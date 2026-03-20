@@ -1,4 +1,4 @@
-package reposity
+package repository
 
 import (
 	"context"
@@ -11,19 +11,17 @@ import (
 	"go-llm-demo/internal/server/domain"
 )
 
-type FileStore struct {
+type FileMemoryStore struct {
 	path     string
 	maxItems int
 	mu       sync.Mutex
 }
 
-func NewFileStore(path string, maxItems int) *FileStore {
-	return &FileStore{path: path, maxItems: maxItems}
+func NewFileMemoryStore(path string, maxItems int) *FileMemoryStore {
+	return &FileMemoryStore{path: path, maxItems: maxItems}
 }
 
-func (s *FileStore) List(ctx context.Context) ([]domain.MemoryItem, error) {
-	_ = ctx
-
+func (s *FileMemoryStore) List(ctx context.Context) ([]domain.MemoryItem, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -37,9 +35,7 @@ func (s *FileStore) List(ctx context.Context) ([]domain.MemoryItem, error) {
 	return cloned, nil
 }
 
-func (s *FileStore) Add(ctx context.Context, item domain.MemoryItem) error {
-	_ = ctx
-
+func (s *FileMemoryStore) Add(ctx context.Context, item domain.MemoryItem) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -56,16 +52,14 @@ func (s *FileStore) Add(ctx context.Context, item domain.MemoryItem) error {
 	return s.writeAllLocked(items)
 }
 
-func (s *FileStore) Clear(ctx context.Context) error {
-	_ = ctx
-
+func (s *FileMemoryStore) Clear(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	return s.writeAllLocked([]domain.MemoryItem{})
 }
 
-func (s *FileStore) readAllLocked() ([]domain.MemoryItem, error) {
+func (s *FileMemoryStore) readAllLocked() ([]domain.MemoryItem, error) {
 	data, err := os.ReadFile(s.path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -85,7 +79,7 @@ func (s *FileStore) readAllLocked() ([]domain.MemoryItem, error) {
 	return items, nil
 }
 
-func (s *FileStore) writeAllLocked(items []domain.MemoryItem) error {
+func (s *FileMemoryStore) writeAllLocked(items []domain.MemoryItem) error {
 	if err := os.MkdirAll(filepath.Dir(s.path), 0o755); err != nil {
 		return err
 	}

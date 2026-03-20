@@ -9,6 +9,8 @@ import (
 	"io"
 	"net/http"
 	"strings"
+
+	"go-llm-demo/internal/server/domain"
 )
 
 var SupportedModels = []string{
@@ -40,12 +42,6 @@ type ModelScopeProvider struct {
 	Model   string
 }
 
-type ModelScopeEmbeddingProvider struct {
-	APIKey  string
-	BaseURL string
-	Model   string
-}
-
 func (p *ModelScopeProvider) GetModelName() string {
 	return p.Model
 }
@@ -72,7 +68,7 @@ type EmbeddingResponse struct {
 	Embedding []float64 `json:"embedding"`
 }
 
-func (p *ModelScopeProvider) Chat(ctx context.Context, messages []Message) (<-chan string, error) {
+func (p *ModelScopeProvider) Chat(ctx context.Context, messages []domain.Message) (<-chan string, error) {
 	out := make(chan string)
 
 	go func() {
@@ -141,62 +137,4 @@ func (p *ModelScopeProvider) Chat(ctx context.Context, messages []Message) (<-ch
 	}()
 
 	return out, nil
-}
-
-func (p *ModelScopeEmbeddingProvider) GetModelName() string {
-	return p.Model
-}
-
-func (p *ModelScopeEmbeddingProvider) Embed(ctx context.Context, text string) ([]float64, error) {
-	body := map[string]any{
-		"model": p.Model,
-		"input": text,
-	}
-
-	jsonData, err := json.Marshal(body)
-	if err != nil {
-		return nil, fmt.Errorf("embedding request marshal failed: %w", err)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, "POST", p.BaseURL, bytes.NewBuffer(jsonData))
-	if err != nil {
-		return nil, fmt.Errorf("embedding request create failed: %w", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+p.APIKey)
-	req.Header.Set("Content-Type", "application/json")
-
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("embedding request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	bodyBytes, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("embedding response read failed: %w", err)
-	}
-	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return nil, fmt.Errorf("embedding request failed: %s %s", resp.Status, strings.TrimSpace(string(bodyBytes)))
-	}
-
-	var res EmbeddingResponse
-	if err := json.Unmarshal(bodyBytes, &res); err != nil {
-		return nil, fmt.Errorf("embedding response decode failed: %w", err)
-	}
-
-	switch {
-	case len(res.Data) > 0 && len(res.Data[0].Embedding) > 0:
-		return res.Data[0].Embedding, nil
-	case len(res.Embeddings) > 0 && len(res.Embeddings[0].Embedding) > 0:
-		return res.Embeddings[0].Embedding, nil
-	case len(res.Output.Embeddings) > 0 && len(res.Output.Embeddings[0]) > 0:
-		return res.Output.Embeddings[0], nil
-	case len(res.Output.TextEmbedding) > 0:
-		return res.Output.TextEmbedding, nil
-	case len(res.Embedding) > 0:
-		return res.Embedding, nil
-	default:
-		return nil, fmt.Errorf("embedding response missing vector data")
-	}
 }

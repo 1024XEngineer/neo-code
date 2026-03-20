@@ -4,7 +4,25 @@
     <option name="autoReloadType" value="ALL" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="d168819c-52a3-420a-9c1d-6eca0804d637" name="更改" comment="" />
+    <list default="true" id="d168819c-52a3-420a-9c1d-6eca0804d637" name="更改" comment="refactor&lt;all&gt;：把原来的项目的结构优化了一下">
+      <change afterPath="$PROJECT_DIR$/internal/server/infra/provider/chat_provider.go" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/internal/server/infra/repository/role_repository.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/cmd/server/info.go" beforeDir="false" afterPath="$PROJECT_DIR$/cmd/server/main.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/cmd/tui/main.go" beforeDir="false" afterPath="$PROJECT_DIR$/cmd/tui/main.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/internal/server/domain/memory.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/server/domain/memory.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/internal/server/domain/message.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/server/domain/chat.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/internal/server/domain/role.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/server/domain/role.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/internal/server/infra/provider/embedding_provider.go" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/internal/server/infra/provider/modelscope_provider.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/server/infra/provider/modelscope_provider.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/internal/server/infra/reposity/memory_reposity.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/server/infra/repository/memory_repository.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/internal/server/infra/reposity/role_reposity.go" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/internal/server/service/chat_service.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/server/service/chat_service.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/internal/server/service/memory_service.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/server/service/memory_service.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/internal/server/service/role_service.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/server/service/role_service.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/internal/server/transport/info.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/server/transport/http/chat_handler.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/internal/tui/infra/info.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/tui/infra/api_client.go" afterDir="false" />
+    </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
     <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
@@ -82,6 +100,7 @@
       <recent name="C:\Users\10116\Desktop\study\gopro\test2\scripts" />
     </key>
     <key name="MoveFile.RECENT_KEYS">
+      <recent name="C:\Users\10116\Desktop\study\gopro\test1\internal\server\transport\http" />
       <recent name="C:\Users\10116\Desktop\study\gopro\test1\cmd\tui" />
       <recent name="C:\Users\10116\Desktop\study\gopro\test1\internal\server\infra\reposity" />
     </key>
@@ -131,7 +150,9 @@
   </component>
   <component name="VcsManagerConfiguration">
     <MESSAGE value="大体结构" />
-    <option name="LAST_COMMIT_MESSAGE" value="大体结构" />
+    <MESSAGE value="初始" />
+    <MESSAGE value="refactor&lt;all&gt;：把原来的项目的结构优化了一下" />
+    <option name="LAST_COMMIT_MESSAGE" value="refactor&lt;all&gt;：把原来的项目的结构优化了一下" />
   </component>
   <component name="VgoModernizerVersionTracker">
     <upgrades>

@@ -8,7 +8,7 @@ import (
 	"strings"
 
 	"go-llm-demo/internal/server/infra/provider"
-	"go-llm-demo/internal/server/service"
+	"go-llm-demo/internal/tui/infra"
 )
 
 const defaultHistoryTurns = 6
@@ -24,7 +24,7 @@ func main() {
 		activeModel = provider.DefaultModel()
 	}
 
-	personaPrompt, err := loadPersonaPrompt(envString("PERSONA_FILE_PATH", "./persona.txt"))
+	personaPrompt, err := loadPersonaPrompt(os.Getenv("PERSONA_FILE_PATH"))
 	if err != nil {
 		fmt.Printf("加载人设文件失败：%v\n", err)
 		return
@@ -35,23 +35,19 @@ func main() {
 		return
 	}
 
-	if !provider.IsSupportedModel(activeModel) {
-		fmt.Printf("当前模型不受支持：%s\n", activeModel)
-		printAvailableModels()
-		return
-	}
-
 	fmt.Println("=== NeoCode ===")
 	fmt.Println("Use /switch <model> to change models, /models to list available models, /help for commands")
-	fmt.Println("Memory retrieval is enabled and uses local JSON storage.")
-	if personaPrompt != "" {
-		fmt.Println("Persona prompt is enabled from local config.")
-	}
 
 	scanner := bufio.NewScanner(os.Stdin)
 	ctx := context.Background()
 	historyTurns := envInt("SHORT_TERM_HISTORY_TURNS", defaultHistoryTurns)
 	history := initialHistory(personaPrompt, historyTurns)
+
+	apiClient, err := infra.NewLocalChatClient()
+	if err != nil {
+		fmt.Printf("初始化失败：%v\n", err)
+		return
+	}
 
 	for {
 		fmt.Printf("[%s] > ", activeModel)
@@ -67,7 +63,7 @@ func main() {
 
 		if strings.HasPrefix(line, "/") {
 			historyChanged := false
-			shouldExit, err := handleCommand(ctx, line, &activeModel, &history, &historyChanged, personaPrompt, historyTurns)
+			shouldExit, err := handleCommand(ctx, line, &activeModel, &history, &historyChanged, personaPrompt, historyTurns, apiClient)
 			if err != nil {
 				fmt.Println(err)
 			}
@@ -82,11 +78,11 @@ func main() {
 		}
 
 		fmt.Println("Thinking...")
-		history = append(history, provider.Message{Role: "user", Content: line})
-		messages := append([]provider.Message(nil), history...)
-		rep, err := service.Chat(ctx, messages, activeModel)
+		messages := append([]infra.Message(nil), history...)
+		messages = append(messages, infra.Message{Role: "user", Content: line})
+
+		rep, err := apiClient.Chat(ctx, messages, activeModel)
 		if err != nil {
-			history = history[:len(history)-1]
 			fmt.Printf("生成失败：%v\n", err)
 			continue
 		}
@@ -97,7 +93,7 @@ func main() {
 			fmt.Print(msg)
 		}
 		if replyBuilder.Len() > 0 {
-			history = append(history, provider.Message{Role: "assistant", Content: replyBuilder.String()})
+			history = append(history, infra.Message{Role: "assistant", Content: replyBuilder.String()})
 			history = trimHistory(history, historyTurns)
 		}
 		fmt.Println()
@@ -108,7 +104,7 @@ func main() {
 	}
 }
 
-func handleCommand(ctx context.Context, input string, activeModel *string, history *[]provider.Message, historyChanged *bool, personaPrompt string, historyTurns int) (bool, error) {
+func handleCommand(ctx context.Context, input string, activeModel *string, history *[]infra.Message, historyChanged *bool, personaPrompt string, historyTurns int, client infra.ChatClient) (bool, error) {
 	fields := strings.Fields(input)
 	if len(fields) == 0 {
 		return false, nil
@@ -132,13 +128,14 @@ func handleCommand(ctx context.Context, input string, activeModel *string, histo
 	case "/models":
 		printAvailableModels()
 	case "/memory":
-		stats, err := service.GetMemoryStats(ctx)
+		stats, err := client.GetMemoryStats(ctx)
 		if err != nil {
 			return false, err
 		}
-		fmt.Printf("memory items: %d, topK: %d, minScore: %.2f, file: %s\n", stats.Items, stats.TopK, stats.MinScore, stats.Path)
+		fmt.Printf("memory items: %d, topK: %d, minScore: %.2f, file: %s\n",
+			stats.Items, stats.TopK, stats.MinScore, stats.Path)
 	case "/clear-memory":
-		if err := service.ClearMemory(ctx); err != nil {
+		if err := client.ClearMemory(ctx); err != nil {
 			return false, err
 		}
 		fmt.Println("已清空本地长期记忆")
@@ -173,15 +170,10 @@ func printHelp() {
 	fmt.Println("  /clear-context   Clear current short-term context")
 	fmt.Println("  /exit            Exit the program")
 	fmt.Println("  /help            Show this help text")
-	fmt.Println("All other input is treated as a prompt sent to the model.")
-	fmt.Println("Relevant memories are retrieved from local JSON storage automatically.")
-	fmt.Println("Recent conversation history is also sent as short-term context.")
-	fmt.Println("Short-term context length is controlled by SHORT_TERM_HISTORY_TURNS.")
-	fmt.Println("Persona prompt is loaded from PERSONA_FILE_PATH on startup.")
 }
 
-func trimHistory(history []provider.Message, maxTurns int) []provider.Message {
-	var systemMessages []provider.Message
+func trimHistory(history []infra.Message, maxTurns int) []infra.Message {
+	var systemMessages []infra.Message
 	start := 0
 	for start < len(history) && history[start].Role == "system" {
 		systemMessages = append(systemMessages, history[start])
@@ -194,15 +186,15 @@ func trimHistory(history []provider.Message, maxTurns int) []provider.Message {
 		return history
 	}
 
-	trimmed := append([]provider.Message(nil), systemMessages...)
+	trimmed := append([]infra.Message(nil), systemMessages...)
 	trimmed = append(trimmed, conversation[len(conversation)-maxMessages:]...)
 	return trimmed
 }
 
-func initialHistory(personaPrompt string, historyTurns int) []provider.Message {
-	history := make([]provider.Message, 0, historyTurns*2+1)
+func initialHistory(personaPrompt string, historyTurns int) []infra.Message {
+	history := make([]infra.Message, 0, historyTurns*2+1)
 	if personaPrompt != "" {
-		history = append(history, provider.Message{Role: "system", Content: personaPrompt})
+		history = append(history, infra.Message{Role: "system", Content: personaPrompt})
 	}
 	return history
 }
@@ -221,14 +213,6 @@ func loadPersonaPrompt(path string) (string, error) {
 	}
 
 	return strings.TrimSpace(string(data)), nil
-}
-
-func envString(key, fallback string) string {
-	value := strings.TrimSpace(os.Getenv(key))
-	if value == "" {
-		return fallback
-	}
-	return value
 }
 
 func envInt(key string, fallback int) int {

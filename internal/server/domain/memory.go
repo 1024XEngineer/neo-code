@@ -19,3 +19,17 @@ type MemoryRepository interface {
 	Add(ctx context.Context, item MemoryItem) error
 	Clear(ctx context.Context) error
 }
+
+type MemoryService interface {
+	BuildContext(ctx context.Context, userInput string) (string, error)
+	Save(ctx context.Context, userInput, reply string) error
+	GetStats(ctx context.Context) (*MemoryStats, error)
+	Clear(ctx context.Context) error
+}
+
+type MemoryStats struct {
+	Count    int
+	TopK     int
+	MinScore float64
+	Path     string
+}
