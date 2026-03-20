@@ -30,3 +30,6 @@ go.work.sum
 # Editor/IDE
  .idea/
 # .vscode/
+
+# 记忆日志
+memory.json
