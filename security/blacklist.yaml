@@ -1,0 +1,6 @@
+rules:
+  - target: "**/*.env"
+    r: deny
+    w: deny
+  - command: "rm -rf *"
+    x: deny
