@@ -4,11 +4,7 @@
     <option name="autoReloadType" value="ALL" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="52801d34-e381-4228-9d19-0f71ffb68a98" name="更改" comment="大体结构">
-      <change afterPath="$PROJECT_DIR$/.idea/go.imports.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/test1.iml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-    </list>
+    <list default="true" id="d168819c-52a3-420a-9c1d-6eca0804d637" name="更改" comment="" />
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
     <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
@@ -26,9 +22,11 @@
     <option name="RECENT_BRANCH_BY_REPOSITORY">
       <map>
         <entry key="$PROJECT_DIR$" value="new-feature" />
+        <entry key="$PROJECT_DIR$/test" value="test" />
       </map>
     </option>
     <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
+    <option name="ROOT_SYNC" value="SYNC" />
   </component>
   <component name="GitHubPullRequestSearchHistory">{
   &quot;lastFilter&quot;: {
@@ -42,6 +40,10 @@
     &quot;accountId&quot;: &quot;d1cbe9a3-5971-4275-a89d-67ba8485d5af&quot;
   }
 }</component>
+  <component name="KubernetesApiPersistence">{}</component>
+  <component name="KubernetesApiProvider">{
+  &quot;isMigrated&quot;: true
+}</component>
   <component name="ProjectColorInfo">{
   &quot;associatedIndex&quot;: 6
 }</component>
@@ -53,29 +55,47 @@
     <option name="hideEmptyMiddlePackages" value="true" />
     <option name="showLibraryContents" value="true" />
   </component>
-  <component name="PropertiesComponent"><![CDATA[{
-  "keyToString": {
-    "DefaultGoTemplateProperty": "Go File",
-    "RunOnceActivity.ShowReadmeOnStart": "true",
-    "RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252": "true",
-    "RunOnceActivity.git.unshallow": "true",
-    "RunOnceActivity.go.analysis.ui.options.defaults": "true",
-    "RunOnceActivity.go.formatter.settings.were.checked": "true",
-    "RunOnceActivity.go.modules.go.list.on.any.changes.was.set": "true",
-    "RunOnceActivity.typescript.service.memoryLimit.init": "true",
-    "git-widget-placeholder": "test",
-    "go.sdk.automatically.set": "true",
-    "last_opened_file_path": "C:/Users/10116/Desktop/study/gopro/test2/test"
+  <component name="PropertiesComponent">{
+  &quot;keyToString&quot;: {
+    &quot;DefaultGoTemplateProperty&quot;: &quot;Go File&quot;,
+    &quot;Go 构建.go build go-llm-demo.executor&quot;: &quot;Run&quot;,
+    &quot;Go 构建.go build go-llm-demo/cmd/tui.executor&quot;: &quot;Run&quot;,
+    &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.git.unshallow&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.go.analysis.ui.options.defaults&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.go.formatter.settings.were.checked&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.go.modules.go.list.on.any.changes.was.set&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.typescript.service.memoryLimit.init&quot;: &quot;true&quot;,
+    &quot;git-widget-placeholder&quot;: &quot;init-0320&quot;,
+    &quot;go.sdk.automatically.set&quot;: &quot;true&quot;,
+    &quot;last_opened_file_path&quot;: &quot;C:/Users/10116/Desktop/study/gopro/test1/cmd/tui&quot;,
+    &quot;nodejs_package_manager_path&quot;: &quot;npm&quot;
   }
-}]]></component>
+}</component>
   <component name="RecentsManager">
     <key name="CopyFile.RECENT_KEYS">
+      <recent name="C:\Users\10116\Desktop\study\gopro\test1\cmd\tui" />
+      <recent name="C:\Users\10116\Desktop\study\gopro\test1\docs" />
+      <recent name="C:\Users\10116\Desktop\study\gopro\test1" />
       <recent name="C:\Users\10116\Desktop\study\gopro\test2\test" />
       <recent name="C:\Users\10116\Desktop\study\gopro\test2\scripts" />
-      <recent name="C:\Users\10116\Desktop\study\gopro\test2\pkg" />
-      <recent name="C:\Users\10116\Desktop\study\gopro\test2\internal\tui\core" />
-      <recent name="C:\Users\10116\Desktop\study\gopro\test2\internal\tui\infra" />
     </key>
+    <key name="MoveFile.RECENT_KEYS">
+      <recent name="C:\Users\10116\Desktop\study\gopro\test1\cmd\tui" />
+      <recent name="C:\Users\10116\Desktop\study\gopro\test1\internal\server\infra\reposity" />
+    </key>
+  </component>
+  <component name="RunManager">
+    <configuration name="go build go-llm-demo/cmd/tui" type="GoApplicationRunConfiguration" factoryName="Go Application" nameIsGenerated="true">
+      <module name="test1" />
+      <working_directory value="$PROJECT_DIR$" />
+      <kind value="PACKAGE" />
+      <package value="go-llm-demo/cmd/tui" />
+      <directory value="$PROJECT_DIR$" />
+      <filePath value="$PROJECT_DIR$" />
+      <method v="2" />
+    </configuration>
   </component>
   <component name="SharedIndexes">
     <attachedChunks>
@@ -87,7 +107,7 @@
   </component>
   <component name="TaskManager">
     <task active="true" id="Default" summary="默认任务">
-      <changelist id="52801d34-e381-4228-9d19-0f71ffb68a98" name="更改" comment="" />
+      <changelist id="d168819c-52a3-420a-9c1d-6eca0804d637" name="更改" comment="" />
       <created>1773832740502</created>
       <option name="number" value="Default" />
       <option name="presentableId" value="Default" />
@@ -112,5 +132,19 @@
   <component name="VcsManagerConfiguration">
     <MESSAGE value="大体结构" />
     <option name="LAST_COMMIT_MESSAGE" value="大体结构" />
+  </component>
+  <component name="VgoModernizerVersionTracker">
+    <upgrades>
+      <map>
+        <entry key="$PROJECT_DIR$/go.mod">
+          <value>
+            <VersionUpgradeInfo>
+              <version>1.26.1</version>
+              <timestamp>1773981608030</timestamp>
+            </VersionUpgradeInfo>
+          </value>
+        </entry>
+      </map>
+    </upgrades>
   </component>
 </project>
