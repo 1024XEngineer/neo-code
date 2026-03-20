@@ -37,8 +37,8 @@ func main() {
 	}
 
 	fmt.Println("=== NeoCode ===")
-	fmt.Println("多行输入: 输入 ``` 开始代码块，输入 /send 发送，/cancel 取消")
-	fmt.Println("命令: /switch <model> 切换模型, /run <code> 执行代码, /explain <code> 解释代码, /help 查看帮助")
+	fmt.Println("多行输入: ''' / \"\"\" / ``` / <<EOF ... EOF")
+	fmt.Println("命令: /switch <model>, /run, /explain, /memory, /help")
 
 	scanner := bufio.NewScanner(os.Stdin)
 	ctx := context.Background()
@@ -115,16 +115,23 @@ func main() {
 var errEof = fmt.Errorf("EOF")
 
 type multilineState struct {
-	active    bool
-	lines     []string
-	codeBlock bool
+	active     bool
+	delimiter  string
+	lines      []string
+	promptLine int
 }
 
 func readMultilineInput(scanner *bufio.Scanner) (string, error) {
-	state := &multilineState{}
+	state := &multilineState{promptLine: 1}
 	var inputLines []string
 
 	for {
+		prompt := ".  "
+		if state.active {
+			prompt = fmt.Sprintf("%d| ", state.promptLine)
+		}
+		fmt.Print(prompt)
+
 		if !scanner.Scan() {
 			if len(inputLines) > 0 {
 				return strings.Join(inputLines, "\n"), nil
@@ -137,55 +144,93 @@ func readMultilineInput(scanner *bufio.Scanner) (string, error) {
 
 		line := scanner.Text()
 
-		if !state.active && strings.HasPrefix(line, "```") {
-			state.active = true
-			state.codeBlock = true
+		if state.active {
 			state.lines = append(state.lines, line)
-			fmt.Println(line)
-			continue
-		}
+			state.promptLine++
 
-		if state.active && state.codeBlock {
-			state.lines = append(state.lines, line)
-			fmt.Println(line)
-
-			if strings.TrimSpace(line) == "```" {
-				state.active = false
-				state.codeBlock = false
-				return strings.Join(state.lines, "\n"), nil
+			if line == state.delimiter {
+				return strings.Join(state.lines[:len(state.lines)-1], "\n"), nil
 			}
 			continue
 		}
 
-		if !state.active {
-			lower := strings.ToLower(strings.TrimSpace(line))
-			if lower == "/send" {
-				if len(inputLines) > 0 {
+		trimmed := strings.TrimSpace(line)
+
+		if trimmed == "" {
+			if len(inputLines) > 0 {
+				return strings.Join(inputLines, "\n"), nil
+			}
+			continue
+		}
+
+		if strings.HasPrefix(trimmed, "'''") || strings.HasPrefix(trimmed, `"""`) || strings.HasPrefix(trimmed, "```") {
+			delim := trimmed[:3]
+			if len(inputLines) == 0 {
+				state.active = true
+				state.delimiter = delim
+				state.lines = nil
+				state.promptLine = 1
+				fmt.Println(line)
+				continue
+			}
+		}
+
+		if strings.HasPrefix(trimmed, "EOF") || strings.HasPrefix(trimmed, "eof") {
+			parts := strings.SplitN(trimmed, "EOF", 2)
+			if len(parts) == 1 {
+				parts = strings.SplitN(trimmed, "eof", 2)
+			}
+			if len(inputLines) > 0 {
+				delim := strings.TrimSpace(parts[len(parts)-1])
+				if delim == "" {
 					return strings.Join(inputLines, "\n"), nil
 				}
-				continue
-			}
-			if lower == "/cancel" {
-				inputLines = nil
-				state.active = false
+				state.active = true
+				state.delimiter = delim
 				state.lines = nil
-				fmt.Println("已取消输入")
+				state.promptLine = 1
+				fmt.Println(line)
 				continue
 			}
-
-			inputLines = append(inputLines, line)
-			fmt.Println(line)
-
-			if !strings.HasPrefix(line, " ") && !strings.HasPrefix(line, "\t") && len(inputLines) == 1 {
-				continue
-			}
-
-			if strings.HasPrefix(line, " ") || strings.HasPrefix(line, "\t") {
-				continue
-			}
-
-			return strings.Join(inputLines, "\n"), nil
 		}
+
+		if strings.HasPrefix(trimmed, "<<") {
+			parts := strings.SplitN(trimmed, "<<", 2)
+			if len(parts) == 2 {
+				delim := strings.TrimSpace(parts[1])
+				if delim != "" && len(inputLines) == 0 {
+					state.active = true
+					state.delimiter = delim
+					state.lines = nil
+					state.promptLine = 1
+					fmt.Println(line)
+					continue
+				}
+			}
+		}
+
+		if strings.HasPrefix(trimmed, "/") {
+			return line, nil
+		}
+
+		inputLines = append(inputLines, line)
+		fmt.Println(line)
+
+		if len(inputLines) == 1 && !strings.Contains(line, " ") {
+			continue
+		}
+
+		if trimmed == "EOF" || trimmed == "eof" || trimmed == "'''" || trimmed == `"""` || trimmed == "```" {
+			if len(inputLines) > 1 {
+				state.active = false
+				state.delimiter = ""
+				state.lines = nil
+				state.promptLine = 1
+				return strings.Join(inputLines[:len(inputLines)-1], "\n"), nil
+			}
+		}
+
+		return strings.Join(inputLines, "\n"), nil
 	}
 }
 
@@ -372,10 +417,12 @@ func printHelp() {
 	fmt.Println("  /exit             退出程序")
 	fmt.Println("  /help             显示帮助")
 	fmt.Println("")
-	fmt.Println("多行输入:")
-	fmt.Println("  输入 ``` 开始代码块输入")
-	fmt.Println("  输入 /send 发送当前输入")
-	fmt.Println("  输入 /cancel 取消输入")
+	fmt.Println("多行输入（输入结束标记发送）:")
+	fmt.Println("  '''  ...  '''     单引号代码块")
+	fmt.Println("  \"\"\"  ...  \"\"\"     双引号代码块")
+	fmt.Println("  ```  ...  ```    反引号代码块")
+	fmt.Println("  <<EOF  ...  EOF    Heredoc 风格")
+	fmt.Println("  单行直接发送")
 }
 
 func trimHistory(history []infra.Message, maxTurns int) []infra.Message {
