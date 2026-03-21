@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"go-llm-demo/config"
+	"go-llm-demo/configs"
 	"go-llm-demo/internal/server/domain"
 )
 
@@ -16,21 +16,21 @@ var (
 )
 
 func NewChatProvider(model string) (domain.ChatProvider, error) {
-	if config.GlobalAppConfig == nil {
+	if configs.GlobalAppConfig == nil {
 		return nil, fmt.Errorf("config.yaml is not loaded")
 	}
 
-	providerName := strings.TrimSpace(config.GlobalAppConfig.AI.Provider)
+	providerName := strings.TrimSpace(configs.GlobalAppConfig.AI.Provider)
 	if providerName == "" {
 		providerName = "modelscope"
 	}
 	if model == "" {
-		model = strings.TrimSpace(config.GlobalAppConfig.AI.Model)
+		model = strings.TrimSpace(configs.GlobalAppConfig.AI.Model)
 	}
 
 	switch strings.ToLower(providerName) {
 	case "modelscope":
-		apiKey := strings.TrimSpace(config.GlobalAppConfig.AI.APIKey)
+		apiKey := strings.TrimSpace(configs.GlobalAppConfig.AI.APIKey)
 		if apiKey == "" {
 			return nil, fmt.Errorf("missing ai.api_key in config.yaml")
 		}
@@ -47,7 +47,7 @@ func NewChatProvider(model string) (domain.ChatProvider, error) {
 	}
 }
 
-func ValidateChatAPIKey(ctx context.Context, cfg *config.AppConfiguration) error {
+func ValidateChatAPIKey(ctx context.Context, cfg *configs.AppConfiguration) error {
 	if cfg == nil {
 		return fmt.Errorf("config is nil")
 	}

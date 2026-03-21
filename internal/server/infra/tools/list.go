@@ -2,6 +2,7 @@ package tools
 
 import (
 	"fmt"
+	"go-llm-demo/internal/server/domain"
 	"os"
 )
 
@@ -21,13 +22,13 @@ func (l *ListTool) Description() string {
 // Run 执行列表工具，使用给定的参数。
 // 期望的参数：
 //   - path: 要列出的目录（可选，默认：当前目录）
-func (l *ListTool) Run(params map[string]interface{}) *ToolResult {
+func (l *ListTool) Run(params map[string]interface{}) *domain.ToolResult {
 	// 解析可选的path参数
 	path := "." // 默认为当前目录
 	if pathParam, ok := params["path"]; ok {
 		path, ok = pathParam.(string)
 		if !ok {
-			return &ToolResult{
+			return &domain.ToolResult{
 				ToolName: l.Name(),
 				Success:  false,
 				Error:    "path 必须是字符串",
@@ -38,7 +39,7 @@ func (l *ListTool) Run(params map[string]interface{}) *ToolResult {
 	// 打开目录
 	file, err := os.Open(path)
 	if err != nil {
-		return &ToolResult{
+		return &domain.ToolResult{
 			ToolName: l.Name(),
 			Success:  false,
 			Error:    fmt.Sprintf("打开目录失败: %v", err),
@@ -49,7 +50,7 @@ func (l *ListTool) Run(params map[string]interface{}) *ToolResult {
 	// 读取目录内容
 	entries, err := file.Readdir(-1)
 	if err != nil {
-		return &ToolResult{
+		return &domain.ToolResult{
 			ToolName: l.Name(),
 			Success:  false,
 			Error:    fmt.Sprintf("读取目录失败: %v", err),
@@ -66,7 +67,7 @@ func (l *ListTool) Run(params map[string]interface{}) *ToolResult {
 		}
 	}
 
-	return &ToolResult{
+	return &domain.ToolResult{
 		ToolName: l.Name(),
 		Success:  true,
 		Output:   output,
