@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
+// View 渲染当前 TUI 界面。
 func (m Model) View() string {
 	var content string
 
@@ -46,7 +47,7 @@ func (m Model) View() string {
 	inputArea := lipgloss.NewStyle().
 		Height(inputHeight).
 		Width(m.width).
-		Render(RenderInput(m.inputBuffer, m.waitingCode, m.codeDelim, m.codeLines, m.width))
+		Render(RenderInput(m.inputBuffer, m.waitingCode, m.codeDelim, m.codeLines, m.width, m.multilineMode, m.cursorLine, m.cursorCol))
 
 	return statusBar + content + inputArea
 }
@@ -68,6 +69,7 @@ func countLines(s string) int {
 	return count
 }
 
+// RenderMessages 渲染当前可见的聊天消息列表。
 func RenderMessages(messages []Message, width int) string {
 	if len(messages) == 0 {
 		return ""
@@ -76,35 +78,32 @@ func RenderMessages(messages []Message, width int) string {
 	var b strings.Builder
 
 	visibleMessages := messages
-	startIdx := 0
-	if len(messages) > 50 {
-		startIdx = len(messages) - 50
-		visibleMessages = messages[startIdx:]
+	if len(messages) > 30 {
+		visibleMessages = messages[len(messages)-30:]
 	}
 
-	for _, msg := range visibleMessages {
-		idx := startIdx
+	for i, msg := range visibleMessages {
+		idx := len(messages) - len(visibleMessages) + i + 1
 		switch msg.Role {
 		case "user":
-			b.WriteString(userMsgStyle.Render(fmt.Sprintf("[%d] 你:", idx)))
+			b.WriteString(userMsgStyle.Render(fmt.Sprintf("你 [%d]:", idx)))
 			b.WriteString(" ")
 			b.WriteString(msg.Content)
 			b.WriteString("\n\n")
 
 		case "assistant":
-			b.WriteString(assistantMsgStyle.Render(fmt.Sprintf("[%d] Neo:", idx)))
+			b.WriteString(assistantMsgStyle.Render(fmt.Sprintf("Neo [%d]:", idx)))
 			b.WriteString("\n")
 			b.WriteString(renderContent(msg.Content))
 			b.WriteString("\n\n")
 
+		//系统消息不用展示给用户，直接推送到ai,如果需要可以复用
 		case "system":
 			b.WriteString(systemMsgStyle.Render("[系统]"))
 			b.WriteString(" ")
 			b.WriteString(msg.Content)
 			b.WriteString("\n\n")
 		}
-
-		startIdx++
 	}
 
 	return b.String()
@@ -119,21 +118,32 @@ func renderContent(content string) string {
 	var b strings.Builder
 
 	inCodeBlock := false
+	codeLang := ""
+	var codeLines []string
+
 	for _, line := range lines {
 		if strings.HasPrefix(line, "```") {
 			if !inCodeBlock {
 				inCodeBlock = true
-				b.WriteString(codeBlockStyle.Render("\n" + line + "\n"))
+				codeLang = strings.TrimPrefix(line, "```")
+				codeLang = strings.TrimSpace(codeLang)
+				if codeLang == "" {
+					codeLang = "go"
+				}
+				codeLines = []string{}
+				b.WriteString("\n")
 			} else {
 				inCodeBlock = false
-				b.WriteString(codeBlockStyle.Render(line + "\n"))
+				highlighted := HighlightCodeBlock(codeLines, codeLang)
+				b.WriteString(highlighted)
+				b.WriteString(codeBlockStyle.Render("```\n"))
+				codeLines = nil
 			}
 			continue
 		}
 
 		if inCodeBlock {
-			b.WriteString(codeBlockStyle.Render(line))
-			b.WriteString("\n")
+			codeLines = append(codeLines, line)
 		} else {
 			b.WriteString(line)
 			b.WriteString("\n")
@@ -143,49 +153,102 @@ func renderContent(content string) string {
 	return b.String()
 }
 
-func RenderInput(buffer string, waitingCode bool, codeDelim string, codeLines []string, width int) string {
+// HighlightCodeBlock 渲染带语法高亮的代码块。
+func HighlightCodeBlock(lines []string, lang string) string {
+	var b strings.Builder
+	code := strings.Join(lines, "\n")
+
+	b.WriteString(codeBlockStyle.Render("```" + lang + "\n"))
+
+	highlighted := HighlightCode(code, lang)
+	highlightedLines := strings.Split(highlighted, "\n")
+	for _, line := range highlightedLines {
+		b.WriteString(codeBlockStyle.Render(line))
+		b.WriteString("\n")
+	}
+
+	return b.String()
+}
+
+// RenderInput 渲染聊天和代码输入区域。
+func RenderInput(buffer string, waitingCode bool, codeDelim string, codeLines []string, width int, multilineMode bool, cursorLine int, cursorCol int) string {
 	var b strings.Builder
 
 	if waitingCode {
-		b.WriteString(helpStyle.Render(fmt.Sprintf("┌─ 代码输入 (%s ... %s) ─┐", codeDelim, codeDelim)))
+		b.WriteString(helpStyle.Render(fmt.Sprintf("[代码输入] %s ... %s", codeDelim, codeDelim)))
 		b.WriteString("\n")
 
 		for i, line := range codeLines {
-			b.WriteString(fmt.Sprintf("│ %2d │ %s\n", i+1, line))
+			highlighted := HighlightCodeInline(line, detectLang(buffer))
+			b.WriteString(fmt.Sprintf("  %2d: %s\n", i+1, highlighted))
 		}
 
-		b.WriteString("│    │ " + lipgloss.NewStyle().Foreground(lipgloss.Color("#61AFEF")).Render(buffer))
-		b.WriteString("\n")
-		b.WriteString("└─ 双 Enter 发送 · Ctrl+C 取消 ─┘")
+		b.WriteString("  > " + lipgloss.NewStyle().Foreground(lipgloss.Color("#61AFEF")).Render(buffer))
+		b.WriteString("\n[F5发送 Ctrl+C取消]")
 	} else {
-		lines := strings.Split(buffer, "\n")
+		// 清理 \r 并将 tab 转换为 4 个空格以确保显示正确
+		cleanBuffer := strings.ReplaceAll(buffer, "\r", "")
+		cleanBuffer = strings.ReplaceAll(cleanBuffer, "\t", "    ")
+		lines := strings.Split(cleanBuffer, "\n")
 		hasMultipleLines := len(lines) > 1 || (len(lines) == 1 && lines[0] != "")
 
-		if hasMultipleLines {
-			b.WriteString(helpStyle.Render("┌─ 多行输入 ─┐"))
-			b.WriteString("\n")
+		if hasMultipleLines || multilineMode {
+			lang := detectLang(buffer)
+			_ = "[多行输入]"
 			for i, line := range lines {
-				if i == len(lines)-1 {
-					b.WriteString(fmt.Sprintf("│ %2d │ %s█\n", i+1, line))
+				lineNum := fmt.Sprintf("  %2d: ", i+1)
+				b.WriteString(lineNum)
+
+				runes := []rune(line)
+				if multilineMode && i == cursorLine && cursorCol <= len(runes) {
+					cursorStyle := lipgloss.NewStyle().
+						Background(lipgloss.Color("#3E4451")).
+						Foreground(lipgloss.Color("#ABB2BF"))
+
+					var before, after string
+					var char string
+					if cursorCol < len(runes) {
+						char = string(runes[cursorCol])
+						before = string(runes[:cursorCol])
+						after = string(runes[cursorCol+1:])
+					} else {
+						before = string(runes)
+						char = " "
+					}
+
+					if before != "" {
+						b.WriteString(HighlightCodeInline(before, lang))
+					}
+					b.WriteString(cursorStyle.Render(char))
+					if after != "" {
+						b.WriteString(HighlightCodeInline(after, lang))
+					}
 				} else {
-					b.WriteString(fmt.Sprintf("│ %2d │ %s\n", i+1, line))
+					if line != "" {
+						b.WriteString(HighlightCodeInline(line, lang))
+					}
 				}
+				b.WriteString("\n")
 			}
-			b.WriteString("└─ Enter 换行 · F5 发送 ─┘")
+			if multilineMode {
+				b.WriteString("[方向键移动 Enter换行 F5/F8发送 Del删除]")
+			} else {
+				b.WriteString("[Enter换行 F5/F8发送]")
+			}
 		} else {
 			prompt := lipgloss.NewStyle().
 				Foreground(lipgloss.Color("#61AFEF")).
-				Bold(true).Render("› ")
+				Bold(true).Render("> ")
 
 			b.WriteString(prompt)
 			b.WriteString(buffer)
-			b.WriteString("█")
 		}
 	}
 
 	return b.String()
 }
 
+// RenderStatusBar 渲染模型、记忆和状态指示信息。
 func RenderStatusBar(model string, memoryItems int, generating bool, width int) string {
 	var b strings.Builder
 
@@ -224,6 +287,7 @@ func RenderStatusBar(model string, memoryItems int, generating bool, width int) 
 	return b.String()
 }
 
+// RenderHelp 渲染内置命令帮助视图。
 func RenderHelp(width int) string {
 	var b strings.Builder
 
@@ -264,9 +328,9 @@ func RenderHelp(width int) string {
 	}
 
 	b.WriteString("\n")
-	b.WriteString(helpStyle.Render("多行输入: Enter 换行，F5 发送"))
+	b.WriteString(helpStyle.Render("多行输入: Enter进入, 方向键移动, F5发送"))
 	b.WriteString("\n")
-	b.WriteString(helpStyle.Render("命令: /help 查看所有命令"))
+	b.WriteString(helpStyle.Render("命令: /help"))
 	b.WriteString("\n")
 	b.WriteString(helpStyle.Render("取消: Ctrl+C"))
 

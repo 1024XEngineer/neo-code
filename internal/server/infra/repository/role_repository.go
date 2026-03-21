@@ -17,10 +17,12 @@ type FileRoleStore struct {
 	mu   sync.Mutex
 }
 
+// NewFileRoleStore 创建一个基于文件的角色存储。
 func NewFileRoleStore(path string) *FileRoleStore {
 	return &FileRoleStore{path: path}
 }
 
+// GetByID 返回指定 ID 对应的角色。
 func (s *FileRoleStore) GetByID(ctx context.Context, id string) (*domain.Role, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -39,6 +41,7 @@ func (s *FileRoleStore) GetByID(ctx context.Context, id string) (*domain.Role, e
 	return nil, errors.New("role not found")
 }
 
+// GetByName 返回指定名称对应的角色。
 func (s *FileRoleStore) GetByName(ctx context.Context, name string) (*domain.Role, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -57,6 +60,7 @@ func (s *FileRoleStore) GetByName(ctx context.Context, name string) (*domain.Rol
 	return nil, errors.New("role not found")
 }
 
+// List 返回所有已存储的角色。
 func (s *FileRoleStore) List(ctx context.Context) ([]domain.Role, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -71,6 +75,7 @@ func (s *FileRoleStore) List(ctx context.Context) ([]domain.Role, error) {
 	return cloned, nil
 }
 
+// Save 在存储中创建或更新角色。
 func (s *FileRoleStore) Save(ctx context.Context, role *domain.Role) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -99,6 +104,7 @@ func (s *FileRoleStore) Save(ctx context.Context, role *domain.Role) error {
 	return s.writeAllLocked(roles)
 }
 
+// Delete 删除指定 ID 对应的角色。
 func (s *FileRoleStore) Delete(ctx context.Context, id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

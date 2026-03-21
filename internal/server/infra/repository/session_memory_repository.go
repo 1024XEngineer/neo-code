@@ -14,10 +14,12 @@ type SessionMemoryStore struct {
 	items    []domain.MemoryItem
 }
 
+// NewSessionMemoryStore 创建一个用于会话记忆的内存存储。
 func NewSessionMemoryStore(maxItems int) *SessionMemoryStore {
 	return &SessionMemoryStore{maxItems: maxItems}
 }
 
+// List 返回当前会话中的记忆项。
 func (s *SessionMemoryStore) List(ctx context.Context) ([]domain.MemoryItem, error) {
 	_ = ctx
 	s.mu.Lock()
@@ -28,6 +30,7 @@ func (s *SessionMemoryStore) List(ctx context.Context) ([]domain.MemoryItem, err
 	return cloned, nil
 }
 
+// Add 新增或更新一条会话记忆项。
 func (s *SessionMemoryStore) Add(ctx context.Context, item domain.MemoryItem) error {
 	_ = ctx
 	s.mu.Lock()
@@ -59,6 +62,7 @@ func (s *SessionMemoryStore) Add(ctx context.Context, item domain.MemoryItem) er
 	return nil
 }
 
+// Clear 清空全部会话记忆项。
 func (s *SessionMemoryStore) Clear(ctx context.Context) error {
 	_ = ctx
 	s.mu.Lock()

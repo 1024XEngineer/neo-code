@@ -8,19 +8,20 @@ import (
 )
 
 func TestAppConfigurationValidate(t *testing.T) {
+	t.Setenv(APIKeyEnvVar, "env-chat-key")
 	cfg := validConfig()
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("expected valid config, got error: %v", err)
 	}
 }
 
-func TestAppConfigurationValidateMissingAIKey(t *testing.T) {
+func TestAppConfigurationValidateMissingEnvAPIKey(t *testing.T) {
+	t.Setenv(APIKeyEnvVar, "")
 	cfg := validConfig()
-	cfg.AI.APIKey = ""
 
 	err := cfg.Validate()
-	if err == nil || !strings.Contains(err.Error(), "ai.api_key") {
-		t.Fatalf("expected ai.api_key validation error, got: %v", err)
+	if err == nil || !strings.Contains(err.Error(), APIKeyEnvVar) {
+		t.Fatalf("expected %s validation error, got: %v", APIKeyEnvVar, err)
 	}
 }
 
@@ -34,6 +35,7 @@ func TestAppConfigurationValidateBaseAllowsMissingAIKey(t *testing.T) {
 }
 
 func TestLoadAppConfig(t *testing.T) {
+	t.Setenv(APIKeyEnvVar, "env-chat-key")
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
 	content := []byte(`app:
@@ -72,9 +74,13 @@ models:
 	if GlobalAppConfig == nil || GlobalAppConfig.AI.Model != "chat-model" {
 		t.Fatalf("expected loaded config, got %+v", GlobalAppConfig)
 	}
+	if GlobalAppConfig.AI.APIKey != "" {
+		t.Fatalf("expected config api key to be ignored, got %q", GlobalAppConfig.AI.APIKey)
+	}
 }
 
 func TestAppConfigurationValidateMissingMemoryStoragePath(t *testing.T) {
+	t.Setenv(APIKeyEnvVar, "env-chat-key")
 	cfg := validConfig()
 	cfg.Memory.StoragePath = ""
 	err := cfg.Validate()
@@ -132,6 +138,9 @@ func TestWriteAppConfigRoundTrip(t *testing.T) {
 	got, err := LoadBootstrapConfig(path)
 	if err != nil {
 		t.Fatalf("load bootstrap config: %v", err)
+	}
+	if got.AI.APIKey != "" {
+		t.Fatalf("expected written config api key to stay empty, got %q", got.AI.APIKey)
 	}
 	if got.AI.Model != want.AI.Model {
 		t.Fatalf("expected model %q, got %q", want.AI.Model, got.AI.Model)

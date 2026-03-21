@@ -20,10 +20,12 @@ type FileMemoryStore struct {
 	mu       sync.Mutex
 }
 
+// NewFileMemoryStore 创建一个基于文件的长期记忆存储。
 func NewFileMemoryStore(path string, maxItems int) *FileMemoryStore {
 	return &FileMemoryStore{path: path, maxItems: maxItems}
 }
 
+// List 返回全部长期记忆项。
 func (s *FileMemoryStore) List(ctx context.Context) ([]domain.MemoryItem, error) {
 	_ = ctx
 	s.mu.Lock()
@@ -38,6 +40,7 @@ func (s *FileMemoryStore) List(ctx context.Context) ([]domain.MemoryItem, error)
 	return cloned, nil
 }
 
+// Add 新增或更新一条长期记忆项。
 func (s *FileMemoryStore) Add(ctx context.Context, item domain.MemoryItem) error {
 	_ = ctx
 	s.mu.Lock()
@@ -59,6 +62,7 @@ func (s *FileMemoryStore) Add(ctx context.Context, item domain.MemoryItem) error
 	return s.writeAllLocked(items)
 }
 
+// Clear 清空存储中的全部长期记忆项。
 func (s *FileMemoryStore) Clear(ctx context.Context) error {
 	_ = ctx
 	s.mu.Lock()
