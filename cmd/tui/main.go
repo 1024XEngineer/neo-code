@@ -39,6 +39,7 @@ func main() {
 	}
 
 	persona := loadPersonaPrompt(configs.GlobalAppConfig.Persona.FilePath)
+	historyTurns := configs.GlobalAppConfig.History.ShortTermTurns
 
 	client, err := infra.NewLocalChatClient()
 	if err != nil {
@@ -46,7 +47,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	model := core.NewModel(client, persona)
+	model := core.NewModel(client, persona, historyTurns)
 	p := tea.NewProgram(model, tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "运行失败: %v\n", err)
@@ -55,13 +56,6 @@ func main() {
 }
 
 func ensureAPIKeyInteractive(ctx context.Context, scanner *bufio.Scanner, configPath string) (bool, error) {
-	apiKey := os.Getenv("AI_API_KEY")
-
-	if apiKey != "" && configs.GlobalAppConfig != nil {
-		configs.GlobalAppConfig.AI.APIKey = apiKey
-		return true, nil
-	}
-
 	cfg, created, err := configs.EnsureConfigFile(configPath)
 	if err != nil {
 		return false, err
@@ -69,37 +63,20 @@ func ensureAPIKeyInteractive(ctx context.Context, scanner *bufio.Scanner, config
 	if created {
 		fmt.Printf("已创建 %s\n", configPath)
 	}
-
-	if apiKey != "" {
-		cfg.AI.APIKey = apiKey
+	if configs.RuntimeAPIKey() == "" {
+		fmt.Printf("未检测到环境变量 %s。请先在系统环境变量中设置 API Key 后重新启动。\n", configs.APIKeyEnvVar)
+		fmt.Println("Windows 示例: setx AI_API_KEY \"your-api-key\"")
+		return false, nil
 	}
 
 	for {
-		apiKey := strings.TrimSpace(cfg.AI.APIKey)
-		if apiKey == "" {
-			fmt.Println("未配置 API key。请输入你的 API key，或输入 /exit 退出。")
-			input, ok, inputErr := readInteractiveLine(scanner, "api_key> ")
-			if inputErr != nil {
-				return false, inputErr
-			}
-			if !ok {
-				return false, nil
-			}
-			cfg.AI.APIKey = input
-		}
-
 		if err := provider.ValidateChatAPIKey(ctx, cfg); err == nil {
-			if saveErr := configs.WriteAppConfig(configPath, cfg); saveErr != nil {
-				return false, saveErr
-			}
-			fmt.Println("API key 验证通过并已保存。")
+			fmt.Println("API key 验证通过。")
 			return true, nil
 		} else if errors.Is(err, provider.ErrInvalidAPIKey) {
-			fmt.Printf("API key 无效: %v\n", err)
-			cfg.AI.APIKey = ""
-			continue
+			fmt.Printf("环境变量 %s 中的 API key 无效: %v\n", configs.APIKeyEnvVar, err)
 		} else if errors.Is(err, provider.ErrAPIKeyValidationSoft) {
-			fmt.Printf("无法确认 API key 有效性: %v\n", err)
+			fmt.Printf("无法确认环境变量 %s 中的 API key 有效性: %v\n", configs.APIKeyEnvVar, err)
 			result, handleErr := handleSetupDecision(scanner, cfg, true, configPath)
 			if handleErr != nil {
 				return false, handleErr

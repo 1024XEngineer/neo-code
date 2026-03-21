@@ -9,18 +9,52 @@
 3. 结构化长期记忆检索与写回
 4. session memory 与短期上下文保留
 5. 人设文件注入
-6. 启动时交互配置 API Key
+6. 启动时校验环境变量 API Key
 7. `/memory`、`/clear-memory confirm`、`/clear-context`
 
 ## 配置方式
 
-只需要维护根目录下的 `config.yaml`。
+只需要维护根目录下的 `config.yaml`，并在系统环境变量中设置 `AI_API_KEY`。
 
 - 可以先参考 `config.example.yaml`
 - 首次启动时如果 `config.yaml` 不存在，程序会自动创建默认配置
-- 如果 `ai.api_key` 为空，会在启动阶段提示输入 API Key
-- 如果 Key 校验失败，会继续要求重新配置
+- API Key 配置方法见下方 `API Key 配置`
+- 如果 Key 校验失败，请更新环境变量后重新启动
 - 如果网络异常导致无法确认 Key 是否有效，可使用 `/retry`、`/continue`、`/models`、`/switch <model>` 或 `/exit`
+
+## API Key 配置
+
+程序现在只从系统环境变量 `AI_API_KEY` 读取 API Key，不再从 `config.yaml` 读取真实密钥。
+
+Windows 永久生效：
+
+```powershell
+setx AI_API_KEY "your-api-key"
+```
+
+设置后请关闭并重新打开终端，再验证是否生效：
+
+```powershell
+echo $env:AI_API_KEY
+```
+
+Windows 当前终端临时生效：
+
+```powershell
+$env:AI_API_KEY="your-api-key"
+```
+
+CMD 当前终端临时生效：
+
+```cmd
+set AI_API_KEY=your-api-key
+```
+
+配置完成后启动项目：
+
+```bash
+go run ./cmd/tui
+```
 
 示例：
 
@@ -62,7 +96,7 @@ models:
 
 说明：
 
-- `ai.api_key`：聊天模型调用所需 Key
+- `ai.api_key`：已废弃，占位保留，不再读取真实 Key
 - `memory.storage_path`：长期结构化记忆文件
 - `memory.persist_types`：允许持久化的结构化记忆类型
 - `memory.min_match_score`：最低召回分数
@@ -114,6 +148,7 @@ go run ./cmd/server
 
 ## 安全与本地文件
 
+- API Key 必须放在系统环境变量 `AI_API_KEY` 中，不再写入 `config.yaml`
 - `config.yaml` 已在 `.gitignore` 中忽略，不应提交真实密钥
 - `data/` 已在 `.gitignore` 中忽略，本地记忆不会默认入库
 - `.env` 不再是主配置来源，如保留仅用于个人兼容场景

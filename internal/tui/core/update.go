@@ -2,16 +2,22 @@ package core
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
+	"reflect"
 	"strings"
+	"unicode/utf8"
 
-	"github.com/charmbracelet/bubbletea"
 	"go-llm-demo/internal/server/domain"
+	"go-llm-demo/internal/server/infra/tools"
 	"go-llm-demo/internal/tui/infra"
+
+	tea "github.com/charmbracelet/bubbletea"
 )
 
+// Update 处理 Bubble Tea 事件并驱动聊天状态更新。
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 
@@ -34,11 +40,82 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case StreamDoneMsg:
 		m.generating = false
 		m.FinishLastMessage()
+
+		// 检查最后一条AI消息是否为JSON格式的工具调用
+		if len(m.messages) > 0 {
+			lastMsg := &m.messages[len(m.messages)-1]
+			if lastMsg.Role == "assistant" {
+				// 验证是否为JSON
+				var jsonData map[string]interface{}
+				if err := json.Unmarshal([]byte(lastMsg.Content), &jsonData); err == nil {
+					// 检查是否包含工具调用字段
+					if toolName, ok := jsonData["tool"].(string); ok && toolName != "" {
+						// 显示工具执行中提示
+						if toolParams, ok := jsonData["params"].(map[string]interface{}); ok {
+							if filePath, ok := toolParams["filePath"].(string); ok && toolName == "read" {
+								m.AddMessage("system", fmt.Sprintf("read:正在读取%s文件...", filePath))
+							} else if filePath, ok := toolParams["filePath"].(string); ok && (toolName == "edit" || toolName == "write") {
+								m.AddMessage("system", fmt.Sprintf("%s:正在处理%s文件...", toolName, filePath))
+							} else {
+								m.AddMessage("system", fmt.Sprintf("%s:正在执行工具...", toolName))
+							}
+						}
+
+						// 在goroutine中执行工具调用
+						return m, func() tea.Msg {
+							// 创建工具实例并执行
+							var tool tools.Tool
+							switch toolName {
+							case "read":
+								tool = &tools.ReadTool{}
+							case "write":
+								tool = &tools.WriteTool{}
+							case "edit":
+								tool = &tools.EditTool{}
+							case "bash":
+								tool = &tools.BashTool{}
+							case "list":
+								tool = &tools.ListTool{}
+							case "grep":
+								tool = &tools.GrepTool{}
+							default:
+								return ToolErrorMsg{Err: fmt.Errorf("不支持的工具: %s", toolName)}
+							}
+
+							// 安全地获取并转换参数
+							var paramsMap map[string]interface{}
+							if paramsRaw, ok := jsonData["params"]; ok {
+								if paramsCasted, ok := paramsRaw.(map[string]interface{}); ok {
+									// 转换参数键从snake_case到camelCase以兼容AI生成的参数
+									paramsMap = convertSnakeCaseToCamelCase(paramsCasted)
+								} else {
+									return ToolErrorMsg{Err: fmt.Errorf("工具参数格式错误")}
+								}
+							} else {
+								paramsMap = make(map[string]interface{})
+							}
+
+							// 执行工具
+							result := tool.Run(paramsMap)
+
+							// 将结果作为系统消息返回
+							if result.Success {
+								return ToolResultMsg{Result: result}
+							} else {
+								return ToolErrorMsg{Err: fmt.Errorf("%s", result.Error)}
+							}
+						}
+					}
+				}
+			}
+		}
+
 		return m, nil
 
 	case StreamErrorMsg:
 		m.generating = false
 		m.AddMessage("assistant", fmt.Sprintf("错误: %v", msg.Err))
+		m.TrimHistory(m.historyTurns)
 		return m, nil
 
 	case ShowHelpMsg:
@@ -58,6 +135,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case ExitMsg:
 		return m, tea.Quit
+
+	case ToolResultMsg:
+		// 将工具执行结果添加为系统消息，然后重新获取AI响应
+		m.AddMessage("system", fmt.Sprintf("工具执行结果: %s", msg.Result.Output))
+		m.AddMessage("assistant", "")
+		m.generating = true
+
+		// 构建包含工具结果的消息并重新请求AI
+		messages := m.buildMessages()
+		return m, m.streamResponse(messages)
+
+	case ToolErrorMsg:
+		// 将工具执行错误添加为系统消息
+		m.AddMessage("system", fmt.Sprintf("工具执行错误: %v", msg.Err))
+		m.AddMessage("assistant", "")
+		m.generating = true
+
+		// 构建包含错误信息的消息并重新请求AI
+		messages := m.buildMessages()
+		return m, m.streamResponse(messages)
 	}
 
 	return m, cmd
@@ -87,24 +184,83 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case tea.KeyF5:
 		return m.handleSubmit()
 
+	case tea.KeyF8:
+		return m.handleSubmit()
+
 	case tea.KeyUp:
+		if m.multilineMode {
+			m.moveCursorUp()
+			return *m, nil
+		}
 		if len(m.commandHistory) > 0 {
 			if m.cmdHistIndex < len(m.commandHistory)-1 {
 				m.cmdHistIndex++
 			}
 			if m.cmdHistIndex >= 0 && m.cmdHistIndex < len(m.commandHistory) {
 				m.inputBuffer = m.commandHistory[len(m.commandHistory)-1-m.cmdHistIndex]
+				m.cursorLine = 0
+				m.cursorCol = len(m.inputBuffer)
 			}
 		}
 		return *m, nil
 
 	case tea.KeyDown:
+		if m.multilineMode {
+			m.moveCursorDown()
+			return *m, nil
+		}
 		if m.cmdHistIndex > 0 {
 			m.cmdHistIndex--
 			m.inputBuffer = m.commandHistory[len(m.commandHistory)-1-m.cmdHistIndex]
 		} else {
 			m.cmdHistIndex = -1
 			m.inputBuffer = ""
+		}
+		return *m, nil
+
+	case tea.KeyLeft:
+		if m.multilineMode {
+			m.moveCursorLeft()
+			return *m, nil
+		}
+		return *m, nil
+
+	case tea.KeyRight:
+		if m.multilineMode {
+			m.moveCursorRight()
+			return *m, nil
+		}
+		return *m, nil
+
+	case tea.KeyHome:
+		if m.multilineMode {
+			m.cursorCol = 0
+			return *m, nil
+		}
+		return *m, nil
+
+	case tea.KeyEnd:
+		if m.multilineMode {
+			lines := strings.Split(m.inputBuffer, "\n")
+			if m.cursorLine < len(lines) {
+				m.cursorCol = len(lines[m.cursorLine])
+			}
+			return *m, nil
+		}
+		return *m, nil
+
+	case tea.KeyDelete:
+		if m.multilineMode {
+			m.deleteCharAtCursor()
+			return *m, nil
+		}
+		return *m, nil
+
+	case tea.KeyTab:
+		if m.multilineMode {
+			m.insertAtCursor("\t")
+		} else {
+			m.inputBuffer += "\t"
 		}
 		return *m, nil
 
@@ -117,18 +273,42 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m.handleSubmit()
 			}
 		}
+
+		// 检测是否是粘贴事件（bracked paste mode）
+		pasteField := reflect.ValueOf(msg).FieldByName("Paste")
+		isPaste := pasteField.IsValid() && pasteField.Bool()
+
 		r := string(msg.Runes)
-		if msg.Type == tea.KeySpace && m.inputBuffer == "" {
-			return *m, nil
+
+		// 如果是粘贴，自动进入多行模式
+		if isPaste && !m.multilineMode && strings.Contains(r, "\n") {
+			m.enterMultilineMode()
 		}
-		m.inputBuffer += r
-		m.lastKeyWasEnter = false
+
+		if len(r) > 0 && (r[0] >= 32 || r[0] == 9) {
+			if m.multilineMode {
+				m.insertAtCursor(r)
+			} else {
+				m.inputBuffer += r
+				m.cursorCol++
+			}
+		} else if len(r) > 0 && r[0] < 32 && r[0] != 9 {
+			// 处理控制字符（如换行）
+			if r[0] == 10 || r[0] == 13 { // \n or \r
+				m.handleNewline()
+			}
+		}
 		m.cmdHistIndex = -1
 		return *m, nil
 
 	case tea.KeyBackspace:
-		if len(m.inputBuffer) > 0 {
-			m.inputBuffer = m.inputBuffer[:len(m.inputBuffer)-1]
+		if m.multilineMode {
+			m.backspaceAtCursor()
+		} else {
+			if len(m.inputBuffer) > 0 {
+				runes := []rune(m.inputBuffer)
+				m.inputBuffer = string(runes[:len(runes)-1])
+			}
 		}
 		return *m, nil
 
@@ -143,11 +323,45 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) handleNewline() (tea.Model, tea.Cmd) {
-	m.inputBuffer += "\n"
+	if !m.multilineMode {
+		m.enterMultilineMode()
+	}
+
+	lines := strings.Split(m.inputBuffer, "\n")
+	if m.cursorLine < len(lines) {
+		line := lines[m.cursorLine]
+		runes := []rune(line)
+
+		if m.cursorCol > len(runes) {
+			m.cursorCol = len(runes)
+		}
+
+		before := string(runes[:m.cursorCol])
+		after := string(runes[m.cursorCol:])
+
+		lines[m.cursorLine] = before
+
+		newLines := make([]string, 0, len(lines)+1)
+		newLines = append(newLines, lines[:m.cursorLine+1]...)
+		newLines = append(newLines, after)
+		if m.cursorLine < len(lines)-1 {
+			newLines = append(newLines, lines[m.cursorLine+1:]...)
+		}
+
+		m.inputBuffer = strings.Join(newLines, "\n")
+	} else {
+		m.inputBuffer += "\n"
+	}
+	m.cursorLine++
+	m.cursorCol = 0
 	return *m, nil
 }
 
 func (m *Model) handleSubmit() (tea.Model, tea.Cmd) {
+	m.multilineMode = false
+	m.cursorLine = 0
+	m.cursorCol = 0
+
 	input := strings.TrimSpace(m.inputBuffer)
 	m.inputBuffer = ""
 
@@ -182,6 +396,8 @@ func (m *Model) handleSubmit() (tea.Model, tea.Cmd) {
 
 	m.AddMessage("user", input)
 	m.AddMessage("assistant", "")
+	// 在请求发出前先裁剪原始消息，避免 UI 历史无限扩张并影响短期上下文质量。
+	m.TrimHistory(m.historyTurns)
 	m.generating = true
 
 	m.commandHistory = append(m.commandHistory, input)
@@ -363,6 +579,7 @@ func (m *Model) submitCode() tea.Cmd {
 
 	m.AddMessage("user", fmt.Sprintf("```\n%s\n```", code))
 	m.AddMessage("assistant", "")
+	m.TrimHistory(m.historyTurns)
 	m.generating = true
 
 	return tea.Batch(
@@ -375,6 +592,7 @@ func (m *Model) sendCodeToAI(code string) tea.Cmd {
 	prompt := fmt.Sprintf("请解释以下代码：\n```\n%s\n```", code)
 	m.AddMessage("user", prompt)
 	m.AddMessage("assistant", "")
+	m.TrimHistory(m.historyTurns)
 	m.generating = true
 
 	messages := m.buildMessages()
@@ -384,6 +602,7 @@ func (m *Model) sendCodeToAI(code string) tea.Cmd {
 func (m *Model) explainCode(code string) tea.Cmd {
 	m.AddMessage("user", fmt.Sprintf("请解释以下代码：\n```\n%s\n```", code))
 	m.AddMessage("assistant", "")
+	m.TrimHistory(m.historyTurns)
 	m.generating = true
 
 	messages := m.buildMessages()
@@ -405,6 +624,27 @@ func getDelimiter(s string) string {
 		return s[:3]
 	}
 	return s
+}
+
+// convertSnakeCaseToCamelCase 将snake_case键转换为camelCase
+func convertSnakeCaseToCamelCase(params map[string]interface{}) map[string]interface{} {
+	result := make(map[string]interface{})
+	for key, value := range params {
+		// 将snake_case转换为camelCase
+		parts := strings.Split(key, "_")
+		if len(parts) > 1 {
+			camelKey := parts[0]
+			for i := 1; i < len(parts); i++ {
+				if len(parts[i]) > 0 {
+					camelKey += strings.ToUpper(parts[i][:1]) + parts[i][1:]
+				}
+			}
+			result[camelKey] = value
+		} else {
+			result[key] = value
+		}
+	}
+	return result
 }
 
 func runCodeCmd(code string) tea.Cmd {
@@ -463,4 +703,140 @@ func detectLanguage(code string) (string, string) {
 	}
 
 	return "", ""
+}
+
+func (m *Model) moveCursorUp() {
+	if m.cursorLine > 0 {
+		m.cursorLine--
+		lines := strings.Split(m.inputBuffer, "\n")
+		if m.cursorLine < len(lines) {
+			lineRunes := utf8.RuneCountInString(lines[m.cursorLine])
+			if m.cursorCol > lineRunes {
+				m.cursorCol = lineRunes
+			}
+		}
+	}
+}
+
+func (m *Model) moveCursorDown() {
+	lines := strings.Split(m.inputBuffer, "\n")
+	if m.cursorLine < len(lines)-1 {
+		m.cursorLine++
+		lineRunes := utf8.RuneCountInString(lines[m.cursorLine])
+		if m.cursorCol > lineRunes {
+			m.cursorCol = lineRunes
+		}
+	}
+}
+
+func (m *Model) moveCursorLeft() {
+	if m.cursorLine == 0 && m.cursorCol == 0 {
+		return
+	}
+	if m.cursorCol > 0 {
+		m.cursorCol--
+	} else if m.cursorLine > 0 {
+		m.cursorLine--
+		lines := strings.Split(m.inputBuffer, "\n")
+		m.cursorCol = utf8.RuneCountInString(lines[m.cursorLine])
+	}
+}
+
+func (m *Model) moveCursorRight() {
+	lines := strings.Split(m.inputBuffer, "\n")
+	currentLineLen := utf8.RuneCountInString(lines[m.cursorLine])
+	if m.cursorCol < currentLineLen {
+		m.cursorCol++
+	} else if m.cursorLine < len(lines)-1 {
+		m.cursorLine++
+		m.cursorCol = 0
+	}
+}
+
+func (m *Model) insertAtCursor(text string) {
+	lines := strings.Split(m.inputBuffer, "\n")
+	if m.cursorLine >= len(lines) {
+		m.inputBuffer += text
+		m.cursorLine = len(lines) - 1
+		m.cursorCol = utf8.RuneCountInString(lines[m.cursorLine])
+		return
+	}
+
+	line := lines[m.cursorLine]
+	runes := []rune(line)
+	if m.cursorCol > len(runes) {
+		m.cursorCol = len(runes)
+	}
+	before := string(runes[:m.cursorCol])
+	after := string(runes[m.cursorCol:])
+	lines[m.cursorLine] = before + text + after
+	m.inputBuffer = strings.Join(lines, "\n")
+	m.cursorCol += utf8.RuneCountInString(text)
+}
+
+func (m *Model) deleteCharAtCursor() {
+	lines := strings.Split(m.inputBuffer, "\n")
+	if m.cursorLine >= len(lines) {
+		return
+	}
+
+	line := lines[m.cursorLine]
+	runes := []rune(line)
+
+	if m.cursorCol > len(runes) {
+		m.cursorCol = len(runes)
+	}
+
+	if m.cursorCol < len(runes) {
+		runes = append(runes[:m.cursorCol], runes[m.cursorCol+1:]...)
+		lines[m.cursorLine] = string(runes)
+		m.inputBuffer = strings.Join(lines, "\n")
+	} else if m.cursorLine < len(lines)-1 {
+		lines[m.cursorLine] = line + lines[m.cursorLine+1]
+		lines = append(lines[:m.cursorLine+1], lines[m.cursorLine+2:]...)
+		m.inputBuffer = strings.Join(lines, "\n")
+	}
+}
+
+func (m *Model) backspaceAtCursor() {
+	if m.cursorLine == 0 && m.cursorCol == 0 {
+		return
+	}
+
+	lines := strings.Split(m.inputBuffer, "\n")
+
+	if m.cursorCol > 0 {
+		line := lines[m.cursorLine]
+		runes := []rune(line)
+
+		if m.cursorCol > len(runes) {
+			m.cursorCol = len(runes)
+		}
+
+		if m.cursorCol > 0 {
+			runes = append(runes[:m.cursorCol-1], runes[m.cursorCol:]...)
+			lines[m.cursorLine] = string(runes)
+			m.inputBuffer = strings.Join(lines, "\n")
+			m.cursorCol--
+		}
+	} else if m.cursorLine > 0 {
+		lines = strings.Split(m.inputBuffer, "\n")
+		m.cursorLine--
+		m.cursorCol = utf8.RuneCountInString(lines[m.cursorLine])
+		lines[m.cursorLine] = lines[m.cursorLine] + lines[m.cursorLine+1]
+		lines = append(lines[:m.cursorLine+1], lines[m.cursorLine+2:]...)
+		m.inputBuffer = strings.Join(lines, "\n")
+	}
+}
+
+func (m *Model) enterMultilineMode() {
+	m.multilineMode = true
+	m.cursorLine = 0
+	m.cursorCol = utf8.RuneCountInString(m.inputBuffer)
+}
+
+func (m *Model) exitMultilineMode() {
+	m.multilineMode = false
+	m.cursorLine = 0
+	m.cursorCol = 0
 }

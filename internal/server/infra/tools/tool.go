@@ -6,6 +6,7 @@ import (
 )
 
 type ToolResult = domain.ToolResult
+type Tool = domain.Tool
 
 // GlobalRegistry 是ToolRegistry的单例实例。
 var GlobalRegistry = &ToolRegistry{
@@ -14,16 +15,16 @@ var GlobalRegistry = &ToolRegistry{
 
 // ToolRegistry 管理工具的注册和检索。
 type ToolRegistry struct {
-	tools map[string]domain.Tool
+	tools map[string]Tool
 }
 
 // Register 向注册表添加一个工具。
-func (r *ToolRegistry) Register(tool domain.Tool) {
+func (r *ToolRegistry) Register(tool Tool) {
 	r.tools[tool.Name()] = tool
 }
 
 // Get 根据名称从注册表中检索一个工具。
-func (r *ToolRegistry) Get(name string) domain.Tool {
+func (r *ToolRegistry) Get(name string) Tool {
 	return r.tools[name]
 }
 

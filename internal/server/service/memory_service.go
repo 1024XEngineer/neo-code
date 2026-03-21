@@ -26,6 +26,7 @@ type Match struct {
 	Score float64
 }
 
+// NewMemoryService 使用长期存储和会话存储创建记忆服务。
 func NewMemoryService(
 	persistentRepo domain.MemoryRepository,
 	sessionRepo domain.MemoryRepository,
@@ -46,6 +47,7 @@ func NewMemoryService(
 	}
 }
 
+// BuildContext 为当前输入返回得分最高的记忆片段。
 func (s *memoryServiceImpl) BuildContext(ctx context.Context, userInput string) (string, error) {
 	persistentItems, err := s.persistentRepo.List(ctx)
 	if err != nil {
@@ -86,6 +88,7 @@ func (s *memoryServiceImpl) BuildContext(ctx context.Context, userInput string) 
 	return builder.String(), nil
 }
 
+// Save 从一轮对话中提取记忆项并保存。
 func (s *memoryServiceImpl) Save(ctx context.Context, userInput, reply string) error {
 	items := deriveMemoryItems(userInput, reply)
 	for _, item := range items {
@@ -107,6 +110,7 @@ func (s *memoryServiceImpl) Save(ctx context.Context, userInput, reply string) e
 	return nil
 }
 
+// GetStats 返回记忆服务的数量统计和检索配置。
 func (s *memoryServiceImpl) GetStats(ctx context.Context) (*domain.MemoryStats, error) {
 	persistentItems, err := s.persistentRepo.List(ctx)
 	if err != nil {
@@ -128,14 +132,17 @@ func (s *memoryServiceImpl) GetStats(ctx context.Context) (*domain.MemoryStats, 
 	return stats, nil
 }
 
+// Clear 清空所有长期记忆项。
 func (s *memoryServiceImpl) Clear(ctx context.Context) error {
 	return s.persistentRepo.Clear(ctx)
 }
 
+// ClearSession 清空所有会话级记忆项。
 func (s *memoryServiceImpl) ClearSession(ctx context.Context) error {
 	return s.sessionRepo.Clear(ctx)
 }
 
+// Search 对记忆项打分并返回与查询最相关的结果。
 func Search(items []domain.MemoryItem, query string, topK int, minScore float64) []Match {
 	trimmedQuery := strings.TrimSpace(query)
 	if topK <= 0 || trimmedQuery == "" {
@@ -163,6 +170,7 @@ func Search(items []domain.MemoryItem, query string, topK int, minScore float64)
 	return matches
 }
 
+// MergeMatches 对多个匹配结果分组去重并重新排序。
 func MergeMatches(topK int, groups ...[]Match) []Match {
 	merged := make([]Match, 0)
 	seen := map[string]Match{}
@@ -387,10 +395,10 @@ func extractProjectRuleMemory(userInput, assistantReply string, now time.Time) (
 
 func extractCodeFactMemory(userInput, assistantReply string, now time.Time) (domain.MemoryItem, bool) {
 	combined := buildMemoryText(userInput, assistantReply)
-	if !containsAnyFold(combined, ".go", "config.yaml", "main.go", "services/", "memory/", "函数", "文件", "模块", "包") {
+	if !looksLikeCodeKnowledge(userInput, assistantReply) {
 		return domain.MemoryItem{}, false
 	}
-	if containsAnyFold(strings.ToLower(userInput), "帮我", "请你", "写一个", "实现一个") && !containsAnyFold(combined, "在 ", "位于", "负责", "调用", "使用", "路径", "文件") {
+	if containsAnyFold(strings.ToLower(userInput), "帮我", "请你", "写一个", "实现一个") && !containsAnyFold(combined, "在 ", "位于", "负责", "调用", "使用", "路径", "文件", "函数", "模块", "返回", "读取", "写入") {
 		return domain.MemoryItem{}, false
 	}
 	summary := domain.SummarizeText(firstNonEmptyLine(assistantReply, userInput), 140)
@@ -444,6 +452,30 @@ func isCodingRelevant(userInput, assistantReply string) bool {
 func looksLikeProjectFact(userInput, assistantReply string) bool {
 	combined := strings.ToLower(buildMemoryText(userInput, assistantReply))
 	return containsAnyFold(combined, "config.yaml", "readme", "go test", "go build", "项目", "仓库", "约定", "配置", "结构", "命令", "services/", "memory/", "main.go")
+}
+
+func looksLikeCodeKnowledge(userInput, assistantReply string) bool {
+	combined := buildMemoryText(userInput, assistantReply)
+	if !isCodingRelevant(userInput, assistantReply) {
+		return false
+	}
+
+	hasCodeAnchor := containsAnyFold(combined,
+		".go", "config.yaml", "main.go", "services/", "memory/", "json", "yaml",
+		"function", "func", "struct", "interface", "method", "package", "import",
+		"函数", "文件", "模块", "包", "结构体", "接口", "方法", "字段", "参数", "路径", "目录")
+	if !hasCodeAnchor {
+		return false
+	}
+
+	trimmedUser := strings.ToLower(strings.TrimSpace(userInput))
+	trimmedReply := strings.ToLower(strings.TrimSpace(assistantReply))
+	hasQuestionIntent := containsAnyFold(trimmedUser,
+		"什么", "干嘛", "作用", "怎么", "如何", "why", "where", "which", "负责", "在哪", "含义", "区别")
+	hasExplanation := containsAnyFold(trimmedReply,
+		"用于", "负责", "位于", "表示", "通过", "调用", "读取", "写入", "返回", "实现", "处理", "对应", "配置", "路径", "字段", "参数")
+
+	return hasQuestionIntent || hasExplanation || len(strings.TrimSpace(assistantReply)) >= 48
 }
 
 func looksLikeStableInstruction(text string) bool {

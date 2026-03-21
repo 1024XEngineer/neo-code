@@ -5,6 +5,9 @@
 - **输入**：自然语言指令（例如：“帮我写一个 Go 语言的 HTTP Client”）。
 - **过程**：AI 思考 -> 自动调用本地工具 (读写文件、运行命令) -> 验证结果。
 - **输出**：完成后的代码及运行报告。
+<img width="1668" height="877" alt="image" src="https://github.com/user-attachments/assets/1de7fc4f-7147-46fc-8d24-a0d8ee874515" />
+
+> 如需修改架构图，请点击[此处](https://www.processon.com/v/69be5849570ada05a4e95984)
 
 ## 2. 核心架构：四层模型 (Server 端)
 

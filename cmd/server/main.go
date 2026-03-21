@@ -18,6 +18,7 @@ func main() {
 	cfg := configs.GlobalAppConfig
 	memoryRepo := repository.NewFileMemoryStore(cfg.Memory.StoragePath, cfg.Memory.MaxItems)
 	sessionRepo := repository.NewSessionMemoryStore(cfg.Memory.MaxItems)
+	workingRepo := repository.NewWorkingMemoryStore()
 	memorySvc := service.NewMemoryService(
 		memoryRepo,
 		sessionRepo,
@@ -27,6 +28,7 @@ func main() {
 		cfg.Memory.StoragePath,
 		cfg.Memory.PersistTypes,
 	)
+	workingSvc := service.NewWorkingMemoryService(workingRepo, cfg.History.ShortTermTurns)
 
 	roleRepo := repository.NewFileRoleStore("./data/roles.json")
 	roleSvc := service.NewRoleService(roleRepo, cfg.Persona.FilePath)
@@ -37,7 +39,7 @@ func main() {
 		return
 	}
 
-	chatGateway := service.NewChatService(memorySvc, roleSvc, chatProvider)
+	chatGateway := service.NewChatService(memorySvc, workingSvc, roleSvc, chatProvider)
 	fmt.Printf("Server initialized with services: %+v\n", chatGateway)
 	fmt.Println("Note: This is a placeholder. Actual server implementation goes here.")
 }

@@ -5,7 +5,7 @@ app:
 
 ai:
   provider: "modelscope"
-  api_key: ""
+  api_key: "" # deprecated: API Key is read only from AI_API_KEY
   model: "Qwen/Qwen3-Coder-480B-A35B-Instruct"
 
 memory:
