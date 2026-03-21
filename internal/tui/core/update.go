@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/bubbletea"
+	"go-llm-demo/internal/server/domain"
 	"go-llm-demo/internal/tui/infra"
 )
 
@@ -49,8 +50,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case RefreshMemoryMsg:
-		stats, _ := m.client.GetMemoryStats(context.Background())
-		m.memoryStats = *stats
+		stats, err := m.client.GetMemoryStats(context.Background())
+		if err == nil && stats != nil {
+			m.memoryStats = *stats
+		}
 		return m, nil
 
 	case ExitMsg:
@@ -185,30 +188,61 @@ func (m *Model) handleCommand(input string) (tea.Model, tea.Cmd) {
 	case "/exit", "/quit", "/q":
 		return *m, tea.Quit
 	case "/switch":
-		if len(args) > 0 {
-			m.activeModel = args[0]
-			m.AddMessage("assistant", fmt.Sprintf("已切换到模型: %s", args[0]))
+		if len(args) == 0 {
+			m.AddMessage("assistant", "用法: /switch <model>")
+			return *m, nil
 		}
+		target := args[0]
+		if !containsModel(m.client.ListModels(), target) {
+			m.AddMessage("assistant", fmt.Sprintf("模型不可用: %s", target))
+			return *m, nil
+		}
+		m.activeModel = target
+		m.AddMessage("assistant", fmt.Sprintf("已切换到模型: %s", target))
 	case "/models":
-		models := m.provider.ListModels()
+		models := m.client.ListModels()
 		list := strings.Join(models, "\n  - ")
 		m.AddMessage("assistant", fmt.Sprintf("可用模型:\n  - %s", list))
 	case "/memory":
-		stats := m.memoryStats
+		stats, err := m.client.GetMemoryStats(context.Background())
+		if err != nil {
+			m.AddMessage("assistant", fmt.Sprintf("读取记忆统计失败: %v", err))
+			return *m, nil
+		}
+		m.memoryStats = *stats
 		m.AddMessage("assistant", fmt.Sprintf(
-			"记忆统计:\n  条目: %d\n  TopK: %d\n  最小分数: %.2f\n  文件: %s",
-			stats.Items, stats.TopK, stats.MinScore, stats.Path,
+			"记忆统计:\n  长期: %d\n  会话: %d\n  总计: %d\n  TopK: %d\n  最小分数: %.2f\n  文件: %s\n  类型: %s",
+			stats.PersistentItems, stats.SessionItems, stats.TotalItems, stats.TopK, stats.MinScore, stats.Path, formatTypeStats(stats.ByType),
 		))
 	case "/clear-memory":
-		m.client.ClearMemory(context.Background())
+		if len(args) == 0 || args[0] != "confirm" {
+			m.AddMessage("assistant", "此命令会清空长期记忆。请使用 /clear-memory confirm")
+			return *m, nil
+		}
+		if err := m.client.ClearMemory(context.Background()); err != nil {
+			m.AddMessage("assistant", fmt.Sprintf("清空长期记忆失败: %v", err))
+			return *m, nil
+		}
+		stats, _ := m.client.GetMemoryStats(context.Background())
+		if stats != nil {
+			m.memoryStats = *stats
+		}
 		m.AddMessage("assistant", "已清空本地长期记忆")
 	case "/clear-context":
+		if err := m.client.ClearSessionMemory(context.Background()); err != nil {
+			m.AddMessage("assistant", fmt.Sprintf("清空会话记忆失败: %v", err))
+			return *m, nil
+		}
 		m.messages = nil
 		if m.persona != "" {
 			m.messages = append(m.messages, Message{
 				Role:    "system",
 				Content: m.persona,
 			})
+		}
+		stats, _ := m.client.GetMemoryStats(context.Background())
+		if stats != nil {
+			m.memoryStats = *stats
 		}
 		m.AddMessage("assistant", "已清空当前会话上下文")
 	case "/run":
@@ -230,6 +264,38 @@ func (m *Model) handleCommand(input string) (tea.Model, tea.Cmd) {
 	}
 
 	return *m, nil
+}
+
+func containsModel(models []string, target string) bool {
+	for _, model := range models {
+		if model == target {
+			return true
+		}
+	}
+	return false
+}
+
+func formatTypeStats(byType map[string]int) string {
+	if len(byType) == 0 {
+		return "无"
+	}
+	ordered := []string{
+		domain.TypeUserPreference,
+		domain.TypeProjectRule,
+		domain.TypeCodeFact,
+		domain.TypeFixRecipe,
+		domain.TypeSessionMemory,
+	}
+	parts := make([]string, 0, len(byType))
+	for _, key := range ordered {
+		if count := byType[key]; count > 0 {
+			parts = append(parts, fmt.Sprintf("%s=%d", key, count))
+		}
+	}
+	if len(parts) == 0 {
+		return "无"
+	}
+	return strings.Join(parts, ", ")
 }
 
 func (m *Model) buildMessages() []infra.Message {
