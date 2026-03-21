@@ -106,7 +106,7 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyRunes:
 		r := string(msg.Runes)
-		if msg.Type == tea.KeySpace && m.inputBuffer == "" {
+		if m.inputBuffer == "" && len(r) > 0 && (r == " " || r == "\t") {
 			return *m, nil
 		}
 		m.inputBuffer += r
@@ -115,7 +115,8 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyBackspace:
 		if len(m.inputBuffer) > 0 {
-			m.inputBuffer = m.inputBuffer[:len(m.inputBuffer)-1]
+			runes := []rune(m.inputBuffer)
+			m.inputBuffer = string(runes[:len(runes)-1])
 		}
 		return *m, nil
 
