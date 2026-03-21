@@ -81,7 +81,11 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return *m, nil
 
 	case tea.KeyEnter:
-		return m.handleEnter()
+		m.lastKeyWasEnter = true
+		return m.handleNewline()
+
+	case tea.KeyF5:
+		return m.handleSubmit()
 
 	case tea.KeyUp:
 		if len(m.commandHistory) > 0 {
@@ -105,11 +109,20 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return *m, nil
 
 	case tea.KeyRunes:
+		if m.lastKeyWasEnter {
+			m.lastKeyWasEnter = false
+			runes := msg.Runes
+			if len(runes) == 1 && runes[0] == 27 {
+				m.lastKeyWasEnter = false
+				return m.handleSubmit()
+			}
+		}
 		r := string(msg.Runes)
 		if msg.Type == tea.KeySpace && m.inputBuffer == "" {
 			return *m, nil
 		}
 		m.inputBuffer += r
+		m.lastKeyWasEnter = false
 		m.cmdHistIndex = -1
 		return *m, nil
 
@@ -129,7 +142,12 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return *m, nil
 }
 
-func (m *Model) handleEnter() (tea.Model, tea.Cmd) {
+func (m *Model) handleNewline() (tea.Model, tea.Cmd) {
+	m.inputBuffer += "\n"
+	return *m, nil
+}
+
+func (m *Model) handleSubmit() (tea.Model, tea.Cmd) {
 	input := strings.TrimSpace(m.inputBuffer)
 	m.inputBuffer = ""
 

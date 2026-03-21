@@ -40,8 +40,9 @@ type Model struct {
 	cmdHistIndex   int
 	inputBuffer    string
 
-	client  infra.ChatClient
-	persona string
+	client          infra.ChatClient
+	persona         string
+	lastKeyWasEnter bool
 }
 
 type Message struct {

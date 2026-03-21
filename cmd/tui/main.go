@@ -61,7 +61,7 @@ func ensureAPIKeyInteractive(ctx context.Context, scanner *bufio.Scanner, config
 	for {
 		apiKey := strings.TrimSpace(cfg.AI.APIKey)
 		if apiKey == "" {
-			fmt.Println("No API key configured. Enter your API key, or type /exit to quit.")
+			fmt.Println("未配置 API key。请输入你的 API key，或输入 /exit 退出。")
 			input, ok, inputErr := readInteractiveLine(scanner, "api_key> ")
 			if inputErr != nil {
 				return false, inputErr

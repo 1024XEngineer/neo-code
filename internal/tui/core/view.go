@@ -156,15 +156,31 @@ func RenderInput(buffer string, waitingCode bool, codeDelim string, codeLines []
 
 		b.WriteString("│    │ " + lipgloss.NewStyle().Foreground(lipgloss.Color("#61AFEF")).Render(buffer))
 		b.WriteString("\n")
-		b.WriteString("└─ Ctrl+D 发送 · Ctrl+C 取消 ─┘")
+		b.WriteString("└─ 双 Enter 发送 · Ctrl+C 取消 ─┘")
 	} else {
-		prompt := lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#61AFEF")).
-			Bold(true).Render("› ")
+		lines := strings.Split(buffer, "\n")
+		hasMultipleLines := len(lines) > 1 || (len(lines) == 1 && lines[0] != "")
 
-		b.WriteString(prompt)
-		b.WriteString(buffer)
-		b.WriteString("█")
+		if hasMultipleLines {
+			b.WriteString(helpStyle.Render("┌─ 多行输入 ─┐"))
+			b.WriteString("\n")
+			for i, line := range lines {
+				if i == len(lines)-1 {
+					b.WriteString(fmt.Sprintf("│ %2d │ %s█\n", i+1, line))
+				} else {
+					b.WriteString(fmt.Sprintf("│ %2d │ %s\n", i+1, line))
+				}
+			}
+			b.WriteString("└─ Enter 换行 · F5 发送 ─┘")
+		} else {
+			prompt := lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#61AFEF")).
+				Bold(true).Render("› ")
+
+			b.WriteString(prompt)
+			b.WriteString(buffer)
+			b.WriteString("█")
+		}
 	}
 
 	return b.String()
@@ -248,9 +264,9 @@ func RenderHelp(width int) string {
 	}
 
 	b.WriteString("\n")
-	b.WriteString(helpStyle.Render("多行输入: ''' / \"\"\" / ``` 包裹代码"))
+	b.WriteString(helpStyle.Render("多行输入: Enter 换行，F5 发送"))
 	b.WriteString("\n")
-	b.WriteString(helpStyle.Render("发送: Enter 发送单行, Ctrl+D 发送代码块"))
+	b.WriteString(helpStyle.Render("命令: /help 查看所有命令"))
 	b.WriteString("\n")
 	b.WriteString(helpStyle.Render("取消: Ctrl+C"))
 
