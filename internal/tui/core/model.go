@@ -42,8 +42,6 @@ type Model struct {
 
 	client  infra.ChatClient
 	persona string
-
-	provider Provider
 }
 
 type Message struct {
@@ -51,25 +49,6 @@ type Message struct {
 	Content   string
 	Timestamp time.Time
 	Streaming bool
-}
-
-type Provider interface {
-	GetDefaultModel() string
-	ListModels() []string
-}
-
-type modelProvider struct{}
-
-func (modelProvider) GetDefaultModel() string {
-	return "Qwen/Qwen2.5-Coder-7B-Instruct"
-}
-
-func (modelProvider) ListModels() []string {
-	return []string{
-		"Qwen/Qwen2.5-Coder-7B-Instruct",
-		"Qwen/Qwen2.5-7B-Instruct",
-		"deepseek-ai/DeepSeek-Coder-V2-Lite-Instruct",
-	}
 }
 
 var (
@@ -103,21 +82,22 @@ var (
 )
 
 func NewModel(client infra.ChatClient, persona string) Model {
-	mp := modelProvider{}
-	model, _ := client.GetMemoryStats(context.Background())
+	stats, _ := client.GetMemoryStats(context.Background())
+	if stats == nil {
+		stats = &infra.MemoryStats{}
+	}
 
 	return Model{
 		mode:           ModeChat,
 		focused:        "input",
 		messages:       make([]Message, 0),
 		historyTurns:   6,
-		activeModel:    mp.GetDefaultModel(),
-		memoryStats:    *model,
+		activeModel:    client.DefaultModel(),
+		memoryStats:    *stats,
 		commandHistory: make([]string, 0),
 		cmdHistIndex:   -1,
 		client:         client,
 		persona:        persona,
-		provider:       mp,
 	}
 }
 

@@ -34,7 +34,7 @@ func (m Model) View() string {
 	statusBar := lipgloss.NewStyle().
 		Height(statusHeight).
 		Width(m.width).
-		Render(RenderStatusBar(m.activeModel, m.memoryStats.Items, m.generating, m.width))
+		Render(RenderStatusBar(m.activeModel, m.memoryStats.TotalItems, m.generating, m.width))
 
 	padding := availableHeight - countLines(content)
 	if padding > 0 {
@@ -229,7 +229,7 @@ func RenderHelp(width int) string {
 		{"/run <code>", "执行代码"},
 		{"/explain <code>", "解释代码"},
 		{"/memory", "显示记忆统计"},
-		{"/clear-memory", "清空长期记忆"},
+		{"/clear-memory confirm", "清空长期记忆"},
 		{"/clear-context", "清空会话上下文"},
 		{"/exit", "退出程序"},
 	}
