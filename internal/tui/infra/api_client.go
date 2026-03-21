@@ -4,7 +4,7 @@ import (
 	"context"
 	"strings"
 
-	"go-llm-demo/config"
+	"go-llm-demo/configs"
 	"go-llm-demo/internal/server/domain"
 	"go-llm-demo/internal/server/infra/provider"
 	"go-llm-demo/internal/server/infra/repository"
@@ -35,11 +35,11 @@ type MemoryStats struct {
 type localChatClient struct {
 	roleSvc   domain.RoleService
 	memorySvc domain.MemoryService
-	config    *config.AppConfiguration
+	config    *configs.AppConfiguration
 }
 
 func NewLocalChatClient() (ChatClient, error) {
-	cfg := config.GlobalAppConfig
+	cfg := configs.GlobalAppConfig
 	if cfg == nil {
 		return nil, context.Canceled
 	}
