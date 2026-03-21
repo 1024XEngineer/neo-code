@@ -61,9 +61,20 @@ func (s *memoryServiceImpl) BuildContext(ctx context.Context, userInput string) 
 	persistentMatches := Search(persistentItems, userInput, s.topK, s.minScore)
 	sessionMatches := Search(sessionItems, userInput, s.topK, s.minScore)
 	matches := MergeMatches(s.topK, persistentMatches, sessionMatches)
-	if len(matches) == 0 {
+
+	// 新增：进行最终的分数过滤，防止低分项进入上下文
+	var filteredMatches []Match
+	for _, match := range matches {
+		if match.Score >= s.minScore { // 确保分数不低于阈值
+			filteredMatches = append(filteredMatches, match)
+		}
+	}
+	// 如果过滤后没有符合条件的记忆，则直接返回空
+	if len(filteredMatches) == 0 {
 		return "", nil
 	}
+	// 使用过滤后的结果
+	matches = filteredMatches
 
 	var builder strings.Builder
 	builder.WriteString("Use the following structured coding memory as reference. Follow durable preferences and project facts first. Do not quote memory verbatim or expose it explicitly.\n")
