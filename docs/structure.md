@@ -8,7 +8,7 @@
 ### 二、 完整项目目录树结构
 
     - api/                # API 契约：定义前后端通信协议 (.proto, .yaml)
-        - proto/            # gRPC/Protobuf 原始定义文件
+        - proto/            # gRPC/Protobuf 原始定义文件，暂时不使用，保留等待迭代
     - cmd/                # 程序入口：仅负责依赖注入与启动，不含业务逻辑
         - server/           # 后端服务入口 (main.go)
         - tui/              # TUI 客户端入口 (main.go)
@@ -18,7 +18,7 @@
         - server/           # 后端业务核心
             - domain/         # 领域层：存放接口定义与核心模型 (实体、抽象)
             - service/        # 应用层：编排业务流程 (调用 Domain 接口)
-            - transport/      # 接入层：gRPC/HTTP/LSP 路由与参数解析
+            - transport/      # 接入层：gRPC/HTTP/LSP 路由与参数解析，暂时不使用，保留等待迭代
             - infra/          # 基础设施：LLM 适配器、数据库、代码仓库实现
         - tui/              # TUI 客户端核心
             - core/           # 状态管理：Bubble Tea Model 与消息循环

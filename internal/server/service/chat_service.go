@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"go-llm-demo/internal/server/infra/provider"
 	"strings"
 
 	"go-llm-demo/internal/server/domain"
@@ -12,7 +13,7 @@ type chatServiceImpl struct {
 	memorySvc  domain.MemoryService
 	workingSvc domain.WorkingMemoryService
 	roleSvc    domain.RoleService
-	provider   domain.ChatProvider
+	//provider   domain.ChatProvider
 }
 
 // NewChatService 使用记忆、角色和模型提供方依赖创建聊天服务。
@@ -21,7 +22,7 @@ func NewChatService(memorySvc domain.MemoryService, workingSvc domain.WorkingMem
 		memorySvc:  memorySvc,
 		workingSvc: workingSvc,
 		roleSvc:    roleSvc,
-		provider:   provider,
+		//provider:   provider,
 	}
 }
 
@@ -75,7 +76,12 @@ func (s *chatServiceImpl) Send(ctx context.Context, req *domain.ChatRequest) (<-
 		}
 	}
 
-	out, err := s.provider.Chat(ctx, messages)
+	chatProvider, err := provider.NewChatProvider(req.Model)
+	if err != nil {
+		return nil, err
+	}
+
+	out, err := chatProvider.Chat(ctx, messages)
 	if err != nil {
 		return nil, err
 	}
@@ -90,7 +96,7 @@ func (s *chatServiceImpl) Send(ctx context.Context, req *domain.ChatRequest) (<-
 			resultChan <- chunk
 		}
 
-		if userInput != "" && replyBuilder.Len() > 0 {
+		if s.latestUserInput(messages) != "" && replyBuilder.Len() > 0 {
 			if s.workingSvc != nil {
 				updatedMessages := append([]domain.Message{}, req.Messages...)
 				updatedMessages = append(updatedMessages, domain.Message{Role: "assistant", Content: replyBuilder.String()})
@@ -98,7 +104,7 @@ func (s *chatServiceImpl) Send(ctx context.Context, req *domain.ChatRequest) (<-
 					fmt.Printf("工作记忆刷新失败：%v\n", err)
 				}
 			}
-			if err := s.memorySvc.Save(context.Background(), userInput, replyBuilder.String()); err != nil {
+			if err := s.memorySvc.Save(context.Background(), s.latestUserInput(messages), replyBuilder.String()); err != nil {
 				fmt.Printf("记忆保存失败：%v\n", err)
 			}
 		}
