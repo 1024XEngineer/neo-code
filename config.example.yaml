@@ -1,0 +1,40 @@
+# 应用配置文件示例
+app:
+  name: "NeoCode"
+  version: "1.0.0"
+
+ai:
+  provider: "modelscope"
+  api_key: "" # deprecated: API Key is read only from AI_API_KEY
+  model: "Qwen/Qwen3-Coder-480B-A35B-Instruct"
+
+memory:
+  top_k: 5
+  min_match_score: 2.2
+  max_prompt_chars: 1800
+  max_items: 1000
+  storage_path: "./data/memory_rules.json"
+  persist_types:
+    - "user_preference"
+    - "project_rule"
+    - "code_fact"
+    - "fix_recipe"
+
+history:
+  short_term_turns: 6
+
+persona:
+  file_path: "./persona.txt"
+
+models:
+  chat:
+    default_model: "Qwen/Qwen3-Coder-480B-A35B-Instruct"
+    models:
+      - name: "Qwen/Qwen3-Coder-480B-A35B-Instruct"
+        url: "https://api-inference.modelscope.cn/v1/chat/completions"
+      - name: "ZhipuAI/GLM-5"
+        url: "https://api-inference.modelscope.cn/v1/chat/completions"
+      - name: "moonshotai/Kimi-K2.5"
+        url: "https://api-inference.modelscope.cn/v1/chat/completions"
+      - name: "deepseek-ai/DeepSeek-R1-0528"
+        url: "https://api-inference.modelscope.cn/v1/chat/completions"

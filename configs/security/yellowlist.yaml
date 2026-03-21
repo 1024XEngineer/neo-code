@@ -1,0 +1,5 @@
+rules:
+  - target: "src/**/*.go"
+    w: ask
+  - command: "go build *"
+    x: ask
