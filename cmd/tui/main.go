@@ -10,7 +10,7 @@ import (
 	"strings"
 	"syscall"
 
-	"go-llm-demo/config"
+	"go-llm-demo/configs"
 	"go-llm-demo/internal/server/infra/provider"
 	"go-llm-demo/internal/tui/core"
 	"go-llm-demo/internal/tui/infra"
@@ -33,12 +33,12 @@ func main() {
 		return
 	}
 
-	if err := config.LoadAppConfig("config.yaml"); err != nil {
+	if err := configs.LoadAppConfig("config.yaml"); err != nil {
 		fmt.Fprintf(os.Stderr, "加载配置失败: %v\n", err)
 		os.Exit(1)
 	}
 
-	persona := loadPersonaPrompt(config.GlobalAppConfig.Persona.FilePath)
+	persona := loadPersonaPrompt(configs.GlobalAppConfig.Persona.FilePath)
 
 	client, err := infra.NewLocalChatClient()
 	if err != nil {
@@ -57,12 +57,12 @@ func main() {
 func ensureAPIKeyInteractive(ctx context.Context, scanner *bufio.Scanner, configPath string) (bool, error) {
 	apiKey := os.Getenv("AI_API_KEY")
 
-	if apiKey != "" && config.GlobalAppConfig != nil {
-		config.GlobalAppConfig.AI.APIKey = apiKey
+	if apiKey != "" && configs.GlobalAppConfig != nil {
+		configs.GlobalAppConfig.AI.APIKey = apiKey
 		return true, nil
 	}
 
-	cfg, created, err := config.EnsureConfigFile(configPath)
+	cfg, created, err := configs.EnsureConfigFile(configPath)
 	if err != nil {
 		return false, err
 	}
@@ -89,7 +89,7 @@ func ensureAPIKeyInteractive(ctx context.Context, scanner *bufio.Scanner, config
 		}
 
 		if err := provider.ValidateChatAPIKey(ctx, cfg); err == nil {
-			if saveErr := config.WriteAppConfig(configPath, cfg); saveErr != nil {
+			if saveErr := configs.WriteAppConfig(configPath, cfg); saveErr != nil {
 				return false, saveErr
 			}
 			fmt.Println("API key 验证通过并已保存。")
@@ -108,7 +108,7 @@ func ensureAPIKeyInteractive(ctx context.Context, scanner *bufio.Scanner, config
 				return false, nil
 			}
 			if result == setupContinue {
-				config.GlobalAppConfig = cfg
+				configs.GlobalAppConfig = cfg
 				return true, nil
 			}
 			continue
@@ -122,7 +122,7 @@ func ensureAPIKeyInteractive(ctx context.Context, scanner *bufio.Scanner, config
 				return false, nil
 			}
 			if result == setupContinue {
-				config.GlobalAppConfig = cfg
+				configs.GlobalAppConfig = cfg
 				return true, nil
 			}
 		}
@@ -137,7 +137,7 @@ const (
 	setupExit
 )
 
-func handleSetupDecision(scanner *bufio.Scanner, cfg *config.AppConfiguration, allowContinue bool, configPath string) (setupDecision, error) {
+func handleSetupDecision(scanner *bufio.Scanner, cfg *configs.AppConfiguration, allowContinue bool, configPath string) (setupDecision, error) {
 	for {
 		prompt := "选择 /retry, /models, /switch <model>, 或 /exit > "
 		if allowContinue {
@@ -164,7 +164,7 @@ func handleSetupDecision(scanner *bufio.Scanner, cfg *config.AppConfiguration, a
 				fmt.Println("/continue 仅在网络或服务问题导致无法确认时可用。")
 				continue
 			}
-			if saveErr := config.WriteAppConfig(configPath, cfg); saveErr != nil {
+			if saveErr := configs.WriteAppConfig(configPath, cfg); saveErr != nil {
 				return setupExit, saveErr
 			}
 			fmt.Println("继续启动，使用当前 API key 和模型。")

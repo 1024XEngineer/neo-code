@@ -5,23 +5,24 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="d168819c-52a3-420a-9c1d-6eca0804d637" name="更改" comment="refactor&lt;all&gt;：把原来的项目的结构优化了一下">
-      <change afterPath="$PROJECT_DIR$/internal/server/infra/provider/chat_provider.go" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/internal/server/infra/repository/role_repository.go" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/internal/server/domain/tool.go" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/cmd/server/info.go" beforeDir="false" afterPath="$PROJECT_DIR$/cmd/server/main.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/cmd/server/main.go" beforeDir="false" afterPath="$PROJECT_DIR$/cmd/server/main.go" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/cmd/tui/main.go" beforeDir="false" afterPath="$PROJECT_DIR$/cmd/tui/main.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/internal/server/domain/memory.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/server/domain/memory.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/internal/server/domain/message.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/server/domain/chat.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/internal/server/domain/role.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/server/domain/role.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/internal/server/infra/provider/embedding_provider.go" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/config/app_config.go" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/config/app_config_test.go" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/configs/info.go" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/internal/pkg/info.go" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/internal/server/infra/provider/chat_provider.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/server/infra/provider/chat_provider.go" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/internal/server/infra/provider/modelscope_provider.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/server/infra/provider/modelscope_provider.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/internal/server/infra/reposity/memory_reposity.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/server/infra/repository/memory_repository.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/internal/server/infra/reposity/role_reposity.go" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/internal/server/service/chat_service.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/server/service/chat_service.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/internal/server/service/memory_service.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/server/service/memory_service.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/internal/server/service/role_service.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/server/service/role_service.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/internal/server/transport/info.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/server/transport/http/chat_handler.go" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/internal/tui/infra/info.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/tui/infra/api_client.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/internal/server/infra/tools/list.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/server/infra/tools/list.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/internal/server/infra/tools/tool.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/server/infra/tools/tool.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/internal/tui/infra/api_client.go" beforeDir="false" afterPath="$PROJECT_DIR$/internal/tui/infra/api_client.go" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/persona.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/persona.txt.example" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/security/blacklist.yaml" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/security/whitelist.yaml" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/security/yellowlist.yaml" beforeDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -39,7 +40,7 @@
   <component name="Git.Settings">
     <option name="RECENT_BRANCH_BY_REPOSITORY">
       <map>
-        <entry key="$PROJECT_DIR$" value="new-feature" />
+        <entry key="$PROJECT_DIR$" value="init-0320" />
         <entry key="$PROJECT_DIR$/test" value="test" />
       </map>
     </option>
@@ -73,24 +74,24 @@
     <option name="hideEmptyMiddlePackages" value="true" />
     <option name="showLibraryContents" value="true" />
   </component>
-  <component name="PropertiesComponent">{
-  &quot;keyToString&quot;: {
-    &quot;DefaultGoTemplateProperty&quot;: &quot;Go File&quot;,
-    &quot;Go 构建.go build go-llm-demo.executor&quot;: &quot;Run&quot;,
-    &quot;Go 构建.go build go-llm-demo/cmd/tui.executor&quot;: &quot;Run&quot;,
-    &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
-    &quot;RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252&quot;: &quot;true&quot;,
-    &quot;RunOnceActivity.git.unshallow&quot;: &quot;true&quot;,
-    &quot;RunOnceActivity.go.analysis.ui.options.defaults&quot;: &quot;true&quot;,
-    &quot;RunOnceActivity.go.formatter.settings.were.checked&quot;: &quot;true&quot;,
-    &quot;RunOnceActivity.go.modules.go.list.on.any.changes.was.set&quot;: &quot;true&quot;,
-    &quot;RunOnceActivity.typescript.service.memoryLimit.init&quot;: &quot;true&quot;,
-    &quot;git-widget-placeholder&quot;: &quot;init-0320&quot;,
-    &quot;go.sdk.automatically.set&quot;: &quot;true&quot;,
-    &quot;last_opened_file_path&quot;: &quot;C:/Users/10116/Desktop/study/gopro/test1/cmd/tui&quot;,
-    &quot;nodejs_package_manager_path&quot;: &quot;npm&quot;
+  <component name="PropertiesComponent"><![CDATA[{
+  "keyToString": {
+    "DefaultGoTemplateProperty": "Go File",
+    "Go 构建.go build go-llm-demo.executor": "Run",
+    "Go 构建.go build go-llm-demo/cmd/tui.executor": "Run",
+    "RunOnceActivity.ShowReadmeOnStart": "true",
+    "RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252": "true",
+    "RunOnceActivity.git.unshallow": "true",
+    "RunOnceActivity.go.analysis.ui.options.defaults": "true",
+    "RunOnceActivity.go.formatter.settings.were.checked": "true",
+    "RunOnceActivity.go.modules.go.list.on.any.changes.was.set": "true",
+    "RunOnceActivity.typescript.service.memoryLimit.init": "true",
+    "git-widget-placeholder": "tools-0321",
+    "go.sdk.automatically.set": "true",
+    "last_opened_file_path": "C:/Users/10116/Desktop/study/gopro/test1/cmd/tui",
+    "nodejs_package_manager_path": "npm"
   }
-}</component>
+}]]></component>
   <component name="RecentsManager">
     <key name="CopyFile.RECENT_KEYS">
       <recent name="C:\Users\10116\Desktop\study\gopro\test1\cmd\tui" />
@@ -105,7 +106,15 @@
       <recent name="C:\Users\10116\Desktop\study\gopro\test1\internal\server\infra\reposity" />
     </key>
   </component>
-  <component name="RunManager">
+  <component name="RunManager" selected="Go 构建.go build go-llm-demo/cmd/tui">
+    <configuration name="go build go-llm-demo" type="GoApplicationRunConfiguration" factoryName="Go Application" temporary="true" nameIsGenerated="true">
+      <module name="test1" />
+      <working_directory value="$PROJECT_DIR$" />
+      <kind value="PACKAGE" />
+      <package value="go-llm-demo" />
+      <directory value="$PROJECT_DIR$" />
+      <method v="2" />
+    </configuration>
     <configuration name="go build go-llm-demo/cmd/tui" type="GoApplicationRunConfiguration" factoryName="Go Application" nameIsGenerated="true">
       <module name="test1" />
       <working_directory value="$PROJECT_DIR$" />
@@ -115,6 +124,11 @@
       <filePath value="$PROJECT_DIR$" />
       <method v="2" />
     </configuration>
+    <recent_temporary>
+      <list>
+        <item itemvalue="Go 构建.go build go-llm-demo" />
+      </list>
+    </recent_temporary>
   </component>
   <component name="SharedIndexes">
     <attachedChunks>

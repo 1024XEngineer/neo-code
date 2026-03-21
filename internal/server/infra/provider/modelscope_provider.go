@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"go-llm-demo/config"
+	"go-llm-demo/configs"
 	"go-llm-demo/internal/server/domain"
 )
 
@@ -30,9 +30,9 @@ var fallbackSupportedModels = []string{
 }
 
 func SupportedModels() []string {
-	if config.GlobalAppConfig != nil && len(config.GlobalAppConfig.Models.Chat.Models) > 0 {
-		models := make([]string, 0, len(config.GlobalAppConfig.Models.Chat.Models))
-		for _, model := range config.GlobalAppConfig.Models.Chat.Models {
+	if configs.GlobalAppConfig != nil && len(configs.GlobalAppConfig.Models.Chat.Models) > 0 {
+		models := make([]string, 0, len(configs.GlobalAppConfig.Models.Chat.Models))
+		for _, model := range configs.GlobalAppConfig.Models.Chat.Models {
 			if strings.TrimSpace(model.Name) != "" {
 				models = append(models, model.Name)
 			}
@@ -47,7 +47,7 @@ func SupportedModels() []string {
 }
 
 func DefaultModel() string {
-	defaultModel := config.GetDefaultChatModel()
+	defaultModel := configs.GetDefaultChatModel()
 	if defaultModel != "" {
 		return defaultModel
 	}
@@ -92,7 +92,7 @@ func (p *ModelScopeProvider) Chat(ctx context.Context, messages []domain.Message
 	out := make(chan string)
 
 	baseURL := p.BaseURL
-	if configURL, exists := config.GetChatModelURL(p.Model); exists && configURL != "" {
+	if configURL, exists := configs.GetChatModelURL(p.Model); exists && configURL != "" {
 		baseURL = configURL
 	}
 	if strings.TrimSpace(baseURL) == "" {
@@ -242,16 +242,16 @@ func isRetryableError(err error) bool {
 	return false
 }
 
-func validateModelScopeAPIKey(ctx context.Context, cfg *config.AppConfiguration) error {
+func validateModelScopeAPIKey(ctx context.Context, cfg *configs.AppConfiguration) error {
 	if cfg == nil {
-		return fmt.Errorf("config is nil")
+		return fmt.Errorf("configs is nil")
 	}
 
 	modelName := strings.TrimSpace(cfg.AI.Model)
 	if modelName == "" {
 		modelName = strings.TrimSpace(cfg.Models.Chat.DefaultModel)
 	}
-	baseURL, ok := config.GetChatModelURLFromConfig(cfg, modelName)
+	baseURL, ok := configs.GetChatModelURLFromConfig(cfg, modelName)
 	if !ok || strings.TrimSpace(baseURL) == "" {
 		return fmt.Errorf("chat model URL is not configured for %q", modelName)
 	}
