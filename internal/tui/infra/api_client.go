@@ -104,12 +104,9 @@ func (c *localChatClient) ClearSessionMemory(ctx context.Context) error {
 }
 
 func (c *localChatClient) ListModels() []string {
-	return provider.SupportedModels()
+	return provider.SupportedModelsForConfig(c.config)
 }
 
 func (c *localChatClient) DefaultModel() string {
-	if c.config != nil && strings.TrimSpace(c.config.AI.Model) != "" {
-		return strings.TrimSpace(c.config.AI.Model)
-	}
-	return provider.DefaultModel()
+	return provider.DefaultModelForConfig(c.config)
 }

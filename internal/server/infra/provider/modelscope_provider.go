@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -30,55 +29,14 @@ var fallbackSupportedModels = []string{
 	"deepseek-ai/DeepSeek-R1-0528",
 }
 
-// SupportedModels 返回配置中的模型列表，缺省时使用内置兜底列表。
-func SupportedModels() []string {
-	if configs.GlobalAppConfig != nil && len(configs.GlobalAppConfig.Models.Chat.Models) > 0 {
-		models := make([]string, 0, len(configs.GlobalAppConfig.Models.Chat.Models))
-		for _, model := range configs.GlobalAppConfig.Models.Chat.Models {
-			if strings.TrimSpace(model.Name) != "" {
-				models = append(models, model.Name)
-			}
-		}
-		if len(models) > 0 {
-			return models
-		}
-	}
-	models := make([]string, len(fallbackSupportedModels))
-	copy(models, fallbackSupportedModels)
-	return models
-}
-
-// DefaultModel 返回配置中的默认模型，缺省时回退到首个可用模型。
-func DefaultModel() string {
-	defaultModel := configs.GetDefaultChatModel()
-	if defaultModel != "" {
-		return defaultModel
-	}
-	supported := SupportedModels()
-	if len(supported) == 0 {
-		return fallbackSupportedModels[0]
-	}
-	return supported[0]
-}
-
-// IsSupportedModel 判断指定模型是否在支持列表中。
-func IsSupportedModel(model string) bool {
-	for _, m := range SupportedModels() {
-		if m == model {
-			return true
-		}
-	}
-	return false
-}
-
-type ModelScopeProvider struct {
+type ChatCompletionProvider struct {
 	APIKey  string
 	BaseURL string
 	Model   string
 }
 
 // GetModelName 返回提供方当前模型，缺省时使用默认模型。
-func (p *ModelScopeProvider) GetModelName() string {
+func (p *ChatCompletionProvider) GetModelName() string {
 	if p.Model != "" {
 		return p.Model
 	}
@@ -93,64 +51,76 @@ type StreamResponse struct {
 	} `json:"choices"`
 }
 
-// Chat 向 ModelScope 发送流式请求并返回文本分片。
-func (p *ModelScopeProvider) Chat(ctx context.Context, messages []domain.Message) (<-chan string, error) {
-	out := make(chan string)
+// Chat 向聊天补全接口发送流式请求并返回文本分片。
+func (p *ChatCompletionProvider) Chat(ctx context.Context, messages []domain.Message) (<-chan string, error) {
+	baseURL, err := ResolveChatEndpoint(configs.GlobalAppConfig, p.GetModelName())
+	if err != nil {
+		if strings.TrimSpace(p.BaseURL) != "" {
+			baseURL = p.BaseURL
+		} else {
+			return nil, err
+		}
+	}
 
-	baseURL := p.BaseURL
-	if configURL, exists := configs.GetChatModelURL(p.Model); exists && configURL != "" {
-		baseURL = configURL
+	modelName := p.GetModelName()
+	body := map[string]any{
+		"model":    modelName,
+		"messages": messages,
+		"stream":   true,
 	}
-	if strings.TrimSpace(baseURL) == "" {
-		return nil, fmt.Errorf("chat model URL is not configured for %q", p.Model)
+	jsonData, err := json.Marshal(body)
+	if err != nil {
+		return nil, fmt.Errorf("chat request marshal failed: %w", err)
 	}
+
+	resp, err := doRequestWithRetry(ctx, func(reqCtx context.Context) (*http.Response, error) {
+		req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, baseURL, bytes.NewBuffer(jsonData))
+		if err != nil {
+			return nil, fmt.Errorf("chat request create failed: %w", err)
+		}
+		req.Header.Set("Authorization", "Bearer "+p.APIKey)
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := httpClient().Do(req)
+		if err != nil {
+			return nil, err
+		}
+		if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= http.StatusInternalServerError {
+			body, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			return nil, fmt.Errorf("retryable chat status: %s %s", resp.Status, strings.TrimSpace(string(body)))
+		}
+		return resp, nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("chat request failed: %w", err)
+	}
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("chat request failed: %s %s", resp.Status, strings.TrimSpace(string(body)))
+	}
+
+	out := make(chan string)
 
 	go func() {
 		defer close(out)
-
-		body := map[string]any{
-			"model":    p.Model,
-			"messages": messages,
-			"stream":   true,
-		}
-		jsonData, err := json.Marshal(body)
-		if err != nil {
-			return
-		}
-
-		resp, err := doRequestWithRetry(ctx, func(reqCtx context.Context) (*http.Response, error) {
-			req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, baseURL, bytes.NewBuffer(jsonData))
-			if err != nil {
-				return nil, fmt.Errorf("chat request create failed: %w", err)
-			}
-			req.Header.Set("Authorization", "Bearer "+p.APIKey)
-			req.Header.Set("Content-Type", "application/json")
-			resp, err := httpClient().Do(req)
-			if err != nil {
-				return nil, err
-			}
-			if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= http.StatusInternalServerError {
-				body, _ := io.ReadAll(resp.Body)
-				resp.Body.Close()
-				return nil, fmt.Errorf("retryable chat status: %s %s", resp.Status, strings.TrimSpace(string(body)))
-			}
-			return resp, nil
-		})
-		if err != nil {
-			return
-		}
 		defer resp.Body.Close()
-		if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-			return
-		}
 
 		reader := bufio.NewReader(resp.Body)
+		receivedContent := false
+		receivedDone := false
 		for {
 			line, err := reader.ReadString('\n')
 			if err != nil {
 				if err == io.EOF {
+					if !receivedDone {
+						if receivedContent {
+							fmt.Println("chat stream ended unexpectedly before completion")
+						}
+					}
 					return
 				}
+				fmt.Println("读取错误:", err)
 				return
 			}
 			line = strings.TrimSpace(line)
@@ -162,16 +132,19 @@ func (p *ModelScopeProvider) Chat(ctx context.Context, messages []domain.Message
 				continue
 			}
 			if data == "[DONE]" {
+				receivedDone = true
 				break
 			}
 
 			text, err := decodeStreamContent(data)
 			if err != nil {
+				fmt.Println("JSON 解码错误:", err)
 				return
 			}
 			if text == "" {
 				continue
 			}
+			receivedContent = true
 			select {
 			case <-ctx.Done():
 				return
@@ -191,34 +164,11 @@ func decodeStreamContent(data string) (string, error) {
 	if len(res.Choices) == 0 {
 		return "", nil
 	}
-	content := res.Choices[0].Delta.Content
-	content = stripThinkingTags(content)
-	return content, nil
-}
-
-func stripThinkingTags(content string) string {
-	thinkStart := "<think>"
-	thinkEnd := "</think>"
-	for {
-		start := strings.Index(content, thinkStart)
-		if start == -1 {
-			break
-		}
-		end := strings.Index(content, thinkEnd)
-		if end == -1 {
-			break
-		}
-		end += len(thinkEnd)
-		content = content[:start] + content[end:]
-	}
-	return content
+	return res.Choices[0].Delta.Content, nil
 }
 
 func httpClient() *http.Client {
-	tr := &http.Transport{
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-	}
-	return &http.Client{Timeout: requestTimeout, Transport: tr}
+	return &http.Client{Timeout: requestTimeout}
 }
 
 func doRequestWithRetry(ctx context.Context, do func(context.Context) (*http.Response, error)) (*http.Response, error) {
@@ -263,9 +213,9 @@ func validateModelScopeAPIKey(ctx context.Context, cfg *configs.AppConfiguration
 	if modelName == "" {
 		modelName = strings.TrimSpace(cfg.Models.Chat.DefaultModel)
 	}
-	baseURL, ok := configs.GetChatModelURLFromConfig(cfg, modelName)
-	if !ok || strings.TrimSpace(baseURL) == "" {
-		return fmt.Errorf("chat model URL is not configured for %q", modelName)
+	baseURL, err := ResolveChatEndpoint(cfg, modelName)
+	if err != nil {
+		return err
 	}
 
 	body := map[string]any{

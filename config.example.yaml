@@ -4,7 +4,7 @@ app:
   version: "1.0.0"
 
 ai:
-  provider: "modelscope"
+  provider: "modelscope" # modelscope | deepseek | siliconflow | 豆包大模型 | openai
   api_key: "AI_API_KEY" # environment variable name; falls back to AI_API_KEY when empty
   model: "Qwen/Qwen3-Coder-480B-A35B-Instruct"
 
@@ -28,7 +28,7 @@ persona:
 
 models:
   chat:
-    default_model: "Qwen/Qwen3-Coder-480B-A35B-Instruct"
+    default_model: "Qwen/Qwen3-Coder-480B-A35B-Instruct" # only used by modelscope
     models:
       - name: "Qwen/Qwen3-Coder-480B-A35B-Instruct"
         url: "https://api-inference.modelscope.cn/v1/chat/completions"
@@ -38,3 +38,8 @@ models:
         url: "https://api-inference.modelscope.cn/v1/chat/completions"
       - name: "deepseek-ai/DeepSeek-R1-0528"
         url: "https://api-inference.modelscope.cn/v1/chat/completions"
+
+# Notes:
+# - /models only shows the built-in list when provider=modelscope.
+# - For deepseek, siliconflow, 豆包大模型, and openai, please set ai.model yourself
+#   in config.yaml or by running /switch <model>.

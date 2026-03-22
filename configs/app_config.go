@@ -156,24 +156,31 @@ func (c *AppConfiguration) ValidateBase() error {
 	if c == nil {
 		return fmt.Errorf("app config is nil")
 	}
-	if strings.TrimSpace(c.AI.Provider) == "" {
+	providerName := normalizeProviderName(c.AI.Provider)
+	if providerName == "" {
 		return fmt.Errorf("invalid config: ai.provider is required")
 	}
+	if !isSupportedProvider(providerName) {
+		return fmt.Errorf("invalid config: unsupported ai.provider %q", strings.TrimSpace(c.AI.Provider))
+	}
+	c.AI.Provider = providerName
 	if strings.TrimSpace(c.AI.Model) == "" {
 		return fmt.Errorf("invalid config: ai.model is required")
 	}
-	if strings.TrimSpace(c.Models.Chat.DefaultModel) == "" {
-		return fmt.Errorf("invalid config: models.chat.default_model is required")
-	}
-	if len(c.Models.Chat.Models) == 0 {
-		return fmt.Errorf("invalid config: models.chat.models must not be empty")
-	}
-	for i, model := range c.Models.Chat.Models {
-		if strings.TrimSpace(model.Name) == "" {
-			return fmt.Errorf("invalid config: models.chat.models[%d].name is required", i)
+	if providerName == "modelscope" {
+		if strings.TrimSpace(c.Models.Chat.DefaultModel) == "" {
+			return fmt.Errorf("invalid config: models.chat.default_model is required")
 		}
-		if strings.TrimSpace(model.URL) == "" {
-			return fmt.Errorf("invalid config: models.chat.models[%d].url is required", i)
+		if len(c.Models.Chat.Models) == 0 {
+			return fmt.Errorf("invalid config: models.chat.models must not be empty")
+		}
+		for i, model := range c.Models.Chat.Models {
+			if strings.TrimSpace(model.Name) == "" {
+				return fmt.Errorf("invalid config: models.chat.models[%d].name is required", i)
+			}
+			if strings.TrimSpace(model.URL) == "" {
+				return fmt.Errorf("invalid config: models.chat.models[%d].url is required", i)
+			}
 		}
 	}
 	if c.Memory.TopK <= 0 {
@@ -268,4 +275,36 @@ func GetDefaultChatModel() string {
 		return ""
 	}
 	return strings.TrimSpace(GlobalAppConfig.Models.Chat.DefaultModel)
+}
+
+func normalizeProviderName(name string) string {
+	trimmed := strings.TrimSpace(name)
+	if trimmed == "" {
+		return ""
+	}
+	if strings.EqualFold(trimmed, "modelscope") {
+		return "modelscope"
+	}
+	if strings.EqualFold(trimmed, "deepseek") {
+		return "deepseek"
+	}
+	if strings.EqualFold(trimmed, "siliconflow") {
+		return "siliconflow"
+	}
+	if strings.EqualFold(trimmed, "openai") {
+		return "openai"
+	}
+	if trimmed == "豆包大模型" {
+		return "豆包大模型"
+	}
+	return trimmed
+}
+
+func isSupportedProvider(name string) bool {
+	switch normalizeProviderName(name) {
+	case "modelscope", "deepseek", "siliconflow", "豆包大模型", "openai":
+		return true
+	default:
+		return false
+	}
 }

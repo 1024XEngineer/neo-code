@@ -61,6 +61,28 @@ func TestAppConfigurationValidateBaseAllowsMissingAIKey(t *testing.T) {
 	}
 }
 
+func TestAppConfigurationValidateBaseAllowsNonModelScopeWithoutCatalog(t *testing.T) {
+	cfg := validConfig()
+	cfg.AI.Provider = "deepseek"
+	cfg.AI.Model = "deepseek-chat"
+	cfg.Models.Chat.DefaultModel = ""
+	cfg.Models.Chat.Models = nil
+
+	if err := cfg.ValidateBase(); err != nil {
+		t.Fatalf("expected non-modelscope config without catalog to validate, got: %v", err)
+	}
+}
+
+func TestAppConfigurationValidateBaseRejectsUnsupportedProvider(t *testing.T) {
+	cfg := validConfig()
+	cfg.AI.Provider = "unknown"
+
+	err := cfg.ValidateBase()
+	if err == nil || !strings.Contains(err.Error(), "unsupported ai.provider") {
+		t.Fatalf("expected unsupported provider error, got: %v", err)
+	}
+}
+
 func TestLoadAppConfig(t *testing.T) {
 	t.Setenv("CUSTOM_CHAT_KEY", "env-chat-key")
 	dir := t.TempDir()

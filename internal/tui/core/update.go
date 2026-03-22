@@ -384,7 +384,7 @@ func (m *Model) handleSubmit() (tea.Model, tea.Cmd) {
 		return m.handleCommand(input)
 	}
 	if !m.apiKeyReady {
-		m.AddMessage("assistant", "当前 API Key 未通过校验，请使用 /apikey <env_name> 切换变量名，或 /exit 退出。")
+		m.AddMessage("assistant", "当前 API Key 未通过校验，请使用 /apikey <env_name>、/provider <name>、/switch <model> 调整配置，或 /exit 退出。")
 		return *m, nil
 	}
 
@@ -410,7 +410,7 @@ func (m *Model) handleCommand(input string) (tea.Model, tea.Cmd) {
 	cmd := fields[0]
 	args := fields[1:]
 	if !m.apiKeyReady && !isAPIKeyRecoveryCommand(cmd) {
-		m.AddMessage("assistant", "当前 API Key 未通过校验，仅支持 /apikey <env_name>、/help、/models、/switch <model> 或 /exit。")
+		m.AddMessage("assistant", "当前 API Key 未通过校验，仅支持 /apikey <env_name>、/provider <name>、/help、/models、/switch <model> 或 /exit。")
 		return *m, nil
 	}
 
@@ -451,25 +451,94 @@ func (m *Model) handleCommand(input string) (tea.Model, tea.Cmd) {
 		}
 		m.apiKeyReady = false
 		if errors.Is(err, provider.ErrInvalidAPIKey) {
-			m.AddMessage("assistant", fmt.Sprintf("环境变量 %s 中的 API Key 无效：%v。请继续使用 /apikey <env_name> 切换，或 /exit 退出。", envName, err))
+			m.AddMessage("assistant", fmt.Sprintf("环境变量 %s 中的 API Key 无效：%v。请继续使用 /apikey <env_name>、/provider <name>、/switch <model> 调整配置，或 /exit 退出。", envName, err))
 			return *m, nil
 		}
-		m.AddMessage("assistant", fmt.Sprintf("环境变量 %s 的 API Key 未通过校验：%v。请继续使用 /apikey <env_name> 切换，或 /exit 退出。", envName, err))
+		m.AddMessage("assistant", fmt.Sprintf("环境变量 %s 的 API Key 未通过校验：%v。请继续使用 /apikey <env_name>、/provider <name>、/switch <model> 调整配置，或 /exit 退出。", envName, err))
 		return *m, nil
+	case "/provider":
+		if len(args) == 0 {
+			m.AddMessage("assistant", fmt.Sprintf("用法: /provider <name>\n可用提供商:\n  - %s", strings.Join(provider.SupportedProviders(), "\n  - ")))
+			return *m, nil
+		}
+		cfg := configs.GlobalAppConfig
+		if cfg == nil {
+			m.AddMessage("assistant", "当前配置未加载，无法切换提供商")
+			return *m, nil
+		}
+		providerName, ok := provider.NormalizeProviderName(strings.Join(args, " "))
+		if !ok {
+			m.AddMessage("assistant", fmt.Sprintf("不支持的提供商: %s\n可用提供商:\n  - %s", strings.Join(args, " "), strings.Join(provider.SupportedProviders(), "\n  - ")))
+			return *m, nil
+		}
+		cfg.AI.Provider = providerName
+		if provider.ProviderSupportsModelCatalog(providerName) && !provider.IsSupportedModelForConfig(cfg, cfg.AI.Model) {
+			cfg.AI.Model = provider.DefaultModelForConfig(cfg)
+		}
+		m.activeModel = cfg.AI.Model
+		if writeErr := configs.WriteAppConfig(m.configPath, cfg); writeErr != nil {
+			m.AddMessage("assistant", fmt.Sprintf("切换提供商失败: %v", writeErr))
+			return *m, nil
+		}
+		if cfg.RuntimeAPIKey() == "" {
+			m.apiKeyReady = false
+			m.AddMessage("assistant", fmt.Sprintf("已切换到提供商 %s，但当前环境变量 %s 未设置。请使用 /apikey <env_name> 或设置该环境变量。", providerName, cfg.APIKeyEnvVarName()))
+			return *m, nil
+		}
+		if err := provider.ValidateChatAPIKey(context.Background(), cfg); err == nil {
+			m.apiKeyReady = true
+			if provider.ProviderSupportsModelCatalog(providerName) {
+				m.AddMessage("assistant", fmt.Sprintf("已切换到提供商 %s，当前模型: %s。", providerName, cfg.AI.Model))
+			} else {
+				m.AddMessage("assistant", fmt.Sprintf("已切换到提供商 %s。该提供商不提供内置模型列表，请确认当前模型 %s，或使用 /switch <model> 修改。", providerName, cfg.AI.Model))
+			}
+			return *m, nil
+		} else {
+			m.apiKeyReady = false
+			m.AddMessage("assistant", fmt.Sprintf("已切换到提供商 %s，但 API Key 未通过校验：%v。可继续使用 /apikey <env_name>、/provider <name>、/switch <model> 调整配置。", providerName, err))
+			return *m, nil
+		}
 	case "/switch":
 		if len(args) == 0 {
 			m.AddMessage("assistant", "用法: /switch <model>")
 			return *m, nil
 		}
-		target := args[0]
-		if !containsModel(m.client.ListModels(), target) {
+		cfg := configs.GlobalAppConfig
+		if cfg == nil {
+			m.AddMessage("assistant", "当前配置未加载，无法切换模型")
+			return *m, nil
+		}
+		target := strings.Join(args, " ")
+		if provider.ProviderSupportsModelCatalog(cfg.AI.Provider) && !provider.IsSupportedModelForConfig(cfg, target) {
 			m.AddMessage("assistant", fmt.Sprintf("模型不可用: %s", target))
 			return *m, nil
 		}
+		cfg.AI.Model = target
+		if writeErr := configs.WriteAppConfig(m.configPath, cfg); writeErr != nil {
+			m.AddMessage("assistant", fmt.Sprintf("切换模型失败: %v", writeErr))
+			return *m, nil
+		}
 		m.activeModel = target
-		m.AddMessage("assistant", fmt.Sprintf("已切换到模型: %s", target))
+		if cfg.RuntimeAPIKey() == "" {
+			m.apiKeyReady = false
+			m.AddMessage("assistant", fmt.Sprintf("已切换到模型: %s，但当前环境变量 %s 未设置。", target, cfg.APIKeyEnvVarName()))
+			return *m, nil
+		}
+		if err := provider.ValidateChatAPIKey(context.Background(), cfg); err == nil {
+			m.apiKeyReady = true
+			m.AddMessage("assistant", fmt.Sprintf("已切换到模型: %s", target))
+			return *m, nil
+		} else {
+			m.apiKeyReady = false
+			m.AddMessage("assistant", fmt.Sprintf("已切换到模型 %s，但 API Key 未通过校验：%v。", target, err))
+			return *m, nil
+		}
 	case "/models":
 		models := m.client.ListModels()
+		if len(models) == 0 {
+			m.AddMessage("assistant", fmt.Sprintf("当前提供商 %s 不提供内置模型列表，请使用 /switch <model> 手动设置模型。", provider.CurrentProvider()))
+			return *m, nil
+		}
 		list := strings.Join(models, "\n  - ")
 		m.AddMessage("assistant", fmt.Sprintf("可用模型:\n  - %s", list))
 	case "/memory":
@@ -537,7 +606,7 @@ func (m *Model) handleCommand(input string) (tea.Model, tea.Cmd) {
 
 func isAPIKeyRecoveryCommand(cmd string) bool {
 	switch cmd {
-	case "/apikey", "/help", "/models", "/switch", "/exit", "/quit", "/q":
+	case "/apikey", "/provider", "/help", "/models", "/switch", "/exit", "/quit", "/q":
 		return true
 	default:
 		return false

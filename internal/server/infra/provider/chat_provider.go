@@ -21,31 +21,27 @@ func NewChatProvider(model string) (domain.ChatProvider, error) {
 		return nil, fmt.Errorf("config.yaml is not loaded")
 	}
 
-	providerName := strings.TrimSpace(configs.GlobalAppConfig.AI.Provider)
-	if providerName == "" {
-		providerName = "modelscope"
+	providerName := CurrentProvider()
+	if model == "" {
+		model = DefaultModel()
 	}
 	if model == "" {
-		model = strings.TrimSpace(configs.GlobalAppConfig.AI.Model)
+		return nil, fmt.Errorf("ai.model is required for provider %s", providerName)
+	}
+	baseURL, err := ResolveChatEndpoint(configs.GlobalAppConfig, model)
+	if err != nil {
+		return nil, err
+	}
+	apiKey := configs.RuntimeAPIKey()
+	if apiKey == "" {
+		return nil, fmt.Errorf("missing %s environment variable", configs.RuntimeAPIKeyEnvVarName())
 	}
 
-	switch strings.ToLower(providerName) {
-	case "modelscope":
-		apiKey := configs.RuntimeAPIKey()
-		if apiKey == "" {
-			return nil, fmt.Errorf("missing %s environment variable", configs.RuntimeAPIKeyEnvVarName())
-		}
-		modelName := model
-		if modelName == "" {
-			modelName = DefaultModel()
-		}
-		return &ModelScopeProvider{
-			APIKey: apiKey,
-			Model:  modelName,
-		}, nil
-	default:
-		return nil, fmt.Errorf("unsupported ai.provider: %s", providerName)
-	}
+	return &ChatCompletionProvider{
+		APIKey:  apiKey,
+		BaseURL: baseURL,
+		Model:   model,
+	}, nil
 }
 
 // ValidateChatAPIKey 按当前提供方配置校验运行时 API Key。
@@ -54,15 +50,13 @@ func ValidateChatAPIKey(ctx context.Context, cfg *configs.AppConfiguration) erro
 		return fmt.Errorf("config is nil")
 	}
 
-	providerName := strings.TrimSpace(cfg.AI.Provider)
+	providerName := providerNameFromConfig(cfg)
 	if providerName == "" {
-		providerName = "modelscope"
+		return fmt.Errorf("unsupported ai.provider: %s", cfg.AI.Provider)
+	}
+	if strings.TrimSpace(cfg.AI.Model) == "" {
+		return fmt.Errorf("ai.model is required for provider %s", providerName)
 	}
 
-	switch strings.ToLower(providerName) {
-	case "modelscope":
-		return validateModelScopeAPIKey(ctx, cfg)
-	default:
-		return fmt.Errorf("unsupported ai.provider: %s", providerName)
-	}
+	return validateModelScopeAPIKey(ctx, cfg)
 }
