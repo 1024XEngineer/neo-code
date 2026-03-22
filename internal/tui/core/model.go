@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 	"go-llm-demo/configs"
 	"go-llm-demo/internal/tui/infra"
 )
@@ -59,36 +58,6 @@ type Message struct {
 	Timestamp time.Time
 	Streaming bool
 }
-
-var (
-	accentStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#61AFEF")).
-			Bold(true)
-
-	userMsgStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#98C379")).
-			Bold(true)
-
-	assistantMsgStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("#E5C07B"))
-
-	systemMsgStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#C678DD"))
-
-	timestampStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#5C6370"))
-
-	codeBlockStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#ABB2BF")).
-			Background(lipgloss.Color("#282C34")).
-			Padding(0, 1)
-
-	helpStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#61AFEF"))
-
-	dimStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#5C6370"))
-)
 
 // NewModel 创建 TUI 状态模型。
 // historyTurns 用于限制发送给后端的短期对话轮数，避免原始消息无限增长。

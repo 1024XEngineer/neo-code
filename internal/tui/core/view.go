@@ -1,21 +1,27 @@
 package core
 
 import (
-	"fmt"
 	"strings"
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
+	"go-llm-demo/internal/tui/components"
 )
 
 func (m Model) View() string {
-	var content string
+	if m.width < 20 || m.height < 5 {
+		return "窗口太小"
+	}
 
+	var content string
 	switch m.mode {
 	case ModeHelp:
 		content = RenderHelp(m.width)
 	default:
 		content = m.chatView()
+		if m.generating {
+			content += thinkingAnimation()
+		}
 	}
 
 	statusHeight := 1
@@ -34,7 +40,12 @@ func (m Model) View() string {
 	statusBar := lipgloss.NewStyle().
 		Height(statusHeight).
 		Width(m.width).
-		Render(RenderStatusBar(m.activeModel, m.memoryStats.Items, m.generating, m.width))
+		Render(components.StatusBar{
+			Model:      m.activeModel,
+			MemoryCnt:  m.memoryStats.TotalItems,
+			Generating: m.generating,
+			Width:      m.width,
+		}.Render())
 
 	padding := availableHeight - countLines(content)
 	if padding > 0 {
@@ -46,13 +57,27 @@ func (m Model) View() string {
 	inputArea := lipgloss.NewStyle().
 		Height(inputHeight).
 		Width(m.width).
-		Render(RenderInput(m.inputBuffer, m.waitingCode, m.codeDelim, m.codeLines, m.width))
+		Render(components.Input{
+			Buffer:     m.inputBuffer,
+			Multiline:  m.multilineMode,
+			CursorLine: m.cursorLine,
+			CursorCol:  m.cursorCol,
+		}.Render())
 
 	return statusBar + content + inputArea
 }
 
 func (m Model) chatView() string {
-	return RenderMessages(m.messages, m.width)
+	messages := make([]components.Message, len(m.messages))
+	for i, msg := range m.messages {
+		messages[i] = components.Message{
+			Role:      msg.Role,
+			Content:   msg.Content,
+			Timestamp: msg.Timestamp,
+			Streaming: msg.Streaming,
+		}
+	}
+	return components.MessageList{Messages: messages, Width: m.width}.Render()
 }
 
 func countLines(s string) int {
@@ -68,160 +93,12 @@ func countLines(s string) int {
 	return count
 }
 
-func RenderMessages(messages []Message, width int) string {
-	if len(messages) == 0 {
-		return ""
-	}
-
-	var b strings.Builder
-
-	visibleMessages := messages
-	startIdx := 0
-	if len(messages) > 50 {
-		startIdx = len(messages) - 50
-		visibleMessages = messages[startIdx:]
-	}
-
-	for _, msg := range visibleMessages {
-		idx := startIdx
-		switch msg.Role {
-		case "user":
-			b.WriteString(userMsgStyle.Render(fmt.Sprintf("[%d] 你:", idx)))
-			b.WriteString(" ")
-			b.WriteString(msg.Content)
-			b.WriteString("\n\n")
-
-		case "assistant":
-			b.WriteString(assistantMsgStyle.Render(fmt.Sprintf("[%d] Neo:", idx)))
-			b.WriteString("\n")
-			b.WriteString(renderContent(msg.Content))
-			b.WriteString("\n\n")
-
-		case "system":
-			b.WriteString(systemMsgStyle.Render("[系统]"))
-			b.WriteString(" ")
-			b.WriteString(msg.Content)
-			b.WriteString("\n\n")
-		}
-
-		startIdx++
-	}
-
-	return b.String()
-}
-
-func renderContent(content string) string {
-	if content == "" {
-		return "..."
-	}
-
-	lines := strings.Split(content, "\n")
-	var b strings.Builder
-
-	inCodeBlock := false
-	for _, line := range lines {
-		if strings.HasPrefix(line, "```") {
-			if !inCodeBlock {
-				inCodeBlock = true
-				b.WriteString(codeBlockStyle.Render("\n" + line + "\n"))
-			} else {
-				inCodeBlock = false
-				b.WriteString(codeBlockStyle.Render(line + "\n"))
-			}
-			continue
-		}
-
-		if inCodeBlock {
-			b.WriteString(codeBlockStyle.Render(line))
-			b.WriteString("\n")
-		} else {
-			b.WriteString(line)
-			b.WriteString("\n")
-		}
-	}
-
-	return b.String()
-}
-
-func RenderInput(buffer string, waitingCode bool, codeDelim string, codeLines []string, width int) string {
-	var b strings.Builder
-
-	if waitingCode {
-		b.WriteString(helpStyle.Render(fmt.Sprintf("┌─ 代码输入 (%s ... %s) ─┐", codeDelim, codeDelim)))
-		b.WriteString("\n")
-
-		for i, line := range codeLines {
-			b.WriteString(fmt.Sprintf("│ %2d │ %s\n", i+1, line))
-		}
-
-		b.WriteString("│    │ " + lipgloss.NewStyle().Foreground(lipgloss.Color("#61AFEF")).Render(buffer))
-		b.WriteString("\n")
-		b.WriteString("└─ 双 Enter 发送 · Ctrl+C 取消 ─┘")
-	} else {
-		lines := strings.Split(buffer, "\n")
-		hasMultipleLines := len(lines) > 1 || (len(lines) == 1 && lines[0] != "")
-
-		if hasMultipleLines {
-			b.WriteString(helpStyle.Render("┌─ 多行输入 ─┐"))
-			b.WriteString("\n")
-			for i, line := range lines {
-				if i == len(lines)-1 {
-					b.WriteString(fmt.Sprintf("│ %2d │ %s█\n", i+1, line))
-				} else {
-					b.WriteString(fmt.Sprintf("│ %2d │ %s\n", i+1, line))
-				}
-			}
-			b.WriteString("└─ Enter 换行 · F5 发送 ─┘")
-		} else {
-			prompt := lipgloss.NewStyle().
-				Foreground(lipgloss.Color("#61AFEF")).
-				Bold(true).Render("› ")
-
-			b.WriteString(prompt)
-			b.WriteString(buffer)
-			b.WriteString("█")
-		}
-	}
-
-	return b.String()
-}
-
-func RenderStatusBar(model string, memoryItems int, generating bool, width int) string {
-	var b strings.Builder
-
-	modelStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#98C379")).
-		Background(lipgloss.Color("#282C34")).
-		Padding(0, 1)
-
-	memStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#C678DD")).
-		Background(lipgloss.Color("#282C34")).
-		Padding(0, 1)
-
-	status := "●"
-	if generating {
-		status = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#E5C07B")).
-			Render("◐")
-	}
-
-	timeStr := time.Now().Format("15:04")
-
-	b.WriteString(modelStyle.Render(model))
-	b.WriteString("  ")
-	b.WriteString(memStyle.Render(fmt.Sprintf("记忆: %d", memoryItems)))
-	b.WriteString("  ")
-	b.WriteString(status)
-
-	space := width - len(model) - len(fmt.Sprintf("记忆: %d", memoryItems)) - len(timeStr) - 10
-	if space > 0 {
-		b.WriteString(strings.Repeat(" ", space))
-	}
-
-	b.WriteString(timestampStyle.Render(timeStr))
-
-	return b.String()
+func thinkingAnimation() string {
+	frames := []string{"◐", "◓", "◑", "◒"}
+	frame := frames[int(time.Now().UnixMilli()/200)%len(frames)]
+	return lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#E5C07B")).
+		Render(" %s 正在思考...", frame)
 }
 
 func RenderHelp(width int) string {
@@ -246,7 +123,7 @@ func RenderHelp(width int) string {
 		{"/run <code>", "执行代码"},
 		{"/explain <code>", "解释代码"},
 		{"/memory", "显示记忆统计"},
-		{"/clear-memory", "清空长期记忆"},
+		{"/clear-memory confirm", "清空长期记忆"},
 		{"/clear-context", "清空会话上下文"},
 		{"/exit", "退出程序"},
 	}
@@ -258,6 +135,12 @@ func RenderHelp(width int) string {
 	descStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("#ABB2BF"))
 
+	dimStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#5C6370"))
+
+	helpStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#61AFEF"))
+
 	for _, c := range commands {
 		b.WriteString(cmdStyle.Render(c.cmd))
 		b.WriteString(descStyle.Render(c.desc))
@@ -265,9 +148,9 @@ func RenderHelp(width int) string {
 	}
 
 	b.WriteString("\n")
-	b.WriteString(helpStyle.Render("多行输入: Enter 换行，F5 发送"))
+	b.WriteString(helpStyle.Render("多行输入: Enter进入, 方向键移动, F5发送"))
 	b.WriteString("\n")
-	b.WriteString(helpStyle.Render("命令: /help 查看所有命令"))
+	b.WriteString(helpStyle.Render("命令: /help"))
 	b.WriteString("\n")
 	b.WriteString(helpStyle.Render("取消: Ctrl+C"))
 
