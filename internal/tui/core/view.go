@@ -55,10 +55,10 @@ func (m Model) View() string {
 			Width(m.width).
 			Height(helpHeight).
 			Render(RenderHelp(m.width))
-		return statusBar + chatArea + help + inputArea
+		return lipgloss.JoinVertical(lipgloss.Left, statusBar, chatArea, help, inputArea)
 	}
 
-	return statusBar + chatArea + inputArea
+	return lipgloss.JoinVertical(lipgloss.Left, statusBar, chatArea, inputArea)
 }
 
 func countLines(s string) int {

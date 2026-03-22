@@ -725,7 +725,7 @@ func (m *Model) syncLayout() {
 	}
 	m.textarea.SetWidth(inputWidth)
 	m.textarea.SetHeight(m.calculateInputHeight())
-	m.textarea.Prompt = "┃ "
+	m.textarea.Prompt = "> "
 
 	statusHeight := 1
 	inputHeight := m.textarea.Height() + 2

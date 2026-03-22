@@ -75,8 +75,6 @@ func NewModel(client infra.ChatClient, persona string, historyTurns int, configP
 
 	input := textarea.New()
 	focusedStyle, blurredStyle := textarea.DefaultStyles()
-	focusedStyle.CursorLine = lipgloss.NewStyle().Foreground(lipgloss.Color("#E6EAF2"))
-	blurredStyle.CursorLine = lipgloss.NewStyle().Foreground(lipgloss.Color("#AAB2C0"))
 	focusedStyle.Prompt = lipgloss.NewStyle().Foreground(lipgloss.Color("#61AFEF"))
 	blurredStyle.Prompt = lipgloss.NewStyle().Foreground(lipgloss.Color("#5C6370"))
 	focusedStyle.Text = lipgloss.NewStyle().Foreground(lipgloss.Color("#E6EAF2"))
@@ -87,7 +85,7 @@ func NewModel(client infra.ChatClient, persona string, historyTurns int, configP
 	input.Focus()
 	input.ShowLineNumbers = false
 	input.SetHeight(3)
-	input.Prompt = "┃ "
+	input.Prompt = "> "
 	input.CharLimit = 0
 	input.KeyMap.InsertNewline.SetEnabled(true)
 	input.Cursor.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("#61AFEF"))
