@@ -251,6 +251,12 @@ PR
 
 下面按块解释本仓库当前配置。
 
+说明：
+
+- 本节所有 YAML 片段都以仓库当前已经提交的 `.github/workflows/ci.yml` 为准。
+- 如果你在其他教程里看到 `actions/checkout@v4` 或 `actions/setup-go@v5`，那通常只是当时常见的示例版本；阅读本仓库文档时，应优先以仓库实际 CI 配置为准。
+- 当前仓库使用 `actions/checkout@v5` 与 `actions/setup-go@v6`，文档会与这份实际配置保持同步。
+
 ### 7.1 触发条件
 
 ```yaml
@@ -339,7 +345,7 @@ permissions:
 ### 7.6 Setup Go
 
 ```yaml
-- name: Set up Go
+- name: Setup Go
   uses: actions/setup-go@v6
   with:
     go-version-file: go.mod
@@ -355,6 +361,12 @@ permissions:
 
 - 避免把 Go 版本写死两份
 - 与仓库当前依赖状态绑定，维护成本更低
+
+版本说明：
+
+- 当前仓库的 CI 已经使用 `actions/setup-go@v6`
+- 同样，前面的 checkout 步骤使用的是 `actions/checkout@v5`
+- 如果后续团队决定升级这些 Action 版本，应优先修改 `.github/workflows/ci.yml`，再同步更新本指南
 
 ### 7.7 Build
 
@@ -634,6 +646,18 @@ PR 页面通常会显示检查状态，比如：
 
 - `go fmt ./...`
 - `go vet ./...`
+- `golangci-lint run`
+
+如果团队后续希望把“能编译、能测试”进一步升级成“基础质量门禁”，最推荐优先增加 `golangci-lint`。它是 Go 社区非常常见的综合静态分析工具，覆盖的问题范围通常比 `go vet` 更广，也更适合在 PR 阶段做统一检查。
+
+可以在 GitHub Actions 中增加类似步骤：
+
+```yaml
+- name: Lint
+  uses: golangci/golangci-lint-action@v6
+  with:
+    version: latest
+```
 
 ### 13.2 增加 PR 注释或状态门禁
 
