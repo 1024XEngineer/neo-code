@@ -118,7 +118,7 @@ func TestBuildMessagesSkipsTransientToolStatusMessage(t *testing.T) {
 }
 
 func TestBuildMessagesKeepsOnlyRecentToolContextMessages(t *testing.T) {
-	m := Model{}
+	m := Model{maxToolContextMessages: 3}
 	m.messages = append(m.messages, Message{Role: "user", Content: "step 1"})
 	for i := 1; i <= 5; i++ {
 		m.messages = append(m.messages, Message{Role: "system", Content: "[TOOL_CONTEXT]\ntool=read\nsuccess=true\noutput:\nchunk " + string(rune('0'+i))})
@@ -132,8 +132,8 @@ func TestBuildMessagesKeepsOnlyRecentToolContextMessages(t *testing.T) {
 			toolCtxCount++
 		}
 	}
-	if toolCtxCount != 3 {
-		t.Fatalf("expected 3 tool context messages, got %d", toolCtxCount)
+	if toolCtxCount != 5 {
+		t.Fatalf("expected 5 tool context messages, got %d", toolCtxCount)
 	}
 
 	joined := ""
