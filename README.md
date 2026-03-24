@@ -21,7 +21,7 @@
 - [整体架构设计说明](./docs/structure.md)：快速了解项目分层思路、目录结构和模块职责。
 - [架构详细说明文档](./docs/detailed_architecture_guide.md)：深入理解系统目标、核心架构、数据流和后续演进方向。
 - [API 契约书与开发指南](./docs/API_Contract_Guide.md)：了解 `api/proto/chat.proto` 的契约设计和前后端协作边界。
-- [GitHub Actions + Codecov 使用指南](./docs/GitHub_Actions_Codecov_Guide.md)：面向新成员的 CI、测试覆盖率与 PR 检查上手文档。
+- [GitHub Actions + Codecov 使用指南](./docs/github-actions-codecov-guide.md)：面向新成员的 CI、测试覆盖率与 PR 检查上手文档。
 - [安全拦截器模块文档](./docs/Security_Interceptor.md)：说明工具执行前的安全校验模型与接口规范。
 - [安全拦截器测试手册](./docs/Security_Interceptor_Test_Manual.md)：整理安全拦截相关测试点与手工验证步骤。
 - [Repository Guidelines](./docs/AGENTS.md)：补充仓库协作约定、目录组织与开发命令说明。
