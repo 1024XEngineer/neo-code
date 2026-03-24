@@ -10,9 +10,6 @@ import (
 	"strings"
 
 	"go-llm-demo/configs"
-	"go-llm-demo/internal/server/domain"
-	"go-llm-demo/internal/server/infra/provider"
-	"go-llm-demo/internal/server/infra/tools"
 	"go-llm-demo/internal/tui/services"
 	"go-llm-demo/internal/tui/state"
 
@@ -91,7 +88,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 					paramsMap := map[string]interface{}{}
 					if toolParams, ok := jsonData["params"].(map[string]interface{}); ok {
-						paramsMap = tools.NormalizeParams(toolParams)
+						paramsMap = services.NormalizeToolParams(toolParams)
 					}
 
 					// 显示工具执行中提示（仅用于 UI，不参与模型上下文）
@@ -99,8 +96,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 					// 在goroutine中执行工具调用
 					return m, func() tea.Msg {
-						call := domain.ToolCall{Tool: toolName, Params: paramsMap}
-						result := tools.GlobalRegistry.Execute(call)
+						call := services.ToolCall{Tool: toolName, Params: paramsMap}
+						result := services.ExecuteToolCall(call)
 						if result == nil {
 							mu := m.mutex()
 							mu.Lock()
@@ -328,7 +325,7 @@ func (m *Model) handleCommand(input string) (tea.Model, tea.Cmd) {
 			m.AddMessage("assistant", fmt.Sprintf("环境变量 %s 未设置。请继续使用 /apikey <env_name> 切换，或 /exit 退出。", envName))
 			return *m, nil
 		}
-		err := provider.ValidateChatAPIKey(context.Background(), cfg)
+		err := services.ValidateChatAPIKey(context.Background(), cfg)
 		if err == nil {
 			if writeErr := configs.WriteAppConfig(m.chat.ConfigPath, cfg); writeErr != nil {
 				cfg.AI.APIKey = previousEnvName
@@ -341,7 +338,7 @@ func (m *Model) handleCommand(input string) (tea.Model, tea.Cmd) {
 			return *m, nil
 		}
 		m.chat.APIKeyReady = false
-		if errors.Is(err, provider.ErrInvalidAPIKey) {
+		if errors.Is(err, services.ErrInvalidAPIKey) {
 			m.AddMessage("assistant", fmt.Sprintf("环境变量 %s 中的 API Key 无效：%v。请继续使用 /apikey <env_name>、/provider <name>、/switch <model> 调整配置，或 /exit 退出。", envName, err))
 			return *m, nil
 		}
@@ -349,7 +346,7 @@ func (m *Model) handleCommand(input string) (tea.Model, tea.Cmd) {
 		return *m, nil
 	case "/provider":
 		if len(args) == 0 {
-			m.AddMessage("assistant", fmt.Sprintf("用法: /provider <name>\n可用提供商:\n  - %s", strings.Join(provider.SupportedProviders(), "\n  - ")))
+			m.AddMessage("assistant", fmt.Sprintf("用法: /provider <name>\n可用提供商:\n  - %s", strings.Join(services.SupportedProviders(), "\n  - ")))
 			return *m, nil
 		}
 		cfg := configs.GlobalAppConfig
@@ -357,13 +354,13 @@ func (m *Model) handleCommand(input string) (tea.Model, tea.Cmd) {
 			m.AddMessage("assistant", "当前配置未加载，无法切换提供商")
 			return *m, nil
 		}
-		providerName, ok := provider.NormalizeProviderName(strings.Join(args, " "))
+		providerName, ok := services.NormalizeProviderName(strings.Join(args, " "))
 		if !ok {
-			m.AddMessage("assistant", fmt.Sprintf("不支持的提供商: %s\n可用提供商:\n  - %s", strings.Join(args, " "), strings.Join(provider.SupportedProviders(), "\n  - ")))
+			m.AddMessage("assistant", fmt.Sprintf("不支持的提供商: %s\n可用提供商:\n  - %s", strings.Join(args, " "), strings.Join(services.SupportedProviders(), "\n  - ")))
 			return *m, nil
 		}
 		cfg.AI.Provider = providerName
-		cfg.AI.Model = provider.DefaultModelForProvider(providerName)
+		cfg.AI.Model = services.DefaultModelForProvider(providerName)
 		m.chat.ActiveModel = cfg.AI.Model
 		if writeErr := configs.WriteAppConfig(m.chat.ConfigPath, cfg); writeErr != nil {
 			m.AddMessage("assistant", fmt.Sprintf("切换提供商失败: %v", writeErr))
@@ -374,7 +371,7 @@ func (m *Model) handleCommand(input string) (tea.Model, tea.Cmd) {
 			m.AddMessage("assistant", fmt.Sprintf("已切换到提供商 %s，但当前环境变量 %s 未设置。请使用 /apikey <env_name> 或设置该环境变量。", providerName, cfg.APIKeyEnvVarName()))
 			return *m, nil
 		}
-		if err := provider.ValidateChatAPIKey(context.Background(), cfg); err == nil {
+		if err := services.ValidateChatAPIKey(context.Background(), cfg); err == nil {
 			m.chat.APIKeyReady = true
 			m.AddMessage("assistant", fmt.Sprintf("已切换到提供商 %s，当前模型已重置为默认值: %s。", providerName, cfg.AI.Model))
 			return *m, nil
@@ -405,7 +402,7 @@ func (m *Model) handleCommand(input string) (tea.Model, tea.Cmd) {
 			m.AddMessage("assistant", fmt.Sprintf("已切换到模型: %s，但当前环境变量 %s 未设置。", target, cfg.APIKeyEnvVarName()))
 			return *m, nil
 		}
-		if err := provider.ValidateChatAPIKey(context.Background(), cfg); err == nil {
+		if err := services.ValidateChatAPIKey(context.Background(), cfg); err == nil {
 			m.chat.APIKeyReady = true
 			m.AddMessage("assistant", fmt.Sprintf("已切换到模型: %s", target))
 			return *m, nil
@@ -421,7 +418,7 @@ func (m *Model) handleCommand(input string) (tea.Model, tea.Cmd) {
 		}
 		root := strings.TrimSpace(m.chat.WorkspaceRoot)
 		if root == "" {
-			root = tools.GetWorkspaceRoot()
+			root = services.GetWorkspaceRoot()
 		}
 		if strings.TrimSpace(root) == "" {
 			m.AddMessage("assistant", "当前工作区: 未知")
@@ -509,11 +506,11 @@ func formatTypeStats(byType map[string]int) string {
 		return "无"
 	}
 	ordered := []string{
-		domain.TypeUserPreference,
-		domain.TypeProjectRule,
-		domain.TypeCodeFact,
-		domain.TypeFixRecipe,
-		domain.TypeSessionMemory,
+		services.TypeUserPreference,
+		services.TypeProjectRule,
+		services.TypeCodeFact,
+		services.TypeFixRecipe,
+		services.TypeSessionMemory,
 	}
 	parts := make([]string, 0, len(byType))
 	for _, key := range ordered {
@@ -636,7 +633,7 @@ func formatToolStatusMessage(toolName string, params map[string]interface{}) str
 	return fmt.Sprintf("%s tool=%s%s", toolStatusPrefix, strings.TrimSpace(toolName), detail)
 }
 
-func formatToolContextMessage(result *tools.ToolResult) string {
+func formatToolContextMessage(result *services.ToolResult) string {
 	if result == nil {
 		return toolContextPrefix + "\n" + "tool=unknown\n" + "success=false\n" + "error:\n工具返回为空"
 	}
