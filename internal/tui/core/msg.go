@@ -1,27 +1,6 @@
 package core
 
-import (
-	tea "github.com/charmbracelet/bubbletea"
-	"go-llm-demo/internal/tui/services"
-)
-
-func Chunk(content string) tea.Cmd {
-	return func() tea.Msg {
-		return StreamChunkMsg{Content: content}
-	}
-}
-
-func Done() tea.Cmd {
-	return func() tea.Msg {
-		return StreamDoneMsg{}
-	}
-}
-
-func CmdErr(err error) tea.Cmd {
-	return func() tea.Msg {
-		return StreamErrorMsg{Err: err}
-	}
-}
+import "go-llm-demo/internal/tui/services"
 
 type StreamChunkMsg struct {
 	Content string
@@ -66,11 +45,3 @@ func (HideHelpMsg) isMsg() {}
 type RefreshMemoryMsg struct{}
 
 func (RefreshMemoryMsg) isMsg() {}
-
-type streamNextChunk struct {
-	stream <-chan string
-}
-
-func (streamNextChunk) isMsg() {}
-
-var StreamDone = func() tea.Msg { return StreamDoneMsg{} }
