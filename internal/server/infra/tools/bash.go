@@ -30,6 +30,9 @@ func (b *BashTool) Run(params map[string]interface{}) *ToolResult {
 		errRes.ToolName = b.Definition().Name
 		return errRes
 	}
+	if denied := guardToolExecution("Bash", command, b.Definition().Name); denied != nil {
+		return denied
+	}
 	timeoutMs, errRes := optionalInt(params, "timeout", 120000)
 	if errRes != nil {
 		errRes.ToolName = b.Definition().Name
