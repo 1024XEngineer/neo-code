@@ -154,7 +154,7 @@ persona:
 
 - `configs/persona.txt` 现在只负责行为约束和回复风格，不再维护任何具体工具参数说明。
 - 模型可见的工具参数、必填项、默认值和枚举约束，统一来源于 `internal/server/infra/tools/*.go` 中各工具的 `Definition()`。
-- 聊天服务会在运行时把渲染后的 tool schema 注入到 system context，因此更新 schema 定义后，模型上下文会自动同步。
+- 聊天服务会在运行时把渲染后的 tool schema 作为 `tools` 参数传给模型，更新 schema 定义后会自动同步到工具调用协议。
 
 ## Memory 设计
 
