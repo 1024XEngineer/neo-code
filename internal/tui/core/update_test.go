@@ -1039,11 +1039,11 @@ func TestStreamDoneMsgExecutesToolCallFromAssistantJSON(t *testing.T) {
 	if !got.chat.ToolExecuting {
 		t.Fatal("expected tool execution flag to be set")
 	}
-	if len(got.chat.Messages) != 2 {
-		t.Fatalf("expected tool status message to be appended, got %d messages", len(got.chat.Messages))
+	if len(got.chat.Messages) != 1 {
+		t.Fatalf("expected pure tool JSON to be replaced by a single tool status message, got %d messages", len(got.chat.Messages))
 	}
-	if !strings.HasPrefix(got.chat.Messages[1].Content, toolStatusPrefix) {
-		t.Fatalf("expected transient tool status, got %q", got.chat.Messages[1].Content)
+	if !strings.HasPrefix(got.chat.Messages[0].Content, toolStatusPrefix) {
+		t.Fatalf("expected transient tool status, got %q", got.chat.Messages[0].Content)
 	}
 	if cmd == nil {
 		t.Fatal("expected tool execution command")

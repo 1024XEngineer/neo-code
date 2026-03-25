@@ -85,42 +85,46 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		mu.Unlock()
 
-		// 当前工具协议约定：模型如果想调用工具，需要把最后一条 assistant 消息完整输出为
-		// {"tool":"...","params":{...}} 结构。这里在流结束后统一解析，避免半截 JSON 被误触发。
+		// 当前工具协议约定：模型如果想调用工具，需要输出一个合法的工具调用 JSON。
+		// 这里允许 JSON 前面带解释文本、代码围栏或 think 块，但只会提取最后一个合法调用。
 		if shouldCheckToolCall {
-			var jsonData map[string]interface{}
-			if err := json.Unmarshal([]byte(lastContent), &jsonData); err == nil {
-				if toolName, ok := jsonData["tool"].(string); ok && toolName != "" {
-					mu := m.mutex()
-					mu.Lock()
-					if m.chat.ToolExecuting {
-						mu.Unlock()
-						return m, nil
+			if captured, ok := captureToolCallFromAssistantText(lastContent); ok {
+				call := services.ToolCall{
+					Tool:   strings.TrimSpace(captured.Call.Tool),
+					Params: services.NormalizeToolParams(captured.Call.Params),
+				}
+
+				mu := m.mutex()
+				mu.Lock()
+				if len(m.chat.Messages) > 0 {
+					lastIndex := len(m.chat.Messages) - 1
+					if strings.TrimSpace(captured.CleanedResponse) == "" {
+						m.chat.Messages = append(m.chat.Messages[:lastIndex], m.chat.Messages[lastIndex+1:]...)
+					} else {
+						m.chat.Messages[lastIndex].Content = captured.CleanedResponse
 					}
-					m.chat.ToolExecuting = true
+				}
+				if m.chat.ToolExecuting {
 					mu.Unlock()
+					return m, nil
+				}
+				m.chat.ToolExecuting = true
+				mu.Unlock()
 
-					paramsMap := map[string]interface{}{}
-					if toolParams, ok := jsonData["params"].(map[string]interface{}); ok {
-						paramsMap = services.NormalizeToolParams(toolParams)
+				// 显示工具执行中提示（仅用于 UI，不参与模型上下文）
+				m.AddMessage("system", formatToolStatusMessage(call.Tool, call.Params))
+
+				// 在 goroutine 中执行工具调用
+				return m, func() tea.Msg {
+					result := executeToolCall(call)
+					if result == nil {
+						mu := m.mutex()
+						mu.Lock()
+						m.chat.ToolExecuting = false
+						mu.Unlock()
+						return ToolErrorMsg{Err: fmt.Errorf("tool execution failed: empty result")}
 					}
-
-					// 显示工具执行中提示（仅用于 UI，不参与模型上下文）
-					m.AddMessage("system", formatToolStatusMessage(toolName, paramsMap))
-
-					// 在goroutine中执行工具调用
-					return m, func() tea.Msg {
-						call := services.ToolCall{Tool: toolName, Params: paramsMap}
-						result := executeToolCall(call)
-						if result == nil {
-							mu := m.mutex()
-							mu.Lock()
-							m.chat.ToolExecuting = false
-							mu.Unlock()
-							return ToolErrorMsg{Err: fmt.Errorf("tool execution failed: empty result")}
-						}
-						return ToolResultMsg{Result: result, Call: call}
-					}
+					return ToolResultMsg{Result: result, Call: call}
 				}
 			}
 		}
