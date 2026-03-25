@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
+	"time"
 
 	"go-llm-demo/internal/server/domain"
 )
@@ -131,22 +133,52 @@ func (s *memoryServiceImpl) Save(ctx context.Context, userInput, reply string) e
 	}
 
 	for _, item := range items {
-		if item.Type == domain.TypeSessionMemory {
-			if err := s.sessionRepo.Add(ctx, item); err != nil {
-				return err
-			}
-			continue
-		}
-		if len(s.persistTypes) > 0 {
-			if _, ok := s.persistTypes[item.Type]; !ok {
-				continue
-			}
-		}
-		if err := s.persistentRepo.Add(ctx, item); err != nil {
+		if err := s.storeMemoryItem(ctx, item); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// SaveManualMemory stores an explicit durable note without routing it back through the extractor.
+func (s *memoryServiceImpl) SaveManualMemory(ctx context.Context, text string) error {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
+		return nil
+	}
+
+	itemType, scope := inferManualMemoryKind(trimmed)
+	if len(s.persistTypes) > 0 {
+		if _, ok := s.persistTypes[itemType]; !ok {
+			for _, fallbackType := range []string{domain.TypeUserPreference, domain.TypeProjectRule, domain.TypeCodeFact, domain.TypeFixRecipe} {
+				if _, allowed := s.persistTypes[fallbackType]; allowed {
+					itemType = fallbackType
+					scope = domain.MemoryItem{Type: fallbackType}.Normalized().Scope
+					break
+				}
+			}
+			if _, ok := s.persistTypes[itemType]; !ok {
+				return fmt.Errorf("manual memory type %q is not enabled in memory.persist_types", itemType)
+			}
+		}
+	}
+
+	now := time.Now().UTC()
+	item := domain.MemoryItem{
+		ID:             strconv.FormatInt(now.UnixNano(), 10) + "-manual",
+		Type:           itemType,
+		Scope:          scope,
+		Summary:        domain.SummarizeText(trimmed, 140),
+		Details:        domain.SummarizeText(trimmed, 220),
+		Source:         "manual",
+		Confidence:     0.99,
+		UserInput:      trimmed,
+		AssistantReply: "Manually saved from /remember.",
+		Text:           trimmed,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
+	return s.storeMemoryItem(ctx, item)
 }
 
 // GetStats returns memory counts and retrieval settings.
@@ -179,6 +211,18 @@ func (s *memoryServiceImpl) Clear(ctx context.Context) error {
 // ClearSession removes all session-scoped memory items.
 func (s *memoryServiceImpl) ClearSession(ctx context.Context) error {
 	return s.sessionRepo.Clear(ctx)
+}
+
+func (s *memoryServiceImpl) storeMemoryItem(ctx context.Context, item domain.MemoryItem) error {
+	if item.Type == domain.TypeSessionMemory {
+		return s.sessionRepo.Add(ctx, item)
+	}
+	if len(s.persistTypes) > 0 {
+		if _, ok := s.persistTypes[item.Type]; !ok {
+			return nil
+		}
+	}
+	return s.persistentRepo.Add(ctx, item)
 }
 
 // Search scores memory items and returns the most relevant matches.
@@ -420,6 +464,21 @@ func countMemoryTypes(groups ...[]domain.MemoryItem) map[string]int {
 		}
 	}
 	return counts
+}
+
+func inferManualMemoryKind(text string) (string, string) {
+	lower := strings.ToLower(strings.TrimSpace(text))
+	projectHints := []string{
+		"repo", "repository", "project", "workspace", "file", "path", "config", "command",
+		"go test", "go build", "readme", "agents.md", "claude.md", "memory.md",
+		"仓库", "项目", "工作区", "文件", "路径", "配置", "命令", "约定", "规范", "提交",
+	}
+	for _, hint := range projectHints {
+		if strings.Contains(lower, hint) {
+			return domain.TypeProjectRule, domain.ScopeProject
+		}
+	}
+	return domain.TypeUserPreference, domain.ScopeUser
 }
 
 // ListMemoryItems returns both persistent and session memory items for inspection.

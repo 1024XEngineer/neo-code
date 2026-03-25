@@ -240,6 +240,9 @@ func (c *localChatClient) Remember(ctx context.Context, text string) error {
 	if c.memorySvc == nil {
 		return nil
 	}
+	if impl, ok := c.memorySvc.(manualMemoryWriter); ok {
+		return impl.SaveManualMemory(ctx, text)
+	}
 	return c.memorySvc.Save(ctx, strings.TrimSpace(text), "Noted. Remember this for future coding assistance.")
 }
 

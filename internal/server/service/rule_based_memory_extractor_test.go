@@ -136,3 +136,40 @@ func TestMemoryServiceUsesInjectedExtractor(t *testing.T) {
 		t.Fatalf("expected custom extractor item to be persisted, got %+v", stats.ByType)
 	}
 }
+
+func TestMemoryServiceSaveManualMemoryPersistsExplicitNote(t *testing.T) {
+	ctx := context.Background()
+	path := t.TempDir() + "/memory.json"
+
+	svc := NewMemoryService(
+		repository.NewFileMemoryStore(path, 100),
+		repository.NewSessionMemoryStore(100),
+		5,
+		2.2,
+		1800,
+		path,
+		[]string{domain.TypeUserPreference, domain.TypeProjectRule},
+	)
+
+	writer, ok := svc.(interface {
+		SaveManualMemory(context.Context, string) error
+	})
+	if !ok {
+		t.Fatal("expected memory service to expose SaveManualMemory")
+	}
+
+	if err := writer.SaveManualMemory(ctx, "以后默认用中文总结改动"); err != nil {
+		t.Fatalf("save manual memory: %v", err)
+	}
+
+	stats, err := svc.GetStats(ctx)
+	if err != nil {
+		t.Fatalf("stats: %v", err)
+	}
+	if stats.PersistentItems != 1 {
+		t.Fatalf("expected one persisted manual memory item, got %+v", stats)
+	}
+	if stats.ByType[domain.TypeUserPreference] != 1 {
+		t.Fatalf("expected a user_preference manual memory item, got %+v", stats.ByType)
+	}
+}
