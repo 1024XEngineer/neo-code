@@ -123,14 +123,14 @@ func TestChatCompletionProviderChatStreamsFallbackMessageOnMalformedChunk(t *tes
 		Model:   "test-model",
 	}
 
-	stream, err := p.Chat(context.Background(), []domain.Message{{Role: "user", Content: "hi"}})
+	stream, err := p.Chat(context.Background(), []domain.Message{{Role: "user", Content: "hi"}}, nil)
 	if err != nil {
 		t.Fatalf("expected stream request to succeed, got error: %v", err)
 	}
 
 	var output strings.Builder
 	for chunk := range stream {
-		output.WriteString(chunk)
+		output.WriteString(chunk.Content)
 	}
 
 	got := output.String()
@@ -154,14 +154,14 @@ func TestChatCompletionProviderChatStreamsFallbackMessageOnUnexpectedEOF(t *test
 		Model:   "test-model",
 	}
 
-	stream, err := p.Chat(context.Background(), []domain.Message{{Role: "user", Content: "hi"}})
+	stream, err := p.Chat(context.Background(), []domain.Message{{Role: "user", Content: "hi"}}, nil)
 	if err != nil {
 		t.Fatalf("expected stream request to succeed, got error: %v", err)
 	}
 
 	var output strings.Builder
 	for chunk := range stream {
-		output.WriteString(chunk)
+		output.WriteString(chunk.Content)
 	}
 
 	got := output.String()
@@ -174,12 +174,12 @@ func TestChatCompletionProviderChatStreamsFallbackMessageOnUnexpectedEOF(t *test
 }
 
 func TestEmitStreamErrorMessageIgnoresNilError(t *testing.T) {
-	out := make(chan string, 1)
+	out := make(chan domain.ChatEvent, 1)
 	emitStreamErrorMessage(context.Background(), out, nil)
 
 	select {
 	case got := <-out:
-		t.Fatalf("expected no message for nil error, got %q", got)
+		t.Fatalf("expected no message for nil error, got %q", got.Content)
 	default:
 	}
 }
@@ -188,7 +188,7 @@ func TestEmitStreamErrorMessageReturnsWhenContextCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	out := make(chan string)
+	out := make(chan domain.ChatEvent)
 	done := make(chan struct{})
 
 	go func() {
