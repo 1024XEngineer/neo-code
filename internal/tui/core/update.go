@@ -689,12 +689,18 @@ func (m *Model) handleCommand(input string) (tea.Model, tea.Cmd) {
 				m.AddMessage("assistant", todo.MsgUsageAdd)
 				return *m, nil
 			}
-			content := args[1]
 			priority := services.TodoPriorityMedium
-			if len(args) > 2 {
-				if p, ok := services.ParseTodoPriority(args[2]); ok {
+			contentParts := append([]string(nil), args[1:]...)
+			if len(contentParts) > 1 {
+				if p, ok := services.ParseTodoPriority(contentParts[len(contentParts)-1]); ok {
 					priority = p
+					contentParts = contentParts[:len(contentParts)-1]
 				}
+			}
+			content := strings.TrimSpace(strings.Join(contentParts, " "))
+			if content == "" {
+				m.AddMessage("assistant", todo.MsgUsageAdd)
+				return *m, nil
 			}
 			_, err := m.client.AddTodo(context.Background(), content, priority)
 			if err != nil {

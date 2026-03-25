@@ -26,12 +26,20 @@ func RenderHelp(width int) string {
 		{"/apikey <env_name>", "Switch the API key environment variable"},
 		{"/provider <name>", "Switch the model provider"},
 		{"/switch <model>", "Switch the active model"},
-		{"/run <code>", "Run code"},
-		{"/explain <code>", "Explain code"},
 		{"/memory", "Show memory stats"},
+		{"/memory-list", "List stored memory items"},
+		{"/project-memory", "Show loaded project memory files"},
+		{"/memory-mode", "Show the current memory extraction mode"},
+		{"/remember <text>", "Store an explicit durable memory note"},
+		{"/resume", "Show the saved working session summary"},
 		{"/clear-memory confirm", "Clear persistent memory"},
 		{"/clear-context", "Clear the session context"},
-		{"/exit", "Exit the app"},
+		{"/todo | /todo list", "Open or refresh the todo list"},
+		{"/todo add <content> [priority]", "Add a todo item"},
+		{"/run <code>", "Run code"},
+		{"/explain <code>", "Explain code"},
+		{"/y | /n", "Approve or reject a pending security prompt"},
+		{"/exit | /quit | /q", "Exit the app"},
 	}
 
 	cmdStyle := lipgloss.NewStyle().

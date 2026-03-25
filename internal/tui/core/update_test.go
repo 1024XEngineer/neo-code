@@ -776,6 +776,38 @@ func TestHandleCommandMemoryModeSuccess(t *testing.T) {
 	assertLastMessageContains(t, got, "auto")
 }
 
+func TestHandleCommandTodoAddSupportsMultiWordContent(t *testing.T) {
+	client := &fakeChatClient{}
+	m := newTestModel(t, client)
+	m.chat.APIKeyReady = true
+
+	updated, _ := m.handleCommand("/todo add 修复 memory 命令")
+	got := updated.(Model)
+	assertLastMessageContains(t, got, "修复 memory 命令")
+	if len(client.todos) != 1 || client.todos[0].Content != "修复 memory 命令" {
+		t.Fatalf("expected full todo content to be stored, got %+v", client.todos)
+	}
+	if client.todos[0].Priority != services.TodoPriorityMedium {
+		t.Fatalf("expected default medium priority, got %+v", client.todos[0])
+	}
+}
+
+func TestHandleCommandTodoAddParsesTrailingPriority(t *testing.T) {
+	client := &fakeChatClient{}
+	m := newTestModel(t, client)
+	m.chat.APIKeyReady = true
+
+	updated, _ := m.handleCommand("/todo add 修复 memory 命令 high")
+	got := updated.(Model)
+	assertLastMessageContains(t, got, "修复 memory 命令")
+	if len(client.todos) != 1 || client.todos[0].Content != "修复 memory 命令" {
+		t.Fatalf("expected full todo content to be stored, got %+v", client.todos)
+	}
+	if client.todos[0].Priority != services.TodoPriorityHigh {
+		t.Fatalf("expected high priority, got %+v", client.todos[0])
+	}
+}
+
 func TestHandleCommandClearMemoryRequiresConfirm(t *testing.T) {
 	client := &fakeChatClient{}
 	m := newTestModel(t, client)

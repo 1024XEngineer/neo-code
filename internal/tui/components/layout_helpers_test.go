@@ -9,7 +9,17 @@ import (
 func TestRenderHelpContainsKeyCommands(t *testing.T) {
 	rendered := RenderHelp(80)
 
-	for _, want := range []string{"NeoCode Help", "/help", "/provider <name>", "Press Esc or /help to close"} {
+	for _, want := range []string{
+		"NeoCode Help",
+		"/help",
+		"/provider <name>",
+		"/memory-list",
+		"/project-memory",
+		"/remember <text>",
+		"/resume",
+		"/memory-mode",
+		"Press Esc or /help to close",
+	} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("expected help to contain %q, got %q", want, rendered)
 		}
