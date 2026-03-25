@@ -49,6 +49,11 @@ type MemoryService interface {
 	ClearSession(ctx context.Context) error
 }
 
+// MemoryExtractor extracts structured memory items from one conversation turn.
+type MemoryExtractor interface {
+	Extract(ctx context.Context, userInput, assistantReply string) ([]MemoryItem, error)
+}
+
 type MemoryStats struct {
 	PersistentItems int
 	SessionItems    int
@@ -59,7 +64,7 @@ type MemoryStats struct {
 	ByType          map[string]int
 }
 
-// IsPersistentType 判断记忆类型是否应该长期持久化。
+// IsPersistentType reports whether the memory type should be stored long-term.
 func IsPersistentType(itemType string) bool {
 	switch strings.TrimSpace(itemType) {
 	case TypeUserPreference, TypeProjectRule, TypeCodeFact, TypeFixRecipe:
@@ -69,7 +74,7 @@ func IsPersistentType(itemType string) bool {
 	}
 }
 
-// Normalized 为记忆项补齐缺失字段并应用默认值。
+// Normalized fills missing fields and applies defaults to a memory item.
 func (i MemoryItem) Normalized() MemoryItem {
 	normalized := i
 	if normalized.Type == "" {
@@ -116,7 +121,7 @@ func (i MemoryItem) Normalized() MemoryItem {
 	return normalized
 }
 
-// SearchText 根据记忆项字段构建用于检索的文本。
+// SearchText builds a text blob used for retrieval.
 func (i MemoryItem) SearchText() string {
 	parts := make([]string, 0, 4)
 	if strings.TrimSpace(i.Type) != "" {
@@ -137,7 +142,7 @@ func (i MemoryItem) SearchText() string {
 	return strings.TrimSpace(strings.Join(parts, "\n"))
 }
 
-// PromptBlock 将记忆项格式化为可注入提示词的文本块。
+// PromptBlock formats a memory item for prompt injection.
 func (i MemoryItem) PromptBlock() string {
 	parts := []string{
 		"Type: " + i.Type,
@@ -153,7 +158,7 @@ func (i MemoryItem) PromptBlock() string {
 	return strings.Join(parts, "\n")
 }
 
-// SummarizeText 按指定最大长度截断文本。
+// SummarizeText truncates text to the given maximum length.
 func SummarizeText(text string, maxLen int) string {
 	trimmed := strings.TrimSpace(text)
 	if len(trimmed) <= maxLen {
@@ -165,7 +170,7 @@ func SummarizeText(text string, maxLen int) string {
 	return trimmed[:maxLen-3] + "..."
 }
 
-// InferTags 从自由文本中推断简要主题标签。
+// InferTags derives short topic tags from free-form text.
 func InferTags(text string) []string {
 	trimmed := strings.ToLower(text)
 	tags := make([]string, 0, 6)
@@ -198,7 +203,7 @@ func InferTags(text string) []string {
 	return tags
 }
 
-// Keywords 从文本中提取去重后的小写关键词。
+// Keywords extracts unique lowercase keywords from text.
 func Keywords(text string) []string {
 	text = strings.ToLower(text)
 	replacer := strings.NewReplacer(

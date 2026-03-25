@@ -2,12 +2,9 @@ package service
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"sort"
-	"strconv"
 	"strings"
-	"time"
 
 	"go-llm-demo/internal/server/domain"
 )
@@ -15,6 +12,7 @@ import (
 type memoryServiceImpl struct {
 	persistentRepo domain.MemoryRepository
 	sessionRepo    domain.MemoryRepository
+	extractor      domain.MemoryExtractor
 	topK           int
 	minScore       float64
 	maxPromptChars int
@@ -27,7 +25,7 @@ type Match struct {
 	Score float64
 }
 
-// NewMemoryService 使用长期存储和会话存储创建记忆服务。
+// NewMemoryService creates a memory service with the default rule-based extractor.
 func NewMemoryService(
 	persistentRepo domain.MemoryRepository,
 	sessionRepo domain.MemoryRepository,
@@ -37,9 +35,37 @@ func NewMemoryService(
 	path string,
 	persistTypes []string,
 ) domain.MemoryService {
+	return NewMemoryServiceWithExtractor(
+		persistentRepo,
+		sessionRepo,
+		NewRuleBasedMemoryExtractor(),
+		topK,
+		minScore,
+		maxPromptChars,
+		path,
+		persistTypes,
+	)
+}
+
+// NewMemoryServiceWithExtractor creates a memory service with a pluggable extractor.
+func NewMemoryServiceWithExtractor(
+	persistentRepo domain.MemoryRepository,
+	sessionRepo domain.MemoryRepository,
+	extractor domain.MemoryExtractor,
+	topK int,
+	minScore float64,
+	maxPromptChars int,
+	path string,
+	persistTypes []string,
+) domain.MemoryService {
+	if extractor == nil {
+		extractor = NewRuleBasedMemoryExtractor()
+	}
+
 	return &memoryServiceImpl{
 		persistentRepo: persistentRepo,
 		sessionRepo:    sessionRepo,
+		extractor:      extractor,
 		topK:           topK,
 		minScore:       minScore,
 		maxPromptChars: maxPromptChars,
@@ -48,7 +74,7 @@ func NewMemoryService(
 	}
 }
 
-// BuildContext 为当前输入返回得分最高的记忆片段。
+// BuildContext returns the most relevant memory snippets for the current input.
 func (s *memoryServiceImpl) BuildContext(ctx context.Context, userInput string) (string, error) {
 	persistentItems, err := s.persistentRepo.List(ctx)
 	if err != nil {
@@ -63,18 +89,15 @@ func (s *memoryServiceImpl) BuildContext(ctx context.Context, userInput string) 
 	sessionMatches := Search(sessionItems, userInput, s.topK, s.minScore)
 	matches := MergeMatches(s.topK, persistentMatches, sessionMatches)
 
-	// 新增：进行最终的分数过滤，防止低分项进入上下文
 	var filteredMatches []Match
 	for _, match := range matches {
-		if match.Score >= s.minScore { // 确保分数不低于阈值
+		if match.Score >= s.minScore {
 			filteredMatches = append(filteredMatches, match)
 		}
 	}
-	// 如果过滤后没有符合条件的记忆，则直接返回空
 	if len(filteredMatches) == 0 {
 		return "", nil
 	}
-	// 使用过滤后的结果
 	matches = filteredMatches
 
 	var builder strings.Builder
@@ -100,9 +123,13 @@ func (s *memoryServiceImpl) BuildContext(ctx context.Context, userInput string) 
 	return builder.String(), nil
 }
 
-// Save 从一轮对话中提取记忆项并保存。
+// Save extracts memory items from a conversation turn and persists them.
 func (s *memoryServiceImpl) Save(ctx context.Context, userInput, reply string) error {
-	items := deriveMemoryItems(userInput, reply)
+	items, err := s.extractor.Extract(ctx, userInput, reply)
+	if err != nil {
+		return err
+	}
+
 	for _, item := range items {
 		if item.Type == domain.TypeSessionMemory {
 			if err := s.sessionRepo.Add(ctx, item); err != nil {
@@ -122,7 +149,7 @@ func (s *memoryServiceImpl) Save(ctx context.Context, userInput, reply string) e
 	return nil
 }
 
-// GetStats 返回记忆服务的数量统计和检索配置。
+// GetStats returns memory counts and retrieval settings.
 func (s *memoryServiceImpl) GetStats(ctx context.Context) (*domain.MemoryStats, error) {
 	persistentItems, err := s.persistentRepo.List(ctx)
 	if err != nil {
@@ -144,17 +171,17 @@ func (s *memoryServiceImpl) GetStats(ctx context.Context) (*domain.MemoryStats, 
 	return stats, nil
 }
 
-// Clear 清空所有长期记忆项。
+// Clear removes all persistent memory items.
 func (s *memoryServiceImpl) Clear(ctx context.Context) error {
 	return s.persistentRepo.Clear(ctx)
 }
 
-// ClearSession 清空所有会话级记忆项。
+// ClearSession removes all session-scoped memory items.
 func (s *memoryServiceImpl) ClearSession(ctx context.Context) error {
 	return s.sessionRepo.Clear(ctx)
 }
 
-// Search 对记忆项打分并返回与查询最相关的结果。
+// Search scores memory items and returns the most relevant matches.
 func Search(items []domain.MemoryItem, query string, topK int, minScore float64) []Match {
 	trimmedQuery := strings.TrimSpace(query)
 	if topK <= 0 || trimmedQuery == "" {
@@ -182,7 +209,7 @@ func Search(items []domain.MemoryItem, query string, topK int, minScore float64)
 	return matches
 }
 
-// MergeMatches 对多个匹配结果分组去重并重新排序。
+// MergeMatches merges and resorts multiple match groups.
 func MergeMatches(topK int, groups ...[]Match) []Match {
 	merged := make([]Match, 0)
 	seen := map[string]Match{}
@@ -342,242 +369,6 @@ func matchKey(item domain.MemoryItem) string {
 	return normalized.Type + "::" + normalized.Scope + "::" + normalized.Summary
 }
 
-func buildMemoryText(userInput, assistantReply string) string {
-	return strings.TrimSpace(userInput) + "\n" + strings.TrimSpace(assistantReply)
-}
-
-func deriveMemoryItems(userInput, assistantReply string) []domain.MemoryItem {
-	if shouldSkipMemoryCapture(userInput, assistantReply) {
-		return nil
-	}
-
-	now := time.Now().UTC()
-	items := make([]domain.MemoryItem, 0, 4)
-
-	if preferenceItem, ok := extractPreferenceMemory(userInput, assistantReply, now); ok {
-		items = append(items, preferenceItem)
-	}
-	if ruleItem, ok := extractProjectRuleMemory(userInput, assistantReply, now); ok {
-		items = append(items, ruleItem)
-	}
-	if codeFactItem, ok := extractCodeFactMemory(userInput, assistantReply, now); ok {
-		items = append(items, codeFactItem)
-	}
-	if failureItem, ok := extractFixRecipeMemory(userInput, assistantReply, now); ok {
-		items = append(items, failureItem)
-	}
-	if mainItem, ok := extractSessionMemory(userInput, assistantReply, now); ok {
-		items = append(items, mainItem)
-	}
-
-	return dedupeMemoryItems(items)
-}
-
-func extractSessionMemory(userInput, assistantReply string, now time.Time) (domain.MemoryItem, bool) {
-	combined := buildMemoryText(userInput, assistantReply)
-	if !isCodingRelevant(userInput, assistantReply) || looksLikeStableInstruction(userInput) || looksLikeProjectFact(userInput, assistantReply) {
-		return domain.MemoryItem{}, false
-	}
-
-	summary := domain.SummarizeText(userInput, 140)
-	if summary == "" {
-		summary = domain.SummarizeText(assistantReply, 140)
-	}
-
-	return newMemoryItem(now, domain.TypeSessionMemory, domain.ScopeSession, summary, assistantReply, userInput, assistantReply, combined, 0.66), true
-}
-
-func extractPreferenceMemory(userInput, assistantReply string, now time.Time) (domain.MemoryItem, bool) {
-	trimmed := strings.TrimSpace(userInput)
-	if trimmed == "" || !looksLikeStableInstruction(trimmed) {
-		return domain.MemoryItem{}, false
-	}
-
-	summary := domain.SummarizeText(trimmed, 140)
-	return newMemoryItem(now, domain.TypeUserPreference, domain.ScopeUser, summary, assistantReply, userInput, assistantReply, buildMemoryText(userInput, assistantReply), 0.95), true
-}
-
-func extractProjectRuleMemory(userInput, assistantReply string, now time.Time) (domain.MemoryItem, bool) {
-	combined := strings.ToLower(buildMemoryText(userInput, assistantReply))
-	if !looksLikeProjectFact(userInput, assistantReply) {
-		return domain.MemoryItem{}, false
-	}
-	if looksLikeStableInstruction(userInput) && !hasProjectRuleAnchor(combined) {
-		return domain.MemoryItem{}, false
-	}
-	if !hasProjectRuleSignal(combined) {
-		return domain.MemoryItem{}, false
-	}
-	summary := domain.SummarizeText(firstNonEmptyLine(userInput, assistantReply), 140)
-	return newMemoryItem(now, domain.TypeProjectRule, domain.ScopeProject, summary, assistantReply, userInput, assistantReply, buildMemoryText(userInput, assistantReply), 0.9), true
-}
-
-func extractCodeFactMemory(userInput, assistantReply string, now time.Time) (domain.MemoryItem, bool) {
-	combined := buildMemoryText(userInput, assistantReply)
-	if !looksLikeCodeKnowledge(userInput, assistantReply) {
-		return domain.MemoryItem{}, false
-	}
-	if containsAnyFold(strings.ToLower(userInput), "帮我", "请你", "写一个", "实现一个") && !containsAnyFold(combined, "在 ", "位于", "负责", "调用", "使用", "路径", "文件", "函数", "模块", "返回", "读取", "写入") {
-		return domain.MemoryItem{}, false
-	}
-	summary := domain.SummarizeText(firstNonEmptyLine(assistantReply, userInput), 140)
-	return newMemoryItem(now, domain.TypeCodeFact, domain.ScopeProject, summary, assistantReply, userInput, assistantReply, combined, 0.82), true
-}
-
-func extractFixRecipeMemory(userInput, assistantReply string, now time.Time) (domain.MemoryItem, bool) {
-	combined := strings.ToLower(buildMemoryText(userInput, assistantReply))
-	hasProblem := containsAnyFold(combined, "error", "failed", "panic", "bug", "报错", "失败", "异常")
-	hasFix := containsAnyFold(combined, "修复", "已通过", "解决", "fixed", "use", "改为", "增加", "remove", "replace")
-	if !hasProblem || !hasFix {
-		return domain.MemoryItem{}, false
-	}
-	summary := domain.SummarizeText(firstNonEmptyLine(userInput, assistantReply), 140)
-	details := assistantReply
-	if details == "" {
-		details = userInput
-	}
-	return newMemoryItem(now, domain.TypeFixRecipe, domain.ScopeProject, summary, details, userInput, assistantReply, buildMemoryText(userInput, assistantReply), 0.8), true
-}
-
-func newMemoryItem(now time.Time, itemType, scope, summary, details, userInput, assistantReply, text string, confidence float64) domain.MemoryItem {
-	item := domain.MemoryItem{
-		ID:             strconv.FormatInt(now.UnixNano(), 10) + "-" + itemType,
-		Type:           itemType,
-		Summary:        strings.TrimSpace(summary),
-		Details:        domain.SummarizeText(details, 220),
-		Scope:          scope,
-		Tags:           domain.InferTags(summary + "\n" + details),
-		Source:         "conversation",
-		Confidence:     confidence,
-		Text:           strings.TrimSpace(text),
-		CreatedAt:      now,
-		UpdatedAt:      now,
-		UserInput:      strings.TrimSpace(userInput),
-		AssistantReply: strings.TrimSpace(assistantReply),
-	}
-	return item.Normalized()
-}
-
-func isCodingRelevant(userInput, assistantReply string) bool {
-	combined := strings.ToLower(buildMemoryText(userInput, assistantReply))
-	if containsAnyFold(combined,
-		"function", "file", "repo", "project", "build", "test", "config", "bug", "error", "fix",
-		"golang", "go ", "yaml", "json", "memory", "prompt", "cli", "agent", "编程", "项目", "配置", "测试", "构建", "报错", "修复") {
-		return true
-	}
-	trimmedUser := strings.TrimSpace(strings.ToLower(userInput))
-	return len(trimmedUser) > 20 && containsAnyFold(trimmedUser, "code", "代码")
-}
-
-func looksLikeProjectFact(userInput, assistantReply string) bool {
-	combined := strings.ToLower(buildMemoryText(userInput, assistantReply))
-	return hasProjectRuleAnchor(combined) && hasProjectRuleSignal(combined)
-}
-
-func looksLikeCodeKnowledge(userInput, assistantReply string) bool {
-	combined := buildMemoryText(userInput, assistantReply)
-	if !isCodingRelevant(userInput, assistantReply) {
-		return false
-	}
-
-	hasCodeAnchor := containsAnyFold(combined,
-		".go", "config.yaml", "main.go", "services/", "memory/", "json", "yaml",
-		"function", "func", "struct", "interface", "method", "package", "import",
-		"函数", "文件", "模块", "包", "结构体", "接口", "方法", "字段", "参数", "路径", "目录")
-	if !hasCodeAnchor {
-		return false
-	}
-
-	trimmedUser := strings.ToLower(strings.TrimSpace(userInput))
-	trimmedReply := strings.ToLower(strings.TrimSpace(assistantReply))
-	hasQuestionIntent := containsAnyFold(trimmedUser,
-		"什么", "干嘛", "作用", "怎么", "如何", "why", "where", "which", "负责", "在哪", "含义", "区别")
-	hasExplanation := containsAnyFold(trimmedReply,
-		"用于", "负责", "位于", "表示", "通过", "调用", "读取", "写入", "返回", "实现", "处理", "对应", "配置", "路径", "字段", "参数")
-
-	return hasQuestionIntent || hasExplanation || len(strings.TrimSpace(assistantReply)) >= 48
-}
-
-func looksLikeStableInstruction(text string) bool {
-	trimmed := strings.TrimSpace(strings.ToLower(text))
-	if trimmed == "" {
-		return false
-	}
-	if !containsAnyFold(trimmed, "默认", "始终", "以后", "统一", "不要自动", "回答中文", "只用", "只使用", "只需要", "不要再", "固定", "长期") {
-		return false
-	}
-	return containsAnyFold(trimmed, "config.yaml", ".env", "中文", "提交", "命令", "风格", "配置")
-}
-
-func shouldSkipMemoryCapture(userInput, assistantReply string) bool {
-	trimmedUser := strings.TrimSpace(userInput)
-	trimmedReply := strings.TrimSpace(assistantReply)
-	if trimmedUser == "" || trimmedReply == "" {
-		return true
-	}
-	return looksLikeToolCallPayload(trimmedReply)
-}
-
-func looksLikeToolCallPayload(text string) bool {
-	trimmed := strings.TrimSpace(text)
-	if trimmed == "" || !strings.HasPrefix(trimmed, "{") {
-		return false
-	}
-
-	var payload map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(trimmed), &payload); err != nil {
-		return false
-	}
-
-	toolValue, hasTool := payload["tool"]
-	paramsValue, hasParams := payload["params"]
-	if !hasTool || !hasParams {
-		return false
-	}
-
-	var toolName string
-	if err := json.Unmarshal(toolValue, &toolName); err != nil {
-		return false
-	}
-
-	var params map[string]interface{}
-	return strings.TrimSpace(toolName) != "" && json.Unmarshal(paramsValue, &params) == nil
-}
-
-func hasProjectRuleAnchor(text string) bool {
-	return containsAnyFold(text,
-		"config.yaml", "readme", "go test", "go build",
-		"cmd/", "internal/", "configs/", "services/", "memory/", "main.go",
-		"data/", "workspace", "工作区", "根目录", "主配置文件", "文件", "路径")
-}
-
-func hasProjectRuleSignal(text string) bool {
-	return containsAnyFold(text,
-		"项目", "仓库", "约定", "配置", "结构", "目录", "命令",
-		"默认", "统一", "必须", "需要", "测试命令", "构建命令")
-}
-
-func containsAnyFold(text string, needles ...string) bool {
-	for _, needle := range needles {
-		if strings.Contains(strings.ToLower(text), strings.ToLower(needle)) {
-			return true
-		}
-	}
-	return false
-}
-
-func firstNonEmptyLine(values ...string) string {
-	for _, value := range values {
-		for _, line := range strings.Split(value, "\n") {
-			trimmed := strings.TrimSpace(line)
-			if trimmed != "" {
-				return trimmed
-			}
-		}
-	}
-	return ""
-}
-
 func allowedPersistTypes(configured []string) map[string]struct{} {
 	allowed := map[string]struct{}{}
 	for _, itemType := range configured {
@@ -621,22 +412,6 @@ func shortPromptBlock(item domain.MemoryItem) string {
 	return strings.Join(parts, "\n")
 }
 
-func dedupeMemoryItems(items []domain.MemoryItem) []domain.MemoryItem {
-	if len(items) == 0 {
-		return nil
-	}
-	seen := map[string]domain.MemoryItem{}
-	for _, item := range items {
-		key := item.Type + "::" + item.Scope + "::" + strings.ToLower(strings.TrimSpace(item.Summary))
-		seen[key] = item
-	}
-	result := make([]domain.MemoryItem, 0, len(seen))
-	for _, item := range seen {
-		result = append(result, item)
-	}
-	return result
-}
-
 func countMemoryTypes(groups ...[]domain.MemoryItem) map[string]int {
 	counts := map[string]int{}
 	for _, group := range groups {
@@ -645,4 +420,32 @@ func countMemoryTypes(groups ...[]domain.MemoryItem) map[string]int {
 		}
 	}
 	return counts
+}
+
+// ListMemoryItems returns both persistent and session memory items for inspection.
+func (s *memoryServiceImpl) ListMemoryItems(ctx context.Context) ([]domain.MemoryItem, error) {
+	persistentItems, err := s.persistentRepo.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	sessionItems, err := s.sessionRepo.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	items := make([]domain.MemoryItem, 0, len(persistentItems)+len(sessionItems))
+	for _, item := range persistentItems {
+		items = append(items, item.Normalized())
+	}
+	for _, item := range sessionItems {
+		items = append(items, item.Normalized())
+	}
+
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].UpdatedAt.Equal(items[j].UpdatedAt) {
+			return items[i].Summary < items[j].Summary
+		}
+		return items[i].UpdatedAt.After(items[j].UpdatedAt)
+	})
+	return items, nil
 }
