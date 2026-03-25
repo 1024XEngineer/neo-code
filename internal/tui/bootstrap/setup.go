@@ -32,13 +32,13 @@ var (
 func PrepareWorkspace(workspaceFlag string) (string, error) {
 	workspaceRoot, err := resolveWorkspaceRoot(workspaceFlag)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("解析工作区失败: %w", err)
 	}
 	if err := setWorkspaceRoot(workspaceRoot); err != nil {
-		return "", err
+		return "", fmt.Errorf("设置工作区失败: %w", err)
 	}
 	if err := initializeSecurity(filepath.Join(workspaceRoot, "configs", "security")); err != nil {
-		return "", err
+		return "", fmt.Errorf("初始化安全策略失败: %w", err)
 	}
 	return workspaceRoot, nil
 }
