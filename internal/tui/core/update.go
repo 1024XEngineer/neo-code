@@ -587,10 +587,82 @@ func (m *Model) handleCommand(input string) (tea.Model, tea.Cmd) {
 			return *m, nil
 		}
 		m.chat.MemoryStats = *stats
+		projectFiles := "none"
+		if len(stats.ProjectSources) > 0 {
+			projectFiles = strings.Join(stats.ProjectSources, ", ")
+		}
 		m.AddMessage("assistant", fmt.Sprintf(
-			"Memory stats:\n  Persistent: %d\n  Session: %d\n  Total: %d\n  TopK: %d\n  Min score: %.2f\n  File: %s\n  Types: %s",
-			stats.PersistentItems, stats.SessionItems, stats.TotalItems, stats.TopK, stats.MinScore, stats.Path, formatTypeStats(stats.ByType),
+			"Memory stats:\n  Persistent: %d\n  Session: %d\n  Total: %d\n  TopK: %d\n  Min score: %.2f\n  File: %s\n  Project memory files: %s\n  Types: %s",
+			stats.PersistentItems, stats.SessionItems, stats.TotalItems, stats.TopK, stats.MinScore, stats.Path, projectFiles, formatTypeStats(stats.ByType),
 		))
+	case "/memory-list":
+		items, err := m.client.ListMemoryItems(context.Background())
+		if err != nil {
+			m.AddMessage("assistant", fmt.Sprintf("Failed to list memory items: %v", err))
+			return *m, nil
+		}
+		if len(items) == 0 {
+			m.AddMessage("assistant", "No memory items stored.")
+			return *m, nil
+		}
+		lines := make([]string, 0, len(items)+1)
+		lines = append(lines, "Memory items:")
+		for _, item := range items {
+			lines = append(lines, fmt.Sprintf("- [%s/%s] %s", item.Type, item.Scope, item.Summary))
+		}
+		m.AddMessage("assistant", strings.Join(lines, "\n"))
+	case "/project-memory":
+		sources, err := m.client.GetProjectMemorySources(context.Background())
+		if err != nil {
+			m.AddMessage("assistant", fmt.Sprintf("Failed to load project memory files: %v", err))
+			return *m, nil
+		}
+		if len(sources) == 0 {
+			m.AddMessage("assistant", "No explicit project memory files are loaded for this workspace.")
+			return *m, nil
+		}
+		lines := make([]string, 0, len(sources)+1)
+		lines = append(lines, "Explicit project memory files:")
+		for _, source := range sources {
+			lines = append(lines, fmt.Sprintf("- %s", source.Path))
+		}
+		m.AddMessage("assistant", strings.Join(lines, "\n"))
+	case "/resume":
+		if provider, ok := m.client.(services.WorkingSessionSummaryProvider); ok {
+			summary, err := provider.GetWorkingSessionSummary(context.Background())
+			if err != nil {
+				m.AddMessage("assistant", fmt.Sprintf("Failed to load working session summary: %v", err))
+				return *m, nil
+			}
+			if strings.TrimSpace(summary) == "" {
+				m.AddMessage("assistant", "No saved working session summary for this workspace.")
+				return *m, nil
+			}
+			m.AddMessage("assistant", summary)
+			return *m, nil
+		}
+		m.AddMessage("assistant", "Working session summary is not available in the current client.")
+	case "/remember":
+		if len(args) == 0 {
+			m.AddMessage("assistant", "Usage: /remember <text>")
+			return *m, nil
+		}
+		text := strings.TrimSpace(strings.TrimPrefix(input, cmd))
+		if err := m.client.Remember(context.Background(), text); err != nil {
+			m.AddMessage("assistant", fmt.Sprintf("Failed to remember this note: %v", err))
+			return *m, nil
+		}
+		stats, _ := m.client.GetMemoryStats(context.Background())
+		if stats != nil {
+			m.chat.MemoryStats = *stats
+		}
+		m.AddMessage("assistant", "Stored a manual memory note for future coding assistance.")
+	case "/memory-mode":
+		mode := m.client.MemoryMode(context.Background())
+		if strings.TrimSpace(mode) == "" {
+			mode = "rule"
+		}
+		m.AddMessage("assistant", fmt.Sprintf("Current memory extractor mode: %s", mode))
 	case "/clear-memory":
 		if len(args) == 0 || args[0] != "confirm" {
 			m.AddMessage("assistant", "This command will clear persistent memory. Use /clear-memory confirm")

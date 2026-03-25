@@ -9,31 +9,40 @@ import (
 )
 
 type chatServiceImpl struct {
-	memorySvc    domain.MemoryService
-	workingSvc   domain.WorkingMemoryService
-	todoSvc      domain.TodoService
-	roleSvc      domain.RoleService
-	chatProvider domain.ChatProvider
+	memorySvc        domain.MemoryService
+	workingSvc       domain.WorkingMemoryService
+	projectMemorySvc domain.ProjectMemoryService
+	todoSvc          domain.TodoService
+	roleSvc          domain.RoleService
+	chatProvider     domain.ChatProvider
 }
 
-// NewChatService 使用记忆、角色、任务清单和模型提供方依赖创建聊天服务。
-func NewChatService(memorySvc domain.MemoryService, workingSvc domain.WorkingMemoryService, todoSvc domain.TodoService, roleSvc domain.RoleService, chatProvider domain.ChatProvider) domain.ChatGateway {
+// NewChatService creates a chat service from role, memory, todo, and provider dependencies.
+func NewChatService(
+	memorySvc domain.MemoryService,
+	workingSvc domain.WorkingMemoryService,
+	projectMemorySvc domain.ProjectMemoryService,
+	todoSvc domain.TodoService,
+	roleSvc domain.RoleService,
+	chatProvider domain.ChatProvider,
+) domain.ChatGateway {
 	return &chatServiceImpl{
-		memorySvc:    memorySvc,
-		workingSvc:   workingSvc,
-		todoSvc:      todoSvc,
-		roleSvc:      roleSvc,
-		chatProvider: chatProvider,
+		memorySvc:        memorySvc,
+		workingSvc:       workingSvc,
+		projectMemorySvc: projectMemorySvc,
+		todoSvc:          todoSvc,
+		roleSvc:          roleSvc,
+		chatProvider:     chatProvider,
 	}
 }
 
-// Send 为消息补充角色和记忆上下文后发起流式回复。
+// Send injects role, explicit project memory, working memory, and recalled memory before chatting.
 func (s *chatServiceImpl) Send(ctx context.Context, req *domain.ChatRequest) (<-chan string, error) {
 	messages := req.Messages
 
 	rolePrompt, err := s.roleSvc.GetActivePrompt(ctx)
 	if err != nil {
-		fmt.Printf("获取角色提示失败：%v\n", err)
+		fmt.Printf("failed to load role prompt: %v\n", err)
 	} else if rolePrompt != "" {
 		hasSystem := false
 		for _, msg := range messages {
@@ -42,14 +51,20 @@ func (s *chatServiceImpl) Send(ctx context.Context, req *domain.ChatRequest) (<-
 				break
 			}
 		}
-
 		if !hasSystem {
-			// 角色提示总是放在最前面的 system 消息里，便于后续继续叠加记忆上下文。
 			messages = append([]domain.Message{{Role: "system", Content: rolePrompt}}, messages...)
 		}
 	}
 
 	userInput := s.latestUserInput(messages)
+	projectContext := ""
+	if s.projectMemorySvc != nil {
+		projectContext, err = s.projectMemorySvc.BuildContext(ctx)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	workingContext := ""
 	if s.workingSvc != nil {
 		workingContext, err = s.workingSvc.BuildContext(ctx, messages)
@@ -57,20 +72,22 @@ func (s *chatServiceImpl) Send(ctx context.Context, req *domain.ChatRequest) (<-
 			return nil, err
 		}
 	}
+
 	todoContext := ""
 	if s.todoSvc != nil {
 		todos, _ := s.todoSvc.ListTodos(ctx)
 		todoContext = buildTodoContext(todos)
 	}
 
-	blocks := []string{workingContext, todoContext}
-	if userInput != "" {
+	blocks := []string{projectContext, workingContext, todoContext}
+	if userInput != "" && s.memorySvc != nil {
 		memoryContext, ctxErr := s.memorySvc.BuildContext(ctx, userInput)
 		if ctxErr != nil {
 			return nil, ctxErr
 		}
 		blocks = append(blocks, memoryContext)
 	}
+
 	combinedContext := joinContextBlocks(blocks...)
 	if combinedContext != "" {
 		messages = injectSystemContext(messages, rolePrompt, combinedContext)
@@ -91,18 +108,21 @@ func (s *chatServiceImpl) Send(ctx context.Context, req *domain.ChatRequest) (<-
 			resultChan <- chunk
 		}
 
-		if s.latestUserInput(messages) != "" && replyBuilder.Len() > 0 {
-			if s.workingSvc != nil {
-				// 工作记忆刷新要基于用户原始消息序列，而不是注入过 system 上下文后的 messages，
-				// 否则会把内部提示也误当成真实对话历史。
-				updatedMessages := append([]domain.Message{}, req.Messages...)
-				updatedMessages = append(updatedMessages, domain.Message{Role: "assistant", Content: replyBuilder.String()})
-				if err := s.workingSvc.Refresh(context.Background(), updatedMessages); err != nil {
-					fmt.Printf("工作记忆刷新失败：%v\n", err)
-				}
+		latestInput := s.latestUserInput(messages)
+		if latestInput == "" || replyBuilder.Len() == 0 {
+			return
+		}
+
+		if s.workingSvc != nil {
+			updatedMessages := append([]domain.Message{}, req.Messages...)
+			updatedMessages = append(updatedMessages, domain.Message{Role: "assistant", Content: replyBuilder.String()})
+			if err := s.workingSvc.Refresh(context.Background(), updatedMessages); err != nil {
+				fmt.Printf("failed to refresh working memory: %v\n", err)
 			}
-			if err := s.memorySvc.Save(context.Background(), s.latestUserInput(messages), replyBuilder.String()); err != nil {
-				fmt.Printf("记忆保存失败：%v\n", err)
+		}
+		if s.memorySvc != nil {
+			if err := s.memorySvc.Save(context.Background(), latestInput, replyBuilder.String()); err != nil {
+				fmt.Printf("failed to save memory: %v\n", err)
 			}
 		}
 	}()

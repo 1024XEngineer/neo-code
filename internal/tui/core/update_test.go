@@ -19,11 +19,18 @@ type fakeChatClient struct {
 	lastMessages     []services.Message
 	lastModel        string
 	memoryStats      *services.MemoryStats
+	memoryItems      []services.MemoryListItem
+	projectSources   []services.ProjectMemorySource
+	resumeSummary    string
 	nilMemoryStats   bool
 	memoryErr        error
+	memoryListErr    error
+	projectMemoryErr error
+	rememberErr      error
 	clearMemoryErr   error
 	clearSessionErr  error
 	defaultModelName string
+	memoryMode       string
 	todos            []services.Todo
 }
 
@@ -54,6 +61,35 @@ func (f *fakeChatClient) GetMemoryStats(context.Context) (*services.MemoryStats,
 		return &statsCopy, nil
 	}
 	return &services.MemoryStats{}, nil
+}
+
+func (f *fakeChatClient) GetWorkingSessionSummary(context.Context) (string, error) {
+	return f.resumeSummary, nil
+}
+
+func (f *fakeChatClient) GetProjectMemorySources(context.Context) ([]services.ProjectMemorySource, error) {
+	if f.projectMemoryErr != nil {
+		return nil, f.projectMemoryErr
+	}
+	return append([]services.ProjectMemorySource(nil), f.projectSources...), nil
+}
+
+func (f *fakeChatClient) ListMemoryItems(context.Context) ([]services.MemoryListItem, error) {
+	if f.memoryListErr != nil {
+		return nil, f.memoryListErr
+	}
+	return append([]services.MemoryListItem(nil), f.memoryItems...), nil
+}
+
+func (f *fakeChatClient) Remember(context.Context, string) error {
+	return f.rememberErr
+}
+
+func (f *fakeChatClient) MemoryMode(context.Context) string {
+	if strings.TrimSpace(f.memoryMode) == "" {
+		return "rule"
+	}
+	return f.memoryMode
 }
 
 func (f *fakeChatClient) ClearMemory(context.Context) error {
@@ -655,6 +691,7 @@ func TestHandleCommandMemorySuccess(t *testing.T) {
 		TopK:            4,
 		MinScore:        1.5,
 		Path:            "memory.json",
+		ProjectSources:  []string{"AGENTS.md", ".neocode/memory.md"},
 		ByType: map[string]int{
 			services.TypeUserPreference: 1,
 		},
@@ -665,6 +702,78 @@ func TestHandleCommandMemorySuccess(t *testing.T) {
 	updated, _ := m.handleCommand("/memory")
 	got := updated.(Model)
 	assertLastMessageContains(t, got, "memory.json")
+	assertLastMessageContains(t, got, "AGENTS.md")
+}
+
+func TestHandleCommandMemoryListSuccess(t *testing.T) {
+	client := &fakeChatClient{memoryItems: []services.MemoryListItem{
+		{Type: services.TypeUserPreference, Scope: "user", Summary: "Use Chinese"},
+		{Type: services.TypeCodeFact, Scope: "project", Summary: "memory_repository.go stores persistent memory"},
+	}}
+	m := newTestModel(t, client)
+	m.chat.APIKeyReady = true
+
+	updated, _ := m.handleCommand("/memory-list")
+	got := updated.(Model)
+	assertLastMessageContains(t, got, "Use Chinese")
+	assertLastMessageContains(t, got, "memory_repository.go")
+}
+
+func TestHandleCommandProjectMemorySuccess(t *testing.T) {
+	client := &fakeChatClient{projectSources: []services.ProjectMemorySource{
+		{Path: "AGENTS.md"},
+		{Path: ".neocode/memory.md"},
+	}}
+	m := newTestModel(t, client)
+	m.chat.APIKeyReady = true
+
+	updated, _ := m.handleCommand("/project-memory")
+	got := updated.(Model)
+	assertLastMessageContains(t, got, "AGENTS.md")
+	assertLastMessageContains(t, got, ".neocode/memory.md")
+}
+
+func TestHandleCommandResumeSuccess(t *testing.T) {
+	client := &fakeChatClient{resumeSummary: "已恢复上次工作现场：\n- 当前目标: 修复记忆模块"}
+	m := newTestModel(t, client)
+	m.chat.APIKeyReady = true
+
+	updated, _ := m.handleCommand("/resume")
+	got := updated.(Model)
+	assertLastMessageContains(t, got, "修复记忆模块")
+}
+
+func TestHandleCommandRememberRequiresArgument(t *testing.T) {
+	client := &fakeChatClient{}
+	m := newTestModel(t, client)
+	m.chat.APIKeyReady = true
+
+	updated, _ := m.handleCommand("/remember")
+	got := updated.(Model)
+	assertLastMessageContains(t, got, "/remember <text>")
+}
+
+func TestHandleCommandRememberSuccess(t *testing.T) {
+	client := &fakeChatClient{memoryStats: &services.MemoryStats{TotalItems: 4}}
+	m := newTestModel(t, client)
+	m.chat.APIKeyReady = true
+
+	updated, _ := m.handleCommand("/remember 以后都用中文总结改动")
+	got := updated.(Model)
+	assertLastMessageContains(t, got, "Stored a manual memory note")
+	if got.chat.MemoryStats.TotalItems != 4 {
+		t.Fatalf("expected refreshed stats after remember, got %+v", got.chat.MemoryStats)
+	}
+}
+
+func TestHandleCommandMemoryModeSuccess(t *testing.T) {
+	client := &fakeChatClient{memoryMode: "auto"}
+	m := newTestModel(t, client)
+	m.chat.APIKeyReady = true
+
+	updated, _ := m.handleCommand("/memory-mode")
+	got := updated.(Model)
+	assertLastMessageContains(t, got, "auto")
 }
 
 func TestHandleCommandClearMemoryRequiresConfirm(t *testing.T) {

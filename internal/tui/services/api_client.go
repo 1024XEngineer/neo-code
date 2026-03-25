@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"strings"
+	"time"
 
 	"go-llm-demo/configs"
 	"go-llm-demo/internal/server/domain"
@@ -31,10 +32,15 @@ var (
 	ParseTodoPriority = domain.ParseTodoPriority
 )
 
-// ChatClient 定义 TUI 侧依赖的最小聊天与记忆接口。
+// ChatClient defines the local interface the TUI depends on.
 type ChatClient interface {
 	Chat(ctx context.Context, messages []Message, model string) (<-chan string, error)
 	GetMemoryStats(ctx context.Context) (*MemoryStats, error)
+	GetWorkingSessionSummary(ctx context.Context) (string, error)
+	GetProjectMemorySources(ctx context.Context) ([]ProjectMemorySource, error)
+	ListMemoryItems(ctx context.Context) ([]MemoryListItem, error)
+	Remember(ctx context.Context, text string) error
+	MemoryMode(ctx context.Context) string
 	ClearMemory(ctx context.Context) error
 	ClearSessionMemory(ctx context.Context) error
 	GetTodoList(ctx context.Context) ([]Todo, error)
@@ -44,12 +50,12 @@ type ChatClient interface {
 	DefaultModel() string
 }
 
-// WorkingSessionSummaryProvider 为支持恢复摘要的客户端扩展接口。
+// WorkingSessionSummaryProvider exposes persisted working session summaries.
 type WorkingSessionSummaryProvider interface {
 	GetWorkingSessionSummary(ctx context.Context) (string, error)
 }
 
-// MemoryStats 是 TUI 展示 memory 面板所需的聚合统计信息。
+// MemoryStats contains the memory statistics shown in the TUI.
 type MemoryStats struct {
 	PersistentItems int
 	SessionItems    int
@@ -58,17 +64,29 @@ type MemoryStats struct {
 	MinScore        float64
 	Path            string
 	ByType          map[string]int
+	ProjectSources  []string
+}
+
+type ProjectMemorySource = domain.ProjectMemorySource
+
+type MemoryListItem struct {
+	Type      string
+	Scope     string
+	Summary   string
+	UpdatedAt time.Time
 }
 
 type localChatClient struct {
-	roleSvc    domain.RoleService
-	memorySvc  domain.MemoryService
-	workingSvc domain.WorkingMemoryService
-	todoSvc    domain.TodoService
-	config     *configs.AppConfiguration
+	roleSvc          domain.RoleService
+	memorySvc        domain.MemoryService
+	workingSvc       domain.WorkingMemoryService
+	projectMemorySvc domain.ProjectMemoryService
+	todoSvc          domain.TodoService
+	config           *configs.AppConfiguration
+	memoryMode       string
 }
 
-// NewLocalChatClient 将本地服务组装为 TUI 使用的聊天客户端。
+// NewLocalChatClient wires local services for TUI use.
 func NewLocalChatClient() (ChatClient, error) {
 	cfg := configs.GlobalAppConfig
 	if cfg == nil {
@@ -83,17 +101,25 @@ func NewLocalChatClient() (ChatClient, error) {
 	if maxItems <= 0 {
 		maxItems = 1000
 	}
+
 	workspaceRoot := tools.GetWorkspaceRoot()
 	persistentRepo := repository.NewFileMemoryStore(storePath, maxItems)
 	sessionRepo := repository.NewSessionMemoryStore(maxItems)
+
 	workingStatePath := ""
 	if cfg.History.PersistSessionState {
 		workingStatePath = BuildWorkspaceStatePath(cfg.History.WorkspaceStateDir, workspaceRoot)
 	}
 	workingRepo := repository.NewWorkingMemoryStore(workingStatePath)
-	memorySvc := service.NewMemoryService(
+
+	memoryExtractor, err := buildMemoryExtractor(cfg)
+	if err != nil {
+		return nil, err
+	}
+	memorySvc := service.NewMemoryServiceWithExtractor(
 		persistentRepo,
 		sessionRepo,
+		memoryExtractor,
 		cfg.Memory.TopK,
 		cfg.Memory.MinMatchScore,
 		cfg.Memory.MaxPromptChars,
@@ -101,6 +127,7 @@ func NewLocalChatClient() (ChatClient, error) {
 		cfg.Memory.PersistTypes,
 	)
 	workingSvc := service.NewWorkingMemoryService(workingRepo, cfg.History.ShortTermTurns, workspaceRoot)
+	projectMemorySvc := service.NewProjectMemoryService(workspaceRoot, cfg.Memory.ProjectFiles, cfg.Memory.ProjectPromptChars)
 
 	roleRepo := repository.NewFileRoleStore("./data/roles.json")
 	roleSvc := service.NewRoleService(roleRepo, strings.TrimSpace(cfg.Persona.FilePath))
@@ -109,31 +136,70 @@ func NewLocalChatClient() (ChatClient, error) {
 	todoSvc := service.NewTodoService(todoRepo)
 	tools.GlobalRegistry.Register(tools.NewTodoTool(todoSvc))
 
-	// 当前仍以内进程方式组装服务，后续替换为真实 transport 时可继续复用该接口。
 	return &localChatClient{
-		roleSvc:    roleSvc,
-		memorySvc:  memorySvc,
-		workingSvc: workingSvc,
-		todoSvc:    todoSvc,
-		config:     cfg,
+		roleSvc:          roleSvc,
+		memorySvc:        memorySvc,
+		workingSvc:       workingSvc,
+		projectMemorySvc: projectMemorySvc,
+		todoSvc:          todoSvc,
+		config:           cfg,
+		memoryMode:       strings.TrimSpace(cfg.Memory.Extractor),
 	}, nil
 }
 
-// Chat 通过本地聊天服务发送消息。
+func buildMemoryExtractor(cfg *configs.AppConfiguration) (domain.MemoryExtractor, error) {
+	if cfg == nil {
+		return service.BuildMemoryExtractor(service.MemoryExtractorModeRule, nil, service.LLMMemoryExtractorOptions{})
+	}
+
+	mode := strings.TrimSpace(cfg.Memory.Extractor)
+	if mode == "" || strings.EqualFold(mode, service.MemoryExtractorModeRule) {
+		return service.BuildMemoryExtractor(service.MemoryExtractorModeRule, nil, service.LLMMemoryExtractorOptions{})
+	}
+
+	model := strings.TrimSpace(cfg.Memory.ExtractorModel)
+	if model == "" {
+		model = strings.TrimSpace(cfg.AI.Model)
+	}
+
+	extractorProvider, err := provider.NewChatProvider(model)
+	if err != nil {
+		if strings.EqualFold(mode, service.MemoryExtractorModeAuto) {
+			return service.BuildMemoryExtractor(service.MemoryExtractorModeAuto, nil, service.LLMMemoryExtractorOptions{})
+		}
+		return nil, err
+	}
+
+	return service.BuildMemoryExtractor(mode, extractorProvider, service.LLMMemoryExtractorOptions{
+		Timeout: time.Duration(cfg.Memory.ExtractorTimeoutSecond) * time.Second,
+	})
+}
+
+// Chat sends a chat request through the local services.
 func (c *localChatClient) Chat(ctx context.Context, messages []Message, model string) (<-chan string, error) {
 	chatProvider, err := provider.NewChatProvider(model)
 	if err != nil {
 		return nil, err
 	}
-	chatSvc := service.NewChatService(c.memorySvc, c.workingSvc, c.todoSvc, c.roleSvc, chatProvider)
+	chatSvc := service.NewChatService(c.memorySvc, c.workingSvc, c.projectMemorySvc, c.todoSvc, c.roleSvc, chatProvider)
 	return chatSvc.Send(ctx, &domain.ChatRequest{Messages: messages, Model: model})
 }
 
-// GetMemoryStats 返回 TUI 所需的当前记忆统计信息。
+// GetMemoryStats returns memory statistics for the TUI.
 func (c *localChatClient) GetMemoryStats(ctx context.Context) (*MemoryStats, error) {
 	stats, err := c.memorySvc.GetStats(ctx)
 	if err != nil {
 		return nil, err
+	}
+	projectSources := make([]string, 0)
+	if c.projectMemorySvc != nil {
+		sources, sourceErr := c.projectMemorySvc.ListSources(ctx)
+		if sourceErr != nil {
+			return nil, sourceErr
+		}
+		for _, source := range sources {
+			projectSources = append(projectSources, source.Path)
+		}
 	}
 	return &MemoryStats{
 		PersistentItems: stats.PersistentItems,
@@ -143,15 +209,54 @@ func (c *localChatClient) GetMemoryStats(ctx context.Context) (*MemoryStats, err
 		MinScore:        stats.MinScore,
 		Path:            stats.Path,
 		ByType:          stats.ByType,
+		ProjectSources:  projectSources,
 	}, nil
 }
 
-// ClearMemory 通过本地记忆服务清空长期记忆。
+// GetProjectMemorySources returns currently loaded explicit project memory files.
+func (c *localChatClient) GetProjectMemorySources(ctx context.Context) ([]ProjectMemorySource, error) {
+	if c.projectMemorySvc == nil {
+		return nil, nil
+	}
+	return c.projectMemorySvc.ListSources(ctx)
+}
+
+// ListMemoryItems returns memory items for inspection.
+func (c *localChatClient) ListMemoryItems(ctx context.Context) ([]MemoryListItem, error) {
+	if c.memorySvc == nil {
+		return nil, nil
+	}
+
+	impl, ok := c.memorySvc.(memoryListProvider)
+	if ok {
+		return impl.ListMemoryItems(ctx)
+	}
+
+	return nil, nil
+}
+
+// Remember stores an explicit durable preference or rule from a manual command.
+func (c *localChatClient) Remember(ctx context.Context, text string) error {
+	if c.memorySvc == nil {
+		return nil
+	}
+	return c.memorySvc.Save(ctx, strings.TrimSpace(text), "Noted. Remember this for future coding assistance.")
+}
+
+// MemoryMode returns the configured memory extraction mode.
+func (c *localChatClient) MemoryMode(context.Context) string {
+	if strings.TrimSpace(c.memoryMode) == "" {
+		return service.MemoryExtractorModeRule
+	}
+	return c.memoryMode
+}
+
+// ClearMemory clears persistent memory.
 func (c *localChatClient) ClearMemory(ctx context.Context) error {
 	return c.memorySvc.Clear(ctx)
 }
 
-// ClearSessionMemory 清空会话记忆和工作记忆状态。
+// ClearSessionMemory clears session memory and working memory state.
 func (c *localChatClient) ClearSessionMemory(ctx context.Context) error {
 	if err := c.memorySvc.ClearSession(ctx); err != nil {
 		return err
@@ -162,7 +267,7 @@ func (c *localChatClient) ClearSessionMemory(ctx context.Context) error {
 	return nil
 }
 
-// GetTodoList 返回当前任务清单。
+// GetTodoList returns the current todo list.
 func (c *localChatClient) GetTodoList(ctx context.Context) ([]domain.Todo, error) {
 	if c.todoSvc == nil {
 		return nil, nil
@@ -170,7 +275,7 @@ func (c *localChatClient) GetTodoList(ctx context.Context) ([]domain.Todo, error
 	return c.todoSvc.ListTodos(ctx)
 }
 
-// AddTodo 添加一个新任务。
+// AddTodo adds a new todo item.
 func (c *localChatClient) AddTodo(ctx context.Context, content string, priority domain.TodoPriority) (*domain.Todo, error) {
 	if c.todoSvc == nil {
 		return nil, nil
@@ -178,7 +283,7 @@ func (c *localChatClient) AddTodo(ctx context.Context, content string, priority 
 	return c.todoSvc.AddTodo(ctx, content, priority)
 }
 
-// UpdateTodoStatus 更新任务状态。
+// UpdateTodoStatus updates a todo status.
 func (c *localChatClient) UpdateTodoStatus(ctx context.Context, id string, status domain.TodoStatus) error {
 	if c.todoSvc == nil {
 		return nil
@@ -186,7 +291,7 @@ func (c *localChatClient) UpdateTodoStatus(ctx context.Context, id string, statu
 	return c.todoSvc.UpdateTodoStatus(ctx, id, status)
 }
 
-// RemoveTodo 移除特定任务。
+// RemoveTodo removes a todo item.
 func (c *localChatClient) RemoveTodo(ctx context.Context, id string) error {
 	if c.todoSvc == nil {
 		return nil
@@ -194,12 +299,12 @@ func (c *localChatClient) RemoveTodo(ctx context.Context, id string) error {
 	return c.todoSvc.RemoveTodo(ctx, id)
 }
 
-// DefaultModel 返回 TUI 使用的默认模型。
+// DefaultModel returns the TUI default model.
 func (c *localChatClient) DefaultModel() string {
 	return provider.DefaultModelForConfig(c.config)
 }
 
-// GetWorkingSessionSummary 返回当前工作区上次保存的会话摘要。
+// GetWorkingSessionSummary returns the persisted working session summary for the workspace.
 func (c *localChatClient) GetWorkingSessionSummary(ctx context.Context) (string, error) {
 	if c.workingSvc == nil || c.config == nil || !c.config.History.ResumeLastSession {
 		return "", nil
