@@ -7,16 +7,19 @@ import (
 )
 
 type Message struct {
-	Role      string
-	Content   string
-	Timestamp time.Time
-	Streaming bool
+	Role       string
+	Content    string
+	ToolCalls  []services.ChatToolCall
+	ToolCallID string
+	Timestamp  time.Time
+	Streaming  bool
 }
 
 type PendingApproval struct {
 	Call     services.ToolCall
 	ToolType string
 	Target   string
+	CallID   string
 }
 
 type ChatState struct {

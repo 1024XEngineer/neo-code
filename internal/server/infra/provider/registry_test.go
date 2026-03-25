@@ -97,7 +97,7 @@ func TestChatCompletionProviderChatReturnsErrorOnBadStatus(t *testing.T) {
 		Model:   "missing-model",
 	}
 
-	stream, err := p.Chat(context.Background(), []domain.Message{{Role: "user", Content: "hi"}})
+	stream, err := p.Chat(context.Background(), []domain.Message{{Role: "user", Content: "hi"}}, nil)
 	if err == nil {
 		if stream != nil {
 			for range stream {

@@ -33,7 +33,7 @@ var (
 
 // ChatClient 定义 TUI 侧依赖的最小聊天与记忆接口。
 type ChatClient interface {
-	Chat(ctx context.Context, messages []Message, model string) (<-chan string, error)
+	Chat(ctx context.Context, messages []Message, model string) (<-chan ChatEvent, error)
 	GetMemoryStats(ctx context.Context) (*MemoryStats, error)
 	ClearMemory(ctx context.Context) error
 	ClearSessionMemory(ctx context.Context) error
@@ -120,16 +120,13 @@ func NewLocalChatClient() (ChatClient, error) {
 }
 
 // Chat 通过本地聊天服务发送消息。
-func (c *localChatClient) Chat(ctx context.Context, messages []Message, model string) (<-chan string, error) {
+func (c *localChatClient) Chat(ctx context.Context, messages []Message, model string) (<-chan ChatEvent, error) {
 	chatProvider, err := provider.NewChatProvider(model)
 	if err != nil {
 		return nil, err
 	}
-	schemaPrompt, err := tools.GlobalSchemaPrompt()
-	if err != nil {
-		return nil, err
-	}
-	chatSvc := service.NewChatService(c.memorySvc, c.workingSvc, c.todoSvc, c.roleSvc, chatProvider, schemaPrompt)
+	toolSchemas := tools.BuildToolSchemas(tools.GlobalRegistry.ListDefinitions())
+	chatSvc := service.NewChatService(c.memorySvc, c.workingSvc, c.todoSvc, c.roleSvc, chatProvider, toolSchemas)
 	return chatSvc.Send(ctx, &domain.ChatRequest{Messages: messages, Model: model})
 }
 

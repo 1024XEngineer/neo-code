@@ -26,7 +26,7 @@ type Model struct {
 	client  services.ChatClient
 	persona string
 
-	streamChan      <-chan string
+	streamChan      <-chan services.ChatEvent
 	textarea        textarea.Model
 	viewport        viewport.Model
 	chatLayout      components.RenderedChatLayout
@@ -141,6 +141,29 @@ func (m *Model) AddMessage(role, content string) {
 		Role:      role,
 		Content:   content,
 		Timestamp: time.Now(),
+	})
+}
+
+func (m *Model) AddToolCallMessage(calls []services.ChatToolCall) {
+	mu := m.mutex()
+	mu.Lock()
+	defer mu.Unlock()
+	m.chat.Messages = append(m.chat.Messages, state.Message{
+		Role:      "assistant",
+		ToolCalls: calls,
+		Timestamp: time.Now(),
+	})
+}
+
+func (m *Model) AddToolMessage(callID, content string) {
+	mu := m.mutex()
+	mu.Lock()
+	defer mu.Unlock()
+	m.chat.Messages = append(m.chat.Messages, state.Message{
+		Role:       "tool",
+		Content:    content,
+		ToolCallID: callID,
+		Timestamp:  time.Now(),
 	})
 }
 

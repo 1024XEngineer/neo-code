@@ -27,16 +27,16 @@ type fakeChatClient struct {
 	todos            []services.Todo
 }
 
-func (f *fakeChatClient) Chat(_ context.Context, messages []services.Message, model string) (<-chan string, error) {
+func (f *fakeChatClient) Chat(_ context.Context, messages []services.Message, model string) (<-chan services.ChatEvent, error) {
 	f.lastMessages = append([]services.Message(nil), messages...)
 	f.lastModel = model
 	if f.chatErr != nil {
 		return nil, f.chatErr
 	}
 
-	ch := make(chan string, len(f.chatChunks))
+	ch := make(chan services.ChatEvent, len(f.chatChunks))
 	for _, chunk := range f.chatChunks {
-		ch <- chunk
+		ch <- services.ChatEvent{Type: services.ChatEventDelta, Content: chunk}
 	}
 	close(ch)
 	return ch, nil
@@ -792,8 +792,8 @@ func TestStreamChunkMsgAppendsContentAndSchedulesNextChunk(t *testing.T) {
 	m.chat.Generating = true
 	m.chat.Messages = []state.Message{{Role: "assistant", Content: ""}}
 
-	ch := make(chan string, 1)
-	ch <- "second"
+	ch := make(chan services.ChatEvent, 1)
+	ch <- services.ChatEvent{Type: services.ChatEventDelta, Content: "second"}
 	close(ch)
 	m.streamChan = ch
 
@@ -928,7 +928,7 @@ func TestStreamDoneMsgCompletesWithoutToolCall(t *testing.T) {
 	client := &fakeChatClient{}
 	m := newTestModel(t, client)
 	m.chat.Generating = true
-	ch := make(chan string)
+	ch := make(chan services.ChatEvent)
 	close(ch)
 	m.streamChan = ch
 	m.chat.Messages = []state.Message{{Role: "assistant", Content: "done", Streaming: true}}
@@ -1016,11 +1016,9 @@ func TestRefreshMemoryMsgIgnoresClientError(t *testing.T) {
 	}
 }
 
-func TestStreamDoneMsgExecutesToolCallFromAssistantJSON(t *testing.T) {
+func TestStreamToolCallMsgExecutesToolCall(t *testing.T) {
 	client := &fakeChatClient{}
 	m := newTestModel(t, client)
-	m.chat.Generating = true
-	m.chat.Messages = []state.Message{{Role: "assistant", Content: `{"tool":"read","params":{"path":"README.md"}}`, Streaming: true}}
 
 	expected := &services.ToolResult{ToolName: "read", Success: true, Output: "ok"}
 	executeToolCall = func(call services.ToolCall) *services.ToolResult {
@@ -1033,17 +1031,26 @@ func TestStreamDoneMsgExecutesToolCallFromAssistantJSON(t *testing.T) {
 		return expected
 	}
 
-	updated, cmd := m.Update(StreamDoneMsg{})
+	updated, cmd := m.Update(StreamToolCallMsg{
+		Call: services.ToolCall{
+			Tool:   "read",
+			Params: map[string]interface{}{"path": "README.md"},
+		},
+		CallID: "call-1",
+	})
 	got := updated.(Model)
 
 	if !got.chat.ToolExecuting {
 		t.Fatal("expected tool execution flag to be set")
 	}
-	if len(got.chat.Messages) != 1 {
-		t.Fatalf("expected pure tool JSON to be replaced by a single tool status message, got %d messages", len(got.chat.Messages))
+	if len(got.chat.Messages) != 2 {
+		t.Fatalf("expected tool call and tool status messages, got %d messages", len(got.chat.Messages))
 	}
-	if !strings.HasPrefix(got.chat.Messages[0].Content, toolStatusPrefix) {
-		t.Fatalf("expected transient tool status, got %q", got.chat.Messages[0].Content)
+	if got.chat.Messages[0].Role != "assistant" {
+		t.Fatalf("expected assistant tool call message, got %+v", got.chat.Messages[0])
+	}
+	if !strings.HasPrefix(got.chat.Messages[1].Content, toolStatusPrefix) {
+		t.Fatalf("expected transient tool status, got %q", got.chat.Messages[1].Content)
 	}
 	if cmd == nil {
 		t.Fatal("expected tool execution command")
@@ -1056,17 +1063,24 @@ func TestStreamDoneMsgExecutesToolCallFromAssistantJSON(t *testing.T) {
 	if resultMsg.Result != expected {
 		t.Fatalf("expected tool result to round-trip, got %+v", resultMsg.Result)
 	}
+	if resultMsg.CallID != "call-1" {
+		t.Fatalf("expected call id to round-trip, got %q", resultMsg.CallID)
+	}
 }
 
-func TestStreamDoneMsgReturnsToolErrorWhenToolResultIsNil(t *testing.T) {
+func TestStreamToolCallMsgReturnsToolErrorWhenToolResultIsNil(t *testing.T) {
 	client := &fakeChatClient{}
 	m := newTestModel(t, client)
-	m.chat.Generating = true
-	m.chat.Messages = []state.Message{{Role: "assistant", Content: `{"tool":"read","params":{"path":"README.md"}}`, Streaming: true}}
 
 	executeToolCall = func(services.ToolCall) *services.ToolResult { return nil }
 
-	_, cmd := m.Update(StreamDoneMsg{})
+	_, cmd := m.Update(StreamToolCallMsg{
+		Call: services.ToolCall{
+			Tool:   "read",
+			Params: map[string]interface{}{"path": "README.md"},
+		},
+		CallID: "call-1",
+	})
 	if cmd == nil {
 		t.Fatal("expected tool execution command")
 	}
@@ -1083,7 +1097,7 @@ func TestToolResultMsgAddsContextAndRestartsStreaming(t *testing.T) {
 	m.chat.ToolExecuting = true
 
 	result := &services.ToolResult{ToolName: "read", Success: true, Output: "README"}
-	updated, cmd := m.Update(ToolResultMsg{Result: result})
+	updated, cmd := m.Update(ToolResultMsg{Result: result, CallID: "call-1"})
 	got := updated.(Model)
 
 	if got.chat.ToolExecuting {
@@ -1092,14 +1106,17 @@ func TestToolResultMsgAddsContextAndRestartsStreaming(t *testing.T) {
 	if !got.chat.Generating {
 		t.Fatal("expected follow-up generation to start")
 	}
-	if len(got.chat.Messages) != 3 {
-		t.Fatalf("expected tool context and placeholder messages, got %d", len(got.chat.Messages))
+	if len(got.chat.Messages) != 4 {
+		t.Fatalf("expected tool context, tool message, and placeholder messages, got %d", len(got.chat.Messages))
 	}
 	if !strings.HasPrefix(got.chat.Messages[1].Content, toolContextPrefix) {
 		t.Fatalf("expected tool context message, got %q", got.chat.Messages[1].Content)
 	}
-	if got.chat.Messages[2].Role != "assistant" || got.chat.Messages[2].Content != "" {
-		t.Fatalf("expected assistant placeholder, got %+v", got.chat.Messages[2])
+	if got.chat.Messages[2].Role != "tool" || got.chat.Messages[2].ToolCallID != "call-1" {
+		t.Fatalf("expected tool message with call id, got %+v", got.chat.Messages[2])
+	}
+	if got.chat.Messages[3].Role != "assistant" || got.chat.Messages[3].Content != "" {
+		t.Fatalf("expected assistant placeholder, got %+v", got.chat.Messages[3])
 	}
 	if cmd == nil {
 		t.Fatal("expected streaming command")
@@ -1119,7 +1136,7 @@ func TestToolErrorMsgAddsErrorContextAndRestartsStreaming(t *testing.T) {
 	m := newTestModel(t, client)
 	m.chat.ToolExecuting = true
 
-	updated, cmd := m.Update(ToolErrorMsg{Err: errors.New("tool failed")})
+	updated, cmd := m.Update(ToolErrorMsg{Err: errors.New("tool failed"), CallID: "call-1"})
 	got := updated.(Model)
 
 	if got.chat.ToolExecuting {
@@ -1128,11 +1145,14 @@ func TestToolErrorMsgAddsErrorContextAndRestartsStreaming(t *testing.T) {
 	if !got.chat.Generating {
 		t.Fatal("expected generation restart after tool error")
 	}
-	if len(got.chat.Messages) != 2 {
-		t.Fatalf("expected tool error context and placeholder, got %d messages", len(got.chat.Messages))
+	if len(got.chat.Messages) != 3 {
+		t.Fatalf("expected tool error context, tool message, and placeholder, got %d messages", len(got.chat.Messages))
 	}
 	if !strings.Contains(got.chat.Messages[0].Content, "tool failed") {
 		t.Fatalf("expected tool error context, got %q", got.chat.Messages[0].Content)
+	}
+	if got.chat.Messages[1].Role != "tool" || got.chat.Messages[1].ToolCallID != "call-1" {
+		t.Fatalf("expected tool message with call id, got %+v", got.chat.Messages[1])
 	}
 	if cmd == nil {
 		t.Fatal("expected follow-up stream command")
@@ -1424,6 +1444,7 @@ func TestApproveCommandWhileToolExecutingKeepsPendingApproval(t *testing.T) {
 				},
 				ToolType: "Bash",
 				Target:   "echo hello",
+				CallID:   "call-1",
 			},
 		},
 	}
@@ -1439,6 +1460,9 @@ func TestApproveCommandWhileToolExecutingKeepsPendingApproval(t *testing.T) {
 	}
 	if got.chat.PendingApproval.Call.Tool != "bash" {
 		t.Fatalf("expected pending tool to stay intact, got %+v", got.chat.PendingApproval.Call)
+	}
+	if got.chat.PendingApproval.CallID != "call-1" {
+		t.Fatalf("expected pending call id to stay intact, got %+v", got.chat.PendingApproval.CallID)
 	}
 	if len(got.chat.Messages) != 1 {
 		t.Fatalf("expected a single assistant warning, got %d", len(got.chat.Messages))
@@ -1471,6 +1495,7 @@ func TestToolResultMsgSecurityAskStoresPendingApproval(t *testing.T) {
 				"command": "echo hello",
 			},
 		},
+		CallID: "call-1",
 	})
 	if cmd != nil {
 		t.Fatal("expected no follow-up command while waiting for approval")
@@ -1485,6 +1510,9 @@ func TestToolResultMsgSecurityAskStoresPendingApproval(t *testing.T) {
 	}
 	if got.chat.PendingApproval.Target != "echo hello" {
 		t.Fatalf("unexpected pending approval target %q", got.chat.PendingApproval.Target)
+	}
+	if got.chat.PendingApproval.CallID != "call-1" {
+		t.Fatalf("unexpected pending approval call id %q", got.chat.PendingApproval.CallID)
 	}
 	if len(got.chat.Messages) != 1 {
 		t.Fatalf("expected one approval prompt message, got %d", len(got.chat.Messages))

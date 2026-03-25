@@ -59,13 +59,8 @@ func main() {
 		return
 	}
 
-	schemaPrompt, err := tools.GlobalSchemaPrompt()
-	if err != nil {
-		fmt.Printf("生成工具 schema 上下文失败：%v\n", err)
-		return
-	}
-
-	chatGateway := service.NewChatService(memorySvc, workingSvc, todoSvc, roleSvc, chatProvider, schemaPrompt)
+	toolSchemas := tools.BuildToolSchemas(tools.GlobalRegistry.ListDefinitions())
+	chatGateway := service.NewChatService(memorySvc, workingSvc, todoSvc, roleSvc, chatProvider, toolSchemas)
 	fmt.Printf("服务器已初始化并加载服务: %+v\n", chatGateway)
 	fmt.Println("注意：这是一个占位符。实际的服务器实现将在此处进行.")
 }

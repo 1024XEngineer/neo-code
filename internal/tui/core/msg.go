@@ -18,15 +18,24 @@ type StreamErrorMsg struct {
 
 func (StreamErrorMsg) isMsg() {}
 
+type StreamToolCallMsg struct {
+	Call   services.ToolCall
+	CallID string
+}
+
+func (StreamToolCallMsg) isMsg() {}
+
 type ToolResultMsg struct {
 	Result *services.ToolResult
 	Call   services.ToolCall
+	CallID string
 }
 
 func (ToolResultMsg) isMsg() {}
 
 type ToolErrorMsg struct {
-	Err error
+	Err    error
+	CallID string
 }
 
 func (ToolErrorMsg) isMsg() {}

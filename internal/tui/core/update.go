@@ -66,68 +66,55 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, m.streamResponseFromChannel()
 
+	case StreamToolCallMsg:
+		if strings.TrimSpace(msg.Call.Tool) == "" {
+			return m, func() tea.Msg {
+				return ToolErrorMsg{Err: fmt.Errorf("tool call is missing tool name"), CallID: msg.CallID}
+			}
+		}
+
+		toolCall, err := buildAssistantToolCall(msg.CallID, msg.Call)
+		if err != nil {
+			return m, func() tea.Msg { return ToolErrorMsg{Err: err, CallID: msg.CallID} }
+		}
+		m.AddToolCallMessage([]services.ChatToolCall{toolCall})
+
+		mu := m.mutex()
+		mu.Lock()
+		if m.chat.ToolExecuting {
+			mu.Unlock()
+			return m, nil
+		}
+		m.chat.ToolExecuting = true
+		mu.Unlock()
+
+		// 显示工具执行中提示（仅用于 UI，不参与模型上下文）
+		m.AddMessage("system", formatToolStatusMessage(msg.Call.Tool, msg.Call.Params))
+
+		return m, func() tea.Msg {
+			result := executeToolCall(msg.Call)
+			if result == nil {
+				mu := m.mutex()
+				mu.Lock()
+				m.chat.ToolExecuting = false
+				mu.Unlock()
+				return ToolErrorMsg{Err: fmt.Errorf("tool execution failed: empty result"), CallID: msg.CallID}
+			}
+			return ToolResultMsg{Result: result, Call: msg.Call, CallID: msg.CallID}
+		}
+
 	case StreamDoneMsg:
 		mu := m.mutex()
 		mu.Lock()
 		m.chat.Generating = false
 		m.streamChan = nil
 
-		var lastContent string
-		shouldCheckToolCall := !m.chat.ToolExecuting && len(m.chat.Messages) > 0
 		if len(m.chat.Messages) > 0 {
 			lastMsg := &m.chat.Messages[len(m.chat.Messages)-1]
 			lastMsg.Streaming = false
-			if lastMsg.Role == "assistant" {
-				lastContent = lastMsg.Content
-			} else {
-				shouldCheckToolCall = false
-			}
 		}
 		mu.Unlock()
 
-		// 当前工具协议约定：模型如果想调用工具，需要输出一个合法的工具调用 JSON。
-		// 这里允许 JSON 前面带解释文本、代码围栏或 think 块，但只会提取最后一个合法调用。
-		if shouldCheckToolCall {
-			if captured, ok := captureToolCallFromAssistantText(lastContent); ok {
-				call := services.ToolCall{
-					Tool:   strings.TrimSpace(captured.Call.Tool),
-					Params: services.NormalizeToolParams(captured.Call.Params),
-				}
-
-				mu := m.mutex()
-				mu.Lock()
-				if len(m.chat.Messages) > 0 {
-					lastIndex := len(m.chat.Messages) - 1
-					if strings.TrimSpace(captured.CleanedResponse) == "" {
-						m.chat.Messages = append(m.chat.Messages[:lastIndex], m.chat.Messages[lastIndex+1:]...)
-					} else {
-						m.chat.Messages[lastIndex].Content = captured.CleanedResponse
-					}
-				}
-				if m.chat.ToolExecuting {
-					mu.Unlock()
-					return m, nil
-				}
-				m.chat.ToolExecuting = true
-				mu.Unlock()
-
-				// 显示工具执行中提示（仅用于 UI，不参与模型上下文）
-				m.AddMessage("system", formatToolStatusMessage(call.Tool, call.Params))
-
-				// 在 goroutine 中执行工具调用
-				return m, func() tea.Msg {
-					result := executeToolCall(call)
-					if result == nil {
-						mu := m.mutex()
-						mu.Lock()
-						m.chat.ToolExecuting = false
-						mu.Unlock()
-						return ToolErrorMsg{Err: fmt.Errorf("tool execution failed: empty result")}
-					}
-					return ToolResultMsg{Result: result, Call: call}
-				}
-			}
-		}
 		m.refreshViewport()
 
 		return m, nil
@@ -188,6 +175,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				Call:     msg.Call,
 				ToolType: toolType,
 				Target:   target,
+				CallID:   msg.CallID,
 			}
 			pending := m.chat.PendingApproval
 			mu.Unlock()
@@ -197,6 +185,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.AddMessage("system", formatToolContextMessage(msg.Result))
+		m.AddToolMessage(msg.CallID, buildToolResultContent(msg.Result))
 		m.AddMessage("assistant", "")
 		m.chat.Generating = true
 		m.refreshViewport()
@@ -212,6 +201,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		mu.Unlock()
 		// 将工具执行错误添加为结构化系统上下文
 		m.AddMessage("system", formatToolErrorContext(msg.Err))
+		if strings.TrimSpace(msg.CallID) != "" {
+			m.AddToolMessage(msg.CallID, msg.Err.Error())
+		}
 		m.AddMessage("assistant", "")
 		m.chat.Generating = true
 		m.refreshViewport()
@@ -442,9 +434,9 @@ func (m *Model) handleCommand(input string) (tea.Model, tea.Cmd) {
 				mu.Lock()
 				m.chat.ToolExecuting = false
 				mu.Unlock()
-				return ToolErrorMsg{Err: fmt.Errorf("tool execution failed: empty result")}
+				return ToolErrorMsg{Err: fmt.Errorf("tool execution failed: empty result"), CallID: pending.CallID}
 			}
-			return ToolResultMsg{Result: result, Call: pending.Call}
+			return ToolResultMsg{Result: result, Call: pending.Call, CallID: pending.CallID}
 		}
 	case "/n":
 		if len(args) > 0 {
@@ -805,13 +797,15 @@ func (m *Model) buildMessages() []services.Message {
 			}
 		}
 		// 跳过空的 assistant 消息
-		if msg.Role == "assistant" && strings.TrimSpace(msg.Content) == "" {
+		if msg.Role == "assistant" && strings.TrimSpace(msg.Content) == "" && len(msg.ToolCalls) == 0 {
 			continue
 		}
 		// 将非空消息按其原始角色和内容添加到结果中
 		result = append(result, services.Message{
-			Role:    msg.Role,
-			Content: msg.Content,
+			Role:       msg.Role,
+			Content:    msg.Content,
+			ToolCalls:  msg.ToolCalls,
+			ToolCallID: msg.ToolCallID,
 		})
 	}
 
@@ -826,11 +820,11 @@ func (m *Model) streamResponse(messages []services.Message) tea.Cmd {
 
 	m.streamChan = stream
 	return func() tea.Msg {
-		chunk, ok := <-stream
+		event, ok := <-stream
 		if !ok {
 			return StreamDoneMsg{}
 		}
-		return StreamChunkMsg{Content: chunk}
+		return mapChatEventToMsg(event)
 	}
 }
 
@@ -839,11 +833,11 @@ func (m *Model) streamResponseFromChannel() tea.Cmd {
 		return nil
 	}
 	return func() tea.Msg {
-		chunk, ok := <-m.streamChan
+		event, ok := <-m.streamChan
 		if !ok {
 			return StreamDoneMsg{}
 		}
-		return StreamChunkMsg{Content: chunk}
+		return mapChatEventToMsg(event)
 	}
 }
 
@@ -858,6 +852,90 @@ func (m *Model) sendCodeToAI(code string) tea.Cmd {
 
 	messages := m.buildMessages()
 	return m.streamResponse(messages)
+}
+
+func mapChatEventToMsg(event services.ChatEvent) tea.Msg {
+	switch event.Type {
+	case services.ChatEventDelta:
+		return StreamChunkMsg{Content: event.Content}
+	case services.ChatEventToolCall:
+		call, err := buildToolCallFromEvent(event.ToolCall)
+		if err != nil {
+			return StreamErrorMsg{Err: err}
+		}
+		return StreamToolCallMsg{Call: call, CallID: event.ToolCall.ID}
+	case services.ChatEventDone:
+		return StreamDoneMsg{}
+	default:
+		if strings.TrimSpace(event.Content) != "" {
+			return StreamChunkMsg{Content: event.Content}
+		}
+		return StreamDoneMsg{}
+	}
+}
+
+func buildToolCallFromEvent(call *services.ChatToolCall) (services.ToolCall, error) {
+	if call == nil {
+		return services.ToolCall{}, fmt.Errorf("tool call event is nil")
+	}
+	toolName := strings.TrimSpace(call.Function.Name)
+	if toolName == "" {
+		return services.ToolCall{}, fmt.Errorf("tool call is missing function name")
+	}
+	params, err := parseToolCallArguments(call.Function.Arguments)
+	if err != nil {
+		return services.ToolCall{}, err
+	}
+	return services.ToolCall{
+		Tool:   toolName,
+		Params: services.NormalizeToolParams(params),
+	}, nil
+}
+
+func parseToolCallArguments(args string) (map[string]interface{}, error) {
+	trimmed := strings.TrimSpace(args)
+	if trimmed == "" {
+		return map[string]interface{}{}, nil
+	}
+	var params map[string]interface{}
+	if err := json.Unmarshal([]byte(trimmed), &params); err != nil {
+		return nil, fmt.Errorf("tool call arguments parse failed: %w", err)
+	}
+	if params == nil {
+		return map[string]interface{}{}, nil
+	}
+	return params, nil
+}
+
+func buildAssistantToolCall(callID string, call services.ToolCall) (services.ChatToolCall, error) {
+	if strings.TrimSpace(callID) == "" {
+		return services.ChatToolCall{}, fmt.Errorf("tool call id is required")
+	}
+	args, err := json.Marshal(call.Params)
+	if err != nil {
+		return services.ChatToolCall{}, fmt.Errorf("tool call arguments marshal failed: %w", err)
+	}
+	return services.ChatToolCall{
+		ID:   callID,
+		Type: "function",
+		Function: services.ChatToolCallFunction{
+			Name:      call.Tool,
+			Arguments: string(args),
+		},
+	}, nil
+}
+
+func buildToolResultContent(result *services.ToolResult) string {
+	if result == nil {
+		return ""
+	}
+	if strings.TrimSpace(result.Output) != "" {
+		return result.Output
+	}
+	if strings.TrimSpace(result.Error) != "" {
+		return result.Error
+	}
+	return ""
 }
 
 func isTransientToolStatusMessage(content string) bool {

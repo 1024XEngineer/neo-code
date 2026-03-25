@@ -14,24 +14,24 @@ type chatServiceImpl struct {
 	todoSvc      domain.TodoService
 	roleSvc      domain.RoleService
 	chatProvider domain.ChatProvider
-	toolSchema   string
+	tools        []domain.ToolSchema
 }
 
-// NewChatService creates a chat service with memory, role, todo, tool schema,
+// NewChatService creates a chat service with memory, role, todo, tool schemas,
 // and chat provider dependencies.
-func NewChatService(memorySvc domain.MemoryService, workingSvc domain.WorkingMemoryService, todoSvc domain.TodoService, roleSvc domain.RoleService, chatProvider domain.ChatProvider, toolSchema string) domain.ChatGateway {
+func NewChatService(memorySvc domain.MemoryService, workingSvc domain.WorkingMemoryService, todoSvc domain.TodoService, roleSvc domain.RoleService, chatProvider domain.ChatProvider, tools []domain.ToolSchema) domain.ChatGateway {
 	return &chatServiceImpl{
 		memorySvc:    memorySvc,
 		workingSvc:   workingSvc,
 		todoSvc:      todoSvc,
 		roleSvc:      roleSvc,
 		chatProvider: chatProvider,
-		toolSchema:   toolSchema,
+		tools:        tools,
 	}
 }
 
 // Send enriches the request with role and runtime context before streaming.
-func (s *chatServiceImpl) Send(ctx context.Context, req *domain.ChatRequest) (<-chan string, error) {
+func (s *chatServiceImpl) Send(ctx context.Context, req *domain.ChatRequest) (<-chan domain.ChatEvent, error) {
 	messages := req.Messages
 
 	rolePrompt, err := s.roleSvc.GetActivePrompt(ctx)
@@ -63,7 +63,7 @@ func (s *chatServiceImpl) Send(ctx context.Context, req *domain.ChatRequest) (<-
 		todoContext = buildTodoContext(todos)
 	}
 
-	blocks := []string{s.toolSchema, workingContext, todoContext}
+	blocks := []string{workingContext, todoContext}
 	if userInput != "" {
 		memoryContext, ctxErr := s.memorySvc.BuildContext(ctx, userInput)
 		if ctxErr != nil {
@@ -76,19 +76,21 @@ func (s *chatServiceImpl) Send(ctx context.Context, req *domain.ChatRequest) (<-
 		messages = injectSystemContext(messages, rolePrompt, combinedContext)
 	}
 
-	out, err := s.chatProvider.Chat(ctx, messages)
+	out, err := s.chatProvider.Chat(ctx, messages, s.tools)
 	if err != nil {
 		return nil, err
 	}
 
-	resultChan := make(chan string)
+	resultChan := make(chan domain.ChatEvent)
 	go func() {
 		defer close(resultChan)
 
 		var replyBuilder strings.Builder
-		for chunk := range out {
-			replyBuilder.WriteString(chunk)
-			resultChan <- chunk
+		for event := range out {
+			if event.Type == domain.ChatEventDelta {
+				replyBuilder.WriteString(event.Content)
+			}
+			resultChan <- event
 		}
 
 		if s.latestUserInput(messages) != "" && replyBuilder.Len() > 0 {

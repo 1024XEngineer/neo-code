@@ -11,6 +11,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -24,8 +25,8 @@ const (
 )
 
 var (
-	ErrInvalidAPIKey        = errors.New("无效的 API Key")
-	ErrAPIKeyValidationSoft = errors.New("API Key 校验结果不确定")
+	ErrInvalidAPIKey        = errors.New("鏃犳晥鐨?API Key")
+	ErrAPIKeyValidationSoft = errors.New("API Key 鏍￠獙缁撴灉涓嶇‘瀹?")
 )
 
 type ChatCompletionProvider struct {
@@ -34,7 +35,7 @@ type ChatCompletionProvider struct {
 	Model   string
 }
 
-// GetModelName 返回提供方当前模型，缺省时使用默认模型。
+// GetModelName 杩斿洖鎻愪緵鏂瑰綋鍓嶆ā鍨嬶紝缂虹渷鏃朵娇鐢ㄩ粯璁ゆā鍨嬨€?
 func (p *ChatCompletionProvider) GetModelName() string {
 	if p.Model != "" {
 		return p.Model
@@ -45,12 +46,24 @@ func (p *ChatCompletionProvider) GetModelName() string {
 type StreamResponse struct {
 	Choices []struct {
 		Delta struct {
-			Content string `json:"content"`
+			Content   string          `json:"content"`
+			ToolCalls []toolCallDelta `json:"tool_calls"`
 		} `json:"delta"`
+		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`
 }
 
-// NewChatProvider 为指定模型创建已配置的聊天提供方。
+type toolCallDelta struct {
+	Index    int    `json:"index"`
+	ID       string `json:"id"`
+	Type     string `json:"type"`
+	Function struct {
+		Name      string `json:"name"`
+		Arguments string `json:"arguments"`
+	} `json:"function"`
+}
+
+// NewChatProvider 涓烘寚瀹氭ā鍨嬪垱寤哄凡閰嶇疆鐨勮亰澶╂彁渚涙柟銆?
 func NewChatProvider(model string) (domain.ChatProvider, error) {
 	if configs.GlobalAppConfig == nil {
 		return nil, fmt.Errorf("config.yaml is not loaded")
@@ -79,7 +92,7 @@ func NewChatProvider(model string) (domain.ChatProvider, error) {
 	}, nil
 }
 
-// ValidateChatAPIKey 按当前提供方配置校验运行时 API Key。
+// ValidateChatAPIKey 鎸夊綋鍓嶆彁渚涙柟閰嶇疆鏍￠獙杩愯鏃?API Key銆?
 func ValidateChatAPIKey(ctx context.Context, cfg *configs.AppConfiguration) error {
 	if cfg == nil {
 		return fmt.Errorf("config cannot be nil")
@@ -99,8 +112,8 @@ func ValidateChatAPIKey(ctx context.Context, cfg *configs.AppConfiguration) erro
 	return validateChatAPIKey(ctx, cfg)
 }
 
-// Chat 向聊天补全接口发送流式请求并返回文本分片。
-func (p *ChatCompletionProvider) Chat(ctx context.Context, messages []domain.Message) (<-chan string, error) {
+// Chat 鍚戣亰澶╄ˉ鍏ㄦ帴鍙ｅ彂閫佹祦寮忚姹傚苟杩斿洖鏂囨湰鍒嗙墖銆?
+func (p *ChatCompletionProvider) Chat(ctx context.Context, messages []domain.Message, tools []domain.ToolSchema) (<-chan domain.ChatEvent, error) {
 	baseURL := strings.TrimSpace(p.BaseURL)
 	if baseURL == "" {
 		var err error
@@ -115,6 +128,10 @@ func (p *ChatCompletionProvider) Chat(ctx context.Context, messages []domain.Mes
 		"model":    modelName,
 		"messages": messages,
 		"stream":   true,
+	}
+	if len(tools) > 0 {
+		body["tools"] = tools
+		body["tool_choice"] = "auto"
 	}
 	jsonData, err := json.Marshal(body)
 	if err != nil {
@@ -148,13 +165,15 @@ func (p *ChatCompletionProvider) Chat(ctx context.Context, messages []domain.Mes
 		return nil, fmt.Errorf("chat request failed: %s %s", resp.Status, strings.TrimSpace(string(body)))
 	}
 
-	out := make(chan string)
+	out := make(chan domain.ChatEvent)
 
 	go func() {
 		defer close(out)
 		defer resp.Body.Close()
 
 		reader := bufio.NewReader(resp.Body)
+		toolCalls := map[int]*domain.ChatToolCall{}
+		hasToolCalls := false
 		for {
 			line, err := reader.ReadString('\n')
 			if err != nil {
@@ -173,18 +192,37 @@ func (p *ChatCompletionProvider) Chat(ctx context.Context, messages []domain.Mes
 				break
 			}
 
-			text, err := decodeStreamContent(data)
+			text, deltas, finishReason, err := decodeStreamDelta(data)
 			if err != nil {
 				emitStreamErrorMessage(ctx, out, err)
 				return
 			}
-			if text == "" {
-				continue
+			if text != "" {
+				text = stripThinkingTags(text)
+				select {
+				case <-ctx.Done():
+					return
+				case out <- domain.ChatEvent{Type: domain.ChatEventDelta, Content: text}:
+				}
 			}
-			select {
-			case <-ctx.Done():
-				return
-			case out <- text:
+			if len(deltas) > 0 {
+				hasToolCalls = true
+				for _, delta := range deltas {
+					updateToolCall(toolCalls, delta)
+				}
+			}
+			if finishReason == "tool_calls" {
+				break
+			}
+		}
+
+		if hasToolCalls {
+			for _, call := range orderedToolCalls(toolCalls) {
+				select {
+				case <-ctx.Done():
+					return
+				case out <- domain.ChatEvent{Type: domain.ChatEventToolCall, ToolCall: call}:
+				}
 			}
 		}
 	}()
@@ -192,14 +230,14 @@ func (p *ChatCompletionProvider) Chat(ctx context.Context, messages []domain.Mes
 	return out, nil
 }
 
-func emitStreamErrorMessage(ctx context.Context, out chan<- string, err error) {
+func emitStreamErrorMessage(ctx context.Context, out chan<- domain.ChatEvent, err error) {
 	if err == nil {
 		return
 	}
 	msg := fmt.Sprintf("\n[STREAM_ERROR] %v", err)
 	select {
 	case <-ctx.Done():
-	case out <- msg:
+	case out <- domain.ChatEvent{Type: domain.ChatEventDelta, Content: msg}:
 	}
 }
 
@@ -213,17 +251,16 @@ func streamReadError(err error) error {
 	return fmt.Errorf("chat stream read failed: %w", err)
 }
 
-func decodeStreamContent(data string) (string, error) {
+func decodeStreamDelta(data string) (string, []toolCallDelta, string, error) {
 	var res StreamResponse
 	if err := json.Unmarshal([]byte(data), &res); err != nil {
-		return "", fmt.Errorf("chat stream decode failed: %w", err)
+		return "", nil, "", fmt.Errorf("chat stream decode failed: %w", err)
 	}
 	if len(res.Choices) == 0 {
-		return "", nil
+		return "", nil, "", nil
 	}
-	content := res.Choices[0].Delta.Content
-	content = stripThinkingTags(content)
-	return content, nil
+	choice := res.Choices[0]
+	return choice.Delta.Content, choice.Delta.ToolCalls, choice.FinishReason, nil
 }
 
 func stripThinkingTags(content string) string {
@@ -242,6 +279,42 @@ func stripThinkingTags(content string) string {
 		content = content[:start] + content[end:]
 	}
 	return content
+}
+
+func updateToolCall(calls map[int]*domain.ChatToolCall, delta toolCallDelta) {
+	call, ok := calls[delta.Index]
+	if !ok {
+		call = &domain.ChatToolCall{Type: "function"}
+		calls[delta.Index] = call
+	}
+	if strings.TrimSpace(delta.ID) != "" {
+		call.ID = delta.ID
+	}
+	if strings.TrimSpace(delta.Type) != "" {
+		call.Type = delta.Type
+	}
+	if strings.TrimSpace(delta.Function.Name) != "" {
+		call.Function.Name = delta.Function.Name
+	}
+	if delta.Function.Arguments != "" {
+		call.Function.Arguments += delta.Function.Arguments
+	}
+}
+
+func orderedToolCalls(calls map[int]*domain.ChatToolCall) []*domain.ChatToolCall {
+	if len(calls) == 0 {
+		return nil
+	}
+	indexes := make([]int, 0, len(calls))
+	for idx := range calls {
+		indexes = append(indexes, idx)
+	}
+	sort.Ints(indexes)
+	ordered := make([]*domain.ChatToolCall, 0, len(indexes))
+	for _, idx := range indexes {
+		ordered = append(ordered, calls[idx])
+	}
+	return ordered
 }
 
 func httpClient() *http.Client {
@@ -286,7 +359,7 @@ func isRetryableError(err error) bool {
 
 func validateChatAPIKey(ctx context.Context, cfg *configs.AppConfiguration) error {
 	if cfg == nil {
-		return fmt.Errorf("配置不能为空")
+		return fmt.Errorf("閰嶇疆涓嶈兘涓虹┖")
 	}
 
 	modelName := strings.TrimSpace(cfg.AI.Model)

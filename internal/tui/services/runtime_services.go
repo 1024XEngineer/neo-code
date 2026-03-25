@@ -13,6 +13,11 @@ import (
 
 type ToolCall = domain.ToolCall
 type ToolResult = servertools.ToolResult
+type ChatEvent = domain.ChatEvent
+type ChatEventType = domain.ChatEventType
+type ChatToolCall = domain.ChatToolCall
+type ChatToolCallFunction = domain.ChatToolCallFunction
+type ToolSchema = domain.ToolSchema
 
 const (
 	TypeUserPreference = domain.TypeUserPreference
@@ -20,6 +25,10 @@ const (
 	TypeCodeFact       = domain.TypeCodeFact
 	TypeFixRecipe      = domain.TypeFixRecipe
 	TypeSessionMemory  = domain.TypeSessionMemory
+
+	ChatEventDelta    = domain.ChatEventDelta
+	ChatEventToolCall = domain.ChatEventToolCall
+	ChatEventDone     = domain.ChatEventDone
 )
 
 var (

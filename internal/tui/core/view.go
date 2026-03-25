@@ -94,14 +94,20 @@ func (m *Model) renderChatContent() string {
 }
 
 func (m Model) toComponentMessages() []components.Message {
-	messages := make([]components.Message, len(m.chat.Messages))
-	for i, msg := range m.chat.Messages {
-		messages[i] = components.Message{
+	messages := make([]components.Message, 0, len(m.chat.Messages))
+	for _, msg := range m.chat.Messages {
+		if msg.Role == "tool" {
+			continue
+		}
+		if msg.Role == "assistant" && strings.TrimSpace(msg.Content) == "" && len(msg.ToolCalls) > 0 {
+			continue
+		}
+		messages = append(messages, components.Message{
 			Role:      msg.Role,
 			Content:   displayMessageContent(msg.Role, msg.Content),
 			Timestamp: msg.Timestamp,
 			Streaming: msg.Streaming,
-		}
+		})
 	}
 	return messages
 }
