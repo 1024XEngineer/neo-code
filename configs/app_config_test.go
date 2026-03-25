@@ -76,8 +76,19 @@ func TestAppConfigurationValidateBaseRejectsUnsupportedProvider(t *testing.T) {
 	cfg.AI.Provider = "unknown"
 
 	err := cfg.ValidateBase()
-	if err == nil || !strings.Contains(err.Error(), "不支持的 ai.provider") {
+	if err == nil || !strings.Contains(err.Error(), "unsupported ai.provider") {
 		t.Fatalf("expected unsupported provider error, got: %v", err)
+	}
+}
+
+func TestAppConfigurationValidateRejectsUnsupportedMemoryExtractor(t *testing.T) {
+	t.Setenv(DefaultAPIKeyEnvVar, "env-chat-key")
+	cfg := validConfig()
+	cfg.Memory.Extractor = "unknown"
+
+	err := cfg.Validate()
+	if err == nil || !strings.Contains(err.Error(), "memory.extractor") {
+		t.Fatalf("expected memory.extractor validation error, got: %v", err)
 	}
 }
 
@@ -98,6 +109,13 @@ memory:
   max_prompt_chars: 1800
   max_items: 1000
   storage_path: "./data/memory_rules.json"
+  project_files:
+    - "AGENTS.md"
+    - ".neocode/memory.md"
+  project_prompt_chars: 2400
+  extractor: "auto"
+  extractor_model: "gpt-5.4-mini"
+  extractor_timeout_seconds: 15
 history:
   short_term_turns: 6
   max_tool_context_messages: 3
@@ -125,6 +143,12 @@ persona:
 	}
 	if got := GlobalAppConfig.RuntimeAPIKey(); got != "env-chat-key" {
 		t.Fatalf("expected runtime api key from custom env, got %q", got)
+	}
+	if GlobalAppConfig.Memory.Extractor != "auto" {
+		t.Fatalf("expected memory extractor auto, got %q", GlobalAppConfig.Memory.Extractor)
+	}
+	if GlobalAppConfig.Memory.ExtractorModel != "gpt-5.4-mini" {
+		t.Fatalf("expected extractor model gpt-5.4-mini, got %q", GlobalAppConfig.Memory.ExtractorModel)
 	}
 }
 
@@ -182,6 +206,9 @@ func TestWriteAppConfigRoundTrip(t *testing.T) {
 	if got.Memory.StoragePath != want.Memory.StoragePath {
 		t.Fatalf("expected storage path %q, got %q", want.Memory.StoragePath, got.Memory.StoragePath)
 	}
+	if got.Memory.Extractor != want.Memory.Extractor {
+		t.Fatalf("expected extractor %q, got %q", want.Memory.Extractor, got.Memory.Extractor)
+	}
 }
 
 func validConfig() *AppConfiguration {
@@ -195,6 +222,11 @@ func validConfig() *AppConfiguration {
 	cfg.Memory.MaxItems = 1000
 	cfg.Memory.StoragePath = "./data/memory_rules.json"
 	cfg.Memory.PersistTypes = []string{"user_preference", "project_rule", "code_fact", "fix_recipe"}
+	cfg.Memory.ProjectFiles = []string{"AGENTS.md", ".neocode/memory.md"}
+	cfg.Memory.ProjectPromptChars = 2400
+	cfg.Memory.Extractor = "rule"
+	cfg.Memory.ExtractorModel = ""
+	cfg.Memory.ExtractorTimeoutSecond = 20
 	cfg.History.ShortTermTurns = 6
 	cfg.History.MaxToolContextMessages = 3
 	cfg.History.MaxToolContextOutputSize = 4000
@@ -209,6 +241,26 @@ func TestDefaultAppConfigUsesCheckedInPersonaPath(t *testing.T) {
 	cfg := DefaultAppConfig()
 	if cfg.Persona.FilePath != DefaultPersonaFilePath {
 		t.Fatalf("expected default persona path %q, got %q", DefaultPersonaFilePath, cfg.Persona.FilePath)
+	}
+	if cfg.Memory.Extractor != "rule" {
+		t.Fatalf("expected default memory extractor to be rule, got %q", cfg.Memory.Extractor)
+	}
+	if cfg.Memory.ProjectPromptChars != 2400 {
+		t.Fatalf("expected default project prompt chars 2400, got %d", cfg.Memory.ProjectPromptChars)
+	}
+	if cfg.Memory.ExtractorTimeoutSecond != 20 {
+		t.Fatalf("expected default extractor timeout 20, got %d", cfg.Memory.ExtractorTimeoutSecond)
+	}
+}
+
+func TestAppConfigurationValidateRejectsInvalidProjectPromptChars(t *testing.T) {
+	t.Setenv(DefaultAPIKeyEnvVar, "env-chat-key")
+	cfg := validConfig()
+	cfg.Memory.ProjectPromptChars = 0
+
+	err := cfg.Validate()
+	if err == nil || !strings.Contains(err.Error(), "memory.project_prompt_chars") {
+		t.Fatalf("expected project prompt chars validation error, got: %v", err)
 	}
 }
 

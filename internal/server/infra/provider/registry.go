@@ -20,7 +20,7 @@ var providerSpecs = []ProviderSpec{
 	{Name: "deepseek", BaseURL: "https://api.deepseek.com/chat/completions", DefaultModel: "deepseek-chat"},
 	{Name: "openll", BaseURL: "https://www.openll.top/v1/chat/completions", DefaultModel: "gpt-5.4"},
 	{Name: "siliconflow", BaseURL: "https://api.siliconflow.cn/v1/chat/completions", DefaultModel: "zai-org/GLM-4.6"},
-	{Name: "豆包大模型", BaseURL: "https://ark.cn-beijing.volces.com/api/v3/chat/completions", DefaultModel: "doubao-pro-v1"},
+	{Name: "doubao", BaseURL: "https://ark.cn-beijing.volces.com/api/v3/chat/completions", DefaultModel: "doubao-pro-v1"},
 	{Name: "openai", BaseURL: "https://api.openai.com/v1/chat/completions", DefaultModel: "gpt-5.4"},
 }
 

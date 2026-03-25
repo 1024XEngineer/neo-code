@@ -117,6 +117,9 @@ memory:
   max_prompt_chars: 1800
   max_items: 1000
   storage_path: "./data/memory_rules.json"
+  extractor: "rule"
+  extractor_model: ""
+  extractor_timeout_seconds: 20
   persist_types:
     - "user_preference"
     - "project_rule"

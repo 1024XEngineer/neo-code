@@ -17,7 +17,7 @@ func TestNormalizeProviderName(t *testing.T) {
 		"DEEPSEEK":    "deepseek",
 		"OPENLL":      "openll",
 		"siliconflow": "siliconflow",
-		"豆包大模型":       "豆包大模型",
+		"doubao":      "doubao",
 		"openai":      "openai",
 	}
 
@@ -38,7 +38,7 @@ func TestDefaultModelForProvider(t *testing.T) {
 		"deepseek":    "deepseek-chat",
 		"openll":      "gpt-5.4",
 		"siliconflow": "zai-org/GLM-4.6",
-		"豆包大模型":       "doubao-pro-v1",
+		"doubao":      "doubao-pro-v1",
 		"openai":      "gpt-5.4",
 	}
 

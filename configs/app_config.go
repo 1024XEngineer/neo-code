@@ -24,12 +24,17 @@ type AppConfiguration struct {
 	} `yaml:"ai"`
 
 	Memory struct {
-		TopK           int      `yaml:"top_k"`
-		MinMatchScore  float64  `yaml:"min_match_score"`
-		MaxPromptChars int      `yaml:"max_prompt_chars"`
-		MaxItems       int      `yaml:"max_items"`
-		StoragePath    string   `yaml:"storage_path"`
-		PersistTypes   []string `yaml:"persist_types"`
+		TopK                   int      `yaml:"top_k"`
+		MinMatchScore          float64  `yaml:"min_match_score"`
+		MaxPromptChars         int      `yaml:"max_prompt_chars"`
+		MaxItems               int      `yaml:"max_items"`
+		StoragePath            string   `yaml:"storage_path"`
+		PersistTypes           []string `yaml:"persist_types"`
+		ProjectFiles           []string `yaml:"project_files"`
+		ProjectPromptChars     int      `yaml:"project_prompt_chars"`
+		Extractor              string   `yaml:"extractor"`
+		ExtractorModel         string   `yaml:"extractor_model"`
+		ExtractorTimeoutSecond int      `yaml:"extractor_timeout_seconds"`
 	} `yaml:"memory"`
 
 	History struct {
@@ -48,7 +53,7 @@ type AppConfiguration struct {
 
 var GlobalAppConfig *AppConfiguration
 
-// DefaultAppConfig 返回内置的应用默认配置。
+// DefaultAppConfig returns the built-in application defaults.
 func DefaultAppConfig() *AppConfiguration {
 	cfg := &AppConfiguration{}
 	cfg.App.Name = "NeoCode"
@@ -62,6 +67,11 @@ func DefaultAppConfig() *AppConfiguration {
 	cfg.Memory.MaxItems = 1000
 	cfg.Memory.StoragePath = "./data/memory_rules.json"
 	cfg.Memory.PersistTypes = []string{"user_preference", "project_rule", "code_fact", "fix_recipe"}
+	cfg.Memory.ProjectFiles = []string{"AGENTS.md", "CLAUDE.md", ".neocode/memory.md", "NEOCODE.md"}
+	cfg.Memory.ProjectPromptChars = 2400
+	cfg.Memory.Extractor = "rule"
+	cfg.Memory.ExtractorModel = ""
+	cfg.Memory.ExtractorTimeoutSecond = 20
 	cfg.History.ShortTermTurns = 6
 	cfg.History.MaxToolContextMessages = 3
 	cfg.History.MaxToolContextOutputSize = 4000
@@ -72,7 +82,7 @@ func DefaultAppConfig() *AppConfiguration {
 	return cfg
 }
 
-// LoadAppConfig 加载运行时配置并保存到全局变量。
+// LoadAppConfig loads runtime config and stores it globally.
 func LoadAppConfig(filePath string) error {
 	cfg, err := LoadBootstrapConfig(filePath)
 	if err != nil {
@@ -85,17 +95,16 @@ func LoadAppConfig(filePath string) error {
 	return nil
 }
 
-// LoadBootstrapConfig 加载不依赖运行时密钥的基础配置。
+// LoadBootstrapConfig loads config without requiring runtime secrets.
 func LoadBootstrapConfig(filePath string) (*AppConfiguration, error) {
 	data, err := os.ReadFile(filePath)
 	if err != nil {
-		return nil, fmt.Errorf("读取配置文件时出错: %w", err)
+		return nil, fmt.Errorf("read config file: %w", err)
 	}
 
 	cfg := DefaultAppConfig()
-	//解析data数据覆盖到cfg上
 	if err := yaml.Unmarshal(data, cfg); err != nil {
-		return nil, fmt.Errorf("解析yaml信息失败: %w", err)
+		return nil, fmt.Errorf("parse yaml config: %w", err)
 	}
 	if err := cfg.ValidateBase(); err != nil {
 		return nil, err
@@ -103,13 +112,13 @@ func LoadBootstrapConfig(filePath string) (*AppConfiguration, error) {
 	return cfg, nil
 }
 
-// EnsureConfigFile 加载已有配置文件，或在缺失时写入默认配置。
+// EnsureConfigFile loads an existing config or writes defaults when missing.
 func EnsureConfigFile(filePath string) (*AppConfiguration, bool, error) {
 	if _, err := os.Stat(filePath); err == nil {
 		cfg, loadErr := LoadBootstrapConfig(filePath)
 		return cfg, false, loadErr
 	} else if !errors.Is(err, os.ErrNotExist) {
-		return nil, false, fmt.Errorf("文件不存在: %w", err)
+		return nil, false, fmt.Errorf("stat config file: %w", err)
 	}
 
 	cfg := DefaultAppConfig()
@@ -119,87 +128,99 @@ func EnsureConfigFile(filePath string) (*AppConfiguration, bool, error) {
 	return cfg, true, nil
 }
 
-// WriteAppConfig 将应用配置写入磁盘。
+// WriteAppConfig persists application config to disk.
 func WriteAppConfig(filePath string, cfg *AppConfiguration) error {
 	if cfg == nil {
-		return fmt.Errorf("应用配置不能为空")
+		return fmt.Errorf("app configuration cannot be nil")
 	}
 	cfgCopy := *cfg
 	cfgCopy.AI.APIKey = strings.TrimSpace(cfgCopy.AI.APIKey)
 	data, err := yaml.Marshal(&cfgCopy)
 	if err != nil {
-		return fmt.Errorf("序列化yaml信息时错误: %w", err)
+		return fmt.Errorf("marshal yaml config: %w", err)
 	}
 	if err := os.WriteFile(filePath, data, 0o644); err != nil {
-		return fmt.Errorf("向yaml文件写入配置信息时错误: %w", err)
+		return fmt.Errorf("write yaml config: %w", err)
 	}
 	return nil
 }
 
-// Validate 检查配置是否满足运行时要求。
+// Validate checks runtime config requirements.
 func (c *AppConfiguration) Validate() error {
 	return c.ValidateRuntime()
 }
 
-// ValidateBase 检查不包含密钥的基础配置是否合法。
+// ValidateBase checks config values that do not require secrets.
 func (c *AppConfiguration) ValidateBase() error {
 	if c == nil {
-		return fmt.Errorf("应用配置不能为空")
+		return fmt.Errorf("app configuration cannot be nil")
 	}
+
 	providerName := normalizeProviderName(c.AI.Provider)
 	if providerName == "" {
-		return fmt.Errorf("配置无效：需要 ai.provider")
+		return fmt.Errorf("invalid config: ai.provider is required")
 	}
 	if !isSupportedProvider(providerName) {
-		return fmt.Errorf("配置无效：不支持的 ai.provider %q", strings.TrimSpace(c.AI.Provider))
+		return fmt.Errorf("invalid config: unsupported ai.provider %q", strings.TrimSpace(c.AI.Provider))
 	}
 	c.AI.Provider = providerName
+
 	if strings.TrimSpace(c.AI.Model) == "" {
-		return fmt.Errorf("配置无效：需要 ai.model")
+		return fmt.Errorf("invalid config: ai.model is required")
 	}
 	if c.Memory.TopK <= 0 {
-		return fmt.Errorf("配置无效：memory.top_k 必须大于 0")
+		return fmt.Errorf("invalid config: memory.top_k must be greater than 0")
 	}
 	if c.Memory.MinMatchScore < 0 {
-		return fmt.Errorf("配置无效：memory.min_match_score 不能为负数")
+		return fmt.Errorf("invalid config: memory.min_match_score cannot be negative")
 	}
 	if c.Memory.MaxPromptChars <= 0 {
-		return fmt.Errorf("配置无效：memory.max_prompt_chars 必须大于 0")
+		return fmt.Errorf("invalid config: memory.max_prompt_chars must be greater than 0")
 	}
 	if c.Memory.MaxItems <= 0 {
-		return fmt.Errorf("配置无效：memory.max_items 必须大于 0")
+		return fmt.Errorf("invalid config: memory.max_items must be greater than 0")
 	}
 	if strings.TrimSpace(c.Memory.StoragePath) == "" {
-		return fmt.Errorf("配置无效：需要 memory.storage_path")
+		return fmt.Errorf("invalid config: memory.storage_path is required")
+	}
+	if c.Memory.ProjectPromptChars <= 0 {
+		return fmt.Errorf("invalid config: memory.project_prompt_chars must be greater than 0")
+	}
+	c.Memory.Extractor = normalizeMemoryExtractorMode(c.Memory.Extractor)
+	if c.Memory.Extractor == "" {
+		return fmt.Errorf("invalid config: memory.extractor must be one of rule, llm, auto")
+	}
+	if c.Memory.ExtractorTimeoutSecond <= 0 {
+		return fmt.Errorf("invalid config: memory.extractor_timeout_seconds must be greater than 0")
 	}
 	if c.History.ShortTermTurns <= 0 {
-		return fmt.Errorf("配置无效：history.short_term_turns 必须大于 0")
+		return fmt.Errorf("invalid config: history.short_term_turns must be greater than 0")
 	}
 	if c.History.MaxToolContextMessages < 0 {
-		return fmt.Errorf("配置无效：history.max_tool_context_messages 不能为负数")
+		return fmt.Errorf("invalid config: history.max_tool_context_messages cannot be negative")
 	}
 	if c.History.MaxToolContextOutputSize <= 0 {
-		return fmt.Errorf("配置无效：history.max_tool_context_output_size 必须大于 0")
+		return fmt.Errorf("invalid config: history.max_tool_context_output_size must be greater than 0")
 	}
 	if c.History.PersistSessionState && strings.TrimSpace(c.History.WorkspaceStateDir) == "" {
-		return fmt.Errorf("配置无效：history.workspace_state_dir 不能为空")
+		return fmt.Errorf("invalid config: history.workspace_state_dir cannot be empty")
 	}
 	return nil
 }
 
-// ValidateRuntime 检查配置字段和运行时必需的环境变量。
+// ValidateRuntime checks config and required environment variables.
 func (c *AppConfiguration) ValidateRuntime() error {
 	if err := c.ValidateBase(); err != nil {
 		return err
 	}
 	envVarName := c.APIKeyEnvVarName()
 	if c.RuntimeAPIKey() == "" {
-		return fmt.Errorf("运行时无效：需要 %s 环境变量", envVarName)
+		return fmt.Errorf("invalid runtime config: missing %s environment variable", envVarName)
 	}
 	return nil
 }
 
-// APIKeyEnvVarName 返回当前配置使用的 API Key 环境变量名。
+// APIKeyEnvVarName returns the configured environment variable name for the API key.
 func (c *AppConfiguration) APIKeyEnvVarName() string {
 	if c == nil {
 		return DefaultAPIKeyEnvVar
@@ -210,12 +231,12 @@ func (c *AppConfiguration) APIKeyEnvVarName() string {
 	return DefaultAPIKeyEnvVar
 }
 
-// RuntimeAPIKey 返回配置指向的环境变量中的 API Key，并去掉首尾空白。
+// RuntimeAPIKey returns the actual API key from environment variables.
 func (c *AppConfiguration) RuntimeAPIKey() string {
 	return strings.TrimSpace(os.Getenv(c.APIKeyEnvVarName()))
 }
 
-// RuntimeAPIKeyEnvVarName 返回全局配置当前使用的 API Key 环境变量名。
+// RuntimeAPIKeyEnvVarName returns the active API key environment variable name.
 func RuntimeAPIKeyEnvVarName() string {
 	if GlobalAppConfig != nil {
 		return GlobalAppConfig.APIKeyEnvVarName()
@@ -223,7 +244,7 @@ func RuntimeAPIKeyEnvVarName() string {
 	return DefaultAPIKeyEnvVar
 }
 
-// RuntimeAPIKey 返回全局配置指向的环境变量中的 API Key，并去掉首尾空白。
+// RuntimeAPIKey returns the active API key from the global config.
 func RuntimeAPIKey() string {
 	if GlobalAppConfig != nil {
 		return GlobalAppConfig.RuntimeAPIKey()
@@ -236,32 +257,42 @@ func normalizeProviderName(name string) string {
 	if trimmed == "" {
 		return ""
 	}
-	if strings.EqualFold(trimmed, "modelscope") {
+	switch {
+	case strings.EqualFold(trimmed, "modelscope"):
 		return "modelscope"
-	}
-	if strings.EqualFold(trimmed, "deepseek") {
+	case strings.EqualFold(trimmed, "deepseek"):
 		return "deepseek"
-	}
-	if strings.EqualFold(trimmed, "openll") {
+	case strings.EqualFold(trimmed, "openll"):
 		return "openll"
-	}
-	if strings.EqualFold(trimmed, "siliconflow") {
+	case strings.EqualFold(trimmed, "siliconflow"):
 		return "siliconflow"
-	}
-	if strings.EqualFold(trimmed, "openai") {
+	case strings.EqualFold(trimmed, "openai"):
 		return "openai"
+	case strings.EqualFold(trimmed, "doubao"):
+		return "doubao"
+	default:
+		return trimmed
 	}
-	if trimmed == "豆包大模型" {
-		return "豆包大模型"
-	}
-	return trimmed
 }
 
 func isSupportedProvider(name string) bool {
 	switch normalizeProviderName(name) {
-	case "modelscope", "deepseek", "openll", "siliconflow", "豆包大模型", "openai":
+	case "modelscope", "deepseek", "openll", "siliconflow", "openai", "doubao":
 		return true
 	default:
 		return false
+	}
+}
+
+func normalizeMemoryExtractorMode(mode string) string {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "", "rule":
+		return "rule"
+	case "llm":
+		return "llm"
+	case "auto":
+		return "auto"
+	default:
+		return ""
 	}
 }

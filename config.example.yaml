@@ -1,10 +1,10 @@
-# 应用配置文件示例
+# Example application configuration
 app:
   name: "NeoCode"
   version: "1.0.0"
 
 ai:
-  provider: "openll" # modelscope | deepseek | openll | siliconflow | 豆包大模型 | openai
+  provider: "openll" # modelscope | deepseek | openll | siliconflow | doubao | openai
   api_key: "AI_API_KEY" # environment variable name; falls back to AI_API_KEY when empty
   model: "gpt-5.4"
 
@@ -14,6 +14,15 @@ memory:
   max_prompt_chars: 1800
   max_items: 1000
   storage_path: "./data/memory_rules.json"
+  project_files:
+    - "AGENTS.md"
+    - "CLAUDE.md"
+    - ".neocode/memory.md"
+    - "NEOCODE.md"
+  project_prompt_chars: 2400
+  extractor: "rule" # rule | llm | auto
+  extractor_model: "" # optional; defaults to ai.model when empty
+  extractor_timeout_seconds: 20
   persist_types:
     - "user_preference"
     - "project_rule"
