@@ -61,9 +61,10 @@
 1. 用户在输入框编辑内容，`core/update.go` 处理按键并更新 `textarea` 状态。
 2. 按下 `F5` 或 `F8` 后，`handleSubmit()` 将用户消息写入 `chat_state`，然后触发 `streamResponse(...)`。
 3. `services.ChatClient.Chat(...)` 启动本地聊天服务，流式返回模型输出。
-4. `StreamChunkMsg` 持续追加 assistant 内容；`StreamDoneMsg` 在流结束时检查最后一条 assistant 消息是否是工具调用 JSON。
-5. 若检测到 `{"tool":"...","params":{...}}`，TUI 会通过 `services.ExecuteToolCall(...)` 执行工具，并把工具结果重新注入为 system 上下文。
-6. 模型基于新的上下文继续生成，直到得到最终自然语言回复。
+4. 聊天服务会把角色提示、记忆上下文、任务上下文，以及由 `internal/server/infra/tools/*.go` 的 `Definition()` 渲染出的 tool schema 一并注入到 system context。
+5. `StreamChunkMsg` 持续追加 assistant 内容；`StreamDoneMsg` 在流结束时检查最后一条 assistant 消息是否是工具调用 JSON。
+6. 若检测到 `{"tool":"...","params":{...}}`，TUI 会通过 `services.ExecuteToolCall(...)` 执行工具，并把工具结果重新注入为 system 上下文。
+7. 模型基于新的上下文继续生成，直到得到最终自然语言回复。
 
 ---
 

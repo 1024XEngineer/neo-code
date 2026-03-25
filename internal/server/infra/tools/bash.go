@@ -18,8 +18,8 @@ func (b *BashTool) Definition() ToolDefinition {
 		Description: "Execute a bash command in the workspace. Supports optional workdir and timeout, default is 120000ms.",
 		Parameters: []ToolParamSpec{
 			{Name: "command", Type: "string", Required: true, Description: "The bash command to execute."},
-			{Name: "workdir", Type: "string", Description: "Directory within the workspace to execute the command, defaults to workspace root."},
-			{Name: "timeout", Type: "integer", Description: "Command timeout in milliseconds, default 120000."},
+			{Name: "workdir", Type: "string", Description: "Directory within the workspace to execute the command. Defaults to the workspace root.", DefaultValue: "."},
+			{Name: "timeout", Type: "integer", Description: "Command timeout in milliseconds.", DefaultValue: 120000},
 			{Name: "description", Type: "string", Description: "A brief explanation of the command purpose for logs and auditing."},
 		},
 	}
@@ -52,7 +52,11 @@ func (b *BashTool) Run(params map[string]interface{}) *ToolResult {
 		pathErr.ToolName = b.Definition().Name
 		return pathErr
 	}
-	description, _ := optionalString(params, "description", "")
+	description, errRes := optionalString(params, "description", "")
+	if errRes != nil {
+		errRes.ToolName = b.Definition().Name
+		return errRes
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutMs)*time.Millisecond)
 	defer cancel()

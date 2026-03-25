@@ -17,7 +17,7 @@ func (e *EditTool) Definition() ToolDefinition {
 			{Name: "filePath", Type: "string", Required: true, Description: "Path to the file to modify within the workspace."},
 			{Name: "oldString", Type: "string", Required: true, Description: "The original text to replace, must match file content exactly."},
 			{Name: "newString", Type: "string", Required: true, Description: "The new text to replace with, must be different from oldString."},
-			{Name: "replaceAll", Type: "boolean", Description: "Whether to replace all occurrences, default false."},
+			{Name: "replaceAll", Type: "boolean", Description: "Whether to replace all occurrences.", DefaultValue: false},
 		},
 	}
 }

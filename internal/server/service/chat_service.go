@@ -14,20 +14,23 @@ type chatServiceImpl struct {
 	todoSvc      domain.TodoService
 	roleSvc      domain.RoleService
 	chatProvider domain.ChatProvider
+	toolSchema   string
 }
 
-// NewChatService 使用记忆、角色、任务清单和模型提供方依赖创建聊天服务。
-func NewChatService(memorySvc domain.MemoryService, workingSvc domain.WorkingMemoryService, todoSvc domain.TodoService, roleSvc domain.RoleService, chatProvider domain.ChatProvider) domain.ChatGateway {
+// NewChatService creates a chat service with memory, role, todo, tool schema,
+// and chat provider dependencies.
+func NewChatService(memorySvc domain.MemoryService, workingSvc domain.WorkingMemoryService, todoSvc domain.TodoService, roleSvc domain.RoleService, chatProvider domain.ChatProvider, toolSchema string) domain.ChatGateway {
 	return &chatServiceImpl{
 		memorySvc:    memorySvc,
 		workingSvc:   workingSvc,
 		todoSvc:      todoSvc,
 		roleSvc:      roleSvc,
 		chatProvider: chatProvider,
+		toolSchema:   toolSchema,
 	}
 }
 
-// Send 为消息补充角色和记忆上下文后发起流式回复。
+// Send enriches the request with role and runtime context before streaming.
 func (s *chatServiceImpl) Send(ctx context.Context, req *domain.ChatRequest) (<-chan string, error) {
 	messages := req.Messages
 
@@ -35,16 +38,10 @@ func (s *chatServiceImpl) Send(ctx context.Context, req *domain.ChatRequest) (<-
 	if err != nil {
 		fmt.Printf("获取角色提示失败：%v\n", err)
 	} else if rolePrompt != "" {
-		hasSystem := false
-		for _, msg := range messages {
-			if msg.Role == "system" {
-				hasSystem = true
-				break
-			}
-		}
-
-		if !hasSystem {
-			// 角色提示总是放在最前面的 system 消息里，便于后续继续叠加记忆上下文。
+		hasLeadingSystem := len(messages) > 0 && messages[0].Role == "system"
+		if !hasLeadingSystem {
+			// Keep the role prompt as the leading system message when the caller
+			// did not already provide one at the front of the conversation.
 			messages = append([]domain.Message{{Role: "system", Content: rolePrompt}}, messages...)
 		}
 	}
@@ -59,11 +56,14 @@ func (s *chatServiceImpl) Send(ctx context.Context, req *domain.ChatRequest) (<-
 	}
 	todoContext := ""
 	if s.todoSvc != nil {
-		todos, _ := s.todoSvc.ListTodos(ctx)
+		todos, todoErr := s.todoSvc.ListTodos(ctx)
+		if todoErr != nil {
+			return nil, todoErr
+		}
 		todoContext = buildTodoContext(todos)
 	}
 
-	blocks := []string{workingContext, todoContext}
+	blocks := []string{s.toolSchema, workingContext, todoContext}
 	if userInput != "" {
 		memoryContext, ctxErr := s.memorySvc.BuildContext(ctx, userInput)
 		if ctxErr != nil {
@@ -72,7 +72,7 @@ func (s *chatServiceImpl) Send(ctx context.Context, req *domain.ChatRequest) (<-
 		blocks = append(blocks, memoryContext)
 	}
 	combinedContext := joinContextBlocks(blocks...)
-	if combinedContext != "" {
+	if rolePrompt != "" || combinedContext != "" {
 		messages = injectSystemContext(messages, rolePrompt, combinedContext)
 	}
 
@@ -93,8 +93,8 @@ func (s *chatServiceImpl) Send(ctx context.Context, req *domain.ChatRequest) (<-
 
 		if s.latestUserInput(messages) != "" && replyBuilder.Len() > 0 {
 			if s.workingSvc != nil {
-				// 工作记忆刷新要基于用户原始消息序列，而不是注入过 system 上下文后的 messages，
-				// 否则会把内部提示也误当成真实对话历史。
+				// Refresh working memory from the original request messages so the
+				// injected system context does not become conversation history.
 				updatedMessages := append([]domain.Message{}, req.Messages...)
 				updatedMessages = append(updatedMessages, domain.Message{Role: "assistant", Content: replyBuilder.String()})
 				if err := s.workingSvc.Refresh(context.Background(), updatedMessages); err != nil {
@@ -132,11 +132,19 @@ func buildTodoContext(todos []domain.Todo) string {
 }
 
 func injectSystemContext(messages []domain.Message, rolePrompt, combinedContext string) []domain.Message {
-	if rolePrompt != "" && len(messages) > 0 && messages[0].Role == "system" {
-		messages[0].Content = rolePrompt + "\n\n" + combinedContext
+	systemContext := joinContextBlocks(rolePrompt, combinedContext)
+	if systemContext == "" {
 		return messages
 	}
-	return append([]domain.Message{{Role: "system", Content: combinedContext}}, messages...)
+	if len(messages) > 0 && messages[0].Role == "system" {
+		if rolePrompt != "" && strings.Contains(messages[0].Content, rolePrompt) {
+			messages[0].Content = joinContextBlocks(messages[0].Content, combinedContext)
+			return messages
+		}
+		messages[0].Content = joinContextBlocks(systemContext, messages[0].Content)
+		return messages
+	}
+	return append([]domain.Message{{Role: "system", Content: systemContext}}, messages...)
 }
 
 func joinContextBlocks(blocks ...string) string {

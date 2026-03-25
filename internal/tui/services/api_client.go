@@ -125,7 +125,11 @@ func (c *localChatClient) Chat(ctx context.Context, messages []Message, model st
 	if err != nil {
 		return nil, err
 	}
-	chatSvc := service.NewChatService(c.memorySvc, c.workingSvc, c.todoSvc, c.roleSvc, chatProvider)
+	schemaPrompt, err := tools.GlobalSchemaPrompt()
+	if err != nil {
+		return nil, err
+	}
+	chatSvc := service.NewChatService(c.memorySvc, c.workingSvc, c.todoSvc, c.roleSvc, chatProvider, schemaPrompt)
 	return chatSvc.Send(ctx, &domain.ChatRequest{Messages: messages, Model: model})
 }
 

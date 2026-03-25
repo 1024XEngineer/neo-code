@@ -12,7 +12,7 @@ func (l *ListTool) Definition() ToolDefinition {
 	return ToolDefinition{
 		Name:        "list",
 		Description: "List directory contents in the workspace. One entry per line, subdirectories suffixed with '/'.",
-		Parameters:  []ToolParamSpec{{Name: "path", Type: "string", Description: "Directory within the workspace to list, defaults to workspace root."}},
+		Parameters:  []ToolParamSpec{{Name: "path", Type: "string", Description: "Directory within the workspace to list. Defaults to the workspace root.", DefaultValue: "."}},
 	}
 }
 

@@ -15,8 +15,8 @@ func (r *ReadTool) Definition() ToolDefinition {
 		Description: "Read a file or directory in the workspace. Supports offset/limit pagination for files, returns directory entries for directories.",
 		Parameters: []ToolParamSpec{
 			{Name: "filePath", Type: "string", Required: true, Description: "Path to the target file or directory in the workspace. Supports relative paths."},
-			{Name: "offset", Type: "integer", Description: "Starting line number for reading a file, 1-based, default 1."},
-			{Name: "limit", Type: "integer", Description: "Maximum number of lines to return for a file, default 2000."},
+			{Name: "offset", Type: "integer", Description: "Starting line number for reading a file, 1-based.", DefaultValue: 1},
+			{Name: "limit", Type: "integer", Description: "Maximum number of lines to return for a file.", DefaultValue: 2000},
 		},
 	}
 }

@@ -51,6 +51,7 @@ func main() {
 
 	todoRepo := repository.NewInMemoryTodoRepository()
 	todoSvc := service.NewTodoService(todoRepo)
+	tools.GlobalRegistry.Register(tools.NewTodoTool(todoSvc))
 
 	chatProvider, err := provider.NewChatProvider(cfg.AI.Model)
 	if err != nil {
@@ -58,7 +59,13 @@ func main() {
 		return
 	}
 
-	chatGateway := service.NewChatService(memorySvc, workingSvc, todoSvc, roleSvc, chatProvider)
+	schemaPrompt, err := tools.GlobalSchemaPrompt()
+	if err != nil {
+		fmt.Printf("生成工具 schema 上下文失败：%v\n", err)
+		return
+	}
+
+	chatGateway := service.NewChatService(memorySvc, workingSvc, todoSvc, roleSvc, chatProvider, schemaPrompt)
 	fmt.Printf("服务器已初始化并加载服务: %+v\n", chatGateway)
 	fmt.Println("注意：这是一个占位符。实际的服务器实现将在此处进行.")
 }

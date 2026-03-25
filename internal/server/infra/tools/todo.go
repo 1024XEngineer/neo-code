@@ -21,11 +21,11 @@ func (t *TodoTool) Definition() ToolDefinition {
 		Name:        "todo",
 		Description: "Manage an explicit todo list: add tasks, update status, list items, remove items, or clear the list.",
 		Parameters: []ToolParamSpec{
-			{Name: "action", Type: "string", Required: true, Description: "Action type: add, update, list, remove, clear."},
+			{Name: "action", Type: "string", Required: true, Description: "Action type.", Enum: []string{"add", "update", "list", "remove", "clear"}},
 			{Name: "content", Type: "string", Description: "Task content, used by add."},
-			{Name: "priority", Type: "string", Description: "Task priority: high, medium, low. Used by add, default is medium."},
+			{Name: "priority", Type: "string", Description: "Task priority used by add.", DefaultValue: "medium", Enum: []string{"high", "medium", "low"}},
 			{Name: "id", Type: "string", Description: "Task id, used by update and remove."},
-			{Name: "status", Type: "string", Description: "Task status: pending, in_progress, completed. Used by update."},
+			{Name: "status", Type: "string", Description: "Task status used by update.", Enum: []string{"pending", "in_progress", "completed"}},
 		},
 	}
 }

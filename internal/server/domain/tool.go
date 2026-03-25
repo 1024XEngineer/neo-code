@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-// ToolCall 表示工具调用请求。
+// ToolCall represents a tool invocation request.
 type ToolCall struct {
 	Tool   string                 `json:"tool"`
 	Params map[string]interface{} `json:"params"`
@@ -42,7 +42,7 @@ type Tool interface {
 	Run(params map[string]interface{}) *ToolResult
 }
 
-// ToolResult 表示执行工具的结果。
+// ToolResult represents the result of a tool execution.
 type ToolResult struct {
 	ToolName string                 `json:"tool"`
 	Success  bool                   `json:"success"`
@@ -51,19 +51,21 @@ type ToolResult struct {
 	Metadata map[string]interface{} `json:"metadata,omitempty"`
 }
 
-// ToolDefinition 描述工具的定义，包括名称、描述和参数规范。
+// ToolDefinition describes a tool and its parameter schema.
 type ToolDefinition struct {
 	Name        string          `json:"name"`
 	Description string          `json:"description"`
 	Parameters  []ToolParamSpec `json:"parameters"`
 }
 
-// ToolParamSpec 描述工具的单个参数规范。
+// ToolParamSpec describes a single tool parameter.
 type ToolParamSpec struct {
-	Name        string `json:"name"`        // 参数名称
-	Type        string `json:"type"`        // 参数类型（string, integer, boolean 等）
-	Required    bool   `json:"required"`    // 是否必需
-	Description string `json:"description"` // 参数描述
+	Name         string      `json:"name"`
+	Type         string      `json:"type"`
+	Required     bool        `json:"required"`
+	Description  string      `json:"description"`
+	DefaultValue interface{} `json:"default,omitempty"`
+	Enum         []string    `json:"enum,omitempty"`
 }
 
 func (tr *ToolResult) MarshalJSON() ([]byte, error) {

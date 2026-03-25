@@ -17,7 +17,7 @@ func (g *GrepTool) Definition() ToolDefinition {
 		Description: "Recursively search for file content in the workspace using regular expressions and return all matches with file, line number, and text.",
 		Parameters: []ToolParamSpec{
 			{Name: "pattern", Type: "string", Required: true, Description: "The regular expression to search for."},
-			{Name: "path", Type: "string", Description: "Search root directory within the workspace, defaults to workspace root."},
+			{Name: "path", Type: "string", Description: "Search root directory within the workspace. Defaults to the workspace root.", DefaultValue: "."},
 			{Name: "include", Type: "string", Description: "Optional filename glob filter, e.g., '*.go'."},
 		},
 	}

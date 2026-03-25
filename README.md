@@ -150,6 +150,12 @@ persona:
 - `history.resume_last_session`：启动时是否展示恢复摘要
 - `persona.file_path`：启动时加载的人设文件
 
+## Tool Schema 维护说明
+
+- `configs/persona.txt` 现在只负责行为约束和回复风格，不再维护任何具体工具参数说明。
+- 模型可见的工具参数、必填项、默认值和枚举约束，统一来源于 `internal/server/infra/tools/*.go` 中各工具的 `Definition()`。
+- 聊天服务会在运行时把渲染后的 tool schema 注入到 system context，因此更新 schema 定义后，模型上下文会自动同步。
+
 ## Memory 设计
 
 当前 memory 使用纯结构化规则召回，不使用 embedding 或向量相似度。系统会将长期结构化记忆写入 `memory.storage_path`，并在当前进程内维护 session memory。主要包括：
