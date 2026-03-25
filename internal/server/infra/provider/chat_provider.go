@@ -158,6 +158,7 @@ func (p *ChatCompletionProvider) Chat(ctx context.Context, messages []domain.Mes
 		for {
 			line, err := reader.ReadString('\n')
 			if err != nil {
+				emitStreamErrorMessage(ctx, out, streamReadError(err))
 				return
 			}
 			line = strings.TrimSpace(line)
@@ -174,6 +175,7 @@ func (p *ChatCompletionProvider) Chat(ctx context.Context, messages []domain.Mes
 
 			text, err := decodeStreamContent(data)
 			if err != nil {
+				emitStreamErrorMessage(ctx, out, err)
 				return
 			}
 			if text == "" {
@@ -188,6 +190,27 @@ func (p *ChatCompletionProvider) Chat(ctx context.Context, messages []domain.Mes
 	}()
 
 	return out, nil
+}
+
+func emitStreamErrorMessage(ctx context.Context, out chan<- string, err error) {
+	if err == nil {
+		return
+	}
+	msg := fmt.Sprintf("\n[STREAM_ERROR] %v", err)
+	select {
+	case <-ctx.Done():
+	case out <- msg:
+	}
+}
+
+func streamReadError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, io.EOF) {
+		return fmt.Errorf("chat stream ended unexpectedly before completion")
+	}
+	return fmt.Errorf("chat stream read failed: %w", err)
 }
 
 func decodeStreamContent(data string) (string, error) {
