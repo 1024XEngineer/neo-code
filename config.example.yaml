@@ -29,7 +29,7 @@ history:
   resume_last_session: true
 
 persona:
-  file_path: "./configs/persona.txt"
+  file_path: "./configs/prompt.md"
 
 # Notes:
 # - Switching provider with /provider <name> resets ai.model to that provider's default model.

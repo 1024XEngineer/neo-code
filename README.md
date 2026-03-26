@@ -132,7 +132,7 @@ history:
   resume_last_session: true
 
 persona:
-  file_path: "./persona.txt"
+  file_path: "./configs/prompt.md"
 ```
 
 说明：
@@ -148,11 +148,11 @@ persona:
 - `history.persist_session_state`：是否按 workspace 持久化当前工作现场
 - `history.workspace_state_dir`：workspace 会话状态文件保存目录
 - `history.resume_last_session`：启动时是否展示恢复摘要
-- `persona.file_path`：启动时加载的人设文件
+- `persona.file_path`：启动时加载的系统提示词文件（默认 `configs/prompt.md`）
 
 ## Tool Schema 维护说明
 
-- `configs/persona.txt` 现在只负责行为约束和回复风格，不再维护任何具体工具参数说明。
+- `configs/prompt.md` 保存系统提示词，不建议直接修改；工具参数以 schema 为唯一来源。
 - 模型可见的工具参数、必填项、默认值和枚举约束，统一来源于 `internal/server/infra/tools/*.go` 中各工具的 `Definition()`。
 - 聊天服务会在运行时把渲染后的 tool schema 作为 `tools` 参数传给模型，更新 schema 定义后会自动同步到工具调用协议。
 
@@ -200,7 +200,7 @@ go run ./cmd/server
 - `config.example.yaml`：配置模板
 - `data/memory_rules.json`：长期结构化记忆文件
 - `data/workspaces/<workspace-hash>/session_state.json`：按工作区保存的当前工作现场
-- `persona.txt`：人设内容
+- `prompt.md`：系统提示词
 
 ## 安全与本地文件
 
