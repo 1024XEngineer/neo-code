@@ -7,31 +7,16 @@ import (
 )
 
 const (
-	DefaultPersonaFilePath = "./configs/persona.txt"
-	legacyPersonaFilePath  = "./persona.txt"
+	DefaultPromptFilePath = "./configs/prompt.md"
 )
 
 func ResolvePersonaFilePath(path string) string {
 	trimmed := strings.TrimSpace(path)
 	if trimmed == "" {
-		return ""
+		return DefaultPromptFilePath
 	}
 
-	candidates := []string{trimmed}
-	if trimmed == legacyPersonaFilePath || trimmed == "persona.txt" {
-		candidates = append(candidates, DefaultPersonaFilePath, "configs/persona.txt")
-	}
-
-	for _, candidate := range candidates {
-		if candidate == "" {
-			continue
-		}
-		if _, err := os.Stat(candidate); err == nil {
-			return candidate
-		}
-	}
-
-	return trimmed
+	return DefaultPromptFilePath
 }
 
 func LoadPersonaPrompt(path string) (string, string, error) {
@@ -42,7 +27,7 @@ func LoadPersonaPrompt(path string) (string, string, error) {
 
 	data, err := os.ReadFile(resolvedPath)
 	if err != nil {
-		return "", resolvedPath, fmt.Errorf("read persona file %q: %w", resolvedPath, err)
+		return "", resolvedPath, fmt.Errorf("read prompt file %q: %w", resolvedPath, err)
 	}
 
 	return strings.TrimSpace(string(data)), resolvedPath, nil

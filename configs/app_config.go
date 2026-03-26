@@ -68,7 +68,7 @@ func DefaultAppConfig() *AppConfiguration {
 	cfg.History.PersistSessionState = true
 	cfg.History.WorkspaceStateDir = "./data/workspaces"
 	cfg.History.ResumeLastSession = true
-	cfg.Persona.FilePath = DefaultPersonaFilePath
+	cfg.Persona.FilePath = DefaultPromptFilePath
 	return cfg
 }
 

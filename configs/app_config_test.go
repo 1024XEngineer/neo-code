@@ -106,7 +106,7 @@ history:
   workspace_state_dir: "./data/workspaces"
   resume_last_session: true
 persona:
-  file_path: "./configs/persona.txt"
+  file_path: "./configs/prompt.md"
 `)
 	if err := os.WriteFile(path, content, 0o644); err != nil {
 		t.Fatalf("write config: %v", err)
@@ -201,14 +201,14 @@ func validConfig() *AppConfiguration {
 	cfg.History.PersistSessionState = true
 	cfg.History.WorkspaceStateDir = "./data/workspaces"
 	cfg.History.ResumeLastSession = true
-	cfg.Persona.FilePath = DefaultPersonaFilePath
+	cfg.Persona.FilePath = DefaultPromptFilePath
 	return cfg
 }
 
 func TestDefaultAppConfigUsesCheckedInPersonaPath(t *testing.T) {
 	cfg := DefaultAppConfig()
-	if cfg.Persona.FilePath != DefaultPersonaFilePath {
-		t.Fatalf("expected default persona path %q, got %q", DefaultPersonaFilePath, cfg.Persona.FilePath)
+	if cfg.Persona.FilePath != DefaultPromptFilePath {
+		t.Fatalf("expected default prompt path %q, got %q", DefaultPromptFilePath, cfg.Persona.FilePath)
 	}
 }
 
@@ -222,8 +222,8 @@ func TestResolvePersonaFilePathFallsBackToCheckedInFile(t *testing.T) {
 	if err := os.MkdirAll(configsDir, 0o755); err != nil {
 		t.Fatalf("mkdir configs: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(configsDir, "persona.txt"), []byte("persona"), 0o644); err != nil {
-		t.Fatalf("write persona: %v", err)
+	if err := os.WriteFile(filepath.Join(configsDir, "prompt.md"), []byte("persona"), 0o644); err != nil {
+		t.Fatalf("write prompt: %v", err)
 	}
 	if err := os.Chdir(tmpDir); err != nil {
 		t.Fatalf("chdir temp dir: %v", err)
@@ -233,8 +233,8 @@ func TestResolvePersonaFilePathFallsBackToCheckedInFile(t *testing.T) {
 	}()
 
 	resolved := ResolvePersonaFilePath("./persona.txt")
-	if resolved != DefaultPersonaFilePath {
-		t.Fatalf("expected legacy persona path to resolve to %q, got %q", DefaultPersonaFilePath, resolved)
+	if resolved != DefaultPromptFilePath {
+		t.Fatalf("expected legacy persona path to resolve to %q, got %q", DefaultPromptFilePath, resolved)
 	}
 	if _, err := os.Stat(resolved); err != nil {
 		t.Fatalf("expected resolved persona file to exist: %v", err)
