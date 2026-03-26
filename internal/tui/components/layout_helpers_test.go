@@ -9,30 +9,59 @@ import (
 )
 
 func TestRenderHelpContainsKeyCommands(t *testing.T) {
-	rendered := RenderHelp(80)
+	rendered := RenderHelp(80, "/help toggle help\n/provider <name> switch provider")
 
-	for _, want := range []string{"NeoCode Help", "/help", "/provider <name>", "Press Esc or /help to close"} {
+	for _, want := range []string{"NeoCode Help", "/help", "/provider <name>", "Use /help, Esc, or q to close this panel."} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("expected help to contain %q, got %q", want, rendered)
 		}
 	}
 }
 
-func TestInputBoxRenderChangesFooterByGeneratingState(t *testing.T) {
-	idle := InputBox{Body: "body", Generating: false}.Render()
-	if !strings.Contains(idle, "Ctrl+V: paste") {
-		t.Fatalf("expected idle footer to mention paste, got %q", idle)
+func TestInputBoxRenderShowsBodyAndStatusOnlyByDefault(t *testing.T) {
+	rendered := InputBox{Body: "body", Status: "Thinking..."}.Render()
+	if !strings.Contains(rendered, "body") {
+		t.Fatalf("expected body content, got %q", rendered)
 	}
-	if !strings.Contains(idle, "click [Copy]: copy") {
-		t.Fatalf("expected idle footer to mention copy action, got %q", idle)
+	if !strings.Contains(rendered, "Thinking...") {
+		t.Fatalf("expected status line, got %q", rendered)
 	}
+	if strings.Contains(rendered, "Ctrl+V: paste") {
+		t.Fatalf("expected footer shortcuts to be omitted by default, got %q", rendered)
+	}
+}
 
-	busy := InputBox{Body: "body", Generating: true}.Render()
-	if strings.Contains(busy, "Ctrl+V: paste") {
-		t.Fatalf("expected generating footer to omit paste hint, got %q", busy)
+func TestInputBoxRenderIncludesConsoleMetadataWhenProvided(t *testing.T) {
+	rendered := InputBox{
+		ModeLabel: "COMMAND",
+		MetaText:  "1 line(s) | 12 chars",
+		Body:      "body",
+		Status:    "Ready",
+		NoteText:  "Open the command and key reference.",
+		Width:     40,
+	}.Render()
+	for _, want := range []string{"COMMAND", "1 line(s) | 12 chars", "Open the command and key reference."} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("expected console metadata to contain %q, got %q", want, rendered)
+		}
 	}
-	if !strings.Contains(busy, "F5/F8: send") {
-		t.Fatalf("expected busy footer to keep send hint, got %q", busy)
+}
+
+func TestInputBoxRenderKeepsMetadataSingleLineAndTrimsTrailingBodyNewlines(t *testing.T) {
+	rendered := ansi.Strip(InputBox{
+		Body:      "body\n\n",
+		ModeLabel: "COMMAND",
+		MetaText:  strings.Repeat("meta", 12),
+		Status:    strings.Repeat("status", 12),
+		NoteText:  strings.Repeat("note", 16),
+		Width:     24,
+	}.Render())
+
+	if strings.Contains(rendered, "body\n\n\n") {
+		t.Fatalf("expected trailing body newlines to be trimmed, got %q", rendered)
+	}
+	if strings.Count(rendered, "\n") != 3 {
+		t.Fatalf("expected body plus three metadata lines, got %q", rendered)
 	}
 }
 
@@ -80,6 +109,20 @@ func TestMessageListRenderLayoutIncludesCopyRegions(t *testing.T) {
 	}
 }
 
+func TestMessageListRenderLayoutTrimsTrailingBlankLines(t *testing.T) {
+	layout := MessageList{
+		Width: 60,
+		Messages: []Message{
+			{Role: "user", Content: "hello", Timestamp: time.Unix(1, 0)},
+			{Role: "assistant", Content: "world", Timestamp: time.Unix(2, 0)},
+		},
+	}.RenderLayout()
+
+	if strings.HasSuffix(layout.Content, "\n") {
+		t.Fatalf("expected rendered layout to avoid trailing blank lines, got %q", layout.Content)
+	}
+}
+
 func TestMessageListRenderWrapsLongWords(t *testing.T) {
 	rendered := ansi.Strip(MessageList{
 		Width: 20,
@@ -93,5 +136,40 @@ func TestMessageListRenderWrapsLongWords(t *testing.T) {
 	}
 	if !strings.Contains(rendered, strings.Repeat("a", 16)+"\n"+strings.Repeat("a", 9)) {
 		t.Fatalf("expected wrapped output, got %q", rendered)
+	}
+}
+
+func TestRenderPanelKeepsHeaderSingleLineWhenHintIsLong(t *testing.T) {
+	rendered := ansi.Strip(RenderPanel(
+		"Context",
+		"runtime snapshot | scroll 100% | this should stay on one line",
+		"body",
+		40,
+		8,
+		false,
+		"#61AFEF",
+	))
+
+	if !strings.Contains(rendered, "Context") {
+		t.Fatalf("expected panel title, got %q", rendered)
+	}
+	if strings.Contains(rendered, "Context\n") {
+		t.Fatalf("expected header to stay on one line, got %q", rendered)
+	}
+}
+
+func TestStatusBarRenderStaysSingleLineInNarrowWidth(t *testing.T) {
+	rendered := ansi.Strip(StatusBar{
+		Mode:      "chat",
+		Focus:     "conversation",
+		Model:     "very-long-model-name-for-testing",
+		MemoryCnt: 42,
+		Status:    "Thinking about a very long status message that should be clipped",
+		Busy:      true,
+		Width:     48,
+	}.Render())
+
+	if strings.Contains(rendered, "\n") {
+		t.Fatalf("expected status bar to remain single-line, got %q", rendered)
 	}
 }

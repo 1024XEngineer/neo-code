@@ -42,18 +42,17 @@ func TestNewModelUsesEmptyStatsWhenClientReturnsNil(t *testing.T) {
 	}
 }
 
-func TestAppendAndFinishLastMessage(t *testing.T) {
+func TestAppendLastMessage(t *testing.T) {
 	m := Model{}
 	m.chat.Messages = []state.Message{{Role: "assistant", Content: "hello", Streaming: true}}
 
 	m.AppendLastMessage(" world")
-	m.FinishLastMessage()
 
 	if m.chat.Messages[0].Content != "hello world" {
 		t.Fatalf("expected appended content, got %q", m.chat.Messages[0].Content)
 	}
-	if m.chat.Messages[0].Streaming {
-		t.Fatal("expected last message streaming to be cleared")
+	if !m.chat.Messages[0].Streaming {
+		t.Fatal("expected append helper to leave streaming state untouched")
 	}
 }
 

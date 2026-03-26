@@ -7,16 +7,12 @@ import (
 	"time"
 
 	"go-llm-demo/configs"
-	"go-llm-demo/internal/tui/components"
 	"go-llm-demo/internal/tui/services"
 	"go-llm-demo/internal/tui/state"
 
 	"github.com/atotto/clipboard"
-	"github.com/charmbracelet/bubbles/cursor"
-	"github.com/charmbracelet/bubbles/textarea"
-	"github.com/charmbracelet/bubbles/viewport"
+	"github.com/charmbracelet/bubbles/help"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 )
 
 type Model struct {
@@ -27,24 +23,23 @@ type Model struct {
 	persona string
 
 	streamChan      <-chan string
-	textarea        textarea.Model
-	viewport        viewport.Model
-	chatLayout      components.RenderedChatLayout
+	textarea        composerModel
+	viewport        chatPaneModel
+	context         contextPaneModel
+	help            help.Model
+	status          statusModel
+	todo            todoPanelModel
+	layout          layoutState
 	copyToClipboard func(string) error
 	thinkingInBlock bool
 	thinkingCarry   string
 
 	mu *sync.Mutex
-
-	// Todo 相关状态
-	todos      []services.Todo
-	todoCursor int
 }
 
 const resumeSummaryPrefix = "[RESUME_SUMMARY]"
 
-// NewModel 创建 TUI 状态模型。
-// historyTurns 用于限制发送给后端的短期对话轮数，避免原始消息无限增长。
+// NewModel constructs the top-level Bubble Tea model for the TUI.
 func NewModel(client services.ChatClient, persona string, historyTurns int, configPath, workspaceRoot string) Model {
 	stats, _ := client.GetMemoryStats(context.Background())
 	if stats == nil {
@@ -54,32 +49,10 @@ func NewModel(client services.ChatClient, persona string, historyTurns int, conf
 		historyTurns = 6
 	}
 
-	input := textarea.New()
-	focusedStyle, blurredStyle := textarea.DefaultStyles()
-	focusedStyle.Prompt = lipgloss.NewStyle().Foreground(lipgloss.Color("#61AFEF"))
-	blurredStyle.Prompt = lipgloss.NewStyle().Foreground(lipgloss.Color("#5C6370"))
-	focusedStyle.Text = lipgloss.NewStyle().Foreground(lipgloss.Color("#E6EAF2"))
-	blurredStyle.Text = lipgloss.NewStyle().Foreground(lipgloss.Color("#AAB2C0"))
-	input.FocusedStyle = focusedStyle
-	input.BlurredStyle = blurredStyle
-	input.Placeholder = "Type a message..."
-	input.Focus()
-	input.ShowLineNumbers = false
-	input.SetHeight(3)
-	input.Prompt = "> "
-	input.CharLimit = 0
-	input.KeyMap.InsertNewline.SetEnabled(true)
-	input.Cursor.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("#61AFEF"))
-	input.Cursor.TextStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#E6EAF2"))
-	_ = input.Cursor.SetMode(cursor.CursorBlink)
-
-	vp := viewport.New(0, 0)
-	vp.SetContent("")
-
 	model := Model{
 		ui: state.UIState{
 			Mode:       state.ModeChat,
-			Focused:    "input",
+			Focused:    "composer",
 			AutoScroll: true,
 		},
 		chat: state.ChatState{
@@ -95,8 +68,12 @@ func NewModel(client services.ChatClient, persona string, historyTurns int, conf
 		},
 		client:          client,
 		persona:         persona,
-		textarea:        input,
-		viewport:        vp,
+		textarea:        newComposerModel(),
+		viewport:        newChatPaneModel(),
+		context:         newContextPaneModel(),
+		help:            help.New(),
+		status:          newStatusModel(),
+		todo:            newTodoPanelModel(client),
 		copyToClipboard: clipboard.WriteAll,
 		mu:              &sync.Mutex{},
 	}
@@ -117,30 +94,6 @@ func (m *Model) mutex() *sync.Mutex {
 		m.mu = &sync.Mutex{}
 	}
 	return m.mu
-}
-
-func (m Model) statusText() string {
-	if strings.TrimSpace(m.ui.CopyStatus) != "" {
-		return m.ui.CopyStatus
-	}
-	if m.chat.ToolExecuting {
-		return "Executing tool..."
-	}
-	if m.chat.PendingApproval != nil {
-		return "Approval required"
-	}
-	if m.chat.Generating {
-		return "Thinking..."
-	}
-	if strings.TrimSpace(m.ui.StatusText) != "" {
-		return m.ui.StatusText
-	}
-	return "Ready"
-}
-
-func (m *Model) clearNotices() {
-	m.ui.CopyStatus = ""
-	m.ui.StatusText = ""
 }
 
 func (m *Model) resetThinkingFilter() {
@@ -206,22 +159,22 @@ func partialTagSuffix(content string, tag string) int {
 	return 0
 }
 
-// Init 返回 Bubble Tea 的初始命令。
+// Init returns the initial Bubble Tea command.
 func (m Model) Init() tea.Cmd {
 	return m.textarea.Focus()
 }
 
-// SetWidth 更新当前视口宽度。
+// SetWidth stores the current viewport width.
 func (m *Model) SetWidth(w int) {
 	m.ui.Width = w
 }
 
-// SetHeight 更新当前视口高度。
+// SetHeight stores the current viewport height.
 func (m *Model) SetHeight(h int) {
 	m.ui.Height = h
 }
 
-// AddMessage 向聊天历史追加一条带时间戳的消息。
+// AddMessage appends a timestamped message to the chat history.
 func (m *Model) AddMessage(role, content string) {
 	mu := m.mutex()
 	mu.Lock()
@@ -233,7 +186,7 @@ func (m *Model) AddMessage(role, content string) {
 	})
 }
 
-// AppendLastMessage 将流式内容追加到最后一条消息中。
+// AppendLastMessage appends streamed text onto the last message.
 func (m *Model) AppendLastMessage(content string) {
 	mu := m.mutex()
 	mu.Lock()
@@ -243,7 +196,7 @@ func (m *Model) AppendLastMessage(content string) {
 	}
 }
 
-// FinishLastMessage 将最后一条消息标记为结束流式输出。
+// FinishLastMessage marks the last message as no longer streaming.
 func (m *Model) FinishLastMessage() {
 	mu := m.mutex()
 	mu.Lock()
@@ -253,7 +206,7 @@ func (m *Model) FinishLastMessage() {
 	}
 }
 
-// TrimHistory 在保留系统消息的同时裁剪最近的非系统对话轮次。
+// TrimHistory keeps system messages and the latest non-system turns.
 func (m *Model) TrimHistory(maxTurns int) {
 	mu := m.mutex()
 	mu.Lock()

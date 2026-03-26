@@ -41,22 +41,6 @@ type ExitMsg struct{}
 
 func (ExitMsg) isMsg() {}
 
-type ShowHelpMsg struct{}
-
-func (ShowHelpMsg) isMsg() {}
-
-type HideHelpMsg struct{}
-
-func (HideHelpMsg) isMsg() {}
-
 type RefreshMemoryMsg struct{}
 
 func (RefreshMemoryMsg) isMsg() {}
-
-type RefreshTodosMsg struct{}
-
-func (RefreshTodosMsg) isMsg() {}
-
-type TodoUpdatedMsg struct{}
-
-func (TodoUpdatedMsg) isMsg() {}

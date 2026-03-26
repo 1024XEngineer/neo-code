@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"go-llm-demo/configs"
+	"go-llm-demo/internal/tui/components"
 	"go-llm-demo/internal/tui/services"
 	"go-llm-demo/internal/tui/state"
 
@@ -115,6 +116,37 @@ func newTestModel(t *testing.T, client *fakeChatClient) *Model {
 	return &m
 }
 
+func flattenCmdMessages(t *testing.T, cmd tea.Cmd) []tea.Msg {
+	t.Helper()
+	if cmd == nil {
+		return nil
+	}
+
+	msg := cmd()
+	switch typed := msg.(type) {
+	case tea.BatchMsg:
+		msgs := make([]tea.Msg, 0, len(typed))
+		for _, nested := range typed {
+			msgs = append(msgs, flattenCmdMessages(t, nested)...)
+		}
+		return msgs
+	default:
+		return []tea.Msg{msg}
+	}
+}
+
+func firstMessageOfType[T any](t *testing.T, msgs []tea.Msg) T {
+	t.Helper()
+	var zero T
+	for _, msg := range msgs {
+		if typed, ok := msg.(T); ok {
+			return typed
+		}
+	}
+	t.Fatalf("expected message of type %T, got %#v", zero, msgs)
+	return zero
+}
+
 func restoreCoreGlobals(t *testing.T) {
 	t.Helper()
 
@@ -187,7 +219,7 @@ func TestHandleSubmitFromHelpModeSendsInput(t *testing.T) {
 	}
 }
 
-func TestHandleSubmitHelpCommandClosesHelpAndRestoresViewportHeight(t *testing.T) {
+func TestHandleSubmitHelpCommandClosesHelpAndKeepsWorkbenchLayout(t *testing.T) {
 	client := &fakeChatClient{}
 	m := newTestModel(t, client)
 	m.ui.Height = 30
@@ -205,8 +237,28 @@ func TestHandleSubmitHelpCommandClosesHelpAndRestoresViewportHeight(t *testing.T
 	if got.ui.Mode != state.ModeChat {
 		t.Fatalf("expected chat mode, got %v", got.ui.Mode)
 	}
-	if got.viewport.Height <= helpHeight {
-		t.Fatalf("expected viewport height to grow after closing help, got help=%d chat=%d", helpHeight, got.viewport.Height)
+	if got.viewport.Height != helpHeight {
+		t.Fatalf("expected workbench layout to preserve viewport height, got help=%d chat=%d", helpHeight, got.viewport.Height)
+	}
+}
+
+func TestHandleKeyFromHelpModeCanFocusComposerAndType(t *testing.T) {
+	client := &fakeChatClient{}
+	m := newTestModel(t, client)
+	m.ui.Mode = state.ModeHelp
+	_ = m.setFocus("help")
+
+	updated, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
+	got := updated.(Model)
+
+	if got.ui.Focused != "composer" {
+		t.Fatalf("expected focus to move to composer, got %q", got.ui.Focused)
+	}
+	if got.textarea.Value() != "a" {
+		t.Fatalf("expected help mode typing to reach composer, got %q", got.textarea.Value())
+	}
+	if cmd == nil {
+		t.Fatal("expected textarea update command when typing from help mode")
 	}
 }
 
@@ -261,17 +313,14 @@ func TestHandleSubmitStartsStreamingConversation(t *testing.T) {
 		t.Fatalf("expected command history to record input, got %+v", got.chat.CommandHistory)
 	}
 
-	msg := cmd()
-	ready, ok := msg.(StreamReadyMsg)
-	if !ok {
-		t.Fatalf("expected StreamReadyMsg, got %T", msg)
-	}
+	msgs := flattenCmdMessages(t, cmd)
+	ready := firstMessageOfType[StreamReadyMsg](t, msgs)
 	updated, nextCmd := got.Update(ready)
 	got = updated.(Model)
 	if nextCmd == nil {
 		t.Fatal("expected follow-up chunk command")
 	}
-	msg = nextCmd()
+	msg := nextCmd()
 	chunk, ok := msg.(StreamChunkMsg)
 	if !ok {
 		t.Fatalf("expected StreamChunkMsg, got %T", msg)
@@ -281,6 +330,129 @@ func TestHandleSubmitStartsStreamingConversation(t *testing.T) {
 	}
 	if len(client.lastMessages) != 1 || client.lastMessages[0].Role != "user" || client.lastMessages[0].Content != "hello" {
 		t.Fatalf("expected streamed context to contain only the user message, got %+v", client.lastMessages)
+	}
+}
+
+func TestHandleKeyEnterSubmitsInput(t *testing.T) {
+	client := &fakeChatClient{chatChunks: []string{"hello back"}}
+	m := newTestModel(t, client)
+	m.chat.APIKeyReady = true
+	m.textarea.SetValue("hello")
+
+	updated, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
+	got := updated.(Model)
+
+	if cmd == nil {
+		t.Fatal("expected submit command from enter key")
+	}
+	if !got.chat.Generating {
+		t.Fatal("expected enter to start generation")
+	}
+	if len(got.chat.Messages) != 2 {
+		t.Fatalf("expected submitted messages, got %d", len(got.chat.Messages))
+	}
+	if got.chat.Messages[0].Content != "hello" {
+		t.Fatalf("expected entered text to be submitted, got %+v", got.chat.Messages[0])
+	}
+}
+
+func TestHandleKeyAltEnterInsertsNewline(t *testing.T) {
+	client := &fakeChatClient{}
+	m := newTestModel(t, client)
+	m.textarea.SetValue("hello")
+	m.textarea.CursorEnd()
+
+	updated, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyEnter, Alt: true})
+	got := updated.(Model)
+
+	if got.chat.Generating {
+		t.Fatal("expected alt+enter not to submit")
+	}
+	if got.textarea.Value() != "hello\n" {
+		t.Fatalf("expected alt+enter to insert newline, got %q", got.textarea.Value())
+	}
+	if cmd == nil {
+		t.Fatal("expected textarea to return its follow-up command")
+	}
+}
+
+func TestHandleKeyTabCyclesWorkbenchFocus(t *testing.T) {
+	client := &fakeChatClient{}
+	m := newTestModel(t, client)
+
+	updated, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyTab})
+	got := updated.(Model)
+	if got.ui.Focused != "conversation" {
+		t.Fatalf("expected focus to move to conversation, got %q", got.ui.Focused)
+	}
+	if cmd != nil {
+		t.Fatal("expected no focus command when blurring composer")
+	}
+
+	updated, _ = got.handleKey(tea.KeyMsg{Type: tea.KeyTab})
+	got = updated.(Model)
+	if got.ui.Focused != "context" {
+		t.Fatalf("expected focus to move to context, got %q", got.ui.Focused)
+	}
+
+	updated, cmd = got.handleKey(tea.KeyMsg{Type: tea.KeyTab})
+	got = updated.(Model)
+	if got.ui.Focused != "composer" {
+		t.Fatalf("expected focus to wrap back to composer, got %q", got.ui.Focused)
+	}
+	if cmd == nil {
+		t.Fatal("expected focus command when returning to composer")
+	}
+}
+
+func TestHandleKeyShiftTabCyclesFocusBackward(t *testing.T) {
+	client := &fakeChatClient{}
+	m := newTestModel(t, client)
+
+	updated, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyShiftTab})
+	got := updated.(Model)
+	if got.ui.Focused != "context" {
+		t.Fatalf("expected reverse focus to land on context, got %q", got.ui.Focused)
+	}
+	if cmd != nil {
+		t.Fatal("expected no focus command when blurring composer")
+	}
+}
+
+func TestHandleKeyPgDownScrollsContextViewportWhenFocused(t *testing.T) {
+	client := &fakeChatClient{}
+	m := newTestModel(t, client)
+	m.ui.Width = 80
+	m.ui.Height = 24
+	m.chat.WorkspaceRoot = "D:/workspace/project/with/a/very/long/path/that/forces/the/context/panel/to/wrap/and/overflow"
+	m.chat.PendingApproval = &state.PendingApproval{
+		Call:   services.ToolCall{Tool: "Bash"},
+		Target: "git status --short --branch --ahead-behind --verbose output that is intentionally very long",
+	}
+	m.chat.Messages = []state.Message{
+		{Role: "user", Content: "please inspect the current branch and compare every file in the workspace for the upcoming release cut"},
+		{Role: "assistant", Content: "I am reviewing the worktree and collecting a runtime snapshot before making edits."},
+		{Role: "system", Content: formatToolStatusMessage("Edit", map[string]interface{}{"filePath": "internal/tui/core/update.go"})},
+		{Role: "system", Content: toolContextPrefix + "\n" + "tool=Edit\n" + "success=true\n" + "output:\n" + strings.Repeat("wrapped output line ", 12)},
+	}
+	m.todo.setTodos([]services.Todo{
+		{ID: "1", Content: "Refine focus handling for workbench panes", Status: services.TodoInProgress},
+		{ID: "2", Content: "Add context viewport scrolling coverage", Status: services.TodoPending},
+		{ID: "3", Content: "Polish footer help metadata", Status: services.TodoPending},
+		{ID: "4", Content: "Ship final verification run", Status: services.TodoCompleted},
+	})
+	m.syncLayout()
+	m.refreshViewport()
+	_ = m.setFocus("context")
+
+	if m.context.YOffset != 0 {
+		t.Fatalf("expected context to start at top, got %d", m.context.YOffset)
+	}
+
+	updated, _ := m.handleKey(tea.KeyMsg{Type: tea.KeyPgDown})
+	got := updated.(Model)
+	if got.context.YOffset == 0 {
+		t.Fatalf("expected context viewport to scroll, got offset %d", got.context.YOffset)
 	}
 }
 
@@ -746,6 +918,24 @@ func TestHandleCommandClearContextFailure(t *testing.T) {
 	assertLastMessageContains(t, got, "clear session failed")
 }
 
+func TestHandleCommandClearAliasClearsSessionContext(t *testing.T) {
+	client := &fakeChatClient{memoryStats: &services.MemoryStats{TotalItems: 3}}
+	m := newTestModel(t, client)
+	m.chat.APIKeyReady = true
+	m.chat.Messages = []state.Message{
+		{Role: "user", Content: "hello"},
+		{Role: "assistant", Content: "world"},
+	}
+
+	updated, _ := m.handleCommand("/clear")
+	got := updated.(Model)
+
+	assertLastMessageContains(t, got, "Cleared the current session context")
+	if len(got.chat.Messages) != 1 {
+		t.Fatalf("expected only the confirmation message to remain, got %d messages", len(got.chat.Messages))
+	}
+}
+
 func TestHandleCommandRunReturnsBatchCommand(t *testing.T) {
 	client := &fakeChatClient{}
 	m := newTestModel(t, client)
@@ -791,17 +981,14 @@ func TestHandleCommandExplainStartsStreaming(t *testing.T) {
 	if !strings.Contains(got.chat.Messages[0].Content, "package main") {
 		t.Fatalf("expected explain prompt to include code, got %q", got.chat.Messages[0].Content)
 	}
-	msg := cmd()
-	ready, ok := msg.(StreamReadyMsg)
-	if !ok {
-		t.Fatalf("expected StreamReadyMsg, got %#v", msg)
-	}
+	msgs := flattenCmdMessages(t, cmd)
+	ready := firstMessageOfType[StreamReadyMsg](t, msgs)
 	updated, nextCmd := got.Update(ready)
 	got = updated.(Model)
 	if nextCmd == nil {
 		t.Fatal("expected explain chunk command")
 	}
-	msg = nextCmd()
+	msg := nextCmd()
 	if chunk, ok := msg.(StreamChunkMsg); !ok || chunk.Content != "explained" {
 		t.Fatalf("expected explain stream chunk, got %#v", msg)
 	}
@@ -889,6 +1076,9 @@ func TestMouseMsgUpdatesViewport(t *testing.T) {
 func TestMouseClickCopiesCodeBlock(t *testing.T) {
 	client := &fakeChatClient{}
 	m := newTestModel(t, client)
+	m.ui.Width = 140
+	m.ui.Height = 36
+	m.syncLayout()
 	m.chat.Messages = []state.Message{{Role: "assistant", Content: "```go\nfmt.Println(1)\n```"}}
 	m.refreshViewport()
 
@@ -898,7 +1088,11 @@ func TestMouseClickCopiesCodeBlock(t *testing.T) {
 		return nil
 	}
 
-	updated, cmd := m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: 1, Y: 2})
+	region := m.viewport.layout.Regions[0]
+	clickX := components.PanelHorizontalFrameSize()/2 + region.StartCol - 1
+	clickY := components.PanelVerticalFrameSize()/2 + 1 + region.StartRow
+
+	updated, cmd := m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: clickX, Y: clickY})
 	got := updated.(Model)
 
 	if cmd != nil {
@@ -915,6 +1109,9 @@ func TestMouseClickCopiesCodeBlock(t *testing.T) {
 func TestMouseClickCopyFailureShowsEnglishStatus(t *testing.T) {
 	client := &fakeChatClient{}
 	m := newTestModel(t, client)
+	m.ui.Width = 140
+	m.ui.Height = 36
+	m.syncLayout()
 	m.chat.Messages = []state.Message{{Role: "assistant", Content: "```go\nfmt.Println(1)\n```"}}
 	m.refreshViewport()
 
@@ -922,7 +1119,11 @@ func TestMouseClickCopyFailureShowsEnglishStatus(t *testing.T) {
 		return errors.New("clipboard unavailable")
 	}
 
-	updated, cmd := m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: 1, Y: 2})
+	region := m.viewport.layout.Regions[0]
+	clickX := components.PanelHorizontalFrameSize()/2 + region.StartCol - 1
+	clickY := components.PanelVerticalFrameSize()/2 + 1 + region.StartRow
+
+	updated, cmd := m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: clickX, Y: clickY})
 	got := updated.(Model)
 
 	if cmd != nil {
@@ -936,6 +1137,9 @@ func TestMouseClickCopyFailureShowsEnglishStatus(t *testing.T) {
 func TestMouseClickOutsideCopyRegionDoesNotCopy(t *testing.T) {
 	client := &fakeChatClient{}
 	m := newTestModel(t, client)
+	m.ui.Width = 140
+	m.ui.Height = 36
+	m.syncLayout()
 	m.chat.Messages = []state.Message{{Role: "assistant", Content: "```go\nfmt.Println(1)\n```"}}
 	m.refreshViewport()
 
@@ -945,7 +1149,10 @@ func TestMouseClickOutsideCopyRegionDoesNotCopy(t *testing.T) {
 		return nil
 	}
 
-	updated, _ := m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: 20, Y: 2})
+	region := m.viewport.layout.Regions[0]
+	clickY := components.PanelVerticalFrameSize()/2 + 1 + region.StartRow
+
+	updated, _ := m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: 20, Y: clickY})
 	got := updated.(Model)
 
 	if called {
@@ -1022,24 +1229,12 @@ func TestStreamDoneMsgDoesNotReexecuteWhenToolAlreadyExecuting(t *testing.T) {
 	}
 }
 
-func TestShowHideHelpRefreshMemoryAndExitMsgs(t *testing.T) {
+func TestRefreshMemoryAndExitMsgs(t *testing.T) {
 	client := &fakeChatClient{memoryStats: &services.MemoryStats{TotalItems: 7}}
 	m := newTestModel(t, client)
 
-	updated, _ := m.Update(ShowHelpMsg{})
+	updated, _ := m.Update(RefreshMemoryMsg{})
 	got := updated.(Model)
-	if got.ui.Mode != state.ModeHelp {
-		t.Fatalf("expected help mode, got %v", got.ui.Mode)
-	}
-
-	updated, _ = got.Update(HideHelpMsg{})
-	got = updated.(Model)
-	if got.ui.Mode != state.ModeChat {
-		t.Fatalf("expected chat mode, got %v", got.ui.Mode)
-	}
-
-	updated, _ = got.Update(RefreshMemoryMsg{})
-	got = updated.(Model)
 	if got.chat.MemoryStats.TotalItems != 7 {
 		t.Fatalf("expected refreshed stats, got %+v", got.chat.MemoryStats)
 	}
@@ -1150,17 +1345,14 @@ func TestToolResultMsgAddsContextAndRestartsStreaming(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("expected streaming command")
 	}
-	msg := cmd()
-	ready, ok := msg.(StreamReadyMsg)
-	if !ok {
-		t.Fatalf("expected StreamReadyMsg, got %T", msg)
-	}
+	msgs := flattenCmdMessages(t, cmd)
+	ready := firstMessageOfType[StreamReadyMsg](t, msgs)
 	updated, nextCmd := got.Update(ready)
 	got = updated.(Model)
 	if nextCmd == nil {
 		t.Fatal("expected tool follow-up chunk command")
 	}
-	msg = nextCmd()
+	msg := nextCmd()
 	chunk, ok := msg.(StreamChunkMsg)
 	if !ok {
 		t.Fatalf("expected StreamChunkMsg, got %T", msg)
@@ -1193,17 +1385,14 @@ func TestToolErrorMsgAddsErrorContextAndRestartsStreaming(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("expected follow-up stream command")
 	}
-	msg := cmd()
-	ready, ok := msg.(StreamReadyMsg)
-	if !ok {
-		t.Fatalf("expected StreamReadyMsg, got %T", msg)
-	}
+	msgs := flattenCmdMessages(t, cmd)
+	ready := firstMessageOfType[StreamReadyMsg](t, msgs)
 	updated, nextCmd := got.Update(ready)
 	got = updated.(Model)
 	if nextCmd == nil {
 		t.Fatal("expected recovery chunk command")
 	}
-	msg = nextCmd()
+	msg := nextCmd()
 	if _, ok := msg.(StreamChunkMsg); !ok {
 		t.Fatalf("expected StreamChunkMsg, got %T", msg)
 	}
@@ -1317,20 +1506,6 @@ func TestDetectLanguage(t *testing.T) {
 		if ext != tt.ext || run != tt.run {
 			t.Fatalf("detectLanguage(%q) = (%q,%q), want (%q,%q)", tt.code, ext, run, tt.ext, tt.run)
 		}
-	}
-}
-
-func TestCalculateInputHeight(t *testing.T) {
-	client := &fakeChatClient{}
-	m := newTestModel(t, client)
-
-	m.textarea.SetValue("one")
-	if got := m.calculateInputHeight(); got != 3 {
-		t.Fatalf("expected minimum height 3, got %d", got)
-	}
-	m.textarea.SetValue(strings.Repeat("a\n", 10))
-	if got := m.calculateInputHeight(); got != 8 {
-		t.Fatalf("expected capped height 8, got %d", got)
 	}
 }
 

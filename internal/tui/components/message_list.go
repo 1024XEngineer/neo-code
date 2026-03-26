@@ -70,7 +70,10 @@ func (ml MessageList) RenderLayout() RenderedChatLayout {
 		}
 	}
 
-	return RenderedChatLayout{Content: b.String(), Regions: regions}
+	return RenderedChatLayout{
+		Content: strings.TrimRight(b.String(), "\n"),
+		Regions: regions,
+	}
 }
 
 func renderMessageLine(label string, content string, labelStyle lipgloss.Style, width int) string {

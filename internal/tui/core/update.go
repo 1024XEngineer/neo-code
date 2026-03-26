@@ -16,6 +16,7 @@ import (
 	"go-llm-demo/internal/tui/todo"
 
 	"github.com/charmbracelet/bubbles/key"
+	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -33,11 +34,20 @@ var (
 	executeToolCall    = services.ExecuteToolCall
 )
 
+type bubblePane interface {
+	update(tea.Msg) tea.Cmd
+	focus() tea.Cmd
+	blur()
+}
+
 // Update 处理 Bubble Tea 事件并驱动聊天状态更新。
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 
 	switch msg := msg.(type) {
+
+	case spinner.TickMsg:
+		return m, m.status.update(msg)
 
 	case tea.WindowSizeMsg:
 		m.SetWidth(msg.Width)
@@ -50,20 +60,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleKey(msg)
 
 	case tea.MouseMsg:
-		if handled := m.handleMouseClick(msg); handled {
+		if handled := m.handleMouse(msg); handled {
 			m.refreshViewport()
 			return m, nil
 		}
-		var vpCmd tea.Cmd
-		m.viewport, vpCmd = m.viewport.Update(msg)
-		m.ui.AutoScroll = m.viewport.AtBottom()
-		return m, vpCmd
+		return m, m.updateBubblePane(m.activePanel(), msg)
 
 	case StreamReadyMsg:
 		if msg.Stream == nil {
 			m.chat.Generating = false
-			m.ui.StatusText = "Done"
-			return m, nil
+			return m, m.setDoneStatus("Done")
 		}
 		m.streamChan = msg.Stream
 		return m, m.streamResponseFromChannel()
@@ -83,7 +89,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		mu.Lock()
 		m.chat.Generating = false
 		m.streamChan = nil
-		m.ui.StatusText = "Done"
 
 		var lastContent string
 		shouldCheckToolCall := !m.chat.ToolExecuting && len(m.chat.Messages) > 0
@@ -112,7 +117,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						return m, nil
 					}
 					m.chat.ToolExecuting = true
-					m.ui.StatusText = ""
 					mu.Unlock()
 
 					paramsMap := map[string]interface{}{}
@@ -122,6 +126,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 					// 显示工具执行中提示（仅用于 UI，不参与模型上下文）
 					m.AddMessage("system", formatToolStatusMessage(toolName, paramsMap))
+					m.setToolRunningStatus(toolName)
 
 					// 在goroutine中执行工具调用
 					return m, func() tea.Msg {
@@ -139,7 +144,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		}
-		m.refreshViewport()
+		m.setDoneStatus("Done")
 
 		return m, nil
 
@@ -148,7 +153,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		mu.Lock()
 		m.chat.Generating = false
 		m.streamChan = nil
-		m.ui.StatusText = "Request failed"
 		replacedPlaceholder := false
 		if len(m.chat.Messages) > 0 {
 			lastMsg := &m.chat.Messages[len(m.chat.Messages)-1]
@@ -160,21 +164,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		mu.Unlock()
 		m.resetThinkingFilter()
+		m.setErrorStatus("Request failed")
 		if !replacedPlaceholder {
 			m.AddMessage("assistant", fmt.Sprintf("Error: %v", msg.Err))
 		}
 		m.TrimHistory(m.chat.HistoryTurns)
-		m.refreshViewport()
-		return m, nil
-
-	case ShowHelpMsg:
-		m.ui.Mode = state.ModeHelp
-		m.refreshViewport()
-		return m, nil
-
-	case HideHelpMsg:
-		m.ui.Mode = state.ModeChat
-		m.refreshViewport()
 		return m, nil
 
 	case RefreshMemoryMsg:
@@ -182,7 +176,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if err == nil && stats != nil {
 			m.chat.MemoryStats = *stats
 		}
-		m.refreshViewport()
 		return m, nil
 
 	case ExitMsg:
@@ -192,7 +185,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		mu := m.mutex()
 		mu.Lock()
 		m.chat.ToolExecuting = false
-		m.ui.StatusText = ""
 		mu.Unlock()
 		// 将结构化工具上下文添加为系统消息，然后重新获取AI响应
 		if toolType, target, ok := isSecurityAskResult(msg.Result); ok {
@@ -207,35 +199,27 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			mu.Unlock()
 
 			m.AddMessage("assistant", formatPendingApprovalMessage(pending))
+			m.setApprovalRequiredStatus()
 			m.refreshViewport()
 			return m, nil
 		}
 		m.AddMessage("system", formatToolContextMessage(msg.Result))
 		m.AddMessage("assistant", "")
-		m.chat.Generating = true
-		m.ui.StatusText = ""
-		m.refreshViewport()
 
 		// 构建包含工具结果的消息并重新请求AI
-		messages := m.buildMessages()
-		return m, m.streamResponse(messages)
+		return m, m.queueAssistantResponse()
 
 	case ToolErrorMsg:
 		mu := m.mutex()
 		mu.Lock()
 		m.chat.ToolExecuting = false
-		m.ui.StatusText = ""
 		mu.Unlock()
 		// 将工具执行错误添加为结构化系统上下文
 		m.AddMessage("system", formatToolErrorContext(msg.Err))
 		m.AddMessage("assistant", "")
-		m.chat.Generating = true
-		m.ui.StatusText = ""
-		m.refreshViewport()
 
 		// 构建包含错误信息的消息并重新请求AI
-		messages := m.buildMessages()
-		return m, m.streamResponse(messages)
+		return m, m.queueAssistantResponse()
 	}
 
 	return m, cmd
@@ -244,34 +228,50 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.ui.Mode == state.ModeHelp {
 		if msg.Type == tea.KeyEsc || msg.String() == "q" {
-			m.ui.Mode = state.ModeChat
+			_ = m.switchMode(state.ModeChat, "composer")
 			m.refreshViewport()
 			return *m, nil
 		}
 	}
 
-	if m.ui.Mode == state.ModeTodo {
-		return m.handleTodoKey(msg)
+	switch msg.Type {
+	case tea.KeyTab:
+		cmd := m.cycleFocus(true)
+		m.refreshViewport()
+		return *m, cmd
+	case tea.KeyShiftTab:
+		cmd := m.cycleFocus(false)
+		m.refreshViewport()
+		return *m, cmd
+	}
+
+	if key.Matches(msg, m.textarea.KeyMap.InsertNewline) {
+		m.chat.CmdHistIndex = -1
+		inputCmd := m.updateBubblePane("composer", msg)
+		m.refreshViewport()
+		if m.viewport.AtBottom() {
+			m.ui.AutoScroll = true
+		}
+		return *m, inputCmd
 	}
 
 	switch msg.Type {
+	case tea.KeyEnter:
+		return m.handleSubmit()
+
 	case tea.KeyF5:
 		return m.handleSubmit()
 
 	case tea.KeyF8:
 		return m.handleSubmit()
-
-	case tea.KeyPgUp:
-		m.ui.AutoScroll = false
-		m.viewport.HalfViewUp()
-		return *m, nil
-
-	case tea.KeyPgDown:
-		m.viewport.HalfViewDown()
-		m.ui.AutoScroll = m.viewport.AtBottom()
-		return *m, nil
-
+	case tea.KeyPgUp, tea.KeyPgDown:
+		if m.activePanel() != "composer" {
+			return *m, m.updateBubblePane(m.activePanel(), msg)
+		}
 	case tea.KeyUp:
+		if m.activePanel() != "composer" {
+			return *m, m.updateBubblePane(m.activePanel(), msg)
+		}
 		if strings.TrimSpace(m.textarea.Value()) == "" && len(m.chat.CommandHistory) > 0 {
 			if m.chat.CmdHistIndex < len(m.chat.CommandHistory)-1 {
 				m.chat.CmdHistIndex++
@@ -283,6 +283,9 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 	case tea.KeyDown:
+		if m.activePanel() != "composer" {
+			return *m, m.updateBubblePane(m.activePanel(), msg)
+		}
 		if m.chat.CmdHistIndex > 0 {
 			m.chat.CmdHistIndex--
 			m.textarea.SetValue(m.chat.CommandHistory[len(m.chat.CommandHistory)-1-m.chat.CmdHistIndex])
@@ -296,9 +299,21 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 
+	if m.activePanel() != "composer" && shouldFocusComposerForKey(msg) {
+		focusCmd := m.setFocus("composer")
+		inputCmd := m.updateBubblePane("composer", msg)
+		m.refreshViewport()
+		if inputCmd == nil {
+			return *m, focusCmd
+		}
+		if focusCmd == nil {
+			return *m, inputCmd
+		}
+		return *m, tea.Batch(focusCmd, inputCmd)
+	}
+
 	m.chat.CmdHistIndex = -1
-	var inputCmd tea.Cmd
-	m.textarea, inputCmd = m.textarea.Update(msg)
+	inputCmd := m.updateBubblePane("composer", msg)
 	m.refreshViewport()
 	if m.viewport.AtBottom() {
 		m.ui.AutoScroll = true
@@ -306,34 +321,196 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return *m, inputCmd
 }
 
-func (m *Model) handleMouseClick(msg tea.MouseMsg) bool {
+func shouldFocusComposerForKey(msg tea.KeyMsg) bool {
+	switch msg.Type {
+	case tea.KeyRunes, tea.KeySpace, tea.KeyBackspace:
+		return true
+	default:
+		return strings.TrimSpace(msg.String()) != ""
+	}
+}
+
+func (m *Model) setFocus(panel string) tea.Cmd {
+	panel = strings.TrimSpace(panel)
+	switch panel {
+	case "conversation", "context", "composer", "help":
+	default:
+		panel = "composer"
+	}
+
+	if m.ui.Mode == state.ModeTodo {
+		panel = "todo"
+	} else if m.ui.Mode == state.ModeHelp {
+		switch panel {
+		case "help", "composer":
+		default:
+			panel = "help"
+		}
+	}
+
+	if previous := m.bubblePane(m.ui.Focused); previous != nil {
+		previous.blur()
+	}
+	m.ui.Focused = panel
+	if pane := m.bubblePane(panel); pane != nil {
+		return pane.focus()
+	}
+	return nil
+}
+
+func (m Model) focusOrder() []string {
+	if m.ui.Mode == state.ModeTodo {
+		return []string{"todo"}
+	}
+	if m.ui.Mode == state.ModeHelp {
+		return []string{"help", "composer"}
+	}
+	return []string{"conversation", "context", "composer"}
+}
+
+func (m *Model) cycleFocus(forward bool) tea.Cmd {
+	order := m.focusOrder()
+	if len(order) == 0 {
+		return nil
+	}
+
+	current := m.activePanel()
+	index := 0
+	for i, panel := range order {
+		if panel == current {
+			index = i
+			break
+		}
+	}
+
+	if forward {
+		index = (index + 1) % len(order)
+	} else {
+		index = (index - 1 + len(order)) % len(order)
+	}
+
+	return m.setFocus(order[index])
+}
+
+func (m Model) panelAtPosition(y int, x int) string {
+	if y < 0 || x < 0 {
+		return ""
+	}
+
+	if y < m.layout.mainHeight {
+		if m.ui.Mode == state.ModeHelp {
+			return "help"
+		}
+		if m.layout.stacked {
+			if y < m.layout.conversationHeight {
+				return "conversation"
+			}
+			if y > m.layout.conversationHeight {
+				return "context"
+			}
+			return ""
+		}
+
+		if x < m.layout.conversationWidth {
+			return "conversation"
+		}
+		if x > m.layout.conversationWidth {
+			return "context"
+		}
+		return ""
+	}
+
+	if y < m.layout.mainHeight+m.layout.composerHeight {
+		return "composer"
+	}
+	return ""
+}
+
+func (m *Model) bubblePane(panel string) bubblePane {
+	switch strings.TrimSpace(panel) {
+	case "composer":
+		return &m.textarea
+	case "todo":
+		return &m.todo
+	case "conversation":
+		return &m.viewport
+	case "context":
+		return &m.context
+	default:
+		return nil
+	}
+}
+
+func (m *Model) updateBubblePane(panel string, msg tea.Msg) tea.Cmd {
+	pane := m.bubblePane(panel)
+	if pane == nil {
+		return nil
+	}
+
+	cmd := pane.update(msg)
+	switch strings.TrimSpace(panel) {
+	case "todo":
+		action, err := m.todo.consumeAction()
+		if err != nil {
+			m.AddMessage("assistant", fmt.Sprintf("Todo action failed: %v", err))
+			m.refreshViewport()
+			return cmd
+		}
+		switch action {
+		case todoPanelExit:
+			_ = m.switchMode(state.ModeChat, "composer")
+		case todoPanelPromptAdd:
+			m.AddMessage("assistant", todo.MsgPromptAdd)
+			_ = m.switchMode(state.ModeChat, "composer")
+		case todoPanelRefreshed:
+		}
+	case "conversation":
+		m.ui.AutoScroll = m.viewport.AtBottom()
+	}
+	return cmd
+}
+
+func (m *Model) handleMouse(msg tea.MouseMsg) bool {
+	panel := m.panelAtPosition(msg.Y, msg.X)
+
+	switch msg.Button {
+	case tea.MouseButtonWheelUp, tea.MouseButtonWheelDown:
+		if panel == "conversation" || panel == "context" {
+			_ = m.setFocus(panel)
+			_ = m.updateBubblePane(panel, msg)
+			return true
+		}
+	}
+
 	if msg.Action != tea.MouseActionPress || msg.Button != tea.MouseButtonLeft {
 		return false
 	}
+
+	if panel != "" {
+		_ = m.setFocus(panel)
+	}
+	if panel != "conversation" {
+		return panel != ""
+	}
+
 	contentRow, contentCol, ok := m.chatContentPosition(msg)
 	if !ok {
-		return false
+		return panel != ""
 	}
-	region, found := findClickableRegion(m.chatLayout.Regions, contentRow, contentCol)
+	region, found := m.viewport.clickableRegion(contentRow, contentCol)
 	if !found || region.Kind != "copy" {
-		return false
+		return panel != ""
 	}
 	if err := m.copyCodeBlock(region.CodeBlock); err != nil {
-		m.ui.CopyStatus = fmt.Sprintf("Copy failed: %v", err)
+		m.setNoticeStatus(fmt.Sprintf("Copy failed: %v", err))
 		return true
 	}
-	m.ui.CopyStatus = components.FormatCopyNotice(region.CodeBlock)
+	m.setNoticeStatus(components.FormatCopyNotice(region.CodeBlock))
 	return true
 }
 
 func (m *Model) chatContentPosition(msg tea.MouseMsg) (int, int, bool) {
-	statusHeight := 1
-	chatTop := statusHeight
-	chatBottom := chatTop + m.viewport.Height
-	if msg.Y < chatTop || msg.Y >= chatBottom {
-		return 0, 0, false
-	}
-	return m.viewport.YOffset + (msg.Y - chatTop), msg.X, true
+	return m.viewport.contentPosition(msg.Y, msg.X)
 }
 
 func findClickableRegion(regions []components.ClickableRegion, row, col int) (components.ClickableRegion, bool) {
@@ -356,10 +533,22 @@ func (m *Model) copyCodeBlock(ref components.CodeBlockRef) error {
 	return m.copyToClipboard(ref.Code)
 }
 
+func (m *Model) switchMode(mode state.Mode, focus string) tea.Cmd {
+	m.ui.Mode = mode
+	return m.setFocus(focus)
+}
+
+func (m *Model) queueAssistantResponse() tea.Cmd {
+	m.chat.Generating = true
+	m.ui.AutoScroll = true
+	statusCmd := m.setThinkingStatus()
+	m.refreshViewport()
+	return tea.Batch(statusCmd, m.streamResponse(m.buildMessages()))
+}
+
 func (m *Model) handleSubmit() (tea.Model, tea.Cmd) {
 	input := strings.TrimSpace(m.textarea.Value())
-	m.textarea.Reset()
-	m.textarea.SetHeight(m.calculateInputHeight())
+	m.textarea.resetForSubmit()
 	m.syncLayout()
 
 	if input == "" {
@@ -367,7 +556,7 @@ func (m *Model) handleSubmit() (tea.Model, tea.Cmd) {
 	}
 
 	if m.ui.Mode == state.ModeHelp {
-		m.ui.Mode = state.ModeChat
+		_ = m.switchMode(state.ModeChat, "composer")
 		m.refreshViewport()
 		if input == "/help" {
 			return *m, nil
@@ -393,16 +582,11 @@ func (m *Model) handleSubmit() (tea.Model, tea.Cmd) {
 	m.AddMessage("assistant", "")
 	// 在请求发出前先裁剪原始消息，避免 UI 历史无限扩张并影响短期上下文质量。
 	m.TrimHistory(m.chat.HistoryTurns)
-	m.chat.Generating = true
-	m.ui.AutoScroll = true
-	m.ui.StatusText = ""
-	m.refreshViewport()
-
+	m.TrimHistory(m.chat.HistoryTurns)
 	m.chat.CommandHistory = append(m.chat.CommandHistory, input)
 	m.chat.CmdHistIndex = -1
 
-	messages := m.buildMessages()
-	return *m, m.streamResponse(messages)
+	return *m, m.queueAssistantResponse()
 }
 
 func (m *Model) handleCommand(input string) (tea.Model, tea.Cmd) {
@@ -421,7 +605,7 @@ func (m *Model) handleCommand(input string) (tea.Model, tea.Cmd) {
 
 	switch cmd {
 	case "/help":
-		m.ui.Mode = state.ModeHelp
+		_ = m.switchMode(state.ModeHelp, "help")
 	case "/y":
 		if len(args) > 0 {
 			m.AddMessage("assistant", "Usage: /y")
@@ -456,6 +640,7 @@ func (m *Model) handleCommand(input string) (tea.Model, tea.Cmd) {
 		m.chat.ToolExecuting = true
 		mu.Unlock()
 
+		m.setToolRunningStatus(pending.Call.Tool)
 		m.refreshViewport()
 		return *m, func() tea.Msg {
 			services.ApproveSecurityAsk(pending.ToolType, pending.Target)
@@ -486,6 +671,7 @@ func (m *Model) handleCommand(input string) (tea.Model, tea.Cmd) {
 			toolName = "unknown"
 		}
 		m.AddMessage("assistant", fmt.Sprintf("Rejected tool %s for target %s.", toolName, pending.Target))
+		m.setDoneStatus("Rejected pending tool")
 		return *m, nil
 	case "/exit", "/quit", "/q":
 		return *m, tea.Quit
@@ -634,7 +820,7 @@ func (m *Model) handleCommand(input string) (tea.Model, tea.Cmd) {
 		m.AddMessage("assistant", "Cleared local persistent memory")
 	case "/todo":
 		if len(args) == 0 {
-			m.ui.Mode = state.ModeTodo
+			_ = m.switchMode(state.ModeTodo, "todo")
 			return m.refreshTodos()
 		}
 		subCmd := args[0]
@@ -659,12 +845,12 @@ func (m *Model) handleCommand(input string) (tea.Model, tea.Cmd) {
 			m.AddMessage("assistant", fmt.Sprintf(todo.MsgAddSuccess, content))
 			return m.refreshTodos()
 		case "list":
-			m.ui.Mode = state.ModeTodo
+			_ = m.switchMode(state.ModeTodo, "todo")
 			return m.refreshTodos()
 		default:
 			m.AddMessage("assistant", fmt.Sprintf(todo.MsgUnknownSubCmd, subCmd))
 		}
-	case "/clear-context":
+	case "/clear", "/clear-context":
 		if err := m.client.ClearSessionMemory(context.Background()); err != nil {
 			m.AddMessage("assistant", fmt.Sprintf("Failed to clear session memory: %v", err))
 			return *m, nil
@@ -698,69 +884,11 @@ func (m *Model) handleCommand(input string) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) refreshTodos() (tea.Model, tea.Cmd) {
-	todos, err := m.client.GetTodoList(context.Background())
-	if err == nil {
-		m.todos = todos
+	if err := m.todo.refresh(); err != nil {
+		m.refreshViewport()
+		return *m, nil
 	}
 	m.refreshViewport()
-	return *m, nil
-}
-
-func (m *Model) handleTodoKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch {
-	case key.Matches(msg, todo.Keys.Back):
-		m.ui.Mode = state.ModeChat
-		m.refreshViewport()
-		return *m, nil
-
-	case key.Matches(msg, todo.Keys.Up):
-		if m.todoCursor > 0 {
-			m.todoCursor--
-		}
-		m.refreshViewport()
-		return *m, nil
-
-	case key.Matches(msg, todo.Keys.Down):
-		if m.todoCursor < len(m.todos)-1 {
-			m.todoCursor++
-		}
-		m.refreshViewport()
-		return *m, nil
-
-	case key.Matches(msg, todo.Keys.Done):
-		if len(m.todos) > 0 {
-			t := m.todos[m.todoCursor]
-			nextStatus := services.TodoInProgress
-			switch t.Status {
-			case services.TodoPending:
-				nextStatus = services.TodoInProgress
-			case services.TodoInProgress:
-				nextStatus = services.TodoCompleted
-			case services.TodoCompleted:
-				nextStatus = services.TodoPending
-			}
-			_ = m.client.UpdateTodoStatus(context.Background(), t.ID, nextStatus)
-			return m.refreshTodos()
-		}
-
-	case key.Matches(msg, todo.Keys.Delete):
-		if len(m.todos) > 0 {
-			t := m.todos[m.todoCursor]
-			_ = m.client.RemoveTodo(context.Background(), t.ID)
-			if m.todoCursor >= len(m.todos)-1 && m.todoCursor > 0 {
-				m.todoCursor--
-			}
-			return m.refreshTodos()
-		}
-
-	case key.Matches(msg, todo.Keys.Add):
-		// 切换到聊天模式，让用户通过 /todo add 命令行新增，或者这里可以简单处理
-		m.AddMessage("assistant", todo.MsgPromptAdd)
-		m.ui.Mode = state.ModeChat
-		m.refreshViewport()
-		return *m, nil
-	}
-
 	return *m, nil
 }
 
@@ -771,15 +899,6 @@ func isAPIKeyRecoveryCommand(cmd string) bool {
 	default:
 		return false
 	}
-}
-
-func containsModel(models []string, target string) bool {
-	for _, model := range models {
-		if model == target {
-			return true
-		}
-	}
-	return false
 }
 
 func formatTypeStats(byType map[string]int) string {
@@ -871,13 +990,7 @@ func (m *Model) sendCodeToAI(code string) tea.Cmd {
 	m.AddMessage("user", prompt)
 	m.AddMessage("assistant", "")
 	m.TrimHistory(m.chat.HistoryTurns)
-	m.chat.Generating = true
-	m.ui.AutoScroll = true
-	m.ui.StatusText = ""
-	m.refreshViewport()
-
-	messages := m.buildMessages()
-	return m.streamResponse(messages)
+	return m.queueAssistantResponse()
 }
 
 func isTransientToolStatusMessage(content string) bool {
@@ -1061,49 +1174,12 @@ func detectLanguage(code string) (string, string) {
 	return "", ""
 }
 
-func (m *Model) calculateInputHeight() int {
-	lines := strings.Count(m.textarea.Value(), "\n") + 1
-	if lines < 3 {
-		return 3
-	}
-	if lines > 8 {
-		return 8
-	}
-	return lines
-}
-
 func (m *Model) syncLayout() {
-	if m.ui.Width <= 0 || m.ui.Height <= 0 {
-		return
-	}
-	inputWidth := m.ui.Width
-	if inputWidth < 20 {
-		inputWidth = 20
-	}
-	m.textarea.SetWidth(inputWidth)
-	m.textarea.SetHeight(m.calculateInputHeight())
-	m.textarea.Prompt = "> "
-
-	statusHeight := 1
-	inputHeight := m.textarea.Height() + 2
-	helpHeight := 0
-	if m.ui.Mode == state.ModeHelp {
-		helpHeight = minInt(20, m.ui.Height-statusHeight-3)
-	}
-	contentHeight := m.ui.Height - statusHeight - inputHeight - helpHeight
-	if contentHeight < 3 {
-		contentHeight = 3
-	}
-	m.viewport.Width = m.ui.Width
-	m.viewport.Height = contentHeight
+	m.configureLayout()
 }
 
 func (m *Model) refreshViewport() {
 	m.syncLayout()
-	content := m.renderChatContent()
-	m.viewport.SetContent(content)
-	if m.ui.AutoScroll || m.viewport.AtBottom() {
-		m.viewport.GotoBottom()
-		m.ui.AutoScroll = true
-	}
+	m.ui.AutoScroll = m.viewport.refresh(m.ui.Mode, m.todo, m.toComponentMessages(), m.ui.AutoScroll)
+	m.context.refresh(m.renderContextBody(components.PanelInnerWidth(m.layout.contextWidth)))
 }
