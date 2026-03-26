@@ -1,36 +1,21 @@
-# 应用配置文件示例
-app:
-  name: "NeoCode"
-  version: "1.0.0"
+# NeoCode 示例配置
+# 如果你直接运行 `go run ./cmd/neocode`，首次启动会自动生成一份类似配置。
 
-ai:
-  provider: "openll" # modelscope | deepseek | openll | siliconflow | 豆包大模型 | openai
-  api_key: "AI_API_KEY" # environment variable name; falls back to AI_API_KEY when empty
-  model: "gpt-5.4"
+providers:
+  - name: openai
+    type: openai
+    base_url: https://api.openai.com/v1
+    model: gpt-4.1-mini
+    api_key_env: OPENAI_API_KEY
 
-memory:
-  top_k: 5
-  min_match_score: 2.2
-  max_prompt_chars: 1800
-  max_items: 1000
-  storage_path: "./data/memory_rules.json"
-  persist_types:
-    - "user_preference"
-    - "project_rule"
-    - "code_fact"
-    - "fix_recipe"
+  - name: local-proxy
+    type: openai-compatible
+    base_url: http://localhost:11434/v1
+    model: qwen2.5-coder
+    api_key_env: OPENAI_API_KEY
 
-history:
-  short_term_turns: 6
-  max_tool_context_messages: 3
-  max_tool_context_output_size: 4000
-  persist_session_state: true
-  workspace_state_dir: "./data/workspaces"
-  resume_last_session: true
-
-persona:
-  file_path: "./configs/persona.txt"
-
-# Notes:
-# - Switching provider with /provider <name> resets ai.model to that provider's default model.
-# - You can still override the current model at any time with /switch <model>.
+selected_provider: openai
+current_model: gpt-4.1-mini
+workdir: .
+shell: powershell
+sessions_path: ~/.neocode/sessions.json
