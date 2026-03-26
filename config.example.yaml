@@ -14,14 +14,20 @@ memory:
   max_prompt_chars: 1800
   max_items: 1000
   storage_path: "./data/memory_rules.json"
+  # 按顺序扫描工作区中的显式项目记忆文件。
+  # 这些文件用于承载团队约定、项目规则或需要优先注入给模型的固定上下文。
   project_files:
     - "AGENTS.md"
     - "CLAUDE.md"
     - ".neocode/memory.md"
     - "NEOCODE.md"
+  # 显式项目记忆注入到 prompt 时的最大字符数预算。
   project_prompt_chars: 2400
-  extractor: "rule" # rule | llm | auto
-  extractor_model: "" # optional; defaults to ai.model when empty
+  # 记忆提取策略：rule | llm | auto。
+  extractor: "rule"
+  # 仅在 llm/auto 模式下使用；为空时默认复用 ai.model。
+  extractor_model: ""
+  # 单次 LLM 记忆提取请求的超时时间（秒），用于限制额外提取链路的等待时间。
   extractor_timeout_seconds: 20
   persist_types:
     - "user_preference"
