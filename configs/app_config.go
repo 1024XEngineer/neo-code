@@ -67,7 +67,7 @@ func DefaultAppConfig() *AppConfiguration {
 	cfg.Memory.MaxItems = 1000
 	cfg.Memory.StoragePath = "./data/memory_rules.json"
 	cfg.Memory.PersistTypes = []string{"user_preference", "project_rule", "code_fact", "fix_recipe"}
-	cfg.Memory.ProjectFiles = []string{"AGENTS.md", "CLAUDE.md", ".neocode/memory.md", "NEOCODE.md"}
+	cfg.Memory.ProjectFiles = []string{"AGENTS.md"}
 	cfg.Memory.ProjectPromptChars = 2400
 	cfg.Memory.Extractor = "rule"
 	cfg.Memory.ExtractorModel = ""

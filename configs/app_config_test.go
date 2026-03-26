@@ -111,7 +111,7 @@ memory:
   storage_path: "./data/memory_rules.json"
   project_files:
     - "AGENTS.md"
-    - ".neocode/memory.md"
+    - "CLAUDE.md"
   project_prompt_chars: 2400
   extractor: "auto"
   extractor_model: "gpt-5.4-mini"
@@ -222,7 +222,7 @@ func validConfig() *AppConfiguration {
 	cfg.Memory.MaxItems = 1000
 	cfg.Memory.StoragePath = "./data/memory_rules.json"
 	cfg.Memory.PersistTypes = []string{"user_preference", "project_rule", "code_fact", "fix_recipe"}
-	cfg.Memory.ProjectFiles = []string{"AGENTS.md", ".neocode/memory.md"}
+	cfg.Memory.ProjectFiles = []string{"AGENTS.md"}
 	cfg.Memory.ProjectPromptChars = 2400
 	cfg.Memory.Extractor = "rule"
 	cfg.Memory.ExtractorModel = ""
@@ -247,6 +247,9 @@ func TestDefaultAppConfigUsesCheckedInPersonaPath(t *testing.T) {
 	}
 	if cfg.Memory.ProjectPromptChars != 2400 {
 		t.Fatalf("expected default project prompt chars 2400, got %d", cfg.Memory.ProjectPromptChars)
+	}
+	if len(cfg.Memory.ProjectFiles) != 1 || cfg.Memory.ProjectFiles[0] != "AGENTS.md" {
+		t.Fatalf("expected default project files to contain only AGENTS.md, got %+v", cfg.Memory.ProjectFiles)
 	}
 	if cfg.Memory.ExtractorTimeoutSecond != 20 {
 		t.Fatalf("expected default extractor timeout 20, got %d", cfg.Memory.ExtractorTimeoutSecond)

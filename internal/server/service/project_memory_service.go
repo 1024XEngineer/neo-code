@@ -52,12 +52,12 @@ func (s *projectMemoryServiceImpl) BuildContext(ctx context.Context) (string, er
 		return "", nil
 	}
 
-	header := "Use the following explicit project memory files as authoritative project instructions and conventions. Prefer them over inferred memory when they conflict.\n"
+	header := "Use the following explicit project memory files as authoritative project instructions and conventions. Files are listed in precedence order: earlier files override later files when conflicts exist. Prefer explicit project memory over inferred memory.\n"
 	var builder strings.Builder
 	builder.WriteString(header)
 
-	for _, source := range sources {
-		block := fmt.Sprintf("Project memory file: %s\n%s\n", source.Path, strings.TrimSpace(source.Content))
+	for idx, source := range sources {
+		block := fmt.Sprintf("Project memory file #%d (higher priority first): %s\n%s\n", idx+1, source.Path, strings.TrimSpace(source.Content))
 		if s.maxPromptChars > 0 && builder.Len()+len(block) > s.maxPromptChars {
 			remaining := s.maxPromptChars - builder.Len()
 			if remaining <= 0 {

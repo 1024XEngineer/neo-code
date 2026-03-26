@@ -14,12 +14,11 @@ memory:
   max_prompt_chars: 1800
   max_items: 1000
   storage_path: "./data/memory_rules.json"
-  # 按顺序扫描工作区中的显式项目记忆文件。
+  # 显式项目记忆文件。默认兼容业界通用的 AGENTS.md。
+  # 如需兼容仓库里已有的其他约定文件，可继续追加到列表末尾；
+  # 系统按列表顺序加载，越靠前优先级越高。
   project_files:
-    - "AGENTS.md" # 仓库协作约定文件，通常记录开发规范、目录职责、提交流程等项目规则。
-    - "CLAUDE.md" # 兼容 Claude Code 风格的仓库指令文件，用于复用已有的团队约定。
-    - ".neocode/memory.md" # NeoCode 自身约定的项目记忆文件，用于沉淀需要长期注入的项目上下文。
-    - "NEOCODE.md" # 面向 NeoCode 的仓库说明文件，可作为项目级补充指令或约定入口。
+    - "AGENTS.md" # 首选项目级约定文件；建议把仓库协作规则集中维护在这里。
   # 显式项目记忆注入到 prompt 时的最大字符数预算。
   project_prompt_chars: 2400
   # 记忆提取策略：rule | llm | auto。

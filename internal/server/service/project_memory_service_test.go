@@ -13,14 +13,11 @@ func TestProjectMemoryServiceLoadsConfiguredFiles(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(workspace, "AGENTS.md"), []byte("Use go test ./... before PR."), 0o644); err != nil {
 		t.Fatalf("write AGENTS.md: %v", err)
 	}
-	if err := os.MkdirAll(filepath.Join(workspace, ".neocode"), 0o755); err != nil {
-		t.Fatalf("mkdir .neocode: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(workspace, ".neocode", "memory.md"), []byte("Prefer Chinese explanations for teammates."), 0o644); err != nil {
-		t.Fatalf("write .neocode/memory.md: %v", err)
+	if err := os.WriteFile(filepath.Join(workspace, "CLAUDE.md"), []byte("Prefer concise review summaries."), 0o644); err != nil {
+		t.Fatalf("write CLAUDE.md: %v", err)
 	}
 
-	svc := NewProjectMemoryService(workspace, []string{"AGENTS.md", ".neocode/memory.md", "missing.md"}, 2400)
+	svc := NewProjectMemoryService(workspace, []string{"AGENTS.md", "CLAUDE.md", "missing.md"}, 2400)
 
 	sources, err := svc.ListSources(context.Background())
 	if err != nil {
@@ -34,11 +31,19 @@ func TestProjectMemoryServiceLoadsConfiguredFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build context: %v", err)
 	}
-	if !strings.Contains(ctxText, "AGENTS.md") || !strings.Contains(ctxText, ".neocode/memory.md") {
+	if !strings.Contains(ctxText, "AGENTS.md") || !strings.Contains(ctxText, "CLAUDE.md") {
 		t.Fatalf("expected project memory paths in context, got %q", ctxText)
 	}
 	if !strings.Contains(ctxText, "Use go test ./... before PR.") {
 		t.Fatalf("expected project memory content in context, got %q", ctxText)
+	}
+	if !strings.Contains(ctxText, "precedence order") {
+		t.Fatalf("expected precedence guidance in context, got %q", ctxText)
+	}
+	agentsIdx := strings.Index(ctxText, "AGENTS.md")
+	claudeIdx := strings.Index(ctxText, "CLAUDE.md")
+	if agentsIdx == -1 || claudeIdx == -1 || agentsIdx > claudeIdx {
+		t.Fatalf("expected configured file order to be preserved, got %q", ctxText)
 	}
 }
 
