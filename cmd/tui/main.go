@@ -105,9 +105,9 @@ func runWithDeps(workspaceFlag string, deps runDeps) error {
 
 	persona, personaPath, err := deps.loadPersonaPrompt(configs.GlobalAppConfig.Persona.FilePath)
 	if err != nil {
-		fmt.Fprintf(deps.stderr, "警告: 人设加载失败: %v\n", err)
+		fmt.Fprintf(deps.stderr, "警告: 系统提示词加载失败: %v\n", err)
 	} else if personaPath != "" && strings.TrimSpace(configs.GlobalAppConfig.Persona.FilePath) != personaPath {
-		fmt.Fprintf(deps.stderr, "提示: 人设已从 %s 回退加载\n", personaPath)
+		fmt.Fprintf(deps.stderr, "提示: 系统提示词已从 %s 回退加载\n", personaPath)
 	}
 
 	historyTurns := configs.GlobalAppConfig.History.ShortTermTurns

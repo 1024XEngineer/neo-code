@@ -79,26 +79,26 @@ func TestLoadDotEnvTrimsQuotedValuesAndSkipsEmptyKeys(t *testing.T) {
 	}
 }
 
-func TestLoadPersonaPromptReturnsTrimmedContent(t *testing.T) {
+func TestLoadPromptReturnsTrimmedContent(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "persona.txt")
-	if err := os.WriteFile(path, []byte("\n hello persona \n"), 0o644); err != nil {
-		t.Fatalf("write persona file: %v", err)
+	path := filepath.Join(dir, "prompt.md")
+	if err := os.WriteFile(path, []byte("\n hello prompt \n"), 0o644); err != nil {
+		t.Fatalf("write prompt file: %v", err)
 	}
 
-	if got := loadPersonaPrompt(path); got != "hello persona" {
-		t.Fatalf("expected trimmed persona prompt, got %q", got)
+	if got := loadPersonaPrompt(path); got != "hello prompt" {
+		t.Fatalf("expected trimmed prompt, got %q", got)
 	}
 }
 
-func TestLoadPersonaPromptReturnsEmptyForMissingFile(t *testing.T) {
+func TestLoadPromptReturnsEmptyForMissingFile(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "missing.txt")
 	if got := loadPersonaPrompt(missing); got != "" {
 		t.Fatalf("expected empty string for missing file, got %q", got)
 	}
 }
 
-func TestLoadPersonaPromptReturnsEmptyForBlankPath(t *testing.T) {
+func TestLoadPromptReturnsEmptyForBlankPath(t *testing.T) {
 	if got := loadPersonaPrompt("   "); got != "" {
 		t.Fatalf("expected empty string for blank path, got %q", got)
 	}
@@ -239,7 +239,7 @@ func TestRunWithDepsReturnsLoadAppConfigError(t *testing.T) {
 	}
 }
 
-func TestRunWithDepsPrintsPersonaFallbackHintAndRunsProgram(t *testing.T) {
+func TestRunWithDepsPrintsPromptFallbackHintAndRunsProgram(t *testing.T) {
 	origGlobalConfig := configs.GlobalAppConfig
 	t.Cleanup(func() { configs.GlobalAppConfig = origGlobalConfig })
 
@@ -263,14 +263,14 @@ func TestRunWithDepsPrintsPersonaFallbackHintAndRunsProgram(t *testing.T) {
 		},
 		loadPersonaPrompt: func(path string) (string, string, error) {
 			if path != "./persona.txt" {
-				t.Fatalf("expected configured persona path, got %q", path)
+				t.Fatalf("expected configured prompt path, got %q", path)
 			}
-			return "persona text", "./configs/persona.txt", nil
+			return "prompt text", "./configs/prompt.md", nil
 		},
 		newProgram: func(persona string, historyTurns int, configPath, workspaceRoot string) (programRunner, error) {
 			newProgramCalled = true
-			if persona != "persona text" {
-				t.Fatalf("unexpected persona %q", persona)
+			if persona != "prompt text" {
+				t.Fatalf("unexpected prompt %q", persona)
 			}
 			if historyTurns != cfg.History.ShortTermTurns {
 				t.Fatalf("unexpected history turns %d", historyTurns)
@@ -287,12 +287,12 @@ func TestRunWithDepsPrintsPersonaFallbackHintAndRunsProgram(t *testing.T) {
 	if !newProgramCalled || !program.called {
 		t.Fatal("expected program to be created and run")
 	}
-	if !strings.Contains(stderr.String(), "./configs/persona.txt") {
-		t.Fatalf("expected fallback persona hint, got %q", stderr.String())
+	if !strings.Contains(stderr.String(), "./configs/prompt.md") {
+		t.Fatalf("expected fallback prompt hint, got %q", stderr.String())
 	}
 }
 
-func TestRunWithDepsContinuesWhenPersonaLoadFails(t *testing.T) {
+func TestRunWithDepsContinuesWhenPromptLoadFails(t *testing.T) {
 	origGlobalConfig := configs.GlobalAppConfig
 	t.Cleanup(func() { configs.GlobalAppConfig = origGlobalConfig })
 
@@ -312,11 +312,11 @@ func TestRunWithDepsContinuesWhenPersonaLoadFails(t *testing.T) {
 			return nil
 		},
 		loadPersonaPrompt: func(string) (string, string, error) {
-			return "", "", errors.New("persona failed")
+			return "", "", errors.New("prompt failed")
 		},
 		newProgram: func(persona string, historyTurns int, configPath, workspaceRoot string) (programRunner, error) {
 			if persona != "" {
-				t.Fatalf("expected empty persona on load failure, got %q", persona)
+				t.Fatalf("expected empty prompt on load failure, got %q", persona)
 			}
 			return program, nil
 		},
@@ -327,8 +327,8 @@ func TestRunWithDepsContinuesWhenPersonaLoadFails(t *testing.T) {
 	if !program.called {
 		t.Fatal("expected program to still run")
 	}
-	if !strings.Contains(stderr.String(), "persona failed") {
-		t.Fatalf("expected persona warning, got %q", stderr.String())
+	if !strings.Contains(stderr.String(), "prompt failed") {
+		t.Fatalf("expected prompt warning, got %q", stderr.String())
 	}
 }
 
@@ -349,7 +349,7 @@ func TestRunWithDepsReturnsNewProgramError(t *testing.T) {
 			configs.GlobalAppConfig = cfg
 			return nil
 		},
-		loadPersonaPrompt: func(string) (string, string, error) { return "persona", "", nil },
+		loadPersonaPrompt: func(string) (string, string, error) { return "prompt", "", nil },
 		newProgram:        func(string, int, string, string) (programRunner, error) { return nil, errors.New("new program failed") },
 	})
 	if err == nil || !strings.Contains(err.Error(), "new program failed") {
@@ -404,7 +404,7 @@ func TestRunWithDepsHappyPathCallsUTF8Hook(t *testing.T) {
 			configs.GlobalAppConfig = cfg
 			return nil
 		},
-		loadPersonaPrompt: func(string) (string, string, error) { return "persona", "", nil },
+		loadPersonaPrompt: func(string) (string, string, error) { return "prompt", "", nil },
 		newProgram:        func(string, int, string, string) (programRunner, error) { return program, nil },
 	})
 	if err != nil {
