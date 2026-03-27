@@ -36,6 +36,7 @@
 - `tools`
   - `fs_read_file`
   - `fs_write_file`
+  - `fs_edit_file`
   - `fs_list_dir`
   - `fs_search`
   - `bash_exec`

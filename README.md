@@ -104,7 +104,8 @@ go build ./...
 ## 内置工具
 
 - `fs_read_file`：读取工作目录内文本文件
-- `fs_write_file`：写入或追加工作目录内文本文件
+- `fs_write_file`：新建、覆盖或追加工作目录内文本文件
+- `fs_edit_file`：对已有文本文件执行精确片段替换，适合局部修改
 - `fs_list_dir`：列出工作目录内目录内容
 - `fs_search`：在工作目录内搜索文本
 - `bash_exec`：在当前工作目录执行非交互 shell 命令

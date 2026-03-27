@@ -25,7 +25,7 @@ func (t *WriteFileTool) Name() string {
 
 // Description describes the tool for the model.
 func (t *WriteFileTool) Description() string {
-	return "Write or append a UTF-8 text file within the current workdir."
+	return "Create, overwrite, or append a UTF-8 text file within the current workdir. Use fs_edit_file for targeted in-place edits."
 }
 
 // Schema returns the JSON schema for tool arguments.

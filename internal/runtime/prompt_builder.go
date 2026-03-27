@@ -24,7 +24,9 @@ func (b *PromptBuilder) Build(session Session) []provider.Message {
 		Content: fmt.Sprintf(
 			"You are NeoCode, a local coding agent inside a terminal UI. "+
 				"Use tools when they materially help. Keep answers concise and grounded in tool results. "+
-				"The active workdir is %s. Never assume files outside that workdir are accessible.",
+				"The active workdir is %s. Never assume files outside that workdir are accessible. "+
+				"When updating an existing file, prefer fs_edit_file for targeted changes. "+
+				"Use fs_write_file for new files, full rewrites, or appends.",
 			b.workdir,
 		),
 	})

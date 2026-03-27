@@ -194,7 +194,7 @@ type ToolResult struct {
 
 各工具 MVP 建议：
 
-- Filesystem：读文件、写文件、列目录、搜索文件
+- Filesystem：读文件、写文件、精确编辑文件、列目录、搜索文件
 - Bash：执行命令，限制超时、输出长度、工作目录
 - WebFetch：抓取网页文本内容，限制响应大小
 

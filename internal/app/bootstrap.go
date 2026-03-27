@@ -68,18 +68,9 @@ func Build(configPath string) (*Bootstrap, error) {
 		return nil, fmt.Errorf("no provider is available; check whether the configured API key environment variables are set")
 	}
 
-	registry := tools.NewRegistry()
-	for _, tool := range []tools.Tool{
-		fstool.NewReadFileTool(),
-		fstool.NewWriteFileTool(),
-		fstool.NewListDirTool(),
-		fstool.NewSearchTool(),
-		bashtool.NewExecTool(cfg.Shell),
-		webfetchtool.NewFetchTool(),
-	} {
-		if err := registry.Register(tool); err != nil {
-			return nil, err
-		}
+	registry, err := registerBuiltinTools(cfg)
+	if err != nil {
+		return nil, err
 	}
 	executor := tools.NewExecutor(registry)
 
@@ -111,6 +102,25 @@ func Run(ctx context.Context, configPath string) error {
 	}
 
 	return bootstrap.UI.Run(ctx)
+}
+
+func registerBuiltinTools(cfg config.Config) (*tools.Registry, error) {
+	registry := tools.NewRegistry()
+	for _, tool := range []tools.Tool{
+		fstool.NewReadFileTool(),
+		fstool.NewWriteFileTool(),
+		fstool.NewEditFileTool(),
+		fstool.NewListDirTool(),
+		fstool.NewSearchTool(),
+		bashtool.NewExecTool(cfg.Shell),
+		webfetchtool.NewFetchTool(),
+	} {
+		if err := registry.Register(tool); err != nil {
+			return nil, err
+		}
+	}
+
+	return registry, nil
 }
 
 func buildProvider(cfg config.ProviderConfig, apiKey string) (provider.Provider, error) {
