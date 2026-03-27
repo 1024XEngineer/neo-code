@@ -74,14 +74,29 @@ func TestExecuteLocalCommand(t *testing.T) {
 			expectErr: `unknown command "/unknown"`,
 		},
 		{
+			name:      "unknown command with suffix is rejected",
+			command:   "/unknown_cmd",
+			expectErr: `unknown command "/unknown_cmd"`,
+		},
+		{
 			name:      "set usage requires enough arguments",
 			command:   "/set url",
 			expectErr: "usage:",
 		},
 		{
+			name:      "unsupported set field is rejected",
+			command:   "/set nope value",
+			expectErr: `unsupported /set field "nope"`,
+		},
+		{
 			name:      "invalid url is rejected",
 			command:   "/set url not-a-url",
 			expectErr: "invalid url",
+		},
+		{
+			name:      "empty command is rejected",
+			command:   "   ",
+			expectErr: "empty command",
 		},
 	}
 

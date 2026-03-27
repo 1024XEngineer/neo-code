@@ -146,6 +146,42 @@ func TestProviderConfigResolveAPIKey(t *testing.T) {
 	}
 }
 
+func TestConfigMethodErrorPaths(t *testing.T) {
+	t.Parallel()
+
+	t.Run("selected provider on nil config", func(t *testing.T) {
+		var cfg *Config
+		_, err := cfg.SelectedProviderConfig()
+		if err == nil || !strings.Contains(err.Error(), "config is nil") {
+			t.Fatalf("expected nil config error, got %v", err)
+		}
+	})
+
+	t.Run("provider lookup not found", func(t *testing.T) {
+		cfg := Default()
+		_, err := cfg.ProviderByName("missing-provider")
+		if err == nil || !strings.Contains(err.Error(), "not found") {
+			t.Fatalf("expected missing provider error, got %v", err)
+		}
+	})
+
+	t.Run("resolve wraps missing env", func(t *testing.T) {
+		restoreEnv(t, "MISSING_PROVIDER_KEY")
+		_ = os.Unsetenv("MISSING_PROVIDER_KEY")
+
+		_, err := (ProviderConfig{
+			Name:      "custom",
+			Type:      "custom",
+			BaseURL:   "https://example.com",
+			Model:     "custom-model",
+			APIKeyEnv: "MISSING_PROVIDER_KEY",
+		}).Resolve()
+		if err == nil || !strings.Contains(err.Error(), "MISSING_PROVIDER_KEY") {
+			t.Fatalf("expected missing env resolve error, got %v", err)
+		}
+	})
+}
+
 func TestLoaderLoadEnvironmentSources(t *testing.T) {
 	tests := []struct {
 		name           string

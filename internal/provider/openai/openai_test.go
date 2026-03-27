@@ -247,6 +247,62 @@ func TestProviderChatConsumesSSEAndMergesToolCalls(t *testing.T) {
 	}
 }
 
+func TestProviderChatHTTPErrorResponses(t *testing.T) {
+	t.Setenv(config.DefaultOpenAIAPIKeyEnv, "test-key")
+
+	tests := []struct {
+		name      string
+		status    int
+		body      string
+		expectErr string
+	}{
+		{
+			name:      "http 401 json error",
+			status:    http.StatusUnauthorized,
+			body:      `{"error":{"message":"invalid api key"}}`,
+			expectErr: "invalid api key",
+		},
+		{
+			name:      "http 500 empty body falls back to status",
+			status:    http.StatusInternalServerError,
+			body:      ``,
+			expectErr: "500 Internal Server Error",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(tt.status)
+				if tt.body != "" {
+					_, _ = w.Write([]byte(tt.body))
+				}
+			}))
+			defer server.Close()
+
+			provider, err := New(config.ProviderConfig{
+				Name:      config.ProviderOpenAI,
+				Type:      config.ProviderOpenAI,
+				BaseURL:   server.URL,
+				Model:     config.DefaultOpenAIModel,
+				APIKeyEnv: config.DefaultOpenAIAPIKeyEnv,
+			})
+			if err != nil {
+				t.Fatalf("New() error = %v", err)
+			}
+			provider.client = server.Client()
+
+			_, err = provider.Chat(context.Background(), domain.ChatRequest{
+				Model: config.DefaultOpenAIModel,
+			}, make(chan domain.StreamEvent, 1))
+			if err == nil || !strings.Contains(err.Error(), tt.expectErr) {
+				t.Fatalf("expected error containing %q, got %v", tt.expectErr, err)
+			}
+		})
+	}
+}
+
 func TestBuildRequestIncludesSystemPromptToolsAndToolMessages(t *testing.T) {
 	t.Parallel()
 

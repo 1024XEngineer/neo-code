@@ -76,3 +76,19 @@ func TestLoaderLoadEnvironmentSilentlyIgnoresDotEnvFailures(t *testing.T) {
 		t.Fatalf("expected env to stay empty when dotenv loading fails, got %q", got)
 	}
 }
+
+func TestLoaderLoadInvalidBaseDir(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	baseFile := filepath.Join(tempDir, "not-a-directory")
+	if err := os.WriteFile(baseFile, []byte("x"), 0o644); err != nil {
+		t.Fatalf("write base file: %v", err)
+	}
+
+	loader := NewLoader(baseFile)
+	_, err := loader.Load(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "create config dir") {
+		t.Fatalf("expected invalid base dir error, got %v", err)
+	}
+}
