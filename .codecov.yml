@@ -1,0 +1,8 @@
+coverage:
+  status:
+    project:
+      default:
+        target: 80%   # 告诉裁判：整体覆盖率 80% 就给我亮绿灯
+    patch:
+      default:
+        target: 80%   # 告诉裁判：这次 PR 新增的代码覆盖率达到 80% 也给我亮绿灯
