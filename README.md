@@ -110,6 +110,12 @@ go build ./...
 - `bash_exec`：在当前工作目录执行非交互 shell 命令
 - `web_fetch`：抓取 HTTP/HTTPS 网页文本内容
 
+当前 `tools` 层的职责边界如下：
+
+- `Registry` 只负责工具注册、schema 暴露和按名称查找
+- `Executor` 负责实际执行工具，并统一补齐 `ToolCallID`、`Name`、错误结果和错误内容
+- `Runtime` 通过注入的 tool catalog 与 tool executor 编排工具调用，不直接耦合具体工具实现
+
 ## 项目结构
 
 ```text
@@ -142,6 +148,7 @@ docs/
 - 复制操作以内建动作为主，不再依赖终端原生选中文本：
   - `y`：复制当前代码块
   - `Y`：复制当前消息
+- 渲染代码已按组件职责拆分为 `theme`、共享 panel helper、root 布局、conversation 视图和 runtime 视图，便于后续继续迭代而不把 `view.go` 堆成单文件。
 
 ## TUI 快捷键
 

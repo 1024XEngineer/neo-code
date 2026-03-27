@@ -3,10 +3,12 @@ package tui
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/charmbracelet/x/ansi"
 
 	"neocode/internal/provider"
+	"neocode/internal/runtime"
 )
 
 func TestTruncateVisualUsesDisplayWidth(t *testing.T) {
@@ -93,4 +95,59 @@ func TestBoxLineFitsLongContent(t *testing.T) {
 	if width := ansi.StringWidth(line); width != 18 {
 		t.Fatalf("expected box line width 18, got %d for %q", width, line)
 	}
+}
+
+func TestRenderPanelFrameFitsRequestedSize(t *testing.T) {
+	panel := renderPanelFrame("Runtime", "tools + activity", 36, 8, true, themeAccent, "content")
+
+	lines := strings.Split(panel, "\n")
+	if len(lines) != 8 {
+		t.Fatalf("expected 8 rendered lines, got %d", len(lines))
+	}
+	expectedWidth := ansi.StringWidth(lines[0])
+	if expectedWidth < 36 {
+		t.Fatalf("expected panel width to be at least 36, got %d", expectedWidth)
+	}
+	for _, line := range lines {
+		if width := ansi.StringWidth(line); width != expectedWidth {
+			t.Fatalf("expected panel width %d, got %d for %q", expectedWidth, width, line)
+		}
+	}
+}
+
+func TestRenderHeaderIncludesRuntimeStatus(t *testing.T) {
+	m := model{
+		width:  100,
+		height: 24,
+		layout: computeLayout(100, 24),
+		state: uiState{
+			status: runtime.Status{
+				Provider: "openai",
+				Model:    "gpt-4.1-mini",
+				Workdir:  "D:/workspace",
+			},
+			lastUpdatedAt: mustParseTime(t, "2026-03-27T10:08:09+08:00"),
+		},
+	}
+
+	header := m.renderHeader()
+	if !strings.Contains(header, "Provider openai") {
+		t.Fatalf("expected header to contain provider, got %q", header)
+	}
+	if !strings.Contains(header, "Model gpt-4.1-mini") {
+		t.Fatalf("expected header to contain model, got %q", header)
+	}
+	if !strings.Contains(header, "Workdir D:/workspace") {
+		t.Fatalf("expected header to contain workdir, got %q", header)
+	}
+}
+
+func mustParseTime(t *testing.T, value string) time.Time {
+	t.Helper()
+
+	parsed, err := time.Parse(time.RFC3339, value)
+	if err != nil {
+		t.Fatalf("parse time: %v", err)
+	}
+	return parsed
 }

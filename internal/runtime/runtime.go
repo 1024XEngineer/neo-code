@@ -45,6 +45,10 @@ type Status struct {
 // Option customizes runtime construction.
 type Option func(*Service)
 
+type toolCatalog interface {
+	ListSchemas() []provider.ToolSpec
+}
+
 // WithMaxTurns overrides the default tool loop turn cap.
 func WithMaxTurns(maxTurns int) Option {
 	return func(s *Service) {
@@ -99,7 +103,8 @@ func WithSessionStorePath(path string) Option {
 
 // Service orchestrates sessions, prompts, provider calls, tool execution, and event dispatch.
 type Service struct {
-	registry         *tools.Registry
+	toolCatalog      toolCatalog
+	toolExecutor     tools.Executor
 	sessions         *SessionStore
 	prompts          *PromptBuilder
 	bus              *EventBus
@@ -120,14 +125,21 @@ type Service struct {
 }
 
 // New constructs a runtime service with an initial session.
-func New(modelProvider provider.Provider, registry *tools.Registry, model, workdir string, opts ...Option) (*Service, error) {
+func New(
+	modelProvider provider.Provider,
+	catalog toolCatalog,
+	executor tools.Executor,
+	model, workdir string,
+	opts ...Option,
+) (*Service, error) {
 	service := &Service{
-		registry: registry,
-		prompts:  NewPromptBuilder(workdir),
-		bus:      NewEventBus(),
-		model:    model,
-		workdir:  workdir,
-		maxTurns: defaultMaxTurns,
+		toolCatalog:  catalog,
+		toolExecutor: executor,
+		prompts:      NewPromptBuilder(workdir),
+		bus:          NewEventBus(),
+		model:        model,
+		workdir:      workdir,
+		maxTurns:     defaultMaxTurns,
 		providers: map[string]ProviderBinding{
 			modelProvider.Name(): {
 				Name:   modelProvider.Name(),
@@ -146,6 +158,12 @@ func New(modelProvider provider.Provider, registry *tools.Registry, model, workd
 	active, ok := service.currentBinding()
 	if !ok {
 		return nil, fmt.Errorf("no active provider configured")
+	}
+	if service.toolCatalog == nil {
+		return nil, fmt.Errorf("tool catalog is required")
+	}
+	if service.toolExecutor == nil {
+		return nil, fmt.Errorf("tool executor is required")
 	}
 
 	service.status = Status{

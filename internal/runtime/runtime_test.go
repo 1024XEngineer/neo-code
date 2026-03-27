@@ -83,7 +83,7 @@ func TestServiceRunExecutesToolLoop(t *testing.T) {
 		t.Fatalf("register tool: %v", err)
 	}
 
-	service, err := New(&fakeProvider{}, registry, "test-model", t.TempDir())
+	service, err := New(&fakeProvider{}, registry, tools.NewExecutor(registry), "test-model", t.TempDir())
 	if err != nil {
 		t.Fatalf("create runtime: %v", err)
 	}
@@ -151,7 +151,14 @@ func TestServiceRunStopsAtMaxTurns(t *testing.T) {
 		t.Fatalf("register tool: %v", err)
 	}
 
-	service, err := New(&loopingProvider{}, registry, "test-model", t.TempDir(), WithMaxTurns(1))
+	service, err := New(
+		&loopingProvider{},
+		registry,
+		tools.NewExecutor(registry),
+		"test-model",
+		t.TempDir(),
+		WithMaxTurns(1),
+	)
 	if err != nil {
 		t.Fatalf("create runtime: %v", err)
 	}
@@ -185,9 +192,11 @@ func (p *textProvider) Chat(ctx context.Context, req provider.ChatRequest) (prov
 }
 
 func TestServiceSwitchProviderUpdatesStatus(t *testing.T) {
+	registry := tools.NewRegistry()
 	service, err := New(
 		&textProvider{name: "primary", content: "ok"},
-		tools.NewRegistry(),
+		registry,
+		tools.NewExecutor(registry),
 		"model-a",
 		t.TempDir(),
 		WithProviders([]ProviderBinding{
@@ -213,7 +222,14 @@ func TestServiceSwitchProviderUpdatesStatus(t *testing.T) {
 }
 
 func TestServiceRunPublishesAgentChunks(t *testing.T) {
-	service, err := New(&textProvider{name: "primary", content: strings.Repeat("a", 80)}, tools.NewRegistry(), "model-a", t.TempDir())
+	registry := tools.NewRegistry()
+	service, err := New(
+		&textProvider{name: "primary", content: strings.Repeat("a", 80)},
+		registry,
+		tools.NewExecutor(registry),
+		"model-a",
+		t.TempDir(),
+	)
 	if err != nil {
 		t.Fatalf("create runtime: %v", err)
 	}
@@ -237,6 +253,120 @@ func TestServiceRunPublishesAgentChunks(t *testing.T) {
 		default:
 			if !foundChunk {
 				t.Fatalf("expected at least one agent chunk event")
+			}
+			return
+		}
+	}
+}
+
+type failingTool struct{}
+
+func (t *failingTool) Name() string {
+	return "fail"
+}
+
+func (t *failingTool) Description() string {
+	return "Always fails."
+}
+
+func (t *failingTool) Schema() map[string]any {
+	return map[string]any{"type": "object"}
+}
+
+func (t *failingTool) Execute(context.Context, tools.Invocation) (tools.Result, error) {
+	return tools.Result{Content: "failed to execute command"}, context.DeadlineExceeded
+}
+
+type failingToolProvider struct {
+	calls int
+}
+
+func (p *failingToolProvider) Name() string {
+	return "failing"
+}
+
+func (p *failingToolProvider) Chat(context.Context, provider.ChatRequest) (provider.ChatResponse, error) {
+	p.calls++
+	if p.calls == 1 {
+		return provider.ChatResponse{
+			Message: provider.Message{
+				Role: provider.RoleAssistant,
+				ToolCalls: []provider.ToolCall{
+					{
+						ID:        "call-fail-1",
+						Name:      "fail",
+						Arguments: `{}`,
+					},
+				},
+			},
+		}, nil
+	}
+
+	return provider.ChatResponse{
+		Message: provider.Message{
+			Role:    provider.RoleAssistant,
+			Content: "recovered after tool failure",
+		},
+	}, nil
+}
+
+func TestServiceRunContinuesAfterToolError(t *testing.T) {
+	registry := tools.NewRegistry()
+	if err := registry.Register(&failingTool{}); err != nil {
+		t.Fatalf("register tool: %v", err)
+	}
+
+	service, err := New(
+		&failingToolProvider{},
+		registry,
+		tools.NewExecutor(registry),
+		"test-model",
+		t.TempDir(),
+	)
+	if err != nil {
+		t.Fatalf("create runtime: %v", err)
+	}
+
+	session := service.Sessions()[0]
+	events := service.Subscribe(64)
+	if err := service.Run(context.Background(), UserInput{
+		SessionID: session.ID,
+		Content:   "trigger a failing tool",
+	}); err != nil {
+		t.Fatalf("run returned error: %v", err)
+	}
+
+	stored, ok := service.Session(session.ID)
+	if !ok {
+		t.Fatalf("expected session to exist")
+	}
+	if len(stored.Messages) != 4 {
+		t.Fatalf("expected 4 messages in session, got %d", len(stored.Messages))
+	}
+	if got := stored.Messages[2].Content; got != "tool error: failed to execute command" {
+		t.Fatalf("expected normalized tool error message, got %q", got)
+	}
+	if got := stored.Messages[3].Content; got != "recovered after tool failure" {
+		t.Fatalf("expected runtime to continue after tool error, got %q", got)
+	}
+
+	foundToolFinished := false
+	foundErrorEvent := false
+	for {
+		select {
+		case event := <-events:
+			switch event.Type {
+			case EventToolFinished:
+				foundToolFinished = true
+			case EventError:
+				foundErrorEvent = true
+			}
+		default:
+			if !foundToolFinished {
+				t.Fatalf("expected tool finished event")
+			}
+			if !foundErrorEvent {
+				t.Fatalf("expected error event for tool failure")
 			}
 			return
 		}

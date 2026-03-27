@@ -18,7 +18,8 @@
 - `Provider`
   - 只负责模型协议适配、请求组装、响应解析和错误映射
 - `Tools`
-  - 统一管理 schema、参数校验、执行和结果包装
+  - `Registry` 负责注册、schema 暴露和工具查找
+  - `Executor` 负责执行工具、补齐标准结果并统一错误包装
 - `Config`
   - 负责配置加载、默认值补全和启动校验
 
@@ -58,10 +59,10 @@
 
 1. TUI 提交用户输入
 2. Runtime 写入会话消息
-3. Runtime 组装 system prompt、历史消息和 tool schema
+3. Runtime 通过 tool catalog 组装 system prompt、历史消息和 tool schema
 4. Runtime 调用当前 provider
 5. 如果返回普通文本，则流式派发 chunk，并最终写入 assistant message
-6. 如果返回 tool calls，则执行工具
+6. 如果返回 tool calls，则通过 tool executor 执行工具
 7. Tool Result 回写到会话
 8. Runtime 再次调用 provider，直到结束或达到最大轮数
 
@@ -106,3 +107,4 @@
 - assistant 消息中的 fenced code block 会被识别为独立代码块，支持块级导航与复制。
 - 主会话区支持鼠标滚轮、方向键、`PgUp / PgDn`、`Home / End`、`g / G` 等阅读操作；当用户离开底部时，新的流式输出不会强制打断当前阅读位置。
 - 这一轮升级没有改变 `TUI / Runtime / Provider / Tools / Config` 的职责边界，只增强了 TUI 的状态组织、渲染能力与交互闭环。
+- 当前 `internal/tui` 的渲染层已经按职责拆分为 root 布局、conversation 视图、runtime 视图、主题变量和共享 panel helper，后续新增组件时应优先沿这个方向扩展，而不是重新堆回单个大文件。

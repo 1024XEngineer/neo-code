@@ -81,10 +81,12 @@ func Build(configPath string) (*Bootstrap, error) {
 			return nil, err
 		}
 	}
+	executor := tools.NewExecutor(registry)
 
 	rt, err := runtime.New(
 		bindings[0].Client,
 		registry,
+		executor,
 		bindings[0].Model,
 		cfg.Workdir,
 		runtime.WithProviders(bindings, cfg.SelectedProvider),

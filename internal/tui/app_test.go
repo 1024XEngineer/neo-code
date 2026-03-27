@@ -28,7 +28,8 @@ func (p *tuiTestProvider) Chat(context.Context, provider.ChatRequest) (provider.
 func newTestModelWithProvider(t *testing.T, modelProvider provider.Provider) *model {
 	t.Helper()
 
-	runtimeSvc, err := runtime.New(modelProvider, tools.NewRegistry(), "test-model", t.TempDir())
+	registry := tools.NewRegistry()
+	runtimeSvc, err := runtime.New(modelProvider, registry, tools.NewExecutor(registry), "test-model", t.TempDir())
 	if err != nil {
 		t.Fatalf("create runtime: %v", err)
 	}

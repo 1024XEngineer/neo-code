@@ -27,7 +27,7 @@ func (s *Service) executeLoop(ctx context.Context, input UserInput) error {
 		response, err := s.chat(ctx, binding, provider.ChatRequest{
 			Model:    binding.Model,
 			Messages: s.prompts.Build(session),
-			Tools:    s.registry.ListSchemas(),
+			Tools:    s.toolCatalog.ListSchemas(),
 		}, input.SessionID)
 		if err != nil {
 			return err
@@ -69,7 +69,7 @@ func (s *Service) executeLoop(ctx context.Context, input UserInput) error {
 				At:        time.Now(),
 			})
 
-			result, err := s.registry.Execute(ctx, tools.Invocation{
+			result, err := s.toolExecutor.Execute(ctx, tools.Invocation{
 				ID:        call.ID,
 				Name:      call.Name,
 				Arguments: json.RawMessage(call.Arguments),
