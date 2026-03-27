@@ -71,7 +71,7 @@ func (t *ListDirTool) Execute(ctx context.Context, call tools.Invocation) (tools
 
 	info, err := os.Stat(resolvedPath)
 	if err != nil {
-		return tools.Result{}, err
+		return tools.Result{}, wrapPathError("stat", args.Path, err)
 	}
 	if !info.IsDir() {
 		return tools.Result{}, fmt.Errorf("path %q is not a directory", args.Path)
@@ -109,7 +109,7 @@ func (t *ListDirTool) Execute(ctx context.Context, call tools.Invocation) (tools
 	} else {
 		entries, err := os.ReadDir(resolvedPath)
 		if err != nil {
-			return tools.Result{}, err
+			return tools.Result{}, wrapPathError("read", args.Path, err)
 		}
 		for idx, entry := range entries {
 			if idx >= limit {

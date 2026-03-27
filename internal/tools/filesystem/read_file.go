@@ -73,7 +73,7 @@ func (t *ReadFileTool) Execute(ctx context.Context, call tools.Invocation) (tool
 
 	info, err := os.Stat(resolvedPath)
 	if err != nil {
-		return tools.Result{}, err
+		return tools.Result{}, wrapPathError("stat", args.Path, err)
 	}
 	if info.IsDir() {
 		return tools.Result{}, fmt.Errorf("path %q is a directory", args.Path)
@@ -86,19 +86,19 @@ func (t *ReadFileTool) Execute(ctx context.Context, call tools.Invocation) (tool
 
 	file, err := os.Open(resolvedPath)
 	if err != nil {
-		return tools.Result{}, err
+		return tools.Result{}, wrapPathError("open", args.Path, err)
 	}
 	defer file.Close()
 
 	if args.Offset > 0 {
 		if _, err := file.Seek(args.Offset, io.SeekStart); err != nil {
-			return tools.Result{}, err
+			return tools.Result{}, fmt.Errorf("seek path %q: %w", args.Path, err)
 		}
 	}
 
 	content, err := io.ReadAll(io.LimitReader(file, int64(limit)))
 	if err != nil {
-		return tools.Result{}, err
+		return tools.Result{}, fmt.Errorf("read path %q: %w", args.Path, err)
 	}
 
 	return tools.Result{

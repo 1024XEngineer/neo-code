@@ -168,7 +168,7 @@ func TestEditFileRejectsInvalidTargetsAndArguments(t *testing.T) {
 				"old_text": "alpha",
 				"new_text": "beta",
 			},
-			wantErr: "cannot find the file specified",
+			wantErr: "does not exist",
 		},
 		{
 			name: "directory target",

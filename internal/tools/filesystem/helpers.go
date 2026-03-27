@@ -1,7 +1,9 @@
 package filesystem
 
 import (
+	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 )
@@ -40,6 +42,16 @@ func resolvePath(workdir, target string) (string, error) {
 	}
 
 	return candidate, nil
+}
+
+func wrapPathError(op, target string, err error) error {
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("path %q does not exist", target)
+	}
+	return fmt.Errorf("%s path %q: %w", op, target, err)
 }
 
 func truncateString(value string, limit int) string {

@@ -83,7 +83,7 @@ func (t *SearchTool) Execute(ctx context.Context, call tools.Invocation) (tools.
 
 	info, err := os.Stat(root)
 	if err != nil {
-		return tools.Result{}, err
+		return tools.Result{}, wrapPathError("stat", args.Path, err)
 	}
 	if !info.IsDir() {
 		return tools.Result{}, fmt.Errorf("path %q is not a directory", args.Path)

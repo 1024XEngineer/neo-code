@@ -77,7 +77,7 @@ func (t *EditFileTool) Execute(ctx context.Context, call tools.Invocation) (tool
 
 	info, err := os.Stat(resolvedPath)
 	if err != nil {
-		return tools.Result{}, err
+		return tools.Result{}, wrapPathError("stat", args.Path, err)
 	}
 	if info.IsDir() {
 		return tools.Result{}, fmt.Errorf("path %q is a directory", args.Path)
@@ -88,7 +88,7 @@ func (t *EditFileTool) Execute(ctx context.Context, call tools.Invocation) (tool
 
 	payload, err := os.ReadFile(resolvedPath)
 	if err != nil {
-		return tools.Result{}, err
+		return tools.Result{}, wrapPathError("read", args.Path, err)
 	}
 	if len(payload) > maxWriteBytes {
 		return tools.Result{}, fmt.Errorf("file exceeds %d bytes", maxWriteBytes)
