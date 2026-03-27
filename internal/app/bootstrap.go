@@ -39,7 +39,7 @@ func Build(configPath string) (*Bootstrap, error) {
 		if !ok || apiKey == "" {
 			if providerCfg.Name == cfg.SelectedProvider {
 				return nil, fmt.Errorf(
-					"当前选中的 provider %q 没有读到环境变量 %q。这个报错发生在真正请求模型之前，所以不是模型名过期导致的。请确认当前进程里真的有这个变量，或者把 api_key_env 写成纯变量名，例如 OPENAI_API_KEY。",
+					"selected provider %q is missing environment variable %q; this check runs before any model request is sent, so verify that the current process exports the variable and that api_key_env contains only the variable name, for example OPENAI_API_KEY",
 					providerCfg.Name,
 					providerCfg.APIKeyEnv,
 				)
@@ -65,7 +65,7 @@ func Build(configPath string) (*Bootstrap, error) {
 	}
 
 	if len(bindings) == 0 {
-		return nil, fmt.Errorf("没有可用的 provider，请检查配置中的 API Key 环境变量是否已设置")
+		return nil, fmt.Errorf("no provider is available; check whether the configured API key environment variables are set")
 	}
 
 	registry := tools.NewRegistry()

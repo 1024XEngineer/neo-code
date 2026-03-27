@@ -1,5 +1,5 @@
-# NeoCode 示例配置
-# 如果你直接运行 `go run ./cmd/neocode`，首次启动会自动生成一份类似配置。
+# Example NeoCode configuration
+# Running `go run ./cmd/neocode` will generate a similar file on first launch.
 
 providers:
   - name: openai

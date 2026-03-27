@@ -50,12 +50,12 @@ func Load(path string) (Config, error) {
 	if err != nil {
 		if os.IsNotExist(err) {
 			if err := writeDefaultConfig(resolvedPath); err != nil {
-				return Config{}, fmt.Errorf("创建默认配置文件失败: %w", err)
+				return Config{}, fmt.Errorf("create default config: %w", err)
 			}
 
 			payload, err = os.ReadFile(resolvedPath)
 			if err != nil {
-				return Config{}, fmt.Errorf("读取自动生成的配置文件失败: %w", err)
+				return Config{}, fmt.Errorf("read generated config: %w", err)
 			}
 		} else {
 			return Config{}, fmt.Errorf("read config: %w", err)
@@ -83,18 +83,18 @@ func writeDefaultConfig(path string) error {
 
 	payload, err := yaml.Marshal(cfg)
 	if err != nil {
-		return fmt.Errorf("序列化默认配置失败: %w", err)
+		return fmt.Errorf("marshal default config: %w", err)
 	}
 
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return fmt.Errorf("创建配置目录失败: %w", err)
+		return fmt.Errorf("create config directory: %w", err)
 	}
 
-	header := "# NeoCode 首次启动已自动生成此配置文件。\n" +
-		"# 你通常只需要确认 model / workdir，并设置对应的 API Key 环境变量。\n\n"
+	header := "# This file was generated automatically the first time NeoCode started.\n" +
+		"# In most cases you only need to confirm model / workdir and set the matching API key environment variable.\n\n"
 
 	if err := os.WriteFile(path, append([]byte(header), payload...), 0o644); err != nil {
-		return fmt.Errorf("写入默认配置文件失败: %w", err)
+		return fmt.Errorf("write default config: %w", err)
 	}
 
 	return nil
