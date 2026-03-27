@@ -188,14 +188,9 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	if m.state.showHelp {
-		if msg.String() == "esc" || key.Matches(msg, m.keys.ToggleHelp) {
+		if msg.String() == "esc" {
 			m.state.showHelp = false
 		}
-		return m, nil
-	}
-
-	if key.Matches(msg, m.keys.ToggleHelp) {
-		m.state.showHelp = true
 		return m, nil
 	}
 
@@ -299,6 +294,9 @@ func (m *model) handleBrowseKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.copySelectedCodeBlock()
 	case key.Matches(msg, m.keys.CopyMessage):
 		return m, m.copySelectedMessage()
+	case key.Matches(msg, m.keys.ToggleHelp):
+		m.state.showHelp = true
+		return m, nil
 	case key.Matches(msg, m.keys.JumpLatest):
 		m.viewport.GotoBottom()
 		return m, m.setNotice("Jumped to latest output.", toneInfo)

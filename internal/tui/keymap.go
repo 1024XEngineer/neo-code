@@ -116,8 +116,8 @@ func defaultKeyMap() KeyMap {
 			key.WithHelp("up/down", "line"),
 		),
 		ToggleHelp: key.NewBinding(
-			key.WithKeys("f1"),
-			key.WithHelp("F1", "help"),
+			key.WithKeys("h"),
+			key.WithHelp("h", "help"),
 		),
 		Quit: key.NewBinding(
 			key.WithKeys("ctrl+c", "q"),
@@ -132,7 +132,6 @@ func (k KeyMap) ShortHelp() []key.Binding {
 		k.Submit,
 		k.ToggleSidebar,
 		k.CopyCodeBlock,
-		k.ToggleHelp,
 		k.Quit,
 	}
 }

@@ -76,43 +76,95 @@ func TestHandleKeyQuestionMarkStaysInComposer(t *testing.T) {
 	}
 }
 
-func TestHandleKeyF1OpensHelpInComposer(t *testing.T) {
+func TestHandleKeyHStaysInComposer(t *testing.T) {
 	m := newTestModel(t)
 	m.state.pane = paneCompose
 
-	updated, _ := m.handleKey(tea.KeyMsg{Type: tea.KeyF1})
+	updated, _ := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}})
 	next := updated.(*model)
 
-	if !next.state.showHelp {
-		t.Fatalf("expected F1 in composer to open help")
+	if next.state.showHelp {
+		t.Fatalf("expected h in composer not to open help")
 	}
-	if got := next.composer.Value(); got != "" {
-		t.Fatalf("expected F1 not to be inserted into composer, got %q", got)
+	if got := next.composer.Value(); got != "h" {
+		t.Fatalf("expected h to be inserted into composer, got %q", got)
 	}
 }
 
-func TestHandleKeyF1OpensHelpInBrowse(t *testing.T) {
+func TestHandleKeyHOpensHelpInBrowse(t *testing.T) {
+	m := newTestModel(t)
+	m.state.pane = paneBrowse
+
+	updated, _ := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}})
+	next := updated.(*model)
+
+	if !next.state.showHelp {
+		t.Fatalf("expected h in browse mode to open help")
+	}
+}
+
+func TestHandleKeyHStaysInSidebarFilter(t *testing.T) {
+	m := newTestModel(t)
+	m.openSidebar(false)
+
+	updated, _ := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}})
+	next := updated.(*model)
+
+	if next.state.showHelp {
+		t.Fatalf("expected h in sidebar not to open help")
+	}
+	if got := next.sidebarFilter.Value(); got != "h" {
+		t.Fatalf("expected h to be inserted into sidebar filter, got %q", got)
+	}
+	if next.state.sidebarSelection != 0 {
+		t.Fatalf("expected sidebar selection reset to 0 after filter update, got %d", next.state.sidebarSelection)
+	}
+	if next.state.sidebarScroll != 0 {
+		t.Fatalf("expected sidebar scroll reset to 0 after filter update, got %d", next.state.sidebarScroll)
+	}
+	if next.state.pane != paneSidebar {
+		t.Fatalf("expected pane to remain sidebar, got %s", next.state.pane.Label())
+	}
+	if !next.state.sidebarOpen {
+		t.Fatalf("expected sidebar to remain open after typing h")
+	}
+}
+
+func TestHandleKeyEscClosesHelpOverlay(t *testing.T) {
+	m := newTestModel(t)
+	m.state.pane = paneBrowse
+	m.state.showHelp = true
+
+	updated, _ := m.handleKey(tea.KeyMsg{Type: tea.KeyEsc})
+	next := updated.(*model)
+
+	if next.state.showHelp {
+		t.Fatalf("expected Esc to close help overlay")
+	}
+}
+
+func TestHandleKeyHDoesNotCloseHelpOverlay(t *testing.T) {
+	m := newTestModel(t)
+	m.state.pane = paneBrowse
+	m.state.showHelp = true
+
+	updated, _ := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}})
+	next := updated.(*model)
+
+	if !next.state.showHelp {
+		t.Fatalf("expected h not to close help overlay")
+	}
+}
+
+func TestHandleKeyF1DoesNotOpenHelp(t *testing.T) {
 	m := newTestModel(t)
 	m.state.pane = paneBrowse
 
 	updated, _ := m.handleKey(tea.KeyMsg{Type: tea.KeyF1})
 	next := updated.(*model)
 
-	if !next.state.showHelp {
-		t.Fatalf("expected F1 in browse mode to open help")
-	}
-}
-
-func TestHandleKeyF1OpensHelpInSidebar(t *testing.T) {
-	m := newTestModel(t)
-	m.state.sidebarOpen = true
-	m.state.pane = paneSidebar
-
-	updated, _ := m.handleKey(tea.KeyMsg{Type: tea.KeyF1})
-	next := updated.(*model)
-
-	if !next.state.showHelp {
-		t.Fatalf("expected F1 in sidebar to open help")
+	if next.state.showHelp {
+		t.Fatalf("expected F1 not to open help")
 	}
 }
 
