@@ -116,8 +116,8 @@ func defaultKeyMap() KeyMap {
 			key.WithHelp("up/down", "line"),
 		),
 		ToggleHelp: key.NewBinding(
-			key.WithKeys("?"),
-			key.WithHelp("?", "help"),
+			key.WithKeys("f1"),
+			key.WithHelp("F1", "help"),
 		),
 		Quit: key.NewBinding(
 			key.WithKeys("ctrl+c", "q"),

@@ -113,7 +113,7 @@ func buildEmptyConversation(width int) renderedConversation {
 			cardWidth,
 			themeBorder,
 			themePanelAlt,
-			lipgloss.NewStyle().Foreground(themeMuted).Render(" Press ? for shortcuts, Ctrl+B for sessions, and y to copy code."),
+			lipgloss.NewStyle().Foreground(themeMuted).Render(" Press F1 for shortcuts, Ctrl+B for sessions, and y to copy code."),
 		),
 		boxBottom(cardWidth, themeBorder),
 	}

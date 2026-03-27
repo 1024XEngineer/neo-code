@@ -194,6 +194,11 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	if key.Matches(msg, m.keys.ToggleHelp) {
+		m.state.showHelp = true
+		return m, nil
+	}
+
 	if msg.Paste || key.Matches(msg, m.keys.Paste) {
 		return m.handlePasteKey(msg)
 	}
@@ -204,11 +209,6 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	if m.state.pane == paneCompose {
 		return m.handleComposerKey(msg)
-	}
-
-	if key.Matches(msg, m.keys.ToggleHelp) {
-		m.state.showHelp = true
-		return m, nil
 	}
 
 	switch {

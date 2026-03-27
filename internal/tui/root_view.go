@@ -231,7 +231,7 @@ func (m model) renderHelpOverlay() string {
 
 	sections := []string{
 		lipgloss.NewStyle().Bold(true).Foreground(themeText).Render("NeoCode Reader Controls"),
-		lipgloss.NewStyle().Foreground(themeMuted).Render("The footer only shows high-signal shortcuts. Press ? anytime for the full map."),
+		lipgloss.NewStyle().Foreground(themeMuted).Render("The footer only shows high-signal shortcuts. Press F1 anytime for the full map."),
 		"",
 		renderSectionTitle("CORE"),
 		lipgloss.NewStyle().Foreground(themeText).Render("Enter send | Ctrl+J newline | Ctrl+V paste"),
@@ -245,7 +245,7 @@ func (m model) renderHelpOverlay() string {
 		lipgloss.NewStyle().Foreground(themeText).Render("Click a code block to select it, or click Copy in its header."),
 		lipgloss.NewStyle().Foreground(themeText).Render("Click outside the session drawer to close it."),
 		"",
-		lipgloss.NewStyle().Foreground(themeAccent).Render("Press ? or Esc to return."),
+		lipgloss.NewStyle().Foreground(themeAccent).Render("Press F1 or Esc to return."),
 	}
 
 	panel := lipgloss.NewStyle().

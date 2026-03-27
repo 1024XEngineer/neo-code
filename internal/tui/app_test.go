@@ -76,6 +76,46 @@ func TestHandleKeyQuestionMarkStaysInComposer(t *testing.T) {
 	}
 }
 
+func TestHandleKeyF1OpensHelpInComposer(t *testing.T) {
+	m := newTestModel(t)
+	m.state.pane = paneCompose
+
+	updated, _ := m.handleKey(tea.KeyMsg{Type: tea.KeyF1})
+	next := updated.(*model)
+
+	if !next.state.showHelp {
+		t.Fatalf("expected F1 in composer to open help")
+	}
+	if got := next.composer.Value(); got != "" {
+		t.Fatalf("expected F1 not to be inserted into composer, got %q", got)
+	}
+}
+
+func TestHandleKeyF1OpensHelpInBrowse(t *testing.T) {
+	m := newTestModel(t)
+	m.state.pane = paneBrowse
+
+	updated, _ := m.handleKey(tea.KeyMsg{Type: tea.KeyF1})
+	next := updated.(*model)
+
+	if !next.state.showHelp {
+		t.Fatalf("expected F1 in browse mode to open help")
+	}
+}
+
+func TestHandleKeyF1OpensHelpInSidebar(t *testing.T) {
+	m := newTestModel(t)
+	m.state.sidebarOpen = true
+	m.state.pane = paneSidebar
+
+	updated, _ := m.handleKey(tea.KeyMsg{Type: tea.KeyF1})
+	next := updated.(*model)
+
+	if !next.state.showHelp {
+		t.Fatalf("expected F1 in sidebar to open help")
+	}
+}
+
 func TestHandleKeySlashOpensSidebarInBrowse(t *testing.T) {
 	m := newTestModel(t)
 	m.state.pane = paneBrowse
