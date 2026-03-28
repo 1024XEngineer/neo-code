@@ -132,7 +132,7 @@ func (c *Config) ApplyDefaultsFrom(defaults Config) {
 	if c.ToolTimeoutSec <= 0 {
 		c.ToolTimeoutSec = defaults.ToolTimeoutSec
 	}
-	c.Tools.ApplyDefaults(def.Tools)
+	c.Tools.ApplyDefaults(defaults.Tools)
 
 	c.Workdir = normalizeWorkdir(c.Workdir)
 }
