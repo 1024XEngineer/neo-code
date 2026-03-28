@@ -1,4 +1,5 @@
 # .goreleaser.yaml
+project_name: neocode
 version: 2 # 必须声明为 v2 语法
 
 before:
@@ -45,3 +46,36 @@ changelog:
     exclude:
       - '^docs:'
       - '^test:'
+
+# ================= 新增：包管理器分发配置 =================
+
+# 1. 生成 Debian (.deb) 安装包
+nfpms:
+  - id: default
+    file_name_template: '{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}'
+    homepage: "https://github.com/1024XEngineer/neocode" # 换成官方或你的仓库地址
+    description: "A local Coding Agent MVP."
+    maintainer: "NeoCode Team"
+    formats:
+      - deb
+
+# 2. 生成 Homebrew 配方并自动推送到你的 homebrew-neocode 仓库
+brews:
+  - repository:
+      owner: 1024XEngineer  # <--- 改成你的 GitHub 用户名
+      name: homebrew-neocode       # 你刚才建好的仓库名
+      token: "{{ .Env.TAP_GITHUB_TOKEN }}" # 使用刚才传进来的秘钥
+    directory: Formula
+    homepage: "https://github.com/1024XEngineer/neocode"
+    description: "A local Coding Agent MVP."
+    test: |
+      system "#{bin}/neocode --version" # 简单的安装后测试脚本
+
+# 3. 生成 Scoop 清单并自动推送到你的 scoop-bucket 仓库
+scoops:
+  - repository:
+      owner: 1024XEngineer  # <--- 改成你的 GitHub 用户名
+      name: scoop-bucket           # 你刚才建好的仓库名
+      token: "{{ .Env.TAP_GITHUB_TOKEN }}"
+    homepage: "https://github.com/1024XEngineer/neocode"
+    description: "A local Coding Agent MVP."

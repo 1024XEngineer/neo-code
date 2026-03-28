@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/dust/neo-code/internal/tools"
+	"neo-code/internal/tools"
 )
 
 type WriteFileTool struct {

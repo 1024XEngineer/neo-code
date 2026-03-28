@@ -13,18 +13,67 @@ NeoCode 是一个基于 Go 和 Bubble Tea 构建的本地 Coding Agent MVP。它
 - Go 1.21 及以上
 - 至少一个可用的模型 Provider API Key，例如 `OPENAI_API_KEY`
 
-## 快速开始
-1. 克隆仓库。
+## 安装指南 (快速开始)
+
+NeoCode 提供了极其原生的系统级安装体验，真正的开箱即用（无需 Go 环境）。请根据你的操作系统选择最适合的安装方式：
+
+### 🍎 macOS / Linux (推荐 Homebrew)
+对于习惯使用 Homebrew 的用户，只需一行命令即可接入官方 Tap 并安装：
+```bash
+brew install 1024XEngineer/homebrew-neocode/neocode
+```
+
+### 🪟 Windows (推荐 Scoop)
+
+对于 Windows 极客玩家，我们提供了官方的 Scoop 分发源：
+
+```PowerShell
+scoop bucket add neocode https://github.com/1024XEngineer/scoop-bucket.git
+scoop install neocode
+```
+
+### 🐧 Ubuntu / Debian (.deb)
+
+前往项目的 [Releases 页面](https://www.google.com/search?q=https://github.com/pionxe/neo-code/releases) 下载最新版本的 `.deb` 安装包，然后在终端执行：
+
+```Bash
+sudo dpkg -i neo-code_*_linux_amd64.deb
+```
+
+### 🚀 兜底方案：一键安装脚本
+
+如果你的系统没有安装上述包管理器，也可以使用我们提供的自动化脚本一键下载并配置：
+
+**Linux / macOS:**
+
+```Bash
+curl -sSL https://raw.githubusercontent.com/1024XEngineer/neo-code/main/scripts/install.sh | bash
+```
+
+**Windows (PowerShell):**
+
+```PowerShell
+irm https://raw.githubusercontent.com/1024XEngineer/neo-code/main/scripts/install.ps1 | iex
+```
+
+------
+
+### 🛠️ 源码运行（面向开发者）
+
+如果你希望参与二次开发，可以从源码启动：
+
+1. 确保已安装 Go 1.21 及以上环境，然后克隆仓库。
 2. 准备 Provider 的 API Key，可以通过环境变量或 NeoCode 托管的 `.env` 文件提供。
 3. 运行应用：
 
-```bash
+```Bash
 go run ./cmd/neocode
 ```
 
-首次启动时，NeoCode 会在当前用户主目录下创建自己的托管目录、默认配置和会话存储结构。
+*注：首次启动时（无论哪种安装方式），NeoCode 都会在当前用户主目录下自动创建托管目录、默认配置和会话存储结构。*
 
 ## Slash Command
+
 - `/set url <url>`：更新当前选中 Provider 的 Base URL。
 - `/set key <key>`：将当前 Provider 的密钥写入托管 `.env` 并立即重新加载。
 - `/model`：打开交互式模型选择列表。

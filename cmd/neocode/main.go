@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/dust/neo-code/internal/app"
+	"neo-code/internal/app"
 )
 
 func main() {

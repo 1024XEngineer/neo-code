@@ -3,7 +3,7 @@ package tools
 import (
 	"context"
 
-	"github.com/dust/neo-code/internal/provider"
+	"neo-code/internal/provider"
 )
 
 type Tool interface {

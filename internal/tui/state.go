@@ -10,7 +10,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	agentruntime "github.com/dust/neo-code/internal/runtime"
+	agentruntime "neo-code/internal/runtime"
 )
 
 type panel int

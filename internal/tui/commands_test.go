@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dust/neo-code/internal/config"
+	"neo-code/internal/config"
 )
 
 func TestExecuteLocalCommand(t *testing.T) {

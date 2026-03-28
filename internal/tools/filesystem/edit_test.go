@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dust/neo-code/internal/tools"
+	"neo-code/internal/tools"
 )
 
 func TestEditToolExecute(t *testing.T) {

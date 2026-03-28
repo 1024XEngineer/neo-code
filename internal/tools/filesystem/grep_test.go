@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dust/neo-code/internal/tools"
+	"neo-code/internal/tools"
 )
 
 func TestGrepToolExecute(t *testing.T) {

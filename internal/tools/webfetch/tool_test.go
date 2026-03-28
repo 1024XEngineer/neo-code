@@ -9,8 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dust/neo-code/internal/config"
-	"github.com/dust/neo-code/internal/tools"
+	"neo-code/internal/config"
+	"neo-code/internal/tools"
+
 	"golang.org/x/net/html"
 )
 

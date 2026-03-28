@@ -10,10 +10,10 @@ import (
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/dust/neo-code/internal/config"
-	"github.com/dust/neo-code/internal/provider"
-	agentruntime "github.com/dust/neo-code/internal/runtime"
-	"github.com/dust/neo-code/internal/tools"
+	"neo-code/internal/config"
+	"neo-code/internal/provider"
+	agentruntime "neo-code/internal/runtime"
+	"neo-code/internal/tools"
 )
 
 type stubRuntime struct {
