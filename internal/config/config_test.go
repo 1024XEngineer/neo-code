@@ -24,6 +24,12 @@ selected_provider: openai
 current_model: gpt-5.4
 workdir: .
 shell: powershell
+tools:
+  webfetch:
+    max_response_bytes: 4096
+    supported_content_types:
+      - text/html
+      - text/plain
 providers:
   - name: openai
     type: openai
@@ -42,6 +48,12 @@ providers:
 				}
 				if provider.BaseURL != "https://example.com/v1" {
 					t.Fatalf("expected custom base url, got %q", provider.BaseURL)
+				}
+				if cfg.Tools.WebFetch.MaxResponseBytes != 4096 {
+					t.Fatalf("expected custom max_response_bytes 4096, got %d", cfg.Tools.WebFetch.MaxResponseBytes)
+				}
+				if len(cfg.Tools.WebFetch.SupportedContentTypes) != 2 {
+					t.Fatalf("expected 2 supported content types, got %+v", cfg.Tools.WebFetch.SupportedContentTypes)
 				}
 			},
 		},
@@ -72,6 +84,12 @@ providers:
 				}
 				if provider.Model != "gpt-4o" {
 					t.Fatalf("expected provider model gpt-4o, got %q", provider.Model)
+				}
+				if cfg.Tools.WebFetch.MaxResponseBytes != DefaultWebFetchMaxResponseBytes {
+					t.Fatalf("expected default max_response_bytes %d, got %d", DefaultWebFetchMaxResponseBytes, cfg.Tools.WebFetch.MaxResponseBytes)
+				}
+				if len(cfg.Tools.WebFetch.SupportedContentTypes) != len(DefaultWebFetchSupportedContentTypes()) {
+					t.Fatalf("expected default supported content types, got %+v", cfg.Tools.WebFetch.SupportedContentTypes)
 				}
 			},
 		},
@@ -362,6 +380,12 @@ func TestConfigApplyDefaultsFillsMissingFields(t *testing.T) {
 	if !filepath.IsAbs(cfg.Workdir) {
 		t.Fatalf("expected absolute workdir, got %q", cfg.Workdir)
 	}
+	if cfg.Tools.WebFetch.MaxResponseBytes != DefaultWebFetchMaxResponseBytes {
+		t.Fatalf("expected default webfetch max_response_bytes %d, got %d", DefaultWebFetchMaxResponseBytes, cfg.Tools.WebFetch.MaxResponseBytes)
+	}
+	if len(cfg.Tools.WebFetch.SupportedContentTypes) != len(DefaultWebFetchSupportedContentTypes()) {
+		t.Fatalf("expected default supported content types, got %+v", cfg.Tools.WebFetch.SupportedContentTypes)
+	}
 }
 
 func TestConfigValidateFailures(t *testing.T) {
@@ -422,6 +446,24 @@ func TestConfigValidateFailures(t *testing.T) {
 				return &cfg
 			}(),
 			expectErr: "model is empty",
+		},
+		{
+			name: "invalid webfetch max response bytes",
+			config: func() *Config {
+				cfg := validConfig.Clone()
+				cfg.Tools.WebFetch.MaxResponseBytes = 0
+				return &cfg
+			}(),
+			expectErr: "max_response_bytes must be greater than 0",
+		},
+		{
+			name: "invalid webfetch supported content types",
+			config: func() *Config {
+				cfg := validConfig.Clone()
+				cfg.Tools.WebFetch.SupportedContentTypes = []string{""}
+				return &cfg
+			}(),
+			expectErr: "supported_content_types[0] is empty",
 		},
 	}
 
@@ -542,6 +584,8 @@ func TestLoaderLoadAndSaveRoundTrip(t *testing.T) {
 			cfg.Providers[i].Model = "gpt-5.4"
 		}
 	}
+	cfg.Tools.WebFetch.MaxResponseBytes = 1024
+	cfg.Tools.WebFetch.SupportedContentTypes = []string{"text/html", "application/json"}
 	if err := loader.Save(context.Background(), cfg); err != nil {
 		t.Fatalf("Save() error = %v", err)
 	}
@@ -552,6 +596,12 @@ func TestLoaderLoadAndSaveRoundTrip(t *testing.T) {
 	}
 	if reloaded.CurrentModel != "gpt-5.4" {
 		t.Fatalf("expected current model %q, got %q", "gpt-5.4", reloaded.CurrentModel)
+	}
+	if reloaded.Tools.WebFetch.MaxResponseBytes != 1024 {
+		t.Fatalf("expected max_response_bytes %d, got %d", 1024, reloaded.Tools.WebFetch.MaxResponseBytes)
+	}
+	if len(reloaded.Tools.WebFetch.SupportedContentTypes) != 2 {
+		t.Fatalf("expected persisted supported content types, got %+v", reloaded.Tools.WebFetch.SupportedContentTypes)
 	}
 }
 
@@ -621,8 +671,12 @@ func TestNormalizeWorkdirAndClone(t *testing.T) {
 	cfg := Default()
 	cloned := cfg.Clone()
 	cloned.CurrentModel = "modified"
+	cloned.Tools.WebFetch.SupportedContentTypes[0] = "application/json"
 	if cfg.CurrentModel == cloned.CurrentModel {
 		t.Fatalf("expected clone to be independent from source")
+	}
+	if cfg.Tools.WebFetch.SupportedContentTypes[0] == cloned.Tools.WebFetch.SupportedContentTypes[0] {
+		t.Fatalf("expected webfetch supported content types to be cloned")
 	}
 }
 

@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"mime"
 	"os"
 	"path/filepath"
 	goruntime "runtime"
@@ -30,7 +31,18 @@ const (
 	DefaultWorkdir          = "."
 	DefaultMaxLoops         = 8
 	DefaultToolTimeoutSec   = 20
+	// DefaultWebFetchMaxResponseBytes bounds the amount of web content returned to the model.
+	DefaultWebFetchMaxResponseBytes int64 = 256 * 1024
 )
+
+var defaultWebFetchSupportedContentTypes = []string{
+	"text/html",
+	"application/xhtml+xml",
+	"text/plain",
+	"application/json",
+	"application/xml",
+	"text/xml",
+}
 
 type Config struct {
 	Providers        []ProviderConfig `yaml:"providers"`
@@ -40,6 +52,7 @@ type Config struct {
 	Shell            string           `yaml:"shell"`
 	MaxLoops         int              `yaml:"max_loops,omitempty"`
 	ToolTimeoutSec   int              `yaml:"tool_timeout_sec,omitempty"`
+	Tools            ToolsConfig      `yaml:"tools,omitempty"`
 }
 
 type ProviderConfig struct {
@@ -58,6 +71,22 @@ type ResolvedProviderConfig struct {
 type ModelOption struct {
 	Name        string
 	Description string
+}
+
+// ToolsConfig stores tool-specific configuration values.
+type ToolsConfig struct {
+	WebFetch WebFetchConfig `yaml:"webfetch,omitempty"`
+}
+
+// WebFetchConfig controls response filtering and limits for the webfetch tool.
+type WebFetchConfig struct {
+	MaxResponseBytes      int64    `yaml:"max_response_bytes,omitempty"`
+	SupportedContentTypes []string `yaml:"supported_content_types,omitempty"`
+}
+
+// DefaultWebFetchSupportedContentTypes returns the default media types accepted by webfetch.
+func DefaultWebFetchSupportedContentTypes() []string {
+	return append([]string(nil), defaultWebFetchSupportedContentTypes...)
 }
 
 func Default() *Config {
@@ -91,6 +120,9 @@ func Default() *Config {
 		Shell:            defaultShell(),
 		MaxLoops:         DefaultMaxLoops,
 		ToolTimeoutSec:   DefaultToolTimeoutSec,
+		Tools: ToolsConfig{
+			WebFetch: defaultWebFetchConfig(),
+		},
 	}
 }
 
@@ -112,6 +144,7 @@ func (c *Config) Clone() Config {
 
 	clone := *c
 	clone.Providers = append([]ProviderConfig(nil), c.Providers...)
+	clone.Tools = c.Tools.Clone()
 	return clone
 }
 
@@ -148,6 +181,7 @@ func (c *Config) ApplyDefaults() {
 	if c.ToolTimeoutSec <= 0 {
 		c.ToolTimeoutSec = def.ToolTimeoutSec
 	}
+	c.Tools.ApplyDefaults(def.Tools)
 
 	c.Workdir = normalizeWorkdir(c.Workdir)
 }
@@ -191,6 +225,9 @@ func (c *Config) Validate() error {
 	}
 	if strings.TrimSpace(selected.Model) == "" {
 		return fmt.Errorf("config: selected provider %q has empty model", selected.Name)
+	}
+	if err := c.Tools.Validate(); err != nil {
+		return fmt.Errorf("config: tools: %w", err)
 	}
 
 	return nil
@@ -343,4 +380,104 @@ func defaultShell() string {
 		return "powershell"
 	}
 	return "bash"
+}
+
+func defaultWebFetchConfig() WebFetchConfig {
+	return WebFetchConfig{
+		MaxResponseBytes:      DefaultWebFetchMaxResponseBytes,
+		SupportedContentTypes: DefaultWebFetchSupportedContentTypes(),
+	}
+}
+
+func (c ToolsConfig) Clone() ToolsConfig {
+	return ToolsConfig{
+		WebFetch: c.WebFetch.Clone(),
+	}
+}
+
+func (c *ToolsConfig) ApplyDefaults(def ToolsConfig) {
+	if c == nil {
+		return
+	}
+
+	c.WebFetch.ApplyDefaults(def.WebFetch)
+}
+
+func (c ToolsConfig) Validate() error {
+	if err := c.WebFetch.Validate(); err != nil {
+		return fmt.Errorf("webfetch: %w", err)
+	}
+	return nil
+}
+
+func (c WebFetchConfig) Clone() WebFetchConfig {
+	clone := c
+	clone.SupportedContentTypes = append([]string(nil), c.SupportedContentTypes...)
+	return clone
+}
+
+func (c *WebFetchConfig) ApplyDefaults(def WebFetchConfig) {
+	if c == nil {
+		return
+	}
+
+	if c.MaxResponseBytes <= 0 {
+		c.MaxResponseBytes = def.MaxResponseBytes
+	}
+	c.SupportedContentTypes = normalizeContentTypes(c.SupportedContentTypes, def.SupportedContentTypes)
+}
+
+func (c WebFetchConfig) Validate() error {
+	if c.MaxResponseBytes <= 0 {
+		return errors.New("max_response_bytes must be greater than 0")
+	}
+	if len(c.SupportedContentTypes) == 0 {
+		return errors.New("supported_content_types is empty")
+	}
+
+	for i, contentType := range c.SupportedContentTypes {
+		if normalizeContentType(contentType) == "" {
+			return fmt.Errorf("supported_content_types[%d] is empty", i)
+		}
+	}
+	return nil
+}
+
+func normalizeContentTypes(values []string, defaults []string) []string {
+	source := values
+	if len(source) == 0 {
+		source = defaults
+	}
+
+	normalized := make([]string, 0, len(source))
+	seen := make(map[string]struct{}, len(source))
+	for _, value := range source {
+		contentType := normalizeContentType(value)
+		if contentType == "" {
+			continue
+		}
+		if _, exists := seen[contentType]; exists {
+			continue
+		}
+		seen[contentType] = struct{}{}
+		normalized = append(normalized, contentType)
+	}
+	return normalized
+}
+
+func normalizeContentType(value string) string {
+	trimmed := strings.ToLower(strings.TrimSpace(value))
+	if trimmed == "" {
+		return ""
+	}
+
+	mediaType, _, err := mime.ParseMediaType(trimmed)
+	if err == nil {
+		return mediaType
+	}
+
+	if index := strings.Index(trimmed, ";"); index >= 0 {
+		return strings.TrimSpace(trimmed[:index])
+	}
+	return trimmed
 }
