@@ -1,0 +1,2 @@
+# 强制 Shell 脚本始终使用 LF 换行符，防止在 Windows 上拉取时被转为 CRLF
+*.sh text eol=lf

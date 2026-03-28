@@ -1,0 +1,34 @@
+name: goreleaser
+
+on:
+  push:
+    # 只有推送 v 开头的 tag 时才触发发布流程
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write # 必须赋予写入权限，以便 Action 能够创建 Release
+
+jobs:
+  goreleaser:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # 获取所有历史记录和 tag
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22' # 替换为 NeoCode 实际使用的 Go 版本
+
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@v5
+        with:
+          distribution: goreleaser
+          version: latest
+          args: release --clean
+        env:
+          # GitHub Actions 自动注入的 Token，用于发布 Release
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

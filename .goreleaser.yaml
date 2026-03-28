@@ -1,0 +1,47 @@
+# .goreleaser.yaml
+version: 2 # 必须声明为 v2 语法
+
+before:
+  hooks:
+    # 每次构建前清理模块并下载依赖
+    - go mod tidy
+    - go mod download
+
+builds:
+  - env:
+      - CGO_ENABLED=0 # 禁用 CGO，确保生成纯静态链接的二进制文件
+    goos:
+      - linux
+      - windows
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    # 指定 main.go 的路径（根据 NeoCode 的实际目录调整）
+    main: ./cmd/neocode/main.go 
+    # 编译出的二进制文件名
+    binary: neocode
+
+archives:
+  - format: tar.gz
+    # 为 Windows 提供单独的 zip 格式
+    format_overrides:
+      - goos: windows
+        format: zip
+    name_template: >-
+      {{ .ProjectName }}_
+      {{- title .Os }}_
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else if eq .Arch "386" }}i386
+      {{- else }}{{ .Arch }}{{ end }}
+      {{- if .Arm }}v{{ .Arm }}{{ end }}
+
+checksum:
+  name_template: 'checksums.txt'
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
