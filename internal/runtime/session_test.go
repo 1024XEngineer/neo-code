@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dust/neo-code/internal/provider"
+	"neo-code/internal/provider"
 )
 
 func TestJSONSessionStoreSaveLoadAndListSummaries(t *testing.T) {

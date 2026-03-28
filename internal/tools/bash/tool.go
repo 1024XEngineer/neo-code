@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dust/neo-code/internal/tools"
+	"neo-code/internal/tools"
 )
 
 type Tool struct {

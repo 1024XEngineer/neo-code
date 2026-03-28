@@ -4,8 +4,8 @@ import (
 	"context"
 	"errors"
 
-	"github.com/dust/neo-code/internal/config"
-	"github.com/dust/neo-code/internal/provider"
+	"neo-code/internal/config"
+	"neo-code/internal/provider"
 )
 
 type Provider struct {

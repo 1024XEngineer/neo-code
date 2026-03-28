@@ -4,10 +4,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dust/neo-code/internal/config"
-	"github.com/dust/neo-code/internal/provider"
-	"github.com/dust/neo-code/internal/provider/anthropic"
-	"github.com/dust/neo-code/internal/provider/openai"
+	"neo-code/internal/config"
+	"neo-code/internal/provider"
+	"neo-code/internal/provider/anthropic"
+	"neo-code/internal/provider/openai"
 )
 
 func TestRegistryRegisterAndGet(t *testing.T) {

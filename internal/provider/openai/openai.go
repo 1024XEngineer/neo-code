@@ -13,8 +13,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dust/neo-code/internal/config"
-	domain "github.com/dust/neo-code/internal/provider"
+	"neo-code/internal/config"
+	domain "neo-code/internal/provider"
 )
 
 type Provider struct {

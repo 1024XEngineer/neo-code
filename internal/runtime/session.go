@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/dust/neo-code/internal/provider"
+	"neo-code/internal/provider"
 )
 
 const sessionsDirName = "sessions"

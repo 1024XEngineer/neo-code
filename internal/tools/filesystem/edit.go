@@ -8,7 +8,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/dust/neo-code/internal/tools"
+	"neo-code/internal/tools"
 )
 
 type EditTool struct {

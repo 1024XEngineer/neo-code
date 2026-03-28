@@ -6,13 +6,13 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/dust/neo-code/internal/config"
-	agentruntime "github.com/dust/neo-code/internal/runtime"
-	"github.com/dust/neo-code/internal/tools"
-	"github.com/dust/neo-code/internal/tools/bash"
-	"github.com/dust/neo-code/internal/tools/filesystem"
-	"github.com/dust/neo-code/internal/tools/webfetch"
-	"github.com/dust/neo-code/internal/tui"
+	"neo-code/internal/config"
+	agentruntime "neo-code/internal/runtime"
+	"neo-code/internal/tools"
+	"neo-code/internal/tools/bash"
+	"neo-code/internal/tools/filesystem"
+	"neo-code/internal/tools/webfetch"
+	"neo-code/internal/tui"
 )
 
 func NewProgram(ctx context.Context) (*tea.Program, error) {

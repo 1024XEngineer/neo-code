@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/dust/neo-code/internal/provider"
+	"neo-code/internal/provider"
 )
 
 type Registry struct {

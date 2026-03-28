@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dust/neo-code/internal/tools"
+	"neo-code/internal/tools"
 )
 
 func TestToolExecute(t *testing.T) {

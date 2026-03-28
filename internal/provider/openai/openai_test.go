@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dust/neo-code/internal/config"
-	domain "github.com/dust/neo-code/internal/provider"
+	"neo-code/internal/config"
+	domain "neo-code/internal/provider"
 )
 
 func TestMergeToolCallDeltas(t *testing.T) {

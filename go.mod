@@ -1,4 +1,4 @@
-module github.com/dust/neo-code
+module neo-code
 
 go 1.24.2
 

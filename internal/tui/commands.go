@@ -9,7 +9,7 @@ import (
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/dust/neo-code/internal/config"
+	"neo-code/internal/config"
 )
 
 const (
