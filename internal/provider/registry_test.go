@@ -10,6 +10,7 @@ import (
 	"neo-code/internal/provider/builtin"
 	"neo-code/internal/provider/gemini"
 	"neo-code/internal/provider/openai"
+	"neo-code/internal/provider/openll"
 )
 
 type stubProvider struct{}
@@ -125,6 +126,7 @@ func TestServiceListProvidersUsesConfiguredMetadata(t *testing.T) {
 	expectedModels := map[string]int{
 		openai.Name: len(openai.BuiltinConfig().Models),
 		gemini.Name: len(gemini.BuiltinConfig().Models),
+		openll.Name: len(openll.BuiltinConfig().Models),
 	}
 	if len(items) != len(expectedModels) {
 		t.Fatalf("expected only supported providers, got %d", len(items))
