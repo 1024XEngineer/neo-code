@@ -6,7 +6,7 @@ import (
 	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/spinner"
-	"github.com/charmbracelet/bubbles/textarea"
+	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -26,7 +26,7 @@ type App struct {
 	sessions       list.Model
 	modelPicker    list.Model
 	transcript     viewport.Model
-	input          textarea.Model
+	input          textinput.Model
 	activeMessages []provider.Message
 	focus          panel
 	width          int
@@ -48,19 +48,25 @@ func New(cfg *config.Config, configManager *config.Manager, runtime agentruntime
 	delegate := sessionDelegate{styles: uiStyles}
 	sessionList := list.New([]list.Item{}, delegate, 0, 0)
 	sessionList.Title = ""
+	sessionList.SetShowTitle(false)
 	sessionList.SetShowHelp(false)
 	sessionList.SetShowStatusBar(false)
+	sessionList.SetShowFilter(false)
+	sessionList.SetShowPagination(false)
 	sessionList.SetFilteringEnabled(true)
 	sessionList.DisableQuitKeybindings()
+	sessionList.FilterInput.Prompt = "筛选："
+	sessionList.FilterInput.Placeholder = "输入关键词…"
 
-	input := textarea.New()
+	input := textinput.New()
 	input.Placeholder = "Ask NeoCode to inspect, edit, or build. Type / to browse commands."
-	input.Prompt = "> "
+	input.Prompt = ""
 	input.CharLimit = 24000
-	input.ShowLineNumbers = false
-	input.SetHeight(1)
+	input.PromptStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(colorUser))
+	input.TextStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(colorText))
+	input.PlaceholderStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(colorSubtle))
+	input.Cursor.Style = lipgloss.NewStyle().Foreground(lipgloss.Color(colorUser))
 	input.Focus()
-	input.KeyMap.InsertNewline.SetEnabled(false)
 
 	spin := spinner.New()
 	spin.Spinner = spinner.Line
@@ -110,5 +116,5 @@ func New(cfg *config.Config, configManager *config.Manager, runtime agentruntime
 }
 
 func (a App) Init() tea.Cmd {
-	return tea.Batch(ListenForRuntimeEvent(a.runtime.Events()), textarea.Blink, a.spinner.Tick)
+	return tea.Batch(ListenForRuntimeEvent(a.runtime.Events()), textinput.Blink, a.spinner.Tick)
 }

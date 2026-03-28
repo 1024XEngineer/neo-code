@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/dust/neo-code/internal/config"
 	"github.com/dust/neo-code/internal/provider"
@@ -122,7 +123,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		switch a.focus {
 		case panelSessions:
-			if key.Matches(typed, a.keys.OpenSession) && !a.isFilteringSessions() {
+			if key.Matches(typed, a.keys.OpenSession) && !a.sessions.SettingFilter() {
 				if err := a.activateSelectedSession(); err != nil {
 					a.state.StatusText = err.Error()
 					a.state.ExecutionError = err.Error()
@@ -135,6 +136,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			var cmd tea.Cmd
 			a.sessions, cmd = a.sessions.Update(msg)
+			a.sessions.SetShowFilter(a.sessions.FilterState() != list.Unfiltered)
 			cmds = append(cmds, cmd)
 			return a, tea.Batch(cmds...)
 		case panelTranscript:
@@ -446,12 +448,17 @@ func (a *App) applyFocus() {
 func (a *App) resizeComponents() {
 	lay := a.computeLayout()
 	a.help.ShowAll = a.state.ShowHelp
-	a.sessions.SetSize(max(20, lay.sidebarWidth-4), max(4, lay.sidebarHeight-4))
+	sidebarFrameWidth := a.styles.panelFocused.GetHorizontalFrameSize()
+	sidebarFrameHeight := a.styles.panelFocused.GetVerticalFrameSize()
+	sidebarBodyWidth := max(14, lay.sidebarWidth-sidebarFrameWidth)
+	sidebarBodyHeight := max(4, lay.sidebarHeight-sidebarFrameHeight-lipgloss.Height(a.renderSidebarHeader(sidebarBodyWidth)))
+	a.sessions.SetSize(sidebarBodyWidth, sidebarBodyHeight)
 	menuHeight := a.commandMenuHeight(max(24, lay.rightWidth))
 	a.transcript.Width = max(24, lay.rightWidth)
-	a.transcript.Height = max(6, lay.rightHeight-2-menuHeight-1)
-	a.input.SetWidth(max(24, lay.rightWidth-2))
-	a.input.SetHeight(1)
+	promptInnerWidth := max(8, lay.rightWidth-a.styles.inputBoxFocused.GetHorizontalFrameSize())
+	a.input.Width = max(4, promptInnerWidth-lipgloss.Width("> "))
+	promptHeight := lipgloss.Height(a.renderPrompt(a.transcript.Width))
+	a.transcript.Height = max(6, lay.rightHeight-menuHeight-promptHeight)
 	a.modelPicker.SetSize(max(24, clamp(lay.rightWidth-14, 28, 52)), max(4, clamp(lay.rightHeight-10, 6, 10)))
 	a.rebuildTranscript()
 }

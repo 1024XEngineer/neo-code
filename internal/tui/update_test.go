@@ -9,6 +9,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/dust/neo-code/internal/config"
 	"github.com/dust/neo-code/internal/provider"
@@ -299,10 +300,18 @@ func TestAppHelpersAndRenderingSmoke(t *testing.T) {
 	app.syncConfigState(manager.Get())
 	app.rebuildTranscript()
 
-	if app.View() == "" {
+	view := app.View()
+	if view == "" {
 		t.Fatalf("expected non-empty View()")
 	}
-	if app.renderHeader() == "" || app.renderBody(app.computeLayout()) == "" {
+	if lipgloss.Height(view) > app.height+1 {
+		t.Fatalf("expected view height to stay within window bounds, got %d", lipgloss.Height(view))
+	}
+	lines := strings.Split(strings.TrimRight(view, "\n"), "\n")
+	if len(lines) == 0 || !strings.Contains(lines[len(lines)-1], "Ctrl+U") {
+		t.Fatalf("expected footer help to render on the last visible line")
+	}
+	if app.renderHeader(app.computeLayout().contentWidth) == "" || app.renderBody(app.computeLayout()) == "" {
 		t.Fatalf("expected non-empty render output")
 	}
 	app.state.ShowModelPicker = true
@@ -319,6 +328,22 @@ func TestAppHelpersAndRenderingSmoke(t *testing.T) {
 	}
 	if app.renderPrompt(80) == "" || app.renderHelp(80) == "" {
 		t.Fatalf("expected prompt and help output")
+	}
+	if lipgloss.Width(app.renderPrompt(80)) != 80 {
+		t.Fatalf("expected prompt width 80, got %d", lipgloss.Width(app.renderPrompt(80)))
+	}
+	sidebar := app.renderSidebar(26, 12)
+	if lipgloss.Width(sidebar) != 26 || lipgloss.Height(sidebar) != 12 {
+		t.Fatalf("expected sidebar to respect requested dimensions, got %dx%d", lipgloss.Width(sidebar), lipgloss.Height(sidebar))
+	}
+	if !strings.Contains(app.renderSidebar(26, 12), sidebarTitle) || !strings.Contains(app.renderSidebar(26, 12), sidebarOpenHint) {
+		t.Fatalf("expected updated sidebar header text")
+	}
+	if strings.Contains(app.renderPrompt(80), "Enter/Ctrl+S") {
+		t.Fatalf("expected composer hint line to be removed")
+	}
+	if strings.TrimSpace(app.renderPrompt(80)) == "" {
+		t.Fatalf("expected prompt to render a visible border")
 	}
 	if app.focusLabel() == "" || app.statusBadge("ready") == "" {
 		t.Fatalf("expected status helpers to render")
@@ -361,6 +386,9 @@ func TestAppHelpersAndRenderingSmoke(t *testing.T) {
 	app.sessions.SetFilterState(list.Filtering)
 	if !app.isFilteringSessions() {
 		t.Fatalf("expected filtering state")
+	}
+	if app.sessions.ShowPagination() {
+		t.Fatalf("expected sessions pagination to stay hidden")
 	}
 }
 
@@ -504,7 +532,7 @@ func TestAppUpdateAdditionalTransitions(t *testing.T) {
 		},
 		{
 			name: "toggle help flips state",
-			msg:  tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}},
+			msg:  tea.KeyMsg{Type: tea.KeyCtrlQ},
 			assert: func(t *testing.T, app App, runtime *stubRuntime, manager *config.Manager, msgs []tea.Msg) {
 				t.Helper()
 				if !app.state.ShowHelp || !app.help.ShowAll {
@@ -627,7 +655,7 @@ func TestAppUpdateAdditionalTransitions(t *testing.T) {
 		},
 		{
 			name: "quit returns quit command",
-			msg:  tea.KeyMsg{Type: tea.KeyCtrlC},
+			msg:  tea.KeyMsg{Type: tea.KeyCtrlU},
 			assert: func(t *testing.T, app App, runtime *stubRuntime, manager *config.Manager, msgs []tea.Msg) {
 				t.Helper()
 				foundQuit := false

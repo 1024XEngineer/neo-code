@@ -56,8 +56,10 @@ type styles struct {
 	commandUsage      lipgloss.Style
 	commandUsageMatch lipgloss.Style
 	commandDesc       lipgloss.Style
-	inputMeta         lipgloss.Style
+	inputPrefix       lipgloss.Style
 	inputLine         lipgloss.Style
+	inputBox          lipgloss.Style
+	inputBoxFocused   lipgloss.Style
 	footer            lipgloss.Style
 	badgeUser         lipgloss.Style
 	badgeAgent        lipgloss.Style
@@ -71,12 +73,12 @@ func newStyles() styles {
 	panel := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color(colorBorder)).
-		Background(lipgloss.Color(colorPanel)).
+		Background(lipgloss.Color(colorBg)).
 		Padding(0, 1)
 
 	return styles{
 		doc: lipgloss.NewStyle().
-			Padding(1, 2).
+			Padding(1, 2, 0, 2).
 			Background(lipgloss.Color(colorBg)).
 			Foreground(lipgloss.Color(colorText)),
 		headerBrand: lipgloss.NewStyle().
@@ -99,7 +101,8 @@ func newStyles() styles {
 		panelSubtitle: lipgloss.NewStyle().
 			Foreground(lipgloss.Color(colorSubtle)),
 		panelBody: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(colorText)),
+			Foreground(lipgloss.Color(colorText)).
+			Background(lipgloss.Color(colorBg)),
 		empty: lipgloss.NewStyle().
 			Foreground(lipgloss.Color(colorSubtle)).
 			Padding(1, 0),
@@ -123,19 +126,20 @@ func newStyles() styles {
 		streamMeta: lipgloss.NewStyle().
 			Foreground(lipgloss.Color(colorSubtle)),
 		streamContent: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(colorText)),
+			Foreground(lipgloss.Color(colorText)).
+			Background(lipgloss.Color(colorBg)),
 		messageUserTag:  tagStyle(colorUser, colorInk),
 		messageAgentTag: tagStyle(colorPrimary, colorInk),
 		messageToolTag:  tagStyle(colorSuccess, colorInk),
 		messageBody: lipgloss.NewStyle().
 			Foreground(lipgloss.Color(colorText)).
-			PaddingLeft(1),
+			Padding(0, 1),
 		messageUserBody: lipgloss.NewStyle().
 			Foreground(lipgloss.Color(colorText)).
-			PaddingLeft(1),
+			Padding(0, 1),
 		messageToolBody: lipgloss.NewStyle().
 			Foreground(lipgloss.Color(colorSuccess)).
-			PaddingLeft(1),
+			Padding(0, 1),
 		inlineNotice: lipgloss.NewStyle().
 			Foreground(lipgloss.Color(colorSubtle)).
 			Italic(true),
@@ -154,7 +158,7 @@ func newStyles() styles {
 		codeText: lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#BAC2DE")),
 		commandMenu: lipgloss.NewStyle().
-			Background(lipgloss.Color(colorCode)).
+			Background(lipgloss.Color(colorBg)).
 			Padding(1, 1),
 		commandMenuTitle: lipgloss.NewStyle().
 			Bold(true).
@@ -166,13 +170,24 @@ func newStyles() styles {
 			Foreground(lipgloss.Color(colorPrimary)),
 		commandDesc: lipgloss.NewStyle().
 			Foreground(lipgloss.Color(colorSubtle)),
-		inputMeta: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(colorSubtle)),
+		inputPrefix: lipgloss.NewStyle().
+			Foreground(lipgloss.Color(colorUser)).
+			Bold(true),
 		inputLine: lipgloss.NewStyle().
 			Foreground(lipgloss.Color(colorText)),
+		inputBox: lipgloss.NewStyle().
+			Border(lipgloss.NormalBorder()).
+			BorderForeground(lipgloss.Color(colorBorder)).
+			Background(lipgloss.Color(colorBg)).
+			Padding(0, 1),
+		inputBoxFocused: lipgloss.NewStyle().
+			Border(lipgloss.NormalBorder()).
+			BorderForeground(lipgloss.Color(colorUser)).
+			Background(lipgloss.Color(colorBg)).
+			Padding(0, 1),
 		footer: lipgloss.NewStyle().
-			PaddingTop(1).
-			Foreground(lipgloss.Color(colorSubtle)),
+			Foreground(lipgloss.Color(colorSubtle)).
+			Background(lipgloss.Color(colorBg)),
 		badgeUser:    badge(colorUser, colorInk),
 		badgeAgent:   badge(colorPrimary, colorInk),
 		badgeSuccess: badge(colorSuccess, colorInk),

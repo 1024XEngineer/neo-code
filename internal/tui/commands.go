@@ -22,12 +22,12 @@ const (
 	slashUsageModel  = "/model"
 
 	commandMenuTitle    = "Commands"
-	composerHintText    = "Enter send | /set url | /set key | /model | Tab switch panels"
 	modelPickerTitle    = "Select Model"
 	modelPickerSubtitle = "Up/Down choose, Enter confirm, Esc cancel"
 
-	sidebarTitle    = "Sessions"
-	sidebarSubtitle = "Use / to filter, Enter to open"
+	sidebarTitle      = "Sessions"
+	sidebarFilterHint = "按 \"/\" 筛选"
+	sidebarOpenHint   = "Enter 打开"
 
 	draftSessionTitle     = "Draft"
 	emptyConversationText = "No conversation yet.\nAsk NeoCode to inspect or change code, or type / to browse local commands."
