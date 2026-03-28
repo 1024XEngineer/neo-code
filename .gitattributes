@@ -1,0 +1,2 @@
+# 强制 scripts 目录下的 Shell 脚本始终使用 LF 换行符
+scripts/*.sh text eol=lf
