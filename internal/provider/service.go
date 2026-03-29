@@ -176,6 +176,15 @@ func modelDescriptors(models []string) []ModelDescriptor {
 	return descriptors
 }
 
+// Build 根据已解析的 provider 配置构建 Provider 实例。
+// 使 Service 满足 runtime.ProviderFactory 接口，简化装配层依赖。
+func (s *Service) Build(ctx context.Context, cfg config.ResolvedProviderConfig) (Provider, error) {
+	if err := s.validate(); err != nil {
+		return nil, err
+	}
+	return s.registry.Build(ctx, cfg)
+}
+
 func (s *Service) validate() error {
 	if s == nil || s.manager == nil {
 		return errServiceManagerNil

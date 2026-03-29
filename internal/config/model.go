@@ -39,7 +39,7 @@ type Config struct {
 
 type ProviderConfig struct {
 	Name      string   `yaml:"name"`
-	Driver    string   `yaml:"type"`
+	Driver    string   `yaml:"driver"`
 	BaseURL   string   `yaml:"base_url"`
 	Model     string   `yaml:"model"`
 	Models    []string `yaml:"models,omitempty"`
@@ -490,20 +490,6 @@ func normalizeModelIDs(models []string) []string {
 		normalized = append(normalized, id)
 	}
 	return normalized
-}
-
-func equalModelIDs(left []string, right []string) bool {
-	left = normalizeModelIDs(left)
-	right = normalizeModelIDs(right)
-	if len(left) != len(right) {
-		return false
-	}
-	for i := range left {
-		if !strings.EqualFold(left[i], right[i]) {
-			return false
-		}
-	}
-	return true
 }
 
 func containsModelID(models []string, model string) bool {

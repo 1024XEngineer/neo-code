@@ -36,9 +36,10 @@ func TestMergeToolCallDeltas(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name   string
-		deltas []toolCallDelta
-		assert func(t *testing.T, calls map[int]*domain.ToolCall)
+		name       string
+		deltas     []toolCallDelta
+		assert     func(t *testing.T, calls map[int]*domain.ToolCall)
+		assertDisc func(t *testing.T, disc []domain.ToolCall)
 	}{
 		{
 			name: "single tool call fragments are merged by index",
@@ -60,6 +61,15 @@ func TestMergeToolCallDeltas(t *testing.T) {
 					t.Fatalf("unexpected arguments: %q", call.Arguments)
 				}
 			},
+			assertDisc: func(t *testing.T, disc []domain.ToolCall) {
+				t.Helper()
+				if len(disc) != 1 {
+					t.Fatalf("expected 1 discovered tool call, got %d", len(disc))
+				}
+				if disc[0].ID != "call_1" || disc[0].Name != "filesystem_edit" {
+					t.Fatalf("unexpected discovered call: %+v", disc[0])
+				}
+			},
 		},
 		{
 			name: "multiple indices stay isolated",
@@ -77,6 +87,12 @@ func TestMergeToolCallDeltas(t *testing.T) {
 					t.Fatalf("unexpected second arguments: %q", calls[1].Arguments)
 				}
 			},
+			assertDisc: func(t *testing.T, disc []domain.ToolCall) {
+				t.Helper()
+				if len(disc) != 2 {
+					t.Fatalf("expected 2 discovered tool calls, got %d", len(disc))
+				}
+			},
 		},
 	}
 
@@ -85,8 +101,11 @@ func TestMergeToolCallDeltas(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			calls := map[int]*domain.ToolCall{}
-			mergeToolCallDeltas(calls, tt.deltas)
+			discovered := mergeToolCallDeltas(calls, tt.deltas)
 			tt.assert(t, calls)
+			if tt.assertDisc != nil {
+				tt.assertDisc(t, discovered)
+			}
 		})
 	}
 }
