@@ -75,6 +75,8 @@ OPENAI_API_KEY=your-api-key
 - `GEMINI_API_KEY`
 - `AI_API_KEY`
 
+你也可以在进入 TUI 后通过 `/apikey` 打开输入框，自定义当前运行时优先读取的 API Key 环境变量名。留空确认会恢复为当前 Provider 的默认环境变量名。
+
 ### 3. 启动应用
 
 ```bash
@@ -97,6 +99,7 @@ go run ./cmd/neocode
 
 - `/provider`：切换当前 Provider
 - `/model`：切换当前模型
+- `/apikey`：设置全局 API Key 环境变量名覆盖
 
 ## 新手先理解这 4 层
 
@@ -149,6 +152,7 @@ go run ./cmd/neocode
 ```yaml
 selected_provider: openai
 current_model: gpt-4.1
+api_key_env_override: CUSTOM_OPENAI_KEY
 workdir: /absolute/path/to/workspace
 shell: powershell
 max_loops: 8
@@ -179,7 +183,7 @@ tools:
 - 示例里的 `workdir` 使用绝对路径是为了贴近真实落盘结果
 - 如果你首次启动时还没有手动配置，程序会根据当前工作目录生成默认值
 
-Provider 的 `base_url`、默认模型列表和 `api_key_env` 由代码内建定义提供，不需要你在 YAML 中手动维护。
+Provider 的 `base_url`、默认模型列表和 `api_key_env` 由代码内建定义提供，不需要你在 YAML 中手动维护；如果你想全局覆盖当前运行时读取的环境变量名，可以设置顶层的 `api_key_env_override`，留空则回退到当前 Provider 的默认值。
 
 ## 工具与安全边界
 

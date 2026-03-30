@@ -27,14 +27,15 @@ var defaultWebFetchSupportedContentTypes = []string{
 }
 
 type Config struct {
-	Providers        []ProviderConfig `yaml:"-"`
-	SelectedProvider string           `yaml:"selected_provider"`
-	CurrentModel     string           `yaml:"current_model"`
-	Workdir          string           `yaml:"workdir"`
-	Shell            string           `yaml:"shell"`
-	MaxLoops         int              `yaml:"max_loops,omitempty"`
-	ToolTimeoutSec   int              `yaml:"tool_timeout_sec,omitempty"`
-	Tools            ToolsConfig      `yaml:"tools,omitempty"`
+	Providers         []ProviderConfig `yaml:"-"`
+	SelectedProvider  string           `yaml:"selected_provider"`
+	CurrentModel      string           `yaml:"current_model"`
+	APIKeyEnvOverride string           `yaml:"api_key_env_override,omitempty"`
+	Workdir           string           `yaml:"workdir"`
+	Shell             string           `yaml:"shell"`
+	MaxLoops          int              `yaml:"max_loops,omitempty"`
+	ToolTimeoutSec    int              `yaml:"tool_timeout_sec,omitempty"`
+	Tools             ToolsConfig      `yaml:"tools,omitempty"`
 }
 
 type ProviderConfig struct {
@@ -125,6 +126,7 @@ func (c *Config) ApplyDefaultsFrom(defaults Config) {
 	}
 	c.Tools.ApplyDefaults(defaults.Tools)
 
+	c.APIKeyEnvOverride = normalizeAPIKeyEnvOverride(c.APIKeyEnvOverride)
 	c.Workdir = normalizeWorkdir(c.Workdir)
 }
 
@@ -171,6 +173,9 @@ func (c *Config) Validate() error {
 	if !containsModelID(selected.SupportedModels(), c.CurrentModel) {
 		return fmt.Errorf("config: current_model %q is not supported by provider %q", c.CurrentModel, selected.Name)
 	}
+	if err := validateAPIKeyEnvOverride(c.APIKeyEnvOverride); err != nil {
+		return fmt.Errorf("config: %w", err)
+	}
 	if err := c.Tools.Validate(); err != nil {
 		return fmt.Errorf("config: tools: %w", err)
 	}
@@ -198,6 +203,14 @@ func (c *Config) ProviderByName(name string) (ProviderConfig, error) {
 	}
 
 	return ProviderConfig{}, fmt.Errorf("config: provider %q not found", name)
+}
+
+func (c *Config) EffectiveSelectedProviderConfig() (ProviderConfig, error) {
+	selected, err := c.SelectedProviderConfig()
+	if err != nil {
+		return ProviderConfig{}, err
+	}
+	return selected.WithAPIKeyEnvOverride(c.APIKeyEnvOverride)
 }
 
 func (p ProviderConfig) Validate() error {
@@ -238,6 +251,33 @@ func (p ProviderConfig) SupportedModels() []string {
 		return nil
 	}
 	return []string{model}
+}
+
+func (p ProviderConfig) EffectiveAPIKeyEnv(override string) (string, error) {
+	if err := validateAPIKeyEnvOverride(override); err != nil {
+		return "", err
+	}
+
+	if override = normalizeAPIKeyEnvOverride(override); override != "" {
+		return override, nil
+	}
+
+	envName := strings.TrimSpace(p.APIKeyEnv)
+	if envName == "" {
+		return "", fmt.Errorf("provider %q api_key_env is empty", p.Name)
+	}
+	return envName, nil
+}
+
+func (p ProviderConfig) WithAPIKeyEnvOverride(override string) (ProviderConfig, error) {
+	envName, err := p.EffectiveAPIKeyEnv(override)
+	if err != nil {
+		return ProviderConfig{}, err
+	}
+
+	next := p
+	next.APIKeyEnv = envName
+	return next, nil
 }
 
 func (p ProviderConfig) ResolveAPIKey() (string, error) {
@@ -300,6 +340,26 @@ func mergeProviderDefaults(provider ProviderConfig, defaults []ProviderConfig) P
 	}
 
 	return provider
+}
+
+func normalizeAPIKeyEnvOverride(value string) string {
+	return strings.TrimSpace(value)
+}
+
+func validateAPIKeyEnvOverride(value string) error {
+	value = normalizeAPIKeyEnvOverride(value)
+	if value == "" {
+		return nil
+	}
+	if strings.Contains(value, "=") {
+		return errors.New("api_key_env_override must not contain =")
+	}
+	for _, r := range value {
+		if r == ' ' || r == '\t' || r == '\n' || r == '\r' {
+			return errors.New("api_key_env_override must not contain whitespace")
+		}
+	}
+	return nil
 }
 
 func matchDefaultProvider(provider ProviderConfig, defaults []ProviderConfig) (ProviderConfig, bool) {
