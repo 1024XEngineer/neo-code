@@ -24,7 +24,16 @@ func (a App) View() string {
 	docWidth := max(0, a.width-a.styles.doc.GetHorizontalFrameSize())
 	docHeight := max(0, a.height-a.styles.doc.GetVerticalFrameSize())
 	if docWidth < 84 || docHeight < 24 {
-		return strings.TrimRight(a.styles.doc.Render(lipgloss.Place(docWidth, docHeight, lipgloss.Left, lipgloss.Top, "Window too small.\nPlease resize to at least 84x24.")), "\n")
+		return strings.TrimRight(
+			a.styles.doc.Render(lipgloss.Place(
+				docWidth,
+				docHeight,
+				lipgloss.Left,
+				lipgloss.Top,
+				"Window too small.\nPlease resize to at least 84x24.",
+			)),
+			"\n",
+		)
 	}
 
 	lay := a.computeLayout()
@@ -39,7 +48,10 @@ func (a App) View() string {
 	}
 	parts = append(parts, helpView)
 	content := lipgloss.JoinVertical(lipgloss.Left, parts...)
-	return strings.TrimRight(a.styles.doc.Render(lipgloss.Place(docWidth, docHeight, lipgloss.Left, lipgloss.Top, content)), "\n")
+	return strings.TrimRight(
+		a.styles.doc.Render(lipgloss.Place(docWidth, docHeight, lipgloss.Left, lipgloss.Top, content)),
+		"\n",
+	)
 }
 
 func (a App) renderHeader(width int) string {
@@ -167,19 +179,8 @@ func (a App) renderPrompt(width int) string {
 		box = a.styles.inputBoxFocused
 	}
 
-	// 计算边框和内边距占用的空间
 	boxWidth := max(8, width-2)
-
-	prefix := a.styles.inputPrefix.Render(">")
-	inputContent := a.input.View()
-
-	content := lipgloss.JoinHorizontal(
-		lipgloss.Left,
-		prefix,
-		lipgloss.NewStyle().Width(1).Render(" "),
-		a.styles.inputLine.Width(max(4, boxWidth-2-lipgloss.Width(prefix)-1)).Render(inputContent),
-	)
-	return box.Width(boxWidth).Render(content)
+	return box.Width(boxWidth).Render(a.input.View())
 }
 
 func (a App) renderSidebarHeader(width int) string {
@@ -223,35 +224,42 @@ func (a App) renderPanel(title string, subtitle string, body string, width int, 
 }
 
 func (a App) renderMessageBlock(message provider.Message, width int) string {
+	return a.renderMessageBlockDetailed(message, width).View
+}
+
+func (a App) renderMessageBlockDetailed(message provider.Message, width int) renderedMessageBlock {
 	switch message.Role {
 	case roleEvent:
-		return a.styles.inlineNotice.Width(width).Render("  > " + wrapPlain(message.Content, max(16, width-6)))
+		view := a.styles.inlineNotice.Width(width).Render("  > " + wrapPlain(message.Content, max(16, width-6)))
+		return renderedMessageBlock{View: view, Height: lipgloss.Height(view)}
 	case roleError:
-		return a.styles.inlineError.Width(width).Render("  ! " + wrapPlain(message.Content, max(16, width-6)))
+		view := a.styles.inlineError.Width(width).Render("  ! " + wrapPlain(message.Content, max(16, width-6)))
+		return renderedMessageBlock{View: view, Height: lipgloss.Height(view)}
 	case roleSystem:
-		return a.styles.inlineSystem.Width(width).Render("  - " + wrapPlain(message.Content, max(16, width-6)))
+		view := a.styles.inlineSystem.Width(width).Render("  - " + wrapPlain(message.Content, max(16, width-6)))
+		return renderedMessageBlock{View: view, Height: lipgloss.Height(view)}
 	}
 
-	maxMessageWidth := clamp(int(float64(width)*0.84), 24, width)
+	contentWidth := clamp(int(float64(width)*0.84), 24, width)
 	tag := messageTagAgent
 	tagStyle := a.styles.messageAgentTag
 	bodyStyle := a.styles.messageBody
-	blockAlign := lipgloss.Left
+	userAligned := false
 
 	switch message.Role {
 	case roleUser:
-		maxMessageWidth = clamp(int(float64(width)*0.68), 24, width)
+		contentWidth = clamp(int(float64(width)*0.68), 24, width)
 		tag = messageTagUser
 		tagStyle = a.styles.messageUserTag
 		bodyStyle = a.styles.messageUserBody
-		blockAlign = lipgloss.Right
+		userAligned = true
 	case roleTool:
 		tag = messageTagTool
 		tagStyle = a.styles.messageToolTag
 		bodyStyle = a.styles.messageToolBody
 	}
 
-	content := strings.TrimSpace(message.Content)
+	content := message.Content
 	if content == "" && len(message.ToolCalls) > 0 {
 		names := make([]string, 0, len(message.ToolCalls))
 		for _, call := range message.ToolCalls {
@@ -259,25 +267,40 @@ func (a App) renderMessageBlock(message provider.Message, width int) string {
 		}
 		content = "Tool calls: " + strings.Join(names, ", ")
 	}
-	if content == "" {
+	if strings.TrimSpace(content) == "" {
 		content = emptyMessageText
 	}
 
-	contentBlock := a.renderMessageContent(content, maxMessageWidth-2, bodyStyle)
-	if message.Role == roleUser {
-		contentBlock = lipgloss.PlaceHorizontal(maxMessageWidth, lipgloss.Right, contentBlock)
+	contentRender := a.renderMessageContentDetailed(content, contentWidth, bodyStyle)
+	tagView := tagStyle.Render(tag)
+	if userAligned {
+		tagView = lipgloss.PlaceHorizontal(contentWidth, lipgloss.Right, tagView)
 	}
 
 	block := lipgloss.JoinVertical(
-		blockAlign,
-		tagStyle.Render(tag),
-		contentBlock,
+		lipgloss.Left,
+		tagView,
+		contentRender.View,
 	)
+	block = lipgloss.NewStyle().Width(contentWidth).Render(block)
 
-	if message.Role == roleUser {
-		return lipgloss.PlaceHorizontal(width, lipgloss.Right, block)
+	targets := make([]codeBlockTarget, 0, len(contentRender.CodeBlocks))
+	targetXOffset := 0
+	if userAligned {
+		targetXOffset = width - contentWidth
+		block = lipgloss.PlaceHorizontal(width, lipgloss.Right, block)
 	}
-	return block
+	for _, target := range contentRender.CodeBlocks {
+		target.X += targetXOffset
+		target.Line++
+		targets = append(targets, target)
+	}
+
+	return renderedMessageBlock{
+		View:       block,
+		Height:     lipgloss.Height(block),
+		CodeBlocks: targets,
+	}
 }
 
 func (a App) renderCommandMenu(width int) string {
@@ -315,40 +338,74 @@ func (a App) commandMenuHeight(width int) int {
 func (a App) renderHelp(width int) string {
 	a.help.ShowAll = a.state.ShowHelp
 	helpContent := a.help.View(a.keys)
-	// 确保帮助视图填充整个宽度，避免边框断裂
 	return a.styles.footer.Width(width).Render(helpContent)
 }
 
 func (a App) renderMessageContent(content string, width int, bodyStyle lipgloss.Style) string {
-	parts := strings.Split(content, "```")
-	if len(parts) == 1 {
-		return bodyStyle.Render(wrapPlain(content, max(16, width-2)))
+	return a.renderMessageContentDetailed(content, width, bodyStyle).View
+}
+
+func (a App) renderMessageContentDetailed(content string, width int, bodyStyle lipgloss.Style) renderedContent {
+	segments := parseMessageSegments(content)
+	if len(segments) == 0 {
+		view := bodyStyle.Width(width).Render(emptyMessageText)
+		return renderedContent{View: view, Height: lipgloss.Height(view)}
 	}
 
-	blocks := make([]string, 0, len(parts))
-	for i, part := range parts {
-		if i%2 == 0 {
-			trimmed := strings.Trim(part, "\n")
-			if trimmed == "" {
-				continue
-			}
-			blocks = append(blocks, bodyStyle.Render(wrapPlain(trimmed, max(16, width-2))))
-			continue
+	blocks := make([]string, 0, len(segments))
+	targets := make([]codeBlockTarget, 0, 2)
+	lineOffset := 0
+	codeIndex := 0
+	bodyInnerWidth := max(16, width-bodyStyle.GetHorizontalFrameSize())
+
+	for _, segment := range segments {
+		switch segment.Kind {
+		case segmentCode:
+			codeView, target := a.renderCodeBlock(segment, width, codeIndex)
+			blocks = append(blocks, codeView)
+			target.Line += lineOffset
+			targets = append(targets, target)
+			lineOffset += lipgloss.Height(codeView)
+			codeIndex++
+		default:
+			view := bodyStyle.Width(width).Render(wrapPlain(segment.Content, bodyInnerWidth))
+			blocks = append(blocks, view)
+			lineOffset += lipgloss.Height(view)
 		}
-
-		code := strings.Trim(part, "\n")
-		lines := strings.Split(code, "\n")
-		if len(lines) > 1 && !strings.Contains(lines[0], " ") && !strings.Contains(lines[0], "\t") {
-			code = strings.Join(lines[1:], "\n")
-		}
-		blocks = append(blocks, a.styles.codeBlock.Width(width).Render(a.styles.codeText.Width(max(10, width-4)).Render(code)))
 	}
 
-	if len(blocks) == 0 {
-		return bodyStyle.Render(emptyMessageText)
+	view := lipgloss.JoinVertical(lipgloss.Left, blocks...)
+	return renderedContent{
+		View:       view,
+		Height:     lipgloss.Height(view),
+		CodeBlocks: targets,
+	}
+}
+
+func (a App) renderCodeBlock(segment messageSegment, width int, codeIndex int) (string, codeBlockTarget) {
+	language := strings.TrimSpace(segment.Language)
+	if language == "" {
+		language = "text"
 	}
 
-	return lipgloss.JoinVertical(lipgloss.Left, blocks...)
+	copyLabel := "[ Copy ]"
+	headerLeft := a.styles.codeLanguage.Render(language)
+	headerRight := a.styles.codeCopy.Render(copyLabel)
+	headerText := padBetween(width, headerLeft, headerRight)
+	header := a.styles.codeHeader.Width(width).Render(headerText)
+
+	bodyInnerWidth := max(10, width-a.styles.codeBlock.GetHorizontalFrameSize())
+	code := strings.TrimSuffix(segment.Content, "\n")
+	body := a.styles.codeBlock.Width(width).Render(a.styles.codeText.Width(bodyInnerWidth).Render(code))
+
+	return lipgloss.JoinVertical(lipgloss.Left, header, body), codeBlockTarget{
+		BlockIndex: codeIndex,
+		Language:   language,
+		Content:    segment.Content,
+		Line:       0,
+		X:          max(0, width-lipgloss.Width(headerRight)),
+		Width:      lipgloss.Width(headerRight),
+	}
 }
 
 func (a App) statusBadge(text string) string {

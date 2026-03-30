@@ -99,6 +99,11 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		a.rebuildTranscript()
 		return a, tea.Batch(cmds...)
+	case tea.MouseMsg:
+		if a.state.ActivePicker == pickerNone {
+			a.handleMouse(typed)
+		}
+		return a, tea.Batch(cmds...)
 	case tea.KeyMsg:
 		if key.Matches(typed, a.keys.Quit) {
 			return a, tea.Quit
@@ -177,7 +182,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (tea.Model, tea.Cmd) {
-	if key.Matches(typed, a.keys.Send) {
+	if a.shouldSendInput(typed) {
 		input := strings.TrimSpace(a.input.Value())
 		if input == "" || a.state.IsAgentRunning {
 			return a, tea.Batch(cmds...)
@@ -524,17 +529,20 @@ func (a *App) resizeComponents() {
 	menuHeight := a.commandMenuHeight(max(24, lay.rightWidth))
 	a.transcript.Width = max(24, lay.rightWidth)
 	promptInnerWidth := max(8, lay.rightWidth-a.styles.inputBoxFocused.GetHorizontalFrameSize())
-	a.input.Width = max(4, promptInnerWidth-lipgloss.Width("> "))
+	a.input.SetWidth(promptInnerWidth)
+	a.input.SetHeight(a.composerRows(promptInnerWidth))
 	promptHeight := lipgloss.Height(a.renderPrompt(a.transcript.Width))
 	a.transcript.Height = max(6, lay.rightHeight-menuHeight-promptHeight)
 	a.providerPicker.SetSize(max(24, clamp(lay.rightWidth-14, 28, 52)), max(4, clamp(lay.rightHeight-10, 6, 10)))
 	a.modelPicker.SetSize(max(24, clamp(lay.rightWidth-14, 28, 52)), max(4, clamp(lay.rightHeight-10, 6, 10)))
+	a.updateTranscriptRect(lay)
 	a.rebuildTranscript()
 }
 
 func (a *App) rebuildTranscript() {
 	width := max(24, a.transcript.Width)
 	if len(a.activeMessages) == 0 {
+		a.codeBlocks = nil
 		a.transcript.SetContent(a.styles.empty.Width(width).Render(emptyConversationText))
 		a.transcript.GotoTop()
 		return
@@ -542,10 +550,23 @@ func (a *App) rebuildTranscript() {
 
 	atBottom := a.transcript.AtBottom()
 	blocks := make([]string, 0, len(a.activeMessages))
-	for _, message := range a.activeMessages {
-		blocks = append(blocks, a.renderMessageBlock(message, width))
+	targets := make([]codeBlockTarget, 0, 4)
+	lineOffset := 0
+	for i, message := range a.activeMessages {
+		rendered := a.renderMessageBlockDetailed(message, width)
+		for _, target := range rendered.CodeBlocks {
+			target.MessageIndex = i
+			target.Line += lineOffset
+			targets = append(targets, target)
+		}
+		blocks = append(blocks, rendered.View)
+		lineOffset += rendered.Height
+		if i < len(a.activeMessages)-1 {
+			lineOffset += 2
+		}
 	}
 
+	a.codeBlocks = targets
 	a.transcript.SetContent(strings.Join(blocks, "\n\n"))
 	if atBottom || a.state.IsAgentRunning {
 		a.transcript.GotoBottom()

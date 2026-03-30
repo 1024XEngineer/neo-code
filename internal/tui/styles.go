@@ -55,6 +55,9 @@ type styles struct {
 	inlineNotice      lipgloss.Style
 	inlineError       lipgloss.Style
 	inlineSystem      lipgloss.Style
+	codeHeader        lipgloss.Style
+	codeLanguage      lipgloss.Style
+	codeCopy          lipgloss.Style
 	codeBlock         lipgloss.Style
 	codeText          lipgloss.Style
 	commandMenu       lipgloss.Style
@@ -176,8 +179,16 @@ func newStyles() styles {
 			Foreground(lipgloss.Color(colorSubtle)).
 			Background(lipgloss.Color(colorPanel)).
 			Padding(0, 1),
+		codeHeader: lipgloss.NewStyle().
+			Foreground(lipgloss.Color(colorText)).
+			Background(lipgloss.Color(colorPanelAlt)),
+		codeLanguage: lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color(colorPrimary)),
+		codeCopy: lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color(colorSuccess)),
 		codeBlock: lipgloss.NewStyle().
-			MarginLeft(1).
 			Padding(0, 1).
 			Background(lipgloss.Color(colorCode)).
 			BorderLeft(true).

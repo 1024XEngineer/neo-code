@@ -138,7 +138,7 @@ func TestAppUpdateComposerCommands(t *testing.T) {
 			app.input.SetValue(tt.input)
 			app.state.InputText = tt.input
 
-			model, cmd := app.Update(tea.KeyMsg{Type: tea.KeyEnter})
+			model, cmd := app.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
 			app = model.(App)
 
 			for _, msg := range collectTeaMessages(cmd) {
@@ -688,6 +688,23 @@ func TestAppUpdateAdditionalTransitions(t *testing.T) {
 			},
 		},
 		{
+			name: "input enter inserts newline instead of sending",
+			setup: func(t *testing.T, app *App, runtime *stubRuntime, manager *config.Manager) {
+				app.input.SetValue("hello")
+				app.state.InputText = "hello"
+			},
+			msg: tea.KeyMsg{Type: tea.KeyEnter},
+			assert: func(t *testing.T, app App, runtime *stubRuntime, manager *config.Manager, msgs []tea.Msg) {
+				t.Helper()
+				if len(runtime.runInputs) != 0 {
+					t.Fatalf("expected enter to stay local, got %+v", runtime.runInputs)
+				}
+				if !strings.Contains(app.state.InputText, "\n") {
+					t.Fatalf("expected enter to insert a newline, got %q", app.state.InputText)
+				}
+			},
+		},
+		{
 			name: "input typing updates composer text",
 			msg:  tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}},
 			assert: func(t *testing.T, app App, runtime *stubRuntime, manager *config.Manager, msgs []tea.Msg) {
@@ -703,7 +720,7 @@ func TestAppUpdateAdditionalTransitions(t *testing.T) {
 				app.input.SetValue("inspect repo")
 				app.state.InputText = "inspect repo"
 			},
-			msg: tea.KeyMsg{Type: tea.KeyEnter},
+			msg: tea.KeyMsg{Type: tea.KeyCtrlS},
 			assert: func(t *testing.T, app App, runtime *stubRuntime, manager *config.Manager, msgs []tea.Msg) {
 				t.Helper()
 				if !app.state.IsAgentRunning {
@@ -1029,6 +1046,92 @@ func TestAppRefreshErrorPaths(t *testing.T) {
 			t.Fatalf("expected load session error, got %v", err)
 		}
 	})
+}
+
+func TestRenderMessageContentPreservesStructureAndCodeTargets(t *testing.T) {
+	manager := newTestConfigManager(t)
+	runtime := newStubRuntime()
+	app, err := New(nil, manager, runtime, newTestProviderService(t, manager))
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	rendered := app.renderMessageContentDetailed("line1\n\nline2\n```go\nfmt.Println(\"x\")\n```\nnext", 48, app.styles.messageBody)
+	if !strings.Contains(rendered.View, "line1") || !strings.Contains(rendered.View, "line2") || !strings.Contains(rendered.View, "next") {
+		t.Fatalf("expected rendered output to keep plain-text sections")
+	}
+	if !strings.Contains(rendered.View, "[ Copy ]") {
+		t.Fatalf("expected rendered output to include copy affordance")
+	}
+	if len(rendered.CodeBlocks) != 1 {
+		t.Fatalf("expected one code block target, got %d", len(rendered.CodeBlocks))
+	}
+	if rendered.CodeBlocks[0].Language != "go" {
+		t.Fatalf("expected go language label, got %q", rendered.CodeBlocks[0].Language)
+	}
+	if !strings.Contains(rendered.CodeBlocks[0].Content, "fmt.Println") {
+		t.Fatalf("expected code block content to be preserved, got %q", rendered.CodeBlocks[0].Content)
+	}
+}
+
+func TestMouseCopyCodeBlockAndWheelScroll(t *testing.T) {
+	manager := newTestConfigManager(t)
+	runtime := newStubRuntime()
+	app, err := New(nil, manager, runtime, newTestProviderService(t, manager))
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	originalWriteClipboard := writeClipboard
+	defer func() { writeClipboard = originalWriteClipboard }()
+
+	var copied string
+	writeClipboard = func(text string) error {
+		copied = text
+		return nil
+	}
+
+	app.activeMessages = []provider.Message{
+		{Role: roleAssistant, Content: "```go\nfmt.Println(\"copy\")\n```"},
+	}
+	app.rebuildTranscript()
+	if len(app.codeBlocks) != 1 {
+		t.Fatalf("expected one clickable code block, got %d", len(app.codeBlocks))
+	}
+
+	target := app.codeBlocks[0]
+	mouseCopy := tea.MouseMsg{
+		X:      app.transcriptRect.X + target.X + 1,
+		Y:      app.transcriptRect.Y + target.Line,
+		Action: tea.MouseActionPress,
+		Button: tea.MouseButtonLeft,
+	}
+	model, _ := app.Update(mouseCopy)
+	app = model.(App)
+
+	if !strings.Contains(copied, "fmt.Println(\"copy\")") {
+		t.Fatalf("expected code block to be copied, got %q", copied)
+	}
+	if !strings.Contains(app.state.StatusText, "Copied") {
+		t.Fatalf("expected copy notice, got %q", app.state.StatusText)
+	}
+
+	app.transcript.SetContent(strings.Repeat("line\n", 80))
+	app.transcript.Height = 5
+	app.transcript.GotoTop()
+	app.transcriptRect = rect{X: 4, Y: 3, Width: app.transcript.Width, Height: 5}
+	mouseScroll := tea.MouseMsg{
+		X:      app.transcriptRect.X + 1,
+		Y:      app.transcriptRect.Y + 1,
+		Action: tea.MouseActionPress,
+		Button: tea.MouseButtonWheelDown,
+	}
+	model, _ = app.Update(mouseScroll)
+	app = model.(App)
+
+	if app.transcript.YOffset == 0 {
+		t.Fatalf("expected mouse wheel to scroll transcript")
+	}
 }
 
 func newTestConfigManager(t *testing.T) *config.Manager {
