@@ -25,6 +25,7 @@
 
 ## 默认值治理
 - 默认 Provider 名称、URL、默认模型、模型列表和环境变量名统一由内建 Provider 定义提供
+- 当前内建 Provider 包括 `openai`、`gemini`、`openll` 和 `qiniuyun`；其中 `qiniuyun` 复用 OpenAI-compatible driver，并默认读取 `QINIUYUN_API_KEY`
 - `Loader` 在加载旧配置时会丢弃 `providers` / `provider_overrides`，重新回到“YAML 只保存选择状态和顶层 override”的最小结构
 - Provider 的可选模型目录属于实例配置，进入运行时 `Config` 后再提供给 TUI 和 runtime，避免 TUI 或 driver 自己维护一套零散常量
 
