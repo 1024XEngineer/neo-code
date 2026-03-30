@@ -52,26 +52,27 @@ func (t *WriteFileTool) Schema() map[string]any {
 func (t *WriteFileTool) Execute(ctx context.Context, input tools.ToolCallInput) (tools.ToolResult, error) {
 	var args writeFileInput
 	if err := json.Unmarshal(input.Arguments, &args); err != nil {
-		return tools.ToolResult{Name: t.Name()}, err
+		return tools.NewErrorResult(t.Name(), "invalid arguments", err.Error(), nil), err
 	}
 	if strings.TrimSpace(args.Path) == "" {
-		return tools.ToolResult{Name: t.Name()}, errors.New(writeFileToolName + ": path is required")
+		err := errors.New(writeFileToolName + ": path is required")
+		return tools.NewErrorResult(t.Name(), tools.NormalizeErrorReason(t.Name(), err), "", nil), err
 	}
 	if err := ctx.Err(); err != nil {
-		return tools.ToolResult{Name: t.Name()}, err
+		return tools.NewErrorResult(t.Name(), tools.NormalizeErrorReason(t.Name(), err), "", nil), err
 	}
 
 	base := effectiveRoot(t.root, input.Workdir)
 
 	target, err := resolvePath(base, args.Path)
 	if err != nil {
-		return tools.ToolResult{Name: t.Name()}, err
+		return tools.NewErrorResult(t.Name(), tools.NormalizeErrorReason(t.Name(), err), "", nil), err
 	}
 	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-		return tools.ToolResult{Name: t.Name()}, err
+		return tools.NewErrorResult(t.Name(), tools.NormalizeErrorReason(t.Name(), err), "", nil), err
 	}
 	if err := os.WriteFile(target, []byte(args.Content), 0o644); err != nil {
-		return tools.ToolResult{Name: t.Name()}, err
+		return tools.NewErrorResult(t.Name(), tools.NormalizeErrorReason(t.Name(), err), "", nil), err
 	}
 
 	return tools.ToolResult{
