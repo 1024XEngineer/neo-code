@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"sort"
 	"strings"
@@ -97,7 +98,12 @@ func (p *Provider) Chat(ctx context.Context, req domain.ChatRequest, events chan
 	if err != nil {
 		return domain.ChatResponse{}, fmt.Errorf("openai provider: send request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func(Body io.ReadCloser) {
+		err := Body.Close()
+		if err != nil {
+			log.Printf("openai provider: close response body: %v", err)
+		}
+	}(resp.Body)
 
 	if resp.StatusCode >= http.StatusBadRequest {
 		return domain.ChatResponse{}, p.parseError(resp)
@@ -205,7 +211,11 @@ func (p *Provider) consumeStream(ctx context.Context, body io.Reader, events cha
 				}
 			}
 
-			mergeToolCallDeltas(toolCalls, choice.Delta.ToolCalls)
+			for _, discovered := range mergeToolCallDeltas(toolCalls, choice.Delta.ToolCalls) {
+				if err := emitToolCallStart(ctx, events, discovered.ID, discovered.Name); err != nil {
+					return err
+				}
+			}
 		}
 
 		return nil
@@ -302,10 +312,30 @@ func emitTextDelta(ctx context.Context, events chan<- domain.StreamEvent, text s
 	}
 }
 
-func mergeToolCallDeltas(target map[int]*domain.ToolCall, deltas []toolCallDelta) {
+func emitToolCallStart(ctx context.Context, events chan<- domain.StreamEvent, id, name string) error {
+	if events == nil || name == "" {
+		return nil
+	}
+
+	select {
+	case events <- domain.StreamEvent{
+		Type:       domain.StreamEventToolCallStart,
+		ToolCallID: id,
+		ToolName:   name,
+	}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// mergeToolCallDeltas 将流式增量合并到 target map 中，并返回本次新发现的 tool call 列表。
+// 当一个新的 tool call 索引首次出现且拥有非空工具名称时，视为新发现。
+func mergeToolCallDeltas(target map[int]*domain.ToolCall, deltas []toolCallDelta) []domain.ToolCall {
+	var discovered []domain.ToolCall
 	for _, delta := range deltas {
-		call, ok := target[delta.Index]
-		if !ok {
+		call, exists := target[delta.Index]
+		if !exists {
 			call = &domain.ToolCall{}
 			target[delta.Index] = call
 		}
@@ -319,7 +349,12 @@ func mergeToolCallDeltas(target map[int]*domain.ToolCall, deltas []toolCallDelta
 		if delta.Function.Arguments != "" {
 			call.Arguments += delta.Function.Arguments
 		}
+
+		if !exists && strings.TrimSpace(call.Name) != "" {
+			discovered = append(discovered, *call)
+		}
 	}
+	return discovered
 }
 
 func finalizeResponse(content string, toolCalls map[int]*domain.ToolCall, finishReason string, usage domain.Usage) domain.ChatResponse {

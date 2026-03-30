@@ -34,7 +34,7 @@ func NewProgram(ctx context.Context) (*tea.Program, error) {
 	providerService := provider.NewService(manager, providerRegistry)
 
 	sessionStore := agentruntime.NewSessionStore(loader.BaseDir())
-	runtimeSvc := agentruntime.NewWithFactory(manager, toolRegistry, sessionStore, providerRegistry)
+	runtimeSvc := agentruntime.NewWithFactory(manager, toolRegistry, sessionStore, providerService)
 
 	tuiApp, err := tui.New(&cfg, manager, runtimeSvc, providerService)
 	if err != nil {

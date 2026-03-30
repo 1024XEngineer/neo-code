@@ -14,7 +14,6 @@ import (
 
 const maxContextTurns = 10
 
-// Runtime coordinates agent execution, session persistence, and event delivery.
 type Runtime interface {
 	Run(ctx context.Context, input UserInput) error
 	CancelActiveRun() bool
@@ -23,8 +22,6 @@ type Runtime interface {
 	LoadSession(ctx context.Context, id string) (Session, error)
 }
 
-// UserInput describes a single user turn. RunID is supplied by the caller and
-// is echoed on all runtime events produced while handling this input.
 type UserInput struct {
 	SessionID string
 	RunID     string
@@ -36,15 +33,15 @@ type ProviderFactory interface {
 }
 
 type Service struct {
-	configManager   *config.Manager
-	sessionStore    Store
-	toolRegistry    *tools.Registry
-	providerFactory ProviderFactory
-	events          chan RuntimeEvent
-	runMu           sync.Mutex
-	activeRunToken  uint64
-	nextRunToken    uint64
-	activeRunCancel context.CancelFunc
+	configManager   *config.Manager    //配置管理器，提供当前选中的 provider、model、workdir 等配置读取能力
+	sessionStore    Store              //会话持久化接口，负责保存和加载聊天会话
+	toolRegistry    *tools.Registry    //工具注册表，维护所有工具的schema
+	providerFactory ProviderFactory    //provider 工厂接口，根据配置动态创建具体的 provider 实例
+	events          chan RuntimeEvent  //事件通道，Runtime 在运行过程中产生的所有事件都通过这个 channel 发送给 TUI 层消费和展示
+	runMu           sync.Mutex         //运行互斥锁，保证同一时间只有一个 Run 在执行
+	activeRunToken  uint64             //当前活跃运行的令牌标识，用于标记正在执行的 Run 实例，配合 nextRunToken 实现新旧 Run 的安全切换
+	nextRunToken    uint64             //下一个运行令牌的递增计数器，每次启动新 Run 时递增并赋给 activeRunToken，用于区分不同 Run 的生命周期
+	activeRunCancel context.CancelFunc //当前活跃 Run 的取消函数
 }
 
 func NewWithFactory(configManager *config.Manager, toolRegistry *tools.Registry, sessionStore Store, providerFactory ProviderFactory) *Service {
@@ -76,7 +73,7 @@ func (s *Service) Run(ctx context.Context, input UserInput) error {
 
 	session, err := s.loadOrCreateSession(ctx, input.SessionID, input.Content)
 	if err != nil {
-		return s.handleRunError(input.RunID, input.SessionID, err)
+		return s.handleRunError(ctx, input.RunID, input.SessionID, err)
 	}
 
 	userMessage := provider.Message{
@@ -86,13 +83,13 @@ func (s *Service) Run(ctx context.Context, input UserInput) error {
 	session.Messages = append(session.Messages, userMessage)
 	session.UpdatedAt = time.Now()
 	if err := s.sessionStore.Save(ctx, &session); err != nil {
-		return s.handleRunError(input.RunID, session.ID, err)
+		return s.handleRunError(ctx, input.RunID, session.ID, err)
 	}
-	s.emit(EventUserMessage, input.RunID, session.ID, userMessage)
+	s.emit(ctx, EventUserMessage, input.RunID, session.ID, userMessage)
 
 	for attempt := 0; ; attempt++ {
 		if err := ctx.Err(); err != nil {
-			return s.handleRunError(input.RunID, session.ID, err)
+			return s.handleRunError(ctx, input.RunID, session.ID, err)
 		}
 
 		cfg := s.configManager.Get()
@@ -102,25 +99,25 @@ func (s *Service) Run(ctx context.Context, input UserInput) error {
 		}
 		if attempt >= maxLoops {
 			err := errors.New("runtime: max loop reached")
-			s.emit(EventError, input.RunID, session.ID, err.Error())
+			s.emit(ctx, EventError, input.RunID, session.ID, err.Error())
 			return err
 		}
 
 		resolvedProvider, err := s.configManager.ResolvedSelectedProvider()
 		if err != nil {
-			s.emit(EventError, input.RunID, session.ID, err.Error())
+			s.emit(ctx, EventError, input.RunID, session.ID, err.Error())
 			return err
 		}
 
 		modelProvider, err := s.providerFactory.Build(ctx, resolvedProvider)
 		if err != nil {
-			s.emit(EventError, input.RunID, session.ID, err.Error())
+			s.emit(ctx, EventError, input.RunID, session.ID, err.Error())
 			return err
 		}
 
 		streamEvents := make(chan provider.StreamEvent, 32)
 		streamDone := make(chan struct{})
-		go s.forwardProviderEvents(input.RunID, session.ID, streamEvents, streamDone)
+		go s.forwardProviderEvents(ctx, input.RunID, session.ID, streamEvents, streamDone)
 
 		resp, err := modelProvider.Chat(ctx, provider.ChatRequest{
 			Model:        cfg.CurrentModel,
@@ -131,10 +128,10 @@ func (s *Service) Run(ctx context.Context, input UserInput) error {
 		close(streamEvents)
 		<-streamDone
 		if err != nil {
-			return s.handleRunError(input.RunID, session.ID, err)
+			return s.handleRunError(ctx, input.RunID, session.ID, err)
 		}
 		if err := ctx.Err(); err != nil {
-			return s.handleRunError(input.RunID, session.ID, err)
+			return s.handleRunError(ctx, input.RunID, session.ID, err)
 		}
 
 		assistant := resp.Message
@@ -146,23 +143,23 @@ func (s *Service) Run(ctx context.Context, input UserInput) error {
 			session.Messages = append(session.Messages, assistant)
 			session.UpdatedAt = time.Now()
 			if err := s.sessionStore.Save(ctx, &session); err != nil {
-				return s.handleRunError(input.RunID, session.ID, err)
+				return s.handleRunError(ctx, input.RunID, session.ID, err)
 			}
 		}
 
 		if err := ctx.Err(); err != nil {
-			return s.handleRunError(input.RunID, session.ID, err)
+			return s.handleRunError(ctx, input.RunID, session.ID, err)
 		}
 		if len(assistant.ToolCalls) == 0 {
-			s.emit(EventAgentDone, input.RunID, session.ID, assistant)
+			s.emit(ctx, EventAgentDone, input.RunID, session.ID, assistant)
 			return nil
 		}
 
 		for _, call := range assistant.ToolCalls {
 			if err := ctx.Err(); err != nil {
-				return s.handleRunError(input.RunID, session.ID, err)
+				return s.handleRunError(ctx, input.RunID, session.ID, err)
 			}
-			s.emit(EventToolStart, input.RunID, session.ID, call)
+			s.emit(ctx, EventToolStart, input.RunID, session.ID, call)
 
 			runCtx, cancel := context.WithTimeout(ctx, time.Duration(cfg.ToolTimeoutSec)*time.Second)
 			result, execErr := s.toolRegistry.Execute(runCtx, tools.ToolCallInput{
@@ -172,16 +169,16 @@ func (s *Service) Run(ctx context.Context, input UserInput) error {
 				Workdir:   cfg.Workdir,
 				SessionID: session.ID,
 				EmitChunk: func(chunk []byte) {
-					s.emit(EventToolChunk, input.RunID, session.ID, string(chunk))
+					s.emit(ctx, EventToolChunk, input.RunID, session.ID, string(chunk))
 				},
 			})
 			cancel()
 			if s.isRunCanceled(execErr) {
-				return s.handleRunError(input.RunID, session.ID, execErr)
+				return s.handleRunError(ctx, input.RunID, session.ID, execErr)
 			}
 			if execErr == nil {
 				if err := ctx.Err(); err != nil {
-					return s.handleRunError(input.RunID, session.ID, err)
+					return s.handleRunError(ctx, input.RunID, session.ID, err)
 				}
 			}
 
@@ -199,20 +196,20 @@ func (s *Service) Run(ctx context.Context, input UserInput) error {
 			session.UpdatedAt = time.Now()
 			if err := s.sessionStore.Save(ctx, &session); err != nil {
 				if execErr != nil && errors.Is(err, context.Canceled) {
-					s.emit(EventToolResult, input.RunID, session.ID, result)
+					s.emit(ctx, EventToolResult, input.RunID, session.ID, result)
 				}
-				return s.handleRunError(input.RunID, session.ID, err)
+				return s.handleRunError(ctx, input.RunID, session.ID, err)
 			}
 			if err := ctx.Err(); err != nil {
 				if execErr == nil {
-					return s.handleRunError(input.RunID, session.ID, err)
+					return s.handleRunError(ctx, input.RunID, session.ID, err)
 				}
 			}
 
-			s.emit(EventToolResult, input.RunID, session.ID, result)
+			s.emit(ctx, EventToolResult, input.RunID, session.ID, result)
 			if execErr != nil {
 				if err := ctx.Err(); err != nil {
-					return s.handleRunError(input.RunID, session.ID, err)
+					return s.handleRunError(ctx, input.RunID, session.ID, err)
 				}
 			}
 		}
@@ -254,21 +251,45 @@ func (s *Service) loadOrCreateSession(ctx context.Context, sessionID string, tit
 	return s.sessionStore.Load(ctx, sessionID)
 }
 
-func (s *Service) emit(kind EventType, runID string, sessionID string, payload any) {
-	s.events <- RuntimeEvent{
+// emit 向事件通道发送事件。
+// 先尝试非阻塞发送，确保即使 context 已取消，只要通道有空间事件就能被投递；
+// 仅在通道已满时才通过 ctx.Done() 退出，避免 goroutine 泄漏。
+func (s *Service) emit(ctx context.Context, kind EventType, runID string, sessionID string, payload any) {
+	evt := RuntimeEvent{
 		Type:      kind,
 		RunID:     runID,
 		SessionID: sessionID,
 		Payload:   payload,
 	}
+	select {
+	case s.events <- evt:
+		return
+	default:
+	}
+	select {
+	case s.events <- evt:
+	case <-ctx.Done():
+	}
 }
 
-func (s *Service) forwardProviderEvents(runID string, sessionID string, input <-chan provider.StreamEvent, done chan<- struct{}) {
+// forwardProviderEvents 将 provider 流式事件转发为 runtime 事件。
+// 使用 select 同时监听输入通道和 context 取消信号，确保 goroutine 不会因通道阻塞而泄漏。
+func (s *Service) forwardProviderEvents(ctx context.Context, runID string, sessionID string, input <-chan provider.StreamEvent, done chan<- struct{}) {
 	defer close(done)
-	for event := range input {
-		switch event.Type {
-		case provider.StreamEventTextDelta:
-			s.emit(EventAgentChunk, runID, sessionID, event.Text)
+	for {
+		select {
+		case event, ok := <-input:
+			if !ok {
+				return
+			}
+			switch event.Type {
+			case provider.StreamEventTextDelta:
+				s.emit(ctx, EventAgentChunk, runID, sessionID, event.Text)
+			case provider.StreamEventToolCallStart:
+				s.emit(ctx, EventToolCallThinking, runID, sessionID, event.ToolName)
+			}
+		case <-ctx.Done():
+			return
 		}
 	}
 }
@@ -296,13 +317,13 @@ func (s *Service) finishRun(token uint64) {
 	s.activeRunCancel = nil
 }
 
-func (s *Service) handleRunError(runID string, sessionID string, err error) error {
+func (s *Service) handleRunError(ctx context.Context, runID string, sessionID string, err error) error {
 	if s.isRunCanceled(err) {
-		s.emit(EventRunCanceled, runID, sessionID, nil)
+		s.emit(ctx, EventRunCanceled, runID, sessionID, nil)
 		return context.Canceled
 	}
 
-	s.emit(EventError, runID, sessionID, err.Error())
+	s.emit(ctx, EventError, runID, sessionID, err.Error())
 	return err
 }
 
@@ -346,8 +367,8 @@ func (s *Service) trimMessages(messages []provider.Message) []provider.Message {
 func (s *Service) systemPrompt() string {
 	return `You are NeoCode, a local coding agent.
 
-Be concise and accurate.
-Use tools when necessary.
-When a tool fails, inspect the error and continue safely.
-Stay within the workspace and avoid destructive behavior unless clearly requested.`
+	Be concise and accurate.
+	Use tools when necessary.
+	When a tool fails, inspect the error and continue safely.
+	 Stay within the workspace and avoid destructive behavior unless clearly requested.`
 }

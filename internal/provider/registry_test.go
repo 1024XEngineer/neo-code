@@ -282,3 +282,52 @@ func TestServiceSelectProviderRejectsUnsupportedDriver(t *testing.T) {
 		t.Fatalf("expected SelectProvider() to preserve ErrDriverNotFound, got %v", err)
 	}
 }
+
+// --- Service.Build 补充测试 ---
+
+func TestServiceBuildDelegatesToRegistry(t *testing.T) {
+	t.Parallel()
+
+	registry := newTestRegistry(t)
+
+	resolved := config.ResolvedProviderConfig{
+		ProviderConfig: config.ProviderConfig{
+			Name:      "openai-main",
+			Driver:    "openai",
+			BaseURL:   openai.DefaultBaseURL,
+			Model:     openai.DefaultModel,
+			APIKeyEnv: openai.DefaultAPIKeyEnv,
+		},
+		APIKey: "test-key",
+	}
+
+	got, err := registry.Build(context.Background(), resolved)
+	if err != nil {
+		t.Fatalf("Registry.Build() error = %v", err)
+	}
+	if _, ok := got.(*openai.Provider); !ok {
+		t.Fatalf("expected openai.Provider, got %T", got)
+	}
+}
+
+func TestServiceBuildReturnsErrorOnNilManager(t *testing.T) {
+	t.Parallel()
+
+	service := (*provider.Service)(nil)
+	_, err := service.Build(context.Background(), config.ResolvedProviderConfig{})
+	if err == nil {
+		t.Fatalf("expected error for nil Service")
+	}
+}
+
+func TestServiceBuildReturnsErrorOnNilRegistry(t *testing.T) {
+	t.Parallel()
+
+	manager := newTestManager(t)
+	service := provider.NewService(manager, nil)
+
+	_, err := service.Build(context.Background(), config.ResolvedProviderConfig{})
+	if err == nil {
+		t.Fatalf("expected error for nil registry")
+	}
+}

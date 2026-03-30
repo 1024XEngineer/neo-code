@@ -1,112 +1,129 @@
 # NeoCode
 
-NeoCode 是一个基于 Go 和 Bubble Tea 的本地编码 Agent。它在终端中运行 ReAct 闭环，能够对话、调用工具、持久化会话，并以流式方式展示模型输出。
+> 基于 Go + Bubble Tea 的本地 Coding Agent
 
-## 当前 Provider 策略
+NeoCode 是一个在终端中运行的 AI 编码助手，采用 ReAct（Reason-Act-Observe）循环模式，能够自主推理、调用工具并完成任务。
 
-- 内建 provider 定义随代码版本发布。
-- `config.yaml` 不再持久化完整 `providers` 列表。
-- `config.yaml` 只保存当前选择状态和通用运行配置。
-- 运行时的 `providers` 完全来自代码内建定义。
-- API Key 只从环境变量读取，不写入 YAML。
-- 当前内建 provider 包括 `openai` 和 `gemini`。
-- `gemini` 复用 OpenAI-compatible driver，请求地址指向 Gemini 的兼容接口。
-- provider 实例自己定义 `base_url`、默认模型、可选模型列表和 `api_key_env`。
-- `base_url` 不在 TUI 中展示给用户。
-- driver 只负责协议构造与响应解析，不决定 `models`、`base_url` 或 `api_key_env`。
+## 核心特性
 
-这意味着：
+- **流式输出** — 实时展示模型思考过程
+- **工具系统** — 文件操作、代码执行、搜索等内置工具
+- **多 Provider 支持** — OpenAI、Gemini 等主流模型，易于扩展
+- **终端原生体验** — 基于 Bubble Tea 的现代化 TUI
 
-- 新用户启动后会自动拿到当前版本最新的内建 provider。
-- 未来代码新增 provider 时，新用户不需要修改 YAML。
-- 老配置文件中的 `providers` / `provider_overrides` 会在加载时被清理为新的最小状态格式。
+## 快速开始
 
-## 配置文件
+### 环境要求
 
-默认路径：
-[`~/.neocode/config.yaml`](~/.neocode/config.yaml)
+- Go 1.21+
+- API Key（OpenAI 或 Google Gemini）
 
-当前落盘结构示例：
-
-```yaml
-selected_provider: openai
-current_model: gpt-5.4
-workdir: .
-shell: powershell
-max_loops: 8
-tool_timeout_sec: 20
-```
-
-其中：
-
-- `selected_provider` 和 `current_model` 是用户当前选择。
-- provider 的 `base_url`、`models`、`api_key_env` 和 `driver` 都由开发者在代码中预设。
-- `openai` 默认读取 `OPENAI_API_KEY`，`gemini` 默认读取 `GEMINI_API_KEY`。
-- 完整 provider 列表不落盘，用户不需要在 YAML 中维护供应商元数据。
-
-## Slash Commands
-
-- `/provider`：打开 provider 选择器。
-- `/model`：打开当前 provider 的模型选择器。
-
-
-
-## 安装指南 (快速开始)
-
-NeoCode 提供了极其原生的系统级安装体验，真正的开箱即用（无需 Go 环境）。请根据你的操作系统选择最适合的安装方式：
-
-### 🍎 macOS / Linux (推荐 Homebrew)
-
-对于习惯使用 Homebrew 的用户，只需一行命令即可接入官方 Tap 并安装：
+### 安装与运行
 
 ```bash
-brew install 1024XEngineer/homebrew-neocode/neocode
-```
+# 克隆仓库
+git clone https://github.com/yourusername/neocode.git
+cd neocode
 
-### 🪟 Windows (推荐 Scoop)
+# 设置 API Key
+export OPENAI_API_KEY=your_key_here
 
-对于 Windows 极客玩家，我们提供了官方的 Scoop 分发源：
-
-```PowerShell
-scoop bucket add neocode https://github.com/1024XEngineer/scoop-bucket.git
-scoop install neocode
-```
-
-### 🐧 Ubuntu / Debian (.deb)
-
-前往项目的 [Releases 页面](https://www.google.com/search?q=https://github.com/pionxe/neo-code/releases) 下载最新版本的 `.deb` 安装包，然后在终端执行：
-
-```Bash
-sudo dpkg -i neo-code_*_linux_amd64.deb
-```
-
-### 🚀 兜底方案：一键安装脚本
-
-如果你的系统没有安装上述包管理器，也可以使用我们提供的自动化脚本一键下载并配置：
-
-**Linux / macOS:**
-
-```Bash
-curl -sSL https://raw.githubusercontent.com/1024XEngineer/neo-code/main/scripts/install.sh | bash
-```
-
-**Windows (PowerShell):**
-
-```PowerShell
-irm https://raw.githubusercontent.com/1024XEngineer/neo-code/main/scripts/install.ps1 | iex
-```
-
-
-
-## 运行
-
-```bash
+# 运行
 go run ./cmd/neocode
 ```
+
+### 基本使用
+
+在 TUI 中输入自然语言指令，例如：
+
+```
+帮我看看当前项目的目录结构
+创建一个 HTTP 服务器，监听 8080 端口
+分析 runtime.go 的主要逻辑
+```
+
+使用 slash 命令快速切换配置：
+
+- `/provider` — 切换模型提供商
+- `/model` — 切换模型
+
+## 架构概览
+
+```
+┌─────────────────────────────────────────┐
+│              TUI (Bubble Tea)           │
+└────────────────┬────────────────────────┘
+                 │ Events
+┌────────────────▼────────────────────────┐
+│          Runtime (ReAct Loop)           │
+└────────┬───────────────────┬────────────┘
+         │                   │
+    ┌────▼─────┐        ┌────▼──────┐
+    │ Provider │        │   Tools   │
+    │  (LLM)   │        │ Registry  │
+    └──────────┘        └───────────┘
+```
+
+核心模块职责：
+
+- **`internal/config`** — 配置管理、环境变量、YAML 加载
+- **`internal/provider`** — LLM 提供商抽象，抹平厂商差异
+- **`internal/runtime`** — ReAct 主循环、事件流、会话管理
+- **`internal/tools`** — 工具注册表与具体工具实现
+- **`internal/tui`** — 终端 UI、交互体验、事件桥接
+- **`internal/app`** — 应用装配与依赖注入
+
+## 目录结构
+
+```text
+.
+├── cmd/neocode          # CLI 入口
+├── docs                 # 架构与设计文档
+│   ├── guides           # 使用指南
+│   └── *.md             # 设计文档
+├── internal
+│   ├── app              # 应用装配
+│   ├── config           # 配置管理
+│   ├── provider         # Provider 抽象与实现
+│   ├── runtime          # ReAct 循环与事件流
+│   ├── tools            # 工具系统
+│   └── tui              # 终端 UI
+└── README.md
+```
+
+## 文档
+
+- **[配置指南](docs/guides/configuration.md)** — Provider 策略、配置文件、环境变量
+- **[扩展 Provider](docs/guides/adding-providers.md)** — 如何添加新的模型提供商
+- **[架构设计](docs/neocode-coding-agent-mvp-architecture.md)** — 整体架构与设计理念
+- **[事件流](docs/runtime-provider-event-flow.md)** — Runtime 与 Provider 的事件交互
 
 ## 开发
 
 ```bash
+# 格式化代码
 gofmt -w ./cmd ./internal
+
+# 运行测试
 go test ./...
+
+# 编译
+go build ./...
 ```
+
+## 当前状态
+
+NeoCode 正处于 MVP 阶段，核心闭环已可用：
+
+✅ 用户输入 → Agent 推理 → 工具调用 → 结果返回 → UI 展示
+
+正在持续迭代中，重点关注：
+
+- 📚 文档完善
+- 🧪 测试覆盖率
+- 🛠️ 工具能力扩展
+- 🔧 稳定性与性能
+
+## License
+
+MIT

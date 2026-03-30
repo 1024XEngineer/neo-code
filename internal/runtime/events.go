@@ -30,10 +30,7 @@ const (
 	EventRunCanceled EventType = "run_canceled"
 	// EventError is emitted for terminal runtime errors other than cancellation.
 	EventError EventType = "error"
-)
-
-const (
-	EventToolStarted   = EventToolStart
-	EventToolFinished  = EventToolResult
-	EventAgentComplete = EventAgentDone
+	// EventToolCallThinking is emitted when the model decides to call a tool,
+	// before the tool execution begins. TUI can show a transitional indicator.
+	EventToolCallThinking EventType = "tool_call_thinking"
 )
