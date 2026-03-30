@@ -11,7 +11,6 @@ import (
 	"neo-code/internal/config"
 	"neo-code/internal/provider"
 	"neo-code/internal/provider/builtin"
-	"neo-code/internal/provider/openai"
 	"neo-code/internal/tools"
 )
 
@@ -1003,8 +1002,8 @@ func TestServiceConstructorsAndDelegates(t *testing.T) {
 
 func newRuntimeConfigManager(t *testing.T) *config.Manager {
 	t.Helper()
-	restoreRuntimeEnv(t, openai.DefaultAPIKeyEnv)
-	if err := os.Setenv(openai.DefaultAPIKeyEnv, "test-key"); err != nil {
+	restoreRuntimeEnv(t, config.OpenAIDefaultAPIKeyEnv)
+	if err := os.Setenv(config.OpenAIDefaultAPIKeyEnv, "test-key"); err != nil {
 		t.Fatalf("set env: %v", err)
 	}
 	manager := config.NewManager(config.NewLoader(t.TempDir(), builtin.DefaultConfig()))

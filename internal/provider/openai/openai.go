@@ -23,35 +23,12 @@ type Provider struct {
 	client *http.Client
 }
 
-const (
-	Name             = "openai"
-	DriverName       = "openai"
-	DefaultBaseURL   = "https://api.openai.com/v1"
-	DefaultModel     = "gpt-4.1"
-	DefaultAPIKeyEnv = "OPENAI_API_KEY"
-)
+const DriverName = "openai"
 
-var builtinModels = []string{
-	DefaultModel,
-	"gpt-4o",
-	"gpt-5.4",
-	"gpt-5.3-codex",
-}
-
-func BuiltinConfig() config.ProviderConfig {
-	return config.ProviderConfig{
-		Name:      Name,
-		Driver:    DriverName,
-		BaseURL:   DefaultBaseURL,
-		Model:     DefaultModel,
-		Models:    append([]string(nil), builtinModels...),
-		APIKeyEnv: DefaultAPIKeyEnv,
-	}
-}
-
+// Driver 返回 OpenAI 协议驱动的定义。
 func Driver() domain.DriverDefinition {
 	return domain.DriverDefinition{
-		Name: Name,
+		Name: DriverName,
 		Build: func(ctx context.Context, cfg config.ResolvedProviderConfig) (domain.Provider, error) {
 			return New(cfg)
 		},

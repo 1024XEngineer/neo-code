@@ -14,7 +14,6 @@ import (
 	"neo-code/internal/config"
 	"neo-code/internal/provider"
 	"neo-code/internal/provider/builtin"
-	provideropenai "neo-code/internal/provider/openai"
 	agentruntime "neo-code/internal/runtime"
 	"neo-code/internal/tools"
 )
@@ -317,7 +316,7 @@ func TestAppHelpersAndRenderingSmoke(t *testing.T) {
 
 	app.openModelPicker()
 	app.closePicker()
-	app.selectCurrentModel(provideropenai.DefaultModel)
+	app.selectCurrentModel(config.OpenAIDefaultModel)
 	app.appendAssistantChunk("hello")
 	app.appendAssistantChunk(" world")
 	if !app.lastAssistantMatches("hello world") {
@@ -498,7 +497,7 @@ func TestTUIStandaloneHelpers(t *testing.T) {
 	}
 
 	manager := newTestConfigManager(t)
-	msg := runModelSelection(newTestProviderService(t, manager), provideropenai.DefaultModel)()
+	msg := runModelSelection(newTestProviderService(t, manager), config.OpenAIDefaultModel)()
 	if result, ok := msg.(localCommandResultMsg); !ok || result.err != nil {
 		t.Fatalf("expected successful localCommandResultMsg, got %+v", msg)
 	}
@@ -808,11 +807,11 @@ func TestAppUpdateProviderPickerEnterAppliesSelection(t *testing.T) {
 	if err := manager.Update(context.Background(), func(cfg *config.Config) error {
 		cfg.Providers = append(cfg.Providers, config.ProviderConfig{
 			Name:      "openai-alt",
-			Driver:    provideropenai.DriverName,
-			BaseURL:   provideropenai.DefaultBaseURL,
+			Driver:    "openai",
+			BaseURL:   config.OpenAIDefaultBaseURL,
 			Model:     "gpt-4o",
 			Models:    []string{"gpt-4o"},
-			APIKeyEnv: provideropenai.DefaultAPIKeyEnv,
+			APIKeyEnv: config.OpenAIDefaultAPIKeyEnv,
 		})
 		cfg.CurrentModel = "unsupported-current"
 		return nil

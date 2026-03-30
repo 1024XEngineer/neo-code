@@ -14,10 +14,10 @@ import (
 
 func resolvedConfig(baseURL string, model string) config.ResolvedProviderConfig {
 	if strings.TrimSpace(baseURL) == "" {
-		baseURL = DefaultBaseURL
+		baseURL = config.OpenAIDefaultBaseURL
 	}
 	if strings.TrimSpace(model) == "" {
-		model = DefaultModel
+		model = config.OpenAIDefaultModel
 	}
 
 	return config.ResolvedProviderConfig{
@@ -26,7 +26,7 @@ func resolvedConfig(baseURL string, model string) config.ResolvedProviderConfig 
 			Driver:    DriverName,
 			BaseURL:   baseURL,
 			Model:     model,
-			APIKeyEnv: DefaultAPIKeyEnv,
+			APIKeyEnv: config.OpenAIDefaultAPIKeyEnv,
 		},
 		APIKey: "test-key",
 	}
@@ -110,26 +110,8 @@ func TestMergeToolCallDeltas(t *testing.T) {
 	}
 }
 
-func TestBuiltinConfigIncludesProviderModels(t *testing.T) {
-	t.Parallel()
-
-	cfg := BuiltinConfig()
-	if cfg.Name != DriverName {
-		t.Fatalf("expected provider name %q, got %q", DriverName, cfg.Name)
-	}
-	if cfg.BaseURL != DefaultBaseURL {
-		t.Fatalf("expected base URL %q, got %q", DefaultBaseURL, cfg.BaseURL)
-	}
-	if len(cfg.Models) < 3 {
-		t.Fatalf("expected builtin models to be predeclared, got %+v", cfg.Models)
-	}
-	if !containsString(cfg.Models, "gpt-5.4") {
-		t.Fatalf("expected builtin models to include gpt-5.4, got %+v", cfg.Models)
-	}
-}
-
 func TestProviderChatConsumesSSEAndMergesToolCalls(t *testing.T) {
-	t.Setenv(DefaultAPIKeyEnv, "test-key")
+	t.Setenv(config.OpenAIDefaultAPIKeyEnv, "test-key")
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/chat/completions" {
@@ -299,7 +281,7 @@ func TestProviderChatConsumesSSEAndMergesToolCalls(t *testing.T) {
 }
 
 func TestProviderChatHTTPErrorResponses(t *testing.T) {
-	t.Setenv(DefaultAPIKeyEnv, "test-key")
+	t.Setenv(config.OpenAIDefaultAPIKeyEnv, "test-key")
 
 	tests := []struct {
 		name      string
@@ -332,14 +314,14 @@ func TestProviderChatHTTPErrorResponses(t *testing.T) {
 			}))
 			defer server.Close()
 
-			provider, err := New(resolvedConfig(server.URL, DefaultModel))
+			provider, err := New(resolvedConfig(server.URL, config.OpenAIDefaultModel))
 			if err != nil {
 				t.Fatalf("New() error = %v", err)
 			}
 			provider.client = server.Client()
 
 			_, err = provider.Chat(context.Background(), domain.ChatRequest{
-				Model: DefaultModel,
+				Model: config.OpenAIDefaultModel,
 			}, make(chan domain.StreamEvent, 1))
 			if err == nil || !strings.Contains(err.Error(), tt.expectErr) {
 				t.Fatalf("expected error containing %q, got %v", tt.expectErr, err)
@@ -351,7 +333,7 @@ func TestProviderChatHTTPErrorResponses(t *testing.T) {
 func TestBuildRequestIncludesSystemPromptToolsAndToolMessages(t *testing.T) {
 	t.Parallel()
 
-	provider, err := New(resolvedConfig(DefaultBaseURL, DefaultModel))
+	provider, err := New(resolvedConfig(config.OpenAIDefaultBaseURL, config.OpenAIDefaultModel))
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
@@ -386,8 +368,8 @@ func TestBuildRequestIncludesSystemPromptToolsAndToolMessages(t *testing.T) {
 		t.Fatalf("buildRequest() error = %v", err)
 	}
 
-	if payload.Model != DefaultModel {
-		t.Fatalf("expected default model %q, got %q", DefaultModel, payload.Model)
+	if payload.Model != config.OpenAIDefaultModel {
+		t.Fatalf("expected default model %q, got %q", config.OpenAIDefaultModel, payload.Model)
 	}
 	if !payload.Stream {
 		t.Fatalf("expected stream=true")
@@ -412,7 +394,7 @@ func TestBuildRequestIncludesSystemPromptToolsAndToolMessages(t *testing.T) {
 func TestParseErrorAndEmitTextDelta(t *testing.T) {
 	t.Parallel()
 
-	provider, err := New(resolvedConfig(DefaultBaseURL, DefaultModel))
+	provider, err := New(resolvedConfig(config.OpenAIDefaultBaseURL, config.OpenAIDefaultModel))
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
@@ -470,7 +452,7 @@ func TestParseErrorAndEmitTextDelta(t *testing.T) {
 func TestProviderConsumeStreamRejectsDirtyJSON(t *testing.T) {
 	t.Parallel()
 
-	provider, err := New(resolvedConfig(DefaultBaseURL, DefaultModel))
+	provider, err := New(resolvedConfig(config.OpenAIDefaultBaseURL, config.OpenAIDefaultModel))
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
@@ -689,7 +671,7 @@ func TestMergeToolCallDeltasEdgeCases(t *testing.T) {
 }
 
 func TestProviderChatEmitsToolCallStartEvent(t *testing.T) {
-	t.Setenv(DefaultAPIKeyEnv, "test-key")
+	t.Setenv(config.OpenAIDefaultAPIKeyEnv, "test-key")
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -717,7 +699,7 @@ func TestProviderChatEmitsToolCallStartEvent(t *testing.T) {
 	}))
 	defer server.Close()
 
-	provider, err := New(resolvedConfig(server.URL, DefaultModel))
+	provider, err := New(resolvedConfig(server.URL, config.OpenAIDefaultModel))
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
@@ -725,7 +707,7 @@ func TestProviderChatEmitsToolCallStartEvent(t *testing.T) {
 
 	events := make(chan domain.StreamEvent, 8)
 	_, err = provider.Chat(context.Background(), domain.ChatRequest{
-		Model:    DefaultModel,
+		Model:    config.OpenAIDefaultModel,
 		Messages: []domain.Message{{Role: "user", Content: "edit"}},
 		Tools: []domain.ToolSpec{
 			{Name: "filesystem_edit", Description: "edit", Schema: map[string]any{"type": "object"}},

@@ -3,9 +3,8 @@ package builtin
 import (
 	"testing"
 
-	"neo-code/internal/provider/gemini"
-	"neo-code/internal/provider/openai"
-	"neo-code/internal/provider/openll"
+	"neo-code/internal/config"
+	"neo-code/internal/provider"
 )
 
 func TestDefaultConfigIncludesBuiltinProviders(t *testing.T) {
@@ -15,19 +14,72 @@ func TestDefaultConfigIncludesBuiltinProviders(t *testing.T) {
 	if len(cfg.Providers) != 3 {
 		t.Fatalf("expected 3 builtin providers, got %d", len(cfg.Providers))
 	}
-	if cfg.Providers[0].Name != openai.Name {
-		t.Fatalf("expected first provider %q, got %q", openai.Name, cfg.Providers[0].Name)
+	if cfg.Providers[0].Name != config.OpenAIName {
+		t.Fatalf("expected first provider %q, got %q", config.OpenAIName, cfg.Providers[0].Name)
 	}
-	if cfg.Providers[1].Name != gemini.Name {
-		t.Fatalf("expected second provider %q, got %q", gemini.Name, cfg.Providers[1].Name)
+	if cfg.Providers[1].Name != config.GeminiName {
+		t.Fatalf("expected second provider %q, got %q", config.GeminiName, cfg.Providers[1].Name)
 	}
-	if cfg.Providers[2].Name != openll.Name {
-		t.Fatalf("expected third provider %q, got %q", openll.Name, cfg.Providers[2].Name)
+	if cfg.Providers[2].Name != config.OpenLLName {
+		t.Fatalf("expected third provider %q, got %q", config.OpenLLName, cfg.Providers[2].Name)
 	}
-	if cfg.SelectedProvider != openai.Name {
-		t.Fatalf("expected selected provider %q, got %q", openai.Name, cfg.SelectedProvider)
+	if cfg.SelectedProvider != config.OpenAIName {
+		t.Fatalf("expected selected provider %q, got %q", config.OpenAIName, cfg.SelectedProvider)
 	}
-	if cfg.CurrentModel != openai.DefaultModel {
-		t.Fatalf("expected current model %q, got %q", openai.DefaultModel, cfg.CurrentModel)
+	if cfg.CurrentModel != config.OpenAIDefaultModel {
+		t.Fatalf("expected current model %q, got %q", config.OpenAIDefaultModel, cfg.CurrentModel)
+	}
+}
+
+func TestNewRegistry(t *testing.T) {
+	t.Parallel()
+
+	registry, err := NewRegistry()
+	if err != nil {
+		t.Fatalf("NewRegistry() error = %v", err)
+	}
+	if registry == nil {
+		t.Fatal("expected non-nil registry")
+	}
+}
+
+func TestRegister(t *testing.T) {
+	t.Parallel()
+
+	t.Run("success", func(t *testing.T) {
+		t.Parallel()
+		registry := provider.NewRegistry()
+		err := Register(registry)
+		if err != nil {
+			t.Fatalf("Register() error = %v", err)
+		}
+	})
+
+	t.Run("nil registry", func(t *testing.T) {
+		t.Parallel()
+		err := Register(nil)
+		if err == nil {
+			t.Fatal("expected error for nil registry")
+		}
+	})
+}
+
+func TestDefaultConfigValidates(t *testing.T) {
+	t.Parallel()
+
+	cfg := DefaultConfig()
+	cfg.ApplyDefaultsFrom(*cfg)
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("expected default config to validate, got %v", err)
+	}
+}
+
+func TestDefaultConfigWorkdirIsAbsolute(t *testing.T) {
+	t.Parallel()
+
+	cfg := DefaultConfig()
+	cfg.ApplyDefaultsFrom(*cfg)
+	if cfg.Workdir == "" {
+		t.Fatal("expected workdir to be set")
 	}
 }

@@ -110,7 +110,7 @@ func (s *Service) SetCurrentModel(ctx context.Context, modelID string) (Provider
 			return err
 		}
 
-		if !containsModel(selected.SupportedModels(), modelID) {
+		if !config.ContainsModelID(selected.SupportedModels(), modelID) {
 			return ErrModelNotFound
 		}
 
@@ -125,16 +125,6 @@ func (s *Service) SetCurrentModel(ctx context.Context, modelID string) (Provider
 	return selection, nil
 }
 
-func containsModel(models []string, modelID string) bool {
-	target := normalizeKey(modelID)
-	for _, model := range models {
-		if normalizeKey(model) == target {
-			return true
-		}
-	}
-	return false
-}
-
 func selectionFromConfig(cfg config.Config) ProviderSelection {
 	return ProviderSelection{
 		ProviderID: cfg.SelectedProvider,
@@ -143,7 +133,7 @@ func selectionFromConfig(cfg config.Config) ProviderSelection {
 }
 
 func selectModel(currentModel string, models []string, fallback string) string {
-	if containsModel(models, currentModel) {
+	if config.ContainsModelID(models, currentModel) {
 		return strings.TrimSpace(currentModel)
 	}
 	return strings.TrimSpace(fallback)

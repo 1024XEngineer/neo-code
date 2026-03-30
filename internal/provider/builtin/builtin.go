@@ -5,21 +5,18 @@ import (
 
 	"neo-code/internal/config"
 	"neo-code/internal/provider"
-	"neo-code/internal/provider/gemini"
 	"neo-code/internal/provider/openai"
-	"neo-code/internal/provider/openll"
 )
 
+// DefaultConfig 返回默认配置，包含所有内置 provider。
 func DefaultConfig() *config.Config {
 	cfg := config.Default()
-	defaultProvider := openai.BuiltinConfig()
-	cfg.Providers = []config.ProviderConfig{
-		defaultProvider,
-		gemini.BuiltinConfig(),
-		openll.BuiltinConfig(),
-	}
-	cfg.SelectedProvider = defaultProvider.Name
-	cfg.CurrentModel = defaultProvider.Model
+	providers := config.DefaultProviders()
+
+	cfg.Providers = providers
+	cfg.SelectedProvider = providers[0].Name
+	cfg.CurrentModel = providers[0].Model
+
 	return cfg
 }
 

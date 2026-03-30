@@ -8,9 +8,7 @@ import (
 	"neo-code/internal/config"
 	"neo-code/internal/provider"
 	"neo-code/internal/provider/builtin"
-	"neo-code/internal/provider/gemini"
 	"neo-code/internal/provider/openai"
-	"neo-code/internal/provider/openll"
 )
 
 type stubProvider struct{}
@@ -62,9 +60,9 @@ func TestRegistryBuildsRegisteredDriverCaseInsensitively(t *testing.T) {
 		ProviderConfig: config.ProviderConfig{
 			Name:      "openai-main",
 			Driver:    "OPENAI",
-			BaseURL:   openai.DefaultBaseURL,
-			Model:     openai.DefaultModel,
-			APIKeyEnv: openai.DefaultAPIKeyEnv,
+			BaseURL:   config.OpenAIDefaultBaseURL,
+			Model:     config.OpenAIDefaultModel,
+			APIKeyEnv: config.OpenAIDefaultAPIKeyEnv,
 		},
 		APIKey: "test-key",
 	})
@@ -124,9 +122,9 @@ func TestServiceListProvidersUsesConfiguredMetadata(t *testing.T) {
 		t.Fatalf("ListProviders() error = %v", err)
 	}
 	expectedModels := map[string]int{
-		openai.Name: len(openai.BuiltinConfig().Models),
-		gemini.Name: len(gemini.BuiltinConfig().Models),
-		openll.Name: len(openll.BuiltinConfig().Models),
+		config.OpenAIName: len(config.OpenAIProvider().Models),
+		config.GeminiName: len(config.GeminiProvider().Models),
+		config.OpenLLName: len(config.OpenLLProvider().Models),
 	}
 	if len(items) != len(expectedModels) {
 		t.Fatalf("expected only supported providers, got %d", len(items))
@@ -294,9 +292,9 @@ func TestServiceBuildDelegatesToRegistry(t *testing.T) {
 		ProviderConfig: config.ProviderConfig{
 			Name:      "openai-main",
 			Driver:    "openai",
-			BaseURL:   openai.DefaultBaseURL,
-			Model:     openai.DefaultModel,
-			APIKeyEnv: openai.DefaultAPIKeyEnv,
+			BaseURL:   config.OpenAIDefaultBaseURL,
+			Model:     config.OpenAIDefaultModel,
+			APIKeyEnv: config.OpenAIDefaultAPIKeyEnv,
 		},
 		APIKey: "test-key",
 	}

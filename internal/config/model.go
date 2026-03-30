@@ -108,7 +108,7 @@ func (c *Config) ApplyDefaultsFrom(defaults Config) {
 			c.CurrentModel = defaults.CurrentModel
 		}
 	}
-	if selected, err := c.SelectedProviderConfig(); err == nil && !containsModelID(selected.SupportedModels(), c.CurrentModel) {
+	if selected, err := c.SelectedProviderConfig(); err == nil && !ContainsModelID(selected.SupportedModels(), c.CurrentModel) {
 		c.CurrentModel = selected.Model
 	}
 	if strings.TrimSpace(c.Workdir) == "" {
@@ -168,7 +168,7 @@ func (c *Config) Validate() error {
 	if strings.TrimSpace(selected.Model) == "" {
 		return fmt.Errorf("config: selected provider %q has empty model", selected.Name)
 	}
-	if !containsModelID(selected.SupportedModels(), c.CurrentModel) {
+	if !ContainsModelID(selected.SupportedModels(), c.CurrentModel) {
 		return fmt.Errorf("config: current_model %q is not supported by provider %q", c.CurrentModel, selected.Name)
 	}
 	if err := c.Tools.Validate(); err != nil {
@@ -220,7 +220,7 @@ func (p ProviderConfig) Validate() error {
 		if len(models) == 0 {
 			return fmt.Errorf("provider %q models is empty", p.Name)
 		}
-		if !containsModelID(models, p.Model) {
+		if !ContainsModelID(models, p.Model) {
 			return fmt.Errorf("provider %q default model %q is not in models", p.Name, strings.TrimSpace(p.Model))
 		}
 	}
@@ -492,7 +492,7 @@ func normalizeModelIDs(models []string) []string {
 	return normalized
 }
 
-func containsModelID(models []string, model string) bool {
+func ContainsModelID(models []string, model string) bool {
 	target := strings.ToLower(strings.TrimSpace(model))
 	if target == "" {
 		return false
