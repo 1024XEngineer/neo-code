@@ -8,6 +8,7 @@ import (
 	"neo-code/internal/provider/gemini"
 	"neo-code/internal/provider/openai"
 	"neo-code/internal/provider/openll"
+	"neo-code/internal/provider/qiniuyun"
 )
 
 func DefaultConfig() *config.Config {
@@ -17,6 +18,7 @@ func DefaultConfig() *config.Config {
 		defaultProvider,
 		gemini.BuiltinConfig(),
 		openll.BuiltinConfig(),
+		qiniuyun.BuiltinConfig(),
 	}
 	cfg.SelectedProvider = defaultProvider.Name
 	cfg.CurrentModel = defaultProvider.Model

@@ -44,6 +44,7 @@ NeoCode 是一个基于 Go 和 Bubble Tea 的本地 Coding Agent MVP。
 | `openai` | `gpt-4.1` | `OPENAI_API_KEY` | 默认配置 |
 | `gemini` | `gemini-2.5-flash` | `GEMINI_API_KEY` | 走 OpenAI-compatible 接口 |
 | `openll` | `gpt-4.1` | `AI_API_KEY` | 自定义 OpenAI-compatible 入口 |
+| `qiniuyun` | `deepseek/deepseek-v3.2-251201` | `QINIUYUN_API_KEY` | 七牛云 OpenAI-compatible 入口 |
 
 ## 快速开始
 
@@ -74,6 +75,7 @@ OPENAI_API_KEY=your-api-key
 - `OPENAI_API_KEY`
 - `GEMINI_API_KEY`
 - `AI_API_KEY`
+- `QINIUYUN_API_KEY`
 
 你也可以在进入 TUI 后通过 `/apikey` 打开输入框，自定义当前运行时优先读取的 API Key 环境变量名。留空确认会恢复为当前 Provider 的默认环境变量名。
 
@@ -184,6 +186,8 @@ tools:
 - 如果你首次启动时还没有手动配置，程序会根据当前工作目录生成默认值
 
 Provider 的 `base_url`、默认模型列表和 `api_key_env` 由代码内建定义提供，不需要你在 YAML 中手动维护；如果你想全局覆盖当前运行时读取的环境变量名，可以设置顶层的 `api_key_env_override`，留空则回退到当前 Provider 的默认值。
+
+当前代码内建的 Provider 包括 `openai`、`gemini`、`openll` 和 `qiniuyun`。其中 `qiniuyun` 预置的模型目录为 `z-ai/glm-5`、`minimax/minimax-m2.5`、`moonshotai/kimi-k2.5` 与 `deepseek/deepseek-v3.2-251201`。
 
 ## 工具与安全边界
 
