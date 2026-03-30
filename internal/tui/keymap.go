@@ -23,8 +23,8 @@ type keyMap struct {
 func newKeyMap() keyMap {
 	return keyMap{
 		Send: key.NewBinding(
-			key.WithKeys("ctrl+enter", "ctrl+s"),
-			key.WithHelp("Ctrl+Enter/Ctrl+S", "send"),
+			key.WithKeys("ctrl+j"),
+			key.WithHelp("Ctrl+J", "send"),
 		),
 		CancelAgent: key.NewBinding(
 			key.WithKeys("ctrl+w"),
