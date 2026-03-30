@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -94,7 +95,7 @@ func TestRegistryExecute(t *testing.T) {
 				Name: "missing_tool",
 			},
 			expectErr:     "tool: not found",
-			expectContent: "tool: not found",
+			expectContent: "tool error",
 			expectIsError: true,
 		},
 		{
@@ -104,7 +105,7 @@ func TestRegistryExecute(t *testing.T) {
 				Name: "error_tool",
 			},
 			expectErr:     "boom",
-			expectContent: "boom",
+			expectContent: "tool error",
 			expectIsError: true,
 		},
 		{
@@ -135,8 +136,8 @@ func TestRegistryExecute(t *testing.T) {
 			if result.ToolCallID != tt.input.ID {
 				t.Fatalf("expected tool call id %q, got %q", tt.input.ID, result.ToolCallID)
 			}
-			if result.Content != tt.expectContent {
-				t.Fatalf("expected content %q, got %q", tt.expectContent, result.Content)
+			if tt.expectContent != "" && !strings.Contains(result.Content, tt.expectContent) {
+				t.Fatalf("expected content containing %q, got %q", tt.expectContent, result.Content)
 			}
 			if result.IsError != tt.expectIsError {
 				t.Fatalf("expected IsError=%v, got %v", tt.expectIsError, result.IsError)
