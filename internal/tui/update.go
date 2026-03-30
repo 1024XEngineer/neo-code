@@ -212,6 +212,9 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 			}
 			a.openModelPicker()
 			return a, tea.Batch(cmds...)
+		case slashCommandAPIKeyInput:
+			a.openAPIKeyInput()
+			return a, tea.Batch(cmds...)
 		}
 
 		if strings.HasPrefix(input, slashPrefix) {
@@ -263,6 +266,10 @@ func (a App) updatePicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return a, nil
 			}
 			return a, runModelSelection(a.providerSvc, item.id)
+		case pickerAPIKey:
+			value := a.apiKeyInput.Value()
+			a.closePicker()
+			return a, runAPIKeyEnvSelection(a.providerSvc, value)
 		}
 	}
 
@@ -272,6 +279,8 @@ func (a App) updatePicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		a.providerPicker, cmd = a.providerPicker.Update(msg)
 	case pickerModel:
 		a.modelPicker, cmd = a.modelPicker.Update(msg)
+	case pickerAPIKey:
+		a.apiKeyInput, cmd = a.apiKeyInput.Update(msg)
 	}
 	return a, cmd
 }
@@ -359,7 +368,13 @@ func (a *App) syncActiveSessionTitle() {
 func (a *App) syncConfigState(cfg config.Config) {
 	a.state.CurrentProvider = cfg.SelectedProvider
 	a.state.CurrentModel = cfg.CurrentModel
+	a.state.APIKeyEnvOverride = cfg.APIKeyEnvOverride
 	a.state.CurrentWorkdir = cfg.Workdir
+	if providerCfg, err := cfg.EffectiveSelectedProviderConfig(); err == nil {
+		a.state.CurrentAPIKeyEnv = providerCfg.APIKeyEnv
+	} else {
+		a.state.CurrentAPIKeyEnv = ""
+	}
 }
 
 func (a *App) handleRuntimeEvent(event agentruntime.RuntimeEvent) {
@@ -511,6 +526,12 @@ func (a *App) focusPrev() {
 
 func (a *App) applyFocus() {
 	a.state.Focus = a.focus
+	if a.state.ActivePicker == pickerAPIKey {
+		a.input.Blur()
+		a.apiKeyInput.Focus()
+		return
+	}
+	a.apiKeyInput.Blur()
 	if a.focus == panelInput && a.state.ActivePicker == pickerNone {
 		a.input.Focus()
 		return
@@ -535,6 +556,7 @@ func (a *App) resizeComponents() {
 	a.transcript.Height = max(6, lay.rightHeight-menuHeight-promptHeight)
 	a.providerPicker.SetSize(max(24, clamp(lay.rightWidth-14, 28, 52)), max(4, clamp(lay.rightHeight-10, 6, 10)))
 	a.modelPicker.SetSize(max(24, clamp(lay.rightWidth-14, 28, 52)), max(4, clamp(lay.rightHeight-10, 6, 10)))
+	a.apiKeyInput.Width = max(20, clamp(lay.rightWidth-20, 24, 48))
 	a.updateTranscriptRect(lay)
 	a.rebuildTranscript()
 }

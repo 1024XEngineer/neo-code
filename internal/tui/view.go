@@ -159,6 +159,10 @@ func (a App) renderPicker(width int, height int) string {
 		title = providerPickerTitle
 		subtitle = providerPickerSubtitle
 		body = a.providerPicker.View()
+	} else if a.state.ActivePicker == pickerAPIKey {
+		title = apiKeyInputTitle
+		subtitle = apiKeyInputSubtitle
+		body = a.apiKeyInput.View()
 	}
 	content := lipgloss.JoinVertical(
 		lipgloss.Left,

@@ -123,6 +123,25 @@ func TestAppUpdateComposerCommands(t *testing.T) {
 				}
 			},
 		},
+		{
+			name:  "apikey command opens input and does not start runtime",
+			input: "/apikey",
+			assert: func(t *testing.T, runtime *stubRuntime, manager *config.Manager, app App) {
+				t.Helper()
+				if len(runtime.runInputs) != 0 {
+					t.Fatalf("expected runtime not to run, got %d calls", len(runtime.runInputs))
+				}
+				if app.state.ActivePicker != pickerAPIKey {
+					t.Fatalf("expected api key input to open")
+				}
+				if app.state.StatusText != statusEditAPIKeyEnv {
+					t.Fatalf("expected status %q, got %q", statusEditAPIKeyEnv, app.state.StatusText)
+				}
+				if app.apiKeyInput.Placeholder == "" {
+					t.Fatalf("expected api key input placeholder to be populated")
+				}
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -173,6 +192,26 @@ func TestAppUpdateModelPickerAndRuntimeMessages(t *testing.T) {
 				}
 				if app.state.Focus != panelInput {
 					t.Fatalf("expected focus to return to input")
+				}
+			},
+		},
+		{
+			name: "escape closes api key input",
+			setup: func(t *testing.T, app *App, runtime *stubRuntime) {
+				app.openAPIKeyInput()
+				app.apiKeyInput.SetValue("CUSTOM_OPENAI_KEY")
+			},
+			msg: tea.KeyMsg{Type: tea.KeyEsc},
+			assert: func(t *testing.T, runtime *stubRuntime, app App, msgs []tea.Msg) {
+				t.Helper()
+				if app.state.ActivePicker != pickerNone {
+					t.Fatalf("expected api key input to close")
+				}
+				if app.state.Focus != panelInput {
+					t.Fatalf("expected focus to return to input")
+				}
+				if app.apiKeyInput.Value() != "CUSTOM_OPENAI_KEY" {
+					t.Fatalf("expected api key input value to stay local on cancel, got %q", app.apiKeyInput.Value())
 				}
 			},
 		},
@@ -317,6 +356,8 @@ func TestAppHelpersAndRenderingSmoke(t *testing.T) {
 
 	app.openModelPicker()
 	app.closePicker()
+	app.openAPIKeyInput()
+	app.closePicker()
 	app.selectCurrentModel(provideropenai.DefaultModel)
 	app.appendAssistantChunk("hello")
 	app.appendAssistantChunk(" world")
@@ -357,6 +398,10 @@ func TestAppHelpersAndRenderingSmoke(t *testing.T) {
 	app.state.ActivePicker = pickerModel
 	if app.renderPicker(48, 12) == "" || app.renderWaterfall(80, 20) == "" {
 		t.Fatalf("expected model picker rendering")
+	}
+	app.state.ActivePicker = pickerAPIKey
+	if app.renderPicker(48, 12) == "" || app.renderWaterfall(80, 20) == "" {
+		t.Fatalf("expected api key picker rendering")
 	}
 	app.state.ActivePicker = pickerNone
 	if app.renderCommandMenu(80) == "" {
@@ -510,6 +555,14 @@ func TestTUIStandaloneHelpers(t *testing.T) {
 	msg := runModelSelection(newTestProviderService(t, manager), provideropenai.DefaultModel)()
 	if result, ok := msg.(localCommandResultMsg); !ok || result.err != nil {
 		t.Fatalf("expected successful localCommandResultMsg, got %+v", msg)
+	}
+	msg = runAPIKeyEnvSelection(newTestProviderService(t, manager), "CUSTOM_OPENAI_KEY")()
+	if result, ok := msg.(localCommandResultMsg); !ok || result.err != nil || !strings.Contains(result.notice, "CUSTOM_OPENAI_KEY") {
+		t.Fatalf("expected successful api key env result, got %+v", msg)
+	}
+	msg = runAPIKeyEnvSelection(newTestProviderService(t, manager), "   ")()
+	if result, ok := msg.(localCommandResultMsg); !ok || result.err != nil || !strings.Contains(result.notice, "restored") {
+		t.Fatalf("expected restore-default result, got %+v", msg)
 	}
 
 	_ = model
@@ -892,6 +945,82 @@ func TestAppUpdateProviderPickerEnterAppliesSelection(t *testing.T) {
 	}
 	if cfg.CurrentModel != "gpt-4o" {
 		t.Fatalf("expected current model to follow provider default, got %q", cfg.CurrentModel)
+	}
+}
+
+func TestAppUpdateAPIKeyPickerEnterAppliesOverride(t *testing.T) {
+	manager := newTestConfigManager(t)
+	runtime := newStubRuntime()
+	app, err := New(nil, manager, runtime, newTestProviderService(t, manager))
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	app.openAPIKeyInput()
+	app.apiKeyInput.SetValue("CUSTOM_OPENAI_KEY")
+
+	model, cmd := app.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	app = model.(App)
+	if app.state.ActivePicker != pickerNone {
+		t.Fatalf("expected picker to close after selection")
+	}
+
+	for _, msg := range collectTeaMessages(cmd) {
+		model, follow := app.Update(msg)
+		app = model.(App)
+		_ = collectTeaMessages(follow)
+	}
+
+	cfg := manager.Get()
+	if cfg.APIKeyEnvOverride != "CUSTOM_OPENAI_KEY" {
+		t.Fatalf("expected override to persist, got %q", cfg.APIKeyEnvOverride)
+	}
+	if app.state.CurrentAPIKeyEnv != "CUSTOM_OPENAI_KEY" {
+		t.Fatalf("expected current api key env to refresh, got %q", app.state.CurrentAPIKeyEnv)
+	}
+	if !strings.Contains(app.state.StatusText, "CUSTOM_OPENAI_KEY") {
+		t.Fatalf("expected success status to mention override, got %q", app.state.StatusText)
+	}
+}
+
+func TestAppUpdateAPIKeyPickerEnterClearsOverride(t *testing.T) {
+	manager := newTestConfigManager(t)
+	if err := manager.Update(context.Background(), func(cfg *config.Config) error {
+		cfg.APIKeyEnvOverride = "CUSTOM_OPENAI_KEY"
+		return nil
+	}); err != nil {
+		t.Fatalf("seed api key override: %v", err)
+	}
+	runtime := newStubRuntime()
+	app, err := New(nil, manager, runtime, newTestProviderService(t, manager))
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	app.openAPIKeyInput()
+	app.apiKeyInput.SetValue("   ")
+
+	model, cmd := app.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	app = model.(App)
+	if app.state.ActivePicker != pickerNone {
+		t.Fatalf("expected picker to close after clearing override")
+	}
+
+	for _, msg := range collectTeaMessages(cmd) {
+		model, follow := app.Update(msg)
+		app = model.(App)
+		_ = collectTeaMessages(follow)
+	}
+
+	cfg := manager.Get()
+	if cfg.APIKeyEnvOverride != "" {
+		t.Fatalf("expected override to clear, got %q", cfg.APIKeyEnvOverride)
+	}
+	if app.state.CurrentAPIKeyEnv != provideropenai.DefaultAPIKeyEnv {
+		t.Fatalf("expected current api key env to fall back to provider default, got %q", app.state.CurrentAPIKeyEnv)
+	}
+	if !strings.Contains(strings.ToLower(app.state.StatusText), "default") {
+		t.Fatalf("expected restore-default status, got %q", app.state.StatusText)
 	}
 }
 

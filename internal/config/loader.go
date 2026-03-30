@@ -24,13 +24,14 @@ type Loader struct {
 }
 
 type persistedConfig struct {
-	SelectedProvider string      `yaml:"selected_provider"`
-	CurrentModel     string      `yaml:"current_model"`
-	Workdir          string      `yaml:"workdir"`
-	Shell            string      `yaml:"shell"`
-	MaxLoops         int         `yaml:"max_loops,omitempty"`
-	ToolTimeoutSec   int         `yaml:"tool_timeout_sec,omitempty"`
-	Tools            ToolsConfig `yaml:"tools,omitempty"`
+	SelectedProvider  string      `yaml:"selected_provider"`
+	CurrentModel      string      `yaml:"current_model"`
+	APIKeyEnvOverride string      `yaml:"api_key_env_override,omitempty"`
+	Workdir           string      `yaml:"workdir"`
+	Shell             string      `yaml:"shell"`
+	MaxLoops          int         `yaml:"max_loops,omitempty"`
+	ToolTimeoutSec    int         `yaml:"tool_timeout_sec,omitempty"`
+	Tools             ToolsConfig `yaml:"tools,omitempty"`
 }
 
 func NewLoader(baseDir string, defaults *Config) *Loader {
@@ -124,13 +125,14 @@ func (l *Loader) Save(ctx context.Context, cfg *Config) error {
 	}
 
 	file := persistedConfig{
-		SelectedProvider: snapshot.SelectedProvider,
-		CurrentModel:     snapshot.CurrentModel,
-		Workdir:          snapshot.Workdir,
-		Shell:            snapshot.Shell,
-		MaxLoops:         snapshot.MaxLoops,
-		ToolTimeoutSec:   snapshot.ToolTimeoutSec,
-		Tools:            snapshot.Tools,
+		SelectedProvider:  snapshot.SelectedProvider,
+		CurrentModel:      snapshot.CurrentModel,
+		APIKeyEnvOverride: snapshot.APIKeyEnvOverride,
+		Workdir:           snapshot.Workdir,
+		Shell:             snapshot.Shell,
+		MaxLoops:          snapshot.MaxLoops,
+		ToolTimeoutSec:    snapshot.ToolTimeoutSec,
+		Tools:             snapshot.Tools,
 	}
 
 	data, err := yaml.Marshal(&file)
@@ -192,13 +194,14 @@ func parseCurrentConfig(data []byte, _ Config) (*Config, error) {
 	}
 
 	cfg := &Config{
-		SelectedProvider: strings.TrimSpace(file.SelectedProvider),
-		CurrentModel:     strings.TrimSpace(file.CurrentModel),
-		Workdir:          strings.TrimSpace(file.Workdir),
-		Shell:            strings.TrimSpace(file.Shell),
-		MaxLoops:         file.MaxLoops,
-		ToolTimeoutSec:   file.ToolTimeoutSec,
-		Tools:            file.Tools,
+		SelectedProvider:  strings.TrimSpace(file.SelectedProvider),
+		CurrentModel:      strings.TrimSpace(file.CurrentModel),
+		APIKeyEnvOverride: strings.TrimSpace(file.APIKeyEnvOverride),
+		Workdir:           strings.TrimSpace(file.Workdir),
+		Shell:             strings.TrimSpace(file.Shell),
+		MaxLoops:          file.MaxLoops,
+		ToolTimeoutSec:    file.ToolTimeoutSec,
+		Tools:             file.Tools,
 	}
 
 	return cfg, nil

@@ -91,7 +91,8 @@ func (m *Manager) SelectedProvider() (ProviderConfig, error) {
 }
 
 func (m *Manager) ResolvedSelectedProvider() (ResolvedProviderConfig, error) {
-	provider, err := m.SelectedProvider()
+	cfg := m.Get()
+	provider, err := cfg.EffectiveSelectedProviderConfig()
 	if err != nil {
 		return ResolvedProviderConfig{}, err
 	}
