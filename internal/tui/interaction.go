@@ -13,7 +13,7 @@ import (
 var writeClipboard = clipboard.WriteAll
 
 func (a *App) shouldSendInput(msg tea.KeyMsg) bool {
-	return key.Matches(msg, a.keys.Send) || msg.String() == "ctrl+enter"
+	return key.Matches(msg, a.keys.Send)
 }
 
 func (a *App) handleMouse(msg tea.MouseMsg) {
