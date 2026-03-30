@@ -23,64 +23,64 @@ type keyMap struct {
 func newKeyMap() keyMap {
 	return keyMap{
 		Send: key.NewBinding(
-			key.WithKeys("enter", "ctrl+s"),
-			key.WithHelp("Enter/Ctrl+S", "发送（输入框）"),
+			key.WithKeys("ctrl+enter", "ctrl+s"),
+			key.WithHelp("Ctrl+Enter/Ctrl+S", "send"),
 		),
 		CancelAgent: key.NewBinding(
 			key.WithKeys("ctrl+w"),
-			key.WithHelp("Ctrl+w", "中止"),
+			key.WithHelp("Ctrl+W", "cancel"),
 		),
 		NewSession: key.NewBinding(
 			key.WithKeys("ctrl+n"),
-			key.WithHelp("Ctrl+N", "新会话"),
+			key.WithHelp("Ctrl+N", "new"),
 		),
 		NextPanel: key.NewBinding(
 			key.WithKeys("tab"),
-			key.WithHelp("Tab", "下个面板"),
+			key.WithHelp("Tab", "next panel"),
 		),
 		PrevPanel: key.NewBinding(
 			key.WithKeys("shift+tab"),
-			key.WithHelp("Shift+Tab", "上个面板"),
+			key.WithHelp("Shift+Tab", "prev panel"),
 		),
 		FocusInput: key.NewBinding(
 			key.WithKeys("esc"),
-			key.WithHelp("Esc", "聚焦输入框"),
+			key.WithHelp("Esc", "focus input"),
 		),
 		OpenSession: key.NewBinding(
 			key.WithKeys("enter"),
-			key.WithHelp("Enter", "打开会话"),
+			key.WithHelp("Enter", "open session"),
 		),
 		ToggleHelp: key.NewBinding(
 			key.WithKeys("ctrl+q"),
-			key.WithHelp("Ctrl+Q", "帮助"),
+			key.WithHelp("Ctrl+Q", "help"),
 		),
 		Quit: key.NewBinding(
 			key.WithKeys("ctrl+u"),
-			key.WithHelp("Ctrl+U", "退出"),
+			key.WithHelp("Ctrl+U", "quit"),
 		),
 		ScrollUp: key.NewBinding(
 			key.WithKeys("up", "k"),
-			key.WithHelp("Up/k", "向上滚动"),
+			key.WithHelp("Up/k", "scroll up"),
 		),
 		ScrollDown: key.NewBinding(
 			key.WithKeys("down", "j"),
-			key.WithHelp("Down/j", "向下滚动"),
+			key.WithHelp("Down/j", "scroll down"),
 		),
 		PageUp: key.NewBinding(
 			key.WithKeys("pgup", "b"),
-			key.WithHelp("PgUp/b", "向上翻页"),
+			key.WithHelp("PgUp/b", "page up"),
 		),
 		PageDown: key.NewBinding(
 			key.WithKeys("pgdown", "f"),
-			key.WithHelp("PgDn/f", "向下翻页"),
+			key.WithHelp("PgDn/f", "page down"),
 		),
 		Top: key.NewBinding(
 			key.WithKeys("g", "home"),
-			key.WithHelp("g/Home", "跳到顶部"),
+			key.WithHelp("g/Home", "top"),
 		),
 		Bottom: key.NewBinding(
 			key.WithKeys("G", "end"),
-			key.WithHelp("G/End", "跳到底部"),
+			key.WithHelp("G/End", "bottom"),
 		),
 	}
 }

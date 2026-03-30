@@ -56,6 +56,27 @@ type activityEntry struct {
 	IsError bool
 }
 
+type rect struct {
+	X      int
+	Y      int
+	Width  int
+	Height int
+}
+
+func (r rect) contains(x int, y int) bool {
+	return x >= r.X && x < r.X+r.Width && y >= r.Y && y < r.Y+r.Height
+}
+
+type codeBlockTarget struct {
+	MessageIndex int
+	BlockIndex   int
+	Language     string
+	Content      string
+	Line         int
+	X            int
+	Width        int
+}
+
 type sessionItem struct {
 	Summary agentruntime.SessionSummary
 	Active  bool
