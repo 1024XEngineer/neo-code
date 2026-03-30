@@ -49,41 +49,46 @@ func (t *ReadFileTool) Schema() map[string]any {
 func (t *ReadFileTool) Execute(ctx context.Context, input tools.ToolCallInput) (tools.ToolResult, error) {
 	var args readFileInput
 	if err := json.Unmarshal(input.Arguments, &args); err != nil {
-		return tools.ToolResult{Name: t.Name()}, err
+		return tools.NewErrorResult(t.Name(), "invalid arguments", err.Error(), nil), err
 	}
 	if strings.TrimSpace(args.Path) == "" {
-		return tools.ToolResult{Name: t.Name()}, errors.New(readFileToolName + ": path is required")
+		err := errors.New(readFileToolName + ": path is required")
+		return tools.NewErrorResult(t.Name(), tools.NormalizeErrorReason(t.Name(), err), "", nil), err
 	}
 
 	base := effectiveRoot(t.root, input.Workdir)
 
 	target, err := resolvePath(base, args.Path)
 	if err != nil {
-		return tools.ToolResult{Name: t.Name()}, err
+		return tools.NewErrorResult(t.Name(), tools.NormalizeErrorReason(t.Name(), err), "", nil), err
 	}
 
 	data, err := os.ReadFile(target)
 	if err != nil {
-		return tools.ToolResult{Name: t.Name()}, err
+		return tools.NewErrorResult(t.Name(), tools.NormalizeErrorReason(t.Name(), err), "", nil), err
 	}
 
-	if input.EmitChunk != nil && len(data) > emitChunkSize {
-		for start := 0; start < len(data); start += emitChunkSize {
-			end := start + emitChunkSize
-			if end > len(data) {
-				end = len(data)
-			}
-			input.EmitChunk(data[start:end])
-		}
-	}
-
-	return tools.ToolResult{
+	result := tools.ToolResult{
 		Name:    t.Name(),
 		Content: string(data),
 		Metadata: map[string]any{
 			"path": target,
 		},
-	}, nil
+	}
+	result = tools.ApplyOutputLimit(result, tools.DefaultOutputLimitBytes)
+
+	if input.EmitChunk != nil {
+		content := []byte(result.Content)
+		for start := 0; start < len(content); start += emitChunkSize {
+			end := start + emitChunkSize
+			if end > len(content) {
+				end = len(content)
+			}
+			input.EmitChunk(content[start:end])
+		}
+	}
+
+	return result, nil
 }
 
 func resolvePath(root string, requested string) (string, error) {
