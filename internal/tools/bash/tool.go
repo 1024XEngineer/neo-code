@@ -15,10 +15,9 @@ import (
 )
 
 type Tool struct {
-	root        string
-	shell       string
-	timeout     time.Duration
-	outputLimit int
+	root    string
+	shell   string
+	timeout time.Duration
 }
 
 type input struct {
@@ -28,10 +27,9 @@ type input struct {
 
 func New(root string, shell string, timeout time.Duration) *Tool {
 	return &Tool{
-		root:        root,
-		shell:       shell,
-		timeout:     timeout,
-		outputLimit: 16 * 1024,
+		root:    root,
+		shell:   shell,
+		timeout: timeout,
 	}
 }
 
@@ -63,15 +61,16 @@ func (t *Tool) Schema() map[string]any {
 func (t *Tool) Execute(ctx context.Context, call tools.ToolCallInput) (tools.ToolResult, error) {
 	var in input
 	if err := json.Unmarshal(call.Arguments, &in); err != nil {
-		return tools.ToolResult{Name: t.Name()}, err
+		return tools.NewErrorResult(t.Name(), "invalid arguments", err.Error(), nil), err
 	}
 	if strings.TrimSpace(in.Command) == "" {
-		return tools.ToolResult{Name: t.Name()}, errors.New("bash: command is empty")
+		err := errors.New("bash: command is empty")
+		return tools.NewErrorResult(t.Name(), tools.NormalizeErrorReason(t.Name(), err), "", nil), err
 	}
 
 	workdir, err := resolveWorkdir(call.Workdir, in.Workdir)
 	if err != nil {
-		return tools.ToolResult{Name: t.Name()}, err
+		return tools.NewErrorResult(t.Name(), tools.NormalizeErrorReason(t.Name(), err), "", nil), err
 	}
 
 	runCtx, cancel := context.WithTimeout(ctx, t.timeout)
@@ -83,21 +82,26 @@ func (t *Tool) Execute(ctx context.Context, call tools.ToolCallInput) (tools.Too
 	output, err := cmd.CombinedOutput()
 
 	content := string(output)
-	if len(content) > t.outputLimit {
-		content = content[:t.outputLimit] + "\n...[truncated]"
+	if err != nil {
+		result := tools.NewErrorResult(
+			t.Name(),
+			tools.NormalizeErrorReason(t.Name(), err),
+			content,
+			map[string]any{"workdir": workdir},
+		)
+		result = tools.ApplyOutputLimit(result, tools.DefaultOutputLimitBytes)
+		return result, err
 	}
+
 	result := tools.ToolResult{
 		Name:    t.Name(),
 		Content: content,
-		IsError: err != nil,
 		Metadata: map[string]any{
 			"workdir": workdir,
 		},
 	}
-	if err != nil && strings.TrimSpace(result.Content) == "" {
-		result.Content = err.Error()
-	}
-	return result, err
+	result = tools.ApplyOutputLimit(result, tools.DefaultOutputLimitBytes)
+	return result, nil
 }
 
 func (t *Tool) shellArgs(command string) []string {
