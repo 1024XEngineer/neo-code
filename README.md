@@ -1,8 +1,5 @@
 # NeoCode
 
-<<<<<<< HEAD
-> 基于 Go + Bubble Tea 的本地 Coding Agent
-
 NeoCode 是一个基于 Go 和 Bubble Tea 的本地 Coding Agent MVP。
 
 它当前聚焦一条最重要的主链路：
@@ -21,26 +18,6 @@ NeoCode 是一个基于 Go 和 Bubble Tea 的本地 Coding Agent MVP。
 
 ## 当前能力
 
-=======
-NeoCode 是一个基于 Go 和 Bubble Tea 的本地 Coding Agent MVP。
-
-它当前聚焦一条最重要的主链路：
-
-`用户输入 -> Agent 推理 -> 调用工具 -> 获取结果 -> 继续推理 -> UI 展示`
-
-如果你是第一次打开这个仓库，可以先把它理解成一个运行在终端里的本地 AI 编码助手。它会在 TUI 中接收你的问题，调用模型进行推理，在需要时使用本地工具，再把过程和结果实时展示出来。
-
-## 这份 README 适合谁
-
-- 想先把项目跑起来的新同学
-- 想快速看懂仓库分层的贡献者
-- 想知道配置文件、Provider、Tools 应该放在哪一层的协作者
-
-如果你想直接看详细设计，可以跳到本文末尾的“文档索引”。
-
-## 当前能力
-
->>>>>>> 93a2f3f92c3f7bcfefce1a6a73f1373a975b5617
 当前仓库已经围绕 MVP 主链路组织，重点在于把边界理顺，而不是一次性做很多功能。
 
 - 终端 TUI 交互界面
@@ -276,11 +253,8 @@ gofmt -w ./cmd ./internal
 
 ## 文档索引
 
-<<<<<<< HEAD
 - `docs/guides/configuration.md`
 - `docs/guides/adding-providers.md`
-=======
->>>>>>> 93a2f3f92c3f7bcfefce1a6a73f1373a975b5617
 - `docs/neocode-coding-agent-mvp-architecture.md`
 - `docs/runtime-provider-event-flow.md`
 - `docs/config-management-detail-design.md`
@@ -291,10 +265,6 @@ gofmt -w ./cmd ./internal
 ## 一句话总结
 
 NeoCode 当前不是一个“功能很多”的 Agent，而是一个把主链路、分层和可验证性打磨清楚的 Coding Agent MVP。对新同学来说，最好的阅读顺序是：先跑起来，再看 `README` 的分层说明，最后按需进入 `docs/` 深入细节。
-<<<<<<< HEAD
-
 ## License
 
 MIT
-=======
->>>>>>> 93a2f3f92c3f7bcfefce1a6a73f1373a975b5617
