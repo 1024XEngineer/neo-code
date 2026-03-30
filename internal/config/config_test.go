@@ -629,6 +629,32 @@ func TestProviderLookupAndResolveSelectedProvider(t *testing.T) {
 	}
 }
 
+func TestProviderLookupAndResolveSelectedProviderUsesOverride(t *testing.T) {
+	t.Setenv("CUSTOM_OPENAI_KEY", "override-key")
+
+	manager := NewManager(NewLoader(t.TempDir(), testDefaultConfig()))
+	if _, err := manager.Load(context.Background()); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if err := manager.Update(context.Background(), func(cfg *Config) error {
+		cfg.APIKeyEnvOverride = "  CUSTOM_OPENAI_KEY  "
+		return nil
+	}); err != nil {
+		t.Fatalf("Update() error = %v", err)
+	}
+
+	resolved, err := manager.ResolvedSelectedProvider()
+	if err != nil {
+		t.Fatalf("ResolvedSelectedProvider() error = %v", err)
+	}
+	if resolved.APIKeyEnv != "CUSTOM_OPENAI_KEY" {
+		t.Fatalf("expected resolved env %q, got %q", "CUSTOM_OPENAI_KEY", resolved.APIKeyEnv)
+	}
+	if resolved.APIKey != "override-key" {
+		t.Fatalf("expected resolved key %q, got %q", "override-key", resolved.APIKey)
+	}
+}
+
 func TestLoaderLoadAndSaveRoundTrip(t *testing.T) {
 	tempDir := t.TempDir()
 	loader := NewLoader(tempDir, testDefaultConfig())
@@ -644,6 +670,7 @@ func TestLoaderLoadAndSaveRoundTrip(t *testing.T) {
 	cfg.CurrentModel = "gpt-5.4"
 	cfg.Providers[0].Models = []string{"gpt-4.1", "gpt-5.4"}
 	cfg.Providers[0].BaseURL = "https://ignored.example/v1"
+	cfg.APIKeyEnvOverride = "CUSTOM_OPENAI_KEY"
 	cfg.Tools.WebFetch.MaxResponseBytes = 1024
 	cfg.Tools.WebFetch.SupportedContentTypes = []string{"text/html", "application/json"}
 	if err := loader.Save(context.Background(), cfg); err != nil {
@@ -664,10 +691,16 @@ func TestLoaderLoadAndSaveRoundTrip(t *testing.T) {
 	if strings.Contains(text, "models:") || strings.Contains(text, "base_url:") || strings.Contains(text, "api_key_env:") {
 		t.Fatalf("expected persisted config to keep only selection state and common runtime settings, got:\n%s", text)
 	}
+	if !strings.Contains(text, "api_key_env_override: CUSTOM_OPENAI_KEY") {
+		t.Fatalf("expected persisted config to include api_key_env_override, got:\n%s", text)
+	}
 
 	reloaded, err := loader.Load(context.Background())
 	if err != nil {
 		t.Fatalf("Load() reload error = %v", err)
+	}
+	if reloaded.APIKeyEnvOverride != "CUSTOM_OPENAI_KEY" {
+		t.Fatalf("expected api key env override to round-trip, got %q", reloaded.APIKeyEnvOverride)
 	}
 	if reloaded.CurrentModel != "gpt-5.4" {
 		t.Fatalf("expected current model %q, got %q", "gpt-5.4", reloaded.CurrentModel)
@@ -690,6 +723,68 @@ func TestLoaderLoadAndSaveRoundTrip(t *testing.T) {
 	}
 	if len(reloaded.Tools.WebFetch.SupportedContentTypes) != 2 {
 		t.Fatalf("expected persisted supported content types, got %+v", reloaded.Tools.WebFetch.SupportedContentTypes)
+	}
+}
+
+func TestLoaderSaveOmitsEmptyAPIKeyEnvOverride(t *testing.T) {
+	tempDir := t.TempDir()
+	loader := NewLoader(tempDir, testDefaultConfig())
+
+	cfg, err := loader.Load(context.Background())
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	cfg.APIKeyEnvOverride = "CUSTOM_OPENAI_KEY"
+	if err := loader.Save(context.Background(), cfg); err != nil {
+		t.Fatalf("Save() with override error = %v", err)
+	}
+
+	cfg.APIKeyEnvOverride = "   "
+	if err := loader.Save(context.Background(), cfg); err != nil {
+		t.Fatalf("Save() clearing override error = %v", err)
+	}
+
+	data, err := os.ReadFile(loader.ConfigPath())
+	if err != nil {
+		t.Fatalf("read config file: %v", err)
+	}
+	if strings.Contains(string(data), "api_key_env_override:") {
+		t.Fatalf("expected empty override to be omitted, got:\n%s", string(data))
+	}
+}
+
+func TestConfigValidateRejectsInvalidAPIKeyEnvOverride(t *testing.T) {
+	tests := []struct {
+		name      string
+		override  string
+		expectErr string
+	}{
+		{
+			name:      "contains spaces",
+			override:  "CUSTOM KEY",
+			expectErr: "must not contain whitespace",
+		},
+		{
+			name:      "contains equals",
+			override:  "CUSTOM=KEY",
+			expectErr: "must not contain =",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := testDefaultConfig()
+			cfg.APIKeyEnvOverride = tt.override
+			cfg.ApplyDefaultsFrom(*testDefaultConfig())
+
+			err := cfg.Validate()
+			if err == nil || !strings.Contains(err.Error(), tt.expectErr) {
+				t.Fatalf("expected error containing %q, got %v", tt.expectErr, err)
+			}
+		})
 	}
 }
 

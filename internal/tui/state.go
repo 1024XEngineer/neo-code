@@ -28,6 +28,7 @@ const (
 	pickerNone pickerMode = iota
 	pickerProvider
 	pickerModel
+	pickerAPIKey
 )
 
 type UIState struct {
@@ -42,6 +43,8 @@ type UIState struct {
 	StatusText         string
 	CurrentProvider    string
 	CurrentModel       string
+	CurrentAPIKeyEnv   string
+	APIKeyEnvOverride  string
 	CurrentWorkdir     string
 	ShowHelp           bool
 	ActivePicker       pickerMode

@@ -3,6 +3,7 @@ package provider_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"neo-code/internal/config"
@@ -217,6 +218,60 @@ func TestServiceSelectProviderAndSetCurrentModel(t *testing.T) {
 	}
 	if selected.Model != "custom-model" || reloaded.CurrentModel != "custom-alt" {
 		t.Fatalf("expected current model persistence without overriding provider default, got provider=%q current=%q", selected.Model, reloaded.CurrentModel)
+	}
+}
+
+func TestServiceSetAPIKeyEnvOverridePersistsAcrossReloadAndSwitches(t *testing.T) {
+	defaults := builtin.DefaultConfig()
+	defaults.Providers = append(defaults.Providers, config.ProviderConfig{
+		Name:      "custom-main",
+		Driver:    "custom",
+		BaseURL:   "https://example.com",
+		Model:     "custom-model",
+		Models:    []string{"custom-model", "custom-alt"},
+		APIKeyEnv: "CUSTOM_PROVIDER_KEY",
+	})
+	manager := newTestManagerWithDefaults(t, defaults)
+	registry := newTestRegistry(t)
+	if err := registry.Register(stubDriver("custom")); err != nil {
+		t.Fatalf("register stub driver: %v", err)
+	}
+
+	service := provider.NewService(manager, registry)
+	if err := service.SetAPIKeyEnvOverride(context.Background(), " GLOBAL_OVERRIDE_KEY "); err != nil {
+		t.Fatalf("SetAPIKeyEnvOverride() error = %v", err)
+	}
+
+	cfg := manager.Get()
+	if cfg.APIKeyEnvOverride != "GLOBAL_OVERRIDE_KEY" {
+		t.Fatalf("expected override to be normalized, got %q", cfg.APIKeyEnvOverride)
+	}
+
+	if _, err := service.SelectProvider(context.Background(), "custom-main"); err != nil {
+		t.Fatalf("SelectProvider() error = %v", err)
+	}
+	if _, err := service.SetCurrentModel(context.Background(), "custom-alt"); err != nil {
+		t.Fatalf("SetCurrentModel() error = %v", err)
+	}
+
+	reloaded, err := manager.Reload(context.Background())
+	if err != nil {
+		t.Fatalf("Reload() error = %v", err)
+	}
+	if reloaded.APIKeyEnvOverride != "GLOBAL_OVERRIDE_KEY" {
+		t.Fatalf("expected override to persist after reload, got %q", reloaded.APIKeyEnvOverride)
+	}
+	if reloaded.SelectedProvider != "custom-main" || reloaded.CurrentModel != "custom-alt" {
+		t.Fatalf("expected provider/model selection to persist, got provider=%q model=%q", reloaded.SelectedProvider, reloaded.CurrentModel)
+	}
+}
+
+func TestServiceSetAPIKeyEnvOverrideRejectsInvalidInput(t *testing.T) {
+	service := provider.NewService(newTestManager(t), newTestRegistry(t))
+
+	err := service.SetAPIKeyEnvOverride(context.Background(), "CUSTOM KEY")
+	if err == nil || (!strings.Contains(err.Error(), "whitespace") && !strings.Contains(err.Error(), "api_key_env_override")) {
+		t.Fatalf("expected override validation error, got %v", err)
 	}
 }
 

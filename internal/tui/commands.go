@@ -15,15 +15,19 @@ const (
 	slashPrefix              = "/"
 	slashCommandProviderPick = "/provider"
 	slashCommandModelPicker  = "/model"
+	slashCommandAPIKeyInput  = "/apikey"
 
 	slashUsageProvider = "/provider"
 	slashUsageModel    = "/model"
+	slashUsageAPIKey   = "/apikey"
 
 	commandMenuTitle       = "Commands"
 	providerPickerTitle    = "Select Provider"
 	providerPickerSubtitle = "Up/Down choose, Enter confirm, Esc cancel"
 	modelPickerTitle       = "Select Model"
 	modelPickerSubtitle    = "Up/Down choose, Enter confirm, Esc cancel"
+	apiKeyInputTitle       = "Set API Key Env"
+	apiKeyInputSubtitle    = "Enter save, Esc cancel, leave empty to restore default"
 
 	sidebarTitle      = "Sessions"
 	sidebarFilterHint = "Type / to search"
@@ -46,6 +50,7 @@ const (
 	statusRunning        = "Running"
 	statusChooseProvider = "Choose a provider"
 	statusChooseModel    = "Choose a model"
+	statusEditAPIKeyEnv  = "Set API key env"
 
 	focusLabelSessions   = "Sessions"
 	focusLabelTranscript = "Transcript"
@@ -76,6 +81,7 @@ type commandSuggestion struct {
 var builtinSlashCommands = []slashCommand{
 	{Usage: slashUsageProvider, Description: "Open the interactive provider picker"},
 	{Usage: slashUsageModel, Description: "Open the interactive model picker"},
+	{Usage: slashUsageAPIKey, Description: "Open the API key env input"},
 }
 
 func newSelectionPicker(items []list.Item) list.Model {
@@ -154,6 +160,16 @@ func (a *App) openModelPicker() {
 	a.selectCurrentModel(a.state.CurrentModel)
 }
 
+func (a *App) openAPIKeyInput() {
+	a.state.ActivePicker = pickerAPIKey
+	a.state.StatusText = statusEditAPIKeyEnv
+	a.apiKeyInput.SetValue(a.state.APIKeyEnvOverride)
+	a.apiKeyInput.Placeholder = fallback(a.state.CurrentAPIKeyEnv, "Enter API key env name")
+	a.focus = panelInput
+	a.applyFocus()
+	a.apiKeyInput.CursorEnd()
+}
+
 func (a *App) closePicker() {
 	a.state.ActivePicker = pickerNone
 	a.focus = panelInput
@@ -225,6 +241,23 @@ func runModelSelection(providerSvc ProviderController, modelID string) tea.Cmd {
 		}
 		return localCommandResultMsg{
 			notice: fmt.Sprintf("[System] Current model switched to %s.", selection.ModelID),
+		}
+	}
+}
+
+func runAPIKeyEnvSelection(providerSvc ProviderController, envName string) tea.Cmd {
+	return func() tea.Msg {
+		trimmed := strings.TrimSpace(envName)
+		if err := providerSvc.SetAPIKeyEnvOverride(context.Background(), trimmed); err != nil {
+			return localCommandResultMsg{err: err}
+		}
+		if trimmed == "" {
+			return localCommandResultMsg{
+				notice: "[System] API key env restored to provider default.",
+			}
+		}
+		return localCommandResultMsg{
+			notice: fmt.Sprintf("[System] API key env override set to %s.", trimmed),
 		}
 	}
 }

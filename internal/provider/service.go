@@ -125,6 +125,17 @@ func (s *Service) SetCurrentModel(ctx context.Context, modelID string) (Provider
 	return selection, nil
 }
 
+func (s *Service) SetAPIKeyEnvOverride(ctx context.Context, envName string) error {
+	if err := s.validate(); err != nil {
+		return err
+	}
+
+	return s.manager.Update(ctx, func(cfg *config.Config) error {
+		cfg.APIKeyEnvOverride = envName
+		return nil
+	})
+}
+
 func containsModel(models []string, modelID string) bool {
 	target := normalizeKey(modelID)
 	for _, model := range models {

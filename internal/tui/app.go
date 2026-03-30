@@ -27,6 +27,7 @@ type App struct {
 	sessions       list.Model
 	providerPicker list.Model
 	modelPicker    list.Model
+	apiKeyInput    textinput.Model
 	transcript     viewport.Model
 	input          textinput.Model
 	activeMessages []provider.Message
@@ -77,6 +78,12 @@ func New(cfg *config.Config, configManager *config.Manager, runtime agentruntime
 	spin.Spinner = spinner.Line
 	spin.Style = lipgloss.NewStyle().Foreground(lipgloss.Color(colorPrimary))
 
+	apiKeyInput := textinput.New()
+	apiKeyInput.Prompt = ""
+	apiKeyInput.Placeholder = "Enter API key env name"
+	apiKeyInput.Cursor.Style = lipgloss.NewStyle().Foreground(lipgloss.Color(colorUser))
+	apiKeyInput.CharLimit = 256
+
 	h := help.New()
 	h.ShowAll = false
 
@@ -85,6 +92,7 @@ func New(cfg *config.Config, configManager *config.Manager, runtime agentruntime
 			StatusText:         statusReady,
 			CurrentProvider:    cfg.SelectedProvider,
 			CurrentModel:       cfg.CurrentModel,
+			APIKeyEnvOverride:  cfg.APIKeyEnvOverride,
 			CurrentWorkdir:     cfg.Workdir,
 			ActiveSessionTitle: draftSessionTitle,
 			Focus:              panelInput,
@@ -98,6 +106,7 @@ func New(cfg *config.Config, configManager *config.Manager, runtime agentruntime
 		sessions:       sessionList,
 		providerPicker: newProviderPicker(nil),
 		modelPicker:    newModelPicker(nil),
+		apiKeyInput:    apiKeyInput,
 		transcript:     viewport.New(0, 0),
 		input:          input,
 		focus:          panelInput,
