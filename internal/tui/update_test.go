@@ -138,7 +138,7 @@ func TestAppUpdateComposerCommands(t *testing.T) {
 			app.input.SetValue(tt.input)
 			app.state.InputText = tt.input
 
-			model, cmd := app.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
+			model, cmd := app.Update(tea.KeyMsg{Type: tea.KeyCtrlJ})
 			app = model.(App)
 
 			for _, msg := range collectTeaMessages(cmd) {
@@ -379,7 +379,7 @@ func TestAppHelpersAndRenderingSmoke(t *testing.T) {
 	if !strings.Contains(app.renderSidebar(26, 12), sidebarTitle) || !strings.Contains(app.renderSidebar(26, 12), sidebarOpenHint) {
 		t.Fatalf("expected updated sidebar header text")
 	}
-	if strings.Contains(app.renderPrompt(80), "Enter/Ctrl+S") {
+	if strings.Contains(app.renderPrompt(80), "Ctrl+S") || strings.Contains(app.renderPrompt(80), "Ctrl+Enter") {
 		t.Fatalf("expected composer hint line to be removed")
 	}
 	if strings.TrimSpace(app.renderPrompt(80)) == "" {
@@ -447,6 +447,15 @@ func TestTUIStandaloneHelpers(t *testing.T) {
 	}
 	if preview("line1\nline2\nline3", 8, 2) == "" {
 		t.Fatalf("expected preview output")
+	}
+	if newKeyMap().Send.Help().Key != "Ctrl+J" {
+		t.Fatalf("expected send help to advertise Ctrl+J, got %+v", newKeyMap().Send.Help())
+	}
+	if wrappedLineCount("你好世界", 4) != 2 {
+		t.Fatalf("expected CJK text to consume full-width columns")
+	}
+	if wrappedLineCount("ab你cd", 4) != 2 {
+		t.Fatalf("expected mixed-width text to wrap by display width")
 	}
 	if clamp(10, 0, 5) != 5 || max(2, 3) != 3 {
 		t.Fatalf("expected numeric helpers to work")
@@ -720,7 +729,7 @@ func TestAppUpdateAdditionalTransitions(t *testing.T) {
 				app.input.SetValue("inspect repo")
 				app.state.InputText = "inspect repo"
 			},
-			msg: tea.KeyMsg{Type: tea.KeyCtrlS},
+			msg: tea.KeyMsg{Type: tea.KeyCtrlJ},
 			assert: func(t *testing.T, app App, runtime *stubRuntime, manager *config.Manager, msgs []tea.Msg) {
 				t.Helper()
 				if !app.state.IsAgentRunning {

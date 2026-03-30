@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/mattn/go-runewidth"
 )
 
 type messageSegmentKind int
@@ -86,16 +87,22 @@ func wrappedLineCount(text string, width int) int {
 	if width <= 0 {
 		return 1
 	}
+
 	lines := strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n")
 	total := 0
 	for _, line := range lines {
-		runes := []rune(line)
-		if len(runes) == 0 {
+		if line == "" {
 			total++
 			continue
 		}
-		total += (len(runes)-1)/width + 1
+		displayWidth := runewidth.StringWidth(line)
+		if displayWidth <= 0 {
+			total++
+			continue
+		}
+		total += (displayWidth-1)/width + 1
 	}
+
 	if total == 0 {
 		return 1
 	}
