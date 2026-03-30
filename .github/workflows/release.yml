@@ -34,6 +34,4 @@ jobs:
           version: '~> v2'
           args: release --clean
         env:
-          # GitHub Actions 自动注入的 Token，用于发布 Release
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAP_GITHUB_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
