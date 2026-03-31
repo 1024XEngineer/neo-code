@@ -20,7 +20,6 @@ NeoCode 采用"内置 Provider 优先"的策略：
 ✅ **安全第一**
 - API Key 只从环境变量读取，永不写入 YAML
 - 不硬编码在源码中
-- 支持通过 `.env` 文件管理
 
 ### 当前内置 Provider
 
@@ -110,7 +109,7 @@ tools:
 
 ### 环境变量管理
 
-#### 方式一：系统环境变量
+#### 方式：系统环境变量
 
 **Linux/macOS**：
 ```bash
@@ -126,29 +125,11 @@ $env:GEMINI_API_KEY="AI..."
 $env:AI_API_KEY="your-key"
 ```
 
-#### 方式二：.env 文件
-
-**项目根目录 `.env`**：
-```env
-OPENAI_API_KEY=sk-...
-GEMINI_API_KEY=AI...
-AI_API_KEY=your-key
-```
-
-**NeoCode 管理目录 `~/.neocode/.env`**：
-```env
-OPENAI_API_KEY=sk-...
-GEMINI_API_KEY=AI...
-```
-
-NeoCode 会自动加载这两个位置的 `.env` 文件。
-
 ### 安全最佳实践
 
 ⚠️ **重要安全提示**：
 
 1. **永不提交 API Key**
-   - 确保 `.env` 文件在 `.gitignore` 中
    - 不要将包含 API Key 的文件提交到版本控制
 
 2. **使用环境变量**
@@ -204,7 +185,6 @@ NeoCode 提供以下 slash 命令用于快速切换配置：
 ### 核心功能
 
 - ✅ YAML 加载与保存
-- ✅ `.env` 文件自动加载
 - ✅ 默认值管理
 - ✅ 并发安全访问
 - ✅ 配置校验
@@ -217,8 +197,6 @@ NeoCode 提供以下 slash 命令用于快速切换配置：
 加载 ~/.neocode/config.yaml
   ↓
 应用内置 defaults (来自 builtin_providers.go)
-  ↓
-合并 .env 文件环境变量
   ↓
 验证配置完整性
   ↓
@@ -307,9 +285,6 @@ max_loops: 10
 ```bash
 # 检查环境变量
 echo $OPENAI_API_KEY
-
-# 或检查 .env 文件
-cat ~/.neocode/.env
 ```
 
 ### Provider 不存在
@@ -322,6 +297,4 @@ cat ~/.neocode/.env
 
 ## 相关文档
 
-- [配置管理详细设计](../config-management-detail-design.md)
-- [Provider 架构优化 PR](../provider-architecture-optimization-pr.md)
 - [添加新 Provider](./adding-providers.md)

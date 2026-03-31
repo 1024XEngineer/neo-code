@@ -8,14 +8,12 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/joho/godotenv"
 	"gopkg.in/yaml.v3"
 )
 
 const (
 	dirName    = ".neocode"
 	configName = "config.yaml"
-	envName    = ".env"
 )
 
 type Loader struct {
@@ -62,10 +60,6 @@ func (l *Loader) ConfigPath() string {
 	return filepath.Join(l.baseDir, configName)
 }
 
-func (l *Loader) EnvPath() string {
-	return filepath.Join(l.baseDir, envName)
-}
-
 func (l *Loader) DefaultConfig() Config {
 	return l.defaults.Clone()
 }
@@ -74,8 +68,6 @@ func (l *Loader) Load(ctx context.Context) (*Config, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-
-	l.LoadEnvironment()
 
 	if err := os.MkdirAll(l.baseDir, 0o755); err != nil {
 		return nil, fmt.Errorf("config: create config dir: %w", err)
@@ -147,11 +139,6 @@ func (l *Loader) Save(ctx context.Context, cfg *Config) error {
 	}
 
 	return nil
-}
-
-func (l *Loader) LoadEnvironment() {
-	_ = godotenv.Load()
-	_ = godotenv.Load(l.EnvPath())
 }
 
 func defaultBaseDir() string {

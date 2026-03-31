@@ -125,6 +125,7 @@ func TestServiceListProvidersUsesConfiguredMetadata(t *testing.T) {
 		config.OpenAIName: len(config.OpenAIProvider().Models),
 		config.GeminiName: len(config.GeminiProvider().Models),
 		config.OpenLLName: len(config.OpenLLProvider().Models),
+		config.QiniuName:  len(config.QiniuProvider().Models),
 	}
 	if len(items) != len(expectedModels) {
 		t.Fatalf("expected only supported providers, got %d", len(items))

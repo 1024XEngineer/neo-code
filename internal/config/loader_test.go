@@ -45,38 +45,6 @@ func TestLoaderLoadMalformedYAML(t *testing.T) {
 	}
 }
 
-func TestLoaderLoadEnvironmentSilentlyIgnoresDotEnvFailures(t *testing.T) {
-	tempDir := t.TempDir()
-	restoreEnv(t, testAPIKeyEnv)
-	_ = os.Unsetenv(testAPIKeyEnv)
-
-	previousWD, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("Getwd() error = %v", err)
-	}
-	if err := os.Chdir(tempDir); err != nil {
-		t.Fatalf("Chdir() error = %v", err)
-	}
-	t.Cleanup(func() {
-		_ = os.Chdir(previousWD)
-	})
-
-	if err := os.MkdirAll(filepath.Join(tempDir, ".env"), 0o755); err != nil {
-		t.Fatalf("mkdir cwd .env dir: %v", err)
-	}
-
-	loader := NewLoader(filepath.Join(tempDir, ".neocode"), testDefaultConfig())
-	if err := os.MkdirAll(loader.EnvPath(), 0o755); err != nil {
-		t.Fatalf("mkdir managed .env dir: %v", err)
-	}
-
-	loader.LoadEnvironment()
-
-	if got := os.Getenv(testAPIKeyEnv); got != "" {
-		t.Fatalf("expected env to stay empty when dotenv loading fails, got %q", got)
-	}
-}
-
 func TestLoaderLoadInvalidBaseDir(t *testing.T) {
 	t.Parallel()
 

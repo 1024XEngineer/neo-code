@@ -15,6 +15,11 @@ const (
 	OpenLLDefaultBaseURL   = "https://www.openll.top/v1"
 	OpenLLDefaultModel     = "gpt-5.4"
 	OpenLLDefaultAPIKeyEnv = "AI_API_KEY"
+
+	QiniuName             = "qiniu"
+	QiniuDefaultBaseURL   = "https://api.qnaigc.com/v1"
+	QiniuDefaultModel     = "openai/gpt-5"
+	QiniuDefaultAPIKeyEnv = "QINIU_API_KEY"
 )
 
 var openAIModels = []string{
@@ -34,6 +39,11 @@ var openLLModels = []string{
 	OpenLLDefaultModel,
 	"gpt-5.3-codex",
 	"gpt-5.3-turbo",
+}
+
+var qiniuModels = []string{
+	QiniuDefaultModel,
+	"openai/gpt-5.2-codex",
 }
 
 // OpenAIProvider 返回 OpenAI provider 的默认配置。
@@ -72,11 +82,23 @@ func OpenLLProvider() ProviderConfig {
 	}
 }
 
+func QiniuProvider() ProviderConfig {
+	return ProviderConfig{
+		Name:      QiniuName,
+		Driver:    "openai",
+		BaseURL:   QiniuDefaultBaseURL,
+		Model:     QiniuDefaultModel,
+		Models:    append([]string(nil), qiniuModels...),
+		APIKeyEnv: QiniuDefaultAPIKeyEnv,
+	}
+}
+
 // DefaultProviders 返回所有内置 provider 配置列表。
 func DefaultProviders() []ProviderConfig {
 	return []ProviderConfig{
 		OpenAIProvider(),
 		GeminiProvider(),
 		OpenLLProvider(),
+		QiniuProvider(),
 	}
 }

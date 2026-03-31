@@ -11,8 +11,8 @@ func TestDefaultConfigIncludesBuiltinProviders(t *testing.T) {
 	t.Parallel()
 
 	cfg := DefaultConfig()
-	if len(cfg.Providers) != 3 {
-		t.Fatalf("expected 3 builtin providers, got %d", len(cfg.Providers))
+	if len(cfg.Providers) != 4 {
+		t.Fatalf("expected 4 builtin providers, got %d", len(cfg.Providers))
 	}
 	if cfg.Providers[0].Name != config.OpenAIName {
 		t.Fatalf("expected first provider %q, got %q", config.OpenAIName, cfg.Providers[0].Name)
@@ -22,6 +22,9 @@ func TestDefaultConfigIncludesBuiltinProviders(t *testing.T) {
 	}
 	if cfg.Providers[2].Name != config.OpenLLName {
 		t.Fatalf("expected third provider %q, got %q", config.OpenLLName, cfg.Providers[2].Name)
+	}
+	if cfg.Providers[3].Name != config.QiniuName {
+		t.Fatalf("expected fourth provider %q, got %q", config.QiniuName, cfg.Providers[3].Name)
 	}
 	if cfg.SelectedProvider != config.OpenAIName {
 		t.Fatalf("expected selected provider %q, got %q", config.OpenAIName, cfg.SelectedProvider)

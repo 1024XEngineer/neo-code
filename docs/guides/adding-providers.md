@@ -280,6 +280,3 @@ func DefaultProviders() []ProviderConfig {
 
 所有内置 provider 都复用 `openai` 驱动，配置集中在 `builtin_providers.go`。
 
-## 相关文档
-
-- [Provider Architecture Optimization PR](../provider-architecture-optimization-pr.md)

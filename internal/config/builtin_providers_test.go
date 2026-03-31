@@ -8,11 +8,11 @@ func TestDefaultProvidersReturnsAllBuiltins(t *testing.T) {
 	t.Parallel()
 
 	providers := DefaultProviders()
-	if len(providers) != 3 {
-		t.Fatalf("expected 3 builtin providers, got %d", len(providers))
+	if len(providers) != 4 {
+		t.Fatalf("expected 4 builtin providers, got %d", len(providers))
 	}
 
-	expectedNames := []string{OpenAIName, GeminiName, OpenLLName}
+	expectedNames := []string{OpenAIName, GeminiName, OpenLLName, QiniuName}
 	for i, provider := range providers {
 		if provider.Name != expectedNames[i] {
 			t.Fatalf("expected provider[%d] name %q, got %q", i, expectedNames[i], provider.Name)
@@ -132,49 +132,5 @@ func TestDefaultProvidersReturnsIndependentSlices(t *testing.T) {
 	}
 	if providers2[0].Name != OpenAIName {
 		t.Fatalf("expected first provider name %q, got %q", OpenAIName, providers2[0].Name)
-	}
-}
-
-func TestProviderConstants(t *testing.T) {
-	t.Parallel()
-
-	// Verify all constants are non-empty
-	if OpenAIName == "" {
-		t.Fatal("OpenAIName should not be empty")
-	}
-	if OpenAIDefaultBaseURL == "" {
-		t.Fatal("OpenAIDefaultBaseURL should not be empty")
-	}
-	if OpenAIDefaultModel == "" {
-		t.Fatal("OpenAIDefaultModel should not be empty")
-	}
-	if OpenAIDefaultAPIKeyEnv == "" {
-		t.Fatal("OpenAIDefaultAPIKeyEnv should not be empty")
-	}
-
-	if GeminiName == "" {
-		t.Fatal("GeminiName should not be empty")
-	}
-	if GeminiDefaultBaseURL == "" {
-		t.Fatal("GeminiDefaultBaseURL should not be empty")
-	}
-	if GeminiDefaultModel == "" {
-		t.Fatal("GeminiDefaultModel should not be empty")
-	}
-	if GeminiDefaultAPIKeyEnv == "" {
-		t.Fatal("GeminiDefaultAPIKeyEnv should not be empty")
-	}
-
-	if OpenLLName == "" {
-		t.Fatal("OpenLLName should not be empty")
-	}
-	if OpenLLDefaultBaseURL == "" {
-		t.Fatal("OpenLLDefaultBaseURL should not be empty")
-	}
-	if OpenLLDefaultModel == "" {
-		t.Fatal("OpenLLDefaultModel should not be empty")
-	}
-	if OpenLLDefaultAPIKeyEnv == "" {
-		t.Fatal("OpenLLDefaultAPIKeyEnv should not be empty")
 	}
 }

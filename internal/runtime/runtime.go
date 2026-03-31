@@ -120,7 +120,7 @@ func (s *Service) Run(ctx context.Context, input UserInput) error {
 		go s.forwardProviderEvents(ctx, input.RunID, session.ID, streamEvents, streamDone)
 
 		resp, err := modelProvider.Chat(ctx, provider.ChatRequest{
-			Model:        resolvedProvider.Model,
+			Model:        cfg.CurrentModel,
 			SystemPrompt: s.systemPrompt(),
 			Messages:     s.trimMessages(session.Messages),
 			Tools:        s.toolRegistry.GetSpecs(),
