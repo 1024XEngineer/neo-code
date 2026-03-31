@@ -4,6 +4,7 @@ import "github.com/charmbracelet/bubbles/key"
 
 type keyMap struct {
 	Send        key.Binding
+	Newline     key.Binding
 	CancelAgent key.Binding
 	NewSession  key.Binding
 	NextPanel   key.Binding
@@ -23,12 +24,16 @@ type keyMap struct {
 func newKeyMap() keyMap {
 	return keyMap{
 		Send: key.NewBinding(
-			key.WithKeys("enter", "ctrl+s"),
-			key.WithHelp("Enter/Ctrl+S", "发送（输入框）"),
+			key.WithKeys("enter"),
+			key.WithHelp("Enter", "发送（输入框）"),
+		),
+		Newline: key.NewBinding(
+			key.WithKeys("ctrl+j"),
+			key.WithHelp("Ctrl+J", "换行（输入框）"),
 		),
 		CancelAgent: key.NewBinding(
 			key.WithKeys("ctrl+w"),
-			key.WithHelp("Ctrl+w", "中止"),
+			key.WithHelp("Ctrl+W", "中止"),
 		),
 		NewSession: key.NewBinding(
 			key.WithKeys("ctrl+n"),
@@ -60,40 +65,40 @@ func newKeyMap() keyMap {
 		),
 		ScrollUp: key.NewBinding(
 			key.WithKeys("up", "k"),
-			key.WithHelp("Up/k", "向上滚动"),
+			key.WithHelp("Up/K", "向上滚动"),
 		),
 		ScrollDown: key.NewBinding(
 			key.WithKeys("down", "j"),
-			key.WithHelp("Down/j", "向下滚动"),
+			key.WithHelp("Down/J", "向下滚动"),
 		),
 		PageUp: key.NewBinding(
 			key.WithKeys("pgup", "b"),
-			key.WithHelp("PgUp/b", "向上翻页"),
+			key.WithHelp("PgUp/B", "向上翻页"),
 		),
 		PageDown: key.NewBinding(
 			key.WithKeys("pgdown", "f"),
-			key.WithHelp("PgDn/f", "向下翻页"),
+			key.WithHelp("PgDn/F", "向下翻页"),
 		),
 		Top: key.NewBinding(
 			key.WithKeys("g", "home"),
-			key.WithHelp("g/Home", "跳到顶部"),
+			key.WithHelp("G/Home", "跳到顶部"),
 		),
 		Bottom: key.NewBinding(
 			key.WithKeys("G", "end"),
-			key.WithHelp("G/End", "跳到底部"),
+			key.WithHelp("Shift+G/End", "跳到底部"),
 		),
 	}
 }
 
 func (k keyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Send, k.CancelAgent, k.NewSession, k.ToggleHelp, k.Quit}
+	return []key.Binding{k.Send, k.Newline, k.CancelAgent, k.ToggleHelp, k.Quit}
 }
 
 func (k keyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
-		{k.Send, k.CancelAgent, k.NewSession, k.OpenSession},
-		{k.FocusInput, k.NextPanel, k.PrevPanel, k.ToggleHelp},
-		{k.Quit, k.ScrollUp, k.ScrollDown, k.PageUp},
-		{k.PageDown, k.Top, k.Bottom},
+		{k.Send, k.Newline, k.CancelAgent, k.NewSession},
+		{k.OpenSession, k.FocusInput, k.NextPanel, k.PrevPanel},
+		{k.ToggleHelp, k.Quit, k.ScrollUp, k.ScrollDown},
+		{k.PageUp, k.PageDown, k.Top, k.Bottom},
 	}
 }

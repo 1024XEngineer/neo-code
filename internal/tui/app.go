@@ -6,7 +6,7 @@ import (
 	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/spinner"
-	"github.com/charmbracelet/bubbles/textinput"
+	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -28,7 +28,7 @@ type App struct {
 	providerPicker list.Model
 	modelPicker    list.Model
 	transcript     viewport.Model
-	input          textinput.Model
+	input          textarea.Model
 	activeMessages []provider.Message
 	focus          panel
 	width          int
@@ -63,14 +63,27 @@ func New(cfg *config.Config, configManager *config.Manager, runtime agentruntime
 	sessionList.FilterInput.Prompt = "Filter: "
 	sessionList.FilterInput.Placeholder = "Type to search sessions"
 
-	input := textinput.New()
+	input := textarea.New()
 	input.Placeholder = "Ask NeoCode to inspect, edit, or build. Type / to browse commands."
-	input.Prompt = ""
 	input.CharLimit = 24000
-	input.PromptStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(colorUser))
-	input.TextStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(colorText))
-	input.PlaceholderStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(colorSubtle))
+	input.ShowLineNumbers = false
+	input.SetPromptFunc(composerPromptWidth, func(line int) string {
+		return "> "
+	})
+	input.FocusedStyle.Base = lipgloss.NewStyle()
+	input.FocusedStyle.Prompt = lipgloss.NewStyle().Foreground(lipgloss.Color(colorUser)).Bold(true)
+	input.FocusedStyle.Text = lipgloss.NewStyle().Foreground(lipgloss.Color(colorText))
+	input.FocusedStyle.Placeholder = lipgloss.NewStyle().Foreground(lipgloss.Color(colorSubtle))
+	input.FocusedStyle.CursorLine = lipgloss.NewStyle()
+	input.FocusedStyle.CursorLineNumber = lipgloss.NewStyle()
+	input.BlurredStyle.Base = lipgloss.NewStyle()
+	input.BlurredStyle.Prompt = lipgloss.NewStyle().Foreground(lipgloss.Color(colorUser)).Bold(true)
+	input.BlurredStyle.Text = lipgloss.NewStyle().Foreground(lipgloss.Color(colorText))
+	input.BlurredStyle.Placeholder = lipgloss.NewStyle().Foreground(lipgloss.Color(colorSubtle))
+	input.BlurredStyle.CursorLine = lipgloss.NewStyle()
+	input.BlurredStyle.CursorLineNumber = lipgloss.NewStyle()
 	input.Cursor.Style = lipgloss.NewStyle().Foreground(lipgloss.Color(colorUser))
+	input.SetHeight(composerMinHeight)
 	input.Focus()
 
 	spin := spinner.New()
@@ -130,5 +143,5 @@ func New(cfg *config.Config, configManager *config.Manager, runtime agentruntime
 }
 
 func (a App) Init() tea.Cmd {
-	return tea.Batch(ListenForRuntimeEvent(a.runtime.Events()), textinput.Blink, a.spinner.Tick)
+	return tea.Batch(ListenForRuntimeEvent(a.runtime.Events()), textarea.Blink, a.spinner.Tick)
 }

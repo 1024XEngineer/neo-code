@@ -26,6 +26,12 @@ type localCommandResultMsg struct {
 	err    error
 }
 
+const (
+	composerMinHeight   = 1
+	composerMaxHeight   = 5
+	composerPromptWidth = 2
+)
+
 func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 	var spinCmd tea.Cmd
@@ -143,6 +149,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.state.InputText = ""
 			a.focus = panelInput
 			a.applyFocus()
+			a.resizeComponents()
 			a.rebuildTranscript()
 			return a, tea.Batch(cmds...)
 		}
@@ -185,6 +192,7 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 
 		a.input.Reset()
 		a.state.InputText = ""
+		a.resizeComponents()
 
 		switch strings.ToLower(input) {
 		case slashCommandProviderPick:
@@ -229,9 +237,15 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 		return a, tea.Batch(cmds...)
 	}
 
+	if key.Matches(typed, a.keys.Newline) {
+		a.growComposerForNewline()
+		msg = tea.KeyMsg{Type: tea.KeyEnter}
+	}
+
 	var cmd tea.Cmd
 	a.input, cmd = a.input.Update(msg)
 	a.state.InputText = a.input.Value()
+	a.normalizeComposerHeight()
 	a.resizeComponents()
 	cmds = append(cmds, cmd)
 	return a, tea.Batch(cmds...)
@@ -523,13 +537,39 @@ func (a *App) resizeComponents() {
 	a.sessions.SetSize(sidebarBodyWidth, sidebarBodyHeight)
 	menuHeight := a.commandMenuHeight(max(24, lay.rightWidth))
 	a.transcript.Width = max(24, lay.rightWidth)
-	promptInnerWidth := max(8, lay.rightWidth-a.styles.inputBoxFocused.GetHorizontalFrameSize())
-	a.input.Width = max(4, promptInnerWidth-lipgloss.Width("> "))
+	a.input.SetWidth(a.composerInnerWidth(lay.rightWidth))
+	a.input.SetHeight(a.composerHeight())
 	promptHeight := lipgloss.Height(a.renderPrompt(a.transcript.Width))
 	a.transcript.Height = max(6, lay.rightHeight-menuHeight-promptHeight)
 	a.providerPicker.SetSize(max(24, clamp(lay.rightWidth-14, 28, 52)), max(4, clamp(lay.rightHeight-10, 6, 10)))
 	a.modelPicker.SetSize(max(24, clamp(lay.rightWidth-14, 28, 52)), max(4, clamp(lay.rightHeight-10, 6, 10)))
 	a.rebuildTranscript()
+}
+
+func (a App) composerBoxWidth(totalWidth int) int {
+	return max(8, totalWidth-2)
+}
+
+func (a App) composerInnerWidth(totalWidth int) int {
+	return max(4, a.composerBoxWidth(totalWidth)-a.styles.inputBoxFocused.GetHorizontalFrameSize())
+}
+
+func (a App) composerHeight() int {
+	return clamp(a.input.LineCount(), composerMinHeight, composerMaxHeight)
+}
+
+func (a *App) growComposerForNewline() {
+	nextHeight := clamp(a.input.LineCount()+1, composerMinHeight, composerMaxHeight)
+	if nextHeight > a.input.Height() {
+		a.input.SetHeight(nextHeight)
+	}
+}
+
+func (a *App) normalizeComposerHeight() {
+	targetHeight := clamp(a.input.LineCount(), composerMinHeight, composerMaxHeight)
+	if targetHeight != a.input.Height() {
+		a.input.SetHeight(targetHeight)
+	}
 }
 
 func (a *App) rebuildTranscript() {
