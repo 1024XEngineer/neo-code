@@ -168,18 +168,9 @@ func (a App) renderPrompt(width int) string {
 	}
 
 	// 计算边框和内边距占用的空间
-	boxWidth := max(8, width-2)
+	boxWidth := a.composerBoxWidth(width)
 
-	prefix := a.styles.inputPrefix.Render(">")
-	inputContent := a.input.View()
-
-	content := lipgloss.JoinHorizontal(
-		lipgloss.Left,
-		prefix,
-		lipgloss.NewStyle().Width(1).Render(" "),
-		a.styles.inputLine.Width(max(4, boxWidth-2-lipgloss.Width(prefix)-1)).Render(inputContent),
-	)
-	return box.Width(boxWidth).Render(content)
+	return box.Width(boxWidth).Render(a.input.View())
 }
 
 func (a App) renderSidebarHeader(width int) string {

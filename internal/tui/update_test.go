@@ -92,7 +92,7 @@ func TestAppUpdateComposerCommands(t *testing.T) {
 		},
 		{
 			name:  "provider command opens picker and does not start runtime",
-			input: "/provider",
+			input: "/provider\n",
 			assert: func(t *testing.T, runtime *stubRuntime, manager *config.Manager, app App) {
 				t.Helper()
 				if len(runtime.runInputs) != 0 {
@@ -137,7 +137,7 @@ func TestAppUpdateComposerCommands(t *testing.T) {
 			app.input.SetValue(tt.input)
 			app.state.InputText = tt.input
 
-			model, cmd := app.Update(tea.KeyMsg{Type: tea.KeyEnter})
+			model, cmd := app.Update(tea.KeyMsg{Type: tea.KeyCtrlJ})
 			app = model.(App)
 
 			for _, msg := range collectTeaMessages(cmd) {
@@ -371,6 +371,9 @@ func TestAppHelpersAndRenderingSmoke(t *testing.T) {
 	if lipgloss.Width(app.renderPrompt(80)) != 80 {
 		t.Fatalf("expected prompt width 80, got %d", lipgloss.Width(app.renderPrompt(80)))
 	}
+	if !strings.Contains(app.renderHelp(80), "Ctrl+J") {
+		t.Fatalf("expected help to render the new send shortcut")
+	}
 	sidebar := app.renderSidebar(26, 12)
 	if lipgloss.Width(sidebar) != 26 || lipgloss.Height(sidebar) != 12 {
 		t.Fatalf("expected sidebar to respect requested dimensions, got %dx%d", lipgloss.Width(sidebar), lipgloss.Height(sidebar))
@@ -383,6 +386,30 @@ func TestAppHelpersAndRenderingSmoke(t *testing.T) {
 	}
 	if strings.TrimSpace(app.renderPrompt(80)) == "" {
 		t.Fatalf("expected prompt to render a visible border")
+	}
+	app.input.SetValue("one")
+	app.state.InputText = "one"
+	app.resizeComponents()
+	if app.input.Height() != 1 {
+		t.Fatalf("expected single-line composer height 1, got %d", app.input.Height())
+	}
+	if strings.Count(app.renderPrompt(80), "> ") < 1 {
+		t.Fatalf("expected single-line prompt to render composer prefix")
+	}
+	app.input.SetValue("one\ntwo")
+	app.state.InputText = app.input.Value()
+	app.resizeComponents()
+	if app.input.Height() != 2 {
+		t.Fatalf("expected two-line composer height 2, got %d", app.input.Height())
+	}
+	if strings.Count(app.renderPrompt(80), "> ") < 2 {
+		t.Fatalf("expected multi-line prompt to repeat composer prefix")
+	}
+	app.input.SetValue(strings.Join([]string{"1", "2", "3", "4", "5", "6"}, "\n"))
+	app.state.InputText = app.input.Value()
+	app.resizeComponents()
+	if app.input.Height() != composerMaxHeight {
+		t.Fatalf("expected composer height capped at %d, got %d", composerMaxHeight, app.input.Height())
 	}
 	if app.focusLabel() == "" || app.statusBadge("ready") == "" {
 		t.Fatalf("expected status helpers to render")
@@ -697,12 +724,65 @@ func TestAppUpdateAdditionalTransitions(t *testing.T) {
 			},
 		},
 		{
-			name: "plain input send starts runtime",
+			name: "enter inserts newline without sending",
 			setup: func(t *testing.T, app *App, runtime *stubRuntime, manager *config.Manager) {
 				app.input.SetValue("inspect repo")
 				app.state.InputText = "inspect repo"
+				app.resizeComponents()
 			},
 			msg: tea.KeyMsg{Type: tea.KeyEnter},
+			assert: func(t *testing.T, app App, runtime *stubRuntime, manager *config.Manager, msgs []tea.Msg) {
+				t.Helper()
+				if len(runtime.runInputs) != 0 {
+					t.Fatalf("expected enter not to send input, got %+v", runtime.runInputs)
+				}
+				if app.state.InputText != "inspect repo\n" {
+					t.Fatalf("expected newline to be inserted, got %q", app.state.InputText)
+				}
+				if app.input.Height() != 2 {
+					t.Fatalf("expected composer height to grow to 2, got %d", app.input.Height())
+				}
+				prompt := app.renderPrompt(80)
+				if !strings.Contains(prompt, "inspect repo") {
+					t.Fatalf("expected first line to remain visible after newline, got %q", prompt)
+				}
+				if strings.Count(prompt, "> ") < 2 {
+					t.Fatalf("expected both lines to keep prompt prefix, got %q", prompt)
+				}
+			},
+		},
+		{
+			name: "second enter grows composer to third line",
+			setup: func(t *testing.T, app *App, runtime *stubRuntime, manager *config.Manager) {
+				app.input.SetValue("line1\nline2")
+				app.state.InputText = app.input.Value()
+				app.resizeComponents()
+			},
+			msg: tea.KeyMsg{Type: tea.KeyEnter},
+			assert: func(t *testing.T, app App, runtime *stubRuntime, manager *config.Manager, msgs []tea.Msg) {
+				t.Helper()
+				if len(runtime.runInputs) != 0 {
+					t.Fatalf("expected second enter not to send input")
+				}
+				if app.input.Height() != 3 {
+					t.Fatalf("expected composer height to grow to 3, got %d", app.input.Height())
+				}
+				prompt := app.renderPrompt(80)
+				if !strings.Contains(prompt, "line1") || !strings.Contains(prompt, "line2") {
+					t.Fatalf("expected previous lines to remain visible, got %q", prompt)
+				}
+				if strings.Count(prompt, "> ") < 3 {
+					t.Fatalf("expected all three lines to keep prompt prefix, got %q", prompt)
+				}
+			},
+		},
+		{
+			name: "plain multiline input ctrl+j starts runtime",
+			setup: func(t *testing.T, app *App, runtime *stubRuntime, manager *config.Manager) {
+				app.input.SetValue("inspect repo\nwith details")
+				app.state.InputText = "inspect repo\nwith details"
+			},
+			msg: tea.KeyMsg{Type: tea.KeyCtrlJ},
 			assert: func(t *testing.T, app App, runtime *stubRuntime, manager *config.Manager, msgs []tea.Msg) {
 				t.Helper()
 				if !app.state.IsAgentRunning {
@@ -711,7 +791,7 @@ func TestAppUpdateAdditionalTransitions(t *testing.T) {
 				if len(app.activeMessages) == 0 || app.activeMessages[len(app.activeMessages)-1].Role != roleUser {
 					t.Fatalf("expected user message appended")
 				}
-				if len(runtime.runInputs) != 1 || runtime.runInputs[0].Content != "inspect repo" {
+				if len(runtime.runInputs) != 1 || runtime.runInputs[0].Content != "inspect repo\nwith details" {
 					t.Fatalf("expected runtime command to execute once, got %+v", runtime.runInputs)
 				}
 				finished := false
@@ -722,6 +802,35 @@ func TestAppUpdateAdditionalTransitions(t *testing.T) {
 				}
 				if !finished {
 					t.Fatalf("expected runFinishedMsg from command")
+				}
+			},
+		},
+		{
+			name: "blank multiline input ctrl+j stays local",
+			setup: func(t *testing.T, app *App, runtime *stubRuntime, manager *config.Manager) {
+				app.input.SetValue(" \n ")
+				app.state.InputText = " \n "
+			},
+			msg: tea.KeyMsg{Type: tea.KeyCtrlJ},
+			assert: func(t *testing.T, app App, runtime *stubRuntime, manager *config.Manager, msgs []tea.Msg) {
+				t.Helper()
+				if len(runtime.runInputs) != 0 || app.state.IsAgentRunning {
+					t.Fatalf("expected blank multiline input not to send")
+				}
+			},
+		},
+		{
+			name: "delete newline shrinks composer height",
+			setup: func(t *testing.T, app *App, runtime *stubRuntime, manager *config.Manager) {
+				app.input.SetValue("line1\n")
+				app.state.InputText = app.input.Value()
+				app.resizeComponents()
+			},
+			msg: tea.KeyMsg{Type: tea.KeyBackspace},
+			assert: func(t *testing.T, app App, runtime *stubRuntime, manager *config.Manager, msgs []tea.Msg) {
+				t.Helper()
+				if app.input.Height() != 1 {
+					t.Fatalf("expected composer height to shrink to 1, got %d", app.input.Height())
 				}
 			},
 		},
