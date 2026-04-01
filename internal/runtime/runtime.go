@@ -8,11 +8,10 @@ import (
 	"time"
 
 	"neo-code/internal/config"
+	agentcontext "neo-code/internal/context"
 	"neo-code/internal/provider"
 	"neo-code/internal/tools"
 )
-
-const maxContextTurns = 10
 
 type Runtime interface {
 	Run(ctx context.Context, input UserInput) error
@@ -33,20 +32,30 @@ type ProviderFactory interface {
 }
 
 type Service struct {
-	configManager   *config.Manager    //配置管理器，提供当前选中的 provider、model、workdir 等配置读取能力
-	sessionStore    Store              //会话持久化接口，负责保存和加载聊天会话
-	toolRegistry    *tools.Registry    //工具注册表，维护所有工具的schema
-	providerFactory ProviderFactory    //provider 工厂接口，根据配置动态创建具体的 provider 实例
-	events          chan RuntimeEvent  //事件通道，Runtime 在运行过程中产生的所有事件都通过这个 channel 发送给 TUI 层消费和展示
-	runMu           sync.Mutex         //运行互斥锁，保证同一时间只有一个 Run 在执行
-	activeRunToken  uint64             //当前活跃运行的令牌标识，用于标记正在执行的 Run 实例，配合 nextRunToken 实现新旧 Run 的安全切换
-	nextRunToken    uint64             //下一个运行令牌的递增计数器，每次启动新 Run 时递增并赋给 activeRunToken，用于区分不同 Run 的生命周期
-	activeRunCancel context.CancelFunc //当前活跃 Run 的取消函数
+	configManager   *config.Manager      // 配置管理器，提供当前选中的 provider、model、workdir 等配置读取能力。
+	sessionStore    Store                // 会话持久化接口，负责保存和加载聊天会话。
+	toolRegistry    *tools.Registry      // 工具注册表，维护所有工具的 schema。
+	providerFactory ProviderFactory      // Provider 工厂接口，根据配置动态创建具体的 provider 实例。
+	contextBuilder  agentcontext.Builder // 上下文构建器，负责组装 system prompt 与本轮发给模型的消息上下文。
+	events          chan RuntimeEvent    // 事件通道，Runtime 在运行过程中产生的事件都通过该通道发送给 TUI 层消费和展示。
+	runMu           sync.Mutex           // 运行互斥锁，保证同一时间只有一个 Run 在执行。
+	activeRunToken  uint64               // 当前活跃运行的令牌标识，用于标记正在执行的 Run 实例。
+	nextRunToken    uint64               // 下一个运行令牌的递增计数器，用于区分不同 Run 的生命周期。
+	activeRunCancel context.CancelFunc   // 当前活跃 Run 的取消函数。
 }
 
-func NewWithFactory(configManager *config.Manager, toolRegistry *tools.Registry, sessionStore Store, providerFactory ProviderFactory) *Service {
+func NewWithFactory(
+	configManager *config.Manager,
+	toolRegistry *tools.Registry,
+	sessionStore Store,
+	providerFactory ProviderFactory,
+	contextBuilder agentcontext.Builder,
+) *Service {
 	if providerFactory == nil {
 		providerFactory = provider.NewRegistry()
+	}
+	if contextBuilder == nil {
+		contextBuilder = agentcontext.NewBuilder()
 	}
 
 	return &Service{
@@ -54,6 +63,7 @@ func NewWithFactory(configManager *config.Manager, toolRegistry *tools.Registry,
 		sessionStore:    sessionStore,
 		toolRegistry:    toolRegistry,
 		providerFactory: providerFactory,
+		contextBuilder:  contextBuilder,
 		events:          make(chan RuntimeEvent, 128),
 	}
 }
@@ -77,7 +87,7 @@ func (s *Service) Run(ctx context.Context, input UserInput) error {
 	}
 
 	userMessage := provider.Message{
-		Role:    "user",
+		Role:    provider.RoleUser,
 		Content: input.Content,
 	}
 	session.Messages = append(session.Messages, userMessage)
@@ -115,14 +125,22 @@ func (s *Service) Run(ctx context.Context, input UserInput) error {
 			return err
 		}
 
+		builtContext, err := s.contextBuilder.Build(ctx, agentcontext.BuildInput{
+			Messages: session.Messages,
+			Workdir:  cfg.Workdir,
+		})
+		if err != nil {
+			return s.handleRunError(ctx, input.RunID, session.ID, err)
+		}
+
 		streamEvents := make(chan provider.StreamEvent, 32)
 		streamDone := make(chan struct{})
 		go s.forwardProviderEvents(ctx, input.RunID, session.ID, streamEvents, streamDone)
 
 		resp, err := modelProvider.Chat(ctx, provider.ChatRequest{
 			Model:        cfg.CurrentModel,
-			SystemPrompt: s.systemPrompt(),
-			Messages:     s.trimMessages(session.Messages),
+			SystemPrompt: builtContext.SystemPrompt,
+			Messages:     builtContext.Messages,
 			Tools:        s.toolRegistry.GetSpecs(),
 		}, streamEvents)
 		close(streamEvents)
@@ -136,7 +154,7 @@ func (s *Service) Run(ctx context.Context, input UserInput) error {
 
 		assistant := resp.Message
 		if strings.TrimSpace(assistant.Role) == "" {
-			assistant.Role = "assistant"
+			assistant.Role = provider.RoleAssistant
 		}
 
 		if strings.TrimSpace(assistant.Content) != "" || len(assistant.ToolCalls) > 0 {
@@ -187,7 +205,7 @@ func (s *Service) Run(ctx context.Context, input UserInput) error {
 			}
 
 			toolMessage := provider.Message{
-				Role:       "tool",
+				Role:       provider.RoleTool,
 				Content:    result.Content,
 				ToolCallID: call.ID,
 				IsError:    result.IsError,
@@ -329,46 +347,4 @@ func (s *Service) handleRunError(ctx context.Context, runID string, sessionID st
 
 func (s *Service) isRunCanceled(err error) bool {
 	return errors.Is(err, context.Canceled)
-}
-
-func (s *Service) trimMessages(messages []provider.Message) []provider.Message {
-	if len(messages) <= maxContextTurns {
-		return append([]provider.Message(nil), messages...)
-	}
-
-	type span struct {
-		start int
-		end   int
-	}
-
-	spans := make([]span, 0, len(messages))
-	for i := 0; i < len(messages); {
-		start := i
-		i++
-
-		if messages[start].Role == "assistant" && len(messages[start].ToolCalls) > 0 {
-			for i < len(messages) && messages[i].Role == "tool" {
-				i++
-			}
-		}
-
-		spans = append(spans, span{start: start, end: i})
-	}
-
-	if len(spans) <= maxContextTurns {
-		return append([]provider.Message(nil), messages...)
-	}
-
-	start := spans[len(spans)-maxContextTurns].start
-	clipped := append([]provider.Message(nil), messages[start:]...)
-	return clipped
-}
-
-func (s *Service) systemPrompt() string {
-	return `You are NeoCode, a local coding agent.
-
-	Be concise and accurate.
-	Use tools when necessary.
-	When a tool fails, inspect the error and continue safely.
-	 Stay within the workspace and avoid destructive behavior unless clearly requested.`
 }

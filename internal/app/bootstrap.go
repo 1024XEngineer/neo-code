@@ -7,6 +7,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"neo-code/internal/config"
+	agentcontext "neo-code/internal/context"
 	"neo-code/internal/provider"
 	"neo-code/internal/provider/builtin"
 	agentruntime "neo-code/internal/runtime"
@@ -34,7 +35,7 @@ func NewProgram(ctx context.Context) (*tea.Program, error) {
 	providerService := provider.NewService(manager, providerRegistry)
 
 	sessionStore := agentruntime.NewSessionStore(loader.BaseDir())
-	runtimeSvc := agentruntime.NewWithFactory(manager, toolRegistry, sessionStore, providerService)
+	runtimeSvc := agentruntime.NewWithFactory(manager, toolRegistry, sessionStore, providerService, agentcontext.NewBuilder())
 
 	tuiApp, err := tui.New(&cfg, manager, runtimeSvc, providerService)
 	if err != nil {

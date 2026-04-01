@@ -106,7 +106,7 @@ func (p *Provider) buildRequest(req domain.ChatRequest) (chatCompletionRequest, 
 
 	if strings.TrimSpace(req.SystemPrompt) != "" {
 		payload.Messages = append(payload.Messages, openAIMessage{
-			Role:    "system",
+			Role:    domain.RoleSystem,
 			Content: req.SystemPrompt,
 		})
 	}
@@ -342,7 +342,7 @@ func finalizeResponse(content string, toolCalls map[int]*domain.ToolCall, finish
 	sort.Ints(ordered)
 
 	message := domain.Message{
-		Role:    "assistant",
+		Role:    domain.RoleAssistant,
 		Content: content,
 	}
 
