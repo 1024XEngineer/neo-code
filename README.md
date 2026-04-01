@@ -11,6 +11,28 @@ NeoCode 是一个在终端中运行的 AI 编码助手，采用 ReAct（Reason-A
 - **多 Provider 支持** — OpenAI、Gemini 等主流模型，易于扩展
 - **终端原生体验** — 基于 Bubble Tea 的现代化 TUI
 
+## 一键安装
+
+NeoCode 提供了跨平台的一键安装脚本。无论你是哪种操作系统，只需在终端执行以下命令，脚本将自动探测系统架构、拉取最新 Release 产物并配置好环境变量：
+
+### 🍎 macOS / Linux
+打开终端（Terminal）并运行：
+```bash
+curl -fsSL https://raw.githubusercontent.com/1024XEngineer/neo-code/main/scripts/install.sh | bash
+```
+
+### Windows
+
+打开 PowerShell 并运行：
+
+
+
+```PowerShell
+irm https://raw.githubusercontent.com/pionxe/neo-code/main/scripts/install.ps1 | iex
+```
+
+
+
 ## 快速开始
 
 ### 环境要求
@@ -125,6 +147,35 @@ NeoCode 正处于 MVP 阶段，核心闭环已可用：
 - 🧪 测试覆盖率
 - 🛠️ 工具能力扩展
 - 🔧 稳定性与性能
+
+
+
+## 自动化发版指南
+
+NeoCode 已经集成了 GoReleaser 与 GitHub Actions 的全自动化 CI/CD 流水线。
+
+**作为项目维护者，发布新版本时绝对不需要在本地手动编译或打包二进制文件。** 只需要通过 Git 打一个语义化版本标签（Tag）即可触发全自动构建：
+
+1. **确保主分支代码已就绪**：所有新特性和 Bug 修复均已合并至 `main` 分支。
+
+2. **在本地打上版本标签**（版本号必须以 `v` 开头，如 `v0.1.0`）：
+
+   ```Bash
+   git tag v0.1.0
+   ```
+
+3. **将标签推送到远程仓库**：
+
+   ```Bash
+   git push origin v0.1.0
+   ```
+
+**发布流水线说明：** 推送到远程后，GitHub Actions 会自动接管，整个过程通常耗时 1~2 分钟：
+
+- 自动读取 `.goreleaser.yaml` 配置。
+- 执行跨平台（Windows/macOS/Linux）与多架构（amd64/arm64）的静态交叉编译。
+- 自动将编译产物打包压缩（`.tar.gz` 和 `.zip`），并计算 SHA256 校验和。
+- 自动在项目的 Releases 页面创建一个全新的发版记录，并将所有压缩包作为资产（Assets）挂载上去。
 
 ## License
 
