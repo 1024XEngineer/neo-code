@@ -43,7 +43,7 @@ func (a App) View() string {
 }
 
 func (a App) renderHeader(width int) string {
-	status := a.state.StatusText
+	status := compactStatusText(a.state.StatusText, max(18, width/3))
 	if a.state.IsAgentRunning {
 		status = a.spinner.View() + " " + fallback(status, statusRunning)
 	}
@@ -272,7 +272,40 @@ func (a App) renderMessageBlock(message provider.Message, width int) string {
 }
 
 func (a App) renderCommandMenu(width int) string {
-	suggestions := a.matchingSlashCommands(strings.TrimSpace(a.input.Value()))
+	input := strings.TrimSpace(a.input.Value())
+
+	if suggestions := a.matchingFileReferences(a.input.Value()); len(suggestions) > 0 {
+		lines := make([]string, 0, len(suggestions)+1)
+		lines = append(lines, a.styles.commandMenuTitle.Render(fileMenuTitle))
+		for idx, suggestion := range suggestions {
+			usageStyle := a.styles.commandUsage
+			if idx == 0 {
+				usageStyle = a.styles.commandUsageMatch
+			}
+			lines = append(lines, lipgloss.JoinHorizontal(
+				lipgloss.Top,
+				usageStyle.Render("@"+suggestion),
+				lipgloss.NewStyle().Width(2).Render(""),
+				a.styles.commandDesc.Render("workspace file reference"),
+			))
+		}
+		return a.styles.commandMenu.Width(width).Render(lipgloss.JoinVertical(lipgloss.Left, lines...))
+	}
+
+	if isWorkspaceCommandInput(input) {
+		lines := []string{
+			a.styles.commandMenuTitle.Render(shellMenuTitle),
+			lipgloss.JoinHorizontal(
+				lipgloss.Top,
+				a.styles.commandUsageMatch.Render(workspaceCommandUsage),
+				lipgloss.NewStyle().Width(2).Render(""),
+				a.styles.commandDesc.Render(trimMiddle(a.state.CurrentWorkdir, max(24, width-28))),
+			),
+		}
+		return a.styles.commandMenu.Width(width).Render(lipgloss.JoinVertical(lipgloss.Left, lines...))
+	}
+
+	suggestions := a.matchingSlashCommands(input)
 	if len(suggestions) == 0 {
 		return ""
 	}
@@ -359,6 +392,24 @@ func (a App) statusBadge(text string) string {
 	default:
 		return a.styles.badgeSuccess.Render(text)
 	}
+}
+
+func compactStatusText(text string, limit int) string {
+	text = strings.ReplaceAll(text, "\r\n", "\n")
+	text = strings.ReplaceAll(text, "\r", "\n")
+	lines := strings.Split(text, "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		line = strings.Join(strings.Fields(line), " ")
+		if limit > 0 {
+			return trimMiddle(line, limit)
+		}
+		return line
+	}
+	return ""
 }
 
 func (a App) focusLabel() string {

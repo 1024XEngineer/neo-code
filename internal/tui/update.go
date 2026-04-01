@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/key"
@@ -103,6 +104,28 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.appendInlineMessage(roleSystem, typed.notice)
 		}
 		a.rebuildTranscript()
+		a.transcript.GotoBottom()
+		return a, tea.Batch(cmds...)
+	case workspaceCommandResultMsg:
+		if typed.command == "" && typed.err != nil {
+			a.state.ExecutionError = typed.err.Error()
+			a.state.StatusText = typed.err.Error()
+			a.appendInlineMessage(roleError, typed.err.Error())
+			a.rebuildTranscript()
+			a.transcript.GotoBottom()
+			return a, tea.Batch(cmds...)
+		}
+		result := formatWorkspaceCommandResult(typed.command, typed.output, typed.err)
+		a.activeMessages = append(a.activeMessages, provider.Message{Role: roleTool, Content: result})
+		if typed.err != nil {
+			a.state.ExecutionError = typed.err.Error()
+			a.state.StatusText = fmt.Sprintf("Command failed: %s", typed.command)
+		} else {
+			a.state.ExecutionError = ""
+			a.state.StatusText = statusCommandDone
+		}
+		a.rebuildTranscript()
+		a.transcript.GotoBottom()
 		return a, tea.Batch(cmds...)
 	case tea.KeyMsg:
 		if key.Matches(typed, a.keys.Quit) {
@@ -123,6 +146,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if a.state.ActivePicker != pickerNone {
 			return a.updatePicker(typed)
+		}
+		if a.focus == panelInput && key.Matches(typed, a.keys.NextPanel) && a.applyTopFileSuggestion() {
+			return a, tea.Batch(cmds...)
 		}
 		if key.Matches(typed, a.keys.NextPanel) {
 			a.focusNext()
@@ -214,7 +240,25 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 
 		if strings.HasPrefix(input, slashPrefix) {
 			a.state.StatusText = statusApplyingCommand
-			cmds = append(cmds, runLocalCommand(a.configManager, a.providerSvc, input))
+			cmds = append(cmds, runLocalCommand(a.configManager, a.providerSvc, a.currentStatusSnapshot(), input))
+			return a, tea.Batch(cmds...)
+		}
+		if isWorkspaceCommandInput(input) {
+			command, err := extractWorkspaceCommand(input)
+			if err != nil {
+				a.state.ExecutionError = err.Error()
+				a.state.StatusText = err.Error()
+				a.appendInlineMessage(roleError, err.Error())
+				a.rebuildTranscript()
+				a.transcript.GotoBottom()
+				return a, tea.Batch(cmds...)
+			}
+			a.state.StatusText = statusRunningCommand
+			a.state.ExecutionError = ""
+			a.appendInlineMessage(roleEvent, "Running command: "+command)
+			a.rebuildTranscript()
+			a.transcript.GotoBottom()
+			cmds = append(cmds, runWorkspaceCommand(a.configManager, input))
 			return a, tea.Batch(cmds...)
 		}
 
@@ -613,21 +657,32 @@ func (a *App) handleImmediateSlashCommand(input string) (bool, tea.Cmd) {
 		a.startDraftSession()
 		a.state.StatusText = "[System] Cleared current draft/history."
 		return true, nil
-	case slashCommandUndo:
-		if len(a.activeMessages) == 0 {
-			a.state.StatusText = "[System] Nothing to undo."
-			return true, nil
-		}
-		a.activeMessages = a.activeMessages[:len(a.activeMessages)-1]
-		if len(a.activeMessages) == 0 {
-			a.state.ActiveSessionID = ""
-			a.state.ActiveSessionTitle = draftSessionTitle
-		}
-		a.state.StatusText = "[System] Removed the last local entry."
-		a.rebuildTranscript()
-		return true, nil
 	default:
 		return false, nil
+	}
+}
+
+func (a App) currentStatusSnapshot() statusSnapshot {
+	picker := "none"
+	switch a.state.ActivePicker {
+	case pickerProvider:
+		picker = "provider"
+	case pickerModel:
+		picker = "model"
+	}
+
+	return statusSnapshot{
+		ActiveSessionID:    a.state.ActiveSessionID,
+		ActiveSessionTitle: a.state.ActiveSessionTitle,
+		IsAgentRunning:     a.state.IsAgentRunning,
+		CurrentProvider:    a.state.CurrentProvider,
+		CurrentModel:       a.state.CurrentModel,
+		CurrentWorkdir:     a.state.CurrentWorkdir,
+		CurrentTool:        a.state.CurrentTool,
+		ExecutionError:     a.state.ExecutionError,
+		FocusLabel:         a.focusLabel(),
+		PickerLabel:        picker,
+		MessageCount:       len(a.activeMessages),
 	}
 }
 

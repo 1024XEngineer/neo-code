@@ -30,6 +30,7 @@ type App struct {
 	transcript     viewport.Model
 	input          textarea.Model
 	activeMessages []provider.Message
+	fileCandidates []string
 	focus          panel
 	width          int
 	height         int
@@ -138,6 +139,9 @@ func New(cfg *config.Config, configManager *config.Manager, runtime agentruntime
 	}
 	app.selectCurrentProvider(cfg.SelectedProvider)
 	app.selectCurrentModel(cfg.CurrentModel)
+	if err := app.refreshFileCandidates(); err != nil {
+		return App{}, err
+	}
 	app.resizeComponents()
 	return app, nil
 }
