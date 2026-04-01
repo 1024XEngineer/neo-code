@@ -534,6 +534,96 @@ func TestServiceRunErrorPaths(t *testing.T) {
 				}
 			},
 		},
+		{
+			name:  "retryable provider error triggers runtime retry then succeeds",
+			input: UserInput{RunID: "run-retry-success", Content: "hello"},
+			provider: func() *scriptedProvider {
+				callIdx := 0
+				return &scriptedProvider{
+					name: "retry-then-success",
+					chatFn: func(ctx context.Context, req provider.ChatRequest, events chan<- provider.StreamEvent) (provider.ChatResponse, error) {
+						callIdx++
+						if callIdx == 1 {
+							return provider.ChatResponse{}, &provider.ProviderError{
+								StatusCode: 500,
+								Code:       provider.ErrorCodeServer,
+								Message:    "internal server error",
+								Retryable:  true,
+							}
+						}
+						return provider.ChatResponse{
+							Message: provider.Message{
+								Role:    "assistant",
+								Content: "recovered",
+							},
+							FinishReason: "stop",
+						}, nil
+					},
+				}
+			}(),
+			expectEvents: []EventType{EventUserMessage, EventProviderRetry, EventAgentDone},
+			assert: func(t *testing.T, store *memoryStore, scripted *scriptedProvider, tool *stubTool) {
+				t.Helper()
+				if scripted.callCount < 2 {
+					t.Fatalf("expected at least 2 provider calls (initial + retry), got %d", scripted.callCount)
+				}
+				session := onlySession(t, store)
+				if len(session.Messages) != 2 {
+					t.Fatalf("expected user + assistant messages, got %d", len(session.Messages))
+				}
+				if session.Messages[1].Content != "recovered" {
+					t.Fatalf("expected assistant content %q, got %q", "recovered", session.Messages[1].Content)
+				}
+			},
+		},
+		{
+			name:  "non-retryable provider error does not trigger runtime retry",
+			input: UserInput{RunID: "run-no-retry", Content: "hello"},
+			provider: &scriptedProvider{
+				name: "auth-error-no-retry",
+				chatFn: func(ctx context.Context, req provider.ChatRequest, events chan<- provider.StreamEvent) (provider.ChatResponse, error) {
+					return provider.ChatResponse{}, &provider.ProviderError{
+						StatusCode: 401,
+						Code:       provider.ErrorCodeAuthFailed,
+						Message:    "invalid api key",
+						Retryable:  false,
+					}
+				},
+			},
+			expectErr:    "invalid api key",
+			expectEvents: []EventType{EventUserMessage, EventError},
+			assert: func(t *testing.T, store *memoryStore, scripted *scriptedProvider, tool *stubTool) {
+				t.Helper()
+				if scripted.callCount != 1 {
+					t.Fatalf("expected exactly 1 provider call (no retry for 401), got %d", scripted.callCount)
+				}
+			},
+		},
+		{
+			name:  "runtime retry exhausted emits error",
+			input: UserInput{RunID: "run-retry-exhausted", Content: "hello"},
+			provider: &scriptedProvider{
+				name: "always-500",
+				chatFn: func(ctx context.Context, req provider.ChatRequest, events chan<- provider.StreamEvent) (provider.ChatResponse, error) {
+					return provider.ChatResponse{}, &provider.ProviderError{
+						StatusCode: 500,
+						Code:       provider.ErrorCodeServer,
+						Message:    "internal server error",
+						Retryable:  true,
+					}
+				},
+			},
+			expectErr:    "internal server error",
+			expectEvents: []EventType{EventUserMessage, EventProviderRetry, EventError},
+			assert: func(t *testing.T, store *memoryStore, scripted *scriptedProvider, tool *stubTool) {
+				t.Helper()
+				// 1 initial + 2 retries = 3 calls
+				if scripted.callCount != defaultProviderRetryMax+1 {
+					t.Fatalf("expected %d provider calls (1 initial + %d retries), got %d",
+						defaultProviderRetryMax+1, defaultProviderRetryMax, scripted.callCount)
+				}
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -1092,4 +1182,47 @@ func cloneBuildInput(input agentcontext.BuildInput) agentcontext.BuildInput {
 
 func containsError(err error, target string) bool {
 	return err != nil && strings.Contains(err.Error(), target)
+}
+
+func TestIsRetryableProviderError(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"nil error", nil, false},
+		{"retryable provider error", &provider.ProviderError{Retryable: true}, true},
+		{"non-retryable provider error", &provider.ProviderError{Retryable: false}, false},
+		{"plain error", errors.New("something failed"), false},
+		{"wrapped retryable", fmt.Errorf("wrapped: %w", &provider.ProviderError{Retryable: true}), true},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := isRetryableProviderError(tt.err); got != tt.want {
+				t.Fatalf("isRetryableProviderError() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestProviderRetryBackoff(t *testing.T) {
+	t.Parallel()
+
+	first := providerRetryBackoff(1)
+	second := providerRetryBackoff(2)
+
+	if second <= first {
+		t.Fatalf("expected backoff to increase: first=%v second=%v", first, second)
+	}
+
+	// 验证不超过 MaxWait
+	large := providerRetryBackoff(20)
+	if large > providerRetryMaxWait {
+		t.Fatalf("expected backoff <= MaxWait, got %v > %v", large, providerRetryMaxWait)
+	}
 }

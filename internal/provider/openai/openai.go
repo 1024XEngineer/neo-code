@@ -16,11 +16,25 @@ import (
 
 	"neo-code/internal/config"
 	domain "neo-code/internal/provider"
+	"neo-code/internal/provider/transport"
 )
 
 type Provider struct {
 	cfg    config.ResolvedProviderConfig
 	client *http.Client
+}
+
+type buildOptions struct {
+	transport http.RoundTripper
+}
+
+type BuildOption func(*buildOptions)
+
+// WithTransport 注入自定义 HTTP Transport（如 RetryTransport）。
+func WithTransport(rt http.RoundTripper) BuildOption {
+	return func(o *buildOptions) {
+		o.transport = rt
+	}
 }
 
 const DriverName = "openai"
@@ -30,12 +44,14 @@ func Driver() domain.DriverDefinition {
 	return domain.DriverDefinition{
 		Name: DriverName,
 		Build: func(ctx context.Context, cfg config.ResolvedProviderConfig) (domain.Provider, error) {
-			return New(cfg)
+			baseTransport := http.DefaultTransport
+			retryTransport := transport.NewRetryTransport(baseTransport, transport.DefaultRetryConfig())
+			return New(cfg, WithTransport(retryTransport))
 		},
 	}
 }
 
-func New(cfg config.ResolvedProviderConfig) (*Provider, error) {
+func New(cfg config.ResolvedProviderConfig, opts ...BuildOption) (*Provider, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("openai provider: %w", err)
 	}
@@ -43,10 +59,18 @@ func New(cfg config.ResolvedProviderConfig) (*Provider, error) {
 		return nil, errors.New("openai provider: api key is empty")
 	}
 
+	o := &buildOptions{
+		transport: http.DefaultTransport,
+	}
+	for _, apply := range opts {
+		apply(o)
+	}
+
 	return &Provider{
 		cfg: cfg,
 		client: &http.Client{
-			Timeout: 90 * time.Second,
+			Timeout:   90 * time.Second,
+			Transport: o.transport,
 		},
 	}, nil
 }
@@ -233,20 +257,21 @@ func (p *Provider) consumeStream(ctx context.Context, body io.Reader, events cha
 func (p *Provider) parseError(resp *http.Response) error {
 	data, readErr := io.ReadAll(resp.Body)
 	if readErr != nil {
-		return fmt.Errorf("openai provider: read error response: %w", readErr)
+		return domain.NewProviderErrorFromStatus(resp.StatusCode,
+			fmt.Sprintf("openai provider: read error response: %v", readErr))
 	}
 
 	var parsed openAIErrorResponse
 	if err := json.Unmarshal(data, &parsed); err == nil && strings.TrimSpace(parsed.Error.Message) != "" {
-		return errors.New(parsed.Error.Message)
+		return domain.NewProviderErrorFromStatus(resp.StatusCode, parsed.Error.Message)
 	}
 
 	bodyText := strings.TrimSpace(string(data))
 	if bodyText == "" {
-		return errors.New(resp.Status)
+		return domain.NewProviderErrorFromStatus(resp.StatusCode, resp.Status)
 	}
 
-	return fmt.Errorf("openai provider: %s", bodyText)
+	return domain.NewProviderErrorFromStatus(resp.StatusCode, bodyText)
 }
 
 func toOpenAIMessage(message domain.Message) openAIMessage {
@@ -436,5 +461,6 @@ type openAIUsage struct {
 type openAIErrorResponse struct {
 	Error struct {
 		Message string `json:"message"`
+		Code    string `json:"code,omitempty"`
 	} `json:"error"`
 }

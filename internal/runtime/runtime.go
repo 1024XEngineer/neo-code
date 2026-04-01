@@ -3,6 +3,9 @@ package runtime
 import (
 	"context"
 	"errors"
+	"fmt"
+	"log"
+	"math/rand/v2"
 	"strings"
 	"sync"
 	"time"
@@ -11,6 +14,18 @@ import (
 	agentcontext "neo-code/internal/context"
 	"neo-code/internal/provider"
 	"neo-code/internal/tools"
+)
+
+const maxContextTurns = 10
+
+const (
+	// defaultProviderRetryMax 是 runtime 层对单次 provider.Chat() 的最大重试次数（不含首次调用）。
+	// 与 RetryTransport 的 HTTP 层重试互补：Transport 耗尽后 runtime 仍可重试整个 Chat 调用。
+	defaultProviderRetryMax = 2
+	// providerRetryBaseWait 是 runtime 层重试的初始等待时间。
+	providerRetryBaseWait = 1 * time.Second
+	// providerRetryMaxWait 是 runtime 层重试的最大等待时间。
+	providerRetryMaxWait = 5 * time.Second
 )
 
 type Runtime interface {
@@ -113,18 +128,6 @@ func (s *Service) Run(ctx context.Context, input UserInput) error {
 			return err
 		}
 
-		resolvedProvider, err := s.configManager.ResolvedSelectedProvider()
-		if err != nil {
-			s.emit(ctx, EventError, input.RunID, session.ID, err.Error())
-			return err
-		}
-
-		modelProvider, err := s.providerFactory.Build(ctx, resolvedProvider)
-		if err != nil {
-			s.emit(ctx, EventError, input.RunID, session.ID, err.Error())
-			return err
-		}
-
 		builtContext, err := s.contextBuilder.Build(ctx, agentcontext.BuildInput{
 			Messages: session.Messages,
 			Workdir:  cfg.Workdir,
@@ -133,18 +136,13 @@ func (s *Service) Run(ctx context.Context, input UserInput) error {
 			return s.handleRunError(ctx, input.RunID, session.ID, err)
 		}
 
-		streamEvents := make(chan provider.StreamEvent, 32)
-		streamDone := make(chan struct{})
-		go s.forwardProviderEvents(ctx, input.RunID, session.ID, streamEvents, streamDone)
+		resp, err := s.callProviderWithRetry(ctx, input.RunID, session.ID, provider.ChatRequest{
 
-		resp, err := modelProvider.Chat(ctx, provider.ChatRequest{
 			Model:        cfg.CurrentModel,
 			SystemPrompt: builtContext.SystemPrompt,
 			Messages:     builtContext.Messages,
 			Tools:        s.toolRegistry.GetSpecs(),
-		}, streamEvents)
-		close(streamEvents)
-		<-streamDone
+		})
 		if err != nil {
 			return s.handleRunError(ctx, input.RunID, session.ID, err)
 		}
@@ -341,8 +339,101 @@ func (s *Service) handleRunError(ctx context.Context, runID string, sessionID st
 		return context.Canceled
 	}
 
+	// 提取 ProviderError 信息用于日志增强。
+	var pErr *provider.ProviderError
+	if errors.As(err, &pErr) {
+		log.Printf("runtime: provider error (status=%d, code=%s, retryable=%v): %s",
+			pErr.StatusCode, pErr.Code, pErr.Retryable, pErr.Message)
+	}
+
 	s.emit(ctx, EventError, runID, sessionID, err.Error())
 	return err
+}
+
+// isRetryableProviderError 判断 error 是否为可重试的 ProviderError。
+func isRetryableProviderError(err error) bool {
+	var pErr *provider.ProviderError
+	if !errors.As(err, &pErr) {
+		return false
+	}
+	return pErr.Retryable
+}
+
+// callProviderWithRetry 在可重试的 ProviderError 上自动重试 provider.Chat() 调用。
+// 每次重试都会重新构建 provider 实例和流式事件转发管道。
+// 非可重试错误、context 取消、重试耗尽时直接返回错误。
+func (s *Service) callProviderWithRetry(
+	ctx context.Context,
+	runID string,
+	sessionID string,
+	req provider.ChatRequest,
+) (provider.ChatResponse, error) {
+	var lastErr error
+
+	for retryAttempt := 0; retryAttempt <= defaultProviderRetryMax; retryAttempt++ {
+		if retryAttempt > 0 {
+			wait := providerRetryBackoff(retryAttempt)
+			s.emit(ctx, EventProviderRetry, runID, sessionID,
+				fmt.Sprintf("retrying provider call (attempt %d/%d, wait=%.1fs)...",
+					retryAttempt, defaultProviderRetryMax, wait.Seconds()))
+
+			select {
+			case <-ctx.Done():
+				return provider.ChatResponse{}, ctx.Err()
+			case <-time.After(wait):
+			}
+		}
+
+		resolvedProvider, err := s.configManager.ResolvedSelectedProvider()
+		if err != nil {
+			return provider.ChatResponse{}, err
+		}
+
+		modelProvider, err := s.providerFactory.Build(ctx, resolvedProvider)
+		if err != nil {
+			return provider.ChatResponse{}, err
+		}
+
+		streamEvents := make(chan provider.StreamEvent, 32)
+		streamDone := make(chan struct{})
+		go s.forwardProviderEvents(ctx, runID, sessionID, streamEvents, streamDone)
+
+		resp, err := modelProvider.Chat(ctx, req, streamEvents)
+		close(streamEvents)
+		<-streamDone
+
+		if err == nil {
+			return resp, nil
+		}
+
+		lastErr = err
+
+		// 非可重试错误或 context 已取消，立即返回。
+		if !isRetryableProviderError(err) {
+			return provider.ChatResponse{}, err
+		}
+		if ctx.Err() != nil {
+			return provider.ChatResponse{}, ctx.Err()
+		}
+	}
+
+	return provider.ChatResponse{}, lastErr
+}
+
+// providerRetryBackoff 计算指数退避 + 随机抖动的等待时间。
+// attempt 从 1 开始（首次重试）。
+func providerRetryBackoff(attempt int) time.Duration {
+	wait := providerRetryBaseWait << (attempt - 1)
+
+	// 随机抖动：[0.5, 1.5) * wait
+	jitter := float64(wait) * (0.5 + rand.Float64())
+	wait = time.Duration(jitter)
+
+	if wait > providerRetryMaxWait {
+		wait = providerRetryMaxWait
+	}
+
+	return wait
 }
 
 func (s *Service) isRunCanceled(err error) bool {
