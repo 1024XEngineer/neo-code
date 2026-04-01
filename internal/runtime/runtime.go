@@ -32,16 +32,16 @@ type ProviderFactory interface {
 }
 
 type Service struct {
-	configManager   *config.Manager
-	sessionStore    Store
-	toolRegistry    *tools.Registry
-	providerFactory ProviderFactory
-	contextBuilder  agentcontext.Builder
-	events          chan RuntimeEvent
-	runMu           sync.Mutex
-	activeRunToken  uint64
-	nextRunToken    uint64
-	activeRunCancel context.CancelFunc
+	configManager   *config.Manager      // 配置管理器，提供当前选中的 provider、model、workdir 等配置读取能力。
+	sessionStore    Store                // 会话持久化接口，负责保存和加载聊天会话。
+	toolRegistry    *tools.Registry      // 工具注册表，维护所有工具的 schema。
+	providerFactory ProviderFactory      // Provider 工厂接口，根据配置动态创建具体的 provider 实例。
+	contextBuilder  agentcontext.Builder // 上下文构建器，负责组装 system prompt 与本轮发给模型的消息上下文。
+	events          chan RuntimeEvent    // 事件通道，Runtime 在运行过程中产生的事件都通过该通道发送给 TUI 层消费和展示。
+	runMu           sync.Mutex           // 运行互斥锁，保证同一时间只有一个 Run 在执行。
+	activeRunToken  uint64               // 当前活跃运行的令牌标识，用于标记正在执行的 Run 实例。
+	nextRunToken    uint64               // 下一个运行令牌的递增计数器，用于区分不同 Run 的生命周期。
+	activeRunCancel context.CancelFunc   // 当前活跃 Run 的取消函数。
 }
 
 func NewWithFactory(
@@ -269,6 +269,9 @@ func (s *Service) loadOrCreateSession(ctx context.Context, sessionID string, tit
 	return s.sessionStore.Load(ctx, sessionID)
 }
 
+// emit 向事件通道发送事件。
+// 先尝试非阻塞发送，确保即使 context 已取消，只要通道有空间事件就能被投递；
+// 仅在通道已满时才通过 ctx.Done() 退出，避免 goroutine 泄漏。
 func (s *Service) emit(ctx context.Context, kind EventType, runID string, sessionID string, payload any) {
 	evt := RuntimeEvent{
 		Type:      kind,
@@ -287,6 +290,8 @@ func (s *Service) emit(ctx context.Context, kind EventType, runID string, sessio
 	}
 }
 
+// forwardProviderEvents 将 provider 流式事件转发为 runtime 事件。
+// 使用 select 同时监听输入通道和 context 取消信号，确保 goroutine 不会因通道阻塞而泄漏。
 func (s *Service) forwardProviderEvents(ctx context.Context, runID string, sessionID string, input <-chan provider.StreamEvent, done chan<- struct{}) {
 	defer close(done)
 	for {
