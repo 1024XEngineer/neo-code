@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"neo-code/internal/config"
+	agentcontext "neo-code/internal/context"
 	"neo-code/internal/provider"
 	"neo-code/internal/provider/builtin"
 	"neo-code/internal/tools"
@@ -171,6 +172,26 @@ func (t *stubTool) Execute(ctx context.Context, input tools.ToolCallInput) (tool
 	}, t.err
 }
 
+type stubContextBuilder struct {
+	buildFn   func(ctx context.Context, input agentcontext.BuildInput) (agentcontext.BuildResult, error)
+	callCount int
+	lastInput agentcontext.BuildInput
+	builds    []agentcontext.BuildInput
+}
+
+func (b *stubContextBuilder) Build(ctx context.Context, input agentcontext.BuildInput) (agentcontext.BuildResult, error) {
+	b.callCount++
+	b.lastInput = cloneBuildInput(input)
+	b.builds = append(b.builds, cloneBuildInput(input))
+	if b.buildFn != nil {
+		return b.buildFn(ctx, input)
+	}
+	return agentcontext.BuildResult{
+		SystemPrompt: "stub system prompt",
+		Messages:     append([]provider.Message(nil), input.Messages...),
+	}, nil
+}
+
 func TestServiceRun(t *testing.T) {
 	tests := []struct {
 		name                string
@@ -178,6 +199,7 @@ func TestServiceRun(t *testing.T) {
 		providerResponses   []provider.ChatResponse
 		providerStreams     [][]provider.StreamEvent
 		registerTool        tools.Tool
+		contextBuilder      agentcontext.Builder
 		expectProviderCalls int
 		expectToolCalls     int
 		expectMessageRoles  []string
@@ -202,6 +224,16 @@ func TestServiceRun(t *testing.T) {
 					{Type: provider.StreamEventTextDelta, Text: "answer"},
 				},
 			},
+			contextBuilder: &stubContextBuilder{
+				buildFn: func(ctx context.Context, input agentcontext.BuildInput) (agentcontext.BuildResult, error) {
+					return agentcontext.BuildResult{
+						SystemPrompt: "custom system prompt",
+						Messages: []provider.Message{
+							{Role: "user", Content: "trimmed history"},
+						},
+					}, nil
+				},
+			},
 			expectProviderCalls: 1,
 			expectToolCalls:     0,
 			expectMessageRoles:  []string{"user", "assistant"},
@@ -214,8 +246,11 @@ func TestServiceRun(t *testing.T) {
 				if len(scripted.requests[0].Tools) == 0 {
 					t.Fatalf("expected tool specs to be forwarded")
 				}
-				if scripted.requests[0].SystemPrompt == "" {
-					t.Fatalf("expected system prompt to be set")
+				if scripted.requests[0].SystemPrompt != "custom system prompt" {
+					t.Fatalf("expected system prompt from context builder, got %q", scripted.requests[0].SystemPrompt)
+				}
+				if len(scripted.requests[0].Messages) != 1 || scripted.requests[0].Messages[0].Content != "trimmed history" {
+					t.Fatalf("expected messages from context builder, got %+v", scripted.requests[0].Messages)
 				}
 			},
 		},
@@ -305,7 +340,7 @@ func TestServiceRun(t *testing.T) {
 			}
 			factory := &scriptedProviderFactory{provider: scripted}
 
-			service := NewWithFactory(manager, registry, store, factory)
+			service := NewWithFactory(manager, registry, store, factory, tt.contextBuilder)
 			if err := service.Run(context.Background(), tt.input); err != nil {
 				t.Fatalf("Run() error = %v", err)
 			}
@@ -338,114 +373,60 @@ func TestServiceRun(t *testing.T) {
 	}
 }
 
-func TestServiceTrimMessagesPreservesToolPairs(t *testing.T) {
+func TestServiceRunDelegatesToContextBuilder(t *testing.T) {
 	t.Parallel()
 
 	manager := newRuntimeConfigManager(t)
-	service := NewWithFactory(manager, tools.NewRegistry(), newMemoryStore(), &scriptedProviderFactory{provider: &scriptedProvider{}})
+	store := newMemoryStore()
+	registry := tools.NewRegistry()
+	registry.Register(&stubTool{name: "filesystem_read_file", content: "default"})
 
-	messages := make([]provider.Message, 0, maxContextTurns+4)
-	for i := 0; i < 8; i++ {
-		messages = append(messages, provider.Message{Role: "user", Content: fmt.Sprintf("u-%d", i)})
-	}
-	messages = append(messages,
-		provider.Message{
-			Role: "assistant",
-			ToolCalls: []provider.ToolCall{
-				{ID: "call-1", Name: "filesystem_edit", Arguments: "{}"},
-			},
+	builder := &stubContextBuilder{
+		buildFn: func(ctx context.Context, input agentcontext.BuildInput) (agentcontext.BuildResult, error) {
+			return agentcontext.BuildResult{
+				SystemPrompt: "delegated prompt",
+				Messages: []provider.Message{
+					{Role: "user", Content: "delegated message"},
+				},
+			}, nil
 		},
-		provider.Message{Role: "tool", ToolCallID: "call-1", Content: "tool-result"},
-		provider.Message{Role: "assistant", Content: "after-tool"},
-		provider.Message{Role: "user", Content: "latest"},
-	)
-
-	trimmed := service.trimMessages(messages)
-	if len(trimmed) > len(messages) {
-		t.Fatalf("trimmed messages should not grow")
 	}
 
-	foundAssistantToolCall := false
-	foundToolResult := false
-	for _, message := range trimmed {
-		if message.Role == "assistant" && len(message.ToolCalls) > 0 {
-			foundAssistantToolCall = true
-		}
-		if message.Role == "tool" && message.ToolCallID == "call-1" {
-			foundToolResult = true
-		}
-	}
-	if foundAssistantToolCall != foundToolResult {
-		t.Fatalf("expected tool call and tool result to be preserved together, got %+v", trimmed)
-	}
-}
-
-func TestServiceTrimMessagesBoundaries(t *testing.T) {
-	t.Parallel()
-
-	manager := newRuntimeConfigManager(t)
-	service := NewWithFactory(manager, tools.NewRegistry(), newMemoryStore(), &scriptedProviderFactory{provider: &scriptedProvider{}})
-
-	tests := []struct {
-		name    string
-		input   []provider.Message
-		wantLen int
-		assert  func(t *testing.T, original []provider.Message, trimmed []provider.Message)
-	}{
-		{
-			name: "within max turns returns full cloned slice",
-			input: []provider.Message{
-				{Role: "user", Content: "one"},
-				{Role: "assistant", Content: "two"},
-			},
-			wantLen: 2,
-			assert: func(t *testing.T, original []provider.Message, trimmed []provider.Message) {
-				t.Helper()
-				if &trimmed[0] == &original[0] {
-					t.Fatalf("expected trimmed slice to be cloned")
-				}
-			},
-		},
-		{
-			name: "long message list with limited spans keeps full history",
-			input: func() []provider.Message {
-				messages := make([]provider.Message, 0, maxContextTurns+3)
-				for i := 0; i < maxContextTurns-1; i++ {
-					messages = append(messages, provider.Message{Role: "user", Content: fmt.Sprintf("u-%d", i)})
-				}
-				messages = append(messages,
-					provider.Message{
-						Role: "assistant",
-						ToolCalls: []provider.ToolCall{
-							{ID: "call-1", Name: "filesystem_edit", Arguments: "{}"},
-						},
-					},
-					provider.Message{Role: "tool", ToolCallID: "call-1", Content: "tool-1"},
-					provider.Message{Role: "tool", ToolCallID: "call-1", Content: "tool-2"},
-				)
-				return messages
-			}(),
-			wantLen: maxContextTurns + 2,
-			assert: func(t *testing.T, original []provider.Message, trimmed []provider.Message) {
-				t.Helper()
-				if len(trimmed) != len(original) {
-					t.Fatalf("expected full history to remain, got %d want %d", len(trimmed), len(original))
-				}
+	scripted := &scriptedProvider{
+		responses: []provider.ChatResponse{
+			{
+				Message: provider.Message{
+					Role:    "assistant",
+					Content: "done",
+				},
+				FinishReason: "stop",
 			},
 		},
 	}
 
-	for _, tt := range tests {
-		tt := tt
-		t.Run(tt.name, func(t *testing.T) {
-			trimmed := service.trimMessages(tt.input)
-			if len(trimmed) != tt.wantLen {
-				t.Fatalf("expected len %d, got %d", tt.wantLen, len(trimmed))
-			}
-			if tt.assert != nil {
-				tt.assert(t, tt.input, trimmed)
-			}
-		})
+	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: scripted}, builder)
+	input := UserInput{RunID: "run-context-builder", Content: "hello"}
+	if err := service.Run(context.Background(), input); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	if builder.callCount != 1 {
+		t.Fatalf("expected builder to be called once, got %d", builder.callCount)
+	}
+	if builder.lastInput.Workdir == "" {
+		t.Fatalf("expected workdir to be forwarded to builder")
+	}
+	if len(builder.lastInput.Messages) != 1 || builder.lastInput.Messages[0].Content != "hello" {
+		t.Fatalf("expected persisted session messages to be forwarded, got %+v", builder.lastInput.Messages)
+	}
+	if len(scripted.requests) != 1 {
+		t.Fatalf("expected one provider request, got %d", len(scripted.requests))
+	}
+	if scripted.requests[0].SystemPrompt != "delegated prompt" {
+		t.Fatalf("expected delegated prompt, got %q", scripted.requests[0].SystemPrompt)
+	}
+	if len(scripted.requests[0].Messages) != 1 || scripted.requests[0].Messages[0].Content != "delegated message" {
+		t.Fatalf("expected delegated messages, got %+v", scripted.requests[0].Messages)
 	}
 }
 
@@ -674,7 +655,7 @@ func TestServiceRunErrorPaths(t *testing.T) {
 				err:      tt.factoryErr,
 			}
 
-			service := NewWithFactory(manager, registry, store, factory)
+			service := NewWithFactory(manager, registry, store, factory, nil)
 			err := service.Run(context.Background(), tt.input)
 			if tt.expectErr != "" {
 				if err == nil || err.Error() != tt.expectErr && !containsError(err, tt.expectErr) {
@@ -714,7 +695,7 @@ func TestServiceCancelActiveRun(t *testing.T) {
 		},
 	}
 
-	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: scripted})
+	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: scripted}, nil)
 	errCh := make(chan error, 1)
 	input := UserInput{RunID: "run-cancel-active", Content: "hello"}
 
@@ -757,7 +738,7 @@ func TestServiceRunCanceledByProvider(t *testing.T) {
 		},
 	}
 
-	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: scripted})
+	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: scripted}, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
 	input := UserInput{RunID: "run-provider-cancel", Content: "hello"}
@@ -802,7 +783,7 @@ func TestServiceRunPreservesProviderErrorAfterCancel(t *testing.T) {
 		},
 	}
 
-	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: scripted})
+	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: scripted}, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
 	input := UserInput{RunID: "run-provider-error-after-cancel", Content: "hello"}
@@ -860,7 +841,7 @@ func TestServiceRunCanceledDuringToolExecution(t *testing.T) {
 		},
 	}
 
-	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: scripted})
+	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: scripted}, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
 	input := UserInput{RunID: "run-tool-cancel", Content: "edit file"}
@@ -925,7 +906,7 @@ func TestServiceRunPreservesToolErrorAfterCancel(t *testing.T) {
 		},
 	}
 
-	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: scripted})
+	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: scripted}, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
 	input := UserInput{RunID: "run-tool-error-after-cancel", Content: "edit file"}
@@ -968,7 +949,7 @@ func TestServiceRunPreservesSessionSaveErrorAfterCancel(t *testing.T) {
 
 	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{
 		provider: &scriptedProvider{name: "unused"},
-	})
+	}, nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -1029,7 +1010,7 @@ func TestServiceRunToolTimeoutIsNotCancellation(t *testing.T) {
 		},
 	}
 
-	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: scripted})
+	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: scripted}, nil)
 	input := UserInput{RunID: "run-tool-timeout", Content: "edit file"}
 	if err := service.Run(context.Background(), input); err != nil {
 		t.Fatalf("Run() error = %v", err)
@@ -1057,7 +1038,7 @@ func TestServiceConstructorsAndDelegates(t *testing.T) {
 	registry := tools.NewRegistry()
 	registry.Register(&stubTool{name: "filesystem_read_file", content: "ok"})
 
-	service := NewWithFactory(manager, registry, store, nil)
+	service := NewWithFactory(manager, registry, store, nil, nil)
 	if service == nil {
 		t.Fatalf("expected service")
 	}
@@ -1190,6 +1171,12 @@ func cloneChatRequest(req provider.ChatRequest) provider.ChatRequest {
 	cloned := req
 	cloned.Messages = append([]provider.Message(nil), req.Messages...)
 	cloned.Tools = append([]provider.ToolSpec(nil), req.Tools...)
+	return cloned
+}
+
+func cloneBuildInput(input agentcontext.BuildInput) agentcontext.BuildInput {
+	cloned := input
+	cloned.Messages = append([]provider.Message(nil), input.Messages...)
 	return cloned
 }
 

@@ -67,6 +67,7 @@ go run ./cmd/neocode
 核心模块职责：
 
 - **`internal/config`** — 配置管理、环境变量、YAML 加载
+- **`internal/context`** — system prompt、消息裁剪与上下文构建
 - **`internal/provider`** — LLM 提供商抽象，抹平厂商差异
 - **`internal/runtime`** — ReAct 主循环、事件流、会话管理
 - **`internal/tools`** — 工具注册表与具体工具实现
@@ -84,6 +85,7 @@ go run ./cmd/neocode
 ├── internal
 │   ├── app              # 应用装配
 │   ├── config           # 配置管理
+│   ├── context          # 上下文构建
 │   ├── provider         # Provider 抽象与实现
 │   ├── runtime          # ReAct 循环与事件流
 │   ├── tools            # 工具系统
