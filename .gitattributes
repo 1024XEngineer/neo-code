@@ -1,2 +1,12 @@
+# 统一仓库内常见文本文件为 LF，避免 Windows 下出现无意义的换行警告
+*.go text eol=lf
+*.md text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+go.mod text eol=lf
+go.sum text eol=lf
+.gitignore text eol=lf
+.gitattributes text eol=lf
+
 # 强制 scripts 目录下的 Shell 脚本始终使用 LF 换行符
 scripts/*.sh text eol=lf

@@ -6,13 +6,14 @@
 
 `用户输入 -> Agent 推理 -> 调用工具 -> 获取结果 -> 继续推理 -> UI 展示`
 
-MVP 聚焦五个模块：
+MVP 聚焦六个模块：
 
 1. provider：统一不同模型/API 的调用方式
 2. TUI：用户交互入口，承载输入、对话、侧边栏、会话
 3. tools：统一工具定义、参数校验、执行与结果封装
 4. config：管理本地配置、provider 切换、模型选择
-5. agent runtime：驱动整个 agent loop，是系统核心
+5. context：负责 system prompt、显式上下文源与历史消息裁剪
+6. agent runtime：驱动整个 agent loop，是系统核心
 
 ---
 
@@ -46,6 +47,7 @@ flowchart LR
 - TUI：负责交互和渲染
 - Application：负责启动和依赖注入
 - Runtime：负责 Agent Loop 和状态编排
+- Context：负责模型请求前的上下文构建
 - Provider：负责模型调用抽象
 - Tool Manager：负责工具注册、校验、执行
 - Config：负责配置加载与选择
@@ -295,7 +297,7 @@ type UserInput struct {
 Runtime 内部建议拆分：
 
 - `SessionStore`：管理会话和消息历史
-- `PromptBuilder`：组装 prompt/messages/tools
+- `context.Builder`：组装核心 prompt、显式上下文源与裁剪后的消息
 - `Executor`：执行 loop
 - `EventBus`：向 TUI 推送运行事件
 
@@ -379,6 +381,13 @@ sequenceDiagram
 │   │   ├── loader.go
 │   │   ├── model.go
 │   │   └── validate.go
+│   ├── context/
+│   │   ├── builder.go
+│   │   ├── metadata.go
+│   │   ├── prompt.go
+│   │   ├── source_rules.go
+│   │   ├── source_system.go
+│   │   └── trim.go
 │   ├── provider/
 │   │   ├── provider.go
 │   │   ├── openai/

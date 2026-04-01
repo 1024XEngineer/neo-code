@@ -413,8 +413,17 @@ func TestServiceRunDelegatesToContextBuilder(t *testing.T) {
 	if builder.callCount != 1 {
 		t.Fatalf("expected builder to be called once, got %d", builder.callCount)
 	}
-	if builder.lastInput.Workdir == "" {
-		t.Fatalf("expected workdir to be forwarded to builder")
+	if builder.lastInput.Metadata.Workdir == "" {
+		t.Fatalf("expected workdir to be forwarded to builder metadata")
+	}
+	if builder.lastInput.Metadata.Shell == "" {
+		t.Fatalf("expected shell to be forwarded to builder metadata")
+	}
+	if builder.lastInput.Metadata.Provider == "" {
+		t.Fatalf("expected provider to be forwarded to builder metadata")
+	}
+	if builder.lastInput.Metadata.Model == "" {
+		t.Fatalf("expected model to be forwarded to builder metadata")
 	}
 	if len(builder.lastInput.Messages) != 1 || builder.lastInput.Messages[0].Content != "hello" {
 		t.Fatalf("expected persisted session messages to be forwarded, got %+v", builder.lastInput.Messages)

@@ -14,7 +14,7 @@ type Builder interface {
 // BuildInput contains the runtime state needed to assemble model context.
 type BuildInput struct {
 	Messages []provider.Message
-	Workdir  string
+	Metadata Metadata
 }
 
 // BuildResult is the provider-facing context produced for a single round.

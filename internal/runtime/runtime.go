@@ -130,7 +130,12 @@ func (s *Service) Run(ctx context.Context, input UserInput) error {
 
 		builtContext, err := s.contextBuilder.Build(ctx, agentcontext.BuildInput{
 			Messages: session.Messages,
-			Workdir:  cfg.Workdir,
+			Metadata: agentcontext.Metadata{
+				Workdir:  cfg.Workdir,
+				Shell:    cfg.Shell,
+				Provider: cfg.SelectedProvider,
+				Model:    cfg.CurrentModel,
+			},
 		})
 		if err != nil {
 			return s.handleRunError(ctx, input.RunID, session.ID, err)
