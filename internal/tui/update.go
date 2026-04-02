@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/list"
@@ -33,6 +34,7 @@ const (
 	composerMinHeight   = 1
 	composerMaxHeight   = 5
 	composerPromptWidth = 2
+	mouseWheelStepLines = 3
 )
 
 func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -50,10 +52,12 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.resizeComponents()
 		return a, tea.Batch(cmds...)
 	case RuntimeMsg:
-		a.handleRuntimeEvent(typed.Event)
+		transcriptDirty := a.handleRuntimeEvent(typed.Event)
 		_ = a.refreshSessions()
 		a.syncActiveSessionTitle()
-		a.rebuildTranscript()
+		if transcriptDirty {
+			a.rebuildTranscript()
+		}
 		cmds = append(cmds, ListenForRuntimeEvent(a.runtime.Events()))
 		return a, tea.Batch(cmds...)
 	case RuntimeClosedMsg:
@@ -61,7 +65,6 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if strings.TrimSpace(a.state.StatusText) == "" {
 			a.state.StatusText = statusRuntimeClosed
 		}
-		a.rebuildTranscript()
 		return a, tea.Batch(cmds...)
 	case runFinishedMsg:
 		if typed.err != nil {
@@ -74,12 +77,10 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else {
 				a.state.ExecutionError = typed.err.Error()
 				a.state.StatusText = typed.err.Error()
-				a.appendInlineMessage(roleError, typed.err.Error())
 			}
 		}
 		_ = a.refreshSessions()
 		a.syncActiveSessionTitle()
-		a.rebuildTranscript()
 		return a, tea.Batch(cmds...)
 	case compactFinishedMsg:
 		// compact feedback should primarily come from runtime compact_done/error events.
@@ -105,7 +106,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if typed.err != nil {
 			a.state.ExecutionError = typed.err.Error()
 			a.state.StatusText = typed.err.Error()
-			a.appendInlineMessage(roleError, typed.err.Error())
+			a.appendActivity("command", "Local command failed", typed.err.Error(), true)
 		} else {
 			a.state.ExecutionError = ""
 			a.state.StatusText = typed.notice
@@ -114,42 +115,41 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if err := a.refreshProviderPicker(); err != nil {
 				a.state.ExecutionError = err.Error()
 				a.state.StatusText = err.Error()
-				a.appendInlineMessage(roleError, err.Error())
+				a.appendActivity("system", "Failed to refresh providers", err.Error(), true)
 			}
 			if err := a.refreshModelPicker(); err != nil {
 				a.state.ExecutionError = err.Error()
 				a.state.StatusText = err.Error()
-				a.appendInlineMessage(roleError, err.Error())
+				a.appendActivity("system", "Failed to refresh models", err.Error(), true)
 			} else {
 				a.selectCurrentProvider(cfg.SelectedProvider)
 				a.selectCurrentModel(cfg.CurrentModel)
 			}
-			a.appendInlineMessage(roleSystem, typed.notice)
+			a.appendActivity("command", typed.notice, "", false)
 		}
-		a.rebuildTranscript()
-		a.transcript.GotoBottom()
 		return a, tea.Batch(cmds...)
 	case workspaceCommandResultMsg:
 		if typed.command == "" && typed.err != nil {
 			a.state.ExecutionError = typed.err.Error()
 			a.state.StatusText = typed.err.Error()
-			a.appendInlineMessage(roleError, typed.err.Error())
-			a.rebuildTranscript()
-			a.transcript.GotoBottom()
+			a.appendActivity("command", "Workspace command failed", typed.err.Error(), true)
 			return a, tea.Batch(cmds...)
 		}
 		result := formatWorkspaceCommandResult(typed.command, typed.output, typed.err)
-		a.activeMessages = append(a.activeMessages, provider.Message{Role: roleTool, Content: result})
 		if typed.err != nil {
 			a.state.ExecutionError = typed.err.Error()
 			a.state.StatusText = fmt.Sprintf("Command failed: %s", typed.command)
+			a.appendActivity("command", "Command failed", result, true)
 		} else {
 			a.state.ExecutionError = ""
 			a.state.StatusText = statusCommandDone
+			a.appendActivity("command", "Command finished", result, false)
 		}
-		a.rebuildTranscript()
-		a.transcript.GotoBottom()
 		return a, tea.Batch(cmds...)
+	case tea.MouseMsg:
+		if a.handleTranscriptMouse(typed) {
+			return a, tea.Batch(cmds...)
+		}
 	case tea.KeyMsg:
 		if key.Matches(typed, a.keys.Quit) {
 			return a, tea.Quit
@@ -164,7 +164,6 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if a.runtime.CancelActiveRun() {
 				a.state.StatusText = statusCanceling
 			}
-			a.rebuildTranscript()
 			return a, tea.Batch(cmds...)
 		}
 		if a.state.ActivePicker != pickerNone {
@@ -197,11 +196,10 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if err := a.activateSelectedSession(); err != nil {
 					a.state.StatusText = err.Error()
 					a.state.ExecutionError = err.Error()
-					a.appendInlineMessage(roleError, err.Error())
+					a.appendActivity("system", "Failed to open session", err.Error(), true)
 				}
 				a.focus = panelInput
 				a.applyFocus()
-				a.rebuildTranscript()
 				return a, tea.Batch(cmds...)
 			}
 			var cmd tea.Cmd
@@ -243,8 +241,7 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 			if err := a.refreshProviderPicker(); err != nil {
 				a.state.ExecutionError = err.Error()
 				a.state.StatusText = err.Error()
-				a.appendInlineMessage(roleError, err.Error())
-				a.rebuildTranscript()
+				a.appendActivity("system", "Failed to refresh providers", err.Error(), true)
 				return a, tea.Batch(cmds...)
 			}
 			a.openProviderPicker()
@@ -253,8 +250,7 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 			if err := a.refreshModelPicker(); err != nil {
 				a.state.ExecutionError = err.Error()
 				a.state.StatusText = err.Error()
-				a.appendInlineMessage(roleError, err.Error())
-				a.rebuildTranscript()
+				a.appendActivity("system", "Failed to refresh models", err.Error(), true)
 				return a, tea.Batch(cmds...)
 			}
 			a.openModelPicker()
@@ -271,20 +267,18 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 			if err != nil {
 				a.state.ExecutionError = err.Error()
 				a.state.StatusText = err.Error()
-				a.appendInlineMessage(roleError, err.Error())
-				a.rebuildTranscript()
-				a.transcript.GotoBottom()
+				a.appendActivity("command", "Invalid workspace command", err.Error(), true)
 				return a, tea.Batch(cmds...)
 			}
+			a.activities = nil
 			a.state.StatusText = statusRunningCommand
 			a.state.ExecutionError = ""
-			a.appendInlineMessage(roleEvent, "Running command: "+command)
-			a.rebuildTranscript()
-			a.transcript.GotoBottom()
+			a.appendActivity("command", "Running command", command, false)
 			cmds = append(cmds, runWorkspaceCommand(a.configManager, input))
 			return a, tea.Batch(cmds...)
 		}
 
+		a.activities = nil
 		a.state.IsAgentRunning = true
 		a.state.StreamingReply = false
 		a.state.ExecutionError = ""
@@ -377,6 +371,7 @@ func (a *App) refreshSessions() error {
 func (a *App) refreshMessages() error {
 	if strings.TrimSpace(a.state.ActiveSessionID) == "" {
 		a.activeMessages = nil
+		a.activities = nil
 		return nil
 	}
 
@@ -386,6 +381,7 @@ func (a *App) refreshMessages() error {
 	}
 
 	a.activeMessages = session.Messages
+	a.activities = nil
 	a.state.ActiveSessionTitle = session.Title
 	return nil
 }
@@ -430,10 +426,12 @@ func (a *App) syncConfigState(cfg config.Config) {
 	a.state.CurrentWorkdir = cfg.Workdir
 }
 
-func (a *App) handleRuntimeEvent(event agentruntime.RuntimeEvent) {
+func (a *App) handleRuntimeEvent(event agentruntime.RuntimeEvent) bool {
 	if a.state.ActiveSessionID == "" {
 		a.state.ActiveSessionID = event.SessionID
 	}
+
+	transcriptDirty := false
 
 	switch event.Type {
 	case agentruntime.EventUserMessage:
@@ -441,34 +439,46 @@ func (a *App) handleRuntimeEvent(event agentruntime.RuntimeEvent) {
 		a.state.StreamingReply = false
 		a.state.CurrentTool = ""
 		a.state.ExecutionError = ""
+	case agentruntime.EventToolCallThinking:
+		if payload, ok := event.Payload.(string); ok && strings.TrimSpace(payload) != "" {
+			a.state.CurrentTool = payload
+			a.appendActivity("tool", "Planning tool call", payload, false)
+		}
 	case agentruntime.EventToolStart:
 		a.state.StatusText = statusRunningTool
 		a.state.StreamingReply = false
 		if payload, ok := event.Payload.(provider.ToolCall); ok {
 			a.state.CurrentTool = payload.Name
-			a.appendInlineMessage(roleEvent, "Running tool: "+payload.Name+"...")
+			a.appendActivity("tool", "Running tool", payload.Name, false)
 		}
 	case agentruntime.EventToolResult:
 		a.state.StreamingReply = false
 		a.state.CurrentTool = ""
 		if payload, ok := event.Payload.(tools.ToolResult); ok {
+			a.activeMessages = append(a.activeMessages, provider.Message{
+				Role:    roleTool,
+				Content: payload.Content,
+				IsError: payload.IsError,
+			})
+			transcriptDirty = true
 			if payload.IsError {
 				a.state.ExecutionError = payload.Content
 				a.state.StatusText = statusToolError
-				a.appendInlineMessage(roleError, preview(payload.Content, 88, 4))
+				a.appendActivity("tool", "Tool error", preview(payload.Content, 88, 4), true)
 			} else if strings.TrimSpace(a.state.ExecutionError) == "" {
 				a.state.StatusText = statusToolFinished
-				a.appendInlineMessage(roleEvent, "Completed tool: "+payload.Name)
+				a.appendActivity("tool", "Completed tool", payload.Name, false)
 			}
 		}
 	case agentruntime.EventAgentChunk:
 		if payload, ok := event.Payload.(string); ok {
 			a.appendAssistantChunk(payload)
+			transcriptDirty = true
 		}
 	case agentruntime.EventToolChunk:
 		if payload, ok := event.Payload.(string); ok && strings.TrimSpace(payload) != "" {
 			a.state.StatusText = statusRunningTool
-			a.appendInlineMessage(roleEvent, preview(payload, 88, 4))
+			a.appendActivity("tool", "Tool output", preview(payload, 88, 4), false)
 		}
 	case agentruntime.EventAgentDone:
 		a.state.IsAgentRunning = false
@@ -479,6 +489,7 @@ func (a *App) handleRuntimeEvent(event agentruntime.RuntimeEvent) {
 		}
 		if payload, ok := event.Payload.(provider.Message); ok && strings.TrimSpace(payload.Content) != "" && !a.lastAssistantMatches(payload.Content) {
 			a.activeMessages = append(a.activeMessages, provider.Message{Role: roleAssistant, Content: payload.Content})
+			transcriptDirty = true
 		}
 	case agentruntime.EventRunCanceled:
 		a.state.IsAgentRunning = false
@@ -486,7 +497,7 @@ func (a *App) handleRuntimeEvent(event agentruntime.RuntimeEvent) {
 		a.state.CurrentTool = ""
 		a.state.ExecutionError = ""
 		a.state.StatusText = statusCanceled
-		a.appendInlineMessage(roleSystem, "Canceled current run.")
+		a.appendActivity("run", "Canceled current run", "", false)
 	case agentruntime.EventError:
 		a.state.StatusText = statusError
 		a.state.IsAgentRunning = false
@@ -495,7 +506,12 @@ func (a *App) handleRuntimeEvent(event agentruntime.RuntimeEvent) {
 		if payload, ok := event.Payload.(string); ok {
 			a.state.ExecutionError = payload
 			a.state.StatusText = payload
-			a.appendInlineMessage(roleError, payload)
+			a.appendActivity("run", "Runtime error", payload, true)
+		}
+	case agentruntime.EventProviderRetry:
+		if payload, ok := event.Payload.(string); ok && strings.TrimSpace(payload) != "" {
+			a.state.StatusText = statusThinking
+			a.appendActivity("provider", "Retrying provider call", payload, false)
 		}
 	case agentruntime.EventCompactDone:
 		payload, ok := event.Payload.(agentruntime.CompactDonePayload)
@@ -539,6 +555,8 @@ func (a *App) handleRuntimeEvent(event agentruntime.RuntimeEvent) {
 		a.state.StatusText = message
 		a.appendInlineMessage(roleError, message)
 	}
+
+	return transcriptDirty
 }
 
 func (a *App) appendAssistantChunk(chunk string) {
@@ -564,6 +582,29 @@ func (a *App) appendInlineMessage(role string, message string) {
 	a.activeMessages = append(a.activeMessages, provider.Message{Role: role, Content: content})
 }
 
+func (a *App) appendActivity(kind string, title string, detail string, isError bool) {
+	title = strings.TrimSpace(title)
+	detail = strings.TrimSpace(detail)
+	if title == "" && detail == "" {
+		return
+	}
+	if title == "" {
+		title = detail
+		detail = ""
+	}
+
+	a.activities = append(a.activities, activityEntry{
+		Time:    time.Now(),
+		Kind:    strings.TrimSpace(kind),
+		Title:   title,
+		Detail:  detail,
+		IsError: isError,
+	})
+	if len(a.activities) > maxActivityEntries {
+		a.activities = append([]activityEntry(nil), a.activities[len(a.activities)-maxActivityEntries:]...)
+	}
+}
+
 func (a *App) lastAssistantMatches(content string) bool {
 	if len(a.activeMessages) == 0 {
 		return false
@@ -580,14 +621,57 @@ func (a *App) handleViewportKeys(vp *viewport.Model, msg tea.KeyMsg) {
 	case key.Matches(msg, a.keys.ScrollDown):
 		vp.LineDown(2)
 	case key.Matches(msg, a.keys.PageUp):
-		vp.HalfViewUp()
+		vp.ViewUp()
 	case key.Matches(msg, a.keys.PageDown):
-		vp.HalfViewDown()
+		vp.ViewDown()
 	case key.Matches(msg, a.keys.Top):
 		vp.GotoTop()
 	case key.Matches(msg, a.keys.Bottom):
 		vp.GotoBottom()
 	}
+}
+
+func (a *App) handleTranscriptMouse(msg tea.MouseMsg) bool {
+	if !a.isMouseWithinTranscript(msg) {
+		return false
+	}
+
+	switch msg.Button {
+	case tea.MouseButtonWheelUp:
+		a.transcript.LineUp(mouseWheelStepLines)
+		return true
+	case tea.MouseButtonWheelDown:
+		a.transcript.LineDown(mouseWheelStepLines)
+		return true
+	default:
+		return false
+	}
+}
+
+func (a App) isMouseWithinTranscript(msg tea.MouseMsg) bool {
+	x, y, width, height := a.transcriptBounds()
+	if width <= 0 || height <= 0 {
+		return false
+	}
+	return msg.X >= x && msg.X < x+width && msg.Y >= y && msg.Y < y+height
+}
+
+func (a App) transcriptBounds() (int, int, int, int) {
+	lay := a.computeLayout()
+	contentX := a.styles.doc.GetPaddingLeft()
+	contentY := a.styles.doc.GetPaddingTop()
+	headerHeight := lipgloss.Height(a.renderHeader(lay.contentWidth))
+	bodyY := contentY + headerHeight
+
+	streamX := contentX
+	streamY := bodyY
+	if lay.stacked {
+		streamY += lay.sidebarHeight
+	} else {
+		streamX += lay.sidebarWidth + lay.bodyGap
+	}
+
+	return streamX, streamY, lay.rightWidth, a.transcript.Height
 }
 
 func (a *App) focusNext() {
@@ -650,11 +734,12 @@ func (a *App) applyComponentLayout(rebuildTranscript bool) {
 	sidebarBodyHeight := max(4, lay.sidebarHeight-sidebarFrameHeight-lipgloss.Height(a.renderSidebarHeader(sidebarBodyWidth)))
 	a.sessions.SetSize(sidebarBodyWidth, sidebarBodyHeight)
 	menuHeight := a.commandMenuHeight(max(24, lay.rightWidth))
+	activityHeight := a.activityPreviewHeight()
 	a.transcript.Width = max(24, lay.rightWidth)
 	a.input.SetWidth(a.composerInnerWidth(lay.rightWidth))
 	a.input.SetHeight(a.composerHeight())
 	promptHeight := lipgloss.Height(a.renderPrompt(a.transcript.Width))
-	a.transcript.Height = max(6, lay.rightHeight-menuHeight-promptHeight)
+	a.transcript.Height = max(6, lay.rightHeight-activityHeight-menuHeight-promptHeight)
 	a.providerPicker.SetSize(max(24, clamp(lay.rightWidth-14, 28, 52)), max(4, clamp(lay.rightHeight-10, 6, 10)))
 	a.modelPicker.SetSize(max(24, clamp(lay.rightWidth-14, 28, 52)), max(4, clamp(lay.rightHeight-10, 6, 10)))
 	if rebuildTranscript || prevTranscriptWidth != a.transcript.Width {
@@ -766,6 +851,7 @@ func (a *App) startDraftSession() {
 	a.state.ActiveSessionID = ""
 	a.state.ActiveSessionTitle = draftSessionTitle
 	a.activeMessages = nil
+	a.activities = nil
 	a.state.StatusText = statusDraft
 	a.state.ExecutionError = ""
 	a.state.CurrentTool = ""
