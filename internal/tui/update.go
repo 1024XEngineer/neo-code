@@ -22,13 +22,13 @@ import (
 type RuntimeMsg struct{ Event agentruntime.RuntimeEvent }
 type RuntimeClosedMsg struct{}
 type runFinishedMsg struct{ err error }
-type compactFinishedMsg struct {
-	err error
-}
 type modelCatalogRefreshMsg struct {
 	providerID string
 	models     []provider.ModelDescriptor
 	err        error
+}
+type compactFinishedMsg struct {
+	err error
 }
 type localCommandResultMsg struct {
 	notice          string
@@ -89,6 +89,23 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		_ = a.refreshSessions()
 		a.syncActiveSessionTitle()
 		return a, tea.Batch(cmds...)
+	case modelCatalogRefreshMsg:
+		if strings.EqualFold(a.modelRefreshID, typed.providerID) {
+			a.modelRefreshID = ""
+		}
+		if !strings.EqualFold(strings.TrimSpace(a.state.CurrentProvider), strings.TrimSpace(typed.providerID)) {
+			return a, tea.Batch(cmds...)
+		}
+		if typed.err != nil {
+			a.appendActivity("provider", "Failed to refresh models", typed.err.Error(), true)
+			return a, tea.Batch(cmds...)
+		}
+
+		a.modelPicker = replacePickerItems(a.modelPicker, newModelPicker(typed.models))
+		cfg := a.configManager.Get()
+		a.syncConfigState(cfg)
+		a.selectCurrentModel(cfg.CurrentModel)
+		return a, tea.Batch(cmds...)
 	case compactFinishedMsg:
 		// compact feedback should primarily come from runtime compact_done/error events.
 		if typed.err != nil && strings.TrimSpace(a.state.ExecutionError) == "" {
@@ -108,23 +125,6 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.syncActiveSessionTitle()
 		a.rebuildTranscript()
 		a.transcript.GotoBottom()
-		return a, tea.Batch(cmds...)
-	case modelCatalogRefreshMsg:
-		if strings.EqualFold(a.modelRefreshID, typed.providerID) {
-			a.modelRefreshID = ""
-		}
-		if !strings.EqualFold(strings.TrimSpace(a.state.CurrentProvider), strings.TrimSpace(typed.providerID)) {
-			return a, tea.Batch(cmds...)
-		}
-		if typed.err != nil {
-			a.appendActivity("provider", "Failed to refresh models", typed.err.Error(), true)
-			return a, tea.Batch(cmds...)
-		}
-
-		a.modelPicker = replacePickerItems(a.modelPicker, newModelPicker(typed.models))
-		cfg := a.configManager.Get()
-		a.syncConfigState(cfg)
-		a.selectCurrentModel(cfg.CurrentModel)
 		return a, tea.Batch(cmds...)
 	case localCommandResultMsg:
 		if typed.err != nil {
@@ -551,11 +551,11 @@ func (a *App) handleRuntimeEvent(event agentruntime.RuntimeEvent) bool {
 	case agentruntime.EventCompactDone:
 		payload, ok := event.Payload.(agentruntime.CompactDonePayload)
 		if !ok {
-			return
+			return transcriptDirty
 		}
 		// Skip passive micro checks that did not rewrite context to avoid transcript noise.
 		if payload.TriggerMode == "micro" && !payload.Applied {
-			return
+			return transcriptDirty
 		}
 		a.state.ExecutionError = ""
 		a.state.StatusText = fmt.Sprintf(
@@ -575,20 +575,23 @@ func (a *App) handleRuntimeEvent(event agentruntime.RuntimeEvent) bool {
 				payload.TranscriptPath,
 			),
 		)
+		transcriptDirty = true
 	case agentruntime.EventCompactError:
 		payload, ok := event.Payload.(agentruntime.CompactErrorPayload)
 		if !ok {
-			return
+			return transcriptDirty
 		}
 		if payload.TriggerMode == "micro" {
 			// Micro compact failure is non-blocking for the main loop, keep it as a lightweight notice.
 			a.appendInlineMessage(roleEvent, fmt.Sprintf("Compact(micro) skipped: %s", payload.Message))
-			return
+			transcriptDirty = true
+			return transcriptDirty
 		}
 		message := fmt.Sprintf("Compact(%s) failed: %s", payload.TriggerMode, payload.Message)
 		a.state.ExecutionError = message
 		a.state.StatusText = message
 		a.appendInlineMessage(roleError, message)
+		transcriptDirty = true
 	}
 
 	return transcriptDirty

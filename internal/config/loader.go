@@ -98,7 +98,7 @@ func (l *Loader) Load(ctx context.Context) (*Config, error) {
 		return nil, fmt.Errorf("config: read config file: %w", err)
 	}
 
-	cfg, err := parseConfig(data, l.defaults)
+	cfg, err := parseConfigWithContextDefaults(data, l.defaults.Context)
 	if err != nil {
 		return nil, fmt.Errorf("config: parse config file: %w", err)
 	}
@@ -106,7 +106,11 @@ func (l *Loader) Load(ctx context.Context) (*Config, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
-	if requiresConfigRewrite(data) {
+	needsRewrite, err := persistedConfigDiffers(data, *cfg)
+	if err != nil {
+		return nil, err
+	}
+	if needsRewrite {
 		if err := l.Save(ctx, cfg); err != nil {
 			return nil, err
 		}
@@ -129,24 +133,9 @@ func (l *Loader) Save(ctx context.Context, cfg *Config) error {
 		return err
 	}
 
-	file := persistedConfig{
-		SelectedProvider: snapshot.SelectedProvider,
-		CurrentModel:     snapshot.CurrentModel,
-		Workdir:          snapshot.Workdir,
-		Shell:            snapshot.Shell,
-		MaxLoops:         snapshot.MaxLoops,
-		ToolTimeoutSec:   snapshot.ToolTimeoutSec,
-		Context:          newPersistedContextConfig(snapshot.Context),
-		Tools:            snapshot.Tools,
-	}
-
-	data, err := yaml.Marshal(&file)
+	data, err := marshalPersistedConfig(snapshot)
 	if err != nil {
-		return fmt.Errorf("config: marshal config: %w", err)
-	}
-
-	if len(data) == 0 || data[len(data)-1] != '\n' {
-		data = append(data, '\n')
+		return err
 	}
 
 	if err := os.WriteFile(l.ConfigPath(), data, 0o644); err != nil {
@@ -164,33 +153,22 @@ func defaultBaseDir() string {
 	return filepath.Join(home, dirName)
 }
 
-func parseConfig(data []byte, defaults Config) (*Config, error) {
+func parseConfig(data []byte) (*Config, error) {
+	return parseConfigWithContextDefaults(data, Default().Context)
+}
+
+func parseConfigWithContextDefaults(data []byte, contextDefaults ContextConfig) (*Config, error) {
 	if len(bytes.TrimSpace(data)) == 0 {
 		return &Config{}, nil
 	}
 
-	return parseCurrentConfig(data, defaults)
+	return parseCurrentConfig(data, contextDefaults)
 }
 
-type aliasConfig struct {
-	MaxLoop       int    `yaml:"max_loop"`
-	WorkspaceRoot string `yaml:"workspace_root"`
-}
-
-func parseCurrentConfig(data []byte, defaults Config) (*Config, error) {
+func parseCurrentConfig(data []byte, contextDefaults ContextConfig) (*Config, error) {
 	var file persistedConfig
 	if err := yaml.Unmarshal(data, &file); err != nil {
 		return nil, err
-	}
-
-	var aliases aliasConfig
-	if err := yaml.Unmarshal(data, &aliases); err == nil {
-		if file.MaxLoops == 0 && aliases.MaxLoop > 0 {
-			file.MaxLoops = aliases.MaxLoop
-		}
-		if strings.TrimSpace(file.Workdir) == "" && strings.TrimSpace(aliases.WorkspaceRoot) != "" {
-			file.Workdir = aliases.WorkspaceRoot
-		}
 	}
 
 	cfg := &Config{
@@ -200,11 +178,33 @@ func parseCurrentConfig(data []byte, defaults Config) (*Config, error) {
 		Shell:            strings.TrimSpace(file.Shell),
 		MaxLoops:         file.MaxLoops,
 		ToolTimeoutSec:   file.ToolTimeoutSec,
-		Context:          fromPersistedContextConfig(file.Context, defaults.Context),
+		Context:          fromPersistedContextConfig(file.Context, contextDefaults),
 		Tools:            file.Tools,
 	}
 
 	return cfg, nil
+}
+
+func marshalPersistedConfig(snapshot Config) ([]byte, error) {
+	file := persistedConfig{
+		SelectedProvider: snapshot.SelectedProvider,
+		CurrentModel:     snapshot.CurrentModel,
+		Workdir:          snapshot.Workdir,
+		Shell:            snapshot.Shell,
+		MaxLoops:         snapshot.MaxLoops,
+		ToolTimeoutSec:   snapshot.ToolTimeoutSec,
+		Context:          newPersistedContextConfig(snapshot.Context),
+		Tools:            snapshot.Tools,
+	}
+
+	data, err := yaml.Marshal(&file)
+	if err != nil {
+		return nil, fmt.Errorf("config: marshal config: %w", err)
+	}
+	if len(data) == 0 || data[len(data)-1] != '\n' {
+		data = append(data, '\n')
+	}
+	return data, nil
 }
 
 func newPersistedContextConfig(cfg ContextConfig) persistedContextConfig {
@@ -239,18 +239,10 @@ func fromPersistedContextConfig(file persistedContextConfig, defaults ContextCon
 	return out
 }
 
-func requiresConfigRewrite(data []byte) bool {
-	text := strings.TrimSpace(string(data))
-	switch {
-	case text == "":
-		return false
-	case strings.Contains(text, "\nproviders:") || strings.HasPrefix(text, "providers:"):
-		return true
-	case strings.Contains(text, "provider_overrides:"):
-		return true
-	case strings.Contains(text, "workspace_root:") || strings.Contains(text, "max_loop:"):
-		return true
-	default:
-		return false
+func persistedConfigDiffers(data []byte, cfg Config) (bool, error) {
+	canonical, err := marshalPersistedConfig(cfg)
+	if err != nil {
+		return false, err
 	}
+	return !bytes.Equal(bytes.TrimSpace(data), bytes.TrimSpace(canonical)), nil
 }
