@@ -79,9 +79,6 @@ providers:
     type: openai
     base_url: https://example.com/v1
     model: gpt-5.4
-    models:
-      - gpt-4.1
-      - gpt-5.4
     api_key_env: OPENAI_API_KEY
 `
 	if err := os.WriteFile(loader.ConfigPath(), []byte(strings.TrimSpace(legacy)+"\n"), 0o644); err != nil {
@@ -102,9 +99,6 @@ providers:
 	if cfg.CurrentModel != "gpt-5.4" {
 		t.Fatalf("expected current model to stay %q, got %q", "gpt-5.4", cfg.CurrentModel)
 	}
-	if len(provider.Models) != len(testDefaultProviderConfig().Models) {
-		t.Fatalf("expected builtin provider models, got %+v", provider.Models)
-	}
 
 	rewritten, err := os.ReadFile(loader.ConfigPath())
 	if err != nil {
@@ -119,5 +113,84 @@ providers:
 	}
 	if strings.Contains(text, "models:") || strings.Contains(text, "base_url:") || strings.Contains(text, "api_key_env:") {
 		t.Fatalf("expected rewritten config to omit provider metadata, got:\n%s", text)
+	}
+}
+
+func TestLoaderRewritesNormalizedSelectionStateOnLoad(t *testing.T) {
+	t.Parallel()
+
+	loader := NewLoader(t.TempDir(), testDefaultConfig())
+	if err := os.MkdirAll(loader.BaseDir(), 0o755); err != nil {
+		t.Fatalf("mkdir base dir: %v", err)
+	}
+
+	raw := `
+selected_provider: missing-provider
+workdir: .
+shell: powershell
+`
+	if err := os.WriteFile(loader.ConfigPath(), []byte(strings.TrimSpace(raw)+"\n"), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := loader.Load(context.Background())
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.SelectedProvider != testProviderName {
+		t.Fatalf("expected selected provider %q, got %q", testProviderName, cfg.SelectedProvider)
+	}
+	if cfg.CurrentModel != testModel {
+		t.Fatalf("expected current model %q, got %q", testModel, cfg.CurrentModel)
+	}
+
+	rewritten, err := os.ReadFile(loader.ConfigPath())
+	if err != nil {
+		t.Fatalf("read rewritten config: %v", err)
+	}
+	text := string(rewritten)
+	if !strings.Contains(text, "selected_provider: "+testProviderName) {
+		t.Fatalf("expected rewritten config to persist selected provider, got:\n%s", text)
+	}
+	if !strings.Contains(text, "current_model: "+testModel) {
+		t.Fatalf("expected rewritten config to persist current model, got:\n%s", text)
+	}
+}
+
+func TestLoaderRewritesMissingCurrentModelOnLoad(t *testing.T) {
+	t.Parallel()
+
+	loader := NewLoader(t.TempDir(), testDefaultConfig())
+	if err := os.MkdirAll(loader.BaseDir(), 0o755); err != nil {
+		t.Fatalf("mkdir base dir: %v", err)
+	}
+
+	raw := `
+selected_provider: openai
+workdir: .
+shell: powershell
+`
+	if err := os.WriteFile(loader.ConfigPath(), []byte(strings.TrimSpace(raw)+"\n"), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := loader.Load(context.Background())
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.SelectedProvider != testProviderName {
+		t.Fatalf("expected selected provider %q, got %q", testProviderName, cfg.SelectedProvider)
+	}
+	if cfg.CurrentModel != testModel {
+		t.Fatalf("expected current model %q, got %q", testModel, cfg.CurrentModel)
+	}
+
+	rewritten, err := os.ReadFile(loader.ConfigPath())
+	if err != nil {
+		t.Fatalf("read rewritten config: %v", err)
+	}
+	text := string(rewritten)
+	if !strings.Contains(text, "current_model: "+testModel) {
+		t.Fatalf("expected rewritten config to persist current model, got:\n%s", text)
 	}
 }

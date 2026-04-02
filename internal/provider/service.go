@@ -94,7 +94,8 @@ func (s *Service) SelectProvider(ctx context.Context, providerName string) (Prov
 		}
 
 		cfg.SelectedProvider = selected.Name
-		cfg.CurrentModel = selectModel(cfg.CurrentModel, modelDescriptorIDs(models), selected.Model)
+		nextModel, _ := resolveCurrentModel(cfg.CurrentModel, models, selected.Model)
+		cfg.CurrentModel = nextModel
 		selection = selectionFromConfig(*cfg)
 		return nil
 	})
@@ -173,6 +174,45 @@ func (s *Service) Build(ctx context.Context, cfg config.ResolvedProviderConfig) 
 	return s.registry.Build(ctx, cfg)
 }
 
+func (s *Service) EnsureSelection(ctx context.Context) (ProviderSelection, error) {
+	if err := s.validate(); err != nil {
+		return ProviderSelection{}, err
+	}
+	if err := ctx.Err(); err != nil {
+		return ProviderSelection{}, err
+	}
+
+	cfgSnapshot := s.manager.Get()
+	selected, err := cfgSnapshot.SelectedProviderConfig()
+	if err != nil {
+		return ProviderSelection{}, err
+	}
+
+	models := s.modelsForProvider(ctx, selected, modelQueryOptions{
+		allowSyncRefresh: true,
+		queueRefresh:     true,
+	})
+	nextModel, changed := resolveCurrentModel(cfgSnapshot.CurrentModel, models, selected.Model)
+	if !changed {
+		return selectionFromConfig(cfgSnapshot), nil
+	}
+
+	var selection ProviderSelection
+	err = s.manager.Update(ctx, func(cfg *config.Config) error {
+		if _, err := cfg.SelectedProviderConfig(); err != nil {
+			return err
+		}
+		cfg.CurrentModel = nextModel
+		selection = selectionFromConfig(*cfg)
+		return nil
+	})
+	if err != nil {
+		return ProviderSelection{}, err
+	}
+
+	return selection, nil
+}
+
 func (s *Service) validate() error {
 	if s == nil || s.manager == nil {
 		return ErrServiceManagerNil
@@ -189,7 +229,6 @@ type modelQueryOptions struct {
 }
 
 func (s *Service) modelsForProvider(ctx context.Context, providerCfg config.ProviderConfig, options modelQueryOptions) []ModelDescriptor {
-	manualModels := modelDescriptorsFromIDs(providerCfg.ConfiguredModels())
 	defaultModels := modelDescriptorsFromIDs([]string{providerCfg.Model})
 
 	cached, cachedOK := s.loadCatalogModels(ctx, providerCfg)
@@ -205,7 +244,7 @@ func (s *Service) modelsForProvider(ctx context.Context, providerCfg config.Prov
 		s.queueRefresh(providerCfg)
 	}
 
-	return MergeModelDescriptors(manualModels, cached, defaultModels)
+	return MergeModelDescriptors(cached, defaultModels)
 }
 
 func (s *Service) catalogExpired(ctx context.Context, providerCfg config.ProviderConfig) bool {
@@ -314,11 +353,18 @@ func selectionFromConfig(cfg config.Config) ProviderSelection {
 	}
 }
 
-func selectModel(currentModel string, models []string, fallback string) string {
-	if config.ContainsModelID(models, currentModel) {
-		return strings.TrimSpace(currentModel)
+func resolveCurrentModel(currentModel string, models []ModelDescriptor, fallback string) (string, bool) {
+	currentModel = strings.TrimSpace(currentModel)
+	if containsModelDescriptorID(models, currentModel) {
+		return currentModel, false
 	}
-	return strings.TrimSpace(fallback)
+
+	fallback = strings.TrimSpace(fallback)
+	if fallback != "" && containsModelDescriptorID(models, fallback) {
+		return fallback, currentModel != fallback
+	}
+
+	return currentModel, false
 }
 
 func catalogItemFromConfig(cfg config.ProviderConfig, models []ModelDescriptor) ProviderCatalogItem {
@@ -329,21 +375,16 @@ func catalogItemFromConfig(cfg config.ProviderConfig, models []ModelDescriptor) 
 	}
 }
 
-func modelDescriptorIDs(models []ModelDescriptor) []string {
-	if len(models) == 0 {
-		return nil
-	}
-
-	ids := make([]string, 0, len(models))
-	for _, model := range models {
-		if strings.TrimSpace(model.ID) == "" {
-			continue
-		}
-		ids = append(ids, model.ID)
-	}
-	return ids
-}
-
 func containsModelDescriptorID(models []ModelDescriptor, modelID string) bool {
-	return config.ContainsModelID(modelDescriptorIDs(models), modelID)
+	target := config.NormalizeKey(modelID)
+	if target == "" {
+		return false
+	}
+
+	for _, model := range models {
+		if config.NormalizeKey(model.ID) == target {
+			return true
+		}
+	}
+	return false
 }

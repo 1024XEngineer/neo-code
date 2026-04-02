@@ -2,7 +2,7 @@ package provider
 
 import "testing"
 
-func TestDescriptorFromMetadataPreservesRawFields(t *testing.T) {
+func TestDescriptorFromRawModelNormalizesUsefulFields(t *testing.T) {
 	t.Parallel()
 
 	raw := map[string]any{
@@ -21,7 +21,7 @@ func TestDescriptorFromMetadataPreservesRawFields(t *testing.T) {
 		},
 	}
 
-	descriptor, ok := DescriptorFromMetadata(raw)
+	descriptor, ok := DescriptorFromRawModel(raw)
 	if !ok {
 		t.Fatal("expected descriptor to be normalized")
 	}
@@ -34,12 +34,12 @@ func TestDescriptorFromMetadataPreservesRawFields(t *testing.T) {
 	if !descriptor.Capabilities["tool_call"] {
 		t.Fatalf("expected tool_call capability, got %+v", descriptor.Capabilities)
 	}
-	if _, ok := descriptor.Metadata["experimental"]; !ok {
-		t.Fatalf("expected unknown metadata to be preserved, got %+v", descriptor.Metadata)
+	if _, ok := descriptor.Capabilities["notes"]; ok {
+		t.Fatalf("expected non-bool capability values to be ignored, got %+v", descriptor.Capabilities)
 	}
 }
 
-func TestMergeModelDescriptorsPrefersEarlierSourceAndBackfillsMetadata(t *testing.T) {
+func TestMergeModelDescriptorsPrefersEarlierSourceAndBackfillsUsefulFields(t *testing.T) {
 	t.Parallel()
 
 	manual := []ModelDescriptor{{
@@ -51,9 +51,8 @@ func TestMergeModelDescriptorsPrefersEarlierSourceAndBackfillsMetadata(t *testin
 		Name:            "Discovered Name",
 		ContextWindow:   64000,
 		MaxOutputTokens: 4096,
-		Metadata: map[string]any{
-			"id":             "gpt-test",
-			"context_window": float64(64000),
+		Capabilities: map[string]bool{
+			"tool_call": true,
 		},
 	}}
 
@@ -67,7 +66,7 @@ func TestMergeModelDescriptorsPrefersEarlierSourceAndBackfillsMetadata(t *testin
 	if merged[0].ContextWindow != 64000 {
 		t.Fatalf("expected metadata to be backfilled, got %+v", merged[0])
 	}
-	if _, ok := merged[0].Metadata["context_window"]; !ok {
-		t.Fatalf("expected raw metadata to survive merge, got %+v", merged[0].Metadata)
+	if !merged[0].Capabilities["tool_call"] {
+		t.Fatalf("expected capabilities to be backfilled, got %+v", merged[0].Capabilities)
 	}
 }

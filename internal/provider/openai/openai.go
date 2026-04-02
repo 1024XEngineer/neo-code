@@ -94,7 +94,7 @@ func (p *Provider) DiscoverModels(ctx context.Context) ([]domain.ModelDescriptor
 
 	descriptors := make([]domain.ModelDescriptor, 0, len(rawModels))
 	for _, raw := range rawModels {
-		descriptor, ok := domain.DescriptorFromMetadata(raw)
+		descriptor, ok := domain.DescriptorFromRawModel(raw)
 		if !ok {
 			continue
 		}

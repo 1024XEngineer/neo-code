@@ -53,7 +53,6 @@ type ModelDescriptor struct {
 	ContextWindow   int             `json:"context_window,omitempty"`
 	MaxOutputTokens int             `json:"max_output_tokens,omitempty"`
 	Capabilities    map[string]bool `json:"capabilities,omitempty"`
-	Metadata        map[string]any  `json:"metadata,omitempty"`
 }
 
 type ProviderCatalogItem struct {

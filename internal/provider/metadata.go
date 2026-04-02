@@ -6,8 +6,8 @@ import (
 	"neo-code/internal/config"
 )
 
-// DescriptorFromMetadata normalizes a raw provider model object into a ModelDescriptor.
-func DescriptorFromMetadata(raw map[string]any) (ModelDescriptor, bool) {
+// DescriptorFromRawModel normalizes a raw provider model object into a ModelDescriptor.
+func DescriptorFromRawModel(raw map[string]any) (ModelDescriptor, bool) {
 	id := firstNonEmptyString(
 		stringValue(raw["id"]),
 		stringValue(raw["model"]),
@@ -24,7 +24,6 @@ func DescriptorFromMetadata(raw map[string]any) (ModelDescriptor, bool) {
 		ContextWindow:   firstPositiveInt(raw["context_window"], raw["contextLength"], raw["input_token_limit"], raw["max_context_tokens"]),
 		MaxOutputTokens: firstPositiveInt(raw["max_output_tokens"], raw["output_token_limit"], raw["max_tokens"]),
 		Capabilities:    boolMapValue(raw["capabilities"]),
-		Metadata:        cloneStringAnyMap(raw),
 	}
 	return normalizeModelDescriptor(descriptor), true
 }
@@ -91,7 +90,6 @@ func normalizeModelDescriptor(descriptor ModelDescriptor) ModelDescriptor {
 		descriptor.Name = descriptor.ID
 	}
 	descriptor.Capabilities = cloneStringBoolMap(descriptor.Capabilities)
-	descriptor.Metadata = cloneStringAnyMap(descriptor.Metadata)
 	return descriptor
 }
 
@@ -109,7 +107,6 @@ func mergeModelDescriptor(primary ModelDescriptor, secondary ModelDescriptor) Mo
 		primary.MaxOutputTokens = secondary.MaxOutputTokens
 	}
 	primary.Capabilities = mergeStringBoolMaps(primary.Capabilities, secondary.Capabilities)
-	primary.Metadata = mergeStringAnyMaps(primary.Metadata, secondary.Metadata)
 	return normalizeModelDescriptor(primary)
 }
 
@@ -127,32 +124,6 @@ func mergeStringBoolMaps(primary map[string]bool, secondary map[string]bool) map
 			continue
 		}
 		merged[key] = value
-	}
-	return merged
-}
-
-func mergeStringAnyMaps(primary map[string]any, secondary map[string]any) map[string]any {
-	if len(primary) == 0 && len(secondary) == 0 {
-		return nil
-	}
-
-	merged := cloneStringAnyMap(primary)
-	if merged == nil {
-		merged = make(map[string]any, len(secondary))
-	}
-
-	for key, value := range secondary {
-		current, exists := merged[key]
-		if !exists {
-			merged[key] = cloneJSONValue(value)
-			continue
-		}
-
-		currentMap, currentOK := current.(map[string]any)
-		valueMap, valueOK := value.(map[string]any)
-		if currentOK && valueOK {
-			merged[key] = mergeStringAnyMaps(currentMap, valueMap)
-		}
 	}
 	return merged
 }
@@ -232,32 +203,6 @@ func cloneStringBoolMap(source map[string]bool) map[string]bool {
 		cloned[key] = value
 	}
 	return cloned
-}
-
-func cloneStringAnyMap(source map[string]any) map[string]any {
-	if len(source) == 0 {
-		return nil
-	}
-	cloned := make(map[string]any, len(source))
-	for key, value := range source {
-		cloned[key] = cloneJSONValue(value)
-	}
-	return cloned
-}
-
-func cloneJSONValue(value any) any {
-	switch typed := value.(type) {
-	case map[string]any:
-		return cloneStringAnyMap(typed)
-	case []any:
-		cloned := make([]any, 0, len(typed))
-		for _, item := range typed {
-			cloned = append(cloned, cloneJSONValue(item))
-		}
-		return cloned
-	default:
-		return typed
-	}
 }
 
 func normalizeModelID(id string) string {

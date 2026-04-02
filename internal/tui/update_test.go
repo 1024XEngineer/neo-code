@@ -940,7 +940,6 @@ func TestAppUpdateAdditionalTransitions(t *testing.T) {
 func TestAppUpdateModelPickerEnterAppliesSelection(t *testing.T) {
 	manager := newTestConfigManager(t)
 	if err := manager.Update(context.Background(), func(cfg *config.Config) error {
-		cfg.Providers[0].Models = []string{cfg.Providers[0].Model, "gpt-4o"}
 		cfg.CurrentModel = "unsupported-current"
 		return nil
 	}); err != nil {
@@ -982,18 +981,10 @@ func TestAppUpdateModelPickerEnterAppliesSelection(t *testing.T) {
 func TestAppUpdateProviderPickerEnterAppliesSelection(t *testing.T) {
 	manager := newTestConfigManager(t)
 	if err := manager.Update(context.Background(), func(cfg *config.Config) error {
-		cfg.Providers = append(cfg.Providers, config.ProviderConfig{
-			Name:      "openai-alt",
-			Driver:    "openai",
-			BaseURL:   "https://alt.example.com/v1",
-			Model:     "gpt-4o",
-			Models:    []string{"gpt-4o"},
-			APIKeyEnv: config.OpenAIDefaultAPIKeyEnv,
-		})
 		cfg.CurrentModel = "unsupported-current"
 		return nil
 	}); err != nil {
-		t.Fatalf("append provider: %v", err)
+		t.Fatalf("set unsupported current model: %v", err)
 	}
 
 	runtime := newStubRuntime()
@@ -1013,14 +1004,14 @@ func TestAppUpdateProviderPickerEnterAppliesSelection(t *testing.T) {
 		if !ok {
 			continue
 		}
-		if candidate.id == "openai-alt" {
+		if candidate.id == config.QiniuName {
 			selectedIndex = idx
 			selected = candidate.id
 			break
 		}
 	}
 	if selectedIndex < 0 {
-		t.Fatalf("expected provider picker to include openai-alt")
+		t.Fatalf("expected provider picker to include %s", config.QiniuName)
 	}
 	app.providerPicker.Select(selectedIndex)
 
@@ -1040,7 +1031,7 @@ func TestAppUpdateProviderPickerEnterAppliesSelection(t *testing.T) {
 	if cfg.SelectedProvider != selected {
 		t.Fatalf("expected selected provider %q, got %q", selected, cfg.SelectedProvider)
 	}
-	if cfg.CurrentModel != "gpt-4o" {
+	if cfg.CurrentModel != config.QiniuDefaultModel {
 		t.Fatalf("expected current model to follow provider default, got %q", cfg.CurrentModel)
 	}
 }
@@ -1718,11 +1709,55 @@ func newTestConfigManager(t *testing.T) *config.Manager {
 
 func newTestProviderService(t *testing.T, manager *config.Manager) *provider.Service {
 	t.Helper()
-	registry, err := builtin.NewRegistry()
+
+	registry := provider.NewRegistry()
+	err := registry.Register(provider.DriverDefinition{
+		Name: config.OpenAIName,
+		Build: func(ctx context.Context, cfg config.ResolvedProviderConfig) (provider.Provider, error) {
+			return tuiTestProvider{}, nil
+		},
+	})
 	if err != nil {
 		t.Fatalf("register provider drivers: %v", err)
 	}
-	return provider.NewService(manager, registry, nil)
+	return provider.NewService(manager, registry, newTUITestCatalogStore())
+}
+
+type tuiTestProvider struct{}
+
+func (tuiTestProvider) Chat(ctx context.Context, req provider.ChatRequest, events chan<- provider.StreamEvent) (provider.ChatResponse, error) {
+	return provider.ChatResponse{}, nil
+}
+
+type tuiTestCatalogStore struct {
+	catalogs map[string]provider.ModelCatalog
+}
+
+func newTUITestCatalogStore() *tuiTestCatalogStore {
+	return &tuiTestCatalogStore{
+		catalogs: map[string]provider.ModelCatalog{},
+	}
+}
+
+func (s *tuiTestCatalogStore) Load(ctx context.Context, identity config.ProviderIdentity) (provider.ModelCatalog, error) {
+	if err := ctx.Err(); err != nil {
+		return provider.ModelCatalog{}, err
+	}
+
+	catalog, ok := s.catalogs[identity.Key()]
+	if !ok {
+		return provider.ModelCatalog{}, provider.ErrModelCatalogNotFound
+	}
+	return catalog, nil
+}
+
+func (s *tuiTestCatalogStore) Save(ctx context.Context, catalog provider.ModelCatalog) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	s.catalogs[catalog.Identity.Key()] = catalog
+	return nil
 }
 
 func collectTeaMessages(cmd tea.Cmd) []tea.Msg {

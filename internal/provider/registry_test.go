@@ -99,72 +99,47 @@ func TestRegistryRejectsDuplicateDriverRegistration(t *testing.T) {
 	}
 }
 
-func TestServiceListProvidersUsesConfiguredMetadata(t *testing.T) {
+func TestServiceListProvidersFallsBackToProviderDefaultModel(t *testing.T) {
 	t.Parallel()
 
 	manager := newTestManager(t)
-	if err := manager.Update(context.Background(), func(cfg *config.Config) error {
-		cfg.Providers = append(cfg.Providers, config.ProviderConfig{
-			Name:      "unsupported",
-			Driver:    "custom",
-			BaseURL:   "https://example.com",
-			Model:     "custom-model",
-			Models:    []string{"custom-model"},
-			APIKeyEnv: "CUSTOM_API_KEY",
-		})
-		return nil
-	}); err != nil {
-		t.Fatalf("append provider: %v", err)
-	}
 
 	service := provider.NewService(manager, newTestRegistry(t), newCatalogStoreStub())
 	items, err := service.ListProviders(context.Background())
 	if err != nil {
 		t.Fatalf("ListProviders() error = %v", err)
 	}
-	expectedModels := map[string]int{
-		config.OpenAIName: len(config.OpenAIProvider().SupportedModels()),
-		config.GeminiName: len(config.GeminiProvider().SupportedModels()),
-		config.OpenLLName: len(config.OpenLLProvider().SupportedModels()),
-		config.QiniuName:  len(config.QiniuProvider().SupportedModels()),
+	expected := map[string]int{
+		config.OpenAIName: 1,
+		config.GeminiName: 1,
+		config.OpenLLName: 1,
+		config.QiniuName:  1,
 	}
-	if len(items) != len(expectedModels) {
-		t.Fatalf("expected only supported providers, got %d", len(items))
+	if len(items) != len(expected) {
+		t.Fatalf("expected only builtin providers, got %d", len(items))
 	}
 
 	for _, item := range items {
-		wantModels, ok := expectedModels[item.ID]
+		wantModels, ok := expected[item.ID]
 		if !ok {
-			t.Fatalf("unexpected supported provider %q", item.ID)
+			t.Fatalf("unexpected builtin provider %q", item.ID)
 		}
 		if item.Description != "" {
 			t.Fatalf("expected provider description to stay empty for hidden metadata, got %q", item.Description)
 		}
 		if len(item.Models) != wantModels {
-			t.Fatalf("expected provider models to come from config, got %+v", item.Models)
+			t.Fatalf("expected provider models to fall back to the default model, got %+v", item.Models)
 		}
-		delete(expectedModels, item.ID)
+		delete(expected, item.ID)
 	}
-	if len(expectedModels) != 0 {
-		t.Fatalf("missing supported providers from catalog: %+v", expectedModels)
+	if len(expected) != 0 {
+		t.Fatalf("missing builtin providers from catalog: %+v", expected)
 	}
 }
 
 func TestServiceSelectProviderAndSetCurrentModel(t *testing.T) {
-	defaults := builtin.DefaultConfig()
-	defaults.Providers = append(defaults.Providers, config.ProviderConfig{
-		Name:      "custom-main",
-		Driver:    "custom",
-		BaseURL:   "https://example.com",
-		Model:     "custom-model",
-		Models:    []string{"custom-model", "custom-alt"},
-		APIKeyEnv: "CUSTOM_API_KEY",
-	})
-	manager := newTestManagerWithDefaults(t, defaults)
+	manager := newTestManager(t)
 	registry := newTestRegistry(t)
-	if err := registry.Register(stubDriver("custom")); err != nil {
-		t.Fatalf("register stub driver: %v", err)
-	}
 
 	if err := manager.Update(context.Background(), func(cfg *config.Config) error {
 		cfg.CurrentModel = "gpt-5.4"
@@ -173,13 +148,28 @@ func TestServiceSelectProviderAndSetCurrentModel(t *testing.T) {
 		t.Fatalf("seed current model: %v", err)
 	}
 
-	service := provider.NewService(manager, registry, newCatalogStoreStub())
+	store := newCatalogStoreStub()
+	identity, err := config.QiniuProvider().Identity()
+	if err != nil {
+		t.Fatalf("qiniu provider identity: %v", err)
+	}
+	if err := store.Save(context.Background(), provider.ModelCatalog{
+		SchemaVersion: 1,
+		Identity:      identity,
+		Models: []provider.ModelDescriptor{
+			{ID: "qiniu-alt", Name: "qiniu-alt"},
+		},
+	}); err != nil {
+		t.Fatalf("seed catalog: %v", err)
+	}
 
-	selection, err := service.SelectProvider(context.Background(), "custom-main")
+	service := provider.NewService(manager, registry, store)
+
+	selection, err := service.SelectProvider(context.Background(), config.QiniuName)
 	if err != nil {
 		t.Fatalf("SelectProvider() error = %v", err)
 	}
-	if selection.ProviderID != "custom-main" || selection.ModelID != "custom-model" {
+	if selection.ProviderID != config.QiniuName || selection.ModelID != config.QiniuDefaultModel {
 		t.Fatalf("unexpected selection after switch: %+v", selection)
 	}
 
@@ -187,12 +177,12 @@ func TestServiceSelectProviderAndSetCurrentModel(t *testing.T) {
 		t.Fatalf("expected ErrModelNotFound, got %v", err)
 	}
 
-	selection, err = service.SetCurrentModel(context.Background(), "custom-alt")
+	selection, err = service.SetCurrentModel(context.Background(), "qiniu-alt")
 	if err != nil {
 		t.Fatalf("SetCurrentModel() error = %v", err)
 	}
-	if selection.ModelID != "custom-alt" {
-		t.Fatalf("expected selected model %q, got %+v", "custom-alt", selection)
+	if selection.ModelID != "qiniu-alt" {
+		t.Fatalf("expected selected model %q, got %+v", "qiniu-alt", selection)
 	}
 
 	cfg := manager.Get()
@@ -200,10 +190,10 @@ func TestServiceSelectProviderAndSetCurrentModel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SelectedProviderConfig() error = %v", err)
 	}
-	if selected.Name != "custom-main" {
-		t.Fatalf("expected selected provider %q, got %+v", "custom-main", selected)
+	if selected.Name != config.QiniuName {
+		t.Fatalf("expected selected provider %q, got %+v", config.QiniuName, selected)
 	}
-	if selected.Model != "custom-model" || cfg.CurrentModel != "custom-alt" {
+	if selected.Model != config.QiniuDefaultModel || cfg.CurrentModel != "qiniu-alt" {
 		t.Fatalf("expected provider default and current model to diverge safely, got provider=%q current=%q", selected.Model, cfg.CurrentModel)
 	}
 
@@ -215,30 +205,25 @@ func TestServiceSelectProviderAndSetCurrentModel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SelectedProviderConfig() after reload error = %v", err)
 	}
-	if selected.Model != "custom-model" || reloaded.CurrentModel != "custom-alt" {
+	if selected.Model != config.QiniuDefaultModel || reloaded.CurrentModel != "qiniu-alt" {
 		t.Fatalf("expected current model persistence without overriding provider default, got provider=%q current=%q", selected.Model, reloaded.CurrentModel)
 	}
 }
 
-func TestServiceModelOperationsUseProviderConfigEvenWithoutDriver(t *testing.T) {
+func TestServiceModelOperationsUseBuiltinConfigEvenWithoutDriver(t *testing.T) {
 	t.Parallel()
 
-	manager := newTestManager(t)
-	if err := manager.Update(context.Background(), func(cfg *config.Config) error {
-		cfg.Providers = append(cfg.Providers, config.ProviderConfig{
-			Name:      "broken-provider",
-			Driver:    "missing-driver",
-			BaseURL:   "https://example.com",
-			Model:     "broken-model",
-			Models:    []string{"broken-model", "broken-alt"},
-			APIKeyEnv: "BROKEN_API_KEY",
-		})
-		cfg.SelectedProvider = "broken-provider"
-		cfg.CurrentModel = "broken-model"
-		return nil
-	}); err != nil {
-		t.Fatalf("append broken provider: %v", err)
-	}
+	defaults := builtin.DefaultConfig()
+	defaults.Providers = []config.ProviderConfig{{
+		Name:      config.OpenAIName,
+		Driver:    "missing-driver",
+		BaseURL:   config.OpenAIDefaultBaseURL,
+		Model:     "broken-model",
+		APIKeyEnv: config.OpenAIDefaultAPIKeyEnv,
+	}}
+	defaults.SelectedProvider = config.OpenAIName
+	defaults.CurrentModel = "broken-model"
+	manager := newTestManagerWithDefaults(t, defaults)
 
 	service := provider.NewService(manager, newTestRegistry(t), newCatalogStoreStub())
 
@@ -246,39 +231,32 @@ func TestServiceModelOperationsUseProviderConfigEvenWithoutDriver(t *testing.T) 
 	if err != nil {
 		t.Fatalf("ListModels() error = %v", err)
 	}
-	if len(models) != 2 || models[1].ID != "broken-alt" {
-		t.Fatalf("expected models from provider config, got %+v", models)
+	if len(models) != 1 || models[0].ID != "broken-model" {
+		t.Fatalf("expected default model fallback, got %+v", models)
 	}
 
-	selection, err := service.SetCurrentModel(context.Background(), "broken-alt")
-	if err != nil {
-		t.Fatalf("SetCurrentModel() error = %v", err)
-	}
-	if selection.ModelID != "broken-alt" {
-		t.Fatalf("expected current model to update from provider config, got %+v", selection)
+	if _, err := service.SetCurrentModel(context.Background(), "broken-alt"); !errors.Is(err, provider.ErrModelNotFound) {
+		t.Fatalf("expected SetCurrentModel() to reject undiscovered model, got %v", err)
 	}
 }
 
 func TestServiceSelectProviderRejectsUnsupportedDriver(t *testing.T) {
 	t.Parallel()
 
-	manager := newTestManager(t)
-	if err := manager.Update(context.Background(), func(cfg *config.Config) error {
-		cfg.Providers = append(cfg.Providers, config.ProviderConfig{
-			Name:      "broken-provider",
-			Driver:    "missing-driver",
-			BaseURL:   "https://example.com",
-			Model:     "broken-model",
-			Models:    []string{"broken-model"},
-			APIKeyEnv: "BROKEN_API_KEY",
-		})
-		return nil
-	}); err != nil {
-		t.Fatalf("append broken provider: %v", err)
-	}
+	defaults := builtin.DefaultConfig()
+	defaults.Providers = []config.ProviderConfig{{
+		Name:      config.OpenAIName,
+		Driver:    "missing-driver",
+		BaseURL:   config.OpenAIDefaultBaseURL,
+		Model:     config.OpenAIDefaultModel,
+		APIKeyEnv: config.OpenAIDefaultAPIKeyEnv,
+	}}
+	defaults.SelectedProvider = config.OpenAIName
+	defaults.CurrentModel = config.OpenAIDefaultModel
+	manager := newTestManagerWithDefaults(t, defaults)
 
 	service := provider.NewService(manager, newTestRegistry(t), newCatalogStoreStub())
-	if _, err := service.SelectProvider(context.Background(), "broken-provider"); !errors.Is(err, provider.ErrDriverNotFound) {
+	if _, err := service.SelectProvider(context.Background(), config.OpenAIName); !errors.Is(err, provider.ErrDriverNotFound) {
 		t.Fatalf("expected SelectProvider() to preserve ErrDriverNotFound, got %v", err)
 	}
 }

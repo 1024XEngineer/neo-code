@@ -10,12 +10,12 @@ NeoCode 的 provider 架构采用**集中式配置 + 驱动复用**的设计：
 
 - **配置层**（`internal/config/builtin_providers.go`）：集中管理所有 provider 的元数据
   - Provider 名称、Driver 名称
-  - Base URL、默认模型、模型列表
-  - API Key 环境变量名
+  - Base URL、默认模型、API Key 环境变量名
 
 - **驱动层**（`internal/provider/openai/` 等）：负责实际的 API 协议实现
   - 请求构造、响应解析
   - 流式输出、Tool Call 处理
+  - 动态模型发现（如 `GET /models`）与结果归一化
 
 ### 驱动复用
 
@@ -46,11 +46,6 @@ const (
     DeepSeekDefaultAPIKeyEnv = "DEEPSEEK_API_KEY"
 )
 
-var deepSeekModels = []string{
-    DeepSeekDefaultModel,
-    "deepseek-coder",
-}
-
 // DeepSeekProvider 返回 DeepSeek provider 的默认配置。
 func DeepSeekProvider() ProviderConfig {
     return ProviderConfig{
@@ -58,7 +53,6 @@ func DeepSeekProvider() ProviderConfig {
         Driver:    "openai",                    // 复用 openai 驱动
         BaseURL:   DeepSeekDefaultBaseURL,
         Model:     DeepSeekDefaultModel,
-        Models:    append([]string(nil), deepSeekModels...),
         APIKeyEnv: DeepSeekDefaultAPIKeyEnv,
     }
 }
@@ -182,19 +176,12 @@ const (
     AnthropicDefaultAPIKeyEnv = "ANTHROPIC_API_KEY"
 )
 
-var anthropicModels = []string{
-    AnthropicDefaultModel,
-    "claude-opus-4-20250514",
-    "claude-3-5-sonnet-20241022",
-}
-
 func AnthropicProvider() ProviderConfig {
     return ProviderConfig{
         Name:      AnthropicName,
         Driver:    "anthropic",               // 使用新的 anthropic 驱动
         BaseURL:   AnthropicDefaultBaseURL,
         Model:     AnthropicDefaultModel,
-        Models:    append([]string(nil), anthropicModels...),
         APIKeyEnv: AnthropicDefaultAPIKeyEnv,
     }
 }
@@ -226,7 +213,7 @@ func DefaultProviders() []ProviderConfig {
 | `ChatRequest` | `internal/provider/types.go` | 请求：`Model`、`SystemPrompt`、`Messages`、`Tools` |
 | `ChatResponse` | `internal/provider/types.go` | 响应：`Message`、`FinishReason`、`Usage` |
 | `StreamEvent` | `internal/provider/types.go` | 流式事件：`TextDelta`、`ToolCallStart` |
-| `ProviderConfig` | `internal/config/model.go` | 配置：`Name`、`Driver`、`BaseURL`、`Model`、`Models`、`APIKeyEnv` |
+| `ProviderConfig` | `internal/config/model.go` | 配置：`Name`、`Driver`、`BaseURL`、`Model`、`APIKeyEnv` |
 
 ## 设计约束
 
@@ -242,7 +229,7 @@ func DefaultProviders() []ProviderConfig {
 
 ✅ **驱动职责清晰**
 - 驱动只负责协议构造与响应解析
-- 不持有模型列表、base_url 等配置信息
+- 不持有 provider 元数据；模型目录由 driver 发现，缓存与合并由 service 处理
 
 ✅ **架构分层**
 - 厂商差异收敛在 `internal/provider/` 内
@@ -274,9 +261,10 @@ func DefaultProviders() []ProviderConfig {
         OpenAIProvider(),  // OpenAI 官方 API
         GeminiProvider(),  // Google Gemini (OpenAI-compatible)
         OpenLLProvider(),  // OpenLL 服务 (OpenAI-compatible)
+        QiniuProvider(),   // 七牛云推理服务 (OpenAI-compatible)
     }
 }
 ```
 
-所有内置 provider 都复用 `openai` 驱动，配置集中在 `builtin_providers.go`。
+所有内置 provider 都通过代码集中注册。模型选择器展示的候选模型由默认模型、动态发现结果和本地缓存共同组成。
 

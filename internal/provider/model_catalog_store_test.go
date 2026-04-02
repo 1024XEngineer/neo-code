@@ -24,11 +24,13 @@ func TestJSONModelCatalogStoreRoundTrip(t *testing.T) {
 		FetchedAt:     time.Date(2026, 4, 2, 10, 0, 0, 0, time.UTC),
 		ExpiresAt:     time.Date(2026, 4, 3, 10, 0, 0, 0, time.UTC),
 		Models: []ModelDescriptor{{
-			ID:   "gpt-test",
-			Name: "GPT Test",
-			Metadata: map[string]any{
-				"id":           "gpt-test",
-				"experimental": map[string]any{"tier": "beta"},
+			ID:              "gpt-test",
+			Name:            "GPT Test",
+			Description:     "normalized model",
+			ContextWindow:   128000,
+			MaxOutputTokens: 8192,
+			Capabilities: map[string]bool{
+				"tool_call": true,
 			},
 		}},
 	}
@@ -47,8 +49,11 @@ func TestJSONModelCatalogStoreRoundTrip(t *testing.T) {
 	if len(got.Models) != 1 {
 		t.Fatalf("expected 1 model, got %+v", got.Models)
 	}
-	if _, ok := got.Models[0].Metadata["experimental"]; !ok {
-		t.Fatalf("expected nested metadata to survive round-trip, got %+v", got.Models[0].Metadata)
+	if got.Models[0].ContextWindow != 128000 || got.Models[0].MaxOutputTokens != 8192 {
+		t.Fatalf("expected normalized token fields to survive round-trip, got %+v", got.Models[0])
+	}
+	if !got.Models[0].Capabilities["tool_call"] {
+		t.Fatalf("expected capabilities to survive round-trip, got %+v", got.Models[0].Capabilities)
 	}
 }
 

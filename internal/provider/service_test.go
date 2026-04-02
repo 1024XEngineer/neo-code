@@ -25,24 +25,12 @@ func TestNewService(t *testing.T) {
 	}
 }
 
-func TestServiceListProvidersFiltersUnsupportedDrivers(t *testing.T) {
+func TestServiceListProvidersReturnsBuiltinCatalog(t *testing.T) {
 	t.Parallel()
 
 	manager := config.NewManager(config.NewLoader(t.TempDir(), testDefaultConfig()))
 	if _, err := manager.Load(context.Background()); err != nil {
 		t.Fatalf("Load() error = %v", err)
-	}
-	if err := manager.Update(context.Background(), func(cfg *config.Config) error {
-		cfg.Providers = append(cfg.Providers, config.ProviderConfig{
-			Name:      "unsupported",
-			Driver:    "custom",
-			BaseURL:   "https://example.com/v1",
-			Model:     "custom-model",
-			APIKeyEnv: "CUSTOM_API_KEY",
-		})
-		return nil
-	}); err != nil {
-		t.Fatalf("append provider: %v", err)
 	}
 
 	registry := NewRegistry()
@@ -55,10 +43,18 @@ func TestServiceListProvidersFiltersUnsupportedDrivers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListProviders() error = %v", err)
 	}
-	if len(items) != 4 {
-		t.Fatalf("expected 4 supported builtin providers, got %d", len(items))
+	expected := config.DefaultProviders()
+	if len(items) != len(expected) {
+		t.Fatalf("expected %d builtin providers, got %d", len(expected), len(items))
+	}
+	expectedNames := make(map[string]struct{}, len(expected))
+	for _, providerCfg := range expected {
+		expectedNames[providerCfg.Name] = struct{}{}
 	}
 	for _, item := range items {
+		if _, ok := expectedNames[item.ID]; !ok {
+			t.Fatalf("unexpected provider in catalog: %+v", item)
+		}
 		if len(item.Models) != 1 {
 			t.Fatalf("expected default fallback model for %q, got %+v", item.ID, item.Models)
 		}
@@ -68,17 +64,7 @@ func TestServiceListProvidersFiltersUnsupportedDrivers(t *testing.T) {
 func TestServiceSelectProviderFallsBackToProviderDefault(t *testing.T) {
 	t.Parallel()
 
-	defaults := testDefaultConfig()
-	defaults.Providers = append(defaults.Providers, config.ProviderConfig{
-		Name:      "custom-main",
-		Driver:    "custom",
-		BaseURL:   "https://example.com/v1",
-		Model:     "custom-model",
-		Models:    []string{"custom-model", "custom-alt"},
-		APIKeyEnv: "CUSTOM_API_KEY",
-	})
-
-	manager := config.NewManager(config.NewLoader(t.TempDir(), defaults))
+	manager := config.NewManager(config.NewLoader(t.TempDir(), testDefaultConfig()))
 	if _, err := manager.Load(context.Background()); err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
@@ -90,21 +76,21 @@ func TestServiceSelectProviderFallsBackToProviderDefault(t *testing.T) {
 	}
 
 	registry := NewRegistry()
-	if err := registry.Register(testDriverDefinition("custom", nil)); err != nil {
-		t.Fatalf("register custom driver: %v", err)
+	if err := registry.Register(testDriverDefinition(config.OpenAIName, nil)); err != nil {
+		t.Fatalf("register openai driver: %v", err)
 	}
 
 	service := NewService(manager, registry, newMemoryCatalogStore())
-	selection, err := service.SelectProvider(context.Background(), "custom-main")
+	selection, err := service.SelectProvider(context.Background(), config.QiniuName)
 	if err != nil {
 		t.Fatalf("SelectProvider() error = %v", err)
 	}
-	if selection.ProviderID != "custom-main" || selection.ModelID != "custom-model" {
+	if selection.ProviderID != config.QiniuName || selection.ModelID != config.QiniuDefaultModel {
 		t.Fatalf("unexpected selection: %+v", selection)
 	}
 }
 
-func TestServiceListModelsUsesConfiguredModelsWithoutDiscovery(t *testing.T) {
+func TestServiceEnsureSelectionRepairsInvalidCurrentModel(t *testing.T) {
 	t.Parallel()
 
 	manager := config.NewManager(config.NewLoader(t.TempDir(), testDefaultConfig()))
@@ -112,19 +98,41 @@ func TestServiceListModelsUsesConfiguredModelsWithoutDiscovery(t *testing.T) {
 		t.Fatalf("Load() error = %v", err)
 	}
 	if err := manager.Update(context.Background(), func(cfg *config.Config) error {
-		cfg.Providers = append(cfg.Providers, config.ProviderConfig{
-			Name:      "broken-provider",
-			Driver:    "missing-driver",
-			BaseURL:   "https://example.com/v1",
-			Model:     "broken-model",
-			Models:    []string{"broken-model", "broken-alt"},
-			APIKeyEnv: "BROKEN_API_KEY",
-		})
-		cfg.SelectedProvider = "broken-provider"
-		cfg.CurrentModel = "broken-model"
+		cfg.CurrentModel = "unsupported-current"
 		return nil
 	}); err != nil {
-		t.Fatalf("append provider: %v", err)
+		t.Fatalf("seed invalid current model: %v", err)
+	}
+
+	registry := NewRegistry()
+	if err := registry.Register(testDriverDefinition(config.OpenAIName, nil)); err != nil {
+		t.Fatalf("register openai driver: %v", err)
+	}
+
+	service := NewService(manager, registry, newMemoryCatalogStore())
+	selection, err := service.EnsureSelection(context.Background())
+	if err != nil {
+		t.Fatalf("EnsureSelection() error = %v", err)
+	}
+	if selection.ProviderID != config.OpenAIName || selection.ModelID != config.OpenAIDefaultModel {
+		t.Fatalf("unexpected normalized selection: %+v", selection)
+	}
+
+	reloaded, err := manager.Reload(context.Background())
+	if err != nil {
+		t.Fatalf("Reload() error = %v", err)
+	}
+	if reloaded.CurrentModel != config.OpenAIDefaultModel {
+		t.Fatalf("expected rewritten current model %q, got %q", config.OpenAIDefaultModel, reloaded.CurrentModel)
+	}
+}
+
+func TestServiceListModelsFallsBackToDefaultModelWithoutDiscovery(t *testing.T) {
+	t.Parallel()
+
+	manager := config.NewManager(config.NewLoader(t.TempDir(), testDefaultConfig()))
+	if _, err := manager.Load(context.Background()); err != nil {
+		t.Fatalf("Load() error = %v", err)
 	}
 
 	service := NewService(manager, NewRegistry(), newMemoryCatalogStore())
@@ -132,26 +140,30 @@ func TestServiceListModelsUsesConfiguredModelsWithoutDiscovery(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListModels() error = %v", err)
 	}
-	if len(models) != 2 || models[1].ID != "broken-alt" {
-		t.Fatalf("expected configured models fallback, got %+v", models)
+	if len(models) != 1 || models[0].ID != config.OpenAIDefaultModel {
+		t.Fatalf("expected default model fallback, got %+v", models)
 	}
 }
 
-func TestServiceSetCurrentModelUsesConfiguredModels(t *testing.T) {
-	t.Parallel()
+func TestServiceSetCurrentModelUsesDiscoveredModels(t *testing.T) {
+	t.Setenv(testAPIKeyEnv, "test-key")
 
 	manager := config.NewManager(config.NewLoader(t.TempDir(), testDefaultConfig()))
 	if _, err := manager.Load(context.Background()); err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if err := manager.Update(context.Background(), func(cfg *config.Config) error {
-		cfg.Providers[0].Models = []string{cfg.Providers[0].Model, "gpt-4o"}
-		return nil
-	}); err != nil {
-		t.Fatalf("seed provider models: %v", err)
+
+	registry := NewRegistry()
+	if err := registry.Register(testDriverDefinition(config.OpenAIName, func(ctx context.Context, cfg config.ResolvedProviderConfig) ([]ModelDescriptor, error) {
+		return []ModelDescriptor{
+			{ID: cfg.Model, Name: cfg.Model},
+			{ID: "gpt-4o", Name: "GPT-4o"},
+		}, nil
+	})); err != nil {
+		t.Fatalf("register discovery driver: %v", err)
 	}
 
-	service := NewService(manager, NewRegistry(), newMemoryCatalogStore())
+	service := NewService(manager, registry, newMemoryCatalogStore())
 	selection, err := service.SetCurrentModel(context.Background(), "gpt-4o")
 	if err != nil {
 		t.Fatalf("SetCurrentModel() error = %v", err)
@@ -177,11 +189,6 @@ func TestServiceListModelsDiscoversAndCachesOnMiss(t *testing.T) {
 			Name:            "Server Model",
 			ContextWindow:   32000,
 			MaxOutputTokens: 4096,
-			Metadata: map[string]any{
-				"id":                "server-model",
-				"context_window":    float64(32000),
-				"max_output_tokens": float64(4096),
-			},
 		}}, nil
 	})); err != nil {
 		t.Fatalf("register discovery driver: %v", err)
@@ -210,25 +217,14 @@ func TestServiceListModelsDiscoversAndCachesOnMiss(t *testing.T) {
 }
 
 func TestServiceListModelsReturnsStaleCacheAndRefreshesInBackground(t *testing.T) {
-	t.Setenv("CUSTOM_API_KEY", "test-key")
+	t.Setenv(testAPIKeyEnv, "test-key")
 
-	defaults := testDefaultConfig()
-	defaults.Providers = []config.ProviderConfig{{
-		Name:      "custom",
-		Driver:    "custom",
-		BaseURL:   "https://example.com/v1",
-		Model:     "fallback-model",
-		APIKeyEnv: "CUSTOM_API_KEY",
-	}}
-	defaults.SelectedProvider = "custom"
-	defaults.CurrentModel = "fallback-model"
-
-	manager := config.NewManager(config.NewLoader(t.TempDir(), defaults))
+	manager := config.NewManager(config.NewLoader(t.TempDir(), testDefaultConfig()))
 	if _, err := manager.Load(context.Background()); err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
 
-	identity, err := defaults.Providers[0].Identity()
+	identity, err := config.OpenAIProvider().Identity()
 	if err != nil {
 		t.Fatalf("Identity() error = %v", err)
 	}
@@ -250,7 +246,7 @@ func TestServiceListModelsReturnsStaleCacheAndRefreshesInBackground(t *testing.T
 
 	refreshed := make(chan struct{}, 1)
 	registry := NewRegistry()
-	if err := registry.Register(testDriverDefinition("custom", func(ctx context.Context, cfg config.ResolvedProviderConfig) ([]ModelDescriptor, error) {
+	if err := registry.Register(testDriverDefinition(config.OpenAIName, func(ctx context.Context, cfg config.ResolvedProviderConfig) ([]ModelDescriptor, error) {
 		select {
 		case refreshed <- struct{}{}:
 		default:
@@ -335,37 +331,65 @@ func TestServiceBuildAndValidate(t *testing.T) {
 	})
 }
 
-func TestSelectModelHelper(t *testing.T) {
+func TestResolveCurrentModelHelper(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
 		name         string
 		currentModel string
-		models       []string
+		models       []ModelDescriptor
 		fallback     string
 		expected     string
+		changed      bool
 	}{
 		{
 			name:         "current model in list",
 			currentModel: "gpt-4o",
-			models:       []string{"gpt-4.1", "gpt-4o", "gpt-5.4"},
-			fallback:     "gpt-4.1",
-			expected:     "gpt-4o",
+			models: []ModelDescriptor{
+				{ID: "gpt-4.1"},
+				{ID: "gpt-4o"},
+				{ID: "gpt-5.4"},
+			},
+			fallback: "gpt-4.1",
+			expected: "gpt-4o",
+			changed:  false,
 		},
 		{
-			name:         "current model not in list",
+			name:         "current model falls back to provider default",
 			currentModel: "unknown-model",
-			models:       []string{"gpt-4.1", "gpt-4o", "gpt-5.4"},
-			fallback:     "gpt-4.1",
-			expected:     "gpt-4.1",
+			models: []ModelDescriptor{
+				{ID: "gpt-4.1"},
+				{ID: "gpt-4o"},
+				{ID: "gpt-5.4"},
+			},
+			fallback: "gpt-4.1",
+			expected: "gpt-4.1",
+			changed:  true,
+		},
+		{
+			name:         "missing fallback keeps current model unchanged",
+			currentModel: "unknown-model",
+			models: []ModelDescriptor{
+				{ID: "gpt-4o"},
+			},
+			fallback: "gpt-4.1",
+			expected: "unknown-model",
+			changed:  false,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			if got := selectModel(tt.currentModel, tt.models, tt.fallback); got != tt.expected {
-				t.Fatalf("selectModel() = %q, want %q", got, tt.expected)
+			got, changed := resolveCurrentModel(tt.currentModel, tt.models, tt.fallback)
+			if got != tt.expected || changed != tt.changed {
+				t.Fatalf(
+					"resolveCurrentModel() = (%q, %v), want (%q, %v)",
+					got,
+					changed,
+					tt.expected,
+					tt.changed,
+				)
 			}
 		})
 	}

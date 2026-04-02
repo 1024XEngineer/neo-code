@@ -22,7 +22,6 @@ func testDefaultProviderConfig() ProviderConfig {
 		Driver:    testProviderName,
 		BaseURL:   testBaseURL,
 		Model:     testModel,
-		Models:    []string{testModel, "gpt-4o", "gpt-5.4", "gpt-5.3-codex"},
 		APIKeyEnv: testAPIKeyEnv,
 	}
 }
@@ -120,11 +119,11 @@ providers:
 			},
 		},
 		{
-			name: "legacy format",
+			name: "legacy fields are ignored",
 			data: `
 selected_provider: openai
 current_model: gpt-4o
-workspace_root: .
+workspace_root: ./definitely-legacy-root
 shell: bash
 max_loop: 5
 providers:
@@ -137,8 +136,8 @@ providers:
 `,
 			assert: func(t *testing.T, cfg *Config) {
 				t.Helper()
-				if cfg.MaxLoops != 5 {
-					t.Fatalf("expected max loops 5, got %d", cfg.MaxLoops)
+				if cfg.MaxLoops != DefaultMaxLoops {
+					t.Fatalf("expected legacy max_loop to be ignored, got %d", cfg.MaxLoops)
 				}
 				provider, err := cfg.SelectedProviderConfig()
 				if err != nil {
@@ -150,8 +149,8 @@ providers:
 				if cfg.CurrentModel != "gpt-4o" {
 					t.Fatalf("expected current model %q, got %q", "gpt-4o", cfg.CurrentModel)
 				}
-				if len(provider.Models) != len(testDefaultProviderConfig().Models) {
-					t.Fatalf("expected builtin provider models, got %+v", provider.Models)
+				if strings.Contains(filepath.ToSlash(cfg.Workdir), "definitely-legacy-root") {
+					t.Fatalf("expected legacy workspace_root to be ignored, got %q", cfg.Workdir)
 				}
 				if cfg.Tools.WebFetch.MaxResponseBytes != DefaultWebFetchMaxResponseBytes {
 					t.Fatalf("expected default max_response_bytes %d, got %d", DefaultWebFetchMaxResponseBytes, cfg.Tools.WebFetch.MaxResponseBytes)
@@ -167,7 +166,7 @@ providers:
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			cfg, err := parseConfig([]byte(tt.data), *testDefaultConfig())
+			cfg, err := parseConfig([]byte(tt.data))
 			if err != nil {
 				t.Fatalf("parseConfig() error = %v", err)
 			}
@@ -296,7 +295,6 @@ func TestManagerConcurrentAccess(t *testing.T) {
 					for k := range next.Providers {
 						if next.Providers[k].Name == next.SelectedProvider {
 							next.Providers[k].Model = model
-							next.Providers[k].Models = append([]string(nil), models...)
 						}
 					}
 					return nil
@@ -509,18 +507,6 @@ func TestProviderConfigValidateFailures(t *testing.T) {
 			},
 			expectErr: "api_key_env is empty",
 		},
-		{
-			name: "default model missing from models",
-			provider: ProviderConfig{
-				Name:      testProviderName,
-				Driver:    testProviderName,
-				BaseURL:   testBaseURL,
-				Model:     testModel,
-				Models:    []string{"gpt-4o"},
-				APIKeyEnv: testAPIKeyEnv,
-			},
-			expectErr: "default model \"gpt-4.1\" is not in models",
-		},
 	}
 
 	for _, tt := range tests {
@@ -574,7 +560,6 @@ func TestLoaderLoadAndSaveRoundTrip(t *testing.T) {
 	}
 
 	cfg.CurrentModel = "gpt-5.4"
-	cfg.Providers[0].Models = []string{"gpt-4.1", "gpt-5.4"}
 	cfg.Providers[0].BaseURL = "https://ignored.example/v1"
 	cfg.Tools.WebFetch.MaxResponseBytes = 1024
 	cfg.Tools.WebFetch.SupportedContentTypes = []string{"text/html", "application/json"}
@@ -613,9 +598,6 @@ func TestLoaderLoadAndSaveRoundTrip(t *testing.T) {
 	}
 	if provider.BaseURL != testBaseURL {
 		t.Fatalf("expected provider base url to come from builtin definition, got %q", provider.BaseURL)
-	}
-	if len(provider.Models) != len(testDefaultProviderConfig().Models) {
-		t.Fatalf("expected provider models to come from builtin definition, got %+v", provider.Models)
 	}
 	if reloaded.Tools.WebFetch.MaxResponseBytes != 1024 {
 		t.Fatalf("expected max_response_bytes %d, got %d", 1024, reloaded.Tools.WebFetch.MaxResponseBytes)
@@ -656,25 +638,41 @@ func TestLoaderUsesUpdatedBuiltinProviderWhenUserHasNoOverride(t *testing.T) {
 	}
 }
 
-func TestApplyProviderDefaultsMatchesByNameOnly(t *testing.T) {
-	defaults := []ProviderConfig{testDefaultProviderConfig()}
+func TestApplyDefaultsReplacesProvidersWithBuiltinSnapshot(t *testing.T) {
+	t.Parallel()
+
 	current := Config{
-		Providers: []ProviderConfig{
-			{
-				Name:   "openai-alt",
-				Driver: testProviderName,
-			},
-		},
+		Providers: []ProviderConfig{{
+			Name:      "openai-alt",
+			Driver:    "custom",
+			BaseURL:   "https://example.com/v1",
+			Model:     "custom-model",
+			APIKeyEnv: "CUSTOM_API_KEY",
+		}},
+		SelectedProvider: "openai-alt",
+		CurrentModel:     "custom-model",
 	}
 
-	current.ApplyDefaultsFrom(Config{Providers: defaults})
+	current.ApplyDefaultsFrom(*testDefaultConfig())
 
-	provider, err := current.ProviderByName("openai-alt")
+	if len(current.Providers) != 1 {
+		t.Fatalf("expected builtin provider snapshot, got %+v", current.Providers)
+	}
+	if _, err := current.ProviderByName("openai-alt"); err == nil {
+		t.Fatalf("expected custom provider to be dropped, got %+v", current.Providers)
+	}
+	provider, err := current.ProviderByName(testProviderName)
 	if err != nil {
-		t.Fatalf("ProviderByName(openai-alt) error = %v", err)
+		t.Fatalf("ProviderByName(%s) error = %v", testProviderName, err)
 	}
-	if provider.BaseURL != "" || provider.Model != "" || provider.APIKeyEnv != "" || len(provider.Models) != 0 {
-		t.Fatalf("expected provider metadata to stay empty when only driver matches, got %+v", provider)
+	if provider.BaseURL != testBaseURL || provider.Model != testModel || provider.APIKeyEnv != testAPIKeyEnv {
+		t.Fatalf("expected builtin provider metadata, got %+v", provider)
+	}
+	if current.SelectedProvider != testProviderName {
+		t.Fatalf("expected selected provider to reset to builtin %q, got %q", testProviderName, current.SelectedProvider)
+	}
+	if current.CurrentModel != testModel {
+		t.Fatalf("expected current model to reset with selected builtin provider, got %q", current.CurrentModel)
 	}
 }
 
@@ -757,13 +755,13 @@ func TestNormalizeWorkdirAndClone(t *testing.T) {
 	cfg := testDefaultConfig()
 	cloned := cfg.Clone()
 	cloned.CurrentModel = "modified"
-	cloned.Providers[0].Models[0] = "modified-model"
+	cloned.Providers[0].BaseURL = "https://modified.example/v1"
 	cloned.Tools.WebFetch.SupportedContentTypes[0] = "application/json"
 	if cfg.CurrentModel == cloned.CurrentModel {
 		t.Fatalf("expected clone to be independent from source")
 	}
-	if cfg.Providers[0].Models[0] == cloned.Providers[0].Models[0] {
-		t.Fatalf("expected provider models to be cloned")
+	if cfg.Providers[0].BaseURL == cloned.Providers[0].BaseURL {
+		t.Fatalf("expected providers to be cloned")
 	}
 	if cfg.Tools.WebFetch.SupportedContentTypes[0] == cloned.Tools.WebFetch.SupportedContentTypes[0] {
 		t.Fatalf("expected webfetch supported content types to be cloned")

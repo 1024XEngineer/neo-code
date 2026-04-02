@@ -22,14 +22,7 @@ import (
 func NewProgram(ctx context.Context) (*tea.Program, error) {
 	loader := config.NewLoader("", builtin.DefaultConfig())
 	manager := config.NewManager(loader)
-	cfg, err := manager.Load(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	toolRegistry := buildToolRegistry(cfg)
-	toolManager, err := buildToolManager(toolRegistry)
-	if err != nil {
+	if _, err := manager.Load(ctx); err != nil {
 		return nil, err
 	}
 
@@ -38,6 +31,17 @@ func NewProgram(ctx context.Context) (*tea.Program, error) {
 		return nil, err
 	}
 	providerService := provider.NewService(manager, providerRegistry, nil)
+	if _, err := providerService.EnsureSelection(ctx); err != nil {
+		return nil, err
+	}
+
+	cfg := manager.Get()
+
+	toolRegistry := buildToolRegistry(cfg)
+	toolManager, err := buildToolManager(toolRegistry)
+	if err != nil {
+		return nil, err
+	}
 
 	sessionStore := agentruntime.NewSessionStore(loader.BaseDir())
 	runtimeSvc := agentruntime.NewWithFactory(
