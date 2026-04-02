@@ -80,5 +80,5 @@ func buildToolManager(registry *tools.Registry) (tools.Manager, error) {
 	if err != nil {
 		return nil, err
 	}
-	return tools.NewManager(registry, engine, nil)
+	return tools.NewManager(registry, engine, security.NewWorkspaceSandbox())
 }

@@ -76,6 +76,7 @@ func TestBuildToolManagerWrapsRegistry(t *testing.T) {
 
 	registry := tools.NewRegistry()
 	registry.Register(stubToolForBootstrap{name: "bash", content: "ok"})
+	workdir := t.TempDir()
 	manager, err := buildToolManager(registry)
 	if err != nil {
 		t.Fatalf("buildToolManager() error = %v", err)
@@ -95,12 +96,22 @@ func TestBuildToolManagerWrapsRegistry(t *testing.T) {
 	result, execErr := manager.Execute(context.Background(), tools.ToolCallInput{
 		Name:      "bash",
 		Arguments: []byte(`{"command":"echo hi"}`),
+		Workdir:   workdir,
 	})
 	if execErr != nil {
 		t.Fatalf("Execute() error = %v", execErr)
 	}
 	if result.Content != "ok" {
 		t.Fatalf("expected ok result, got %+v", result)
+	}
+
+	_, execErr = manager.Execute(context.Background(), tools.ToolCallInput{
+		Name:      "bash",
+		Arguments: []byte(`{"command":"echo hi","workdir":"../outside"}`),
+		Workdir:   workdir,
+	})
+	if execErr == nil {
+		t.Fatalf("expected sandbox rejection for outside workdir")
 	}
 }
 
