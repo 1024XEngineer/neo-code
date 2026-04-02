@@ -8,6 +8,7 @@ import (
 
 	"github.com/atotto/clipboard"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 type copyCodeButtonBinding struct {
@@ -15,50 +16,71 @@ type copyCodeButtonBinding struct {
 	Code string
 }
 
+type markdownSegmentKind int
+
+const (
+	markdownSegmentText markdownSegmentKind = iota
+	markdownSegmentCode
+)
+
+type markdownSegment struct {
+	Kind markdownSegmentKind
+	Text string
+}
+
 var (
 	copyCodeButtonPattern = regexp.MustCompile(`\[Copy code #([0-9]+)\]`)
 	clipboardWriteAll     = clipboard.WriteAll
 )
 
-func collectCopyCodeButtons(content string, startID int) []copyCodeButtonBinding {
-	codeBlocks := extractFencedCodeBlocks(content)
-	if len(codeBlocks) == 0 {
-		return nil
+func splitMarkdownSegments(content string) []markdownSegment {
+	parts := strings.Split(content, "```")
+	if len(parts) == 1 {
+		return []markdownSegment{{Kind: markdownSegmentText, Text: content}}
 	}
 
-	bindings := make([]copyCodeButtonBinding, 0, len(codeBlocks))
-	for i, code := range codeBlocks {
-		bindings = append(bindings, copyCodeButtonBinding{
-			ID:   startID + i,
-			Code: code,
-		})
+	segments := make([]markdownSegment, 0, len(parts))
+	for i, part := range parts {
+		if i%2 == 0 {
+			if part != "" {
+				segments = append(segments, markdownSegment{Kind: markdownSegmentText, Text: part})
+			}
+			continue
+		}
+
+		code := extractCodeBlockContent(part)
+		if code == "" {
+			continue
+		}
+		segments = append(segments, markdownSegment{Kind: markdownSegmentCode, Text: code})
 	}
-	return bindings
+	if len(segments) == 0 {
+		return []markdownSegment{{Kind: markdownSegmentText, Text: content}}
+	}
+	return segments
 }
 
 func extractFencedCodeBlocks(content string) []string {
-	parts := strings.Split(content, "```")
-	if len(parts) < 3 {
-		return nil
-	}
-
-	blocks := make([]string, 0, len(parts)/2)
-	for i := 1; i < len(parts); i += 2 {
-		code := strings.Trim(parts[i], "\n")
-		if code == "" {
-			continue
+	segments := splitMarkdownSegments(content)
+	blocks := make([]string, 0, len(segments))
+	for _, segment := range segments {
+		if segment.Kind == markdownSegmentCode && strings.TrimSpace(segment.Text) != "" {
+			blocks = append(blocks, strings.TrimSpace(segment.Text))
 		}
-		lines := strings.Split(code, "\n")
-		if len(lines) > 1 && !strings.Contains(lines[0], " ") && !strings.Contains(lines[0], "\t") {
-			code = strings.Join(lines[1:], "\n")
-		}
-		code = strings.TrimSpace(code)
-		if code == "" {
-			continue
-		}
-		blocks = append(blocks, code)
 	}
 	return blocks
+}
+
+func extractCodeBlockContent(raw string) string {
+	code := strings.Trim(raw, "\n")
+	if code == "" {
+		return ""
+	}
+	lines := strings.Split(code, "\n")
+	if len(lines) > 1 && !strings.Contains(lines[0], " ") && !strings.Contains(lines[0], "\t") {
+		code = strings.Join(lines[1:], "\n")
+	}
+	return strings.TrimSpace(code)
 }
 
 func (a *App) setCodeCopyBlocks(bindings []copyCodeButtonBinding) {
@@ -68,28 +90,36 @@ func (a *App) setCodeCopyBlocks(bindings []copyCodeButtonBinding) {
 	}
 }
 
-func parseCopyCodeButtonID(line string) (int, bool) {
+func parseCopyCodeButton(line string) (id int, startCol int, endCol int, ok bool) {
 	clean := ansiEscapePattern.ReplaceAllString(line, "")
-	matches := copyCodeButtonPattern.FindStringSubmatch(clean)
-	if len(matches) != 2 {
-		return 0, false
+	matches := copyCodeButtonPattern.FindStringSubmatchIndex(clean)
+	if len(matches) < 4 {
+		return 0, 0, 0, false
 	}
 
-	id, err := strconv.Atoi(matches[1])
+	buttonText := clean[matches[0]:matches[1]]
+	idText := clean[matches[2]:matches[3]]
+	id, err := strconv.Atoi(idText)
 	if err != nil {
-		return 0, false
+		return 0, 0, 0, false
 	}
-	return id, true
+
+	startCol = lipgloss.Width(clean[:matches[0]])
+	endCol = startCol + lipgloss.Width(buttonText)
+	return id, startCol, endCol, true
 }
 
 func (a *App) handleTranscriptCopyClick(msg tea.MouseMsg) bool {
-	line, ok := a.transcriptLineAtMouse(msg)
+	line, relativeX, ok := a.transcriptLineAtMouse(msg)
 	if !ok {
 		return false
 	}
 
-	buttonID, ok := parseCopyCodeButtonID(line)
+	buttonID, startCol, endCol, ok := parseCopyCodeButton(line)
 	if !ok {
+		return false
+	}
+	if relativeX < startCol || relativeX >= endCol {
 		return false
 	}
 
@@ -114,20 +144,20 @@ func (a *App) handleTranscriptCopyClick(msg tea.MouseMsg) bool {
 	return true
 }
 
-func (a App) transcriptLineAtMouse(msg tea.MouseMsg) (string, bool) {
+func (a App) transcriptLineAtMouse(msg tea.MouseMsg) (line string, relativeX int, ok bool) {
 	if !a.isMouseWithinTranscript(msg) {
-		return "", false
+		return "", 0, false
 	}
 
-	_, y, _, _ := a.transcriptBounds()
+	x, y, _, _ := a.transcriptBounds()
 	lineIndex := msg.Y - y
 	if lineIndex < 0 {
-		return "", false
+		return "", 0, false
 	}
 
 	lines := strings.Split(a.transcript.View(), "\n")
 	if lineIndex >= len(lines) {
-		return "", false
+		return "", 0, false
 	}
-	return lines[lineIndex], true
+	return lines[lineIndex], msg.X - x, true
 }

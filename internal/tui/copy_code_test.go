@@ -25,12 +25,15 @@ func TestExtractFencedCodeBlocks(t *testing.T) {
 }
 
 func TestParseCopyCodeButtonID(t *testing.T) {
-	id, ok := parseCopyCodeButtonID("[Copy code #12]")
+	id, startCol, endCol, ok := parseCopyCodeButton("[Copy code #12]")
 	if !ok || id != 12 {
 		t.Fatalf("expected id=12 parse success, got id=%d ok=%v", id, ok)
 	}
+	if startCol != 0 || endCol <= startCol {
+		t.Fatalf("expected valid button range, got start=%d end=%d", startCol, endCol)
+	}
 
-	if _, ok := parseCopyCodeButtonID("no button"); ok {
+	if _, _, _, ok := parseCopyCodeButton("no button"); ok {
 		t.Fatalf("expected parse failure for non-button line")
 	}
 }
@@ -106,6 +109,14 @@ func TestTranscriptMouseClickCopiesCodeBlock(t *testing.T) {
 	}
 	if !strings.Contains(app.state.StatusText, "Copied code block #1") {
 		t.Fatalf("expected copy success status, got %q", app.state.StatusText)
+	}
+
+	if handled := app.handleTranscriptMouse(tea.MouseMsg{
+		X:      x + 1,
+		Y:      y + targetY,
+		Button: tea.MouseButtonLeft,
+	}); handled {
+		t.Fatalf("expected click outside copy button text to be ignored")
 	}
 }
 

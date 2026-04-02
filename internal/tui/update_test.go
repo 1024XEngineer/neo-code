@@ -1502,8 +1502,11 @@ func TestViewActivityPreviewAndStatusHelpers(t *testing.T) {
 
 	rendered := app.renderMessageContent("before\n```go\nfmt.Println(1)\n```\nafter", 30, app.styles.messageBody)
 	rendered = stripANSI(rendered)
-	if !strings.Contains(rendered, "before") || !strings.Contains(rendered, "fmt.Println(1)") || !strings.Contains(rendered, "after") {
+	if !strings.Contains(rendered, "before") || !strings.Contains(rendered, "fmt.Println(") || !strings.Contains(rendered, "1)") || !strings.Contains(rendered, "after") {
 		t.Fatalf("expected mixed prose and code to render, got %q", rendered)
+	}
+	if !strings.Contains(rendered, "[Copy code #1]") {
+		t.Fatalf("expected copy button alongside code block, got %q", rendered)
 	}
 
 	if got := compactStatusText("\n  hello   world \n", 0); got != "hello world" {
@@ -1611,8 +1614,11 @@ func TestRenderMessageContentShowsPlaceholderWhenMarkdownFails(t *testing.T) {
 
 	content := "before\n```go\nfmt.Println(1)\n```\nafter"
 	rendered := app.renderMessageContent(content, 50, app.styles.messageBody)
-	if !strings.Contains(rendered, emptyMessageText) {
-		t.Fatalf("expected placeholder when markdown render fails, got %q", rendered)
+	if !strings.Contains(rendered, "fmt.Println(1)") {
+		t.Fatalf("expected code block to keep rendering when markdown prose fails, got %q", rendered)
+	}
+	if !strings.Contains(rendered, "[Copy code #1]") {
+		t.Fatalf("expected copy button for rendered code block, got %q", rendered)
 	}
 }
 
