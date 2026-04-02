@@ -31,7 +31,7 @@
   - 当前 `provider`
   - 当前 `model`
 - `context.Builder` 负责统一组装：
-  - 固定核心 system prompt
+  - 固定核心 system prompt sections
   - 从 `workdir` 向上发现的 `AGENTS.md`
   - 系统状态摘要（`workdir` / `shell` / `provider` / `model` / git branch / git dirty）
   - 裁剪后的历史消息
@@ -42,7 +42,7 @@
 
 当前 `system prompt` 按以下顺序拼装：
 
-1. 固定核心指令
+1. 固定核心 sections
 2. `Project Rules` section
 3. `System State` section
 
@@ -51,6 +51,7 @@
 - 规则文件只支持大写文件名 `AGENTS.md`
 - 多份命中结果按“从全局到局部”的顺序注入
 - git 只注入摘要，不注入完整 `git status`
+- 各 section 统一由 `internal/context` 内部的 `renderPromptSection` 和 `composeSystemPrompt` 渲染，`runtime` 仍只消费最终字符串
 
 ## 流式桥接
 

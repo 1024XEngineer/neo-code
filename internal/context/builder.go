@@ -30,12 +30,12 @@ func (b *DefaultBuilder) Build(ctx context.Context, input BuildInput) (BuildResu
 		return BuildResult{}, err
 	}
 
+	sections := append([]promptSection{}, defaultSystemPromptSections()...)
+	sections = append(sections, renderProjectRulesSection(rules))
+	sections = append(sections, renderSystemStateSection(systemState))
+
 	return BuildResult{
-		SystemPrompt: composeSystemPrompt(
-			defaultSystemPrompt(),
-			renderProjectRulesSection(rules),
-			renderSystemStateSection(systemState),
-		),
-		Messages: trimMessages(input.Messages),
+		SystemPrompt: composeSystemPrompt(sections...),
+		Messages:     trimMessages(input.Messages),
 	}, nil
 }
