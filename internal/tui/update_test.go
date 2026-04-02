@@ -1489,6 +1489,16 @@ func TestHandleViewportKeysPageScrollingUsesFullPage(t *testing.T) {
 	if app.transcript.YOffset != 0 {
 		t.Fatalf("expected page up to return a full page, got offset %d", app.transcript.YOffset)
 	}
+
+	app.handleViewportKeys(&app.transcript, tea.KeyMsg{Type: tea.KeyEnd})
+	if !app.transcript.AtBottom() {
+		t.Fatalf("expected end to jump to bottom")
+	}
+
+	app.handleViewportKeys(&app.transcript, tea.KeyMsg{Type: tea.KeyHome})
+	if !app.transcript.AtTop() {
+		t.Fatalf("expected home to jump to top")
+	}
 }
 
 func TestTranscriptMouseWheelScrollsOnlyInsideTranscript(t *testing.T) {
@@ -1540,6 +1550,81 @@ func TestTranscriptMouseWheelScrollsOnlyInsideTranscript(t *testing.T) {
 	_ = collectTeaMessages(cmd)
 	if app.transcript.YOffset != 0 {
 		t.Fatalf("expected wheel event outside transcript to be ignored, got %d", app.transcript.YOffset)
+	}
+
+	app.transcript.Height = 0
+	if app.isMouseWithinTranscript(tea.MouseMsg{X: x + 1, Y: y + 1}) {
+		t.Fatalf("expected zero-height transcript bounds to reject mouse hits")
+	}
+
+	app.transcript.Height = 10
+	if app.handleTranscriptMouse(tea.MouseMsg{X: x + 1, Y: y + 1, Button: tea.MouseButtonLeft}) {
+		t.Fatalf("expected non-wheel mouse button to be ignored")
+	}
+
+	app.width = 100
+	app.height = 32
+	app.resizeComponents()
+	stackX, stackY, _, stackH := app.transcriptBounds()
+	if stackH <= 0 || !app.isMouseWithinTranscript(tea.MouseMsg{X: stackX + 1, Y: stackY + 1}) {
+		t.Fatalf("expected stacked layout transcript bounds to accept mouse hits")
+	}
+}
+
+func TestViewActivityPreviewAndStatusHelpers(t *testing.T) {
+	manager := newTestConfigManager(t)
+	runtime := newStubRuntime()
+	app, err := New(nil, manager, runtime, newTestProviderService(t, manager))
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	if app.activityPreviewHeight() != 0 || app.renderActivityPreview(80) != "" {
+		t.Fatalf("expected empty activity state to render nothing")
+	}
+
+	fixed := time.Date(2026, 4, 2, 9, 30, 0, 0, time.UTC)
+	app.activities = []activityEntry{
+		{Time: fixed, Kind: "tool", Title: "first", Detail: "alpha"},
+		{Time: fixed, Kind: "", Title: "second", Detail: ""},
+		{Time: fixed, Kind: "provider", Title: "third", Detail: "retry"},
+		{Time: fixed, Kind: "run", Title: "fourth", Detail: "done"},
+	}
+	app.focus = panelActivity
+	if app.focusLabel() != focusLabelActivity {
+		t.Fatalf("expected activity focus label, got %q", app.focusLabel())
+	}
+	if app.activityPreviewHeight() != 6 {
+		t.Fatalf("expected fixed activity preview height, got %d", app.activityPreviewHeight())
+	}
+
+	preview := app.renderActivityPreview(64)
+	if !strings.Contains(preview, "second") || !strings.Contains(preview, "third") || !strings.Contains(preview, "fourth") {
+		t.Fatalf("expected last activity entries in preview, got %q", preview)
+	}
+	if strings.Contains(preview, "first") {
+		t.Fatalf("expected oldest activity entry to be trimmed from preview, got %q", preview)
+	}
+
+	line := app.renderActivityLine(activityEntry{Time: fixed, Kind: "", Title: "single line", Detail: ""}, 80)
+	if !strings.Contains(line, "EVENT") || strings.Contains(line, "single line:") {
+		t.Fatalf("expected fallback kind without detail suffix, got %q", line)
+	}
+
+	rendered := app.renderMessageContent("before\n```go\nfmt.Println(1)\n```\nafter", 30, app.styles.messageBody)
+	if !strings.Contains(rendered, "before") || !strings.Contains(rendered, "fmt.Println(1)") || !strings.Contains(rendered, "after") {
+		t.Fatalf("expected mixed prose and code to render, got %q", rendered)
+	}
+
+	if got := compactStatusText("\n  hello   world \n", 0); got != "hello world" {
+		t.Fatalf("expected compact status without truncation, got %q", got)
+	}
+	if got := compactStatusText("\n \n", 10); got != "" {
+		t.Fatalf("expected empty compact status for blank input, got %q", got)
+	}
+
+	if app.statusBadge("failed request") == "" || app.statusBadge("canceled") == "" || app.statusBadge("ready") == "" {
+		t.Fatalf("expected status badge branches to render non-empty output")
 	}
 }
 
