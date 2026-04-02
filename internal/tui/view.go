@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/list"
@@ -347,6 +348,22 @@ func (a App) renderHelp(width int) string {
 }
 
 func (a App) renderMessageContent(content string, width int, bodyStyle lipgloss.Style) string {
+	rendered, err := a.renderMarkdownContent(content, max(16, width-2))
+	if err == nil {
+		return bodyStyle.Render(rendered)
+	}
+
+	return a.renderMessageContentLegacy(content, width, bodyStyle)
+}
+
+func (a App) renderMarkdownContent(content string, width int) (string, error) {
+	if a.markdownRenderer == nil {
+		return "", fmt.Errorf("tui: markdown renderer is nil")
+	}
+	return a.markdownRenderer.Render(content, width)
+}
+
+func (a App) renderMessageContentLegacy(content string, width int, bodyStyle lipgloss.Style) string {
 	parts := strings.Split(content, "```")
 	if len(parts) == 1 {
 		return bodyStyle.Render(wrapPlain(content, max(16, width-2)))

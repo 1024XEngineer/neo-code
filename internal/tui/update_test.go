@@ -3,6 +3,8 @@ package tui
 import (
 	"bytes"
 	"context"
+	"errors"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -28,6 +30,25 @@ type stubRuntime struct {
 	loadErr      error
 	cancelCalls  int
 	cancelResult bool
+}
+
+type stubMarkdownRenderer struct {
+	output string
+	err    error
+	calls  int
+}
+
+var ansiPattern = regexp.MustCompile(`\x1b\[[0-9;]*m`)
+
+func (r *stubMarkdownRenderer) Render(content string, width int) (string, error) {
+	r.calls++
+	if r.err != nil {
+		return "", r.err
+	}
+	if r.output != "" {
+		return r.output, nil
+	}
+	return content, nil
 }
 
 func newStubRuntime() *stubRuntime {
@@ -1331,7 +1352,7 @@ func TestAdditionalRenderingAndToolChunkBranches(t *testing.T) {
 	}
 
 	rendered := app.renderMessageContent("```\n```", 20, app.styles.messageBody)
-	if !strings.Contains(rendered, emptyMessageText) {
+	if !strings.Contains(stripANSI(rendered), emptyMessageText) {
 		t.Fatalf("expected empty code block placeholder, got %q", rendered)
 	}
 }
@@ -1480,6 +1501,7 @@ func TestViewActivityPreviewAndStatusHelpers(t *testing.T) {
 	}
 
 	rendered := app.renderMessageContent("before\n```go\nfmt.Println(1)\n```\nafter", 30, app.styles.messageBody)
+	rendered = stripANSI(rendered)
 	if !strings.Contains(rendered, "before") || !strings.Contains(rendered, "fmt.Println(1)") || !strings.Contains(rendered, "after") {
 		t.Fatalf("expected mixed prose and code to render, got %q", rendered)
 	}
@@ -1493,6 +1515,43 @@ func TestViewActivityPreviewAndStatusHelpers(t *testing.T) {
 
 	if app.statusBadge("failed request") == "" || app.statusBadge("canceled") == "" || app.statusBadge("ready") == "" {
 		t.Fatalf("expected status badge branches to render non-empty output")
+	}
+}
+
+func TestRenderMessageContentUsesMarkdownRenderer(t *testing.T) {
+	manager := newTestConfigManager(t)
+	runtime := newStubRuntime()
+	app, err := New(nil, manager, runtime, newTestProviderService(t, manager))
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	stub := &stubMarkdownRenderer{output: "markdown-rendered"}
+	app.markdownRenderer = stub
+
+	rendered := app.renderMessageContent("# Title\n\n- item", 40, app.styles.messageBody)
+	if !strings.Contains(rendered, "markdown-rendered") {
+		t.Fatalf("expected markdown renderer output, got %q", rendered)
+	}
+	if stub.calls != 1 {
+		t.Fatalf("expected markdown renderer to be called once, got %d", stub.calls)
+	}
+}
+
+func TestRenderMessageContentFallsBackWhenMarkdownFails(t *testing.T) {
+	manager := newTestConfigManager(t)
+	runtime := newStubRuntime()
+	app, err := New(nil, manager, runtime, newTestProviderService(t, manager))
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	app.markdownRenderer = &stubMarkdownRenderer{err: errors.New("render failed")}
+
+	content := "before\n```go\nfmt.Println(1)\n```\nafter"
+	rendered := app.renderMessageContent(content, 50, app.styles.messageBody)
+	if !strings.Contains(rendered, "before") || !strings.Contains(rendered, "fmt.Println(1)") || !strings.Contains(rendered, "after") {
+		t.Fatalf("expected legacy markdown fallback output, got %q", rendered)
 	}
 }
 
@@ -1621,4 +1680,8 @@ func collectTeaMessages(cmd tea.Cmd) []tea.Msg {
 	default:
 		return []tea.Msg{typed}
 	}
+}
+
+func stripANSI(input string) string {
+	return ansiPattern.ReplaceAllString(input, "")
 }
