@@ -1538,7 +1538,7 @@ func TestRenderMessageContentUsesMarkdownRenderer(t *testing.T) {
 	}
 }
 
-func TestRenderMessageContentFallsBackWhenMarkdownFails(t *testing.T) {
+func TestRenderMessageContentShowsPlaceholderWhenMarkdownFails(t *testing.T) {
 	manager := newTestConfigManager(t)
 	runtime := newStubRuntime()
 	app, err := New(nil, manager, runtime, newTestProviderService(t, manager))
@@ -1550,8 +1550,24 @@ func TestRenderMessageContentFallsBackWhenMarkdownFails(t *testing.T) {
 
 	content := "before\n```go\nfmt.Println(1)\n```\nafter"
 	rendered := app.renderMessageContent(content, 50, app.styles.messageBody)
-	if !strings.Contains(rendered, "before") || !strings.Contains(rendered, "fmt.Println(1)") || !strings.Contains(rendered, "after") {
-		t.Fatalf("expected legacy markdown fallback output, got %q", rendered)
+	if !strings.Contains(rendered, emptyMessageText) {
+		t.Fatalf("expected placeholder when markdown render fails, got %q", rendered)
+	}
+}
+
+func TestRenderMessageContentShowsPlaceholderWhenRendererMissing(t *testing.T) {
+	manager := newTestConfigManager(t)
+	runtime := newStubRuntime()
+	app, err := New(nil, manager, runtime, newTestProviderService(t, manager))
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	app.markdownRenderer = nil
+
+	rendered := app.renderMessageContent("content", 50, app.styles.messageBody)
+	if !strings.Contains(rendered, emptyMessageText) {
+		t.Fatalf("expected placeholder when markdown renderer is missing, got %q", rendered)
 	}
 }
 

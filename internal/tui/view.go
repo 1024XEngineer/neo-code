@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"fmt"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/list"
@@ -348,56 +347,15 @@ func (a App) renderHelp(width int) string {
 }
 
 func (a App) renderMessageContent(content string, width int, bodyStyle lipgloss.Style) string {
-	rendered, err := a.renderMarkdownContent(content, max(16, width-2))
-	if err == nil {
-		return bodyStyle.Render(rendered)
-	}
-
-	return a.renderMessageContentLegacy(content, width, bodyStyle)
-}
-
-func (a App) renderMarkdownContent(content string, width int) (string, error) {
 	if a.markdownRenderer == nil {
-		return "", fmt.Errorf("tui: markdown renderer is nil")
-	}
-	return a.markdownRenderer.Render(content, width)
-}
-
-func (a App) renderMessageContentLegacy(content string, width int, bodyStyle lipgloss.Style) string {
-	parts := strings.Split(content, "```")
-	if len(parts) == 1 {
-		return bodyStyle.Render(wrapPlain(content, max(16, width-2)))
-	}
-
-	blocks := make([]string, 0, len(parts))
-	for i, part := range parts {
-		if i%2 == 0 {
-			trimmed := strings.Trim(part, "\n")
-			if trimmed == "" {
-				continue
-			}
-			blocks = append(blocks, bodyStyle.Render(wrapPlain(trimmed, max(16, width-2))))
-			continue
-		}
-
-		code := strings.Trim(part, "\n")
-		lines := strings.Split(code, "\n")
-		if len(lines) > 1 && !strings.Contains(lines[0], " ") && !strings.Contains(lines[0], "\t") {
-			code = strings.Join(lines[1:], "\n")
-		}
-		codeWidth := max(10, width-4)
-		renderedCode := wrapCodeBlock(code, codeWidth)
-		if strings.TrimSpace(renderedCode) == "" {
-			renderedCode = emptyMessageText
-		}
-		blocks = append(blocks, a.styles.codeBlock.Width(width).Render(a.styles.codeText.Width(codeWidth).Render(renderedCode)))
-	}
-
-	if len(blocks) == 0 {
 		return bodyStyle.Render(emptyMessageText)
 	}
 
-	return lipgloss.JoinVertical(lipgloss.Left, blocks...)
+	rendered, err := a.markdownRenderer.Render(content, max(16, width-2))
+	if err != nil {
+		return bodyStyle.Render(emptyMessageText)
+	}
+	return bodyStyle.Render(rendered)
 }
 
 func (a App) statusBadge(text string) string {
