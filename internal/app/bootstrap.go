@@ -11,6 +11,7 @@ import (
 	"neo-code/internal/provider"
 	"neo-code/internal/provider/builtin"
 	agentruntime "neo-code/internal/runtime"
+	"neo-code/internal/security"
 	"neo-code/internal/tools"
 	"neo-code/internal/tools/bash"
 	"neo-code/internal/tools/filesystem"
@@ -27,6 +28,10 @@ func NewProgram(ctx context.Context) (*tea.Program, error) {
 	}
 
 	toolRegistry := buildToolRegistry(cfg)
+	toolManager, err := buildToolManager(toolRegistry)
+	if err != nil {
+		return nil, err
+	}
 
 	providerRegistry, err := builtin.NewRegistry()
 	if err != nil {
@@ -35,7 +40,13 @@ func NewProgram(ctx context.Context) (*tea.Program, error) {
 	providerService := provider.NewService(manager, providerRegistry)
 
 	sessionStore := agentruntime.NewSessionStore(loader.BaseDir())
-	runtimeSvc := agentruntime.NewWithFactory(manager, toolRegistry, sessionStore, providerService, agentcontext.NewBuilder())
+	runtimeSvc := agentruntime.NewWithFactory(
+		manager,
+		toolManager,
+		sessionStore,
+		providerService,
+		agentcontext.NewBuilder(),
+	)
 
 	tuiApp, err := tui.New(&cfg, manager, runtimeSvc, providerService)
 	if err != nil {
@@ -62,4 +73,12 @@ func buildToolRegistry(cfg config.Config) *tools.Registry {
 		SupportedContentTypes: cfg.Tools.WebFetch.SupportedContentTypes,
 	}))
 	return toolRegistry
+}
+
+func buildToolManager(registry *tools.Registry) (tools.Manager, error) {
+	engine, err := security.NewStaticGateway(security.DecisionAllow, nil)
+	if err != nil {
+		return nil, err
+	}
+	return tools.NewManager(registry, engine, nil)
 }

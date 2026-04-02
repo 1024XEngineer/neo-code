@@ -70,3 +70,48 @@ func TestBuildToolRegistryUsesWebFetchConfig(t *testing.T) {
 		t.Fatalf("expected formatted webfetch content")
 	}
 }
+
+func TestBuildToolManagerWrapsRegistry(t *testing.T) {
+	t.Parallel()
+
+	registry := tools.NewRegistry()
+	registry.Register(stubToolForBootstrap{name: "bash", content: "ok"})
+	manager, err := buildToolManager(registry)
+	if err != nil {
+		t.Fatalf("buildToolManager() error = %v", err)
+	}
+	if manager == nil {
+		t.Fatalf("expected tool manager")
+	}
+
+	specs, err := manager.ListAvailableSpecs(context.Background(), tools.SpecListInput{})
+	if err != nil {
+		t.Fatalf("ListAvailableSpecs() error = %v", err)
+	}
+	if len(specs) != 1 {
+		t.Fatalf("expected 1 spec, got %+v", specs)
+	}
+
+	result, execErr := manager.Execute(context.Background(), tools.ToolCallInput{
+		Name:      "bash",
+		Arguments: []byte(`{"command":"echo hi"}`),
+	})
+	if execErr != nil {
+		t.Fatalf("Execute() error = %v", execErr)
+	}
+	if result.Content != "ok" {
+		t.Fatalf("expected ok result, got %+v", result)
+	}
+}
+
+type stubToolForBootstrap struct {
+	name    string
+	content string
+}
+
+func (s stubToolForBootstrap) Name() string           { return s.name }
+func (s stubToolForBootstrap) Description() string    { return "stub" }
+func (s stubToolForBootstrap) Schema() map[string]any { return map[string]any{"type": "object"} }
+func (s stubToolForBootstrap) Execute(ctx context.Context, call tools.ToolCallInput) (tools.ToolResult, error) {
+	return tools.ToolResult{Name: s.name, Content: s.content}, nil
+}

@@ -8,14 +8,23 @@ import (
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
 
+	"neo-code/internal/config"
 	"neo-code/internal/provider"
 )
 
 const (
-	slashPrefix              = "/"
-	slashCommandProviderPick = "/provider"
-	slashCommandModelPicker  = "/model"
+	slashPrefix           = "/"
+	slashCommandHelp      = "/help"
+	slashCommandExit      = "/exit"
+	slashCommandClear     = "/clear"
+	slashCommandStatus    = "/status"
+	slashCommandProvider  = "/provider"
+	slashCommandModelPick = "/model"
 
+	slashUsageHelp     = "/help"
+	slashUsageExit     = "/exit"
+	slashUsageClear    = "/clear"
+	slashUsageStatus   = "/status"
 	slashUsageProvider = "/provider"
 	slashUsageModel    = "/model"
 
@@ -30,22 +39,25 @@ const (
 	sidebarOpenHint   = "Enter to open"
 
 	draftSessionTitle     = "Draft"
-	emptyConversationText = "No conversation yet.\nAsk NeoCode to inspect or change code, or type / to browse local commands."
+	emptyConversationText = "No conversation yet.\nAsk NeoCode to inspect or change code, or type /help to browse local commands."
 	emptyMessageText      = "(empty)"
 
-	statusReady          = "Ready"
-	statusRuntimeClosed  = "Runtime closed"
-	statusThinking       = "Thinking"
-	statusCanceling      = "Canceling"
-	statusCanceled       = "Canceled"
-	statusRunningTool    = "Running tool"
-	statusToolFinished   = "Tool finished"
-	statusToolError      = "Tool error"
-	statusError          = "Error"
-	statusDraft          = "New draft"
-	statusRunning        = "Running"
-	statusChooseProvider = "Choose a provider"
-	statusChooseModel    = "Choose a model"
+	statusReady           = "Ready"
+	statusRuntimeClosed   = "Runtime closed"
+	statusThinking        = "Thinking"
+	statusCanceling       = "Canceling"
+	statusCanceled        = "Canceled"
+	statusRunningTool     = "Running tool"
+	statusToolFinished    = "Tool finished"
+	statusToolError       = "Tool error"
+	statusError           = "Error"
+	statusDraft           = "New draft"
+	statusRunning         = "Running"
+	statusApplyingCommand = "Applying local command"
+	statusRunningCommand  = "Running command"
+	statusCommandDone     = "Command finished"
+	statusChooseProvider  = "Choose a provider"
+	statusChooseModel     = "Choose a model"
 
 	focusLabelSessions   = "Sessions"
 	focusLabelTranscript = "Transcript"
@@ -73,9 +85,27 @@ type commandSuggestion struct {
 	Match   bool
 }
 
+type statusSnapshot struct {
+	ActiveSessionID    string
+	ActiveSessionTitle string
+	IsAgentRunning     bool
+	CurrentProvider    string
+	CurrentModel       string
+	CurrentWorkdir     string
+	CurrentTool        string
+	ExecutionError     string
+	FocusLabel         string
+	PickerLabel        string
+	MessageCount       int
+}
+
 var builtinSlashCommands = []slashCommand{
+	{Usage: slashUsageHelp, Description: "Show slash command help"},
+	{Usage: slashUsageClear, Description: "Clear the current draft transcript"},
+	{Usage: slashUsageStatus, Description: "Show current session and agent status"},
 	{Usage: slashUsageProvider, Description: "Open the interactive provider picker"},
 	{Usage: slashUsageModel, Description: "Open the interactive model picker"},
+	{Usage: slashUsageExit, Description: "Exit NeoCode"},
 }
 
 func newSelectionPicker(items []list.Item) list.Model {
@@ -194,6 +224,9 @@ func (a App) matchingSlashCommands(input string) []commandSuggestion {
 	}
 
 	query := strings.ToLower(strings.TrimSpace(input))
+	if isCompleteSlashCommand(query) {
+		return nil
+	}
 	out := make([]commandSuggestion, 0, len(builtinSlashCommands))
 	for _, command := range builtinSlashCommands {
 		normalized := strings.ToLower(command.Usage)
@@ -203,6 +236,15 @@ func (a App) matchingSlashCommands(input string) []commandSuggestion {
 		}
 	}
 	return out
+}
+
+func isCompleteSlashCommand(input string) bool {
+	for _, command := range builtinSlashCommands {
+		if strings.EqualFold(strings.TrimSpace(command.Usage), strings.TrimSpace(input)) {
+			return true
+		}
+	}
+	return false
 }
 
 func runProviderSelection(providerSvc ProviderController, providerName string) tea.Cmd {
@@ -227,4 +269,104 @@ func runModelSelection(providerSvc ProviderController, modelID string) tea.Cmd {
 			notice: fmt.Sprintf("[System] Current model switched to %s.", selection.ModelID),
 		}
 	}
+}
+
+func runLocalCommand(configManager *config.Manager, providerSvc ProviderController, snapshot statusSnapshot, raw string) tea.Cmd {
+	return func() tea.Msg {
+		notice, err := executeLocalCommand(context.Background(), configManager, providerSvc, snapshot, raw)
+		return localCommandResultMsg{notice: notice, err: err}
+	}
+}
+
+func executeLocalCommand(ctx context.Context, configManager *config.Manager, providerSvc ProviderController, snapshot statusSnapshot, raw string) (string, error) {
+	fields := strings.Fields(strings.TrimSpace(raw))
+	if len(fields) == 0 {
+		return "", fmt.Errorf("empty command")
+	}
+
+	switch strings.ToLower(fields[0]) {
+	case slashCommandHelp:
+		return slashHelpText(), nil
+	case slashCommandStatus:
+		return executeStatusCommand(snapshot), nil
+	case slashCommandProvider:
+		return executeProviderCommand(ctx, providerSvc, strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(raw), slashCommandProvider)))
+	default:
+		return "", fmt.Errorf("unknown command %q", fields[0])
+	}
+}
+
+func executeStatusCommand(snapshot statusSnapshot) string {
+	sessionID := snapshot.ActiveSessionID
+	if strings.TrimSpace(sessionID) == "" {
+		sessionID = "<draft>"
+	}
+	sessionTitle := snapshot.ActiveSessionTitle
+	if strings.TrimSpace(sessionTitle) == "" {
+		sessionTitle = draftSessionTitle
+	}
+	running := "no"
+	if snapshot.IsAgentRunning {
+		running = "yes"
+	}
+	currentTool := snapshot.CurrentTool
+	if strings.TrimSpace(currentTool) == "" {
+		currentTool = "<none>"
+	}
+	errorText := snapshot.ExecutionError
+	if strings.TrimSpace(errorText) == "" {
+		errorText = "<none>"
+	}
+	picker := snapshot.PickerLabel
+	if strings.TrimSpace(picker) == "" {
+		picker = "none"
+	}
+
+	lines := []string{
+		"Status:",
+		"Session: " + sessionTitle,
+		"Session ID: " + sessionID,
+		"Running: " + running,
+		"Provider: " + snapshot.CurrentProvider,
+		"Model: " + snapshot.CurrentModel,
+		"Workdir: " + snapshot.CurrentWorkdir,
+		"Focus: " + snapshot.FocusLabel,
+		"Picker: " + picker,
+		"Current Tool: " + currentTool,
+		fmt.Sprintf("Messages: %d", snapshot.MessageCount),
+		"Error: " + errorText,
+	}
+	return strings.Join(lines, "\n")
+}
+
+func executeProviderCommand(ctx context.Context, providerSvc ProviderController, value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", fmt.Errorf("usage: %s", slashUsageProvider)
+	}
+	selection, err := providerSvc.SelectProvider(ctx, value)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("[System] Current provider switched to %s.", selection.ProviderID), nil
+}
+
+func slashHelpText() string {
+	lines := []string{"Available slash commands:"}
+	for _, command := range builtinSlashCommands {
+		lines = append(lines, fmt.Sprintf("%s - %s", command.Usage, command.Description))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func splitFirstWord(input string) (string, string) {
+	input = strings.TrimSpace(input)
+	if input == "" {
+		return "", ""
+	}
+	index := strings.IndexAny(input, " \t")
+	if index < 0 {
+		return input, ""
+	}
+	return input[:index], strings.TrimSpace(input[index+1:])
 }

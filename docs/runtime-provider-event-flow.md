@@ -22,6 +22,36 @@
 8. 执行返回的工具调用，并保存每一个工具结果。
 9. 如果仍需继续推理，则进入下一轮；否则结束。
 
+### Context Builder 输入与职责
+
+- `runtime` 只向 `context.Builder` 传递本轮所需元数据：
+  - 历史消息
+  - `workdir`
+  - `shell`
+  - 当前 `provider`
+  - 当前 `model`
+- `context.Builder` 负责统一组装：
+  - 固定核心 system prompt
+  - 从 `workdir` 向上发现的 `AGENTS.md`
+  - 系统状态摘要（`workdir` / `shell` / `provider` / `model` / git branch / git dirty）
+  - 裁剪后的历史消息
+- `runtime` 不直接读取规则文件，也不直接查询 git 状态。
+- `provider` 只消费最终生成的 `SystemPrompt`、消息列表和工具 schema，不感知上下文来源。
+
+### System Prompt 注入顺序
+
+当前 `system prompt` 按以下顺序拼装：
+
+1. 固定核心指令
+2. `Project Rules` section
+3. `System State` section
+
+其中：
+
+- 规则文件只支持大写文件名 `AGENTS.md`
+- 多份命中结果按“从全局到局部”的顺序注入
+- git 只注入摘要，不注入完整 `git status`
+
 ## 流式桥接
 
 - Provider 发出 `StreamEvent`

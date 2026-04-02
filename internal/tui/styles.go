@@ -263,6 +263,29 @@ func wrapPlain(text string, width int) string {
 	return strings.Join(out, "\n")
 }
 
+func wrapCodeBlock(text string, width int) string {
+	if width <= 0 {
+		return text
+	}
+
+	lines := strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n")
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		expanded := strings.ReplaceAll(line, "\t", "    ")
+		runes := []rune(expanded)
+		if len(runes) == 0 {
+			out = append(out, "")
+			continue
+		}
+		for len(runes) > width {
+			out = append(out, string(runes[:width]))
+			runes = runes[width:]
+		}
+		out = append(out, string(runes))
+	}
+	return strings.Join(out, "\n")
+}
+
 func trimRunes(text string, limit int) string {
 	runes := []rune(text)
 	if len(runes) <= limit || limit < 4 {

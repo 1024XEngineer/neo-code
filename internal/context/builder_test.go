@@ -3,6 +3,7 @@ package context
 import (
 	stdcontext "context"
 	"fmt"
+	"strings"
 	"testing"
 
 	"neo-code/internal/provider"
@@ -16,7 +17,7 @@ func TestDefaultBuilderBuild(t *testing.T) {
 		Messages: []provider.Message{
 			{Role: "user", Content: "hello"},
 		},
-		Workdir: t.TempDir(),
+		Metadata: testMetadata(t.TempDir()),
 	}
 
 	got, err := builder.Build(stdcontext.Background(), input)
@@ -26,8 +27,17 @@ func TestDefaultBuilderBuild(t *testing.T) {
 	if got.SystemPrompt == "" {
 		t.Fatalf("expected non-empty system prompt")
 	}
-	if got.SystemPrompt != defaultSystemPrompt() {
-		t.Fatalf("expected default prompt to remain unchanged")
+	if !strings.Contains(got.SystemPrompt, defaultSystemPrompt()) {
+		t.Fatalf("expected default prompt to remain in composed prompt")
+	}
+	if !strings.Contains(got.SystemPrompt, "## System State") {
+		t.Fatalf("expected system state section in composed prompt")
+	}
+	if strings.Contains(got.SystemPrompt, "## Project Rules") {
+		t.Fatalf("did not expect project rules section without AGENTS.md")
+	}
+	if !strings.Contains(got.SystemPrompt, input.Metadata.Workdir) {
+		t.Fatalf("expected workdir in system state section")
 	}
 	if len(got.Messages) != 1 {
 		t.Fatalf("expected 1 message, got %d", len(got.Messages))

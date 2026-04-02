@@ -365,8 +365,17 @@ func TestAppHelpersAndRenderingSmoke(t *testing.T) {
 			t.Fatalf("expected slash command menu when input starts with slash")
 		}
 	}
+	app.input.SetValue("/status")
+	app.state.InputText = "/status"
+	if menu := app.renderCommandMenu(80); menu != "" {
+		t.Fatalf("expected complete slash command to hide menu, got %q", menu)
+	}
 	if app.renderPrompt(80) == "" || app.renderHelp(80) == "" {
 		t.Fatalf("expected prompt and help output")
+	}
+	app.state.StatusText = "Status:\nSession: Draft\nProvider: openll"
+	if lipgloss.Height(app.renderHeader(app.computeLayout().contentWidth)) != 1 {
+		t.Fatalf("expected header to remain a single line even with multiline status text")
 	}
 	if lipgloss.Width(app.renderPrompt(80)) != 80 {
 		t.Fatalf("expected prompt width 80, got %d", lipgloss.Width(app.renderPrompt(80)))
@@ -1173,6 +1182,167 @@ func TestAppRefreshErrorPaths(t *testing.T) {
 			t.Fatalf("expected load session error, got %v", err)
 		}
 	})
+}
+
+func TestImmediateSlashCommandsAndLayoutBranches(t *testing.T) {
+	manager := newTestConfigManager(t)
+	runtime := newStubRuntime()
+	app, err := New(nil, manager, runtime, newTestProviderService(t, manager))
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	handled, cmd := app.handleImmediateSlashCommand("/help")
+	if handled || cmd != nil {
+		t.Fatalf("expected /help to stay on normal slash flow")
+	}
+
+	handled, cmd = app.handleImmediateSlashCommand("/clear")
+	if !handled || cmd != nil {
+		t.Fatalf("expected /clear to be handled locally")
+	}
+	if app.state.ActiveSessionID != "" || len(app.activeMessages) != 0 {
+		t.Fatalf("expected /clear to reset draft state")
+	}
+
+	handled, cmd = app.handleImmediateSlashCommand("/exit")
+	if !handled || cmd == nil {
+		t.Fatalf("expected /exit to return a quit cmd")
+	}
+	foundQuit := false
+	for _, msg := range collectTeaMessages(cmd) {
+		if _, ok := msg.(tea.QuitMsg); ok {
+			foundQuit = true
+		}
+	}
+	if !foundQuit {
+		t.Fatalf("expected quit msg from /exit")
+	}
+
+	app.state.IsAgentRunning = false
+	app.transcript.Width = 40
+	app.transcript.Height = 4
+	app.transcript.SetContent(strings.Repeat("line\n", 20))
+	app.transcript.GotoBottom()
+	app.resizeComposerLayout()
+	if app.transcript.Width <= 0 || app.transcript.Height <= 0 {
+		t.Fatalf("expected resizeComposerLayout to keep transcript dimensions positive")
+	}
+
+	snapshot := app.currentStatusSnapshot()
+	if snapshot.FocusLabel == "" || snapshot.CurrentProvider == "" || snapshot.CurrentModel == "" {
+		t.Fatalf("expected non-empty status snapshot fields, got %+v", snapshot)
+	}
+}
+
+func TestAdditionalRenderingAndToolChunkBranches(t *testing.T) {
+	manager := newTestConfigManager(t)
+	runtime := newStubRuntime()
+	app, err := New(nil, manager, runtime, newTestProviderService(t, manager))
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	app.state.ActiveSessionID = "session-tool"
+	app.handleRuntimeEvent(agentruntime.RuntimeEvent{
+		Type:      agentruntime.EventToolChunk,
+		SessionID: "session-tool",
+		Payload:   "chunk output",
+	})
+	if app.state.StatusText != statusRunningTool {
+		t.Fatalf("expected tool chunk to keep running status, got %q", app.state.StatusText)
+	}
+	if len(app.activeMessages) == 0 || !strings.Contains(app.activeMessages[len(app.activeMessages)-1].Content, "chunk output") {
+		t.Fatalf("expected tool chunk preview to append inline message")
+	}
+
+	if got := wrapCodeBlock("a\tb", 3); !strings.Contains(got, "\n") {
+		t.Fatalf("expected tabs to expand and wrap, got %q", got)
+	}
+	if got := wrapCodeBlock("abc", 0); got != "abc" {
+		t.Fatalf("expected width<=0 to return original text, got %q", got)
+	}
+
+	rendered := app.renderMessageContent("```\n```", 20, app.styles.messageBody)
+	if !strings.Contains(rendered, emptyMessageText) {
+		t.Fatalf("expected empty code block placeholder, got %q", rendered)
+	}
+}
+
+func TestWorkspaceCommandAndFileReferenceFlow(t *testing.T) {
+	previousExecutor := workspaceCommandExecutor
+	t.Cleanup(func() { workspaceCommandExecutor = previousExecutor })
+	workspaceCommandExecutor = func(ctx context.Context, cfg config.Config, command string) (string, error) {
+		return "stubbed output for " + command, nil
+	}
+
+	manager := newTestConfigManager(t)
+	runtime := newStubRuntime()
+	app, err := New(nil, manager, runtime, newTestProviderService(t, manager))
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	app.input.SetValue("& git status")
+	app.state.InputText = app.input.Value()
+	model, cmd := app.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	app = model.(App)
+	for _, msg := range collectTeaMessages(cmd) {
+		model, follow := app.Update(msg)
+		app = model.(App)
+		_ = collectTeaMessages(follow)
+	}
+
+	if len(runtime.runInputs) != 0 {
+		t.Fatalf("expected & command not to hit agent runtime, got %+v", runtime.runInputs)
+	}
+	if app.state.StatusText != statusCommandDone {
+		t.Fatalf("expected command done status, got %q", app.state.StatusText)
+	}
+	if len(app.activeMessages) < 2 {
+		t.Fatalf("expected running event and command result, got %+v", app.activeMessages)
+	}
+	first := app.activeMessages[0]
+	if first.Role != roleEvent || !strings.Contains(first.Content, "Running command: git status") {
+		t.Fatalf("expected running command notice, got %+v", first)
+	}
+	last := app.activeMessages[len(app.activeMessages)-1]
+	if last.Role != roleTool || !strings.Contains(last.Content, "Command: & git status") || !strings.Contains(last.Content, "stubbed output for git status") {
+		t.Fatalf("expected tool transcript entry with command output, got %+v", last)
+	}
+
+	app.fileCandidates = []string{"README.md", "internal/tui/update.go", "internal/tui/view.go"}
+	app.input.SetValue("inspect @internal/tui/upd")
+	app.state.InputText = app.input.Value()
+	menu := app.renderCommandMenu(80)
+	if !strings.Contains(menu, fileMenuTitle) || !strings.Contains(menu, "@internal/tui/update.go") {
+		t.Fatalf("expected file suggestion menu, got %q", menu)
+	}
+	if strings.Count(menu, "\n") > 6 {
+		t.Fatalf("expected compact file suggestion menu, got %q", menu)
+	}
+
+	model, cmd = app.Update(tea.KeyMsg{Type: tea.KeyTab})
+	app = model.(App)
+	if cmd != nil {
+		_ = collectTeaMessages(cmd)
+	}
+	if app.focus != panelInput {
+		t.Fatalf("expected tab completion to keep focus in input, got %v", app.focus)
+	}
+	if app.state.InputText != "inspect @internal/tui/update.go" {
+		t.Fatalf("expected @ suggestion to be applied, got %q", app.state.InputText)
+	}
+
+	app.input.SetValue("& go test ./...")
+	app.state.InputText = app.input.Value()
+	menu = app.renderCommandMenu(80)
+	if !strings.Contains(menu, shellMenuTitle) || !strings.Contains(menu, workspaceCommandUsage) {
+		t.Fatalf("expected shell hint menu, got %q", menu)
+	}
+	if strings.Count(menu, "\n") > 3 {
+		t.Fatalf("expected compact shell menu, got %q", menu)
+	}
 }
 
 func newTestConfigManager(t *testing.T) *config.Manager {

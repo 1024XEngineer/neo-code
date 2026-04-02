@@ -49,7 +49,7 @@ type ProviderFactory interface {
 type Service struct {
 	configManager   *config.Manager      // 配置管理器，提供当前选中的 provider、model、workdir 等配置读取能力。
 	sessionStore    Store                // 会话持久化接口，负责保存和加载聊天会话。
-	toolRegistry    *tools.Registry      // 工具注册表，维护所有工具的 schema。
+	toolManager     tools.Manager        // 工具管理器，统一工具 schema 暴露与执行入口。
 	providerFactory ProviderFactory      // Provider 工厂接口，根据配置动态创建具体的 provider 实例。
 	contextBuilder  agentcontext.Builder // 上下文构建器，负责组装 system prompt 与本轮发给模型的消息上下文。
 	events          chan RuntimeEvent    // 事件通道，Runtime 在运行过程中产生的事件都通过该通道发送给 TUI 层消费和展示。
@@ -61,13 +61,16 @@ type Service struct {
 
 func NewWithFactory(
 	configManager *config.Manager,
-	toolRegistry *tools.Registry,
+	toolManager tools.Manager,
 	sessionStore Store,
 	providerFactory ProviderFactory,
 	contextBuilder agentcontext.Builder,
 ) *Service {
 	if providerFactory == nil {
 		providerFactory = provider.NewRegistry()
+	}
+	if toolManager == nil {
+		toolManager = tools.NewRegistry()
 	}
 	if contextBuilder == nil {
 		contextBuilder = agentcontext.NewBuilder()
@@ -76,7 +79,7 @@ func NewWithFactory(
 	return &Service{
 		configManager:   configManager,
 		sessionStore:    sessionStore,
-		toolRegistry:    toolRegistry,
+		toolManager:     toolManager,
 		providerFactory: providerFactory,
 		contextBuilder:  contextBuilder,
 		events:          make(chan RuntimeEvent, 128),
@@ -130,18 +133,29 @@ func (s *Service) Run(ctx context.Context, input UserInput) error {
 
 		builtContext, err := s.contextBuilder.Build(ctx, agentcontext.BuildInput{
 			Messages: session.Messages,
-			Workdir:  cfg.Workdir,
+			Metadata: agentcontext.Metadata{
+				Workdir:  cfg.Workdir,
+				Shell:    cfg.Shell,
+				Provider: cfg.SelectedProvider,
+				Model:    cfg.CurrentModel,
+			},
+		})
+		if err != nil {
+			return s.handleRunError(ctx, input.RunID, session.ID, err)
+		}
+
+		toolSpecs, err := s.toolManager.ListAvailableSpecs(ctx, tools.SpecListInput{
+			SessionID: session.ID,
 		})
 		if err != nil {
 			return s.handleRunError(ctx, input.RunID, session.ID, err)
 		}
 
 		resp, err := s.callProviderWithRetry(ctx, input.RunID, session.ID, provider.ChatRequest{
-
 			Model:        cfg.CurrentModel,
 			SystemPrompt: builtContext.SystemPrompt,
 			Messages:     builtContext.Messages,
-			Tools:        s.toolRegistry.GetSpecs(),
+			Tools:        toolSpecs,
 		})
 		if err != nil {
 			return s.handleRunError(ctx, input.RunID, session.ID, err)
@@ -178,7 +192,7 @@ func (s *Service) Run(ctx context.Context, input UserInput) error {
 			s.emit(ctx, EventToolStart, input.RunID, session.ID, call)
 
 			runCtx, cancel := context.WithTimeout(ctx, time.Duration(cfg.ToolTimeoutSec)*time.Second)
-			result, execErr := s.toolRegistry.Execute(runCtx, tools.ToolCallInput{
+			result, execErr := s.toolManager.Execute(runCtx, tools.ToolCallInput{
 				ID:        call.ID,
 				Name:      call.Name,
 				Arguments: []byte(call.Arguments),

@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"neo-code/internal/config"
 	agentcontext "neo-code/internal/context"
@@ -190,6 +191,37 @@ func (b *stubContextBuilder) Build(ctx context.Context, input agentcontext.Build
 		SystemPrompt: "stub system prompt",
 		Messages:     append([]provider.Message(nil), input.Messages...),
 	}, nil
+}
+
+type stubToolManager struct {
+	specs        []provider.ToolSpec
+	result       tools.ToolResult
+	err          error
+	listErr      error
+	listCalls    int
+	executeCalls int
+	lastInput    tools.ToolCallInput
+}
+
+func (m *stubToolManager) ListAvailableSpecs(ctx context.Context, input tools.SpecListInput) ([]provider.ToolSpec, error) {
+	m.listCalls++
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if m.listErr != nil {
+		return nil, m.listErr
+	}
+	return append([]provider.ToolSpec(nil), m.specs...), nil
+}
+
+func (m *stubToolManager) Execute(ctx context.Context, input tools.ToolCallInput) (tools.ToolResult, error) {
+	m.executeCalls++
+	m.lastInput = input
+	result := m.result
+	if result.Name == "" {
+		result.Name = input.Name
+	}
+	return result, m.err
 }
 
 func TestServiceRun(t *testing.T) {
@@ -413,8 +445,17 @@ func TestServiceRunDelegatesToContextBuilder(t *testing.T) {
 	if builder.callCount != 1 {
 		t.Fatalf("expected builder to be called once, got %d", builder.callCount)
 	}
-	if builder.lastInput.Workdir == "" {
-		t.Fatalf("expected workdir to be forwarded to builder")
+	if builder.lastInput.Metadata.Workdir == "" {
+		t.Fatalf("expected workdir to be forwarded to builder metadata")
+	}
+	if builder.lastInput.Metadata.Shell == "" {
+		t.Fatalf("expected shell to be forwarded to builder metadata")
+	}
+	if builder.lastInput.Metadata.Provider == "" {
+		t.Fatalf("expected provider to be forwarded to builder metadata")
+	}
+	if builder.lastInput.Metadata.Model == "" {
+		t.Fatalf("expected model to be forwarded to builder metadata")
 	}
 	if len(builder.lastInput.Messages) != 1 || builder.lastInput.Messages[0].Content != "hello" {
 		t.Fatalf("expected persisted session messages to be forwarded, got %+v", builder.lastInput.Messages)
@@ -428,6 +469,125 @@ func TestServiceRunDelegatesToContextBuilder(t *testing.T) {
 	if len(scripted.requests[0].Messages) != 1 || scripted.requests[0].Messages[0].Content != "delegated message" {
 		t.Fatalf("expected delegated messages, got %+v", scripted.requests[0].Messages)
 	}
+}
+
+func TestServiceRunUsesToolManager(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	store := newMemoryStore()
+	toolManager := &stubToolManager{
+		specs: []provider.ToolSpec{
+			{Name: "filesystem_edit", Description: "stub", Schema: map[string]any{"type": "object"}},
+		},
+		result: tools.ToolResult{
+			Name:    "filesystem_edit",
+			Content: "tool manager output",
+		},
+	}
+
+	scripted := &scriptedProvider{
+		responses: []provider.ChatResponse{
+			{
+				Message: provider.Message{
+					Role: "assistant",
+					ToolCalls: []provider.ToolCall{
+						{ID: "call-manager", Name: "filesystem_edit", Arguments: `{"path":"main.go"}`},
+					},
+				},
+				FinishReason: "tool_calls",
+			},
+			{
+				Message: provider.Message{
+					Role:    "assistant",
+					Content: "done",
+				},
+				FinishReason: "stop",
+			},
+		},
+	}
+
+	service := NewWithFactory(manager, toolManager, store, &scriptedProviderFactory{provider: scripted}, nil)
+	if err := service.Run(context.Background(), UserInput{RunID: "run-tool-manager", Content: "edit file"}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	if toolManager.listCalls != 2 {
+		t.Fatalf("expected 2 spec list calls, got %d", toolManager.listCalls)
+	}
+	if toolManager.executeCalls != 1 {
+		t.Fatalf("expected 1 execute call, got %d", toolManager.executeCalls)
+	}
+	if toolManager.lastInput.ID != "call-manager" {
+		t.Fatalf("expected forwarded tool call id, got %q", toolManager.lastInput.ID)
+	}
+	if len(scripted.requests) == 0 || len(scripted.requests[0].Tools) != 1 || scripted.requests[0].Tools[0].Name != "filesystem_edit" {
+		t.Fatalf("expected tool specs from tool manager, got %+v", scripted.requests)
+	}
+
+	session := onlySession(t, store)
+	foundToolMessage := false
+	for _, message := range session.Messages {
+		if message.Role == provider.RoleTool && message.Content == "tool manager output" {
+			foundToolMessage = true
+			break
+		}
+	}
+	if !foundToolMessage {
+		t.Fatalf("expected tool manager result in session messages, got %+v", session.Messages)
+	}
+}
+
+func TestServiceRunHandlesToolManagerSpecError(t *testing.T) {
+	manager := newRuntimeConfigManager(t)
+	store := newMemoryStore()
+	toolManager := &stubToolManager{
+		listErr: errors.New("tool specs unavailable"),
+	}
+
+	service := NewWithFactory(manager, toolManager, store, &scriptedProviderFactory{
+		provider: &scriptedProvider{},
+	}, nil)
+	input := UserInput{RunID: "run-tool-spec-error", Content: "hello"}
+	err := service.Run(context.Background(), input)
+	if err == nil || !containsError(err, "tool specs unavailable") {
+		t.Fatalf("expected tool spec error, got %v", err)
+	}
+
+	events := collectRuntimeEvents(service.Events())
+	assertEventSequence(t, events, []EventType{EventUserMessage, EventError})
+	assertNoEventType(t, events, EventAgentDone)
+	assertEventsRunID(t, events, input.RunID)
+
+	session := onlySession(t, store)
+	if len(session.Messages) != 1 || session.Messages[0].Role != provider.RoleUser {
+		t.Fatalf("expected only user message to persist, got %+v", session.Messages)
+	}
+}
+
+func TestServiceNewWithFactoryDefaultsToolManager(t *testing.T) {
+	manager := newRuntimeConfigManager(t)
+	store := newMemoryStore()
+	service := NewWithFactory(manager, nil, store, &scriptedProviderFactory{
+		provider: &scriptedProvider{
+			responses: []provider.ChatResponse{
+				{
+					Message: provider.Message{
+						Role:    provider.RoleAssistant,
+						Content: "done",
+					},
+					FinishReason: "stop",
+				},
+			},
+		},
+	}, nil)
+
+	if err := service.Run(context.Background(), UserInput{RunID: "run-default-tool-manager", Content: "hello"}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	events := collectRuntimeEvents(service.Events())
+	assertEventSequence(t, events, []EventType{EventUserMessage, EventAgentDone})
 }
 
 func TestServiceRunErrorPaths(t *testing.T) {
@@ -1213,16 +1373,41 @@ func TestIsRetryableProviderError(t *testing.T) {
 func TestProviderRetryBackoff(t *testing.T) {
 	t.Parallel()
 
-	first := providerRetryBackoff(1)
-	second := providerRetryBackoff(2)
-
-	if second <= first {
-		t.Fatalf("expected backoff to increase: first=%v second=%v", first, second)
+	tests := []struct {
+		name    string
+		attempt int
+		min     time.Duration
+		max     time.Duration
+	}{
+		{
+			name:    "first retry stays within jittered base window",
+			attempt: 1,
+			min:     500 * time.Millisecond,
+			max:     1500 * time.Millisecond,
+		},
+		{
+			name:    "second retry stays within jittered doubled window",
+			attempt: 2,
+			min:     1 * time.Second,
+			max:     3 * time.Second,
+		},
+		{
+			name:    "large retry is capped at max wait",
+			attempt: 20,
+			min:     providerRetryMaxWait,
+			max:     providerRetryMaxWait,
+		},
 	}
 
-	// 验证不超过 MaxWait
-	large := providerRetryBackoff(20)
-	if large > providerRetryMaxWait {
-		t.Fatalf("expected backoff <= MaxWait, got %v > %v", large, providerRetryMaxWait)
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := providerRetryBackoff(tt.attempt)
+			if got < tt.min || got > tt.max {
+				t.Fatalf("providerRetryBackoff(%d) = %v, want within [%v, %v]", tt.attempt, got, tt.min, tt.max)
+			}
+		})
 	}
 }

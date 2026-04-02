@@ -34,6 +34,12 @@ func (r *Registry) Get(name string) (Tool, error) {
 	return tool, nil
 }
 
+// Supports reports whether a tool is registered.
+func (r *Registry) Supports(name string) bool {
+	_, err := r.Get(name)
+	return err == nil
+}
+
 func (r *Registry) GetSpecs() []provider.ToolSpec {
 	names := make([]string, 0, len(r.tools))
 	for name := range r.tools {
@@ -55,6 +61,14 @@ func (r *Registry) GetSpecs() []provider.ToolSpec {
 
 func (r *Registry) ListSchemas() []provider.ToolSpec {
 	return r.GetSpecs()
+}
+
+// ListAvailableSpecs returns all registered tool specs.
+func (r *Registry) ListAvailableSpecs(ctx context.Context, input SpecListInput) ([]provider.ToolSpec, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return r.GetSpecs(), nil
 }
 
 func (r *Registry) Execute(ctx context.Context, input ToolCallInput) (ToolResult, error) {
