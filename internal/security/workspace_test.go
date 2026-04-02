@@ -425,8 +425,9 @@ func TestSandboxTarget(t *testing.T) {
 func TestCanonicalWorkspaceRoot(t *testing.T) {
 	t.Parallel()
 
+	sandbox := NewWorkspaceSandbox()
 	existing := t.TempDir()
-	got, err := canonicalWorkspaceRoot(existing)
+	got, err := sandbox.canonicalWorkspaceRoot(existing)
 	if err != nil {
 		t.Fatalf("canonicalWorkspaceRoot(existing) error: %v", err)
 	}
@@ -434,19 +435,22 @@ func TestCanonicalWorkspaceRoot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("filepath.Abs(existing): %v", err)
 	}
-	if got != filepath.Clean(expectedExisting) {
+	if !samePathKey(got, expectedExisting) {
 		t.Fatalf("canonicalWorkspaceRoot(existing) = %q, want %q", got, filepath.Clean(expectedExisting))
+	}
+	if _, ok := sandbox.canonicalRoots.Load(cleanedPathKey(existing)); !ok {
+		t.Fatalf("expected canonical root cache entry for %q", existing)
 	}
 
 	missing := filepath.Join(t.TempDir(), "missing", "dir")
-	_, err = canonicalWorkspaceRoot(missing)
+	_, err = sandbox.canonicalWorkspaceRoot(missing)
 	if err == nil || !strings.Contains(err.Error(), "resolve workspace root") {
 		t.Fatalf("expected missing root error, got %v", err)
 	}
 
 	notDirRoot := filepath.Join(t.TempDir(), "file.txt")
 	mustWriteWorkspaceFile(t, notDirRoot, "content")
-	_, err = canonicalWorkspaceRoot(notDirRoot)
+	_, err = sandbox.canonicalWorkspaceRoot(notDirRoot)
 	if err == nil || !strings.Contains(err.Error(), "is not a directory") {
 		t.Fatalf("expected not-a-directory error, got %v", err)
 	}
@@ -460,7 +464,7 @@ func TestCanonicalWorkspaceRoot(t *testing.T) {
 	if err := os.Symlink(targetRoot, linkRoot); err != nil {
 		t.Skipf("symlink not supported in this environment: %v", err)
 	}
-	got, err = canonicalWorkspaceRoot(linkRoot)
+	got, err = sandbox.canonicalWorkspaceRoot(linkRoot)
 	if err != nil {
 		t.Fatalf("canonicalWorkspaceRoot(link) error: %v", err)
 	}
@@ -468,8 +472,11 @@ func TestCanonicalWorkspaceRoot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("filepath.Abs(targetRoot): %v", err)
 	}
-	if got != filepath.Clean(expectedLink) {
+	if !samePathKey(got, expectedLink) {
 		t.Fatalf("canonicalWorkspaceRoot(link) = %q, want %q", got, filepath.Clean(expectedLink))
+	}
+	if _, ok := sandbox.canonicalRoots.Load(cleanedPathKey(linkRoot)); ok {
+		t.Fatalf("did not expect symlinked root %q to be cached", linkRoot)
 	}
 }
 
@@ -640,6 +647,81 @@ func TestEnsureNoSymlinkEscape(t *testing.T) {
 			}
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+func TestNearestExistingPath(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		setup     func(t *testing.T) (root string, target string)
+		expect    func(root string, target string) string
+		expectErr string
+	}{
+		{
+			name: "returns root for missing nested path",
+			setup: func(t *testing.T) (string, string) {
+				t.Helper()
+				root := t.TempDir()
+				return root, filepath.Join(root, "missing", "file.txt")
+			},
+			expect: func(root string, target string) string {
+				return cleanedPathKey(root)
+			},
+		},
+		{
+			name: "returns nearest existing ancestor",
+			setup: func(t *testing.T) (string, string) {
+				t.Helper()
+				root := t.TempDir()
+				dir := filepath.Join(root, "dir")
+				if err := os.MkdirAll(dir, 0o755); err != nil {
+					t.Fatalf("mkdir dir: %v", err)
+				}
+				return root, filepath.Join(dir, "missing", "file.txt")
+			},
+			expect: func(root string, target string) string {
+				return cleanedPathKey(filepath.Join(root, "dir"))
+			},
+		},
+		{
+			name: "returns broken symlink ancestor",
+			setup: func(t *testing.T) (string, string) {
+				t.Helper()
+				root := t.TempDir()
+				link := filepath.Join(root, "broken")
+				if err := os.Symlink(filepath.Join(root, "missing"), link); err != nil {
+					t.Skipf("symlink not supported in this environment: %v", err)
+				}
+				return root, filepath.Join(link, "child.txt")
+			},
+			expect: func(root string, target string) string {
+				return cleanedPathKey(filepath.Join(root, "broken"))
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			root, target := tt.setup(t)
+			got, err := nearestExistingPath(root, target)
+			if tt.expectErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.expectErr) {
+					t.Fatalf("expected error containing %q, got %v", tt.expectErr, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("nearestExistingPath() error: %v", err)
+			}
+			want := tt.expect(root, target)
+			if got != want {
+				t.Fatalf("nearestExistingPath() = %q, want %q", got, want)
 			}
 		})
 	}

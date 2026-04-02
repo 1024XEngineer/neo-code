@@ -6,11 +6,15 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"sync"
 )
 
 // WorkspaceSandbox enforces workspace-relative path boundaries for tool actions.
-type WorkspaceSandbox struct{}
+type WorkspaceSandbox struct {
+	canonicalRoots sync.Map
+}
 
 // NewWorkspaceSandbox creates a sandbox that blocks traversal and symlink escape.
 func NewWorkspaceSandbox() *WorkspaceSandbox {
@@ -34,7 +38,7 @@ func (s *WorkspaceSandbox) Check(ctx context.Context, action Action) error {
 		return nil
 	}
 
-	return validateWorkspacePlan(plan)
+	return s.validateWorkspacePlan(plan)
 }
 
 type workspacePlan struct {
@@ -116,9 +120,9 @@ func sandboxTarget(action Action) (string, bool) {
 
 // validateWorkspacePlan resolves the canonical workspace root, expands the
 // requested target to an absolute path, verifies it stays inside the workspace,
-// and then checks every existing path segment for symlink escape.
-func validateWorkspacePlan(plan workspacePlan) error {
-	root, err := canonicalWorkspaceRoot(plan.root)
+// and then checks the nearest existing path ancestor for symlink escape.
+func (s *WorkspaceSandbox) validateWorkspacePlan(plan workspacePlan) error {
+	root, err := s.canonicalWorkspaceRoot(plan.root)
 	if err != nil {
 		return err
 	}
@@ -135,28 +139,47 @@ func validateWorkspacePlan(plan workspacePlan) error {
 }
 
 // canonicalWorkspaceRoot resolves the configured workspace root to a canonical
-// directory path. The root must already exist so validation cannot silently rely
-// on a string-only path that may later resolve through a symlinked parent.
-func canonicalWorkspaceRoot(root string) (string, error) {
+// directory path and caches non-symlink workspace roots for repeated tool calls.
+func (s *WorkspaceSandbox) canonicalWorkspaceRoot(root string) (string, error) {
 	absoluteRoot, err := filepath.Abs(strings.TrimSpace(root))
 	if err != nil {
 		return "", fmt.Errorf("security: resolve workspace root: %w", err)
 	}
+	cacheKey := cleanedPathKey(absoluteRoot)
+	if cached, ok := s.canonicalRoots.Load(cacheKey); ok {
+		return cached.(string), nil
+	}
 
+	canonicalRoot, cacheable, err := resolveCanonicalWorkspaceRoot(cacheKey)
+	if err != nil {
+		return "", err
+	}
+	if cacheable {
+		s.canonicalRoots.Store(cacheKey, canonicalRoot)
+	}
+	return canonicalRoot, nil
+}
+
+// resolveCanonicalWorkspaceRoot resolves the configured workspace root to a
+// canonical directory path. The root must already exist so validation cannot
+// silently rely on a string-only path that may later resolve through a
+// symlinked parent.
+func resolveCanonicalWorkspaceRoot(absoluteRoot string) (string, bool, error) {
 	info, err := os.Stat(absoluteRoot)
 	if err != nil {
-		return "", fmt.Errorf("security: resolve workspace root: %w", err)
+		return "", false, fmt.Errorf("security: resolve workspace root: %w", err)
 	}
 	if !info.IsDir() {
-		return "", fmt.Errorf("security: workspace root %q is not a directory", root)
+		return "", false, fmt.Errorf("security: workspace root %q is not a directory", absoluteRoot)
 	}
 
 	canonicalRoot, err := filepath.EvalSymlinks(absoluteRoot)
 	if err != nil {
-		return "", fmt.Errorf("security: resolve workspace root: %w", err)
+		return "", false, fmt.Errorf("security: resolve workspace root: %w", err)
 	}
 
-	return filepath.Clean(canonicalRoot), nil
+	cleanedCanonical := cleanedPathKey(canonicalRoot)
+	return cleanedCanonical, samePathKey(absoluteRoot, cleanedCanonical), nil
 }
 
 // absoluteWorkspaceTarget expands a workspace-relative target into an absolute
@@ -183,57 +206,38 @@ func absoluteWorkspaceTarget(root string, target string) (string, error) {
 	return filepath.Clean(absoluteTarget), nil
 }
 
-// ensureNoSymlinkEscape walks each existing segment from root to target and
-// ensures that any encountered symlink still resolves inside the workspace.
+// ensureNoSymlinkEscape resolves the nearest existing path on the way to target
+// and ensures that any symlink in the existing prefix still resolves inside the
+// workspace.
 //
 // This blocks common symlink escape attempts such as placing a link inside the
-// workspace that points to a file or directory outside the workspace tree.
+// workspace that points to a file or directory outside the workspace tree while
+// avoiding a path-by-path stat on every component.
 //
 // Known limitation: this validation is still subject to TOCTOU races between the
 // sandbox check and the later filesystem operation in the executor. Eliminating
 // that window requires executor-level changes such as descriptor-based access or
 // no-follow file opening, which are outside this lightweight sandbox layer.
 func ensureNoSymlinkEscape(root string, target string, original string) error {
-	relativeTarget, err := filepath.Rel(root, target)
+	existingPath, err := nearestExistingPath(root, target)
 	if err != nil {
-		return fmt.Errorf("security: compare workspace target %q: %w", original, err)
+		return err
 	}
-
-	cleanRelative := filepath.Clean(relativeTarget)
-	if cleanRelative == "." {
+	if existingPath == root {
 		return nil
 	}
 
-	current := root
-	for _, segment := range splitRelativePath(cleanRelative) {
-		next := filepath.Join(current, segment)
-		info, err := os.Lstat(next)
-		if err != nil {
-			if errors.Is(err, os.ErrNotExist) {
-				return nil
-			}
-			return fmt.Errorf("security: inspect path %q: %w", next, err)
-		}
-
-		if info.Mode()&os.ModeSymlink != 0 {
-			resolved, err := filepath.EvalSymlinks(next)
-			if err != nil {
-				return fmt.Errorf("security: resolve symlink %q: %w", next, err)
-			}
-			resolved, err = filepath.Abs(resolved)
-			if err != nil {
-				return fmt.Errorf("security: resolve symlink %q: %w", next, err)
-			}
-			if !isWithinWorkspace(root, resolved) {
-				return fmt.Errorf("security: path %q escapes workspace root via symlink", original)
-			}
-			current = filepath.Clean(resolved)
-			continue
-		}
-
-		current = next
+	resolved, err := filepath.EvalSymlinks(existingPath)
+	if err != nil {
+		return fmt.Errorf("security: resolve symlink %q: %w", existingPath, err)
 	}
-
+	resolved, err = filepath.Abs(resolved)
+	if err != nil {
+		return fmt.Errorf("security: resolve symlink %q: %w", existingPath, err)
+	}
+	if !isWithinWorkspace(root, resolved) {
+		return fmt.Errorf("security: path %q escapes workspace root via symlink", original)
+	}
 	return nil
 }
 
@@ -250,9 +254,50 @@ func validateTargetVolume(root string, target string) error {
 }
 
 func normalizeVolumeName(path string) string {
-	volume := strings.TrimSpace(filepath.VolumeName(filepath.Clean(path)))
+	volume := strings.TrimSpace(filepath.VolumeName(cleanedPathKey(path)))
 	volume = strings.TrimPrefix(volume, `\\?\`)
 	return strings.ToLower(volume)
+}
+
+func nearestExistingPath(root string, target string) (string, error) {
+	current := cleanedPathKey(target)
+	root = cleanedPathKey(root)
+	for {
+		info, err := os.Lstat(current)
+		if err == nil {
+			if info.Mode()&os.ModeSymlink != 0 || current != root {
+				return current, nil
+			}
+			return root, nil
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return "", fmt.Errorf("security: inspect path %q: %w", current, err)
+		}
+		if samePathKey(current, root) {
+			return root, nil
+		}
+
+		parent := filepath.Dir(current)
+		if samePathKey(parent, current) {
+			return "", fmt.Errorf("security: compare workspace target %q: reached filesystem root", target)
+		}
+		current = parent
+	}
+}
+
+func cleanedPathKey(path string) string {
+	cleaned := filepath.Clean(path)
+	if runtime.GOOS == "windows" {
+		return strings.ToLower(cleaned)
+	}
+	return cleaned
+}
+
+func samePathKey(a string, b string) bool {
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(cleanedPathKey(a), cleanedPathKey(b))
+	}
+	return cleanedPathKey(a) == cleanedPathKey(b)
 }
 
 func splitRelativePath(path string) []string {
