@@ -498,15 +498,6 @@ func (r *readCloser) Close() error {
 	return nil
 }
 
-func containsString(items []string, target string) bool {
-	for _, item := range items {
-		if item == target {
-			return true
-		}
-	}
-	return false
-}
-
 // --- emitToolCallStart / mergeToolCallDeltas 边界补充测试 ---
 
 func TestEmitToolCallStartGuards(t *testing.T) {

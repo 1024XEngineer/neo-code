@@ -25,44 +25,48 @@ const (
 // OpenAIProvider returns the builtin OpenAI provider definition.
 func OpenAIProvider() ProviderConfig {
 	return ProviderConfig{
-		Name:      OpenAIName,
-		Driver:    "openai",
-		BaseURL:   OpenAIDefaultBaseURL,
-		Model:     OpenAIDefaultModel,
-		APIKeyEnv: OpenAIDefaultAPIKeyEnv,
+		Name:        OpenAIName,
+		Description: "OpenAI official API",
+		Driver:      "openai",
+		BaseURL:     OpenAIDefaultBaseURL,
+		Model:       OpenAIDefaultModel,
+		APIKeyEnv:   OpenAIDefaultAPIKeyEnv,
 	}
 }
 
 // GeminiProvider returns the builtin Gemini provider definition.
 func GeminiProvider() ProviderConfig {
 	return ProviderConfig{
-		Name:      GeminiName,
-		Driver:    "openai",
-		BaseURL:   GeminiDefaultBaseURL,
-		Model:     GeminiDefaultModel,
-		APIKeyEnv: GeminiDefaultAPIKeyEnv,
+		Name:        GeminiName,
+		Description: "Google Gemini API (OpenAI-compatible)",
+		Driver:      "openai",
+		BaseURL:     GeminiDefaultBaseURL,
+		Model:       GeminiDefaultModel,
+		APIKeyEnv:   GeminiDefaultAPIKeyEnv,
 	}
 }
 
 // OpenLLProvider returns the builtin OpenLL provider definition.
 func OpenLLProvider() ProviderConfig {
 	return ProviderConfig{
-		Name:      OpenLLName,
-		Driver:    "openai",
-		BaseURL:   OpenLLDefaultBaseURL,
-		Model:     OpenLLDefaultModel,
-		APIKeyEnv: OpenLLDefaultAPIKeyEnv,
+		Name:        OpenLLName,
+		Description: "OpenLL aggregated API",
+		Driver:      "openai",
+		BaseURL:     OpenLLDefaultBaseURL,
+		Model:       OpenLLDefaultModel,
+		APIKeyEnv:   OpenLLDefaultAPIKeyEnv,
 	}
 }
 
 // QiniuProvider returns the builtin Qiniu provider definition.
 func QiniuProvider() ProviderConfig {
 	return ProviderConfig{
-		Name:      QiniuName,
-		Driver:    "openai",
-		BaseURL:   QiniuDefaultBaseURL,
-		Model:     QiniuDefaultModel,
-		APIKeyEnv: QiniuDefaultAPIKeyEnv,
+		Name:        QiniuName,
+		Description: "Qiniu AI API",
+		Driver:      "openai",
+		BaseURL:     QiniuDefaultBaseURL,
+		Model:       QiniuDefaultModel,
+		APIKeyEnv:   QiniuDefaultAPIKeyEnv,
 	}
 }
 

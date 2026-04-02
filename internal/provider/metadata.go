@@ -61,7 +61,7 @@ func MergeModelDescriptors(sources ...[]ModelDescriptor) []ModelDescriptor {
 	for _, source := range sources {
 		for _, candidate := range source {
 			normalized := normalizeModelDescriptor(candidate)
-			key := normalizeModelID(normalized.ID)
+			key := config.NormalizeKey(normalized.ID)
 			if key == "" {
 				continue
 			}
@@ -203,8 +203,4 @@ func cloneStringBoolMap(source map[string]bool) map[string]bool {
 		cloned[key] = value
 	}
 	return cloned
-}
-
-func normalizeModelID(id string) string {
-	return config.NormalizeKey(id)
 }

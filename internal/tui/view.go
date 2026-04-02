@@ -222,7 +222,7 @@ func (a App) renderMessageBlock(message provider.Message, width int) string {
 		return a.styles.inlineNotice.Width(width).Render("  > " + wrapPlain(message.Content, max(16, width-6)))
 	case roleError:
 		return a.styles.inlineError.Width(width).Render("  ! " + wrapPlain(message.Content, max(16, width-6)))
-	case roleSystem:
+	case provider.RoleSystem:
 		return a.styles.inlineSystem.Width(width).Render("  - " + wrapPlain(message.Content, max(16, width-6)))
 	}
 
@@ -233,13 +233,13 @@ func (a App) renderMessageBlock(message provider.Message, width int) string {
 	blockAlign := lipgloss.Left
 
 	switch message.Role {
-	case roleUser:
+	case provider.RoleUser:
 		maxMessageWidth = clamp(int(float64(width)*0.68), 24, width)
 		tag = messageTagUser
 		tagStyle = a.styles.messageUserTag
 		bodyStyle = a.styles.messageUserBody
 		blockAlign = lipgloss.Right
-	case roleTool:
+	case provider.RoleTool:
 		tag = messageTagTool
 		tagStyle = a.styles.messageToolTag
 		bodyStyle = a.styles.messageToolBody
@@ -258,7 +258,7 @@ func (a App) renderMessageBlock(message provider.Message, width int) string {
 	}
 
 	contentBlock := a.renderMessageContent(content, maxMessageWidth-2, bodyStyle)
-	if message.Role == roleUser {
+	if message.Role == provider.RoleUser {
 		contentBlock = lipgloss.PlaceHorizontal(maxMessageWidth, lipgloss.Right, contentBlock)
 	}
 
@@ -268,7 +268,7 @@ func (a App) renderMessageBlock(message provider.Message, width int) string {
 		contentBlock,
 	)
 
-	if message.Role == roleUser {
+	if message.Role == provider.RoleUser {
 		return lipgloss.PlaceHorizontal(width, lipgloss.Right, block)
 	}
 	return block

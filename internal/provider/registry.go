@@ -2,28 +2,34 @@ package provider
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 
 	"neo-code/internal/config"
 )
 
 type Builder func(ctx context.Context, cfg config.ResolvedProviderConfig) (Provider, error)
-type DiscoveryFunc func(ctx context.Context, cfg config.ResolvedProviderConfig) ([]ModelDescriptor, error)
 
 type DriverDefinition struct {
-	Name     string
-	Build    Builder
-	Discover DiscoveryFunc
+	Name  string
+	Build Builder
 }
 
 type Registry struct {
-	drivers map[string]DriverDefinition
+	mu                 sync.Mutex
+	drivers            map[string]DriverDefinition
+	discoveryProviders map[string]Provider
 }
 
 func NewRegistry() *Registry {
-	return &Registry{drivers: map[string]DriverDefinition{}}
+	return &Registry{
+		drivers:            map[string]DriverDefinition{},
+		discoveryProviders: map[string]Provider{},
+	}
 }
 
 func (r *Registry) Register(driver DriverDefinition) error {
@@ -34,7 +40,7 @@ func (r *Registry) Register(driver DriverDefinition) error {
 	r.ensureDrivers()
 
 	driver.Name = strings.TrimSpace(driver.Name)
-	driverType := config.NormalizeKey(driver.Name)
+	driverType := config.NormalizeProviderDriver(driver.Name)
 	if driverType == "" {
 		return errors.New("provider: driver name is empty")
 	}
@@ -57,14 +63,11 @@ func (r *Registry) Build(ctx context.Context, cfg config.ResolvedProviderConfig)
 }
 
 func (r *Registry) DiscoverModels(ctx context.Context, cfg config.ResolvedProviderConfig) ([]ModelDescriptor, error) {
-	driver, err := r.driver(cfg.Driver)
+	discoveryProvider, err := r.discoveryProvider(ctx, cfg)
 	if err != nil {
 		return nil, err
 	}
-	if driver.Discover == nil {
-		return nil, nil
-	}
-	return driver.Discover(ctx, cfg)
+	return discoveryProvider.DiscoverModels(ctx)
 }
 
 func (r *Registry) Supports(driverType string) bool {
@@ -76,7 +79,7 @@ func (r *Registry) driver(driverType string) (DriverDefinition, error) {
 	if r == nil {
 		return DriverDefinition{}, ErrDriverNotFound
 	}
-	driver, ok := r.drivers[config.NormalizeKey(driverType)]
+	driver, ok := r.drivers[config.NormalizeProviderDriver(driverType)]
 	if !ok {
 		return DriverDefinition{}, fmt.Errorf("%w: %s", ErrDriverNotFound, strings.TrimSpace(driverType))
 	}
@@ -87,4 +90,53 @@ func (r *Registry) ensureDrivers() {
 	if r.drivers == nil {
 		r.drivers = map[string]DriverDefinition{}
 	}
+	if r.discoveryProviders == nil {
+		r.discoveryProviders = map[string]Provider{}
+	}
+}
+
+func (r *Registry) discoveryProvider(ctx context.Context, cfg config.ResolvedProviderConfig) (Provider, error) {
+	driver, err := r.driver(cfg.Driver)
+	if err != nil {
+		return nil, err
+	}
+
+	cacheKey, err := discoveryCacheKey(cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	r.mu.Lock()
+	r.ensureDrivers()
+	if cached, ok := r.discoveryProviders[cacheKey]; ok {
+		r.mu.Unlock()
+		return cached, nil
+	}
+	r.mu.Unlock()
+
+	built, err := driver.Build(ctx, cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	r.mu.Lock()
+	r.ensureDrivers()
+	if cached, ok := r.discoveryProviders[cacheKey]; ok {
+		r.mu.Unlock()
+		return cached, nil
+	}
+	r.discoveryProviders[cacheKey] = built
+	r.mu.Unlock()
+
+	return built, nil
+}
+
+func discoveryCacheKey(cfg config.ResolvedProviderConfig) (string, error) {
+	identity, err := cfg.Identity()
+	if err != nil {
+		return "", err
+	}
+
+	sum := sha256.Sum256([]byte(identity.Key() + "|" + strings.TrimSpace(cfg.APIKey)))
+	return identity.Key() + "|" + hex.EncodeToString(sum[:]), nil
 }

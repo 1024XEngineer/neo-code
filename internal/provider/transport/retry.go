@@ -5,8 +5,8 @@ import (
 	"io"
 	"log"
 	"math/rand/v2"
+	"net"
 	"net/http"
-	"strings"
 	"time"
 
 	"neo-code/internal/provider"
@@ -57,21 +57,14 @@ func isNetworkError(err error) bool {
 	if err == nil {
 		return false
 	}
-	msg := err.Error()
-	// 常见网络错误关键字
-	networkIndicators := []string{
-		"connection refused",
-		"connection reset",
-		"connection timed out",
-		"timeout",
-		"no such host",
-		"i/o timeout",
-		"dial tcp",
+	var netErr *net.OpError
+	if errors.As(err, &netErr) {
+		return true
 	}
-	for _, indicator := range networkIndicators {
-		if strings.Contains(msg, indicator) {
-			return true
-		}
+	// net/url.Error 包装了底层错误，也需要识别。
+	var urlErr *net.AddrError
+	if errors.As(err, &urlErr) {
+		return true
 	}
 	return false
 }
@@ -126,11 +119,32 @@ func (rt *RetryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 
 		resp, err := rt.base.RoundTrip(req)
 		if err == nil {
-			return resp, nil
+			if !provider.IsRetryableStatus(resp.StatusCode) {
+				return resp, nil
+			}
+
+			lastResp = resp
+			lastErr = provider.NewProviderErrorFromStatus(resp.StatusCode, resp.Status)
+			if req.Context().Err() != nil {
+				_ = rt.drainAndClose(resp)
+				return nil, req.Context().Err()
+			}
+			if attempt == rt.config.MaxRetries {
+				return resp, nil
+			}
+			continue
 		}
 
-		lastErr = err
+		// 将网络层错误包装为结构化 ProviderError。
 		lastResp = nil
+		var netErr net.Error
+		if errors.As(err, &netErr) && netErr.Timeout() {
+			lastErr = provider.NewTimeoutProviderError(err.Error())
+		} else if isNetworkError(err) {
+			lastErr = provider.NewNetworkProviderError(err.Error())
+		} else {
+			lastErr = err
+		}
 
 		// 检查是否可重试。
 		if !rt.config.RetryableFunc(err) {

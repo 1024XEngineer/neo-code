@@ -2,6 +2,8 @@ package provider
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -20,10 +22,17 @@ type Service struct {
 	catalogs          ModelCatalogStore
 	catalogTTL        time.Duration
 	backgroundTimeout time.Duration
+	refreshLease      time.Duration
 	now               func() time.Time
 
-	refreshMu    sync.Mutex
-	inFlightByID map[string]struct{}
+	refreshMu        sync.Mutex
+	nextRefreshToken uint64
+	inFlightByID     map[string]refreshTask
+}
+
+type refreshTask struct {
+	token     uint64
+	startedAt time.Time
 }
 
 func NewService(manager *config.Manager, registry *Registry, catalogs ModelCatalogStore) *Service {
@@ -37,10 +46,15 @@ func NewService(manager *config.Manager, registry *Registry, catalogs ModelCatal
 		catalogs:          catalogs,
 		catalogTTL:        defaultModelCatalogTTL,
 		backgroundTimeout: defaultBackgroundRefreshTime,
+		refreshLease:      defaultBackgroundRefreshTime * 2,
 		now:               time.Now,
-		inFlightByID:      map[string]struct{}{},
+		inFlightByID:      map[string]refreshTask{},
 	}
 }
+
+var errProviderConfigChanged = errors.New("provider: provider config changed during update")
+
+const maxOptimisticLockRetries = 10
 
 func (s *Service) ListProviders(ctx context.Context) ([]ProviderCatalogItem, error) {
 	if err := s.validate(); err != nil {
@@ -72,39 +86,51 @@ func (s *Service) SelectProvider(ctx context.Context, providerName string) (Prov
 		return ProviderSelection{}, err
 	}
 
-	cfgSnapshot := s.manager.Get()
-	providerCfg, err := cfgSnapshot.ProviderByName(providerName)
-	if err != nil {
-		return ProviderSelection{}, ErrProviderNotFound
-	}
-	if !s.registry.Supports(providerCfg.Driver) {
-		return ProviderSelection{}, ErrDriverNotFound
-	}
+	for {
+		if err := ctx.Err(); err != nil {
+			return ProviderSelection{}, err
+		}
 
-	models := s.modelsForProvider(ctx, providerCfg, modelQueryOptions{})
-
-	var selection ProviderSelection
-	err = s.manager.Update(ctx, func(cfg *config.Config) error {
-		selected, err := cfg.ProviderByName(providerName)
+		cfgSnapshot := s.manager.Get()
+		providerCfg, err := cfgSnapshot.ProviderByName(providerName)
 		if err != nil {
-			return ErrProviderNotFound
+			return ProviderSelection{}, ErrProviderNotFound
 		}
-		if !s.registry.Supports(selected.Driver) {
-			return ErrDriverNotFound
+		if !s.registry.Supports(providerCfg.Driver) {
+			return ProviderSelection{}, ErrDriverNotFound
 		}
 
-		cfg.SelectedProvider = selected.Name
-		nextModel, _ := resolveCurrentModel(cfg.CurrentModel, models, selected.Model)
-		cfg.CurrentModel = nextModel
-		selection = selectionFromConfig(*cfg)
-		return nil
-	})
-	if err != nil {
-		return ProviderSelection{}, err
+		models := s.modelsForProvider(ctx, providerCfg, modelQueryOptions{})
+
+		var selection ProviderSelection
+		err = s.manager.Update(ctx, func(cfg *config.Config) error {
+			selected, err := cfg.ProviderByName(providerName)
+			if err != nil {
+				return ErrProviderNotFound
+			}
+			if selected != providerCfg {
+				return errProviderConfigChanged
+			}
+			if !s.registry.Supports(selected.Driver) {
+				return ErrDriverNotFound
+			}
+
+			cfg.SelectedProvider = selected.Name
+			nextModel, _ := resolveCurrentModel(cfg.CurrentModel, models, selected.Model)
+			cfg.CurrentModel = nextModel
+			selection = selectionFromConfig(*cfg)
+			return nil
+		})
+		if errors.Is(err, errProviderConfigChanged) {
+			continue
+		}
+		if err != nil {
+			return ProviderSelection{}, err
+		}
+
+		s.queueRefresh(providerCfg)
+		return selection, nil
 	}
-
-	s.queueRefresh(providerCfg)
-	return selection, nil
 }
 
 func (s *Service) ListModels(ctx context.Context) ([]ModelDescriptor, error) {
@@ -144,33 +170,48 @@ func (s *Service) SetCurrentModel(ctx context.Context, modelID string) (Provider
 		return ProviderSelection{}, ErrModelNotFound
 	}
 
-	cfgSnapshot := s.manager.Get()
-	selected, err := cfgSnapshot.SelectedProviderConfig()
-	if err != nil {
-		return ProviderSelection{}, err
-	}
-
-	models := s.modelsForProvider(ctx, selected, modelQueryOptions{
-		queueRefresh: true,
-	})
-	if !containsModelDescriptorID(models, modelID) {
-		return ProviderSelection{}, ErrModelNotFound
-	}
-
-	var selection ProviderSelection
-	err = s.manager.Update(ctx, func(cfg *config.Config) error {
-		if _, err := cfg.SelectedProviderConfig(); err != nil {
-			return err
+	for attempt := 0; attempt < maxOptimisticLockRetries; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return ProviderSelection{}, err
 		}
-		cfg.CurrentModel = modelID
-		selection = selectionFromConfig(*cfg)
-		return nil
-	})
-	if err != nil {
-		return ProviderSelection{}, err
-	}
 
-	return selection, nil
+		cfgSnapshot := s.manager.Get()
+		selected, err := cfgSnapshot.SelectedProviderConfig()
+		if err != nil {
+			return ProviderSelection{}, err
+		}
+
+		models := s.modelsForProvider(ctx, selected, modelQueryOptions{
+			queueRefresh: true,
+		})
+		if !containsModelDescriptorID(models, modelID) {
+			return ProviderSelection{}, ErrModelNotFound
+		}
+
+		var selection ProviderSelection
+		err = s.manager.Update(ctx, func(cfg *config.Config) error {
+			currentSelected, err := cfg.SelectedProviderConfig()
+			if err != nil {
+				return err
+			}
+			if currentSelected != selected {
+				return errProviderConfigChanged
+			}
+
+			cfg.CurrentModel = modelID
+			selection = selectionFromConfig(*cfg)
+			return nil
+		})
+		if errors.Is(err, errProviderConfigChanged) {
+			continue
+		}
+		if err != nil {
+			return ProviderSelection{}, err
+		}
+
+		return selection, nil
+	}
+	return ProviderSelection{}, fmt.Errorf("provider: set current model %q: config changed too frequently, exhausted %d retries", modelID, maxOptimisticLockRetries)
 }
 
 func (s *Service) Build(ctx context.Context, cfg config.ResolvedProviderConfig) (Provider, error) {
@@ -188,42 +229,66 @@ func (s *Service) EnsureSelection(ctx context.Context) (ProviderSelection, error
 		return ProviderSelection{}, err
 	}
 
-	cfgSnapshot := s.manager.Get()
-	selected, err := cfgSnapshot.SelectedProviderConfig()
-	if err != nil {
-		return ProviderSelection{}, err
-	}
-
-	models := s.modelsForProvider(ctx, selected, modelQueryOptions{
-		queueRefresh: true,
-	})
-	nextModel, changed := resolveCurrentModel(cfgSnapshot.CurrentModel, models, selected.Model)
-	if !changed {
-		return selectionFromConfig(cfgSnapshot), nil
-	}
-
-	var selection ProviderSelection
-	err = s.manager.Update(ctx, func(cfg *config.Config) error {
-		if _, err := cfg.SelectedProviderConfig(); err != nil {
-			return err
+	for {
+		cfgSnapshot := s.manager.Get()
+		selected, err := cfgSnapshot.SelectedProviderConfig()
+		if err != nil {
+			return ProviderSelection{}, err
 		}
-		cfg.CurrentModel = nextModel
-		selection = selectionFromConfig(*cfg)
-		return nil
-	})
-	if err != nil {
-		return ProviderSelection{}, err
-	}
 
-	return selection, nil
+		models := s.modelsForProvider(ctx, selected, modelQueryOptions{
+			queueRefresh: true,
+		})
+		nextModel, changed := resolveCurrentModel(cfgSnapshot.CurrentModel, models, selected.Model)
+		if !changed {
+			latest := s.manager.Get()
+			latestSelected, err := latest.SelectedProviderConfig()
+			if err != nil {
+				return ProviderSelection{}, err
+			}
+			if latestSelected != selected || latest.CurrentModel != cfgSnapshot.CurrentModel {
+				if err := ctx.Err(); err != nil {
+					return ProviderSelection{}, err
+				}
+				continue
+			}
+			return selectionFromConfig(latest), nil
+		}
+
+		var selection ProviderSelection
+		err = s.manager.Update(ctx, func(cfg *config.Config) error {
+			currentSelected, err := cfg.SelectedProviderConfig()
+			if err != nil {
+				return err
+			}
+			if currentSelected != selected {
+				return errProviderConfigChanged
+			}
+
+			cfg.CurrentModel = nextModel
+			selection = selectionFromConfig(*cfg)
+			return nil
+		})
+		if errors.Is(err, errProviderConfigChanged) {
+			if err := ctx.Err(); err != nil {
+				return ProviderSelection{}, err
+			}
+			continue
+		}
+		if err != nil {
+			return ProviderSelection{}, err
+		}
+
+		return selection, nil
+	}
 }
 
 func (s *Service) validate() error {
 	if s == nil || s.manager == nil {
-		return ErrServiceManagerNil
+		return errServiceManagerNil
 	}
 	if s.registry == nil {
-		return ErrServiceRegistryNil
+		return errServiceRegistryNil
 	}
 	return nil
 }
@@ -342,25 +407,33 @@ func (s *Service) queueRefresh(providerCfg config.ProviderConfig) {
 	}
 
 	key := identity.Key()
+	now := s.now()
+	lease := s.refreshLeaseDuration()
+
 	s.refreshMu.Lock()
-	if _, exists := s.inFlightByID[key]; exists {
-		s.refreshMu.Unlock()
-		return
+	if task, exists := s.inFlightByID[key]; exists {
+		if lease <= 0 || now.Sub(task.startedAt) < lease {
+			s.refreshMu.Unlock()
+			return
+		}
 	}
-	s.inFlightByID[key] = struct{}{}
+	s.nextRefreshToken++
+	token := s.nextRefreshToken
+	s.inFlightByID[key] = refreshTask{
+		token:     token,
+		startedAt: now,
+	}
 	s.refreshMu.Unlock()
 
-	go func() {
+	go func(expectedToken uint64) {
 		defer func() {
-			s.refreshMu.Lock()
-			delete(s.inFlightByID, key)
-			s.refreshMu.Unlock()
+			s.releaseRefresh(key, expectedToken)
 		}()
 
 		ctx, cancel := context.WithTimeout(context.Background(), s.backgroundTimeout)
 		defer cancel()
 		_, _ = s.discoverAndPersist(ctx, providerCfg)
-	}()
+	}(token)
 }
 
 func selectionFromConfig(cfg config.Config) ProviderSelection {
@@ -381,27 +454,65 @@ func resolveCurrentModel(currentModel string, models []ModelDescriptor, fallback
 		return fallback, currentModel != fallback
 	}
 
+	if first := firstModelDescriptorID(models); first != "" {
+		return first, currentModel != first
+	}
+	if fallback != "" {
+		return fallback, currentModel != fallback
+	}
+
 	return currentModel, false
 }
 
 func catalogItemFromConfig(cfg config.ProviderConfig, models []ModelDescriptor) ProviderCatalogItem {
 	return ProviderCatalogItem{
-		ID:     strings.TrimSpace(cfg.Name),
-		Name:   strings.TrimSpace(cfg.Name),
-		Models: MergeModelDescriptors(models),
+		ID:          strings.TrimSpace(cfg.Name),
+		Name:        strings.TrimSpace(cfg.Name),
+		Description: strings.TrimSpace(cfg.Description),
+		Models:      MergeModelDescriptors(models),
 	}
 }
 
 func containsModelDescriptorID(models []ModelDescriptor, modelID string) bool {
-	target := config.NormalizeKey(modelID)
-	if target == "" {
+	if modelID == "" {
 		return false
 	}
 
 	for _, model := range models {
-		if config.NormalizeKey(model.ID) == target {
+		if config.NormalizeKey(model.ID) == modelID {
 			return true
 		}
 	}
 	return false
+}
+
+func firstModelDescriptorID(models []ModelDescriptor) string {
+	for _, model := range models {
+		id := strings.TrimSpace(model.ID)
+		if id != "" {
+			return id
+		}
+	}
+	return ""
+}
+
+func (s *Service) refreshLeaseDuration() time.Duration {
+	if s.refreshLease > 0 {
+		return s.refreshLease
+	}
+	if s.backgroundTimeout > 0 {
+		return s.backgroundTimeout * 2
+	}
+	return defaultBackgroundRefreshTime * 2
+}
+
+func (s *Service) releaseRefresh(key string, expectedToken uint64) {
+	s.refreshMu.Lock()
+	defer s.refreshMu.Unlock()
+
+	task, exists := s.inFlightByID[key]
+	if !exists || task.token != expectedToken {
+		return
+	}
+	delete(s.inFlightByID, key)
 }

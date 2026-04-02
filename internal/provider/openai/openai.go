@@ -52,13 +52,6 @@ func Driver() domain.DriverDefinition {
 		Build: func(ctx context.Context, cfg config.ResolvedProviderConfig) (domain.Provider, error) {
 			return New(cfg, WithTransport(defaultRetryTransport()))
 		},
-		Discover: func(ctx context.Context, cfg config.ResolvedProviderConfig) ([]domain.ModelDescriptor, error) {
-			provider, err := New(cfg, WithTransport(defaultRetryTransport()))
-			if err != nil {
-				return nil, err
-			}
-			return provider.DiscoverModels(ctx)
-		},
 	}
 }
 

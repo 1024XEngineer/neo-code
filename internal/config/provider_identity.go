@@ -21,10 +21,15 @@ func NormalizeKey(s string) string {
 	return strings.ToLower(strings.TrimSpace(s))
 }
 
+// NormalizeProviderName 将 provider 名称规范化为小写并去除首尾空白。
+// 语义上表示"用户选择的 provider 的显示名称"，用于配置匹配和去重。
 func NormalizeProviderName(name string) string {
 	return NormalizeKey(name)
 }
 
+// NormalizeProviderDriver 将驱动类型标识规范化为小写并去除首尾空白。
+// 语义上表示"协议驱动类型"（如 openai、anthropic），用于注册表匹配。
+// 当前实现与 NormalizeProviderName 相同，保留独立函数以明确语义区分。
 func NormalizeProviderDriver(driver string) string {
 	return NormalizeKey(driver)
 }

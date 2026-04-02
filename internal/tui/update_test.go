@@ -199,7 +199,7 @@ func TestAppUpdateModelPickerAndRuntimeMessages(t *testing.T) {
 					t.Fatalf("expected assistant draft message")
 				}
 				last := app.activeMessages[len(app.activeMessages)-1]
-				if last.Role != roleAssistant || last.Content != "hello" {
+				if last.Role != provider.RoleAssistant || last.Content != "hello" {
 					t.Fatalf("unexpected last assistant draft: %+v", last)
 				}
 			},
@@ -214,7 +214,7 @@ func TestAppUpdateModelPickerAndRuntimeMessages(t *testing.T) {
 				Type:      agentruntime.EventAgentDone,
 				SessionID: "session-2",
 				Payload: provider.Message{
-					Role:    roleAssistant,
+					Role:    provider.RoleAssistant,
 					Content: "final",
 				},
 			}},
@@ -280,7 +280,7 @@ func TestAppUpdateModelPickerAndRuntimeMessages(t *testing.T) {
 				if app.state.StatusText != statusToolError {
 					t.Fatalf("expected status tool error, got %q", app.state.StatusText)
 				}
-				if len(app.activeMessages) == 0 || app.activeMessages[len(app.activeMessages)-1].Role != roleTool {
+				if len(app.activeMessages) == 0 || app.activeMessages[len(app.activeMessages)-1].Role != provider.RoleTool {
 					t.Fatalf("expected tool result to stay in transcript, got %+v", app.activeMessages)
 				}
 				if len(app.activities) == 0 || app.activities[len(app.activities)-1].Title != "Tool error" {
@@ -317,8 +317,8 @@ func TestAppHelpersAndRenderingSmoke(t *testing.T) {
 		ID:    "session-1",
 		Title: "Existing Session",
 		Messages: []provider.Message{
-			{Role: roleUser, Content: "hi"},
-			{Role: roleAssistant, Content: "hello"},
+			{Role: provider.RoleUser, Content: "hi"},
+			{Role: provider.RoleAssistant, Content: "hello"},
 		},
 	}
 	runtime.sessions = []agentruntime.SessionSummary{
@@ -342,7 +342,7 @@ func TestAppHelpersAndRenderingSmoke(t *testing.T) {
 	if !app.lastAssistantMatches("hello world") {
 		t.Fatalf("expected assistant draft to match")
 	}
-	app.appendInlineMessage(roleSystem, "notice")
+	app.appendInlineMessage(provider.RoleSystem, "notice")
 
 	app.focusNext()
 	app.focusPrev()
@@ -471,7 +471,7 @@ func TestAppHelpersAndRenderingSmoke(t *testing.T) {
 		t.Fatalf("expected error message block")
 	}
 	if app.renderMessageBlock(provider.Message{
-		Role: roleAssistant,
+		Role: provider.RoleAssistant,
 		ToolCalls: []provider.ToolCall{
 			{Name: "filesystem_edit"},
 		},
@@ -705,7 +705,7 @@ func TestAppUpdateAdditionalTransitions(t *testing.T) {
 			setup: func(t *testing.T, app *App, runtime *stubRuntime, manager *config.Manager) {
 				app.state.ActiveSessionID = "existing"
 				app.state.ActiveSessionTitle = "Existing"
-				app.activeMessages = []provider.Message{{Role: roleUser, Content: "hello"}}
+				app.activeMessages = []provider.Message{{Role: provider.RoleUser, Content: "hello"}}
 			},
 			msg: tea.KeyMsg{Type: tea.KeyCtrlN},
 			assert: func(t *testing.T, app App, runtime *stubRuntime, manager *config.Manager, msgs []tea.Msg) {
@@ -722,7 +722,7 @@ func TestAppUpdateAdditionalTransitions(t *testing.T) {
 				runtime.loads["s1"] = agentruntime.Session{
 					ID:       "s1",
 					Title:    "One",
-					Messages: []provider.Message{{Role: roleAssistant, Content: "loaded"}},
+					Messages: []provider.Message{{Role: provider.RoleAssistant, Content: "loaded"}},
 				}
 				if err := app.refreshSessions(); err != nil {
 					t.Fatalf("refresh sessions: %v", err)
@@ -829,7 +829,7 @@ func TestAppUpdateAdditionalTransitions(t *testing.T) {
 				if !app.state.IsAgentRunning {
 					t.Fatalf("expected agent to start running")
 				}
-				if len(app.activeMessages) == 0 || app.activeMessages[len(app.activeMessages)-1].Role != roleUser {
+				if len(app.activeMessages) == 0 || app.activeMessages[len(app.activeMessages)-1].Role != provider.RoleUser {
 					t.Fatalf("expected user message appended")
 				}
 				if len(runtime.runInputs) != 1 || runtime.runInputs[0].Content != "inspect repo\nwith details" {
@@ -1122,7 +1122,7 @@ func TestAppHandleRuntimeEventAdditionalBranches(t *testing.T) {
 				if app.state.CurrentTool != "" || app.state.StatusText != statusToolFinished {
 					t.Fatalf("unexpected tool success state: %+v", app.state)
 				}
-				if len(app.activeMessages) == 0 || app.activeMessages[len(app.activeMessages)-1].Role != roleTool {
+				if len(app.activeMessages) == 0 || app.activeMessages[len(app.activeMessages)-1].Role != provider.RoleTool {
 					t.Fatalf("expected tool result message in transcript, got %+v", app.activeMessages)
 				}
 				if len(app.activities) == 0 || app.activities[len(app.activities)-1].Title != "Completed tool" {
@@ -1727,6 +1727,10 @@ type tuiTestProvider struct{}
 
 func (tuiTestProvider) Chat(ctx context.Context, req provider.ChatRequest, events chan<- provider.StreamEvent) (provider.ChatResponse, error) {
 	return provider.ChatResponse{}, nil
+}
+
+func (tuiTestProvider) DiscoverModels(ctx context.Context) ([]provider.ModelDescriptor, error) {
+	return nil, nil
 }
 
 type tuiTestCatalogStore struct {

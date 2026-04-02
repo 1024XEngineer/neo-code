@@ -12,8 +12,8 @@ var (
 	ErrModelNotFound           = errors.New("model not found")
 	ErrDriverNotFound          = errors.New("provider driver not found")
 	ErrDriverAlreadyRegistered = errors.New("provider: driver already registered")
-	ErrServiceManagerNil       = errors.New("provider: config manager is nil")
-	ErrServiceRegistryNil      = errors.New("provider: registry is nil")
+	errServiceManagerNil       = errors.New("provider: config manager is nil")
+	errServiceRegistryNil      = errors.New("provider: registry is nil")
 )
 
 type ProviderErrorCode string

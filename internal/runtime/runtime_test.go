@@ -122,6 +122,10 @@ func (p *scriptedProvider) Chat(ctx context.Context, req provider.ChatRequest, e
 	return p.responses[callIndex], nil
 }
 
+func (p *scriptedProvider) DiscoverModels(ctx context.Context) ([]provider.ModelDescriptor, error) {
+	return nil, nil
+}
+
 type scriptedProviderFactory struct {
 	provider provider.Provider
 	calls    int
