@@ -3,6 +3,7 @@ package provider_test
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 
 	"neo-code/internal/config"
@@ -116,16 +117,16 @@ func TestServiceListProvidersUsesConfiguredMetadata(t *testing.T) {
 		t.Fatalf("append provider: %v", err)
 	}
 
-	service := provider.NewService(manager, newTestRegistry(t))
+	service := provider.NewService(manager, newTestRegistry(t), newCatalogStoreStub())
 	items, err := service.ListProviders(context.Background())
 	if err != nil {
 		t.Fatalf("ListProviders() error = %v", err)
 	}
 	expectedModels := map[string]int{
-		config.OpenAIName: len(config.OpenAIProvider().Models),
-		config.GeminiName: len(config.GeminiProvider().Models),
-		config.OpenLLName: len(config.OpenLLProvider().Models),
-		config.QiniuName:  len(config.QiniuProvider().Models),
+		config.OpenAIName: len(config.OpenAIProvider().SupportedModels()),
+		config.GeminiName: len(config.GeminiProvider().SupportedModels()),
+		config.OpenLLName: len(config.OpenLLProvider().SupportedModels()),
+		config.QiniuName:  len(config.QiniuProvider().SupportedModels()),
 	}
 	if len(items) != len(expectedModels) {
 		t.Fatalf("expected only supported providers, got %d", len(items))
@@ -172,7 +173,7 @@ func TestServiceSelectProviderAndSetCurrentModel(t *testing.T) {
 		t.Fatalf("seed current model: %v", err)
 	}
 
-	service := provider.NewService(manager, registry)
+	service := provider.NewService(manager, registry, newCatalogStoreStub())
 
 	selection, err := service.SelectProvider(context.Background(), "custom-main")
 	if err != nil {
@@ -239,7 +240,7 @@ func TestServiceModelOperationsUseProviderConfigEvenWithoutDriver(t *testing.T) 
 		t.Fatalf("append broken provider: %v", err)
 	}
 
-	service := provider.NewService(manager, newTestRegistry(t))
+	service := provider.NewService(manager, newTestRegistry(t), newCatalogStoreStub())
 
 	models, err := service.ListModels(context.Background())
 	if err != nil {
@@ -276,7 +277,7 @@ func TestServiceSelectProviderRejectsUnsupportedDriver(t *testing.T) {
 		t.Fatalf("append broken provider: %v", err)
 	}
 
-	service := provider.NewService(manager, newTestRegistry(t))
+	service := provider.NewService(manager, newTestRegistry(t), newCatalogStoreStub())
 	if _, err := service.SelectProvider(context.Background(), "broken-provider"); !errors.Is(err, provider.ErrDriverNotFound) {
 		t.Fatalf("expected SelectProvider() to preserve ErrDriverNotFound, got %v", err)
 	}
@@ -323,10 +324,47 @@ func TestServiceBuildReturnsErrorOnNilRegistry(t *testing.T) {
 	t.Parallel()
 
 	manager := newTestManager(t)
-	service := provider.NewService(manager, nil)
+	service := provider.NewService(manager, nil, newCatalogStoreStub())
 
 	_, err := service.Build(context.Background(), config.ResolvedProviderConfig{})
 	if err == nil {
 		t.Fatalf("expected error for nil registry")
 	}
+}
+
+type catalogStoreStub struct {
+	mu       sync.Mutex
+	catalogs map[string]provider.ModelCatalog
+}
+
+func newCatalogStoreStub() *catalogStoreStub {
+	return &catalogStoreStub{
+		catalogs: map[string]provider.ModelCatalog{},
+	}
+}
+
+func (s *catalogStoreStub) Load(ctx context.Context, identity config.ProviderIdentity) (provider.ModelCatalog, error) {
+	if err := ctx.Err(); err != nil {
+		return provider.ModelCatalog{}, err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	catalog, ok := s.catalogs[identity.Key()]
+	if !ok {
+		return provider.ModelCatalog{}, provider.ErrModelCatalogNotFound
+	}
+	return catalog, nil
+}
+
+func (s *catalogStoreStub) Save(ctx context.Context, catalog provider.ModelCatalog) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.catalogs[catalog.Identity.Key()] = catalog
+	return nil
 }

@@ -22,78 +22,51 @@ const (
 	QiniuDefaultAPIKeyEnv = "QINIU_API_KEY"
 )
 
-var openAIModels = []string{
-	OpenAIDefaultModel,
-	"gpt-4o",
-	"gpt-5.4",
-	"gpt-5.3-codex",
-}
-
-var geminiModels = []string{
-	GeminiDefaultModel,
-	"gemini-2.5-pro",
-	"gemini-2.0-flash",
-}
-
-var openLLModels = []string{
-	OpenLLDefaultModel,
-	"gpt-5.3-codex",
-	"gpt-5.3-turbo",
-}
-
-var qiniuModels = []string{
-	QiniuDefaultModel,
-	"openai/gpt-5.2-codex",
-}
-
-// OpenAIProvider 返回 OpenAI provider 的默认配置。
+// OpenAIProvider returns the builtin OpenAI provider definition.
 func OpenAIProvider() ProviderConfig {
 	return ProviderConfig{
 		Name:      OpenAIName,
 		Driver:    "openai",
 		BaseURL:   OpenAIDefaultBaseURL,
 		Model:     OpenAIDefaultModel,
-		Models:    append([]string(nil), openAIModels...),
 		APIKeyEnv: OpenAIDefaultAPIKeyEnv,
 	}
 }
 
-// GeminiProvider 返回 Gemini provider 的默认配置。
+// GeminiProvider returns the builtin Gemini provider definition.
 func GeminiProvider() ProviderConfig {
 	return ProviderConfig{
 		Name:      GeminiName,
 		Driver:    "openai",
 		BaseURL:   GeminiDefaultBaseURL,
 		Model:     GeminiDefaultModel,
-		Models:    append([]string(nil), geminiModels...),
 		APIKeyEnv: GeminiDefaultAPIKeyEnv,
 	}
 }
 
-// OpenLLProvider 返回 OpenLL provider 的默认配置。
+// OpenLLProvider returns the builtin OpenLL provider definition.
 func OpenLLProvider() ProviderConfig {
 	return ProviderConfig{
 		Name:      OpenLLName,
 		Driver:    "openai",
 		BaseURL:   OpenLLDefaultBaseURL,
 		Model:     OpenLLDefaultModel,
-		Models:    append([]string(nil), openLLModels...),
 		APIKeyEnv: OpenLLDefaultAPIKeyEnv,
 	}
 }
 
+// QiniuProvider returns the builtin Qiniu provider definition.
 func QiniuProvider() ProviderConfig {
 	return ProviderConfig{
 		Name:      QiniuName,
 		Driver:    "openai",
 		BaseURL:   QiniuDefaultBaseURL,
 		Model:     QiniuDefaultModel,
-		Models:    append([]string(nil), qiniuModels...),
 		APIKeyEnv: QiniuDefaultAPIKeyEnv,
 	}
 }
 
-// DefaultProviders 返回所有内置 provider 配置列表。
+// DefaultProviders returns all builtin provider definitions.
 func DefaultProviders() []ProviderConfig {
 	return []ProviderConfig{
 		OpenAIProvider(),

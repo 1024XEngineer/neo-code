@@ -928,6 +928,7 @@ func TestAppUpdateAdditionalTransitions(t *testing.T) {
 func TestAppUpdateModelPickerEnterAppliesSelection(t *testing.T) {
 	manager := newTestConfigManager(t)
 	if err := manager.Update(context.Background(), func(cfg *config.Config) error {
+		cfg.Providers[0].Models = []string{cfg.Providers[0].Model, "gpt-4o"}
 		cfg.CurrentModel = "unsupported-current"
 		return nil
 	}); err != nil {
@@ -952,10 +953,12 @@ func TestAppUpdateModelPickerEnterAppliesSelection(t *testing.T) {
 		t.Fatalf("expected picker to close after selection")
 	}
 
-	for _, msg := range collectTeaMessages(cmd) {
-		model, follow := app.Update(msg)
-		app = model.(App)
-		_ = collectTeaMessages(follow)
+	if cmd != nil {
+		if msg := cmd(); msg != nil {
+			model, follow := app.Update(msg)
+			app = model.(App)
+			_ = collectTeaMessages(follow)
+		}
 	}
 
 	cfg := manager.Get()
@@ -970,7 +973,7 @@ func TestAppUpdateProviderPickerEnterAppliesSelection(t *testing.T) {
 		cfg.Providers = append(cfg.Providers, config.ProviderConfig{
 			Name:      "openai-alt",
 			Driver:    "openai",
-			BaseURL:   config.OpenAIDefaultBaseURL,
+			BaseURL:   "https://alt.example.com/v1",
 			Model:     "gpt-4o",
 			Models:    []string{"gpt-4o"},
 			APIKeyEnv: config.OpenAIDefaultAPIKeyEnv,
@@ -1489,7 +1492,7 @@ func newTestProviderService(t *testing.T, manager *config.Manager) *provider.Ser
 	if err != nil {
 		t.Fatalf("register provider drivers: %v", err)
 	}
-	return provider.NewService(manager, registry)
+	return provider.NewService(manager, registry, nil)
 }
 
 func collectTeaMessages(cmd tea.Cmd) []tea.Msg {
@@ -1504,7 +1507,7 @@ func collectTeaMessages(cmd tea.Cmd) []tea.Msg {
 	var msg tea.Msg
 	select {
 	case msg = <-msgCh:
-	case <-time.After(25 * time.Millisecond):
+	case <-time.After(250 * time.Millisecond):
 		return nil
 	}
 	if msg == nil {

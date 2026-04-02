@@ -434,13 +434,19 @@ func TestConfigValidateFailures(t *testing.T) {
 			expectErr: "supported_content_types[0] is empty",
 		},
 		{
-			name: "current model unsupported by selected provider",
+			name: "duplicate provider endpoints after normalization",
 			config: func() *Config {
 				cfg := validConfig.Clone()
-				cfg.CurrentModel = "unsupported-model"
+				cfg.Providers = append(cfg.Providers, ProviderConfig{
+					Name:      "openai-shadow",
+					Driver:    "OPENAI",
+					BaseURL:   "https://API.OPENAI.COM/v1/",
+					Model:     "shadow-model",
+					APIKeyEnv: "OPENAI_SHADOW_KEY",
+				})
 				return &cfg
 			}(),
-			expectErr: "current_model \"unsupported-model\" is not supported",
+			expectErr: "duplicate provider endpoint",
 		},
 	}
 
@@ -669,6 +675,19 @@ func TestApplyProviderDefaultsMatchesByNameOnly(t *testing.T) {
 	}
 	if provider.BaseURL != "" || provider.Model != "" || provider.APIKeyEnv != "" || len(provider.Models) != 0 {
 		t.Fatalf("expected provider metadata to stay empty when only driver matches, got %+v", provider)
+	}
+}
+
+func TestApplyDefaultsPreservesDynamicCurrentModel(t *testing.T) {
+	t.Parallel()
+
+	cfg := testDefaultConfig()
+	cfg.CurrentModel = "server-discovered-model"
+
+	cfg.ApplyDefaultsFrom(*testDefaultConfig())
+
+	if cfg.CurrentModel != "server-discovered-model" {
+		t.Fatalf("expected dynamic current model to be preserved, got %q", cfg.CurrentModel)
 	}
 }
 

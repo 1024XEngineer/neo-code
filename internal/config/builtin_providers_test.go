@@ -40,11 +40,11 @@ func TestOpenAIProviderConfig(t *testing.T) {
 	if provider.APIKeyEnv != OpenAIDefaultAPIKeyEnv {
 		t.Fatalf("expected API key env %q, got %q", OpenAIDefaultAPIKeyEnv, provider.APIKeyEnv)
 	}
-	if len(provider.Models) == 0 {
-		t.Fatal("expected non-empty models list")
+	if len(provider.Models) != 0 {
+		t.Fatalf("expected builtin provider to leave manual models empty, got %+v", provider.Models)
 	}
-	if !ContainsModelID(provider.Models, OpenAIDefaultModel) {
-		t.Fatalf("expected models to contain default model %q", OpenAIDefaultModel)
+	if !ContainsModelID(provider.SupportedModels(), OpenAIDefaultModel) {
+		t.Fatalf("expected supported models to contain default model %q", OpenAIDefaultModel)
 	}
 }
 
@@ -68,11 +68,11 @@ func TestGeminiProviderConfig(t *testing.T) {
 	if provider.APIKeyEnv != GeminiDefaultAPIKeyEnv {
 		t.Fatalf("expected API key env %q, got %q", GeminiDefaultAPIKeyEnv, provider.APIKeyEnv)
 	}
-	if len(provider.Models) == 0 {
-		t.Fatal("expected non-empty models list")
+	if len(provider.Models) != 0 {
+		t.Fatalf("expected builtin provider to leave manual models empty, got %+v", provider.Models)
 	}
-	if !ContainsModelID(provider.Models, GeminiDefaultModel) {
-		t.Fatalf("expected models to contain default model %q", GeminiDefaultModel)
+	if !ContainsModelID(provider.SupportedModels(), GeminiDefaultModel) {
+		t.Fatalf("expected supported models to contain default model %q", GeminiDefaultModel)
 	}
 }
 
@@ -96,27 +96,28 @@ func TestOpenLLProviderConfig(t *testing.T) {
 	if provider.APIKeyEnv != OpenLLDefaultAPIKeyEnv {
 		t.Fatalf("expected API key env %q, got %q", OpenLLDefaultAPIKeyEnv, provider.APIKeyEnv)
 	}
-	if len(provider.Models) == 0 {
-		t.Fatal("expected non-empty models list")
+	if len(provider.Models) != 0 {
+		t.Fatalf("expected builtin provider to leave manual models empty, got %+v", provider.Models)
 	}
-	if !ContainsModelID(provider.Models, OpenLLDefaultModel) {
-		t.Fatalf("expected models to contain default model %q", OpenLLDefaultModel)
+	if !ContainsModelID(provider.SupportedModels(), OpenLLDefaultModel) {
+		t.Fatalf("expected supported models to contain default model %q", OpenLLDefaultModel)
 	}
 }
 
 func TestProviderModelsAreImmutable(t *testing.T) {
 	t.Parallel()
 
-	// Verify that modifying returned models slice doesn't affect future calls
 	provider1 := OpenAIProvider()
-	provider1.Models[0] = "modified-model"
+	models1 := provider1.SupportedModels()
+	models1[0] = "modified-model"
 
 	provider2 := OpenAIProvider()
-	if provider2.Models[0] == "modified-model" {
-		t.Fatal("expected models slice to be independent between calls")
+	models2 := provider2.SupportedModels()
+	if models2[0] == "modified-model" {
+		t.Fatal("expected supported models slice to be independent between calls")
 	}
-	if provider2.Models[0] != OpenAIDefaultModel {
-		t.Fatalf("expected first model %q, got %q", OpenAIDefaultModel, provider2.Models[0])
+	if models2[0] != OpenAIDefaultModel {
+		t.Fatalf("expected first model %q, got %q", OpenAIDefaultModel, models2[0])
 	}
 }
 

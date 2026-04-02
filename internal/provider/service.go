@@ -2,26 +2,43 @@ package provider
 
 import (
 	"context"
-	"errors"
 	"strings"
+	"sync"
+	"time"
 
 	"neo-code/internal/config"
 )
 
-type Service struct {
-	manager  *config.Manager
-	registry *Registry
-}
-
-var (
-	errServiceManagerNil  = errors.New("provider: config manager is nil")
-	errServiceRegistryNil = errors.New("provider: registry is nil")
+const (
+	defaultModelCatalogTTL       = 24 * time.Hour
+	defaultBackgroundRefreshTime = 30 * time.Second
 )
 
-func NewService(manager *config.Manager, registry *Registry) *Service {
+type Service struct {
+	manager           *config.Manager
+	registry          *Registry
+	catalogs          ModelCatalogStore
+	catalogTTL        time.Duration
+	backgroundTimeout time.Duration
+	now               func() time.Time
+
+	refreshMu    sync.Mutex
+	inFlightByID map[string]struct{}
+}
+
+func NewService(manager *config.Manager, registry *Registry, catalogs ModelCatalogStore) *Service {
+	if catalogs == nil && manager != nil {
+		catalogs = NewJSONModelCatalogStore(manager.BaseDir())
+	}
+
 	return &Service{
-		manager:  manager,
-		registry: registry,
+		manager:           manager,
+		registry:          registry,
+		catalogs:          catalogs,
+		catalogTTL:        defaultModelCatalogTTL,
+		backgroundTimeout: defaultBackgroundRefreshTime,
+		now:               time.Now,
+		inFlightByID:      map[string]struct{}{},
 	}
 }
 
@@ -42,7 +59,9 @@ func (s *Service) ListProviders(ctx context.Context) ([]ProviderCatalogItem, err
 		if !s.registry.Supports(providerCfg.Driver) {
 			continue
 		}
-		items = append(items, catalogItemFromConfig(providerCfg))
+
+		models := s.modelsForProvider(ctx, providerCfg, modelQueryOptions{})
+		items = append(items, catalogItemFromConfig(providerCfg, models))
 	}
 
 	return items, nil
@@ -53,19 +72,29 @@ func (s *Service) SelectProvider(ctx context.Context, providerName string) (Prov
 		return ProviderSelection{}, err
 	}
 
-	var selection ProviderSelection
+	cfgSnapshot := s.manager.Get()
+	providerCfg, err := cfgSnapshot.ProviderByName(providerName)
+	if err != nil {
+		return ProviderSelection{}, ErrProviderNotFound
+	}
+	if !s.registry.Supports(providerCfg.Driver) {
+		return ProviderSelection{}, ErrDriverNotFound
+	}
 
-	err := s.manager.Update(ctx, func(cfg *config.Config) error {
-		providerCfg, err := cfg.ProviderByName(providerName)
+	models := s.modelsForProvider(ctx, providerCfg, modelQueryOptions{})
+
+	var selection ProviderSelection
+	err = s.manager.Update(ctx, func(cfg *config.Config) error {
+		selected, err := cfg.ProviderByName(providerName)
 		if err != nil {
 			return ErrProviderNotFound
 		}
-		if !s.registry.Supports(providerCfg.Driver) {
+		if !s.registry.Supports(selected.Driver) {
 			return ErrDriverNotFound
 		}
 
-		cfg.SelectedProvider = providerCfg.Name
-		cfg.CurrentModel = selectModel(cfg.CurrentModel, providerCfg.SupportedModels(), providerCfg.Model)
+		cfg.SelectedProvider = selected.Name
+		cfg.CurrentModel = selectModel(cfg.CurrentModel, modelDescriptorIDs(models), selected.Model)
 		selection = selectionFromConfig(*cfg)
 		return nil
 	})
@@ -73,6 +102,7 @@ func (s *Service) SelectProvider(ctx context.Context, providerName string) (Prov
 		return ProviderSelection{}, err
 	}
 
+	s.queueRefresh(providerCfg)
 	return selection, nil
 }
 
@@ -90,7 +120,10 @@ func (s *Service) ListModels(ctx context.Context) ([]ModelDescriptor, error) {
 		return nil, err
 	}
 
-	return modelDescriptors(selected.SupportedModels()), nil
+	return s.modelsForProvider(ctx, selected, modelQueryOptions{
+		allowSyncRefresh: true,
+		queueRefresh:     true,
+	}), nil
 }
 
 func (s *Service) SetCurrentModel(ctx context.Context, modelID string) (ProviderSelection, error) {
@@ -103,17 +136,25 @@ func (s *Service) SetCurrentModel(ctx context.Context, modelID string) (Provider
 		return ProviderSelection{}, ErrModelNotFound
 	}
 
+	cfgSnapshot := s.manager.Get()
+	selected, err := cfgSnapshot.SelectedProviderConfig()
+	if err != nil {
+		return ProviderSelection{}, err
+	}
+
+	models := s.modelsForProvider(ctx, selected, modelQueryOptions{
+		allowSyncRefresh: true,
+		queueRefresh:     true,
+	})
+	if !containsModelDescriptorID(models, modelID) {
+		return ProviderSelection{}, ErrModelNotFound
+	}
+
 	var selection ProviderSelection
-	err := s.manager.Update(ctx, func(cfg *config.Config) error {
-		selected, err := cfg.SelectedProviderConfig()
-		if err != nil {
+	err = s.manager.Update(ctx, func(cfg *config.Config) error {
+		if _, err := cfg.SelectedProviderConfig(); err != nil {
 			return err
 		}
-
-		if !config.ContainsModelID(selected.SupportedModels(), modelID) {
-			return ErrModelNotFound
-		}
-
 		cfg.CurrentModel = modelID
 		selection = selectionFromConfig(*cfg)
 		return nil
@@ -123,6 +164,147 @@ func (s *Service) SetCurrentModel(ctx context.Context, modelID string) (Provider
 	}
 
 	return selection, nil
+}
+
+func (s *Service) Build(ctx context.Context, cfg config.ResolvedProviderConfig) (Provider, error) {
+	if err := s.validate(); err != nil {
+		return nil, err
+	}
+	return s.registry.Build(ctx, cfg)
+}
+
+func (s *Service) validate() error {
+	if s == nil || s.manager == nil {
+		return ErrServiceManagerNil
+	}
+	if s.registry == nil {
+		return ErrServiceRegistryNil
+	}
+	return nil
+}
+
+type modelQueryOptions struct {
+	allowSyncRefresh bool
+	queueRefresh     bool
+}
+
+func (s *Service) modelsForProvider(ctx context.Context, providerCfg config.ProviderConfig, options modelQueryOptions) []ModelDescriptor {
+	manualModels := modelDescriptorsFromIDs(providerCfg.ConfiguredModels())
+	defaultModels := modelDescriptorsFromIDs([]string{providerCfg.Model})
+
+	cached, cachedOK := s.loadCatalogModels(ctx, providerCfg)
+	if !cachedOK && options.allowSyncRefresh {
+		discovered, ok := s.discoverAndPersist(ctx, providerCfg)
+		if ok {
+			cached = discovered
+			cachedOK = true
+		}
+	}
+
+	if cachedOK && options.queueRefresh && s.catalogExpired(ctx, providerCfg) {
+		s.queueRefresh(providerCfg)
+	}
+
+	return MergeModelDescriptors(manualModels, cached, defaultModels)
+}
+
+func (s *Service) catalogExpired(ctx context.Context, providerCfg config.ProviderConfig) bool {
+	catalog, err := s.loadCatalog(ctx, providerCfg)
+	if err != nil {
+		return false
+	}
+	return catalog.Expired(s.now())
+}
+
+func (s *Service) loadCatalogModels(ctx context.Context, providerCfg config.ProviderConfig) ([]ModelDescriptor, bool) {
+	catalog, err := s.loadCatalog(ctx, providerCfg)
+	if err != nil {
+		return nil, false
+	}
+	return catalog.Models, true
+}
+
+func (s *Service) loadCatalog(ctx context.Context, providerCfg config.ProviderConfig) (ModelCatalog, error) {
+	if s.catalogs == nil {
+		return ModelCatalog{}, ErrModelCatalogNotFound
+	}
+
+	identity, err := providerCfg.Identity()
+	if err != nil {
+		return ModelCatalog{}, err
+	}
+	return s.catalogs.Load(ctx, identity)
+}
+
+func (s *Service) discoverAndPersist(ctx context.Context, providerCfg config.ProviderConfig) ([]ModelDescriptor, bool) {
+	if s.registry == nil {
+		return nil, false
+	}
+	if !s.registry.Supports(providerCfg.Driver) {
+		return nil, false
+	}
+
+	resolved, err := providerCfg.Resolve()
+	if err != nil {
+		return nil, false
+	}
+
+	discovered, err := s.registry.DiscoverModels(ctx, resolved)
+	if err != nil {
+		return nil, false
+	}
+
+	discovered = MergeModelDescriptors(discovered)
+	if s.catalogs == nil {
+		return discovered, true
+	}
+
+	identity, err := providerCfg.Identity()
+	if err != nil {
+		return discovered, true
+	}
+
+	now := s.now()
+	_ = s.catalogs.Save(ctx, ModelCatalog{
+		SchemaVersion: modelCatalogSchemaVersion,
+		Identity:      identity,
+		FetchedAt:     now,
+		ExpiresAt:     now.Add(s.catalogTTL),
+		Models:        discovered,
+	})
+	return discovered, true
+}
+
+func (s *Service) queueRefresh(providerCfg config.ProviderConfig) {
+	if s.catalogs == nil || s.registry == nil || !s.registry.Supports(providerCfg.Driver) {
+		return
+	}
+
+	identity, err := providerCfg.Identity()
+	if err != nil {
+		return
+	}
+
+	key := identity.Key()
+	s.refreshMu.Lock()
+	if _, exists := s.inFlightByID[key]; exists {
+		s.refreshMu.Unlock()
+		return
+	}
+	s.inFlightByID[key] = struct{}{}
+	s.refreshMu.Unlock()
+
+	go func() {
+		defer func() {
+			s.refreshMu.Lock()
+			delete(s.inFlightByID, key)
+			s.refreshMu.Unlock()
+		}()
+
+		ctx, cancel := context.WithTimeout(context.Background(), s.backgroundTimeout)
+		defer cancel()
+		_, _ = s.discoverAndPersist(ctx, providerCfg)
+	}()
 }
 
 func selectionFromConfig(cfg config.Config) ProviderSelection {
@@ -139,48 +321,29 @@ func selectModel(currentModel string, models []string, fallback string) string {
 	return strings.TrimSpace(fallback)
 }
 
-func catalogItemFromConfig(cfg config.ProviderConfig) ProviderCatalogItem {
+func catalogItemFromConfig(cfg config.ProviderConfig, models []ModelDescriptor) ProviderCatalogItem {
 	return ProviderCatalogItem{
 		ID:     strings.TrimSpace(cfg.Name),
 		Name:   strings.TrimSpace(cfg.Name),
-		Models: modelDescriptors(cfg.SupportedModels()),
+		Models: MergeModelDescriptors(models),
 	}
 }
 
-func modelDescriptors(models []string) []ModelDescriptor {
+func modelDescriptorIDs(models []ModelDescriptor) []string {
 	if len(models) == 0 {
 		return nil
 	}
 
-	descriptors := make([]ModelDescriptor, 0, len(models))
-	for _, modelID := range models {
-		modelID = strings.TrimSpace(modelID)
-		if modelID == "" {
+	ids := make([]string, 0, len(models))
+	for _, model := range models {
+		if strings.TrimSpace(model.ID) == "" {
 			continue
 		}
-		descriptors = append(descriptors, ModelDescriptor{
-			ID:   modelID,
-			Name: modelID,
-		})
+		ids = append(ids, model.ID)
 	}
-	return descriptors
+	return ids
 }
 
-// Build 根据已解析的 provider 配置构建 Provider 实例。
-// 使 Service 满足 runtime.ProviderFactory 接口，简化装配层依赖。
-func (s *Service) Build(ctx context.Context, cfg config.ResolvedProviderConfig) (Provider, error) {
-	if err := s.validate(); err != nil {
-		return nil, err
-	}
-	return s.registry.Build(ctx, cfg)
-}
-
-func (s *Service) validate() error {
-	if s == nil || s.manager == nil {
-		return errServiceManagerNil
-	}
-	if s.registry == nil {
-		return errServiceRegistryNil
-	}
-	return nil
+func containsModelDescriptorID(models []ModelDescriptor, modelID string) bool {
+	return config.ContainsModelID(modelDescriptorIDs(models), modelID)
 }

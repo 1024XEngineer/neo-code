@@ -16,6 +16,7 @@ import (
 
 	"neo-code/internal/config"
 	domain "neo-code/internal/provider"
+	modeldiscovery "neo-code/internal/provider/discovery"
 	"neo-code/internal/provider/transport"
 )
 
@@ -39,14 +40,24 @@ func WithTransport(rt http.RoundTripper) BuildOption {
 
 const DriverName = "openai"
 
+// defaultRetryTransport 返回内置的带重试的 HTTP Transport。
+func defaultRetryTransport() http.RoundTripper {
+	return transport.NewRetryTransport(http.DefaultTransport, transport.DefaultRetryConfig())
+}
+
 // Driver 返回 OpenAI 协议驱动的定义。
 func Driver() domain.DriverDefinition {
 	return domain.DriverDefinition{
 		Name: DriverName,
 		Build: func(ctx context.Context, cfg config.ResolvedProviderConfig) (domain.Provider, error) {
-			baseTransport := http.DefaultTransport
-			retryTransport := transport.NewRetryTransport(baseTransport, transport.DefaultRetryConfig())
-			return New(cfg, WithTransport(retryTransport))
+			return New(cfg, WithTransport(defaultRetryTransport()))
+		},
+		Discover: func(ctx context.Context, cfg config.ResolvedProviderConfig) ([]domain.ModelDescriptor, error) {
+			provider, err := New(cfg, WithTransport(defaultRetryTransport()))
+			if err != nil {
+				return nil, err
+			}
+			return provider.DiscoverModels(ctx)
 		},
 	}
 }
@@ -73,6 +84,23 @@ func New(cfg config.ResolvedProviderConfig, opts ...BuildOption) (*Provider, err
 			Transport: o.transport,
 		},
 	}, nil
+}
+
+func (p *Provider) DiscoverModels(ctx context.Context) ([]domain.ModelDescriptor, error) {
+	rawModels, err := modeldiscovery.FetchOpenAICompatibleModels(ctx, p.client, p.cfg.BaseURL, p.cfg.APIKey)
+	if err != nil {
+		return nil, err
+	}
+
+	descriptors := make([]domain.ModelDescriptor, 0, len(rawModels))
+	for _, raw := range rawModels {
+		descriptor, ok := domain.DescriptorFromMetadata(raw)
+		if !ok {
+			continue
+		}
+		descriptors = append(descriptors, descriptor)
+	}
+	return domain.MergeModelDescriptors(descriptors), nil
 }
 
 func (p *Provider) Chat(ctx context.Context, req domain.ChatRequest, events chan<- domain.StreamEvent) (domain.ChatResponse, error) {
