@@ -24,6 +24,17 @@ func TestExtractFencedCodeBlocks(t *testing.T) {
 	}
 }
 
+func TestExtractFencedCodeBlocksFromIndentedMarkdown(t *testing.T) {
+	content := "说明：\n\n    package main\n    import \"fmt\"\n\n结尾。"
+	blocks := extractFencedCodeBlocks(content)
+	if len(blocks) != 1 {
+		t.Fatalf("expected 1 code block from indented markdown, got %d", len(blocks))
+	}
+	if !strings.Contains(blocks[0], "package main") || !strings.Contains(blocks[0], "import \"fmt\"") {
+		t.Fatalf("expected extracted indented code block, got %q", blocks[0])
+	}
+}
+
 func TestParseCopyCodeButtonID(t *testing.T) {
 	id, startCol, endCol, ok := parseCopyCodeButton("[Copy code #12]")
 	if !ok || id != 12 {
@@ -56,6 +67,24 @@ func TestRenderMessageBlockWithCopyAddsButtons(t *testing.T) {
 	}
 	if len(bindings) != 1 || bindings[0].ID != 1 || bindings[0].Code != "fmt.Println(1)" {
 		t.Fatalf("unexpected bindings: %+v", bindings)
+	}
+}
+
+func TestRenderMessageBlockWithCopyAddsButtonsForIndentedCode(t *testing.T) {
+	manager := newTestConfigManager(t)
+	runtime := newStubRuntime()
+	app, err := New(nil, manager, runtime, newTestProviderService(t, manager))
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	content := "说明：\n\n    package main\n    import \"fmt\""
+	rendered, bindings := app.renderMessageBlockWithCopy(providerMessage(roleAssistant, content), 80, 1)
+	if !strings.Contains(stripANSI(rendered), "[Copy code #1]") {
+		t.Fatalf("expected copy button for indented markdown code, got %q", rendered)
+	}
+	if len(bindings) != 1 || !strings.Contains(bindings[0].Code, "package main") {
+		t.Fatalf("unexpected bindings for indented markdown code: %+v", bindings)
 	}
 }
 

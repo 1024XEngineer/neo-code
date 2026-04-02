@@ -36,11 +36,11 @@ var (
 )
 
 func splitMarkdownSegments(content string) []markdownSegment {
-	parts := strings.Split(content, "```")
-	if len(parts) == 1 {
-		return []markdownSegment{{Kind: markdownSegmentText, Text: content}}
+	if !strings.Contains(content, "```") {
+		return splitIndentedCodeSegments(content)
 	}
 
+	parts := strings.Split(content, "```")
 	segments := make([]markdownSegment, 0, len(parts))
 	for i, part := range parts {
 		if i%2 == 0 {
@@ -60,6 +60,77 @@ func splitMarkdownSegments(content string) []markdownSegment {
 			Code:   code,
 		})
 	}
+	if len(segments) == 0 {
+		return []markdownSegment{{Kind: markdownSegmentText, Text: content}}
+	}
+	return segments
+}
+
+func splitIndentedCodeSegments(content string) []markdownSegment {
+	lines := strings.Split(content, "\n")
+	segments := make([]markdownSegment, 0, 4)
+	textLines := make([]string, 0, len(lines))
+	codeLines := make([]string, 0, len(lines))
+	inCode := false
+
+	flushText := func() {
+		if len(textLines) == 0 {
+			return
+		}
+		segments = append(segments, markdownSegment{
+			Kind: markdownSegmentText,
+			Text: strings.Join(textLines, "\n"),
+		})
+		textLines = textLines[:0]
+	}
+	flushCode := func() {
+		if len(codeLines) == 0 {
+			return
+		}
+		code := strings.Join(codeLines, "\n")
+		code = strings.TrimSpace(code)
+		if code == "" {
+			codeLines = codeLines[:0]
+			return
+		}
+		segments = append(segments, markdownSegment{
+			Kind:   markdownSegmentCode,
+			Fenced: "```\n" + code + "\n```",
+			Code:   code,
+		})
+		codeLines = codeLines[:0]
+	}
+
+	for _, line := range lines {
+		indented := isIndentedCodeLine(line)
+		if inCode {
+			if indented {
+				codeLines = append(codeLines, trimCodeIndent(line))
+				continue
+			}
+			if strings.TrimSpace(line) == "" {
+				codeLines = append(codeLines, "")
+				continue
+			}
+			flushCode()
+			inCode = false
+		}
+
+		if indented {
+			flushText()
+			inCode = true
+			codeLines = append(codeLines, trimCodeIndent(line))
+			continue
+		}
+
+		textLines = append(textLines, line)
+	}
+
+	if inCode {
+		flushCode()
+	}
+	flushText()
+
 	if len(segments) == 0 {
 		return []markdownSegment{{Kind: markdownSegmentText, Text: content}}
 	}
@@ -91,6 +162,11 @@ func parseCodeFence(raw string) (fenced string, code string) {
 		}
 		return "```" + lines[0] + "\n" + body + "\n```", body
 	}
+	if len(lines) == 1 && isFenceLanguageCandidate(lines[0]) {
+		// Streaming may temporarily contain only the language marker (e.g. ```go).
+		// Skip until body content arrives.
+		return "", ""
+	}
 
 	code = strings.TrimSpace(code)
 	if code == "" {
@@ -101,6 +177,20 @@ func parseCodeFence(raw string) (fenced string, code string) {
 
 func isFenceLanguageCandidate(line string) bool {
 	return !strings.Contains(line, " ") && !strings.Contains(line, "\t")
+}
+
+func isIndentedCodeLine(line string) bool {
+	return strings.HasPrefix(line, "\t") || strings.HasPrefix(line, "    ")
+}
+
+func trimCodeIndent(line string) string {
+	if strings.HasPrefix(line, "\t") {
+		return strings.TrimPrefix(line, "\t")
+	}
+	if strings.HasPrefix(line, "    ") {
+		return line[4:]
+	}
+	return line
 }
 
 func (a *App) setCodeCopyBlocks(bindings []copyCodeButtonBinding) {
