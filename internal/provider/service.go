@@ -115,16 +115,23 @@ func (s *Service) ListModels(ctx context.Context) ([]ModelDescriptor, error) {
 		return nil, err
 	}
 
-	cfg := s.manager.Get()
-	selected, err := cfg.SelectedProviderConfig()
-	if err != nil {
+	return s.selectedProviderModels(ctx, modelQueryOptions{
+		allowSyncRefresh: true,
+		queueRefresh:     true,
+	})
+}
+
+func (s *Service) ListModelsSnapshot(ctx context.Context) ([]ModelDescriptor, error) {
+	if err := s.validate(); err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 
-	return s.modelsForProvider(ctx, selected, modelQueryOptions{
-		allowSyncRefresh: true,
-		queueRefresh:     true,
-	}), nil
+	return s.selectedProviderModels(ctx, modelQueryOptions{
+		queueRefresh: true,
+	})
 }
 
 func (s *Service) SetCurrentModel(ctx context.Context, modelID string) (ProviderSelection, error) {
@@ -144,8 +151,7 @@ func (s *Service) SetCurrentModel(ctx context.Context, modelID string) (Provider
 	}
 
 	models := s.modelsForProvider(ctx, selected, modelQueryOptions{
-		allowSyncRefresh: true,
-		queueRefresh:     true,
+		queueRefresh: true,
 	})
 	if !containsModelDescriptorID(models, modelID) {
 		return ProviderSelection{}, ErrModelNotFound
@@ -189,8 +195,7 @@ func (s *Service) EnsureSelection(ctx context.Context) (ProviderSelection, error
 	}
 
 	models := s.modelsForProvider(ctx, selected, modelQueryOptions{
-		allowSyncRefresh: true,
-		queueRefresh:     true,
+		queueRefresh: true,
 	})
 	nextModel, changed := resolveCurrentModel(cfgSnapshot.CurrentModel, models, selected.Model)
 	if !changed {
@@ -228,6 +233,16 @@ type modelQueryOptions struct {
 	queueRefresh     bool
 }
 
+func (s *Service) selectedProviderModels(ctx context.Context, options modelQueryOptions) ([]ModelDescriptor, error) {
+	cfg := s.manager.Get()
+	selected, err := cfg.SelectedProviderConfig()
+	if err != nil {
+		return nil, err
+	}
+
+	return s.modelsForProvider(ctx, selected, options), nil
+}
+
 func (s *Service) modelsForProvider(ctx context.Context, providerCfg config.ProviderConfig, options modelQueryOptions) []ModelDescriptor {
 	defaultModels := modelDescriptorsFromIDs([]string{providerCfg.Model})
 
@@ -240,8 +255,10 @@ func (s *Service) modelsForProvider(ctx context.Context, providerCfg config.Prov
 		}
 	}
 
-	if cachedOK && options.queueRefresh && s.catalogExpired(ctx, providerCfg) {
-		s.queueRefresh(providerCfg)
+	if options.queueRefresh {
+		if !cachedOK || s.catalogExpired(ctx, providerCfg) {
+			s.queueRefresh(providerCfg)
+		}
 	}
 
 	return MergeModelDescriptors(cached, defaultModels)

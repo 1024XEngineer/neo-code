@@ -145,7 +145,7 @@ func TestServiceListModelsFallsBackToDefaultModelWithoutDiscovery(t *testing.T) 
 	}
 }
 
-func TestServiceSetCurrentModelUsesDiscoveredModels(t *testing.T) {
+func TestServiceListModelsSnapshotReturnsDefaultAndRefreshesInBackgroundOnMiss(t *testing.T) {
 	t.Setenv(testAPIKeyEnv, "test-key")
 
 	manager := config.NewManager(config.NewLoader(t.TempDir(), testDefaultConfig()))
@@ -153,17 +153,80 @@ func TestServiceSetCurrentModelUsesDiscoveredModels(t *testing.T) {
 		t.Fatalf("Load() error = %v", err)
 	}
 
+	store := newMemoryCatalogStore()
+	refreshed := make(chan struct{}, 1)
 	registry := NewRegistry()
 	if err := registry.Register(testDriverDefinition(config.OpenAIName, func(ctx context.Context, cfg config.ResolvedProviderConfig) ([]ModelDescriptor, error) {
-		return []ModelDescriptor{
-			{ID: cfg.Model, Name: cfg.Model},
-			{ID: "gpt-4o", Name: "GPT-4o"},
-		}, nil
+		select {
+		case refreshed <- struct{}{}:
+		default:
+		}
+		return []ModelDescriptor{{ID: "gpt-4o", Name: "GPT-4o"}}, nil
 	})); err != nil {
 		t.Fatalf("register discovery driver: %v", err)
 	}
 
-	service := NewService(manager, registry, newMemoryCatalogStore())
+	service := NewService(manager, registry, store)
+	service.backgroundTimeout = time.Second
+
+	models, err := service.ListModelsSnapshot(context.Background())
+	if err != nil {
+		t.Fatalf("ListModelsSnapshot() error = %v", err)
+	}
+	if len(models) != 1 || models[0].ID != config.OpenAIDefaultModel {
+		t.Fatalf("expected immediate default model fallback, got %+v", models)
+	}
+
+	select {
+	case <-refreshed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected background refresh to run")
+	}
+
+	identity, err := config.OpenAIProvider().Identity()
+	if err != nil {
+		t.Fatalf("Identity() error = %v", err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		catalog, err := store.Load(context.Background(), identity)
+		if err == nil && containsModelDescriptorID(catalog.Models, "gpt-4o") {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	catalog, err := store.Load(context.Background(), identity)
+	if err != nil {
+		t.Fatalf("Load() refreshed catalog error = %v", err)
+	}
+	t.Fatalf("expected refreshed catalog to contain gpt-4o, got %+v", catalog.Models)
+}
+
+func TestServiceSetCurrentModelUsesCachedDiscoveredModels(t *testing.T) {
+	manager := config.NewManager(config.NewLoader(t.TempDir(), testDefaultConfig()))
+	if _, err := manager.Load(context.Background()); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	store := newMemoryCatalogStore()
+	identity, err := config.OpenAIProvider().Identity()
+	if err != nil {
+		t.Fatalf("Identity() error = %v", err)
+	}
+	if err := store.Save(context.Background(), ModelCatalog{
+		SchemaVersion: modelCatalogSchemaVersion,
+		Identity:      identity,
+		Models: []ModelDescriptor{
+			{ID: config.OpenAIDefaultModel, Name: config.OpenAIDefaultModel},
+			{ID: "gpt-4o", Name: "GPT-4o"},
+		},
+	}); err != nil {
+		t.Fatalf("seed model catalog: %v", err)
+	}
+
+	service := NewService(manager, NewRegistry(), store)
 	selection, err := service.SetCurrentModel(context.Background(), "gpt-4o")
 	if err != nil {
 		t.Fatalf("SetCurrentModel() error = %v", err)
