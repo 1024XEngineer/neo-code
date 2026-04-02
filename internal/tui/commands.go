@@ -37,6 +37,8 @@ const (
 	sidebarTitle      = "Sessions"
 	sidebarFilterHint = "Type / to search"
 	sidebarOpenHint   = "Enter to open"
+	activityTitle     = "Activity"
+	activitySubtitle  = "Latest execution events"
 
 	draftSessionTitle     = "Draft"
 	emptyConversationText = "No conversation yet.\nAsk NeoCode to inspect or change code, or type /help to browse local commands."
@@ -61,7 +63,11 @@ const (
 
 	focusLabelSessions   = "Sessions"
 	focusLabelTranscript = "Transcript"
+	focusLabelActivity   = "Activity"
 	focusLabelComposer   = "Composer"
+
+	activityPreviewEntries = 3
+	maxActivityEntries     = 64
 
 	messageTagUser  = "[ YOU ]"
 	messageTagAgent = "[ NEO ]"
