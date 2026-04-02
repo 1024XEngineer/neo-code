@@ -242,6 +242,12 @@ func TestAppUpdateModelPickerAndRuntimeMessages(t *testing.T) {
 				if app.state.ExecutionError != "" || app.state.StatusText != statusCanceled {
 					t.Fatalf("expected canceled status without error, got %+v", app.state)
 				}
+				if len(app.activeMessages) != 0 {
+					t.Fatalf("expected cancel notice to stay out of transcript, got %+v", app.activeMessages)
+				}
+				if len(app.activities) == 0 || app.activities[len(app.activities)-1].Title != "Canceled current run" {
+					t.Fatalf("expected cancel notice in activity, got %+v", app.activities)
+				}
 			},
 		},
 		{
@@ -265,6 +271,12 @@ func TestAppUpdateModelPickerAndRuntimeMessages(t *testing.T) {
 				}
 				if app.state.StatusText != statusToolError {
 					t.Fatalf("expected status tool error, got %q", app.state.StatusText)
+				}
+				if len(app.activeMessages) == 0 || app.activeMessages[len(app.activeMessages)-1].Role != roleTool {
+					t.Fatalf("expected tool result to stay in transcript, got %+v", app.activeMessages)
+				}
+				if len(app.activities) == 0 || app.activities[len(app.activities)-1].Title != "Tool error" {
+					t.Fatalf("expected tool error in activity, got %+v", app.activities)
 				}
 			},
 		},
@@ -1083,6 +1095,12 @@ func TestAppHandleRuntimeEventAdditionalBranches(t *testing.T) {
 				if app.state.CurrentTool != "filesystem_edit" || app.state.StatusText != statusRunningTool {
 					t.Fatalf("unexpected tool start state: %+v", app.state)
 				}
+				if len(app.activeMessages) != 0 {
+					t.Fatalf("expected tool start to stay out of transcript, got %+v", app.activeMessages)
+				}
+				if len(app.activities) == 0 || app.activities[len(app.activities)-1].Title != "Running tool" {
+					t.Fatalf("expected tool start in activity, got %+v", app.activities)
+				}
 			},
 		},
 		{
@@ -1102,6 +1120,12 @@ func TestAppHandleRuntimeEventAdditionalBranches(t *testing.T) {
 				if app.state.CurrentTool != "" || app.state.StatusText != statusToolFinished {
 					t.Fatalf("unexpected tool success state: %+v", app.state)
 				}
+				if len(app.activeMessages) == 0 || app.activeMessages[len(app.activeMessages)-1].Role != roleTool {
+					t.Fatalf("expected tool result message in transcript, got %+v", app.activeMessages)
+				}
+				if len(app.activities) == 0 || app.activities[len(app.activities)-1].Title != "Completed tool" {
+					t.Fatalf("expected tool completion in activity, got %+v", app.activities)
+				}
 			},
 		},
 		{
@@ -1115,6 +1139,46 @@ func TestAppHandleRuntimeEventAdditionalBranches(t *testing.T) {
 				t.Helper()
 				if app.state.ExecutionError != "boom" || app.state.IsAgentRunning {
 					t.Fatalf("unexpected error state: %+v", app.state)
+				}
+				if len(app.activeMessages) != 0 {
+					t.Fatalf("expected runtime error to stay out of transcript, got %+v", app.activeMessages)
+				}
+				if len(app.activities) == 0 || app.activities[len(app.activities)-1].Title != "Runtime error" {
+					t.Fatalf("expected runtime error in activity, got %+v", app.activities)
+				}
+			},
+		},
+		{
+			name: "tool call thinking is tracked as activity",
+			event: agentruntime.RuntimeEvent{
+				Type:      agentruntime.EventToolCallThinking,
+				SessionID: "s1",
+				Payload:   "filesystem_edit",
+			},
+			assert: func(t *testing.T, app App) {
+				t.Helper()
+				if app.state.CurrentTool != "filesystem_edit" {
+					t.Fatalf("expected current tool to be populated, got %+v", app.state)
+				}
+				if len(app.activities) == 0 || app.activities[len(app.activities)-1].Title != "Planning tool call" {
+					t.Fatalf("expected planning activity, got %+v", app.activities)
+				}
+			},
+		},
+		{
+			name: "provider retry is tracked as activity",
+			event: agentruntime.RuntimeEvent{
+				Type:      agentruntime.EventProviderRetry,
+				SessionID: "s1",
+				Payload:   "retrying provider call (attempt 1/2, wait=1.0s)...",
+			},
+			assert: func(t *testing.T, app App) {
+				t.Helper()
+				if app.state.StatusText != statusThinking {
+					t.Fatalf("expected provider retry to preserve thinking status, got %+v", app.state)
+				}
+				if len(app.activities) == 0 || app.activities[len(app.activities)-1].Title != "Retrying provider call" {
+					t.Fatalf("expected provider retry activity, got %+v", app.activities)
 				}
 			},
 		},
@@ -1252,8 +1316,11 @@ func TestAdditionalRenderingAndToolChunkBranches(t *testing.T) {
 	if app.state.StatusText != statusRunningTool {
 		t.Fatalf("expected tool chunk to keep running status, got %q", app.state.StatusText)
 	}
-	if len(app.activeMessages) == 0 || !strings.Contains(app.activeMessages[len(app.activeMessages)-1].Content, "chunk output") {
-		t.Fatalf("expected tool chunk preview to append inline message")
+	if len(app.activeMessages) != 0 {
+		t.Fatalf("expected tool chunk to stay out of transcript, got %+v", app.activeMessages)
+	}
+	if len(app.activities) == 0 || !strings.Contains(app.activities[len(app.activities)-1].Detail, "chunk output") {
+		t.Fatalf("expected tool chunk preview in activity, got %+v", app.activities)
 	}
 
 	if got := wrapCodeBlock("a\tb", 3); !strings.Contains(got, "\n") {
@@ -1266,6 +1333,166 @@ func TestAdditionalRenderingAndToolChunkBranches(t *testing.T) {
 	rendered := app.renderMessageContent("```\n```", 20, app.styles.messageBody)
 	if !strings.Contains(rendered, emptyMessageText) {
 		t.Fatalf("expected empty code block placeholder, got %q", rendered)
+	}
+}
+
+func TestHandleViewportKeysPageScrollingUsesFullPage(t *testing.T) {
+	manager := newTestConfigManager(t)
+	runtime := newStubRuntime()
+	app, err := New(nil, manager, runtime, newTestProviderService(t, manager))
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	app.transcript.SetContent(strings.Repeat("line\n", 120))
+	app.transcript.Height = 10
+	app.transcript.GotoTop()
+
+	app.handleViewportKeys(&app.transcript, tea.KeyMsg{Type: tea.KeyPgDown})
+	if app.transcript.YOffset != 10 {
+		t.Fatalf("expected page down to move a full page, got offset %d", app.transcript.YOffset)
+	}
+
+	app.handleViewportKeys(&app.transcript, tea.KeyMsg{Type: tea.KeyPgUp})
+	if app.transcript.YOffset != 0 {
+		t.Fatalf("expected page up to return a full page, got offset %d", app.transcript.YOffset)
+	}
+
+	app.handleViewportKeys(&app.transcript, tea.KeyMsg{Type: tea.KeyEnd})
+	if !app.transcript.AtBottom() {
+		t.Fatalf("expected end to jump to bottom")
+	}
+
+	app.handleViewportKeys(&app.transcript, tea.KeyMsg{Type: tea.KeyHome})
+	if !app.transcript.AtTop() {
+		t.Fatalf("expected home to jump to top")
+	}
+}
+
+func TestTranscriptMouseWheelScrollsOnlyInsideTranscript(t *testing.T) {
+	manager := newTestConfigManager(t)
+	runtime := newStubRuntime()
+	app, err := New(nil, manager, runtime, newTestProviderService(t, manager))
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	app.width = 128
+	app.height = 40
+	app.resizeComponents()
+	app.transcript.SetContent(strings.Repeat("line\n", 160))
+	app.transcript.GotoTop()
+
+	x, y, _, _ := app.transcriptBounds()
+	model, cmd := app.Update(tea.MouseMsg{
+		X:      x + 1,
+		Y:      y + 1,
+		Button: tea.MouseButtonWheelDown,
+		Type:   tea.MouseWheelDown,
+	})
+	app = model.(App)
+	_ = collectTeaMessages(cmd)
+	if app.transcript.YOffset != mouseWheelStepLines {
+		t.Fatalf("expected wheel down to scroll transcript by %d lines, got %d", mouseWheelStepLines, app.transcript.YOffset)
+	}
+
+	model, cmd = app.Update(tea.MouseMsg{
+		X:      x + 1,
+		Y:      y + 1,
+		Button: tea.MouseButtonWheelUp,
+		Type:   tea.MouseWheelUp,
+	})
+	app = model.(App)
+	_ = collectTeaMessages(cmd)
+	if app.transcript.YOffset != 0 {
+		t.Fatalf("expected wheel up to scroll transcript back to top, got %d", app.transcript.YOffset)
+	}
+
+	model, cmd = app.Update(tea.MouseMsg{
+		X:      0,
+		Y:      0,
+		Button: tea.MouseButtonWheelDown,
+		Type:   tea.MouseWheelDown,
+	})
+	app = model.(App)
+	_ = collectTeaMessages(cmd)
+	if app.transcript.YOffset != 0 {
+		t.Fatalf("expected wheel event outside transcript to be ignored, got %d", app.transcript.YOffset)
+	}
+
+	app.transcript.Height = 0
+	if app.isMouseWithinTranscript(tea.MouseMsg{X: x + 1, Y: y + 1}) {
+		t.Fatalf("expected zero-height transcript bounds to reject mouse hits")
+	}
+
+	app.transcript.Height = 10
+	if app.handleTranscriptMouse(tea.MouseMsg{X: x + 1, Y: y + 1, Button: tea.MouseButtonLeft}) {
+		t.Fatalf("expected non-wheel mouse button to be ignored")
+	}
+
+	app.width = 100
+	app.height = 32
+	app.resizeComponents()
+	stackX, stackY, _, stackH := app.transcriptBounds()
+	if stackH <= 0 || !app.isMouseWithinTranscript(tea.MouseMsg{X: stackX + 1, Y: stackY + 1}) {
+		t.Fatalf("expected stacked layout transcript bounds to accept mouse hits")
+	}
+}
+
+func TestViewActivityPreviewAndStatusHelpers(t *testing.T) {
+	manager := newTestConfigManager(t)
+	runtime := newStubRuntime()
+	app, err := New(nil, manager, runtime, newTestProviderService(t, manager))
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	if app.activityPreviewHeight() != 0 || app.renderActivityPreview(80) != "" {
+		t.Fatalf("expected empty activity state to render nothing")
+	}
+
+	fixed := time.Date(2026, 4, 2, 9, 30, 0, 0, time.UTC)
+	app.activities = []activityEntry{
+		{Time: fixed, Kind: "tool", Title: "first", Detail: "alpha"},
+		{Time: fixed, Kind: "", Title: "second", Detail: ""},
+		{Time: fixed, Kind: "provider", Title: "third", Detail: "retry"},
+		{Time: fixed, Kind: "run", Title: "fourth", Detail: "done"},
+	}
+	app.focus = panelActivity
+	if app.focusLabel() != focusLabelActivity {
+		t.Fatalf("expected activity focus label, got %q", app.focusLabel())
+	}
+	if app.activityPreviewHeight() != 6 {
+		t.Fatalf("expected fixed activity preview height, got %d", app.activityPreviewHeight())
+	}
+
+	preview := app.renderActivityPreview(64)
+	if !strings.Contains(preview, "second") || !strings.Contains(preview, "third") || !strings.Contains(preview, "fourth") {
+		t.Fatalf("expected last activity entries in preview, got %q", preview)
+	}
+	if strings.Contains(preview, "first") {
+		t.Fatalf("expected oldest activity entry to be trimmed from preview, got %q", preview)
+	}
+
+	line := app.renderActivityLine(activityEntry{Time: fixed, Kind: "", Title: "single line", Detail: ""}, 80)
+	if !strings.Contains(line, "EVENT") || strings.Contains(line, "single line:") {
+		t.Fatalf("expected fallback kind without detail suffix, got %q", line)
+	}
+
+	rendered := app.renderMessageContent("before\n```go\nfmt.Println(1)\n```\nafter", 30, app.styles.messageBody)
+	if !strings.Contains(rendered, "before") || !strings.Contains(rendered, "fmt.Println(1)") || !strings.Contains(rendered, "after") {
+		t.Fatalf("expected mixed prose and code to render, got %q", rendered)
+	}
+
+	if got := compactStatusText("\n  hello   world \n", 0); got != "hello world" {
+		t.Fatalf("expected compact status without truncation, got %q", got)
+	}
+	if got := compactStatusText("\n \n", 10); got != "" {
+		t.Fatalf("expected empty compact status for blank input, got %q", got)
+	}
+
+	if app.statusBadge("failed request") == "" || app.statusBadge("canceled") == "" || app.statusBadge("ready") == "" {
+		t.Fatalf("expected status badge branches to render non-empty output")
 	}
 }
 
@@ -1299,16 +1526,19 @@ func TestWorkspaceCommandAndFileReferenceFlow(t *testing.T) {
 	if app.state.StatusText != statusCommandDone {
 		t.Fatalf("expected command done status, got %q", app.state.StatusText)
 	}
-	if len(app.activeMessages) < 2 {
-		t.Fatalf("expected running event and command result, got %+v", app.activeMessages)
+	if len(app.activeMessages) != 0 {
+		t.Fatalf("expected workspace command flow to stay out of transcript, got %+v", app.activeMessages)
 	}
-	first := app.activeMessages[0]
-	if first.Role != roleEvent || !strings.Contains(first.Content, "Running command: git status") {
-		t.Fatalf("expected running command notice, got %+v", first)
+	if len(app.activities) < 2 {
+		t.Fatalf("expected running event and command result in activity, got %+v", app.activities)
 	}
-	last := app.activeMessages[len(app.activeMessages)-1]
-	if last.Role != roleTool || !strings.Contains(last.Content, "Command: & git status") || !strings.Contains(last.Content, "stubbed output for git status") {
-		t.Fatalf("expected tool transcript entry with command output, got %+v", last)
+	first := app.activities[0]
+	if first.Title != "Running command" || !strings.Contains(first.Detail, "git status") {
+		t.Fatalf("expected running command activity, got %+v", first)
+	}
+	last := app.activities[len(app.activities)-1]
+	if last.Title != "Command finished" || !strings.Contains(last.Detail, "Command: & git status") || !strings.Contains(last.Detail, "stubbed output for git status") {
+		t.Fatalf("expected command output in activity, got %+v", last)
 	}
 
 	app.fileCandidates = []string{"README.md", "internal/tui/update.go", "internal/tui/view.go"}

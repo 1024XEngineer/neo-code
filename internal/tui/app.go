@@ -30,6 +30,7 @@ type App struct {
 	transcript     viewport.Model
 	input          textarea.Model
 	activeMessages []provider.Message
+	activities     []activityEntry
 	fileCandidates []string
 	focus          panel
 	width          int

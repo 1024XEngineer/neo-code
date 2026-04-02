@@ -130,6 +130,9 @@ func (a App) renderWaterfall(width int, height int) string {
 	transcript := a.styles.streamContent.Width(width).Height(a.transcript.Height).Render(a.transcript.View())
 
 	parts := []string{transcript}
+	if activity := a.renderActivityPreview(width); activity != "" {
+		parts = append(parts, activity)
+	}
 	if menu := a.renderCommandMenu(width); menu != "" {
 		parts = append(parts, menu)
 	}
@@ -418,9 +421,56 @@ func (a App) focusLabel() string {
 		return focusLabelSessions
 	case panelTranscript:
 		return focusLabelTranscript
+	case panelActivity:
+		return focusLabelActivity
 	default:
 		return focusLabelComposer
 	}
+}
+
+func (a App) activityPreviewHeight() int {
+	if len(a.activities) == 0 {
+		return 0
+	}
+	return 6
+}
+
+func (a App) renderActivityPreview(width int) string {
+	if len(a.activities) == 0 {
+		return ""
+	}
+
+	entries := a.activities
+	if len(entries) > activityPreviewEntries {
+		entries = entries[len(entries)-activityPreviewEntries:]
+	}
+
+	lines := make([]string, 0, len(entries))
+	bodyWidth := max(10, width-4)
+	for _, entry := range entries {
+		lines = append(lines, a.renderActivityLine(entry, bodyWidth))
+	}
+
+	return a.renderPanel(
+		activityTitle,
+		activitySubtitle,
+		strings.Join(lines, "\n"),
+		width,
+		a.activityPreviewHeight(),
+		a.focus == panelActivity,
+	)
+}
+
+func (a App) renderActivityLine(entry activityEntry, width int) string {
+	timeLabel := entry.Time.Format("15:04:05")
+	kindLabel := strings.ToUpper(fallback(strings.TrimSpace(entry.Kind), "event"))
+
+	text := entry.Title
+	if strings.TrimSpace(entry.Detail) != "" {
+		text = text + ": " + entry.Detail
+	}
+
+	return trimMiddle(timeLabel+" "+kindLabel+" "+strings.Join(strings.Fields(text), " "), max(12, width))
 }
 
 func (a App) computeLayout() layout {
