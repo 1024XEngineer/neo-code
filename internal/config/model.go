@@ -48,12 +48,11 @@ type Config struct {
 }
 
 type ProviderConfig struct {
-	Name        string `yaml:"name"`
-	Description string `yaml:"description,omitempty"`
-	Driver      string `yaml:"driver"`
-	BaseURL     string `yaml:"base_url"`
-	Model       string `yaml:"model"`
-	APIKeyEnv   string `yaml:"api_key_env"`
+	Name      string `yaml:"name"`
+	Driver    string `yaml:"driver"`
+	BaseURL   string `yaml:"base_url"`
+	Model     string `yaml:"model"`
+	APIKeyEnv string `yaml:"api_key_env"`
 }
 
 type ResolvedProviderConfig struct {
@@ -543,6 +542,19 @@ func containsProviderName(providers []ProviderConfig, name string) bool {
 	}
 	for _, provider := range providers {
 		if NormalizeProviderName(provider.Name) == target {
+			return true
+		}
+	}
+	return false
+}
+
+func ContainsModelID(models []string, model string) bool {
+	target := NormalizeKey(model)
+	if target == "" {
+		return false
+	}
+	for _, candidate := range models {
+		if NormalizeKey(candidate) == target {
 			return true
 		}
 	}

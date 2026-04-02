@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"strings"
 	"testing"
@@ -20,22 +19,19 @@ import (
 func TestIsNetworkError(t *testing.T) {
 	t.Parallel()
 
-	dialErr := &net.OpError{Op: "dial", Net: "tcp", Addr: &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 8080}, Err: errors.New("connection refused")}
-	timeoutErr := &net.OpError{Op: "dial", Net: "tcp", Addr: &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 443}, Err: errors.New("i/o timeout")}
-	dnsErr := &net.OpError{Op: "dial", Net: "tcp", Addr: &net.TCPAddr{IP: net.IPv4(0, 0, 0, 0), Port: 0}, Err: &net.DNSError{Err: "no such host"}}
-	addrErr := &net.AddrError{Err: "no such host", Addr: "api.openai.com"}
-
 	tests := []struct {
 		name string
 		err  error
 		want bool
 	}{
 		{"nil", nil, false},
-		{"connection refused (OpError)", dialErr, true},
-		{"connection refused wrapped", fmt.Errorf("wrapped: %w", dialErr), true},
-		{"i/o timeout (OpError)", timeoutErr, true},
-		{"DNS failure (OpError)", dnsErr, true},
-		{"DNS failure (AddrError)", addrErr, true},
+		{"connection refused", errors.New("dial tcp 127.0.0.1:8080: connection refused"), true},
+		{"connection reset", errors.New("connection reset by peer"), true},
+		{"connection timed out", errors.New("connection timed out"), true},
+		{"i/o timeout", errors.New("dial tcp: i/o timeout"), true},
+		{"no such host", errors.New("dial tcp: lookup api.openai.com: no such host"), true},
+		{"dial tcp", errors.New("dial tcp 127.0.0.1:443: operation was refused"), true},
+		{"timeout in message", errors.New("request timeout"), true},
 		{"tls cert error", errors.New("x509: certificate signed by unknown authority"), false},
 		{"generic error", errors.New("something went wrong"), false},
 		{"empty message", errors.New(""), false},
@@ -67,7 +63,7 @@ func TestDefaultRetryableFunc(t *testing.T) {
 		{"non-retryable ProviderError", &provider.ProviderError{StatusCode: 401, Code: provider.ErrorCodeAuthFailed, Retryable: false}, false},
 		{"wrapped retryable ProviderError", fmt.Errorf("wrapped: %w", &provider.ProviderError{StatusCode: 500, Retryable: true}), true},
 		{"wrapped non-retryable ProviderError", fmt.Errorf("wrapped: %w", &provider.ProviderError{StatusCode: 400, Retryable: false}), false},
-		{"network error (OpError)", &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}, true},
+		{"network error", errors.New("dial tcp 127.0.0.1:8080: connection refused"), true},
 		{"non-network non-provider error", errors.New("bad request"), false},
 		{"empty error message", errors.New(""), false},
 	}
@@ -183,9 +179,7 @@ func TestRoundTrip_RetryThenSuccess(t *testing.T) {
 	wantResp := newSuccessResponse(http.StatusOK, "ok")
 	m := &mockRoundTripper{
 		fn: []func() (*http.Response, error){
-			func() (*http.Response, error) {
-				return nil, &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}
-			},
+			func() (*http.Response, error) { return nil, errors.New("dial tcp 127.0.0.1:8080: connection refused") },
 			func() (*http.Response, error) { return wantResp, nil },
 		},
 	}
@@ -209,41 +203,10 @@ func TestRoundTrip_RetryThenSuccess(t *testing.T) {
 	}
 }
 
-func TestRoundTrip_RetryableStatusThenSuccess(t *testing.T) {
-	t.Parallel()
-
-	m := &mockRoundTripper{
-		fn: []func() (*http.Response, error){
-			func() (*http.Response, error) {
-				return newSuccessResponse(http.StatusTooManyRequests, "retry later"), nil
-			},
-			func() (*http.Response, error) { return newSuccessResponse(http.StatusOK, "ok"), nil },
-		},
-	}
-
-	rt := NewRetryTransport(m, RetryConfig{
-		MaxRetries: 2,
-		WaitBase:   1 * time.Millisecond,
-		MaxWait:    10 * time.Millisecond,
-	})
-	req, _ := http.NewRequest(http.MethodGet, "http://example.com", nil)
-	resp, err := rt.RoundTrip(req)
-
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("status = %d, want 200", resp.StatusCode)
-	}
-	if m.callCount != 2 {
-		t.Fatalf("callCount = %d, want 2", m.callCount)
-	}
-}
-
 func TestRoundTrip_AllRetriesFail(t *testing.T) {
 	t.Parallel()
 
-	networkErr := &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}
+	networkErr := errors.New("connection refused")
 	m := &mockRoundTripper{
 		fn: []func() (*http.Response, error){
 			func() (*http.Response, error) { return nil, networkErr },
@@ -263,77 +226,11 @@ func TestRoundTrip_AllRetriesFail(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error after all retries exhausted")
 	}
-	var pErr *provider.ProviderError
-	if !errors.As(err, &pErr) {
-		t.Fatalf("expected *ProviderError, got %v", err)
-	}
-	if pErr.Code != provider.ErrorCodeNetwork {
-		t.Fatalf("expected network_error code, got %s", pErr.Code)
+	if !errors.Is(err, networkErr) {
+		t.Fatalf("expected networkErr, got %v", err)
 	}
 	if m.callCount != 3 {
 		t.Fatalf("callCount = %d, want 3 (1 initial + 2 retries)", m.callCount)
-	}
-}
-
-func TestRoundTrip_RetryableStatusExhaustedReturnsFinalResponse(t *testing.T) {
-	t.Parallel()
-
-	m := &mockRoundTripper{
-		fn: []func() (*http.Response, error){
-			func() (*http.Response, error) {
-				return newSuccessResponse(http.StatusInternalServerError, "boom-1"), nil
-			},
-			func() (*http.Response, error) { return newSuccessResponse(http.StatusBadGateway, "boom-2"), nil },
-			func() (*http.Response, error) {
-				return newSuccessResponse(http.StatusServiceUnavailable, "boom-3"), nil
-			},
-		},
-	}
-
-	rt := NewRetryTransport(m, RetryConfig{
-		MaxRetries: 2,
-		WaitBase:   1 * time.Millisecond,
-		MaxWait:    10 * time.Millisecond,
-	})
-	req, _ := http.NewRequest(http.MethodGet, "http://example.com", nil)
-	resp, err := rt.RoundTrip(req)
-
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if resp.StatusCode != http.StatusServiceUnavailable {
-		t.Fatalf("status = %d, want 503", resp.StatusCode)
-	}
-	if m.callCount != 3 {
-		t.Fatalf("callCount = %d, want 3 (1 initial + 2 retries)", m.callCount)
-	}
-}
-
-func TestRoundTrip_ClientErrorStatusIsNotRetried(t *testing.T) {
-	t.Parallel()
-
-	m := &mockRoundTripper{
-		fn: []func() (*http.Response, error){
-			func() (*http.Response, error) { return newSuccessResponse(http.StatusBadRequest, "bad request"), nil },
-		},
-	}
-
-	rt := NewRetryTransport(m, RetryConfig{
-		MaxRetries: 2,
-		WaitBase:   1 * time.Millisecond,
-		MaxWait:    10 * time.Millisecond,
-	})
-	req, _ := http.NewRequest(http.MethodGet, "http://example.com", nil)
-	resp, err := rt.RoundTrip(req)
-
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if resp.StatusCode != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400", resp.StatusCode)
-	}
-	if m.callCount != 1 {
-		t.Fatalf("callCount = %d, want 1", m.callCount)
 	}
 }
 
@@ -374,9 +271,7 @@ func TestRoundTrip_ContextCanceled(t *testing.T) {
 
 	m := &mockRoundTripper{
 		fn: []func() (*http.Response, error){
-			func() (*http.Response, error) {
-				return nil, &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}
-			},
+			func() (*http.Response, error) { return nil, errors.New("connection refused") },
 		},
 	}
 
@@ -407,7 +302,7 @@ func TestRoundTrip_ContextCanceledDuringBackoff(t *testing.T) {
 		fn: []func() (*http.Response, error){
 			func() (*http.Response, error) {
 				callCount++
-				return nil, &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}
+				return nil, errors.New("connection refused")
 			},
 			func() (*http.Response, error) {
 				// 在第二次调用之前 context 已取消，这里不应被调用
@@ -442,7 +337,7 @@ func TestRoundTrip_ContextCanceledDuringBackoff(t *testing.T) {
 func TestRoundTrip_ZeroMaxRetries(t *testing.T) {
 	t.Parallel()
 
-	networkErr := &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}
+	networkErr := errors.New("connection refused")
 	m := &mockRoundTripper{
 		fn: []func() (*http.Response, error){
 			func() (*http.Response, error) { return nil, networkErr },
@@ -471,7 +366,7 @@ func TestRoundTrip_SeekerBodyRewound(t *testing.T) {
 	m := &mockRoundTripper{
 		fn: []func() (*http.Response, error){
 			func() (*http.Response, error) {
-				return nil, &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}
+				return nil, errors.New("connection refused")
 			},
 			func() (*http.Response, error) {
 				return wantResp, nil

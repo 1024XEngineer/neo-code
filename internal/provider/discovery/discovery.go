@@ -15,7 +15,7 @@ type openAIModelsResponse struct {
 
 // FetchOpenAICompatibleModels fetches raw model objects from an OpenAI-compatible /models endpoint.
 func FetchOpenAICompatibleModels(ctx context.Context, client *http.Client, baseURL string, apiKey string) ([]map[string]any, error) {
-	endpoint := strings.TrimRight(baseURL, "/") + "/models"
+	endpoint := strings.TrimRight(strings.TrimSpace(baseURL), "/") + "/models"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return nil, fmt.Errorf("provider discovery: build request: %w", err)

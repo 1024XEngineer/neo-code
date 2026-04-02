@@ -18,10 +18,6 @@ func (stubProvider) Chat(ctx context.Context, req provider.ChatRequest, events c
 	return provider.ChatResponse{}, nil
 }
 
-func (stubProvider) DiscoverModels(ctx context.Context) ([]provider.ModelDescriptor, error) {
-	return nil, nil
-}
-
 func stubDriver(driverType string) provider.DriverDefinition {
 	return provider.DriverDefinition{
 		Name: driverType,
@@ -103,64 +99,6 @@ func TestRegistryRejectsDuplicateDriverRegistration(t *testing.T) {
 	}
 }
 
-func TestRegistryDiscoverModelsBuildsProviderOncePerEndpointAndCredential(t *testing.T) {
-	t.Parallel()
-
-	registry := provider.NewRegistry()
-
-	var mu sync.Mutex
-	buildCalls := 0
-	discoverCalls := 0
-	if err := registry.Register(provider.DriverDefinition{
-		Name: "custom",
-		Build: func(ctx context.Context, cfg config.ResolvedProviderConfig) (provider.Provider, error) {
-			mu.Lock()
-			buildCalls++
-			mu.Unlock()
-			return discoverStubProvider{
-				discover: func(ctx context.Context) ([]provider.ModelDescriptor, error) {
-					mu.Lock()
-					discoverCalls++
-					mu.Unlock()
-					return []provider.ModelDescriptor{{ID: "model-a"}}, nil
-				},
-			}, nil
-		},
-	}); err != nil {
-		t.Fatalf("register custom driver: %v", err)
-	}
-
-	resolved := config.ResolvedProviderConfig{
-		ProviderConfig: config.ProviderConfig{
-			Name:      "custom-main",
-			Driver:    "custom",
-			BaseURL:   "https://example.com/v1",
-			Model:     "model-a",
-			APIKeyEnv: "CUSTOM_API_KEY",
-		},
-		APIKey: "test-key",
-	}
-
-	for range 3 {
-		models, err := registry.DiscoverModels(context.Background(), resolved)
-		if err != nil {
-			t.Fatalf("DiscoverModels() error = %v", err)
-		}
-		if len(models) != 1 || models[0].ID != "model-a" {
-			t.Fatalf("unexpected models: %+v", models)
-		}
-	}
-
-	mu.Lock()
-	defer mu.Unlock()
-	if buildCalls != 1 {
-		t.Fatalf("expected discovery provider to be built once, got %d", buildCalls)
-	}
-	if discoverCalls != 3 {
-		t.Fatalf("expected discover method to run each time, got %d", discoverCalls)
-	}
-}
-
 func TestServiceListProvidersFallsBackToProviderDefaultModel(t *testing.T) {
 	t.Parallel()
 
@@ -186,8 +124,8 @@ func TestServiceListProvidersFallsBackToProviderDefaultModel(t *testing.T) {
 		if !ok {
 			t.Fatalf("unexpected builtin provider %q", item.ID)
 		}
-		if item.Description == "" {
-			t.Fatalf("expected provider %q to have a non-empty description", item.ID)
+		if item.Description != "" {
+			t.Fatalf("expected provider description to stay empty for hidden metadata, got %q", item.Description)
 		}
 		if len(item.Models) != wantModels {
 			t.Fatalf("expected provider models to fall back to the default model, got %+v", item.Models)
@@ -375,21 +313,6 @@ func TestServiceBuildReturnsErrorOnNilRegistry(t *testing.T) {
 type catalogStoreStub struct {
 	mu       sync.Mutex
 	catalogs map[string]provider.ModelCatalog
-}
-
-type discoverStubProvider struct {
-	discover func(context.Context) ([]provider.ModelDescriptor, error)
-}
-
-func (p discoverStubProvider) Chat(ctx context.Context, req provider.ChatRequest, events chan<- provider.StreamEvent) (provider.ChatResponse, error) {
-	return provider.ChatResponse{}, nil
-}
-
-func (p discoverStubProvider) DiscoverModels(ctx context.Context) ([]provider.ModelDescriptor, error) {
-	if p.discover == nil {
-		return nil, nil
-	}
-	return p.discover(ctx)
 }
 
 func newCatalogStoreStub() *catalogStoreStub {

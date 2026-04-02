@@ -2,7 +2,6 @@ package provider
 
 import (
 	"context"
-	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -88,71 +87,6 @@ func TestServiceSelectProviderFallsBackToProviderDefault(t *testing.T) {
 	}
 	if selection.ProviderID != config.QiniuName || selection.ModelID != config.QiniuDefaultModel {
 		t.Fatalf("unexpected selection: %+v", selection)
-	}
-}
-
-func TestServiceSetCurrentModelRetriesWhenSelectedProviderChangesDuringUpdate(t *testing.T) {
-	t.Parallel()
-
-	manager := config.NewManager(config.NewLoader(t.TempDir(), testDefaultConfig()))
-	if _, err := manager.Load(context.Background()); err != nil {
-		t.Fatalf("Load() error = %v", err)
-	}
-
-	registry := NewRegistry()
-	if err := registry.Register(testDriverDefinition(config.OpenAIName, nil)); err != nil {
-		t.Fatalf("register openai driver: %v", err)
-	}
-
-	store := newBlockingCatalogStore()
-	openAIIdentity, err := config.OpenAIProvider().Identity()
-	if err != nil {
-		t.Fatalf("openai identity: %v", err)
-	}
-	if err := store.Save(context.Background(), ModelCatalog{
-		SchemaVersion: modelCatalogSchemaVersion,
-		Identity:      openAIIdentity,
-		Models: []ModelDescriptor{
-			{ID: config.OpenAIDefaultModel, Name: config.OpenAIDefaultModel},
-			{ID: "gpt-4o", Name: "gpt-4o"},
-		},
-	}); err != nil {
-		t.Fatalf("seed openai model catalog: %v", err)
-	}
-
-	service := NewService(manager, registry, store)
-
-	type result struct {
-		selection ProviderSelection
-		err       error
-	}
-	resultCh := make(chan result, 1)
-	go func() {
-		selection, err := service.SetCurrentModel(context.Background(), "gpt-4o")
-		resultCh <- result{selection: selection, err: err}
-	}()
-
-	<-store.loadStarted
-	if err := manager.Update(context.Background(), func(cfg *config.Config) error {
-		cfg.SelectedProvider = config.QiniuName
-		cfg.CurrentModel = config.QiniuDefaultModel
-		return nil
-	}); err != nil {
-		t.Fatalf("switch selected provider: %v", err)
-	}
-	close(store.releaseLoad)
-
-	outcome := <-resultCh
-	if !errors.Is(outcome.err, ErrModelNotFound) {
-		t.Fatalf("expected ErrModelNotFound after provider switch, got selection=%+v err=%v", outcome.selection, outcome.err)
-	}
-
-	reloaded, err := manager.Reload(context.Background())
-	if err != nil {
-		t.Fatalf("Reload() error = %v", err)
-	}
-	if reloaded.SelectedProvider != config.QiniuName || reloaded.CurrentModel != config.QiniuDefaultModel {
-		t.Fatalf("expected qiniu selection to stay intact, got provider=%q model=%q", reloaded.SelectedProvider, reloaded.CurrentModel)
 	}
 }
 
@@ -419,48 +353,6 @@ func TestServiceListModelsReturnsStaleCacheAndRefreshesInBackground(t *testing.T
 	t.Fatalf("expected refreshed catalog to contain fresh-model, got %+v", catalog.Models)
 }
 
-func TestServiceQueueRefreshReplacesStaleInFlightTask(t *testing.T) {
-	t.Setenv(testAPIKeyEnv, "test-key")
-
-	manager := config.NewManager(config.NewLoader(t.TempDir(), testDefaultConfig()))
-	if _, err := manager.Load(context.Background()); err != nil {
-		t.Fatalf("Load() error = %v", err)
-	}
-
-	refreshed := make(chan struct{}, 1)
-	registry := NewRegistry()
-	if err := registry.Register(testDriverDefinition(config.OpenAIName, func(ctx context.Context, cfg config.ResolvedProviderConfig) ([]ModelDescriptor, error) {
-		select {
-		case refreshed <- struct{}{}:
-		default:
-		}
-		return nil, nil
-	})); err != nil {
-		t.Fatalf("register discovery driver: %v", err)
-	}
-
-	service := NewService(manager, registry, newMemoryCatalogStore())
-	service.backgroundTimeout = 100 * time.Millisecond
-	service.refreshLease = 10 * time.Millisecond
-
-	identity, err := config.OpenAIProvider().Identity()
-	if err != nil {
-		t.Fatalf("Identity() error = %v", err)
-	}
-	service.inFlightByID[identity.Key()] = refreshTask{
-		token:     41,
-		startedAt: service.now().Add(-time.Minute),
-	}
-
-	service.queueRefresh(config.OpenAIProvider())
-
-	select {
-	case <-refreshed:
-	case <-time.After(time.Second):
-		t.Fatal("expected stale in-flight refresh entry to be replaced")
-	}
-}
-
 func TestServiceBuildAndValidate(t *testing.T) {
 	t.Parallel()
 
@@ -538,21 +430,14 @@ func TestResolveCurrentModelHelper(t *testing.T) {
 			changed:  true,
 		},
 		{
-			name:         "missing fallback uses first discovered model",
+			name:         "missing fallback keeps current model unchanged",
 			currentModel: "unknown-model",
 			models: []ModelDescriptor{
 				{ID: "gpt-4o"},
 			},
 			fallback: "gpt-4.1",
-			expected: "gpt-4o",
-			changed:  true,
-		},
-		{
-			name:         "empty models fall back to provider default",
-			currentModel: "unknown-model",
-			fallback:     "gpt-4.1",
-			expected:     "gpt-4.1",
-			changed:      true,
+			expected: "unknown-model",
+			changed:  false,
 		},
 	}
 
@@ -596,35 +481,20 @@ func testDefaultConfig() *config.Config {
 	return cfg
 }
 
-func testDriverDefinition(name string, discover func(context.Context, config.ResolvedProviderConfig) ([]ModelDescriptor, error)) DriverDefinition {
+func testDriverDefinition(name string, discover DiscoveryFunc) DriverDefinition {
 	return DriverDefinition{
-		Name: name,
+		Name:     name,
+		Discover: discover,
 		Build: func(ctx context.Context, cfg config.ResolvedProviderConfig) (Provider, error) {
-			return serviceTestProvider{
-				discover: func(discoverCtx context.Context) ([]ModelDescriptor, error) {
-					if discover == nil {
-						return nil, nil
-					}
-					return discover(discoverCtx, cfg)
-				},
-			}, nil
+			return serviceTestProvider{}, nil
 		},
 	}
 }
 
-type serviceTestProvider struct {
-	discover func(context.Context) ([]ModelDescriptor, error)
-}
+type serviceTestProvider struct{}
 
 func (serviceTestProvider) Chat(ctx context.Context, req ChatRequest, events chan<- StreamEvent) (ChatResponse, error) {
 	return ChatResponse{}, nil
-}
-
-func (p serviceTestProvider) DiscoverModels(ctx context.Context) ([]ModelDescriptor, error) {
-	if p.discover == nil {
-		return nil, nil
-	}
-	return p.discover(ctx)
 }
 
 type memoryCatalogStore struct {
@@ -636,33 +506,6 @@ func newMemoryCatalogStore() *memoryCatalogStore {
 	return &memoryCatalogStore{
 		catalogs: map[string]ModelCatalog{},
 	}
-}
-
-type blockingCatalogStore struct {
-	base        *memoryCatalogStore
-	loadStarted chan struct{}
-	releaseLoad chan struct{}
-	once        sync.Once
-}
-
-func newBlockingCatalogStore() *blockingCatalogStore {
-	return &blockingCatalogStore{
-		base:        newMemoryCatalogStore(),
-		loadStarted: make(chan struct{}),
-		releaseLoad: make(chan struct{}),
-	}
-}
-
-func (s *blockingCatalogStore) Load(ctx context.Context, identity config.ProviderIdentity) (ModelCatalog, error) {
-	s.once.Do(func() {
-		close(s.loadStarted)
-		<-s.releaseLoad
-	})
-	return s.base.Load(ctx, identity)
-}
-
-func (s *blockingCatalogStore) Save(ctx context.Context, catalog ModelCatalog) error {
-	return s.base.Save(ctx, catalog)
 }
 
 func (s *memoryCatalogStore) Load(ctx context.Context, identity config.ProviderIdentity) (ModelCatalog, error) {

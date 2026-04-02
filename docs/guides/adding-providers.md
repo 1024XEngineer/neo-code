@@ -134,11 +134,6 @@ func (p *Provider) Chat(ctx context.Context, req domain.ChatRequest, events chan
     // 4. 返回 domain.ChatResponse
 }
 
-// DiscoverModels 实现模型发现能力
-func (p *Provider) DiscoverModels(ctx context.Context) ([]domain.ModelDescriptor, error) {
-    return nil, nil
-}
-
 // Driver 返回驱动定义
 func Driver() domain.DriverDefinition {
     return domain.DriverDefinition{
@@ -207,7 +202,7 @@ func DefaultProviders() []ProviderConfig {
 
 | 类型 | 位置 | 说明 |
 |------|------|------|
-| `Provider` | `internal/provider/types.go` | 核心接口，定义 `Chat` / `DiscoverModels` 方法 |
+| `Provider` | `internal/provider/types.go` | 核心接口，定义 `Chat` 方法 |
 | `DriverDefinition` | `internal/provider/registry.go` | 驱动定义：`Name` + `Build` 构造函数 |
 | `Registry` | `internal/provider/registry.go` | 驱动注册中心 |
 
@@ -272,3 +267,4 @@ func DefaultProviders() []ProviderConfig {
 ```
 
 所有内置 provider 都通过代码集中注册。模型选择器展示的候选模型由默认模型、动态发现结果和本地缓存共同组成。
+

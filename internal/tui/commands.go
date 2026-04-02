@@ -76,8 +76,12 @@ const (
 	messageTagAgent = "[ NEO ]"
 	messageTagTool  = "[ TOOL ]"
 
-	roleEvent = "event"
-	roleError = "error"
+	roleUser      = "user"
+	roleAssistant = "assistant"
+	roleTool      = "tool"
+	roleEvent     = "event"
+	roleError     = "error"
+	roleSystem    = "system"
 )
 
 type slashCommand struct {

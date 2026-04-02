@@ -4,7 +4,6 @@ import "context"
 
 type Provider interface {
 	Chat(ctx context.Context, req ChatRequest, events chan<- StreamEvent) (ChatResponse, error)
-	DiscoverModels(ctx context.Context) ([]ModelDescriptor, error)
 }
 
 type StreamEventType string

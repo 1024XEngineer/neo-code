@@ -87,6 +87,12 @@ func (s *JSONModelCatalogStore) Save(ctx context.Context, catalog ModelCatalog) 
 
 	normalized := normalizeModelCatalog(catalog)
 
+	normalizedIdentity, err := config.NewProviderIdentity(normalized.Identity.Driver, normalized.Identity.BaseURL)
+	if err != nil {
+		return fmt.Errorf("provider: normalize model catalog key: %w", err)
+	}
+	normalized.Identity = normalizedIdentity
+
 	path, err := s.catalogPathFromNormalized(normalized.Identity)
 	if err != nil {
 		return err
@@ -113,10 +119,6 @@ func (s *JSONModelCatalogStore) Save(ctx context.Context, catalog ModelCatalog) 
 func normalizeModelCatalog(catalog ModelCatalog) ModelCatalog {
 	if catalog.SchemaVersion == 0 {
 		catalog.SchemaVersion = modelCatalogSchemaVersion
-	}
-	// 规范化 identity，确保 Save 和 Load 的规范化路径一致。
-	if normalized, err := config.NewProviderIdentity(catalog.Identity.Driver, catalog.Identity.BaseURL); err == nil {
-		catalog.Identity = normalized
 	}
 	catalog.Models = MergeModelDescriptors(catalog.Models)
 	return catalog
