@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -438,16 +439,16 @@ func TestCanonicalWorkspaceRoot(t *testing.T) {
 	}
 
 	missing := filepath.Join(t.TempDir(), "missing", "dir")
-	got, err = canonicalWorkspaceRoot(missing)
-	if err != nil {
-		t.Fatalf("canonicalWorkspaceRoot(missing) error: %v", err)
+	_, err = canonicalWorkspaceRoot(missing)
+	if err == nil || !strings.Contains(err.Error(), "resolve workspace root") {
+		t.Fatalf("expected missing root error, got %v", err)
 	}
-	expectedMissing, err := filepath.Abs(missing)
-	if err != nil {
-		t.Fatalf("filepath.Abs(missing): %v", err)
-	}
-	if got != filepath.Clean(expectedMissing) {
-		t.Fatalf("canonicalWorkspaceRoot(missing) = %q, want %q", got, filepath.Clean(expectedMissing))
+
+	notDirRoot := filepath.Join(t.TempDir(), "file.txt")
+	mustWriteWorkspaceFile(t, notDirRoot, "content")
+	_, err = canonicalWorkspaceRoot(notDirRoot)
+	if err == nil || !strings.Contains(err.Error(), "is not a directory") {
+		t.Fatalf("expected not-a-directory error, got %v", err)
 	}
 
 	symlinkRoot := t.TempDir()
@@ -514,6 +515,65 @@ func TestAbsoluteWorkspaceTarget(t *testing.T) {
 			}
 			if got != filepath.Clean(wantAbs) {
 				t.Fatalf("absoluteWorkspaceTarget() = %q, want %q", got, filepath.Clean(wantAbs))
+			}
+		})
+	}
+}
+
+func TestValidateTargetVolume(t *testing.T) {
+	t.Parallel()
+
+	if runtime.GOOS != "windows" {
+		t.Skip("volume validation is Windows-specific")
+	}
+
+	root := `C:\workspace`
+	inside := `C:\workspace\file.txt`
+	outside := `D:\secret.txt`
+
+	if err := validateTargetVolume(root, inside); err != nil {
+		t.Fatalf("validateTargetVolume(inside) error: %v", err)
+	}
+	if err := validateTargetVolume(root, outside); err == nil || !strings.Contains(err.Error(), "different volume") {
+		t.Fatalf("expected different volume error, got %v", err)
+	}
+}
+
+func TestNormalizeVolumeName(t *testing.T) {
+	t.Parallel()
+
+	if runtime.GOOS != "windows" {
+		t.Skip("volume normalization is Windows-specific")
+	}
+
+	tests := []struct {
+		name string
+		path string
+		want string
+	}{
+		{
+			name: "drive letter is normalized",
+			path: `C:\workspace`,
+			want: `c:`,
+		},
+		{
+			name: "extended path prefix is removed",
+			path: `\\?\C:\workspace`,
+			want: `c:`,
+		},
+		{
+			name: "unc share is normalized",
+			path: `\\server\share\dir`,
+			want: `\\server\share`,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := normalizeVolumeName(tt.path); got != tt.want {
+				t.Fatalf("normalizeVolumeName(%q) = %q, want %q", tt.path, got, tt.want)
 			}
 		})
 	}
