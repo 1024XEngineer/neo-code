@@ -30,21 +30,29 @@ func buildPermissionAction(input ToolCallInput) (security.Action, error) {
 		action.Payload.Operation = "command"
 		action.Payload.TargetType = security.TargetTypeCommand
 		action.Payload.Target = extractStringArgument(input.Arguments, "command")
+		action.Payload.SandboxTargetType = security.TargetTypeDirectory
+		action.Payload.SandboxTarget = extractStringArgument(input.Arguments, "workdir")
 	case "filesystem_read_file":
 		action.Type = security.ActionTypeRead
 		action.Payload.Operation = "read_file"
 		action.Payload.TargetType = security.TargetTypePath
 		action.Payload.Target = extractStringArgument(input.Arguments, "path")
+		action.Payload.SandboxTargetType = security.TargetTypePath
+		action.Payload.SandboxTarget = action.Payload.Target
 	case "filesystem_grep":
 		action.Type = security.ActionTypeRead
 		action.Payload.Operation = "grep"
 		action.Payload.TargetType = security.TargetTypeDirectory
 		action.Payload.Target = extractStringArgument(input.Arguments, "dir")
+		action.Payload.SandboxTargetType = security.TargetTypeDirectory
+		action.Payload.SandboxTarget = action.Payload.Target
 	case "filesystem_glob":
 		action.Type = security.ActionTypeRead
 		action.Payload.Operation = "glob"
 		action.Payload.TargetType = security.TargetTypeDirectory
 		action.Payload.Target = extractStringArgument(input.Arguments, "dir")
+		action.Payload.SandboxTargetType = security.TargetTypeDirectory
+		action.Payload.SandboxTarget = action.Payload.Target
 	case "webfetch":
 		action.Type = security.ActionTypeRead
 		action.Payload.Operation = "fetch"
@@ -55,11 +63,15 @@ func buildPermissionAction(input ToolCallInput) (security.Action, error) {
 		action.Payload.Operation = "write_file"
 		action.Payload.TargetType = security.TargetTypePath
 		action.Payload.Target = extractStringArgument(input.Arguments, "path")
+		action.Payload.SandboxTargetType = security.TargetTypePath
+		action.Payload.SandboxTarget = action.Payload.Target
 	case "filesystem_edit":
 		action.Type = security.ActionTypeWrite
 		action.Payload.Operation = "edit"
 		action.Payload.TargetType = security.TargetTypePath
 		action.Payload.Target = extractStringArgument(input.Arguments, "path")
+		action.Payload.SandboxTargetType = security.TargetTypePath
+		action.Payload.SandboxTarget = action.Payload.Target
 	default:
 		if strings.HasPrefix(strings.ToLower(toolName), "mcp.") {
 			action.Type = security.ActionTypeMCP

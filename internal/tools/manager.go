@@ -208,6 +208,12 @@ func actionMetadata(action security.Action) map[string]any {
 	if action.Payload.Target != "" {
 		metadata["permission_target"] = action.Payload.Target
 	}
+	if action.Payload.SandboxTargetType != "" {
+		metadata["permission_sandbox_target_type"] = string(action.Payload.SandboxTargetType)
+	}
+	if action.Payload.SandboxTarget != "" {
+		metadata["permission_sandbox_target"] = action.Payload.SandboxTarget
+	}
 	return metadata
 }
 

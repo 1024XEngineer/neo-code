@@ -58,13 +58,15 @@ const (
 
 // ActionPayload is the normalized structured context used by policy and sandbox.
 type ActionPayload struct {
-	ToolName   string
-	Resource   string
-	Operation  string
-	SessionID  string
-	Workdir    string
-	TargetType TargetType
-	Target     string
+	ToolName          string
+	Resource          string
+	Operation         string
+	SessionID         string
+	Workdir           string
+	TargetType        TargetType
+	Target            string
+	SandboxTargetType TargetType
+	SandboxTarget     string
 }
 
 // Action is the unified security input for one tool execution request.
