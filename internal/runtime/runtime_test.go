@@ -11,6 +11,7 @@ import (
 
 	"neo-code/internal/config"
 	agentcontext "neo-code/internal/context"
+	contextcompact "neo-code/internal/context/compact"
 	"neo-code/internal/provider"
 	"neo-code/internal/provider/builtin"
 	"neo-code/internal/tools"
@@ -201,6 +202,23 @@ type stubToolManager struct {
 	listCalls    int
 	executeCalls int
 	lastInput    tools.ToolCallInput
+}
+
+type stubCompactRunner struct {
+	runFn  func(ctx context.Context, input contextcompact.Input) (contextcompact.Result, error)
+	calls  []contextcompact.Input
+	result contextcompact.Result
+	err    error
+}
+
+func (r *stubCompactRunner) Run(ctx context.Context, input contextcompact.Input) (contextcompact.Result, error) {
+	cloned := input
+	cloned.Messages = append([]provider.Message(nil), input.Messages...)
+	r.calls = append(r.calls, cloned)
+	if r.runFn != nil {
+		return r.runFn(ctx, input)
+	}
+	return r.result, r.err
 }
 
 func (m *stubToolManager) ListAvailableSpecs(ctx context.Context, input tools.SpecListInput) ([]provider.ToolSpec, error) {
@@ -1231,6 +1249,204 @@ func TestServiceConstructorsAndDelegates(t *testing.T) {
 	}
 }
 
+func TestServiceRunAppliesMicroCompactBeforeContextBuild(t *testing.T) {
+	manager := newRuntimeConfigManager(t)
+	if err := manager.Update(context.Background(), func(cfg *config.Config) error {
+		cfg.Context.Compact.MicroEnabled = true
+		return nil
+	}); err != nil {
+		t.Fatalf("enable micro compact: %v", err)
+	}
+
+	store := newMemoryStore()
+	session := newSession("existing")
+	session.ID = "session-micro"
+	session.Messages = []provider.Message{
+		{Role: provider.RoleUser, Content: "history"},
+	}
+	store.sessions[session.ID] = cloneSession(session)
+
+	registry := tools.NewRegistry()
+	registry.Register(&stubTool{name: "filesystem_read_file", content: "ok"})
+
+	builder := &stubContextBuilder{}
+	scripted := &scriptedProvider{
+		responses: []provider.ChatResponse{
+			{
+				Message: provider.Message{Role: provider.RoleAssistant, Content: "done"},
+			},
+		},
+	}
+	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: scripted}, builder)
+	compactRunner := &stubCompactRunner{
+		runFn: func(ctx context.Context, input contextcompact.Input) (contextcompact.Result, error) {
+			next := append([]provider.Message(nil), input.Messages...)
+			next = append(next, provider.Message{Role: provider.RoleAssistant, Content: "micro-summary"})
+			return contextcompact.Result{
+				Messages: next,
+				Applied:  true,
+				Metrics: contextcompact.Metrics{
+					BeforeChars: 10,
+					AfterChars:  6,
+					SavedRatio:  0.4,
+					TriggerMode: string(contextcompact.ModeMicro),
+				},
+				TranscriptID:   "transcript_1_session-micro",
+				TranscriptPath: "/tmp/transcript.jsonl",
+			}, nil
+		},
+	}
+	service.compactRunner = compactRunner
+
+	if err := service.Run(context.Background(), UserInput{
+		SessionID: session.ID,
+		RunID:     "run-micro",
+		Content:   "latest",
+	}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	if len(compactRunner.calls) == 0 || compactRunner.calls[0].Mode != contextcompact.ModeMicro {
+		t.Fatalf("expected micro compact call, got %+v", compactRunner.calls)
+	}
+	if len(builder.lastInput.Messages) == 0 || builder.lastInput.Messages[len(builder.lastInput.Messages)-1].Content != "micro-summary" {
+		t.Fatalf("expected compacted messages to be passed into context builder, got %+v", builder.lastInput.Messages)
+	}
+
+	events := collectRuntimeEvents(service.Events())
+	assertEventSequence(t, events, []EventType{EventCompactStart, EventCompactDone, EventMicroCompactApplied, EventAgentDone})
+	donePayload, ok := findEventPayload[CompactDonePayload](events, EventCompactDone)
+	if !ok || !donePayload.Applied || donePayload.TriggerMode != string(contextcompact.ModeMicro) {
+		t.Fatalf("expected compact_done payload with applied micro mode, got %+v", donePayload)
+	}
+}
+
+func TestServiceRunMicroCompactFailureDoesNotBlockMainLoop(t *testing.T) {
+	manager := newRuntimeConfigManager(t)
+	if err := manager.Update(context.Background(), func(cfg *config.Config) error {
+		cfg.Context.Compact.MicroEnabled = true
+		return nil
+	}); err != nil {
+		t.Fatalf("enable micro compact: %v", err)
+	}
+
+	store := newMemoryStore()
+	registry := tools.NewRegistry()
+	registry.Register(&stubTool{name: "filesystem_read_file", content: "ok"})
+
+	scripted := &scriptedProvider{
+		responses: []provider.ChatResponse{
+			{
+				Message: provider.Message{Role: provider.RoleAssistant, Content: "still works"},
+			},
+		},
+	}
+	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: scripted}, nil)
+	service.compactRunner = &stubCompactRunner{err: errors.New("compact failed")}
+
+	if err := service.Run(context.Background(), UserInput{RunID: "run-micro-fail", Content: "hello"}); err != nil {
+		t.Fatalf("expected run to continue when micro compact fails, got %v", err)
+	}
+
+	events := collectRuntimeEvents(service.Events())
+	assertEventSequence(t, events, []EventType{EventCompactStart, EventCompactError, EventAgentDone})
+	assertNoEventType(t, events, EventError)
+}
+
+func TestServiceCompactManualAppliesAndPersists(t *testing.T) {
+	manager := newRuntimeConfigManager(t)
+	store := newMemoryStore()
+	session := newSession("manual")
+	session.ID = "session-manual"
+	session.Messages = []provider.Message{
+		{Role: provider.RoleUser, Content: "before"},
+	}
+	store.sessions[session.ID] = cloneSession(session)
+
+	registry := tools.NewRegistry()
+	registry.Register(&stubTool{name: "filesystem_read_file", content: "ok"})
+
+	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: &scriptedProvider{}}, nil)
+	service.compactRunner = &stubCompactRunner{
+		result: contextcompact.Result{
+			Messages: []provider.Message{
+				{Role: provider.RoleAssistant, Content: "[compact_summary]\\ndone:\\n- ok\\n\\nin_progress:\\n- continue"},
+				{Role: provider.RoleAssistant, Content: "latest"},
+			},
+			Applied: true,
+			Metrics: contextcompact.Metrics{
+				BeforeChars: 80,
+				AfterChars:  30,
+				SavedRatio:  0.625,
+				TriggerMode: string(contextcompact.ModeManual),
+			},
+			TranscriptID:   "transcript_manual",
+			TranscriptPath: "/tmp/manual.jsonl",
+		},
+	}
+
+	result, err := service.Compact(context.Background(), CompactInput{
+		SessionID: session.ID,
+		RunID:     "run-manual",
+	})
+	if err != nil {
+		t.Fatalf("Compact() error = %v", err)
+	}
+	if !result.Applied || result.BeforeChars != 80 || result.AfterChars != 30 {
+		t.Fatalf("unexpected compact result: %+v", result)
+	}
+
+	saved, err := store.Load(context.Background(), session.ID)
+	if err != nil {
+		t.Fatalf("load compacted session: %v", err)
+	}
+	if len(saved.Messages) != 2 || !strings.Contains(saved.Messages[0].Content, "compact_summary") {
+		t.Fatalf("expected persisted compacted messages, got %+v", saved.Messages)
+	}
+
+	events := collectRuntimeEvents(service.Events())
+	assertEventSequence(t, events, []EventType{EventCompactStart, EventCompactDone})
+	donePayload, ok := findEventPayload[CompactDonePayload](events, EventCompactDone)
+	if !ok || !donePayload.Applied || donePayload.TriggerMode != string(contextcompact.ModeManual) {
+		t.Fatalf("expected compact_done payload with applied manual mode, got %+v", donePayload)
+	}
+}
+
+func TestServiceCompactManualFailureReturnsError(t *testing.T) {
+	manager := newRuntimeConfigManager(t)
+	store := newMemoryStore()
+	session := newSession("manual-fail")
+	session.ID = "session-manual-fail"
+	session.Messages = []provider.Message{{Role: provider.RoleUser, Content: "before"}}
+	store.sessions[session.ID] = cloneSession(session)
+
+	registry := tools.NewRegistry()
+	registry.Register(&stubTool{name: "filesystem_read_file", content: "ok"})
+
+	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: &scriptedProvider{}}, nil)
+	service.compactRunner = &stubCompactRunner{err: errors.New("manual compact failed")}
+
+	_, err := service.Compact(context.Background(), CompactInput{
+		SessionID: session.ID,
+		RunID:     "run-manual-fail",
+	})
+	if err == nil || !strings.Contains(err.Error(), "manual compact failed") {
+		t.Fatalf("expected compact failure, got %v", err)
+	}
+
+	saved, err := store.Load(context.Background(), session.ID)
+	if err != nil {
+		t.Fatalf("load original session: %v", err)
+	}
+	if len(saved.Messages) != 1 || saved.Messages[0].Content != "before" {
+		t.Fatalf("expected original session untouched, got %+v", saved.Messages)
+	}
+
+	events := collectRuntimeEvents(service.Events())
+	assertEventSequence(t, events, []EventType{EventCompactStart, EventCompactError})
+	assertNoEventType(t, events, EventCompactDone)
+}
+
 func newRuntimeConfigManager(t *testing.T) *config.Manager {
 	t.Helper()
 	restoreRuntimeEnv(t, config.OpenAIDefaultAPIKeyEnv)
@@ -1310,6 +1526,21 @@ func assertNoEventType(t *testing.T, events []RuntimeEvent, unexpected EventType
 			t.Fatalf("did not expect event %q in %+v", unexpected, events)
 		}
 	}
+}
+
+func findEventPayload[T any](events []RuntimeEvent, kind EventType) (T, bool) {
+	var zero T
+	for _, event := range events {
+		if event.Type != kind {
+			continue
+		}
+		payload, ok := event.Payload.(T)
+		if !ok {
+			return zero, false
+		}
+		return payload, true
+	}
+	return zero, false
 }
 
 func assertEventsRunID(t *testing.T, events []RuntimeEvent, runID string) {

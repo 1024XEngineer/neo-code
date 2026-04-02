@@ -8,6 +8,17 @@
 
 ## 核心类型
 - `Config`：顶层应用配置，运行时包含 Provider 列表、当前选中 Provider、当前模型、工作目录、Shell 和循环限制等信息
+- `Config.Context.Compact`：上下文压缩配置，包含：
+  - `micro_enabled`
+  - `tool_result_keep_recent`
+  - `tool_result_placeholder_min_chars`
+  - `manual_strategy`（M1 支持 `keep_recent` / `full_replace`）
+  - `manual_keep_recent_spans`
+  - `max_summary_chars`
+
+默认策略说明：
+- `micro_enabled` 默认 `true`，可通过配置显式关闭
+- `manual_strategy` 默认 `keep_recent`
 - `ProviderConfig`：单个 Provider 的内建定义，包括 Base URL、默认模型、实例级模型列表和 API Key 环境变量名
 - `Manager`：使用 `sync.RWMutex` 保护的配置访问器与修改器
 - `Loader`：对 YAML 文件和托管 `.env` 文件的文件系统封装

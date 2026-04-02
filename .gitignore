@@ -31,6 +31,7 @@ config.local.yaml
 # Local data
 data/
 .cache/
+.neocode/projects/**/.transcripts/
 
 # Editor/IDE
 .idea/

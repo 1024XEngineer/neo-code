@@ -19,15 +19,18 @@ import (
 )
 
 type stubRuntime struct {
-	runInputs    []agentruntime.UserInput
-	events       chan agentruntime.RuntimeEvent
-	sessions     []agentruntime.SessionSummary
-	loads        map[string]agentruntime.Session
-	runErr       error
-	listErr      error
-	loadErr      error
-	cancelCalls  int
-	cancelResult bool
+	runInputs     []agentruntime.UserInput
+	compactInputs []agentruntime.CompactInput
+	events        chan agentruntime.RuntimeEvent
+	sessions      []agentruntime.SessionSummary
+	loads         map[string]agentruntime.Session
+	runErr        error
+	compactErr    error
+	compactResult agentruntime.CompactResult
+	listErr       error
+	loadErr       error
+	cancelCalls   int
+	cancelResult  bool
 }
 
 func newStubRuntime() *stubRuntime {
@@ -40,6 +43,11 @@ func newStubRuntime() *stubRuntime {
 func (r *stubRuntime) Run(ctx context.Context, input agentruntime.UserInput) error {
 	r.runInputs = append(r.runInputs, input)
 	return r.runErr
+}
+
+func (r *stubRuntime) Compact(ctx context.Context, input agentruntime.CompactInput) (agentruntime.CompactResult, error) {
+	r.compactInputs = append(r.compactInputs, input)
+	return r.compactResult, r.compactErr
 }
 
 func (r *stubRuntime) Events() <-chan agentruntime.RuntimeEvent {
@@ -1191,6 +1199,93 @@ func TestAppHandleRuntimeEventAdditionalBranches(t *testing.T) {
 				}
 			},
 		},
+		{
+			name: "compact done event emits lightweight notice",
+			event: agentruntime.RuntimeEvent{
+				Type:      agentruntime.EventCompactDone,
+				SessionID: "s1",
+				Payload: agentruntime.CompactDonePayload{
+					Applied:        true,
+					BeforeChars:    100,
+					AfterChars:     60,
+					SavedRatio:     0.4,
+					TriggerMode:    "manual",
+					TranscriptPath: "/tmp/t.jsonl",
+				},
+			},
+			assert: func(t *testing.T, app App) {
+				t.Helper()
+				if !strings.Contains(app.state.StatusText, "Compact(manual)") {
+					t.Fatalf("expected compact status text, got %q", app.state.StatusText)
+				}
+				if len(app.activeMessages) == 0 || !strings.Contains(app.activeMessages[len(app.activeMessages)-1].Content, "Compact(manual)") {
+					t.Fatalf("expected compact inline notice, got %+v", app.activeMessages)
+				}
+			},
+		},
+		{
+			name: "compact done ignores passive micro checks",
+			setup: func(app *App) {
+				app.state.StatusText = "unchanged"
+			},
+			event: agentruntime.RuntimeEvent{
+				Type:      agentruntime.EventCompactDone,
+				SessionID: "s1",
+				Payload: agentruntime.CompactDonePayload{
+					Applied:     false,
+					TriggerMode: "micro",
+				},
+			},
+			assert: func(t *testing.T, app App) {
+				t.Helper()
+				if app.state.StatusText != "unchanged" {
+					t.Fatalf("expected status unchanged for passive micro compact, got %q", app.state.StatusText)
+				}
+			},
+		},
+		{
+			name: "compact error event is surfaced",
+			event: agentruntime.RuntimeEvent{
+				Type:      agentruntime.EventCompactError,
+				SessionID: "s1",
+				Payload: agentruntime.CompactErrorPayload{
+					TriggerMode: "manual",
+					Message:     "disk full",
+				},
+			},
+			assert: func(t *testing.T, app App) {
+				t.Helper()
+				if !strings.Contains(app.state.ExecutionError, "Compact(manual) failed: disk full") {
+					t.Fatalf("expected compact error in state, got %q", app.state.ExecutionError)
+				}
+			},
+		},
+		{
+			name: "micro compact error remains non-blocking notice",
+			setup: func(app *App) {
+				app.state.StatusText = statusThinking
+			},
+			event: agentruntime.RuntimeEvent{
+				Type:      agentruntime.EventCompactError,
+				SessionID: "s1",
+				Payload: agentruntime.CompactErrorPayload{
+					TriggerMode: "micro",
+					Message:     "tmp write failed",
+				},
+			},
+			assert: func(t *testing.T, app App) {
+				t.Helper()
+				if app.state.ExecutionError != "" {
+					t.Fatalf("expected no execution error for micro compact failure, got %q", app.state.ExecutionError)
+				}
+				if app.state.StatusText != statusThinking {
+					t.Fatalf("expected status unchanged for micro compact failure, got %q", app.state.StatusText)
+				}
+				if len(app.activeMessages) == 0 || !strings.Contains(app.activeMessages[len(app.activeMessages)-1].Content, "Compact(micro) skipped") {
+					t.Fatalf("expected lightweight micro compact notice, got %+v", app.activeMessages)
+				}
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -1261,6 +1356,40 @@ func TestImmediateSlashCommandsAndLayoutBranches(t *testing.T) {
 	}
 	if app.state.ActiveSessionID != "" || len(app.activeMessages) != 0 {
 		t.Fatalf("expected /clear to reset draft state")
+	}
+
+	runtime.compactResult = agentruntime.CompactResult{
+		Applied:        true,
+		BeforeChars:    100,
+		AfterChars:     40,
+		SavedRatio:     0.6,
+		TranscriptPath: "/tmp/transcript.jsonl",
+	}
+	app.state.ActiveSessionID = "session-compact"
+	handled, cmd = app.handleImmediateSlashCommand("/compact")
+	if !handled || cmd == nil {
+		t.Fatalf("expected /compact to trigger compact cmd")
+	}
+	if app.state.StatusText != statusCompacting {
+		t.Fatalf("expected compact status %q, got %q", statusCompacting, app.state.StatusText)
+	}
+	msgs := collectTeaMessages(cmd)
+	if len(msgs) != 1 {
+		t.Fatalf("expected one compact command message, got %d", len(msgs))
+	}
+	if _, ok := msgs[0].(compactFinishedMsg); !ok {
+		t.Fatalf("expected compact finished msg, got %T", msgs[0])
+	}
+	if len(runtime.compactInputs) != 1 || runtime.compactInputs[0].SessionID != "session-compact" {
+		t.Fatalf("expected runtime compact call with active session, got %+v", runtime.compactInputs)
+	}
+
+	handled, cmd = app.handleImmediateSlashCommand("/compact now")
+	if !handled || cmd != nil {
+		t.Fatalf("expected /compact with args to be handled locally with usage error")
+	}
+	if !strings.Contains(app.state.StatusText, "usage: /compact") {
+		t.Fatalf("expected /compact usage hint, got %q", app.state.StatusText)
 	}
 
 	handled, cmd = app.handleImmediateSlashCommand("/exit")

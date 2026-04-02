@@ -27,6 +27,9 @@ type modelCatalogRefreshMsg struct {
 	models     []provider.ModelDescriptor
 	err        error
 }
+type compactFinishedMsg struct {
+	err error
+}
 type localCommandResultMsg struct {
 	notice          string
 	err             error
@@ -102,6 +105,26 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cfg := a.configManager.Get()
 		a.syncConfigState(cfg)
 		a.selectCurrentModel(cfg.CurrentModel)
+		return a, tea.Batch(cmds...)
+	case compactFinishedMsg:
+		// compact feedback should primarily come from runtime compact_done/error events.
+		if typed.err != nil && strings.TrimSpace(a.state.ExecutionError) == "" {
+			a.state.ExecutionError = typed.err.Error()
+			a.state.StatusText = typed.err.Error()
+		}
+		if err := a.refreshSessions(); err != nil {
+			a.state.ExecutionError = err.Error()
+			a.state.StatusText = err.Error()
+			a.appendInlineMessage(roleError, err.Error())
+		}
+		if err := a.refreshMessages(); err != nil && strings.TrimSpace(a.state.ActiveSessionID) != "" {
+			a.state.ExecutionError = err.Error()
+			a.state.StatusText = err.Error()
+			a.appendInlineMessage(roleError, err.Error())
+		}
+		a.syncActiveSessionTitle()
+		a.rebuildTranscript()
+		a.transcript.GotoBottom()
 		return a, tea.Batch(cmds...)
 	case localCommandResultMsg:
 		if typed.err != nil {
@@ -525,6 +548,50 @@ func (a *App) handleRuntimeEvent(event agentruntime.RuntimeEvent) bool {
 			a.state.StatusText = statusThinking
 			a.appendActivity("provider", "Retrying provider call", payload, false)
 		}
+	case agentruntime.EventCompactDone:
+		payload, ok := event.Payload.(agentruntime.CompactDonePayload)
+		if !ok {
+			return transcriptDirty
+		}
+		// Skip passive micro checks that did not rewrite context to avoid transcript noise.
+		if payload.TriggerMode == "micro" && !payload.Applied {
+			return transcriptDirty
+		}
+		a.state.ExecutionError = ""
+		a.state.StatusText = fmt.Sprintf(
+			"Compact(%s) saved %.1f%% context",
+			payload.TriggerMode,
+			payload.SavedRatio*100,
+		)
+		a.appendInlineMessage(
+			roleSystem,
+			fmt.Sprintf(
+				"[System] Compact(%s) %s (before=%d, after=%d, saved=%.1f%%, transcript=%s)",
+				payload.TriggerMode,
+				map[bool]string{true: "applied", false: "checked"}[payload.Applied],
+				payload.BeforeChars,
+				payload.AfterChars,
+				payload.SavedRatio*100,
+				payload.TranscriptPath,
+			),
+		)
+		transcriptDirty = true
+	case agentruntime.EventCompactError:
+		payload, ok := event.Payload.(agentruntime.CompactErrorPayload)
+		if !ok {
+			return transcriptDirty
+		}
+		if payload.TriggerMode == "micro" {
+			// Micro compact failure is non-blocking for the main loop, keep it as a lightweight notice.
+			a.appendInlineMessage(roleEvent, fmt.Sprintf("Compact(micro) skipped: %s", payload.Message))
+			transcriptDirty = true
+			return transcriptDirty
+		}
+		message := fmt.Sprintf("Compact(%s) failed: %s", payload.TriggerMode, payload.Message)
+		a.state.ExecutionError = message
+		a.state.StatusText = message
+		a.appendInlineMessage(roleError, message)
+		transcriptDirty = true
 	}
 
 	return transcriptDirty
@@ -769,7 +836,7 @@ func (a *App) rebuildTranscript() {
 }
 
 func (a *App) handleImmediateSlashCommand(input string) (bool, tea.Cmd) {
-	command, _ := splitFirstWord(strings.ToLower(strings.TrimSpace(input)))
+	command, rest := splitFirstWord(strings.ToLower(strings.TrimSpace(input)))
 	switch command {
 	case slashCommandExit:
 		return true, tea.Quit
@@ -777,6 +844,18 @@ func (a *App) handleImmediateSlashCommand(input string) (bool, tea.Cmd) {
 		a.startDraftSession()
 		a.state.StatusText = "[System] Cleared current draft/history."
 		return true, nil
+	case slashCommandCompact:
+		if strings.TrimSpace(rest) != "" {
+			errText := fmt.Sprintf("usage: %s", slashUsageCompact)
+			a.state.ExecutionError = errText
+			a.state.StatusText = errText
+			a.appendInlineMessage(roleError, errText)
+			a.rebuildTranscript()
+			return true, nil
+		}
+		a.state.StatusText = statusCompacting
+		a.state.ExecutionError = ""
+		return true, runCompact(a.runtime, a.state.ActiveSessionID)
 	default:
 		return false, nil
 	}
@@ -846,5 +925,12 @@ func runAgent(runtime agentruntime.Runtime, sessionID string, content string) te
 	return func() tea.Msg {
 		err := runtime.Run(context.Background(), agentruntime.UserInput{SessionID: sessionID, Content: content})
 		return runFinishedMsg{err: err}
+	}
+}
+
+func runCompact(runtime agentruntime.Runtime, sessionID string) tea.Cmd {
+	return func() tea.Msg {
+		_, err := runtime.Compact(context.Background(), agentruntime.CompactInput{SessionID: sessionID})
+		return compactFinishedMsg{err: err}
 	}
 }

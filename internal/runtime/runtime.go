@@ -12,6 +12,7 @@ import (
 
 	"neo-code/internal/config"
 	agentcontext "neo-code/internal/context"
+	contextcompact "neo-code/internal/context/compact"
 	"neo-code/internal/provider"
 	"neo-code/internal/tools"
 )
@@ -30,6 +31,7 @@ const (
 
 type Runtime interface {
 	Run(ctx context.Context, input UserInput) error
+	Compact(ctx context.Context, input CompactInput) (CompactResult, error)
 	CancelActiveRun() bool
 	Events() <-chan RuntimeEvent
 	ListSessions(ctx context.Context) ([]SessionSummary, error)
@@ -42,6 +44,36 @@ type UserInput struct {
 	Content   string
 }
 
+type CompactInput struct {
+	SessionID string
+	RunID     string
+}
+
+type CompactResult struct {
+	Applied        bool
+	BeforeChars    int
+	AfterChars     int
+	SavedRatio     float64
+	TriggerMode    string
+	TranscriptID   string
+	TranscriptPath string
+}
+
+type CompactDonePayload struct {
+	Applied        bool    `json:"applied"`
+	BeforeChars    int     `json:"before_chars"`
+	AfterChars     int     `json:"after_chars"`
+	SavedRatio     float64 `json:"saved_ratio"`
+	TriggerMode    string  `json:"trigger_mode"`
+	TranscriptID   string  `json:"transcript_id"`
+	TranscriptPath string  `json:"transcript_path"`
+}
+
+type CompactErrorPayload struct {
+	TriggerMode string `json:"trigger_mode"`
+	Message     string `json:"message"`
+}
+
 type ProviderFactory interface {
 	Build(ctx context.Context, cfg config.ResolvedProviderConfig) (provider.Provider, error)
 }
@@ -52,11 +84,12 @@ type Service struct {
 	toolManager     tools.Manager        // 工具管理器，统一工具 schema 暴露与执行入口。
 	providerFactory ProviderFactory      // Provider 工厂接口，根据配置动态创建具体的 provider 实例。
 	contextBuilder  agentcontext.Builder // 上下文构建器，负责组装 system prompt 与本轮发给模型的消息上下文。
-	events          chan RuntimeEvent    // 事件通道，Runtime 在运行过程中产生的事件都通过该通道发送给 TUI 层消费和展示。
-	runMu           sync.Mutex           // 运行互斥锁，保证同一时间只有一个 Run 在执行。
-	activeRunToken  uint64               // 当前活跃运行的令牌标识，用于标记正在执行的 Run 实例。
-	nextRunToken    uint64               // 下一个运行令牌的递增计数器，用于区分不同 Run 的生命周期。
-	activeRunCancel context.CancelFunc   // 当前活跃 Run 的取消函数。
+	compactRunner   contextcompact.Runner
+	events          chan RuntimeEvent  // 事件通道，Runtime 在运行过程中产生的事件都通过该通道发送给 TUI 层消费和展示。
+	runMu           sync.Mutex         // 运行互斥锁，保证同一时间只有一个 Run 在执行。
+	activeRunToken  uint64             // 当前活跃运行的令牌标识，用于标记正在执行的 Run 实例。
+	nextRunToken    uint64             // 下一个运行令牌的递增计数器，用于区分不同 Run 的生命周期。
+	activeRunCancel context.CancelFunc // 当前活跃 Run 的取消函数。
 }
 
 func NewWithFactory(
@@ -82,6 +115,7 @@ func NewWithFactory(
 		toolManager:     toolManager,
 		providerFactory: providerFactory,
 		contextBuilder:  contextBuilder,
+		compactRunner:   contextcompact.NewRunner(),
 		events:          make(chan RuntimeEvent, 128),
 	}
 }
@@ -129,6 +163,11 @@ func (s *Service) Run(ctx context.Context, input UserInput) error {
 			err := errors.New("runtime: max loop reached")
 			s.emit(ctx, EventError, input.RunID, session.ID, err.Error())
 			return err
+		}
+
+		session, _, err = s.runCompactForSession(ctx, input.RunID, session, cfg, contextcompact.ModeMicro, false)
+		if err != nil {
+			return s.handleRunError(ctx, input.RunID, session.ID, err)
 		}
 
 		builtContext, err := s.contextBuilder.Build(ctx, agentcontext.BuildInput{
@@ -244,6 +283,36 @@ func (s *Service) Run(ctx context.Context, input UserInput) error {
 			}
 		}
 	}
+}
+
+func (s *Service) Compact(ctx context.Context, input CompactInput) (CompactResult, error) {
+	if err := ctx.Err(); err != nil {
+		return CompactResult{}, err
+	}
+	if strings.TrimSpace(input.SessionID) == "" {
+		return CompactResult{}, errors.New("runtime: compact session_id is empty")
+	}
+
+	cfg := s.configManager.Get()
+	session, err := s.sessionStore.Load(ctx, input.SessionID)
+	if err != nil {
+		return CompactResult{}, err
+	}
+
+	session, result, err := s.runCompactForSession(ctx, input.RunID, session, cfg, contextcompact.ModeManual, true)
+	if err != nil {
+		return CompactResult{}, err
+	}
+
+	return CompactResult{
+		Applied:        result.Applied,
+		BeforeChars:    result.Metrics.BeforeChars,
+		AfterChars:     result.Metrics.AfterChars,
+		SavedRatio:     result.Metrics.SavedRatio,
+		TriggerMode:    result.Metrics.TriggerMode,
+		TranscriptID:   result.TranscriptID,
+		TranscriptPath: result.TranscriptPath,
+	}, nil
 }
 
 func (s *Service) CancelActiveRun() bool {
@@ -362,6 +431,72 @@ func (s *Service) handleRunError(ctx context.Context, runID string, sessionID st
 
 	s.emit(ctx, EventError, runID, sessionID, err.Error())
 	return err
+}
+
+func (s *Service) runCompactForSession(
+	ctx context.Context,
+	runID string,
+	session Session,
+	cfg config.Config,
+	mode contextcompact.Mode,
+	failOnError bool,
+) (Session, contextcompact.Result, error) {
+	if s.compactRunner == nil {
+		return session, contextcompact.Result{}, nil
+	}
+
+	originalMessages := append([]provider.Message(nil), session.Messages...)
+	s.emit(ctx, EventCompactStart, runID, session.ID, string(mode))
+
+	result, err := s.compactRunner.Run(ctx, contextcompact.Input{
+		Mode:      mode,
+		SessionID: session.ID,
+		Workdir:   cfg.Workdir,
+		Messages:  session.Messages,
+		Config:    cfg.Context.Compact,
+	})
+	if err != nil {
+		s.emit(ctx, EventCompactError, runID, session.ID, CompactErrorPayload{
+			TriggerMode: string(mode),
+			Message:     err.Error(),
+		})
+		if failOnError {
+			return session, contextcompact.Result{}, err
+		}
+		return session, contextcompact.Result{}, nil
+	}
+
+	if result.Applied {
+		session.Messages = append([]provider.Message(nil), result.Messages...)
+		session.UpdatedAt = time.Now()
+		if err := s.sessionStore.Save(ctx, &session); err != nil {
+			s.emit(ctx, EventCompactError, runID, session.ID, CompactErrorPayload{
+				TriggerMode: string(mode),
+				Message:     err.Error(),
+			})
+			session.Messages = originalMessages
+			if failOnError {
+				return session, contextcompact.Result{}, err
+			}
+			return session, contextcompact.Result{}, nil
+		}
+	}
+
+	donePayload := CompactDonePayload{
+		Applied:        result.Applied,
+		BeforeChars:    result.Metrics.BeforeChars,
+		AfterChars:     result.Metrics.AfterChars,
+		SavedRatio:     result.Metrics.SavedRatio,
+		TriggerMode:    result.Metrics.TriggerMode,
+		TranscriptID:   result.TranscriptID,
+		TranscriptPath: result.TranscriptPath,
+	}
+	s.emit(ctx, EventCompactDone, runID, session.ID, donePayload)
+	if mode == contextcompact.ModeMicro && result.Applied {
+		s.emit(ctx, EventMicroCompactApplied, runID, session.ID, donePayload)
+	}
+
+	return session, result, nil
 }
 
 // isRetryableProviderError 判断 error 是否为可重试的 ProviderError。

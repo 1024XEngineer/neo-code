@@ -68,6 +68,9 @@ go run ./cmd/neocode
 
 - `/provider` — 切换内建模型提供商
 - `/model` — 切换模型
+- `/compact` — 手动压缩当前会话上下文（保留可追溯 transcript）
+
+上下文压缩默认开启每轮 `micro_compact`，手动 `/compact` 支持 `keep_recent` 与 `full_replace` 两种策略。
 
 ## 架构概览
 

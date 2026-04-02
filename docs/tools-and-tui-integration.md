@@ -22,6 +22,8 @@
 
 ## TUI 集成方式
 - 本地配置操作统一通过 Slash Command 完成，例如 Base URL、API Key 和模型选择
+- `/compact` 提供手动上下文压缩入口，触发 runtime 的 manual compact 流程
+- TUI 对 compact 仅做轻量可观测展示：显示 `compact_done` / `compact_error` 关键信息，避免事件刷屏
 - runtime 事件以内联形式渲染到 transcript 中，而不是单独拆出控制台面板
 - 工具开始和结束事件会以轻量提示插入聊天流，使交互更沉浸
 

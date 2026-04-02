@@ -25,6 +25,7 @@ func TestExecuteLocalCommand(t *testing.T) {
 				for _, want := range []string{
 					slashUsageHelp,
 					slashUsageClear,
+					slashUsageCompact,
 					slashUsageStatus,
 					slashUsageProvider,
 					slashUsageModel,

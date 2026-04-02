@@ -17,6 +17,7 @@ const (
 	slashCommandHelp      = "/help"
 	slashCommandExit      = "/exit"
 	slashCommandClear     = "/clear"
+	slashCommandCompact   = "/compact"
 	slashCommandStatus    = "/status"
 	slashCommandProvider  = "/provider"
 	slashCommandModelPick = "/model"
@@ -24,6 +25,7 @@ const (
 	slashUsageHelp     = "/help"
 	slashUsageExit     = "/exit"
 	slashUsageClear    = "/clear"
+	slashUsageCompact  = "/compact"
 	slashUsageStatus   = "/status"
 	slashUsageProvider = "/provider"
 	slashUsageModel    = "/model"
@@ -58,6 +60,7 @@ const (
 	statusApplyingCommand = "Applying local command"
 	statusRunningCommand  = "Running command"
 	statusCommandDone     = "Command finished"
+	statusCompacting      = "Compacting context"
 	statusChooseProvider  = "Choose a provider"
 	statusChooseModel     = "Choose a model"
 
@@ -108,6 +111,7 @@ type statusSnapshot struct {
 var builtinSlashCommands = []slashCommand{
 	{Usage: slashUsageHelp, Description: "Show slash command help"},
 	{Usage: slashUsageClear, Description: "Clear the current draft transcript"},
+	{Usage: slashUsageCompact, Description: "Compact the current session context"},
 	{Usage: slashUsageStatus, Description: "Show current session and agent status"},
 	{Usage: slashUsageProvider, Description: "Open the interactive provider picker"},
 	{Usage: slashUsageModel, Description: "Open the interactive model picker"},
