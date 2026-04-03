@@ -193,3 +193,8 @@ MIT
 - 当前只保留 manual compact，不会在每轮 provider 请求前自动执行 compact。
 - compact transcript 会写入 `~/.neocode/projects/<project-hash>/.transcripts/`。
 - 支持 `keep_recent` 和 `full_replace` 两种手动策略。
+- compact summary 由 provider / model 生成语义摘要，而不是固定模板占位文本。
+- compact summary 会优先使用会话自身记录的 provider / model；旧会话缺少元数据时才回退到当前选中配置。
+- summary 保留固定 section：`done`、`in_progress`、`decisions`、`code_changes`、`constraints`。
+- summary 重点保留已完成任务结果、重要决策及原因、当前进行中状态、关键代码改动以及用户约束。
+- summary 默认忽略工具详细输出、逐步排查过程、已解决错误细节和重复背景信息。

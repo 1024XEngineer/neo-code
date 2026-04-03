@@ -30,6 +30,7 @@
   - `shell`
   - 当前 `provider`
   - 当前 `model`
+- manual compact 的摘要 prompt 也由 `internal/context` 统一构建，`runtime` 只负责选择 provider/model 并发起请求。
 - `context.Builder` 负责统一组装：
   - 固定核心 system prompt sections
   - 从 `workdir` 向上发现的 `AGENTS.md`
@@ -79,6 +80,7 @@
 3. compact runner 先写入 transcript（完整原始消息，JSONL）。
 4. compact runner 按 `keep_recent` 或 `full_replace` 生成 summary 并重写会话消息。
 5. 成功时发出 `compact_done`；失败时发出 `compact_error`。
+- compact summary 默认优先使用会话自身记录的 provider/model；仅在旧会话缺少这些元数据时回退到当前选中配置。
 
 `compact_done` payload 包含：
 - `applied`

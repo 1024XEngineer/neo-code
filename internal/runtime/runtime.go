@@ -127,7 +127,6 @@ func NewWithFactory(
 		toolManager:     toolManager,
 		providerFactory: providerFactory,
 		contextBuilder:  contextBuilder,
-		compactRunner:   contextcompact.NewRunner(),
 		events:          make(chan RuntimeEvent, 128),
 	}
 }
@@ -215,6 +214,10 @@ func (s *Service) Run(ctx context.Context, input UserInput) error {
 			return s.handleRunError(ctx, input.RunID, session.ID, err)
 		}
 
+		metadataChanged := session.Provider != cfg.SelectedProvider || session.Model != cfg.CurrentModel
+		session.Provider = cfg.SelectedProvider
+		session.Model = cfg.CurrentModel
+
 		assistant := resp.Message
 		if strings.TrimSpace(assistant.Role) == "" {
 			assistant.Role = provider.RoleAssistant
@@ -222,6 +225,11 @@ func (s *Service) Run(ctx context.Context, input UserInput) error {
 
 		if strings.TrimSpace(assistant.Content) != "" || len(assistant.ToolCalls) > 0 {
 			session.Messages = append(session.Messages, assistant)
+			session.UpdatedAt = time.Now()
+			if err := s.sessionStore.Save(ctx, &session); err != nil {
+				return s.handleRunError(ctx, input.RunID, session.ID, err)
+			}
+		} else if metadataChanged {
 			session.UpdatedAt = time.Now()
 			if err := s.sessionStore.Save(ctx, &session); err != nil {
 				return s.handleRunError(ctx, input.RunID, session.ID, err)
@@ -537,14 +545,26 @@ func (s *Service) runCompactForSession(
 	cfg config.Config,
 	failOnError bool,
 ) (Session, contextcompact.Result, error) {
-	if s.compactRunner == nil {
-		return session, contextcompact.Result{}, nil
+	runner := s.compactRunner
+	if runner == nil {
+		var err error
+		runner, err = s.defaultCompactRunner(session, cfg)
+		if err != nil {
+			s.emit(ctx, EventCompactError, runID, session.ID, CompactErrorPayload{
+				TriggerMode: CompactTriggerModeManual,
+				Message:     err.Error(),
+			})
+			if failOnError {
+				return session, contextcompact.Result{}, err
+			}
+			return session, contextcompact.Result{}, nil
+		}
 	}
 
 	originalMessages := append([]provider.Message(nil), session.Messages...)
 	s.emit(ctx, EventCompactStart, runID, session.ID, CompactTriggerModeManual)
 
-	result, err := s.compactRunner.Run(ctx, contextcompact.Input{
+	result, err := runner.Run(ctx, contextcompact.Input{
 		Mode:      contextcompact.ModeManual,
 		SessionID: session.ID,
 		Workdir:   cfg.Workdir,
@@ -590,6 +610,44 @@ func (s *Service) runCompactForSession(
 	s.emit(ctx, EventCompactDone, runID, session.ID, donePayload)
 
 	return session, result, nil
+}
+
+func (s *Service) defaultCompactRunner(session Session, cfg config.Config) (contextcompact.Runner, error) {
+	resolvedProvider, model, err := resolveCompactProviderSelection(session, cfg)
+	if err != nil {
+		return nil, err
+	}
+	return contextcompact.NewRunner(newCompactSummaryGenerator(s.providerFactory, resolvedProvider, model)), nil
+}
+
+func resolveCompactProviderSelection(session Session, cfg config.Config) (config.ResolvedProviderConfig, string, error) {
+	sessionProvider := strings.TrimSpace(session.Provider)
+	sessionModel := strings.TrimSpace(session.Model)
+	if sessionProvider != "" && sessionModel != "" {
+		providerCfg, err := cfg.ProviderByName(sessionProvider)
+		if err != nil {
+			return config.ResolvedProviderConfig{}, "", err
+		}
+		resolved, err := providerCfg.Resolve()
+		if err != nil {
+			return config.ResolvedProviderConfig{}, "", err
+		}
+		return resolved, sessionModel, nil
+	}
+
+	resolved, err := resolveSelectedProviderFromConfig(cfg)
+	if err != nil {
+		return config.ResolvedProviderConfig{}, "", err
+	}
+	return resolved, strings.TrimSpace(cfg.CurrentModel), nil
+}
+
+func resolveSelectedProviderFromConfig(cfg config.Config) (config.ResolvedProviderConfig, error) {
+	providerCfg, err := cfg.SelectedProviderConfig()
+	if err != nil {
+		return config.ResolvedProviderConfig{}, err
+	}
+	return providerCfg.Resolve()
 }
 
 // isRetryableProviderError 判断 error 是否为可重试的 ProviderError。

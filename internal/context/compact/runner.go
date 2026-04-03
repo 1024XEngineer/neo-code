@@ -44,6 +44,15 @@ type Input struct {
 	Config    config.CompactConfig
 }
 
+// SummaryInput describes the historical context that must be summarized.
+type SummaryInput struct {
+	Mode             Mode
+	ArchivedMessages []provider.Message
+	RetainedMessages []provider.Message
+	RemovedSpans     int
+	Config           config.CompactConfig
+}
+
 // Metrics reports compact input/output size changes.
 type Metrics struct {
 	BeforeChars int     `json:"before_chars"`
@@ -62,6 +71,11 @@ type Result struct {
 	ErrorMode      ErrorMode          `json:"error_mode"`
 }
 
+// SummaryGenerator produces the semantic compact summary.
+type SummaryGenerator interface {
+	Generate(ctx context.Context, input SummaryInput) (string, error)
+}
+
 // Runner defines the compact execution contract.
 type Runner interface {
 	Run(ctx context.Context, input Input) (Result, error)
@@ -69,6 +83,7 @@ type Runner interface {
 
 // Service is the default compact implementation.
 type Service struct {
+	generator   SummaryGenerator
 	now         func() time.Time
 	randomToken func() (string, error)
 	userHomeDir func() (string, error)
@@ -79,8 +94,9 @@ type Service struct {
 }
 
 // NewRunner returns the default compact runner.
-func NewRunner() *Service {
+func NewRunner(generator SummaryGenerator) *Service {
 	return &Service{
+		generator:   generator,
 		now:         time.Now,
 		randomToken: randomTranscriptToken,
 		userHomeDir: os.UserHomeDir,
@@ -123,7 +139,7 @@ func (s *Service) Run(ctx context.Context, input Input) (Result, error) {
 	base.TranscriptID = transcriptID
 	base.TranscriptPath = transcriptPath
 
-	next, applied, err := manualCompact(messages, cfg)
+	next, applied, err := s.manualCompact(ctx, messages, cfg)
 	if err != nil {
 		return Result{}, err
 	}
@@ -160,19 +176,19 @@ func collectSpans(messages []provider.Message) []span {
 	return spans
 }
 
-func manualCompact(messages []provider.Message, cfg config.CompactConfig) ([]provider.Message, bool, error) {
+func (s *Service) manualCompact(ctx context.Context, messages []provider.Message, cfg config.CompactConfig) ([]provider.Message, bool, error) {
 	strategy := strings.ToLower(strings.TrimSpace(cfg.ManualStrategy))
 	switch strategy {
 	case config.CompactManualStrategyKeepRecent:
-		return manualCompactKeepRecent(messages, cfg)
+		return s.manualCompactKeepRecent(ctx, messages, cfg)
 	case config.CompactManualStrategyFullReplace:
-		return manualCompactFullReplace(messages, cfg)
+		return s.manualCompactFullReplace(ctx, messages, cfg)
 	default:
 		return nil, false, fmt.Errorf("compact: manual strategy %q is not supported", cfg.ManualStrategy)
 	}
 }
 
-func manualCompactKeepRecent(messages []provider.Message, cfg config.CompactConfig) ([]provider.Message, bool, error) {
+func (s *Service) manualCompactKeepRecent(ctx context.Context, messages []provider.Message, cfg config.CompactConfig) ([]provider.Message, bool, error) {
 	spans := collectSpans(messages)
 	if len(spans) <= cfg.ManualKeepRecentSpans {
 		return cloneMessages(messages), false, nil
@@ -182,7 +198,7 @@ func manualCompactKeepRecent(messages []provider.Message, cfg config.CompactConf
 	removed := cloneMessages(messages[:keepStart])
 	kept := cloneMessages(messages[keepStart:])
 
-	summary, err := buildSummary(removed, len(spans)-cfg.ManualKeepRecentSpans, cfg)
+	summary, err := s.buildSummary(ctx, removed, kept, len(spans)-cfg.ManualKeepRecentSpans, cfg)
 	if err != nil {
 		return nil, false, err
 	}
@@ -193,12 +209,12 @@ func manualCompactKeepRecent(messages []provider.Message, cfg config.CompactConf
 	return next, true, nil
 }
 
-func manualCompactFullReplace(messages []provider.Message, cfg config.CompactConfig) ([]provider.Message, bool, error) {
+func (s *Service) manualCompactFullReplace(ctx context.Context, messages []provider.Message, cfg config.CompactConfig) ([]provider.Message, bool, error) {
 	if len(messages) == 0 {
 		return nil, false, nil
 	}
 	spans := collectSpans(messages)
-	summary, err := buildSummary(cloneMessages(messages), len(spans), cfg)
+	summary, err := s.buildSummary(ctx, cloneMessages(messages), nil, len(spans), cfg)
 	if err != nil {
 		return nil, false, err
 	}
@@ -206,74 +222,131 @@ func manualCompactFullReplace(messages []provider.Message, cfg config.CompactCon
 	return []provider.Message{{Role: provider.RoleAssistant, Content: summary}}, true, nil
 }
 
-func buildSummary(removed []provider.Message, removedSpans int, cfg config.CompactConfig) (string, error) {
-	toolNames := make([]string, 0, 8)
-	seenTools := map[string]struct{}{}
-	for _, message := range removed {
-		for _, call := range message.ToolCalls {
-			name := strings.TrimSpace(call.Name)
-			if name == "" {
-				continue
-			}
-			if _, exists := seenTools[name]; exists {
-				continue
-			}
-			seenTools[name] = struct{}{}
-			toolNames = append(toolNames, name)
-		}
-	}
-	toolSummary := "none"
-	if len(toolNames) > 0 {
-		toolSummary = strings.Join(toolNames, ", ")
+func (s *Service) buildSummary(
+	ctx context.Context,
+	archived []provider.Message,
+	retained []provider.Message,
+	removedSpans int,
+	cfg config.CompactConfig,
+) (string, error) {
+	if s.generator == nil {
+		return "", errors.New("compact: summary generator is nil")
 	}
 
-	summary := fmt.Sprintf(strings.Join([]string{
-		"[compact_summary]",
-		"done:",
-		"- Archived %d historical spans (%d messages).",
-		"",
-		"in_progress:",
-		"- Continue from the retained recent context window.",
-		"",
-		"decisions:",
-		"- manual_strategy=%s",
-		"- manual_keep_recent_spans=%d",
-		"",
-		"code_changes:",
-		"- Older context outside the recent window was replaced by this summary.",
-		"- Historical tool calls in archived spans: %s",
-		"",
-		"constraints:",
-		"- Assistant tool_calls and tool_result pairs remain intact in retained spans.",
-	}, "\n"), removedSpans, len(removed), cfg.ManualStrategy, cfg.ManualKeepRecentSpans, toolSummary)
+	summary, err := s.generator.Generate(ctx, SummaryInput{
+		Mode:             ModeManual,
+		ArchivedMessages: cloneMessages(archived),
+		RetainedMessages: cloneMessages(retained),
+		RemovedSpans:     removedSpans,
+		Config:           cfg,
+	})
+	if err != nil {
+		return "", err
+	}
 
 	return validateSummary(summary, cfg.MaxSummaryChars)
 }
 
 func validateSummary(summary string, maxChars int) (string, error) {
-	summary = strings.TrimSpace(summary)
+	summary = normalizeSummary(summary)
 	if maxChars > 0 {
 		runes := []rune(summary)
 		if len(runes) > maxChars {
-			summary = strings.TrimSpace(string(runes[:maxChars]))
+			summary = normalizeSummary(string(runes[:maxChars]))
 		}
 	}
 
-	hasDone := sectionHasContent(summary, "done")
-	hasInProgress := sectionHasContent(summary, "in_progress")
-	if !hasDone && !hasInProgress {
-		return "", errors.New("compact: summary requires done or in_progress content")
+	if err := validateSummaryStructure(summary); err != nil {
+		return "", err
 	}
 	return summary, nil
 }
 
-func sectionHasContent(summary string, section string) bool {
-	pattern := fmt.Sprintf(`(?ms)^%s:\s*\n\s*-\s+.+?(\n\w+?:|\z)`, regexp.QuoteMeta(section))
-	re, err := regexp.Compile(pattern)
-	if err != nil {
-		return false
+var summarySections = []string{
+	"done",
+	"in_progress",
+	"decisions",
+	"code_changes",
+	"constraints",
+}
+
+func normalizeSummary(summary string) string {
+	summary = strings.ReplaceAll(summary, "\r\n", "\n")
+	return strings.TrimSpace(summary)
+}
+
+func validateSummaryStructure(summary string) error {
+	summary = normalizeSummary(summary)
+	if summary == "" {
+		return errors.New("compact: summary is empty")
 	}
-	return re.MatchString(summary)
+
+	lines := strings.Split(summary, "\n")
+	index := nextNonEmptyLine(lines, 0)
+	if index >= len(lines) || strings.TrimSpace(lines[index]) != "[compact_summary]" {
+		return errors.New("compact: summary must start with [compact_summary]")
+	}
+	index++
+
+	for _, section := range summarySections {
+		index = nextNonEmptyLine(lines, index)
+		if index >= len(lines) || strings.TrimSpace(lines[index]) != section+":" {
+			return fmt.Errorf("compact: summary missing required section %q", section)
+		}
+		index++
+
+		bullets := 0
+		for index < len(lines) {
+			rawLine := strings.TrimRight(lines[index], " \t")
+			line := strings.TrimSpace(rawLine)
+			bulletLine := strings.TrimLeft(rawLine, " \t")
+			switch {
+			case line == "":
+				index++
+			case isSummarySectionHeader(line):
+				if bullets == 0 {
+					return fmt.Errorf("compact: summary section %q requires at least one bullet", section)
+				}
+				goto nextSection
+			case bulletLine == "-":
+				return fmt.Errorf("compact: summary section %q contains an empty bullet", section)
+			case !strings.HasPrefix(bulletLine, "- "):
+				return fmt.Errorf("compact: summary section %q contains invalid line %q", section, line)
+			case strings.TrimSpace(strings.TrimPrefix(bulletLine, "- ")) == "":
+				return fmt.Errorf("compact: summary section %q contains an empty bullet", section)
+			default:
+				bullets++
+				index++
+			}
+		}
+		if bullets == 0 {
+			return fmt.Errorf("compact: summary section %q requires at least one bullet", section)
+		}
+
+	nextSection:
+	}
+
+	index = nextNonEmptyLine(lines, index)
+	if index < len(lines) {
+		return fmt.Errorf("compact: summary contains unexpected trailing content %q", strings.TrimSpace(lines[index]))
+	}
+	return nil
+}
+
+func nextNonEmptyLine(lines []string, start int) int {
+	for start < len(lines) && strings.TrimSpace(lines[start]) == "" {
+		start++
+	}
+	return start
+}
+
+func isSummarySectionHeader(line string) bool {
+	for _, section := range summarySections {
+		if line == section+":" {
+			return true
+		}
+	}
+	return false
 }
 
 type transcriptLine struct {
