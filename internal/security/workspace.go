@@ -42,6 +42,9 @@ type workspacePlan struct {
 	target string
 }
 
+// buildWorkspacePlan extracts the workspace root and the sandbox-specific target
+// that should be validated. Actions that do not touch local workspace paths are
+// ignored here and continue through the permission pipeline unchanged.
 func buildWorkspacePlan(action Action) (workspacePlan, bool, error) {
 	if !needsWorkspaceSandbox(action) {
 		return workspacePlan{}, false, nil
@@ -72,6 +75,10 @@ func needsWorkspaceSandbox(action Action) bool {
 	}
 }
 
+// sandboxTarget returns the path-like value that should be checked against the
+// workspace boundary. This is intentionally separate from ActionPayload.Target,
+// because some tools expose one value to policy while validating another one for
+// local filesystem access.
 func sandboxTarget(action Action) (string, bool) {
 	if action.Type == ActionTypeBash {
 		target := strings.TrimSpace(action.Payload.SandboxTarget)
@@ -107,6 +114,9 @@ func sandboxTarget(action Action) (string, bool) {
 	}
 }
 
+// validateWorkspacePlan resolves the canonical workspace root, expands the
+// requested target to an absolute path, verifies it stays inside the workspace,
+// and then checks every existing path segment for symlink escape.
 func validateWorkspacePlan(plan workspacePlan) error {
 	root, err := canonicalWorkspaceRoot(plan.root)
 	if err != nil {
@@ -124,23 +134,34 @@ func validateWorkspacePlan(plan workspacePlan) error {
 	return ensureNoSymlinkEscape(root, target, plan.target)
 }
 
+// canonicalWorkspaceRoot resolves the configured workspace root to a canonical
+// directory path. The root must already exist so validation cannot silently rely
+// on a string-only path that may later resolve through a symlinked parent.
 func canonicalWorkspaceRoot(root string) (string, error) {
 	absoluteRoot, err := filepath.Abs(strings.TrimSpace(root))
 	if err != nil {
 		return "", fmt.Errorf("security: resolve workspace root: %w", err)
 	}
 
+	info, err := os.Stat(absoluteRoot)
+	if err != nil {
+		return "", fmt.Errorf("security: resolve workspace root: %w", err)
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("security: workspace root %q is not a directory", root)
+	}
+
 	canonicalRoot, err := filepath.EvalSymlinks(absoluteRoot)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return filepath.Clean(absoluteRoot), nil
-		}
 		return "", fmt.Errorf("security: resolve workspace root: %w", err)
 	}
 
 	return filepath.Clean(canonicalRoot), nil
 }
 
+// absoluteWorkspaceTarget expands a workspace-relative target into an absolute
+// path and rejects Windows volume changes up front so later boundary checks do
+// not depend on platform-specific filepath.Rel behavior.
 func absoluteWorkspaceTarget(root string, target string) (string, error) {
 	trimmedTarget := strings.TrimSpace(target)
 	if trimmedTarget == "" {
@@ -155,9 +176,23 @@ func absoluteWorkspaceTarget(root string, target string) (string, error) {
 		return "", fmt.Errorf("security: resolve workspace target %q: %w", target, err)
 	}
 
+	if err := validateTargetVolume(root, absoluteTarget); err != nil {
+		return "", err
+	}
+
 	return filepath.Clean(absoluteTarget), nil
 }
 
+// ensureNoSymlinkEscape walks each existing segment from root to target and
+// ensures that any encountered symlink still resolves inside the workspace.
+//
+// This blocks common symlink escape attempts such as placing a link inside the
+// workspace that points to a file or directory outside the workspace tree.
+//
+// Known limitation: this validation is still subject to TOCTOU races between the
+// sandbox check and the later filesystem operation in the executor. Eliminating
+// that window requires executor-level changes such as descriptor-based access or
+// no-follow file opening, which are outside this lightweight sandbox layer.
 func ensureNoSymlinkEscape(root string, target string, original string) error {
 	relativeTarget, err := filepath.Rel(root, target)
 	if err != nil {
@@ -200,6 +235,24 @@ func ensureNoSymlinkEscape(root string, target string, original string) error {
 	}
 
 	return nil
+}
+
+func validateTargetVolume(root string, target string) error {
+	rootVolume := normalizeVolumeName(root)
+	targetVolume := normalizeVolumeName(target)
+	if rootVolume == "" || targetVolume == "" {
+		return nil
+	}
+	if !strings.EqualFold(rootVolume, targetVolume) {
+		return fmt.Errorf("security: path %q is on different volume than workspace root", target)
+	}
+	return nil
+}
+
+func normalizeVolumeName(path string) string {
+	volume := strings.TrimSpace(filepath.VolumeName(filepath.Clean(path)))
+	volume = strings.TrimPrefix(volume, `\\?\`)
+	return strings.ToLower(volume)
 }
 
 func splitRelativePath(path string) []string {
