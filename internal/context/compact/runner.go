@@ -14,6 +14,7 @@ import (
 	goruntime "runtime"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"neo-code/internal/config"
 	"neo-code/internal/provider"
@@ -178,7 +179,7 @@ func hasMicroCandidate(messages []provider.Message, cfg config.CompactConfig) bo
 	}
 	candidateCount := len(toolIndices) - cfg.ToolResultKeepRecent
 	for i := 0; i < candidateCount; i++ {
-		if len(messages[toolIndices[i]].Content) >= cfg.ToolResultPlaceholderMinChars {
+		if utf8.RuneCountInString(messages[toolIndices[i]].Content) >= cfg.ToolResultPlaceholderMinChars {
 			return true
 		}
 	}
@@ -206,7 +207,7 @@ func microCompact(messages []provider.Message, cfg config.CompactConfig) ([]prov
 	for i := 0; i < candidateCount; i++ {
 		idx := toolIndices[i]
 		message := next[idx]
-		if len(message.Content) < cfg.ToolResultPlaceholderMinChars {
+		if utf8.RuneCountInString(message.Content) < cfg.ToolResultPlaceholderMinChars {
 			continue
 		}
 
@@ -515,17 +516,17 @@ func cloneMessages(messages []provider.Message) []provider.Message {
 	return out
 }
 
-// countMessageChars 统计消息字符预算（当前按字符串字节长度计算）。
+// countMessageChars 统计消息字符预算（按 rune 字符数计算）。
 func countMessageChars(messages []provider.Message) int {
 	total := 0
 	for _, message := range messages {
-		total += len(message.Role)
-		total += len(message.Content)
-		total += len(message.ToolCallID)
+		total += utf8.RuneCountInString(message.Role)
+		total += utf8.RuneCountInString(message.Content)
+		total += utf8.RuneCountInString(message.ToolCallID)
 		for _, call := range message.ToolCalls {
-			total += len(call.ID)
-			total += len(call.Name)
-			total += len(call.Arguments)
+			total += utf8.RuneCountInString(call.ID)
+			total += utf8.RuneCountInString(call.Name)
+			total += utf8.RuneCountInString(call.Arguments)
 		}
 	}
 	return total

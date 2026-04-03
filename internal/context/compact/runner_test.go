@@ -504,3 +504,66 @@ func TestValidateSummaryTruncatesByRune(t *testing.T) {
 		t.Fatalf("expected summary to be truncated, got %q", got)
 	}
 }
+
+func TestMicroCompactThresholdUsesRunes(t *testing.T) {
+	t.Parallel()
+
+	runner := NewRunner()
+	home := t.TempDir()
+	runner.userHomeDir = func() (string, error) { return home, nil }
+
+	// "你" 是单个 rune，但占用多个字节。
+	longChinese := strings.Repeat("你", 12)
+	messages := []provider.Message{
+		{Role: provider.RoleAssistant, ToolCalls: []provider.ToolCall{{ID: "call-1", Name: "filesystem_read_file", Arguments: "{}"}}},
+		{Role: provider.RoleTool, ToolCallID: "call-1", Content: longChinese},
+		{Role: provider.RoleTool, ToolCallID: "recent", Content: "keep recent"},
+	}
+
+	result, err := runner.Run(context.Background(), Input{
+		Mode:      ModeMicro,
+		SessionID: "session-rune-threshold",
+		Workdir:   t.TempDir(),
+		Messages:  messages,
+		Config: config.CompactConfig{
+			MicroEnabled:                  true,
+			ToolResultKeepRecent:          1,
+			ToolResultPlaceholderMinChars: 12,
+			ManualStrategy:                config.CompactManualStrategyKeepRecent,
+			ManualKeepRecentSpans:         6,
+			MaxSummaryChars:               1200,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if !result.Applied {
+		t.Fatalf("expected chinese content to match rune threshold and be compacted")
+	}
+}
+
+func TestCountMessageCharsUsesRunes(t *testing.T) {
+	t.Parallel()
+
+	messages := []provider.Message{
+		{
+			Role:       "用户",
+			Content:    "你好",
+			ToolCallID: "工具",
+			ToolCalls: []provider.ToolCall{
+				{ID: "调用", Name: "读取", Arguments: `{"路径":"文件"}`},
+			},
+		},
+	}
+
+	got := countMessageChars(messages)
+	want := utf8.RuneCountInString("用户") +
+		utf8.RuneCountInString("你好") +
+		utf8.RuneCountInString("工具") +
+		utf8.RuneCountInString("调用") +
+		utf8.RuneCountInString("读取") +
+		utf8.RuneCountInString(`{"路径":"文件"}`)
+	if got != want {
+		t.Fatalf("countMessageChars() = %d, want %d", got, want)
+	}
+}
