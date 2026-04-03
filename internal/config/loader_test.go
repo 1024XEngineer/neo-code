@@ -105,6 +105,12 @@ providers:
 		t.Fatalf("read rewritten config: %v", err)
 	}
 	text := string(rewritten)
+	if !strings.Contains(text, "default_workdir:") {
+		t.Fatalf("expected rewritten config to include default_workdir, got:\n%s", text)
+	}
+	if strings.Contains(text, "\nworkdir:") || strings.HasPrefix(text, "workdir:") {
+		t.Fatalf("expected rewritten config to drop legacy workdir key, got:\n%s", text)
+	}
 	if strings.Contains(text, "provider_overrides:") {
 		t.Fatalf("expected rewritten config to drop provider overrides, got:\n%s", text)
 	}

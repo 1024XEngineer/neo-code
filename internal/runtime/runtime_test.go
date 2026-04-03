@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -1228,6 +1229,146 @@ func TestServiceConstructorsAndDelegates(t *testing.T) {
 	sessionStore := NewSessionStore(t.TempDir())
 	if sessionStore == nil {
 		t.Fatalf("expected JSON session store")
+	}
+}
+
+func TestServiceRunUsesSessionWorkdirForContextAndTools(t *testing.T) {
+	manager := newRuntimeConfigManager(t)
+	defaultWorkdir := t.TempDir()
+	sessionWorkdir := t.TempDir()
+	if err := manager.Update(context.Background(), func(cfg *config.Config) error {
+		cfg.Workdir = defaultWorkdir
+		return nil
+	}); err != nil {
+		t.Fatalf("update default workdir: %v", err)
+	}
+
+	store := newMemoryStore()
+	session := newSessionWithWorkdir("Session Workdir", sessionWorkdir)
+	store.sessions[session.ID] = cloneSession(session)
+
+	tool := &stubTool{name: "filesystem_edit", content: "ok"}
+	registry := tools.NewRegistry()
+	registry.Register(tool)
+
+	builder := &stubContextBuilder{}
+	scripted := &scriptedProvider{
+		responses: []provider.ChatResponse{
+			{
+				Message: provider.Message{
+					Role: "assistant",
+					ToolCalls: []provider.ToolCall{
+						{ID: "call-session-workdir", Name: "filesystem_edit", Arguments: `{"path":"main.go"}`},
+					},
+				},
+				FinishReason: "tool_calls",
+			},
+			{
+				Message:      provider.Message{Role: "assistant", Content: "done"},
+				FinishReason: "stop",
+			},
+		},
+	}
+
+	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: scripted}, builder)
+	if err := service.Run(context.Background(), UserInput{
+		SessionID: session.ID,
+		RunID:     "run-session-workdir",
+		Content:   "edit",
+	}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	if builder.lastInput.Metadata.Workdir != sessionWorkdir {
+		t.Fatalf("expected context workdir %q, got %q", sessionWorkdir, builder.lastInput.Metadata.Workdir)
+	}
+	if tool.lastInput.Workdir != sessionWorkdir {
+		t.Fatalf("expected tool input workdir %q, got %q", sessionWorkdir, tool.lastInput.Workdir)
+	}
+}
+
+func TestServiceRunUsesInputWorkdirForNewSession(t *testing.T) {
+	manager := newRuntimeConfigManager(t)
+	defaultWorkdir := t.TempDir()
+	draftRoot := t.TempDir()
+	if err := manager.Update(context.Background(), func(cfg *config.Config) error {
+		cfg.Workdir = defaultWorkdir
+		return nil
+	}); err != nil {
+		t.Fatalf("update default workdir: %v", err)
+	}
+
+	store := newMemoryStore()
+	registry := tools.NewRegistry()
+	registry.Register(&stubTool{name: "filesystem_read_file", content: "default"})
+	builder := &stubContextBuilder{}
+	scripted := &scriptedProvider{
+		responses: []provider.ChatResponse{
+			{
+				Message:      provider.Message{Role: "assistant", Content: "done"},
+				FinishReason: "stop",
+			},
+		},
+	}
+
+	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: scripted}, builder)
+	if err := service.Run(context.Background(), UserInput{
+		RunID:   "run-new-session-workdir",
+		Content: "hello",
+		Workdir: draftRoot,
+	}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	created := onlySession(t, store)
+	if created.Workdir != draftRoot {
+		t.Fatalf("expected session workdir %q, got %q", draftRoot, created.Workdir)
+	}
+	if builder.lastInput.Metadata.Workdir != draftRoot {
+		t.Fatalf("expected context metadata workdir %q, got %q", draftRoot, builder.lastInput.Metadata.Workdir)
+	}
+}
+
+func TestServiceSetSessionWorkdir(t *testing.T) {
+	manager := newRuntimeConfigManager(t)
+	defaultWorkdir := t.TempDir()
+	target := filepath.Join(defaultWorkdir, "sub")
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatalf("mkdir target: %v", err)
+	}
+	if err := manager.Update(context.Background(), func(cfg *config.Config) error {
+		cfg.Workdir = defaultWorkdir
+		return nil
+	}); err != nil {
+		t.Fatalf("update default workdir: %v", err)
+	}
+
+	store := newMemoryStore()
+	session := newSession("set workdir")
+	store.sessions[session.ID] = cloneSession(session)
+	registry := tools.NewRegistry()
+	registry.Register(&stubTool{name: "filesystem_read_file", content: "default"})
+
+	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: &scriptedProvider{}}, nil)
+	updated, err := service.SetSessionWorkdir(context.Background(), session.ID, "sub")
+	if err != nil {
+		t.Fatalf("SetSessionWorkdir() error = %v", err)
+	}
+	if updated.Workdir != target {
+		t.Fatalf("expected updated workdir %q, got %q", target, updated.Workdir)
+	}
+
+	loaded, err := service.LoadSession(context.Background(), session.ID)
+	if err != nil {
+		t.Fatalf("LoadSession() error = %v", err)
+	}
+	if loaded.Workdir != target {
+		t.Fatalf("expected persisted workdir %q, got %q", target, loaded.Workdir)
+	}
+
+	_, err = service.SetSessionWorkdir(context.Background(), "", "sub")
+	if err == nil || !containsError(err, "session id is empty") {
+		t.Fatalf("expected empty session id error, got %v", err)
 	}
 }
 

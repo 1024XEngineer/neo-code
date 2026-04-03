@@ -21,15 +21,17 @@ import (
 )
 
 type stubRuntime struct {
-	runInputs    []agentruntime.UserInput
-	events       chan agentruntime.RuntimeEvent
-	sessions     []agentruntime.SessionSummary
-	loads        map[string]agentruntime.Session
-	runErr       error
-	listErr      error
-	loadErr      error
-	cancelCalls  int
-	cancelResult bool
+	runInputs     []agentruntime.UserInput
+	events        chan agentruntime.RuntimeEvent
+	sessions      []agentruntime.SessionSummary
+	loads         map[string]agentruntime.Session
+	runErr        error
+	listErr       error
+	loadErr       error
+	setWorkdirErr error
+	setCalls      int
+	cancelCalls   int
+	cancelResult  bool
 }
 
 type stubMarkdownRenderer struct {
@@ -87,6 +89,20 @@ func (r *stubRuntime) LoadSession(ctx context.Context, id string) (agentruntime.
 		return session, nil
 	}
 	return agentruntime.Session{}, nil
+}
+
+func (r *stubRuntime) SetSessionWorkdir(ctx context.Context, sessionID string, workdir string) (agentruntime.Session, error) {
+	r.setCalls++
+	if r.setWorkdirErr != nil {
+		return agentruntime.Session{}, r.setWorkdirErr
+	}
+	session, ok := r.loads[sessionID]
+	if !ok {
+		session = agentruntime.Session{ID: sessionID}
+	}
+	session.Workdir = strings.TrimSpace(workdir)
+	r.loads[sessionID] = session
+	return session, nil
 }
 
 func TestAppUpdateComposerCommands(t *testing.T) {
@@ -170,6 +186,129 @@ func TestAppUpdateComposerCommands(t *testing.T) {
 			tt.assert(t, runtime, manager, app)
 		})
 	}
+}
+
+func TestAppUpdateWorkspaceSlashCommands(t *testing.T) {
+	t.Run("draft workspace command updates local current workdir", func(t *testing.T) {
+		manager := newTestConfigManager(t)
+		runtime := newStubRuntime()
+		app, err := New(nil, manager, runtime, newTestProviderService(t, manager))
+		if err != nil {
+			t.Fatalf("New() error = %v", err)
+		}
+
+		target := t.TempDir()
+		app.input.SetValue("/workspace " + target)
+		app.state.InputText = app.input.Value()
+
+		model, cmd := app.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		app = model.(App)
+		for _, msg := range collectTeaMessages(cmd) {
+			model, follow := app.Update(msg)
+			app = model.(App)
+			_ = collectTeaMessages(follow)
+		}
+
+		if len(runtime.runInputs) != 0 {
+			t.Fatalf("expected slash command not to call runtime.Run, got %+v", runtime.runInputs)
+		}
+		if runtime.setCalls != 0 {
+			t.Fatalf("expected draft workspace change not to call SetSessionWorkdir")
+		}
+		if app.state.CurrentWorkdir != target {
+			t.Fatalf("expected current workdir %q, got %q", target, app.state.CurrentWorkdir)
+		}
+		if !strings.Contains(app.state.StatusText, "Draft workspace switched") {
+			t.Fatalf("expected draft workspace switch status, got %q", app.state.StatusText)
+		}
+	})
+
+	t.Run("session workspace command updates runtime session workdir", func(t *testing.T) {
+		manager := newTestConfigManager(t)
+		runtime := newStubRuntime()
+		sessionID := "session-workdir"
+		runtime.loads[sessionID] = agentruntime.Session{ID: sessionID, Workdir: t.TempDir()}
+
+		app, err := New(nil, manager, runtime, newTestProviderService(t, manager))
+		if err != nil {
+			t.Fatalf("New() error = %v", err)
+		}
+		app.state.ActiveSessionID = sessionID
+		target := t.TempDir()
+
+		app.input.SetValue("/cwd " + target)
+		app.state.InputText = app.input.Value()
+
+		model, cmd := app.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		app = model.(App)
+		for _, msg := range collectTeaMessages(cmd) {
+			model, follow := app.Update(msg)
+			app = model.(App)
+			_ = collectTeaMessages(follow)
+		}
+
+		if runtime.setCalls != 1 {
+			t.Fatalf("expected SetSessionWorkdir to be called once, got %d", runtime.setCalls)
+		}
+		if app.state.CurrentWorkdir != target {
+			t.Fatalf("expected current workdir %q, got %q", target, app.state.CurrentWorkdir)
+		}
+		if !strings.Contains(app.state.StatusText, "Session workspace switched") {
+			t.Fatalf("expected session workspace switch status, got %q", app.state.StatusText)
+		}
+	})
+}
+
+func TestRunAgentWorkdirForwarding(t *testing.T) {
+	t.Run("draft run forwards current workdir", func(t *testing.T) {
+		manager := newTestConfigManager(t)
+		runtime := newStubRuntime()
+		app, err := New(nil, manager, runtime, newTestProviderService(t, manager))
+		if err != nil {
+			t.Fatalf("New() error = %v", err)
+		}
+
+		target := t.TempDir()
+		app.state.CurrentWorkdir = target
+		app.input.SetValue("hello")
+		app.state.InputText = "hello"
+
+		model, cmd := app.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		app = model.(App)
+		_ = collectTeaMessages(cmd)
+
+		if len(runtime.runInputs) != 1 {
+			t.Fatalf("expected one runtime input, got %d", len(runtime.runInputs))
+		}
+		if runtime.runInputs[0].Workdir != target {
+			t.Fatalf("expected draft run workdir %q, got %q", target, runtime.runInputs[0].Workdir)
+		}
+	})
+
+	t.Run("session run uses persisted session workdir", func(t *testing.T) {
+		manager := newTestConfigManager(t)
+		runtime := newStubRuntime()
+		app, err := New(nil, manager, runtime, newTestProviderService(t, manager))
+		if err != nil {
+			t.Fatalf("New() error = %v", err)
+		}
+
+		app.state.ActiveSessionID = "session-1"
+		app.state.CurrentWorkdir = t.TempDir()
+		app.input.SetValue("hello")
+		app.state.InputText = "hello"
+
+		model, cmd := app.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		app = model.(App)
+		_ = collectTeaMessages(cmd)
+
+		if len(runtime.runInputs) != 1 {
+			t.Fatalf("expected one runtime input, got %d", len(runtime.runInputs))
+		}
+		if runtime.runInputs[0].Workdir != "" {
+			t.Fatalf("expected session run to omit workdir override, got %q", runtime.runInputs[0].Workdir)
+		}
+	})
 }
 
 func TestAppUpdateModelPickerAndRuntimeMessages(t *testing.T) {
@@ -569,7 +708,7 @@ func TestTUIStandaloneHelpers(t *testing.T) {
 	}
 
 	runtime := newStubRuntime()
-	runMsg := runAgent(runtime, "session-x", "hello")()
+	runMsg := runAgent(runtime, "session-x", "", "hello")()
 	if _, ok := runMsg.(runFinishedMsg); !ok {
 		t.Fatalf("expected runFinishedMsg")
 	}
@@ -1949,7 +2088,7 @@ func TestRenderMessageContentShowsPlaceholderWhenRendererMissing(t *testing.T) {
 func TestWorkspaceCommandAndFileReferenceFlow(t *testing.T) {
 	previousExecutor := workspaceCommandExecutor
 	t.Cleanup(func() { workspaceCommandExecutor = previousExecutor })
-	workspaceCommandExecutor = func(ctx context.Context, cfg config.Config, command string) (string, error) {
+	workspaceCommandExecutor = func(ctx context.Context, cfg config.Config, workdir string, command string) (string, error) {
 		return "stubbed output for " + command, nil
 	}
 

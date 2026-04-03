@@ -26,6 +26,7 @@ func TestExecuteLocalCommand(t *testing.T) {
 					slashUsageHelp,
 					slashUsageClear,
 					slashUsageStatus,
+					slashUsageWorkdir,
 					slashUsageProvider,
 					slashUsageModel,
 					slashUsageExit,
@@ -186,6 +187,23 @@ func defaultTestStatusSnapshot(manager *config.Manager) statusSnapshot {
 }
 
 func TestCommandHelperFunctions(t *testing.T) {
+	t.Run("workspace slash parser supports aliases", func(t *testing.T) {
+		if !isWorkspaceSlashCommand("/workspace ./tmp") {
+			t.Fatalf("expected /workspace to be recognized")
+		}
+		if !isWorkspaceSlashCommand("/cwd ./tmp") {
+			t.Fatalf("expected /cwd to be recognized")
+		}
+		args, err := parseWorkspaceSlashCommand("/workspace ./tmp")
+		if err != nil || args != "./tmp" {
+			t.Fatalf("expected ./tmp, got %q / %v", args, err)
+		}
+		args, err = parseWorkspaceSlashCommand("/cwd")
+		if err != nil || args != "" {
+			t.Fatalf("expected empty args for /cwd, got %q / %v", args, err)
+		}
+	})
+
 	t.Run("splitFirstWord handles empty and remainder", func(t *testing.T) {
 		if first, rest := splitFirstWord("   "); first != "" || rest != "" {
 			t.Fatalf("expected empty split, got %q / %q", first, rest)

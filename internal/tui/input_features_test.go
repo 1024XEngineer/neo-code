@@ -46,7 +46,7 @@ func TestWorkspaceCommandHelpers(t *testing.T) {
 	})
 
 	t.Run("default workspace command executor rejects empty commands", func(t *testing.T) {
-		output, err := defaultWorkspaceCommandExecutor(context.Background(), config.Config{}, "   ")
+		output, err := defaultWorkspaceCommandExecutor(context.Background(), config.Config{}, "", "   ")
 		if err == nil || !strings.Contains(err.Error(), "empty") || output != "" {
 			t.Fatalf("expected empty command error, got output=%q err=%v", output, err)
 		}

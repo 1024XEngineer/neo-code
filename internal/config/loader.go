@@ -24,7 +24,8 @@ type Loader struct {
 type persistedConfig struct {
 	SelectedProvider string      `yaml:"selected_provider"`
 	CurrentModel     string      `yaml:"current_model"`
-	Workdir          string      `yaml:"workdir"`
+	DefaultWorkdir   string      `yaml:"default_workdir,omitempty"`
+	Workdir          string      `yaml:"workdir,omitempty"` // legacy key
 	Shell            string      `yaml:"shell"`
 	MaxLoops         int         `yaml:"max_loops,omitempty"`
 	ToolTimeoutSec   int         `yaml:"tool_timeout_sec,omitempty"`
@@ -156,7 +157,7 @@ func parseCurrentConfig(data []byte) (*Config, error) {
 	cfg := &Config{
 		SelectedProvider: strings.TrimSpace(file.SelectedProvider),
 		CurrentModel:     strings.TrimSpace(file.CurrentModel),
-		Workdir:          strings.TrimSpace(file.Workdir),
+		Workdir:          firstNonEmpty(strings.TrimSpace(file.DefaultWorkdir), strings.TrimSpace(file.Workdir)),
 		Shell:            strings.TrimSpace(file.Shell),
 		MaxLoops:         file.MaxLoops,
 		ToolTimeoutSec:   file.ToolTimeoutSec,
@@ -170,7 +171,7 @@ func marshalPersistedConfig(snapshot Config) ([]byte, error) {
 	file := persistedConfig{
 		SelectedProvider: snapshot.SelectedProvider,
 		CurrentModel:     snapshot.CurrentModel,
-		Workdir:          snapshot.Workdir,
+		DefaultWorkdir:   snapshot.Workdir,
 		Shell:            snapshot.Shell,
 		MaxLoops:         snapshot.MaxLoops,
 		ToolTimeoutSec:   snapshot.ToolTimeoutSec,
@@ -193,4 +194,13 @@ func persistedConfigDiffers(data []byte, cfg Config) (bool, error) {
 		return false, err
 	}
 	return !bytes.Equal(bytes.TrimSpace(data), bytes.TrimSpace(canonical)), nil
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
 }

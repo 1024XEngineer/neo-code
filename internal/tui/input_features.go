@@ -56,9 +56,9 @@ func extractWorkspaceCommand(input string) (string, error) {
 	return command, nil
 }
 
-func runWorkspaceCommand(configManager *config.Manager, raw string) tea.Cmd {
+func runWorkspaceCommand(configManager *config.Manager, workdir string, raw string) tea.Cmd {
 	return func() tea.Msg {
-		command, output, err := executeWorkspaceCommand(context.Background(), configManager, raw)
+		command, output, err := executeWorkspaceCommand(context.Background(), configManager, workdir, raw)
 		return workspaceCommandResultMsg{
 			command: command,
 			output:  output,
@@ -67,21 +67,25 @@ func runWorkspaceCommand(configManager *config.Manager, raw string) tea.Cmd {
 	}
 }
 
-func executeWorkspaceCommand(ctx context.Context, configManager *config.Manager, raw string) (string, string, error) {
+func executeWorkspaceCommand(ctx context.Context, configManager *config.Manager, workdir string, raw string) (string, string, error) {
 	command, err := extractWorkspaceCommand(raw)
 	if err != nil {
 		return "", "", err
 	}
 
 	cfg := configManager.Get()
-	output, execErr := workspaceCommandExecutor(ctx, cfg, command)
+	output, execErr := workspaceCommandExecutor(ctx, cfg, workdir, command)
 	return command, output, execErr
 }
 
-func defaultWorkspaceCommandExecutor(ctx context.Context, cfg config.Config, command string) (string, error) {
+func defaultWorkspaceCommandExecutor(ctx context.Context, cfg config.Config, workdir string, command string) (string, error) {
 	command = strings.TrimSpace(command)
 	if command == "" {
 		return "", errors.New("command is empty")
+	}
+	targetWorkdir := strings.TrimSpace(workdir)
+	if targetWorkdir == "" {
+		targetWorkdir = cfg.Workdir
 	}
 
 	timeoutSec := cfg.ToolTimeoutSec
@@ -94,7 +98,7 @@ func defaultWorkspaceCommandExecutor(ctx context.Context, cfg config.Config, com
 
 	args := shellArgs(cfg.Shell, command)
 	cmd := exec.CommandContext(runCtx, args[0], args[1:]...)
-	cmd.Dir = cfg.Workdir
+	cmd.Dir = targetWorkdir
 	output, err := cmd.CombinedOutput()
 	text := sanitizeWorkspaceOutput(output)
 
