@@ -170,7 +170,7 @@ func (a *App) refreshProviderPicker() error {
 }
 
 func (a *App) refreshModelPicker() error {
-	models, err := a.providerSvc.ListModels(context.Background())
+	models, err := a.providerSvc.ListModelsSnapshot(context.Background())
 	if err != nil {
 		return err
 	}
@@ -264,7 +264,8 @@ func runProviderSelection(providerSvc ProviderController, providerName string) t
 			return localCommandResultMsg{err: err}
 		}
 		return localCommandResultMsg{
-			notice: fmt.Sprintf("[System] Current provider switched to %s.", selection.ProviderID),
+			notice:          fmt.Sprintf("[System] Current provider switched to %s.", selection.ProviderID),
+			providerChanged: true,
 		}
 	}
 }
@@ -276,7 +277,8 @@ func runModelSelection(providerSvc ProviderController, modelID string) tea.Cmd {
 			return localCommandResultMsg{err: err}
 		}
 		return localCommandResultMsg{
-			notice: fmt.Sprintf("[System] Current model switched to %s.", selection.ModelID),
+			notice:       fmt.Sprintf("[System] Current model switched to %s.", selection.ModelID),
+			modelChanged: true,
 		}
 	}
 }
@@ -284,7 +286,29 @@ func runModelSelection(providerSvc ProviderController, modelID string) tea.Cmd {
 func runLocalCommand(configManager *config.Manager, providerSvc ProviderController, snapshot statusSnapshot, raw string) tea.Cmd {
 	return func() tea.Msg {
 		notice, err := executeLocalCommand(context.Background(), configManager, providerSvc, snapshot, raw)
-		return localCommandResultMsg{notice: notice, err: err}
+		result := localCommandResultMsg{notice: notice, err: err}
+		if err == nil {
+			cfg := configManager.Get()
+			result.providerChanged = !strings.EqualFold(snapshot.CurrentProvider, cfg.SelectedProvider)
+			result.modelChanged = !strings.EqualFold(snapshot.CurrentModel, cfg.CurrentModel)
+		}
+		return result
+	}
+}
+
+func runModelCatalogRefresh(providerSvc ProviderController, providerID string) tea.Cmd {
+	providerID = strings.TrimSpace(providerID)
+	if providerSvc == nil || providerID == "" {
+		return nil
+	}
+
+	return func() tea.Msg {
+		models, err := providerSvc.ListModels(context.Background())
+		return modelCatalogRefreshMsg{
+			providerID: providerID,
+			models:     models,
+			err:        err,
+		}
 	}
 }
 

@@ -22,9 +22,16 @@ import (
 type RuntimeMsg struct{ Event agentruntime.RuntimeEvent }
 type RuntimeClosedMsg struct{}
 type runFinishedMsg struct{ err error }
+type modelCatalogRefreshMsg struct {
+	providerID string
+	models     []provider.ModelDescriptor
+	err        error
+}
 type localCommandResultMsg struct {
-	notice string
-	err    error
+	notice          string
+	err             error
+	providerChanged bool
+	modelChanged    bool
 }
 
 const (
@@ -83,6 +90,23 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		_ = a.refreshSessions()
 		a.syncActiveSessionTitle()
 		return a, tea.Batch(cmds...)
+	case modelCatalogRefreshMsg:
+		if strings.EqualFold(a.modelRefreshID, typed.providerID) {
+			a.modelRefreshID = ""
+		}
+		if !strings.EqualFold(strings.TrimSpace(a.state.CurrentProvider), strings.TrimSpace(typed.providerID)) {
+			return a, tea.Batch(cmds...)
+		}
+		if typed.err != nil {
+			a.appendActivity("provider", "Failed to refresh models", typed.err.Error(), true)
+			return a, tea.Batch(cmds...)
+		}
+
+		a.modelPicker = replacePickerItems(a.modelPicker, newModelPicker(typed.models))
+		cfg := a.configManager.Get()
+		a.syncConfigState(cfg)
+		a.selectCurrentModel(cfg.CurrentModel)
+		return a, tea.Batch(cmds...)
 	case localCommandResultMsg:
 		if typed.err != nil {
 			a.state.ExecutionError = typed.err.Error()
@@ -93,17 +117,25 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.state.StatusText = typed.notice
 			cfg := a.configManager.Get()
 			a.syncConfigState(cfg)
-			if err := a.refreshProviderPicker(); err != nil {
-				a.state.ExecutionError = err.Error()
-				a.state.StatusText = err.Error()
-				a.appendActivity("system", "Failed to refresh providers", err.Error(), true)
-			}
-			if err := a.refreshModelPicker(); err != nil {
-				a.state.ExecutionError = err.Error()
-				a.state.StatusText = err.Error()
-				a.appendActivity("system", "Failed to refresh models", err.Error(), true)
-			} else {
+			if typed.providerChanged {
+				if err := a.refreshProviderPicker(); err != nil {
+					a.state.ExecutionError = err.Error()
+					a.state.StatusText = err.Error()
+					a.appendActivity("system", "Failed to refresh providers", err.Error(), true)
+					return a, tea.Batch(cmds...)
+				}
+				if err := a.refreshModelPicker(); err != nil {
+					a.state.ExecutionError = err.Error()
+					a.state.StatusText = err.Error()
+					a.appendActivity("system", "Failed to refresh models", err.Error(), true)
+					return a, tea.Batch(cmds...)
+				}
 				a.selectCurrentProvider(cfg.SelectedProvider)
+				a.selectCurrentModel(cfg.CurrentModel)
+				if cmd := a.requestModelCatalogRefresh(cfg.SelectedProvider); cmd != nil {
+					cmds = append(cmds, cmd)
+				}
+			} else if typed.modelChanged {
 				a.selectCurrentModel(cfg.CurrentModel)
 			}
 			a.appendActivity("command", typed.notice, "", false)
@@ -253,6 +285,9 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 					return a, tea.Batch(cmds...)
 				}
 				a.openModelPicker()
+				if cmd := a.requestModelCatalogRefresh(a.state.CurrentProvider); cmd != nil {
+					cmds = append(cmds, cmd)
+				}
 				return a, tea.Batch(cmds...)
 			}
 
@@ -1025,6 +1060,16 @@ func (a *App) startDraftSession() {
 	a.applyFocus()
 	a.resizeComponents()
 	a.rebuildTranscript()
+}
+
+func (a *App) requestModelCatalogRefresh(providerID string) tea.Cmd {
+	providerID = strings.TrimSpace(providerID)
+	if providerID == "" || strings.EqualFold(a.modelRefreshID, providerID) {
+		return nil
+	}
+
+	a.modelRefreshID = providerID
+	return runModelCatalogRefresh(a.providerSvc, providerID)
 }
 
 func ListenForRuntimeEvent(sub <-chan agentruntime.RuntimeEvent) tea.Cmd {

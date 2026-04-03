@@ -1,9 +1,5 @@
 package provider
 
-import (
-	"errors"
-)
-
 const (
 	RoleSystem    = "system"
 	RoleUser      = "user"
@@ -50,16 +46,13 @@ type Usage struct {
 	TotalTokens  int `json:"total_tokens"`
 }
 
-var (
-	ErrProviderNotFound = errors.New("provider not found")
-	ErrModelNotFound    = errors.New("model not found")
-	ErrDriverNotFound   = errors.New("provider driver not found")
-)
-
 type ModelDescriptor struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	Description string `json:"description,omitempty"`
+	ID              string          `json:"id"`
+	Name            string          `json:"name"`
+	Description     string          `json:"description,omitempty"`
+	ContextWindow   int             `json:"context_window,omitempty"`
+	MaxOutputTokens int             `json:"max_output_tokens,omitempty"`
+	Capabilities    map[string]bool `json:"capabilities,omitempty"`
 }
 
 type ProviderCatalogItem struct {

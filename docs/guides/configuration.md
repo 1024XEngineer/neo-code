@@ -16,6 +16,7 @@ NeoCode 采用"内置 Provider 优先"的策略：
 - `config.yaml` 不再持久化完整 `providers` 列表
 - 只保存当前选择状态和通用运行配置
 - 运行时的 `providers` 完全来自代码内置定义
+- 用户不能通过 YAML 注入新的 provider
 
 ✅ **安全第一**
 - API Key 只从环境变量读取，永不写入 YAML
@@ -28,6 +29,7 @@ NeoCode 采用"内置 Provider 优先"的策略：
 | `openai` | `openai` | OpenAI 官方 API |
 | `gemini` | `openai` | Google Gemini (OpenAI-compatible API) |
 | `openll` | `openai` | OpenLL 服务 (OpenAI-compatible API) |
+| `qiniu` | `openai` | 七牛云推理服务 (OpenAI-compatible API) |
 
 所有内置 provider 都复用 `openai` 驱动，支持流式输出和 Tool Call。
 
@@ -39,6 +41,7 @@ NeoCode 采用"内置 Provider 优先"的策略：
 - ✅ 未来代码新增 provider 时，用户无需修改 YAML
 - ✅ 老配置文件中的 `providers` / `provider_overrides` 会在加载时被清理
 - ✅ 配置文件始终保持简洁，只包含必要的运行时状态
+- ✅ 如需新增 provider，只能通过代码扩展内建列表完成
 
 ## 配置文件
 
@@ -106,6 +109,7 @@ tools:
 | `openai` | `OPENAI_API_KEY` | [OpenAI Platform](https://platform.openai.com/api-keys) |
 | `gemini` | `GEMINI_API_KEY` | [Google AI Studio](https://aistudio.google.com/apikey) |
 | `openll` | `AI_API_KEY` | OpenLL 服务提供商 |
+| `qiniu` | `QINIU_API_KEY` | 七牛云推理服务 |
 
 ### 环境变量管理
 
@@ -156,6 +160,7 @@ NeoCode 提供以下 slash 命令用于快速切换配置：
   ❯ openai
     gemini
     openll
+    qiniu
 ```
 
 ### /model - 模型选择器
@@ -165,6 +170,8 @@ NeoCode 提供以下 slash 命令用于快速切换配置：
 ```
 
 打开当前 provider 的模型选择器。
+
+模型列表会合并当前 provider 的默认模型、服务端动态发现结果和本地缓存结果。
 
 **界面示例**（选择 openai provider 后）：
 ```
@@ -208,9 +215,9 @@ NeoCode 提供以下 slash 命令用于快速切换配置：
 2. 立即持久化到 `config.yaml`
 3. 下次启动自动恢复选择状态
 
-## 添加自定义 Provider
+## 扩展内建 Provider
 
-如需添加自定义 provider（如企业内部服务），请参考：
+如需添加新的内建 provider（包括企业内部服务），请参考：
 
 👉 [adding-providers.md](./adding-providers.md)
 

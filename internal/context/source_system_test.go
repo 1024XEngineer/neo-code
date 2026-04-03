@@ -21,7 +21,7 @@ func TestCollectSystemStateHandlesGitUnavailable(t *testing.T) {
 		t.Fatalf("expected git to be unavailable")
 	}
 
-	section := renderSystemStateSection(state)
+	section := renderPromptSection(renderSystemStateSection(state))
 	if !strings.Contains(section, "- git: unavailable") {
 		t.Fatalf("expected unavailable git section, got %q", section)
 	}
@@ -56,12 +56,15 @@ func TestCollectSystemStateIncludesGitSummary(t *testing.T) {
 		t.Fatalf("expected dirty git state")
 	}
 
-	section := renderSystemStateSection(state)
+	section := renderPromptSection(renderSystemStateSection(state))
 	if !strings.Contains(section, "branch=`feature/context`") {
 		t.Fatalf("expected branch in system section, got %q", section)
 	}
 	if !strings.Contains(section, "dirty=`dirty`") {
 		t.Fatalf("expected dirty marker in system section, got %q", section)
+	}
+	if strings.Contains(section, "internal/context/builder.go") {
+		t.Fatalf("did not expect full git status output in system section, got %q", section)
 	}
 }
 

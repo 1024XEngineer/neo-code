@@ -38,12 +38,11 @@ type Config struct {
 }
 
 type ProviderConfig struct {
-	Name      string   `yaml:"name"`
-	Driver    string   `yaml:"driver"`
-	BaseURL   string   `yaml:"base_url"`
-	Model     string   `yaml:"model"`
-	Models    []string `yaml:"models,omitempty"`
-	APIKeyEnv string   `yaml:"api_key_env"`
+	Name      string `yaml:"name"`
+	Driver    string `yaml:"driver"`
+	BaseURL   string `yaml:"base_url"`
+	Model     string `yaml:"model"`
+	APIKeyEnv string `yaml:"api_key_env"`
 }
 
 type ResolvedProviderConfig struct {
@@ -92,24 +91,28 @@ func (c *Config) ApplyDefaultsFrom(defaults Config) {
 		return
 	}
 
-	if len(c.Providers) == 0 {
+	if len(defaults.Providers) > 0 {
 		c.Providers = cloneProviders(defaults.Providers)
-	} else {
-		c.Providers = applyProviderDefaults(c.Providers, defaults.Providers)
 	}
 
-	if strings.TrimSpace(c.SelectedProvider) == "" {
-		c.SelectedProvider = defaults.SelectedProvider
+	fallbackProvider := defaultSelectedProviderName(c.Providers, defaults.SelectedProvider)
+	selectedReset := false
+	switch current := strings.TrimSpace(c.SelectedProvider); {
+	case current == "":
+		c.SelectedProvider = fallbackProvider
+		selectedReset = true
+	case !containsProviderName(c.Providers, current):
+		c.SelectedProvider = fallbackProvider
+		selectedReset = true
+	default:
+		c.SelectedProvider = current
 	}
-	if strings.TrimSpace(c.CurrentModel) == "" {
+	if strings.TrimSpace(c.CurrentModel) == "" || selectedReset {
 		if selected, err := c.SelectedProviderConfig(); err == nil {
 			c.CurrentModel = selected.Model
 		} else if strings.TrimSpace(defaults.CurrentModel) != "" {
 			c.CurrentModel = defaults.CurrentModel
 		}
-	}
-	if selected, err := c.SelectedProviderConfig(); err == nil && !ContainsModelID(selected.SupportedModels(), c.CurrentModel) {
-		c.CurrentModel = selected.Model
 	}
 	if strings.TrimSpace(c.Workdir) == "" {
 		c.Workdir = defaults.Workdir
@@ -137,16 +140,31 @@ func (c *Config) Validate() error {
 	}
 
 	seen := make(map[string]struct{}, len(c.Providers))
+	seenEndpoints := make(map[string]string, len(c.Providers))
 	for i, provider := range c.Providers {
 		if err := provider.Validate(); err != nil {
 			return fmt.Errorf("config: provider[%d]: %w", i, err)
 		}
 
-		key := strings.ToLower(strings.TrimSpace(provider.Name))
+		key := NormalizeProviderName(provider.Name)
 		if _, exists := seen[key]; exists {
 			return fmt.Errorf("config: duplicate provider name %q", provider.Name)
 		}
 		seen[key] = struct{}{}
+
+		identity, err := provider.Identity()
+		if err != nil {
+			return fmt.Errorf("config: provider[%d]: %w", i, err)
+		}
+		if existingName, exists := seenEndpoints[identity.Key()]; exists {
+			return fmt.Errorf(
+				"config: duplicate provider endpoint %q for providers %q and %q",
+				identity.BaseURL,
+				existingName,
+				provider.Name,
+			)
+		}
+		seenEndpoints[identity.Key()] = provider.Name
 	}
 
 	if strings.TrimSpace(c.SelectedProvider) == "" {
@@ -168,9 +186,6 @@ func (c *Config) Validate() error {
 	if strings.TrimSpace(selected.Model) == "" {
 		return fmt.Errorf("config: selected provider %q has empty model", selected.Name)
 	}
-	if !ContainsModelID(selected.SupportedModels(), c.CurrentModel) {
-		return fmt.Errorf("config: current_model %q is not supported by provider %q", c.CurrentModel, selected.Name)
-	}
 	if err := c.Tools.Validate(); err != nil {
 		return fmt.Errorf("config: tools: %w", err)
 	}
@@ -190,9 +205,9 @@ func (c *Config) ProviderByName(name string) (ProviderConfig, error) {
 		return ProviderConfig{}, errors.New("config: config is nil")
 	}
 
-	target := strings.ToLower(strings.TrimSpace(name))
+	target := NormalizeProviderName(name)
 	for _, provider := range c.Providers {
-		if strings.ToLower(strings.TrimSpace(provider.Name)) == target {
+		if NormalizeProviderName(provider.Name) == target {
 			return provider, nil
 		}
 	}
@@ -216,28 +231,14 @@ func (p ProviderConfig) Validate() error {
 	if strings.TrimSpace(p.APIKeyEnv) == "" {
 		return fmt.Errorf("provider %q api_key_env is empty", p.Name)
 	}
-	if models := normalizeModelIDs(p.Models); len(p.Models) > 0 {
-		if len(models) == 0 {
-			return fmt.Errorf("provider %q models is empty", p.Name)
-		}
-		if !ContainsModelID(models, p.Model) {
-			return fmt.Errorf("provider %q default model %q is not in models", p.Name, strings.TrimSpace(p.Model))
-		}
+	if _, err := p.Identity(); err != nil {
+		return fmt.Errorf("provider %q: %w", p.Name, err)
 	}
 	return nil
 }
 
-func (p ProviderConfig) SupportedModels() []string {
-	models := normalizeModelIDs(p.Models)
-	if len(models) > 0 {
-		return models
-	}
-
-	model := strings.TrimSpace(p.Model)
-	if model == "" {
-		return nil
-	}
-	return []string{model}
+func (p ProviderConfig) Identity() (ProviderIdentity, error) {
+	return NewProviderIdentity(p.Driver, p.BaseURL)
 }
 
 func (p ProviderConfig) ResolveAPIKey() (string, error) {
@@ -264,57 +265,6 @@ func (p ProviderConfig) Resolve() (ResolvedProviderConfig, error) {
 		ProviderConfig: p,
 		APIKey:         apiKey,
 	}, nil
-}
-
-func applyProviderDefaults(providers []ProviderConfig, defaults []ProviderConfig) []ProviderConfig {
-	out := make([]ProviderConfig, 0, len(providers))
-	for _, provider := range providers {
-		out = append(out, mergeProviderDefaults(provider, defaults))
-	}
-	return out
-}
-
-func mergeProviderDefaults(provider ProviderConfig, defaults []ProviderConfig) ProviderConfig {
-	base, ok := matchDefaultProvider(provider, defaults)
-	if !ok {
-		return provider
-	}
-
-	if strings.TrimSpace(provider.Name) == "" {
-		provider.Name = base.Name
-	}
-	if strings.TrimSpace(provider.Driver) == "" {
-		provider.Driver = base.Driver
-	}
-	if strings.TrimSpace(provider.BaseURL) == "" {
-		provider.BaseURL = base.BaseURL
-	}
-	if strings.TrimSpace(provider.Model) == "" {
-		provider.Model = base.Model
-	}
-	if len(provider.Models) == 0 {
-		provider.Models = cloneModelIDs(base.Models)
-	}
-	if strings.TrimSpace(provider.APIKeyEnv) == "" {
-		provider.APIKeyEnv = base.APIKeyEnv
-	}
-
-	return provider
-}
-
-func matchDefaultProvider(provider ProviderConfig, defaults []ProviderConfig) (ProviderConfig, bool) {
-	name := strings.ToLower(strings.TrimSpace(provider.Name))
-	if name == "" {
-		return ProviderConfig{}, false
-	}
-
-	for _, candidate := range defaults {
-		if strings.ToLower(candidate.Name) == name {
-			return candidate, true
-		}
-	}
-
-	return ProviderConfig{}, false
 }
 
 func normalizeWorkdir(workdir string) string {
@@ -455,50 +405,41 @@ func cloneProviders(providers []ProviderConfig) []ProviderConfig {
 
 	cloned := make([]ProviderConfig, 0, len(providers))
 	for _, provider := range providers {
-		next := provider
-		next.Models = cloneModelIDs(provider.Models)
-		cloned = append(cloned, next)
+		cloned = append(cloned, provider)
 	}
 	return cloned
 }
 
-func cloneModelIDs(models []string) []string {
-	normalized := normalizeModelIDs(models)
-	if len(normalized) == 0 {
-		return nil
+func defaultSelectedProviderName(providers []ProviderConfig, fallback string) string {
+	if containsProviderName(providers, fallback) {
+		return strings.TrimSpace(fallback)
 	}
-	return append([]string(nil), normalized...)
+	if len(providers) == 0 {
+		return ""
+	}
+	return strings.TrimSpace(providers[0].Name)
 }
 
-func normalizeModelIDs(models []string) []string {
-	if len(models) == 0 {
-		return nil
-	}
-
-	normalized := make([]string, 0, len(models))
-	seen := make(map[string]struct{}, len(models))
-	for _, model := range models {
-		id := strings.TrimSpace(model)
-		if id == "" {
-			continue
-		}
-		key := strings.ToLower(id)
-		if _, exists := seen[key]; exists {
-			continue
-		}
-		seen[key] = struct{}{}
-		normalized = append(normalized, id)
-	}
-	return normalized
-}
-
-func ContainsModelID(models []string, model string) bool {
-	target := strings.ToLower(strings.TrimSpace(model))
+func containsProviderName(providers []ProviderConfig, name string) bool {
+	target := NormalizeProviderName(name)
 	if target == "" {
 		return false
 	}
-	for _, candidate := range normalizeModelIDs(models) {
-		if strings.EqualFold(candidate, target) {
+	for _, provider := range providers {
+		if NormalizeProviderName(provider.Name) == target {
+			return true
+		}
+	}
+	return false
+}
+
+func ContainsModelID(models []string, model string) bool {
+	target := NormalizeKey(model)
+	if target == "" {
+		return false
+	}
+	for _, candidate := range models {
+		if NormalizeKey(candidate) == target {
 			return true
 		}
 	}

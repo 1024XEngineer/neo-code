@@ -65,6 +65,14 @@ type ActionPayload struct {
 	Workdir    string
 	TargetType TargetType
 	Target     string
+	// SandboxTargetType is the target kind used specifically for workspace boundary
+	// checks. It falls back to TargetType when unset so callers can keep permission
+	// display metadata separate from the path actually validated by the sandbox.
+	SandboxTargetType TargetType
+	// SandboxTarget is the concrete path/value used specifically for workspace
+	// validation. It falls back to Target when unset. For example, bash validates
+	// its requested workdir here while Target still contains the shell command.
+	SandboxTarget string
 }
 
 // Action is the unified security input for one tool execution request.

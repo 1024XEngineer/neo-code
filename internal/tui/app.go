@@ -42,6 +42,7 @@ type App struct {
 	activeMessages   []provider.Message
 	activities       []activityEntry
 	fileCandidates   []string
+	modelRefreshID   string
 	focus            panel
 	width            int
 	height           int
@@ -157,6 +158,7 @@ func New(cfg *config.Config, configManager *config.Manager, runtime agentruntime
 	}
 	app.selectCurrentProvider(cfg.SelectedProvider)
 	app.selectCurrentModel(cfg.CurrentModel)
+	app.modelRefreshID = cfg.SelectedProvider
 	if err := app.refreshFileCandidates(); err != nil {
 		return App{}, err
 	}
@@ -165,5 +167,13 @@ func New(cfg *config.Config, configManager *config.Manager, runtime agentruntime
 }
 
 func (a App) Init() tea.Cmd {
-	return tea.Batch(ListenForRuntimeEvent(a.runtime.Events()), textarea.Blink, a.spinner.Tick)
+	cmds := []tea.Cmd{
+		ListenForRuntimeEvent(a.runtime.Events()),
+		textarea.Blink,
+		a.spinner.Tick,
+	}
+	if cmd := runModelCatalogRefresh(a.providerSvc, a.modelRefreshID); cmd != nil {
+		cmds = append(cmds, cmd)
+	}
+	return tea.Batch(cmds...)
 }

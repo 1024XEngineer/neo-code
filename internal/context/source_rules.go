@@ -119,15 +119,14 @@ func findExactRuleFile(dir string) (string, error) {
 	return "", nil
 }
 
-func renderProjectRulesSection(documents []ruleDocument) string {
+func renderProjectRulesSection(documents []ruleDocument) promptSection {
 	if len(documents) == 0 {
-		return ""
+		return promptSection{}
 	}
 
 	const totalTruncationNotice = "\n[additional project rules truncated to fit total limit]\n"
 
 	var builder strings.Builder
-	builder.WriteString("## Project Rules\n")
 
 	remaining := maxTotalRuleRunes
 	totalBudgetTruncated := false
@@ -162,7 +161,10 @@ func renderProjectRulesSection(documents []ruleDocument) string {
 		}
 	}
 
-	return strings.TrimSpace(builder.String())
+	return promptSection{
+		title:   "Project Rules",
+		content: strings.TrimSpace(builder.String()),
+	}
 }
 
 func renderRuleDocumentChunk(document ruleDocument) string {

@@ -3,6 +3,8 @@ package tools
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -304,6 +306,41 @@ func TestDefaultManagerExecuteBoundaries(t *testing.T) {
 	}
 }
 
+func TestDefaultManagerExecuteWithWorkspaceSandbox(t *testing.T) {
+	t.Parallel()
+
+	registry := NewRegistry()
+	tool := &managerStubTool{name: "filesystem_write_file", content: "ok"}
+	registry.Register(tool)
+
+	engine, err := security.NewStaticGateway(security.DecisionAllow, nil)
+	if err != nil {
+		t.Fatalf("new engine: %v", err)
+	}
+	manager, err := NewManager(registry, engine, security.NewWorkspaceSandbox())
+	if err != nil {
+		t.Fatalf("new manager: %v", err)
+	}
+
+	workdir := t.TempDir()
+	outsideDir := t.TempDir()
+	if err := os.Symlink(outsideDir, filepath.Join(workdir, "link")); err != nil {
+		t.Skipf("symlink not supported in this environment: %v", err)
+	}
+
+	_, execErr := manager.Execute(context.Background(), ToolCallInput{
+		Name:      "filesystem_write_file",
+		Arguments: []byte(`{"path":"link/outside.txt","content":"hello"}`),
+		Workdir:   workdir,
+	})
+	if execErr == nil || !strings.Contains(execErr.Error(), "escapes workspace root via symlink") {
+		t.Fatalf("expected sandbox escape error, got %v", execErr)
+	}
+	if tool.callCount != 0 {
+		t.Fatalf("expected blocked tool not to execute, got %d calls", tool.callCount)
+	}
+}
+
 func TestPermissionDecisionError(t *testing.T) {
 	t.Parallel()
 
@@ -358,17 +395,19 @@ func TestBuildPermissionAction(t *testing.T) {
 		wantType     security.ActionType
 		wantResource string
 		wantTarget   string
+		wantSandbox  string
 		wantErr      string
 	}{
 		{
 			name: "bash maps to bash action",
 			input: ToolCallInput{
 				Name:      "bash",
-				Arguments: []byte(`{"command":"echo hi"}`),
+				Arguments: []byte(`{"command":"echo hi","workdir":"scripts"}`),
 			},
 			wantType:     security.ActionTypeBash,
 			wantResource: "bash",
 			wantTarget:   "echo hi",
+			wantSandbox:  "scripts",
 		},
 		{
 			name: "read file maps to read action",
@@ -379,6 +418,7 @@ func TestBuildPermissionAction(t *testing.T) {
 			wantType:     security.ActionTypeRead,
 			wantResource: "filesystem_read_file",
 			wantTarget:   "main.go",
+			wantSandbox:  "main.go",
 		},
 		{
 			name: "grep maps to read action",
@@ -389,6 +429,7 @@ func TestBuildPermissionAction(t *testing.T) {
 			wantType:     security.ActionTypeRead,
 			wantResource: "filesystem_grep",
 			wantTarget:   "internal",
+			wantSandbox:  "internal",
 		},
 		{
 			name: "glob maps to read action",
@@ -399,6 +440,7 @@ func TestBuildPermissionAction(t *testing.T) {
 			wantType:     security.ActionTypeRead,
 			wantResource: "filesystem_glob",
 			wantTarget:   "cmd",
+			wantSandbox:  "cmd",
 		},
 		{
 			name: "write file maps to write action",
@@ -409,6 +451,7 @@ func TestBuildPermissionAction(t *testing.T) {
 			wantType:     security.ActionTypeWrite,
 			wantResource: "filesystem_write_file",
 			wantTarget:   "main.go",
+			wantSandbox:  "main.go",
 		},
 		{
 			name: "webfetch maps to read action",
@@ -429,6 +472,7 @@ func TestBuildPermissionAction(t *testing.T) {
 			wantType:     security.ActionTypeWrite,
 			wantResource: "filesystem_edit",
 			wantTarget:   "main.go",
+			wantSandbox:  "main.go",
 		},
 		{
 			name: "mcp tool maps to mcp action",
@@ -477,6 +521,9 @@ func TestBuildPermissionAction(t *testing.T) {
 			}
 			if action.Payload.Target != tt.wantTarget {
 				t.Fatalf("expected target %q, got %q", tt.wantTarget, action.Payload.Target)
+			}
+			if action.Payload.SandboxTarget != tt.wantSandbox {
+				t.Fatalf("expected sandbox target %q, got %q", tt.wantSandbox, action.Payload.SandboxTarget)
 			}
 		})
 	}

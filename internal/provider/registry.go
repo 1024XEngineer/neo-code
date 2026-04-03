@@ -10,17 +10,17 @@ import (
 )
 
 type Builder func(ctx context.Context, cfg config.ResolvedProviderConfig) (Provider, error)
+type DiscoveryFunc func(ctx context.Context, cfg config.ResolvedProviderConfig) ([]ModelDescriptor, error)
 
 type DriverDefinition struct {
-	Name  string
-	Build Builder
+	Name     string
+	Build    Builder
+	Discover DiscoveryFunc
 }
 
 type Registry struct {
 	drivers map[string]DriverDefinition
 }
-
-var errDriverAlreadyRegistered = errors.New("provider: driver already registered")
 
 func NewRegistry() *Registry {
 	return &Registry{drivers: map[string]DriverDefinition{}}
@@ -34,7 +34,7 @@ func (r *Registry) Register(driver DriverDefinition) error {
 	r.ensureDrivers()
 
 	driver.Name = strings.TrimSpace(driver.Name)
-	driverType := normalizeKey(driver.Name)
+	driverType := config.NormalizeKey(driver.Name)
 	if driverType == "" {
 		return errors.New("provider: driver name is empty")
 	}
@@ -42,7 +42,7 @@ func (r *Registry) Register(driver DriverDefinition) error {
 		return fmt.Errorf("provider: driver %q build func is nil", driver.Name)
 	}
 	if _, exists := r.drivers[driverType]; exists {
-		return fmt.Errorf("%w: %s", errDriverAlreadyRegistered, driver.Name)
+		return fmt.Errorf("%w: %s", ErrDriverAlreadyRegistered, driver.Name)
 	}
 	r.drivers[driverType] = driver
 	return nil
@@ -56,6 +56,17 @@ func (r *Registry) Build(ctx context.Context, cfg config.ResolvedProviderConfig)
 	return driver.Build(ctx, cfg)
 }
 
+func (r *Registry) DiscoverModels(ctx context.Context, cfg config.ResolvedProviderConfig) ([]ModelDescriptor, error) {
+	driver, err := r.driver(cfg.Driver)
+	if err != nil {
+		return nil, err
+	}
+	if driver.Discover == nil {
+		return nil, nil
+	}
+	return driver.Discover(ctx, cfg)
+}
+
 func (r *Registry) Supports(driverType string) bool {
 	_, err := r.driver(driverType)
 	return err == nil
@@ -65,15 +76,11 @@ func (r *Registry) driver(driverType string) (DriverDefinition, error) {
 	if r == nil {
 		return DriverDefinition{}, ErrDriverNotFound
 	}
-	driver, ok := r.drivers[normalizeKey(driverType)]
+	driver, ok := r.drivers[config.NormalizeKey(driverType)]
 	if !ok {
 		return DriverDefinition{}, fmt.Errorf("%w: %s", ErrDriverNotFound, strings.TrimSpace(driverType))
 	}
 	return driver, nil
-}
-
-func normalizeKey(value string) string {
-	return strings.ToLower(strings.TrimSpace(value))
 }
 
 func (r *Registry) ensureDrivers() {

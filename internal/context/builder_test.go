@@ -3,6 +3,8 @@ package context
 import (
 	stdcontext "context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -27,14 +29,17 @@ func TestDefaultBuilderBuild(t *testing.T) {
 	if got.SystemPrompt == "" {
 		t.Fatalf("expected non-empty system prompt")
 	}
-	if !strings.Contains(got.SystemPrompt, defaultSystemPrompt()) {
-		t.Fatalf("expected default prompt to remain in composed prompt")
+	if !strings.Contains(got.SystemPrompt, "## Agent Identity") {
+		t.Fatalf("expected core prompt sections to be included")
 	}
 	if !strings.Contains(got.SystemPrompt, "## System State") {
 		t.Fatalf("expected system state section in composed prompt")
 	}
 	if strings.Contains(got.SystemPrompt, "## Project Rules") {
 		t.Fatalf("did not expect project rules section without AGENTS.md")
+	}
+	if strings.Contains(got.SystemPrompt, "\n\n\n") {
+		t.Fatalf("did not expect repeated blank lines in composed prompt")
 	}
 	if !strings.Contains(got.SystemPrompt, input.Metadata.Workdir) {
 		t.Fatalf("expected workdir in system state section")
@@ -57,6 +62,34 @@ func TestDefaultBuilderBuildHonorsCancellation(t *testing.T) {
 	_, err := builder.Build(ctx, BuildInput{})
 	if err != stdcontext.Canceled {
 		t.Fatalf("expected context.Canceled, got %v", err)
+	}
+}
+
+func TestDefaultBuilderBuildComposesPromptSectionsInOrder(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, ruleFileName), []byte("project-rules"), 0o644); err != nil {
+		t.Fatalf("write AGENTS.md: %v", err)
+	}
+
+	builder := NewBuilder()
+	got, err := builder.Build(stdcontext.Background(), BuildInput{
+		Messages: []provider.Message{{Role: "user", Content: "hello"}},
+		Metadata: testMetadata(root),
+	})
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+
+	identityIndex := strings.Index(got.SystemPrompt, "## Agent Identity")
+	rulesIndex := strings.Index(got.SystemPrompt, "## Project Rules")
+	stateIndex := strings.Index(got.SystemPrompt, "## System State")
+	if identityIndex < 0 || rulesIndex < 0 || stateIndex < 0 {
+		t.Fatalf("expected all prompt sections, got %q", got.SystemPrompt)
+	}
+	if !(identityIndex < rulesIndex && rulesIndex < stateIndex) {
+		t.Fatalf("expected section order core -> project rules -> system state, got %q", got.SystemPrompt)
 	}
 }
 

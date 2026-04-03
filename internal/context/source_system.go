@@ -48,10 +48,8 @@ func collectSystemState(ctx context.Context, metadata Metadata, runner gitComman
 	return state, nil
 }
 
-func renderSystemStateSection(state SystemState) string {
+func renderSystemStateSection(state SystemState) promptSection {
 	lines := []string{
-		"## System State",
-		"",
 		fmt.Sprintf("- workdir: `%s`", promptValue(state.Workdir)),
 		fmt.Sprintf("- shell: `%s`", promptValue(state.Shell)),
 		fmt.Sprintf("- provider: `%s`", promptValue(state.Provider)),
@@ -68,7 +66,10 @@ func renderSystemStateSection(state SystemState) string {
 		lines = append(lines, "- git: unavailable")
 	}
 
-	return strings.Join(lines, "\n")
+	return promptSection{
+		title:   "System State",
+		content: strings.Join(lines, "\n"),
+	}
 }
 
 func runGitCommand(ctx context.Context, workdir string, args ...string) (string, error) {

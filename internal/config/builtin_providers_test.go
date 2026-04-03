@@ -40,12 +40,6 @@ func TestOpenAIProviderConfig(t *testing.T) {
 	if provider.APIKeyEnv != OpenAIDefaultAPIKeyEnv {
 		t.Fatalf("expected API key env %q, got %q", OpenAIDefaultAPIKeyEnv, provider.APIKeyEnv)
 	}
-	if len(provider.Models) == 0 {
-		t.Fatal("expected non-empty models list")
-	}
-	if !ContainsModelID(provider.Models, OpenAIDefaultModel) {
-		t.Fatalf("expected models to contain default model %q", OpenAIDefaultModel)
-	}
 }
 
 func TestGeminiProviderConfig(t *testing.T) {
@@ -67,12 +61,6 @@ func TestGeminiProviderConfig(t *testing.T) {
 	}
 	if provider.APIKeyEnv != GeminiDefaultAPIKeyEnv {
 		t.Fatalf("expected API key env %q, got %q", GeminiDefaultAPIKeyEnv, provider.APIKeyEnv)
-	}
-	if len(provider.Models) == 0 {
-		t.Fatal("expected non-empty models list")
-	}
-	if !ContainsModelID(provider.Models, GeminiDefaultModel) {
-		t.Fatalf("expected models to contain default model %q", GeminiDefaultModel)
 	}
 }
 
@@ -96,27 +84,20 @@ func TestOpenLLProviderConfig(t *testing.T) {
 	if provider.APIKeyEnv != OpenLLDefaultAPIKeyEnv {
 		t.Fatalf("expected API key env %q, got %q", OpenLLDefaultAPIKeyEnv, provider.APIKeyEnv)
 	}
-	if len(provider.Models) == 0 {
-		t.Fatal("expected non-empty models list")
-	}
-	if !ContainsModelID(provider.Models, OpenLLDefaultModel) {
-		t.Fatalf("expected models to contain default model %q", OpenLLDefaultModel)
-	}
 }
 
-func TestProviderModelsAreImmutable(t *testing.T) {
+func TestProviderDefaultsAreIndependent(t *testing.T) {
 	t.Parallel()
 
-	// Verify that modifying returned models slice doesn't affect future calls
 	provider1 := OpenAIProvider()
-	provider1.Models[0] = "modified-model"
+	provider1.Model = "modified-model"
 
 	provider2 := OpenAIProvider()
-	if provider2.Models[0] == "modified-model" {
-		t.Fatal("expected models slice to be independent between calls")
+	if provider2.Model == "modified-model" {
+		t.Fatal("expected builtin provider defaults to be independent between calls")
 	}
-	if provider2.Models[0] != OpenAIDefaultModel {
-		t.Fatalf("expected first model %q, got %q", OpenAIDefaultModel, provider2.Models[0])
+	if provider2.Model != OpenAIDefaultModel {
+		t.Fatalf("expected default model %q, got %q", OpenAIDefaultModel, provider2.Model)
 	}
 }
 

@@ -38,7 +38,7 @@ func TestLoadProjectRulesOrdersGlobalToLocal(t *testing.T) {
 		t.Fatalf("expected global-to-local order, got %+v", documents)
 	}
 
-	section := renderProjectRulesSection(documents)
+	section := renderPromptSection(renderProjectRulesSection(documents))
 	rootIndex := strings.Index(section, rootRules)
 	localIndex := strings.Index(section, localRules)
 	if rootIndex < 0 || localIndex < 0 || rootIndex >= localIndex {
@@ -140,25 +140,29 @@ func TestRenderProjectRulesSectionTruncatesSingleFileAndTotalBudget(t *testing.T
 	largeTotalA := strings.Repeat("b", 7000)
 	largeTotalB := strings.Repeat("c", 7000)
 
-	section := renderProjectRulesSection([]ruleDocument{
+	section := renderPromptSection(renderProjectRulesSection([]ruleDocument{
 		{Path: "/repo/AGENTS.md", Content: largeSingle[:maxRuleFileRunes], Truncated: true},
-	})
+	}))
 	if !strings.Contains(section, "[truncated to fit per-file limit]") {
 		t.Fatalf("expected per-file truncation marker, got %q", section)
 	}
 
-	totalSection := renderProjectRulesSection([]ruleDocument{
+	totalPromptSection := renderProjectRulesSection([]ruleDocument{
 		{Path: "/repo/root/AGENTS.md", Content: largeTotalA},
 		{Path: "/repo/root/app/AGENTS.md", Content: largeTotalB},
 	})
+	totalSection := renderPromptSection(totalPromptSection)
 	if !strings.Contains(totalSection, "[additional project rules truncated to fit total limit]") {
 		t.Fatalf("expected total truncation marker, got %q", totalSection)
 	}
 	if strings.Contains(totalSection, strings.Repeat("c", 6500)) {
 		t.Fatalf("expected total rules section to be truncated")
 	}
-	body := strings.TrimPrefix(totalSection, "## Project Rules\n")
-	if runeCount(body) > maxTotalRuleRunes {
-		t.Fatalf("expected rendered rules body to respect total rune budget, got %d > %d", runeCount(body), maxTotalRuleRunes)
+	if runeCount(totalPromptSection.content) > maxTotalRuleRunes {
+		t.Fatalf(
+			"expected rendered rules body to respect total rune budget, got %d > %d",
+			runeCount(totalPromptSection.content),
+			maxTotalRuleRunes,
+		)
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"neo-code/internal/config"
@@ -15,6 +16,8 @@ import (
 )
 
 func TestNewProgram(t *testing.T) {
+	disableBuiltinProviderAPIKeys(t)
+
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
@@ -30,6 +33,41 @@ func TestNewProgram(t *testing.T) {
 	configPath := filepath.Join(home, ".neocode", "config.yaml")
 	if _, err := os.Stat(configPath); err != nil {
 		t.Fatalf("expected config file to be created at %q: %v", configPath, err)
+	}
+}
+
+func TestNewProgramNormalizesInvalidCurrentModelOnStartup(t *testing.T) {
+	disableBuiltinProviderAPIKeys(t)
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	configDir := filepath.Join(home, ".neocode")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+
+	configPath := filepath.Join(configDir, "config.yaml")
+	raw := []byte("selected_provider: openai\ncurrent_model: unsupported-current\nworkdir: .\nshell: powershell\n")
+	if err := os.WriteFile(configPath, raw, 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	program, err := NewProgram(context.Background())
+	if err != nil {
+		t.Fatalf("NewProgram() error = %v", err)
+	}
+	if program == nil {
+		t.Fatalf("expected tea program")
+	}
+
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	if !strings.Contains(string(data), "current_model: "+config.OpenAIDefaultModel) {
+		t.Fatalf("expected startup normalization to rewrite current_model, got:\n%s", string(data))
 	}
 }
 
@@ -77,6 +115,7 @@ func TestBuildToolManagerWrapsRegistry(t *testing.T) {
 
 	registry := tools.NewRegistry()
 	registry.Register(stubToolForBootstrap{name: "bash", content: "ok"})
+	workdir := t.TempDir()
 	manager, err := buildToolManager(registry)
 	if err != nil {
 		t.Fatalf("buildToolManager() error = %v", err)
@@ -96,12 +135,22 @@ func TestBuildToolManagerWrapsRegistry(t *testing.T) {
 	result, execErr := manager.Execute(context.Background(), tools.ToolCallInput{
 		Name:      "bash",
 		Arguments: []byte(`{"command":"echo hi"}`),
+		Workdir:   workdir,
 	})
 	if execErr != nil {
 		t.Fatalf("Execute() error = %v", execErr)
 	}
 	if result.Content != "ok" {
 		t.Fatalf("expected ok result, got %+v", result)
+	}
+
+	_, execErr = manager.Execute(context.Background(), tools.ToolCallInput{
+		Name:      "bash",
+		Arguments: []byte(`{"command":"echo hi","workdir":"../outside"}`),
+		Workdir:   workdir,
+	})
+	if execErr == nil {
+		t.Fatalf("expected sandbox rejection for outside workdir")
 	}
 }
 
@@ -171,4 +220,12 @@ func (s stubToolForBootstrap) Description() string    { return "stub" }
 func (s stubToolForBootstrap) Schema() map[string]any { return map[string]any{"type": "object"} }
 func (s stubToolForBootstrap) Execute(ctx context.Context, call tools.ToolCallInput) (tools.ToolResult, error) {
 	return tools.ToolResult{Name: s.name, Content: s.content}, nil
+}
+
+func disableBuiltinProviderAPIKeys(t *testing.T) {
+	t.Helper()
+	t.Setenv(config.OpenAIDefaultAPIKeyEnv, "")
+	t.Setenv(config.GeminiDefaultAPIKeyEnv, "")
+	t.Setenv(config.OpenLLDefaultAPIKeyEnv, "")
+	t.Setenv(config.QiniuDefaultAPIKeyEnv, "")
 }

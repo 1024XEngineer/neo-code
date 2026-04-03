@@ -25,7 +25,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.22' # 替换为 NeoCode 实际使用的 Go 版本
+          go-version-file: 'go.mod' # 💡 修复点 1：让 Action 自动跟随项目真实的 Go 版本
 
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v5
@@ -34,4 +34,5 @@ jobs:
           version: '~> v2'
           args: release --clean
         env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}       # 💡 修复点 2：补回本仓库的内置鉴权令牌
           TAP_GITHUB_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
