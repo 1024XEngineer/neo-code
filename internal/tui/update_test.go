@@ -204,7 +204,7 @@ func TestAppUpdateWorkspaceSlashCommands(t *testing.T) {
 		}
 
 		target := t.TempDir()
-		app.input.SetValue("/workspace " + target)
+		app.input.SetValue("/cwd " + target)
 		app.state.InputText = app.input.Value()
 
 		model, cmd := app.Update(tea.KeyMsg{Type: tea.KeyEnter})
@@ -278,9 +278,9 @@ func TestRunSessionWorkdirCommandBranches(t *testing.T) {
 	})
 
 	t.Run("empty workspace query without current workdir returns usage", func(t *testing.T) {
-		msg := runSessionWorkdirCommand(newStubRuntime(), "", "", "/workspace")()
+		msg := runSessionWorkdirCommand(newStubRuntime(), "", "", "/cwd")()
 		result := msg.(sessionWorkdirResultMsg)
-		if result.err == nil || !strings.Contains(result.err.Error(), "usage: /workspace <path>") {
+		if result.err == nil || !strings.Contains(result.err.Error(), "usage: /cwd <path>") {
 			t.Fatalf("expected usage error, got %+v", result)
 		}
 	})
@@ -299,7 +299,7 @@ func TestRunSessionWorkdirCommandBranches(t *testing.T) {
 		current := t.TempDir()
 		runtime := newStubRuntime()
 		runtime.setResult = &agentruntime.Session{ID: "session-1", Workdir: ""}
-		msg := runSessionWorkdirCommand(runtime, "session-1", current, "/workspace ./subdir")()
+		msg := runSessionWorkdirCommand(runtime, "session-1", current, "/cwd ./subdir")()
 		result := msg.(sessionWorkdirResultMsg)
 		if result.err != nil {
 			t.Fatalf("unexpected error: %v", result.err)

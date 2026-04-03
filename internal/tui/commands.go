@@ -20,7 +20,6 @@ const (
 	slashCommandStatus    = "/status"
 	slashCommandProvider  = "/provider"
 	slashCommandModelPick = "/model"
-	slashCommandWorkspace = "/workspace"
 	slashCommandCWD       = "/cwd"
 
 	slashUsageHelp     = "/help"
@@ -29,7 +28,7 @@ const (
 	slashUsageStatus   = "/status"
 	slashUsageProvider = "/provider"
 	slashUsageModel    = "/model"
-	slashUsageWorkdir  = "/workspace"
+	slashUsageWorkdir  = "/cwd"
 
 	commandMenuTitle       = "Commands"
 	providerPickerTitle    = "Select Provider"
@@ -116,7 +115,7 @@ var builtinSlashCommands = []slashCommand{
 	{Usage: slashUsageHelp, Description: "Show slash command help"},
 	{Usage: slashUsageClear, Description: "Clear the current draft transcript"},
 	{Usage: slashUsageStatus, Description: "Show current session and agent status"},
-	{Usage: slashUsageWorkdir, Description: "Show or set current session workspace root (/workspace <path>, /cwd alias)"},
+	{Usage: slashUsageWorkdir, Description: "Show or set current session workspace root (/cwd [path])"},
 	{Usage: slashUsageProvider, Description: "Open the interactive provider picker"},
 	{Usage: slashUsageModel, Description: "Open the interactive model picker"},
 	{Usage: slashUsageExit, Description: "Exit NeoCode"},
@@ -411,13 +410,13 @@ func splitFirstWord(input string) (string, string) {
 
 func isWorkspaceSlashCommand(raw string) bool {
 	command, _ := splitFirstWord(strings.ToLower(strings.TrimSpace(raw)))
-	return command == slashCommandWorkspace || command == slashCommandCWD
+	return command == slashCommandCWD
 }
 
 func parseWorkspaceSlashCommand(raw string) (string, error) {
 	command, args := splitFirstWord(strings.TrimSpace(raw))
 	switch strings.ToLower(command) {
-	case slashCommandWorkspace, slashCommandCWD:
+	case slashCommandCWD:
 		return strings.TrimSpace(args), nil
 	default:
 		return "", fmt.Errorf("unknown command %q", command)

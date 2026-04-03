@@ -1151,7 +1151,7 @@ func runSessionWorkdirCommand(
 		if strings.TrimSpace(requested) == "" {
 			workdir := strings.TrimSpace(currentWorkdir)
 			if workdir == "" {
-				return sessionWorkdirResultMsg{err: fmt.Errorf("usage: /workspace <path>")}
+				return sessionWorkdirResultMsg{err: fmt.Errorf("usage: /cwd <path>")}
 			}
 			return sessionWorkdirResultMsg{
 				notice:  fmt.Sprintf("[System] Current workspace is %s.", workdir),

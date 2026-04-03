@@ -188,22 +188,22 @@ func defaultTestStatusSnapshot(manager *config.Manager) statusSnapshot {
 
 func TestCommandHelperFunctions(t *testing.T) {
 	t.Run("workspace slash parser supports aliases", func(t *testing.T) {
-		if !isWorkspaceSlashCommand("/workspace ./tmp") {
-			t.Fatalf("expected /workspace to be recognized")
-		}
 		if !isWorkspaceSlashCommand("/cwd ./tmp") {
 			t.Fatalf("expected /cwd to be recognized")
 		}
 		if isWorkspaceSlashCommand("/status") {
 			t.Fatalf("expected non-workspace slash command to be ignored")
 		}
-		args, err := parseWorkspaceSlashCommand("/workspace ./tmp")
+		args, err := parseWorkspaceSlashCommand("/cwd")
+		if err != nil || args != "" {
+			t.Fatalf("expected empty args for /cwd, got %q / %v", args, err)
+		}
+		args, err = parseWorkspaceSlashCommand("/cwd ./tmp")
 		if err != nil || args != "./tmp" {
 			t.Fatalf("expected ./tmp, got %q / %v", args, err)
 		}
-		args, err = parseWorkspaceSlashCommand("/cwd")
-		if err != nil || args != "" {
-			t.Fatalf("expected empty args for /cwd, got %q / %v", args, err)
+		if _, err := parseWorkspaceSlashCommand("/workspace ./tmp"); err == nil {
+			t.Fatalf("expected /workspace to be rejected")
 		}
 		if _, err := parseWorkspaceSlashCommand("/status"); err == nil {
 			t.Fatalf("expected unknown slash command to return error")
