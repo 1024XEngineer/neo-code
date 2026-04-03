@@ -554,7 +554,7 @@ func (a *App) handleRuntimeEvent(event agentruntime.RuntimeEvent) bool {
 			return transcriptDirty
 		}
 		// Skip passive micro checks that did not rewrite context to avoid transcript noise.
-		if payload.TriggerMode == "micro" && !payload.Applied {
+		if payload.TriggerMode == agentruntime.CompactTriggerModeMicro && !payload.Applied {
 			return transcriptDirty
 		}
 		a.state.ExecutionError = ""
@@ -581,7 +581,7 @@ func (a *App) handleRuntimeEvent(event agentruntime.RuntimeEvent) bool {
 		if !ok {
 			return transcriptDirty
 		}
-		if payload.TriggerMode == "micro" {
+		if payload.TriggerMode == agentruntime.CompactTriggerModeMicro {
 			// Micro compact failure is non-blocking for the main loop, keep it as a lightweight notice.
 			a.appendInlineMessage(roleEvent, fmt.Sprintf("Compact(micro) skipped: %s", payload.Message))
 			transcriptDirty = true
