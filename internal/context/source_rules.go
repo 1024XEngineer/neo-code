@@ -78,7 +78,7 @@ func discoverRuleFilesWithFinder(ctx context.Context, workdir string, finder rul
 
 		match, err := finder(dir)
 		if err != nil {
-			break
+			return nil, fmt.Errorf("context: discover rule file in %s: %w", dir, err)
 		}
 		if match != "" {
 			paths = append(paths, match)

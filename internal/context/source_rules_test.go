@@ -94,7 +94,7 @@ func TestLoadRuleDocumentsReturnsReadError(t *testing.T) {
 	}
 }
 
-func TestDiscoverRuleFilesStopsOnDirectoryReadError(t *testing.T) {
+func TestDiscoverRuleFilesReturnsDirectoryReadError(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
@@ -125,11 +125,11 @@ func TestDiscoverRuleFilesStopsOnDirectoryReadError(t *testing.T) {
 			return "", nil
 		}
 	})
-	if err != nil {
-		t.Fatalf("discoverRuleFilesWithFinder() error = %v", err)
+	if err == nil || !strings.Contains(err.Error(), permissionErr.Error()) {
+		t.Fatalf("expected discoverRuleFilesWithFinder() to return permission error, got %v", err)
 	}
-	if len(paths) != 1 || paths[0] != localRules {
-		t.Fatalf("expected traversal to stop after read error and keep collected paths, got %+v", paths)
+	if paths != nil {
+		t.Fatalf("expected no paths on discovery failure, got %+v", paths)
 	}
 }
 
