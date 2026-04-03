@@ -829,6 +829,105 @@ func TestConstructorsRejectMissingDependencies(t *testing.T) {
 	})
 }
 
+func TestCompactConfigDefaultsAndRoundTrip(t *testing.T) {
+	tempDir := t.TempDir()
+	loader := NewLoader(tempDir, testDefaultConfig())
+
+	cfg, err := loader.Load(context.Background())
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	compactCfg := cfg.Context.Compact
+	if compactCfg.ManualStrategy != CompactManualStrategyKeepRecent {
+		t.Fatalf("expected manual strategy %q, got %q", CompactManualStrategyKeepRecent, compactCfg.ManualStrategy)
+	}
+	if compactCfg.ManualKeepRecentSpans != DefaultCompactManualKeepRecentSpans {
+		t.Fatalf("expected manual_keep_recent_spans=%d, got %d", DefaultCompactManualKeepRecentSpans, compactCfg.ManualKeepRecentSpans)
+	}
+	if compactCfg.MaxSummaryChars != DefaultCompactMaxSummaryChars {
+		t.Fatalf("expected max_summary_chars=%d, got %d", DefaultCompactMaxSummaryChars, compactCfg.MaxSummaryChars)
+	}
+
+	cfg.Context.Compact.ManualStrategy = CompactManualStrategyFullReplace
+	cfg.Context.Compact.ManualKeepRecentSpans = 2
+	cfg.Context.Compact.MaxSummaryChars = 900
+	if err := loader.Save(context.Background(), cfg); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	reloaded, err := loader.Load(context.Background())
+	if err != nil {
+		t.Fatalf("Reload() error = %v", err)
+	}
+	if reloaded.Context.Compact.ManualStrategy != CompactManualStrategyFullReplace {
+		t.Fatalf("expected manual strategy to persist, got %q", reloaded.Context.Compact.ManualStrategy)
+	}
+	if reloaded.Context.Compact.ManualKeepRecentSpans != 2 {
+		t.Fatalf("expected manual_keep_recent_spans=2, got %d", reloaded.Context.Compact.ManualKeepRecentSpans)
+	}
+	if reloaded.Context.Compact.MaxSummaryChars != 900 {
+		t.Fatalf("expected max_summary_chars=900, got %d", reloaded.Context.Compact.MaxSummaryChars)
+	}
+}
+
+func TestCompactConfigValidateFailures(t *testing.T) {
+	tests := []struct {
+		name      string
+		compact   CompactConfig
+		expectErr string
+	}{
+		{
+			name: "invalid manual strategy",
+			compact: CompactConfig{
+				ManualStrategy:        "invalid",
+				ManualKeepRecentSpans: 6,
+				MaxSummaryChars:       1200,
+			},
+			expectErr: "manual_strategy",
+		},
+		{
+			name: "invalid manual keep spans",
+			compact: CompactConfig{
+				ManualStrategy:        CompactManualStrategyKeepRecent,
+				ManualKeepRecentSpans: 0,
+				MaxSummaryChars:       1200,
+			},
+			expectErr: "manual_keep_recent_spans",
+		},
+		{
+			name: "invalid summary chars",
+			compact: CompactConfig{
+				ManualStrategy:        CompactManualStrategyKeepRecent,
+				ManualKeepRecentSpans: 6,
+				MaxSummaryChars:       0,
+			},
+			expectErr: "max_summary_chars",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.compact.Validate()
+			if err == nil || !strings.Contains(err.Error(), tt.expectErr) {
+				t.Fatalf("expected error containing %q, got %v", tt.expectErr, err)
+			}
+		})
+	}
+}
+
+func TestCompactConfigValidateSupportsFullReplace(t *testing.T) {
+	err := (CompactConfig{
+		ManualStrategy:        CompactManualStrategyFullReplace,
+		ManualKeepRecentSpans: 6,
+		MaxSummaryChars:       1200,
+	}).Validate()
+	if err != nil {
+		t.Fatalf("expected full_replace strategy to validate, got %v", err)
+	}
+}
+
 func restoreEnv(t *testing.T, key string) {
 	t.Helper()
 	value, ok := os.LookupEnv(key)

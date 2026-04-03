@@ -302,3 +302,31 @@ echo $OPENAI_API_KEY
 ## 相关文档
 
 - [添加新 Provider](./adding-providers.md)
+
+## Context Compact
+
+NeoCode 当前支持 manual compact，可通过 `/compact` 命令显式触发。
+
+### 配置示例
+
+```yaml
+context:
+  compact:
+    manual_strategy: keep_recent
+    manual_keep_recent_spans: 6
+    max_summary_chars: 1200
+```
+
+### 字段说明
+
+| 字段 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `context.compact.manual_strategy` | string | `keep_recent` | 手动 `/compact` 策略，可选 `keep_recent` / `full_replace` |
+| `context.compact.manual_keep_recent_spans` | int | `6` | `keep_recent` 模式下保留最近 N 个对话跨度 |
+| `context.compact.max_summary_chars` | int | `1200` | compact summary 最大字符数 |
+
+### `/compact`
+
+- 显式触发一次 manual compact。
+- 执行顺序为：写入 transcript -> 生成/校验 summary -> 回写会话消息 -> 发送 compact 事件。
+- 若 transcript 落盘失败，compact 会直接报错并终止，不会写坏会话。

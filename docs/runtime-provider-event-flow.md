@@ -65,3 +65,26 @@
 - assistant 完整回复后保存
 - 每个工具结果完成后保存
 - 避免在高频 UI 刷新路径中做磁盘 I/O
+
+## Manual Compact
+
+当前 runtime 额外暴露以下 compact 事件：
+- `compact_start`
+- `compact_done`
+- `compact_error`
+
+手动 `/compact` 链路如下：
+1. TUI 识别 `/compact` 并调用 `runtime.Compact(...)`。
+2. runtime 发出 `compact_start` 事件。
+3. compact runner 先写入 transcript（完整原始消息，JSONL）。
+4. compact runner 按 `keep_recent` 或 `full_replace` 生成 summary 并重写会话消息。
+5. 成功时发出 `compact_done`；失败时发出 `compact_error`。
+
+`compact_done` payload 包含：
+- `applied`
+- `before_chars`
+- `after_chars`
+- `saved_ratio`
+- `trigger_mode`
+- `transcript_id`
+- `transcript_path`

@@ -303,3 +303,18 @@ func TestExecuteStatusCommandSnapshot(t *testing.T) {
 		}
 	}
 }
+
+func TestExecuteStatusCommandTreatsCompactingAsRunning(t *testing.T) {
+	notice := executeStatusCommand(statusSnapshot{
+		ActiveSessionTitle: draftSessionTitle,
+		IsCompacting:       true,
+		CurrentProvider:    "openai",
+		CurrentModel:       "gpt-5.4",
+		CurrentWorkdir:     `D:\repo`,
+		FocusLabel:         focusLabelComposer,
+		PickerLabel:        "none",
+	})
+	if !strings.Contains(notice, "Running: yes") {
+		t.Fatalf("expected compacting state to be reported as running, got %q", notice)
+	}
+}
