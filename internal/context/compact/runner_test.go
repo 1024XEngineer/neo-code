@@ -335,3 +335,143 @@ func TestSaveTranscriptUsesUniqueIDWithinSameTimestamp(t *testing.T) {
 		t.Fatalf("second transcript file missing: %v", err)
 	}
 }
+
+func TestRunRejectsUnsupportedMode(t *testing.T) {
+	t.Parallel()
+
+	runner := NewRunner()
+	_, err := runner.Run(context.Background(), Input{
+		Mode:      Mode("invalid"),
+		SessionID: "session-invalid-mode",
+		Workdir:   t.TempDir(),
+		Messages:  []provider.Message{{Role: provider.RoleUser, Content: "hello"}},
+		Config: config.CompactConfig{
+			ManualStrategy:                config.CompactManualStrategyKeepRecent,
+			ManualKeepRecentSpans:         6,
+			ToolResultKeepRecent:          3,
+			ToolResultPlaceholderMinChars: 100,
+			MaxSummaryChars:               1200,
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "unsupported mode") {
+		t.Fatalf("expected unsupported mode error, got %v", err)
+	}
+}
+
+func TestRunManualRejectsUnsupportedStrategy(t *testing.T) {
+	t.Parallel()
+
+	runner := NewRunner()
+	home := t.TempDir()
+	runner.userHomeDir = func() (string, error) { return home, nil }
+	runner.randomToken = func() (string, error) { return "token0001", nil }
+
+	_, err := runner.Run(context.Background(), Input{
+		Mode:      ModeManual,
+		SessionID: "session-invalid-strategy",
+		Workdir:   t.TempDir(),
+		Messages:  []provider.Message{{Role: provider.RoleUser, Content: "hello"}},
+		Config: config.CompactConfig{
+			ManualStrategy:                "unknown_strategy",
+			ManualKeepRecentSpans:         6,
+			ToolResultKeepRecent:          3,
+			ToolResultPlaceholderMinChars: 100,
+			MaxSummaryChars:               1200,
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "not supported") {
+		t.Fatalf("expected unsupported strategy error, got %v", err)
+	}
+}
+
+func TestRunManualFullReplaceNoMessagesIsNoop(t *testing.T) {
+	t.Parallel()
+
+	runner := NewRunner()
+	home := t.TempDir()
+	runner.userHomeDir = func() (string, error) { return home, nil }
+	runner.randomToken = func() (string, error) { return "token0002", nil }
+
+	result, err := runner.Run(context.Background(), Input{
+		Mode:      ModeManual,
+		SessionID: "session-empty-full-replace",
+		Workdir:   t.TempDir(),
+		Messages:  nil,
+		Config: config.CompactConfig{
+			ManualStrategy:                config.CompactManualStrategyFullReplace,
+			ManualKeepRecentSpans:         6,
+			ToolResultKeepRecent:          3,
+			ToolResultPlaceholderMinChars: 100,
+			MaxSummaryChars:               1200,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.Applied {
+		t.Fatalf("expected no-op when full_replace runs on empty messages")
+	}
+	if len(result.Messages) != 0 {
+		t.Fatalf("expected no messages, got %+v", result.Messages)
+	}
+}
+
+func TestSaveTranscriptHandlesHomeDirAndRenameFailures(t *testing.T) {
+	t.Parallel()
+
+	t.Run("user home lookup failure", func(t *testing.T) {
+		t.Parallel()
+
+		runner := NewRunner()
+		runner.userHomeDir = func() (string, error) { return "", errors.New("no home") }
+		_, _, err := runner.saveTranscript([]provider.Message{{Role: provider.RoleUser, Content: "hello"}}, "s1", t.TempDir())
+		if err == nil || !strings.Contains(err.Error(), "resolve user home") {
+			t.Fatalf("expected home dir failure, got %v", err)
+		}
+	})
+
+	t.Run("rename failure removes temp file", func(t *testing.T) {
+		t.Parallel()
+
+		runner := NewRunner()
+		home := t.TempDir()
+		runner.userHomeDir = func() (string, error) { return home, nil }
+		runner.randomToken = func() (string, error) { return "token0003", nil }
+
+		removedPath := ""
+		runner.rename = func(oldPath, newPath string) error {
+			return errors.New("rename failed")
+		}
+		runner.remove = func(path string) error {
+			removedPath = path
+			return nil
+		}
+
+		_, _, err := runner.saveTranscript(
+			[]provider.Message{{Role: provider.RoleUser, Content: "hello"}},
+			"s2",
+			filepath.Join(home, "workspace"),
+		)
+		if err == nil || !strings.Contains(err.Error(), "commit transcript") {
+			t.Fatalf("expected rename commit failure, got %v", err)
+		}
+		if strings.TrimSpace(removedPath) == "" || !strings.HasSuffix(removedPath, ".tmp") {
+			t.Fatalf("expected temp file cleanup, got %q", removedPath)
+		}
+	})
+}
+
+func TestValidateSummaryRequiresDoneOrInProgress(t *testing.T) {
+	t.Parallel()
+
+	_, err := validateSummary(strings.Join([]string{
+		"[compact_summary]",
+		"decisions:",
+		"- none",
+		"constraints:",
+		"- keep safety checks",
+	}, "\n"), 0)
+	if err == nil || !strings.Contains(err.Error(), "requires done or in_progress content") {
+		t.Fatalf("expected summary section validation failure, got %v", err)
+	}
+}
