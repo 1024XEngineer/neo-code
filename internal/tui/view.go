@@ -44,7 +44,7 @@ func (a App) View() string {
 
 func (a App) renderHeader(width int) string {
 	status := compactStatusText(a.state.StatusText, max(18, width/3))
-	if a.state.IsAgentRunning {
+	if a.isBusy() {
 		status = a.spinner.View() + " " + fallback(status, statusRunning)
 	}
 
@@ -170,7 +170,7 @@ func (a App) renderPrompt(width int) string {
 		box = a.styles.inputBoxFocused
 	}
 
-	// 计算边框和内边距占用的空间
+	// 计算边框和内边距占用的空间。
 	boxWidth := a.composerBoxWidth(width)
 
 	return box.Width(boxWidth).Render(a.input.View())
@@ -342,7 +342,7 @@ func (a App) commandMenuHeight(width int) int {
 func (a App) renderHelp(width int) string {
 	a.help.ShowAll = a.state.ShowHelp
 	helpContent := a.help.View(a.keys)
-	// 确保帮助视图填充整个宽度，避免边框断裂
+	// 确保帮助视图填充整个宽度，避免边框断裂。
 	return a.styles.footer.Width(width).Render(helpContent)
 }
 
@@ -390,7 +390,7 @@ func (a App) statusBadge(text string) string {
 		return a.styles.badgeError.Render(text)
 	case strings.Contains(lower, "cancel"):
 		return a.styles.badgeWarning.Render(text)
-	case a.state.IsAgentRunning || strings.Contains(lower, "running") || strings.Contains(lower, "thinking"):
+	case a.isBusy() || strings.Contains(lower, "running") || strings.Contains(lower, "thinking"):
 		return a.styles.badgeWarning.Render(text)
 	default:
 		return a.styles.badgeSuccess.Render(text)

@@ -1,6 +1,6 @@
 package context
 
-// Metadata contains the non-message runtime state needed by context sources.
+// Metadata 描述构建上下文时需要注入的非消息元信息。
 type Metadata struct {
 	Workdir  string
 	Shell    string
@@ -8,14 +8,14 @@ type Metadata struct {
 	Model    string
 }
 
-// GitState is the summarized git metadata exposed to the prompt builder.
+// GitState 是注入到 prompt 的 Git 摘要信息。
 type GitState struct {
 	Available bool
 	Branch    string
 	Dirty     bool
 }
 
-// SystemState is the summarized runtime metadata exposed to the prompt builder.
+// SystemState 是注入到 prompt 的运行时环境摘要。
 type SystemState struct {
 	Workdir  string
 	Shell    string

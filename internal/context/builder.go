@@ -2,19 +2,20 @@ package context
 
 import "context"
 
-// DefaultBuilder preserves the current runtime context-building behavior.
+// DefaultBuilder 负责将运行时状态组装为模型可消费的上下文。
 type DefaultBuilder struct {
 	gitRunner gitCommandRunner
 }
 
-// NewBuilder returns the default context builder implementation.
+// NewBuilder 返回默认上下文构建器实现。
 func NewBuilder() Builder {
 	return &DefaultBuilder{
 		gitRunner: runGitCommand,
 	}
 }
 
-// Build assembles the provider-facing context for the current round.
+// Build 构建单轮请求所需的 system prompt 与消息窗口。
+// 失败时直接返回错误，不吞掉规则加载或系统状态采集失败。
 func (b *DefaultBuilder) Build(ctx context.Context, input BuildInput) (BuildResult, error) {
 	if err := ctx.Err(); err != nil {
 		return BuildResult{}, err

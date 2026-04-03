@@ -61,6 +61,10 @@ func composeSystemPrompt(sections ...promptSection) string {
 	return strings.Join(rendered, "\n\n")
 }
 
+// renderPromptSection 将一个 section 渲染为 Markdown 块：
+// ## Title
+//
+// Content
 func renderPromptSection(section promptSection) string {
 	title := strings.TrimSpace(section.title)
 	content := strings.TrimSpace(section.content)

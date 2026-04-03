@@ -25,6 +25,7 @@ func TestExecuteLocalCommand(t *testing.T) {
 				for _, want := range []string{
 					slashUsageHelp,
 					slashUsageClear,
+					slashUsageCompact,
 					slashUsageStatus,
 					slashUsageProvider,
 					slashUsageModel,
@@ -301,5 +302,20 @@ func TestExecuteStatusCommandSnapshot(t *testing.T) {
 		if !strings.Contains(notice, want) {
 			t.Fatalf("expected status output to contain %q, got %q", want, notice)
 		}
+	}
+}
+
+func TestExecuteStatusCommandTreatsCompactingAsRunning(t *testing.T) {
+	notice := executeStatusCommand(statusSnapshot{
+		ActiveSessionTitle: draftSessionTitle,
+		IsCompacting:       true,
+		CurrentProvider:    "openai",
+		CurrentModel:       "gpt-5.4",
+		CurrentWorkdir:     `D:\repo`,
+		FocusLabel:         focusLabelComposer,
+		PickerLabel:        "none",
+	})
+	if !strings.Contains(notice, "Running: yes") {
+		t.Fatalf("expected compacting state to be reported as running, got %q", notice)
 	}
 }

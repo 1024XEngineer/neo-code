@@ -6,18 +6,18 @@ import (
 	"neo-code/internal/provider"
 )
 
-// Builder builds the provider-facing context for a single model round.
+// Builder 定义上下文构建契约：将运行时状态转换为模型请求上下文。
 type Builder interface {
 	Build(ctx context.Context, input BuildInput) (BuildResult, error)
 }
 
-// BuildInput contains the runtime state needed to assemble model context.
+// BuildInput 是构建上下文所需输入。
 type BuildInput struct {
 	Messages []provider.Message
 	Metadata Metadata
 }
 
-// BuildResult is the provider-facing context produced for a single round.
+// BuildResult 是传给 provider 的上下文结果。
 type BuildResult struct {
 	SystemPrompt string
 	Messages     []provider.Message

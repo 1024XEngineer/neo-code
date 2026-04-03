@@ -10,6 +10,8 @@ import (
 
 type gitCommandRunner func(ctx context.Context, workdir string, args ...string) (string, error)
 
+// collectSystemState 收集当前运行环境快照。
+// Git 不可用时降级为仅返回基础信息；context 取消/超时则直接返回错误。
 func collectSystemState(ctx context.Context, metadata Metadata, runner gitCommandRunner) (SystemState, error) {
 	state := SystemState{
 		Workdir:  strings.TrimSpace(metadata.Workdir),
@@ -48,6 +50,7 @@ func collectSystemState(ctx context.Context, metadata Metadata, runner gitComman
 	return state, nil
 }
 
+// renderSystemStateSection 将运行环境快照转换为 prompt section。
 func renderSystemStateSection(state SystemState) promptSection {
 	lines := []string{
 		fmt.Sprintf("- workdir: `%s`", promptValue(state.Workdir)),
@@ -89,6 +92,7 @@ func promptValue(value string) string {
 	return value
 }
 
+// isContextError 用于区分“调用被取消”与“命令本身失败”。
 func isContextError(err error) bool {
 	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }

@@ -23,6 +23,7 @@ type ruleDocument struct {
 
 type ruleFileFinder func(string) (string, error)
 
+// loadProjectRules 按目录层级加载当前工作区可见的 AGENTS.md 规则文档。
 func loadProjectRules(ctx context.Context, workdir string) ([]ruleDocument, error) {
 	paths, err := discoverRuleFiles(ctx, workdir)
 	if err != nil {
@@ -32,6 +33,7 @@ func loadProjectRules(ctx context.Context, workdir string) ([]ruleDocument, erro
 	return loadRuleDocuments(ctx, paths, os.ReadFile)
 }
 
+// loadRuleDocuments 读取并裁剪单文件规则内容，避免超长规则直接挤爆 prompt。
 func loadRuleDocuments(ctx context.Context, paths []string, readFile func(string) ([]byte, error)) ([]ruleDocument, error) {
 	documents := make([]ruleDocument, 0, len(paths))
 	for _, path := range paths {
@@ -59,6 +61,8 @@ func discoverRuleFiles(ctx context.Context, workdir string) ([]string, error) {
 	return discoverRuleFilesWithFinder(ctx, workdir, findExactRuleFile)
 }
 
+// discoverRuleFilesWithFinder 从 workdir 逐级向上查找 AGENTS.md，并按“根到叶”顺序返回。
+// 这样更外层规则先出现，靠近项目目录的规则后出现，便于后续覆盖解释。
 func discoverRuleFilesWithFinder(ctx context.Context, workdir string, finder ruleFileFinder) ([]string, error) {
 	workdir = strings.TrimSpace(workdir)
 	if workdir == "" {
@@ -98,6 +102,7 @@ func discoverRuleFilesWithFinder(ctx context.Context, workdir string, finder rul
 	return paths, nil
 }
 
+// findExactRuleFile 在单个目录内查找大小写精确匹配的 AGENTS.md。
 func findExactRuleFile(dir string) (string, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -119,6 +124,7 @@ func findExactRuleFile(dir string) (string, error) {
 	return "", nil
 }
 
+// renderProjectRulesSection 将多份规则拼接到同一 prompt section，并受总字符预算约束。
 func renderProjectRulesSection(documents []ruleDocument) promptSection {
 	if len(documents) == 0 {
 		return promptSection{}
@@ -184,6 +190,7 @@ func renderRuleDocumentChunk(document ruleDocument) string {
 	return builder.String()
 }
 
+// renderRuleDocumentChunkWithinBudget 在预算内渲染单个规则块，优先保留标题与尽可能多的正文。
 func renderRuleDocumentChunkWithinBudget(document ruleDocument, budget int) string {
 	if budget <= 0 {
 		return ""
@@ -224,6 +231,7 @@ func renderRuleDocumentChunkWithinBudget(document ruleDocument, budget int) stri
 	return header + body.String()
 }
 
+// truncateRunes 按字符数裁剪字符串，避免中文等多字节字符被切坏。
 func truncateRunes(input string, max int) (string, bool) {
 	if max <= 0 {
 		return "", input != ""

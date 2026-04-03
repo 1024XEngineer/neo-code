@@ -19,15 +19,18 @@ import (
 )
 
 type stubRuntime struct {
-	runInputs    []agentruntime.UserInput
-	events       chan agentruntime.RuntimeEvent
-	sessions     []agentruntime.SessionSummary
-	loads        map[string]agentruntime.Session
-	runErr       error
-	listErr      error
-	loadErr      error
-	cancelCalls  int
-	cancelResult bool
+	runInputs     []agentruntime.UserInput
+	compactInputs []agentruntime.CompactInput
+	events        chan agentruntime.RuntimeEvent
+	sessions      []agentruntime.SessionSummary
+	loads         map[string]agentruntime.Session
+	runErr        error
+	compactErr    error
+	compactResult agentruntime.CompactResult
+	listErr       error
+	loadErr       error
+	cancelCalls   int
+	cancelResult  bool
 }
 
 func newStubRuntime() *stubRuntime {
@@ -40,6 +43,11 @@ func newStubRuntime() *stubRuntime {
 func (r *stubRuntime) Run(ctx context.Context, input agentruntime.UserInput) error {
 	r.runInputs = append(r.runInputs, input)
 	return r.runErr
+}
+
+func (r *stubRuntime) Compact(ctx context.Context, input agentruntime.CompactInput) (agentruntime.CompactResult, error) {
+	r.compactInputs = append(r.compactInputs, input)
+	return r.compactResult, r.compactErr
 }
 
 func (r *stubRuntime) Events() <-chan agentruntime.RuntimeEvent {
@@ -1191,6 +1199,93 @@ func TestAppHandleRuntimeEventAdditionalBranches(t *testing.T) {
 				}
 			},
 		},
+		{
+			name: "compact done event emits lightweight notice",
+			event: agentruntime.RuntimeEvent{
+				Type:      agentruntime.EventCompactDone,
+				SessionID: "s1",
+				Payload: agentruntime.CompactDonePayload{
+					Applied:        true,
+					BeforeChars:    100,
+					AfterChars:     60,
+					SavedRatio:     0.4,
+					TriggerMode:    agentruntime.CompactTriggerModeManual,
+					TranscriptPath: "/tmp/t.jsonl",
+				},
+			},
+			assert: func(t *testing.T, app App) {
+				t.Helper()
+				if !strings.Contains(app.state.StatusText, "Compact(manual)") {
+					t.Fatalf("expected compact status text, got %q", app.state.StatusText)
+				}
+				if len(app.activeMessages) == 0 || !strings.Contains(app.activeMessages[len(app.activeMessages)-1].Content, "Compact(manual)") {
+					t.Fatalf("expected compact inline notice, got %+v", app.activeMessages)
+				}
+			},
+		},
+		{
+			name: "compact done ignores passive micro checks",
+			setup: func(app *App) {
+				app.state.StatusText = "unchanged"
+			},
+			event: agentruntime.RuntimeEvent{
+				Type:      agentruntime.EventCompactDone,
+				SessionID: "s1",
+				Payload: agentruntime.CompactDonePayload{
+					Applied:     false,
+					TriggerMode: agentruntime.CompactTriggerModeMicro,
+				},
+			},
+			assert: func(t *testing.T, app App) {
+				t.Helper()
+				if app.state.StatusText != "unchanged" {
+					t.Fatalf("expected status unchanged for passive micro compact, got %q", app.state.StatusText)
+				}
+			},
+		},
+		{
+			name: "compact error event is surfaced",
+			event: agentruntime.RuntimeEvent{
+				Type:      agentruntime.EventCompactError,
+				SessionID: "s1",
+				Payload: agentruntime.CompactErrorPayload{
+					TriggerMode: agentruntime.CompactTriggerModeManual,
+					Message:     "disk full",
+				},
+			},
+			assert: func(t *testing.T, app App) {
+				t.Helper()
+				if !strings.Contains(app.state.ExecutionError, "Compact(manual) failed: disk full") {
+					t.Fatalf("expected compact error in state, got %q", app.state.ExecutionError)
+				}
+			},
+		},
+		{
+			name: "micro compact error remains non-blocking notice",
+			setup: func(app *App) {
+				app.state.StatusText = statusThinking
+			},
+			event: agentruntime.RuntimeEvent{
+				Type:      agentruntime.EventCompactError,
+				SessionID: "s1",
+				Payload: agentruntime.CompactErrorPayload{
+					TriggerMode: agentruntime.CompactTriggerModeMicro,
+					Message:     "tmp write failed",
+				},
+			},
+			assert: func(t *testing.T, app App) {
+				t.Helper()
+				if app.state.ExecutionError != "" {
+					t.Fatalf("expected no execution error for micro compact failure, got %q", app.state.ExecutionError)
+				}
+				if app.state.StatusText != statusThinking {
+					t.Fatalf("expected status unchanged for micro compact failure, got %q", app.state.StatusText)
+				}
+				if len(app.activeMessages) == 0 || !strings.Contains(app.activeMessages[len(app.activeMessages)-1].Content, "Compact(micro) skipped") {
+					t.Fatalf("expected lightweight micro compact notice, got %+v", app.activeMessages)
+				}
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -1263,6 +1358,50 @@ func TestImmediateSlashCommandsAndLayoutBranches(t *testing.T) {
 		t.Fatalf("expected /clear to reset draft state")
 	}
 
+	runtime.compactResult = agentruntime.CompactResult{
+		Applied:        true,
+		BeforeChars:    100,
+		AfterChars:     40,
+		SavedRatio:     0.6,
+		TranscriptPath: "/tmp/transcript.jsonl",
+	}
+	app.state.ActiveSessionID = "session-compact"
+	handled, cmd = app.handleImmediateSlashCommand("/compact")
+	if !handled || cmd == nil {
+		t.Fatalf("expected /compact to trigger compact cmd")
+	}
+	if app.state.StatusText != statusCompacting {
+		t.Fatalf("expected compact status %q, got %q", statusCompacting, app.state.StatusText)
+	}
+	if !app.state.IsCompacting {
+		t.Fatalf("expected /compact to mark UI as compacting")
+	}
+	msgs := collectTeaMessages(cmd)
+	if len(msgs) != 1 {
+		t.Fatalf("expected one compact command message, got %d", len(msgs))
+	}
+	if _, ok := msgs[0].(compactFinishedMsg); !ok {
+		t.Fatalf("expected compact finished msg, got %T", msgs[0])
+	}
+	if len(runtime.compactInputs) != 1 || runtime.compactInputs[0].SessionID != "session-compact" {
+		t.Fatalf("expected runtime compact call with active session, got %+v", runtime.compactInputs)
+	}
+	handled, cmd = app.handleImmediateSlashCommand("/compact")
+	if !handled || cmd != nil {
+		t.Fatalf("expected re-entrant /compact to be rejected while compacting")
+	}
+	if !strings.Contains(strings.ToLower(app.state.StatusText), "compact is already running") {
+		t.Fatalf("expected compact busy hint, got %q", app.state.StatusText)
+	}
+
+	handled, cmd = app.handleImmediateSlashCommand("/compact now")
+	if !handled || cmd != nil {
+		t.Fatalf("expected /compact with args to be handled locally with usage error")
+	}
+	if !strings.Contains(app.state.StatusText, "usage: /compact") {
+		t.Fatalf("expected /compact usage hint, got %q", app.state.StatusText)
+	}
+
 	handled, cmd = app.handleImmediateSlashCommand("/exit")
 	if !handled || cmd == nil {
 		t.Fatalf("expected /exit to return a quit cmd")
@@ -1290,6 +1429,56 @@ func TestImmediateSlashCommandsAndLayoutBranches(t *testing.T) {
 	snapshot := app.currentStatusSnapshot()
 	if snapshot.FocusLabel == "" || snapshot.CurrentProvider == "" || snapshot.CurrentModel == "" {
 		t.Fatalf("expected non-empty status snapshot fields, got %+v", snapshot)
+	}
+}
+
+func TestCompactBusyBlocksSendAndNewSession(t *testing.T) {
+	manager := newTestConfigManager(t)
+	runtime := newStubRuntime()
+	app, err := New(nil, manager, runtime, newTestProviderService(t, manager))
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	app.state.IsCompacting = true
+	app.state.ActiveSessionID = "session-existing"
+	app.state.ActiveSessionTitle = "Existing"
+	app.input.SetValue("hello")
+	app.state.InputText = "hello"
+
+	model, cmd := app.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	app = model.(App)
+	_ = collectTeaMessages(cmd)
+	if len(runtime.runInputs) != 0 {
+		t.Fatalf("expected send to be blocked while compacting, got %+v", runtime.runInputs)
+	}
+	if app.state.InputText != "hello" {
+		t.Fatalf("expected input unchanged while compacting, got %q", app.state.InputText)
+	}
+
+	model, cmd = app.Update(tea.KeyMsg{Type: tea.KeyCtrlN})
+	app = model.(App)
+	_ = collectTeaMessages(cmd)
+	if app.state.ActiveSessionID != "session-existing" {
+		t.Fatalf("expected new-session shortcut to be blocked while compacting")
+	}
+}
+
+func TestCompactFinishedMsgClearsBusyState(t *testing.T) {
+	manager := newTestConfigManager(t)
+	runtime := newStubRuntime()
+	app, err := New(nil, manager, runtime, newTestProviderService(t, manager))
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	app.state.IsCompacting = true
+	model, cmd := app.Update(compactFinishedMsg{err: nil})
+	app = model.(App)
+	_ = collectTeaMessages(cmd)
+
+	if app.state.IsCompacting {
+		t.Fatalf("expected compact finished message to clear busy compacting state")
 	}
 }
 

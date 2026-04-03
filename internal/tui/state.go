@@ -36,6 +36,7 @@ type UIState struct {
 	ActiveSessionTitle string
 	InputText          string
 	IsAgentRunning     bool
+	IsCompacting       bool
 	StreamingReply     bool
 	CurrentTool        string
 	ExecutionError     string
