@@ -15,14 +15,17 @@ const (
 	maxTotalRuleRunes = 12000
 )
 
+// ruleDocument 表示单个规则文件在提示词中的投影。
 type ruleDocument struct {
 	Path      string
 	Content   string
 	Truncated bool
 }
 
+// ruleFileFinder 抽象目录扫描逻辑，便于在测试中注入假实现。
 type ruleFileFinder func(string) (string, error)
 
+// loadProjectRules 从 workdir 向上逐级发现并加载规则文件。
 func loadProjectRules(ctx context.Context, workdir string) ([]ruleDocument, error) {
 	paths, err := discoverRuleFiles(ctx, workdir)
 	if err != nil {
@@ -32,6 +35,7 @@ func loadProjectRules(ctx context.Context, workdir string) ([]ruleDocument, erro
 	return loadRuleDocuments(ctx, paths, os.ReadFile)
 }
 
+// loadRuleDocuments 读取并截断规则文件内容，避免单文件过大挤占上下文预算。
 func loadRuleDocuments(ctx context.Context, paths []string, readFile func(string) ([]byte, error)) ([]ruleDocument, error) {
 	documents := make([]ruleDocument, 0, len(paths))
 	for _, path := range paths {
@@ -55,10 +59,13 @@ func loadRuleDocuments(ctx context.Context, paths []string, readFile func(string
 	return documents, nil
 }
 
+// discoverRuleFiles 执行默认规则文件发现策略。
 func discoverRuleFiles(ctx context.Context, workdir string) ([]string, error) {
 	return discoverRuleFilesWithFinder(ctx, workdir, findExactRuleFile)
 }
 
+// discoverRuleFilesWithFinder 从当前目录向上遍历到根目录，收集匹配规则文件。
+// 返回顺序会反转为“从上层到下层”，让更顶层规则先出现。
 func discoverRuleFilesWithFinder(ctx context.Context, workdir string, finder ruleFileFinder) ([]string, error) {
 	workdir = strings.TrimSpace(workdir)
 	if workdir == "" {
@@ -98,6 +105,7 @@ func discoverRuleFilesWithFinder(ctx context.Context, workdir string, finder rul
 	return paths, nil
 }
 
+// findExactRuleFile 在单个目录内查找严格大小写匹配的 AGENTS.md。
 func findExactRuleFile(dir string) (string, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -119,6 +127,8 @@ func findExactRuleFile(dir string) (string, error) {
 	return "", nil
 }
 
+// renderProjectRulesSection 在总预算内渲染规则分节。
+// 当预算不足时，优先保留靠近工作目录的规则并标记截断提示。
 func renderProjectRulesSection(documents []ruleDocument) promptSection {
 	if len(documents) == 0 {
 		return promptSection{}
@@ -167,6 +177,7 @@ func renderProjectRulesSection(documents []ruleDocument) promptSection {
 	}
 }
 
+// renderRuleDocumentChunk 渲染单个规则文件块（不考虑总预算）。
 func renderRuleDocumentChunk(document ruleDocument) string {
 	var builder strings.Builder
 	builder.WriteString("\n### ")
@@ -184,6 +195,8 @@ func renderRuleDocumentChunk(document ruleDocument) string {
 	return builder.String()
 }
 
+// renderRuleDocumentChunkWithinBudget 在给定字符预算内渲染单个规则文件块。
+// 若预算不足以容纳标题，则直接返回空字符串。
 func renderRuleDocumentChunkWithinBudget(document ruleDocument, budget int) string {
 	if budget <= 0 {
 		return ""
@@ -224,6 +237,7 @@ func renderRuleDocumentChunkWithinBudget(document ruleDocument, budget int) stri
 	return header + body.String()
 }
 
+// truncateRunes 按 rune（而非字节）截断，避免 UTF-8 多字节字符被破坏。
 func truncateRunes(input string, max int) (string, bool) {
 	if max <= 0 {
 		return "", input != ""
@@ -236,6 +250,7 @@ func truncateRunes(input string, max int) (string, bool) {
 	return string(runes[:max]), true
 }
 
+// runeCount 统一使用 rune 数进行长度预算计算。
 func runeCount(input string) int {
 	return utf8.RuneCountInString(input)
 }

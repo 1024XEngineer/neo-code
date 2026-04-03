@@ -2,11 +2,15 @@ package context
 
 import "strings"
 
+// promptSection 表示 system prompt 的一个结构化分节。
+// 约定：title 为空时只输出内容；content 为空时该节忽略。
 type promptSection struct {
 	title   string
 	content string
 }
 
+// defaultPromptSections 定义默认系统提示词骨架。
+// 这些内容为通用行为约束，项目规则与系统态会在后续阶段追加。
 var defaultPromptSections = []promptSection{
 	{
 		title: "Agent Identity",
@@ -49,6 +53,8 @@ func defaultSystemPromptSections() []promptSection {
 	return defaultPromptSections
 }
 
+// composeSystemPrompt 将多个分节拼接为最终系统提示词。
+// 空分节会被自动跳过，保证输出紧凑。
 func composeSystemPrompt(sections ...promptSection) string {
 	rendered := make([]string, 0, len(sections))
 	for _, section := range sections {
@@ -61,6 +67,10 @@ func composeSystemPrompt(sections ...promptSection) string {
 	return strings.Join(rendered, "\n\n")
 }
 
+// renderPromptSection 负责单节渲染，输出格式为：
+// ## Title
+//
+// Content
 func renderPromptSection(section promptSection) string {
 	title := strings.TrimSpace(section.title)
 	content := strings.TrimSpace(section.content)
