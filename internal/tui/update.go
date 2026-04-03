@@ -39,6 +39,10 @@ const (
 	composerMaxHeight   = 5
 	composerPromptWidth = 2
 	mouseWheelStepLines = 3
+	pasteBurstWindow    = 120 * time.Millisecond
+	pasteEnterGuard     = 180 * time.Millisecond
+	pasteSessionGuard   = 5 * time.Second
+	pasteBurstThreshold = 12
 )
 
 func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -159,6 +163,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if a.handleTranscriptMouse(typed) {
 			return a, tea.Batch(cmds...)
 		}
+		if a.handleInputMouse(typed) {
+			return a, tea.Batch(cmds...)
+		}
 	case tea.KeyMsg:
 		if key.Matches(typed, a.keys.Quit) {
 			return a, tea.Quit
@@ -178,8 +185,14 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if a.state.ActivePicker != pickerNone {
 			return a.updatePicker(typed)
 		}
-		if a.focus == panelInput && key.Matches(typed, a.keys.NextPanel) && a.applyTopFileSuggestion() {
-			return a, tea.Batch(cmds...)
+		if a.focus == panelInput && key.Matches(typed, a.keys.NextPanel) {
+			if a.applyTopFileSuggestion() {
+				return a, tea.Batch(cmds...)
+			}
+			if a.shouldHandleTabAsInput(typed) {
+				tabMsg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'\t'}, Paste: typed.Paste}
+				return a.updateInputPanel(tabMsg, tabMsg, cmds)
+			}
 		}
 		if key.Matches(typed, a.keys.NextPanel) {
 			a.focusNext()
@@ -228,92 +241,198 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (tea.Model, tea.Cmd) {
+	now := a.now()
+	effectiveTyped := typed
+
 	if key.Matches(typed, a.keys.Send) {
-		input := strings.TrimSpace(a.input.Value())
-		if input == "" || a.state.IsAgentRunning {
-			return a, tea.Batch(cmds...)
-		}
-
-		a.input.Reset()
-		a.state.InputText = ""
-		a.resizeComponents()
-
-		if handled, cmd := a.handleImmediateSlashCommand(input); handled {
-			if cmd != nil {
-				cmds = append(cmds, cmd)
-			}
-			return a, tea.Batch(cmds...)
-		}
-
-		switch strings.ToLower(input) {
-		case slashCommandProvider:
-			if err := a.refreshProviderPicker(); err != nil {
-				a.state.ExecutionError = err.Error()
-				a.state.StatusText = err.Error()
-				a.appendActivity("system", "Failed to refresh providers", err.Error(), true)
+		if a.shouldTreatEnterAsNewline(typed, now) {
+			a.growComposerForNewline()
+			msg = tea.KeyMsg{Type: tea.KeyEnter}
+			effectiveTyped = tea.KeyMsg{Type: tea.KeyEnter, Paste: true}
+		} else {
+			input := strings.TrimSpace(a.input.Value())
+			if input == "" || a.state.IsAgentRunning {
 				return a, tea.Batch(cmds...)
 			}
-			a.openProviderPicker()
-			return a, tea.Batch(cmds...)
-		case slashCommandModelPick:
-			if err := a.refreshModelPicker(); err != nil {
-				a.state.ExecutionError = err.Error()
-				a.state.StatusText = err.Error()
-				a.appendActivity("system", "Failed to refresh models", err.Error(), true)
-				return a, tea.Batch(cmds...)
-			}
-			a.openModelPicker()
-			if cmd := a.requestModelCatalogRefresh(a.state.CurrentProvider); cmd != nil {
-				cmds = append(cmds, cmd)
-			}
-			return a, tea.Batch(cmds...)
-		}
 
-		if strings.HasPrefix(input, slashPrefix) {
-			a.state.StatusText = statusApplyingCommand
-			cmds = append(cmds, runLocalCommand(a.configManager, a.providerSvc, a.currentStatusSnapshot(), input))
-			return a, tea.Batch(cmds...)
-		}
-		if isWorkspaceCommandInput(input) {
-			command, err := extractWorkspaceCommand(input)
-			if err != nil {
-				a.state.ExecutionError = err.Error()
-				a.state.StatusText = err.Error()
-				a.appendActivity("command", "Invalid workspace command", err.Error(), true)
+			a.input.Reset()
+			a.state.InputText = ""
+			a.resizeComponents()
+			a.resetPasteHeuristics()
+
+			if handled, cmd := a.handleImmediateSlashCommand(input); handled {
+				if cmd != nil {
+					cmds = append(cmds, cmd)
+				}
 				return a, tea.Batch(cmds...)
 			}
+
+			switch strings.ToLower(input) {
+			case slashCommandProvider:
+				if err := a.refreshProviderPicker(); err != nil {
+					a.state.ExecutionError = err.Error()
+					a.state.StatusText = err.Error()
+					a.appendActivity("system", "Failed to refresh providers", err.Error(), true)
+					return a, tea.Batch(cmds...)
+				}
+				a.openProviderPicker()
+				return a, tea.Batch(cmds...)
+			case slashCommandModelPick:
+				if err := a.refreshModelPicker(); err != nil {
+					a.state.ExecutionError = err.Error()
+					a.state.StatusText = err.Error()
+					a.appendActivity("system", "Failed to refresh models", err.Error(), true)
+					return a, tea.Batch(cmds...)
+				}
+				a.openModelPicker()
+				if cmd := a.requestModelCatalogRefresh(a.state.CurrentProvider); cmd != nil {
+					cmds = append(cmds, cmd)
+				}
+				return a, tea.Batch(cmds...)
+			}
+
+			if strings.HasPrefix(input, slashPrefix) {
+				a.state.StatusText = statusApplyingCommand
+				cmds = append(cmds, runLocalCommand(a.configManager, a.providerSvc, a.currentStatusSnapshot(), input))
+				return a, tea.Batch(cmds...)
+			}
+			if isWorkspaceCommandInput(input) {
+				command, err := extractWorkspaceCommand(input)
+				if err != nil {
+					a.state.ExecutionError = err.Error()
+					a.state.StatusText = err.Error()
+					a.appendActivity("command", "Invalid workspace command", err.Error(), true)
+					return a, tea.Batch(cmds...)
+				}
+				a.activities = nil
+				a.state.StatusText = statusRunningCommand
+				a.state.ExecutionError = ""
+				a.appendActivity("command", "Running command", command, false)
+				cmds = append(cmds, runWorkspaceCommand(a.configManager, input))
+				return a, tea.Batch(cmds...)
+			}
+
 			a.activities = nil
-			a.state.StatusText = statusRunningCommand
+			a.state.IsAgentRunning = true
+			a.state.StreamingReply = false
 			a.state.ExecutionError = ""
-			a.appendActivity("command", "Running command", command, false)
-			cmds = append(cmds, runWorkspaceCommand(a.configManager, input))
+			a.state.StatusText = statusThinking
+			a.state.CurrentTool = ""
+			a.activeMessages = append(a.activeMessages, provider.Message{Role: roleUser, Content: input})
+			a.rebuildTranscript()
+			cmds = append(cmds, runAgent(a.runtime, a.state.ActiveSessionID, input))
 			return a, tea.Batch(cmds...)
 		}
-
-		a.activities = nil
-		a.state.IsAgentRunning = true
-		a.state.StreamingReply = false
-		a.state.ExecutionError = ""
-		a.state.StatusText = statusThinking
-		a.state.CurrentTool = ""
-		a.activeMessages = append(a.activeMessages, provider.Message{Role: roleUser, Content: input})
-		a.rebuildTranscript()
-		cmds = append(cmds, runAgent(a.runtime, a.state.ActiveSessionID, input))
-		return a, tea.Batch(cmds...)
 	}
 
 	if key.Matches(typed, a.keys.Newline) {
 		a.growComposerForNewline()
 		msg = tea.KeyMsg{Type: tea.KeyEnter}
+		effectiveTyped = tea.KeyMsg{Type: tea.KeyEnter}
 	}
 
+	before := a.input.Value()
 	var cmd tea.Cmd
 	a.input, cmd = a.input.Update(msg)
 	a.state.InputText = a.input.Value()
+	a.noteInputEdit(before, a.state.InputText, effectiveTyped, now)
 	a.normalizeComposerHeight()
 	a.resizeComposerLayout()
 	cmds = append(cmds, cmd)
 	return a, tea.Batch(cmds...)
+}
+
+func (a App) now() time.Time {
+	if a.nowFn == nil {
+		return time.Now()
+	}
+	return a.nowFn()
+}
+
+func (a *App) shouldTreatEnterAsNewline(typed tea.KeyMsg, now time.Time) bool {
+	if !key.Matches(typed, a.keys.Send) || a.state.IsAgentRunning {
+		return false
+	}
+	if typed.Paste {
+		a.pasteMode = true
+		a.lastPasteLikeAt = now
+		return true
+	}
+	if a.pasteMode &&
+		!a.lastPasteLikeAt.IsZero() &&
+		!a.lastInputEditAt.IsZero() &&
+		now.Sub(a.lastPasteLikeAt) <= pasteSessionGuard &&
+		now.Sub(a.lastInputEditAt) <= pasteEnterGuard {
+		return true
+	}
+	if a.pasteMode && !a.lastPasteLikeAt.IsZero() && now.Sub(a.lastPasteLikeAt) > pasteSessionGuard {
+		a.pasteMode = false
+	}
+	if a.lastPasteLikeAt.IsZero() {
+		return false
+	}
+	return now.Sub(a.lastPasteLikeAt) <= pasteEnterGuard
+}
+
+func (a *App) noteInputEdit(before string, after string, typed tea.KeyMsg, now time.Time) {
+	if before == after {
+		return
+	}
+
+	prevEditAt := a.lastInputEditAt
+	a.lastInputEditAt = now
+
+	if key.Matches(typed, a.keys.Newline) {
+		a.inputBurstStart = time.Time{}
+		a.inputBurstCount = 0
+		return
+	}
+
+	pasteLike := typed.Paste
+
+	switch typed.Type {
+	case tea.KeyRunes:
+		runeCount := len(typed.Runes)
+		if runeCount > 1 {
+			pasteLike = true
+		}
+		if strings.ContainsRune(string(typed.Runes), '\n') || strings.ContainsRune(string(typed.Runes), '\r') {
+			pasteLike = true
+		}
+		if runeCount > 0 {
+			if prevEditAt.IsZero() || now.Sub(prevEditAt) > pasteBurstWindow || a.inputBurstCount == 0 {
+				a.inputBurstStart = now
+				a.inputBurstCount = runeCount
+			} else {
+				a.inputBurstCount += runeCount
+			}
+			if a.inputBurstCount >= pasteBurstThreshold {
+				pasteLike = true
+			}
+		}
+	case tea.KeyEnter:
+		if typed.Paste && strings.Count(after, "\n") > strings.Count(before, "\n") {
+			pasteLike = true
+		}
+		a.inputBurstStart = time.Time{}
+		a.inputBurstCount = 0
+	default:
+		a.inputBurstStart = time.Time{}
+		a.inputBurstCount = 0
+	}
+
+	if pasteLike {
+		a.lastPasteLikeAt = now
+		a.pasteMode = true
+	}
+}
+
+func (a *App) resetPasteHeuristics() {
+	a.lastInputEditAt = time.Time{}
+	a.lastPasteLikeAt = time.Time{}
+	a.inputBurstStart = time.Time{}
+	a.inputBurstCount = 0
+	a.pasteMode = false
 }
 
 func (a App) updatePicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -603,17 +722,50 @@ func (a *App) handleViewportKeys(vp *viewport.Model, msg tea.KeyMsg) {
 }
 
 func (a *App) handleTranscriptMouse(msg tea.MouseMsg) bool {
+	switch {
+	case msg.Button == tea.MouseButtonWheelUp && (msg.Action == tea.MouseActionPress || msg.Type == tea.MouseWheelUp):
+		if !a.isMouseWithinTranscript(msg) {
+			return false
+		}
+		a.transcript.LineUp(mouseWheelStepLines)
+		return true
+	case msg.Button == tea.MouseButtonWheelDown && (msg.Action == tea.MouseActionPress || msg.Type == tea.MouseWheelDown):
+		if !a.isMouseWithinTranscript(msg) {
+			return false
+		}
+		a.transcript.LineDown(mouseWheelStepLines)
+		return true
+	}
+
 	if !a.isMouseWithinTranscript(msg) {
+		if msg.Action == tea.MouseActionRelease || msg.Type == tea.MouseRelease {
+			a.pendingCopyID = 0
+		}
 		return false
 	}
 
-	switch msg.Button {
-	case tea.MouseButtonWheelUp:
-		a.transcript.LineUp(mouseWheelStepLines)
-		return true
-	case tea.MouseButtonWheelDown:
-		a.transcript.LineDown(mouseWheelStepLines)
-		return true
+	switch {
+	case msg.Action == tea.MouseActionMotion || msg.Type == tea.MouseMotion:
+		return false
+	case msg.Button == tea.MouseButtonLeft && msg.Action == tea.MouseActionPress:
+		if buttonID, ok := a.copyButtonIDAtMouse(msg); ok {
+			a.pendingCopyID = buttonID
+			return true
+		}
+		a.pendingCopyID = 0
+		return false
+	case msg.Action == tea.MouseActionRelease || msg.Type == tea.MouseRelease:
+		defer func() { a.pendingCopyID = 0 }()
+
+		buttonID, ok := a.copyButtonIDAtMouse(msg)
+		if !ok {
+			return false
+		}
+
+		if a.pendingCopyID != 0 && a.pendingCopyID != buttonID {
+			return false
+		}
+		return a.copyCodeBlockByID(buttonID)
 	default:
 		return false
 	}
@@ -643,6 +795,87 @@ func (a App) transcriptBounds() (int, int, int, int) {
 	}
 
 	return streamX, streamY, lay.rightWidth, a.transcript.Height
+}
+
+func (a App) isMouseWithinInput(msg tea.MouseMsg) bool {
+	x, y, width, height := a.inputBounds()
+	if width <= 0 || height <= 0 {
+		return false
+	}
+	return msg.X >= x && msg.X < x+width && msg.Y >= y && msg.Y < y+height
+}
+
+func (a App) inputBounds() (int, int, int, int) {
+	lay := a.computeLayout()
+	contentX := a.styles.doc.GetPaddingLeft()
+	contentY := a.styles.doc.GetPaddingTop()
+	headerHeight := lipgloss.Height(a.renderHeader(lay.contentWidth))
+	bodyY := contentY + headerHeight
+
+	streamX := contentX
+	streamY := bodyY
+	if lay.stacked {
+		streamY += lay.sidebarHeight
+	} else {
+		streamX += lay.sidebarWidth + lay.bodyGap
+	}
+
+	inputY := streamY + a.transcript.Height + a.activityPreviewHeight() + a.commandMenuHeight(max(24, lay.rightWidth))
+	inputHeight := lipgloss.Height(a.renderPrompt(max(24, lay.rightWidth)))
+	return streamX, inputY, lay.rightWidth, inputHeight
+}
+
+func (a *App) handleInputMouse(msg tea.MouseMsg) bool {
+	if !a.isMouseWithinInput(msg) {
+		return false
+	}
+	if a.state.ActivePicker != pickerNone {
+		return false
+	}
+
+	switch {
+	case msg.Button == tea.MouseButtonWheelUp && (msg.Action == tea.MouseActionPress || msg.Type == tea.MouseWheelUp):
+		a.scrollInputPage(-1)
+		return true
+	case msg.Button == tea.MouseButtonWheelDown && (msg.Action == tea.MouseActionPress || msg.Type == tea.MouseWheelDown):
+		a.scrollInputPage(1)
+		return true
+	default:
+		return false
+	}
+}
+
+func (a *App) scrollInputPage(direction int) {
+	if direction == 0 {
+		return
+	}
+	if a.focus != panelInput {
+		a.focus = panelInput
+		a.applyFocus()
+	}
+
+	step := max(1, a.input.Height()-1)
+	keyType := tea.KeyUp
+	if direction > 0 {
+		keyType = tea.KeyDown
+	}
+
+	for i := 0; i < step; i++ {
+		var cmd tea.Cmd
+		a.input, cmd = a.input.Update(tea.KeyMsg{Type: keyType})
+		_ = cmd
+	}
+	a.state.InputText = a.input.Value()
+}
+
+func (a App) shouldHandleTabAsInput(typed tea.KeyMsg) bool {
+	if a.focus != panelInput || a.state.ActivePicker != pickerNone || typed.Type != tea.KeyTab {
+		return false
+	}
+	if typed.Paste || a.pasteMode {
+		return true
+	}
+	return strings.TrimSpace(a.input.Value()) != ""
 }
 
 func (a *App) focusNext() {
@@ -751,6 +984,7 @@ func (a *App) normalizeComposerHeight() {
 func (a *App) rebuildTranscript() {
 	width := max(24, a.transcript.Width)
 	if len(a.activeMessages) == 0 {
+		a.setCodeCopyBlocks(nil)
 		a.transcript.SetContent(a.styles.empty.Width(width).Render(emptyConversationText))
 		a.transcript.GotoTop()
 		return
@@ -758,9 +992,15 @@ func (a *App) rebuildTranscript() {
 
 	atBottom := a.transcript.AtBottom()
 	blocks := make([]string, 0, len(a.activeMessages))
+	copyButtons := make([]copyCodeButtonBinding, 0, 4)
+	nextCopyID := 1
 	for _, message := range a.activeMessages {
-		blocks = append(blocks, a.renderMessageBlock(message, width))
+		rendered, bindings := a.renderMessageBlockWithCopy(message, width, nextCopyID)
+		blocks = append(blocks, rendered)
+		copyButtons = append(copyButtons, bindings...)
+		nextCopyID += len(bindings)
 	}
+	a.setCodeCopyBlocks(copyButtons)
 
 	a.transcript.SetContent(strings.Join(blocks, "\n\n"))
 	if atBottom || a.state.IsAgentRunning {

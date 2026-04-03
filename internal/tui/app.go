@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/list"
@@ -17,26 +18,35 @@ import (
 )
 
 type App struct {
-	state          UIState
-	configManager  *config.Manager
-	providerSvc    ProviderController
-	runtime        agentruntime.Runtime
-	keys           keyMap
-	help           help.Model
-	spinner        spinner.Model
-	sessions       list.Model
-	providerPicker list.Model
-	modelPicker    list.Model
-	transcript     viewport.Model
-	input          textarea.Model
-	activeMessages []provider.Message
-	activities     []activityEntry
-	fileCandidates []string
-	modelRefreshID string
-	focus          panel
-	width          int
-	height         int
-	styles         styles
+	state            UIState
+	configManager    *config.Manager
+	providerSvc      ProviderController
+	runtime          agentruntime.Runtime
+	keys             keyMap
+	help             help.Model
+	spinner          spinner.Model
+	sessions         list.Model
+	providerPicker   list.Model
+	modelPicker      list.Model
+	transcript       viewport.Model
+	input            textarea.Model
+	markdownRenderer markdownContentRenderer
+	codeCopyBlocks   map[int]string
+	pendingCopyID    int
+	nowFn            func() time.Time
+	lastInputEditAt  time.Time
+	lastPasteLikeAt  time.Time
+	inputBurstStart  time.Time
+	inputBurstCount  int
+	pasteMode        bool
+	activeMessages   []provider.Message
+	activities       []activityEntry
+	fileCandidates   []string
+	modelRefreshID   string
+	focus            panel
+	width            int
+	height           int
+	styles           styles
 }
 
 func New(cfg *config.Config, configManager *config.Manager, runtime agentruntime.Runtime, providerSvc ProviderController) (App, error) {
@@ -52,6 +62,10 @@ func New(cfg *config.Config, configManager *config.Manager, runtime agentruntime
 	}
 
 	uiStyles := newStyles()
+	markdownRenderer, err := newMarkdownRenderer()
+	if err != nil {
+		return App{}, err
+	}
 	keys := newKeyMap()
 	delegate := sessionDelegate{styles: uiStyles}
 	sessionList := list.New([]list.Item{}, delegate, 0, 0)
@@ -68,7 +82,7 @@ func New(cfg *config.Config, configManager *config.Manager, runtime agentruntime
 
 	input := textarea.New()
 	input.Placeholder = "Ask NeoCode to inspect, edit, or build. Type / to browse commands."
-	input.CharLimit = 24000
+	input.CharLimit = 0
 	input.ShowLineNumbers = false
 	input.SetPromptFunc(composerPromptWidth, func(line int) string {
 		return "> "
@@ -105,21 +119,24 @@ func New(cfg *config.Config, configManager *config.Manager, runtime agentruntime
 			ActiveSessionTitle: draftSessionTitle,
 			Focus:              panelInput,
 		},
-		configManager:  configManager,
-		providerSvc:    providerSvc,
-		runtime:        runtime,
-		keys:           keys,
-		help:           h,
-		spinner:        spin,
-		sessions:       sessionList,
-		providerPicker: newProviderPicker(nil),
-		modelPicker:    newModelPicker(nil),
-		transcript:     viewport.New(0, 0),
-		input:          input,
-		focus:          panelInput,
-		width:          128,
-		height:         40,
-		styles:         uiStyles,
+		configManager:    configManager,
+		providerSvc:      providerSvc,
+		runtime:          runtime,
+		keys:             keys,
+		help:             h,
+		spinner:          spin,
+		sessions:         sessionList,
+		providerPicker:   newProviderPicker(nil),
+		modelPicker:      newModelPicker(nil),
+		transcript:       viewport.New(0, 0),
+		input:            input,
+		markdownRenderer: markdownRenderer,
+		codeCopyBlocks:   make(map[int]string),
+		nowFn:            time.Now,
+		focus:            panelInput,
+		width:            128,
+		height:           40,
+		styles:           uiStyles,
 	}
 
 	if err := app.refreshSessions(); err != nil {

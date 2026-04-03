@@ -57,6 +57,7 @@ type styles struct {
 	inlineSystem      lipgloss.Style
 	codeBlock         lipgloss.Style
 	codeText          lipgloss.Style
+	codeCopyButton    lipgloss.Style
 	commandMenu       lipgloss.Style
 	commandMenuTitle  lipgloss.Style
 	commandUsage      lipgloss.Style
@@ -185,6 +186,10 @@ func newStyles() styles {
 			BorderForeground(lipgloss.Color(colorPrimary)),
 		codeText: lipgloss.NewStyle().
 			Foreground(lipgloss.Color(colorText)),
+		codeCopyButton: lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color(colorPrimary)).
+			Underline(true),
 		commandMenu: lipgloss.NewStyle().
 			UnsetBackground().
 			Padding(1, 1),
