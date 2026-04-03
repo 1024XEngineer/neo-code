@@ -12,6 +12,159 @@ import (
 	domain "neo-code/internal/provider"
 )
 
+func TestDriver(t *testing.T) {
+	t.Parallel()
+
+	driver := Driver()
+	if driver.Name != DriverName {
+		t.Fatalf("expected driver name %q, got %q", DriverName, driver.Name)
+	}
+	if driver.Build == nil {
+		t.Fatal("expected Build function to be non-nil")
+	}
+	if driver.Discover == nil {
+		t.Fatal("expected Discover function to be non-nil")
+	}
+}
+
+func TestWithTransport(t *testing.T) {
+	t.Parallel()
+
+	customTransport := &http.Transport{}
+	cfg := resolvedConfig("", "")
+
+	provider, err := New(cfg, WithTransport(customTransport))
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	if provider.client.Transport != customTransport {
+		t.Fatal("expected custom transport to be set")
+	}
+}
+
+func TestDefaultRetryTransport(t *testing.T) {
+	t.Parallel()
+
+	transport := defaultRetryTransport()
+	if transport == nil {
+		t.Fatal("expected non-nil transport")
+	}
+}
+
+func TestDiscoverModels(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/models" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": []map[string]any{
+				{"id": "gpt-4", "name": "GPT-4"},
+				{"id": "gpt-3.5-turbo"},
+			},
+		})
+	}))
+	defer server.Close()
+
+	provider, err := New(resolvedConfig(server.URL, ""))
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	provider.client = server.Client()
+
+	models, err := provider.DiscoverModels(context.Background())
+	if err != nil {
+		t.Fatalf("DiscoverModels() error = %v", err)
+	}
+	if len(models) != 2 {
+		t.Fatalf("expected 2 models, got %d", len(models))
+	}
+	if models[0].ID != "gpt-4" || models[0].Name != "GPT-4" {
+		t.Fatalf("unexpected first model: %+v", models[0])
+	}
+}
+
+func TestEmitToolCallDelta(t *testing.T) {
+	t.Parallel()
+
+	t.Run("nil events guard", func(t *testing.T) {
+		t.Parallel()
+		if err := emitToolCallDelta(context.Background(), nil, 0, "args"); err != nil {
+			t.Fatalf("expected nil events guard to return nil, got %v", err)
+		}
+	})
+
+	t.Run("empty arguments guard", func(t *testing.T) {
+		t.Parallel()
+		events := make(chan domain.StreamEvent, 1)
+		if err := emitToolCallDelta(context.Background(), events, 0, ""); err != nil {
+			t.Fatalf("expected empty arguments guard to return nil, got %v", err)
+		}
+		select {
+		case <-events:
+			t.Fatal("expected no event for empty arguments")
+		default:
+		}
+	})
+
+	t.Run("normal send", func(t *testing.T) {
+		t.Parallel()
+		events := make(chan domain.StreamEvent, 1)
+		if err := emitToolCallDelta(context.Background(), events, 3, `{"path":"main.go"}`); err != nil {
+			t.Fatalf("emitToolCallDelta() error = %v", err)
+		}
+		got := <-events
+		if got.Type != domain.StreamEventToolCallDelta || got.ToolCallIndex != 3 || got.ToolArgumentsDelta != `{"path":"main.go"}` {
+			t.Fatalf("unexpected event: %+v", got)
+		}
+	})
+
+	t.Run("context cancellation", func(t *testing.T) {
+		t.Parallel()
+		cancelledCtx, cancel := context.WithCancel(context.Background())
+		cancel()
+		if err := emitToolCallDelta(cancelledCtx, make(chan domain.StreamEvent), 0, "args"); err == nil {
+			t.Fatal("expected cancellation error")
+		}
+	})
+}
+
+func TestEmitMessageDone(t *testing.T) {
+	t.Parallel()
+
+	t.Run("nil events guard", func(t *testing.T) {
+		t.Parallel()
+		if err := emitMessageDone(context.Background(), nil, "stop", nil); err != nil {
+			t.Fatalf("expected nil events guard to return nil, got %v", err)
+		}
+	})
+
+	t.Run("normal send", func(t *testing.T) {
+		t.Parallel()
+		events := make(chan domain.StreamEvent, 1)
+		usage := &domain.Usage{TotalTokens: 100}
+		if err := emitMessageDone(context.Background(), events, "stop", usage); err != nil {
+			t.Fatalf("emitMessageDone() error = %v", err)
+		}
+		got := <-events
+		if got.Type != domain.StreamEventMessageDone || got.FinishReason != "stop" || got.Usage.TotalTokens != 100 {
+			t.Fatalf("unexpected event: %+v", got)
+		}
+	})
+
+	t.Run("context cancellation", func(t *testing.T) {
+		t.Parallel()
+		cancelledCtx, cancel := context.WithCancel(context.Background())
+		cancel()
+		if err := emitMessageDone(cancelledCtx, make(chan domain.StreamEvent), "stop", nil); err == nil {
+			t.Fatal("expected cancellation error")
+		}
+	})
+}
+
 func resolvedConfig(baseURL string, model string) config.ResolvedProviderConfig {
 	if strings.TrimSpace(baseURL) == "" {
 		baseURL = config.OpenAIDefaultBaseURL
@@ -524,146 +677,6 @@ func TestProviderChatEmitsToolCallStartEvent(t *testing.T) {
 	if !foundToolCallStart {
 		t.Fatalf("expected StreamEventToolCallStart event in stream")
 	}
-}
-
-// TestEmitToolCallDeltaGuards 测试 emitToolCallDelta 的边界保护。
-func TestEmitToolCallDeltaGuards(t *testing.T) {
-	t.Parallel()
-
-	t.Run("nil events channel returns nil", func(t *testing.T) {
-		t.Parallel()
-		err := emitToolCallDelta(context.Background(), nil, 0, `{"path":"a.go"}`)
-		if err != nil {
-			t.Fatalf("expected nil error, got %v", err)
-		}
-	})
-
-	t.Run("empty arguments returns nil", func(t *testing.T) {
-		t.Parallel()
-		events := make(chan domain.StreamEvent, 1)
-		err := emitToolCallDelta(context.Background(), events, 0, "")
-		if err != nil {
-			t.Fatalf("expected nil error, got %v", err)
-		}
-		if len(events) != 0 {
-			t.Fatalf("expected no events, got %d", len(events))
-		}
-	})
-
-	t.Run("valid arguments sends event with correct fields", func(t *testing.T) {
-		t.Parallel()
-		events := make(chan domain.StreamEvent, 1)
-		err := emitToolCallDelta(context.Background(), events, 2, `{"path":"a.go"}`)
-		if err != nil {
-			t.Fatalf("expected nil error, got %v", err)
-		}
-
-		select {
-		case evt := <-events:
-			if evt.Type != domain.StreamEventToolCallDelta {
-				t.Fatalf("expected type %s, got %s", domain.StreamEventToolCallDelta, evt.Type)
-			}
-			if evt.ToolCallIndex != 2 {
-				t.Fatalf("expected ToolCallIndex %d, got %d", 2, evt.ToolCallIndex)
-			}
-			if evt.ToolArgumentsDelta != `{"path":"a.go"}` {
-				t.Fatalf("expected ToolArgumentsDelta %q, got %q", `{"path":"a.go"}`, evt.ToolArgumentsDelta)
-			}
-		default:
-			t.Fatal("expected event in channel")
-		}
-	})
-
-	t.Run("context cancellation returns error", func(t *testing.T) {
-		t.Parallel()
-		ctx, cancel := context.WithCancel(context.Background())
-		cancel()
-
-		events := make(chan domain.StreamEvent, 1)
-		err := emitToolCallDelta(ctx, events, 0, `{"path":"a.go"}`)
-		if err == nil {
-			t.Fatal("expected error from canceled context")
-		}
-		if err != context.Canceled {
-			t.Fatalf("expected context.Canceled, got %v", err)
-		}
-	})
-}
-
-// TestEmitMessageDoneGuards 测试 emitMessageDone 的边界保护。
-func TestEmitMessageDoneGuards(t *testing.T) {
-	t.Parallel()
-
-	t.Run("nil events channel returns nil", func(t *testing.T) {
-		t.Parallel()
-		usage := &domain.Usage{InputTokens: 100, OutputTokens: 50, TotalTokens: 150}
-		err := emitMessageDone(context.Background(), nil, "stop", usage)
-		if err != nil {
-			t.Fatalf("expected nil error, got %v", err)
-		}
-	})
-
-	t.Run("valid message_done sends event with correct fields", func(t *testing.T) {
-		t.Parallel()
-		events := make(chan domain.StreamEvent, 1)
-		usage := &domain.Usage{InputTokens: 100, OutputTokens: 50, TotalTokens: 150}
-		err := emitMessageDone(context.Background(), events, "tool_calls", usage)
-		if err != nil {
-			t.Fatalf("expected nil error, got %v", err)
-		}
-
-		select {
-		case evt := <-events:
-			if evt.Type != domain.StreamEventMessageDone {
-				t.Fatalf("expected type %s, got %s", domain.StreamEventMessageDone, evt.Type)
-			}
-			if evt.FinishReason != "tool_calls" {
-				t.Fatalf("expected FinishReason %q, got %q", "tool_calls", evt.FinishReason)
-			}
-			if evt.Usage == nil {
-				t.Fatal("expected Usage to be non-nil")
-			}
-			if evt.Usage.InputTokens != 100 || evt.Usage.OutputTokens != 50 || evt.Usage.TotalTokens != 150 {
-				t.Fatalf("expected Usage %+v, got %+v", usage, evt.Usage)
-			}
-		default:
-			t.Fatal("expected event in channel")
-		}
-	})
-
-	t.Run("nil usage is allowed", func(t *testing.T) {
-		t.Parallel()
-		events := make(chan domain.StreamEvent, 1)
-		err := emitMessageDone(context.Background(), events, "stop", nil)
-		if err != nil {
-			t.Fatalf("expected nil error, got %v", err)
-		}
-
-		select {
-		case evt := <-events:
-			if evt.Usage != nil {
-				t.Fatalf("expected Usage to be nil, got %+v", evt.Usage)
-			}
-		default:
-			t.Fatal("expected event in channel")
-		}
-	})
-
-	t.Run("context cancellation returns error", func(t *testing.T) {
-		t.Parallel()
-		ctx, cancel := context.WithCancel(context.Background())
-		cancel()
-
-		events := make(chan domain.StreamEvent, 1)
-		usage := &domain.Usage{InputTokens: 100, OutputTokens: 50, TotalTokens: 150}
-		err := emitMessageDone(ctx, events, "stop", usage)
-		if err == nil {
-			t.Fatal("expected error from canceled context")
-		}
-		if err != context.Canceled {
-			t.Fatalf("expected context.Canceled, got %v", err)
-		}
-	})
 }
 
 // TestProviderChatEmitsFullEventStream 测试完整的事件流（包括 tool_call_delta 和 message_done）。

@@ -193,6 +193,153 @@ func TestServiceSelectProviderRejectsUnsupportedDriver(t *testing.T) {
 	}
 }
 
+func TestServiceListModelsSnapshot(t *testing.T) {
+	t.Parallel()
+
+	manager := newTestManager(t, config.DefaultConfig())
+	registry := newRegistry(t, config.OpenAIName, nil)
+	service := NewService(manager, registry, providercatalog.NewService("", registry, newCatalogStoreStub()))
+
+	models, err := service.ListModelsSnapshot(context.Background())
+	if err != nil {
+		t.Fatalf("ListModelsSnapshot() error = %v", err)
+	}
+	if len(models) != 1 || models[0].ID != config.OpenAIDefaultModel {
+		t.Fatalf("expected default model fallback, got %+v", models)
+	}
+}
+
+func TestServiceValidateErrors(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		service *Service
+		errMsg  string
+	}{
+		{
+			name:    "nil service",
+			service: nil,
+			errMsg:  "provider selection: service is nil",
+		},
+		{
+			name: "nil manager",
+			service: &Service{
+				manager:  nil,
+				registry: provider.NewRegistry(),
+				catalogs: providercatalog.NewService("", provider.NewRegistry(), newCatalogStoreStub()),
+			},
+			errMsg: "provider selection: config manager is nil",
+		},
+		{
+			name: "nil registry",
+			service: &Service{
+				manager:  config.NewManager(config.NewLoader(t.TempDir(), config.DefaultConfig())),
+				registry: nil,
+				catalogs: providercatalog.NewService("", provider.NewRegistry(), newCatalogStoreStub()),
+			},
+			errMsg: "provider selection: registry is nil",
+		},
+		{
+			name: "nil catalogs",
+			service: &Service{
+				manager:  config.NewManager(config.NewLoader(t.TempDir(), config.DefaultConfig())),
+				registry: provider.NewRegistry(),
+				catalogs: nil,
+			},
+			errMsg: "provider selection: catalog service is nil",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := tt.service.ListProviders(context.Background())
+			if err == nil || err.Error() != tt.errMsg {
+				t.Fatalf("expected error %q, got %v", tt.errMsg, err)
+			}
+		})
+	}
+}
+
+func TestServiceOperationsWithCanceledContext(t *testing.T) {
+	t.Parallel()
+
+	manager := newTestManager(t, config.DefaultConfig())
+	registry := newRegistry(t, config.OpenAIName, nil)
+	service := NewService(manager, registry, providercatalog.NewService("", registry, newCatalogStoreStub()))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	tests := []struct {
+		name string
+		fn   func(context.Context) error
+	}{
+		{
+			name: "ListProviders",
+			fn: func(ctx context.Context) error {
+				_, err := service.ListProviders(ctx)
+				return err
+			},
+		},
+		{
+			name: "ListModels",
+			fn: func(ctx context.Context) error {
+				_, err := service.ListModels(ctx)
+				return err
+			},
+		},
+		{
+			name: "ListModelsSnapshot",
+			fn: func(ctx context.Context) error {
+				_, err := service.ListModelsSnapshot(ctx)
+				return err
+			},
+		},
+		{
+			name: "EnsureSelection",
+			fn: func(ctx context.Context) error {
+				_, err := service.EnsureSelection(ctx)
+				return err
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := tt.fn(ctx)
+			if err == nil {
+				t.Fatalf("expected error for canceled context")
+			}
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("expected context.Canceled, got %v", err)
+			}
+		})
+	}
+}
+
+func TestServiceSetCurrentModelEmptyModelID(t *testing.T) {
+	t.Parallel()
+
+	manager := newTestManager(t, config.DefaultConfig())
+	registry := newRegistry(t, config.OpenAIName, nil)
+	service := NewService(manager, registry, providercatalog.NewService("", registry, newCatalogStoreStub()))
+
+	_, err := service.SetCurrentModel(context.Background(), "")
+	if !errors.Is(err, provider.ErrModelNotFound) {
+		t.Fatalf("expected ErrModelNotFound for empty model ID, got %v", err)
+	}
+
+	_, err = service.SetCurrentModel(context.Background(), "   ")
+	if !errors.Is(err, provider.ErrModelNotFound) {
+		t.Fatalf("expected ErrModelNotFound for whitespace model ID, got %v", err)
+	}
+}
+
 func TestResolveCurrentModelHelper(t *testing.T) {
 	t.Parallel()
 

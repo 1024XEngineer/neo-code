@@ -2,6 +2,177 @@ package provider
 
 import "testing"
 
+func TestModelDescriptorsFromIDs(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		modelIDs []string
+		want     []ModelDescriptor
+	}{
+		{
+			name:     "empty slice",
+			modelIDs: []string{},
+			want:     nil,
+		},
+		{
+			name:     "nil slice",
+			modelIDs: nil,
+			want:     nil,
+		},
+		{
+			name:     "single model ID",
+			modelIDs: []string{"gpt-4"},
+			want: []ModelDescriptor{
+				{ID: "gpt-4", Name: "gpt-4"},
+			},
+		},
+		{
+			name:     "multiple model IDs",
+			modelIDs: []string{"gpt-4", "gpt-3.5-turbo"},
+			want: []ModelDescriptor{
+				{ID: "gpt-4", Name: "gpt-4"},
+				{ID: "gpt-3.5-turbo", Name: "gpt-3.5-turbo"},
+			},
+		},
+		{
+			name:     "IDs with whitespace",
+			modelIDs: []string{"  gpt-4  ", "\tgpt-3.5-turbo\t"},
+			want: []ModelDescriptor{
+				{ID: "gpt-4", Name: "gpt-4"},
+				{ID: "gpt-3.5-turbo", Name: "gpt-3.5-turbo"},
+			},
+		},
+		{
+			name:     "empty strings are skipped",
+			modelIDs: []string{"gpt-4", "", "  ", "gpt-3.5-turbo"},
+			want: []ModelDescriptor{
+				{ID: "gpt-4", Name: "gpt-4"},
+				{ID: "gpt-3.5-turbo", Name: "gpt-3.5-turbo"},
+			},
+		},
+		{
+			name:     "all empty strings",
+			modelIDs: []string{"", "  ", "\t"},
+			want:     nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := modelDescriptorsFromIDs(tt.modelIDs)
+			if len(got) != len(tt.want) {
+				t.Fatalf("expected %d descriptors, got %d", len(tt.want), len(got))
+			}
+			for i := range got {
+				if got[i].ID != tt.want[i].ID || got[i].Name != tt.want[i].Name {
+					t.Fatalf("descriptor %d: expected %+v, got %+v", i, tt.want[i], got[i])
+				}
+			}
+		})
+	}
+}
+
+func TestFirstPositiveInt(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		values []any
+		want   int
+	}{
+		{
+			name:   "empty values",
+			values: []any{},
+			want:   0,
+		},
+		{
+			name:   "int positive",
+			values: []any{int(100)},
+			want:   100,
+		},
+		{
+			name:   "int negative returns zero",
+			values: []any{int(-100)},
+			want:   0,
+		},
+		{
+			name:   "int zero returns zero",
+			values: []any{int(0)},
+			want:   0,
+		},
+		{
+			name:   "int32 positive",
+			values: []any{int32(200)},
+			want:   200,
+		},
+		{
+			name:   "int32 negative returns zero",
+			values: []any{int32(-200)},
+			want:   0,
+		},
+		{
+			name:   "int64 positive",
+			values: []any{int64(300)},
+			want:   300,
+		},
+		{
+			name:   "int64 negative returns zero",
+			values: []any{int64(-300)},
+			want:   0,
+		},
+		{
+			name:   "float32 positive",
+			values: []any{float32(400.5)},
+			want:   400,
+		},
+		{
+			name:   "float32 negative returns zero",
+			values: []any{float32(-400.5)},
+			want:   0,
+		},
+		{
+			name:   "float64 positive",
+			values: []any{float64(500.7)},
+			want:   500,
+		},
+		{
+			name:   "float64 negative returns zero",
+			values: []any{float64(-500.7)},
+			want:   0,
+		},
+		{
+			name:   "first positive wins",
+			values: []any{0, -10, 100, 200},
+			want:   100,
+		},
+		{
+			name:   "all negative or zero",
+			values: []any{-1, -2, 0, -3},
+			want:   0,
+		},
+		{
+			name:   "mixed types",
+			values: []any{int(0), int32(-10), int64(1000), float64(2000)},
+			want:   1000,
+		},
+		{
+			name:   "non-numeric type ignored",
+			values: []any{"100", 200},
+			want:   200,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := firstPositiveInt(tt.values...)
+			if got != tt.want {
+				t.Fatalf("expected %d, got %d", tt.want, got)
+			}
+		})
+	}
+}
+
 func TestDescriptorFromRawModelNormalizesUsefulFields(t *testing.T) {
 	t.Parallel()
 
