@@ -471,7 +471,7 @@ func (s *Service) runCompactForSession(
 		session.UpdatedAt = time.Now()
 		if err := s.sessionStore.Save(ctx, &session); err != nil {
 			s.emit(ctx, EventCompactError, runID, session.ID, CompactErrorPayload{
-				TriggerMode: string(mode),
+				TriggerMode: compactTriggerMode(mode),
 				Message:     err.Error(),
 			})
 			session.Messages = originalMessages
@@ -487,7 +487,7 @@ func (s *Service) runCompactForSession(
 		BeforeChars:    result.Metrics.BeforeChars,
 		AfterChars:     result.Metrics.AfterChars,
 		SavedRatio:     result.Metrics.SavedRatio,
-		TriggerMode:    result.Metrics.TriggerMode,
+		TriggerMode:    compactTriggerMode(mode),
 		TranscriptID:   result.TranscriptID,
 		TranscriptPath: result.TranscriptPath,
 	}
@@ -583,6 +583,17 @@ func providerRetryBackoff(attempt int) time.Duration {
 	}
 
 	return wait
+}
+
+func compactTriggerMode(mode contextcompact.Mode) string {
+	switch mode {
+	case contextcompact.ModeMicro:
+		return CompactTriggerModeMicro
+	case contextcompact.ModeManual:
+		return CompactTriggerModeManual
+	default:
+		return string(mode)
+	}
 }
 
 func (s *Service) isRunCanceled(err error) bool {

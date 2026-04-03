@@ -1209,7 +1209,7 @@ func TestAppHandleRuntimeEventAdditionalBranches(t *testing.T) {
 					BeforeChars:    100,
 					AfterChars:     60,
 					SavedRatio:     0.4,
-					TriggerMode:    "manual",
+					TriggerMode:    agentruntime.CompactTriggerModeManual,
 					TranscriptPath: "/tmp/t.jsonl",
 				},
 			},
@@ -1233,7 +1233,7 @@ func TestAppHandleRuntimeEventAdditionalBranches(t *testing.T) {
 				SessionID: "s1",
 				Payload: agentruntime.CompactDonePayload{
 					Applied:     false,
-					TriggerMode: "micro",
+					TriggerMode: agentruntime.CompactTriggerModeMicro,
 				},
 			},
 			assert: func(t *testing.T, app App) {
@@ -1249,7 +1249,7 @@ func TestAppHandleRuntimeEventAdditionalBranches(t *testing.T) {
 				Type:      agentruntime.EventCompactError,
 				SessionID: "s1",
 				Payload: agentruntime.CompactErrorPayload{
-					TriggerMode: "manual",
+					TriggerMode: agentruntime.CompactTriggerModeManual,
 					Message:     "disk full",
 				},
 			},
@@ -1269,7 +1269,7 @@ func TestAppHandleRuntimeEventAdditionalBranches(t *testing.T) {
 				Type:      agentruntime.EventCompactError,
 				SessionID: "s1",
 				Payload: agentruntime.CompactErrorPayload{
-					TriggerMode: "micro",
+					TriggerMode: agentruntime.CompactTriggerModeMicro,
 					Message:     "tmp write failed",
 				},
 			},
