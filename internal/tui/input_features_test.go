@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	goruntime "runtime"
 	"strings"
 	"testing"
 
@@ -11,6 +12,40 @@ import (
 )
 
 func TestWorkspaceCommandHelpers(t *testing.T) {
+	t.Run("execute workspace command forwards explicit workdir", func(t *testing.T) {
+		manager := newTestConfigManager(t)
+		capturedWorkdir := ""
+		capturedCommand := ""
+		previous := workspaceCommandExecutor
+		t.Cleanup(func() { workspaceCommandExecutor = previous })
+		workspaceCommandExecutor = func(ctx context.Context, cfg config.Config, workdir string, command string) (string, error) {
+			capturedWorkdir = workdir
+			capturedCommand = command
+			return "ok", nil
+		}
+
+		target := t.TempDir()
+		command, output, err := executeWorkspaceCommand(context.Background(), manager, target, "& git status")
+		if err != nil {
+			t.Fatalf("executeWorkspaceCommand() error = %v", err)
+		}
+		if command != "git status" || output != "ok" {
+			t.Fatalf("unexpected execute result command=%q output=%q", command, output)
+		}
+		if capturedWorkdir != target || capturedCommand != "git status" {
+			t.Fatalf("expected forwarded workdir=%q command=%q, got workdir=%q command=%q", target, "git status", capturedWorkdir, capturedCommand)
+		}
+
+		msg := runWorkspaceCommand(manager, target, "& git status")()
+		result, ok := msg.(workspaceCommandResultMsg)
+		if !ok {
+			t.Fatalf("expected workspaceCommandResultMsg, got %T", msg)
+		}
+		if result.err != nil || result.command != "git status" || result.output != "ok" {
+			t.Fatalf("unexpected runWorkspaceCommand result: %+v", result)
+		}
+	})
+
 	t.Run("extract workspace command validates prefix and body", func(t *testing.T) {
 		if _, err := extractWorkspaceCommand("git status"); err == nil {
 			t.Fatalf("expected missing prefix to fail")
@@ -46,9 +81,34 @@ func TestWorkspaceCommandHelpers(t *testing.T) {
 	})
 
 	t.Run("default workspace command executor rejects empty commands", func(t *testing.T) {
-		output, err := defaultWorkspaceCommandExecutor(context.Background(), config.Config{}, "   ")
+		output, err := defaultWorkspaceCommandExecutor(context.Background(), config.Config{}, "", "   ")
 		if err == nil || !strings.Contains(err.Error(), "empty") || output != "" {
 			t.Fatalf("expected empty command error, got output=%q err=%v", output, err)
+		}
+	})
+
+	t.Run("default workspace command executor falls back to cfg workdir", func(t *testing.T) {
+		workdir := t.TempDir()
+		cfg := config.Config{
+			Workdir:        workdir,
+			ToolTimeoutSec: 5,
+		}
+		command := "pwd"
+		if goruntime.GOOS == "windows" {
+			cfg.Shell = "powershell"
+			command = "$PWD.Path"
+		} else {
+			cfg.Shell = "sh"
+		}
+
+		output, err := defaultWorkspaceCommandExecutor(context.Background(), cfg, "", command)
+		if err != nil {
+			t.Fatalf("defaultWorkspaceCommandExecutor() error = %v", err)
+		}
+		normalizedOutput := strings.ToLower(filepath.Clean(strings.TrimSpace(output)))
+		normalizedWorkdir := strings.ToLower(filepath.Clean(workdir))
+		if !strings.Contains(normalizedOutput, normalizedWorkdir) {
+			t.Fatalf("expected output %q to contain resolved workdir %q", output, workdir)
 		}
 	})
 }

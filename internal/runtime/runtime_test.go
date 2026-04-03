@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -1230,18 +1231,178 @@ func TestServiceConstructorsAndDelegates(t *testing.T) {
 	}
 }
 
+func TestServiceRunUsesSessionWorkdirForContextAndTools(t *testing.T) {
+	manager := newRuntimeConfigManager(t)
+	defaultWorkdir := t.TempDir()
+	sessionWorkdir := t.TempDir()
+	if err := manager.Update(context.Background(), func(cfg *config.Config) error {
+		cfg.Workdir = defaultWorkdir
+		return nil
+	}); err != nil {
+		t.Fatalf("update default workdir: %v", err)
+	}
+
+	store := newMemoryStore()
+	session := newSessionWithWorkdir("Session Workdir", sessionWorkdir)
+	store.sessions[session.ID] = cloneSession(session)
+
+	tool := &stubTool{name: "filesystem_edit", content: "ok"}
+	registry := tools.NewRegistry()
+	registry.Register(tool)
+
+	builder := &stubContextBuilder{}
+	scripted := &scriptedProvider{
+		responses: []provider.ChatResponse{
+			{
+				Message: provider.Message{
+					Role: "assistant",
+					ToolCalls: []provider.ToolCall{
+						{ID: "call-session-workdir", Name: "filesystem_edit", Arguments: `{"path":"main.go"}`},
+					},
+				},
+				FinishReason: "tool_calls",
+			},
+			{
+				Message:      provider.Message{Role: "assistant", Content: "done"},
+				FinishReason: "stop",
+			},
+		},
+	}
+
+	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: scripted}, builder)
+	if err := service.Run(context.Background(), UserInput{
+		SessionID: session.ID,
+		RunID:     "run-session-workdir",
+		Content:   "edit",
+	}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	if builder.lastInput.Metadata.Workdir != sessionWorkdir {
+		t.Fatalf("expected context workdir %q, got %q", sessionWorkdir, builder.lastInput.Metadata.Workdir)
+	}
+	if tool.lastInput.Workdir != sessionWorkdir {
+		t.Fatalf("expected tool input workdir %q, got %q", sessionWorkdir, tool.lastInput.Workdir)
+	}
+}
+
+func TestServiceRunUsesInputWorkdirForNewSession(t *testing.T) {
+	manager := newRuntimeConfigManager(t)
+	defaultWorkdir := t.TempDir()
+	draftRoot := t.TempDir()
+	if err := manager.Update(context.Background(), func(cfg *config.Config) error {
+		cfg.Workdir = defaultWorkdir
+		return nil
+	}); err != nil {
+		t.Fatalf("update default workdir: %v", err)
+	}
+
+	store := newMemoryStore()
+	registry := tools.NewRegistry()
+	registry.Register(&stubTool{name: "filesystem_read_file", content: "default"})
+	builder := &stubContextBuilder{}
+	scripted := &scriptedProvider{
+		responses: []provider.ChatResponse{
+			{
+				Message:      provider.Message{Role: "assistant", Content: "done"},
+				FinishReason: "stop",
+			},
+		},
+	}
+
+	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: scripted}, builder)
+	if err := service.Run(context.Background(), UserInput{
+		RunID:   "run-new-session-workdir",
+		Content: "hello",
+		Workdir: draftRoot,
+	}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	created := onlySession(t, store)
+	if created.Workdir != draftRoot {
+		t.Fatalf("expected session workdir %q, got %q", draftRoot, created.Workdir)
+	}
+	if builder.lastInput.Metadata.Workdir != draftRoot {
+		t.Fatalf("expected context metadata workdir %q, got %q", draftRoot, builder.lastInput.Metadata.Workdir)
+	}
+}
+
+func TestServiceSetSessionWorkdir(t *testing.T) {
+	manager := newRuntimeConfigManager(t)
+	defaultWorkdir := t.TempDir()
+	target := filepath.Join(defaultWorkdir, "sub")
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatalf("mkdir target: %v", err)
+	}
+	if err := manager.Update(context.Background(), func(cfg *config.Config) error {
+		cfg.Workdir = defaultWorkdir
+		return nil
+	}); err != nil {
+		t.Fatalf("update default workdir: %v", err)
+	}
+
+	store := newMemoryStore()
+	session := newSession("set workdir")
+	store.sessions[session.ID] = cloneSession(session)
+	registry := tools.NewRegistry()
+	registry.Register(&stubTool{name: "filesystem_read_file", content: "default"})
+
+	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: &scriptedProvider{}}, nil)
+	updated, err := service.SetSessionWorkdir(context.Background(), session.ID, "sub")
+	if err != nil {
+		t.Fatalf("SetSessionWorkdir() error = %v", err)
+	}
+	if updated.Workdir != target {
+		t.Fatalf("expected updated workdir %q, got %q", target, updated.Workdir)
+	}
+
+	loaded, err := service.LoadSession(context.Background(), session.ID)
+	if err != nil {
+		t.Fatalf("LoadSession() error = %v", err)
+	}
+	if loaded.Workdir != target {
+		t.Fatalf("expected in-memory workdir %q, got %q", target, loaded.Workdir)
+	}
+
+	another := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: &scriptedProvider{}}, nil)
+	reloaded, err := another.LoadSession(context.Background(), session.ID)
+	if err != nil {
+		t.Fatalf("LoadSession() with new service error = %v", err)
+	}
+	if strings.TrimSpace(reloaded.Workdir) != "" {
+		t.Fatalf("expected session workdir not to persist across process lifetime, got %q", reloaded.Workdir)
+	}
+
+	_, err = service.SetSessionWorkdir(context.Background(), "", "sub")
+	if err == nil || !containsError(err, "session id is empty") {
+		t.Fatalf("expected empty session id error, got %v", err)
+	}
+}
+
 func newRuntimeConfigManager(t *testing.T) *config.Manager {
 	t.Helper()
-	restoreRuntimeEnv(t, config.OpenAIDefaultAPIKeyEnv)
-	if err := os.Setenv(config.OpenAIDefaultAPIKeyEnv, "test-key"); err != nil {
+
+	apiKeyEnv := runtimeTestAPIKeyEnv(t)
+	restoreRuntimeEnv(t, apiKeyEnv)
+	if err := os.Setenv(apiKeyEnv, "test-key"); err != nil {
 		t.Fatalf("set env: %v", err)
 	}
-	manager := config.NewManager(config.NewLoader(t.TempDir(), config.DefaultConfig()))
+
+	defaults := config.DefaultConfig()
+	selected := config.NormalizeProviderName(defaults.SelectedProvider)
+	for i := range defaults.Providers {
+		if config.NormalizeProviderName(defaults.Providers[i].Name) == selected {
+			defaults.Providers[i].APIKeyEnv = apiKeyEnv
+			break
+		}
+	}
+
+	manager := config.NewManager(config.NewLoader(t.TempDir(), defaults))
 	if _, err := manager.Load(context.Background()); err != nil {
 		t.Fatalf("load config: %v", err)
 	}
 	if err := manager.Update(context.Background(), func(cfg *config.Config) error {
-		cfg.Workdir = t.TempDir()
 		cfg.ToolTimeoutSec = 1
 		cfg.MaxLoops = 4
 		return nil
@@ -1249,6 +1410,36 @@ func newRuntimeConfigManager(t *testing.T) *config.Manager {
 		t.Fatalf("update config: %v", err)
 	}
 	return manager
+}
+
+func runtimeTestAPIKeyEnv(t *testing.T) string {
+	t.Helper()
+
+	const fallback = "NEOCODE_RUNTIME_TEST_API_KEY"
+	name := strings.TrimSpace(t.Name())
+	if name == "" {
+		return fallback
+	}
+
+	var b strings.Builder
+	b.Grow(len(name))
+	for _, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z':
+			b.WriteRune(r - ('a' - 'A'))
+		case r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('_')
+		}
+	}
+
+	suffix := strings.Trim(b.String(), "_")
+	if suffix == "" {
+		suffix = "CASE"
+	}
+
+	return "NEOCODE_RUNTIME_TEST_API_KEY_" + suffix
 }
 
 func restoreRuntimeEnv(t *testing.T, key string) {
@@ -1341,6 +1532,87 @@ func cloneBuildInput(input agentcontext.BuildInput) agentcontext.BuildInput {
 
 func containsError(err error, target string) bool {
 	return err != nil && strings.Contains(err.Error(), target)
+}
+
+func TestWorkdirHelperFunctions(t *testing.T) {
+	t.Run("effectiveSessionWorkdir prefers session value", func(t *testing.T) {
+		if got := effectiveSessionWorkdir("  /session ", "/default"); got != "/session" {
+			t.Fatalf("expected session workdir, got %q", got)
+		}
+		if got := effectiveSessionWorkdir("", " /default "); got != "/default" {
+			t.Fatalf("expected default workdir, got %q", got)
+		}
+	})
+
+	t.Run("resolve workdir handles empty relative absolute and invalid cases", func(t *testing.T) {
+		defaultDir := t.TempDir()
+		currentDir := t.TempDir()
+		relativeTarget := filepath.Join(currentDir, "nested")
+		if err := os.MkdirAll(relativeTarget, 0o755); err != nil {
+			t.Fatalf("mkdir relative target: %v", err)
+		}
+		absoluteTarget := t.TempDir()
+
+		got, err := resolveWorkdirForSession(defaultDir, "", "")
+		if err != nil || got != filepath.Clean(defaultDir) {
+			t.Fatalf("expected default dir %q, got %q / %v", filepath.Clean(defaultDir), got, err)
+		}
+
+		got, err = resolveWorkdirForSession(defaultDir, currentDir, "nested")
+		if err != nil || got != filepath.Clean(relativeTarget) {
+			t.Fatalf("expected relative target %q, got %q / %v", filepath.Clean(relativeTarget), got, err)
+		}
+
+		got, err = resolveWorkdirForSession(defaultDir, currentDir, absoluteTarget)
+		if err != nil || got != filepath.Clean(absoluteTarget) {
+			t.Fatalf("expected absolute target %q, got %q / %v", filepath.Clean(absoluteTarget), got, err)
+		}
+
+		_, err = resolveWorkdirForSession("", "", "")
+		if err == nil || !containsError(err, "workdir is empty") {
+			t.Fatalf("expected empty workdir error, got %v", err)
+		}
+
+		filePath := filepath.Join(defaultDir, "note.txt")
+		if err := os.WriteFile(filePath, []byte("x"), 0o644); err != nil {
+			t.Fatalf("write file: %v", err)
+		}
+		_, err = normalizeExistingWorkdir(filePath)
+		if err == nil || !containsError(err, "is not a directory") {
+			t.Fatalf("expected non-directory error, got %v", err)
+		}
+	})
+}
+
+func TestServiceSetSessionWorkdirNoopDoesNotSave(t *testing.T) {
+	manager := newRuntimeConfigManager(t)
+	defaultWorkdir := t.TempDir()
+	if err := manager.Update(context.Background(), func(cfg *config.Config) error {
+		cfg.Workdir = defaultWorkdir
+		return nil
+	}); err != nil {
+		t.Fatalf("update default workdir: %v", err)
+	}
+
+	store := newMemoryStore()
+	target := t.TempDir()
+	session := newSessionWithWorkdir("noop", target)
+	store.sessions[session.ID] = cloneSession(session)
+	registry := tools.NewRegistry()
+	registry.Register(&stubTool{name: "filesystem_read_file", content: "default"})
+	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: &scriptedProvider{}}, nil)
+
+	beforeSaves := store.saves
+	updated, err := service.SetSessionWorkdir(context.Background(), session.ID, target)
+	if err != nil {
+		t.Fatalf("SetSessionWorkdir() error = %v", err)
+	}
+	if updated.Workdir != target {
+		t.Fatalf("expected unchanged workdir %q, got %q", target, updated.Workdir)
+	}
+	if store.saves != beforeSaves {
+		t.Fatalf("expected no extra save on noop update, saves before=%d after=%d", beforeSaves, store.saves)
+	}
 }
 
 func TestIsRetryableProviderError(t *testing.T) {

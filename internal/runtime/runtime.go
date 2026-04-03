@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log"
 	"math/rand/v2"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -28,18 +30,27 @@ const (
 	providerRetryMaxWait = 5 * time.Second
 )
 
+var runtimeSessionWorkdirs = struct {
+	mu   sync.RWMutex
+	data map[string]string
+}{
+	data: make(map[string]string),
+}
+
 type Runtime interface {
 	Run(ctx context.Context, input UserInput) error
 	CancelActiveRun() bool
 	Events() <-chan RuntimeEvent
 	ListSessions(ctx context.Context) ([]SessionSummary, error)
 	LoadSession(ctx context.Context, id string) (Session, error)
+	SetSessionWorkdir(ctx context.Context, sessionID string, workdir string) (Session, error)
 }
 
 type UserInput struct {
 	SessionID string
 	RunID     string
 	Content   string
+	Workdir   string
 }
 
 type ProviderFactory interface {
@@ -99,7 +110,8 @@ func (s *Service) Run(ctx context.Context, input UserInput) error {
 		return errors.New("runtime: input content is empty")
 	}
 
-	session, err := s.loadOrCreateSession(ctx, input.SessionID, input.Content)
+	initialCfg := s.configManager.Get()
+	session, err := s.loadOrCreateSession(ctx, input.SessionID, input.Content, initialCfg.Workdir, input.Workdir)
 	if err != nil {
 		return s.handleRunError(ctx, input.RunID, input.SessionID, err)
 	}
@@ -121,6 +133,7 @@ func (s *Service) Run(ctx context.Context, input UserInput) error {
 		}
 
 		cfg := s.configManager.Get()
+		activeWorkdir := effectiveSessionWorkdir(session.Workdir, cfg.Workdir)
 		maxLoops := cfg.MaxLoops
 		if maxLoops <= 0 {
 			maxLoops = 8
@@ -134,7 +147,7 @@ func (s *Service) Run(ctx context.Context, input UserInput) error {
 		builtContext, err := s.contextBuilder.Build(ctx, agentcontext.BuildInput{
 			Messages: session.Messages,
 			Metadata: agentcontext.Metadata{
-				Workdir:  cfg.Workdir,
+				Workdir:  activeWorkdir,
 				Shell:    cfg.Shell,
 				Provider: cfg.SelectedProvider,
 				Model:    cfg.CurrentModel,
@@ -196,7 +209,7 @@ func (s *Service) Run(ctx context.Context, input UserInput) error {
 				ID:        call.ID,
 				Name:      call.Name,
 				Arguments: []byte(call.Arguments),
-				Workdir:   cfg.Workdir,
+				Workdir:   activeWorkdir,
 				SessionID: session.ID,
 				EmitChunk: func(chunk []byte) {
 					s.emit(ctx, EventToolChunk, input.RunID, session.ID, string(chunk))
@@ -267,18 +280,100 @@ func (s *Service) ListSessions(ctx context.Context) ([]SessionSummary, error) {
 }
 
 func (s *Service) LoadSession(ctx context.Context, id string) (Session, error) {
-	return s.sessionStore.Load(ctx, id)
+	session, err := s.sessionStore.Load(ctx, id)
+	if err != nil {
+		return Session{}, err
+	}
+	session.Workdir = s.sessionWorkdir(id, session.Workdir)
+	return session, nil
 }
 
-func (s *Service) loadOrCreateSession(ctx context.Context, sessionID string, title string) (Session, error) {
+func (s *Service) SetSessionWorkdir(ctx context.Context, sessionID string, workdir string) (Session, error) {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return Session{}, errors.New("runtime: session id is empty")
+	}
+
+	session, err := s.sessionStore.Load(ctx, sessionID)
+	if err != nil {
+		return Session{}, err
+	}
+	session.Workdir = s.sessionWorkdir(sessionID, session.Workdir)
+
+	cfg := s.configManager.Get()
+	resolved, err := resolveWorkdirForSession(cfg.Workdir, session.Workdir, workdir)
+	if err != nil {
+		return Session{}, err
+	}
+	if session.Workdir == resolved {
+		return session, nil
+	}
+
+	session.Workdir = resolved
+	s.setSessionWorkdir(sessionID, resolved)
+	return session, nil
+}
+
+func (s *Service) sessionWorkdir(sessionID string, fallback string) string {
+	key := s.sessionWorkdirKey(sessionID)
+	runtimeSessionWorkdirs.mu.RLock()
+	value, ok := runtimeSessionWorkdirs.data[key]
+	runtimeSessionWorkdirs.mu.RUnlock()
+	if ok {
+		return strings.TrimSpace(value)
+	}
+	return strings.TrimSpace(fallback)
+}
+
+func (s *Service) setSessionWorkdir(sessionID string, workdir string) {
+	key := s.sessionWorkdirKey(sessionID)
+	runtimeSessionWorkdirs.mu.Lock()
+	runtimeSessionWorkdirs.data[key] = strings.TrimSpace(workdir)
+	runtimeSessionWorkdirs.mu.Unlock()
+}
+
+func (s *Service) sessionWorkdirKey(sessionID string) string {
+	return fmt.Sprintf("%p:%s", s, strings.TrimSpace(sessionID))
+}
+
+func (s *Service) loadOrCreateSession(
+	ctx context.Context,
+	sessionID string,
+	title string,
+	defaultWorkdir string,
+	requestedWorkdir string,
+) (Session, error) {
 	if strings.TrimSpace(sessionID) == "" {
-		session := newSession(title)
+		sessionWorkdir, err := resolveWorkdirForSession(defaultWorkdir, "", requestedWorkdir)
+		if err != nil {
+			return Session{}, err
+		}
+		session := newSessionWithWorkdir(title, sessionWorkdir)
+		s.setSessionWorkdir(session.ID, sessionWorkdir)
 		if err := s.sessionStore.Save(ctx, &session); err != nil {
 			return Session{}, err
 		}
 		return session, nil
 	}
-	return s.sessionStore.Load(ctx, sessionID)
+	session, err := s.sessionStore.Load(ctx, sessionID)
+	if err != nil {
+		return Session{}, err
+	}
+	session.Workdir = s.sessionWorkdir(sessionID, session.Workdir)
+	if strings.TrimSpace(requestedWorkdir) == "" && strings.TrimSpace(session.Workdir) != "" {
+		return session, nil
+	}
+
+	resolved, err := resolveWorkdirForSession(defaultWorkdir, session.Workdir, requestedWorkdir)
+	if err != nil {
+		return Session{}, err
+	}
+	if session.Workdir == resolved {
+		return session, nil
+	}
+	session.Workdir = resolved
+	s.setSessionWorkdir(sessionID, resolved)
+	return session, nil
 }
 
 // emit 向事件通道发送事件。
@@ -452,4 +547,47 @@ func providerRetryBackoff(attempt int) time.Duration {
 
 func (s *Service) isRunCanceled(err error) bool {
 	return errors.Is(err, context.Canceled)
+}
+
+func effectiveSessionWorkdir(sessionWorkdir string, defaultWorkdir string) string {
+	workdir := strings.TrimSpace(sessionWorkdir)
+	if workdir != "" {
+		return workdir
+	}
+	return strings.TrimSpace(defaultWorkdir)
+}
+
+func resolveWorkdirForSession(defaultWorkdir string, currentWorkdir string, requestedWorkdir string) (string, error) {
+	base := effectiveSessionWorkdir(currentWorkdir, defaultWorkdir)
+	if strings.TrimSpace(requestedWorkdir) == "" {
+		return normalizeExistingWorkdir(base)
+	}
+
+	target := strings.TrimSpace(requestedWorkdir)
+	if !filepath.IsAbs(target) {
+		target = filepath.Join(base, target)
+	}
+	return normalizeExistingWorkdir(target)
+}
+
+func normalizeExistingWorkdir(workdir string) (string, error) {
+	trimmed := strings.TrimSpace(workdir)
+	if trimmed == "" {
+		return "", errors.New("runtime: workdir is empty")
+	}
+
+	absolute, err := filepath.Abs(trimmed)
+	if err != nil {
+		return "", fmt.Errorf("runtime: resolve workdir: %w", err)
+	}
+
+	info, err := os.Stat(absolute)
+	if err != nil {
+		return "", fmt.Errorf("runtime: resolve workdir: %w", err)
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("runtime: workdir %q is not a directory", absolute)
+	}
+
+	return filepath.Clean(absolute), nil
 }

@@ -49,7 +49,7 @@ func TestNewProgramNormalizesInvalidCurrentModelOnStartup(t *testing.T) {
 	}
 
 	configPath := filepath.Join(configDir, "config.yaml")
-	raw := []byte("selected_provider: openai\ncurrent_model: unsupported-current\nworkdir: .\nshell: powershell\n")
+	raw := []byte("selected_provider: openai\ncurrent_model: unsupported-current\nshell: powershell\n")
 	if err := os.WriteFile(configPath, raw, 0o644); err != nil {
 		t.Fatalf("write config: %v", err)
 	}

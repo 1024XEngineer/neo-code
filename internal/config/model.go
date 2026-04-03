@@ -30,7 +30,7 @@ type Config struct {
 	Providers        []ProviderConfig `yaml:"-"`
 	SelectedProvider string           `yaml:"selected_provider"`
 	CurrentModel     string           `yaml:"current_model"`
-	Workdir          string           `yaml:"workdir"`
+	Workdir          string           `yaml:"-"`
 	Shell            string           `yaml:"shell"`
 	MaxLoops         int              `yaml:"max_loops,omitempty"`
 	ToolTimeoutSec   int              `yaml:"tool_timeout_sec,omitempty"`

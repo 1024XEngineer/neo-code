@@ -45,6 +45,52 @@ func TestLoaderLoadMalformedYAML(t *testing.T) {
 	}
 }
 
+func TestLoaderRejectsLegacyWorkdirKey(t *testing.T) {
+	t.Parallel()
+
+	loader := NewLoader(t.TempDir(), testDefaultConfig())
+	if err := os.MkdirAll(loader.BaseDir(), 0o755); err != nil {
+		t.Fatalf("mkdir base dir: %v", err)
+	}
+	raw := `
+selected_provider: openai
+current_model: gpt-4.1
+workdir: .
+shell: powershell
+`
+	if err := os.WriteFile(loader.ConfigPath(), []byte(strings.TrimSpace(raw)+"\n"), 0o644); err != nil {
+		t.Fatalf("write legacy config: %v", err)
+	}
+
+	_, err := loader.Load(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "legacy config key \"workdir\" is no longer supported") {
+		t.Fatalf("expected legacy workdir rejection, got %v", err)
+	}
+}
+
+func TestLoaderRejectsLegacyDefaultWorkdirKey(t *testing.T) {
+	t.Parallel()
+
+	loader := NewLoader(t.TempDir(), testDefaultConfig())
+	if err := os.MkdirAll(loader.BaseDir(), 0o755); err != nil {
+		t.Fatalf("mkdir base dir: %v", err)
+	}
+	raw := `
+selected_provider: openai
+current_model: gpt-4.1
+default_workdir: .
+shell: powershell
+`
+	if err := os.WriteFile(loader.ConfigPath(), []byte(strings.TrimSpace(raw)+"\n"), 0o644); err != nil {
+		t.Fatalf("write legacy config: %v", err)
+	}
+
+	_, err := loader.Load(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "legacy config key \"default_workdir\" is no longer supported") {
+		t.Fatalf("expected legacy default_workdir rejection, got %v", err)
+	}
+}
+
 func TestLoaderLoadInvalidBaseDir(t *testing.T) {
 	t.Parallel()
 
@@ -72,7 +118,6 @@ func TestLoaderRewritesLegacyProvidersFormatOnLoad(t *testing.T) {
 	legacy := `
 selected_provider: openai
 current_model: gpt-5.4
-workdir: .
 shell: powershell
 providers:
   - name: openai
@@ -105,6 +150,9 @@ providers:
 		t.Fatalf("read rewritten config: %v", err)
 	}
 	text := string(rewritten)
+	if strings.Contains(text, "default_workdir:") || strings.Contains(text, "\nworkdir:") || strings.HasPrefix(text, "workdir:") {
+		t.Fatalf("expected rewritten config to avoid any workdir keys, got:\n%s", text)
+	}
 	if strings.Contains(text, "provider_overrides:") {
 		t.Fatalf("expected rewritten config to drop provider overrides, got:\n%s", text)
 	}
@@ -126,7 +174,6 @@ func TestLoaderRewritesNormalizedSelectionStateOnLoad(t *testing.T) {
 
 	raw := `
 selected_provider: missing-provider
-workdir: .
 shell: powershell
 `
 	if err := os.WriteFile(loader.ConfigPath(), []byte(strings.TrimSpace(raw)+"\n"), 0o644); err != nil {
@@ -167,7 +214,6 @@ func TestLoaderRewritesMissingCurrentModelOnLoad(t *testing.T) {
 
 	raw := `
 selected_provider: openai
-workdir: .
 shell: powershell
 `
 	if err := os.WriteFile(loader.ConfigPath(), []byte(strings.TrimSpace(raw)+"\n"), 0o644); err != nil {

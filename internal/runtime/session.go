@@ -22,6 +22,7 @@ type Session struct {
 	Title     string             `json:"title"`
 	CreatedAt time.Time          `json:"created_at"`
 	UpdatedAt time.Time          `json:"updated_at"`
+	Workdir   string             `json:"-"`
 	Messages  []provider.Message `json:"messages"`
 }
 
@@ -165,12 +166,17 @@ func (s *JSONSessionStore) filePath(id string) string {
 }
 
 func newSession(title string) Session {
+	return newSessionWithWorkdir(title, "")
+}
+
+func newSessionWithWorkdir(title string, workdir string) Session {
 	now := time.Now()
 	return Session{
 		ID:        newID("session"),
 		Title:     sanitizeTitle(title),
 		CreatedAt: now,
 		UpdatedAt: now,
+		Workdir:   strings.TrimSpace(workdir),
 		Messages:  []provider.Message{},
 	}
 }

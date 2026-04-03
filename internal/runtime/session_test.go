@@ -32,6 +32,7 @@ func TestJSONSessionStoreSaveLoadAndListSummaries(t *testing.T) {
 		Title:     "New Session",
 		CreatedAt: time.Now().Add(-30 * time.Minute),
 		UpdatedAt: time.Now(),
+		Workdir:   t.TempDir(),
 		Messages: []provider.Message{
 			{Role: "user", Content: "new"},
 		},
@@ -51,8 +52,20 @@ func TestJSONSessionStoreSaveLoadAndListSummaries(t *testing.T) {
 	if loaded.Title != older.Title {
 		t.Fatalf("expected title %q, got %q", older.Title, loaded.Title)
 	}
+	if loaded.Workdir != "" {
+		t.Fatalf("expected workdir to stay in-memory only, got %q", loaded.Workdir)
+	}
 	if len(loaded.Messages) != 2 || loaded.Messages[1].Content != "world" {
 		t.Fatalf("unexpected loaded messages: %+v", loaded.Messages)
+	}
+
+	rawPath := filepath.Join(baseDir, sessionsDirName, newer.ID+".json")
+	raw, err := os.ReadFile(rawPath)
+	if err != nil {
+		t.Fatalf("read saved session: %v", err)
+	}
+	if strings.Contains(string(raw), "\"workdir\"") {
+		t.Fatalf("expected persisted session file to exclude workdir, got:\n%s", string(raw))
 	}
 
 	mustWriteRuntimeFile(t, filepath.Join(baseDir, sessionsDirName, "invalid.json"), "{invalid")

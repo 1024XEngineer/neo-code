@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -32,6 +34,11 @@ type localCommandResultMsg struct {
 	err             error
 	providerChanged bool
 	modelChanged    bool
+}
+type sessionWorkdirResultMsg struct {
+	notice  string
+	workdir string
+	err     error
 }
 
 const (
@@ -140,6 +147,25 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			a.appendActivity("command", typed.notice, "", false)
 		}
+		return a, tea.Batch(cmds...)
+	case sessionWorkdirResultMsg:
+		if typed.err != nil {
+			a.state.ExecutionError = typed.err.Error()
+			a.state.StatusText = typed.err.Error()
+			a.appendActivity("workspace", "Workspace command failed", typed.err.Error(), true)
+			return a, tea.Batch(cmds...)
+		}
+
+		a.state.ExecutionError = ""
+		a.state.StatusText = typed.notice
+		a.state.CurrentWorkdir = strings.TrimSpace(typed.workdir)
+		if err := a.refreshFileCandidates(); err != nil {
+			a.state.ExecutionError = err.Error()
+			a.state.StatusText = err.Error()
+			a.appendActivity("workspace", "Failed to refresh workspace files", err.Error(), true)
+			return a, tea.Batch(cmds...)
+		}
+		a.appendActivity("workspace", typed.notice, "", false)
 		return a, tea.Batch(cmds...)
 	case workspaceCommandResultMsg:
 		if typed.command == "" && typed.err != nil {
@@ -292,6 +318,12 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 			}
 
 			if strings.HasPrefix(input, slashPrefix) {
+				if isWorkspaceSlashCommand(input) {
+					a.state.StatusText = statusApplyingCommand
+					a.state.ExecutionError = ""
+					cmds = append(cmds, runSessionWorkdirCommand(a.runtime, a.state.ActiveSessionID, a.state.CurrentWorkdir, input))
+					return a, tea.Batch(cmds...)
+				}
 				a.state.StatusText = statusApplyingCommand
 				cmds = append(cmds, runLocalCommand(a.configManager, a.providerSvc, a.currentStatusSnapshot(), input))
 				return a, tea.Batch(cmds...)
@@ -308,7 +340,7 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 				a.state.StatusText = statusRunningCommand
 				a.state.ExecutionError = ""
 				a.appendActivity("command", "Running command", command, false)
-				cmds = append(cmds, runWorkspaceCommand(a.configManager, input))
+				cmds = append(cmds, runWorkspaceCommand(a.configManager, a.state.CurrentWorkdir, input))
 				return a, tea.Batch(cmds...)
 			}
 
@@ -320,7 +352,11 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 			a.state.CurrentTool = ""
 			a.activeMessages = append(a.activeMessages, provider.Message{Role: roleUser, Content: input})
 			a.rebuildTranscript()
-			cmds = append(cmds, runAgent(a.runtime, a.state.ActiveSessionID, input))
+			requestedWorkdir := ""
+			if strings.TrimSpace(a.state.ActiveSessionID) == "" {
+				requestedWorkdir = a.state.CurrentWorkdir
+			}
+			cmds = append(cmds, runAgent(a.runtime, a.state.ActiveSessionID, requestedWorkdir, input))
 			return a, tea.Batch(cmds...)
 		}
 	}
@@ -514,6 +550,7 @@ func (a *App) refreshMessages() error {
 	a.activeMessages = session.Messages
 	a.activities = nil
 	a.state.ActiveSessionTitle = session.Title
+	a.state.CurrentWorkdir = selectSessionWorkdir(session.Workdir, a.configManager.Get().Workdir)
 	return nil
 }
 
@@ -554,7 +591,9 @@ func (a *App) syncActiveSessionTitle() {
 func (a *App) syncConfigState(cfg config.Config) {
 	a.state.CurrentProvider = cfg.SelectedProvider
 	a.state.CurrentModel = cfg.CurrentModel
-	a.state.CurrentWorkdir = cfg.Workdir
+	if strings.TrimSpace(a.state.CurrentWorkdir) == "" {
+		a.state.CurrentWorkdir = cfg.Workdir
+	}
 }
 
 func (a *App) handleRuntimeEvent(event agentruntime.RuntimeEvent) bool {
@@ -1056,6 +1095,11 @@ func (a *App) startDraftSession() {
 	a.state.CurrentTool = ""
 	a.input.Reset()
 	a.state.InputText = ""
+	a.state.CurrentWorkdir = a.configManager.Get().Workdir
+	if err := a.refreshFileCandidates(); err != nil {
+		a.state.ExecutionError = err.Error()
+		a.appendActivity("workspace", "Failed to refresh workspace files", err.Error(), true)
+	}
 	a.focus = panelInput
 	a.applyFocus()
 	a.resizeComponents()
@@ -1082,9 +1126,101 @@ func ListenForRuntimeEvent(sub <-chan agentruntime.RuntimeEvent) tea.Cmd {
 	}
 }
 
-func runAgent(runtime agentruntime.Runtime, sessionID string, content string) tea.Cmd {
+func runAgent(runtime agentruntime.Runtime, sessionID string, workdir string, content string) tea.Cmd {
 	return func() tea.Msg {
-		err := runtime.Run(context.Background(), agentruntime.UserInput{SessionID: sessionID, Content: content})
+		err := runtime.Run(context.Background(), agentruntime.UserInput{
+			SessionID: sessionID,
+			Content:   content,
+			Workdir:   workdir,
+		})
 		return runFinishedMsg{err: err}
 	}
+}
+
+func runSessionWorkdirCommand(
+	runtime agentruntime.Runtime,
+	sessionID string,
+	currentWorkdir string,
+	raw string,
+) tea.Cmd {
+	return func() tea.Msg {
+		requested, err := parseWorkspaceSlashCommand(raw)
+		if err != nil {
+			return sessionWorkdirResultMsg{err: err}
+		}
+		if strings.TrimSpace(requested) == "" {
+			workdir := strings.TrimSpace(currentWorkdir)
+			if workdir == "" {
+				return sessionWorkdirResultMsg{err: fmt.Errorf("usage: /cwd <path>")}
+			}
+			return sessionWorkdirResultMsg{
+				notice:  fmt.Sprintf("[System] Current workspace is %s.", workdir),
+				workdir: workdir,
+			}
+		}
+
+		if strings.TrimSpace(sessionID) == "" {
+			workdir, err := resolveWorkspacePath(currentWorkdir, requested)
+			if err != nil {
+				return sessionWorkdirResultMsg{err: err}
+			}
+			return sessionWorkdirResultMsg{
+				notice:  fmt.Sprintf("[System] Draft workspace switched to %s.", workdir),
+				workdir: workdir,
+			}
+		}
+
+		session, err := runtime.SetSessionWorkdir(context.Background(), sessionID, requested)
+		if err != nil {
+			return sessionWorkdirResultMsg{err: err}
+		}
+		workdir := strings.TrimSpace(session.Workdir)
+		if workdir == "" {
+			workdir = strings.TrimSpace(currentWorkdir)
+		}
+		return sessionWorkdirResultMsg{
+			notice:  fmt.Sprintf("[System] Session workspace switched to %s.", workdir),
+			workdir: workdir,
+		}
+	}
+}
+
+func resolveWorkspacePath(base string, requested string) (string, error) {
+	base = strings.TrimSpace(base)
+	if base == "" {
+		workingDir, err := os.Getwd()
+		if err != nil {
+			return "", fmt.Errorf("workspace: resolve current directory: %w", err)
+		}
+		base = workingDir
+	}
+
+	target := strings.TrimSpace(requested)
+	if target == "" {
+		target = "."
+	}
+	if !filepath.IsAbs(target) {
+		target = filepath.Join(base, target)
+	}
+
+	absolute, err := filepath.Abs(target)
+	if err != nil {
+		return "", fmt.Errorf("workspace: resolve path: %w", err)
+	}
+	info, err := os.Stat(absolute)
+	if err != nil {
+		return "", fmt.Errorf("workspace: resolve path: %w", err)
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("workspace: %q is not a directory", absolute)
+	}
+	return filepath.Clean(absolute), nil
+}
+
+func selectSessionWorkdir(sessionWorkdir string, defaultWorkdir string) string {
+	workdir := strings.TrimSpace(sessionWorkdir)
+	if workdir != "" {
+		return workdir
+	}
+	return strings.TrimSpace(defaultWorkdir)
 }

@@ -41,6 +41,7 @@ func TestParseConfigFormats(t *testing.T) {
 	tests := []struct {
 		name   string
 		data   string
+		err    string
 		assert func(t *testing.T, cfg *Config)
 	}{
 		{
@@ -48,7 +49,6 @@ func TestParseConfigFormats(t *testing.T) {
 			data: `
 selected_provider: openai
 current_model: gpt-5.4
-workdir: .
 shell: powershell
 
 provider_overrides:
@@ -88,11 +88,30 @@ providers:
 			},
 		},
 		{
+			name: "legacy default_workdir key is rejected",
+			data: `
+selected_provider: openai
+current_model: gpt-4.1
+default_workdir: ./from-default
+shell: powershell
+`,
+			err: "legacy config key \"default_workdir\" is no longer supported",
+		},
+		{
+			name: "legacy workdir key is rejected",
+			data: `
+selected_provider: openai
+current_model: gpt-4.1
+workdir: ./from-legacy
+shell: powershell
+`,
+			err: "legacy config key \"workdir\" is no longer supported",
+		},
+		{
 			name: "legacy persisted providers list keeps selection only",
 			data: `
 selected_provider: openai
 current_model: gpt-5.4
-workdir: .
 shell: powershell
 providers:
   - name: openai
@@ -167,6 +186,12 @@ providers:
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			cfg, err := parseConfig([]byte(tt.data))
+			if tt.err != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.err) {
+					t.Fatalf("expected parseConfig() error containing %q, got %v", tt.err, err)
+				}
+				return
+			}
 			if err != nil {
 				t.Fatalf("parseConfig() error = %v", err)
 			}
@@ -572,6 +597,9 @@ func TestLoaderLoadAndSaveRoundTrip(t *testing.T) {
 		t.Fatalf("read config file: %v", err)
 	}
 	text := string(data)
+	if strings.Contains(text, "default_workdir:") || strings.Contains(text, "\nworkdir:") || strings.HasPrefix(text, "workdir:") {
+		t.Fatalf("expected persisted config to avoid any workdir keys, got:\n%s", text)
+	}
 	if strings.Contains(text, "\nproviders:") || strings.HasPrefix(text, "providers:") {
 		t.Fatalf("expected persisted config to omit providers, got:\n%s", text)
 	}
