@@ -11,10 +11,19 @@ import (
 )
 
 const (
-	DefaultWorkdir                        = "."
-	DefaultMaxLoops                       = 8
-	DefaultToolTimeoutSec                 = 20
-	DefaultWebFetchMaxResponseBytes int64 = 256 * 1024
+	DefaultWorkdir                            = "."
+	DefaultMaxLoops                           = 8
+	DefaultToolTimeoutSec                     = 20
+	DefaultWebFetchMaxResponseBytes     int64 = 256 * 1024
+	DefaultCompactToolResultKeepRecent        = 3
+	DefaultCompactPlaceholderMinChars         = 100
+	DefaultCompactManualKeepRecentSpans       = 6
+	DefaultCompactMaxSummaryChars             = 1200
+)
+
+const (
+	CompactManualStrategyKeepRecent  = "keep_recent"
+	CompactManualStrategyFullReplace = "full_replace"
 )
 
 var defaultWebFetchSupportedContentTypes = []string{
@@ -34,6 +43,7 @@ type Config struct {
 	Shell            string           `yaml:"shell"`
 	MaxLoops         int              `yaml:"max_loops,omitempty"`
 	ToolTimeoutSec   int              `yaml:"tool_timeout_sec,omitempty"`
+	Context          ContextConfig    `yaml:"context,omitempty"`
 	Tools            ToolsConfig      `yaml:"tools,omitempty"`
 }
 
@@ -54,6 +64,19 @@ type ToolsConfig struct {
 	WebFetch WebFetchConfig `yaml:"webfetch,omitempty"`
 }
 
+type ContextConfig struct {
+	Compact CompactConfig `yaml:"compact,omitempty"`
+}
+
+type CompactConfig struct {
+	MicroEnabled                  bool   `yaml:"micro_enabled,omitempty"`
+	ToolResultKeepRecent          int    `yaml:"tool_result_keep_recent,omitempty"`
+	ToolResultPlaceholderMinChars int    `yaml:"tool_result_placeholder_min_chars,omitempty"`
+	ManualStrategy                string `yaml:"manual_strategy,omitempty"`
+	ManualKeepRecentSpans         int    `yaml:"manual_keep_recent_spans,omitempty"`
+	MaxSummaryChars               int    `yaml:"max_summary_chars,omitempty"`
+}
+
 type WebFetchConfig struct {
 	MaxResponseBytes      int64    `yaml:"max_response_bytes,omitempty"`
 	SupportedContentTypes []string `yaml:"supported_content_types,omitempty"`
@@ -69,6 +92,7 @@ func Default() *Config {
 		Shell:          defaultShell(),
 		MaxLoops:       DefaultMaxLoops,
 		ToolTimeoutSec: DefaultToolTimeoutSec,
+		Context:        defaultContextConfig(),
 		Tools: ToolsConfig{
 			WebFetch: defaultWebFetchConfig(),
 		},
@@ -82,6 +106,7 @@ func (c *Config) Clone() Config {
 
 	clone := *c
 	clone.Providers = cloneProviders(c.Providers)
+	clone.Context = c.Context.Clone()
 	clone.Tools = c.Tools.Clone()
 	return clone
 }
@@ -126,6 +151,7 @@ func (c *Config) ApplyDefaultsFrom(defaults Config) {
 	if c.ToolTimeoutSec <= 0 {
 		c.ToolTimeoutSec = defaults.ToolTimeoutSec
 	}
+	c.Context.ApplyDefaults(defaults.Context)
 	c.Tools.ApplyDefaults(defaults.Tools)
 
 	c.Workdir = normalizeWorkdir(c.Workdir)
@@ -188,6 +214,9 @@ func (c *Config) Validate() error {
 	}
 	if err := c.Tools.Validate(); err != nil {
 		return fmt.Errorf("config: tools: %w", err)
+	}
+	if err := c.Context.Validate(); err != nil {
+		return fmt.Errorf("config: context: %w", err)
 	}
 
 	return nil
@@ -305,9 +334,32 @@ func defaultWebFetchConfig() WebFetchConfig {
 	}
 }
 
+func defaultContextConfig() ContextConfig {
+	return ContextConfig{
+		Compact: defaultCompactConfig(),
+	}
+}
+
+func defaultCompactConfig() CompactConfig {
+	return CompactConfig{
+		MicroEnabled:                  true,
+		ToolResultKeepRecent:          DefaultCompactToolResultKeepRecent,
+		ToolResultPlaceholderMinChars: DefaultCompactPlaceholderMinChars,
+		ManualStrategy:                CompactManualStrategyKeepRecent,
+		ManualKeepRecentSpans:         DefaultCompactManualKeepRecentSpans,
+		MaxSummaryChars:               DefaultCompactMaxSummaryChars,
+	}
+}
+
 func (c ToolsConfig) Clone() ToolsConfig {
 	return ToolsConfig{
 		WebFetch: c.WebFetch.Clone(),
+	}
+}
+
+func (c ContextConfig) Clone() ContextConfig {
+	return ContextConfig{
+		Compact: c.Compact.Clone(),
 	}
 }
 
@@ -319,9 +371,24 @@ func (c *ToolsConfig) ApplyDefaults(defaults ToolsConfig) {
 	c.WebFetch.ApplyDefaults(defaults.WebFetch)
 }
 
+func (c *ContextConfig) ApplyDefaults(defaults ContextConfig) {
+	if c == nil {
+		return
+	}
+
+	c.Compact.ApplyDefaults(defaults.Compact)
+}
+
 func (c ToolsConfig) Validate() error {
 	if err := c.WebFetch.Validate(); err != nil {
 		return fmt.Errorf("webfetch: %w", err)
+	}
+	return nil
+}
+
+func (c ContextConfig) Validate() error {
+	if err := c.Compact.Validate(); err != nil {
+		return fmt.Errorf("compact: %w", err)
 	}
 	return nil
 }
@@ -330,6 +397,10 @@ func (c WebFetchConfig) Clone() WebFetchConfig {
 	clone := c
 	clone.SupportedContentTypes = append([]string(nil), c.SupportedContentTypes...)
 	return clone
+}
+
+func (c CompactConfig) Clone() CompactConfig {
+	return c
 }
 
 func (c *WebFetchConfig) ApplyDefaults(defaults WebFetchConfig) {
@@ -341,6 +412,28 @@ func (c *WebFetchConfig) ApplyDefaults(defaults WebFetchConfig) {
 		c.MaxResponseBytes = defaults.MaxResponseBytes
 	}
 	c.SupportedContentTypes = normalizeContentTypes(c.SupportedContentTypes, defaults.SupportedContentTypes)
+}
+
+func (c *CompactConfig) ApplyDefaults(defaults CompactConfig) {
+	if c == nil {
+		return
+	}
+
+	if c.ToolResultKeepRecent <= 0 {
+		c.ToolResultKeepRecent = defaults.ToolResultKeepRecent
+	}
+	if c.ToolResultPlaceholderMinChars <= 0 {
+		c.ToolResultPlaceholderMinChars = defaults.ToolResultPlaceholderMinChars
+	}
+	if strings.TrimSpace(c.ManualStrategy) == "" {
+		c.ManualStrategy = defaults.ManualStrategy
+	}
+	if c.ManualKeepRecentSpans <= 0 {
+		c.ManualKeepRecentSpans = defaults.ManualKeepRecentSpans
+	}
+	if c.MaxSummaryChars <= 0 {
+		c.MaxSummaryChars = defaults.MaxSummaryChars
+	}
 }
 
 func (c WebFetchConfig) Validate() error {
@@ -357,6 +450,28 @@ func (c WebFetchConfig) Validate() error {
 		}
 	}
 	return nil
+}
+
+func (c CompactConfig) Validate() error {
+	if c.ToolResultKeepRecent <= 0 {
+		return errors.New("tool_result_keep_recent must be greater than 0")
+	}
+	if c.ToolResultPlaceholderMinChars <= 0 {
+		return errors.New("tool_result_placeholder_min_chars must be greater than 0")
+	}
+	if c.ManualKeepRecentSpans <= 0 {
+		return errors.New("manual_keep_recent_spans must be greater than 0")
+	}
+	if c.MaxSummaryChars <= 0 {
+		return errors.New("max_summary_chars must be greater than 0")
+	}
+
+	switch strings.ToLower(strings.TrimSpace(c.ManualStrategy)) {
+	case CompactManualStrategyKeepRecent, CompactManualStrategyFullReplace:
+		return nil
+	default:
+		return fmt.Errorf("manual_strategy %q is not supported", c.ManualStrategy)
+	}
 }
 
 func normalizeContentTypes(values []string, defaults []string) []string {

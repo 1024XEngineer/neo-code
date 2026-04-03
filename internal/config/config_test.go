@@ -829,6 +829,184 @@ func TestConstructorsRejectMissingDependencies(t *testing.T) {
 	})
 }
 
+func TestCompactConfigDefaultsAndRoundTrip(t *testing.T) {
+	tempDir := t.TempDir()
+	loader := NewLoader(tempDir, testDefaultConfig())
+
+	cfg, err := loader.Load(context.Background())
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	compactCfg := cfg.Context.Compact
+	if !compactCfg.MicroEnabled {
+		t.Fatalf("expected micro_enabled default true")
+	}
+	if compactCfg.ToolResultKeepRecent != DefaultCompactToolResultKeepRecent {
+		t.Fatalf("expected tool_result_keep_recent=%d, got %d", DefaultCompactToolResultKeepRecent, compactCfg.ToolResultKeepRecent)
+	}
+	if compactCfg.ToolResultPlaceholderMinChars != DefaultCompactPlaceholderMinChars {
+		t.Fatalf("expected tool_result_placeholder_min_chars=%d, got %d", DefaultCompactPlaceholderMinChars, compactCfg.ToolResultPlaceholderMinChars)
+	}
+	if compactCfg.ManualStrategy != CompactManualStrategyKeepRecent {
+		t.Fatalf("expected manual strategy %q, got %q", CompactManualStrategyKeepRecent, compactCfg.ManualStrategy)
+	}
+	if compactCfg.ManualKeepRecentSpans != DefaultCompactManualKeepRecentSpans {
+		t.Fatalf("expected manual_keep_recent_spans=%d, got %d", DefaultCompactManualKeepRecentSpans, compactCfg.ManualKeepRecentSpans)
+	}
+	if compactCfg.MaxSummaryChars != DefaultCompactMaxSummaryChars {
+		t.Fatalf("expected max_summary_chars=%d, got %d", DefaultCompactMaxSummaryChars, compactCfg.MaxSummaryChars)
+	}
+
+	if err := loader.Save(context.Background(), cfg); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	reloaded, err := loader.Load(context.Background())
+	if err != nil {
+		t.Fatalf("Reload() error = %v", err)
+	}
+
+	if reloaded.Context.Compact.ManualStrategy != CompactManualStrategyKeepRecent {
+		t.Fatalf("expected manual strategy to persist, got %q", reloaded.Context.Compact.ManualStrategy)
+	}
+}
+
+func TestCompactConfigMicroEnabledFalsePersistsAcrossReload(t *testing.T) {
+	tempDir := t.TempDir()
+	loader := NewLoader(tempDir, testDefaultConfig())
+
+	cfg, err := loader.Load(context.Background())
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	cfg.Context.Compact.MicroEnabled = false
+
+	if err := loader.Save(context.Background(), cfg); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	reloaded, err := loader.Load(context.Background())
+	if err != nil {
+		t.Fatalf("Reload() error = %v", err)
+	}
+	if reloaded.Context.Compact.MicroEnabled {
+		t.Fatalf("expected micro_enabled to persist as false after reload")
+	}
+}
+
+func TestCompactConfigMissingMicroEnabledFallsBackToDefaultTrue(t *testing.T) {
+	tempDir := t.TempDir()
+	loader := NewLoader(tempDir, testDefaultConfig())
+	if err := os.MkdirAll(loader.BaseDir(), 0o755); err != nil {
+		t.Fatalf("create base dir: %v", err)
+	}
+
+	legacyConfig := []byte(strings.Join([]string{
+		"selected_provider: openai",
+		"current_model: gpt-4.1",
+		"workdir: " + filepath.ToSlash(tempDir),
+		"shell: powershell",
+		"",
+	}, "\n"))
+	if err := os.WriteFile(loader.ConfigPath(), legacyConfig, 0o644); err != nil {
+		t.Fatalf("write legacy config: %v", err)
+	}
+
+	cfg, err := loader.Load(context.Background())
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !cfg.Context.Compact.MicroEnabled {
+		t.Fatalf("expected missing micro_enabled to fallback to default true")
+	}
+}
+
+func TestCompactConfigValidateFailures(t *testing.T) {
+	tests := []struct {
+		name      string
+		compact   CompactConfig
+		expectErr string
+	}{
+		{
+			name: "invalid keep recent",
+			compact: CompactConfig{
+				ToolResultKeepRecent:          0,
+				ToolResultPlaceholderMinChars: 100,
+				ManualStrategy:                CompactManualStrategyKeepRecent,
+				ManualKeepRecentSpans:         6,
+				MaxSummaryChars:               1200,
+			},
+			expectErr: "tool_result_keep_recent",
+		},
+		{
+			name: "invalid placeholder min chars",
+			compact: CompactConfig{
+				ToolResultKeepRecent:          3,
+				ToolResultPlaceholderMinChars: 0,
+				ManualStrategy:                CompactManualStrategyKeepRecent,
+				ManualKeepRecentSpans:         6,
+				MaxSummaryChars:               1200,
+			},
+			expectErr: "tool_result_placeholder_min_chars",
+		},
+		{
+			name: "invalid manual strategy",
+			compact: CompactConfig{
+				ToolResultKeepRecent:          3,
+				ToolResultPlaceholderMinChars: 100,
+				ManualStrategy:                "unsupported",
+				ManualKeepRecentSpans:         6,
+				MaxSummaryChars:               1200,
+			},
+			expectErr: "manual_strategy",
+		},
+		{
+			name: "invalid manual keep spans",
+			compact: CompactConfig{
+				ToolResultKeepRecent:          3,
+				ToolResultPlaceholderMinChars: 100,
+				ManualStrategy:                CompactManualStrategyKeepRecent,
+				ManualKeepRecentSpans:         0,
+				MaxSummaryChars:               1200,
+			},
+			expectErr: "manual_keep_recent_spans",
+		},
+		{
+			name: "invalid summary chars",
+			compact: CompactConfig{
+				ToolResultKeepRecent:          3,
+				ToolResultPlaceholderMinChars: 100,
+				ManualStrategy:                CompactManualStrategyKeepRecent,
+				ManualKeepRecentSpans:         6,
+				MaxSummaryChars:               0,
+			},
+			expectErr: "max_summary_chars",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.compact.Validate()
+			if err == nil || !strings.Contains(err.Error(), tt.expectErr) {
+				t.Fatalf("expected error containing %q, got %v", tt.expectErr, err)
+			}
+		})
+	}
+}
+
+func TestCompactConfigValidateSupportsFullReplace(t *testing.T) {
+	err := (CompactConfig{
+		ToolResultKeepRecent:          3,
+		ToolResultPlaceholderMinChars: 100,
+		ManualStrategy:                CompactManualStrategyFullReplace,
+		ManualKeepRecentSpans:         6,
+		MaxSummaryChars:               1200,
+	}).Validate()
+	if err != nil {
+		t.Fatalf("expected full_replace strategy to be valid, got %v", err)
+	}
+}
+
 func restoreEnv(t *testing.T, key string) {
 	t.Helper()
 	value, ok := os.LookupEnv(key)

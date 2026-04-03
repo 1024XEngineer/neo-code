@@ -14,6 +14,13 @@ type RuntimeEvent struct {
 }
 
 const (
+	// CompactTriggerModeMicro labels compact payloads produced by the micro strategy.
+	CompactTriggerModeMicro = "micro"
+	// CompactTriggerModeManual labels compact payloads produced by manual compact requests.
+	CompactTriggerModeManual = "manual"
+)
+
+const (
 	// EventUserMessage is emitted after the user input has been accepted and saved.
 	EventUserMessage EventType = "user_message"
 	// EventAgentChunk carries streamed assistant text.
@@ -36,4 +43,12 @@ const (
 	// EventProviderRetry is emitted when runtime retries a provider call due to
 	// a retryable error (e.g. 429, 5xx). Payload is a human-readable message.
 	EventProviderRetry EventType = "provider_retry"
+	// EventCompactStart is emitted when a compact cycle starts.
+	EventCompactStart EventType = "compact_start"
+	// EventCompactDone is emitted when a compact cycle completes.
+	EventCompactDone EventType = "compact_done"
+	// EventCompactError is emitted when compact fails.
+	EventCompactError EventType = "compact_error"
+	// EventMicroCompactApplied is emitted when micro compact has rewritten context.
+	EventMicroCompactApplied EventType = "micro_compact_applied"
 )
