@@ -13,7 +13,8 @@ import (
 
 	"neo-code/internal/config"
 	"neo-code/internal/provider"
-	"neo-code/internal/provider/builtin"
+	providercatalog "neo-code/internal/provider/catalog"
+	providerselection "neo-code/internal/provider/selection"
 	agentruntime "neo-code/internal/runtime"
 	"neo-code/internal/tools"
 )
@@ -1571,14 +1572,14 @@ func TestWorkspaceCommandAndFileReferenceFlow(t *testing.T) {
 
 func newTestConfigManager(t *testing.T) *config.Manager {
 	t.Helper()
-	manager := config.NewManager(config.NewLoader(t.TempDir(), builtin.DefaultConfig()))
+	manager := config.NewManager(config.NewLoader(t.TempDir(), config.DefaultConfig()))
 	if _, err := manager.Load(context.Background()); err != nil {
 		t.Fatalf("load config: %v", err)
 	}
 	return manager
 }
 
-func newTestProviderService(t *testing.T, manager *config.Manager) *provider.Service {
+func newTestProviderService(t *testing.T, manager *config.Manager) *providerselection.Service {
 	t.Helper()
 
 	registry := provider.NewRegistry()
@@ -1591,7 +1592,8 @@ func newTestProviderService(t *testing.T, manager *config.Manager) *provider.Ser
 	if err != nil {
 		t.Fatalf("register provider drivers: %v", err)
 	}
-	return provider.NewService(manager, registry, newTUITestCatalogStore())
+	modelCatalogs := providercatalog.NewService("", registry, newTUITestCatalogStore())
+	return providerselection.NewService(manager, registry, modelCatalogs)
 }
 
 type tuiTestProvider struct{}
@@ -1601,28 +1603,28 @@ func (tuiTestProvider) Chat(ctx context.Context, req provider.ChatRequest, event
 }
 
 type tuiTestCatalogStore struct {
-	catalogs map[string]provider.ModelCatalog
+	catalogs map[string]providercatalog.ModelCatalog
 }
 
 func newTUITestCatalogStore() *tuiTestCatalogStore {
 	return &tuiTestCatalogStore{
-		catalogs: map[string]provider.ModelCatalog{},
+		catalogs: map[string]providercatalog.ModelCatalog{},
 	}
 }
 
-func (s *tuiTestCatalogStore) Load(ctx context.Context, identity config.ProviderIdentity) (provider.ModelCatalog, error) {
+func (s *tuiTestCatalogStore) Load(ctx context.Context, identity config.ProviderIdentity) (providercatalog.ModelCatalog, error) {
 	if err := ctx.Err(); err != nil {
-		return provider.ModelCatalog{}, err
+		return providercatalog.ModelCatalog{}, err
 	}
 
 	catalog, ok := s.catalogs[identity.Key()]
 	if !ok {
-		return provider.ModelCatalog{}, provider.ErrModelCatalogNotFound
+		return providercatalog.ModelCatalog{}, providercatalog.ErrCatalogNotFound
 	}
 	return catalog, nil
 }
 
-func (s *tuiTestCatalogStore) Save(ctx context.Context, catalog provider.ModelCatalog) error {
+func (s *tuiTestCatalogStore) Save(ctx context.Context, catalog providercatalog.ModelCatalog) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}

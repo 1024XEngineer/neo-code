@@ -90,7 +90,10 @@ go run ./cmd/neocode
 
 - **`internal/config`** — 配置管理、环境变量、YAML 加载
 - **`internal/context`** — system prompt、消息裁剪与上下文构建
-- **`internal/provider`** — 内建 LLM Provider 抽象、模型元数据归一化、动态发现与 catalog 缓存
+- **`internal/provider`** — Provider 契约、驱动注册与通用领域类型
+- **`internal/provider/catalog`** — 模型发现、catalog 缓存与后台刷新
+- **`internal/provider/selection`** — provider/model 选择与配置同步
+- **`internal/provider/builtin`** — 内建 driver 注册
 - **`internal/runtime`** — ReAct 主循环、事件流、会话管理
 - **`internal/tools`** — 工具注册表与具体工具实现
 - **`internal/tui`** — 终端 UI、交互体验、事件桥接
@@ -108,7 +111,10 @@ go run ./cmd/neocode
 │   ├── app              # 应用装配
 │   ├── config           # 配置管理
 │   ├── context          # 上下文构建
-│   ├── provider         # Provider 抽象、模型发现与元数据缓存
+│   ├── provider         # Provider 契约与驱动注册
+│   │   ├── builtin      # 内建 driver 注册
+│   │   ├── catalog      # 模型发现与缓存
+│   │   └── selection    # provider/model 选择服务
 │   ├── runtime          # ReAct 循环与事件流
 │   ├── tools            # 工具系统
 │   └── tui              # 终端 UI

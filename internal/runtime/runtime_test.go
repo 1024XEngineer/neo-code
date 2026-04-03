@@ -12,7 +12,6 @@ import (
 	"neo-code/internal/config"
 	agentcontext "neo-code/internal/context"
 	"neo-code/internal/provider"
-	"neo-code/internal/provider/builtin"
 	"neo-code/internal/tools"
 )
 
@@ -1237,7 +1236,7 @@ func newRuntimeConfigManager(t *testing.T) *config.Manager {
 	if err := os.Setenv(config.OpenAIDefaultAPIKeyEnv, "test-key"); err != nil {
 		t.Fatalf("set env: %v", err)
 	}
-	manager := config.NewManager(config.NewLoader(t.TempDir(), builtin.DefaultConfig()))
+	manager := config.NewManager(config.NewLoader(t.TempDir(), config.DefaultConfig()))
 	if _, err := manager.Load(context.Background()); err != nil {
 		t.Fatalf("load config: %v", err)
 	}

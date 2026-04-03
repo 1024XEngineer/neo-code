@@ -1,9 +1,9 @@
 package context
 
-import "neo-code/internal/provider/builtin"
+import "neo-code/internal/config"
 
 func testMetadata(workdir string) Metadata {
-	cfg := builtin.DefaultConfig()
+	cfg := config.DefaultConfig()
 	return Metadata{
 		Workdir:  workdir,
 		Shell:    cfg.Shell,
