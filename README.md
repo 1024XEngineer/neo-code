@@ -8,7 +8,7 @@ NeoCode 是一个在终端中运行的 AI 编码助手，采用 ReAct（Reason-A
 
 - **流式输出** — 实时展示模型思考过程
 - **工具系统** — 文件操作、代码执行、搜索等内置工具
-- **多 Provider 支持** — OpenAI、Gemini 等主流模型，易于扩展
+- **内建 Provider 支持** — OpenAI、Gemini、OpenLL、Qiniu，模型列表支持动态发现与缓存
 - **终端原生体验** — 基于 Bubble Tea 的现代化 TUI
 
 ## 一键安装
@@ -66,7 +66,7 @@ go run ./cmd/neocode
 
 使用 slash 命令快速切换配置：
 
-- `/provider` — 切换模型提供商
+- `/provider` — 切换内建模型提供商
 - `/model` — 切换模型
 - `/compact` — 手动压缩当前会话上下文（保留可追溯 transcript）
 
@@ -92,8 +92,8 @@ go run ./cmd/neocode
 核心模块职责：
 
 - **`internal/config`** — 配置管理、环境变量、YAML 加载
-- **`internal/context`** — 多 section system prompt 组装、消息裁剪与上下文构建
-- **`internal/provider`** — LLM 提供商抽象，抹平厂商差异
+- **`internal/context`** — system prompt、消息裁剪与上下文构建
+- **`internal/provider`** — 内建 LLM Provider 抽象、模型元数据归一化、动态发现与 catalog 缓存
 - **`internal/runtime`** — ReAct 主循环、事件流、会话管理
 - **`internal/tools`** — 工具注册表与具体工具实现
 - **`internal/tui`** — 终端 UI、交互体验、事件桥接
@@ -110,8 +110,8 @@ go run ./cmd/neocode
 ├── internal
 │   ├── app              # 应用装配
 │   ├── config           # 配置管理
-│   ├── context          # system prompt 组装与上下文构建
-│   ├── provider         # Provider 抽象与实现
+│   ├── context          # 上下文构建
+│   ├── provider         # Provider 抽象、模型发现与元数据缓存
 │   ├── runtime          # ReAct 循环与事件流
 │   ├── tools            # 工具系统
 │   └── tui              # 终端 UI
