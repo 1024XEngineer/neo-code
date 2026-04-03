@@ -1641,3 +1641,39 @@ func TestProviderRetryBackoff(t *testing.T) {
 		})
 	}
 }
+
+func TestCompactTriggerMode(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		mode contextcompact.Mode
+		want string
+	}{
+		{
+			name: "micro mode",
+			mode: contextcompact.ModeMicro,
+			want: CompactTriggerModeMicro,
+		},
+		{
+			name: "manual mode",
+			mode: contextcompact.ModeManual,
+			want: CompactTriggerModeManual,
+		},
+		{
+			name: "unknown mode fallback",
+			mode: contextcompact.Mode("custom"),
+			want: "custom",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := compactTriggerMode(tt.mode); got != tt.want {
+				t.Fatalf("compactTriggerMode(%q) = %q, want %q", tt.mode, got, tt.want)
+			}
+		})
+	}
+}
