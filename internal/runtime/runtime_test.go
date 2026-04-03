@@ -17,6 +17,21 @@ import (
 	"neo-code/internal/tools"
 )
 
+func TestMain(m *testing.M) {
+	const key = config.OpenAIDefaultAPIKeyEnv
+	previousValue, hadPrevious := os.LookupEnv(key)
+	_ = os.Setenv(key, "test-key")
+
+	exitCode := m.Run()
+
+	if hadPrevious {
+		_ = os.Setenv(key, previousValue)
+	} else {
+		_ = os.Unsetenv(key)
+	}
+	os.Exit(exitCode)
+}
+
 type memoryStore struct {
 	sessions map[string]Session
 	saves    int
@@ -1449,10 +1464,6 @@ func TestServiceCompactManualFailureReturnsError(t *testing.T) {
 
 func newRuntimeConfigManager(t *testing.T) *config.Manager {
 	t.Helper()
-	restoreRuntimeEnv(t, config.OpenAIDefaultAPIKeyEnv)
-	if err := os.Setenv(config.OpenAIDefaultAPIKeyEnv, "test-key"); err != nil {
-		t.Fatalf("set env: %v", err)
-	}
 	manager := config.NewManager(config.NewLoader(t.TempDir(), builtin.DefaultConfig()))
 	if _, err := manager.Load(context.Background()); err != nil {
 		t.Fatalf("load config: %v", err)
@@ -1466,18 +1477,6 @@ func newRuntimeConfigManager(t *testing.T) *config.Manager {
 		t.Fatalf("update config: %v", err)
 	}
 	return manager
-}
-
-func restoreRuntimeEnv(t *testing.T, key string) {
-	t.Helper()
-	value, ok := os.LookupEnv(key)
-	t.Cleanup(func() {
-		if !ok {
-			_ = os.Unsetenv(key)
-			return
-		}
-		_ = os.Setenv(key, value)
-	})
 }
 
 func onlySession(t *testing.T, store *memoryStore) Session {
