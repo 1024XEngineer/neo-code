@@ -1462,6 +1462,270 @@ func TestServiceCompactManualFailureReturnsError(t *testing.T) {
 	assertNoEventType(t, events, EventCompactDone)
 }
 
+func TestServiceManualCompactThenRunContinuesToolRound(t *testing.T) {
+	manager := newRuntimeConfigManager(t)
+	store := newMemoryStore()
+	session := newSession("manual-continue")
+	session.ID = "session-manual-continue"
+	session.Messages = []provider.Message{
+		{Role: provider.RoleUser, Content: "legacy request"},
+		{Role: provider.RoleAssistant, Content: "legacy answer"},
+	}
+	store.sessions[session.ID] = cloneSession(session)
+
+	registry := tools.NewRegistry()
+	tool := &stubTool{name: "filesystem_read_file", content: "file content"}
+	registry.Register(tool)
+
+	scripted := &scriptedProvider{
+		responses: []provider.ChatResponse{
+			{
+				Message: provider.Message{
+					Role: provider.RoleAssistant,
+					ToolCalls: []provider.ToolCall{
+						{
+							ID:        "call-continue-1",
+							Name:      "filesystem_read_file",
+							Arguments: `{"path":"README.md"}`,
+						},
+					},
+				},
+				FinishReason: "tool_calls",
+			},
+			{
+				Message: provider.Message{
+					Role:    provider.RoleAssistant,
+					Content: "tool round still works",
+				},
+				FinishReason: "stop",
+			},
+		},
+	}
+
+	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: scripted}, nil)
+	service.compactRunner = &stubCompactRunner{
+		runFn: func(ctx context.Context, input contextcompact.Input) (contextcompact.Result, error) {
+			switch input.Mode {
+			case contextcompact.ModeManual:
+				compacted := []provider.Message{
+					{Role: provider.RoleAssistant, Content: "[compact_summary]\ndone:\n- archived\n\nin_progress:\n- continue"},
+					{Role: provider.RoleAssistant, Content: "latest kept"},
+				}
+				return contextcompact.Result{
+					Messages: compacted,
+					Applied:  true,
+					Metrics: contextcompact.Metrics{
+						BeforeChars: 120,
+						AfterChars:  40,
+						SavedRatio:  2.0 / 3.0,
+						TriggerMode: string(contextcompact.ModeManual),
+					},
+					TranscriptID:   "transcript_manual_then_run",
+					TranscriptPath: "/tmp/manual-then-run.jsonl",
+				}, nil
+			case contextcompact.ModeMicro:
+				before := len(input.Messages)
+				return contextcompact.Result{
+					Messages: input.Messages,
+					Applied:  false,
+					Metrics: contextcompact.Metrics{
+						BeforeChars: before,
+						AfterChars:  before,
+						SavedRatio:  0,
+						TriggerMode: string(contextcompact.ModeMicro),
+					},
+					TranscriptID:   "transcript_micro_check",
+					TranscriptPath: "/tmp/micro-check.jsonl",
+				}, nil
+			default:
+				return contextcompact.Result{}, fmt.Errorf("unexpected compact mode %q", input.Mode)
+			}
+		},
+	}
+
+	if _, err := service.Compact(context.Background(), CompactInput{
+		SessionID: session.ID,
+		RunID:     "run-manual-first",
+	}); err != nil {
+		t.Fatalf("Compact() error = %v", err)
+	}
+
+	if err := service.Run(context.Background(), UserInput{
+		SessionID: session.ID,
+		RunID:     "run-after-manual",
+		Content:   "continue please",
+	}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	if tool.callCount != 1 {
+		t.Fatalf("expected tool to run once after manual compact, got %d", tool.callCount)
+	}
+
+	saved, err := store.Load(context.Background(), session.ID)
+	if err != nil {
+		t.Fatalf("load session: %v", err)
+	}
+	if len(saved.Messages) < 6 {
+		t.Fatalf("expected compacted history + new tool round, got %+v", saved.Messages)
+	}
+	if !strings.Contains(saved.Messages[0].Content, "compact_summary") {
+		t.Fatalf("expected compact summary to be kept in session, got %+v", saved.Messages)
+	}
+
+	tail := saved.Messages[len(saved.Messages)-4:]
+	gotRoles := []string{tail[0].Role, tail[1].Role, tail[2].Role, tail[3].Role}
+	wantRoles := []string{provider.RoleUser, provider.RoleAssistant, provider.RoleTool, provider.RoleAssistant}
+	for i := range wantRoles {
+		if gotRoles[i] != wantRoles[i] {
+			t.Fatalf("unexpected tail roles: got %v, want %v", gotRoles, wantRoles)
+		}
+	}
+
+	events := collectRuntimeEvents(service.Events())
+	assertEventSequence(t, events, []EventType{
+		EventCompactStart,
+		EventCompactDone,
+		EventUserMessage,
+		EventToolStart,
+		EventToolResult,
+		EventAgentDone,
+	})
+
+	manualDone := false
+	for _, event := range events {
+		if event.Type != EventCompactDone {
+			continue
+		}
+		payload, ok := event.Payload.(CompactDonePayload)
+		if ok && payload.TriggerMode == CompactTriggerModeManual {
+			manualDone = true
+			break
+		}
+	}
+	if !manualDone {
+		t.Fatalf("expected compact_done(manual) event, got %+v", events)
+	}
+}
+
+func TestServiceManualAndMicroCompactCombination(t *testing.T) {
+	manager := newRuntimeConfigManager(t)
+	if err := manager.Update(context.Background(), func(cfg *config.Config) error {
+		cfg.Context.Compact.MicroEnabled = true
+		return nil
+	}); err != nil {
+		t.Fatalf("enable micro compact: %v", err)
+	}
+
+	store := newMemoryStore()
+	session := newSession("manual-micro")
+	session.ID = "session-manual-micro"
+	session.Messages = []provider.Message{
+		{Role: provider.RoleUser, Content: "old context"},
+		{Role: provider.RoleAssistant, Content: "old answer"},
+	}
+	store.sessions[session.ID] = cloneSession(session)
+
+	registry := tools.NewRegistry()
+	registry.Register(&stubTool{name: "filesystem_read_file", content: "ok"})
+
+	builder := &stubContextBuilder{}
+	scripted := &scriptedProvider{
+		responses: []provider.ChatResponse{
+			{
+				Message: provider.Message{
+					Role:    provider.RoleAssistant,
+					Content: "done",
+				},
+				FinishReason: "stop",
+			},
+		},
+	}
+
+	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: scripted}, builder)
+	service.compactRunner = &stubCompactRunner{
+		runFn: func(ctx context.Context, input contextcompact.Input) (contextcompact.Result, error) {
+			switch input.Mode {
+			case contextcompact.ModeManual:
+				compacted := []provider.Message{
+					{Role: provider.RoleAssistant, Content: "[compact_summary]\ndone:\n- archived\n\nin_progress:\n- continue"},
+					{Role: provider.RoleAssistant, Content: "recent assistant"},
+				}
+				return contextcompact.Result{
+					Messages: compacted,
+					Applied:  true,
+					Metrics: contextcompact.Metrics{
+						BeforeChars: 80,
+						AfterChars:  35,
+						SavedRatio:  0.5625,
+						TriggerMode: string(contextcompact.ModeManual),
+					},
+					TranscriptID:   "transcript_combo_manual",
+					TranscriptPath: "/tmp/combo-manual.jsonl",
+				}, nil
+			case contextcompact.ModeMicro:
+				if len(input.Messages) == 0 || !strings.Contains(input.Messages[0].Content, "compact_summary") {
+					return contextcompact.Result{}, errors.New("micro compact did not receive manual compacted context")
+				}
+				next := append([]provider.Message(nil), input.Messages...)
+				next = append(next, provider.Message{Role: provider.RoleAssistant, Content: "micro-marker"})
+				return contextcompact.Result{
+					Messages: next,
+					Applied:  true,
+					Metrics: contextcompact.Metrics{
+						BeforeChars: 35,
+						AfterChars:  28,
+						SavedRatio:  0.2,
+						TriggerMode: string(contextcompact.ModeMicro),
+					},
+					TranscriptID:   "transcript_combo_micro",
+					TranscriptPath: "/tmp/combo-micro.jsonl",
+				}, nil
+			default:
+				return contextcompact.Result{}, fmt.Errorf("unexpected compact mode %q", input.Mode)
+			}
+		},
+	}
+
+	if _, err := service.Compact(context.Background(), CompactInput{
+		SessionID: session.ID,
+		RunID:     "run-combo-manual",
+	}); err != nil {
+		t.Fatalf("Compact() error = %v", err)
+	}
+
+	if err := service.Run(context.Background(), UserInput{
+		SessionID: session.ID,
+		RunID:     "run-combo-micro",
+		Content:   "follow up",
+	}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	if len(builder.lastInput.Messages) == 0 {
+		t.Fatalf("expected context builder input")
+	}
+	if builder.lastInput.Messages[len(builder.lastInput.Messages)-1].Content != "micro-marker" {
+		t.Fatalf("expected micro compact output to be passed into builder, got %+v", builder.lastInput.Messages)
+	}
+
+	calls := service.compactRunner.(*stubCompactRunner).calls
+	if len(calls) < 2 {
+		t.Fatalf("expected manual + micro compact calls, got %+v", calls)
+	}
+	if calls[0].Mode != contextcompact.ModeManual || calls[1].Mode != contextcompact.ModeMicro {
+		t.Fatalf("expected compact call order manual -> micro, got %+v", calls)
+	}
+
+	events := collectRuntimeEvents(service.Events())
+	assertEventSequence(t, events, []EventType{
+		EventCompactStart,
+		EventCompactDone,
+		EventMicroCompactApplied,
+		EventAgentDone,
+	})
+}
+
 func TestServiceSerializesRunAndCompact(t *testing.T) {
 	manager := newRuntimeConfigManager(t)
 	store := newMemoryStore()

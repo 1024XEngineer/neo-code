@@ -59,6 +59,14 @@ current_model: gpt-4.1
 workdir: /Users/username/projects/myproject
 shell: bash
 max_loops: 8
+context:
+  compact:
+    micro_enabled: true
+    tool_result_keep_recent: 3
+    tool_result_placeholder_min_chars: 100
+    manual_strategy: keep_recent
+    manual_keep_recent_spans: 6
+    max_summary_chars: 1200
 
 tools:
   webfetch:
@@ -87,6 +95,17 @@ tools:
 |------|------|--------|------|
 | `tools.webfetch.max_response_bytes` | int | `1048576` (1MB) | WebFetch 工具最大响应字节数 |
 | `tools.webfetch.supported_content_types` | []string | `[text/html, text/plain, application/json]` | 支持的内容类型 |
+
+#### 上下文压缩配置（Compact）
+
+| 字段 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `context.compact.micro_enabled` | bool | `true` | 是否在每轮 provider 请求前启用 micro compact |
+| `context.compact.tool_result_keep_recent` | int | `3` | micro compact 中保留最近 N 条 tool result 原文 |
+| `context.compact.tool_result_placeholder_min_chars` | int | `100` | micro compact 触发占位替换的最小字符数阈值 |
+| `context.compact.manual_strategy` | string | `keep_recent` | 手动 `/compact` 策略，可选 `keep_recent` / `full_replace` |
+| `context.compact.manual_keep_recent_spans` | int | `6` | `keep_recent` 模式下保留最近 N 个 span |
+| `context.compact.max_summary_chars` | int | `1200` | 手动 compact 生成 summary 的最大字符数 |
 
 ### 配置文件特点
 
@@ -181,6 +200,16 @@ NeoCode 提供以下 slash 命令用于快速切换配置：
     gpt-5.4
     gpt-5.3-codex
 ```
+
+### /compact - 手动压缩当前会话
+
+```
+/compact
+```
+
+- 显式触发一次 manual compact。
+- 执行顺序为：写入 transcript -> 生成/校验 summary -> 重写会话消息 -> 发送 compact 事件。
+- 若压缩前 transcript 写盘失败，compact 会直接报错并终止，不会写坏会话。
 
 ## 配置管理
 

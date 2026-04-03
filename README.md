@@ -68,6 +68,13 @@ go run ./cmd/neocode
 
 - `/provider` — 切换内建模型提供商
 - `/model` — 切换模型
+- `/compact` — 手动压缩当前会话上下文
+
+### 上下文压缩（Compact）
+
+- 每次向模型发起请求前，runtime 会先执行一次 `micro compact`，对旧且较长的 `tool result` 做轻量占位替换，控制上下文膨胀。
+- 你可以随时输入 `/compact` 触发 `manual compact`，把较早历史折叠为结构化 summary，并保留最近若干对话跨度。
+- 每次 compact 前都会先写入完整 transcript（`~/.neocode/projects/<project-hash>/.transcripts/`），便于追溯和恢复历史。
 
 ## 架构概览
 

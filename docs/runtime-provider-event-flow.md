@@ -4,10 +4,19 @@
 
 当前 runtime 对外暴露一组小而稳定的事件：
 
+- `user_message`
 - `agent_chunk`
 - `agent_done`
 - `tool_start`
+- `tool_chunk`
 - `tool_result`
+- `tool_call_thinking`
+- `provider_retry`
+- `compact_start`
+- `compact_done`
+- `compact_error`
+- `micro_compact_applied`
+- `run_canceled`
 - `error`
 
 ## ReAct 主循环
@@ -15,12 +24,31 @@
 1. 加载目标会话或创建新会话。
 2. 追加最新的用户消息。
 3. 读取最新配置快照。
-4. 解析当前 provider 配置并构建 provider 实例。
-5. 调用 `context.Builder` 生成本轮请求使用的 `system prompt` 和消息上下文。
-6. 调用 `Provider.Chat`，并把流式事件桥接给 TUI。
-7. 保存 assistant 完整回复。
-8. 执行返回的工具调用，并保存每一个工具结果。
-9. 如果仍需继续推理，则进入下一轮；否则结束。
+4. 每轮请求前执行一次 `micro compact`（轻量压缩旧 tool result）。
+5. 解析当前 provider 配置并构建 provider 实例。
+6. 调用 `context.Builder` 生成本轮请求使用的 `system prompt` 和消息上下文。
+7. 调用 `Provider.Chat`，并把流式事件桥接给 TUI。
+8. 保存 assistant 完整回复。
+9. 执行返回的工具调用，并保存每一个工具结果。
+10. 如果仍需继续推理，则进入下一轮；否则结束。
+
+## 手动 `/compact` 命令链路
+
+1. TUI 识别 `/compact` 并调用 `runtime.Compact(...)`。
+2. runtime 发出 `compact_start` 事件。
+3. compact 服务先写 transcript（完整原始消息，JSONL）。
+4. 按策略（`keep_recent` / `full_replace`）执行手动压缩并生成指标。
+5. runtime 回写 session（仅在 `applied=true` 时写回）。
+6. 成功时发出 `compact_done`；失败时发出 `compact_error`。
+
+## Compact 结果与可观测字段
+
+- `before_chars`
+- `after_chars`
+- `saved_ratio`
+- `trigger_mode`（`micro` / `manual`）
+- `transcript_id`
+- `transcript_path`
 
 ### Context Builder 输入与职责
 
@@ -64,4 +92,5 @@
 - 用户消息提交后保存
 - assistant 完整回复后保存
 - 每个工具结果完成后保存
+- 每次 compact 执行前先保存 transcript（完整留痕）
 - 避免在高频 UI 刷新路径中做磁盘 I/O
