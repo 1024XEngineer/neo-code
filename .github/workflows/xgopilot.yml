@@ -1,0 +1,4 @@
+default_ai_provider: gemini
+require_member_to_trigger: true
+gemini:
+  model: "gemini-3.0-pro-preview"
