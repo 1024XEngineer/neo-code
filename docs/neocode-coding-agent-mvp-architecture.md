@@ -376,66 +376,43 @@ sequenceDiagram
 │       └── main.go
 ├── internal/
 │   ├── app/
-│   │   ├── bootstrap.go
-│   │   ├── console_encoding_nonwindows.go
-│   │   └── console_encoding_windows.go
+│   │   └── bootstrap.go
 │   ├── config/
 │   │   ├── loader.go
-│   │   ├── manager.go
 │   │   ├── model.go
-│   │   └── default_config.go
+│   │   └── validate.go
 │   ├── context/
 │   │   ├── builder.go
-│   │   ├── compact_prompt.go
 │   │   ├── metadata.go
 │   │   ├── prompt.go
 │   │   ├── source_rules.go
 │   │   ├── source_system.go
-│   │   ├── trim.go
-│   │   ├── types.go
-│   │   ├── compact/
-│   │   │   └── runner.go
-│   │   └── internalcompact/
-│   │       └── spec.go
+│   │   └── trim.go
 │   ├── provider/
 │   │   ├── provider.go
-│   │   ├── registry.go
-│   │   ├── types.go
 │   │   ├── openai/
-│   │   ├── builtin/
-│   │   ├── catalog/
-│   │   ├── discovery/
-│   │   ├── selection/
-│   │   └── transport/
+│   │   ├── anthropic/
+│   │   └── gemini/
 │   ├── runtime/
 │   │   ├── runtime.go
-│   │   ├── compact_generator.go
-│   │   ├── events.go
-│   │   ├── id.go
-│   │   └── session.go
-│   ├── security/
+│   │   ├── executor.go
+│   │   ├── prompt_builder.go
+│   │   ├── session_store.go
+│   │   └── events.go
 │   ├── tools/
-│   │   ├── manager.go
 │   │   ├── registry.go
 │   │   ├── types.go
-│   │   ├── format.go
-│   │   ├── permission_mapper.go
-│   │   ├── bash/
 │   │   ├── filesystem/
+│   │   ├── bash/
 │   │   └── webfetch/
 │   └── tui/
 │       ├── app.go
-│       ├── commands.go
-│       ├── input_features.go
 │       ├── state.go
 │       ├── keymap.go
-│       ├── provider_service.go
-│       ├── styles.go
-│       ├── update.go
-│       └── view.go
+│       ├── views/
+│       └── components/
 └── docs/
-    ├── guides/
-    └── neocode-coding-agent-mvp-architecture.md
+    └── mvp-architecture.md
 ```
 
 ---

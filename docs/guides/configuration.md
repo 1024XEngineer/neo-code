@@ -305,9 +305,7 @@ echo $OPENAI_API_KEY
 
 ## Context Compact
 
-NeoCode 当前支持 manual compact，可通过 `/compact` 命令显式触发。
-
-manual compact 会优先复用会话自身记录的 `provider` 和 `model` 生成语义摘要；旧会话缺少这些元数据时，才回退到当前 `selected_provider` 和 `current_model`。本次改动不额外新增配置项。
+以下配置用于控制手动上下文压缩行为。
 
 ### 配置示例
 
@@ -327,11 +325,4 @@ context:
 | `context.compact.manual_keep_recent_messages` | int | `10` | `keep_recent` 模式下保留最近 N 条消息；会按 tool call 与 tool result 的原子块整体保留 |
 | `context.compact.max_summary_chars` | int | `1200` | compact summary 最大字符数 |
 
-### `/compact`
-
-- 显式触发一次 manual compact。
-- 执行顺序为：写入 transcript -> 生成/校验 summary -> 回写会话消息 -> 发送 compact 事件。
-- 若 transcript 落盘失败，compact 会直接报错并终止，不会写坏会话。
-- compact summary 采用固定 section：`done`、`in_progress`、`decisions`、`code_changes`、`constraints`。
-- 语义摘要会优先保留已完成任务和结果、重要决策及原因、当前进行中状态、关键代码改动以及用户偏好/约束。
-- compact summary 不保留工具详细输出、逐步排查过程、已解决错误细节和重复背景。
+更多行为说明见 [context-compact.md](../context-compact.md)。

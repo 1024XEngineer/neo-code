@@ -18,9 +18,11 @@ import (
 const sessionsDirName = "sessions"
 
 type Session struct {
-	ID        string             `json:"id"`
-	Title     string             `json:"title"`
-	Provider  string             `json:"provider,omitempty"`
+	ID    string `json:"id"`
+	Title string `json:"title"`
+	// Provider 记录最近一次成功运行会话时使用的 provider，用于 compact 优先复用历史配置。
+	Provider string `json:"provider,omitempty"`
+	// Model 记录最近一次成功运行会话时使用的 model，用于 compact 优先复用历史配置。
 	Model     string             `json:"model,omitempty"`
 	CreatedAt time.Time          `json:"created_at"`
 	UpdatedAt time.Time          `json:"updated_at"`

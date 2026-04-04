@@ -14,11 +14,6 @@ type RuntimeEvent struct {
 }
 
 const (
-	// CompactTriggerModeManual labels compact payloads produced by manual compact requests.
-	CompactTriggerModeManual = "manual"
-)
-
-const (
 	// EventUserMessage is emitted after the user input has been accepted and saved.
 	EventUserMessage EventType = "user_message"
 	// EventAgentChunk carries streamed assistant text.

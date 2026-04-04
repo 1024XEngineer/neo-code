@@ -16,6 +16,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"neo-code/internal/config"
+	contextcompact "neo-code/internal/context/compact"
 	"neo-code/internal/provider"
 	providercatalog "neo-code/internal/provider/catalog"
 	providerselection "neo-code/internal/provider/selection"
@@ -1848,7 +1849,7 @@ func TestImmediateSlashCommandsAndLayoutBranches(t *testing.T) {
 		BeforeChars:    100,
 		AfterChars:     40,
 		SavedRatio:     0.6,
-		TriggerMode:    agentruntime.CompactTriggerModeManual,
+		TriggerMode:    string(contextcompact.ModeManual),
 		TranscriptPath: "/tmp/transcript.jsonl",
 	}
 	app.state.ActiveSessionID = "session-compact"
@@ -1936,7 +1937,7 @@ func TestCompactEventAndBusyBranches(t *testing.T) {
 			BeforeChars:    100,
 			AfterChars:     60,
 			SavedRatio:     0.4,
-			TriggerMode:    agentruntime.CompactTriggerModeManual,
+			TriggerMode:    string(contextcompact.ModeManual),
 			TranscriptPath: "/tmp/t.jsonl",
 		},
 	})
@@ -1954,7 +1955,7 @@ func TestCompactEventAndBusyBranches(t *testing.T) {
 		Type:      agentruntime.EventCompactError,
 		SessionID: "s1",
 		Payload: agentruntime.CompactErrorPayload{
-			TriggerMode: agentruntime.CompactTriggerModeManual,
+			TriggerMode: string(contextcompact.ModeManual),
 			Message:     "disk full",
 		},
 	})
