@@ -1,3 +1,6 @@
+# ⚠️ 已过时：旧版 API 文档（DEPRECATED）
+
+
 # NeoCode Coding Agent MVP 架构设计
 
 ## 1. 目标
@@ -376,43 +379,66 @@ sequenceDiagram
 │       └── main.go
 ├── internal/
 │   ├── app/
-│   │   └── bootstrap.go
+│   │   ├── bootstrap.go
+│   │   ├── console_encoding_nonwindows.go
+│   │   └── console_encoding_windows.go
 │   ├── config/
 │   │   ├── loader.go
+│   │   ├── manager.go
 │   │   ├── model.go
-│   │   └── validate.go
+│   │   └── default_config.go
 │   ├── context/
 │   │   ├── builder.go
+│   │   ├── compact_prompt.go
 │   │   ├── metadata.go
 │   │   ├── prompt.go
 │   │   ├── source_rules.go
 │   │   ├── source_system.go
-│   │   └── trim.go
+│   │   ├── trim.go
+│   │   ├── types.go
+│   │   ├── compact/
+│   │   │   └── runner.go
+│   │   └── internalcompact/
+│   │       └── spec.go
 │   ├── provider/
 │   │   ├── provider.go
-│   │   ├── openai/
-│   │   ├── anthropic/
-│   │   └── gemini/
-│   ├── runtime/
-│   │   ├── runtime.go
-│   │   ├── executor.go
-│   │   ├── prompt_builder.go
-│   │   ├── session_store.go
-│   │   └── events.go
-│   ├── tools/
 │   │   ├── registry.go
 │   │   ├── types.go
-│   │   ├── filesystem/
+│   │   ├── openai/
+│   │   ├── builtin/
+│   │   ├── catalog/
+│   │   ├── discovery/
+│   │   ├── selection/
+│   │   └── transport/
+│   ├── runtime/
+│   │   ├── runtime.go
+│   │   ├── compact_generator.go
+│   │   ├── events.go
+│   │   ├── id.go
+│   │   └── session.go
+│   ├── security/
+│   ├── tools/
+│   │   ├── manager.go
+│   │   ├── registry.go
+│   │   ├── types.go
+│   │   ├── format.go
+│   │   ├── permission_mapper.go
 │   │   ├── bash/
+│   │   ├── filesystem/
 │   │   └── webfetch/
 │   └── tui/
 │       ├── app.go
+│       ├── commands.go
+│       ├── input_features.go
 │       ├── state.go
 │       ├── keymap.go
-│       ├── views/
-│       └── components/
+│       ├── provider_service.go
+│       ├── styles.go
+│       ├── update.go
+│       └── view.go
 └── docs/
-    └── mvp-architecture.md
+    ├── guides/
+    └── neocode-coding-agent-mvp-architecture.md
 ```
 
 ---
