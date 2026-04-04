@@ -613,6 +613,60 @@ func TestEmitToolCallStartGuards(t *testing.T) {
 	}
 }
 
+func TestMergeToolCallDeltaEmitsStartWhenNameArrivesLater(t *testing.T) {
+	t.Parallel()
+
+	events := make(chan domain.StreamEvent, 4)
+	toolCalls := make(map[int]*domain.ToolCall)
+
+	if err := mergeToolCallDelta(context.Background(), events, toolCalls, toolCallDelta{
+		Index: 0,
+		ID:    "call_late_name",
+	}); err != nil {
+		t.Fatalf("mergeToolCallDelta() first delta error = %v", err)
+	}
+
+	select {
+	case evt := <-events:
+		t.Fatalf("expected no event before tool name arrives, got %+v", evt)
+	default:
+	}
+
+	if err := mergeToolCallDelta(context.Background(), events, toolCalls, toolCallDelta{
+		Index: 0,
+		Function: openAIFunctionCall{
+			Name:      "filesystem_edit",
+			Arguments: `{"path":"main.go"}`,
+		},
+	}); err != nil {
+		t.Fatalf("mergeToolCallDelta() late-name delta error = %v", err)
+	}
+
+	start := <-events
+	if start.Type != domain.StreamEventToolCallStart {
+		t.Fatalf("expected tool_call_start event, got %+v", start)
+	}
+	if start.ToolCallID != "call_late_name" || start.ToolName != "filesystem_edit" {
+		t.Fatalf("unexpected tool_call_start payload: %+v", start)
+	}
+
+	delta := <-events
+	if delta.Type != domain.StreamEventToolCallDelta {
+		t.Fatalf("expected tool_call_delta event, got %+v", delta)
+	}
+	if delta.ToolArgumentsDelta != `{"path":"main.go"}` {
+		t.Fatalf("unexpected tool arguments delta: %+v", delta)
+	}
+
+	call := toolCalls[0]
+	if call == nil {
+		t.Fatal("expected tool call to be accumulated")
+	}
+	if call.ID != "call_late_name" || call.Name != "filesystem_edit" || call.Arguments != `{"path":"main.go"}` {
+		t.Fatalf("unexpected accumulated tool call: %+v", call)
+	}
+}
+
 func TestProviderChatEmitsToolCallStartEvent(t *testing.T) {
 	t.Setenv(config.OpenAIDefaultAPIKeyEnv, "test-key")
 

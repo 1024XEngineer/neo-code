@@ -203,6 +203,72 @@ func TestRoundTrip_RetryThenSuccess(t *testing.T) {
 	}
 }
 
+func TestRoundTrip_RetryableStatusThenSuccess(t *testing.T) {
+	t.Parallel()
+
+	wantResp := newSuccessResponse(http.StatusOK, "ok")
+	m := &mockRoundTripper{
+		fn: []func() (*http.Response, error){
+			func() (*http.Response, error) {
+				return newSuccessResponse(http.StatusTooManyRequests, "retry later"), nil
+			},
+			func() (*http.Response, error) { return wantResp, nil },
+		},
+	}
+
+	rt := NewRetryTransport(m, RetryConfig{
+		MaxRetries: 2,
+		WaitBase:   1 * time.Millisecond,
+		MaxWait:    10 * time.Millisecond,
+	})
+	req, _ := http.NewRequest(http.MethodGet, "http://example.com", nil)
+	resp, err := rt.RoundTrip(req)
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	if m.callCount != 2 {
+		t.Fatalf("callCount = %d, want 2", m.callCount)
+	}
+}
+
+func TestRoundTrip_RetryableStatusExhaustedReturnsLastResponse(t *testing.T) {
+	t.Parallel()
+
+	m := &mockRoundTripper{
+		fn: []func() (*http.Response, error){
+			func() (*http.Response, error) {
+				return newSuccessResponse(http.StatusTooManyRequests, "retry later"), nil
+			},
+			func() (*http.Response, error) { return newSuccessResponse(http.StatusBadGateway, "still broken"), nil },
+		},
+	}
+
+	rt := NewRetryTransport(m, RetryConfig{
+		MaxRetries: 1,
+		WaitBase:   1 * time.Millisecond,
+		MaxWait:    10 * time.Millisecond,
+	})
+	req, _ := http.NewRequest(http.MethodGet, "http://example.com", nil)
+	resp, err := rt.RoundTrip(req)
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp == nil {
+		t.Fatal("expected final response after retries are exhausted")
+	}
+	if resp.StatusCode != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502", resp.StatusCode)
+	}
+	if m.callCount != 2 {
+		t.Fatalf("callCount = %d, want 2", m.callCount)
+	}
+}
+
 func TestRoundTrip_AllRetriesFail(t *testing.T) {
 	t.Parallel()
 

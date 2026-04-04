@@ -9,7 +9,6 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"neo-code/internal/config"
-	"neo-code/internal/provider"
 )
 
 const (
@@ -161,7 +160,7 @@ func newSelectionPickerItems(items []selectionItem) list.Model {
 	return newSelectionPicker(listItems)
 }
 
-func mapProviderItems(items []provider.ProviderCatalogItem) []selectionItem {
+func mapProviderItems(items []config.ProviderCatalogItem) []selectionItem {
 	mapped := make([]selectionItem, 0, len(items))
 	for _, item := range items {
 		mapped = append(mapped, selectionItem{
@@ -173,7 +172,7 @@ func mapProviderItems(items []provider.ProviderCatalogItem) []selectionItem {
 	return mapped
 }
 
-func mapModelItems(models []provider.ModelDescriptor) []selectionItem {
+func mapModelItems(models []config.ModelDescriptor) []selectionItem {
 	mapped := make([]selectionItem, 0, len(models))
 	for _, option := range models {
 		mapped = append(mapped, selectionItem{
