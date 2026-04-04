@@ -33,9 +33,10 @@
 - `context.Builder` 负责统一组装：
   - 固定核心 system prompt sections
   - 从 `workdir` 向上发现的 `AGENTS.md`
-  - 系统状态摘要（`workdir` / `shell` / `provider` / `model` / git branch / git dirty）
+  - 系统状态摘要（`workdir` / `shell` / `os` / `arch` / `provider` / `model` / git branch / git dirty）
   - 裁剪后的历史消息
 - `runtime` 不直接读取规则文件，也不直接查询 git 状态。
+- `context` 在本地直接采集当前进程运行环境的 `os` 与 `arch`，不依赖 `runtime` 额外传入。
 - `provider` 只消费最终生成的 `SystemPrompt`、消息列表和工具 schema，不感知上下文来源。
 
 ### System Prompt 注入顺序
@@ -51,6 +52,7 @@
 - 规则文件只支持大写文件名 `AGENTS.md`
 - 多份命中结果按“从全局到局部”的顺序注入
 - git 只注入摘要，不注入完整 `git status`
+- `System State` 当前会稳定注入 `workdir`、`shell`、`os`、`arch`、`provider`、`model` 与 git 摘要
 - 各 section 统一由 `internal/context` 内部的 `renderPromptSection` 和 `composeSystemPrompt` 渲染，`runtime` 仍只消费最终字符串
 
 ## 流式桥接

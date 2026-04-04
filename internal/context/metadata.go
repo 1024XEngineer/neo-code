@@ -19,6 +19,8 @@ type GitState struct {
 type SystemState struct {
 	Workdir  string
 	Shell    string
+	OS       string
+	Arch     string
 	Provider string
 	Model    string
 	Git      GitState

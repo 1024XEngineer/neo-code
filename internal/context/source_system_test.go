@@ -3,6 +3,7 @@ package context
 import (
 	"context"
 	"errors"
+	goruntime "runtime"
 	"strings"
 	"testing"
 )
@@ -20,8 +21,20 @@ func TestCollectSystemStateHandlesGitUnavailable(t *testing.T) {
 	if state.Git.Available {
 		t.Fatalf("expected git to be unavailable")
 	}
+	if state.OS != goruntime.GOOS {
+		t.Fatalf("expected os %q, got %q", goruntime.GOOS, state.OS)
+	}
+	if state.Arch != goruntime.GOARCH {
+		t.Fatalf("expected arch %q, got %q", goruntime.GOARCH, state.Arch)
+	}
 
 	section := renderPromptSection(renderSystemStateSection(state))
+	if !strings.Contains(section, "- os: `"+goruntime.GOOS+"`") {
+		t.Fatalf("expected os in system section, got %q", section)
+	}
+	if !strings.Contains(section, "- arch: `"+goruntime.GOARCH+"`") {
+		t.Fatalf("expected arch in system section, got %q", section)
+	}
 	if !strings.Contains(section, "- git: unavailable") {
 		t.Fatalf("expected unavailable git section, got %q", section)
 	}
@@ -55,8 +68,20 @@ func TestCollectSystemStateIncludesGitSummary(t *testing.T) {
 	if !state.Git.Dirty {
 		t.Fatalf("expected dirty git state")
 	}
+	if state.OS != goruntime.GOOS {
+		t.Fatalf("expected os %q, got %q", goruntime.GOOS, state.OS)
+	}
+	if state.Arch != goruntime.GOARCH {
+		t.Fatalf("expected arch %q, got %q", goruntime.GOARCH, state.Arch)
+	}
 
 	section := renderPromptSection(renderSystemStateSection(state))
+	if !strings.Contains(section, "- os: `"+goruntime.GOOS+"`") {
+		t.Fatalf("expected os in system section, got %q", section)
+	}
+	if !strings.Contains(section, "- arch: `"+goruntime.GOARCH+"`") {
+		t.Fatalf("expected arch in system section, got %q", section)
+	}
 	if !strings.Contains(section, "branch=`feature/context`") {
 		t.Fatalf("expected branch in system section, got %q", section)
 	}

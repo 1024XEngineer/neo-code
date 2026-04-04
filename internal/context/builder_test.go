@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	goruntime "runtime"
 	"strings"
 	"testing"
 
@@ -43,6 +44,12 @@ func TestDefaultBuilderBuild(t *testing.T) {
 	}
 	if !strings.Contains(got.SystemPrompt, input.Metadata.Workdir) {
 		t.Fatalf("expected workdir in system state section")
+	}
+	if !strings.Contains(got.SystemPrompt, "- os: `"+goruntime.GOOS+"`") {
+		t.Fatalf("expected os in system state section, got %q", got.SystemPrompt)
+	}
+	if !strings.Contains(got.SystemPrompt, "- arch: `"+goruntime.GOARCH+"`") {
+		t.Fatalf("expected arch in system state section, got %q", got.SystemPrompt)
 	}
 	if len(got.Messages) != 1 {
 		t.Fatalf("expected 1 message, got %d", len(got.Messages))

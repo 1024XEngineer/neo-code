@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	goruntime "runtime"
 	"strings"
 )
 
@@ -14,6 +15,8 @@ func collectSystemState(ctx context.Context, metadata Metadata, runner gitComman
 	state := SystemState{
 		Workdir:  strings.TrimSpace(metadata.Workdir),
 		Shell:    strings.TrimSpace(metadata.Shell),
+		OS:       strings.TrimSpace(goruntime.GOOS),
+		Arch:     strings.TrimSpace(goruntime.GOARCH),
 		Provider: strings.TrimSpace(metadata.Provider),
 		Model:    strings.TrimSpace(metadata.Model),
 	}
@@ -52,6 +55,8 @@ func renderSystemStateSection(state SystemState) promptSection {
 	lines := []string{
 		fmt.Sprintf("- workdir: `%s`", promptValue(state.Workdir)),
 		fmt.Sprintf("- shell: `%s`", promptValue(state.Shell)),
+		fmt.Sprintf("- os: `%s`", promptValue(state.OS)),
+		fmt.Sprintf("- arch: `%s`", promptValue(state.Arch)),
 		fmt.Sprintf("- provider: `%s`", promptValue(state.Provider)),
 		fmt.Sprintf("- model: `%s`", promptValue(state.Model)),
 	}

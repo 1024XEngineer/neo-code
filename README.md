@@ -89,7 +89,7 @@ go run ./cmd/neocode
 核心模块职责：
 
 - **`internal/config`** — 配置管理、环境变量、YAML 加载
-- **`internal/context`** — system prompt、消息裁剪与上下文构建
+- **`internal/context`** — system prompt、消息裁剪、环境感知与上下文构建
 - **`internal/provider`** — Provider 契约、驱动注册与通用领域类型
 - **`internal/provider/catalog`** — 模型发现、catalog 缓存与后台刷新
 - **`internal/provider/selection`** — provider/model 选择与配置同步
