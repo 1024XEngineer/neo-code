@@ -2486,6 +2486,95 @@ func TestWorkspaceCommandAndFileReferenceFlow(t *testing.T) {
 	}
 }
 
+func TestActivityMouseFilePickerAndProgressRendering(t *testing.T) {
+	manager := newTestConfigManager(t)
+	runtime := newStubRuntime()
+	app, err := New(nil, manager, runtime, newTestProviderService(t, manager))
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	app.width = 120
+	app.height = 38
+	app.applyComponentLayout(true)
+	x0, y0, _, _ := app.activityBounds()
+	if app.isMouseWithinActivity(tea.MouseMsg{X: x0, Y: y0}) {
+		t.Fatalf("expected empty activity panel hit test to be false")
+	}
+	if app.handleActivityMouse(tea.MouseMsg{X: x0, Y: y0, Type: tea.MouseWheelDown, Button: tea.MouseButtonWheelDown}) {
+		t.Fatalf("expected mouse handling to be false without activities")
+	}
+
+	app.appendActivity("tool", "Running tool", "detail", false)
+	app.applyComponentLayout(true)
+	ax, ay, aw, ah := app.activityBounds()
+	if aw <= 0 || ah <= 0 {
+		t.Fatalf("expected visible activity bounds, got width=%d height=%d", aw, ah)
+	}
+	inside := tea.MouseMsg{
+		X:      ax + 1,
+		Y:      ay + 1,
+		Type:   tea.MouseWheelDown,
+		Button: tea.MouseButtonWheelDown,
+		Action: tea.MouseActionPress,
+	}
+	app.focus = panelTranscript
+	if !app.handleActivityMouse(inside) {
+		t.Fatalf("expected activity wheel event to be handled")
+	}
+	if app.focus != panelActivity {
+		t.Fatalf("expected focus to move to activity panel, got %v", app.focus)
+	}
+
+	app.state.ActivePicker = pickerModel
+	if app.handleActivityMouse(inside) {
+		t.Fatalf("expected activity mouse ignored when picker is active")
+	}
+	app.state.ActivePicker = pickerNone
+	if app.isMouseWithinActivity(tea.MouseMsg{X: ax + aw + 2, Y: ay}) {
+		t.Fatalf("expected out-of-bound mouse point to be rejected")
+	}
+
+	app.state.ActivePicker = pickerFile
+	if pickerView := stripANSI(app.renderPicker(48, 12)); !strings.Contains(pickerView, filePickerTitle) {
+		t.Fatalf("expected file picker title, got %q", pickerView)
+	}
+	model, cmd := app.updatePicker(tea.KeyMsg{Type: tea.KeyDown})
+	app = model.(App)
+	if cmd != nil {
+		_ = collectTeaMessages(cmd)
+	}
+
+	app.state.IsAgentRunning = true
+	app.state.StatusText = "thinking"
+	app.runProgressKnown = true
+	app.runProgressValue = 0.45
+	app.runProgressLabel = "Planning"
+	header := stripANSI(app.renderHeader(100))
+	if !strings.Contains(header, "Planning") {
+		t.Fatalf("expected progress label in header, got %q", header)
+	}
+	app.runProgressLabel = ""
+	app.state.StatusText = ""
+	header = stripANSI(app.renderHeader(100))
+	if !strings.Contains(header, statusRunning) {
+		t.Fatalf("expected running fallback text in header, got %q", header)
+	}
+
+	app.state.ActivePicker = pickerFile
+	snapshot := app.currentStatusSnapshot()
+	if snapshot.PickerLabel != "file" {
+		t.Fatalf("expected picker label file, got %q", snapshot.PickerLabel)
+	}
+
+	app.runProgressKnown = true
+	modelAny, _ := app.Update(RuntimeClosedMsg{})
+	closed := modelAny.(App)
+	if closed.runProgressKnown {
+		t.Fatalf("expected RuntimeClosedMsg to clear run progress")
+	}
+}
+
 func newTestConfigManager(t *testing.T) *config.Manager {
 	t.Helper()
 	manager := config.NewManager(config.NewLoader(t.TempDir(), config.DefaultConfig()))
