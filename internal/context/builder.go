@@ -20,22 +20,39 @@ func (b *DefaultBuilder) Build(ctx context.Context, input BuildInput) (BuildResu
 		return BuildResult{}, err
 	}
 
-	rules, err := loadProjectRules(ctx, input.Metadata.Workdir)
+	rules, systemState, err := b.collectPromptState(ctx, input.Metadata)
 	if err != nil {
 		return BuildResult{}, err
 	}
-
-	systemState, err := collectSystemState(ctx, input.Metadata, b.gitRunner)
-	if err != nil {
-		return BuildResult{}, err
-	}
-
-	sections := append([]promptSection{}, defaultSystemPromptSections()...)
-	sections = append(sections, renderProjectRulesSection(rules))
-	sections = append(sections, renderSystemStateSection(systemState))
 
 	return BuildResult{
-		SystemPrompt: composeSystemPrompt(sections...),
+		SystemPrompt: composeSystemPrompt(buildPromptSections(input, rules, systemState)...),
 		Messages:     trimMessages(input.Messages),
 	}, nil
+}
+
+func (b *DefaultBuilder) collectPromptState(ctx context.Context, metadata Metadata) ([]ruleDocument, SystemState, error) {
+	rules, err := loadProjectRules(ctx, metadata.Workdir)
+	if err != nil {
+		return nil, SystemState{}, err
+	}
+
+	systemState, err := collectSystemState(ctx, metadata, b.gitRunner)
+	if err != nil {
+		return nil, SystemState{}, err
+	}
+
+	return rules, systemState, nil
+}
+
+func buildPromptSections(input BuildInput, rules []ruleDocument, systemState SystemState) []promptSection {
+	sections := append([]promptSection{}, defaultSystemPromptSections()...)
+	sections = append(sections, buildDynamicPromptSections(input)...)
+	sections = append(sections, renderProjectRulesSection(rules))
+	sections = append(sections, renderSystemStateSection(systemState))
+	return sections
+}
+
+func buildDynamicPromptSections(BuildInput) []promptSection {
+	return nil
 }
