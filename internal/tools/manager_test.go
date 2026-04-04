@@ -16,6 +16,7 @@ type managerStubTool struct {
 	content   string
 	err       error
 	callCount int
+	lastCall  ToolCallInput
 }
 
 func (t *managerStubTool) Name() string { return t.name }
@@ -26,6 +27,7 @@ func (t *managerStubTool) Schema() map[string]any { return map[string]any{"type"
 
 func (t *managerStubTool) Execute(ctx context.Context, call ToolCallInput) (ToolResult, error) {
 	t.callCount++
+	t.lastCall = call
 	return ToolResult{
 		Name:    t.name,
 		Content: t.content,
@@ -38,13 +40,13 @@ type stubSandbox struct {
 	lastAction security.Action
 }
 
-func (s *stubSandbox) Check(ctx context.Context, action security.Action) error {
+func (s *stubSandbox) Check(ctx context.Context, action security.Action) (*security.WorkspaceExecutionPlan, error) {
 	s.callCount++
 	s.lastAction = action
 	if err := ctx.Err(); err != nil {
-		return err
+		return nil, err
 	}
-	return s.err
+	return nil, s.err
 }
 
 func TestDefaultManagerListAvailableSpecs(t *testing.T) {
@@ -599,13 +601,18 @@ func TestNoopWorkspaceSandbox(t *testing.T) {
 	t.Parallel()
 
 	sandbox := NoopWorkspaceSandbox{}
-	if err := sandbox.Check(context.Background(), security.Action{}); err != nil {
+	plan, err := sandbox.Check(context.Background(), security.Action{})
+	if err != nil {
 		t.Fatalf("expected nil error, got %v", err)
+	}
+	if plan != nil {
+		t.Fatalf("expected nil workspace plan, got %#v", plan)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if err := sandbox.Check(ctx, security.Action{}); !errors.Is(err, context.Canceled) {
+	_, err = sandbox.Check(ctx, security.Action{})
+	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected context canceled, got %v", err)
 	}
 }

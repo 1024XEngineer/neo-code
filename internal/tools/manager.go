@@ -31,7 +31,7 @@ type Executor interface {
 
 // WorkspaceSandbox enforces workspace-oriented constraints before execution.
 type WorkspaceSandbox interface {
-	Check(ctx context.Context, action security.Action) error
+	Check(ctx context.Context, action security.Action) (*security.WorkspaceExecutionPlan, error)
 }
 
 // NoopWorkspaceSandbox keeps the explicit sandbox stage in the execution chain
@@ -39,8 +39,8 @@ type WorkspaceSandbox interface {
 type NoopWorkspaceSandbox struct{}
 
 // Check implements WorkspaceSandbox.
-func (NoopWorkspaceSandbox) Check(ctx context.Context, action security.Action) error {
-	return ctx.Err()
+func (NoopWorkspaceSandbox) Check(ctx context.Context, action security.Action) (*security.WorkspaceExecutionPlan, error) {
+	return nil, ctx.Err()
 }
 
 // PermissionDecisionError reports a non-allow permission decision.
@@ -155,10 +155,15 @@ func (m *DefaultManager) Execute(ctx context.Context, input ToolCallInput) (Tool
 		return result, permissionErrorFromDecision(decision)
 	}
 
-	if err := m.sandbox.Check(ctx, action); err != nil {
+	plan, err := m.sandbox.Check(ctx, action)
+	if err != nil {
 		result := NewErrorResult(input.Name, "workspace sandbox rejected action", err.Error(), actionMetadata(action))
 		result.ToolCallID = input.ID
 		return result, err
+	}
+
+	if plan != nil {
+		input.WorkspacePlan = plan
 	}
 
 	return m.executor.Execute(ctx, input)

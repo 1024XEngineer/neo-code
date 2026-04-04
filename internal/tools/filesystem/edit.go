@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 
+	"neo-code/internal/security"
 	"neo-code/internal/tools"
 )
 
@@ -72,7 +73,13 @@ func (t *EditTool) Execute(ctx context.Context, input tools.ToolCallInput) (tool
 	}
 
 	root := effectiveRoot(t.root, input.Workdir)
-	target, err := resolvePath(root, args.Path)
+	root, target, err := tools.ResolveWorkspaceTarget(
+		input,
+		security.TargetTypePath,
+		root,
+		args.Path,
+		resolvePath,
+	)
 	if err != nil {
 		return tools.NewErrorResult(t.Name(), tools.NormalizeErrorReason(t.Name(), err), "", nil), err
 	}

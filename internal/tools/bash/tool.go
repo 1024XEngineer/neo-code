@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"neo-code/internal/security"
 	"neo-code/internal/tools"
 )
 
@@ -68,7 +69,17 @@ func (t *Tool) Execute(ctx context.Context, call tools.ToolCallInput) (tools.Too
 		return tools.NewErrorResult(t.Name(), tools.NormalizeErrorReason(t.Name(), err), "", nil), err
 	}
 
-	workdir, err := resolveWorkdir(call.Workdir, in.Workdir)
+	base := strings.TrimSpace(call.Workdir)
+	if base == "" {
+		base = t.root
+	}
+	_, workdir, err := tools.ResolveWorkspaceTarget(
+		call,
+		security.TargetTypeDirectory,
+		base,
+		in.Workdir,
+		resolveWorkdir,
+	)
 	if err != nil {
 		return tools.NewErrorResult(t.Name(), tools.NormalizeErrorReason(t.Name(), err), "", nil), err
 	}

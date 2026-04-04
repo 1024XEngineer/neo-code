@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"neo-code/internal/security"
 	"neo-code/internal/tools"
 )
 
@@ -64,7 +65,13 @@ func (t *WriteFileTool) Execute(ctx context.Context, input tools.ToolCallInput) 
 
 	base := effectiveRoot(t.root, input.Workdir)
 
-	target, err := resolvePath(base, args.Path)
+	_, target, err := tools.ResolveWorkspaceTarget(
+		input,
+		security.TargetTypePath,
+		base,
+		args.Path,
+		resolvePath,
+	)
 	if err != nil {
 		return tools.NewErrorResult(t.Name(), tools.NormalizeErrorReason(t.Name(), err), "", nil), err
 	}

@@ -155,7 +155,7 @@ func TestWorkspaceSandboxCheck(t *testing.T) {
 			}
 
 			sandbox := NewWorkspaceSandbox()
-			err := sandbox.Check(context.Background(), tt.action(root, outsideFile))
+			_, err := sandbox.Check(context.Background(), tt.action(root, outsideFile))
 			if tt.expectErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tt.expectErr) {
 					t.Fatalf("expected error containing %q, got %v", tt.expectErr, err)
@@ -179,12 +179,12 @@ func TestWorkspaceSandboxCheckShortCircuits(t *testing.T) {
 	canceledCtx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	err := sandbox.Check(canceledCtx, action)
+	_, err := sandbox.Check(canceledCtx, action)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected context canceled error, got %v", err)
 	}
 
-	err = sandbox.Check(context.Background(), Action{
+	_, err = sandbox.Check(context.Background(), Action{
 		Type: ActionTypeRead,
 		Payload: ActionPayload{
 			Resource: "filesystem_read_file",
@@ -638,7 +638,7 @@ func TestEnsureNoSymlinkEscape(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			root, target, original := tt.setup(t)
-			err := ensureNoSymlinkEscape(root, target, original)
+			_, err := ensureNoSymlinkEscape(root, target, original)
 			if tt.expectErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tt.expectErr) {
 					t.Fatalf("expected error containing %q, got %v", tt.expectErr, err)
@@ -650,6 +650,197 @@ func TestEnsureNoSymlinkEscape(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestWorkspaceExecutionPlanValidateForExecution(t *testing.T) {
+	t.Parallel()
+
+	t.Run("nil plan is allowed", func(t *testing.T) {
+		t.Parallel()
+		var plan *WorkspaceExecutionPlan
+		if err := plan.ValidateForExecution(); err != nil {
+			t.Fatalf("expected nil error, got %v", err)
+		}
+	})
+
+	t.Run("empty root is rejected", func(t *testing.T) {
+		t.Parallel()
+		plan := &WorkspaceExecutionPlan{Target: "target.txt"}
+		err := plan.ValidateForExecution()
+		if err == nil || !strings.Contains(err.Error(), "workspace plan root is empty") {
+			t.Fatalf("expected empty root error, got %v", err)
+		}
+	})
+
+	t.Run("empty target is rejected", func(t *testing.T) {
+		t.Parallel()
+		plan := &WorkspaceExecutionPlan{Root: t.TempDir()}
+		err := plan.ValidateForExecution()
+		if err == nil || !strings.Contains(err.Error(), "workspace plan target is empty") {
+			t.Fatalf("expected empty target error, got %v", err)
+		}
+	})
+
+	t.Run("anchor path change is rejected", func(t *testing.T) {
+		t.Parallel()
+
+		root := t.TempDir()
+		insideDir := filepath.Join(root, "inside")
+		if err := os.MkdirAll(insideDir, 0o755); err != nil {
+			t.Fatalf("mkdir inside: %v", err)
+		}
+		outsideDir := t.TempDir()
+
+		linkPath := filepath.Join(root, "swap-link")
+		if err := os.Symlink(insideDir, linkPath); err != nil {
+			t.Skipf("symlink not supported in this environment: %v", err)
+		}
+
+		plan, err := NewWorkspaceSandbox().Check(context.Background(), fileAction(
+			ActionTypeRead,
+			"filesystem_read_file",
+			"read_file",
+			root,
+			filepath.Join("swap-link", "a.txt"),
+		))
+		if err != nil {
+			t.Fatalf("build plan: %v", err)
+		}
+		if plan == nil {
+			t.Fatalf("expected non-nil plan")
+		}
+
+		if err := os.Remove(linkPath); err != nil {
+			t.Fatalf("remove link: %v", err)
+		}
+		if err := os.Symlink(outsideDir, linkPath); err != nil {
+			t.Fatalf("replace link: %v", err)
+		}
+
+		err = plan.ValidateForExecution()
+		if err == nil || !strings.Contains(err.Error(), "changed before execution") {
+			t.Fatalf("expected changed-before-execution error, got %v", err)
+		}
+	})
+
+	t.Run("anchor snapshot change is rejected", func(t *testing.T) {
+		t.Parallel()
+
+		root := t.TempDir()
+		file := filepath.Join(root, "main.go")
+		mustWriteWorkspaceFile(t, file, "short")
+
+		plan, err := NewWorkspaceSandbox().Check(context.Background(), fileAction(
+			ActionTypeRead,
+			"filesystem_read_file",
+			"read_file",
+			root,
+			"main.go",
+		))
+		if err != nil {
+			t.Fatalf("build plan: %v", err)
+		}
+		if plan == nil {
+			t.Fatalf("expected non-nil plan")
+		}
+
+		if err := os.WriteFile(file, []byte("longer-content"), 0o644); err != nil {
+			t.Fatalf("mutate file: %v", err)
+		}
+
+		err = plan.ValidateForExecution()
+		if err == nil || !strings.Contains(err.Error(), "changed before execution") {
+			t.Fatalf("expected changed-before-execution error, got %v", err)
+		}
+	})
+
+	t.Run("valid unchanged plan passes", func(t *testing.T) {
+		t.Parallel()
+
+		root := t.TempDir()
+		mustWriteWorkspaceFile(t, filepath.Join(root, "main.go"), "package main\n")
+		plan, err := NewWorkspaceSandbox().Check(context.Background(), fileAction(
+			ActionTypeRead,
+			"filesystem_read_file",
+			"read_file",
+			root,
+			"main.go",
+		))
+		if err != nil {
+			t.Fatalf("build plan: %v", err)
+		}
+		if plan == nil {
+			t.Fatalf("expected non-nil plan")
+		}
+		if err := plan.ValidateForExecution(); err != nil {
+			t.Fatalf("expected valid plan, got %v", err)
+		}
+	})
+}
+
+func TestCapturePathSnapshotAndEqual(t *testing.T) {
+	t.Parallel()
+
+	t.Run("regular file snapshot and equality", func(t *testing.T) {
+		t.Parallel()
+
+		root := t.TempDir()
+		file := filepath.Join(root, "a.txt")
+		mustWriteWorkspaceFile(t, file, "hello")
+
+		left, err := capturePathSnapshot(file)
+		if err != nil {
+			t.Fatalf("capturePathSnapshot(left): %v", err)
+		}
+		right, err := capturePathSnapshot(file)
+		if err != nil {
+			t.Fatalf("capturePathSnapshot(right): %v", err)
+		}
+		if !left.Equal(right) {
+			t.Fatalf("expected equal snapshots: %#v vs %#v", left, right)
+		}
+	})
+
+	t.Run("symlink snapshot captures link target", func(t *testing.T) {
+		t.Parallel()
+
+		root := t.TempDir()
+		targetDir := filepath.Join(root, "target")
+		if err := os.MkdirAll(targetDir, 0o755); err != nil {
+			t.Fatalf("mkdir target: %v", err)
+		}
+		linkPath := filepath.Join(root, "link")
+		if err := os.Symlink(targetDir, linkPath); err != nil {
+			t.Skipf("symlink not supported in this environment: %v", err)
+		}
+
+		snapshot, err := capturePathSnapshot(linkPath)
+		if err != nil {
+			t.Fatalf("capturePathSnapshot(link): %v", err)
+		}
+		if snapshot.linkTarget == "" {
+			t.Fatalf("expected link target in snapshot, got %#v", snapshot)
+		}
+	})
+
+	t.Run("missing path returns inspect error", func(t *testing.T) {
+		t.Parallel()
+
+		_, err := capturePathSnapshot(filepath.Join(t.TempDir(), "missing.txt"))
+		if err == nil || !strings.Contains(err.Error(), "inspect path") {
+			t.Fatalf("expected inspect error, got %v", err)
+		}
+	})
+
+	t.Run("different snapshots are not equal", func(t *testing.T) {
+		t.Parallel()
+
+		a := pathSnapshot{mode: 0o644, size: 10, modUnix: 1, linkTarget: "a"}
+		b := pathSnapshot{mode: 0o755, size: 10, modUnix: 1, linkTarget: "a"}
+		if a.Equal(b) {
+			t.Fatalf("expected snapshots to differ: %#v vs %#v", a, b)
+		}
+	})
 }
 
 func TestNearestExistingPath(t *testing.T) {

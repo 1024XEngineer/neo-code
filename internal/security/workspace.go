@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -22,28 +23,49 @@ func NewWorkspaceSandbox() *WorkspaceSandbox {
 }
 
 // Check validates that the action stays within the configured workspace root.
-func (s *WorkspaceSandbox) Check(ctx context.Context, action Action) error {
+func (s *WorkspaceSandbox) Check(ctx context.Context, action Action) (*WorkspaceExecutionPlan, error) {
 	if err := ctx.Err(); err != nil {
-		return err
+		return nil, err
 	}
 	if err := action.Validate(); err != nil {
-		return err
+		return nil, err
 	}
 
 	plan, ok, err := buildWorkspacePlan(action)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if !ok {
-		return nil
+		return nil, nil
 	}
 
 	return s.validateWorkspacePlan(plan)
 }
 
 type workspacePlan struct {
-	root   string
-	target string
+	root       string
+	target     string
+	targetType TargetType
+	actionType ActionType
+}
+
+// WorkspaceExecutionPlan binds a validated workspace target to the later
+// execution phase.
+type WorkspaceExecutionPlan struct {
+	Root            string
+	Target          string
+	RequestedTarget string
+	TargetType      TargetType
+	ActionType      ActionType
+	anchorPath      string
+	anchorSnapshot  pathSnapshot
+}
+
+type pathSnapshot struct {
+	mode       fs.FileMode
+	size       int64
+	modUnix    int64
+	linkTarget string
 }
 
 // buildWorkspacePlan extracts the workspace root and the sandbox-specific target
@@ -64,9 +86,16 @@ func buildWorkspacePlan(action Action) (workspacePlan, bool, error) {
 		return workspacePlan{}, false, nil
 	}
 
+	targetType := action.Payload.SandboxTargetType
+	if targetType == "" {
+		targetType = action.Payload.TargetType
+	}
+
 	return workspacePlan{
-		root:   root,
-		target: target,
+		root:       root,
+		target:     target,
+		targetType: targetType,
+		actionType: action.Type,
 	}, true, nil
 }
 
@@ -121,21 +150,71 @@ func sandboxTarget(action Action) (string, bool) {
 // validateWorkspacePlan resolves the canonical workspace root, expands the
 // requested target to an absolute path, verifies it stays inside the workspace,
 // and then checks the nearest existing path ancestor for symlink escape.
-func (s *WorkspaceSandbox) validateWorkspacePlan(plan workspacePlan) error {
+func (s *WorkspaceSandbox) validateWorkspacePlan(plan workspacePlan) (*WorkspaceExecutionPlan, error) {
 	root, err := s.canonicalWorkspaceRoot(plan.root)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	target, err := absoluteWorkspaceTarget(root, plan.target)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if !isWithinWorkspace(root, target) {
-		return fmt.Errorf("security: path %q escapes workspace root", plan.target)
+		return nil, fmt.Errorf("security: path %q escapes workspace root", plan.target)
 	}
 
-	return ensureNoSymlinkEscape(root, target, plan.target)
+	anchorPath, err := ensureNoSymlinkEscape(root, target, plan.target)
+	if err != nil {
+		return nil, err
+	}
+	anchorSnapshot, err := capturePathSnapshot(anchorPath)
+	if err != nil {
+		return nil, err
+	}
+
+	return &WorkspaceExecutionPlan{
+		Root:            root,
+		Target:          target,
+		RequestedTarget: plan.target,
+		TargetType:      plan.targetType,
+		ActionType:      plan.actionType,
+		anchorPath:      anchorPath,
+		anchorSnapshot:  anchorSnapshot,
+	}, nil
+}
+
+// ValidateForExecution rechecks the validated workspace anchor before a tool
+// touches the filesystem to narrow the TOCTOU window between sandbox check and
+// execution.
+func (p *WorkspaceExecutionPlan) ValidateForExecution() error {
+	if p == nil {
+		return nil
+	}
+	if strings.TrimSpace(p.Root) == "" {
+		return errors.New("security: workspace plan root is empty")
+	}
+	if strings.TrimSpace(p.Target) == "" {
+		return errors.New("security: workspace plan target is empty")
+	}
+
+	currentAnchor, err := nearestExistingPath(p.Root, p.Target)
+	if err != nil {
+		return err
+	}
+	if !samePathKey(currentAnchor, p.anchorPath) {
+		return fmt.Errorf("security: workspace target changed before execution: %q", p.RequestedTarget)
+	}
+
+	currentSnapshot, err := capturePathSnapshot(currentAnchor)
+	if err != nil {
+		return err
+	}
+	if !p.anchorSnapshot.Equal(currentSnapshot) {
+		return fmt.Errorf("security: workspace target changed before execution: %q", p.RequestedTarget)
+	}
+
+	return ensureResolvedPathWithinWorkspace(p.Root, currentAnchor, p.RequestedTarget)
 }
 
 // canonicalWorkspaceRoot resolves the configured workspace root to a canonical
@@ -218,27 +297,63 @@ func absoluteWorkspaceTarget(root string, target string) (string, error) {
 // sandbox check and the later filesystem operation in the executor. Eliminating
 // that window requires executor-level changes such as descriptor-based access or
 // no-follow file opening, which are outside this lightweight sandbox layer.
-func ensureNoSymlinkEscape(root string, target string, original string) error {
+func ensureNoSymlinkEscape(root string, target string, original string) (string, error) {
 	existingPath, err := nearestExistingPath(root, target)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if existingPath == root {
-		return nil
+		return root, nil
 	}
 
-	resolved, err := filepath.EvalSymlinks(existingPath)
+	if err := ensureResolvedPathWithinWorkspace(root, existingPath, original); err != nil {
+		return "", err
+	}
+	return existingPath, nil
+}
+
+func ensureResolvedPathWithinWorkspace(root string, candidate string, original string) error {
+	resolved, err := filepath.EvalSymlinks(candidate)
 	if err != nil {
-		return fmt.Errorf("security: resolve symlink %q: %w", existingPath, err)
+		return fmt.Errorf("security: resolve symlink %q: %w", candidate, err)
 	}
 	resolved, err = filepath.Abs(resolved)
 	if err != nil {
-		return fmt.Errorf("security: resolve symlink %q: %w", existingPath, err)
+		return fmt.Errorf("security: resolve symlink %q: %w", candidate, err)
 	}
 	if !isWithinWorkspace(root, resolved) {
 		return fmt.Errorf("security: path %q escapes workspace root via symlink", original)
 	}
 	return nil
+}
+
+func capturePathSnapshot(path string) (pathSnapshot, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return pathSnapshot{}, fmt.Errorf("security: inspect path %q: %w", path, err)
+	}
+
+	snapshot := pathSnapshot{
+		mode:    info.Mode(),
+		size:    info.Size(),
+		modUnix: info.ModTime().UnixNano(),
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		linkTarget, readErr := os.Readlink(path)
+		if readErr != nil {
+			return pathSnapshot{}, fmt.Errorf("security: read symlink %q: %w", path, readErr)
+		}
+		snapshot.linkTarget = filepath.Clean(linkTarget)
+	}
+	return snapshot, nil
+}
+
+// Equal reports whether two path snapshots represent the same path identity.
+func (s pathSnapshot) Equal(other pathSnapshot) bool {
+	return s.mode == other.mode &&
+		s.size == other.size &&
+		s.modUnix == other.modUnix &&
+		s.linkTarget == other.linkTarget
 }
 
 func validateTargetVolume(root string, target string) error {

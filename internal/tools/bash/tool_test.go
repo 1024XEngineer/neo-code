@@ -24,30 +24,41 @@ func TestToolExecute(t *testing.T) {
 		name          string
 		command       string
 		workdir       string
+		callWorkdir   string
 		expectErr     string
 		expectContent string
 	}{
 		{
 			name:          "captures stdout",
 			command:       safeEchoCommand(),
+			callWorkdir:   workspace,
 			expectContent: "hello",
 		},
 		{
-			name:      "rejects workdir escape",
-			command:   safeEchoCommand(),
-			workdir:   "..",
-			expectErr: "workdir escapes workspace root",
+			name:        "rejects workdir escape",
+			command:     safeEchoCommand(),
+			workdir:     "..",
+			callWorkdir: workspace,
+			expectErr:   "workdir escapes workspace root",
 		},
 		{
-			name:      "rejects empty command",
-			command:   "",
-			expectErr: "command is empty",
+			name:        "rejects empty command",
+			command:     "",
+			callWorkdir: workspace,
+			expectErr:   "command is empty",
 		},
 		{
 			name:          "runs inside nested workdir",
 			command:       safePwdCommand(),
 			workdir:       "sub",
+			callWorkdir:   workspace,
 			expectContent: normalizeOutputPath(subdir),
+		},
+		{
+			name:          "uses tool root when call workdir is empty",
+			command:       safePwdCommand(),
+			callWorkdir:   "",
+			expectContent: normalizeOutputPath(workspace),
 		},
 	}
 
@@ -66,7 +77,7 @@ func TestToolExecute(t *testing.T) {
 			result, execErr := tool.Execute(context.Background(), tools.ToolCallInput{
 				Name:      tool.Name(),
 				Arguments: args,
-				Workdir:   workspace,
+				Workdir:   tt.callWorkdir,
 			})
 
 			if tt.expectErr != "" {
