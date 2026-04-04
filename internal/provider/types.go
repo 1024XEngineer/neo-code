@@ -68,8 +68,13 @@ const (
 )
 
 // StreamEvent 表示 provider 驱动层向 runtime 推送的流式事件。
+// 强制使用 NewXxxStreamEvent 构造器创建实例，禁止直接构造。
 type StreamEvent struct {
-	Type StreamEventType
+	Type    StreamEventType `json:"type"`
+	Payload interface{}     `json:"payload,omitempty"` // 强类型载荷，使用类型断言访问
+
+	// --- 以下字段已弃用，保留仅用于 Phase 1 向后兼容 ---
+	// Phase 2 将由 Runtime 负责人移除，届时所有消费方应通过 Payload 类型断言访问。
 
 	// text_delta
 	Text string `json:"text,omitempty"` // 文本片段
@@ -83,4 +88,78 @@ type StreamEvent struct {
 	// message_done
 	FinishReason string `json:"finish_reason,omitempty"` // 结束原因（仅 message_done 时有效）
 	Usage        *Usage `json:"usage,omitempty"`         // 使用统计（仅 message_done 时有效）
+}
+
+// --- Payload 强类型定义 ---
+
+// TextDeltaPayload 表示文本增量事件的载荷。
+type TextDeltaPayload struct {
+	Text string `json:"text"`
+}
+
+// ToolCallStartPayload 表示工具调用开始事件的载荷。
+type ToolCallStartPayload struct {
+	Index int    `json:"index"`
+	ID    string `json:"id"`
+	Name  string `json:"name"`
+}
+
+// ToolCallDeltaPayload 表示工具调用参数增量事件的载荷。
+type ToolCallDeltaPayload struct {
+	Index          int    `json:"index"`
+	ID             string `json:"id"`
+	ArgumentsDelta string `json:"arguments_delta"`
+}
+
+// MessageDonePayload 表示消息完成事件的载荷。
+type MessageDonePayload struct {
+	FinishReason string `json:"finish_reason"`
+	Usage        *Usage `json:"usage"`
+}
+
+// --- 构造器 ---
+
+// NewTextDeltaStreamEvent 创建文本增量流事件。
+func NewTextDeltaStreamEvent(text string) StreamEvent {
+	return StreamEvent{
+		Type:    StreamEventTextDelta,
+		Payload: TextDeltaPayload{Text: text},
+		// 兼容层：同步填充弃用字段
+		Text: text,
+	}
+}
+
+// NewToolCallStartStreamEvent 创建工具调用开始流事件。
+func NewToolCallStartStreamEvent(index int, id, name string) StreamEvent {
+	return StreamEvent{
+		Type:    StreamEventToolCallStart,
+		Payload: ToolCallStartPayload{Index: index, ID: id, Name: name},
+		// 兼容层：同步填充弃用字段
+		ToolCallIndex: index,
+		ToolCallID:    id,
+		ToolName:      name,
+	}
+}
+
+// NewToolCallDeltaStreamEvent 创建工具调用参数增量流事件。
+func NewToolCallDeltaStreamEvent(index int, id, argumentsDelta string) StreamEvent {
+	return StreamEvent{
+		Type:    StreamEventToolCallDelta,
+		Payload: ToolCallDeltaPayload{Index: index, ID: id, ArgumentsDelta: argumentsDelta},
+		// 兼容层：同步填充弃用字段
+		ToolCallIndex:      index,
+		ToolCallID:         id,
+		ToolArgumentsDelta: argumentsDelta,
+	}
+}
+
+// NewMessageDoneStreamEvent 创建消息完成流事件。
+func NewMessageDoneStreamEvent(finishReason string, usage *Usage) StreamEvent {
+	return StreamEvent{
+		Type:    StreamEventMessageDone,
+		Payload: MessageDonePayload{FinishReason: finishReason, Usage: usage},
+		// 兼容层：同步填充弃用字段
+		FinishReason: finishReason,
+		Usage:        usage,
+	}
 }

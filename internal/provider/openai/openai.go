@@ -53,11 +53,11 @@ func Driver() provider.DriverDefinition {
 			return New(cfg, WithTransport(defaultRetryTransport()))
 		},
 		Discover: func(ctx context.Context, cfg config.ResolvedProviderConfig) ([]config.ModelDescriptor, error) {
-			provider, err := New(cfg, WithTransport(defaultRetryTransport()))
+			p, err := New(cfg, WithTransport(defaultRetryTransport()))
 			if err != nil {
 				return nil, err
 			}
-			return provider.DiscoverModels(ctx)
+			return p.DiscoverModels(ctx)
 		},
 	}
 }
@@ -331,34 +331,23 @@ func emitTextDelta(ctx context.Context, events chan<- provider.StreamEvent, text
 	if text == "" {
 		return nil
 	}
-	return emitStreamEvent(ctx, events, provider.StreamEvent{
-		Type: provider.StreamEventTextDelta,
-		Text: text,
-	})
+	return emitStreamEvent(ctx, events, provider.NewTextDeltaStreamEvent(text))
 }
 
 func emitToolCallStart(ctx context.Context, events chan<- provider.StreamEvent, index int, id, name string) error {
 	if name == "" {
 		return nil
 	}
-	return emitStreamEvent(ctx, events, provider.StreamEvent{
-		Type:          provider.StreamEventToolCallStart,
-		ToolCallID:    id,
-		ToolName:      name,
-		ToolCallIndex: index,
-	})
+	return emitStreamEvent(ctx, events, provider.NewToolCallStartStreamEvent(index, id, name))
 }
 
 // emitToolCallDelta 发送工具调用参数增量事件。
-func emitToolCallDelta(ctx context.Context, events chan<- provider.StreamEvent, index int, argumentsDelta string) error {
+// id 为工具调用 ID，由上游 mergeToolCallDelta 从累积状态中传入。
+func emitToolCallDelta(ctx context.Context, events chan<- provider.StreamEvent, index int, id, argumentsDelta string) error {
 	if argumentsDelta == "" {
 		return nil
 	}
-	return emitStreamEvent(ctx, events, provider.StreamEvent{
-		Type:               provider.StreamEventToolCallDelta,
-		ToolCallIndex:      index,
-		ToolArgumentsDelta: argumentsDelta,
-	})
+	return emitStreamEvent(ctx, events, provider.NewToolCallDeltaStreamEvent(index, id, argumentsDelta))
 }
 
 // emitMessageDone 发送消息完成事件。
@@ -366,11 +355,7 @@ func emitMessageDone(ctx context.Context, events chan<- provider.StreamEvent, fi
 	if events == nil {
 		return nil
 	}
-	return emitStreamEvent(ctx, events, provider.StreamEvent{
-		Type:         provider.StreamEventMessageDone,
-		FinishReason: finishReason,
-		Usage:        usage,
-	})
+	return emitStreamEvent(ctx, events, provider.NewMessageDoneStreamEvent(finishReason, usage))
 }
 
 // extractStreamUsage 从 OpenAI usage 响应提取并覆盖累积的 token 统计。
@@ -413,7 +398,7 @@ func mergeToolCallDelta(ctx context.Context, events chan<- provider.StreamEvent,
 	// 发送参数增量事件（同一 chunk 可能同时携带 name 和 arguments）
 	if args := delta.Function.Arguments; args != "" {
 		call.Arguments += args
-		if err := emitToolCallDelta(ctx, events, delta.Index, args); err != nil {
+		if err := emitToolCallDelta(ctx, events, delta.Index, call.ID, args); err != nil {
 			return err
 		}
 	}

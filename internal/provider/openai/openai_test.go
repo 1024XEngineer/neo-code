@@ -92,7 +92,7 @@ func TestEmitToolCallDelta(t *testing.T) {
 
 	t.Run("nil events guard", func(t *testing.T) {
 		t.Parallel()
-		if err := emitToolCallDelta(context.Background(), nil, 0, "args"); err != nil {
+		if err := emitToolCallDelta(context.Background(), nil, 0, "", "args"); err != nil {
 			t.Fatalf("expected nil events guard to return nil, got %v", err)
 		}
 	})
@@ -100,7 +100,7 @@ func TestEmitToolCallDelta(t *testing.T) {
 	t.Run("empty arguments guard", func(t *testing.T) {
 		t.Parallel()
 		events := make(chan domain.StreamEvent, 1)
-		if err := emitToolCallDelta(context.Background(), events, 0, ""); err != nil {
+		if err := emitToolCallDelta(context.Background(), events, 0, "", ""); err != nil {
 			t.Fatalf("expected empty arguments guard to return nil, got %v", err)
 		}
 		select {
@@ -113,11 +113,11 @@ func TestEmitToolCallDelta(t *testing.T) {
 	t.Run("normal send", func(t *testing.T) {
 		t.Parallel()
 		events := make(chan domain.StreamEvent, 1)
-		if err := emitToolCallDelta(context.Background(), events, 3, `{"path":"main.go"}`); err != nil {
+		if err := emitToolCallDelta(context.Background(), events, 3, "call_123", `{"path":"main.go"}`); err != nil {
 			t.Fatalf("emitToolCallDelta() error = %v", err)
 		}
 		got := <-events
-		if got.Type != domain.StreamEventToolCallDelta || got.ToolCallIndex != 3 || got.ToolArgumentsDelta != `{"path":"main.go"}` {
+		if got.Type != domain.StreamEventToolCallDelta || got.ToolCallIndex != 3 || got.ToolArgumentsDelta != `{"path":"main.go"}` || got.ToolCallID != "call_123" {
 			t.Fatalf("unexpected event: %+v", got)
 		}
 	})
@@ -126,7 +126,7 @@ func TestEmitToolCallDelta(t *testing.T) {
 		t.Parallel()
 		cancelledCtx, cancel := context.WithCancel(context.Background())
 		cancel()
-		if err := emitToolCallDelta(cancelledCtx, make(chan domain.StreamEvent), 0, "args"); err == nil {
+		if err := emitToolCallDelta(cancelledCtx, make(chan domain.StreamEvent), 0, "", "args"); err == nil {
 			t.Fatal("expected cancellation error")
 		}
 	})
