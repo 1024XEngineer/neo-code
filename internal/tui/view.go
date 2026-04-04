@@ -46,7 +46,14 @@ func (a App) View() string {
 func (a App) renderHeader(width int) string {
 	status := compactStatusText(a.state.StatusText, max(18, width/3))
 	if a.state.IsAgentRunning {
-		status = a.spinner.View() + " " + fallback(status, statusRunning)
+		if a.runProgressKnown {
+			progressBar := a.progress
+			progressBar.Width = clamp(width/7, 12, 26)
+			progressLabel := fallback(strings.TrimSpace(a.runProgressLabel), fallback(status, statusRunning))
+			status = progressBar.ViewAs(a.runProgressValue) + " " + progressLabel
+		} else {
+			status = a.spinner.View() + " " + fallback(status, statusRunning)
+		}
 	}
 
 	brand := lipgloss.JoinHorizontal(
@@ -152,6 +159,11 @@ func (a App) renderPicker(width int, height int) string {
 		subtitle = providerPickerSubtitle
 		body = a.providerPicker.View()
 	}
+	if a.state.ActivePicker == pickerFile {
+		title = filePickerTitle
+		subtitle = filePickerSubtitle
+		body = a.fileBrowser.View()
+	}
 	content := lipgloss.JoinVertical(
 		lipgloss.Left,
 		a.styles.panelTitle.Render(title),
@@ -217,11 +229,6 @@ func (a App) renderPanel(title string, subtitle string, body string, width int, 
 	return lipgloss.Place(width, height, lipgloss.Left, lipgloss.Top, panel)
 }
 
-func (a App) renderMessageBlock(message provider.Message, width int) string {
-	rendered, _ := a.renderMessageBlockWithCopy(message, width, 1)
-	return rendered
-}
-
 func (a App) renderMessageBlockWithCopy(message provider.Message, width int, startCopyID int) (string, []copyCodeButtonBinding) {
 	switch message.Role {
 	case roleEvent:
@@ -282,60 +289,24 @@ func (a App) renderMessageBlockWithCopy(message provider.Message, width int, sta
 }
 
 func (a App) renderCommandMenu(width int) string {
-	input := strings.TrimSpace(a.input.Value())
-
-	if suggestions := a.matchingFileReferences(a.input.Value()); len(suggestions) > 0 {
-		lines := make([]string, 0, len(suggestions)+1)
-		lines = append(lines, a.styles.commandMenuTitle.Render(fileMenuTitle))
-		for idx, suggestion := range suggestions {
-			usageStyle := a.styles.commandUsage
-			if idx == 0 {
-				usageStyle = a.styles.commandUsageMatch
-			}
-			lines = append(lines, lipgloss.JoinHorizontal(
-				lipgloss.Top,
-				usageStyle.Render("@"+suggestion),
-				lipgloss.NewStyle().Width(2).Render(""),
-				a.styles.commandDesc.Render("workspace file reference"),
-			))
-		}
-		return a.styles.commandMenu.Width(width).Render(lipgloss.JoinVertical(lipgloss.Left, lines...))
-	}
-
-	if isWorkspaceCommandInput(input) {
-		lines := []string{
-			a.styles.commandMenuTitle.Render(shellMenuTitle),
-			lipgloss.JoinHorizontal(
-				lipgloss.Top,
-				a.styles.commandUsageMatch.Render(workspaceCommandUsage),
-				lipgloss.NewStyle().Width(2).Render(""),
-				a.styles.commandDesc.Render(trimMiddle(a.state.CurrentWorkdir, max(24, width-28))),
-			),
-		}
-		return a.styles.commandMenu.Width(width).Render(lipgloss.JoinVertical(lipgloss.Left, lines...))
-	}
-
-	suggestions := a.matchingSlashCommands(input)
-	if len(suggestions) == 0 {
+	if a.state.ActivePicker != pickerNone || len(a.commandMenu.Items()) == 0 {
 		return ""
 	}
-
-	lines := make([]string, 0, len(suggestions)+1)
-	lines = append(lines, a.styles.commandMenuTitle.Render(commandMenuTitle))
-	for _, suggestion := range suggestions {
-		usageStyle := a.styles.commandUsage
-		if suggestion.Match {
-			usageStyle = a.styles.commandUsageMatch
-		}
-		lines = append(lines, lipgloss.JoinHorizontal(
-			lipgloss.Top,
-			usageStyle.Render(suggestion.Command.Usage),
-			lipgloss.NewStyle().Width(2).Render(""),
-			a.styles.commandDesc.Render(suggestion.Command.Description),
-		))
+	title := commandMenuTitle
+	if strings.TrimSpace(a.commandMenuMeta.Title) != "" {
+		title = a.commandMenuMeta.Title
 	}
-
-	return a.styles.commandMenu.Width(width).Render(lipgloss.JoinVertical(lipgloss.Left, lines...))
+	body := strings.TrimSpace(a.commandMenu.View())
+	if body == "" {
+		return ""
+	}
+	return a.styles.commandMenu.Width(width).Render(
+		lipgloss.JoinVertical(
+			lipgloss.Left,
+			a.styles.commandMenuTitle.Render(title),
+			body,
+		),
+	)
 }
 
 func (a App) commandMenuHeight(width int) int {
@@ -351,11 +322,6 @@ func (a App) renderHelp(width int) string {
 	helpContent := a.help.View(a.keys)
 	// Keep help content stretched to full width to avoid clipping at borders.
 	return a.styles.footer.Width(width).Render(helpContent)
-}
-
-func (a App) renderMessageContent(content string, width int, bodyStyle lipgloss.Style) string {
-	rendered, _ := a.renderMessageContentWithCopy(content, width, bodyStyle, 1)
-	return rendered
 }
 
 func (a App) renderMessageContentWithCopy(content string, width int, bodyStyle lipgloss.Style, startCopyID int) (string, []copyCodeButtonBinding) {
@@ -502,22 +468,12 @@ func (a App) renderActivityPreview(width int) string {
 	if len(a.activities) == 0 {
 		return ""
 	}
-
-	entries := a.activities
-	if len(entries) > activityPreviewEntries {
-		entries = entries[len(entries)-activityPreviewEntries:]
-	}
-
-	lines := make([]string, 0, len(entries))
-	bodyWidth := max(10, width-4)
-	for _, entry := range entries {
-		lines = append(lines, a.renderActivityLine(entry, bodyWidth))
-	}
+	content := a.activity.View()
 
 	return a.renderPanel(
 		activityTitle,
 		activitySubtitle,
-		strings.Join(lines, "\n"),
+		content,
 		width,
 		a.activityPreviewHeight(),
 		a.focus == panelActivity,

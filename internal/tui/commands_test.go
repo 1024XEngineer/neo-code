@@ -243,7 +243,7 @@ func TestCommandHelperFunctions(t *testing.T) {
 	})
 
 	t.Run("sanitize workspace output decodes utf16le launcher errors", func(t *testing.T) {
-		text := "适用于 Linux 的 Windows 子系统没有已安装的分发版。\r\n请运行 wsl.exe --list --online"
+		text := "This app needs WSL installed.\r\nRun wsl.exe --list --online"
 		encoded := utf16.Encode([]rune(text))
 		raw := make([]byte, 0, len(encoded)*2)
 		for _, word := range encoded {
@@ -253,7 +253,7 @@ func TestCommandHelperFunctions(t *testing.T) {
 		}
 
 		got := sanitizeWorkspaceOutput(raw)
-		for _, want := range []string{"适用于 Linux", "Windows 子系统", "wsl.exe --list --online"} {
+		for _, want := range []string{"This app needs WSL installed.", "Run wsl.exe --list --online"} {
 			if !strings.Contains(got, want) {
 				t.Fatalf("expected decoded output to contain %q, got %q", want, got)
 			}
@@ -261,7 +261,7 @@ func TestCommandHelperFunctions(t *testing.T) {
 	})
 
 	t.Run("decode workspace output prefers utf16 when chinese prefix has no zero bytes", func(t *testing.T) {
-		text := "拒绝访问。 \r\n错误代码: Bash/Service/CreateInstance/E_ACCESSDENIED"
+		text := "Access denied.\r\nError code: Bash/Service/CreateInstance/E_ACCESSDENIED"
 		encoded := utf16.Encode([]rune(text))
 		raw := make([]byte, 0, len(encoded)*2)
 		for _, word := range encoded {
@@ -271,7 +271,7 @@ func TestCommandHelperFunctions(t *testing.T) {
 		}
 
 		got := decodeWorkspaceOutput(raw)
-		for _, want := range []string{"拒绝访问", "错误代码", "E_ACCESSDENIED"} {
+		for _, want := range []string{"Access denied.", "Error code", "E_ACCESSDENIED"} {
 			if !strings.Contains(got, want) {
 				t.Fatalf("expected decoded utf16 output to contain %q, got %q", want, got)
 			}

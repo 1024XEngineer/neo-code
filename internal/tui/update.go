@@ -69,7 +69,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		a.width = typed.Width
 		a.height = typed.Height
-		a.resizeComponents()
+		a.applyComponentLayout(true)
 		return a, tea.Batch(cmds...)
 	case RuntimeMsg:
 		transcriptDirty := a.handleRuntimeEvent(typed.Event)
@@ -82,6 +82,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, tea.Batch(cmds...)
 	case RuntimeClosedMsg:
 		a.state.IsAgentRunning = false
+		a.clearRunProgress()
 		a.state.IsCompacting = false
 		if strings.TrimSpace(a.state.StatusText) == "" {
 			a.state.StatusText = statusRuntimeClosed
@@ -90,6 +91,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case runFinishedMsg:
 		if typed.err != nil {
 			a.state.IsAgentRunning = false
+			a.clearRunProgress()
 			a.state.StreamingReply = false
 			a.state.CurrentTool = ""
 			if errors.Is(typed.err, context.Canceled) {
@@ -99,6 +101,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				a.state.ExecutionError = typed.err.Error()
 				a.state.StatusText = typed.err.Error()
 			}
+		}
+		if !a.state.IsAgentRunning {
+			a.clearRunProgress()
 		}
 		_ = a.refreshSessions()
 		a.syncActiveSessionTitle()
@@ -115,10 +120,10 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, tea.Batch(cmds...)
 		}
 
-		a.modelPicker = replacePickerItems(a.modelPicker, newModelPicker(typed.models))
+		replacePickerItems(&a.modelPicker, mapModelItems(typed.models))
 		cfg := a.configManager.Get()
 		a.syncConfigState(cfg)
-		a.selectCurrentModel(cfg.CurrentModel)
+		selectPickerItemByID(&a.modelPicker, cfg.CurrentModel)
 		return a, tea.Batch(cmds...)
 	case compactFinishedMsg:
 		a.state.IsCompacting = false
@@ -215,6 +220,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if a.handleTranscriptMouse(typed) {
 			return a, tea.Batch(cmds...)
 		}
+		if a.handleActivityMouse(typed) {
+			return a, tea.Batch(cmds...)
+		}
 		if a.handleInputMouse(typed) {
 			return a, tea.Batch(cmds...)
 		}
@@ -225,7 +233,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if key.Matches(typed, a.keys.ToggleHelp) {
 			a.state.ShowHelp = !a.state.ShowHelp
 			a.help.ShowAll = a.state.ShowHelp
-			a.resizeComponents()
+			a.applyComponentLayout(true)
 			return a, tea.Batch(cmds...)
 		}
 		if a.state.IsAgentRunning && key.Matches(typed, a.keys.CancelAgent) {
@@ -237,8 +245,16 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if a.state.ActivePicker != pickerNone {
 			return a.updatePicker(typed)
 		}
+		if a.focus == panelInput {
+			if cmd, handled := a.updateCommandMenuSelection(typed); handled {
+				if cmd != nil {
+					cmds = append(cmds, cmd)
+				}
+				return a, tea.Batch(cmds...)
+			}
+		}
 		if a.focus == panelInput && key.Matches(typed, a.keys.NextPanel) {
-			if a.applyTopFileSuggestion() {
+			if a.applySelectedCommandSuggestion() {
 				return a, tea.Batch(cmds...)
 			}
 			if a.shouldHandleTabAsInput(typed) {
@@ -284,6 +300,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case panelTranscript:
 			a.handleViewportKeys(&a.transcript, typed)
 			return a, tea.Batch(cmds...)
+		case panelActivity:
+			a.handleViewportKeys(&a.activity, typed)
+			return a, tea.Batch(cmds...)
 		case panelInput:
 			return a.updateInputPanel(msg, typed, cmds)
 		}
@@ -309,7 +328,8 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 
 			a.input.Reset()
 			a.state.InputText = ""
-			a.resizeComponents()
+			a.applyComponentLayout(true)
+			a.refreshCommandMenu()
 			a.resetPasteHeuristics()
 
 			if handled, cmd := a.handleImmediateSlashCommand(input); handled {
@@ -362,7 +382,7 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 					a.appendActivity("command", "Invalid workspace command", err.Error(), true)
 					return a, tea.Batch(cmds...)
 				}
-				a.activities = nil
+				a.clearActivities()
 				a.state.StatusText = statusRunningCommand
 				a.state.ExecutionError = ""
 				a.appendActivity("command", "Running command", command, false)
@@ -370,7 +390,8 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 				return a, tea.Batch(cmds...)
 			}
 
-			a.activities = nil
+			a.clearActivities()
+			a.clearRunProgress()
 			a.state.IsAgentRunning = true
 			a.state.IsCompacting = false
 			a.state.StreamingReply = false
@@ -400,7 +421,8 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 	a.state.InputText = a.input.Value()
 	a.noteInputEdit(before, a.state.InputText, effectiveTyped, now)
 	a.normalizeComposerHeight()
-	a.resizeComposerLayout()
+	a.applyComponentLayout(false)
+	a.refreshCommandMenu()
 	cmds = append(cmds, cmd)
 	return a, tea.Batch(cmds...)
 }
@@ -506,14 +528,14 @@ func (a App) updatePicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case msg.String() == "enter":
 		switch a.state.ActivePicker {
 		case pickerProvider:
-			item, ok := a.providerPicker.SelectedItem().(providerItem)
+			item, ok := a.providerPicker.SelectedItem().(selectionItem)
 			a.closePicker()
 			if !ok {
 				return a, nil
 			}
 			return a, runProviderSelection(a.providerSvc, item.name)
 		case pickerModel:
-			item, ok := a.modelPicker.SelectedItem().(modelItem)
+			item, ok := a.modelPicker.SelectedItem().(selectionItem)
 			a.closePicker()
 			if !ok {
 				return a, nil
@@ -528,6 +550,21 @@ func (a App) updatePicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		a.providerPicker, cmd = a.providerPicker.Update(msg)
 	case pickerModel:
 		a.modelPicker, cmd = a.modelPicker.Update(msg)
+	case pickerFile:
+		a.fileBrowser, cmd = a.fileBrowser.Update(msg)
+		if didSelect, path := a.fileBrowser.DidSelectFile(msg); didSelect {
+			a.closePicker()
+			if err := a.applyFileReference(path); err != nil {
+				a.state.ExecutionError = err.Error()
+				a.state.StatusText = err.Error()
+				a.appendActivity("workspace", "Failed to apply file reference", err.Error(), true)
+				return a, cmd
+			}
+			return a, cmd
+		}
+		if disabled, path := a.fileBrowser.DidSelectDisabledFile(msg); disabled {
+			a.state.StatusText = fmt.Sprintf("[System] %s is not selectable.", filepath.Base(path))
+		}
 	}
 	return a, cmd
 }
@@ -565,7 +602,7 @@ func (a *App) refreshSessions() error {
 func (a *App) refreshMessages() error {
 	if strings.TrimSpace(a.state.ActiveSessionID) == "" {
 		a.activeMessages = nil
-		a.activities = nil
+		a.clearActivities()
 		return nil
 	}
 
@@ -575,7 +612,7 @@ func (a *App) refreshMessages() error {
 	}
 
 	a.activeMessages = session.Messages
-	a.activities = nil
+	a.clearActivities()
 	a.state.ActiveSessionTitle = session.Title
 	a.state.CurrentWorkdir = selectSessionWorkdir(session.Workdir, a.configManager.Get().Workdir)
 	return nil
@@ -636,9 +673,11 @@ func (a *App) handleRuntimeEvent(event agentruntime.RuntimeEvent) bool {
 		a.state.StreamingReply = false
 		a.state.CurrentTool = ""
 		a.state.ExecutionError = ""
+		a.setRunProgress(0.15, "Queued")
 	case agentruntime.EventToolCallThinking:
 		if payload, ok := event.Payload.(string); ok && strings.TrimSpace(payload) != "" {
 			a.state.CurrentTool = payload
+			a.setRunProgress(0.35, "Planning")
 			a.appendActivity("tool", "Planning tool call", payload, false)
 		}
 	case agentruntime.EventToolStart:
@@ -646,11 +685,13 @@ func (a *App) handleRuntimeEvent(event agentruntime.RuntimeEvent) bool {
 		a.state.StreamingReply = false
 		if payload, ok := event.Payload.(provider.ToolCall); ok {
 			a.state.CurrentTool = payload.Name
+			a.setRunProgress(0.6, "Running tool")
 			a.appendActivity("tool", "Running tool", payload.Name, false)
 		}
 	case agentruntime.EventToolResult:
 		a.state.StreamingReply = false
 		a.state.CurrentTool = ""
+		a.setRunProgress(0.8, "Integrating result")
 		if payload, ok := event.Payload.(tools.ToolResult); ok {
 			a.activeMessages = append(a.activeMessages, provider.Message{
 				Role:    roleTool,
@@ -670,6 +711,9 @@ func (a *App) handleRuntimeEvent(event agentruntime.RuntimeEvent) bool {
 	case agentruntime.EventAgentChunk:
 		if payload, ok := event.Payload.(string); ok {
 			a.appendAssistantChunk(payload)
+			if !a.runProgressKnown {
+				a.setRunProgress(0.72, "Generating")
+			}
 			transcriptDirty = true
 		}
 	case agentruntime.EventToolChunk:
@@ -681,6 +725,7 @@ func (a *App) handleRuntimeEvent(event agentruntime.RuntimeEvent) bool {
 		a.state.IsAgentRunning = false
 		a.state.StreamingReply = false
 		a.state.CurrentTool = ""
+		a.clearRunProgress()
 		if strings.TrimSpace(a.state.ExecutionError) == "" {
 			a.state.StatusText = statusReady
 		}
@@ -694,12 +739,14 @@ func (a *App) handleRuntimeEvent(event agentruntime.RuntimeEvent) bool {
 		a.state.CurrentTool = ""
 		a.state.ExecutionError = ""
 		a.state.StatusText = statusCanceled
+		a.clearRunProgress()
 		a.appendActivity("run", "Canceled current run", "", false)
 	case agentruntime.EventError:
 		a.state.StatusText = statusError
 		a.state.IsAgentRunning = false
 		a.state.StreamingReply = false
 		a.state.CurrentTool = ""
+		a.clearRunProgress()
 		if payload, ok := event.Payload.(string); ok {
 			a.state.ExecutionError = payload
 			a.state.StatusText = payload
@@ -708,6 +755,7 @@ func (a *App) handleRuntimeEvent(event agentruntime.RuntimeEvent) bool {
 	case agentruntime.EventProviderRetry:
 		if payload, ok := event.Payload.(string); ok && strings.TrimSpace(payload) != "" {
 			a.state.StatusText = statusThinking
+			a.runProgressKnown = false
 			a.appendActivity("provider", "Retrying provider call", payload, false)
 		}
 	case agentruntime.EventCompactDone:
@@ -769,6 +817,7 @@ func (a *App) appendInlineMessage(role string, message string) {
 }
 
 func (a *App) appendActivity(kind string, title string, detail string, isError bool) {
+	previousCount := len(a.activities)
 	title = strings.TrimSpace(title)
 	detail = strings.TrimSpace(detail)
 	if title == "" && detail == "" {
@@ -789,6 +838,25 @@ func (a *App) appendActivity(kind string, title string, detail string, isError b
 	if len(a.activities) > maxActivityEntries {
 		a.activities = append([]activityEntry(nil), a.activities[len(a.activities)-maxActivityEntries:]...)
 	}
+	a.syncActivityViewport(previousCount)
+}
+
+func (a *App) clearActivities() {
+	previousCount := len(a.activities)
+	if previousCount == 0 {
+		return
+	}
+	a.activities = nil
+	a.syncActivityViewport(previousCount)
+}
+
+func (a *App) syncActivityViewport(previousCount int) {
+	visibleBefore := previousCount > 0
+	visibleNow := len(a.activities) > 0
+	if visibleBefore != visibleNow {
+		a.applyComponentLayout(true)
+	}
+	a.rebuildActivity()
 }
 
 func (a *App) lastAssistantMatches(content string) bool {
@@ -921,6 +989,64 @@ func (a App) inputBounds() (int, int, int, int) {
 	return streamX, inputY, lay.rightWidth, inputHeight
 }
 
+func (a App) activityBounds() (int, int, int, int) {
+	lay := a.computeLayout()
+	contentX := a.styles.doc.GetPaddingLeft()
+	contentY := a.styles.doc.GetPaddingTop()
+	headerHeight := lipgloss.Height(a.renderHeader(lay.contentWidth))
+	bodyY := contentY + headerHeight
+
+	streamX := contentX
+	streamY := bodyY
+	if lay.stacked {
+		streamY += lay.sidebarHeight
+	} else {
+		streamX += lay.sidebarWidth + lay.bodyGap
+	}
+
+	activityHeight := a.activityPreviewHeight()
+	if activityHeight <= 0 {
+		return streamX, streamY + a.transcript.Height, lay.rightWidth, 0
+	}
+	return streamX, streamY + a.transcript.Height, lay.rightWidth, activityHeight
+}
+
+func (a App) isMouseWithinActivity(msg tea.MouseMsg) bool {
+	x, y, width, height := a.activityBounds()
+	if width <= 0 || height <= 0 {
+		return false
+	}
+	return msg.X >= x && msg.X < x+width && msg.Y >= y && msg.Y < y+height
+}
+
+func (a *App) handleActivityMouse(msg tea.MouseMsg) bool {
+	if len(a.activities) == 0 || !a.isMouseWithinActivity(msg) {
+		return false
+	}
+	if a.state.ActivePicker != pickerNone {
+		return false
+	}
+
+	switch {
+	case msg.Button == tea.MouseButtonWheelUp && (msg.Action == tea.MouseActionPress || msg.Type == tea.MouseWheelUp):
+		if a.focus != panelActivity {
+			a.focus = panelActivity
+			a.applyFocus()
+		}
+		a.activity.LineUp(mouseWheelStepLines)
+		return true
+	case msg.Button == tea.MouseButtonWheelDown && (msg.Action == tea.MouseActionPress || msg.Type == tea.MouseWheelDown):
+		if a.focus != panelActivity {
+			a.focus = panelActivity
+			a.applyFocus()
+		}
+		a.activity.LineDown(mouseWheelStepLines)
+		return true
+	default:
+		return false
+	}
+}
+
 func (a *App) handleInputMouse(msg tea.MouseMsg) bool {
 	if !a.isMouseWithinInput(msg) {
 		return false
@@ -975,7 +1101,7 @@ func (a App) shouldHandleTabAsInput(typed tea.KeyMsg) bool {
 }
 
 func (a *App) focusNext() {
-	order := []panel{panelSessions, panelTranscript, panelInput}
+	order := []panel{panelSessions, panelTranscript, panelActivity, panelInput}
 	current := 0
 	for i, item := range order {
 		if item == a.focus {
@@ -989,7 +1115,7 @@ func (a *App) focusNext() {
 }
 
 func (a *App) focusPrev() {
-	order := []panel{panelSessions, panelTranscript, panelInput}
+	order := []panel{panelSessions, panelTranscript, panelActivity, panelInput}
 	current := 0
 	for i, item := range order {
 		if item == a.focus {
@@ -1016,38 +1142,51 @@ func (a *App) applyFocus() {
 	a.input.Blur()
 }
 
-func (a *App) resizeComposerLayout() {
-	a.applyComponentLayout(false)
-}
-
-func (a *App) resizeComponents() {
-	a.applyComponentLayout(true)
-}
-
 func (a *App) applyComponentLayout(rebuildTranscript bool) {
 	lay := a.computeLayout()
 	prevTranscriptWidth := a.transcript.Width
+	prevActivityWidth := a.activity.Width
+	prevActivityHeight := a.activity.Height
 	a.help.ShowAll = a.state.ShowHelp
 	sidebarFrameWidth := a.styles.panelFocused.GetHorizontalFrameSize()
 	sidebarFrameHeight := a.styles.panelFocused.GetVerticalFrameSize()
 	sidebarBodyWidth := max(14, lay.sidebarWidth-sidebarFrameWidth)
 	sidebarBodyHeight := max(4, lay.sidebarHeight-sidebarFrameHeight-lipgloss.Height(a.renderSidebarHeader(sidebarBodyWidth)))
 	a.sessions.SetSize(sidebarBodyWidth, sidebarBodyHeight)
+	a.transcript.Width = max(24, lay.rightWidth)
+	a.resizeCommandMenu()
 	menuHeight := a.commandMenuHeight(max(24, lay.rightWidth))
 	activityHeight := a.activityPreviewHeight()
-	a.transcript.Width = max(24, lay.rightWidth)
 	a.input.SetWidth(a.composerInnerWidth(lay.rightWidth))
 	a.input.SetHeight(a.composerHeight())
 	promptHeight := lipgloss.Height(a.renderPrompt(a.transcript.Width))
 	a.transcript.Height = max(6, lay.rightHeight-activityHeight-menuHeight-promptHeight)
+
+	if activityHeight > 0 {
+		panelStyle := a.styles.panelFocused
+		frameHeight := panelStyle.GetVerticalFrameSize()
+		borderWidth := 2
+		paddingWidth := panelStyle.GetHorizontalFrameSize() - borderWidth
+		panelWidth := max(1, lay.rightWidth-borderWidth)
+		bodyWidth := max(10, panelWidth-paddingWidth)
+		bodyHeight := max(1, activityHeight-frameHeight-1)
+		a.activity.Width = bodyWidth
+		a.activity.Height = bodyHeight
+	} else {
+		a.activity.Width = max(10, lay.rightWidth-4)
+		a.activity.Height = 0
+	}
+
 	a.providerPicker.SetSize(max(24, clamp(lay.rightWidth-14, 28, 52)), max(4, clamp(lay.rightHeight-10, 6, 10)))
 	a.modelPicker.SetSize(max(24, clamp(lay.rightWidth-14, 28, 52)), max(4, clamp(lay.rightHeight-10, 6, 10)))
+	a.fileBrowser.SetHeight(max(6, clamp(lay.rightHeight-8, 8, 16)))
 	if rebuildTranscript || prevTranscriptWidth != a.transcript.Width {
 		a.rebuildTranscript()
-		return
-	}
-	if a.transcript.AtBottom() || a.isBusy() {
+	} else if a.transcript.AtBottom() || a.isBusy() {
 		a.transcript.GotoBottom()
+	}
+	if prevActivityWidth != a.activity.Width || prevActivityHeight != a.activity.Height {
+		a.rebuildActivity()
 	}
 }
 
@@ -1104,6 +1243,44 @@ func (a *App) rebuildTranscript() {
 	}
 }
 
+func (a *App) rebuildActivity() {
+	if len(a.activities) == 0 || a.activity.Height <= 0 {
+		a.activity.SetContent("")
+		a.activity.GotoTop()
+		return
+	}
+
+	atBottom := a.activity.AtBottom()
+	width := max(12, a.activity.Width)
+	lines := make([]string, 0, len(a.activities))
+	for _, entry := range a.activities {
+		lines = append(lines, a.renderActivityLine(entry, width))
+	}
+	a.activity.SetContent(strings.Join(lines, "\n"))
+	if atBottom || a.focus != panelActivity {
+		a.activity.GotoBottom()
+	}
+}
+
+func (a *App) setRunProgress(value float64, label string) {
+	a.runProgressKnown = true
+	switch {
+	case value < 0:
+		a.runProgressValue = 0
+	case value > 1:
+		a.runProgressValue = 1
+	default:
+		a.runProgressValue = value
+	}
+	a.runProgressLabel = strings.TrimSpace(label)
+}
+
+func (a *App) clearRunProgress() {
+	a.runProgressKnown = false
+	a.runProgressValue = 0
+	a.runProgressLabel = ""
+}
+
 func (a *App) handleImmediateSlashCommand(input string) (bool, tea.Cmd) {
 	command, rest := splitFirstWord(strings.ToLower(strings.TrimSpace(input)))
 	switch command {
@@ -1156,6 +1333,8 @@ func (a App) currentStatusSnapshot() statusSnapshot {
 		picker = "provider"
 	case pickerModel:
 		picker = "model"
+	case pickerFile:
+		picker = "file"
 	}
 
 	return statusSnapshot{
@@ -1178,11 +1357,12 @@ func (a *App) startDraftSession() {
 	a.state.ActiveSessionID = ""
 	a.state.ActiveSessionTitle = draftSessionTitle
 	a.activeMessages = nil
-	a.activities = nil
+	a.clearActivities()
 	a.state.IsCompacting = false
 	a.state.StatusText = statusDraft
 	a.state.ExecutionError = ""
 	a.state.CurrentTool = ""
+	a.clearRunProgress()
 	a.input.Reset()
 	a.state.InputText = ""
 	a.state.CurrentWorkdir = a.configManager.Get().Workdir
@@ -1192,7 +1372,7 @@ func (a *App) startDraftSession() {
 	}
 	a.focus = panelInput
 	a.applyFocus()
-	a.resizeComponents()
+	a.applyComponentLayout(true)
 	a.rebuildTranscript()
 }
 

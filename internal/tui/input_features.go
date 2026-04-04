@@ -36,6 +36,13 @@ type workspaceCommandResultMsg struct {
 	err     error
 }
 
+type tokenSelector int
+
+const (
+	tokenSelectorFirst tokenSelector = iota
+	tokenSelectorLast
+)
+
 var workspaceCommandExecutor = defaultWorkspaceCommandExecutor
 
 var ansiEscapePattern = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]`)
@@ -250,6 +257,12 @@ func (a *App) refreshFileCandidates() error {
 		return err
 	}
 	a.fileCandidates = candidates
+	if workdir := strings.TrimSpace(a.state.CurrentWorkdir); workdir != "" {
+		if absolute, absErr := filepath.Abs(workdir); absErr == nil {
+			a.fileBrowser.CurrentDirectory = absolute
+		}
+	}
+	a.refreshCommandMenu()
 	return nil
 }
 
@@ -296,20 +309,24 @@ func collectWorkspaceFiles(root string, limit int) ([]string, error) {
 	return candidates, nil
 }
 
-func (a App) matchingFileReferences(input string) []string {
-	_, _, token, ok := currentReferenceToken(input)
+func (a App) resolveFileReferenceSuggestions(input string) (start int, end int, query string, suggestions []string, ok bool) {
+	start, end, token, ok := currentReferenceToken(input)
 	if !ok {
-		return nil
+		return 0, 0, "", nil, false
 	}
 
-	query := strings.ToLower(strings.TrimPrefix(token, fileReferencePrefix))
-	if len(a.fileCandidates) == 0 {
+	query = strings.ToLower(strings.TrimPrefix(token, fileReferencePrefix))
+	suggestions = collectFileSuggestionMatches(query, a.fileCandidates, maxFileSuggestions)
+	return start, end, query, suggestions, true
+}
+
+func collectFileSuggestionMatches(query string, candidates []string, limit int) []string {
+	if len(candidates) == 0 || limit <= 0 {
 		return nil
 	}
-
 	prefixMatches := make([]string, 0, maxFileSuggestions)
 	containsMatches := make([]string, 0, maxFileSuggestions)
-	for _, candidate := range a.fileCandidates {
+	for _, candidate := range candidates {
 		lower := strings.ToLower(candidate)
 		switch {
 		case query == "" || strings.HasPrefix(lower, query):
@@ -323,47 +340,111 @@ func (a App) matchingFileReferences(input string) []string {
 	}
 
 	out := append(prefixMatches, containsMatches...)
-	if len(out) > maxFileSuggestions {
-		out = out[:maxFileSuggestions]
+	if len(out) > limit {
+		out = out[:limit]
 	}
 	return out
 }
 
-func currentReferenceToken(input string) (start int, end int, token string, ok bool) {
+func tokenRange(input string, selector tokenSelector) (start int, end int, token string, ok bool) {
 	if strings.TrimSpace(input) == "" {
 		return 0, 0, "", false
 	}
 
-	end = len(input)
-	start = strings.LastIndexAny(input, " \t\r\n")
-	if start < 0 {
+	switch selector {
+	case tokenSelectorFirst:
 		start = 0
-	} else {
-		start++
+		for start < len(input) {
+			switch input[start] {
+			case ' ', '\t', '\r', '\n':
+				start++
+			default:
+				goto parse
+			}
+		}
+		return 0, 0, "", false
+	case tokenSelectorLast:
+		end = len(input)
+		start = strings.LastIndexAny(input, " \t\r\n")
+		if start < 0 {
+			start = 0
+		} else {
+			start++
+		}
+		if start >= end {
+			return 0, 0, "", false
+		}
+		token = input[start:end]
+		return start, end, token, true
+	default:
+		return 0, 0, "", false
 	}
 
+parse:
+	end = start
+	for end < len(input) {
+		switch input[end] {
+		case ' ', '\t', '\r', '\n':
+			token = input[start:end]
+			return start, end, token, true
+		default:
+			end++
+		}
+	}
 	token = input[start:end]
+	return start, end, token, true
+}
+
+func currentReferenceToken(input string) (start int, end int, token string, ok bool) {
+	start, end, token, ok = tokenRange(input, tokenSelectorLast)
+	if !ok {
+		return 0, 0, "", false
+	}
 	if !strings.HasPrefix(token, fileReferencePrefix) {
 		return 0, 0, "", false
 	}
 	return start, end, token, true
 }
 
-func (a *App) applyTopFileSuggestion() bool {
-	suggestions := a.matchingFileReferences(a.input.Value())
-	if len(suggestions) == 0 {
-		return false
+func (a *App) applyFileReference(path string) error {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return fmt.Errorf("file path is empty")
 	}
 
-	start, end, _, ok := currentReferenceToken(a.input.Value())
-	if !ok {
-		return false
+	resolved := filepath.ToSlash(path)
+	if workdir := strings.TrimSpace(a.state.CurrentWorkdir); workdir != "" {
+		base, errBase := filepath.Abs(workdir)
+		target, errTarget := filepath.Abs(path)
+		if errBase == nil && errTarget == nil {
+			if rel, errRel := filepath.Rel(base, target); errRel == nil && !strings.HasPrefix(rel, "..") {
+				resolved = filepath.ToSlash(rel)
+			} else {
+				resolved = filepath.ToSlash(target)
+			}
+		}
+	}
+	resolved = strings.TrimPrefix(resolved, "./")
+	reference := fileReferencePrefix + resolved
+
+	current := a.input.Value()
+	if start, end, _, ok := currentReferenceToken(current); ok {
+		current = current[:start] + reference + current[end:]
+	} else if strings.TrimSpace(current) == "" {
+		current = reference
+	} else {
+		separator := " "
+		if strings.HasSuffix(current, " ") || strings.HasSuffix(current, "\t") {
+			separator = ""
+		}
+		current = current + separator + reference
 	}
 
-	next := a.input.Value()[:start] + fileReferencePrefix + suggestions[0] + a.input.Value()[end:]
-	a.input.SetValue(next)
-	a.state.InputText = next
+	a.input.SetValue(current)
+	a.state.InputText = current
 	a.normalizeComposerHeight()
-	a.resizeComposerLayout()
-	return true
+	a.applyComponentLayout(false)
+	a.refreshCommandMenu()
+	a.state.StatusText = fmt.Sprintf("[System] Added file reference %s.", reference)
+	return nil
 }

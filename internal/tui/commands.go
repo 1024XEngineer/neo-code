@@ -31,11 +31,13 @@ const (
 	slashUsageModel    = "/model"
 	slashUsageWorkdir  = "/cwd"
 
-	commandMenuTitle       = "Commands"
+	commandMenuTitle       = "Suggestions"
 	providerPickerTitle    = "Select Provider"
 	providerPickerSubtitle = "Up/Down choose, Enter confirm, Esc cancel"
 	modelPickerTitle       = "Select Model"
 	modelPickerSubtitle    = "Up/Down choose, Enter confirm, Esc cancel"
+	filePickerTitle        = "Browse Files"
+	filePickerSubtitle     = "Navigate folders, Enter choose file, Esc cancel"
 
 	sidebarTitle      = "Sessions"
 	sidebarFilterHint = "Type / to search"
@@ -64,14 +66,14 @@ const (
 	statusCompacting      = "Compacting context"
 	statusChooseProvider  = "Choose a provider"
 	statusChooseModel     = "Choose a model"
+	statusBrowseFile      = "Browse workspace files"
 
 	focusLabelSessions   = "Sessions"
 	focusLabelTranscript = "Transcript"
 	focusLabelActivity   = "Activity"
 	focusLabelComposer   = "Composer"
 
-	activityPreviewEntries = 3
-	maxActivityEntries     = 64
+	maxActivityEntries = 64
 
 	messageTagUser  = "[ YOU ]"
 	messageTagAgent = "[ NEO ]"
@@ -136,33 +138,56 @@ func newSelectionPicker(items []list.Item) list.Model {
 	return picker
 }
 
-func newProviderPicker(items []config.ProviderCatalogItem) list.Model {
+func newCommandMenuModel(uiStyles styles) list.Model {
+	delegate := commandMenuDelegate{styles: uiStyles}
+	menu := list.New([]list.Item{}, delegate, 0, 0)
+	menu.Title = ""
+	menu.SetShowTitle(false)
+	menu.SetShowHelp(false)
+	menu.SetShowStatusBar(false)
+	menu.SetShowPagination(false)
+	menu.SetShowFilter(false)
+	menu.SetFilteringEnabled(false)
+	menu.DisableQuitKeybindings()
+	return menu
+}
+
+func newSelectionPickerItems(items []selectionItem) list.Model {
 	listItems := make([]list.Item, 0, len(items))
 	for _, item := range items {
-		listItems = append(listItems, providerItem{
+		listItems = append(listItems, item)
+	}
+	return newSelectionPicker(listItems)
+}
+
+func mapProviderItems(items []config.ProviderCatalogItem) []selectionItem {
+	mapped := make([]selectionItem, 0, len(items))
+	for _, item := range items {
+		mapped = append(mapped, selectionItem{
 			id:          item.ID,
 			name:        item.Name,
 			description: item.Description,
 		})
 	}
-	return newSelectionPicker(listItems)
+	return mapped
 }
 
-func newModelPicker(models []config.ModelDescriptor) list.Model {
-	items := make([]list.Item, 0, len(models))
+func mapModelItems(models []config.ModelDescriptor) []selectionItem {
+	mapped := make([]selectionItem, 0, len(models))
 	for _, option := range models {
-		items = append(items, modelItem{
+		mapped = append(mapped, selectionItem{
 			id:          option.ID,
 			name:        option.Name,
 			description: option.Description,
 		})
 	}
-	return newSelectionPicker(items)
+	return mapped
 }
 
-func replacePickerItems(current list.Model, next list.Model) list.Model {
+func replacePickerItems(current *list.Model, items []selectionItem) {
+	next := newSelectionPickerItems(items)
 	next.SetSize(current.Width(), current.Height())
-	return next
+	*current = next
 }
 
 func (a *App) refreshProviderPicker() error {
@@ -171,8 +196,8 @@ func (a *App) refreshProviderPicker() error {
 		return err
 	}
 
-	a.providerPicker = replacePickerItems(a.providerPicker, newProviderPicker(items))
-	a.selectCurrentProvider(a.state.CurrentProvider)
+	replacePickerItems(&a.providerPicker, mapProviderItems(items))
+	selectPickerItemByID(&a.providerPicker, a.state.CurrentProvider)
 	return nil
 }
 
@@ -182,23 +207,24 @@ func (a *App) refreshModelPicker() error {
 		return err
 	}
 
-	a.modelPicker = replacePickerItems(a.modelPicker, newModelPicker(models))
-	a.selectCurrentModel(a.state.CurrentModel)
+	replacePickerItems(&a.modelPicker, mapModelItems(models))
+	selectPickerItemByID(&a.modelPicker, a.state.CurrentModel)
 	return nil
 }
 
 func (a *App) openProviderPicker() {
-	a.state.ActivePicker = pickerProvider
-	a.state.StatusText = statusChooseProvider
-	a.input.Blur()
-	a.selectCurrentProvider(a.state.CurrentProvider)
+	a.openPicker(pickerProvider, statusChooseProvider, &a.providerPicker, a.state.CurrentProvider)
 }
 
 func (a *App) openModelPicker() {
-	a.state.ActivePicker = pickerModel
-	a.state.StatusText = statusChooseModel
+	a.openPicker(pickerModel, statusChooseModel, &a.modelPicker, a.state.CurrentModel)
+}
+
+func (a *App) openPicker(mode pickerMode, statusText string, picker *list.Model, selectedID string) {
+	a.state.ActivePicker = mode
+	a.state.StatusText = statusText
 	a.input.Blur()
-	a.selectCurrentModel(a.state.CurrentModel)
+	selectPickerItemByID(picker, selectedID)
 }
 
 func (a *App) closePicker() {
@@ -207,32 +233,26 @@ func (a *App) closePicker() {
 	a.applyFocus()
 }
 
-func (a *App) selectCurrentProvider(providerID string) {
-	items := a.providerPicker.Items()
+func selectPickerItemByID(picker *list.Model, selectedID string) {
+	items := picker.Items()
 	for idx, item := range items {
-		candidate, ok := item.(providerItem)
-		if ok && strings.EqualFold(candidate.id, providerID) {
-			a.providerPicker.Select(idx)
+		candidate, ok := item.(selectionItem)
+		if ok && strings.EqualFold(candidate.id, selectedID) {
+			picker.Select(idx)
 			return
 		}
 	}
 	if len(items) > 0 {
-		a.providerPicker.Select(0)
+		picker.Select(0)
 	}
 }
 
+func (a *App) selectCurrentProvider(providerID string) {
+	selectPickerItemByID(&a.providerPicker, providerID)
+}
+
 func (a *App) selectCurrentModel(modelID string) {
-	items := a.modelPicker.Items()
-	for idx, item := range items {
-		candidate, ok := item.(modelItem)
-		if ok && strings.EqualFold(candidate.id, modelID) {
-			a.modelPicker.Select(idx)
-			return
-		}
-	}
-	if len(items) > 0 {
-		a.modelPicker.Select(0)
-	}
+	selectPickerItemByID(&a.modelPicker, modelID)
 }
 
 func (a App) matchingSlashCommands(input string) []commandSuggestion {
