@@ -116,6 +116,75 @@ func TestManualCompactKeepRecentRetainsRecentMessagesAndWholeToolBlock(t *testin
 	}
 }
 
+func TestReactiveCompactUsesKeepRecentAndReportsReactiveMode(t *testing.T) {
+	t.Parallel()
+
+	generator := &stubSummaryGenerator{summary: validSemanticSummary()}
+	runner := NewRunner(generator)
+	home := t.TempDir()
+	runner.userHomeDir = func() (string, error) { return home, nil }
+
+	messages := []provider.Message{
+		{Role: provider.RoleUser, Content: "old requirement"},
+		{Role: provider.RoleAssistant, Content: "old answer"},
+		{Role: provider.RoleUser, Content: "middle request"},
+		{Role: provider.RoleAssistant, ToolCalls: []provider.ToolCall{{ID: "call-old", Name: "filesystem_grep", Arguments: "{}"}}},
+		{Role: provider.RoleTool, ToolCallID: "call-old", Content: "old result"},
+		{Role: provider.RoleAssistant, Content: "after tool"},
+		{Role: provider.RoleUser, Content: "instruction to keep"},
+		{Role: provider.RoleAssistant, Content: "ack"},
+		{Role: provider.RoleUser, Content: "recent follow up"},
+		{Role: provider.RoleAssistant, Content: "recent answer"},
+		{Role: provider.RoleUser, Content: "latest explicit instruction"},
+		{Role: provider.RoleAssistant, Content: "latest result"},
+	}
+
+	result, err := runner.Run(context.Background(), Input{
+		Mode:      ModeReactive,
+		SessionID: "session-reactive",
+		Workdir:   t.TempDir(),
+		Messages:  messages,
+		Config: config.CompactConfig{
+			ManualStrategy:           config.CompactManualStrategyFullReplace,
+			ManualKeepRecentMessages: 8,
+			MaxSummaryChars:          1200,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if !result.Applied {
+		t.Fatalf("expected reactive compact applied")
+	}
+	if result.Metrics.TriggerMode != string(ModeReactive) {
+		t.Fatalf("expected trigger mode %q, got %q", ModeReactive, result.Metrics.TriggerMode)
+	}
+	if result.TranscriptID == "" || result.TranscriptPath == "" {
+		t.Fatalf("expected transcript metadata, got %+v", result)
+	}
+	if len(result.Messages) != 10 {
+		t.Fatalf("expected summary + 9 retained messages, got %d", len(result.Messages))
+	}
+	if result.Messages[1].Role != provider.RoleAssistant || len(result.Messages[1].ToolCalls) != 1 {
+		t.Fatalf("expected retained tool call block start, got %+v", result.Messages[1])
+	}
+	if result.Messages[2].Role != provider.RoleTool || result.Messages[2].ToolCallID != "call-old" {
+		t.Fatalf("expected retained tool result, got %+v", result.Messages[2])
+	}
+	if len(generator.calls) != 1 {
+		t.Fatalf("expected generator to run once, got %d", len(generator.calls))
+	}
+	if generator.calls[0].Mode != ModeReactive {
+		t.Fatalf("expected summary input mode %q, got %q", ModeReactive, generator.calls[0].Mode)
+	}
+	if generator.calls[0].Config.ManualStrategy != config.CompactManualStrategyKeepRecent {
+		t.Fatalf("expected reactive compact to force keep_recent, got %q", generator.calls[0].Config.ManualStrategy)
+	}
+	if len(generator.calls[0].ArchivedMessages) != 3 || len(generator.calls[0].RetainedMessages) != 9 {
+		t.Fatalf("unexpected generator input: %+v", generator.calls[0])
+	}
+}
+
 func TestManualCompactKeepRecentProtectsLatestExplicitUserInstruction(t *testing.T) {
 	t.Parallel()
 
@@ -333,6 +402,28 @@ func TestRunManualRejectsUnsupportedStrategy(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "not supported") {
 		t.Fatalf("expected unsupported strategy error, got %v", err)
+	}
+}
+
+func TestRunRejectsUnsupportedMode(t *testing.T) {
+	t.Parallel()
+
+	runner := NewRunner(&stubSummaryGenerator{summary: validSemanticSummary()})
+	runner.userHomeDir = func() (string, error) { return t.TempDir(), nil }
+
+	_, err := runner.Run(context.Background(), Input{
+		Mode:      Mode("unexpected"),
+		SessionID: "session-invalid-mode",
+		Workdir:   t.TempDir(),
+		Messages:  []provider.Message{{Role: provider.RoleUser, Content: "hello"}},
+		Config: config.CompactConfig{
+			ManualStrategy:           config.CompactManualStrategyKeepRecent,
+			ManualKeepRecentMessages: 10,
+			MaxSummaryChars:          1200,
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "unsupported mode") {
+		t.Fatalf("expected unsupported mode error, got %v", err)
 	}
 }
 

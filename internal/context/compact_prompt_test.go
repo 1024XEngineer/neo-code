@@ -73,3 +73,22 @@ func TestBuildCompactPromptUsesEmptyJSONArraysWhenNoMessages(t *testing.T) {
 		t.Fatalf("expected empty archived and retained arrays, got %q", prompt.UserPrompt)
 	}
 }
+
+func TestBuildCompactPromptPreservesReactiveMode(t *testing.T) {
+	t.Parallel()
+
+	prompt := BuildCompactPrompt(CompactPromptInput{
+		Mode:                     "reactive",
+		ManualStrategy:           "keep_recent",
+		ManualKeepRecentMessages: 6,
+		ArchivedMessageCount:     4,
+		MaxSummaryChars:          800,
+	})
+
+	if !strings.Contains(prompt.UserPrompt, "reactive context compact") {
+		t.Fatalf("expected reactive mode in user prompt, got %q", prompt.UserPrompt)
+	}
+	if !strings.Contains(prompt.UserPrompt, "mode: reactive") {
+		t.Fatalf("expected reactive mode field in user prompt, got %q", prompt.UserPrompt)
+	}
+}

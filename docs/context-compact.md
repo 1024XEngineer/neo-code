@@ -1,10 +1,11 @@
 # Context Compact
 
-本文档说明 NeoCode 中 manual compact 的配置、执行链路和摘要约定。
+本文档说明 NeoCode 中 context compact 的配置、执行链路和摘要约定。
 
 ## 概览
 
-- 当前仅支持手动触发的 compact，不包含自动 compact。
+- runtime 当前仅接入手动触发的 compact，不包含自动 compact。
+- `internal/context/compact` 已支持 `manual` 与 `reactive` 两种 mode，供 runtime 后续在 provider 上下文过长错误场景接入调用。
 - 用户通过 `/compact` 对当前会话执行一次上下文压缩。
 - compact 前会先写入完整 transcript，随后生成并校验 compact summary，再回写会话消息。
 
@@ -38,6 +39,15 @@ context:
 6. summary generator 调用模型生成语义摘要。
 7. runner 校验摘要结构与长度，必要时截断。
 8. compact 成功时回写会话消息并发出 `compact_done`；失败时发出 `compact_error`。
+
+其中 `reactive` mode 在 context 包内与 `manual` 复用同一条压缩管线：
+
+1. 先写 transcript。
+2. 默认按 `keep_recent` 裁剪可归档历史。
+3. 生成并校验 `[compact_summary]`。
+4. 返回压缩后的消息与 transcript 元信息。
+
+当前 runtime 主链尚未自动调用 `reactive` mode；后续接入时可继续复用现有 compact 事件，并通过 `trigger_mode=reactive` 区分。
 
 ## 摘要协议
 

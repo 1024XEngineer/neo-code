@@ -27,6 +27,8 @@ type Mode string
 const (
 	// ModeManual runs the explicit user-triggered compact flow.
 	ModeManual Mode = "manual"
+	// ModeReactive runs the provider-error-triggered compact flow.
+	ModeReactive Mode = "reactive"
 )
 
 // ErrorMode classifies compact result errors.
@@ -117,17 +119,20 @@ func NewRunner(generator SummaryGenerator) *Service {
 	}
 }
 
-// Run executes manual compact and persists the original transcript first.
+// Run 执行 compact 流程，并在压缩前优先持久化原始 transcript。
 func (s *Service) Run(ctx context.Context, input Input) (Result, error) {
 	if err := ctx.Err(); err != nil {
 		return Result{}, err
 	}
 
-	if input.Mode != ModeManual {
+	if input.Mode != ModeManual && input.Mode != ModeReactive {
 		return Result{}, fmt.Errorf("compact: unsupported mode %q", input.Mode)
 	}
 
 	cfg := normalizeCompactConfig(input.Config)
+	if input.Mode == ModeReactive {
+		cfg.ManualStrategy = config.CompactManualStrategyKeepRecent
+	}
 	messages := cloneMessages(input.Messages)
 	beforeChars := countMessageChars(messages)
 	base := Result{
@@ -149,7 +154,7 @@ func (s *Service) Run(ctx context.Context, input Input) (Result, error) {
 	base.TranscriptID = transcriptID
 	base.TranscriptPath = transcriptPath
 
-	next, applied, err := s.manualCompact(ctx, messages, cfg)
+	next, applied, err := s.compactMessages(ctx, input.Mode, messages, cfg)
 	if err != nil {
 		return Result{}, err
 	}
@@ -266,19 +271,34 @@ func splitMessagesAt(messages []provider.Message, retainedStart int) ([]provider
 	return cloneMessages(messages[:retainedStart]), cloneMessages(messages[retainedStart:])
 }
 
-func (s *Service) manualCompact(ctx context.Context, messages []provider.Message, cfg config.CompactConfig) ([]provider.Message, bool, error) {
+// compactMessages 根据当前 mode 选择实际复用的压缩策略。
+func (s *Service) compactMessages(
+	ctx context.Context,
+	mode Mode,
+	messages []provider.Message,
+	cfg config.CompactConfig,
+) ([]provider.Message, bool, error) {
+	if mode == ModeReactive {
+		return s.compactKeepRecent(ctx, mode, messages, cfg)
+	}
+
 	strategy := strings.ToLower(strings.TrimSpace(cfg.ManualStrategy))
 	switch strategy {
 	case config.CompactManualStrategyKeepRecent:
-		return s.manualCompactKeepRecent(ctx, messages, cfg)
+		return s.compactKeepRecent(ctx, mode, messages, cfg)
 	case config.CompactManualStrategyFullReplace:
-		return s.manualCompactFullReplace(ctx, messages, cfg)
+		return s.compactFullReplace(ctx, mode, messages, cfg)
 	default:
 		return nil, false, fmt.Errorf("compact: manual strategy %q is not supported", cfg.ManualStrategy)
 	}
 }
 
-func (s *Service) manualCompactKeepRecent(ctx context.Context, messages []provider.Message, cfg config.CompactConfig) ([]provider.Message, bool, error) {
+func (s *Service) compactKeepRecent(
+	ctx context.Context,
+	mode Mode,
+	messages []provider.Message,
+	cfg config.CompactConfig,
+) ([]provider.Message, bool, error) {
 	blocks := collectAtomicBlocks(messages)
 	retainedStart := retainedStartForKeepRecent(blocks, cfg.ManualKeepRecentMessages)
 	if retainedStart <= 0 {
@@ -287,7 +307,7 @@ func (s *Service) manualCompactKeepRecent(ctx context.Context, messages []provid
 
 	removed, kept := splitMessagesAt(messages, retainedStart)
 
-	summary, err := s.buildSummary(ctx, removed, kept, len(removed), cfg)
+	summary, err := s.buildSummary(ctx, mode, removed, kept, len(removed), cfg)
 	if err != nil {
 		return nil, false, err
 	}
@@ -298,7 +318,12 @@ func (s *Service) manualCompactKeepRecent(ctx context.Context, messages []provid
 	return next, true, nil
 }
 
-func (s *Service) manualCompactFullReplace(ctx context.Context, messages []provider.Message, cfg config.CompactConfig) ([]provider.Message, bool, error) {
+func (s *Service) compactFullReplace(
+	ctx context.Context,
+	mode Mode,
+	messages []provider.Message,
+	cfg config.CompactConfig,
+) ([]provider.Message, bool, error) {
 	if len(messages) == 0 {
 		return nil, false, nil
 	}
@@ -314,7 +339,7 @@ func (s *Service) manualCompactFullReplace(ctx context.Context, messages []provi
 		return cloneMessages(messages), false, nil
 	}
 
-	summary, err := s.buildSummary(ctx, archived, retained, len(archived), cfg)
+	summary, err := s.buildSummary(ctx, mode, archived, retained, len(archived), cfg)
 	if err != nil {
 		return nil, false, err
 	}
@@ -327,6 +352,7 @@ func (s *Service) manualCompactFullReplace(ctx context.Context, messages []provi
 
 func (s *Service) buildSummary(
 	ctx context.Context,
+	mode Mode,
 	archived []provider.Message,
 	retained []provider.Message,
 	archivedMessageCount int,
@@ -337,7 +363,7 @@ func (s *Service) buildSummary(
 	}
 
 	summary, err := s.generator.Generate(ctx, SummaryInput{
-		Mode:                 ModeManual,
+		Mode:                 mode,
 		ArchivedMessages:     cloneMessages(archived),
 		RetainedMessages:     cloneMessages(retained),
 		ArchivedMessageCount: archivedMessageCount,
