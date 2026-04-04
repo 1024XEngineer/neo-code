@@ -8,8 +8,6 @@ import (
 
 // 通用领域错误。
 var (
-	ErrProviderNotFound        = errors.New("provider not found")
-	ErrModelNotFound           = errors.New("model not found")
 	ErrDriverNotFound          = errors.New("provider driver not found")
 	ErrDriverAlreadyRegistered = errors.New("provider: driver already registered")
 )

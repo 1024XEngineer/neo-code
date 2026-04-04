@@ -535,16 +535,3 @@ func containsProviderName(providers []ProviderConfig, name string) bool {
 	}
 	return false
 }
-
-func ContainsModelID(models []string, model string) bool {
-	target := NormalizeKey(model)
-	if target == "" {
-		return false
-	}
-	for _, candidate := range models {
-		if NormalizeKey(candidate) == target {
-			return true
-		}
-	}
-	return false
-}

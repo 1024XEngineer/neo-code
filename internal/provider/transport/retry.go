@@ -1,10 +1,12 @@
 package transport
 
 import (
+	"context"
 	"errors"
 	"io"
 	"log"
 	"math/rand/v2"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -53,22 +55,31 @@ func DefaultRetryableFunc(err error) bool {
 }
 
 // isNetworkError 判断是否为网络层错误（不包含 TLS 错误，避免重试证书问题）。
+// 优先通过类型断言检测 *net.OpError 和 context.DeadlineExceeded，
+// 再通过消息文本匹配兜底（兼容包装过的错误）。
 func isNetworkError(err error) bool {
 	if err == nil {
 		return false
 	}
+	// 类型断言：Go 标准库网络操作返回的底层错误
+	var opErr *net.OpError
+	if errors.As(err, &opErr) {
+		return true
+	}
+	// context 超时通常由网络操作触发
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	// 消息匹配：兼容被 fmt.Errorf 包装过的网络错误
 	msg := err.Error()
-	// 常见网络错误关键字
-	networkIndicators := []string{
+	for _, indicator := range []string{
 		"connection refused",
 		"connection reset",
 		"connection timed out",
-		"timeout",
 		"no such host",
-		"i/o timeout",
 		"dial tcp",
-	}
-	for _, indicator := range networkIndicators {
+		"timeout",
+	} {
 		if strings.Contains(msg, indicator) {
 			return true
 		}
@@ -126,15 +137,23 @@ func (rt *RetryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 
 		resp, err := rt.base.RoundTrip(req)
 		if err == nil {
-			return resp, nil
-		}
+			if !provider.IsRetryableStatus(resp.StatusCode) {
+				return resp, nil
+			}
 
-		lastErr = err
-		lastResp = nil
+			lastResp = resp
+			lastErr = provider.NewProviderErrorFromStatus(resp.StatusCode, resp.Status)
+			if !rt.config.RetryableFunc(lastErr) || attempt == rt.config.MaxRetries {
+				return resp, nil
+			}
+		} else {
+			lastErr = err
+			lastResp = nil
 
-		// 检查是否可重试。
-		if !rt.config.RetryableFunc(err) {
-			return nil, err
+			// 检查是否可重试。
+			if !rt.config.RetryableFunc(err) {
+				return nil, err
+			}
 		}
 
 		// 检查 context 是否已取消。
@@ -143,6 +162,9 @@ func (rt *RetryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		}
 	}
 
+	if lastResp != nil {
+		return lastResp, nil
+	}
 	return nil, lastErr
 }
 

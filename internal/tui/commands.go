@@ -9,7 +9,6 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"neo-code/internal/config"
-	"neo-code/internal/provider"
 )
 
 const (
@@ -137,7 +136,7 @@ func newSelectionPicker(items []list.Item) list.Model {
 	return picker
 }
 
-func newProviderPicker(items []provider.ProviderCatalogItem) list.Model {
+func newProviderPicker(items []config.ProviderCatalogItem) list.Model {
 	listItems := make([]list.Item, 0, len(items))
 	for _, item := range items {
 		listItems = append(listItems, providerItem{
@@ -149,7 +148,7 @@ func newProviderPicker(items []provider.ProviderCatalogItem) list.Model {
 	return newSelectionPicker(listItems)
 }
 
-func newModelPicker(models []provider.ModelDescriptor) list.Model {
+func newModelPicker(models []config.ModelDescriptor) list.Model {
 	items := make([]list.Item, 0, len(models))
 	for _, option := range models {
 		items = append(items, modelItem{

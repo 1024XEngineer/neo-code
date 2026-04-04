@@ -10,7 +10,7 @@ import (
 )
 
 type Builder func(ctx context.Context, cfg config.ResolvedProviderConfig) (Provider, error)
-type DiscoveryFunc func(ctx context.Context, cfg config.ResolvedProviderConfig) ([]ModelDescriptor, error)
+type DiscoveryFunc func(ctx context.Context, cfg config.ResolvedProviderConfig) ([]config.ModelDescriptor, error)
 
 type DriverDefinition struct {
 	Name     string
@@ -56,7 +56,7 @@ func (r *Registry) Build(ctx context.Context, cfg config.ResolvedProviderConfig)
 	return driver.Build(ctx, cfg)
 }
 
-func (r *Registry) DiscoverModels(ctx context.Context, cfg config.ResolvedProviderConfig) ([]ModelDescriptor, error) {
+func (r *Registry) DiscoverModels(ctx context.Context, cfg config.ResolvedProviderConfig) ([]config.ModelDescriptor, error) {
 	driver, err := r.driver(cfg.Driver)
 	if err != nil {
 		return nil, err

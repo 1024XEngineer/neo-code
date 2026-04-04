@@ -26,7 +26,7 @@ type RuntimeClosedMsg struct{}
 type runFinishedMsg struct{ err error }
 type modelCatalogRefreshMsg struct {
 	providerID string
-	models     []provider.ModelDescriptor
+	models     []config.ModelDescriptor
 	err        error
 }
 

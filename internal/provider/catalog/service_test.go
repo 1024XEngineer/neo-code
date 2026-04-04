@@ -42,12 +42,12 @@ func TestListProviderModelsSnapshotReturnsDefaultAndRefreshesInBackgroundOnMiss(
 	t.Setenv(testAPIKeyEnv, "test-key")
 
 	refreshed := make(chan struct{}, 1)
-	registry := newRegistry(t, config.OpenAIName, func(ctx context.Context, cfg config.ResolvedProviderConfig) ([]provider.ModelDescriptor, error) {
+	registry := newRegistry(t, config.OpenAIName, func(ctx context.Context, cfg config.ResolvedProviderConfig) ([]config.ModelDescriptor, error) {
 		select {
 		case refreshed <- struct{}{}:
 		default:
 		}
-		return []provider.ModelDescriptor{{ID: "gpt-4o", Name: "GPT-4o"}}, nil
+		return []config.ModelDescriptor{{ID: "gpt-4o", Name: "GPT-4o"}}, nil
 	})
 
 	store := newMemoryStore()
@@ -92,8 +92,8 @@ func TestListProviderModelsSnapshotReturnsDefaultAndRefreshesInBackgroundOnMiss(
 func TestListProviderModelsDiscoversAndCachesOnMiss(t *testing.T) {
 	t.Setenv(testAPIKeyEnv, "test-key")
 
-	registry := newRegistry(t, config.OpenAIName, func(ctx context.Context, cfg config.ResolvedProviderConfig) ([]provider.ModelDescriptor, error) {
-		return []provider.ModelDescriptor{{
+	registry := newRegistry(t, config.OpenAIName, func(ctx context.Context, cfg config.ResolvedProviderConfig) ([]config.ModelDescriptor, error) {
+		return []config.ModelDescriptor{{
 			ID:              "server-model",
 			Name:            "Server Model",
 			ContextWindow:   32000,
@@ -140,21 +140,20 @@ func TestListProviderModelsReturnsStaleCacheAndRefreshesInBackground(t *testing.
 		Identity:      identity,
 		FetchedAt:     now.Add(-48 * time.Hour),
 		ExpiresAt:     now.Add(-24 * time.Hour),
-		Models: []provider.ModelDescriptor{{
-			ID:   "stale-model",
-			Name: "Stale Model",
-		}},
+		Models: []config.ModelDescriptor{
+			{ID: "stale-model", Name: "Stale Model"},
+		},
 	}); err != nil {
 		t.Fatalf("seed stale catalog: %v", err)
 	}
 
 	refreshed := make(chan struct{}, 1)
-	registry := newRegistry(t, config.OpenAIName, func(ctx context.Context, cfg config.ResolvedProviderConfig) ([]provider.ModelDescriptor, error) {
+	registry := newRegistry(t, config.OpenAIName, func(ctx context.Context, cfg config.ResolvedProviderConfig) ([]config.ModelDescriptor, error) {
 		select {
 		case refreshed <- struct{}{}:
 		default:
 		}
-		return []provider.ModelDescriptor{{ID: "fresh-model", Name: "Fresh Model"}}, nil
+		return []config.ModelDescriptor{{ID: "fresh-model", Name: "Fresh Model"}}, nil
 	})
 
 	service := NewService("", registry, store)
@@ -194,7 +193,7 @@ func TestListProviderModelsReturnsStaleCacheAndRefreshesInBackground(t *testing.
 func TestDescriptorsFromIDsHelper(t *testing.T) {
 	t.Parallel()
 
-	models := descriptorsFromIDs([]string{"gpt-4.1", "", "gpt-4o"})
+	models := config.DescriptorsFromIDs([]string{"gpt-4.1", "", "gpt-4o"})
 	if len(models) != 2 {
 		t.Fatalf("expected 2 descriptors, got %d", len(models))
 	}
@@ -219,7 +218,7 @@ func newRegistry(t *testing.T, name string, discover provider.DiscoveryFunc) *pr
 	return registry
 }
 
-func containsModelDescriptorID(models []provider.ModelDescriptor, modelID string) bool {
+func containsModelDescriptorID(models []config.ModelDescriptor, modelID string) bool {
 	target := config.NormalizeKey(modelID)
 	if target == "" {
 		return false

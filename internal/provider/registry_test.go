@@ -87,7 +87,7 @@ func TestRegistryDiscoverModels(t *testing.T) {
 	t.Run("driver with discovery function", func(t *testing.T) {
 		t.Parallel()
 
-		expectedModels := []provider.ModelDescriptor{
+		expectedModels := []config.ModelDescriptor{
 			{ID: "model-1", Name: "Model 1"},
 			{ID: "model-2", Name: "Model 2"},
 		}
@@ -98,7 +98,7 @@ func TestRegistryDiscoverModels(t *testing.T) {
 			Build: func(ctx context.Context, cfg config.ResolvedProviderConfig) (provider.Provider, error) {
 				return stubProvider{}, nil
 			},
-			Discover: func(ctx context.Context, cfg config.ResolvedProviderConfig) ([]provider.ModelDescriptor, error) {
+			Discover: func(ctx context.Context, cfg config.ResolvedProviderConfig) ([]config.ModelDescriptor, error) {
 				return expectedModels, nil
 			},
 		}

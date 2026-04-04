@@ -1,5 +1,6 @@
 package provider
 
+// Role 常量定义消息角色标识。
 const (
 	RoleSystem    = "system"
 	RoleUser      = "user"
@@ -7,6 +8,7 @@ const (
 	RoleTool      = "tool"
 )
 
+// Message 表示对话中的单条消息。
 type Message struct {
 	Role       string     `json:"role"`
 	Content    string     `json:"content"`
@@ -15,18 +17,21 @@ type Message struct {
 	IsError    bool       `json:"is_error,omitempty"`
 }
 
+// ToolCall 表示模型发起的工具调用请求。
 type ToolCall struct {
 	ID        string `json:"id"`
 	Name      string `json:"name"`
 	Arguments string `json:"arguments"`
 }
 
+// ToolSpec 表示暴露给模型的可调用工具描述。
 type ToolSpec struct {
 	Name        string         `json:"name"`
 	Description string         `json:"description"`
 	Schema      map[string]any `json:"schema"`
 }
 
+// ChatRequest 是 provider.Chat() 的请求参数。
 type ChatRequest struct {
 	Model        string     `json:"model"`
 	SystemPrompt string     `json:"system_prompt"`
@@ -34,39 +39,21 @@ type ChatRequest struct {
 	Tools        []ToolSpec `json:"tools,omitempty"`
 }
 
+// ChatResponse 是 provider.Chat() 的返回结果。
 type ChatResponse struct {
 	Message      Message `json:"message"`
 	FinishReason string  `json:"finish_reason"`
 	Usage        Usage   `json:"usage"`
 }
 
+// Usage 记录本次请求的 token 使用统计。
 type Usage struct {
 	InputTokens  int `json:"input_tokens"`
 	OutputTokens int `json:"output_tokens"`
 	TotalTokens  int `json:"total_tokens"`
 }
 
-type ModelDescriptor struct {
-	ID              string          `json:"id"`
-	Name            string          `json:"name"`
-	Description     string          `json:"description,omitempty"`
-	ContextWindow   int             `json:"context_window,omitempty"`
-	MaxOutputTokens int             `json:"max_output_tokens,omitempty"`
-	Capabilities    map[string]bool `json:"capabilities,omitempty"`
-}
-
-type ProviderCatalogItem struct {
-	ID          string            `json:"id"`
-	Name        string            `json:"name"`
-	Description string            `json:"description,omitempty"`
-	Models      []ModelDescriptor `json:"models,omitempty"`
-}
-
-type ProviderSelection struct {
-	ProviderID string `json:"provider_id"`
-	ModelID    string `json:"model_id"`
-}
-
+// StreamEventType 定义流式事件类型。
 type StreamEventType string
 
 const (

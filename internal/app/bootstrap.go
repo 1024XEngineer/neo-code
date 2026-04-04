@@ -10,7 +10,6 @@ import (
 	agentcontext "neo-code/internal/context"
 	"neo-code/internal/provider/builtin"
 	providercatalog "neo-code/internal/provider/catalog"
-	providerselection "neo-code/internal/provider/selection"
 	agentruntime "neo-code/internal/runtime"
 	"neo-code/internal/security"
 	"neo-code/internal/tools"
@@ -38,8 +37,8 @@ func ensureConsoleUTF8() {
 func NewProgram(ctx context.Context) (*tea.Program, error) {
 
 	ensureConsoleUTF8()
-	
-    loader := config.NewLoader("", config.DefaultConfig())
+
+	loader := config.NewLoader("", config.DefaultConfig())
 	manager := config.NewManager(loader)
 	if _, err := manager.Load(ctx); err != nil {
 		return nil, err
@@ -50,7 +49,7 @@ func NewProgram(ctx context.Context) (*tea.Program, error) {
 		return nil, err
 	}
 	modelCatalogs := providercatalog.NewService(manager.BaseDir(), providerRegistry, nil)
-	providerSelection := providerselection.NewService(manager, providerRegistry, modelCatalogs)
+	providerSelection := config.NewSelectionService(manager, providerRegistry, providerRegistry, modelCatalogs)
 	if _, err := providerSelection.EnsureSelection(ctx); err != nil {
 		return nil, err
 	}

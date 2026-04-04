@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -19,7 +20,6 @@ import (
 	contextcompact "neo-code/internal/context/compact"
 	"neo-code/internal/provider"
 	providercatalog "neo-code/internal/provider/catalog"
-	providerselection "neo-code/internal/provider/selection"
 	agentruntime "neo-code/internal/runtime"
 	"neo-code/internal/tools"
 )
@@ -867,7 +867,7 @@ func TestTUIStandaloneHelpers(t *testing.T) {
 		t.Fatalf("expected delegate update to return nil")
 	}
 	var buf bytes.Buffer
-	model := newModelPicker([]provider.ModelDescriptor{{ID: "gpt-4.1", Name: "gpt-4.1"}})
+	model := newModelPicker([]config.ModelDescriptor{{ID: "gpt-4.1", Name: "gpt-4.1"}})
 	sessionList := []list.Item{sItem}
 	listModel := list.New(sessionList, delegate, 30, 10)
 	delegate.Render(&buf, listModel, 0, sItem)
@@ -2485,40 +2485,41 @@ func newTestConfigManager(t *testing.T) *config.Manager {
 	return manager
 }
 
-func newTestProviderService(t *testing.T, manager *config.Manager) *providerselection.Service {
+func newTestProviderService(t *testing.T, manager *config.Manager) *config.SelectionService {
 	t.Helper()
 
 	registry := provider.NewRegistry()
 	err := registry.Register(provider.DriverDefinition{
 		Name: config.OpenAIName,
 		Build: func(ctx context.Context, cfg config.ResolvedProviderConfig) (provider.Provider, error) {
-			return tuiTestProvider{}, nil
+			return tUItestProvider{}, nil
 		},
 	})
 	if err != nil {
 		t.Fatalf("register provider drivers: %v", err)
 	}
-	modelCatalogs := providercatalog.NewService("", registry, newTUITestCatalogStore())
-	return providerselection.NewService(manager, registry, modelCatalogs)
+	modelCatalogs := providercatalog.NewService("", registry, newTUItestCatalogStore())
+	return config.NewSelectionService(manager, registry, registry, modelCatalogs)
 }
 
-type tuiTestProvider struct{}
+type tUItestProvider struct{}
 
-func (tuiTestProvider) Chat(ctx context.Context, req provider.ChatRequest, events chan<- provider.StreamEvent) (provider.ChatResponse, error) {
+func (tUItestProvider) Chat(ctx context.Context, req provider.ChatRequest, events chan<- provider.StreamEvent) (provider.ChatResponse, error) {
 	return provider.ChatResponse{}, nil
 }
 
-type tuiTestCatalogStore struct {
+type tUItestCatalogStore struct {
 	catalogs map[string]providercatalog.ModelCatalog
+	mu       sync.Mutex
 }
 
-func newTUITestCatalogStore() *tuiTestCatalogStore {
-	return &tuiTestCatalogStore{
+func newTUItestCatalogStore() *tUItestCatalogStore {
+	return &tUItestCatalogStore{
 		catalogs: map[string]providercatalog.ModelCatalog{},
 	}
 }
 
-func (s *tuiTestCatalogStore) Load(ctx context.Context, identity config.ProviderIdentity) (providercatalog.ModelCatalog, error) {
+func (s *tUItestCatalogStore) Load(ctx context.Context, identity config.ProviderIdentity) (providercatalog.ModelCatalog, error) {
 	if err := ctx.Err(); err != nil {
 		return providercatalog.ModelCatalog{}, err
 	}
@@ -2530,7 +2531,7 @@ func (s *tuiTestCatalogStore) Load(ctx context.Context, identity config.Provider
 	return catalog, nil
 }
 
-func (s *tuiTestCatalogStore) Save(ctx context.Context, catalog providercatalog.ModelCatalog) error {
+func (s *tUItestCatalogStore) Save(ctx context.Context, catalog providercatalog.ModelCatalog) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
