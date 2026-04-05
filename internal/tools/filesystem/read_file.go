@@ -69,6 +69,15 @@ func (t *ReadFileTool) Execute(ctx context.Context, input tools.ToolCallInput) (
 	if err != nil {
 		return tools.NewErrorResult(t.Name(), tools.NormalizeErrorReason(t.Name(), err), "", nil), err
 	}
+	filter, err := newResultPathFilter(base)
+	if err != nil {
+		return tools.NewErrorResult(t.Name(), tools.NormalizeErrorReason(t.Name(), err), "", nil), err
+	}
+	_, reason, allowed := filter.evaluate(target)
+	if !allowed {
+		err := errors.New(readFileToolName + ": blocked by security policy (" + reason + ")")
+		return tools.NewErrorResult(t.Name(), tools.NormalizeErrorReason(t.Name(), err), "", nil), err
+	}
 
 	data, err := os.ReadFile(target)
 	if err != nil {

@@ -3,6 +3,7 @@ package filesystem
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -178,5 +179,60 @@ func TestGrepToolErrorFormattingAndTruncation(t *testing.T) {
 				t.Fatalf("expected truncated=%v, got %#v", tt.expectTruncate, result.Metadata["truncated"])
 			}
 		})
+	}
+}
+
+func TestGrepToolFiltersSensitiveAndSymlinkEscapes(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	outside := t.TempDir()
+	mustWriteFile(t, filepath.Join(workspace, "safe.txt"), "needle\n")
+	mustWriteFile(t, filepath.Join(workspace, ".env"), "needle\n")
+	mustWriteFile(t, filepath.Join(workspace, ".git", "config"), "needle\n")
+	mustWriteFile(t, filepath.Join(workspace, "private.pem"), "needle\n")
+	mustWriteFile(t, filepath.Join(outside, "secret.txt"), "needle\n")
+	linkPath := filepath.Join(workspace, "linked.txt")
+	if err := os.Symlink(filepath.Join(outside, "secret.txt"), linkPath); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+
+	tool := NewGrep(workspace)
+	result, err := tool.Execute(context.Background(), tools.ToolCallInput{
+		Name:      tool.Name(),
+		Arguments: mustMarshalFSArgs(t, map[string]any{"pattern": "needle"}),
+		Workdir:   workspace,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !strings.Contains(normalizeSlashPath(result.Content), "safe.txt:1: needle") {
+		t.Fatalf("expected safe file match, got %q", result.Content)
+	}
+	for _, blocked := range []string{".env", ".git/config", "private.pem", "linked.txt"} {
+		if strings.Contains(result.Content, blocked) {
+			t.Fatalf("expected %q to be filtered, got %q", blocked, result.Content)
+		}
+	}
+
+	if got, ok := result.Metadata["matched_count"].(int); !ok || got < 1 {
+		t.Fatalf("expected matched_count >= 1, got %#v", result.Metadata["matched_count"])
+	}
+	if got, ok := result.Metadata["filtered_count"].(int); !ok || got < 3 {
+		t.Fatalf("expected filtered_count >= 3, got %#v", result.Metadata["filtered_count"])
+	}
+	if got, ok := result.Metadata["returned_count"].(int); !ok || got < 1 {
+		t.Fatalf("expected returned_count >= 1, got %#v", result.Metadata["returned_count"])
+	}
+	reasons, ok := result.Metadata["filtered_reasons"].(map[string]int)
+	if !ok {
+		t.Fatalf("expected filtered_reasons map, got %#v", result.Metadata["filtered_reasons"])
+	}
+	if reasons[filterReasonSensitivePath] < 2 {
+		t.Fatalf("expected sensitive_path reason count, got %#v", reasons)
+	}
+	if reasons[filterReasonSymlinkEscape] < 1 {
+		t.Fatalf("expected symlink_escape reason count, got %#v", reasons)
 	}
 }

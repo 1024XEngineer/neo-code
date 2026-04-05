@@ -80,6 +80,10 @@ func (t *GrepTool) Execute(ctx context.Context, input tools.ToolCallInput) (tool
 	if err != nil {
 		return tools.NewErrorResult(t.Name(), tools.NormalizeErrorReason(t.Name(), err), "", nil), err
 	}
+	filter, err := newResultPathFilter(root)
+	if err != nil {
+		return tools.NewErrorResult(t.Name(), tools.NormalizeErrorReason(t.Name(), err), "", nil), err
+	}
 
 	matcher, err := buildGrepMatcher(pattern, args.UseRegex)
 	if err != nil {
@@ -87,8 +91,11 @@ func (t *GrepTool) Execute(ctx context.Context, input tools.ToolCallInput) (tool
 	}
 
 	var (
-		results      []string
-		matchedFiles int
+		results         []string
+		matchedFiles    int
+		matchedCount    int
+		filteredCount   int
+		filteredReasons = map[string]int{}
 	)
 	err = filepath.WalkDir(searchRoot, func(path string, entry os.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -101,6 +108,12 @@ func (t *GrepTool) Execute(ctx context.Context, input tools.ToolCallInput) (tool
 			return filepath.SkipDir
 		}
 		if entry.IsDir() {
+			return nil
+		}
+		relativePath, reason, allowed := filter.evaluate(path)
+		if !allowed {
+			filteredCount++
+			filteredReasons[reason]++
 			return nil
 		}
 
@@ -116,7 +129,8 @@ func (t *GrepTool) Execute(ctx context.Context, input tools.ToolCallInput) (tool
 				continue
 			}
 			fileMatched = true
-			results = append(results, fmt.Sprintf("%s:%d: %s", toRelativePath(root, path), idx+1, strings.TrimRight(line, "\r")))
+			matchedCount++
+			results = append(results, fmt.Sprintf("%s:%d: %s", relativePath, idx+1, strings.TrimRight(line, "\r")))
 			if len(results) >= defaultGrepResultLimit {
 				return errGrepResultLimitReached
 			}
@@ -135,9 +149,13 @@ func (t *GrepTool) Execute(ctx context.Context, input tools.ToolCallInput) (tool
 			Name:    t.Name(),
 			Content: "no matches",
 			Metadata: map[string]any{
-				"root":          searchRoot,
-				"matched_files": 0,
-				"matched_lines": 0,
+				"root":             searchRoot,
+				"matched_files":    0,
+				"matched_lines":    0,
+				"matched_count":    matchedCount,
+				"filtered_count":   filteredCount,
+				"returned_count":   0,
+				"filtered_reasons": filteredReasons,
 			},
 		}, nil
 	}
@@ -146,9 +164,13 @@ func (t *GrepTool) Execute(ctx context.Context, input tools.ToolCallInput) (tool
 		Name:    t.Name(),
 		Content: strings.Join(results, "\n"),
 		Metadata: map[string]any{
-			"root":          searchRoot,
-			"matched_files": matchedFiles,
-			"matched_lines": len(results),
+			"root":             searchRoot,
+			"matched_files":    matchedFiles,
+			"matched_lines":    len(results),
+			"matched_count":    matchedCount,
+			"filtered_count":   filteredCount,
+			"returned_count":   len(results),
+			"filtered_reasons": filteredReasons,
 		},
 	}
 	result = tools.ApplyOutputLimit(result, tools.DefaultOutputLimitBytes)

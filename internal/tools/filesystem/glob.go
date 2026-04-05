@@ -72,6 +72,10 @@ func (t *GlobTool) Execute(ctx context.Context, input tools.ToolCallInput) (tool
 	if err != nil {
 		return tools.NewErrorResult(t.Name(), tools.NormalizeErrorReason(t.Name(), err), "", nil), err
 	}
+	filter, err := newResultPathFilter(root)
+	if err != nil {
+		return tools.NewErrorResult(t.Name(), tools.NormalizeErrorReason(t.Name(), err), "", nil), err
+	}
 
 	matcher, err := buildGlobMatcher(pattern)
 	if err != nil {
@@ -79,6 +83,9 @@ func (t *GlobTool) Execute(ctx context.Context, input tools.ToolCallInput) (tool
 	}
 
 	matches := make([]string, 0, 32)
+	matchedCount := 0
+	filteredCount := 0
+	filteredReasons := map[string]int{}
 	err = filepath.WalkDir(searchRoot, func(path string, entry os.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -98,7 +105,14 @@ func (t *GlobTool) Execute(ctx context.Context, input tools.ToolCallInput) (tool
 			return nil
 		}
 		if matcher.MatchString(normalizeSlashPath(relativeToSearch)) {
-			matches = append(matches, normalizeSlashPath(toRelativePath(root, path)))
+			matchedCount++
+			relativePath, reason, allowed := filter.evaluate(path)
+			if !allowed {
+				filteredCount++
+				filteredReasons[reason]++
+				return nil
+			}
+			matches = append(matches, relativePath)
 		}
 		return nil
 	})
@@ -112,8 +126,12 @@ func (t *GlobTool) Execute(ctx context.Context, input tools.ToolCallInput) (tool
 			Name:    t.Name(),
 			Content: "no matches",
 			Metadata: map[string]any{
-				"root":  searchRoot,
-				"count": 0,
+				"root":             searchRoot,
+				"count":            0,
+				"matched_count":    matchedCount,
+				"filtered_count":   filteredCount,
+				"returned_count":   0,
+				"filtered_reasons": filteredReasons,
 			},
 		}, nil
 	}
@@ -122,8 +140,12 @@ func (t *GlobTool) Execute(ctx context.Context, input tools.ToolCallInput) (tool
 		Name:    t.Name(),
 		Content: strings.Join(matches, "\n"),
 		Metadata: map[string]any{
-			"root":  searchRoot,
-			"count": len(matches),
+			"root":             searchRoot,
+			"count":            len(matches),
+			"matched_count":    matchedCount,
+			"filtered_count":   filteredCount,
+			"returned_count":   len(matches),
+			"filtered_reasons": filteredReasons,
 		},
 	}
 	result = tools.ApplyOutputLimit(result, tools.DefaultOutputLimitBytes)

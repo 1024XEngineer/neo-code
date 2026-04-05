@@ -20,6 +20,9 @@ func TestReadFileToolExecute(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(workspace, "small.txt"), []byte("hello world"), 0o644); err != nil {
 		t.Fatalf("write small file: %v", err)
 	}
+	if err := os.WriteFile(filepath.Join(workspace, ".env"), []byte("API_KEY=test"), 0o644); err != nil {
+		t.Fatalf("write env file: %v", err)
+	}
 	if err := os.MkdirAll(filepath.Join(workspace, "nested"), 0o755); err != nil {
 		t.Fatalf("mkdir nested: %v", err)
 	}
@@ -55,6 +58,11 @@ func TestReadFileToolExecute(t *testing.T) {
 			name:      "reject path traversal",
 			path:      filepath.Join("..", "outside.txt"),
 			expectErr: "path escapes workspace root",
+		},
+		{
+			name:      "reject sensitive file",
+			path:      ".env",
+			expectErr: "blocked by security policy (sensitive_path)",
 		},
 	}
 
