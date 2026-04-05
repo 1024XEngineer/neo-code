@@ -50,7 +50,12 @@ func TestCompactSummaryGeneratorBuildsProviderRequestWithoutTools(t *testing.T) 
 		Mode: contextcompact.ModeManual,
 		ArchivedMessages: []provider.Message{
 			{Role: provider.RoleUser, Content: "legacy request"},
-			{Role: provider.RoleAssistant, Content: "legacy answer"},
+			{
+				Role: provider.RoleAssistant,
+				ToolCalls: []provider.ToolCall{
+					{ID: "call-1", Name: "filesystem_read_file", Arguments: "{}"},
+				},
+			},
 		},
 		RetainedMessages: []provider.Message{
 			{Role: provider.RoleAssistant, Content: "recent answer"},
@@ -90,8 +95,14 @@ func TestCompactSummaryGeneratorBuildsProviderRequestWithoutTools(t *testing.T) 
 	if !strings.Contains(req.Messages[0].Content, "<archived_source_material>") {
 		t.Fatalf("expected archived material boundary, got %q", req.Messages[0].Content)
 	}
-	if !strings.Contains(req.Messages[0].Content, "\"role\": \"user\"") {
-		t.Fatalf("expected archived messages rendered as JSON, got %q", req.Messages[0].Content)
+	if strings.Contains(req.Messages[0].Content, "\"role\": \"user\"") {
+		t.Fatalf("expected transcript-style compact prompt instead of pretty JSON, got %q", req.Messages[0].Content)
+	}
+	if !strings.Contains(req.Messages[0].Content, "[message 0] role=user") {
+		t.Fatalf("expected transcript-style user message header, got %q", req.Messages[0].Content)
+	}
+	if !strings.Contains(req.Messages[0].Content, "tool_call id=call-1 name=filesystem_read_file") {
+		t.Fatalf("expected tool call metadata in compact prompt, got %q", req.Messages[0].Content)
 	}
 }
 

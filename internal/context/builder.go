@@ -4,13 +4,20 @@ import "context"
 
 // DefaultBuilder preserves the current runtime context-building behavior.
 type DefaultBuilder struct {
-	gitRunner gitCommandRunner
+	promptSources []promptSectionSource
+	trimPolicy    messageTrimPolicy
 }
 
 // NewBuilder returns the default context builder implementation.
 func NewBuilder() Builder {
+	systemSource := &systemStateSource{gitRunner: runGitCommand}
 	return &DefaultBuilder{
-		gitRunner: runGitCommand,
+		promptSources: []promptSectionSource{
+			corePromptSource{},
+			&projectRulesSource{},
+			systemSource,
+		},
+		trimPolicy: spanMessageTrimPolicy{},
 	}
 }
 
@@ -20,22 +27,22 @@ func (b *DefaultBuilder) Build(ctx context.Context, input BuildInput) (BuildResu
 		return BuildResult{}, err
 	}
 
-	rules, err := loadProjectRules(ctx, input.Metadata.Workdir)
-	if err != nil {
-		return BuildResult{}, err
+	sections := make([]promptSection, 0, len(b.promptSources)+1)
+	for _, source := range b.promptSources {
+		sourceSections, err := source.Sections(ctx, input)
+		if err != nil {
+			return BuildResult{}, err
+		}
+		sections = append(sections, sourceSections...)
 	}
 
-	systemState, err := collectSystemState(ctx, input.Metadata, b.gitRunner)
-	if err != nil {
-		return BuildResult{}, err
+	trimPolicy := b.trimPolicy
+	if trimPolicy == nil {
+		trimPolicy = spanMessageTrimPolicy{}
 	}
-
-	sections := append([]promptSection{}, defaultSystemPromptSections()...)
-	sections = append(sections, renderProjectRulesSection(rules))
-	sections = append(sections, renderSystemStateSection(systemState))
 
 	return BuildResult{
 		SystemPrompt: composeSystemPrompt(sections...),
-		Messages:     trimMessages(input.Messages),
+		Messages:     trimPolicy.Trim(input.Messages),
 	}, nil
 }

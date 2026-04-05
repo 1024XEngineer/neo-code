@@ -591,7 +591,7 @@ func TestManualCompactTruncationFailsWhenStructureBreaks(t *testing.T) {
 			MaxSummaryChars:          40,
 		},
 	})
-	if err == nil || !strings.Contains(err.Error(), "missing required section") {
+	if err == nil || !strings.Contains(err.Error(), "max_summary_chars") {
 		t.Fatalf("expected truncation validation failure, got %v", err)
 	}
 }
@@ -624,5 +624,66 @@ func TestManualCompactKeepRecentWithoutEnoughMessagesSkipsGenerator(t *testing.T
 	}
 	if len(generator.calls) != 0 {
 		t.Fatalf("expected generator not to run, got %d calls", len(generator.calls))
+	}
+}
+
+func TestManualCompactReturnsErrorWhenSummaryGeneratorIsMissing(t *testing.T) {
+	t.Parallel()
+
+	runner := NewRunner(nil)
+	runner.userHomeDir = func() (string, error) { return t.TempDir(), nil }
+
+	_, err := runner.Run(context.Background(), Input{
+		Mode:      ModeManual,
+		SessionID: "session-missing-generator",
+		Workdir:   t.TempDir(),
+		Messages: []provider.Message{
+			{Role: provider.RoleUser, Content: "older"},
+			{Role: provider.RoleAssistant, Content: "older answer"},
+			{Role: provider.RoleUser, Content: "latest explicit instruction"},
+			{Role: provider.RoleAssistant, Content: "newer"},
+		},
+		Config: config.CompactConfig{
+			ManualStrategy:           config.CompactManualStrategyFullReplace,
+			ManualKeepRecentMessages: 10,
+			MaxSummaryChars:          1200,
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "summary generator is nil") {
+		t.Fatalf("expected missing generator error, got %v", err)
+	}
+}
+
+func TestManualCompactDefaultsToKeepRecentStrategyWhenManualStrategyIsEmpty(t *testing.T) {
+	t.Parallel()
+
+	generator := &stubSummaryGenerator{summary: validSemanticSummary()}
+	runner := NewRunner(generator)
+	runner.userHomeDir = func() (string, error) { return t.TempDir(), nil }
+
+	result, err := runner.Run(context.Background(), Input{
+		Mode:      ModeManual,
+		SessionID: "session-default-strategy",
+		Workdir:   t.TempDir(),
+		Messages: []provider.Message{
+			{Role: provider.RoleUser, Content: "old request"},
+			{Role: provider.RoleAssistant, Content: "old answer"},
+			{Role: provider.RoleUser, Content: "latest request"},
+			{Role: provider.RoleAssistant, Content: "latest answer"},
+		},
+		Config: config.CompactConfig{
+			ManualStrategy:           "",
+			ManualKeepRecentMessages: 2,
+			MaxSummaryChars:          1200,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if !result.Applied {
+		t.Fatalf("expected compact to apply with default keep_recent strategy")
+	}
+	if len(generator.calls) != 1 || generator.calls[0].Config.ManualStrategy != config.CompactManualStrategyKeepRecent {
+		t.Fatalf("expected keep_recent default strategy, got %+v", generator.calls)
 	}
 }

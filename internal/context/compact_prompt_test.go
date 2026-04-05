@@ -18,7 +18,16 @@ func TestBuildCompactPromptIncludesFixedInstructionsAndBoundaries(t *testing.T) 
 		ArchivedMessageCount:     3,
 		MaxSummaryChars:          1200,
 		ArchivedMessages: []provider.Message{
-			{Role: provider.RoleUser, Content: "legacy request"},
+			{
+				Role:    provider.RoleUser,
+				Content: "legacy request\nwith details",
+			},
+			{
+				Role: provider.RoleAssistant,
+				ToolCalls: []provider.ToolCall{
+					{ID: "call-1", Name: "filesystem_read_file", Arguments: "{\n  \"path\": \"a.txt\"\n}"},
+				},
+			},
 		},
 		RetainedMessages: []provider.Message{
 			{Role: provider.RoleAssistant, Content: "recent answer"},
@@ -48,8 +57,17 @@ func TestBuildCompactPromptIncludesFixedInstructionsAndBoundaries(t *testing.T) 
 	if !strings.Contains(prompt.UserPrompt, "<retained_source_material>") {
 		t.Fatalf("expected retained material boundary, got %q", prompt.UserPrompt)
 	}
-	if !strings.Contains(prompt.UserPrompt, "\"role\": \"user\"") {
-		t.Fatalf("expected archived messages rendered as JSON, got %q", prompt.UserPrompt)
+	if strings.Contains(prompt.UserPrompt, "\"role\": \"user\"") {
+		t.Fatalf("expected compact transcript rendering instead of pretty JSON, got %q", prompt.UserPrompt)
+	}
+	if !strings.Contains(prompt.UserPrompt, "[message 0] role=user") {
+		t.Fatalf("expected compact transcript header, got %q", prompt.UserPrompt)
+	}
+	if !strings.Contains(prompt.UserPrompt, "tool_call id=call-1 name=filesystem_read_file") {
+		t.Fatalf("expected tool call metadata in compact transcript, got %q", prompt.UserPrompt)
+	}
+	if !strings.Contains(prompt.UserPrompt, "content:\n  legacy request") {
+		t.Fatalf("expected multiline content block in compact transcript, got %q", prompt.UserPrompt)
 	}
 	if !strings.Contains(prompt.UserPrompt, "target_max_summary_chars: 1200") {
 		t.Fatalf("expected target max chars in user prompt, got %q", prompt.UserPrompt)

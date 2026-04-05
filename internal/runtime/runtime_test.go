@@ -525,8 +525,11 @@ func TestServiceRunPersistsSessionProviderAndModel(t *testing.T) {
 func TestServiceRunFailurePreservesExistingSessionProviderAndModel(t *testing.T) {
 	t.Parallel()
 
-	manager := newRuntimeConfigManager(t)
-	setRuntimeProviderEnv(t, config.GeminiDefaultAPIKeyEnv, "gemini-key")
+	geminiEnv := runtimeTestAPIKeyEnv(t) + "_GEMINI"
+	manager := newRuntimeConfigManagerWithProviderEnvs(t, map[string]string{
+		config.GeminiName: geminiEnv,
+	})
+	setRuntimeProviderEnv(t, geminiEnv, "gemini-key")
 	if err := manager.Update(context.Background(), func(cfg *config.Config) error {
 		cfg.SelectedProvider = config.GeminiName
 		cfg.CurrentModel = "gemini-current-model"
@@ -1570,8 +1573,11 @@ func TestServiceCompactManualFailureReturnsError(t *testing.T) {
 func TestServiceCompactUsesSessionProviderAndModelWhenPresent(t *testing.T) {
 	t.Parallel()
 
-	manager := newRuntimeConfigManager(t)
-	setRuntimeProviderEnv(t, config.GeminiDefaultAPIKeyEnv, "gemini-key")
+	geminiEnv := runtimeTestAPIKeyEnv(t) + "_GEMINI"
+	manager := newRuntimeConfigManagerWithProviderEnvs(t, map[string]string{
+		config.GeminiName: geminiEnv,
+	})
+	setRuntimeProviderEnv(t, geminiEnv, "gemini-key")
 	if err := manager.Update(context.Background(), func(cfg *config.Config) error {
 		cfg.SelectedProvider = config.GeminiName
 		cfg.CurrentModel = "gemini-current-model"
@@ -1644,8 +1650,11 @@ func TestServiceCompactUsesSessionProviderAndModelWhenPresent(t *testing.T) {
 func TestServiceCompactFallsBackToCurrentProviderWhenSessionMetadataMissing(t *testing.T) {
 	t.Parallel()
 
-	manager := newRuntimeConfigManager(t)
-	setRuntimeProviderEnv(t, config.GeminiDefaultAPIKeyEnv, "gemini-key")
+	geminiEnv := runtimeTestAPIKeyEnv(t) + "_GEMINI"
+	manager := newRuntimeConfigManagerWithProviderEnvs(t, map[string]string{
+		config.GeminiName: geminiEnv,
+	})
+	setRuntimeProviderEnv(t, geminiEnv, "gemini-key")
 	if err := manager.Update(context.Background(), func(cfg *config.Config) error {
 		cfg.SelectedProvider = config.GeminiName
 		cfg.CurrentModel = "gemini-current-model"
@@ -2080,6 +2089,10 @@ func TestServiceSetSessionWorkdir(t *testing.T) {
 }
 
 func newRuntimeConfigManager(t *testing.T) *config.Manager {
+	return newRuntimeConfigManagerWithProviderEnvs(t, nil)
+}
+
+func newRuntimeConfigManagerWithProviderEnvs(t *testing.T, providerEnvs map[string]string) *config.Manager {
 	t.Helper()
 
 	apiKeyEnv := runtimeTestAPIKeyEnv(t)
@@ -2094,6 +2107,14 @@ func newRuntimeConfigManager(t *testing.T) *config.Manager {
 		if config.NormalizeProviderName(defaults.Providers[i].Name) == selected {
 			defaults.Providers[i].APIKeyEnv = apiKeyEnv
 			break
+		}
+	}
+	for providerName, envKey := range providerEnvs {
+		for i := range defaults.Providers {
+			if config.NormalizeProviderName(defaults.Providers[i].Name) == config.NormalizeProviderName(providerName) {
+				defaults.Providers[i].APIKeyEnv = envKey
+				break
+			}
 		}
 	}
 

@@ -16,20 +16,8 @@ var defaultPromptSections = []promptSection{
 	{
 		title: "Tool Usage",
 		content: "- Use tools when they reduce uncertainty or are required to complete the task safely.\n" +
-			"- Inspect tool failures, explain the relevant error, and continue with the safest useful next step.\n" +
+			"- Stay within the current workspace unless the user clearly asks for something else.\n" +
 			"- Do not claim work is done unless the needed files, commands, or verification actually succeeded.",
-	},
-	{
-		title: "Workspace Safety",
-		content: "- Stay within the current workspace unless the user clearly asks for something else.\n" +
-			"- Avoid destructive actions such as deleting files, rewriting unrelated work, or changing history unless explicitly requested.\n" +
-			"- Respect project rules and local constraints before making changes.",
-	},
-	{
-		title: "Code Changes",
-		content: "- Prefer minimal, testable changes that keep module boundaries clear.\n" +
-			"- Follow the existing architecture and keep provider, runtime, tools, config, and TUI responsibilities separated.\n" +
-			"- When behavior changes, update the relevant tests or documentation needed to keep the implementation verifiable.",
 	},
 	{
 		title: "Failure Recovery",

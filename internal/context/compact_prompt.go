@@ -1,7 +1,6 @@
 package context
 
 import (
-	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -87,14 +86,70 @@ func buildCompactSummarySystemPrompt() string {
 	return builder.String()
 }
 
+// renderCompactPromptMessages 将消息渲染为紧凑的 transcript 视图，减少冗余 JSON 噪音。
 func renderCompactPromptMessages(messages []provider.Message) string {
 	if len(messages) == 0 {
 		return "[]"
 	}
 
-	payload, err := json.MarshalIndent(messages, "", "  ")
-	if err != nil {
-		return "[]"
+	var builder strings.Builder
+	for index, message := range messages {
+		if index > 0 {
+			builder.WriteString("\n\n")
+		}
+		builder.WriteString(fmt.Sprintf("[message %d] role=%s", index, strings.TrimSpace(message.Role)))
+		if message.ToolCallID != "" {
+			builder.WriteString(fmt.Sprintf(" tool_call_id=%s", strings.TrimSpace(message.ToolCallID)))
+		}
+		if message.IsError {
+			builder.WriteString(" is_error=true")
+		}
+
+		for _, call := range message.ToolCalls {
+			builder.WriteString("\n")
+			builder.WriteString(renderCompactPromptToolCall(call))
+		}
+
+		content := strings.TrimSpace(message.Content)
+		if content != "" {
+			builder.WriteString("\ncontent:")
+			builder.WriteString(renderCompactPromptContent(content))
+		}
 	}
-	return string(payload)
+	return builder.String()
+}
+
+// renderCompactPromptToolCall 以单行形式渲染工具调用元信息，压缩摘要输入体积。
+func renderCompactPromptToolCall(call provider.ToolCall) string {
+	line := fmt.Sprintf(
+		"tool_call id=%s name=%s arguments=%s",
+		strings.TrimSpace(call.ID),
+		strings.TrimSpace(call.Name),
+		compactPromptInlineText(call.Arguments),
+	)
+	return strings.TrimSpace(line)
+}
+
+// renderCompactPromptContent 按缩进块渲染消息正文，兼顾可读性与多行内容边界。
+func renderCompactPromptContent(content string) string {
+	lines := strings.Split(content, "\n")
+	if len(lines) == 1 {
+		return " " + lines[0]
+	}
+
+	var builder strings.Builder
+	for _, line := range lines {
+		builder.WriteString("\n  ")
+		builder.WriteString(line)
+	}
+	return builder.String()
+}
+
+// compactPromptInlineText 将多行文本折叠为单行，避免工具参数放大摘要 prompt。
+func compactPromptInlineText(input string) string {
+	fields := strings.Fields(strings.TrimSpace(input))
+	if len(fields) == 0 {
+		return "{}"
+	}
+	return strings.Join(fields, " ")
 }

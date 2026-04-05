@@ -74,3 +74,19 @@ func TestRenderPromptSectionBranches(t *testing.T) {
 		})
 	}
 }
+
+func TestComposeSystemPromptSkipsEmptySections(t *testing.T) {
+	t.Parallel()
+
+	got := composeSystemPrompt(
+		promptSection{},
+		promptSection{content: "plain"},
+		promptSection{title: "Title Only"},
+		promptSection{title: "Section", content: "body"},
+	)
+
+	want := "plain\n\n## Section\n\nbody"
+	if got != want {
+		t.Fatalf("composeSystemPrompt() = %q, want %q", got, want)
+	}
+}
