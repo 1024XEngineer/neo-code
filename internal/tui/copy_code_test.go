@@ -36,7 +36,7 @@ func TestExtractFencedCodeBlocksWithoutLanguageKeepsFirstLine(t *testing.T) {
 }
 
 func TestExtractFencedCodeBlocksFromIndentedMarkdown(t *testing.T) {
-	content := "说明：\n\n    package main\n    import \"fmt\"\n\n结尾。"
+	content := "intro\n\n    package main\n    import \"fmt\"\n\nending"
 	blocks := extractFencedCodeBlocks(content)
 	if len(blocks) != 1 {
 		t.Fatalf("expected 1 code block from indented markdown, got %d", len(blocks))
@@ -107,7 +107,7 @@ func TestRenderMessageBlockWithCopyAddsButtonsForIndentedCode(t *testing.T) {
 		t.Fatalf("New() error = %v", err)
 	}
 
-	content := "说明：\n\n    package main\n    import \"fmt\""
+	content := "璇存槑锛歕n\n    package main\n    import \"fmt\""
 	rendered, bindings := app.renderMessageBlockWithCopy(providerMessage(roleAssistant, content), 80, 1)
 	if !strings.Contains(stripANSI(rendered), "[Copy code #1]") {
 		t.Fatalf("expected copy button for indented markdown code, got %q", rendered)
@@ -139,7 +139,7 @@ func TestTranscriptMouseClickCopiesCodeBlock(t *testing.T) {
 	app.activeMessages = []provider.Message{
 		{Role: roleAssistant, Content: "```go\nfmt.Println(1)\n```"},
 	}
-	app.resizeComponents()
+	app.applyComponentLayout(true)
 	app.rebuildTranscript()
 
 	x, y, _, _ := app.transcriptBounds()
@@ -226,7 +226,7 @@ func TestTranscriptMouseCopyFailureSetsError(t *testing.T) {
 	app.activeMessages = []provider.Message{
 		{Role: roleAssistant, Content: "```txt\nhello\n```"},
 	}
-	app.resizeComponents()
+	app.applyComponentLayout(true)
 	app.rebuildTranscript()
 
 	x, y, _, _ := app.transcriptBounds()

@@ -4,8 +4,10 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/charmbracelet/bubbles/filepicker"
 	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/list"
+	"github.com/charmbracelet/bubbles/progress"
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
@@ -26,9 +28,14 @@ type App struct {
 	help             help.Model
 	spinner          spinner.Model
 	sessions         list.Model
+	commandMenu      list.Model
+	commandMenuMeta  commandMenuMeta
 	providerPicker   list.Model
 	modelPicker      list.Model
+	fileBrowser      filepicker.Model
+	progress         progress.Model
 	transcript       viewport.Model
+	activity         viewport.Model
 	input            textarea.Model
 	markdownRenderer markdownContentRenderer
 	codeCopyBlocks   map[int]string
@@ -44,6 +51,9 @@ type App struct {
 	fileCandidates   []string
 	modelRefreshID   string
 	focus            panel
+	runProgressValue float64
+	runProgressKnown bool
+	runProgressLabel string
 	width            int
 	height           int
 	styles           styles
@@ -110,6 +120,20 @@ func New(cfg *config.Config, configManager *config.Manager, runtime agentruntime
 	h := help.New()
 	h.ShowAll = false
 
+	commandMenu := newCommandMenuModel(uiStyles)
+
+	fileBrowser := filepicker.New()
+	fileBrowser.SetHeight(10)
+	fileBrowser.AutoHeight = false
+	fileBrowser.ShowPermissions = false
+	fileBrowser.ShowSize = false
+	fileBrowser.FileAllowed = true
+	fileBrowser.DirAllowed = true
+	fileBrowser.CurrentDirectory = cfg.Workdir
+
+	progressBar := progress.New(progress.WithDefaultGradient(), progress.WithoutPercentage())
+	progressBar.Width = 22
+
 	app := App{
 		state: UIState{
 			StatusText:         statusReady,
@@ -126,9 +150,13 @@ func New(cfg *config.Config, configManager *config.Manager, runtime agentruntime
 		help:             h,
 		spinner:          spin,
 		sessions:         sessionList,
-		providerPicker:   newProviderPicker(nil),
-		modelPicker:      newModelPicker(nil),
+		commandMenu:      commandMenu,
+		providerPicker:   newSelectionPickerItems(nil),
+		modelPicker:      newSelectionPickerItems(nil),
+		fileBrowser:      fileBrowser,
+		progress:         progressBar,
 		transcript:       viewport.New(0, 0),
+		activity:         viewport.New(0, 0),
 		input:            input,
 		markdownRenderer: markdownRenderer,
 		codeCopyBlocks:   make(map[int]string),
@@ -162,7 +190,9 @@ func New(cfg *config.Config, configManager *config.Manager, runtime agentruntime
 	if err := app.refreshFileCandidates(); err != nil {
 		return App{}, err
 	}
-	app.resizeComponents()
+	app.applyComponentLayout(true)
+	app.refreshCommandMenu()
+	app.rebuildActivity()
 	return app, nil
 }
 

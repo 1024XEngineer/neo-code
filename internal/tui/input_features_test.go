@@ -174,12 +174,13 @@ func TestWorkspaceFileHelpers(t *testing.T) {
 		app.fileCandidates = []string{"README.md", "internal/tui/update.go", "internal/tui/view.go"}
 		app.input.SetValue("inspect @internal/tui/upd")
 		app.state.InputText = app.input.Value()
+		app.refreshCommandMenu()
 
-		suggestions := app.matchingFileReferences(app.input.Value())
-		if len(suggestions) == 0 || suggestions[0] != "internal/tui/update.go" {
+		_, _, _, suggestions, ok := app.resolveFileReferenceSuggestions(app.input.Value())
+		if !ok || len(suggestions) == 0 || suggestions[0] != "internal/tui/update.go" {
 			t.Fatalf("unexpected suggestions %v", suggestions)
 		}
-		if !app.applyTopFileSuggestion() {
+		if !app.applySelectedCommandSuggestion() {
 			t.Fatalf("expected top suggestion to be applied")
 		}
 		if app.state.InputText != "inspect @internal/tui/update.go" {
@@ -188,8 +189,64 @@ func TestWorkspaceFileHelpers(t *testing.T) {
 
 		app.input.SetValue("inspect plain-text")
 		app.state.InputText = app.input.Value()
-		if app.applyTopFileSuggestion() {
-			t.Fatalf("expected applyTopFileSuggestion to fail without @ token")
+		app.refreshCommandMenu()
+		if app.applySelectedCommandSuggestion() {
+			t.Fatalf("expected applySelectedCommandSuggestion to fail without @ token")
+		}
+	})
+
+	t.Run("apply file reference handles replace append and path resolution", func(t *testing.T) {
+		manager := newTestConfigManager(t)
+		runtime := newStubRuntime()
+		app, err := New(nil, manager, runtime, newTestProviderService(t, manager))
+		if err != nil {
+			t.Fatalf("New() error = %v", err)
+		}
+
+		workdir := t.TempDir()
+		inside := filepath.Join(workdir, "internal", "tui", "update.go")
+		outside := filepath.Join(t.TempDir(), "outside.go")
+		app.state.CurrentWorkdir = workdir
+
+		app.input.SetValue("inspect @old/path.go")
+		app.state.InputText = app.input.Value()
+		if err := app.applyFileReference(inside); err != nil {
+			t.Fatalf("applyFileReference(replace) error = %v", err)
+		}
+		if !strings.Contains(app.state.InputText, "@internal/tui/update.go") {
+			t.Fatalf("expected replaced relative reference, got %q", app.state.InputText)
+		}
+
+		app.input.SetValue("inspect")
+		app.state.InputText = app.input.Value()
+		if err := app.applyFileReference(inside); err != nil {
+			t.Fatalf("applyFileReference(append with space) error = %v", err)
+		}
+		if !strings.HasPrefix(app.state.InputText, "inspect @internal/tui/update.go") {
+			t.Fatalf("expected appended reference with separator, got %q", app.state.InputText)
+		}
+
+		app.input.SetValue("inspect ")
+		app.state.InputText = app.input.Value()
+		if err := app.applyFileReference(inside); err != nil {
+			t.Fatalf("applyFileReference(append without extra space) error = %v", err)
+		}
+		if strings.Contains(app.state.InputText, "inspect  @") {
+			t.Fatalf("expected single separator before reference, got %q", app.state.InputText)
+		}
+
+		app.input.SetValue("   ")
+		app.state.InputText = app.input.Value()
+		if err := app.applyFileReference(outside); err != nil {
+			t.Fatalf("applyFileReference(empty input) error = %v", err)
+		}
+		outsideAbs, _ := filepath.Abs(outside)
+		if !strings.Contains(app.state.InputText, "@"+filepath.ToSlash(outsideAbs)) {
+			t.Fatalf("expected absolute reference for outside file, got %q", app.state.InputText)
+		}
+
+		if err := app.applyFileReference(" "); err == nil {
+			t.Fatalf("expected empty path to fail")
 		}
 	})
 }

@@ -153,35 +153,47 @@ func newStyles() styles {
 		messageToolTag:  tagStyle(colorSuccess),
 		messageBody: lipgloss.NewStyle().
 			Foreground(lipgloss.Color(colorText)).
-			Background(lipgloss.Color(colorPanel)).
-			Padding(0, 1),
+			UnsetBackground().
+			Border(lipgloss.NormalBorder()).
+			BorderForeground(lipgloss.Color(colorBorder)).
+			Padding(0, 0),
 		messageUserBody: lipgloss.NewStyle().
 			Foreground(lipgloss.Color(colorText)).
-			Background(lipgloss.Color("#12202D")).
-			Padding(0, 1),
+			UnsetBackground().
+			Border(lipgloss.NormalBorder()).
+			BorderForeground(lipgloss.Color(colorUser)).
+			Padding(0, 0),
 		messageToolBody: lipgloss.NewStyle().
 			Foreground(lipgloss.Color(colorSuccess)).
-			Background(lipgloss.Color("#0F1B1C")).
-			Padding(0, 1),
+			UnsetBackground().
+			Border(lipgloss.NormalBorder()).
+			BorderForeground(lipgloss.Color(colorSuccess)).
+			Padding(0, 0),
 		inlineNotice: lipgloss.NewStyle().
 			Foreground(lipgloss.Color(colorSubtle)).
-			Background(lipgloss.Color(colorPanel)).
-			Padding(0, 1).
+			UnsetBackground().
+			Border(lipgloss.NormalBorder()).
+			BorderForeground(lipgloss.Color(colorBorder)).
+			Padding(0, 0).
 			Italic(true),
 		inlineError: lipgloss.NewStyle().
 			Foreground(lipgloss.Color(colorError)).
-			Background(lipgloss.Color("#21131A")).
-			Padding(0, 1).
+			UnsetBackground().
+			Border(lipgloss.NormalBorder()).
+			BorderForeground(lipgloss.Color(colorError)).
+			Padding(0, 0).
 			Bold(true),
 		inlineSystem: lipgloss.NewStyle().
 			Foreground(lipgloss.Color(colorSubtle)).
-			Background(lipgloss.Color(colorPanel)).
-			Padding(0, 1),
+			UnsetBackground().
+			Border(lipgloss.NormalBorder()).
+			BorderForeground(lipgloss.Color(colorBorder)).
+			Padding(0, 0),
 		codeBlock: lipgloss.NewStyle().
 			MarginLeft(1).
-			Padding(0, 1).
-			Background(lipgloss.Color(colorCode)).
-			BorderLeft(true).
+			Padding(0, 0).
+			UnsetBackground().
+			Border(lipgloss.NormalBorder()).
 			BorderStyle(lipgloss.NormalBorder()).
 			BorderForeground(lipgloss.Color(colorPrimary)),
 		codeText: lipgloss.NewStyle().
@@ -347,11 +359,4 @@ func clamp(value int, minValue int, maxValue int) int {
 		return maxValue
 	}
 	return value
-}
-
-func max(a int, b int) int {
-	if a > b {
-		return a
-	}
-	return b
 }
