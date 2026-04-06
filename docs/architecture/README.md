@@ -1,8 +1,8 @@
 ﻿# NeoCode 架构文档
 
-> 状态：v2.0.0-draft.1  
+> 状态：v2.0.0-draft.2  
 > 目录：`docs/architecture`  
-> 目标：将架构说明按模块拆分为 `README.md + interface.go`，并逐步替代 `docs/interfaces`。
+> 目标：以模块化文档（`README.md + interface.go`）作为唯一架构事实源。
 
 ## 标签约定
 
@@ -36,6 +36,7 @@ flowchart LR
     Runtime --> Tools["Tools"]
     Runtime --> Config["Config"]
     Runtime --> Session["Session"]
+    Runtime --> Utils["Utils"]
 ```
 
 ## 模块清单
@@ -51,20 +52,16 @@ flowchart LR
 | CLI | [cli/README.md](./cli/README.md) | [cli/interface.go](./cli/interface.go) | `[CURRENT]` |
 | Gateway | [gateway/README.md](./gateway/README.md) | [gateway/interface.go](./gateway/interface.go) | `[PROPOSED]` |
 | Session | [session/README.md](./session/README.md) | [session/interface.go](./session/interface.go) | `[CURRENT]` |
+| Utils | [utils/README.md](./utils/README.md) | [utils/interface.go](./utils/interface.go) | `[PROPOSED]` |
 
 ## 阅读顺序
 
 1. 先读 `runtime`、`session`，建立主编排与持久化基线。
-2. 再读 `context`、`provider`、`tools`、`config`，理解编排依赖边界。
-3. 最后读 `tui`、`cli`、`gateway`，理解入口层与协议层演进。
-
-## 与旧文档关系
-
-- 本目录是新的模块化架构事实源。
-- `docs/interfaces` 进入“逐步迁移替代”阶段，迁移中保持语义一致。
-- `docs/session-persistence-design.md` 的关键内容会逐步沉淀到 `docs/architecture/session/*`。
+2. 再读 `context`、`provider`、`tools`、`config`，理解核心依赖边界。
+3. 再读 `tui`、`cli`、`gateway`，理解入口层与协议层演进。
 
 ## 约束
 
 - 本目录中的 `interface.go` 用于架构契约表达，不参与生产代码实现。
 - 未落地能力必须显式标注 `[PROPOSED]` 或 `[NOT IMPLEMENTED YET]`。
+- 文档中的接口命名优先对齐当前项目已存在命名。
