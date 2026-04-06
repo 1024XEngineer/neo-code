@@ -64,6 +64,27 @@ func TestMicroCompactMessagesClearsOlderCompactableToolResults(t *testing.T) {
 	}
 }
 
+func TestMicroCompactMessagesHandlesEmptyAndInvalidSpanInputs(t *testing.T) {
+	t.Parallel()
+
+	if got := microCompactMessages(nil); got != nil {
+		t.Fatalf("expected nil input to remain nil, got %+v", got)
+	}
+
+	assistantOnly := []provider.Message{
+		{
+			Role: provider.RoleAssistant,
+			ToolCalls: []provider.ToolCall{
+				{ID: "", Name: "bash", Arguments: "{}"},
+			},
+		},
+	}
+	got := microCompactMessagesWithPolicies(assistantOnly, stubMicroCompactPolicySource{})
+	if len(got) != 1 || len(got[0].ToolCalls) != 1 {
+		t.Fatalf("expected invalid tool call id path to keep message untouched, got %+v", got)
+	}
+}
+
 func TestMicroCompactMessagesKeepsProtectedTailUntouched(t *testing.T) {
 	t.Parallel()
 
@@ -310,5 +331,18 @@ func TestMicroCompactMessagesSkipsEmptyRecentSpansWhenCountingRetainedBudget(t *
 	}
 	if got[10].Content != "" {
 		t.Fatalf("expected empty recent tool result to remain unchanged, got %q", got[10].Content)
+	}
+}
+
+func TestMicroCompactMessagesSkipsToolMessagesWhenCompactableIDsMissing(t *testing.T) {
+	t.Parallel()
+
+	messages := []provider.Message{
+		{Role: provider.RoleTool, ToolCallID: "orphan", Content: "orphan result"},
+	}
+
+	got := microCompactMessagesWithPolicies(messages, stubMicroCompactPolicySource{})
+	if got[0].Content != "orphan result" {
+		t.Fatalf("expected orphan tool result to remain, got %q", got[0].Content)
 	}
 }

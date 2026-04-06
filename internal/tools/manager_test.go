@@ -40,6 +40,7 @@ func (t *managerStubTool) Execute(ctx context.Context, call ToolCallInput) (Tool
 
 type stubSandbox struct {
 	err        error
+	plan       *security.WorkspaceExecutionPlan
 	callCount  int
 	lastAction security.Action
 }
@@ -65,7 +66,7 @@ func (s *stubSandbox) Check(ctx context.Context, action security.Action) (*secur
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	return nil, s.err
+	return s.plan, s.err
 }
 
 func TestDefaultManagerListAvailableSpecs(t *testing.T) {
@@ -402,6 +403,43 @@ func TestDefaultManagerExecuteWithWorkspaceSandbox(t *testing.T) {
 	}
 }
 
+func TestDefaultManagerExecuteForwardsWorkspacePlanToTool(t *testing.T) {
+	t.Parallel()
+
+	registry := NewRegistry()
+	tool := &managerStubTool{name: "filesystem_write_file", content: "ok"}
+	registry.Register(tool)
+
+	engine, err := security.NewStaticGateway(security.DecisionAllow, nil)
+	if err != nil {
+		t.Fatalf("new engine: %v", err)
+	}
+	plan := &security.WorkspaceExecutionPlan{
+		Root:            "workspace-root",
+		Target:          "workspace-root/notes.txt",
+		RequestedTarget: "notes.txt",
+	}
+	manager, err := NewManager(registry, engine, &stubSandbox{plan: plan})
+	if err != nil {
+		t.Fatalf("new manager: %v", err)
+	}
+
+	result, execErr := manager.Execute(context.Background(), ToolCallInput{
+		Name:      "filesystem_write_file",
+		Arguments: []byte(`{"path":"notes.txt","content":"hello"}`),
+		Workdir:   t.TempDir(),
+	})
+	if execErr != nil {
+		t.Fatalf("unexpected error: %v", execErr)
+	}
+	if result.Content != "ok" {
+		t.Fatalf("expected ok result, got %+v", result)
+	}
+	if tool.lastCall.WorkspacePlan == nil || tool.lastCall.WorkspacePlan.Target != plan.Target {
+		t.Fatalf("expected workspace plan to be forwarded, got %+v", tool.lastCall.WorkspacePlan)
+	}
+}
+
 func TestPermissionDecisionError(t *testing.T) {
 	t.Parallel()
 
@@ -454,6 +492,23 @@ func TestPermissionDecisionError(t *testing.T) {
 	var nilErr *PermissionDecisionError
 	if nilErr.Error() != "" || nilErr.Decision() != "" || nilErr.ToolName() != "" {
 		t.Fatalf("expected nil permission error helpers to be empty")
+	}
+	if nilErr.Reason() != "" || nilErr.RuleID() != "" || nilErr.Action() != (security.Action{}) {
+		t.Fatalf("expected nil permission error extended helpers to be empty")
+	}
+
+	defaultAsk := &PermissionDecisionError{decision: security.DecisionAsk}
+	if !strings.Contains(defaultAsk.Error(), "permission approval required") {
+		t.Fatalf("expected default ask message, got %q", defaultAsk.Error())
+	}
+}
+
+func TestNewManagerRejectsNilExecutor(t *testing.T) {
+	t.Parallel()
+
+	manager, err := NewManager(nil, nil, nil)
+	if err == nil || !strings.Contains(err.Error(), "executor is nil") {
+		t.Fatalf("expected nil executor error, got manager=%v err=%v", manager, err)
 	}
 }
 

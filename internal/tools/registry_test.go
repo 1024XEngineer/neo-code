@@ -206,3 +206,24 @@ func TestRegistryMicroCompactPolicyPreserveHistory(t *testing.T) {
 		t.Fatalf("expected preserve history policy, got %q", got)
 	}
 }
+
+func TestRegistryMicroCompactPolicyNormalizesNameAndNilRegistry(t *testing.T) {
+	t.Parallel()
+
+	registry := NewRegistry()
+	registry.Register(stubTool{
+		name:        "Custom_Tool",
+		description: "preserve history",
+		schema:      map[string]any{"type": "object"},
+		policy:      MicroCompactPolicyPreserveHistory,
+	})
+
+	if got := registry.MicroCompactPolicy("  custom_tool  "); got != MicroCompactPolicyPreserveHistory {
+		t.Fatalf("expected normalized preserve history policy, got %q", got)
+	}
+
+	var nilRegistry *Registry
+	if got := nilRegistry.MicroCompactPolicy("whatever"); got != MicroCompactPolicyCompact {
+		t.Fatalf("expected nil registry default compact policy, got %q", got)
+	}
+}
