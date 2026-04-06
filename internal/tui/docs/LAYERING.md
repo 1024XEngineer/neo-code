@@ -5,13 +5,13 @@
 ## 改造范围
 
 - 本轮只处理 `internal/tui`。
-- 入口层 `cmd/tui` 暂不处理。
+- 入口层 `cmd/neocode` 暂不处理。
 
 ## 分层定义
 
 ### L1 - Entry（暂缓）
 
-- 位置：`cmd/tui/`
+- 位置：`cmd/neocode/`
 - 职责：参数解析、终端初始化、启动 Program。
 - 本轮状态：暂不纳入改造。
 
