@@ -132,16 +132,13 @@ func TestBuildToolManagerWrapsRegistry(t *testing.T) {
 		t.Fatalf("expected 1 spec, got %+v", specs)
 	}
 
-	result, execErr := manager.Execute(context.Background(), tools.ToolCallInput{
+	_, execErr := manager.Execute(context.Background(), tools.ToolCallInput{
 		Name:      "bash",
 		Arguments: []byte(`{"command":"echo hi"}`),
 		Workdir:   workdir,
 	})
-	if execErr != nil {
-		t.Fatalf("Execute() error = %v", execErr)
-	}
-	if result.Content != "ok" {
-		t.Fatalf("expected ok result, got %+v", result)
+	if execErr == nil {
+		t.Fatalf("expected bash to require approval by default policy")
 	}
 
 	_, execErr = manager.Execute(context.Background(), tools.ToolCallInput{
@@ -151,6 +148,29 @@ func TestBuildToolManagerWrapsRegistry(t *testing.T) {
 	})
 	if execErr == nil {
 		t.Fatalf("expected sandbox rejection for outside workdir")
+	}
+}
+
+func TestBuildToolManagerAllowsWebfetchWhitelist(t *testing.T) {
+	t.Parallel()
+
+	registry := tools.NewRegistry()
+	registry.Register(stubToolForBootstrap{name: "webfetch", content: "ok"})
+	manager, err := buildToolManager(registry)
+	if err != nil {
+		t.Fatalf("buildToolManager() error = %v", err)
+	}
+
+	result, execErr := manager.Execute(context.Background(), tools.ToolCallInput{
+		Name:      "webfetch",
+		Arguments: []byte(`{"url":"https://github.com/1024XEngineer/neo-code"}`),
+		Workdir:   t.TempDir(),
+	})
+	if execErr != nil {
+		t.Fatalf("expected whitelist webfetch allow, got %v", execErr)
+	}
+	if result.Content != "ok" {
+		t.Fatalf("expected ok result, got %+v", result)
 	}
 }
 

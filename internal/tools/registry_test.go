@@ -5,6 +5,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"neo-code/internal/security"
 )
 
 type stubTool struct {
@@ -178,5 +180,18 @@ func TestRegistryHelpers(t *testing.T) {
 	_, err = registry.ListAvailableSpecs(canceled, SpecListInput{})
 	if err == nil || !strings.Contains(err.Error(), context.Canceled.Error()) {
 		t.Fatalf("expected context canceled, got %v", err)
+	}
+}
+
+func TestRegistryRememberSessionDecisionUnsupported(t *testing.T) {
+	t.Parallel()
+
+	registry := NewRegistry()
+	err := registry.RememberSessionDecision("session-1", security.Action{}, SessionPermissionScopeAlways)
+	if err == nil {
+		t.Fatalf("expected unsupported error")
+	}
+	if !strings.Contains(err.Error(), "unsupported") {
+		t.Fatalf("expected unsupported error, got %v", err)
 	}
 }

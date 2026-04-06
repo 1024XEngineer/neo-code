@@ -20,43 +20,44 @@ import (
 )
 
 type App struct {
-	state            UIState
-	configManager    *config.Manager
-	providerSvc      ProviderController
-	runtime          agentruntime.Runtime
-	keys             keyMap
-	help             help.Model
-	spinner          spinner.Model
-	sessions         list.Model
-	commandMenu      list.Model
-	commandMenuMeta  commandMenuMeta
-	providerPicker   list.Model
-	modelPicker      list.Model
-	fileBrowser      filepicker.Model
-	progress         progress.Model
-	transcript       viewport.Model
-	activity         viewport.Model
-	input            textarea.Model
-	markdownRenderer markdownContentRenderer
-	codeCopyBlocks   map[int]string
-	pendingCopyID    int
-	nowFn            func() time.Time
-	lastInputEditAt  time.Time
-	lastPasteLikeAt  time.Time
-	inputBurstStart  time.Time
-	inputBurstCount  int
-	pasteMode        bool
-	activeMessages   []provider.Message
-	activities       []activityEntry
-	fileCandidates   []string
-	modelRefreshID   string
-	focus            panel
-	runProgressValue float64
-	runProgressKnown bool
-	runProgressLabel string
-	width            int
-	height           int
-	styles           styles
+	state             UIState
+	configManager     *config.Manager
+	providerSvc       ProviderController
+	runtime           agentruntime.Runtime
+	keys              keyMap
+	help              help.Model
+	spinner           spinner.Model
+	sessions          list.Model
+	commandMenu       list.Model
+	commandMenuMeta   commandMenuMeta
+	providerPicker    list.Model
+	modelPicker       list.Model
+	fileBrowser       filepicker.Model
+	progress          progress.Model
+	transcript        viewport.Model
+	activity          viewport.Model
+	input             textarea.Model
+	markdownRenderer  markdownContentRenderer
+	codeCopyBlocks    map[int]string
+	pendingCopyID     int
+	nowFn             func() time.Time
+	lastInputEditAt   time.Time
+	lastPasteLikeAt   time.Time
+	inputBurstStart   time.Time
+	inputBurstCount   int
+	pasteMode         bool
+	pendingPermission *pendingPermissionPrompt
+	activeMessages    []provider.Message
+	activities        []activityEntry
+	fileCandidates    []string
+	modelRefreshID    string
+	focus             panel
+	runProgressValue  float64
+	runProgressKnown  bool
+	runProgressLabel  string
+	width             int
+	height            int
+	styles            styles
 }
 
 func New(cfg *config.Config, configManager *config.Manager, runtime agentruntime.Runtime, providerSvc ProviderController) (App, error) {

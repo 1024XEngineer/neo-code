@@ -58,6 +58,15 @@ type activityEntry struct {
 	IsError bool
 }
 
+type pendingPermissionPrompt struct {
+	RequestID    string
+	ToolCallID   string
+	ToolName     string
+	ToolCategory string
+	Target       string
+	Submitted    bool
+}
+
 type commandMenuMeta struct {
 	Title string
 }

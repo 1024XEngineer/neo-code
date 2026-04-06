@@ -15,7 +15,10 @@ type RuntimeEvent struct {
 
 // PermissionRequestPayload 描述一次需要审批的权限请求上下文。
 type PermissionRequestPayload struct {
+	RequestID     string
+	ToolCallID    string
 	ToolName      string
+	ToolCategory  string
 	ActionType    string
 	Operation     string
 	TargetType    string
@@ -28,7 +31,10 @@ type PermissionRequestPayload struct {
 
 // PermissionResolvedPayload 描述权限请求被运行时处理后的最终状态。
 type PermissionResolvedPayload struct {
+	RequestID     string
+	ToolCallID    string
 	ToolName      string
+	ToolCategory  string
 	ActionType    string
 	Operation     string
 	TargetType    string

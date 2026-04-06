@@ -99,7 +99,7 @@ func buildToolRegistry(cfg config.Config) *tools.Registry {
 }
 
 func buildToolManager(registry *tools.Registry) (tools.Manager, error) {
-	engine, err := security.NewStaticGateway(security.DecisionAllow, nil)
+	engine, err := security.NewRecommendedPolicyEngine()
 	if err != nil {
 		return nil, err
 	}

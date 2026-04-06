@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"neo-code/internal/provider"
+	"neo-code/internal/security"
 )
 
 type Registry struct {
@@ -93,4 +94,9 @@ func (r *Registry) Execute(ctx context.Context, input ToolCallInput) (ToolResult
 		return result, execErr
 	}
 	return result, nil
+}
+
+// RememberSessionDecision 对纯 Registry 管理器不生效，保留接口以满足 runtime 依赖。
+func (r *Registry) RememberSessionDecision(sessionID string, action security.Action, scope SessionPermissionScope) error {
+	return errors.New("tools: session permission memory is unsupported by registry manager")
 }

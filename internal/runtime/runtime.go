@@ -117,6 +117,7 @@ var runtimeSessionWorkdirs = struct {
 type Runtime interface {
 	Run(ctx context.Context, input UserInput) error
 	Compact(ctx context.Context, input CompactInput) (CompactResult, error)
+	ResolvePermission(ctx context.Context, input PermissionResolutionInput) error
 	CancelActiveRun() bool
 	Events() <-chan RuntimeEvent
 	ListSessions(ctx context.Context) ([]SessionSummary, error)
@@ -299,18 +300,13 @@ func (s *Service) Run(ctx context.Context, input UserInput) error {
 			}
 			s.emit(ctx, EventToolStart, input.RunID, session.ID, call)
 
-			runCtx, cancel := context.WithTimeout(ctx, time.Duration(cfg.ToolTimeoutSec)*time.Second)
-			result, execErr := s.toolManager.Execute(runCtx, tools.ToolCallInput{
-				ID:        call.ID,
-				Name:      call.Name,
-				Arguments: []byte(call.Arguments),
-				Workdir:   activeWorkdir,
-				SessionID: session.ID,
-				EmitChunk: func(chunk []byte) {
-					s.emit(ctx, EventToolChunk, input.RunID, session.ID, string(chunk))
-				},
+			result, execErr := s.executeToolCallWithPermission(ctx, permissionExecutionInput{
+				RunID:       input.RunID,
+				SessionID:   session.ID,
+				Call:        call,
+				Workdir:     activeWorkdir,
+				ToolTimeout: time.Duration(cfg.ToolTimeoutSec) * time.Second,
 			})
-			cancel()
 			if s.isRunCanceled(execErr) {
 				return s.handleRunError(ctx, input.RunID, session.ID, execErr)
 			}
@@ -324,9 +320,6 @@ func (s *Service) Run(ctx context.Context, input UserInput) error {
 				result.Content = execErr.Error()
 			}
 			if permissionEvent, ok := permissionEventFromError(execErr); ok {
-				if permissionEvent.decision == "ask" {
-					s.emit(ctx, EventPermissionRequest, input.RunID, session.ID, permissionEvent.toRequestPayload())
-				}
 				s.emit(ctx, EventPermissionResolved, input.RunID, session.ID, permissionEvent.toResolvedPayload())
 			}
 
@@ -739,6 +732,7 @@ type permissionEventView struct {
 	decision   string
 	reason     string
 	ruleID     string
+	scope      string
 	resolvedAs string
 }
 
@@ -770,6 +764,7 @@ func permissionEventFromError(err error) (permissionEventView, bool) {
 		decision:   decision,
 		reason:     reason,
 		ruleID:     strings.TrimSpace(permissionErr.RuleID()),
+		scope:      strings.TrimSpace(permissionErr.RememberScope()),
 		resolvedAs: resolvedAs,
 	}, true
 }
@@ -785,7 +780,7 @@ func (v permissionEventView) toRequestPayload() PermissionRequestPayload {
 		Decision:      v.decision,
 		Reason:        v.reason,
 		RuleID:        v.ruleID,
-		RememberScope: "",
+		RememberScope: v.scope,
 	}
 }
 
@@ -800,7 +795,7 @@ func (v permissionEventView) toResolvedPayload() PermissionResolvedPayload {
 		Decision:      v.decision,
 		Reason:        v.reason,
 		RuleID:        v.ruleID,
-		RememberScope: "",
+		RememberScope: v.scope,
 		ResolvedAs:    v.resolvedAs,
 	}
 }

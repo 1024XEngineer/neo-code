@@ -201,6 +201,12 @@ type stubToolManager struct {
 	listCalls    int
 	executeCalls int
 	lastInput    tools.ToolCallInput
+	rememberErr  error
+	remembered   []struct {
+		sessionID string
+		action    security.Action
+		scope     tools.SessionPermissionScope
+	}
 }
 
 func (m *stubToolManager) ListAvailableSpecs(ctx context.Context, input tools.SpecListInput) ([]provider.ToolSpec, error) {
@@ -222,6 +228,19 @@ func (m *stubToolManager) Execute(ctx context.Context, input tools.ToolCallInput
 		result.Name = input.Name
 	}
 	return result, m.err
+}
+
+func (m *stubToolManager) RememberSessionDecision(sessionID string, action security.Action, scope tools.SessionPermissionScope) error {
+	m.remembered = append(m.remembered, struct {
+		sessionID string
+		action    security.Action
+		scope     tools.SessionPermissionScope
+	}{
+		sessionID: sessionID,
+		action:    action,
+		scope:     scope,
+	})
+	return m.rememberErr
 }
 
 func TestServiceRun(t *testing.T) {
@@ -541,6 +560,9 @@ func TestServiceRunDelegatesToContextBuilder(t *testing.T) {
 
 	manager := newRuntimeConfigManager(t)
 	store := newMemoryStore()
+	session := newSession("memory reject")
+	session.ID = "session-memory-reject"
+	store.sessions[session.ID] = cloneSession(session)
 	registry := tools.NewRegistry()
 	registry.Register(&stubTool{name: "filesystem_read_file", content: "default"})
 
@@ -737,13 +759,16 @@ func TestServiceRunUsesToolManager(t *testing.T) {
 	}
 }
 
-func TestServiceRunEmitsPermissionRequestAndResolvedForAsk(t *testing.T) {
+func TestServiceRunWaitsForPermissionResolutionAndContinues(t *testing.T) {
 	t.Parallel()
 
 	manager := newRuntimeConfigManager(t)
 	store := newMemoryStore()
+	session := newSession("memory reject")
+	session.ID = "session-memory-reject"
+	store.sessions[session.ID] = cloneSession(session)
 	registry := tools.NewRegistry()
-	tool := &stubTool{name: "webfetch", content: "should-not-run"}
+	tool := &stubTool{name: "webfetch", content: "fetched"}
 	registry.Register(tool)
 
 	engine, err := security.NewStaticGateway(security.DecisionAllow, []security.Rule{
@@ -774,34 +799,65 @@ func TestServiceRunEmitsPermissionRequestAndResolvedForAsk(t *testing.T) {
 	}
 
 	service := NewWithFactory(manager, toolManager, store, &scriptedProviderFactory{provider: scripted}, nil)
-	if err := service.Run(context.Background(), UserInput{RunID: "run-permission-ask", Content: "fetch private"}); err != nil {
+	runErrCh := make(chan error, 1)
+	go func() {
+		runErrCh <- service.Run(context.Background(), UserInput{RunID: "run-permission-ask", Content: "fetch private"})
+	}()
+
+	var requestPayload PermissionRequestPayload
+	deadline := time.After(3 * time.Second)
+waitRequest:
+	for {
+		select {
+		case <-deadline:
+			t.Fatalf("timed out waiting permission request event")
+		case event := <-service.Events():
+			if event.Type != EventPermissionRequest {
+				continue
+			}
+			payload, ok := event.Payload.(PermissionRequestPayload)
+			if !ok {
+				t.Fatalf("expected PermissionRequestPayload, got %#v", event.Payload)
+			}
+			requestPayload = payload
+			break waitRequest
+		}
+	}
+
+	if strings.TrimSpace(requestPayload.RequestID) == "" {
+		t.Fatalf("expected non-empty permission request id")
+	}
+	if strings.TrimSpace(requestPayload.RememberScope) != "" {
+		t.Fatalf("expected empty remember scope for permission_request, got %q", requestPayload.RememberScope)
+	}
+	if requestPayload.ToolName != "webfetch" || requestPayload.Decision != "ask" {
+		t.Fatalf("unexpected permission request payload: %+v", requestPayload)
+	}
+
+	if err := service.ResolvePermission(context.Background(), PermissionResolutionInput{
+		RequestID: requestPayload.RequestID,
+		Decision:  PermissionResolutionAllowSession,
+	}); err != nil {
+		t.Fatalf("ResolvePermission() error = %v", err)
+	}
+	if err := <-runErrCh; err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
-	if tool.callCount != 0 {
-		t.Fatalf("expected blocked tool not to execute, got %d", tool.callCount)
+	if tool.callCount != 1 {
+		t.Fatalf("expected allowed tool to execute once, got %d", tool.callCount)
 	}
 
 	events := collectRuntimeEvents(service.Events())
 	assertEventSequence(t, events, []EventType{
-		EventPermissionRequest,
 		EventPermissionResolved,
 		EventToolResult,
 		EventAgentDone,
 	})
 	assertNoEventType(t, events, EventError)
 
-	var (
-		requestPayload  PermissionRequestPayload
-		resolvedPayload PermissionResolvedPayload
-	)
+	var resolvedPayload PermissionResolvedPayload
 	for _, event := range events {
 		switch event.Type {
-		case EventPermissionRequest:
-			payload, ok := event.Payload.(PermissionRequestPayload)
-			if !ok {
-				t.Fatalf("expected PermissionRequestPayload, got %#v", event.Payload)
-			}
-			requestPayload = payload
 		case EventPermissionResolved:
 			payload, ok := event.Payload.(PermissionResolvedPayload)
 			if !ok {
@@ -811,17 +867,14 @@ func TestServiceRunEmitsPermissionRequestAndResolvedForAsk(t *testing.T) {
 		}
 	}
 
-	if requestPayload.ToolName != "webfetch" || requestPayload.Decision != "ask" {
-		t.Fatalf("unexpected permission request payload: %+v", requestPayload)
-	}
-	if requestPayload.RuleID != "ask-webfetch" {
-		t.Fatalf("expected rule id ask-webfetch, got %+v", requestPayload)
-	}
-	if resolvedPayload.ToolName != "webfetch" || resolvedPayload.Decision != "ask" {
+	if resolvedPayload.ToolName != "webfetch" || resolvedPayload.Decision != "allow" {
 		t.Fatalf("unexpected permission resolved payload: %+v", resolvedPayload)
 	}
-	if resolvedPayload.ResolvedAs != "rejected" {
-		t.Fatalf("expected resolved_as rejected, got %+v", resolvedPayload)
+	if resolvedPayload.ResolvedAs != "approved" {
+		t.Fatalf("expected resolved_as approved, got %+v", resolvedPayload)
+	}
+	if resolvedPayload.RememberScope != string(tools.SessionPermissionScopeAlways) {
+		t.Fatalf("expected remember scope always_session, got %+v", resolvedPayload)
 	}
 }
 
@@ -891,6 +944,97 @@ func TestServiceRunEmitsPermissionResolvedForDeny(t *testing.T) {
 		}
 		if payload.RuleID != "deny-bash" {
 			t.Fatalf("expected deny-bash rule id, got %+v", payload)
+		}
+		return
+	}
+	t.Fatalf("expected permission resolved event payload")
+}
+
+func TestServiceRunEmitsRememberScopeWhenSessionRejectMemoryHits(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	store := newMemoryStore()
+	session := newSession("memory reject")
+	session.ID = "session-memory-reject"
+	store.sessions[session.ID] = cloneSession(session)
+	registry := tools.NewRegistry()
+	tool := &stubTool{name: "webfetch", content: "should-not-run"}
+	registry.Register(tool)
+
+	engine, err := security.NewStaticGateway(security.DecisionAllow, []security.Rule{
+		{
+			ID:       "ask-webfetch",
+			Type:     security.ActionTypeRead,
+			Resource: "webfetch",
+			Decision: security.DecisionAsk,
+			Reason:   "requires approval",
+		},
+	})
+	if err != nil {
+		t.Fatalf("new static gateway: %v", err)
+	}
+	toolManager, err := tools.NewManager(registry, engine, nil)
+	if err != nil {
+		t.Fatalf("new tool manager: %v", err)
+	}
+	if err := toolManager.RememberSessionDecision("session-memory-reject", security.Action{
+		Type: security.ActionTypeRead,
+		Payload: security.ActionPayload{
+			ToolName:   "webfetch",
+			Resource:   "webfetch",
+			Operation:  "fetch",
+			TargetType: security.TargetTypeURL,
+			Target:     "https://example.com/private",
+		},
+	}, tools.SessionPermissionScopeReject); err != nil {
+		t.Fatalf("remember session reject: %v", err)
+	}
+
+	scripted := &scriptedProvider{
+		responses: []provider.ChatResponse{
+			{
+				Message: provider.Message{
+					Role: "assistant",
+					ToolCalls: []provider.ToolCall{
+						{ID: "call-memory-reject", Name: "webfetch", Arguments: `{"url":"https://example.com/private"}`},
+					},
+				},
+				FinishReason: "tool_calls",
+			},
+			{
+				Message:      provider.Message{Role: "assistant", Content: "done"},
+				FinishReason: "stop",
+			},
+		},
+	}
+
+	service := NewWithFactory(manager, toolManager, store, &scriptedProviderFactory{provider: scripted}, nil)
+	if err := service.Run(context.Background(), UserInput{
+		SessionID: "session-memory-reject",
+		RunID:     "run-memory-reject",
+		Content:   "fetch private",
+	}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if tool.callCount != 0 {
+		t.Fatalf("expected remembered reject to skip tool execution, got %d", tool.callCount)
+	}
+
+	events := collectRuntimeEvents(service.Events())
+	assertEventSequence(t, events, []EventType{EventPermissionResolved, EventToolResult, EventAgentDone})
+	assertNoEventType(t, events, EventPermissionRequest)
+
+	for _, event := range events {
+		if event.Type != EventPermissionResolved {
+			continue
+		}
+		payload, ok := event.Payload.(PermissionResolvedPayload)
+		if !ok {
+			t.Fatalf("expected PermissionResolvedPayload, got %#v", event.Payload)
+		}
+		if payload.RememberScope != string(tools.SessionPermissionScopeReject) {
+			t.Fatalf("expected remember_scope reject, got %+v", payload)
 		}
 		return
 	}
@@ -2422,5 +2566,49 @@ func TestProviderRetryBackoff(t *testing.T) {
 				t.Fatalf("providerRetryBackoff(%d) = %v, want within [%v, %v]", tt.attempt, got, tt.min, tt.max)
 			}
 		})
+	}
+}
+
+func TestPermissionEventViewPayloadMapping(t *testing.T) {
+	t.Parallel()
+
+	view := permissionEventView{
+		toolName:   "webfetch",
+		actionType: string(security.ActionTypeRead),
+		operation:  "fetch",
+		targetType: string(security.TargetTypeURL),
+		target:     "https://example.com",
+		decision:   "ask",
+		reason:     "need approval",
+		ruleID:     "rule-1",
+		scope:      string(tools.SessionPermissionScopeAlways),
+		resolvedAs: "rejected",
+	}
+
+	requestPayload := view.toRequestPayload()
+	if requestPayload.ToolName != view.toolName ||
+		requestPayload.ActionType != view.actionType ||
+		requestPayload.Operation != view.operation ||
+		requestPayload.TargetType != view.targetType ||
+		requestPayload.Target != view.target ||
+		requestPayload.Decision != view.decision ||
+		requestPayload.Reason != view.reason ||
+		requestPayload.RuleID != view.ruleID ||
+		requestPayload.RememberScope != view.scope {
+		t.Fatalf("unexpected request payload: %+v", requestPayload)
+	}
+
+	resolvedPayload := view.toResolvedPayload()
+	if resolvedPayload.ToolName != view.toolName ||
+		resolvedPayload.ActionType != view.actionType ||
+		resolvedPayload.Operation != view.operation ||
+		resolvedPayload.TargetType != view.targetType ||
+		resolvedPayload.Target != view.target ||
+		resolvedPayload.Decision != view.decision ||
+		resolvedPayload.Reason != view.reason ||
+		resolvedPayload.RuleID != view.ruleID ||
+		resolvedPayload.RememberScope != view.scope ||
+		resolvedPayload.ResolvedAs != view.resolvedAs {
+		t.Fatalf("unexpected resolved payload: %+v", resolvedPayload)
 	}
 }

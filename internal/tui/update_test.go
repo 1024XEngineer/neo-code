@@ -38,6 +38,8 @@ type stubRuntime struct {
 	setWorkdirErr error
 	setResult     *agentruntime.Session
 	setCalls      int
+	resolveInputs []agentruntime.PermissionResolutionInput
+	resolveErr    error
 	cancelCalls   int
 	cancelResult  bool
 }
@@ -76,6 +78,11 @@ func (r *stubRuntime) Run(ctx context.Context, input agentruntime.UserInput) err
 func (r *stubRuntime) Compact(ctx context.Context, input agentruntime.CompactInput) (agentruntime.CompactResult, error) {
 	r.compactInputs = append(r.compactInputs, input)
 	return r.compactResult, r.compactErr
+}
+
+func (r *stubRuntime) ResolvePermission(ctx context.Context, input agentruntime.PermissionResolutionInput) error {
+	r.resolveInputs = append(r.resolveInputs, input)
+	return r.resolveErr
 }
 
 func (r *stubRuntime) Events() <-chan agentruntime.RuntimeEvent {
@@ -487,6 +494,131 @@ func TestRunAgentWorkdirForwarding(t *testing.T) {
 			t.Fatalf("expected session run to omit workdir override, got %q", runtime.runInputs[0].Workdir)
 		}
 	})
+}
+
+func TestHandlePermissionDecisionKey(t *testing.T) {
+	t.Parallel()
+
+	manager := newTestConfigManager(t)
+	runtime := newStubRuntime()
+	app, err := New(nil, manager, runtime, newTestProviderService(t, manager))
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	app.pendingPermission = &pendingPermissionPrompt{
+		RequestID: "perm-1",
+		ToolName:  "webfetch",
+	}
+
+	tests := []struct {
+		name     string
+		key      tea.KeyMsg
+		wantSent agentruntime.PermissionResolutionDecision
+		handled  bool
+	}{
+		{
+			name:     "y maps to allow once",
+			key:      tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}},
+			wantSent: agentruntime.PermissionResolutionAllowOnce,
+			handled:  true,
+		},
+		{
+			name:     "a maps to allow session",
+			key:      tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}},
+			wantSent: agentruntime.PermissionResolutionAllowSession,
+			handled:  true,
+		},
+		{
+			name:     "n maps to reject",
+			key:      tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}},
+			wantSent: agentruntime.PermissionResolutionReject,
+			handled:  true,
+		},
+		{
+			name:    "other key ignored",
+			key:     tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}},
+			handled: false,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			app.pendingPermission.Submitted = false
+			runtime.resolveInputs = nil
+
+			cmd, handled := app.handlePermissionDecisionKey(tt.key)
+			if handled != tt.handled {
+				t.Fatalf("expected handled=%v, got %v", tt.handled, handled)
+			}
+			if !tt.handled {
+				if cmd != nil {
+					t.Fatalf("expected nil cmd for unhandled key")
+				}
+				return
+			}
+			if cmd == nil {
+				t.Fatalf("expected resolve cmd")
+			}
+			msg := cmd()
+			result, ok := msg.(permissionResolveResultMsg)
+			if !ok {
+				t.Fatalf("expected permissionResolveResultMsg, got %T", msg)
+			}
+			if result.err != nil {
+				t.Fatalf("expected nil resolve error, got %v", result.err)
+			}
+			if len(runtime.resolveInputs) == 0 {
+				t.Fatalf("expected runtime resolve inputs")
+			}
+			last := runtime.resolveInputs[len(runtime.resolveInputs)-1]
+			if last.Decision != tt.wantSent {
+				t.Fatalf("expected decision %q, got %q", tt.wantSent, last.Decision)
+			}
+			if strings.TrimSpace(last.RequestID) != "perm-1" {
+				t.Fatalf("expected request id perm-1, got %q", last.RequestID)
+			}
+		})
+	}
+}
+
+func TestHandlePermissionDecisionKeyIgnoresRepeatedSubmission(t *testing.T) {
+	t.Parallel()
+
+	manager := newTestConfigManager(t)
+	runtime := newStubRuntime()
+	app, err := New(nil, manager, runtime, newTestProviderService(t, manager))
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	app.pendingPermission = &pendingPermissionPrompt{
+		RequestID: "perm-repeat",
+		ToolName:  "webfetch",
+	}
+
+	cmd, handled := app.handlePermissionDecisionKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	if !handled || cmd == nil {
+		t.Fatalf("expected first permission key to be handled with cmd")
+	}
+	msg := cmd()
+	result, ok := msg.(permissionResolveResultMsg)
+	if !ok || result.err != nil {
+		t.Fatalf("expected successful permissionResolveResultMsg, got %#v", msg)
+	}
+	if len(runtime.resolveInputs) != 1 {
+		t.Fatalf("expected one resolve call after first submission, got %d", len(runtime.resolveInputs))
+	}
+
+	cmd, handled = app.handlePermissionDecisionKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	if !handled {
+		t.Fatalf("expected repeated permission key to be consumed")
+	}
+	if cmd != nil {
+		t.Fatalf("expected repeated submission to skip runtime command")
+	}
+	if len(runtime.resolveInputs) != 1 {
+		t.Fatalf("expected resolve call count unchanged after repeat, got %d", len(runtime.resolveInputs))
+	}
 }
 
 func TestAppUpdateModelPickerAndRuntimeMessages(t *testing.T) {
