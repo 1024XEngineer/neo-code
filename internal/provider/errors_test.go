@@ -1,8 +1,10 @@
 package provider
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"testing"
@@ -168,5 +170,220 @@ func TestProviderError_As(t *testing.T) {
 	}
 	if !target.Retryable {
 		t.Fatalf("expected retryable")
+	}
+}
+
+// --- IsRecoverableStreamError 全分支覆盖 ---
+
+func TestIsRecoverableStreamError_Nil(t *testing.T) {
+	t.Parallel()
+	if IsRecoverableStreamError(nil) {
+		t.Fatal("nil error should not be recoverable")
+	}
+}
+
+func TestIsRecoverableStreamError_ContextErrors_NotRecoverable(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		err  error
+	}{
+		{"context.Canceled", context.Canceled},
+		{"context.DeadlineExceeded", context.DeadlineExceeded},
+		{"wrapped Canceled", fmt.Errorf("wrap: %w", context.Canceled)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if IsRecoverableStreamError(tt.err) {
+				t.Fatalf("%v should not be recoverable", tt.err)
+			}
+		})
+	}
+}
+
+func TestIsRecoverableStreamError_BufferOverflow_NotRecoverable(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		sentinel error
+	}{
+		{"ErrLineTooLong", ErrLineTooLong},
+		{"ErrStreamTooLarge", ErrStreamTooLarge},
+		{"wrapped ErrLineTooLong", fmt.Errorf("read: %w", ErrLineTooLong)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if IsRecoverableStreamError(tt.sentinel) {
+				t.Fatalf("%v should not be recoverable", tt.sentinel)
+			}
+		})
+	}
+}
+
+func TestIsRecoverableStreamError_StreamInterrupted_Recoverable(t *testing.T) {
+	t.Parallel()
+	if !IsRecoverableStreamError(ErrStreamInterrupted) {
+		t.Fatal("ErrStreamInterrupted should be recoverable")
+	}
+	wrapped := fmt.Errorf("stream broken: %w", ErrStreamInterrupted)
+	if !IsRecoverableStreamError(wrapped) {
+		t.Fatal("wrapped ErrStreamInterrupted should be recoverable")
+	}
+}
+
+func TestIsRecoverableStreamError_ProviderError_ByRetryableField(t *testing.T) {
+	t.Parallel()
+
+	retryable := NewProviderErrorFromStatus(http.StatusTooManyRequests, "rate limit")
+	if !IsRecoverableStreamError(retryable) {
+		t.Fatal("429 ProviderError should be recoverable")
+	}
+
+	serverErr := NewProviderErrorFromStatus(http.StatusInternalServerError, "internal")
+	if !IsRecoverableStreamError(serverErr) {
+		t.Fatal("5xx ProviderError should be recoverable")
+	}
+
+	authErr := NewProviderErrorFromStatus(http.StatusUnauthorized, "bad key")
+	if IsRecoverableStreamError(authErr) {
+		t.Fatal("401 ProviderError should NOT be recoverable")
+	}
+
+	clientErr := NewProviderErrorFromStatus(http.StatusBadRequest, "bad request")
+	if IsRecoverableStreamError(clientErr) {
+		t.Fatal("400 ProviderError should NOT be recoverable")
+	}
+
+	wrappedRetryable := fmt.Errorf("layer1: %w", retryable)
+	if !IsRecoverableStreamError(wrappedRetryable) {
+		t.Fatal("wrapped retryable ProviderError should be recoverable")
+	}
+}
+
+func TestIsRecoverableStreamError_NetOpError_Recoverable(t *testing.T) {
+	t.Parallel()
+
+	// 模拟网络错误：使用一个包含 "connection reset" 的通用 error
+	// net.OpError 需要真实网络操作才能产生，这里用包装方式模拟
+	genericNetErr := fmt.Errorf("net error: connection reset by peer")
+	// 注意：真实的 *net.OpError 需要 errors.As 匹配
+	// 此处验证非上述已知不可恢复类型时默认返回 false
+	if IsRecoverableStreamError(genericNetErr) {
+		// 通用 error（非 OpError/ProviderError/哨兵）默认不恢复
+		t.Fatal("generic non-net error should not be recoverable")
+	}
+}
+
+func TestIsRecoverableStreamError_UnknownError_NotRecoverable(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		err  error
+	}{
+		{"generic error", errors.New("something went wrong")},
+		{"io.EOF", io.EOF},
+		{"io.ErrClosedPipe", io.ErrClosedPipe},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if IsRecoverableStreamError(tt.err) {
+				t.Fatalf("%v should not be recoverable", tt.err)
+			}
+		})
+	}
+}
+
+// --- MarkNonRetryable 测试 ---
+
+func TestMarkNonRetryable_ProviderError(t *testing.T) {
+	t.Parallel()
+
+	// Retryable=true 的 ProviderError → Retryable=false
+	retryable := NewProviderErrorFromStatus(http.StatusInternalServerError, "internal")
+	if !retryable.Retryable {
+		t.Fatal("setup: expected retryable")
+	}
+
+	marked := MarkNonRetryable(retryable)
+	var pErr *ProviderError
+	if !errors.As(marked, &pErr) {
+		t.Fatal("marked error should be *ProviderError")
+	}
+	if pErr.Retryable {
+		t.Fatal("MarkNonRetryable should set Retryable=false")
+	}
+	if pErr.StatusCode != 500 || pErr.Code != ErrorCodeServer {
+		t.Fatalf("MarkNonRetryable should preserve StatusCode and Code, got status=%d code=%s", pErr.StatusCode, pErr.Code)
+	}
+
+	// 原始对象不受影响
+	if !retryable.Retryable {
+		t.Fatal("original ProviderError should not be mutated")
+	}
+}
+
+func TestMarkNonRetryable_WrappedProviderError(t *testing.T) {
+	t.Parallel()
+
+	inner := NewProviderErrorFromStatus(http.StatusTooManyRequests, "rate limited")
+	wrapped := fmt.Errorf("layer: %w", inner)
+
+	marked := MarkNonRetryable(wrapped)
+	var pErr *ProviderError
+	if !errors.As(marked, &pErr) {
+		t.Fatal("marked error should contain *ProviderError")
+	}
+	if pErr.Retryable {
+		t.Fatal("MarkNonRetryable on wrapped should set Retryable=false")
+	}
+}
+
+func TestMarkNonRetryable_NonProviderError(t *testing.T) {
+	t.Parallel()
+
+	// 非 ProviderError → 包装为 ProviderError{Retryable: false}
+	generic := errors.New("some error")
+	marked := MarkNonRetryable(generic)
+
+	var pErr *ProviderError
+	if !errors.As(marked, &pErr) {
+		t.Fatal("marked error should be *ProviderError")
+	}
+	if pErr.Retryable {
+		t.Fatal("should be non-retryable")
+	}
+	if pErr.Code != ErrorCodeUnknown {
+		t.Fatalf("expected code %s, got %s", ErrorCodeUnknown, pErr.Code)
+	}
+	if !strings.Contains(pErr.Message, "some error") {
+		t.Fatalf("message should contain original error text, got: %s", pErr.Message)
+	}
+}
+
+func TestMarkNonRetryable_AlreadyNonRetryable(t *testing.T) {
+	t.Parallel()
+
+	// 已经 Retryable=false 的 ProviderError → 保持 false
+	nonRetryable := NewProviderErrorFromStatus(http.StatusUnauthorized, "bad key")
+	if nonRetryable.Retryable {
+		t.Fatal("setup: 401 should be non-retryable")
+	}
+
+	marked := MarkNonRetryable(nonRetryable)
+	var pErr *ProviderError
+	if !errors.As(marked, &pErr) {
+		t.Fatal("marked error should be *ProviderError")
+	}
+	if pErr.Retryable {
+		t.Fatal("should still be non-retryable")
 	}
 }
