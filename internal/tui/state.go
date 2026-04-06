@@ -64,6 +64,7 @@ type pendingPermissionPrompt struct {
 	ToolName     string
 	ToolCategory string
 	Target       string
+	Submitted    bool
 }
 
 type commandMenuMeta struct {

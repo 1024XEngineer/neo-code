@@ -3,6 +3,8 @@ package tools
 import (
 	"errors"
 	"fmt"
+	"net/url"
+	"path/filepath"
 	"strings"
 	"sync"
 
@@ -127,11 +129,12 @@ func sessionPermissionActionKey(action security.Action) string {
 	return strings.Join([]string{
 		string(action.Type),
 		sessionPermissionCategory(action),
+		sessionPermissionTargetScope(action),
 	}, "|")
 }
 
 // sessionPermissionCategory 将安全动作归一为稳定的工具类别。
-// 类别用于 once/always/reject 的 session 级记忆，不再按具体 target 区分。
+// 类别用于聚合同类工具，再配合 target scope 控制最小授权范围。
 func sessionPermissionCategory(action security.Action) string {
 	resource := strings.ToLower(strings.TrimSpace(action.Payload.Resource))
 	switch action.Type {
@@ -161,4 +164,46 @@ func sessionPermissionCategory(action security.Action) string {
 		return toolName
 	}
 	return resource
+}
+
+// sessionPermissionTargetScope 基于 action 的 target 生成最小授权范围键。
+func sessionPermissionTargetScope(action security.Action) string {
+	target := strings.TrimSpace(action.Payload.Target)
+	if target == "" {
+		return "*"
+	}
+
+	switch action.Payload.TargetType {
+	case security.TargetTypeURL:
+		return normalizePermissionURLTarget(target)
+	case security.TargetTypePath:
+		return normalizePermissionPathTarget(filepath.Dir(target))
+	case security.TargetTypeDirectory:
+		return normalizePermissionPathTarget(target)
+	default:
+		return strings.ToLower(target)
+	}
+}
+
+// normalizePermissionURLTarget 将 URL 归一到 host[:port] 维度。
+func normalizePermissionURLTarget(raw string) string {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || strings.TrimSpace(parsed.Host) == "" {
+		return strings.ToLower(strings.TrimSpace(raw))
+	}
+
+	host := strings.ToLower(strings.TrimSpace(parsed.Hostname()))
+	if port := strings.TrimSpace(parsed.Port()); port != "" {
+		host += ":" + port
+	}
+	return host
+}
+
+// normalizePermissionPathTarget 统一路径分隔并按平台无关形式生成匹配键。
+func normalizePermissionPathTarget(raw string) string {
+	cleaned := filepath.Clean(strings.TrimSpace(raw))
+	if cleaned == "." || cleaned == "" {
+		return "."
+	}
+	return strings.ToLower(filepath.ToSlash(cleaned))
 }

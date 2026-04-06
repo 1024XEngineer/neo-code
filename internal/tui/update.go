@@ -116,6 +116,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, tea.Batch(cmds...)
 	case permissionResolveResultMsg:
 		if typed.err != nil {
+			if a.pendingPermission != nil && strings.EqualFold(strings.TrimSpace(a.pendingPermission.RequestID), strings.TrimSpace(typed.requestID)) {
+				a.pendingPermission.Submitted = false
+			}
 			a.state.ExecutionError = typed.err.Error()
 			a.state.StatusText = typed.err.Error()
 			a.appendActivity("permission", "Submit permission failed", typed.err.Error(), true)
@@ -1483,8 +1486,13 @@ func (a *App) handlePermissionDecisionKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 	default:
 		return nil, false
 	}
+	if a.pendingPermission.Submitted {
+		a.state.StatusText = "Permission decision already submitted, waiting runtime..."
+		return nil, true
+	}
 
 	requestID := strings.TrimSpace(a.pendingPermission.RequestID)
+	a.pendingPermission.Submitted = true
 	a.state.StatusText = "Submitting permission decision..."
 	a.state.ExecutionError = ""
 	return runResolvePermission(a.runtime, requestID, decision), true

@@ -91,6 +91,58 @@ func TestResolvePermissionSuccess(t *testing.T) {
 	}
 }
 
+func TestResolvePermissionDuplicateSubmissionIsNonBlocking(t *testing.T) {
+	t.Parallel()
+
+	service := NewWithFactory(
+		newRuntimeConfigManager(t),
+		&stubToolManager{},
+		newMemoryStore(),
+		&scriptedProviderFactory{provider: &scriptedProvider{}},
+		nil,
+	)
+
+	request := registerPendingPermission(service, permissionExecutionInput{
+		RunID:     "run-permission-dup",
+		SessionID: "session-permission-dup",
+		Call: provider.ToolCall{
+			ID:   "call-dup",
+			Name: "webfetch",
+		},
+	}, security.Action{
+		Type: security.ActionTypeRead,
+		Payload: security.ActionPayload{
+			ToolName: "webfetch",
+			Resource: "webfetch",
+		},
+	})
+	defer clearPendingPermission(service, request.RequestID)
+
+	if err := service.ResolvePermission(context.Background(), PermissionResolutionInput{
+		RequestID: request.RequestID,
+		Decision:  PermissionResolutionAllowOnce,
+	}); err != nil {
+		t.Fatalf("first ResolvePermission() error = %v", err)
+	}
+
+	secondDone := make(chan error, 1)
+	go func() {
+		secondDone <- service.ResolvePermission(context.Background(), PermissionResolutionInput{
+			RequestID: request.RequestID,
+			Decision:  PermissionResolutionAllowSession,
+		})
+	}()
+
+	select {
+	case err := <-secondDone:
+		if err != nil {
+			t.Fatalf("second ResolvePermission() error = %v", err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatalf("second ResolvePermission() should not block")
+	}
+}
+
 func TestServiceRunPermissionRejectFlow(t *testing.T) {
 	t.Parallel()
 

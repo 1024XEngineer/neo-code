@@ -544,6 +544,9 @@ func TestHandlePermissionDecisionKey(t *testing.T) {
 	for _, tt := range tests {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
+			app.pendingPermission.Submitted = false
+			runtime.resolveInputs = nil
+
 			cmd, handled := app.handlePermissionDecisionKey(tt.key)
 			if handled != tt.handled {
 				t.Fatalf("expected handled=%v, got %v", tt.handled, handled)
@@ -576,6 +579,45 @@ func TestHandlePermissionDecisionKey(t *testing.T) {
 				t.Fatalf("expected request id perm-1, got %q", last.RequestID)
 			}
 		})
+	}
+}
+
+func TestHandlePermissionDecisionKeyIgnoresRepeatedSubmission(t *testing.T) {
+	t.Parallel()
+
+	manager := newTestConfigManager(t)
+	runtime := newStubRuntime()
+	app, err := New(nil, manager, runtime, newTestProviderService(t, manager))
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	app.pendingPermission = &pendingPermissionPrompt{
+		RequestID: "perm-repeat",
+		ToolName:  "webfetch",
+	}
+
+	cmd, handled := app.handlePermissionDecisionKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	if !handled || cmd == nil {
+		t.Fatalf("expected first permission key to be handled with cmd")
+	}
+	msg := cmd()
+	result, ok := msg.(permissionResolveResultMsg)
+	if !ok || result.err != nil {
+		t.Fatalf("expected successful permissionResolveResultMsg, got %#v", msg)
+	}
+	if len(runtime.resolveInputs) != 1 {
+		t.Fatalf("expected one resolve call after first submission, got %d", len(runtime.resolveInputs))
+	}
+
+	cmd, handled = app.handlePermissionDecisionKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	if !handled {
+		t.Fatalf("expected repeated permission key to be consumed")
+	}
+	if cmd != nil {
+		t.Fatalf("expected repeated submission to skip runtime command")
+	}
+	if len(runtime.resolveInputs) != 1 {
+		t.Fatalf("expected resolve call count unchanged after repeat, got %d", len(runtime.resolveInputs))
 	}
 }
 

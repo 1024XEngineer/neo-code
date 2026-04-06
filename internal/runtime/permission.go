@@ -43,6 +43,7 @@ type pendingPermissionRequest struct {
 	Call      provider.ToolCall
 	Action    security.Action
 	ResultCh  chan PermissionResolutionDecision
+	Submitted bool
 }
 
 var runtimePendingPermissions = struct {
@@ -63,19 +64,31 @@ func (s *Service) ResolvePermission(ctx context.Context, input PermissionResolut
 	if decision == "" {
 		return fmt.Errorf("runtime: unsupported permission decision %q", input.Decision)
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 
 	runtimePendingPermissions.mu.Lock()
 	pending := runtimePendingPermissions.byRun[s]
-	runtimePendingPermissions.mu.Unlock()
 	if pending == nil || pending.RequestID != requestID {
+		runtimePendingPermissions.mu.Unlock()
 		return fmt.Errorf("runtime: permission request %q not found", requestID)
 	}
-
-	select {
-	case pending.ResultCh <- decision:
+	// Submitted 标记用于避免重复提交同一个 request 导致阻塞。
+	if pending.Submitted {
+		runtimePendingPermissions.mu.Unlock()
 		return nil
-	case <-ctx.Done():
-		return ctx.Err()
+	}
+	pending.Submitted = true
+	resultCh := pending.ResultCh
+	runtimePendingPermissions.mu.Unlock()
+
+	// 非阻塞提交，避免 UI 重复触发导致写满 channel 后长时间卡住。
+	select {
+	case resultCh <- decision:
+		return nil
+	default:
+		return nil
 	}
 }
 
@@ -176,18 +189,17 @@ func (s *Service) awaitPermissionDecision(
 	defer clearPendingPermission(s, request.RequestID)
 
 	s.emit(ctx, EventPermissionRequest, input.RunID, input.SessionID, PermissionRequestPayload{
-		RequestID:     request.RequestID,
-		ToolCallID:    input.Call.ID,
-		ToolName:      input.Call.Name,
-		ToolCategory:  permissionToolCategory(permissionErr.Action()),
-		ActionType:    string(permissionErr.Action().Type),
-		Operation:     permissionErr.Action().Payload.Operation,
-		TargetType:    string(permissionErr.Action().Payload.TargetType),
-		Target:        permissionErr.Action().Payload.Target,
-		Decision:      permissionErr.Decision(),
-		Reason:        permissionErr.Reason(),
-		RuleID:        permissionErr.RuleID(),
-		RememberScope: string(tools.SessionPermissionScopeAlways),
+		RequestID:    request.RequestID,
+		ToolCallID:   input.Call.ID,
+		ToolName:     input.Call.Name,
+		ToolCategory: permissionToolCategory(permissionErr.Action()),
+		ActionType:   string(permissionErr.Action().Type),
+		Operation:    permissionErr.Action().Payload.Operation,
+		TargetType:   string(permissionErr.Action().Payload.TargetType),
+		Target:       permissionErr.Action().Payload.Target,
+		Decision:     permissionErr.Decision(),
+		Reason:       permissionErr.Reason(),
+		RuleID:       permissionErr.RuleID(),
 	})
 
 	select {

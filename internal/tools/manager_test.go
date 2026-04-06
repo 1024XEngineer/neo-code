@@ -643,7 +643,7 @@ func TestDefaultManagerSessionPermissionMemory(t *testing.T) {
 		readInput := ToolCallInput{
 			ID:        "call-read",
 			Name:      "filesystem_read_file",
-			Arguments: []byte(`{"path":"README.md"}`),
+			Arguments: []byte(`{"path":"internal/README.md"}`),
 			SessionID: sessionID,
 		}
 		grepInput := ToolCallInput{

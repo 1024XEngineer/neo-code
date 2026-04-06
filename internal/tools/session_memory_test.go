@@ -203,9 +203,81 @@ func TestSessionPermissionCategoryAndActionKey(t *testing.T) {
 			}
 
 			key := sessionPermissionActionKey(tt.action)
-			if !strings.HasSuffix(key, "|"+tt.expected) {
-				t.Fatalf("sessionPermissionActionKey() = %q, expected suffix %q", key, "|"+tt.expected)
+			if !strings.Contains(key, "|"+tt.expected+"|") {
+				t.Fatalf("sessionPermissionActionKey() = %q, expected category token %q", key, "|"+tt.expected+"|")
 			}
 		})
+	}
+}
+
+func TestSessionPermissionMemoryResolveRequiresTargetScopeMatch(t *testing.T) {
+	t.Parallel()
+
+	memory := newSessionPermissionMemory()
+	sessionID := "session-target-scope"
+
+	webAction := security.Action{
+		Type: security.ActionTypeRead,
+		Payload: security.ActionPayload{
+			ToolName:   "webfetch",
+			Resource:   "webfetch",
+			TargetType: security.TargetTypeURL,
+			Target:     "https://docs.github.com/en/rest",
+		},
+	}
+	if err := memory.remember(sessionID, webAction, SessionPermissionScopeAlways); err != nil {
+		t.Fatalf("remember web action: %v", err)
+	}
+
+	sameHost := security.Action{
+		Type: security.ActionTypeRead,
+		Payload: security.ActionPayload{
+			ToolName:   "webfetch",
+			Resource:   "webfetch",
+			TargetType: security.TargetTypeURL,
+			Target:     "https://docs.github.com/en/actions",
+		},
+	}
+	if _, _, ok := memory.resolve(sessionID, sameHost); !ok {
+		t.Fatalf("expected same host/path scope web action to hit memory")
+	}
+
+	differentHost := security.Action{
+		Type: security.ActionTypeRead,
+		Payload: security.ActionPayload{
+			ToolName:   "webfetch",
+			Resource:   "webfetch",
+			TargetType: security.TargetTypeURL,
+			Target:     "https://example.com/en/actions",
+		},
+	}
+	if _, _, ok := memory.resolve(sessionID, differentHost); ok {
+		t.Fatalf("expected different host web action to miss memory")
+	}
+
+	fileAction := security.Action{
+		Type: security.ActionTypeRead,
+		Payload: security.ActionPayload{
+			ToolName:   "filesystem_read_file",
+			Resource:   "filesystem_read_file",
+			TargetType: security.TargetTypePath,
+			Target:     "src/main.go",
+		},
+	}
+	if err := memory.remember(sessionID, fileAction, SessionPermissionScopeAlways); err != nil {
+		t.Fatalf("remember file action: %v", err)
+	}
+
+	otherFile := security.Action{
+		Type: security.ActionTypeRead,
+		Payload: security.ActionPayload{
+			ToolName:   "filesystem_read_file",
+			Resource:   "filesystem_read_file",
+			TargetType: security.TargetTypePath,
+			Target:     "secrets/secret.key",
+		},
+	}
+	if _, _, ok := memory.resolve(sessionID, otherFile); ok {
+		t.Fatalf("expected different path file action to miss memory")
 	}
 }

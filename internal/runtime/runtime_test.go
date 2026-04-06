@@ -743,6 +743,9 @@ waitRequest:
 	if strings.TrimSpace(requestPayload.RequestID) == "" {
 		t.Fatalf("expected non-empty permission request id")
 	}
+	if strings.TrimSpace(requestPayload.RememberScope) != "" {
+		t.Fatalf("expected empty remember scope for permission_request, got %q", requestPayload.RememberScope)
+	}
 	if requestPayload.ToolName != "webfetch" || requestPayload.Decision != "ask" {
 		t.Fatalf("unexpected permission request payload: %+v", requestPayload)
 	}
