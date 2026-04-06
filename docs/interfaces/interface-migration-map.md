@@ -1,7 +1,8 @@
 ﻿# interface-migration-map
 
 > 状态：V2 Draft（语义收敛版）  
-> 更新日期：2026-04-06
+> 更新日期：2026-04-06  
+> 迁移方向：`docs/interfaces` -> `docs/architecture`（逐步替代）
 
 ## 1. 状态定义
 
@@ -20,7 +21,17 @@
 | `SetWorkdir` | `Runtime.SetSessionWorkdir(...)` | `Runtime.SetSessionWorkdir(...)` | Current | 会话级工作目录映射。 |
 | `TerminalState` | 无独立接口 | `TerminalEventGate` | Proposed | 终态唯一性门禁是目标态设计。 |
 
-## 3. Context 侧映射
+## 3. Session 侧映射
+
+| 旧协商名 | 当前项目名 | V2 定名 | 状态 | 说明 |
+|---|---|---|---|---|
+| `SessionManager.GetHistory(sessionID)` | `Store.Load(ctx, id)` | `Store.Load(ctx, id)` | Current | 当前按会话 ID 加载完整快照。 |
+| `SessionManager.AppendMessage(...)` | runtime 内部拼装后 `Store.Save(...)` | `Runtime + Store.Save` | Deprecated | 追加语义已收敛为整会话保存。 |
+| `SessionManager.List()` | `Store.ListSummaries(ctx)` | `Store.ListSummaries(ctx)` | Current | 当前按更新时间倒序返回摘要。 |
+| `SessionRuntimeStateStore` | 无独立接口 | `SessionRuntimeStateStore` | Proposed | 运行态拆分能力尚未落地。 |
+| `ArchiveStore` | 无独立接口 | `ArchiveStore` | Proposed | 归档与 compact 联动属于目标态。 |
+
+## 4. Context 侧映射
 
 | 旧协商名 | 当前项目名 | V2 定名 | 状态 | 说明 |
 |---|---|---|---|---|
@@ -29,7 +40,7 @@
 | `BuildInput(messages, metadata)` | `BuildInput{Messages, Metadata}` | `BuildInput + LoopState/TokenBudget/WorkspaceMap/TaskScope` | Proposed | 扩展字段尚未落地。 |
 | `ContextMessage` | `provider.Message` | `provider.Message` | Current | 继续复用 provider 消息结构。 |
 
-## 4. Provider 侧映射
+## 5. Provider 侧映射
 
 | 旧协商名 | 当前项目名 | V2 定名 | 状态 | 说明 |
 |---|---|---|---|---|
@@ -38,7 +49,7 @@
 | `IsContextTooLong(err)` | 无统一公开接口 | `ErrorClassifier.IsContextOverflow(err)` | Proposed | 目标态统一错误归一化。 |
 | `ProviderError(kind)` | `ProviderError{Code, Retryable}` | `ProviderError + context_overflow` | Proposed | context_overflow 错误码尚未稳定落地。 |
 
-## 5. Tools 侧映射
+## 6. Tools 侧映射
 
 | 旧协商名 | 当前项目名 | V2 定名 | 状态 | 说明 |
 |---|---|---|---|---|
@@ -47,7 +58,7 @@
 | `ToolExecutor.SpawnSubAgent(...)` | 无公开接口 | `SubAgentOrchestrator.Spawn/Wait/Cancel` | Proposed | 子 Agent 扩展未落地。 |
 | `NeedApproval` 布尔返回 | `PermissionDecisionError + permission 事件` | 交互式审批闭环 | Proposed | 当前为 runtime 内部顺序事件，不是交互式确认。 |
 
-## 6. Config 侧映射
+## 7. Config 侧映射
 
 | 旧协商名 | 当前项目名 | V2 定名 | 状态 | 说明 |
 |---|---|---|---|---|
@@ -56,7 +67,7 @@
 | `ConfigRegistry.OnConfigChange(callback)` | 无稳定监听接口 | `Registry.Watch(fn)` | Proposed | 热更新监听未落地。 |
 | `ConfigRegistry.UpdateConfig` | `Manager.Update(ctx, mutate)` | `Registry.Update(ctx, mutate)` | Current | 当前已有事务式更新。 |
 
-## 7. Gateway 与协议映射
+## 8. Gateway 与协议映射
 
 | 旧协商名 | 当前项目名 | V2 定名 | 状态 | 说明 |
 |---|---|---|---|---|
@@ -64,7 +75,7 @@
 | `/ws`（泛称） | 暂无稳定公共网关实现 | `/ws/chat` | Proposed | 路径规范属于目标态。 |
 | `POST /compact`（草案） | TUI 调 `Runtime.Compact` | `POST /api/compact -> Runtime.Compact` | Proposed | HTTP 入口未落地。 |
 
-## 8. Compact 与审批冲突收敛
+## 9. 冲突语义收敛
 
 - `compact_start`：
   - Current：字符串 payload。
@@ -76,8 +87,8 @@
   - Current：不存在自动触发链路。
   - Proposed：预算驱动自动触发。
 
-## 9. 迁移优先级
+## 10. 文档迁移计划
 
-1. 先保证文档消费者按 Current 行为可联调。  
-2. 再推进 reactive 自动恢复与单次重试门禁。  
-3. 最后补 Gateway 与交互式审批闭环。  
+1. 先把各模块契约沉淀到 `docs/architecture/<module>/README.md + interface.go`。  
+2. 再将 `docs/interfaces` 逐步降级为迁移索引与兼容说明。  
+3. `docs/session-persistence-design.md` 的核心内容优先迁移到 `docs/architecture/session/*`。  
