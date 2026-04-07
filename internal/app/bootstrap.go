@@ -12,6 +12,7 @@ import (
 	providercatalog "neo-code/internal/provider/catalog"
 	agentruntime "neo-code/internal/runtime"
 	"neo-code/internal/security"
+	agentsession "neo-code/internal/session"
 	"neo-code/internal/tools"
 	"neo-code/internal/tools/bash"
 	"neo-code/internal/tools/filesystem"
@@ -56,13 +57,16 @@ func NewProgram(ctx context.Context) (*tea.Program, error) {
 
 	cfg := manager.Get()
 
-	toolRegistry := buildToolRegistry(cfg)
+	toolRegistry, err := buildToolRegistry(cfg)
+	if err != nil {
+		return nil, err
+	}
 	toolManager, err := buildToolManager(toolRegistry)
 	if err != nil {
 		return nil, err
 	}
 
-	sessionStore := agentruntime.NewSessionStore(loader.BaseDir())
+	sessionStore := agentsession.NewStore(loader.BaseDir())
 	runtimeSvc := agentruntime.NewWithFactory(
 		manager,
 		toolManager,
@@ -82,7 +86,7 @@ func NewProgram(ctx context.Context) (*tea.Program, error) {
 	), nil
 }
 
-func buildToolRegistry(cfg config.Config) *tools.Registry {
+func buildToolRegistry(cfg config.Config) (*tools.Registry, error) {
 	toolRegistry := tools.NewRegistry()
 	toolRegistry.Register(filesystem.New(cfg.Workdir))
 	toolRegistry.Register(filesystem.NewWrite(cfg.Workdir))
@@ -95,7 +99,14 @@ func buildToolRegistry(cfg config.Config) *tools.Registry {
 		MaxResponseBytes:      cfg.Tools.WebFetch.MaxResponseBytes,
 		SupportedContentTypes: cfg.Tools.WebFetch.SupportedContentTypes,
 	}))
-	return toolRegistry
+	mcpRegistry, err := buildMCPRegistry(cfg)
+	if err != nil {
+		return nil, err
+	}
+	if mcpRegistry != nil {
+		toolRegistry.SetMCPRegistry(mcpRegistry)
+	}
+	return toolRegistry, nil
 }
 
 func buildToolManager(registry *tools.Registry) (tools.Manager, error) {

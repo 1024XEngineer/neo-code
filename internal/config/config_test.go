@@ -471,6 +471,47 @@ func TestConfigValidateFailures(t *testing.T) {
 			}(),
 			expectErr: "duplicate provider endpoint",
 		},
+		{
+			name: "invalid mcp duplicate server id",
+			config: func() *Config {
+				cfg := validConfig.Clone()
+				cfg.Tools.MCP.Servers = []MCPServerConfig{
+					{ID: "docs", Enabled: true, Stdio: MCPStdioConfig{Command: "cmd-1"}},
+					{ID: "docs", Enabled: true, Stdio: MCPStdioConfig{Command: "cmd-2"}},
+				}
+				return &cfg
+			}(),
+			expectErr: "duplicate servers",
+		},
+		{
+			name: "invalid mcp source",
+			config: func() *Config {
+				cfg := validConfig.Clone()
+				cfg.Tools.MCP.Servers = []MCPServerConfig{
+					{ID: "docs", Enabled: true, Source: "sse", Stdio: MCPStdioConfig{Command: "cmd"}},
+				}
+				return &cfg
+			}(),
+			expectErr: "not supported",
+		},
+		{
+			name: "invalid mcp env binding",
+			config: func() *Config {
+				cfg := validConfig.Clone()
+				cfg.Tools.MCP.Servers = []MCPServerConfig{
+					{
+						ID:      "docs",
+						Enabled: true,
+						Stdio:   MCPStdioConfig{Command: "cmd"},
+						Env: []MCPEnvVarConfig{
+							{Name: "TOKEN", Value: "a", ValueEnv: "TOKEN_ENV"},
+						},
+					},
+				}
+				return &cfg
+			}(),
+			expectErr: "exactly one of value/value_env",
+		},
 	}
 
 	for _, tt := range tests {
@@ -482,6 +523,34 @@ func TestConfigValidateFailures(t *testing.T) {
 				t.Fatalf("expected error containing %q, got %v", tt.expectErr, err)
 			}
 		})
+	}
+}
+
+func TestMCPConfigApplyDefaultsAndClone(t *testing.T) {
+	t.Parallel()
+
+	cfg := MCPConfig{
+		Servers: []MCPServerConfig{
+			{
+				ID:      " Docs ",
+				Enabled: true,
+				Source:  "",
+				Stdio: MCPStdioConfig{
+					Command: "mock",
+					Args:    []string{"a"},
+				},
+			},
+		},
+	}
+	cfg.ApplyDefaults(defaultMCPConfig())
+	if cfg.Servers[0].Source != "stdio" {
+		t.Fatalf("expected default source stdio, got %q", cfg.Servers[0].Source)
+	}
+
+	cloned := cfg.Clone()
+	cloned.Servers[0].Stdio.Args[0] = "b"
+	if cfg.Servers[0].Stdio.Args[0] == "b" {
+		t.Fatalf("expected MCP clone to be independent")
 	}
 }
 

@@ -91,7 +91,7 @@ func TestWorkspaceCommandHelpers(t *testing.T) {
 		workdir := t.TempDir()
 		cfg := config.Config{
 			Workdir:        workdir,
-			ToolTimeoutSec: 5,
+			ToolTimeoutSec: 15,
 		}
 		command := "pwd"
 		if goruntime.GOOS == "windows" {

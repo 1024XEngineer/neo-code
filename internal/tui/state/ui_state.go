@@ -1,6 +1,6 @@
 package state
 
-import agentruntime "neo-code/internal/runtime"
+import agentsession "neo-code/internal/session"
 
 // Panel 定义 TUI 中可聚焦的主面板。
 type Panel int
@@ -24,7 +24,7 @@ const (
 
 // UIState 保存顶层界面状态快照，仅作为数据容器使用。
 type UIState struct {
-	Sessions           []agentruntime.SessionSummary
+	Sessions           []agentsession.Summary
 	ActiveSessionID    string
 	ActiveSessionTitle string
 	ActiveRunID        string

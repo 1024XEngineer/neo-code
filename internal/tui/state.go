@@ -10,7 +10,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	agentruntime "neo-code/internal/runtime"
+	agentsession "neo-code/internal/session"
 )
 
 type panel int
@@ -32,7 +32,7 @@ const (
 )
 
 type UIState struct {
-	Sessions           []agentruntime.SessionSummary
+	Sessions           []agentsession.Summary
 	ActiveSessionID    string
 	ActiveSessionTitle string
 	InputText          string
@@ -142,7 +142,7 @@ func (d commandMenuDelegate) Render(w io.Writer, m list.Model, index int, item l
 }
 
 type sessionItem struct {
-	Summary agentruntime.SessionSummary
+	Summary agentsession.Summary
 	Active  bool
 }
 

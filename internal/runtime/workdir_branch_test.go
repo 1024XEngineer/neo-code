@@ -6,30 +6,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	agentsession "neo-code/internal/session"
 )
-
-func TestSessionWorkdirKeyAndMemoryMap(t *testing.T) {
-	t.Parallel()
-
-	serviceA := &Service{}
-	serviceB := &Service{}
-
-	keyA := serviceA.sessionWorkdirKey("session-1")
-	keyB := serviceB.sessionWorkdirKey("session-1")
-	if keyA == keyB {
-		t.Fatalf("expected unique key per service instance, got %q", keyA)
-	}
-
-	if got := serviceA.sessionWorkdir("session-1", "/fallback"); got != "/fallback" {
-		t.Fatalf("expected fallback workdir, got %q", got)
-	}
-
-	target := t.TempDir()
-	serviceA.setSessionWorkdir("session-1", target)
-	if got := serviceA.sessionWorkdir("session-1", "/fallback"); got != target {
-		t.Fatalf("expected mapped workdir %q, got %q", target, got)
-	}
-}
 
 func TestResolveWorkdirForSessionAndNormalizeErrors(t *testing.T) {
 	t.Parallel()
@@ -82,7 +61,7 @@ func TestLoadSessionUsesFallbackWorkdirWhenMemoryMissing(t *testing.T) {
 
 	manager := newRuntimeConfigManager(t)
 	store := newMemoryStore()
-	session := newSession("fallback")
+	session := agentsession.New("fallback")
 	session.Workdir = t.TempDir()
 	store.sessions[session.ID] = cloneSession(session)
 
