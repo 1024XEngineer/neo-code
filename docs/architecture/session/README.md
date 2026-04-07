@@ -1,45 +1,180 @@
-﻿# Session 模块
+﻿# Session 模块设计与接口文档
 
-## 角色定位
+> 文档版本：v2.0
+> 文档定位：详细设计文档（LLD）+ 接口文档（API/Contract）
 
-Session 模块定义会话状态的持久化边界，负责：
+## 规范词约定
 
-- 会话完整快照保存（消息、标题、时间戳、模型元信息）。
-- 会话加载与摘要列表读取。
-- 会话级元信息承载（如 provider/model、运行期 workdir 关联）。
+- `MUST`：必须满足的架构契约。
+- `SHOULD`：强烈建议遵循，若例外必须记录原因。
+- `MAY`：可选增强能力。
 
-## [CURRENT] 实现基线
+## 1. 详细设计（LLD）
 
-- 当前基线类型位于 runtime：`Session`、`SessionSummary`、`Store`、`JSONSessionStore`。
-- 当前持久化语义：基于 JSON 文件落盘，按会话维度读写。
-- 当前 runtime 依赖 session 契约做统一状态管理，不在 TUI 散落保存聊天状态。
+### 1.1 目的与范围
 
-### [CURRENT] 关键行为
+Session 模块定义会话持久化边界，负责快照保存、会话恢复、摘要查询与可选运行态扩展存储。
 
-- `Save`：整会话覆盖保存，使用临时文件替换保证写入完整性。
-- `Load`：按 `session_id` 读取完整会话。
-- `ListSummaries`：读取摘要并按 `updated_at` 倒序。
-- `Workdir`：会话运行期映射由 runtime 维护，会话结构保留关联语义。
+Session 模块 MUST 覆盖：
 
-## [PROPOSED] 目标态扩展
+- 会话完整快照写入。
+- 会话按标识加载。
+- 会话摘要列表查询。
 
-- `[PROPOSED][NOT IMPLEMENTED YET]` 会话运行态拆分：将易变运行态与持久快照解耦。
-- `[PROPOSED][NOT IMPLEMENTED YET]` 可插拔存储后端：文件、SQLite、远端服务。
-- `[PROPOSED][NOT IMPLEMENTED YET]` 会话归档与 compact transcript 联动，支持生命周期治理。
-- `[PROPOSED][NOT IMPLEMENTED YET]` 统一可观测字段（例如 token 汇总、最后终态事件）。
+Session 模块 MUST NOT 覆盖：
 
-## 与 Runtime 的接口关系
+- 主循环编排决策（由 Runtime 负责）。
+- 上下文组装与压缩策略（由 Context 负责）。
+- 模型调用与协议处理（由 Provider 负责）。
 
-- Runtime 只通过 Session 契约读写状态：`Save/Load/ListSummaries`。
-- Runtime 负责决定写入时机与一致性边界；Session 只负责存储语义。
-- TUI 不应直接写 session 存储，避免出现双写与时序冲突。
+### 1.2 架构链路定位
 
-## 联调注意事项
+- Session 的直接调用方 MUST 是 Runtime。
+- Client 不得直接读写 Session 存储。
+- 在系统单入口模型中，路径为 `Client -> Gateway -> Runtime <-> Session`。
 
-- 当前会话数据写入是“回合内关键节点保存”，不是每个 UI 字符输入实时持久化。
-- `compact` 触发前后会发生会话消息重写，消费者需按事件时序刷新视图。
-- 当前没有独立的“运行态存储接口”，相关能力属于目标态。
+### 1.3 模块边界
 
-## 迁移来源
+- 上游：Runtime。
+- 下游：文件存储或其他可插拔存储后端。
+- 边界约束：Session 仅负责存储语义，不持有编排逻辑。
 
-- `docs/session-persistence-design.md` 的持久化策略与边界说明，逐步迁移到本模块文档与契约文件。
+### 1.4 核心流程
+
+#### 1.4.1 Save 流程
+
+```mermaid
+sequenceDiagram
+    participant RT as Runtime
+    participant SS as Session.Store
+    participant FS as Storage
+
+    RT->>SS: Save(ctx, *Session)
+    SS->>FS: atomic write snapshot
+    FS-->>SS: ok/error
+    SS-->>RT: nil/error
+```
+
+#### 1.4.2 Load 流程
+
+```mermaid
+sequenceDiagram
+    participant RT as Runtime
+    participant SS as Session.Store
+    participant FS as Storage
+
+    RT->>SS: Load(ctx, session_id)
+    SS->>FS: read snapshot
+    FS-->>SS: json bytes
+    SS-->>RT: Session / error
+```
+
+#### 1.4.3 List 流程
+
+```mermaid
+sequenceDiagram
+    participant RT as Runtime
+    participant SS as Session.Store
+    participant FS as Storage
+
+    RT->>SS: ListSummaries(ctx)
+    SS->>FS: scan session files
+    SS-->>RT: []SessionSummary / error
+```
+
+### 1.5 一致性与并发语义
+
+- 同一会话写入 SHOULD 串行化，避免覆盖冲突。
+- 多会话并发读取 MUST 线程安全。
+- 快照写入 SHOULD 具备原子性与完整性保障。
+
+### 1.6 非功能约束
+
+- 可观测性：Session 错误 SHOULD 可被 Runtime 统一记录。
+- 可恢复性：读取失败 MUST 保持错误可诊断，不得吞错。
+- 可扩展性：扩展接口 MUST 不破坏 `Store` 基础签名。
+
+## 2. 接口文档（API/Contract）
+
+### 2.1 公共规范
+
+- 所有方法 MUST 接收 `context.Context`。
+- 会话写入 MUST 以完整快照为单位。
+- 错误 MUST 原样返回，由 Runtime 决策后续动作。
+
+### 2.2 接口目录
+
+| 接口 | 职责 |
+|---|---|
+| `Store` | 快照保存、会话加载、摘要查询 |
+| `SessionRuntimeStateStore` | 运行态快照保存与恢复 |
+| `ArchiveStore` | 会话归档扩展 |
+
+### 2.3 关键类型目录
+
+| 类型 | 说明 |
+|---|---|
+| `Session` | 完整会话快照 |
+| `SessionSummary` | 会话摘要视图 |
+| `RuntimeState` | 运行态扩展快照 |
+
+### 2.4 跨层契约绑定
+
+| 链路 | 输入契约 | 输出契约 | 说明 |
+|---|---|---|---|
+| `Runtime -> Session`（保存） | `session.Session` | `error` | 回合关键节点落盘 |
+| `Runtime -> Session`（加载） | `session.Store.Load(id)` | `session.Session` | 会话恢复 |
+| `Runtime -> Session`（列表） | `session.Store.ListSummaries()` | `[]session.SessionSummary` | 会话导航数据 |
+
+### 2.5 JSON 示例
+
+#### 2.5.1 Session 快照示例
+
+```json
+{
+  "id": "sess_123",
+  "title": "修复 provider 超时",
+  "provider": "openai",
+  "model": "gpt-4.1",
+  "workdir": "C:/workspace/demo",
+  "messages": [
+    {"role": "user", "parts": [{"type": "text", "text": "帮我排查超时问题"}]}
+  ]
+}
+```
+
+#### 2.5.2 摘要列表示例
+
+```json
+[
+  {
+    "id": "sess_123",
+    "title": "修复 provider 超时",
+    "created_at": "2026-04-07T10:20:30Z",
+    "updated_at": "2026-04-07T11:02:15Z"
+  }
+]
+```
+
+#### 2.5.3 失败示例
+
+```json
+{
+  "code": "session_store_write_failed",
+  "message": "atomic rename failed: access denied"
+}
+```
+
+### 2.6 变更规则
+
+- 字段新增 MUST 保持向后兼容。
+- 字段改名/删除 MUST 经过版本化流程并提供迁移窗口。
+- 扩展接口 SHOULD 通过新增接口演进，不破坏 `Store` 稳定签名。
+
+## 3. 评审检查清单
+
+- 是否包含 Save/Load/List 全流程说明。
+- 是否明确 Runtime 为唯一直接调用方。
+- 是否提供成功与失败 JSON 示例。
+- 是否定义并发与一致性语义。
+- 是否与 `session/interface.go` 类型名完全一致。
