@@ -1,4 +1,4 @@
-package runtime
+package session
 
 import (
 	"context"
@@ -17,6 +17,8 @@ import (
 
 const sessionsDirName = "sessions"
 
+// Session 表示单个会话的持久化模型，包含基础元数据与消息历史。
+// Provider / Model 用于在 compact 等流程中优先复用会话最近一次成功运行的模型配置。
 type Session struct {
 	ID    string `json:"id"`
 	Title string `json:"title"`
@@ -30,71 +32,78 @@ type Session struct {
 	Messages  []providertypes.Message `json:"messages"`
 }
 
-type SessionSummary struct {
+// Summary 表示会话列表视图所需的轻量摘要信息。
+type Summary struct {
 	ID        string    `json:"id"`
 	Title     string    `json:"title"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
+// Store 定义会话持久化抽象。
 type Store interface {
 	Save(ctx context.Context, session *Session) error
 	Load(ctx context.Context, id string) (Session, error)
-	ListSummaries(ctx context.Context) ([]SessionSummary, error)
+	ListSummaries(ctx context.Context) ([]Summary, error)
 }
 
-type JSONSessionStore struct {
+// JSONStore 是基于 JSON 文件的会话存储实现。
+type JSONStore struct {
 	mu      sync.RWMutex
 	baseDir string
 }
 
-func NewJSONSessionStore(baseDir string) *JSONSessionStore {
-	return &JSONSessionStore{
+// NewJSONStore 创建 JSONStore，实际会话目录为 {baseDir}/sessions。
+func NewJSONStore(baseDir string) *JSONStore {
+	return &JSONStore{
 		baseDir: filepath.Join(baseDir, sessionsDirName),
 	}
 }
 
-func NewSessionStore(baseDir string) *JSONSessionStore {
-	return NewJSONSessionStore(baseDir)
+// NewStore 返回默认会话存储实现（当前为 JSONStore）。
+func NewStore(baseDir string) *JSONStore {
+	return NewJSONStore(baseDir)
 }
 
-func (s *JSONSessionStore) Save(ctx context.Context, session *Session) error {
+// Save 持久化会话到 JSON 文件，采用临时文件 + 原子替换策略。
+func (s *JSONStore) Save(ctx context.Context, session *Session) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	if session == nil {
-		return errors.New("runtime: session is nil")
+		return errors.New("session: session is nil")
 	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if err := os.MkdirAll(s.baseDir, 0o755); err != nil {
-		return fmt.Errorf("runtime: create sessions dir: %w", err)
+		return fmt.Errorf("session: create sessions dir: %w", err)
 	}
 
 	payload, err := json.MarshalIndent(session, "", "  ")
 	if err != nil {
-		return fmt.Errorf("runtime: marshal session: %w", err)
+		return fmt.Errorf("session: marshal session: %w", err)
 	}
 	payload = append(payload, '\n')
 
 	target := s.filePath(session.ID)
 	temp := target + ".tmp"
 	if err := os.WriteFile(temp, payload, 0o644); err != nil {
-		return fmt.Errorf("runtime: write temp session: %w", err)
+		return fmt.Errorf("session: write temp session: %w", err)
 	}
 	if err := os.Remove(target); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("runtime: replace session file: %w", err)
+		return fmt.Errorf("session: replace session file: %w", err)
 	}
 	if err := os.Rename(temp, target); err != nil {
-		return fmt.Errorf("runtime: commit session file: %w", err)
+		return fmt.Errorf("session: commit session file: %w", err)
 	}
 
 	return nil
 }
 
-func (s *JSONSessionStore) Load(ctx context.Context, id string) (Session, error) {
+// Load 读取并反序列化指定 ID 的会话文件。
+func (s *JSONStore) Load(ctx context.Context, id string) (Session, error) {
 	if err := ctx.Err(); err != nil {
 		return Session{}, err
 	}
@@ -109,12 +118,13 @@ func (s *JSONSessionStore) Load(ctx context.Context, id string) (Session, error)
 
 	var session Session
 	if err := json.Unmarshal(data, &session); err != nil {
-		return Session{}, fmt.Errorf("runtime: decode session %s: %w", id, err)
+		return Session{}, fmt.Errorf("session: decode session %s: %w", id, err)
 	}
 	return session, nil
 }
 
-func (s *JSONSessionStore) ListSummaries(ctx context.Context) ([]SessionSummary, error) {
+// ListSummaries 列出所有会话摘要，并按 UpdatedAt 倒序返回。
+func (s *JSONStore) ListSummaries(ctx context.Context) ([]Summary, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -123,15 +133,15 @@ func (s *JSONSessionStore) ListSummaries(ctx context.Context) ([]SessionSummary,
 	defer s.mu.RUnlock()
 
 	if err := os.MkdirAll(s.baseDir, 0o755); err != nil {
-		return nil, fmt.Errorf("runtime: create sessions dir: %w", err)
+		return nil, fmt.Errorf("session: create sessions dir: %w", err)
 	}
 
 	entries, err := os.ReadDir(s.baseDir)
 	if err != nil {
-		return nil, fmt.Errorf("runtime: list sessions dir: %w", err)
+		return nil, fmt.Errorf("session: list sessions dir: %w", err)
 	}
 
-	summaries := make([]SessionSummary, 0, len(entries))
+	summaries := make([]Summary, 0, len(entries))
 	for _, entry := range entries {
 		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
 			continue
@@ -148,7 +158,7 @@ func (s *JSONSessionStore) ListSummaries(ctx context.Context) ([]SessionSummary,
 			continue
 		}
 
-		var summary SessionSummary
+		var summary Summary
 		if err := json.Unmarshal(data, &summary); err != nil {
 			continue
 		}
@@ -165,18 +175,21 @@ func (s *JSONSessionStore) ListSummaries(ctx context.Context) ([]SessionSummary,
 	return summaries, nil
 }
 
-func (s *JSONSessionStore) filePath(id string) string {
+// filePath 生成会话 ID 对应的 JSON 文件路径。
+func (s *JSONStore) filePath(id string) string {
 	return filepath.Join(s.baseDir, id+".json")
 }
 
-func newSession(title string) Session {
-	return newSessionWithWorkdir(title, "")
+// New 创建一个默认标题策略的新会话对象。
+func New(title string) Session {
+	return NewWithWorkdir(title, "")
 }
 
-func newSessionWithWorkdir(title string, workdir string) Session {
+// NewWithWorkdir 创建一个包含运行目录的会话对象。
+func NewWithWorkdir(title string, workdir string) Session {
 	now := time.Now()
 	return Session{
-		ID:        newID("session"),
+		ID:        NewID("session"),
 		Title:     sanitizeTitle(title),
 		CreatedAt: now,
 		UpdatedAt: now,
@@ -185,6 +198,7 @@ func newSessionWithWorkdir(title string, workdir string) Session {
 	}
 }
 
+// sanitizeTitle 规范化会话标题：去空白、空标题回退默认值、超长截断。
 func sanitizeTitle(title string) string {
 	title = strings.TrimSpace(title)
 	if title == "" {

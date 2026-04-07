@@ -94,7 +94,8 @@ go run ./cmd/neocode
 - **`internal/provider/catalog`** — 模型发现、catalog 缓存与后台刷新
 - **`internal/provider/selection`** — provider/model 选择与配置同步
 - **`internal/provider/builtin`** — 内建 driver 注册
-- **`internal/runtime`** — ReAct 主循环、事件流、会话管理
+- **`internal/runtime`** — ReAct 主循环与事件流编排（不直接承载会话存储实现；不再导出会话模型与存储类型）
+- **`internal/session`** — 会话模型、会话存储抽象与 JSON 持久化实现（统一对外暴露 `Session` / `Summary` / `Store`）
 - **`internal/tools`** — 工具注册表与具体工具实现
 - **`internal/tui`** — 终端 UI、交互体验、事件桥接
 - **`internal/app`** — 应用装配与依赖注入
@@ -116,6 +117,7 @@ go run ./cmd/neocode
 │   │   ├── catalog      # 模型发现与缓存
 │   │   └── selection    # provider/model 选择服务
 │   ├── runtime          # ReAct 循环与事件流
+│   ├── session          # 会话模型与持久化
 │   ├── tools            # 工具系统
 │   └── tui              # 终端 UI
 └── README.md

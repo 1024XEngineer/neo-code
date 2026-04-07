@@ -1,4 +1,4 @@
-package runtime
+package session
 
 import (
 	"context"
@@ -11,11 +11,11 @@ import (
 	providertypes "neo-code/internal/provider/types"
 )
 
-func TestJSONSessionStoreSaveLoadAndListSummaries(t *testing.T) {
+func TestJSONStoreSaveLoadAndListSummaries(t *testing.T) {
 	t.Parallel()
 
 	baseDir := t.TempDir()
-	store := NewJSONSessionStore(baseDir)
+	store := NewJSONStore(baseDir)
 
 	older := &Session{
 		ID:        "session-old",
@@ -68,7 +68,7 @@ func TestJSONSessionStoreSaveLoadAndListSummaries(t *testing.T) {
 		t.Fatalf("expected persisted session file to exclude workdir, got:\n%s", string(raw))
 	}
 
-	mustWriteRuntimeFile(t, filepath.Join(baseDir, sessionsDirName, "invalid.json"), "{invalid")
+	mustWriteSessionFile(t, filepath.Join(baseDir, sessionsDirName, "invalid.json"), "{invalid")
 	if err := os.MkdirAll(filepath.Join(baseDir, sessionsDirName, "directory"), 0o755); err != nil {
 		t.Fatalf("mkdir stray directory: %v", err)
 	}
@@ -85,11 +85,11 @@ func TestJSONSessionStoreSaveLoadAndListSummaries(t *testing.T) {
 	}
 }
 
-func TestJSONSessionStoreErrors(t *testing.T) {
+func TestJSONStoreErrors(t *testing.T) {
 	t.Parallel()
 
 	baseDir := t.TempDir()
-	store := NewJSONSessionStore(baseDir)
+	store := NewJSONStore(baseDir)
 
 	cancelledCtx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -108,11 +108,11 @@ func TestJSONSessionStoreErrors(t *testing.T) {
 	}
 }
 
-func TestJSONSessionStoreCorruptedSessionBehaviors(t *testing.T) {
+func TestJSONStoreCorruptedSessionBehaviors(t *testing.T) {
 	t.Parallel()
 
 	baseDir := t.TempDir()
-	store := NewJSONSessionStore(baseDir)
+	store := NewJSONStore(baseDir)
 
 	valid := &Session{
 		ID:        "valid-session",
@@ -125,7 +125,7 @@ func TestJSONSessionStoreCorruptedSessionBehaviors(t *testing.T) {
 		t.Fatalf("Save valid session: %v", err)
 	}
 
-	mustWriteRuntimeFile(t, filepath.Join(baseDir, sessionsDirName, "broken.json"), "{broken")
+	mustWriteSessionFile(t, filepath.Join(baseDir, sessionsDirName, "broken.json"), "{broken")
 
 	_, err := store.Load(context.Background(), "broken")
 	if err == nil || !strings.Contains(err.Error(), "decode session broken") {
@@ -141,7 +141,7 @@ func TestJSONSessionStoreCorruptedSessionBehaviors(t *testing.T) {
 	}
 }
 
-func TestJSONSessionStoreSaveInvalidBaseDir(t *testing.T) {
+func TestJSONStoreSaveInvalidBaseDir(t *testing.T) {
 	t.Parallel()
 
 	tempDir := t.TempDir()
@@ -150,7 +150,7 @@ func TestJSONSessionStoreSaveInvalidBaseDir(t *testing.T) {
 		t.Fatalf("write base file: %v", err)
 	}
 
-	store := NewJSONSessionStore(baseFile)
+	store := NewJSONStore(baseFile)
 	err := store.Save(context.Background(), &Session{
 		ID:        "session-x",
 		Title:     "Broken Save",
@@ -162,7 +162,7 @@ func TestJSONSessionStoreSaveInvalidBaseDir(t *testing.T) {
 	}
 }
 
-func mustWriteRuntimeFile(t *testing.T, path string, content string) {
+func mustWriteSessionFile(t *testing.T, path string, content string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatalf("mkdir %s: %v", filepath.Dir(path), err)
