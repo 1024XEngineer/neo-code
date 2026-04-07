@@ -3,7 +3,6 @@ package components
 import (
 	"strings"
 
-	tuiutils "neo-code/internal/tui/core/utils"
 	tuistate "neo-code/internal/tui/state"
 )
 
@@ -22,14 +21,14 @@ func RenderActivityLine(entry tuistate.ActivityEntry, width int) string {
 	if entry.IsError {
 		kind = "error"
 	}
-	kindLabel := strings.ToUpper(tuiutils.Fallback(kind, "event"))
+	kindLabel := strings.ToUpper(fallback(kind, "event"))
 
 	text := entry.Title
 	if strings.TrimSpace(entry.Detail) != "" {
 		text = text + ": " + entry.Detail
 	}
 
-	return tuiutils.TrimMiddle(
+	return trimMiddle(
 		timeLabel+" "+kindLabel+" "+strings.Join(strings.Fields(text), " "),
 		max(12, width),
 	)

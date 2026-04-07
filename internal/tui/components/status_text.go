@@ -2,8 +2,6 @@ package components
 
 import (
 	"strings"
-
-	tuiutils "neo-code/internal/tui/core/utils"
 )
 
 // CompactStatusText 压缩状态文本为单行展示，支持可选长度限制。
@@ -18,7 +16,7 @@ func CompactStatusText(text string, limit int) string {
 		}
 		line = strings.Join(strings.Fields(line), " ")
 		if limit > 0 {
-			return tuiutils.TrimMiddle(line, limit)
+			return trimMiddle(line, limit)
 		}
 		return line
 	}

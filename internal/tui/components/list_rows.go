@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
-	tuiutils "neo-code/internal/tui/core/utils"
 )
 
 // CommandMenuRowData 描述命令建议菜单单行渲染所需数据。
@@ -35,7 +34,7 @@ func RenderCommandMenuRow(data CommandMenuRowData) string {
 			lipgloss.Top,
 			line,
 			lipgloss.NewStyle().Width(2).Render(""),
-			data.DescriptionStyle.Render(tuiutils.TrimMiddle(description, descWidth)),
+			data.DescriptionStyle.Render(trimMiddle(description, descWidth)),
 		)
 	}
 
@@ -60,7 +59,7 @@ type SessionRowData struct {
 // RenderSessionRow 渲染会话列表单行内容。
 func RenderSessionRow(data SessionRowData) string {
 	width := max(18, data.Width-2)
-	title := tuiutils.TrimRunes(data.Title, max(8, width-10))
+	title := trimRunes(data.Title, max(8, width-10))
 
 	prefix := "o"
 	if data.Active {

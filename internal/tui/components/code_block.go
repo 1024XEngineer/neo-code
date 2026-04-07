@@ -4,7 +4,6 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
-	tuiutils "neo-code/internal/tui/core/utils"
 )
 
 // NormalizeBlockRightEdge 对多行块内容进行统一宽度补齐，避免右边界抖动。
@@ -18,7 +17,7 @@ func NormalizeBlockRightEdge(content string, maxWidth int) string {
 	for _, line := range lines {
 		targetWidth = max(targetWidth, lipgloss.Width(line))
 	}
-	targetWidth = tuiutils.Clamp(targetWidth, 1, maxWidth)
+	targetWidth = clamp(targetWidth, 1, maxWidth)
 
 	padStyle := lipgloss.NewStyle().Width(targetWidth)
 	normalized := make([]string, 0, len(lines))
