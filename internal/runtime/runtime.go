@@ -17,6 +17,7 @@ import (
 	agentcontext "neo-code/internal/context"
 	contextcompact "neo-code/internal/context/compact"
 	"neo-code/internal/provider"
+	agentsession "neo-code/internal/session"
 	"neo-code/internal/tools"
 )
 
@@ -120,9 +121,9 @@ type Runtime interface {
 	ResolvePermission(ctx context.Context, input PermissionResolutionInput) error
 	CancelActiveRun() bool
 	Events() <-chan RuntimeEvent
-	ListSessions(ctx context.Context) ([]SessionSummary, error)
-	LoadSession(ctx context.Context, id string) (Session, error)
-	SetSessionWorkdir(ctx context.Context, sessionID string, workdir string) (Session, error)
+	ListSessions(ctx context.Context) ([]agentsession.Summary, error)
+	LoadSession(ctx context.Context, id string) (agentsession.Session, error)
+	SetSessionWorkdir(ctx context.Context, sessionID string, workdir string) (agentsession.Session, error)
 }
 
 type UserInput struct {
@@ -138,7 +139,7 @@ type ProviderFactory interface {
 
 type Service struct {
 	configManager   *config.Manager      // 配置管理器，提供当前选中的 provider、model、workdir 等配置读取能力。
-	sessionStore    Store                // 会话持久化接口，负责保存和加载聊天会话。
+	sessionStore    agentsession.Store   // 会话持久化接口，负责保存和加载聊天会话。
 	toolManager     tools.Manager        // 工具管理器，统一工具 schema 暴露与执行入口。
 	providerFactory ProviderFactory      // Provider 工厂接口，根据配置动态创建具体的 provider 实例。
 	contextBuilder  agentcontext.Builder // 上下文构建器，负责组装 system prompt 与本轮发给模型的消息上下文。
@@ -154,7 +155,7 @@ type Service struct {
 func NewWithFactory(
 	configManager *config.Manager,
 	toolManager tools.Manager,
-	sessionStore Store,
+	sessionStore agentsession.Store,
 	providerFactory ProviderFactory,
 	contextBuilder agentcontext.Builder,
 ) *Service {
@@ -372,35 +373,35 @@ func (s *Service) Events() <-chan RuntimeEvent {
 	return s.events
 }
 
-func (s *Service) ListSessions(ctx context.Context) ([]SessionSummary, error) {
+func (s *Service) ListSessions(ctx context.Context) ([]agentsession.Summary, error) {
 	return s.sessionStore.ListSummaries(ctx)
 }
 
-func (s *Service) LoadSession(ctx context.Context, id string) (Session, error) {
+func (s *Service) LoadSession(ctx context.Context, id string) (agentsession.Session, error) {
 	session, err := s.sessionStore.Load(ctx, id)
 	if err != nil {
-		return Session{}, err
+		return agentsession.Session{}, err
 	}
 	session.Workdir = s.sessionWorkdir(id, session.Workdir)
 	return session, nil
 }
 
-func (s *Service) SetSessionWorkdir(ctx context.Context, sessionID string, workdir string) (Session, error) {
+func (s *Service) SetSessionWorkdir(ctx context.Context, sessionID string, workdir string) (agentsession.Session, error) {
 	sessionID = strings.TrimSpace(sessionID)
 	if sessionID == "" {
-		return Session{}, errors.New("runtime: session id is empty")
+		return agentsession.Session{}, errors.New("runtime: session id is empty")
 	}
 
 	session, err := s.sessionStore.Load(ctx, sessionID)
 	if err != nil {
-		return Session{}, err
+		return agentsession.Session{}, err
 	}
 	session.Workdir = s.sessionWorkdir(sessionID, session.Workdir)
 
 	cfg := s.configManager.Get()
 	resolved, err := resolveWorkdirForSession(cfg.Workdir, session.Workdir, workdir)
 	if err != nil {
-		return Session{}, err
+		return agentsession.Session{}, err
 	}
 	if session.Workdir == resolved {
 		return session, nil
@@ -439,22 +440,22 @@ func (s *Service) loadOrCreateSession(
 	title string,
 	defaultWorkdir string,
 	requestedWorkdir string,
-) (Session, error) {
+) (agentsession.Session, error) {
 	if strings.TrimSpace(sessionID) == "" {
 		sessionWorkdir, err := resolveWorkdirForSession(defaultWorkdir, "", requestedWorkdir)
 		if err != nil {
-			return Session{}, err
+			return agentsession.Session{}, err
 		}
-		session := newSessionWithWorkdir(title, sessionWorkdir)
+		session := agentsession.NewWithWorkdir(title, sessionWorkdir)
 		s.setSessionWorkdir(session.ID, sessionWorkdir)
 		if err := s.sessionStore.Save(ctx, &session); err != nil {
-			return Session{}, err
+			return agentsession.Session{}, err
 		}
 		return session, nil
 	}
 	session, err := s.sessionStore.Load(ctx, sessionID)
 	if err != nil {
-		return Session{}, err
+		return agentsession.Session{}, err
 	}
 	session.Workdir = s.sessionWorkdir(sessionID, session.Workdir)
 	if strings.TrimSpace(requestedWorkdir) == "" && strings.TrimSpace(session.Workdir) != "" {
@@ -463,7 +464,7 @@ func (s *Service) loadOrCreateSession(
 
 	resolved, err := resolveWorkdirForSession(defaultWorkdir, session.Workdir, requestedWorkdir)
 	if err != nil {
-		return Session{}, err
+		return agentsession.Session{}, err
 	}
 	if session.Workdir == resolved {
 		return session, nil

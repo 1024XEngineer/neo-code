@@ -15,16 +15,17 @@ import (
 	contextcompact "neo-code/internal/context/compact"
 	"neo-code/internal/provider"
 	"neo-code/internal/security"
+	agentsession "neo-code/internal/session"
 	"neo-code/internal/tools"
 )
 
 type memoryStore struct {
-	sessions map[string]Session
+	sessions map[string]agentsession.Session
 	saves    int
 }
 
 type failingStore struct {
-	Store
+	agentsession.Store
 	saveErr          error
 	failOnSave       int
 	saveCalls        int
@@ -32,10 +33,10 @@ type failingStore struct {
 }
 
 func newMemoryStore() *memoryStore {
-	return &memoryStore{sessions: map[string]Session{}}
+	return &memoryStore{sessions: map[string]agentsession.Session{}}
 }
 
-func (s *failingStore) Save(ctx context.Context, session *Session) error {
+func (s *failingStore) Save(ctx context.Context, session *agentsession.Session) error {
 	s.saveCalls++
 	if s.failOnSave > 0 && s.saveCalls == s.failOnSave {
 		return s.saveErr
@@ -49,7 +50,7 @@ func (s *failingStore) Save(ctx context.Context, session *Session) error {
 	return s.Store.Save(ctx, session)
 }
 
-func (s *memoryStore) Save(ctx context.Context, session *Session) error {
+func (s *memoryStore) Save(ctx context.Context, session *agentsession.Session) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -61,24 +62,24 @@ func (s *memoryStore) Save(ctx context.Context, session *Session) error {
 	return nil
 }
 
-func (s *memoryStore) Load(ctx context.Context, id string) (Session, error) {
+func (s *memoryStore) Load(ctx context.Context, id string) (agentsession.Session, error) {
 	if err := ctx.Err(); err != nil {
-		return Session{}, err
+		return agentsession.Session{}, err
 	}
 	session, ok := s.sessions[id]
 	if !ok {
-		return Session{}, errors.New("not found")
+		return agentsession.Session{}, errors.New("not found")
 	}
 	return cloneSession(session), nil
 }
 
-func (s *memoryStore) ListSummaries(ctx context.Context) ([]SessionSummary, error) {
+func (s *memoryStore) ListSummaries(ctx context.Context) ([]agentsession.Summary, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	summaries := make([]SessionSummary, 0, len(s.sessions))
+	summaries := make([]agentsession.Summary, 0, len(s.sessions))
 	for _, session := range s.sessions {
-		summaries = append(summaries, SessionSummary{
+		summaries = append(summaries, agentsession.Summary{
 			ID:        session.ID,
 			Title:     session.Title,
 			CreatedAt: session.CreatedAt,
@@ -606,7 +607,7 @@ func TestServiceRunDelegatesToContextBuilder(t *testing.T) {
 
 	manager := newRuntimeConfigManager(t)
 	store := newMemoryStore()
-	session := newSession("memory reject")
+	session := agentsession.New("memory reject")
 	session.ID = "session-memory-reject"
 	store.sessions[session.ID] = cloneSession(session)
 	registry := tools.NewRegistry()
@@ -747,7 +748,7 @@ func TestServiceRunDefaultBuilderUsesToolManagerMicroCompactPolicies(t *testing.
 	registry.Register(&stubTool{name: "bash", content: "default"})
 	registry.Register(&stubTool{name: "webfetch", content: "default"})
 
-	session := newSession("preserve history")
+	session := agentsession.New("preserve history")
 	session.ID = "session-preserve-history"
 	session.Messages = []provider.Message{
 		{Role: provider.RoleUser, Content: "older user"},
@@ -810,7 +811,7 @@ func TestServiceRunDefaultBuilderUsesGenericToolManagerMicroCompactPolicies(t *t
 		},
 	}
 
-	session := newSession("preserve history by manager")
+	session := agentsession.New("preserve history by manager")
 	session.ID = "session-preserve-history-manager"
 	session.Messages = []provider.Message{
 		{Role: provider.RoleUser, Content: "older user"},
@@ -879,7 +880,7 @@ func TestServiceRunFailurePreservesExistingSessionProviderAndModel(t *testing.T)
 	}
 
 	store := newMemoryStore()
-	session := newSession("preserve-metadata")
+	session := agentsession.New("preserve-metadata")
 	session.ID = "session-preserve-metadata"
 	session.Provider = config.OpenAIName
 	session.Model = "openai-original-model"
@@ -979,7 +980,7 @@ func TestServiceRunWaitsForPermissionResolutionAndContinues(t *testing.T) {
 
 	manager := newRuntimeConfigManager(t)
 	store := newMemoryStore()
-	session := newSession("memory reject")
+	session := agentsession.New("memory reject")
 	session.ID = "session-memory-reject"
 	store.sessions[session.ID] = cloneSession(session)
 	registry := tools.NewRegistry()
@@ -1170,7 +1171,7 @@ func TestServiceRunEmitsRememberScopeWhenSessionRejectMemoryHits(t *testing.T) {
 
 	manager := newRuntimeConfigManager(t)
 	store := newMemoryStore()
-	session := newSession("memory reject")
+	session := agentsession.New("memory reject")
 	session.ID = "session-memory-reject"
 	store.sessions[session.ID] = cloneSession(session)
 	registry := tools.NewRegistry()
@@ -1304,7 +1305,7 @@ func TestServiceRunErrorPaths(t *testing.T) {
 		provider     *scriptedProvider
 		factoryErr   error
 		registerTool *stubTool
-		seedSession  *Session
+		seedSession  *agentsession.Session
 		expectErr    string
 		expectEvents []EventType
 		assert       func(t *testing.T, store *memoryStore, provider *scriptedProvider, tool *stubTool)
@@ -1368,11 +1369,11 @@ func TestServiceRunErrorPaths(t *testing.T) {
 					{provider.NewTextDeltaStreamEvent("resumed")},
 				},
 			},
-			seedSession: &Session{
+			seedSession: &agentsession.Session{
 				ID:        "existing-session",
 				Title:     "Resume Me",
-				CreatedAt: newSession("seed").CreatedAt,
-				UpdatedAt: newSession("seed").UpdatedAt,
+				CreatedAt: agentsession.New("seed").CreatedAt,
+				UpdatedAt: agentsession.New("seed").UpdatedAt,
 				Messages: []provider.Message{
 					{Role: "user", Content: "earlier"},
 				},
@@ -1862,7 +1863,7 @@ func TestServiceRunToolTimeoutIsNotCancellation(t *testing.T) {
 func TestServiceCompactManualAppliesAndPersists(t *testing.T) {
 	manager := newRuntimeConfigManager(t)
 	store := newMemoryStore()
-	session := newSession("manual")
+	session := agentsession.New("manual")
 	session.ID = "session-manual"
 	session.Messages = []provider.Message{
 		{Role: provider.RoleUser, Content: "older"},
@@ -1920,7 +1921,7 @@ func TestServiceCompactManualAppliesAndPersists(t *testing.T) {
 func TestServiceCompactManualFailureReturnsError(t *testing.T) {
 	manager := newRuntimeConfigManager(t)
 	store := newMemoryStore()
-	session := newSession("manual-fail")
+	session := agentsession.New("manual-fail")
 	session.ID = "session-manual-fail"
 	session.Messages = []provider.Message{
 		{Role: provider.RoleUser, Content: "older"},
@@ -1974,7 +1975,7 @@ func TestServiceCompactUsesSessionProviderAndModelWhenPresent(t *testing.T) {
 	}
 
 	store := newMemoryStore()
-	session := newSession("manual-provider")
+	session := agentsession.New("manual-provider")
 	session.ID = "session-manual-provider"
 	session.Provider = config.OpenAIName
 	session.Model = "session-model"
@@ -2048,7 +2049,7 @@ func TestServiceCompactFallsBackToCurrentProviderWhenSessionMetadataMissing(t *t
 	}
 
 	store := newMemoryStore()
-	session := newSession("manual-fallback")
+	session := agentsession.New("manual-fallback")
 	session.ID = "session-manual-fallback"
 	session.Messages = []provider.Message{
 		{Role: provider.RoleUser, Content: "older"},
@@ -2105,7 +2106,7 @@ func TestServiceCompactFallsBackToCurrentProviderWhenSessionMetadataMissing(t *t
 func TestServiceManualCompactThenRunContinuesToolRound(t *testing.T) {
 	manager := newRuntimeConfigManager(t)
 	store := newMemoryStore()
-	session := newSession("manual-continue")
+	session := agentsession.New("manual-continue")
 	session.ID = "session-manual-continue"
 	session.Messages = []provider.Message{
 		{Role: provider.RoleUser, Content: "legacy request"},
@@ -2188,7 +2189,7 @@ func TestServiceManualCompactThenRunContinuesToolRound(t *testing.T) {
 func TestServiceSerializesRunAndCompact(t *testing.T) {
 	manager := newRuntimeConfigManager(t)
 	store := newMemoryStore()
-	session := newSession("serialized")
+	session := agentsession.New("serialized")
 	session.ID = "session-serialized"
 	store.sessions[session.ID] = cloneSession(session)
 
@@ -2284,7 +2285,7 @@ func TestServiceConstructorsAndDelegates(t *testing.T) {
 		t.Fatalf("expected events channel")
 	}
 
-	session := newSession("List Me")
+	session := agentsession.New("List Me")
 	store.sessions[session.ID] = cloneSession(session)
 
 	summaries, err := service.ListSessions(context.Background())
@@ -2303,7 +2304,7 @@ func TestServiceConstructorsAndDelegates(t *testing.T) {
 		t.Fatalf("expected loaded session %q, got %q", session.ID, loaded.ID)
 	}
 
-	sessionStore := NewSessionStore(t.TempDir())
+	sessionStore := agentsession.NewStore(t.TempDir())
 	if sessionStore == nil {
 		t.Fatalf("expected JSON session store")
 	}
@@ -2321,7 +2322,7 @@ func TestServiceRunUsesSessionWorkdirForContextAndTools(t *testing.T) {
 	}
 
 	store := newMemoryStore()
-	session := newSessionWithWorkdir("Session Workdir", sessionWorkdir)
+	session := agentsession.NewWithWorkdir("Session Workdir", sessionWorkdir)
 	store.sessions[session.ID] = cloneSession(session)
 
 	tool := &stubTool{name: "filesystem_edit", content: "ok"}
@@ -2410,7 +2411,7 @@ func TestServiceSetSessionWorkdir(t *testing.T) {
 	}
 
 	store := newMemoryStore()
-	session := newSession("set workdir")
+	session := agentsession.New("set workdir")
 	store.sessions[session.ID] = cloneSession(session)
 	registry := tools.NewRegistry()
 	registry.Register(&stubTool{name: "filesystem_read_file", content: "default"})
@@ -2541,7 +2542,7 @@ func restoreRuntimeEnv(t *testing.T, key string) {
 	})
 }
 
-func onlySession(t *testing.T, store *memoryStore) Session {
+func onlySession(t *testing.T, store *memoryStore) agentsession.Session {
 	t.Helper()
 	if len(store.sessions) != 1 {
 		t.Fatalf("expected exactly 1 session, got %d", len(store.sessions))
@@ -2549,7 +2550,7 @@ func onlySession(t *testing.T, store *memoryStore) Session {
 	for _, session := range store.sessions {
 		return session
 	}
-	return Session{}
+	return agentsession.Session{}
 }
 
 func resolvedProviderForTests(cfg config.Config, providerName string) (config.ResolvedProviderConfig, error) {
@@ -2606,7 +2607,7 @@ func assertEventsRunID(t *testing.T, events []RuntimeEvent, runID string) {
 	}
 }
 
-func cloneSession(session Session) Session {
+func cloneSession(session agentsession.Session) agentsession.Session {
 	cloned := session
 	cloned.Messages = append([]provider.Message(nil), session.Messages...)
 	return cloned
@@ -2691,7 +2692,7 @@ func TestServiceSetSessionWorkdirNoopDoesNotSave(t *testing.T) {
 
 	store := newMemoryStore()
 	target := t.TempDir()
-	session := newSessionWithWorkdir("noop", target)
+	session := agentsession.NewWithWorkdir("noop", target)
 	store.sessions[session.ID] = cloneSession(session)
 	registry := tools.NewRegistry()
 	registry.Register(&stubTool{name: "filesystem_read_file", content: "default"})

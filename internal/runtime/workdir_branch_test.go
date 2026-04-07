@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	agentsession "neo-code/internal/session"
 )
 
 func TestSessionWorkdirKeyAndMemoryMap(t *testing.T) {
@@ -82,7 +84,7 @@ func TestLoadSessionUsesFallbackWorkdirWhenMemoryMissing(t *testing.T) {
 
 	manager := newRuntimeConfigManager(t)
 	store := newMemoryStore()
-	session := newSession("fallback")
+	session := agentsession.New("fallback")
 	session.Workdir = t.TempDir()
 	store.sessions[session.ID] = cloneSession(session)
 

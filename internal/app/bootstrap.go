@@ -12,6 +12,7 @@ import (
 	providercatalog "neo-code/internal/provider/catalog"
 	agentruntime "neo-code/internal/runtime"
 	"neo-code/internal/security"
+	agentsession "neo-code/internal/session"
 	"neo-code/internal/tools"
 	"neo-code/internal/tools/bash"
 	"neo-code/internal/tools/filesystem"
@@ -62,7 +63,7 @@ func NewProgram(ctx context.Context) (*tea.Program, error) {
 		return nil, err
 	}
 
-	sessionStore := agentruntime.NewSessionStore(loader.BaseDir())
+	sessionStore := agentsession.NewStore(loader.BaseDir())
 	runtimeSvc := agentruntime.NewWithFactory(
 		manager,
 		toolManager,
