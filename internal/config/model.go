@@ -60,6 +60,7 @@ type ResolvedProviderConfig struct {
 
 type ToolsConfig struct {
 	WebFetch WebFetchConfig `yaml:"webfetch,omitempty"`
+	MCP      MCPConfig      `yaml:"mcp,omitempty"`
 }
 
 type ContextConfig struct {
@@ -78,6 +79,34 @@ type WebFetchConfig struct {
 	SupportedContentTypes []string `yaml:"supported_content_types,omitempty"`
 }
 
+type MCPConfig struct {
+	Servers []MCPServerConfig `yaml:"servers,omitempty"`
+}
+
+type MCPServerConfig struct {
+	ID      string            `yaml:"id"`
+	Enabled bool              `yaml:"enabled,omitempty"`
+	Source  string            `yaml:"source,omitempty"`
+	Version string            `yaml:"version,omitempty"`
+	Stdio   MCPStdioConfig    `yaml:"stdio,omitempty"`
+	Env     []MCPEnvVarConfig `yaml:"env,omitempty"`
+}
+
+type MCPStdioConfig struct {
+	Command           string   `yaml:"command,omitempty"`
+	Args              []string `yaml:"args,omitempty"`
+	Workdir           string   `yaml:"workdir,omitempty"`
+	StartTimeoutSec   int      `yaml:"start_timeout_sec,omitempty"`
+	CallTimeoutSec    int      `yaml:"call_timeout_sec,omitempty"`
+	RestartBackoffSec int      `yaml:"restart_backoff_sec,omitempty"`
+}
+
+type MCPEnvVarConfig struct {
+	Name     string `yaml:"name"`
+	Value    string `yaml:"value,omitempty"`
+	ValueEnv string `yaml:"value_env,omitempty"`
+}
+
 func DefaultWebFetchSupportedContentTypes() []string {
 	return append([]string(nil), defaultWebFetchSupportedContentTypes...)
 }
@@ -91,6 +120,7 @@ func Default() *Config {
 		Context:        defaultContextConfig(),
 		Tools: ToolsConfig{
 			WebFetch: defaultWebFetchConfig(),
+			MCP:      defaultMCPConfig(),
 		},
 	}
 }
@@ -330,6 +360,13 @@ func defaultWebFetchConfig() WebFetchConfig {
 	}
 }
 
+// defaultMCPConfig 返回 MCP 工具接入配置的默认值（默认无 server）。
+func defaultMCPConfig() MCPConfig {
+	return MCPConfig{
+		Servers: nil,
+	}
+}
+
 // defaultContextConfig 返回上下文压缩相关配置的默认值。
 func defaultContextConfig() ContextConfig {
 	return ContextConfig{
@@ -349,6 +386,7 @@ func defaultCompactConfig() CompactConfig {
 func (c ToolsConfig) Clone() ToolsConfig {
 	return ToolsConfig{
 		WebFetch: c.WebFetch.Clone(),
+		MCP:      c.MCP.Clone(),
 	}
 }
 
@@ -365,6 +403,7 @@ func (c *ToolsConfig) ApplyDefaults(defaults ToolsConfig) {
 	}
 
 	c.WebFetch.ApplyDefaults(defaults.WebFetch)
+	c.MCP.ApplyDefaults(defaults.MCP)
 }
 
 // ApplyDefaults 为上下文配置补齐缺省的 compact 参数。
@@ -379,6 +418,93 @@ func (c *ContextConfig) ApplyDefaults(defaults ContextConfig) {
 func (c ToolsConfig) Validate() error {
 	if err := c.WebFetch.Validate(); err != nil {
 		return fmt.Errorf("webfetch: %w", err)
+	}
+	if err := c.MCP.Validate(); err != nil {
+		return fmt.Errorf("mcp: %w", err)
+	}
+	return nil
+}
+
+// Clone 返回 MCP 配置的独立副本，避免引用共享造成并发污染。
+func (c MCPConfig) Clone() MCPConfig {
+	if len(c.Servers) == 0 {
+		return MCPConfig{}
+	}
+	cloned := make([]MCPServerConfig, 0, len(c.Servers))
+	for _, server := range c.Servers {
+		cloned = append(cloned, server.Clone())
+	}
+	return MCPConfig{
+		Servers: cloned,
+	}
+}
+
+// Clone 返回单个 MCP server 配置的独立副本。
+func (c MCPServerConfig) Clone() MCPServerConfig {
+	cloned := c
+	cloned.Stdio.Args = append([]string(nil), c.Stdio.Args...)
+	if len(c.Env) > 0 {
+		cloned.Env = make([]MCPEnvVarConfig, 0, len(c.Env))
+		cloned.Env = append(cloned.Env, c.Env...)
+	} else {
+		cloned.Env = nil
+	}
+	return cloned
+}
+
+// ApplyDefaults 为 MCP 配置补齐缺省字段，保证运行时行为可预测。
+func (c *MCPConfig) ApplyDefaults(defaults MCPConfig) {
+	if c == nil {
+		return
+	}
+	if len(c.Servers) == 0 {
+		c.Servers = defaults.Clone().Servers
+	}
+	for index := range c.Servers {
+		c.Servers[index].ApplyDefaults()
+	}
+}
+
+// Validate 校验 MCP server 列表与字段合法性，防止启动后失败。
+func (c MCPConfig) Validate() error {
+	if len(c.Servers) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(c.Servers))
+	for index, server := range c.Servers {
+		normalizedID := strings.ToLower(strings.TrimSpace(server.ID))
+		if normalizedID == "" {
+			return fmt.Errorf("servers[%d].id is empty", index)
+		}
+		if _, exists := seen[normalizedID]; exists {
+			return fmt.Errorf("duplicate servers[%d].id %q", index, server.ID)
+		}
+		seen[normalizedID] = struct{}{}
+
+		source := strings.ToLower(strings.TrimSpace(server.Source))
+		if source == "" {
+			source = "stdio"
+		}
+		if source != "stdio" {
+			return fmt.Errorf("servers[%d].source %q is not supported", index, server.Source)
+		}
+		if !server.Enabled {
+			continue
+		}
+
+		if strings.TrimSpace(server.Stdio.Command) == "" {
+			return fmt.Errorf("servers[%d].stdio.command is empty", index)
+		}
+		for envIndex, env := range server.Env {
+			if strings.TrimSpace(env.Name) == "" {
+				return fmt.Errorf("servers[%d].env[%d].name is empty", index, envIndex)
+			}
+			hasValue := strings.TrimSpace(env.Value) != ""
+			hasValueEnv := strings.TrimSpace(env.ValueEnv) != ""
+			if hasValue == hasValueEnv {
+				return fmt.Errorf("servers[%d].env[%d] must set exactly one of value/value_env", index, envIndex)
+			}
+		}
 	}
 	return nil
 }
@@ -411,6 +537,17 @@ func (c *WebFetchConfig) ApplyDefaults(defaults WebFetchConfig) {
 		c.MaxResponseBytes = defaults.MaxResponseBytes
 	}
 	c.SupportedContentTypes = normalizeContentTypes(c.SupportedContentTypes, defaults.SupportedContentTypes)
+}
+
+// ApplyDefaults 为 MCP server stdio 配置补齐默认值。
+func (c *MCPServerConfig) ApplyDefaults() {
+	if c == nil {
+		return
+	}
+	c.Source = strings.ToLower(strings.TrimSpace(c.Source))
+	if c.Source == "" {
+		c.Source = "stdio"
+	}
 }
 
 // ApplyDefaults 为 compact 配置填充缺省策略和阈值。
