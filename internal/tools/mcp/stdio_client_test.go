@@ -14,6 +14,12 @@ import (
 	"time"
 )
 
+type errWriter struct{}
+
+func (errWriter) Write(p []byte) (int, error) {
+	return 0, errors.New("write failed")
+}
+
 func TestStdIOClientListToolsAndCallTool(t *testing.T) {
 	t.Parallel()
 
@@ -222,6 +228,45 @@ func TestFailAllPendingLocked(t *testing.T) {
 	client.failAllPendingLocked(errors.New("closed"))
 	if len(client.pending) != 0 {
 		t.Fatalf("expected pending cleared")
+	}
+}
+
+func TestWriteFramedMessageError(t *testing.T) {
+	t.Parallel()
+
+	if err := writeFramedMessage(errWriter{}, []byte(`{}`)); err == nil {
+		t.Fatalf("expected write error")
+	}
+}
+
+func TestStdIOClientWaitLoopNilCommand(t *testing.T) {
+	t.Parallel()
+
+	client := &StdIOClient{
+		pending: make(map[string]chan rpcReply),
+		started: true,
+	}
+	client.waitLoop(nil)
+	if client.started {
+		t.Fatalf("expected started=false after nil command waitLoop")
+	}
+}
+
+func TestStdIOClientBumpBackoffClamp(t *testing.T) {
+	t.Parallel()
+
+	client := &StdIOClient{
+		cfg: StdioClientConfig{
+			RestartBackoff: time.Second,
+		},
+		backoff: maxStdioRestartBackoff,
+	}
+	client.bumpBackoffLocked()
+	if client.backoff != maxStdioRestartBackoff {
+		t.Fatalf("expected clamp to max backoff, got %v", client.backoff)
+	}
+	if client.retryAt.IsZero() {
+		t.Fatalf("expected retryAt assigned")
 	}
 }
 

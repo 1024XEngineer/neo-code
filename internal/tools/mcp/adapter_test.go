@@ -146,3 +146,50 @@ func TestAdapterAccessorsAndSchemaClone(t *testing.T) {
 		t.Fatalf("expected schema clone not mutated, got %v", query2["type"])
 	}
 }
+
+func TestAdapterBuildAndCreateErrors(t *testing.T) {
+	t.Parallel()
+
+	factory := NewAdapterFactory(nil)
+	if _, err := factory.BuildAdapters(context.Background()); err == nil {
+		t.Fatalf("expected nil registry error")
+	}
+
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	registry := NewRegistry()
+	factory = NewAdapterFactory(registry)
+	if _, err := factory.BuildAdapters(canceledCtx); err == nil {
+		t.Fatalf("expected canceled context error")
+	}
+
+	if _, err := NewAdapter(nil, "docs", ToolDescriptor{Name: "search"}); err == nil {
+		t.Fatalf("expected nil registry error")
+	}
+	if _, err := NewAdapter(registry, " ", ToolDescriptor{Name: "search"}); err == nil {
+		t.Fatalf("expected empty server id error")
+	}
+	if _, err := NewAdapter(registry, "docs", ToolDescriptor{Name: " "}); err == nil {
+		t.Fatalf("expected empty tool name error")
+	}
+}
+
+func TestAdapterCallBoundary(t *testing.T) {
+	t.Parallel()
+
+	var nilAdapter *Adapter
+	if _, err := nilAdapter.Call(context.Background(), nil); err == nil {
+		t.Fatalf("expected nil adapter error")
+	}
+
+	registry := NewRegistry()
+	adapter, err := NewAdapter(registry, "docs", ToolDescriptor{Name: "search"})
+	if err != nil {
+		t.Fatalf("NewAdapter() error = %v", err)
+	}
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := adapter.Call(canceledCtx, nil); err == nil {
+		t.Fatalf("expected context canceled error")
+	}
+}

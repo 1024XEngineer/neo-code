@@ -412,3 +412,39 @@ func TestRegistryExecuteMCPCallErrorDoesNotReturnOK(t *testing.T) {
 		t.Fatalf("expected non-ok error content, got %q", result.Content)
 	}
 }
+
+func TestRegistrySupportsMCPToolAndHelpers(t *testing.T) {
+	t.Parallel()
+
+	registry := NewRegistry()
+	mcpRegistry := mcp.NewRegistry()
+	if err := mcpRegistry.RegisterServer("docs", "stdio", "v1", &stubMCPClient{
+		tools: []mcp.ToolDescriptor{
+			{Name: "search", Description: "search docs", InputSchema: map[string]any{"type": "object"}},
+		},
+	}); err != nil {
+		t.Fatalf("register mcp server: %v", err)
+	}
+	if err := mcpRegistry.RefreshServerTools(context.Background(), "docs"); err != nil {
+		t.Fatalf("refresh mcp tools: %v", err)
+	}
+	registry.SetMCPRegistry(mcpRegistry)
+
+	if !registry.Supports("mcp.docs.search") {
+		t.Fatalf("expected supports mcp.docs.search")
+	}
+	if registry.Supports("mcp.docs.missing") {
+		t.Fatalf("did not expect supports mcp.docs.missing")
+	}
+	if registry.Supports("search") {
+		t.Fatalf("did not expect supports non-prefixed mcp name")
+	}
+
+	snapshots := registry.mcpFactoryBuildSnapshot()
+	if len(snapshots) != 1 {
+		t.Fatalf("expected one snapshot, got %d", len(snapshots))
+	}
+	if got := mcpToolFullName(" Docs ", " Search "); got != "mcp.docs.search" {
+		t.Fatalf("unexpected mcp full name: %q", got)
+	}
+}
