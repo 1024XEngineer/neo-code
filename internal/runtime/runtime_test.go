@@ -2829,3 +2829,208 @@ func TestPermissionEventViewPayloadMapping(t *testing.T) {
 		t.Fatalf("unexpected resolved payload: %+v", resolvedPayload)
 	}
 }
+
+func TestStreamAccumulatorBuildMessageRejectsMissingToolName(t *testing.T) {
+	t.Parallel()
+
+	acc := newStreamAccumulator()
+	acc.accumulateToolCallStart(0, "call-1", "")
+	acc.accumulateToolCallDelta(0, "call-1", "{}")
+
+	_, err := acc.buildMessage()
+	if err == nil || !containsError(err, "without name") {
+		t.Fatalf("expected missing tool name error, got %v", err)
+	}
+}
+
+func TestLoadSessionReturnsStoreError(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	store := newMemoryStore()
+	service := NewWithFactory(manager, nil, store, &scriptedProviderFactory{provider: &scriptedProvider{}}, nil)
+
+	_, err := service.LoadSession(context.Background(), "missing")
+	if err == nil || !containsError(err, "not found") {
+		t.Fatalf("expected load error, got %v", err)
+	}
+}
+
+func TestSetSessionWorkdirReturnsStoreError(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	store := newMemoryStore()
+	service := NewWithFactory(manager, nil, store, &scriptedProviderFactory{provider: &scriptedProvider{}}, nil)
+
+	_, err := service.SetSessionWorkdir(context.Background(), "missing", t.TempDir())
+	if err == nil || !containsError(err, "not found") {
+		t.Fatalf("expected load error from SetSessionWorkdir, got %v", err)
+	}
+}
+
+func TestSetSessionWorkdirReturnsResolveError(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	defaultWorkdir := t.TempDir()
+	if err := manager.Update(context.Background(), func(cfg *config.Config) error {
+		cfg.Workdir = defaultWorkdir
+		return nil
+	}); err != nil {
+		t.Fatalf("update config: %v", err)
+	}
+
+	store := newMemoryStore()
+	session := agentsession.New("set bad workdir")
+	session.ID = "session-set-bad-workdir"
+	store.sessions[session.ID] = cloneSession(session)
+
+	service := NewWithFactory(manager, nil, store, &scriptedProviderFactory{provider: &scriptedProvider{}}, nil)
+	_, err := service.SetSessionWorkdir(context.Background(), session.ID, filepath.Join(defaultWorkdir, "missing-dir"))
+	if err == nil || !containsError(err, "resolve workdir") {
+		t.Fatalf("expected resolve workdir error, got %v", err)
+	}
+}
+
+func TestServiceRunFailsWhenInitialUserMessageSaveFails(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	baseStore := newMemoryStore()
+	store := &failingStore{
+		Store:      baseStore,
+		saveErr:    errors.New("save failed on first write"),
+		failOnSave: 1,
+	}
+	registry := tools.NewRegistry()
+	registry.Register(&stubTool{name: "filesystem_read_file", content: "default"})
+
+	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: &scriptedProvider{}}, nil)
+	err := service.Run(context.Background(), UserInput{
+		RunID:   "run-initial-save-fail",
+		Content: "hello",
+	})
+	if err == nil || !containsError(err, "save failed on first write") {
+		t.Fatalf("expected initial save error, got %v", err)
+	}
+}
+
+func TestServiceRunFailsWhenAssistantSaveFails(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	baseStore := newMemoryStore()
+	store := &failingStore{
+		Store:      baseStore,
+		saveErr:    errors.New("save failed on assistant"),
+		failOnSave: 2,
+	}
+	registry := tools.NewRegistry()
+	registry.Register(&stubTool{name: "filesystem_read_file", content: "default"})
+
+	scripted := &scriptedProvider{
+		streams: [][]provider.StreamEvent{
+			{provider.NewTextDeltaStreamEvent("assistant reply")},
+		},
+	}
+	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: scripted}, nil)
+	err := service.Run(context.Background(), UserInput{
+		RunID:   "run-assistant-save-fail",
+		Content: "hello",
+	})
+	if err == nil || !containsError(err, "save failed on assistant") {
+		t.Fatalf("expected assistant save error, got %v", err)
+	}
+}
+
+func TestHandleProviderStreamEventErrorBranches(t *testing.T) {
+	t.Parallel()
+
+	acc := newStreamAccumulator()
+
+	err := handleProviderStreamEvent(
+		provider.StreamEvent{Type: provider.StreamEventToolCallStart},
+		acc,
+		nil,
+		nil,
+	)
+	if err == nil || !containsError(err, "tool_call_start event payload is nil") {
+		t.Fatalf("expected tool_call_start payload error, got %v", err)
+	}
+
+	err = handleProviderStreamEvent(
+		provider.StreamEvent{Type: provider.StreamEventToolCallDelta},
+		acc,
+		nil,
+		nil,
+	)
+	if err == nil || !containsError(err, "tool_call_delta event payload is nil") {
+		t.Fatalf("expected tool_call_delta payload error, got %v", err)
+	}
+
+	err = handleProviderStreamEvent(
+		provider.StreamEvent{Type: provider.StreamEventMessageDone},
+		acc,
+		nil,
+		nil,
+	)
+	if err == nil || !containsError(err, "message_done event payload is nil") {
+		t.Fatalf("expected message_done payload error, got %v", err)
+	}
+}
+
+func TestEmitDropsWhenChannelFullAndContextCanceled(t *testing.T) {
+	t.Parallel()
+
+	service := &Service{
+		events: make(chan RuntimeEvent, 1),
+	}
+	service.events <- RuntimeEvent{Type: EventAgentChunk}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	done := make(chan struct{})
+	go func() {
+		service.emit(ctx, EventError, "run-id", "session-id", "payload")
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(1 * time.Second):
+		t.Fatal("emit should return when channel is full and context is canceled")
+	}
+}
+
+func TestCallProviderWithRetryReturnsCombinedForwardError(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	registry := tools.NewRegistry()
+	registry.Register(&stubTool{name: "filesystem_read_file", content: "default"})
+	store := newMemoryStore()
+
+	scripted := &scriptedProvider{
+		chatFn: func(ctx context.Context, req provider.ChatRequest, events chan<- provider.StreamEvent) error {
+			events <- provider.StreamEvent{Type: provider.StreamEventTextDelta}
+			return errors.New("provider chat failed")
+		},
+	}
+	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: scripted}, nil)
+
+	_, err := service.callProviderWithRetry(
+		context.Background(),
+		"run-forward-error",
+		"session-forward-error",
+		provider.ChatRequest{
+			Model:        "test-model",
+			SystemPrompt: "prompt",
+			Messages:     []provider.Message{{Role: provider.RoleUser, Content: "hello"}},
+		},
+	)
+	if err == nil || !containsError(err, "provider stream handling failed after provider error") {
+		t.Fatalf("expected combined forward/provider error, got %v", err)
+	}
+}

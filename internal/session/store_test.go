@@ -2,6 +2,8 @@ package session
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -213,6 +215,157 @@ func TestNewWithWorkdirFallsBackDefaultTitle(t *testing.T) {
 
 	if session.Title != "New Session" {
 		t.Fatalf("expected default title %q, got %q", "New Session", session.Title)
+	}
+}
+
+func TestNewStoreReturnsJSONStore(t *testing.T) {
+	t.Parallel()
+
+	store := NewStore(t.TempDir())
+	if store == nil {
+		t.Fatalf("expected non-nil store")
+	}
+}
+
+func TestJSONStoreListSummariesReadDirFailure(t *testing.T) {
+	t.Parallel()
+
+	baseDir := t.TempDir()
+	store := NewJSONStore(baseDir)
+
+	// 把 sessions 目录位置占成普通文件，触发 ReadDir 失败路径。
+	sessionsPath := filepath.Join(baseDir, sessionsDirName)
+	if err := os.WriteFile(sessionsPath, []byte("not-a-dir"), 0o644); err != nil {
+		t.Fatalf("write %s: %v", sessionsPath, err)
+	}
+
+	_, err := store.ListSummaries(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "create sessions dir") {
+		t.Fatalf("expected create sessions dir error, got %v", err)
+	}
+}
+
+func TestJSONStoreListSummariesContextCanceledDuringIteration(t *testing.T) {
+	t.Parallel()
+
+	baseDir := t.TempDir()
+	store := NewJSONStore(baseDir)
+
+	for i := 0; i < 10; i++ {
+		s := &Session{
+			ID:        "session-iter-" + strings.Repeat("x", i+1),
+			Title:     "iter",
+			CreatedAt: time.Now(),
+			UpdatedAt: time.Now(),
+		}
+		if err := store.Save(context.Background(), s); err != nil {
+			t.Fatalf("save session %d: %v", i, err)
+		}
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := store.ListSummaries(ctx)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context canceled, got %v", err)
+	}
+}
+
+func TestJSONStoreLoadDecodeErrorWithNonJSONPayload(t *testing.T) {
+	t.Parallel()
+
+	baseDir := t.TempDir()
+	store := NewJSONStore(baseDir)
+
+	mustWriteSessionFile(t, filepath.Join(baseDir, sessionsDirName, "decode-bad.json"), "{not-json")
+
+	_, err := store.Load(context.Background(), "decode-bad")
+	if err == nil || !strings.Contains(err.Error(), "decode session decode-bad") {
+		t.Fatalf("expected decode session error, got %v", err)
+	}
+}
+
+func TestJSONStoreListSummariesSkipsUnreadableAndMalformedEntries(t *testing.T) {
+	t.Parallel()
+
+	baseDir := t.TempDir()
+	store := NewJSONStore(baseDir)
+
+	valid := &Session{
+		ID:        "valid-summary",
+		Title:     "Valid",
+		CreatedAt: time.Now().Add(-time.Minute),
+		UpdatedAt: time.Now(),
+	}
+	if err := store.Save(context.Background(), valid); err != nil {
+		t.Fatalf("save valid session: %v", err)
+	}
+
+	mustWriteSessionFile(t, filepath.Join(baseDir, sessionsDirName, "malformed.json"), "{malformed")
+	mustWriteSessionFile(t, filepath.Join(baseDir, sessionsDirName, "empty-id.json"), `{"id":"   ","title":"x"}`)
+
+	summaries, err := store.ListSummaries(context.Background())
+	if err != nil {
+		t.Fatalf("ListSummaries() error: %v", err)
+	}
+	if len(summaries) != 1 || summaries[0].ID != valid.ID {
+		t.Fatalf("expected only valid summary, got %+v", summaries)
+	}
+}
+
+func TestJSONStoreSavePersistsProviderModelAndMessages(t *testing.T) {
+	t.Parallel()
+
+	baseDir := t.TempDir()
+	store := NewJSONStore(baseDir)
+
+	session := &Session{
+		ID:        "persist-full-fields",
+		Title:     "Persist Fields",
+		Provider:  "openai",
+		Model:     "gpt-4.1",
+		CreatedAt: time.Now().Add(-time.Hour),
+		UpdatedAt: time.Now(),
+		Messages: []provider.Message{
+			{Role: provider.RoleUser, Content: "hello"},
+			{
+				Role:    provider.RoleAssistant,
+				Content: "calling tool",
+				ToolCalls: []provider.ToolCall{
+					{ID: "call-1", Name: "webfetch", Arguments: `{"url":"https://example.com"}`},
+				},
+			},
+			{Role: provider.RoleTool, ToolCallID: "call-1", Content: "ok"},
+		},
+	}
+
+	if err := store.Save(context.Background(), session); err != nil {
+		t.Fatalf("save session: %v", err)
+	}
+
+	rawPath := filepath.Join(baseDir, sessionsDirName, session.ID+".json")
+	raw, err := os.ReadFile(rawPath)
+	if err != nil {
+		t.Fatalf("read raw file: %v", err)
+	}
+
+	var decoded map[string]any
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatalf("decode raw json: %v", err)
+	}
+
+	if decoded["provider"] != "openai" {
+		t.Fatalf("expected provider persisted, got %+v", decoded["provider"])
+	}
+	if decoded["model"] != "gpt-4.1" {
+		t.Fatalf("expected model persisted, got %+v", decoded["model"])
+	}
+	if _, ok := decoded["messages"]; !ok {
+		t.Fatalf("expected messages field persisted, got %+v", decoded)
+	}
+	if _, ok := decoded["workdir"]; ok {
+		t.Fatalf("expected workdir not persisted, got %+v", decoded)
 	}
 }
 

@@ -39,3 +39,15 @@ func TestNewIDAllowsEmptyPrefix(t *testing.T) {
 		t.Fatalf("expected format _<16hex>, got %q", id)
 	}
 }
+
+func TestNewIDCompatibilityWrapper(t *testing.T) {
+	t.Parallel()
+
+	id := newID("session")
+	if !strings.HasPrefix(id, "session_") {
+		t.Fatalf("expected compatibility wrapper to preserve prefix, got %q", id)
+	}
+	if len(strings.TrimPrefix(id, "session_")) != 16 {
+		t.Fatalf("expected compatibility wrapper to return 16 hex chars, got %q", id)
+	}
+}
