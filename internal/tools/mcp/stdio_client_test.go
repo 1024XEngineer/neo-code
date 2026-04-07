@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -23,7 +24,7 @@ func (errWriter) Write(p []byte) (int, error) {
 func TestStdIOClientListToolsAndCallTool(t *testing.T) {
 	t.Parallel()
 
-	client := newTestStdIOClient(t)
+	client := newTestStdIOClientWithMode(t, "framed")
 	defer func() { _ = client.Close() }()
 
 	toolsList, err := client.ListTools(context.Background())
@@ -43,13 +44,50 @@ func TestStdIOClientListToolsAndCallTool(t *testing.T) {
 	}
 }
 
+func TestStdIOClientLineProtocolInitializeAndCalls(t *testing.T) {
+	t.Parallel()
+
+	client := newTestStdIOClientWithMode(t, "line")
+	defer func() { _ = client.Close() }()
+
+	toolsList, err := client.ListTools(context.Background())
+	if err != nil {
+		t.Fatalf("ListTools() with line protocol error = %v", err)
+	}
+	if len(toolsList) != 1 || toolsList[0].Name != "search" {
+		t.Fatalf("unexpected tools list: %+v", toolsList)
+	}
+
+	result, err := client.CallTool(context.Background(), "search", []byte(`{"query":"mcp"}`))
+	if err != nil {
+		t.Fatalf("CallTool() with line protocol error = %v", err)
+	}
+	if !strings.Contains(result.Content, "search") {
+		t.Fatalf("unexpected call result content: %q", result.Content)
+	}
+}
+
+func TestStdIOClientInitializeFallbackToFramed(t *testing.T) {
+	t.Parallel()
+
+	client := newTestStdIOClientWithMode(t, "framed")
+	defer func() { _ = client.Close() }()
+
+	if _, err := client.ListTools(context.Background()); err != nil {
+		t.Fatalf("expected fallback initialize success, got %v", err)
+	}
+	if client.protocol != stdioProtocolFramed {
+		t.Fatalf("expected framed protocol selected, got %q", client.protocol)
+	}
+}
+
 func TestStdIOClientHealthCheck(t *testing.T) {
 	t.Parallel()
 
-	client := newTestStdIOClient(t)
+	client := newTestStdIOClientWithMode(t, "framed")
 	defer func() { _ = client.Close() }()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	if err := client.HealthCheck(ctx); err != nil {
 		t.Fatalf("HealthCheck() error = %v", err)
@@ -59,7 +97,7 @@ func TestStdIOClientHealthCheck(t *testing.T) {
 func TestStdIOClientConcurrentCallTool(t *testing.T) {
 	t.Parallel()
 
-	client := newTestStdIOClient(t)
+	client := newTestStdIOClientWithMode(t, "framed")
 	defer func() { _ = client.Close() }()
 
 	const workers = 16
@@ -98,6 +136,40 @@ func TestReadFramedMessageRejectsOversizedPayload(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "exceeds limit") {
 		t.Fatalf("expected exceeds limit error, got %v", err)
+	}
+}
+
+func TestReadRPCMessageLine(t *testing.T) {
+	t.Parallel()
+
+	reader := bufio.NewReader(strings.NewReader("Starting...\n{\"jsonrpc\":\"2.0\",\"id\":\"1\",\"result\":{}}\n"))
+	payload, protocol, err := readRPCMessage(reader)
+	if err != nil {
+		t.Fatalf("readRPCMessage() error = %v", err)
+	}
+	if protocol != stdioProtocolLine {
+		t.Fatalf("expected line protocol, got %q", protocol)
+	}
+	if !strings.Contains(string(payload), `"jsonrpc":"2.0"`) {
+		t.Fatalf("unexpected payload: %s", payload)
+	}
+}
+
+func TestReadRPCMessageFramed(t *testing.T) {
+	t.Parallel()
+
+	body := `{"jsonrpc":"2.0","id":"1","result":{"ok":true}}`
+	raw := "log\nContent-Length: " + strconv.Itoa(len(body)) + "\r\n\r\n" + body
+	reader := bufio.NewReader(strings.NewReader(raw))
+	payload, protocol, err := readRPCMessage(reader)
+	if err != nil {
+		t.Fatalf("readRPCMessage() error = %v", err)
+	}
+	if protocol != stdioProtocolFramed {
+		t.Fatalf("expected framed protocol, got %q", protocol)
+	}
+	if string(payload) != body {
+		t.Fatalf("unexpected payload: %s", payload)
 	}
 }
 
@@ -176,13 +248,28 @@ func TestReadFramedMessageHeaderErrors(t *testing.T) {
 	t.Parallel()
 
 	reader := bufio.NewReader(strings.NewReader("X-Test: 1\r\n\r\n{}"))
-	if _, err := readFramedMessage(reader); err == nil || !strings.Contains(err.Error(), "missing content-length") {
+	if _, err := readFramedMessage(reader); err == nil || !(strings.Contains(err.Error(), "missing content-length") || errors.Is(err, io.EOF)) {
 		t.Fatalf("expected missing content-length error, got %v", err)
 	}
 
 	reader = bufio.NewReader(strings.NewReader("Content-Length: nope\r\n\r\n{}"))
 	if _, err := readFramedMessage(reader); err == nil || !strings.Contains(err.Error(), "invalid content-length") {
 		t.Fatalf("expected invalid content-length error, got %v", err)
+	}
+}
+
+func TestReadFramedMessageIgnoresStdoutPreamble(t *testing.T) {
+	t.Parallel()
+
+	body := `{"jsonrpc":"2.0","id":"1","result":{"ok":true}}`
+	raw := "Starting Time MCP server...\nContent-Length: " + strconv.Itoa(len(body)) + "\r\n\r\n" + body
+	reader := bufio.NewReader(strings.NewReader(raw))
+	payload, err := readFramedMessage(reader)
+	if err != nil {
+		t.Fatalf("readFramedMessage() error = %v", err)
+	}
+	if string(payload) != body {
+		t.Fatalf("unexpected payload: %s", string(payload))
 	}
 }
 
@@ -271,12 +358,20 @@ func TestStdIOClientBumpBackoffClamp(t *testing.T) {
 }
 
 func newTestStdIOClient(t *testing.T) *StdIOClient {
+	return newTestStdIOClientWithMode(t, "framed")
+}
+
+func newTestStdIOClientWithMode(t *testing.T, wireMode string) *StdIOClient {
 	t.Helper()
+
+	if strings.TrimSpace(wireMode) == "" {
+		wireMode = "framed"
+	}
 
 	client, err := NewStdIOClient(StdioClientConfig{
 		Command:      os.Args[0],
 		Args:         []string{"-test.run=TestHelperProcessMCPStdioServer", "--"},
-		Env:          []string{"GO_WANT_MCP_STDIO_HELPER=1", "GO_MCP_STDIO_REQUIRE_INITIALIZE=1"},
+		Env:          []string{"GO_WANT_MCP_STDIO_HELPER=1", "GO_MCP_STDIO_REQUIRE_INITIALIZE=1", "GO_MCP_STDIO_WIRE=" + wireMode},
 		StartTimeout: 3 * time.Second,
 		CallTimeout:  3 * time.Second,
 	})
@@ -292,7 +387,7 @@ func TestStdIOClientInitializeFailure(t *testing.T) {
 	client, err := NewStdIOClient(StdioClientConfig{
 		Command:      os.Args[0],
 		Args:         []string{"-test.run=TestHelperProcessMCPStdioServer", "--"},
-		Env:          []string{"GO_WANT_MCP_STDIO_HELPER=1", "GO_MCP_STDIO_INIT_FAIL=1"},
+		Env:          []string{"GO_WANT_MCP_STDIO_HELPER=1", "GO_MCP_STDIO_INIT_FAIL=1", "GO_MCP_STDIO_WIRE=framed"},
 		StartTimeout: 3 * time.Second,
 		CallTimeout:  3 * time.Second,
 	})
@@ -314,11 +409,24 @@ func TestHelperProcessMCPStdioServer(t *testing.T) {
 
 	requireInitialize := os.Getenv("GO_MCP_STDIO_REQUIRE_INITIALIZE") == "1"
 	initFail := os.Getenv("GO_MCP_STDIO_INIT_FAIL") == "1"
+	wireMode := strings.TrimSpace(os.Getenv("GO_MCP_STDIO_WIRE"))
+	if wireMode == "" {
+		wireMode = "framed"
+	}
 	initialized := !requireInitialize
 
 	reader := bufio.NewReader(os.Stdin)
 	for {
-		payload, err := readFramedMessage(reader)
+		var (
+			payload []byte
+			err     error
+		)
+		switch wireMode {
+		case "line":
+			payload, _, err = readRPCMessage(reader)
+		default:
+			payload, err = readFramedMessage(reader)
+		}
 		if err != nil {
 			if err == io.EOF {
 				os.Exit(0)
@@ -428,7 +536,13 @@ func TestHelperProcessMCPStdioServer(t *testing.T) {
 		if err != nil {
 			os.Exit(4)
 		}
-		if err := writeFramedMessage(os.Stdout, rawResponse); err != nil {
+		switch wireMode {
+		case "line":
+			err = writeLineMessage(os.Stdout, rawResponse)
+		default:
+			err = writeFramedMessage(os.Stdout, rawResponse)
+		}
+		if err != nil {
 			os.Exit(5)
 		}
 	}

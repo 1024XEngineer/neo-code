@@ -23,6 +23,7 @@ const (
 	defaultStdioRestartBackoff = 1 * time.Second
 	maxStdioRestartBackoff     = 30 * time.Second
 	maxStdioFrameBytes         = 8 * 1024 * 1024
+	maxStdioLineBytes          = 8 * 1024 * 1024
 	defaultMCPProtocolVersion  = "2024-11-05"
 	defaultMCPClientName       = "neocode"
 	defaultMCPClientVersion    = "0.1.0"
@@ -88,8 +89,17 @@ type StdIOClient struct {
 	initialized  bool
 	initializing bool
 	initDone     chan struct{}
+	protocol     stdioProtocol
 	shutdown     bool
 }
+
+type stdioProtocol string
+
+const (
+	stdioProtocolUnknown stdioProtocol = ""
+	stdioProtocolLine    stdioProtocol = "line"
+	stdioProtocolFramed  stdioProtocol = "framed"
+)
 
 // NewStdIOClient 创建 stdio MCP client。
 func NewStdIOClient(cfg StdioClientConfig) (*StdIOClient, error) {
@@ -132,7 +142,7 @@ func (c *StdIOClient) Close() error {
 	return nil
 }
 
-// ListTools 调用 MCP `tools/list` 获取工具清单。
+// ListTools 调用 MCP tools/list 获取工具清单。
 func (c *StdIOClient) ListTools(ctx context.Context) ([]ToolDescriptor, error) {
 	callCtx, cancel := c.callContext(ctx)
 	defer cancel()
@@ -169,7 +179,7 @@ func (c *StdIOClient) ListTools(ctx context.Context) ([]ToolDescriptor, error) {
 	return result, nil
 }
 
-// CallTool 调用 MCP `tools/call` 并收敛返回值。
+// CallTool 调用 MCP tools/call 并收敛返回值。
 func (c *StdIOClient) CallTool(ctx context.Context, toolName string, arguments []byte) (CallResult, error) {
 	trimmedToolName := strings.TrimSpace(toolName)
 	if trimmedToolName == "" {
@@ -196,12 +206,13 @@ func (c *StdIOClient) CallTool(ctx context.Context, toolName string, arguments [
 	return decodeCallResult(raw), nil
 }
 
-// HealthCheck 通过一次短超时 `tools/list` 验证连接可用性。
+// HealthCheck 通过一次短超时 tools/list 验证连接可用性。
 func (c *StdIOClient) HealthCheck(ctx context.Context) error {
 	_, err := c.ListTools(ctx)
 	return err
 }
 
+// callContext 基于配置与上游截止时间生成单次 RPC 调用上下文。
 func (c *StdIOClient) callContext(ctx context.Context) (context.Context, context.CancelFunc) {
 	timeout := c.cfg.CallTimeout
 	if deadline, ok := ctx.Deadline(); ok {
@@ -212,12 +223,24 @@ func (c *StdIOClient) callContext(ctx context.Context) (context.Context, context
 	return context.WithTimeout(ctx, timeout)
 }
 
+// call 发送 RPC 请求并等待响应。
 func (c *StdIOClient) call(ctx context.Context, method string, params any) (json.RawMessage, error) {
 	return c.callRequest(ctx, method, params, false)
 }
 
-// callRequest 发送带响应的 RPC 请求；skipEnsure=true 用于初始化阶段避免递归。
+// callRequest 在可用连接上发送 RPC 请求，skipEnsure=true 用于初始化阶段避免递归。
 func (c *StdIOClient) callRequest(ctx context.Context, method string, params any, skipEnsure bool) (json.RawMessage, error) {
+	return c.callRequestWithProtocol(ctx, method, params, skipEnsure, stdioProtocolUnknown)
+}
+
+// callRequestWithProtocol 按指定协议发送 RPC 请求，用于 initialize 时的协议探测与回退。
+func (c *StdIOClient) callRequestWithProtocol(
+	ctx context.Context,
+	method string,
+	params any,
+	skipEnsure bool,
+	override stdioProtocol,
+) (json.RawMessage, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -240,6 +263,7 @@ func (c *StdIOClient) callRequest(ctx context.Context, method string, params any
 	}
 	c.pending[requestID] = replyCh
 	stdin := c.stdin
+	selectedProtocol := c.resolveWriteProtocolLocked(override)
 	c.mu.Unlock()
 	if stdin == nil {
 		c.removePending(requestID)
@@ -257,7 +281,7 @@ func (c *StdIOClient) callRequest(ctx context.Context, method string, params any
 		return nil, fmt.Errorf("mcp: marshal request: %w", err)
 	}
 	c.writeMu.Lock()
-	writeErr := writeFramedMessage(stdin, requestPayload)
+	writeErr := writeMessageWithProtocol(stdin, requestPayload, selectedProtocol)
 	c.writeMu.Unlock()
 	if writeErr != nil {
 		c.removePending(requestID)
@@ -273,8 +297,19 @@ func (c *StdIOClient) callRequest(ctx context.Context, method string, params any
 	}
 }
 
-// sendNotification 发送无需响应的 RPC 通知；skipEnsure=true 用于初始化流程。
+// sendNotification 发送无响应 RPC 通知，skipEnsure=true 用于初始化流程。
 func (c *StdIOClient) sendNotification(ctx context.Context, method string, params any, skipEnsure bool) error {
+	return c.sendNotificationWithProtocol(ctx, method, params, skipEnsure, stdioProtocolUnknown)
+}
+
+// sendNotificationWithProtocol 按指定协议发送 RPC 通知，用于 initialize 完成后的 initialized 事件。
+func (c *StdIOClient) sendNotificationWithProtocol(
+	ctx context.Context,
+	method string,
+	params any,
+	skipEnsure bool,
+	override stdioProtocol,
+) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -293,6 +328,7 @@ func (c *StdIOClient) sendNotification(ctx context.Context, method string, param
 		return errors.New("mcp: stdio client closed")
 	}
 	stdin := c.stdin
+	selectedProtocol := c.resolveWriteProtocolLocked(override)
 	c.mu.Unlock()
 	if stdin == nil {
 		return errors.New("mcp: stdio client is not connected")
@@ -308,7 +344,7 @@ func (c *StdIOClient) sendNotification(ctx context.Context, method string, param
 	}
 
 	c.writeMu.Lock()
-	writeErr := writeFramedMessage(stdin, payload)
+	writeErr := writeMessageWithProtocol(stdin, payload, selectedProtocol)
 	c.writeMu.Unlock()
 	if writeErr != nil {
 		return fmt.Errorf("mcp: send notification: %w", writeErr)
@@ -316,6 +352,7 @@ func (c *StdIOClient) sendNotification(ctx context.Context, method string, param
 	return nil
 }
 
+// ensureStarted 确保 stdio 子进程已启动并处于可读写状态。
 func (c *StdIOClient) ensureStarted(ctx context.Context) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -374,6 +411,7 @@ func (c *StdIOClient) ensureStarted(ctx context.Context) error {
 	c.initialized = false
 	c.initializing = false
 	c.initDone = nil
+	c.protocol = stdioProtocolUnknown
 	c.backoff = c.cfg.RestartBackoff
 	c.retryAt = time.Time{}
 
@@ -427,7 +465,7 @@ func (c *StdIOClient) ensureInitialized(ctx context.Context) error {
 	}
 }
 
-// performInitialize 执行标准 MCP 初始化握手：initialize -> notifications/initialized。
+// performInitialize 执行 MCP 握手并自动兼容 line/framed 两种 stdio 线协议。
 func (c *StdIOClient) performInitialize(ctx context.Context) error {
 	params := map[string]any{
 		"protocolVersion": defaultMCPProtocolVersion,
@@ -437,22 +475,61 @@ func (c *StdIOClient) performInitialize(ctx context.Context) error {
 			"version": defaultMCPClientVersion,
 		},
 	}
-	if _, err := c.callRequest(ctx, "initialize", params, true); err != nil {
-		return fmt.Errorf("mcp: initialize session: %w", err)
+
+	protocols := []stdioProtocol{stdioProtocolLine, stdioProtocolFramed}
+	c.mu.Lock()
+	if c.protocol == stdioProtocolLine || c.protocol == stdioProtocolFramed {
+		protocols = []stdioProtocol{c.protocol}
 	}
-	if err := c.sendNotification(ctx, "notifications/initialized", map[string]any{}, true); err != nil {
-		return fmt.Errorf("mcp: notify initialized: %w", err)
+	c.mu.Unlock()
+
+	errs := make([]string, 0, len(protocols))
+	for index, protocol := range protocols {
+		attemptCtx, cancel := initializeAttemptContext(ctx, len(protocols)-index)
+		_, initErr := c.callRequestWithProtocol(attemptCtx, "initialize", params, true, protocol)
+		cancel()
+		if initErr != nil {
+			errs = append(errs, fmt.Sprintf("%s=%v", protocol, initErr))
+			continue
+		}
+
+		notifyCtx, notifyCancel := initializeAttemptContext(ctx, len(protocols)-index)
+		notifyErr := c.sendNotificationWithProtocol(
+			notifyCtx,
+			"notifications/initialized",
+			map[string]any{},
+			true,
+			protocol,
+		)
+		notifyCancel()
+		if notifyErr != nil {
+			errs = append(errs, fmt.Sprintf("%s=%v", protocol, notifyErr))
+			continue
+		}
+
+		c.mu.Lock()
+		c.protocol = protocol
+		c.mu.Unlock()
+		return nil
 	}
-	return nil
+
+	return fmt.Errorf("mcp: initialize session: %s", strings.Join(errs, "; "))
 }
 
+// readLoop 持续消费 MCP server 响应并分发给对应 pending 请求。
 func (c *StdIOClient) readLoop() {
 	for {
-		message, err := readFramedMessage(c.reader)
+		message, protocol, err := readRPCMessage(c.reader)
 		if err != nil {
 			c.markExited(fmt.Errorf("mcp: read response: %w", err))
 			return
 		}
+
+		c.mu.Lock()
+		if c.protocol == stdioProtocolUnknown && (protocol == stdioProtocolLine || protocol == stdioProtocolFramed) {
+			c.protocol = protocol
+		}
+		c.mu.Unlock()
 
 		var response jsonRPCResponse
 		if err := json.Unmarshal(message, &response); err != nil {
@@ -482,6 +559,7 @@ func (c *StdIOClient) readLoop() {
 	}
 }
 
+// waitLoop 等待子进程退出并触发统一下线处理。
 func (c *StdIOClient) waitLoop(command *exec.Cmd) {
 	if command == nil {
 		c.markExited(errors.New("mcp: stdio process is nil"))
@@ -491,6 +569,7 @@ func (c *StdIOClient) waitLoop(command *exec.Cmd) {
 	c.markExited(fmt.Errorf("mcp: stdio process exited: %w", err))
 }
 
+// markExited 将客户端状态原子切换为已下线并唤醒所有等待请求。
 func (c *StdIOClient) markExited(err error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -505,6 +584,7 @@ func (c *StdIOClient) markExited(err error) {
 	}
 	c.initializing = false
 	c.initDone = nil
+	c.protocol = stdioProtocolUnknown
 	c.exitErr = err
 	if c.exited != nil {
 		close(c.exited)
@@ -517,12 +597,25 @@ func (c *StdIOClient) markExited(err error) {
 	c.bumpBackoffLocked()
 }
 
+// resolveWriteProtocolLocked 根据调用方覆盖值与会话状态解析实际写入协议。
+func (c *StdIOClient) resolveWriteProtocolLocked(override stdioProtocol) stdioProtocol {
+	if override == stdioProtocolLine || override == stdioProtocolFramed {
+		return override
+	}
+	if c.protocol == stdioProtocolLine || c.protocol == stdioProtocolFramed {
+		return c.protocol
+	}
+	return stdioProtocolFramed
+}
+
+// removePending 从挂起请求表中移除指定 requestID。
 func (c *StdIOClient) removePending(requestID string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	delete(c.pending, requestID)
 }
 
+// failAllPendingLocked 将所有挂起请求统一返回错误，调用方需持有 c.mu。
 func (c *StdIOClient) failAllPendingLocked(err error) {
 	for requestID, replyCh := range c.pending {
 		replyCh <- rpcReply{err: err}
@@ -530,6 +623,7 @@ func (c *StdIOClient) failAllPendingLocked(err error) {
 	}
 }
 
+// bumpBackoffLocked 按指数退避策略更新下次可重启时间，调用方需持有 c.mu。
 func (c *StdIOClient) bumpBackoffLocked() {
 	if c.backoff <= 0 {
 		c.backoff = c.cfg.RestartBackoff
@@ -541,6 +635,27 @@ func (c *StdIOClient) bumpBackoffLocked() {
 	}
 }
 
+// initializeAttemptContext 按剩余尝试次数切分超时预算，避免单个协议探测耗尽全部时间。
+func initializeAttemptContext(parent context.Context, remainingAttempts int) (context.Context, context.CancelFunc) {
+	if remainingAttempts <= 1 {
+		return context.WithCancel(parent)
+	}
+	deadline, ok := parent.Deadline()
+	if !ok {
+		return context.WithCancel(parent)
+	}
+	remaining := time.Until(deadline)
+	if remaining <= 0 {
+		return context.WithCancel(parent)
+	}
+	timeout := remaining / time.Duration(remainingAttempts)
+	if timeout < 200*time.Millisecond {
+		timeout = 200 * time.Millisecond
+	}
+	return context.WithTimeout(parent, timeout)
+}
+
+// writeFramedMessage 以 Content-Length framed 格式写入 JSON-RPC 消息。
 func writeFramedMessage(writer io.Writer, payload []byte) error {
 	header := fmt.Sprintf("Content-Length: %d\r\n\r\n", len(payload))
 	if _, err := io.WriteString(writer, header); err != nil {
@@ -552,28 +667,85 @@ func writeFramedMessage(writer io.Writer, payload []byte) error {
 	return nil
 }
 
-func readFramedMessage(reader *bufio.Reader) ([]byte, error) {
-	contentLength := -1
+// writeLineMessage 以行分隔 JSON（NDJSON）格式写入 JSON-RPC 消息。
+func writeLineMessage(writer io.Writer, payload []byte) error {
+	if len(payload) == 0 {
+		return nil
+	}
+	if _, err := writer.Write(payload); err != nil {
+		return err
+	}
+	if !bytes.HasSuffix(payload, []byte("\n")) {
+		if _, err := io.WriteString(writer, "\n"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// writeMessageWithProtocol 按指定线协议写入消息；未知协议默认使用 framed。
+func writeMessageWithProtocol(writer io.Writer, payload []byte, protocol stdioProtocol) error {
+	switch protocol {
+	case stdioProtocolLine:
+		return writeLineMessage(writer, payload)
+	case stdioProtocolFramed, stdioProtocolUnknown:
+		return writeFramedMessage(writer, payload)
+	default:
+		return writeFramedMessage(writer, payload)
+	}
+}
+
+// readRPCMessage 自动识别并读取 line/framed 两种 stdio 消息，忽略非协议日志行。
+func readRPCMessage(reader *bufio.Reader) ([]byte, stdioProtocol, error) {
 	for {
 		line, err := reader.ReadString('\n')
 		if err != nil {
-			return nil, err
+			return nil, stdioProtocolUnknown, err
 		}
+
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "" {
-			break
+			continue
 		}
 
 		lower := strings.ToLower(trimmed)
 		if strings.HasPrefix(lower, "content-length:") {
-			rawLength := strings.TrimSpace(trimmed[len("content-length:"):])
-			length, convErr := strconv.Atoi(rawLength)
-			if convErr != nil {
-				return nil, fmt.Errorf("mcp: invalid content-length %q", rawLength)
+			payload, framedErr := readFramedPayload(reader, trimmed)
+			if framedErr != nil {
+				return nil, stdioProtocolUnknown, framedErr
 			}
-			contentLength = length
+			return payload, stdioProtocolFramed, nil
+		}
+
+		if strings.HasPrefix(trimmed, "{") || strings.HasPrefix(trimmed, "[") {
+			if len(trimmed) > maxStdioLineBytes {
+				return nil, stdioProtocolUnknown, fmt.Errorf("mcp: line message too large: %d", len(trimmed))
+			}
+			if !json.Valid([]byte(trimmed)) {
+				continue
+			}
+			return []byte(trimmed), stdioProtocolLine, nil
 		}
 	}
+}
+
+// readFramedPayload 在已读取首个 Content-Length 头后，继续读取 header/body 并返回 payload。
+func readFramedPayload(reader *bufio.Reader, firstHeader string) ([]byte, error) {
+	contentLength, err := parseContentLength(firstHeader)
+	if err != nil {
+		return nil, err
+	}
+
+	for {
+		line, readErr := reader.ReadString('\n')
+		if readErr != nil {
+			return nil, readErr
+		}
+		if strings.TrimSpace(line) == "" {
+			break
+		}
+	}
+
 	if contentLength < 0 {
 		return nil, errors.New("mcp: missing content-length header")
 	}
@@ -588,6 +760,35 @@ func readFramedMessage(reader *bufio.Reader) ([]byte, error) {
 	return payload, nil
 }
 
+// parseContentLength 解析 Content-Length 头并返回消息体长度。
+func parseContentLength(header string) (int, error) {
+	trimmed := strings.TrimSpace(header)
+	lower := strings.ToLower(trimmed)
+	if !strings.HasPrefix(lower, "content-length:") {
+		return -1, errors.New("mcp: missing content-length header")
+	}
+	rawLength := strings.TrimSpace(trimmed[len("content-length:"):])
+	contentLength, err := strconv.Atoi(rawLength)
+	if err != nil {
+		return -1, fmt.Errorf("mcp: invalid content-length %q", rawLength)
+	}
+	return contentLength, nil
+}
+
+// readFramedMessage 仅读取 framed 消息；会跳过前置日志与 line 消息直到遇到 framed。
+func readFramedMessage(reader *bufio.Reader) ([]byte, error) {
+	for {
+		message, protocol, err := readRPCMessage(reader)
+		if err != nil {
+			return nil, err
+		}
+		if protocol == stdioProtocolFramed {
+			return message, nil
+		}
+	}
+}
+
+// decodeCallResult 将 tools/call 结果统一收敛为 CallResult。
 func decodeCallResult(raw json.RawMessage) CallResult {
 	var payload map[string]any
 	if err := json.Unmarshal(raw, &payload); err != nil {
