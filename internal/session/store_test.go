@@ -158,6 +158,31 @@ func TestHashWorkspaceRootNormalizesChinesePathVariants(t *testing.T) {
 	}
 }
 
+func TestWorkspaceHelpersHandleEmptyAndRelativePath(t *testing.T) {
+	t.Parallel()
+
+	if got := workspacePathKey("   "); got != "" {
+		t.Fatalf("expected empty workspace key, got %q", got)
+	}
+	if got := normalizeWorkspaceRoot("   "); got != "" {
+		t.Fatalf("expected empty normalized workspace root, got %q", got)
+	}
+
+	workingDir, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	relative := "."
+	normalized := normalizeWorkspaceRoot(relative)
+	if normalized != filepath.Clean(workingDir) {
+		t.Fatalf("expected relative path to normalize to %q, got %q", filepath.Clean(workingDir), normalized)
+	}
+
+	if got, want := hashWorkspaceRoot(""), hashWorkspaceRoot("   "); got != want {
+		t.Fatalf("expected empty workspace root variants to share fallback hash, got %q want %q", got, want)
+	}
+}
+
 func TestJSONStoreErrors(t *testing.T) {
 	t.Parallel()
 
@@ -233,6 +258,97 @@ func TestJSONStoreSaveInvalidBaseDir(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "create sessions dir") {
 		t.Fatalf("expected invalid base dir error, got %v", err)
+	}
+}
+
+func TestJSONStoreSaveReplaceFailureWhenTargetIsNonEmptyDirectory(t *testing.T) {
+	t.Parallel()
+
+	baseDir := t.TempDir()
+	workspaceRoot := t.TempDir()
+	store := NewJSONStore(baseDir, workspaceRoot)
+	targetDir := filepath.Join(sessionDirectory(baseDir, workspaceRoot), "blocked.json")
+	if err := os.MkdirAll(targetDir, 0o755); err != nil {
+		t.Fatalf("mkdir target dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(targetDir, "child.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatalf("write child file: %v", err)
+	}
+
+	err := store.Save(context.Background(), &Session{
+		ID:        "blocked",
+		Title:     "Blocked",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	})
+	if err == nil || !strings.Contains(err.Error(), "replace session file") {
+		t.Fatalf("expected replace failure, got %v", err)
+	}
+}
+
+func TestJSONStoreSaveOverwritesExistingSessionFile(t *testing.T) {
+	t.Parallel()
+
+	baseDir := t.TempDir()
+	workspaceRoot := t.TempDir()
+	store := NewJSONStore(baseDir, workspaceRoot)
+	session := &Session{
+		ID:        "overwrite",
+		Title:     "First",
+		CreatedAt: time.Now().Add(-time.Minute),
+		UpdatedAt: time.Now().Add(-time.Minute),
+	}
+	if err := store.Save(context.Background(), session); err != nil {
+		t.Fatalf("save initial session: %v", err)
+	}
+
+	session.Title = "Second"
+	session.UpdatedAt = time.Now()
+	if err := store.Save(context.Background(), session); err != nil {
+		t.Fatalf("save updated session: %v", err)
+	}
+
+	loaded, err := store.Load(context.Background(), session.ID)
+	if err != nil {
+		t.Fatalf("load updated session: %v", err)
+	}
+	if loaded.Title != "Second" {
+		t.Fatalf("expected overwritten session title %q, got %q", "Second", loaded.Title)
+	}
+}
+
+func TestJSONStoreSaveWriteTempFailure(t *testing.T) {
+	t.Parallel()
+
+	baseDir := t.TempDir()
+	workspaceRoot := t.TempDir()
+	store := NewJSONStore(baseDir, workspaceRoot)
+	sessionsPath := sessionDirectory(baseDir, workspaceRoot)
+	if err := os.MkdirAll(sessionsPath, 0o755); err != nil {
+		t.Fatalf("mkdir sessions path: %v", err)
+	}
+	tempDir := filepath.Join(sessionsPath, "temp-blocked.json.tmp")
+	if err := os.MkdirAll(tempDir, 0o755); err != nil {
+		t.Fatalf("mkdir temp dir: %v", err)
+	}
+
+	err := store.Save(context.Background(), &Session{
+		ID:        "temp-blocked",
+		Title:     "Temp Blocked",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	})
+	if err == nil || !strings.Contains(err.Error(), "write temp session") {
+		t.Fatalf("expected temp write failure, got %v", err)
+	}
+}
+
+func TestJSONStoreLoadMissingFileReturnsError(t *testing.T) {
+	t.Parallel()
+
+	store := NewJSONStore(t.TempDir(), t.TempDir())
+	if _, err := store.Load(context.Background(), "missing"); err == nil {
+		t.Fatalf("expected missing file load to fail")
 	}
 }
 

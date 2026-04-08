@@ -323,6 +323,25 @@ func TestBuildToolRegistryIncludesMCPFromConfig(t *testing.T) {
 	}
 }
 
+func TestBuildToolRegistryReturnsMCPSourceError(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.Default().Clone()
+	cfg.Workdir = t.TempDir()
+	cfg.Tools.MCP.Servers = []config.MCPServerConfig{
+		{
+			ID:      "docs",
+			Enabled: true,
+			Source:  "sse",
+		},
+	}
+
+	_, err := buildToolRegistry(cfg)
+	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "unsupported mcp source") {
+		t.Fatalf("expected unsupported mcp source error, got %v", err)
+	}
+}
+
 func TestResolveMCPServerEnvAndWorkdir(t *testing.T) {
 	t.Setenv("MCP_TOKEN", "secret")
 	env, err := resolveMCPServerEnv(config.MCPServerConfig{
@@ -550,6 +569,89 @@ func TestBuildRuntimeRejectsInvalidWorkdirOverride(t *testing.T) {
 	_, err := BuildRuntime(context.Background(), BootstrapOptions{Workdir: invalid})
 	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "resolve workdir") {
 		t.Fatalf("expected resolve workdir error, got %v", err)
+	}
+}
+
+func TestBuildRuntimeRejectsInvalidConfigFile(t *testing.T) {
+	disableBuiltinProviderAPIKeys(t)
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	configDir := filepath.Join(home, ".neocode")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	configPath := filepath.Join(configDir, "config.yaml")
+	if err := os.WriteFile(configPath, []byte("workdir: legacy\n"), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	_, err := BuildRuntime(context.Background(), BootstrapOptions{})
+	if err == nil || !strings.Contains(err.Error(), "no longer supported") {
+		t.Fatalf("expected legacy config error, got %v", err)
+	}
+}
+
+func TestBuildRuntimeRejectsUnsupportedMCPSource(t *testing.T) {
+	disableBuiltinProviderAPIKeys(t)
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	configDir := filepath.Join(home, ".neocode")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	configPath := filepath.Join(configDir, "config.yaml")
+	raw := []byte(strings.Join([]string{
+		"selected_provider: openai",
+		"current_model: " + config.OpenAIDefaultModel,
+		"shell: powershell",
+		"tools:",
+		"  mcp:",
+		"    servers:",
+		"      - id: docs",
+		"        enabled: true",
+		"        source: sse",
+	}, "\n") + "\n")
+	if err := os.WriteFile(configPath, raw, 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	_, err := BuildRuntime(context.Background(), BootstrapOptions{})
+	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "not supported") {
+		t.Fatalf("expected unsupported mcp source validation error, got %v", err)
+	}
+}
+
+func TestNewProgramRejectsInvalidWorkdirOverride(t *testing.T) {
+	disableBuiltinProviderAPIKeys(t)
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	_, err := NewProgram(context.Background(), BootstrapOptions{Workdir: filepath.Join(t.TempDir(), "missing", "中文")})
+	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "resolve workdir") {
+		t.Fatalf("expected invalid workdir error, got %v", err)
+	}
+}
+
+func TestResolveBootstrapWorkdirRejectsEmptyAndFile(t *testing.T) {
+	if _, err := resolveBootstrapWorkdir("   "); err == nil || !strings.Contains(err.Error(), "workdir is empty") {
+		t.Fatalf("expected empty workdir error, got %v", err)
+	}
+
+	filePath := filepath.Join(t.TempDir(), "note.txt")
+	if err := os.WriteFile(filePath, []byte("x"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+
+	if _, err := resolveBootstrapWorkdir(filePath); err == nil || !strings.Contains(err.Error(), "is not a directory") {
+		t.Fatalf("expected file path error, got %v", err)
 	}
 }
 

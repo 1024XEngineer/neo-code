@@ -11,6 +11,7 @@ import (
 )
 
 var launchRootProgram = defaultRootProgramLauncher
+var newRootProgram = app.NewProgram
 
 // GlobalFlags 描述 CLI 根命令当前支持的全局参数。
 type GlobalFlags struct {
@@ -49,7 +50,7 @@ func NewRootCommand() *cobra.Command {
 
 // defaultRootProgramLauncher 负责在默认根命令路径下启动 TUI。
 func defaultRootProgramLauncher(ctx context.Context, opts app.BootstrapOptions) error {
-	program, err := app.NewProgram(ctx, opts)
+	program, err := newRootProgram(ctx, opts)
 	if err != nil {
 		return err
 	}
