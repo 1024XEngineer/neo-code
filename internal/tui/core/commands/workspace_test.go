@@ -8,20 +8,20 @@ import (
 	"strings"
 	"testing"
 
-	agentruntime "neo-code/internal/runtime"
+	agentsession "neo-code/internal/session"
 	tuiworkspace "neo-code/internal/tui/core/workspace"
 )
 
 type stubSessionWorkdirSetter struct {
-	session agentruntime.Session
+	session agentsession.Session
 	err     error
 	calls   int
 }
 
-func (s *stubSessionWorkdirSetter) SetSessionWorkdir(ctx context.Context, sessionID string, workdir string) (agentruntime.Session, error) {
+func (s *stubSessionWorkdirSetter) SetSessionWorkdir(ctx context.Context, sessionID string, workdir string) (agentsession.Session, error) {
 	s.calls++
 	if s.err != nil {
-		return agentruntime.Session{}, s.err
+		return agentsession.Session{}, s.err
 	}
 	return s.session, nil
 }
@@ -91,7 +91,7 @@ func TestExecuteSessionWorkdirCommand(t *testing.T) {
 
 	t.Run("runtime empty workdir fallback", func(t *testing.T) {
 		current := t.TempDir()
-		stub := &stubSessionWorkdirSetter{session: agentruntime.Session{ID: "session-1", Workdir: ""}}
+		stub := &stubSessionWorkdirSetter{session: agentsession.Session{ID: "session-1", Workdir: ""}}
 		result := ExecuteSessionWorkdirCommand(stub, "session-1", current, "/cwd sub", parse, tuiworkspace.ResolveWorkspacePath, tuiworkspace.SelectSessionWorkdir)
 		if result.Err != nil {
 			t.Fatalf("unexpected error: %v", result.Err)
