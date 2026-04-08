@@ -1332,7 +1332,7 @@ func TestMergeModelDescriptors(t *testing.T) {
 func TestDescriptorsFromIDs(t *testing.T) {
 	t.Parallel()
 
-	result := DescriptorsFromIDs("gpt-4.1", "gpt-4.1-mini")
+	result := DescriptorsFromIDs([]string{"gpt-4.1", "gpt-4.1-mini"})
 	if len(result) != 2 {
 		t.Fatalf("expected 2 descriptors, got %d", len(result))
 	}
