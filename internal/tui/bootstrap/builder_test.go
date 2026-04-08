@@ -2,6 +2,7 @@ package bootstrap
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"neo-code/internal/config"
@@ -162,5 +163,136 @@ func TestNormalizeMode(t *testing.T) {
 				t.Errorf("NormalizeMode(%v) = %v, want %v", tt.input, got, tt.want)
 			}
 		})
+	}
+}
+
+type errorFactory struct {
+	runtimeErr  error
+	providerErr error
+	runtimeNil  bool
+	providerNil bool
+}
+
+func (f errorFactory) BuildRuntime(mode Mode, current agentruntime.Runtime) (agentruntime.Runtime, error) {
+	if f.runtimeErr != nil {
+		return nil, f.runtimeErr
+	}
+	if f.runtimeNil {
+		return nil, nil
+	}
+	return current, nil
+}
+
+func (f errorFactory) BuildProvider(mode Mode, current ProviderService) (ProviderService, error) {
+	if f.providerErr != nil {
+		return nil, f.providerErr
+	}
+	if f.providerNil {
+		return nil, nil
+	}
+	return current, nil
+}
+
+type noopRuntime struct{}
+
+func (r noopRuntime) Run(ctx context.Context, input agentruntime.UserInput) error {
+	return nil
+}
+
+func (r noopRuntime) Compact(ctx context.Context, input agentruntime.CompactInput) (agentruntime.CompactResult, error) {
+	return agentruntime.CompactResult{}, nil
+}
+
+func (r noopRuntime) ResolvePermission(ctx context.Context, input agentruntime.PermissionResolutionInput) error {
+	return nil
+}
+
+func (r noopRuntime) Events() <-chan agentruntime.RuntimeEvent {
+	ch := make(chan agentruntime.RuntimeEvent)
+	close(ch)
+	return ch
+}
+
+func (r noopRuntime) CancelActiveRun() bool {
+	return false
+}
+
+func (r noopRuntime) ListSessions(ctx context.Context) ([]agentsession.Summary, error) {
+	return nil, nil
+}
+
+func (r noopRuntime) LoadSession(ctx context.Context, id string) (agentsession.Session, error) {
+	return agentsession.Session{}, nil
+}
+
+func (r noopRuntime) SetSessionWorkdir(ctx context.Context, sessionID string, workdir string) (agentsession.Session, error) {
+	return agentsession.Session{}, nil
+}
+
+type noopProviderService struct{}
+
+func (s noopProviderService) ListProviders(ctx context.Context) ([]config.ProviderCatalogItem, error) {
+	return nil, nil
+}
+
+func (s noopProviderService) SelectProvider(ctx context.Context, providerID string) (config.ProviderSelection, error) {
+	return config.ProviderSelection{}, nil
+}
+
+func (s noopProviderService) ListModels(ctx context.Context) ([]config.ModelDescriptor, error) {
+	return nil, nil
+}
+
+func (s noopProviderService) ListModelsSnapshot(ctx context.Context) ([]config.ModelDescriptor, error) {
+	return nil, nil
+}
+
+func (s noopProviderService) SetCurrentModel(ctx context.Context, modelID string) (config.ProviderSelection, error) {
+	return config.ProviderSelection{}, nil
+}
+
+func TestBuildFactoryErrors(t *testing.T) {
+	manager := &config.Manager{}
+	runtimeSvc := noopRuntime{}
+	providerSvc := noopProviderService{}
+
+	_, err := Build(Options{
+		ConfigManager:   manager,
+		Runtime:         runtimeSvc,
+		ProviderService: providerSvc,
+		Factory:         errorFactory{runtimeErr: errors.New("runtime boom")},
+	})
+	if err == nil {
+		t.Fatalf("expected runtime factory error")
+	}
+
+	_, err = Build(Options{
+		ConfigManager:   manager,
+		Runtime:         runtimeSvc,
+		ProviderService: providerSvc,
+		Factory:         errorFactory{providerErr: errors.New("provider boom")},
+	})
+	if err == nil {
+		t.Fatalf("expected provider factory error")
+	}
+
+	_, err = Build(Options{
+		ConfigManager:   manager,
+		Runtime:         runtimeSvc,
+		ProviderService: providerSvc,
+		Factory:         errorFactory{runtimeNil: true},
+	})
+	if err == nil {
+		t.Fatalf("expected nil runtime factory error")
+	}
+
+	_, err = Build(Options{
+		ConfigManager:   manager,
+		Runtime:         runtimeSvc,
+		ProviderService: providerSvc,
+		Factory:         errorFactory{providerNil: true},
+	})
+	if err == nil {
+		t.Fatalf("expected nil provider factory error")
 	}
 }

@@ -30,6 +30,13 @@ type CompactFinishedMsg struct {
 	Err error
 }
 
+// PermissionResolvedMsg 表示权限审批结果已回传。
+type PermissionResolvedMsg struct {
+	RequestID string
+	Decision  string
+	Err       error
+}
+
 // LocalCommandResultMsg 表示本地命令执行结果。
 type LocalCommandResultMsg struct {
 	Notice          string

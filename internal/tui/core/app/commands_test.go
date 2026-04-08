@@ -1,9 +1,15 @@
 package tui
 
 import (
+	"context"
+	"errors"
+	"strings"
 	"testing"
 
 	"github.com/charmbracelet/bubbles/list"
+
+	"neo-code/internal/config"
+	tuistatus "neo-code/internal/tui/core/status"
 )
 
 func TestBuiltinSlashCommands(t *testing.T) {
@@ -140,5 +146,153 @@ func TestStatusCodeCopyError(t *testing.T) {
 func TestMaxActivityEntries(t *testing.T) {
 	if maxActivityEntries == 0 {
 		t.Error("maxActivityEntries should not be zero")
+	}
+}
+
+type errorProviderService struct {
+	err error
+}
+
+func (s errorProviderService) ListProviders(ctx context.Context) ([]config.ProviderCatalogItem, error) {
+	return nil, s.err
+}
+
+func (s errorProviderService) SelectProvider(ctx context.Context, providerID string) (config.ProviderSelection, error) {
+	return config.ProviderSelection{}, s.err
+}
+
+func (s errorProviderService) ListModels(ctx context.Context) ([]config.ModelDescriptor, error) {
+	return nil, s.err
+}
+
+func (s errorProviderService) ListModelsSnapshot(ctx context.Context) ([]config.ModelDescriptor, error) {
+	return nil, s.err
+}
+
+func (s errorProviderService) SetCurrentModel(ctx context.Context, modelID string) (config.ProviderSelection, error) {
+	return config.ProviderSelection{}, s.err
+}
+
+func TestExecuteLocalCommandErrors(t *testing.T) {
+	app, _ := newTestApp(t)
+	snapshot := app.currentStatusSnapshot()
+
+	if _, err := executeLocalCommand(context.Background(), app.configManager, app.providerSvc, snapshot, ""); err == nil {
+		t.Fatalf("expected empty command error")
+	}
+	if _, err := executeLocalCommand(context.Background(), app.configManager, app.providerSvc, snapshot, "/unknown"); err == nil {
+		t.Fatalf("expected unknown command error")
+	}
+}
+
+func TestExecuteLocalCommandHelpAndStatus(t *testing.T) {
+	app, _ := newTestApp(t)
+	snapshot := app.currentStatusSnapshot()
+
+	helpText, err := executeLocalCommand(context.Background(), app.configManager, app.providerSvc, snapshot, "/help")
+	if err != nil {
+		t.Fatalf("executeLocalCommand(/help) error = %v", err)
+	}
+	if !strings.Contains(helpText, "Available slash commands:") {
+		t.Fatalf("expected help output, got %q", helpText)
+	}
+
+	statusText, err := executeLocalCommand(context.Background(), app.configManager, app.providerSvc, snapshot, "/status")
+	if err != nil {
+		t.Fatalf("executeLocalCommand(/status) error = %v", err)
+	}
+	if !strings.Contains(statusText, "Status:") {
+		t.Fatalf("expected status output, got %q", statusText)
+	}
+}
+
+func TestExecuteProviderCommandValidation(t *testing.T) {
+	app, _ := newTestApp(t)
+	if _, err := executeProviderCommand(context.Background(), app.providerSvc, ""); err == nil {
+		t.Fatalf("expected usage error")
+	}
+}
+
+func TestExecuteProviderCommandSuccess(t *testing.T) {
+	app, _ := newTestApp(t)
+	value := app.state.CurrentProvider
+	if strings.TrimSpace(value) == "" {
+		t.Fatalf("expected provider id to be set")
+	}
+
+	message, err := executeProviderCommand(context.Background(), app.providerSvc, value)
+	if err != nil {
+		t.Fatalf("executeProviderCommand error = %v", err)
+	}
+	if !strings.Contains(message, value) {
+		t.Fatalf("expected provider id in message, got %q", message)
+	}
+}
+
+func TestExecuteProviderCommandPropagatesError(t *testing.T) {
+	providerSvc := errorProviderService{err: errors.New("boom")}
+	if _, err := executeProviderCommand(context.Background(), providerSvc, "any"); err == nil {
+		t.Fatalf("expected provider error")
+	}
+}
+
+func TestRunProviderSelectionCmd(t *testing.T) {
+	app, _ := newTestApp(t)
+	cmd := runProviderSelection(app.providerSvc, app.state.CurrentProvider)
+	if cmd == nil {
+		t.Fatalf("expected cmd")
+	}
+	msg := cmd()
+	result, ok := msg.(localCommandResultMsg)
+	if !ok {
+		t.Fatalf("expected localCommandResultMsg, got %T", msg)
+	}
+	if !result.ProviderChanged || !strings.Contains(result.Notice, app.state.CurrentProvider) {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+}
+
+func TestRunModelSelectionCmd(t *testing.T) {
+	app, _ := newTestApp(t)
+	cmd := runModelSelection(app.providerSvc, app.state.CurrentModel)
+	if cmd == nil {
+		t.Fatalf("expected cmd")
+	}
+	msg := cmd()
+	result, ok := msg.(localCommandResultMsg)
+	if !ok {
+		t.Fatalf("expected localCommandResultMsg, got %T", msg)
+	}
+	if !result.ModelChanged || !strings.Contains(result.Notice, app.state.CurrentModel) {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+}
+
+func TestRunModelCatalogRefreshCmd(t *testing.T) {
+	app, _ := newTestApp(t)
+	cmd := runModelCatalogRefresh(app.providerSvc, app.state.CurrentProvider)
+	if cmd == nil {
+		t.Fatalf("expected refresh cmd")
+	}
+	msg := cmd()
+	result, ok := msg.(modelCatalogRefreshMsg)
+	if !ok {
+		t.Fatalf("expected modelCatalogRefreshMsg, got %T", msg)
+	}
+	if !strings.EqualFold(result.ProviderID, app.state.CurrentProvider) {
+		t.Fatalf("unexpected provider id: %s", result.ProviderID)
+	}
+}
+
+func TestExecuteStatusCommandFormatting(t *testing.T) {
+	snapshot := tuistatus.Snapshot{
+		ActiveSessionTitle: "Draft",
+		CurrentProvider:    "test-provider",
+		CurrentModel:       "test-model",
+		CurrentWorkdir:     "/tmp",
+	}
+	output := executeStatusCommand(snapshot)
+	if !strings.Contains(output, "Status:") {
+		t.Fatalf("expected Status header, got %q", output)
 	}
 }
