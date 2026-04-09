@@ -345,7 +345,7 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 				if isWorkspaceSlashCommand(input) {
 					a.state.StatusText = statusApplyingCommand
 					a.state.ExecutionError = ""
-					cmds = append(cmds, runWorkspaceSwitchCommand(a.workspaceSwitcher, a.state.CurrentWorkdir, a.configManager.Get().Workdir, input))
+					cmds = append(cmds, runWorkspaceSwitchCommand(a.state.CurrentWorkdir, a.configManager.Get().Workdir, input))
 					return a, tea.Batch(cmds...)
 				}
 				a.state.StatusText = statusApplyingCommand
@@ -1557,12 +1557,7 @@ func runAgent(runtime agentruntime.Runtime, runID string, sessionID string, work
 }
 
 // runWorkspaceSwitchCommand 负责解析 `/cwd`，并在需要时启动新工作区进程。
-func runWorkspaceSwitchCommand(
-	workspaceSwitcher WorkspaceSwitcher,
-	currentWorkdir string,
-	startupWorkdir string,
-	raw string,
-) tea.Cmd {
+func runWorkspaceSwitchCommand(currentWorkdir string, startupWorkdir string, raw string) tea.Cmd {
 	result := tuicommands.ExecuteWorkspaceSwitchCommand(
 		currentWorkdir,
 		startupWorkdir,
@@ -1570,33 +1565,14 @@ func runWorkspaceSwitchCommand(
 		parseWorkspaceSlashCommand,
 		tuiworkspace.ResolveWorkspacePath,
 	)
-	if result.Err != nil {
-		return func() tea.Msg {
-			return workspaceSwitchResultMsg{
-				Notice:     result.Notice,
-				Workdir:    result.Workdir,
-				Relaunched: result.Relaunch,
-				Err:        result.Err,
-			}
-		}
-	}
-
-	return tuiservices.RunWorkspaceSwitchCmd(
-		workspaceSwitcher,
-		tuiservices.WorkspaceSwitchRequest{
+	return func() tea.Msg {
+		return workspaceSwitchResultMsg{
 			Notice:     result.Notice,
 			Workdir:    result.Workdir,
 			Relaunched: result.Relaunch,
-		},
-		func(notice string, workdir string, relaunched bool, err error) tea.Msg {
-			return workspaceSwitchResultMsg{
-				Notice:     notice,
-				Workdir:    workdir,
-				Relaunched: relaunched,
-				Err:        err,
-			}
-		},
-	)
+			Err:        result.Err,
+		}
+	}
 }
 
 // runCompact 鍦ㄧ嫭绔嬪懡浠や腑瑙﹀彂 runtime compact锛屽苟鎶婄粨鏋滃洖浼犵粰 TUI銆
@@ -1653,5 +1629,6 @@ func (a *App) applyWorkspaceSwitchResult(result workspaceSwitchResultMsg) tea.Cm
 	}
 
 	a.appendActivity("workspace", result.Notice, "", false)
+	a.pendingWorkdir = strings.TrimSpace(result.Workdir)
 	return tea.Quit
 }

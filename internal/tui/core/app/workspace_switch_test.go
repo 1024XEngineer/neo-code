@@ -152,8 +152,8 @@ func TestAppWorkspaceSwitchSuccessQuitsCurrentProgram(t *testing.T) {
 	if !result.Relaunched || result.Workdir != target {
 		t.Fatalf("unexpected switch result: %+v", result)
 	}
-	if switcher.calls != 1 || switcher.lastWorkdir != target {
-		t.Fatalf("expected switcher call for %q, got calls=%d last=%q", target, switcher.calls, switcher.lastWorkdir)
+	if switcher.calls != 0 {
+		t.Fatalf("expected relaunch path to defer restart outside TUI, got %d switcher calls", switcher.calls)
 	}
 
 	model, quitCmd := updated.Update(msg)
@@ -167,12 +167,14 @@ func TestAppWorkspaceSwitchSuccessQuitsCurrentProgram(t *testing.T) {
 	if _, ok := quitCmd().(tea.QuitMsg); !ok {
 		t.Fatalf("expected tea.QuitMsg from quit command")
 	}
+	if updated.PendingWorkspaceWorkdir() != target {
+		t.Fatalf("expected pending relaunch workdir %q, got %q", target, updated.PendingWorkspaceWorkdir())
+	}
 }
 
 func TestAppWorkspaceSwitchFailureKeepsCurrentProgram(t *testing.T) {
-	app, switcher := newWorkspaceSwitchTestApp(t)
+	app, _ := newWorkspaceSwitchTestApp(t)
 	target := t.TempDir()
-	switcher.err = errors.New("start failed")
 	originalWorkdir := app.state.CurrentWorkdir
 	app.input.SetValue("/cwd " + target)
 
@@ -187,20 +189,26 @@ func TestAppWorkspaceSwitchFailureKeepsCurrentProgram(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected workspace switch result msg, got %T", msg)
 	}
-	if result.Err == nil {
-		t.Fatalf("expected relaunch error, got %+v", result)
+	if result.Err != nil {
+		t.Fatalf("expected relaunch request to be deferred without start error, got %+v", result)
 	}
 
 	model, quitCmd := updated.Update(msg)
 	updated = model.(App)
-	if quitCmd != nil {
-		t.Fatalf("expected failure path to stay in current program")
+	if quitCmd == nil {
+		t.Fatalf("expected relaunch request to quit current program")
+	}
+	if _, ok := quitCmd().(tea.QuitMsg); !ok {
+		t.Fatalf("expected tea.QuitMsg from quit command")
 	}
 	if updated.state.CurrentWorkdir != originalWorkdir {
-		t.Fatalf("expected workdir to remain %q, got %q", originalWorkdir, updated.state.CurrentWorkdir)
+		t.Fatalf("expected displayed workdir to remain %q before relaunch, got %q", originalWorkdir, updated.state.CurrentWorkdir)
 	}
-	if !strings.Contains(updated.state.ExecutionError, "start failed") {
-		t.Fatalf("expected start failure error, got %q", updated.state.ExecutionError)
+	if updated.PendingWorkspaceWorkdir() != target {
+		t.Fatalf("expected pending relaunch workdir %q, got %q", target, updated.PendingWorkspaceWorkdir())
+	}
+	if updated.state.ExecutionError != "" {
+		t.Fatalf("expected no immediate relaunch error, got %q", updated.state.ExecutionError)
 	}
 }
 
@@ -368,7 +376,7 @@ func TestAppApplyWorkspaceSwitchResultRefreshFailure(t *testing.T) {
 }
 
 func TestRunWorkspaceSwitchCommandReturnsValidationError(t *testing.T) {
-	cmd := runWorkspaceSwitchCommand(nil, "", "", "/cwd nowhere")
+	cmd := runWorkspaceSwitchCommand("", "", "/cwd nowhere")
 	if cmd == nil {
 		t.Fatalf("expected workspace switch command")
 	}

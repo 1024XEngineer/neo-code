@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/charmbracelet/bubbles/filepicker"
@@ -88,6 +89,7 @@ type appComponents struct {
 type appRuntimeState struct {
 	codeCopyBlocks   map[int]string
 	pendingCopyID    int
+	pendingWorkdir   string
 	nowFn            func() time.Time
 	lastInputEditAt  time.Time
 	lastPasteLikeAt  time.Time
@@ -112,6 +114,11 @@ type App struct {
 	width  int
 	height int
 	styles styles
+}
+
+// PendingWorkspaceWorkdir 返回本次退出后需要重建到的新工作区。
+func (a App) PendingWorkspaceWorkdir() string {
+	return strings.TrimSpace(a.pendingWorkdir)
 }
 
 func New(

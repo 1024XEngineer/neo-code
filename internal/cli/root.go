@@ -13,6 +13,10 @@ import (
 var launchRootProgram = defaultRootProgramLauncher
 var newRootProgram = app.NewProgram
 
+type workspaceRelaunchModel interface {
+	PendingWorkspaceWorkdir() string
+}
+
 // GlobalFlags 描述 CLI 根命令当前支持的全局参数。
 type GlobalFlags struct {
 	Workdir string
@@ -50,10 +54,26 @@ func NewRootCommand() *cobra.Command {
 
 // defaultRootProgramLauncher 负责在默认根命令路径下启动 TUI。
 func defaultRootProgramLauncher(ctx context.Context, opts app.BootstrapOptions) error {
-	program, err := newRootProgram(ctx, opts)
-	if err != nil {
-		return err
+	current := opts
+	for {
+		program, err := newRootProgram(ctx, current)
+		if err != nil {
+			return err
+		}
+		model, err := program.Run()
+		if err != nil {
+			return err
+		}
+
+		relaunchModel, ok := model.(workspaceRelaunchModel)
+		if !ok {
+			return nil
+		}
+
+		nextWorkdir := strings.TrimSpace(relaunchModel.PendingWorkspaceWorkdir())
+		if nextWorkdir == "" {
+			return nil
+		}
+		current.Workdir = nextWorkdir
 	}
-	_, err = program.Run()
-	return err
 }

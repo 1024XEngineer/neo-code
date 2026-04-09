@@ -121,6 +121,35 @@ func TestDefaultRootProgramLauncherReturnsNewProgramError(t *testing.T) {
 	}
 }
 
+func TestDefaultRootProgramLauncherRelaunchesWithRequestedWorkdir(t *testing.T) {
+	originalNewProgram := newRootProgram
+	t.Cleanup(func() { newRootProgram = originalNewProgram })
+
+	calls := make([]app.BootstrapOptions, 0, 2)
+	newRootProgram = func(ctx context.Context, opts app.BootstrapOptions) (*tea.Program, error) {
+		calls = append(calls, opts)
+		if len(calls) == 1 {
+			model := relaunchModel{workdir: `D:\鏂板伐浣滃尯`}
+			return tea.NewProgram(model, tea.WithInput(nil), tea.WithOutput(io.Discard)), nil
+		}
+		model := quitModel{}
+		return tea.NewProgram(model, tea.WithInput(nil), tea.WithOutput(io.Discard)), nil
+	}
+
+	if err := defaultRootProgramLauncher(context.Background(), app.BootstrapOptions{Workdir: `D:\鏃у伐浣滃尯`}); err != nil {
+		t.Fatalf("defaultRootProgramLauncher() error = %v", err)
+	}
+	if len(calls) != 2 {
+		t.Fatalf("expected two program launches, got %d", len(calls))
+	}
+	if calls[0].Workdir != `D:\鏃у伐浣滃尯` {
+		t.Fatalf("expected first launch to use original workdir, got %q", calls[0].Workdir)
+	}
+	if calls[1].Workdir != `D:\鏂板伐浣滃尯` {
+		t.Fatalf("expected relaunch to use requested workdir, got %q", calls[1].Workdir)
+	}
+}
+
 type quitModel struct{}
 
 func (quitModel) Init() tea.Cmd {
@@ -133,4 +162,24 @@ func (quitModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (quitModel) View() string {
 	return ""
+}
+
+type relaunchModel struct {
+	workdir string
+}
+
+func (m relaunchModel) Init() tea.Cmd {
+	return tea.Quit
+}
+
+func (m relaunchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	return m, nil
+}
+
+func (m relaunchModel) View() string {
+	return ""
+}
+
+func (m relaunchModel) PendingWorkspaceWorkdir() string {
+	return m.workdir
 }
