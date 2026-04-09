@@ -547,11 +547,16 @@ func TestConsumeStream_ContextCancellation(t *testing.T) {
 
 	sseData := `data: {"id":"a","choices":[{"delta":{"content":"should not emit"}}]}
 
-`
+	`
 	events := make(chan providertypes.StreamEvent, 1)
 	err = p.consumeStream(ctx, strings.NewReader(sseData), events)
-	if err != nil && !errors.Is(err, context.Canceled) {
-		t.Fatalf("expected context.Canceled or nil, got: %v", err)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got: %v", err)
+	}
+	select {
+	case evt := <-events:
+		t.Fatalf("expected no events after cancellation, got: %#v", evt)
+	default:
 	}
 }
 

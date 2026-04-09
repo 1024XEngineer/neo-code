@@ -78,9 +78,15 @@ func (p *Provider) consumeStream(
 	}
 
 	for {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
 		line, err := reader.ReadLine()
 
 		if err != nil && !errors.Is(err, io.EOF) {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return ctxErr
+			}
 			// 非 EOF 的读取错误：先刷新缓冲的 data 行，再包装为流中断，
 			// 避免中断前最后一段数据丢失。
 			if flushErr := flushPendingData(); flushErr != nil {
@@ -116,6 +122,9 @@ func (p *Provider) consumeStream(
 		}
 
 		if errors.Is(err, io.EOF) {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return ctxErr
+			}
 			// [DEBUG] 流 EOF 时打印关键状态，用于诊断截断原因
 			log.Printf("[DEBUG-STREAM] EOF reached: done=%v, finishReason=%q, totalRead=%d, toolCallCount=%d",
 				done, finishReason, reader.totalRead, len(toolCalls))
