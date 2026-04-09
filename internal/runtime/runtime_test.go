@@ -221,7 +221,7 @@ func (t *stubTool) Execute(ctx context.Context, input tools.ToolCallInput) (tool
 		return t.executeFn(ctx, input)
 	}
 	if input.EmitChunk != nil {
-		_ = input.EmitChunk([]byte("chunk"))
+		input.EmitChunk([]byte("chunk"))
 	}
 	return tools.ToolResult{
 		Name:    t.name,
@@ -1728,7 +1728,7 @@ func TestServiceRunCanceledDuringToolExecution(t *testing.T) {
 		name: "filesystem_edit",
 		executeFn: func(ctx context.Context, input tools.ToolCallInput) (tools.ToolResult, error) {
 			if input.EmitChunk != nil {
-				_ = input.EmitChunk([]byte("chunk"))
+				input.EmitChunk([]byte("chunk"))
 			}
 			close(toolStarted)
 			<-ctx.Done()
@@ -1788,7 +1788,7 @@ func TestServiceRunPreservesToolErrorAfterCancel(t *testing.T) {
 		name: "filesystem_edit",
 		executeFn: func(ctx context.Context, input tools.ToolCallInput) (tools.ToolResult, error) {
 			if input.EmitChunk != nil {
-				_ = input.EmitChunk([]byte("chunk"))
+				input.EmitChunk([]byte("chunk"))
 			}
 			close(toolStarted)
 			<-ctx.Done()

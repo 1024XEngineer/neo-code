@@ -15,14 +15,7 @@ type Tool interface {
 	Execute(ctx context.Context, call ToolCallInput) (ToolResult, error)
 }
 
-// ChunkEmitter 是工具执行过程中向上游发送流式分片的回调。
-// 并发语义：
-// - 回调可能在一次执行内被调用 0 次或多次；
-// - 回调在工具执行 goroutine 中调用；
-// - 调用方若返回非 nil error，工具应停止后续分片发送并尽快中止执行。
-// 内存语义：
-// - 回调返回后不得继续持有传入的 chunk 引用，若需异步使用必须先复制。
-type ChunkEmitter func(chunk []byte) error
+type ChunkEmitter func(chunk []byte)
 
 type ToolCallInput struct {
 	ID            string
@@ -31,8 +24,7 @@ type ToolCallInput struct {
 	SessionID     string
 	Workdir       string
 	WorkspacePlan *security.WorkspaceExecutionPlan
-	// EmitChunk 为流式分片回调，语义见 ChunkEmitter 注释。
-	EmitChunk ChunkEmitter
+	EmitChunk     ChunkEmitter
 }
 
 type ToolResult struct {

@@ -100,25 +100,12 @@ func (t *ReadFileTool) Execute(ctx context.Context, input tools.ToolCallInput) (
 
 	if input.EmitChunk != nil {
 		content := []byte(result.Content)
-		emittedBytes := 0
 		for start := 0; start < len(content); start += emitChunkSize {
 			end := start + emitChunkSize
 			if end > len(content) {
 				end = len(content)
 			}
-			if emitErr := input.EmitChunk(content[start:end]); emitErr != nil {
-				err := errors.New(readFileToolName + ": emit chunk failed: " + emitErr.Error())
-				return tools.NewErrorResult(
-					t.Name(),
-					tools.NormalizeErrorReason(t.Name(), err),
-					"",
-					map[string]any{
-						"path":          target,
-						"emitted_bytes": emittedBytes,
-					},
-				), err
-			}
-			emittedBytes += end - start
+			input.EmitChunk(content[start:end])
 		}
 	}
 

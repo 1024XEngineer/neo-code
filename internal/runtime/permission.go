@@ -100,15 +100,8 @@ func (s *Service) executeToolCallWithPermission(ctx context.Context, input permi
 		Arguments: []byte(input.Call.Arguments),
 		Workdir:   input.Workdir,
 		SessionID: input.SessionID,
-		EmitChunk: func(chunk []byte) error {
-			if err := ctx.Err(); err != nil {
-				return err
-			}
+		EmitChunk: func(chunk []byte) {
 			s.emit(ctx, EventToolChunk, input.RunID, input.SessionID, string(chunk))
-			if err := ctx.Err(); err != nil {
-				return err
-			}
-			return nil
 		},
 	}
 
