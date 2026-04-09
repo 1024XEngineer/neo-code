@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"strings"
 
 	"neo-code/internal/provider"
@@ -67,6 +68,7 @@ func (p *Provider) consumeStream(
 
 	// finishStream 统一的流结束处理：发送 message_done 事件。
 	finishStream := func() error {
+		log.Printf("[DEBUG-STREAM] finishStream called: finishReason=%q, done=%v", finishReason, done)
 		return emitMessageDone(ctx, events, finishReason, &usage)
 	}
 
@@ -114,6 +116,16 @@ func (p *Provider) consumeStream(
 		}
 
 		if errors.Is(err, io.EOF) {
+			// [DEBUG] 流 EOF 时打印关键状态，用于诊断截断原因
+			log.Printf("[DEBUG-STREAM] EOF reached: done=%v, finishReason=%q, totalRead=%d, toolCallCount=%d",
+				done, finishReason, reader.totalRead, len(toolCalls))
+			if !done {
+				log.Printf("[DEBUG-STREAM] WARNING: stream ended WITHOUT [DONE] marker — treating as interruption")
+				if flushErr := flushPendingData(); flushErr != nil {
+					return flushErr
+				}
+				return fmt.Errorf("%w: missing [DONE] marker before EOF", provider.ErrStreamInterrupted)
+			}
 			if flushErr := flushPendingData(); flushErr != nil {
 				return flushErr
 			}

@@ -123,6 +123,13 @@ func (p *scriptedProvider) Chat(ctx context.Context, req providertypes.ChatReque
 				return ctx.Err()
 			}
 		}
+		if callIndex >= len(p.responses) && !streamContainsMessageDone(p.streams[callIndex]) {
+			select {
+			case events <- providertypes.NewMessageDoneStreamEvent("", nil):
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
 	}
 	if callIndex < len(p.responses) {
 		response := p.responses[callIndex]
@@ -153,6 +160,16 @@ func (p *scriptedProvider) Chat(ctx context.Context, req providertypes.ChatReque
 	}
 
 	return nil
+}
+
+// streamContainsMessageDone 判断测试流中是否已显式包含结束事件，避免辅助 provider 重复补发 message_done。
+func streamContainsMessageDone(events []providertypes.StreamEvent) bool {
+	for _, event := range events {
+		if event.Type == providertypes.StreamEventMessageDone {
+			return true
+		}
+	}
+	return false
 }
 
 type scriptedProviderFactory struct {
@@ -471,7 +488,7 @@ func TestServiceRunMergesLateToolCallMetadata(t *testing.T) {
 		},
 	}
 
-	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: scripted}, nil)
+	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: scripted}, &stubContextBuilder{})
 	if err := service.Run(context.Background(), UserInput{RunID: "run-late-tool-metadata", Content: "edit"}); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -522,7 +539,7 @@ func TestServiceRunRejectsToolCallWithoutID(t *testing.T) {
 		},
 	}
 
-	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: scripted}, nil)
+	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: scripted}, &stubContextBuilder{})
 	err := service.Run(context.Background(), UserInput{RunID: "run-missing-tool-id", Content: "edit"})
 	if err == nil || !containsError(err, "without id") {
 		t.Fatalf("expected missing tool id error, got %v", err)
@@ -552,6 +569,41 @@ func TestServiceRunRejectsMalformedProviderStreamEvent(t *testing.T) {
 	err := service.Run(context.Background(), UserInput{RunID: "run-malformed-stream-event", Content: "hello"})
 	if err == nil || !containsError(err, "text_delta event payload is nil") {
 		t.Fatalf("expected malformed stream event error, got %v", err)
+	}
+}
+
+func TestServiceRunRejectsProviderCompletionWithoutMessageDone(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	store := newMemoryStore()
+	registry := tools.NewRegistry()
+	registry.Register(&stubTool{name: "filesystem_read_file", content: "default"})
+
+	scripted := &scriptedProvider{
+		chatFn: func(ctx context.Context, req providertypes.ChatRequest, events chan<- providertypes.StreamEvent) error {
+			select {
+			case events <- providertypes.NewTextDeltaStreamEvent("partial"):
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+			return nil
+		},
+	}
+
+	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: scripted}, &stubContextBuilder{})
+	err := service.Run(context.Background(), UserInput{RunID: "run-missing-message-done", Content: "hello"})
+	if err == nil || !containsError(err, "without message_done") {
+		t.Fatalf("expected missing message_done error, got %v", err)
+	}
+
+	events := collectRuntimeEvents(service.Events())
+	assertEventSequence(t, events, []EventType{EventUserMessage, EventAgentChunk, EventError})
+	assertNoEventType(t, events, EventAgentDone)
+
+	session := onlySession(t, store)
+	if len(session.Messages) != 1 || session.Messages[0].Role != providertypes.RoleUser {
+		t.Fatalf("expected only user message to persist after missing message_done, got %+v", session.Messages)
 	}
 }
 
@@ -1416,6 +1468,7 @@ func TestServiceRunErrorPaths(t *testing.T) {
 							}
 						}
 						events <- providertypes.NewTextDeltaStreamEvent("recovered")
+						events <- providertypes.NewMessageDoneStreamEvent("stop", nil)
 						return nil
 					},
 				}
@@ -2215,6 +2268,7 @@ func TestServiceSerializesRunAndCompact(t *testing.T) {
 			}
 			<-unblockProvider
 			events <- providertypes.NewTextDeltaStreamEvent("done")
+			events <- providertypes.NewMessageDoneStreamEvent("stop", nil)
 			return nil
 		},
 	}
@@ -2471,6 +2525,7 @@ func newRuntimeConfigManagerWithProviderEnvs(t *testing.T, providerEnvs map[stri
 	t.Helper()
 
 	apiKeyEnv := runtimeTestAPIKeyEnv(t)
+	defaultWorkdir := t.TempDir()
 	restoreRuntimeEnv(t, apiKeyEnv)
 	if err := os.Setenv(apiKeyEnv, "test-key"); err != nil {
 		t.Fatalf("set env: %v", err)
@@ -2500,6 +2555,7 @@ func newRuntimeConfigManagerWithProviderEnvs(t *testing.T, providerEnvs map[stri
 	if err := manager.Update(context.Background(), func(cfg *config.Config) error {
 		cfg.ToolTimeoutSec = 1
 		cfg.MaxLoops = 4
+		cfg.Workdir = defaultWorkdir
 		return nil
 	}); err != nil {
 		t.Fatalf("update config: %v", err)
@@ -2749,6 +2805,7 @@ func TestIsRetryableProviderError(t *testing.T) {
 		{"non-retryable provider error", &provider.ProviderError{Retryable: false}, false},
 		{"plain error", errors.New("something failed"), false},
 		{"wrapped retryable", fmt.Errorf("wrapped: %w", &provider.ProviderError{Retryable: true}), true},
+		{"stream interrupted sentinel", provider.ErrStreamInterrupted, false},
 	}
 
 	for _, tt := range tests {

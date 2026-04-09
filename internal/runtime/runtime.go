@@ -35,8 +35,9 @@ const (
 // streamAccumulator 在流式事件处理过程中累积本轮对话需要持久化的助手消息状态，
 // 包括文本内容和工具调用列表。
 type streamAccumulator struct {
-	content   strings.Builder
-	toolCalls map[int]*providertypes.ToolCall
+	content     strings.Builder
+	toolCalls   map[int]*providertypes.ToolCall
+	messageDone bool
 }
 
 // newStreamAccumulator 创建并初始化一个空的流式事件累积器。
@@ -542,6 +543,9 @@ func handleProviderStreamEvent(
 		if err != nil {
 			return err
 		}
+		if acc != nil {
+			acc.messageDone = true
+		}
 		if onMessageDone != nil {
 			onMessageDone(payload)
 		}
@@ -723,6 +727,9 @@ func (s *Service) callProviderWithRetry(
 		}
 
 		if err == nil {
+			if !acc.messageDone {
+				return nil, fmt.Errorf("%w: provider stream ended without message_done event", provider.ErrStreamInterrupted)
+			}
 			return acc, nil
 		}
 

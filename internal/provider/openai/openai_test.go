@@ -37,12 +37,12 @@ func TestWithTransport(t *testing.T) {
 	customTransport := &http.Transport{}
 	cfg := resolvedConfig("", "")
 
-	provider, err := New(cfg, withTransport(customTransport))
+	p, err := New(cfg, withTransport(customTransport))
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
 
-	if provider.client.Transport != customTransport {
+	if p.client.Transport != customTransport {
 		t.Fatal("expected custom transport to be set")
 	}
 }
@@ -95,11 +95,11 @@ func TestNewDefaultTransportWhenNoOption(t *testing.T) {
 	t.Parallel()
 
 	cfg := resolvedConfig("", "")
-	provider, err := New(cfg)
+	p, err := New(cfg)
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
-	if provider.client.Transport == nil {
+	if p.client.Transport == nil {
 		t.Fatal("expected default transport to be set")
 	}
 }
@@ -130,13 +130,13 @@ func TestDiscoverModels(t *testing.T) {
 	}))
 	defer server.Close()
 
-	provider, err := New(resolvedConfig(server.URL, ""))
+	p, err := New(resolvedConfig(server.URL, ""))
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
-	provider.client = server.Client()
+	p.client = server.Client()
 
-	models, err := provider.DiscoverModels(context.Background())
+	models, err := p.DiscoverModels(context.Background())
 	if err != nil {
 		t.Fatalf("DiscoverModels() error = %v", err)
 	}
@@ -490,6 +490,7 @@ func TestConsumeStream_MultiLineDataPayload(t *testing.T) {
 
 	sseData := `data: {"id":"a","choices":[{"delta":{"content":"part1"},"finish_reason":""}]}
 data: {"id":"b","choices":[{"delta":{"content":"part2"},"finish_reason":"stop"}]}
+data: [DONE]
 
 `
 	events := make(chan providertypes.StreamEvent, 8)
@@ -503,7 +504,7 @@ data: {"id":"b","choices":[{"delta":{"content":"part2"},"finish_reason":"stop"}]
 	}
 }
 
-func TestConsumeStream_EOFWithoutDone(t *testing.T) {
+func TestConsumeStream_EOFWithoutDoneReturnsInterrupted(t *testing.T) {
 	t.Setenv(config.OpenAIDefaultAPIKeyEnv, "test-key")
 
 	p, err := New(resolvedConfig("", ""))
@@ -515,8 +516,11 @@ func TestConsumeStream_EOFWithoutDone(t *testing.T) {
 `
 	events := make(chan providertypes.StreamEvent, 4)
 	err = p.consumeStream(context.Background(), strings.NewReader(sseData), events)
-	if err != nil {
-		t.Fatalf("consumeStream() error = %v", err)
+	if err == nil {
+		t.Fatal("expected interrupted error for EOF without [DONE]")
+	}
+	if !errors.Is(err, provider.ErrStreamInterrupted) {
+		t.Fatalf("expected ErrStreamInterrupted, got %v", err)
 	}
 	drained := drainStreamEvents(events)
 	var foundText bool
