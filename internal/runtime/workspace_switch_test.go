@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -154,6 +155,90 @@ func TestServiceSwitchWorkspaceRejectsCrossWorkspaceWhileBusy(t *testing.T) {
 	_, err := service.SwitchWorkspace(context.Background(), WorkspaceSwitchInput{RequestedPath: workspaceB})
 	if err == nil || !strings.Contains(err.Error(), "cannot switch workspace while run is running") {
 		t.Fatalf("expected busy switch rejection, got %v", err)
+	}
+}
+
+func TestServiceSwitchWorkspaceKeepsSessionWithinWorkspace(t *testing.T) {
+	manager := newRuntimeConfigManager(t)
+	repoRoot := t.TempDir()
+	workspaceA := filepath.Join(repoRoot, "pkg")
+	target := filepath.Join(repoRoot, "cmd")
+	if err := os.MkdirAll(workspaceA, 0o755); err != nil {
+		t.Fatalf("mkdir workspaceA: %v", err)
+	}
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatalf("mkdir target: %v", err)
+	}
+	if output, err := runGitCommand(t, repoRoot, "init"); err != nil {
+		t.Fatalf("git init: %v (%s)", err, output)
+	}
+	if err := manager.Update(context.Background(), func(cfg *config.Config) error {
+		cfg.Workdir = workspaceA
+		return nil
+	}); err != nil {
+		t.Fatalf("update workdir: %v", err)
+	}
+
+	router := agentsession.NewScopedStoreRouter(t.TempDir(), workspaceA)
+	service := NewWithFactory(manager, tools.NewRegistry(), router, &scriptedProviderFactory{provider: &scriptedProvider{}}, nil)
+	session := agentsession.NewWithWorkdir("workspace-a", workspaceA)
+	if err := router.StoreForWorkspace(repoRoot).Save(context.Background(), &session); err != nil {
+		t.Fatalf("save session: %v", err)
+	}
+
+	result, err := service.SwitchWorkspace(context.Background(), WorkspaceSwitchInput{
+		SessionID:     session.ID,
+		RequestedPath: target,
+	})
+	if err != nil {
+		t.Fatalf("SwitchWorkspace() error = %v", err)
+	}
+	if result.WorkspaceChanged {
+		t.Fatalf("expected same workspace switch, got %+v", result)
+	}
+	if result.ResetToDraft {
+		t.Fatalf("expected same workspace switch to keep session, got %+v", result)
+	}
+	if !result.KeepSession {
+		t.Fatalf("expected same workspace switch to keep session, got %+v", result)
+	}
+	if result.Session.Workdir != filepath.Clean(target) {
+		t.Fatalf("expected updated session workdir %q, got %q", filepath.Clean(target), result.Session.Workdir)
+	}
+
+	loaded, err := service.LoadSession(context.Background(), session.ID)
+	if err != nil {
+		t.Fatalf("LoadSession() error = %v", err)
+	}
+	if loaded.Workdir != filepath.Clean(target) {
+		t.Fatalf("expected persisted session workdir %q, got %q", filepath.Clean(target), loaded.Workdir)
+	}
+}
+
+func TestResolveWorkspaceSelectionFallsBackToWorkdirWhenGitResolverFails(t *testing.T) {
+	base := t.TempDir()
+	target := filepath.Join(base, "child")
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatalf("mkdir target: %v", err)
+	}
+
+	previous := workspaceGitRootResolver
+	workspaceGitRootResolver = func(context.Context, string) (string, error) {
+		return "", errors.New("no git root")
+	}
+	defer func() {
+		workspaceGitRootResolver = previous
+	}()
+
+	workdir, root, err := resolveWorkspaceSelection(context.Background(), base, "child")
+	if err != nil {
+		t.Fatalf("resolveWorkspaceSelection() error = %v", err)
+	}
+	if workdir != filepath.Clean(target) {
+		t.Fatalf("expected workdir %q, got %q", filepath.Clean(target), workdir)
+	}
+	if root != filepath.Clean(target) {
+		t.Fatalf("expected fallback workspace root %q, got %q", filepath.Clean(target), root)
 	}
 }
 
