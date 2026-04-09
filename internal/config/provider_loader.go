@@ -72,6 +72,12 @@ func loadCustomProviders(baseDir string) ([]ProviderConfig, error) {
 		}
 
 		providerDir := filepath.Join(providersDir, entry.Name())
+		if _, err := os.Stat(filepath.Join(providerDir, customProviderConfigName)); err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, fmt.Errorf("config: stat %s: %w", filepath.Join(providerDir, customProviderConfigName), err)
+		}
 		providerCfg, err := loadCustomProvider(providerDir)
 		if err != nil {
 			return nil, err

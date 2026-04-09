@@ -111,7 +111,15 @@ func (s *SelectionService) SelectProvider(ctx context.Context, providerName stri
 	if err != nil {
 		return ProviderSelection{}, err
 	}
-	models, err := s.catalogs.ListProviderModels(ctx, input)
+	var models []providertypes.ModelDescriptor
+	if providerCfg.Source == ProviderSourceCustom {
+		models, err = s.catalogs.ListProviderModels(ctx, input)
+	} else {
+		models, err = s.catalogs.ListProviderModelsSnapshot(ctx, input)
+		if len(models) == 0 {
+			models = providertypes.DescriptorsFromIDs([]string{strings.TrimSpace(providerCfg.Model)})
+		}
+	}
 	if err != nil {
 		return ProviderSelection{}, err
 	}
@@ -216,19 +224,6 @@ func (s *SelectionService) SetCurrentModel(ctx context.Context, modelID string) 
 		return ProviderSelection{}, ErrNoModelsAvailable
 	}
 	if !containsModelDescriptorID(models, modelID) {
-		fallbackID := strings.TrimSpace(selected.Model)
-		if fallbackID != "" && containsModelDescriptorID(models, fallbackID) {
-			selection, fallbackErr := s.fallbackToProviderDefaultModel(ctx, selected, fallbackID)
-			if fallbackErr != nil {
-				return ProviderSelection{}, fallbackErr
-			}
-			return selection, fmt.Errorf(
-				"selection: model %q not found; fell back to default model %q: %w",
-				modelID,
-				fallbackID,
-				ErrModelNotFound,
-			)
-		}
 		return ProviderSelection{}, ErrModelNotFound
 	}
 
@@ -301,9 +296,15 @@ func (s *SelectionService) EnsureSelection(ctx context.Context) (ProviderSelecti
 	if err != nil {
 		return ProviderSelection{}, err
 	}
-	models, err := s.catalogs.ListProviderModels(ctx, input)
+	models, err := s.catalogs.ListProviderModelsSnapshot(ctx, input)
 	if err != nil {
 		return ProviderSelection{}, err
+	}
+	if len(models) == 0 {
+		if selected.Source == ProviderSourceCustom {
+			return selectionFromConfig(cfgSnapshot), nil
+		}
+		models = providertypes.DescriptorsFromIDs([]string{strings.TrimSpace(selected.Model)})
 	}
 	if len(models) == 0 {
 		return ProviderSelection{}, ErrNoModelsAvailable

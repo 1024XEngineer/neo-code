@@ -307,6 +307,62 @@ openai_compatible:
 	}
 }
 
+func TestLoaderIgnoresDirectoriesWithoutProviderYAML(t *testing.T) {
+	t.Parallel()
+
+	loader := NewLoader(t.TempDir(), testDefaultConfig())
+	validDir := filepath.Join(loader.BaseDir(), providersDirName, "company-gateway")
+	ignoredDir := filepath.Join(loader.BaseDir(), providersDirName, ".git")
+	for _, dir := range []string{validDir, ignoredDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir custom provider dir: %v", err)
+		}
+	}
+
+	providerYAML := `
+name: company-gateway
+driver: openaicompat
+api_key_env: COMPANY_GATEWAY_API_KEY
+openai_compatible:
+  base_url: https://llm.example.com/v1
+  api_style: chat_completions
+`
+	if err := os.WriteFile(filepath.Join(validDir, customProviderConfigName), []byte(strings.TrimSpace(providerYAML)+"\n"), 0o644); err != nil {
+		t.Fatalf("write provider.yaml: %v", err)
+	}
+
+	cfg, err := loader.Load(context.Background())
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	customProvider, err := cfg.ProviderByName("company-gateway")
+	if err != nil {
+		t.Fatalf("ProviderByName(company-gateway) error = %v", err)
+	}
+	if customProvider.Source != ProviderSourceCustom {
+		t.Fatalf("expected custom provider source, got %+v", customProvider)
+	}
+}
+
+func TestLoaderRejectsMalformedCustomProviderYAML(t *testing.T) {
+	t.Parallel()
+
+	loader := NewLoader(t.TempDir(), testDefaultConfig())
+	customDir := filepath.Join(loader.BaseDir(), providersDirName, "company-gateway")
+	if err := os.MkdirAll(customDir, 0o755); err != nil {
+		t.Fatalf("mkdir custom provider dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(customDir, customProviderConfigName), []byte("name: [\n"), 0o644); err != nil {
+		t.Fatalf("write malformed provider.yaml: %v", err)
+	}
+
+	_, err := loader.Load(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "parse") {
+		t.Fatalf("expected malformed custom provider parse error, got %v", err)
+	}
+}
+
 func TestLoaderRejectsCustomProviderDefaultModel(t *testing.T) {
 	t.Parallel()
 

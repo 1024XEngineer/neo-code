@@ -153,8 +153,8 @@ func TestSelectionServiceSelectProviderAndSetCurrentModel(t *testing.T) {
 	if !errors.Is(err, ErrModelNotFound) {
 		t.Fatalf("expected ErrModelNotFound, got %v", err)
 	}
-	if selection.ModelID != QiniuDefaultModel {
-		t.Fatalf("expected fallback selection to default model %q, got %+v", QiniuDefaultModel, selection)
+	if selection != (ProviderSelection{}) {
+		t.Fatalf("expected failed switch to return empty selection, got %+v", selection)
 	}
 
 	cfg := manager.Get()
@@ -165,20 +165,57 @@ func TestSelectionServiceSelectProviderAndSetCurrentModel(t *testing.T) {
 	if selected.Name != QiniuName {
 		t.Fatalf("expected selected provider %q, got %+v", QiniuName, selected)
 	}
-	if selected.Model != QiniuDefaultModel || cfg.CurrentModel != QiniuDefaultModel {
-		t.Fatalf("expected failed switch to fall back to provider default, got provider=%q current=%q", selected.Model, cfg.CurrentModel)
+	if cfg.CurrentModel != QiniuDefaultModel+"-alt" {
+		t.Fatalf("expected failed switch to preserve current model %q, got %q", QiniuDefaultModel+"-alt", cfg.CurrentModel)
 	}
 }
 
 func TestSelectionServiceSelectProviderRequiresDiscoveryOnCacheMiss(t *testing.T) {
 	t.Parallel()
 
-	manager := newSelectionTestManager(t, DefaultConfig())
+	defaults := DefaultConfig()
+	defaults.Providers = append(defaults.Providers, ProviderConfig{
+		Name:      "company-gateway",
+		Driver:    "openaicompat",
+		BaseURL:   "https://llm.example.com/v1",
+		APIKeyEnv: "COMPANY_GATEWAY_API_KEY",
+		Source:    ProviderSourceCustom,
+	})
+
+	tracker := &catalogMethodCalls{}
+	manager := newSelectionTestManager(t, defaults)
 	service := NewSelectionService(manager, newDriverSupporterStub(), catalogMethodsStub{
 		listModels: []providertypes.ModelDescriptor{
+			{ID: "server-coder", Name: "Server Coder"},
+			{ID: "server-chat", Name: "Server Chat"},
+		},
+		tracker: tracker,
+	})
+
+	selection, err := service.SelectProvider(context.Background(), "company-gateway")
+	if err != nil {
+		t.Fatalf("SelectProvider() error = %v", err)
+	}
+	if selection.ProviderID != "company-gateway" || selection.ModelID != "server-coder" {
+		t.Fatalf("expected sync discovery-backed selection, got %+v", selection)
+	}
+	if tracker.listCalls != 1 || tracker.snapshotCalls != 0 {
+		t.Fatalf("expected custom provider selection to use sync catalog only, got %+v", *tracker)
+	}
+}
+
+func TestSelectionServiceSelectBuiltinProviderUsesSnapshotCatalog(t *testing.T) {
+	t.Parallel()
+
+	tracker := &catalogMethodCalls{}
+	manager := newSelectionTestManager(t, DefaultConfig())
+	service := NewSelectionService(manager, newDriverSupporterStub(), catalogMethodsStub{
+		listErr: errors.New("unexpected sync discovery"),
+		snapshotModels: []providertypes.ModelDescriptor{
 			{ID: QiniuDefaultModel, Name: QiniuDefaultModel},
 			{ID: QiniuDefaultModel + "-alt", Name: QiniuDefaultModel + "-alt"},
 		},
+		tracker: tracker,
 	})
 
 	selection, err := service.SelectProvider(context.Background(), QiniuName)
@@ -186,7 +223,10 @@ func TestSelectionServiceSelectProviderRequiresDiscoveryOnCacheMiss(t *testing.T
 		t.Fatalf("SelectProvider() error = %v", err)
 	}
 	if selection.ProviderID != QiniuName || selection.ModelID != QiniuDefaultModel {
-		t.Fatalf("expected sync discovery-backed selection, got %+v", selection)
+		t.Fatalf("expected snapshot-backed builtin selection, got %+v", selection)
+	}
+	if tracker.listCalls != 0 || tracker.snapshotCalls != 1 {
+		t.Fatalf("expected builtin provider selection to use snapshot catalog only, got %+v", *tracker)
 	}
 }
 
@@ -268,7 +308,7 @@ func TestSelectionServiceEnsureSelectionFallsBackToFirstDiscoveredModel(t *testi
 
 	manager := newSelectionTestManager(t, defaults)
 	service := NewSelectionService(manager, newDriverSupporterStub(), catalogMethodsStub{
-		listModels: []providertypes.ModelDescriptor{
+		snapshotModels: []providertypes.ModelDescriptor{
 			{ID: "server-coder", Name: "Server Coder"},
 			{ID: "server-chat", Name: "Server Chat"},
 		},
@@ -283,18 +323,71 @@ func TestSelectionServiceEnsureSelectionFallsBackToFirstDiscoveredModel(t *testi
 	}
 }
 
-func TestSelectionServiceEnsureSelectionRejectsEmptyDiscoveredModelList(t *testing.T) {
+func TestSelectionServiceEnsureSelectionFallsBackToBuiltinDefaultModelWhenSnapshotMissing(t *testing.T) {
 	t.Parallel()
 
 	defaults := testDefaultConfig()
 	defaults.CurrentModel = "unsupported-current"
 
+	tracker := &catalogMethodCalls{}
 	manager := newSelectionTestManager(t, defaults)
-	service := NewSelectionService(manager, newDriverSupporterStub(), catalogMethodsStub{})
+	service := NewSelectionService(manager, newDriverSupporterStub(), catalogMethodsStub{tracker: tracker})
 
-	_, err := service.EnsureSelection(context.Background())
-	if !errors.Is(err, ErrNoModelsAvailable) {
-		t.Fatalf("expected ErrNoModelsAvailable, got %v", err)
+	selection, err := service.EnsureSelection(context.Background())
+	if err != nil {
+		t.Fatalf("EnsureSelection() error = %v", err)
+	}
+	if selection.ProviderID != OpenAIName || selection.ModelID != OpenAIDefaultModel {
+		t.Fatalf("expected builtin fallback to default model, got %+v", selection)
+	}
+	if tracker.listCalls != 0 || tracker.snapshotCalls != 1 {
+		t.Fatalf("expected builtin ensure to use snapshot catalog only, got %+v", *tracker)
+	}
+
+	reloaded, err := manager.Reload(context.Background())
+	if err != nil {
+		t.Fatalf("Reload() error = %v", err)
+	}
+	if reloaded.CurrentModel != OpenAIDefaultModel {
+		t.Fatalf("expected builtin fallback to persist %q, got %q", OpenAIDefaultModel, reloaded.CurrentModel)
+	}
+}
+
+func TestSelectionServiceEnsureSelectionKeepsCustomSelectionWhenSnapshotMissing(t *testing.T) {
+	t.Parallel()
+
+	defaults := testDefaultConfig()
+	defaults.Providers = append(defaults.Providers, ProviderConfig{
+		Name:      "company-gateway",
+		Driver:    "openaicompat",
+		BaseURL:   "https://llm.example.com/v1",
+		APIKeyEnv: "COMPANY_GATEWAY_API_KEY",
+		Source:    ProviderSourceCustom,
+	})
+	defaults.SelectedProvider = "company-gateway"
+	defaults.CurrentModel = "unknown-model"
+
+	tracker := &catalogMethodCalls{}
+	manager := newSelectionTestManager(t, defaults)
+	service := NewSelectionService(manager, newDriverSupporterStub(), catalogMethodsStub{tracker: tracker})
+
+	selection, err := service.EnsureSelection(context.Background())
+	if err != nil {
+		t.Fatalf("EnsureSelection() error = %v", err)
+	}
+	if selection.ProviderID != "company-gateway" || selection.ModelID != "unknown-model" {
+		t.Fatalf("expected custom selection to stay unchanged without snapshot, got %+v", selection)
+	}
+	if tracker.listCalls != 0 || tracker.snapshotCalls != 1 {
+		t.Fatalf("expected custom ensure to use snapshot catalog only, got %+v", *tracker)
+	}
+
+	reloaded, err := manager.Reload(context.Background())
+	if err != nil {
+		t.Fatalf("Reload() error = %v", err)
+	}
+	if reloaded.CurrentModel != "unknown-model" {
+		t.Fatalf("expected custom current model to stay unchanged, got %q", reloaded.CurrentModel)
 	}
 }
 
@@ -571,18 +664,46 @@ type catalogMethodsStub struct {
 	listModels     []providertypes.ModelDescriptor
 	snapshotModels []providertypes.ModelDescriptor
 	cachedModels   []providertypes.ModelDescriptor
+	listErr        error
+	snapshotErr    error
+	cachedErr      error
+	tracker        *catalogMethodCalls
 }
 
 func (s catalogMethodsStub) ListProviderModels(_ context.Context, _ provider.CatalogInput) ([]providertypes.ModelDescriptor, error) {
+	if s.tracker != nil {
+		s.tracker.listCalls++
+	}
+	if s.listErr != nil {
+		return nil, s.listErr
+	}
 	return providertypes.MergeModelDescriptors(s.listModels), nil
 }
 
 func (s catalogMethodsStub) ListProviderModelsSnapshot(_ context.Context, _ provider.CatalogInput) ([]providertypes.ModelDescriptor, error) {
+	if s.tracker != nil {
+		s.tracker.snapshotCalls++
+	}
+	if s.snapshotErr != nil {
+		return nil, s.snapshotErr
+	}
 	return providertypes.MergeModelDescriptors(s.snapshotModels), nil
 }
 
 func (s catalogMethodsStub) ListProviderModelsCached(_ context.Context, _ provider.CatalogInput) ([]providertypes.ModelDescriptor, error) {
+	if s.tracker != nil {
+		s.tracker.cachedCalls++
+	}
+	if s.cachedErr != nil {
+		return nil, s.cachedErr
+	}
 	return providertypes.MergeModelDescriptors(s.cachedModels), nil
+}
+
+type catalogMethodCalls struct {
+	listCalls     int
+	snapshotCalls int
+	cachedCalls   int
 }
 
 type errorCatalogStub struct {
