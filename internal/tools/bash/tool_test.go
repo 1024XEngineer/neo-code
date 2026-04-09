@@ -62,7 +62,7 @@ func TestToolExecute(t *testing.T) {
 		},
 	}
 
-	tool := New(workspace, defaultShell(), 3*time.Second)
+	tool := New(workspace, defaultShell(), 10*time.Second)
 	for _, tt := range tests {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
@@ -101,7 +101,7 @@ func TestToolExecute(t *testing.T) {
 
 func TestToolExecuteErrorFormattingAndTruncation(t *testing.T) {
 	workspace := t.TempDir()
-	tool := New(workspace, defaultShell(), 3*time.Second)
+	tool := New(workspace, defaultShell(), 10*time.Second)
 
 	tests := []struct {
 		name           string

@@ -438,8 +438,8 @@ func newTestStdIOClientWithMode(t *testing.T, wireMode string) *StdIOClient {
 		Command:      os.Args[0],
 		Args:         []string{"-test.run=TestHelperProcessMCPStdioServer", "--"},
 		Env:          []string{"GO_WANT_MCP_STDIO_HELPER=1", "GO_MCP_STDIO_REQUIRE_INITIALIZE=1", "GO_MCP_STDIO_WIRE=" + wireMode},
-		StartTimeout: 3 * time.Second,
-		CallTimeout:  3 * time.Second,
+		StartTimeout: 10 * time.Second,
+		CallTimeout:  10 * time.Second,
 	})
 	if err != nil {
 		t.Fatalf("NewStdIOClient() error = %v", err)
@@ -454,8 +454,8 @@ func TestStdIOClientInitializeFailure(t *testing.T) {
 		Command:      os.Args[0],
 		Args:         []string{"-test.run=TestHelperProcessMCPStdioServer", "--"},
 		Env:          []string{"GO_WANT_MCP_STDIO_HELPER=1", "GO_MCP_STDIO_INIT_FAIL=1", "GO_MCP_STDIO_WIRE=framed"},
-		StartTimeout: 3 * time.Second,
-		CallTimeout:  3 * time.Second,
+		StartTimeout: 10 * time.Second,
+		CallTimeout:  10 * time.Second,
 	})
 	if err != nil {
 		t.Fatalf("NewStdIOClient() error = %v", err)

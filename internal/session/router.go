@@ -52,6 +52,9 @@ func (r *ScopedStoreRouter) StoreForWorkspace(workspaceRoot string) Store {
 
 // Save 使用默认工作区根目录对应的存储执行保存。
 func (r *ScopedStoreRouter) Save(ctx context.Context, session *Session) error {
+	if r == nil {
+		return nil
+	}
 	store := r.StoreForWorkspace(r.defaultRoot)
 	if store == nil {
 		return nil
@@ -61,6 +64,9 @@ func (r *ScopedStoreRouter) Save(ctx context.Context, session *Session) error {
 
 // Load 使用默认工作区根目录对应的存储执行读取。
 func (r *ScopedStoreRouter) Load(ctx context.Context, id string) (Session, error) {
+	if r == nil {
+		return Session{}, nil
+	}
 	store := r.StoreForWorkspace(r.defaultRoot)
 	if store == nil {
 		return Session{}, nil
@@ -70,6 +76,9 @@ func (r *ScopedStoreRouter) Load(ctx context.Context, id string) (Session, error
 
 // ListSummaries 使用默认工作区根目录对应的存储列出会话摘要。
 func (r *ScopedStoreRouter) ListSummaries(ctx context.Context) ([]Summary, error) {
+	if r == nil {
+		return nil, nil
+	}
 	store := r.StoreForWorkspace(r.defaultRoot)
 	if store == nil {
 		return nil, nil

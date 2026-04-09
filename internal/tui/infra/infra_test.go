@@ -271,7 +271,7 @@ func TestDefaultWorkspaceCommandExecutor(t *testing.T) {
 	cfg := config.Config{
 		Workdir:        workdir,
 		Shell:          shellName,
-		ToolTimeoutSec: 1,
+		ToolTimeoutSec: 5,
 	}
 
 	if _, err := DefaultWorkspaceCommandExecutor(context.Background(), cfg, "", "  "); err == nil {
@@ -328,11 +328,11 @@ func workspaceExecutorCommands() (shell string, success string, noOutput string,
 			"Write-Output 'OK'",
 			"$null = 1",
 			"Write-Error 'failed'; exit 2",
-			"Start-Sleep -Seconds 2"
+			"Start-Sleep -Seconds 6"
 	}
 	return "bash",
 		"printf 'OK\\n'",
 		"true",
 		"echo failed 1>&2; exit 2",
-		"sleep 2"
+		"sleep 6"
 }
