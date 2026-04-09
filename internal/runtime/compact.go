@@ -57,9 +57,15 @@ func (s *Service) Compact(ctx context.Context, input CompactInput) (CompactResul
 
 	s.operationMu.Lock()
 	defer s.operationMu.Unlock()
+	s.setOperationState("compact")
+	defer s.clearOperationState()
 
 	cfg := s.configManager.Get()
-	session, err := s.sessionStore.Load(ctx, input.SessionID)
+	store := s.currentSessionStore()
+	if store == nil {
+		return CompactResult{}, errors.New("runtime: session store is nil")
+	}
+	session, err := store.Load(ctx, input.SessionID)
 	if err != nil {
 		return CompactResult{}, err
 	}
@@ -107,10 +113,11 @@ func (s *Service) runCompactForSession(
 	originalMessages := append([]providertypes.Message(nil), session.Messages...)
 	s.emit(ctx, EventCompactStart, runID, session.ID, string(contextcompact.ModeManual))
 
+	workspaceRoot, workspaceWorkdir := s.currentWorkspaceState()
 	result, err := runner.Run(ctx, contextcompact.Input{
 		Mode:      contextcompact.ModeManual,
 		SessionID: session.ID,
-		Workdir:   cfg.Workdir,
+		Workdir:   effectiveSessionWorkdir(session.Workdir, effectiveWorkspaceBase(workspaceWorkdir, workspaceRoot)),
 		Messages:  session.Messages,
 		Config:    cfg.Context.Compact,
 	})
@@ -128,7 +135,7 @@ func (s *Service) runCompactForSession(
 	if result.Applied {
 		session.Messages = append([]providertypes.Message(nil), result.Messages...)
 		session.UpdatedAt = time.Now()
-		if err := s.sessionStore.Save(ctx, &session); err != nil {
+		if err := s.currentSessionStore().Save(ctx, &session); err != nil {
 			s.emit(ctx, EventCompactError, runID, session.ID, CompactErrorPayload{
 				TriggerMode: string(contextcompact.ModeManual),
 				Message:     err.Error(),

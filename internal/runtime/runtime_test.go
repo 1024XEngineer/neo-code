@@ -2406,6 +2406,9 @@ func TestServiceRunUsesInputWorkdirForNewSession(t *testing.T) {
 func TestServiceSetSessionWorkdir(t *testing.T) {
 	manager := newRuntimeConfigManager(t)
 	defaultWorkdir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(defaultWorkdir, ".git"), 0o755); err != nil {
+		t.Fatalf("mkdir git marker: %v", err)
+	}
 	target := filepath.Join(defaultWorkdir, "sub")
 	if err := os.MkdirAll(target, 0o755); err != nil {
 		t.Fatalf("mkdir target: %v", err)
@@ -2690,6 +2693,9 @@ func TestWorkdirHelperFunctions(t *testing.T) {
 func TestServiceSetSessionWorkdirNoopDoesNotSave(t *testing.T) {
 	manager := newRuntimeConfigManager(t)
 	defaultWorkdir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(defaultWorkdir, ".git"), 0o755); err != nil {
+		t.Fatalf("mkdir git marker: %v", err)
+	}
 	if err := manager.Update(context.Background(), func(cfg *config.Config) error {
 		cfg.Workdir = defaultWorkdir
 		return nil
@@ -2698,7 +2704,10 @@ func TestServiceSetSessionWorkdirNoopDoesNotSave(t *testing.T) {
 	}
 
 	store := newMemoryStore()
-	target := t.TempDir()
+	target := filepath.Join(defaultWorkdir, "sub")
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatalf("mkdir target: %v", err)
+	}
 	session := agentsession.NewWithWorkdir("noop", target)
 	store.sessions[session.ID] = cloneSession(session)
 	registry := tools.NewRegistry()

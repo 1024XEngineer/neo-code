@@ -86,7 +86,7 @@ func BuildRuntime(ctx context.Context, opts BootstrapOptions) (RuntimeBundle, er
 		return RuntimeBundle{}, err
 	}
 
-	sessionStore := agentsession.NewStore(loader.BaseDir(), cfg.Workdir)
+	sessionStore := agentsession.NewScopedStoreRouter(loader.BaseDir(), cfg.Workdir)
 	runtimeSvc := agentruntime.NewWithFactory(
 		manager,
 		toolManager,

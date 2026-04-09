@@ -40,9 +40,12 @@ type LocalCommandResultMsg struct {
 
 // SessionWorkdirResultMsg 表示会话工作目录命令结果。
 type SessionWorkdirResultMsg struct {
-	Notice  string
-	Workdir string
-	Err     error
+	Notice           string
+	Workdir          string
+	WorkspaceRoot    string
+	WorkspaceChanged bool
+	ResetToDraft     bool
+	Err              error
 }
 
 // WorkspaceCommandResultMsg 表示工作区命令执行结果。

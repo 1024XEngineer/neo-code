@@ -325,4 +325,3 @@ func preview(text string, width int, lines int) string {
 	}
 	return joined
 }
-

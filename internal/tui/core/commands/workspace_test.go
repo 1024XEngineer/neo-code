@@ -3,27 +3,24 @@ package commands
 import (
 	"context"
 	"errors"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
-	agentsession "neo-code/internal/session"
-	tuiworkspace "neo-code/internal/tui/core/workspace"
+	agentruntime "neo-code/internal/runtime"
 )
 
 type stubSessionWorkdirSetter struct {
-	session agentsession.Session
-	err     error
-	calls   int
+	result agentruntime.WorkspaceSwitchResult
+	err    error
+	calls  int
 }
 
-func (s *stubSessionWorkdirSetter) SetSessionWorkdir(ctx context.Context, sessionID string, workdir string) (agentsession.Session, error) {
+func (s *stubSessionWorkdirSetter) SwitchWorkspace(ctx context.Context, input agentruntime.WorkspaceSwitchInput) (agentruntime.WorkspaceSwitchResult, error) {
 	s.calls++
 	if s.err != nil {
-		return agentsession.Session{}, s.err
+		return agentruntime.WorkspaceSwitchResult{}, s.err
 	}
-	return s.session, nil
+	return s.result, nil
 }
 
 func TestExecuteSessionWorkdirCommand(t *testing.T) {
@@ -42,14 +39,14 @@ func TestExecuteSessionWorkdirCommand(t *testing.T) {
 	}
 
 	t.Run("parse error", func(t *testing.T) {
-		result := ExecuteSessionWorkdirCommand(&stubSessionWorkdirSetter{}, "", "", "/bad", parse, tuiworkspace.ResolveWorkspacePath, tuiworkspace.SelectSessionWorkdir)
+		result := ExecuteSessionWorkdirCommand(&stubSessionWorkdirSetter{}, "", "", "/bad", parse)
 		if result.Err == nil {
 			t.Fatalf("expected parse error")
 		}
 	})
 
 	t.Run("empty requested without current workdir", func(t *testing.T) {
-		result := ExecuteSessionWorkdirCommand(&stubSessionWorkdirSetter{}, "", "", "/cwd", parse, tuiworkspace.ResolveWorkspacePath, tuiworkspace.SelectSessionWorkdir)
+		result := ExecuteSessionWorkdirCommand(&stubSessionWorkdirSetter{}, "", "", "/cwd", parse)
 		if result.Err == nil || !strings.Contains(result.Err.Error(), "usage: /cwd <path>") {
 			t.Fatalf("expected usage error, got %+v", result)
 		}
@@ -57,7 +54,7 @@ func TestExecuteSessionWorkdirCommand(t *testing.T) {
 
 	t.Run("empty requested with current workdir", func(t *testing.T) {
 		current := t.TempDir()
-		result := ExecuteSessionWorkdirCommand(&stubSessionWorkdirSetter{}, "", current, "/cwd", parse, tuiworkspace.ResolveWorkspacePath, tuiworkspace.SelectSessionWorkdir)
+		result := ExecuteSessionWorkdirCommand(&stubSessionWorkdirSetter{}, "", current, "/cwd", parse)
 		if result.Err != nil {
 			t.Fatalf("unexpected error: %v", result.Err)
 		}
@@ -68,11 +65,8 @@ func TestExecuteSessionWorkdirCommand(t *testing.T) {
 
 	t.Run("draft session resolves requested path", func(t *testing.T) {
 		base := t.TempDir()
-		target := filepath.Join(base, "sub")
-		if err := ensureDir(target); err != nil {
-			t.Fatalf("mkdir target: %v", err)
-		}
-		result := ExecuteSessionWorkdirCommand(&stubSessionWorkdirSetter{}, "", base, "/cwd sub", parse, tuiworkspace.ResolveWorkspacePath, tuiworkspace.SelectSessionWorkdir)
+		stub := &stubSessionWorkdirSetter{result: agentruntime.WorkspaceSwitchResult{Workdir: base}}
+		result := ExecuteSessionWorkdirCommand(stub, "", base, "/cwd sub", parse)
 		if result.Err != nil {
 			t.Fatalf("unexpected error: %v", result.Err)
 		}
@@ -83,7 +77,7 @@ func TestExecuteSessionWorkdirCommand(t *testing.T) {
 
 	t.Run("runtime error", func(t *testing.T) {
 		stub := &stubSessionWorkdirSetter{err: errors.New("set workdir failed")}
-		result := ExecuteSessionWorkdirCommand(stub, "session-1", t.TempDir(), "/cwd sub", parse, tuiworkspace.ResolveWorkspacePath, tuiworkspace.SelectSessionWorkdir)
+		result := ExecuteSessionWorkdirCommand(stub, "session-1", t.TempDir(), "/cwd sub", parse)
 		if result.Err == nil || !strings.Contains(result.Err.Error(), "set workdir failed") {
 			t.Fatalf("expected runtime error, got %+v", result)
 		}
@@ -91,8 +85,8 @@ func TestExecuteSessionWorkdirCommand(t *testing.T) {
 
 	t.Run("runtime empty workdir fallback", func(t *testing.T) {
 		current := t.TempDir()
-		stub := &stubSessionWorkdirSetter{session: agentsession.Session{ID: "session-1", Workdir: ""}}
-		result := ExecuteSessionWorkdirCommand(stub, "session-1", current, "/cwd sub", parse, tuiworkspace.ResolveWorkspacePath, tuiworkspace.SelectSessionWorkdir)
+		stub := &stubSessionWorkdirSetter{result: agentruntime.WorkspaceSwitchResult{Workdir: current}}
+		result := ExecuteSessionWorkdirCommand(stub, "session-1", current, "/cwd sub", parse)
 		if result.Err != nil {
 			t.Fatalf("unexpected error: %v", result.Err)
 		}
@@ -100,8 +94,24 @@ func TestExecuteSessionWorkdirCommand(t *testing.T) {
 			t.Fatalf("expected fallback workdir %q, got %q", current, result.Workdir)
 		}
 	})
-}
 
-func ensureDir(path string) error {
-	return os.MkdirAll(path, 0o755)
+	t.Run("cross workspace resets to draft", func(t *testing.T) {
+		workdir := t.TempDir()
+		stub := &stubSessionWorkdirSetter{result: agentruntime.WorkspaceSwitchResult{
+			Workdir:          workdir,
+			WorkspaceRoot:    workdir,
+			WorkspaceChanged: true,
+			ResetToDraft:     true,
+		}}
+		result := ExecuteSessionWorkdirCommand(stub, "session-1", t.TempDir(), "/cwd "+workdir, parse)
+		if result.Err != nil {
+			t.Fatalf("unexpected error: %v", result.Err)
+		}
+		if !result.ResetToDraft || !result.WorkspaceChanged {
+			t.Fatalf("expected reset-to-draft result, got %+v", result)
+		}
+		if !strings.Contains(result.Notice, "Started a new draft") {
+			t.Fatalf("unexpected notice: %q", result.Notice)
+		}
+	})
 }

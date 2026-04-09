@@ -112,12 +112,12 @@ func (a *streamAccumulator) buildMessage() (providertypes.Message, error) {
 type Runtime interface {
 	Run(ctx context.Context, input UserInput) error
 	Compact(ctx context.Context, input CompactInput) (CompactResult, error)
+	SwitchWorkspace(ctx context.Context, input WorkspaceSwitchInput) (WorkspaceSwitchResult, error)
 	ResolvePermission(ctx context.Context, input PermissionResolutionInput) error
 	CancelActiveRun() bool
 	Events() <-chan RuntimeEvent
 	ListSessions(ctx context.Context) ([]agentsession.Summary, error)
 	LoadSession(ctx context.Context, id string) (agentsession.Session, error)
-	SetSessionWorkdir(ctx context.Context, sessionID string, workdir string) (agentsession.Session, error)
 }
 
 type UserInput struct {
@@ -132,20 +132,26 @@ type ProviderFactory interface {
 }
 
 type Service struct {
-	configManager   *config.Manager      // 配置管理器，提供当前选中的 provider、model、workdir 等配置读取能力。
-	sessionStore    agentsession.Store   // 会话持久化接口，负责保存和加载聊天会话。
-	toolManager     tools.Manager        // 工具管理器，统一工具 schema 暴露与执行入口。
-	providerFactory ProviderFactory      // Provider 工厂接口，根据配置动态创建具体的 provider 实例。
-	contextBuilder  agentcontext.Builder // 上下文构建器，负责组装 system prompt 与本轮发给模型的消息上下文。
-	compactRunner   contextcompact.Runner
-	events          chan RuntimeEvent
-	operationMu     sync.Mutex         // 运行级互斥：串行化 Run 与 Compact，避免并发写同一会话。
-	runMu           sync.Mutex         // 仅保护 activeRun* 字段的并发读写。
-	activeRunToken  uint64             // 当前活跃运行的令牌标识，用于标记正在执行的 Run 实例。
-	nextRunToken    uint64             // 下一个运行令牌的递增计数器，用于区分不同 Run 的生命周期。
+	configManager       *config.Manager    // 配置管理器，提供当前选中的 provider、model、workdir 等配置读取能力。
+	sessionStore        agentsession.Store // 默认会话持久化接口，兼容未实现工作区路由能力的场景。
+	storeProvider       workspaceStoreProvider
+	toolManager         tools.Manager        // 工具管理器，统一工具 schema 暴露与执行入口。
+	providerFactory     ProviderFactory      // Provider 工厂接口，根据配置动态创建具体的 provider 实例。
+	contextBuilder      agentcontext.Builder // 上下文构建器，负责组装 system prompt 与本轮发给模型的消息上下文。
+	compactRunner       contextcompact.Runner
+	events              chan RuntimeEvent
+	operationMu         sync.Mutex // 运行级互斥：串行化 Run 与 Compact，避免并发写同一会话。
+	runMu               sync.Mutex // 仅保护 activeRun* 字段的并发读写。
+	workspaceMu         sync.RWMutex
+	operationStateMu    sync.RWMutex
+	activeRunToken      uint64             // 当前活跃运行的令牌标识，用于标记正在执行的 Run 实例。
+	nextRunToken        uint64             // 下一个运行令牌的递增计数器，用于区分不同 Run 的生命周期。
 	activeRunCancel     context.CancelFunc // 当前活跃 Run 的取消函数。
 	sessionInputTokens  int                // 当前会话累计输入 token。
 	sessionOutputTokens int                // 当前会话累计输出 token。
+	activeWorkspaceRoot string
+	activeWorkdir       string
+	activeOperation     string
 }
 
 func NewWithFactory(
@@ -165,7 +171,7 @@ func NewWithFactory(
 		contextBuilder = agentcontext.NewBuilderWithToolPolicies(toolManager)
 	}
 
-	return &Service{
+	service := &Service{
 		configManager:   configManager,
 		sessionStore:    sessionStore,
 		toolManager:     toolManager,
@@ -173,11 +179,22 @@ func NewWithFactory(
 		contextBuilder:  contextBuilder,
 		events:          make(chan RuntimeEvent, 128),
 	}
+	if provider, ok := sessionStore.(workspaceStoreProvider); ok {
+		service.storeProvider = provider
+	} else {
+		service.storeProvider = fixedWorkspaceStoreProvider{store: sessionStore}
+	}
+	if configManager != nil {
+		service.initializeWorkspaceState(configManager.Get().Workdir)
+	}
+	return service
 }
 
 func (s *Service) Run(ctx context.Context, input UserInput) error {
 	s.operationMu.Lock()
 	defer s.operationMu.Unlock()
+	s.setOperationState("run")
+	defer s.clearOperationState()
 
 	runCtx, cancel := context.WithCancel(ctx)
 	runToken := s.startRun(cancel)
@@ -191,11 +208,13 @@ func (s *Service) Run(ctx context.Context, input UserInput) error {
 		return errors.New("runtime: input content is empty")
 	}
 
-	initialCfg := s.configManager.Get()
-	session, err := s.loadOrCreateSession(ctx, input.SessionID, input.Content, initialCfg.Workdir, input.Workdir)
+	workspaceRoot, workspaceWorkdir := s.currentWorkspaceState()
+	defaultWorkdir := effectiveWorkspaceBase(workspaceWorkdir, workspaceRoot)
+	session, err := s.loadOrCreateSession(ctx, input.SessionID, input.Content, defaultWorkdir, input.Workdir)
 	if err != nil {
 		return s.handleRunError(ctx, input.RunID, input.SessionID, err)
 	}
+	s.setWorkspaceState(workspaceRoot, effectiveSessionWorkdir(session.Workdir, defaultWorkdir))
 	s.restoreSessionTokens(session)
 
 	userMessage := providertypes.Message{
@@ -204,7 +223,7 @@ func (s *Service) Run(ctx context.Context, input UserInput) error {
 	}
 	session.Messages = append(session.Messages, userMessage)
 	session.UpdatedAt = time.Now()
-	if err := s.sessionStore.Save(ctx, &session); err != nil {
+	if err := s.currentSessionStore().Save(ctx, &session); err != nil {
 		return s.handleRunError(ctx, input.RunID, session.ID, err)
 	}
 	s.emit(ctx, EventUserMessage, input.RunID, session.ID, userMessage)
@@ -217,7 +236,9 @@ func (s *Service) Run(ctx context.Context, input UserInput) error {
 		}
 
 		cfg := s.configManager.Get()
-		activeWorkdir := effectiveSessionWorkdir(session.Workdir, cfg.Workdir)
+		workspaceRoot, workspaceWorkdir := s.currentWorkspaceState()
+		activeWorkdir := effectiveSessionWorkdir(session.Workdir, effectiveWorkspaceBase(workspaceWorkdir, workspaceRoot))
+		s.setWorkspaceState(workspaceRoot, activeWorkdir)
 		maxLoops := cfg.MaxLoops
 		if maxLoops <= 0 {
 			maxLoops = 8
@@ -296,12 +317,12 @@ func (s *Service) Run(ctx context.Context, input UserInput) error {
 		if strings.TrimSpace(assistant.Content) != "" || len(assistant.ToolCalls) > 0 {
 			session.Messages = append(session.Messages, assistant)
 			session.UpdatedAt = time.Now()
-			if err := s.sessionStore.Save(ctx, &session); err != nil {
+			if err := s.currentSessionStore().Save(ctx, &session); err != nil {
 				return s.handleRunError(ctx, input.RunID, session.ID, err)
 			}
 		} else if metadataChanged {
 			session.UpdatedAt = time.Now()
-			if err := s.sessionStore.Save(ctx, &session); err != nil {
+			if err := s.currentSessionStore().Save(ctx, &session); err != nil {
 				return s.handleRunError(ctx, input.RunID, session.ID, err)
 			}
 		}
@@ -351,7 +372,7 @@ func (s *Service) Run(ctx context.Context, input UserInput) error {
 			}
 			session.Messages = append(session.Messages, toolMessage)
 			session.UpdatedAt = time.Now()
-			if err := s.sessionStore.Save(ctx, &session); err != nil {
+			if err := s.currentSessionStore().Save(ctx, &session); err != nil {
 				if execErr != nil && errors.Is(err, context.Canceled) {
 					s.emit(ctx, EventToolResult, input.RunID, session.ID, result)
 				}
@@ -390,42 +411,24 @@ func (s *Service) Events() <-chan RuntimeEvent {
 }
 
 func (s *Service) ListSessions(ctx context.Context) ([]agentsession.Summary, error) {
-	return s.sessionStore.ListSummaries(ctx)
+	store := s.currentSessionStore()
+	if store == nil {
+		return nil, errors.New("runtime: session store is nil")
+	}
+	return store.ListSummaries(ctx)
 }
 
 func (s *Service) LoadSession(ctx context.Context, id string) (agentsession.Session, error) {
-	session, err := s.sessionStore.Load(ctx, id)
+	store := s.currentSessionStore()
+	if store == nil {
+		return agentsession.Session{}, errors.New("runtime: session store is nil")
+	}
+	session, err := store.Load(ctx, id)
 	if err != nil {
 		return agentsession.Session{}, err
 	}
-	return session, nil
-}
-
-func (s *Service) SetSessionWorkdir(ctx context.Context, sessionID string, workdir string) (agentsession.Session, error) {
-	sessionID = strings.TrimSpace(sessionID)
-	if sessionID == "" {
-		return agentsession.Session{}, errors.New("runtime: session id is empty")
-	}
-
-	session, err := s.sessionStore.Load(ctx, sessionID)
-	if err != nil {
-		return agentsession.Session{}, err
-	}
-
-	cfg := s.configManager.Get()
-	resolved, err := resolveWorkdirForSession(cfg.Workdir, session.Workdir, workdir)
-	if err != nil {
-		return agentsession.Session{}, err
-	}
-	if session.Workdir == resolved {
-		return session, nil
-	}
-
-	session.Workdir = resolved
-	session.UpdatedAt = time.Now()
-	if err := s.sessionStore.Save(ctx, &session); err != nil {
-		return agentsession.Session{}, err
-	}
+	workspaceRoot, workspaceWorkdir := s.currentWorkspaceState()
+	s.setWorkspaceState(workspaceRoot, effectiveSessionWorkdir(session.Workdir, effectiveWorkspaceBase(workspaceWorkdir, workspaceRoot)))
 	return session, nil
 }
 
@@ -436,18 +439,22 @@ func (s *Service) loadOrCreateSession(
 	defaultWorkdir string,
 	requestedWorkdir string,
 ) (agentsession.Session, error) {
+	store := s.currentSessionStore()
+	if store == nil {
+		return agentsession.Session{}, errors.New("runtime: session store is nil")
+	}
 	if strings.TrimSpace(sessionID) == "" {
 		sessionWorkdir, err := resolveWorkdirForSession(defaultWorkdir, "", requestedWorkdir)
 		if err != nil {
 			return agentsession.Session{}, err
 		}
 		session := agentsession.NewWithWorkdir(title, sessionWorkdir)
-		if err := s.sessionStore.Save(ctx, &session); err != nil {
+		if err := store.Save(ctx, &session); err != nil {
 			return agentsession.Session{}, err
 		}
 		return session, nil
 	}
-	session, err := s.sessionStore.Load(ctx, sessionID)
+	session, err := store.Load(ctx, sessionID)
 	if err != nil {
 		return agentsession.Session{}, err
 	}
@@ -464,7 +471,7 @@ func (s *Service) loadOrCreateSession(
 	}
 	session.Workdir = resolved
 	session.UpdatedAt = time.Now()
-	if err := s.sessionStore.Save(ctx, &session); err != nil {
+	if err := store.Save(ctx, &session); err != nil {
 		return agentsession.Session{}, err
 	}
 	return session, nil
@@ -579,8 +586,8 @@ func (s *Service) forwardProviderEvents(
 						s.sessionInputTokens += done.Usage.InputTokens
 						s.sessionOutputTokens += done.Usage.OutputTokens
 						s.emit(ctx, EventTokenUsage, runID, sessionID, TokenUsagePayload{
-							InputTokens:        done.Usage.InputTokens,
-							OutputTokens:       done.Usage.OutputTokens,
+							InputTokens:         done.Usage.InputTokens,
+							OutputTokens:        done.Usage.OutputTokens,
 							SessionInputTokens:  s.sessionInputTokens,
 							SessionOutputTokens: s.sessionOutputTokens,
 						})

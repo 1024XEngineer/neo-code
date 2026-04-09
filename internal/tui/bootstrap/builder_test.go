@@ -41,8 +41,8 @@ func (r *testRuntime) LoadSession(ctx context.Context, id string) (agentsession.
 	return agentsession.Session{}, nil
 }
 
-func (r *testRuntime) SetSessionWorkdir(ctx context.Context, sessionID string, workdir string) (agentsession.Session, error) {
-	return agentsession.Session{}, nil
+func (r *testRuntime) SwitchWorkspace(ctx context.Context, input agentruntime.WorkspaceSwitchInput) (agentruntime.WorkspaceSwitchResult, error) {
+	return agentruntime.WorkspaceSwitchResult{}, nil
 }
 
 type testProviderService struct{}

@@ -204,5 +204,6 @@ go run ./cmd/neocode --workdir /path/to/workspace
 说明：
 
 - `--workdir` 只影响当前进程，不会写回 `config.yaml`
-- 当前工作区会同时用于工具执行根目录与 session 存储分桶
+- 当前工作区会同时影响工具默认执行根目录与 session 作用域；若目录位于 Git 仓库内，session 作用域优先使用仓库根目录
+- 运行中的 `/cwd` 只影响当前进程：同工作区内保留当前会话，跨工作区时切换到目标工作区的 session 分桶并重置为 Draft
 - session 历史现在按工作区隔离存储，不同工作区默认互不可见

@@ -173,15 +173,27 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, tea.Batch(cmds...)
 		}
 
+		if typed.ResetToDraft {
+			a.startDraftSessionWithWorkdir(typed.Workdir)
+			if err := a.refreshSessions(); err != nil {
+				a.state.ExecutionError = err.Error()
+				a.state.StatusText = err.Error()
+				a.appendActivity("workspace", "Failed to refresh workspace sessions", err.Error(), true)
+				return a, tea.Batch(cmds...)
+			}
+		} else {
+			a.state.ExecutionError = ""
+			a.state.StatusText = typed.Notice
+			a.state.CurrentWorkdir = strings.TrimSpace(typed.Workdir)
+			if err := a.refreshFileCandidates(); err != nil {
+				a.state.ExecutionError = err.Error()
+				a.state.StatusText = err.Error()
+				a.appendActivity("workspace", "Failed to refresh workspace files", err.Error(), true)
+				return a, tea.Batch(cmds...)
+			}
+		}
 		a.state.ExecutionError = ""
 		a.state.StatusText = typed.Notice
-		a.state.CurrentWorkdir = strings.TrimSpace(typed.Workdir)
-		if err := a.refreshFileCandidates(); err != nil {
-			a.state.ExecutionError = err.Error()
-			a.state.StatusText = err.Error()
-			a.appendActivity("workspace", "Failed to refresh workspace files", err.Error(), true)
-			return a, tea.Batch(cmds...)
-		}
 		a.appendActivity("workspace", typed.Notice, "", false)
 		return a, tea.Batch(cmds...)
 	case workspaceCommandResultMsg:
@@ -732,6 +744,9 @@ var runtimeEventHandlerRegistry = map[agentruntime.EventType]func(*App, agentrun
 
 // handleRuntimeEvent 通过注册表分发 runtime 事件，避免巨型 switch 膨胀。
 func (a *App) handleRuntimeEvent(event agentruntime.RuntimeEvent) bool {
+	if !a.shouldHandleRuntimeEvent(event) {
+		return false
+	}
 	if a.state.ActiveSessionID == "" {
 		a.state.ActiveSessionID = event.SessionID
 	}
@@ -740,6 +755,23 @@ func (a *App) handleRuntimeEvent(event agentruntime.RuntimeEvent) bool {
 		return false
 	}
 	return handler(a, event)
+}
+
+// shouldHandleRuntimeEvent 判断事件是否仍属于当前激活的会话或运行。
+func (a *App) shouldHandleRuntimeEvent(event agentruntime.RuntimeEvent) bool {
+	activeRunID := strings.TrimSpace(a.state.ActiveRunID)
+	eventRunID := strings.TrimSpace(event.RunID)
+	if activeRunID != "" && eventRunID != "" && !strings.EqualFold(activeRunID, eventRunID) {
+		return false
+	}
+
+	activeSessionID := strings.TrimSpace(a.state.ActiveSessionID)
+	eventSessionID := strings.TrimSpace(event.SessionID)
+	if activeSessionID != "" && eventSessionID != "" && !strings.EqualFold(activeSessionID, eventSessionID) {
+		return false
+	}
+
+	return true
 }
 
 // runtimeEventUserMessageHandler 处理用户消息进入运行队列后的状态同步。
@@ -1510,6 +1542,11 @@ func (a App) currentStatusSnapshot() tuistatus.Snapshot {
 }
 
 func (a *App) startDraftSession() {
+	a.startDraftSessionWithWorkdir("")
+}
+
+// startDraftSessionWithWorkdir 重置当前界面为草稿态，并可指定新的工作目录。
+func (a *App) startDraftSessionWithWorkdir(workdir string) {
 	a.state.ActiveSessionID = ""
 	a.state.ActiveSessionTitle = draftSessionTitle
 	a.activeMessages = nil
@@ -1525,7 +1562,7 @@ func (a *App) startDraftSession() {
 	a.clearRunProgress()
 	a.input.Reset()
 	a.state.InputText = ""
-	a.state.CurrentWorkdir = a.configManager.Get().Workdir
+	a.state.CurrentWorkdir = tuiutils.Fallback(strings.TrimSpace(workdir), a.configManager.Get().Workdir)
 	if err := a.refreshFileCandidates(); err != nil {
 		a.state.ExecutionError = err.Error()
 		a.appendActivity("workspace", "Failed to refresh workspace files", err.Error(), true)
@@ -1580,13 +1617,14 @@ func runSessionWorkdirCommand(
 			currentWorkdir,
 			raw,
 			parseWorkspaceSlashCommand,
-			tuiworkspace.ResolveWorkspacePath,
-			tuiworkspace.SelectSessionWorkdir,
 		)
 		return sessionWorkdirResultMsg{
-			Notice:  result.Notice,
-			Workdir: result.Workdir,
-			Err:     result.Err,
+			Notice:           result.Notice,
+			Workdir:          result.Workdir,
+			WorkspaceRoot:    result.WorkspaceRoot,
+			WorkspaceChanged: result.WorkspaceChanged,
+			ResetToDraft:     result.ResetToDraft,
+			Err:              result.Err,
 		}
 	}
 }

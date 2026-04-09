@@ -342,5 +342,6 @@ go run ./cmd/neocode --workdir /path/to/workspace
 补充说明：
 
 - `--workdir` 只影响本次启动，不会持久化到 `config.yaml`
-- 运行时工具根目录与 session 存储分桶都会使用该工作区
+- 运行时工具默认根目录与初始 session 作用域都会从该目录出发；若目录位于 Git 仓库内，则 session 作用域优先使用仓库根目录
+- `/cwd` 只影响当前进程中的工作区上下文，不会回写配置；同工作区内保留当前会话，跨工作区时会切换 session 分桶并重置为 Draft
 - session 现按工作区隔离存储，不同工作区的历史会话默认互不可见

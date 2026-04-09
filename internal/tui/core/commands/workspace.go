@@ -5,30 +5,31 @@ import (
 	"fmt"
 	"strings"
 
-	agentsession "neo-code/internal/session"
+	agentruntime "neo-code/internal/runtime"
 )
 
-// SessionWorkdirSetter 定义设置会话工作目录所需的最小 runtime 能力。
-type SessionWorkdirSetter interface {
-	SetSessionWorkdir(ctx context.Context, sessionID string, workdir string) (agentsession.Session, error)
+// WorkspaceSwitcher 定义切换当前工作区上下文所需的最小 runtime 能力。
+type WorkspaceSwitcher interface {
+	SwitchWorkspace(ctx context.Context, input agentruntime.WorkspaceSwitchInput) (agentruntime.WorkspaceSwitchResult, error)
 }
 
 // SessionWorkdirCommandResult 表示工作目录命令执行结果。
 type SessionWorkdirCommandResult struct {
-	Notice  string
-	Workdir string
-	Err     error
+	Notice           string
+	Workdir          string
+	WorkspaceRoot    string
+	WorkspaceChanged bool
+	ResetToDraft     bool
+	Err              error
 }
 
 // ExecuteSessionWorkdirCommand 执行 /cwd 命令的核心流程，返回统一结果结构。
 func ExecuteSessionWorkdirCommand(
-	runtime SessionWorkdirSetter,
+	runtime WorkspaceSwitcher,
 	sessionID string,
 	currentWorkdir string,
 	raw string,
 	parseCommand func(string) (string, error),
-	resolveWorkspacePath func(string, string) (string, error),
-	selectSessionWorkdir func(string, string) string,
 ) SessionWorkdirCommandResult {
 	requested, err := parseCommand(raw)
 	if err != nil {
@@ -46,25 +47,26 @@ func ExecuteSessionWorkdirCommand(
 		}
 	}
 
-	if strings.TrimSpace(sessionID) == "" {
-		workdir, err := resolveWorkspacePath(currentWorkdir, requested)
-		if err != nil {
-			return SessionWorkdirCommandResult{Err: err}
-		}
-		return SessionWorkdirCommandResult{
-			Notice:  fmt.Sprintf("[System] Draft workspace switched to %s.", workdir),
-			Workdir: workdir,
-		}
-	}
-
-	session, err := runtime.SetSessionWorkdir(context.Background(), sessionID, requested)
+	result, err := runtime.SwitchWorkspace(context.Background(), agentruntime.WorkspaceSwitchInput{
+		SessionID:     strings.TrimSpace(sessionID),
+		RequestedPath: requested,
+	})
 	if err != nil {
 		return SessionWorkdirCommandResult{Err: err}
 	}
-
-	workdir := selectSessionWorkdir(session.Workdir, currentWorkdir)
+	notice := fmt.Sprintf("[System] Draft workspace switched to %s.", result.Workdir)
+	if strings.TrimSpace(sessionID) != "" {
+		if result.ResetToDraft {
+			notice = fmt.Sprintf("[System] Workspace switched to %s. Started a new draft in the target workspace.", result.Workdir)
+		} else {
+			notice = fmt.Sprintf("[System] Session workspace switched to %s.", result.Workdir)
+		}
+	}
 	return SessionWorkdirCommandResult{
-		Notice:  fmt.Sprintf("[System] Session workspace switched to %s.", workdir),
-		Workdir: workdir,
+		Notice:           notice,
+		Workdir:          result.Workdir,
+		WorkspaceRoot:    result.WorkspaceRoot,
+		WorkspaceChanged: result.WorkspaceChanged,
+		ResetToDraft:     result.ResetToDraft,
 	}
 }
