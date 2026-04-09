@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
+	"os/exec"
 	"path/filepath"
 	goruntime "runtime"
 	"strings"
@@ -103,23 +103,21 @@ func detectWorkspaceGitRoot(ctx context.Context, workdir string) (string, error)
 	if err != nil {
 		return "", err
 	}
-	for {
-		gitMarker := filepath.Join(current, ".git")
-		if _, statErr := os.Stat(gitMarker); statErr == nil {
-			if isFilesystemRoot(current) {
-				break
-			}
-			return current, nil
-		}
 
-		parent := filepath.Dir(current)
-		if parent == current || sameWorkspacePath(parent, current) {
-			break
-		}
-		current = parent
+	command := exec.CommandContext(ctx, "git", "-C", current, "rev-parse", "--show-toplevel")
+	output, err := command.Output()
+	if err != nil {
+		return "", errors.New("runtime: directory is not inside git work tree")
 	}
 
-	return "", errors.New("runtime: directory is not inside git work tree")
+	root, err := normalizeExistingWorkdir(strings.TrimSpace(string(output)))
+	if err != nil {
+		return "", err
+	}
+	if isFilesystemRoot(root) && !sameWorkspacePath(root, current) {
+		return "", errors.New("runtime: directory is not inside git work tree")
+	}
+	return root, nil
 }
 
 // isFilesystemRoot 判断路径是否已经位于文件系统根目录。

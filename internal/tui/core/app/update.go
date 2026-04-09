@@ -761,12 +761,15 @@ func (a *App) handleRuntimeEvent(event agentruntime.RuntimeEvent) bool {
 func (a *App) shouldHandleRuntimeEvent(event agentruntime.RuntimeEvent) bool {
 	activeRunID := strings.TrimSpace(a.state.ActiveRunID)
 	eventRunID := strings.TrimSpace(event.RunID)
+	activeSessionID := strings.TrimSpace(a.state.ActiveSessionID)
+	eventSessionID := strings.TrimSpace(event.SessionID)
+	if activeRunID == "" && activeSessionID == "" {
+		return eventRunID == "" && eventSessionID == ""
+	}
 	if activeRunID != "" && eventRunID != "" && !strings.EqualFold(activeRunID, eventRunID) {
 		return false
 	}
 
-	activeSessionID := strings.TrimSpace(a.state.ActiveSessionID)
-	eventSessionID := strings.TrimSpace(event.SessionID)
 	if activeSessionID != "" && eventSessionID != "" && !strings.EqualFold(activeSessionID, eventSessionID) {
 		return false
 	}

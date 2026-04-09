@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -2405,13 +2406,17 @@ func TestServiceRunUsesInputWorkdirForNewSession(t *testing.T) {
 
 func TestServiceSetSessionWorkdir(t *testing.T) {
 	manager := newRuntimeConfigManager(t)
-	defaultWorkdir := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(defaultWorkdir, ".git"), 0o755); err != nil {
-		t.Fatalf("mkdir git marker: %v", err)
+	repoRoot := t.TempDir()
+	defaultWorkdir := filepath.Join(repoRoot, "app")
+	if err := os.MkdirAll(defaultWorkdir, 0o755); err != nil {
+		t.Fatalf("mkdir default workdir: %v", err)
 	}
 	target := filepath.Join(defaultWorkdir, "sub")
 	if err := os.MkdirAll(target, 0o755); err != nil {
 		t.Fatalf("mkdir target: %v", err)
+	}
+	if output, err := exec.Command("git", "-C", repoRoot, "init").CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v (%s)", err, string(output))
 	}
 	if err := manager.Update(context.Background(), func(cfg *config.Config) error {
 		cfg.Workdir = defaultWorkdir
@@ -2692,9 +2697,10 @@ func TestWorkdirHelperFunctions(t *testing.T) {
 
 func TestServiceSetSessionWorkdirNoopDoesNotSave(t *testing.T) {
 	manager := newRuntimeConfigManager(t)
-	defaultWorkdir := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(defaultWorkdir, ".git"), 0o755); err != nil {
-		t.Fatalf("mkdir git marker: %v", err)
+	repoRoot := t.TempDir()
+	defaultWorkdir := filepath.Join(repoRoot, "app")
+	if err := os.MkdirAll(defaultWorkdir, 0o755); err != nil {
+		t.Fatalf("mkdir default workdir: %v", err)
 	}
 	if err := manager.Update(context.Background(), func(cfg *config.Config) error {
 		cfg.Workdir = defaultWorkdir
@@ -2707,6 +2713,9 @@ func TestServiceSetSessionWorkdirNoopDoesNotSave(t *testing.T) {
 	target := filepath.Join(defaultWorkdir, "sub")
 	if err := os.MkdirAll(target, 0o755); err != nil {
 		t.Fatalf("mkdir target: %v", err)
+	}
+	if output, err := exec.Command("git", "-C", repoRoot, "init").CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v (%s)", err, string(output))
 	}
 	session := agentsession.NewWithWorkdir("noop", target)
 	store.sessions[session.ID] = cloneSession(session)
