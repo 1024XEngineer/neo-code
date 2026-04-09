@@ -13,7 +13,7 @@ import (
 	providertypes "neo-code/internal/provider/types"
 )
 
-// consumeStream 消费 SSE 响应流，使用有界读取器防止缓冲区溢出。
+// consumeStream 消费 SSE 响应流，并在 [DONE] 或 message_done 时完成收尾。
 func (p *Provider) consumeStream(
 	ctx context.Context,
 	body io.Reader,
@@ -30,7 +30,7 @@ func (p *Provider) consumeStream(
 
 	dataLines := make([]string, 0, 4)
 
-	// processChunk 解析单个 SSE data payload，发送事件。
+	// processChunk 解析单个 SSE data payload，并发出增量事件。
 	processChunk := func(payload string) error {
 		if strings.TrimSpace(payload) == "[DONE]" {
 			done = true
@@ -66,23 +66,31 @@ func (p *Provider) consumeStream(
 		return nil
 	}
 
-	// finishStream 统一的流结束处理：发送 message_done 事件。
+	// finishStream 统一输出 message_done 收尾事件。
 	finishStream := func() error {
 		log.Printf("[DEBUG-STREAM] finishStream called: finishReason=%q, done=%v", finishReason, done)
 		return emitMessageDone(ctx, events, finishReason, &usage)
 	}
 
+	// flushPendingData 刷新积累的 data 行，保证多行 data payload 正确拼接。
 	flushPendingData := func() error {
 		defer func() { dataLines = dataLines[:0] }()
 		return flushDataLines(dataLines, processChunk)
 	}
 
 	for {
-		line, err := reader.ReadLine()
+		// 每次读取前优先响应上下文取消，避免取消请求被误判为流中断。
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
 
+		line, err := reader.ReadLine()
 		if err != nil && !errors.Is(err, io.EOF) {
-			// 非 EOF 的读取错误：先刷新缓冲的 data 行，再包装为流中断，
-			// 避免中断前最后一段数据丢失。
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return ctxErr
+			}
 			if flushErr := flushPendingData(); flushErr != nil {
 				return flushErr
 			}
@@ -90,12 +98,9 @@ func (p *Provider) consumeStream(
 		}
 
 		trimmed := line
-
 		switch {
 		case strings.HasPrefix(trimmed, "data:"):
 			data := strings.TrimSpace(strings.TrimPrefix(trimmed, "data:"))
-			// data: [DONE] 需要立即处理：先刷新已缓冲的 data 行，再标记结束，
-			// 避免与前面的合法 JSON 拼接后导致 json.Unmarshal 失败。
 			if data == "[DONE]" {
 				if flushErr := flushPendingData(); flushErr != nil {
 					return flushErr
@@ -116,10 +121,12 @@ func (p *Provider) consumeStream(
 		}
 
 		if errors.Is(err, io.EOF) {
-			// [DEBUG] 流 EOF 时打印关键状态，用于诊断截断原因
 			log.Printf("[DEBUG-STREAM] EOF reached: done=%v, finishReason=%q, totalRead=%d, toolCallCount=%d",
 				done, finishReason, reader.totalRead, len(toolCalls))
 			if !done {
+				if ctxErr := ctx.Err(); ctxErr != nil {
+					return ctxErr
+				}
 				log.Printf("[DEBUG-STREAM] WARNING: stream ended WITHOUT [DONE] marker — treating as interruption")
 				if flushErr := flushPendingData(); flushErr != nil {
 					return flushErr
@@ -134,7 +141,7 @@ func (p *Provider) consumeStream(
 	}
 }
 
-// extractStreamUsage 从 OpenAI usage 响应提取并覆盖累积的 token 统计。
+// extractStreamUsage 将 OpenAI usage 响应覆盖到累计 token 统计。
 func extractStreamUsage(usage *providertypes.Usage, raw *openAIUsage) {
 	if raw == nil {
 		return

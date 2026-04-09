@@ -218,3 +218,63 @@ func TestReadFileToolExecuteStopsOnEmitChunkError(t *testing.T) {
 		t.Fatalf("expected emitted_bytes=0 before first successful emit, got %+v", result.Metadata)
 	}
 }
+
+func TestReadFileToolExecuteEmitsProgressBeforeChunkFailure(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	content := strings.Repeat("chunk-data-", 500)
+	if err := os.WriteFile(filepath.Join(workspace, "large.txt"), []byte(content), 0o644); err != nil {
+		t.Fatalf("write large file: %v", err)
+	}
+
+	tool := New(workspace)
+	args := mustMarshalFSArgs(t, map[string]string{"path": "large.txt"})
+
+	emitCount := 0
+	result, err := tool.Execute(context.Background(), tools.ToolCallInput{
+		Name:      tool.Name(),
+		Arguments: args,
+		Workdir:   workspace,
+		EmitChunk: func(chunk []byte) error {
+			emitCount++
+			if emitCount == 2 {
+				return errors.New("consumer closed on second chunk")
+			}
+			return nil
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "emit chunk failed") {
+		t.Fatalf("expected emit chunk failure, got %v", err)
+	}
+	if !result.IsError {
+		t.Fatalf("expected error result, got %+v", result)
+	}
+	if result.Metadata["emitted_bytes"] != emitChunkSize {
+		t.Fatalf("expected emitted_bytes=%d after first successful chunk, got %+v", emitChunkSize, result.Metadata)
+	}
+}
+
+func TestReadFileToolExecuteWithoutChunkEmitter(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "small.txt"), []byte("hello without stream"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+
+	tool := New(workspace)
+	args := mustMarshalFSArgs(t, map[string]string{"path": "small.txt"})
+
+	result, err := tool.Execute(context.Background(), tools.ToolCallInput{
+		Name:      tool.Name(),
+		Arguments: args,
+		Workdir:   workspace,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Content != "hello without stream" {
+		t.Fatalf("unexpected content: %q", result.Content)
+	}
+}

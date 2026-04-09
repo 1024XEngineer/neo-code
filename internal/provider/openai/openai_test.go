@@ -555,6 +555,46 @@ func TestConsumeStream_ContextCancellation(t *testing.T) {
 	}
 }
 
+func TestConsumeStream_ContextCancellationOnReadErrorReturnsCanceled(t *testing.T) {
+	t.Setenv(config.OpenAIDefaultAPIKeyEnv, "test-key")
+
+	p, err := New(resolvedConfig("", ""))
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	body := &cancelThenErrorReader{cancel: cancel, err: io.ErrClosedPipe}
+	err = p.consumeStream(ctx, body, make(chan providertypes.StreamEvent, 1))
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got %v", err)
+	}
+}
+
+func TestConsumeStream_ContextCancellationAtEOFWithoutDoneReturnsCanceled(t *testing.T) {
+	t.Setenv(config.OpenAIDefaultAPIKeyEnv, "test-key")
+
+	p, err := New(resolvedConfig("", ""))
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	sseData := `data: {"id":"a","choices":[{"delta":{"content":"hello"}}]}
+
+`
+	body := &cancelOnEOFReader{
+		reader: strings.NewReader(sseData),
+		cancel: cancel,
+	}
+	events := make(chan providertypes.StreamEvent, 8)
+
+	err = p.consumeStream(ctx, body, events)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got %v", err)
+	}
+}
+
 func TestConsumeStream_FinishReasonAccumulation(t *testing.T) {
 	t.Setenv(config.OpenAIDefaultAPIKeyEnv, "test-key")
 
@@ -1265,6 +1305,29 @@ func TestConsumeStream_FlushesPendingDataOnNonEOFError(t *testing.T) {
 type errReader struct{ err error }
 
 func (e *errReader) Read(_ []byte) (int, error) { return 0, e.err }
+
+type cancelThenErrorReader struct {
+	cancel func()
+	err    error
+}
+
+func (r *cancelThenErrorReader) Read(_ []byte) (int, error) {
+	r.cancel()
+	return 0, r.err
+}
+
+type cancelOnEOFReader struct {
+	reader io.Reader
+	cancel func()
+}
+
+func (r *cancelOnEOFReader) Read(p []byte) (int, error) {
+	n, err := r.reader.Read(p)
+	if errors.Is(err, io.EOF) {
+		r.cancel()
+	}
+	return n, err
+}
 
 type failingReadCloser struct{ err error }
 
