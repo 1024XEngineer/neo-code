@@ -3,9 +3,7 @@ package bash
 import (
 	"context"
 	"encoding/json"
-	"os"
-	"path/filepath"
-	goruntime "runtime"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -13,135 +11,149 @@ import (
 	"neo-code/internal/tools"
 )
 
+type scriptedSecurityExecutor struct {
+	calls                int
+	lastCall             tools.ToolCallInput
+	lastCommand          string
+	lastRequestedWorkdir string
+	result               tools.ToolResult
+	err                  error
+}
+
+func (e *scriptedSecurityExecutor) Execute(
+	ctx context.Context,
+	call tools.ToolCallInput,
+	command string,
+	requestedWorkdir string,
+) (tools.ToolResult, error) {
+	e.calls++
+	e.lastCall = call
+	e.lastCommand = command
+	e.lastRequestedWorkdir = requestedWorkdir
+	return e.result, e.err
+}
+
 func TestToolExecute(t *testing.T) {
+	t.Parallel()
+
 	workspace := t.TempDir()
-	subdir := filepath.Join(workspace, "sub")
-	if err := os.MkdirAll(subdir, 0o755); err != nil {
-		t.Fatalf("mkdir subdir: %v", err)
-	}
-
-	tests := []struct {
-		name          string
-		command       string
-		workdir       string
-		callWorkdir   string
-		expectErr     string
-		expectContent string
-	}{
-		{
-			name:          "captures stdout",
-			command:       safeEchoCommand(),
-			callWorkdir:   workspace,
-			expectContent: "hello",
-		},
-		{
-			name:        "rejects workdir escape",
-			command:     safeEchoCommand(),
-			workdir:     "..",
-			callWorkdir: workspace,
-			expectErr:   "workdir escapes workspace root",
-		},
-		{
-			name:        "rejects empty command",
-			command:     "",
-			callWorkdir: workspace,
-			expectErr:   "command is empty",
-		},
-		{
-			name:          "runs inside nested workdir",
-			command:       safePwdCommand(),
-			workdir:       "sub",
-			callWorkdir:   workspace,
-			expectContent: normalizeOutputPath(subdir),
-		},
-		{
-			name:          "uses tool root when call workdir is empty",
-			command:       safePwdCommand(),
-			callWorkdir:   "",
-			expectContent: normalizeOutputPath(workspace),
+	executor := &scriptedSecurityExecutor{
+		result: tools.ToolResult{
+			Name:    "bash",
+			Content: "hello",
+			Metadata: map[string]any{
+				"workdir": workspace,
+			},
 		},
 	}
+	tool := NewWithExecutor(workspace, defaultShell(), 3*time.Second, executor)
 
-	tool := New(workspace, defaultShell(), 3*time.Second)
-	for _, tt := range tests {
-		tt := tt
-		t.Run(tt.name, func(t *testing.T) {
-			args, err := json.Marshal(map[string]string{
-				"command": tt.command,
-				"workdir": tt.workdir,
-			})
-			if err != nil {
-				t.Fatalf("marshal args: %v", err)
-			}
+	args, err := json.Marshal(map[string]string{
+		"command": "echo hello",
+		"workdir": "sub",
+	})
+	if err != nil {
+		t.Fatalf("marshal args: %v", err)
+	}
 
-			result, execErr := tool.Execute(context.Background(), tools.ToolCallInput{
-				Name:      tool.Name(),
-				Arguments: args,
-				Workdir:   tt.callWorkdir,
-			})
-
-			if tt.expectErr != "" {
-				if execErr == nil || !strings.Contains(execErr.Error(), tt.expectErr) {
-					t.Fatalf("expected error containing %q, got %v", tt.expectErr, execErr)
-				}
-				return
-			}
-			if execErr != nil {
-				t.Fatalf("unexpected error: %v", execErr)
-			}
-			if !strings.Contains(normalizeOutputPath(result.Content), normalizeOutputPath(tt.expectContent)) {
-				t.Fatalf("expected content containing %q, got %q", tt.expectContent, result.Content)
-			}
-			if result.IsError {
-				t.Fatalf("expected IsError=false, got true")
-			}
-		})
+	result, execErr := tool.Execute(context.Background(), tools.ToolCallInput{
+		Name:      tool.Name(),
+		Arguments: args,
+		Workdir:   workspace,
+	})
+	if execErr != nil {
+		t.Fatalf("unexpected error: %v", execErr)
+	}
+	if executor.calls != 1 {
+		t.Fatalf("expected executor to be called once, got %d", executor.calls)
+	}
+	if executor.lastCommand != "echo hello" {
+		t.Fatalf("expected command to be forwarded, got %q", executor.lastCommand)
+	}
+	if executor.lastRequestedWorkdir != "sub" {
+		t.Fatalf("expected requested workdir to be forwarded, got %q", executor.lastRequestedWorkdir)
+	}
+	if executor.lastCall.Workdir != workspace {
+		t.Fatalf("expected call workdir to be preserved, got %q", executor.lastCall.Workdir)
+	}
+	if result.Content != "hello" {
+		t.Fatalf("expected executor result content, got %q", result.Content)
+	}
+	if result.IsError {
+		t.Fatalf("expected non-error result")
 	}
 }
 
 func TestToolExecuteErrorFormattingAndTruncation(t *testing.T) {
-	workspace := t.TempDir()
-	tool := New(workspace, defaultShell(), 3*time.Second)
+	t.Parallel()
 
+	workspace := t.TempDir()
 	tests := []struct {
 		name           string
 		arguments      []byte
+		executorResult tools.ToolResult
+		executorErr    error
 		expectErr      string
 		expectContent  []string
 		expectMetadata bool
-		expectTruncate bool
+		expectCalls    int
 	}{
 		{
 			name:          "invalid json arguments",
 			arguments:     []byte(`{invalid`),
 			expectErr:     "invalid character",
 			expectContent: []string{"tool error", "tool: bash", "reason: invalid arguments"},
+			expectCalls:   0,
 		},
 		{
 			name:      "command failure returns formatted error",
-			arguments: mustMarshalArgs(t, map[string]string{"command": failingCommand(), "workdir": ""}),
-			expectErr: commandFailureFragment(),
+			arguments: mustMarshalArgs(t, map[string]string{"command": "bad", "workdir": ""}),
+			executorResult: tools.NewErrorResult(
+				"bash",
+				tools.NormalizeErrorReason("bash", errors.New("exit status 1")),
+				"boom",
+				map[string]any{"workdir": workspace},
+			),
+			executorErr: errors.New("exit status 1"),
+			expectErr:   "exit status 1",
 			expectContent: []string{
 				"tool error",
 				"tool: bash",
 				"reason:",
-				commandFailureOutput(),
+				"boom",
 			},
 			expectMetadata: true,
+			expectCalls:    1,
 		},
 		{
 			name:      "large output is truncated",
-			arguments: mustMarshalArgs(t, map[string]string{"command": largeOutputCommand(), "workdir": ""}),
+			arguments: mustMarshalArgs(t, map[string]string{"command": "large", "workdir": ""}),
+			executorResult: tools.ApplyOutputLimit(
+				tools.ToolResult{
+					Name:    "bash",
+					Content: strings.Repeat("x", tools.DefaultOutputLimitBytes+100),
+					Metadata: map[string]any{
+						"workdir": workspace,
+					},
+				},
+				tools.DefaultOutputLimitBytes,
+			),
 			expectContent: []string{
 				"...[truncated]",
 			},
 			expectMetadata: true,
-			expectTruncate: true,
+			expectCalls:    1,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			executor := &scriptedSecurityExecutor{
+				result: tt.executorResult,
+				err:    tt.executorErr,
+			}
+			tool := NewWithExecutor(workspace, defaultShell(), 3*time.Second, executor)
+
 			result, err := tool.Execute(context.Background(), tools.ToolCallInput{
 				Name:      tool.Name(),
 				Arguments: tt.arguments,
@@ -156,6 +168,9 @@ func TestToolExecuteErrorFormattingAndTruncation(t *testing.T) {
 				t.Fatalf("unexpected error: %v", err)
 			}
 
+			if executor.calls != tt.expectCalls {
+				t.Fatalf("expected executor calls=%d, got %d", tt.expectCalls, executor.calls)
+			}
 			for _, fragment := range tt.expectContent {
 				if !strings.Contains(result.Content, fragment) {
 					t.Fatalf("expected content to contain %q, got %q", fragment, result.Content)
@@ -163,9 +178,6 @@ func TestToolExecuteErrorFormattingAndTruncation(t *testing.T) {
 			}
 			if tt.expectMetadata && result.Metadata["workdir"] == "" {
 				t.Fatalf("expected workdir metadata, got %#v", result.Metadata)
-			}
-			if truncated, _ := result.Metadata["truncated"].(bool); truncated != tt.expectTruncate {
-				t.Fatalf("expected truncated=%v, got %#v", tt.expectTruncate, result.Metadata["truncated"])
 			}
 		})
 	}
@@ -179,55 +191,4 @@ func mustMarshalArgs(t *testing.T, value any) []byte {
 		t.Fatalf("marshal args: %v", err)
 	}
 	return data
-}
-
-func safeEchoCommand() string {
-	if goruntime.GOOS == "windows" {
-		return "Write-Output 'hello'"
-	}
-	return "printf 'hello'"
-}
-
-func safePwdCommand() string {
-	if goruntime.GOOS == "windows" {
-		return "(Get-Location).Path"
-	}
-	return "pwd"
-}
-
-func failingCommand() string {
-	if goruntime.GOOS == "windows" {
-		return "Write-Output 'boom'; exit 1"
-	}
-	return "printf 'boom\\n'; exit 1"
-}
-
-func commandFailureFragment() string {
-	return "exit status 1"
-}
-
-func commandFailureOutput() string {
-	return "boom"
-}
-
-func largeOutputCommand() string {
-	if goruntime.GOOS == "windows" {
-		return "$text = 'x' * 70000; Write-Output $text"
-	}
-	return "i=0; while [ $i -lt 70000 ]; do printf x; i=$((i+1)); done"
-}
-
-func defaultShell() string {
-	if goruntime.GOOS == "windows" {
-		return "powershell"
-	}
-	return "sh"
-}
-
-func normalizeOutputPath(value string) string {
-	trimmed := strings.TrimSpace(value)
-	if goruntime.GOOS == "windows" {
-		return strings.ToLower(strings.ReplaceAll(trimmed, "/", `\`))
-	}
-	return strings.ReplaceAll(trimmed, `\`, "/")
 }

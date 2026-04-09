@@ -17,23 +17,30 @@ type ProviderService interface {
 	SetCurrentModel(ctx context.Context, modelID string) (config.ProviderSelection, error)
 }
 
+// WorkspaceSwitcher 定义 TUI 触发工作区进程切换所需的最小能力。
+type WorkspaceSwitcher interface {
+	SwitchWorkspace(ctx context.Context, workdir string) error
+}
+
 // Options 定义 bootstrap 装配输入。
 type Options struct {
-	Config          *config.Config
-	ConfigManager   *config.Manager
-	Runtime         agentruntime.Runtime
-	ProviderService ProviderService
-	Mode            Mode
-	Factory         ServiceFactory
+	Config            *config.Config
+	ConfigManager     *config.Manager
+	Runtime           agentruntime.Runtime
+	ProviderService   ProviderService
+	WorkspaceSwitcher WorkspaceSwitcher
+	Mode              Mode
+	Factory           ServiceFactory
 }
 
 // Container 表示完成装配后供 TUI Core 使用的依赖集合。
 type Container struct {
-	Config          config.Config
-	ConfigManager   *config.Manager
-	Runtime         agentruntime.Runtime
-	ProviderService ProviderService
-	Mode            Mode
+	Config            config.Config
+	ConfigManager     *config.Manager
+	Runtime           agentruntime.Runtime
+	ProviderService   ProviderService
+	WorkspaceSwitcher WorkspaceSwitcher
+	Mode              Mode
 }
 
 // Build 执行 TUI bootstrap 装配，并返回可注入到 App/Core 的容器。
@@ -46,6 +53,9 @@ func Build(options Options) (Container, error) {
 	}
 	if options.ProviderService == nil {
 		return Container{}, fmt.Errorf("tui bootstrap: provider service is nil")
+	}
+	if options.WorkspaceSwitcher == nil {
+		return Container{}, fmt.Errorf("tui bootstrap: workspace switcher is nil")
 	}
 
 	mode := NormalizeMode(options.Mode)
@@ -72,12 +82,21 @@ func Build(options Options) (Container, error) {
 		return Container{}, fmt.Errorf("tui bootstrap: provider factory returned nil")
 	}
 
+	workspaceSwitcher, err := factory.BuildWorkspaceSwitcher(mode, options.WorkspaceSwitcher)
+	if err != nil {
+		return Container{}, fmt.Errorf("tui bootstrap: build workspace switcher: %w", err)
+	}
+	if workspaceSwitcher == nil {
+		return Container{}, fmt.Errorf("tui bootstrap: workspace switcher factory returned nil")
+	}
+
 	return Container{
-		Config:          cfg,
-		ConfigManager:   options.ConfigManager,
-		Runtime:         runtimeSvc,
-		ProviderService: providerSvc,
-		Mode:            mode,
+		Config:            cfg,
+		ConfigManager:     options.ConfigManager,
+		Runtime:           runtimeSvc,
+		ProviderService:   providerSvc,
+		WorkspaceSwitcher: workspaceSwitcher,
+		Mode:              mode,
 	}, nil
 }
 

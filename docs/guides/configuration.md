@@ -331,6 +331,15 @@ context:
 
 更多行为说明见 [context-compact.md](../context-compact.md)。
 
+## /cwd 工作区切换
+
+- `/cwd` 不再是“修改当前 session 执行目录”，而是“切换到另一个工作区实例”。
+- `/cwd` 不带参数时，只显示当前工作区路径。
+- `/cwd <path>` 会先把目标解析为存在的绝对目录；若目标与本次启动工作区相同，则返回 no-op 提示。
+- 若当前 Agent 正在运行或正在 compact，`/cwd` 会直接拒绝切换，不会强制中断当前任务。
+- 切换成功时，NeoCode 会启动一个新的 `--workdir <path>` 进程，并退出当前进程。
+- 新进程进入目标工作区后，会使用该工作区自己的 session 分桶，并从 fresh draft 开始，而不是迁移当前输入框或当前会话。
+
 ## CLI 工作区覆盖
 
 NeoCode 支持在启动时通过 CLI 参数覆盖当前运行工作区：

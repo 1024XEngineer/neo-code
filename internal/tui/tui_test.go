@@ -16,9 +16,13 @@ func TestProviderControllerTypeAlias(t *testing.T) {
 	var _ ProviderController = ProviderController(nil)
 }
 
+func TestWorkspaceSwitcherTypeAlias(t *testing.T) {
+	var _ WorkspaceSwitcher = WorkspaceSwitcher(nil)
+}
+
 func TestNewForwardsToCore(t *testing.T) {
 	t.Run("nil config", func(t *testing.T) {
-		_, err := New(nil, &config.Manager{}, &runtime.Service{}, nil)
+		_, err := New(nil, &config.Manager{}, &runtime.Service{}, nil, nil)
 		if err == nil {
 			t.Error("expected error for nil runtime")
 		}

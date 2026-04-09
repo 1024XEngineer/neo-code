@@ -75,9 +75,9 @@
 
 ## Iteration 6 补充（Bootstrap 落地）
 
-- `internal/tui/bootstrap` 已提供 `Build` 装配入口，统一完成 `ConfigManager + Runtime + ProviderService` 注入。
+- `internal/tui/bootstrap` 已提供 `Build` 装配入口，统一完成 `ConfigManager + Runtime + ProviderService + WorkspaceSwitcher` 注入。
 - 支持 `Mode`（`live/offline/mock`）与 `ServiceFactory` 扩展点，可在不修改 `core` 的情况下替换注入实现。
-- `internal/tui.New(...)` 保持兼容签名，对外作为薄封装；实际装配路径为 `New -> bootstrap.Build -> newApp`。
+- `internal/tui.New(...)` 继续作为薄封装暴露给上层；实际装配路径为 `New -> bootstrap.Build -> newApp`，并显式接收 `WorkspaceSwitcher`。
 
 ## Iteration 7 补充（Runtime Source 收敛）
 

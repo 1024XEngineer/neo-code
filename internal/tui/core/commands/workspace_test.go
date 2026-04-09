@@ -1,32 +1,17 @@
 package commands
 
 import (
-	"context"
 	"errors"
 	"os"
 	"path/filepath"
+	goruntime "runtime"
 	"strings"
 	"testing"
 
-	agentsession "neo-code/internal/session"
 	tuiworkspace "neo-code/internal/tui/core/workspace"
 )
 
-type stubSessionWorkdirSetter struct {
-	session agentsession.Session
-	err     error
-	calls   int
-}
-
-func (s *stubSessionWorkdirSetter) SetSessionWorkdir(ctx context.Context, sessionID string, workdir string) (agentsession.Session, error) {
-	s.calls++
-	if s.err != nil {
-		return agentsession.Session{}, s.err
-	}
-	return s.session, nil
-}
-
-func TestExecuteSessionWorkdirCommand(t *testing.T) {
+func TestExecuteWorkspaceSwitchCommand(t *testing.T) {
 	parse := func(raw string) (string, error) {
 		raw = strings.TrimSpace(raw)
 		if raw == "/bad" {
@@ -42,14 +27,14 @@ func TestExecuteSessionWorkdirCommand(t *testing.T) {
 	}
 
 	t.Run("parse error", func(t *testing.T) {
-		result := ExecuteSessionWorkdirCommand(&stubSessionWorkdirSetter{}, "", "", "/bad", parse, tuiworkspace.ResolveWorkspacePath, tuiworkspace.SelectSessionWorkdir)
+		result := ExecuteWorkspaceSwitchCommand("", "", "/bad", parse, tuiworkspace.ResolveWorkspacePath)
 		if result.Err == nil {
 			t.Fatalf("expected parse error")
 		}
 	})
 
 	t.Run("empty requested without current workdir", func(t *testing.T) {
-		result := ExecuteSessionWorkdirCommand(&stubSessionWorkdirSetter{}, "", "", "/cwd", parse, tuiworkspace.ResolveWorkspacePath, tuiworkspace.SelectSessionWorkdir)
+		result := ExecuteWorkspaceSwitchCommand("", "", "/cwd", parse, tuiworkspace.ResolveWorkspacePath)
 		if result.Err == nil || !strings.Contains(result.Err.Error(), "usage: /cwd <path>") {
 			t.Fatalf("expected usage error, got %+v", result)
 		}
@@ -57,49 +42,90 @@ func TestExecuteSessionWorkdirCommand(t *testing.T) {
 
 	t.Run("empty requested with current workdir", func(t *testing.T) {
 		current := t.TempDir()
-		result := ExecuteSessionWorkdirCommand(&stubSessionWorkdirSetter{}, "", current, "/cwd", parse, tuiworkspace.ResolveWorkspacePath, tuiworkspace.SelectSessionWorkdir)
+		result := ExecuteWorkspaceSwitchCommand(current, current, "/cwd", parse, tuiworkspace.ResolveWorkspacePath)
 		if result.Err != nil {
 			t.Fatalf("unexpected error: %v", result.Err)
 		}
 		if result.Workdir != current || !strings.Contains(result.Notice, "Current workspace is") {
 			t.Fatalf("unexpected result: %+v", result)
 		}
+		if result.Relaunch {
+			t.Fatalf("expected no relaunch for query only")
+		}
 	})
 
-	t.Run("draft session resolves requested path", func(t *testing.T) {
+	t.Run("requested path resolves to relaunch target", func(t *testing.T) {
 		base := t.TempDir()
 		target := filepath.Join(base, "sub")
 		if err := ensureDir(target); err != nil {
 			t.Fatalf("mkdir target: %v", err)
 		}
-		result := ExecuteSessionWorkdirCommand(&stubSessionWorkdirSetter{}, "", base, "/cwd sub", parse, tuiworkspace.ResolveWorkspacePath, tuiworkspace.SelectSessionWorkdir)
+
+		result := ExecuteWorkspaceSwitchCommand(base, base, "/cwd sub", parse, tuiworkspace.ResolveWorkspacePath)
 		if result.Err != nil {
 			t.Fatalf("unexpected error: %v", result.Err)
 		}
-		if !strings.Contains(result.Notice, "Draft workspace switched") {
+		if !result.Relaunch || result.Workdir != target {
+			t.Fatalf("expected relaunch to %q, got %+v", target, result)
+		}
+	})
+
+	t.Run("requested path matching startup workdir is noop", func(t *testing.T) {
+		startup := t.TempDir()
+		current := filepath.Join(startup, "session-subdir")
+		if err := ensureDir(current); err != nil {
+			t.Fatalf("mkdir current: %v", err)
+		}
+
+		result := ExecuteWorkspaceSwitchCommand(current, startup, "/cwd .", parse, tuiworkspace.ResolveWorkspacePath)
+		if result.Err != nil {
+			t.Fatalf("unexpected error: %v", result.Err)
+		}
+		if result.Relaunch {
+			t.Fatalf("expected noop when switching to startup workdir, got %+v", result)
+		}
+		if result.Workdir != startup {
+			t.Fatalf("expected startup workdir %q, got %q", startup, result.Workdir)
+		}
+		if !strings.Contains(result.Notice, "Workspace already set") {
 			t.Fatalf("unexpected notice: %q", result.Notice)
 		}
 	})
 
-	t.Run("runtime error", func(t *testing.T) {
-		stub := &stubSessionWorkdirSetter{err: errors.New("set workdir failed")}
-		result := ExecuteSessionWorkdirCommand(stub, "session-1", t.TempDir(), "/cwd sub", parse, tuiworkspace.ResolveWorkspacePath, tuiworkspace.SelectSessionWorkdir)
-		if result.Err == nil || !strings.Contains(result.Err.Error(), "set workdir failed") {
-			t.Fatalf("expected runtime error, got %+v", result)
+	t.Run("relative path resolves from startup workdir", func(t *testing.T) {
+		startup := t.TempDir()
+		current := filepath.Join(startup, "session-subdir")
+		target := filepath.Join(startup, "next-workspace")
+		if err := ensureDir(current); err != nil {
+			t.Fatalf("mkdir current: %v", err)
 		}
-	})
+		if err := ensureDir(target); err != nil {
+			t.Fatalf("mkdir target: %v", err)
+		}
 
-	t.Run("runtime empty workdir fallback", func(t *testing.T) {
-		current := t.TempDir()
-		stub := &stubSessionWorkdirSetter{session: agentsession.Session{ID: "session-1", Workdir: ""}}
-		result := ExecuteSessionWorkdirCommand(stub, "session-1", current, "/cwd sub", parse, tuiworkspace.ResolveWorkspacePath, tuiworkspace.SelectSessionWorkdir)
+		result := ExecuteWorkspaceSwitchCommand(current, startup, "/cwd next-workspace", parse, tuiworkspace.ResolveWorkspacePath)
 		if result.Err != nil {
 			t.Fatalf("unexpected error: %v", result.Err)
 		}
-		if result.Workdir != current {
-			t.Fatalf("expected fallback workdir %q, got %q", current, result.Workdir)
+		if !result.Relaunch || result.Workdir != target {
+			t.Fatalf("expected startup-relative relaunch to %q, got %+v", target, result)
 		}
 	})
+}
+
+func TestSameWorkspacePath(t *testing.T) {
+	left := filepath.Clean("/tmp/project")
+	right := filepath.Clean("/tmp/project")
+	if goruntime.GOOS == "windows" {
+		left = `C:\Repo`
+		right = `c:\repo`
+	}
+	if !sameWorkspacePath(left, right) {
+		t.Fatalf("expected %q and %q to match", left, right)
+	}
+	if sameWorkspacePath(left, "") {
+		t.Fatalf("expected blank path to never match")
+	}
 }
 
 func ensureDir(path string) error {

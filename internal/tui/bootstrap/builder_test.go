@@ -2,6 +2,7 @@ package bootstrap
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"neo-code/internal/config"
@@ -67,6 +68,45 @@ func (s *testProviderService) SetCurrentModel(ctx context.Context, modelID strin
 	return config.ProviderSelection{}, nil
 }
 
+type testWorkspaceSwitcher struct{}
+
+func (s *testWorkspaceSwitcher) SwitchWorkspace(ctx context.Context, workdir string) error {
+	return nil
+}
+
+type testFactory struct {
+	useRuntime              bool
+	runtimeResult           agentruntime.Runtime
+	runtimeErr              error
+	useProvider             bool
+	providerResult          ProviderService
+	providerErr             error
+	useWorkspaceSwitcher    bool
+	workspaceSwitcherResult WorkspaceSwitcher
+	workspaceSwitcherErr    error
+}
+
+func (f testFactory) BuildRuntime(mode Mode, current agentruntime.Runtime) (agentruntime.Runtime, error) {
+	if !f.useRuntime {
+		return current, nil
+	}
+	return f.runtimeResult, f.runtimeErr
+}
+
+func (f testFactory) BuildProvider(mode Mode, current ProviderService) (ProviderService, error) {
+	if !f.useProvider {
+		return current, nil
+	}
+	return f.providerResult, f.providerErr
+}
+
+func (f testFactory) BuildWorkspaceSwitcher(mode Mode, current WorkspaceSwitcher) (WorkspaceSwitcher, error) {
+	if !f.useWorkspaceSwitcher {
+		return current, nil
+	}
+	return f.workspaceSwitcherResult, f.workspaceSwitcherErr
+}
+
 func TestBuild(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
 		manager := &config.Manager{}
@@ -74,9 +114,10 @@ func TestBuild(t *testing.T) {
 		providerSvc := &testProviderService{}
 
 		container, err := Build(Options{
-			ConfigManager:   manager,
-			Runtime:         runtime,
-			ProviderService: providerSvc,
+			ConfigManager:     manager,
+			Runtime:           runtime,
+			ProviderService:   providerSvc,
+			WorkspaceSwitcher: &testWorkspaceSwitcher{},
 		})
 		if err != nil {
 			t.Fatalf("Build() error = %v", err)
@@ -88,9 +129,10 @@ func TestBuild(t *testing.T) {
 
 	t.Run("nil config manager", func(t *testing.T) {
 		_, err := Build(Options{
-			ConfigManager:   nil,
-			Runtime:         &testRuntime{},
-			ProviderService: &testProviderService{},
+			ConfigManager:     nil,
+			Runtime:           &testRuntime{},
+			ProviderService:   &testProviderService{},
+			WorkspaceSwitcher: &testWorkspaceSwitcher{},
 		})
 		if err == nil {
 			t.Fatal("expected error for nil config manager")
@@ -100,9 +142,10 @@ func TestBuild(t *testing.T) {
 	t.Run("nil runtime", func(t *testing.T) {
 		manager := &config.Manager{}
 		_, err := Build(Options{
-			ConfigManager:   manager,
-			Runtime:         nil,
-			ProviderService: &testProviderService{},
+			ConfigManager:     manager,
+			Runtime:           nil,
+			ProviderService:   &testProviderService{},
+			WorkspaceSwitcher: &testWorkspaceSwitcher{},
 		})
 		if err == nil {
 			t.Fatal("expected error for nil runtime")
@@ -112,12 +155,140 @@ func TestBuild(t *testing.T) {
 	t.Run("nil provider service", func(t *testing.T) {
 		manager := &config.Manager{}
 		_, err := Build(Options{
-			ConfigManager:   manager,
-			Runtime:         &testRuntime{},
-			ProviderService: nil,
+			ConfigManager:     manager,
+			Runtime:           &testRuntime{},
+			ProviderService:   nil,
+			WorkspaceSwitcher: &testWorkspaceSwitcher{},
 		})
 		if err == nil {
 			t.Fatal("expected error for nil provider service")
+		}
+	})
+
+	t.Run("nil workspace switcher", func(t *testing.T) {
+		manager := &config.Manager{}
+		_, err := Build(Options{
+			ConfigManager:     manager,
+			Runtime:           &testRuntime{},
+			ProviderService:   &testProviderService{},
+			WorkspaceSwitcher: nil,
+		})
+		if err == nil {
+			t.Fatal("expected error for nil workspace switcher")
+		}
+	})
+
+	t.Run("runtime factory error", func(t *testing.T) {
+		manager := &config.Manager{}
+		_, err := Build(Options{
+			ConfigManager:     manager,
+			Runtime:           &testRuntime{},
+			ProviderService:   &testProviderService{},
+			WorkspaceSwitcher: &testWorkspaceSwitcher{},
+			Factory: testFactory{
+				useRuntime: true,
+				runtimeErr: errors.New("runtime factory failed"),
+			},
+		})
+		if err == nil || err.Error() != "tui bootstrap: build runtime: runtime factory failed" {
+			t.Fatalf("expected runtime factory error, got %v", err)
+		}
+	})
+
+	t.Run("runtime factory returns nil", func(t *testing.T) {
+		manager := &config.Manager{}
+		_, err := Build(Options{
+			ConfigManager:     manager,
+			Runtime:           &testRuntime{},
+			ProviderService:   &testProviderService{},
+			WorkspaceSwitcher: &testWorkspaceSwitcher{},
+			Factory: testFactory{
+				useRuntime:              true,
+				runtimeResult:           nil,
+				useProvider:             true,
+				providerResult:          &testProviderService{},
+				useWorkspaceSwitcher:    true,
+				workspaceSwitcherResult: &testWorkspaceSwitcher{},
+			},
+		})
+		if err == nil || err.Error() != "tui bootstrap: runtime factory returned nil" {
+			t.Fatalf("expected nil runtime error, got %v", err)
+		}
+	})
+
+	t.Run("provider factory error", func(t *testing.T) {
+		manager := &config.Manager{}
+		_, err := Build(Options{
+			ConfigManager:     manager,
+			Runtime:           &testRuntime{},
+			ProviderService:   &testProviderService{},
+			WorkspaceSwitcher: &testWorkspaceSwitcher{},
+			Factory: testFactory{
+				useProvider: true,
+				providerErr: errors.New("provider factory failed"),
+			},
+		})
+		if err == nil || err.Error() != "tui bootstrap: build provider service: provider factory failed" {
+			t.Fatalf("expected provider factory error, got %v", err)
+		}
+	})
+
+	t.Run("provider factory returns nil", func(t *testing.T) {
+		manager := &config.Manager{}
+		_, err := Build(Options{
+			ConfigManager:     manager,
+			Runtime:           &testRuntime{},
+			ProviderService:   &testProviderService{},
+			WorkspaceSwitcher: &testWorkspaceSwitcher{},
+			Factory: testFactory{
+				useRuntime:              true,
+				runtimeResult:           &testRuntime{},
+				useProvider:             true,
+				providerResult:          nil,
+				useWorkspaceSwitcher:    true,
+				workspaceSwitcherResult: &testWorkspaceSwitcher{},
+			},
+		})
+		if err == nil || err.Error() != "tui bootstrap: provider factory returned nil" {
+			t.Fatalf("expected nil provider error, got %v", err)
+		}
+	})
+
+	t.Run("workspace switcher factory error", func(t *testing.T) {
+		manager := &config.Manager{}
+		_, err := Build(Options{
+			ConfigManager:     manager,
+			Runtime:           &testRuntime{},
+			ProviderService:   &testProviderService{},
+			WorkspaceSwitcher: &testWorkspaceSwitcher{},
+			Factory: testFactory{
+				useWorkspaceSwitcher: true,
+				workspaceSwitcherErr: errors.New("workspace switcher factory failed"),
+			},
+		})
+		if err == nil || err.Error() != "tui bootstrap: build workspace switcher: workspace switcher factory failed" {
+			t.Fatalf("expected workspace switcher factory error, got %v", err)
+		}
+	})
+
+	t.Run("workspace switcher factory returns nil", func(t *testing.T) {
+		manager := &config.Manager{}
+		_, err := Build(Options{
+			ConfigManager:     manager,
+			Runtime:           &testRuntime{},
+			ProviderService:   &testProviderService{},
+			WorkspaceSwitcher: &testWorkspaceSwitcher{},
+			Factory: testFactory{
+				useRuntime:              true,
+				runtimeResult:           &testRuntime{},
+				useProvider:             true,
+				providerResult:          &testProviderService{},
+				useWorkspaceSwitcher:    true,
+				workspaceSwitcherResult: nil,
+			},
+		})
+		if err == nil || err.Error() != "tui bootstrap: workspace switcher factory returned nil" {
+			t.Fatalf("expected nil workspace switcher error, got %v", err)
 		}
 	})
 }
@@ -139,6 +310,10 @@ func TestResolveConfigSnapshot(t *testing.T) {
 		cfg := resolveConfigSnapshot(inputCfg, manager)
 		if cfg.Workdir != "/test" {
 			t.Errorf("expected Workdir /test, got %s", cfg.Workdir)
+		}
+		cfg.Workdir = "/mutated"
+		if inputCfg.Workdir != "/test" {
+			t.Fatalf("expected resolveConfigSnapshot to return clone, got source %q", inputCfg.Workdir)
 		}
 	})
 }

@@ -165,24 +165,10 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.appendActivity("command", typed.Notice, "", false)
 		}
 		return a, tea.Batch(cmds...)
-	case sessionWorkdirResultMsg:
-		if typed.Err != nil {
-			a.state.ExecutionError = typed.Err.Error()
-			a.state.StatusText = typed.Err.Error()
-			a.appendActivity("workspace", "Workspace command failed", typed.Err.Error(), true)
-			return a, tea.Batch(cmds...)
+	case workspaceSwitchResultMsg:
+		if cmd := a.applyWorkspaceSwitchResult(typed); cmd != nil {
+			cmds = append(cmds, cmd)
 		}
-
-		a.state.ExecutionError = ""
-		a.state.StatusText = typed.Notice
-		a.state.CurrentWorkdir = strings.TrimSpace(typed.Workdir)
-		if err := a.refreshFileCandidates(); err != nil {
-			a.state.ExecutionError = err.Error()
-			a.state.StatusText = err.Error()
-			a.appendActivity("workspace", "Failed to refresh workspace files", err.Error(), true)
-			return a, tea.Batch(cmds...)
-		}
-		a.appendActivity("workspace", typed.Notice, "", false)
 		return a, tea.Batch(cmds...)
 	case workspaceCommandResultMsg:
 		if typed.Command == "" && typed.Err != nil {
@@ -308,7 +294,13 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 			effectiveTyped = tea.KeyMsg{Type: tea.KeyEnter, Paste: true}
 		} else {
 			input := strings.TrimSpace(a.input.Value())
-			if input == "" || a.isBusy() {
+			if input == "" {
+				return a, tea.Batch(cmds...)
+			}
+			if a.isBusy() {
+				if a.rejectBusyWorkspaceSwitch(input) {
+					return a, tea.Batch(cmds...)
+				}
 				return a, tea.Batch(cmds...)
 			}
 
@@ -353,7 +345,7 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 				if isWorkspaceSlashCommand(input) {
 					a.state.StatusText = statusApplyingCommand
 					a.state.ExecutionError = ""
-					cmds = append(cmds, runSessionWorkdirCommand(a.runtime, a.state.ActiveSessionID, a.state.CurrentWorkdir, input))
+					cmds = append(cmds, runWorkspaceSwitchCommand(a.workspaceSwitcher, a.state.CurrentWorkdir, a.configManager.Get().Workdir, input))
 					return a, tea.Batch(cmds...)
 				}
 				a.state.StatusText = statusApplyingCommand
@@ -599,7 +591,7 @@ func (a *App) refreshMessages() error {
 	a.activeMessages = session.Messages
 	a.clearActivities()
 	a.state.ActiveSessionTitle = session.Title
-	a.state.CurrentWorkdir = tuiworkspace.SelectSessionWorkdir(session.Workdir, a.configManager.Get().Workdir)
+	a.state.CurrentWorkdir = a.configManager.Get().Workdir
 	a.refreshRuntimeSourceSnapshot()
 	return nil
 }
@@ -771,9 +763,6 @@ func runtimeEventRunContextHandler(a *App, event agentruntime.RuntimeEvent) bool
 	}
 	if strings.TrimSpace(mapped.Model) != "" {
 		a.state.CurrentModel = mapped.Model
-	}
-	if strings.TrimSpace(mapped.Workdir) != "" {
-		a.state.CurrentWorkdir = mapped.Workdir
 	}
 	return false
 }
@@ -1567,28 +1556,47 @@ func runAgent(runtime agentruntime.Runtime, runID string, sessionID string, work
 	)
 }
 
-func runSessionWorkdirCommand(
-	runtime agentruntime.Runtime,
-	sessionID string,
+// runWorkspaceSwitchCommand 负责解析 `/cwd`，并在需要时启动新工作区进程。
+func runWorkspaceSwitchCommand(
+	workspaceSwitcher WorkspaceSwitcher,
 	currentWorkdir string,
+	startupWorkdir string,
 	raw string,
 ) tea.Cmd {
-	return func() tea.Msg {
-		result := tuicommands.ExecuteSessionWorkdirCommand(
-			runtime,
-			sessionID,
-			currentWorkdir,
-			raw,
-			parseWorkspaceSlashCommand,
-			tuiworkspace.ResolveWorkspacePath,
-			tuiworkspace.SelectSessionWorkdir,
-		)
-		return sessionWorkdirResultMsg{
-			Notice:  result.Notice,
-			Workdir: result.Workdir,
-			Err:     result.Err,
+	result := tuicommands.ExecuteWorkspaceSwitchCommand(
+		currentWorkdir,
+		startupWorkdir,
+		raw,
+		parseWorkspaceSlashCommand,
+		tuiworkspace.ResolveWorkspacePath,
+	)
+	if result.Err != nil {
+		return func() tea.Msg {
+			return workspaceSwitchResultMsg{
+				Notice:     result.Notice,
+				Workdir:    result.Workdir,
+				Relaunched: result.Relaunch,
+				Err:        result.Err,
+			}
 		}
 	}
+
+	return tuiservices.RunWorkspaceSwitchCmd(
+		workspaceSwitcher,
+		tuiservices.WorkspaceSwitchRequest{
+			Notice:     result.Notice,
+			Workdir:    result.Workdir,
+			Relaunched: result.Relaunch,
+		},
+		func(notice string, workdir string, relaunched bool, err error) tea.Msg {
+			return workspaceSwitchResultMsg{
+				Notice:     notice,
+				Workdir:    workdir,
+				Relaunched: relaunched,
+				Err:        err,
+			}
+		},
+	)
 }
 
 // runCompact 鍦ㄧ嫭绔嬪懡浠や腑瑙﹀彂 runtime compact锛屽苟鎶婄粨鏋滃洖浼犵粰 TUI銆
@@ -1603,4 +1611,47 @@ func runCompact(runtime agentruntime.Runtime, sessionID string) tea.Cmd {
 // isBusy 缁熶竴鍒ゆ柇褰撳墠鐣岄潰鏄惁瀛樺湪杩涜涓殑 agent 鎴?compact 鎿嶄綔銆
 func (a App) isBusy() bool {
 	return tuiutils.IsBusy(a.state.IsAgentRunning, a.state.IsCompacting)
+}
+
+// rejectBusyWorkspaceSwitch 负责在运行中拒绝 `/cwd`，并给出统一提示。
+func (a *App) rejectBusyWorkspaceSwitch(input string) bool {
+	if !isWorkspaceSlashCommand(input) {
+		return false
+	}
+
+	errText := "workspace switch is unavailable while agent is busy"
+	a.state.ExecutionError = errText
+	a.state.StatusText = errText
+	a.appendActivity("workspace", "Workspace switch rejected", errText, true)
+	return true
+}
+
+// applyWorkspaceSwitchResult 负责消费工作区切换结果，并在成功拉起新进程后退出当前 TUI。
+func (a *App) applyWorkspaceSwitchResult(result workspaceSwitchResultMsg) tea.Cmd {
+	if result.Err != nil {
+		a.state.ExecutionError = result.Err.Error()
+		a.state.StatusText = result.Err.Error()
+		a.appendActivity("workspace", "Workspace switch failed", result.Err.Error(), true)
+		return nil
+	}
+
+	a.state.ExecutionError = ""
+	a.state.StatusText = result.Notice
+	if !result.Relaunched {
+		nextWorkdir := strings.TrimSpace(result.Workdir)
+		if nextWorkdir != "" && nextWorkdir != strings.TrimSpace(a.state.CurrentWorkdir) {
+			a.state.CurrentWorkdir = nextWorkdir
+			if err := a.refreshFileCandidates(); err != nil {
+				a.state.ExecutionError = err.Error()
+				a.state.StatusText = err.Error()
+				a.appendActivity("workspace", "Failed to refresh workspace files", err.Error(), true)
+				return nil
+			}
+		}
+		a.appendActivity("workspace", result.Notice, "", false)
+		return nil
+	}
+
+	a.appendActivity("workspace", result.Notice, "", false)
+	return tea.Quit
 }

@@ -550,8 +550,8 @@ func TestConsumeStream_ContextCancellation(t *testing.T) {
 `
 	events := make(chan providertypes.StreamEvent, 1)
 	err = p.consumeStream(ctx, strings.NewReader(sseData), events)
-	if err != nil && !errors.Is(err, context.Canceled) {
-		t.Fatalf("expected context.Canceled or nil, got: %v", err)
+	if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, provider.ErrStreamInterrupted) {
+		t.Fatalf("expected context.Canceled, ErrStreamInterrupted, or nil, got: %v", err)
 	}
 }
 

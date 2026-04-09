@@ -1,70 +1,80 @@
 package commands
 
 import (
-	"context"
 	"fmt"
+	"path/filepath"
+	goruntime "runtime"
 	"strings"
-
-	agentsession "neo-code/internal/session"
 )
 
-// SessionWorkdirSetter 定义设置会话工作目录所需的最小 runtime 能力。
-type SessionWorkdirSetter interface {
-	SetSessionWorkdir(ctx context.Context, sessionID string, workdir string) (agentsession.Session, error)
+// WorkspaceSwitchCommandResult 表示 `/cwd` 命令解析后的统一结果。
+type WorkspaceSwitchCommandResult struct {
+	Notice   string
+	Workdir  string
+	Relaunch bool
+	Err      error
 }
 
-// SessionWorkdirCommandResult 表示工作目录命令执行结果。
-type SessionWorkdirCommandResult struct {
-	Notice  string
-	Workdir string
-	Err     error
-}
-
-// ExecuteSessionWorkdirCommand 执行 /cwd 命令的核心流程，返回统一结果结构。
-func ExecuteSessionWorkdirCommand(
-	runtime SessionWorkdirSetter,
-	sessionID string,
+// ExecuteWorkspaceSwitchCommand 负责解析 `/cwd`，并产出是否需要重启到新工作区的结果。
+func ExecuteWorkspaceSwitchCommand(
 	currentWorkdir string,
+	startupWorkdir string,
 	raw string,
 	parseCommand func(string) (string, error),
 	resolveWorkspacePath func(string, string) (string, error),
-	selectSessionWorkdir func(string, string) string,
-) SessionWorkdirCommandResult {
+) WorkspaceSwitchCommandResult {
 	requested, err := parseCommand(raw)
 	if err != nil {
-		return SessionWorkdirCommandResult{Err: err}
+		return WorkspaceSwitchCommandResult{Err: err}
 	}
 
+	currentWorkdir = strings.TrimSpace(currentWorkdir)
+	startupWorkdir = strings.TrimSpace(startupWorkdir)
+	activeWorkspaceRoot := startupWorkdir
+	if activeWorkspaceRoot == "" {
+		activeWorkspaceRoot = currentWorkdir
+	}
 	if strings.TrimSpace(requested) == "" {
-		workdir := strings.TrimSpace(currentWorkdir)
+		workdir := activeWorkspaceRoot
 		if workdir == "" {
-			return SessionWorkdirCommandResult{Err: fmt.Errorf("usage: /cwd <path>")}
+			return WorkspaceSwitchCommandResult{Err: fmt.Errorf("usage: /cwd <path>")}
 		}
-		return SessionWorkdirCommandResult{
+		return WorkspaceSwitchCommandResult{
 			Notice:  fmt.Sprintf("[System] Current workspace is %s.", workdir),
 			Workdir: workdir,
 		}
 	}
 
-	if strings.TrimSpace(sessionID) == "" {
-		workdir, err := resolveWorkspacePath(currentWorkdir, requested)
-		if err != nil {
-			return SessionWorkdirCommandResult{Err: err}
-		}
-		return SessionWorkdirCommandResult{
-			Notice:  fmt.Sprintf("[System] Draft workspace switched to %s.", workdir),
-			Workdir: workdir,
-		}
-	}
-
-	session, err := runtime.SetSessionWorkdir(context.Background(), sessionID, requested)
+	resolvedWorkdir, err := resolveWorkspacePath(activeWorkspaceRoot, requested)
 	if err != nil {
-		return SessionWorkdirCommandResult{Err: err}
+		return WorkspaceSwitchCommandResult{Err: err}
+	}
+	if sameWorkspacePath(resolvedWorkdir, activeWorkspaceRoot) {
+		return WorkspaceSwitchCommandResult{
+			Notice:  fmt.Sprintf("[System] Workspace already set to %s.", resolvedWorkdir),
+			Workdir: resolvedWorkdir,
+		}
 	}
 
-	workdir := selectSessionWorkdir(session.Workdir, currentWorkdir)
-	return SessionWorkdirCommandResult{
-		Notice:  fmt.Sprintf("[System] Session workspace switched to %s.", workdir),
-		Workdir: workdir,
+	return WorkspaceSwitchCommandResult{
+		Notice:   fmt.Sprintf("[System] Switching workspace to %s.", resolvedWorkdir),
+		Workdir:  resolvedWorkdir,
+		Relaunch: true,
 	}
+}
+
+// sameWorkspacePath 负责在跨平台场景下比较两个工作区路径是否指向同一目录。
+func sameWorkspacePath(left string, right string) bool {
+	left = strings.TrimSpace(left)
+	right = strings.TrimSpace(right)
+	if left == "" || right == "" {
+		return false
+	}
+
+	normalizedLeft := filepath.Clean(left)
+	normalizedRight := filepath.Clean(right)
+	if goruntime.GOOS == "windows" {
+		return strings.EqualFold(normalizedLeft, normalizedRight)
+	}
+	return normalizedLeft == normalizedRight
 }

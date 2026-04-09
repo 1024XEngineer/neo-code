@@ -39,6 +39,16 @@ type stubProvider struct {
 	err       error
 }
 
+type stubWorkspaceSwitcher struct {
+	lastWorkdir string
+	err         error
+}
+
+func (s *stubWorkspaceSwitcher) SwitchWorkspace(ctx context.Context, workdir string) error {
+	s.lastWorkdir = workdir
+	return s.err
+}
+
 func (s *stubProvider) SelectProvider(ctx context.Context, providerID string) (config.ProviderSelection, error) {
 	return s.selection, s.err
 }
@@ -148,6 +158,115 @@ func TestCommandCmds(t *testing.T) {
 	)()
 	if got, ok := workspaceMsg.(string); !ok || got != "git status:clean" {
 		t.Fatalf("expected workspace command msg, got %T %#v", workspaceMsg, workspaceMsg)
+	}
+
+	switcher := &stubWorkspaceSwitcher{}
+	switchMsg := RunWorkspaceSwitchCmd(
+		switcher,
+		WorkspaceSwitchRequest{
+			Notice:     "switching",
+			Workdir:    "/repo",
+			Relaunched: true,
+		},
+		func(notice string, workdir string, relaunched bool, err error) tea.Msg {
+			return struct {
+				Notice     string
+				Workdir    string
+				Relaunched bool
+				Err        error
+			}{Notice: notice, Workdir: workdir, Relaunched: relaunched, Err: err}
+		},
+	)()
+	gotSwitch, ok := switchMsg.(struct {
+		Notice     string
+		Workdir    string
+		Relaunched bool
+		Err        error
+	})
+	if !ok || gotSwitch.Notice != "switching" || gotSwitch.Workdir != "/repo" || !gotSwitch.Relaunched {
+		t.Fatalf("unexpected workspace switch msg: %T %#v", switchMsg, switchMsg)
+	}
+	if switcher.lastWorkdir != "/repo" {
+		t.Fatalf("expected switcher to receive workdir, got %q", switcher.lastWorkdir)
+	}
+
+	switchMsg = RunWorkspaceSwitchCmd(
+		nil,
+		WorkspaceSwitchRequest{
+			Notice:     "noop",
+			Workdir:    "/same",
+			Relaunched: false,
+		},
+		func(notice string, workdir string, relaunched bool, err error) tea.Msg {
+			return struct {
+				Notice     string
+				Workdir    string
+				Relaunched bool
+				Err        error
+			}{Notice: notice, Workdir: workdir, Relaunched: relaunched, Err: err}
+		},
+	)()
+	gotSwitch, ok = switchMsg.(struct {
+		Notice     string
+		Workdir    string
+		Relaunched bool
+		Err        error
+	})
+	if !ok || gotSwitch.Err != nil || gotSwitch.Relaunched {
+		t.Fatalf("expected non-relaunch path to return cleanly, got %#v", switchMsg)
+	}
+
+	switchMsg = RunWorkspaceSwitchCmd(
+		nil,
+		WorkspaceSwitchRequest{
+			Notice:     "relaunch",
+			Workdir:    "/repo",
+			Relaunched: true,
+		},
+		func(notice string, workdir string, relaunched bool, err error) tea.Msg {
+			return struct {
+				Notice     string
+				Workdir    string
+				Relaunched bool
+				Err        error
+			}{Notice: notice, Workdir: workdir, Relaunched: relaunched, Err: err}
+		},
+	)()
+	gotSwitch, ok = switchMsg.(struct {
+		Notice     string
+		Workdir    string
+		Relaunched bool
+		Err        error
+	})
+	if !ok || gotSwitch.Err == nil || !gotSwitch.Relaunched {
+		t.Fatalf("expected nil switcher error for relaunch path, got %#v", switchMsg)
+	}
+
+	switcher.err = errors.New("launch failed")
+	switchMsg = RunWorkspaceSwitchCmd(
+		switcher,
+		WorkspaceSwitchRequest{
+			Notice:     "switching",
+			Workdir:    "/repo",
+			Relaunched: true,
+		},
+		func(notice string, workdir string, relaunched bool, err error) tea.Msg {
+			return struct {
+				Notice     string
+				Workdir    string
+				Relaunched bool
+				Err        error
+			}{Notice: notice, Workdir: workdir, Relaunched: relaunched, Err: err}
+		},
+	)()
+	gotSwitch, ok = switchMsg.(struct {
+		Notice     string
+		Workdir    string
+		Relaunched bool
+		Err        error
+	})
+	if !ok || gotSwitch.Err == nil || gotSwitch.Err.Error() != "launch failed" {
+		t.Fatalf("expected relaunch error to bubble up, got %#v", switchMsg)
 	}
 }
 

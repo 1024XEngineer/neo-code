@@ -43,6 +43,7 @@ func TestNewRootCommandAllowsEmptyWorkdir(t *testing.T) {
 	}
 
 	cmd := NewRootCommand()
+	cmd.SetArgs([]string{})
 	if err := cmd.ExecuteContext(context.Background()); err != nil {
 		t.Fatalf("ExecuteContext() error = %v", err)
 	}
@@ -61,6 +62,7 @@ func TestNewRootCommandReturnsLauncherError(t *testing.T) {
 	}
 
 	cmd := NewRootCommand()
+	cmd.SetArgs([]string{})
 	err := cmd.ExecuteContext(context.Background())
 	if !errors.Is(err, expected) {
 		t.Fatalf("expected launcher error %v, got %v", expected, err)

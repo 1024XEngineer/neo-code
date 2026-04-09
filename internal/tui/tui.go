@@ -9,10 +9,17 @@ import (
 
 type App = tuiapp.App
 type ProviderController = tuiapp.ProviderController
+type WorkspaceSwitcher = tuiapp.WorkspaceSwitcher
 
 // New 保留 internal/tui 对外入口，内部实现转发到分层后的 core/app。
-func New(cfg *config.Config, configManager *config.Manager, runtime agentruntime.Runtime, providerSvc ProviderController) (App, error) {
-	return tuiapp.New(cfg, configManager, runtime, providerSvc)
+func New(
+	cfg *config.Config,
+	configManager *config.Manager,
+	runtime agentruntime.Runtime,
+	providerSvc ProviderController,
+	workspaceSwitcher WorkspaceSwitcher,
+) (App, error) {
+	return tuiapp.New(cfg, configManager, runtime, providerSvc, workspaceSwitcher)
 }
 
 // NewWithBootstrap 保留对外注入入口，内部转发到 core/app。

@@ -45,7 +45,7 @@ type runFinishedMsg = tuistate.RunFinishedMsg
 type modelCatalogRefreshMsg = tuistate.ModelCatalogRefreshMsg
 type compactFinishedMsg = tuistate.CompactFinishedMsg
 type localCommandResultMsg = tuistate.LocalCommandResultMsg
-type sessionWorkdirResultMsg = tuistate.SessionWorkdirResultMsg
+type workspaceSwitchResultMsg = tuistate.WorkspaceSwitchResultMsg
 type workspaceCommandResultMsg = tuistate.WorkspaceCommandResultMsg
 
 type ProviderController interface {
@@ -56,11 +56,14 @@ type ProviderController interface {
 	SetCurrentModel(ctx context.Context, modelID string) (config.ProviderSelection, error)
 }
 
+type WorkspaceSwitcher = tuibootstrap.WorkspaceSwitcher
+
 // appServices 聚合 App 需要的服务依赖，避免与渲染状态混在同一层级。
 type appServices struct {
-	configManager *config.Manager
-	providerSvc   ProviderController
-	runtime       agentruntime.Runtime
+	configManager     *config.Manager
+	providerSvc       ProviderController
+	runtime           agentruntime.Runtime
+	workspaceSwitcher WorkspaceSwitcher
 }
 
 // appComponents 聚合 Bubble Tea 组件与渲染器。
@@ -111,12 +114,19 @@ type App struct {
 	styles styles
 }
 
-func New(cfg *config.Config, configManager *config.Manager, runtime agentruntime.Runtime, providerSvc ProviderController) (App, error) {
+func New(
+	cfg *config.Config,
+	configManager *config.Manager,
+	runtime agentruntime.Runtime,
+	providerSvc ProviderController,
+	workspaceSwitcher WorkspaceSwitcher,
+) (App, error) {
 	return NewWithBootstrap(tuibootstrap.Options{
-		Config:          cfg,
-		ConfigManager:   configManager,
-		Runtime:         runtime,
-		ProviderService: providerSvc,
+		Config:            cfg,
+		ConfigManager:     configManager,
+		Runtime:           runtime,
+		ProviderService:   providerSvc,
+		WorkspaceSwitcher: workspaceSwitcher,
 	})
 }
 
@@ -135,6 +145,7 @@ func newApp(container tuibootstrap.Container) (App, error) {
 	configManager := container.ConfigManager
 	runtime := container.Runtime
 	providerSvc := container.ProviderService
+	workspaceSwitcher := container.WorkspaceSwitcher
 
 	uiStyles := newStyles()
 	markdownRenderer, err := newMarkdownRenderer()
@@ -209,9 +220,10 @@ func newApp(container tuibootstrap.Container) (App, error) {
 			Focus:              panelInput,
 		},
 		appServices: appServices{
-			configManager: configManager,
-			providerSvc:   providerSvc,
-			runtime:       runtime,
+			configManager:     configManager,
+			providerSvc:       providerSvc,
+			runtime:           runtime,
+			workspaceSwitcher: workspaceSwitcher,
 		},
 		appComponents: appComponents{
 			keys:             keys,

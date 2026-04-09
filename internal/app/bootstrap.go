@@ -22,6 +22,7 @@ import (
 	"neo-code/internal/tools/filesystem"
 	"neo-code/internal/tools/webfetch"
 	"neo-code/internal/tui"
+	tuiinfra "neo-code/internal/tui/infra"
 )
 
 const utf8CodePage = 65001
@@ -110,7 +111,13 @@ func NewProgram(ctx context.Context, opts BootstrapOptions) (*tea.Program, error
 		return nil, err
 	}
 
-	tuiApp, err := tui.New(&bundle.Config, bundle.ConfigManager, bundle.Runtime, bundle.ProviderSelection)
+	tuiApp, err := tui.New(
+		&bundle.Config,
+		bundle.ConfigManager,
+		bundle.Runtime,
+		bundle.ProviderSelection,
+		tuiinfra.NewProcessWorkspaceSwitcher(),
+	)
 	if err != nil {
 		return nil, err
 	}
