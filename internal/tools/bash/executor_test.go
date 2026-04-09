@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	goruntime "runtime"
 	"strings"
 	"testing"
 	"time"
@@ -147,7 +148,7 @@ func TestShellCommand(t *testing.T) {
 		{name: "pwsh", shell: "pwsh", binary: "powershell"},
 		{name: "bash", shell: "bash", binary: "bash"},
 		{name: "sh", shell: "sh", binary: "sh"},
-		{name: "fallback", shell: "unknown", binary: defaultShell()},
+		{name: "fallback", shell: "unknown", binary: fallbackShell()},
 	}
 
 	for _, tt := range tests {
@@ -163,6 +164,13 @@ func TestShellCommand(t *testing.T) {
 			}
 		})
 	}
+}
+
+func fallbackShell() string {
+	if goruntime.GOOS == "windows" {
+		return "powershell"
+	}
+	return "sh"
 }
 
 func TestResolveWorkdir(t *testing.T) {
