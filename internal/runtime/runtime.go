@@ -209,9 +209,11 @@ func (s *Service) Run(ctx context.Context, input UserInput) error {
 		return errors.New("runtime: input content is empty")
 	}
 
-	workspaceRoot, workspaceWorkdir := s.currentWorkspaceState()
-	defaultWorkdir := effectiveWorkspaceBase(workspaceWorkdir, workspaceRoot)
-	session, err := s.loadOrCreateSession(ctx, input.SessionID, input.Content, defaultWorkdir, input.Workdir)
+	store, workspaceRoot, defaultWorkdir, err := s.resolveRunWorkspaceStore(ctx, input)
+	if err != nil {
+		return s.handleRunError(ctx, input.RunID, input.SessionID, err)
+	}
+	session, err := s.loadOrCreateSession(ctx, store, input.SessionID, input.Content, defaultWorkdir, input.Workdir)
 	if err != nil {
 		return s.handleRunError(ctx, input.RunID, input.SessionID, err)
 	}
@@ -224,7 +226,7 @@ func (s *Service) Run(ctx context.Context, input UserInput) error {
 	}
 	session.Messages = append(session.Messages, userMessage)
 	session.UpdatedAt = time.Now()
-	if err := s.currentSessionStore().Save(ctx, &session); err != nil {
+	if err := store.Save(ctx, &session); err != nil {
 		return s.handleRunError(ctx, input.RunID, session.ID, err)
 	}
 	s.emit(ctx, EventUserMessage, input.RunID, session.ID, userMessage)
@@ -435,12 +437,12 @@ func (s *Service) LoadSession(ctx context.Context, id string) (agentsession.Sess
 
 func (s *Service) loadOrCreateSession(
 	ctx context.Context,
+	store agentsession.Store,
 	sessionID string,
 	title string,
 	defaultWorkdir string,
 	requestedWorkdir string,
 ) (agentsession.Session, error) {
-	store := s.currentSessionStore()
 	if store == nil {
 		return agentsession.Session{}, errors.New("runtime: session store is nil")
 	}

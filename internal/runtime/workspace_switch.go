@@ -76,6 +76,27 @@ func resolveWorkspaceSelection(ctx context.Context, baseWorkdir string, requeste
 	return workdir, root, nil
 }
 
+// resolveRunWorkspaceStore 根据本次 Run 输入预先确定应使用的会话分桶与默认工作目录。
+func (s *Service) resolveRunWorkspaceStore(ctx context.Context, input UserInput) (agentsession.Store, string, string, error) {
+	currentRoot, currentWorkdir := s.currentWorkspaceState()
+	workspaceRoot := currentRoot
+	defaultWorkdir := effectiveWorkspaceBase(currentWorkdir, currentRoot)
+
+	if strings.TrimSpace(input.SessionID) == "" && strings.TrimSpace(input.Workdir) != "" {
+		_, resolvedRoot, err := resolveWorkspaceSelection(ctx, defaultWorkdir, input.Workdir)
+		if err != nil {
+			return nil, "", "", err
+		}
+		workspaceRoot = resolvedRoot
+	}
+
+	store := s.sessionStoreForWorkspace(workspaceRoot)
+	if store == nil {
+		return nil, "", "", errors.New("runtime: session store is nil")
+	}
+	return store, workspaceRoot, defaultWorkdir, nil
+}
+
 // resolveRequestedWorkspacePath 将请求路径解析为存在的绝对目录。
 func resolveRequestedWorkspacePath(baseWorkdir string, requestedPath string) (string, error) {
 	base, err := normalizeExistingWorkdir(baseWorkdir)
@@ -263,18 +284,19 @@ func (s *Service) SwitchWorkspace(ctx context.Context, input WorkspaceSwitchInpu
 		return result, nil
 	}
 
-	s.setWorkspaceState(workspaceRoot, workdir)
 	if strings.TrimSpace(session.ID) == "" {
+		s.setWorkspaceState(workspaceRoot, workdir)
 		return result, nil
 	}
 
 	result.KeepSession = true
 	if session.Workdir == workdir {
+		s.setWorkspaceState(workspaceRoot, workdir)
 		result.Session = session
 		return result, nil
 	}
 
-	store := s.currentSessionStore()
+	store := s.sessionStoreForWorkspace(workspaceRoot)
 	if store == nil {
 		return WorkspaceSwitchResult{}, errors.New("runtime: session store is nil")
 	}
@@ -283,6 +305,7 @@ func (s *Service) SwitchWorkspace(ctx context.Context, input WorkspaceSwitchInpu
 	if err := store.Save(ctx, &session); err != nil {
 		return WorkspaceSwitchResult{}, err
 	}
+	s.setWorkspaceState(workspaceRoot, workdir)
 	result.Session = session
 	return result, nil
 }

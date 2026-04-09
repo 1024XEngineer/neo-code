@@ -2458,6 +2458,71 @@ func TestServiceRunUsesInputWorkdirForNewSession(t *testing.T) {
 	}
 }
 
+func TestServiceRunRoutesNewSessionToRequestedWorkspaceStore(t *testing.T) {
+	manager := newRuntimeConfigManager(t)
+	workspaceA := t.TempDir()
+	workspaceB := t.TempDir()
+	if err := manager.Update(context.Background(), func(cfg *config.Config) error {
+		cfg.Workdir = workspaceA
+		return nil
+	}); err != nil {
+		t.Fatalf("update default workdir: %v", err)
+	}
+
+	router := agentsession.NewScopedStoreRouter(t.TempDir(), workspaceA)
+	registry := tools.NewRegistry()
+	registry.Register(&stubTool{name: "filesystem_read_file", content: "default"})
+	builder := &stubContextBuilder{}
+	scripted := &scriptedProvider{
+		streams: [][]providertypes.StreamEvent{
+			{providertypes.NewTextDeltaStreamEvent("done")},
+		},
+	}
+
+	service := NewWithFactory(manager, registry, router, &scriptedProviderFactory{provider: scripted}, builder)
+	if err := service.Run(context.Background(), UserInput{
+		RunID:   "run-routed-workspace-store",
+		Content: "hello",
+		Workdir: workspaceB,
+	}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	storeA := router.StoreForWorkspace(workspaceA)
+	summariesA, err := storeA.ListSummaries(context.Background())
+	if err != nil {
+		t.Fatalf("ListSummaries() for workspace A error = %v", err)
+	}
+	if len(summariesA) != 0 {
+		t.Fatalf("expected workspace A to stay empty, got %+v", summariesA)
+	}
+
+	storeB := router.StoreForWorkspace(workspaceB)
+	summariesB, err := storeB.ListSummaries(context.Background())
+	if err != nil {
+		t.Fatalf("ListSummaries() for workspace B error = %v", err)
+	}
+	if len(summariesB) != 1 {
+		t.Fatalf("expected exactly one workspace B session, got %+v", summariesB)
+	}
+
+	created, err := storeB.Load(context.Background(), summariesB[0].ID)
+	if err != nil {
+		t.Fatalf("Load() for workspace B session error = %v", err)
+	}
+	if created.Workdir != workspaceB {
+		t.Fatalf("expected session workdir %q, got %q", workspaceB, created.Workdir)
+	}
+	if builder.lastInput.Metadata.Workdir != workspaceB {
+		t.Fatalf("expected context metadata workdir %q, got %q", workspaceB, builder.lastInput.Metadata.Workdir)
+	}
+
+	workspaceRoot, activeWorkdir := service.currentWorkspaceState()
+	if workspaceRoot != filepath.Clean(workspaceB) || activeWorkdir != filepath.Clean(workspaceB) {
+		t.Fatalf("expected runtime workspace state to move to workspace B, got root=%q workdir=%q", workspaceRoot, activeWorkdir)
+	}
+}
+
 func TestServiceSetSessionWorkdir(t *testing.T) {
 	manager := newRuntimeConfigManager(t)
 	repoRoot := t.TempDir()
@@ -2789,6 +2854,61 @@ func TestServiceSetSessionWorkdirNoopDoesNotSave(t *testing.T) {
 	}
 	if store.saves != beforeSaves {
 		t.Fatalf("expected no extra save on noop update, saves before=%d after=%d", beforeSaves, store.saves)
+	}
+}
+
+func TestServiceSwitchWorkspaceKeepsRuntimeStateWhenSessionSaveFails(t *testing.T) {
+	manager := newRuntimeConfigManager(t)
+	repoRoot := t.TempDir()
+	defaultWorkdir := filepath.Join(repoRoot, "app")
+	target := filepath.Join(repoRoot, "pkg")
+	if err := os.MkdirAll(defaultWorkdir, 0o755); err != nil {
+		t.Fatalf("mkdir default workdir: %v", err)
+	}
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatalf("mkdir target: %v", err)
+	}
+	if output, err := exec.Command("git", "-C", repoRoot, "init").CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v (%s)", err, string(output))
+	}
+	if err := manager.Update(context.Background(), func(cfg *config.Config) error {
+		cfg.Workdir = defaultWorkdir
+		return nil
+	}); err != nil {
+		t.Fatalf("update default workdir: %v", err)
+	}
+
+	baseStore := newMemoryStore()
+	session := agentsession.NewWithWorkdir("switch-save-fail", defaultWorkdir)
+	baseStore.sessions[session.ID] = cloneSession(session)
+	store := &failingStore{
+		Store:      baseStore,
+		saveErr:    errors.New("save failed"),
+		failOnSave: 1,
+	}
+
+	service := NewWithFactory(manager, tools.NewRegistry(), store, &scriptedProviderFactory{provider: &scriptedProvider{}}, nil)
+	rootBefore, workdirBefore := service.currentWorkspaceState()
+
+	_, err := service.SwitchWorkspace(context.Background(), WorkspaceSwitchInput{
+		SessionID:     session.ID,
+		RequestedPath: target,
+	})
+	if err == nil || !containsError(err, "save failed") {
+		t.Fatalf("expected save failure, got %v", err)
+	}
+
+	rootAfter, workdirAfter := service.currentWorkspaceState()
+	if rootAfter != rootBefore || workdirAfter != workdirBefore {
+		t.Fatalf("expected runtime workspace state to stay unchanged, before=(%q,%q) after=(%q,%q)", rootBefore, workdirBefore, rootAfter, workdirAfter)
+	}
+
+	loaded, err := baseStore.Load(context.Background(), session.ID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if loaded.Workdir != defaultWorkdir {
+		t.Fatalf("expected persisted session workdir to remain %q, got %q", defaultWorkdir, loaded.Workdir)
 	}
 }
 
