@@ -1,7 +1,7 @@
 package state
 
 import (
-	"neo-code/internal/config"
+	providertypes "neo-code/internal/provider/types"
 	agentruntime "neo-code/internal/runtime"
 )
 
@@ -21,7 +21,7 @@ type RunFinishedMsg struct {
 // ModelCatalogRefreshMsg 表示模型目录刷新结果。
 type ModelCatalogRefreshMsg struct {
 	ProviderID string
-	Models     []config.ModelDescriptor
+	Models     []providertypes.ModelDescriptor
 	Err        error
 }
 

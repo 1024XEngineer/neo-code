@@ -9,6 +9,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"neo-code/internal/config"
+	providertypes "neo-code/internal/provider/types"
 	tuicommands "neo-code/internal/tui/core/commands"
 	tuistatus "neo-code/internal/tui/core/status"
 	tuiservices "neo-code/internal/tui/services"
@@ -152,7 +153,7 @@ func mapProviderItems(items []config.ProviderCatalogItem) []selectionItem {
 	return mapped
 }
 
-func mapModelItems(models []config.ModelDescriptor) []selectionItem {
+func mapModelItems(models []providertypes.ModelDescriptor) []selectionItem {
 	mapped := make([]selectionItem, 0, len(models))
 	for _, option := range models {
 		mapped = append(mapped, selectionItem{
@@ -296,7 +297,7 @@ func runModelCatalogRefresh(providerSvc ProviderController, providerID string) t
 	return tuiservices.RefreshModelCatalogCmd(
 		providerSvc,
 		providerID,
-		func(providerID string, models []config.ModelDescriptor, err error) tea.Msg {
+		func(providerID string, models []providertypes.ModelDescriptor, err error) tea.Msg {
 			return modelCatalogRefreshMsg{
 				ProviderID: providerID,
 				Models:     models,

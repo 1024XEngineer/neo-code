@@ -75,18 +75,19 @@ func TestNewValidationErrors(t *testing.T) {
 
 	t.Run("invalid config validate fails", func(t *testing.T) {
 		t.Parallel()
-		cfg := config.ResolvedProviderConfig{
-			ProviderConfig: config.ProviderConfig{
-				Driver:    DriverName,
-				BaseURL:   "",
-				Model:     "",
-				APIKeyEnv: "NONEXISTENT_ENV_VAR_" + t.Name(),
-			},
-			APIKey: "test-key",
+		cfg := provider.RuntimeConfig{
+			Name:         DriverName,
+			Driver:       DriverName,
+			BaseURL:      "",
+			DefaultModel: config.OpenAIDefaultModel,
+			APIKey:       "test-key",
 		}
 		_, err := New(cfg)
-		if err != nil {
-			return
+		if err == nil {
+			t.Fatal("expected error for empty base url")
+		}
+		if !strings.Contains(err.Error(), "base url is empty") {
+			t.Fatalf("expected base url error, got: %v", err)
 		}
 	})
 }
@@ -274,15 +275,12 @@ func TestBuildRequest_EmptyModelReturnsError(t *testing.T) {
 	// 直接构造 Provider 跳过 New() 的 Validate 校验，
 	// 以便测试 buildRequest 对空 model 的独立校验。
 	p := &Provider{
-		cfg: config.ResolvedProviderConfig{
-			ProviderConfig: config.ProviderConfig{
-				Name:      DriverName,
-				Driver:    DriverName,
-				BaseURL:   config.OpenAIDefaultBaseURL,
-				Model:     "",
-				APIKeyEnv: config.OpenAIDefaultAPIKeyEnv,
-			},
-			APIKey: "test-key",
+		cfg: provider.RuntimeConfig{
+			Name:         DriverName,
+			Driver:       DriverName,
+			BaseURL:      config.OpenAIDefaultBaseURL,
+			DefaultModel: "",
+			APIKey:       "test-key",
 		},
 		client: &http.Client{},
 	}
@@ -876,9 +874,9 @@ func TestMergeToolCallDelta_IDUpdateOnly(t *testing.T) {
 	}
 }
 
-// --- Chat 集成测试 ---
+// --- Generate 集成测试 ---
 
-func TestChat_BaseURLTrailingSlashHandled(t *testing.T) {
+func TestGenerate_BaseURLTrailingSlashHandled(t *testing.T) {
 	t.Setenv(config.OpenAIDefaultAPIKeyEnv, "test-key")
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -951,7 +949,7 @@ func TestParseError_InvalidJSONBody(t *testing.T) {
 
 // --- 原有保留的集成测试（保持兼容） ---
 
-func TestProviderChatConsumesSSEAndMergesToolCalls(t *testing.T) {
+func TestProviderGenerateConsumesSSEAndMergesToolCalls(t *testing.T) {
 	t.Setenv(config.OpenAIDefaultAPIKeyEnv, "test-key")
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1052,7 +1050,7 @@ func TestProviderChatConsumesSSEAndMergesToolCalls(t *testing.T) {
 	}
 }
 
-func TestProviderChatHTTPErrorResponses(t *testing.T) {
+func TestProviderGenerateHTTPErrorResponses(t *testing.T) {
 	t.Setenv(config.OpenAIDefaultAPIKeyEnv, "test-key")
 
 	tests := []struct {
@@ -1195,16 +1193,19 @@ func TestProviderConsumeStreamRejectsDirtyJSON(t *testing.T) {
 
 // --- 辅助函数 ---
 
-func resolvedConfig(baseURL string, model string) config.ResolvedProviderConfig {
+func resolvedConfig(baseURL string, model string) provider.RuntimeConfig {
 	if strings.TrimSpace(baseURL) == "" {
 		baseURL = config.OpenAIDefaultBaseURL
 	}
 	if strings.TrimSpace(model) == "" {
 		model = config.OpenAIDefaultModel
 	}
-	return config.ResolvedProviderConfig{
-		ProviderConfig: config.ProviderConfig{Name: DriverName, Driver: DriverName, BaseURL: baseURL, Model: model, APIKeyEnv: config.OpenAIDefaultAPIKeyEnv},
-		APIKey:         "test-key",
+	return provider.RuntimeConfig{
+		Name:         DriverName,
+		Driver:       DriverName,
+		BaseURL:      baseURL,
+		DefaultModel: model,
+		APIKey:       "test-key",
 	}
 }
 
@@ -1430,7 +1431,7 @@ func TestMergeToolCallDeltaEmitsStartWhenNameArrivesLater(t *testing.T) {
 	}
 }
 
-func TestProviderChatEmitsToolCallStartEvent(t *testing.T) {
+func TestProviderGenerateEmitsToolCallStartEvent(t *testing.T) {
 	t.Setenv(config.OpenAIDefaultAPIKeyEnv, "test-key")
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1473,7 +1474,7 @@ func TestProviderChatEmitsToolCallStartEvent(t *testing.T) {
 	}
 }
 
-func TestProviderChatEmitsFullEventStream(t *testing.T) {
+func TestProviderGenerateEmitsFullEventStream(t *testing.T) {
 	t.Setenv(config.OpenAIDefaultAPIKeyEnv, "test-key")
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

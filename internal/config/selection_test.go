@@ -5,6 +5,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	providertypes "neo-code/internal/provider/types"
 )
 
 func TestSelectionServiceListProvidersUsesCatalogModels(t *testing.T) {
@@ -96,7 +98,7 @@ func TestSelectionServiceSelectProviderRequiresDiscoveryOnCacheMiss(t *testing.T
 
 	manager := newSelectionTestManager(t, DefaultConfig())
 	service := NewSelectionService(manager, newDriverSupporterStub(), catalogMethodsStub{
-		listModels: []ModelDescriptor{
+		listModels: []providertypes.ModelDescriptor{
 			{ID: QiniuDefaultModel, Name: QiniuDefaultModel},
 			{ID: QiniuDefaultModel + "-alt", Name: QiniuDefaultModel + "-alt"},
 		},
@@ -184,7 +186,7 @@ func TestSelectionServiceEnsureSelectionFallsBackToFirstDiscoveredModel(t *testi
 
 	manager := newSelectionTestManager(t, defaults)
 	service := NewSelectionService(manager, newDriverSupporterStub(), catalogMethodsStub{
-		listModels: []ModelDescriptor{
+		listModels: []providertypes.ModelDescriptor{
 			{ID: "server-coder", Name: "Server Coder"},
 			{ID: "server-chat", Name: "Server Chat"},
 		},
@@ -402,7 +404,7 @@ func TestResolveCurrentModelHelper(t *testing.T) {
 	tests := []struct {
 		name         string
 		currentModel string
-		models       []ModelDescriptor
+		models       []providertypes.ModelDescriptor
 		fallback     string
 		expected     string
 		changed      bool
@@ -410,7 +412,7 @@ func TestResolveCurrentModelHelper(t *testing.T) {
 		{
 			name:         "current model in list",
 			currentModel: "gpt-4o",
-			models: []ModelDescriptor{
+			models: []providertypes.ModelDescriptor{
 				{ID: "gpt-4.1"},
 				{ID: "gpt-4o"},
 				{ID: "gpt-5.4"},
@@ -422,7 +424,7 @@ func TestResolveCurrentModelHelper(t *testing.T) {
 		{
 			name:         "current model falls back to provider default",
 			currentModel: "unknown-model",
-			models: []ModelDescriptor{
+			models: []providertypes.ModelDescriptor{
 				{ID: "gpt-4.1"},
 				{ID: "gpt-4o"},
 				{ID: "gpt-5.4"},
@@ -434,7 +436,7 @@ func TestResolveCurrentModelHelper(t *testing.T) {
 		{
 			name:         "missing fallback uses first discovered model",
 			currentModel: "unknown-model",
-			models: []ModelDescriptor{
+			models: []providertypes.ModelDescriptor{
 				{ID: "gpt-4o"},
 			},
 			fallback: "gpt-4.1",
@@ -471,59 +473,59 @@ func (s *selectiveDriverSupporter) Supports(driverType string) bool {
 
 type catalogStub struct{}
 
-func (catalogStub) ListProviderModels(_ context.Context, cfg ProviderConfig) ([]ModelDescriptor, error) {
+func (catalogStub) ListProviderModels(_ context.Context, cfg ProviderConfig) ([]providertypes.ModelDescriptor, error) {
 	return defaultModelsForProvider(cfg), nil
 }
 
-func (catalogStub) ListProviderModelsSnapshot(_ context.Context, cfg ProviderConfig) ([]ModelDescriptor, error) {
+func (catalogStub) ListProviderModelsSnapshot(_ context.Context, cfg ProviderConfig) ([]providertypes.ModelDescriptor, error) {
 	return defaultModelsForProvider(cfg), nil
 }
 
-func (catalogStub) ListProviderModelsCached(_ context.Context, cfg ProviderConfig) ([]ModelDescriptor, error) {
+func (catalogStub) ListProviderModelsCached(_ context.Context, cfg ProviderConfig) ([]providertypes.ModelDescriptor, error) {
 	return defaultModelsForProvider(cfg), nil
 }
 
 type catalogMethodsStub struct {
-	listModels     []ModelDescriptor
-	snapshotModels []ModelDescriptor
-	cachedModels   []ModelDescriptor
+	listModels     []providertypes.ModelDescriptor
+	snapshotModels []providertypes.ModelDescriptor
+	cachedModels   []providertypes.ModelDescriptor
 }
 
-func (s catalogMethodsStub) ListProviderModels(_ context.Context, _ ProviderConfig) ([]ModelDescriptor, error) {
-	return MergeModelDescriptors(s.listModels), nil
+func (s catalogMethodsStub) ListProviderModels(_ context.Context, _ ProviderConfig) ([]providertypes.ModelDescriptor, error) {
+	return providertypes.MergeModelDescriptors(s.listModels), nil
 }
 
-func (s catalogMethodsStub) ListProviderModelsSnapshot(_ context.Context, _ ProviderConfig) ([]ModelDescriptor, error) {
-	return MergeModelDescriptors(s.snapshotModels), nil
+func (s catalogMethodsStub) ListProviderModelsSnapshot(_ context.Context, _ ProviderConfig) ([]providertypes.ModelDescriptor, error) {
+	return providertypes.MergeModelDescriptors(s.snapshotModels), nil
 }
 
-func (s catalogMethodsStub) ListProviderModelsCached(_ context.Context, _ ProviderConfig) ([]ModelDescriptor, error) {
-	return MergeModelDescriptors(s.cachedModels), nil
+func (s catalogMethodsStub) ListProviderModelsCached(_ context.Context, _ ProviderConfig) ([]providertypes.ModelDescriptor, error) {
+	return providertypes.MergeModelDescriptors(s.cachedModels), nil
 }
 
 type errorCatalogStub struct {
 	err error
 }
 
-func (s errorCatalogStub) ListProviderModels(_ context.Context, _ ProviderConfig) ([]ModelDescriptor, error) {
+func (s errorCatalogStub) ListProviderModels(_ context.Context, _ ProviderConfig) ([]providertypes.ModelDescriptor, error) {
 	return nil, s.err
 }
 
-func (s errorCatalogStub) ListProviderModelsSnapshot(_ context.Context, _ ProviderConfig) ([]ModelDescriptor, error) {
+func (s errorCatalogStub) ListProviderModelsSnapshot(_ context.Context, _ ProviderConfig) ([]providertypes.ModelDescriptor, error) {
 	return nil, s.err
 }
 
-func (s errorCatalogStub) ListProviderModelsCached(_ context.Context, _ ProviderConfig) ([]ModelDescriptor, error) {
+func (s errorCatalogStub) ListProviderModelsCached(_ context.Context, _ ProviderConfig) ([]providertypes.ModelDescriptor, error) {
 	return nil, s.err
 }
 
 // defaultModelsForProvider 为给定 provider 返回包含默认模型和额外测试模型的列表。
-func defaultModelsForProvider(cfg ProviderConfig) []ModelDescriptor {
+func defaultModelsForProvider(cfg ProviderConfig) []providertypes.ModelDescriptor {
 	model := strings.TrimSpace(cfg.Model)
 	if model == "" {
 		return nil
 	}
-	return []ModelDescriptor{
+	return []providertypes.ModelDescriptor{
 		{ID: model, Name: model},
 		{ID: model + "-alt", Name: model + "-alt"},
 	}

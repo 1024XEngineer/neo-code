@@ -1,8 +1,8 @@
-package config
+package types
 
 import "strings"
 
-// ModelCapabilityState 表示模型能力提示的三态值。
+// ModelCapabilityState 表示模型能力提示的三态枚举。
 type ModelCapabilityState string
 
 const (
@@ -21,14 +21,14 @@ const (
 	ModelReasoningModeConfigurable ModelReasoningMode = "configurable"
 )
 
-// ModelCapabilityHints 描述配置层关注的模型能力提示。
+// ModelCapabilityHints 描述 discovery/catalog 链路共享的模型能力提示。
 type ModelCapabilityHints struct {
 	ToolCalling   ModelCapabilityState `json:"tool_calling,omitempty"`
 	ImageInput    ModelCapabilityState `json:"image_input,omitempty"`
 	ReasoningMode ModelReasoningMode   `json:"reasoning_mode,omitempty"`
 }
 
-// ModelDescriptor 表示模型元数据描述符。
+// ModelDescriptor 表示 discovery/catalog 链路共享的模型元数据描述符。
 type ModelDescriptor struct {
 	ID              string               `json:"id"`
 	Name            string               `json:"name"`
@@ -60,8 +60,7 @@ func DescriptorFromRawModel(raw map[string]any) (ModelDescriptor, bool) {
 	return normalizeModelDescriptor(descriptor), true
 }
 
-// MergeModelDescriptors 合并多个 ModelDescriptor 来源，按 ID 去重，
-// 优先保留较早来源的字段值，后续来源用于回填空字段。
+// MergeModelDescriptors 合并多个 ModelDescriptor 来源，按 ID 去重并回填缺失字段。
 func MergeModelDescriptors(sources ...[]ModelDescriptor) []ModelDescriptor {
 	if len(sources) == 0 {
 		return nil
@@ -73,7 +72,7 @@ func MergeModelDescriptors(sources ...[]ModelDescriptor) []ModelDescriptor {
 	for _, source := range sources {
 		for _, candidate := range source {
 			normalized := normalizeModelDescriptor(candidate)
-			key := NormalizeKey(normalized.ID)
+			key := normalizeKey(normalized.ID)
 			if key == "" {
 				continue
 			}
@@ -94,7 +93,7 @@ func MergeModelDescriptors(sources ...[]ModelDescriptor) []ModelDescriptor {
 	return merged
 }
 
-// DescriptorsFromIDs 从模型 ID 字符串列表构建最小化的 ModelDescriptor 列表。
+// DescriptorsFromIDs 从模型 ID 列表构建最小化的 ModelDescriptor 列表。
 func DescriptorsFromIDs(modelIDs []string) []ModelDescriptor {
 	if len(modelIDs) == 0 {
 		return nil
@@ -115,6 +114,33 @@ func DescriptorsFromIDs(modelIDs []string) []ModelDescriptor {
 		return nil
 	}
 	return descriptors
+}
+
+// CloneModelDescriptors 返回模型描述列表的深拷贝，避免不同快照共享底层切片。
+func CloneModelDescriptors(source []ModelDescriptor) []ModelDescriptor {
+	if len(source) == 0 {
+		return nil
+	}
+
+	cloned := make([]ModelDescriptor, 0, len(source))
+	for _, descriptor := range source {
+		cloned = append(cloned, normalizeModelDescriptor(descriptor))
+	}
+	return cloned
+}
+
+// EqualModelDescriptors 判断两个模型描述列表是否表示同一份规范化快照。
+func EqualModelDescriptors(left []ModelDescriptor, right []ModelDescriptor) bool {
+	if len(left) != len(right) {
+		return false
+	}
+
+	for index := range left {
+		if normalizeModelDescriptor(left[index]) != normalizeModelDescriptor(right[index]) {
+			return false
+		}
+	}
+	return true
 }
 
 // normalizeModelDescriptor 统一清理模型描述中的字符串和能力提示字段。
@@ -161,19 +187,6 @@ func mergeModelCapabilityHints(primary ModelCapabilityHints, secondary ModelCapa
 	return normalizeModelCapabilityHints(primary)
 }
 
-// cloneModelDescriptors 返回模型描述列表的深拷贝，避免配置快照之间共享底层切片。
-func cloneModelDescriptors(source []ModelDescriptor) []ModelDescriptor {
-	if len(source) == 0 {
-		return nil
-	}
-
-	cloned := make([]ModelDescriptor, 0, len(source))
-	for _, descriptor := range source {
-		cloned = append(cloned, normalizeModelDescriptor(descriptor))
-	}
-	return cloned
-}
-
 // normalizeModelCapabilityHints 规范化模型能力提示中的枚举字符串。
 func normalizeModelCapabilityHints(hints ModelCapabilityHints) ModelCapabilityHints {
 	hints.ToolCalling = normalizeModelCapabilityState(string(hints.ToolCalling))
@@ -196,7 +209,7 @@ func modelCapabilityHintsFromValue(value any) ModelCapabilityHints {
 			continue
 		}
 
-		switch NormalizeKey(key) {
+		switch normalizeKey(key) {
 		case "tool_calling", "tool_call":
 			hints.ToolCalling = modelCapabilityStateFromBool(boolValue)
 		case "image_input":
@@ -216,7 +229,7 @@ func modelCapabilityStateFromBool(value bool) ModelCapabilityState {
 
 // normalizeModelCapabilityState 将能力状态字符串收敛为受支持的三态枚举。
 func normalizeModelCapabilityState(value string) ModelCapabilityState {
-	switch ModelCapabilityState(NormalizeKey(value)) {
+	switch ModelCapabilityState(normalizeKey(value)) {
 	case ModelCapabilityStateSupported:
 		return ModelCapabilityStateSupported
 	case ModelCapabilityStateUnsupported:
@@ -230,7 +243,7 @@ func normalizeModelCapabilityState(value string) ModelCapabilityState {
 
 // normalizeModelReasoningMode 将 reasoning_mode 字符串规范化为受支持的枚举值。
 func normalizeModelReasoningMode(value string) ModelReasoningMode {
-	switch ModelReasoningMode(NormalizeKey(value)) {
+	switch ModelReasoningMode(normalizeKey(value)) {
 	case ModelReasoningModeNone:
 		return ModelReasoningModeNone
 	case ModelReasoningModeNative:
@@ -242,6 +255,11 @@ func normalizeModelReasoningMode(value string) ModelReasoningMode {
 	default:
 		return ""
 	}
+}
+
+// normalizeKey 统一执行大小写折叠与空白清理，保证跨层比较稳定。
+func normalizeKey(value string) string {
+	return strings.ToLower(strings.TrimSpace(value))
 }
 
 // stringValue 从通用值中提取字符串并做空白裁剪。

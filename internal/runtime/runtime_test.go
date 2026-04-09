@@ -174,13 +174,13 @@ func streamContainsMessageDone(events []providertypes.StreamEvent) bool {
 type scriptedProviderFactory struct {
 	provider        provider.Provider
 	calls           int
-	configs         []config.ResolvedProviderConfig
+	configs         []provider.RuntimeConfig
 	err             error
 	capabilities    provider.DriverCapabilities
 	capabilitiesErr error
 }
 
-func (f *scriptedProviderFactory) Build(ctx context.Context, cfg config.ResolvedProviderConfig) (provider.Provider, error) {
+func (f *scriptedProviderFactory) Build(ctx context.Context, cfg provider.RuntimeConfig) (provider.Provider, error) {
 	f.calls++
 	f.configs = append(f.configs, cfg)
 	if f.err != nil {

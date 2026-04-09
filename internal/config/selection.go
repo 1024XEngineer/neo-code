@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	providertypes "neo-code/internal/provider/types"
 )
 
 // Selection 领域错误。
@@ -17,9 +19,9 @@ var (
 
 // ProviderCatalogItem 表示一个已配置的 provider 及其可用模型列表，用于 UI 展示。
 type ProviderCatalogItem struct {
-	ID     string            `json:"id"`
-	Name   string            `json:"name"`
-	Models []ModelDescriptor `json:"models,omitempty"`
+	ID     string                          `json:"id"`
+	Name   string                          `json:"name"`
+	Models []providertypes.ModelDescriptor `json:"models,omitempty"`
 }
 
 // ProviderSelection 表示当前选中的 provider 和 model。
@@ -35,9 +37,9 @@ type DriverSupporter interface {
 
 // ModelCatalog 定义模型目录查询接口，用于获取 provider 的可用模型列表。
 type ModelCatalog interface {
-	ListProviderModels(ctx context.Context, providerCfg ProviderConfig) ([]ModelDescriptor, error)
-	ListProviderModelsSnapshot(ctx context.Context, providerCfg ProviderConfig) ([]ModelDescriptor, error)
-	ListProviderModelsCached(ctx context.Context, providerCfg ProviderConfig) ([]ModelDescriptor, error)
+	ListProviderModels(ctx context.Context, providerCfg ProviderConfig) ([]providertypes.ModelDescriptor, error)
+	ListProviderModelsSnapshot(ctx context.Context, providerCfg ProviderConfig) ([]providertypes.ModelDescriptor, error)
+	ListProviderModelsCached(ctx context.Context, providerCfg ProviderConfig) ([]providertypes.ModelDescriptor, error)
 }
 
 // SelectionService 管理 provider 和模型选择状态，并通过 ConfigManager 持久化变更。
@@ -132,7 +134,7 @@ func (s *SelectionService) SelectProvider(ctx context.Context, providerName stri
 }
 
 // ListModels 获取当前选中 provider 的模型列表，必要时会同步触发远程发现。
-func (s *SelectionService) ListModels(ctx context.Context) ([]ModelDescriptor, error) {
+func (s *SelectionService) ListModels(ctx context.Context) ([]providertypes.ModelDescriptor, error) {
 	if err := s.validate(); err != nil {
 		return nil, err
 	}
@@ -148,7 +150,7 @@ func (s *SelectionService) ListModels(ctx context.Context) ([]ModelDescriptor, e
 }
 
 // ListModelsSnapshot 获取当前选中 provider 的快照模型列表，不阻塞等待同步发现。
-func (s *SelectionService) ListModelsSnapshot(ctx context.Context) ([]ModelDescriptor, error) {
+func (s *SelectionService) ListModelsSnapshot(ctx context.Context) ([]providertypes.ModelDescriptor, error) {
 	if err := s.validate(); err != nil {
 		return nil, err
 	}
@@ -342,7 +344,7 @@ func selectionFromConfig(cfg Config) ProviderSelection {
 	}
 }
 
-func resolveCurrentModel(currentModel string, models []ModelDescriptor, fallback string) (string, bool) {
+func resolveCurrentModel(currentModel string, models []providertypes.ModelDescriptor, fallback string) (string, bool) {
 	currentModel = strings.TrimSpace(currentModel)
 	if containsModelDescriptorID(models, currentModel) {
 		return currentModel, false
@@ -363,15 +365,15 @@ func resolveCurrentModel(currentModel string, models []ModelDescriptor, fallback
 	return currentModel, false
 }
 
-func providerCatalogItem(cfg ProviderConfig, models []ModelDescriptor) ProviderCatalogItem {
+func providerCatalogItem(cfg ProviderConfig, models []providertypes.ModelDescriptor) ProviderCatalogItem {
 	return ProviderCatalogItem{
 		ID:     strings.TrimSpace(cfg.Name),
 		Name:   strings.TrimSpace(cfg.Name),
-		Models: MergeModelDescriptors(models),
+		Models: providertypes.MergeModelDescriptors(models),
 	}
 }
 
-func containsModelDescriptorID(models []ModelDescriptor, modelID string) bool {
+func containsModelDescriptorID(models []providertypes.ModelDescriptor, modelID string) bool {
 	target := NormalizeKey(modelID)
 	if target == "" {
 		return false

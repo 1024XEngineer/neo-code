@@ -44,7 +44,7 @@ func TestCompactSummaryGeneratorBuildsProviderRequestWithoutTools(t *testing.T) 
 		},
 	}
 	factory := &scriptedProviderFactory{provider: scripted}
-	generator := newCompactSummaryGenerator(factory, resolvedProvider, "session-model")
+	generator := newCompactSummaryGenerator(factory, resolvedProvider.ToRuntimeConfig(), "session-model")
 
 	summary, err := generator.Generate(context.Background(), contextcompact.SummaryInput{
 		Mode: contextcompact.ModeManual,
@@ -123,7 +123,7 @@ func TestCompactSummaryGeneratorRejectsToolCalls(t *testing.T) {
 			},
 		},
 	}
-	generator := newCompactSummaryGenerator(&scriptedProviderFactory{provider: scripted}, resolvedProvider, "session-model")
+	generator := newCompactSummaryGenerator(&scriptedProviderFactory{provider: scripted}, resolvedProvider.ToRuntimeConfig(), "session-model")
 
 	_, err = generator.Generate(context.Background(), contextcompact.SummaryInput{
 		Mode: contextcompact.ModeManual,
@@ -153,7 +153,7 @@ func TestCompactSummaryGeneratorRejectsMalformedStreamEvent(t *testing.T) {
 			},
 		},
 	}
-	generator := newCompactSummaryGenerator(&scriptedProviderFactory{provider: scripted}, resolvedProvider, "session-model")
+	generator := newCompactSummaryGenerator(&scriptedProviderFactory{provider: scripted}, resolvedProvider.ToRuntimeConfig(), "session-model")
 
 	_, err = generator.Generate(context.Background(), contextcompact.SummaryInput{
 		Mode:   contextcompact.ModeManual,
@@ -180,7 +180,7 @@ func TestCompactSummaryGeneratorMalformedStreamEventDoesNotDeadlock(t *testing.T
 	scripted := &scriptedProvider{
 		streams: [][]providertypes.StreamEvent{stream},
 	}
-	generator := newCompactSummaryGenerator(&scriptedProviderFactory{provider: scripted}, resolvedProvider, "session-model")
+	generator := newCompactSummaryGenerator(&scriptedProviderFactory{provider: scripted}, resolvedProvider.ToRuntimeConfig(), "session-model")
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -222,7 +222,7 @@ func TestCompactSummaryGeneratorRejectsDriverWithoutStreaming(t *testing.T) {
 			ToolTransport: true,
 		},
 	}
-	generator := newCompactSummaryGenerator(factory, resolvedProvider, "session-model")
+	generator := newCompactSummaryGenerator(factory, resolvedProvider.ToRuntimeConfig(), "session-model")
 
 	_, err = generator.Generate(context.Background(), contextcompact.SummaryInput{
 		Mode:   contextcompact.ModeManual,
@@ -252,7 +252,7 @@ func TestCompactSummaryGeneratorPropagatesDriverNotFoundFromCapabilities(t *test
 		provider:        &scriptedProvider{},
 		capabilitiesErr: provider.ErrDriverNotFound,
 	}
-	generator := newCompactSummaryGenerator(factory, resolvedProvider, "session-model")
+	generator := newCompactSummaryGenerator(factory, resolvedProvider.ToRuntimeConfig(), "session-model")
 
 	_, err = generator.Generate(context.Background(), contextcompact.SummaryInput{
 		Mode:   contextcompact.ModeManual,

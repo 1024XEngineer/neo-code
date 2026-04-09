@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	goruntime "runtime"
 	"strings"
+
+	providertypes "neo-code/internal/provider/types"
 )
 
 const (
@@ -54,16 +56,16 @@ const (
 )
 
 type ProviderConfig struct {
-	Name           string            `yaml:"name"`
-	Driver         string            `yaml:"driver"`
-	BaseURL        string            `yaml:"base_url"`
-	Model          string            `yaml:"model"`
-	APIKeyEnv      string            `yaml:"api_key_env"`
-	APIStyle       string            `yaml:"-"`
-	DeploymentMode string            `yaml:"-"`
-	APIVersion     string            `yaml:"-"`
-	Models         []ModelDescriptor `yaml:"-"`
-	Source         ProviderSource    `yaml:"-"`
+	Name           string                          `yaml:"name"`
+	Driver         string                          `yaml:"driver"`
+	BaseURL        string                          `yaml:"base_url"`
+	Model          string                          `yaml:"model"`
+	APIKeyEnv      string                          `yaml:"api_key_env"`
+	APIStyle       string                          `yaml:"-"`
+	DeploymentMode string                          `yaml:"-"`
+	APIVersion     string                          `yaml:"-"`
+	Models         []providertypes.ModelDescriptor `yaml:"-"`
+	Source         ProviderSource                  `yaml:"-"`
 }
 
 type ResolvedProviderConfig struct {
@@ -713,7 +715,7 @@ func cloneProviders(providers []ProviderConfig) []ProviderConfig {
 // cloneProviderConfig 返回 provider 配置的深拷贝，避免模型元数据等切片在不同快照间共享。
 func cloneProviderConfig(provider ProviderConfig) ProviderConfig {
 	cloned := provider
-	cloned.Models = cloneModelDescriptors(provider.Models)
+	cloned.Models = providertypes.CloneModelDescriptors(provider.Models)
 	return cloned
 }
 
@@ -796,7 +798,7 @@ func mergeProviderConfig(base ProviderConfig, override ProviderConfig) ProviderC
 		merged.APIVersion = strings.TrimSpace(override.APIVersion)
 	}
 	if len(override.Models) > 0 {
-		merged.Models = cloneModelDescriptors(override.Models)
+		merged.Models = providertypes.CloneModelDescriptors(override.Models)
 	}
 	if override.Source != "" {
 		merged.Source = override.Source
@@ -846,21 +848,7 @@ func sameProviderDefinition(left ProviderConfig, right ProviderConfig) bool {
 	if NormalizeProviderAPIVersion(left.APIVersion) != NormalizeProviderAPIVersion(right.APIVersion) {
 		return false
 	}
-	return sameModelDescriptors(left.Models, right.Models)
-}
-
-// sameModelDescriptors 判断两个模型描述列表是否表示同一份配置快照。
-func sameModelDescriptors(left []ModelDescriptor, right []ModelDescriptor) bool {
-	if len(left) != len(right) {
-		return false
-	}
-
-	for index := range left {
-		if normalizeModelDescriptor(left[index]) != normalizeModelDescriptor(right[index]) {
-			return false
-		}
-	}
-	return true
+	return providertypes.EqualModelDescriptors(left.Models, right.Models)
 }
 
 // normalizedBaseURLOrRaw 优先返回规范化 base_url，解析失败时退回原始值以保持比较稳定。

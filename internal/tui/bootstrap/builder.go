@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"neo-code/internal/config"
+	providertypes "neo-code/internal/provider/types"
 	agentruntime "neo-code/internal/runtime"
 )
 
@@ -12,8 +13,8 @@ import (
 type ProviderService interface {
 	ListProviders(ctx context.Context) ([]config.ProviderCatalogItem, error)
 	SelectProvider(ctx context.Context, providerID string) (config.ProviderSelection, error)
-	ListModels(ctx context.Context) ([]config.ModelDescriptor, error)
-	ListModelsSnapshot(ctx context.Context) ([]config.ModelDescriptor, error)
+	ListModels(ctx context.Context) ([]providertypes.ModelDescriptor, error)
+	ListModelsSnapshot(ctx context.Context) ([]providertypes.ModelDescriptor, error)
 	SetCurrentModel(ctx context.Context, modelID string) (config.ProviderSelection, error)
 }
 

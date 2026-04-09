@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"neo-code/internal/config"
+	providertypes "neo-code/internal/provider/types"
 )
 
 func TestJSONStoreRoundTrip(t *testing.T) {
@@ -26,15 +27,15 @@ func TestJSONStoreRoundTrip(t *testing.T) {
 		Identity:      identity,
 		FetchedAt:     time.Date(2026, 4, 2, 10, 0, 0, 0, time.UTC),
 		ExpiresAt:     time.Date(2026, 4, 3, 10, 0, 0, 0, time.UTC),
-		Models: []config.ModelDescriptor{
+		Models: []providertypes.ModelDescriptor{
 			{
 				ID:              "gpt-4.1",
 				Name:            "GPT-4.1",
 				Description:     "Fast flagship",
 				ContextWindow:   128000,
 				MaxOutputTokens: 16384,
-				CapabilityHints: config.ModelCapabilityHints{
-					ToolCalling: config.ModelCapabilityStateSupported,
+				CapabilityHints: providertypes.ModelCapabilityHints{
+					ToolCalling: providertypes.ModelCapabilityStateSupported,
 				},
 			},
 		},
@@ -63,7 +64,7 @@ func TestJSONStoreRoundTrip(t *testing.T) {
 	if got.Models[0].ID != expected.Models[0].ID || got.Models[0].Name != expected.Models[0].Name {
 		t.Fatalf("expected model %+v, got %+v", expected.Models[0], got.Models[0])
 	}
-	if got.Models[0].CapabilityHints.ToolCalling != config.ModelCapabilityStateSupported {
+	if got.Models[0].CapabilityHints.ToolCalling != providertypes.ModelCapabilityStateSupported {
 		t.Fatalf("expected capability hints to round-trip, got %+v", got.Models[0].CapabilityHints)
 	}
 }
@@ -85,7 +86,7 @@ func TestJSONStoreSeparatesDriverSpecificIdentityKeys(t *testing.T) {
 
 	if err := store.Save(context.Background(), ModelCatalog{
 		Identity: responsesIdentity,
-		Models: []config.ModelDescriptor{
+		Models: []providertypes.ModelDescriptor{
 			{ID: "responses-model", Name: "Responses Model"},
 		},
 	}); err != nil {
@@ -93,7 +94,7 @@ func TestJSONStoreSeparatesDriverSpecificIdentityKeys(t *testing.T) {
 	}
 	if err := store.Save(context.Background(), ModelCatalog{
 		Identity: chatIdentity,
-		Models: []config.ModelDescriptor{
+		Models: []providertypes.ModelDescriptor{
 			{ID: "chat-model", Name: "Chat Model"},
 		},
 	}); err != nil {
@@ -153,7 +154,7 @@ func TestJSONStoreSaveReplacesExistingCatalogWithoutTempLeak(t *testing.T) {
 		Identity:      identity,
 		FetchedAt:     time.Date(2026, 4, 2, 10, 0, 0, 0, time.UTC),
 		ExpiresAt:     time.Date(2026, 4, 3, 10, 0, 0, 0, time.UTC),
-		Models: []config.ModelDescriptor{
+		Models: []providertypes.ModelDescriptor{
 			{ID: "gpt-old", Name: "GPT Old"},
 		},
 	}
@@ -162,7 +163,7 @@ func TestJSONStoreSaveReplacesExistingCatalogWithoutTempLeak(t *testing.T) {
 		Identity:      identity,
 		FetchedAt:     time.Date(2026, 4, 4, 10, 0, 0, 0, time.UTC),
 		ExpiresAt:     time.Date(2026, 4, 5, 10, 0, 0, 0, time.UTC),
-		Models: []config.ModelDescriptor{
+		Models: []providertypes.ModelDescriptor{
 			{ID: "gpt-new", Name: "GPT New"},
 		},
 	}
@@ -304,7 +305,7 @@ func TestNormalizeCatalogDefaultsSchemaAndDedupesModels(t *testing.T) {
 	t.Parallel()
 
 	modelCatalog := normalizeCatalog(ModelCatalog{
-		Models: []config.ModelDescriptor{
+		Models: []providertypes.ModelDescriptor{
 			{ID: "gpt-4o", Name: "GPT-4o"},
 			{ID: "gpt-4o", Name: "GPT-4o Duplicate"},
 		},

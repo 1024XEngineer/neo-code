@@ -12,13 +12,13 @@ import (
 	"strings"
 	"time"
 
-	"neo-code/internal/config"
+	"neo-code/internal/provider"
 	providertypes "neo-code/internal/provider/types"
 )
 
 // Provider 封装 OpenAI 兼容 API 的客户端配置和 HTTP 连接。
 type Provider struct {
-	cfg    config.ResolvedProviderConfig
+	cfg    provider.RuntimeConfig
 	client *http.Client
 }
 
@@ -37,10 +37,10 @@ func withTransport(rt http.RoundTripper) buildOption {
 	}
 }
 
-// New 创建 OpenAI provider 实例。cfg 必须 Validate 通过且包含有效 API Key。
-func New(cfg config.ResolvedProviderConfig, opts ...buildOption) (*Provider, error) {
-	if err := cfg.Validate(); err != nil {
-		return nil, fmt.Errorf("openai provider: %w", err)
+// New 创建 OpenAI provider 实例。cfg 必须包含有效的接入地址和 API Key。
+func New(cfg provider.RuntimeConfig, opts ...buildOption) (*Provider, error) {
+	if strings.TrimSpace(cfg.BaseURL) == "" {
+		return nil, errors.New("openai provider: base url is empty")
 	}
 	if strings.TrimSpace(cfg.APIKey) == "" {
 		return nil, errors.New("openai provider: api key is empty")
@@ -63,24 +63,24 @@ func New(cfg config.ResolvedProviderConfig, opts ...buildOption) (*Provider, err
 }
 
 // DiscoverModels 通过 /models 端点查询可用模型列表。
-func (p *Provider) DiscoverModels(ctx context.Context) ([]config.ModelDescriptor, error) {
+func (p *Provider) DiscoverModels(ctx context.Context) ([]providertypes.ModelDescriptor, error) {
 	rawModels, err := p.fetchModels(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	descriptors := make([]config.ModelDescriptor, 0, len(rawModels))
+	descriptors := make([]providertypes.ModelDescriptor, 0, len(rawModels))
 	for _, raw := range rawModels {
-		descriptor, ok := config.DescriptorFromRawModel(raw)
+		descriptor, ok := providertypes.DescriptorFromRawModel(raw)
 		if !ok {
 			continue
 		}
 		descriptors = append(descriptors, descriptor)
 	}
-	return config.MergeModelDescriptors(descriptors), nil
+	return providertypes.MergeModelDescriptors(descriptors), nil
 }
 
-// Chat 发起 SSE 流式对话请求。
+// Generate 发起 SSE 流式生成请求。
 // 流中途断连或协议错误时直接返回错误，由上层调用方决定重试策略。
 func (p *Provider) Generate(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error {
 	payload, err := p.buildRequest(req)

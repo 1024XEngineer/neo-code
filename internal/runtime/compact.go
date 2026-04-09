@@ -161,7 +161,7 @@ func (s *Service) defaultCompactRunner(session agentsession.Session, cfg config.
 	if err != nil {
 		return nil, err
 	}
-	return contextcompact.NewRunner(newCompactSummaryGenerator(s.providerFactory, resolvedProvider, model)), nil
+	return contextcompact.NewRunner(newCompactSummaryGenerator(s.providerFactory, resolvedProvider.ToRuntimeConfig(), model)), nil
 }
 
 // resolveCompactProviderSelection 优先复用会话记录的 provider/model，缺失时再回退当前配置。

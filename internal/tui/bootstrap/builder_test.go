@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"neo-code/internal/config"
+	providertypes "neo-code/internal/provider/types"
 	agentruntime "neo-code/internal/runtime"
 	agentsession "neo-code/internal/session"
 )
@@ -55,11 +56,11 @@ func (s *testProviderService) SelectProvider(ctx context.Context, providerID str
 	return config.ProviderSelection{}, nil
 }
 
-func (s *testProviderService) ListModels(ctx context.Context) ([]config.ModelDescriptor, error) {
+func (s *testProviderService) ListModels(ctx context.Context) ([]providertypes.ModelDescriptor, error) {
 	return nil, nil
 }
 
-func (s *testProviderService) ListModelsSnapshot(ctx context.Context) ([]config.ModelDescriptor, error) {
+func (s *testProviderService) ListModelsSnapshot(ctx context.Context) ([]providertypes.ModelDescriptor, error) {
 	return nil, nil
 }
 

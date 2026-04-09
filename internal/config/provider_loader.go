@@ -121,10 +121,15 @@ func loadCustomProvider(providerDir string) (ProviderConfig, error) {
 
 // resolveCustomProviderBaseURL 根据 driver 对应的配置块提取最终生效的接入地址。
 func resolveCustomProviderBaseURL(file customProviderFile) string {
-	return firstNonEmptyString(
+	for _, value := range []string{
 		file.BaseURL,
 		file.OpenAICompatible.BaseURL,
 		file.Gemini.BaseURL,
 		file.Anthropic.BaseURL,
-	)
+	} {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
 }

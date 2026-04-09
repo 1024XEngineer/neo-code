@@ -17,7 +17,7 @@ import (
 func (p *Provider) buildRequest(req providertypes.GenerateRequest) (chatCompletionRequest, error) {
 	model := strings.TrimSpace(req.Model)
 	if model == "" {
-		model = strings.TrimSpace(p.cfg.Model)
+		model = strings.TrimSpace(p.cfg.DefaultModel)
 	}
 	if model == "" {
 		return chatCompletionRequest{}, errors.New("openai provider: model is empty")

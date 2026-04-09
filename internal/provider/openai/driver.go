@@ -4,9 +4,9 @@ import (
 	"context"
 	"net/http"
 
-	"neo-code/internal/config"
 	"neo-code/internal/provider"
 	"neo-code/internal/provider/transport"
+	providertypes "neo-code/internal/provider/types"
 )
 
 // DriverName 是 OpenAI 驱动的注册标识。
@@ -21,10 +21,10 @@ func defaultRetryTransport() http.RoundTripper {
 func Driver() provider.DriverDefinition {
 	return provider.DriverDefinition{
 		Name: DriverName,
-		Build: func(ctx context.Context, cfg config.ResolvedProviderConfig) (provider.Provider, error) {
+		Build: func(ctx context.Context, cfg provider.RuntimeConfig) (provider.Provider, error) {
 			return New(cfg, withTransport(defaultRetryTransport()))
 		},
-		Discover: func(ctx context.Context, cfg config.ResolvedProviderConfig) ([]config.ModelDescriptor, error) {
+		Discover: func(ctx context.Context, cfg provider.RuntimeConfig) ([]providertypes.ModelDescriptor, error) {
 			p, err := New(cfg, withTransport(defaultRetryTransport()))
 			if err != nil {
 				return nil, err

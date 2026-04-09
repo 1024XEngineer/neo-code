@@ -5,21 +5,21 @@ import (
 	"errors"
 	"strings"
 
-	"neo-code/internal/config"
 	agentcontext "neo-code/internal/context"
 	contextcompact "neo-code/internal/context/compact"
+	"neo-code/internal/provider"
 	providertypes "neo-code/internal/provider/types"
 )
 
 type compactSummaryGenerator struct {
 	providerFactory ProviderFactory
-	providerConfig  config.ResolvedProviderConfig
+	providerConfig  provider.RuntimeConfig
 	model           string
 }
 
 func newCompactSummaryGenerator(
 	providerFactory ProviderFactory,
-	providerCfg config.ResolvedProviderConfig,
+	providerCfg provider.RuntimeConfig,
 	model string,
 ) contextcompact.SummaryGenerator {
 	return &compactSummaryGenerator{

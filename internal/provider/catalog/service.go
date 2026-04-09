@@ -9,6 +9,7 @@ import (
 
 	"neo-code/internal/config"
 	"neo-code/internal/provider"
+	providertypes "neo-code/internal/provider/types"
 )
 
 const (
@@ -42,20 +43,20 @@ func NewService(baseDir string, registry *provider.Registry, store Store) *Servi
 	}
 }
 
-func (s *Service) ListProviderModels(ctx context.Context, providerCfg config.ProviderConfig) ([]config.ModelDescriptor, error) {
+func (s *Service) ListProviderModels(ctx context.Context, providerCfg config.ProviderConfig) ([]providertypes.ModelDescriptor, error) {
 	return s.listProviderModels(ctx, providerCfg, queryOptions{
 		allowSyncRefresh: true,
 		queueRefresh:     true,
 	})
 }
 
-func (s *Service) ListProviderModelsSnapshot(ctx context.Context, providerCfg config.ProviderConfig) ([]config.ModelDescriptor, error) {
+func (s *Service) ListProviderModelsSnapshot(ctx context.Context, providerCfg config.ProviderConfig) ([]providertypes.ModelDescriptor, error) {
 	return s.listProviderModels(ctx, providerCfg, queryOptions{
 		queueRefresh: true,
 	})
 }
 
-func (s *Service) ListProviderModelsCached(ctx context.Context, providerCfg config.ProviderConfig) ([]config.ModelDescriptor, error) {
+func (s *Service) ListProviderModelsCached(ctx context.Context, providerCfg config.ProviderConfig) ([]providertypes.ModelDescriptor, error) {
 	return s.listProviderModels(ctx, providerCfg, queryOptions{})
 }
 
@@ -63,7 +64,7 @@ func (s *Service) listProviderModels(
 	ctx context.Context,
 	providerCfg config.ProviderConfig,
 	options queryOptions,
-) ([]config.ModelDescriptor, error) {
+) ([]providertypes.ModelDescriptor, error) {
 	if err := s.validate(); err != nil {
 		return nil, err
 	}
@@ -90,14 +91,14 @@ type queryOptions struct {
 }
 
 type catalogSnapshot struct {
-	models   []config.ModelDescriptor
+	models   []providertypes.ModelDescriptor
 	ok       bool
 	expired  bool
 	identity config.ProviderIdentity
 }
 
-func (s *Service) modelsForProvider(ctx context.Context, providerCfg config.ProviderConfig, options queryOptions) ([]config.ModelDescriptor, error) {
-	configuredModels := config.MergeModelDescriptors(providerCfg.Models)
+func (s *Service) modelsForProvider(ctx context.Context, providerCfg config.ProviderConfig, options queryOptions) ([]providertypes.ModelDescriptor, error) {
+	configuredModels := providertypes.MergeModelDescriptors(providerCfg.Models)
 	defaultModels := providerDefaultModels(providerCfg)
 	snapshot := s.catalogSnapshot(ctx, providerCfg)
 
@@ -128,9 +129,9 @@ func (s *Service) modelsForProvider(ctx context.Context, providerCfg config.Prov
 		if len(defaultModels) == 0 {
 			return nil, nil
 		}
-		return config.MergeModelDescriptors(configuredModels, defaultModels), nil
+		return providertypes.MergeModelDescriptors(configuredModels, defaultModels), nil
 	}
-	return config.MergeModelDescriptors(configuredModels, models, defaultModels), nil
+	return providertypes.MergeModelDescriptors(configuredModels, models, defaultModels), nil
 }
 
 func (s *Service) catalogSnapshot(ctx context.Context, providerCfg config.ProviderConfig) catalogSnapshot {
@@ -163,7 +164,7 @@ func (s *Service) loadCatalog(ctx context.Context, providerCfg config.ProviderCo
 	return s.store.Load(ctx, identity)
 }
 
-func (s *Service) discoverAndPersist(ctx context.Context, providerCfg config.ProviderConfig) ([]config.ModelDescriptor, error) {
+func (s *Service) discoverAndPersist(ctx context.Context, providerCfg config.ProviderConfig) ([]providertypes.ModelDescriptor, error) {
 	if !s.registry.Supports(providerCfg.Driver) {
 		return nil, nil
 	}
@@ -173,12 +174,12 @@ func (s *Service) discoverAndPersist(ctx context.Context, providerCfg config.Pro
 		return nil, err
 	}
 
-	discovered, err := s.registry.DiscoverModels(ctx, resolved)
+	discovered, err := s.registry.DiscoverModels(ctx, resolved.ToRuntimeConfig())
 	if err != nil {
 		return nil, err
 	}
 
-	discovered = config.MergeModelDescriptors(discovered)
+	discovered = providertypes.MergeModelDescriptors(discovered)
 	if s.store == nil {
 		return discovered, nil
 	}
@@ -230,9 +231,9 @@ func (s *Service) queueRefresh(providerCfg config.ProviderConfig, identity confi
 }
 
 // providerDefaultModels 仅为内建 provider 暴露代码定义的默认模型，自定义 provider 必须完全依赖远程发现结果。
-func providerDefaultModels(providerCfg config.ProviderConfig) []config.ModelDescriptor {
+func providerDefaultModels(providerCfg config.ProviderConfig) []providertypes.ModelDescriptor {
 	if providerCfg.Source == config.ProviderSourceCustom {
 		return nil
 	}
-	return config.DescriptorsFromIDs([]string{providerCfg.Model})
+	return providertypes.DescriptorsFromIDs([]string{providerCfg.Model})
 }
