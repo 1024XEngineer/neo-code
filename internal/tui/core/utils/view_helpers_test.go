@@ -51,17 +51,19 @@ func TestIsBusy(t *testing.T) {
 		name           string
 		isAgentRunning bool
 		isCompacting   bool
+		isRebuilding   bool
 		want           bool
 	}{
-		{"both false", false, false, false},
-		{"agent running", true, false, true},
-		{"compacting", false, true, true},
-		{"both true", true, true, true},
+		{"both false", false, false, false, false},
+		{"agent running", true, false, false, true},
+		{"compacting", false, true, false, true},
+		{"rebuilding", false, false, true, true},
+		{"both true", true, true, false, true},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := IsBusy(tt.isAgentRunning, tt.isCompacting); got != tt.want {
+			if got := IsBusy(tt.isAgentRunning, tt.isCompacting, tt.isRebuilding); got != tt.want {
 				t.Errorf("IsBusy() = %v, want %v", got, tt.want)
 			}
 		})

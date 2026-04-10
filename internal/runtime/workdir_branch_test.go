@@ -77,3 +77,33 @@ func TestLoadSessionUsesFallbackWorkdirWhenMemoryMissing(t *testing.T) {
 		t.Fatalf("expected fallback to persisted workdir %q, got %q", session.Workdir, loaded.Workdir)
 	}
 }
+
+func TestNewWithFactoryDefaultsWorkspaceRootToWorkdir(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	service := NewWithFactory(manager, nil, newMemoryStore(), &scriptedProviderFactory{provider: &scriptedProvider{}}, nil)
+	want := strings.TrimSpace(manager.Get().Workdir)
+	if service.workspaceRoot != want {
+		t.Fatalf("expected workspace root %q, got %q", want, service.workspaceRoot)
+	}
+}
+
+func TestResolveSessionWorkdirRejectsSymlinkEscape(t *testing.T) {
+	t.Parallel()
+
+	workspaceRoot := t.TempDir()
+	outsideRoot := t.TempDir()
+	linkPath := filepath.Join(workspaceRoot, "link")
+	if err := os.Symlink(outsideRoot, linkPath); err != nil {
+		t.Skipf("symlink not supported: %v", err)
+	}
+
+	service := &Service{
+		workspaceRoot: workspaceRoot,
+		workdir:       workspaceRoot,
+	}
+	if _, err := service.resolveSessionWorkdir("", "link"); err == nil || !strings.Contains(err.Error(), "escapes workspace root") {
+		t.Fatalf("expected symlink escape error, got %v", err)
+	}
+}

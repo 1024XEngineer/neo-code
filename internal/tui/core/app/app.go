@@ -87,24 +87,28 @@ type appComponents struct {
 
 // appRuntimeState 聚合运行期易变字段，降低 App 顶层字段密度。
 type appRuntimeState struct {
-	codeCopyBlocks    map[int]string
-	pendingCopyID     int
-	deferredEventCmd  tea.Cmd
-	nowFn             func() time.Time
-	lastInputEditAt   time.Time
-	lastPasteLikeAt   time.Time
-	inputBurstStart   time.Time
-	inputBurstCount   int
-	pasteMode         bool
-	activeMessages    []providertypes.Message
-	activities        []tuistate.ActivityEntry
-	fileCandidates    []string
-	modelRefreshID    string
-	focus             panel
-	runProgressValue  float64
-	runProgressKnown  bool
-	runProgressLabel  string
-	pendingPermission *permissionPromptState
+	codeCopyBlocks        map[int]string
+	pendingCopyID         int
+	deferredEventCmd      tea.Cmd
+	runtimeListenerID     uint64
+	runtimeListenerCtx    context.Context
+	runtimeListenerCancel context.CancelFunc
+	rebuildRequestID      uint64
+	nowFn                 func() time.Time
+	lastInputEditAt       time.Time
+	lastPasteLikeAt       time.Time
+	inputBurstStart       time.Time
+	inputBurstCount       int
+	pasteMode             bool
+	activeMessages        []providertypes.Message
+	activities            []tuistate.ActivityEntry
+	fileCandidates        []string
+	modelRefreshID        string
+	focus                 panel
+	runProgressValue      float64
+	runProgressKnown      bool
+	runProgressLabel      string
+	pendingPermission     *permissionPromptState
 }
 
 type App struct {
@@ -204,6 +208,7 @@ func newApp(container tuibootstrap.Container) (App, error) {
 
 	progressBar := progress.New(progress.WithDefaultGradient(), progress.WithoutPercentage())
 	progressBar.Width = 22
+	runtimeListenerCtx, runtimeListenerCancel := context.WithCancel(context.Background())
 
 	app := App{
 		state: tuistate.UIState{
@@ -237,9 +242,12 @@ func newApp(container tuibootstrap.Container) (App, error) {
 			markdownRenderer: markdownRenderer,
 		},
 		appRuntimeState: appRuntimeState{
-			codeCopyBlocks: make(map[int]string),
-			nowFn:          time.Now,
-			focus:          panelInput,
+			codeCopyBlocks:        make(map[int]string),
+			runtimeListenerID:     1,
+			runtimeListenerCtx:    runtimeListenerCtx,
+			runtimeListenerCancel: runtimeListenerCancel,
+			nowFn:                 time.Now,
+			focus:                 panelInput,
 		},
 		width:  128,
 		height: 40,
@@ -277,7 +285,7 @@ func newApp(container tuibootstrap.Container) (App, error) {
 
 func (a App) Init() tea.Cmd {
 	cmds := []tea.Cmd{
-		ListenForRuntimeEvent(a.runtime.Events()),
+		ListenForRuntimeEvent(a.runtimeListenerCtx, a.runtimeListenerID, a.runtime.Events()),
 		textarea.Blink,
 		a.spinner.Tick,
 	}

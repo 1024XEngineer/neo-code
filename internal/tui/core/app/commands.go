@@ -64,6 +64,7 @@ const (
 	statusDraft                = "New draft"
 	statusRunning              = "Running"
 	statusApplyingCommand      = "Applying local command"
+	statusRebuildingWorkspace  = "Rebuilding workspace"
 	statusRunningCommand       = "Running command"
 	statusCommandDone          = "Command finished"
 	statusCompacting           = "Compacting context"

@@ -31,6 +31,7 @@ type UIState struct {
 	InputText          string
 	IsAgentRunning     bool
 	IsCompacting       bool
+	IsRebuilding       bool
 	StreamingReply     bool
 	CurrentTool        string
 	ToolStates         []ToolState

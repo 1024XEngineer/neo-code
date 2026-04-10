@@ -56,6 +56,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.applyComponentLayout(true)
 		return a, tea.Batch(cmds...)
 	case RuntimeMsg:
+		if typed.SubscriptionID != a.runtimeListenerID {
+			return a, tea.Batch(cmds...)
+		}
 		transcriptDirty := a.handleRuntimeEvent(typed.Event)
 		if a.deferredEventCmd != nil {
 			cmds = append(cmds, a.deferredEventCmd)
@@ -66,9 +69,13 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if transcriptDirty {
 			a.rebuildTranscript()
 		}
-		cmds = append(cmds, ListenForRuntimeEvent(a.runtime.Events()))
+		cmds = append(cmds, ListenForRuntimeEvent(a.runtimeListenerCtx, a.runtimeListenerID, a.runtime.Events()))
 		return a, tea.Batch(cmds...)
 	case RuntimeClosedMsg:
+		if typed.SubscriptionID != a.runtimeListenerID {
+			return a, tea.Batch(cmds...)
+		}
+		a.cancelRuntimeListener()
 		a.state.IsAgentRunning = false
 		a.state.StreamingReply = false
 		a.state.CurrentTool = ""
@@ -212,9 +219,12 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return a, tea.Batch(cmds...)
 			}
 			a.state.ExecutionError = ""
-			a.state.StatusText = statusApplyingCommand
+			a.state.IsRebuilding = true
+			a.rebuildRequestID++
+			a.cancelRuntimeListener()
+			a.state.StatusText = statusRebuildingWorkspace
 			a.appendActivity("workspace", "Rebuilding workspace bundle", typed.Workdir, false)
-			cmds = append(cmds, runWorkspaceRebuild(a.rebuildWorkspace, typed.Notice, typed.Workdir))
+			cmds = append(cmds, runWorkspaceRebuild(a.rebuildRequestID, a.rebuildWorkspace, typed.Notice, typed.Workdir))
 			return a, tea.Batch(cmds...)
 		}
 
@@ -230,16 +240,16 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.appendActivity("workspace", typed.Notice, "", false)
 		return a, tea.Batch(cmds...)
 	case workspaceRebuildFinishedMsg:
+		if typed.RebuildID != a.rebuildRequestID {
+			return a, tea.Batch(cmds...)
+		}
+		a.state.IsRebuilding = false
 		if typed.Err != nil {
-			a.state.ExecutionError = typed.Err.Error()
-			a.state.StatusText = typed.Err.Error()
-			a.appendActivity("workspace", "Workspace rebuild failed", typed.Err.Error(), true)
+			cmds = append(cmds, a.failWorkspaceRebuild(typed.Err)...)
 			return a, tea.Batch(cmds...)
 		}
 		if err := a.applyWorkspaceBinding(typed.Binding); err != nil {
-			a.state.ExecutionError = err.Error()
-			a.state.StatusText = err.Error()
-			a.appendActivity("workspace", "Workspace rebuild failed", err.Error(), true)
+			cmds = append(cmds, a.failWorkspaceRebuild(err)...)
 			return a, tea.Batch(cmds...)
 		}
 		a.startDraftSession()
@@ -266,7 +276,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if cmd := a.requestModelCatalogRefresh(a.state.CurrentProvider); cmd != nil {
 			cmds = append(cmds, cmd)
 		}
-		cmds = append(cmds, ListenForRuntimeEvent(a.runtime.Events()))
+		if cmd := a.bindRuntimeListener(); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
 		a.state.ExecutionError = ""
 		a.state.StatusText = typed.Notice
 		a.appendActivity("workspace", typed.Notice, "", false)
@@ -1787,11 +1799,14 @@ func (a *App) requestModelCatalogRefresh(providerID string) tea.Cmd {
 	return runModelCatalogRefresh(a.providerSvc, providerID)
 }
 
-func ListenForRuntimeEvent(sub <-chan agentruntime.RuntimeEvent) tea.Cmd {
+func ListenForRuntimeEvent(ctx context.Context, subscriptionID uint64, sub <-chan agentruntime.RuntimeEvent) tea.Cmd {
 	return tuiservices.ListenForRuntimeEventCmd(
+		ctx,
 		sub,
-		func(event agentruntime.RuntimeEvent) tea.Msg { return RuntimeMsg{Event: event} },
-		func() tea.Msg { return RuntimeClosedMsg{} },
+		func(event agentruntime.RuntimeEvent) tea.Msg {
+			return RuntimeMsg{SubscriptionID: subscriptionID, Event: event}
+		},
+		func() tea.Msg { return RuntimeClosedMsg{SubscriptionID: subscriptionID} },
 	)
 }
 
@@ -1859,6 +1874,7 @@ func runSessionWorkdirCommand(
 }
 
 func runWorkspaceRebuild(
+	rebuildID uint64,
 	rebuild tuibootstrap.RebuildWorkspaceFunc,
 	notice string,
 	requestedPath string,
@@ -1866,11 +1882,44 @@ func runWorkspaceRebuild(
 	return func() tea.Msg {
 		binding, err := rebuild(context.Background(), requestedPath)
 		return workspaceRebuildFinishedMsg{
-			Notice:  notice,
-			Binding: binding,
-			Err:     err,
+			RebuildID: rebuildID,
+			Notice:    notice,
+			Binding:   binding,
+			Err:       err,
 		}
 	}
+}
+
+// failWorkspaceRebuild 统一处理 workspace rebuild 失败后的状态恢复与 runtime 监听回绑。
+func (a *App) failWorkspaceRebuild(err error) []tea.Cmd {
+	cmds := make([]tea.Cmd, 0, 1)
+	if cmd := a.bindRuntimeListener(); cmd != nil {
+		cmds = append(cmds, cmd)
+	}
+	a.state.ExecutionError = err.Error()
+	a.state.StatusText = err.Error()
+	a.appendActivity("workspace", "Workspace rebuild failed", err.Error(), true)
+	return cmds
+}
+
+// bindRuntimeListener 为当前 runtime 绑定新的可取消事件监听。
+func (a *App) bindRuntimeListener() tea.Cmd {
+	if a.runtime == nil {
+		return nil
+	}
+	a.cancelRuntimeListener()
+	a.runtimeListenerID++
+	a.runtimeListenerCtx, a.runtimeListenerCancel = context.WithCancel(context.Background())
+	return ListenForRuntimeEvent(a.runtimeListenerCtx, a.runtimeListenerID, a.runtime.Events())
+}
+
+// cancelRuntimeListener 取消当前 runtime 事件监听，避免旧订阅在重建期间继续回写 UI。
+func (a *App) cancelRuntimeListener() {
+	if a.runtimeListenerCancel != nil {
+		a.runtimeListenerCancel()
+	}
+	a.runtimeListenerCtx = nil
+	a.runtimeListenerCancel = nil
 }
 
 // runCompact 鍦ㄧ嫭绔嬪懡浠や腑瑙﹀彂 runtime compact锛屽苟鎶婄粨鏋滃洖浼犵粰 TUI銆
@@ -1884,5 +1933,5 @@ func runCompact(runtime agentruntime.Runtime, sessionID string) tea.Cmd {
 
 // isBusy 缁熶竴鍒ゆ柇褰撳墠鐣岄潰鏄惁瀛樺湪杩涜涓殑 agent 鎴?compact 鎿嶄綔銆
 func (a App) isBusy() bool {
-	return tuiutils.IsBusy(a.state.IsAgentRunning, a.state.IsCompacting)
+	return tuiutils.IsBusy(a.state.IsAgentRunning, a.state.IsCompacting, a.state.IsRebuilding)
 }

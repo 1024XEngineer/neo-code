@@ -124,9 +124,10 @@ func newWorkspaceTestApp(manager *config.Manager, runtime agentruntime.Runtime, 
 			activity:       viewport.New(0, 0),
 		},
 		appRuntimeState: appRuntimeState{
-			nowFn:          time.Now,
-			codeCopyBlocks: map[int]string{},
-			focus:          panelInput,
+			nowFn:             time.Now,
+			codeCopyBlocks:    map[int]string{},
+			focus:             panelInput,
+			runtimeListenerID: 1,
 		},
 		styles: uiStyles,
 	}
@@ -168,7 +169,7 @@ func TestSessionWorkdirResultRequiresConfiguredRebuild(t *testing.T) {
 
 func TestRunWorkspaceRebuildReturnsFinishedMsg(t *testing.T) {
 	wantPath := t.TempDir()
-	cmd := runWorkspaceRebuild(func(ctx context.Context, requestedPath string) (tuibootstrap.WorkspaceBinding, error) {
+	cmd := runWorkspaceRebuild(7, func(ctx context.Context, requestedPath string) (tuibootstrap.WorkspaceBinding, error) {
 		if requestedPath != wantPath {
 			t.Fatalf("expected requested path %q, got %q", wantPath, requestedPath)
 		}
@@ -179,6 +180,9 @@ func TestRunWorkspaceRebuildReturnsFinishedMsg(t *testing.T) {
 	finished, ok := msg.(workspaceRebuildFinishedMsg)
 	if !ok {
 		t.Fatalf("expected workspaceRebuildFinishedMsg, got %T", msg)
+	}
+	if finished.RebuildID != 7 {
+		t.Fatalf("expected rebuild id 7, got %d", finished.RebuildID)
 	}
 	if finished.Notice != "notice" {
 		t.Fatalf("unexpected notice: %+v", finished)
@@ -201,13 +205,15 @@ func TestWorkspaceRebuildFinishedResetsToFreshDraft(t *testing.T) {
 	newRuntime := &workspaceTestRuntime{}
 
 	app := newWorkspaceTestApp(oldManager, oldRuntime, provider)
+	app.rebuildRequestID = 1
 	app.state.ActiveSessionID = "old-session"
 	app.state.ActiveSessionTitle = "Old"
 	app.input.SetValue("stale input")
 	app.state.InputText = "stale input"
 
 	model, _ := app.Update(workspaceRebuildFinishedMsg{
-		Notice: "[System] Workspace switched to " + newRoot + ".",
+		RebuildID: 1,
+		Notice:    "[System] Workspace switched to " + newRoot + ".",
 		Binding: tuibootstrap.WorkspaceBinding{
 			Config:          newManager.Get(),
 			ConfigManager:   newManager,
@@ -218,6 +224,9 @@ func TestWorkspaceRebuildFinishedResetsToFreshDraft(t *testing.T) {
 		},
 	})
 	next := model.(App)
+	if next.state.IsRebuilding {
+		t.Fatalf("expected rebuild flag to be cleared")
+	}
 	if next.state.ActiveSessionID != "" {
 		t.Fatalf("expected draft session after rebuild, got %q", next.state.ActiveSessionID)
 	}
@@ -234,11 +243,82 @@ func TestWorkspaceRebuildFinishedResetsToFreshDraft(t *testing.T) {
 
 func TestWorkspaceRebuildFinishedReportsRebuildError(t *testing.T) {
 	app := newPermissionTestApp(&permissionTestRuntime{})
+	app.rebuildRequestID = 1
+	app.state.IsRebuilding = true
 
-	model, _ := app.Update(workspaceRebuildFinishedMsg{Err: errors.New("rebuild failed")})
+	model, _ := app.Update(workspaceRebuildFinishedMsg{RebuildID: 1, Err: errors.New("rebuild failed")})
 	next := model.(App)
 	if next.state.ExecutionError != "rebuild failed" {
 		t.Fatalf("expected rebuild error to surface, got %q", next.state.ExecutionError)
+	}
+	if next.state.IsRebuilding {
+		t.Fatalf("expected rebuild flag to clear after failure")
+	}
+}
+
+func TestSessionWorkdirResultStartsBusyRebuild(t *testing.T) {
+	app := newPermissionTestApp(&permissionTestRuntime{})
+	app.rebuildWorkspace = func(ctx context.Context, requestedPath string) (tuibootstrap.WorkspaceBinding, error) {
+		return tuibootstrap.WorkspaceBinding{}, nil
+	}
+
+	model, cmd := app.Update(sessionWorkdirResultMsg{
+		Notice:          "[System] Workspace switched to /tmp/other.",
+		Workdir:         t.TempDir(),
+		RequiresRebuild: true,
+	})
+	next := model.(App)
+	if !next.state.IsRebuilding {
+		t.Fatalf("expected rebuild flag to be set")
+	}
+	if next.state.StatusText != statusRebuildingWorkspace {
+		t.Fatalf("expected rebuild status, got %q", next.state.StatusText)
+	}
+	if cmd == nil {
+		t.Fatalf("expected rebuild command to be returned")
+	}
+}
+
+func TestWorkspaceRebuildFinishedIgnoresStaleResult(t *testing.T) {
+	app := newPermissionTestApp(&permissionTestRuntime{})
+	app.rebuildRequestID = 2
+	app.state.IsRebuilding = true
+	app.state.StatusText = statusRebuildingWorkspace
+
+	model, _ := app.Update(workspaceRebuildFinishedMsg{
+		RebuildID: 1,
+		Err:       errors.New("stale rebuild should be ignored"),
+	})
+	next := model.(App)
+	if !next.state.IsRebuilding {
+		t.Fatalf("expected stale rebuild to keep current rebuild state")
+	}
+	if next.state.ExecutionError != "" {
+		t.Fatalf("expected stale rebuild error to be ignored, got %q", next.state.ExecutionError)
+	}
+}
+
+func TestRuntimeMessagesIgnoreStaleSubscription(t *testing.T) {
+	app := newPermissionTestApp(&permissionTestRuntime{})
+	app.runtimeListenerID = 2
+	app.state.StatusText = statusThinking
+
+	model, _ := app.Update(RuntimeClosedMsg{SubscriptionID: 1})
+	next := model.(App)
+	if next.state.StatusText != statusThinking {
+		t.Fatalf("expected stale runtime close to be ignored, got %q", next.state.StatusText)
+	}
+
+	model, _ = next.Update(RuntimeMsg{
+		SubscriptionID: 1,
+		Event: agentruntime.RuntimeEvent{
+			Type:    agentruntime.EventError,
+			Payload: "stale event",
+		},
+	})
+	next = model.(App)
+	if next.state.ExecutionError != "" {
+		t.Fatalf("expected stale runtime event to be ignored, got %q", next.state.ExecutionError)
 	}
 }
 

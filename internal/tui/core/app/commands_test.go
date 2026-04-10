@@ -63,6 +63,7 @@ func TestStatusConstants(t *testing.T) {
 		{"statusDraft", statusDraft},
 		{"statusRunning", statusRunning},
 		{"statusApplyingCommand", statusApplyingCommand},
+		{"statusRebuildingWorkspace", statusRebuildingWorkspace},
 		{"statusRunningCommand", statusRunningCommand},
 		{"statusCommandDone", statusCommandDone},
 		{"statusCompacting", statusCompacting},

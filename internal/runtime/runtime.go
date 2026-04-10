@@ -165,7 +165,7 @@ func NewWithFactory(
 	}
 	return NewWithWorkspace(
 		configManager,
-		"",
+		workdir,
 		workdir,
 		toolManager,
 		sessionStore,
@@ -201,7 +201,7 @@ func NewWithWorkspace(
 		providerFactory: providerFactory,
 		contextBuilder:  contextBuilder,
 		events:          make(chan RuntimeEvent, 128),
-		workspaceRoot:   strings.TrimSpace(workspaceRoot),
+		workspaceRoot:   normalizeWorkspaceRoot(workspaceRoot),
 		workdir:         strings.TrimSpace(workdir),
 	}
 }
@@ -944,8 +944,11 @@ func normalizeRequestedWorkdir(base string, requestedWorkdir string) (string, er
 
 func isWithinWorkspaceRoot(workspaceRoot string, target string) bool {
 	root := strings.TrimSpace(workspaceRoot)
-	target = strings.TrimSpace(target)
-	if root == "" || target == "" {
+	if root == "" {
+		return false
+	}
+	target, err := canonicalWorkspacePath(target)
+	if err != nil {
 		return false
 	}
 	relative, err := filepath.Rel(root, target)
@@ -953,4 +956,38 @@ func isWithinWorkspaceRoot(workspaceRoot string, target string) bool {
 		return false
 	}
 	return relative == "." || (relative != ".." && !strings.HasPrefix(relative, ".."+string(os.PathSeparator)))
+}
+
+// normalizeWorkspaceRoot 在 runtime 构建时尽量把工作区根目录规整为稳定可比较的绝对路径。
+func normalizeWorkspaceRoot(workspaceRoot string) string {
+	trimmed := strings.TrimSpace(workspaceRoot)
+	if trimmed == "" {
+		return ""
+	}
+	canonical, err := canonicalWorkspacePath(trimmed)
+	if err == nil {
+		return canonical
+	}
+	absolute, absErr := filepath.Abs(trimmed)
+	if absErr == nil {
+		return filepath.Clean(absolute)
+	}
+	return filepath.Clean(trimmed)
+}
+
+// canonicalWorkspacePath 返回用于工作区边界比较的规范绝对路径，并解析已存在路径上的符号链接。
+func canonicalWorkspacePath(path string) (string, error) {
+	trimmed := strings.TrimSpace(path)
+	if trimmed == "" {
+		return "", errors.New("path is empty")
+	}
+	absolute, err := filepath.Abs(trimmed)
+	if err != nil {
+		return "", err
+	}
+	resolved, err := filepath.EvalSymlinks(absolute)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Clean(resolved), nil
 }

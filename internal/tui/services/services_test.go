@@ -71,6 +71,7 @@ func TestListenForRuntimeEventCmd(t *testing.T) {
 	ch <- event
 
 	msg := ListenForRuntimeEventCmd(
+		context.Background(),
 		ch,
 		func(e agentruntime.RuntimeEvent) tea.Msg { return e },
 		func() tea.Msg { return "closed" },
@@ -82,12 +83,28 @@ func TestListenForRuntimeEventCmd(t *testing.T) {
 
 	close(ch)
 	msg = ListenForRuntimeEventCmd(
+		context.Background(),
 		ch,
 		func(e agentruntime.RuntimeEvent) tea.Msg { return e },
 		func() tea.Msg { return "closed" },
 	)()
 	if gotClosed, ok := msg.(string); !ok || gotClosed != "closed" {
 		t.Fatalf("expected closed msg, got %T %#v", msg, msg)
+	}
+}
+
+func TestListenForRuntimeEventCmdCanceled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	msg := ListenForRuntimeEventCmd(
+		ctx,
+		make(chan agentruntime.RuntimeEvent),
+		func(e agentruntime.RuntimeEvent) tea.Msg { return e },
+		func() tea.Msg { return "closed" },
+	)()
+	if msg != nil {
+		t.Fatalf("expected nil msg when listener is canceled, got %T %#v", msg, msg)
 	}
 }
 

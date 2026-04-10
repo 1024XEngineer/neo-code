@@ -28,16 +28,21 @@ type PermissionResolver interface {
 
 // ListenForRuntimeEventCmd 监听 runtime 事件通道，并将结果映射为 UI 消息。
 func ListenForRuntimeEventCmd(
+	ctx context.Context,
 	sub <-chan agentruntime.RuntimeEvent,
 	eventMsg func(agentruntime.RuntimeEvent) tea.Msg,
 	closedMsg func() tea.Msg,
 ) tea.Cmd {
 	return func() tea.Msg {
-		event, ok := <-sub
-		if !ok {
-			return closedMsg()
+		select {
+		case <-ctx.Done():
+			return nil
+		case event, ok := <-sub:
+			if !ok {
+				return closedMsg()
+			}
+			return eventMsg(event)
 		}
-		return eventMsg(event)
 	}
 }
 

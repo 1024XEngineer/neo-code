@@ -28,9 +28,9 @@ func RequestedWorkdirForRun(activeSessionID string, currentWorkdir string) strin
 	return ""
 }
 
-// IsBusy 统一判断当前是否存在进行中的 agent 或 compact 操作。
-func IsBusy(isAgentRunning bool, isCompacting bool) bool {
-	return isAgentRunning || isCompacting
+// IsBusy 统一判断当前是否存在进行中的 agent、compact 或 workspace rebuild 操作。
+func IsBusy(isAgentRunning bool, isCompacting bool, isRebuilding bool) bool {
+	return isAgentRunning || isCompacting || isRebuilding
 }
 
 // FocusLabelFromPanel 将焦点面板枚举映射为界面展示标签。

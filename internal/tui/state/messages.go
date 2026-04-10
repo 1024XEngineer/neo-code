@@ -8,11 +8,14 @@ import (
 
 // RuntimeMsg 封装 runtime 事件流消息。
 type RuntimeMsg struct {
-	Event agentruntime.RuntimeEvent
+	SubscriptionID uint64
+	Event          agentruntime.RuntimeEvent
 }
 
 // RuntimeClosedMsg 表示 runtime 事件通道已关闭。
-type RuntimeClosedMsg struct{}
+type RuntimeClosedMsg struct {
+	SubscriptionID uint64
+}
 
 // RunFinishedMsg 表示一次 Run 调用结束。
 type RunFinishedMsg struct {
@@ -50,9 +53,10 @@ type SessionWorkdirResultMsg struct {
 
 // WorkspaceRebuildFinishedMsg 表示一次跨工作区 bundle 重建结束。
 type WorkspaceRebuildFinishedMsg struct {
-	Notice  string
-	Binding tuibootstrap.WorkspaceBinding
-	Err     error
+	RebuildID uint64
+	Notice    string
+	Binding   tuibootstrap.WorkspaceBinding
+	Err       error
 }
 
 // WorkspaceCommandResultMsg 表示工作区命令执行结果。

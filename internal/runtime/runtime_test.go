@@ -2427,7 +2427,10 @@ func TestServiceRunUsesSessionWorkdirForContextAndTools(t *testing.T) {
 func TestServiceRunUsesInputWorkdirForNewSession(t *testing.T) {
 	manager := newRuntimeConfigManager(t)
 	defaultWorkdir := t.TempDir()
-	draftRoot := t.TempDir()
+	draftRoot := filepath.Join(defaultWorkdir, "draft")
+	if err := os.MkdirAll(draftRoot, 0o755); err != nil {
+		t.Fatalf("mkdir draft root: %v", err)
+	}
 	if err := manager.Update(context.Background(), func(cfg *config.Config) error {
 		cfg.Workdir = defaultWorkdir
 		return nil
@@ -2763,7 +2766,10 @@ func TestServiceUpdateSessionWorkdirNoopDoesNotSave(t *testing.T) {
 	}
 
 	store := newMemoryStore()
-	target := t.TempDir()
+	target := filepath.Join(defaultWorkdir, "target")
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatalf("mkdir target: %v", err)
+	}
 	session := agentsession.NewWithWorkdir("noop", target)
 	store.sessions[session.ID] = cloneSession(session)
 	registry := tools.NewRegistry()
