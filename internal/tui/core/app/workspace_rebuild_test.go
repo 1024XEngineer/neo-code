@@ -3,6 +3,9 @@ package tui
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -195,6 +198,9 @@ func TestRunWorkspaceRebuildReturnsFinishedMsg(t *testing.T) {
 func TestWorkspaceRebuildFinishedResetsToFreshDraft(t *testing.T) {
 	oldRoot := t.TempDir()
 	newRoot := t.TempDir()
+	if err := os.WriteFile(filepath.Join(newRoot, "new.txt"), []byte("new"), 0o644); err != nil {
+		t.Fatalf("write new workspace file: %v", err)
+	}
 	oldManager := newWorkspaceConfigManager(t, oldRoot)
 	newManager := newWorkspaceConfigManager(t, newRoot)
 	provider := &workspaceTestProvider{}
@@ -210,6 +216,8 @@ func TestWorkspaceRebuildFinishedResetsToFreshDraft(t *testing.T) {
 	app.state.ActiveSessionTitle = "Old"
 	app.input.SetValue("stale input")
 	app.state.InputText = "stale input"
+	app.fileCandidates = []string{"old.txt"}
+	app.fileBrowser.CurrentDirectory = oldRoot
 
 	model, _ := app.Update(workspaceRebuildFinishedMsg{
 		RebuildID: 1,
@@ -232,6 +240,12 @@ func TestWorkspaceRebuildFinishedResetsToFreshDraft(t *testing.T) {
 	}
 	if next.state.CurrentWorkdir != newRoot {
 		t.Fatalf("expected rebuilt workdir %q, got %q", newRoot, next.state.CurrentWorkdir)
+	}
+	if next.fileBrowser.CurrentDirectory != newRoot {
+		t.Fatalf("expected file browser directory %q, got %q", newRoot, next.fileBrowser.CurrentDirectory)
+	}
+	if !containsWorkspaceCandidate(next.fileCandidates, "new.txt") {
+		t.Fatalf("expected rebuilt workspace files to include new.txt, got %+v", next.fileCandidates)
 	}
 	if len(next.state.Sessions) != 0 {
 		t.Fatalf("expected session list to refresh from rebuilt runtime, got %+v", next.state.Sessions)
@@ -343,4 +357,36 @@ func TestApplyWorkspaceBindingValidatesDependencies(t *testing.T) {
 	}); err == nil {
 		t.Fatalf("expected provider validation error")
 	}
+}
+
+func TestApplyWorkspaceBindingFallsBackToConfigPaths(t *testing.T) {
+	root := t.TempDir()
+	manager := newWorkspaceConfigManager(t, root)
+	provider := &workspaceTestProvider{}
+	runtime := &workspaceTestRuntime{}
+	app := newPermissionTestApp(&permissionTestRuntime{})
+
+	if err := app.applyWorkspaceBinding(tuibootstrap.WorkspaceBinding{
+		Config:          manager.Get(),
+		ConfigManager:   manager,
+		Runtime:         runtime,
+		ProviderService: provider,
+	}); err != nil {
+		t.Fatalf("apply workspace binding: %v", err)
+	}
+	if app.workspaceRoot != root {
+		t.Fatalf("expected workspace root fallback %q, got %q", root, app.workspaceRoot)
+	}
+	if app.state.CurrentWorkdir != root {
+		t.Fatalf("expected workdir fallback %q, got %q", root, app.state.CurrentWorkdir)
+	}
+}
+
+func containsWorkspaceCandidate(candidates []string, name string) bool {
+	for _, candidate := range candidates {
+		if strings.Contains(candidate, name) {
+			return true
+		}
+	}
+	return false
 }

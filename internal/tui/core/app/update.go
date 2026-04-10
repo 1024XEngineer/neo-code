@@ -253,26 +253,12 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, tea.Batch(cmds...)
 		}
 		a.startDraftSession()
-		if err := a.refreshSessions(); err != nil {
+		if err := a.refreshWorkspaceBundleState(); err != nil {
 			a.state.ExecutionError = err.Error()
 			a.state.StatusText = err.Error()
-			a.appendActivity("workspace", "Failed to refresh sessions", err.Error(), true)
+			a.appendActivity("workspace", "Failed to refresh rebuilt workspace", err.Error(), true)
 			return a, tea.Batch(cmds...)
 		}
-		if err := a.refreshProviderPicker(); err != nil {
-			a.state.ExecutionError = err.Error()
-			a.state.StatusText = err.Error()
-			a.appendActivity("workspace", "Failed to refresh providers", err.Error(), true)
-			return a, tea.Batch(cmds...)
-		}
-		if err := a.refreshModelPicker(); err != nil {
-			a.state.ExecutionError = err.Error()
-			a.state.StatusText = err.Error()
-			a.appendActivity("workspace", "Failed to refresh models", err.Error(), true)
-			return a, tea.Batch(cmds...)
-		}
-		a.selectCurrentProvider(a.state.CurrentProvider)
-		a.selectCurrentModel(a.state.CurrentModel)
 		if cmd := a.requestModelCatalogRefresh(a.state.CurrentProvider); cmd != nil {
 			cmds = append(cmds, cmd)
 		}
@@ -1783,10 +1769,36 @@ func (a *App) applyWorkspaceBinding(binding tuibootstrap.WorkspaceBinding) error
 	a.configManager = binding.ConfigManager
 	a.providerSvc = binding.ProviderService
 	a.runtime = binding.Runtime
-	a.workspaceRoot = strings.TrimSpace(binding.WorkspaceRoot)
 	a.syncConfigState(binding.Config)
-	a.state.CurrentWorkdir = binding.Workdir
+	a.workspaceRoot = trimmedOrDefault(binding.WorkspaceRoot, binding.Config.Workdir)
+	a.state.CurrentWorkdir = trimmedOrDefault(binding.Workdir, binding.Config.Workdir)
 	return nil
+}
+
+// refreshWorkspaceBundleState 刷新跨工作区重建后依赖于新 workdir 的 UI 数据与选择器状态。
+func (a *App) refreshWorkspaceBundleState() error {
+	if err := a.refreshSessions(); err != nil {
+		return fmt.Errorf("refresh sessions: %w", err)
+	}
+	if err := a.refreshProviderPicker(); err != nil {
+		return fmt.Errorf("refresh providers: %w", err)
+	}
+	if err := a.refreshModelPicker(); err != nil {
+		return fmt.Errorf("refresh models: %w", err)
+	}
+	if err := a.refreshFileCandidates(); err != nil {
+		return fmt.Errorf("refresh workspace files: %w", err)
+	}
+	a.selectCurrentProvider(a.state.CurrentProvider)
+	a.selectCurrentModel(a.state.CurrentModel)
+	return nil
+}
+
+func trimmedOrDefault(primary, fallback string) string {
+	if trimmed := strings.TrimSpace(primary); trimmed != "" {
+		return trimmed
+	}
+	return strings.TrimSpace(fallback)
 }
 
 func (a *App) requestModelCatalogRefresh(providerID string) tea.Cmd {
