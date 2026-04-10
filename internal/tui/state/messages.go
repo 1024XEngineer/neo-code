@@ -30,6 +30,13 @@ type CompactFinishedMsg struct {
 	Err error
 }
 
+// PermissionResolutionFinishedMsg 表示一次权限审批提交完成结果。
+type PermissionResolutionFinishedMsg struct {
+	RequestID string
+	Decision  agentruntime.PermissionResolutionDecision
+	Err       error
+}
+
 // PermissionResolvedMsg 表示权限审批结果已回传。
 type PermissionResolvedMsg struct {
 	RequestID string

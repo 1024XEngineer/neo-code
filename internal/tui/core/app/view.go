@@ -232,8 +232,7 @@ func (a App) renderPrompt(width int) string {
 
 	// Account for frame and padding when sizing the composer container.
 	boxWidth := a.composerBoxWidth(width)
-
-	return box.Width(boxWidth).Render(a.input.View())
+	return box.Width(boxWidth).Render(a.renderPermissionPrompt())
 }
 
 func (a App) renderSidebarHeader(width int) string {

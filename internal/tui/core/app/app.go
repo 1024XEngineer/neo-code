@@ -45,6 +45,7 @@ type RuntimeClosedMsg = tuistate.RuntimeClosedMsg
 type runFinishedMsg = tuistate.RunFinishedMsg
 type modelCatalogRefreshMsg = tuistate.ModelCatalogRefreshMsg
 type compactFinishedMsg = tuistate.CompactFinishedMsg
+type permissionResolutionFinishedMsg = tuistate.PermissionResolutionFinishedMsg
 type permissionResolvedMsg = tuistate.PermissionResolvedMsg
 type localCommandResultMsg = tuistate.LocalCommandResultMsg
 type sessionWorkdirResultMsg = tuistate.SessionWorkdirResultMsg
@@ -88,6 +89,7 @@ type appComponents struct {
 type appRuntimeState struct {
 	codeCopyBlocks             map[int]string
 	pendingCopyID              int
+	deferredEventCmd           tea.Cmd
 	nowFn                      func() time.Time
 	lastInputEditAt            time.Time
 	lastPasteLikeAt            time.Time
@@ -102,6 +104,7 @@ type appRuntimeState struct {
 	runProgressValue           float64
 	runProgressKnown           bool
 	runProgressLabel           string
+	pendingPermission          *permissionPromptState
 	pendingPermissionID        string
 	pendingPermissionTool      string
 	pendingPermissionHint      string

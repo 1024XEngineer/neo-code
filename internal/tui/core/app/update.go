@@ -55,6 +55,10 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, tea.Batch(cmds...)
 	case RuntimeMsg:
 		transcriptDirty := a.handleRuntimeEvent(typed.Event)
+		if a.deferredEventCmd != nil {
+			cmds = append(cmds, a.deferredEventCmd)
+			a.deferredEventCmd = nil
+		}
 		_ = a.refreshSessions()
 		a.syncActiveSessionTitle()
 		if transcriptDirty {
@@ -341,6 +345,15 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 	now := a.now()
 	effectiveTyped := typed
 
+	if a.pendingPermission != nil {
+		if cmd, handled := a.updatePendingPermissionInput(typed); handled {
+			if cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+			return a, tea.Batch(cmds...)
+		}
+	}
+
 	if key.Matches(typed, a.keys.Send) {
 		if a.shouldTreatEnterAsNewline(typed, now) {
 			a.growComposerForNewline()
@@ -461,6 +474,55 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 	a.refreshCommandMenu()
 	cmds = append(cmds, cmd)
 	return a, tea.Batch(cmds...)
+}
+
+// updatePendingPermissionInput 处理权限审批面板上的键盘交互（上下选择与回车确认）。
+func (a *App) updatePendingPermissionInput(typed tea.KeyMsg) (tea.Cmd, bool) {
+	if a.pendingPermission == nil {
+		return nil, false
+	}
+	if a.pendingPermission.Submitting {
+		return nil, true
+	}
+
+	switch {
+	case key.Matches(typed, a.keys.ScrollUp):
+		a.pendingPermission.Selected = normalizePermissionPromptSelection(a.pendingPermission.Selected - 1)
+		a.state.StatusText = statusPermissionRequired
+		return nil, true
+	case key.Matches(typed, a.keys.ScrollDown):
+		a.pendingPermission.Selected = normalizePermissionPromptSelection(a.pendingPermission.Selected + 1)
+		a.state.StatusText = statusPermissionRequired
+		return nil, true
+	case key.Matches(typed, a.keys.Send):
+		option := permissionPromptOptionAt(a.pendingPermission.Selected)
+		return a.submitPermissionDecision(option.Decision), true
+	}
+
+	if typed.Type == tea.KeyRunes && len(typed.Runes) > 0 {
+		if decision, ok := parsePermissionShortcut(string(typed.Runes)); ok {
+			return a.submitPermissionDecision(decision), true
+		}
+	}
+	return nil, true
+}
+
+// submitPermissionDecision 触发一次权限审批提交命令。
+func (a *App) submitPermissionDecision(decision agentruntime.PermissionResolutionDecision) tea.Cmd {
+	if a.pendingPermission == nil {
+		return nil
+	}
+
+	requestID := strings.TrimSpace(a.pendingPermission.Request.RequestID)
+	if requestID == "" {
+		return nil
+	}
+
+	a.pendingPermission.Submitting = true
+	a.pendingPermissionSubmitted = true
+	a.state.StatusText = statusPermissionSubmitting
+	a.appendActivity("permission", "Submitting permission decision", string(decision), false)
+	return runPermissionResolve(a.runtime, requestID, decision)
 }
 
 func (a App) now() time.Time {
@@ -871,25 +933,46 @@ func runtimeEventUsageHandler(a *App, event agentruntime.RuntimeEvent) bool {
 
 // runtimeEventPermissionRequestHandler 处理权限审批请求并提示用户输入。
 func runtimeEventPermissionRequestHandler(a *App, event agentruntime.RuntimeEvent) bool {
-	payload, ok := event.Payload.(agentruntime.PermissionRequestPayload)
+	payload, ok := parsePermissionRequestPayload(event.Payload)
 	if !ok {
 		return false
+	}
+	if a.pendingPermission != nil {
+		currentRequestID := strings.TrimSpace(a.pendingPermission.Request.RequestID)
+		nextRequestID := strings.TrimSpace(payload.RequestID)
+		if currentRequestID != "" && currentRequestID != nextRequestID && !a.pendingPermission.Submitting {
+			a.deferredEventCmd = runPermissionResolve(a.runtime, currentRequestID, agentruntime.PermissionResolutionReject)
+			a.appendActivity("permission", "Auto-rejected superseded permission request", currentRequestID, false)
+		}
+	}
+	a.pendingPermission = &permissionPromptState{
+		Request:    payload,
+		Selected:   0,
+		Submitting: false,
 	}
 	a.pendingPermissionID = strings.TrimSpace(payload.RequestID)
 	a.pendingPermissionTool = strings.TrimSpace(payload.ToolName)
 	a.pendingPermissionHint = formatPermissionPrompt(payload)
 	a.pendingPermissionSubmitted = false
+	a.focus = panelInput
+	a.applyFocus()
 	a.state.ExecutionError = ""
 	a.state.StatusText = statusAwaitingPermission
 	a.appendActivity("permission", "Permission required", a.pendingPermissionHint, false)
+	if a.width > 0 && a.height > 0 {
+		a.applyComponentLayout(false)
+	}
 	return false
 }
 
 // runtimeEventPermissionResolvedHandler 处理权限审批结果并更新状态。
 func runtimeEventPermissionResolvedHandler(a *App, event agentruntime.RuntimeEvent) bool {
-	payload, ok := event.Payload.(agentruntime.PermissionResolvedPayload)
+	payload, ok := parsePermissionResolvedPayload(event.Payload)
 	if !ok {
 		return false
+	}
+	if a.pendingPermission != nil && strings.TrimSpace(a.pendingPermission.Request.RequestID) == strings.TrimSpace(payload.RequestID) {
+		a.pendingPermission = nil
 	}
 	a.clearPendingPermissionState()
 	if strings.EqualFold(payload.Decision, "allow") {
@@ -898,6 +981,9 @@ func runtimeEventPermissionResolvedHandler(a *App, event agentruntime.RuntimeEve
 		a.state.StatusText = statusPermissionDenied
 	}
 	a.appendActivity("permission", "Permission resolved", fmt.Sprintf("%s %s", payload.Decision, payload.ToolName), false)
+	if a.width > 0 && a.height > 0 {
+		a.applyComponentLayout(false)
+	}
 	return false
 }
 
@@ -1579,6 +1665,7 @@ func (a *App) clearRunProgress() {
 
 // clearPendingPermissionState 清理当前等待中的权限审批上下文，避免结束态继续拦截 y/a/n。
 func (a *App) clearPendingPermissionState() {
+	a.pendingPermission = nil
 	a.pendingPermissionID = ""
 	a.pendingPermissionTool = ""
 	a.pendingPermissionHint = ""
@@ -1696,6 +1783,7 @@ func (a *App) startDraftSession() {
 	a.state.ToolStates = nil
 	a.state.RunContext = tuistate.ContextWindowState{}
 	a.state.TokenUsage = tuistate.TokenUsageState{}
+	a.clearPendingPermissionState()
 	a.clearRunProgress()
 	a.input.Reset()
 	a.state.InputText = ""

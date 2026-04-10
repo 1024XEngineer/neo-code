@@ -126,6 +126,31 @@ func TestRunPermissionResolveCmd(t *testing.T) {
 	}
 }
 
+func TestRunResolvePermissionCmd(t *testing.T) {
+	resolver := &stubPermissionResolver{}
+	input := agentruntime.PermissionResolutionInput{
+		RequestID: "perm-2",
+		Decision:  agentruntime.PermissionResolutionReject,
+	}
+	msg := RunResolvePermissionCmd(
+		resolver,
+		input,
+		func(got agentruntime.PermissionResolutionInput, err error) tea.Msg {
+			if err != nil {
+				t.Fatalf("expected nil error, got %v", err)
+			}
+			return got
+		},
+	)()
+	resolved, ok := msg.(agentruntime.PermissionResolutionInput)
+	if !ok {
+		t.Fatalf("expected permission resolution input, got %T", msg)
+	}
+	if resolved.RequestID != "perm-2" || resolved.Decision != agentruntime.PermissionResolutionReject {
+		t.Fatalf("unexpected resolved input: %+v", resolved)
+	}
+}
+
 func TestProviderCmds(t *testing.T) {
 	svc := &stubProvider{
 		selection: config.ProviderSelection{ProviderID: "openai", ModelID: "gpt-5.4"},
