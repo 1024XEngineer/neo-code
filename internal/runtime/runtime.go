@@ -287,6 +287,8 @@ func (s *Service) Run(ctx context.Context, input UserInput) error {
 					s.resetSessionTokenTotals(&session)
 					autoCompacted = true
 				}
+				// Don't count the reactive-compact retry as a new reasoning turn.
+				attempt--
 				continue
 			}
 			return s.handleRunError(ctx, input.RunID, session.ID, err)

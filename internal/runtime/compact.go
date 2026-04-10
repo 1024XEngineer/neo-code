@@ -128,6 +128,11 @@ func (s *Service) runCompactForSession(
 
 	if result.Applied {
 		session.Messages = append([]providertypes.Message(nil), result.Messages...)
+		// Reset token totals now so the persisted session never carries stale high
+		// counts; if the follow-up provider call is canceled before its own save
+		// the next run will start from zero rather than immediately auto-compacting.
+		session.TokenInputTotal = 0
+		session.TokenOutputTotal = 0
 		session.UpdatedAt = time.Now()
 		if err := s.sessionStore.Save(ctx, &session); err != nil {
 			s.emit(ctx, EventCompactError, runID, session.ID, CompactErrorPayload{

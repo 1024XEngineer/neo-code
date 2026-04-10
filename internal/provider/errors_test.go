@@ -126,6 +126,12 @@ func TestNewProviderErrorFromStatus(t *testing.T) {
 	if err.Code != ErrorCodeContextTooLong {
 		t.Fatalf("expected code %q, got %q", ErrorCodeContextTooLong, err.Code)
 	}
+
+	// 429 with token-count message must stay rate_limited, not context_too_long.
+	err = NewProviderErrorFromStatus(429, "requested too many tokens for this minute")
+	if err.Code != ErrorCodeRateLimit {
+		t.Fatalf("429 with token-count message: expected code %q, got %q", ErrorCodeRateLimit, err.Code)
+	}
 }
 
 func TestNewNetworkProviderError(t *testing.T) {
@@ -210,6 +216,15 @@ func TestIsContextTooLong(t *testing.T) {
 		{
 			name: "non context error",
 			err:  errors.New("invalid api key"),
+			want: false,
+		},
+		{
+			name: "rate limited with token-count message is not context_too_long",
+			err: &ProviderError{
+				StatusCode: 429,
+				Code:       ErrorCodeRateLimit,
+				Message:    "requested too many tokens for this minute",
+			},
 			want: false,
 		},
 	}

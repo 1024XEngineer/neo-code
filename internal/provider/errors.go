@@ -91,7 +91,11 @@ func classifyStatus(statusCode int) ProviderErrorCode {
 // NewProviderErrorFromStatus 根据 HTTP 状态码和消息构造 ProviderError。
 func NewProviderErrorFromStatus(statusCode int, message string) *ProviderError {
 	code := classifyStatus(statusCode)
-	if matchesContextTooLong(message) {
+	// Only elevate to context_too_long for generic client errors (e.g. 400/413).
+	// Do not override specific classifications such as rate_limited (429) even if
+	// the message contains token-count fragments, which would mis-route throttling
+	// errors into the reactive-compact path.
+	if code == ErrorCodeClient && matchesContextTooLong(message) {
 		code = ErrorCodeContextTooLong
 	}
 	return &ProviderError{
@@ -124,6 +128,7 @@ func NewTimeoutProviderError(message string) *ProviderError {
 
 // IsContextTooLong 判断 provider 错误是否表示请求上下文超出模型窗口。
 // 优先识别 typed error，必要时再回退到消息文本匹配，兼容不同厂商或额外包装层。
+// 已被归类为 rate_limited (429) 的错误不会因文本片段而被误判为 context_too_long。
 func IsContextTooLong(err error) bool {
 	if err == nil {
 		return false
@@ -133,6 +138,12 @@ func IsContextTooLong(err error) bool {
 	if errors.As(err, &pErr) {
 		if pErr.Code == ErrorCodeContextTooLong {
 			return true
+		}
+		// Skip text fallback for errors that are already classified as a specific
+		// non-context error (e.g. rate_limited).  Token-count fragments in 429
+		// messages must not route the runtime into the reactive-compact path.
+		if pErr.Code == ErrorCodeRateLimit {
+			return false
 		}
 		if matchesContextTooLong(pErr.Message) {
 			return true
