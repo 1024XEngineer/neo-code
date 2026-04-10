@@ -196,6 +196,7 @@ func TestReadFileToolExecuteStopsOnEmitChunkError(t *testing.T) {
 	args := mustMarshalFSArgs(t, map[string]string{"path": "large.txt"})
 
 	emitCount := 0
+	consumerErr := errors.New("consumer closed")
 	result, err := tool.Execute(context.Background(), tools.ToolCallInput{
 		Name:      tool.Name(),
 		Arguments: args,
@@ -203,13 +204,16 @@ func TestReadFileToolExecuteStopsOnEmitChunkError(t *testing.T) {
 		EmitChunk: func(chunk []byte) error {
 			emitCount++
 			if emitCount == 1 {
-				return errors.New("consumer closed")
+				return consumerErr
 			}
 			return nil
 		},
 	})
-	if err == nil || !strings.Contains(err.Error(), "emit chunk failed") {
+	if err == nil || !errors.Is(err, errReadFileEmitChunkFailed) {
 		t.Fatalf("expected emit chunk failure, got %v", err)
+	}
+	if !errors.Is(err, consumerErr) {
+		t.Fatalf("expected wrapped consumer error, got %v", err)
 	}
 	if !result.IsError {
 		t.Fatalf("expected error result, got %+v", result)
@@ -232,6 +236,7 @@ func TestReadFileToolExecuteEmitsProgressBeforeChunkFailure(t *testing.T) {
 	args := mustMarshalFSArgs(t, map[string]string{"path": "large.txt"})
 
 	emitCount := 0
+	consumerErr := errors.New("consumer closed on second chunk")
 	result, err := tool.Execute(context.Background(), tools.ToolCallInput{
 		Name:      tool.Name(),
 		Arguments: args,
@@ -239,13 +244,16 @@ func TestReadFileToolExecuteEmitsProgressBeforeChunkFailure(t *testing.T) {
 		EmitChunk: func(chunk []byte) error {
 			emitCount++
 			if emitCount == 2 {
-				return errors.New("consumer closed on second chunk")
+				return consumerErr
 			}
 			return nil
 		},
 	})
-	if err == nil || !strings.Contains(err.Error(), "emit chunk failed") {
+	if err == nil || !errors.Is(err, errReadFileEmitChunkFailed) {
 		t.Fatalf("expected emit chunk failure, got %v", err)
+	}
+	if !errors.Is(err, consumerErr) {
+		t.Fatalf("expected wrapped consumer error, got %v", err)
 	}
 	if !result.IsError {
 		t.Fatalf("expected error result, got %+v", result)

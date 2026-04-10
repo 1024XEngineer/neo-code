@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -378,6 +379,138 @@ func TestExecuteToolCallWithPermissionReturnsContextCanceledFromEmitChunk(t *tes
 		SessionID: "session-canceled",
 		Call: providertypes.ToolCall{
 			ID:        "call-canceled",
+			Name:      "filesystem_read_file",
+			Arguments: `{"path":"README.md"}`,
+		},
+		ToolTimeout: time.Second,
+	})
+	if !errors.Is(execErr, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got %v", execErr)
+	}
+}
+
+type doneSignalContext struct {
+	context.Context
+	doneCalled chan struct{}
+	once       sync.Once
+}
+
+// Done 在 runtime.emit 进入阻塞发送分支时发出信号，便于测试精确控制取消时机。
+func (c *doneSignalContext) Done() <-chan struct{} {
+	c.once.Do(func() {
+		close(c.doneCalled)
+	})
+	return c.Context.Done()
+}
+
+func TestExecuteToolCallWithPermissionDoesNotRecheckContextAfterSuccessfulEmit(t *testing.T) {
+	t.Parallel()
+
+	var cancel context.CancelFunc
+	registry := tools.NewRegistry()
+	registry.Register(&stubTool{
+		name: "filesystem_read_file",
+		executeFn: func(_ context.Context, input tools.ToolCallInput) (tools.ToolResult, error) {
+			if input.EmitChunk == nil {
+				t.Fatalf("expected EmitChunk callback")
+			}
+			if err := input.EmitChunk([]byte("stream-chunk")); err != nil {
+				t.Fatalf("expected successful emit, got %v", err)
+			}
+			cancel()
+			return tools.ToolResult{Name: input.Name, Content: "ok"}, nil
+		},
+	})
+
+	engine, err := security.NewStaticGateway(security.DecisionAllow, nil)
+	if err != nil {
+		t.Fatalf("new static gateway: %v", err)
+	}
+	toolManager, err := tools.NewManager(registry, engine, nil)
+	if err != nil {
+		t.Fatalf("new tool manager: %v", err)
+	}
+
+	service := NewWithFactory(
+		newRuntimeConfigManager(t),
+		toolManager,
+		newMemoryStore(),
+		&scriptedProviderFactory{provider: &scriptedProvider{}},
+		nil,
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	service.events = make(chan RuntimeEvent, 1)
+
+	result, execErr := service.executeToolCallWithPermission(ctx, permissionExecutionInput{
+		RunID:     "run-successful-emit",
+		SessionID: "session-successful-emit",
+		Call: providertypes.ToolCall{
+			ID:        "call-successful-emit",
+			Name:      "filesystem_read_file",
+			Arguments: `{"path":"README.md"}`,
+		},
+		ToolTimeout: time.Second,
+	})
+	if execErr != nil {
+		t.Fatalf("expected nil error after successful emit, got %v", execErr)
+	}
+	if result.Content != "ok" {
+		t.Fatalf("expected successful tool result, got %+v", result)
+	}
+}
+
+func TestExecuteToolCallWithPermissionReturnsContextCanceledWhenChunkNotDelivered(t *testing.T) {
+	t.Parallel()
+
+	registry := tools.NewRegistry()
+	registry.Register(&stubTool{
+		name: "filesystem_read_file",
+		executeFn: func(_ context.Context, input tools.ToolCallInput) (tools.ToolResult, error) {
+			if input.EmitChunk == nil {
+				t.Fatalf("expected EmitChunk callback")
+			}
+			if err := input.EmitChunk([]byte("stream-chunk")); !errors.Is(err, context.Canceled) {
+				t.Fatalf("expected context.Canceled from emitter, got %v", err)
+			}
+			return tools.NewErrorResult(input.Name, "emit failed", "", nil), context.Canceled
+		},
+	})
+
+	engine, err := security.NewStaticGateway(security.DecisionAllow, nil)
+	if err != nil {
+		t.Fatalf("new static gateway: %v", err)
+	}
+	toolManager, err := tools.NewManager(registry, engine, nil)
+	if err != nil {
+		t.Fatalf("new tool manager: %v", err)
+	}
+
+	service := NewWithFactory(
+		newRuntimeConfigManager(t),
+		toolManager,
+		newMemoryStore(),
+		&scriptedProviderFactory{provider: &scriptedProvider{}},
+		nil,
+	)
+	service.events = make(chan RuntimeEvent, 1)
+	service.events <- RuntimeEvent{Type: EventAgentChunk}
+
+	baseCtx, cancel := context.WithCancel(context.Background())
+	ctx := &doneSignalContext{
+		Context:    baseCtx,
+		doneCalled: make(chan struct{}),
+	}
+	go func() {
+		<-ctx.doneCalled
+		cancel()
+	}()
+
+	_, execErr := service.executeToolCallWithPermission(ctx, permissionExecutionInput{
+		RunID:     "run-canceled-blocked",
+		SessionID: "session-canceled-blocked",
+		Call: providertypes.ToolCall{
+			ID:        "call-canceled-blocked",
 			Name:      "filesystem_read_file",
 			Arguments: `{"path":"README.md"}`,
 		},

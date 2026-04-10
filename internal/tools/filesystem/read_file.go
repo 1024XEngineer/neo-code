@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,6 +14,8 @@ import (
 )
 
 const emitChunkSize = 4 * 1024
+
+var errReadFileEmitChunkFailed = errors.New(readFileToolName + ": emit chunk failed")
 
 type ReadFileTool struct {
 	root string
@@ -107,7 +110,7 @@ func (t *ReadFileTool) Execute(ctx context.Context, input tools.ToolCallInput) (
 				end = len(content)
 			}
 			if emitErr := input.EmitChunk(content[start:end]); emitErr != nil {
-				err := errors.New(readFileToolName + ": emit chunk failed: " + emitErr.Error())
+				err := fmt.Errorf("%w: %w", errReadFileEmitChunkFailed, emitErr)
 				return tools.NewErrorResult(
 					t.Name(),
 					tools.NormalizeErrorReason(t.Name(), err),

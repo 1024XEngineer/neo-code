@@ -491,10 +491,10 @@ func (s *Service) loadOrCreateSession(
 	return session, nil
 }
 
-// emit 向事件通道发送事件。
+// emit 向事件通道发送事件，并在通道阻塞且上下文取消时返回对应错误。
 // 先尝试非阻塞发送，确保即使 context 已取消，只要通道有空间事件就能被投递；
-// 仅在通道已满时才通过 ctx.Done() 退出，避免 goroutine 泄漏。
-func (s *Service) emit(ctx context.Context, kind EventType, runID string, sessionID string, payload any) {
+// 仅在通道已满时才通过 ctx.Done() 退出，避免 goroutine 泄漏并向调用方反馈未投递状态。
+func (s *Service) emit(ctx context.Context, kind EventType, runID string, sessionID string, payload any) error {
 	evt := RuntimeEvent{
 		Type:      kind,
 		RunID:     runID,
@@ -503,12 +503,14 @@ func (s *Service) emit(ctx context.Context, kind EventType, runID string, sessio
 	}
 	select {
 	case s.events <- evt:
-		return
+		return nil
 	default:
 	}
 	select {
 	case s.events <- evt:
+		return nil
 	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 
