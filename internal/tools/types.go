@@ -26,11 +26,13 @@ type Tool interface {
 type ChunkEmitter func(chunk []byte) error
 
 type ToolCallInput struct {
-	ID            string
-	Name          string
-	Arguments     []byte
-	SessionID     string
-	Workdir       string
+	ID        string
+	Name      string
+	Arguments []byte
+	SessionID string
+	Workdir   string
+	// WorkspacePlan 为沙箱层生成的执行计划；为 nil 时表示当前调用未绑定工作区沙箱，
+	// 工具只能依赖自身的路径解析与校验逻辑，不应被解释为“已经通过沙箱放行”。
 	WorkspacePlan *security.WorkspaceExecutionPlan
 	// EmitChunk 为流式分片回调，语义见 ChunkEmitter 注释。
 	EmitChunk ChunkEmitter

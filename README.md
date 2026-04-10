@@ -126,6 +126,7 @@ go run ./cmd/neocode
 ## 文档
 
 - **[配置指南](docs/guides/configuration.md)** — Provider 策略、配置文件、环境变量
+- **[架构说明](docs/architecture/README.md)** — 当前主链路、模块边界与预留扩展面
 - **[扩展 Provider](docs/guides/adding-providers.md)** — 如何添加新的模型提供商
 - **[架构设计](docs/neocode-coding-agent-mvp-architecture.md)** — 整体架构与设计理念
 - **[事件流](docs/runtime-provider-event-flow.md)** — Runtime 与 Provider 的事件交互
