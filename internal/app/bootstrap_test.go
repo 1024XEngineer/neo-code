@@ -608,6 +608,37 @@ func TestBuildRuntimeUsesWorkdirOverride(t *testing.T) {
 	}
 }
 
+func TestBuildRuntimeTracksWorkspaceRootAcrossNestedOverride(t *testing.T) {
+	disableBuiltinProviderAPIKeys(t)
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	repoRoot := filepath.Join(t.TempDir(), "repo")
+	nested := filepath.Join(repoRoot, "pkg", "nested")
+	if err := os.MkdirAll(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
+		t.Fatalf("mkdir git marker: %v", err)
+	}
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatalf("mkdir nested: %v", err)
+	}
+
+	bundle, err := BuildRuntime(context.Background(), BootstrapOptions{Workdir: nested})
+	if err != nil {
+		t.Fatalf("BuildRuntime() error = %v", err)
+	}
+	if bundle.Workdir != nested {
+		t.Fatalf("expected workdir %q, got %q", nested, bundle.Workdir)
+	}
+	if bundle.WorkspaceRoot != repoRoot {
+		t.Fatalf("expected workspace root %q, got %q", repoRoot, bundle.WorkspaceRoot)
+	}
+	if bundle.ConfigManager.Get().Workdir != nested {
+		t.Fatalf("expected config manager workdir %q, got %q", nested, bundle.ConfigManager.Get().Workdir)
+	}
+}
+
 func TestBuildRuntimeRejectsInvalidWorkdirOverride(t *testing.T) {
 	disableBuiltinProviderAPIKeys(t)
 

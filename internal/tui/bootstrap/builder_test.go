@@ -84,6 +84,43 @@ func TestBuild(t *testing.T) {
 		if container.ConfigManager != manager {
 			t.Error("expected ConfigManager to be set")
 		}
+		if container.WorkspaceRoot != container.Config.Workdir {
+			t.Fatalf("expected workspace root to default to config workdir %q, got %q", container.Config.Workdir, container.WorkspaceRoot)
+		}
+		if container.Workdir != container.Config.Workdir {
+			t.Fatalf("expected workdir to default to config workdir %q, got %q", container.Config.Workdir, container.Workdir)
+		}
+	})
+
+	t.Run("preserves explicit workspace binding", func(t *testing.T) {
+		manager := &config.Manager{}
+		runtime := &testRuntime{}
+		providerSvc := &testProviderService{}
+		rebuild := func(ctx context.Context, requestedPath string) (WorkspaceBinding, error) {
+			return WorkspaceBinding{}, nil
+		}
+
+		container, err := Build(Options{
+			Config:           &config.Config{Workdir: "/config"},
+			ConfigManager:    manager,
+			Runtime:          runtime,
+			ProviderService:  providerSvc,
+			WorkspaceRoot:    "/workspace-root",
+			Workdir:          "/workspace-root/subdir",
+			RebuildWorkspace: rebuild,
+		})
+		if err != nil {
+			t.Fatalf("Build() error = %v", err)
+		}
+		if container.WorkspaceRoot != "/workspace-root" {
+			t.Fatalf("expected workspace root to be preserved, got %q", container.WorkspaceRoot)
+		}
+		if container.Workdir != "/workspace-root/subdir" {
+			t.Fatalf("expected workdir to be preserved, got %q", container.Workdir)
+		}
+		if container.RebuildWorkspace == nil {
+			t.Fatalf("expected rebuild func to be preserved")
+		}
 	})
 
 	t.Run("nil config manager", func(t *testing.T) {

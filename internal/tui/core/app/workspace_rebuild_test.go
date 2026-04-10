@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -151,6 +152,42 @@ func TestSessionWorkdirResultBlocksCrossWorkspaceWhileBusy(t *testing.T) {
 	}
 }
 
+func TestSessionWorkdirResultRequiresConfiguredRebuild(t *testing.T) {
+	app := newPermissionTestApp(&permissionTestRuntime{})
+
+	model, _ := app.Update(sessionWorkdirResultMsg{
+		Notice:          "[System] Workspace switched to /tmp/other.",
+		Workdir:         t.TempDir(),
+		RequiresRebuild: true,
+	})
+	next := model.(App)
+	if next.state.ExecutionError == "" {
+		t.Fatalf("expected rebuild configuration error")
+	}
+}
+
+func TestRunWorkspaceRebuildReturnsFinishedMsg(t *testing.T) {
+	wantPath := t.TempDir()
+	cmd := runWorkspaceRebuild(func(ctx context.Context, requestedPath string) (tuibootstrap.WorkspaceBinding, error) {
+		if requestedPath != wantPath {
+			t.Fatalf("expected requested path %q, got %q", wantPath, requestedPath)
+		}
+		return tuibootstrap.WorkspaceBinding{Workdir: requestedPath}, nil
+	}, "notice", wantPath)
+
+	msg := cmd()
+	finished, ok := msg.(workspaceRebuildFinishedMsg)
+	if !ok {
+		t.Fatalf("expected workspaceRebuildFinishedMsg, got %T", msg)
+	}
+	if finished.Notice != "notice" {
+		t.Fatalf("unexpected notice: %+v", finished)
+	}
+	if finished.Binding.Workdir != wantPath {
+		t.Fatalf("expected binding workdir %q, got %q", wantPath, finished.Binding.Workdir)
+	}
+}
+
 func TestWorkspaceRebuildFinishedResetsToFreshDraft(t *testing.T) {
 	oldRoot := t.TempDir()
 	newRoot := t.TempDir()
@@ -192,5 +229,38 @@ func TestWorkspaceRebuildFinishedResetsToFreshDraft(t *testing.T) {
 	}
 	if next.state.InputText != "" {
 		t.Fatalf("expected draft input to be cleared, got %q", next.state.InputText)
+	}
+}
+
+func TestWorkspaceRebuildFinishedReportsRebuildError(t *testing.T) {
+	app := newPermissionTestApp(&permissionTestRuntime{})
+
+	model, _ := app.Update(workspaceRebuildFinishedMsg{Err: errors.New("rebuild failed")})
+	next := model.(App)
+	if next.state.ExecutionError != "rebuild failed" {
+		t.Fatalf("expected rebuild error to surface, got %q", next.state.ExecutionError)
+	}
+}
+
+func TestApplyWorkspaceBindingValidatesDependencies(t *testing.T) {
+	app := newPermissionTestApp(&permissionTestRuntime{})
+	manager := newWorkspaceConfigManager(t, t.TempDir())
+	provider := &workspaceTestProvider{}
+	runtime := &workspaceTestRuntime{}
+
+	if err := app.applyWorkspaceBinding(tuibootstrap.WorkspaceBinding{}); err == nil {
+		t.Fatalf("expected config manager validation error")
+	}
+	if err := app.applyWorkspaceBinding(tuibootstrap.WorkspaceBinding{
+		ConfigManager:   manager,
+		ProviderService: provider,
+	}); err == nil {
+		t.Fatalf("expected runtime validation error")
+	}
+	if err := app.applyWorkspaceBinding(tuibootstrap.WorkspaceBinding{
+		ConfigManager: manager,
+		Runtime:       runtime,
+	}); err == nil {
+		t.Fatalf("expected provider validation error")
 	}
 }

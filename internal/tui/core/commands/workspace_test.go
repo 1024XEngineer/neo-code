@@ -129,6 +129,22 @@ func TestExecuteSessionWorkdirCommand(t *testing.T) {
 			t.Fatalf("expected rebuild request")
 		}
 	})
+
+	t.Run("active session cross workspace requests rebuild without updating runtime", func(t *testing.T) {
+		current := t.TempDir()
+		other := t.TempDir()
+		stub := &stubSessionWorkdirSetter{}
+		result := ExecuteSessionWorkdirCommand(stub, "session-1", current, current, "/cwd "+other, parse, agentworkspace.ResolveFrom, tuiworkspace.SelectSessionWorkdir)
+		if result.Err != nil {
+			t.Fatalf("unexpected error: %v", result.Err)
+		}
+		if !result.RequiresRebuild {
+			t.Fatalf("expected rebuild request")
+		}
+		if stub.calls != 0 {
+			t.Fatalf("expected runtime not to be updated on cross-workspace switch, got %d calls", stub.calls)
+		}
+	})
 }
 
 func ensureDir(path string) error {

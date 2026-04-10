@@ -3,6 +3,7 @@ package bootstrap
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"neo-code/internal/config"
 	agentruntime "neo-code/internal/runtime"
@@ -69,6 +70,14 @@ func Build(options Options) (Container, error) {
 
 	mode := NormalizeMode(options.Mode)
 	cfg := resolveConfigSnapshot(options.Config, options.ConfigManager)
+	workspaceRoot := strings.TrimSpace(options.WorkspaceRoot)
+	if workspaceRoot == "" {
+		workspaceRoot = strings.TrimSpace(cfg.Workdir)
+	}
+	workdir := strings.TrimSpace(options.Workdir)
+	if workdir == "" {
+		workdir = strings.TrimSpace(cfg.Workdir)
+	}
 
 	factory := options.Factory
 	if factory == nil {
@@ -96,8 +105,8 @@ func Build(options Options) (Container, error) {
 		ConfigManager:    options.ConfigManager,
 		Runtime:          runtimeSvc,
 		ProviderService:  providerSvc,
-		WorkspaceRoot:    options.WorkspaceRoot,
-		Workdir:          options.Workdir,
+		WorkspaceRoot:    workspaceRoot,
+		Workdir:          workdir,
 		RebuildWorkspace: options.RebuildWorkspace,
 		Mode:             mode,
 	}, nil

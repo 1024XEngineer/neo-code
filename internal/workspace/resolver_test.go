@@ -48,6 +48,41 @@ func TestResolveFromFallsBackToTargetDirectoryOutsideGit(t *testing.T) {
 	}
 }
 
+func TestResolveUsesCurrentDirectoryWhenBaseAndPathAreEmpty(t *testing.T) {
+	previous, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+
+	repoRoot := t.TempDir()
+	nested := filepath.Join(repoRoot, "nested")
+	if err := os.MkdirAll(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
+		t.Fatalf("mkdir git marker: %v", err)
+	}
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatalf("mkdir nested: %v", err)
+	}
+	if err := os.Chdir(nested); err != nil {
+		t.Fatalf("chdir nested: %v", err)
+	}
+	t.Cleanup(func() {
+		if chdirErr := os.Chdir(previous); chdirErr != nil {
+			t.Fatalf("restore cwd: %v", chdirErr)
+		}
+	})
+
+	resolved, err := Resolve("")
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if resolved.Workdir != nested {
+		t.Fatalf("expected workdir %q, got %q", nested, resolved.Workdir)
+	}
+	if resolved.WorkspaceRoot != repoRoot {
+		t.Fatalf("expected workspace root %q, got %q", repoRoot, resolved.WorkspaceRoot)
+	}
+}
+
 func TestResolveRejectsInvalidTargets(t *testing.T) {
 	base := t.TempDir()
 	filePath := filepath.Join(base, "note.txt")
@@ -70,5 +105,8 @@ func TestSameRoot(t *testing.T) {
 	}
 	if SameRoot(root, filepath.Join(root, "child")) {
 		t.Fatalf("expected different roots")
+	}
+	if SameRoot("", root) {
+		t.Fatalf("expected empty root to never match")
 	}
 }
