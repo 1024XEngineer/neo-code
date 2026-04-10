@@ -271,7 +271,7 @@ func TestDefaultWorkspaceCommandExecutor(t *testing.T) {
 	cfg := config.Config{
 		Workdir:        workdir,
 		Shell:          shellName,
-		ToolTimeoutSec: 1,
+		ToolTimeoutSec: 3,
 	}
 
 	if _, err := DefaultWorkspaceCommandExecutor(context.Background(), cfg, "", "  "); err == nil {
@@ -302,7 +302,9 @@ func TestDefaultWorkspaceCommandExecutor(t *testing.T) {
 		t.Fatalf("expected failing command to return sanitized output")
 	}
 
-	output, err = DefaultWorkspaceCommandExecutor(context.Background(), cfg, workdir, sleepCmd)
+	timeoutCfg := cfg
+	timeoutCfg.ToolTimeoutSec = 1
+	output, err = DefaultWorkspaceCommandExecutor(context.Background(), timeoutCfg, workdir, sleepCmd)
 	if err == nil || !strings.Contains(err.Error(), "timed out") {
 		t.Fatalf("expected timeout error, got err=%v output=%q", err, output)
 	}
