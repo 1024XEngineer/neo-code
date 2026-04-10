@@ -22,6 +22,16 @@ import (
 	"neo-code/internal/tools/mcp"
 )
 
+func replaceRegisterMCPStdioServerHook(t *testing.T, fn registerMCPStdioServerFunc) {
+	t.Helper()
+
+	original := registerMCPStdioServerHook.Load().(registerMCPStdioServerFunc)
+	registerMCPStdioServerHook.Store(fn)
+	t.Cleanup(func() {
+		registerMCPStdioServerHook.Store(original)
+	})
+}
+
 func TestNewProgram(t *testing.T) {
 	disableBuiltinProviderAPIKeys(t)
 
@@ -142,14 +152,12 @@ func TestBuildMCPRegistryFromConfig(t *testing.T) {
 		},
 	}
 
-	originalRegister := registerMCPStdioServer
-	t.Cleanup(func() { registerMCPStdioServer = originalRegister })
-	registerMCPStdioServer = func(registry *mcp.Registry, cfg config.Config, server config.MCPServerConfig) error {
+	replaceRegisterMCPStdioServerHook(t, func(registry *mcp.Registry, cfg config.Config, server config.MCPServerConfig) error {
 		if err := registry.RegisterServer(server.ID, "stdio", server.Version, stubClient); err != nil {
 			return err
 		}
 		return registry.RefreshServerTools(context.Background(), server.ID)
-	}
+	})
 
 	registry, err := buildMCPRegistry(cfg)
 	if err != nil {
@@ -292,9 +300,7 @@ func TestBuildToolRegistryIncludesMCPFromConfig(t *testing.T) {
 		},
 	}
 
-	originalRegister := registerMCPStdioServer
-	t.Cleanup(func() { registerMCPStdioServer = originalRegister })
-	registerMCPStdioServer = func(registry *mcp.Registry, cfg config.Config, server config.MCPServerConfig) error {
+	replaceRegisterMCPStdioServerHook(t, func(registry *mcp.Registry, cfg config.Config, server config.MCPServerConfig) error {
 		client := &stubMCPServerClient{
 			tools: []mcp.ToolDescriptor{
 				{Name: "search", Description: "search docs", InputSchema: map[string]any{"type": "object"}},
@@ -304,7 +310,7 @@ func TestBuildToolRegistryIncludesMCPFromConfig(t *testing.T) {
 			return err
 		}
 		return registry.RefreshServerTools(context.Background(), server.ID)
-	}
+	})
 
 	registry, err := buildToolRegistry(cfg, cfg.Workdir)
 	if err != nil {
@@ -444,11 +450,9 @@ func TestBuildMCPRegistryRegisterError(t *testing.T) {
 		{ID: "docs", Enabled: true, Source: "stdio"},
 	}
 
-	originalRegister := registerMCPStdioServer
-	t.Cleanup(func() { registerMCPStdioServer = originalRegister })
-	registerMCPStdioServer = func(registry *mcp.Registry, cfg config.Config, server config.MCPServerConfig) error {
+	replaceRegisterMCPStdioServerHook(t, func(registry *mcp.Registry, cfg config.Config, server config.MCPServerConfig) error {
 		return errors.New("register failed")
-	}
+	})
 
 	_, err := buildMCPRegistry(cfg)
 	if err == nil || !strings.Contains(err.Error(), "register failed") {
@@ -471,9 +475,7 @@ func TestBuildMCPRegistryRollbackRegisteredServersOnFailure(t *testing.T) {
 		"search": new(bool),
 	}
 
-	originalRegister := registerMCPStdioServer
-	t.Cleanup(func() { registerMCPStdioServer = originalRegister })
-	registerMCPStdioServer = func(registry *mcp.Registry, cfg config.Config, server config.MCPServerConfig) error {
+	replaceRegisterMCPStdioServerHook(t, func(registry *mcp.Registry, cfg config.Config, server config.MCPServerConfig) error {
 		client := &closeableStubMCPServerClient{closed: closedByServer[strings.TrimSpace(server.ID)]}
 		if err := registry.RegisterServer(server.ID, "stdio", server.Version, client); err != nil {
 			return err
@@ -482,7 +484,7 @@ func TestBuildMCPRegistryRollbackRegisteredServersOnFailure(t *testing.T) {
 			return errors.New("search register failed")
 		}
 		return nil
-	}
+	})
 
 	registry, err := buildMCPRegistry(cfg)
 	if err == nil || !strings.Contains(err.Error(), "search register failed") {

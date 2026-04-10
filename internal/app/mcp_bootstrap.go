@@ -6,14 +6,33 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"neo-code/internal/config"
 	"neo-code/internal/tools/mcp"
 )
 
-var newMCPStdioClient = mcp.NewStdIOClient
-var registerMCPStdioServer = defaultRegisterMCPStdioServer
+type newMCPStdioClientFunc func(cfg mcp.StdioClientConfig) (*mcp.StdIOClient, error)
+type registerMCPStdioServerFunc func(registry *mcp.Registry, cfg config.Config, server config.MCPServerConfig) error
+
+var newMCPStdioClientHook atomic.Value
+var registerMCPStdioServerHook atomic.Value
+
+func init() {
+	newMCPStdioClientHook.Store(newMCPStdioClientFunc(mcp.NewStdIOClient))
+	registerMCPStdioServerHook.Store(registerMCPStdioServerFunc(defaultRegisterMCPStdioServer))
+}
+
+// currentNewMCPStdioClient 返回当前用于创建 stdio client 的 hook，便于测试安全替换。
+func currentNewMCPStdioClient() newMCPStdioClientFunc {
+	return newMCPStdioClientHook.Load().(newMCPStdioClientFunc)
+}
+
+// currentRegisterMCPStdioServer 返回当前用于注册 stdio server 的 hook，避免并行测试共享裸全局函数。
+func currentRegisterMCPStdioServer() registerMCPStdioServerFunc {
+	return registerMCPStdioServerHook.Load().(registerMCPStdioServerFunc)
+}
 
 // buildMCPRegistry 按配置构建并初始化 MCP registry；若无启用 server 则返回 nil。
 func buildMCPRegistry(cfg config.Config) (*mcp.Registry, error) {
@@ -33,7 +52,7 @@ func buildMCPRegistry(cfg config.Config) (*mcp.Registry, error) {
 
 		switch strings.ToLower(strings.TrimSpace(server.Source)) {
 		case "", "stdio":
-			if err := registerMCPStdioServer(registry, cfg, server); err != nil {
+			if err := currentRegisterMCPStdioServer()(registry, cfg, server); err != nil {
 				rollbackMCPServers(registry, append(registeredServerIDs, strings.TrimSpace(server.ID)))
 				return nil, fmt.Errorf("app: register mcp server %q: %w", strings.TrimSpace(server.ID), err)
 			}
@@ -68,7 +87,7 @@ func defaultRegisterMCPStdioServer(registry *mcp.Registry, cfg config.Config, se
 	}
 
 	workdir := resolveMCPServerWorkdir(cfg.Workdir, server.Stdio.Workdir)
-	client, err := newMCPStdioClient(mcp.StdioClientConfig{
+	client, err := currentNewMCPStdioClient()(mcp.StdioClientConfig{
 		Command:        strings.TrimSpace(server.Stdio.Command),
 		Args:           append([]string(nil), server.Stdio.Args...),
 		Env:            env,
