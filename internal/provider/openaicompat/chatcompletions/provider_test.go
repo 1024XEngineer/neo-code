@@ -1,0 +1,617 @@
+package chatcompletions
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"neo-code/internal/provider"
+	providertypes "neo-code/internal/provider/types"
+)
+
+func TestNewAndBuildRequest(t *testing.T) {
+	t.Parallel()
+
+	t.Run("new validation", func(t *testing.T) {
+		t.Parallel()
+
+		if _, err := New(testCfg("", "gpt-4.1", "test-key"), &http.Client{}); err == nil || !strings.Contains(err.Error(), "base url is empty") {
+			t.Fatalf("expected base url error, got %v", err)
+		}
+		if _, err := New(testCfg("https://api.example.com/v1", "gpt-4.1", ""), &http.Client{}); err == nil || !strings.Contains(err.Error(), "api key is empty") {
+			t.Fatalf("expected api key error, got %v", err)
+		}
+		if _, err := New(testCfg("https://api.example.com/v1", "gpt-4.1", "test-key"), nil); err == nil || !strings.Contains(err.Error(), "client is nil") {
+			t.Fatalf("expected nil client error, got %v", err)
+		}
+	})
+
+	t.Run("build request variants", func(t *testing.T) {
+		t.Parallel()
+
+		if _, err := BuildRequest(testCfg("https://api.example.com/v1", "", "test-key"), providertypes.GenerateRequest{}); err == nil || !strings.Contains(err.Error(), "model is empty") {
+			t.Fatalf("expected model error, got %v", err)
+		}
+
+		payload, err := BuildRequest(testCfg("https://api.example.com/v1", "gpt-4.1", "test-key"), providertypes.GenerateRequest{
+			Model:        "gpt-5.4",
+			SystemPrompt: "system",
+			Messages: []providertypes.Message{
+				{Role: providertypes.RoleUser, Content: "hello"},
+				{Role: providertypes.RoleAssistant, ToolCalls: []providertypes.ToolCall{{ID: "call_1", Name: "filesystem_edit", Arguments: `{"path":"main.go"}`}}},
+				{Role: providertypes.RoleTool, ToolCallID: "call_1", Content: "done"},
+			},
+			Tools: []providertypes.ToolSpec{{Name: "filesystem_edit", Description: "Edit file", Schema: map[string]any{"type": "object"}}},
+		})
+		if err != nil {
+			t.Fatalf("BuildRequest() error = %v", err)
+		}
+		if payload.Model != "gpt-5.4" || !payload.Stream || payload.ToolChoice != "auto" {
+			t.Fatalf("unexpected payload: %+v", payload)
+		}
+		if len(payload.Messages) != 4 || payload.Messages[0].Role != providertypes.RoleSystem {
+			t.Fatalf("unexpected messages: %+v", payload.Messages)
+		}
+		if len(payload.Tools) != 1 || payload.Tools[0].Function.Name != "filesystem_edit" {
+			t.Fatalf("unexpected tools: %+v", payload.Tools)
+		}
+
+		fallback, err := BuildRequest(testCfg("https://api.example.com/v1", "gpt-4.1", "test-key"), providertypes.GenerateRequest{
+			SystemPrompt: "   ",
+			Messages:     []providertypes.Message{{Role: providertypes.RoleUser, Content: "hello"}},
+			Tools:        []providertypes.ToolSpec{},
+		})
+		if err != nil {
+			t.Fatalf("BuildRequest() fallback error = %v", err)
+		}
+		if fallback.Model != "gpt-4.1" || len(fallback.Messages) != 1 || len(fallback.Tools) != 0 || fallback.ToolChoice != "" {
+			t.Fatalf("unexpected fallback payload: %+v", fallback)
+		}
+	})
+
+	t.Run("message conversion", func(t *testing.T) {
+		t.Parallel()
+
+		user := ToOpenAIMessage(providertypes.Message{Role: providertypes.RoleUser, Content: "hello"})
+		if user.Role != providertypes.RoleUser || user.Content != "hello" || len(user.ToolCalls) != 0 {
+			t.Fatalf("unexpected user message: %+v", user)
+		}
+
+		assistant := ToOpenAIMessage(providertypes.Message{
+			Role: providertypes.RoleAssistant,
+			ToolCalls: []providertypes.ToolCall{
+				{ID: "call_1", Name: "read_file", Arguments: `{"path":"main.go"}`},
+			},
+		})
+		if len(assistant.ToolCalls) != 1 || assistant.ToolCalls[0].Type != "function" || assistant.ToolCalls[0].Function.Name != "read_file" {
+			t.Fatalf("unexpected assistant message: %+v", assistant)
+		}
+
+		tool := ToOpenAIMessage(providertypes.Message{Role: providertypes.RoleTool, ToolCallID: "call_1", Content: "result"})
+		if tool.Role != providertypes.RoleTool || tool.ToolCallID != "call_1" {
+			t.Fatalf("unexpected tool message: %+v", tool)
+		}
+	})
+}
+
+func TestParseErrorVariants(t *testing.T) {
+	t.Parallel()
+
+	if err := ParseError(&http.Response{
+		Status:     "400 Bad Request",
+		StatusCode: http.StatusBadRequest,
+		Body:       &failingReadCloser{err: errors.New("broken body")},
+	}); err == nil || !strings.Contains(err.Error(), "read error response") {
+		t.Fatalf("expected body read error, got %v", err)
+	}
+
+	if err := ParseError(&http.Response{
+		Status:     "401 Unauthorized",
+		StatusCode: http.StatusUnauthorized,
+		Body:       ioNopCloser(`{"error":{"message":"invalid api key"}}`),
+	}); err == nil || !strings.Contains(err.Error(), "invalid api key") {
+		t.Fatalf("expected json error payload, got %v", err)
+	}
+
+	if err := ParseError(&http.Response{
+		Status:     "502 Bad Gateway",
+		StatusCode: http.StatusBadGateway,
+		Body:       ioNopCloser("gateway timeout"),
+	}); err == nil || !strings.Contains(err.Error(), "gateway timeout") {
+		t.Fatalf("expected plain text fallback, got %v", err)
+	}
+
+	if err := ParseError(&http.Response{
+		Status:     "500 Internal Server Error",
+		StatusCode: http.StatusInternalServerError,
+		Body:       ioNopCloser("   "),
+	}); err == nil || !strings.Contains(err.Error(), "500 Internal Server Error") {
+		t.Fatalf("expected status fallback, got %v", err)
+	}
+
+	contextErr := ParseError(&http.Response{
+		Status:     "400 Bad Request",
+		StatusCode: http.StatusBadRequest,
+		Body: ioNopCloser(
+			`{"error":{"message":"This model's maximum context length is 128000 tokens. However, your messages resulted in 140000 tokens."}}`,
+		),
+	})
+	if contextErr == nil || !provider.IsContextTooLong(contextErr) {
+		t.Fatalf("expected context-too-long classification, got %v", contextErr)
+	}
+}
+
+func TestEmitFlushMergeAndUsage(t *testing.T) {
+	t.Parallel()
+
+	if err := EmitTextDelta(context.Background(), nil, "hello"); err != nil {
+		t.Fatalf("nil channel guard failed: %v", err)
+	}
+
+	events := make(chan providertypes.StreamEvent, 8)
+	if err := EmitTextDelta(context.Background(), events, ""); err != nil {
+		t.Fatalf("empty text guard failed: %v", err)
+	}
+	select {
+	case evt := <-events:
+		t.Fatalf("expected no event for empty text, got %+v", evt)
+	default:
+	}
+
+	if err := EmitTextDelta(context.Background(), events, "chunk"); err != nil {
+		t.Fatalf("EmitTextDelta() error = %v", err)
+	}
+	if got := mustText(t, <-events); got.Text != "chunk" {
+		t.Fatalf("unexpected text payload: %+v", got)
+	}
+
+	if err := EmitToolCallStart(context.Background(), events, 1, "call_1", "filesystem_edit"); err != nil {
+		t.Fatalf("EmitToolCallStart() error = %v", err)
+	}
+	if got := mustStart(t, <-events); got.Index != 1 || got.ID != "call_1" || got.Name != "filesystem_edit" {
+		t.Fatalf("unexpected start payload: %+v", got)
+	}
+
+	if err := EmitToolCallDelta(context.Background(), events, 1, "call_1", "{}"); err != nil {
+		t.Fatalf("EmitToolCallDelta() error = %v", err)
+	}
+	if got := mustDelta(t, <-events); got.ID != "call_1" || got.ArgumentsDelta != "{}" {
+		t.Fatalf("unexpected delta payload: %+v", got)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := EmitTextDelta(ctx, make(chan providertypes.StreamEvent), "x"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected canceled text emit, got %v", err)
+	}
+	if err := EmitToolCallStart(ctx, make(chan providertypes.StreamEvent), 0, "call_1", "tool"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected canceled start emit, got %v", err)
+	}
+	if err := EmitToolCallDelta(ctx, make(chan providertypes.StreamEvent), 0, "call_1", "{}"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected canceled delta emit, got %v", err)
+	}
+
+	doneEvents := make(chan providertypes.StreamEvent, 1)
+	if err := EmitMessageDone(ctx, doneEvents, "stop", &providertypes.Usage{TotalTokens: 10}); err != nil {
+		t.Fatalf("expected canceled message_done fallback, got %v", err)
+	}
+	if got := mustDone(t, <-doneEvents); got.FinishReason != "stop" || got.Usage == nil || got.Usage.TotalTokens != 10 {
+		t.Fatalf("unexpected message_done payload: %+v", got)
+	}
+	if err := EmitMessageDone(ctx, make(chan providertypes.StreamEvent), "stop", &providertypes.Usage{}); err != nil {
+		t.Fatalf("expected non-blocking drop on canceled context, got %v", err)
+	}
+
+	var flushed []string
+	if err := FlushDataLines([]string{"a", "b"}, func(line string) error {
+		flushed = append(flushed, line)
+		return nil
+	}); err != nil || strings.Join(flushed, ",") != "a,b" {
+		t.Fatalf("unexpected flush result: lines=%v err=%v", flushed, err)
+	}
+	flushErr := errors.New("flush failed")
+	if err := FlushDataLines([]string{"x"}, func(string) error { return flushErr }); !errors.Is(err, flushErr) {
+		t.Fatalf("expected flush error, got %v", err)
+	}
+
+	toolCalls := map[int]*providertypes.ToolCall{}
+	if err := MergeToolCallDelta(context.Background(), events, toolCalls, ToolCallDelta{Index: 0, ID: "call_0"}); err != nil {
+		t.Fatalf("MergeToolCallDelta() id-only error = %v", err)
+	}
+	select {
+	case evt := <-events:
+		t.Fatalf("expected no event for id-only delta, got %+v", evt)
+	default:
+	}
+	if err := MergeToolCallDelta(context.Background(), events, toolCalls, ToolCallDelta{
+		Index:    0,
+		Function: FunctionCall{Name: "filesystem_edit", Arguments: `{"path":"main.go"}`},
+	}); err != nil {
+		t.Fatalf("MergeToolCallDelta() name error = %v", err)
+	}
+	if err := MergeToolCallDelta(context.Background(), events, toolCalls, ToolCallDelta{
+		Index:    0,
+		Function: FunctionCall{Arguments: `,"replace":"new"}`},
+	}); err != nil {
+		t.Fatalf("MergeToolCallDelta() args error = %v", err)
+	}
+	if mustStart(t, <-events).Name != "filesystem_edit" {
+		t.Fatal("expected tool_call_start after name arrival")
+	}
+	if mustDelta(t, <-events).ArgumentsDelta != `{"path":"main.go"}` {
+		t.Fatal("expected first tool call delta")
+	}
+	if mustDelta(t, <-events).ArgumentsDelta != `,"replace":"new"}` {
+		t.Fatal("expected second tool call delta")
+	}
+	if toolCalls[0].Arguments != `{"path":"main.go"},"replace":"new"}` {
+		t.Fatalf("unexpected accumulated tool call: %+v", toolCalls[0])
+	}
+
+	if err := MergeToolCallDelta(ctx, make(chan providertypes.StreamEvent), map[int]*providertypes.ToolCall{}, ToolCallDelta{
+		Index:    1,
+		Function: FunctionCall{Name: "filesystem_edit"},
+	}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected canceled merge, got %v", err)
+	}
+
+	var usage providertypes.Usage
+	ExtractStreamUsage(&usage, nil)
+	ExtractStreamUsage(&usage, &Usage{PromptTokens: 10, CompletionTokens: 5, TotalTokens: 15})
+	if usage.InputTokens != 10 || usage.OutputTokens != 5 || usage.TotalTokens != 15 {
+		t.Fatalf("unexpected usage mapping: %+v", usage)
+	}
+}
+
+func testCfg(baseURL, model, apiKey string) provider.RuntimeConfig {
+	return provider.RuntimeConfig{
+		Name:         "openaicompat",
+		Driver:       "openaicompat",
+		BaseURL:      baseURL,
+		DefaultModel: model,
+		APIKey:       apiKey,
+	}
+}
+
+func mustProvider(t *testing.T) *Provider {
+	t.Helper()
+	p, err := New(testCfg("https://api.example.com/v1", "gpt-4.1", "test-key"), &http.Client{})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	return p
+}
+
+func mustText(t *testing.T, evt providertypes.StreamEvent) providertypes.TextDeltaPayload {
+	t.Helper()
+	payload, err := evt.TextDeltaValue()
+	if err != nil {
+		t.Fatalf("TextDeltaValue() error = %v", err)
+	}
+	return payload
+}
+
+func mustStart(t *testing.T, evt providertypes.StreamEvent) providertypes.ToolCallStartPayload {
+	t.Helper()
+	payload, err := evt.ToolCallStartValue()
+	if err != nil {
+		t.Fatalf("ToolCallStartValue() error = %v", err)
+	}
+	return payload
+}
+
+func mustDelta(t *testing.T, evt providertypes.StreamEvent) providertypes.ToolCallDeltaPayload {
+	t.Helper()
+	payload, err := evt.ToolCallDeltaValue()
+	if err != nil {
+		t.Fatalf("ToolCallDeltaValue() error = %v", err)
+	}
+	return payload
+}
+
+func mustDone(t *testing.T, evt providertypes.StreamEvent) providertypes.MessageDonePayload {
+	t.Helper()
+	payload, err := evt.MessageDoneValue()
+	if err != nil {
+		t.Fatalf("MessageDoneValue() error = %v", err)
+	}
+	return payload
+}
+
+func ioNopCloser(body string) io.ReadCloser { return &readCloser{Reader: strings.NewReader(body)} }
+
+type readCloser struct{ *strings.Reader }
+
+func (r *readCloser) Close() error { return nil }
+
+type failingReadCloser struct{ err error }
+
+func (f *failingReadCloser) Read(_ []byte) (int, error) { return 0, f.err }
+func (f *failingReadCloser) Close() error               { return f.err }
+
+func TestConsumeStreamVariants(t *testing.T) {
+	t.Parallel()
+
+	t.Run("comment and done", func(t *testing.T) {
+		t.Parallel()
+
+		events := make(chan providertypes.StreamEvent, 4)
+		err := mustProvider(t).ConsumeStream(context.Background(), strings.NewReader(
+			": heartbeat\n"+
+				"data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n"+
+				"data: [DONE]\n\n",
+		), events)
+		if err != nil {
+			t.Fatalf("ConsumeStream() error = %v", err)
+		}
+		drained := drain(events)
+		if len(drained) != 2 || drained[0].Type != providertypes.StreamEventTextDelta || drained[1].Type != providertypes.StreamEventMessageDone {
+			t.Fatalf("unexpected events: %+v", drained)
+		}
+	})
+
+	t.Run("payload and decode errors", func(t *testing.T) {
+		t.Parallel()
+
+		if err := mustProvider(t).ConsumeStream(context.Background(), strings.NewReader("data: {\"error\":{\"message\":\"rate limit exceeded\"}}\n"), make(chan providertypes.StreamEvent, 1)); err == nil || !strings.Contains(err.Error(), "rate limit exceeded") {
+			t.Fatalf("expected payload error, got %v", err)
+		}
+		if err := mustProvider(t).ConsumeStream(context.Background(), strings.NewReader("data: {not-json}\n\n"), make(chan providertypes.StreamEvent, 1)); err == nil || !strings.Contains(err.Error(), "decode stream chunk") {
+			t.Fatalf("expected decode error, got %v", err)
+		}
+	})
+
+	t.Run("eof without done flushes and interrupts", func(t *testing.T) {
+		t.Parallel()
+
+		events := make(chan providertypes.StreamEvent, 4)
+		err := mustProvider(t).ConsumeStream(context.Background(), strings.NewReader("data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n"), events)
+		if !errors.Is(err, provider.ErrStreamInterrupted) {
+			t.Fatalf("expected ErrStreamInterrupted, got %v", err)
+		}
+		drained := drain(events)
+		if len(drained) == 0 || drained[0].Type != providertypes.StreamEventTextDelta {
+			t.Fatalf("expected pending text delta, got %+v", drained)
+		}
+	})
+
+	t.Run("cancellation beats interruption", func(t *testing.T) {
+		t.Parallel()
+
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		if err := mustProvider(t).ConsumeStream(ctx, strings.NewReader("data: {}\n\n"), make(chan providertypes.StreamEvent, 1)); !errors.Is(err, context.Canceled) {
+			t.Fatalf("expected context.Canceled, got %v", err)
+		}
+
+		ctx2, cancel2 := context.WithCancel(context.Background())
+		err := mustProvider(t).ConsumeStream(ctx2, &cancelThenErrorReader{cancel: cancel2, err: io.ErrClosedPipe}, make(chan providertypes.StreamEvent, 1))
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("expected read cancellation, got %v", err)
+		}
+	})
+
+	t.Run("done then read error still finishes", func(t *testing.T) {
+		t.Parallel()
+
+		ctx, cancel := context.WithCancel(context.Background())
+		events := make(chan providertypes.StreamEvent, 2)
+		err := mustProvider(t).ConsumeStream(ctx, &cancelAfterDoneReader{
+			payload: []byte("data: [DONE]\n"),
+			cancel:  cancel,
+			err:     io.ErrClosedPipe,
+		}, events)
+		if err != nil {
+			t.Fatalf("expected completed stream, got %v", err)
+		}
+		drained := drain(events)
+		if len(drained) != 1 || drained[0].Type != providertypes.StreamEventMessageDone {
+			t.Fatalf("unexpected completion events: %+v", drained)
+		}
+	})
+
+	t.Run("flush pending data on non eof error", func(t *testing.T) {
+		t.Parallel()
+
+		events := make(chan providertypes.StreamEvent, 4)
+		body := io.MultiReader(
+			strings.NewReader("data: {\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n"),
+			&errReader{err: io.ErrClosedPipe},
+		)
+		err := mustProvider(t).ConsumeStream(context.Background(), body, events)
+		if !errors.Is(err, provider.ErrStreamInterrupted) {
+			t.Fatalf("expected interrupted error, got %v", err)
+		}
+		drained := drain(events)
+		if len(drained) == 0 || drained[0].Type != providertypes.StreamEventTextDelta {
+			t.Fatalf("expected flushed text delta, got %+v", drained)
+		}
+	})
+
+	t.Run("tool call stream records usage", func(t *testing.T) {
+		t.Parallel()
+
+		events := make(chan providertypes.StreamEvent, 8)
+		err := mustProvider(t).ConsumeStream(context.Background(), strings.NewReader(
+			"data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hello \"}}]}\n"+
+				"data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"function\":{\"name\":\"filesystem_edit\",\"arguments\":\"{\\\"path\\\":\\\"main.go\\\"}\"}}]}}]}\n"+
+				"data: {\"choices\":[{\"index\":0,\"finish_reason\":\"tool_calls\"}],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":5,\"total_tokens\":15}}\n"+
+				"data: [DONE]\n\n",
+		), events)
+		if err != nil {
+			t.Fatalf("ConsumeStream() error = %v", err)
+		}
+		drained := drain(events)
+		if len(drained) != 4 || drained[0].Type != providertypes.StreamEventTextDelta || drained[1].Type != providertypes.StreamEventToolCallStart || drained[2].Type != providertypes.StreamEventToolCallDelta {
+			t.Fatalf("unexpected stream events: %+v", drained)
+		}
+		done := mustDone(t, drained[3])
+		if done.FinishReason != "tool_calls" || done.Usage == nil || done.Usage.TotalTokens != 15 {
+			t.Fatalf("unexpected done payload: %+v", done)
+		}
+	})
+}
+
+func TestGenerateVariants(t *testing.T) {
+	t.Parallel()
+
+	t.Run("build and marshal errors", func(t *testing.T) {
+		t.Parallel()
+
+		emptyModel := &Provider{cfg: testCfg("https://api.example.com/v1", "", "test-key"), client: &http.Client{}}
+		if err := emptyModel.Generate(context.Background(), providertypes.GenerateRequest{}, nil); err == nil || !strings.Contains(err.Error(), "model is empty") {
+			t.Fatalf("expected model error, got %v", err)
+		}
+
+		if err := mustProvider(t).Generate(context.Background(), providertypes.GenerateRequest{
+			Messages: []providertypes.Message{{Role: providertypes.RoleUser, Content: "hello"}},
+			Tools:    []providertypes.ToolSpec{{Name: "bad", Schema: map[string]any{"bad": func() {}}}},
+		}, nil); err == nil || !strings.Contains(err.Error(), "marshal request") {
+			t.Fatalf("expected marshal error, got %v", err)
+		}
+	})
+
+	t.Run("request build and send errors", func(t *testing.T) {
+		t.Parallel()
+
+		invalidURL := &Provider{cfg: testCfg("://bad", "gpt-4.1", "test-key"), client: &http.Client{}}
+		if err := invalidURL.Generate(context.Background(), providertypes.GenerateRequest{
+			Messages: []providertypes.Message{{Role: providertypes.RoleUser, Content: "hello"}},
+		}, nil); err == nil || !strings.Contains(err.Error(), "build request") {
+			t.Fatalf("expected build request error, got %v", err)
+		}
+
+		sendErr := &Provider{
+			cfg: testCfg("https://api.example.com/v1", "gpt-4.1", "test-key"),
+			client: &http.Client{Transport: roundTripperFunc(func(*http.Request) (*http.Response, error) {
+				return nil, io.ErrClosedPipe
+			})},
+		}
+		if err := sendErr.Generate(context.Background(), providertypes.GenerateRequest{
+			Messages: []providertypes.Message{{Role: providertypes.RoleUser, Content: "hello"}},
+		}, nil); err == nil || !strings.Contains(err.Error(), "send request") {
+			t.Fatalf("expected send request error, got %v", err)
+		}
+	})
+
+	t.Run("http error response", func(t *testing.T) {
+		t.Parallel()
+
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"error":{"message":"invalid api key"}}`))
+		}))
+		defer server.Close()
+
+		p, err := New(testCfg(server.URL, "gpt-4.1", "test-key"), server.Client())
+		if err != nil {
+			t.Fatalf("New() error = %v", err)
+		}
+		if err := p.Generate(context.Background(), providertypes.GenerateRequest{
+			Messages: []providertypes.Message{{Role: providertypes.RoleUser, Content: "hello"}},
+		}, nil); err == nil || !strings.Contains(err.Error(), "invalid api key") {
+			t.Fatalf("expected parsed provider error, got %v", err)
+		}
+	})
+
+	t.Run("success", func(t *testing.T) {
+		t.Parallel()
+
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/chat/completions" {
+				t.Fatalf("unexpected path: %s", r.URL.Path)
+			}
+			if r.Header.Get("Authorization") != "Bearer test-key" || r.Header.Get("Accept") != "text/event-stream" {
+				t.Fatalf("unexpected headers: auth=%q accept=%q", r.Header.Get("Authorization"), r.Header.Get("Accept"))
+			}
+
+			var payload Request
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Fatalf("decode request: %v", err)
+			}
+			if payload.Model != "gpt-5.4" || !payload.Stream {
+				t.Fatalf("unexpected payload: %+v", payload)
+			}
+
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = w.Write([]byte(
+				"data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n" +
+					"data: {\"choices\":[{\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":1,\"total_tokens\":2}}\n" +
+					"data: [DONE]\n\n",
+			))
+		}))
+		defer server.Close()
+
+		p, err := New(testCfg(server.URL+"/", "gpt-4.1", "test-key"), server.Client())
+		if err != nil {
+			t.Fatalf("New() error = %v", err)
+		}
+		events := make(chan providertypes.StreamEvent, 4)
+		err = p.Generate(context.Background(), providertypes.GenerateRequest{
+			Model:    "gpt-5.4",
+			Messages: []providertypes.Message{{Role: providertypes.RoleUser, Content: "hello"}},
+		}, events)
+		if err != nil {
+			t.Fatalf("Generate() error = %v", err)
+		}
+		drained := drain(events)
+		if len(drained) != 2 || drained[0].Type != providertypes.StreamEventTextDelta {
+			t.Fatalf("unexpected generate events: %+v", drained)
+		}
+		done := mustDone(t, drained[1])
+		if done.FinishReason != "stop" || done.Usage == nil || done.Usage.TotalTokens != 2 {
+			t.Fatalf("unexpected done payload: %+v", done)
+		}
+	})
+}
+
+func drain(events <-chan providertypes.StreamEvent) []providertypes.StreamEvent {
+	var drained []providertypes.StreamEvent
+	for {
+		select {
+		case evt := <-events:
+			drained = append(drained, evt)
+		default:
+			return drained
+		}
+	}
+}
+
+type roundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripperFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+type errReader struct{ err error }
+
+func (e *errReader) Read(_ []byte) (int, error) { return 0, e.err }
+
+type cancelThenErrorReader struct {
+	cancel func()
+	err    error
+}
+
+func (r *cancelThenErrorReader) Read(_ []byte) (int, error) {
+	r.cancel()
+	return 0, r.err
+}
+
+type cancelAfterDoneReader struct {
+	payload []byte
+	cancel  func()
+	err     error
+	read    bool
+}
+
+func (r *cancelAfterDoneReader) Read(p []byte) (int, error) {
+	if !r.read {
+		r.read = true
+		return copy(p, r.payload), nil
+	}
+	r.cancel()
+	return 0, r.err
+}

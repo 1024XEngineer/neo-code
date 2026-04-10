@@ -91,8 +91,9 @@ go run ./cmd/neocode
 - **`internal/config`** — 配置管理、环境变量、YAML 加载
 - **`internal/context`** — system prompt、消息裁剪与上下文构建
 - **`internal/provider`** — Provider 契约、驱动注册与通用领域类型
+- **`internal/provider/openaicompat`** — OpenAI-compatible 协议入口、discovery 与 `api_style` 分流
+- **`internal/provider/openaicompat/chatcompletions`** — `/chat/completions` 请求组装、SSE 解析与 tool-call 增量处理
 - **`internal/provider/catalog`** — 模型发现、catalog 缓存与后台刷新
-- **`internal/provider/selection`** — provider/model 选择与配置同步
 - **`internal/provider/builtin`** — 内建 driver 注册
 - **`internal/runtime`** — ReAct 主循环与事件流编排（不直接承载会话存储实现；不再导出会话模型与存储类型）
 - **`internal/session`** — 会话模型、会话存储抽象与 JSON 持久化实现（统一对外暴露 `Session` / `Summary` / `Store`）
@@ -115,7 +116,7 @@ go run ./cmd/neocode
 │   ├── provider         # Provider 契约与驱动注册
 │   │   ├── builtin      # 内建 driver 注册
 │   │   ├── catalog      # 模型发现与缓存
-│   │   └── selection    # provider/model 选择服务
+│   │   └── openaicompat # OpenAI-compatible 协议入口与子协议实现
 │   ├── runtime          # ReAct 循环与事件流
 │   ├── session          # 会话模型与持久化
 │   ├── tools            # 工具系统

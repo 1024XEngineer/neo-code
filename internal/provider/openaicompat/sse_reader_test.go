@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"neo-code/internal/provider"
+	"neo-code/internal/provider/openaicompat/chatcompletions"
 )
 
 // --- boundedSSEReader 单元测试 ---
@@ -56,7 +57,7 @@ func TestBoundedSSEReader_ReadLine_Normal(t *testing.T) {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			r := newBoundedSSEReader(strings.NewReader(tt.input))
+			r := chatcompletions.NewBoundedSSEReader(strings.NewReader(tt.input))
 			got, err := r.ReadLine()
 			if got != tt.want {
 				t.Fatalf("ReadLine() = %q, want %q", got, tt.want)
@@ -74,7 +75,7 @@ func TestBoundedSSEReader_ReadLine_Normal(t *testing.T) {
 func TestBoundedSSEReader_ReadLine_MultipleLines(t *testing.T) {
 	t.Parallel()
 
-	r := newBoundedSSEReader(strings.NewReader("line1\nline2\n\nline4\n"))
+	r := chatcompletions.NewBoundedSSEReader(strings.NewReader("line1\nline2\n\nline4\n"))
 
 	line1, err := r.ReadLine()
 	if err != nil || line1 != "line1" {
@@ -107,8 +108,8 @@ func TestBoundedSSEReader_ReadLine_MultipleLines(t *testing.T) {
 func TestBoundedSSEReader_L1_LineTooLong(t *testing.T) {
 	t.Parallel()
 
-	longLine := strings.Repeat("x", maxSSELineSize+1) + "\n"
-	r := newBoundedSSEReader(strings.NewReader(longLine))
+	longLine := strings.Repeat("x", chatcompletions.MaxSSELineSize+1) + "\n"
+	r := chatcompletions.NewBoundedSSEReader(strings.NewReader(longLine))
 
 	_, err := r.ReadLine()
 	if err == nil {
@@ -123,15 +124,15 @@ func TestBoundedSSEReader_L1_BoundaryExactLimit(t *testing.T) {
 	t.Parallel()
 
 	// 恰好等于上限的行应该正常通过（不含 \n）
-	exactLine := strings.Repeat("a", maxSSELineSize) + "\n"
-	r := newBoundedSSEReader(strings.NewReader(exactLine))
+	exactLine := strings.Repeat("a", chatcompletions.MaxSSELineSize) + "\n"
+	r := chatcompletions.NewBoundedSSEReader(strings.NewReader(exactLine))
 
 	got, err := r.ReadLine()
 	if err != nil {
 		t.Fatalf("unexpected error at exact limit: %v", err)
 	}
-	if len(got) != maxSSELineSize {
-		t.Fatalf("expected line length %d, got %d", maxSSELineSize, len(got))
+	if len(got) != chatcompletions.MaxSSELineSize {
+		t.Fatalf("expected line length %d, got %d", chatcompletions.MaxSSELineSize, len(got))
 	}
 }
 
@@ -143,15 +144,15 @@ func TestBoundedSSEReader_L3_StreamTooLarge(t *testing.T) {
 	lineSize := int64(len(line))
 
 	var sb strings.Builder
-	linesToWrite := int(maxStreamTotalSize/lineSize) + 1
+	linesToWrite := int(chatcompletions.MaxStreamTotalSize/lineSize) + 1
 	for range linesToWrite {
 		sb.WriteString(line)
 	}
 
-	r := newBoundedSSEReader(strings.NewReader(sb.String()))
+	r := chatcompletions.NewBoundedSSEReader(strings.NewReader(sb.String()))
 
 	// 前面的行应能正常读取
-	expectedNormal := int(maxStreamTotalSize / lineSize)
+	expectedNormal := int(chatcompletions.MaxStreamTotalSize / lineSize)
 	for range expectedNormal {
 		_, err := r.ReadLine()
 		if err != nil {
@@ -187,7 +188,7 @@ func TestTrimLineEnding(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		got := trimLineEnding(tt.input)
+		got := chatcompletions.TrimLineEnding(tt.input)
 		if got != tt.want {
 			t.Fatalf("trimLineEnding(%q) = %q, want %q", tt.input, got, tt.want)
 		}
@@ -200,15 +201,15 @@ func TestBoundedSSEReader_L1_NoNewlineEOFAtLimit(t *testing.T) {
 	t.Parallel()
 
 	// 不含 \n 的行，长度恰好等于 maxSSELineSize，以 EOF 结尾
-	exactLine := strings.Repeat("b", maxSSELineSize)
-	r := newBoundedSSEReader(strings.NewReader(exactLine))
+	exactLine := strings.Repeat("b", chatcompletions.MaxSSELineSize)
+	r := chatcompletions.NewBoundedSSEReader(strings.NewReader(exactLine))
 
 	got, err := r.ReadLine()
 	if err == nil || !errors.Is(err, io.EOF) {
 		t.Fatalf("expected io.EOF for line without trailing newline, got err=%v", err)
 	}
-	if len(got) != maxSSELineSize {
-		t.Fatalf("expected line length %d, got %d", maxSSELineSize, len(got))
+	if len(got) != chatcompletions.MaxSSELineSize {
+		t.Fatalf("expected line length %d, got %d", chatcompletions.MaxSSELineSize, len(got))
 	}
 }
 
@@ -218,8 +219,8 @@ func TestBoundedSSEReader_L1_NoNewlineEOFExceedsLimit(t *testing.T) {
 	t.Parallel()
 
 	// 不含 \n，长度超过 maxSSELineSize
-	longLine := strings.Repeat("c", maxSSELineSize+1)
-	r := newBoundedSSEReader(strings.NewReader(longLine))
+	longLine := strings.Repeat("c", chatcompletions.MaxSSELineSize+1)
+	r := chatcompletions.NewBoundedSSEReader(strings.NewReader(longLine))
 
 	_, err := r.ReadLine()
 	if err == nil {
@@ -235,7 +236,7 @@ func TestBoundedSSEReader_L1_NoNewlineEOFExceedsLimit(t *testing.T) {
 func TestBoundedSSEReader_UnderlyingErrorPropagation(t *testing.T) {
 	t.Parallel()
 
-	r := newBoundedSSEReader(&errReader{err: io.ErrClosedPipe})
+	r := chatcompletions.NewBoundedSSEReader(&errReader{err: io.ErrClosedPipe})
 	_, err := r.ReadLine()
 	if err == nil {
 		t.Fatal("expected error from broken reader")
@@ -251,8 +252,8 @@ func TestBoundedSSEReader_L1_ThenNormalRead(t *testing.T) {
 	t.Parallel()
 
 	// 第一行超长触发 L1，第二行正常
-	input := strings.Repeat("x", maxSSELineSize+10) + "\nnormal line\n"
-	r := newBoundedSSEReader(strings.NewReader(input))
+	input := strings.Repeat("x", chatcompletions.MaxSSELineSize+10) + "\nnormal line\n"
+	r := chatcompletions.NewBoundedSSEReader(strings.NewReader(input))
 
 	// 第一行应返回 ErrLineTooLong
 	_, err := r.ReadLine()
