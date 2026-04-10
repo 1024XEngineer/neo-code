@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -32,6 +33,19 @@ type stubCompactor struct {
 func (s *stubCompactor) Compact(ctx context.Context, input agentruntime.CompactInput) (agentruntime.CompactResult, error) {
 	s.lastInput = input
 	return agentruntime.CompactResult{}, s.err
+}
+
+type stubPermissionResolver struct {
+	lastInput   agentruntime.PermissionResolutionInput
+	err         error
+	deadline    time.Time
+	hasDeadline bool
+}
+
+func (s *stubPermissionResolver) ResolvePermission(ctx context.Context, input agentruntime.PermissionResolutionInput) error {
+	s.lastInput = input
+	s.deadline, s.hasDeadline = ctx.Deadline()
+	return s.err
 }
 
 type stubProvider struct {
@@ -99,6 +113,44 @@ func TestRunCompactCmd(t *testing.T) {
 	}
 	if err, ok := msg.(error); !ok || err == nil || err.Error() != "compact failed" {
 		t.Fatalf("expected forwarded compact error, got %T %#v", msg, msg)
+	}
+}
+
+func TestRunResolvePermissionCmd(t *testing.T) {
+	resolver := &stubPermissionResolver{err: errors.New("permission failed")}
+	input := agentruntime.PermissionResolutionInput{
+		RequestID: "perm-1",
+		Decision:  agentruntime.PermissionResolutionAllowSession,
+	}
+	msg := RunResolvePermissionCmd(
+		resolver,
+		input,
+		func(in agentruntime.PermissionResolutionInput, err error) tea.Msg {
+			return struct {
+				Input agentruntime.PermissionResolutionInput
+				Err   error
+			}{Input: in, Err: err}
+		},
+	)()
+
+	got, ok := msg.(struct {
+		Input agentruntime.PermissionResolutionInput
+		Err   error
+	})
+	if !ok {
+		t.Fatalf("expected wrapped permission result message, got %T %#v", msg, msg)
+	}
+	if got.Input.RequestID != "perm-1" || got.Input.Decision != agentruntime.PermissionResolutionAllowSession {
+		t.Fatalf("unexpected permission input forwarded: %+v", got.Input)
+	}
+	if got.Err == nil || got.Err.Error() != "permission failed" {
+		t.Fatalf("expected forwarded permission error, got %#v", got.Err)
+	}
+	if resolver.lastInput.RequestID != "perm-1" || resolver.lastInput.Decision != agentruntime.PermissionResolutionAllowSession {
+		t.Fatalf("unexpected resolver input: %+v", resolver.lastInput)
+	}
+	if !resolver.hasDeadline {
+		t.Fatalf("expected permission resolver context to carry a deadline")
 	}
 }
 

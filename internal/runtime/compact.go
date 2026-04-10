@@ -64,7 +64,7 @@ func (s *Service) Compact(ctx context.Context, input CompactInput) (CompactResul
 		return CompactResult{}, err
 	}
 
-	session, result, err := s.runCompactForSession(ctx, input.RunID, session, cfg, true)
+	session, result, err := s.runCompactForSession(ctx, input.RunID, session, cfg, contextcompact.ModeManual, true)
 	if err != nil {
 		return CompactResult{}, err
 	}
@@ -86,6 +86,7 @@ func (s *Service) runCompactForSession(
 	runID string,
 	session agentsession.Session,
 	cfg config.Config,
+	mode contextcompact.Mode,
 	failOnError bool,
 ) (agentsession.Session, contextcompact.Result, error) {
 	runner := s.compactRunner
@@ -94,7 +95,7 @@ func (s *Service) runCompactForSession(
 		runner, err = s.defaultCompactRunner(session, cfg)
 		if err != nil {
 			s.emit(ctx, EventCompactError, runID, session.ID, CompactErrorPayload{
-				TriggerMode: string(contextcompact.ModeManual),
+				TriggerMode: string(mode),
 				Message:     err.Error(),
 			})
 			if failOnError {
@@ -105,18 +106,18 @@ func (s *Service) runCompactForSession(
 	}
 
 	originalMessages := append([]providertypes.Message(nil), session.Messages...)
-	s.emit(ctx, EventCompactStart, runID, session.ID, string(contextcompact.ModeManual))
+	s.emit(ctx, EventCompactStart, runID, session.ID, string(mode))
 
 	result, err := runner.Run(ctx, contextcompact.Input{
-		Mode:      contextcompact.ModeManual,
+		Mode:      mode,
 		SessionID: session.ID,
-		Workdir:   cfg.Workdir,
+		Workdir:   effectiveSessionWorkdir(session.Workdir, cfg.Workdir),
 		Messages:  session.Messages,
 		Config:    cfg.Context.Compact,
 	})
 	if err != nil {
 		s.emit(ctx, EventCompactError, runID, session.ID, CompactErrorPayload{
-			TriggerMode: string(contextcompact.ModeManual),
+			TriggerMode: string(mode),
 			Message:     err.Error(),
 		})
 		if failOnError {
@@ -127,10 +128,15 @@ func (s *Service) runCompactForSession(
 
 	if result.Applied {
 		session.Messages = append([]providertypes.Message(nil), result.Messages...)
+		// Reset token totals now so the persisted session never carries stale high
+		// counts; if the follow-up provider call is canceled before its own save
+		// the next run will start from zero rather than immediately auto-compacting.
+		session.TokenInputTotal = 0
+		session.TokenOutputTotal = 0
 		session.UpdatedAt = time.Now()
 		if err := s.sessionStore.Save(ctx, &session); err != nil {
 			s.emit(ctx, EventCompactError, runID, session.ID, CompactErrorPayload{
-				TriggerMode: string(contextcompact.ModeManual),
+				TriggerMode: string(mode),
 				Message:     err.Error(),
 			})
 			session.Messages = originalMessages
@@ -146,13 +152,24 @@ func (s *Service) runCompactForSession(
 		BeforeChars:    result.Metrics.BeforeChars,
 		AfterChars:     result.Metrics.AfterChars,
 		SavedRatio:     result.Metrics.SavedRatio,
-		TriggerMode:    string(contextcompact.ModeManual),
+		TriggerMode:    string(mode),
 		TranscriptID:   result.TranscriptID,
 		TranscriptPath: result.TranscriptPath,
 	}
 	s.emit(ctx, EventCompactDone, runID, session.ID, donePayload)
 
 	return session, result, nil
+}
+
+// resetSessionTokenTotals 在 compact 成功后同步清零内存计数器与会话累计 token。
+func (s *Service) resetSessionTokenTotals(session *agentsession.Session) {
+	s.sessionInputTokens = 0
+	s.sessionOutputTokens = 0
+	if session == nil {
+		return
+	}
+	session.TokenInputTotal = 0
+	session.TokenOutputTotal = 0
 }
 
 // defaultCompactRunner 为手动 compact 选择摘要生成器并构造默认 runner。

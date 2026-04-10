@@ -4,8 +4,8 @@
 
 ## 概览
 
-- runtime 当前仅接入手动触发的 compact，不包含自动 compact。
-- `internal/context/compact` 已支持 `manual` 与 `reactive` 两种 mode，供 runtime 后续在 provider 上下文过长错误场景接入调用。
+- runtime 已接入手动 compact、基于 token 阈值的自动 compact，以及 provider 上下文过长后的 `reactive` compact 自动恢复。
+- `internal/context/compact` 支持 `manual` 与 `reactive` 两种 mode。
 - 用户通过 `/compact` 对当前会话执行一次上下文压缩。
 - compact 前会先写入完整 transcript，随后生成并校验 compact summary，再回写会话消息。
 
@@ -69,7 +69,12 @@ context:
 3. 生成并校验 `[compact_summary]`。
 4. 返回压缩后的消息与 transcript 元信息。
 
-当前 runtime 主链尚未自动调用 `reactive` mode；后续接入时可继续复用现有 compact 事件，并通过 `trigger_mode=reactive` 区分。
+当 provider 返回“上下文过长”错误时，runtime 会：
+
+1. 识别 provider 归一化后的 typed error，必要时回退到错误文本匹配。
+2. 触发一次 `compact.Run(mode=reactive)`。
+3. 继续复用 `compact_start`、`compact_done`、`compact_error` 事件，并通过 `trigger_mode=reactive` 区分来源。
+4. 每次 `Run()` 最多只执行一次 reactive 重试，避免无限循环。
 
 ## 摘要协议
 
@@ -106,7 +111,7 @@ constraints:
 
 ## 事件
 
-manual compact 相关 runtime 事件包括：
+compact 相关 runtime 事件包括：
 
 - `compact_start`
 - `compact_done`

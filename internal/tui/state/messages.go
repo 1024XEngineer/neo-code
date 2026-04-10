@@ -51,3 +51,10 @@ type WorkspaceCommandResultMsg struct {
 	Output  string
 	Err     error
 }
+
+// PermissionResolutionFinishedMsg 表示一次权限审批提交完成结果。
+type PermissionResolutionFinishedMsg struct {
+	RequestID string
+	Decision  agentruntime.PermissionResolutionDecision
+	Err       error
+}

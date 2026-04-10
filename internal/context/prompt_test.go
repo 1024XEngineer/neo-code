@@ -1,6 +1,9 @@
 package context
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestDefaultSystemPromptSectionsReturnsCachedSections(t *testing.T) {
 	t.Parallel()
@@ -88,5 +91,27 @@ func TestComposeSystemPromptSkipsEmptySections(t *testing.T) {
 	want := "plain\n\n## Section\n\nbody"
 	if got != want {
 		t.Fatalf("composeSystemPrompt() = %q, want %q", got, want)
+	}
+}
+
+func TestDefaultToolUsagePromptEncouragesAskFlow(t *testing.T) {
+	t.Parallel()
+
+	sections := defaultSystemPromptSections()
+	var toolUsage string
+	for _, section := range sections {
+		if section.title == "Tool Usage" {
+			toolUsage = section.content
+			break
+		}
+	}
+	if toolUsage == "" {
+		t.Fatalf("expected Tool Usage section to exist")
+	}
+	if !strings.Contains(toolUsage, "permission layer") {
+		t.Fatalf("expected Tool Usage to mention permission layer, got %q", toolUsage)
+	}
+	if !strings.Contains(toolUsage, "Do not self-reject") {
+		t.Fatalf("expected Tool Usage to discourage self-reject, got %q", toolUsage)
 	}
 }

@@ -16,6 +16,8 @@ var defaultPromptSections = []promptSection{
 	{
 		title: "Tool Usage",
 		content: "- Use tools when they reduce uncertainty or are required to complete the task safely.\n" +
+			"- For risky operations, call the relevant tool first and let the runtime permission layer decide ask/allow/deny.\n" +
+			"- Do not self-reject a user-requested operation before attempting the proper tool call and permission flow.\n" +
 			"- Stay within the current workspace unless the user clearly asks for something else.\n" +
 			"- Do not claim work is done unless the needed files, commands, or verification actually succeeded.",
 	},
