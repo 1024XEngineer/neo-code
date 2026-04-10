@@ -305,9 +305,18 @@ func (s *SelectionService) EnsureSelection(ctx context.Context) (ProviderSelecti
 	}
 	if len(models) == 0 {
 		if selected.Source == ProviderSourceCustom {
-			return selectionFromConfig(cfgSnapshot), nil
+			if strings.TrimSpace(cfgSnapshot.CurrentModel) == "" {
+				discovered, discoverErr := s.catalogs.ListProviderModels(ctx, input)
+				if discoverErr == nil {
+					models = discovered
+				}
+			}
+			if len(models) == 0 {
+				return selectionFromConfig(cfgSnapshot), nil
+			}
+		} else {
+			models = providertypes.DescriptorsFromIDs([]string{strings.TrimSpace(selected.Model)})
 		}
-		models = providertypes.DescriptorsFromIDs([]string{strings.TrimSpace(selected.Model)})
 	}
 	if len(models) == 0 {
 		return ProviderSelection{}, ErrNoModelsAvailable

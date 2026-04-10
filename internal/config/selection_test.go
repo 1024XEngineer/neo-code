@@ -416,6 +416,91 @@ func TestSelectionServiceEnsureSelectionKeepsCustomSelectionWhenSnapshotMissing(
 	}
 }
 
+func TestSelectionServiceEnsureSelectionBackfillsEmptyCustomModelFromSynchronousDiscovery(t *testing.T) {
+	t.Parallel()
+
+	defaults := testDefaultConfig()
+	defaults.Providers = append(defaults.Providers, ProviderConfig{
+		Name:      "company-gateway",
+		Driver:    "openaicompat",
+		BaseURL:   "https://llm.example.com/v1",
+		APIKeyEnv: "COMPANY_GATEWAY_API_KEY",
+		Source:    ProviderSourceCustom,
+	})
+	defaults.SelectedProvider = "company-gateway"
+	defaults.CurrentModel = ""
+
+	tracker := &catalogMethodCalls{}
+	manager := newSelectionTestManager(t, defaults)
+	service := NewSelectionService(manager, newDriverSupporterStub(), catalogMethodsStub{
+		listModels: []providertypes.ModelDescriptor{
+			{ID: "server-coder", Name: "Server Coder"},
+			{ID: "server-chat", Name: "Server Chat"},
+		},
+		tracker: tracker,
+	})
+
+	selection, err := service.EnsureSelection(context.Background())
+	if err != nil {
+		t.Fatalf("EnsureSelection() error = %v", err)
+	}
+	if selection.ProviderID != "company-gateway" || selection.ModelID != "server-coder" {
+		t.Fatalf("expected synchronous discovery to backfill first discovered model, got %+v", selection)
+	}
+	if tracker.listCalls != 1 || tracker.snapshotCalls != 1 {
+		t.Fatalf("expected custom ensure to try snapshot first and then sync discovery, got %+v", *tracker)
+	}
+
+	reloaded, err := manager.Reload(context.Background())
+	if err != nil {
+		t.Fatalf("Reload() error = %v", err)
+	}
+	if reloaded.CurrentModel != "server-coder" {
+		t.Fatalf("expected discovered current model to persist, got %q", reloaded.CurrentModel)
+	}
+}
+
+func TestSelectionServiceEnsureSelectionKeepsEmptyCustomModelWhenSynchronousDiscoveryFails(t *testing.T) {
+	t.Parallel()
+
+	defaults := testDefaultConfig()
+	defaults.Providers = append(defaults.Providers, ProviderConfig{
+		Name:      "company-gateway",
+		Driver:    "openaicompat",
+		BaseURL:   "https://llm.example.com/v1",
+		APIKeyEnv: "COMPANY_GATEWAY_API_KEY",
+		Source:    ProviderSourceCustom,
+	})
+	defaults.SelectedProvider = "company-gateway"
+	defaults.CurrentModel = ""
+
+	tracker := &catalogMethodCalls{}
+	manager := newSelectionTestManager(t, defaults)
+	service := NewSelectionService(manager, newDriverSupporterStub(), catalogMethodsStub{
+		listErr: errors.New("discover failed"),
+		tracker: tracker,
+	})
+
+	selection, err := service.EnsureSelection(context.Background())
+	if err != nil {
+		t.Fatalf("EnsureSelection() should preserve the empty model when discovery fails, got %v", err)
+	}
+	if selection.ProviderID != "company-gateway" || selection.ModelID != "" {
+		t.Fatalf("expected empty custom model to stay unchanged after failed discovery, got %+v", selection)
+	}
+	if tracker.listCalls != 1 || tracker.snapshotCalls != 1 {
+		t.Fatalf("expected custom ensure to attempt sync discovery once, got %+v", *tracker)
+	}
+
+	reloaded, err := manager.Reload(context.Background())
+	if err != nil {
+		t.Fatalf("Reload() error = %v", err)
+	}
+	if reloaded.CurrentModel != "" {
+		t.Fatalf("expected empty current model to stay unchanged after failed discovery, got %q", reloaded.CurrentModel)
+	}
+}
+
 func TestSelectionServiceSelectCustomProviderDoesNotPersistWhenDiscoveryFails(t *testing.T) {
 	t.Parallel()
 
