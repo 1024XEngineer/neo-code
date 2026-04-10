@@ -87,8 +87,4 @@ runtime 在转发 provider 流式事件时，从 `MessageDone` 事件中提取 `
 - 每个工具结果完成后保存
 - 避免在高频 UI 刷新路径中做磁盘 I/O
 
-## Session 持久化补充
-
-- Session 默认按工作区隔离存储到 `~/.neocode/projects/<workspace-hash>/sessions/`
-- `runtime` 在加载会话时恢复 `token_input_total` 与 `token_output_total`
-- compact 成功后，重置后的 token 累计值会随下一次 session 保存一起持久化
+会话 JSON 结构、工作区分桶以及 token 计数持久化约束统一见 [Session 持久化设计](./session-persistence-design.md)。

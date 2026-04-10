@@ -40,7 +40,7 @@ context:
 
 ## 自动压缩
 
-当 `auto_compact.enabled` 为 `true` 时，runtime 在每次调用 `context.Builder.Build()` 时将当前 token 累计值传入 Metadata，context 模块通过比较累计值与阈值在 `BuildResult.ShouldAutoCompact` 中返回压缩建议。runtime 读取建议后调用现有 compact 管线执行压缩，并在成功后重置 token 计数器。
+当 `auto_compact.enabled` 为 `true` 时，runtime 在每次调用 `context.Builder.Build()` 时将当前 token 累计值传入 Metadata，context 模块通过比较累计值与阈值在 `BuildResult.ShouldAutoCompact` 中返回压缩建议。runtime 读取建议后调用现有 compact 管线执行压缩；token 计数的重置与持久化语义统一见 [Session 持久化设计](./session-persistence-design.md)。
 
 设计原则：
 - **context 拥有压缩决策权**，runtime 只做编排执行。
