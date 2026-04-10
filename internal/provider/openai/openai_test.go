@@ -910,6 +910,28 @@ func TestParseError_InvalidJSONBody(t *testing.T) {
 	}
 }
 
+func TestParseError_ClassifiesContextTooLong(t *testing.T) {
+	t.Parallel()
+
+	p, err := New(resolvedConfig(config.OpenAIDefaultBaseURL, config.OpenAIDefaultModel))
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	resp := &http.Response{
+		Status:     "400 Bad Request",
+		StatusCode: 400,
+		Body:       ioNopCloser(`{"error":{"message":"This model's maximum context length is 128000 tokens. However, your messages resulted in 140000 tokens."}}`),
+	}
+	err = p.parseError(resp)
+	if err == nil {
+		t.Fatal("expected context too long error")
+	}
+	if !provider.IsContextTooLong(err) {
+		t.Fatalf("expected parsed error to be classified as context too long, got %v", err)
+	}
+}
+
 // --- 原有保留的集成测试（保持兼容） ---
 
 func TestProviderChatConsumesSSEAndMergesToolCalls(t *testing.T) {

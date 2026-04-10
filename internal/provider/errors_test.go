@@ -121,6 +121,17 @@ func TestNewProviderErrorFromStatus(t *testing.T) {
 	if err.Retryable {
 		t.Fatalf("expected 401 to not be retryable")
 	}
+
+	err = NewProviderErrorFromStatus(400, "This model's maximum context length is 128000 tokens.")
+	if err.Code != ErrorCodeContextTooLong {
+		t.Fatalf("expected code %q, got %q", ErrorCodeContextTooLong, err.Code)
+	}
+
+	// 429 with token-count message must stay rate_limited, not context_too_long.
+	err = NewProviderErrorFromStatus(429, "requested too many tokens for this minute")
+	if err.Code != ErrorCodeRateLimit {
+		t.Fatalf("429 with token-count message: expected code %q, got %q", ErrorCodeRateLimit, err.Code)
+	}
 }
 
 func TestNewNetworkProviderError(t *testing.T) {
@@ -168,5 +179,63 @@ func TestProviderError_As(t *testing.T) {
 	}
 	if !target.Retryable {
 		t.Fatalf("expected retryable")
+	}
+}
+
+func TestIsContextTooLong(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{
+			name: "typed provider error",
+			err: &ProviderError{
+				StatusCode: 400,
+				Code:       ErrorCodeContextTooLong,
+				Message:    "maximum context length exceeded",
+			},
+			want: true,
+		},
+		{
+			name: "wrapped provider message fallback",
+			err: fmt.Errorf("wrapped: %w", &ProviderError{
+				StatusCode: 400,
+				Code:       ErrorCodeClient,
+				Message:    "prompt is too long for this model",
+			}),
+			want: true,
+		},
+		{
+			name: "plain text fallback",
+			err:  errors.New("context window exceeded for model"),
+			want: true,
+		},
+		{
+			name: "non context error",
+			err:  errors.New("invalid api key"),
+			want: false,
+		},
+		{
+			name: "rate limited with token-count message is not context_too_long",
+			err: &ProviderError{
+				StatusCode: 429,
+				Code:       ErrorCodeRateLimit,
+				Message:    "requested too many tokens for this minute",
+			},
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := IsContextTooLong(tt.err); got != tt.want {
+				t.Fatalf("IsContextTooLong() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
