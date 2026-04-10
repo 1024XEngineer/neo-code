@@ -255,6 +255,9 @@ func (s *Service) Run(ctx context.Context, input UserInput) error {
 			session, compactResult, _ = s.runCompactForSession(ctx, input.RunID, session, cfg, contextcompact.ModeManual, false)
 			if compactResult.Applied {
 				s.resetSessionTokenTotals(&session)
+				// 自动 compact 成功后需要在同一轮重建上下文，避免继续沿用压缩前的请求内容。
+				attempt--
+				continue
 			}
 		}
 
