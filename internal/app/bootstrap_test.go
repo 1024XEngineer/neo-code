@@ -736,6 +736,31 @@ func TestResolveBootstrapWorkdirRejectsEmptyAndFile(t *testing.T) {
 	}
 }
 
+func TestResolveBootstrapWorkdirResolvesRelativeCurrentDirectory(t *testing.T) {
+	previous, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+
+	workdir := t.TempDir()
+	if err := os.Chdir(workdir); err != nil {
+		t.Fatalf("chdir workdir: %v", err)
+	}
+	t.Cleanup(func() {
+		if chdirErr := os.Chdir(previous); chdirErr != nil {
+			t.Fatalf("restore cwd: %v", chdirErr)
+		}
+	})
+
+	resolved, err := resolveBootstrapWorkdir(".")
+	if err != nil {
+		t.Fatalf("resolveBootstrapWorkdir(.) error = %v", err)
+	}
+	if resolved != workdir {
+		t.Fatalf("expected resolved workdir %q, got %q", workdir, resolved)
+	}
+}
+
 func TestEnsureConsoleUTF8SetsOutputThenInput(t *testing.T) {
 	originalOutput := setConsoleOutputCodePage
 	originalInput := setConsoleInputCodePage

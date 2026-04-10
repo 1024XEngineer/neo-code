@@ -48,6 +48,26 @@ func TestResolveFromFallsBackToTargetDirectoryOutsideGit(t *testing.T) {
 	}
 }
 
+func TestResolveFromDetectsWorkspaceRootWhenGitMarkerIsFile(t *testing.T) {
+	base := t.TempDir()
+	repoRoot := filepath.Join(base, "repo")
+	nested := filepath.Join(repoRoot, "pkg", "nested")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatalf("mkdir nested: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, ".git"), []byte("gitdir: /tmp/linked"), 0o644); err != nil {
+		t.Fatalf("write git marker file: %v", err)
+	}
+
+	resolved, err := ResolveFrom(repoRoot, "pkg/nested")
+	if err != nil {
+		t.Fatalf("ResolveFrom() error = %v", err)
+	}
+	if resolved.WorkspaceRoot != repoRoot {
+		t.Fatalf("expected workspace root %q, got %q", repoRoot, resolved.WorkspaceRoot)
+	}
+}
+
 func TestResolveUsesCurrentDirectoryWhenBaseAndPathAreEmpty(t *testing.T) {
 	previous, err := os.Getwd()
 	if err != nil {
@@ -102,6 +122,21 @@ func TestSameRoot(t *testing.T) {
 	root := t.TempDir()
 	if !SameRoot(root, filepath.Join(root, ".")) {
 		t.Fatalf("expected same root match")
+	}
+	previous, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	if err := os.Chdir(root); err != nil {
+		t.Fatalf("chdir root: %v", err)
+	}
+	t.Cleanup(func() {
+		if chdirErr := os.Chdir(previous); chdirErr != nil {
+			t.Fatalf("restore cwd: %v", chdirErr)
+		}
+	})
+	if !SameRoot(root, ".") {
+		t.Fatalf("expected relative path to normalize to current root")
 	}
 	if SameRoot(root, filepath.Join(root, "child")) {
 		t.Fatalf("expected different roots")

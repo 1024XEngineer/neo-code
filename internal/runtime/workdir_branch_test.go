@@ -107,3 +107,17 @@ func TestResolveSessionWorkdirRejectsSymlinkEscape(t *testing.T) {
 		t.Fatalf("expected symlink escape error, got %v", err)
 	}
 }
+
+func TestNormalizeWorkspaceRootFallsBackToAbsolutePathForMissingDirectory(t *testing.T) {
+	t.Parallel()
+
+	missing := filepath.Join(t.TempDir(), "missing", "workspace")
+	got := normalizeWorkspaceRoot(missing)
+	want, err := filepath.Abs(missing)
+	if err != nil {
+		t.Fatalf("Abs() error = %v", err)
+	}
+	if got != filepath.Clean(want) {
+		t.Fatalf("expected normalized workspace root %q, got %q", filepath.Clean(want), got)
+	}
+}

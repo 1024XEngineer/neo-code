@@ -994,6 +994,57 @@ func TestBuildPermissionAction(t *testing.T) {
 	}
 }
 
+func TestBuildPermissionActionUsesWorkspaceBindingForBash(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		input       ToolCallInput
+		wantWorkdir string
+		wantSandbox string
+	}{
+		{
+			name: "prefers workspace root for session scope",
+			input: ToolCallInput{
+				Name:          "bash",
+				Arguments:     []byte(`{"command":"pwd"}`),
+				Workdir:       "/repo/app",
+				WorkspaceRoot: "/repo",
+			},
+			wantWorkdir: "/repo",
+			wantSandbox: "/repo/app",
+		},
+		{
+			name: "falls back to workdir when workspace root missing",
+			input: ToolCallInput{
+				Name:      "bash",
+				Arguments: []byte(`{"command":"pwd"}`),
+				Workdir:   "/repo/app",
+			},
+			wantWorkdir: "/repo/app",
+			wantSandbox: "/repo/app",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			action, err := buildPermissionAction(tt.input)
+			if err != nil {
+				t.Fatalf("buildPermissionAction() error = %v", err)
+			}
+			if action.Payload.Workdir != tt.wantWorkdir {
+				t.Fatalf("expected workdir %q, got %q", tt.wantWorkdir, action.Payload.Workdir)
+			}
+			if action.Payload.SandboxTarget != tt.wantSandbox {
+				t.Fatalf("expected sandbox target %q, got %q", tt.wantSandbox, action.Payload.SandboxTarget)
+			}
+		})
+	}
+}
+
 func TestPermissionMapperHelpers(t *testing.T) {
 	t.Parallel()
 
