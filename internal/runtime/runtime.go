@@ -148,6 +148,9 @@ type Service struct {
 	activeRunCancel     context.CancelFunc // 当前活跃 Run 的取消函数。
 	sessionInputTokens  int                // 当前会话累计输入 token。
 	sessionOutputTokens int                // 当前会话累计输出 token。
+	pendingPermissionMu sync.Mutex         // 保护待审批请求状态，避免不同运行实例共享全局变量。
+	pendingPermission   *pendingPermissionRequest
+	nextPermissionID    uint64
 }
 
 func NewWithFactory(
@@ -209,7 +212,9 @@ func (s *Service) Run(ctx context.Context, input UserInput) error {
 	if err := s.sessionStore.Save(ctx, &session); err != nil {
 		return s.handleRunError(ctx, input.RunID, session.ID, err)
 	}
-	s.emit(ctx, EventUserMessage, input.RunID, session.ID, userMessage)
+	if err := s.emitRequired(ctx, EventUserMessage, input.RunID, session.ID, userMessage); err != nil {
+		return s.handleRunError(ctx, input.RunID, session.ID, err)
+	}
 
 	autoCompacted := false
 	reactiveRetried := false
@@ -227,7 +232,7 @@ func (s *Service) Run(ctx context.Context, input UserInput) error {
 		}
 		if attempt >= maxLoops {
 			err := errors.New("runtime: max loop reached")
-			s.emit(ctx, EventError, input.RunID, session.ID, err.Error())
+			_ = s.emit(ctx, EventError, input.RunID, session.ID, err.Error())
 			return err
 		}
 
@@ -332,7 +337,9 @@ func (s *Service) Run(ctx context.Context, input UserInput) error {
 			return s.handleRunError(ctx, input.RunID, session.ID, err)
 		}
 		if len(assistant.ToolCalls) == 0 {
-			s.emit(ctx, EventAgentDone, input.RunID, session.ID, assistant)
+			if err := s.emitRequired(ctx, EventAgentDone, input.RunID, session.ID, assistant); err != nil {
+				return s.handleRunError(ctx, input.RunID, session.ID, err)
+			}
 			return nil
 		}
 
@@ -340,7 +347,9 @@ func (s *Service) Run(ctx context.Context, input UserInput) error {
 			if err := ctx.Err(); err != nil {
 				return s.handleRunError(ctx, input.RunID, session.ID, err)
 			}
-			s.emit(ctx, EventToolStart, input.RunID, session.ID, call)
+			if err := s.emitRequired(ctx, EventToolStart, input.RunID, session.ID, call); err != nil {
+				return s.handleRunError(ctx, input.RunID, session.ID, err)
+			}
 
 			result, execErr := s.executeToolCallWithPermission(ctx, permissionExecutionInput{
 				RunID:       input.RunID,
@@ -362,7 +371,15 @@ func (s *Service) Run(ctx context.Context, input UserInput) error {
 				result.Content = execErr.Error()
 			}
 			if permissionEvent, ok := permissionEventFromError(execErr); ok {
-				s.emit(ctx, EventPermissionResolved, input.RunID, session.ID, permissionEvent.toResolvedPayload())
+				if err := s.emitRequired(
+					ctx,
+					EventPermissionResolved,
+					input.RunID,
+					session.ID,
+					permissionEvent.toResolvedPayload(),
+				); err != nil {
+					return s.handleRunError(ctx, input.RunID, session.ID, err)
+				}
 			}
 
 			toolMessage := providertypes.Message{
@@ -375,7 +392,7 @@ func (s *Service) Run(ctx context.Context, input UserInput) error {
 			session.UpdatedAt = time.Now()
 			if err := s.sessionStore.Save(ctx, &session); err != nil {
 				if execErr != nil && errors.Is(err, context.Canceled) {
-					s.emit(ctx, EventToolResult, input.RunID, session.ID, result)
+					_ = s.emit(ctx, EventToolResult, input.RunID, session.ID, result)
 				}
 				return s.handleRunError(ctx, input.RunID, session.ID, err)
 			}
@@ -385,7 +402,9 @@ func (s *Service) Run(ctx context.Context, input UserInput) error {
 				}
 			}
 
-			s.emit(ctx, EventToolResult, input.RunID, session.ID, result)
+			if err := s.emitRequired(ctx, EventToolResult, input.RunID, session.ID, result); err != nil {
+				return s.handleRunError(ctx, input.RunID, session.ID, err)
+			}
 			if execErr != nil {
 				if err := ctx.Err(); err != nil {
 					return s.handleRunError(ctx, input.RunID, session.ID, err)
@@ -513,6 +532,14 @@ func (s *Service) emit(ctx context.Context, kind EventType, runID string, sessio
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+}
+
+// emitRequired 用于投递影响交互一致性的关键事件；投递失败时返回带事件名的错误。
+func (s *Service) emitRequired(ctx context.Context, kind EventType, runID string, sessionID string, payload any) error {
+	if err := s.emit(ctx, kind, runID, sessionID, payload); err != nil {
+		return fmt.Errorf("runtime: emit %s event: %w", kind, err)
+	}
+	return nil
 }
 
 // handleProviderStreamEvent 解析并应用单条 provider 流式事件，缺失载荷或未知类型时返回错误。

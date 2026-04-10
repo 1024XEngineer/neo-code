@@ -40,13 +40,33 @@ type WorkspaceSandbox interface {
 	Check(ctx context.Context, action security.Action) (*security.WorkspaceExecutionPlan, error)
 }
 
-// NoopWorkspaceSandbox keeps the explicit sandbox stage in the execution chain
-// without changing current behavior.
-type NoopWorkspaceSandbox struct{}
+type missingWorkspaceSandbox struct{}
 
-// Check implements WorkspaceSandbox.
-func (NoopWorkspaceSandbox) Check(ctx context.Context, action security.Action) (*security.WorkspaceExecutionPlan, error) {
-	return nil, ctx.Err()
+// Check 在调用方漏传 sandbox 时明确返回错误，避免静默退化为无隔离执行。
+func (missingWorkspaceSandbox) Check(ctx context.Context, action security.Action) (*security.WorkspaceExecutionPlan, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if !requiresWorkspaceSandbox(action) {
+		return nil, nil
+	}
+	return nil, errors.New("tools: workspace sandbox is required")
+}
+
+// requiresWorkspaceSandbox 判断当前动作是否会触及本地工作区边界。
+func requiresWorkspaceSandbox(action security.Action) bool {
+	switch action.Type {
+	case security.ActionTypeBash:
+		return true
+	case security.ActionTypeRead, security.ActionTypeWrite:
+		targetType := action.Payload.SandboxTargetType
+		if targetType == "" {
+			targetType = action.Payload.TargetType
+		}
+		return targetType == security.TargetTypePath || targetType == security.TargetTypeDirectory
+	default:
+		return false
+	}
 }
 
 // PermissionDecisionError reports a non-allow permission decision.
@@ -149,7 +169,7 @@ func NewManager(executor Executor, engine security.PermissionEngine, sandbox Wor
 		engine = defaultEngine
 	}
 	if sandbox == nil {
-		sandbox = NoopWorkspaceSandbox{}
+		sandbox = missingWorkspaceSandbox{}
 	}
 
 	return &DefaultManager{

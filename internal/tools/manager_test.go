@@ -538,7 +538,7 @@ func TestDefaultManagerSessionPermissionMemory(t *testing.T) {
 		if err != nil {
 			t.Fatalf("new engine: %v", err)
 		}
-		manager, err := NewManager(registry, engine, nil)
+		manager, err := NewManager(registry, engine, &stubSandbox{})
 		if err != nil {
 			t.Fatalf("new manager: %v", err)
 		}
@@ -748,7 +748,7 @@ func TestDefaultManagerSessionPermissionMemory(t *testing.T) {
 		if err != nil {
 			t.Fatalf("new engine: %v", err)
 		}
-		manager, err := NewManager(registry, engine, nil)
+		manager, err := NewManager(registry, engine, &stubSandbox{})
 		if err != nil {
 			t.Fatalf("new manager: %v", err)
 		}
@@ -809,7 +809,7 @@ func TestDefaultManagerSessionPermissionMemory(t *testing.T) {
 		if err != nil {
 			t.Fatalf("new engine: %v", err)
 		}
-		manager, err := NewManager(registry, engine, nil)
+		manager, err := NewManager(registry, engine, &stubSandbox{})
 		if err != nil {
 			t.Fatalf("new manager: %v", err)
 		}
@@ -1060,16 +1060,34 @@ func TestPermissionMapperHelpers(t *testing.T) {
 	}
 }
 
-func TestNoopWorkspaceSandbox(t *testing.T) {
+func TestMissingWorkspaceSandbox(t *testing.T) {
 	t.Parallel()
 
-	sandbox := NoopWorkspaceSandbox{}
-	plan, err := sandbox.Check(context.Background(), security.Action{})
-	if err != nil {
-		t.Fatalf("expected nil error, got %v", err)
-	}
+	sandbox := missingWorkspaceSandbox{}
+	plan, err := sandbox.Check(context.Background(), security.Action{
+		Type: security.ActionTypeWrite,
+		Payload: security.ActionPayload{
+			TargetType: security.TargetTypePath,
+		},
+	})
 	if plan != nil {
 		t.Fatalf("expected nil workspace plan, got %#v", plan)
+	}
+	if err == nil || !strings.Contains(err.Error(), "workspace sandbox is required") {
+		t.Fatalf("expected required sandbox error, got %v", err)
+	}
+
+	plan, err = sandbox.Check(context.Background(), security.Action{
+		Type: security.ActionTypeRead,
+		Payload: security.ActionPayload{
+			TargetType: security.TargetTypeURL,
+		},
+	})
+	if err != nil {
+		t.Fatalf("expected non-workspace action to pass, got %v", err)
+	}
+	if plan != nil {
+		t.Fatalf("expected nil plan for non-workspace action, got %#v", plan)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())

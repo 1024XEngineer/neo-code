@@ -144,6 +144,72 @@ func TestResolvePermissionDuplicateSubmissionIsNonBlocking(t *testing.T) {
 	}
 }
 
+func TestPendingPermissionStateLivesOnService(t *testing.T) {
+	t.Parallel()
+
+	service := NewWithFactory(
+		newRuntimeConfigManager(t),
+		&stubToolManager{},
+		newMemoryStore(),
+		&scriptedProviderFactory{provider: &scriptedProvider{}},
+		nil,
+	)
+
+	request := registerPendingPermission(service, permissionExecutionInput{
+		RunID:     "run-local",
+		SessionID: "session-local",
+		Call: providertypes.ToolCall{
+			ID:   "call-local",
+			Name: "webfetch",
+		},
+	}, security.Action{
+		Type: security.ActionTypeRead,
+		Payload: security.ActionPayload{
+			ToolName: "webfetch",
+			Resource: "webfetch",
+		},
+	})
+
+	if service.pendingPermission == nil || service.pendingPermission.RequestID != request.RequestID {
+		t.Fatalf("expected pending permission stored on service, got %#v", service.pendingPermission)
+	}
+
+	clearPendingPermission(service, request.RequestID)
+	if service.pendingPermission != nil {
+		t.Fatalf("expected pending permission cleared from service, got %#v", service.pendingPermission)
+	}
+}
+
+func TestAwaitPermissionDecisionPropagatesCriticalEventFailure(t *testing.T) {
+	t.Parallel()
+
+	service := &Service{
+		events: make(chan RuntimeEvent, 1),
+	}
+	service.events <- RuntimeEvent{Type: EventError}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, _, requestID, err := service.awaitPermissionDecision(ctx, permissionExecutionInput{
+		RunID:     "run-event-fail",
+		SessionID: "session-event-fail",
+		Call: providertypes.ToolCall{
+			ID:   "call-event-fail",
+			Name: "webfetch",
+		},
+	}, &tools.PermissionDecisionError{})
+	if requestID == "" {
+		t.Fatalf("expected request id even on emit failure")
+	}
+	if err == nil || !containsError(err, "emit permission_request event") {
+		t.Fatalf("expected permission_request emit error, got %v", err)
+	}
+	if service.pendingPermission != nil {
+		t.Fatalf("expected deferred cleanup to clear pending permission, got %#v", service.pendingPermission)
+	}
+}
+
 func TestServiceRunPermissionRejectFlow(t *testing.T) {
 	t.Parallel()
 
@@ -342,7 +408,7 @@ func TestExecuteToolCallWithPermissionReturnsContextCanceledFromEmitChunk(t *tes
 
 	registry := tools.NewRegistry()
 	registry.Register(&stubTool{
-		name: "filesystem_read_file",
+		name: "webfetch",
 		executeFn: func(_ context.Context, input tools.ToolCallInput) (tools.ToolResult, error) {
 			if input.EmitChunk == nil {
 				t.Fatalf("expected EmitChunk callback")
@@ -379,8 +445,8 @@ func TestExecuteToolCallWithPermissionReturnsContextCanceledFromEmitChunk(t *tes
 		SessionID: "session-canceled",
 		Call: providertypes.ToolCall{
 			ID:        "call-canceled",
-			Name:      "filesystem_read_file",
-			Arguments: `{"path":"README.md"}`,
+			Name:      "webfetch",
+			Arguments: `{"url":"https://example.com"}`,
 		},
 		ToolTimeout: time.Second,
 	})
@@ -409,7 +475,7 @@ func TestExecuteToolCallWithPermissionDoesNotRecheckContextAfterSuccessfulEmit(t
 	var cancel context.CancelFunc
 	registry := tools.NewRegistry()
 	registry.Register(&stubTool{
-		name: "filesystem_read_file",
+		name: "webfetch",
 		executeFn: func(_ context.Context, input tools.ToolCallInput) (tools.ToolResult, error) {
 			if input.EmitChunk == nil {
 				t.Fatalf("expected EmitChunk callback")
@@ -447,8 +513,8 @@ func TestExecuteToolCallWithPermissionDoesNotRecheckContextAfterSuccessfulEmit(t
 		SessionID: "session-successful-emit",
 		Call: providertypes.ToolCall{
 			ID:        "call-successful-emit",
-			Name:      "filesystem_read_file",
-			Arguments: `{"path":"README.md"}`,
+			Name:      "webfetch",
+			Arguments: `{"url":"https://example.com"}`,
 		},
 		ToolTimeout: time.Second,
 	})
@@ -465,7 +531,7 @@ func TestExecuteToolCallWithPermissionReturnsContextCanceledWhenChunkNotDelivere
 
 	registry := tools.NewRegistry()
 	registry.Register(&stubTool{
-		name: "filesystem_read_file",
+		name: "webfetch",
 		executeFn: func(_ context.Context, input tools.ToolCallInput) (tools.ToolResult, error) {
 			if input.EmitChunk == nil {
 				t.Fatalf("expected EmitChunk callback")
@@ -511,8 +577,8 @@ func TestExecuteToolCallWithPermissionReturnsContextCanceledWhenChunkNotDelivere
 		SessionID: "session-canceled-blocked",
 		Call: providertypes.ToolCall{
 			ID:        "call-canceled-blocked",
-			Name:      "filesystem_read_file",
-			Arguments: `{"path":"README.md"}`,
+			Name:      "webfetch",
+			Arguments: `{"url":"https://example.com"}`,
 		},
 		ToolTimeout: time.Second,
 	})

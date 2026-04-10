@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"sync"
 	"time"
 
 	providertypes "neo-code/internal/provider/types"
@@ -46,14 +45,6 @@ type pendingPermissionRequest struct {
 	Submitted bool
 }
 
-var runtimePendingPermissions = struct {
-	mu     sync.Mutex
-	nextID uint64
-	byRun  map[*Service]*pendingPermissionRequest
-}{
-	byRun: make(map[*Service]*pendingPermissionRequest),
-}
-
 // ResolvePermission 接收 UI 的审批决定，并唤醒 runtime 中等待的工具调用。
 func (s *Service) ResolvePermission(ctx context.Context, input PermissionResolutionInput) error {
 	requestID := strings.TrimSpace(input.RequestID)
@@ -68,20 +59,20 @@ func (s *Service) ResolvePermission(ctx context.Context, input PermissionResolut
 		return err
 	}
 
-	runtimePendingPermissions.mu.Lock()
-	pending := runtimePendingPermissions.byRun[s]
+	s.pendingPermissionMu.Lock()
+	pending := s.pendingPermission
 	if pending == nil || pending.RequestID != requestID {
-		runtimePendingPermissions.mu.Unlock()
+		s.pendingPermissionMu.Unlock()
 		return fmt.Errorf("runtime: permission request %q not found", requestID)
 	}
 	// Submitted 标记用于避免重复提交同一个 request 导致阻塞。
 	if pending.Submitted {
-		runtimePendingPermissions.mu.Unlock()
+		s.pendingPermissionMu.Unlock()
 		return nil
 	}
 	pending.Submitted = true
 	resultCh := pending.ResultCh
-	runtimePendingPermissions.mu.Unlock()
+	s.pendingPermissionMu.Unlock()
 
 	// 非阻塞提交，避免 UI 重复触发导致写满 channel 后长时间卡住。
 	select {
@@ -134,7 +125,7 @@ func (s *Service) executeToolCallWithPermission(ctx context.Context, input permi
 				return tools.ToolResult{}, rememberErr
 			}
 		}
-		s.emit(ctx, EventPermissionResolved, input.RunID, input.SessionID, PermissionResolvedPayload{
+		if err := s.emitRequired(ctx, EventPermissionResolved, input.RunID, input.SessionID, PermissionResolvedPayload{
 			RequestID:     requestID,
 			ToolCallID:    input.Call.ID,
 			ToolName:      input.Call.Name,
@@ -148,7 +139,9 @@ func (s *Service) executeToolCallWithPermission(ctx context.Context, input permi
 			RuleID:        permissionErr.RuleID(),
 			RememberScope: string(scope),
 			ResolvedAs:    "rejected",
-		})
+		}); err != nil {
+			return tools.ToolResult{}, err
+		}
 		return tools.ToolResult{
 			ToolCallID: input.Call.ID,
 			Name:       input.Call.Name,
@@ -160,7 +153,7 @@ func (s *Service) executeToolCallWithPermission(ctx context.Context, input permi
 	if rememberErr := s.toolManager.RememberSessionDecision(input.SessionID, permissionErr.Action(), scope); rememberErr != nil {
 		return tools.ToolResult{}, rememberErr
 	}
-	s.emit(ctx, EventPermissionResolved, input.RunID, input.SessionID, PermissionResolvedPayload{
+	if err := s.emitRequired(ctx, EventPermissionResolved, input.RunID, input.SessionID, PermissionResolvedPayload{
 		RequestID:     requestID,
 		ToolCallID:    input.Call.ID,
 		ToolName:      input.Call.Name,
@@ -174,7 +167,9 @@ func (s *Service) executeToolCallWithPermission(ctx context.Context, input permi
 		RuleID:        permissionErr.RuleID(),
 		RememberScope: string(scope),
 		ResolvedAs:    "approved",
-	})
+	}); err != nil {
+		return tools.ToolResult{}, err
+	}
 
 	retryCtx, retryCancel := context.WithTimeout(ctx, input.ToolTimeout)
 	retryResult, retryErr := s.toolManager.Execute(retryCtx, callInput)
@@ -191,7 +186,7 @@ func (s *Service) awaitPermissionDecision(
 	request := registerPendingPermission(s, input, permissionErr.Action())
 	defer clearPendingPermission(s, request.RequestID)
 
-	s.emit(ctx, EventPermissionRequest, input.RunID, input.SessionID, PermissionRequestPayload{
+	if err := s.emitRequired(ctx, EventPermissionRequest, input.RunID, input.SessionID, PermissionRequestPayload{
 		RequestID:    request.RequestID,
 		ToolCallID:   input.Call.ID,
 		ToolName:     input.Call.Name,
@@ -203,7 +198,9 @@ func (s *Service) awaitPermissionDecision(
 		Decision:     permissionErr.Decision(),
 		Reason:       permissionErr.Reason(),
 		RuleID:       permissionErr.RuleID(),
-	})
+	}); err != nil {
+		return "", "", request.RequestID, err
+	}
 
 	select {
 	case <-ctx.Done():
@@ -219,30 +216,30 @@ func (s *Service) awaitPermissionDecision(
 
 // registerPendingPermission 注册待审批请求并返回 request id。
 func registerPendingPermission(s *Service, input permissionExecutionInput, action security.Action) pendingPermissionRequest {
-	runtimePendingPermissions.mu.Lock()
-	defer runtimePendingPermissions.mu.Unlock()
+	s.pendingPermissionMu.Lock()
+	defer s.pendingPermissionMu.Unlock()
 
-	runtimePendingPermissions.nextID++
+	s.nextPermissionID++
 	request := pendingPermissionRequest{
-		RequestID: fmt.Sprintf("perm-%d", runtimePendingPermissions.nextID),
+		RequestID: fmt.Sprintf("perm-%d", s.nextPermissionID),
 		RunID:     input.RunID,
 		SessionID: input.SessionID,
 		Call:      input.Call,
 		Action:    action,
 		ResultCh:  make(chan PermissionResolutionDecision, 1),
 	}
-	runtimePendingPermissions.byRun[s] = &request
+	s.pendingPermission = &request
 	return request
 }
 
 // clearPendingPermission 清理待审批请求，避免跨请求误用。
 func clearPendingPermission(s *Service, requestID string) {
-	runtimePendingPermissions.mu.Lock()
-	defer runtimePendingPermissions.mu.Unlock()
+	s.pendingPermissionMu.Lock()
+	defer s.pendingPermissionMu.Unlock()
 
-	current := runtimePendingPermissions.byRun[s]
+	current := s.pendingPermission
 	if current != nil && current.RequestID == requestID {
-		delete(runtimePendingPermissions.byRun, s)
+		s.pendingPermission = nil
 	}
 }
 

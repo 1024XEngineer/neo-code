@@ -15,6 +15,8 @@
 
 当前项目主链路 `TUI -> Runtime -> Provider / Tool Manager` 基本清晰，运行时编排、工具调度、配置管理与 TUI 展示的边界总体可读，适合作为 Agent CLI 的 MVP 基础。
 
+> 2026-04-10 修复进展：`internal/gateway` 已按建议移除；待审批权限状态改为由 `runtime.Service` 实例持有；缺失 workspace sandbox 时会显式报错；关键交互事件开始在投递失败时返回错误。
+
 但仓库中仍存在几类会直接拉低可维护性和演进效率的问题：
 
 - 存在未落地的抽象层，增加理解成本且没有产生真实隔离收益。

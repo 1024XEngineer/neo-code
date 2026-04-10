@@ -3085,6 +3085,23 @@ func TestEmitDropsWhenChannelFullAndContextCanceled(t *testing.T) {
 	}
 }
 
+func TestEmitRequiredWrapsCriticalEventError(t *testing.T) {
+	t.Parallel()
+
+	service := &Service{
+		events: make(chan RuntimeEvent, 1),
+	}
+	service.events <- RuntimeEvent{Type: EventAgentChunk}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := service.emitRequired(ctx, EventToolStart, "run-id", "session-id", "payload")
+	if err == nil || !containsError(err, "emit tool_start event") {
+		t.Fatalf("expected wrapped tool_start emit error, got %v", err)
+	}
+}
+
 func TestCallProviderWithRetryReturnsCombinedForwardError(t *testing.T) {
 	t.Parallel()
 
