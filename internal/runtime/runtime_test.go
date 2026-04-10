@@ -2463,7 +2463,7 @@ func TestServiceRunUsesInputWorkdirForNewSession(t *testing.T) {
 	}
 }
 
-func TestServiceSetSessionWorkdir(t *testing.T) {
+func TestServiceUpdateSessionWorkdir(t *testing.T) {
 	manager := newRuntimeConfigManager(t)
 	defaultWorkdir := t.TempDir()
 	target := filepath.Join(defaultWorkdir, "sub")
@@ -2484,9 +2484,9 @@ func TestServiceSetSessionWorkdir(t *testing.T) {
 	registry.Register(&stubTool{name: "filesystem_read_file", content: "default"})
 
 	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: &scriptedProvider{}}, nil)
-	updated, err := service.SetSessionWorkdir(context.Background(), session.ID, "sub")
+	updated, err := service.UpdateSessionWorkdir(context.Background(), session.ID, "sub")
 	if err != nil {
-		t.Fatalf("SetSessionWorkdir() error = %v", err)
+		t.Fatalf("UpdateSessionWorkdir() error = %v", err)
 	}
 	if updated.Workdir != target {
 		t.Fatalf("expected updated workdir %q, got %q", target, updated.Workdir)
@@ -2509,7 +2509,7 @@ func TestServiceSetSessionWorkdir(t *testing.T) {
 		t.Fatalf("expected session workdir to persist across service lifetime, got %q", reloaded.Workdir)
 	}
 
-	_, err = service.SetSessionWorkdir(context.Background(), "", "sub")
+	_, err = service.UpdateSessionWorkdir(context.Background(), "", "sub")
 	if err == nil || !containsError(err, "session id is empty") {
 		t.Fatalf("expected empty session id error, got %v", err)
 	}
@@ -2718,23 +2718,25 @@ func TestWorkdirHelperFunctions(t *testing.T) {
 		}
 		absoluteTarget := t.TempDir()
 
-		got, err := resolveWorkdirForSession(defaultDir, "", "")
+		service := &Service{workdir: defaultDir}
+		got, err := service.resolveSessionWorkdir("", "")
 		if err != nil || got != filepath.Clean(defaultDir) {
 			t.Fatalf("expected default dir %q, got %q / %v", filepath.Clean(defaultDir), got, err)
 		}
 
-		got, err = resolveWorkdirForSession(defaultDir, currentDir, "nested")
+		got, err = service.resolveSessionWorkdir(currentDir, "nested")
 		if err != nil || got != filepath.Clean(relativeTarget) {
 			t.Fatalf("expected relative target %q, got %q / %v", filepath.Clean(relativeTarget), got, err)
 		}
 
-		got, err = resolveWorkdirForSession(defaultDir, currentDir, absoluteTarget)
+		got, err = service.resolveSessionWorkdir(currentDir, absoluteTarget)
 		if err != nil || got != filepath.Clean(absoluteTarget) {
 			t.Fatalf("expected absolute target %q, got %q / %v", filepath.Clean(absoluteTarget), got, err)
 		}
 
-		_, err = resolveWorkdirForSession("", "", "")
-		if err == nil || !containsError(err, "workdir is empty") {
+		service = &Service{}
+		_, err = service.resolveSessionWorkdir("", "")
+		if err == nil || !containsError(err, "resolve workdir") {
 			t.Fatalf("expected empty workdir error, got %v", err)
 		}
 
@@ -2742,14 +2744,15 @@ func TestWorkdirHelperFunctions(t *testing.T) {
 		if err := os.WriteFile(filePath, []byte("x"), 0o644); err != nil {
 			t.Fatalf("write file: %v", err)
 		}
-		_, err = normalizeExistingWorkdir(filePath)
+		service = &Service{workdir: defaultDir}
+		_, err = service.resolveSessionWorkdir("", filePath)
 		if err == nil || !containsError(err, "is not a directory") {
 			t.Fatalf("expected non-directory error, got %v", err)
 		}
 	})
 }
 
-func TestServiceSetSessionWorkdirNoopDoesNotSave(t *testing.T) {
+func TestServiceUpdateSessionWorkdirNoopDoesNotSave(t *testing.T) {
 	manager := newRuntimeConfigManager(t)
 	defaultWorkdir := t.TempDir()
 	if err := manager.Update(context.Background(), func(cfg *config.Config) error {
@@ -2768,9 +2771,9 @@ func TestServiceSetSessionWorkdirNoopDoesNotSave(t *testing.T) {
 	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: &scriptedProvider{}}, nil)
 
 	beforeSaves := store.saves
-	updated, err := service.SetSessionWorkdir(context.Background(), session.ID, target)
+	updated, err := service.UpdateSessionWorkdir(context.Background(), session.ID, target)
 	if err != nil {
-		t.Fatalf("SetSessionWorkdir() error = %v", err)
+		t.Fatalf("UpdateSessionWorkdir() error = %v", err)
 	}
 	if updated.Workdir != target {
 		t.Fatalf("expected unchanged workdir %q, got %q", target, updated.Workdir)
@@ -2919,20 +2922,20 @@ func TestLoadSessionReturnsStoreError(t *testing.T) {
 	}
 }
 
-func TestSetSessionWorkdirReturnsStoreError(t *testing.T) {
+func TestUpdateSessionWorkdirReturnsStoreError(t *testing.T) {
 	t.Parallel()
 
 	manager := newRuntimeConfigManager(t)
 	store := newMemoryStore()
 	service := NewWithFactory(manager, nil, store, &scriptedProviderFactory{provider: &scriptedProvider{}}, nil)
 
-	_, err := service.SetSessionWorkdir(context.Background(), "missing", t.TempDir())
+	_, err := service.UpdateSessionWorkdir(context.Background(), "missing", t.TempDir())
 	if err == nil || !containsError(err, "not found") {
-		t.Fatalf("expected load error from SetSessionWorkdir, got %v", err)
+		t.Fatalf("expected load error from UpdateSessionWorkdir, got %v", err)
 	}
 }
 
-func TestSetSessionWorkdirReturnsResolveError(t *testing.T) {
+func TestUpdateSessionWorkdirReturnsResolveError(t *testing.T) {
 	t.Parallel()
 
 	manager := newRuntimeConfigManager(t)
@@ -2950,7 +2953,7 @@ func TestSetSessionWorkdirReturnsResolveError(t *testing.T) {
 	store.sessions[session.ID] = cloneSession(session)
 
 	service := NewWithFactory(manager, nil, store, &scriptedProviderFactory{provider: &scriptedProvider{}}, nil)
-	_, err := service.SetSessionWorkdir(context.Background(), session.ID, filepath.Join(defaultWorkdir, "missing-dir"))
+	_, err := service.UpdateSessionWorkdir(context.Background(), session.ID, filepath.Join(defaultWorkdir, "missing-dir"))
 	if err == nil || !containsError(err, "resolve workdir") {
 		t.Fatalf("expected resolve workdir error, got %v", err)
 	}

@@ -20,7 +20,7 @@ func buildPermissionAction(input ToolCallInput) (security.Action, error) {
 			Resource:  toolName,
 			Operation: toolName,
 			SessionID: input.SessionID,
-			Workdir:   input.Workdir,
+			Workdir:   workspaceRootForInput(input),
 		},
 	}
 
@@ -32,6 +32,9 @@ func buildPermissionAction(input ToolCallInput) (security.Action, error) {
 		action.Payload.Target = extractStringArgument(input.Arguments, "command")
 		action.Payload.SandboxTargetType = security.TargetTypeDirectory
 		action.Payload.SandboxTarget = extractStringArgument(input.Arguments, "workdir")
+		if strings.TrimSpace(action.Payload.SandboxTarget) == "" {
+			action.Payload.SandboxTarget = input.Workdir
+		}
 	case "filesystem_read_file":
 		action.Type = security.ActionTypeRead
 		action.Payload.Operation = "read_file"
@@ -85,6 +88,14 @@ func buildPermissionAction(input ToolCallInput) (security.Action, error) {
 	}
 
 	return action, nil
+}
+
+func workspaceRootForInput(input ToolCallInput) string {
+	root := strings.TrimSpace(input.WorkspaceRoot)
+	if root != "" {
+		return root
+	}
+	return strings.TrimSpace(input.Workdir)
 }
 
 func mcpServerTarget(toolName string) string {

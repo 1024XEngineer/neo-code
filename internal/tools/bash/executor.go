@@ -65,16 +65,22 @@ func (e *defaultSecurityExecutor) Execute(
 		return tools.NewErrorResult("bash", tools.NormalizeErrorReason("bash", err), "", nil), err
 	}
 
-	base := strings.TrimSpace(call.Workdir)
-	if base == "" {
-		base = e.root
+	root := strings.TrimSpace(call.WorkspaceRoot)
+	if root == "" {
+		root = e.root
+	}
+	currentWorkdir := strings.TrimSpace(call.Workdir)
+	if currentWorkdir == "" {
+		currentWorkdir = root
 	}
 	_, workdir, err := tools.ResolveWorkspaceTarget(
 		call,
 		security.TargetTypeDirectory,
-		base,
+		root,
 		requestedWorkdir,
-		resolveWorkdir,
+		func(root string, requested string) (string, error) {
+			return resolveWorkdir(root, currentWorkdir, requested)
+		},
 	)
 	if err != nil {
 		return tools.NewErrorResult("bash", tools.NormalizeErrorReason("bash", err), "", nil), err
@@ -124,7 +130,7 @@ func shellCommand(shell string, command string) (string, []string) {
 	return "sh", []string{"-lc", command}
 }
 
-func resolveWorkdir(root string, requested string) (string, error) {
+func resolveWorkdir(root string, current string, requested string) (string, error) {
 	if strings.ContainsRune(root, '\x00') || strings.ContainsRune(requested, '\x00') {
 		return "", errors.New("bash: invalid path contains NUL")
 	}
@@ -132,9 +138,15 @@ func resolveWorkdir(root string, requested string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	target := requested
-	if strings.TrimSpace(target) == "" {
+	target := strings.TrimSpace(current)
+	if target == "" {
 		target = base
+	}
+	if strings.TrimSpace(requested) != "" {
+		target = requested
+		if !filepath.IsAbs(target) {
+			target = filepath.Join(base, target)
+		}
 	} else if !filepath.IsAbs(target) {
 		target = filepath.Join(base, target)
 	}

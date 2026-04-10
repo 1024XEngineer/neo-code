@@ -16,8 +16,8 @@ const (
 	editToolName      = tools.ToolNameFilesystemEdit
 )
 
-func effectiveRoot(defaultRoot string, workdir string) string {
-	base := strings.TrimSpace(workdir)
+func effectiveRoot(defaultRoot string, workspaceRoot string) string {
+	base := strings.TrimSpace(workspaceRoot)
 	if base == "" {
 		base = defaultRoot
 	}

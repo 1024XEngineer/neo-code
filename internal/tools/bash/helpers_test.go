@@ -124,7 +124,7 @@ func TestResolveWorkdirVariants(t *testing.T) {
 	for _, tt := range tests {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := resolveWorkdir(root, tt.requested)
+			got, err := resolveWorkdir(root, root, tt.requested)
 			if tt.expectErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tt.expectErr) {
 					t.Fatalf("expected error containing %q, got %v", tt.expectErr, err)

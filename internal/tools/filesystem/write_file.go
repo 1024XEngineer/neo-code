@@ -68,7 +68,7 @@ func (t *WriteFileTool) Execute(ctx context.Context, input tools.ToolCallInput) 
 		return tools.NewErrorResult(t.Name(), tools.NormalizeErrorReason(t.Name(), err), "", nil), err
 	}
 
-	base := effectiveRoot(t.root, input.Workdir)
+	base := effectiveRoot(t.root, input.WorkspaceRoot)
 
 	_, target, err := tools.ResolveWorkspaceTarget(
 		input,

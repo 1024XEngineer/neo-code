@@ -3,6 +3,7 @@ package state
 import (
 	"neo-code/internal/config"
 	agentruntime "neo-code/internal/runtime"
+	tuibootstrap "neo-code/internal/tui/bootstrap"
 )
 
 // RuntimeMsg 封装 runtime 事件流消息。
@@ -40,8 +41,17 @@ type LocalCommandResultMsg struct {
 
 // SessionWorkdirResultMsg 表示会话工作目录命令结果。
 type SessionWorkdirResultMsg struct {
+	Notice          string
+	Workdir         string
+	WorkspaceRoot   string
+	RequiresRebuild bool
+	Err             error
+}
+
+// WorkspaceRebuildFinishedMsg 表示一次跨工作区 bundle 重建结束。
+type WorkspaceRebuildFinishedMsg struct {
 	Notice  string
-	Workdir string
+	Binding tuibootstrap.WorkspaceBinding
 	Err     error
 }
 

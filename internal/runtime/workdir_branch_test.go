@@ -20,28 +20,31 @@ func TestResolveWorkdirForSessionAndNormalizeErrors(t *testing.T) {
 		t.Fatalf("mkdir relative dir: %v", err)
 	}
 	absoluteDir := t.TempDir()
+	service := &Service{workdir: base}
 
-	got, err := resolveWorkdirForSession(base, "", "")
+	got, err := service.resolveSessionWorkdir("", "")
 	if err != nil || got != filepath.Clean(base) {
 		t.Fatalf("expected base workdir %q, got %q / %v", filepath.Clean(base), got, err)
 	}
 
-	got, err = resolveWorkdirForSession(base, current, "child")
+	got, err = service.resolveSessionWorkdir(current, "child")
 	if err != nil || got != filepath.Clean(relativeDir) {
 		t.Fatalf("expected relative workdir %q, got %q / %v", filepath.Clean(relativeDir), got, err)
 	}
 
-	got, err = resolveWorkdirForSession(base, current, absoluteDir)
+	got, err = service.resolveSessionWorkdir(current, absoluteDir)
 	if err != nil || got != filepath.Clean(absoluteDir) {
 		t.Fatalf("expected absolute workdir %q, got %q / %v", filepath.Clean(absoluteDir), got, err)
 	}
 
-	_, err = resolveWorkdirForSession("", "", "")
-	if err == nil || !strings.Contains(err.Error(), "workdir is empty") {
+	service = &Service{}
+	_, err = service.resolveSessionWorkdir("", "")
+	if err == nil || !strings.Contains(err.Error(), "resolve workdir") {
 		t.Fatalf("expected empty workdir error, got %v", err)
 	}
 
-	_, err = normalizeExistingWorkdir(filepath.Join(base, "missing"))
+	service = &Service{workdir: base}
+	_, err = service.resolveSessionWorkdir("", filepath.Join(base, "missing"))
 	if err == nil || !strings.Contains(err.Error(), "resolve workdir") {
 		t.Fatalf("expected missing path error, got %v", err)
 	}
@@ -50,7 +53,7 @@ func TestResolveWorkdirForSessionAndNormalizeErrors(t *testing.T) {
 	if err := os.WriteFile(filePath, []byte("x"), 0o644); err != nil {
 		t.Fatalf("write file: %v", err)
 	}
-	_, err = normalizeExistingWorkdir(filePath)
+	_, err = service.resolveSessionWorkdir("", filePath)
 	if err == nil || !strings.Contains(err.Error(), "is not a directory") {
 		t.Fatalf("expected non-directory error, got %v", err)
 	}

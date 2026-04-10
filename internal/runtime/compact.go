@@ -111,7 +111,7 @@ func (s *Service) runCompactForSession(
 	result, err := runner.Run(ctx, contextcompact.Input{
 		Mode:      mode,
 		SessionID: session.ID,
-		Workdir:   effectiveSessionWorkdir(session.Workdir, cfg.Workdir),
+		Workdir:   effectiveSessionWorkdir(session.Workdir, s.workdir),
 		Messages:  session.Messages,
 		Config:    cfg.Context.Compact,
 	})

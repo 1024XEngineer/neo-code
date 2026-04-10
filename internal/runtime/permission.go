@@ -95,11 +95,12 @@ func (s *Service) ResolvePermission(ctx context.Context, input PermissionResolut
 // executeToolCallWithPermission 执行工具调用并处理 ask 决策的显式审批闭环。
 func (s *Service) executeToolCallWithPermission(ctx context.Context, input permissionExecutionInput) (tools.ToolResult, error) {
 	callInput := tools.ToolCallInput{
-		ID:        input.Call.ID,
-		Name:      input.Call.Name,
-		Arguments: []byte(input.Call.Arguments),
-		Workdir:   input.Workdir,
-		SessionID: input.SessionID,
+		ID:            input.Call.ID,
+		Name:          input.Call.Name,
+		Arguments:     []byte(input.Call.Arguments),
+		WorkspaceRoot: s.workspaceRoot,
+		Workdir:       input.Workdir,
+		SessionID:     input.SessionID,
 		EmitChunk: func(chunk []byte) error {
 			if err := ctx.Err(); err != nil {
 				return err

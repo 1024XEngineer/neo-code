@@ -161,8 +161,8 @@ type RuntimePort interface {
 	ListSessions(ctx context.Context) ([]SessionSummary, error)
 	// LoadSession 加载指定会话详情。
 	LoadSession(ctx context.Context, id string) (Session, error)
-	// SetSessionWorkdir 更新会话工作目录。
-	SetSessionWorkdir(ctx context.Context, sessionID string, workdir string) (Session, error)
+	// UpdateSessionWorkdir 更新会话工作目录。
+	UpdateSessionWorkdir(ctx context.Context, sessionID string, workdir string) (Session, error)
 }
 
 // Gateway 定义网关主契约。

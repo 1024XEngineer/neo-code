@@ -46,6 +46,7 @@ type modelCatalogRefreshMsg = tuistate.ModelCatalogRefreshMsg
 type compactFinishedMsg = tuistate.CompactFinishedMsg
 type localCommandResultMsg = tuistate.LocalCommandResultMsg
 type sessionWorkdirResultMsg = tuistate.SessionWorkdirResultMsg
+type workspaceRebuildFinishedMsg = tuistate.WorkspaceRebuildFinishedMsg
 type workspaceCommandResultMsg = tuistate.WorkspaceCommandResultMsg
 type permissionResolutionFinishedMsg = tuistate.PermissionResolutionFinishedMsg
 
@@ -59,9 +60,11 @@ type ProviderController interface {
 
 // appServices 聚合 App 需要的服务依赖，避免与渲染状态混在同一层级。
 type appServices struct {
-	configManager *config.Manager
-	providerSvc   ProviderController
-	runtime       agentruntime.Runtime
+	configManager    *config.Manager
+	providerSvc      ProviderController
+	runtime          agentruntime.Runtime
+	workspaceRoot    string
+	rebuildWorkspace tuibootstrap.RebuildWorkspaceFunc
 }
 
 // appComponents 聚合 Bubble Tea 组件与渲染器。
@@ -212,9 +215,11 @@ func newApp(container tuibootstrap.Container) (App, error) {
 			Focus:              panelInput,
 		},
 		appServices: appServices{
-			configManager: configManager,
-			providerSvc:   providerSvc,
-			runtime:       runtime,
+			configManager:    configManager,
+			providerSvc:      providerSvc,
+			runtime:          runtime,
+			workspaceRoot:    container.WorkspaceRoot,
+			rebuildWorkspace: container.RebuildWorkspace,
 		},
 		appComponents: appComponents{
 			keys:             keys,

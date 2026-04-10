@@ -18,12 +18,14 @@ import (
 	providertypes "neo-code/internal/provider/types"
 	agentruntime "neo-code/internal/runtime"
 	"neo-code/internal/tools"
+	tuibootstrap "neo-code/internal/tui/bootstrap"
 	tuicommands "neo-code/internal/tui/core/commands"
 	tuistatus "neo-code/internal/tui/core/status"
 	tuiutils "neo-code/internal/tui/core/utils"
 	tuiworkspace "neo-code/internal/tui/core/workspace"
 	tuiservices "neo-code/internal/tui/services"
 	tuistate "neo-code/internal/tui/state"
+	agentworkspace "neo-code/internal/workspace"
 )
 
 const (
@@ -194,6 +196,27 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.appendActivity("workspace", "Workspace command failed", typed.Err.Error(), true)
 			return a, tea.Batch(cmds...)
 		}
+		if typed.RequiresRebuild {
+			if a.isBusy() {
+				err := errors.New("workspace rebuild is blocked while agent or compact is running")
+				a.state.ExecutionError = err.Error()
+				a.state.StatusText = err.Error()
+				a.appendActivity("workspace", "Workspace command failed", err.Error(), true)
+				return a, tea.Batch(cmds...)
+			}
+			if a.rebuildWorkspace == nil {
+				err := errors.New("workspace rebuild is not configured")
+				a.state.ExecutionError = err.Error()
+				a.state.StatusText = err.Error()
+				a.appendActivity("workspace", "Workspace command failed", err.Error(), true)
+				return a, tea.Batch(cmds...)
+			}
+			a.state.ExecutionError = ""
+			a.state.StatusText = statusApplyingCommand
+			a.appendActivity("workspace", "Rebuilding workspace bundle", typed.Workdir, false)
+			cmds = append(cmds, runWorkspaceRebuild(a.rebuildWorkspace, typed.Notice, typed.Workdir))
+			return a, tea.Batch(cmds...)
+		}
 
 		a.state.ExecutionError = ""
 		a.state.StatusText = typed.Notice
@@ -204,6 +227,48 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.appendActivity("workspace", "Failed to refresh workspace files", err.Error(), true)
 			return a, tea.Batch(cmds...)
 		}
+		a.appendActivity("workspace", typed.Notice, "", false)
+		return a, tea.Batch(cmds...)
+	case workspaceRebuildFinishedMsg:
+		if typed.Err != nil {
+			a.state.ExecutionError = typed.Err.Error()
+			a.state.StatusText = typed.Err.Error()
+			a.appendActivity("workspace", "Workspace rebuild failed", typed.Err.Error(), true)
+			return a, tea.Batch(cmds...)
+		}
+		if err := a.applyWorkspaceBinding(typed.Binding); err != nil {
+			a.state.ExecutionError = err.Error()
+			a.state.StatusText = err.Error()
+			a.appendActivity("workspace", "Workspace rebuild failed", err.Error(), true)
+			return a, tea.Batch(cmds...)
+		}
+		a.startDraftSession()
+		if err := a.refreshSessions(); err != nil {
+			a.state.ExecutionError = err.Error()
+			a.state.StatusText = err.Error()
+			a.appendActivity("workspace", "Failed to refresh sessions", err.Error(), true)
+			return a, tea.Batch(cmds...)
+		}
+		if err := a.refreshProviderPicker(); err != nil {
+			a.state.ExecutionError = err.Error()
+			a.state.StatusText = err.Error()
+			a.appendActivity("workspace", "Failed to refresh providers", err.Error(), true)
+			return a, tea.Batch(cmds...)
+		}
+		if err := a.refreshModelPicker(); err != nil {
+			a.state.ExecutionError = err.Error()
+			a.state.StatusText = err.Error()
+			a.appendActivity("workspace", "Failed to refresh models", err.Error(), true)
+			return a, tea.Batch(cmds...)
+		}
+		a.selectCurrentProvider(a.state.CurrentProvider)
+		a.selectCurrentModel(a.state.CurrentModel)
+		if cmd := a.requestModelCatalogRefresh(a.state.CurrentProvider); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+		cmds = append(cmds, ListenForRuntimeEvent(a.runtime.Events()))
+		a.state.ExecutionError = ""
+		a.state.StatusText = typed.Notice
 		a.appendActivity("workspace", typed.Notice, "", false)
 		return a, tea.Batch(cmds...)
 	case workspaceCommandResultMsg:
@@ -384,7 +449,7 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 				if isWorkspaceSlashCommand(input) {
 					a.state.StatusText = statusApplyingCommand
 					a.state.ExecutionError = ""
-					cmds = append(cmds, runSessionWorkdirCommand(a.runtime, a.state.ActiveSessionID, a.state.CurrentWorkdir, input))
+					cmds = append(cmds, runSessionWorkdirCommand(a.runtime, a.state.ActiveSessionID, a.workspaceRoot, a.state.CurrentWorkdir, input))
 					return a, tea.Batch(cmds...)
 				}
 				a.state.StatusText = statusApplyingCommand
@@ -1691,6 +1756,27 @@ func (a *App) startDraftSession() {
 	a.rebuildTranscript()
 }
 
+// applyWorkspaceBinding 将跨工作区重建后的依赖和状态重新绑定到当前 App。
+func (a *App) applyWorkspaceBinding(binding tuibootstrap.WorkspaceBinding) error {
+	if binding.ConfigManager == nil {
+		return errors.New("workspace binding config manager is nil")
+	}
+	if binding.Runtime == nil {
+		return errors.New("workspace binding runtime is nil")
+	}
+	if binding.ProviderService == nil {
+		return errors.New("workspace binding provider service is nil")
+	}
+
+	a.configManager = binding.ConfigManager
+	a.providerSvc = binding.ProviderService
+	a.runtime = binding.Runtime
+	a.workspaceRoot = strings.TrimSpace(binding.WorkspaceRoot)
+	a.syncConfigState(binding.Config)
+	a.state.CurrentWorkdir = binding.Workdir
+	return nil
+}
+
 func (a *App) requestModelCatalogRefresh(providerID string) tea.Cmd {
 	providerID = strings.TrimSpace(providerID)
 	if providerID == "" || strings.EqualFold(a.modelRefreshID, providerID) {
@@ -1747,6 +1833,7 @@ func runResolvePermission(
 func runSessionWorkdirCommand(
 	runtime agentruntime.Runtime,
 	sessionID string,
+	currentWorkspaceRoot string,
 	currentWorkdir string,
 	raw string,
 ) tea.Cmd {
@@ -1754,16 +1841,34 @@ func runSessionWorkdirCommand(
 		result := tuicommands.ExecuteSessionWorkdirCommand(
 			runtime,
 			sessionID,
+			currentWorkspaceRoot,
 			currentWorkdir,
 			raw,
 			parseWorkspaceSlashCommand,
-			tuiworkspace.ResolveWorkspacePath,
+			agentworkspace.ResolveFrom,
 			tuiworkspace.SelectSessionWorkdir,
 		)
 		return sessionWorkdirResultMsg{
-			Notice:  result.Notice,
-			Workdir: result.Workdir,
-			Err:     result.Err,
+			Notice:          result.Notice,
+			Workdir:         result.Workdir,
+			WorkspaceRoot:   result.WorkspaceRoot,
+			RequiresRebuild: result.RequiresRebuild,
+			Err:             result.Err,
+		}
+	}
+}
+
+func runWorkspaceRebuild(
+	rebuild tuibootstrap.RebuildWorkspaceFunc,
+	notice string,
+	requestedPath string,
+) tea.Cmd {
+	return func() tea.Msg {
+		binding, err := rebuild(context.Background(), requestedPath)
+		return workspaceRebuildFinishedMsg{
+			Notice:  notice,
+			Binding: binding,
+			Err:     err,
 		}
 	}
 }

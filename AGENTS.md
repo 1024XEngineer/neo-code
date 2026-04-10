@@ -27,6 +27,7 @@
 - `internal/runtime`：ReAct 主循环、事件流、Prompt 编排、token 累积与自动压缩触发。
 - `internal/session`：会话领域模型、存储抽象与 JSON 持久化实现。
 - `internal/tools`：工具契约、注册表、参数校验和具体工具实现。
+- `internal/workspace`：工作区路径规范化、Git 根目录识别与 `workspaceRoot/workdir` 解析。
 - `internal/tui`：Bubble Tea 状态机、渲染层、Slash Command 和事件桥接。
 - `docs`：架构、配置、事件流、会话持久化等说明文档。
 
@@ -38,6 +39,7 @@
 - `runtime` 负责会话编排、消息上下文流转、tool schema 传递、tool call 识别、tool result 回灌、token 累积、事件派发和停止条件。runtime 不替 context 做压缩决策。
 - `session` 负责会话领域模型与 JSON 持久化，包括 token 累计值的持久化。
 - `tools` 负责统一的 `schema + execute + result` 协议，以及参数校验、错误包装和输出格式收敛。
+- `workspace` 负责统一的工作区解析语义，优先识别 Git 顶层仓库并输出稳定的 `workspaceRoot`。
 - `tui` 只消费 runtime 事件并负责展示，不直接调用 provider，不直接执行 tools。
 
 ## 4. AI 修改代码时的执行流程

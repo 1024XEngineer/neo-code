@@ -3,8 +3,6 @@ package app
 import (
 	"context"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -22,6 +20,8 @@ import (
 	"neo-code/internal/tools/filesystem"
 	"neo-code/internal/tools/webfetch"
 	"neo-code/internal/tui"
+	tuibootstrap "neo-code/internal/tui/bootstrap"
+	agentworkspace "neo-code/internal/workspace"
 )
 
 const utf8CodePage = 65001
@@ -42,6 +42,8 @@ type RuntimeBundle struct {
 	ConfigManager     *config.Manager
 	Runtime           agentruntime.Runtime
 	ProviderSelection *config.SelectionService
+	WorkspaceRoot     string
+	Workdir           string
 }
 
 // EnsureConsoleUTF8 负责在 Windows 控制台中尽量启用 UTF-8 编码。
@@ -76,8 +78,21 @@ func BuildRuntime(ctx context.Context, opts BootstrapOptions) (RuntimeBundle, er
 	}
 
 	cfg := manager.Get()
+	workspaceResolution, err := agentworkspace.Resolve(cfg.Workdir)
+	if err != nil {
+		return RuntimeBundle{}, err
+	}
+	if cfg.Workdir != workspaceResolution.Workdir {
+		if err := manager.Update(ctx, func(cfg *config.Config) error {
+			cfg.Workdir = workspaceResolution.Workdir
+			return nil
+		}); err != nil {
+			return RuntimeBundle{}, err
+		}
+		cfg = manager.Get()
+	}
 
-	toolRegistry, err := buildToolRegistry(cfg)
+	toolRegistry, err := buildToolRegistry(cfg, workspaceResolution.WorkspaceRoot)
 	if err != nil {
 		return RuntimeBundle{}, err
 	}
@@ -86,9 +101,11 @@ func BuildRuntime(ctx context.Context, opts BootstrapOptions) (RuntimeBundle, er
 		return RuntimeBundle{}, err
 	}
 
-	sessionStore := agentsession.NewStore(loader.BaseDir(), cfg.Workdir)
-	runtimeSvc := agentruntime.NewWithFactory(
+	sessionStore := agentsession.NewStore(loader.BaseDir(), workspaceResolution.WorkspaceRoot)
+	runtimeSvc := agentruntime.NewWithWorkspace(
 		manager,
+		workspaceResolution.WorkspaceRoot,
+		workspaceResolution.Workdir,
 		toolManager,
 		sessionStore,
 		providerRegistry,
@@ -100,6 +117,8 @@ func BuildRuntime(ctx context.Context, opts BootstrapOptions) (RuntimeBundle, er
 		ConfigManager:     manager,
 		Runtime:           runtimeSvc,
 		ProviderSelection: providerSelection,
+		WorkspaceRoot:     workspaceResolution.WorkspaceRoot,
+		Workdir:           workspaceResolution.Workdir,
 	}, nil
 }
 
@@ -110,7 +129,28 @@ func NewProgram(ctx context.Context, opts BootstrapOptions) (*tea.Program, error
 		return nil, err
 	}
 
-	tuiApp, err := tui.New(&bundle.Config, bundle.ConfigManager, bundle.Runtime, bundle.ProviderSelection)
+	tuiApp, err := tui.NewWithBootstrap(tuibootstrap.Options{
+		Config:          &bundle.Config,
+		ConfigManager:   bundle.ConfigManager,
+		Runtime:         bundle.Runtime,
+		ProviderService: bundle.ProviderSelection,
+		WorkspaceRoot:   bundle.WorkspaceRoot,
+		Workdir:         bundle.Workdir,
+		RebuildWorkspace: func(ctx context.Context, requestedPath string) (tuibootstrap.WorkspaceBinding, error) {
+			rebuilt, err := BuildRuntime(ctx, BootstrapOptions{Workdir: requestedPath})
+			if err != nil {
+				return tuibootstrap.WorkspaceBinding{}, err
+			}
+			return tuibootstrap.WorkspaceBinding{
+				Config:          rebuilt.Config,
+				ConfigManager:   rebuilt.ConfigManager,
+				Runtime:         rebuilt.Runtime,
+				ProviderService: rebuilt.ProviderSelection,
+				WorkspaceRoot:   rebuilt.WorkspaceRoot,
+				Workdir:         rebuilt.Workdir,
+			}, nil
+		},
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -139,36 +179,24 @@ func bootstrapDefaultConfig(opts BootstrapOptions) (*config.Config, error) {
 
 // resolveBootstrapWorkdir 将 CLI 传入的工作区解析为存在的绝对目录。
 func resolveBootstrapWorkdir(workdir string) (string, error) {
-	trimmed := strings.TrimSpace(workdir)
-	if trimmed == "" {
+	if strings.TrimSpace(workdir) == "" {
 		return "", fmt.Errorf("app: workdir is empty")
 	}
-
-	absolute, err := filepath.Abs(trimmed)
+	resolved, err := agentworkspace.Resolve(workdir)
 	if err != nil {
 		return "", fmt.Errorf("app: resolve workdir %q: %w", workdir, err)
 	}
-	absolute = filepath.Clean(absolute)
-
-	info, err := os.Stat(absolute)
-	if err != nil {
-		return "", fmt.Errorf("app: resolve workdir %q: %w", workdir, err)
-	}
-	if !info.IsDir() {
-		return "", fmt.Errorf("app: workdir %q is not a directory", absolute)
-	}
-
-	return absolute, nil
+	return resolved.Workdir, nil
 }
 
-func buildToolRegistry(cfg config.Config) (*tools.Registry, error) {
+func buildToolRegistry(cfg config.Config, workspaceRoot string) (*tools.Registry, error) {
 	toolRegistry := tools.NewRegistry()
-	toolRegistry.Register(filesystem.New(cfg.Workdir))
-	toolRegistry.Register(filesystem.NewWrite(cfg.Workdir))
-	toolRegistry.Register(filesystem.NewGrep(cfg.Workdir))
-	toolRegistry.Register(filesystem.NewGlob(cfg.Workdir))
-	toolRegistry.Register(filesystem.NewEdit(cfg.Workdir))
-	toolRegistry.Register(bash.New(cfg.Workdir, cfg.Shell, time.Duration(cfg.ToolTimeoutSec)*time.Second))
+	toolRegistry.Register(filesystem.New(workspaceRoot))
+	toolRegistry.Register(filesystem.NewWrite(workspaceRoot))
+	toolRegistry.Register(filesystem.NewGrep(workspaceRoot))
+	toolRegistry.Register(filesystem.NewGlob(workspaceRoot))
+	toolRegistry.Register(filesystem.NewEdit(workspaceRoot))
+	toolRegistry.Register(bash.New(workspaceRoot, cfg.Shell, time.Duration(cfg.ToolTimeoutSec)*time.Second))
 	toolRegistry.Register(webfetch.New(webfetch.Config{
 		Timeout:               time.Duration(cfg.ToolTimeoutSec) * time.Second,
 		MaxResponseBytes:      cfg.Tools.WebFetch.MaxResponseBytes,

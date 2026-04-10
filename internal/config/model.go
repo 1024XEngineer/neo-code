@@ -17,7 +17,7 @@ const (
 	DefaultWebFetchMaxResponseBytes        int64 = 256 * 1024
 	DefaultCompactManualKeepRecentMessages       = 10
 	DefaultCompactMaxSummaryChars                = 1200
-	DefaultAutoCompactInputTokenThreshold         = 100000
+	DefaultAutoCompactInputTokenThreshold        = 100000
 )
 
 const (

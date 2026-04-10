@@ -80,7 +80,7 @@ func (t *GrepTool) Execute(ctx context.Context, input tools.ToolCallInput) (tool
 		return tools.NewErrorResult(t.Name(), tools.NormalizeErrorReason(t.Name(), err), "", nil), err
 	}
 
-	root := effectiveRoot(t.root, input.Workdir)
+	root := effectiveRoot(t.root, input.WorkspaceRoot)
 	searchRoot, err := resolveSearchDir(root, args.Dir)
 	if err != nil {
 		return tools.NewErrorResult(t.Name(), tools.NormalizeErrorReason(t.Name(), err), "", nil), err

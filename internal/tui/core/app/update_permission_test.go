@@ -53,7 +53,7 @@ func (r *permissionTestRuntime) LoadSession(ctx context.Context, id string) (age
 	return agentsession.Session{}, nil
 }
 
-func (r *permissionTestRuntime) SetSessionWorkdir(ctx context.Context, sessionID string, workdir string) (agentsession.Session, error) {
+func (r *permissionTestRuntime) UpdateSessionWorkdir(ctx context.Context, sessionID string, workdir string) (agentsession.Session, error) {
 	return agentsession.Session{}, nil
 }
 

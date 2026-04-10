@@ -1231,10 +1231,10 @@ func TestDescriptorFromRawModel(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name    string
-		raw     map[string]any
-		want    ModelDescriptor
-		wantOK  bool
+		name   string
+		raw    map[string]any
+		want   ModelDescriptor
+		wantOK bool
 	}{
 		{
 			name:   "empty map returns false",
@@ -1252,10 +1252,10 @@ func TestDescriptorFromRawModel(t *testing.T) {
 		{
 			name: "full descriptor",
 			raw: map[string]any{
-				"id":               "gpt-4.1",
-				"display_name":     "GPT-4.1",
-				"description":      "desc",
-				"context_window":   128000,
+				"id":                "gpt-4.1",
+				"display_name":      "GPT-4.1",
+				"description":       "desc",
+				"context_window":    128000,
 				"max_output_tokens": 16384,
 			},
 			want: ModelDescriptor{

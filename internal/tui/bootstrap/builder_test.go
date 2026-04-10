@@ -41,7 +41,7 @@ func (r *testRuntime) LoadSession(ctx context.Context, id string) (agentsession.
 	return agentsession.Session{}, nil
 }
 
-func (r *testRuntime) SetSessionWorkdir(ctx context.Context, sessionID string, workdir string) (agentsession.Session, error) {
+func (r *testRuntime) UpdateSessionWorkdir(ctx context.Context, sessionID string, workdir string) (agentsession.Session, error) {
 	return agentsession.Session{}, nil
 }
 

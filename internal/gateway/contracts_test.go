@@ -33,7 +33,7 @@ func (s *runtimePortCompileStub) LoadSession(_ context.Context, _ string) (Sessi
 	return Session{}, nil
 }
 
-func (s *runtimePortCompileStub) SetSessionWorkdir(_ context.Context, _, _ string) (Session, error) {
+func (s *runtimePortCompileStub) UpdateSessionWorkdir(_ context.Context, _, _ string) (Session, error) {
 	return Session{}, nil
 }
 

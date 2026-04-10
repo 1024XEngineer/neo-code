@@ -97,6 +97,7 @@ go run ./cmd/neocode
 - **`internal/runtime`** — ReAct 主循环与事件流编排（不直接承载会话存储实现；不再导出会话模型与存储类型）
 - **`internal/session`** — 会话模型、会话存储抽象与 JSON 持久化实现（统一对外暴露 `Session` / `Summary` / `Store`）
 - **`internal/tools`** — 工具注册表与具体工具实现
+- **`internal/workspace`** — 统一工作区解析与 Git 根目录识别
 - **`internal/tui`** — 终端 UI、交互体验、事件桥接
 - **`internal/app`** — 应用装配与依赖注入
 
@@ -204,7 +205,8 @@ go run ./cmd/neocode --workdir /path/to/workspace
 说明：
 
 - `--workdir` 只影响当前进程，不会写回 `config.yaml`
-- 当前工作区会同时用于工具执行根目录与 session 存储分桶
+- 启动路径会先解析为 `workdir`，再优先向上回溯 Git 顶层仓库作为 `workspaceRoot`
+- 工具沙箱和 session 存储分桶固定绑定到 `workspaceRoot`，不会因 `/cwd` 切到子目录而缩小边界
 - session 历史现在按工作区隔离存储，不同工作区默认互不可见
 
 [![Contributors](https://hub-io-mcells-projects.vercel.app/r/1024XEngineer/neo-code)](https://github.com/1024XEngineer/neo-code/graphs/contributors)

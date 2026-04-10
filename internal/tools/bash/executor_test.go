@@ -185,7 +185,7 @@ func TestResolveWorkdir(t *testing.T) {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			target, err := resolveWorkdir(tt.root, tt.requested)
+			target, err := resolveWorkdir(tt.root, tt.root, tt.requested)
 			if tt.expectErr != "" {
 				if err == nil || !strings.Contains(strings.ToLower(err.Error()), strings.ToLower(tt.expectErr)) {
 					t.Fatalf("expected error containing %q, got %v", tt.expectErr, err)

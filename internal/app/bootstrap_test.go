@@ -91,7 +91,7 @@ func TestBuildToolRegistryUsesWebFetchConfig(t *testing.T) {
 	cfg.Workdir = t.TempDir()
 	cfg.Tools.WebFetch.MaxResponseBytes = 4
 
-	registry, err := buildToolRegistry(cfg)
+	registry, err := buildToolRegistry(cfg, cfg.Workdir)
 	if err != nil {
 		t.Fatalf("buildToolRegistry() error = %v", err)
 	}
@@ -306,7 +306,7 @@ func TestBuildToolRegistryIncludesMCPFromConfig(t *testing.T) {
 		return registry.RefreshServerTools(context.Background(), server.ID)
 	}
 
-	registry, err := buildToolRegistry(cfg)
+	registry, err := buildToolRegistry(cfg, cfg.Workdir)
 	if err != nil {
 		t.Fatalf("buildToolRegistry() error = %v", err)
 	}
@@ -339,7 +339,7 @@ func TestBuildToolRegistryReturnsMCPSourceError(t *testing.T) {
 		},
 	}
 
-	_, err := buildToolRegistry(cfg)
+	_, err := buildToolRegistry(cfg, cfg.Workdir)
 	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "unsupported mcp source") {
 		t.Fatalf("expected unsupported mcp source error, got %v", err)
 	}

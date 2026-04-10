@@ -30,6 +30,7 @@ type ToolCallInput struct {
 	Name          string
 	Arguments     []byte
 	SessionID     string
+	WorkspaceRoot string
 	Workdir       string
 	WorkspacePlan *security.WorkspaceExecutionPlan
 	// EmitChunk 为流式分片回调，语义见 ChunkEmitter 注释。

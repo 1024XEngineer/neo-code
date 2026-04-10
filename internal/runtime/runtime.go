@@ -118,7 +118,7 @@ type Runtime interface {
 	Events() <-chan RuntimeEvent
 	ListSessions(ctx context.Context) ([]agentsession.Summary, error)
 	LoadSession(ctx context.Context, id string) (agentsession.Session, error)
-	SetSessionWorkdir(ctx context.Context, sessionID string, workdir string) (agentsession.Session, error)
+	UpdateSessionWorkdir(ctx context.Context, sessionID string, requestedPath string) (agentsession.Session, error)
 }
 
 type UserInput struct {
@@ -147,10 +147,38 @@ type Service struct {
 	activeRunCancel     context.CancelFunc // 当前活跃 Run 的取消函数。
 	sessionInputTokens  int                // 当前会话累计输入 token。
 	sessionOutputTokens int                // 当前会话累计输出 token。
+	workspaceRoot       string             // 当前 runtime 绑定的工作区根目录。
+	workdir             string             // 当前 runtime 默认工作目录。
 }
 
+// NewWithFactory 保留测试和兼容场景使用，工作区根目录默认退化为当前配置 workdir。
 func NewWithFactory(
 	configManager *config.Manager,
+	toolManager tools.Manager,
+	sessionStore agentsession.Store,
+	providerFactory ProviderFactory,
+	contextBuilder agentcontext.Builder,
+) *Service {
+	workdir := ""
+	if configManager != nil {
+		workdir = strings.TrimSpace(configManager.Get().Workdir)
+	}
+	return NewWithWorkspace(
+		configManager,
+		"",
+		workdir,
+		toolManager,
+		sessionStore,
+		providerFactory,
+		contextBuilder,
+	)
+}
+
+// NewWithWorkspace 使用显式 workspaceRoot/workdir 构建绑定到单工作区的 runtime。
+func NewWithWorkspace(
+	configManager *config.Manager,
+	workspaceRoot string,
+	workdir string,
 	toolManager tools.Manager,
 	sessionStore agentsession.Store,
 	providerFactory ProviderFactory,
@@ -173,6 +201,8 @@ func NewWithFactory(
 		providerFactory: providerFactory,
 		contextBuilder:  contextBuilder,
 		events:          make(chan RuntimeEvent, 128),
+		workspaceRoot:   strings.TrimSpace(workspaceRoot),
+		workdir:         strings.TrimSpace(workdir),
 	}
 }
 
@@ -192,8 +222,7 @@ func (s *Service) Run(ctx context.Context, input UserInput) error {
 		return errors.New("runtime: input content is empty")
 	}
 
-	initialCfg := s.configManager.Get()
-	session, err := s.loadOrCreateSession(ctx, input.SessionID, input.Content, initialCfg.Workdir, input.Workdir)
+	session, err := s.loadOrCreateSession(ctx, input.SessionID, input.Content, input.Workdir)
 	if err != nil {
 		return s.handleRunError(ctx, input.RunID, input.SessionID, err)
 	}
@@ -219,7 +248,7 @@ func (s *Service) Run(ctx context.Context, input UserInput) error {
 		}
 
 		cfg := s.configManager.Get()
-		activeWorkdir := effectiveSessionWorkdir(session.Workdir, cfg.Workdir)
+		activeWorkdir := effectiveSessionWorkdir(session.Workdir, s.workdir)
 		maxLoops := cfg.MaxLoops
 		if maxLoops <= 0 {
 			maxLoops = 8
@@ -422,7 +451,8 @@ func (s *Service) LoadSession(ctx context.Context, id string) (agentsession.Sess
 	return session, nil
 }
 
-func (s *Service) SetSessionWorkdir(ctx context.Context, sessionID string, workdir string) (agentsession.Session, error) {
+// UpdateSessionWorkdir 在当前 runtime 绑定的 workspace 内更新会话工作目录。
+func (s *Service) UpdateSessionWorkdir(ctx context.Context, sessionID string, requestedPath string) (agentsession.Session, error) {
 	sessionID = strings.TrimSpace(sessionID)
 	if sessionID == "" {
 		return agentsession.Session{}, errors.New("runtime: session id is empty")
@@ -433,8 +463,7 @@ func (s *Service) SetSessionWorkdir(ctx context.Context, sessionID string, workd
 		return agentsession.Session{}, err
 	}
 
-	cfg := s.configManager.Get()
-	resolved, err := resolveWorkdirForSession(cfg.Workdir, session.Workdir, workdir)
+	resolved, err := s.resolveSessionWorkdir(session.Workdir, requestedPath)
 	if err != nil {
 		return agentsession.Session{}, err
 	}
@@ -454,11 +483,10 @@ func (s *Service) loadOrCreateSession(
 	ctx context.Context,
 	sessionID string,
 	title string,
-	defaultWorkdir string,
 	requestedWorkdir string,
 ) (agentsession.Session, error) {
 	if strings.TrimSpace(sessionID) == "" {
-		sessionWorkdir, err := resolveWorkdirForSession(defaultWorkdir, "", requestedWorkdir)
+		sessionWorkdir, err := s.resolveSessionWorkdir("", requestedWorkdir)
 		if err != nil {
 			return agentsession.Session{}, err
 		}
@@ -476,7 +504,7 @@ func (s *Service) loadOrCreateSession(
 		return session, nil
 	}
 
-	resolved, err := resolveWorkdirForSession(defaultWorkdir, session.Workdir, requestedWorkdir)
+	resolved, err := s.resolveSessionWorkdir(session.Workdir, requestedWorkdir)
 	if err != nil {
 		return agentsession.Session{}, err
 	}
@@ -870,37 +898,59 @@ func effectiveSessionWorkdir(sessionWorkdir string, defaultWorkdir string) strin
 	return strings.TrimSpace(defaultWorkdir)
 }
 
-func resolveWorkdirForSession(defaultWorkdir string, currentWorkdir string, requestedWorkdir string) (string, error) {
-	base := effectiveSessionWorkdir(currentWorkdir, defaultWorkdir)
-	if strings.TrimSpace(requestedWorkdir) == "" {
-		return normalizeExistingWorkdir(base)
+// resolveSessionWorkdir 负责在当前 runtime 绑定的 workspace 内解析会话工作目录。
+func (s *Service) resolveSessionWorkdir(currentWorkdir string, requestedWorkdir string) (string, error) {
+	base := effectiveSessionWorkdir(currentWorkdir, s.workdir)
+	resolved, err := normalizeRequestedWorkdir(base, requestedWorkdir)
+	if err != nil {
+		return "", fmt.Errorf("runtime: resolve workdir: %w", err)
+	}
+	if strings.TrimSpace(s.workspaceRoot) != "" && !isWithinWorkspaceRoot(s.workspaceRoot, resolved) {
+		return "", fmt.Errorf(
+			"runtime: requested workdir %q escapes workspace root %q",
+			resolved,
+			s.workspaceRoot,
+		)
+	}
+	return resolved, nil
+}
+
+func normalizeRequestedWorkdir(base string, requestedWorkdir string) (string, error) {
+	base = strings.TrimSpace(base)
+	if base == "" {
+		return "", errors.New("workdir is empty")
 	}
 
 	target := strings.TrimSpace(requestedWorkdir)
-	if !filepath.IsAbs(target) {
+	if target == "" {
+		target = base
+	} else if !filepath.IsAbs(target) {
 		target = filepath.Join(base, target)
 	}
-	return normalizeExistingWorkdir(target)
-}
 
-func normalizeExistingWorkdir(workdir string) (string, error) {
-	trimmed := strings.TrimSpace(workdir)
-	if trimmed == "" {
-		return "", errors.New("runtime: workdir is empty")
-	}
-
-	absolute, err := filepath.Abs(trimmed)
+	absolute, err := filepath.Abs(target)
 	if err != nil {
-		return "", fmt.Errorf("runtime: resolve workdir: %w", err)
+		return "", err
 	}
-
 	info, err := os.Stat(absolute)
 	if err != nil {
-		return "", fmt.Errorf("runtime: resolve workdir: %w", err)
+		return "", err
 	}
 	if !info.IsDir() {
-		return "", fmt.Errorf("runtime: workdir %q is not a directory", absolute)
+		return "", fmt.Errorf("workdir %q is not a directory", absolute)
 	}
-
 	return filepath.Clean(absolute), nil
+}
+
+func isWithinWorkspaceRoot(workspaceRoot string, target string) bool {
+	root := strings.TrimSpace(workspaceRoot)
+	target = strings.TrimSpace(target)
+	if root == "" || target == "" {
+		return false
+	}
+	relative, err := filepath.Rel(root, target)
+	if err != nil {
+		return false
+	}
+	return relative == "." || (relative != ".." && !strings.HasPrefix(relative, ".."+string(os.PathSeparator)))
 }
