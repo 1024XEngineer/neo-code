@@ -43,11 +43,5 @@ func driverDefinition(name string) provider.DriverDefinition {
 			return p.DiscoverModels(ctx)
 		},
 		ValidateCatalogIdentity: validateCatalogIdentity,
-		Capabilities: provider.DriverTransportCapabilities{
-			Streaming:           true,
-			ToolTransport:       true,
-			ModelDiscovery:      true,
-			ImageInputTransport: false,
-		},
 	}
 }

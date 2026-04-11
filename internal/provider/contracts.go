@@ -23,14 +23,6 @@ type Provider interface {
 	Generate(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error
 }
 
-// DriverTransportCapabilities 描述 driver 层本身是否能传输某类运行时能力。
-type DriverTransportCapabilities struct {
-	Streaming           bool
-	ToolTransport       bool
-	ModelDiscovery      bool
-	ImageInputTransport bool
-}
-
 // CatalogInput 汇总 provider/catalog 查询、发现与缓存所需的最小输入。
 type CatalogInput struct {
 	Identity               ProviderIdentity

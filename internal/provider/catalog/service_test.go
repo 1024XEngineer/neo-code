@@ -363,90 +363,6 @@ func TestListProviderModelsCachedUsesFreshCatalogWithoutDiscovery(t *testing.T) 
 	}
 }
 
-func TestListProviderModelsSkipsDiscoveryWhenDriverDisablesModelDiscovery(t *testing.T) {
-	t.Setenv(testAPIKeyEnv, "")
-
-	var resolveCalls int32
-	var discoverCalls int32
-	registry := newRegistryWithCapabilities(
-		t,
-		openaicompat.DriverName,
-		provider.DriverTransportCapabilities{
-			Streaming:           true,
-			ToolTransport:       true,
-			ModelDiscovery:      false,
-			ImageInputTransport: false,
-		},
-		func(ctx context.Context, cfg provider.RuntimeConfig) ([]providertypes.ModelDescriptor, error) {
-			atomic.AddInt32(&discoverCalls, 1)
-			return []providertypes.ModelDescriptor{{ID: "server-model", Name: "Server Model"}}, nil
-		},
-	)
-
-	service := NewService("", registry, newMemoryStore())
-	input := openAIProviderSource()
-	input.ResolveDiscoveryConfig = func() (provider.RuntimeConfig, error) {
-		atomic.AddInt32(&resolveCalls, 1)
-		return provider.RuntimeConfig{}, errors.New("resolver should not run")
-	}
-
-	models, err := service.ListProviderModels(context.Background(), input)
-	if err != nil {
-		t.Fatalf("ListProviderModels() error = %v", err)
-	}
-	if len(models) != 1 || models[0].ID != config.OpenAIDefaultModel {
-		t.Fatalf("expected builtin default model fallback, got %+v", models)
-	}
-	if atomic.LoadInt32(&resolveCalls) != 0 {
-		t.Fatalf("expected discovery config resolver to be skipped, got %d calls", resolveCalls)
-	}
-	if atomic.LoadInt32(&discoverCalls) != 0 {
-		t.Fatalf("expected discovery func to be skipped, got %d calls", discoverCalls)
-	}
-}
-
-func TestListProviderModelsCustomProviderSkipsDiscoveryWhenDriverDisablesModelDiscovery(t *testing.T) {
-	t.Setenv(testAPIKeyEnv, "")
-
-	var resolveCalls int32
-	var discoverCalls int32
-	registry := newRegistryWithCapabilities(
-		t,
-		openaicompat.DriverName,
-		provider.DriverTransportCapabilities{
-			Streaming:           true,
-			ToolTransport:       true,
-			ModelDiscovery:      false,
-			ImageInputTransport: false,
-		},
-		func(ctx context.Context, cfg provider.RuntimeConfig) ([]providertypes.ModelDescriptor, error) {
-			atomic.AddInt32(&discoverCalls, 1)
-			return []providertypes.ModelDescriptor{{ID: "server-model", Name: "Server Model"}}, nil
-		},
-	)
-
-	service := NewService("", registry, newMemoryStore())
-	input := customGatewayProviderSource()
-	input.ResolveDiscoveryConfig = func() (provider.RuntimeConfig, error) {
-		atomic.AddInt32(&resolveCalls, 1)
-		return provider.RuntimeConfig{}, errors.New("resolver should not run")
-	}
-
-	models, err := service.ListProviderModels(context.Background(), input)
-	if err != nil {
-		t.Fatalf("ListProviderModels() error = %v", err)
-	}
-	if len(models) != 0 {
-		t.Fatalf("expected custom provider without discovery support to stay empty, got %+v", models)
-	}
-	if atomic.LoadInt32(&resolveCalls) != 0 {
-		t.Fatalf("expected discovery config resolver to be skipped, got %d calls", resolveCalls)
-	}
-	if atomic.LoadInt32(&discoverCalls) != 0 {
-		t.Fatalf("expected discovery func to be skipped, got %d calls", discoverCalls)
-	}
-}
-
 func TestDiscoverAndPersistFailurePaths(t *testing.T) {
 	t.Run("unsupported driver", func(t *testing.T) {
 		service := NewService("", provider.NewRegistry(), newMemoryStore())
@@ -558,33 +474,55 @@ func TestQueueRefreshDeduplicatesInFlightRequests(t *testing.T) {
 	t.Fatal("expected in-flight refresh marker to be cleared")
 }
 
-func newRegistry(t *testing.T, name string, discover provider.DiscoveryFunc) *provider.Registry {
-	return newRegistryWithCapabilities(
-		t,
-		name,
-		provider.DriverTransportCapabilities{
-			Streaming:           true,
-			ToolTransport:       true,
-			ModelDiscovery:      true,
-			ImageInputTransport: false,
-		},
-		discover,
-	)
+func TestQueueRefreshSkipsWhenDriverUnsupportedOrIdentityIncomplete(t *testing.T) {
+	t.Parallel()
+
+	t.Run("unsupported driver", func(t *testing.T) {
+		t.Parallel()
+
+		service := NewService("", provider.NewRegistry(), newMemoryStore())
+		input := openAIProviderSource()
+		input.Identity.Driver = "missing"
+
+		service.queueRefresh(input)
+
+		service.refreshMu.Lock()
+		defer service.refreshMu.Unlock()
+		if len(service.inFlightByID) != 0 {
+			t.Fatalf("expected no refresh to be queued, got %+v", service.inFlightByID)
+		}
+	})
+
+	t.Run("incomplete identity", func(t *testing.T) {
+		t.Parallel()
+
+		service := NewService("", newRegistry(t, openaicompat.DriverName, nil), newMemoryStore())
+		input := openAIProviderSource()
+		input.Identity.BaseURL = ""
+
+		service.queueRefresh(input)
+
+		service.refreshMu.Lock()
+		defer service.refreshMu.Unlock()
+		if len(service.inFlightByID) != 0 {
+			t.Fatalf("expected no refresh to be queued, got %+v", service.inFlightByID)
+		}
+	})
 }
 
-func newRegistryWithCapabilities(
-	t *testing.T,
-	name string,
-	capabilities provider.DriverTransportCapabilities,
-	discover provider.DiscoveryFunc,
-) *provider.Registry {
+func newRegistry(t *testing.T, name string, discover provider.DiscoveryFunc) *provider.Registry {
 	t.Helper()
+
+	if discover == nil {
+		discover = func(ctx context.Context, cfg provider.RuntimeConfig) ([]providertypes.ModelDescriptor, error) {
+			return nil, nil
+		}
+	}
 
 	registry := provider.NewRegistry()
 	if err := registry.Register(provider.DriverDefinition{
-		Name:         name,
-		Discover:     discover,
-		Capabilities: capabilities,
+		Name:     name,
+		Discover: discover,
 		Build: func(ctx context.Context, cfg provider.RuntimeConfig) (provider.Provider, error) {
 			return catalogTestProvider{}, nil
 		},

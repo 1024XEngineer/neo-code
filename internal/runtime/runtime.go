@@ -130,7 +130,6 @@ type UserInput struct {
 
 type ProviderFactory interface {
 	Build(ctx context.Context, cfg provider.RuntimeConfig) (provider.Provider, error)
-	DriverTransportCapabilities(driverType string) (provider.DriverTransportCapabilities, error)
 }
 
 type Service struct {
@@ -689,31 +688,6 @@ func isRetryableProviderError(err error) bool {
 	return pErr.Retryable
 }
 
-// ensureDriverTransportCapabilities 校验当前 driver 是否满足指定运行场景的基础传输能力要求。
-func ensureDriverTransportCapabilities(
-	factory ProviderFactory,
-	cfg provider.RuntimeConfig,
-	requireStreaming bool,
-	requireToolTransport bool,
-) error {
-	if factory == nil {
-		return errors.New("runtime: provider factory is nil")
-	}
-
-	driverType := strings.TrimSpace(cfg.Driver)
-	caps, err := factory.DriverTransportCapabilities(driverType)
-	if err != nil {
-		return err
-	}
-	if requireStreaming && !caps.Streaming {
-		return fmt.Errorf("runtime: provider driver %q does not support streaming", driverType)
-	}
-	if requireToolTransport && !caps.ToolTransport {
-		return fmt.Errorf("runtime: provider driver %q does not support tool transport", driverType)
-	}
-	return nil
-}
-
 // callProviderWithRetry 在可重试的 ProviderError 上自动重试 provider.Generate() 调用。
 // 每次重试都会重新创建 provider 实例、流式事件转发管道和累积器。
 // 非可重试错误、context 取消、重试耗尽时直接返回错误。
@@ -748,10 +722,6 @@ func (s *Service) callProviderWithRetry(
 			return nil, err
 		}
 		runtimeCfg := resolvedProvider.ToRuntimeConfig()
-		requireToolTransport := len(req.Tools) > 0
-		if err := ensureDriverTransportCapabilities(s.providerFactory, runtimeCfg, true, requireToolTransport); err != nil {
-			return nil, err
-		}
 
 		modelProvider, err := s.providerFactory.Build(ctx, runtimeCfg)
 		if err != nil {

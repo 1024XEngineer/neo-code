@@ -172,12 +172,10 @@ func streamContainsMessageDone(events []providertypes.StreamEvent) bool {
 }
 
 type scriptedProviderFactory struct {
-	provider        provider.Provider
-	calls           int
-	configs         []provider.RuntimeConfig
-	err             error
-	capabilities    provider.DriverTransportCapabilities
-	capabilitiesErr error
+	provider provider.Provider
+	calls    int
+	configs  []provider.RuntimeConfig
+	err      error
 }
 
 func (f *scriptedProviderFactory) Build(ctx context.Context, cfg provider.RuntimeConfig) (provider.Provider, error) {
@@ -187,19 +185,6 @@ func (f *scriptedProviderFactory) Build(ctx context.Context, cfg provider.Runtim
 		return nil, f.err
 	}
 	return f.provider, nil
-}
-
-func (f *scriptedProviderFactory) DriverTransportCapabilities(driverType string) (provider.DriverTransportCapabilities, error) {
-	if f.capabilitiesErr != nil {
-		return provider.DriverTransportCapabilities{}, f.capabilitiesErr
-	}
-	if f.capabilities == (provider.DriverTransportCapabilities{}) {
-		return provider.DriverTransportCapabilities{
-			Streaming:     true,
-			ToolTransport: true,
-		}, nil
-	}
-	return f.capabilities, nil
 }
 
 type stubTool struct {
@@ -3113,115 +3098,6 @@ func TestCallProviderWithRetryReturnsCombinedForwardError(t *testing.T) {
 	)
 	if err == nil || !containsError(err, "provider stream handling failed after provider error") {
 		t.Fatalf("expected combined forward/provider error, got %v", err)
-	}
-}
-
-func TestServiceRunRejectsDriverWithoutToolTransportWhenRequestExposesTools(t *testing.T) {
-	t.Parallel()
-
-	manager := newRuntimeConfigManager(t)
-	store := newMemoryStore()
-	registry := tools.NewRegistry()
-	registry.Register(&stubTool{name: "filesystem_read_file", content: "default"})
-
-	scripted := &scriptedProvider{
-		streams: [][]providertypes.StreamEvent{
-			{providertypes.NewTextDeltaStreamEvent("should not run")},
-		},
-	}
-	factory := &scriptedProviderFactory{
-		provider: scripted,
-		capabilities: provider.DriverTransportCapabilities{
-			Streaming:     true,
-			ToolTransport: false,
-		},
-	}
-
-	service := NewWithFactory(manager, registry, store, factory, &stubContextBuilder{})
-	err := service.Run(context.Background(), UserInput{
-		RunID:   "run-driver-no-tools",
-		Content: "hello",
-	})
-	if err == nil || !containsError(err, "does not support tool transport") {
-		t.Fatalf("expected tool transport capability error, got %v", err)
-	}
-	if factory.calls != 0 {
-		t.Fatalf("expected provider build to be skipped, got %d", factory.calls)
-	}
-	if scripted.callCount != 0 {
-		t.Fatalf("expected provider Generate() to be skipped, got %d", scripted.callCount)
-	}
-}
-
-func TestServiceRunAllowsDriverWithoutToolTransportWhenRequestHasNoTools(t *testing.T) {
-	t.Parallel()
-
-	manager := newRuntimeConfigManager(t)
-	store := newMemoryStore()
-	toolManager := &stubToolManager{}
-
-	scripted := &scriptedProvider{
-		streams: [][]providertypes.StreamEvent{
-			{providertypes.NewTextDeltaStreamEvent("plain answer")},
-		},
-	}
-	factory := &scriptedProviderFactory{
-		provider: scripted,
-		capabilities: provider.DriverTransportCapabilities{
-			Streaming:     true,
-			ToolTransport: false,
-		},
-	}
-
-	service := NewWithFactory(manager, toolManager, store, factory, &stubContextBuilder{})
-	err := service.Run(context.Background(), UserInput{
-		RunID:   "run-driver-no-tool-transport-no-tools",
-		Content: "hello",
-	})
-	if err != nil {
-		t.Fatalf("expected no-tools request to succeed, got %v", err)
-	}
-	if factory.calls != 1 {
-		t.Fatalf("expected provider build once, got %d", factory.calls)
-	}
-	if scripted.callCount != 1 {
-		t.Fatalf("expected provider Generate() once, got %d", scripted.callCount)
-	}
-	if len(scripted.requests) != 1 {
-		t.Fatalf("expected one provider request, got %d", len(scripted.requests))
-	}
-	if len(scripted.requests[0].Tools) != 0 {
-		t.Fatalf("expected provider request without tools, got %+v", scripted.requests[0].Tools)
-	}
-
-	events := collectRuntimeEvents(service.Events())
-	assertEventSequence(t, events, []EventType{EventUserMessage, EventAgentChunk, EventAgentDone})
-	assertNoEventType(t, events, EventError)
-}
-
-func TestServiceRunPropagatesDriverNotFoundFromCapabilities(t *testing.T) {
-	t.Parallel()
-
-	manager := newRuntimeConfigManager(t)
-	store := newMemoryStore()
-	registry := tools.NewRegistry()
-	registry.Register(&stubTool{name: "filesystem_read_file", content: "default"})
-
-	factory := &scriptedProviderFactory{
-		provider:        &scriptedProvider{},
-		capabilitiesErr: fmt.Errorf("%w: missing", provider.ErrDriverNotFound),
-	}
-
-	service := NewWithFactory(manager, registry, store, factory, &stubContextBuilder{})
-	err := service.Run(context.Background(), UserInput{
-		RunID:   "run-driver-missing",
-		Content: "hello",
-	})
-	if !errors.Is(err, provider.ErrDriverNotFound) {
-		t.Fatalf("expected ErrDriverNotFound, got %v", err)
-	}
-	if factory.calls != 0 {
-		t.Fatalf("expected provider build to be skipped, got %d", factory.calls)
 	}
 }
 

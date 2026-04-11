@@ -42,9 +42,6 @@ func (g *compactSummaryGenerator) Generate(ctx context.Context, input contextcom
 		strings.TrimSpace(g.providerConfig.APIKey) == "" {
 		return "", errors.New("runtime: compact summary generator provider config is incomplete")
 	}
-	if err := ensureDriverTransportCapabilities(g.providerFactory, g.providerConfig, true, false); err != nil {
-		return "", err
-	}
 
 	prompt := agentcontext.BuildCompactPrompt(agentcontext.CompactPromptInput{
 		Mode:                     string(input.Mode),

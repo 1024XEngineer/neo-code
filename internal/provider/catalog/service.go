@@ -147,11 +147,7 @@ func (s *Service) loadCatalog(ctx context.Context, identity provider.ProviderIde
 }
 
 func (s *Service) discoverAndPersist(ctx context.Context, input provider.CatalogInput) ([]providertypes.ModelDescriptor, error) {
-	supported, err := s.supportsModelDiscovery(input.Identity.Driver)
-	if err != nil {
-		return nil, err
-	}
-	if !supported {
+	if !s.registry.Supports(input.Identity.Driver) {
 		return nil, nil
 	}
 
@@ -190,8 +186,7 @@ func (s *Service) queueRefresh(input provider.CatalogInput) {
 		return
 	}
 
-	supported, err := s.supportsModelDiscovery(input.Identity.Driver)
-	if err != nil || !supported {
+	if !s.registry.Supports(input.Identity.Driver) {
 		return
 	}
 	identity := input.Identity
@@ -219,20 +214,6 @@ func (s *Service) queueRefresh(input provider.CatalogInput) {
 		defer cancel()
 		_, _ = s.discoverAndPersist(ctx, input)
 	}()
-}
-
-func (s *Service) supportsModelDiscovery(driverType string) (bool, error) {
-	driverType = strings.TrimSpace(driverType)
-	if !s.registry.Supports(driverType) {
-		return false, nil
-	}
-
-	caps, err := s.registry.DriverTransportCapabilities(driverType)
-	if err != nil {
-		return false, err
-	}
-
-	return caps.ModelDiscovery, nil
 }
 
 func shouldQueueRefresh(options queryOptions, snapshot catalogSnapshot, performedSyncRefresh bool) bool {

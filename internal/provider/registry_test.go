@@ -23,6 +23,9 @@ func stubDriver(driverType string) provider.DriverDefinition {
 		Build: func(ctx context.Context, cfg provider.RuntimeConfig) (provider.Provider, error) {
 			return stubProvider{}, nil
 		},
+		Discover: func(ctx context.Context, cfg provider.RuntimeConfig) ([]providertypes.ModelDescriptor, error) {
+			return nil, nil
+		},
 	}
 }
 
@@ -111,30 +114,6 @@ func TestRegistryDiscoverModels(t *testing.T) {
 		}
 	})
 
-	t.Run("driver without discovery function", func(t *testing.T) {
-		t.Parallel()
-
-		registry := provider.NewRegistry()
-		driver := provider.DriverDefinition{
-			Name: "test-driver",
-			Build: func(ctx context.Context, cfg provider.RuntimeConfig) (provider.Provider, error) {
-				return stubProvider{}, nil
-			},
-			Discover: nil,
-		}
-		if err := registry.Register(driver); err != nil {
-			t.Fatalf("Register() error = %v", err)
-		}
-
-		got, err := registry.DiscoverModels(context.Background(), provider.RuntimeConfig{Driver: "test-driver"})
-		if err != nil {
-			t.Fatalf("DiscoverModels() error = %v", err)
-		}
-		if got != nil {
-			t.Fatalf("expected nil models, got %v", got)
-		}
-	})
-
 	t.Run("unknown driver", func(t *testing.T) {
 		t.Parallel()
 
@@ -173,30 +152,6 @@ func TestRegistrySupports(t *testing.T) {
 				t.Fatalf("Supports(%q) = %v, want %v", tt.driverType, got, tt.want)
 			}
 		})
-	}
-}
-
-func TestRegistryDriverTransportCapabilities(t *testing.T) {
-	t.Parallel()
-
-	registry := newTestRegistry(t)
-	got, err := registry.DriverTransportCapabilities("OPENAICOMPAT")
-	if err != nil {
-		t.Fatalf("DriverTransportCapabilities() error = %v", err)
-	}
-	if !got.Streaming {
-		t.Fatalf("expected openaicompat driver to support streaming, got %+v", got)
-	}
-	if !got.ToolTransport {
-		t.Fatalf("expected openaicompat driver to support tool transport, got %+v", got)
-	}
-	if !got.ModelDiscovery {
-		t.Fatalf("expected openaicompat driver to support model discovery, got %+v", got)
-	}
-
-	_, err = registry.DriverTransportCapabilities("missing")
-	if !errors.Is(err, provider.ErrDriverNotFound) {
-		t.Fatalf("expected ErrDriverNotFound for missing driver, got %v", err)
 	}
 }
 
@@ -274,6 +229,25 @@ func TestRegistryRegisterErrors(t *testing.T) {
 			t.Fatal("expected error for nil build function")
 		}
 		if err.Error() != `provider: driver "test" build func is nil` {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("nil discover function", func(t *testing.T) {
+		t.Parallel()
+
+		registry := provider.NewRegistry()
+		err := registry.Register(provider.DriverDefinition{
+			Name: "test",
+			Build: func(ctx context.Context, cfg provider.RuntimeConfig) (provider.Provider, error) {
+				return nil, nil
+			},
+			Discover: nil,
+		})
+		if err == nil {
+			t.Fatal("expected error for nil discover function")
+		}
+		if err.Error() != `provider: driver "test" discover func is nil` {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	})
