@@ -31,6 +31,13 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - name: Contract lint (docs/architecture)
+        run: bash ./scripts/ci/contract-lint.sh
+
+      - name: Contract drift report (non-blocking)
+        continue-on-error: true
+        run: bash ./scripts/ci/contract-drift-report.sh
+
       - name: Build
         run: go build ./...
 
