@@ -114,6 +114,21 @@ func TestDefaultToolUsagePromptIncludesPermissionAndAntiLoopGuidance(t *testing.
 	if !strings.Contains(toolUsage, "permission layer") {
 		t.Fatalf("expected Tool Usage to mention permission layer, got %q", toolUsage)
 	}
+	if !strings.Contains(toolUsage, "Do not invent tool names") {
+		t.Fatalf("expected Tool Usage to forbid invented tool names, got %q", toolUsage)
+	}
+	if !strings.Contains(toolUsage, "`filesystem_read_file`, `filesystem_grep`, and `filesystem_glob`") {
+		t.Fatalf("expected Tool Usage to prefer structured read/search tools, got %q", toolUsage)
+	}
+	if !strings.Contains(toolUsage, "`filesystem_edit` for precise edits") {
+		t.Fatalf("expected Tool Usage to describe edit tool preference, got %q", toolUsage)
+	}
+	if !strings.Contains(toolUsage, "Do not use `bash` to edit files") {
+		t.Fatalf("expected Tool Usage to discourage bash file edits, got %q", toolUsage)
+	}
+	if !strings.Contains(toolUsage, "avoid interactive or blocking commands") {
+		t.Fatalf("expected Tool Usage to constrain bash usage, got %q", toolUsage)
+	}
 	if !strings.Contains(toolUsage, "Do not self-reject") {
 		t.Fatalf("expected Tool Usage to discourage self-reject, got %q", toolUsage)
 	}
