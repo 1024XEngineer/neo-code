@@ -58,6 +58,7 @@ graph TD
     subgraph "Infrastructure Layer 基础设施层"
         PROV["Provider"]
         TOOL["Tool"]
+        SEC["Security"]
     end
 
     subgraph "Support Layer 支撑层"
@@ -76,6 +77,7 @@ graph TD
     LOOP <--> SESS
     LOOP ==> PROV
     LOOP ==> TOOL
+    TOOL <--> SEC
 
     CTX -. "依赖" .-> UTIL
     TOOL -. "依赖" .-> UTIL
@@ -92,6 +94,7 @@ graph TD
 - Runtime MUST 作为唯一编排中心，负责链路生命周期与终态收敛。
 - Provider MUST 吸收模型厂商差异，向上游输出统一协议。
 - Tools MUST 作为工具执行边界，负责权限与结果归一。
+- Security MUST 作为统一权限治理边界，负责策略命中、审批事件与会话级记忆。
 - Utils MUST 通过 `utils.Registry` 契约提供统一辅助能力入口。
 
 ## 5. 模块职责矩阵（逻辑依赖 + 契约关系）
@@ -103,6 +106,7 @@ graph TD
 | Context | Prompt 组装、上下文压缩、作用域隔离 | Runtime | Config / Utils | `context.BuildInput`、`context.BuildResult` |
 | Provider | 模型协议抹平、流式事件归一、能力判定 | Runtime | 模型供应商 API | `provider.GenerateRequest`、`provider.StreamEvent` |
 | Tools | 工具执行、审批拦截、输出归一 | Runtime | 本地/远端执行器 | `tools.ToolCallInput`、`tools.ToolResult` |
+| Security | 权限判定、审批事件、session 记忆、工作区边界复核 | Tools / Runtime | 策略规则与审批交互 | `security.Action`、`security.CheckResult` |
 | Session | 会话持久化、摘要视图、状态恢复 | Runtime | 存储介质 | `session.Store`、`session.Session`、`session.SessionSummary` |
 | Config | 配置加载、校验、更新、快照提供 | Runtime / Gateway | 配置文件与环境变量 | `config.Registry` |
 | Utils | 通用辅助能力（Token/路径/解析/序列化） | Gateway / Runtime / Context / Tools | 基础库 | `utils.Registry` |
@@ -126,6 +130,7 @@ graph TD
 | `Runtime -> Context` | `context.BuildInput`、`context.AdvancedBuildInput` | `context.BuildResult` | 编排层请求上下文构建 |
 | `Runtime -> Provider` | `provider.GenerateRequest` | `provider.StreamEvent` | 模型生成调用与流式事件回传 |
 | `Runtime -> Tools` | `tools.ToolCallInput` | `tools.ToolResult` | 工具执行与结果回灌 |
+| `Tools / Runtime -> Security` | `security.Action` / `runtime.PermissionResolutionInput` | `security.CheckResult` / 审批事件 | 权限判定、审批闭环、session 记忆 |
 | `Runtime <-> Session` | `session.Store` | `session.Session`、`session.SessionSummary` | 会话读写与摘要查询 |
 | `Runtime <-> Config` | `config.Registry` | `config.Config` | 配置读取与更新事务 |
 | `Runtime/Context/Tools/Gateway -> Utils` | `utils.Registry` | 各子能力接口返回值 | 统一辅助能力调用入口 |
@@ -148,11 +153,10 @@ graph TD
 
 1. 先读本文档：系统边界、单入口链路、契约映射。
 2. 再读核心编排：`runtime`、`session`。
-3. 再读协议与执行：`context`、`provider`、`tools`、`config`。
+3. 再读协议与执行：`context`、`provider`、`tools`、`security`、`config`。
 4. 最后读入口与支撑：`gateway`、`tui`、`cli`、`utils`。
 
 ---
 
 本文档仅承载系统级架构定义。模块级实现细节请查看对应模块文档。
-
 

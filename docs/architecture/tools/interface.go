@@ -33,7 +33,12 @@ type WorkspaceExecutionPlan struct {
 }
 
 // ChunkEmitter 是工具流式输出回调。
-type ChunkEmitter func(chunk []byte)
+// 并发语义：
+// - 单次 Execute 内按顺序调用；
+// - 回调返回非 nil error 时，工具应停止继续发送分片并尽快中止执行。
+// 内存语义：
+// - 回调返回后不得继续持有传入的 chunk 引用。
+type ChunkEmitter func(chunk []byte) error
 
 // ToolCallInput 是一次工具调用输入。
 type ToolCallInput struct {
@@ -67,45 +72,78 @@ type ToolResult struct {
 	Metadata map[string]any
 }
 
-// Manager 定义 runtime 侧工具边界。
+// PermissionRememberScope 表示审批结果在 session 中的记忆范围。
+type PermissionRememberScope string
+
+const (
+	// PermissionRememberNone 表示不记录。
+	PermissionRememberNone PermissionRememberScope = "none"
+	// PermissionRememberOnce 表示仅本次有效。
+	PermissionRememberOnce PermissionRememberScope = "once"
+	// PermissionRememberAlways 表示当前会话内持续放行。
+	PermissionRememberAlways PermissionRememberScope = "always_session"
+	// PermissionRememberReject 表示当前会话内持续拒绝。
+	PermissionRememberReject PermissionRememberScope = "reject_session"
+)
+
+// PermissionResolution 表示一次审批决议。
+type PermissionResolution struct {
+	// RequestID 是审批请求标识。
+	RequestID string
+	// Allowed 表示是否允许继续执行。
+	Allowed bool
+	// Reason 是审批理由或来源说明。
+	Reason string
+	// Scope 表示 session 记忆范围。
+	Scope PermissionRememberScope
+}
+
+// Manager 定义 runtime 侧当前工具边界。
 type Manager interface {
 	// ListAvailableSpecs 返回当前上下文可见工具列表。
-	// 职责：向模型暴露可调用工具能力。
-	// 输入语义：input 提供会话与代理上下文。
-	// 并发约束：应支持并发读取且保证返回结果一致语义。
-	// 生命周期：每轮 provider 调用前调用。
-	// 错误语义：返回注册表读取失败、权限过滤失败或策略计算失败。
 	ListAvailableSpecs(ctx context.Context, input SpecListInput) ([]ToolSpec, error)
 	// Execute 执行一次工具调用。
-	// 职责：执行权限校验、沙箱校验并调用具体工具。
-	// 输入语义：input 为模型发起的工具调用，包含执行上下文与约束计划。
-	// 并发约束：执行链路线程安全，同名工具可并发，不同会话互不影响。
-	// 生命周期：每个工具调用返回一次结果或错误。
-	// 错误语义：系统错误通过 error 返回，业务失败通过 ToolResult.IsError 表达。
 	Execute(ctx context.Context, input ToolCallInput) (ToolResult, error)
+}
+
+// ToolManagerV2 定义 #98 收口后的目标工具门面。
+type ToolManagerV2 interface {
+	// ListAvailableSpecs 返回当前上下文可见工具列表。
+	ListAvailableSpecs(ctx context.Context, input SpecListInput) ([]ToolSpec, error)
+	// Execute 执行一次工具调用。
+	Execute(ctx context.Context, input ToolCallInput) (ToolResult, error)
+	// ResolvePermission 接收 UI/Runtime 回传的审批结果。
+	ResolvePermission(ctx context.Context, resolution PermissionResolution) error
+}
+
+// PermissionMemoryStore 定义工具侧可替换的 session 记忆存储。
+type PermissionMemoryStore interface {
+	// Remember 记录一次审批记忆。
+	Remember(sessionID string, actionKey string, scope PermissionRememberScope, allowed bool) error
+	// Resolve 读取已命中的 session 记忆。
+	Resolve(sessionID string, actionKey string) (allowed bool, scope PermissionRememberScope, ok bool)
+	// Clear 清理会话下全部记忆。
+	Clear(sessionID string) error
+}
+
+// MCPRegistryAdapter 定义 MCP server 生命周期与工具发现契约。
+type MCPRegistryAdapter interface {
+	// RegisterServer 注册一个 MCP server。
+	RegisterServer(ctx context.Context, serverID string, source string, version string) error
+	// UnregisterServer 注销一个 MCP server。
+	UnregisterServer(ctx context.Context, serverID string) error
+	// RefreshServerTools 刷新指定 server 的工具列表。
+	RefreshServerTools(ctx context.Context, serverID string) error
+	// ListServerTools 返回所有已注册 server 暴露的工具能力。
+	ListServerTools(ctx context.Context) ([]ToolSpec, error)
 }
 
 // SubAgentOrchestrator 定义子任务隔离执行扩展契约。
 type SubAgentOrchestrator interface {
 	// Spawn 创建子任务。
-	// 职责：创建隔离子代理执行任务。
-	// 输入语义：task 为任务文本，scope 为隔离范围标识。
-	// 并发约束：支持并发创建多个子任务。
-	// 生命周期：返回的 agentID 用于后续等待或取消。
-	// 错误语义：返回调度失败、参数非法或资源不足错误。
 	Spawn(ctx context.Context, task string, scope string) (agentID string, err error)
 	// Wait 等待子任务结束。
-	// 职责：阻塞直到子任务完成或超时。
-	// 输入语义：agentID 为子任务标识。
-	// 并发约束：支持并发等待不同子任务。
-	// 生命周期：通常在主循环需要结果时调用。
-	// 错误语义：返回超时、取消、任务不存在或子任务失败错误。
 	Wait(ctx context.Context, agentID string) (result ToolResult, err error)
 	// Cancel 取消子任务。
-	// 职责：中止指定子任务执行。
-	// 输入语义：agentID 为子任务标识。
-	// 并发约束：应幂等且线程安全。
-	// 生命周期：用户取消或门禁触发时调用。
-	// 错误语义：返回取消失败或任务不存在错误。
 	Cancel(ctx context.Context, agentID string) error
 }
