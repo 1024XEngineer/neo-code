@@ -42,6 +42,9 @@ func (r *Registry) Register(driver DriverDefinition) error {
 	if driver.Build == nil {
 		return fmt.Errorf("provider: driver %q build func is nil", driver.Name)
 	}
+	if driver.Discover == nil {
+		return fmt.Errorf("provider: driver %q discover func is nil", driver.Name)
+	}
 	if _, exists := r.drivers[driverType]; exists {
 		return fmt.Errorf("%w: %s", ErrDriverAlreadyRegistered, driver.Name)
 	}
@@ -61,9 +64,6 @@ func (r *Registry) DiscoverModels(ctx context.Context, cfg RuntimeConfig) ([]pro
 	driver, err := r.driver(cfg.Driver)
 	if err != nil {
 		return nil, err
-	}
-	if driver.Discover == nil {
-		return nil, nil
 	}
 	return driver.Discover(ctx, cfg)
 }

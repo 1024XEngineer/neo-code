@@ -474,8 +474,50 @@ func TestQueueRefreshDeduplicatesInFlightRequests(t *testing.T) {
 	t.Fatal("expected in-flight refresh marker to be cleared")
 }
 
+func TestQueueRefreshSkipsWhenDriverUnsupportedOrIdentityIncomplete(t *testing.T) {
+	t.Parallel()
+
+	t.Run("unsupported driver", func(t *testing.T) {
+		t.Parallel()
+
+		service := NewService("", provider.NewRegistry(), newMemoryStore())
+		input := openAIProviderSource()
+		input.Identity.Driver = "missing"
+
+		service.queueRefresh(input)
+
+		service.refreshMu.Lock()
+		defer service.refreshMu.Unlock()
+		if len(service.inFlightByID) != 0 {
+			t.Fatalf("expected no refresh to be queued, got %+v", service.inFlightByID)
+		}
+	})
+
+	t.Run("incomplete identity", func(t *testing.T) {
+		t.Parallel()
+
+		service := NewService("", newRegistry(t, openaicompat.DriverName, nil), newMemoryStore())
+		input := openAIProviderSource()
+		input.Identity.BaseURL = ""
+
+		service.queueRefresh(input)
+
+		service.refreshMu.Lock()
+		defer service.refreshMu.Unlock()
+		if len(service.inFlightByID) != 0 {
+			t.Fatalf("expected no refresh to be queued, got %+v", service.inFlightByID)
+		}
+	})
+}
+
 func newRegistry(t *testing.T, name string, discover provider.DiscoveryFunc) *provider.Registry {
 	t.Helper()
+
+	if discover == nil {
+		discover = func(ctx context.Context, cfg provider.RuntimeConfig) ([]providertypes.ModelDescriptor, error) {
+			return nil, nil
+		}
+	}
 
 	registry := provider.NewRegistry()
 	if err := registry.Register(provider.DriverDefinition{

@@ -23,6 +23,9 @@ func stubDriver(driverType string) provider.DriverDefinition {
 		Build: func(ctx context.Context, cfg provider.RuntimeConfig) (provider.Provider, error) {
 			return stubProvider{}, nil
 		},
+		Discover: func(ctx context.Context, cfg provider.RuntimeConfig) ([]providertypes.ModelDescriptor, error) {
+			return nil, nil
+		},
 	}
 }
 
@@ -108,30 +111,6 @@ func TestRegistryDiscoverModels(t *testing.T) {
 		}
 		if len(got) != len(expectedModels) {
 			t.Fatalf("expected %d models, got %d", len(expectedModels), len(got))
-		}
-	})
-
-	t.Run("driver without discovery function", func(t *testing.T) {
-		t.Parallel()
-
-		registry := provider.NewRegistry()
-		driver := provider.DriverDefinition{
-			Name: "test-driver",
-			Build: func(ctx context.Context, cfg provider.RuntimeConfig) (provider.Provider, error) {
-				return stubProvider{}, nil
-			},
-			Discover: nil,
-		}
-		if err := registry.Register(driver); err != nil {
-			t.Fatalf("Register() error = %v", err)
-		}
-
-		got, err := registry.DiscoverModels(context.Background(), provider.RuntimeConfig{Driver: "test-driver"})
-		if err != nil {
-			t.Fatalf("DiscoverModels() error = %v", err)
-		}
-		if got != nil {
-			t.Fatalf("expected nil models, got %v", got)
 		}
 	})
 
@@ -250,6 +229,25 @@ func TestRegistryRegisterErrors(t *testing.T) {
 			t.Fatal("expected error for nil build function")
 		}
 		if err.Error() != `provider: driver "test" build func is nil` {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("nil discover function", func(t *testing.T) {
+		t.Parallel()
+
+		registry := provider.NewRegistry()
+		err := registry.Register(provider.DriverDefinition{
+			Name: "test",
+			Build: func(ctx context.Context, cfg provider.RuntimeConfig) (provider.Provider, error) {
+				return nil, nil
+			},
+			Discover: nil,
+		})
+		if err == nil {
+			t.Fatal("expected error for nil discover function")
+		}
+		if err.Error() != `provider: driver "test" discover func is nil` {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	})
