@@ -11,6 +11,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"neo-code/internal/config"
+	configstate "neo-code/internal/config/state"
 	agentcontext "neo-code/internal/context"
 	"neo-code/internal/provider/builtin"
 	providercatalog "neo-code/internal/provider/catalog"
@@ -41,7 +42,7 @@ type RuntimeBundle struct {
 	Config            config.Config
 	ConfigManager     *config.Manager
 	Runtime           agentruntime.Runtime
-	ProviderSelection *config.SelectionService
+	ProviderSelection *configstate.Service
 }
 
 // EnsureConsoleUTF8 负责在 Windows 控制台中尽量启用 UTF-8 编码。
@@ -70,7 +71,7 @@ func BuildRuntime(ctx context.Context, opts BootstrapOptions) (RuntimeBundle, er
 		return RuntimeBundle{}, err
 	}
 	modelCatalogs := providercatalog.NewService(manager.BaseDir(), providerRegistry, nil)
-	providerSelection := config.NewSelectionService(manager, providerRegistry, modelCatalogs)
+	providerSelection := configstate.NewService(manager, providerRegistry, modelCatalogs)
 	if _, err := providerSelection.EnsureSelection(ctx); err != nil {
 		return RuntimeBundle{}, err
 	}
@@ -123,7 +124,7 @@ func NewProgram(ctx context.Context, opts BootstrapOptions) (*tea.Program, error
 
 // bootstrapDefaultConfig 负责计算本次启动应使用的默认配置快照。
 func bootstrapDefaultConfig(opts BootstrapOptions) (*config.Config, error) {
-	defaultCfg := config.DefaultConfig()
+	defaultCfg := config.StaticDefaults()
 	workdir := strings.TrimSpace(opts.Workdir)
 	if workdir == "" {
 		return defaultCfg, nil

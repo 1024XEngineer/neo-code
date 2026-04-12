@@ -15,6 +15,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"neo-code/internal/config"
+	configstate "neo-code/internal/config/state"
 	providertypes "neo-code/internal/provider/types"
 	agentruntime "neo-code/internal/runtime"
 	tuibootstrap "neo-code/internal/tui/bootstrap"
@@ -51,11 +52,11 @@ type workspaceCommandResultMsg = tuistate.WorkspaceCommandResultMsg
 type permissionResolutionFinishedMsg = tuistate.PermissionResolutionFinishedMsg
 
 type ProviderController interface {
-	ListProviders(ctx context.Context) ([]config.ProviderCatalogItem, error)
-	SelectProvider(ctx context.Context, providerID string) (config.ProviderSelection, error)
+	ListProviderOptions(ctx context.Context) ([]configstate.ProviderOption, error)
+	SelectProvider(ctx context.Context, providerID string) (configstate.Selection, error)
 	ListModels(ctx context.Context) ([]providertypes.ModelDescriptor, error)
 	ListModelsSnapshot(ctx context.Context) ([]providertypes.ModelDescriptor, error)
-	SetCurrentModel(ctx context.Context, modelID string) (config.ProviderSelection, error)
+	SetCurrentModel(ctx context.Context, modelID string) (configstate.Selection, error)
 }
 
 // appServices 聚合 App 需要的服务依赖，避免与渲染状态混在同一层级。

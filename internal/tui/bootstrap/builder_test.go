@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"neo-code/internal/config"
+	configstate "neo-code/internal/config/state"
 	providertypes "neo-code/internal/provider/types"
 	agentruntime "neo-code/internal/runtime"
 	agentsession "neo-code/internal/session"
@@ -49,12 +50,12 @@ func (r *testRuntime) SetSessionWorkdir(ctx context.Context, sessionID string, w
 
 type testProviderService struct{}
 
-func (s *testProviderService) ListProviders(ctx context.Context) ([]config.ProviderCatalogItem, error) {
+func (s *testProviderService) ListProviderOptions(ctx context.Context) ([]configstate.ProviderOption, error) {
 	return nil, nil
 }
 
-func (s *testProviderService) SelectProvider(ctx context.Context, providerID string) (config.ProviderSelection, error) {
-	return config.ProviderSelection{}, nil
+func (s *testProviderService) SelectProvider(ctx context.Context, providerID string) (configstate.Selection, error) {
+	return configstate.Selection{}, nil
 }
 
 func (s *testProviderService) ListModels(ctx context.Context) ([]providertypes.ModelDescriptor, error) {
@@ -65,8 +66,8 @@ func (s *testProviderService) ListModelsSnapshot(ctx context.Context) ([]provide
 	return nil, nil
 }
 
-func (s *testProviderService) SetCurrentModel(ctx context.Context, modelID string) (config.ProviderSelection, error) {
-	return config.ProviderSelection{}, nil
+func (s *testProviderService) SetCurrentModel(ctx context.Context, modelID string) (configstate.Selection, error) {
+	return configstate.Selection{}, nil
 }
 
 func TestBuild(t *testing.T) {
@@ -232,12 +233,12 @@ func (r noopRuntime) SetSessionWorkdir(ctx context.Context, sessionID string, wo
 
 type noopProviderService struct{}
 
-func (s noopProviderService) ListProviders(ctx context.Context) ([]config.ProviderCatalogItem, error) {
+func (s noopProviderService) ListProviderOptions(ctx context.Context) ([]configstate.ProviderOption, error) {
 	return nil, nil
 }
 
-func (s noopProviderService) SelectProvider(ctx context.Context, providerID string) (config.ProviderSelection, error) {
-	return config.ProviderSelection{}, nil
+func (s noopProviderService) SelectProvider(ctx context.Context, providerID string) (configstate.Selection, error) {
+	return configstate.Selection{}, nil
 }
 
 func (s noopProviderService) ListModels(ctx context.Context) ([]providertypes.ModelDescriptor, error) {
@@ -248,8 +249,8 @@ func (s noopProviderService) ListModelsSnapshot(ctx context.Context) ([]provider
 	return nil, nil
 }
 
-func (s noopProviderService) SetCurrentModel(ctx context.Context, modelID string) (config.ProviderSelection, error) {
-	return config.ProviderSelection{}, nil
+func (s noopProviderService) SetCurrentModel(ctx context.Context, modelID string) (configstate.Selection, error) {
+	return configstate.Selection{}, nil
 }
 
 func TestBuildFactoryErrors(t *testing.T) {

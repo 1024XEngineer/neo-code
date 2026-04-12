@@ -8,7 +8,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/list"
 
-	"neo-code/internal/config"
+	configstate "neo-code/internal/config/state"
 	providertypes "neo-code/internal/provider/types"
 	tuistatus "neo-code/internal/tui/core/status"
 )
@@ -155,12 +155,12 @@ type errorProviderService struct {
 	err error
 }
 
-func (s errorProviderService) ListProviders(ctx context.Context) ([]config.ProviderCatalogItem, error) {
+func (s errorProviderService) ListProviderOptions(ctx context.Context) ([]configstate.ProviderOption, error) {
 	return nil, s.err
 }
 
-func (s errorProviderService) SelectProvider(ctx context.Context, providerID string) (config.ProviderSelection, error) {
-	return config.ProviderSelection{}, s.err
+func (s errorProviderService) SelectProvider(ctx context.Context, providerID string) (configstate.Selection, error) {
+	return configstate.Selection{}, s.err
 }
 
 func (s errorProviderService) ListModels(ctx context.Context) ([]providertypes.ModelDescriptor, error) {
@@ -171,8 +171,8 @@ func (s errorProviderService) ListModelsSnapshot(ctx context.Context) ([]provide
 	return nil, s.err
 }
 
-func (s errorProviderService) SetCurrentModel(ctx context.Context, modelID string) (config.ProviderSelection, error) {
-	return config.ProviderSelection{}, s.err
+func (s errorProviderService) SetCurrentModel(ctx context.Context, modelID string) (configstate.Selection, error) {
+	return configstate.Selection{}, s.err
 }
 
 func TestExecuteLocalCommandErrors(t *testing.T) {

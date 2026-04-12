@@ -98,8 +98,11 @@ package anthropic
 
 import (
     "context"
+    "errors"
     "net/http"
-    
+    "strings"
+    "time"
+
     "neo-code/internal/config"
     domain "neo-code/internal/provider"
 )
@@ -117,8 +120,8 @@ type Provider struct {
 
 // New 构造函数
 func New(cfg config.ResolvedProviderConfig) (*Provider, error) {
-    if err := cfg.Validate(); err != nil {
-        return nil, fmt.Errorf("anthropic provider: %w", err)
+    if strings.TrimSpace(cfg.APIKey) == "" {
+        return nil, errors.New("anthropic provider: api key is empty")
     }
     return &Provider{
         cfg:    cfg,
@@ -267,4 +270,3 @@ func DefaultProviders() []ProviderConfig {
 ```
 
 所有内置 provider 都通过代码集中注册。模型选择器展示的候选模型由默认模型、动态发现结果和本地缓存共同组成。
-

@@ -129,10 +129,7 @@ func TestCatalogSnapshotOnMissingCatalog(t *testing.T) {
 	t.Parallel()
 
 	service := NewService("", provider.NewRegistry(), newMemoryStore())
-	input, err := config.NewProviderCatalogInput(config.OpenAIProvider())
-	if err != nil {
-		t.Fatalf("NewProviderCatalogInput() error = %v", err)
-	}
+	input := mustCatalogInput(t, config.OpenAIProvider())
 	snapshot := service.catalogSnapshot(context.Background(), input)
 	if snapshot.ok || snapshot.expired || len(snapshot.models) != 0 {
 		t.Fatalf("expected empty snapshot on cache miss, got %+v", snapshot)
@@ -151,10 +148,7 @@ func TestListProviderModelsRejectsUnsupportedOpenAICompatibleAPIStyle(t *testing
 	cfg := customGatewayProvider()
 	cfg.APIStyle = "responses"
 
-	input, err := config.NewProviderCatalogInput(cfg)
-	if err != nil {
-		t.Fatalf("NewProviderCatalogInput() error = %v", err)
-	}
+	input := mustCatalogInput(t, cfg)
 
 	models, err := service.ListProviderModels(context.Background(), input)
 	if err == nil || models != nil || !strings.Contains(err.Error(), `api_style "responses" is not supported yet`) {
@@ -174,10 +168,7 @@ func TestListBuiltinProviderModelsRejectsUnsupportedOpenAICompatibleAPIStyle(t *
 	cfg := config.OpenAIProvider()
 	cfg.APIStyle = "responses"
 
-	input, err := config.NewProviderCatalogInput(cfg)
-	if err != nil {
-		t.Fatalf("NewProviderCatalogInput() error = %v", err)
-	}
+	input := mustCatalogInput(t, cfg)
 
 	models, err := service.ListProviderModels(context.Background(), input)
 	if err == nil || models != nil || !strings.Contains(err.Error(), `api_style "responses" is not supported yet`) {
@@ -197,10 +188,7 @@ func TestListBuiltinProviderModelsSnapshotRejectsUnsupportedOpenAICompatibleAPIS
 	cfg := config.OpenAIProvider()
 	cfg.APIStyle = "responses"
 
-	input, err := config.NewProviderCatalogInput(cfg)
-	if err != nil {
-		t.Fatalf("NewProviderCatalogInput() error = %v", err)
-	}
+	input := mustCatalogInput(t, cfg)
 
 	models, err := service.ListProviderModelsSnapshot(context.Background(), input)
 	if err == nil || models != nil || !provider.IsDiscoveryConfigError(err) {
@@ -224,10 +212,7 @@ func TestListBuiltinProviderModelsSnapshotAndCachedRejectUnsupportedAPIStyleWith
 	cfg := config.OpenAIProvider()
 	cfg.APIStyle = "responses"
 
-	input, err := config.NewProviderCatalogInput(cfg)
-	if err != nil {
-		t.Fatalf("NewProviderCatalogInput() error = %v", err)
-	}
+	input := mustCatalogInput(t, cfg)
 	if err := store.Save(context.Background(), ModelCatalog{
 		SchemaVersion: schemaVersion,
 		Identity:      input.Identity,

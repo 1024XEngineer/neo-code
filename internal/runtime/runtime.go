@@ -718,7 +718,8 @@ func (s *Service) callProviderWithRetry(
 			}
 		}
 
-		resolvedProvider, err := s.configManager.ResolvedSelectedProvider()
+		cfg := s.configManager.Get()
+		resolvedProvider, err := config.ResolveSelectedProvider(cfg)
 		if err != nil {
 			return nil, err
 		}

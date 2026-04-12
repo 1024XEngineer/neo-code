@@ -10,7 +10,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"neo-code/internal/config"
+	configstate "neo-code/internal/config/state"
 	providertypes "neo-code/internal/provider/types"
 	agentruntime "neo-code/internal/runtime"
 )
@@ -49,16 +49,16 @@ func (s *stubPermissionResolver) ResolvePermission(ctx context.Context, input ag
 }
 
 type stubProvider struct {
-	selection config.ProviderSelection
+	selection configstate.Selection
 	models    []providertypes.ModelDescriptor
 	err       error
 }
 
-func (s *stubProvider) SelectProvider(ctx context.Context, providerID string) (config.ProviderSelection, error) {
+func (s *stubProvider) SelectProvider(ctx context.Context, providerID string) (configstate.Selection, error) {
 	return s.selection, s.err
 }
 
-func (s *stubProvider) SetCurrentModel(ctx context.Context, modelID string) (config.ProviderSelection, error) {
+func (s *stubProvider) SetCurrentModel(ctx context.Context, modelID string) (configstate.Selection, error) {
 	return s.selection, s.err
 }
 
@@ -156,17 +156,17 @@ func TestRunResolvePermissionCmd(t *testing.T) {
 
 func TestProviderCmds(t *testing.T) {
 	svc := &stubProvider{
-		selection: config.ProviderSelection{ProviderID: "openai", ModelID: "gpt-5.4"},
+		selection: configstate.Selection{ProviderID: "openai", ModelID: "gpt-5.4"},
 		models:    []providertypes.ModelDescriptor{{ID: "gpt-5.4", Name: "GPT-5.4"}},
 	}
 
-	msg := SelectProviderCmd(svc, "openai", func(sel config.ProviderSelection, err error) tea.Msg { return sel })()
-	if sel, ok := msg.(config.ProviderSelection); !ok || sel.ProviderID != "openai" {
+	msg := SelectProviderCmd(svc, "openai", func(sel configstate.Selection, err error) tea.Msg { return sel })()
+	if sel, ok := msg.(configstate.Selection); !ok || sel.ProviderID != "openai" {
 		t.Fatalf("expected provider selection msg, got %T %#v", msg, msg)
 	}
 
-	msg = SelectModelCmd(svc, "gpt-5.4", func(sel config.ProviderSelection, err error) tea.Msg { return sel })()
-	if sel, ok := msg.(config.ProviderSelection); !ok || sel.ModelID != "gpt-5.4" {
+	msg = SelectModelCmd(svc, "gpt-5.4", func(sel configstate.Selection, err error) tea.Msg { return sel })()
+	if sel, ok := msg.(configstate.Selection); !ok || sel.ModelID != "gpt-5.4" {
 		t.Fatalf("expected model selection msg, got %T %#v", msg, msg)
 	}
 

@@ -22,8 +22,8 @@ type Loader struct {
 }
 
 type persistedConfig struct {
-	SelectedProvider string                 `yaml:"selected_provider"`
-	CurrentModel     string                 `yaml:"current_model"`
+	SelectedProvider string                 `yaml:"selected_provider,omitempty"`
+	CurrentModel     string                 `yaml:"current_model,omitempty"`
 	Shell            string                 `yaml:"shell"`
 	MaxLoops         int                    `yaml:"max_loops,omitempty"`
 	ToolTimeoutSec   int                    `yaml:"tool_timeout_sec,omitempty"`
@@ -58,8 +58,11 @@ func NewLoader(baseDir string, defaults *Config) *Loader {
 	}
 
 	snapshot := defaults.Clone()
-	snapshot.ApplyDefaultsFrom(*Default())
-	if err := snapshot.Validate(); err != nil {
+	if len(snapshot.Providers) == 0 {
+		snapshot.Providers = cloneProviders(DefaultProviders())
+	}
+	snapshot.applyStaticDefaults(*StaticDefaults())
+	if err := snapshot.ValidateSnapshot(); err != nil {
 		panic(fmt.Sprintf("config: invalid loader defaults: %v", err))
 	}
 
@@ -109,19 +112,13 @@ func (l *Loader) Load(ctx context.Context) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	cfg.Providers = customProviders
-	cfg.ApplyDefaultsFrom(l.defaults)
-	if err := cfg.Validate(); err != nil {
-		return nil, err
-	}
-	needsRewrite, err := persistedConfigDiffers(data, *cfg)
+	cfg.Providers, err = assembleProviders(l.defaults.Providers, customProviders)
 	if err != nil {
 		return nil, err
 	}
-	if needsRewrite {
-		if err := l.Save(ctx, cfg); err != nil {
-			return nil, err
-		}
+	cfg.applyStaticDefaults(l.defaults)
+	if err := cfg.ValidateSnapshot(); err != nil {
+		return nil, err
 	}
 	return cfg, nil
 }
@@ -136,12 +133,11 @@ func (l *Loader) Save(ctx context.Context, cfg *Config) error {
 	}
 
 	snapshot := cfg.Clone()
-	providersSnapshot := cloneProviders(snapshot.Providers)
-	snapshot.ApplyDefaultsFrom(l.defaults)
-	if len(providersSnapshot) > 0 {
-		snapshot.Providers = providersSnapshot
+	if len(snapshot.Providers) == 0 {
+		snapshot.Providers = cloneProviders(l.defaults.Providers)
 	}
-	if err := snapshot.Validate(); err != nil {
+	snapshot.applyStaticDefaults(l.defaults)
+	if err := snapshot.ValidateSnapshot(); err != nil {
 		return err
 	}
 
@@ -166,7 +162,7 @@ func defaultBaseDir() string {
 }
 
 func parseConfig(data []byte) (*Config, error) {
-	return parseConfigWithContextDefaults(data, Default().Context)
+	return parseConfigWithContextDefaults(data, StaticDefaults().Context)
 }
 
 // parseConfigWithContextDefaults 负责在解析配置时注入上下文压缩相关默认值。
@@ -254,10 +250,43 @@ func fromPersistedContextConfig(file persistedContextConfig, defaults ContextCon
 	return out
 }
 
-func persistedConfigDiffers(data []byte, cfg Config) (bool, error) {
-	canonical, err := marshalPersistedConfig(cfg)
-	if err != nil {
-		return false, err
+// assembleProviders 按来源组装运行时 provider 集合，并在发现重名时直接报错。
+func assembleProviders(builtin []ProviderConfig, custom []ProviderConfig) ([]ProviderConfig, error) {
+	assembled := make([]ProviderConfig, 0, len(builtin)+len(custom))
+	seen := make(map[string]string, len(builtin)+len(custom))
+
+	appendProvider := func(provider ProviderConfig) error {
+		name := strings.TrimSpace(provider.Name)
+		key := normalizeProviderName(name)
+		if key == "" {
+			assembled = append(assembled, cloneProviderConfig(provider))
+			return nil
+		}
+		if existing, exists := seen[key]; exists {
+			return fmt.Errorf("config: duplicate provider name %q for %q and %q", name, existing, name)
+		}
+		seen[key] = name
+		assembled = append(assembled, cloneProviderConfig(provider))
+		return nil
 	}
-	return !bytes.Equal(bytes.TrimSpace(data), bytes.TrimSpace(canonical)), nil
+
+	for _, provider := range builtin {
+		candidate := cloneProviderConfig(provider)
+		if candidate.Source == "" {
+			candidate.Source = ProviderSourceBuiltin
+		}
+		if err := appendProvider(candidate); err != nil {
+			return nil, err
+		}
+	}
+	for _, provider := range custom {
+		candidate := cloneProviderConfig(provider)
+		if candidate.Source == "" {
+			candidate.Source = ProviderSourceCustom
+		}
+		if err := appendProvider(candidate); err != nil {
+			return nil, err
+		}
+	}
+	return assembled, nil
 }

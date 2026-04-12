@@ -6,18 +6,18 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"neo-code/internal/config"
+	configstate "neo-code/internal/config/state"
 	providertypes "neo-code/internal/provider/types"
 )
 
 // ProviderSelector 定义 provider 选择命令所需最小能力。
 type ProviderSelector interface {
-	SelectProvider(ctx context.Context, providerID string) (config.ProviderSelection, error)
+	SelectProvider(ctx context.Context, providerID string) (configstate.Selection, error)
 }
 
 // ModelSelector 定义 model 选择命令所需最小能力。
 type ModelSelector interface {
-	SetCurrentModel(ctx context.Context, modelID string) (config.ProviderSelection, error)
+	SetCurrentModel(ctx context.Context, modelID string) (configstate.Selection, error)
 }
 
 // ModelCatalogReader 定义当前 provider 模型目录刷新所需最小能力。
@@ -29,7 +29,7 @@ type ModelCatalogReader interface {
 func SelectProviderCmd(
 	providerSvc ProviderSelector,
 	providerID string,
-	toMsg func(config.ProviderSelection, error) tea.Msg,
+	toMsg func(configstate.Selection, error) tea.Msg,
 ) tea.Cmd {
 	return func() tea.Msg {
 		selection, err := providerSvc.SelectProvider(context.Background(), providerID)
@@ -41,7 +41,7 @@ func SelectProviderCmd(
 func SelectModelCmd(
 	providerSvc ModelSelector,
 	modelID string,
-	toMsg func(config.ProviderSelection, error) tea.Msg,
+	toMsg func(configstate.Selection, error) tea.Msg,
 ) tea.Cmd {
 	return func() tea.Msg {
 		selection, err := providerSvc.SetCurrentModel(context.Background(), modelID)

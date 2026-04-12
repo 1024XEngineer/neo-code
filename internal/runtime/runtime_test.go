@@ -2556,7 +2556,12 @@ func newRuntimeConfigManagerWithProviderEnvs(t *testing.T, providerEnvs map[stri
 		t.Fatalf("set env: %v", err)
 	}
 
-	defaults := config.DefaultConfig()
+	defaults := config.StaticDefaults()
+	defaults.Providers = config.DefaultProviders()
+	if len(defaults.Providers) > 0 {
+		defaults.SelectedProvider = defaults.Providers[0].Name
+		defaults.CurrentModel = defaults.Providers[0].Model
+	}
 	selected := provider.NormalizeKey(defaults.SelectedProvider)
 	for i := range defaults.Providers {
 		if provider.NormalizeKey(defaults.Providers[i].Name) == selected {

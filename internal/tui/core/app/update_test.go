@@ -9,6 +9,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"neo-code/internal/config"
+	configstate "neo-code/internal/config/state"
 	providertypes "neo-code/internal/provider/types"
 	agentruntime "neo-code/internal/runtime"
 	agentsession "neo-code/internal/session"
@@ -19,20 +20,20 @@ import (
 )
 
 type stubProviderService struct {
-	providers []config.ProviderCatalogItem
+	providers []configstate.ProviderOption
 	models    []providertypes.ModelDescriptor
 }
 
-func (s stubProviderService) ListProviders(ctx context.Context) ([]config.ProviderCatalogItem, error) {
+func (s stubProviderService) ListProviderOptions(ctx context.Context) ([]configstate.ProviderOption, error) {
 	return s.providers, nil
 }
 
-func (s stubProviderService) SelectProvider(ctx context.Context, providerID string) (config.ProviderSelection, error) {
+func (s stubProviderService) SelectProvider(ctx context.Context, providerID string) (configstate.Selection, error) {
 	modelID := ""
 	if len(s.models) > 0 {
 		modelID = s.models[0].ID
 	}
-	return config.ProviderSelection{ProviderID: providerID, ModelID: modelID}, nil
+	return configstate.Selection{ProviderID: providerID, ModelID: modelID}, nil
 }
 
 func (s stubProviderService) ListModels(ctx context.Context) ([]providertypes.ModelDescriptor, error) {
@@ -43,12 +44,12 @@ func (s stubProviderService) ListModelsSnapshot(ctx context.Context) ([]provider
 	return s.models, nil
 }
 
-func (s stubProviderService) SetCurrentModel(ctx context.Context, modelID string) (config.ProviderSelection, error) {
+func (s stubProviderService) SetCurrentModel(ctx context.Context, modelID string) (configstate.Selection, error) {
 	providerID := ""
 	if len(s.providers) > 0 {
 		providerID = s.providers[0].ID
 	}
-	return config.ProviderSelection{ProviderID: providerID, ModelID: modelID}, nil
+	return configstate.Selection{ProviderID: providerID, ModelID: modelID}, nil
 }
 
 type stubRuntime struct {
@@ -96,26 +97,32 @@ func (s *stubRuntime) SetSessionWorkdir(ctx context.Context, sessionID string, w
 	return agentsession.NewWithWorkdir("draft", workdir), nil
 }
 
-func newTestApp(t *testing.T) (App, *stubRuntime) {
-	t.Helper()
-
-	cfg := config.DefaultConfig()
-	cfg.Workdir = t.TempDir()
+func newDefaultAppConfig() *config.Config {
+	cfg := config.StaticDefaults()
+	cfg.Providers = config.DefaultProviders()
 	if len(cfg.Providers) > 0 {
 		cfg.SelectedProvider = cfg.Providers[0].Name
 		cfg.CurrentModel = cfg.Providers[0].Model
 	}
+	return cfg
+}
+
+func newTestApp(t *testing.T) (App, *stubRuntime) {
+	t.Helper()
+
+	cfg := newDefaultAppConfig()
+	cfg.Workdir = t.TempDir()
 
 	manager := config.NewManager(config.NewLoader(cfg.Workdir, cfg))
 	if _, err := manager.Load(context.Background()); err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
 
-	var providers []config.ProviderCatalogItem
+	var providers []configstate.ProviderOption
 	var models []providertypes.ModelDescriptor
 	if len(cfg.Providers) > 0 {
 		provider := cfg.Providers[0]
-		providers = []config.ProviderCatalogItem{
+		providers = []configstate.ProviderOption{
 			{
 				ID:   provider.Name,
 				Name: provider.Name,
@@ -787,7 +794,7 @@ func TestHelpHeightAndRenderHelp(t *testing.T) {
 }
 
 func TestNewWithBootstrapSuccess(t *testing.T) {
-	cfg := config.DefaultConfig()
+	cfg := newDefaultAppConfig()
 	cfg.Workdir = t.TempDir()
 	if len(cfg.Providers) > 0 {
 		cfg.SelectedProvider = cfg.Providers[0].Name
@@ -799,11 +806,11 @@ func TestNewWithBootstrapSuccess(t *testing.T) {
 		t.Fatalf("Load() error = %v", err)
 	}
 
-	var providers []config.ProviderCatalogItem
+	var providers []configstate.ProviderOption
 	var models []providertypes.ModelDescriptor
 	if len(cfg.Providers) > 0 {
 		provider := cfg.Providers[0]
-		providers = []config.ProviderCatalogItem{
+		providers = []configstate.ProviderOption{
 			{
 				ID:   provider.Name,
 				Name: provider.Name,
@@ -833,7 +840,7 @@ func TestNewWithBootstrapSuccess(t *testing.T) {
 }
 
 func TestNewWithBootstrapMissingDependencies(t *testing.T) {
-	cfg := config.DefaultConfig()
+	cfg := newDefaultAppConfig()
 
 	manager := config.NewManager(config.NewLoader(t.TempDir(), cfg))
 	if _, err := manager.Load(context.Background()); err != nil {
@@ -860,7 +867,7 @@ func TestNewWithBootstrapMissingDependencies(t *testing.T) {
 }
 
 func TestNewUsesBootstrap(t *testing.T) {
-	cfg := config.DefaultConfig()
+	cfg := newDefaultAppConfig()
 	cfg.Workdir = t.TempDir()
 	if len(cfg.Providers) > 0 {
 		cfg.SelectedProvider = cfg.Providers[0].Name
@@ -872,11 +879,11 @@ func TestNewUsesBootstrap(t *testing.T) {
 		t.Fatalf("Load() error = %v", err)
 	}
 
-	var providers []config.ProviderCatalogItem
+	var providers []configstate.ProviderOption
 	var models []providertypes.ModelDescriptor
 	if len(cfg.Providers) > 0 {
 		provider := cfg.Providers[0]
-		providers = []config.ProviderCatalogItem{
+		providers = []configstate.ProviderOption{
 			{
 				ID:   provider.Name,
 				Name: provider.Name,

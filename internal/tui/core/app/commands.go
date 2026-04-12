@@ -9,6 +9,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"neo-code/internal/config"
+	configstate "neo-code/internal/config/state"
 	providertypes "neo-code/internal/provider/types"
 	tuicommands "neo-code/internal/tui/core/commands"
 	tuistatus "neo-code/internal/tui/core/status"
@@ -164,7 +165,7 @@ func newHelpPickerItems(items []selectionItem) list.Model {
 	return newHelpPicker(listItems)
 }
 
-func mapProviderItems(items []config.ProviderCatalogItem) []selectionItem {
+func mapProviderItems(items []configstate.ProviderOption) []selectionItem {
 	mapped := make([]selectionItem, 0, len(items))
 	for _, item := range items {
 		mapped = append(mapped, selectionItem{
@@ -201,7 +202,7 @@ func replaceHelpPickerItems(current *list.Model, items []selectionItem) {
 }
 
 func (a *App) refreshProviderPicker() error {
-	items, err := a.providerSvc.ListProviders(context.Background())
+	items, err := a.providerSvc.ListProviderOptions(context.Background())
 	if err != nil {
 		return err
 	}
@@ -296,7 +297,7 @@ func runProviderSelection(providerSvc ProviderController, providerName string) t
 	return tuiservices.SelectProviderCmd(
 		providerSvc,
 		providerName,
-		func(selection config.ProviderSelection, err error) tea.Msg {
+		func(selection configstate.Selection, err error) tea.Msg {
 			if err != nil {
 				return localCommandResultMsg{Err: err}
 			}
@@ -312,7 +313,7 @@ func runModelSelection(providerSvc ProviderController, modelID string) tea.Cmd {
 	return tuiservices.SelectModelCmd(
 		providerSvc,
 		modelID,
-		func(selection config.ProviderSelection, err error) tea.Msg {
+		func(selection configstate.Selection, err error) tea.Msg {
 			if err != nil {
 				return localCommandResultMsg{Err: err}
 			}

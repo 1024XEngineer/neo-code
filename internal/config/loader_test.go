@@ -136,7 +136,7 @@ providers:
 	}
 }
 
-func TestLoaderRewritesNormalizedSelectionStateOnLoad(t *testing.T) {
+func TestLoaderPreservesSelectionStateOnLoad(t *testing.T) {
 	t.Parallel()
 
 	loader := NewLoader(t.TempDir(), testDefaultConfig())
@@ -156,27 +156,24 @@ shell: powershell
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if cfg.SelectedProvider != testProviderName {
-		t.Fatalf("expected selected provider %q, got %q", testProviderName, cfg.SelectedProvider)
+	if cfg.SelectedProvider != "missing-provider" {
+		t.Fatalf("expected selected provider to remain unchanged, got %q", cfg.SelectedProvider)
 	}
-	if cfg.CurrentModel != testModel {
-		t.Fatalf("expected current model %q, got %q", testModel, cfg.CurrentModel)
+	if cfg.CurrentModel != "" {
+		t.Fatalf("expected current model to remain empty, got %q", cfg.CurrentModel)
 	}
 
-	rewritten, err := os.ReadFile(loader.ConfigPath())
+	persisted, err := os.ReadFile(loader.ConfigPath())
 	if err != nil {
-		t.Fatalf("read rewritten config: %v", err)
+		t.Fatalf("read config: %v", err)
 	}
-	text := string(rewritten)
-	if !strings.Contains(text, "selected_provider: "+testProviderName) {
-		t.Fatalf("expected rewritten config to persist selected provider, got:\n%s", text)
-	}
-	if !strings.Contains(text, "current_model: "+testModel) {
-		t.Fatalf("expected rewritten config to persist current model, got:\n%s", text)
+	text := string(persisted)
+	if !strings.Contains(text, "selected_provider: missing-provider") {
+		t.Fatalf("expected config file to remain unchanged, got:\n%s", text)
 	}
 }
 
-func TestLoaderRewritesMissingCurrentModelOnLoad(t *testing.T) {
+func TestLoaderPreservesMissingCurrentModelOnLoad(t *testing.T) {
 	t.Parallel()
 
 	loader := NewLoader(t.TempDir(), testDefaultConfig())
@@ -199,17 +196,17 @@ shell: powershell
 	if cfg.SelectedProvider != testProviderName {
 		t.Fatalf("expected selected provider %q, got %q", testProviderName, cfg.SelectedProvider)
 	}
-	if cfg.CurrentModel != testModel {
-		t.Fatalf("expected current model %q, got %q", testModel, cfg.CurrentModel)
+	if cfg.CurrentModel != "" {
+		t.Fatalf("expected current model to remain empty, got %q", cfg.CurrentModel)
 	}
 
-	rewritten, err := os.ReadFile(loader.ConfigPath())
+	persisted, err := os.ReadFile(loader.ConfigPath())
 	if err != nil {
-		t.Fatalf("read rewritten config: %v", err)
+		t.Fatalf("read config: %v", err)
 	}
-	text := string(rewritten)
-	if !strings.Contains(text, "current_model: "+testModel) {
-		t.Fatalf("expected rewritten config to persist current model, got:\n%s", text)
+	text := string(persisted)
+	if strings.Contains(text, "current_model:") {
+		t.Fatalf("expected config file to preserve missing current_model, got:\n%s", text)
 	}
 }
 

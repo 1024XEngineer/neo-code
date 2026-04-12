@@ -130,11 +130,13 @@ type MCPEnvVarConfig struct {
 	ValueEnv string `yaml:"value_env,omitempty"`
 }
 
+// DefaultWebFetchSupportedContentTypes 返回 WebFetch 允许抓取的默认内容类型列表副本。
 func DefaultWebFetchSupportedContentTypes() []string {
 	return append([]string(nil), defaultWebFetchSupportedContentTypes...)
 }
 
-func Default() *Config {
+// StaticDefaults 返回 config 层负责的静态默认值骨架，不包含 provider 装配和选择状态修复。
+func StaticDefaults() *Config {
 	return &Config{
 		Workdir:        DefaultWorkdir,
 		Shell:          defaultShell(),
@@ -150,7 +152,7 @@ func Default() *Config {
 
 func (c *Config) Clone() Config {
 	if c == nil {
-		return *Default()
+		return *StaticDefaults()
 	}
 
 	clone := *c
@@ -160,32 +162,12 @@ func (c *Config) Clone() Config {
 	return clone
 }
 
-func (c *Config) ApplyDefaultsFrom(defaults Config) {
+// applyStaticDefaults 仅补齐静态配置默认值，不处理 provider 装配或当前选择状态修复。
+func (c *Config) applyStaticDefaults(defaults Config) {
 	if c == nil {
 		return
 	}
 
-	c.Providers = mergeProviders(defaults.Providers, c.Providers)
-
-	fallbackProvider := defaultSelectedProviderName(c.Providers, defaults.SelectedProvider)
-	selectedReset := false
-	switch current := strings.TrimSpace(c.SelectedProvider); {
-	case current == "":
-		c.SelectedProvider = fallbackProvider
-		selectedReset = true
-	case !containsProviderName(c.Providers, current):
-		c.SelectedProvider = fallbackProvider
-		selectedReset = true
-	default:
-		c.SelectedProvider = current
-	}
-	if strings.TrimSpace(c.CurrentModel) == "" || selectedReset {
-		if selected, err := c.SelectedProviderConfig(); err == nil {
-			c.CurrentModel = strings.TrimSpace(selected.Model)
-		} else if strings.TrimSpace(defaults.CurrentModel) != "" {
-			c.CurrentModel = defaults.CurrentModel
-		}
-	}
 	if strings.TrimSpace(c.Workdir) == "" {
 		c.Workdir = defaults.Workdir
 	}
@@ -204,7 +186,8 @@ func (c *Config) ApplyDefaultsFrom(defaults Config) {
 	c.Workdir = normalizeWorkdir(c.Workdir)
 }
 
-func (c *Config) Validate() error {
+// ValidateSnapshot 仅校验配置快照本身是否结构完整，不负责 selected_provider/current_model 的可运行性修正。
+func (c *Config) ValidateSnapshot() error {
 	if c == nil {
 		return errors.New("config: config is nil")
 	}
@@ -240,24 +223,11 @@ func (c *Config) Validate() error {
 		seenEndpoints[identity.Key()] = provider.Name
 	}
 
-	if strings.TrimSpace(c.SelectedProvider) == "" {
-		return errors.New("config: selected_provider is empty")
-	}
-	selected, err := c.SelectedProviderConfig()
-	if err != nil {
-		return err
-	}
-	if strings.TrimSpace(c.CurrentModel) == "" && selected.Source != ProviderSourceCustom {
-		return errors.New("config: current_model is empty")
-	}
 	if strings.TrimSpace(c.Workdir) == "" {
 		return errors.New("config: workdir is empty")
 	}
 	if !filepath.IsAbs(c.Workdir) {
 		return fmt.Errorf("config: workdir must be absolute, got %q", c.Workdir)
-	}
-	if selected.Source != ProviderSourceCustom && strings.TrimSpace(selected.Model) == "" {
-		return fmt.Errorf("config: selected provider %q has empty model", selected.Name)
 	}
 	if err := c.Tools.Validate(); err != nil {
 		return fmt.Errorf("config: tools: %w", err)
@@ -267,13 +237,6 @@ func (c *Config) Validate() error {
 	}
 
 	return nil
-}
-
-func (c *Config) SelectedProviderConfig() (ProviderConfig, error) {
-	if c == nil {
-		return ProviderConfig{}, errors.New("config: config is nil")
-	}
-	return c.ProviderByName(c.SelectedProvider)
 }
 
 func (c *Config) ProviderByName(name string) (ProviderConfig, error) {
@@ -289,6 +252,20 @@ func (c *Config) ProviderByName(name string) (ProviderConfig, error) {
 	}
 
 	return ProviderConfig{}, fmt.Errorf("config: provider %q not found", name)
+}
+
+// ResolveSelectedProvider 解析当前配置中选中的 provider，并补全运行时所需的密钥信息。
+func ResolveSelectedProvider(cfg Config) (ResolvedProviderConfig, error) {
+	providerName := strings.TrimSpace(cfg.SelectedProvider)
+	if providerName == "" {
+		return ResolvedProviderConfig{}, errors.New("config: selected provider is empty")
+	}
+
+	providerCfg, err := cfg.ProviderByName(providerName)
+	if err != nil {
+		return ResolvedProviderConfig{}, err
+	}
+	return providerCfg.Resolve()
 }
 
 func (p ProviderConfig) Validate() error {
@@ -715,119 +692,6 @@ func cloneProviderConfig(provider ProviderConfig) ProviderConfig {
 	cloned := provider
 	cloned.Models = providertypes.CloneModelDescriptors(provider.Models)
 	return cloned
-}
-
-// mergeProviders 将 builtin defaults 与当前运行时 providers 合并，保留自定义 provider，
-// 并用 builtin 定义为同名 provider 补齐缺失字段。
-func mergeProviders(defaults []ProviderConfig, current []ProviderConfig) []ProviderConfig {
-	if len(defaults) == 0 && len(current) == 0 {
-		return nil
-	}
-
-	merged := make([]ProviderConfig, 0, len(defaults)+len(current))
-	indexByName := make(map[string]int, len(defaults)+len(current))
-
-	appendProvider := func(provider ProviderConfig) {
-		key := normalizeProviderName(provider.Name)
-		indexByName[key] = len(merged)
-		merged = append(merged, cloneProviderConfig(provider))
-	}
-
-	for _, provider := range defaults {
-		builtin := cloneProviderConfig(provider)
-		if builtin.Source == "" {
-			builtin.Source = ProviderSourceBuiltin
-		}
-		appendProvider(builtin)
-	}
-
-	for _, provider := range current {
-		candidate := cloneProviderConfig(provider)
-		key := normalizeProviderName(candidate.Name)
-		if key == "" {
-			merged = append(merged, candidate)
-			continue
-		}
-
-		if index, exists := indexByName[key]; exists {
-			if !shouldMergeProviderDefinition(merged[index], candidate) {
-				merged = append(merged, candidate)
-				continue
-			}
-			merged[index] = mergeProviderConfig(merged[index], candidate)
-			continue
-		}
-
-		if candidate.Source == "" {
-			candidate.Source = ProviderSourceCustom
-		}
-		appendProvider(candidate)
-	}
-
-	return merged
-}
-
-// mergeProviderConfig 将 override 中的显式字段覆盖到 base 之上，用于 builtin 缺省值回填。
-func mergeProviderConfig(base ProviderConfig, override ProviderConfig) ProviderConfig {
-	merged := cloneProviderConfig(base)
-
-	if strings.TrimSpace(override.Name) != "" {
-		merged.Name = strings.TrimSpace(override.Name)
-	}
-	if strings.TrimSpace(override.Driver) != "" {
-		merged.Driver = strings.TrimSpace(override.Driver)
-	}
-	if strings.TrimSpace(override.BaseURL) != "" {
-		merged.BaseURL = strings.TrimSpace(override.BaseURL)
-	}
-	if strings.TrimSpace(override.Model) != "" {
-		merged.Model = strings.TrimSpace(override.Model)
-	}
-	if strings.TrimSpace(override.APIKeyEnv) != "" {
-		merged.APIKeyEnv = strings.TrimSpace(override.APIKeyEnv)
-	}
-	if strings.TrimSpace(override.APIStyle) != "" {
-		merged.APIStyle = strings.TrimSpace(override.APIStyle)
-	}
-	if strings.TrimSpace(override.DeploymentMode) != "" {
-		merged.DeploymentMode = strings.TrimSpace(override.DeploymentMode)
-	}
-	if strings.TrimSpace(override.APIVersion) != "" {
-		merged.APIVersion = strings.TrimSpace(override.APIVersion)
-	}
-	if len(override.Models) > 0 {
-		merged.Models = providertypes.CloneModelDescriptors(override.Models)
-	}
-	if override.Source != "" {
-		merged.Source = override.Source
-	}
-
-	return merged
-}
-
-// shouldMergeProviderDefinition 判断同名 provider 是否允许做 builtin 默认值回填。
-// custom provider 的同名冲突必须保留下来，交给后续校验明确报错。
-func shouldMergeProviderDefinition(existing ProviderConfig, candidate ProviderConfig) bool {
-	if normalizeProviderName(existing.Name) != normalizeProviderName(candidate.Name) {
-		return false
-	}
-	if existing.Source == ProviderSourceBuiltin {
-		return candidate.Source != ProviderSourceCustom
-	}
-	if candidate.Source == ProviderSourceBuiltin {
-		return false
-	}
-	return false
-}
-
-func defaultSelectedProviderName(providers []ProviderConfig, fallback string) string {
-	if containsProviderName(providers, fallback) {
-		return strings.TrimSpace(fallback)
-	}
-	if len(providers) == 0 {
-		return ""
-	}
-	return strings.TrimSpace(providers[0].Name)
 }
 
 func containsProviderName(providers []ProviderConfig, name string) bool {

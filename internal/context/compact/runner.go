@@ -207,7 +207,7 @@ func (s *Service) transcriptStore() transcriptStore {
 
 // normalizeCompactConfig 在 compact 执行前补齐缺失配置并收敛默认策略。
 func normalizeCompactConfig(cfg config.CompactConfig) config.CompactConfig {
-	defaults := config.Default().Context.Compact
+	defaults := config.StaticDefaults().Context.Compact
 	cfg.ApplyDefaults(defaults)
 	if strings.TrimSpace(cfg.ManualStrategy) == "" {
 		cfg.ManualStrategy = config.CompactManualStrategyKeepRecent

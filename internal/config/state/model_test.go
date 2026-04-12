@@ -1,50 +1,18 @@
-package config
+package state
 
 import (
 	"strings"
 	"testing"
 
+	configpkg "neo-code/internal/config"
 	providerpkg "neo-code/internal/provider"
 	providertypes "neo-code/internal/provider/types"
 )
 
-func TestResolvedProviderConfigToRuntimeConfig(t *testing.T) {
-	t.Parallel()
-
-	resolved := ResolvedProviderConfig{
-		ProviderConfig: ProviderConfig{
-			Name:           "company-gateway",
-			Driver:         "openaicompat",
-			BaseURL:        "https://llm.example.com/v1",
-			Model:          "server-default",
-			APIStyle:       "responses",
-			DeploymentMode: "ignored",
-			APIVersion:     "ignored",
-		},
-		APIKey: "secret-key",
-	}
-
-	got := resolved.ToRuntimeConfig()
-	want := providerpkg.RuntimeConfig{
-		Name:           "company-gateway",
-		Driver:         "openaicompat",
-		BaseURL:        "https://llm.example.com/v1",
-		DefaultModel:   "server-default",
-		APIKey:         "secret-key",
-		APIStyle:       "responses",
-		DeploymentMode: "ignored",
-		APIVersion:     "ignored",
-	}
-
-	if got != want {
-		t.Fatalf("ToRuntimeConfig() = %+v, want %+v", got, want)
-	}
-}
-
-func TestNewProviderCatalogInputBuiltinIncludesDefaultsAndLazyDiscovery(t *testing.T) {
+func TestCatalogInputFromProviderBuiltinIncludesDefaultsAndLazyDiscovery(t *testing.T) {
 	t.Setenv("CATALOG_PROVIDER_API_KEY", "secret-key")
 
-	cfg := ProviderConfig{
+	cfg := configpkg.ProviderConfig{
 		Name:      "company-gateway",
 		Driver:    "openaicompat",
 		BaseURL:   "https://API.EXAMPLE.COM/v1/",
@@ -54,12 +22,12 @@ func TestNewProviderCatalogInputBuiltinIncludesDefaultsAndLazyDiscovery(t *testi
 		Models: []providertypes.ModelDescriptor{
 			{ID: " model-a ", Name: " Model A "},
 		},
-		Source: ProviderSourceBuiltin,
+		Source: configpkg.ProviderSourceBuiltin,
 	}
 
-	input, err := NewProviderCatalogInput(cfg)
+	input, err := catalogInputFromProvider(cfg)
 	if err != nil {
-		t.Fatalf("NewProviderCatalogInput() error = %v", err)
+		t.Fatalf("catalogInputFromProvider() error = %v", err)
 	}
 
 	if input.Identity.Driver != "openaicompat" {
@@ -95,19 +63,19 @@ func TestNewProviderCatalogInputBuiltinIncludesDefaultsAndLazyDiscovery(t *testi
 	}
 }
 
-func TestNewProviderCatalogInputDefaultsOpenAICompatibleIdentityAPIStyle(t *testing.T) {
+func TestCatalogInputFromProviderDefaultsOpenAICompatibleIdentityAPIStyle(t *testing.T) {
 	t.Setenv("CATALOG_PROVIDER_API_KEY", "secret-key")
 
-	input, err := NewProviderCatalogInput(ProviderConfig{
+	input, err := catalogInputFromProvider(configpkg.ProviderConfig{
 		Name:      "company-gateway",
 		Driver:    "openaicompat",
 		BaseURL:   "https://API.EXAMPLE.COM/v1/",
 		Model:     "server-default",
 		APIKeyEnv: "CATALOG_PROVIDER_API_KEY",
-		Source:    ProviderSourceBuiltin,
+		Source:    configpkg.ProviderSourceBuiltin,
 	})
 	if err != nil {
-		t.Fatalf("NewProviderCatalogInput() error = %v", err)
+		t.Fatalf("catalogInputFromProvider() error = %v", err)
 	}
 
 	if input.Identity.APIStyle != providerpkg.OpenAICompatibleAPIStyleChatCompletions {
@@ -127,33 +95,33 @@ func TestNewProviderCatalogInputDefaultsOpenAICompatibleIdentityAPIStyle(t *test
 	}
 }
 
-func TestNewProviderCatalogInputCustomOmitsDefaultModels(t *testing.T) {
+func TestCatalogInputFromProviderCustomOmitsDefaultModels(t *testing.T) {
 	t.Setenv("CATALOG_PROVIDER_API_KEY", "secret-key")
 
-	input, err := NewProviderCatalogInput(ProviderConfig{
+	input, err := catalogInputFromProvider(configpkg.ProviderConfig{
 		Name:      "company-gateway",
 		Driver:    "openaicompat",
 		BaseURL:   "https://llm.example.com/v1",
 		APIKeyEnv: "CATALOG_PROVIDER_API_KEY",
-		Source:    ProviderSourceCustom,
+		Source:    configpkg.ProviderSourceCustom,
 	})
 	if err != nil {
-		t.Fatalf("NewProviderCatalogInput() error = %v", err)
+		t.Fatalf("catalogInputFromProvider() error = %v", err)
 	}
 	if input.DefaultModels != nil {
 		t.Fatalf("expected custom provider to omit default models, got %+v", input.DefaultModels)
 	}
 }
 
-func TestNewProviderCatalogInputPropagatesIdentityErrors(t *testing.T) {
+func TestCatalogInputFromProviderPropagatesIdentityErrors(t *testing.T) {
 	t.Parallel()
 
-	_, err := NewProviderCatalogInput(ProviderConfig{
+	_, err := catalogInputFromProvider(configpkg.ProviderConfig{
 		Name:      "broken-provider",
 		Driver:    "openaicompat",
 		BaseURL:   "   ",
 		APIKeyEnv: "CATALOG_PROVIDER_API_KEY",
-		Source:    ProviderSourceBuiltin,
+		Source:    configpkg.ProviderSourceBuiltin,
 	})
 	if err == nil || !strings.Contains(err.Error(), "base_url is empty") {
 		t.Fatalf("expected base_url validation error, got %v", err)
