@@ -2,8 +2,10 @@ package context
 
 import (
 	"context"
+	"strings"
 
 	providertypes "neo-code/internal/provider/types"
+	"neo-code/internal/tools"
 )
 
 // DefaultBuilder preserves the current runtime context-building behavior.
@@ -83,8 +85,31 @@ func (b *DefaultBuilder) Build(ctx context.Context, input BuildInput) (BuildResu
 
 // applyReadTimeContextProjection 负责在 provider 请求前按开关应用只读上下文投影，避免改写原始会话消息。
 func applyReadTimeContextProjection(messages []providertypes.Message, options CompactOptions, policies MicroCompactPolicySource) []providertypes.Message {
+	var projected []providertypes.Message
 	if options.DisableMicroCompact {
-		return cloneContextMessages(messages)
+		projected = cloneContextMessages(messages)
+	} else {
+		projected = microCompactMessagesWithPolicies(messages, policies)
 	}
-	return microCompactMessagesWithPolicies(messages, policies)
+	return projectToolMessagesForModel(projected)
+}
+
+// projectToolMessagesForModel 仅在 provider 读取路径上格式化 tool 消息，避免污染持久化会话内容。
+func projectToolMessagesForModel(messages []providertypes.Message) []providertypes.Message {
+	for i := range messages {
+		message := messages[i]
+		if message.Role != providertypes.RoleTool {
+			continue
+		}
+		if len(message.ToolMetadata) == 0 {
+			continue
+		}
+		content := strings.TrimSpace(message.Content)
+		if content == "" || content == microCompactClearedMessage {
+			continue
+		}
+		messages[i].Content = tools.FormatToolMessageForModel(message)
+		messages[i].ToolMetadata = nil
+	}
+	return messages
 }

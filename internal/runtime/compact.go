@@ -128,9 +128,6 @@ func (s *Service) runCompactForSession(
 
 	if result.Applied {
 		session.Messages = append([]providertypes.Message(nil), result.Messages...)
-		// Reset token totals now so the persisted session never carries stale high
-		// counts; if the follow-up provider call is canceled before its own save
-		// the next run will start from zero rather than immediately auto-compacting.
 		session.TokenInputTotal = 0
 		session.TokenOutputTotal = 0
 		session.UpdatedAt = time.Now()
@@ -181,7 +178,7 @@ func (s *Service) defaultCompactRunner(session agentsession.Session, cfg config.
 	return contextcompact.NewRunner(newCompactSummaryGenerator(s.providerFactory, resolvedProvider.ToRuntimeConfig(), model)), nil
 }
 
-// resolveCompactProviderSelection 优先复用会话记录的 provider/model，缺失时再回退当前配置。
+// resolveCompactProviderSelection 优先复用会话记录的 provider/model，缺失时回退到当前配置。
 func resolveCompactProviderSelection(session agentsession.Session, cfg config.Config) (config.ResolvedProviderConfig, string, error) {
 	sessionProvider := strings.TrimSpace(session.Provider)
 	sessionModel := strings.TrimSpace(session.Model)
@@ -197,18 +194,9 @@ func resolveCompactProviderSelection(session agentsession.Session, cfg config.Co
 		return resolved, sessionModel, nil
 	}
 
-	resolved, err := resolveSelectedProviderFromConfig(cfg)
+	resolved, err := config.ResolveSelectedProvider(cfg)
 	if err != nil {
 		return config.ResolvedProviderConfig{}, "", err
 	}
 	return resolved, strings.TrimSpace(cfg.CurrentModel), nil
-}
-
-// resolveSelectedProviderFromConfig 统一解析当前选中的 provider 配置并补全密钥。
-func resolveSelectedProviderFromConfig(cfg config.Config) (config.ResolvedProviderConfig, error) {
-	providerCfg, err := cfg.SelectedProviderConfig()
-	if err != nil {
-		return config.ResolvedProviderConfig{}, err
-	}
-	return providerCfg.Resolve()
 }

@@ -114,9 +114,6 @@ func TestDefaultToolUsagePromptIncludesPermissionAndAntiLoopGuidance(t *testing.
 	if !strings.Contains(toolUsage, "permission layer") {
 		t.Fatalf("expected Tool Usage to mention permission layer, got %q", toolUsage)
 	}
-	if !strings.Contains(toolUsage, "Do not self-reject") {
-		t.Fatalf("expected Tool Usage to discourage self-reject, got %q", toolUsage)
-	}
 	if !strings.Contains(toolUsage, "Do not invent tool names") {
 		t.Fatalf("expected Tool Usage to forbid invented tool names, got %q", toolUsage)
 	}
@@ -131,6 +128,9 @@ func TestDefaultToolUsagePromptIncludesPermissionAndAntiLoopGuidance(t *testing.
 	}
 	if !strings.Contains(toolUsage, "avoid interactive or blocking commands") {
 		t.Fatalf("expected Tool Usage to constrain bash usage, got %q", toolUsage)
+	}
+	if !strings.Contains(toolUsage, "Do not self-reject") {
+		t.Fatalf("expected Tool Usage to discourage self-reject, got %q", toolUsage)
 	}
 	if !strings.Contains(toolUsage, "Do not repeat the same tool call with identical arguments") {
 		t.Fatalf("expected Tool Usage to include anti-loop guidance, got %q", toolUsage)

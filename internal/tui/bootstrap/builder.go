@@ -20,14 +20,6 @@ type ProviderService interface {
 	SetCurrentModel(ctx context.Context, modelID string) (configstate.Selection, error)
 }
 
-// MemoService 定义 TUI 需要注入的 memo 交互能力。
-type MemoService interface {
-	List(ctx context.Context) ([]memo.Entry, error)
-	Add(ctx context.Context, entry memo.Entry) error
-	Remove(ctx context.Context, keyword string) (int, error)
-	Search(ctx context.Context, keyword string) ([]memo.Entry, error)
-}
-
 // Options 定义 bootstrap 装配输入。
 type Options struct {
 	Config          *config.Config

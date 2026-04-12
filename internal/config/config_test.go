@@ -2,6 +2,7 @@ package config
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -31,12 +32,29 @@ func testDefaultProviderConfig() ProviderConfig {
 }
 
 func testDefaultConfig() *Config {
-	cfg := Default()
+	cfg := StaticDefaults()
 	defaultProvider := testDefaultProviderConfig()
 	cfg.Providers = []ProviderConfig{defaultProvider}
 	cfg.SelectedProvider = defaultProvider.Name
 	cfg.CurrentModel = defaultProvider.Model
 	return cfg
+}
+
+func applyStaticDefaultsForTest(cfg *Config) {
+	if len(cfg.Providers) == 0 {
+		cfg.Providers = cloneProviders(testDefaultConfig().Providers)
+	}
+	cfg.applyStaticDefaults(*testDefaultConfig())
+}
+
+func selectedProviderConfigForTest(cfg *Config) (ProviderConfig, error) {
+	if cfg == nil {
+		return ProviderConfig{}, os.ErrInvalid
+	}
+	if strings.TrimSpace(cfg.SelectedProvider) == "" {
+		return ProviderConfig{}, os.ErrNotExist
+	}
+	return cfg.ProviderByName(cfg.SelectedProvider)
 }
 
 func TestParseConfigFormats(t *testing.T) {
@@ -66,7 +84,7 @@ tools:
 				if cfg.CurrentModel != "gpt-5.4" {
 					t.Fatalf("expected current model gpt-5.4, got %q", cfg.CurrentModel)
 				}
-				provider, err := cfg.SelectedProviderConfig()
+				provider, err := selectedProviderConfigForTest(cfg)
 				if err != nil {
 					t.Fatalf("selected provider: %v", err)
 				}
@@ -153,7 +171,7 @@ providers:
 			if err != nil {
 				t.Fatalf("parseConfig() error = %v", err)
 			}
-			cfg.ApplyDefaultsFrom(*testDefaultConfig())
+			applyStaticDefaultsForTest(cfg)
 			tt.assert(t, cfg)
 		})
 	}
@@ -219,14 +237,14 @@ func TestConfigMethodErrorPaths(t *testing.T) {
 
 	t.Run("selected provider on nil config", func(t *testing.T) {
 		var cfg *Config
-		_, err := cfg.SelectedProviderConfig()
-		if err == nil || !strings.Contains(err.Error(), "config is nil") {
+		_, err := selectedProviderConfigForTest(cfg)
+		if !errors.Is(err, os.ErrInvalid) {
 			t.Fatalf("expected nil config error, got %v", err)
 		}
 	})
 
 	t.Run("provider lookup not found", func(t *testing.T) {
-		cfg := Default()
+		cfg := StaticDefaults()
 		_, err := cfg.ProviderByName("missing-provider")
 		if err == nil || !strings.Contains(err.Error(), "not found") {
 			t.Fatalf("expected missing provider error, got %v", err)
@@ -269,8 +287,8 @@ func TestManagerConcurrentAccess(t *testing.T) {
 				if cfg.SelectedProvider == "" {
 					t.Errorf("selected provider should never be empty")
 				}
-				if _, err := cfg.SelectedProviderConfig(); err != nil {
-					t.Errorf("SelectedProviderConfig() error = %v", err)
+				if _, err := selectedProviderConfigForTest(&cfg); err != nil {
+					t.Errorf("selected provider error = %v", err)
 				}
 				model := models[(idx+j)%len(models)]
 				if err := manager.Update(context.Background(), func(next *Config) error {
@@ -291,13 +309,13 @@ func TestManagerConcurrentAccess(t *testing.T) {
 	wg.Wait()
 
 	finalConfig := manager.Get()
-	finalConfig.ApplyDefaultsFrom(*testDefaultConfig())
-	if err := finalConfig.Validate(); err != nil {
+	applyStaticDefaultsForTest(&finalConfig)
+	if err := finalConfig.ValidateSnapshot(); err != nil {
 		t.Fatalf("final config should validate, got %v", err)
 	}
 }
 
-func TestConfigApplyDefaultsFillsMissingFields(t *testing.T) {
+func TestConfigApplyStaticDefaultsFillsRuntimeFields(t *testing.T) {
 	t.Parallel()
 
 	cfg := &Config{
@@ -311,20 +329,16 @@ func TestConfigApplyDefaultsFillsMissingFields(t *testing.T) {
 		Workdir:          ".",
 	}
 
-	cfg.ApplyDefaultsFrom(*testDefaultConfig())
+	applyStaticDefaultsForTest(cfg)
 
-	provider, err := cfg.SelectedProviderConfig()
-	if err != nil {
-		t.Fatalf("SelectedProviderConfig() error = %v", err)
+	if cfg.CurrentModel != "" {
+		t.Fatalf("expected current model to stay empty, got %q", cfg.CurrentModel)
 	}
-	if provider.BaseURL != testBaseURL {
-		t.Fatalf("expected default base url %q, got %q", testBaseURL, provider.BaseURL)
+	if cfg.Providers[0].BaseURL != "" {
+		t.Fatalf("expected provider base url to stay empty, got %q", cfg.Providers[0].BaseURL)
 	}
-	if provider.APIKeyEnv != testAPIKeyEnv {
-		t.Fatalf("expected default api key env %q, got %q", testAPIKeyEnv, provider.APIKeyEnv)
-	}
-	if cfg.CurrentModel != testModel {
-		t.Fatalf("expected current model %q, got %q", testModel, cfg.CurrentModel)
+	if cfg.Providers[0].APIKeyEnv != "" {
+		t.Fatalf("expected provider api key env to stay empty, got %q", cfg.Providers[0].APIKeyEnv)
 	}
 	if !filepath.IsAbs(cfg.Workdir) {
 		t.Fatalf("expected absolute workdir, got %q", cfg.Workdir)
@@ -341,7 +355,7 @@ func TestConfigValidateFailures(t *testing.T) {
 	t.Parallel()
 
 	validConfig := testDefaultConfig().Clone()
-	validConfig.ApplyDefaultsFrom(*testDefaultConfig())
+	applyStaticDefaultsForTest(&validConfig)
 
 	tests := []struct {
 		name      string
@@ -388,20 +402,18 @@ func TestConfigValidateFailures(t *testing.T) {
 			expectErr: "workdir must be absolute",
 		},
 		{
-			name: "non-existent workdir",
+			name: "non-existent workdir is accepted by ValidateSnapshot (no filesystem check)",
 			config: func() *Config {
 				cfg := testDefaultConfig()
-				cfg.ApplyDefaultsFrom(*testDefaultConfig())
 				cfg.Workdir = filepath.Join(t.TempDir(), "does-not-exist")
 				return cfg
 			}(),
-			expectErr: "workdir does not exist",
+			expectErr: "", // ValidateSnapshot 只校验路径格式，不做文件系统检查
 		},
 		{
-			name: "workdir is a file",
+			name: "workdir pointing to a file is accepted by ValidateSnapshot (no filesystem check)",
 			config: func() *Config {
 				cfg := testDefaultConfig()
-				cfg.ApplyDefaultsFrom(*testDefaultConfig())
 				filePath := filepath.Join(t.TempDir(), "a-file.txt")
 				if err := os.WriteFile(filePath, []byte("x"), 0o644); err != nil {
 					t.Fatalf("setup: %v", err)
@@ -409,7 +421,7 @@ func TestConfigValidateFailures(t *testing.T) {
 				cfg.Workdir = filePath
 				return cfg
 			}(),
-			expectErr: "workdir is not a directory",
+			expectErr: "", // ValidateSnapshot 不验证 workdir 是否为目录
 		},
 		{
 			name: "selected provider model empty",
@@ -500,7 +512,13 @@ func TestConfigValidateFailures(t *testing.T) {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			err := tt.config.Validate()
+			err := tt.config.ValidateSnapshot()
+			if tt.expectErr == "" {
+				if err != nil {
+					t.Fatalf("expected no error, got %v", err)
+				}
+				return
+			}
 			if err == nil || !strings.Contains(err.Error(), tt.expectErr) {
 				t.Fatalf("expected error containing %q, got %v", tt.expectErr, err)
 			}
@@ -528,10 +546,32 @@ func TestConfigValidateAllowsEmptyCurrentModelForSelectedCustomProvider(t *testi
 		Workdir:          workdir,
 		Shell:            "powershell",
 	}
-	cfg.ApplyDefaultsFrom(*testDefaultConfig())
+	applyStaticDefaultsForTest(&cfg)
 
-	if err := cfg.Validate(); err != nil {
+	if err := cfg.ValidateSnapshot(); err != nil {
 		t.Fatalf("expected selected custom provider with empty current_model to validate, got %v", err)
+	}
+}
+
+func TestValidateSnapshotDoesNotTreatSelectionAsRuntimeReady(t *testing.T) {
+	t.Parallel()
+
+	cfg := Config{
+		Providers: []ProviderConfig{
+			testDefaultProviderConfig(),
+		},
+		SelectedProvider: "missing-provider",
+		CurrentModel:     "",
+		Workdir:          filepath.Clean(t.TempDir()),
+		Shell:            "powershell",
+	}
+	applyStaticDefaultsForTest(&cfg)
+
+	if err := cfg.ValidateSnapshot(); err != nil {
+		t.Fatalf("expected snapshot validation to ignore unresolved selection state, got %v", err)
+	}
+	if _, err := ResolveSelectedProvider(cfg); err == nil || !strings.Contains(err.Error(), "not found") {
+		t.Fatalf("expected unresolved selected provider after snapshot validation, got %v", err)
 	}
 }
 
@@ -668,9 +708,14 @@ func TestProviderLookupAndResolveSelectedProvider(t *testing.T) {
 		t.Fatalf("expected provider %q, got %q", testProviderName, provider.Name)
 	}
 
-	resolved, err := manager.ResolvedSelectedProvider()
+	current := manager.Get()
+	selected, err := current.ProviderByName(current.SelectedProvider)
 	if err != nil {
-		t.Fatalf("ResolvedSelectedProvider() error = %v", err)
+		t.Fatalf("selected provider error = %v", err)
+	}
+	resolved, err := selected.Resolve()
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
 	}
 	if resolved.APIKey != "lookup-key" {
 		t.Fatalf("expected resolved key %q, got %q", "lookup-key", resolved.APIKey)
@@ -722,9 +767,9 @@ func TestLoaderLoadAndSaveRoundTrip(t *testing.T) {
 	if reloaded.CurrentModel != "gpt-5.4" {
 		t.Fatalf("expected current model %q, got %q", "gpt-5.4", reloaded.CurrentModel)
 	}
-	provider, err := reloaded.SelectedProviderConfig()
+	provider, err := selectedProviderConfigForTest(reloaded)
 	if err != nil {
-		t.Fatalf("SelectedProviderConfig() reload error = %v", err)
+		t.Fatalf("selected provider reload error = %v", err)
 	}
 	if provider.Model != testModel {
 		t.Fatalf("expected provider default model to stay %q, got %q", testModel, provider.Model)
@@ -762,38 +807,38 @@ func TestLoaderUsesUpdatedBuiltinProviderWhenUserHasNoOverride(t *testing.T) {
 		t.Fatalf("updated Load() error = %v", err)
 	}
 
-	provider, err := reloaded.SelectedProviderConfig()
+	provider, err := selectedProviderConfigForTest(reloaded)
 	if err != nil {
-		t.Fatalf("SelectedProviderConfig() error = %v", err)
+		t.Fatalf("selected provider error = %v", err)
 	}
 	if provider.BaseURL != "https://new.example/v1" {
 		t.Fatalf("expected latest builtin base url, got %q", provider.BaseURL)
 	}
 }
 
-func TestApplyDefaultsPreservesCustomProvidersAlongsideBuiltinSnapshot(t *testing.T) {
+func TestAssembleProvidersPreservesCustomProvidersAlongsideBuiltinSnapshot(t *testing.T) {
 	t.Parallel()
 
-	current := Config{
-		Providers: []ProviderConfig{{
-			Name:      "openai-alt",
-			Driver:    "custom",
-			BaseURL:   "https://example.com/v1",
-			APIKeyEnv: "CUSTOM_API_KEY",
-			Source:    ProviderSourceCustom,
-		}},
-		SelectedProvider: "openai-alt",
-		CurrentModel:     "server-discovered-model",
+	customProviders := []ProviderConfig{{
+		Name:      "openai-alt",
+		Driver:    "custom",
+		BaseURL:   "https://example.com/v1",
+		APIKeyEnv: "CUSTOM_API_KEY",
+		Source:    ProviderSourceCustom,
+	}}
+
+	assembled, err := assembleProviders(testDefaultConfig().Providers, customProviders)
+	if err != nil {
+		t.Fatalf("assembleProviders() error = %v", err)
 	}
 
-	current.ApplyDefaultsFrom(*testDefaultConfig())
-
-	if len(current.Providers) != 2 {
-		t.Fatalf("expected builtin and custom providers to coexist, got %+v", current.Providers)
+	if len(assembled) != 2 {
+		t.Fatalf("expected builtin and custom providers to coexist, got %+v", assembled)
 	}
+	current := Config{Providers: assembled}
 	customProvider, err := current.ProviderByName("openai-alt")
 	if err != nil {
-		t.Fatalf("expected custom provider to be preserved, got %+v", current.Providers)
+		t.Fatalf("expected custom provider to be preserved, got %+v", assembled)
 	}
 	if customProvider.Source != ProviderSourceCustom {
 		t.Fatalf("expected custom provider source, got %+v", customProvider)
@@ -808,74 +853,56 @@ func TestApplyDefaultsPreservesCustomProvidersAlongsideBuiltinSnapshot(t *testin
 	if provider.Source != ProviderSourceBuiltin {
 		t.Fatalf("expected builtin provider source, got %+v", provider)
 	}
-	if current.SelectedProvider != "openai-alt" {
-		t.Fatalf("expected selected provider to stay on custom provider, got %q", current.SelectedProvider)
-	}
-	if current.CurrentModel != "server-discovered-model" {
-		t.Fatalf("expected current model to preserve discovered model, got %q", current.CurrentModel)
-	}
 }
 
-func TestApplyDefaultsKeepsDuplicateCustomProviderNamesForValidation(t *testing.T) {
+func TestAssembleProvidersRejectsDuplicateCustomProviderNames(t *testing.T) {
 	t.Parallel()
 
-	current := Config{
-		Providers: []ProviderConfig{
-			{
-				Name:      "company-gateway",
-				Driver:    "openaicompat",
-				BaseURL:   "https://example-a.com/v1",
-				APIKeyEnv: "COMPANY_GATEWAY_A_API_KEY",
-				Source:    ProviderSourceCustom,
-			},
-			{
-				Name:      "company-gateway",
-				Driver:    "openaicompat",
-				BaseURL:   "https://example-b.com/v1",
-				APIKeyEnv: "COMPANY_GATEWAY_B_API_KEY",
-				Source:    ProviderSourceCustom,
-			},
+	customProviders := []ProviderConfig{
+		{
+			Name:      "company-gateway",
+			Driver:    "openaicompat",
+			BaseURL:   "https://example-a.com/v1",
+			APIKeyEnv: "COMPANY_GATEWAY_A_API_KEY",
+			Source:    ProviderSourceCustom,
 		},
-		SelectedProvider: testProviderName,
-		CurrentModel:     testModel,
+		{
+			Name:      "company-gateway",
+			Driver:    "openaicompat",
+			BaseURL:   "https://example-b.com/v1",
+			APIKeyEnv: "COMPANY_GATEWAY_B_API_KEY",
+			Source:    ProviderSourceCustom,
+		},
 	}
 
-	current.ApplyDefaultsFrom(*testDefaultConfig())
-
-	if err := current.Validate(); err == nil || !strings.Contains(err.Error(), "duplicate provider name") {
+	if _, err := assembleProviders(testDefaultConfig().Providers, customProviders); err == nil || !strings.Contains(err.Error(), "duplicate provider name") {
 		t.Fatalf("expected duplicate custom provider name error, got %v", err)
 	}
 }
 
-func TestApplyDefaultsKeepsIdenticalDuplicateCustomProviderNamesForValidation(t *testing.T) {
+func TestAssembleProvidersRejectsIdenticalDuplicateCustomProviderNames(t *testing.T) {
 	t.Parallel()
 
-	current := Config{
-		Providers: []ProviderConfig{
-			{
-				Name:      "company-gateway",
-				Driver:    "openaicompat",
-				BaseURL:   "https://example.com/v1",
-				APIKeyEnv: "COMPANY_GATEWAY_API_KEY",
-				APIStyle:  "responses",
-				Source:    ProviderSourceCustom,
-			},
-			{
-				Name:      "company-gateway",
-				Driver:    "openaicompat",
-				BaseURL:   "https://example.com/v1",
-				APIKeyEnv: "COMPANY_GATEWAY_API_KEY",
-				APIStyle:  "responses",
-				Source:    ProviderSourceCustom,
-			},
+	customProviders := []ProviderConfig{
+		{
+			Name:      "company-gateway",
+			Driver:    "openaicompat",
+			BaseURL:   "https://example.com/v1",
+			APIKeyEnv: "COMPANY_GATEWAY_API_KEY",
+			APIStyle:  "responses",
+			Source:    ProviderSourceCustom,
 		},
-		SelectedProvider: testProviderName,
-		CurrentModel:     testModel,
+		{
+			Name:      "company-gateway",
+			Driver:    "openaicompat",
+			BaseURL:   "https://example.com/v1",
+			APIKeyEnv: "COMPANY_GATEWAY_API_KEY",
+			APIStyle:  "responses",
+			Source:    ProviderSourceCustom,
+		},
 	}
 
-	current.ApplyDefaultsFrom(*testDefaultConfig())
-
-	if err := current.Validate(); err == nil || !strings.Contains(err.Error(), "duplicate provider name") {
+	if _, err := assembleProviders(testDefaultConfig().Providers, customProviders); err == nil || !strings.Contains(err.Error(), "duplicate provider name") {
 		t.Fatalf("expected duplicate custom provider name error, got %v", err)
 	}
 }
@@ -886,7 +913,7 @@ func TestApplyDefaultsPreservesDynamicCurrentModel(t *testing.T) {
 	cfg := testDefaultConfig()
 	cfg.CurrentModel = "server-discovered-model"
 
-	cfg.ApplyDefaultsFrom(*testDefaultConfig())
+	applyStaticDefaultsForTest(cfg)
 
 	if cfg.CurrentModel != "server-discovered-model" {
 		t.Fatalf("expected dynamic current model to be preserved, got %q", cfg.CurrentModel)
@@ -951,8 +978,8 @@ func TestNormalizeWorkdirAndClone(t *testing.T) {
 
 	var nilConfig *Config
 	clonedNil := nilConfig.Clone()
-	clonedNil.ApplyDefaultsFrom(*testDefaultConfig())
-	if err := clonedNil.Validate(); err != nil {
+	applyStaticDefaultsForTest(&clonedNil)
+	if err := clonedNil.ValidateSnapshot(); err != nil {
 		t.Fatalf("cloned nil config should validate, got %v", err)
 	}
 
@@ -1171,7 +1198,7 @@ func restoreEnv(t *testing.T, key string) {
 func TestAutoCompactConfigDefaults(t *testing.T) {
 	t.Parallel()
 
-	cfg := Default()
+	cfg := StaticDefaults()
 
 	if cfg.Context.AutoCompact.InputTokenThreshold != DefaultAutoCompactInputTokenThreshold {
 		t.Fatalf("expected input_token_threshold=%d, got %d",

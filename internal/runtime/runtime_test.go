@@ -380,6 +380,14 @@ func TestServiceRun(t *testing.T) {
 				name:    "filesystem_edit",
 				content: "tool output",
 			},
+			contextBuilder: &stubContextBuilder{
+				buildFn: func(ctx context.Context, input agentcontext.BuildInput) (agentcontext.BuildResult, error) {
+					return agentcontext.BuildResult{
+						SystemPrompt: "stub system prompt",
+						Messages:     projectToolMessagesForProviderTest(input.Messages),
+					}, nil
+				},
+			},
 			expectProviderCalls: 2,
 			expectToolCalls:     1,
 			expectMessageRoles:  []string{"user", "assistant", "tool", "assistant"},
@@ -401,13 +409,26 @@ func TestServiceRun(t *testing.T) {
 				second := scripted.requests[1]
 				foundToolResult := false
 				for _, message := range second.Messages {
-					if message.Role == "tool" && message.ToolCallID == "call-1" && message.Content == "tool output" {
+					if message.Role == "tool" &&
+						message.ToolCallID == "call-1" &&
+						strings.Contains(message.Content, "tool result") &&
+						strings.Contains(message.Content, "tool: filesystem_edit") &&
+						strings.Contains(message.Content, "status: ok") &&
+						strings.Contains(message.Content, "content:\ntool output") {
 						foundToolResult = true
 						break
 					}
 				}
 				if !foundToolResult {
 					t.Fatalf("expected tool result message in second provider request: %+v", second.Messages)
+				}
+
+				session := onlySession(t, store)
+				if session.Messages[2].Role != providertypes.RoleTool || session.Messages[2].Content != "tool output" {
+					t.Fatalf("expected persisted tool message to keep raw content, got %+v", session.Messages[2])
+				}
+				if session.Messages[2].ToolMetadata["tool_name"] != "filesystem_edit" {
+					t.Fatalf("expected persisted tool metadata to keep tool name, got %+v", session.Messages[2].ToolMetadata)
 				}
 			},
 		},
@@ -901,7 +922,7 @@ func TestServiceRunDefaultBuilderUsesGenericToolManagerMicroCompactPolicies(t *t
 		}},
 	}
 
-	service := NewWithFactory(manager, toolManager, store, &scriptedProviderFactory{provider: scripted}, nil)
+	service := NewWithFactory(manager, toolManager, store, &scriptedProviderFactory{provider: scripted}, &stubContextBuilder{})
 	if err := service.Run(context.Background(), UserInput{
 		SessionID: session.ID,
 		RunID:     "run-preserve-history-generic-manager",
@@ -986,6 +1007,9 @@ func TestServiceRunUsesToolManager(t *testing.T) {
 		result: tools.ToolResult{
 			Name:    "filesystem_edit",
 			Content: "tool manager output",
+			Metadata: map[string]any{
+				"path": "main.go",
+			},
 		},
 	}
 
@@ -999,7 +1023,7 @@ func TestServiceRunUsesToolManager(t *testing.T) {
 		},
 	}
 
-	service := NewWithFactory(manager, toolManager, store, &scriptedProviderFactory{provider: scripted}, nil)
+	service := NewWithFactory(manager, toolManager, store, &scriptedProviderFactory{provider: scripted}, &stubContextBuilder{})
 	if err := service.Run(context.Background(), UserInput{RunID: "run-tool-manager", Content: "edit file"}); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -1020,7 +1044,10 @@ func TestServiceRunUsesToolManager(t *testing.T) {
 	session := onlySession(t, store)
 	foundToolMessage := false
 	for _, message := range session.Messages {
-		if message.Role == providertypes.RoleTool && message.Content == "tool manager output" {
+		if message.Role == providertypes.RoleTool &&
+			message.Content == "tool manager output" &&
+			message.ToolMetadata["tool_name"] == "filesystem_edit" &&
+			message.ToolMetadata["path"] == "main.go" {
 			foundToolMessage = true
 			break
 		}
@@ -2477,7 +2504,12 @@ func newRuntimeConfigManagerWithProviderEnvs(t *testing.T, providerEnvs map[stri
 		t.Fatalf("set env: %v", err)
 	}
 
-	defaults := config.DefaultConfig()
+	defaults := config.StaticDefaults()
+	defaults.Providers = config.DefaultProviders()
+	if len(defaults.Providers) > 0 {
+		defaults.SelectedProvider = defaults.Providers[0].Name
+		defaults.CurrentModel = defaults.Providers[0].Model
+	}
 	selected := provider.NormalizeKey(defaults.SelectedProvider)
 	for i := range defaults.Providers {
 		if provider.NormalizeKey(defaults.Providers[i].Name) == selected {
@@ -2641,6 +2673,21 @@ func cloneBuildInput(input agentcontext.BuildInput) agentcontext.BuildInput {
 	cloned := input
 	cloned.Messages = append([]providertypes.Message(nil), input.Messages...)
 	return cloned
+}
+
+// projectToolMessagesForProviderTest 模拟 context 层在 provider 请求前对 tool 消息做的只读投影。
+func projectToolMessagesForProviderTest(messages []providertypes.Message) []providertypes.Message {
+	projected := append([]providertypes.Message(nil), messages...)
+	for i, message := range projected {
+		if message.Role != providertypes.RoleTool || len(message.ToolMetadata) == 0 {
+			continue
+		}
+		next := message
+		next.Content = tools.FormatToolMessageForModel(message)
+		next.ToolMetadata = nil
+		projected[i] = next
+	}
+	return projected
 }
 
 func containsError(err error, target string) bool {

@@ -535,7 +535,15 @@ func TestJSONStoreSavePersistsProviderModelAndMessages(t *testing.T) {
 					{ID: "call-1", Name: "webfetch", Arguments: `{"url":"https://example.com"}`},
 				},
 			},
-			{Role: providertypes.RoleTool, ToolCallID: "call-1", Content: "ok"},
+			{
+				Role:       providertypes.RoleTool,
+				ToolCallID: "call-1",
+				Content:    "ok",
+				ToolMetadata: map[string]string{
+					"tool_name":   "webfetch",
+					"http_status": "200",
+				},
+			},
 		},
 	}
 
@@ -565,6 +573,14 @@ func TestJSONStoreSavePersistsProviderModelAndMessages(t *testing.T) {
 	}
 	if decoded["workdir"] != session.Workdir {
 		t.Fatalf("expected workdir persisted as %q, got %+v", session.Workdir, decoded["workdir"])
+	}
+
+	loaded, err := store.Load(context.Background(), session.ID)
+	if err != nil {
+		t.Fatalf("load saved session: %v", err)
+	}
+	if loaded.Messages[2].ToolMetadata["tool_name"] != "webfetch" || loaded.Messages[2].ToolMetadata["http_status"] != "200" {
+		t.Fatalf("expected tool metadata round-trip, got %+v", loaded.Messages[2].ToolMetadata)
 	}
 }
 

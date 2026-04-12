@@ -1,347 +1,224 @@
 # 配置指南
 
-本文档说明 NeoCode 的配置策略和配置文件结构。
+本文说明 NeoCode 当前真实生效的配置规则。
 
-## Provider 策略
+## 总原则
 
-NeoCode 采用"内置 Provider 优先"的策略：
+- `config.yaml` 只保存最小运行时状态
+- provider 元数据来自代码内置定义或 custom provider 文件
+- API Key 只从环境变量读取
+- YAML 采用严格解析，未知字段直接报错
 
-### 核心原则
+这意味着 NeoCode 当前不会：
 
-✅ **配置集中管理**
-- 所有内置 provider 定义集中在 `internal/config/builtin_providers.go`
-- 配置随代码版本发布，自动更新
+- 自动清理旧版 `providers` / `provider_overrides`
+- 自动兼容 `workdir`、`default_workdir` 等旧字段
+- 自动加载 `.env`
 
-✅ **最小持久化**
-- `config.yaml` 不再持久化完整 `providers` 列表
-- 只保存当前选择状态和通用运行配置
-- 运行时的 `providers` 完全来自代码内置定义
-- 用户不能通过 YAML 注入新的 provider
+## 配置文件位置
 
-✅ **安全第一**
-- API Key 只从环境变量读取，永不写入 YAML
-- 不硬编码在源码中
+主配置文件路径：
 
-### 当前内置 Provider
-
-| Provider | Driver | 说明 |
-|----------|--------|------|
-| `openai` | `openai` | OpenAI 官方 API |
-| `gemini` | `openai` | Google Gemini (OpenAI-compatible API) |
-| `openll` | `openai` | OpenLL 服务 (OpenAI-compatible API) |
-| `qiniu` | `openai` | 七牛云推理服务 (OpenAI-compatible API) |
-
-所有内置 provider 都复用 `openai` 驱动，支持流式输出和 Tool Call。
-
-### 设计优势
-
-这种方式意味着：
-
-- ✅ 新用户启动后自动获得当前版本最新的内置 provider
-- ✅ 未来代码新增 provider 时，用户无需修改 YAML
-- ✅ 老配置文件中的 `providers` / `provider_overrides` 会在加载时被清理
-- ✅ 配置文件始终保持简洁，只包含必要的运行时状态
-- ✅ 如需新增 provider，只能通过代码扩展内建列表完成
-
-## 配置文件
-
-### 默认路径
-
-```
+```text
 ~/.neocode/config.yaml
 ```
 
-### 完整配置示例
+custom provider 目录：
+
+```text
+~/.neocode/providers/<provider-name>/provider.yaml
+```
+
+## `config.yaml` 可写字段
+
+当前支持的主配置示例：
 
 ```yaml
 selected_provider: openai
 current_model: gpt-4.1
-workdir: /Users/username/projects/myproject
 shell: bash
 max_loops: 8
+tool_timeout_sec: 20
 
 tools:
   webfetch:
-    max_response_bytes: 1048576
+    max_response_bytes: 262144
     supported_content_types:
       - text/html
       - text/plain
       - application/json
-```
 
-### 字段说明
-
-#### 基础配置
-
-| 字段 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `selected_provider` | string | `openai` | 当前选择的 provider 名称 |
-| `current_model` | string | 取决于 provider | 当前选择的模型名称 |
-| `workdir` | string | `.` (当前目录) | 工作目录的绝对路径；启动时要求路径已存在且必须是目录 |
-| `shell` | string | `bash` (Linux/Mac)<br>`powershell` (Windows) | Shell 类型 |
-| `max_loops` | int | `8` | Agent 推理循环最大轮数 |
-
-#### 工具配置
-
-| 字段 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `tools.webfetch.max_response_bytes` | int | `1048576` (1MB) | WebFetch 工具最大响应字节数 |
-| `tools.webfetch.supported_content_types` | []string | `[text/html, text/plain, application/json]` | 支持的内容类型 |
-
-### 配置文件特点
-
-**自动管理**：
-- 首次启动时自动创建默认配置
-- `workdir` 自动转换为绝对路径
-- `workdir` 必须指向已存在的目录
-- 无效配置会在启动时报错
-
-**最小持久化**：
-- 不保存 `providers` 列表（由代码内置提供）
-- 不保存 `base_url`、`models` 等 provider 元数据
-- 只保存用户的选择状态和自定义设置
-
-## 环境变量
-
-每个 provider 对应的 API Key 环境变量：
-
-| Provider | 环境变量 | 获取方式 |
-|----------|----------|----------|
-| `openai` | `OPENAI_API_KEY` | [OpenAI Platform](https://platform.openai.com/api-keys) |
-| `gemini` | `GEMINI_API_KEY` | [Google AI Studio](https://aistudio.google.com/apikey) |
-| `openll` | `AI_API_KEY` | OpenLL 服务提供商 |
-| `qiniu` | `QINIU_API_KEY` | 七牛云推理服务 |
-
-### 环境变量管理
-
-#### 方式：系统环境变量
-
-**Linux/macOS**：
-```bash
-export OPENAI_API_KEY="sk-..."
-export GEMINI_API_KEY="AI..."
-export AI_API_KEY="your-key"
-```
-
-**Windows PowerShell**：
-```powershell
-$env:OPENAI_API_KEY="sk-..."
-$env:GEMINI_API_KEY="AI..."
-$env:AI_API_KEY="your-key"
-```
-
-### 安全最佳实践
-
-⚠️ **重要安全提示**：
-
-1**使用环境变量**
-   - API Key 仅从环境变量读取
-   - 永不写入配置文件
-   - 不硬编码在代码中
-
-2**密钥轮换**
-   - 定期更换 API Key
-   - 不要在多个环境使用同一个 Key
-
-## Slash Commands
-
-NeoCode 提供以下 slash 命令用于快速切换配置：
-
-### /provider - Provider 选择器
-
-```
-/provider
-```
-
-打开 provider 选择器，列出所有可用的内置 provider。
-
-**界面示例**：
-```
-? Select a provider:
-  ❯ openai
-    gemini
-    openll
-    qiniu
-```
-
-### /model - 模型选择器
-
-```
-/model
-```
-
-打开当前 provider 的模型选择器。
-
-模型列表会合并当前 provider 的默认模型、服务端动态发现结果和本地缓存结果。
-
-**界面示例**（选择 openai provider 后）：
-```
-? Select a model:
-  ❯ gpt-4.1
-    gpt-4o
-    gpt-5.4
-    gpt-5.3-codex
-```
-
-## 配置管理
-
-配置管理由 `internal/config` 模块负责：
-
-### 核心功能
-
-- ✅ YAML 加载与保存
-- ✅ 默认值管理
-- ✅ 并发安全访问
-- ✅ 配置校验
-
-### 配置流程
-
-```
-启动
-  ↓
-加载 ~/.neocode/config.yaml
-  ↓
-应用内置 defaults (来自 builtin_providers.go)
-  ↓
-验证配置完整性
-  ↓
-运行时使用
-```
-
-### 配置更新
-
-当用户通过 TUI 切换 provider 或 model 时：
-
-1. 更新内存中的配置
-2. 立即持久化到 `config.yaml`
-3. 下次启动自动恢复选择状态
-
-## 扩展内建 Provider
-
-如需添加新的内建 provider（包括企业内部服务），请参考：
-
-👉 [adding-providers.md](./adding-providers.md)
-
-### 快速步骤
-
-**OpenAI 兼容服务**（推荐）：
-1. 在 `internal/config/builtin_providers.go` 添加配置函数
-2. 在 `DefaultProviders()` 中注册
-3. 设置对应的环境变量
-
-**自定义协议**：
-1. 在 `internal/provider/yourprovider/` 实现驱动
-2. 在 `internal/provider/builtin/builtin.go` 注册驱动
-3. 在 `internal/config/builtin_providers.go` 添加配置
-
-## 配置示例场景
-
-### 场景一：使用 Gemini
-
-```bash
-# 1. 设置环境变量
-export GEMINI_API_KEY="your-gemini-api-key"
-
-# 2. 启动 NeoCode
-go run ./cmd/neocode
-
-# 3. 在 TUI 中切换
-/provider  # 选择 gemini
-/model     # 选择 gemini-2.5-flash
-```
-
-### 场景二：使用 OpenLL
-
-```bash
-# 1. 设置环境变量
-export AI_API_KEY="your-openll-api-key"
-
-# 2. 启动并切换
-go run ./cmd/neocode
-# 在 TUI 中: /provider → openll
-```
-
-### 场景三：自定义工作目录
-
-```yaml
-# ~/.neocode/config.yaml
-selected_provider: openai
-current_model: gpt-4.1
-workdir: /Users/username/projects/myproject
-shell: bash
-max_loops: 10
-```
-
-## 故障排查
-
-### 配置加载失败
-
-**错误**：`config validation failed: providers is empty`
-
-**解决**：
-- 确保使用最新版本的代码
-- 删除 `~/.neocode/config.yaml` 让系统重新生成
-
-### API Key 未找到
-
-**错误**：`environment variable OPENAI_API_KEY is empty`
-
-**解决**：
-```bash
-# 检查环境变量
-echo $OPENAI_API_KEY
-```
-
-### Provider 不存在
-
-**错误**：`provider not found: xxx`
-
-**解决**：
-- 检查 provider 名称拼写
-- 使用 `/provider` 命令查看所有可用 provider
-
-## 相关文档
-
-- [添加新 Provider](./adding-providers.md)
-
-## Context Compact
-
-以下配置用于控制手动上下文压缩行为。
-
-### 配置示例
-
-```yaml
 context:
   compact:
     manual_strategy: keep_recent
     manual_keep_recent_messages: 10
     max_summary_chars: 1200
     micro_compact_disabled: false
+  auto_compact:
+    enabled: false
+    input_token_threshold: 100000
 ```
 
-### 字段说明
+### 基础字段
 
-| 字段 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `context.compact.manual_strategy` | string | `keep_recent` | 手动 `/compact` 策略，可选 `keep_recent` / `full_replace` |
-| `context.compact.manual_keep_recent_messages` | int | `10` | `keep_recent` 模式下保留最近 N 条消息；会按 tool call 与 tool result 的原子块整体保留 |
-| `context.compact.max_summary_chars` | int | `1200` | compact summary 最大字符数 |
-| `context.compact.micro_compact_disabled` | bool | `false` | 是否关闭默认启用的读时 micro compact；设为 `true` 可快速回退到仅 trim、不做旧工具结果清理 |
+| 字段 | 说明 |
+|------|------|
+| `selected_provider` | 当前选中的 provider 名称 |
+| `current_model` | 当前选中的模型 ID |
+| `shell` | 默认 shell，Windows 默认 `powershell`，其他平台默认 `bash` |
+| `max_loops` | Agent 主循环最大轮数 |
+| `tool_timeout_sec` | 工具执行超时（秒） |
 
-新增工具默认会参与 micro compact；如果某个工具的历史结果必须保留，需要在 `internal/tools` 的工具实现中显式声明保留策略。
+### `context` 字段
 
-更多行为说明见 [context-compact.md](../context-compact.md)。
+| 字段 | 说明 |
+|------|------|
+| `context.compact.manual_strategy` | `/compact` 手动压缩策略，支持 `keep_recent` / `full_replace` |
+| `context.compact.manual_keep_recent_messages` | `keep_recent` 策略下保留的最近消息数 |
+| `context.compact.max_summary_chars` | compact summary 最大字符数 |
+| `context.compact.micro_compact_disabled` | 是否关闭默认启用的 micro compact |
+| `context.auto_compact.enabled` | 是否启用自动压缩 |
+| `context.auto_compact.input_token_threshold` | 自动压缩输入 token 阈值 |
 
-## CLI 工作区覆盖
+### `tools` 字段
 
-NeoCode 支持在启动时通过 CLI 参数覆盖当前运行工作区：
+| 字段 | 说明 |
+|------|------|
+| `tools.webfetch.max_response_bytes` | WebFetch 最大响应字节数 |
+| `tools.webfetch.supported_content_types` | WebFetch 允许的内容类型 |
+| `tools.mcp.servers` | MCP server 列表 |
+
+## 不写入 `config.yaml` 的字段
+
+以下内容不允许写入主配置文件：
+
+- `providers`
+- `provider_overrides`
+- `workdir`
+- `default_workdir`
+- `base_url`
+- `api_key_env`
+- `models`
+
+如果这些字段出现在 `config.yaml` 中，加载会直接失败，而不是被“自动迁移”或“悄悄清理”。
+
+## provider 策略
+
+NeoCode 采用“builtin provider + custom provider”双来源模型。
+
+### builtin provider
+
+builtin provider 由代码内置，集中定义在：
+
+```text
+internal/config/builtin_providers.go
+```
+
+当前内置 provider：
+
+- `openai`
+- `gemini`
+- `openll`
+- `qiniu`
+
+### custom provider
+
+custom provider 通过单独文件声明，而不是写进 `config.yaml`：
+
+```yaml
+name: company-gateway
+driver: openaicompat
+api_key_env: COMPANY_GATEWAY_API_KEY
+openai_compatible:
+  base_url: https://llm.example.com/v1
+  api_style: chat_completions
+```
+
+文件路径：
+
+```text
+~/.neocode/providers/company-gateway/provider.yaml
+```
+
+## 环境变量
+
+API Key 只从系统环境变量读取。
+
+常见映射：
+
+| Provider | 环境变量 |
+|----------|----------|
+| `openai` | `OPENAI_API_KEY` |
+| `gemini` | `GEMINI_API_KEY` |
+| `openll` | `AI_API_KEY` |
+| `qiniu` | `QINIU_API_KEY` |
+
+示例：
+
+```bash
+export OPENAI_API_KEY="sk-..."
+export GEMINI_API_KEY="AI..."
+```
+
+Windows PowerShell：
+
+```powershell
+$env:OPENAI_API_KEY = "sk-..."
+$env:GEMINI_API_KEY = "AI..."
+```
+
+## 启动时的选择修正
+
+`config.yaml` 里的 `selected_provider/current_model` 表达的是“用户上次保存的选择状态”。
+
+启动时系统还会基于当前 provider、driver 支持情况和模型目录快照执行选择修正。因此需要区分两件事：
+
+- 配置快照结构合法
+- 当前选择已经可直接运行
+
+前者由 `config.ValidateSnapshot()` 保证，后者由 `internal/config/state.Service.EnsureSelection()` 保证。
+
+不要把这两层职责混在一起理解。
+
+## CLI Workdir 覆盖
+
+工作目录不写入 `config.yaml`，只通过启动参数覆盖：
 
 ```bash
 go run ./cmd/neocode --workdir /path/to/workspace
 ```
 
-补充说明：
+说明：
 
-- `--workdir` 只影响本次启动，不会持久化到 `config.yaml`
-- 运行时工具根目录与 session 存储分桶都会使用该工作区
-- session 现按工作区隔离存储，不同工作区的历史会话默认互不可见
+- `--workdir` 只影响本次进程
+- 不会回写到 `config.yaml`
+- 工具根目录与 session 隔离都会使用该工作区
+
+## 常见错误
+
+### 旧字段被拒绝
+
+如果在 `config.yaml` 中看到如下字段：
+
+- `workdir`
+- `default_workdir`
+- `providers`
+- `provider_overrides`
+
+当前版本会直接报未知字段错误。处理方式是手动删除这些字段，而不是等待程序自动迁移。
+
+### API Key 未设置
+
+报错示例：
+
+```text
+config: environment variable OPENAI_API_KEY is empty
+```
+
+处理方式：先在当前 shell 中设置对应环境变量，再启动 NeoCode。
+
+## 相关文档
+
+- [添加 Provider](./adding-providers.md)
+- [配置管理详细设计](../config-management-detail-design.md)
+- [Context Compact](../context-compact.md)

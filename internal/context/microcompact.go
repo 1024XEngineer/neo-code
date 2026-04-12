@@ -72,6 +72,12 @@ func cloneContextMessages(messages []providertypes.Message) []providertypes.Mess
 	for _, message := range messages {
 		next := message
 		next.ToolCalls = append([]providertypes.ToolCall(nil), message.ToolCalls...)
+		if len(message.ToolMetadata) > 0 {
+			next.ToolMetadata = make(map[string]string, len(message.ToolMetadata))
+			for key, value := range message.ToolMetadata {
+				next.ToolMetadata[key] = value
+			}
+		}
 		cloned = append(cloned, next)
 	}
 	return cloned

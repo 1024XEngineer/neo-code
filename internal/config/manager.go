@@ -72,13 +72,11 @@ func (m *Manager) Update(ctx context.Context, mutate func(*Config) error) error 
 	if err := mutate(&next); err != nil {
 		return err
 	}
-
-	providersSnapshot := cloneProviders(next.Providers)
-	next.ApplyDefaultsFrom(m.loader.DefaultConfig())
-	if len(providersSnapshot) > 0 {
-		next.Providers = providersSnapshot
+	if len(next.Providers) == 0 {
+		next.Providers = cloneProviders(m.loader.DefaultConfig().Providers)
 	}
-	if err := next.Validate(); err != nil {
+	next.applyStaticDefaults(m.loader.DefaultConfig())
+	if err := next.ValidateSnapshot(); err != nil {
 		return err
 	}
 	if err := m.loader.Save(ctx, &next); err != nil {
@@ -87,20 +85,6 @@ func (m *Manager) Update(ctx context.Context, mutate func(*Config) error) error 
 
 	m.config = &next
 	return nil
-}
-
-func (m *Manager) SelectedProvider() (ProviderConfig, error) {
-	cfg := m.Get()
-	return cfg.SelectedProviderConfig()
-}
-
-func (m *Manager) ResolvedSelectedProvider() (ResolvedProviderConfig, error) {
-	provider, err := m.SelectedProvider()
-	if err != nil {
-		return ResolvedProviderConfig{}, err
-	}
-
-	return provider.Resolve()
 }
 
 func (m *Manager) BaseDir() string {

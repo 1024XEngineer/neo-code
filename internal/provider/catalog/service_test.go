@@ -81,10 +81,7 @@ func TestListProviderModelsMergesConfiguredMetadataAfterDiscovery(t *testing.T) 
 	}}
 	providerCfg.Model = "deepseek-coder"
 
-	input, err := config.NewProviderCatalogInput(providerCfg)
-	if err != nil {
-		t.Fatalf("NewProviderCatalogInput() error = %v", err)
-	}
+	input := mustCatalogInput(t, providerCfg)
 	models, err := service.ListProviderModels(context.Background(), input)
 	if err != nil {
 		t.Fatalf("ListProviderModels() error = %v", err)
@@ -385,10 +382,7 @@ func TestDiscoverAndPersistFailurePaths(t *testing.T) {
 			APIKeyEnv: "",
 		}
 
-		input, err := config.NewProviderCatalogInput(providerCfg)
-		if err != nil {
-			t.Fatalf("NewProviderCatalogInput() error = %v", err)
-		}
+		input := mustCatalogInput(t, providerCfg)
 		discovered, err := service.discoverAndPersist(context.Background(), input)
 		if err == nil || discovered != nil {
 			t.Fatalf("expected resolve failure to surface as error, got err=%v models=%+v", err, discovered)
@@ -533,17 +527,39 @@ func newRegistry(t *testing.T, name string, discover provider.DiscoveryFunc) *pr
 }
 
 func openAIProviderSource() provider.CatalogInput {
-	input, err := config.NewProviderCatalogInput(config.OpenAIProvider())
-	if err != nil {
-		panic(err)
-	}
-	return input
+	return mustCatalogInput(nil, config.OpenAIProvider())
 }
 
 func customGatewayProviderSource() provider.CatalogInput {
-	input, err := config.NewProviderCatalogInput(customGatewayProvider())
+	return mustCatalogInput(nil, customGatewayProvider())
+}
+
+func mustCatalogInput(t *testing.T, cfg config.ProviderConfig) provider.CatalogInput {
+	cloned := cfg
+	cloned.Models = providertypes.CloneModelDescriptors(cfg.Models)
+
+	identity, err := cloned.Identity()
 	if err != nil {
+		if t != nil {
+			t.Helper()
+			t.Fatalf("Identity() error = %v", err)
+		}
 		panic(err)
+	}
+
+	input := provider.CatalogInput{
+		Identity:         identity,
+		ConfiguredModels: providertypes.CloneModelDescriptors(cloned.Models),
+		ResolveDiscoveryConfig: func() (provider.RuntimeConfig, error) {
+			resolved, err := cloned.Resolve()
+			if err != nil {
+				return provider.RuntimeConfig{}, err
+			}
+			return resolved.ToRuntimeConfig(), nil
+		},
+	}
+	if cloned.Source != config.ProviderSourceCustom {
+		input.DefaultModels = providertypes.DescriptorsFromIDs([]string{cloned.Model})
 	}
 	return input
 }

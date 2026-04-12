@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"neo-code/internal/config"
+	configstate "neo-code/internal/config/state"
 	"neo-code/internal/tools"
 	"neo-code/internal/tools/mcp"
 )
@@ -110,7 +111,7 @@ func TestBuildRuntimeRejectsUnsupportedSelectedProviderDriverOnStartup(t *testin
 	}
 
 	_, err := BuildRuntime(context.Background(), BootstrapOptions{})
-	if !errors.Is(err, config.ErrDriverUnsupported) {
+	if !errors.Is(err, configstate.ErrDriverUnsupported) {
 		t.Fatalf("expected ErrDriverUnsupported, got %v", err)
 	}
 
@@ -132,7 +133,7 @@ func TestBuildToolRegistryUsesWebFetchConfig(t *testing.T) {
 	}))
 	defer server.Close()
 
-	cfg := config.Default().Clone()
+	cfg := config.StaticDefaults().Clone()
 	cfg.Workdir = t.TempDir()
 	cfg.Tools.WebFetch.MaxResponseBytes = 4
 
@@ -174,7 +175,7 @@ func TestBuildMCPRegistryFromConfig(t *testing.T) {
 		},
 	}
 
-	cfg := config.Default().Clone()
+	cfg := config.StaticDefaults().Clone()
 	cfg.Workdir = t.TempDir()
 	cfg.Tools.MCP.Servers = []config.MCPServerConfig{
 		{
@@ -212,7 +213,7 @@ func TestBuildMCPRegistryFromConfig(t *testing.T) {
 func TestBuildMCPRegistryUnsupportedSource(t *testing.T) {
 	t.Parallel()
 
-	cfg := config.Default().Clone()
+	cfg := config.StaticDefaults().Clone()
 	cfg.Workdir = t.TempDir()
 	cfg.Tools.MCP.Servers = []config.MCPServerConfig{
 		{
@@ -241,7 +242,7 @@ func TestDefaultRegisterMCPStdioServerSuccess(t *testing.T) {
 	t.Parallel()
 
 	registry := mcp.NewRegistry()
-	cfg := config.Default().Clone()
+	cfg := config.StaticDefaults().Clone()
 	wd, err := os.Getwd()
 	if err != nil {
 		t.Fatalf("getwd: %v", err)
@@ -285,7 +286,7 @@ func TestDefaultRegisterMCPStdioServerRefreshFailure(t *testing.T) {
 	t.Parallel()
 
 	registry := mcp.NewRegistry()
-	cfg := config.Default().Clone()
+	cfg := config.StaticDefaults().Clone()
 	wd, err := os.Getwd()
 	if err != nil {
 		t.Fatalf("getwd: %v", err)
@@ -324,7 +325,7 @@ func TestDefaultRegisterMCPStdioServerRefreshFailure(t *testing.T) {
 func TestBuildToolRegistryIncludesMCPFromConfig(t *testing.T) {
 	t.Parallel()
 
-	cfg := config.Default().Clone()
+	cfg := config.StaticDefaults().Clone()
 	cfg.Workdir = t.TempDir()
 	cfg.Tools.MCP.Servers = []config.MCPServerConfig{
 		{
@@ -374,7 +375,7 @@ func TestBuildToolRegistryIncludesMCPFromConfig(t *testing.T) {
 func TestBuildToolRegistryReturnsMCPSourceError(t *testing.T) {
 	t.Parallel()
 
-	cfg := config.Default().Clone()
+	cfg := config.StaticDefaults().Clone()
 	cfg.Workdir = t.TempDir()
 	cfg.Tools.MCP.Servers = []config.MCPServerConfig{
 		{
@@ -465,7 +466,7 @@ func TestResolveMCPServerEnvValidationErrors(t *testing.T) {
 func TestBuildMCPRegistryNoEnabledServerReturnsNil(t *testing.T) {
 	t.Parallel()
 
-	cfg := config.Default().Clone()
+	cfg := config.StaticDefaults().Clone()
 	cfg.Workdir = t.TempDir()
 	cfg.Tools.MCP.Servers = []config.MCPServerConfig{
 		{ID: "docs", Enabled: false, Source: "stdio"},
@@ -483,7 +484,7 @@ func TestBuildMCPRegistryNoEnabledServerReturnsNil(t *testing.T) {
 func TestBuildMCPRegistryRegisterError(t *testing.T) {
 	t.Parallel()
 
-	cfg := config.Default().Clone()
+	cfg := config.StaticDefaults().Clone()
 	cfg.Workdir = t.TempDir()
 	cfg.Tools.MCP.Servers = []config.MCPServerConfig{
 		{ID: "docs", Enabled: true, Source: "stdio"},
@@ -504,7 +505,7 @@ func TestBuildMCPRegistryRegisterError(t *testing.T) {
 func TestBuildMCPRegistryRollbackRegisteredServersOnFailure(t *testing.T) {
 	t.Parallel()
 
-	cfg := config.Default().Clone()
+	cfg := config.StaticDefaults().Clone()
 	cfg.Workdir = t.TempDir()
 	cfg.Tools.MCP.Servers = []config.MCPServerConfig{
 		{ID: "docs", Enabled: true, Source: "stdio"},
@@ -551,7 +552,7 @@ func TestRollbackMCPServersBoundaries(t *testing.T) {
 func TestInitialMCPRefreshTimeoutAndDurationConversion(t *testing.T) {
 	t.Parallel()
 
-	cfg := config.Default().Clone()
+	cfg := config.StaticDefaults().Clone()
 	cfg.ToolTimeoutSec = 1
 	timeout := initialMCPRefreshTimeout(cfg)
 	if timeout < 5*time.Second {

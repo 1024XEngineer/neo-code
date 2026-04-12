@@ -14,11 +14,12 @@ const RoleTool = "tool"
 
 // Message 表示对话中的单条消息。
 type Message struct {
-	Role       string     `json:"role"`
-	Content    string     `json:"content"`
-	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
-	ToolCallID string     `json:"tool_call_id,omitempty"`
-	IsError    bool       `json:"is_error,omitempty"`
+	Role         string            `json:"role"`
+	Content      string            `json:"content"`
+	ToolCalls    []ToolCall        `json:"tool_calls,omitempty"`
+	ToolCallID   string            `json:"tool_call_id,omitempty"`
+	IsError      bool              `json:"is_error,omitempty"`
+	ToolMetadata map[string]string `json:"tool_metadata,omitempty"`
 }
 
 // ToolCall 表示模型发起的工具调用请求。
