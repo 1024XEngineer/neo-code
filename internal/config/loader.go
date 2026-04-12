@@ -29,6 +29,7 @@ type persistedConfig struct {
 	ToolTimeoutSec   int                    `yaml:"tool_timeout_sec,omitempty"`
 	Context          persistedContextConfig `yaml:"context,omitempty"`
 	Tools            ToolsConfig            `yaml:"tools,omitempty"`
+	Memo             persistedMemoConfig    `yaml:"memo,omitempty"`
 }
 
 type persistedContextConfig struct {
@@ -46,6 +47,12 @@ type persistedCompactConfig struct {
 type persistedAutoCompactConfig struct {
 	Enabled             bool `yaml:"enabled"`
 	InputTokenThreshold int  `yaml:"input_token_threshold,omitempty"`
+}
+
+type persistedMemoConfig struct {
+	Enabled       *bool `yaml:"enabled,omitempty"`
+	AutoExtract   *bool `yaml:"auto_extract,omitempty"`
+	MaxIndexLines int   `yaml:"max_index_lines,omitempty"`
 }
 
 func NewLoader(baseDir string, defaults *Config) *Loader {
@@ -104,7 +111,7 @@ func (l *Loader) Load(ctx context.Context) (*Config, error) {
 		return nil, fmt.Errorf("config: read config file: %w", err)
 	}
 
-	cfg, err := parseConfigWithContextDefaults(data, l.defaults.Context)
+	cfg, err := parseConfigWithContextDefaults(data, l.defaults.Context, l.defaults.Memo)
 	if err != nil {
 		return nil, fmt.Errorf("config: parse config file: %w", err)
 	}
@@ -162,19 +169,28 @@ func defaultBaseDir() string {
 }
 
 func parseConfig(data []byte) (*Config, error) {
-	return parseConfigWithContextDefaults(data, StaticDefaults().Context)
+	defaults := StaticDefaults()
+	return parseConfigWithContextDefaults(data, defaults.Context, defaults.Memo)
 }
 
 // parseConfigWithContextDefaults 负责在解析配置时注入上下文压缩相关默认值。
-func parseConfigWithContextDefaults(data []byte, contextDefaults ContextConfig) (*Config, error) {
+func parseConfigWithContextDefaults(
+	data []byte,
+	contextDefaults ContextConfig,
+	memoDefaults ...MemoConfig,
+) (*Config, error) {
 	if len(bytes.TrimSpace(data)) == 0 {
 		return &Config{}, nil
 	}
 
-	return parseCurrentConfig(data, contextDefaults)
+	resolvedMemo := defaultMemoConfig()
+	if len(memoDefaults) > 0 {
+		resolvedMemo = memoDefaults[0]
+	}
+	return parseCurrentConfig(data, contextDefaults, resolvedMemo)
 }
 
-func parseCurrentConfig(data []byte, contextDefaults ContextConfig) (*Config, error) {
+func parseCurrentConfig(data []byte, contextDefaults ContextConfig, memoDefaults MemoConfig) (*Config, error) {
 	var file persistedConfig
 	decoder := yaml.NewDecoder(bytes.NewReader(data))
 	decoder.KnownFields(true)
@@ -189,6 +205,7 @@ func parseCurrentConfig(data []byte, contextDefaults ContextConfig) (*Config, er
 		ToolTimeoutSec:   file.ToolTimeoutSec,
 		Context:          fromPersistedContextConfig(file.Context, contextDefaults),
 		Tools:            file.Tools,
+		Memo:             fromPersistedMemoConfig(file.Memo, memoDefaults),
 	}
 
 	return cfg, nil
@@ -203,6 +220,7 @@ func marshalPersistedConfig(snapshot Config) ([]byte, error) {
 		ToolTimeoutSec:   snapshot.ToolTimeoutSec,
 		Context:          newPersistedContextConfig(snapshot.Context),
 		Tools:            snapshot.Tools,
+		Memo:             newPersistedMemoConfig(snapshot.Memo),
 	}
 
 	data, err := yaml.Marshal(&file)
@@ -289,4 +307,30 @@ func assembleProviders(builtin []ProviderConfig, custom []ProviderConfig) ([]Pro
 		}
 	}
 	return assembled, nil
+}
+
+// newPersistedMemoConfig 将运行时 memo 配置收敛为 YAML 持久化结构。
+func newPersistedMemoConfig(cfg MemoConfig) persistedMemoConfig {
+	enabled := cfg.Enabled
+	autoExtract := cfg.AutoExtract
+	return persistedMemoConfig{
+		Enabled:       &enabled,
+		AutoExtract:   &autoExtract,
+		MaxIndexLines: cfg.MaxIndexLines,
+	}
+}
+
+// fromPersistedMemoConfig 将持久化配置恢复为运行时 memo 配置。
+func fromPersistedMemoConfig(file persistedMemoConfig, defaults MemoConfig) MemoConfig {
+	out := defaults
+	if file.Enabled != nil {
+		out.Enabled = *file.Enabled
+	}
+	if file.AutoExtract != nil {
+		out.AutoExtract = *file.AutoExtract
+	}
+	if file.MaxIndexLines > 0 {
+		out.MaxIndexLines = file.MaxIndexLines
+	}
+	return out
 }

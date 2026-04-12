@@ -34,6 +34,25 @@ func NewBuilderWithToolPolicies(policies MicroCompactPolicySource) Builder {
 	}
 }
 
+// NewBuilderWithMemo 返回带记忆注入能力的上下文构建器。
+// memoSource 为 nil 时等价于 NewBuilderWithToolPolicies。
+func NewBuilderWithMemo(policies MicroCompactPolicySource, memoSource SectionSource) Builder {
+	systemSource := &systemStateSource{gitRunner: runGitCommand}
+	sources := []promptSectionSource{
+		corePromptSource{},
+		&projectRulesSource{},
+		systemSource,
+	}
+	if memoSource != nil {
+		sources = append(sources, memoSource)
+	}
+	return &DefaultBuilder{
+		promptSources:       sources,
+		trimPolicy:          spanMessageTrimPolicy{},
+		microCompactPolicies: policies,
+	}
+}
+
 // Build assembles the provider-facing context for the current round.
 func (b *DefaultBuilder) Build(ctx context.Context, input BuildInput) (BuildResult, error) {
 	if err := ctx.Err(); err != nil {

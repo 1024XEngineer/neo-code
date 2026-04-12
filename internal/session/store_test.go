@@ -146,16 +146,16 @@ func TestHashWorkspaceRootNormalizesChinesePathVariants(t *testing.T) {
 		t.Fatalf("mkdir base: %v", err)
 	}
 
-	normalized := normalizeWorkspaceRoot(base)
+	normalized := NormalizeWorkspaceRoot(base)
 	slashVariant := strings.ReplaceAll(normalized, `\`, `/`)
-	if got, want := hashWorkspaceRoot(normalized), hashWorkspaceRoot(slashVariant); got != want {
+	if got, want := HashWorkspaceRoot(normalized), HashWorkspaceRoot(slashVariant); got != want {
 		t.Fatalf("expected slash variants to hash equally, got %q and %q", got, want)
 	}
 
 	upperVariant := strings.ToUpper(normalized)
 	lowerVariant := strings.ToLower(normalized)
-	gotCaseUpper := hashWorkspaceRoot(upperVariant)
-	gotCaseLower := hashWorkspaceRoot(lowerVariant)
+	gotCaseUpper := HashWorkspaceRoot(upperVariant)
+	gotCaseLower := HashWorkspaceRoot(lowerVariant)
 	if goruntime.GOOS == "windows" {
 		if gotCaseUpper != gotCaseLower {
 			t.Fatalf("expected case variants to hash equally on windows, got %q and %q", gotCaseUpper, gotCaseLower)
@@ -170,10 +170,10 @@ func TestHashWorkspaceRootNormalizesChinesePathVariants(t *testing.T) {
 func TestWorkspaceHelpersHandleEmptyAndRelativePath(t *testing.T) {
 	t.Parallel()
 
-	if got := workspacePathKey("   "); got != "" {
+	if got := WorkspacePathKey("   "); got != "" {
 		t.Fatalf("expected empty workspace key, got %q", got)
 	}
-	if got := normalizeWorkspaceRoot("   "); got != "" {
+	if got := NormalizeWorkspaceRoot("   "); got != "" {
 		t.Fatalf("expected empty normalized workspace root, got %q", got)
 	}
 
@@ -182,12 +182,12 @@ func TestWorkspaceHelpersHandleEmptyAndRelativePath(t *testing.T) {
 		t.Fatalf("getwd: %v", err)
 	}
 	relative := "."
-	normalized := normalizeWorkspaceRoot(relative)
+	normalized := NormalizeWorkspaceRoot(relative)
 	if normalized != filepath.Clean(workingDir) {
 		t.Fatalf("expected relative path to normalize to %q, got %q", filepath.Clean(workingDir), normalized)
 	}
 
-	if got, want := hashWorkspaceRoot(""), hashWorkspaceRoot("   "); got != want {
+	if got, want := HashWorkspaceRoot(""), HashWorkspaceRoot("   "); got != want {
 		t.Fatalf("expected empty workspace root variants to share fallback hash, got %q want %q", got, want)
 	}
 }

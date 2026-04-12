@@ -16,6 +16,7 @@ import (
 
 	"neo-code/internal/config"
 	configstate "neo-code/internal/config/state"
+	"neo-code/internal/memo"
 	providertypes "neo-code/internal/provider/types"
 	agentruntime "neo-code/internal/runtime"
 	tuibootstrap "neo-code/internal/tui/bootstrap"
@@ -63,6 +64,7 @@ type appServices struct {
 	configManager *config.Manager
 	providerSvc   ProviderController
 	runtime       agentruntime.Runtime
+	memoSvc       *memo.Service
 }
 
 // appComponents 聚合 Bubble Tea 组件与渲染器。
@@ -122,6 +124,17 @@ func New(cfg *config.Config, configManager *config.Manager, runtime agentruntime
 		ConfigManager:   configManager,
 		Runtime:         runtime,
 		ProviderService: providerSvc,
+	})
+}
+
+// NewWithMemo 创建带 memo 服务的 TUI App。
+func NewWithMemo(cfg *config.Config, configManager *config.Manager, runtime agentruntime.Runtime, providerSvc ProviderController, memoSvc *memo.Service) (App, error) {
+	return NewWithBootstrap(tuibootstrap.Options{
+		Config:          cfg,
+		ConfigManager:   configManager,
+		Runtime:         runtime,
+		ProviderService: providerSvc,
+		MemoSvc:         memoSvc,
 	})
 }
 
@@ -218,6 +231,7 @@ func newApp(container tuibootstrap.Container) (App, error) {
 			configManager: configManager,
 			providerSvc:   providerSvc,
 			runtime:       runtime,
+			memoSvc:       container.MemoSvc,
 		},
 		appComponents: appComponents{
 			keys:             keys,

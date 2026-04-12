@@ -21,6 +21,7 @@ const (
 	DefaultCompactManualKeepRecentMessages       = 10
 	DefaultCompactMaxSummaryChars                = 1200
 	DefaultAutoCompactInputTokenThreshold        = 100000
+	DefaultMemoMaxIndexLines                     = 200
 )
 
 const (
@@ -47,6 +48,7 @@ type Config struct {
 	ToolTimeoutSec   int              `yaml:"tool_timeout_sec,omitempty"`
 	Context          ContextConfig    `yaml:"context,omitempty"`
 	Tools            ToolsConfig      `yaml:"tools,omitempty"`
+	Memo             MemoConfig       `yaml:"memo,omitempty"`
 }
 
 type ProviderSource string
@@ -88,6 +90,13 @@ type ContextConfig struct {
 type AutoCompactConfig struct {
 	Enabled             bool `yaml:"enabled"`
 	InputTokenThreshold int  `yaml:"input_token_threshold,omitempty"`
+}
+
+// MemoConfig 控制跨会话持久记忆的行为配置。
+type MemoConfig struct {
+	Enabled       bool `yaml:"enabled,omitempty"`
+	AutoExtract   bool `yaml:"auto_extract,omitempty"`
+	MaxIndexLines int  `yaml:"max_index_lines,omitempty"`
 }
 
 type CompactConfig struct {
@@ -147,7 +156,13 @@ func StaticDefaults() *Config {
 			WebFetch: defaultWebFetchConfig(),
 			MCP:      defaultMCPConfig(),
 		},
+		Memo: defaultMemoConfig(),
 	}
+}
+
+// Default 兼容历史调用，返回配置层静态默认值骨架。
+func Default() *Config {
+	return StaticDefaults()
 }
 
 func (c *Config) Clone() Config {
@@ -159,6 +174,7 @@ func (c *Config) Clone() Config {
 	clone.Providers = cloneProviders(c.Providers)
 	clone.Context = c.Context.Clone()
 	clone.Tools = c.Tools.Clone()
+	clone.Memo = c.Memo.Clone()
 	return clone
 }
 
@@ -182,6 +198,7 @@ func (c *Config) applyStaticDefaults(defaults Config) {
 	}
 	c.Context.ApplyDefaults(defaults.Context)
 	c.Tools.ApplyDefaults(defaults.Tools)
+	c.Memo.ApplyDefaults(defaults.Memo)
 
 	c.Workdir = normalizeWorkdir(c.Workdir)
 }
@@ -234,6 +251,9 @@ func (c *Config) ValidateSnapshot() error {
 	}
 	if err := c.Context.Validate(); err != nil {
 		return fmt.Errorf("config: context: %w", err)
+	}
+	if err := c.Memo.Validate(); err != nil {
+		return fmt.Errorf("config: memo: %w", err)
 	}
 
 	return nil
@@ -379,6 +399,15 @@ func defaultContextConfig() ContextConfig {
 func defaultAutoCompactConfig() AutoCompactConfig {
 	return AutoCompactConfig{
 		InputTokenThreshold: DefaultAutoCompactInputTokenThreshold,
+	}
+}
+
+// defaultMemoConfig 返回跨会话记忆的默认配置。
+func defaultMemoConfig() MemoConfig {
+	return MemoConfig{
+		Enabled:       true,
+		AutoExtract:   true,
+		MaxIndexLines: DefaultMemoMaxIndexLines,
 	}
 }
 
@@ -546,6 +575,11 @@ func (c AutoCompactConfig) Clone() AutoCompactConfig {
 	return c
 }
 
+// Clone 返回 memo 配置的值副本。
+func (c MemoConfig) Clone() MemoConfig {
+	return c
+}
+
 // ApplyDefaults 为 auto_compact 配置填充缺省阈值。
 func (c *AutoCompactConfig) ApplyDefaults(defaults AutoCompactConfig) {
 	if c == nil {
@@ -554,6 +588,24 @@ func (c *AutoCompactConfig) ApplyDefaults(defaults AutoCompactConfig) {
 	if c.InputTokenThreshold <= 0 {
 		c.InputTokenThreshold = defaults.InputTokenThreshold
 	}
+}
+
+// ApplyDefaults 为 memo 配置补齐缺省参数。
+func (c *MemoConfig) ApplyDefaults(defaults MemoConfig) {
+	if c == nil {
+		return
+	}
+	if c.MaxIndexLines <= 0 {
+		c.MaxIndexLines = defaults.MaxIndexLines
+	}
+}
+
+// Validate 校验 memo 配置是否合法。
+func (c MemoConfig) Validate() error {
+	if c.MaxIndexLines < 0 {
+		return errors.New("max_index_lines must be non-negative")
+	}
+	return nil
 }
 
 // Validate 校验 auto_compact 配置是否合法。

@@ -300,8 +300,8 @@ func renderProjectRulesSection(documents []ruleDocument) promptSection {
 	}
 
 	return promptSection{
-		title:   "Project Rules",
-		content: strings.TrimSpace(builder.String()),
+		Title:   "Project Rules",
+		Content: strings.TrimSpace(builder.String()),
 	}
 }
 

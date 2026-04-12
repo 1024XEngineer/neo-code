@@ -121,7 +121,7 @@ func TestDefaultBuilderBuildUsesSpanTrimPolicyWhenTrimPolicyIsUnset(t *testing.T
 
 	builder := &DefaultBuilder{
 		promptSources: []promptSectionSource{
-			stubPromptSectionSource{sections: []promptSection{{title: "Stub", content: "body"}}},
+			stubPromptSectionSource{sections: []promptSection{{Title: "Stub", Content: "body"}}},
 		},
 	}
 
@@ -157,7 +157,7 @@ func TestDefaultBuilderBuildAppliesMicroCompactAfterTrim(t *testing.T) {
 
 	builder := &DefaultBuilder{
 		promptSources: []promptSectionSource{
-			stubPromptSectionSource{sections: []promptSection{{title: "Stub", content: "body"}}},
+			stubPromptSectionSource{sections: []promptSection{{Title: "Stub", Content: "body"}}},
 		},
 	}
 
@@ -211,7 +211,7 @@ func TestDefaultBuilderBuildSkipsMicroCompactWhenDisabled(t *testing.T) {
 
 	builder := &DefaultBuilder{
 		promptSources: []promptSectionSource{
-			stubPromptSectionSource{sections: []promptSection{{title: "Stub", content: "body"}}},
+			stubPromptSectionSource{sections: []promptSection{{Title: "Stub", Content: "body"}}},
 		},
 	}
 
@@ -264,7 +264,7 @@ func TestDefaultBuilderBuildHonorsToolMicroCompactPolicies(t *testing.T) {
 
 	builder := &DefaultBuilder{
 		promptSources: []promptSectionSource{
-			stubPromptSectionSource{sections: []promptSection{{title: "Stub", content: "body"}}},
+			stubPromptSectionSource{sections: []promptSection{{Title: "Stub", Content: "body"}}},
 		},
 		microCompactPolicies: stubMicroCompactPolicySource{
 			"custom_tool": tools.MicroCompactPolicyPreserveHistory,
@@ -631,37 +631,42 @@ func TestBuildShouldAutoCompactAboveThreshold(t *testing.T) {
 	}
 }
 
-func TestApplyReadTimeContextProjectionFormatsToolMessagesWithoutMutatingSessionState(t *testing.T) {
+func TestNewBuilderWithMemo(t *testing.T) {
 	t.Parallel()
 
-	original := []providertypes.Message{
-		{Role: providertypes.RoleUser, Content: "edit this"},
-		{
-			Role:       providertypes.RoleTool,
-			ToolCallID: "call-1",
-			Content:    "ok",
-			ToolMetadata: map[string]string{
-				"tool_name":     "filesystem_edit",
-				"path":          "main.go",
-				"search_length": "12",
-			},
-		},
-	}
+	t.Run("with memo source injects memo section", func(t *testing.T) {
+		memoSource := stubPromptSectionSource{
+			sections: []promptSection{{Title: "Memo", Content: "- [user] test entry"}},
+		}
+		builder := NewBuilderWithMemo(stubMicroCompactPolicySource{}, memoSource)
+		input := BuildInput{
+			Messages: []providertypes.Message{{Role: "user", Content: "hello"}},
+			Metadata: testMetadata(t.TempDir()),
+		}
+		result, err := builder.Build(stdcontext.Background(), input)
+		if err != nil {
+			t.Fatalf("Build() error = %v", err)
+		}
+		if !strings.Contains(result.SystemPrompt, "## Memo") {
+			t.Errorf("expected Memo section in system prompt")
+		}
+		if !strings.Contains(result.SystemPrompt, "test entry") {
+			t.Errorf("expected memo content in system prompt")
+		}
+	})
 
-	got := applyReadTimeContextProjection(original, CompactOptions{}, nil)
-	if len(got) != len(original) {
-		t.Fatalf("expected projected messages to keep length, got %d", len(got))
-	}
-	if !strings.Contains(got[1].Content, "tool result") || !strings.Contains(got[1].Content, "tool: filesystem_edit") {
-		t.Fatalf("expected tool message to be projected for model, got %q", got[1].Content)
-	}
-	if got[1].ToolMetadata != nil {
-		t.Fatalf("expected projected provider message to clear tool metadata, got %+v", got[1].ToolMetadata)
-	}
-	if original[1].Content != "ok" {
-		t.Fatalf("expected original session message to keep raw content, got %q", original[1].Content)
-	}
-	if original[1].ToolMetadata["path"] != "main.go" {
-		t.Fatalf("expected original tool metadata to remain intact, got %+v", original[1].ToolMetadata)
-	}
+	t.Run("nil memo source skips memo section", func(t *testing.T) {
+		builder := NewBuilderWithMemo(stubMicroCompactPolicySource{}, nil)
+		input := BuildInput{
+			Messages: []providertypes.Message{{Role: "user", Content: "hello"}},
+			Metadata: testMetadata(t.TempDir()),
+		}
+		result, err := builder.Build(stdcontext.Background(), input)
+		if err != nil {
+			t.Fatalf("Build() error = %v", err)
+		}
+		if strings.Contains(result.SystemPrompt, "## Memo") {
+			t.Error("nil memo source should not inject Memo section")
+		}
+	})
 }

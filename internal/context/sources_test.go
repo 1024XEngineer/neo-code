@@ -20,13 +20,13 @@ func TestCorePromptSourceSectionsReturnsClone(t *testing.T) {
 		t.Fatalf("expected non-empty core prompt sections")
 	}
 
-	first[0].title = "changed"
+	first[0].Title = "changed"
 
 	second, err := source.Sections(context.Background(), BuildInput{})
 	if err != nil {
 		t.Fatalf("Sections() second call error = %v", err)
 	}
-	if second[0].title != defaultPromptSections[0].title {
+	if second[0].Title != defaultPromptSections[0].Title {
 		t.Fatalf("expected cloned sections, got %+v", second)
 	}
 }

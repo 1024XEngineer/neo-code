@@ -15,8 +15,8 @@ func TestDefaultSystemPromptSectionsReturnsCachedSections(t *testing.T) {
 	if len(sections) == 0 {
 		t.Fatalf("expected non-empty default sections")
 	}
-	if sections[0].title != "Agent Identity" {
-		t.Fatalf("expected first default section title, got %q", sections[0].title)
+	if sections[0].Title != "Agent Identity" {
+		t.Fatalf("expected first default section title, got %q", sections[0].Title)
 	}
 }
 
@@ -36,30 +36,30 @@ func TestRenderPromptSectionBranches(t *testing.T) {
 		{
 			name: "content only renders content",
 			section: promptSection{
-				content: "content only",
+				Content: "content only",
 			},
 			want: "content only",
 		},
 		{
 			name: "title only renders empty",
 			section: promptSection{
-				title: "Title Only",
+				Title: "Title Only",
 			},
 			want: "",
 		},
 		{
 			name: "title and content render heading",
 			section: promptSection{
-				title:   "Section",
-				content: "body",
+				Title:   "Section",
+				Content: "body",
 			},
 			want: "## Section\n\nbody",
 		},
 		{
 			name: "title and content are trimmed before rendering",
 			section: promptSection{
-				title:   " Section ",
-				content: "\nbody\n",
+				Title:   " Section ",
+				Content: "\nbody\n",
 			},
 			want: "## Section\n\nbody",
 		},
@@ -83,9 +83,9 @@ func TestComposeSystemPromptSkipsEmptySections(t *testing.T) {
 
 	got := composeSystemPrompt(
 		promptSection{},
-		promptSection{content: "plain"},
-		promptSection{title: "Title Only"},
-		promptSection{title: "Section", content: "body"},
+		promptSection{Content: "plain"},
+		promptSection{Title: "Title Only"},
+		promptSection{Title: "Section", Content: "body"},
 	)
 
 	want := "plain\n\n## Section\n\nbody"
@@ -101,11 +101,11 @@ func TestDefaultToolUsagePromptIncludesPermissionAndAntiLoopGuidance(t *testing.
 	var toolUsage string
 	var failureRecovery string
 	for _, section := range sections {
-		if section.title == "Tool Usage" {
-			toolUsage = section.content
+		if section.Title == "Tool Usage" {
+			toolUsage = section.Content
 		}
-		if section.title == "Failure Recovery" {
-			failureRecovery = section.content
+		if section.Title == "Failure Recovery" {
+			failureRecovery = section.Content
 		}
 	}
 	if toolUsage == "" {

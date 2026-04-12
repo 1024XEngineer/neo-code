@@ -759,3 +759,83 @@ openai_compatible:
 		t.Fatalf("expected unknown field rejection, got %v", err)
 	}
 }
+
+func TestLoaderMemoConfigPreservesExplicitFalse(t *testing.T) {
+	t.Parallel()
+
+	loader := NewLoader(t.TempDir(), testDefaultConfig())
+	if err := os.MkdirAll(loader.BaseDir(), 0o755); err != nil {
+		t.Fatalf("mkdir base dir: %v", err)
+	}
+
+	raw := `
+selected_provider: openai
+current_model: gpt-4.1
+shell: powershell
+memo:
+  enabled: false
+  auto_extract: false
+  max_index_lines: 123
+`
+	if err := os.WriteFile(loader.ConfigPath(), []byte(strings.TrimSpace(raw)+"\n"), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := loader.Load(context.Background())
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Memo.Enabled {
+		t.Fatalf("expected memo.enabled to stay false")
+	}
+	if cfg.Memo.AutoExtract {
+		t.Fatalf("expected memo.auto_extract to stay false")
+	}
+	if cfg.Memo.MaxIndexLines != 123 {
+		t.Fatalf("expected memo.max_index_lines=123, got %d", cfg.Memo.MaxIndexLines)
+	}
+
+	data, err := os.ReadFile(loader.ConfigPath())
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	text := string(data)
+	if !strings.Contains(text, "enabled: false") {
+		t.Fatalf("expected persisted memo.enabled=false, got:\n%s", text)
+	}
+	if !strings.Contains(text, "auto_extract: false") {
+		t.Fatalf("expected persisted memo.auto_extract=false, got:\n%s", text)
+	}
+}
+
+func TestLoaderMemoConfigAppliesDefaultsWhenSectionMissing(t *testing.T) {
+	t.Parallel()
+
+	loader := NewLoader(t.TempDir(), testDefaultConfig())
+	if err := os.MkdirAll(loader.BaseDir(), 0o755); err != nil {
+		t.Fatalf("mkdir base dir: %v", err)
+	}
+
+	raw := `
+selected_provider: openai
+current_model: gpt-4.1
+shell: powershell
+`
+	if err := os.WriteFile(loader.ConfigPath(), []byte(strings.TrimSpace(raw)+"\n"), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := loader.Load(context.Background())
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !cfg.Memo.Enabled {
+		t.Fatalf("expected memo.enabled default true when memo section missing")
+	}
+	if !cfg.Memo.AutoExtract {
+		t.Fatalf("expected memo.auto_extract default true when memo section missing")
+	}
+	if cfg.Memo.MaxIndexLines <= 0 {
+		t.Fatalf("expected memo.max_index_lines to be defaulted, got %d", cfg.Memo.MaxIndexLines)
+	}
+}

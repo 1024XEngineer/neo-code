@@ -15,6 +15,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"neo-code/internal/config"
+	"neo-code/internal/memo"
 	providertypes "neo-code/internal/provider/types"
 	agentruntime "neo-code/internal/runtime"
 	agentsession "neo-code/internal/session"
@@ -1647,6 +1648,12 @@ func (a *App) handleImmediateSlashCommand(input string) (bool, tea.Cmd) {
 		a.state.StatusText = statusCompacting
 		a.state.ExecutionError = ""
 		return true, runCompact(a.runtime, a.state.ActiveSessionID)
+	case slashCommandMemo:
+		return true, a.handleMemoCommand()
+	case slashCommandRemember:
+		return true, a.handleRememberCommand(rest)
+	case slashCommandForget:
+		return true, a.handleForgetCommand(rest)
 	default:
 		return false, nil
 	}
@@ -1797,6 +1804,92 @@ func (a App) isBusy() bool {
 	return tuiutils.IsBusy(a.state.IsAgentRunning, a.state.IsCompacting)
 }
 
+// handleMemoCommand 处理 /memo 命令，显示记忆索引内容。
+func (a *App) handleMemoCommand() tea.Cmd {
+	if a.memoSvc == nil {
+		a.appendInlineMessage(roleError, "[System] Memo service is not enabled.")
+		a.rebuildTranscript()
+		return nil
+	}
+	entries, err := a.memoSvc.List(context.Background())
+	if err != nil {
+		a.appendInlineMessage(roleError, fmt.Sprintf("[System] Failed to load memo: %s", err))
+		a.rebuildTranscript()
+		return nil
+	}
+	if len(entries) == 0 {
+		a.appendInlineMessage(roleSystem, "[System] No memos stored yet. Use /remember <text> to add one.")
+		a.rebuildTranscript()
+		return nil
+	}
+	var lines []string
+	lines = append(lines, fmt.Sprintf("[System] %d memo(s):", len(entries)))
+	for _, entry := range entries {
+		lines = append(lines, fmt.Sprintf("  [%s] %s", entry.Type, entry.Title))
+	}
+	a.appendInlineMessage(roleSystem, strings.Join(lines, "\n"))
+	a.rebuildTranscript()
+	return nil
+}
+
+// handleRememberCommand 处理 /remember <text> 命令，创建新的记忆条目。
+func (a *App) handleRememberCommand(text string) tea.Cmd {
+	text = strings.TrimSpace(text)
+	if a.memoSvc == nil {
+		a.appendInlineMessage(roleError, "[System] Memo service is not enabled.")
+		a.rebuildTranscript()
+		return nil
+	}
+	if text == "" {
+		a.appendInlineMessage(roleError, fmt.Sprintf("[System] Usage: %s", slashUsageRemember))
+		a.rebuildTranscript()
+		return nil
+	}
+	title := memo.NormalizeTitle(text)
+	entry := memo.Entry{
+		Type:    memo.TypeUser,
+		Title:   title,
+		Content: text,
+		Source:  memo.SourceUserManual,
+	}
+	if err := a.memoSvc.Add(context.Background(), entry); err != nil {
+		a.appendInlineMessage(roleError, fmt.Sprintf("[System] Failed to save memo: %s", err))
+		a.rebuildTranscript()
+		return nil
+	}
+	a.appendInlineMessage(roleSystem, fmt.Sprintf("[System] Memo saved: %s", title))
+	a.rebuildTranscript()
+	return nil
+}
+
+// handleForgetCommand 处理 /forget <keyword> 命令，删除匹配的记忆条目。
+func (a *App) handleForgetCommand(keyword string) tea.Cmd {
+	keyword = strings.TrimSpace(keyword)
+	if a.memoSvc == nil {
+		a.appendInlineMessage(roleError, "[System] Memo service is not enabled.")
+		a.rebuildTranscript()
+		return nil
+	}
+	if keyword == "" {
+		a.appendInlineMessage(roleError, fmt.Sprintf("[System] Usage: %s", slashUsageForget))
+		a.rebuildTranscript()
+		return nil
+	}
+	removed, err := a.memoSvc.Remove(context.Background(), keyword)
+	if err != nil {
+		a.appendInlineMessage(roleError, fmt.Sprintf("[System] Failed to remove memo: %s", err))
+		a.rebuildTranscript()
+		return nil
+	}
+	if removed == 0 {
+		a.appendInlineMessage(roleSystem, fmt.Sprintf("[System] No memos matching %q.", keyword))
+	} else {
+		a.appendInlineMessage(roleSystem, fmt.Sprintf("[System] Removed %d memo(s) matching %q.", removed, keyword))
+	}
+	a.rebuildTranscript()
+	return nil
+}
+
 // setCurrentWorkdir 统一设置当前工作目录，仅接受非空白且为绝对路径的值。
 // 非法值会被静默忽略，防止 runtime 事件或异常输入污染 UI 状态。
 func (a *App) setCurrentWorkdir(workdir string) {
@@ -1805,4 +1898,5 @@ func (a *App) setCurrentWorkdir(workdir string) {
 		return
 	}
 	a.state.CurrentWorkdir = trimmed
+
 }

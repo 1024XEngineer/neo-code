@@ -14,12 +14,12 @@ const projectsDirName = "projects"
 
 // sessionDirectory 负责根据工作区根目录计算会话分桶目录。
 func sessionDirectory(baseDir string, workspaceRoot string) string {
-	return filepath.Join(baseDir, projectsDirName, hashWorkspaceRoot(workspaceRoot), sessionsDirName)
+	return filepath.Join(baseDir, projectsDirName, HashWorkspaceRoot(workspaceRoot), sessionsDirName)
 }
 
-// hashWorkspaceRoot 负责为规范化后的工作区根目录生成稳定哈希。
-func hashWorkspaceRoot(workspaceRoot string) string {
-	key := workspacePathKey(workspaceRoot)
+// HashWorkspaceRoot 为规范化后的工作区根目录生成稳定哈希，供 session 和 memo 等包共享。
+func HashWorkspaceRoot(workspaceRoot string) string {
+	key := WorkspacePathKey(workspaceRoot)
 	if key == "" {
 		key = "unknown"
 	}
@@ -27,9 +27,9 @@ func hashWorkspaceRoot(workspaceRoot string) string {
 	return hex.EncodeToString(sum[:8])
 }
 
-// workspacePathKey 负责生成工作区路径的稳定比较键，并在 Windows 下兼容大小写不敏感路径。
-func workspacePathKey(workspaceRoot string) string {
-	normalized := normalizeWorkspaceRoot(workspaceRoot)
+// WorkspacePathKey 生成工作区路径的稳定比较键，Windows 下兼容大小写不敏感。
+func WorkspacePathKey(workspaceRoot string) string {
+	normalized := NormalizeWorkspaceRoot(workspaceRoot)
 	if normalized == "" {
 		return ""
 	}
@@ -39,8 +39,8 @@ func workspacePathKey(workspaceRoot string) string {
 	return normalized
 }
 
-// normalizeWorkspaceRoot 负责将工作区根目录规范化为绝对清洗路径。
-func normalizeWorkspaceRoot(workspaceRoot string) string {
+// NormalizeWorkspaceRoot 将工作区根目录规范化为绝对清洗路径。
+func NormalizeWorkspaceRoot(workspaceRoot string) string {
 	trimmed := strings.TrimSpace(workspaceRoot)
 	if trimmed == "" {
 		return ""

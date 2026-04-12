@@ -223,10 +223,10 @@ func TestRenderProjectRulesSectionTruncatesSingleFileAndTotalBudget(t *testing.T
 	if strings.Contains(totalSection, strings.Repeat("c", 6500)) {
 		t.Fatalf("expected total rules section to be truncated")
 	}
-	if runeCount(totalPromptSection.content) > projectRuleTotalRuneLimit {
+	if runeCount(totalPromptSection.Content) > projectRuleTotalRuneLimit {
 		t.Fatalf(
 			"expected rendered rules body to respect total rune budget, got %d > %d",
-			runeCount(totalPromptSection.content),
+			runeCount(totalPromptSection.Content),
 			projectRuleTotalRuneLimit,
 		)
 	}

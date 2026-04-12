@@ -12,6 +12,9 @@ type promptSectionSource interface {
 	Sections(ctx context.Context, input BuildInput) ([]promptSection, error)
 }
 
+// SectionSource 是 promptSectionSource 的导出版本，允许外部包实现并注入额外的 prompt section。
+type SectionSource = promptSectionSource
+
 // corePromptSource 只负责提供固定核心 system prompt sections。
 type corePromptSource struct{}
 

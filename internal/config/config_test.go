@@ -1361,3 +1361,71 @@ func TestAutoCompactConfigContextConfigValidate(t *testing.T) {
 		t.Fatalf("expected error to contain 'auto_compact', got %v", err)
 	}
 }
+
+func TestMemoConfigClone(t *testing.T) {
+	t.Parallel()
+
+	original := MemoConfig{
+		Enabled:       true,
+		AutoExtract:   false,
+		MaxIndexLines: 100,
+	}
+	cloned := original.Clone()
+	if cloned != original {
+		t.Fatalf("Clone() = %+v, want %+v", cloned, original)
+	}
+	cloned.MaxIndexLines = 200
+	if original.MaxIndexLines != 100 {
+		t.Error("modifying clone should not affect original (value type check)")
+	}
+}
+
+func TestMemoConfigApplyDefaults(t *testing.T) {
+	t.Parallel()
+
+	t.Run("fills zero MaxIndexLines", func(t *testing.T) {
+		cfg := MemoConfig{Enabled: true, MaxIndexLines: 0}
+		cfg.ApplyDefaults(MemoConfig{MaxIndexLines: DefaultMemoMaxIndexLines})
+		if cfg.MaxIndexLines != DefaultMemoMaxIndexLines {
+			t.Errorf("MaxIndexLines = %d, want %d", cfg.MaxIndexLines, DefaultMemoMaxIndexLines)
+		}
+	})
+
+	t.Run("preserves explicit MaxIndexLines", func(t *testing.T) {
+		cfg := MemoConfig{MaxIndexLines: 50}
+		cfg.ApplyDefaults(MemoConfig{MaxIndexLines: DefaultMemoMaxIndexLines})
+		if cfg.MaxIndexLines != 50 {
+			t.Errorf("MaxIndexLines = %d, want 50", cfg.MaxIndexLines)
+		}
+	})
+
+	t.Run("nil receiver is no-op", func(t *testing.T) {
+		var cfg *MemoConfig
+		cfg.ApplyDefaults(MemoConfig{MaxIndexLines: 200})
+	})
+}
+
+func TestMemoConfigValidate(t *testing.T) {
+	t.Parallel()
+
+	t.Run("valid config", func(t *testing.T) {
+		cfg := MemoConfig{MaxIndexLines: 100}
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("valid config should not error: %v", err)
+		}
+	})
+
+	t.Run("negative MaxIndexLines", func(t *testing.T) {
+		cfg := MemoConfig{MaxIndexLines: -1}
+		if err := cfg.Validate(); err == nil {
+			t.Fatal("negative MaxIndexLines should fail validation")
+		}
+	})
+
+	t.Run("zero MaxIndexLines is valid", func(t *testing.T) {
+		cfg := MemoConfig{MaxIndexLines: 0}
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("zero MaxIndexLines should be valid: %v", err)
+		}
+	})
+}

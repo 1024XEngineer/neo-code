@@ -6,6 +6,7 @@ import (
 
 	"neo-code/internal/config"
 	configstate "neo-code/internal/config/state"
+	"neo-code/internal/memo"
 	providertypes "neo-code/internal/provider/types"
 	agentruntime "neo-code/internal/runtime"
 )
@@ -25,6 +26,7 @@ type Options struct {
 	ConfigManager   *config.Manager
 	Runtime         agentruntime.Runtime
 	ProviderService ProviderService
+	MemoSvc         *memo.Service
 	Mode            Mode
 	Factory         ServiceFactory
 }
@@ -35,6 +37,7 @@ type Container struct {
 	ConfigManager   *config.Manager
 	Runtime         agentruntime.Runtime
 	ProviderService ProviderService
+	MemoSvc         *memo.Service
 	Mode            Mode
 }
 
@@ -79,6 +82,7 @@ func Build(options Options) (Container, error) {
 		ConfigManager:   options.ConfigManager,
 		Runtime:         runtimeSvc,
 		ProviderService: providerSvc,
+		MemoSvc:         options.MemoSvc,
 		Mode:            mode,
 	}, nil
 }

@@ -10,6 +10,7 @@ import (
 	"neo-code/internal/config"
 	configstate "neo-code/internal/config/state"
 	agentcontext "neo-code/internal/context"
+	"neo-code/internal/memo"
 	"neo-code/internal/provider/builtin"
 	providercatalog "neo-code/internal/provider/catalog"
 	agentruntime "neo-code/internal/runtime"
@@ -40,6 +41,7 @@ type RuntimeBundle struct {
 	ConfigManager     *config.Manager
 	Runtime           agentruntime.Runtime
 	ProviderSelection *configstate.Service
+	MemoService       *memo.Service
 }
 
 // EnsureConsoleUTF8 负责在 Windows 控制台中尽量启用 UTF-8 编码。
@@ -87,12 +89,26 @@ func BuildRuntime(ctx context.Context, opts BootstrapOptions) (RuntimeBundle, er
 	// Session Store 绑定到启动时的 workdir 哈希分桶，整个应用生命周期内不可变。
 	// 这意味着所有会话都归属到启动时指定的项目目录下，运行时不会因配置变更而迁移存储位置。
 	sessionStore := agentsession.NewStore(loader.BaseDir(), cfg.Workdir)
+
+	var contextBuilder agentcontext.Builder = agentcontext.NewBuilderWithToolPolicies(toolRegistry)
+	var memoSvc *memo.Service
+	if cfg.Memo.Enabled {
+		memoStore := memo.NewFileStore(loader.BaseDir(), cfg.Workdir)
+		memoSource := memo.NewContextSource(memoStore)
+		var sourceInvl func()
+		if invalidator, ok := memoSource.(interface{ InvalidateCache() }); ok {
+			sourceInvl = invalidator.InvalidateCache
+		}
+		contextBuilder = agentcontext.NewBuilderWithMemo(toolRegistry, memoSource)
+		memoSvc = memo.NewService(memoStore, nil, cfg.Memo, sourceInvl)
+	}
+
 	runtimeSvc := agentruntime.NewWithFactory(
 		manager,
 		toolManager,
 		sessionStore,
 		providerRegistry,
-		agentcontext.NewBuilderWithToolPolicies(toolRegistry),
+		contextBuilder,
 	)
 
 	return RuntimeBundle{
@@ -100,6 +116,7 @@ func BuildRuntime(ctx context.Context, opts BootstrapOptions) (RuntimeBundle, er
 		ConfigManager:     manager,
 		Runtime:           runtimeSvc,
 		ProviderSelection: providerSelection,
+		MemoService:       memoSvc,
 	}, nil
 }
 
@@ -110,7 +127,7 @@ func NewProgram(ctx context.Context, opts BootstrapOptions) (*tea.Program, error
 		return nil, err
 	}
 
-	tuiApp, err := tui.New(&bundle.Config, bundle.ConfigManager, bundle.Runtime, bundle.ProviderSelection)
+	tuiApp, err := tui.NewWithMemo(&bundle.Config, bundle.ConfigManager, bundle.Runtime, bundle.ProviderSelection, bundle.MemoService)
 	if err != nil {
 		return nil, err
 	}

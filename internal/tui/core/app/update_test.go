@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -10,6 +11,7 @@ import (
 
 	"neo-code/internal/config"
 	configstate "neo-code/internal/config/state"
+	"neo-code/internal/memo"
 	providertypes "neo-code/internal/provider/types"
 	agentruntime "neo-code/internal/runtime"
 	agentsession "neo-code/internal/session"
@@ -1326,4 +1328,245 @@ func TestStartDraftSessionResetsRunState(t *testing.T) {
 	if len(app.activities) != 0 {
 		t.Fatalf("expected activities to be cleared")
 	}
+}
+func TestSetCurrentWorkdir(t *testing.T) {
+	app, _ := newTestApp(t)
+
+	t.Run("accepts absolute path", func(t *testing.T) {
+		dir := t.TempDir()
+		app.setCurrentWorkdir(dir)
+		if app.state.CurrentWorkdir != filepath.Clean(dir) {
+			t.Fatalf("expected %q, got %q", filepath.Clean(dir), app.state.CurrentWorkdir)
+		}
+	})
+
+	t.Run("ignores empty", func(t *testing.T) {
+		app.state.CurrentWorkdir = "/original"
+		app.setCurrentWorkdir("")
+		if app.state.CurrentWorkdir != "/original" {
+			t.Fatalf("expected no change, got %q", app.state.CurrentWorkdir)
+		}
+	})
+
+	t.Run("ignores whitespace", func(t *testing.T) {
+		app.state.CurrentWorkdir = "/original"
+		app.setCurrentWorkdir("   ")
+		if app.state.CurrentWorkdir != "/original" {
+			t.Fatalf("expected no change, got %q", app.state.CurrentWorkdir)
+		}
+	})
+
+	t.Run("ignores relative path", func(t *testing.T) {
+		app.state.CurrentWorkdir = "/original"
+		app.setCurrentWorkdir("relative/path")
+		if app.state.CurrentWorkdir != "/original" {
+			t.Fatalf("expected no change, got %q", app.state.CurrentWorkdir)
+		}
+	})
+}
+
+// newTestAppWithMemo 创建一个注入了 memo 服务的测试 App。
+func newTestAppWithMemo(t *testing.T) (App, *stubRuntime) {
+	t.Helper()
+
+	cfg := newDefaultAppConfig()
+	cfg.Workdir = t.TempDir()
+	cfg.Memo.Enabled = true
+	if len(cfg.Providers) > 0 {
+		cfg.SelectedProvider = cfg.Providers[0].Name
+		cfg.CurrentModel = cfg.Providers[0].Model
+	}
+
+	manager := config.NewManager(config.NewLoader(cfg.Workdir, cfg))
+	if _, err := manager.Load(context.Background()); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	var providers []configstate.ProviderOption
+	var models []providertypes.ModelDescriptor
+	if len(cfg.Providers) > 0 {
+		provider := cfg.Providers[0]
+		providers = []configstate.ProviderOption{
+			{ID: provider.Name, Name: provider.Name, Models: []providertypes.ModelDescriptor{{ID: provider.Model, Name: provider.Model}}},
+		}
+		models = []providertypes.ModelDescriptor{{ID: provider.Model, Name: provider.Model}}
+	}
+
+	// 创建真实的 memo 服务
+	memoStore := memo.NewFileStore(t.TempDir(), cfg.Workdir)
+	memoSvc := memo.NewService(memoStore, nil, cfg.Memo, nil)
+
+	runtime := newStubRuntime()
+	app, err := newApp(tuibootstrap.Container{
+		Config:          *cfg,
+		ConfigManager:   manager,
+		Runtime:         runtime,
+		ProviderService: stubProviderService{providers: providers, models: models},
+		MemoSvc:         memoSvc,
+	})
+	if err != nil {
+		t.Fatalf("newApp() error = %v", err)
+	}
+	return app, runtime
+}
+
+func TestHandleMemoCommand(t *testing.T) {
+	t.Parallel()
+
+	t.Run("shows no memos message when empty", func(t *testing.T) {
+		app, _ := newTestAppWithMemo(t)
+		cmd := app.handleMemoCommand()
+		if cmd != nil {
+			t.Error("expected nil cmd")
+		}
+		msgs := app.activeMessages
+		if len(msgs) == 0 {
+			t.Fatal("expected at least one inline message")
+		}
+		last := msgs[len(msgs)-1]
+		if !strings.Contains(last.Content, "No memos stored yet") {
+			t.Errorf("expected 'no memos' message, got: %s", last.Content)
+		}
+	})
+
+	t.Run("lists entries when memos exist", func(t *testing.T) {
+		app, _ := newTestAppWithMemo(t)
+		app.memoSvc.Add(context.Background(), memo.Entry{Type: memo.TypeUser, Title: "test entry", Content: "test", Source: memo.SourceUserManual})
+
+		app.handleMemoCommand()
+		msgs := app.activeMessages
+		last := msgs[len(msgs)-1]
+		if !strings.Contains(last.Content, "1 memo(s)") {
+			t.Errorf("expected memo count, got: %s", last.Content)
+		}
+		if !strings.Contains(last.Content, "test entry") {
+			t.Errorf("expected entry title, got: %s", last.Content)
+		}
+	})
+
+	t.Run("nil memoSvc shows error", func(t *testing.T) {
+		app, _ := newTestApp(t)
+		cmd := app.handleMemoCommand()
+		if cmd != nil {
+			t.Error("expected nil cmd")
+		}
+		msgs := app.activeMessages
+		if len(msgs) == 0 {
+			t.Fatal("expected at least one inline message")
+		}
+		last := msgs[len(msgs)-1]
+		if !strings.Contains(last.Content, "not enabled") {
+			t.Errorf("expected 'not enabled' message, got: %s", last.Content)
+		}
+	})
+}
+
+func TestHandleRememberCommand(t *testing.T) {
+	t.Parallel()
+
+	t.Run("saves memo and shows confirmation", func(t *testing.T) {
+		app, _ := newTestAppWithMemo(t)
+		cmd := app.handleRememberCommand("my preference")
+		if cmd != nil {
+			t.Error("expected nil cmd")
+		}
+		msgs := app.activeMessages
+		last := msgs[len(msgs)-1]
+		if !strings.Contains(last.Content, "Memo saved") {
+			t.Errorf("expected saved confirmation, got: %s", last.Content)
+		}
+		// Verify the entry was actually saved
+		entries, _ := app.memoSvc.List(context.Background())
+		if len(entries) != 1 {
+			t.Fatalf("expected 1 entry, got %d", len(entries))
+		}
+		if entries[0].Title != "my preference" {
+			t.Errorf("Title = %q, want %q", entries[0].Title, "my preference")
+		}
+	})
+
+	t.Run("empty text shows usage", func(t *testing.T) {
+		app, _ := newTestAppWithMemo(t)
+		app.handleRememberCommand("")
+		msgs := app.activeMessages
+		last := msgs[len(msgs)-1]
+		if !strings.Contains(last.Content, "Usage") {
+			t.Errorf("expected usage message, got: %s", last.Content)
+		}
+	})
+
+	t.Run("whitespace only text shows usage", func(t *testing.T) {
+		app, _ := newTestAppWithMemo(t)
+		app.handleRememberCommand("   ")
+		msgs := app.activeMessages
+		last := msgs[len(msgs)-1]
+		if !strings.Contains(last.Content, "Usage") {
+			t.Errorf("expected usage message, got: %s", last.Content)
+		}
+	})
+
+	t.Run("nil memoSvc shows error", func(t *testing.T) {
+		app, _ := newTestApp(t)
+		app.handleRememberCommand("something")
+		msgs := app.activeMessages
+		last := msgs[len(msgs)-1]
+		if !strings.Contains(last.Content, "not enabled") {
+			t.Errorf("expected 'not enabled' message, got: %s", last.Content)
+		}
+	})
+}
+
+func TestHandleForgetCommand(t *testing.T) {
+	t.Parallel()
+
+	t.Run("removes matching memos", func(t *testing.T) {
+		app, _ := newTestAppWithMemo(t)
+		app.memoSvc.Add(context.Background(), memo.Entry{Type: memo.TypeUser, Title: "remove me", Content: "test", Source: memo.SourceUserManual})
+		app.memoSvc.Add(context.Background(), memo.Entry{Type: memo.TypeFeedback, Title: "keep this", Content: "test2", Source: memo.SourceUserManual})
+
+		app.handleForgetCommand("remove")
+		msgs := app.activeMessages
+		last := msgs[len(msgs)-1]
+		if !strings.Contains(last.Content, "Removed 1 memo") {
+			t.Errorf("expected removal confirmation, got: %s", last.Content)
+		}
+		// Verify only one was removed
+		entries, _ := app.memoSvc.List(context.Background())
+		if len(entries) != 1 {
+			t.Fatalf("expected 1 remaining entry, got %d", len(entries))
+		}
+		if entries[0].Title != "keep this" {
+			t.Errorf("remaining entry Title = %q, want %q", entries[0].Title, "keep this")
+		}
+	})
+
+	t.Run("no match shows message", func(t *testing.T) {
+		app, _ := newTestAppWithMemo(t)
+		app.handleForgetCommand("nonexistent")
+		msgs := app.activeMessages
+		last := msgs[len(msgs)-1]
+		if !strings.Contains(last.Content, "No memos matching") {
+			t.Errorf("expected no match message, got: %s", last.Content)
+		}
+	})
+
+	t.Run("empty keyword shows usage", func(t *testing.T) {
+		app, _ := newTestAppWithMemo(t)
+		app.handleForgetCommand("")
+		msgs := app.activeMessages
+		last := msgs[len(msgs)-1]
+		if !strings.Contains(last.Content, "Usage") {
+			t.Errorf("expected usage message, got: %s", last.Content)
+		}
+	})
+
+	t.Run("nil memoSvc shows error", func(t *testing.T) {
+		app, _ := newTestApp(t)
+		app.handleForgetCommand("something")
+		msgs := app.activeMessages
+		last := msgs[len(msgs)-1]
+		if !strings.Contains(last.Content, "not enabled") {
+			t.Errorf("expected 'not enabled' message, got: %s", last.Content)
+		}
+	})
 }
