@@ -2,211 +2,140 @@
 
 > 基于 Go + Bubble Tea 的本地 Coding Agent
 
-NeoCode 是一个在终端中运行的 AI 编码助手，采用 ReAct（Reason-Act-Observe）循环模式，能够自主推理、调用工具并完成任务。
+## NeoCode 是什么
 
-## 核心特性
+NeoCode 是一个在终端中运行的 AI 编码助手，采用 ReAct（Reason-Act-Observe）循环模式，围绕以下主链路工作：
 
-- **流式输出** — 实时展示模型思考过程
-- **工具系统** — 文件操作、代码执行、搜索等内置工具
-- **内建 Provider 支持** — OpenAI、Gemini、OpenLL、Qiniu，模型列表支持动态发现与缓存
-- **终端原生体验** — 基于 Bubble Tea 的现代化 TUI
+`用户输入 -> Agent 推理 -> 调用工具 -> 获取结果 -> 继续推理 -> UI 展示`
 
-## 一键安装
+它适合希望在本地工作流中完成代码理解、修改、调试与自动化操作的开发者。
 
-NeoCode 提供了跨平台的一键安装脚本。无论你是哪种操作系统，只需在终端执行以下命令，脚本将自动探测系统架构、拉取最新 Release 产物并配置好环境变量：
+## 有什么能力
 
-### 🍎 macOS / Linux
-打开终端（Terminal）并运行：
+- 终端原生 TUI 交互体验（Bubble Tea）
+- Agent 可调用内置工具完成文件与命令相关任务
+- 支持 Provider/Model 切换（内建 `openai`、`gemini`、`openll`、`qiniu`）
+- 支持上下文压缩（`/compact`），帮助长会话保持可用
+- 支持工作区隔离（`--workdir`、`/cwd`）
+- 会话持久化与恢复，降低重复沟通成本
+
+## 怎么用（快速开始）
+
+### 1) 环境要求
+
+- Go `1.25+`
+- 可用的 API Key（如 OpenAI、Gemini、OpenLL、Qiniu）
+
+### 2) 一键安装
+
+macOS / Linux：
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/1024XEngineer/neo-code/main/scripts/install.sh | bash
 ```
 
-### Windows
+Windows PowerShell：
 
-打开 PowerShell 并运行：
-
-
-
-```PowerShell
+```powershell
 irm https://raw.githubusercontent.com/1024XEngineer/neo-code/main/scripts/install.ps1 | iex
 ```
 
-
-
-## 快速开始
-
-### 环境要求
-
-- Go 1.21+
-- API Key（OpenAI 或 Google Gemini）
-
-### 安装与运行
+### 3) 从源码运行
 
 ```bash
-# 克隆仓库
 git clone https://github.com/1024XEngineer/neo-code.git
-cd neocode
-
-# 设置 API Key
-export OPENAI_API_KEY=your_key_here
-
-# 运行
+cd neo-code
 go run ./cmd/neocode
 ```
 
-### 基本使用
-
-在 TUI 中输入自然语言指令，例如：
-
-```
-帮我看看当前项目的目录结构
-创建一个 HTTP 服务器，监听 8080 端口
-分析 runtime.go 的主要逻辑
-```
-
-使用 slash 命令快速切换配置：
-
-- `/provider` — 切换内建模型提供商
-- `/model` — 切换模型
-
-## 架构概览
-
-```
-┌─────────────────────────────────────────┐
-│              TUI (Bubble Tea)           │
-└────────────────┬────────────────────────┘
-                 │ Events
-┌────────────────▼────────────────────────┐
-│          Runtime (ReAct Loop)           │
-└────────┬───────────────────┬────────────┘
-         │                   │
-    ┌────▼─────┐        ┌────▼──────┐
-    │ Provider │        │   Tools   │
-    │  (LLM)   │        │ Registry  │
-    └──────────┘        └───────────┘
-```
-
-核心模块职责：
-
-- **`internal/config`** — 配置管理、环境变量、YAML 加载
-- **`internal/context`** — system prompt、消息裁剪与上下文构建
-- **`internal/provider`** — Provider 契约、驱动注册与通用领域类型
-- **`internal/provider/openaicompat`** — OpenAI-compatible 协议入口、discovery 与 `api_style` 分流
-- **`internal/provider/openaicompat/chatcompletions`** — `/chat/completions` 请求组装、SSE 解析与 tool-call 增量处理
-- **`internal/provider/catalog`** — 模型发现、catalog 缓存与后台刷新
-- **`internal/provider/builtin`** — 内建 driver 注册
-- **`internal/runtime`** — ReAct 主循环与事件流编排（不直接承载会话存储实现；不再导出会话模型与存储类型）
-- **`internal/session`** — 会话模型、会话存储抽象与 JSON 持久化实现（统一对外暴露 `Session` / `Summary` / `Store`）
-- **`internal/tools`** — 工具注册表与具体工具实现
-- **`internal/tui`** — 终端 UI、交互体验、事件桥接
-- **`internal/app`** — 应用装配与依赖注入
-
-## 目录结构
-
-```text
-.
-├── cmd/neocode          # CLI 入口
-├── docs                 # 架构与设计文档
-│   ├── guides           # 使用指南
-│   └── *.md             # 设计文档
-├── internal
-│   ├── app              # 应用装配
-│   ├── config           # 配置管理
-│   ├── context          # 上下文构建
-│   ├── provider         # Provider 契约与驱动注册
-│   │   ├── builtin      # 内建 driver 注册
-│   │   ├── catalog      # 模型发现与缓存
-│   │   └── openaicompat # OpenAI-compatible 协议入口与子协议实现
-│   ├── runtime          # ReAct 循环与事件流
-│   ├── session          # 会话模型与持久化
-│   ├── tools            # 工具系统
-│   └── tui              # 终端 UI
-└── README.md
-```
-
-## 文档
-
-- **[配置指南](docs/guides/configuration.md)** — Provider 策略、配置文件、环境变量
-- **[扩展 Provider](docs/guides/adding-providers.md)** — 如何添加新的模型提供商
-- **[架构设计](docs/neocode-coding-agent-mvp-architecture.md)** — 整体架构与设计理念
-- **[事件流](docs/runtime-provider-event-flow.md)** — Runtime 与 Provider 的事件交互
-- **[Session 持久化](docs/session-persistence-design.md)** — 会话 JSON 存储、token 累计与工作区隔离
-
-## 开发
+设置 API Key 示例（按你使用的 provider 选择）：
 
 ```bash
-# 格式化代码
-gofmt -w ./cmd ./internal
-
-# 运行测试
-go test ./...
-
-# 编译
-go build ./...
+export OPENAI_API_KEY="your_key_here"
+export GEMINI_API_KEY="your_key_here"
+export AI_API_KEY="your_key_here"
+export QINIU_API_KEY="your_key_here"
 ```
 
-## 当前状态
+Windows PowerShell：
 
-NeoCode 正处于 MVP 阶段，核心闭环已可用：
+```powershell
+$env:OPENAI_API_KEY = "your_key_here"
+$env:GEMINI_API_KEY = "your_key_here"
+$env:AI_API_KEY = "your_key_here"
+$env:QINIU_API_KEY = "your_key_here"
+```
 
-✅ 用户输入 → Agent 推理 → 工具调用 → 结果返回 → UI 展示
-
-正在持续迭代中，重点关注：
-
-- 📚 文档完善
-- 🧪 测试覆盖率
-- 🛠️ 工具能力扩展
-- 🔧 稳定性与性能
-
-
-
-## 自动化发版指南
-
-NeoCode 已经集成了 GoReleaser 与 GitHub Actions 的全自动化 CI/CD 流水线。
-
-**作为项目维护者，发布新版本时绝对不需要在本地手动编译或打包二进制文件。** 只需要通过 Git 打一个语义化版本标签（Tag）即可触发全自动构建：
-
-1. **确保主分支代码已就绪**：所有新特性和 Bug 修复均已合并至 `main` 分支。
-
-2. **在本地打上版本标签**（版本号必须以 `v` 开头，如 `v0.1.0`）：
-
-   ```Bash
-   git tag v0.1.0
-   ```
-
-3. **将标签推送到远程仓库**：
-
-   ```Bash
-   git push origin v0.1.0
-   ```
-
-**发布流水线说明：** 推送到远程后，GitHub Actions 会自动接管，整个过程通常耗时 1~2 分钟：
-
-- 自动读取 `.goreleaser.yaml` 配置。
-- 执行跨平台（Windows/macOS/Linux）与多架构（amd64/arm64）的静态交叉编译。
-- 自动将编译产物打包压缩（`.tar.gz` 和 `.zip`），并计算 SHA256 校验和。
-- 自动在项目的 Releases 页面创建一个全新的发版记录，并将所有压缩包作为资产（Assets）挂载上去。
-
-## License
-
-MIT
-
-## Manual Compact
-
-NeoCode 支持通过 `/compact` 手动压缩当前会话上下文。配置项见 `docs/guides/configuration.md`，流程和摘要约定见 `docs/context-compact.md`。
-
-## CLI Workdir
-
-NeoCode 现在支持通过 CLI 启动参数覆盖本次运行工作区：
+按工作区启动（仅当前进程生效）：
 
 ```bash
 go run ./cmd/neocode --workdir /path/to/workspace
 ```
 
-说明：
+### 4) 首次使用与常用命令
 
-- `--workdir` 只影响当前进程，不会写回 `config.yaml`
-- 当前工作区会同时用于工具执行根目录与 session 存储分桶
-- session 历史现在按工作区隔离存储，不同工作区默认互不可见
+- `/help`：查看命令帮助
+- `/provider`：打开 provider 选择器
+- `/model`：打开 model 选择器
+- `/compact`：压缩当前会话上下文
+- `/status`：查看当前会话与运行状态
+- `/cwd [path]`：查看或设置当前会话工作区
+- `/memo`：查看记忆索引
+- `/remember <text>`：保存记忆
+- `/forget <keyword>`：按关键词删除记忆
+- `& <command>`：在当前工作区执行本地命令
 
-[![Contributors](https://hub-io-mcells-projects.vercel.app/r/1024XEngineer/neo-code)](https://github.com/1024XEngineer/neo-code/graphs/contributors)
+示例输入：
+
+```text
+请先阅读当前项目目录结构并给出模块职责摘要
+帮我在 internal/runtime 下定位与 tool result 回灌相关逻辑
+```
+
+## 配置入口
+
+- 主配置文件：`~/.neocode/config.yaml`
+- 自定义 Provider：`~/.neocode/providers/<provider-name>/provider.yaml`
+
+配置原则（用户侧重点）：
+
+- API Key 通过环境变量注入，不写入 `config.yaml`
+- `--workdir` 只影响当前运行，不会回写到配置文件
+
+详细配置请参考：[docs/guides/configuration.md](docs/guides/configuration.md)
+
+## 文档导航
+
+- [配置指南](docs/guides/configuration.md)
+- [扩展 Provider](docs/guides/adding-providers.md)
+- [Runtime/Provider 事件流](docs/runtime-provider-event-flow.md)
+- [Session 持久化设计](docs/session-persistence-design.md)
+- [Context Compact 说明](docs/context-compact.md)
+- [Tools 与 TUI 集成](docs/tools-and-tui-integration.md)
+- [MCP 配置指南](docs/guides/mcp-configuration.md)
+
+## 如何参与
+
+欢迎通过 Issue 和 PR 参与共建。
+
+1. 在 [Issues](https://github.com/1024XEngineer/neo-code/issues) 先沟通问题或需求。
+2. Fork 仓库并创建功能分支。
+3. 完成开发并确保改动聚焦、边界清晰。
+4. 本地自检：
+
+   ```bash
+   gofmt -w ./cmd ./internal
+   go test ./...
+   go build ./...
+   ```
+
+5. 提交 PR 到主仓库并说明变更目的、影响范围和验证方式。
+
+提交前请确认：
+
+- 不提交明文密钥、个人配置或会话数据
+- 不提交无关改动与临时文件
+
+## License
+
+MIT
