@@ -3,7 +3,6 @@ package runtime
 import (
 	"context"
 	"errors"
-	"sync"
 	"testing"
 	"time"
 
@@ -24,7 +23,7 @@ func TestCompactValidationAndLoadErrorBranches(t *testing.T) {
 		configManager: newRuntimeConfigManager(t),
 		sessionStore:  newMemoryStore(),
 		events:        make(chan RuntimeEvent, 16),
-		sessionLocks:  make(map[string]*sync.Mutex),
+		sessionLocks:  make(map[string]*sessionLockEntry),
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -174,7 +173,7 @@ func TestRuntimeLoadOrCreateAndEmitBranches(t *testing.T) {
 	t.Parallel()
 
 	manager := newRuntimeConfigManager(t)
-	service := &Service{configManager: manager, sessionStore: newMemoryStore(), events: make(chan RuntimeEvent, 1), sessionLocks: map[string]*sync.Mutex{}}
+	service := &Service{configManager: manager, sessionStore: newMemoryStore(), events: make(chan RuntimeEvent, 1), sessionLocks: map[string]*sessionLockEntry{}}
 
 	if _, err := service.loadOrCreateSession(context.Background(), "", "title", t.TempDir(), "missing/subdir"); err == nil {
 		t.Fatalf("expected new session workdir resolve error")
@@ -234,11 +233,11 @@ func TestRuntimeLoadOrCreateAndEmitBranches(t *testing.T) {
 	}
 
 	service.finishRun(token2)
-	if !service.CancelActiveRun() {
-		t.Fatalf("expected previous active run to become cancel target")
+	if service.CancelActiveRun() {
+		t.Fatalf("expected no active run after latest run finished")
 	}
-	if len(canceled) != 2 || canceled[1] != "run-1" {
-		t.Fatalf("expected second cancel to target run-1, got %v", canceled)
+	if len(canceled) != 1 || canceled[0] != "run-2" {
+		t.Fatalf("expected only run-2 canceled, got %v", canceled)
 	}
 
 	service.finishRun(token1)
@@ -273,6 +272,32 @@ func TestPermissionHelperAndAwaitBranches(t *testing.T) {
 	_, _, err = service.awaitPermissionDecision(ctx, permissionExecutionInput{RunID: "r", SessionID: "s", Call: providertypes.ToolCall{ID: "c", Name: "filesystem_read_file"}}, permissionErr)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected canceled while waiting permission, got %v", err)
+	}
+}
+
+func TestAcquireSessionLockReleasesAndCleansUp(t *testing.T) {
+	t.Parallel()
+
+	service := &Service{}
+	lock1, release1 := service.acquireSessionLock("session-1")
+	lock2, release2 := service.acquireSessionLock("session-1")
+	if lock1 != lock2 {
+		t.Fatalf("expected same mutex instance for same session")
+	}
+	if got := service.sessionLocks["session-1"].refs; got != 2 {
+		t.Fatalf("expected refs=2, got %d", got)
+	}
+
+	lock1.Lock()
+	lock1.Unlock()
+	release1()
+	if got := service.sessionLocks["session-1"].refs; got != 1 {
+		t.Fatalf("expected refs=1 after first release, got %d", got)
+	}
+
+	release2()
+	if len(service.sessionLocks) != 0 {
+		t.Fatalf("expected session lock entry to be cleaned up")
 	}
 }
 

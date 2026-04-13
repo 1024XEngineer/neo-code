@@ -41,9 +41,12 @@ func (s *Service) Run(ctx context.Context, input UserInput) error {
 	}()
 
 	if sessionID != "" {
-		sessionMu := s.acquireSessionLock(sessionID)
+		sessionMu, releaseLockRef := s.acquireSessionLock(sessionID)
 		sessionMu.Lock()
-		releaseSessionLock = sessionMu.Unlock
+		releaseSessionLock = func() {
+			sessionMu.Unlock()
+			releaseLockRef()
+		}
 	}
 
 	session, err := s.loadOrCreateSession(ctx, input.SessionID, input.Content, initialCfg.Workdir, input.Workdir)
@@ -52,9 +55,12 @@ func (s *Service) Run(ctx context.Context, input UserInput) error {
 	}
 
 	if sessionID == "" {
-		sessionMu := s.acquireSessionLock(session.ID)
+		sessionMu, releaseLockRef := s.acquireSessionLock(session.ID)
 		sessionMu.Lock()
-		releaseSessionLock = sessionMu.Unlock
+		releaseSessionLock = func() {
+			sessionMu.Unlock()
+			releaseLockRef()
+		}
 	}
 
 	state := newRunState(input.RunID, session)

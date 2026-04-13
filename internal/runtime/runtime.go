@@ -68,11 +68,17 @@ type Service struct {
 
 	events           chan RuntimeEvent
 	sessionMu        sync.Mutex
-	sessionLocks     map[string]*sync.Mutex
+	sessionLocks     map[string]*sessionLockEntry
 	runMu            sync.Mutex
 	activeRunToken   uint64
 	nextRunToken     uint64
 	activeRunCancels map[uint64]context.CancelFunc
+}
+
+// sessionLockEntry 维护单个会话锁及其当前引用计数，用于在无引用时回收 map 项。
+type sessionLockEntry struct {
+	mu   sync.Mutex
+	refs int
 }
 
 // NewWithFactory 使用注入依赖构建默认 runtime Service。
@@ -101,7 +107,7 @@ func NewWithFactory(
 		contextBuilder:   contextBuilder,
 		approvalBroker:   approval.NewBroker(),
 		events:           make(chan RuntimeEvent, 128),
-		sessionLocks:     make(map[string]*sync.Mutex),
+		sessionLocks:     make(map[string]*sessionLockEntry),
 		activeRunCancels: make(map[uint64]context.CancelFunc),
 	}
 }
@@ -216,6 +222,9 @@ func (s *Service) emit(ctx context.Context, kind EventType, runID string, sessio
 func (s *Service) startRun(cancel context.CancelFunc) uint64 {
 	s.runMu.Lock()
 	defer s.runMu.Unlock()
+	if s.activeRunCancels == nil {
+		s.activeRunCancels = make(map[uint64]context.CancelFunc)
+	}
 
 	s.nextRunToken++
 	token := s.nextRunToken
@@ -242,18 +251,41 @@ func (s *Service) finishRun(token uint64) {
 	}
 }
 
-// acquireSessionLock 获取指定会话的互斥锁，确保同一会话的 Run/Compact 串行执行。
-// 不同会话的锁互不干扰，支持多会话并行。
-func (s *Service) acquireSessionLock(sessionID string) *sync.Mutex {
+// acquireSessionLock 获取指定会话锁并返回释放引用的函数。
+// 调用方在完成会话级串行操作后，必须调用 release 以允许锁条目回收。
+func (s *Service) acquireSessionLock(sessionID string) (*sync.Mutex, func()) {
 	s.sessionMu.Lock()
-	defer s.sessionMu.Unlock()
-
-	mu, ok := s.sessionLocks[sessionID]
-	if !ok {
-		mu = &sync.Mutex{}
-		s.sessionLocks[sessionID] = mu
+	if s.sessionLocks == nil {
+		s.sessionLocks = make(map[string]*sessionLockEntry)
 	}
-	return mu
+
+	entry, ok := s.sessionLocks[sessionID]
+	if !ok {
+		entry = &sessionLockEntry{}
+		s.sessionLocks[sessionID] = entry
+	}
+	entry.refs++
+	s.sessionMu.Unlock()
+
+	released := false
+	release := func() {
+		s.sessionMu.Lock()
+		defer s.sessionMu.Unlock()
+		if released {
+			return
+		}
+		released = true
+
+		current, exists := s.sessionLocks[sessionID]
+		if !exists || current != entry {
+			return
+		}
+		current.refs--
+		if current.refs <= 0 {
+			delete(s.sessionLocks, sessionID)
+		}
+	}
+	return &entry.mu, release
 }
 
 func resolveWorkdirForSession(defaultWorkdir string, currentWorkdir string, requestedWorkdir string) (string, error) {

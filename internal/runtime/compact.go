@@ -66,9 +66,12 @@ func (s *Service) Compact(ctx context.Context, input CompactInput) (CompactResul
 		return CompactResult{}, errors.New("runtime: compact session_id is empty")
 	}
 
-	sessionMu := s.acquireSessionLock(input.SessionID)
+	sessionMu, releaseLockRef := s.acquireSessionLock(input.SessionID)
 	sessionMu.Lock()
-	defer sessionMu.Unlock()
+	defer func() {
+		sessionMu.Unlock()
+		releaseLockRef()
+	}()
 
 	cfg := s.configManager.Get()
 	session, err := s.sessionStore.Load(ctx, input.SessionID)
