@@ -352,7 +352,7 @@ waitRequest:
 
 	if err := service.ResolvePermission(context.Background(), PermissionResolutionInput{
 		RequestID: requestPayload.RequestID,
-		Decision:  PermissionResolutionAllowSession,
+		Decision:  approvalflow.DecisionAllowSession,
 	}); err != nil {
 		t.Fatalf("ResolvePermission() error = %v", err)
 	}
@@ -476,7 +476,7 @@ waitRequest:
 
 	if err := service.ResolvePermission(context.Background(), PermissionResolutionInput{
 		RequestID: requestPayload.RequestID,
-		Decision:  PermissionResolutionReject,
+		Decision:  approvalflow.DecisionReject,
 	}); err != nil {
 		t.Fatalf("ResolvePermission() error = %v", err)
 	}
