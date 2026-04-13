@@ -96,6 +96,9 @@ func (t *RememberTool) Execute(ctx context.Context, call tools.ToolCallInput) (t
 		err := fmt.Errorf("%s: invalid type %q, must be one of user/feedback/project/reference", rememberToolName, args.Type)
 		return tools.NewErrorResult(rememberToolName, tools.NormalizeErrorReason(rememberToolName, err), "", nil), err
 	}
+	if t.svc == nil {
+		return nilServiceError(rememberToolName)
+	}
 
 	title := memo.NormalizeTitle(args.Title)
 	entry := memo.Entry{

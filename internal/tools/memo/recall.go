@@ -72,6 +72,9 @@ func (t *RecallTool) Execute(ctx context.Context, call tools.ToolCallInput) (too
 		err := fmt.Errorf("%s: keyword is required", recallToolName)
 		return tools.NewErrorResult(recallToolName, tools.NormalizeErrorReason(recallToolName, err), "", nil), err
 	}
+	if t.svc == nil {
+		return nilServiceError(recallToolName)
+	}
 
 	results, err := t.svc.Recall(ctx, args.Keyword)
 	if err != nil {
@@ -79,10 +82,10 @@ func (t *RecallTool) Execute(ctx context.Context, call tools.ToolCallInput) (too
 	}
 
 	if len(results) == 0 {
-		return tools.ToolResult{
+		return tools.ApplyOutputLimit(tools.ToolResult{
 			Name:    recallToolName,
 			Content: fmt.Sprintf("No memories found matching %q.", args.Keyword),
-		}, nil
+		}, tools.DefaultOutputLimitBytes), nil
 	}
 
 	// 按 key 排序保证输出稳定性
@@ -98,8 +101,8 @@ func (t *RecallTool) Execute(ctx context.Context, call tools.ToolCallInput) (too
 		fmt.Fprintf(&builder, "--- %s ---\n%s\n\n", k, results[k])
 	}
 
-	return tools.ToolResult{
+	return tools.ApplyOutputLimit(tools.ToolResult{
 		Name:    recallToolName,
 		Content: builder.String(),
-	}, nil
+	}, tools.DefaultOutputLimitBytes), nil
 }

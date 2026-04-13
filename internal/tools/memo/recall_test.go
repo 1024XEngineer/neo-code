@@ -91,6 +91,21 @@ func TestRecallToolExecuteInvalidJSON(t *testing.T) {
 	}
 }
 
+func TestRecallToolExecuteNilService(t *testing.T) {
+	tool := NewRecallTool(nil)
+	args, _ := json.Marshal(recallInput{Keyword: "tab"})
+	result, err := tool.Execute(context.Background(), tools.ToolCallInput{Arguments: args})
+	if err == nil {
+		t.Fatal("expected error for nil service")
+	}
+	if !result.IsError {
+		t.Fatal("expected error result")
+	}
+	if !strings.Contains(result.Content, "service is nil") {
+		t.Fatalf("unexpected error content: %q", result.Content)
+	}
+}
+
 func TestRecallToolExecuteEmptyKeyword(t *testing.T) {
 	svc := newTestService(t)
 	tool := NewRecallTool(svc)
@@ -143,5 +158,34 @@ func TestRecallToolDescription(t *testing.T) {
 	desc := tool.Description()
 	if !strings.Contains(desc, "memory") {
 		t.Errorf("Description should mention 'memory': %q", desc)
+	}
+}
+
+func TestRecallToolExecuteAppliesOutputLimit(t *testing.T) {
+	svc := newTestService(t)
+	if err := svc.Add(context.Background(), memo.Entry{
+		Type:    memo.TypeReference,
+		Title:   "超长记忆",
+		Content: strings.Repeat("x", tools.DefaultOutputLimitBytes+1024),
+		Source:  memo.SourceUserManual,
+	}); err != nil {
+		t.Fatalf("seed memo entry: %v", err)
+	}
+
+	tool := NewRecallTool(svc)
+	args, _ := json.Marshal(recallInput{Keyword: "超长"})
+	result, err := tool.Execute(context.Background(), tools.ToolCallInput{Arguments: args})
+	if err != nil {
+		t.Fatalf("Execute error: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("expected success result, got error: %s", result.Content)
+	}
+	if !strings.Contains(result.Content, "...[truncated]") {
+		t.Fatalf("expected truncated suffix, got content length %d", len(result.Content))
+	}
+	truncated, ok := result.Metadata["truncated"].(bool)
+	if !ok || !truncated {
+		t.Fatalf("expected metadata truncated=true, got %+v", result.Metadata)
 	}
 }

@@ -118,6 +118,25 @@ func TestRememberToolExecuteInvalidJSON(t *testing.T) {
 	}
 }
 
+func TestRememberToolExecuteNilService(t *testing.T) {
+	tool := NewRememberTool(nil)
+	args, _ := json.Marshal(rememberInput{
+		Type:    "user",
+		Title:   "偏好中文注释",
+		Content: "用户偏好使用中文注释和 tab 缩进",
+	})
+	result, err := tool.Execute(context.Background(), tools.ToolCallInput{Arguments: args})
+	if err == nil {
+		t.Fatal("expected error for nil service")
+	}
+	if !result.IsError {
+		t.Fatal("expected error result")
+	}
+	if !strings.Contains(result.Content, "service is nil") {
+		t.Fatalf("unexpected error content: %q", result.Content)
+	}
+}
+
 func TestRememberToolExecuteMissingFields(t *testing.T) {
 	svc := newTestService(t)
 	tool := NewRememberTool(svc)

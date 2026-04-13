@@ -9,12 +9,14 @@ import (
 
 // signalPhrases 包含规则提取器识别的显式记忆信号词。
 var signalPhrases = []string{
-	"记住", "记下来", "以后都这样", "以后都这样",
+	"记住", "记下来", "以后都这样",
 	"我偏好", "我喜欢", "我习惯", "我希望",
 	"别再", "不要再", "不要使用", "避免",
 	"always", "never", "prefer", "avoid",
 	"remember", "make sure", "from now on",
 }
+
+var lowerSignalPhrases = normalizeSignalPhrases(signalPhrases)
 
 // RuleExtractor 基于规则的轻量记忆提取器，检测用户消息中的显式信号词。
 // 无外部依赖，适合作为默认提取器。
@@ -48,11 +50,9 @@ func (r *RuleExtractor) Extract(ctx context.Context, messages []providertypes.Me
 		return nil, nil
 	}
 
-	// 截断过长内容作为标题
+	// 截断过长内容作为标题（按 rune 截断，避免破坏 UTF-8）。
 	title := NormalizeTitle(lastUserMsg)
-	if len(title) > 150 {
-		title = title[:147] + "..."
-	}
+	title = truncateWithEllipsis(title, 150)
 
 	return []Entry{
 		{
@@ -67,12 +67,39 @@ func (r *RuleExtractor) Extract(ctx context.Context, messages []providertypes.Me
 // containsSignal 检查文本是否包含任意信号词。
 func containsSignal(text string) bool {
 	lower := strings.ToLower(text)
-	for _, phrase := range signalPhrases {
-		if strings.Contains(lower, strings.ToLower(phrase)) {
+	for _, phrase := range lowerSignalPhrases {
+		if strings.Contains(lower, phrase) {
 			return true
 		}
 	}
 	return false
+}
+
+// normalizeSignalPhrases 将信号词标准化为小写，避免运行时重复转换。
+func normalizeSignalPhrases(phrases []string) []string {
+	result := make([]string, 0, len(phrases))
+	for _, phrase := range phrases {
+		text := strings.TrimSpace(strings.ToLower(phrase))
+		if text != "" {
+			result = append(result, text)
+		}
+	}
+	return result
+}
+
+// truncateWithEllipsis 按 rune 截断字符串，并在超长时追加省略号。
+func truncateWithEllipsis(text string, maxRunes int) string {
+	if maxRunes <= 0 {
+		return ""
+	}
+	runes := []rune(text)
+	if len(runes) <= maxRunes {
+		return text
+	}
+	if maxRunes <= 3 {
+		return string(runes[:maxRunes])
+	}
+	return string(runes[:maxRunes-3]) + "..."
 }
 
 // ExtractAndStore 从消息中提取记忆并保存到 Service。

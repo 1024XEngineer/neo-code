@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"neo-code/internal/config"
 	providertypes "neo-code/internal/provider/types"
@@ -123,8 +124,8 @@ func TestRuleExtractorExtractEnglishSignals(t *testing.T) {
 
 func TestRuleExtractorExtractLongContent(t *testing.T) {
 	extractor := NewRuleExtractor()
-	// 超过 150 字符
-	longContent := "记住" + strings.Repeat("a", 200)
+	// 超过 150 rune，验证按 rune 截断且保持 UTF-8 合法。
+	longContent := "记住" + strings.Repeat("中", 200)
 	messages := []providertypes.Message{
 		{Role: providertypes.RoleUser, Content: longContent},
 	}
@@ -136,11 +137,14 @@ func TestRuleExtractorExtractLongContent(t *testing.T) {
 	if len(entries) != 1 {
 		t.Fatalf("entries = %d, want 1", len(entries))
 	}
-	if len(entries[0].Title) > 150 {
-		t.Errorf("Title length = %d, should be <= 150", len(entries[0].Title))
+	if got := len([]rune(entries[0].Title)); got > 150 {
+		t.Errorf("Title rune length = %d, should be <= 150", got)
 	}
 	if !strings.HasSuffix(entries[0].Title, "...") {
 		t.Error("Title should be truncated with ...")
+	}
+	if !utf8.ValidString(entries[0].Title) {
+		t.Errorf("Title should remain valid UTF-8: %q", entries[0].Title)
 	}
 }
 
