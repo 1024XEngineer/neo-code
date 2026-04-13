@@ -532,8 +532,15 @@ func TestStdIOClientListToolsTimeout(t *testing.T) {
 	defer func() { _ = client.Close() }()
 
 	_, callErr := client.ListTools(context.Background())
-	if callErr == nil || !errors.Is(callErr, context.DeadlineExceeded) {
-		t.Fatalf("expected deadline exceeded, got %v", callErr)
+	if callErr == nil {
+		t.Fatal("expected timeout error, got nil")
+	}
+	errMsg := callErr.Error()
+	if !strings.Contains(errMsg, "deadline exceeded") {
+		t.Fatalf("expected deadline exceeded error, got %v", callErr)
+	}
+	if !strings.Contains(errMsg, "initialize session") && !strings.Contains(errMsg, "tools/list") {
+		t.Fatalf("expected initialize session or tools/list timeout path, got %v", callErr)
 	}
 }
 
