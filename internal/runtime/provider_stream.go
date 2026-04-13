@@ -34,29 +34,21 @@ func generateStreamingMessage(
 			streamDone <- outcome
 		}()
 
-		for {
-			select {
-			case event, ok := <-streamEvents:
-				if !ok {
-					return
-				}
-				if err := streaming.HandleEvent(event, acc, streaming.Hooks{
-					OnTextDelta:     hooks.OnTextDelta,
-					OnToolCallStart: hooks.OnToolCallStart,
-					OnMessageDone: func(payload providertypes.MessageDonePayload) {
-						if payload.Usage != nil {
-							outcome.inputTokens = payload.Usage.InputTokens
-							outcome.outputTokens = payload.Usage.OutputTokens
-						}
-						if hooks.OnMessageDone != nil {
-							hooks.OnMessageDone(payload)
-						}
-					},
-				}); err != nil && outcome.err == nil {
-					outcome.err = err
-				}
-			case <-ctx.Done():
-				return
+		userOnMessageDone := hooks.OnMessageDone
+		hooksCopy := hooks
+		hooksCopy.OnMessageDone = func(payload providertypes.MessageDonePayload) {
+			if payload.Usage != nil {
+				outcome.inputTokens = payload.Usage.InputTokens
+				outcome.outputTokens = payload.Usage.OutputTokens
+			}
+			if userOnMessageDone != nil {
+				userOnMessageDone(payload)
+			}
+		}
+
+		for event := range streamEvents {
+			if err := streaming.HandleEvent(event, acc, hooksCopy); err != nil && outcome.err == nil {
+				outcome.err = err
 			}
 		}
 	}()

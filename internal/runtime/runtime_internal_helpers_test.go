@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -13,6 +14,27 @@ import (
 	agentsession "neo-code/internal/session"
 	"neo-code/internal/tools"
 )
+
+type stubMemoExtractor struct {
+	mu       sync.Mutex
+	calls    int
+	lastMsgs []providertypes.Message
+	doneCh   chan struct{}
+}
+
+func (s *stubMemoExtractor) ExtractAndStore(_ context.Context, messages []providertypes.Message) {
+	s.mu.Lock()
+	s.calls++
+	s.lastMsgs = append([]providertypes.Message(nil), messages...)
+	doneCh := s.doneCh
+	s.mu.Unlock()
+	if doneCh != nil {
+		select {
+		case doneCh <- struct{}{}:
+		default:
+		}
+	}
+}
 
 func TestRunStateNilReceiverNoops(t *testing.T) {
 	t.Parallel()
@@ -226,6 +248,50 @@ func TestExecuteAssistantToolCallsCanceledSaveStillEmitsResultWhenExecErr(t *tes
 
 	events := collectRuntimeEvents(service.Events())
 	assertEventSequence(t, events, []EventType{EventToolStart, EventToolResult})
+}
+
+func TestSetMemoExtractorAndRunTriggersExtraction(t *testing.T) {
+	t.Parallel()
+
+	store := newMemoryStore()
+	providerStub := &scriptedProvider{
+		streams: [][]providertypes.StreamEvent{
+			{
+				providertypes.NewTextDeltaStreamEvent("memo ready"),
+				providertypes.NewMessageDoneStreamEvent("", nil),
+			},
+		},
+	}
+	factory := &scriptedProviderFactory{provider: providerStub}
+	toolManager := &stubToolManager{}
+	service := NewWithFactory(
+		newRuntimeConfigManagerWithProviderEnvs(t, nil),
+		toolManager,
+		store,
+		factory,
+		&stubContextBuilder{},
+	)
+	extractor := &stubMemoExtractor{doneCh: make(chan struct{}, 1)}
+	service.SetMemoExtractor(extractor)
+
+	if err := service.Run(context.Background(), UserInput{RunID: "run-memo-extract", Content: "hello"}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	select {
+	case <-extractor.doneCh:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("memo extractor was not triggered")
+	}
+
+	extractor.mu.Lock()
+	defer extractor.mu.Unlock()
+	if extractor.calls != 1 {
+		t.Fatalf("expected memo extractor to be called once, got %d", extractor.calls)
+	}
+	if len(extractor.lastMsgs) < 2 {
+		t.Fatalf("expected user+assistant messages, got %d", len(extractor.lastMsgs))
+	}
 }
 
 func newRuntimeSession(id string) agentsession.Session {

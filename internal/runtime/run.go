@@ -90,6 +90,7 @@ func (s *Service) Run(ctx context.Context, input UserInput) error {
 
 			if len(turnResult.assistant.ToolCalls) == 0 {
 				s.emit(ctx, EventAgentDone, state.runID, state.session.ID, turnResult.assistant)
+				s.triggerMemoExtraction(state.session.Messages)
 				return nil
 			}
 			if err := s.executeAssistantToolCalls(ctx, &state, snapshot, turnResult.assistant); err != nil {

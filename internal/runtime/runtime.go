@@ -11,6 +11,7 @@ import (
 	agentcontext "neo-code/internal/context"
 	contextcompact "neo-code/internal/context/compact"
 	"neo-code/internal/provider"
+	providertypes "neo-code/internal/provider/types"
 	"neo-code/internal/runtime/approval"
 	agentsession "neo-code/internal/session"
 	"neo-code/internal/tools"
@@ -47,6 +48,13 @@ type ProviderFactory interface {
 	Build(ctx context.Context, cfg provider.RuntimeConfig) (provider.Provider, error)
 }
 
+// MemoExtractor 定义 runtime 层调用记忆提取的最小能力。
+// 通过接口注入避免 runtime 直接依赖 memo 子系统实现细节。
+type MemoExtractor interface {
+	// ExtractAndStore 从对话消息中提取并落盘记忆，失败由实现方自行处理。
+	ExtractAndStore(ctx context.Context, messages []providertypes.Message)
+}
+
 // Service 是 runtime 的默认实现，负责组织一次完整的 agent 运行闭环。
 type Service struct {
 	configManager   *config.Manager
@@ -56,6 +64,7 @@ type Service struct {
 	contextBuilder  agentcontext.Builder
 	compactRunner   contextcompact.Runner
 	approvalBroker  *approval.Broker
+	memoExtractor   MemoExtractor
 
 	events          chan RuntimeEvent
 	sessionMu       sync.Mutex
@@ -94,6 +103,11 @@ func NewWithFactory(
 		events:          make(chan RuntimeEvent, 128),
 		sessionLocks:    make(map[string]*sync.Mutex),
 	}
+}
+
+// SetMemoExtractor 设置可选记忆提取钩子，由 Run 在结束时异步触发。
+func (s *Service) SetMemoExtractor(extractor MemoExtractor) {
+	s.memoExtractor = extractor
 }
 
 // CancelActiveRun 尝试取消当前正在执行的 Run。

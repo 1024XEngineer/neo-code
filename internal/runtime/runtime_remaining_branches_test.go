@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"sync"
 	"testing"
@@ -135,6 +136,38 @@ func TestGenerateStreamingMessageHooksAndContextDoneBranches(t *testing.T) {
 	outcome = generateStreamingMessage(ctx, providerWait, providertypes.GenerateRequest{}, streaming.Hooks{})
 	if !errors.Is(outcome.err, context.Canceled) {
 		t.Fatalf("expected context canceled, got %v", outcome.err)
+	}
+}
+
+func TestGenerateStreamingMessageDrainEventsAfterContextCanceled(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	providerIgnoreCancel := &scriptedProvider{chatFn: func(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error {
+		<-ctx.Done()
+		for i := 0; i < 64; i++ {
+			events <- providertypes.NewTextDeltaStreamEvent(fmt.Sprintf("delta-%d", i))
+		}
+		return context.Canceled
+	}}
+
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+		cancel()
+	}()
+
+	done := make(chan streamGenerateResult, 1)
+	go func() {
+		done <- generateStreamingMessage(ctx, providerIgnoreCancel, providertypes.GenerateRequest{}, streaming.Hooks{})
+	}()
+
+	select {
+	case outcome := <-done:
+		if !errors.Is(outcome.err, context.Canceled) {
+			t.Fatalf("expected context canceled, got %v", outcome.err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("generateStreamingMessage blocked after context cancellation")
 	}
 }
 
