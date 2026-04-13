@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"strings"
 
 	agentcontext "neo-code/internal/context"
@@ -105,8 +106,8 @@ func parseCompactSummaryOutput(content string) (contextcompact.SummaryOutput, er
 		return contextcompact.SummaryOutput{}, err
 	}
 
-	var response compactSummaryResponse
-	if err := json.Unmarshal([]byte(jsonText), &response); err != nil {
+	response, err := decodeCompactSummaryResponse(jsonText)
+	if err != nil {
 		return contextcompact.SummaryOutput{}, err
 	}
 
@@ -114,18 +115,38 @@ func parseCompactSummaryOutput(content string) (contextcompact.SummaryOutput, er
 		DisplaySummary: strings.TrimSpace(response.DisplaySummary),
 	}
 	output.TaskState.Goal = response.TaskState.Goal
-	output.TaskState.Progress = append([]string(nil), response.TaskState.Progress...)
-	output.TaskState.OpenItems = append([]string(nil), response.TaskState.OpenItems...)
+	output.TaskState.Progress = cloneStringSlice(response.TaskState.Progress)
+	output.TaskState.OpenItems = cloneStringSlice(response.TaskState.OpenItems)
 	output.TaskState.NextStep = response.TaskState.NextStep
-	output.TaskState.Blockers = append([]string(nil), response.TaskState.Blockers...)
-	output.TaskState.KeyArtifacts = append([]string(nil), response.TaskState.KeyArtifacts...)
-	output.TaskState.Decisions = append([]string(nil), response.TaskState.Decisions...)
-	output.TaskState.UserConstraints = append([]string(nil), response.TaskState.UserConstraints...)
+	output.TaskState.Blockers = cloneStringSlice(response.TaskState.Blockers)
+	output.TaskState.KeyArtifacts = cloneStringSlice(response.TaskState.KeyArtifacts)
+	output.TaskState.Decisions = cloneStringSlice(response.TaskState.Decisions)
+	output.TaskState.UserConstraints = cloneStringSlice(response.TaskState.UserConstraints)
 
 	if output.DisplaySummary == "" {
 		return contextcompact.SummaryOutput{}, errors.New("runtime: compact summary response is empty")
 	}
 	return output, nil
+}
+
+// decodeCompactSummaryResponse 对 compact JSON 响应执行严格解码，拒绝未知字段与尾随垃圾内容。
+func decodeCompactSummaryResponse(jsonText string) (compactSummaryResponse, error) {
+	decoder := json.NewDecoder(strings.NewReader(jsonText))
+	decoder.DisallowUnknownFields()
+
+	var response compactSummaryResponse
+	if err := decoder.Decode(&response); err != nil {
+		return compactSummaryResponse{}, err
+	}
+	if err := decoder.Decode(&struct{}{}); err != nil && !errors.Is(err, io.EOF) {
+		return compactSummaryResponse{}, errors.New("runtime: compact summary response contains trailing JSON content")
+	}
+	return response, nil
+}
+
+// cloneStringSlice 复制字符串切片，避免结果复用解析对象的底层数组。
+func cloneStringSlice(items []string) []string {
+	return append([]string(nil), items...)
 }
 
 // extractJSONObject 从模型响应中提取最外层 JSON 对象，容忍前后噪音。

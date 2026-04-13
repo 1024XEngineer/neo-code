@@ -240,3 +240,21 @@ func TestCompactSummaryGeneratorMalformedStreamEventDoesNotDeadlock(t *testing.T
 		t.Fatal("expected compact generation to fail instead of deadlocking on malformed stream event")
 	}
 }
+
+func TestParseCompactSummaryOutputRejectsUnknownTopLevelField(t *testing.T) {
+	t.Parallel()
+
+	content := `{"task_state":{"goal":"g","progress":[],"open_items":[],"next_step":"","blockers":[],"key_artifacts":[],"decisions":[],"user_constraints":[]},"display_summary":"[compact_summary]\nok","unexpected":"value"}`
+	if _, err := parseCompactSummaryOutput(content); err == nil {
+		t.Fatal("expected unknown top-level field to be rejected")
+	}
+}
+
+func TestParseCompactSummaryOutputRejectsUnknownTaskStateField(t *testing.T) {
+	t.Parallel()
+
+	content := `{"task_state":{"goal":"g","progress":[],"open_items":[],"next_step":"","blockers":[],"key_artifacts":[],"decisions":[],"user_constraints":[],"extra":"x"},"display_summary":"[compact_summary]\nok"}`
+	if _, err := parseCompactSummaryOutput(content); err == nil {
+		t.Fatal("expected unknown task_state field to be rejected")
+	}
+}

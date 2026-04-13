@@ -78,6 +78,11 @@ func TestRunCompactForSessionSaveErrorPolicyBranches(t *testing.T) {
 	baseStore := newMemoryStore()
 	session := newRuntimeSession("session-compact-save-error")
 	session.Messages = []providertypes.Message{{Role: providertypes.RoleUser, Content: "before"}}
+	session.TaskState.Goal = "before-goal"
+	session.TokenInputTotal = 11
+	session.TokenOutputTotal = 22
+	originalUpdatedAt := time.Unix(1700000000, 0)
+	session.UpdatedAt = originalUpdatedAt
 	baseStore.sessions[session.ID] = cloneSession(session)
 
 	store := &failingStore{Store: baseStore, saveErr: errors.New("save failed"), failOnSave: 1, ignoreContextErr: true}
@@ -87,6 +92,9 @@ func TestRunCompactForSessionSaveErrorPolicyBranches(t *testing.T) {
 		compactRunner: &stubCompactRunner{result: contextcompact.Result{
 			Applied:  true,
 			Messages: []providertypes.Message{{Role: providertypes.RoleAssistant, Content: "after"}},
+			TaskState: agentsession.TaskState{
+				Goal: "after-goal",
+			},
 		}},
 	}
 
@@ -96,6 +104,15 @@ func TestRunCompactForSessionSaveErrorPolicyBranches(t *testing.T) {
 	}
 	if strictSession.Messages[0].Content != "before" {
 		t.Fatalf("expected strict mode to rollback messages, got %+v", strictSession.Messages)
+	}
+	if strictSession.TaskState.Goal != "before-goal" {
+		t.Fatalf("expected strict mode to rollback task state, got %+v", strictSession.TaskState)
+	}
+	if strictSession.TokenInputTotal != 11 || strictSession.TokenOutputTotal != 22 {
+		t.Fatalf("expected strict mode to rollback token totals, got input=%d output=%d", strictSession.TokenInputTotal, strictSession.TokenOutputTotal)
+	}
+	if !strictSession.UpdatedAt.Equal(originalUpdatedAt) {
+		t.Fatalf("expected strict mode to rollback updated_at, got %s", strictSession.UpdatedAt)
 	}
 
 	store.saveCalls = 0
@@ -108,6 +125,15 @@ func TestRunCompactForSessionSaveErrorPolicyBranches(t *testing.T) {
 	}
 	if bestEffortSession.Messages[0].Content != "before" {
 		t.Fatalf("expected best effort rollback messages, got %+v", bestEffortSession.Messages)
+	}
+	if bestEffortSession.TaskState.Goal != "before-goal" {
+		t.Fatalf("expected best effort rollback task state, got %+v", bestEffortSession.TaskState)
+	}
+	if bestEffortSession.TokenInputTotal != 11 || bestEffortSession.TokenOutputTotal != 22 {
+		t.Fatalf("expected best effort rollback token totals, got input=%d output=%d", bestEffortSession.TokenInputTotal, bestEffortSession.TokenOutputTotal)
+	}
+	if !bestEffortSession.UpdatedAt.Equal(originalUpdatedAt) {
+		t.Fatalf("expected best effort rollback updated_at, got %s", bestEffortSession.UpdatedAt)
 	}
 }
 
