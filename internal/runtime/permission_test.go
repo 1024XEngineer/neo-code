@@ -11,7 +11,37 @@ import (
 	approvalflow "neo-code/internal/runtime/approval"
 	"neo-code/internal/security"
 	"neo-code/internal/tools"
+	"neo-code/internal/tools/mcp"
 )
+
+type runtimeStubMCPClient struct {
+	tools      []mcp.ToolDescriptor
+	callResult mcp.CallResult
+	callErr    error
+	callCount  int
+}
+
+func (s *runtimeStubMCPClient) ListTools(ctx context.Context) ([]mcp.ToolDescriptor, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return append([]mcp.ToolDescriptor(nil), s.tools...), nil
+}
+
+func (s *runtimeStubMCPClient) CallTool(ctx context.Context, toolName string, arguments []byte) (mcp.CallResult, error) {
+	if err := ctx.Err(); err != nil {
+		return mcp.CallResult{}, err
+	}
+	s.callCount++
+	if s.callErr != nil {
+		return mcp.CallResult{}, s.callErr
+	}
+	return s.callResult, nil
+}
+
+func (s *runtimeStubMCPClient) HealthCheck(ctx context.Context) error {
+	return ctx.Err()
+}
 
 func TestResolvePermissionValidation(t *testing.T) {
 	t.Parallel()
@@ -223,6 +253,367 @@ waitRequest:
 	}
 	if !found {
 		t.Fatalf("expected user reject resolved payload")
+	}
+}
+
+func TestServiceRunMCPPermissionAllowFlow(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	store := newMemoryStore()
+	registry := tools.NewRegistry()
+	mcpRegistry := mcp.NewRegistry()
+	mcpClient := &runtimeStubMCPClient{
+		tools: []mcp.ToolDescriptor{
+			{Name: "create_issue", Description: "create issue", InputSchema: map[string]any{"type": "object"}},
+		},
+		callResult: mcp.CallResult{Content: "mcp create ok"},
+	}
+	if err := mcpRegistry.RegisterServer("github", "stdio", "v1", mcpClient); err != nil {
+		t.Fatalf("register mcp server: %v", err)
+	}
+	if err := mcpRegistry.RefreshServerTools(context.Background(), "github"); err != nil {
+		t.Fatalf("refresh mcp tools: %v", err)
+	}
+	registry.SetMCPRegistry(mcpRegistry)
+
+	engine, err := security.NewPolicyEngine(security.DecisionAllow, []security.PolicyRule{
+		{
+			ID:               "ask-github-create",
+			Priority:         720,
+			Decision:         security.DecisionAsk,
+			Reason:           "mcp create requires approval",
+			ActionTypes:      []security.ActionType{security.ActionTypeMCP},
+			ResourcePatterns: []string{"mcp.github.create_issue"},
+			TargetTypes:      []security.TargetType{security.TargetTypeMCP},
+		},
+	})
+	if err != nil {
+		t.Fatalf("new policy engine: %v", err)
+	}
+	toolManager, err := tools.NewManager(registry, engine, nil)
+	if err != nil {
+		t.Fatalf("new tool manager: %v", err)
+	}
+
+	scripted := &scriptedProvider{
+		responses: []scriptedResponse{
+			{
+				Message: providertypes.Message{
+					Role: "assistant",
+					ToolCalls: []providertypes.ToolCall{
+						{ID: "call-mcp-allow", Name: "mcp.github.create_issue", Arguments: `{"title":"hello"}`},
+					},
+				},
+				FinishReason: "tool_calls",
+			},
+			{
+				Message:      providertypes.Message{Role: "assistant", Content: "done"},
+				FinishReason: "stop",
+			},
+		},
+	}
+
+	service := NewWithFactory(manager, toolManager, store, &scriptedProviderFactory{provider: scripted}, nil)
+	runErrCh := make(chan error, 1)
+	go func() {
+		runErrCh <- service.Run(context.Background(), UserInput{RunID: "run-mcp-permission-allow", Content: "create issue"})
+	}()
+
+	var requestPayload PermissionRequestPayload
+waitRequest:
+	for {
+		select {
+		case <-time.After(3 * time.Second):
+			t.Fatalf("timed out waiting permission request")
+		case event := <-service.Events():
+			if event.Type != EventPermissionRequest {
+				continue
+			}
+			payload, ok := event.Payload.(PermissionRequestPayload)
+			if !ok {
+				t.Fatalf("expected permission request payload, got %#v", event.Payload)
+			}
+			requestPayload = payload
+			break waitRequest
+		}
+	}
+
+	if requestPayload.ToolName != "mcp.github.create_issue" ||
+		requestPayload.ToolCategory != "mcp.github" ||
+		requestPayload.RuleID != "ask-github-create" ||
+		requestPayload.Reason != "mcp create requires approval" ||
+		requestPayload.Decision != "ask" {
+		t.Fatalf("unexpected permission request payload: %+v", requestPayload)
+	}
+	if requestPayload.RememberScope != "" {
+		t.Fatalf("expected empty request remember scope, got %+v", requestPayload)
+	}
+
+	if err := service.ResolvePermission(context.Background(), PermissionResolutionInput{
+		RequestID: requestPayload.RequestID,
+		Decision:  PermissionResolutionAllowSession,
+	}); err != nil {
+		t.Fatalf("ResolvePermission() error = %v", err)
+	}
+	if err := <-runErrCh; err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if mcpClient.callCount != 1 {
+		t.Fatalf("expected MCP tool to execute once, got %d", mcpClient.callCount)
+	}
+
+	events := collectRuntimeEvents(service.Events())
+	assertEventSequence(t, events, []EventType{EventPermissionResolved, EventToolResult, EventAgentDone})
+
+	foundResolved := false
+	for _, event := range events {
+		if event.Type != EventPermissionResolved {
+			continue
+		}
+		payload, ok := event.Payload.(PermissionResolvedPayload)
+		if !ok {
+			t.Fatalf("expected PermissionResolvedPayload, got %#v", event.Payload)
+		}
+		if payload.ToolName != "mcp.github.create_issue" ||
+			payload.ToolCategory != "mcp.github" ||
+			payload.RuleID != "ask-github-create" ||
+			payload.Reason != "permission approved by user" ||
+			payload.Decision != "allow" ||
+			payload.ResolvedAs != "approved" ||
+			payload.RememberScope != string(tools.SessionPermissionScopeAlways) {
+			t.Fatalf("unexpected permission resolved payload: %+v", payload)
+		}
+		foundResolved = true
+	}
+	if !foundResolved {
+		t.Fatalf("expected permission resolved event")
+	}
+}
+
+func TestServiceRunMCPPermissionRejectFlow(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	store := newMemoryStore()
+	registry := tools.NewRegistry()
+	mcpRegistry := mcp.NewRegistry()
+	mcpClient := &runtimeStubMCPClient{
+		tools: []mcp.ToolDescriptor{
+			{Name: "create_issue", Description: "create issue", InputSchema: map[string]any{"type": "object"}},
+		},
+		callResult: mcp.CallResult{Content: "should-not-run"},
+	}
+	if err := mcpRegistry.RegisterServer("github", "stdio", "v1", mcpClient); err != nil {
+		t.Fatalf("register mcp server: %v", err)
+	}
+	if err := mcpRegistry.RefreshServerTools(context.Background(), "github"); err != nil {
+		t.Fatalf("refresh mcp tools: %v", err)
+	}
+	registry.SetMCPRegistry(mcpRegistry)
+
+	engine, err := security.NewPolicyEngine(security.DecisionAllow, []security.PolicyRule{
+		{
+			ID:               "ask-github-create",
+			Priority:         720,
+			Decision:         security.DecisionAsk,
+			Reason:           "mcp create requires approval",
+			ActionTypes:      []security.ActionType{security.ActionTypeMCP},
+			ResourcePatterns: []string{"mcp.github.create_issue"},
+			TargetTypes:      []security.TargetType{security.TargetTypeMCP},
+		},
+	})
+	if err != nil {
+		t.Fatalf("new policy engine: %v", err)
+	}
+	toolManager, err := tools.NewManager(registry, engine, nil)
+	if err != nil {
+		t.Fatalf("new tool manager: %v", err)
+	}
+
+	scripted := &scriptedProvider{
+		responses: []scriptedResponse{
+			{
+				Message: providertypes.Message{
+					Role: "assistant",
+					ToolCalls: []providertypes.ToolCall{
+						{ID: "call-mcp-reject", Name: "mcp.github.create_issue", Arguments: `{"title":"hello"}`},
+					},
+				},
+				FinishReason: "tool_calls",
+			},
+			{
+				Message:      providertypes.Message{Role: "assistant", Content: "done"},
+				FinishReason: "stop",
+			},
+		},
+	}
+
+	service := NewWithFactory(manager, toolManager, store, &scriptedProviderFactory{provider: scripted}, nil)
+	runErrCh := make(chan error, 1)
+	go func() {
+		runErrCh <- service.Run(context.Background(), UserInput{RunID: "run-mcp-permission-reject", Content: "create issue"})
+	}()
+
+	var requestPayload PermissionRequestPayload
+waitRequest:
+	for {
+		select {
+		case <-time.After(3 * time.Second):
+			t.Fatalf("timed out waiting permission request")
+		case event := <-service.Events():
+			if event.Type != EventPermissionRequest {
+				continue
+			}
+			payload, ok := event.Payload.(PermissionRequestPayload)
+			if !ok {
+				t.Fatalf("expected permission request payload, got %#v", event.Payload)
+			}
+			requestPayload = payload
+			break waitRequest
+		}
+	}
+
+	if err := service.ResolvePermission(context.Background(), PermissionResolutionInput{
+		RequestID: requestPayload.RequestID,
+		Decision:  PermissionResolutionReject,
+	}); err != nil {
+		t.Fatalf("ResolvePermission() error = %v", err)
+	}
+	if err := <-runErrCh; err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if mcpClient.callCount != 0 {
+		t.Fatalf("expected rejected MCP tool not to execute, got %d", mcpClient.callCount)
+	}
+
+	events := collectRuntimeEvents(service.Events())
+	assertEventSequence(t, events, []EventType{EventPermissionResolved, EventToolResult, EventAgentDone})
+
+	foundResolved := false
+	for _, event := range events {
+		if event.Type != EventPermissionResolved {
+			continue
+		}
+		payload, ok := event.Payload.(PermissionResolvedPayload)
+		if !ok {
+			t.Fatalf("expected PermissionResolvedPayload, got %#v", event.Payload)
+		}
+		if payload.ToolName != "mcp.github.create_issue" ||
+			payload.RuleID != "ask-github-create" ||
+			payload.Decision != "deny" ||
+			payload.ResolvedAs != "rejected" ||
+			payload.RememberScope != string(tools.SessionPermissionScopeReject) {
+			t.Fatalf("unexpected permission resolved payload: %+v", payload)
+		}
+		foundResolved = true
+	}
+	if !foundResolved {
+		t.Fatalf("expected permission resolved event")
+	}
+}
+
+func TestServiceRunMCPPermissionHardDenyFlow(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	store := newMemoryStore()
+	registry := tools.NewRegistry()
+	mcpRegistry := mcp.NewRegistry()
+	mcpClient := &runtimeStubMCPClient{
+		tools: []mcp.ToolDescriptor{
+			{Name: "create_issue", Description: "create issue", InputSchema: map[string]any{"type": "object"}},
+		},
+		callResult: mcp.CallResult{Content: "should-not-run"},
+	}
+	if err := mcpRegistry.RegisterServer("github", "stdio", "v1", mcpClient); err != nil {
+		t.Fatalf("register mcp server: %v", err)
+	}
+	if err := mcpRegistry.RefreshServerTools(context.Background(), "github"); err != nil {
+		t.Fatalf("refresh mcp tools: %v", err)
+	}
+	registry.SetMCPRegistry(mcpRegistry)
+
+	engine, err := security.NewPolicyEngine(security.DecisionAllow, []security.PolicyRule{
+		{
+			ID:             "deny-github-server",
+			Priority:       830,
+			Decision:       security.DecisionDeny,
+			Reason:         "github mcp server denied",
+			ActionTypes:    []security.ActionType{security.ActionTypeMCP},
+			ToolCategories: []string{"mcp.github"},
+			TargetTypes:    []security.TargetType{security.TargetTypeMCP},
+		},
+		{
+			ID:               "ask-github-create",
+			Priority:         720,
+			Decision:         security.DecisionAsk,
+			Reason:           "mcp create requires approval",
+			ActionTypes:      []security.ActionType{security.ActionTypeMCP},
+			ResourcePatterns: []string{"mcp.github.create_issue"},
+			TargetTypes:      []security.TargetType{security.TargetTypeMCP},
+		},
+	})
+	if err != nil {
+		t.Fatalf("new policy engine: %v", err)
+	}
+	toolManager, err := tools.NewManager(registry, engine, nil)
+	if err != nil {
+		t.Fatalf("new tool manager: %v", err)
+	}
+
+	scripted := &scriptedProvider{
+		responses: []scriptedResponse{
+			{
+				Message: providertypes.Message{
+					Role: "assistant",
+					ToolCalls: []providertypes.ToolCall{
+						{ID: "call-mcp-deny", Name: "mcp.github.create_issue", Arguments: `{"title":"hello"}`},
+					},
+				},
+				FinishReason: "tool_calls",
+			},
+			{
+				Message:      providertypes.Message{Role: "assistant", Content: "done"},
+				FinishReason: "stop",
+			},
+		},
+	}
+
+	service := NewWithFactory(manager, toolManager, store, &scriptedProviderFactory{provider: scripted}, nil)
+	if err := service.Run(context.Background(), UserInput{RunID: "run-mcp-permission-deny", Content: "create issue"}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if mcpClient.callCount != 0 {
+		t.Fatalf("expected hard denied MCP tool not to execute, got %d", mcpClient.callCount)
+	}
+
+	events := collectRuntimeEvents(service.Events())
+	assertEventSequence(t, events, []EventType{EventPermissionResolved, EventToolResult, EventAgentDone})
+	assertNoEventType(t, events, EventPermissionRequest)
+
+	foundResolved := false
+	for _, event := range events {
+		if event.Type != EventPermissionResolved {
+			continue
+		}
+		payload, ok := event.Payload.(PermissionResolvedPayload)
+		if !ok {
+			t.Fatalf("expected PermissionResolvedPayload, got %#v", event.Payload)
+		}
+		if payload.ToolName != "mcp.github.create_issue" ||
+			payload.ToolCategory != "mcp.github" ||
+			payload.RuleID != "deny-github-server" ||
+			payload.Reason != "github mcp server denied" ||
+			payload.Decision != "deny" ||
+			payload.ResolvedAs != "denied" ||
+			payload.RememberScope != "" {
+			t.Fatalf("unexpected permission resolved payload: %+v", payload)
+		}
+		foundResolved = true
+	}
+	if !foundResolved {
+		t.Fatalf("expected permission resolved event")
 	}
 }
 

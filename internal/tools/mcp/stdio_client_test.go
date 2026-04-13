@@ -516,6 +516,48 @@ func TestStdIOClientInitializeFailure(t *testing.T) {
 	}
 }
 
+func TestStdIOClientListToolsTimeout(t *testing.T) {
+	t.Parallel()
+
+	client, err := NewStdIOClient(StdioClientConfig{
+		Command:      os.Args[0],
+		Args:         []string{"-test.run=TestHelperProcessMCPStdioServer", "--"},
+		Env:          []string{"GO_WANT_MCP_STDIO_HELPER=1", "GO_MCP_STDIO_REQUIRE_INITIALIZE=1", "GO_MCP_STDIO_WIRE=framed", "GO_MCP_STDIO_LIST_DELAY_MS=300"},
+		StartTimeout: 3 * time.Second,
+		CallTimeout:  100 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("NewStdIOClient() error = %v", err)
+	}
+	defer func() { _ = client.Close() }()
+
+	_, callErr := client.ListTools(context.Background())
+	if callErr == nil || !errors.Is(callErr, context.DeadlineExceeded) {
+		t.Fatalf("expected deadline exceeded, got %v", callErr)
+	}
+}
+
+func TestStdIOClientListToolsProtocolError(t *testing.T) {
+	t.Parallel()
+
+	client, err := NewStdIOClient(StdioClientConfig{
+		Command:      os.Args[0],
+		Args:         []string{"-test.run=TestHelperProcessMCPStdioServer", "--"},
+		Env:          []string{"GO_WANT_MCP_STDIO_HELPER=1", "GO_MCP_STDIO_REQUIRE_INITIALIZE=1", "GO_MCP_STDIO_WIRE=framed", "GO_MCP_STDIO_LIST_MALFORMED=1"},
+		StartTimeout: 3 * time.Second,
+		CallTimeout:  3 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("NewStdIOClient() error = %v", err)
+	}
+	defer func() { _ = client.Close() }()
+
+	_, callErr := client.ListTools(context.Background())
+	if callErr == nil || !strings.Contains(callErr.Error(), "decode tools/list result") {
+		t.Fatalf("expected decode tools/list result error, got %v", callErr)
+	}
+}
+
 func TestHelperProcessMCPStdioServer(t *testing.T) {
 	if os.Getenv("GO_WANT_MCP_STDIO_HELPER") != "1" {
 		return
@@ -523,6 +565,8 @@ func TestHelperProcessMCPStdioServer(t *testing.T) {
 
 	requireInitialize := os.Getenv("GO_MCP_STDIO_REQUIRE_INITIALIZE") == "1"
 	initFail := os.Getenv("GO_MCP_STDIO_INIT_FAIL") == "1"
+	listDelayMS, _ := strconv.Atoi(strings.TrimSpace(os.Getenv("GO_MCP_STDIO_LIST_DELAY_MS")))
+	listMalformed := os.Getenv("GO_MCP_STDIO_LIST_MALFORMED") == "1"
 	wireMode := strings.TrimSpace(os.Getenv("GO_MCP_STDIO_WIRE"))
 	if wireMode == "" {
 		wireMode = "framed"
@@ -594,6 +638,17 @@ func TestHelperProcessMCPStdioServer(t *testing.T) {
 						"code":    -32002,
 						"message": "server not initialized",
 					},
+				}
+				break
+			}
+			if listDelayMS > 0 {
+				time.Sleep(time.Duration(listDelayMS) * time.Millisecond)
+			}
+			if listMalformed {
+				response = map[string]any{
+					"jsonrpc": "2.0",
+					"id":      requestID,
+					"result":  "broken",
 				}
 				break
 			}

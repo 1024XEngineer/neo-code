@@ -172,6 +172,72 @@ func TestRegistryConcurrentSnapshotAndRefresh(t *testing.T) {
 	}
 }
 
+func TestRegistryConcurrentRefreshAndCall(t *testing.T) {
+	t.Parallel()
+
+	registry := NewRegistry()
+	client := &stubServerClient{
+		tools: []ToolDescriptor{
+			{Name: "search", InputSchema: map[string]any{"type": "object"}},
+		},
+		callResult: CallResult{Content: "ok"},
+	}
+	if err := registry.RegisterServer("server-1", "stdio", "v1", client); err != nil {
+		t.Fatalf("register server: %v", err)
+	}
+	if err := registry.RefreshServerTools(context.Background(), "server-1"); err != nil {
+		t.Fatalf("refresh tools: %v", err)
+	}
+
+	var wg sync.WaitGroup
+	errCh := make(chan error, 32)
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 16; j++ {
+				if err := registry.RefreshServerTools(context.Background(), "server-1"); err != nil {
+					errCh <- err
+					return
+				}
+			}
+		}()
+	}
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 16; j++ {
+				result, err := registry.Call(context.Background(), "server-1", "search", []byte(`{"q":"neo"}`))
+				if err != nil {
+					errCh <- err
+					return
+				}
+				if result.Content != "ok" {
+					errCh <- errors.New("unexpected call result")
+					return
+				}
+			}
+		}()
+	}
+
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatalf("concurrent refresh and call timed out")
+	}
+	close(errCh)
+	for err := range errCh {
+		t.Fatalf("concurrent registry operation failed: %v", err)
+	}
+}
+
 func TestRegistrySnapshotSchemaIsDeepCloned(t *testing.T) {
 	t.Parallel()
 

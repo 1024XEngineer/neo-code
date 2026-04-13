@@ -745,3 +745,54 @@ func TestParseMCPToolFullName(t *testing.T) {
 		t.Fatalf("expected parse failure for incomplete name")
 	}
 }
+
+func TestRegistryMCPFaultDoesNotAffectBuiltInTools(t *testing.T) {
+	t.Parallel()
+
+	registry := NewRegistry()
+	registry.Register(stubTool{
+		name:        "builtin_tool",
+		description: "built in",
+		schema:      map[string]any{"type": "object"},
+		result: ToolResult{
+			Name:    "builtin_tool",
+			Content: "builtin ok",
+		},
+	})
+
+	mcpRegistry := mcp.NewRegistry()
+	if err := mcpRegistry.RegisterServer("docs", "stdio", "v1", &stubMCPClient{
+		tools: []mcp.ToolDescriptor{
+			{Name: "search", Description: "search docs", InputSchema: map[string]any{"type": "object"}},
+		},
+		callErr: errors.New("mcp transport timeout"),
+	}); err != nil {
+		t.Fatalf("register mcp server: %v", err)
+	}
+	if err := mcpRegistry.RefreshServerTools(context.Background(), "docs"); err != nil {
+		t.Fatalf("refresh mcp tools: %v", err)
+	}
+	if err := mcpRegistry.SetServerStatus("docs", mcp.ServerStatusOffline); err != nil {
+		t.Fatalf("set server offline: %v", err)
+	}
+	registry.SetMCPRegistry(mcpRegistry)
+
+	specs, err := registry.ListAvailableSpecs(context.Background(), SpecListInput{})
+	if err != nil {
+		t.Fatalf("ListAvailableSpecs() error = %v", err)
+	}
+	if len(specs) != 1 || specs[0].Name != "builtin_tool" {
+		t.Fatalf("expected built-in tool only, got %+v", specs)
+	}
+
+	result, err := registry.Execute(context.Background(), ToolCallInput{
+		ID:   "builtin-call",
+		Name: "builtin_tool",
+	})
+	if err != nil {
+		t.Fatalf("builtin Execute() error = %v", err)
+	}
+	if result.Content != "builtin ok" {
+		t.Fatalf("expected builtin execution success, got %+v", result)
+	}
+}

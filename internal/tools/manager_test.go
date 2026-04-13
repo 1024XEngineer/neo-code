@@ -1203,6 +1203,108 @@ func TestDefaultManagerExecuteMCPServerDenyUsesTraceableRule(t *testing.T) {
 	}
 }
 
+func TestDefaultManagerExecuteMCPServerDenyPriorityOverridesToolRules(t *testing.T) {
+	t.Parallel()
+
+	registry := NewRegistry()
+	mcpRegistry := mcp.NewRegistry()
+	client := &stubMCPClient{
+		tools: []mcp.ToolDescriptor{
+			{Name: "create_issue", Description: "create"},
+			{Name: "list_issues", Description: "list"},
+			{Name: "search", Description: "search"},
+		},
+		callResult: mcp.CallResult{Content: "ok"},
+	}
+	if err := mcpRegistry.RegisterServer("github", "stdio", "v1", client); err != nil {
+		t.Fatalf("register mcp server: %v", err)
+	}
+	if err := mcpRegistry.RegisterServer("docs", "stdio", "v1", client); err != nil {
+		t.Fatalf("register docs server: %v", err)
+	}
+	if err := mcpRegistry.RefreshServerTools(context.Background(), "github"); err != nil {
+		t.Fatalf("refresh github tools: %v", err)
+	}
+	if err := mcpRegistry.RefreshServerTools(context.Background(), "docs"); err != nil {
+		t.Fatalf("refresh docs tools: %v", err)
+	}
+	registry.SetMCPRegistry(mcpRegistry)
+
+	engine, err := security.NewPolicyEngine(security.DecisionAllow, []security.PolicyRule{
+		{
+			ID:             "deny-github-server",
+			Priority:       830,
+			Decision:       security.DecisionDeny,
+			Reason:         "github server denied",
+			ActionTypes:    []security.ActionType{security.ActionTypeMCP},
+			ToolCategories: []string{"mcp.github"},
+			TargetTypes:    []security.TargetType{security.TargetTypeMCP},
+		},
+		{
+			ID:               "allow-github-create",
+			Priority:         700,
+			Decision:         security.DecisionAllow,
+			Reason:           "github create allowed",
+			ActionTypes:      []security.ActionType{security.ActionTypeMCP},
+			ResourcePatterns: []string{"mcp.github.create_issue"},
+			TargetTypes:      []security.TargetType{security.TargetTypeMCP},
+		},
+		{
+			ID:               "ask-github-list",
+			Priority:         720,
+			Decision:         security.DecisionAsk,
+			Reason:           "github list requires approval",
+			ActionTypes:      []security.ActionType{security.ActionTypeMCP},
+			ResourcePatterns: []string{"mcp.github.list_issues"},
+			TargetTypes:      []security.TargetType{security.TargetTypeMCP},
+		},
+		{
+			ID:               "allow-docs-search",
+			Priority:         700,
+			Decision:         security.DecisionAllow,
+			Reason:           "docs search allowed",
+			ActionTypes:      []security.ActionType{security.ActionTypeMCP},
+			ResourcePatterns: []string{"mcp.docs.search"},
+			TargetTypes:      []security.TargetType{security.TargetTypeMCP},
+		},
+	})
+	if err != nil {
+		t.Fatalf("new policy engine: %v", err)
+	}
+
+	manager, err := NewManager(registry, engine, nil)
+	if err != nil {
+		t.Fatalf("new manager: %v", err)
+	}
+
+	for _, input := range []ToolCallInput{
+		{ID: "call-github-create", Name: "mcp.github.create_issue", Arguments: []byte(`{"title":"hello"}`), SessionID: "session-priority"},
+		{ID: "call-github-list", Name: "mcp.github.list_issues", Arguments: []byte(`{"state":"open"}`), SessionID: "session-priority"},
+	} {
+		_, execErr := manager.Execute(context.Background(), input)
+		var permissionErr *PermissionDecisionError
+		if !errors.As(execErr, &permissionErr) {
+			t.Fatalf("expected permission error for %s, got %v", input.Name, execErr)
+		}
+		if permissionErr.Decision() != "deny" || permissionErr.RuleID() != "deny-github-server" {
+			t.Fatalf("expected server-level deny for %s, got decision=%q rule=%q", input.Name, permissionErr.Decision(), permissionErr.RuleID())
+		}
+	}
+
+	result, execErr := manager.Execute(context.Background(), ToolCallInput{
+		ID:        "call-docs-search",
+		Name:      "mcp.docs.search",
+		Arguments: []byte(`{"query":"neo-code"}`),
+		SessionID: "session-priority",
+	})
+	if execErr != nil {
+		t.Fatalf("expected docs search allow, got %v", execErr)
+	}
+	if result.Content != "ok" {
+		t.Fatalf("expected docs search to execute, got %+v", result)
+	}
+}
+
 func TestNoopWorkspaceSandbox(t *testing.T) {
 	t.Parallel()
 
