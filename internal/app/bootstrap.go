@@ -186,7 +186,7 @@ func BuildRuntime(ctx context.Context, opts BootstrapOptions) (RuntimeBundle, er
 	}, nil
 }
 
-// NewProgram 基于共享运行时依赖构建并返回 TUI 程序。
+// NewProgram 基于共享运行时依赖构建并返回 TUI 程序，同时返回退出时应调用的资源清理函数。
 func NewProgram(ctx context.Context, opts BootstrapOptions) (*tea.Program, func() error, error) {
 	bundle, err := BuildRuntime(ctx, opts)
 	if err != nil {
@@ -253,13 +253,10 @@ func buildToolRegistry(cfg config.Config) (*tools.Registry, func() error, error)
 			Agents:    buildMCPAgentExposureRules(cfg.Tools.MCP.Exposure.Agents),
 		}))
 	}
-	cleanup := func() error {
-		if mcpRegistry != nil {
-			return mcpRegistry.Close()
-		}
-		return nil
+	if mcpRegistry == nil {
+		return toolRegistry, nil, nil
 	}
-	return toolRegistry, cleanup, nil
+	return toolRegistry, mcpRegistry.Close, nil
 }
 
 // buildMCPAgentExposureRules 将配置层的 agent 过滤规则转换为 tools/mcp 层输入。

@@ -1133,6 +1133,62 @@ func TestNewMemoExtractorAdapterSchedulesExtractorAndGenerates(t *testing.T) {
 	}
 }
 
+func TestNewMemoExtractorAdapterKeepsScheduledConfigSnapshot(t *testing.T) {
+	t.Setenv(config.OpenAIDefaultAPIKeyEnv, "openai-token")
+	t.Setenv(config.QiniuDefaultAPIKeyEnv, "qiniu-token")
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	cfg := config.StaticDefaults().Clone()
+	cfg.SelectedProvider = config.OpenAIName
+	cfg.CurrentModel = "snapshot-model"
+	manager := config.NewManager(config.NewLoader("", &cfg))
+	providerStub := &stubMemoProvider{
+		generate: func(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error {
+			if req.Model != "snapshot-model" {
+				t.Fatalf("expected scheduled model snapshot, got %q", req.Model)
+			}
+			events <- providertypes.NewTextDeltaStreamEvent(
+				`[{"type":"user","title":"偏好","content":"snapshot","keywords":["snapshot"]}]`,
+			)
+			events <- providertypes.NewMessageDoneStreamEvent("stop", nil)
+			return nil
+		},
+	}
+	factory := &stubMemoProviderFactory{provider: providerStub}
+	scheduler := &stubMemoExtractorScheduler{}
+	extractor := newMemoExtractorAdapter(factory, manager, scheduler)
+
+	messages := []providertypes.Message{{Role: providertypes.RoleUser, Content: "remember snapshot"}}
+	extractor.Schedule("session-1", messages)
+	if !scheduler.called || scheduler.extractor == nil {
+		t.Fatalf("expected scheduler to receive extractor")
+	}
+
+	if err := manager.Update(context.Background(), func(next *config.Config) error {
+		next.SelectedProvider = config.QiniuName
+		next.CurrentModel = "drifted-model"
+		return nil
+	}); err != nil {
+		t.Fatalf("manager.Update() error = %v", err)
+	}
+
+	entries, err := scheduler.extractor.Extract(context.Background(), messages)
+	if err != nil {
+		t.Fatalf("extractor.Extract() error = %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected one extracted entry, got %+v", entries)
+	}
+	if !factory.called {
+		t.Fatalf("expected provider factory Build to be called")
+	}
+	if factory.cfg.Name != config.OpenAIName {
+		t.Fatalf("expected scheduled provider snapshot %q, got %q", config.OpenAIName, factory.cfg.Name)
+	}
+}
+
 func TestNewMemoExtractorAdapterPropagatesFactoryBuildError(t *testing.T) {
 	t.Setenv(config.OpenAIDefaultAPIKeyEnv, "token")
 	cfg := config.StaticDefaults().Clone()
