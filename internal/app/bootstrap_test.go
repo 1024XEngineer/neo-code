@@ -19,8 +19,11 @@ import (
 
 	"neo-code/internal/config"
 	configstate "neo-code/internal/config/state"
+	"neo-code/internal/memo"
+	agentruntime "neo-code/internal/runtime"
 	"neo-code/internal/tools"
 	"neo-code/internal/tools/mcp"
+	"neo-code/internal/tui"
 )
 
 func TestNewProgram(t *testing.T) {
@@ -797,6 +800,119 @@ func TestBuildRuntimeRejectsUnsupportedMCPSource(t *testing.T) {
 	_, err := BuildRuntime(context.Background(), BootstrapOptions{})
 	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "not supported") {
 		t.Fatalf("expected unsupported mcp source validation error, got %v", err)
+	}
+}
+
+func TestBuildRuntimeCleansResourcesWhenToolManagerBuildFails(t *testing.T) {
+	disableBuiltinProviderAPIKeys(t)
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	configDir := filepath.Join(home, ".neocode")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	configPath := filepath.Join(configDir, "config.yaml")
+	raw := []byte(strings.Join([]string{
+		"selected_provider: openai",
+		"current_model: " + config.OpenAIDefaultModel,
+		"shell: powershell",
+		"tools:",
+		"  mcp:",
+		"    servers:",
+		"      - id: docs",
+		"        enabled: true",
+		"        source: stdio",
+		"        stdio:",
+		"          command: mock",
+	}, "\n") + "\n")
+	if err := os.WriteFile(configPath, raw, 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	closed := false
+	originalRegister := registerMCPStdioServer
+	t.Cleanup(func() { registerMCPStdioServer = originalRegister })
+	registerMCPStdioServer = func(registry *mcp.Registry, cfg config.Config, server config.MCPServerConfig) error {
+		client := &closeableStubMCPServerClient{closed: &closed}
+		return registry.RegisterServer(server.ID, "stdio", server.Version, client)
+	}
+
+	originalBuildToolManager := buildToolManagerFunc
+	t.Cleanup(func() { buildToolManagerFunc = originalBuildToolManager })
+	buildToolManagerFunc = func(registry *tools.Registry) (tools.Manager, error) {
+		return nil, errors.New("build tool manager failed")
+	}
+
+	_, err := BuildRuntime(context.Background(), BootstrapOptions{})
+	if err == nil || !strings.Contains(err.Error(), "build tool manager failed") {
+		t.Fatalf("expected tool manager build error, got %v", err)
+	}
+	if !closed {
+		t.Fatalf("expected MCP resources to be closed on BuildRuntime failure")
+	}
+}
+
+func TestNewProgramCleansResourcesWhenTUIBuildFails(t *testing.T) {
+	disableBuiltinProviderAPIKeys(t)
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	configDir := filepath.Join(home, ".neocode")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	configPath := filepath.Join(configDir, "config.yaml")
+	raw := []byte(strings.Join([]string{
+		"selected_provider: openai",
+		"current_model: " + config.OpenAIDefaultModel,
+		"shell: powershell",
+		"tools:",
+		"  mcp:",
+		"    servers:",
+		"      - id: docs",
+		"        enabled: true",
+		"        source: stdio",
+		"        stdio:",
+		"          command: mock",
+	}, "\n") + "\n")
+	if err := os.WriteFile(configPath, raw, 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	closed := false
+	originalRegister := registerMCPStdioServer
+	t.Cleanup(func() { registerMCPStdioServer = originalRegister })
+	registerMCPStdioServer = func(registry *mcp.Registry, cfg config.Config, server config.MCPServerConfig) error {
+		client := &closeableStubMCPServerClient{closed: &closed}
+		return registry.RegisterServer(server.ID, "stdio", server.Version, client)
+	}
+
+	originalNewTUIWithMemo := newTUIWithMemo
+	t.Cleanup(func() { newTUIWithMemo = originalNewTUIWithMemo })
+	newTUIWithMemo = func(
+		cfg *config.Config,
+		configManager *config.Manager,
+		runtime agentruntime.Runtime,
+		providerSvc tui.ProviderController,
+		memoSvc *memo.Service,
+	) (tui.App, error) {
+		return tui.App{}, errors.New("tui init failed")
+	}
+
+	_, cleanup, err := NewProgram(context.Background(), BootstrapOptions{})
+	if cleanup != nil {
+		t.Fatalf("expected nil cleanup on NewProgram failure")
+	}
+	if err == nil || !strings.Contains(err.Error(), "tui init failed") {
+		t.Fatalf("expected tui init error, got %v", err)
+	}
+	if !closed {
+		t.Fatalf("expected MCP resources to be closed when NewProgram fails")
 	}
 }
 

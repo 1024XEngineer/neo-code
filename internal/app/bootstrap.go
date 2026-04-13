@@ -33,6 +33,8 @@ const utf8CodePage = 65001
 var (
 	setConsoleOutputCodePage = platformSetConsoleOutputCodePage
 	setConsoleInputCodePage  = platformSetConsoleInputCodePage
+	buildToolManagerFunc     = buildToolManager
+	newTUIWithMemo           = tui.NewWithMemo
 )
 
 // BootstrapOptions 描述应用启动时可注入的运行时选项。
@@ -125,7 +127,14 @@ func BuildRuntime(ctx context.Context, opts BootstrapOptions) (RuntimeBundle, er
 	if err != nil {
 		return RuntimeBundle{}, err
 	}
-	toolManager, err := buildToolManager(toolRegistry)
+	needCleanup := true
+	defer func() {
+		if needCleanup && toolsCleanup != nil {
+			_ = toolsCleanup()
+		}
+	}()
+
+	toolManager, err := buildToolManagerFunc(toolRegistry)
 	if err != nil {
 		return RuntimeBundle{}, err
 	}
@@ -165,6 +174,7 @@ func BuildRuntime(ctx context.Context, opts BootstrapOptions) (RuntimeBundle, er
 			memo.NewAutoExtractor(nil, memoSvc),
 		))
 	}
+	needCleanup = false
 
 	return RuntimeBundle{
 		Config:            cfg,
@@ -183,8 +193,11 @@ func NewProgram(ctx context.Context, opts BootstrapOptions) (*tea.Program, func(
 		return nil, nil, err
 	}
 
-	tuiApp, err := tui.NewWithMemo(&bundle.Config, bundle.ConfigManager, bundle.Runtime, bundle.ProviderSelection, bundle.MemoService)
+	tuiApp, err := newTUIWithMemo(&bundle.Config, bundle.ConfigManager, bundle.Runtime, bundle.ProviderSelection, bundle.MemoService)
 	if err != nil {
+		if bundle.Close != nil {
+			_ = bundle.Close()
+		}
 		return nil, nil, err
 	}
 	return tea.NewProgram(

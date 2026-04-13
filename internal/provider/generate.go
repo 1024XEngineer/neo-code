@@ -36,6 +36,10 @@ func GenerateText(ctx context.Context, p Provider, req providertypes.GenerateReq
 					continue
 				}
 				messageDone = true
+			default:
+				if streamErr == nil {
+					streamErr = fmt.Errorf("unexpected provider stream event %q", event.Type)
+				}
 			}
 		}
 		if streamErr == nil && !messageDone {
