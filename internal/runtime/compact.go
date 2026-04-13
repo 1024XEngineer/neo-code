@@ -96,23 +96,31 @@ func (s *Service) runCompactForSession(
 	mode contextcompact.Mode,
 	errorPolicy compactErrorPolicy,
 ) (agentsession.Session, contextcompact.Result, error) {
+	failCompact := func(err error) (agentsession.Session, contextcompact.Result, error) {
+		s.emit(ctx, EventCompactError, runID, session.ID, CompactErrorPayload{
+			TriggerMode: string(mode),
+			Message:     err.Error(),
+		})
+		if errorPolicy == compactErrorStrict {
+			return session, contextcompact.Result{}, err
+		}
+		return session, contextcompact.Result{}, nil
+	}
+
 	runner := s.compactRunner
 	if runner == nil {
 		var err error
 		runner, err = s.defaultCompactRunner(session, cfg)
 		if err != nil {
-			s.emit(ctx, EventCompactError, runID, session.ID, CompactErrorPayload{
-				TriggerMode: string(mode),
-				Message:     err.Error(),
-			})
-			if errorPolicy == compactErrorStrict {
-				return session, contextcompact.Result{}, err
-			}
-			return session, contextcompact.Result{}, nil
+			return failCompact(err)
 		}
 	}
 
 	originalMessages := append([]providertypes.Message(nil), session.Messages...)
+	originalTaskState := session.TaskState.Clone()
+	originalTokenInputTotal := session.TokenInputTotal
+	originalTokenOutputTotal := session.TokenOutputTotal
+	originalUpdatedAt := session.UpdatedAt
 	s.emit(ctx, EventCompactStart, runID, session.ID, string(mode))
 
 	result, err := runner.Run(ctx, contextcompact.Input{
@@ -124,14 +132,7 @@ func (s *Service) runCompactForSession(
 		Config:    cfg.Context.Compact,
 	})
 	if err != nil {
-		s.emit(ctx, EventCompactError, runID, session.ID, CompactErrorPayload{
-			TriggerMode: string(mode),
-			Message:     err.Error(),
-		})
-		if errorPolicy == compactErrorStrict {
-			return session, contextcompact.Result{}, err
-		}
-		return session, contextcompact.Result{}, nil
+		return failCompact(err)
 	}
 
 	if result.Applied {
@@ -141,15 +142,12 @@ func (s *Service) runCompactForSession(
 		session.TokenOutputTotal = 0
 		session.UpdatedAt = time.Now()
 		if err := s.sessionStore.Save(ctx, &session); err != nil {
-			s.emit(ctx, EventCompactError, runID, session.ID, CompactErrorPayload{
-				TriggerMode: string(mode),
-				Message:     err.Error(),
-			})
 			session.Messages = originalMessages
-			if errorPolicy == compactErrorStrict {
-				return session, contextcompact.Result{}, err
-			}
-			return session, contextcompact.Result{}, nil
+			session.TaskState = originalTaskState
+			session.TokenInputTotal = originalTokenInputTotal
+			session.TokenOutputTotal = originalTokenOutputTotal
+			session.UpdatedAt = originalUpdatedAt
+			return failCompact(err)
 		}
 	}
 
