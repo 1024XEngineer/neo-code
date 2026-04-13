@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -80,6 +81,81 @@ func (s *memoryStore) ListSummaries(ctx context.Context) ([]agentsession.Summary
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	summaries := make([]agentsession.Summary, 0, len(s.sessions))
+	for _, session := range s.sessions {
+		summaries = append(summaries, agentsession.Summary{
+			ID:        session.ID,
+			Title:     session.Title,
+			CreatedAt: session.CreatedAt,
+			UpdatedAt: session.UpdatedAt,
+		})
+	}
+	return summaries, nil
+}
+
+// blockingLoadStore 用于并发测试：首次 Load 阻塞，以验证同 session 的锁时序。
+type blockingLoadStore struct {
+	mu             sync.Mutex
+	sessions       map[string]agentsession.Session
+	loadCalls      int
+	loadEntered    chan struct{}
+	unblockFirst   chan struct{}
+	loadEnteredSet bool
+}
+
+func newBlockingLoadStore() *blockingLoadStore {
+	return &blockingLoadStore{
+		sessions:     map[string]agentsession.Session{},
+		loadEntered:  make(chan struct{}),
+		unblockFirst: make(chan struct{}),
+	}
+}
+
+func (s *blockingLoadStore) Save(ctx context.Context, session *agentsession.Session) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if session == nil {
+		return errors.New("nil session")
+	}
+	s.mu.Lock()
+	s.sessions[session.ID] = cloneSession(*session)
+	s.mu.Unlock()
+	return nil
+}
+
+func (s *blockingLoadStore) Load(ctx context.Context, id string) (agentsession.Session, error) {
+	if err := ctx.Err(); err != nil {
+		return agentsession.Session{}, err
+	}
+	s.mu.Lock()
+	s.loadCalls++
+	callIndex := s.loadCalls
+	if callIndex == 1 && !s.loadEnteredSet {
+		s.loadEnteredSet = true
+		close(s.loadEntered)
+	}
+	s.mu.Unlock()
+
+	if callIndex == 1 {
+		<-s.unblockFirst
+	}
+
+	s.mu.Lock()
+	session, ok := s.sessions[id]
+	s.mu.Unlock()
+	if !ok {
+		return agentsession.Session{}, errors.New("not found")
+	}
+	return cloneSession(session), nil
+}
+
+func (s *blockingLoadStore) ListSummaries(ctx context.Context) ([]agentsession.Summary, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	summaries := make([]agentsession.Summary, 0, len(s.sessions))
 	for _, session := range s.sessions {
 		summaries = append(summaries, agentsession.Summary{
@@ -1662,6 +1738,80 @@ func TestServiceCancelActiveRun(t *testing.T) {
 	assertEventSequence(t, events, []EventType{EventUserMessage, EventRunCanceled})
 	assertNoEventType(t, events, EventError)
 	assertEventsRunID(t, events, input.RunID)
+}
+
+func TestServiceRunSameSessionConcurrentNoMessageLoss(t *testing.T) {
+	manager := newRuntimeConfigManager(t)
+	registry := tools.NewRegistry()
+	registry.Register(&stubTool{name: "filesystem_read_file", content: "default"})
+
+	store := newBlockingLoadStore()
+	session := agentsession.New("same-session")
+	session.ID = "session-same-concurrent"
+	store.sessions[session.ID] = cloneSession(session)
+
+	scripted := &scriptedProvider{
+		name: "same-session-concurrent-provider",
+		chatFn: func(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error {
+			events <- providertypes.NewTextDeltaStreamEvent("done")
+			events <- providertypes.NewMessageDoneStreamEvent("stop", nil)
+			return nil
+		},
+	}
+
+	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: scripted}, nil)
+	errCh1 := make(chan error, 1)
+	errCh2 := make(chan error, 1)
+	go func() {
+		errCh1 <- service.Run(context.Background(), UserInput{SessionID: session.ID, RunID: "run-same-1", Content: "hello-1"})
+	}()
+
+	select {
+	case <-store.loadEntered:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("timed out waiting first load entry")
+	}
+
+	go func() {
+		errCh2 <- service.Run(context.Background(), UserInput{SessionID: session.ID, RunID: "run-same-2", Content: "hello-2"})
+	}()
+
+	time.Sleep(120 * time.Millisecond)
+	store.mu.Lock()
+	loadCallsBeforeRelease := store.loadCalls
+	store.mu.Unlock()
+	if loadCallsBeforeRelease != 1 {
+		t.Fatalf("expected second run not to load before first lock release, got load calls = %d", loadCallsBeforeRelease)
+	}
+
+	close(store.unblockFirst)
+	if err := <-errCh1; err != nil {
+		t.Fatalf("first run error = %v", err)
+	}
+	if err := <-errCh2; err != nil {
+		t.Fatalf("second run error = %v", err)
+	}
+
+	store.mu.Lock()
+	finalSession := cloneSession(store.sessions[session.ID])
+	store.mu.Unlock()
+
+	if len(finalSession.Messages) != 4 {
+		t.Fatalf("expected 4 messages from two runs, got %+v", finalSession.Messages)
+	}
+	userCount := 0
+	assistantCount := 0
+	for _, message := range finalSession.Messages {
+		switch message.Role {
+		case providertypes.RoleUser:
+			userCount++
+		case providertypes.RoleAssistant:
+			assistantCount++
+		}
+	}
+	if userCount != 2 || assistantCount != 2 {
+		t.Fatalf("expected 2 user + 2 assistant messages, got users=%d assistants=%d messages=%+v", userCount, assistantCount, finalSession.Messages)
+	}
 }
 
 func TestServiceRunCanceledByProvider(t *testing.T) {

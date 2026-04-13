@@ -218,11 +218,32 @@ func TestRuntimeLoadOrCreateAndEmitBranches(t *testing.T) {
 	}
 	<-done
 
-	token1 := service.startRun(func() {})
-	token2 := service.startRun(func() {})
+	canceled := make([]string, 0, 2)
+	token1 := service.startRun(func() { canceled = append(canceled, "run-1") })
+	token2 := service.startRun(func() { canceled = append(canceled, "run-2") })
 	service.finishRun(token1)
 	if service.activeRunToken != token2 {
 		t.Fatalf("expected finishRun with stale token to keep active run")
+	}
+
+	if !service.CancelActiveRun() {
+		t.Fatalf("expected cancel latest active run")
+	}
+	if len(canceled) != 1 || canceled[0] != "run-2" {
+		t.Fatalf("expected latest run canceled first, got %v", canceled)
+	}
+
+	service.finishRun(token2)
+	if !service.CancelActiveRun() {
+		t.Fatalf("expected previous active run to become cancel target")
+	}
+	if len(canceled) != 2 || canceled[1] != "run-1" {
+		t.Fatalf("expected second cancel to target run-1, got %v", canceled)
+	}
+
+	service.finishRun(token1)
+	if service.CancelActiveRun() {
+		t.Fatalf("expected no active run after all runs finished")
 	}
 }
 

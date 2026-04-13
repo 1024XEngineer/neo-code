@@ -66,13 +66,13 @@ type Service struct {
 	approvalBroker  *approval.Broker
 	memoExtractor   MemoExtractor
 
-	events          chan RuntimeEvent
-	sessionMu       sync.Mutex
-	sessionLocks    map[string]*sync.Mutex
-	runMu           sync.Mutex
-	activeRunToken  uint64
-	nextRunToken    uint64
-	activeRunCancel context.CancelFunc
+	events           chan RuntimeEvent
+	sessionMu        sync.Mutex
+	sessionLocks     map[string]*sync.Mutex
+	runMu            sync.Mutex
+	activeRunToken   uint64
+	nextRunToken     uint64
+	activeRunCancels map[uint64]context.CancelFunc
 }
 
 // NewWithFactory 使用注入依赖构建默认 runtime Service。
@@ -94,14 +94,15 @@ func NewWithFactory(
 	}
 
 	return &Service{
-		configManager:   configManager,
-		sessionStore:    sessionStore,
-		toolManager:     toolManager,
-		providerFactory: providerFactory,
-		contextBuilder:  contextBuilder,
-		approvalBroker:  approval.NewBroker(),
-		events:          make(chan RuntimeEvent, 128),
-		sessionLocks:    make(map[string]*sync.Mutex),
+		configManager:    configManager,
+		sessionStore:     sessionStore,
+		toolManager:      toolManager,
+		providerFactory:  providerFactory,
+		contextBuilder:   contextBuilder,
+		approvalBroker:   approval.NewBroker(),
+		events:           make(chan RuntimeEvent, 128),
+		sessionLocks:     make(map[string]*sync.Mutex),
+		activeRunCancels: make(map[uint64]context.CancelFunc),
 	}
 }
 
@@ -110,10 +111,14 @@ func (s *Service) SetMemoExtractor(extractor MemoExtractor) {
 	s.memoExtractor = extractor
 }
 
-// CancelActiveRun 尝试取消当前正在执行的 Run。
+// CancelActiveRun 尝试取消最近一次仍在执行的 Run。
 func (s *Service) CancelActiveRun() bool {
 	s.runMu.Lock()
-	cancel := s.activeRunCancel
+	if s.activeRunToken == 0 {
+		s.runMu.Unlock()
+		return false
+	}
+	cancel := s.activeRunCancels[s.activeRunToken]
 	s.runMu.Unlock()
 	if cancel == nil {
 		return false
@@ -215,21 +220,26 @@ func (s *Service) startRun(cancel context.CancelFunc) uint64 {
 	s.nextRunToken++
 	token := s.nextRunToken
 	s.activeRunToken = token
-	s.activeRunCancel = cancel
+	s.activeRunCancels[token] = cancel
 	return token
 }
 
-// finishRun 在运行结束时释放当前激活的取消句柄。
+// finishRun 在运行结束时释放指定运行的取消句柄，并回退到最新活跃运行。
 func (s *Service) finishRun(token uint64) {
 	s.runMu.Lock()
 	defer s.runMu.Unlock()
 
+	delete(s.activeRunCancels, token)
 	if s.activeRunToken != token {
 		return
 	}
 
 	s.activeRunToken = 0
-	s.activeRunCancel = nil
+	for activeToken := range s.activeRunCancels {
+		if activeToken > s.activeRunToken {
+			s.activeRunToken = activeToken
+		}
+	}
 }
 
 // acquireSessionLock 获取指定会话的互斥锁，确保同一会话的 Run/Compact 串行执行。

@@ -18,8 +18,8 @@ import (
 )
 
 // Run 执行一次完整的 ReAct 闭环：保存用户输入、驱动模型、执行工具并发出事件。
-// 会话创建/加载在锁外完成，仅会话级操作（ReAct 循环）受会话锁保护，
-// 不同会话可并行执行。
+// 已有会话会先加锁再加载/更新，确保同一会话并发 Run 不会出现状态覆盖；
+// 新会话在创建后再绑定会话锁，不同会话可并行执行。
 func (s *Service) Run(ctx context.Context, input UserInput) error {
 	if strings.TrimSpace(input.Content) == "" {
 		return errors.New("runtime: input content is empty")
@@ -34,14 +34,28 @@ func (s *Service) Run(ctx context.Context, input UserInput) error {
 	ctx = runCtx
 
 	initialCfg := s.configManager.Get()
+	sessionID := strings.TrimSpace(input.SessionID)
+	releaseSessionLock := func() {}
+	defer func() {
+		releaseSessionLock()
+	}()
+
+	if sessionID != "" {
+		sessionMu := s.acquireSessionLock(sessionID)
+		sessionMu.Lock()
+		releaseSessionLock = sessionMu.Unlock
+	}
+
 	session, err := s.loadOrCreateSession(ctx, input.SessionID, input.Content, initialCfg.Workdir, input.Workdir)
 	if err != nil {
 		return s.handleRunError(ctx, input.RunID, input.SessionID, err)
 	}
 
-	sessionMu := s.acquireSessionLock(session.ID)
-	sessionMu.Lock()
-	defer sessionMu.Unlock()
+	if sessionID == "" {
+		sessionMu := s.acquireSessionLock(session.ID)
+		sessionMu.Lock()
+		releaseSessionLock = sessionMu.Unlock
+	}
 
 	state := newRunState(input.RunID, session)
 	if err := s.appendUserMessageAndSave(ctx, &state, input.Content); err != nil {
