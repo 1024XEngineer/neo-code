@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -49,13 +50,23 @@ func NewRootCommand() *cobra.Command {
 }
 
 // defaultRootProgramLauncher 负责在默认根命令路径下启动 TUI。
-func defaultRootProgramLauncher(ctx context.Context, opts app.BootstrapOptions) error {
+func defaultRootProgramLauncher(ctx context.Context, opts app.BootstrapOptions) (err error) {
 	program, cleanup, err := newRootProgram(ctx, opts)
 	if err != nil {
 		return err
 	}
 	if cleanup != nil {
-		defer cleanup()
+		defer func() {
+			cleanupErr := cleanup()
+			if cleanupErr == nil {
+				return
+			}
+			if err == nil {
+				err = cleanupErr
+				return
+			}
+			err = errors.Join(err, cleanupErr)
+		}()
 	}
 	_, err = program.Run()
 	return err

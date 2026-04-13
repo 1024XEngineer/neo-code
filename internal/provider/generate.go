@@ -57,5 +57,8 @@ func GenerateText(ctx context.Context, p Provider, req providertypes.GenerateReq
 		}
 		return "", streamErr
 	}
-	return builder.String(), err
+	if err != nil {
+		return "", err
+	}
+	return builder.String(), nil
 }

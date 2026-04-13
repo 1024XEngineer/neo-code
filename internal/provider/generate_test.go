@@ -70,6 +70,24 @@ func TestGenerateTextProviderError(t *testing.T) {
 	}
 }
 
+func TestGenerateTextReturnsEmptyTextWhenProviderErrorsAfterStreaming(t *testing.T) {
+	providerStub := &stubTextGenProvider{
+		generate: func(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error {
+			events <- providertypes.NewTextDeltaStreamEvent("partial")
+			events <- providertypes.NewMessageDoneStreamEvent("stop", nil)
+			return errors.New("provider error")
+		},
+	}
+
+	text, err := provider.GenerateText(context.Background(), providerStub, providertypes.GenerateRequest{})
+	if err == nil || !strings.Contains(err.Error(), "provider error") {
+		t.Fatalf("GenerateText() error = %v", err)
+	}
+	if text != "" {
+		t.Fatalf("text = %q, want empty text on provider error", text)
+	}
+}
+
 func TestGenerateTextRequiresMessageDone(t *testing.T) {
 	providerStub := &stubTextGenProvider{
 		generate: func(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error {

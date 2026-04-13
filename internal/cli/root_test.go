@@ -125,6 +125,47 @@ func TestDefaultRootProgramLauncherReturnsNewProgramError(t *testing.T) {
 	}
 }
 
+func TestDefaultRootProgramLauncherReturnsCleanupErrorWhenRunSucceeds(t *testing.T) {
+	originalNewProgram := newRootProgram
+	t.Cleanup(func() { newRootProgram = originalNewProgram })
+
+	cleanupErr := errors.New("cleanup failed")
+	newRootProgram = func(ctx context.Context, opts app.BootstrapOptions) (*tea.Program, func() error, error) {
+		model := quitModel{}
+		return tea.NewProgram(model, tea.WithInput(nil), tea.WithOutput(io.Discard)), func() error {
+			return cleanupErr
+		}, nil
+	}
+
+	err := defaultRootProgramLauncher(context.Background(), app.BootstrapOptions{})
+	if !errors.Is(err, cleanupErr) {
+		t.Fatalf("expected cleanup error %v, got %v", cleanupErr, err)
+	}
+}
+
+func TestDefaultRootProgramLauncherJoinsRunAndCleanupErrors(t *testing.T) {
+	originalNewProgram := newRootProgram
+	t.Cleanup(func() { newRootProgram = originalNewProgram })
+
+	runErr := context.Canceled
+	cleanupErr := errors.New("cleanup failed")
+	newRootProgram = func(ctx context.Context, opts app.BootstrapOptions) (*tea.Program, func() error, error) {
+		cancelledCtx, cancel := context.WithCancel(context.Background())
+		cancel()
+		return tea.NewProgram(quitModel{}, tea.WithContext(cancelledCtx), tea.WithInput(nil), tea.WithOutput(io.Discard)), func() error {
+			return cleanupErr
+		}, nil
+	}
+
+	err := defaultRootProgramLauncher(context.Background(), app.BootstrapOptions{})
+	if !errors.Is(err, runErr) {
+		t.Fatalf("expected joined error to include run error %v, got %v", runErr, err)
+	}
+	if !errors.Is(err, cleanupErr) {
+		t.Fatalf("expected joined error to include cleanup error %v, got %v", cleanupErr, err)
+	}
+}
+
 type quitModel struct{}
 
 func (quitModel) Init() tea.Cmd {
