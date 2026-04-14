@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"neo-code/internal/gateway/protocol"
@@ -12,6 +13,8 @@ const (
 	WakeErrorCodeInvalidAction = "invalid_action"
 	// WakeErrorCodeMissingRequiredField 表示 wake 请求缺少必要字段。
 	WakeErrorCodeMissingRequiredField = "missing_required_field"
+	// WakeErrorCodeUnsafePath 表示输入路径存在越界风险或不符合安全约束。
+	WakeErrorCodeUnsafePath = "unsafe_path"
 )
 
 // WakeError 表示 wake handler 返回的结构化错误。
@@ -64,6 +67,12 @@ func (h *WakeOpenURLHandler) Handle(intent protocol.WakeIntent) (WakeOpenURLResu
 				"missing required field: params.path",
 			)
 		}
+		if !isSafeReviewPath(path) {
+			return WakeOpenURLResult{}, newWakeError(
+				WakeErrorCodeUnsafePath,
+				"unsafe review path",
+			)
+		}
 	}
 
 	return WakeOpenURLResult{
@@ -71,6 +80,46 @@ func (h *WakeOpenURLHandler) Handle(intent protocol.WakeIntent) (WakeOpenURLResu
 		Action:  action,
 		Params:  cloneParams(intent.Params),
 	}, nil
+}
+
+// isSafeReviewPath 校验 review 请求路径，要求必须为相对路径且不允许出现目录回退段。
+func isSafeReviewPath(path string) bool {
+	trimmed := strings.TrimSpace(path)
+	if trimmed == "" {
+		return false
+	}
+	if filepath.IsAbs(trimmed) {
+		return false
+	}
+	if containsParentTraversalSegment(trimmed) {
+		return false
+	}
+	cleaned := filepath.Clean(trimmed)
+	if cleaned == "." || cleaned == "" {
+		return false
+	}
+	if containsParentTraversalSegment(cleaned) {
+		return false
+	}
+	return true
+}
+
+// containsParentTraversalSegment 按路径段语义识别目录回退段，避免子串匹配导致误伤。
+func containsParentTraversalSegment(path string) bool {
+	normalized := normalizePath(path)
+	normalized = filepath.ToSlash(normalized)
+	segments := strings.Split(normalized, "/")
+	for _, segment := range segments {
+		if segment == ".." {
+			return true
+		}
+	}
+	return false
+}
+
+// normalizePath 将路径转换为统一的正斜杠表示，便于后续分段检查。
+func normalizePath(path string) string {
+	return filepath.ToSlash(strings.ReplaceAll(path, "\\", "/"))
 }
 
 // cloneParams 复制参数 map，避免调用方修改影响返回值。

@@ -54,6 +54,56 @@ func TestWakeOpenURLHandlerHandleMissingPath(t *testing.T) {
 	}
 }
 
+func TestWakeOpenURLHandlerHandleUnsafePath(t *testing.T) {
+	testCases := []string{
+		"../../etc/passwd",
+		"/etc/passwd",
+		"..\\Windows\\system32",
+	}
+
+	handler := NewWakeOpenURLHandler()
+	for _, path := range testCases {
+		_, err := handler.Handle(protocol.WakeIntent{
+			Action: protocol.WakeActionReview,
+			Params: map[string]string{
+				"path": path,
+			},
+		})
+		if err == nil {
+			t.Fatalf("path %q: expected unsafe path error", path)
+		}
+		if err.Code != WakeErrorCodeUnsafePath {
+			t.Fatalf("path %q: error code = %q, want %q", path, err.Code, WakeErrorCodeUnsafePath)
+		}
+	}
+}
+
+func TestIsSafeReviewPath(t *testing.T) {
+	testCases := []struct {
+		name string
+		path string
+		want bool
+	}{
+		{name: "relative file", path: "README.md", want: true},
+		{name: "relative nested path", path: "docs/spec/design.md", want: true},
+		{name: "contains double dot in segment", path: "docs/v1..2/spec.md", want: true},
+		{name: "parent traversal", path: "../secret.txt", want: false},
+		{name: "parent traversal nested", path: "a/../../secret.txt", want: false},
+		{name: "absolute unix path", path: "/tmp/file", want: false},
+		{name: "empty", path: "", want: false},
+		{name: "dot current dir", path: ".", want: false},
+	}
+
+	for _, tc := range testCases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isSafeReviewPath(tc.path); got != tc.want {
+				t.Fatalf("isSafeReviewPath(%q) = %v, want %v", tc.path, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestCloneParams(t *testing.T) {
 	original := map[string]string{"path": "README.md"}
 	cloned := cloneParams(original)
