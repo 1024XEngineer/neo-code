@@ -4,8 +4,8 @@
 
 ## 概览
 
-- runtime 已接入手动 compact、基于 token 阈值的自动 compact，以及 provider 上下文过长后的 `reactive` compact 自动恢复。
-- `internal/context/compact` 支持 `manual`、`auto` 与 `reactive` 三种 mode。
+- runtime 已接入手动 compact、基于 token 阈值的自动 compact、provider 上下文过长后的 `reactive` compact 自动恢复，以及命中最大轮数前的 `loop_limit` continuation checkpoint。
+- `internal/context/compact` 支持 `manual`、`auto`、`reactive` 与 `loop_limit` 四种 mode。
 - 用户通过 `/compact` 对当前会话执行一次上下文压缩。
 - compact 前会先写入完整 transcript，随后生成并校验新的 durable `TaskState` 与 display summary，再回写会话消息。
 
@@ -18,6 +18,7 @@ context:
   compact:
     manual_strategy: keep_recent
     manual_keep_recent_messages: 10
+    read_time_max_message_spans: 24
     max_summary_chars: 1200
     micro_compact_disabled: false
   auto_compact:
@@ -29,6 +30,8 @@ context:
   控制手动 compact 的策略，支持 `keep_recent` 和 `full_replace`。
 - `manual_keep_recent_messages`
   在 `keep_recent` 模式下保留最近消息数量，并按 tool call 与 tool result 的原子块整体保留。
+- `read_time_max_message_spans`
+  控制 `context.Builder` 读时 trim 可保留的 message span 上限；该值越大，普通“继续”续跑时越不容易在未触发 compact 前丢掉较早的文件读取结果。
 - `max_summary_chars`
   控制 compact summary 的最大字符数。
 - `micro_compact_disabled`
@@ -76,6 +79,12 @@ context:
 2. 触发一次 `compact.Run(mode=reactive)`。
 3. 继续复用 `compact_start`、`compact_done`、`compact_error` 事件，并通过 `trigger_mode=reactive` 区分来源。
 4. 每次 `Run()` 最多只执行一次 reactive 重试，避免无限循环。
+
+当 runtime 命中 `max_loops` 停止条件时，还会在返回最终错误前 best-effort 触发一次 `compact.Run(mode=loop_limit)` 作为 continuation checkpoint：
+
+1. 成功时回写 compact 后的消息、durable `TaskState` 与重置后的 token 计数。
+2. 继续复用 `compact_start`、`compact_done`、`compact_error` 事件，并通过 `trigger_mode=loop_limit` 标记来源。
+3. 无论 compact 成功、失败或 no-op，本次 run 仍会结束；区别只在于后续“继续”能否优先复用 durable checkpoint。
 
 ## 生成协议
 

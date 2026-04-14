@@ -21,6 +21,8 @@
 - `compact_done`
 - `compact_error`
 
+这三类 compact 事件同时用于 `manual`、`auto`、`reactive` 与 `loop_limit` 四种来源，调用方可通过 payload 中的 `trigger_mode` 区分。
+
 ## ReAct 主循环
 
 1. 加载目标会话或创建新会话。
@@ -35,6 +37,10 @@
 10. 执行返回的工具调用，并保存每一个工具结果。
 11. 如果最终 assistant 回复后没有后续工具调用，则在 runtime 收口处安排一次后台 memo 自动提取。
 12. 如果仍需继续推理，则进入下一轮；否则结束。
+
+补充说明：
+- 当下一轮开始前已命中 `max_loops` 上限时，runtime 会先尝试一次 `loop_limit` compact checkpoint，再发出最终 `error` 事件结束本次 run。
+- 该 checkpoint 成功时会先发出 `compact_start -> compact_done`，并把 session 消息、`TaskState` 与累计 token 重置后的状态持久化；失败时会发出 `compact_error`，随后仍以最大轮数错误结束。
 
 ### Memo 自动提取调度
 

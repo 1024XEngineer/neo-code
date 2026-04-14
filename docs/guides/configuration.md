@@ -52,6 +52,7 @@ context:
   compact:
     manual_strategy: keep_recent
     manual_keep_recent_messages: 10
+    read_time_max_message_spans: 24
     max_summary_chars: 1200
     micro_compact_disabled: false
   auto_compact:
@@ -75,6 +76,7 @@ context:
 |------|------|
 | `context.compact.manual_strategy` | `/compact` 手动压缩策略，支持 `keep_recent` / `full_replace` |
 | `context.compact.manual_keep_recent_messages` | `keep_recent` 策略下保留的最近消息数 |
+| `context.compact.read_time_max_message_spans` | context 读时保留的 message span 上限，用于降低“继续”时较早文件读取结果被过早裁掉的风险 |
 | `context.compact.max_summary_chars` | compact summary 最大字符数 |
 | `context.compact.micro_compact_disabled` | 是否关闭默认启用的 micro compact |
 | `context.auto_compact.enabled` | 是否启用自动压缩 |

@@ -38,4 +38,5 @@ type CompactOptions struct {
 	DisableMicroCompact           bool
 	AutoCompactThreshold          int
 	MicroCompactRetainedToolSpans int
+	ReadTimeMaxMessageSpans       int
 }

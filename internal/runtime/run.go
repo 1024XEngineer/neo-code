@@ -71,7 +71,21 @@ func (s *Service) Run(ctx context.Context, input UserInput) error {
 	for turn := 0; ; turn++ {
 		maxLoops := resolveMaxLoops(s.configManager.Get())
 		if turn >= maxLoops {
-			err := errors.New("runtime: max loop reached")
+			errMessage := "runtime: max loop reached"
+			applied, compactErr := s.applyCompactForState(
+				ctx,
+				&state,
+				s.configManager.Get(),
+				contextcompact.ModeLoopLimit,
+				compactErrorBestEffort,
+			)
+			if compactErr != nil {
+				return s.handleRunError(ctx, state.runID, state.session.ID, compactErr)
+			}
+			if applied {
+				errMessage = "runtime: max loop reached after saving continuation checkpoint"
+			}
+			err := errors.New(errMessage)
 			s.emit(ctx, EventError, state.runID, state.session.ID, err.Error())
 			return err
 		}
@@ -146,6 +160,7 @@ func (s *Service) prepareTurnSnapshot(ctx context.Context, state *runState) (tur
 			DisableMicroCompact:           cfg.Context.Compact.MicroCompactDisabled,
 			AutoCompactThreshold:          autoCompactThreshold(cfg),
 			MicroCompactRetainedToolSpans: cfg.Context.Compact.MicroCompactRetainedToolSpans,
+			ReadTimeMaxMessageSpans:       cfg.Context.Compact.ReadTimeMaxMessageSpans,
 		},
 	})
 	if err != nil {

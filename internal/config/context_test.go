@@ -13,6 +13,7 @@ func TestContextConfigCloneIndependence(t *testing.T) {
 			ManualStrategy:           CompactManualStrategyKeepRecent,
 			ManualKeepRecentMessages: 10,
 			MaxSummaryChars:          1200,
+			ReadTimeMaxMessageSpans:  24,
 		},
 		AutoCompact: AutoCompactConfig{
 			Enabled:             true,
@@ -48,6 +49,7 @@ func TestCompactConfigCloneValueSemantics(t *testing.T) {
 		ManualKeepRecentMessages: 5,
 		MaxSummaryChars:          800,
 		MicroCompactDisabled:     true,
+		ReadTimeMaxMessageSpans:  24,
 	}
 	cloned := original.Clone()
 	if original != cloned {
@@ -98,6 +100,7 @@ func TestCompactConfigApplyDefaultsAllZeroValues(t *testing.T) {
 		ManualStrategy:           CompactManualStrategyFullReplace,
 		ManualKeepRecentMessages: 15,
 		MaxSummaryChars:          2000,
+		ReadTimeMaxMessageSpans:  24,
 	}
 	cfg.ApplyDefaults(defaults)
 	if cfg.ManualStrategy != CompactManualStrategyFullReplace {
@@ -108,5 +111,8 @@ func TestCompactConfigApplyDefaultsAllZeroValues(t *testing.T) {
 	}
 	if cfg.MaxSummaryChars != 2000 {
 		t.Fatalf("expected chars=2000, got %d", cfg.MaxSummaryChars)
+	}
+	if cfg.ReadTimeMaxMessageSpans != 24 {
+		t.Fatalf("expected read-time spans=24, got %d", cfg.ReadTimeMaxMessageSpans)
 	}
 }

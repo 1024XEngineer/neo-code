@@ -79,7 +79,7 @@ func (b *DefaultBuilder) Build(ctx context.Context, input BuildInput) (BuildResu
 
 	return BuildResult{
 		SystemPrompt:         composeSystemPrompt(sections...),
-		Messages:             applyReadTimeContextProjection(trimPolicy.Trim(input.Messages), input.TaskState, input.Compact, b.microCompactPolicies),
+		Messages:             applyReadTimeContextProjection(trimPolicy.Trim(input.Messages, input.Compact), input.TaskState, input.Compact, b.microCompactPolicies),
 		AutoCompactSuggested: shouldAutoCompact,
 	}, nil
 }

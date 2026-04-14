@@ -11,6 +11,7 @@ const (
 	DefaultCompactMaxSummaryChars                = 1200
 	DefaultAutoCompactInputTokenThreshold        = 100000
 	DefaultMicroCompactRetainedToolSpans         = 2
+	DefaultCompactReadTimeMaxMessageSpans        = 24
 
 	CompactManualStrategyKeepRecent  = "keep_recent"
 	CompactManualStrategyFullReplace = "full_replace"
@@ -27,6 +28,7 @@ type CompactConfig struct {
 	MaxSummaryChars               int    `yaml:"max_summary_chars,omitempty"`
 	MicroCompactDisabled          bool   `yaml:"micro_compact_disabled,omitempty"`
 	MicroCompactRetainedToolSpans int    `yaml:"micro_compact_retained_tool_spans,omitempty"`
+	ReadTimeMaxMessageSpans       int    `yaml:"read_time_max_message_spans,omitempty"`
 	MaxArchivedPromptChars        int    `yaml:"max_archived_prompt_chars,omitempty"`
 }
 
@@ -57,6 +59,7 @@ func defaultCompactConfig() CompactConfig {
 		ManualKeepRecentMessages:      DefaultCompactManualKeepRecentMessages,
 		MaxSummaryChars:               DefaultCompactMaxSummaryChars,
 		MicroCompactRetainedToolSpans: DefaultMicroCompactRetainedToolSpans,
+		ReadTimeMaxMessageSpans:       DefaultCompactReadTimeMaxMessageSpans,
 	}
 }
 
@@ -106,6 +109,9 @@ func (c *CompactConfig) ApplyDefaults(defaults CompactConfig) {
 	if c.MicroCompactRetainedToolSpans <= 0 {
 		c.MicroCompactRetainedToolSpans = defaults.MicroCompactRetainedToolSpans
 	}
+	if c.ReadTimeMaxMessageSpans <= 0 {
+		c.ReadTimeMaxMessageSpans = defaults.ReadTimeMaxMessageSpans
+	}
 }
 
 // ApplyDefaults 为 auto_compact 配置填充缺省阈值。
@@ -136,6 +142,9 @@ func (c CompactConfig) Validate() error {
 	}
 	if c.MaxSummaryChars <= 0 {
 		return errors.New("max_summary_chars must be greater than 0")
+	}
+	if c.ReadTimeMaxMessageSpans <= 0 {
+		return errors.New("read_time_max_message_spans must be greater than 0")
 	}
 
 	switch strings.ToLower(strings.TrimSpace(c.ManualStrategy)) {

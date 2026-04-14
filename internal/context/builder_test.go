@@ -9,11 +9,14 @@ import (
 	"strings"
 	"testing"
 
+	"neo-code/internal/config"
 	"neo-code/internal/context/internalcompact"
 	providertypes "neo-code/internal/provider/types"
 	agentsession "neo-code/internal/session"
 	"neo-code/internal/tools"
 )
+
+const maxRetainedMessageSpans = config.DefaultCompactReadTimeMaxMessageSpans
 
 type stubPromptSectionSource struct {
 	sections []promptSection
@@ -440,7 +443,7 @@ func TestTrimMessagesPreservesToolPairs(t *testing.T) {
 		providertypes.Message{Role: "user", Content: "latest"},
 	)
 
-	trimmed := trimMessages(messages)
+	trimmed := trimMessages(messages, maxRetainedMessageSpans)
 	if len(trimmed) > len(messages) {
 		t.Fatalf("trimmed messages should not grow")
 	}
@@ -463,6 +466,8 @@ func TestTrimMessagesPreservesToolPairs(t *testing.T) {
 func TestTrimMessagesProtectsLatestExplicitUserInstructionTail(t *testing.T) {
 	t.Parallel()
 
+	const retainedSpans = 10
+
 	messages := make([]providertypes.Message, 0, maxRetainedMessageSpans+5)
 	for i := 0; i < 2; i++ {
 		messages = append(messages, providertypes.Message{Role: providertypes.RoleUser, Content: fmt.Sprintf("old-%d", i)})
@@ -482,7 +487,7 @@ func TestTrimMessagesProtectsLatestExplicitUserInstructionTail(t *testing.T) {
 		providertypes.Message{Role: providertypes.RoleAssistant, Content: "follow-up-11"},
 	)
 
-	trimmed := trimMessages(messages)
+	trimmed := trimMessages(messages, retainedSpans)
 	if trimmed[0].Role != providertypes.RoleUser || trimmed[0].Content != "latest explicit instruction" {
 		t.Fatalf("expected protected tail to keep latest explicit user instruction, got %+v", trimmed[0])
 	}
@@ -493,6 +498,8 @@ func TestTrimMessagesProtectsLatestExplicitUserInstructionTail(t *testing.T) {
 
 func TestTrimMessagesUsesSharedSpanModel(t *testing.T) {
 	t.Parallel()
+
+	const retainedSpans = 10
 
 	messages := make([]providertypes.Message, 0, maxRetainedMessageSpans+6)
 	for i := 0; i < 3; i++ {
@@ -518,9 +525,9 @@ func TestTrimMessagesUsesSharedSpanModel(t *testing.T) {
 	)
 
 	spans := internalcompact.BuildMessageSpans(messages)
-	trimmed := trimMessages(messages)
+	trimmed := trimMessages(messages, retainedSpans)
 
-	start := spans[len(spans)-maxRetainedMessageSpans].Start
+	start := spans[len(spans)-retainedSpans].Start
 	if len(trimmed) == 0 || trimmed[0].Content != messages[start].Content {
 		t.Fatalf("expected trim to start from shared span boundary %d, got %+v", start, trimmed)
 	}
@@ -613,7 +620,7 @@ func TestTrimMessagesBoundaries(t *testing.T) {
 	for _, tt := range tests {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
-			trimmed := trimMessages(tt.input)
+			trimmed := trimMessages(tt.input, maxRetainedMessageSpans)
 			if len(trimmed) != tt.wantLen {
 				t.Fatalf("expected len %d, got %d", tt.wantLen, len(trimmed))
 			}

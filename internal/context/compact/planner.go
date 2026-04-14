@@ -22,7 +22,7 @@ type compactionPlanner struct{}
 
 // Plan 根据 mode 与配置返回摘要前的裁剪规划结果。
 func (compactionPlanner) Plan(mode Mode, messages []providertypes.Message, cfg config.CompactConfig) (compactionPlan, error) {
-	if mode == ModeReactive {
+	if mode == ModeReactive || mode == ModeLoopLimit {
 		return planKeepRecent(messages, cfg.ManualKeepRecentMessages), nil
 	}
 

@@ -1867,6 +1867,275 @@ func TestServiceRunErrorPaths(t *testing.T) {
 	}
 }
 
+func TestServiceRunMaxLoopsSavesLoopLimitCheckpoint(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	if err := manager.Update(context.Background(), func(cfg *config.Config) error {
+		cfg.MaxLoops = 1
+		return nil
+	}); err != nil {
+		t.Fatalf("update config: %v", err)
+	}
+	store := newMemoryStore()
+	session := agentsession.New("loop-limit-success")
+	session.ID = "session-loop-limit-success"
+	session.TokenInputTotal = 33
+	session.TokenOutputTotal = 7
+	session.Messages = []providertypes.Message{
+		{Role: providertypes.RoleUser, Content: "older request"},
+	}
+	store.sessions[session.ID] = cloneSession(session)
+
+	registry := tools.NewRegistry()
+	tool := &stubTool{name: "filesystem_edit", content: "loop tool output"}
+	registry.Register(tool)
+
+	scripted := &scriptedProvider{
+		responses: []scriptedResponse{
+			{
+				Message: providertypes.Message{
+					ToolCalls: []providertypes.ToolCall{
+						{ID: "loop-call", Name: "filesystem_edit", Arguments: `{"path":"x"}`},
+					},
+				},
+				FinishReason: "tool_calls",
+			},
+		},
+	}
+
+	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: scripted}, nil)
+	compactRunner := &stubCompactRunner{
+		result: contextcompact.Result{
+			Messages: []providertypes.Message{
+				{Role: providertypes.RoleAssistant, Content: "[compact_summary]\ndone:\n- checkpoint saved\n\nin_progress:\n- continue"},
+				{Role: providertypes.RoleUser, Content: "continue from saved checkpoint"},
+			},
+			TaskState: agentsession.TaskState{
+				Goal:      "Preserve continuation checkpoint",
+				Progress:  []string{"Saved loop-limit compact checkpoint"},
+				NextStep:  "Resume analysis from compacted context",
+				OpenItems: []string{"Continue source inspection"},
+				Decisions: []string{"Use loop_limit compact before max loop exit"},
+				Blockers:  []string{},
+				KeyArtifacts: []string{
+					"checkpoint-summary",
+				},
+				UserConstraints: []string{"Prefer durable checkpoint over raw message tail"},
+			},
+			Applied: true,
+			Metrics: contextcompact.Metrics{
+				BeforeChars: 120,
+				AfterChars:  48,
+				SavedRatio:  0.6,
+				TriggerMode: string(contextcompact.ModeLoopLimit),
+			},
+			TranscriptID:   "transcript_loop_limit",
+			TranscriptPath: "/tmp/loop_limit.jsonl",
+		},
+	}
+	service.compactRunner = compactRunner
+
+	err := service.Run(context.Background(), UserInput{
+		SessionID: session.ID,
+		RunID:     "run-loop-limit-success",
+		Content:   "continue",
+	})
+	if err == nil || !strings.Contains(err.Error(), "max loop reached after saving continuation checkpoint") {
+		t.Fatalf("expected loop-limit checkpoint error, got %v", err)
+	}
+
+	if len(compactRunner.calls) != 1 {
+		t.Fatalf("expected loop-limit compact to run once, got %d", len(compactRunner.calls))
+	}
+	if compactRunner.calls[0].Mode != contextcompact.ModeLoopLimit {
+		t.Fatalf("expected compact mode %q, got %q", contextcompact.ModeLoopLimit, compactRunner.calls[0].Mode)
+	}
+	if compactRunner.calls[0].SessionInputTokens != 33 {
+		t.Fatalf("expected pre-checkpoint input tokens to be preserved, got %d", compactRunner.calls[0].SessionInputTokens)
+	}
+
+	saved, err := store.Load(context.Background(), session.ID)
+	if err != nil {
+		t.Fatalf("load compacted session: %v", err)
+	}
+	if len(saved.Messages) != 2 || !strings.Contains(saved.Messages[0].Content, "checkpoint saved") {
+		t.Fatalf("expected compacted checkpoint messages, got %+v", saved.Messages)
+	}
+	if saved.TaskState.Goal != "Preserve continuation checkpoint" {
+		t.Fatalf("expected persisted task state, got %+v", saved.TaskState)
+	}
+	if saved.TokenInputTotal != 0 || saved.TokenOutputTotal != 0 {
+		t.Fatalf("expected token totals reset after loop-limit checkpoint, got input=%d output=%d", saved.TokenInputTotal, saved.TokenOutputTotal)
+	}
+
+	events := collectRuntimeEvents(service.Events())
+	assertEventSequence(t, events, []EventType{
+		EventUserMessage,
+		EventToolStart,
+		EventToolChunk,
+		EventToolResult,
+		EventCompactStart,
+		EventCompactDone,
+		EventError,
+	})
+	assertNoEventType(t, events, EventCompactError)
+
+	compactStartIndex := eventIndex(events, EventCompactStart)
+	compactDoneIndex := eventIndex(events, EventCompactDone)
+	errorIndex := eventIndex(events, EventError)
+	if compactStartIndex == -1 || compactDoneIndex == -1 || errorIndex == -1 {
+		t.Fatalf("expected loop-limit events in %+v", events)
+	}
+	if !(compactStartIndex < compactDoneIndex && compactDoneIndex < errorIndex) {
+		t.Fatalf("expected compact_start -> compact_done -> error ordering, got %+v", events)
+	}
+
+	foundLoopLimitDone := false
+	foundLoopLimitError := false
+	for _, event := range events {
+		switch event.Type {
+		case EventCompactDone:
+			payload, ok := event.Payload.(CompactResult)
+			if !ok {
+				t.Fatalf("expected CompactResult payload, got %T", event.Payload)
+			}
+			if payload.TriggerMode == string(contextcompact.ModeLoopLimit) {
+				foundLoopLimitDone = true
+			}
+		case EventError:
+			message, ok := event.Payload.(string)
+			if !ok {
+				t.Fatalf("expected string error payload, got %T", event.Payload)
+			}
+			if strings.Contains(message, "after saving continuation checkpoint") {
+				foundLoopLimitError = true
+			}
+		}
+	}
+	if !foundLoopLimitDone {
+		t.Fatalf("expected loop_limit compact_done payload in %+v", events)
+	}
+	if !foundLoopLimitError {
+		t.Fatalf("expected saved-checkpoint error payload in %+v", events)
+	}
+}
+
+func TestServiceRunMaxLoopsLoopLimitCompactFailureFallsBackToOriginalExit(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	if err := manager.Update(context.Background(), func(cfg *config.Config) error {
+		cfg.MaxLoops = 1
+		return nil
+	}); err != nil {
+		t.Fatalf("update config: %v", err)
+	}
+	store := newMemoryStore()
+	session := agentsession.New("loop-limit-failure")
+	session.ID = "session-loop-limit-failure"
+	session.TokenInputTotal = 12
+	session.TokenOutputTotal = 4
+	session.Messages = []providertypes.Message{
+		{Role: providertypes.RoleUser, Content: "older request"},
+	}
+	store.sessions[session.ID] = cloneSession(session)
+
+	registry := tools.NewRegistry()
+	registry.Register(&stubTool{name: "filesystem_edit", content: "loop tool output"})
+
+	scripted := &scriptedProvider{
+		responses: []scriptedResponse{
+			{
+				Message: providertypes.Message{
+					ToolCalls: []providertypes.ToolCall{
+						{ID: "loop-call", Name: "filesystem_edit", Arguments: `{"path":"x"}`},
+					},
+				},
+				FinishReason: "tool_calls",
+			},
+		},
+	}
+
+	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: scripted}, nil)
+	compactRunner := &stubCompactRunner{err: errors.New("loop limit compact failed")}
+	service.compactRunner = compactRunner
+
+	err := service.Run(context.Background(), UserInput{
+		SessionID: session.ID,
+		RunID:     "run-loop-limit-failure",
+		Content:   "continue",
+	})
+	if err == nil || !strings.Contains(err.Error(), "max loop reached") || strings.Contains(err.Error(), "after saving continuation checkpoint") {
+		t.Fatalf("expected original max loop error, got %v", err)
+	}
+
+	if len(compactRunner.calls) != 1 {
+		t.Fatalf("expected loop-limit compact to be attempted once, got %d", len(compactRunner.calls))
+	}
+	if compactRunner.calls[0].Mode != contextcompact.ModeLoopLimit {
+		t.Fatalf("expected compact mode %q, got %q", contextcompact.ModeLoopLimit, compactRunner.calls[0].Mode)
+	}
+
+	saved, err := store.Load(context.Background(), session.ID)
+	if err != nil {
+		t.Fatalf("load session after failed checkpoint: %v", err)
+	}
+	if len(saved.Messages) != 4 {
+		t.Fatalf("expected original messages to remain after compact failure, got %+v", saved.Messages)
+	}
+	if saved.TokenInputTotal != 12 || saved.TokenOutputTotal != 4 {
+		t.Fatalf("expected token totals to remain unchanged, got input=%d output=%d", saved.TokenInputTotal, saved.TokenOutputTotal)
+	}
+
+	events := collectRuntimeEvents(service.Events())
+	assertEventSequence(t, events, []EventType{
+		EventUserMessage,
+		EventToolStart,
+		EventToolChunk,
+		EventToolResult,
+		EventCompactStart,
+		EventCompactError,
+		EventError,
+	})
+	assertNoEventType(t, events, EventCompactDone)
+
+	compactStartIndex := eventIndex(events, EventCompactStart)
+	compactErrorIndex := eventIndex(events, EventCompactError)
+	errorIndex := eventIndex(events, EventError)
+	if compactStartIndex == -1 || compactErrorIndex == -1 || errorIndex == -1 {
+		t.Fatalf("expected loop-limit failure events in %+v", events)
+	}
+	if !(compactStartIndex < compactErrorIndex && compactErrorIndex < errorIndex) {
+		t.Fatalf("expected compact_start -> compact_error -> error ordering, got %+v", events)
+	}
+
+	foundLoopLimitCompactError := false
+	for _, event := range events {
+		switch event.Type {
+		case EventCompactError:
+			payload, ok := event.Payload.(CompactErrorPayload)
+			if !ok {
+				t.Fatalf("expected CompactErrorPayload, got %T", event.Payload)
+			}
+			if payload.TriggerMode == string(contextcompact.ModeLoopLimit) && strings.Contains(payload.Message, "loop limit compact failed") {
+				foundLoopLimitCompactError = true
+			}
+		case EventError:
+			message, ok := event.Payload.(string)
+			if !ok {
+				t.Fatalf("expected string error payload, got %T", event.Payload)
+			}
+			if strings.Contains(message, "after saving continuation checkpoint") {
+				t.Fatalf("did not expect saved-checkpoint message after compact failure: %+v", events)
+			}
+		}
+	}
+	if !foundLoopLimitCompactError {
+		t.Fatalf("expected loop_limit compact_error payload in %+v", events)
+	}
+}
+
 func TestServiceCancelActiveRun(t *testing.T) {
 	manager := newRuntimeConfigManager(t)
 	store := newMemoryStore()
@@ -2928,6 +3197,15 @@ func collectRuntimeEvents(events <-chan RuntimeEvent) []RuntimeEvent {
 			return collected
 		}
 	}
+}
+
+func eventIndex(events []RuntimeEvent, want EventType) int {
+	for index, event := range events {
+		if event.Type == want {
+			return index
+		}
+	}
+	return -1
 }
 
 func assertEventSequence(t *testing.T, events []RuntimeEvent, expected []EventType) {

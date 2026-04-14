@@ -1082,6 +1082,13 @@ func TestCompactConfigDefaultsAndRoundTrip(t *testing.T) {
 	if compactCfg.MaxSummaryChars != DefaultCompactMaxSummaryChars {
 		t.Fatalf("expected max_summary_chars=%d, got %d", DefaultCompactMaxSummaryChars, compactCfg.MaxSummaryChars)
 	}
+	if compactCfg.ReadTimeMaxMessageSpans != DefaultCompactReadTimeMaxMessageSpans {
+		t.Fatalf(
+			"expected read_time_max_message_spans=%d, got %d",
+			DefaultCompactReadTimeMaxMessageSpans,
+			compactCfg.ReadTimeMaxMessageSpans,
+		)
+	}
 	if compactCfg.MicroCompactDisabled {
 		t.Fatalf("expected micro compact to be enabled by default")
 	}
@@ -1089,6 +1096,7 @@ func TestCompactConfigDefaultsAndRoundTrip(t *testing.T) {
 	cfg.Context.Compact.ManualStrategy = CompactManualStrategyFullReplace
 	cfg.Context.Compact.ManualKeepRecentMessages = 2
 	cfg.Context.Compact.MaxSummaryChars = 900
+	cfg.Context.Compact.ReadTimeMaxMessageSpans = 30
 	cfg.Context.Compact.MicroCompactDisabled = true
 	if err := loader.Save(context.Background(), cfg); err != nil {
 		t.Fatalf("Save() error = %v", err)
@@ -1107,6 +1115,9 @@ func TestCompactConfigDefaultsAndRoundTrip(t *testing.T) {
 	if !strings.Contains(text, "micro_compact_disabled: true") {
 		t.Fatalf("expected persisted config to include micro_compact_disabled, got:\n%s", text)
 	}
+	if !strings.Contains(text, "read_time_max_message_spans: 30") {
+		t.Fatalf("expected persisted config to include read_time_max_message_spans, got:\n%s", text)
+	}
 
 	reloaded, err := loader.Load(context.Background())
 	if err != nil {
@@ -1120,6 +1131,9 @@ func TestCompactConfigDefaultsAndRoundTrip(t *testing.T) {
 	}
 	if reloaded.Context.Compact.MaxSummaryChars != 900 {
 		t.Fatalf("expected max_summary_chars=900, got %d", reloaded.Context.Compact.MaxSummaryChars)
+	}
+	if reloaded.Context.Compact.ReadTimeMaxMessageSpans != 30 {
+		t.Fatalf("expected read_time_max_message_spans=30, got %d", reloaded.Context.Compact.ReadTimeMaxMessageSpans)
 	}
 	if !reloaded.Context.Compact.MicroCompactDisabled {
 		t.Fatalf("expected micro_compact_disabled to persist")
@@ -1138,6 +1152,7 @@ func TestCompactConfigValidateFailures(t *testing.T) {
 				ManualStrategy:           "invalid",
 				ManualKeepRecentMessages: 10,
 				MaxSummaryChars:          1200,
+				ReadTimeMaxMessageSpans:  24,
 			},
 			expectErr: "manual_strategy",
 		},
@@ -1147,6 +1162,7 @@ func TestCompactConfigValidateFailures(t *testing.T) {
 				ManualStrategy:           CompactManualStrategyKeepRecent,
 				ManualKeepRecentMessages: 0,
 				MaxSummaryChars:          1200,
+				ReadTimeMaxMessageSpans:  24,
 			},
 			expectErr: "manual_keep_recent_messages",
 		},
@@ -1156,8 +1172,19 @@ func TestCompactConfigValidateFailures(t *testing.T) {
 				ManualStrategy:           CompactManualStrategyKeepRecent,
 				ManualKeepRecentMessages: 10,
 				MaxSummaryChars:          0,
+				ReadTimeMaxMessageSpans:  24,
 			},
 			expectErr: "max_summary_chars",
+		},
+		{
+			name: "invalid read time max spans",
+			compact: CompactConfig{
+				ManualStrategy:           CompactManualStrategyKeepRecent,
+				ManualKeepRecentMessages: 10,
+				MaxSummaryChars:          1200,
+				ReadTimeMaxMessageSpans:  0,
+			},
+			expectErr: "read_time_max_message_spans",
 		},
 	}
 
@@ -1177,6 +1204,7 @@ func TestCompactConfigValidateSupportsFullReplace(t *testing.T) {
 		ManualStrategy:           CompactManualStrategyFullReplace,
 		ManualKeepRecentMessages: 10,
 		MaxSummaryChars:          1200,
+		ReadTimeMaxMessageSpans:  24,
 	}).Validate()
 	if err != nil {
 		t.Fatalf("expected full_replace strategy to validate, got %v", err)
@@ -1261,6 +1289,7 @@ func TestContextConfigApplyDefaultsPropagatesAutoCompactDefaults(t *testing.T) {
 			ManualStrategy:           CompactManualStrategyKeepRecent,
 			ManualKeepRecentMessages: 10,
 			MaxSummaryChars:          1200,
+			ReadTimeMaxMessageSpans:  24,
 		},
 	})
 
@@ -1350,6 +1379,7 @@ func TestAutoCompactConfigContextConfigValidate(t *testing.T) {
 			ManualStrategy:           CompactManualStrategyKeepRecent,
 			ManualKeepRecentMessages: 10,
 			MaxSummaryChars:          1200,
+			ReadTimeMaxMessageSpans:  24,
 		},
 	}
 
@@ -1560,6 +1590,7 @@ func TestValidateSnapshotPropagatesCompactError(t *testing.T) {
 				ManualStrategy:           "invalid_strategy",
 				ManualKeepRecentMessages: 10,
 				MaxSummaryChars:          1200,
+				ReadTimeMaxMessageSpans:  24,
 			},
 		},
 	}
