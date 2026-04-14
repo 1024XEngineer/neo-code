@@ -1654,7 +1654,6 @@ func TestServiceRunErrorPaths(t *testing.T) {
 	tests := []struct {
 		name         string
 		input        UserInput
-		maxLoops     int
 		provider     *scriptedProvider
 		factoryErr   error
 		registerTool *stubTool
@@ -1675,28 +1674,43 @@ func TestServiceRunErrorPaths(t *testing.T) {
 			},
 		},
 		{
-			name:     "max loops reached after repeated tool cycles",
-			input:    UserInput{RunID: "run-max-loops", Content: "loop"},
-			maxLoops: 1,
-			provider: &scriptedProvider{
-				streams: [][]providertypes.StreamEvent{
-					{
-						providertypes.NewToolCallStartStreamEvent(0, "loop-call", "filesystem_edit"),
-						providertypes.NewToolCallDeltaStreamEvent(0, "loop-call", `{"path":"x"}`),
-					},
-				},
-			},
+			name:  "repeated tool cycles continue until assistant completion",
+			input: UserInput{RunID: "run-many-tool-cycles", Content: "loop"},
+			provider: func() *scriptedProvider {
+				responses := make([]scriptedResponse, 0, 10)
+				for i := 0; i < 9; i++ {
+					responses = append(responses, scriptedResponse{
+						Message: providertypes.Message{
+							ToolCalls: []providertypes.ToolCall{
+								{
+									ID:        fmt.Sprintf("loop-call-%d", i),
+									Name:      "filesystem_edit",
+									Arguments: `{"path":"x"}`,
+								},
+							},
+						},
+						FinishReason: "tool_calls",
+					})
+				}
+				responses = append(responses, scriptedResponse{
+					Message:      providertypes.Message{Content: "done after many cycles"},
+					FinishReason: "stop",
+				})
+				return &scriptedProvider{responses: responses}
+			}(),
 			registerTool: &stubTool{name: "filesystem_edit", content: "loop tool output"},
-			expectErr:    "max loop reached",
-			expectEvents: []EventType{EventUserMessage, EventToolStart, EventToolChunk, EventToolResult, EventStopReasonDecided},
+			expectEvents: []EventType{EventUserMessage, EventToolStart, EventToolChunk, EventToolResult, EventAgentDone},
 			assert: func(t *testing.T, store *memoryStore, scripted *scriptedProvider, tool *stubTool) {
 				t.Helper()
-				if scripted.callCount != 1 {
-					t.Fatalf("expected one provider call before loop exit, got %d", scripted.callCount)
+				if scripted.callCount != 10 {
+					t.Fatalf("expected 10 provider calls without loop cap, got %d", scripted.callCount)
 				}
 				session := onlySession(t, store)
-				if len(session.Messages) != 3 {
-					t.Fatalf("expected user, assistant, tool messages before abort, got %d", len(session.Messages))
+				if got := len(session.Messages); got != 20 {
+					t.Fatalf("expected 20 persisted messages after 9 tool cycles and final answer, got %d", got)
+				}
+				if session.Messages[len(session.Messages)-1].Content != "done after many cycles" {
+					t.Fatalf("expected final assistant reply to be persisted, got %+v", session.Messages[len(session.Messages)-1])
 				}
 			},
 		},
@@ -1835,14 +1849,6 @@ func TestServiceRunErrorPaths(t *testing.T) {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			manager := newRuntimeConfigManager(t)
-			if tt.maxLoops > 0 {
-				if err := manager.Update(context.Background(), func(cfg *config.Config) error {
-					cfg.MaxLoops = tt.maxLoops
-					return nil
-				}); err != nil {
-					t.Fatalf("update max loops: %v", err)
-				}
-			}
 
 			store := newMemoryStore()
 			if tt.seedSession != nil {
@@ -1881,275 +1887,6 @@ func TestServiceRunErrorPaths(t *testing.T) {
 				tt.assert(t, store, tt.provider, tt.registerTool)
 			}
 		})
-	}
-}
-
-func TestServiceRunMaxLoopsSavesLoopLimitCheckpoint(t *testing.T) {
-	t.Parallel()
-
-	manager := newRuntimeConfigManager(t)
-	if err := manager.Update(context.Background(), func(cfg *config.Config) error {
-		cfg.MaxLoops = 1
-		return nil
-	}); err != nil {
-		t.Fatalf("update config: %v", err)
-	}
-	store := newMemoryStore()
-	session := agentsession.New("loop-limit-success")
-	session.ID = "session-loop-limit-success"
-	session.TokenInputTotal = 33
-	session.TokenOutputTotal = 7
-	session.Messages = []providertypes.Message{
-		{Role: providertypes.RoleUser, Content: "older request"},
-	}
-	store.sessions[session.ID] = cloneSession(session)
-
-	registry := tools.NewRegistry()
-	tool := &stubTool{name: "filesystem_edit", content: "loop tool output"}
-	registry.Register(tool)
-
-	scripted := &scriptedProvider{
-		responses: []scriptedResponse{
-			{
-				Message: providertypes.Message{
-					ToolCalls: []providertypes.ToolCall{
-						{ID: "loop-call", Name: "filesystem_edit", Arguments: `{"path":"x"}`},
-					},
-				},
-				FinishReason: "tool_calls",
-			},
-		},
-	}
-
-	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: scripted}, nil)
-	compactRunner := &stubCompactRunner{
-		result: contextcompact.Result{
-			Messages: []providertypes.Message{
-				{Role: providertypes.RoleAssistant, Content: "[compact_summary]\ndone:\n- checkpoint saved\n\nin_progress:\n- continue"},
-				{Role: providertypes.RoleUser, Content: "continue from saved checkpoint"},
-			},
-			TaskState: agentsession.TaskState{
-				Goal:      "Preserve continuation checkpoint",
-				Progress:  []string{"Saved loop-limit compact checkpoint"},
-				NextStep:  "Resume analysis from compacted context",
-				OpenItems: []string{"Continue source inspection"},
-				Decisions: []string{"Use loop_limit compact before max loop exit"},
-				Blockers:  []string{},
-				KeyArtifacts: []string{
-					"checkpoint-summary",
-				},
-				UserConstraints: []string{"Prefer durable checkpoint over raw message tail"},
-			},
-			Applied: true,
-			Metrics: contextcompact.Metrics{
-				BeforeChars: 120,
-				AfterChars:  48,
-				SavedRatio:  0.6,
-				TriggerMode: string(contextcompact.ModeLoopLimit),
-			},
-			TranscriptID:   "transcript_loop_limit",
-			TranscriptPath: "/tmp/loop_limit.jsonl",
-		},
-	}
-	service.compactRunner = compactRunner
-
-	err := service.Run(context.Background(), UserInput{
-		SessionID: session.ID,
-		RunID:     "run-loop-limit-success",
-		Content:   "continue",
-	})
-	if err == nil || !strings.Contains(err.Error(), "max loop reached after saving continuation checkpoint") {
-		t.Fatalf("expected loop-limit checkpoint error, got %v", err)
-	}
-
-	if len(compactRunner.calls) != 1 {
-		t.Fatalf("expected loop-limit compact to run once, got %d", len(compactRunner.calls))
-	}
-	if compactRunner.calls[0].Mode != contextcompact.ModeLoopLimit {
-		t.Fatalf("expected compact mode %q, got %q", contextcompact.ModeLoopLimit, compactRunner.calls[0].Mode)
-	}
-	if compactRunner.calls[0].SessionInputTokens != 33 {
-		t.Fatalf("expected pre-checkpoint input tokens to be preserved, got %d", compactRunner.calls[0].SessionInputTokens)
-	}
-
-	saved, err := store.Load(context.Background(), session.ID)
-	if err != nil {
-		t.Fatalf("load compacted session: %v", err)
-	}
-	if len(saved.Messages) != 2 || !strings.Contains(saved.Messages[0].Content, "checkpoint saved") {
-		t.Fatalf("expected compacted checkpoint messages, got %+v", saved.Messages)
-	}
-	if saved.TaskState.Goal != "Preserve continuation checkpoint" {
-		t.Fatalf("expected persisted task state, got %+v", saved.TaskState)
-	}
-	if saved.TokenInputTotal != 0 || saved.TokenOutputTotal != 0 {
-		t.Fatalf("expected token totals reset after loop-limit checkpoint, got input=%d output=%d", saved.TokenInputTotal, saved.TokenOutputTotal)
-	}
-
-	events := collectRuntimeEvents(service.Events())
-	assertEventSequence(t, events, []EventType{
-		EventUserMessage,
-		EventToolStart,
-		EventToolChunk,
-		EventToolResult,
-		EventCompactStart,
-		EventCompactApplied,
-		EventError,
-	})
-	assertNoEventType(t, events, EventCompactError)
-
-	compactStartIndex := eventIndex(events, EventCompactStart)
-	compactDoneIndex := eventIndex(events, EventCompactApplied)
-	errorIndex := eventIndex(events, EventError)
-	if compactStartIndex == -1 || compactDoneIndex == -1 || errorIndex == -1 {
-		t.Fatalf("expected loop-limit events in %+v", events)
-	}
-	if !(compactStartIndex < compactDoneIndex && compactDoneIndex < errorIndex) {
-		t.Fatalf("expected compact_start -> compact_done -> error ordering, got %+v", events)
-	}
-
-	foundLoopLimitDone := false
-	foundLoopLimitError := false
-	for _, event := range events {
-		switch event.Type {
-		case EventCompactApplied:
-			payload, ok := event.Payload.(CompactResult)
-			if !ok {
-				t.Fatalf("expected CompactResult payload, got %T", event.Payload)
-			}
-			if payload.TriggerMode == string(contextcompact.ModeLoopLimit) {
-				foundLoopLimitDone = true
-			}
-		case EventError:
-			message, ok := event.Payload.(string)
-			if !ok {
-				t.Fatalf("expected string error payload, got %T", event.Payload)
-			}
-			if strings.Contains(message, "after saving continuation checkpoint") {
-				foundLoopLimitError = true
-			}
-		}
-	}
-	if !foundLoopLimitDone {
-		t.Fatalf("expected loop_limit compact_done payload in %+v", events)
-	}
-	if !foundLoopLimitError {
-		t.Fatalf("expected saved-checkpoint error payload in %+v", events)
-	}
-}
-
-func TestServiceRunMaxLoopsLoopLimitCompactFailureFallsBackToOriginalExit(t *testing.T) {
-	t.Parallel()
-
-	manager := newRuntimeConfigManager(t)
-	if err := manager.Update(context.Background(), func(cfg *config.Config) error {
-		cfg.MaxLoops = 1
-		return nil
-	}); err != nil {
-		t.Fatalf("update config: %v", err)
-	}
-	store := newMemoryStore()
-	session := agentsession.New("loop-limit-failure")
-	session.ID = "session-loop-limit-failure"
-	session.TokenInputTotal = 12
-	session.TokenOutputTotal = 4
-	session.Messages = []providertypes.Message{
-		{Role: providertypes.RoleUser, Content: "older request"},
-	}
-	store.sessions[session.ID] = cloneSession(session)
-
-	registry := tools.NewRegistry()
-	registry.Register(&stubTool{name: "filesystem_edit", content: "loop tool output"})
-
-	scripted := &scriptedProvider{
-		responses: []scriptedResponse{
-			{
-				Message: providertypes.Message{
-					ToolCalls: []providertypes.ToolCall{
-						{ID: "loop-call", Name: "filesystem_edit", Arguments: `{"path":"x"}`},
-					},
-				},
-				FinishReason: "tool_calls",
-			},
-		},
-	}
-
-	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: scripted}, nil)
-	compactRunner := &stubCompactRunner{err: errors.New("loop limit compact failed")}
-	service.compactRunner = compactRunner
-
-	err := service.Run(context.Background(), UserInput{
-		SessionID: session.ID,
-		RunID:     "run-loop-limit-failure",
-		Content:   "continue",
-	})
-	if err == nil || !strings.Contains(err.Error(), "max loop reached") || strings.Contains(err.Error(), "after saving continuation checkpoint") {
-		t.Fatalf("expected original max loop error, got %v", err)
-	}
-
-	if len(compactRunner.calls) != 1 {
-		t.Fatalf("expected loop-limit compact to be attempted once, got %d", len(compactRunner.calls))
-	}
-	if compactRunner.calls[0].Mode != contextcompact.ModeLoopLimit {
-		t.Fatalf("expected compact mode %q, got %q", contextcompact.ModeLoopLimit, compactRunner.calls[0].Mode)
-	}
-
-	saved, err := store.Load(context.Background(), session.ID)
-	if err != nil {
-		t.Fatalf("load session after failed checkpoint: %v", err)
-	}
-	if len(saved.Messages) != 4 {
-		t.Fatalf("expected original messages to remain after compact failure, got %+v", saved.Messages)
-	}
-	if saved.TokenInputTotal != 12 || saved.TokenOutputTotal != 4 {
-		t.Fatalf("expected token totals to remain unchanged, got input=%d output=%d", saved.TokenInputTotal, saved.TokenOutputTotal)
-	}
-
-	events := collectRuntimeEvents(service.Events())
-	assertEventSequence(t, events, []EventType{
-		EventUserMessage,
-		EventToolStart,
-		EventToolChunk,
-		EventToolResult,
-		EventCompactStart,
-		EventCompactError,
-		EventError,
-	})
-	assertNoEventType(t, events, EventCompactApplied)
-
-	compactStartIndex := eventIndex(events, EventCompactStart)
-	compactErrorIndex := eventIndex(events, EventCompactError)
-	errorIndex := eventIndex(events, EventError)
-	if compactStartIndex == -1 || compactErrorIndex == -1 || errorIndex == -1 {
-		t.Fatalf("expected loop-limit failure events in %+v", events)
-	}
-	if !(compactStartIndex < compactErrorIndex && compactErrorIndex < errorIndex) {
-		t.Fatalf("expected compact_start -> compact_error -> error ordering, got %+v", events)
-	}
-
-	foundLoopLimitCompactError := false
-	for _, event := range events {
-		switch event.Type {
-		case EventCompactError:
-			payload, ok := event.Payload.(CompactErrorPayload)
-			if !ok {
-				t.Fatalf("expected CompactErrorPayload, got %T", event.Payload)
-			}
-			if payload.TriggerMode == string(contextcompact.ModeLoopLimit) && strings.Contains(payload.Message, "loop limit compact failed") {
-				foundLoopLimitCompactError = true
-			}
-		case EventError:
-			message, ok := event.Payload.(string)
-			if !ok {
-				t.Fatalf("expected string error payload, got %T", event.Payload)
-			}
-			if strings.Contains(message, "after saving continuation checkpoint") {
-				t.Fatalf("did not expect saved-checkpoint message after compact failure: %+v", events)
-			}
-		}
-	}
-	if !foundLoopLimitCompactError {
-		t.Fatalf("expected loop_limit compact_error payload in %+v", events)
 	}
 }
 
@@ -3113,7 +2850,6 @@ func newRuntimeConfigManagerWithProviderEnvs(t *testing.T, providerEnvs map[stri
 	}
 	if err := manager.Update(context.Background(), func(cfg *config.Config) error {
 		cfg.ToolTimeoutSec = 1
-		cfg.MaxLoops = 4
 		cfg.Workdir = defaultWorkdir
 		return nil
 	}); err != nil {
@@ -4156,16 +3892,10 @@ func TestServiceRunReactivelyCompactsOnContextTooLong(t *testing.T) {
 	}
 }
 
-func TestServiceRunReactivelyCompactsWithinSingleLoopBudget(t *testing.T) {
+func TestServiceRunReactiveCompactRetriesWithinSameRun(t *testing.T) {
 	t.Parallel()
 
 	manager := newRuntimeConfigManager(t)
-	if err := manager.Update(context.Background(), func(cfg *config.Config) error {
-		cfg.MaxLoops = 1
-		return nil
-	}); err != nil {
-		t.Fatalf("update config: %v", err)
-	}
 
 	store := newMemoryStore()
 	session := agentsession.New("reactive-single-loop")
@@ -4225,11 +3955,11 @@ func TestServiceRunReactivelyCompactsWithinSingleLoopBudget(t *testing.T) {
 		RunID:     "run-reactive-single-loop",
 		Content:   "continue",
 	}); err != nil {
-		t.Fatalf("Run() with MaxLoops=1 should recover, got %v", err)
+		t.Fatalf("Run() should recover after reactive compact, got %v", err)
 	}
 
 	if scripted.callCount != 2 {
-		t.Fatalf("expected provider to be called twice within one loop budget, got %d", scripted.callCount)
+		t.Fatalf("expected provider to be called twice within the same run, got %d", scripted.callCount)
 	}
 
 	events := collectRuntimeEvents(service.Events())

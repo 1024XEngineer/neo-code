@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"neo-code/internal/config"
 	"neo-code/internal/provider"
 	providertypes "neo-code/internal/provider/types"
 	"neo-code/internal/runtime/approval"
@@ -186,20 +185,6 @@ func TestAppendToolMessageAndSaveUnlocksStateBeforePersist(t *testing.T) {
 
 	if err := service.appendToolMessageAndSave(context.Background(), &state, call, result); err != nil {
 		t.Fatalf("appendToolMessageAndSave() error = %v", err)
-	}
-}
-
-func TestResolveMaxLoopsBranches(t *testing.T) {
-	t.Parallel()
-
-	if got := resolveMaxLoops(config.Config{MaxLoops: 0}); got != defaultMaxLoops {
-		t.Fatalf("expected default max loops for zero, got %d", got)
-	}
-	if got := resolveMaxLoops(config.Config{MaxLoops: -3}); got != defaultMaxLoops {
-		t.Fatalf("expected default max loops for negative, got %d", got)
-	}
-	if got := resolveMaxLoops(config.Config{MaxLoops: 12}); got != 12 {
-		t.Fatalf("expected explicit max loops, got %d", got)
 	}
 }
 

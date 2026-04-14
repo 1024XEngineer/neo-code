@@ -21,6 +21,8 @@ import (
 // Run 执行一次完整的 ReAct 闭环：保存用户输入、驱动模型、执行工具并发出事件。
 // 已有会话会先加锁再加载/更新，确保同一会话并发 Run 不会出现状态覆盖；
 // 新会话在创建后再绑定会话锁，不同会话可并行执行。
+// 当前实现不再设置内部轮数上限，因此 Run 仅在拿到最终 assistant 回复、遇到错误或收到外部取消时结束。
+// 这也意味着同一 session 的锁会覆盖整个运行周期，调用方需要依赖模型终止条件或取消机制兜底。
 func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 	var statePtr *runState
 
@@ -77,26 +79,6 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 	}
 
 	for turn := 0; ; turn++ {
-		maxLoops := resolveMaxLoops(s.configManager.Get())
-		if turn >= maxLoops {
-			loopErr := ErrMaxLoopReached
-			applied, compactErr := s.applyCompactForState(
-				ctx,
-				&state,
-				s.configManager.Get(),
-				contextcompact.ModeLoopLimit,
-				compactErrorBestEffort,
-			)
-			if compactErr != nil {
-				return s.handleRunError(ctx, state.runID, state.session.ID, compactErr)
-			}
-			if applied {
-				loopErr = fmt.Errorf("%w after saving continuation checkpoint", ErrMaxLoopReached)
-			}
-			s.emit(ctx, EventError, state.runID, state.session.ID, loopErr.Error())
-			return loopErr
-		}
-
 		state.turn = turn
 		s.transitionRunPhase(ctx, &state, controlplane.PhasePlan)
 
@@ -341,14 +323,6 @@ func (s *Service) applyCompactForState(
 		return true, nil
 	}
 	return false, nil
-}
-
-// resolveMaxLoops 收敛运行时最大推理轮数的默认值逻辑。
-func resolveMaxLoops(cfg config.Config) int {
-	if cfg.MaxLoops <= 0 {
-		return defaultMaxLoops
-	}
-	return cfg.MaxLoops
 }
 
 // autoCompactThreshold 返回当前配置下的自动 compact 触发阈值。

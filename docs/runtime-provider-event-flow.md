@@ -22,7 +22,7 @@
 - `compact_applied`
 - `compact_error`
 
-这三类 compact 事件同时用于 `manual`、`auto`、`reactive` 与 `loop_limit` 四种来源，调用方可通过 payload 中的 `trigger_mode` 区分。
+这三类 compact 事件同时用于 `manual`、`auto` 与 `reactive` 三种来源，调用方可通过 payload 中的 `trigger_mode` 区分。
 
 ## ReAct 主循环
 
@@ -33,15 +33,15 @@
 5. 如命中 token 阈值自动压缩建议，则先执行一次 compact，再在同一轮内重建请求。
 6. 冻结当前 turn 的 `provider / model / tools / workdir / request` 快照。
 7. 调用 `Provider.Generate`，并把流式事件桥接给 TUI。
-8. 如 provider 返回“上下文过长”错误，则触发一次 `reactive` compact，并仅在同一 turn 内重建一次当前请求。
+8. 如 provider 返回“上下文过长”错误，则触发 `reactive` compact，并在同一 run 内最多做 3 次逐步降级的恢复尝试。
 9. 保存 assistant 完整回复。
 10. 执行返回的工具调用，并保存每一个工具结果。
 11. 如果最终 assistant 回复后没有后续工具调用，则在 runtime 收口处安排一次后台 memo 自动提取。
 12. 如果仍需继续推理，则进入下一轮；否则结束。
 
 补充说明：
-- 当下一轮开始前已命中 `max_loops` 上限时，runtime 会先尝试一次 `loop_limit` compact checkpoint，再发出最终 `error` 事件结束本次 run。
-- 该 checkpoint 成功时会先发出 `compact_start -> compact_done`，并把 session 消息、`TaskState` 与累计 token 重置后的状态持久化；失败时会发出 `compact_error`，随后仍以最大轮数错误结束。
+- runtime 不再设置内部 `max_loops` 停止条件；单次 run 仅在拿到最终 assistant 回复、遇到错误或收到外部取消时结束。
+- 由于 session 锁覆盖整个 run 生命周期，同一会话如果持续陷入工具调用循环，会一直占用该会话直到模型自行收口、报错或被取消。
 
 ### Memo 自动提取调度
 

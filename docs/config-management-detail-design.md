@@ -44,7 +44,6 @@
 
 - `workdir`
 - `shell`
-- `max_loops`
 - `tool_timeout_sec`
 - `context`
 - `tools`
@@ -100,7 +99,6 @@ custom provider 来自：
 - `selected_provider`
 - `current_model`
 - `shell`
-- `max_loops`
 - `tool_timeout_sec`
 - `context`
 - `tools`

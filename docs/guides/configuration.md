@@ -37,7 +37,6 @@ custom provider 目录：
 selected_provider: openai
 current_model: gpt-5.4
 shell: bash
-max_loops: 8
 tool_timeout_sec: 20
 
 tools:
@@ -67,7 +66,6 @@ context:
 | `selected_provider` | 当前选中的 provider 名称 |
 | `current_model` | 当前选中的模型 ID |
 | `shell` | 默认 shell，Windows 默认 `powershell`，其他平台默认 `bash` |
-| `max_loops` | Agent 主循环最大轮数 |
 | `tool_timeout_sec` | 工具执行超时（秒） |
 
 ### `context` 字段

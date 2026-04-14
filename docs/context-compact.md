@@ -4,8 +4,8 @@
 
 ## 概览
 
-- runtime 已接入手动 compact、基于 token 阈值的自动 compact、provider 上下文过长后的 `reactive` compact 自动恢复，以及命中最大轮数前的 `loop_limit` continuation checkpoint。
-- `internal/context/compact` 支持 `manual`、`auto`、`reactive` 与 `loop_limit` 四种 mode。
+- runtime 已接入手动 compact、基于 token 阈值的自动 compact，以及 provider 上下文过长后的 `reactive` compact 自动恢复。
+- `internal/context/compact` 支持 `manual`、`auto` 与 `reactive` 三种 mode。
 - 用户通过 `/compact` 对当前会话执行一次上下文压缩。
 - compact 前会先写入完整 transcript，随后生成并校验新的 durable `TaskState` 与 display summary，再回写会话消息。
 
@@ -76,15 +76,9 @@ context:
 当 provider 返回“上下文过长”错误时，runtime 会：
 
 1. 识别 provider 归一化后的 typed error，必要时回退到错误文本匹配。
-2. 触发一次 `compact.Run(mode=reactive)`。
+2. 触发 `compact.Run(mode=reactive)`，并在仍然命中“上下文过长”时继续做逐步降级恢复。
 3. 继续复用 `compact_start`、`compact_applied`、`compact_error` 事件，并通过 `trigger_mode=reactive` 区分来源。
-4. 每次 `Run()` 最多只执行一次 reactive 重试，避免无限循环。
-
-当 runtime 命中 `max_loops` 停止条件时，还会在返回最终错误前 best-effort 触发一次 `compact.Run(mode=loop_limit)` 作为 continuation checkpoint：
-
-1. 成功时回写 compact 后的消息、durable `TaskState` 与重置后的 token 计数。
-2. 继续复用 `compact_start`、`compact_done`、`compact_error` 事件，并通过 `trigger_mode=loop_limit` 标记来源。
-3. 无论 compact 成功、失败或 no-op，本次 run 仍会结束；区别只在于后续“继续”能否优先复用 durable checkpoint。
+4. 每次 `Run()` 最多执行 3 次 reactive compact 降级尝试；每次尝试都会进一步收缩 `manual_keep_recent_messages`，超过上限后返回最后一次 provider 错误。
 
 ## 生成协议
 

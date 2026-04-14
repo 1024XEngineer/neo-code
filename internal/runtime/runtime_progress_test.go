@@ -92,7 +92,6 @@ func TestProgressEvidenceResetsNoProgressStreak(t *testing.T) {
 	cfg := config.Config{
 		Providers:        []config.ProviderConfig{{Name: "test-progress", Driver: "test", BaseURL: "http://localhost", Model: "test", APIKeyEnv: "TEST_KEY"}},
 		SelectedProvider: "test-progress",
-		MaxLoops:         5,
 		Workdir:          t.TempDir(),
 	}
 
@@ -110,12 +109,19 @@ func TestProgressEvidenceResetsNoProgressStreak(t *testing.T) {
 		},
 	}
 
+	var providerCalls int32
 	providerFactory := &scriptedProviderFactory{
 		provider: &scriptedProvider{
 			chatFn: func(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error {
-				events <- providertypes.NewToolCallStartStreamEvent(0, "call_mixed", "tool_mixed")
-				events <- providertypes.NewToolCallDeltaStreamEvent(0, "call_mixed", "{}")
-				events <- providertypes.NewMessageDoneStreamEvent("tool_calls", nil)
+				call := int(atomic.AddInt32(&providerCalls, 1))
+				if call <= 4 {
+					events <- providertypes.NewToolCallStartStreamEvent(0, "call_mixed", "tool_mixed")
+					events <- providertypes.NewToolCallDeltaStreamEvent(0, "call_mixed", "{}")
+					events <- providertypes.NewMessageDoneStreamEvent("tool_calls", nil)
+					return nil
+				}
+				events <- providertypes.NewTextDeltaStreamEvent("done")
+				events <- providertypes.NewMessageDoneStreamEvent("stop", nil)
 				return nil
 			},
 		},
@@ -134,10 +140,24 @@ func TestProgressEvidenceResetsNoProgressStreak(t *testing.T) {
 		RunID:   "run-progress-reset",
 		Content: "trigger mixed progress loop",
 	})
-	if !errors.Is(err, ErrMaxLoopReached) {
-		t.Fatalf("expected ErrMaxLoopReached, got %v", err)
+	if err != nil {
+		t.Fatalf("expected run to finish successfully, got %v", err)
 	}
-	if errors.Is(err, ErrNoProgressStreakLimit) {
-		t.Fatalf("expected not to hit no-progress streak limit, got %v", err)
+
+	if executeCalls != 4 {
+		t.Fatalf("expected 4 tool executions, got %d", executeCalls)
+	}
+	if providerCalls != 5 {
+		t.Fatalf("expected 5 provider calls (4 tool turns + 1 done), got %d", providerCalls)
+	}
+
+	events := collectRuntimeEvents(service.Events())
+	for _, e := range events {
+		if e.Type == EventStopReasonDecided {
+			payload := e.Payload.(StopReasonDecidedPayload)
+			if payload.Reason != controlplane.StopReasonSuccess {
+				t.Fatalf("expected stop reason success, got %s", payload.Reason)
+			}
+		}
 	}
 }
