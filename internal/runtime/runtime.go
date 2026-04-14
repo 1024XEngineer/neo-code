@@ -23,6 +23,10 @@ const (
 	providerRetryBaseWait   = 1 * time.Second
 	providerRetryMaxWait    = 5 * time.Second
 	defaultMaxLoops         = 8
+	defaultToolParallelism  = 4
+	noProgressStreakLimit   = 3
+
+	terminationEventEmitTimeout = 500 * time.Millisecond
 )
 
 // Runtime 定义 runtime 对外暴露的运行、压缩与审批接口。
@@ -68,17 +72,25 @@ type Service struct {
 	memoExtractor   MemoExtractor
 	subAgentFactory subagent.Factory
 
-	events           chan RuntimeEvent
-	sessionMu        sync.Mutex
-	sessionLocks     map[string]*sessionLockEntry
-	runMu            sync.Mutex
-	activeRunToken   uint64
-	nextRunToken     uint64
-	activeRunCancels map[uint64]context.CancelFunc
+	events             chan RuntimeEvent
+	sessionMu          sync.Mutex
+	sessionLocks       map[string]*sessionLockEntry
+	runMu              sync.Mutex
+	activeRunToken     uint64
+	nextRunToken       uint64
+	activeRunCancels   map[uint64]context.CancelFunc
+	permissionAskMapMu sync.Mutex
+	permissionAskLocks map[string]*permissionAskLockEntry
 }
 
 // sessionLockEntry 维护单个会话锁及其当前引用计数，用于在无引用时回收 map 项。
 type sessionLockEntry struct {
+	mu   sync.Mutex
+	refs int
+}
+
+// permissionAskLockEntry 维护单个运行的审批串行锁与引用计数。
+type permissionAskLockEntry struct {
 	mu   sync.Mutex
 	refs int
 }
@@ -102,16 +114,17 @@ func NewWithFactory(
 	}
 
 	return &Service{
-		configManager:    configManager,
-		sessionStore:     sessionStore,
-		toolManager:      toolManager,
-		providerFactory:  providerFactory,
-		contextBuilder:   contextBuilder,
-		approvalBroker:   approval.NewBroker(),
-		subAgentFactory:  subagent.NewWorkerFactory(nil),
-		events:           make(chan RuntimeEvent, 128),
-		sessionLocks:     make(map[string]*sessionLockEntry),
-		activeRunCancels: make(map[uint64]context.CancelFunc),
+		configManager:      configManager,
+		sessionStore:       sessionStore,
+		toolManager:        toolManager,
+		providerFactory:    providerFactory,
+		contextBuilder:     contextBuilder,
+		approvalBroker:     approval.NewBroker(),
+		subAgentFactory:    subagent.NewWorkerFactory(nil),
+		events:             make(chan RuntimeEvent, 128),
+		sessionLocks:       make(map[string]*sessionLockEntry),
+		activeRunCancels:   make(map[uint64]context.CancelFunc),
+		permissionAskLocks: make(map[string]*permissionAskLockEntry),
 	}
 }
 

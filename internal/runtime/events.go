@@ -1,6 +1,10 @@
 package runtime
 
-import "neo-code/internal/subagent"
+import (
+	"time"
+
+	"neo-code/internal/subagent"
+)
 
 // EventType identifies the kind of runtime event emitted during a run.
 type EventType string
@@ -9,10 +13,41 @@ type EventType string
 // for a specific run. RunID is provided by the caller and is echoed back on all
 // events so upper layers can ignore stale events from older runs.
 type RuntimeEvent struct {
-	Type      EventType
-	RunID     string
-	SessionID string
-	Payload   any
+	Type           EventType
+	RunID          string
+	SessionID      string
+	Turn           int
+	Phase          string
+	Timestamp      time.Time
+	PayloadVersion int
+	Payload        any
+}
+
+// PhaseChangedPayload 描述 phase 迁移。
+type PhaseChangedPayload struct {
+	From string `json:"from"`
+	To   string `json:"to"`
+}
+
+// BudgetCheckedPayload 为预算检查壳事件负载（1A 仅占位，1B阶段使用）。
+type BudgetCheckedPayload struct {
+	Note string `json:"note,omitempty"`
+}
+
+// ProgressEvaluatedPayload 汇总 progress 控制面评估结果。
+type ProgressEvaluatedPayload struct {
+	Score string `json:"score"`
+}
+
+// StopReasonDecidedPayload 承载唯一停止原因决议结果。
+type StopReasonDecidedPayload struct {
+	Reason string `json:"reason"`
+	Detail string `json:"detail,omitempty"`
+}
+
+// LedgerReconciledPayload 为账本对账壳事件负载（1A 仅占位）。
+type LedgerReconciledPayload struct {
+	Note string `json:"note,omitempty"`
 }
 
 // PermissionRequestPayload 描述一次需要审批的权限请求上下文。
@@ -71,18 +106,28 @@ const (
 	// EventProviderRetry is emitted when runtime retries a provider call due to
 	// a retryable error (e.g. 429, 5xx). Payload is a human-readable message.
 	EventProviderRetry EventType = "provider_retry"
-	// EventPermissionRequest is emitted when a tool call hits an ask decision.
-	EventPermissionRequest EventType = "permission_request"
+	// EventPermissionRequested 是 1A 权限请求事件名。
+	EventPermissionRequested EventType = "permission_requested"
+	// EventPermissionRequest 为兼容旧事件名保留，语义等同 EventPermissionRequested。
+	EventPermissionRequest = EventPermissionRequested
 	// EventPermissionResolved is emitted when runtime resolves a permission request or denial.
 	EventPermissionResolved EventType = "permission_resolved"
 	// EventCompactStart is emitted when a compact cycle starts.
 	EventCompactStart EventType = "compact_start"
-	// EventCompactDone is emitted when a compact cycle completes.
-	EventCompactDone EventType = "compact_done"
+	// EventCompactApplied 表示一次 compact 已成功应用或校验完成（1A 主事件）。
+	EventCompactApplied EventType = "compact_applied"
+	// EventCompactDone 为兼容旧事件名保留，语义等同 EventCompactApplied。
+	EventCompactDone = EventCompactApplied
 	// EventCompactError is emitted when compact fails.
 	EventCompactError EventType = "compact_error"
 	// EventTokenUsage is emitted after each provider response with token statistics.
 	EventTokenUsage EventType = "token_usage"
+	// EventPhaseChanged 表示显式 phase 迁移。
+	EventPhaseChanged EventType = "phase_changed"
+	// EventProgressEvaluated 表示 progress 评估结果。
+	EventProgressEvaluated EventType = "progress_evaluated"
+	// EventStopReasonDecided 表示唯一停止原因已决议。
+	EventStopReasonDecided EventType = "stop_reason_decided"
 )
 
 // TokenUsagePayload carries token usage statistics for a single provider turn.
