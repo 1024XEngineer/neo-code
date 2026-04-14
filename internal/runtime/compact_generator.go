@@ -31,16 +31,17 @@ func newCompactSummaryGenerator(
 	}
 }
 
-type compactSummaryResponse struct {
+// tolerantSummaryResponse 使用 json.RawMessage 接收数组字段，容忍 LLM 返回 string 代替 []string。
+type tolerantSummaryResponse struct {
 	TaskState struct {
-		Goal            string   `json:"goal"`
-		Progress        []string `json:"progress"`
-		OpenItems       []string `json:"open_items"`
-		NextStep        string   `json:"next_step"`
-		Blockers        []string `json:"blockers"`
-		KeyArtifacts    []string `json:"key_artifacts"`
-		Decisions       []string `json:"decisions"`
-		UserConstraints []string `json:"user_constraints"`
+		Goal            string          `json:"goal"`
+		Progress        json.RawMessage `json:"progress"`
+		OpenItems       json.RawMessage `json:"open_items"`
+		NextStep        string          `json:"next_step"`
+		Blockers        json.RawMessage `json:"blockers"`
+		KeyArtifacts    json.RawMessage `json:"key_artifacts"`
+		Decisions       json.RawMessage `json:"decisions"`
+		UserConstraints json.RawMessage `json:"user_constraints"`
 	} `json:"task_state"`
 	DisplaySummary string `json:"display_summary"`
 }
@@ -68,6 +69,7 @@ func (g *compactSummaryGenerator) Generate(
 		ManualKeepRecentMessages: input.Config.ManualKeepRecentMessages,
 		ArchivedMessageCount:     input.ArchivedMessageCount,
 		MaxSummaryChars:          input.Config.MaxSummaryChars,
+		MaxArchivedPromptChars:   input.Config.MaxArchivedPromptChars,
 		CurrentTaskState:         input.CurrentTaskState,
 		ArchivedMessages:         input.ArchivedMessages,
 		RetainedMessages:         input.RetainedMessages,
@@ -98,34 +100,63 @@ func (g *compactSummaryGenerator) Generate(
 	return parseCompactSummaryOutput(message.Content)
 }
 
-// parseCompactSummaryOutput 解析 compact 生成器返回的 JSON 响应。
+// parseCompactSummaryOutput 解析 compact 生成器返回的 JSON 响应，容忍数组字段被返回为字符串。
 func parseCompactSummaryOutput(content string) (contextcompact.SummaryOutput, error) {
 	jsonText, err := extractJSONObject(content)
 	if err != nil {
 		return contextcompact.SummaryOutput{}, err
 	}
 
-	var response compactSummaryResponse
-	if err := json.Unmarshal([]byte(jsonText), &response); err != nil {
+	var raw tolerantSummaryResponse
+	if err := json.Unmarshal([]byte(jsonText), &raw); err != nil {
 		return contextcompact.SummaryOutput{}, err
 	}
 
 	output := contextcompact.SummaryOutput{
-		DisplaySummary: strings.TrimSpace(response.DisplaySummary),
+		DisplaySummary: strings.TrimSpace(raw.DisplaySummary),
 	}
-	output.TaskState.Goal = response.TaskState.Goal
-	output.TaskState.Progress = append([]string(nil), response.TaskState.Progress...)
-	output.TaskState.OpenItems = append([]string(nil), response.TaskState.OpenItems...)
-	output.TaskState.NextStep = response.TaskState.NextStep
-	output.TaskState.Blockers = append([]string(nil), response.TaskState.Blockers...)
-	output.TaskState.KeyArtifacts = append([]string(nil), response.TaskState.KeyArtifacts...)
-	output.TaskState.Decisions = append([]string(nil), response.TaskState.Decisions...)
-	output.TaskState.UserConstraints = append([]string(nil), response.TaskState.UserConstraints...)
+	output.TaskState.Goal = raw.TaskState.Goal
+	output.TaskState.Progress = coerceStringArray(raw.TaskState.Progress)
+	output.TaskState.OpenItems = coerceStringArray(raw.TaskState.OpenItems)
+	output.TaskState.NextStep = raw.TaskState.NextStep
+	output.TaskState.Blockers = coerceStringArray(raw.TaskState.Blockers)
+	output.TaskState.KeyArtifacts = coerceStringArray(raw.TaskState.KeyArtifacts)
+	output.TaskState.Decisions = coerceStringArray(raw.TaskState.Decisions)
+	output.TaskState.UserConstraints = coerceStringArray(raw.TaskState.UserConstraints)
 
 	if output.DisplaySummary == "" {
 		return contextcompact.SummaryOutput{}, errors.New("runtime: compact summary response is empty")
 	}
 	return output, nil
+}
+
+// coerceStringArray 尝试将 json.RawMessage 解析为 []string，容忍单个 string 值。
+func coerceStringArray(raw json.RawMessage) []string {
+	if len(raw) == 0 {
+		return nil
+	}
+
+	// 根据首字节判断 JSON 类型，避免双重 Unmarshal
+	switch raw[0] {
+	case '[':
+		var arr []string
+		if err := json.Unmarshal(raw, &arr); err == nil {
+			return arr
+		}
+		return nil
+	case '"':
+		var s string
+		if err := json.Unmarshal(raw, &s); err == nil {
+			s = strings.TrimSpace(s)
+			if s != "" {
+				return []string{s}
+			}
+		}
+		return nil
+	default:
+		// null、数字、布尔、对象等均返回 nil
+		return nil
+	}
 }
 
 // extractJSONObject 从模型响应中提取最外层 JSON 对象，容忍前后噪音。

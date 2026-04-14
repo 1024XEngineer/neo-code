@@ -97,7 +97,7 @@ func applyReadTimeContextProjection(
 	if options.DisableMicroCompact || !taskState.Established() {
 		projected = cloneContextMessages(messages)
 	} else {
-		projected = microCompactMessagesWithPolicies(messages, policies)
+		projected = microCompactMessagesWithPolicies(messages, policies, options.MicroCompactRetainedToolSpans)
 	}
 	return projectToolMessagesForModel(projected)
 }

@@ -19,6 +19,7 @@ type CompactPromptInput struct {
 	ManualKeepRecentMessages int
 	ArchivedMessageCount     int
 	MaxSummaryChars          int
+	MaxArchivedPromptChars   int
 	CurrentTaskState         agentsession.TaskState
 	ArchivedMessages         []providertypes.Message
 	RetainedMessages         []providertypes.Message
@@ -56,7 +57,11 @@ func BuildCompactPrompt(input CompactPromptInput) CompactPrompt {
 
 	builder.WriteString("Archived conversation to compress:\n")
 	builder.WriteString("<archived_source_material>\n")
-	builder.WriteString(renderCompactPromptMessages(input.ArchivedMessages))
+	archived := renderCompactPromptMessages(input.ArchivedMessages)
+	if input.MaxArchivedPromptChars > 0 && len(archived) > input.MaxArchivedPromptChars {
+		archived = truncateArchivedContent(archived, input.MaxArchivedPromptChars)
+	}
+	builder.WriteString(archived)
 	builder.WriteString("\n</archived_source_material>\n\n")
 
 	builder.WriteString("Recent context already kept verbatim, including the latest explicit user instruction when present.\n")
@@ -193,4 +198,22 @@ func compactPromptInlineText(input string) string {
 		return "{}"
 	}
 	return strings.Join(fields, " ")
+}
+
+// truncateArchivedContent 从尾部保留 maxChars 个字符的 archived 内容，在消息边界处截断。
+func truncateArchivedContent(content string, maxChars int) string {
+	if maxChars <= 0 || len(content) <= maxChars {
+		return content
+	}
+
+	// 保留尾部 maxChars 个字符
+	tail := content[len(content)-maxChars:]
+
+	// 找到第一个消息边界 [message N] 进行对齐
+	boundary := strings.Index(tail, "[message ")
+	if boundary > 0 {
+		tail = tail[boundary:]
+	}
+
+	return "[... earlier messages truncated ...]\n\n" + tail
 }

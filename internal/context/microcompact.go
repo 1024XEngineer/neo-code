@@ -11,17 +11,21 @@ import (
 const (
 	// microCompactClearedMessage 是旧工具结果被读时微压缩后的占位符文本。
 	microCompactClearedMessage = "[Old tool result content cleared]"
-	// microCompactRetainedToolSpans 定义默认保留原始内容的最近可压缩工具块数量。
-	microCompactRetainedToolSpans = 2
+	// defaultMicroCompactRetainedToolSpans 定义 micro compact 默认保留原始内容的最近可压缩工具块数量。
+	defaultMicroCompactRetainedToolSpans = 2
 )
 
 // microCompactMessages 对裁剪后的消息做只读投影式微压缩，仅清理旧工具结果内容。
 func microCompactMessages(messages []providertypes.Message) []providertypes.Message {
-	return microCompactMessagesWithPolicies(messages, nil)
+	return microCompactMessagesWithPolicies(messages, nil, 0)
 }
 
 // microCompactMessagesWithPolicies 按工具策略对裁剪后的消息做只读投影式微压缩。
-func microCompactMessagesWithPolicies(messages []providertypes.Message, policies MicroCompactPolicySource) []providertypes.Message {
+func microCompactMessagesWithPolicies(messages []providertypes.Message, policies MicroCompactPolicySource, retainedToolSpans int) []providertypes.Message {
+	if retainedToolSpans <= 0 {
+		retainedToolSpans = defaultMicroCompactRetainedToolSpans
+	}
+
 	cloned := cloneContextMessages(messages)
 	if len(cloned) == 0 {
 		return cloned
@@ -47,7 +51,7 @@ func microCompactMessagesWithPolicies(messages []providertypes.Message, policies
 		if !hasCompactableToolContent(cloned, span, compactableIDs) {
 			continue
 		}
-		if retainedCompactableSpans < microCompactRetainedToolSpans {
+		if retainedCompactableSpans < retainedToolSpans {
 			retainedCompactableSpans++
 			continue
 		}

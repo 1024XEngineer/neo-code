@@ -73,15 +73,24 @@ func promptTaskStateListValue(values []string) string {
 	return strings.Join(sanitized, " | ")
 }
 
-// sanitizePromptTaskStateText 将 TaskState 文本收敛为单行安全片段，避免注入额外 prompt 结构。
+// sanitizePromptTaskStateText 将 TaskState 文本清洗为安全片段，保留换行结构，折叠行内空白和控制字符。
 func sanitizePromptTaskStateText(value string) string {
+	// 先将控制字符（保留 \n 和 \t）替换为空格
 	value = strings.Map(func(r rune) rune {
-		switch {
-		case unicode.IsControl(r), unicode.IsSpace(r):
+		if unicode.IsControl(r) && r != '\n' && r != '\t' {
 			return ' '
-		default:
-			return r
 		}
+		return r
 	}, value)
-	return strings.Join(strings.Fields(value), " ")
+
+	lines := strings.Split(value, "\n")
+	cleaned := make([]string, 0, len(lines))
+	for _, line := range lines {
+		fields := strings.Fields(line)
+		if len(fields) == 0 {
+			continue
+		}
+		cleaned = append(cleaned, strings.Join(fields, " "))
+	}
+	return strings.Join(cleaned, "\n")
 }

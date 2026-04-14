@@ -35,6 +35,7 @@ type MicroCompactPolicySource interface {
 
 // CompactOptions controls read-time compact behavior inside the context builder.
 type CompactOptions struct {
-	DisableMicroCompact  bool
-	AutoCompactThreshold int
+	DisableMicroCompact           bool
+	AutoCompactThreshold          int
+	MicroCompactRetainedToolSpans int
 }

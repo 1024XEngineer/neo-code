@@ -22,14 +22,14 @@ func TestRenderTaskStateSectionSanitizesValues(t *testing.T) {
 	})
 
 	want := strings.Join([]string{
-		"- goal: finish migration",
-		"- progress: first item | second item",
-		"- open_items: review comment",
-		"- next_step: run tests now",
+		"- goal: finish\nmigration",
+		"- progress: first\nitem | second item",
+		"- open_items: review\ncomment",
+		"- next_step: run tests\nnow",
 		"- blockers: none needed",
 		"- key_artifacts: internal/context/source_task_state.go",
-		"- decisions: keep single-line format",
-		"- user_constraints: do-not migrate old-data",
+		"- decisions: keep\nsingle-line format",
+		"- user_constraints: do-not migrate\nold-data",
 	}, "\n")
 
 	if section.Title != "Task State" {

@@ -305,3 +305,55 @@ func newRuntimeSession(id string) agentsession.Session {
 func providerRuntimeConfigForTest(name string) provider.RuntimeConfig {
 	return provider.RuntimeConfig{Name: name}
 }
+
+func TestDegradeKeepRecentMessages(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		base    int
+		attempt int
+		want    int
+	}{
+		{
+			name:    "首次尝试使用原值",
+			base:    10,
+			attempt: 1,
+			want:    10,
+		},
+		{
+			name:    "第二次尝试减半",
+			base:    10,
+			attempt: 2,
+			want:    5,
+		},
+		{
+			name:    "第三次尝试四分之一",
+			base:    10,
+			attempt: 3,
+			want:    2,
+		},
+		{
+			name:    "不会低于1",
+			base:    1,
+			attempt: 3,
+			want:    1,
+		},
+		{
+			name:    "大基数多次降级",
+			base:    100,
+			attempt: 3,
+			want:    25,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := degradeKeepRecentMessages(tt.base, tt.attempt)
+			if got != tt.want {
+				t.Fatalf("degradeKeepRecentMessages(%d, %d) = %d, want %d", tt.base, tt.attempt, got, tt.want)
+			}
+		})
+	}
+}

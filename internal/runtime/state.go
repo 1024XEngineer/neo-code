@@ -9,15 +9,18 @@ import (
 	agentsession "neo-code/internal/session"
 )
 
+// maxReactiveCompactAttempts 限制 reactive compact 最大尝试次数，超出后放弃降级并返回错误。
+const maxReactiveCompactAttempts = 3
+
 // runState 汇总单次 Run 生命周期内会变化的会话与计量状态。
 type runState struct {
-	runID               string
-	session             agentsession.Session
-	tokenInputTotal     int
-	tokenOutputTotal    int
-	compactApplied      bool
-	reactiveCompactUsed bool
-	rememberedThisRun   bool
+	runID                   string
+	session                 agentsession.Session
+	tokenInputTotal         int
+	tokenOutputTotal        int
+	compactApplied          bool
+	reactiveCompactAttempts int
+	rememberedThisRun       bool
 }
 
 // newRunState 基于持久化会话创建一次运行的内存状态镜像。
