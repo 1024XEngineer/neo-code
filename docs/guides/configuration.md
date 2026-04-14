@@ -38,6 +38,8 @@ selected_provider: openai
 current_model: gpt-5.4
 shell: bash
 tool_timeout_sec: 20
+runtime:
+  max_no_progress_streak: 3
 
 tools:
   webfetch:
@@ -79,6 +81,12 @@ context:
 | `context.compact.micro_compact_disabled` | 是否关闭默认启用的 micro compact |
 | `context.auto_compact.enabled` | 是否启用自动压缩 |
 | `context.auto_compact.input_token_threshold` | 自动压缩输入 token 阈值 |
+
+### `runtime` 字段
+
+| 字段 | 说明 |
+|------|------|
+| `runtime.max_no_progress_streak` | 连续“无进展”轮次熔断阈值，默认 `3`；当达到 `limit-1` 时会向模型注入一次系统级纠偏提示 |
 
 ### `tools` 字段
 

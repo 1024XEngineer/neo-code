@@ -36,10 +36,8 @@ func TestProgressStreakStopsRun(t *testing.T) {
 	providerFactory := &scriptedProviderFactory{
 		provider: &scriptedProvider{
 			chatFn: func(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error {
-				for _, msg := range req.Messages {
-					if strings.Contains(msg.Content, "System Reminder: You have made multiple consecutive attempts") {
-						promptInjected = true
-					}
+				if strings.Contains(req.SystemPrompt, selfHealingReminder) {
+					promptInjected = true
 				}
 				// the model always decides to call the tool
 				events <- providertypes.NewToolCallStartStreamEvent(0, "call_err", "tool_error")
