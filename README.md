@@ -49,6 +49,12 @@ cd neo-code
 go run ./cmd/neocode
 ```
 
+Gateway 独立进程（Step 1 骨架）：
+
+```bash
+go run ./cmd/neocode-gateway
+```
+
 设置 API Key 示例（按你使用的 provider 选择）：
 
 ```bash

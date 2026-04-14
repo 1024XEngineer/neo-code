@@ -14,6 +14,15 @@ func TestValidateFrame_BasicRules(t *testing.T) {
 		wantField string
 	}{
 		{
+			name: "valid ping request",
+			frame: MessageFrame{
+				Type:      FrameTypeRequest,
+				Action:    FrameActionPing,
+				RequestID: "req-ping",
+			},
+			wantNil: true,
+		},
+		{
 			name: "valid run with input_text",
 			frame: MessageFrame{
 				Type:      FrameTypeRequest,

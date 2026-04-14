@@ -18,6 +18,8 @@ const (
 type FrameAction string
 
 const (
+	// FrameActionPing 表示探活动作，用于验证网关可用性。
+	FrameActionPing FrameAction = "ping"
 	// FrameActionRun 表示发起一次运行。
 	FrameActionRun FrameAction = "run"
 	// FrameActionCompact 表示触发一次手动压缩。

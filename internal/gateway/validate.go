@@ -30,6 +30,8 @@ func validateRequestFrame(frame MessageFrame) *FrameError {
 	}
 
 	switch frame.Action {
+	case FrameActionPing:
+		return nil
 	case FrameActionRun:
 		return validateRunFrame(frame)
 	case FrameActionCompact, FrameActionLoadSession:
@@ -168,7 +170,8 @@ func isValidFrameType(frameType FrameType) bool {
 // isValidFrameAction 判断动作是否属于协议定义集合。
 func isValidFrameAction(action FrameAction) bool {
 	switch action {
-	case FrameActionRun,
+	case FrameActionPing,
+		FrameActionRun,
 		FrameActionCompact,
 		FrameActionCancel,
 		FrameActionListSessions,
