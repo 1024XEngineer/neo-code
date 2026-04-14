@@ -484,12 +484,14 @@ func TestURLDispatchSubcommandDefaultRunnerError(t *testing.T) {
 	originalRunner := runURLDispatchCommand
 	originalDispatch := dispatchURLThroughIPC
 	originalExitProcess := exitProcess
+	originalWriteDispatchError := writeDispatchError
 	originalPreload := runGlobalPreload
 	originalStdout := os.Stdout
 	originalStderr := os.Stderr
 	t.Cleanup(func() { runURLDispatchCommand = originalRunner })
 	t.Cleanup(func() { dispatchURLThroughIPC = originalDispatch })
 	t.Cleanup(func() { exitProcess = originalExitProcess })
+	t.Cleanup(func() { writeDispatchError = originalWriteDispatchError })
 	t.Cleanup(func() { runGlobalPreload = originalPreload })
 	t.Cleanup(func() {
 		os.Stdout = originalStdout
@@ -553,6 +555,63 @@ func TestURLDispatchSubcommandDefaultRunnerError(t *testing.T) {
 	}
 	if strings.Contains(string(stderrOutput), "Error:") {
 		t.Fatalf("stderr = %q, want pure JSON without cobra prefix", string(stderrOutput))
+	}
+}
+
+func TestURLDispatchSubcommandDefaultRunnerErrorFallsBackWhenJSONWriteFails(t *testing.T) {
+	originalRunner := runURLDispatchCommand
+	originalDispatch := dispatchURLThroughIPC
+	originalExitProcess := exitProcess
+	originalWriteDispatchError := writeDispatchError
+	originalPreload := runGlobalPreload
+	originalStderr := os.Stderr
+	t.Cleanup(func() { runURLDispatchCommand = originalRunner })
+	t.Cleanup(func() { dispatchURLThroughIPC = originalDispatch })
+	t.Cleanup(func() { exitProcess = originalExitProcess })
+	t.Cleanup(func() { writeDispatchError = originalWriteDispatchError })
+	t.Cleanup(func() { runGlobalPreload = originalPreload })
+	t.Cleanup(func() { os.Stderr = originalStderr })
+	runGlobalPreload = func(context.Context) error { return nil }
+
+	runURLDispatchCommand = defaultURLDispatchCommandRunner
+	dispatchURLThroughIPC = func(context.Context, urlscheme.DispatchRequest) (urlscheme.DispatchResult, error) {
+		return urlscheme.DispatchResult{}, &urlscheme.DispatchError{
+			Code:    gateway.ErrorCodeInvalidAction.String(),
+			Message: "unsupported wake action",
+		}
+	}
+	writeDispatchError = func(io.Writer, error) error {
+		return errors.New("encode error")
+	}
+
+	exitCode := 0
+	exitProcess = func(code int) {
+		exitCode = code
+	}
+
+	stderrReader, stderrWriter, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("create stderr pipe: %v", err)
+	}
+	t.Cleanup(func() { _ = stderrReader.Close() })
+	os.Stderr = stderrWriter
+
+	command := NewRootCommand()
+	command.SetArgs([]string{"url-dispatch", "--url", "neocode://review?path=README.md"})
+	if err := command.ExecuteContext(context.Background()); err != nil {
+		t.Fatalf("ExecuteContext() error = %v", err)
+	}
+
+	_ = stderrWriter.Close()
+	stderrOutput, readErr := io.ReadAll(stderrReader)
+	if readErr != nil {
+		t.Fatalf("read stderr: %v", readErr)
+	}
+	if exitCode != 1 {
+		t.Fatalf("exit code = %d, want %d", exitCode, 1)
+	}
+	if !strings.Contains(string(stderrOutput), fallbackDispatchErrorJSON) {
+		t.Fatalf("stderr = %q, want contains fallback json", string(stderrOutput))
 	}
 }
 

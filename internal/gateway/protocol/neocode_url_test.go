@@ -3,6 +3,7 @@ package protocol
 import (
 	"errors"
 	"net/url"
+	"path/filepath"
 	"testing"
 )
 
@@ -17,8 +18,8 @@ func TestParseNeoCodeURLSuccess(t *testing.T) {
 	if intent.SessionID != "s-1" {
 		t.Fatalf("session_id = %q, want %q", intent.SessionID, "s-1")
 	}
-	if intent.Workdir != "/tmp/ws" {
-		t.Fatalf("workdir = %q, want %q", intent.Workdir, "/tmp/ws")
+	if intent.Workdir != filepath.Clean("/tmp/ws") {
+		t.Fatalf("workdir = %q, want %q", intent.Workdir, filepath.Clean("/tmp/ws"))
 	}
 	if got := intent.Params["path"]; got != "README.md" {
 		t.Fatalf("params[path] = %q, want %q", got, "README.md")
@@ -38,6 +39,16 @@ func TestParseNeoCodeURLWithActionInPath(t *testing.T) {
 	}
 	if intent.Action != WakeActionReview {
 		t.Fatalf("action = %q, want %q", intent.Action, WakeActionReview)
+	}
+}
+
+func TestParseNeoCodeURLSanitizesWorkdir(t *testing.T) {
+	intent, err := ParseNeoCodeURL("neocode://review?path=README.md&workdir=/tmp/ws/../project")
+	if err != nil {
+		t.Fatalf("parse neocode url: %v", err)
+	}
+	if intent.Workdir != filepath.Clean("/tmp/ws/../project") {
+		t.Fatalf("workdir = %q, want %q", intent.Workdir, filepath.Clean("/tmp/ws/../project"))
 	}
 }
 
@@ -66,6 +77,11 @@ func TestParseNeoCodeURLInvalidCases(t *testing.T) {
 			name:     "missing action",
 			rawURL:   "neocode://",
 			wantCode: ParseErrorCodeMissingRequiredField,
+		},
+		{
+			name:     "unsafe workdir path",
+			rawURL:   "neocode://review?path=README.md&workdir=../../etc",
+			wantCode: ParseErrorCodeUnsafePath,
 		},
 	}
 

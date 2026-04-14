@@ -3,7 +3,12 @@ package protocol
 import (
 	"fmt"
 	"net/url"
+	"path/filepath"
 	"strings"
+)
+
+const (
+	ParseErrorCodeUnsafePath = "unsafe_path"
 )
 
 const (
@@ -70,7 +75,10 @@ func ParseNeoCodeURL(raw string) (WakeIntent, error) {
 
 	params := flattenQueryValues(parsed.Query())
 	sessionID := popQueryParam(params, "session_id", "session")
-	workdir := popQueryParam(params, "workdir")
+	workdir, err := sanitizeWorkdir(popQueryParam(params, "workdir"))
+	if err != nil {
+		return WakeIntent{}, err
+	}
 	if len(params) == 0 {
 		params = nil
 	}
@@ -137,6 +145,19 @@ func popQueryParam(params map[string]string, keys ...string) string {
 		}
 	}
 	return ""
+}
+
+// sanitizeWorkdir 对 workdir 做基础路径清理与安全校验，避免目录穿越类输入进入后续流程。
+func sanitizeWorkdir(workdir string) (string, error) {
+	if workdir == "" {
+		return "", nil
+	}
+
+	cleaned := filepath.Clean(workdir)
+	if strings.Contains(cleaned, "..") {
+		return "", newParseError(ParseErrorCodeUnsafePath, "unsafe workdir path")
+	}
+	return cleaned, nil
 }
 
 // newParseError 创建 URL 解析结构化错误。

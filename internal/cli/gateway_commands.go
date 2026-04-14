@@ -19,7 +19,8 @@ import (
 )
 
 const (
-	defaultGatewayLogLevel = "info"
+	defaultGatewayLogLevel    = "info"
+	fallbackDispatchErrorJSON = `{"status":"error","code":"internal_error","message":"failed to encode or write error output"}`
 )
 
 var (
@@ -28,6 +29,7 @@ var (
 	newGatewayServer      = defaultNewGatewayServer
 	dispatchURLThroughIPC = urlscheme.Dispatch
 	exitProcess           = os.Exit
+	writeDispatchError    = writeURLDispatchErrorOutput
 )
 
 type gatewayCommandOptions struct {
@@ -175,9 +177,9 @@ func defaultURLDispatchCommandRunner(ctx context.Context, options urlDispatchCom
 		ListenAddress: options.ListenAddress,
 	})
 	if err != nil {
-		writeErr := writeURLDispatchErrorOutput(os.Stderr, err)
+		writeErr := writeDispatchError(os.Stderr, err)
 		if writeErr != nil {
-			return errors.Join(err, writeErr)
+			_ = writeURLDispatchFallbackErrorOutput(os.Stderr)
 		}
 		exitProcess(1)
 		return nil
@@ -225,6 +227,12 @@ func writeURLDispatchErrorOutput(writer io.Writer, err error) error {
 		Code:    code,
 		Message: message,
 	})
+}
+
+// writeURLDispatchFallbackErrorOutput 在结构化错误输出失败时提供兜底 JSON，避免命令静默退出。
+func writeURLDispatchFallbackErrorOutput(writer io.Writer) error {
+	_, err := fmt.Fprintln(writer, fallbackDispatchErrorJSON)
+	return err
 }
 
 // encodeJSONLine 将对象编码为单行 JSON，并写入目标输出流。

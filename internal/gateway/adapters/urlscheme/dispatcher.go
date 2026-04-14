@@ -163,6 +163,9 @@ func Dispatch(ctx context.Context, request DispatchRequest) (DispatchResult, err
 
 // applyDispatchDeadline 为调度连接设置统一超时控制。
 func applyDispatchDeadline(conn net.Conn, ctx context.Context) error {
+	if ctx == nil {
+		return nil
+	}
 	if deadline, ok := ctx.Deadline(); ok {
 		return conn.SetDeadline(deadline)
 	}

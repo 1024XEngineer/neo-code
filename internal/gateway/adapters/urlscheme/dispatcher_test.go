@@ -375,6 +375,10 @@ func TestApplyDispatchDeadlineAndToDispatchError(t *testing.T) {
 		_ = connB.Close()
 	})
 
+	if err := applyDispatchDeadline(connA, nil); err != nil {
+		t.Fatalf("apply dispatch deadline with nil context: %v", err)
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 	if err := applyDispatchDeadline(connA, ctx); err != nil {
