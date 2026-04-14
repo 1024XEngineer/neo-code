@@ -32,6 +32,11 @@ func validateRequestFrame(frame MessageFrame) *FrameError {
 	switch frame.Action {
 	case FrameActionPing:
 		return nil
+	case FrameActionWakeOpenURL:
+		if frame.Payload == nil {
+			return NewMissingRequiredFieldError("payload")
+		}
+		return nil
 	case FrameActionRun:
 		return validateRunFrame(frame)
 	case FrameActionCompact, FrameActionLoadSession:
@@ -171,6 +176,7 @@ func isValidFrameType(frameType FrameType) bool {
 func isValidFrameAction(action FrameAction) bool {
 	switch action {
 	case FrameActionPing,
+		FrameActionWakeOpenURL,
 		FrameActionRun,
 		FrameActionCompact,
 		FrameActionCancel,

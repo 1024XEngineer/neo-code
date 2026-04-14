@@ -2,10 +2,11 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
-	"net/url"
 	"os"
 	"os/signal"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"neo-code/internal/gateway"
+	"neo-code/internal/gateway/adapters/urlscheme"
 )
 
 const (
@@ -24,6 +26,7 @@ var (
 	runGatewayCommand     = defaultGatewayCommandRunner
 	runURLDispatchCommand = defaultURLDispatchCommandRunner
 	newGatewayServer      = defaultNewGatewayServer
+	dispatchURLThroughIPC = urlscheme.Dispatch
 )
 
 type gatewayCommandOptions struct {
@@ -34,6 +37,20 @@ type gatewayCommandOptions struct {
 type urlDispatchCommandOptions struct {
 	URL           string
 	ListenAddress string
+}
+
+type urlDispatchSuccessOutput struct {
+	Status        string `json:"status"`
+	ListenAddress string `json:"listen_address"`
+	Action        string `json:"action"`
+	RequestID     string `json:"request_id,omitempty"`
+	Payload       any    `json:"payload,omitempty"`
+}
+
+type urlDispatchErrorOutput struct {
+	Status  string `json:"status"`
+	Code    string `json:"code"`
+	Message string `json:"message"`
 }
 
 type gatewayServer interface {
@@ -114,10 +131,11 @@ func newURLDispatchCommand() *cobra.Command {
 	options := &urlDispatchCommandOptions{}
 
 	cmd := &cobra.Command{
-		Use:          "url-dispatch [url]",
-		Short:        "Dispatch a neocode:// URL to gateway (skeleton)",
-		SilenceUsage: true,
-		Args:         cobra.MaximumNArgs(1),
+		Use:           "url-dispatch [url]",
+		Short:         "Dispatch a neocode:// URL to gateway",
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		Args:          cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			urlValue := strings.TrimSpace(options.URL)
 			if urlValue == "" && len(args) == 1 {
@@ -139,28 +157,72 @@ func newURLDispatchCommand() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&options.URL, "url", "", "neocode:// URL to dispatch")
-	cmd.Flags().StringVar(&options.ListenAddress, "listen", "", "gateway listen address override (reserved for EPIC-GW-02)")
+	cmd.Flags().StringVar(&options.ListenAddress, "listen", "", "gateway listen address override")
 
 	return cmd
 }
 
-// defaultURLDispatchCommandRunner 提供 url-dispatch 的默认骨架行为，明确告知后续步骤接管实现。
-func defaultURLDispatchCommandRunner(_ context.Context, _ urlDispatchCommandOptions) error {
-	return errors.New("url-dispatch is not implemented yet (planned in EPIC-GW-02)")
+// defaultURLDispatchCommandRunner 执行 URL 唤醒请求并将结果以结构化 JSON 输出。
+func defaultURLDispatchCommandRunner(ctx context.Context, options urlDispatchCommandOptions) error {
+	result, err := dispatchURLThroughIPC(ctx, urlscheme.DispatchRequest{
+		RawURL:        options.URL,
+		ListenAddress: options.ListenAddress,
+	})
+	if err != nil {
+		writeErr := writeURLDispatchErrorOutput(os.Stderr, err)
+		if writeErr != nil {
+			return errors.Join(err, writeErr)
+		}
+		return err
+	}
+
+	if err := writeURLDispatchSuccessOutput(os.Stdout, result); err != nil {
+		return err
+	}
+	return nil
 }
 
-// normalizeDispatchURL 校验并标准化 url-dispatch 输入，确保只接受 neocode scheme。
+// normalizeDispatchURL 对 url-dispatch 输入做最小归一化，详细校验交由 dispatcher 完成。
 func normalizeDispatchURL(rawURL string) (string, error) {
-	parsed, err := url.Parse(strings.TrimSpace(rawURL))
-	if err != nil {
-		return "", fmt.Errorf("invalid --url %q: %w", rawURL, err)
+	normalized := strings.TrimSpace(rawURL)
+	if normalized == "" {
+		return "", errors.New("missing required --url or positional <url>")
 	}
-	if !strings.EqualFold(strings.TrimSpace(parsed.Scheme), "neocode") {
-		return "", fmt.Errorf("invalid --url scheme %q: must be neocode", parsed.Scheme)
-	}
-	if strings.TrimSpace(parsed.Host) == "" {
-		return "", errors.New("invalid --url: missing action host")
+	return normalized, nil
+}
+
+// writeURLDispatchSuccessOutput 将 url-dispatch 成功结果输出为结构化 JSON。
+func writeURLDispatchSuccessOutput(writer io.Writer, result urlscheme.DispatchResult) error {
+	return encodeJSONLine(writer, urlDispatchSuccessOutput{
+		Status:        "ok",
+		ListenAddress: result.ListenAddress,
+		Action:        string(result.Response.Action),
+		RequestID:     result.Response.RequestID,
+		Payload:       result.Response.Payload,
+	})
+}
+
+// writeURLDispatchErrorOutput 将 url-dispatch 错误结果输出为结构化 JSON。
+func writeURLDispatchErrorOutput(writer io.Writer, err error) error {
+	code := "internal_error"
+	message := err.Error()
+
+	var dispatchErr *urlscheme.DispatchError
+	if errors.As(err, &dispatchErr) {
+		code = dispatchErr.Code
+		message = dispatchErr.Message
 	}
 
-	return parsed.String(), nil
+	return encodeJSONLine(writer, urlDispatchErrorOutput{
+		Status:  "error",
+		Code:    code,
+		Message: message,
+	})
+}
+
+// encodeJSONLine 将对象编码为单行 JSON，并写入目标输出流。
+func encodeJSONLine(writer io.Writer, payload any) error {
+	encoder := json.NewEncoder(writer)
+	encoder.SetEscapeHTML(false)
+	return encoder.Encode(payload)
 }

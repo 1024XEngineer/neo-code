@@ -32,6 +32,8 @@ const (
 	FrameActionLoadSession FrameAction = "load_session"
 	// FrameActionResolvePermission 表示提交一次权限审批决策。
 	FrameActionResolvePermission FrameAction = "resolve_permission"
+	// FrameActionWakeOpenURL 表示处理 URL Scheme 唤醒请求。
+	FrameActionWakeOpenURL FrameAction = "wake.openUrl"
 )
 
 // InputPartType 表示多模态输入分片类型。

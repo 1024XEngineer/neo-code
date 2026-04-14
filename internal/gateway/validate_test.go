@@ -23,6 +23,17 @@ func TestValidateFrame_BasicRules(t *testing.T) {
 			wantNil: true,
 		},
 		{
+			name: "valid wake open url request",
+			frame: MessageFrame{
+				Type:   FrameTypeRequest,
+				Action: FrameActionWakeOpenURL,
+				Payload: map[string]any{
+					"action": "review",
+				},
+			},
+			wantNil: true,
+		},
+		{
 			name: "valid run with input_text",
 			frame: MessageFrame{
 				Type:      FrameTypeRequest,
@@ -98,6 +109,15 @@ func TestValidateFrame_BasicRules(t *testing.T) {
 			frame: MessageFrame{
 				Type:   FrameTypeRequest,
 				Action: FrameActionResolvePermission,
+			},
+			wantCode:  ErrorCodeMissingRequiredField.String(),
+			wantField: "payload",
+		},
+		{
+			name: "wake open url missing payload",
+			frame: MessageFrame{
+				Type:   FrameTypeRequest,
+				Action: FrameActionWakeOpenURL,
 			},
 			wantCode:  ErrorCodeMissingRequiredField.String(),
 			wantField: "payload",

@@ -13,6 +13,7 @@ import (
 
 var launchRootProgram = defaultRootProgramLauncher
 var newRootProgram = app.NewProgram
+var runGlobalPreload = defaultGlobalPreload
 
 // GlobalFlags 描述 CLI 根命令当前支持的全局参数。
 type GlobalFlags struct {
@@ -35,6 +36,12 @@ func NewRootCommand() *cobra.Command {
 		Short:        "NeoCode coding agent",
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
+		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+			if shouldSkipGlobalPreload(cmd) {
+				return nil
+			}
+			return runGlobalPreload(cmd.Context())
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			flags.Workdir = strings.TrimSpace(settings.GetString("workdir"))
 			return launchRootProgram(cmd.Context(), app.BootstrapOptions{
@@ -74,4 +81,17 @@ func defaultRootProgramLauncher(ctx context.Context, opts app.BootstrapOptions) 
 	}
 	_, err = program.Run()
 	return err
+}
+
+// defaultGlobalPreload 预留给根命令全局预加载逻辑，默认不执行重度配置加载。
+func defaultGlobalPreload(_ context.Context) error {
+	return nil
+}
+
+// shouldSkipGlobalPreload 判断当前命令是否应跳过全局预加载逻辑。
+func shouldSkipGlobalPreload(cmd *cobra.Command) bool {
+	if cmd == nil {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(cmd.Name()), "url-dispatch")
 }

@@ -15,12 +15,15 @@ import (
 )
 
 func TestNewServerUsesDefaultsAndOverrides(t *testing.T) {
-	originalDefaultListenAddress := defaultListenAddressFn
-	defaultListenAddressFn = func() (string, error) {
+	originalResolveListenAddress := resolveListenAddressFn
+	resolveListenAddressFn = func(override string) (string, error) {
+		if override != "" {
+			return strings.TrimSpace(override), nil
+		}
 		return "default-address", nil
 	}
 	t.Cleanup(func() {
-		defaultListenAddressFn = originalDefaultListenAddress
+		resolveListenAddressFn = originalResolveListenAddress
 	})
 
 	server, err := NewServer(ServerOptions{})
@@ -78,12 +81,12 @@ func TestNewServerUsesDefaultsAndOverrides(t *testing.T) {
 }
 
 func TestNewServerReturnsDefaultAddressError(t *testing.T) {
-	originalDefaultListenAddress := defaultListenAddressFn
-	defaultListenAddressFn = func() (string, error) {
+	originalResolveListenAddress := resolveListenAddressFn
+	resolveListenAddressFn = func(string) (string, error) {
 		return "", errors.New("default address failed")
 	}
 	t.Cleanup(func() {
-		defaultListenAddressFn = originalDefaultListenAddress
+		resolveListenAddressFn = originalResolveListenAddress
 	})
 
 	_, err := NewServer(ServerOptions{})

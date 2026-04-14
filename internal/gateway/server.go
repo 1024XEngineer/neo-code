@@ -11,7 +11,6 @@ import (
 	"log"
 	"net"
 	"os"
-	"strings"
 	"sync"
 	"time"
 
@@ -34,7 +33,7 @@ var (
 	errFrameTooLarge = errors.New("frame exceeds max size")
 	errFrameEmpty    = errors.New("empty frame")
 
-	defaultListenAddressFn = transport.DefaultListenAddress
+	resolveListenAddressFn = transport.ResolveListenAddress
 )
 
 // ServerOptions 描述网关服务启动所需的可选配置。
@@ -72,13 +71,9 @@ const (
 
 // NewServer 创建网关服务实例，并解析默认监听地址。
 func NewServer(options ServerOptions) (*Server, error) {
-	listenAddress := strings.TrimSpace(options.ListenAddress)
-	if listenAddress == "" {
-		resolved, err := defaultListenAddressFn()
-		if err != nil {
-			return nil, err
-		}
-		listenAddress = resolved
+	listenAddress, err := resolveListenAddressFn(options.ListenAddress)
+	if err != nil {
+		return nil, err
 	}
 
 	logger := options.Logger
@@ -391,9 +386,7 @@ func readFramePayload(reader *bufio.Reader, maxSize int64) ([]byte, error) {
 }
 
 // dispatchFrame 根据请求动作生成响应帧。
-func (s *Server) dispatchFrame(_ context.Context, frame MessageFrame, runtimePort RuntimePort) MessageFrame {
-	_ = runtimePort
-
+func (s *Server) dispatchFrame(ctx context.Context, frame MessageFrame, runtimePort RuntimePort) MessageFrame {
 	if validationErr := ValidateFrame(frame); validationErr != nil {
 		return errorFrame(frame, validationErr)
 	}
@@ -402,19 +395,7 @@ func (s *Server) dispatchFrame(_ context.Context, frame MessageFrame, runtimePor
 		return errorFrame(frame, NewFrameError(ErrorCodeInvalidFrame, "only request frames are supported"))
 	}
 
-	switch frame.Action {
-	case FrameActionPing:
-		return MessageFrame{
-			Type:      FrameTypeAck,
-			Action:    FrameActionPing,
-			RequestID: frame.RequestID,
-			Payload: map[string]string{
-				"message": "pong",
-			},
-		}
-	default:
-		return errorFrame(frame, NewFrameError(ErrorCodeUnsupportedAction, "action is not implemented in gateway step 1"))
-	}
+	return dispatchRequestFrame(ctx, frame, runtimePort)
 }
 
 // errorFrame 构建统一错误响应帧。
