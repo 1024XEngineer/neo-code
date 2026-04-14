@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -18,6 +19,7 @@ import (
 	"neo-code/internal/provider/streaming"
 	providertypes "neo-code/internal/provider/types"
 	approvalflow "neo-code/internal/runtime/approval"
+	"neo-code/internal/runtime/controlplane"
 	"neo-code/internal/security"
 	agentsession "neo-code/internal/session"
 	"neo-code/internal/tools"
@@ -4338,4 +4340,182 @@ func TestParallelToolCallsPhaseMigration(t *testing.T) {
 
 	assertEventContains(t, events, EventToolStart)
 	assertEventContains(t, events, EventToolResult)
+}
+
+func TestParallelToolCallsRespectConcurrencyLimit(t *testing.T) {
+	t.Parallel()
+
+	var inFlight int32
+	var maxInFlight int32
+	toolSpecs := make([]providertypes.ToolSpec, 0, 12)
+	toolCalls := make([]providertypes.ToolCall, 0, 12)
+	for i := 0; i < 12; i++ {
+		name := fmt.Sprintf("tool_%d", i)
+		toolSpecs = append(toolSpecs, providertypes.ToolSpec{Name: name})
+		toolCalls = append(toolCalls, providertypes.ToolCall{ID: fmt.Sprintf("call_%d", i), Name: name, Arguments: `{}`})
+	}
+
+	toolManager := &stubToolManager{
+		specs: toolSpecs,
+		executeFn: func(ctx context.Context, input tools.ToolCallInput) (tools.ToolResult, error) {
+			current := atomic.AddInt32(&inFlight, 1)
+			defer atomic.AddInt32(&inFlight, -1)
+			for {
+				max := atomic.LoadInt32(&maxInFlight)
+				if current <= max {
+					break
+				}
+				if atomic.CompareAndSwapInt32(&maxInFlight, max, current) {
+					break
+				}
+			}
+			time.Sleep(20 * time.Millisecond)
+			return tools.ToolResult{Name: input.Name, Content: "ok"}, nil
+		},
+	}
+
+	providerFactory := &scriptedProviderFactory{
+		provider: &scriptedProvider{
+			responses: []scriptedResponse{
+				{
+					Message: providertypes.Message{
+						Role:      providertypes.RoleAssistant,
+						ToolCalls: toolCalls,
+					},
+					FinishReason: "tool_calls",
+				},
+				{
+					Message: providertypes.Message{
+						Role:    providertypes.RoleAssistant,
+						Content: "done",
+					},
+					FinishReason: "stop",
+				},
+			},
+		},
+	}
+
+	service := NewWithFactory(
+		newRuntimeConfigManager(t),
+		toolManager,
+		newMemoryStore(),
+		providerFactory,
+		nil,
+	)
+
+	if err := service.Run(context.Background(), UserInput{RunID: "run-parallel-limit", Content: "parallel"}); err != nil {
+		t.Fatalf("Run() failed: %v", err)
+	}
+
+	if got := atomic.LoadInt32(&maxInFlight); got > int32(defaultToolParallelism) {
+		t.Fatalf("max in-flight tool calls = %d, want <= %d", got, defaultToolParallelism)
+	}
+}
+
+func TestParallelToolCallsSerializeSameToolName(t *testing.T) {
+	t.Parallel()
+
+	var sharedInFlight int32
+	var sharedOverlap int32
+
+	toolManager := &stubToolManager{
+		specs: []providertypes.ToolSpec{{Name: "shared_tool"}},
+		executeFn: func(ctx context.Context, input tools.ToolCallInput) (tools.ToolResult, error) {
+			current := atomic.AddInt32(&sharedInFlight, 1)
+			if current > 1 {
+				atomic.StoreInt32(&sharedOverlap, 1)
+			}
+			time.Sleep(25 * time.Millisecond)
+			atomic.AddInt32(&sharedInFlight, -1)
+			return tools.ToolResult{Name: input.Name, Content: "ok"}, nil
+		},
+	}
+
+	providerFactory := &scriptedProviderFactory{
+		provider: &scriptedProvider{
+			responses: []scriptedResponse{
+				{
+					Message: providertypes.Message{
+						Role: providertypes.RoleAssistant,
+						ToolCalls: []providertypes.ToolCall{
+							{ID: "call_1", Name: "shared_tool", Arguments: "{}"},
+							{ID: "call_2", Name: "shared_tool", Arguments: "{}"},
+						},
+					},
+					FinishReason: "tool_calls",
+				},
+				{
+					Message: providertypes.Message{
+						Role:    providertypes.RoleAssistant,
+						Content: "done",
+					},
+					FinishReason: "stop",
+				},
+			},
+		},
+	}
+
+	service := NewWithFactory(
+		newRuntimeConfigManager(t),
+		toolManager,
+		newMemoryStore(),
+		providerFactory,
+		nil,
+	)
+
+	if err := service.Run(context.Background(), UserInput{RunID: "run-parallel-lock", Content: "parallel"}); err != nil {
+		t.Fatalf("Run() failed: %v", err)
+	}
+
+	if atomic.LoadInt32(&sharedOverlap) != 0 {
+		t.Fatalf("same tool calls overlapped, expected serialized execution")
+	}
+}
+
+func TestAgentDoneEventCarriesRunScopedEnvelope(t *testing.T) {
+	t.Parallel()
+
+	service := NewWithFactory(
+		newRuntimeConfigManager(t),
+		&stubToolManager{},
+		newMemoryStore(),
+		&scriptedProviderFactory{
+			provider: &scriptedProvider{
+				responses: []scriptedResponse{
+					{
+						Message: providertypes.Message{
+							Role:    providertypes.RoleAssistant,
+							Content: "done",
+						},
+						FinishReason: "stop",
+					},
+				},
+			},
+		},
+		nil,
+	)
+
+	if err := service.Run(context.Background(), UserInput{RunID: "run-agent-done-envelope", Content: "hello"}); err != nil {
+		t.Fatalf("Run() failed: %v", err)
+	}
+
+	events := collectRuntimeEvents(service.Events())
+	var doneEvent RuntimeEvent
+	found := false
+	for _, event := range events {
+		if event.Type == EventAgentDone {
+			doneEvent = event
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected agent_done event")
+	}
+	if doneEvent.Turn == turnUnspecified {
+		t.Fatalf("expected run-scoped turn, got %d", doneEvent.Turn)
+	}
+	if doneEvent.Phase != string(controlplane.PhasePlan) {
+		t.Fatalf("expected phase=%q, got %q", controlplane.PhasePlan, doneEvent.Phase)
+	}
 }

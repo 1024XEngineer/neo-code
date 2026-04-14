@@ -27,11 +27,11 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 	runCtx, cancel := context.WithCancel(ctx)
 	runToken := s.startRun(cancel)
 	defer func() {
-		s.emitRunTermination(runCtx, input, statePtr, err)
-	}()
-	defer func() {
 		cancel()
 		s.finishRun(runToken)
+	}()
+	defer func() {
+		s.emitRunTermination(runCtx, input, statePtr, err)
 	}()
 	ctx = runCtx
 
@@ -124,7 +124,7 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 			s.emitTokenUsage(ctx, &state, turnResult)
 
 			if len(turnResult.assistant.ToolCalls) == 0 {
-				s.emit(ctx, EventAgentDone, state.runID, state.session.ID, turnResult.assistant)
+				s.emitRunScoped(ctx, EventAgentDone, &state, turnResult.assistant)
 				s.triggerMemoExtraction(state.session.ID, state.session.Messages, state.rememberedThisRun)
 				return nil
 			}

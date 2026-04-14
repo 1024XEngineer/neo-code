@@ -72,7 +72,9 @@ func (s *Service) emitRunTermination(ctx context.Context, input UserInput, state
 			phase = string(state.phase)
 		}
 	}
-	_ = s.emitWithEnvelope(ctx, RuntimeEvent{
+	emitCtx, cancel := stopReasonEmitContext(ctx)
+	defer cancel()
+	_ = s.emitWithEnvelope(emitCtx, RuntimeEvent{
 		Type:           EventStopReasonDecided,
 		RunID:          runID,
 		SessionID:      sessionID,
@@ -82,6 +84,14 @@ func (s *Service) emitRunTermination(ctx context.Context, input UserInput, state
 		PayloadVersion: controlplane.PayloadVersion,
 		Payload:        StopReasonDecidedPayload{Reason: reason, Detail: detail},
 	})
+}
+
+// stopReasonEmitContext 为终止事件提供可用发送窗口，避免继承已取消上下文导致事实事件丢失。
+func stopReasonEmitContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	if ctx != nil && ctx.Err() == nil {
+		return context.WithTimeout(ctx, terminationEventEmitTimeout)
+	}
+	return context.WithTimeout(context.Background(), terminationEventEmitTimeout)
 }
 
 // handleRunError 负责记录 provider 错误日志并原样返回错误；终止类事件由 Run 出口统一发出。

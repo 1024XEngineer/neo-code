@@ -21,6 +21,7 @@ type SpecListInput struct {
 type Manager interface {
 	ListAvailableSpecs(ctx context.Context, input SpecListInput) ([]providertypes.ToolSpec, error)
 	MicroCompactPolicy(name string) MicroCompactPolicy
+	// Execute 必须支持并发调用；runtime 可能在同一轮中并行调度多个工具调用。
 	Execute(ctx context.Context, input ToolCallInput) (ToolResult, error)
 	RememberSessionDecision(sessionID string, action security.Action, scope SessionPermissionScope) error
 }

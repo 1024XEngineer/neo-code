@@ -20,6 +20,9 @@ const (
 	providerRetryBaseWait   = 1 * time.Second
 	providerRetryMaxWait    = 5 * time.Second
 	defaultMaxLoops         = 8
+	defaultToolParallelism  = 4
+
+	terminationEventEmitTimeout = 500 * time.Millisecond
 )
 
 // Runtime 定义 runtime 对外暴露的运行、压缩与审批接口。
@@ -71,6 +74,7 @@ type Service struct {
 	activeRunToken   uint64
 	nextRunToken     uint64
 	activeRunCancels map[uint64]context.CancelFunc
+	permissionAskMu  sync.Mutex
 }
 
 // sessionLockEntry 维护单个会话锁及其当前引用计数，用于在无引用时回收 map 项。

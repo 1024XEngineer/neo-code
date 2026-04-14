@@ -152,6 +152,110 @@ func TestResolvePermissionDuplicateSubmissionIsNonBlocking(t *testing.T) {
 	}
 }
 
+func TestAwaitPermissionDecisionSerializesConcurrentAskRequests(t *testing.T) {
+	t.Parallel()
+
+	service := NewWithFactory(
+		newRuntimeConfigManager(t),
+		&stubToolManager{},
+		newMemoryStore(),
+		&scriptedProviderFactory{provider: &scriptedProvider{}},
+		nil,
+	)
+	permissionErr := permissionDecisionAskError(t)
+
+	type awaitResult struct {
+		decision  approvalflow.Decision
+		requestID string
+		err       error
+	}
+	resultCh := make(chan awaitResult, 2)
+
+	runAwait := func(callID string) {
+		decision, requestID, err := service.awaitPermissionDecision(
+			context.Background(),
+			permissionExecutionInput{
+				RunID:     "run-ask-serial",
+				SessionID: "session-ask-serial",
+				Call: providertypes.ToolCall{
+					ID:   callID,
+					Name: "filesystem_read_file",
+				},
+			},
+			permissionErr,
+		)
+		resultCh <- awaitResult{decision: decision, requestID: requestID, err: err}
+	}
+
+	go runAwait("call-1")
+	go runAwait("call-2")
+
+	var firstReqID string
+	select {
+	case event := <-service.Events():
+		if event.Type != EventPermissionRequested {
+			t.Fatalf("expected first event permission requested, got %q", event.Type)
+		}
+		payload, ok := event.Payload.(PermissionRequestPayload)
+		if !ok {
+			t.Fatalf("expected PermissionRequestPayload, got %#v", event.Payload)
+		}
+		firstReqID = payload.RequestID
+	case <-time.After(2 * time.Second):
+		t.Fatalf("timed out waiting first permission request")
+	}
+
+	select {
+	case event := <-service.Events():
+		t.Fatalf("unexpected second permission request before resolving first: %+v", event)
+	case <-time.After(80 * time.Millisecond):
+	}
+
+	if err := service.ResolvePermission(context.Background(), PermissionResolutionInput{
+		RequestID: firstReqID,
+		Decision:  approvalflow.DecisionAllowOnce,
+	}); err != nil {
+		t.Fatalf("ResolvePermission(first) error = %v", err)
+	}
+
+	var secondReqID string
+	select {
+	case event := <-service.Events():
+		if event.Type != EventPermissionRequested {
+			t.Fatalf("expected second event permission requested, got %q", event.Type)
+		}
+		payload, ok := event.Payload.(PermissionRequestPayload)
+		if !ok {
+			t.Fatalf("expected PermissionRequestPayload, got %#v", event.Payload)
+		}
+		secondReqID = payload.RequestID
+	case <-time.After(2 * time.Second):
+		t.Fatalf("timed out waiting second permission request")
+	}
+
+	if firstReqID == secondReqID {
+		t.Fatalf("expected distinct permission request IDs, got %q", firstReqID)
+	}
+
+	if err := service.ResolvePermission(context.Background(), PermissionResolutionInput{
+		RequestID: secondReqID,
+		Decision:  approvalflow.DecisionAllowSession,
+	}); err != nil {
+		t.Fatalf("ResolvePermission(second) error = %v", err)
+	}
+
+	for i := 0; i < 2; i++ {
+		select {
+		case res := <-resultCh:
+			if res.err != nil {
+				t.Fatalf("awaitPermissionDecision() error = %v", res.err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("timed out waiting awaitPermissionDecision result")
+		}
+	}
+}
+
 func TestServiceRunPermissionRejectFlow(t *testing.T) {
 	t.Parallel()
 

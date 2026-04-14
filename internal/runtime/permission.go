@@ -164,6 +164,9 @@ func (s *Service) awaitPermissionDecision(
 	input permissionExecutionInput,
 	permissionErr *tools.PermissionDecisionError,
 ) (approvalflow.Decision, string, error) {
+	s.permissionAskMu.Lock()
+	defer s.permissionAskMu.Unlock()
+
 	requestID, resultCh, err := s.approvalBroker.Open()
 	if err != nil {
 		return "", "", err
