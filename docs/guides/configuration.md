@@ -35,7 +35,7 @@ custom provider 目录：
 
 ```yaml
 selected_provider: openai
-current_model: gpt-4.1
+current_model: gpt-5.4
 shell: bash
 max_loops: 8
 tool_timeout_sec: 20

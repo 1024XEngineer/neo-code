@@ -22,6 +22,25 @@ type stubMemoExtractor struct {
 	doneCh   chan struct{}
 }
 
+type lockProbeStore struct {
+	saveFn func(ctx context.Context, session *agentsession.Session) error
+}
+
+func (s *lockProbeStore) Save(ctx context.Context, session *agentsession.Session) error {
+	if s.saveFn == nil {
+		return nil
+	}
+	return s.saveFn(ctx, session)
+}
+
+func (s *lockProbeStore) Load(ctx context.Context, id string) (agentsession.Session, error) {
+	return agentsession.Session{}, errors.New("not implemented")
+}
+
+func (s *lockProbeStore) ListSummaries(ctx context.Context) ([]agentsession.Summary, error) {
+	return nil, errors.New("not implemented")
+}
+
 func (s *stubMemoExtractor) Schedule(_ string, messages []providertypes.Message) {
 	s.mu.Lock()
 	s.calls++
@@ -134,6 +153,39 @@ func TestAppendToolMessageAndSaveSanitizesMetadata(t *testing.T) {
 	}
 	if _, exists := msg.ToolMetadata["sensitive"]; exists {
 		t.Fatalf("expected sensitive metadata key to be removed, got %+v", msg.ToolMetadata)
+	}
+}
+
+func TestAppendToolMessageAndSaveUnlocksStateBeforePersist(t *testing.T) {
+	t.Parallel()
+
+	session := newRuntimeSession("session-append-tool-lock")
+	state := newRunState("run-append-tool-lock", session)
+
+	store := &lockProbeStore{
+		saveFn: func(_ context.Context, _ *agentsession.Session) error {
+			locked := make(chan struct{})
+			go func() {
+				state.mu.Lock()
+				state.mu.Unlock()
+				close(locked)
+			}()
+
+			select {
+			case <-locked:
+				return nil
+			case <-time.After(200 * time.Millisecond):
+				return errors.New("state lock is still held during save")
+			}
+		},
+	}
+
+	service := &Service{sessionStore: store}
+	call := providertypes.ToolCall{ID: "call-1", Name: "filesystem_read_file"}
+	result := tools.ToolResult{Name: "filesystem_read_file", Content: "ok"}
+
+	if err := service.appendToolMessageAndSave(context.Background(), &state, call, result); err != nil {
+		t.Fatalf("appendToolMessageAndSave() error = %v", err)
 	}
 }
 

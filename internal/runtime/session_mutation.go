@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	providertypes "neo-code/internal/provider/types"
+	agentsession "neo-code/internal/session"
 	"neo-code/internal/tools"
 )
 
@@ -54,7 +55,6 @@ func (s *Service) appendToolMessageAndSave(
 	result tools.ToolResult,
 ) error {
 	state.mu.Lock()
-	defer state.mu.Unlock()
 	toolMessage := providertypes.Message{
 		Role:         providertypes.RoleTool,
 		Content:      result.Content,
@@ -64,5 +64,54 @@ func (s *Service) appendToolMessageAndSave(
 	}
 	state.session.Messages = append(state.session.Messages, toolMessage)
 	state.touchSession()
-	return s.sessionStore.Save(ctx, &state.session)
+	sessionSnapshot := cloneSessionForPersistence(state.session)
+	state.mu.Unlock()
+	return s.sessionStore.Save(ctx, &sessionSnapshot)
+}
+
+// cloneSessionForPersistence 复制会话快照，避免持久化阶段与并发写入共享可变切片/映射。
+func cloneSessionForPersistence(session agentsession.Session) agentsession.Session {
+	cloned := session
+	cloned.Messages = cloneMessagesForPersistence(session.Messages)
+	cloned.TaskState = session.TaskState.Clone()
+	cloned.Todos = cloneTodosForPersistence(session.Todos)
+	return cloned
+}
+
+// cloneMessagesForPersistence 深拷贝消息切片及其嵌套字段，确保 Save 期间读取稳定。
+func cloneMessagesForPersistence(messages []providertypes.Message) []providertypes.Message {
+	if len(messages) == 0 {
+		return nil
+	}
+	cloned := make([]providertypes.Message, len(messages))
+	for idx, message := range messages {
+		next := message
+		if len(message.ToolCalls) > 0 {
+			next.ToolCalls = append([]providertypes.ToolCall(nil), message.ToolCalls...)
+		} else {
+			next.ToolCalls = nil
+		}
+		if len(message.ToolMetadata) > 0 {
+			next.ToolMetadata = make(map[string]string, len(message.ToolMetadata))
+			for key, value := range message.ToolMetadata {
+				next.ToolMetadata[key] = value
+			}
+		} else {
+			next.ToolMetadata = nil
+		}
+		cloned[idx] = next
+	}
+	return cloned
+}
+
+// cloneTodosForPersistence 深拷贝 Todo 列表，确保持久化快照不与运行态共享底层切片。
+func cloneTodosForPersistence(todos []agentsession.TodoItem) []agentsession.TodoItem {
+	if len(todos) == 0 {
+		return nil
+	}
+	cloned := make([]agentsession.TodoItem, len(todos))
+	for idx, item := range todos {
+		cloned[idx] = item.Clone()
+	}
+	return cloned
 }

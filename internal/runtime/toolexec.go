@@ -20,6 +20,9 @@ func (s *Service) executeAssistantToolCalls(
 		return nil
 	}
 
+	execCtx, cancelExec := context.WithCancel(ctx)
+	defer cancelExec()
+
 	parallelism := resolveToolParallelism(len(assistant.ToolCalls))
 	orderedCalls := reorderToolCallsByNameRoundRobin(assistant.ToolCalls)
 	toolLocks := buildToolExecutionLocks(assistant.ToolCalls)
@@ -29,11 +32,7 @@ func (s *Service) executeAssistantToolCalls(
 	var workerWG sync.WaitGroup
 
 	checkContext := func() bool {
-		if err := ctx.Err(); err != nil {
-			rememberFirstError(&mu, &firstErr, err)
-			return true
-		}
-		return false
+		return shouldStopToolExecution(&mu, &firstErr, execCtx.Err())
 	}
 
 	for i := 0; i < parallelism; i++ {
@@ -41,7 +40,17 @@ func (s *Service) executeAssistantToolCalls(
 		go func() {
 			defer workerWG.Done()
 			for call := range taskCh {
-				s.executeOneToolCall(ctx, state, snapshot, call, toolLocks[normalizeToolLockKey(call.Name)], checkContext, &mu, &firstErr)
+				s.executeOneToolCall(
+					execCtx,
+					state,
+					snapshot,
+					call,
+					toolLocks[normalizeToolLockKey(call.Name)],
+					checkContext,
+					func(err error) {
+						recordAndCancelOnFirstError(&mu, &firstErr, err, cancelExec)
+					},
+				)
 			}
 		}()
 	}
@@ -66,8 +75,7 @@ func (s *Service) executeOneToolCall(
 	call providertypes.ToolCall,
 	toolLock *sync.Mutex,
 	checkContext func() bool,
-	mu *sync.Mutex,
-	firstErr *error,
+	rememberError func(error),
 ) {
 	if checkContext() {
 		return
@@ -87,7 +95,7 @@ func (s *Service) executeOneToolCall(
 	})
 
 	if errors.Is(execErr, context.Canceled) {
-		rememberFirstError(mu, firstErr, execErr)
+		rememberError(execErr)
 		return
 	}
 	if execErr == nil && checkContext() {
@@ -102,7 +110,7 @@ func (s *Service) executeOneToolCall(
 		if execErr != nil && errors.Is(err, context.Canceled) {
 			s.emitRunScoped(ctx, EventToolResult, state, result)
 		}
-		rememberFirstError(mu, firstErr, err)
+		rememberError(err)
 		return
 	}
 
@@ -186,13 +194,32 @@ func normalizeToolLockKey(name string) string {
 }
 
 // rememberFirstError 记录首次错误，后续错误只保留用于日志和事件路径。
-func rememberFirstError(mu *sync.Mutex, firstErr *error, err error) {
+func rememberFirstError(mu *sync.Mutex, firstErr *error, err error) bool {
 	if err == nil {
-		return
+		return false
 	}
 	mu.Lock()
 	defer mu.Unlock()
 	if *firstErr == nil {
 		*firstErr = err
+		return true
+	}
+	return false
+}
+
+// shouldStopToolExecution 统一判断工具执行是否应停止，并在上下文取消时兜底记录错误原因。
+func shouldStopToolExecution(mu *sync.Mutex, firstErr *error, contextErr error) bool {
+	mu.Lock()
+	defer mu.Unlock()
+	if contextErr != nil && *firstErr == nil {
+		*firstErr = contextErr
+	}
+	return *firstErr != nil
+}
+
+// recordAndCancelOnFirstError 在首次记录错误时触发执行上下文取消，阻止后续工具继续派发。
+func recordAndCancelOnFirstError(mu *sync.Mutex, firstErr *error, err error, cancel context.CancelFunc) {
+	if rememberFirstError(mu, firstErr, err) {
+		cancel()
 	}
 }
