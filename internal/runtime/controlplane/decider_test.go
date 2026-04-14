@@ -66,3 +66,23 @@ func TestDecideStopReasonPriority(t *testing.T) {
 		})
 	}
 }
+
+func TestDecideStopReasonDetails(t *testing.T) {
+	t.Parallel()
+
+	reason, detail := DecideStopReason(StopInput{MaxLoopsReached: true})
+	if reason != StopReasonMaxLoops {
+		t.Fatalf("reason = %q, want %q", reason, StopReasonMaxLoops)
+	}
+	if detail != "runtime: max loop reached" {
+		t.Fatalf("detail = %q, want default max-loop detail", detail)
+	}
+
+	reason, detail = DecideStopReason(StopInput{})
+	if reason != StopReasonError {
+		t.Fatalf("reason = %q, want %q", reason, StopReasonError)
+	}
+	if detail != "runtime: stop reason undetermined" {
+		t.Fatalf("detail = %q, want undetermined detail", detail)
+	}
+}

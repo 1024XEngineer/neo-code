@@ -18,7 +18,6 @@ func TestProgressStreakStopsRun(t *testing.T) {
 	cfg := config.Config{
 		Providers:        []config.ProviderConfig{{Name: "test-progress", Driver: "test", BaseURL: "http://localhost", Model: "test", APIKeyEnv: "TEST_KEY"}},
 		SelectedProvider: "test-progress",
-		MaxLoops:         10, // High enough to not trigger max loops
 		Workdir:          t.TempDir(),
 	}
 
