@@ -268,16 +268,16 @@ func TestParseCompactSummaryOutputToleratesStringInsteadOfArray(t *testing.T) {
 			wantOK: true,
 		},
 		{
-			name:   "数字代替数组产生nil",
+			name:   "数字代替数组报错",
 			json:   `{"task_state":{"goal":"g","progress":42,"open_items":[],"next_step":"n","blockers":[],"key_artifacts":[],"decisions":[],"user_constraints":[]},"display_summary":"summary"}`,
 			want:   nil,
-			wantOK: true,
+			wantOK: false,
 		},
 		{
-			name:   "嵌套对象代替数组产生nil",
+			name:   "嵌套对象代替数组报错",
 			json:   `{"task_state":{"goal":"g","progress":{"nested":true},"open_items":[],"next_step":"n","blockers":[],"key_artifacts":[],"decisions":[],"user_constraints":[]},"display_summary":"summary"}`,
 			want:   nil,
-			wantOK: true,
+			wantOK: false,
 		},
 	}
 
@@ -307,9 +307,10 @@ func TestCoerceStringArray(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name string
-		raw  string
-		want []string
+		name    string
+		raw     string
+		want    []string
+		wantErr bool
 	}{
 		{
 			name: "正常字符串数组",
@@ -332,19 +333,22 @@ func TestCoerceStringArray(t *testing.T) {
 			want: nil,
 		},
 		{
-			name: "数字返回nil",
-			raw:  `42`,
-			want: nil,
+			name:    "数字返回nil",
+			raw:     `42`,
+			want:    nil,
+			wantErr: true,
 		},
 		{
-			name: "布尔返回nil",
-			raw:  `true`,
-			want: nil,
+			name:    "布尔返回nil",
+			raw:     `true`,
+			want:    nil,
+			wantErr: true,
 		},
 		{
-			name: "嵌套对象返回nil",
-			raw:  `{"key":"val"}`,
-			want: nil,
+			name:    "嵌套对象返回nil",
+			raw:     `{"key":"val"}`,
+			want:    nil,
+			wantErr: true,
 		},
 		{
 			name: "空RawMessage返回nil",
@@ -356,7 +360,13 @@ func TestCoerceStringArray(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got := coerceStringArray(json.RawMessage(tt.raw))
+			got, err := coerceStringArray("progress", json.RawMessage(tt.raw))
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("coerceStringArray(%q) error = %v, wantErr %v", tt.raw, err, tt.wantErr)
+			}
+			if tt.wantErr {
+				return
+			}
 			if len(got) != len(tt.want) {
 				t.Fatalf("coerceStringArray(%q) = %v, want %v", tt.raw, got, tt.want)
 			}

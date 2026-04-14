@@ -38,10 +38,12 @@ type persistedContextConfig struct {
 }
 
 type persistedCompactConfig struct {
-	ManualStrategy           string `yaml:"manual_strategy,omitempty"`
-	ManualKeepRecentMessages int    `yaml:"manual_keep_recent_messages,omitempty"`
-	MaxSummaryChars          int    `yaml:"max_summary_chars,omitempty"`
-	MicroCompactDisabled     bool   `yaml:"micro_compact_disabled,omitempty"`
+	ManualStrategy                string `yaml:"manual_strategy,omitempty"`
+	ManualKeepRecentMessages      int    `yaml:"manual_keep_recent_messages,omitempty"`
+	MaxSummaryChars               int    `yaml:"max_summary_chars,omitempty"`
+	MicroCompactDisabled          bool   `yaml:"micro_compact_disabled,omitempty"`
+	MicroCompactRetainedToolSpans int    `yaml:"micro_compact_retained_tool_spans,omitempty"`
+	MaxArchivedPromptChars        int    `yaml:"max_archived_prompt_chars,omitempty"`
 }
 
 type persistedAutoCompactConfig struct {
@@ -237,10 +239,12 @@ func marshalPersistedConfig(snapshot Config) ([]byte, error) {
 func newPersistedContextConfig(cfg ContextConfig) persistedContextConfig {
 	return persistedContextConfig{
 		Compact: persistedCompactConfig{
-			ManualStrategy:           cfg.Compact.ManualStrategy,
-			ManualKeepRecentMessages: cfg.Compact.ManualKeepRecentMessages,
-			MaxSummaryChars:          cfg.Compact.MaxSummaryChars,
-			MicroCompactDisabled:     cfg.Compact.MicroCompactDisabled,
+			ManualStrategy:                cfg.Compact.ManualStrategy,
+			ManualKeepRecentMessages:      cfg.Compact.ManualKeepRecentMessages,
+			MaxSummaryChars:               cfg.Compact.MaxSummaryChars,
+			MicroCompactDisabled:          cfg.Compact.MicroCompactDisabled,
+			MicroCompactRetainedToolSpans: cfg.Compact.MicroCompactRetainedToolSpans,
+			MaxArchivedPromptChars:        cfg.Compact.MaxArchivedPromptChars,
 		},
 		AutoCompact: persistedAutoCompactConfig{
 			Enabled:             cfg.AutoCompact.Enabled,
@@ -253,10 +257,12 @@ func newPersistedContextConfig(cfg ContextConfig) persistedContextConfig {
 func fromPersistedContextConfig(file persistedContextConfig, defaults ContextConfig) ContextConfig {
 	out := ContextConfig{
 		Compact: CompactConfig{
-			ManualStrategy:           strings.TrimSpace(file.Compact.ManualStrategy),
-			ManualKeepRecentMessages: file.Compact.ManualKeepRecentMessages,
-			MaxSummaryChars:          file.Compact.MaxSummaryChars,
-			MicroCompactDisabled:     file.Compact.MicroCompactDisabled,
+			ManualStrategy:                strings.TrimSpace(file.Compact.ManualStrategy),
+			ManualKeepRecentMessages:      file.Compact.ManualKeepRecentMessages,
+			MaxSummaryChars:               file.Compact.MaxSummaryChars,
+			MicroCompactDisabled:          file.Compact.MicroCompactDisabled,
+			MicroCompactRetainedToolSpans: file.Compact.MicroCompactRetainedToolSpans,
+			MaxArchivedPromptChars:        file.Compact.MaxArchivedPromptChars,
 		},
 		AutoCompact: AutoCompactConfig{
 			Enabled:             file.AutoCompact.Enabled,
@@ -288,24 +294,26 @@ func assembleProviders(builtin []ProviderConfig, custom []ProviderConfig) ([]Pro
 		return nil
 	}
 
-	for _, provider := range builtin {
-		candidate := cloneProviderConfig(provider)
-		if candidate.Source == "" {
-			candidate.Source = ProviderSourceBuiltin
-		}
-		if err := appendProvider(candidate); err != nil {
-			return nil, err
+	sections := []struct {
+		providers []ProviderConfig
+		source    ProviderSource
+	}{
+		{providers: builtin, source: ProviderSourceBuiltin},
+		{providers: custom, source: ProviderSourceCustom},
+	}
+
+	for _, section := range sections {
+		for _, provider := range section.providers {
+			candidate := cloneProviderConfig(provider)
+			if candidate.Source == "" {
+				candidate.Source = section.source
+			}
+			if err := appendProvider(candidate); err != nil {
+				return nil, err
+			}
 		}
 	}
-	for _, provider := range custom {
-		candidate := cloneProviderConfig(provider)
-		if candidate.Source == "" {
-			candidate.Source = ProviderSourceCustom
-		}
-		if err := appendProvider(candidate); err != nil {
-			return nil, err
-		}
-	}
+
 	return assembled, nil
 }
 

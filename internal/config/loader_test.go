@@ -8,6 +8,20 @@ import (
 	"testing"
 )
 
+func writeLoaderConfig(t *testing.T, loader *Loader, raw string) {
+	t.Helper()
+	if err := os.MkdirAll(loader.BaseDir(), 0o755); err != nil {
+		t.Fatalf("mkdir base dir: %v", err)
+	}
+	content := raw
+	if strings.Contains(raw, "\n") {
+		content = strings.TrimSpace(raw) + "\n"
+	}
+	if err := os.WriteFile(loader.ConfigPath(), []byte(content), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+}
+
 func TestLoaderLoadMissingConfigCreatesDefault(t *testing.T) {
 	t.Parallel()
 
@@ -32,12 +46,7 @@ func TestLoaderLoadMalformedYAML(t *testing.T) {
 	t.Parallel()
 
 	loader := NewLoader(t.TempDir(), testDefaultConfig())
-	if err := os.MkdirAll(loader.BaseDir(), 0o755); err != nil {
-		t.Fatalf("mkdir base dir: %v", err)
-	}
-	if err := os.WriteFile(loader.ConfigPath(), []byte("providers:\n  - name: [\n"), 0o644); err != nil {
-		t.Fatalf("write malformed config: %v", err)
-	}
+	writeLoaderConfig(t, loader, "providers:\n  - name: [\n")
 
 	_, err := loader.Load(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "parse config file") {
@@ -49,18 +58,13 @@ func TestLoaderRejectsLegacyWorkdirKey(t *testing.T) {
 	t.Parallel()
 
 	loader := NewLoader(t.TempDir(), testDefaultConfig())
-	if err := os.MkdirAll(loader.BaseDir(), 0o755); err != nil {
-		t.Fatalf("mkdir base dir: %v", err)
-	}
 	raw := `
 selected_provider: openai
 current_model: gpt-4.1
 workdir: .
 shell: powershell
 `
-	if err := os.WriteFile(loader.ConfigPath(), []byte(strings.TrimSpace(raw)+"\n"), 0o644); err != nil {
-		t.Fatalf("write legacy config: %v", err)
-	}
+	writeLoaderConfig(t, loader, raw)
 
 	_, err := loader.Load(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "field workdir not found") {
@@ -72,18 +76,13 @@ func TestLoaderRejectsLegacyDefaultWorkdirKey(t *testing.T) {
 	t.Parallel()
 
 	loader := NewLoader(t.TempDir(), testDefaultConfig())
-	if err := os.MkdirAll(loader.BaseDir(), 0o755); err != nil {
-		t.Fatalf("mkdir base dir: %v", err)
-	}
 	raw := `
 selected_provider: openai
 current_model: gpt-4.1
 default_workdir: .
 shell: powershell
 `
-	if err := os.WriteFile(loader.ConfigPath(), []byte(strings.TrimSpace(raw)+"\n"), 0o644); err != nil {
-		t.Fatalf("write legacy config: %v", err)
-	}
+	writeLoaderConfig(t, loader, raw)
 
 	_, err := loader.Load(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "field default_workdir not found") {
@@ -111,9 +110,6 @@ func TestLoaderRejectsLegacyProvidersFormatOnLoad(t *testing.T) {
 	t.Parallel()
 
 	loader := NewLoader(t.TempDir(), testDefaultConfig())
-	if err := os.MkdirAll(loader.BaseDir(), 0o755); err != nil {
-		t.Fatalf("mkdir base dir: %v", err)
-	}
 
 	legacy := `
 selected_provider: openai
@@ -126,9 +122,7 @@ providers:
     model: gpt-5.4
     api_key_env: OPENAI_API_KEY
 `
-	if err := os.WriteFile(loader.ConfigPath(), []byte(strings.TrimSpace(legacy)+"\n"), 0o644); err != nil {
-		t.Fatalf("write legacy config: %v", err)
-	}
+	writeLoaderConfig(t, loader, legacy)
 
 	_, err := loader.Load(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "field providers not found") {
@@ -140,17 +134,12 @@ func TestLoaderPreservesSelectionStateOnLoad(t *testing.T) {
 	t.Parallel()
 
 	loader := NewLoader(t.TempDir(), testDefaultConfig())
-	if err := os.MkdirAll(loader.BaseDir(), 0o755); err != nil {
-		t.Fatalf("mkdir base dir: %v", err)
-	}
 
 	raw := `
 selected_provider: missing-provider
 shell: powershell
 `
-	if err := os.WriteFile(loader.ConfigPath(), []byte(strings.TrimSpace(raw)+"\n"), 0o644); err != nil {
-		t.Fatalf("write config: %v", err)
-	}
+	writeLoaderConfig(t, loader, raw)
 
 	cfg, err := loader.Load(context.Background())
 	if err != nil {
@@ -177,17 +166,12 @@ func TestLoaderPreservesMissingCurrentModelOnLoad(t *testing.T) {
 	t.Parallel()
 
 	loader := NewLoader(t.TempDir(), testDefaultConfig())
-	if err := os.MkdirAll(loader.BaseDir(), 0o755); err != nil {
-		t.Fatalf("mkdir base dir: %v", err)
-	}
 
 	raw := `
 selected_provider: openai
 shell: powershell
 `
-	if err := os.WriteFile(loader.ConfigPath(), []byte(strings.TrimSpace(raw)+"\n"), 0o644); err != nil {
-		t.Fatalf("write config: %v", err)
-	}
+	writeLoaderConfig(t, loader, raw)
 
 	cfg, err := loader.Load(context.Background())
 	if err != nil {
@@ -223,9 +207,7 @@ func TestLoaderAllowsSelectedCustomProviderWithEmptyCurrentModel(t *testing.T) {
 selected_provider: company-gateway
 shell: powershell
 `
-	if err := os.WriteFile(loader.ConfigPath(), []byte(strings.TrimSpace(rawConfig)+"\n"), 0o644); err != nil {
-		t.Fatalf("write config: %v", err)
-	}
+	writeLoaderConfig(t, loader, rawConfig)
 
 	providerYAML := `
 name: company-gateway
@@ -263,9 +245,7 @@ selected_provider: company-gateway
 current_model: deepseek-coder
 shell: powershell
 `
-	if err := os.WriteFile(loader.ConfigPath(), []byte(strings.TrimSpace(rawConfig)+"\n"), 0o644); err != nil {
-		t.Fatalf("write config: %v", err)
-	}
+	writeLoaderConfig(t, loader, rawConfig)
 
 	providerYAML := `
 name: company-gateway
@@ -523,9 +503,7 @@ selected_provider: company-gateway
 current_model: server-model
 shell: powershell
 `
-	if err := os.WriteFile(loader.ConfigPath(), []byte(strings.TrimSpace(rawConfig)+"\n"), 0o644); err != nil {
-		t.Fatalf("write config: %v", err)
-	}
+	writeLoaderConfig(t, loader, rawConfig)
 
 	providerYAML := `
 name: company-gateway
@@ -582,9 +560,7 @@ selected_provider: company-gateway
 current_model: server-model
 shell: powershell
 `
-	if err := os.WriteFile(loader.ConfigPath(), []byte(strings.TrimSpace(rawConfig)+"\n"), 0o644); err != nil {
-		t.Fatalf("write config: %v", err)
-	}
+	writeLoaderConfig(t, loader, rawConfig)
 
 	providerYAML := `
 name: company-gateway
@@ -764,9 +740,6 @@ func TestLoaderMemoConfigPreservesExplicitFalse(t *testing.T) {
 	t.Parallel()
 
 	loader := NewLoader(t.TempDir(), testDefaultConfig())
-	if err := os.MkdirAll(loader.BaseDir(), 0o755); err != nil {
-		t.Fatalf("mkdir base dir: %v", err)
-	}
 
 	raw := `
 selected_provider: openai
@@ -777,9 +750,7 @@ memo:
   auto_extract: false
   max_index_lines: 123
 `
-	if err := os.WriteFile(loader.ConfigPath(), []byte(strings.TrimSpace(raw)+"\n"), 0o644); err != nil {
-		t.Fatalf("write config: %v", err)
-	}
+	writeLoaderConfig(t, loader, raw)
 
 	cfg, err := loader.Load(context.Background())
 	if err != nil {
@@ -812,18 +783,13 @@ func TestLoaderMemoConfigAppliesDefaultsWhenSectionMissing(t *testing.T) {
 	t.Parallel()
 
 	loader := NewLoader(t.TempDir(), testDefaultConfig())
-	if err := os.MkdirAll(loader.BaseDir(), 0o755); err != nil {
-		t.Fatalf("mkdir base dir: %v", err)
-	}
 
 	raw := `
 selected_provider: openai
 current_model: gpt-4.1
 shell: powershell
 `
-	if err := os.WriteFile(loader.ConfigPath(), []byte(strings.TrimSpace(raw)+"\n"), 0o644); err != nil {
-		t.Fatalf("write config: %v", err)
-	}
+	writeLoaderConfig(t, loader, raw)
 
 	cfg, err := loader.Load(context.Background())
 	if err != nil {
@@ -837,5 +803,72 @@ shell: powershell
 	}
 	if cfg.Memo.MaxIndexLines <= 0 {
 		t.Fatalf("expected memo.max_index_lines to be defaulted, got %d", cfg.Memo.MaxIndexLines)
+	}
+}
+
+func TestLoaderLoadsCompactExtendedFields(t *testing.T) {
+	t.Parallel()
+
+	loader := NewLoader(t.TempDir(), testDefaultConfig())
+
+	raw := `
+selected_provider: openai
+current_model: gpt-4.1
+shell: powershell
+context:
+  compact:
+    manual_strategy: keep_recent
+    manual_keep_recent_messages: 9
+    max_summary_chars: 900
+    micro_compact_retained_tool_spans: 4
+    max_archived_prompt_chars: 4096
+`
+	writeLoaderConfig(t, loader, raw)
+
+	cfg, err := loader.Load(context.Background())
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Context.Compact.MicroCompactRetainedToolSpans != 4 {
+		t.Fatalf("expected micro_compact_retained_tool_spans=4, got %d", cfg.Context.Compact.MicroCompactRetainedToolSpans)
+	}
+	if cfg.Context.Compact.MaxArchivedPromptChars != 4096 {
+		t.Fatalf("expected max_archived_prompt_chars=4096, got %d", cfg.Context.Compact.MaxArchivedPromptChars)
+	}
+}
+
+func TestLoaderSaveRoundTripsCompactExtendedFields(t *testing.T) {
+	t.Parallel()
+
+	loader := NewLoader(t.TempDir(), testDefaultConfig())
+	cfg := loader.DefaultConfig()
+	cfg.Context.Compact.MicroCompactRetainedToolSpans = 5
+	cfg.Context.Compact.MaxArchivedPromptChars = 3072
+
+	if err := loader.Save(context.Background(), &cfg); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	data, err := os.ReadFile(loader.ConfigPath())
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	text := string(data)
+	if !strings.Contains(text, "micro_compact_retained_tool_spans: 5") {
+		t.Fatalf("expected persisted micro_compact_retained_tool_spans, got:\n%s", text)
+	}
+	if !strings.Contains(text, "max_archived_prompt_chars: 3072") {
+		t.Fatalf("expected persisted max_archived_prompt_chars, got:\n%s", text)
+	}
+
+	loaded, err := loader.Load(context.Background())
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if loaded.Context.Compact.MicroCompactRetainedToolSpans != 5 {
+		t.Fatalf("expected round-trip micro_compact_retained_tool_spans=5, got %d", loaded.Context.Compact.MicroCompactRetainedToolSpans)
+	}
+	if loaded.Context.Compact.MaxArchivedPromptChars != 3072 {
+		t.Fatalf("expected round-trip max_archived_prompt_chars=3072, got %d", loaded.Context.Compact.MaxArchivedPromptChars)
 	}
 }
