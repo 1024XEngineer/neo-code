@@ -92,7 +92,7 @@ func normalizeTaskStateList(items []string) []string {
 		if trimmed == "" {
 			continue
 		}
-		key := strings.ToLower(trimmed)
+		key := trimmed
 		if _, ok := seen[key]; ok {
 			continue
 		}

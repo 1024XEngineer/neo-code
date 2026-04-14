@@ -91,9 +91,14 @@ func (s *Service) Run(ctx context.Context, input UserInput) error {
 
 			turnResult, err := s.callProviderWithRetry(ctx, &state, snapshot)
 			if err != nil {
-				if provider.IsContextTooLong(err) && !state.reactiveCompactUsed {
-					state.reactiveCompactUsed = true
-					_, _ = s.applyCompactForState(ctx, &state, snapshot.config, contextcompact.ModeReactive, compactErrorBestEffort)
+				if provider.IsContextTooLong(err) && state.reactiveCompactAttempts < maxReactiveCompactAttempts {
+					state.reactiveCompactAttempts++
+					degradedCfg := snapshot.config
+					degradedCfg.Context.Compact.ManualKeepRecentMessages = degradeKeepRecentMessages(
+						snapshot.config.Context.Compact.ManualKeepRecentMessages,
+						state.reactiveCompactAttempts,
+					)
+					_, _ = s.applyCompactForState(ctx, &state, degradedCfg, contextcompact.ModeReactive, compactErrorBestEffort)
 					continue
 				}
 				return s.handleRunError(ctx, state.runID, state.session.ID, err)
@@ -138,8 +143,9 @@ func (s *Service) prepareTurnSnapshot(ctx context.Context, state *runState) (tur
 			SessionOutputTokens: state.tokenOutputTotal,
 		},
 		Compact: agentcontext.CompactOptions{
-			DisableMicroCompact:  cfg.Context.Compact.MicroCompactDisabled,
-			AutoCompactThreshold: autoCompactThreshold(cfg),
+			DisableMicroCompact:           cfg.Context.Compact.MicroCompactDisabled,
+			AutoCompactThreshold:          autoCompactThreshold(cfg),
+			MicroCompactRetainedToolSpans: cfg.Context.Compact.MicroCompactRetainedToolSpans,
 		},
 	})
 	if err != nil {
@@ -291,4 +297,15 @@ func autoCompactThreshold(cfg config.Config) int {
 		return cfg.Context.AutoCompact.InputTokenThreshold
 	}
 	return 0
+}
+
+// degradeKeepRecentMessages 根据 reactive compact 尝试次数逐步减少保留消息数。
+func degradeKeepRecentMessages(base int, attempt int) int {
+	for i := 1; i < attempt; i++ {
+		base = base / 2
+	}
+	if base < 1 {
+		return 1
+	}
+	return base
 }

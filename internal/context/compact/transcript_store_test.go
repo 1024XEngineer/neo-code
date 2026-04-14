@@ -121,3 +121,158 @@ func TestTranscriptStoreSaveRemovesTemporaryFileWhenRenameFails(t *testing.T) {
 		t.Fatalf("expected temp transcript cleanup, wrote %q removed %q", written, removed)
 	}
 }
+
+func TestTranscriptStoreCleanupRemovesOldestFiles(t *testing.T) {
+	t.Parallel()
+
+	home := t.TempDir()
+	workdir := filepath.Join(home, "workspace")
+	dir := transcriptDirectory(home, hashProject(workdir))
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	// 创建 5 个 transcript 文件（名字内嵌时间戳，字典序递增）
+	names := []string{
+		"transcript_1000_aaaa_s1.jsonl",
+		"transcript_2000_bbbb_s1.jsonl",
+		"transcript_3000_cccc_s1.jsonl",
+		"transcript_4000_dddd_s1.jsonl",
+		"transcript_5000_eeee_s1.jsonl",
+	}
+	for _, name := range names {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("{}\n"), 0o644); err != nil {
+			t.Fatalf("write file: %v", err)
+		}
+	}
+
+	var removed []string
+	store := transcriptStore{
+		userHomeDir: func() (string, error) { return home, nil },
+		readDir:     os.ReadDir,
+		remove: func(path string) error {
+			removed = append(removed, filepath.Base(path))
+			return nil
+		},
+	}
+
+	if err := store.Cleanup(workdir, 3); err != nil {
+		t.Fatalf("Cleanup() error = %v", err)
+	}
+
+	if len(removed) != 2 {
+		t.Fatalf("expected 2 files removed, got %d: %v", len(removed), removed)
+	}
+	if removed[0] != names[0] || removed[1] != names[1] {
+		t.Fatalf("expected oldest files removed, got %v", removed)
+	}
+}
+
+func TestTranscriptStoreCleanupNoopWhenUnderLimit(t *testing.T) {
+	t.Parallel()
+
+	home := t.TempDir()
+	workdir := filepath.Join(home, "workspace")
+	dir := transcriptDirectory(home, hashProject(workdir))
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(dir, "transcript_1000_aaaa_s1.jsonl"), []byte("{}\n"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+
+	removed := false
+	store := transcriptStore{
+		userHomeDir: func() (string, error) { return home, nil },
+		readDir:     os.ReadDir,
+		remove: func(path string) error {
+			removed = true
+			return nil
+		},
+	}
+
+	if err := store.Cleanup(workdir, 10); err != nil {
+		t.Fatalf("Cleanup() error = %v", err)
+	}
+	if removed {
+		t.Fatalf("expected no files removed when under limit")
+	}
+}
+
+func TestTranscriptStoreCleanupHandlesEmptyDirectory(t *testing.T) {
+	t.Parallel()
+
+	home := t.TempDir()
+	workdir := filepath.Join(home, "workspace")
+	dir := transcriptDirectory(home, hashProject(workdir))
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	store := transcriptStore{
+		userHomeDir: func() (string, error) { return home, nil },
+		readDir:     os.ReadDir,
+		remove: func(path string) error {
+			t.Fatalf("unexpected remove call: %s", path)
+			return nil
+		},
+	}
+
+	if err := store.Cleanup(workdir, 3); err != nil {
+		t.Fatalf("Cleanup() error = %v", err)
+	}
+}
+
+func TestTranscriptStoreCleanupHandlesMissingDirectory(t *testing.T) {
+	t.Parallel()
+
+	home := t.TempDir()
+	workdir := filepath.Join(home, "workspace")
+
+	store := transcriptStore{
+		userHomeDir: func() (string, error) { return home, nil },
+		readDir:     os.ReadDir,
+		remove: func(path string) error {
+			t.Fatalf("unexpected remove call: %s", path)
+			return nil
+		},
+	}
+
+	if err := store.Cleanup(workdir, 3); err != nil {
+		t.Fatalf("Cleanup() error = %v", err)
+	}
+}
+
+func TestTranscriptStoreCleanupIgnoresNonTranscriptFiles(t *testing.T) {
+	t.Parallel()
+
+	home := t.TempDir()
+	workdir := filepath.Join(home, "workspace")
+	dir := transcriptDirectory(home, hashProject(workdir))
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	// 放一个非 transcript 文件
+	if err := os.WriteFile(filepath.Join(dir, "readme.txt"), []byte("hello"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+
+	removed := false
+	store := transcriptStore{
+		userHomeDir: func() (string, error) { return home, nil },
+		readDir:     os.ReadDir,
+		remove: func(path string) error {
+			removed = true
+			return nil
+		},
+	}
+
+	if err := store.Cleanup(workdir, 0); err != nil {
+		t.Fatalf("Cleanup() error = %v", err)
+	}
+	if removed {
+		t.Fatalf("expected non-transcript files to be ignored")
+	}
+}

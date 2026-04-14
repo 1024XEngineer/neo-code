@@ -79,7 +79,7 @@ func TestMicroCompactMessagesHandlesEmptyAndInvalidSpanInputs(t *testing.T) {
 			},
 		},
 	}
-	got := microCompactMessagesWithPolicies(assistantOnly, stubMicroCompactPolicySource{})
+	got := microCompactMessagesWithPolicies(assistantOnly, stubMicroCompactPolicySource{}, 0)
 	if len(got) != 1 || len(got[0].ToolCalls) != 1 {
 		t.Fatalf("expected invalid tool call id path to keep message untouched, got %+v", got)
 	}
@@ -173,7 +173,7 @@ func TestMicroCompactMessagesKeepsPreservedToolsErrorsAndOrphans(t *testing.T) {
 
 	got := microCompactMessagesWithPolicies(messages, stubMicroCompactPolicySource{
 		"custom_tool": tools.MicroCompactPolicyPreserveHistory,
-	})
+	}, 0)
 	if got[1].Content != "custom result" {
 		t.Fatalf("expected preserved tool result to remain, got %q", got[1].Content)
 	}
@@ -225,7 +225,7 @@ func TestMicroCompactMessagesClearsOnlyNonPreservedResultsInMixedToolSpan(t *tes
 
 	got := microCompactMessagesWithPolicies(messages, stubMicroCompactPolicySource{
 		"custom_tool": tools.MicroCompactPolicyPreserveHistory,
-	})
+	}, 0)
 	if got[2].Content != microCompactClearedMessage {
 		t.Fatalf("expected default compactable tool result to be cleared, got %q", got[2].Content)
 	}
@@ -266,7 +266,7 @@ func TestMicroCompactMessagesTreatsNewToolsAsCompactableByDefault(t *testing.T) 
 		{Role: providertypes.RoleUser, Content: "latest explicit instruction"},
 	}
 
-	got := microCompactMessagesWithPolicies(messages, stubMicroCompactPolicySource{})
+	got := microCompactMessagesWithPolicies(messages, stubMicroCompactPolicySource{}, 0)
 	if got[2].Content != microCompactClearedMessage {
 		t.Fatalf("expected new tool result to be compacted by default, got %q", got[2].Content)
 	}
@@ -341,7 +341,7 @@ func TestMicroCompactMessagesSkipsToolMessagesWhenCompactableIDsMissing(t *testi
 		{Role: providertypes.RoleTool, ToolCallID: "orphan", Content: "orphan result"},
 	}
 
-	got := microCompactMessagesWithPolicies(messages, stubMicroCompactPolicySource{})
+	got := microCompactMessagesWithPolicies(messages, stubMicroCompactPolicySource{}, 0)
 	if got[0].Content != "orphan result" {
 		t.Fatalf("expected orphan tool result to remain, got %q", got[0].Content)
 	}

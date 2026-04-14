@@ -23,6 +23,7 @@ type CompactResult struct {
 	Applied        bool
 	BeforeChars    int
 	AfterChars     int
+	BeforeTokens   int
 	SavedRatio     float64
 	TriggerMode    string
 	TranscriptID   string
@@ -35,6 +36,7 @@ func fromCompactResult(result contextcompact.Result) CompactResult {
 		Applied:        result.Applied,
 		BeforeChars:    result.Metrics.BeforeChars,
 		AfterChars:     result.Metrics.AfterChars,
+		BeforeTokens:   result.Metrics.BeforeTokens,
 		SavedRatio:     result.Metrics.SavedRatio,
 		TriggerMode:    result.Metrics.TriggerMode,
 		TranscriptID:   result.TranscriptID,
@@ -124,12 +126,13 @@ func (s *Service) runCompactForSession(
 	s.emit(ctx, EventCompactStart, runID, session.ID, string(mode))
 
 	result, err := runner.Run(ctx, contextcompact.Input{
-		Mode:      mode,
-		SessionID: session.ID,
-		Workdir:   agentsession.EffectiveWorkdir(session.Workdir, cfg.Workdir),
-		Messages:  session.Messages,
-		TaskState: session.TaskState,
-		Config:    cfg.Context.Compact,
+		Mode:               mode,
+		SessionID:          session.ID,
+		Workdir:            agentsession.EffectiveWorkdir(session.Workdir, cfg.Workdir),
+		Messages:           session.Messages,
+		TaskState:          session.TaskState,
+		Config:             cfg.Context.Compact,
+		SessionInputTokens: session.TokenInputTotal,
 	})
 	if err != nil {
 		return failCompact(err)

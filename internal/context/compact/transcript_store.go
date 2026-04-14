@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"regexp"
 	goruntime "runtime"
+	"sort"
 	"strings"
 	"time"
 
@@ -23,6 +24,7 @@ const (
 	transcriptFallbackSessionID = "draft"
 	transcriptFileExtension     = ".jsonl"
 	transcriptTemporarySuffix   = ".tmp"
+	defaultMaxTranscripts       = 50
 )
 
 type transcriptLine struct {
@@ -44,6 +46,7 @@ type transcriptStore struct {
 	writeFile   func(name string, data []byte, perm os.FileMode) error
 	rename      func(oldPath, newPath string) error
 	remove      func(path string) error
+	readDir     func(dir string) ([]os.DirEntry, error)
 }
 
 // Save 按项目维度持久化当前 compact 前的 transcript，并返回 ID 与路径。
@@ -106,6 +109,50 @@ func (s transcriptStore) Save(messages []providertypes.Message, sessionID string
 	}
 
 	return transcriptID, transcriptPath, nil
+}
+
+// Cleanup 保留目录中最近的 maxCount 个 transcript 文件，删除超出的最旧文件。
+func (s transcriptStore) Cleanup(workdir string, maxCount int) error {
+	if maxCount <= 0 {
+		maxCount = defaultMaxTranscripts
+	}
+
+	home, err := s.userHomeDir()
+	if err != nil {
+		return fmt.Errorf("compact: cleanup resolve home: %w", err)
+	}
+
+	projectHash := hashProject(workdir)
+	dir := transcriptDirectory(home, projectHash)
+
+	entries, err := s.readDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("compact: cleanup read dir: %w", err)
+	}
+
+	// 收集 transcript 文件名（内嵌时间戳，字典序 = 时间序）
+	var names []string
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), transcriptFileExtension) {
+			continue
+		}
+		names = append(names, entry.Name())
+	}
+	sort.Strings(names)
+
+	if len(names) <= maxCount {
+		return nil
+	}
+
+	// names 已按字典序排列（最旧在前），删除超出部分
+	toDelete := names[:len(names)-maxCount]
+	for _, name := range toDelete {
+		_ = s.remove(filepath.Join(dir, name))
+	}
+	return nil
 }
 
 // transcriptFileMode 根据当前平台返回 transcript 文件权限。

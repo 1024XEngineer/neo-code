@@ -34,12 +34,13 @@ const (
 
 // Input is a single compact execution request.
 type Input struct {
-	Mode      Mode
-	SessionID string
-	Workdir   string
-	Messages  []providertypes.Message
-	TaskState agentsession.TaskState
-	Config    config.CompactConfig
+	Mode               Mode
+	SessionID          string
+	Workdir            string
+	Messages           []providertypes.Message
+	TaskState          agentsession.TaskState
+	Config             config.CompactConfig
+	SessionInputTokens int
 }
 
 // SummaryInput describes the historical context that must be summarized.
@@ -60,10 +61,11 @@ type SummaryOutput struct {
 
 // Metrics reports compact input/output size changes.
 type Metrics struct {
-	BeforeChars int     `json:"before_chars"`
-	AfterChars  int     `json:"after_chars"`
-	SavedRatio  float64 `json:"saved_ratio"`
-	TriggerMode string  `json:"trigger_mode"`
+	BeforeChars  int     `json:"before_chars"`
+	AfterChars   int     `json:"after_chars"`
+	BeforeTokens int     `json:"before_tokens,omitempty"`
+	SavedRatio   float64 `json:"saved_ratio"`
+	TriggerMode  string  `json:"trigger_mode"`
 }
 
 // Result is the compact execution result.
@@ -97,6 +99,7 @@ type Service struct {
 	writeFile       func(name string, data []byte, perm os.FileMode) error
 	rename          func(oldPath, newPath string) error
 	remove          func(path string) error
+	readDir         func(dir string) ([]os.DirEntry, error)
 	planner         compactionPlanner
 	summaryVerifier compactSummaryValidator
 }
@@ -112,6 +115,7 @@ func NewRunner(generator SummaryGenerator) *Service {
 		writeFile:       os.WriteFile,
 		rename:          os.Rename,
 		remove:          os.Remove,
+		readDir:         os.ReadDir,
 		planner:         compactionPlanner{},
 		summaryVerifier: compactSummaryValidator{},
 	}
@@ -140,10 +144,11 @@ func (s *Service) Run(ctx context.Context, input Input) (Result, error) {
 		Applied:   false,
 		ErrorMode: ErrorModeNone,
 		Metrics: Metrics{
-			BeforeChars: beforeChars,
-			AfterChars:  beforeChars,
-			SavedRatio:  0,
-			TriggerMode: string(input.Mode),
+			BeforeChars:  beforeChars,
+			AfterChars:   beforeChars,
+			BeforeTokens: input.SessionInputTokens,
+			SavedRatio:   0,
+			TriggerMode:  string(input.Mode),
 		},
 	}
 
@@ -154,6 +159,9 @@ func (s *Service) Run(ctx context.Context, input Input) (Result, error) {
 	}
 	base.TranscriptID = transcriptID
 	base.TranscriptPath = transcriptPath
+
+	// 清理过期的 transcript 文件，忽略错误以不影响主流程
+	_ = store.Cleanup(strings.TrimSpace(input.Workdir), 0)
 
 	plan, err := s.planner.Plan(input.Mode, messages, cfg)
 	if err != nil {
@@ -233,6 +241,7 @@ func (s *Service) transcriptStore() transcriptStore {
 		writeFile:   s.writeFile,
 		rename:      s.rename,
 		remove:      s.remove,
+		readDir:     s.readDir,
 	}
 }
 

@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -273,5 +274,133 @@ func TestParseCompactSummaryOutputSkipsNonCompactJSONPreface(t *testing.T) {
 	}
 	if output.TaskState.Goal != "g" {
 		t.Fatalf("expected parsed goal, got %+v", output.TaskState)
+	}
+}
+func TestParseCompactSummaryOutputToleratesStringInsteadOfArray(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		json   string
+		want   []string
+		wantOK bool
+	}{
+		{
+			name:   "正常数组",
+			json:   `{"task_state":{"goal":"g","progress":["a","b"],"open_items":[],"next_step":"n","blockers":[],"key_artifacts":[],"decisions":[],"user_constraints":[]},"display_summary":"summary"}`,
+			want:   []string{"a", "b"},
+			wantOK: true,
+		},
+		{
+			name:   "字符串代替数组",
+			json:   `{"task_state":{"goal":"g","progress":"single item","open_items":[],"next_step":"n","blockers":[],"key_artifacts":[],"decisions":[],"user_constraints":[]},"display_summary":"summary"}`,
+			want:   []string{"single item"},
+			wantOK: true,
+		},
+		{
+			name:   "null代替数组",
+			json:   `{"task_state":{"goal":"g","progress":null,"open_items":[],"next_step":"n","blockers":[],"key_artifacts":[],"decisions":[],"user_constraints":[]},"display_summary":"summary"}`,
+			want:   nil,
+			wantOK: true,
+		},
+		{
+			name:   "数字代替数组产生nil",
+			json:   `{"task_state":{"goal":"g","progress":42,"open_items":[],"next_step":"n","blockers":[],"key_artifacts":[],"decisions":[],"user_constraints":[]},"display_summary":"summary"}`,
+			want:   nil,
+			wantOK: true,
+		},
+		{
+			name:   "嵌套对象代替数组产生nil",
+			json:   `{"task_state":{"goal":"g","progress":{"nested":true},"open_items":[],"next_step":"n","blockers":[],"key_artifacts":[],"decisions":[],"user_constraints":[]},"display_summary":"summary"}`,
+			want:   nil,
+			wantOK: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			output, err := parseCompactSummaryOutput(tt.json)
+			if (err == nil) != tt.wantOK {
+				t.Fatalf("parseCompactSummaryOutput() error = %v, wantOK %v", err, tt.wantOK)
+			}
+			if !tt.wantOK {
+				return
+			}
+			if len(output.TaskState.Progress) != len(tt.want) {
+				t.Fatalf("progress = %v, want %v", output.TaskState.Progress, tt.want)
+			}
+			for i := range output.TaskState.Progress {
+				if output.TaskState.Progress[i] != tt.want[i] {
+					t.Fatalf("progress[%d] = %q, want %q", i, output.TaskState.Progress[i], tt.want[i])
+				}
+			}
+		})
+	}
+}
+
+func TestCoerceStringArray(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		raw  string
+		want []string
+	}{
+		{
+			name: "正常字符串数组",
+			raw:  `["a","b","c"]`,
+			want: []string{"a", "b", "c"},
+		},
+		{
+			name: "单个字符串",
+			raw:  `"single"`,
+			want: []string{"single"},
+		},
+		{
+			name: "空字符串返回nil",
+			raw:  `""`,
+			want: nil,
+		},
+		{
+			name: "null返回nil",
+			raw:  `null`,
+			want: nil,
+		},
+		{
+			name: "数字返回nil",
+			raw:  `42`,
+			want: nil,
+		},
+		{
+			name: "布尔返回nil",
+			raw:  `true`,
+			want: nil,
+		},
+		{
+			name: "嵌套对象返回nil",
+			raw:  `{"key":"val"}`,
+			want: nil,
+		},
+		{
+			name: "空RawMessage返回nil",
+			raw:  ``,
+			want: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := coerceStringArray(json.RawMessage(tt.raw))
+			if len(got) != len(tt.want) {
+				t.Fatalf("coerceStringArray(%q) = %v, want %v", tt.raw, got, tt.want)
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Fatalf("coerceStringArray(%q)[%d] = %q, want %q", tt.raw, i, got[i], tt.want[i])
+				}
+			}
+		})
 	}
 }

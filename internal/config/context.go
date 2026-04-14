@@ -7,9 +7,10 @@ import (
 )
 
 const (
-	DefaultCompactManualKeepRecentMessages = 10
-	DefaultCompactMaxSummaryChars          = 1200
-	DefaultAutoCompactInputTokenThreshold  = 100000
+	DefaultCompactManualKeepRecentMessages       = 10
+	DefaultCompactMaxSummaryChars                = 1200
+	DefaultAutoCompactInputTokenThreshold        = 100000
+	DefaultMicroCompactRetainedToolSpans         = 2
 
 	CompactManualStrategyKeepRecent  = "keep_recent"
 	CompactManualStrategyFullReplace = "full_replace"
@@ -21,10 +22,12 @@ type ContextConfig struct {
 }
 
 type CompactConfig struct {
-	ManualStrategy           string `yaml:"manual_strategy,omitempty"`
-	ManualKeepRecentMessages int    `yaml:"manual_keep_recent_messages,omitempty"`
-	MaxSummaryChars          int    `yaml:"max_summary_chars,omitempty"`
-	MicroCompactDisabled     bool   `yaml:"micro_compact_disabled,omitempty"`
+	ManualStrategy                string `yaml:"manual_strategy,omitempty"`
+	ManualKeepRecentMessages      int    `yaml:"manual_keep_recent_messages,omitempty"`
+	MaxSummaryChars               int    `yaml:"max_summary_chars,omitempty"`
+	MicroCompactDisabled          bool   `yaml:"micro_compact_disabled,omitempty"`
+	MicroCompactRetainedToolSpans int    `yaml:"micro_compact_retained_tool_spans,omitempty"`
+	MaxArchivedPromptChars        int    `yaml:"max_archived_prompt_chars,omitempty"`
 }
 
 // AutoCompactConfig controls automatic context compression triggered by token thresholds.
@@ -50,9 +53,10 @@ func defaultAutoCompactConfig() AutoCompactConfig {
 // defaultCompactConfig 返回手动 compact 策略的默认配置。
 func defaultCompactConfig() CompactConfig {
 	return CompactConfig{
-		ManualStrategy:           CompactManualStrategyKeepRecent,
-		ManualKeepRecentMessages: DefaultCompactManualKeepRecentMessages,
-		MaxSummaryChars:          DefaultCompactMaxSummaryChars,
+		ManualStrategy:                CompactManualStrategyKeepRecent,
+		ManualKeepRecentMessages:      DefaultCompactManualKeepRecentMessages,
+		MaxSummaryChars:               DefaultCompactMaxSummaryChars,
+		MicroCompactRetainedToolSpans: DefaultMicroCompactRetainedToolSpans,
 	}
 }
 
@@ -98,6 +102,9 @@ func (c *CompactConfig) ApplyDefaults(defaults CompactConfig) {
 	}
 	if c.MaxSummaryChars <= 0 {
 		c.MaxSummaryChars = defaults.MaxSummaryChars
+	}
+	if c.MicroCompactRetainedToolSpans <= 0 {
+		c.MicroCompactRetainedToolSpans = defaults.MicroCompactRetainedToolSpans
 	}
 }
 

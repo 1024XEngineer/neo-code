@@ -3937,7 +3937,7 @@ func TestServiceRunReactivelyCompactsWithinSingleLoopBudget(t *testing.T) {
 	assertNoEventType(t, events, EventError)
 }
 
-func TestServiceRunReactiveCompactRetriesOnlyOnce(t *testing.T) {
+func TestServiceRunReactiveCompactDegradesUpToMaxAttempts(t *testing.T) {
 	t.Parallel()
 
 	manager := newRuntimeConfigManager(t)
@@ -3970,11 +3970,11 @@ func TestServiceRunReactiveCompactRetriesOnlyOnce(t *testing.T) {
 	}
 
 	compactRunner := service.compactRunner.(*stubCompactRunner)
-	if len(compactRunner.calls) != 1 {
-		t.Fatalf("expected reactive compact to run once, got %d", len(compactRunner.calls))
+	if len(compactRunner.calls) != 3 {
+		t.Fatalf("expected reactive compact to run 3 times (degradation), got %d", len(compactRunner.calls))
 	}
-	if scripted.callCount != 2 {
-		t.Fatalf("expected provider to be called exactly twice, got %d", scripted.callCount)
+	if scripted.callCount != 4 {
+		t.Fatalf("expected provider to be called exactly 4 times, got %d", scripted.callCount)
 	}
 
 	events := collectRuntimeEvents(service.Events())
