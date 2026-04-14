@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/lipgloss"
 
 	providertypes "neo-code/internal/provider/types"
@@ -68,7 +67,7 @@ func (a App) renderHeader(width int) string {
 		brand,
 		modelStatus,
 	)
-	return a.styles.headerBar.Width(width).Render(lipgloss.Place(width, 1, lipgloss.Left, lipgloss.Top, header))
+	return a.styles.headerBar.Width(width).Height(2).Render(header)
 }
 
 func (a App) renderBody(lay layout) string {
@@ -79,9 +78,8 @@ func (a App) renderBody(lay layout) string {
 func (a App) waterfallMetrics(width int, height int) (int, int, int, int) {
 	activityHeight := a.activityPreviewHeight()
 	menuHeight := a.commandMenuHeight(width)
-	promptHeight := lipgloss.Height(a.renderPrompt(width))
-	transcriptHeight := max(6, height-activityHeight-menuHeight-promptHeight)
-	return transcriptHeight, activityHeight, menuHeight, promptHeight
+	transcriptHeight := max(6, height-activityHeight-menuHeight)
+	return transcriptHeight, activityHeight, menuHeight, 0
 }
 
 func (a App) renderWaterfall(width int, height int) string {
@@ -146,14 +144,17 @@ func (a App) renderPicker(width int, height int) string {
 }
 
 func (a App) renderPrompt(width int) string {
+	if a.pendingPermission != nil {
+		box := a.styles.inputBoxFocused
+		return box.Width(width).Margin(1, 0, 0, 0).Render(a.renderPermissionPrompt())
+	}
+
 	box := a.styles.inputBox
 	if a.focus == panelInput && a.state.ActivePicker == pickerNone {
 		box = a.styles.inputBoxFocused
 	}
 
-	// Account for frame and padding when sizing the composer container.
-	boxWidth := a.composerBoxWidth(width)
-	return box.Width(boxWidth).Render(a.renderPermissionPrompt())
+	return box.Width(width).Margin(1, 0, 0, 0).Render(a.input.View())
 }
 
 func (a App) renderPanel(title string, subtitle string, body string, width int, height int, focused bool) string {
@@ -404,8 +405,4 @@ func (a App) computeLayout() layout {
 func (a App) helpHeight(width int) int {
 	a.help.ShowAll = a.state.ShowHelp
 	return lipgloss.Height(a.styles.footer.Width(width).Render(a.help.View(a.keys)))
-}
-
-func (a App) isFilteringSessions() bool {
-	return a.sessions.FilterState() != list.Unfiltered
 }

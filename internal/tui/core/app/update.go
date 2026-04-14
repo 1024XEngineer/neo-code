@@ -1499,11 +1499,11 @@ func (a *App) applyComponentLayout(rebuildTranscript bool) {
 }
 
 func (a App) composerBoxWidth(totalWidth int) int {
-	return max(8, totalWidth-2)
+	return totalWidth
 }
 
 func (a App) composerInnerWidth(totalWidth int) int {
-	return max(4, a.composerBoxWidth(totalWidth)-a.styles.inputBoxFocused.GetHorizontalFrameSize())
+	return max(4, totalWidth-a.styles.inputBoxFocused.GetHorizontalFrameSize())
 }
 
 func (a App) composerHeight() int {

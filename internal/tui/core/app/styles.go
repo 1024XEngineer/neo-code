@@ -96,7 +96,8 @@ func newStyles() styles {
 			Foreground(lipgloss.Color(anthropicNearBlack)),
 		headerBar: lipgloss.NewStyle().
 			UnsetBackground().
-			Foreground(lipgloss.Color(anthropicNearBlack)),
+			Foreground(lipgloss.Color(anthropicNearBlack)).
+			Underline(true),
 		headerBrand: lipgloss.NewStyle().
 			Bold(true).
 			Foreground(lipgloss.Color(terracotta)).
