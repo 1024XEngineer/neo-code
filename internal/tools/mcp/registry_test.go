@@ -321,6 +321,39 @@ func TestRegistryUnregisterServerClosesClient(t *testing.T) {
 	}
 }
 
+func TestRegistryClose(t *testing.T) {
+	registry := NewRegistry()
+	client1 := &closableStubServerClient{}
+	client2 := &closableStubServerClient{}
+
+	if err := registry.RegisterServer("srv-1", "src1", "v1", client1); err != nil {
+		t.Fatalf("RegisterServer() error = %v", err)
+	}
+	if err := registry.RegisterServer("srv-2", "src2", "v2", client2); err != nil {
+		t.Fatalf("RegisterServer() error = %v", err)
+	}
+
+	if err := registry.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	if !client1.closed || !client2.closed {
+		t.Fatalf("expected all clients to be closed")
+	}
+	if len(registry.Snapshot()) != 0 {
+		t.Fatalf("expected registry to be empty after Close")
+	}
+}
+
+func TestRegistryCloseNilReceiver(t *testing.T) {
+	t.Parallel()
+
+	var nilRegistry *Registry
+	if err := nilRegistry.Close(); err != nil {
+		t.Fatalf("expected nil receiver close to return nil, got %v", err)
+	}
+}
+
 func TestCloseServerClientBoundaries(t *testing.T) {
 	t.Parallel()
 

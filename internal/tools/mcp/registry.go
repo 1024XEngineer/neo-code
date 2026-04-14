@@ -132,6 +132,22 @@ func (r *Registry) UnregisterServer(serverID string) bool {
 	return true
 }
 
+// Close 会卸载并关闭注册表中所有的 MCP client，通常用于在系统退出时清理所有的 stdio 子进程。
+func (r *Registry) Close() error {
+	if r == nil {
+		return nil
+	}
+	r.mu.Lock()
+	servers := r.servers
+	r.servers = make(map[string]*serverEntry)
+	r.mu.Unlock()
+
+	for _, entry := range servers {
+		closeServerClient(entry.client)
+	}
+	return nil
+}
+
 // SetServerStatus 更新指定 server 的生命周期状态。
 func (r *Registry) SetServerStatus(serverID string, status ServerStatus) error {
 	if r == nil {

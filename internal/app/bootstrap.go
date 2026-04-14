@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"strings"
 	"time"
@@ -34,11 +33,51 @@ const utf8CodePage = 65001
 var (
 	setConsoleOutputCodePage = platformSetConsoleOutputCodePage
 	setConsoleInputCodePage  = platformSetConsoleInputCodePage
+	buildToolManagerFunc     = buildToolManager
+	newTUIWithMemo           = tui.NewWithMemo
 )
 
 // BootstrapOptions 描述应用启动时可注入的运行时选项。
 type BootstrapOptions struct {
 	Workdir string
+}
+
+type memoExtractorScheduler interface {
+	ScheduleWithExtractor(sessionID string, messages []providertypes.Message, extractor memo.Extractor)
+}
+
+func newMemoExtractorAdapter(
+	factory agentruntime.ProviderFactory,
+	cm *config.Manager,
+	scheduler memoExtractorScheduler,
+) agentruntime.MemoExtractor {
+	return runtimeMemoExtractorFunc(func(sessionID string, messages []providertypes.Message) {
+		if scheduler == nil {
+			return
+		}
+
+		cfg := cm.Get()
+		resolved, err := config.ResolveSelectedProvider(cfg)
+		if err != nil {
+			log.Printf("memo: resolve selected provider failed: %v", err)
+			return
+		}
+
+		generator := textGenAdapter(func(ctx context.Context, prompt string, msgs []providertypes.Message) (string, error) {
+			p, err := factory.Build(ctx, resolved.ToRuntimeConfig())
+			if err != nil {
+				return "", err
+			}
+
+			return provider.GenerateText(ctx, p, providertypes.GenerateRequest{
+				Model:        cfg.CurrentModel,
+				SystemPrompt: prompt,
+				Messages:     append([]providertypes.Message(nil), msgs...),
+			})
+		})
+
+		scheduler.ScheduleWithExtractor(sessionID, messages, memo.NewLLMExtractor(generator))
+	})
 }
 
 // RuntimeBundle 聚合 CLI 与 TUI 共享的运行时依赖。
@@ -48,6 +87,7 @@ type RuntimeBundle struct {
 	Runtime           agentruntime.Runtime
 	ProviderSelection *configstate.Service
 	MemoService       *memo.Service
+	Close             func() error // 用于清理 bundle 运行期间拉起的系统资源
 }
 
 // EnsureConsoleUTF8 负责在 Windows 控制台中尽量启用 UTF-8 编码。
@@ -83,11 +123,18 @@ func BuildRuntime(ctx context.Context, opts BootstrapOptions) (RuntimeBundle, er
 
 	cfg := manager.Get()
 
-	toolRegistry, err := buildToolRegistry(cfg)
+	toolRegistry, toolsCleanup, err := buildToolRegistry(cfg)
 	if err != nil {
 		return RuntimeBundle{}, err
 	}
-	toolManager, err := buildToolManager(toolRegistry)
+	needCleanup := true
+	defer func() {
+		if needCleanup && toolsCleanup != nil {
+			_ = toolsCleanup()
+		}
+	}()
+
+	toolManager, err := buildToolManagerFunc(toolRegistry)
 	if err != nil {
 		return RuntimeBundle{}, err
 	}
@@ -127,6 +174,7 @@ func BuildRuntime(ctx context.Context, opts BootstrapOptions) (RuntimeBundle, er
 			memo.NewAutoExtractor(nil, memoSvc),
 		))
 	}
+	needCleanup = false
 
 	return RuntimeBundle{
 		Config:            cfg,
@@ -134,25 +182,29 @@ func BuildRuntime(ctx context.Context, opts BootstrapOptions) (RuntimeBundle, er
 		Runtime:           runtimeSvc,
 		ProviderSelection: providerSelection,
 		MemoService:       memoSvc,
+		Close:             toolsCleanup,
 	}, nil
 }
 
-// NewProgram 基于共享运行时依赖构建并返回 TUI 程序。
-func NewProgram(ctx context.Context, opts BootstrapOptions) (*tea.Program, error) {
+// NewProgram 基于共享运行时依赖构建并返回 TUI 程序，同时返回退出时应调用的资源清理函数。
+func NewProgram(ctx context.Context, opts BootstrapOptions) (*tea.Program, func() error, error) {
 	bundle, err := BuildRuntime(ctx, opts)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	tuiApp, err := tui.NewWithMemo(&bundle.Config, bundle.ConfigManager, bundle.Runtime, bundle.ProviderSelection, bundle.MemoService)
+	tuiApp, err := newTUIWithMemo(&bundle.Config, bundle.ConfigManager, bundle.Runtime, bundle.ProviderSelection, bundle.MemoService)
 	if err != nil {
-		return nil, err
+		if bundle.Close != nil {
+			_ = bundle.Close()
+		}
+		return nil, nil, err
 	}
 	return tea.NewProgram(
 		tuiApp,
 		tea.WithAltScreen(),
 		tea.WithMouseCellMotion(),
-	), nil
+	), bundle.Close, nil
 }
 
 // bootstrapDefaultConfig 负责计算本次启动应使用的默认配置快照。
@@ -176,7 +228,7 @@ func resolveBootstrapWorkdir(workdir string) (string, error) {
 	return agentsession.ResolveExistingDir(workdir)
 }
 
-func buildToolRegistry(cfg config.Config) (*tools.Registry, error) {
+func buildToolRegistry(cfg config.Config) (*tools.Registry, func() error, error) {
 	toolRegistry := tools.NewRegistry()
 	toolRegistry.Register(filesystem.New(cfg.Workdir))
 	toolRegistry.Register(filesystem.NewWrite(cfg.Workdir))
@@ -191,7 +243,7 @@ func buildToolRegistry(cfg config.Config) (*tools.Registry, error) {
 	}))
 	mcpRegistry, err := buildMCPRegistry(cfg)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if mcpRegistry != nil {
 		toolRegistry.SetMCPRegistry(mcpRegistry)
@@ -201,7 +253,10 @@ func buildToolRegistry(cfg config.Config) (*tools.Registry, error) {
 			Agents:    buildMCPAgentExposureRules(cfg.Tools.MCP.Exposure.Agents),
 		}))
 	}
-	return toolRegistry, nil
+	if mcpRegistry == nil {
+		return toolRegistry, nil, nil
+	}
+	return toolRegistry, mcpRegistry.Close, nil
 }
 
 // buildMCPAgentExposureRules 将配置层的 agent 过滤规则转换为 tools/mcp 层输入。
@@ -227,136 +282,14 @@ func buildToolManager(registry *tools.Registry) (tools.Manager, error) {
 	return tools.NewManager(registry, engine, security.NewWorkspaceSandbox())
 }
 
-type memoExtractorScheduler interface {
-	ScheduleWithExtractor(sessionID string, messages []providertypes.Message, extractor memo.Extractor)
+type runtimeMemoExtractorFunc func(sessionID string, messages []providertypes.Message)
+
+func (f runtimeMemoExtractorFunc) Schedule(sessionID string, messages []providertypes.Message) {
+	f(sessionID, messages)
 }
 
-// memoExtractorAdapter 在调度时绑定 provider 配置快照，避免后台任务读取全局可变配置。
-type memoExtractorAdapter struct {
-	factory       agentruntime.ProviderFactory
-	configManager *config.Manager
-	scheduler     memoExtractorScheduler
-}
+type textGenAdapter func(ctx context.Context, prompt string, msgs []providertypes.Message) (string, error)
 
-// newMemoExtractorAdapter 创建绑定当前 provider 选择的记忆提取调度适配器。
-func newMemoExtractorAdapter(
-	factory agentruntime.ProviderFactory,
-	cm *config.Manager,
-	scheduler memoExtractorScheduler,
-) *memoExtractorAdapter {
-	return &memoExtractorAdapter{
-		factory:       factory,
-		configManager: cm,
-		scheduler:     scheduler,
-	}
-}
-
-// Schedule 在当前运行结束时绑定 provider/model 快照，再交给后台调度器延后执行。
-func (a *memoExtractorAdapter) Schedule(sessionID string, messages []providertypes.Message) {
-	if a == nil || a.scheduler == nil {
-		return
-	}
-
-	cfg := a.configManager.Get()
-	resolved, err := config.ResolveSelectedProvider(cfg)
-	if err != nil {
-		log.Printf("memo: resolve selected provider failed: %v", err)
-		return
-	}
-
-	extractor := memo.NewLLMExtractor(newProviderTextGenerator(
-		a.factory,
-		resolved.ToRuntimeConfig(),
-		cfg.CurrentModel,
-	))
-	a.scheduler.ScheduleWithExtractor(sessionID, messages, extractor)
-}
-
-// providerTextGenerator 复用当前 provider 配置快照，向 memo 提供纯文本生成能力。
-type providerTextGenerator struct {
-	factory    agentruntime.ProviderFactory
-	runtimeCfg provider.RuntimeConfig
-	model      string
-}
-
-// newProviderTextGenerator 创建绑定固定 provider/model 快照的文本生成适配器。
-func newProviderTextGenerator(
-	factory agentruntime.ProviderFactory,
-	runtimeCfg provider.RuntimeConfig,
-	model string,
-) *providerTextGenerator {
-	return &providerTextGenerator{
-		factory:    factory,
-		runtimeCfg: runtimeCfg,
-		model:      model,
-	}
-}
-
-// Generate 使用预先绑定的 provider/model 快照发起无工具的独立生成请求。
-func (g *providerTextGenerator) Generate(
-	ctx context.Context,
-	prompt string,
-	messages []providertypes.Message,
-) (string, error) {
-	modelProvider, err := g.factory.Build(ctx, g.runtimeCfg)
-	if err != nil {
-		return "", err
-	}
-
-	events := make(chan providertypes.StreamEvent, 32)
-	done := make(chan error, 1)
-	var builder strings.Builder
-
-	go func() {
-		messageDone := false
-		var streamErr error
-		for event := range events {
-			switch event.Type {
-			case providertypes.StreamEventTextDelta:
-				payload, err := event.TextDeltaValue()
-				if err != nil {
-					if streamErr == nil {
-						streamErr = err
-					}
-					continue
-				}
-				builder.WriteString(payload.Text)
-			case providertypes.StreamEventMessageDone:
-				if _, err := event.MessageDoneValue(); err != nil {
-					if streamErr == nil {
-						streamErr = err
-					}
-					continue
-				}
-				messageDone = true
-			default:
-				if streamErr == nil {
-					streamErr = fmt.Errorf("memo: unexpected provider stream event %q", event.Type)
-				}
-			}
-		}
-		if streamErr == nil && !messageDone {
-			streamErr = fmt.Errorf("memo: provider stream ended without message_done event")
-		}
-		done <- streamErr
-	}()
-
-	err = modelProvider.Generate(ctx, providertypes.GenerateRequest{
-		Model:        g.model,
-		SystemPrompt: prompt,
-		Messages:     append([]providertypes.Message(nil), messages...),
-	}, events)
-	close(events)
-
-	streamErr := <-done
-	if streamErr != nil {
-		if err != nil {
-			return "", fmt.Errorf("memo: provider generate failed: %v: %w", streamErr, err)
-		}
-		return "", streamErr
-	}
-	if err != nil {
-		return "", err
-	}
-	return builder.String(), nil
+func (f textGenAdapter) Generate(ctx context.Context, prompt string, msgs []providertypes.Message) (string, error) {
+	return f(ctx, prompt, msgs)
 }

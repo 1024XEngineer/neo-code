@@ -19,8 +19,13 @@ import (
 
 	"neo-code/internal/config"
 	configstate "neo-code/internal/config/state"
+	"neo-code/internal/memo"
+	"neo-code/internal/provider"
+	providertypes "neo-code/internal/provider/types"
+	agentruntime "neo-code/internal/runtime"
 	"neo-code/internal/tools"
 	"neo-code/internal/tools/mcp"
+	"neo-code/internal/tui"
 )
 
 func TestNewProgram(t *testing.T) {
@@ -30,12 +35,15 @@ func TestNewProgram(t *testing.T) {
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 
-	program, err := NewProgram(context.Background(), BootstrapOptions{})
+	program, cleanup, err := NewProgram(context.Background(), BootstrapOptions{})
 	if err != nil {
 		t.Fatalf("NewProgram() error = %v", err)
 	}
 	if program == nil {
 		t.Fatalf("expected tea program")
+	}
+	if cleanup != nil {
+		defer cleanup()
 	}
 
 	configPath := filepath.Join(home, ".neocode", "config.yaml")
@@ -62,12 +70,15 @@ func TestNewProgramNormalizesInvalidCurrentModelOnStartup(t *testing.T) {
 		t.Fatalf("write config: %v", err)
 	}
 
-	program, err := NewProgram(context.Background(), BootstrapOptions{})
+	program, cleanup, err := NewProgram(context.Background(), BootstrapOptions{})
 	if err != nil {
 		t.Fatalf("NewProgram() error = %v", err)
 	}
 	if program == nil {
 		t.Fatalf("expected tea program")
+	}
+	if cleanup != nil {
+		defer cleanup()
 	}
 
 	data, err := os.ReadFile(configPath)
@@ -137,9 +148,12 @@ func TestBuildToolRegistryUsesWebFetchConfig(t *testing.T) {
 	cfg.Workdir = t.TempDir()
 	cfg.Tools.WebFetch.MaxResponseBytes = 4
 
-	registry, err := buildToolRegistry(cfg)
+	registry, cleanup, err := buildToolRegistry(cfg)
 	if err != nil {
 		t.Fatalf("buildToolRegistry() error = %v", err)
+	}
+	if cleanup != nil {
+		defer cleanup()
 	}
 	tool, err := registry.Get("webfetch")
 	if err != nil {
@@ -348,9 +362,12 @@ func TestBuildToolRegistryIncludesMCPFromConfig(t *testing.T) {
 		return registry.RefreshServerTools(context.Background(), server.ID)
 	}
 
-	registry, err := buildToolRegistry(cfg)
+	registry, cleanup, err := buildToolRegistry(cfg)
 	if err != nil {
 		t.Fatalf("buildToolRegistry() error = %v", err)
+	}
+	if cleanup != nil {
+		defer cleanup()
 	}
 	specs, err := registry.ListAvailableSpecs(context.Background(), tools.SpecListInput{})
 	if err != nil {
@@ -410,9 +427,12 @@ func TestBuildToolRegistryAppliesMCPExposureConfig(t *testing.T) {
 		return registry.RefreshServerTools(context.Background(), server.ID)
 	}
 
-	registry, err := buildToolRegistry(cfg)
+	registry, cleanup, err := buildToolRegistry(cfg)
 	if err != nil {
 		t.Fatalf("buildToolRegistry() error = %v", err)
+	}
+	if cleanup != nil {
+		defer cleanup()
 	}
 
 	specs, err := registry.ListAvailableSpecs(context.Background(), tools.SpecListInput{Agent: "planner"})
@@ -448,7 +468,10 @@ func TestBuildToolRegistryReturnsMCPSourceError(t *testing.T) {
 		},
 	}
 
-	_, err := buildToolRegistry(cfg)
+	_, cleanup, err := buildToolRegistry(cfg)
+	if cleanup != nil {
+		defer cleanup()
+	}
 	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "unsupported mcp source") {
 		t.Fatalf("expected unsupported mcp source error, got %v", err)
 	}
@@ -782,6 +805,119 @@ func TestBuildRuntimeRejectsUnsupportedMCPSource(t *testing.T) {
 	}
 }
 
+func TestBuildRuntimeCleansResourcesWhenToolManagerBuildFails(t *testing.T) {
+	disableBuiltinProviderAPIKeys(t)
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	configDir := filepath.Join(home, ".neocode")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	configPath := filepath.Join(configDir, "config.yaml")
+	raw := []byte(strings.Join([]string{
+		"selected_provider: openai",
+		"current_model: " + config.OpenAIDefaultModel,
+		"shell: powershell",
+		"tools:",
+		"  mcp:",
+		"    servers:",
+		"      - id: docs",
+		"        enabled: true",
+		"        source: stdio",
+		"        stdio:",
+		"          command: mock",
+	}, "\n") + "\n")
+	if err := os.WriteFile(configPath, raw, 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	closed := false
+	originalRegister := registerMCPStdioServer
+	t.Cleanup(func() { registerMCPStdioServer = originalRegister })
+	registerMCPStdioServer = func(registry *mcp.Registry, cfg config.Config, server config.MCPServerConfig) error {
+		client := &closeableStubMCPServerClient{closed: &closed}
+		return registry.RegisterServer(server.ID, "stdio", server.Version, client)
+	}
+
+	originalBuildToolManager := buildToolManagerFunc
+	t.Cleanup(func() { buildToolManagerFunc = originalBuildToolManager })
+	buildToolManagerFunc = func(registry *tools.Registry) (tools.Manager, error) {
+		return nil, errors.New("build tool manager failed")
+	}
+
+	_, err := BuildRuntime(context.Background(), BootstrapOptions{})
+	if err == nil || !strings.Contains(err.Error(), "build tool manager failed") {
+		t.Fatalf("expected tool manager build error, got %v", err)
+	}
+	if !closed {
+		t.Fatalf("expected MCP resources to be closed on BuildRuntime failure")
+	}
+}
+
+func TestNewProgramCleansResourcesWhenTUIBuildFails(t *testing.T) {
+	disableBuiltinProviderAPIKeys(t)
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	configDir := filepath.Join(home, ".neocode")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	configPath := filepath.Join(configDir, "config.yaml")
+	raw := []byte(strings.Join([]string{
+		"selected_provider: openai",
+		"current_model: " + config.OpenAIDefaultModel,
+		"shell: powershell",
+		"tools:",
+		"  mcp:",
+		"    servers:",
+		"      - id: docs",
+		"        enabled: true",
+		"        source: stdio",
+		"        stdio:",
+		"          command: mock",
+	}, "\n") + "\n")
+	if err := os.WriteFile(configPath, raw, 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	closed := false
+	originalRegister := registerMCPStdioServer
+	t.Cleanup(func() { registerMCPStdioServer = originalRegister })
+	registerMCPStdioServer = func(registry *mcp.Registry, cfg config.Config, server config.MCPServerConfig) error {
+		client := &closeableStubMCPServerClient{closed: &closed}
+		return registry.RegisterServer(server.ID, "stdio", server.Version, client)
+	}
+
+	originalNewTUIWithMemo := newTUIWithMemo
+	t.Cleanup(func() { newTUIWithMemo = originalNewTUIWithMemo })
+	newTUIWithMemo = func(
+		cfg *config.Config,
+		configManager *config.Manager,
+		runtime agentruntime.Runtime,
+		providerSvc tui.ProviderController,
+		memoSvc *memo.Service,
+	) (tui.App, error) {
+		return tui.App{}, errors.New("tui init failed")
+	}
+
+	_, cleanup, err := NewProgram(context.Background(), BootstrapOptions{})
+	if cleanup != nil {
+		t.Fatalf("expected nil cleanup on NewProgram failure")
+	}
+	if err == nil || !strings.Contains(err.Error(), "tui init failed") {
+		t.Fatalf("expected tui init error, got %v", err)
+	}
+	if !closed {
+		t.Fatalf("expected MCP resources to be closed when NewProgram fails")
+	}
+}
+
 func TestNewProgramRejectsInvalidWorkdirOverride(t *testing.T) {
 	disableBuiltinProviderAPIKeys(t)
 
@@ -789,7 +925,10 @@ func TestNewProgramRejectsInvalidWorkdirOverride(t *testing.T) {
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 
-	_, err := NewProgram(context.Background(), BootstrapOptions{Workdir: filepath.Join(t.TempDir(), "missing", "中文")})
+	_, cleanup, err := NewProgram(context.Background(), BootstrapOptions{Workdir: filepath.Join(t.TempDir(), "missing", "中文")})
+	if cleanup != nil {
+		defer cleanup()
+	}
 	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "resolve workdir") {
 		t.Fatalf("expected invalid workdir error, got %v", err)
 	}
@@ -866,6 +1005,213 @@ func TestEnsureConsoleUTF8SkipsInputWhenOutputFails(t *testing.T) {
 	}
 }
 
+func TestRuntimeMemoExtractorFuncSchedule(t *testing.T) {
+	t.Parallel()
+
+	called := false
+	extractor := runtimeMemoExtractorFunc(func(sessionID string, messages []providertypes.Message) {
+		called = true
+		if sessionID != "session-1" {
+			t.Fatalf("unexpected session id %q", sessionID)
+		}
+		if len(messages) != 1 || messages[0].Content != "hi" {
+			t.Fatalf("unexpected messages %+v", messages)
+		}
+	})
+
+	extractor.Schedule("session-1", []providertypes.Message{
+		{Role: providertypes.RoleUser, Content: "hi"},
+	})
+
+	if !called {
+		t.Fatalf("expected schedule callback to be called")
+	}
+}
+
+func TestTextGenAdapterGenerate(t *testing.T) {
+	t.Parallel()
+
+	called := false
+	adapter := textGenAdapter(func(ctx context.Context, prompt string, msgs []providertypes.Message) (string, error) {
+		called = true
+		if prompt != "prompt" {
+			t.Fatalf("unexpected prompt %q", prompt)
+		}
+		if len(msgs) != 1 || msgs[0].Content != "msg" {
+			t.Fatalf("unexpected messages %+v", msgs)
+		}
+		return "ok", nil
+	})
+
+	result, err := adapter.Generate(context.Background(), "prompt", []providertypes.Message{
+		{Role: providertypes.RoleUser, Content: "msg"},
+	})
+	if err != nil {
+		t.Fatalf("Generate() error = %v", err)
+	}
+	if result != "ok" {
+		t.Fatalf("unexpected result %q", result)
+	}
+	if !called {
+		t.Fatalf("expected adapter callback to be called")
+	}
+}
+
+func TestNewMemoExtractorAdapterSkipsWhenSchedulerNil(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.StaticDefaults().Clone()
+	cfg.SelectedProvider = config.OpenAIName
+	manager := config.NewManager(config.NewLoader("", &cfg))
+	extractor := newMemoExtractorAdapter(nil, manager, nil)
+
+	extractor.Schedule("session-1", []providertypes.Message{
+		{Role: providertypes.RoleUser, Content: "remember this"},
+	})
+}
+
+func TestNewMemoExtractorAdapterSkipsWhenResolveProviderFails(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.StaticDefaults().Clone()
+	cfg.SelectedProvider = ""
+	manager := config.NewManager(config.NewLoader("", &cfg))
+	scheduler := &stubMemoExtractorScheduler{}
+	extractor := newMemoExtractorAdapter(nil, manager, scheduler)
+
+	extractor.Schedule("session-1", []providertypes.Message{
+		{Role: providertypes.RoleUser, Content: "remember this"},
+	})
+
+	if scheduler.called {
+		t.Fatalf("expected scheduler not to be called when provider resolution fails")
+	}
+}
+
+func TestNewMemoExtractorAdapterSchedulesExtractorAndGenerates(t *testing.T) {
+	t.Setenv(config.OpenAIDefaultAPIKeyEnv, "token")
+	cfg := config.StaticDefaults().Clone()
+	cfg.SelectedProvider = config.OpenAIName
+	manager := config.NewManager(config.NewLoader("", &cfg))
+	providerStub := &stubMemoProvider{
+		generate: func(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error {
+			if req.Model != cfg.CurrentModel {
+				t.Fatalf("unexpected model %q", req.Model)
+			}
+			if strings.TrimSpace(req.SystemPrompt) == "" {
+				t.Fatalf("expected non-empty system prompt")
+			}
+			events <- providertypes.NewTextDeltaStreamEvent(`[{"type":"user","title":"偏好","content":"记住使用 Go","keywords":["go"]}]`)
+			events <- providertypes.NewMessageDoneStreamEvent("stop", nil)
+			return nil
+		},
+	}
+	factory := &stubMemoProviderFactory{provider: providerStub}
+	scheduler := &stubMemoExtractorScheduler{}
+	extractor := newMemoExtractorAdapter(factory, manager, scheduler)
+
+	inputMessages := []providertypes.Message{
+		{Role: providertypes.RoleUser, Content: "remember 我偏好 Go"},
+	}
+	extractor.Schedule("session-1", inputMessages)
+
+	if !scheduler.called || scheduler.extractor == nil {
+		t.Fatalf("expected scheduler to receive extractor")
+	}
+	if scheduler.sessionID != "session-1" {
+		t.Fatalf("unexpected session id %q", scheduler.sessionID)
+	}
+	entries, err := scheduler.extractor.Extract(context.Background(), inputMessages)
+	if err != nil {
+		t.Fatalf("extractor.Extract() error = %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected one extracted entry, got %+v", entries)
+	}
+	if !factory.called {
+		t.Fatalf("expected provider factory Build to be called")
+	}
+}
+
+func TestNewMemoExtractorAdapterKeepsScheduledConfigSnapshot(t *testing.T) {
+	t.Setenv(config.OpenAIDefaultAPIKeyEnv, "openai-token")
+	t.Setenv(config.QiniuDefaultAPIKeyEnv, "qiniu-token")
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	cfg := config.StaticDefaults().Clone()
+	cfg.SelectedProvider = config.OpenAIName
+	cfg.CurrentModel = "snapshot-model"
+	manager := config.NewManager(config.NewLoader("", &cfg))
+	providerStub := &stubMemoProvider{
+		generate: func(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error {
+			if req.Model != "snapshot-model" {
+				t.Fatalf("expected scheduled model snapshot, got %q", req.Model)
+			}
+			events <- providertypes.NewTextDeltaStreamEvent(
+				`[{"type":"user","title":"偏好","content":"snapshot","keywords":["snapshot"]}]`,
+			)
+			events <- providertypes.NewMessageDoneStreamEvent("stop", nil)
+			return nil
+		},
+	}
+	factory := &stubMemoProviderFactory{provider: providerStub}
+	scheduler := &stubMemoExtractorScheduler{}
+	extractor := newMemoExtractorAdapter(factory, manager, scheduler)
+
+	messages := []providertypes.Message{{Role: providertypes.RoleUser, Content: "remember snapshot"}}
+	extractor.Schedule("session-1", messages)
+	if !scheduler.called || scheduler.extractor == nil {
+		t.Fatalf("expected scheduler to receive extractor")
+	}
+
+	if err := manager.Update(context.Background(), func(next *config.Config) error {
+		next.SelectedProvider = config.QiniuName
+		next.CurrentModel = "drifted-model"
+		return nil
+	}); err != nil {
+		t.Fatalf("manager.Update() error = %v", err)
+	}
+
+	entries, err := scheduler.extractor.Extract(context.Background(), messages)
+	if err != nil {
+		t.Fatalf("extractor.Extract() error = %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected one extracted entry, got %+v", entries)
+	}
+	if !factory.called {
+		t.Fatalf("expected provider factory Build to be called")
+	}
+	if factory.cfg.Name != config.OpenAIName {
+		t.Fatalf("expected scheduled provider snapshot %q, got %q", config.OpenAIName, factory.cfg.Name)
+	}
+}
+
+func TestNewMemoExtractorAdapterPropagatesFactoryBuildError(t *testing.T) {
+	t.Setenv(config.OpenAIDefaultAPIKeyEnv, "token")
+	cfg := config.StaticDefaults().Clone()
+	cfg.SelectedProvider = config.OpenAIName
+	manager := config.NewManager(config.NewLoader("", &cfg))
+	factory := &stubMemoProviderFactory{buildErr: errors.New("build failed")}
+	scheduler := &stubMemoExtractorScheduler{}
+	extractor := newMemoExtractorAdapter(factory, manager, scheduler)
+
+	inputMessages := []providertypes.Message{
+		{Role: providertypes.RoleUser, Content: "remember coding style"},
+	}
+	extractor.Schedule("session-1", inputMessages)
+	if !scheduler.called || scheduler.extractor == nil {
+		t.Fatalf("expected scheduler to receive extractor")
+	}
+
+	_, err := scheduler.extractor.Extract(context.Background(), inputMessages)
+	if err == nil || !strings.Contains(err.Error(), "build failed") {
+		t.Fatalf("expected build failure, got %v", err)
+	}
+}
+
 type stubToolForBootstrap struct {
 	name    string
 	content string
@@ -929,6 +1275,59 @@ func (s *closeableStubMCPServerClient) Close() error {
 	if s.closed != nil {
 		*s.closed = true
 	}
+	return nil
+}
+
+type stubMemoExtractorScheduler struct {
+	called    bool
+	sessionID string
+	messages  []providertypes.Message
+	extractor memo.Extractor
+}
+
+func (s *stubMemoExtractorScheduler) ScheduleWithExtractor(
+	sessionID string,
+	messages []providertypes.Message,
+	extractor memo.Extractor,
+) {
+	s.called = true
+	s.sessionID = sessionID
+	s.messages = append([]providertypes.Message(nil), messages...)
+	s.extractor = extractor
+}
+
+type stubMemoProviderFactory struct {
+	called   bool
+	cfg      provider.RuntimeConfig
+	provider provider.Provider
+	buildErr error
+}
+
+func (s *stubMemoProviderFactory) Build(ctx context.Context, cfg provider.RuntimeConfig) (provider.Provider, error) {
+	s.called = true
+	s.cfg = cfg
+	if s.buildErr != nil {
+		return nil, s.buildErr
+	}
+	if s.provider != nil {
+		return s.provider, nil
+	}
+	return &stubMemoProvider{}, nil
+}
+
+type stubMemoProvider struct {
+	generate func(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error
+}
+
+func (s *stubMemoProvider) Generate(
+	ctx context.Context,
+	req providertypes.GenerateRequest,
+	events chan<- providertypes.StreamEvent,
+) error {
+	if s.generate != nil {
+		return s.generate(ctx, req, events)
+	}
+	events <- providertypes.NewMessageDoneStreamEvent("stop", nil)
 	return nil
 }
 
