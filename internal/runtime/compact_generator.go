@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 
@@ -115,17 +116,42 @@ func parseCompactSummaryOutput(content string) (contextcompact.SummaryOutput, er
 	}
 
 	task := raw.TaskState
+	progress, err := coerceStringArray("progress", task.Progress)
+	if err != nil {
+		return contextcompact.SummaryOutput{}, err
+	}
+	openItems, err := coerceStringArray("open_items", task.OpenItems)
+	if err != nil {
+		return contextcompact.SummaryOutput{}, err
+	}
+	blockers, err := coerceStringArray("blockers", task.Blockers)
+	if err != nil {
+		return contextcompact.SummaryOutput{}, err
+	}
+	keyArtifacts, err := coerceStringArray("key_artifacts", task.KeyArtifacts)
+	if err != nil {
+		return contextcompact.SummaryOutput{}, err
+	}
+	decisions, err := coerceStringArray("decisions", task.Decisions)
+	if err != nil {
+		return contextcompact.SummaryOutput{}, err
+	}
+	userConstraints, err := coerceStringArray("user_constraints", task.UserConstraints)
+	if err != nil {
+		return contextcompact.SummaryOutput{}, err
+	}
+
 	output := contextcompact.SummaryOutput{
 		DisplaySummary: strings.TrimSpace(raw.DisplaySummary),
 		TaskState: agentsession.TaskState{
 			Goal:            task.Goal,
-			Progress:        coerceStringArray(task.Progress),
-			OpenItems:       coerceStringArray(task.OpenItems),
+			Progress:        progress,
+			OpenItems:       openItems,
 			NextStep:        task.NextStep,
-			Blockers:        coerceStringArray(task.Blockers),
-			KeyArtifacts:    coerceStringArray(task.KeyArtifacts),
-			Decisions:       coerceStringArray(task.Decisions),
-			UserConstraints: coerceStringArray(task.UserConstraints),
+			Blockers:        blockers,
+			KeyArtifacts:    keyArtifacts,
+			Decisions:       decisions,
+			UserConstraints: userConstraints,
 		},
 	}
 
@@ -151,29 +177,33 @@ func decodeCompactSummaryResponse(jsonText string) (tolerantSummaryResponse, err
 }
 
 // coerceStringArray 尝试将 json.RawMessage 解析为 []string，容忍单个 string 值。
-func coerceStringArray(raw json.RawMessage) []string {
+func coerceStringArray(fieldName string, raw json.RawMessage) ([]string, error) {
 	if len(raw) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	// 根据首字节判断 JSON 类型，避免双重 Unmarshal
 	switch raw[0] {
 	case '[':
 		var arr []string
-		if err := json.Unmarshal(raw, &arr); err == nil {
-			return arr
+		if err := json.Unmarshal(raw, &arr); err != nil {
+			return nil, fmt.Errorf("runtime: compact summary task_state.%s must be string array: %w", fieldName, err)
 		}
+		return arr, nil
 	case '"':
 		var s string
-		if err := json.Unmarshal(raw, &s); err == nil {
-			trimmed := strings.TrimSpace(s)
-			if trimmed != "" {
-				return []string{trimmed}
-			}
+		if err := json.Unmarshal(raw, &s); err != nil {
+			return nil, fmt.Errorf("runtime: compact summary task_state.%s must be string: %w", fieldName, err)
 		}
+		trimmed := strings.TrimSpace(s)
+		if trimmed != "" {
+			return []string{trimmed}, nil
+		}
+		return nil, nil
+	case 'n':
+		return nil, nil
 	}
-	// null、数字、布尔、对象等均返回 nil
-	return nil
+	return nil, fmt.Errorf("runtime: compact summary task_state.%s must be string or string array", fieldName)
 }
 
 // extractJSONObject 从模型响应中提取首个满足 compact 协议的 JSON 对象，容忍前后噪音。
