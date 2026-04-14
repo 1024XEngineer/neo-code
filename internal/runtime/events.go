@@ -3,7 +3,7 @@ package runtime
 import (
 	"time"
 
-	"neo-code/internal/subagent"
+	"neo-code/internal/runtime/controlplane"
 )
 
 // EventType identifies the kind of runtime event emitted during a run.
@@ -36,13 +36,13 @@ type BudgetCheckedPayload struct {
 
 // ProgressEvaluatedPayload 汇总 progress 控制面评估结果。
 type ProgressEvaluatedPayload struct {
-	Score string `json:"score"`
+	Score controlplane.ProgressScore `json:"score"`
 }
 
 // StopReasonDecidedPayload 承载唯一停止原因决议结果。
 type StopReasonDecidedPayload struct {
-	Reason string `json:"reason"`
-	Detail string `json:"detail,omitempty"`
+	Reason controlplane.StopReason `json:"reason"`
+	Detail string                  `json:"detail,omitempty"`
 }
 
 // LedgerReconciledPayload 为账本对账壳事件负载（1A 仅占位）。
@@ -108,16 +108,12 @@ const (
 	EventProviderRetry EventType = "provider_retry"
 	// EventPermissionRequested 是 1A 权限请求事件名。
 	EventPermissionRequested EventType = "permission_requested"
-	// EventPermissionRequest 为兼容旧事件名保留，语义等同 EventPermissionRequested。
-	EventPermissionRequest = EventPermissionRequested
 	// EventPermissionResolved is emitted when runtime resolves a permission request or denial.
 	EventPermissionResolved EventType = "permission_resolved"
 	// EventCompactStart is emitted when a compact cycle starts.
 	EventCompactStart EventType = "compact_start"
 	// EventCompactApplied 表示一次 compact 已成功应用或校验完成（1A 主事件）。
 	EventCompactApplied EventType = "compact_applied"
-	// EventCompactDone 为兼容旧事件名保留，语义等同 EventCompactApplied。
-	EventCompactDone = EventCompactApplied
 	// EventCompactError is emitted when compact fails.
 	EventCompactError EventType = "compact_error"
 	// EventTokenUsage is emitted after each provider response with token statistics.
@@ -137,27 +133,3 @@ type TokenUsagePayload struct {
 	SessionInputTokens  int `json:"session_input_tokens"`
 	SessionOutputTokens int `json:"session_output_tokens"`
 }
-
-// SubAgentEventPayload 描述子代理执行生命周期的事件载荷。
-type SubAgentEventPayload struct {
-	Role       subagent.Role       `json:"role"`
-	TaskID     string              `json:"task_id"`
-	State      subagent.State      `json:"state"`
-	StopReason subagent.StopReason `json:"stop_reason,omitempty"`
-	Step       int                 `json:"step,omitempty"`
-	Delta      string              `json:"delta,omitempty"`
-	Error      string              `json:"error,omitempty"`
-}
-
-const (
-	// EventSubAgentStarted 在子代理任务启动后触发。
-	EventSubAgentStarted EventType = "subagent_started"
-	// EventSubAgentProgress 在子代理执行每一步后触发。
-	EventSubAgentProgress EventType = "subagent_progress"
-	// EventSubAgentCompleted 在子代理成功结束后触发。
-	EventSubAgentCompleted EventType = "subagent_completed"
-	// EventSubAgentFailed 在子代理失败结束后触发。
-	EventSubAgentFailed EventType = "subagent_failed"
-	// EventSubAgentCanceled 在子代理被取消后触发。
-	EventSubAgentCanceled EventType = "subagent_canceled"
-)

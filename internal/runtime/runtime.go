@@ -22,7 +22,6 @@ const (
 	defaultProviderRetryMax = 2
 	providerRetryBaseWait   = 1 * time.Second
 	providerRetryMaxWait    = 5 * time.Second
-	defaultMaxLoops         = 8
 	defaultToolParallelism  = 4
 	noProgressStreakLimit   = 3
 
@@ -70,7 +69,6 @@ type Service struct {
 	compactRunner   contextcompact.Runner
 	approvalBroker  *approval.Broker
 	memoExtractor   MemoExtractor
-	subAgentFactory subagent.Factory
 
 	events             chan RuntimeEvent
 	sessionMu          sync.Mutex
@@ -81,6 +79,7 @@ type Service struct {
 	activeRunCancels   map[uint64]context.CancelFunc
 	permissionAskMapMu sync.Mutex
 	permissionAskLocks map[string]*permissionAskLockEntry
+	subAgentFactory    subagent.Factory
 }
 
 // sessionLockEntry 维护单个会话锁及其当前引用计数，用于在无引用时回收 map 项。
@@ -120,11 +119,11 @@ func NewWithFactory(
 		providerFactory:    providerFactory,
 		contextBuilder:     contextBuilder,
 		approvalBroker:     approval.NewBroker(),
-		subAgentFactory:    subagent.NewWorkerFactory(nil),
 		events:             make(chan RuntimeEvent, 128),
 		sessionLocks:       make(map[string]*sessionLockEntry),
-		activeRunCancels:   make(map[uint64]context.CancelFunc),
 		permissionAskLocks: make(map[string]*permissionAskLockEntry),
+		activeRunCancels:   make(map[uint64]context.CancelFunc),
+		subAgentFactory:    subagent.NewWorkerFactory(nil),
 	}
 }
 
