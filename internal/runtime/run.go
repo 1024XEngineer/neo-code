@@ -79,7 +79,7 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 	for turn := 0; ; turn++ {
 		maxLoops := resolveMaxLoops(s.configManager.Get())
 		if turn >= maxLoops {
-			errMessage := "runtime: max loop reached"
+			loopErr := ErrMaxLoopReached
 			applied, compactErr := s.applyCompactForState(
 				ctx,
 				&state,
@@ -91,11 +91,10 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 				return s.handleRunError(ctx, state.runID, state.session.ID, compactErr)
 			}
 			if applied {
-				errMessage = "runtime: max loop reached after saving continuation checkpoint"
+				loopErr = fmt.Errorf("%w after saving continuation checkpoint", ErrMaxLoopReached)
 			}
-			err := errors.New(errMessage)
-			s.emit(ctx, EventError, state.runID, state.session.ID, err.Error())
-			return err
+			s.emit(ctx, EventError, state.runID, state.session.ID, loopErr.Error())
+			return loopErr
 		}
 
 		state.turn = turn
