@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"neo-code/internal/config"
+	agentcontext "neo-code/internal/context"
 	providertypes "neo-code/internal/provider/types"
 	"neo-code/internal/runtime/controlplane"
 	"neo-code/internal/tools"
@@ -244,5 +245,118 @@ func TestRepeatCycleStreakStopsRunAndInjectsReminder(t *testing.T) {
 
 	if !promptInjected {
 		t.Fatal("expected repeat self-healing prompt to be injected before repeat limit is reached")
+	}
+}
+
+func TestComputeToolSignatureNormalizationAndFallback(t *testing.T) {
+	if got := computeToolSignature(nil); got != "" {
+		t.Fatalf("expected empty signature for nil tool calls, got %q", got)
+	}
+
+	callsA := []providertypes.ToolCall{
+		{Name: "filesystem_read_file", Arguments: "{\n  \"path\": \"/tmp/a.txt\",\n  \"opts\": {\"y\": [2,3], \"x\": 1}\n}"},
+		{Name: "bash", Arguments: "{\"cmd\":\"pwd\"}"},
+	}
+	callsB := []providertypes.ToolCall{
+		{Name: "filesystem_read_file", Arguments: "{\"opts\":{\"x\":1,\"y\":[2,3]},\"path\":\"/tmp/a.txt\"}"},
+		{Name: "bash", Arguments: "{ \"cmd\" : \"pwd\" }"},
+	}
+	sigA := computeToolSignature(callsA)
+	sigB := computeToolSignature(callsB)
+	if sigA != sigB {
+		t.Fatalf("expected canonicalized signatures to match, got %q vs %q", sigA, sigB)
+	}
+
+	invalidA := []providertypes.ToolCall{{Name: "bash", Arguments: "{\"cmd\":"}}
+	invalidB := []providertypes.ToolCall{{Name: "bash", Arguments: "{\"cmd\":\"ls\"}"}}
+	if computeToolSignature(invalidA) == computeToolSignature(invalidB) {
+		t.Fatal("expected invalid-json fallback signature to differ from valid-json signature")
+	}
+}
+
+func TestPrepareTurnSnapshotInjectRepeatReminderWithEmptyPrompt(t *testing.T) {
+	manager := newRuntimeConfigManager(t)
+	if err := manager.Update(context.Background(), func(cfg *config.Config) error {
+		cfg.Runtime.MaxRepeatCycleStreak = 3
+		return nil
+	}); err != nil {
+		t.Fatalf("update config: %v", err)
+	}
+
+	service := &Service{
+		configManager: manager,
+		contextBuilder: &stubContextBuilder{
+			buildFn: func(ctx context.Context, input agentcontext.BuildInput) (agentcontext.BuildResult, error) {
+				return agentcontext.BuildResult{SystemPrompt: "", Messages: input.Messages}, nil
+			},
+		},
+		toolManager: &stubToolManager{},
+	}
+	state := newRunState("run-repeat-reminder-empty", newRuntimeSession("session-repeat-reminder-empty"))
+	state.progress.LastScore.RepeatCycleStreak = 2
+
+	snapshot, rebuilt, err := service.prepareTurnSnapshot(context.Background(), &state)
+	if err != nil {
+		t.Fatalf("prepareTurnSnapshot() error = %v", err)
+	}
+	if rebuilt {
+		t.Fatal("expected rebuilt=false")
+	}
+	if snapshot.request.SystemPrompt != selfHealingRepeatReminder {
+		t.Fatalf("expected repeat reminder only, got %q", snapshot.request.SystemPrompt)
+	}
+}
+
+func TestPrepareTurnSnapshotRepeatReminderTakesPriority(t *testing.T) {
+	manager := newRuntimeConfigManager(t)
+	if err := manager.Update(context.Background(), func(cfg *config.Config) error {
+		cfg.Runtime.MaxNoProgressStreak = 3
+		cfg.Runtime.MaxRepeatCycleStreak = 3
+		return nil
+	}); err != nil {
+		t.Fatalf("update config: %v", err)
+	}
+
+	service := &Service{
+		configManager: manager,
+		contextBuilder: &stubContextBuilder{
+			buildFn: func(ctx context.Context, input agentcontext.BuildInput) (agentcontext.BuildResult, error) {
+				return agentcontext.BuildResult{SystemPrompt: "base prompt", Messages: input.Messages}, nil
+			},
+		},
+		toolManager: &stubToolManager{},
+	}
+	state := newRunState("run-reminder-priority", newRuntimeSession("session-reminder-priority"))
+	state.progress.LastScore.NoProgressStreak = 2
+	state.progress.LastScore.RepeatCycleStreak = 2
+
+	snapshot, rebuilt, err := service.prepareTurnSnapshot(context.Background(), &state)
+	if err != nil {
+		t.Fatalf("prepareTurnSnapshot() error = %v", err)
+	}
+	if rebuilt {
+		t.Fatal("expected rebuilt=false")
+	}
+	if !strings.Contains(snapshot.request.SystemPrompt, selfHealingRepeatReminder) {
+		t.Fatalf("expected prompt to contain repeat reminder, got %q", snapshot.request.SystemPrompt)
+	}
+	if strings.Contains(snapshot.request.SystemPrompt, selfHealingReminder) {
+		t.Fatalf("expected no-progress reminder to be skipped when repeat reminder is injected, got %q", snapshot.request.SystemPrompt)
+	}
+}
+
+func TestResolveStreakLimitDefaults(t *testing.T) {
+	if got := resolveNoProgressStreakLimit(config.RuntimeConfig{MaxNoProgressStreak: 0}); got != config.DefaultMaxNoProgressStreak {
+		t.Fatalf("expected default no-progress limit %d, got %d", config.DefaultMaxNoProgressStreak, got)
+	}
+	if got := resolveNoProgressStreakLimit(config.RuntimeConfig{MaxNoProgressStreak: 8}); got != 8 {
+		t.Fatalf("expected explicit no-progress limit 8, got %d", got)
+	}
+
+	if got := resolveRepeatCycleStreakLimit(config.RuntimeConfig{MaxRepeatCycleStreak: -1}); got != config.DefaultMaxRepeatCycleStreak {
+		t.Fatalf("expected default repeat limit %d, got %d", config.DefaultMaxRepeatCycleStreak, got)
+	}
+	if got := resolveRepeatCycleStreakLimit(config.RuntimeConfig{MaxRepeatCycleStreak: 6}); got != 6 {
+		t.Fatalf("expected explicit repeat limit 6, got %d", got)
 	}
 }
