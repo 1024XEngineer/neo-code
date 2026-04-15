@@ -4369,6 +4369,84 @@ func TestAutoCompactThresholdImplicitModeWithoutResolverUsesFallback(t *testing.
 	}
 }
 
+func TestAutoCompactThresholdForStateCachesResolverResultWithinRun(t *testing.T) {
+	t.Parallel()
+
+	service := &Service{}
+	resolveCalls := 0
+	service.SetAutoCompactThresholdResolver(autoCompactThresholdResolverFunc(
+		func(ctx context.Context, cfg config.Config) (int, error) {
+			resolveCalls++
+			return 88000, nil
+		},
+	))
+
+	cfg := config.Config{
+		SelectedProvider: "openai",
+		CurrentModel:     "gpt-5",
+		Context: config.ContextConfig{
+			AutoCompact: config.AutoCompactConfig{
+				Enabled:                     true,
+				InputTokenThreshold:         0,
+				ReserveTokens:               10000,
+				FallbackInputTokenThreshold: 76000,
+			},
+		},
+	}
+	state := newRunState("run-cache-hit", newRuntimeSession("session-cache-hit"))
+
+	threshold1 := service.autoCompactThresholdForState(context.Background(), cfg, &state)
+	threshold2 := service.autoCompactThresholdForState(context.Background(), cfg, &state)
+
+	if threshold1 != 88000 || threshold2 != 88000 {
+		t.Fatalf("expected cached resolver threshold == 88000, got %d and %d", threshold1, threshold2)
+	}
+	if resolveCalls != 1 {
+		t.Fatalf("expected resolver to be called once, got %d", resolveCalls)
+	}
+}
+
+func TestAutoCompactThresholdForStateRecomputesWhenCacheKeyChanges(t *testing.T) {
+	t.Parallel()
+
+	service := &Service{}
+	resolveCalls := 0
+	service.SetAutoCompactThresholdResolver(autoCompactThresholdResolverFunc(
+		func(ctx context.Context, cfg config.Config) (int, error) {
+			resolveCalls++
+			if strings.TrimSpace(cfg.CurrentModel) == "gpt-5.1" {
+				return 99000, nil
+			}
+			return 88000, nil
+		},
+	))
+
+	cfg := config.Config{
+		SelectedProvider: "openai",
+		CurrentModel:     "gpt-5",
+		Context: config.ContextConfig{
+			AutoCompact: config.AutoCompactConfig{
+				Enabled:                     true,
+				InputTokenThreshold:         0,
+				ReserveTokens:               10000,
+				FallbackInputTokenThreshold: 76000,
+			},
+		},
+	}
+	state := newRunState("run-cache-miss", newRuntimeSession("session-cache-miss"))
+
+	threshold1 := service.autoCompactThresholdForState(context.Background(), cfg, &state)
+	cfg.CurrentModel = "gpt-5.1"
+	threshold2 := service.autoCompactThresholdForState(context.Background(), cfg, &state)
+
+	if threshold1 != 88000 || threshold2 != 99000 {
+		t.Fatalf("expected thresholds [88000, 99000], got [%d, %d]", threshold1, threshold2)
+	}
+	if resolveCalls != 2 {
+		t.Fatalf("expected resolver to be called twice after key change, got %d", resolveCalls)
+	}
+}
+
 func TestTokenUsageRecordedOnMessageDone(t *testing.T) {
 	t.Parallel()
 

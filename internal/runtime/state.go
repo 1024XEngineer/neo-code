@@ -21,6 +21,7 @@ type runState struct {
 	session                 agentsession.Session
 	compactApplied          bool
 	reactiveCompactAttempts int
+	autoCompactCache        autoCompactThresholdCache
 	rememberedThisRun       bool
 	turn                    int
 	phase                   controlplane.Phase
@@ -100,4 +101,21 @@ type providerTurnResult struct {
 	assistant    providertypes.Message
 	inputTokens  int
 	outputTokens int
+}
+
+// autoCompactThresholdCache 保存当前 run 已解析过的自动压缩阈值，避免热路径重复解析。
+type autoCompactThresholdCache struct {
+	key       autoCompactThresholdCacheKey
+	threshold int
+	valid     bool
+}
+
+// autoCompactThresholdCacheKey 描述自动压缩阈值解析输入的关键维度。
+type autoCompactThresholdCacheKey struct {
+	provider                  string
+	model                     string
+	autoCompactEnabled        bool
+	autoCompactInputThreshold int
+	autoCompactReserveTokens  int
+	autoCompactFallback       int
 }
