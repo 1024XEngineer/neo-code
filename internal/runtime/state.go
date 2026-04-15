@@ -26,13 +26,15 @@ type runState struct {
 	phase                   controlplane.Phase
 	stopEmitted             bool
 	progress                controlplane.ProgressState
+	reportedMissingSkills   map[string]struct{}
 }
 
 // newRunState 基于持久化会话创建一次运行的内存状态镜像。
 func newRunState(runID string, session agentsession.Session) runState {
 	return runState{
-		runID:   runID,
-		session: session,
+		runID:                 runID,
+		session:               session,
+		reportedMissingSkills: make(map[string]struct{}),
 	}
 }
 
@@ -60,6 +62,24 @@ func (s *runState) touchSession() {
 		return
 	}
 	s.session.UpdatedAt = time.Now()
+}
+
+// markSkillMissingReported 记录并返回某个缺失 skill 是否首次在当前 run 中上报。
+func (s *runState) markSkillMissingReported(skillID string) bool {
+	if s == nil {
+		return true
+	}
+	normalized := normalizeRuntimeSkillID(skillID)
+	if normalized == "" {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, exists := s.reportedMissingSkills[normalized]; exists {
+		return false
+	}
+	s.reportedMissingSkills[normalized] = struct{}{}
+	return true
 }
 
 // turnSnapshot 冻结单轮推理所需的配置、上下文与 provider 请求。

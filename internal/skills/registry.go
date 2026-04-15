@@ -2,6 +2,7 @@ package skills
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -41,6 +42,14 @@ func (r *MemoryRegistry) Refresh(ctx context.Context) error {
 
 	snapshot, err := r.loader.Load(ctx)
 	if err != nil {
+		if errors.Is(err, ErrSkillRootNotFound) {
+			r.mu.Lock()
+			r.loaded = true
+			r.byID = map[string]Skill{}
+			r.issues = nil
+			r.mu.Unlock()
+			return nil
+		}
 		r.mu.Lock()
 		r.issues = []LoadIssue{{
 			Code:    IssueRefreshFailed,

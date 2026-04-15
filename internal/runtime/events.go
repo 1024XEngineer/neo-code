@@ -29,12 +29,12 @@ type PhaseChangedPayload struct {
 	To   string `json:"to"`
 }
 
-// BudgetCheckedPayload 为预算检查壳事件负载（1A 仅占位，1B阶段使用）。
+// BudgetCheckedPayload 为预算检查预留事件负载。
 type BudgetCheckedPayload struct {
 	Note string `json:"note,omitempty"`
 }
 
-// ProgressEvaluatedPayload 汇总 progress 控制面评估结果。
+// ProgressEvaluatedPayload 汇总 progress 控制面的评估结果。
 type ProgressEvaluatedPayload struct {
 	Score controlplane.ProgressScore `json:"score"`
 }
@@ -45,7 +45,7 @@ type StopReasonDecidedPayload struct {
 	Detail string                  `json:"detail,omitempty"`
 }
 
-// LedgerReconciledPayload 为账本对账壳事件负载（1A 仅占位）。
+// LedgerReconciledPayload 为账本对账预留事件负载。
 type LedgerReconciledPayload struct {
 	Note string `json:"note,omitempty"`
 }
@@ -83,6 +83,11 @@ type PermissionResolvedPayload struct {
 	ResolvedAs    string
 }
 
+// SessionSkillEventPayload 描述一次会话级 skill 状态变化或缺失提示。
+type SessionSkillEventPayload struct {
+	SkillID string `json:"skill_id"`
+}
+
 const (
 	// EventUserMessage is emitted after the user input has been accepted and saved.
 	EventUserMessage EventType = "user_message"
@@ -106,18 +111,24 @@ const (
 	// EventProviderRetry is emitted when runtime retries a provider call due to
 	// a retryable error (e.g. 429, 5xx). Payload is a human-readable message.
 	EventProviderRetry EventType = "provider_retry"
-	// EventPermissionRequested 是 1A 权限请求事件名。
+	// EventPermissionRequested 表示一次权限审批请求。
 	EventPermissionRequested EventType = "permission_requested"
 	// EventPermissionResolved is emitted when runtime resolves a permission request or denial.
 	EventPermissionResolved EventType = "permission_resolved"
 	// EventCompactStart is emitted when a compact cycle starts.
 	EventCompactStart EventType = "compact_start"
-	// EventCompactApplied 表示一次 compact 已成功应用或校验完成（1A 主事件）。
+	// EventCompactApplied 表示一次 compact 已成功应用或校验完成。
 	EventCompactApplied EventType = "compact_applied"
 	// EventCompactError is emitted when compact fails.
 	EventCompactError EventType = "compact_error"
 	// EventTokenUsage is emitted after each provider response with token statistics.
 	EventTokenUsage EventType = "token_usage"
+	// EventSkillActivated 表示会话成功激活了一个 skill。
+	EventSkillActivated EventType = "skill_activated"
+	// EventSkillDeactivated 表示会话成功停用了一个 skill。
+	EventSkillDeactivated EventType = "skill_deactivated"
+	// EventSkillMissing 表示运行时发现会话记录的 skill 已无法解析。
+	EventSkillMissing EventType = "skill_missing"
 	// EventPhaseChanged 表示显式 phase 迁移。
 	EventPhaseChanged EventType = "phase_changed"
 	// EventProgressEvaluated 表示 progress 评估结果。

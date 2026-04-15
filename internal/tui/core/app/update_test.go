@@ -96,6 +96,18 @@ func (s *stubRuntime) LoadSession(ctx context.Context, id string) (agentsession.
 	return agentsession.NewWithWorkdir("draft", ""), nil
 }
 
+func (s *stubRuntime) ActivateSessionSkill(ctx context.Context, sessionID string, skillID string) error {
+	return nil
+}
+
+func (s *stubRuntime) DeactivateSessionSkill(ctx context.Context, sessionID string, skillID string) error {
+	return nil
+}
+
+func (s *stubRuntime) ListSessionSkills(ctx context.Context, sessionID string) ([]agentruntime.SessionSkillState, error) {
+	return nil, nil
+}
+
 func (s *stubRuntime) SetSessionWorkdir(ctx context.Context, sessionID string, workdir string) (agentsession.Session, error) {
 	return agentsession.NewWithWorkdir("draft", workdir), nil
 }

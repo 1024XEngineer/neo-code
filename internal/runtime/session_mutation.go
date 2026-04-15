@@ -74,7 +74,20 @@ func cloneSessionForPersistence(session agentsession.Session) agentsession.Sessi
 	cloned := session
 	cloned.Messages = cloneMessagesForPersistence(session.Messages)
 	cloned.TaskState = session.TaskState.Clone()
+	cloned.ActivatedSkills = agentsessionCloneSkillActivations(session.ActivatedSkills)
 	cloned.Todos = cloneTodosForPersistence(session.Todos)
+	return cloned
+}
+
+// agentsessionCloneSkillActivations 深拷贝会话中的 skill 激活列表，避免持久化阶段共享底层切片。
+func agentsessionCloneSkillActivations(items []agentsession.SkillActivation) []agentsession.SkillActivation {
+	if len(items) == 0 {
+		return nil
+	}
+	cloned := make([]agentsession.SkillActivation, len(items))
+	for idx, item := range items {
+		cloned[idx] = item.Clone()
+	}
 	return cloned
 }
 

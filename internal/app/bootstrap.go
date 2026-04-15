@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"log"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 	agentruntime "neo-code/internal/runtime"
 	"neo-code/internal/security"
 	agentsession "neo-code/internal/session"
+	"neo-code/internal/skills"
 	"neo-code/internal/tools"
 	"neo-code/internal/tools/bash"
 	"neo-code/internal/tools/filesystem"
@@ -165,6 +167,7 @@ func BuildRuntime(ctx context.Context, opts BootstrapOptions) (RuntimeBundle, er
 		providerRegistry,
 		contextBuilder,
 	)
+	runtimeSvc.SetSkillsRegistry(buildSkillsRegistry(ctx, loader.BaseDir()))
 
 	// 注入记忆提取钩子：当 AutoExtract 启用且 memoSvc 可用时，ReAct 循环完成后异步提取记忆。
 	if memoSvc != nil && cfg.Memo.AutoExtract {
@@ -257,6 +260,16 @@ func buildToolRegistry(cfg config.Config) (*tools.Registry, func() error, error)
 		return toolRegistry, nil, nil
 	}
 	return toolRegistry, mcpRegistry.Close, nil
+}
+
+// buildSkillsRegistry 负责以最小代价初始化本地 skills registry，refresh 失败时仅记录日志并保留 registry 实例。
+func buildSkillsRegistry(ctx context.Context, baseDir string) skills.Registry {
+	root := filepath.Join(baseDir, "skills")
+	registry := skills.NewRegistry(skills.NewLocalLoader(root))
+	if err := registry.Refresh(ctx); err != nil {
+		log.Printf("skills: initialize registry from %s failed: %v", root, err)
+	}
+	return registry
 }
 
 // buildMCPAgentExposureRules 将配置层的 agent 过滤规则转换为 tools/mcp 层输入。

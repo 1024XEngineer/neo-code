@@ -171,10 +171,15 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 func (s *Service) prepareTurnSnapshot(ctx context.Context, state *runState) (turnSnapshot, bool, error) {
 	cfg := s.configManager.Get()
 	activeWorkdir := agentsession.EffectiveWorkdir(state.session.Workdir, cfg.Workdir)
+	activeSkills, err := s.resolveActiveSkills(ctx, state)
+	if err != nil {
+		return turnSnapshot{}, false, err
+	}
 
 	builtContext, err := s.contextBuilder.Build(ctx, agentcontext.BuildInput{
-		Messages:  state.session.Messages,
-		TaskState: state.session.TaskState,
+		Messages:     state.session.Messages,
+		TaskState:    state.session.TaskState,
+		ActiveSkills: activeSkills,
 		Metadata: agentcontext.Metadata{
 			Workdir:             activeWorkdir,
 			Shell:               cfg.Shell,
