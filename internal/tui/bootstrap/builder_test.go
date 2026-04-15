@@ -10,6 +10,7 @@ import (
 	providertypes "neo-code/internal/provider/types"
 	agentruntime "neo-code/internal/runtime"
 	agentsession "neo-code/internal/session"
+	"neo-code/internal/skills"
 )
 
 type testRuntime struct{}
@@ -42,6 +43,18 @@ func (r *testRuntime) ListSessions(ctx context.Context) ([]agentsession.Summary,
 
 func (r *testRuntime) LoadSession(ctx context.Context, id string) (agentsession.Session, error) {
 	return agentsession.Session{}, nil
+}
+
+func (r *testRuntime) ActivateSessionSkill(ctx context.Context, sessionID string, skillID string) error {
+	return nil
+}
+
+func (r *testRuntime) DeactivateSessionSkill(ctx context.Context, sessionID string, skillID string) error {
+	return nil
+}
+
+func (r *testRuntime) ListSessionSkills(ctx context.Context, sessionID string) ([]agentruntime.SessionSkillState, error) {
+	return []agentruntime.SessionSkillState{{SkillID: "test", Descriptor: &skills.Descriptor{ID: "test"}}}, nil
 }
 
 type testProviderService struct{}
@@ -221,6 +234,18 @@ func (r noopRuntime) ListSessions(ctx context.Context) ([]agentsession.Summary, 
 
 func (r noopRuntime) LoadSession(ctx context.Context, id string) (agentsession.Session, error) {
 	return agentsession.Session{}, nil
+}
+
+func (r noopRuntime) ActivateSessionSkill(ctx context.Context, sessionID string, skillID string) error {
+	return nil
+}
+
+func (r noopRuntime) DeactivateSessionSkill(ctx context.Context, sessionID string, skillID string) error {
+	return nil
+}
+
+func (r noopRuntime) ListSessionSkills(ctx context.Context, sessionID string) ([]agentruntime.SessionSkillState, error) {
+	return nil, nil
 }
 
 type noopProviderService struct{}

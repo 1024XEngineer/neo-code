@@ -90,6 +90,28 @@ func TestRunStateMutationsAndSync(t *testing.T) {
 	}
 }
 
+func TestRunStateMarkSkillMissingReportedBranches(t *testing.T) {
+	t.Parallel()
+
+	session := newRuntimeSession("session-mark-missing")
+	state := newRunState("run-mark-missing", session)
+
+	if !state.markSkillMissingReported("Go_Review") {
+		t.Fatalf("expected first mark to succeed")
+	}
+	if state.markSkillMissingReported("go-review") {
+		t.Fatalf("expected normalized duplicate to be rejected")
+	}
+	if state.markSkillMissingReported(" - ") {
+		t.Fatalf("expected blank normalized id to be rejected")
+	}
+
+	var nilState *runState
+	if !nilState.markSkillMissingReported("anything") {
+		t.Fatalf("expected nil run state to allow reporting")
+	}
+}
+
 func TestAppendAssistantMessageAndSaveMetadataBranches(t *testing.T) {
 	t.Parallel()
 
@@ -185,6 +207,23 @@ func TestAppendToolMessageAndSaveUnlocksStateBeforePersist(t *testing.T) {
 
 	if err := service.appendToolMessageAndSave(context.Background(), &state, call, result); err != nil {
 		t.Fatalf("appendToolMessageAndSave() error = %v", err)
+	}
+}
+
+func TestAgentSessionCloneSkillActivationsCreatesDeepCopy(t *testing.T) {
+	t.Parallel()
+
+	original := []agentsession.SkillActivation{{SkillID: "go-review"}}
+	cloned := agentsessionCloneSkillActivations(original)
+	if len(cloned) != 1 || cloned[0].SkillID != "go-review" {
+		t.Fatalf("unexpected cloned activations: %+v", cloned)
+	}
+	cloned[0].SkillID = "changed"
+	if original[0].SkillID != "go-review" {
+		t.Fatalf("expected source activation to remain unchanged, got %+v", original)
+	}
+	if agentsessionCloneSkillActivations(nil) != nil {
+		t.Fatalf("expected nil activation input to return nil")
 	}
 }
 

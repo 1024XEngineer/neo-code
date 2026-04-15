@@ -23,6 +23,8 @@ import (
 	"neo-code/internal/provider"
 	providertypes "neo-code/internal/provider/types"
 	agentruntime "neo-code/internal/runtime"
+	agentsession "neo-code/internal/session"
+	"neo-code/internal/skills"
 	"neo-code/internal/tools"
 	"neo-code/internal/tools/mcp"
 	"neo-code/internal/tui"
@@ -733,6 +735,111 @@ func TestBuildRuntimeUsesWorkdirOverride(t *testing.T) {
 	}
 	if bundle.ConfigManager == nil || bundle.Runtime == nil || bundle.ProviderSelection == nil {
 		t.Fatalf("expected runtime bundle dependencies, got %+v", bundle)
+	}
+}
+
+func TestBuildRuntimeSucceedsWhenSkillsRootMissing(t *testing.T) {
+	disableBuiltinProviderAPIKeys(t)
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	bundle, err := BuildRuntime(context.Background(), BootstrapOptions{})
+	if err != nil {
+		t.Fatalf("BuildRuntime() error = %v", err)
+	}
+	if bundle.Runtime == nil {
+		t.Fatalf("expected runtime bundle to be created")
+	}
+
+	runtimeWithSkills, ok := bundle.Runtime.(interface {
+		ActivateSessionSkill(ctx context.Context, sessionID string, skillID string) error
+	})
+	if !ok {
+		t.Fatalf("expected runtime to expose ActivateSessionSkill")
+	}
+
+	store := agentsession.NewStore(bundle.ConfigManager.BaseDir(), bundle.Config.Workdir)
+	session := agentsession.New("missing root session")
+	if err := store.Save(context.Background(), &session); err != nil {
+		t.Fatalf("save session: %v", err)
+	}
+
+	err = runtimeWithSkills.ActivateSessionSkill(context.Background(), session.ID, "missing")
+	if !errors.Is(err, skills.ErrSkillNotFound) {
+		t.Fatalf("expected ErrSkillNotFound with empty catalog, got %v", err)
+	}
+}
+
+func TestBuildRuntimeInjectsSkillsRegistryWhenRootExists(t *testing.T) {
+	disableBuiltinProviderAPIKeys(t)
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	skillsRoot := filepath.Join(home, ".neocode", "skills", "go-review")
+	if err := os.MkdirAll(skillsRoot, 0o755); err != nil {
+		t.Fatalf("mkdir skills root: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(skillsRoot, "SKILL.md"), []byte(strings.Join([]string{
+		"---",
+		"id: go-review",
+		"name: go-review",
+		"---",
+		"",
+		"# Go Review",
+		"",
+		"Review code carefully.",
+	}, "\n")), 0o644); err != nil {
+		t.Fatalf("write SKILL.md: %v", err)
+	}
+
+	bundle, err := BuildRuntime(context.Background(), BootstrapOptions{})
+	if err != nil {
+		t.Fatalf("BuildRuntime() error = %v", err)
+	}
+
+	store := agentsession.NewStore(bundle.ConfigManager.BaseDir(), bundle.Config.Workdir)
+	session := agentsession.New("skill session")
+	if err := store.Save(context.Background(), &session); err != nil {
+		t.Fatalf("save session: %v", err)
+	}
+
+	runtimeWithSkills, ok := bundle.Runtime.(interface {
+		ActivateSessionSkill(ctx context.Context, sessionID string, skillID string) error
+	})
+	if !ok {
+		t.Fatalf("expected runtime to expose ActivateSessionSkill")
+	}
+	if err := runtimeWithSkills.ActivateSessionSkill(context.Background(), session.ID, "go-review"); err != nil {
+		t.Fatalf("ActivateSessionSkill() error = %v", err)
+	}
+
+	loaded, err := store.Load(context.Background(), session.ID)
+	if err != nil {
+		t.Fatalf("load session: %v", err)
+	}
+	if got := loaded.ActiveSkillIDs(); len(got) != 1 || got[0] != "go-review" {
+		t.Fatalf("expected activated skill persisted through injected registry, got %+v", got)
+	}
+}
+
+func TestBuildSkillsRegistryKeepsInstanceWhenRefreshFails(t *testing.T) {
+	t.Parallel()
+
+	baseDir := t.TempDir()
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	registry := buildSkillsRegistry(canceledCtx, baseDir)
+	if registry == nil {
+		t.Fatalf("expected non-nil registry even when refresh fails")
+	}
+	_, _, err := registry.Get(context.Background(), "missing")
+	if !errors.Is(err, skills.ErrSkillNotFound) {
+		t.Fatalf("expected empty catalog behavior, got %v", err)
 	}
 }
 

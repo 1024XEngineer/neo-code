@@ -31,6 +31,7 @@ type Session struct {
 	UpdatedAt        time.Time               `json:"updated_at"`
 	Workdir          string                  `json:"workdir,omitempty"`
 	TaskState        TaskState               `json:"task_state"`
+	ActivatedSkills  []SkillActivation       `json:"activated_skills,omitempty"`
 	Todos            []TodoItem              `json:"todos,omitempty"`
 	Messages         []providertypes.Message `json:"messages"`
 	TokenInputTotal  int                     `json:"token_input_total,omitempty"`
@@ -83,6 +84,7 @@ func (s *JSONStore) Save(ctx context.Context, session *Session) error {
 	}
 
 	session.TaskState = normalizeAndClampTaskState(session.TaskState)
+	session.ActivatedSkills = normalizeSkillActivations(session.ActivatedSkills)
 	normalizedTodos, err := normalizeAndValidateTodos(session.Todos)
 	if err != nil {
 		return err
@@ -204,15 +206,16 @@ func New(title string) Session {
 func NewWithWorkdir(title string, workdir string) Session {
 	now := time.Now()
 	return Session{
-		SchemaVersion: CurrentSchemaVersion,
-		ID:            NewID("session"),
-		Title:         sanitizeTitle(title),
-		CreatedAt:     now,
-		UpdatedAt:     now,
-		Workdir:       strings.TrimSpace(workdir),
-		TaskState:     TaskState{},
-		Todos:         []TodoItem{},
-		Messages:      []providertypes.Message{},
+		SchemaVersion:   CurrentSchemaVersion,
+		ID:              NewID("session"),
+		Title:           sanitizeTitle(title),
+		CreatedAt:       now,
+		UpdatedAt:       now,
+		Workdir:         strings.TrimSpace(workdir),
+		TaskState:       TaskState{},
+		ActivatedSkills: []SkillActivation{},
+		Todos:           []TodoItem{},
+		Messages:        []providertypes.Message{},
 	}
 }
 
@@ -244,19 +247,20 @@ func validateSessionSchema(session Session) error {
 // decodeStoredSession 严格校验持久化会话所需字段，并拒绝缺少 schema_version 或 task_state 的旧数据。
 func decodeStoredSession(data []byte) (Session, error) {
 	type storedSession struct {
-		SchemaVersion *int                    `json:"schema_version"`
-		ID            string                  `json:"id"`
-		Title         string                  `json:"title"`
-		Provider      string                  `json:"provider,omitempty"`
-		Model         string                  `json:"model,omitempty"`
-		CreatedAt     time.Time               `json:"created_at"`
-		UpdatedAt     time.Time               `json:"updated_at"`
-		Workdir       string                  `json:"workdir,omitempty"`
-		TaskState     *TaskState              `json:"task_state"`
-		Todos         []TodoItem              `json:"todos,omitempty"`
-		Messages      []providertypes.Message `json:"messages"`
-		TokenInput    int                     `json:"token_input_total,omitempty"`
-		TokenOutput   int                     `json:"token_output_total,omitempty"`
+		SchemaVersion   *int                    `json:"schema_version"`
+		ID              string                  `json:"id"`
+		Title           string                  `json:"title"`
+		Provider        string                  `json:"provider,omitempty"`
+		Model           string                  `json:"model,omitempty"`
+		CreatedAt       time.Time               `json:"created_at"`
+		UpdatedAt       time.Time               `json:"updated_at"`
+		Workdir         string                  `json:"workdir,omitempty"`
+		TaskState       *TaskState              `json:"task_state"`
+		ActivatedSkills []SkillActivation       `json:"activated_skills,omitempty"`
+		Todos           []TodoItem              `json:"todos,omitempty"`
+		Messages        []providertypes.Message `json:"messages"`
+		TokenInput      int                     `json:"token_input_total,omitempty"`
+		TokenOutput     int                     `json:"token_output_total,omitempty"`
 	}
 
 	var stored storedSession
@@ -281,6 +285,7 @@ func decodeStoredSession(data []byte) (Session, error) {
 		UpdatedAt:        stored.UpdatedAt,
 		Workdir:          stored.Workdir,
 		TaskState:        *stored.TaskState,
+		ActivatedSkills:  stored.ActivatedSkills,
 		Todos:            stored.Todos,
 		Messages:         stored.Messages,
 		TokenInputTotal:  stored.TokenInput,
@@ -290,6 +295,7 @@ func decodeStoredSession(data []byte) (Session, error) {
 		return Session{}, err
 	}
 	session.TaskState = normalizeAndClampTaskState(session.TaskState)
+	session.ActivatedSkills = normalizeSkillActivations(session.ActivatedSkills)
 	normalizedTodos, err := normalizeAndValidateTodos(session.Todos)
 	if err != nil {
 		return Session{}, err

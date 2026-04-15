@@ -22,6 +22,7 @@ import (
 	"neo-code/internal/runtime/controlplane"
 	"neo-code/internal/security"
 	agentsession "neo-code/internal/session"
+	"neo-code/internal/skills"
 	"neo-code/internal/tools"
 )
 
@@ -3009,6 +3010,7 @@ func cloneSession(session agentsession.Session) agentsession.Session {
 	cloned := session
 	cloned.Messages = append([]providertypes.Message(nil), session.Messages...)
 	cloned.TaskState = session.TaskState.Clone()
+	cloned.ActivatedSkills = append([]agentsession.SkillActivation(nil), session.ActivatedSkills...)
 	return cloned
 }
 
@@ -3023,6 +3025,7 @@ func cloneBuildInput(input agentcontext.BuildInput) agentcontext.BuildInput {
 	cloned := input
 	cloned.Messages = append([]providertypes.Message(nil), input.Messages...)
 	cloned.TaskState = input.TaskState.Clone()
+	cloned.ActiveSkills = append([]skills.Skill(nil), input.ActiveSkills...)
 	return cloned
 }
 

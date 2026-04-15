@@ -2,6 +2,7 @@ package skills
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -288,6 +289,33 @@ func TestMemoryRegistryRefreshFailure(t *testing.T) {
 	issues := registry.Issues()
 	if len(issues) == 0 || issues[0].Code != IssueRefreshFailed {
 		t.Fatalf("expected refresh failed issue, got %+v", issues)
+	}
+}
+
+func TestMemoryRegistryTreatsMissingRootAsEmptyCatalog(t *testing.T) {
+	t.Parallel()
+
+	root := filepath.Join(t.TempDir(), "missing-skills-root")
+	registry := NewRegistry(NewLocalLoader(root))
+
+	if err := registry.Refresh(context.Background()); err != nil {
+		t.Fatalf("Refresh() error = %v", err)
+	}
+
+	list, err := registry.List(context.Background(), ListInput{})
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(list) != 0 {
+		t.Fatalf("expected empty list, got %+v", list)
+	}
+	if len(registry.Issues()) != 0 {
+		t.Fatalf("expected no issues for missing root, got %+v", registry.Issues())
+	}
+
+	_, _, err = registry.Get(context.Background(), "missing")
+	if !errors.Is(err, ErrSkillNotFound) {
+		t.Fatalf("expected ErrSkillNotFound, got %v", err)
 	}
 }
 

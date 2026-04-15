@@ -54,6 +54,18 @@ func (r *permissionTestRuntime) LoadSession(ctx context.Context, id string) (age
 	return agentsession.Session{}, nil
 }
 
+func (r *permissionTestRuntime) ActivateSessionSkill(ctx context.Context, sessionID string, skillID string) error {
+	return nil
+}
+
+func (r *permissionTestRuntime) DeactivateSessionSkill(ctx context.Context, sessionID string, skillID string) error {
+	return nil
+}
+
+func (r *permissionTestRuntime) ListSessionSkills(ctx context.Context, sessionID string) ([]agentruntime.SessionSkillState, error) {
+	return nil, nil
+}
+
 func newPermissionTestApp(runtime agentruntime.Runtime) *App {
 	input := textarea.New()
 	spin := spinner.New()
