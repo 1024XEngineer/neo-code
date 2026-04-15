@@ -308,6 +308,32 @@ func TestDispatchRPCRequestNormalizeError(t *testing.T) {
 	}
 }
 
+func TestDispatchRPCRequestInvalidIDReturnsNullID(t *testing.T) {
+	server := &Server{}
+	response := server.dispatchRPCRequest(context.Background(), protocol.JSONRPCRequest{
+		JSONRPC: protocol.JSONRPCVersion,
+		ID:      json.RawMessage(`{"bad":"id"}`),
+		Method:  protocol.MethodGatewayPing,
+	}, nil)
+	if response.Error == nil {
+		t.Fatal("expected rpc normalize error")
+	}
+	if response.Error.Code != protocol.JSONRPCCodeInvalidRequest {
+		t.Fatalf("rpc error code = %d, want %d", response.Error.Code, protocol.JSONRPCCodeInvalidRequest)
+	}
+	encoded, err := json.Marshal(response)
+	if err != nil {
+		t.Fatalf("marshal response: %v", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(encoded, &payload); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if id, ok := payload["id"]; !ok || id != nil {
+		t.Fatalf("encoded response id = %#v, want nil", payload["id"])
+	}
+}
+
 func TestDispatchRPCRequestConvertsFrameErrorWithoutPayload(t *testing.T) {
 	server := &Server{}
 	originalHandlers := requestFrameHandlers

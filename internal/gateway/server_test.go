@@ -155,8 +155,8 @@ func TestServerHandleConnectionRejectsOversizedFrame(t *testing.T) {
 	if response.Error == nil {
 		t.Fatal("response rpc error is nil")
 	}
-	if response.Error.Code != protocol.JSONRPCCodeInvalidParams {
-		t.Fatalf("rpc error code = %d, want %d", response.Error.Code, protocol.JSONRPCCodeInvalidParams)
+	if response.Error.Code != protocol.JSONRPCCodeInvalidRequest {
+		t.Fatalf("rpc error code = %d, want %d", response.Error.Code, protocol.JSONRPCCodeInvalidRequest)
 	}
 	if gatewayCode := protocol.GatewayCodeFromJSONRPCError(response.Error); gatewayCode != ErrorCodeInvalidFrame.String() {
 		t.Fatalf("gateway_code = %q, want %q", gatewayCode, ErrorCodeInvalidFrame.String())

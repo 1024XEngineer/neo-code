@@ -279,7 +279,7 @@ func (s *Server) handleConnection(ctx context.Context, conn net.Conn, runtimePor
 				_ = s.writeRPCResponse(conn, encoder, protocol.NewJSONRPCErrorResponse(
 					nil,
 					protocol.NewJSONRPCError(
-						protocol.JSONRPCCodeInvalidParams,
+						protocol.JSONRPCCodeInvalidRequest,
 						fmt.Sprintf("frame exceeds max size %d bytes", MaxFrameSize),
 						protocol.GatewayCodeInvalidFrame,
 					),

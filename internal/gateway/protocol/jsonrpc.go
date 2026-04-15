@@ -91,11 +91,11 @@ func NormalizeJSONRPCRequest(request JSONRPCRequest) (NormalizedRequest, *JSONRP
 	normalized := NormalizedRequest{}
 
 	requestID, idErr := normalizeJSONRPCID(request.ID)
-	normalized.ID = cloneJSONRawMessage(request.ID)
 	normalized.RequestID = requestID
 	if idErr != nil {
 		return normalized, idErr
 	}
+	normalized.ID = cloneJSONRawMessage(request.ID)
 
 	if strings.TrimSpace(request.JSONRPC) != JSONRPCVersion {
 		return normalized, NewJSONRPCError(
@@ -222,17 +222,17 @@ func normalizeJSONRPCID(id json.RawMessage) (string, *JSONRPCError) {
 		)
 	}
 
-	switch typedID := decoded.(type) {
+	switch value := decoded.(type) {
 	case string:
-		typedID = strings.TrimSpace(typedID)
-		if typedID == "" {
+		identifier := strings.TrimSpace(value)
+		if identifier == "" {
 			return "", NewJSONRPCError(
 				JSONRPCCodeInvalidRequest,
 				"invalid field: id",
 				GatewayCodeInvalidFrame,
 			)
 		}
-		return typedID, nil
+		return identifier, nil
 	case float64:
 		identifier := strings.TrimSpace(string(trimmed))
 		if identifier == "" {
@@ -242,7 +242,6 @@ func normalizeJSONRPCID(id json.RawMessage) (string, *JSONRPCError) {
 				GatewayCodeInvalidFrame,
 			)
 		}
-		_ = typedID
 		return identifier, nil
 	default:
 		return "", NewJSONRPCError(

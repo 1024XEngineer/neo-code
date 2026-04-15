@@ -186,6 +186,23 @@ func TestNormalizeJSONRPCRequestErrors(t *testing.T) {
 	}
 }
 
+func TestNormalizeJSONRPCRequestInvalidIDReturnsNullResponseID(t *testing.T) {
+	normalized, rpcErr := NormalizeJSONRPCRequest(JSONRPCRequest{
+		JSONRPC: JSONRPCVersion,
+		ID:      json.RawMessage(`{}`),
+		Method:  MethodGatewayPing,
+	})
+	if rpcErr == nil {
+		t.Fatal("expected rpc error")
+	}
+	if rpcErr.Code != JSONRPCCodeInvalidRequest {
+		t.Fatalf("rpc code = %d, want %d", rpcErr.Code, JSONRPCCodeInvalidRequest)
+	}
+	if normalized.ID != nil {
+		t.Fatalf("normalized id = %s, want nil", string(normalized.ID))
+	}
+}
+
 func TestJSONRPCHelpers(t *testing.T) {
 	response, rpcErr := NewJSONRPCResultResponse(json.RawMessage(`"req-1"`), map[string]string{"message": "ok"})
 	if rpcErr != nil {
