@@ -23,6 +23,7 @@ import (
 	"neo-code/internal/tools"
 	tuistatus "neo-code/internal/tui/core/status"
 	tuiutils "neo-code/internal/tui/core/utils"
+	tuiinfra "neo-code/internal/tui/infra"
 	tuiservices "neo-code/internal/tui/services"
 	tuistate "neo-code/internal/tui/state"
 )
@@ -270,6 +271,14 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, tea.Batch(cmds...)
 		}
 
+		if key.Matches(typed, a.keys.PasteImage) {
+			if err := a.addImageFromClipboard(); err != nil {
+				a.state.StatusText = err.Error()
+				a.appendActivity("multimodal", "Failed to paste image", err.Error(), true)
+			}
+			return a, tea.Batch(cmds...)
+		}
+
 		switch a.focus {
 		case panelSessions:
 			if key.Matches(typed, a.keys.OpenSession) && !a.sessions.SettingFilter() {
@@ -338,6 +347,20 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 				return a, tea.Batch(cmds...)
 			}
 
+			if isImageReferenceInput(input) {
+				if err := a.applyImageReference(input); err != nil {
+					a.state.ExecutionError = err.Error()
+					a.state.StatusText = err.Error()
+					a.appendActivity("multimodal", "Failed to add image reference", err.Error(), true)
+				}
+				a.input.Reset()
+				a.state.InputText = ""
+				a.applyComponentLayout(true)
+				a.refreshCommandMenu()
+				a.resetPasteHeuristics()
+				return a, tea.Batch(cmds...)
+			}
+
 			// 如果不是立即执行的命令，再执行常规的输入重置
 			a.input.Reset()
 			a.state.InputText = ""
@@ -394,6 +417,14 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 				return a, tea.Batch(cmds...)
 			}
 
+			if a.hasImageAttachments() && !a.canSendImageInput() {
+				a.state.ExecutionError = "current model does not support image input"
+				a.state.StatusText = "Model does not support images"
+				a.appendActivity("multimodal", "Image input not supported", fmt.Sprintf("Model %s does not support image input", a.state.CurrentModel), true)
+				a.clearImageAttachments()
+				return a, tea.Batch(cmds...)
+			}
+
 			a.clearActivities()
 			a.clearRunProgress()
 			a.state.IsAgentRunning = true
@@ -402,6 +433,11 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 			a.state.ExecutionError = ""
 			a.state.StatusText = statusThinking
 			a.state.CurrentTool = ""
+
+			if a.hasImageAttachments() {
+				a.appendActivity("multimodal", "Sending message with images", fmt.Sprintf("%d image(s) attached", len(a.pendingImageAttachments)), false)
+			}
+
 			a.activeMessages = append(a.activeMessages, providertypes.Message{Role: roleUser, Content: input})
 			a.rebuildTranscript()
 			runID := fmt.Sprintf("run-%d", a.now().UnixNano())
@@ -615,6 +651,15 @@ func (a App) updatePicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		a.fileBrowser, cmd = a.fileBrowser.Update(msg)
 		if didSelect, path := a.fileBrowser.DidSelectFile(msg); didSelect {
 			a.closePicker()
+			if tuiinfra.IsSupportedImageFormat(path) {
+				if err := a.addImageAttachment(path); err != nil {
+					a.state.ExecutionError = err.Error()
+					a.state.StatusText = err.Error()
+					a.appendActivity("multimodal", "Failed to add image", err.Error(), true)
+					return a, cmd
+				}
+				return a, cmd
+			}
 			if err := a.applyFileReference(path); err != nil {
 				a.state.ExecutionError = err.Error()
 				a.state.StatusText = err.Error()

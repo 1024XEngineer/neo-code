@@ -17,10 +17,14 @@ const (
 	workspaceCommandPrefix = "&"
 	workspaceCommandUsage  = "& <command>"
 	fileReferencePrefix    = "@"
+	imageReferencePrefix   = "@image:"
+	imageReferenceUsage    = "@image:<path>"
 	fileMenuTitle          = "Files"
 	shellMenuTitle         = "Shell"
 	maxWorkspaceFiles      = 4000
 	maxFileSuggestions     = 6
+	maxImageAttachments    = 3
+	imageMaxSizeBytes      = 5 * 1024 * 1024 // 5 MiB
 )
 
 type tokenSelector int
@@ -198,10 +202,18 @@ func currentReferenceToken(input string) (start int, end int, token string, ok b
 	if !ok {
 		return 0, 0, "", false
 	}
-	if !strings.HasPrefix(token, fileReferencePrefix) {
+	if !strings.HasPrefix(token, fileReferencePrefix) && !strings.HasPrefix(token, imageReferencePrefix) {
 		return 0, 0, "", false
 	}
 	return start, end, token, true
+}
+
+func (a *App) applyImageReference(input string) error {
+	path := extractImageReference(input)
+	if path == "" {
+		return fmt.Errorf("invalid image reference")
+	}
+	return a.addImageAttachment(path)
 }
 
 func (a *App) applyFileReference(path string) error {
@@ -245,4 +257,167 @@ func (a *App) applyFileReference(path string) error {
 	a.refreshCommandMenu()
 	a.state.StatusText = fmt.Sprintf("[System] Added file reference %s.", reference)
 	return nil
+}
+
+func isImageReferenceInput(input string) bool {
+	return strings.HasPrefix(strings.TrimSpace(input), imageReferencePrefix)
+}
+
+func extractImageReference(input string) string {
+	trimmed := strings.TrimSpace(input)
+	if !strings.HasPrefix(trimmed, imageReferencePrefix) {
+		return ""
+	}
+	return strings.TrimPrefix(trimmed, imageReferencePrefix)
+}
+
+func (a *App) addImageAttachment(path string) error {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return fmt.Errorf("image path is empty")
+	}
+
+	if len(a.pendingImageAttachments) >= maxImageAttachments {
+		return fmt.Errorf("maximum %d image attachments allowed", maxImageAttachments)
+	}
+
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return fmt.Errorf("invalid image path: %w", err)
+	}
+
+	info, err := tuiinfra.GetFileInfo(absPath)
+	if err != nil {
+		return fmt.Errorf("cannot read image file: %w", err)
+	}
+
+	if info.Size() > imageMaxSizeBytes {
+		return fmt.Errorf("image size exceeds %d MB limit", imageMaxSizeBytes/(1024*1024))
+	}
+
+	mimeType := tuiinfra.DetectImageMimeType(absPath)
+	if mimeType == "" {
+		return fmt.Errorf("unsupported image format")
+	}
+
+	a.pendingImageAttachments = append(a.pendingImageAttachments, pendingImageAttachment{
+		Path:     absPath,
+		MimeType: mimeType,
+		Size:     info.Size(),
+		Name:     filepath.Base(absPath),
+	})
+
+	a.refreshImageAttachmentDisplay()
+	a.state.StatusText = fmt.Sprintf("[System] Added image: %s", filepath.Base(absPath))
+	return nil
+}
+
+func (a *App) removeImageAttachment(index int) error {
+	if index < 0 || index >= len(a.pendingImageAttachments) {
+		return fmt.Errorf("invalid attachment index")
+	}
+
+	removed := a.pendingImageAttachments[index]
+	a.pendingImageAttachments = append(a.pendingImageAttachments[:index], a.pendingImageAttachments[index+1:]...)
+
+	a.refreshImageAttachmentDisplay()
+	a.state.StatusText = fmt.Sprintf("[System] Removed image: %s", removed.Name)
+	return nil
+}
+
+func (a *App) clearImageAttachments() {
+	a.pendingImageAttachments = nil
+}
+
+func (a *App) getImageAttachmentCount() int {
+	return len(a.pendingImageAttachments)
+}
+
+func (a *App) refreshImageAttachmentDisplay() {
+	a.normalizeComposerHeight()
+	a.applyComponentLayout(false)
+}
+
+func (a *App) hasImageAttachments() bool {
+	return len(a.pendingImageAttachments) > 0
+}
+
+func (a *App) getImageAttachments() []pendingImageAttachment {
+	return a.pendingImageAttachments
+}
+
+func (a *App) loadImageAttachmentData(index int) ([]byte, error) {
+	if index < 0 || index >= len(a.pendingImageAttachments) {
+		return nil, fmt.Errorf("invalid attachment index")
+	}
+	return tuiinfra.ReadImageFile(a.pendingImageAttachments[index].Path)
+}
+
+func (a *App) addImageFromClipboard() error {
+	if len(a.pendingImageAttachments) >= maxImageAttachments {
+		return fmt.Errorf("maximum %d image attachments allowed", maxImageAttachments)
+	}
+
+	data, err := tuiinfra.ReadClipboardImage()
+	if err != nil {
+		return fmt.Errorf("failed to read clipboard image: %w", err)
+	}
+
+	if data == nil || len(data) == 0 {
+		return fmt.Errorf("no image in clipboard")
+	}
+
+	if int64(len(data)) > imageMaxSizeBytes {
+		return fmt.Errorf("image size exceeds %d MB limit", imageMaxSizeBytes/(1024*1024))
+	}
+
+	tmpPath, err := tuiinfra.SaveImageToTempFile(data, "paste")
+	if err != nil {
+		return fmt.Errorf("failed to save clipboard image: %w", err)
+	}
+
+	mimeType := tuiinfra.DetectImageMimeType(tmpPath)
+	if mimeType == "" {
+		return fmt.Errorf("unsupported image format from clipboard")
+	}
+
+	a.pendingImageAttachments = append(a.pendingImageAttachments, pendingImageAttachment{
+		Path:     tmpPath,
+		MimeType: mimeType,
+		Size:     int64(len(data)),
+		Name:     "clipboard_image.png",
+	})
+
+	a.refreshImageAttachmentDisplay()
+	a.state.StatusText = "[System] Added image from clipboard"
+	return nil
+}
+
+func (a *App) checkModelImageSupport() bool {
+	if a.currentModelCapabilities.checked {
+		return a.currentModelCapabilities.supportsImageInput
+	}
+
+	models, err := a.providerSvc.ListModelsSnapshot(context.Background())
+	if err != nil {
+		a.currentModelCapabilities.checked = true
+		a.currentModelCapabilities.supportsImageInput = false
+		return false
+	}
+
+	for _, m := range models {
+		if m.ID == a.state.CurrentModel {
+			a.currentModelCapabilities.checked = true
+			a.currentModelCapabilities.supportsImageInput = m.CapabilityHints.ImageInput == "supported"
+			return a.currentModelCapabilities.supportsImageInput
+		}
+	}
+
+	a.currentModelCapabilities.checked = true
+	a.currentModelCapabilities.supportsImageInput = false
+	return false
+}
+
+func (a *App) canSendImageInput() bool {
+	return a.checkModelImageSupport()
 }

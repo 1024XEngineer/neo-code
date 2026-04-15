@@ -19,6 +19,7 @@ type keyMap struct {
 	PageDown    key.Binding
 	Top         key.Binding
 	Bottom      key.Binding
+	PasteImage  key.Binding
 }
 
 func newKeyMap() keyMap {
@@ -86,6 +87,10 @@ func newKeyMap() keyMap {
 		Bottom: key.NewBinding(
 			key.WithKeys("G", "end"),
 			key.WithHelp("Shift+G/End", "Bottom"),
+		),
+		PasteImage: key.NewBinding(
+			key.WithKeys("ctrl+v"),
+			key.WithHelp("Ctrl+V", "Paste image"),
 		),
 	}
 }

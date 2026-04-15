@@ -88,24 +88,38 @@ type appComponents struct {
 
 // appRuntimeState 聚合运行期易变字段，降低 App 顶层字段密度。
 type appRuntimeState struct {
-	codeCopyBlocks    map[int]string
-	pendingCopyID     int
-	deferredEventCmd  tea.Cmd
-	nowFn             func() time.Time
-	lastInputEditAt   time.Time
-	lastPasteLikeAt   time.Time
-	inputBurstStart   time.Time
-	inputBurstCount   int
-	pasteMode         bool
-	activeMessages    []providertypes.Message
-	activities        []tuistate.ActivityEntry
-	fileCandidates    []string
-	modelRefreshID    string
-	focus             panel
-	runProgressValue  float64
-	runProgressKnown  bool
-	runProgressLabel  string
-	pendingPermission *permissionPromptState
+	codeCopyBlocks           map[int]string
+	pendingCopyID            int
+	deferredEventCmd         tea.Cmd
+	nowFn                    func() time.Time
+	lastInputEditAt          time.Time
+	lastPasteLikeAt          time.Time
+	inputBurstStart          time.Time
+	inputBurstCount          int
+	pasteMode                bool
+	activeMessages           []providertypes.Message
+	activities               []tuistate.ActivityEntry
+	fileCandidates           []string
+	modelRefreshID           string
+	focus                    panel
+	runProgressValue         float64
+	runProgressKnown         bool
+	runProgressLabel         string
+	pendingPermission        *permissionPromptState
+	pendingImageAttachments  []pendingImageAttachment
+	currentModelCapabilities modelCapabilityState
+}
+
+type pendingImageAttachment struct {
+	Path     string
+	MimeType string
+	Size     int64
+	Name     string
+}
+
+type modelCapabilityState struct {
+	supportsImageInput bool
+	checked            bool
 }
 
 type App struct {

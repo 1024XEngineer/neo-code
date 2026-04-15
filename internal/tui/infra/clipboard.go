@@ -1,11 +1,66 @@
 package infra
 
-import "github.com/atotto/clipboard"
+import (
+	"os"
 
-// clipboardWriteAll 指向实际剪贴板写入函数，便于在测试中替换。
-var clipboardWriteAll = clipboard.WriteAll
+	"golang.design/x/clipboard"
+)
 
-// CopyText 将文本写入系统剪贴板。
+var clipboardInitialized bool
+
+func initClipboard() error {
+	if clipboardInitialized {
+		return nil
+	}
+	err := clipboard.Init()
+	if err != nil {
+		return err
+	}
+	clipboardInitialized = true
+	return nil
+}
+
 func CopyText(text string) error {
-	return clipboardWriteAll(text)
+	if err := initClipboard(); err != nil {
+		return err
+	}
+	clipboard.Write(clipboard.FmtText, []byte(text))
+	return nil
+}
+
+func ReadClipboardText() (string, error) {
+	if err := initClipboard(); err != nil {
+		return "", err
+	}
+	data := clipboard.Read(clipboard.FmtText)
+	return string(data), nil
+}
+
+func ReadClipboardImage() ([]byte, error) {
+	if err := initClipboard(); err != nil {
+		return nil, err
+	}
+	data := clipboard.Read(clipboard.FmtImage)
+	if len(data) == 0 {
+		return nil, nil
+	}
+	return data, nil
+}
+
+func SaveImageToTempFile(data []byte, prefix string) (string, error) {
+	tmpDir := os.TempDir()
+	tmpFile := tmpDir + "/" + prefix + "_" + "image.png"
+
+	f, err := os.Create(tmpFile)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+
+	_, err = f.Write(data)
+	if err != nil {
+		return "", err
+	}
+
+	return tmpFile, nil
 }
