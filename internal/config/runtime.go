@@ -5,18 +5,21 @@ import (
 )
 
 const (
-	DefaultMaxNoProgressStreak = 3
+	DefaultMaxNoProgressStreak  = 3
+	DefaultMaxRepeatCycleStreak = 3
 )
 
 // RuntimeConfig 定义 runtime 层的可调参数。
 type RuntimeConfig struct {
-	MaxNoProgressStreak int `yaml:"max_no_progress_streak,omitempty"`
+	MaxNoProgressStreak  int `yaml:"max_no_progress_streak,omitempty"`
+	MaxRepeatCycleStreak int `yaml:"max_repeat_cycle_streak,omitempty"`
 }
 
 // defaultRuntimeConfig 返回 runtime 配置的静态默认值。
 func defaultRuntimeConfig() RuntimeConfig {
 	return RuntimeConfig{
-		MaxNoProgressStreak: DefaultMaxNoProgressStreak,
+		MaxNoProgressStreak:  DefaultMaxNoProgressStreak,
+		MaxRepeatCycleStreak: DefaultMaxRepeatCycleStreak,
 	}
 }
 
@@ -33,12 +36,18 @@ func (c *RuntimeConfig) ApplyDefaults(defaults RuntimeConfig) {
 	if c.MaxNoProgressStreak <= 0 {
 		c.MaxNoProgressStreak = defaults.MaxNoProgressStreak
 	}
+	if c.MaxRepeatCycleStreak <= 0 {
+		c.MaxRepeatCycleStreak = defaults.MaxRepeatCycleStreak
+	}
 }
 
 // Validate 校验 runtime 配置是否满足最小约束。
 func (c RuntimeConfig) Validate() error {
 	if c.MaxNoProgressStreak <= 0 {
 		return errors.New("max_no_progress_streak must be greater than 0")
+	}
+	if c.MaxRepeatCycleStreak <= 0 {
+		return errors.New("max_repeat_cycle_streak must be greater than 0")
 	}
 	return nil
 }

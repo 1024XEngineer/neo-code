@@ -4,10 +4,15 @@ import "testing"
 
 func TestApplyProgressEvidenceNoEvidenceIncrementsNoProgress(t *testing.T) {
 	t.Parallel()
-	state := ProgressState{}
-	next := ApplyProgressEvidence(state, nil)
-	if next.LastScore.NoProgressStreak != 1 {
-		t.Fatalf("expected no_progress_streak 1, got %d", next.LastScore.NoProgressStreak)
+	got := ApplyProgressEvidence(ProgressState{}, nil, "")
+	want := ProgressState{
+		LastScore: ProgressScore{
+			NoProgressStreak:  1,
+			RepeatCycleStreak: 0,
+		},
+	}
+	if got != want {
+		t.Fatalf("expected %+v, got %+v", want, got)
 	}
 }
 
@@ -16,14 +21,19 @@ func TestApplyProgressEvidenceOnlyNonDupResetsNoProgressStreak(t *testing.T) {
 	state := ProgressState{
 		LastScore: ProgressScore{NoProgressStreak: 3},
 	}
-	next := ApplyProgressEvidence(state, []ProgressEvidenceRecord{
+	got := ApplyProgressEvidence(state, []ProgressEvidenceRecord{
 		{Kind: EvidenceNewInfoNonDup},
-	})
-	if next.LastScore.NoProgressStreak != 0 {
-		t.Fatalf("expected streak reset to 0, got %d", next.LastScore.NoProgressStreak)
+	}, "sig1")
+	want := ProgressState{
+		LastScore: ProgressScore{
+			ScoreDelta:        1,
+			NoProgressStreak:  0,
+			RepeatCycleStreak: 1,
+		},
+		LastSignature: "sig1",
 	}
-	if next.LastScore.ScoreDelta != 1 {
-		t.Fatalf("expected score_delta 1, got %d", next.LastScore.ScoreDelta)
+	if got != want {
+		t.Fatalf("expected %+v, got %+v", want, got)
 	}
 }
 
@@ -32,11 +42,52 @@ func TestApplyProgressEvidenceMixedResetsNoProgress(t *testing.T) {
 	state := ProgressState{
 		LastScore: ProgressScore{NoProgressStreak: 2},
 	}
-	next := ApplyProgressEvidence(state, []ProgressEvidenceRecord{
+	got := ApplyProgressEvidence(state, []ProgressEvidenceRecord{
 		{Kind: EvidenceNewInfoNonDup},
 		{Kind: ProgressEvidenceKind("other_evidence")},
-	})
-	if next.LastScore.NoProgressStreak != 0 {
-		t.Fatalf("expected streak reset, got %d", next.LastScore.NoProgressStreak)
+	}, "sig1")
+	if got.LastScore.NoProgressStreak != 0 {
+		t.Fatalf("expected streak reset, got %d", got.LastScore.NoProgressStreak)
+	}
+}
+
+func TestApplyProgressEvidenceRepeatCycle(t *testing.T) {
+	t.Parallel()
+	state := ProgressState{
+		LastScore:     ProgressScore{NoProgressStreak: 1, RepeatCycleStreak: 2},
+		LastSignature: "sig1",
+	}
+	got := ApplyProgressEvidence(state, []ProgressEvidenceRecord{
+		{Kind: EvidenceNewInfoNonDup},
+	}, "sig1")
+	want := ProgressState{
+		LastScore: ProgressScore{
+			NoProgressStreak:  2,
+			RepeatCycleStreak: 3,
+		},
+		LastSignature: "sig1",
+	}
+	if got != want {
+		t.Fatalf("expected %+v, got %+v", want, got)
+	}
+}
+
+func TestApplyProgressEvidenceRepeatCycleOnFailureKeepsSignatureTracking(t *testing.T) {
+	t.Parallel()
+	state := ProgressState{
+		LastScore:     ProgressScore{NoProgressStreak: 2, RepeatCycleStreak: 1},
+		LastSignature: "sig1",
+	}
+
+	got := ApplyProgressEvidence(state, nil, "sig1")
+	want := ProgressState{
+		LastScore: ProgressScore{
+			NoProgressStreak:  3,
+			RepeatCycleStreak: 2,
+		},
+		LastSignature: "sig1",
+	}
+	if got != want {
+		t.Fatalf("expected %+v, got %+v", want, got)
 	}
 }

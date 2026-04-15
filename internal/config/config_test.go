@@ -1668,7 +1668,8 @@ func TestValidateSnapshotPropagatesCompactError(t *testing.T) {
 			},
 		},
 		Runtime: RuntimeConfig{
-			MaxNoProgressStreak: 3,
+			MaxNoProgressStreak:  3,
+			MaxRepeatCycleStreak: 3,
 		},
 		Context: ContextConfig{
 			Compact: CompactConfig{

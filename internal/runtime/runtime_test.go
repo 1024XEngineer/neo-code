@@ -1762,7 +1762,7 @@ func TestServiceRunErrorPaths(t *testing.T) {
 								{
 									ID:        fmt.Sprintf("loop-call-%d", i),
 									Name:      "filesystem_edit",
-									Arguments: `{"path":"x"}`,
+									Arguments: fmt.Sprintf(`{"path":"x", "iteration": %d}`, i),
 								},
 							},
 						},
