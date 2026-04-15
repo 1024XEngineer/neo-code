@@ -50,6 +50,27 @@ func TestDispatcherDispatchSuccess(t *testing.T) {
 			t.Errorf("request method = %q, want %q", rpcRequest.Method, protocol.MethodWakeOpenURL)
 			return
 		}
+		if rpcRequest.JSONRPC != protocol.JSONRPCVersion {
+			t.Errorf("request jsonrpc = %q, want %q", rpcRequest.JSONRPC, protocol.JSONRPCVersion)
+			return
+		}
+		if len(bytes.TrimSpace(rpcRequest.ID)) == 0 {
+			t.Error("request id should not be empty")
+			return
+		}
+		var params protocol.WakeIntent
+		if err := json.Unmarshal(rpcRequest.Params, &params); err != nil {
+			t.Errorf("decode request params: %v", err)
+			return
+		}
+		if params.Action != protocol.WakeActionReview {
+			t.Errorf("request params action = %q, want %q", params.Action, protocol.WakeActionReview)
+			return
+		}
+		if got := params.Params["path"]; got != "README.md" {
+			t.Errorf("request params[path] = %q, want %q", got, "README.md")
+			return
+		}
 
 		if err := encoder.Encode(protocol.JSONRPCResponse{
 			JSONRPC: protocol.JSONRPCVersion,

@@ -59,7 +59,7 @@ type JSONRPCRequest struct {
 // JSONRPCResponse 表示控制面输出的 JSON-RPC 响应。
 type JSONRPCResponse struct {
 	JSONRPC string          `json:"jsonrpc"`
-	ID      json.RawMessage `json:"id,omitempty"`
+	ID      json.RawMessage `json:"id"`
 	Result  json.RawMessage `json:"result,omitempty"`
 	Error   *JSONRPCError   `json:"error,omitempty"`
 }

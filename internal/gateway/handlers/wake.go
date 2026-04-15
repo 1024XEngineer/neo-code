@@ -88,6 +88,9 @@ func isSafeReviewPath(path string) bool {
 	if trimmed == "" {
 		return false
 	}
+	if hasWindowsDriveLetterPrefix(trimmed) {
+		return false
+	}
 	if filepath.VolumeName(trimmed) != "" {
 		return false
 	}
@@ -108,6 +111,16 @@ func isSafeReviewPath(path string) bool {
 		return false
 	}
 	return true
+}
+
+// hasWindowsDriveLetterPrefix 检查是否为 Windows 盘符前缀路径（如 C:foo），避免平台差异导致漏拦截。
+func hasWindowsDriveLetterPrefix(path string) bool {
+	trimmed := strings.TrimSpace(path)
+	if len(trimmed) < 2 {
+		return false
+	}
+	drive := trimmed[0]
+	return ((drive >= 'a' && drive <= 'z') || (drive >= 'A' && drive <= 'Z')) && trimmed[1] == ':'
 }
 
 // hasBlockedWindowsPathPrefix 检查是否命中 Windows 底层设备路径前缀，避免绕过常规路径校验。

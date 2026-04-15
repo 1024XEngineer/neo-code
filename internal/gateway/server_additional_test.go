@@ -401,6 +401,9 @@ func TestServerHandleConnectionInvalidJSONFrame(t *testing.T) {
 	if gatewayCode := protocol.GatewayCodeFromJSONRPCError(response.Error); gatewayCode != ErrorCodeInvalidFrame.String() {
 		t.Fatalf("gateway_code = %q, want %q", gatewayCode, ErrorCodeInvalidFrame.String())
 	}
+	if got := strings.TrimSpace(string(response.ID)); got != "null" {
+		t.Fatalf("response id = %q, want %q", got, "null")
+	}
 
 	_ = clientConn.Close()
 	select {

@@ -238,3 +238,22 @@ func TestJSONRPCHelpers(t *testing.T) {
 		t.Fatal("unknown code should map to internal_error")
 	}
 }
+
+func TestNewJSONRPCErrorResponseWithNilIDEncodesNull(t *testing.T) {
+	response := NewJSONRPCErrorResponse(nil, NewJSONRPCError(JSONRPCCodeParseError, "parse error", GatewayCodeInvalidFrame))
+	encoded, err := json.Marshal(response)
+	if err != nil {
+		t.Fatalf("marshal error response: %v", err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(encoded, &payload); err != nil {
+		t.Fatalf("unmarshal encoded response: %v", err)
+	}
+	if _, ok := payload["id"]; !ok {
+		t.Fatal("encoded response should contain id field")
+	}
+	if payload["id"] != nil {
+		t.Fatalf("encoded response id = %#v, want nil", payload["id"])
+	}
+}
