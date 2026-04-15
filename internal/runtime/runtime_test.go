@@ -4297,6 +4297,58 @@ func TestAutoCompactThresholdFallsBackWhenResolverErrors(t *testing.T) {
 	}
 }
 
+func TestAutoCompactThresholdFallsBackWhenResolverReturnsZeroWithoutError(t *testing.T) {
+	t.Parallel()
+
+	service := &Service{}
+	service.SetAutoCompactThresholdResolver(autoCompactThresholdResolverFunc(
+		func(ctx context.Context, cfg config.Config) (int, error) {
+			return 0, nil
+		},
+	))
+
+	cfg := config.Config{
+		Context: config.ContextConfig{
+			AutoCompact: config.AutoCompactConfig{
+				Enabled:                     true,
+				InputTokenThreshold:         0,
+				FallbackInputTokenThreshold: 88000,
+			},
+		},
+	}
+
+	threshold := service.autoCompactThreshold(context.Background(), cfg)
+	if threshold != 88000 {
+		t.Fatalf("expected fallback threshold == 88000, got %d", threshold)
+	}
+}
+
+func TestAutoCompactThresholdFallsBackWhenResolverReturnsNegativeWithoutError(t *testing.T) {
+	t.Parallel()
+
+	service := &Service{}
+	service.SetAutoCompactThresholdResolver(autoCompactThresholdResolverFunc(
+		func(ctx context.Context, cfg config.Config) (int, error) {
+			return -1, nil
+		},
+	))
+
+	cfg := config.Config{
+		Context: config.ContextConfig{
+			AutoCompact: config.AutoCompactConfig{
+				Enabled:                     true,
+				InputTokenThreshold:         0,
+				FallbackInputTokenThreshold: 88000,
+			},
+		},
+	}
+
+	threshold := service.autoCompactThreshold(context.Background(), cfg)
+	if threshold != 88000 {
+		t.Fatalf("expected fallback threshold == 88000, got %d", threshold)
+	}
+}
+
 func TestAutoCompactThresholdImplicitModeWithoutResolverUsesFallback(t *testing.T) {
 	t.Parallel()
 

@@ -359,7 +359,7 @@ func (s *Service) autoCompactThreshold(ctx context.Context, cfg config.Config) i
 	}
 	if s != nil && s.autoCompactThresholdResolver != nil {
 		threshold, err := s.autoCompactThresholdResolver.ResolveAutoCompactThreshold(ctx, cfg)
-		if err == nil {
+		if err == nil && threshold > 0 {
 			return threshold
 		}
 	}

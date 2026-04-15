@@ -83,6 +83,8 @@ context:
 | `context.compact.micro_compact_disabled` | 是否关闭默认启用的 micro compact |
 | `context.auto_compact.enabled` | 是否启用自动压缩 |
 | `context.auto_compact.input_token_threshold` | 自动压缩输入 token 阈值 |
+| `context.auto_compact.reserve_tokens` | 自动阈值推导时预留 token 缓冲（`resolved_threshold = context_window - reserve_tokens`） |
+| `context.auto_compact.fallback_input_token_threshold` | 自动推导失败时使用的保底阈值 |
 
 ### `runtime` 字段
 

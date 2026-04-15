@@ -47,7 +47,7 @@ context:
 - `auto_compact.enabled`
   控制是否启用基于 token 阈值的自动压缩；默认关闭。
 - `auto_compact.input_token_threshold`
-  当会话累计输入 token 数达到此阈值时触发自动压缩；默认 100000。
+  当会话累计输入 token 数达到此阈值时触发自动压缩；默认 `0`（自动推导），推导失败时回退到 `fallback_input_token_threshold`（默认 `100000`）。
 
 ## 自动压缩
 
