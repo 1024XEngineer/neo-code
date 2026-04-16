@@ -177,6 +177,85 @@ func TestStreamRelayCleanupExpiredBindings(t *testing.T) {
 	}
 }
 
+func TestStreamRelayRestartCleanupLoopAfterContextDone(t *testing.T) {
+	relay := NewStreamRelay(StreamRelayOptions{
+		CleanupInterval: 5 * time.Millisecond,
+	})
+
+	firstCtx, firstCancel := context.WithCancel(context.Background())
+	relay.Start(firstCtx, nil)
+	firstCancel()
+
+	waitForStreamRelayState(t, relay, false)
+
+	secondCtx, secondCancel := context.WithCancel(context.Background())
+	relay.Start(secondCtx, nil)
+	waitForStreamRelayState(t, relay, true)
+
+	secondCancel()
+	waitForStreamRelayState(t, relay, false)
+}
+
+func TestStreamRelayBindConnectionLimit(t *testing.T) {
+	relay := NewStreamRelay(StreamRelayOptions{
+		MaxBindingsPerConnection: 1,
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	connectionID := NewConnectionID()
+	connectionCtx := WithConnectionID(ctx, connectionID)
+	connectionCtx = WithStreamRelay(connectionCtx, relay)
+	if err := relay.RegisterConnection(ConnectionRegistration{
+		ConnectionID: connectionID,
+		Channel:      StreamChannelIPC,
+		Context:      connectionCtx,
+		Cancel:       cancel,
+		Write: func(message RelayMessage) error {
+			_ = message
+			return nil
+		},
+		Close: func() {},
+	}); err != nil {
+		t.Fatalf("register connection: %v", err)
+	}
+	defer relay.dropConnection(connectionID)
+
+	if bindErr := relay.BindConnection(connectionID, StreamBinding{
+		SessionID: "session-1",
+		RunID:     "run-1",
+		Channel:   StreamChannelAll,
+		Explicit:  true,
+	}); bindErr != nil {
+		t.Fatalf("first bind: %v", bindErr)
+	}
+
+	bindErr := relay.BindConnection(connectionID, StreamBinding{
+		SessionID: "session-1",
+		RunID:     "run-2",
+		Channel:   StreamChannelAll,
+		Explicit:  true,
+	})
+	if bindErr == nil || bindErr.Code != ErrorCodeInvalidAction.String() {
+		t.Fatalf("second bind error = %#v, want invalid_action", bindErr)
+	}
+}
+
+func waitForStreamRelayState(t *testing.T, relay *StreamRelay, wantStarted bool) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		relay.mu.RLock()
+		started := relay.cleanupStarted
+		relay.mu.RUnlock()
+		if started == wantStarted {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("cleanupStarted state mismatch: want %v", wantStarted)
+}
+
 func registerConnectionForRelayTest(
 	t *testing.T,
 	relay *StreamRelay,

@@ -203,7 +203,6 @@ func (s *NetworkServer) Serve(ctx context.Context, runtimePort RuntimePort) erro
 	if s.relay == nil {
 		s.relay = NewStreamRelay(StreamRelayOptions{Logger: s.logger})
 	}
-	s.relay.Start(ctx, runtimePort)
 
 	listener, err := s.listenFn("tcp", s.listenAddress)
 	if err != nil {
@@ -227,6 +226,7 @@ func (s *NetworkServer) Serve(ctx context.Context, runtimePort RuntimePort) erro
 	s.listenAddress = listener.Addr().String()
 	s.mu.Unlock()
 
+	s.relay.Start(ctx, runtimePort)
 	s.logger.Printf("network listening on %s", listener.Addr().String())
 
 	go func() {
@@ -248,9 +248,14 @@ func (s *NetworkServer) Close(ctx context.Context) error {
 	s.mu.Lock()
 	httpServer := s.server
 	listener := s.listener
+	relay := s.relay
 	s.server = nil
 	s.listener = nil
 	s.mu.Unlock()
+
+	if relay != nil {
+		relay.Stop()
+	}
 
 	if httpServer == nil && listener == nil {
 		return nil

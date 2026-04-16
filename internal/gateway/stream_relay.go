@@ -19,6 +19,8 @@ const (
 	DefaultStreamCleanupInterval = 30 * time.Second
 	// DefaultStreamQueueSize 定义每个连接的默认发送队列容量。
 	DefaultStreamQueueSize = 64
+	// DefaultStreamMaxBindingsPerConnection 定义单连接可维护的最大绑定数，防止路由表被无限放大。
+	DefaultStreamMaxBindingsPerConnection = 128
 )
 
 type relayMessageKind string
@@ -60,6 +62,8 @@ type StreamRelayOptions struct {
 	BindingTTL      time.Duration
 	CleanupInterval time.Duration
 	QueueSize       int
+	// MaxBindingsPerConnection 控制单连接可建立的会话绑定上限。
+	MaxBindingsPerConnection int
 }
 
 type relayConnection struct {
@@ -92,6 +96,7 @@ type StreamRelay struct {
 	bindingTTL      time.Duration
 	cleanupInterval time.Duration
 	queueSize       int
+	maxBindings     int
 
 	mu                     sync.RWMutex
 	connections            map[ConnectionID]*relayConnection
@@ -102,6 +107,8 @@ type StreamRelay struct {
 	eventPumpStarted       bool
 	cleanupLoopCancel      context.CancelFunc
 	runtimeEventLoopCancel context.CancelFunc
+	cleanupLoopGeneration  uint64
+	eventLoopGeneration    uint64
 }
 
 // NewStreamRelay 创建会话路由与流式中继实例。
@@ -126,11 +133,17 @@ func NewStreamRelay(options StreamRelayOptions) *StreamRelay {
 		queueSize = DefaultStreamQueueSize
 	}
 
+	maxBindings := options.MaxBindingsPerConnection
+	if maxBindings <= 0 {
+		maxBindings = DefaultStreamMaxBindingsPerConnection
+	}
+
 	return &StreamRelay{
 		logger:             logger,
 		bindingTTL:         bindingTTL,
 		cleanupInterval:    cleanupInterval,
 		queueSize:          queueSize,
+		maxBindings:        maxBindings,
 		connections:        make(map[ConnectionID]*relayConnection),
 		connectionBindings: make(map[ConnectionID]map[bindingKey]*bindingState),
 		sessionIndex:       make(map[string]map[ConnectionID]struct{}),
@@ -152,14 +165,18 @@ func (r *StreamRelay) Start(ctx context.Context, runtimePort RuntimePort) {
 		cleanupCtx, cleanupCancel := context.WithCancel(ctx)
 		r.cleanupLoopCancel = cleanupCancel
 		r.cleanupStarted = true
-		go r.runCleanupLoop(cleanupCtx)
+		r.cleanupLoopGeneration++
+		cleanupGeneration := r.cleanupLoopGeneration
+		go r.runCleanupLoop(cleanupCtx, cleanupGeneration)
 	}
 
 	if runtimePort != nil && !r.eventPumpStarted {
 		eventCtx, eventCancel := context.WithCancel(ctx)
 		r.runtimeEventLoopCancel = eventCancel
 		r.eventPumpStarted = true
-		go r.runRuntimeEventLoop(eventCtx, runtimePort)
+		r.eventLoopGeneration++
+		eventGeneration := r.eventLoopGeneration
+		go r.runRuntimeEventLoop(eventCtx, runtimePort, eventGeneration)
 	}
 	r.mu.Unlock()
 }
@@ -174,10 +191,12 @@ func (r *StreamRelay) Stop() {
 	cleanupCancel := r.cleanupLoopCancel
 	r.cleanupLoopCancel = nil
 	r.cleanupStarted = false
+	r.cleanupLoopGeneration++
 
 	eventCancel := r.runtimeEventLoopCancel
 	r.runtimeEventLoopCancel = nil
 	r.eventPumpStarted = false
+	r.eventLoopGeneration++
 
 	connectionIDs := make([]ConnectionID, 0, len(r.connections))
 	for connectionID := range r.connections {
@@ -316,6 +335,10 @@ func (r *StreamRelay) BindConnection(connectionID ConnectionID, binding StreamBi
 	if connectionBindingMap == nil {
 		connectionBindingMap = make(map[bindingKey]*bindingState)
 		r.connectionBindings[normalizedConnectionID] = connectionBindingMap
+	}
+	if _, exists := connectionBindingMap[key]; !exists && len(connectionBindingMap) >= r.maxBindings {
+		r.mu.Unlock()
+		return NewFrameError(ErrorCodeInvalidAction, "too many stream bindings for connection")
 	}
 	connectionBindingMap[key] = &bindingState{
 		sessionID: sessionID,
@@ -583,9 +606,17 @@ func (r *StreamRelay) unregisterConnection(connectionID ConnectionID, shouldClos
 }
 
 // runCleanupLoop 周期性扫描并清理过期绑定，避免路由表长期膨胀。
-func (r *StreamRelay) runCleanupLoop(ctx context.Context) {
+func (r *StreamRelay) runCleanupLoop(ctx context.Context, generation uint64) {
 	ticker := time.NewTicker(r.cleanupInterval)
 	defer ticker.Stop()
+	defer func() {
+		r.mu.Lock()
+		if r.cleanupLoopGeneration == generation {
+			r.cleanupLoopCancel = nil
+			r.cleanupStarted = false
+		}
+		r.mu.Unlock()
+	}()
 
 	for {
 		select {
@@ -598,7 +629,16 @@ func (r *StreamRelay) runCleanupLoop(ctx context.Context) {
 }
 
 // runRuntimeEventLoop 订阅运行时事件流并触发中继投递。
-func (r *StreamRelay) runRuntimeEventLoop(ctx context.Context, runtimePort RuntimePort) {
+func (r *StreamRelay) runRuntimeEventLoop(ctx context.Context, runtimePort RuntimePort, generation uint64) {
+	defer func() {
+		r.mu.Lock()
+		if r.eventLoopGeneration == generation {
+			r.runtimeEventLoopCancel = nil
+			r.eventPumpStarted = false
+		}
+		r.mu.Unlock()
+	}()
+
 	if runtimePort == nil {
 		return
 	}
