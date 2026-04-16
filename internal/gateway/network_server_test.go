@@ -55,6 +55,8 @@ func TestOriginAllowlist(t *testing.T) {
 		"http://localhost",
 		"http://127.0.0.1:5173",
 		"http://127.0.0.1",
+		"http://[::1]:3000",
+		"http://[::1]",
 		"app://desktop-client",
 	}
 	for _, origin := range allowed {
@@ -66,7 +68,6 @@ func TestOriginAllowlist(t *testing.T) {
 	disallowed := []string{
 		"",
 		"https://localhost:3000",
-		"http://[::1]:3000",
 		"http://evil.example.com",
 		"file://local",
 	}

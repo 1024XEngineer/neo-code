@@ -67,6 +67,10 @@ go run ./cmd/neocode gateway --http-listen 127.0.0.1:8080
 - `GET /ws`：WebSocket 流式入口（含心跳）
 - `GET /sse`：SSE 流式入口（MVP 默认触发 `gateway.ping`，含心跳）
 
+安全限制：为防止跨站攻击，网关网络面默认开启严格的 Origin 校验。当前仅允许
+`http://localhost`、`http://127.0.0.1`、`http://[::1]` 以及 `app://` 前缀来源连入；
+非允许来源的跨域调用会被拦截并返回 `403`。
+
 URL Scheme 派发骨架命令（EPIC-GW-02A）：
 
 ```bash

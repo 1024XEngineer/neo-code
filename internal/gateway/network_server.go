@@ -647,6 +647,8 @@ func isAllowedControlPlaneOrigin(origin string) bool {
 		normalizedOrigin == "http://localhost",
 		strings.HasPrefix(normalizedOrigin, "http://127.0.0.1:"),
 		normalizedOrigin == "http://127.0.0.1",
+		strings.HasPrefix(normalizedOrigin, "http://[::1]:"),
+		normalizedOrigin == "http://[::1]",
 		strings.HasPrefix(normalizedOrigin, "app://"):
 		return true
 	default:
