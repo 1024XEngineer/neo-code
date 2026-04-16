@@ -95,6 +95,108 @@ func TestDispatchRequestFrameUnsupportedAction(t *testing.T) {
 	}
 }
 
+func TestDispatchRequestFrameBindStream(t *testing.T) {
+	relay := NewStreamRelay(StreamRelayOptions{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	connectionID := NewConnectionID()
+	connectionCtx := WithConnectionID(ctx, connectionID)
+	connectionCtx = WithStreamRelay(connectionCtx, relay)
+
+	if err := relay.RegisterConnection(ConnectionRegistration{
+		ConnectionID: connectionID,
+		Channel:      StreamChannelIPC,
+		Context:      connectionCtx,
+		Cancel:       cancel,
+		Write: func(message RelayMessage) error {
+			_ = message
+			return nil
+		},
+		Close: func() {},
+	}); err != nil {
+		t.Fatalf("register connection: %v", err)
+	}
+	defer relay.dropConnection(connectionID)
+
+	response := dispatchRequestFrame(connectionCtx, MessageFrame{
+		Type:      FrameTypeRequest,
+		Action:    FrameActionBindStream,
+		RequestID: "bind-1",
+		Payload: protocol.BindStreamParams{
+			SessionID: "session-1",
+			RunID:     "run-1",
+			Channel:   "ipc",
+		},
+	}, nil)
+	if response.Type != FrameTypeAck {
+		t.Fatalf("response type = %q, want %q", response.Type, FrameTypeAck)
+	}
+	if response.Action != FrameActionBindStream {
+		t.Fatalf("response action = %q, want %q", response.Action, FrameActionBindStream)
+	}
+	if response.SessionID != "session-1" {
+		t.Fatalf("session_id = %q, want %q", response.SessionID, "session-1")
+	}
+}
+
+func TestHandleBindStreamFrameErrors(t *testing.T) {
+	t.Run("missing relay context", func(t *testing.T) {
+		response := handleBindStreamFrame(context.Background(), MessageFrame{
+			Type:   FrameTypeRequest,
+			Action: FrameActionBindStream,
+			Payload: protocol.BindStreamParams{
+				SessionID: "session-1",
+			},
+		})
+		if response.Type != FrameTypeError {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+		}
+		if response.Error == nil || response.Error.Code != ErrorCodeInternalError.String() {
+			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeInternalError.String())
+		}
+	})
+
+	t.Run("channel mismatch", func(t *testing.T) {
+		relay := NewStreamRelay(StreamRelayOptions{})
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		connectionID := NewConnectionID()
+		connectionCtx := WithConnectionID(ctx, connectionID)
+		connectionCtx = WithStreamRelay(connectionCtx, relay)
+		if err := relay.RegisterConnection(ConnectionRegistration{
+			ConnectionID: connectionID,
+			Channel:      StreamChannelWS,
+			Context:      connectionCtx,
+			Cancel:       cancel,
+			Write: func(message RelayMessage) error {
+				_ = message
+				return nil
+			},
+			Close: func() {},
+		}); err != nil {
+			t.Fatalf("register connection: %v", err)
+		}
+		defer relay.dropConnection(connectionID)
+
+		response := handleBindStreamFrame(connectionCtx, MessageFrame{
+			Type:   FrameTypeRequest,
+			Action: FrameActionBindStream,
+			Payload: protocol.BindStreamParams{
+				SessionID: "session-1",
+				Channel:   "ipc",
+			},
+		})
+		if response.Type != FrameTypeError {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+		}
+		if response.Error == nil || response.Error.Code != ErrorCodeInvalidAction.String() {
+			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeInvalidAction.String())
+		}
+	})
+}
+
 func TestDecodeWakeIntentAdditionalBranches(t *testing.T) {
 	t.Run("nil payload", func(t *testing.T) {
 		_, err := decodeWakeIntent(nil)

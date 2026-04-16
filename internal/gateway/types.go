@@ -20,6 +20,8 @@ type FrameAction string
 const (
 	// FrameActionPing 表示探活动作，用于验证网关可用性。
 	FrameActionPing FrameAction = "ping"
+	// FrameActionBindStream 表示声明流式事件订阅绑定。
+	FrameActionBindStream FrameAction = "bind_stream"
 	// FrameActionRun 表示发起一次运行。
 	FrameActionRun FrameAction = "run"
 	// FrameActionCompact 表示触发一次手动压缩。

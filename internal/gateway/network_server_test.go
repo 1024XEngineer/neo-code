@@ -574,6 +574,81 @@ func TestNetworkServerCloseInterruptsStreams(t *testing.T) {
 	}
 }
 
+func TestNetworkServerStreamsReceiveGatewayEventNotification(t *testing.T) {
+	eventCh := make(chan RuntimeEvent, 2)
+	runtimePort := &runtimePortEventStub{events: eventCh}
+
+	server := newTestNetworkServer(t, NetworkServerOptions{})
+	testContext, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	serveDone := make(chan error, 1)
+	go func() {
+		serveDone <- server.Serve(testContext, runtimePort)
+	}()
+	t.Cleanup(func() {
+		_ = server.Close(context.Background())
+		select {
+		case <-serveDone:
+		case <-time.After(2 * time.Second):
+			t.Fatal("network serve goroutine did not exit")
+		}
+	})
+
+	listenAddress := waitForNetworkAddress(t, server)
+	wsConn, err := websocket.Dial("ws://"+listenAddress+"/ws", "", "http://localhost:3000")
+	if err != nil {
+		t.Fatalf("dial websocket: %v", err)
+	}
+	t.Cleanup(func() { _ = wsConn.Close() })
+
+	if err := websocket.Message.Send(wsConn, `{"jsonrpc":"2.0","id":"bind-ws-1","method":"gateway.bindStream","params":{"session_id":"session-relay","run_id":"run-relay","channel":"ws"}}`); err != nil {
+		t.Fatalf("send bindStream request: %v", err)
+	}
+	bindAck := receiveWSAckFrame(t, wsConn)
+	if bindAck.Action != FrameActionBindStream {
+		t.Fatalf("bind action = %q, want %q", bindAck.Action, FrameActionBindStream)
+	}
+
+	sseRequest, err := http.NewRequest(
+		http.MethodGet,
+		"http://"+listenAddress+"/sse?method=gateway.ping&id=sse-relay-1&session_id=session-relay&run_id=run-relay",
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("new sse request: %v", err)
+	}
+	sseRequest.Header.Set("Origin", "http://localhost:3000")
+	sseResponse, err := http.DefaultClient.Do(sseRequest)
+	if err != nil {
+		t.Fatalf("open sse stream: %v", err)
+	}
+	t.Cleanup(func() { _ = sseResponse.Body.Close() })
+	if sseResponse.StatusCode != http.StatusOK {
+		t.Fatalf("sse status = %d, want %d", sseResponse.StatusCode, http.StatusOK)
+	}
+	_ = readSSEResultFrame(t, sseResponse.Body)
+
+	eventCh <- RuntimeEvent{
+		Type:      RuntimeEventTypeRunProgress,
+		SessionID: "session-relay",
+		RunID:     "run-relay",
+		Payload: map[string]string{
+			"chunk": "hello",
+		},
+	}
+
+	wsEvent := receiveWSGatewayEventNotification(t, wsConn)
+	if wsEvent.SessionID != "session-relay" || wsEvent.RunID != "run-relay" {
+		t.Fatalf("ws event frame mismatch: %#v", wsEvent)
+	}
+
+	sseEvent := readSSEGatewayEventFrame(t, sseResponse.Body)
+	if sseEvent.SessionID != "session-relay" || sseEvent.RunID != "run-relay" {
+		t.Fatalf("sse event frame mismatch: %#v", sseEvent)
+	}
+}
+
 // newTestNetworkServer 创建默认测试网络服务实例，统一收敛测试参数。
 func newTestNetworkServer(t *testing.T, overrides NetworkServerOptions) *NetworkServer {
 	t.Helper()
@@ -690,6 +765,87 @@ func readSSEResultFrame(t *testing.T, body io.Reader) MessageFrame {
 				}
 				return resultFrame
 			}
+		}
+	}
+}
+
+// receiveWSGatewayEventNotification 读取 WS 消息直到拿到 gateway.event 通知并返回其内层事件帧。
+func receiveWSGatewayEventNotification(t *testing.T, wsConn *websocket.Conn) MessageFrame {
+	t.Helper()
+	_ = wsConn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	for attempt := 0; attempt < 20; attempt++ {
+		var rawResponse string
+		if err := websocket.Message.Receive(wsConn, &rawResponse); err != nil {
+			t.Fatalf("receive websocket message: %v", err)
+		}
+
+		var envelope struct {
+			JSONRPC string          `json:"jsonrpc"`
+			Method  string          `json:"method"`
+			Params  json.RawMessage `json:"params"`
+		}
+		if err := json.Unmarshal([]byte(rawResponse), &envelope); err != nil {
+			continue
+		}
+		if envelope.Method != protocol.MethodGatewayEvent {
+			continue
+		}
+		var eventFrame MessageFrame
+		if err := json.Unmarshal(envelope.Params, &eventFrame); err != nil {
+			t.Fatalf("decode gateway.event params: %v", err)
+		}
+		return eventFrame
+	}
+	t.Fatal("did not receive websocket gateway.event notification")
+	return MessageFrame{}
+}
+
+// readSSEGatewayEventFrame 读取 SSE 流直到捕获 gateway.event 事件并解析其内层事件帧。
+func readSSEGatewayEventFrame(t *testing.T, body io.Reader) MessageFrame {
+	t.Helper()
+	reader := bufio.NewReader(body)
+	timeout := time.After(3 * time.Second)
+	currentEvent := ""
+
+	for {
+		select {
+		case <-timeout:
+			t.Fatal("timed out waiting for sse gateway.event")
+		default:
+			line, err := reader.ReadString('\n')
+			if err != nil {
+				t.Fatalf("read sse line: %v", err)
+			}
+			trimmed := strings.TrimSpace(line)
+			if trimmed == "" {
+				continue
+			}
+			if strings.HasPrefix(trimmed, "event:") {
+				currentEvent = strings.TrimSpace(strings.TrimPrefix(trimmed, "event:"))
+				continue
+			}
+			if currentEvent != protocol.MethodGatewayEvent || !strings.HasPrefix(trimmed, "data:") {
+				continue
+			}
+
+			rawData := strings.TrimSpace(strings.TrimPrefix(trimmed, "data:"))
+			var notification struct {
+				JSONRPC string          `json:"jsonrpc"`
+				Method  string          `json:"method"`
+				Params  json.RawMessage `json:"params"`
+			}
+			if err := json.Unmarshal([]byte(rawData), &notification); err != nil {
+				t.Fatalf("decode sse gateway.event notification: %v", err)
+			}
+			if notification.Method != protocol.MethodGatewayEvent {
+				continue
+			}
+
+			var eventFrame MessageFrame
+			if err := json.Unmarshal(notification.Params, &eventFrame); err != nil {
+				t.Fatalf("decode sse gateway.event params: %v", err)
+			}
+			return eventFrame
 		}
 	}
 }
