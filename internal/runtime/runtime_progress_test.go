@@ -67,8 +67,8 @@ func TestProgressStreakStopsRun(t *testing.T) {
 	)
 
 	input := UserInput{
-		RunID:   "run-progress",
-		Content: "trigger error loop",
+		RunID: "run-progress",
+		Parts: []providertypes.ContentPart{providertypes.NewTextPart("trigger error loop")},
 	}
 
 	err := service.Run(context.Background(), input)
@@ -147,8 +147,8 @@ func TestProgressEvidenceResetsNoProgressStreak(t *testing.T) {
 	)
 
 	err := service.Run(context.Background(), UserInput{
-		RunID:   "run-progress-reset",
-		Content: "trigger mixed progress loop",
+		RunID: "run-progress-reset",
+		Parts: []providertypes.ContentPart{providertypes.NewTextPart("trigger mixed progress loop")},
 	})
 	if err != nil {
 		t.Fatalf("expected run to finish successfully, got %v", err)
@@ -216,8 +216,8 @@ func TestRepeatCycleStreakStopsRunAndInjectsReminder(t *testing.T) {
 	)
 
 	err := service.Run(context.Background(), UserInput{
-		RunID:   "run-repeat-streak",
-		Content: "trigger repeat loop",
+		RunID: "run-repeat-streak",
+		Parts: []providertypes.ContentPart{providertypes.NewTextPart("trigger repeat loop")},
 	})
 	if err == nil {
 		t.Fatal("expected repeat cycle limit error, got nil")
@@ -288,8 +288,8 @@ func TestRepeatCycleStreakCountsFailedToolCalls(t *testing.T) {
 	)
 
 	err := service.Run(context.Background(), UserInput{
-		RunID:   "run-repeat-fail-streak",
-		Content: "trigger repeat fail loop",
+		RunID: "run-repeat-fail-streak",
+		Parts: []providertypes.ContentPart{providertypes.NewTextPart("trigger repeat fail loop")},
 	})
 	if !errors.Is(err, ErrRepeatCycleLimit) {
 		t.Fatalf("expected ErrRepeatCycleLimit, got %v", err)

@@ -54,6 +54,17 @@ func (s *stubMemoExtractor) Schedule(_ string, messages []providertypes.Message)
 	}
 }
 
+func TestValidateUserInputPartsAcceptsPureImage(t *testing.T) {
+	t.Parallel()
+
+	parts := []providertypes.ContentPart{
+		providertypes.NewRemoteImagePart("https://example.com/image.png"),
+	}
+	if err := validateUserInputParts(parts); err != nil {
+		t.Fatalf("validateUserInputParts() error = %v", err)
+	}
+}
+
 func TestRunStateNilReceiverNoops(t *testing.T) {
 	t.Parallel()
 
@@ -200,8 +211,8 @@ func TestAppendToolMessageAndSavePreservesMetadataOnlySuccessResult(t *testing.T
 	}
 
 	msg := state.session.Messages[0]
-	if msg.Content != "" {
-		t.Fatalf("expected metadata-only success result to keep empty content, got %q", msg.Content)
+	if renderPartsForTest(msg.Parts) != "" {
+		t.Fatalf("expected metadata-only success result to keep empty content, got %q", renderPartsForTest(msg.Parts))
 	}
 	if msg.ToolMetadata["tool_name"] != "filesystem_read_file" || msg.ToolMetadata["path"] != "README.md" {
 		t.Fatalf("expected metadata-only success result to keep sanitized metadata, got %+v", msg.ToolMetadata)
@@ -228,8 +239,8 @@ func TestAppendToolMessageAndSaveNormalizesSemanticallyEmptySuccessResult(t *tes
 	}
 
 	msg := state.session.Messages[0]
-	if msg.Content != "ok" {
-		t.Fatalf("expected empty success result to be normalized to ok, got %q", msg.Content)
+	if renderPartsForTest(msg.Parts) != "ok" {
+		t.Fatalf("expected empty success result to be normalized to ok, got %q", renderPartsForTest(msg.Parts))
 	}
 	if msg.ToolMetadata["tool_name"] != "filesystem_read_file" {
 		t.Fatalf("expected tool_name metadata to be preserved after normalization, got %+v", msg.ToolMetadata)
@@ -259,8 +270,8 @@ func TestAppendToolMessageAndSaveNormalizesToolNameOnlyMetadataSuccessResult(t *
 	}
 
 	msg := state.session.Messages[0]
-	if msg.Content != "ok" {
-		t.Fatalf("expected tool_name-only metadata success to normalize content to ok, got %q", msg.Content)
+	if renderPartsForTest(msg.Parts) != "ok" {
+		t.Fatalf("expected tool_name-only metadata success to normalize content to ok, got %q", renderPartsForTest(msg.Parts))
 	}
 	if len(msg.ToolMetadata) != 1 || msg.ToolMetadata["tool_name"] != "filesystem_read_file" {
 		t.Fatalf("expected only tool_name metadata to remain, got %+v", msg.ToolMetadata)
@@ -391,8 +402,8 @@ func TestExecuteAssistantToolCallsFillsErrorContent(t *testing.T) {
 	if len(state.session.Messages) != 1 {
 		t.Fatalf("expected one tool message, got %d", len(state.session.Messages))
 	}
-	if state.session.Messages[0].Content != toolErr.Error() {
-		t.Fatalf("expected tool error content fallback, got %q", state.session.Messages[0].Content)
+	if renderPartsForTest(state.session.Messages[0].Parts) != toolErr.Error() {
+		t.Fatalf("expected tool error content fallback, got %q", renderPartsForTest(state.session.Messages[0].Parts))
 	}
 }
 
@@ -458,7 +469,7 @@ func TestSetMemoExtractorAndRunTriggersExtraction(t *testing.T) {
 	extractor := &stubMemoExtractor{doneCh: make(chan struct{}, 1)}
 	service.SetMemoExtractor(extractor)
 
-	if err := service.Run(context.Background(), UserInput{RunID: "run-memo-extract", Content: "hello"}); err != nil {
+	if err := service.Run(context.Background(), UserInput{RunID: "run-memo-extract", Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")}}); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
 

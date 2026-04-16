@@ -72,14 +72,31 @@ func RetainedStartForKeepRecentMessages(spans []MessageSpan, keepMessages int) i
 	return retainedStart
 }
 
-// lastExplicitUserMessageIndex 返回最后一条非空用户消息的位置，用于保护最近明确指令。
+// lastExplicitUserMessageIndex 返回最后一条显式用户消息的位置，用于保护最近明确指令。
 func lastExplicitUserMessageIndex(messages []providertypes.Message) int {
 	for index := len(messages) - 1; index >= 0; index-- {
-		if messages[index].Role == providertypes.RoleUser && strings.TrimSpace(messages[index].Content) != "" {
+		if messages[index].Role == providertypes.RoleUser && hasExplicitUserInput(messages[index].Parts) {
 			return index
 		}
 	}
 	return -1
+}
+
+// hasExplicitUserInput 判断用户消息是否包含显式输入（非空文本或图片）。
+func hasExplicitUserInput(parts []providertypes.ContentPart) bool {
+	for _, part := range parts {
+		switch part.Kind {
+		case providertypes.ContentPartText:
+			if strings.TrimSpace(part.Text) != "" {
+				return true
+			}
+		case providertypes.ContentPartImage:
+			if part.Image != nil {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // markSpanProtected 将包含目标消息的分段标记为受保护分段。

@@ -182,8 +182,8 @@ func TestRenderUserMessageKeepsTagAndBodyRightAligned(t *testing.T) {
 	app, _ := newTestApp(t)
 
 	block, _ := app.renderMessageBlockWithCopy(providertypes.Message{
-		Role:    roleUser,
-		Content: "hello right aligned",
+		Role:  roleUser,
+		Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello right aligned")},
 	}, 72, 1)
 
 	plain := copyCodeANSIPattern.ReplaceAllString(block, "")
@@ -452,12 +452,18 @@ func TestRenderMessageContentWithCopyCodeFallbackAndEmptySegments(t *testing.T) 
 func TestRenderMessageBlockWithCopyExtraBranches(t *testing.T) {
 	app, _ := newTestApp(t)
 
-	eventBlock, _ := app.renderMessageBlockWithCopy(providertypes.Message{Role: roleEvent, Content: "event"}, 50, 1)
+	eventBlock, _ := app.renderMessageBlockWithCopy(providertypes.Message{
+		Role:  roleEvent,
+		Parts: []providertypes.ContentPart{providertypes.NewTextPart("event")},
+	}, 50, 1)
 	if !strings.Contains(eventBlock, "event") {
 		t.Fatalf("expected event block")
 	}
 
-	toolBlock, bindings := app.renderMessageBlockWithCopy(providertypes.Message{Role: roleTool, Content: "tool"}, 50, 1)
+	toolBlock, bindings := app.renderMessageBlockWithCopy(providertypes.Message{
+		Role:  roleTool,
+		Parts: []providertypes.ContentPart{providertypes.NewTextPart("tool")},
+	}, 50, 1)
 	if toolBlock != "" || bindings != nil {
 		t.Fatalf("expected tool role to be skipped")
 	}
@@ -474,8 +480,8 @@ func TestRenderMessageBlockWithCopyExtraBranches(t *testing.T) {
 	}
 
 	userBlock, _ := app.renderMessageBlockWithCopy(providertypes.Message{
-		Role:    roleUser,
-		Content: "hello",
+		Role:  roleUser,
+		Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")},
 	}, 10, 1)
 	if strings.TrimSpace(userBlock) == "" {
 		t.Fatalf("expected user message block")

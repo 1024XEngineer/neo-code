@@ -45,7 +45,7 @@ func TestRunCompactForSessionPolicyBranches(t *testing.T) {
 	t.Parallel()
 
 	session := newRuntimeSession("session-compact-policy")
-	session.Messages = []providertypes.Message{{Role: providertypes.RoleUser, Content: "before"}}
+	session.Messages = []providertypes.Message{{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("before")}}}
 
 	service := &Service{
 		events: make(chan RuntimeEvent, 32),
@@ -77,7 +77,7 @@ func TestRunCompactForSessionSaveErrorPolicyBranches(t *testing.T) {
 
 	baseStore := newMemoryStore()
 	session := newRuntimeSession("session-compact-save-error")
-	session.Messages = []providertypes.Message{{Role: providertypes.RoleUser, Content: "before"}}
+	session.Messages = []providertypes.Message{{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("before")}}}
 	session.TaskState.Goal = "before-goal"
 	session.TokenInputTotal = 11
 	session.TokenOutputTotal = 22
@@ -91,7 +91,7 @@ func TestRunCompactForSessionSaveErrorPolicyBranches(t *testing.T) {
 		events:       make(chan RuntimeEvent, 16),
 		compactRunner: &stubCompactRunner{result: contextcompact.Result{
 			Applied:  true,
-			Messages: []providertypes.Message{{Role: providertypes.RoleAssistant, Content: "after"}},
+			Messages: []providertypes.Message{{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("after")}}},
 			TaskState: agentsession.TaskState{
 				Goal: "after-goal",
 			},
@@ -102,7 +102,7 @@ func TestRunCompactForSessionSaveErrorPolicyBranches(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected strict mode save error")
 	}
-	if strictSession.Messages[0].Content != "before" {
+	if renderPartsForTest(strictSession.Messages[0].Parts) != "before" {
 		t.Fatalf("expected strict mode to rollback messages, got %+v", strictSession.Messages)
 	}
 	if strictSession.TaskState.Goal != "before-goal" {
@@ -123,7 +123,7 @@ func TestRunCompactForSessionSaveErrorPolicyBranches(t *testing.T) {
 	if bestEffortResult.Applied {
 		t.Fatalf("expected empty compact result on best effort save failure")
 	}
-	if bestEffortSession.Messages[0].Content != "before" {
+	if renderPartsForTest(bestEffortSession.Messages[0].Parts) != "before" {
 		t.Fatalf("expected best effort rollback messages, got %+v", bestEffortSession.Messages)
 	}
 	if bestEffortSession.TaskState.Goal != "before-goal" {

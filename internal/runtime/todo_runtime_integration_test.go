@@ -35,8 +35,8 @@ func TestServiceRunTodoWriteToolCall(t *testing.T) {
 			},
 			{
 				Message: providertypes.Message{
-					Role:    providertypes.RoleAssistant,
-					Content: "done",
+					Role:  providertypes.RoleAssistant,
+					Parts: []providertypes.ContentPart{providertypes.NewTextPart("done")},
 				},
 				FinishReason: "stop",
 			},
@@ -52,8 +52,8 @@ func TestServiceRunTodoWriteToolCall(t *testing.T) {
 	)
 
 	if err := service.Run(context.Background(), UserInput{
-		RunID:   "run-todo-tool",
-		Content: "请记录一个待办并继续",
+		RunID: "run-todo-tool",
+		Parts: []providertypes.ContentPart{providertypes.NewTextPart("请记录一个待办并继续")},
 	}); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}

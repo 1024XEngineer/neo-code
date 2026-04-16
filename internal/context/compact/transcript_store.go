@@ -87,7 +87,7 @@ func (s transcriptStore) Save(messages []providertypes.Message, sessionID string
 			Index:      i,
 			Timestamp:  now,
 			Role:       message.Role,
-			Content:    message.Content,
+			Content:    renderTranscriptParts(message.Parts),
 			ToolCalls:  append([]providertypes.ToolCall(nil), message.ToolCalls...),
 			ToolCallID: message.ToolCallID,
 			IsError:    message.IsError,

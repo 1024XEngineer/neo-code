@@ -43,8 +43,8 @@ func TestLLMExtractorExtractValidJSON(t *testing.T) {
 	}
 
 	entries, err := extractor.Extract(context.Background(), []providertypes.Message{
-		{Role: providertypes.RoleUser, Content: "以后默认按 Go 惯用风格写。"},
-		{Role: providertypes.RoleAssistant, Content: "收到。"},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("以后默认按 Go 惯用风格写。")}},
+		{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("收到。")}},
 	})
 	if err != nil {
 		t.Fatalf("Extract() error = %v", err)
@@ -86,7 +86,7 @@ func TestLLMExtractorExtractEmptyResult(t *testing.T) {
 	extractor := NewLLMExtractor(&stubTextGenerator{response: `[]`})
 
 	entries, err := extractor.Extract(context.Background(), []providertypes.Message{
-		{Role: providertypes.RoleUser, Content: "这轮没有需要记住的内容。"},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("这轮没有需要记住的内容。")}},
 	})
 	if err != nil {
 		t.Fatalf("Extract() error = %v", err)
@@ -102,7 +102,7 @@ func TestLLMExtractorExtractNoUserMessage(t *testing.T) {
 	extractor := NewLLMExtractor(generator)
 
 	entries, err := extractor.Extract(context.Background(), []providertypes.Message{
-		{Role: providertypes.RoleAssistant, Content: "只有助手消息。"},
+		{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("只有助手消息。")}},
 	})
 	if err != nil {
 		t.Fatalf("Extract() error = %v", err)
@@ -133,7 +133,7 @@ func TestLLMExtractorExtractInvalidJSON(t *testing.T) {
 	extractor := NewLLMExtractor(&stubTextGenerator{response: `[{invalid json}]`})
 
 	_, err := extractor.Extract(context.Background(), []providertypes.Message{
-		{Role: providertypes.RoleUser, Content: "记住这个。"},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("记住这个。")}},
 	})
 	if err == nil {
 		t.Fatal("expected invalid JSON error")
@@ -147,7 +147,7 @@ func TestLLMExtractorExtractToleratesWrappedJSON(t *testing.T) {
 	})
 
 	entries, err := extractor.Extract(context.Background(), []providertypes.Message{
-		{Role: providertypes.RoleUser, Content: "以后改完先跑测试。"},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("以后改完先跑测试。")}},
 	})
 	if err != nil {
 		t.Fatalf("Extract() error = %v", err)
@@ -168,7 +168,7 @@ func TestLLMExtractorExtractFiltersInvalidEntries(t *testing.T) {
 	})
 
 	entries, err := extractor.Extract(context.Background(), []providertypes.Message{
-		{Role: providertypes.RoleUser, Content: "参考文档在 docs/runtime-provider-event-flow.md。"},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("参考文档在 docs/runtime-provider-event-flow.md。")}},
 	})
 	if err != nil {
 		t.Fatalf("Extract() error = %v", err)
@@ -186,7 +186,7 @@ func TestLLMExtractorExtractCancelledContext(t *testing.T) {
 	cancel()
 
 	_, err := extractor.Extract(ctx, []providertypes.Message{
-		{Role: providertypes.RoleUser, Content: "记住这个。"},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("记住这个。")}},
 	})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("Extract() error = %v, want context.Canceled", err)
@@ -204,13 +204,13 @@ func TestLLMExtractorExtractUsesRecentNonToolMessages(t *testing.T) {
 	messages := make([]providertypes.Message, 0, 16)
 	for index := 0; index < 12; index++ {
 		messages = append(messages, providertypes.Message{
-			Role:    providertypes.RoleUser,
-			Content: "user-" + string(rune('a'+index)),
+			Role:  providertypes.RoleUser,
+			Parts: []providertypes.ContentPart{providertypes.NewTextPart("user-" + string(rune('a'+index)))},
 		})
 		if index%3 == 0 {
 			messages = append(messages, providertypes.Message{
-				Role:    providertypes.RoleTool,
-				Content: "tool-" + string(rune('a'+index)),
+				Role:  providertypes.RoleTool,
+				Parts: []providertypes.ContentPart{providertypes.NewTextPart("tool-" + string(rune('a'+index)))},
 			})
 		}
 	}
@@ -227,8 +227,11 @@ func TestLLMExtractorExtractUsesRecentNonToolMessages(t *testing.T) {
 			t.Fatalf("unexpected tool message in extraction context: %#v", message)
 		}
 	}
-	if generator.messages[0].Content != "user-c" || generator.messages[9].Content != "user-l" {
-		t.Fatalf("unexpected recent window: first=%q last=%q", generator.messages[0].Content, generator.messages[9].Content)
+	if renderMemoParts(generator.messages[0].Parts) != "user-c" ||
+		renderMemoParts(generator.messages[9].Parts) != "user-l" {
+		t.Fatalf("unexpected recent window: first=%q last=%q",
+			renderMemoParts(generator.messages[0].Parts),
+			renderMemoParts(generator.messages[9].Parts))
 	}
 }
 
@@ -237,14 +240,14 @@ func TestLLMExtractorExtractDropsIncompleteToolCallSpan(t *testing.T) {
 	extractor := NewLLMExtractor(generator)
 
 	_, err := extractor.Extract(context.Background(), []providertypes.Message{
-		{Role: providertypes.RoleUser, Content: "first"},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("first")}},
 		{
 			Role: providertypes.RoleAssistant,
 			ToolCalls: []providertypes.ToolCall{
 				{ID: "call_1", Name: "filesystem_read_file", Arguments: `{}`},
 			},
 		},
-		{Role: providertypes.RoleUser, Content: "second"},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("second")}},
 	})
 	if err != nil {
 		t.Fatalf("Extract() error = %v", err)
@@ -264,7 +267,7 @@ func TestLLMExtractorExtractKeepsProjectedToolCallSpan(t *testing.T) {
 	extractor := NewLLMExtractor(generator)
 
 	_, err := extractor.Extract(context.Background(), []providertypes.Message{
-		{Role: providertypes.RoleUser, Content: "remember this"},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("remember this")}},
 		{
 			Role: providertypes.RoleAssistant,
 			ToolCalls: []providertypes.ToolCall{
@@ -274,7 +277,7 @@ func TestLLMExtractorExtractKeepsProjectedToolCallSpan(t *testing.T) {
 		{
 			Role:         providertypes.RoleTool,
 			ToolCallID:   "call_1",
-			Content:      "README body",
+			Parts:        []providertypes.ContentPart{providertypes.NewTextPart("README body")},
 			ToolMetadata: map[string]string{"tool_name": "filesystem_read_file", "path": "README.md"},
 		},
 	})
@@ -291,8 +294,9 @@ func TestLLMExtractorExtractKeepsProjectedToolCallSpan(t *testing.T) {
 	if toolMessage.Role != providertypes.RoleTool {
 		t.Fatalf("expected projected tool message, got %#v", toolMessage)
 	}
-	if !strings.Contains(toolMessage.Content, "tool result") || !strings.Contains(toolMessage.Content, "tool: filesystem_read_file") {
-		t.Fatalf("expected projected tool text, got %q", toolMessage.Content)
+	toolText := renderMemoParts(toolMessage.Parts)
+	if !strings.Contains(toolText, "tool result") || !strings.Contains(toolText, "tool: filesystem_read_file") {
+		t.Fatalf("expected projected tool text, got %q", toolText)
 	}
 	if toolMessage.ToolMetadata != nil {
 		t.Fatalf("expected projected tool metadata to be cleared, got %#v", toolMessage.ToolMetadata)
@@ -304,7 +308,7 @@ func TestLLMExtractorExtractKeepsMetadataOnlyToolCallSpan(t *testing.T) {
 	extractor := NewLLMExtractor(generator)
 
 	_, err := extractor.Extract(context.Background(), []providertypes.Message{
-		{Role: providertypes.RoleUser, Content: "remember this"},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("remember this")}},
 		{
 			Role: providertypes.RoleAssistant,
 			ToolCalls: []providertypes.ToolCall{
@@ -314,7 +318,6 @@ func TestLLMExtractorExtractKeepsMetadataOnlyToolCallSpan(t *testing.T) {
 		{
 			Role:         providertypes.RoleTool,
 			ToolCallID:   "call_1",
-			Content:      "",
 			ToolMetadata: map[string]string{"tool_name": "filesystem_read_file", "path": "README.md"},
 		},
 	})
@@ -328,13 +331,14 @@ func TestLLMExtractorExtractKeepsMetadataOnlyToolCallSpan(t *testing.T) {
 	if toolMessage.Role != providertypes.RoleTool {
 		t.Fatalf("expected projected tool message, got %#v", toolMessage)
 	}
-	if !strings.Contains(toolMessage.Content, "tool result") ||
-		!strings.Contains(toolMessage.Content, "tool: filesystem_read_file") ||
-		!strings.Contains(toolMessage.Content, "meta.path: README.md") {
-		t.Fatalf("expected metadata-only tool text, got %q", toolMessage.Content)
+	toolText := renderMemoParts(toolMessage.Parts)
+	if !strings.Contains(toolText, "tool result") ||
+		!strings.Contains(toolText, "tool: filesystem_read_file") ||
+		!strings.Contains(toolText, "meta.path: README.md") {
+		t.Fatalf("expected metadata-only tool text, got %q", toolText)
 	}
-	if strings.Contains(toolMessage.Content, "content:\n") {
-		t.Fatalf("expected metadata-only projection to omit content section, got %q", toolMessage.Content)
+	if strings.Contains(toolText, "content:\n") {
+		t.Fatalf("expected metadata-only projection to omit content section, got %q", toolText)
 	}
 	if toolMessage.ToolMetadata != nil {
 		t.Fatalf("expected projected tool metadata to be cleared, got %#v", toolMessage.ToolMetadata)
@@ -346,16 +350,16 @@ func TestLLMExtractorExtractSkipsOrphanAndClearedToolMessages(t *testing.T) {
 	extractor := NewLLMExtractor(generator)
 
 	_, err := extractor.Extract(context.Background(), []providertypes.Message{
-		{Role: providertypes.RoleUser, Content: "alpha"},
-		{Role: providertypes.RoleTool, ToolCallID: "orphan", Content: "orphan result"},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("alpha")}},
+		{Role: providertypes.RoleTool, ToolCallID: "orphan", Parts: []providertypes.ContentPart{providertypes.NewTextPart("orphan result")}},
 		{
 			Role: providertypes.RoleAssistant,
 			ToolCalls: []providertypes.ToolCall{
 				{ID: "call_1", Name: "bash", Arguments: `{}`},
 			},
 		},
-		{Role: providertypes.RoleTool, ToolCallID: "call_1", Content: "[Old tool result content cleared]"},
-		{Role: providertypes.RoleUser, Content: "beta"},
+		{Role: providertypes.RoleTool, ToolCallID: "call_1", Parts: []providertypes.ContentPart{providertypes.NewTextPart("[Old tool result content cleared]")}},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("beta")}},
 	})
 	if err != nil {
 		t.Fatalf("Extract() error = %v", err)
@@ -373,7 +377,7 @@ func TestLLMExtractorExtractSkipsOrphanAndClearedToolMessages(t *testing.T) {
 func TestLLMExtractorExtractNilGenerator(t *testing.T) {
 	var extractor *LLMExtractor
 	_, err := extractor.Extract(context.Background(), []providertypes.Message{
-		{Role: providertypes.RoleUser, Content: "记住这个。"},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("记住这个。")}},
 	})
 	if err == nil || !strings.Contains(err.Error(), "text generator is nil") {
 		t.Fatalf("Extract() error = %v", err)
@@ -381,7 +385,7 @@ func TestLLMExtractorExtractNilGenerator(t *testing.T) {
 
 	extractor = NewLLMExtractor(nil)
 	_, err = extractor.Extract(context.Background(), []providertypes.Message{
-		{Role: providertypes.RoleUser, Content: "记住这个。"},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("记住这个。")}},
 	})
 	if err == nil || !strings.Contains(err.Error(), "text generator is nil") {
 		t.Fatalf("Extract() error = %v", err)
@@ -391,7 +395,7 @@ func TestLLMExtractorExtractNilGenerator(t *testing.T) {
 func TestLLMExtractorExtractGeneratorFailure(t *testing.T) {
 	extractor := NewLLMExtractor(&stubTextGenerator{err: errors.New("upstream failed")})
 	_, err := extractor.Extract(context.Background(), []providertypes.Message{
-		{Role: providertypes.RoleUser, Content: "记住这个。"},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("记住这个。")}},
 	})
 	if err == nil || !strings.Contains(err.Error(), "upstream failed") {
 		t.Fatalf("Extract() error = %v", err)
@@ -404,5 +408,23 @@ func TestExtractJSONArrayErrors(t *testing.T) {
 	}
 	if _, err := extractJSONArray(`[{"a":"x"}`); err == nil || !strings.Contains(err.Error(), "incomplete") {
 		t.Fatalf("expected incomplete array error, got %v", err)
+	}
+}
+
+func TestLLMExtractorExtractImageOnlyUserMessageSkipsGenerator(t *testing.T) {
+	generator := &stubTextGenerator{response: `[]`}
+	extractor := NewLLMExtractor(generator)
+
+	entries, err := extractor.Extract(context.Background(), []providertypes.Message{
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewRemoteImagePart("https://example.com/pic.png")}},
+	})
+	if err != nil {
+		t.Fatalf("Extract() error = %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("len(entries) = %d, want 0", len(entries))
+	}
+	if generator.calls != 0 {
+		t.Fatalf("Generate() calls = %d, want 0", generator.calls)
 	}
 }

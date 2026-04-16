@@ -12,10 +12,10 @@ import (
 const toolNameMetadataKey = "tool_name"
 
 // appendUserMessageAndSave 将用户消息追加到会话并立即持久化。
-func (s *Service) appendUserMessageAndSave(ctx context.Context, state *runState, content string) error {
+func (s *Service) appendUserMessageAndSave(ctx context.Context, state *runState, parts []providertypes.ContentPart) error {
 	message := providertypes.Message{
-		Role:    providertypes.RoleUser,
-		Content: content,
+		Role:  providertypes.RoleUser,
+		Parts: parts,
 	}
 	state.session.Messages = append(state.session.Messages, message)
 	state.touchSession()
@@ -37,7 +37,7 @@ func (s *Service) appendAssistantMessageAndSave(
 	state.session.Provider = snapshot.providerConfig.Name
 	state.session.Model = snapshot.model
 
-	if strings.TrimSpace(assistant.Content) != "" || len(assistant.ToolCalls) > 0 {
+	if !assistant.IsEmpty() {
 		state.session.Messages = append(state.session.Messages, assistant)
 		state.touchSession()
 		return s.sessionStore.Save(ctx, &state.session)
@@ -80,7 +80,7 @@ func normalizeToolMessageForPersistence(call providertypes.ToolCall, result tool
 
 	return providertypes.Message{
 		Role:         providertypes.RoleTool,
-		Content:      content,
+		Parts:        []providertypes.ContentPart{providertypes.NewTextPart(content)},
 		ToolCallID:   call.ID,
 		IsError:      result.IsError,
 		ToolMetadata: sanitizedMetadata,
@@ -127,6 +127,7 @@ func cloneMessagesForPersistence(messages []providertypes.Message) []providertyp
 	cloned := make([]providertypes.Message, len(messages))
 	for idx, message := range messages {
 		next := message
+		next.Parts = providertypes.CloneParts(message.Parts)
 		if len(message.ToolCalls) > 0 {
 			next.ToolCalls = append([]providertypes.ToolCall(nil), message.ToolCalls...)
 		} else {

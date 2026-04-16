@@ -74,18 +74,18 @@ func TestManualCompactKeepRecentRetainsRecentMessagesAndWholeToolBlock(t *testin
 	runner.userHomeDir = func() (string, error) { return home, nil }
 
 	messages := []providertypes.Message{
-		{Role: providertypes.RoleUser, Content: "old requirement"},
-		{Role: providertypes.RoleAssistant, Content: "old answer"},
-		{Role: providertypes.RoleUser, Content: "middle request"},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("old requirement")}},
+		{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("old answer")}},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("middle request")}},
 		{Role: providertypes.RoleAssistant, ToolCalls: []providertypes.ToolCall{{ID: "call-old", Name: "filesystem_grep", Arguments: "{}"}}},
-		{Role: providertypes.RoleTool, ToolCallID: "call-old", Content: "old result"},
-		{Role: providertypes.RoleAssistant, Content: "after tool"},
-		{Role: providertypes.RoleUser, Content: "instruction to keep"},
-		{Role: providertypes.RoleAssistant, Content: "ack"},
-		{Role: providertypes.RoleUser, Content: "recent follow up"},
-		{Role: providertypes.RoleAssistant, Content: "recent answer"},
-		{Role: providertypes.RoleUser, Content: "latest explicit instruction"},
-		{Role: providertypes.RoleAssistant, Content: "latest result"},
+		{Role: providertypes.RoleTool, ToolCallID: "call-old", Parts: []providertypes.ContentPart{providertypes.NewTextPart("old result")}},
+		{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("after tool")}},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("instruction to keep")}},
+		{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("ack")}},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("recent follow up")}},
+		{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("recent answer")}},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("latest explicit instruction")}},
+		{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("latest result")}},
 	}
 
 	result, err := runner.Run(context.Background(), Input{
@@ -112,8 +112,9 @@ func TestManualCompactKeepRecentRetainsRecentMessagesAndWholeToolBlock(t *testin
 		t.Fatalf("expected summary role assistant, got %q", result.Messages[0].Role)
 	}
 	for _, section := range []string{"done:", "in_progress:", "decisions:", "code_changes:", "constraints:"} {
-		if !strings.Contains(result.Messages[0].Content, section) {
-			t.Fatalf("expected summary to include section %q, got %q", section, result.Messages[0].Content)
+		summaryText := renderTranscriptParts(result.Messages[0].Parts)
+		if !strings.Contains(summaryText, section) {
+			t.Fatalf("expected summary to include section %q, got %q", section, summaryText)
 		}
 	}
 	if result.Messages[1].Role != providertypes.RoleAssistant || len(result.Messages[1].ToolCalls) != 1 {
@@ -149,11 +150,11 @@ func TestManualCompactPassesCurrentTaskStateAndFiltersOldDisplaySummary(t *testi
 		NextStep:  "Patch compact runner tests",
 	}
 	messages := []providertypes.Message{
-		{Role: providertypes.RoleAssistant, Content: validSemanticSummary()},
-		{Role: providertypes.RoleUser, Content: "older request"},
-		{Role: providertypes.RoleAssistant, Content: "older answer"},
-		{Role: providertypes.RoleUser, Content: "latest explicit instruction"},
-		{Role: providertypes.RoleAssistant, Content: "latest answer"},
+		{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart(validSemanticSummary())}},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("older request")}},
+		{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("older answer")}},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("latest explicit instruction")}},
+		{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("latest answer")}},
 	}
 
 	result, err := runner.Run(context.Background(), Input{
@@ -183,7 +184,7 @@ func TestManualCompactPassesCurrentTaskStateAndFiltersOldDisplaySummary(t *testi
 	if len(generator.calls[0].ArchivedMessages) != 2 {
 		t.Fatalf("expected old display summary filtered from archived messages, got %+v", generator.calls[0].ArchivedMessages)
 	}
-	if strings.HasPrefix(strings.TrimSpace(generator.calls[0].ArchivedMessages[0].Content), "[compact_summary]") {
+	if strings.HasPrefix(strings.TrimSpace(renderTranscriptParts(generator.calls[0].ArchivedMessages[0].Parts)), "[compact_summary]") {
 		t.Fatalf("expected compact summary message to be filtered, got %+v", generator.calls[0].ArchivedMessages)
 	}
 }
@@ -197,18 +198,18 @@ func TestReactiveCompactUsesKeepRecentAndReportsReactiveMode(t *testing.T) {
 	runner.userHomeDir = func() (string, error) { return home, nil }
 
 	messages := []providertypes.Message{
-		{Role: providertypes.RoleUser, Content: "old requirement"},
-		{Role: providertypes.RoleAssistant, Content: "old answer"},
-		{Role: providertypes.RoleUser, Content: "middle request"},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("old requirement")}},
+		{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("old answer")}},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("middle request")}},
 		{Role: providertypes.RoleAssistant, ToolCalls: []providertypes.ToolCall{{ID: "call-old", Name: "filesystem_grep", Arguments: "{}"}}},
-		{Role: providertypes.RoleTool, ToolCallID: "call-old", Content: "old result"},
-		{Role: providertypes.RoleAssistant, Content: "after tool"},
-		{Role: providertypes.RoleUser, Content: "instruction to keep"},
-		{Role: providertypes.RoleAssistant, Content: "ack"},
-		{Role: providertypes.RoleUser, Content: "recent follow up"},
-		{Role: providertypes.RoleAssistant, Content: "recent answer"},
-		{Role: providertypes.RoleUser, Content: "latest explicit instruction"},
-		{Role: providertypes.RoleAssistant, Content: "latest result"},
+		{Role: providertypes.RoleTool, ToolCallID: "call-old", Parts: []providertypes.ContentPart{providertypes.NewTextPart("old result")}},
+		{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("after tool")}},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("instruction to keep")}},
+		{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("ack")}},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("recent follow up")}},
+		{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("recent answer")}},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("latest explicit instruction")}},
+		{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("latest result")}},
 	}
 
 	result, err := runner.Run(context.Background(), Input{
@@ -266,12 +267,12 @@ func TestAutoCompactUsesManualStrategyAndReportsAutoMode(t *testing.T) {
 	runner.userHomeDir = func() (string, error) { return home, nil }
 
 	messages := []providertypes.Message{
-		{Role: providertypes.RoleUser, Content: "old requirement"},
-		{Role: providertypes.RoleAssistant, Content: "old answer"},
-		{Role: providertypes.RoleUser, Content: "middle request"},
-		{Role: providertypes.RoleAssistant, Content: "middle answer"},
-		{Role: providertypes.RoleUser, Content: "recent request"},
-		{Role: providertypes.RoleAssistant, Content: "recent answer"},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("old requirement")}},
+		{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("old answer")}},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("middle request")}},
+		{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("middle answer")}},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("recent request")}},
+		{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("recent answer")}},
 	}
 
 	result, err := runner.Run(context.Background(), Input{
@@ -313,15 +314,15 @@ func TestManualCompactKeepRecentProtectsLatestExplicitUserInstruction(t *testing
 	runner.userHomeDir = func() (string, error) { return t.TempDir(), nil }
 
 	messages := []providertypes.Message{
-		{Role: providertypes.RoleUser, Content: "old requirement"},
-		{Role: providertypes.RoleAssistant, Content: "old answer"},
-		{Role: providertypes.RoleUser, Content: "latest explicit instruction"},
-		{Role: providertypes.RoleAssistant, Content: "ack"},
-		{Role: providertypes.RoleAssistant, Content: "follow up 1"},
-		{Role: providertypes.RoleAssistant, Content: "follow up 2"},
-		{Role: providertypes.RoleAssistant, Content: "follow up 3"},
-		{Role: providertypes.RoleAssistant, Content: "follow up 4"},
-		{Role: providertypes.RoleAssistant, Content: "follow up 5"},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("old requirement")}},
+		{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("old answer")}},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("latest explicit instruction")}},
+		{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("ack")}},
+		{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("follow up 1")}},
+		{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("follow up 2")}},
+		{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("follow up 3")}},
+		{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("follow up 4")}},
+		{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("follow up 5")}},
 	}
 
 	result, err := runner.Run(context.Background(), Input{
@@ -347,7 +348,7 @@ func TestManualCompactKeepRecentProtectsLatestExplicitUserInstruction(t *testing
 	if len(generator.calls[0].ArchivedMessages) != 2 || len(generator.calls[0].RetainedMessages) != 7 {
 		t.Fatalf("expected protected tail to start at latest user instruction, got %+v", generator.calls[0])
 	}
-	if result.Messages[1].Role != providertypes.RoleUser || result.Messages[1].Content != "latest explicit instruction" {
+	if result.Messages[1].Role != providertypes.RoleUser || renderTranscriptParts(result.Messages[1].Parts) != "latest explicit instruction" {
 		t.Fatalf("expected retained latest explicit instruction, got %+v", result.Messages[1])
 	}
 }
@@ -364,7 +365,7 @@ func TestManualCompactWritesTranscriptJSONL(t *testing.T) {
 		SessionID: "session-jsonl",
 		Workdir:   filepath.Join(home, "workspace"),
 		Messages: []providertypes.Message{
-			{Role: providertypes.RoleUser, Content: "hello"},
+			{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")}},
 		},
 		Config: config.CompactConfig{
 			ManualStrategy:           config.CompactManualStrategyKeepRecent,
@@ -404,7 +405,7 @@ func TestManualCompactFailsWhenTranscriptWriteFails(t *testing.T) {
 		Mode:      ModeManual,
 		SessionID: "session-fail",
 		Workdir:   t.TempDir(),
-		Messages:  []providertypes.Message{{Role: providertypes.RoleUser, Content: "hello"}},
+		Messages:  []providertypes.Message{{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")}}},
 		Config: config.CompactConfig{
 			ManualStrategy:           config.CompactManualStrategyKeepRecent,
 			ManualKeepRecentMessages: 10,
@@ -425,12 +426,12 @@ func TestManualCompactFullReplaceKeepsProtectedTail(t *testing.T) {
 	runner.userHomeDir = func() (string, error) { return home, nil }
 
 	messages := []providertypes.Message{
-		{Role: providertypes.RoleUser, Content: "old requirement"},
-		{Role: providertypes.RoleAssistant, Content: "old answer"},
-		{Role: providertypes.RoleUser, Content: "latest explicit instruction"},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("old requirement")}},
+		{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("old answer")}},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("latest explicit instruction")}},
 		{Role: providertypes.RoleAssistant, ToolCalls: []providertypes.ToolCall{{ID: "call-old", Name: "filesystem_grep", Arguments: "{}"}}},
-		{Role: providertypes.RoleTool, ToolCallID: "call-old", Content: "old result"},
-		{Role: providertypes.RoleAssistant, Content: "latest answer"},
+		{Role: providertypes.RoleTool, ToolCallID: "call-old", Parts: []providertypes.ContentPart{providertypes.NewTextPart("old result")}},
+		{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("latest answer")}},
 	}
 
 	result, err := runner.Run(context.Background(), Input{
@@ -472,8 +473,8 @@ func TestManualCompactFullReplaceWithoutArchivableMessagesSkipsGenerator(t *test
 	runner.userHomeDir = func() (string, error) { return t.TempDir(), nil }
 
 	messages := []providertypes.Message{
-		{Role: providertypes.RoleUser, Content: "latest explicit instruction"},
-		{Role: providertypes.RoleAssistant, Content: "latest answer"},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("latest explicit instruction")}},
+		{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("latest answer")}},
 	}
 
 	result, err := runner.Run(context.Background(), Input{
@@ -513,7 +514,7 @@ func TestRunManualRejectsUnsupportedStrategy(t *testing.T) {
 		Mode:      ModeManual,
 		SessionID: "session-invalid-strategy",
 		Workdir:   t.TempDir(),
-		Messages:  []providertypes.Message{{Role: providertypes.RoleUser, Content: "hello"}},
+		Messages:  []providertypes.Message{{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")}}},
 		Config: config.CompactConfig{
 			ManualStrategy:           "unknown_strategy",
 			ManualKeepRecentMessages: 10,
@@ -535,7 +536,7 @@ func TestRunRejectsUnsupportedMode(t *testing.T) {
 		Mode:      Mode("unexpected"),
 		SessionID: "session-invalid-mode",
 		Workdir:   t.TempDir(),
-		Messages:  []providertypes.Message{{Role: providertypes.RoleUser, Content: "hello"}},
+		Messages:  []providertypes.Message{{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")}}},
 		Config: config.CompactConfig{
 			ManualStrategy:           config.CompactManualStrategyKeepRecent,
 			ManualKeepRecentMessages: 10,
@@ -551,8 +552,8 @@ func TestCountMessageCharsUsesRunes(t *testing.T) {
 	t.Parallel()
 
 	messages := []providertypes.Message{
-		{Role: "用户", Content: "你好"},
-		{Role: providertypes.RoleAssistant, Content: "done"},
+		{Role: "用户", Parts: []providertypes.ContentPart{providertypes.NewTextPart("你好")}},
+		{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("done")}},
 	}
 	got := countMessageChars(messages)
 	want := len([]rune("用户")) + len([]rune("你好")) + len([]rune(providertypes.RoleAssistant)) + len([]rune("done"))
@@ -581,8 +582,8 @@ func TestSaveTranscriptUsesUniqueIDWithinSameTimestamp(t *testing.T) {
 		SessionID: "session-dup-safe",
 		Workdir:   t.TempDir(),
 		Messages: []providertypes.Message{
-			{Role: providertypes.RoleUser, Content: "hello"},
-			{Role: providertypes.RoleAssistant, Content: "world"},
+			{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")}},
+			{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("world")}},
 		},
 		Config: config.CompactConfig{
 			ManualStrategy:           config.CompactManualStrategyFullReplace,
@@ -630,10 +631,10 @@ func TestManualCompactGeneratorInvalidSummaryFails(t *testing.T) {
 		SessionID: "session-invalid-summary",
 		Workdir:   t.TempDir(),
 		Messages: []providertypes.Message{
-			{Role: providertypes.RoleUser, Content: "older"},
-			{Role: providertypes.RoleAssistant, Content: "older answer"},
-			{Role: providertypes.RoleUser, Content: "latest explicit instruction"},
-			{Role: providertypes.RoleAssistant, Content: "newer"},
+			{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("older")}},
+			{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("older answer")}},
+			{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("latest explicit instruction")}},
+			{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("newer")}},
 		},
 		Config: config.CompactConfig{
 			ManualStrategy:           config.CompactManualStrategyFullReplace,
@@ -678,10 +679,10 @@ func TestManualCompactGeneratorEmptyBulletFails(t *testing.T) {
 		SessionID: "session-empty-bullet",
 		Workdir:   t.TempDir(),
 		Messages: []providertypes.Message{
-			{Role: providertypes.RoleUser, Content: "older"},
-			{Role: providertypes.RoleAssistant, Content: "older answer"},
-			{Role: providertypes.RoleUser, Content: "latest explicit instruction"},
-			{Role: providertypes.RoleAssistant, Content: "newer"},
+			{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("older")}},
+			{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("older answer")}},
+			{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("latest explicit instruction")}},
+			{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("newer")}},
 		},
 		Config: config.CompactConfig{
 			ManualStrategy:           config.CompactManualStrategyFullReplace,
@@ -710,10 +711,10 @@ func TestManualCompactRejectsEmptyTaskState(t *testing.T) {
 		SessionID: "session-empty-task-state",
 		Workdir:   t.TempDir(),
 		Messages: []providertypes.Message{
-			{Role: providertypes.RoleUser, Content: "older"},
-			{Role: providertypes.RoleAssistant, Content: "older answer"},
-			{Role: providertypes.RoleUser, Content: "latest explicit instruction"},
-			{Role: providertypes.RoleAssistant, Content: "newer"},
+			{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("older")}},
+			{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("older answer")}},
+			{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("latest explicit instruction")}},
+			{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("newer")}},
 		},
 		Config: config.CompactConfig{
 			ManualStrategy:           config.CompactManualStrategyFullReplace,
@@ -741,10 +742,10 @@ func TestManualCompactTruncationFailsWhenStructureBreaks(t *testing.T) {
 		SessionID: "session-truncate-fail",
 		Workdir:   t.TempDir(),
 		Messages: []providertypes.Message{
-			{Role: providertypes.RoleUser, Content: "older"},
-			{Role: providertypes.RoleAssistant, Content: "older answer"},
-			{Role: providertypes.RoleUser, Content: "latest explicit instruction"},
-			{Role: providertypes.RoleAssistant, Content: "newer"},
+			{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("older")}},
+			{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("older answer")}},
+			{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("latest explicit instruction")}},
+			{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("newer")}},
 		},
 		Config: config.CompactConfig{
 			ManualStrategy:           config.CompactManualStrategyFullReplace,
@@ -769,7 +770,7 @@ func TestManualCompactKeepRecentWithoutEnoughMessagesSkipsGenerator(t *testing.T
 		SessionID: "session-no-compact",
 		Workdir:   t.TempDir(),
 		Messages: []providertypes.Message{
-			{Role: providertypes.RoleUser, Content: "single message"},
+			{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("single message")}},
 		},
 		Config: config.CompactConfig{
 			ManualStrategy:           config.CompactManualStrategyKeepRecent,
@@ -799,10 +800,10 @@ func TestManualCompactReturnsErrorWhenSummaryGeneratorIsMissing(t *testing.T) {
 		SessionID: "session-missing-generator",
 		Workdir:   t.TempDir(),
 		Messages: []providertypes.Message{
-			{Role: providertypes.RoleUser, Content: "older"},
-			{Role: providertypes.RoleAssistant, Content: "older answer"},
-			{Role: providertypes.RoleUser, Content: "latest explicit instruction"},
-			{Role: providertypes.RoleAssistant, Content: "newer"},
+			{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("older")}},
+			{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("older answer")}},
+			{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("latest explicit instruction")}},
+			{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("newer")}},
 		},
 		Config: config.CompactConfig{
 			ManualStrategy:           config.CompactManualStrategyFullReplace,
@@ -827,10 +828,10 @@ func TestManualCompactDefaultsToKeepRecentStrategyWhenManualStrategyIsEmpty(t *t
 		SessionID: "session-default-strategy",
 		Workdir:   t.TempDir(),
 		Messages: []providertypes.Message{
-			{Role: providertypes.RoleUser, Content: "old request"},
-			{Role: providertypes.RoleAssistant, Content: "old answer"},
-			{Role: providertypes.RoleUser, Content: "latest request"},
-			{Role: providertypes.RoleAssistant, Content: "latest answer"},
+			{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("old request")}},
+			{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("old answer")}},
+			{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("latest request")}},
+			{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("latest answer")}},
 		},
 		Config: config.CompactConfig{
 			ManualStrategy:           "",

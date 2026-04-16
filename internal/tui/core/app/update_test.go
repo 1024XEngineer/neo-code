@@ -159,6 +159,9 @@ func (s *stubRuntime) SetSessionWorkdir(ctx context.Context, sessionID string, w
 	return agentsession.NewWithWorkdir("draft", workdir), nil
 }
 
+func messageText(message providertypes.Message) string {
+	return renderMessagePartsForDisplay(message.Parts)
+}
 func (s *snapshotRuntime) GetSessionContext(ctx context.Context, sessionID string) (any, error) {
 	return s.sessionContext, nil
 }
@@ -957,7 +960,7 @@ func TestRuntimeEventToolResultHandlerUpdatesMessages(t *testing.T) {
 		t.Fatalf("expected handler to return true")
 	}
 	last := app.activeMessages[len(app.activeMessages)-1]
-	if last.Role != roleTool || last.Content != "ok" {
+	if last.Role != roleTool || messageText(last) != "ok" {
 		t.Fatalf("unexpected tool message: %#v", last)
 	}
 }
@@ -981,7 +984,7 @@ func TestRuntimeEventToolResultHandlerError(t *testing.T) {
 
 func TestRuntimeEventAgentDoneHandlerAppendsMessage(t *testing.T) {
 	app, _ := newTestApp(t)
-	payload := providertypes.Message{Role: roleAssistant, Content: "done"}
+	payload := providertypes.Message{Role: roleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("done")}}
 	handled := runtimeEventAgentDoneHandler(&app, agentruntime.RuntimeEvent{Payload: payload})
 	if !handled {
 		t.Fatalf("expected handler to return true")
@@ -1592,6 +1595,52 @@ func TestUpdateSendWithUnsupportedImageInput(t *testing.T) {
 	if app.state.StatusText != "Model does not support images" {
 		t.Fatalf("unexpected status text: %q", app.state.StatusText)
 	}
+	if app.input.Value() != "hello" {
+		t.Fatalf("expected input to be preserved when send is blocked, got %q", app.input.Value())
+	}
+	if app.state.InputText != "hello" {
+		t.Fatalf("expected state input text to be preserved, got %q", app.state.InputText)
+	}
+}
+
+func TestUpdateSendWithImageAttachmentsWithoutSessionAssets(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.pendingImageAttachments = []pendingImageAttachment{
+		{Name: "a.png", MimeType: "image/png", Path: "/tmp/a.png", Size: 1},
+	}
+	app.providerSvc = stubProviderService{
+		providers: []configstate.ProviderOption{{ID: app.state.CurrentProvider, Name: app.state.CurrentProvider}},
+		models: []providertypes.ModelDescriptor{{
+			ID:   app.state.CurrentModel,
+			Name: app.state.CurrentModel,
+			CapabilityHints: providertypes.ModelCapabilityHints{
+				ImageInput: providertypes.ModelCapabilityStateSupported,
+			},
+		}},
+	}
+	app.input.SetValue("hello")
+	app.state.InputText = "hello"
+
+	model, cmd := app.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd != nil {
+		_ = cmd()
+	}
+	app = model.(App)
+	if app.state.IsAgentRunning {
+		t.Fatalf("expected send to be blocked when session assets are unavailable")
+	}
+	if app.hasImageAttachments() {
+		t.Fatalf("expected pending image attachments to be cleared when storage is unavailable")
+	}
+	if app.state.StatusText != "Image attachments need session asset support" {
+		t.Fatalf("unexpected status text: %q", app.state.StatusText)
+	}
+	if app.input.Value() != "hello" {
+		t.Fatalf("expected input to be preserved when send is blocked, got %q", app.input.Value())
+	}
+	if app.state.InputText != "hello" {
+		t.Fatalf("expected state input text to be preserved, got %q", app.state.InputText)
+	}
 }
 
 func TestUpdatePickerSessionEnterActivatesSelectedSession(t *testing.T) {
@@ -1607,7 +1656,7 @@ func TestUpdatePickerSessionEnterActivatesSelectedSession(t *testing.T) {
 			Title:   "Two",
 			Workdir: app.state.CurrentWorkdir,
 			Messages: []providertypes.Message{
-				{Role: roleUser, Content: "hello"},
+				{Role: roleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")}},
 			},
 		},
 	}
@@ -1782,7 +1831,7 @@ func TestAppendAssistantAndInlineMessage(t *testing.T) {
 	app, _ := newTestApp(t)
 	app.appendAssistantChunk("hi")
 	app.appendAssistantChunk(" there")
-	if len(app.activeMessages) == 0 || !strings.Contains(app.activeMessages[len(app.activeMessages)-1].Content, "there") {
+	if len(app.activeMessages) == 0 || !strings.Contains(messageText(app.activeMessages[len(app.activeMessages)-1]), "there") {
 		t.Fatalf("expected assistant chunk to append")
 	}
 	app.appendInlineMessage(roleSystem, "  note ")
@@ -2141,8 +2190,8 @@ func TestHandleMemoCommand(t *testing.T) {
 			t.Fatal("expected at least one inline message")
 		}
 		last := msgs[len(msgs)-1]
-		if !strings.Contains(last.Content, "No memos stored yet") {
-			t.Errorf("expected 'no memos' message, got: %s", last.Content)
+		if !strings.Contains(messageText(last), "No memos stored yet") {
+			t.Errorf("expected 'no memos' message, got: %s", messageText(last))
 		}
 	})
 
@@ -2153,11 +2202,11 @@ func TestHandleMemoCommand(t *testing.T) {
 		app.handleMemoCommand()
 		msgs := app.activeMessages
 		last := msgs[len(msgs)-1]
-		if !strings.Contains(last.Content, "1 memo(s)") {
-			t.Errorf("expected memo count, got: %s", last.Content)
+		if !strings.Contains(messageText(last), "1 memo(s)") {
+			t.Errorf("expected memo count, got: %s", messageText(last))
 		}
-		if !strings.Contains(last.Content, "test entry") {
-			t.Errorf("expected entry title, got: %s", last.Content)
+		if !strings.Contains(messageText(last), "test entry") {
+			t.Errorf("expected entry title, got: %s", messageText(last))
 		}
 	})
 
@@ -2172,8 +2221,8 @@ func TestHandleMemoCommand(t *testing.T) {
 			t.Fatal("expected at least one inline message")
 		}
 		last := msgs[len(msgs)-1]
-		if !strings.Contains(last.Content, "not enabled") {
-			t.Errorf("expected 'not enabled' message, got: %s", last.Content)
+		if !strings.Contains(messageText(last), "not enabled") {
+			t.Errorf("expected 'not enabled' message, got: %s", messageText(last))
 		}
 	})
 }
@@ -2189,8 +2238,8 @@ func TestHandleRememberCommand(t *testing.T) {
 		}
 		msgs := app.activeMessages
 		last := msgs[len(msgs)-1]
-		if !strings.Contains(last.Content, "Memo saved") {
-			t.Errorf("expected saved confirmation, got: %s", last.Content)
+		if !strings.Contains(messageText(last), "Memo saved") {
+			t.Errorf("expected saved confirmation, got: %s", messageText(last))
 		}
 		// Verify the entry was actually saved
 		entries, _ := app.memoSvc.List(context.Background())
@@ -2207,8 +2256,8 @@ func TestHandleRememberCommand(t *testing.T) {
 		app.handleRememberCommand("")
 		msgs := app.activeMessages
 		last := msgs[len(msgs)-1]
-		if !strings.Contains(last.Content, "Usage") {
-			t.Errorf("expected usage message, got: %s", last.Content)
+		if !strings.Contains(messageText(last), "Usage") {
+			t.Errorf("expected usage message, got: %s", messageText(last))
 		}
 	})
 
@@ -2217,8 +2266,8 @@ func TestHandleRememberCommand(t *testing.T) {
 		app.handleRememberCommand("   ")
 		msgs := app.activeMessages
 		last := msgs[len(msgs)-1]
-		if !strings.Contains(last.Content, "Usage") {
-			t.Errorf("expected usage message, got: %s", last.Content)
+		if !strings.Contains(messageText(last), "Usage") {
+			t.Errorf("expected usage message, got: %s", messageText(last))
 		}
 	})
 
@@ -2227,8 +2276,8 @@ func TestHandleRememberCommand(t *testing.T) {
 		app.handleRememberCommand("something")
 		msgs := app.activeMessages
 		last := msgs[len(msgs)-1]
-		if !strings.Contains(last.Content, "not enabled") {
-			t.Errorf("expected 'not enabled' message, got: %s", last.Content)
+		if !strings.Contains(messageText(last), "not enabled") {
+			t.Errorf("expected 'not enabled' message, got: %s", messageText(last))
 		}
 	})
 }
@@ -2244,8 +2293,8 @@ func TestHandleForgetCommand(t *testing.T) {
 		app.handleForgetCommand("remove")
 		msgs := app.activeMessages
 		last := msgs[len(msgs)-1]
-		if !strings.Contains(last.Content, "Removed 1 memo") {
-			t.Errorf("expected removal confirmation, got: %s", last.Content)
+		if !strings.Contains(messageText(last), "Removed 1 memo") {
+			t.Errorf("expected removal confirmation, got: %s", messageText(last))
 		}
 		// Verify only one was removed
 		entries, _ := app.memoSvc.List(context.Background())
@@ -2262,8 +2311,8 @@ func TestHandleForgetCommand(t *testing.T) {
 		app.handleForgetCommand("nonexistent")
 		msgs := app.activeMessages
 		last := msgs[len(msgs)-1]
-		if !strings.Contains(last.Content, "No memos matching") {
-			t.Errorf("expected no match message, got: %s", last.Content)
+		if !strings.Contains(messageText(last), "No memos matching") {
+			t.Errorf("expected no match message, got: %s", messageText(last))
 		}
 	})
 
@@ -2272,8 +2321,8 @@ func TestHandleForgetCommand(t *testing.T) {
 		app.handleForgetCommand("")
 		msgs := app.activeMessages
 		last := msgs[len(msgs)-1]
-		if !strings.Contains(last.Content, "Usage") {
-			t.Errorf("expected usage message, got: %s", last.Content)
+		if !strings.Contains(messageText(last), "Usage") {
+			t.Errorf("expected usage message, got: %s", messageText(last))
 		}
 	})
 
@@ -2282,8 +2331,8 @@ func TestHandleForgetCommand(t *testing.T) {
 		app.handleForgetCommand("something")
 		msgs := app.activeMessages
 		last := msgs[len(msgs)-1]
-		if !strings.Contains(last.Content, "not enabled") {
-			t.Errorf("expected 'not enabled' message, got: %s", last.Content)
+		if !strings.Contains(messageText(last), "not enabled") {
+			t.Errorf("expected 'not enabled' message, got: %s", messageText(last))
 		}
 	})
 }
@@ -2316,7 +2365,7 @@ func TestActivateSelectedSession(t *testing.T) {
 			Title:   "Active Session",
 			Workdir: app.state.CurrentWorkdir,
 			Messages: []providertypes.Message{
-				{Role: roleUser, Content: "hello"},
+				{Role: roleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")}},
 			},
 		},
 	}
@@ -2857,7 +2906,7 @@ func TestUpdateKeyToggleQuitCancelAndPickerClose(t *testing.T) {
 }
 
 func TestUpdatePickerEnterInvalidSelectionsAndSessionActivationError(t *testing.T) {
-	app, _ := newTestApp(t)
+	app, runtime := newTestApp(t)
 
 	app.providerPicker.SetItems([]list.Item{sessionItem{Summary: agentsession.Summary{ID: "s1"}}})
 	app.openPicker(pickerProvider, statusChooseProvider, &app.providerPicker, "")
@@ -2876,6 +2925,7 @@ func TestUpdatePickerEnterInvalidSelectionsAndSessionActivationError(t *testing.
 	}
 
 	app.sessionPicker.SetItems([]list.Item{sessionItem{Summary: agentsession.Summary{ID: "missing", Title: "missing"}}})
+	runtime.loadSessionErr = errors.New("load failed")
 	app.openPicker(pickerSession, statusChooseSession, &app.sessionPicker, "")
 	model, cmd = app.updatePicker(tea.KeyMsg{Type: tea.KeyEnter})
 	app = model.(App)

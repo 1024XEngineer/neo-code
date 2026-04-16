@@ -156,10 +156,13 @@ func TestToOpenAIMessage_BasicMessage(t *testing.T) {
 	t.Parallel()
 
 	msg := providertypes.Message{
-		Role:    "user",
-		Content: "hello world",
+		Role:  "user",
+		Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello world")},
 	}
-	result := chatcompletions.ToOpenAIMessage(msg)
+	result, err := chatcompletions.ToOpenAIMessage(msg)
+	if err != nil {
+		t.Fatalf("ToOpenAIMessage() basic error = %v", err)
+	}
 
 	if result.Role != "user" || result.Content != "hello world" {
 		t.Fatalf("unexpected basic message: role=%q content=%q", result.Role, result.Content)
@@ -174,10 +177,13 @@ func TestToOpenAIMessage_ToolRoleMessage(t *testing.T) {
 
 	msg := providertypes.Message{
 		Role:       "tool",
-		Content:    "result data",
+		Parts:      []providertypes.ContentPart{providertypes.NewTextPart("result data")},
 		ToolCallID: "call_123",
 	}
-	result := chatcompletions.ToOpenAIMessage(msg)
+	result, err := chatcompletions.ToOpenAIMessage(msg)
+	if err != nil {
+		t.Fatalf("ToOpenAIMessage() tool role error = %v", err)
+	}
 
 	if result.Role != "tool" || result.ToolCallID != "call_123" {
 		t.Fatalf("unexpected tool message: role=%q toolCallID=%q", result.Role, result.ToolCallID)
@@ -194,7 +200,10 @@ func TestToOpenAIMessage_AssistantWithToolCalls(t *testing.T) {
 			{ID: "call_2", Name: "write_file", Arguments: `{"path":"test.go","content":"..."}`},
 		},
 	}
-	result := chatcompletions.ToOpenAIMessage(msg)
+	result, err := chatcompletions.ToOpenAIMessage(msg)
+	if err != nil {
+		t.Fatalf("ToOpenAIMessage() assistant error = %v", err)
+	}
 
 	if len(result.ToolCalls) != 2 {
 		t.Fatalf("expected 2 tool calls, got %d", len(result.ToolCalls))
@@ -215,8 +224,11 @@ func TestToOpenAIMessage_AssistantWithToolCalls(t *testing.T) {
 func TestToOpenAIMessage_EmptyToolCalls(t *testing.T) {
 	t.Parallel()
 
-	msg := providertypes.Message{Role: "user", Content: "test"}
-	result := chatcompletions.ToOpenAIMessage(msg)
+	msg := providertypes.Message{Role: "user", Parts: []providertypes.ContentPart{providertypes.NewTextPart("test")}}
+	result, err := chatcompletions.ToOpenAIMessage(msg)
+	if err != nil {
+		t.Fatalf("ToOpenAIMessage() empty tool calls error = %v", err)
+	}
 	if len(result.ToolCalls) != 0 {
 		t.Fatalf("expected no tool calls for user message, got %d", len(result.ToolCalls))
 	}
@@ -303,7 +315,7 @@ func TestBuildRequest_FallsBackToConfigModel(t *testing.T) {
 		t.Fatalf("New() error = %v", err)
 	}
 
-	payload, err := chatcompletions.BuildRequest(p.cfg, providertypes.GenerateRequest{Messages: []providertypes.Message{{Role: "user", Content: "hi"}}})
+	payload, err := chatcompletions.BuildRequest(p.cfg, providertypes.GenerateRequest{Messages: []providertypes.Message{{Role: "user", Parts: []providertypes.ContentPart{providertypes.NewTextPart("hi")}}}})
 	if err != nil {
 		t.Fatalf("buildRequest() error = %v", err)
 	}
@@ -320,7 +332,7 @@ func TestBuildRequest_RequestModelTakesPrecedence(t *testing.T) {
 		t.Fatalf("New() error = %v", err)
 	}
 
-	payload, err := chatcompletions.BuildRequest(p.cfg, providertypes.GenerateRequest{Model: "gpt-4-custom", Messages: []providertypes.Message{{Role: "user", Content: "hi"}}})
+	payload, err := chatcompletions.BuildRequest(p.cfg, providertypes.GenerateRequest{Model: "gpt-4-custom", Messages: []providertypes.Message{{Role: "user", Parts: []providertypes.ContentPart{providertypes.NewTextPart("hi")}}}})
 	if err != nil {
 		t.Fatalf("buildRequest() error = %v", err)
 	}
@@ -337,7 +349,7 @@ func TestBuildRequest_NoSystemPrompt(t *testing.T) {
 		t.Fatalf("New() error = %v", err)
 	}
 
-	payload, err := chatcompletions.BuildRequest(p.cfg, providertypes.GenerateRequest{SystemPrompt: "", Messages: []providertypes.Message{{Role: "user", Content: "hi"}}})
+	payload, err := chatcompletions.BuildRequest(p.cfg, providertypes.GenerateRequest{SystemPrompt: "", Messages: []providertypes.Message{{Role: "user", Parts: []providertypes.ContentPart{providertypes.NewTextPart("hi")}}}})
 	if err != nil {
 		t.Fatalf("buildRequest() error = %v", err)
 	}
@@ -356,7 +368,7 @@ func TestBuildRequest_NoTools(t *testing.T) {
 		t.Fatalf("New() error = %v", err)
 	}
 
-	payload, err := chatcompletions.BuildRequest(p.cfg, providertypes.GenerateRequest{Messages: []providertypes.Message{{Role: "user", Content: "hi"}}, Tools: nil})
+	payload, err := chatcompletions.BuildRequest(p.cfg, providertypes.GenerateRequest{Messages: []providertypes.Message{{Role: "user", Parts: []providertypes.ContentPart{providertypes.NewTextPart("hi")}}}, Tools: nil})
 	if err != nil {
 		t.Fatalf("buildRequest() error = %v", err)
 	}
@@ -373,7 +385,7 @@ func TestBuildRequest_EmptyToolsSlice(t *testing.T) {
 		t.Fatalf("New() error = %v", err)
 	}
 
-	payload, err := chatcompletions.BuildRequest(p.cfg, providertypes.GenerateRequest{Messages: []providertypes.Message{{Role: "user", Content: "hi"}}, Tools: []providertypes.ToolSpec{}})
+	payload, err := chatcompletions.BuildRequest(p.cfg, providertypes.GenerateRequest{Messages: []providertypes.Message{{Role: "user", Parts: []providertypes.ContentPart{providertypes.NewTextPart("hi")}}}, Tools: []providertypes.ToolSpec{}})
 	if err != nil {
 		t.Fatalf("buildRequest() error = %v", err)
 	}
@@ -391,7 +403,7 @@ func TestBuildRequest_MultipleTools(t *testing.T) {
 	}
 
 	payload, err := chatcompletions.BuildRequest(p.cfg, providertypes.GenerateRequest{
-		Messages: []providertypes.Message{{Role: "user", Content: "use tools"}},
+		Messages: []providertypes.Message{{Role: "user", Parts: []providertypes.ContentPart{providertypes.NewTextPart("use tools")}}},
 		Tools: []providertypes.ToolSpec{
 			{Name: "tool_a", Description: "Tool A", Schema: map[string]any{"type": "object"}},
 			{Name: "tool_b", Description: "Tool B", Schema: map[string]any{"type": "object"}},
@@ -416,7 +428,7 @@ func TestBuildRequest_WhitespaceSystemPromptSkipped(t *testing.T) {
 		t.Fatalf("New() error = %v", err)
 	}
 
-	payload, err := chatcompletions.BuildRequest(p.cfg, providertypes.GenerateRequest{SystemPrompt: "   ", Messages: []providertypes.Message{{Role: "user", Content: "hi"}}})
+	payload, err := chatcompletions.BuildRequest(p.cfg, providertypes.GenerateRequest{SystemPrompt: "   ", Messages: []providertypes.Message{{Role: "user", Parts: []providertypes.ContentPart{providertypes.NewTextPart("hi")}}}})
 	if err != nil {
 		t.Fatalf("buildRequest() error = %v", err)
 	}
@@ -953,7 +965,7 @@ data: [DONE]
 	events := make(chan providertypes.StreamEvent, 4)
 	err = p.Generate(context.Background(), providertypes.GenerateRequest{
 		Model:    config.OpenAIDefaultModel,
-		Messages: []providertypes.Message{{Role: "user", Content: "hi"}},
+		Messages: []providertypes.Message{{Role: "user", Parts: []providertypes.ContentPart{providertypes.NewTextPart("hi")}}},
 	}, events)
 	if err != nil {
 		t.Fatalf("Generate() error = %v", err)
@@ -1048,9 +1060,9 @@ func TestProviderGenerateConsumesSSEAndMergesToolCalls(t *testing.T) {
 	err = p.Generate(context.Background(), providertypes.GenerateRequest{
 		Model: "gpt-5.4",
 		Messages: []providertypes.Message{
-			{Role: "user", Content: "please edit the file"},
+			{Role: "user", Parts: []providertypes.ContentPart{providertypes.NewTextPart("please edit the file")}},
 			{Role: "assistant", ToolCalls: []providertypes.ToolCall{{ID: "call_1", Name: "filesystem_edit", Arguments: `{"path":"main.go","search_string":"old","replace_string":"new"}`}}},
-			{Role: "tool", ToolCallID: "call_1", Content: "tool finished"},
+			{Role: "tool", ToolCallID: "call_1", Parts: []providertypes.ContentPart{providertypes.NewTextPart("tool finished")}},
 		},
 		Tools: []providertypes.ToolSpec{{Name: "filesystem_edit", Description: "Edit one matching block in a file", Schema: map[string]any{"type": "object"}}},
 	}, events)
@@ -1161,7 +1173,7 @@ func TestProviderGenerateRejectsUnsupportedAPIStyle(t *testing.T) {
 
 	err = p.Generate(context.Background(), providertypes.GenerateRequest{
 		Model:    config.OpenAIDefaultModel,
-		Messages: []providertypes.Message{{Role: "user", Content: "hi"}},
+		Messages: []providertypes.Message{{Role: "user", Parts: []providertypes.ContentPart{providertypes.NewTextPart("hi")}}},
 	}, make(chan providertypes.StreamEvent, 1))
 	if err == nil {
 		t.Fatal("expected unsupported api_style error")
@@ -1182,9 +1194,9 @@ func TestBuildRequestIncludesSystemPromptToolsAndToolMessages(t *testing.T) {
 	payload, err := chatcompletions.BuildRequest(p.cfg, providertypes.GenerateRequest{
 		SystemPrompt: "system prompt",
 		Messages: []providertypes.Message{
-			{Role: "user", Content: "hello"},
+			{Role: "user", Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")}},
 			{Role: "assistant", ToolCalls: []providertypes.ToolCall{{ID: "call_1", Name: "filesystem_edit", Arguments: `{"path":"main.go"}`}}},
-			{Role: "tool", ToolCallID: "call_1", Content: "tool finished"},
+			{Role: "tool", ToolCallID: "call_1", Parts: []providertypes.ContentPart{providertypes.NewTextPart("tool finished")}},
 		},
 		Tools: []providertypes.ToolSpec{{Name: "filesystem_edit", Description: "Edit file content", Schema: map[string]any{"type": "object"}}},
 	})
@@ -1571,7 +1583,7 @@ func TestProviderGenerateEmitsToolCallStartEvent(t *testing.T) {
 
 	events := make(chan providertypes.StreamEvent, 8)
 	err = p.Generate(context.Background(), providertypes.GenerateRequest{
-		Model: config.OpenAIDefaultModel, Messages: []providertypes.Message{{Role: "user", Content: "edit"}},
+		Model: config.OpenAIDefaultModel, Messages: []providertypes.Message{{Role: "user", Parts: []providertypes.ContentPart{providertypes.NewTextPart("edit")}}},
 		Tools: []providertypes.ToolSpec{{Name: "filesystem_edit", Description: "edit", Schema: map[string]any{"type": "object"}}},
 	}, events)
 	if err != nil {
@@ -1615,7 +1627,7 @@ func TestProviderGenerateEmitsFullEventStream(t *testing.T) {
 	p.client = server.Client()
 
 	events := make(chan providertypes.StreamEvent, 16)
-	err = p.Generate(context.Background(), providertypes.GenerateRequest{Model: config.OpenAIDefaultModel, Messages: []providertypes.Message{{Role: "user", Content: "test"}}}, events)
+	err = p.Generate(context.Background(), providertypes.GenerateRequest{Model: config.OpenAIDefaultModel, Messages: []providertypes.Message{{Role: "user", Parts: []providertypes.ContentPart{providertypes.NewTextPart("test")}}}}, events)
 	if err != nil {
 		t.Fatalf("Generate() error = %v", err)
 	}

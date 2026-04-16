@@ -20,47 +20,47 @@ func TestMicroCompactMessagesClearsOlderCompactableToolResults(t *testing.T) {
 	t.Parallel()
 
 	messages := []providertypes.Message{
-		{Role: providertypes.RoleUser, Content: "older user"},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("older user")}},
 		{
 			Role: providertypes.RoleAssistant,
 			ToolCalls: []providertypes.ToolCall{
 				{ID: "call-1", Name: "filesystem_read_file", Arguments: "{}"},
 			},
 		},
-		{Role: providertypes.RoleTool, ToolCallID: "call-1", Content: "old read result"},
+		{Role: providertypes.RoleTool, ToolCallID: "call-1", Parts: []providertypes.ContentPart{providertypes.NewTextPart("old read result")}},
 		{
 			Role: providertypes.RoleAssistant,
 			ToolCalls: []providertypes.ToolCall{
 				{ID: "call-2", Name: "bash", Arguments: "{}"},
 			},
 		},
-		{Role: providertypes.RoleTool, ToolCallID: "call-2", Content: "recent bash result"},
+		{Role: providertypes.RoleTool, ToolCallID: "call-2", Parts: []providertypes.ContentPart{providertypes.NewTextPart("recent bash result")}},
 		{
 			Role: providertypes.RoleAssistant,
 			ToolCalls: []providertypes.ToolCall{
 				{ID: "call-3", Name: "webfetch", Arguments: "{}"},
 			},
 		},
-		{Role: providertypes.RoleTool, ToolCallID: "call-3", Content: "latest webfetch result"},
-		{Role: providertypes.RoleUser, Content: "latest explicit instruction"},
-		{Role: providertypes.RoleAssistant, Content: "current working reply"},
+		{Role: providertypes.RoleTool, ToolCallID: "call-3", Parts: []providertypes.ContentPart{providertypes.NewTextPart("latest webfetch result")}},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("latest explicit instruction")}},
+		{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("current working reply")}},
 	}
 
 	got := microCompactMessages(messages)
 	if len(got) != len(messages) {
 		t.Fatalf("expected message count to stay unchanged, got %d want %d", len(got), len(messages))
 	}
-	if got[2].Content != microCompactClearedMessage {
-		t.Fatalf("expected oldest compactable tool result to be cleared, got %q", got[2].Content)
+	if renderDisplayParts(got[2].Parts) != microCompactClearedMessage {
+		t.Fatalf("expected oldest compactable tool result to be cleared, got %q", renderDisplayParts(got[2].Parts))
 	}
-	if got[4].Content != "recent bash result" {
-		t.Fatalf("expected recent compactable tool result to be retained, got %q", got[4].Content)
+	if renderDisplayParts(got[4].Parts) != "recent bash result" {
+		t.Fatalf("expected recent compactable tool result to be retained, got %q", renderDisplayParts(got[4].Parts))
 	}
-	if got[6].Content != "latest webfetch result" {
-		t.Fatalf("expected latest compactable tool result to be retained, got %q", got[6].Content)
+	if renderDisplayParts(got[6].Parts) != "latest webfetch result" {
+		t.Fatalf("expected latest compactable tool result to be retained, got %q", renderDisplayParts(got[6].Parts))
 	}
-	if messages[2].Content != "old read result" {
-		t.Fatalf("expected original slice to remain unchanged, got %q", messages[2].Content)
+	if renderDisplayParts(messages[2].Parts) != "old read result" {
+		t.Fatalf("expected original slice to remain unchanged, got %q", renderDisplayParts(messages[2].Parts))
 	}
 }
 
@@ -89,50 +89,50 @@ func TestMicroCompactMessagesKeepsProtectedTailUntouched(t *testing.T) {
 	t.Parallel()
 
 	messages := []providertypes.Message{
-		{Role: providertypes.RoleUser, Content: "older user"},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("older user")}},
 		{
 			Role: providertypes.RoleAssistant,
 			ToolCalls: []providertypes.ToolCall{
 				{ID: "call-0", Name: "filesystem_grep", Arguments: "{}"},
 			},
 		},
-		{Role: providertypes.RoleTool, ToolCallID: "call-0", Content: "old grep result"},
+		{Role: providertypes.RoleTool, ToolCallID: "call-0", Parts: []providertypes.ContentPart{providertypes.NewTextPart("old grep result")}},
 		{
 			Role: providertypes.RoleAssistant,
 			ToolCalls: []providertypes.ToolCall{
 				{ID: "call-1", Name: "filesystem_read_file", Arguments: "{}"},
 			},
 		},
-		{Role: providertypes.RoleTool, ToolCallID: "call-1", Content: "recent read result"},
+		{Role: providertypes.RoleTool, ToolCallID: "call-1", Parts: []providertypes.ContentPart{providertypes.NewTextPart("recent read result")}},
 		{
 			Role: providertypes.RoleAssistant,
 			ToolCalls: []providertypes.ToolCall{
 				{ID: "call-2", Name: "bash", Arguments: "{}"},
 			},
 		},
-		{Role: providertypes.RoleTool, ToolCallID: "call-2", Content: "recent bash result"},
-		{Role: providertypes.RoleUser, Content: "latest explicit instruction"},
+		{Role: providertypes.RoleTool, ToolCallID: "call-2", Parts: []providertypes.ContentPart{providertypes.NewTextPart("recent bash result")}},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("latest explicit instruction")}},
 		{
 			Role: providertypes.RoleAssistant,
 			ToolCalls: []providertypes.ToolCall{
 				{ID: "call-3", Name: "bash", Arguments: "{}"},
 			},
 		},
-		{Role: providertypes.RoleTool, ToolCallID: "call-3", Content: "tail bash result"},
+		{Role: providertypes.RoleTool, ToolCallID: "call-3", Parts: []providertypes.ContentPart{providertypes.NewTextPart("tail bash result")}},
 	}
 
 	got := microCompactMessages(messages)
-	if got[2].Content != microCompactClearedMessage {
-		t.Fatalf("expected old tool result before protected tail to be cleared, got %q", got[2].Content)
+	if renderDisplayParts(got[2].Parts) != microCompactClearedMessage {
+		t.Fatalf("expected old tool result before protected tail to be cleared, got %q", renderDisplayParts(got[2].Parts))
 	}
-	if got[4].Content != "recent read result" {
-		t.Fatalf("expected recent tool result before protected tail to remain, got %q", got[4].Content)
+	if renderDisplayParts(got[4].Parts) != "recent read result" {
+		t.Fatalf("expected recent tool result before protected tail to remain, got %q", renderDisplayParts(got[4].Parts))
 	}
-	if got[6].Content != "recent bash result" {
-		t.Fatalf("expected second recent tool result before protected tail to remain, got %q", got[6].Content)
+	if renderDisplayParts(got[6].Parts) != "recent bash result" {
+		t.Fatalf("expected second recent tool result before protected tail to remain, got %q", renderDisplayParts(got[6].Parts))
 	}
-	if got[9].Content != "tail bash result" {
-		t.Fatalf("expected protected tail tool result to remain, got %q", got[9].Content)
+	if renderDisplayParts(got[9].Parts) != "tail bash result" {
+		t.Fatalf("expected protected tail tool result to remain, got %q", renderDisplayParts(got[9].Parts))
 	}
 }
 
@@ -146,48 +146,48 @@ func TestMicroCompactMessagesKeepsPreservedToolsErrorsAndOrphans(t *testing.T) {
 				{ID: "call-1", Name: "custom_tool", Arguments: "{}"},
 			},
 		},
-		{Role: providertypes.RoleTool, ToolCallID: "call-1", Content: "custom result"},
+		{Role: providertypes.RoleTool, ToolCallID: "call-1", Parts: []providertypes.ContentPart{providertypes.NewTextPart("custom result")}},
 		{
 			Role: providertypes.RoleAssistant,
 			ToolCalls: []providertypes.ToolCall{
 				{ID: "call-2", Name: "filesystem_edit", Arguments: "{}"},
 			},
 		},
-		{Role: providertypes.RoleTool, ToolCallID: "call-2", Content: "edit failed", IsError: true},
-		{Role: providertypes.RoleTool, ToolCallID: "orphan", Content: "orphan result"},
+		{Role: providertypes.RoleTool, ToolCallID: "call-2", Parts: []providertypes.ContentPart{providertypes.NewTextPart("edit failed")}, IsError: true},
+		{Role: providertypes.RoleTool, ToolCallID: "orphan", Parts: []providertypes.ContentPart{providertypes.NewTextPart("orphan result")}},
 		{
 			Role: providertypes.RoleAssistant,
 			ToolCalls: []providertypes.ToolCall{
 				{ID: "call-3", Name: "filesystem_write_file", Arguments: "{}"},
 			},
 		},
-		{Role: providertypes.RoleTool, ToolCallID: "call-3", Content: microCompactClearedMessage},
+		{Role: providertypes.RoleTool, ToolCallID: "call-3", Parts: []providertypes.ContentPart{providertypes.NewTextPart(microCompactClearedMessage)}},
 		{
 			Role: providertypes.RoleAssistant,
 			ToolCalls: []providertypes.ToolCall{
 				{ID: "call-4", Name: "filesystem_grep", Arguments: "{}"},
 			},
 		},
-		{Role: providertypes.RoleTool, ToolCallID: "call-4", Content: ""},
+		{Role: providertypes.RoleTool, ToolCallID: "call-4", Parts: []providertypes.ContentPart{providertypes.NewTextPart("")}},
 	}
 
 	got := microCompactMessagesWithPolicies(messages, stubMicroCompactPolicySource{
 		"custom_tool": tools.MicroCompactPolicyPreserveHistory,
 	}, 0)
-	if got[1].Content != "custom result" {
-		t.Fatalf("expected preserved tool result to remain, got %q", got[1].Content)
+	if renderDisplayParts(got[1].Parts) != "custom result" {
+		t.Fatalf("expected preserved tool result to remain, got %q", renderDisplayParts(got[1].Parts))
 	}
-	if got[3].Content != "edit failed" {
-		t.Fatalf("expected error tool result to remain, got %q", got[3].Content)
+	if renderDisplayParts(got[3].Parts) != "edit failed" {
+		t.Fatalf("expected error tool result to remain, got %q", renderDisplayParts(got[3].Parts))
 	}
-	if got[4].Content != "orphan result" {
-		t.Fatalf("expected orphan tool result to remain, got %q", got[4].Content)
+	if renderDisplayParts(got[4].Parts) != "orphan result" {
+		t.Fatalf("expected orphan tool result to remain, got %q", renderDisplayParts(got[4].Parts))
 	}
-	if got[6].Content != microCompactClearedMessage {
-		t.Fatalf("expected already cleared content to remain unchanged, got %q", got[6].Content)
+	if renderDisplayParts(got[6].Parts) != microCompactClearedMessage {
+		t.Fatalf("expected already cleared content to remain unchanged, got %q", renderDisplayParts(got[6].Parts))
 	}
-	if got[8].Content != "" {
-		t.Fatalf("expected empty tool result to remain empty, got %q", got[8].Content)
+	if renderDisplayParts(got[8].Parts) != "" {
+		t.Fatalf("expected empty tool result to remain empty, got %q", renderDisplayParts(got[8].Parts))
 	}
 }
 
@@ -195,7 +195,7 @@ func TestMicroCompactMessagesClearsOnlyNonPreservedResultsInMixedToolSpan(t *tes
 	t.Parallel()
 
 	messages := []providertypes.Message{
-		{Role: providertypes.RoleUser, Content: "older user"},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("older user")}},
 		{
 			Role: providertypes.RoleAssistant,
 			ToolCalls: []providertypes.ToolCall{
@@ -203,34 +203,34 @@ func TestMicroCompactMessagesClearsOnlyNonPreservedResultsInMixedToolSpan(t *tes
 				{ID: "call-2", Name: "custom_tool", Arguments: "{}"},
 			},
 		},
-		{Role: providertypes.RoleTool, ToolCallID: "call-1", Content: "read result"},
-		{Role: providertypes.RoleTool, ToolCallID: "call-2", Content: "custom result"},
+		{Role: providertypes.RoleTool, ToolCallID: "call-1", Parts: []providertypes.ContentPart{providertypes.NewTextPart("read result")}},
+		{Role: providertypes.RoleTool, ToolCallID: "call-2", Parts: []providertypes.ContentPart{providertypes.NewTextPart("custom result")}},
 		{
 			Role: providertypes.RoleAssistant,
 			ToolCalls: []providertypes.ToolCall{
 				{ID: "call-3", Name: "bash", Arguments: "{}"},
 			},
 		},
-		{Role: providertypes.RoleTool, ToolCallID: "call-3", Content: "recent bash result"},
+		{Role: providertypes.RoleTool, ToolCallID: "call-3", Parts: []providertypes.ContentPart{providertypes.NewTextPart("recent bash result")}},
 		{
 			Role: providertypes.RoleAssistant,
 			ToolCalls: []providertypes.ToolCall{
 				{ID: "call-4", Name: "webfetch", Arguments: "{}"},
 			},
 		},
-		{Role: providertypes.RoleTool, ToolCallID: "call-4", Content: "latest webfetch result"},
-		{Role: providertypes.RoleUser, Content: "latest explicit instruction"},
-		{Role: providertypes.RoleAssistant, Content: "current reply"},
+		{Role: providertypes.RoleTool, ToolCallID: "call-4", Parts: []providertypes.ContentPart{providertypes.NewTextPart("latest webfetch result")}},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("latest explicit instruction")}},
+		{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("current reply")}},
 	}
 
 	got := microCompactMessagesWithPolicies(messages, stubMicroCompactPolicySource{
 		"custom_tool": tools.MicroCompactPolicyPreserveHistory,
 	}, 0)
-	if got[2].Content != microCompactClearedMessage {
-		t.Fatalf("expected default compactable tool result to be cleared, got %q", got[2].Content)
+	if renderDisplayParts(got[2].Parts) != microCompactClearedMessage {
+		t.Fatalf("expected default compactable tool result to be cleared, got %q", renderDisplayParts(got[2].Parts))
 	}
-	if got[3].Content != "custom result" {
-		t.Fatalf("expected preserved tool result in mixed span to remain, got %q", got[3].Content)
+	if renderDisplayParts(got[3].Parts) != "custom result" {
+		t.Fatalf("expected preserved tool result in mixed span to remain, got %q", renderDisplayParts(got[3].Parts))
 	}
 	if len(got[1].ToolCalls) != 2 {
 		t.Fatalf("expected assistant tool call metadata to remain intact, got %+v", got[1].ToolCalls)
@@ -241,34 +241,34 @@ func TestMicroCompactMessagesTreatsNewToolsAsCompactableByDefault(t *testing.T) 
 	t.Parallel()
 
 	messages := []providertypes.Message{
-		{Role: providertypes.RoleUser, Content: "older user"},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("older user")}},
 		{
 			Role: providertypes.RoleAssistant,
 			ToolCalls: []providertypes.ToolCall{
 				{ID: "call-1", Name: "repo_search", Arguments: "{}"},
 			},
 		},
-		{Role: providertypes.RoleTool, ToolCallID: "call-1", Content: "old repo search result"},
+		{Role: providertypes.RoleTool, ToolCallID: "call-1", Parts: []providertypes.ContentPart{providertypes.NewTextPart("old repo search result")}},
 		{
 			Role: providertypes.RoleAssistant,
 			ToolCalls: []providertypes.ToolCall{
 				{ID: "call-2", Name: "bash", Arguments: "{}"},
 			},
 		},
-		{Role: providertypes.RoleTool, ToolCallID: "call-2", Content: "recent bash result"},
+		{Role: providertypes.RoleTool, ToolCallID: "call-2", Parts: []providertypes.ContentPart{providertypes.NewTextPart("recent bash result")}},
 		{
 			Role: providertypes.RoleAssistant,
 			ToolCalls: []providertypes.ToolCall{
 				{ID: "call-3", Name: "webfetch", Arguments: "{}"},
 			},
 		},
-		{Role: providertypes.RoleTool, ToolCallID: "call-3", Content: "latest webfetch result"},
-		{Role: providertypes.RoleUser, Content: "latest explicit instruction"},
+		{Role: providertypes.RoleTool, ToolCallID: "call-3", Parts: []providertypes.ContentPart{providertypes.NewTextPart("latest webfetch result")}},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("latest explicit instruction")}},
 	}
 
 	got := microCompactMessagesWithPolicies(messages, stubMicroCompactPolicySource{}, 0)
-	if got[2].Content != microCompactClearedMessage {
-		t.Fatalf("expected new tool result to be compacted by default, got %q", got[2].Content)
+	if renderDisplayParts(got[2].Parts) != microCompactClearedMessage {
+		t.Fatalf("expected new tool result to be compacted by default, got %q", renderDisplayParts(got[2].Parts))
 	}
 }
 
@@ -276,61 +276,61 @@ func TestMicroCompactMessagesSkipsEmptyRecentSpansWhenCountingRetainedBudget(t *
 	t.Parallel()
 
 	messages := []providertypes.Message{
-		{Role: providertypes.RoleUser, Content: "older user"},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("older user")}},
 		{
 			Role: providertypes.RoleAssistant,
 			ToolCalls: []providertypes.ToolCall{
 				{ID: "call-1", Name: "filesystem_read_file", Arguments: "{}"},
 			},
 		},
-		{Role: providertypes.RoleTool, ToolCallID: "call-1", Content: "older read result"},
+		{Role: providertypes.RoleTool, ToolCallID: "call-1", Parts: []providertypes.ContentPart{providertypes.NewTextPart("older read result")}},
 		{
 			Role: providertypes.RoleAssistant,
 			ToolCalls: []providertypes.ToolCall{
 				{ID: "call-2", Name: "filesystem_grep", Arguments: "{}"},
 			},
 		},
-		{Role: providertypes.RoleTool, ToolCallID: "call-2", Content: "middle grep result"},
+		{Role: providertypes.RoleTool, ToolCallID: "call-2", Parts: []providertypes.ContentPart{providertypes.NewTextPart("middle grep result")}},
 		{
 			Role: providertypes.RoleAssistant,
 			ToolCalls: []providertypes.ToolCall{
 				{ID: "call-3", Name: "filesystem_edit", Arguments: "{}"},
 			},
 		},
-		{Role: providertypes.RoleTool, ToolCallID: "call-3", Content: "near edit result"},
+		{Role: providertypes.RoleTool, ToolCallID: "call-3", Parts: []providertypes.ContentPart{providertypes.NewTextPart("near edit result")}},
 		{
 			Role: providertypes.RoleAssistant,
 			ToolCalls: []providertypes.ToolCall{
 				{ID: "call-4", Name: "bash", Arguments: "{}"},
 			},
 		},
-		{Role: providertypes.RoleTool, ToolCallID: "call-4", Content: "", IsError: true},
+		{Role: providertypes.RoleTool, ToolCallID: "call-4", Parts: []providertypes.ContentPart{providertypes.NewTextPart("")}, IsError: true},
 		{
 			Role: providertypes.RoleAssistant,
 			ToolCalls: []providertypes.ToolCall{
 				{ID: "call-5", Name: "webfetch", Arguments: "{}"},
 			},
 		},
-		{Role: providertypes.RoleTool, ToolCallID: "call-5", Content: ""},
-		{Role: providertypes.RoleUser, Content: "latest explicit instruction"},
-		{Role: providertypes.RoleAssistant, Content: "current reply"},
+		{Role: providertypes.RoleTool, ToolCallID: "call-5", Parts: []providertypes.ContentPart{providertypes.NewTextPart("")}},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("latest explicit instruction")}},
+		{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("current reply")}},
 	}
 
 	got := microCompactMessages(messages)
-	if got[2].Content != microCompactClearedMessage {
-		t.Fatalf("expected oldest valid tool result to be cleared, got %q", got[2].Content)
+	if renderDisplayParts(got[2].Parts) != microCompactClearedMessage {
+		t.Fatalf("expected oldest valid tool result to be cleared, got %q", renderDisplayParts(got[2].Parts))
 	}
-	if got[4].Content != "middle grep result" {
-		t.Fatalf("expected middle valid tool result to remain, got %q", got[4].Content)
+	if renderDisplayParts(got[4].Parts) != "middle grep result" {
+		t.Fatalf("expected middle valid tool result to remain, got %q", renderDisplayParts(got[4].Parts))
 	}
-	if got[6].Content != "near edit result" {
-		t.Fatalf("expected nearer valid tool result to remain, got %q", got[6].Content)
+	if renderDisplayParts(got[6].Parts) != "near edit result" {
+		t.Fatalf("expected nearer valid tool result to remain, got %q", renderDisplayParts(got[6].Parts))
 	}
-	if got[8].Content != "" {
-		t.Fatalf("expected error/empty tool result to remain unchanged, got %q", got[8].Content)
+	if renderDisplayParts(got[8].Parts) != "" {
+		t.Fatalf("expected error/empty tool result to remain unchanged, got %q", renderDisplayParts(got[8].Parts))
 	}
-	if got[10].Content != "" {
-		t.Fatalf("expected empty recent tool result to remain unchanged, got %q", got[10].Content)
+	if renderDisplayParts(got[10].Parts) != "" {
+		t.Fatalf("expected empty recent tool result to remain unchanged, got %q", renderDisplayParts(got[10].Parts))
 	}
 }
 
@@ -338,11 +338,11 @@ func TestMicroCompactMessagesSkipsToolMessagesWhenCompactableIDsMissing(t *testi
 	t.Parallel()
 
 	messages := []providertypes.Message{
-		{Role: providertypes.RoleTool, ToolCallID: "orphan", Content: "orphan result"},
+		{Role: providertypes.RoleTool, ToolCallID: "orphan", Parts: []providertypes.ContentPart{providertypes.NewTextPart("orphan result")}},
 	}
 
 	got := microCompactMessagesWithPolicies(messages, stubMicroCompactPolicySource{}, 0)
-	if got[0].Content != "orphan result" {
-		t.Fatalf("expected orphan tool result to remain, got %q", got[0].Content)
+	if renderDisplayParts(got[0].Parts) != "orphan result" {
+		t.Fatalf("expected orphan tool result to remain, got %q", renderDisplayParts(got[0].Parts))
 	}
 }

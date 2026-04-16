@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"neo-code/internal/partsrender"
 	providertypes "neo-code/internal/provider/types"
 )
 
@@ -122,11 +123,17 @@ func FormatToolMessageForModel(message providertypes.Message) string {
 	lines = append(lines, fmt.Sprintf("truncated: %t", toolMessageTruncated(message.ToolMetadata)))
 	lines = append(lines, formatToolMetadataLines(message.ToolMetadata)...)
 
-	if strings.TrimSpace(message.Content) != "" {
-		lines = append(lines, "", "content:", message.Content)
+	content := renderToolMessageParts(message.Parts)
+	if strings.TrimSpace(content) != "" {
+		lines = append(lines, "", "content:", content)
 	}
 
 	return strings.Join(lines, "\n")
+}
+
+// renderToolMessageParts 将工具消息分片渲染为模型可消费的文本，图片仅保留安全占位。
+func renderToolMessageParts(parts []providertypes.ContentPart) string {
+	return partsrender.RenderDisplayParts(parts)
 }
 
 // FormatError builds a consistent error payload for tool failures.

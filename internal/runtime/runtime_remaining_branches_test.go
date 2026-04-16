@@ -448,7 +448,7 @@ func TestRunAndProviderRetryRemainingBranches(t *testing.T) {
 		store := &postSaveHookStore{base: base, saveHook: cancel}
 		service := NewWithFactory(manager, &stubToolManager{}, store, &scriptedProviderFactory{provider: &scriptedProvider{}}, &stubContextBuilder{})
 
-		err := service.Run(ctx, UserInput{RunID: "run-cancel-before-snapshot", SessionID: existing.ID, Content: "hello"})
+		err := service.Run(ctx, UserInput{RunID: "run-cancel-before-snapshot", SessionID: existing.ID, Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")}})
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("expected context.Canceled, got %v", err)
 		}
@@ -465,7 +465,7 @@ func TestRunAndProviderRetryRemainingBranches(t *testing.T) {
 
 		service := NewWithFactory(manager, &stubToolManager{}, store, &scriptedProviderFactory{provider: &scriptedProvider{streams: [][]providertypes.StreamEvent{{providertypes.NewTextDeltaStreamEvent("answer")}}}}, &stubContextBuilder{})
 
-		err := service.Run(context.Background(), UserInput{RunID: "run-assistant-save-fail", SessionID: existing.ID, Content: "hello"})
+		err := service.Run(context.Background(), UserInput{RunID: "run-assistant-save-fail", SessionID: existing.ID, Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")}})
 		if err == nil || !containsError(err, "assistant save failed") {
 			t.Fatalf("expected assistant save error, got %v", err)
 		}

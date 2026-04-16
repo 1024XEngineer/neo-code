@@ -12,12 +12,12 @@ func TestCompactionPlannerKeepRecentPlan(t *testing.T) {
 
 	planner := compactionPlanner{}
 	plan, err := planner.Plan(ModeManual, []providertypes.Message{
-		{Role: providertypes.RoleUser, Content: "old request"},
-		{Role: providertypes.RoleAssistant, Content: "old answer"},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("old request")}},
+		{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("old answer")}},
 		{Role: providertypes.RoleAssistant, ToolCalls: []providertypes.ToolCall{{ID: "call-1", Name: "filesystem_read_file", Arguments: "{}"}}},
-		{Role: providertypes.RoleTool, ToolCallID: "call-1", Content: "tool result"},
-		{Role: providertypes.RoleUser, Content: "latest instruction"},
-		{Role: providertypes.RoleAssistant, Content: "latest answer"},
+		{Role: providertypes.RoleTool, ToolCallID: "call-1", Parts: []providertypes.ContentPart{providertypes.NewTextPart("tool result")}},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("latest instruction")}},
+		{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("latest answer")}},
 	}, config.CompactConfig{
 		ManualStrategy:           config.CompactManualStrategyKeepRecent,
 		ManualKeepRecentMessages: 3,
@@ -44,10 +44,10 @@ func TestCompactionPlannerFullReplaceProtectsLatestExplicitUserInstruction(t *te
 
 	planner := compactionPlanner{}
 	plan, err := planner.Plan(ModeManual, []providertypes.Message{
-		{Role: providertypes.RoleUser, Content: "old request"},
-		{Role: providertypes.RoleAssistant, Content: "old answer"},
-		{Role: providertypes.RoleUser, Content: "latest instruction"},
-		{Role: providertypes.RoleAssistant, Content: "latest answer"},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("old request")}},
+		{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("old answer")}},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("latest instruction")}},
+		{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("latest answer")}},
 	}, config.CompactConfig{
 		ManualStrategy: config.CompactManualStrategyFullReplace,
 	})
@@ -60,7 +60,7 @@ func TestCompactionPlannerFullReplaceProtectsLatestExplicitUserInstruction(t *te
 	if len(plan.Archived) != 2 || len(plan.Retained) != 2 {
 		t.Fatalf("unexpected full_replace plan: %+v", plan)
 	}
-	if plan.Retained[0].Role != providertypes.RoleUser || plan.Retained[0].Content != "latest instruction" {
+	if plan.Retained[0].Role != providertypes.RoleUser || renderTranscriptParts(plan.Retained[0].Parts) != "latest instruction" {
 		t.Fatalf("expected latest explicit user instruction to stay retained, got %+v", plan.Retained)
 	}
 }
@@ -78,10 +78,10 @@ func TestCompactionPlannerReactiveModeAlwaysUsesKeepRecentStrategy(t *testing.T)
 	t.Parallel()
 
 	plan, err := (compactionPlanner{}).Plan(ModeReactive, []providertypes.Message{
-		{Role: providertypes.RoleUser, Content: "old request"},
-		{Role: providertypes.RoleAssistant, Content: "old answer"},
-		{Role: providertypes.RoleUser, Content: "latest request"},
-		{Role: providertypes.RoleAssistant, Content: "latest answer"},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("old request")}},
+		{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("old answer")}},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("latest request")}},
+		{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("latest answer")}},
 	}, config.CompactConfig{
 		ManualStrategy:           "unsupported",
 		ManualKeepRecentMessages: 2,

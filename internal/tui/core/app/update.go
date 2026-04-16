@@ -350,13 +350,6 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 				return a, tea.Batch(cmds...)
 			}
 
-			// 如果不是立即执行的命令，再执行常规的输入重置
-			a.input.Reset()
-			a.state.InputText = ""
-			a.applyComponentLayout(true)
-			a.refreshCommandMenu()
-			a.resetPasteHeuristics()
-
 			switch strings.ToLower(input) {
 			case slashCommandHelp:
 				a.refreshHelpPicker()
@@ -425,6 +418,20 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 				a.clearImageAttachments()
 				return a, tea.Batch(cmds...)
 			}
+			if a.hasImageAttachments() {
+				a.state.ExecutionError = "image attachments require session asset storage before sending"
+				a.state.StatusText = "Image attachments need session asset support"
+				a.appendActivity("multimodal", "Image attachments not sent", "Session asset storage is not available yet; images were not converted to text.", true)
+				a.clearImageAttachments()
+				return a, tea.Batch(cmds...)
+			}
+
+			// 如果不是立即执行的命令，再执行常规的输入重置
+			a.input.Reset()
+			a.state.InputText = ""
+			a.applyComponentLayout(true)
+			a.refreshCommandMenu()
+			a.resetPasteHeuristics()
 
 			a.clearActivities()
 			a.clearRunProgress()
@@ -435,17 +442,12 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 			a.state.StatusText = statusThinking
 			a.state.CurrentTool = ""
 
-			if a.hasImageAttachments() {
-				a.appendActivity("multimodal", "Sending message with image metadata", fmt.Sprintf("%d image(s) attached", len(a.pendingImageAttachments)), false)
-			}
-
-			composedInput := a.composeMessageWithImageAttachments(input)
-			a.activeMessages = append(a.activeMessages, providertypes.Message{Role: roleUser, Content: composedInput})
+			a.activeMessages = append(a.activeMessages, providertypes.Message{Role: roleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart(input)}})
 			a.rebuildTranscript()
 			runID := fmt.Sprintf("run-%d", a.now().UnixNano())
 			a.state.ActiveRunID = runID
 			requestedWorkdir := tuiutils.RequestedWorkdirForRun(a.state.CurrentWorkdir)
-			cmds = append(cmds, runAgent(a.runtime, runID, a.state.ActiveSessionID, requestedWorkdir, composedInput))
+			cmds = append(cmds, runAgent(a.runtime, runID, a.state.ActiveSessionID, requestedWorkdir, input))
 			a.clearImageAttachments()
 			return a, tea.Batch(cmds...)
 		}
@@ -632,18 +634,6 @@ func (a App) updatePicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return a, nil
 			}
 			return a, runModelSelection(a.providerSvc, item.id)
-		case pickerSession:
-			item, ok := a.sessionPicker.SelectedItem().(sessionItem)
-			a.closePicker()
-			if !ok {
-				return a, nil
-			}
-			if err := a.activateSessionByID(item.Summary.ID); err != nil {
-				a.state.ExecutionError = err.Error()
-				a.state.StatusText = err.Error()
-				a.appendActivity("system", "Failed to switch session", err.Error(), true)
-			}
-			return a, nil
 		case pickerHelp:
 			item, ok := a.helpPicker.SelectedItem().(selectionItem)
 			a.closePicker()
@@ -651,6 +641,17 @@ func (a App) updatePicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return a, nil
 			}
 			return a, a.runSlashCommandSelection(item.id)
+		case pickerSession:
+			a.closePicker()
+			if err := a.activateSelectedSession(); err != nil {
+				a.state.ExecutionError = err.Error()
+				a.state.StatusText = err.Error()
+				a.appendActivity("session", "Failed to activate session", err.Error(), true)
+				return a, nil
+			}
+			a.rebuildTranscript()
+			a.state.StatusText = statusReady
+			return a, nil
 		}
 	}
 
@@ -1053,7 +1054,7 @@ func runtimeEventToolResultHandler(a *App, event agentruntime.RuntimeEvent) bool
 	}
 	a.activeMessages = append(a.activeMessages, providertypes.Message{
 		Role:    roleTool,
-		Content: payload.Content,
+		Parts:   []providertypes.ContentPart{providertypes.NewTextPart(payload.Content)},
 		IsError: payload.IsError,
 	})
 	if payload.IsError {
@@ -1100,8 +1101,11 @@ func runtimeEventAgentDoneHandler(a *App, event agentruntime.RuntimeEvent) bool 
 	if strings.TrimSpace(a.state.ExecutionError) == "" {
 		a.state.StatusText = statusReady
 	}
-	if payload, ok := event.Payload.(providertypes.Message); ok && strings.TrimSpace(payload.Content) != "" && !a.lastAssistantMatches(payload.Content) {
-		a.activeMessages = append(a.activeMessages, providertypes.Message{Role: roleAssistant, Content: payload.Content})
+	if payload, ok := event.Payload.(providertypes.Message); ok {
+		content := renderMessagePartsForDisplay(payload.Parts)
+		if strings.TrimSpace(content) != "" && !a.lastAssistantMatches(content) {
+			a.activeMessages = append(a.activeMessages, providertypes.Message{Role: roleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart(content)}})
+		}
 		return true
 	}
 	return false
@@ -1258,12 +1262,13 @@ func (a *App) appendAssistantChunk(chunk string) {
 	}
 
 	if !a.state.StreamingReply || len(a.activeMessages) == 0 || a.activeMessages[len(a.activeMessages)-1].Role != roleAssistant {
-		a.activeMessages = append(a.activeMessages, providertypes.Message{Role: roleAssistant, Content: chunk})
+		a.activeMessages = append(a.activeMessages, providertypes.Message{Role: roleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart(chunk)}})
 		a.state.StreamingReply = true
 		return
 	}
 
-	a.activeMessages[len(a.activeMessages)-1].Content += chunk
+	content := renderMessagePartsForDisplay(a.activeMessages[len(a.activeMessages)-1].Parts)
+	a.activeMessages[len(a.activeMessages)-1].Parts = []providertypes.ContentPart{providertypes.NewTextPart(content + chunk)}
 }
 
 func (a *App) appendInlineMessage(role string, message string) {
@@ -1272,7 +1277,7 @@ func (a *App) appendInlineMessage(role string, message string) {
 		return
 	}
 
-	a.activeMessages = append(a.activeMessages, providertypes.Message{Role: role, Content: content})
+	a.activeMessages = append(a.activeMessages, providertypes.Message{Role: role, Parts: []providertypes.ContentPart{providertypes.NewTextPart(content)}})
 }
 
 func (a *App) appendActivity(kind string, title string, detail string, isError bool) {
@@ -1324,7 +1329,7 @@ func (a *App) lastAssistantMatches(content string) bool {
 	}
 
 	last := a.activeMessages[len(a.activeMessages)-1]
-	return last.Role == roleAssistant && strings.TrimSpace(last.Content) == strings.TrimSpace(content)
+	return last.Role == roleAssistant && strings.TrimSpace(renderMessagePartsForDisplay(last.Parts)) == strings.TrimSpace(content)
 }
 
 func (a *App) handleViewportKeys(vp *viewport.Model, msg tea.KeyMsg) {
@@ -1896,7 +1901,7 @@ func runAgent(runtime agentruntime.Runtime, runID string, sessionID string, work
 		agentruntime.UserInput{
 			SessionID: sessionID,
 			RunID:     strings.TrimSpace(runID),
-			Content:   content,
+			Parts:     []providertypes.ContentPart{providertypes.NewTextPart(content)},
 			Workdir:   workdir,
 		},
 		func(err error) tea.Msg { return runFinishedMsg{Err: err} },

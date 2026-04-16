@@ -11,47 +11,47 @@ func TestProjectToolMessagesForModelSkipsMessagesThatCannotBeProjected(t *testin
 	t.Parallel()
 
 	messages := []providertypes.Message{
-		{Role: providertypes.RoleUser, Content: "user"},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("user")}},
 		{
 			Role:         providertypes.RoleTool,
 			ToolCallID:   "call-1",
-			Content:      "tool output",
+			Parts:        []providertypes.ContentPart{providertypes.NewTextPart("tool output")},
 			ToolMetadata: nil,
 		},
 		{
 			Role:         providertypes.RoleTool,
 			ToolCallID:   "call-2",
-			Content:      "   ",
+			Parts:        []providertypes.ContentPart{providertypes.NewTextPart("   ")},
 			ToolMetadata: map[string]string{"tool_name": "bash"},
 		},
 		{
 			Role:         providertypes.RoleTool,
 			ToolCallID:   "call-3",
-			Content:      microCompactClearedMessage,
+			Parts:        []providertypes.ContentPart{providertypes.NewTextPart(microCompactClearedMessage)},
 			ToolMetadata: map[string]string{"tool_name": "bash"},
 		},
 		{
 			Role:         providertypes.RoleTool,
 			ToolCallID:   "call-4",
-			Content:      "result",
+			Parts:        []providertypes.ContentPart{providertypes.NewTextPart("result")},
 			ToolMetadata: map[string]string{"tool_name": "filesystem_read_file", "path": "README.md"},
 		},
 	}
 
 	projected := ProjectToolMessagesForModel(cloneContextMessages(messages))
-	if projected[0].Content != "user" {
+	if renderDisplayParts(projected[0].Parts) != "user" {
 		t.Fatalf("non-tool message should remain unchanged, got %+v", projected[0])
 	}
-	if projected[1].Content != "tool output" || projected[1].ToolMetadata != nil {
+	if renderDisplayParts(projected[1].Parts) != "tool output" || projected[1].ToolMetadata != nil {
 		t.Fatalf("tool without projection metadata should remain unchanged, got %+v", projected[1])
 	}
-	if !strings.Contains(projected[2].Content, "tool result") || projected[2].ToolMetadata != nil {
+	if !strings.Contains(renderDisplayParts(projected[2].Parts), "tool result") || projected[2].ToolMetadata != nil {
 		t.Fatalf("metadata-only tool message should be projected, got %+v", projected[2])
 	}
-	if projected[3].Content != microCompactClearedMessage || projected[3].ToolMetadata == nil {
+	if renderDisplayParts(projected[3].Parts) != microCompactClearedMessage || projected[3].ToolMetadata == nil {
 		t.Fatalf("cleared tool content should not be projected, got %+v", projected[3])
 	}
-	if !strings.Contains(projected[4].Content, "tool result") || projected[4].ToolMetadata != nil {
+	if !strings.Contains(renderDisplayParts(projected[4].Parts), "tool result") || projected[4].ToolMetadata != nil {
 		t.Fatalf("valid tool message should be projected, got %+v", projected[4])
 	}
 }
@@ -71,13 +71,13 @@ func TestBuildRecentMessagesForModelBoundaries(t *testing.T) {
 		},
 		{
 			name:     "non-positive limit",
-			messages: []providertypes.Message{{Role: providertypes.RoleUser, Content: "x"}},
+			messages: []providertypes.Message{{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("x")}}},
 			limit:    0,
 		},
 		{
 			name: "no keepable anchor",
 			messages: []providertypes.Message{
-				{Role: providertypes.RoleTool, ToolCallID: "orphan", Content: "orphan"},
+				{Role: providertypes.RoleTool, ToolCallID: "orphan", Parts: []providertypes.ContentPart{providertypes.NewTextPart("orphan")}},
 			},
 			limit: 10,
 		},
@@ -98,7 +98,7 @@ func TestBuildRecentMessagesForModelKeepsOnlyRecentValidAnchors(t *testing.T) {
 	t.Parallel()
 
 	original := []providertypes.Message{
-		{Role: providertypes.RoleUser, Content: "old-user"},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("old-user")}},
 		{
 			Role: providertypes.RoleAssistant,
 			ToolCalls: []providertypes.ToolCall{
@@ -108,10 +108,10 @@ func TestBuildRecentMessagesForModelKeepsOnlyRecentValidAnchors(t *testing.T) {
 		{
 			Role:         providertypes.RoleTool,
 			ToolCallID:   "call-1",
-			Content:      "README body",
+			Parts:        []providertypes.ContentPart{providertypes.NewTextPart("README body")},
 			ToolMetadata: map[string]string{"tool_name": "filesystem_read_file", "path": "README.md"},
 		},
-		{Role: providertypes.RoleUser, Content: "latest-user"},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("latest-user")}},
 	}
 
 	recent := BuildRecentMessagesForModel(original, 2)
@@ -121,21 +121,21 @@ func TestBuildRecentMessagesForModelKeepsOnlyRecentValidAnchors(t *testing.T) {
 	if recent[0].Role != providertypes.RoleAssistant || len(recent[0].ToolCalls) != 1 {
 		t.Fatalf("expected valid tool span to remain, got %+v", recent[0])
 	}
-	if recent[1].Role != providertypes.RoleTool || !strings.Contains(recent[1].Content, "tool result") {
+	if recent[1].Role != providertypes.RoleTool || !strings.Contains(renderDisplayParts(recent[1].Parts), "tool result") {
 		t.Fatalf("expected tool message to be projected, got %+v", recent[1])
 	}
-	if strings.Contains(recent[1].Content, "content:\nREADME body") {
+	if strings.Contains(renderDisplayParts(recent[1].Parts), "content:\nREADME body") {
 		t.Fatalf("expected tool payload to be minimized, got %+v", recent[1])
 	}
-	if !strings.Contains(recent[1].Content, "content_excerpt:") {
+	if !strings.Contains(renderDisplayParts(recent[1].Parts), "content_excerpt:") {
 		t.Fatalf("expected tool payload excerpt marker, got %+v", recent[1])
 	}
-	if recent[2].Content != "latest-user" {
+	if renderDisplayParts(recent[2].Parts) != "latest-user" {
 		t.Fatalf("expected latest user anchor to remain, got %+v", recent[2])
 	}
 
-	recent[1].Content = "changed"
-	if original[2].Content != "README body" {
+	recent[1].Parts = []providertypes.ContentPart{providertypes.NewTextPart("changed")}
+	if renderDisplayParts(original[2].Parts) != "README body" {
 		t.Fatalf("expected original messages to remain unchanged, got %+v", original[2])
 	}
 }
@@ -154,24 +154,24 @@ func TestBuildRecentMessagesForModelRespectsAbsoluteMessageBudget(t *testing.T) 
 				{ID: "call-5", Name: "bash", Arguments: `{}`},
 			},
 		},
-		{Role: providertypes.RoleTool, ToolCallID: "call-1", Content: "one", ToolMetadata: map[string]string{"tool_name": "bash"}},
-		{Role: providertypes.RoleTool, ToolCallID: "call-2", Content: "two", ToolMetadata: map[string]string{"tool_name": "bash"}},
-		{Role: providertypes.RoleTool, ToolCallID: "call-3", Content: "three", ToolMetadata: map[string]string{"tool_name": "bash"}},
-		{Role: providertypes.RoleTool, ToolCallID: "call-4", Content: "four", ToolMetadata: map[string]string{"tool_name": "bash"}},
-		{Role: providertypes.RoleTool, ToolCallID: "call-5", Content: "five", ToolMetadata: map[string]string{"tool_name": "bash"}},
+		{Role: providertypes.RoleTool, ToolCallID: "call-1", Parts: []providertypes.ContentPart{providertypes.NewTextPart("one")}, ToolMetadata: map[string]string{"tool_name": "bash"}},
+		{Role: providertypes.RoleTool, ToolCallID: "call-2", Parts: []providertypes.ContentPart{providertypes.NewTextPart("two")}, ToolMetadata: map[string]string{"tool_name": "bash"}},
+		{Role: providertypes.RoleTool, ToolCallID: "call-3", Parts: []providertypes.ContentPart{providertypes.NewTextPart("three")}, ToolMetadata: map[string]string{"tool_name": "bash"}},
+		{Role: providertypes.RoleTool, ToolCallID: "call-4", Parts: []providertypes.ContentPart{providertypes.NewTextPart("four")}, ToolMetadata: map[string]string{"tool_name": "bash"}},
+		{Role: providertypes.RoleTool, ToolCallID: "call-5", Parts: []providertypes.ContentPart{providertypes.NewTextPart("five")}, ToolMetadata: map[string]string{"tool_name": "bash"}},
 	}
 
 	messages := []providertypes.Message{
-		{Role: providertypes.RoleUser, Content: "old-user"},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("old-user")}},
 	}
 	messages = append(messages, longSpan...)
-	messages = append(messages, providertypes.Message{Role: providertypes.RoleUser, Content: "latest-user"})
+	messages = append(messages, providertypes.Message{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("latest-user")}})
 
 	recent := BuildRecentMessagesForModel(messages, 3)
 	if len(recent) != 2 {
 		t.Fatalf("len(recent) = %d, want 2", len(recent))
 	}
-	if recent[0].Content != "old-user" || recent[1].Content != "latest-user" {
+	if renderDisplayParts(recent[0].Parts) != "old-user" || renderDisplayParts(recent[1].Parts) != "latest-user" {
 		t.Fatalf("expected oversized tool span to be skipped, got %+v", recent)
 	}
 }
@@ -197,14 +197,14 @@ func TestMatchedToolCallSpanRejectsInvalidAssistantStates(t *testing.T) {
 	t.Parallel()
 
 	messages := []providertypes.Message{
-		{Role: providertypes.RoleUser, Content: "user"},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("user")}},
 		{
 			Role: providertypes.RoleAssistant,
 			ToolCalls: []providertypes.ToolCall{
 				{ID: " ", Name: "bash", Arguments: `{}`},
 			},
 		},
-		{Role: providertypes.RoleTool, ToolCallID: "call-1", Content: "tool output"},
+		{Role: providertypes.RoleTool, ToolCallID: "call-1", Parts: []providertypes.ContentPart{providertypes.NewTextPart("tool output")}},
 	}
 
 	if span := matchedToolCallSpan(messages, -1); span != nil {
@@ -232,12 +232,12 @@ func TestMatchedToolCallSpanRequiresProjectableResponsesAndSkipsDuplicates(t *te
 				{ID: "call-2", Name: "filesystem_read_file", Arguments: `{}`},
 			},
 		},
-		{Role: providertypes.RoleTool, ToolCallID: "call-1", Content: "", ToolMetadata: map[string]string{"tool_name": "bash"}},
-		{Role: providertypes.RoleTool, ToolCallID: "call-1", Content: "first result", ToolMetadata: map[string]string{"tool_name": "bash"}},
-		{Role: providertypes.RoleTool, ToolCallID: "call-1", Content: "duplicate result", ToolMetadata: map[string]string{"tool_name": "bash"}},
-		{Role: providertypes.RoleTool, ToolCallID: "ignored", Content: "ignored result", ToolMetadata: map[string]string{"tool_name": "bash"}},
-		{Role: providertypes.RoleTool, ToolCallID: "call-2", Content: "second result", ToolMetadata: map[string]string{"tool_name": "filesystem_read_file"}},
-		{Role: providertypes.RoleUser, Content: "after"},
+		{Role: providertypes.RoleTool, ToolCallID: "call-1", Parts: []providertypes.ContentPart{providertypes.NewTextPart("")}, ToolMetadata: map[string]string{"tool_name": "bash"}},
+		{Role: providertypes.RoleTool, ToolCallID: "call-1", Parts: []providertypes.ContentPart{providertypes.NewTextPart("first result")}, ToolMetadata: map[string]string{"tool_name": "bash"}},
+		{Role: providertypes.RoleTool, ToolCallID: "call-1", Parts: []providertypes.ContentPart{providertypes.NewTextPart("duplicate result")}, ToolMetadata: map[string]string{"tool_name": "bash"}},
+		{Role: providertypes.RoleTool, ToolCallID: "ignored", Parts: []providertypes.ContentPart{providertypes.NewTextPart("ignored result")}, ToolMetadata: map[string]string{"tool_name": "bash"}},
+		{Role: providertypes.RoleTool, ToolCallID: "call-2", Parts: []providertypes.ContentPart{providertypes.NewTextPart("second result")}, ToolMetadata: map[string]string{"tool_name": "filesystem_read_file"}},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("after")}},
 	}
 
 	span := matchedToolCallSpan(messages, 0)
@@ -262,7 +262,7 @@ func TestMatchedToolCallSpanAcceptsMetadataOnlyResponses(t *testing.T) {
 		{
 			Role:         providertypes.RoleTool,
 			ToolCallID:   "call-1",
-			Content:      "   ",
+			Parts:        []providertypes.ContentPart{providertypes.NewTextPart("   ")},
 			ToolMetadata: map[string]string{"tool_name": "webfetch", "status_code": "200"},
 		},
 	}
@@ -283,7 +283,7 @@ func TestMatchedToolCallSpanRejectsResponsesWithoutProjectionMetadata(t *testing
 				{ID: "call-1", Name: "bash", Arguments: `{}`},
 			},
 		},
-		{Role: providertypes.RoleTool, ToolCallID: "call-1", Content: "raw result"},
+		{Role: providertypes.RoleTool, ToolCallID: "call-1", Parts: []providertypes.ContentPart{providertypes.NewTextPart("raw result")}},
 	}
 
 	if span := matchedToolCallSpan(messages, 0); span != nil {
@@ -301,27 +301,27 @@ func TestIsInjectableToolMessage(t *testing.T) {
 	}{
 		{
 			name:    "non-tool",
-			message: providertypes.Message{Role: providertypes.RoleUser, Content: "user"},
+			message: providertypes.Message{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("user")}},
 			want:    false,
 		},
 		{
 			name:    "empty",
-			message: providertypes.Message{Role: providertypes.RoleTool, Content: "   "},
+			message: providertypes.Message{Role: providertypes.RoleTool, Parts: []providertypes.ContentPart{providertypes.NewTextPart("   ")}},
 			want:    false,
 		},
 		{
 			name:    "metadata-only",
-			message: providertypes.Message{Role: providertypes.RoleTool, Content: "   ", ToolMetadata: map[string]string{"tool_name": "bash"}},
+			message: providertypes.Message{Role: providertypes.RoleTool, Parts: []providertypes.ContentPart{providertypes.NewTextPart("   ")}, ToolMetadata: map[string]string{"tool_name": "bash"}},
 			want:    true,
 		},
 		{
 			name:    "cleared",
-			message: providertypes.Message{Role: providertypes.RoleTool, Content: microCompactClearedMessage},
+			message: providertypes.Message{Role: providertypes.RoleTool, Parts: []providertypes.ContentPart{providertypes.NewTextPart(microCompactClearedMessage)}},
 			want:    false,
 		},
 		{
 			name:    "valid",
-			message: providertypes.Message{Role: providertypes.RoleTool, Content: "ok"},
+			message: providertypes.Message{Role: providertypes.RoleTool, Parts: []providertypes.ContentPart{providertypes.NewTextPart("ok")}},
 			want:    true,
 		},
 	}

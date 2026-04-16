@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
-	"strconv"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -429,30 +428,4 @@ func (a *App) canSendImageInput() bool {
 // invalidateModelCapabilityCache 在 provider 或 model 变化时清理图片能力缓存，避免复用旧结果。
 func (a *App) invalidateModelCapabilityCache() {
 	a.currentModelCapabilities = modelCapabilityState{}
-}
-
-// composeMessageWithImageAttachments 在发送前把附件元信息拼接到文本，避免附件在运行链路中丢失。
-func (a *App) composeMessageWithImageAttachments(content string) string {
-	trimmed := strings.TrimSpace(content)
-	if len(a.pendingImageAttachments) == 0 {
-		return trimmed
-	}
-
-	var builder strings.Builder
-	builder.WriteString(trimmed)
-	builder.WriteString("\n\n[Attached images]\n")
-	for index, attachment := range a.pendingImageAttachments {
-		builder.WriteString(strconv.Itoa(index + 1))
-		builder.WriteString(". ")
-		builder.WriteString(attachment.Name)
-		builder.WriteString(" | mime=")
-		builder.WriteString(attachment.MimeType)
-		builder.WriteString(" | bytes=")
-		builder.WriteString(strconv.FormatInt(attachment.Size, 10))
-		builder.WriteString(" | path=")
-		builder.WriteString(attachment.Path)
-		builder.WriteString("\n")
-	}
-	builder.WriteString("Treat the list above as user-provided image attachments.")
-	return builder.String()
 }

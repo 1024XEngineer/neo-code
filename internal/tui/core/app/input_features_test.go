@@ -200,29 +200,6 @@ func TestCanSendImageInputCacheInvalidationOnModelChange(t *testing.T) {
 	}
 }
 
-func TestComposeMessageWithImageAttachments(t *testing.T) {
-	app, _ := newTestApp(t)
-	app.pendingImageAttachments = []pendingImageAttachment{{
-		Path:     "/tmp/a.png",
-		Name:     "a.png",
-		MimeType: "image/png",
-		Size:     12,
-	}}
-
-	got := app.composeMessageWithImageAttachments("hello")
-	if !strings.Contains(got, "[Attached images]") || !strings.Contains(got, "a.png") || !strings.Contains(got, "path=/tmp/a.png") {
-		t.Fatalf("unexpected composed message: %q", got)
-	}
-}
-
-func TestComposeMessageWithImageAttachmentsNoAttachments(t *testing.T) {
-	app, _ := newTestApp(t)
-	got := app.composeMessageWithImageAttachments("  hello  ")
-	if got != "hello" {
-		t.Fatalf("expected trimmed content without attachment block, got %q", got)
-	}
-}
-
 func TestApplyImageReference(t *testing.T) {
 	app, _ := newTestApp(t)
 	root := t.TempDir()
@@ -416,7 +393,7 @@ func TestRunWorkspaceCommandCmd(t *testing.T) {
 	}
 }
 
-func TestUpdateSendWithImageAttachmentsComposesRuntimeInput(t *testing.T) {
+func TestUpdateSendWithImageAttachmentsBlocksUntilSessionAssets(t *testing.T) {
 	app, runtime := newTestApp(t)
 	root := t.TempDir()
 	imagePath := filepath.Join(root, "queued.png")
@@ -441,23 +418,23 @@ func TestUpdateSendWithImageAttachmentsComposesRuntimeInput(t *testing.T) {
 	app.state.InputText = "hello"
 
 	model, cmd := app.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	if cmd == nil {
-		t.Fatalf("expected run command")
+	if cmd != nil {
+		_ = cmd()
 	}
 	app = model.(App)
 	if app.hasImageAttachments() {
-		t.Fatalf("expected attachments cleared after send")
+		t.Fatalf("expected attachments cleared after unsupported send path")
 	}
-	if len(app.activeMessages) == 0 || !strings.Contains(app.activeMessages[len(app.activeMessages)-1].Content, "[Attached images]") {
-		t.Fatalf("expected composed user message in transcript")
+	if app.state.IsAgentRunning {
+		t.Fatalf("expected image send to be blocked until session assets are available")
 	}
-
-	msg := cmd()
-	_, ok := msg.(runFinishedMsg)
-	if !ok {
-		t.Fatalf("expected runFinishedMsg, got %T", msg)
+	if len(app.activeMessages) != 0 {
+		t.Fatalf("expected no text fallback message in transcript, got %+v", app.activeMessages)
 	}
-	if len(runtime.runInputs) != 1 || !strings.Contains(runtime.runInputs[0].Content, "[Attached images]") {
-		t.Fatalf("expected composed runtime input, got %+v", runtime.runInputs)
+	if len(runtime.runInputs) != 0 {
+		t.Fatalf("expected no runtime input with image metadata fallback, got %+v", runtime.runInputs)
+	}
+	if app.state.StatusText != "Image attachments need session asset support" {
+		t.Fatalf("unexpected status text: %q", app.state.StatusText)
 	}
 }

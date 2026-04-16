@@ -31,8 +31,8 @@ func TestJSONStoreSaveLoadAndListSummaries(t *testing.T) {
 		CreatedAt:     time.Now().Add(-2 * time.Hour),
 		UpdatedAt:     time.Now().Add(-1 * time.Hour),
 		Messages: []providertypes.Message{
-			{Role: "user", Content: "hello"},
-			{Role: "assistant", Content: "world"},
+			{Role: "user", Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")}},
+			{Role: "assistant", Parts: []providertypes.ContentPart{providertypes.NewTextPart("world")}},
 		},
 	}
 	newer := &Session{
@@ -43,7 +43,7 @@ func TestJSONStoreSaveLoadAndListSummaries(t *testing.T) {
 		UpdatedAt:     time.Now(),
 		Workdir:       t.TempDir(),
 		Messages: []providertypes.Message{
-			{Role: "user", Content: "new"},
+			{Role: "user", Parts: []providertypes.ContentPart{providertypes.NewTextPart("new")}},
 		},
 	}
 
@@ -64,7 +64,7 @@ func TestJSONStoreSaveLoadAndListSummaries(t *testing.T) {
 	if loaded.Workdir != older.Workdir {
 		t.Fatalf("expected persisted workdir %q, got %q", older.Workdir, loaded.Workdir)
 	}
-	if len(loaded.Messages) != 2 || loaded.Messages[1].Content != "world" {
+	if len(loaded.Messages) != 2 || renderPartsForTest(loaded.Messages[1].Parts) != "world" {
 		t.Fatalf("unexpected loaded messages: %+v", loaded.Messages)
 	}
 
@@ -230,7 +230,7 @@ func TestJSONStoreCorruptedSessionBehaviors(t *testing.T) {
 		Title:         "Valid Session",
 		CreatedAt:     time.Now().Add(-time.Minute),
 		UpdatedAt:     time.Now(),
-		Messages:      []providertypes.Message{{Role: "user", Content: "hello"}},
+		Messages:      []providertypes.Message{{Role: "user", Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")}}},
 	}
 	if err := store.Save(context.Background(), valid); err != nil {
 		t.Fatalf("Save valid session: %v", err)
@@ -525,7 +525,7 @@ func TestJSONStoreLoadRejectsMissingTaskState(t *testing.T) {
 	mustWriteSessionFile(
 		t,
 		filepath.Join(sessionDirectory(baseDir, workspaceRoot), "missing-task-state.json"),
-		`{"schema_version":1,"id":"missing-task-state","title":"x","messages":[]}`,
+		`{"schema_version":2,"id":"missing-task-state","title":"x","messages":[]}`,
 	)
 
 	_, err := store.Load(context.Background(), "missing-task-state")
@@ -557,7 +557,7 @@ func TestJSONStoreListSummariesSkipsUnreadableAndMalformedEntries(t *testing.T) 
 	mustWriteSessionFile(
 		t,
 		filepath.Join(sessionDirectory(baseDir, workspaceRoot), "missing-task-state-summary.json"),
-		`{"schema_version":1,"id":"missing-task-state-summary","title":"x","created_at":"2026-04-13T00:00:00Z","updated_at":"2026-04-13T00:00:00Z"}`,
+		`{"schema_version":2,"id":"missing-task-state-summary","title":"x","created_at":"2026-04-13T00:00:00Z","updated_at":"2026-04-13T00:00:00Z"}`,
 	)
 
 	summaries, err := store.ListSummaries(context.Background())
@@ -586,10 +586,10 @@ func TestJSONStoreSavePersistsProviderModelAndMessages(t *testing.T) {
 		CreatedAt:     time.Now().Add(-time.Hour),
 		UpdatedAt:     time.Now(),
 		Messages: []providertypes.Message{
-			{Role: providertypes.RoleUser, Content: "hello"},
+			{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")}},
 			{
-				Role:    providertypes.RoleAssistant,
-				Content: "calling tool",
+				Role:  providertypes.RoleAssistant,
+				Parts: []providertypes.ContentPart{providertypes.NewTextPart("calling tool")},
 				ToolCalls: []providertypes.ToolCall{
 					{ID: "call-1", Name: "webfetch", Arguments: `{"url":"https://example.com"}`},
 				},
@@ -597,7 +597,7 @@ func TestJSONStoreSavePersistsProviderModelAndMessages(t *testing.T) {
 			{
 				Role:       providertypes.RoleTool,
 				ToolCallID: "call-1",
-				Content:    "ok",
+				Parts:      []providertypes.ContentPart{providertypes.NewTextPart("ok")},
 				ToolMetadata: map[string]string{
 					"tool_name":   "webfetch",
 					"http_status": "200",
@@ -657,7 +657,7 @@ func TestJSONStoreSaveRoundTripsMetadataOnlyToolMessage(t *testing.T) {
 		CreatedAt:     time.Now().Add(-time.Hour),
 		UpdatedAt:     time.Now(),
 		Messages: []providertypes.Message{
-			{Role: providertypes.RoleUser, Content: "inspect"},
+			{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("inspect")}},
 			{
 				Role: providertypes.RoleAssistant,
 				ToolCalls: []providertypes.ToolCall{
@@ -667,7 +667,7 @@ func TestJSONStoreSaveRoundTripsMetadataOnlyToolMessage(t *testing.T) {
 			{
 				Role:       providertypes.RoleTool,
 				ToolCallID: "call-1",
-				Content:    "",
+				Parts:      []providertypes.ContentPart{providertypes.NewTextPart("")},
 				ToolMetadata: map[string]string{
 					"tool_name": "filesystem_read_file",
 					"path":      "README.md",
@@ -684,8 +684,8 @@ func TestJSONStoreSaveRoundTripsMetadataOnlyToolMessage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load saved session: %v", err)
 	}
-	if loaded.Messages[2].Content != "" {
-		t.Fatalf("expected empty content to round-trip, got %q", loaded.Messages[2].Content)
+	if renderPartsForTest(loaded.Messages[2].Parts) != "" {
+		t.Fatalf("expected empty content to round-trip, got %q", renderPartsForTest(loaded.Messages[2].Parts))
 	}
 	if loaded.Messages[2].ToolMetadata["tool_name"] != "filesystem_read_file" ||
 		loaded.Messages[2].ToolMetadata["path"] != "README.md" {
@@ -697,7 +697,7 @@ func TestDecodeStoredSummaryUsesLightweightMetadataPath(t *testing.T) {
 	t.Parallel()
 
 	summary, err := decodeStoredSummary([]byte(`{
-  "schema_version": 1,
+  "schema_version": 2,
   "id": "summary-only",
   "title": "Summary Only",
   "created_at": "2026-04-13T08:00:00Z",
@@ -782,7 +782,7 @@ func TestJSONStoreLoadClampsOversizedTaskState(t *testing.T) {
 
 	payload := strings.Join([]string{
 		`{`,
-		`  "schema_version": 1,`,
+		`  "schema_version": 2,`,
 		`  "id": "task-state-clamp-load",`,
 		`  "title": "Clamp Load",`,
 		`  "created_at": "2026-04-13T08:00:00Z",`,
@@ -845,15 +845,14 @@ func TestJSONStoreSaveLoadRoundTripTodos(t *testing.T) {
 				UpdatedAt:    updatedAt,
 			},
 			{
-				ID:        "todo-2",
-				Content:   "persist todos in session",
+				ID: "todo-2", Content: "persist todos in session",
 				Status:    TodoStatusInProgress,
 				Priority:  2,
 				CreatedAt: createdAt,
 				UpdatedAt: updatedAt,
 			},
 		},
-		Messages: []providertypes.Message{{Role: "user", Content: "hello"}},
+		Messages: []providertypes.Message{{Role: "user", Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")}}},
 	}
 
 	if err := store.Save(context.Background(), session); err != nil {
@@ -890,7 +889,7 @@ func TestJSONStoreLoadAllowsMissingTodosField(t *testing.T) {
 
 	mustWriteSessionFile(t, filepath.Join(sessionDirectory(baseDir, workspaceRoot), "no-todos.json"), strings.Join([]string{
 		`{`,
-		`  "schema_version": 1,`,
+		`  "schema_version": 2,`,
 		`  "id": "no-todos",`,
 		`  "title": "No Todos",`,
 		`  "created_at": "2026-04-14T10:00:00Z",`,
@@ -951,7 +950,7 @@ func TestJSONStoreLoadRejectsInvalidTodos(t *testing.T) {
 
 	mustWriteSessionFile(t, filepath.Join(sessionDirectory(baseDir, workspaceRoot), "invalid-todos-load.json"), strings.Join([]string{
 		`{`,
-		`  "schema_version": 1,`,
+		`  "schema_version": 2,`,
 		`  "id": "invalid-todos-load",`,
 		`  "title": "Invalid Todos Load",`,
 		`  "created_at": "2026-04-14T10:00:00Z",`,

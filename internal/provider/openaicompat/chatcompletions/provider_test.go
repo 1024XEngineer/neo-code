@@ -42,9 +42,9 @@ func TestNewAndBuildRequest(t *testing.T) {
 			Model:        "gpt-5.4",
 			SystemPrompt: "system",
 			Messages: []providertypes.Message{
-				{Role: providertypes.RoleUser, Content: "hello"},
+				{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")}},
 				{Role: providertypes.RoleAssistant, ToolCalls: []providertypes.ToolCall{{ID: "call_1", Name: "filesystem_edit", Arguments: `{"path":"main.go"}`}}},
-				{Role: providertypes.RoleTool, ToolCallID: "call_1", Content: "done"},
+				{Role: providertypes.RoleTool, ToolCallID: "call_1", Parts: []providertypes.ContentPart{providertypes.NewTextPart("done")}},
 			},
 			Tools: []providertypes.ToolSpec{{Name: "filesystem_edit", Description: "Edit file", Schema: map[string]any{"type": "object"}}},
 		})
@@ -63,7 +63,7 @@ func TestNewAndBuildRequest(t *testing.T) {
 
 		fallback, err := BuildRequest(testCfg("https://api.example.com/v1", "gpt-4.1", "test-key"), providertypes.GenerateRequest{
 			SystemPrompt: "   ",
-			Messages:     []providertypes.Message{{Role: providertypes.RoleUser, Content: "hello"}},
+			Messages:     []providertypes.Message{{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")}}},
 			Tools:        []providertypes.ToolSpec{},
 		})
 		if err != nil {
@@ -77,24 +77,92 @@ func TestNewAndBuildRequest(t *testing.T) {
 	t.Run("message conversion", func(t *testing.T) {
 		t.Parallel()
 
-		user := ToOpenAIMessage(providertypes.Message{Role: providertypes.RoleUser, Content: "hello"})
+		user, err := ToOpenAIMessage(providertypes.Message{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")}})
+		if err != nil {
+			t.Fatalf("ToOpenAIMessage() user error = %v", err)
+		}
 		if user.Role != providertypes.RoleUser || user.Content != "hello" || len(user.ToolCalls) != 0 {
 			t.Fatalf("unexpected user message: %+v", user)
 		}
 
-		assistant := ToOpenAIMessage(providertypes.Message{
+		multiText, err := ToOpenAIMessage(providertypes.Message{
+			Role: providertypes.RoleUser,
+			Parts: []providertypes.ContentPart{
+				providertypes.NewTextPart("hello "),
+				providertypes.NewTextPart("world"),
+			},
+		})
+		if err != nil {
+			t.Fatalf("ToOpenAIMessage() multiText error = %v", err)
+		}
+		if multiText.Content != "hello world" {
+			t.Fatalf("unexpected multiText content: %+v", multiText.Content)
+		}
+
+		assistant, err := ToOpenAIMessage(providertypes.Message{
 			Role: providertypes.RoleAssistant,
 			ToolCalls: []providertypes.ToolCall{
 				{ID: "call_1", Name: "read_file", Arguments: `{"path":"main.go"}`},
 			},
 		})
+		if err != nil {
+			t.Fatalf("ToOpenAIMessage() assistant error = %v", err)
+		}
 		if len(assistant.ToolCalls) != 1 || assistant.ToolCalls[0].Type != "function" || assistant.ToolCalls[0].Function.Name != "read_file" {
 			t.Fatalf("unexpected assistant message: %+v", assistant)
 		}
 
-		tool := ToOpenAIMessage(providertypes.Message{Role: providertypes.RoleTool, ToolCallID: "call_1", Content: "result"})
+		tool, err := ToOpenAIMessage(providertypes.Message{Role: providertypes.RoleTool, ToolCallID: "call_1", Parts: []providertypes.ContentPart{providertypes.NewTextPart("result")}})
+		if err != nil {
+			t.Fatalf("ToOpenAIMessage() tool error = %v", err)
+		}
 		if tool.Role != providertypes.RoleTool || tool.ToolCallID != "call_1" {
 			t.Fatalf("unexpected tool message: %+v", tool)
+		}
+
+		multiModal, err := ToOpenAIMessage(providertypes.Message{
+			Role: providertypes.RoleUser,
+			Parts: []providertypes.ContentPart{
+				providertypes.NewTextPart("look"),
+				providertypes.NewRemoteImagePart("https://example.com/img.png"),
+			},
+		})
+		if err != nil {
+			t.Fatalf("ToOpenAIMessage() multiModal error = %v", err)
+		}
+		parts, ok := multiModal.Content.([]MessageContentPart)
+		if !ok || len(parts) != 2 || parts[0].Type != "text" || parts[1].Type != "image_url" || parts[1].ImageURL.URL != "https://example.com/img.png" {
+			t.Fatalf("unexpected multiModal message: %+v", multiModal)
+		}
+
+		_, err = ToOpenAIMessage(providertypes.Message{
+			Role: providertypes.RoleUser,
+			Parts: []providertypes.ContentPart{
+				providertypes.NewSessionAssetImagePart("asset-1", "image/png"),
+			},
+		})
+		if err == nil || !strings.Contains(err.Error(), "session_asset image is not supported") {
+			t.Fatalf("expected session_asset error, got %v", err)
+		}
+
+		_, err = ToOpenAIMessage(providertypes.Message{
+			Role: providertypes.RoleUser,
+			Parts: []providertypes.ContentPart{
+				{Kind: providertypes.ContentPartImage, Image: &providertypes.ImagePart{SourceType: "unknown"}},
+			},
+		})
+		if err == nil || !strings.Contains(err.Error(), "unsupported source type") {
+			t.Fatalf("expected unsupported image error, got %v", err)
+		}
+
+		_, err = ToOpenAIMessage(providertypes.Message{
+			Role: providertypes.RoleUser,
+			Parts: []providertypes.ContentPart{
+				providertypes.NewRemoteImagePart(""),
+			},
+		})
+		if err == nil || !strings.Contains(err.Error(), "invalid message parts") {
+			t.Fatalf("expected invalid parts error, got %v", err)
 		}
 	})
 }
@@ -304,6 +372,14 @@ func testCfg(baseURL, model, apiKey string) provider.RuntimeConfig {
 	}
 }
 
+func userTextGenerateRequest(text string) providertypes.GenerateRequest {
+	return providertypes.GenerateRequest{
+		Messages: []providertypes.Message{
+			{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart(text)}},
+		},
+	}
+}
+
 func mustProvider(t *testing.T) *Provider {
 	t.Helper()
 	p, err := New(testCfg("https://api.example.com/v1", "gpt-4.1", "test-key"), &http.Client{})
@@ -349,11 +425,7 @@ func mustDone(t *testing.T, evt providertypes.StreamEvent) providertypes.Message
 	return payload
 }
 
-func ioNopCloser(body string) io.ReadCloser { return &readCloser{Reader: strings.NewReader(body)} }
-
-type readCloser struct{ *strings.Reader }
-
-func (r *readCloser) Close() error { return nil }
+func ioNopCloser(body string) io.ReadCloser { return io.NopCloser(strings.NewReader(body)) }
 
 type failingReadCloser struct{ err error }
 
@@ -495,7 +567,7 @@ func TestGenerateVariants(t *testing.T) {
 		}
 
 		if err := mustProvider(t).Generate(context.Background(), providertypes.GenerateRequest{
-			Messages: []providertypes.Message{{Role: providertypes.RoleUser, Content: "hello"}},
+			Messages: userTextGenerateRequest("hello").Messages,
 			Tools:    []providertypes.ToolSpec{{Name: "bad", Schema: map[string]any{"bad": func() {}}}},
 		}, nil); err == nil || !strings.Contains(err.Error(), "marshal request") {
 			t.Fatalf("expected marshal error, got %v", err)
@@ -506,9 +578,7 @@ func TestGenerateVariants(t *testing.T) {
 		t.Parallel()
 
 		invalidURL := &Provider{cfg: testCfg("://bad", "gpt-4.1", "test-key"), client: &http.Client{}}
-		if err := invalidURL.Generate(context.Background(), providertypes.GenerateRequest{
-			Messages: []providertypes.Message{{Role: providertypes.RoleUser, Content: "hello"}},
-		}, nil); err == nil || !strings.Contains(err.Error(), "build request") {
+		if err := invalidURL.Generate(context.Background(), userTextGenerateRequest("hello"), nil); err == nil || !strings.Contains(err.Error(), "build request") {
 			t.Fatalf("expected build request error, got %v", err)
 		}
 
@@ -518,9 +588,7 @@ func TestGenerateVariants(t *testing.T) {
 				return nil, io.ErrClosedPipe
 			})},
 		}
-		if err := sendErr.Generate(context.Background(), providertypes.GenerateRequest{
-			Messages: []providertypes.Message{{Role: providertypes.RoleUser, Content: "hello"}},
-		}, nil); err == nil || !strings.Contains(err.Error(), "send request") {
+		if err := sendErr.Generate(context.Background(), userTextGenerateRequest("hello"), nil); err == nil || !strings.Contains(err.Error(), "send request") {
 			t.Fatalf("expected send request error, got %v", err)
 		}
 	})
@@ -538,10 +606,50 @@ func TestGenerateVariants(t *testing.T) {
 		if err != nil {
 			t.Fatalf("New() error = %v", err)
 		}
-		if err := p.Generate(context.Background(), providertypes.GenerateRequest{
-			Messages: []providertypes.Message{{Role: providertypes.RoleUser, Content: "hello"}},
-		}, nil); err == nil || !strings.Contains(err.Error(), "invalid api key") {
+		if err := p.Generate(context.Background(), userTextGenerateRequest("hello"), nil); err == nil || !strings.Contains(err.Error(), "invalid api key") {
 			t.Fatalf("expected parsed provider error, got %v", err)
+		}
+	})
+
+	t.Run("does not retry without tools on 400", func(t *testing.T) {
+		t.Parallel()
+
+		var reqCount int
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			reqCount++
+			var payload Request
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Fatalf("decode request: %v", err)
+			}
+			if reqCount == 1 {
+				if len(payload.Tools) == 0 {
+					t.Fatalf("first request should include tools")
+				}
+				w.WriteHeader(http.StatusBadRequest)
+				_, _ = w.Write([]byte(`{"error":{"message":"schema rejected"}}`))
+				return
+			}
+			t.Fatalf("unexpected retry request without explicit retry policy")
+		}))
+		defer server.Close()
+
+		p, err := New(testCfg(server.URL, "gpt-4.1", "test-key"), server.Client())
+		if err != nil {
+			t.Fatalf("New() error = %v", err)
+		}
+		events := make(chan providertypes.StreamEvent, 4)
+		err = p.Generate(context.Background(), providertypes.GenerateRequest{
+			Messages: []providertypes.Message{{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")}}},
+			Tools:    []providertypes.ToolSpec{{Name: "read_file", Description: "read", Schema: map[string]any{"type": "object"}}},
+		}, events)
+		if err == nil || !strings.Contains(err.Error(), "schema rejected") {
+			t.Fatalf("Generate() expected original 400 error, got %v", err)
+		}
+		if reqCount != 1 {
+			t.Fatalf("expected one request without tool-stripping retry, got %d", reqCount)
+		}
+		if drained := drain(events); len(drained) != 0 {
+			t.Fatalf("expected no stream events after 400, got %+v", drained)
 		}
 	})
 
@@ -580,7 +688,7 @@ func TestGenerateVariants(t *testing.T) {
 		events := make(chan providertypes.StreamEvent, 4)
 		err = p.Generate(context.Background(), providertypes.GenerateRequest{
 			Model:    "gpt-5.4",
-			Messages: []providertypes.Message{{Role: providertypes.RoleUser, Content: "hello"}},
+			Messages: []providertypes.Message{{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")}}},
 		}, events)
 		if err != nil {
 			t.Fatalf("Generate() error = %v", err)

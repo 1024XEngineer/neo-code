@@ -180,7 +180,7 @@ func (s *Service) Run(ctx context.Context, input Input) (Result, error) {
 	output.TaskState.LastUpdatedAt = s.now()
 
 	next := make([]providertypes.Message, 0, len(plan.Retained)+1)
-	next = append(next, providertypes.Message{Role: providertypes.RoleAssistant, Content: output.DisplaySummary})
+	next = append(next, providertypes.Message{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart(output.DisplaySummary)}})
 	next = append(next, plan.Retained...)
 
 	afterChars := countMessageChars(next)
@@ -285,7 +285,7 @@ func isCompactSummaryMessage(message providertypes.Message) bool {
 	if message.Role != providertypes.RoleAssistant {
 		return false
 	}
-	return strings.HasPrefix(strings.TrimSpace(message.Content), "[compact_summary]")
+	return strings.HasPrefix(strings.TrimSpace(renderTranscriptParts(message.Parts)), "[compact_summary]")
 }
 
 // validateGeneratedTaskState 确保 compact 生成结果真正建立了 durable task state，避免“摘要成功但状态为空”。

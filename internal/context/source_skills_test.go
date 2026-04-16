@@ -15,7 +15,7 @@ func TestDefaultBuilderBuildInjectsSkillsInStableOrder(t *testing.T) {
 
 	builder := NewBuilder()
 	result, err := builder.Build(stdcontext.Background(), BuildInput{
-		Messages: []providertypes.Message{{Role: "user", Content: "hello"}},
+		Messages: []providertypes.Message{{Role: "user", Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")}}},
 		ActiveSkills: []skills.Skill{
 			{
 				Descriptor: skills.Descriptor{ID: "zeta", Name: "Zeta"},
@@ -76,7 +76,7 @@ func TestDefaultBuilderBuildSkipsSkillsSectionWhenNoActiveSkills(t *testing.T) {
 
 	builder := NewBuilder()
 	result, err := builder.Build(stdcontext.Background(), BuildInput{
-		Messages: []providertypes.Message{{Role: "user", Content: "hello"}},
+		Messages: []providertypes.Message{{Role: "user", Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")}}},
 		Metadata: testMetadata(t.TempDir()),
 	})
 	if err != nil {

@@ -48,7 +48,7 @@ func TestAutoExtractorDebounceMergesRequests(t *testing.T) {
 	svc := newAutoExtractorTestService(t)
 	extractor := &stubMemoExtractor{
 		extractFn: func(ctx context.Context, messages []providertypes.Message) ([]Entry, error) {
-			last := messages[len(messages)-1].Content
+			last := renderMemoParts(messages[len(messages)-1].Parts)
 			return []Entry{{Type: TypeProject, Title: last, Content: last, Source: SourceAutoExtract}}, nil
 		},
 	}
@@ -56,8 +56,8 @@ func TestAutoExtractorDebounceMergesRequests(t *testing.T) {
 	auto.debounce = 20 * time.Millisecond
 	auto.logf = func(string, ...any) {}
 
-	auto.Schedule("session-1", []providertypes.Message{{Role: providertypes.RoleUser, Content: "first"}})
-	auto.Schedule("session-1", []providertypes.Message{{Role: providertypes.RoleUser, Content: "second"}})
+	auto.Schedule("session-1", []providertypes.Message{{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("first")}}})
+	auto.Schedule("session-1", []providertypes.Message{{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("second")}}})
 
 	waitFor(t, time.Second, func() bool { return extractor.Calls() == 1 })
 	time.Sleep(60 * time.Millisecond)
@@ -88,14 +88,14 @@ func TestAutoExtractorTrailingRun(t *testing.T) {
 
 	extractor := &stubMemoExtractor{
 		extractFn: func(ctx context.Context, messages []providertypes.Message) ([]Entry, error) {
-			switch messages[len(messages)-1].Content {
+			switch renderMemoParts(messages[len(messages)-1].Parts) {
 			case "first":
 				firstStarted <- struct{}{}
 				<-releaseFirst
 			case "second":
 				secondStarted <- struct{}{}
 			}
-			last := messages[len(messages)-1].Content
+			last := renderMemoParts(messages[len(messages)-1].Parts)
 			return []Entry{{Type: TypeProject, Title: last, Content: last, Source: SourceAutoExtract}}, nil
 		},
 	}
@@ -103,7 +103,7 @@ func TestAutoExtractorTrailingRun(t *testing.T) {
 	auto.debounce = 15 * time.Millisecond
 	auto.logf = func(string, ...any) {}
 
-	auto.Schedule("session-1", []providertypes.Message{{Role: providertypes.RoleUser, Content: "first"}})
+	auto.Schedule("session-1", []providertypes.Message{{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("first")}}})
 
 	select {
 	case <-firstStarted:
@@ -111,7 +111,7 @@ func TestAutoExtractorTrailingRun(t *testing.T) {
 		t.Fatal("first extraction did not start")
 	}
 
-	auto.Schedule("session-1", []providertypes.Message{{Role: providertypes.RoleUser, Content: "second"}})
+	auto.Schedule("session-1", []providertypes.Message{{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("second")}}})
 	time.Sleep(40 * time.Millisecond)
 	close(releaseFirst)
 
@@ -139,7 +139,7 @@ func TestAutoExtractorErrorsAreSilent(t *testing.T) {
 	auto.debounce = 10 * time.Millisecond
 	auto.logf = func(string, ...any) {}
 
-	auto.Schedule("session-1", []providertypes.Message{{Role: providertypes.RoleUser, Content: "x"}})
+	auto.Schedule("session-1", []providertypes.Message{{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("x")}}})
 	waitFor(t, time.Second, func() bool { return extractor.Calls() == 1 })
 
 	entries, err := svc.List(context.Background())
@@ -154,10 +154,9 @@ func TestAutoExtractorErrorsAreSilent(t *testing.T) {
 func TestAutoExtractorSuppressesExactDuplicates(t *testing.T) {
 	svc := newAutoExtractorTestService(t)
 	if err := svc.Add(context.Background(), Entry{
-		Type:    TypeUser,
-		Title:   "reply in chinese",
-		Content: "reply in chinese",
-		Source:  SourceAutoExtract,
+		Type:  TypeUser,
+		Title: "reply in chinese", Content: "reply in chinese",
+		Source: SourceAutoExtract,
 	}); err != nil {
 		t.Fatalf("seed Add() error = %v", err)
 	}
@@ -175,7 +174,7 @@ func TestAutoExtractorSuppressesExactDuplicates(t *testing.T) {
 	auto.debounce = 10 * time.Millisecond
 	auto.logf = func(string, ...any) {}
 
-	auto.Schedule("session-1", []providertypes.Message{{Role: providertypes.RoleUser, Content: "dedupe"}})
+	auto.Schedule("session-1", []providertypes.Message{{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("dedupe")}}})
 	waitFor(t, time.Second, func() bool {
 		entries, err := svc.List(context.Background())
 		return err == nil && len(entries) == 2
@@ -208,8 +207,8 @@ func TestAutoExtractorSuppressesExactDuplicatesAcrossSessions(t *testing.T) {
 	auto.debounce = 0
 	auto.logf = func(string, ...any) {}
 
-	auto.Schedule("session-1", []providertypes.Message{{Role: providertypes.RoleUser, Content: "one"}})
-	auto.Schedule("session-2", []providertypes.Message{{Role: providertypes.RoleUser, Content: "two"}})
+	auto.Schedule("session-1", []providertypes.Message{{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("one")}}})
+	auto.Schedule("session-2", []providertypes.Message{{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("two")}}})
 
 	for i := 0; i < 2; i++ {
 		select {
@@ -247,7 +246,7 @@ func TestAutoExtractorRemovesIdleState(t *testing.T) {
 	auto.idleTTL = 20 * time.Millisecond
 	auto.logf = func(string, ...any) {}
 
-	auto.Schedule("session-1", []providertypes.Message{{Role: providertypes.RoleUser, Content: "cleanup"}})
+	auto.Schedule("session-1", []providertypes.Message{{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("cleanup")}}})
 
 	waitFor(t, time.Second, func() bool { return extractor.Calls() == 1 })
 	waitFor(t, time.Second, func() bool {
@@ -264,7 +263,7 @@ func TestAutoExtractorHandleIdleKeepsActiveState(t *testing.T) {
 	state := &autoExtractState{
 		idleSeq: 2,
 		pending: &autoExtractRequest{
-			messages: []providertypes.Message{{Role: providertypes.RoleUser, Content: "keep"}},
+			messages: []providertypes.Message{{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("keep")}}},
 		},
 	}
 
@@ -307,7 +306,7 @@ func TestAutoExtractorLoadsDedupIndexOutsideCurrentProcessState(t *testing.T) {
 	auto.debounce = 5 * time.Millisecond
 	auto.logf = func(string, ...any) {}
 
-	auto.Schedule("session-1", []providertypes.Message{{Role: providertypes.RoleUser, Content: "dedupe after reload"}})
+	auto.Schedule("session-1", []providertypes.Message{{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("dedupe after reload")}}})
 
 	waitFor(t, time.Second, func() bool { return extractor.Calls() == 1 })
 	entries, err := reloaded.List(context.Background())
@@ -336,7 +335,7 @@ func TestAutoExtractorScheduleWithExtractorUsesBoundExtractor(t *testing.T) {
 	auto.debounce = 5 * time.Millisecond
 	auto.logf = func(string, ...any) {}
 
-	auto.ScheduleWithExtractor("session-1", []providertypes.Message{{Role: providertypes.RoleUser, Content: "use bound"}}, boundExtractor)
+	auto.ScheduleWithExtractor("session-1", []providertypes.Message{{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("use bound")}}}, boundExtractor)
 
 	waitFor(t, time.Second, func() bool { return boundExtractor.Calls() == 1 })
 	if defaultExtractor.Calls() != 0 {
@@ -351,8 +350,8 @@ func TestAutoExtractorScheduleGuardClauses(t *testing.T) {
 	auto.debounce = 5 * time.Millisecond
 	auto.logf = func(string, ...any) {}
 
-	auto.Schedule("", []providertypes.Message{{Role: providertypes.RoleUser, Content: "skip"}})
-	auto.ScheduleWithExtractor("session-1", []providertypes.Message{{Role: providertypes.RoleUser, Content: "skip"}}, nil)
+	auto.Schedule("", []providertypes.Message{{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("skip")}}})
+	auto.ScheduleWithExtractor("session-1", []providertypes.Message{{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("skip")}}}, nil)
 
 	waitFor(t, 150*time.Millisecond, func() bool { return true })
 	if extractor.Calls() != 0 {
@@ -382,8 +381,8 @@ func TestAutoExtractDedupKeyAndTopicParsing(t *testing.T) {
 func TestCloneProviderMessagesDeepCopyAndStopTimer(t *testing.T) {
 	original := []providertypes.Message{
 		{
-			Role:    providertypes.RoleAssistant,
-			Content: "msg",
+			Role:  providertypes.RoleAssistant,
+			Parts: []providertypes.ContentPart{providertypes.NewTextPart("msg")},
 			ToolCalls: []providertypes.ToolCall{
 				{ID: "c1", Name: "tool", Arguments: "{}"},
 			},

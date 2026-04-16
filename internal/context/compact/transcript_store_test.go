@@ -26,7 +26,7 @@ func TestTranscriptStoreSaveSanitizesSessionIDAndWritesJSONL(t *testing.T) {
 	}
 
 	id, path, err := store.Save([]providertypes.Message{
-		{Role: providertypes.RoleUser, Content: "hello"},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")}},
 	}, "session with spaces", filepath.Join(home, "workspace"))
 	if err != nil {
 		t.Fatalf("Save() error = %v", err)
@@ -46,6 +46,47 @@ func TestTranscriptStoreSaveSanitizesSessionIDAndWritesJSONL(t *testing.T) {
 	}
 	if len(data) == 0 {
 		t.Fatalf("expected transcript content")
+	}
+}
+
+func TestTranscriptStoreSaveRedactsImageIdentifiersInContent(t *testing.T) {
+	t.Parallel()
+
+	home := t.TempDir()
+	store := transcriptStore{
+		now:         func() time.Time { return time.Unix(1712052000, 123456789) },
+		randomToken: func() (string, error) { return "token1234", nil },
+		userHomeDir: func() (string, error) { return home, nil },
+		mkdirAll:    os.MkdirAll,
+		writeFile:   os.WriteFile,
+		rename:      os.Rename,
+		remove:      os.Remove,
+	}
+
+	_, path, err := store.Save([]providertypes.Message{
+		{
+			Role: providertypes.RoleUser,
+			Parts: []providertypes.ContentPart{
+				providertypes.NewTextPart("see "),
+				providertypes.NewRemoteImagePart("https://example.com/a.png?token=secret"),
+				providertypes.NewSessionAssetImagePart("asset-123", "image/png"),
+			},
+		},
+	}, "session", filepath.Join(home, "workspace"))
+	if err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read transcript: %v", err)
+	}
+	content := string(data)
+	if strings.Contains(content, "token=secret") || strings.Contains(content, "asset-123") {
+		t.Fatalf("transcript should redact sensitive image identifiers, got %q", content)
+	}
+	if !strings.Contains(content, "[Image:remote]") || !strings.Contains(content, "[Image:session_asset]") {
+		t.Fatalf("transcript should keep redacted image markers, got %q", content)
 	}
 }
 
@@ -113,7 +154,7 @@ func TestTranscriptStoreSaveRemovesTemporaryFileWhenRenameFails(t *testing.T) {
 		},
 	}
 
-	_, _, err := store.Save([]providertypes.Message{{Role: providertypes.RoleUser, Content: "hello"}}, "session", filepath.Join(home, "workspace"))
+	_, _, err := store.Save([]providertypes.Message{{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")}}}, "session", filepath.Join(home, "workspace"))
 	if err == nil || !strings.Contains(err.Error(), "rename boom") {
 		t.Fatalf("expected rename error, got %v", err)
 	}

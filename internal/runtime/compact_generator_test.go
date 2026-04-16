@@ -43,7 +43,7 @@ func TestCompactSummaryGeneratorBuildsProviderRequestWithoutTools(t *testing.T) 
 			OpenItems: []string{"Update runtime tests"},
 		},
 		ArchivedMessages: []providertypes.Message{
-			{Role: providertypes.RoleUser, Content: "legacy request"},
+			{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("legacy request")}},
 			{
 				Role: providertypes.RoleAssistant,
 				ToolCalls: []providertypes.ToolCall{
@@ -52,7 +52,7 @@ func TestCompactSummaryGeneratorBuildsProviderRequestWithoutTools(t *testing.T) 
 			},
 		},
 		RetainedMessages: []providertypes.Message{
-			{Role: providertypes.RoleAssistant, Content: "recent answer"},
+			{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("recent answer")}},
 		},
 		ArchivedMessageCount: 2,
 		Config:               manager.Get().Context.Compact,
@@ -92,23 +92,24 @@ func TestCompactSummaryGeneratorBuildsProviderRequestWithoutTools(t *testing.T) 
 	if len(req.Messages) != 1 || req.Messages[0].Role != providertypes.RoleUser {
 		t.Fatalf("expected a single user prompt, got %+v", req.Messages)
 	}
-	if !strings.Contains(req.Messages[0].Content, "<archived_source_material>") {
-		t.Fatalf("expected archived material boundary, got %q", req.Messages[0].Content)
+	promptText := renderPartsForTest(req.Messages[0].Parts)
+	if !strings.Contains(promptText, "<archived_source_material>") {
+		t.Fatalf("expected archived material boundary, got %q", promptText)
 	}
-	if !strings.Contains(req.Messages[0].Content, "<current_task_state>") {
-		t.Fatalf("expected task state boundary, got %q", req.Messages[0].Content)
+	if !strings.Contains(promptText, "<current_task_state>") {
+		t.Fatalf("expected task state boundary, got %q", promptText)
 	}
-	if strings.Contains(req.Messages[0].Content, "\"role\": \"user\"") {
-		t.Fatalf("expected transcript-style compact prompt instead of pretty JSON, got %q", req.Messages[0].Content)
+	if strings.Contains(promptText, "\"role\": \"user\"") {
+		t.Fatalf("expected transcript-style compact prompt instead of pretty JSON, got %q", promptText)
 	}
-	if !strings.Contains(req.Messages[0].Content, "[message 0] role=user") {
-		t.Fatalf("expected transcript-style user message header, got %q", req.Messages[0].Content)
+	if !strings.Contains(promptText, "[message 0] role=user") {
+		t.Fatalf("expected transcript-style user message header, got %q", promptText)
 	}
-	if !strings.Contains(req.Messages[0].Content, "tool_call id=call-1 name=filesystem_read_file") {
-		t.Fatalf("expected tool call metadata in compact prompt, got %q", req.Messages[0].Content)
+	if !strings.Contains(promptText, "tool_call id=call-1 name=filesystem_read_file") {
+		t.Fatalf("expected tool call metadata in compact prompt, got %q", promptText)
 	}
-	if !strings.Contains(req.Messages[0].Content, `"goal": "Finish task state refactor"`) {
-		t.Fatalf("expected current task state JSON in compact prompt, got %q", req.Messages[0].Content)
+	if !strings.Contains(promptText, `"goal": "Finish task state refactor"`) {
+		t.Fatalf("expected current task state JSON in compact prompt, got %q", promptText)
 	}
 }
 
@@ -134,7 +135,7 @@ func TestCompactSummaryGeneratorRejectsToolCalls(t *testing.T) {
 	_, err = generator.Generate(context.Background(), contextcompact.SummaryInput{
 		Mode: contextcompact.ModeManual,
 		ArchivedMessages: []providertypes.Message{
-			{Role: providertypes.RoleUser, Content: "legacy request"},
+			{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("legacy request")}},
 		},
 		Config: manager.Get().Context.Compact,
 	})

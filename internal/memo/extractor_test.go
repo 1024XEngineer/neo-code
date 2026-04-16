@@ -13,9 +13,9 @@ import (
 func TestRuleExtractorExtractWithSignal(t *testing.T) {
 	extractor := NewRuleExtractor()
 	messages := []providertypes.Message{
-		{Role: providertypes.RoleUser, Content: "请帮我写个函数"},
-		{Role: providertypes.RoleAssistant, Content: "好的"},
-		{Role: providertypes.RoleUser, Content: "记住以后都用中文注释"},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("请帮我写个函数")}},
+		{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("好的")}},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("记住以后都用中文注释")}},
 	}
 
 	entries, err := extractor.Extract(context.Background(), messages)
@@ -39,8 +39,8 @@ func TestRuleExtractorExtractWithSignal(t *testing.T) {
 func TestRuleExtractorExtractNoSignal(t *testing.T) {
 	extractor := NewRuleExtractor()
 	messages := []providertypes.Message{
-		{Role: providertypes.RoleUser, Content: "帮我写个排序函数"},
-		{Role: providertypes.RoleAssistant, Content: "好的，这是一个快速排序"},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("帮我写个排序函数")}},
+		{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("好的，这是一个快速排序")}},
 	}
 
 	entries, err := extractor.Extract(context.Background(), messages)
@@ -55,7 +55,7 @@ func TestRuleExtractorExtractNoSignal(t *testing.T) {
 func TestRuleExtractorExtractNoUserMessage(t *testing.T) {
 	extractor := NewRuleExtractor()
 	messages := []providertypes.Message{
-		{Role: providertypes.RoleAssistant, Content: "好的"},
+		{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("好的")}},
 	}
 
 	entries, err := extractor.Extract(context.Background(), messages)
@@ -84,7 +84,7 @@ func TestRuleExtractorExtractCancelledContext(t *testing.T) {
 	cancel()
 
 	_, err := extractor.Extract(ctx, []providertypes.Message{
-		{Role: providertypes.RoleUser, Content: "记住这个"},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("记住这个")}},
 	})
 	if err == nil {
 		t.Error("expected error for cancelled context")
@@ -111,7 +111,7 @@ func TestRuleExtractorExtractEnglishSignals(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.content, func(t *testing.T) {
 			messages := []providertypes.Message{
-				{Role: providertypes.RoleUser, Content: tt.content},
+				{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart(tt.content)}},
 			}
 			entries, _ := extractor.Extract(context.Background(), messages)
 			got := len(entries) > 0
@@ -127,7 +127,7 @@ func TestRuleExtractorExtractLongContent(t *testing.T) {
 	// 超过 150 rune，验证按 rune 截断且保持 UTF-8 合法。
 	longContent := "记住" + strings.Repeat("中", 200)
 	messages := []providertypes.Message{
-		{Role: providertypes.RoleUser, Content: longContent},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart(longContent)}},
 	}
 
 	entries, err := extractor.Extract(context.Background(), messages)
@@ -151,9 +151,9 @@ func TestRuleExtractorExtractLongContent(t *testing.T) {
 func TestRuleExtractorExtractOnlyLastUserMessage(t *testing.T) {
 	extractor := NewRuleExtractor()
 	messages := []providertypes.Message{
-		{Role: providertypes.RoleUser, Content: "记住偏好A"},
-		{Role: providertypes.RoleAssistant, Content: "好的"},
-		{Role: providertypes.RoleUser, Content: "写个函数"},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("记住偏好A")}},
+		{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("好的")}},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("写个函数")}},
 	}
 
 	entries, _ := extractor.Extract(context.Background(), messages)
@@ -209,7 +209,7 @@ func TestExtractAndStore(t *testing.T) {
 		store := NewFileStore(t.TempDir(), t.TempDir())
 		svc := NewService(store, nil, config.MemoConfig{MaxIndexLines: 200}, nil)
 		messages := []providertypes.Message{
-			{Role: providertypes.RoleUser, Content: "写个函数"},
+			{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("写个函数")}},
 		}
 		ExtractAndStore(context.Background(), NewRuleExtractor(), svc, messages)
 		entries, _ := svc.List(context.Background())
@@ -222,7 +222,7 @@ func TestExtractAndStore(t *testing.T) {
 		store := NewFileStore(t.TempDir(), t.TempDir())
 		svc := NewService(store, nil, config.MemoConfig{MaxIndexLines: 200}, nil)
 		messages := []providertypes.Message{
-			{Role: providertypes.RoleUser, Content: "记住以后都用中文注释"},
+			{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("记住以后都用中文注释")}},
 		}
 		ExtractAndStore(context.Background(), NewRuleExtractor(), svc, messages)
 		entries, _ := svc.List(context.Background())

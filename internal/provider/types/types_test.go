@@ -166,13 +166,13 @@ func TestMessageStructFields(t *testing.T) {
 
 	msg := Message{
 		Role:         RoleUser,
-		Content:      "hello",
+		Parts:        []ContentPart{NewTextPart("hello")},
 		ToolCalls:    []ToolCall{{ID: "t1"}},
 		ToolCallID:   "tc_1",
 		IsError:      true,
 		ToolMetadata: map[string]string{"path": "main.go"},
 	}
-	if msg.Role != RoleUser || msg.Content != "hello" || len(msg.ToolCalls) != 1 ||
+	if msg.Role != RoleUser || renderPartsForTest(msg.Parts) != "hello" || len(msg.ToolCalls) != 1 ||
 		msg.ToolCallID != "tc_1" || !msg.IsError || msg.ToolMetadata["path"] != "main.go" {
 		t.Fatalf("message fields not as expected: %+v", msg)
 	}
