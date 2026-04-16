@@ -48,8 +48,10 @@ type persistedCompactConfig struct {
 }
 
 type persistedAutoCompactConfig struct {
-	Enabled             bool `yaml:"enabled"`
-	InputTokenThreshold int  `yaml:"input_token_threshold,omitempty"`
+	Enabled                     bool `yaml:"enabled"`
+	InputTokenThreshold         int  `yaml:"input_token_threshold,omitempty"`
+	ReserveTokens               int  `yaml:"reserve_tokens,omitempty"`
+	FallbackInputTokenThreshold int  `yaml:"fallback_input_token_threshold,omitempty"`
 }
 
 type persistedMemoConfig struct {
@@ -249,8 +251,10 @@ func newPersistedContextConfig(cfg ContextConfig) persistedContextConfig {
 			MaxArchivedPromptChars:        cfg.Compact.MaxArchivedPromptChars,
 		},
 		AutoCompact: persistedAutoCompactConfig{
-			Enabled:             cfg.AutoCompact.Enabled,
-			InputTokenThreshold: cfg.AutoCompact.InputTokenThreshold,
+			Enabled:                     cfg.AutoCompact.Enabled,
+			InputTokenThreshold:         cfg.AutoCompact.InputTokenThreshold,
+			ReserveTokens:               cfg.AutoCompact.ReserveTokens,
+			FallbackInputTokenThreshold: cfg.AutoCompact.FallbackInputTokenThreshold,
 		},
 	}
 }
@@ -268,8 +272,10 @@ func fromPersistedContextConfig(file persistedContextConfig, defaults ContextCon
 			MaxArchivedPromptChars:        file.Compact.MaxArchivedPromptChars,
 		},
 		AutoCompact: AutoCompactConfig{
-			Enabled:             file.AutoCompact.Enabled,
-			InputTokenThreshold: file.AutoCompact.InputTokenThreshold,
+			Enabled:                     file.AutoCompact.Enabled,
+			InputTokenThreshold:         file.AutoCompact.InputTokenThreshold,
+			ReserveTokens:               file.AutoCompact.ReserveTokens,
+			FallbackInputTokenThreshold: file.AutoCompact.FallbackInputTokenThreshold,
 		},
 	}
 	out.Compact.ApplyDefaults(defaults.Compact)

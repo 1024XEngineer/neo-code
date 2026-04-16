@@ -169,6 +169,15 @@ func BuildRuntime(ctx context.Context, opts BootstrapOptions) (RuntimeBundle, er
 		contextBuilder,
 	)
 	runtimeSvc.SetSkillsRegistry(buildSkillsRegistry(ctx, loader.BaseDir()))
+	runtimeSvc.SetAutoCompactThresholdResolver(runtimeAutoCompactThresholdResolverFunc(
+		func(ctx context.Context, cfg config.Config) (int, error) {
+			resolution, err := configstate.ResolveAutoCompactThreshold(ctx, cfg, modelCatalogs)
+			if err != nil {
+				return 0, err
+			}
+			return resolution.Threshold, nil
+		},
+	))
 
 	// 注入记忆提取钩子：当 AutoExtract 启用且 memoSvc 可用时，ReAct 循环完成后异步提取记忆。
 	if memoSvc != nil && cfg.Memo.AutoExtract {
@@ -307,4 +316,10 @@ type textGenAdapter func(ctx context.Context, prompt string, msgs []providertype
 
 func (f textGenAdapter) Generate(ctx context.Context, prompt string, msgs []providertypes.Message) (string, error) {
 	return f(ctx, prompt, msgs)
+}
+
+type runtimeAutoCompactThresholdResolverFunc func(ctx context.Context, cfg config.Config) (int, error)
+
+func (f runtimeAutoCompactThresholdResolverFunc) ResolveAutoCompactThreshold(ctx context.Context, cfg config.Config) (int, error) {
+	return f(ctx, cfg)
 }

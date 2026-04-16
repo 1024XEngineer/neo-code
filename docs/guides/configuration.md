@@ -58,7 +58,9 @@ context:
     micro_compact_disabled: false
   auto_compact:
     enabled: false
-    input_token_threshold: 100000
+    input_token_threshold: 0
+    reserve_tokens: 13000
+    fallback_input_token_threshold: 100000
 ```
 
 ### 基础字段
@@ -81,6 +83,8 @@ context:
 | `context.compact.micro_compact_disabled` | 是否关闭默认启用的 micro compact |
 | `context.auto_compact.enabled` | 是否启用自动压缩 |
 | `context.auto_compact.input_token_threshold` | 自动压缩输入 token 阈值 |
+| `context.auto_compact.reserve_tokens` | 自动阈值推导时预留 token 缓冲（`resolved_threshold = context_window - reserve_tokens`） |
+| `context.auto_compact.fallback_input_token_threshold` | 自动推导失败时使用的保底阈值 |
 
 ### `runtime` 字段
 
@@ -141,6 +145,13 @@ openai_compatible:
   base_url: https://llm.example.com/v1
   api_style: chat_completions
 ```
+
+## Auto Compact 失败与校验补充
+
+- 当 `context.auto_compact.input_token_threshold <= 0` 时，如果当前 provider 选择无效、catalog snapshot 查询失败、模型缺少可用的 `ContextWindow`，或 `ContextWindow <= reserve_tokens`，系统会回退到 `fallback_input_token_threshold`，不会静默关闭 auto compact。
+- `~/.neocode/providers/<provider-name>/provider.yaml` 中的 `models[].id` 必须非空。
+- `models[].context_window` 和 `models[].max_output_tokens` 如果显式配置，必须大于 `0`。
+- `models` 中重复的模型 `id` 会在加载 `provider.yaml` 时直接报错。
 
 文件路径：
 

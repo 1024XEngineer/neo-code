@@ -60,16 +60,21 @@ type MemoExtractor interface {
 }
 
 // Service 是 runtime 的默认实现，负责组织一次完整的 agent 运行闭环。
+type AutoCompactThresholdResolver interface {
+	ResolveAutoCompactThreshold(ctx context.Context, cfg config.Config) (int, error)
+}
+
 type Service struct {
-	configManager   *config.Manager
-	sessionStore    agentsession.Store
-	toolManager     tools.Manager
-	providerFactory ProviderFactory
-	contextBuilder  agentcontext.Builder
-	compactRunner   contextcompact.Runner
-	approvalBroker  *approval.Broker
-	memoExtractor   MemoExtractor
-	skillsRegistry  skills.Registry
+	configManager                *config.Manager
+	sessionStore                 agentsession.Store
+	toolManager                  tools.Manager
+	providerFactory              ProviderFactory
+	contextBuilder               agentcontext.Builder
+	compactRunner                contextcompact.Runner
+	approvalBroker               *approval.Broker
+	memoExtractor                MemoExtractor
+	skillsRegistry               skills.Registry
+	autoCompactThresholdResolver AutoCompactThresholdResolver
 
 	events             chan RuntimeEvent
 	sessionMu          sync.Mutex
@@ -170,4 +175,9 @@ func (s *Service) LoadSession(ctx context.Context, id string) (agentsession.Sess
 		return agentsession.Session{}, err
 	}
 	return session, nil
+}
+
+// SetAutoCompactThresholdResolver 注入自动压缩阈值解析能力，避免 runtime 直接处理模型目录细节。
+func (s *Service) SetAutoCompactThresholdResolver(resolver AutoCompactThresholdResolver) {
+	s.autoCompactThresholdResolver = resolver
 }

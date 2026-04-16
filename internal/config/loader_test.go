@@ -251,6 +251,11 @@ shell: powershell
 name: company-gateway
 driver: openaicompat
 api_key_env: COMPANY_GATEWAY_API_KEY
+models:
+  - id: deepseek-coder
+    name: DeepSeek Coder
+    context_window: 131072
+    max_output_tokens: 8192
 openai_compatible:
   base_url: https://llm.example.com/v1
   api_style: chat_completions
@@ -290,8 +295,11 @@ openai_compatible:
 	if customProvider.Model != "" {
 		t.Fatalf("expected custom provider default model to be empty, got %q", customProvider.Model)
 	}
-	if len(customProvider.Models) != 0 {
-		t.Fatalf("expected custom provider models to come only from remote discovery, got %+v", customProvider.Models)
+	if len(customProvider.Models) != 1 {
+		t.Fatalf("expected custom provider model metadata from provider.yaml, got %+v", customProvider.Models)
+	}
+	if customProvider.Models[0].ID != "deepseek-coder" || customProvider.Models[0].ContextWindow != 131072 {
+		t.Fatalf("expected parsed model metadata, got %+v", customProvider.Models[0])
 	}
 }
 
@@ -418,6 +426,183 @@ models:
 	}
 	if len(customProvider.Models) != 0 {
 		t.Fatalf("expected models.yaml to be ignored, got %+v", customProvider.Models)
+	}
+}
+
+func TestLoaderRejectsCustomProviderModelWithoutID(t *testing.T) {
+	t.Parallel()
+
+	loader := NewLoader(t.TempDir(), testDefaultConfig())
+	customDir := filepath.Join(loader.BaseDir(), providersDirName, "company-gateway")
+	if err := os.MkdirAll(customDir, 0o755); err != nil {
+		t.Fatalf("mkdir custom provider dir: %v", err)
+	}
+
+	providerYAML := `
+name: company-gateway
+driver: openaicompat
+api_key_env: COMPANY_GATEWAY_API_KEY
+models:
+  - name: DeepSeek Coder
+openai_compatible:
+  base_url: https://llm.example.com/v1
+`
+	if err := os.WriteFile(filepath.Join(customDir, customProviderConfigName), []byte(strings.TrimSpace(providerYAML)+"\n"), 0o644); err != nil {
+		t.Fatalf("write provider.yaml: %v", err)
+	}
+
+	_, err := loader.Load(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "models[0].id") {
+		t.Fatalf("expected empty model id rejection, got %v", err)
+	}
+}
+
+func TestLoaderRejectsCustomProviderModelWithInvalidContextWindow(t *testing.T) {
+	t.Parallel()
+
+	loader := NewLoader(t.TempDir(), testDefaultConfig())
+	customDir := filepath.Join(loader.BaseDir(), providersDirName, "company-gateway")
+	if err := os.MkdirAll(customDir, 0o755); err != nil {
+		t.Fatalf("mkdir custom provider dir: %v", err)
+	}
+
+	providerYAML := `
+name: company-gateway
+driver: openaicompat
+api_key_env: COMPANY_GATEWAY_API_KEY
+models:
+  - id: deepseek-coder
+    context_window: 0
+openai_compatible:
+  base_url: https://llm.example.com/v1
+`
+	if err := os.WriteFile(filepath.Join(customDir, customProviderConfigName), []byte(strings.TrimSpace(providerYAML)+"\n"), 0o644); err != nil {
+		t.Fatalf("write provider.yaml: %v", err)
+	}
+
+	_, err := loader.Load(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "context_window") {
+		t.Fatalf("expected invalid context_window rejection, got %v", err)
+	}
+}
+
+func TestLoaderRejectsCustomProviderModelWithInvalidMaxOutputTokens(t *testing.T) {
+	t.Parallel()
+
+	loader := NewLoader(t.TempDir(), testDefaultConfig())
+	customDir := filepath.Join(loader.BaseDir(), providersDirName, "company-gateway")
+	if err := os.MkdirAll(customDir, 0o755); err != nil {
+		t.Fatalf("mkdir custom provider dir: %v", err)
+	}
+
+	providerYAML := `
+name: company-gateway
+driver: openaicompat
+api_key_env: COMPANY_GATEWAY_API_KEY
+models:
+  - id: deepseek-coder
+    max_output_tokens: 0
+openai_compatible:
+  base_url: https://llm.example.com/v1
+`
+	if err := os.WriteFile(filepath.Join(customDir, customProviderConfigName), []byte(strings.TrimSpace(providerYAML)+"\n"), 0o644); err != nil {
+		t.Fatalf("write provider.yaml: %v", err)
+	}
+
+	_, err := loader.Load(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "max_output_tokens") {
+		t.Fatalf("expected invalid max_output_tokens rejection, got %v", err)
+	}
+}
+
+func TestLoaderRejectsCustomProviderDuplicateModelID(t *testing.T) {
+	t.Parallel()
+
+	loader := NewLoader(t.TempDir(), testDefaultConfig())
+	customDir := filepath.Join(loader.BaseDir(), providersDirName, "company-gateway")
+	if err := os.MkdirAll(customDir, 0o755); err != nil {
+		t.Fatalf("mkdir custom provider dir: %v", err)
+	}
+
+	providerYAML := `
+name: company-gateway
+driver: openaicompat
+api_key_env: COMPANY_GATEWAY_API_KEY
+models:
+  - id: deepseek-coder
+  - id: DeepSeek-Coder
+openai_compatible:
+  base_url: https://llm.example.com/v1
+`
+	if err := os.WriteFile(filepath.Join(customDir, customProviderConfigName), []byte(strings.TrimSpace(providerYAML)+"\n"), 0o644); err != nil {
+		t.Fatalf("write provider.yaml: %v", err)
+	}
+
+	_, err := loader.Load(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "duplicated") {
+		t.Fatalf("expected duplicate model id rejection, got %v", err)
+	}
+}
+
+func TestLoaderParsesAutoCompactDerivedFields(t *testing.T) {
+	t.Parallel()
+
+	loader := NewLoader(t.TempDir(), testDefaultConfig())
+	raw := `
+selected_provider: openai
+current_model: gpt-5.4
+shell: powershell
+context:
+  auto_compact:
+    enabled: true
+    input_token_threshold: 0
+    reserve_tokens: 9000
+    fallback_input_token_threshold: 88000
+`
+	writeLoaderConfig(t, loader, raw)
+
+	cfg, err := loader.Load(context.Background())
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Context.AutoCompact.InputTokenThreshold != 0 {
+		t.Fatalf("expected implicit threshold 0, got %d", cfg.Context.AutoCompact.InputTokenThreshold)
+	}
+	if cfg.Context.AutoCompact.ReserveTokens != 9000 {
+		t.Fatalf("expected reserve_tokens=9000, got %d", cfg.Context.AutoCompact.ReserveTokens)
+	}
+	if cfg.Context.AutoCompact.FallbackInputTokenThreshold != 88000 {
+		t.Fatalf("expected fallback_input_token_threshold=88000, got %d", cfg.Context.AutoCompact.FallbackInputTokenThreshold)
+	}
+}
+
+func TestLoaderSavePersistsAutoCompactDerivedFields(t *testing.T) {
+	t.Parallel()
+
+	loader := NewLoader(t.TempDir(), testDefaultConfig())
+	cfg := testDefaultConfig().Clone()
+	cfg.Context.AutoCompact.Enabled = true
+	cfg.Context.AutoCompact.InputTokenThreshold = 0
+	cfg.Context.AutoCompact.ReserveTokens = 9000
+	cfg.Context.AutoCompact.FallbackInputTokenThreshold = 88000
+
+	if err := loader.Save(context.Background(), &cfg); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	data, err := os.ReadFile(loader.ConfigPath())
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	text := string(data)
+	if strings.Contains(text, "input_token_threshold: 100000") {
+		t.Fatalf("expected implicit threshold to avoid legacy default, got:\n%s", text)
+	}
+	if !strings.Contains(text, "reserve_tokens: 9000") {
+		t.Fatalf("expected reserve_tokens to persist, got:\n%s", text)
+	}
+	if !strings.Contains(text, "fallback_input_token_threshold: 88000") {
+		t.Fatalf("expected fallback_input_token_threshold to persist, got:\n%s", text)
 	}
 }
 

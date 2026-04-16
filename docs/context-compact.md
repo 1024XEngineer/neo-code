@@ -1,5 +1,11 @@
 # Context Compact
 
+## Auto Compact Failure Fallback
+
+- 当 `context.auto_compact.input_token_threshold <= 0` 时，系统会尝试基于当前模型的 `ContextWindow` 自动推导阈值。
+- 若当前 provider 选择无效、catalog snapshot 查询失败，或模型窗口元数据缺失，系统会直接回退到 `fallback_input_token_threshold`。
+- 自动推导失败不会静默关闭 auto compact；runtime 仍会拿到一个可用的保底阈值。
+
 本文档说明 NeoCode 中 context compact 的配置、执行链路和摘要约定。
 
 ## 概览
@@ -23,7 +29,9 @@ context:
     micro_compact_disabled: false
   auto_compact:
     enabled: false
-    input_token_threshold: 100000
+    input_token_threshold: 0
+    reserve_tokens: 13000
+    fallback_input_token_threshold: 100000
 ```
 
 - `manual_strategy`
@@ -39,7 +47,7 @@ context:
 - `auto_compact.enabled`
   控制是否启用基于 token 阈值的自动压缩；默认关闭。
 - `auto_compact.input_token_threshold`
-  当会话累计输入 token 数达到此阈值时触发自动压缩；默认 100000。
+  当会话累计输入 token 数达到此阈值时触发自动压缩；默认 `0`（自动推导），推导失败时回退到 `fallback_input_token_threshold`（默认 `100000`）。
 
 ## 自动压缩
 
@@ -154,3 +162,12 @@ compact 相关 runtime 事件包括：
 - `trigger_mode`
 - `transcript_id`
 - `transcript_path`
+
+## Auto Compact 阈值解析
+
+- `context.auto_compact.input_token_threshold > 0` 时，直接使用显式手动阈值。
+- `context.auto_compact.input_token_threshold <= 0` 时，系统会对当前选中的 provider/model 做自动推导。
+- 自动推导公式为 `resolved_threshold = context_window - reserve_tokens`。
+- `reserve_tokens` 默认 `13000`，用于给输出、tool call 和 system prompt 预留缓冲。
+- 如果当前模型没有可用的 `ContextWindow`，或窗口值小于等于 `reserve_tokens`，则回退到 `fallback_input_token_threshold`。
+- `fallback_input_token_threshold` 默认 `100000`，用于保证主链路在缺少模型窗口元数据时仍可稳定运行。

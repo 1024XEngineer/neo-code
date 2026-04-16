@@ -270,3 +270,34 @@ func DefaultProviders() []ProviderConfig {
 ```
 
 所有内置 provider 都通过代码集中注册。模型选择器展示的候选模型由默认模型、动态发现结果和本地缓存共同组成。
+
+## custom provider 模型元数据补齐
+
+对于复用 `openaicompat` 驱动的 custom provider，如果上游 `GET /models` 不能返回可靠的上下文窗口信息，可以在：
+
+```text
+~/.neocode/providers/<provider-name>/provider.yaml
+```
+
+中显式声明 `models`：
+
+```yaml
+name: company-gateway
+driver: openaicompat
+api_key_env: COMPANY_GATEWAY_API_KEY
+models:
+  - id: deepseek-coder
+    name: DeepSeek Coder
+    context_window: 131072
+    max_output_tokens: 8192
+openai_compatible:
+  base_url: https://llm.example.com/v1
+  api_style: chat_completions
+```
+
+约束如下：
+
+- `models[].id` 必须非空。
+- `models[].context_window` 和 `models[].max_output_tokens` 如果显式配置，必须大于 `0`。
+- 同一个 `provider.yaml` 中重复的模型 `id` 会在加载阶段直接报错。
+- 这些元数据会进入统一的 model catalog 合并链路，优先级仍为“配置模型元数据优先于 discovery/default”。

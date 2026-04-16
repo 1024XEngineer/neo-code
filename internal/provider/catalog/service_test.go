@@ -103,6 +103,34 @@ func TestListProviderModelsMergesConfiguredMetadataAfterDiscovery(t *testing.T) 
 	}
 }
 
+func TestListProviderModelsUsesConfiguredContextWindowWhenDiscoveryMissesIt(t *testing.T) {
+	t.Setenv(testAPIKeyEnv, "test-key")
+
+	registry := newRegistry(t, openaicompat.DriverName, func(ctx context.Context, cfg provider.RuntimeConfig) ([]providertypes.ModelDescriptor, error) {
+		return []providertypes.ModelDescriptor{{
+			ID:            "deepseek-coder",
+			Name:          "Server DeepSeek",
+			ContextWindow: 0,
+		}}, nil
+	})
+
+	service := NewService("", registry, newMemoryStore())
+	providerCfg := customGatewayProvider()
+	providerCfg.Models = []providertypes.ModelDescriptor{{
+		ID:            "deepseek-coder",
+		Name:          "DeepSeek Coder",
+		ContextWindow: 131072,
+	}}
+
+	models, err := service.ListProviderModels(context.Background(), mustCatalogInput(t, providerCfg))
+	if err != nil {
+		t.Fatalf("ListProviderModels() error = %v", err)
+	}
+	if len(models) != 1 || models[0].ContextWindow != 131072 {
+		t.Fatalf("expected configured context window to fill discovery gap, got %+v", models)
+	}
+}
+
 func TestListProviderModelsSnapshotReturnsDefaultAndRefreshesInBackgroundOnMiss(t *testing.T) {
 	t.Setenv(testAPIKeyEnv, "test-key")
 

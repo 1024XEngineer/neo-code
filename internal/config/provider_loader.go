@@ -10,6 +10,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 	"neo-code/internal/provider"
+	providertypes "neo-code/internal/provider/types"
 )
 
 const (
@@ -22,9 +23,17 @@ type customProviderFile struct {
 	Driver           string                      `yaml:"driver"`
 	APIKeyEnv        string                      `yaml:"api_key_env"`
 	BaseURL          string                      `yaml:"base_url,omitempty"`
+	Models           []customProviderModelFile   `yaml:"models,omitempty"`
 	OpenAICompatible customOpenAICompatibleFile  `yaml:"openai_compatible,omitempty"`
 	Gemini           customGeminiProviderFile    `yaml:"gemini,omitempty"`
 	Anthropic        customAnthropicProviderFile `yaml:"anthropic,omitempty"`
+}
+
+type customProviderModelFile struct {
+	ID              string `yaml:"id"`
+	Name            string `yaml:"name,omitempty"`
+	ContextWindow   *int   `yaml:"context_window,omitempty"`
+	MaxOutputTokens *int   `yaml:"max_output_tokens,omitempty"`
 }
 
 type customOpenAICompatibleFile struct {
@@ -106,6 +115,11 @@ func loadCustomProvider(providerDir string) (ProviderConfig, error) {
 	}
 
 	settings := resolveCustomProviderSettings(file)
+	models, err := customProviderModels(file.Models)
+	if err != nil {
+		return ProviderConfig{}, fmt.Errorf("config: custom provider %q: %w", filepath.Base(providerDir), err)
+	}
+
 	cfg := ProviderConfig{
 		Name:           strings.TrimSpace(file.Name),
 		Driver:         strings.TrimSpace(file.Driver),
@@ -114,6 +128,7 @@ func loadCustomProvider(providerDir string) (ProviderConfig, error) {
 		APIStyle:       settings.APIStyle,
 		DeploymentMode: settings.DeploymentMode,
 		APIVersion:     settings.APIVersion,
+		Models:         models,
 		Source:         ProviderSourceCustom,
 	}
 
@@ -126,6 +141,48 @@ func loadCustomProvider(providerDir string) (ProviderConfig, error) {
 	}
 
 	return cfg, nil
+}
+
+// customProviderModels 校验并收敛 custom provider.yaml 中声明的模型元数据。
+func customProviderModels(models []customProviderModelFile) ([]providertypes.ModelDescriptor, error) {
+	if len(models) == 0 {
+		return nil, nil
+	}
+
+	descriptors := make([]providertypes.ModelDescriptor, 0, len(models))
+	seen := make(map[string]struct{}, len(models))
+	for index, model := range models {
+		id := strings.TrimSpace(model.ID)
+		if id == "" {
+			return nil, fmt.Errorf("models[%d].id is empty", index)
+		}
+
+		key := provider.NormalizeKey(id)
+		if _, exists := seen[key]; exists {
+			return nil, fmt.Errorf("models[%d].id %q is duplicated", index, id)
+		}
+		seen[key] = struct{}{}
+
+		descriptor := providertypes.ModelDescriptor{
+			ID:   id,
+			Name: strings.TrimSpace(model.Name),
+		}
+		if model.ContextWindow != nil {
+			if *model.ContextWindow <= 0 {
+				return nil, fmt.Errorf("models[%d].context_window must be greater than 0", index)
+			}
+			descriptor.ContextWindow = *model.ContextWindow
+		}
+		if model.MaxOutputTokens != nil {
+			if *model.MaxOutputTokens <= 0 {
+				return nil, fmt.Errorf("models[%d].max_output_tokens must be greater than 0", index)
+			}
+			descriptor.MaxOutputTokens = *model.MaxOutputTokens
+		}
+		descriptors = append(descriptors, descriptor)
+	}
+
+	return providertypes.MergeModelDescriptors(descriptors), nil
 }
 
 // resolveCustomProviderSettings 根据 driver 只提取当前协议真正生效的配置字段，避免误吃其他协议块的值。

@@ -194,6 +194,78 @@ func TestCloneProviderConfigModelDescriptorsIndependence(t *testing.T) {
 	}
 }
 
+func TestCustomProviderModelsParsesSupportedMetadata(t *testing.T) {
+	t.Parallel()
+
+	contextWindow := 131072
+	maxOutputTokens := 8192
+	models, err := customProviderModels([]customProviderModelFile{
+		{
+			ID:              "deepseek-coder",
+			Name:            "DeepSeek Coder",
+			ContextWindow:   &contextWindow,
+			MaxOutputTokens: &maxOutputTokens,
+		},
+	})
+	if err != nil {
+		t.Fatalf("customProviderModels() error = %v", err)
+	}
+
+	if len(models) != 1 {
+		t.Fatalf("expected one parsed model, got %+v", models)
+	}
+	if models[0].ID != "deepseek-coder" || models[0].ContextWindow != 131072 || models[0].MaxOutputTokens != 8192 {
+		t.Fatalf("unexpected parsed model descriptor: %+v", models[0])
+	}
+}
+
+func TestCustomProviderModelsRejectsEmptyID(t *testing.T) {
+	t.Parallel()
+
+	_, err := customProviderModels([]customProviderModelFile{{Name: "Missing ID"}})
+	if err == nil || !strings.Contains(err.Error(), "models[0].id") {
+		t.Fatalf("expected empty id validation error, got %v", err)
+	}
+}
+
+func TestCustomProviderModelsRejectsNonPositiveContextWindow(t *testing.T) {
+	t.Parallel()
+
+	contextWindow := 0
+	_, err := customProviderModels([]customProviderModelFile{{
+		ID:            "deepseek-coder",
+		ContextWindow: &contextWindow,
+	}})
+	if err == nil || !strings.Contains(err.Error(), "context_window") {
+		t.Fatalf("expected context_window validation error, got %v", err)
+	}
+}
+
+func TestCustomProviderModelsRejectsNonPositiveMaxOutputTokens(t *testing.T) {
+	t.Parallel()
+
+	maxOutputTokens := 0
+	_, err := customProviderModels([]customProviderModelFile{{
+		ID:              "deepseek-coder",
+		MaxOutputTokens: &maxOutputTokens,
+	}})
+	if err == nil || !strings.Contains(err.Error(), "max_output_tokens") {
+		t.Fatalf("expected max_output_tokens validation error, got %v", err)
+	}
+}
+
+func TestCustomProviderModelsRejectsDuplicateID(t *testing.T) {
+	t.Parallel()
+
+	_, err := customProviderModels([]customProviderModelFile{
+		{ID: "deepseek-coder"},
+		{ID: " DeepSeek-Coder "},
+	})
+	if err == nil || !strings.Contains(err.Error(), "duplicated") {
+		t.Fatalf("expected duplicate id validation error, got %v", err)
+	}
+}
+
 func TestProviderByNameCaseInsensitive(t *testing.T) {
 	t.Parallel()
 

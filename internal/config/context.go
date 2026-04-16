@@ -7,11 +7,13 @@ import (
 )
 
 const (
-	DefaultCompactManualKeepRecentMessages       = 10
-	DefaultCompactMaxSummaryChars                = 1200
-	DefaultAutoCompactInputTokenThreshold        = 100000
-	DefaultMicroCompactRetainedToolSpans         = 2
-	DefaultCompactReadTimeMaxMessageSpans        = 24
+	DefaultCompactManualKeepRecentMessages        = 10
+	DefaultCompactMaxSummaryChars                 = 1200
+	DefaultAutoCompactInputTokenThreshold         = 0
+	DefaultAutoCompactReserveTokens               = 13000
+	DefaultAutoCompactFallbackInputTokenThreshold = 100000
+	DefaultMicroCompactRetainedToolSpans          = 2
+	DefaultCompactReadTimeMaxMessageSpans         = 24
 
 	CompactManualStrategyKeepRecent  = "keep_recent"
 	CompactManualStrategyFullReplace = "full_replace"
@@ -34,8 +36,10 @@ type CompactConfig struct {
 
 // AutoCompactConfig controls automatic context compression triggered by token thresholds.
 type AutoCompactConfig struct {
-	Enabled             bool `yaml:"enabled"`
-	InputTokenThreshold int  `yaml:"input_token_threshold,omitempty"`
+	Enabled                     bool `yaml:"enabled"`
+	InputTokenThreshold         int  `yaml:"input_token_threshold,omitempty"`
+	ReserveTokens               int  `yaml:"reserve_tokens,omitempty"`
+	FallbackInputTokenThreshold int  `yaml:"fallback_input_token_threshold,omitempty"`
 }
 
 // defaultContextConfig 返回上下文压缩相关配置的默认值。
@@ -48,7 +52,9 @@ func defaultContextConfig() ContextConfig {
 
 func defaultAutoCompactConfig() AutoCompactConfig {
 	return AutoCompactConfig{
-		InputTokenThreshold: DefaultAutoCompactInputTokenThreshold,
+		InputTokenThreshold:         DefaultAutoCompactInputTokenThreshold,
+		ReserveTokens:               DefaultAutoCompactReserveTokens,
+		FallbackInputTokenThreshold: DefaultAutoCompactFallbackInputTokenThreshold,
 	}
 }
 
@@ -119,8 +125,11 @@ func (c *AutoCompactConfig) ApplyDefaults(defaults AutoCompactConfig) {
 	if c == nil {
 		return
 	}
-	if c.InputTokenThreshold <= 0 {
-		c.InputTokenThreshold = defaults.InputTokenThreshold
+	if c.ReserveTokens <= 0 {
+		c.ReserveTokens = defaults.ReserveTokens
+	}
+	if c.FallbackInputTokenThreshold <= 0 {
+		c.FallbackInputTokenThreshold = defaults.FallbackInputTokenThreshold
 	}
 }
 
@@ -157,8 +166,14 @@ func (c CompactConfig) Validate() error {
 
 // Validate 校验 auto_compact 配置是否合法。
 func (c AutoCompactConfig) Validate() error {
-	if c.Enabled && c.InputTokenThreshold <= 0 {
-		return errors.New("input_token_threshold must be greater than 0 when enabled")
+	if !c.Enabled {
+		return nil
+	}
+	if c.ReserveTokens <= 0 {
+		return errors.New("reserve_tokens must be greater than 0 when enabled")
+	}
+	if c.FallbackInputTokenThreshold <= 0 {
+		return errors.New("fallback_input_token_threshold must be greater than 0 when enabled")
 	}
 	return nil
 }
