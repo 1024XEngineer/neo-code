@@ -338,7 +338,7 @@ func TestDispatchRPCRequestConvertsFrameErrorWithoutPayload(t *testing.T) {
 	server := &Server{}
 	originalHandlers := requestFrameHandlers
 	requestFrameHandlers = map[FrameAction]requestFrameHandler{
-		FrameActionPing: func(frame MessageFrame) MessageFrame {
+		FrameActionPing: func(_ context.Context, frame MessageFrame) MessageFrame {
 			return MessageFrame{
 				Type:      FrameTypeError,
 				Action:    frame.Action,
