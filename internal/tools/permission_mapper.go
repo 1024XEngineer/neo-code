@@ -16,11 +16,14 @@ func buildPermissionAction(input ToolCallInput) (security.Action, error) {
 
 	action := security.Action{
 		Payload: security.ActionPayload{
-			ToolName:  toolName,
-			Resource:  toolName,
-			Operation: toolName,
-			SessionID: input.SessionID,
-			Workdir:   input.Workdir,
+			ToolName:        toolName,
+			Resource:        toolName,
+			Operation:       toolName,
+			SessionID:       input.SessionID,
+			TaskID:          input.TaskID,
+			AgentID:         input.AgentID,
+			Workdir:         input.Workdir,
+			CapabilityToken: input.CapabilityToken,
 		},
 	}
 
@@ -32,6 +35,9 @@ func buildPermissionAction(input ToolCallInput) (security.Action, error) {
 		action.Payload.Target = extractStringArgument(input.Arguments, "command")
 		action.Payload.SandboxTargetType = security.TargetTypeDirectory
 		action.Payload.SandboxTarget = extractStringArgument(input.Arguments, "workdir")
+		if action.Payload.SandboxTarget == "" {
+			action.Payload.SandboxTarget = "."
+		}
 	case "filesystem_read_file":
 		action.Type = security.ActionTypeRead
 		action.Payload.Operation = "read_file"

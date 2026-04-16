@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
+	"time"
 
 	providertypes "neo-code/internal/provider/types"
 	"neo-code/internal/security"
@@ -21,7 +23,6 @@ type SpecListInput struct {
 type Manager interface {
 	ListAvailableSpecs(ctx context.Context, input SpecListInput) ([]providertypes.ToolSpec, error)
 	MicroCompactPolicy(name string) MicroCompactPolicy
-	// Execute 必须支持并发调用；runtime 可能在同一轮中并行调度多个工具调用。
 	Execute(ctx context.Context, input ToolCallInput) (ToolResult, error)
 	RememberSessionDecision(sessionID string, action security.Action, scope SessionPermissionScope) error
 }
@@ -136,6 +137,7 @@ type DefaultManager struct {
 	engine           security.PermissionEngine
 	sandbox          WorkspaceSandbox
 	sessionDecisions *sessionPermissionMemory
+	capabilitySigner *security.CapabilitySigner
 }
 
 // NewManager creates a manager that wraps an executor with security checks.
@@ -153,13 +155,38 @@ func NewManager(executor Executor, engine security.PermissionEngine, sandbox Wor
 	if sandbox == nil {
 		sandbox = NoopWorkspaceSandbox{}
 	}
+	capabilitySigner, err := security.NewEphemeralCapabilitySigner()
+	if err != nil {
+		return nil, err
+	}
 
 	return &DefaultManager{
 		executor:         executor,
 		engine:           engine,
 		sandbox:          sandbox,
 		sessionDecisions: newSessionPermissionMemory(),
+		capabilitySigner: capabilitySigner,
 	}, nil
+}
+
+// SetCapabilitySigner 设置用于 capability token 验签的签名器。
+func (m *DefaultManager) SetCapabilitySigner(signer *security.CapabilitySigner) error {
+	if m == nil {
+		return errors.New("tools: manager is nil")
+	}
+	if signer == nil {
+		return errors.New("tools: capability signer is nil")
+	}
+	m.capabilitySigner = signer
+	return nil
+}
+
+// CapabilitySigner 返回当前 manager 使用的 capability 签名器。
+func (m *DefaultManager) CapabilitySigner() *security.CapabilitySigner {
+	if m == nil {
+		return nil
+	}
+	return m.capabilitySigner
 }
 
 // ListAvailableSpecs returns the currently visible tool specs from the executor.
@@ -198,6 +225,12 @@ func (m *DefaultManager) Execute(ctx context.Context, input ToolCallInput) (Tool
 		result.ToolCallID = input.ID
 		return result, err
 	}
+	if err := m.verifyCapabilityToken(action); err != nil {
+		decision := capabilityDenyDecision(action, err.Error())
+		m.auditCapabilityDecision(action, string(decision.Decision), decision.Reason)
+		result := blockedToolResult(input, decision)
+		return result, permissionErrorFromDecision(decision)
+	}
 
 	decision, err := m.engine.Check(ctx, action)
 	if err != nil {
@@ -207,6 +240,9 @@ func (m *DefaultManager) Execute(ctx context.Context, input ToolCallInput) (Tool
 	}
 	// deny 规则始终优先，避免 session 记忆覆盖硬性安全策略。
 	if decision.Decision == security.DecisionDeny {
+		if security.IsCapabilityDeniedResult(decision) {
+			m.auditCapabilityDecision(action, string(decision.Decision), decision.Reason)
+		}
 		result := blockedToolResult(input, decision)
 		return result, permissionErrorFromDecision(decision)
 	}
@@ -238,12 +274,84 @@ func (m *DefaultManager) Execute(ctx context.Context, input ToolCallInput) (Tool
 		result.ToolCallID = input.ID
 		return result, err
 	}
+	m.auditCapabilityDecision(action, string(security.DecisionAllow), "")
 
 	if plan != nil {
 		input.WorkspacePlan = plan
 	}
 
 	return m.executor.Execute(ctx, input)
+}
+
+// verifyCapabilityToken 校验 capability token 的签名、绑定关系与时效性。
+func (m *DefaultManager) verifyCapabilityToken(action security.Action) error {
+	token := action.Payload.CapabilityToken
+	if token == nil {
+		return nil
+	}
+	if m == nil || m.capabilitySigner == nil {
+		return errors.New("capability signer is unavailable")
+	}
+	if err := m.capabilitySigner.Verify(*token); err != nil {
+		return fmt.Errorf("invalid capability token signature: %w", err)
+	}
+
+	normalized := token.Normalize()
+	taskID := strings.TrimSpace(action.Payload.TaskID)
+	if taskID != "" && normalized.TaskID != taskID {
+		return errors.New("capability token task_id does not match action")
+	}
+	agentID := strings.TrimSpace(action.Payload.AgentID)
+	if agentID != "" && normalized.AgentID != agentID {
+		return errors.New("capability token agent_id does not match action")
+	}
+	if err := normalized.ValidateAt(time.Now().UTC()); err != nil {
+		return fmt.Errorf("invalid capability token: %w", err)
+	}
+	return nil
+}
+
+// capabilityDenyDecision 构造 capability 拒绝时统一的权限结果结构。
+func capabilityDenyDecision(action security.Action, reason string) security.CheckResult {
+	trimmedReason := strings.TrimSpace(reason)
+	if trimmedReason == "" {
+		trimmedReason = "capability token denied"
+	}
+	return security.CheckResult{
+		Decision: security.DecisionDeny,
+		Action:   action,
+		Rule: &security.Rule{
+			ID:       security.CapabilityRuleID,
+			Type:     action.Type,
+			Resource: action.Payload.Resource,
+			Decision: security.DecisionDeny,
+			Reason:   trimmedReason,
+		},
+		Reason: trimmedReason,
+	}
+}
+
+// auditCapabilityDecision 记录 capability 的 allow/deny 决策日志，便于追踪任务权限收敛。
+func (m *DefaultManager) auditCapabilityDecision(action security.Action, decision string, reason string) {
+	if action.Payload.CapabilityToken == nil {
+		return
+	}
+	taskID := strings.TrimSpace(action.Payload.TaskID)
+	if taskID == "" {
+		taskID = strings.TrimSpace(action.Payload.CapabilityToken.TaskID)
+	}
+	agentID := strings.TrimSpace(action.Payload.AgentID)
+	if agentID == "" {
+		agentID = strings.TrimSpace(action.Payload.CapabilityToken.AgentID)
+	}
+	log.Printf(
+		"tools capability audit: decision=%s task_id=%s agent_id=%s tool=%s reason=%s",
+		strings.TrimSpace(decision),
+		taskID,
+		agentID,
+		strings.TrimSpace(action.Payload.ToolName),
+		strings.TrimSpace(reason),
+	)
 }
 
 // RememberSessionDecision 记录会话内权限记忆，用于后续同类 action 快速决策。
@@ -344,6 +452,12 @@ func actionMetadata(action security.Action) map[string]any {
 	}
 	if action.Payload.SandboxTarget != "" {
 		metadata["permission_sandbox_target"] = action.Payload.SandboxTarget
+	}
+	if strings.TrimSpace(action.Payload.TaskID) != "" {
+		metadata["permission_task_id"] = strings.TrimSpace(action.Payload.TaskID)
+	}
+	if strings.TrimSpace(action.Payload.AgentID) != "" {
+		metadata["permission_agent_id"] = strings.TrimSpace(action.Payload.AgentID)
 	}
 	return metadata
 }

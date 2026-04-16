@@ -40,7 +40,10 @@ type ToolCallInput struct {
 	Name          string
 	Arguments     []byte
 	SessionID     string
+	TaskID        string
+	AgentID       string
 	Workdir       string
+	CapabilityToken *security.CapabilityToken
 	WorkspacePlan *security.WorkspaceExecutionPlan
 	// SessionMutator 仅对需要会话级写入的工具开放（例如 todo_write）。
 	SessionMutator SessionMutator
