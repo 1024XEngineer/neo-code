@@ -77,19 +77,10 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 
 	initialCfg := s.configManager.Get()
 	sessionID := strings.TrimSpace(input.SessionID)
-	releaseSessionLock := func() {}
+	releaseSessionLock := s.bindSessionLock(sessionID)
 	defer func() {
 		releaseSessionLock()
 	}()
-
-	if sessionID != "" {
-		sessionMu, releaseLockRef := s.acquireSessionLock(sessionID)
-		sessionMu.Lock()
-		releaseSessionLock = func() {
-			sessionMu.Unlock()
-			releaseLockRef()
-		}
-	}
 
 	sessionTitle := sessionTitleFromParts(input.Parts)
 	session, err := s.loadOrCreateSession(ctx, input.SessionID, sessionTitle, initialCfg.Workdir, input.Workdir)
@@ -98,12 +89,7 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 	}
 
 	if sessionID == "" {
-		sessionMu, releaseLockRef := s.acquireSessionLock(session.ID)
-		sessionMu.Lock()
-		releaseSessionLock = func() {
-			sessionMu.Unlock()
-			releaseLockRef()
-		}
+		releaseSessionLock = s.bindSessionLock(session.ID)
 	}
 
 	state := newRunState(input.RunID, session)
@@ -219,6 +205,7 @@ func (s *Service) prepareTurnSnapshot(ctx context.Context, state *runState) (tur
 	builtContext, err := s.contextBuilder.Build(ctx, agentcontext.BuildInput{
 		Messages:     state.session.Messages,
 		TaskState:    state.session.TaskState,
+		Todos:        cloneTodosForPersistence(state.session.Todos),
 		ActiveSkills: activeSkills,
 		Metadata: agentcontext.Metadata{
 			Workdir:             activeWorkdir,
@@ -230,13 +217,16 @@ func (s *Service) prepareTurnSnapshot(ctx context.Context, state *runState) (tur
 		},
 		Compact: agentcontext.CompactOptions{
 			DisableMicroCompact:           cfg.Context.Compact.MicroCompactDisabled,
-			AutoCompactThreshold:          autoCompactThreshold(cfg),
+			AutoCompactThreshold:          s.autoCompactThresholdForState(ctx, cfg, state),
 			MicroCompactRetainedToolSpans: cfg.Context.Compact.MicroCompactRetainedToolSpans,
 			ReadTimeMaxMessageSpans:       cfg.Context.Compact.ReadTimeMaxMessageSpans,
 		},
 	})
 	if err != nil {
 		return turnSnapshot{}, false, err
+	}
+	if strings.Contains(builtContext.SystemPrompt, "## Todo State") {
+		s.emitRunScoped(ctx, EventTodoSummaryInjected, state, TodoEventPayload{})
 	}
 
 	if builtContext.AutoCompactSuggested && !state.compactApplied {
@@ -268,22 +258,9 @@ func (s *Service) prepareTurnSnapshot(ctx context.Context, state *runState) (tur
 
 	limit := resolveNoProgressStreakLimit(cfg.Runtime)
 	repeatLimit := resolveRepeatCycleStreakLimit(cfg.Runtime)
-	systemPrompt := builtContext.SystemPrompt
-
-	if repeatStreak == repeatLimit-1 {
-		trimmed := strings.TrimSpace(systemPrompt)
-		if trimmed == "" {
-			systemPrompt = selfHealingRepeatReminder
-		} else {
-			systemPrompt = trimmed + "\n\n" + selfHealingRepeatReminder
-		}
-	} else if streak == limit-1 {
-		trimmed := strings.TrimSpace(systemPrompt)
-		if trimmed == "" {
-			systemPrompt = selfHealingReminder
-		} else {
-			systemPrompt = trimmed + "\n\n" + selfHealingReminder
-		}
+	systemPrompt, repeatInjected := withSelfHealingRepeatReminder(builtContext.SystemPrompt, repeatStreak, repeatLimit)
+	if !repeatInjected {
+		systemPrompt = withSelfHealingReminder(systemPrompt, streak, limit)
 	}
 
 	model := strings.TrimSpace(cfg.CurrentModel)
@@ -413,11 +390,42 @@ func (s *Service) applyCompactForState(
 }
 
 // autoCompactThreshold 返回当前配置下的自动 compact 触发阈值。
-func autoCompactThreshold(cfg config.Config) int {
-	if cfg.Context.AutoCompact.Enabled && cfg.Context.AutoCompact.InputTokenThreshold > 0 {
+func (s *Service) autoCompactThreshold(ctx context.Context, cfg config.Config) int {
+	return s.autoCompactThresholdForState(ctx, cfg, nil)
+}
+
+// autoCompactThresholdForState 返回当前配置下的自动 compact 触发阈值，并在单次 run 内按关键输入缓存结果。
+func (s *Service) autoCompactThresholdForState(ctx context.Context, cfg config.Config, state *runState) int {
+	if !cfg.Context.AutoCompact.Enabled {
+		return 0
+	}
+	if cfg.Context.AutoCompact.InputTokenThreshold > 0 {
 		return cfg.Context.AutoCompact.InputTokenThreshold
 	}
-	return 0
+
+	key := autoCompactCacheKeyFromConfig(cfg)
+	if state != nil && state.autoCompactCache.valid && state.autoCompactCache.key == key {
+		return state.autoCompactCache.threshold
+	}
+
+	threshold := fallbackAutoCompactThreshold(cfg)
+	cacheable := true
+	if s != nil && s.autoCompactThresholdResolver != nil {
+		resolvedThreshold, err := s.autoCompactThresholdResolver.ResolveAutoCompactThreshold(ctx, cfg)
+		if err != nil {
+			cacheable = false
+		} else if resolvedThreshold > 0 {
+			threshold = resolvedThreshold
+		}
+	}
+	if state != nil && cacheable {
+		state.autoCompactCache = autoCompactThresholdCache{
+			key:       key,
+			threshold: threshold,
+			valid:     true,
+		}
+	}
+	return threshold
 }
 
 // degradeKeepRecentMessages 根据 reactive compact 尝试次数逐步减少保留消息数。
@@ -453,4 +461,62 @@ func sessionTitleFromParts(parts []providertypes.ContentPart) string {
 		}
 	}
 	return "Image Message"
+}
+
+// fallbackAutoCompactThreshold 返回自动推导失败时仍可继续使用的保底阈值。
+func fallbackAutoCompactThreshold(cfg config.Config) int {
+	if cfg.Context.AutoCompact.FallbackInputTokenThreshold > 0 {
+		return cfg.Context.AutoCompact.FallbackInputTokenThreshold
+	}
+	return 0
+}
+
+// bindSessionLock 获取并持有指定会话锁，返回对应的释放函数。
+func (s *Service) bindSessionLock(sessionID string) func() {
+	id := strings.TrimSpace(sessionID)
+	if id == "" {
+		return func() {}
+	}
+	sessionMu, releaseLockRef := s.acquireSessionLock(id)
+	sessionMu.Lock()
+	return func() {
+		sessionMu.Unlock()
+		releaseLockRef()
+	}
+}
+
+// withSelfHealingReminder 在无进展临界轮次注入自愈提醒，保持提示词拼接规则集中。
+func withSelfHealingReminder(systemPrompt string, streak int, limit int) string {
+	if streak != limit-1 {
+		return systemPrompt
+	}
+	trimmed := strings.TrimSpace(systemPrompt)
+	if trimmed == "" {
+		return selfHealingReminder
+	}
+	return trimmed + "\n\n" + selfHealingReminder
+}
+
+// withSelfHealingRepeatReminder 在重复循环临界轮次注入循环自愈提醒，避免模型继续相同工具调用。
+func withSelfHealingRepeatReminder(systemPrompt string, repeatStreak int, repeatLimit int) (string, bool) {
+	if repeatStreak != repeatLimit-1 {
+		return systemPrompt, false
+	}
+	trimmed := strings.TrimSpace(systemPrompt)
+	if trimmed == "" {
+		return selfHealingRepeatReminder, true
+	}
+	return trimmed + "\n\n" + selfHealingRepeatReminder, true
+}
+
+// autoCompactCacheKeyFromConfig 提取会影响自动压缩阈值解析的配置维度，用于 run 内缓存命中判断。
+func autoCompactCacheKeyFromConfig(cfg config.Config) autoCompactThresholdCacheKey {
+	return autoCompactThresholdCacheKey{
+		provider:                  strings.TrimSpace(cfg.SelectedProvider),
+		model:                     strings.TrimSpace(cfg.CurrentModel),
+		autoCompactEnabled:        cfg.Context.AutoCompact.Enabled,
+		autoCompactInputThreshold: cfg.Context.AutoCompact.InputTokenThreshold,
+		autoCompactReserveTokens:  cfg.Context.AutoCompact.ReserveTokens,
+		autoCompactFallback:       cfg.Context.AutoCompact.FallbackInputTokenThreshold,
+	}
 }

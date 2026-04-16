@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	providertypes "neo-code/internal/provider/types"
+	"neo-code/internal/tools"
 )
 
 // executeAssistantToolCalls 并发执行 assistant 返回的全部工具调用并回写结果。
@@ -89,6 +90,7 @@ func (s *Service) executeOneToolCall(
 	result, execErr := s.executeToolCallWithPermission(ctx, permissionExecutionInput{
 		RunID:       state.runID,
 		SessionID:   state.session.ID,
+		State:       state,
 		Call:        call,
 		Workdir:     snapshot.workdir,
 		ToolTimeout: snapshot.toolTimeout,
@@ -119,6 +121,7 @@ func (s *Service) executeOneToolCall(
 	}
 
 	s.emitRunScoped(ctx, EventToolResult, state, result)
+	s.emitTodoToolEvent(ctx, state, call, result, execErr)
 
 	if isSuccessfulRememberToolCall(call.Name, result, execErr) {
 		state.mu.Lock()
@@ -221,5 +224,29 @@ func shouldStopToolExecution(mu *sync.Mutex, firstErr *error, contextErr error) 
 func recordAndCancelOnFirstError(mu *sync.Mutex, firstErr *error, err error, cancel context.CancelFunc) {
 	if rememberFirstError(mu, firstErr, err) {
 		cancel()
+	}
+}
+
+// emitTodoToolEvent 在 todo_write 调用后补充 Todo 领域事件。
+func (s *Service) emitTodoToolEvent(
+	ctx context.Context,
+	state *runState,
+	call providertypes.ToolCall,
+	result tools.ToolResult,
+	execErr error,
+) {
+	if !strings.EqualFold(strings.TrimSpace(call.Name), tools.ToolNameTodoWrite) {
+		return
+	}
+
+	action, _ := result.Metadata["action"].(string)
+	if execErr == nil {
+		s.emitRunScoped(ctx, EventTodoUpdated, state, TodoEventPayload{Action: action})
+		return
+	}
+
+	reason, _ := result.Metadata["reason_code"].(string)
+	if strings.Contains(strings.ToLower(strings.TrimSpace(reason)), "conflict") {
+		s.emitRunScoped(ctx, EventTodoConflict, state, TodoEventPayload{Action: action, Reason: reason})
 	}
 }

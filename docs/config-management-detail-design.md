@@ -130,3 +130,14 @@ custom provider 来自：
 - 不在 `config` 中堆兼容旧字段的逻辑
 - 不把选择修正混进快照校验
 - 不把 provider/catalog/runtime 语义倒灌回 `config`
+
+## custom provider `models` 校验约束
+
+`~/.neocode/providers/<provider-name>/provider.yaml` 中允许通过 `models` 补齐模型元数据，用于 catalog/discovery 无法提供完整 `ContextWindow` 或 `MaxOutputTokens` 的场景。
+
+该能力的约束是：
+
+- `models[].id` 必须非空。
+- `models[].context_window` 和 `models[].max_output_tokens` 如果显式提供，必须大于 `0`。
+- 重复的模型 `id` 会在加载 custom provider 时直接失败，不保留 silently drop 的宽松行为。
+- 这些元数据不会写回 `config.yaml`，只在 custom provider 文件中声明，并通过现有 catalog 合并链路参与运行时解析。

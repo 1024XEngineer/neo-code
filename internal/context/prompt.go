@@ -25,6 +25,7 @@ var defaultPromptSections = []promptSection{
 		Title: "Tool Usage",
 		Content: "- Use the minimum set of tools needed to make progress or verify a result safely.\n" +
 			"- Only call tools that are actually exposed in the current tool schema. Do not invent tool names.\n" +
+			"- For multi-step implementation work, keep task state explicit via `todo_write` (plan/add/update/set_status/claim/complete/fail) instead of relying on implicit memory.\n" +
 			"- Prefer structured workspace tools over `bash` whenever possible: use `filesystem_read_file`, `filesystem_grep`, and `filesystem_glob` for reading/search, `filesystem_edit` for precise edits, and `filesystem_write_file` only for new files or full rewrites.\n" +
 			"- Do not use `bash` to edit files when the filesystem tools can make the change safely.\n" +
 			"- When using `bash`, avoid interactive or blocking commands and pass non-interactive flags when they are available.\n" +

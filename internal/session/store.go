@@ -32,6 +32,7 @@ type Session struct {
 	Workdir          string                  `json:"workdir,omitempty"`
 	TaskState        TaskState               `json:"task_state"`
 	ActivatedSkills  []SkillActivation       `json:"activated_skills,omitempty"`
+	TodoVersion      int                     `json:"todo_version,omitempty"`
 	Todos            []TodoItem              `json:"todos,omitempty"`
 	Messages         []providertypes.Message `json:"messages"`
 	TokenInputTotal  int                     `json:"token_input_total,omitempty"`
@@ -90,6 +91,9 @@ func (s *JSONStore) Save(ctx context.Context, session *Session) error {
 		return err
 	}
 	session.Todos = normalizedTodos
+	if len(session.Todos) > 0 && session.TodoVersion <= 0 {
+		session.TodoVersion = CurrentTodoVersion
+	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -257,6 +261,7 @@ func decodeStoredSession(data []byte) (Session, error) {
 		Workdir         string                  `json:"workdir,omitempty"`
 		TaskState       *TaskState              `json:"task_state"`
 		ActivatedSkills []SkillActivation       `json:"activated_skills,omitempty"`
+		TodoVersion     *int                    `json:"todo_version,omitempty"`
 		Todos           []TodoItem              `json:"todos,omitempty"`
 		Messages        []providertypes.Message `json:"messages"`
 		TokenInput      int                     `json:"token_input_total,omitempty"`
@@ -286,10 +291,14 @@ func decodeStoredSession(data []byte) (Session, error) {
 		Workdir:          stored.Workdir,
 		TaskState:        *stored.TaskState,
 		ActivatedSkills:  stored.ActivatedSkills,
+		TodoVersion:      0,
 		Todos:            stored.Todos,
 		Messages:         stored.Messages,
 		TokenInputTotal:  stored.TokenInput,
 		TokenOutputTotal: stored.TokenOutput,
+	}
+	if stored.TodoVersion != nil {
+		session.TodoVersion = *stored.TodoVersion
 	}
 	if err := validateSessionSchema(session); err != nil {
 		return Session{}, err
@@ -301,6 +310,9 @@ func decodeStoredSession(data []byte) (Session, error) {
 		return Session{}, err
 	}
 	session.Todos = normalizedTodos
+	if len(session.Todos) > 0 && session.TodoVersion <= 0 {
+		session.TodoVersion = CurrentTodoVersion
+	}
 	return session, nil
 }
 

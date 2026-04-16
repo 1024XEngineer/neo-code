@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"neo-code/internal/config"
 	"neo-code/internal/context/internalcompact"
@@ -139,6 +140,38 @@ func TestDefaultBuilderBuildIncludesTaskStateBeforeSystemState(t *testing.T) {
 	}
 	if !strings.Contains(got.SystemPrompt, "- goal: Finish task state refactor") {
 		t.Fatalf("expected task state content in system prompt, got %q", got.SystemPrompt)
+	}
+}
+
+func TestDefaultBuilderBuildIncludesTodosBeforeSystemState(t *testing.T) {
+	t.Parallel()
+
+	builder := NewBuilder()
+	got, err := builder.Build(stdcontext.Background(), BuildInput{
+		Messages: []providertypes.Message{{Role: "user", Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")}}},
+		Todos: []agentsession.TodoItem{
+			{
+				ID:        "todo-1",
+				Content:   "implement todo tool",
+				Status:    agentsession.TodoStatusInProgress,
+				Priority:  3,
+				Revision:  2,
+				CreatedAt: time.Now(),
+			},
+		},
+		Metadata: testMetadata(t.TempDir()),
+	})
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+
+	todoIndex := strings.Index(got.SystemPrompt, "## Todo State")
+	systemStateIndex := strings.Index(got.SystemPrompt, "## System State")
+	if todoIndex < 0 || systemStateIndex < 0 {
+		t.Fatalf("expected todo and system sections, got %q", got.SystemPrompt)
+	}
+	if todoIndex > systemStateIndex {
+		t.Fatalf("expected todo section before system section, got %q", got.SystemPrompt)
 	}
 }
 

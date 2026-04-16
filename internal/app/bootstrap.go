@@ -26,6 +26,7 @@ import (
 	"neo-code/internal/tools/filesystem"
 	"neo-code/internal/tools/mcp"
 	memotool "neo-code/internal/tools/memo"
+	"neo-code/internal/tools/todo"
 	"neo-code/internal/tools/webfetch"
 	"neo-code/internal/tui"
 )
@@ -168,6 +169,15 @@ func BuildRuntime(ctx context.Context, opts BootstrapOptions) (RuntimeBundle, er
 		contextBuilder,
 	)
 	runtimeSvc.SetSkillsRegistry(buildSkillsRegistry(ctx, loader.BaseDir()))
+	runtimeSvc.SetAutoCompactThresholdResolver(runtimeAutoCompactThresholdResolverFunc(
+		func(ctx context.Context, cfg config.Config) (int, error) {
+			resolution, err := configstate.ResolveAutoCompactThreshold(ctx, cfg, modelCatalogs)
+			if err != nil {
+				return 0, err
+			}
+			return resolution.Threshold, nil
+		},
+	))
 
 	// 注入记忆提取钩子：当 AutoExtract 启用且 memoSvc 可用时，ReAct 循环完成后异步提取记忆。
 	if memoSvc != nil && cfg.Memo.AutoExtract {
@@ -244,6 +254,7 @@ func buildToolRegistry(cfg config.Config) (*tools.Registry, func() error, error)
 		MaxResponseBytes:      cfg.Tools.WebFetch.MaxResponseBytes,
 		SupportedContentTypes: cfg.Tools.WebFetch.SupportedContentTypes,
 	}))
+	toolRegistry.Register(todo.New())
 	mcpRegistry, err := buildMCPRegistry(cfg)
 	if err != nil {
 		return nil, nil, err
@@ -305,4 +316,10 @@ type textGenAdapter func(ctx context.Context, prompt string, msgs []providertype
 
 func (f textGenAdapter) Generate(ctx context.Context, prompt string, msgs []providertypes.Message) (string, error) {
 	return f(ctx, prompt, msgs)
+}
+
+type runtimeAutoCompactThresholdResolverFunc func(ctx context.Context, cfg config.Config) (int, error)
+
+func (f runtimeAutoCompactThresholdResolverFunc) ResolveAutoCompactThreshold(ctx context.Context, cfg config.Config) (int, error) {
+	return f(ctx, cfg)
 }

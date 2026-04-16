@@ -1242,6 +1242,14 @@ func TestAutoCompactConfigDefaults(t *testing.T) {
 		t.Fatalf("expected input_token_threshold=%d, got %d",
 			DefaultAutoCompactInputTokenThreshold, cfg.Context.AutoCompact.InputTokenThreshold)
 	}
+	if cfg.Context.AutoCompact.ReserveTokens != DefaultAutoCompactReserveTokens {
+		t.Fatalf("expected reserve_tokens=%d, got %d",
+			DefaultAutoCompactReserveTokens, cfg.Context.AutoCompact.ReserveTokens)
+	}
+	if cfg.Context.AutoCompact.FallbackInputTokenThreshold != DefaultAutoCompactFallbackInputTokenThreshold {
+		t.Fatalf("expected fallback_input_token_threshold=%d, got %d",
+			DefaultAutoCompactFallbackInputTokenThreshold, cfg.Context.AutoCompact.FallbackInputTokenThreshold)
+	}
 
 	if cfg.Context.AutoCompact.Enabled != false {
 		t.Fatalf("expected enabled=false, got %v", cfg.Context.AutoCompact.Enabled)
@@ -1253,13 +1261,20 @@ func TestAutoCompactConfigApplyDefaults(t *testing.T) {
 
 	cfg := AutoCompactConfig{}
 	defaults := AutoCompactConfig{
-		InputTokenThreshold: 50000,
+		ReserveTokens:               13000,
+		FallbackInputTokenThreshold: 100000,
 	}
 
 	cfg.ApplyDefaults(defaults)
 
-	if cfg.InputTokenThreshold != 50000 {
-		t.Fatalf("expected threshold=50000, got %d", cfg.InputTokenThreshold)
+	if cfg.InputTokenThreshold != 0 {
+		t.Fatalf("expected threshold to remain implicit 0, got %d", cfg.InputTokenThreshold)
+	}
+	if cfg.ReserveTokens != 13000 {
+		t.Fatalf("expected reserve_tokens=13000, got %d", cfg.ReserveTokens)
+	}
+	if cfg.FallbackInputTokenThreshold != 100000 {
+		t.Fatalf("expected fallback_input_token_threshold=100000, got %d", cfg.FallbackInputTokenThreshold)
 	}
 }
 
@@ -1267,10 +1282,14 @@ func TestAutoCompactConfigApplyDefaultsPreservesExplicit(t *testing.T) {
 	t.Parallel()
 
 	cfg := AutoCompactConfig{
-		InputTokenThreshold: 200000,
+		InputTokenThreshold:         200000,
+		ReserveTokens:               5000,
+		FallbackInputTokenThreshold: 80000,
 	}
 	defaults := AutoCompactConfig{
-		InputTokenThreshold: 50000,
+		InputTokenThreshold:         50000,
+		ReserveTokens:               13000,
+		FallbackInputTokenThreshold: 100000,
 	}
 
 	cfg.ApplyDefaults(defaults)
@@ -1278,13 +1297,19 @@ func TestAutoCompactConfigApplyDefaultsPreservesExplicit(t *testing.T) {
 	if cfg.InputTokenThreshold != 200000 {
 		t.Fatalf("expected explicit threshold=200000 to be preserved, got %d", cfg.InputTokenThreshold)
 	}
+	if cfg.ReserveTokens != 5000 {
+		t.Fatalf("expected explicit reserve_tokens=5000 to be preserved, got %d", cfg.ReserveTokens)
+	}
+	if cfg.FallbackInputTokenThreshold != 80000 {
+		t.Fatalf("expected explicit fallback_input_token_threshold=80000 to be preserved, got %d", cfg.FallbackInputTokenThreshold)
+	}
 }
 
 func TestAutoCompactConfigApplyDefaultsNilReceiver(t *testing.T) {
 	t.Parallel()
 
 	var cfg *AutoCompactConfig
-	cfg.ApplyDefaults(AutoCompactConfig{InputTokenThreshold: 50000})
+	cfg.ApplyDefaults(AutoCompactConfig{ReserveTokens: 13000, FallbackInputTokenThreshold: 100000})
 }
 
 func TestContextConfigApplyDefaultsPropagatesAutoCompactDefaults(t *testing.T) {
@@ -1293,7 +1318,8 @@ func TestContextConfigApplyDefaultsPropagatesAutoCompactDefaults(t *testing.T) {
 	cfg := ContextConfig{}
 	cfg.ApplyDefaults(ContextConfig{
 		AutoCompact: AutoCompactConfig{
-			InputTokenThreshold: 50000,
+			ReserveTokens:               13000,
+			FallbackInputTokenThreshold: 100000,
 		},
 		Compact: CompactConfig{
 			ManualStrategy:           CompactManualStrategyKeepRecent,
@@ -1303,8 +1329,14 @@ func TestContextConfigApplyDefaultsPropagatesAutoCompactDefaults(t *testing.T) {
 		},
 	})
 
-	if cfg.AutoCompact.InputTokenThreshold != 50000 {
-		t.Fatalf("expected auto compact threshold=50000, got %d", cfg.AutoCompact.InputTokenThreshold)
+	if cfg.AutoCompact.InputTokenThreshold != 0 {
+		t.Fatalf("expected auto compact threshold to remain implicit 0, got %d", cfg.AutoCompact.InputTokenThreshold)
+	}
+	if cfg.AutoCompact.ReserveTokens != 13000 {
+		t.Fatalf("expected reserve_tokens=13000, got %d", cfg.AutoCompact.ReserveTokens)
+	}
+	if cfg.AutoCompact.FallbackInputTokenThreshold != 100000 {
+		t.Fatalf("expected fallback_input_token_threshold=100000, got %d", cfg.AutoCompact.FallbackInputTokenThreshold)
 	}
 }
 
@@ -1312,16 +1344,15 @@ func TestAutoCompactConfigValidateEnabledWithoutThreshold(t *testing.T) {
 	t.Parallel()
 
 	cfg := AutoCompactConfig{
-		Enabled:             true,
-		InputTokenThreshold: 0,
+		Enabled:                     true,
+		InputTokenThreshold:         0,
+		ReserveTokens:               13000,
+		FallbackInputTokenThreshold: 100000,
 	}
 
 	err := cfg.Validate()
-	if err == nil {
-		t.Fatalf("expected validation error, got nil")
-	}
-	if !strings.Contains(err.Error(), "input_token_threshold") {
-		t.Fatalf("expected error about input_token_threshold, got %v", err)
+	if err != nil {
+		t.Fatalf("expected validation to allow implicit threshold, got %v", err)
 	}
 }
 
@@ -1329,8 +1360,10 @@ func TestAutoCompactConfigValidateDisabledWithoutThreshold(t *testing.T) {
 	t.Parallel()
 
 	cfg := AutoCompactConfig{
-		Enabled:             false,
-		InputTokenThreshold: 0,
+		Enabled:                     false,
+		InputTokenThreshold:         0,
+		ReserveTokens:               0,
+		FallbackInputTokenThreshold: 0,
 	}
 
 	err := cfg.Validate()
@@ -1343,8 +1376,10 @@ func TestAutoCompactConfigValidateEnabledWithThreshold(t *testing.T) {
 	t.Parallel()
 
 	cfg := AutoCompactConfig{
-		Enabled:             true,
-		InputTokenThreshold: 50000,
+		Enabled:                     true,
+		InputTokenThreshold:         50000,
+		ReserveTokens:               13000,
+		FallbackInputTokenThreshold: 100000,
 	}
 
 	err := cfg.Validate()
@@ -1353,12 +1388,46 @@ func TestAutoCompactConfigValidateEnabledWithThreshold(t *testing.T) {
 	}
 }
 
+func TestAutoCompactConfigValidateRejectsNonPositiveReserveTokens(t *testing.T) {
+	t.Parallel()
+
+	cfg := AutoCompactConfig{
+		Enabled:                     true,
+		InputTokenThreshold:         0,
+		ReserveTokens:               0,
+		FallbackInputTokenThreshold: 100000,
+	}
+
+	err := cfg.Validate()
+	if err == nil || !strings.Contains(err.Error(), "reserve_tokens") {
+		t.Fatalf("expected reserve_tokens validation error, got %v", err)
+	}
+}
+
+func TestAutoCompactConfigValidateRejectsNonPositiveFallbackThreshold(t *testing.T) {
+	t.Parallel()
+
+	cfg := AutoCompactConfig{
+		Enabled:                     true,
+		InputTokenThreshold:         0,
+		ReserveTokens:               13000,
+		FallbackInputTokenThreshold: 0,
+	}
+
+	err := cfg.Validate()
+	if err == nil || !strings.Contains(err.Error(), "fallback_input_token_threshold") {
+		t.Fatalf("expected fallback_input_token_threshold validation error, got %v", err)
+	}
+}
+
 func TestAutoCompactConfigClone(t *testing.T) {
 	t.Parallel()
 
 	cfg := AutoCompactConfig{
-		Enabled:             true,
-		InputTokenThreshold: 75000,
+		Enabled:                     true,
+		InputTokenThreshold:         75000,
+		ReserveTokens:               13000,
+		FallbackInputTokenThreshold: 100000,
 	}
 
 	cloned := cfg.Clone()
@@ -1369,6 +1438,13 @@ func TestAutoCompactConfigClone(t *testing.T) {
 	if cfg.InputTokenThreshold != cloned.InputTokenThreshold {
 		t.Fatalf("expected threshold=%d to be cloned, got %d",
 			cfg.InputTokenThreshold, cloned.InputTokenThreshold)
+	}
+	if cfg.ReserveTokens != cloned.ReserveTokens {
+		t.Fatalf("expected reserve_tokens=%d to be cloned, got %d", cfg.ReserveTokens, cloned.ReserveTokens)
+	}
+	if cfg.FallbackInputTokenThreshold != cloned.FallbackInputTokenThreshold {
+		t.Fatalf("expected fallback_input_token_threshold=%d to be cloned, got %d",
+			cfg.FallbackInputTokenThreshold, cloned.FallbackInputTokenThreshold)
 	}
 
 	cloned.InputTokenThreshold = 100000
@@ -1382,8 +1458,10 @@ func TestAutoCompactConfigContextConfigValidate(t *testing.T) {
 
 	ctx := ContextConfig{
 		AutoCompact: AutoCompactConfig{
-			Enabled:             true,
-			InputTokenThreshold: 0,
+			Enabled:                     true,
+			InputTokenThreshold:         0,
+			ReserveTokens:               13000,
+			FallbackInputTokenThreshold: 100000,
 		},
 		Compact: CompactConfig{
 			ManualStrategy:           CompactManualStrategyKeepRecent,
@@ -1394,11 +1472,8 @@ func TestAutoCompactConfigContextConfigValidate(t *testing.T) {
 	}
 
 	err := ctx.Validate()
-	if err == nil {
-		t.Fatalf("expected validation error, got nil")
-	}
-	if !strings.Contains(err.Error(), "auto_compact") {
-		t.Fatalf("expected error to contain 'auto_compact', got %v", err)
+	if err != nil {
+		t.Fatalf("expected context validation to allow implicit threshold, got %v", err)
 	}
 }
 

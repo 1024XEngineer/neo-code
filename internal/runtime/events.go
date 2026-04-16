@@ -6,12 +6,10 @@ import (
 	"neo-code/internal/runtime/controlplane"
 )
 
-// EventType identifies the kind of runtime event emitted during a run.
+// EventType 标识 runtime 事件类型。
 type EventType string
 
-// RuntimeEvent is emitted by the runtime to report progress and terminal states
-// for a specific run. RunID is provided by the caller and is echoed back on all
-// events so upper layers can ignore stale events from older runs.
+// RuntimeEvent 是 runtime 对外发送的统一事件结构。
 type RuntimeEvent struct {
 	Type           EventType
 	RunID          string
@@ -29,7 +27,7 @@ type PhaseChangedPayload struct {
 	To   string `json:"to"`
 }
 
-// BudgetCheckedPayload 为预算检查预留事件负载。
+// BudgetCheckedPayload 为预算检查预留负载。
 type BudgetCheckedPayload struct {
 	Note string `json:"note,omitempty"`
 }
@@ -45,12 +43,12 @@ type StopReasonDecidedPayload struct {
 	Detail string                  `json:"detail,omitempty"`
 }
 
-// LedgerReconciledPayload 为账本对账预留事件负载。
+// LedgerReconciledPayload 为账本对账预留负载。
 type LedgerReconciledPayload struct {
 	Note string `json:"note,omitempty"`
 }
 
-// PermissionRequestPayload 描述一次需要审批的权限请求上下文。
+// PermissionRequestPayload 描述一次权限请求。
 type PermissionRequestPayload struct {
 	RequestID     string
 	ToolCallID    string
@@ -66,7 +64,7 @@ type PermissionRequestPayload struct {
 	RememberScope string
 }
 
-// PermissionResolvedPayload 描述权限请求被运行时处理后的最终状态。
+// PermissionResolvedPayload 描述权限请求被处理后的状态。
 type PermissionResolvedPayload struct {
 	RequestID     string
 	ToolCallID    string
@@ -83,61 +81,71 @@ type PermissionResolvedPayload struct {
 	ResolvedAs    string
 }
 
-// SessionSkillEventPayload 描述一次会话级 skill 状态变化或缺失提示。
+// SessionSkillEventPayload 描述会话级 skill 变更事件。
 type SessionSkillEventPayload struct {
 	SkillID string `json:"skill_id"`
 }
 
+// TodoEventPayload 描述 todo_write 相关事件。
+type TodoEventPayload struct {
+	Action string `json:"action"`
+	Reason string `json:"reason,omitempty"`
+}
+
 const (
-	// EventUserMessage is emitted after the user input has been accepted and saved.
+	// EventUserMessage 表示用户消息已写入会话。
 	EventUserMessage EventType = "user_message"
-	// EventAgentChunk carries streamed assistant text.
+	// EventAgentChunk 表示 assistant 流式文本分片。
 	EventAgentChunk EventType = "agent_chunk"
-	// EventAgentDone is emitted when the assistant finishes normally.
+	// EventAgentDone 表示 assistant 正常结束。
 	EventAgentDone EventType = "agent_done"
-	// EventToolStart is emitted before a tool call begins execution.
+	// EventToolStart 表示工具开始执行。
 	EventToolStart EventType = "tool_start"
-	// EventToolResult is emitted after a tool call finishes and its result is saved.
+	// EventToolResult 表示工具执行完成并写回会话。
 	EventToolResult EventType = "tool_result"
-	// EventToolChunk carries streamed tool output.
+	// EventToolChunk 表示工具流式输出分片。
 	EventToolChunk EventType = "tool_chunk"
-	// EventRunCanceled is emitted once when the root run context is canceled.
+	// EventRunCanceled 表示运行被取消。
 	EventRunCanceled EventType = "run_canceled"
-	// EventError is emitted for terminal runtime errors other than cancellation.
+	// EventError 表示运行出现终止错误。
 	EventError EventType = "error"
-	// EventToolCallThinking is emitted when the model decides to call a tool,
-	// before the tool execution begins. TUI can show a transitional indicator.
+	// EventToolCallThinking 表示模型发起工具调用思考阶段。
 	EventToolCallThinking EventType = "tool_call_thinking"
-	// EventProviderRetry is emitted when runtime retries a provider call due to
-	// a retryable error (e.g. 429, 5xx). Payload is a human-readable message.
+	// EventProviderRetry 表示 provider 调用重试。
 	EventProviderRetry EventType = "provider_retry"
-	// EventPermissionRequested 表示一次权限审批请求。
+	// EventPermissionRequested 表示发起权限请求。
 	EventPermissionRequested EventType = "permission_requested"
-	// EventPermissionResolved is emitted when runtime resolves a permission request or denial.
+	// EventPermissionResolved 表示权限请求已决议。
 	EventPermissionResolved EventType = "permission_resolved"
-	// EventCompactStart is emitted when a compact cycle starts.
+	// EventCompactStart 表示 compact 开始。
 	EventCompactStart EventType = "compact_start"
-	// EventCompactApplied 表示一次 compact 已成功应用或校验完成。
+	// EventCompactApplied 表示 compact 成功应用。
 	EventCompactApplied EventType = "compact_applied"
-	// EventCompactError is emitted when compact fails.
+	// EventCompactError 表示 compact 失败。
 	EventCompactError EventType = "compact_error"
-	// EventTokenUsage is emitted after each provider response with token statistics.
+	// EventTokenUsage 表示 token 用量上报。
 	EventTokenUsage EventType = "token_usage"
-	// EventSkillActivated 表示会话成功激活了一个 skill。
+	// EventSkillActivated 表示 skill 激活。
 	EventSkillActivated EventType = "skill_activated"
-	// EventSkillDeactivated 表示会话成功停用了一个 skill。
+	// EventSkillDeactivated 表示 skill 停用。
 	EventSkillDeactivated EventType = "skill_deactivated"
-	// EventSkillMissing 表示运行时发现会话记录的 skill 已无法解析。
+	// EventSkillMissing 表示会话记录的 skill 丢失。
 	EventSkillMissing EventType = "skill_missing"
-	// EventPhaseChanged 表示显式 phase 迁移。
+	// EventPhaseChanged 表示运行 phase 迁移。
 	EventPhaseChanged EventType = "phase_changed"
-	// EventProgressEvaluated 表示 progress 评估结果。
+	// EventProgressEvaluated 表示 progress 评估完成。
 	EventProgressEvaluated EventType = "progress_evaluated"
-	// EventStopReasonDecided 表示唯一停止原因已决议。
+	// EventStopReasonDecided 表示 stop reason 已决议。
 	EventStopReasonDecided EventType = "stop_reason_decided"
+	// EventTodoUpdated 表示 todo_write 成功更新。
+	EventTodoUpdated EventType = "todo_updated"
+	// EventTodoConflict 表示 todo_write 触发冲突类错误。
+	EventTodoConflict EventType = "todo_conflict"
+	// EventTodoSummaryInjected 表示本轮上下文注入了 Todo 摘要。
+	EventTodoSummaryInjected EventType = "todo_summary_injected"
 )
 
-// TokenUsagePayload carries token usage statistics for a single provider turn.
+// TokenUsagePayload 承载单轮 token 用量统计。
 type TokenUsagePayload struct {
 	InputTokens         int `json:"input_tokens"`
 	OutputTokens        int `json:"output_tokens"`

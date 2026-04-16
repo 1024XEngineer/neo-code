@@ -941,6 +941,16 @@ func TestBuildPermissionAction(t *testing.T) {
 			wantSandbox:  "main.go",
 		},
 		{
+			name: "todo write maps to write action",
+			input: ToolCallInput{
+				Name:      "todo_write",
+				Arguments: []byte(`{"action":"set_status","id":"todo-1"}`),
+			},
+			wantType:     security.ActionTypeWrite,
+			wantResource: "todo_write",
+			wantTarget:   "todo-1",
+		},
+		{
 			name: "mcp tool maps to mcp action",
 			input: ToolCallInput{
 				Name:      "mcp.github.create_issue",

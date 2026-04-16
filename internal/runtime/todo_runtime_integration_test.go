@@ -7,26 +7,16 @@ import (
 
 	providertypes "neo-code/internal/provider/types"
 	"neo-code/internal/tools"
+	todotool "neo-code/internal/tools/todo"
 )
 
-func TestServiceRunToolCallWithPartsInput(t *testing.T) {
+func TestServiceRunTodoWriteToolCall(t *testing.T) {
 	t.Parallel()
 
 	manager := newRuntimeConfigManager(t)
 	store := newMemoryStore()
-	toolManager := &stubToolManager{
-		specs: []providertypes.ToolSpec{
-			{
-				Name:        tools.ToolNameFilesystemReadFile,
-				Description: "read file",
-				Schema:      map[string]any{"type": "object"},
-			},
-		},
-		result: tools.ToolResult{
-			Name:    tools.ToolNameFilesystemReadFile,
-			Content: "ok",
-		},
-	}
+	registry := tools.NewRegistry()
+	registry.Register(todotool.New())
 
 	providerImpl := &scriptedProvider{
 		responses: []scriptedResponse{
@@ -35,9 +25,9 @@ func TestServiceRunToolCallWithPartsInput(t *testing.T) {
 					Role: providertypes.RoleAssistant,
 					ToolCalls: []providertypes.ToolCall{
 						{
-							ID:        "tool-call-1",
-							Name:      tools.ToolNameFilesystemReadFile,
-							Arguments: `{"path":"README.md"}`,
+							ID:        "todo-call-1",
+							Name:      tools.ToolNameTodoWrite,
+							Arguments: `{"action":"add","item":{"id":"todo-1","content":"implement feature","priority":3}}`,
 						},
 					},
 				},
@@ -55,14 +45,14 @@ func TestServiceRunToolCallWithPartsInput(t *testing.T) {
 
 	service := NewWithFactory(
 		manager,
-		toolManager,
+		registry,
 		store,
 		&scriptedProviderFactory{provider: providerImpl},
 		&stubContextBuilder{},
 	)
 
 	if err := service.Run(context.Background(), UserInput{
-		RunID: "run-parts-tool",
+		RunID: "run-todo-tool",
 		Parts: []providertypes.ContentPart{providertypes.NewTextPart("请记录一个待办并继续")},
 	}); err != nil {
 		t.Fatalf("Run() error = %v", err)
@@ -73,43 +63,32 @@ func TestServiceRunToolCallWithPartsInput(t *testing.T) {
 	}
 	toolFound := false
 	for _, spec := range providerImpl.requests[0].Tools {
-		if strings.EqualFold(strings.TrimSpace(spec.Name), tools.ToolNameFilesystemReadFile) {
+		if strings.EqualFold(strings.TrimSpace(spec.Name), tools.ToolNameTodoWrite) {
 			toolFound = true
 			break
 		}
 	}
 	if !toolFound {
-		t.Fatalf("expected first request tools to include %q", tools.ToolNameFilesystemReadFile)
+		t.Fatalf("expected first request tools to include %q", tools.ToolNameTodoWrite)
 	}
 
 	session := onlySession(t, store)
-	if len(session.Messages) == 0 {
-		t.Fatalf("expected session messages, got 0")
+	if len(session.Todos) != 1 {
+		t.Fatalf("expected 1 todo item, got %d", len(session.Todos))
 	}
-	userMsg := session.Messages[0]
-	if userMsg.Role != providertypes.RoleUser {
-		t.Fatalf("expected first message role user, got %q", userMsg.Role)
-	}
-	if got := providertypes.ExtractTextForProjection(userMsg.Parts); got != "请记录一个待办并继续" {
-		t.Fatalf("expected first message parts text to persist, got %q", got)
-	}
-
-	if toolManager.executeCalls != 1 {
-		t.Fatalf("expected 1 tool execute call, got %d", toolManager.executeCalls)
-	}
-	if toolManager.lastInput.Name != tools.ToolNameFilesystemReadFile {
-		t.Fatalf("unexpected tool call name: %q", toolManager.lastInput.Name)
+	if session.Todos[0].ID != "todo-1" || session.Todos[0].Content != "implement feature" {
+		t.Fatalf("unexpected todo item: %+v", session.Todos[0])
 	}
 
 	events := collectRuntimeEvents(service.Events())
-	foundToolResult := false
+	foundTodoUpdated := false
 	for _, event := range events {
-		if event.Type == EventToolResult {
-			foundToolResult = true
+		if event.Type == EventTodoUpdated {
+			foundTodoUpdated = true
 			break
 		}
 	}
-	if !foundToolResult {
-		t.Fatalf("expected %q event in runtime events", EventToolResult)
+	if !foundTodoUpdated {
+		t.Fatalf("expected %q event in runtime events", EventTodoUpdated)
 	}
 }

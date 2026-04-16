@@ -27,6 +27,7 @@ func NewBuilderWithToolPolicies(policies MicroCompactPolicySource) Builder {
 			corePromptSource{},
 			&projectRulesSource{},
 			taskStateSource{},
+			todosSource{},
 			skillPromptSource{},
 			systemSource,
 		},
@@ -43,6 +44,7 @@ func NewBuilderWithMemo(policies MicroCompactPolicySource, memoSource SectionSou
 		corePromptSource{},
 		&projectRulesSource{},
 		taskStateSource{},
+		todosSource{},
 		skillPromptSource{},
 	}
 	if memoSource != nil {

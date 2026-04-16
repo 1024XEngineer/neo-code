@@ -39,6 +39,12 @@ type failingStore struct {
 	ignoreContextErr bool
 }
 
+type autoCompactThresholdResolverFunc func(ctx context.Context, cfg config.Config) (int, error)
+
+func (f autoCompactThresholdResolverFunc) ResolveAutoCompactThreshold(ctx context.Context, cfg config.Config) (int, error) {
+	return f(ctx, cfg)
+}
+
 func newMemoryStore() *memoryStore {
 	return &memoryStore{sessions: map[string]agentsession.Session{}}
 }
@@ -4187,6 +4193,7 @@ func TestRestoreSessionTokensNewSession(t *testing.T) {
 func TestAutoCompactThresholdEnabled(t *testing.T) {
 	t.Parallel()
 
+	service := &Service{}
 	cfg := config.Config{
 		Context: config.ContextConfig{
 			AutoCompact: config.AutoCompactConfig{
@@ -4196,7 +4203,7 @@ func TestAutoCompactThresholdEnabled(t *testing.T) {
 		},
 	}
 
-	threshold := autoCompactThreshold(cfg)
+	threshold := service.autoCompactThreshold(context.Background(), cfg)
 	if threshold != 50000 {
 		t.Fatalf("expected threshold == 50000, got %d", threshold)
 	}
@@ -4205,6 +4212,7 @@ func TestAutoCompactThresholdEnabled(t *testing.T) {
 func TestAutoCompactThresholdDisabled(t *testing.T) {
 	t.Parallel()
 
+	service := &Service{}
 	cfg := config.Config{
 		Context: config.ContextConfig{
 			AutoCompact: config.AutoCompactConfig{
@@ -4214,7 +4222,7 @@ func TestAutoCompactThresholdDisabled(t *testing.T) {
 		},
 	}
 
-	threshold := autoCompactThreshold(cfg)
+	threshold := service.autoCompactThreshold(context.Background(), cfg)
 	if threshold != 0 {
 		t.Fatalf("expected threshold == 0, got %d", threshold)
 	}
@@ -4222,6 +4230,32 @@ func TestAutoCompactThresholdDisabled(t *testing.T) {
 
 func TestAutoCompactThresholdZeroValue(t *testing.T) {
 	t.Parallel()
+
+	service := &Service{}
+	cfg := config.Config{
+		Context: config.ContextConfig{
+			AutoCompact: config.AutoCompactConfig{
+				Enabled:             true,
+				InputTokenThreshold: 0,
+			},
+		},
+	}
+
+	threshold := service.autoCompactThreshold(context.Background(), cfg)
+	if threshold != 0 {
+		t.Fatalf("expected threshold == 0, got %d", threshold)
+	}
+}
+
+func TestAutoCompactThresholdUsesResolver(t *testing.T) {
+	t.Parallel()
+
+	service := &Service{}
+	service.SetAutoCompactThresholdResolver(autoCompactThresholdResolverFunc(
+		func(ctx context.Context, cfg config.Config) (int, error) {
+			return 88000, nil
+		},
+	))
 
 	cfg := config.Config{
 		Context: config.ContextConfig{
@@ -4232,9 +4266,226 @@ func TestAutoCompactThresholdZeroValue(t *testing.T) {
 		},
 	}
 
-	threshold := autoCompactThreshold(cfg)
-	if threshold != 0 {
-		t.Fatalf("expected threshold == 0, got %d", threshold)
+	threshold := service.autoCompactThreshold(context.Background(), cfg)
+	if threshold != 88000 {
+		t.Fatalf("expected resolver threshold == 88000, got %d", threshold)
+	}
+}
+
+func TestAutoCompactThresholdFallsBackWhenResolverErrors(t *testing.T) {
+	t.Parallel()
+
+	service := &Service{}
+	service.SetAutoCompactThresholdResolver(autoCompactThresholdResolverFunc(
+		func(ctx context.Context, cfg config.Config) (int, error) {
+			return 0, errors.New("resolver failed")
+		},
+	))
+
+	cfg := config.Config{
+		Context: config.ContextConfig{
+			AutoCompact: config.AutoCompactConfig{
+				Enabled:                     true,
+				InputTokenThreshold:         0,
+				FallbackInputTokenThreshold: 88000,
+			},
+		},
+	}
+
+	threshold := service.autoCompactThreshold(context.Background(), cfg)
+	if threshold != 88000 {
+		t.Fatalf("expected fallback threshold == 88000, got %d", threshold)
+	}
+}
+
+func TestAutoCompactThresholdFallsBackWhenResolverReturnsZeroWithoutError(t *testing.T) {
+	t.Parallel()
+
+	service := &Service{}
+	service.SetAutoCompactThresholdResolver(autoCompactThresholdResolverFunc(
+		func(ctx context.Context, cfg config.Config) (int, error) {
+			return 0, nil
+		},
+	))
+
+	cfg := config.Config{
+		Context: config.ContextConfig{
+			AutoCompact: config.AutoCompactConfig{
+				Enabled:                     true,
+				InputTokenThreshold:         0,
+				FallbackInputTokenThreshold: 88000,
+			},
+		},
+	}
+
+	threshold := service.autoCompactThreshold(context.Background(), cfg)
+	if threshold != 88000 {
+		t.Fatalf("expected fallback threshold == 88000, got %d", threshold)
+	}
+}
+
+func TestAutoCompactThresholdFallsBackWhenResolverReturnsNegativeWithoutError(t *testing.T) {
+	t.Parallel()
+
+	service := &Service{}
+	service.SetAutoCompactThresholdResolver(autoCompactThresholdResolverFunc(
+		func(ctx context.Context, cfg config.Config) (int, error) {
+			return -1, nil
+		},
+	))
+
+	cfg := config.Config{
+		Context: config.ContextConfig{
+			AutoCompact: config.AutoCompactConfig{
+				Enabled:                     true,
+				InputTokenThreshold:         0,
+				FallbackInputTokenThreshold: 88000,
+			},
+		},
+	}
+
+	threshold := service.autoCompactThreshold(context.Background(), cfg)
+	if threshold != 88000 {
+		t.Fatalf("expected fallback threshold == 88000, got %d", threshold)
+	}
+}
+
+func TestAutoCompactThresholdImplicitModeWithoutResolverUsesFallback(t *testing.T) {
+	t.Parallel()
+
+	service := &Service{}
+	cfg := config.Config{
+		Context: config.ContextConfig{
+			AutoCompact: config.AutoCompactConfig{
+				Enabled:                     true,
+				InputTokenThreshold:         0,
+				FallbackInputTokenThreshold: 88000,
+			},
+		},
+	}
+
+	threshold := service.autoCompactThreshold(context.Background(), cfg)
+	if threshold != 88000 {
+		t.Fatalf("expected implicit mode fallback threshold == 88000, got %d", threshold)
+	}
+}
+
+func TestAutoCompactThresholdForStateCachesResolverResultWithinRun(t *testing.T) {
+	t.Parallel()
+
+	service := &Service{}
+	resolveCalls := 0
+	service.SetAutoCompactThresholdResolver(autoCompactThresholdResolverFunc(
+		func(ctx context.Context, cfg config.Config) (int, error) {
+			resolveCalls++
+			return 88000, nil
+		},
+	))
+
+	cfg := config.Config{
+		SelectedProvider: "openai",
+		CurrentModel:     "gpt-5",
+		Context: config.ContextConfig{
+			AutoCompact: config.AutoCompactConfig{
+				Enabled:                     true,
+				InputTokenThreshold:         0,
+				ReserveTokens:               10000,
+				FallbackInputTokenThreshold: 76000,
+			},
+		},
+	}
+	state := newRunState("run-cache-hit", newRuntimeSession("session-cache-hit"))
+
+	threshold1 := service.autoCompactThresholdForState(context.Background(), cfg, &state)
+	threshold2 := service.autoCompactThresholdForState(context.Background(), cfg, &state)
+
+	if threshold1 != 88000 || threshold2 != 88000 {
+		t.Fatalf("expected cached resolver threshold == 88000, got %d and %d", threshold1, threshold2)
+	}
+	if resolveCalls != 1 {
+		t.Fatalf("expected resolver to be called once, got %d", resolveCalls)
+	}
+}
+
+func TestAutoCompactThresholdForStateRecomputesWhenCacheKeyChanges(t *testing.T) {
+	t.Parallel()
+
+	service := &Service{}
+	resolveCalls := 0
+	service.SetAutoCompactThresholdResolver(autoCompactThresholdResolverFunc(
+		func(ctx context.Context, cfg config.Config) (int, error) {
+			resolveCalls++
+			if strings.TrimSpace(cfg.CurrentModel) == "gpt-5.1" {
+				return 99000, nil
+			}
+			return 88000, nil
+		},
+	))
+
+	cfg := config.Config{
+		SelectedProvider: "openai",
+		CurrentModel:     "gpt-5",
+		Context: config.ContextConfig{
+			AutoCompact: config.AutoCompactConfig{
+				Enabled:                     true,
+				InputTokenThreshold:         0,
+				ReserveTokens:               10000,
+				FallbackInputTokenThreshold: 76000,
+			},
+		},
+	}
+	state := newRunState("run-cache-miss", newRuntimeSession("session-cache-miss"))
+
+	threshold1 := service.autoCompactThresholdForState(context.Background(), cfg, &state)
+	cfg.CurrentModel = "gpt-5.1"
+	threshold2 := service.autoCompactThresholdForState(context.Background(), cfg, &state)
+
+	if threshold1 != 88000 || threshold2 != 99000 {
+		t.Fatalf("expected thresholds [88000, 99000], got [%d, %d]", threshold1, threshold2)
+	}
+	if resolveCalls != 2 {
+		t.Fatalf("expected resolver to be called twice after key change, got %d", resolveCalls)
+	}
+}
+
+func TestAutoCompactThresholdForStateDoesNotCacheResolverErrorFallback(t *testing.T) {
+	t.Parallel()
+
+	service := &Service{}
+	resolveCalls := 0
+	service.SetAutoCompactThresholdResolver(autoCompactThresholdResolverFunc(
+		func(ctx context.Context, cfg config.Config) (int, error) {
+			resolveCalls++
+			if resolveCalls == 1 {
+				return 0, errors.New("snapshot unavailable")
+			}
+			return 91000, nil
+		},
+	))
+
+	cfg := config.Config{
+		SelectedProvider: "openai",
+		CurrentModel:     "gpt-5",
+		Context: config.ContextConfig{
+			AutoCompact: config.AutoCompactConfig{
+				Enabled:                     true,
+				InputTokenThreshold:         0,
+				ReserveTokens:               10000,
+				FallbackInputTokenThreshold: 76000,
+			},
+		},
+	}
+	state := newRunState("run-cache-error", newRuntimeSession("session-cache-error"))
+
+	threshold1 := service.autoCompactThresholdForState(context.Background(), cfg, &state)
+	threshold2 := service.autoCompactThresholdForState(context.Background(), cfg, &state)
+	threshold3 := service.autoCompactThresholdForState(context.Background(), cfg, &state)
+
+	if threshold1 != 76000 || threshold2 != 91000 || threshold3 != 91000 {
+		t.Fatalf("expected thresholds [76000, 91000, 91000], got [%d, %d, %d]", threshold1, threshold2, threshold3)
+	}
+	if resolveCalls != 2 {
+		t.Fatalf("expected resolver to be called twice, got %d", resolveCalls)
 	}
 }
 

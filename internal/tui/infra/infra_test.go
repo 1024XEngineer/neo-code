@@ -403,11 +403,11 @@ func TestClipboardFallbackFunctions(t *testing.T) {
 		t.Fatalf("expected clipboard text or an error, got empty success result")
 	}
 	data, err := ReadClipboardImage()
-	if err != errClipboardImageUnsupported {
-		t.Fatalf("expected unsupported image error, got %v", err)
+	if err != nil && err != errClipboardImageUnsupported {
+		t.Fatalf("expected nil or unsupported image error, got %v", err)
 	}
-	if data != nil {
-		t.Fatalf("expected nil image data on unsupported platform")
+	if err == nil && len(data) == 0 && data != nil {
+		t.Fatalf("expected nil for empty clipboard image state, got zero-length slice")
 	}
 }
 

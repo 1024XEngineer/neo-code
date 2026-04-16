@@ -45,6 +45,7 @@ const (
 type permissionExecutionInput struct {
 	RunID       string
 	SessionID   string
+	State       *runState
 	Call        providertypes.ToolCall
 	Workdir     string
 	ToolTimeout time.Duration
@@ -82,6 +83,9 @@ func (s *Service) executeToolCallWithPermission(ctx context.Context, input permi
 			}
 			return s.emit(ctx, EventToolChunk, input.RunID, input.SessionID, string(chunk))
 		},
+	}
+	if input.State != nil {
+		callInput.SessionMutator = newRuntimeSessionMutator(ctx, s, input.State)
 	}
 
 	runCtx, cancel := context.WithTimeout(ctx, input.ToolTimeout)

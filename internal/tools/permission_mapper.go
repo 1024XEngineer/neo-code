@@ -72,6 +72,11 @@ func buildPermissionAction(input ToolCallInput) (security.Action, error) {
 		action.Payload.Target = extractStringArgument(input.Arguments, "path")
 		action.Payload.SandboxTargetType = security.TargetTypePath
 		action.Payload.SandboxTarget = action.Payload.Target
+	case "todo_write":
+		action.Type = security.ActionTypeWrite
+		action.Payload.Operation = "todo_write"
+		action.Payload.TargetType = security.TargetTypePath
+		action.Payload.Target = extractStringArgument(input.Arguments, "id")
 	default:
 		if strings.HasPrefix(strings.ToLower(toolName), "mcp.") {
 			toolIdentity := normalizeMCPToolIdentity(toolName)

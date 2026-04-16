@@ -97,7 +97,7 @@ func isSafeReviewPath(path string) bool {
 	if hasBlockedWindowsPathPrefix(trimmed) {
 		return false
 	}
-	if filepath.IsAbs(trimmed) || strings.HasPrefix(trimmed, "/") || strings.HasPrefix(trimmed, "\\") {
+	if isAbsoluteReviewPath(trimmed) {
 		return false
 	}
 	if containsParentTraversalSegment(trimmed) {
@@ -113,7 +113,7 @@ func isSafeReviewPath(path string) bool {
 	return true
 }
 
-// hasWindowsDriveLetterPrefix 检查是否为 Windows 盘符前缀路径（如 C:foo），避免平台差异导致漏拦截。
+// hasWindowsDriveLetterPrefix 检查是否为 Windows 盘符前缀路径，如 C:foo。
 func hasWindowsDriveLetterPrefix(path string) bool {
 	trimmed := strings.TrimSpace(path)
 	if len(trimmed) < 2 {
@@ -123,10 +123,19 @@ func hasWindowsDriveLetterPrefix(path string) bool {
 	return ((drive >= 'a' && drive <= 'z') || (drive >= 'A' && drive <= 'Z')) && trimmed[1] == ':'
 }
 
-// hasBlockedWindowsPathPrefix 检查是否命中 Windows 底层设备路径前缀，避免绕过常规路径校验。
+// hasBlockedWindowsPathPrefix 检查是否命中 Windows 设备路径前缀，避免绕过常规路径校验。
 func hasBlockedWindowsPathPrefix(path string) bool {
 	normalized := strings.ReplaceAll(strings.TrimSpace(path), "/", "\\")
 	return strings.HasPrefix(normalized, `\\?\`) || strings.HasPrefix(normalized, `\\.\`)
+}
+
+// isAbsoluteReviewPath 统一识别跨平台绝对路径，避免在 Windows 下漏判 Unix 风格前导斜杠。
+func isAbsoluteReviewPath(path string) bool {
+	if filepath.IsAbs(path) {
+		return true
+	}
+	normalized := normalizePath(path)
+	return strings.HasPrefix(normalized, "/") || strings.HasPrefix(normalized, "\\")
 }
 
 // containsParentTraversalSegment 按路径段语义识别目录回退段，避免子串匹配导致误伤。

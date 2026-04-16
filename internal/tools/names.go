@@ -9,6 +9,7 @@ const (
 	ToolNameFilesystemGrep      = "filesystem_grep"
 	ToolNameFilesystemGlob      = "filesystem_glob"
 	ToolNameFilesystemEdit      = "filesystem_edit"
+	ToolNameTodoWrite           = "todo_write"
 	ToolNameMemoRemember        = "memo_remember"
 	ToolNameMemoRecall          = "memo_recall"
 )

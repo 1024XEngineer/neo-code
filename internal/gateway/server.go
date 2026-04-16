@@ -370,41 +370,7 @@ func (s *Server) dispatchRPCRequest(
 	request protocol.JSONRPCRequest,
 	runtimePort RuntimePort,
 ) protocol.JSONRPCResponse {
-	normalized, rpcErr := protocol.NormalizeJSONRPCRequest(request)
-	if rpcErr != nil {
-		return protocol.NewJSONRPCErrorResponse(normalized.ID, rpcErr)
-	}
-
-	frame := MessageFrame{
-		Type:      FrameTypeRequest,
-		Action:    FrameAction(normalized.Action),
-		RequestID: normalized.RequestID,
-		SessionID: normalized.SessionID,
-		Workdir:   normalized.Workdir,
-		Payload:   normalized.Payload,
-	}
-
-	responseFrame := s.dispatchFrame(ctx, frame, runtimePort)
-	if responseFrame.Type != FrameTypeError {
-		rpcResponse, encodeErr := protocol.NewJSONRPCResultResponse(normalized.ID, responseFrame)
-		if encodeErr != nil {
-			return protocol.NewJSONRPCErrorResponse(normalized.ID, encodeErr)
-		}
-		return rpcResponse
-	}
-
-	frameErr := responseFrame.Error
-	if frameErr == nil {
-		frameErr = NewFrameError(ErrorCodeInternalError, "gateway response missing error payload")
-	}
-	return protocol.NewJSONRPCErrorResponse(
-		normalized.ID,
-		protocol.NewJSONRPCError(
-			protocol.MapGatewayCodeToJSONRPCCode(frameErr.Code),
-			frameErr.Message,
-			frameErr.Code,
-		),
-	)
+	return dispatchRPCRequest(ctx, request, runtimePort)
 }
 
 // readFramePayload 按换行边界读取单条帧，并限制单帧最大字节数。
@@ -442,15 +408,7 @@ func readFramePayload(reader *bufio.Reader, maxSize int64) ([]byte, error) {
 
 // dispatchFrame 根据请求动作生成响应帧。
 func (s *Server) dispatchFrame(ctx context.Context, frame MessageFrame, runtimePort RuntimePort) MessageFrame {
-	if validationErr := ValidateFrame(frame); validationErr != nil {
-		return errorFrame(frame, validationErr)
-	}
-
-	if frame.Type != FrameTypeRequest {
-		return errorFrame(frame, NewFrameError(ErrorCodeInvalidFrame, "only request frames are supported"))
-	}
-
-	return dispatchRequestFrame(ctx, frame, runtimePort)
+	return dispatchFrame(ctx, frame, runtimePort)
 }
 
 // errorFrame 构建统一错误响应帧。

@@ -5,8 +5,10 @@ import (
 
 	providertypes "neo-code/internal/provider/types"
 	"neo-code/internal/security"
+	agentsession "neo-code/internal/session"
 )
 
+// Tool 定义所有内置/扩展工具的统一契约。
 type Tool interface {
 	Name() string
 	Description() string
@@ -16,15 +18,23 @@ type Tool interface {
 }
 
 // ChunkEmitter 是工具执行过程中向上游发送流式分片的回调。
-// 并发语义：
-// - 单次 Execute 内允许调用 0 次或多次；
-// - 同一次 Execute 内默认要求串行调用，工具实现不应并发调用同一个 emitter；
-// - 若工具确需跨 goroutine 使用，必须自行保证顺序、同步与上游消费方的并发安全契约；
-// - 调用方若返回非 nil error，工具应停止后续分片发送并尽快中止执行。
-// 内存语义：
-// - 回调返回后不得继续持有传入的 chunk 引用，若需异步使用必须先复制。
 type ChunkEmitter func(chunk []byte) error
 
+// SessionMutator 定义工具可调用的会话 Todo 读写能力。
+type SessionMutator interface {
+	ListTodos() []agentsession.TodoItem
+	FindTodo(id string) (agentsession.TodoItem, bool)
+	ReplaceTodos(items []agentsession.TodoItem) error
+	AddTodo(item agentsession.TodoItem) error
+	UpdateTodo(id string, patch agentsession.TodoPatch, expectedRevision int64) error
+	SetTodoStatus(id string, status agentsession.TodoStatus, expectedRevision int64) error
+	DeleteTodo(id string, expectedRevision int64) error
+	ClaimTodo(id string, ownerType string, ownerID string, expectedRevision int64) error
+	CompleteTodo(id string, artifacts []string, expectedRevision int64) error
+	FailTodo(id string, reason string, expectedRevision int64) error
+}
+
+// ToolCallInput 承载一次工具调用所需的运行时上下文。
 type ToolCallInput struct {
 	ID            string
 	Name          string
@@ -32,10 +42,13 @@ type ToolCallInput struct {
 	SessionID     string
 	Workdir       string
 	WorkspacePlan *security.WorkspaceExecutionPlan
-	// EmitChunk 为流式分片回调，语义见 ChunkEmitter 注释。
+	// SessionMutator 仅对需要会话级写入的工具开放（例如 todo_write）。
+	SessionMutator SessionMutator
+	// EmitChunk 用于工具执行期间的流式输出回调。
 	EmitChunk ChunkEmitter
 }
 
+// ToolResult 是工具执行完成后返回给 runtime 的统一结果结构。
 type ToolResult struct {
 	ToolCallID string
 	Name       string
@@ -44,4 +57,5 @@ type ToolResult struct {
 	Metadata   map[string]any
 }
 
+// ToolSpec 对齐 provider 层 tool schema 结构。
 type ToolSpec = providertypes.ToolSpec

@@ -18,6 +18,7 @@ type Builder interface {
 type BuildInput struct {
 	Messages     []providertypes.Message
 	TaskState    agentsession.TaskState
+	Todos        []agentsession.TodoItem
 	ActiveSkills []skills.Skill
 	Metadata     Metadata
 	Compact      CompactOptions

@@ -189,7 +189,12 @@ func TestGatewaySubcommandPassesFlagsToRunner(t *testing.T) {
 	}
 
 	command := NewRootCommand()
-	command.SetArgs([]string{"gateway", "--listen", "  /tmp/gateway.sock  ", "--log-level", " WARN "})
+	command.SetArgs([]string{
+		"gateway",
+		"--listen", "  /tmp/gateway.sock  ",
+		"--http-listen", "  127.0.0.1:19080  ",
+		"--log-level", " WARN ",
+	})
 	if err := command.ExecuteContext(context.Background()); err != nil {
 		t.Fatalf("ExecuteContext() error = %v", err)
 	}
@@ -199,6 +204,9 @@ func TestGatewaySubcommandPassesFlagsToRunner(t *testing.T) {
 	}
 	if captured.LogLevel != "warn" {
 		t.Fatalf("log level = %q, want %q", captured.LogLevel, "warn")
+	}
+	if captured.HTTPAddress != "127.0.0.1:19080" {
+		t.Fatalf("http address = %q, want %q", captured.HTTPAddress, "127.0.0.1:19080")
 	}
 }
 
@@ -220,15 +228,22 @@ func TestGatewaySubcommandRejectsInvalidLogLevel(t *testing.T) {
 
 func TestDefaultGatewayCommandRunnerSuccess(t *testing.T) {
 	originalNewGatewayServer := newGatewayServer
+	originalNewGatewayNetwork := newGatewayNetwork
 	t.Cleanup(func() { newGatewayServer = originalNewGatewayServer })
+	t.Cleanup(func() { newGatewayNetwork = originalNewGatewayNetwork })
 
 	server := &stubGatewayServer{listenAddress: "stub://gateway"}
 	newGatewayServer = func(options gateway.ServerOptions) (gatewayServer, error) {
 		return server, nil
 	}
+	networkServer := &stubGatewayServer{listenAddress: "127.0.0.1:8080"}
+	newGatewayNetwork = func(options gateway.NetworkServerOptions) (gatewayNetworkServer, error) {
+		return networkServer, nil
+	}
 
 	err := defaultGatewayCommandRunner(context.Background(), gatewayCommandOptions{
 		ListenAddress: "stub://gateway",
+		HTTPAddress:   "127.0.0.1:8080",
 		LogLevel:      "info",
 	})
 	if err != nil {
@@ -240,19 +255,28 @@ func TestDefaultGatewayCommandRunnerSuccess(t *testing.T) {
 	if !server.closeCalled {
 		t.Fatal("expected server Close to be called")
 	}
+	if !networkServer.closeCalled {
+		t.Fatal("expected network server Close to be called")
+	}
 }
 
 func TestDefaultGatewayCommandRunnerReturnsConstructorError(t *testing.T) {
 	originalNewGatewayServer := newGatewayServer
+	originalNewGatewayNetwork := newGatewayNetwork
 	t.Cleanup(func() { newGatewayServer = originalNewGatewayServer })
+	t.Cleanup(func() { newGatewayNetwork = originalNewGatewayNetwork })
 
 	expected := errors.New("new gateway server failed")
 	newGatewayServer = func(options gateway.ServerOptions) (gatewayServer, error) {
 		return nil, expected
 	}
+	newGatewayNetwork = func(options gateway.NetworkServerOptions) (gatewayNetworkServer, error) {
+		return &stubGatewayServer{listenAddress: "127.0.0.1:8080"}, nil
+	}
 
 	err := defaultGatewayCommandRunner(context.Background(), gatewayCommandOptions{
 		ListenAddress: "stub://gateway",
+		HTTPAddress:   "127.0.0.1:8080",
 		LogLevel:      "info",
 	})
 	if !errors.Is(err, expected) {
@@ -262,7 +286,9 @@ func TestDefaultGatewayCommandRunnerReturnsConstructorError(t *testing.T) {
 
 func TestDefaultGatewayCommandRunnerReturnsServeError(t *testing.T) {
 	originalNewGatewayServer := newGatewayServer
+	originalNewGatewayNetwork := newGatewayNetwork
 	t.Cleanup(func() { newGatewayServer = originalNewGatewayServer })
+	t.Cleanup(func() { newGatewayNetwork = originalNewGatewayNetwork })
 
 	expected := errors.New("serve failed")
 	server := &stubGatewayServer{
@@ -272,9 +298,14 @@ func TestDefaultGatewayCommandRunnerReturnsServeError(t *testing.T) {
 	newGatewayServer = func(options gateway.ServerOptions) (gatewayServer, error) {
 		return server, nil
 	}
+	networkServer := &stubGatewayServer{listenAddress: "127.0.0.1:8080"}
+	newGatewayNetwork = func(options gateway.NetworkServerOptions) (gatewayNetworkServer, error) {
+		return networkServer, nil
+	}
 
 	err := defaultGatewayCommandRunner(context.Background(), gatewayCommandOptions{
 		ListenAddress: "stub://gateway",
+		HTTPAddress:   "127.0.0.1:8080",
 		LogLevel:      "info",
 	})
 	if !errors.Is(err, expected) {
@@ -282,6 +313,74 @@ func TestDefaultGatewayCommandRunnerReturnsServeError(t *testing.T) {
 	}
 	if !server.closeCalled {
 		t.Fatal("expected server Close to be called")
+	}
+	if !networkServer.closeCalled {
+		t.Fatal("expected network server Close to be called")
+	}
+}
+
+func TestDefaultGatewayCommandRunnerDegradesWhenNetworkServeFails(t *testing.T) {
+	originalNewGatewayServer := newGatewayServer
+	originalNewGatewayNetwork := newGatewayNetwork
+	t.Cleanup(func() { newGatewayServer = originalNewGatewayServer })
+	t.Cleanup(func() { newGatewayNetwork = originalNewGatewayNetwork })
+
+	ipcServer := &stubGatewayServer{listenAddress: "stub://gateway"}
+	newGatewayServer = func(options gateway.ServerOptions) (gatewayServer, error) {
+		return ipcServer, nil
+	}
+	networkServer := &stubGatewayServer{
+		listenAddress: "127.0.0.1:8080",
+		serveErr:      errors.New("bind: address already in use"),
+	}
+	newGatewayNetwork = func(options gateway.NetworkServerOptions) (gatewayNetworkServer, error) {
+		return networkServer, nil
+	}
+
+	err := defaultGatewayCommandRunner(context.Background(), gatewayCommandOptions{
+		ListenAddress: "stub://gateway",
+		HTTPAddress:   "127.0.0.1:8080",
+		LogLevel:      "info",
+	})
+	if err != nil {
+		t.Fatalf("expected graceful degradation on network serve error, got %v", err)
+	}
+	if !ipcServer.serveCalled {
+		t.Fatal("expected ipc server Serve to be called")
+	}
+	if !ipcServer.closeCalled {
+		t.Fatal("expected ipc server Close to be called")
+	}
+	if !networkServer.closeCalled {
+		t.Fatal("expected network server Close to be called")
+	}
+}
+
+func TestDefaultGatewayCommandRunnerReturnsNetworkConstructorError(t *testing.T) {
+	originalNewGatewayServer := newGatewayServer
+	originalNewGatewayNetwork := newGatewayNetwork
+	t.Cleanup(func() { newGatewayServer = originalNewGatewayServer })
+	t.Cleanup(func() { newGatewayNetwork = originalNewGatewayNetwork })
+
+	networkErr := errors.New("new network server failed")
+	ipcServer := &stubGatewayServer{listenAddress: "stub://gateway"}
+	newGatewayServer = func(options gateway.ServerOptions) (gatewayServer, error) {
+		return ipcServer, nil
+	}
+	newGatewayNetwork = func(options gateway.NetworkServerOptions) (gatewayNetworkServer, error) {
+		return nil, networkErr
+	}
+
+	err := defaultGatewayCommandRunner(context.Background(), gatewayCommandOptions{
+		ListenAddress: "stub://gateway",
+		HTTPAddress:   "127.0.0.1:8080",
+		LogLevel:      "info",
+	})
+	if !errors.Is(err, networkErr) {
+		t.Fatalf("expected network constructor error %v, got %v", networkErr, err)
+	}
+	if !ipcServer.closeCalled {
+		t.Fatal("expected ipc server Close to be called when network constructor fails")
 	}
 }
 
@@ -294,6 +393,18 @@ func TestDefaultNewGatewayServer(t *testing.T) {
 	}
 	if server == nil {
 		t.Fatal("defaultNewGatewayServer() returned nil server")
+	}
+}
+
+func TestDefaultNewGatewayNetworkServer(t *testing.T) {
+	server, err := defaultNewGatewayNetworkServer(gateway.NetworkServerOptions{
+		ListenAddress: "127.0.0.1:8080",
+	})
+	if err != nil {
+		t.Fatalf("defaultNewGatewayNetworkServer() error = %v", err)
+	}
+	if server == nil {
+		t.Fatal("defaultNewGatewayNetworkServer() returned nil server")
 	}
 }
 
