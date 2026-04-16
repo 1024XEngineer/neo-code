@@ -34,7 +34,7 @@ func DetectImageMimeType(path string) string {
 	}
 
 	detected := mime.TypeByExtension(ext)
-	if detected != "" {
+	if strings.HasPrefix(detected, "image/") {
 		return detected
 	}
 
@@ -50,17 +50,15 @@ func DetectImageMimeType(path string) string {
 		if data[0] == 0xFF && data[1] == 0xD8 && data[2] == 0xFF {
 			return "image/jpeg"
 		}
-		if len(data) >= 12 {
-			if string(data[0:4]) == "GIF8" {
-				return "image/gif"
-			}
-			if string(data[0:4]) == "RIFF" && string(data[8:12]) == "WEBP" {
-				return "image/webp"
-			}
-		}
+	}
+	if len(data) >= 4 && string(data[0:4]) == "GIF8" {
+		return "image/gif"
+	}
+	if len(data) >= 12 && string(data[0:4]) == "RIFF" && string(data[8:12]) == "WEBP" {
+		return "image/webp"
 	}
 
-	return ""
+	return detected
 }
 
 func IsSupportedImageFormat(path string) bool {

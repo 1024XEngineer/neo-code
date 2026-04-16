@@ -3,12 +3,8 @@
 package infra
 
 import (
-	"errors"
-
 	clipboardtext "github.com/atotto/clipboard"
 )
-
-var errClipboardImageUnsupported = errors.New("clipboard image is not supported on this platform")
 
 func CopyText(text string) error {
 	return clipboardtext.WriteAll(text)

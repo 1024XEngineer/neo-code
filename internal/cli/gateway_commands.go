@@ -27,6 +27,7 @@ var (
 	runGatewayCommand     = defaultGatewayCommandRunner
 	runURLDispatchCommand = defaultURLDispatchCommandRunner
 	newGatewayServer      = defaultNewGatewayServer
+	newGatewayNetwork     = defaultNewGatewayNetworkServer
 	dispatchURLThroughIPC = urlscheme.Dispatch
 	exitProcess           = os.Exit
 	writeDispatchError    = writeURLDispatchErrorOutput
@@ -35,6 +36,7 @@ var (
 
 type gatewayCommandOptions struct {
 	ListenAddress string
+	HTTPAddress   string
 	LogLevel      string
 }
 
@@ -63,6 +65,12 @@ type gatewayServer interface {
 	Close(ctx context.Context) error
 }
 
+type gatewayNetworkServer interface {
+	ListenAddress() string
+	Serve(ctx context.Context, runtimePort gateway.RuntimePort) error
+	Close(ctx context.Context) error
+}
+
 // newGatewayCommand 创建并返回网关子命令，负责启动本地 Gateway 进程。
 func newGatewayCommand() *cobra.Command {
 	options := &gatewayCommandOptions{}
@@ -80,12 +88,19 @@ func newGatewayCommand() *cobra.Command {
 
 			return runGatewayCommand(cmd.Context(), gatewayCommandOptions{
 				ListenAddress: strings.TrimSpace(options.ListenAddress),
+				HTTPAddress:   strings.TrimSpace(options.HTTPAddress),
 				LogLevel:      normalizedLogLevel,
 			})
 		},
 	}
 
 	cmd.Flags().StringVar(&options.ListenAddress, "listen", "", "gateway listen address (optional override)")
+	cmd.Flags().StringVar(
+		&options.HTTPAddress,
+		"http-listen",
+		gateway.DefaultNetworkListenAddress,
+		"gateway network listen address (loopback only)",
+	)
 	cmd.Flags().StringVar(&options.LogLevel, "log-level", defaultGatewayLogLevel, "gateway log level: debug|info|warn|error")
 
 	return cmd
@@ -110,24 +125,51 @@ func defaultGatewayCommandRunner(ctx context.Context, options gatewayCommandOpti
 	signalContext, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	server, err := newGatewayServer(gateway.ServerOptions{
+	ipcServer, err := newGatewayServer(gateway.ServerOptions{
 		ListenAddress: options.ListenAddress,
 		Logger:        logger,
 	})
 	if err != nil {
 		return err
 	}
+	networkServer, err := newGatewayNetwork(gateway.NetworkServerOptions{
+		ListenAddress: options.HTTPAddress,
+		Logger:        logger,
+	})
+	if err != nil {
+		_ = ipcServer.Close(context.Background())
+		return err
+	}
 	defer func() {
-		_ = server.Close(context.Background())
+		_ = networkServer.Close(context.Background())
+		_ = ipcServer.Close(context.Background())
 	}()
 
-	logger.Printf("gateway listen address: %s", server.ListenAddress())
-	return server.Serve(signalContext, nil)
+	logger.Printf("gateway ipc listen address: %s", ipcServer.ListenAddress())
+	logger.Printf("gateway network listen address: %s", networkServer.ListenAddress())
+
+	go func() {
+		serveErr := networkServer.Serve(signalContext, nil)
+		if serveErr != nil && signalContext.Err() == nil {
+			logger.Printf(
+				"warning: HTTP server failed to start on %s (port in use?), but IPC server is still running: %v",
+				networkServer.ListenAddress(),
+				serveErr,
+			)
+		}
+	}()
+
+	return ipcServer.Serve(signalContext, nil)
 }
 
 // defaultNewGatewayServer 创建默认网关服务实例，供命令层启动流程调用。
 func defaultNewGatewayServer(options gateway.ServerOptions) (gatewayServer, error) {
 	return gateway.NewServer(options)
+}
+
+// defaultNewGatewayNetworkServer 创建默认网关网络访问面服务实例，供命令层启动流程调用。
+func defaultNewGatewayNetworkServer(options gateway.NetworkServerOptions) (gatewayNetworkServer, error) {
+	return gateway.NewNetworkServer(options)
 }
 
 // newURLDispatchCommand 创建 URL Scheme 派发子命令骨架，仅做参数收敛与调用转发。
