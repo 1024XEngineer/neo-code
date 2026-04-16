@@ -10,17 +10,17 @@ func TestBuildMessageSpansPreservesToolBlocksAndProtectedTail(t *testing.T) {
 	t.Parallel()
 
 	messages := []providertypes.Message{
-		{Role: providertypes.RoleUser, Content: "old"},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("old")}},
 		{
 			Role: providertypes.RoleAssistant,
 			ToolCalls: []providertypes.ToolCall{
 				{ID: "call-1", Name: "filesystem_read_file", Arguments: "{}"},
 			},
 		},
-		{Role: providertypes.RoleTool, ToolCallID: "call-1", Content: "result"},
-		{Role: providertypes.RoleAssistant, Content: "after tool"},
-		{Role: providertypes.RoleUser, Content: "latest explicit instruction"},
-		{Role: providertypes.RoleAssistant, Content: "latest answer"},
+		{Role: providertypes.RoleTool, ToolCallID: "call-1", Parts: []providertypes.ContentPart{providertypes.NewTextPart("result")}},
+		{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("after tool")}},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("latest explicit instruction")}},
+		{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("latest answer")}},
 	}
 
 	spans := BuildMessageSpans(messages)
@@ -54,5 +54,24 @@ func TestRetainedStartForKeepRecentMessagesHonorsProtectedTail(t *testing.T) {
 	start := RetainedStartForKeepRecentMessages(spans, 2)
 	if start != 2 {
 		t.Fatalf("expected protected tail start 2, got %d", start)
+	}
+}
+
+func TestBuildMessageSpansTreatsImageOnlyUserMessageAsExplicitInput(t *testing.T) {
+	t.Parallel()
+
+	messages := []providertypes.Message{
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("old")}},
+		{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("ack")}},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewRemoteImagePart("https://example.com/image.png")}},
+	}
+
+	spans := BuildMessageSpans(messages)
+	protectedStart, ok := ProtectedTailStart(spans)
+	if !ok {
+		t.Fatalf("expected protected tail for image-only user message")
+	}
+	if protectedStart != 2 {
+		t.Fatalf("expected protected tail start 2, got %d", protectedStart)
 	}
 }

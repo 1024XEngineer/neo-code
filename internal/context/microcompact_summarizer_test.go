@@ -24,30 +24,30 @@ func TestMicroCompactWithSummarizerProducesSummary(t *testing.T) {
 	}
 
 	messages := []providertypes.Message{
-		{Role: providertypes.RoleUser, Content: "older user"},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("older user")}},
 		{
 			Role: providertypes.RoleAssistant,
 			ToolCalls: []providertypes.ToolCall{
 				{ID: "call-1", Name: "bash", Arguments: "{}"},
 			},
 		},
-		{Role: providertypes.RoleTool, ToolCallID: "call-1", Content: "old bash result"},
+		{Role: providertypes.RoleTool, ToolCallID: "call-1", Parts: []providertypes.ContentPart{providertypes.NewTextPart("old bash result")}},
 		{
 			Role: providertypes.RoleAssistant,
 			ToolCalls: []providertypes.ToolCall{
 				{ID: "call-2", Name: "bash", Arguments: "{}"},
 			},
 		},
-		{Role: providertypes.RoleTool, ToolCallID: "call-2", Content: "recent bash result"},
+		{Role: providertypes.RoleTool, ToolCallID: "call-2", Parts: []providertypes.ContentPart{providertypes.NewTextPart("recent bash result")}},
 		{
 			Role: providertypes.RoleAssistant,
 			ToolCalls: []providertypes.ToolCall{
 				{ID: "call-3", Name: "bash", Arguments: "{}"},
 			},
 		},
-		{Role: providertypes.RoleTool, ToolCallID: "call-3", Content: "latest bash result"},
-		{Role: providertypes.RoleUser, Content: "latest explicit instruction"},
-		{Role: providertypes.RoleAssistant, Content: "current reply"},
+		{Role: providertypes.RoleTool, ToolCallID: "call-3", Parts: []providertypes.ContentPart{providertypes.NewTextPart("latest bash result")}},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("latest explicit instruction")}},
+		{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("current reply")}},
 	}
 
 	got := microCompactMessagesWithPolicies(
@@ -57,21 +57,21 @@ func TestMicroCompactWithSummarizerProducesSummary(t *testing.T) {
 		stubMicroCompactSummarizerSource{"bash": bashSummarizer},
 	)
 
-	if got[2].Content == microCompactClearedMessage {
+	if renderDisplayParts(got[2].Parts) == microCompactClearedMessage {
 		t.Fatalf("expected summarized content for old bash result, got cleared placeholder")
 	}
-	if !strings.Contains(got[2].Content, "[summary] bash:") {
-		t.Fatalf("expected summary prefix, got %q", got[2].Content)
+	if !strings.Contains(renderDisplayParts(got[2].Parts), "[summary] bash:") {
+		t.Fatalf("expected summary prefix, got %q", renderDisplayParts(got[2].Parts))
 	}
-	if got[4].Content != "recent bash result" {
-		t.Fatalf("expected recent bash result retained, got %q", got[4].Content)
+	if renderDisplayParts(got[4].Parts) != "recent bash result" {
+		t.Fatalf("expected recent bash result retained, got %q", renderDisplayParts(got[4].Parts))
 	}
-	if got[6].Content != "latest bash result" {
-		t.Fatalf("expected latest bash result retained, got %q", got[6].Content)
+	if renderDisplayParts(got[6].Parts) != "latest bash result" {
+		t.Fatalf("expected latest bash result retained, got %q", renderDisplayParts(got[6].Parts))
 	}
 	// 原始切片不被修改
-	if messages[2].Content != "old bash result" {
-		t.Fatalf("expected original slice unchanged, got %q", messages[2].Content)
+	if renderDisplayParts(messages[2].Parts) != "old bash result" {
+		t.Fatalf("expected original slice unchanged, got %q", renderDisplayParts(messages[2].Parts))
 	}
 }
 
@@ -80,29 +80,29 @@ func TestMicroCompactWithoutSummarizerFallsBackToClear(t *testing.T) {
 	t.Parallel()
 
 	messages := []providertypes.Message{
-		{Role: providertypes.RoleUser, Content: "older user"},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("older user")}},
 		{
 			Role: providertypes.RoleAssistant,
 			ToolCalls: []providertypes.ToolCall{
 				{ID: "call-1", Name: "filesystem_read_file", Arguments: "{}"},
 			},
 		},
-		{Role: providertypes.RoleTool, ToolCallID: "call-1", Content: "old read result"},
+		{Role: providertypes.RoleTool, ToolCallID: "call-1", Parts: []providertypes.ContentPart{providertypes.NewTextPart("old read result")}},
 		{
 			Role: providertypes.RoleAssistant,
 			ToolCalls: []providertypes.ToolCall{
 				{ID: "call-2", Name: "bash", Arguments: "{}"},
 			},
 		},
-		{Role: providertypes.RoleTool, ToolCallID: "call-2", Content: "recent bash result"},
+		{Role: providertypes.RoleTool, ToolCallID: "call-2", Parts: []providertypes.ContentPart{providertypes.NewTextPart("recent bash result")}},
 		{
 			Role: providertypes.RoleAssistant,
 			ToolCalls: []providertypes.ToolCall{
 				{ID: "call-3", Name: "bash", Arguments: "{}"},
 			},
 		},
-		{Role: providertypes.RoleTool, ToolCallID: "call-3", Content: "latest bash result"},
-		{Role: providertypes.RoleUser, Content: "latest explicit instruction"},
+		{Role: providertypes.RoleTool, ToolCallID: "call-3", Parts: []providertypes.ContentPart{providertypes.NewTextPart("latest bash result")}},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("latest explicit instruction")}},
 	}
 
 	// 只为 bash 注册 summarizer，read_file 没有
@@ -118,8 +118,8 @@ func TestMicroCompactWithoutSummarizerFallsBackToClear(t *testing.T) {
 	)
 
 	// read_file 没有 summarizer，应回退到清除
-	if got[2].Content != microCompactClearedMessage {
-		t.Fatalf("expected cleared placeholder for read_file without summarizer, got %q", got[2].Content)
+	if renderDisplayParts(got[2].Parts) != microCompactClearedMessage {
+		t.Fatalf("expected cleared placeholder for read_file without summarizer, got %q", renderDisplayParts(got[2].Parts))
 	}
 }
 
@@ -128,7 +128,7 @@ func TestMicroCompactMixedSpanWithSummarizer(t *testing.T) {
 	t.Parallel()
 
 	messages := []providertypes.Message{
-		{Role: providertypes.RoleUser, Content: "older user"},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("older user")}},
 		{
 			Role: providertypes.RoleAssistant,
 			ToolCalls: []providertypes.ToolCall{
@@ -136,24 +136,24 @@ func TestMicroCompactMixedSpanWithSummarizer(t *testing.T) {
 				{ID: "call-2", Name: "filesystem_read_file", Arguments: "{}"},
 			},
 		},
-		{Role: providertypes.RoleTool, ToolCallID: "call-1", Content: "bash output"},
-		{Role: providertypes.RoleTool, ToolCallID: "call-2", Content: "read output"},
+		{Role: providertypes.RoleTool, ToolCallID: "call-1", Parts: []providertypes.ContentPart{providertypes.NewTextPart("bash output")}},
+		{Role: providertypes.RoleTool, ToolCallID: "call-2", Parts: []providertypes.ContentPart{providertypes.NewTextPart("read output")}},
 		{
 			Role: providertypes.RoleAssistant,
 			ToolCalls: []providertypes.ToolCall{
 				{ID: "call-3", Name: "bash", Arguments: "{}"},
 			},
 		},
-		{Role: providertypes.RoleTool, ToolCallID: "call-3", Content: "recent bash"},
+		{Role: providertypes.RoleTool, ToolCallID: "call-3", Parts: []providertypes.ContentPart{providertypes.NewTextPart("recent bash")}},
 		{
 			Role: providertypes.RoleAssistant,
 			ToolCalls: []providertypes.ToolCall{
 				{ID: "call-4", Name: "bash", Arguments: "{}"},
 			},
 		},
-		{Role: providertypes.RoleTool, ToolCallID: "call-4", Content: "latest bash"},
-		{Role: providertypes.RoleUser, Content: "latest explicit instruction"},
-		{Role: providertypes.RoleAssistant, Content: "reply"},
+		{Role: providertypes.RoleTool, ToolCallID: "call-4", Parts: []providertypes.ContentPart{providertypes.NewTextPart("latest bash")}},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("latest explicit instruction")}},
+		{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("reply")}},
 	}
 
 	got := microCompactMessagesWithPolicies(
@@ -168,12 +168,12 @@ func TestMicroCompactMixedSpanWithSummarizer(t *testing.T) {
 	)
 
 	// call-1 bash 在旧 span，有 summarizer，应生成摘要
-	if !strings.Contains(got[2].Content, "[summary]") {
-		t.Fatalf("expected bash summary in old span, got %q", got[2].Content)
+	if !strings.Contains(renderDisplayParts(got[2].Parts), "[summary]") {
+		t.Fatalf("expected bash summary in old span, got %q", renderDisplayParts(got[2].Parts))
 	}
 	// call-2 read_file 在旧 span，没有 summarizer，应清除
-	if got[3].Content != microCompactClearedMessage {
-		t.Fatalf("expected read_file cleared in old span, got %q", got[3].Content)
+	if renderDisplayParts(got[3].Parts) != microCompactClearedMessage {
+		t.Fatalf("expected read_file cleared in old span, got %q", renderDisplayParts(got[3].Parts))
 	}
 }
 
@@ -182,29 +182,29 @@ func TestMicroCompactSummarizerReturnsEmptyFallsBackToClear(t *testing.T) {
 	t.Parallel()
 
 	messages := []providertypes.Message{
-		{Role: providertypes.RoleUser, Content: "older user"},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("older user")}},
 		{
 			Role: providertypes.RoleAssistant,
 			ToolCalls: []providertypes.ToolCall{
 				{ID: "call-1", Name: "bash", Arguments: "{}"},
 			},
 		},
-		{Role: providertypes.RoleTool, ToolCallID: "call-1", Content: "old result"},
+		{Role: providertypes.RoleTool, ToolCallID: "call-1", Parts: []providertypes.ContentPart{providertypes.NewTextPart("old result")}},
 		{
 			Role: providertypes.RoleAssistant,
 			ToolCalls: []providertypes.ToolCall{
 				{ID: "call-2", Name: "bash", Arguments: "{}"},
 			},
 		},
-		{Role: providertypes.RoleTool, ToolCallID: "call-2", Content: "middle result"},
+		{Role: providertypes.RoleTool, ToolCallID: "call-2", Parts: []providertypes.ContentPart{providertypes.NewTextPart("middle result")}},
 		{
 			Role: providertypes.RoleAssistant,
 			ToolCalls: []providertypes.ToolCall{
 				{ID: "call-3", Name: "bash", Arguments: "{}"},
 			},
 		},
-		{Role: providertypes.RoleTool, ToolCallID: "call-3", Content: "recent result"},
-		{Role: providertypes.RoleUser, Content: "latest explicit instruction"},
+		{Role: providertypes.RoleTool, ToolCallID: "call-3", Parts: []providertypes.ContentPart{providertypes.NewTextPart("recent result")}},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("latest explicit instruction")}},
 	}
 
 	got := microCompactMessagesWithPolicies(
@@ -218,8 +218,8 @@ func TestMicroCompactSummarizerReturnsEmptyFallsBackToClear(t *testing.T) {
 		},
 	)
 
-	if got[2].Content != microCompactClearedMessage {
-		t.Fatalf("expected cleared fallback when summarizer returns empty, got %q", got[2].Content)
+	if renderDisplayParts(got[2].Parts) != microCompactClearedMessage {
+		t.Fatalf("expected cleared fallback when summarizer returns empty, got %q", renderDisplayParts(got[2].Parts))
 	}
 }
 
@@ -228,7 +228,7 @@ func TestSummarizeOrClearWithNilSummarizers(t *testing.T) {
 	t.Parallel()
 
 	got := summarizeOrClear(
-		providertypes.Message{Content: "test"},
+		providertypes.Message{Parts: []providertypes.ContentPart{providertypes.NewTextPart("test")}},
 		nil,
 		nil,
 	)
@@ -244,7 +244,7 @@ func TestSummarizeOrClearWithToolNamesLookup(t *testing.T) {
 	t.Run("found", func(t *testing.T) {
 		toolNames := map[string]string{"call-2": "filesystem_read_file"}
 		got := summarizeOrClear(
-			providertypes.Message{ToolCallID: "call-2", Content: "content"},
+			providertypes.Message{ToolCallID: "call-2", Parts: []providertypes.ContentPart{providertypes.NewTextPart("content")}},
 			toolNames,
 			stubMicroCompactSummarizerSource{
 				"filesystem_read_file": func(content string, metadata map[string]string, isError bool) string {
@@ -260,7 +260,7 @@ func TestSummarizeOrClearWithToolNamesLookup(t *testing.T) {
 	t.Run("not_found_in_tool_names", func(t *testing.T) {
 		toolNames := map[string]string{"call-1": "bash"}
 		got := summarizeOrClear(
-			providertypes.Message{ToolCallID: "unknown-id", Content: "content"},
+			providertypes.Message{ToolCallID: "unknown-id", Parts: []providertypes.ContentPart{providertypes.NewTextPart("content")}},
 			toolNames,
 			stubMicroCompactSummarizerSource{},
 		)

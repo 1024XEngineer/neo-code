@@ -109,7 +109,7 @@ func buildExtractionPrompt(now time.Time) string {
 // containsUserMessage 检查待提取消息中是否包含用户输入。
 func containsUserMessage(messages []providertypes.Message) bool {
 	for _, message := range messages {
-		if message.Role == providertypes.RoleUser && strings.TrimSpace(message.Content) != "" {
+		if message.Role == providertypes.RoleUser && hasMemoRelevantUserInput(message.Parts) {
 			return true
 		}
 	}

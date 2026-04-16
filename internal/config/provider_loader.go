@@ -2,6 +2,7 @@ package config
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -205,4 +206,97 @@ func resolveCustomProviderSettings(file customProviderFile) customProviderSettin
 	}
 
 	return settings
+}
+
+// SaveCustomProvider 保存自定义 provider 到文件系统。
+func SaveCustomProvider(
+	baseDir string,
+	name string,
+	driver string,
+	baseURL string,
+	apiKeyEnv string,
+	apiStyle string,
+	deploymentMode string,
+	apiVersion string,
+) error {
+	if err := validateCustomProviderName(name); err != nil {
+		return err
+	}
+
+	providersDir := filepath.Join(baseDir, providersDirName, name)
+	if err := os.MkdirAll(providersDir, 0o755); err != nil {
+		return fmt.Errorf("config: create provider dir: %w", err)
+	}
+
+	normalizedDriver := normalizeProviderDriver(driver)
+	cfg := customProviderFile{
+		Name:      name,
+		Driver:    normalizedDriver,
+		APIKeyEnv: apiKeyEnv,
+	}
+
+	switch normalizedDriver {
+	case provider.DriverOpenAICompat:
+		cfg.OpenAICompatible = customOpenAICompatibleFile{
+			BaseURL:  baseURL,
+			APIStyle: strings.TrimSpace(apiStyle),
+		}
+	case provider.DriverGemini:
+		cfg.Gemini = customGeminiProviderFile{
+			BaseURL:        baseURL,
+			DeploymentMode: strings.TrimSpace(deploymentMode),
+		}
+	case provider.DriverAnthropic:
+		cfg.Anthropic = customAnthropicProviderFile{
+			BaseURL:    baseURL,
+			APIVersion: strings.TrimSpace(apiVersion),
+		}
+	default:
+		cfg.BaseURL = baseURL
+	}
+
+	data, err := yaml.Marshal(cfg)
+	if err != nil {
+		return fmt.Errorf("config: marshal provider: %w", err)
+	}
+
+	providerPath := filepath.Join(providersDir, customProviderConfigName)
+	if err := os.WriteFile(providerPath, data, 0o644); err != nil {
+		return fmt.Errorf("config: write provider: %w", err)
+	}
+
+	return nil
+}
+
+// DeleteCustomProvider 删除自定义 provider。
+func DeleteCustomProvider(baseDir string, name string) error {
+	if err := validateCustomProviderName(name); err != nil {
+		return err
+	}
+	providersDir := filepath.Join(baseDir, providersDirName, name)
+	return os.RemoveAll(providersDir)
+}
+
+// validateCustomProviderName 校验 provider 名称，拒绝路径穿越和分隔符语义。
+func validateCustomProviderName(name string) error {
+	trimmed := strings.TrimSpace(name)
+	if trimmed == "" {
+		return errors.New("config: provider name is empty")
+	}
+	if trimmed == "." || trimmed == ".." {
+		return fmt.Errorf("config: provider name %q is invalid", name)
+	}
+	if strings.ContainsAny(trimmed, `/\`) {
+		return fmt.Errorf("config: provider name %q is invalid", name)
+	}
+	if filepath.IsAbs(trimmed) {
+		return fmt.Errorf("config: provider name %q is invalid", name)
+	}
+	for _, r := range trimmed {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '.' || r == '_' || r == '-' {
+			continue
+		}
+		return fmt.Errorf("config: provider name %q contains unsupported character %q", name, string(r))
+	}
+	return nil
 }

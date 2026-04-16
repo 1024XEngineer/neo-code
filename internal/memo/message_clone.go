@@ -5,6 +5,7 @@ import providertypes "neo-code/internal/provider/types"
 // cloneProviderMessage 深拷贝消息结构，避免后台流程读取到运行时后续修改。
 func cloneProviderMessage(message providertypes.Message) providertypes.Message {
 	cloned := message
+	cloned.Parts = providertypes.CloneParts(message.Parts)
 	if len(message.ToolCalls) > 0 {
 		cloned.ToolCalls = append([]providertypes.ToolCall(nil), message.ToolCalls...)
 	}

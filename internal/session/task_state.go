@@ -7,7 +7,7 @@ import (
 
 const (
 	// CurrentSchemaVersion 表示当前会话持久化结构的唯一合法版本。
-	CurrentSchemaVersion = 1
+	CurrentSchemaVersion = 2
 
 	// taskStateMaxFieldChars 限制 TaskState 单值字段的最大字符数，避免异常大文本污染持久化与后续 prompt。
 	taskStateMaxFieldChars = 2000

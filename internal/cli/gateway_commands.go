@@ -124,10 +124,14 @@ func defaultGatewayCommandRunner(ctx context.Context, options gatewayCommandOpti
 
 	signalContext, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	relay := gateway.NewStreamRelay(gateway.StreamRelayOptions{
+		Logger: logger,
+	})
 
 	ipcServer, err := newGatewayServer(gateway.ServerOptions{
 		ListenAddress: options.ListenAddress,
 		Logger:        logger,
+		Relay:         relay,
 	})
 	if err != nil {
 		return err
@@ -135,12 +139,14 @@ func defaultGatewayCommandRunner(ctx context.Context, options gatewayCommandOpti
 	networkServer, err := newGatewayNetwork(gateway.NetworkServerOptions{
 		ListenAddress: options.HTTPAddress,
 		Logger:        logger,
+		Relay:         relay,
 	})
 	if err != nil {
 		_ = ipcServer.Close(context.Background())
 		return err
 	}
 	defer func() {
+		relay.Stop()
 		_ = networkServer.Close(context.Background())
 		_ = ipcServer.Close(context.Background())
 	}()

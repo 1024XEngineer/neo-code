@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"neo-code/internal/provider"
 )
 
 func writeLoaderConfig(t *testing.T, loader *Loader, raw string) {
@@ -851,6 +853,289 @@ func TestResolveCustomProviderSettingsByDriver(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestSaveCustomProviderPersistsDriverSpecificSettings(t *testing.T) {
+	t.Parallel()
+
+	baseDir := t.TempDir()
+	tests := []struct {
+		name           string
+		driver         string
+		baseURL        string
+		apiStyle       string
+		deploymentMode string
+		apiVersion     string
+		assert         func(t *testing.T, cfg ProviderConfig)
+	}{
+		{
+			name:           "openaicompat settings",
+			driver:         provider.DriverOpenAICompat,
+			baseURL:        "https://llm.example.com/v1",
+			apiStyle:       provider.OpenAICompatibleAPIStyleResponses,
+			deploymentMode: "ignored",
+			apiVersion:     "ignored",
+			assert: func(t *testing.T, cfg ProviderConfig) {
+				t.Helper()
+				if cfg.APIStyle != provider.OpenAICompatibleAPIStyleResponses {
+					t.Fatalf("expected APIStyle=%q, got %q", provider.OpenAICompatibleAPIStyleResponses, cfg.APIStyle)
+				}
+				if cfg.DeploymentMode != "" || cfg.APIVersion != "" {
+					t.Fatalf("expected non-openai specific settings to be empty, got %+v", cfg)
+				}
+			},
+		},
+		{
+			name:           "gemini settings",
+			driver:         provider.DriverGemini,
+			baseURL:        "https://generativelanguage.googleapis.com/v1beta/openai",
+			apiStyle:       "ignored",
+			deploymentMode: "vertex",
+			apiVersion:     "ignored",
+			assert: func(t *testing.T, cfg ProviderConfig) {
+				t.Helper()
+				if cfg.DeploymentMode != "vertex" {
+					t.Fatalf("expected DeploymentMode=vertex, got %q", cfg.DeploymentMode)
+				}
+				if cfg.APIStyle != "" || cfg.APIVersion != "" {
+					t.Fatalf("expected non-gemini specific settings to be empty, got %+v", cfg)
+				}
+			},
+		},
+		{
+			name:           "anthropic settings",
+			driver:         provider.DriverAnthropic,
+			baseURL:        "https://api.anthropic.com/v1",
+			apiStyle:       "ignored",
+			deploymentMode: "ignored",
+			apiVersion:     "2023-06-01",
+			assert: func(t *testing.T, cfg ProviderConfig) {
+				t.Helper()
+				if cfg.APIVersion != "2023-06-01" {
+					t.Fatalf("expected APIVersion=2023-06-01, got %q", cfg.APIVersion)
+				}
+				if cfg.APIStyle != "" || cfg.DeploymentMode != "" {
+					t.Fatalf("expected non-anthropic specific settings to be empty, got %+v", cfg)
+				}
+			},
+		},
+		{
+			name:           "unknown driver keeps top-level base url",
+			driver:         "custom-driver",
+			baseURL:        "https://custom.example.com/v1",
+			apiStyle:       "responses",
+			deploymentMode: "vertex",
+			apiVersion:     "2023-06-01",
+			assert: func(t *testing.T, cfg ProviderConfig) {
+				t.Helper()
+				if cfg.BaseURL != "https://custom.example.com/v1" {
+					t.Fatalf("expected BaseURL=https://custom.example.com/v1, got %q", cfg.BaseURL)
+				}
+				if cfg.APIStyle != "" || cfg.DeploymentMode != "" || cfg.APIVersion != "" {
+					t.Fatalf("expected unknown driver protocol settings to be empty, got %+v", cfg)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			providerName := strings.ReplaceAll(tt.name, " ", "-")
+			apiKeyEnv := strings.ToUpper(strings.ReplaceAll(providerName, "-", "_")) + "_API_KEY"
+			if err := SaveCustomProvider(
+				baseDir,
+				providerName,
+				tt.driver,
+				tt.baseURL,
+				apiKeyEnv,
+				tt.apiStyle,
+				tt.deploymentMode,
+				tt.apiVersion,
+			); err != nil {
+				t.Fatalf("SaveCustomProvider() error = %v", err)
+			}
+
+			cfg, err := loadCustomProvider(filepath.Join(baseDir, providersDirName, providerName))
+			if err != nil {
+				t.Fatalf("loadCustomProvider() error = %v", err)
+			}
+			if cfg.Driver != tt.driver {
+				t.Fatalf("expected driver %q, got %q", tt.driver, cfg.Driver)
+			}
+			if cfg.BaseURL != tt.baseURL {
+				t.Fatalf("expected baseURL %q, got %q", tt.baseURL, cfg.BaseURL)
+			}
+			if cfg.APIKeyEnv != apiKeyEnv {
+				t.Fatalf("expected api_key_env %q, got %q", apiKeyEnv, cfg.APIKeyEnv)
+			}
+			tt.assert(t, cfg)
+		})
+	}
+}
+
+func TestSaveCustomProviderRejectsUnsafeProviderName(t *testing.T) {
+	t.Parallel()
+
+	baseDir := t.TempDir()
+	invalidNames := []string{
+		"",
+		" ",
+		"../escape",
+		"..",
+		"team/gateway",
+		`team\gateway`,
+		"/tmp/abs",
+		"中文",
+	}
+	for _, name := range invalidNames {
+		err := SaveCustomProvider(
+			baseDir,
+			name,
+			provider.DriverOpenAICompat,
+			"https://llm.example.com/v1",
+			"CUSTOM_API_KEY",
+			provider.OpenAICompatibleAPIStyleChatCompletions,
+			"",
+			"",
+		)
+		if err == nil {
+			t.Fatalf("expected SaveCustomProvider to reject %q", name)
+		}
+	}
+}
+
+func TestDeleteCustomProviderRejectsUnsafeProviderName(t *testing.T) {
+	t.Parallel()
+
+	baseDir := t.TempDir()
+	invalidNames := []string{
+		"",
+		"../escape",
+		"team/gateway",
+		`team\gateway`,
+	}
+	for _, name := range invalidNames {
+		if err := DeleteCustomProvider(baseDir, name); err == nil {
+			t.Fatalf("expected DeleteCustomProvider to reject %q", name)
+		}
+	}
+}
+
+func TestDeleteCustomProviderRemovesProviderDir(t *testing.T) {
+	t.Parallel()
+
+	baseDir := t.TempDir()
+	providerName := "team-gateway"
+	providerDir := filepath.Join(baseDir, providersDirName, providerName)
+	if err := os.MkdirAll(providerDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+
+	if err := DeleteCustomProvider(baseDir, providerName); err != nil {
+		t.Fatalf("DeleteCustomProvider() error = %v", err)
+	}
+	if _, err := os.Stat(providerDir); !os.IsNotExist(err) {
+		t.Fatalf("expected provider dir to be removed, stat err = %v", err)
+	}
+}
+
+func TestLoadCustomProvidersReadDirAndStatErrors(t *testing.T) {
+	t.Run("providers dir read error", func(t *testing.T) {
+		baseDir := t.TempDir()
+		providersPath := filepath.Join(baseDir, providersDirName)
+		if err := os.WriteFile(providersPath, []byte("file"), 0o600); err != nil {
+			t.Fatalf("WriteFile() error = %v", err)
+		}
+
+		if _, err := loadCustomProviders(baseDir); err == nil {
+			t.Fatal("expected read providers dir error")
+		}
+	})
+
+	t.Run("provider yaml stat error", func(t *testing.T) {
+		baseDir := t.TempDir()
+		providerDir := filepath.Join(baseDir, providersDirName, "blocked")
+		if err := os.MkdirAll(providerDir, 0o755); err != nil {
+			t.Fatalf("MkdirAll() error = %v", err)
+		}
+		if err := os.Chmod(providerDir, 0o000); err != nil {
+			t.Fatalf("Chmod() error = %v", err)
+		}
+		defer func() { _ = os.Chmod(providerDir, 0o755) }()
+
+		if _, err := loadCustomProviders(baseDir); err == nil {
+			t.Fatal("expected stat error")
+		}
+	})
+}
+
+func TestLoadCustomProviderReadErrors(t *testing.T) {
+	t.Run("missing provider yaml", func(t *testing.T) {
+		providerDir := t.TempDir()
+		if _, err := loadCustomProvider(providerDir); err == nil {
+			t.Fatal("expected missing provider yaml error")
+		}
+	})
+
+	t.Run("provider yaml read error", func(t *testing.T) {
+		providerDir := t.TempDir()
+		providerPath := filepath.Join(providerDir, customProviderConfigName)
+		if err := os.MkdirAll(providerPath, 0o755); err != nil {
+			t.Fatalf("MkdirAll() error = %v", err)
+		}
+		if _, err := loadCustomProvider(providerDir); err == nil {
+			t.Fatal("expected provider yaml read error")
+		}
+	})
+}
+
+func TestSaveCustomProviderFileSystemErrors(t *testing.T) {
+	t.Run("mkdir provider dir failed", func(t *testing.T) {
+		root := t.TempDir()
+		baseDir := filepath.Join(root, "base-file")
+		if err := os.WriteFile(baseDir, []byte("x"), 0o600); err != nil {
+			t.Fatalf("WriteFile() error = %v", err)
+		}
+
+		err := SaveCustomProvider(
+			baseDir,
+			"team-gateway",
+			provider.DriverOpenAICompat,
+			"https://llm.example.com/v1",
+			"TEAM_GATEWAY_API_KEY",
+			provider.OpenAICompatibleAPIStyleChatCompletions,
+			"",
+			"",
+		)
+		if err == nil {
+			t.Fatal("expected create provider dir error")
+		}
+	})
+
+	t.Run("write provider yaml failed", func(t *testing.T) {
+		baseDir := t.TempDir()
+		providerDir := filepath.Join(baseDir, providersDirName, "team-gateway")
+		if err := os.MkdirAll(filepath.Join(providerDir, customProviderConfigName), 0o755); err != nil {
+			t.Fatalf("MkdirAll() error = %v", err)
+		}
+
+		err := SaveCustomProvider(
+			baseDir,
+			"team-gateway",
+			provider.DriverOpenAICompat,
+			"https://llm.example.com/v1",
+			"TEAM_GATEWAY_API_KEY",
+			provider.OpenAICompatibleAPIStyleChatCompletions,
+			"",
+			"",
+		)
+		if err == nil {
+			t.Fatal("expected write provider error")
+		}
+	})
 }
 
 func TestLoaderLoadsUnknownCustomProviderDriverUsingTopLevelBaseURL(t *testing.T) {

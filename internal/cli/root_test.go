@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"neo-code/internal/app"
+	"neo-code/internal/config"
 	"neo-code/internal/gateway"
 	"neo-code/internal/gateway/adapters/urlscheme"
 )
@@ -950,6 +952,70 @@ func TestShouldSkipGlobalPreload(t *testing.T) {
 	}
 }
 
+func TestDefaultGlobalPreloadLoadsPersistedEnv(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	envPath := filepath.Join(home, ".neocode", ".env")
+	if err := os.MkdirAll(filepath.Dir(envPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(envPath, []byte("NEOCODE_PRELOAD_KEY=loaded-value\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	restore := captureEnvForRootTest(t, "NEOCODE_PRELOAD_KEY")
+	defer restore()
+	if err := os.Unsetenv("NEOCODE_PRELOAD_KEY"); err != nil {
+		t.Fatalf("Unsetenv() error = %v", err)
+	}
+
+	if err := defaultGlobalPreload(context.Background()); err != nil {
+		t.Fatalf("defaultGlobalPreload() error = %v", err)
+	}
+	if got := os.Getenv("NEOCODE_PRELOAD_KEY"); got != "loaded-value" {
+		t.Fatalf("expected loaded env value, got %q", got)
+	}
+}
+
+func TestDefaultGlobalPreloadKeepsExistingProcessEnv(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	envPath := config.EnvFilePath("")
+	if err := os.MkdirAll(filepath.Dir(envPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(envPath, []byte("NEOCODE_PRELOAD_KEEP=file-value\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	restore := captureEnvForRootTest(t, "NEOCODE_PRELOAD_KEEP")
+	defer restore()
+	if err := os.Setenv("NEOCODE_PRELOAD_KEEP", "process-value"); err != nil {
+		t.Fatalf("Setenv() error = %v", err)
+	}
+
+	if err := defaultGlobalPreload(context.Background()); err != nil {
+		t.Fatalf("defaultGlobalPreload() error = %v", err)
+	}
+	if got := os.Getenv("NEOCODE_PRELOAD_KEEP"); got != "process-value" {
+		t.Fatalf("expected existing process env value, got %q", got)
+	}
+}
+
+func TestDefaultGlobalPreloadReturnsContextError(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := defaultGlobalPreload(ctx)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context canceled, got %v", err)
+	}
+}
+
 func TestWriteURLDispatchSuccessOutput(t *testing.T) {
 	var buffer bytes.Buffer
 	err := writeURLDispatchSuccessOutput(&buffer, urlscheme.DispatchResult{
@@ -1037,4 +1103,16 @@ func (quitModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (quitModel) View() string {
 	return ""
+}
+
+func captureEnvForRootTest(t *testing.T, key string) func() {
+	t.Helper()
+	value, exists := os.LookupEnv(key)
+	return func() {
+		if exists {
+			_ = os.Setenv(key, value)
+			return
+		}
+		_ = os.Unsetenv(key)
+	}
 }

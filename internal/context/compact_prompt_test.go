@@ -27,8 +27,8 @@ func TestBuildCompactPromptIncludesFixedInstructionsAndBoundaries(t *testing.T) 
 		},
 		ArchivedMessages: []providertypes.Message{
 			{
-				Role:    providertypes.RoleUser,
-				Content: "legacy request\nwith details",
+				Role:  providertypes.RoleUser,
+				Parts: []providertypes.ContentPart{providertypes.NewTextPart("legacy request\nwith details")},
 			},
 			{
 				Role: providertypes.RoleAssistant,
@@ -38,7 +38,7 @@ func TestBuildCompactPromptIncludesFixedInstructionsAndBoundaries(t *testing.T) 
 			},
 		},
 		RetainedMessages: []providertypes.Message{
-			{Role: providertypes.RoleAssistant, Content: "recent answer"},
+			{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("recent answer")}},
 		},
 	})
 
@@ -171,5 +171,22 @@ func TestTruncateArchivedContentHandlesTinyBudget(t *testing.T) {
 	}
 	if got != "[... ear" {
 		t.Fatalf("expected notice prefix slice for tiny budget, got %q", got)
+	}
+}
+
+func TestBuildCompactPromptRendersImagePartsAsSafePlaceholders(t *testing.T) {
+	t.Parallel()
+
+	prompt := BuildCompactPrompt(CompactPromptInput{
+		ArchivedMessages: []providertypes.Message{
+			{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewRemoteImagePart("https://example.com/pic.png")}},
+		},
+	})
+
+	if !strings.Contains(prompt.UserPrompt, "[Image:remote] https://example.com/pic.png") {
+		t.Fatalf("expected compact prompt to render remote image placeholder, got %q", prompt.UserPrompt)
+	}
+	if strings.Contains(prompt.UserPrompt, "data:image") {
+		t.Fatalf("compact prompt should not expose binary/data-url payload, got %q", prompt.UserPrompt)
 	}
 }

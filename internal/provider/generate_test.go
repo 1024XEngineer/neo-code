@@ -41,7 +41,7 @@ func TestGenerateTextSuccess(t *testing.T) {
 		Model:        "test-model",
 		SystemPrompt: "test prompt",
 		Messages: []providertypes.Message{
-			{Role: providertypes.RoleUser, Content: "test message"},
+			{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("test message")}},
 		},
 	}
 

@@ -492,7 +492,7 @@ func TestServiceRunReinjectsSkillsAfterAutoCompact(t *testing.T) {
 		},
 	})
 
-	if err := service.Run(context.Background(), UserInput{SessionID: session.ID, RunID: "run-auto-compact-skills", Content: "hello"}); err != nil {
+	if err := service.Run(context.Background(), UserInput{SessionID: session.ID, RunID: "run-auto-compact-skills", Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")}}); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
 	if len(builder.builds) < 2 {

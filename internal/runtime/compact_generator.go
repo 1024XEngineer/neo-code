@@ -87,8 +87,8 @@ func (g *compactSummaryGenerator) Generate(
 		Model:        g.model,
 		SystemPrompt: prompt.SystemPrompt,
 		Messages: []providertypes.Message{{
-			Role:    providertypes.RoleUser,
-			Content: prompt.UserPrompt,
+			Role:  providertypes.RoleUser,
+			Parts: []providertypes.ContentPart{providertypes.NewTextPart(prompt.UserPrompt)},
 		}},
 	}, streaming.Hooks{})
 	if outcome.err != nil {
@@ -100,7 +100,21 @@ func (g *compactSummaryGenerator) Generate(
 		return contextcompact.SummaryOutput{}, errors.New("runtime: compact summary response must not contain tool calls")
 	}
 
-	return parseCompactSummaryOutput(message.Content)
+	return parseCompactSummaryOutput(renderCompactSummaryResponseParts(message.Parts))
+}
+
+// renderCompactSummaryResponseParts 提取 compact 生成器响应文本，非文本分片仅保留占位以避免二进制泄露。
+func renderCompactSummaryResponseParts(parts []providertypes.ContentPart) string {
+	var builder strings.Builder
+	for _, part := range parts {
+		switch part.Kind {
+		case providertypes.ContentPartText:
+			builder.WriteString(part.Text)
+		case providertypes.ContentPartImage:
+			builder.WriteString("[Image]")
+		}
+	}
+	return builder.String()
 }
 
 // parseCompactSummaryOutput 解析 compact 生成器返回的 JSON 响应，容忍数组字段被返回为字符串。

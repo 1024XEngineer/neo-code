@@ -126,6 +126,12 @@ func TestNetworkServerServeErrorBranches(t *testing.T) {
 		if serveErr := server.Serve(context.Background(), nil); serveErr == nil || !strings.Contains(serveErr.Error(), "listen failed") {
 			t.Fatalf("expected listen error, got %v", serveErr)
 		}
+		server.relay.mu.RLock()
+		started := server.relay.cleanupStarted || server.relay.eventPumpStarted
+		server.relay.mu.RUnlock()
+		if started {
+			t.Fatal("relay loops should not start when listen failed")
+		}
 	})
 
 	t.Run("already serving", func(t *testing.T) {
@@ -169,6 +175,25 @@ func TestNetworkServerServeErrorBranches(t *testing.T) {
 			t.Fatalf("expected serve error, got %v", serveErr)
 		}
 	})
+}
+
+func TestNetworkServerCloseStopsRelayWithoutActiveServer(t *testing.T) {
+	relay := NewStreamRelay(StreamRelayOptions{
+		CleanupInterval: 5 * time.Millisecond,
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	relay.Start(ctx, nil)
+	waitForStreamRelayState(t, relay, true)
+
+	server := &NetworkServer{
+		relay: relay,
+	}
+	if err := server.Close(context.Background()); err != nil {
+		t.Fatalf("close server: %v", err)
+	}
+	waitForStreamRelayState(t, relay, false)
 }
 
 func TestNetworkServerIsClosedState(t *testing.T) {

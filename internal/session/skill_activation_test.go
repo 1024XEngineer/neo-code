@@ -57,7 +57,7 @@ func TestJSONStoreSaveLoadRoundTripActivatedSkills(t *testing.T) {
 			{SkillID: "go_review"},
 			{SkillID: "go-review"},
 		},
-		Messages: []providertypes.Message{{Role: "user", Content: "hello"}},
+		Messages: []providertypes.Message{{Role: "user", Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")}}},
 	}
 
 	if err := store.Save(context.Background(), session); err != nil {
@@ -94,7 +94,7 @@ func TestJSONStoreLoadAllowsMissingActivatedSkillsField(t *testing.T) {
 
 	mustWriteSessionFile(t, filepath.Join(sessionDirectory(baseDir, workspaceRoot), "no-activated-skills.json"), strings.Join([]string{
 		`{`,
-		`  "schema_version": 1,`,
+		`  "schema_version": 2,`,
 		`  "id": "no-activated-skills",`,
 		`  "title": "No Activated Skills",`,
 		`  "created_at": "2026-04-15T10:00:00Z",`,

@@ -15,9 +15,21 @@ type Request struct {
 // Message 表示 OpenAI 协议中的消息格式。
 type Message struct {
 	Role       string     `json:"role"`
-	Content    string     `json:"content,omitempty"`
+	Content    any        `json:"content,omitempty"`
 	ToolCallID string     `json:"tool_call_id,omitempty"`
 	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
+}
+
+// MessageContentPart 表示多模态消息的单个部分。
+type MessageContentPart struct {
+	Type     string    `json:"type"`
+	Text     string    `json:"text,omitempty"`
+	ImageURL *ImageURL `json:"image_url,omitempty"`
+}
+
+// ImageURL 表示图片 URL 对象。
+type ImageURL struct {
+	URL string `json:"url"`
 }
 
 // ToolDefinition 表示工具定义的 OpenAI 格式。

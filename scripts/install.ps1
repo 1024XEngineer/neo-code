@@ -1,8 +1,8 @@
 $ErrorActionPreference = "Stop"
 
 # 配置仓库信息
-$Repo = "pionxe/neo-code"
-$ProjectName = "neo-code"
+$Repo = "1024XEngineer/neo-code"
+$ProjectName = "neocode"
 $BinaryName = "neocode.exe"
 
 Write-Host "🚀 开始安装 $BinaryName..." -ForegroundColor Cyan

@@ -374,7 +374,7 @@ func TestServiceRunPermissionRejectFlow(t *testing.T) {
 				FinishReason: "tool_calls",
 			},
 			{
-				Message:      providertypes.Message{Role: "assistant", Content: "done"},
+				Message:      providertypes.Message{Role: "assistant", Parts: []providertypes.ContentPart{providertypes.NewTextPart("done")}},
 				FinishReason: "stop",
 			},
 		},
@@ -383,7 +383,7 @@ func TestServiceRunPermissionRejectFlow(t *testing.T) {
 	service := NewWithFactory(manager, toolManager, store, &scriptedProviderFactory{provider: scripted}, nil)
 	runErrCh := make(chan error, 1)
 	go func() {
-		runErrCh <- service.Run(context.Background(), UserInput{RunID: "run-permission-reject", Content: "fetch private"})
+		runErrCh <- service.Run(context.Background(), UserInput{RunID: "run-permission-reject", Parts: []providertypes.ContentPart{providertypes.NewTextPart("fetch private")}})
 	}()
 
 	var requestPayload PermissionRequestPayload
@@ -492,7 +492,7 @@ func TestServiceRunMCPPermissionAllowFlow(t *testing.T) {
 				FinishReason: "tool_calls",
 			},
 			{
-				Message:      providertypes.Message{Role: "assistant", Content: "done"},
+				Message:      providertypes.Message{Role: "assistant", Parts: []providertypes.ContentPart{providertypes.NewTextPart("done")}},
 				FinishReason: "stop",
 			},
 		},
@@ -501,7 +501,7 @@ func TestServiceRunMCPPermissionAllowFlow(t *testing.T) {
 	service := NewWithFactory(manager, toolManager, store, &scriptedProviderFactory{provider: scripted}, nil)
 	runErrCh := make(chan error, 1)
 	go func() {
-		runErrCh <- service.Run(context.Background(), UserInput{RunID: "run-mcp-permission-allow", Content: "create issue"})
+		runErrCh <- service.Run(context.Background(), UserInput{RunID: "run-mcp-permission-allow", Parts: []providertypes.ContentPart{providertypes.NewTextPart("create issue")}})
 	}()
 
 	var requestPayload PermissionRequestPayload
@@ -627,7 +627,7 @@ func TestServiceRunMCPPermissionRejectFlow(t *testing.T) {
 				FinishReason: "tool_calls",
 			},
 			{
-				Message:      providertypes.Message{Role: "assistant", Content: "done"},
+				Message:      providertypes.Message{Role: "assistant", Parts: []providertypes.ContentPart{providertypes.NewTextPart("done")}},
 				FinishReason: "stop",
 			},
 		},
@@ -636,7 +636,7 @@ func TestServiceRunMCPPermissionRejectFlow(t *testing.T) {
 	service := NewWithFactory(manager, toolManager, store, &scriptedProviderFactory{provider: scripted}, nil)
 	runErrCh := make(chan error, 1)
 	go func() {
-		runErrCh <- service.Run(context.Background(), UserInput{RunID: "run-mcp-permission-reject", Content: "create issue"})
+		runErrCh <- service.Run(context.Background(), UserInput{RunID: "run-mcp-permission-reject", Parts: []providertypes.ContentPart{providertypes.NewTextPart("create issue")}})
 	}()
 
 	var requestPayload PermissionRequestPayload
@@ -758,14 +758,14 @@ func TestServiceRunMCPPermissionHardDenyFlow(t *testing.T) {
 				FinishReason: "tool_calls",
 			},
 			{
-				Message:      providertypes.Message{Role: "assistant", Content: "done"},
+				Message:      providertypes.Message{Role: "assistant", Parts: []providertypes.ContentPart{providertypes.NewTextPart("done")}},
 				FinishReason: "stop",
 			},
 		},
 	}
 
 	service := NewWithFactory(manager, toolManager, store, &scriptedProviderFactory{provider: scripted}, nil)
-	if err := service.Run(context.Background(), UserInput{RunID: "run-mcp-permission-deny", Content: "create issue"}); err != nil {
+	if err := service.Run(context.Background(), UserInput{RunID: "run-mcp-permission-deny", Parts: []providertypes.ContentPart{providertypes.NewTextPart("create issue")}}); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
 	if mcpClient.callCount != 0 {

@@ -20,7 +20,7 @@ func ProjectToolMessagesForModel(messages []providertypes.Message) []providertyp
 		if !isProjectableToolMessage(message) {
 			continue
 		}
-		messages[i].Content = tools.FormatToolMessageForModel(message)
+		messages[i].Parts = []providertypes.ContentPart{providertypes.NewTextPart(tools.FormatToolMessageForModel(message))}
 		messages[i].ToolMetadata = nil
 	}
 	return messages
@@ -144,7 +144,7 @@ func isInjectableToolMessage(message providertypes.Message) bool {
 	if message.Role != providertypes.RoleTool {
 		return false
 	}
-	content := strings.TrimSpace(message.Content)
+	content := strings.TrimSpace(renderDisplayParts(message.Parts))
 	if content == microCompactClearedMessage {
 		return false
 	}
@@ -173,7 +173,7 @@ func sanitizeRecentWindowToolMessages(messages []providertypes.Message) []provid
 		if message.Role != providertypes.RoleTool {
 			continue
 		}
-		messages[index].Content = sanitizeProjectedToolContent(message.Content)
+		messages[index].Parts = []providertypes.ContentPart{providertypes.NewTextPart(sanitizeProjectedToolContent(renderTranscriptParts(message.Parts)))}
 	}
 	return messages
 }

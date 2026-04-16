@@ -6,6 +6,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
+	"neo-code/internal/provider"
 	providertypes "neo-code/internal/provider/types"
 	tuicomponents "neo-code/internal/tui/components"
 	tuiutils "neo-code/internal/tui/core/utils"
@@ -170,6 +171,11 @@ func (a App) renderPicker(width int, height int) string {
 		subtitle = helpPickerSubtitle
 		body = a.helpPicker.View()
 	}
+	if a.state.ActivePicker == pickerProviderAdd {
+		title = providerAddTitle
+		subtitle = providerAddSubtitle
+		body = a.renderProviderAddForm()
+	}
 	content := lipgloss.JoinVertical(
 		lipgloss.Left,
 		a.styles.panelTitle.Render(title),
@@ -181,6 +187,93 @@ func (a App) renderPicker(width int, height int) string {
 		Height(max(1, height-frameHeight)).
 		Render(content)
 	return lipgloss.Place(width, height, lipgloss.Left, lipgloss.Top, panel)
+}
+
+func (a App) renderProviderAddForm() string {
+	if a.providerAddForm == nil {
+		return "No form active"
+	}
+
+	var sb strings.Builder
+	driver := provider.NormalizeProviderDriver(a.providerAddForm.Driver)
+	baseURLRequired := driver == provider.DriverAnthropic || (driver != provider.DriverOpenAICompat && driver != provider.DriverGemini)
+	visible := providerAddVisibleFields(a.providerAddForm.Driver)
+	clampProviderAddStep(a.providerAddForm)
+
+	type renderField struct {
+		label    string
+		value    string
+		required bool
+		note     string
+	}
+	fields := make([]renderField, 0, len(visible))
+	for _, fieldID := range visible {
+		switch fieldID {
+		case providerAddFieldName:
+			fields = append(fields, renderField{label: "Name", value: a.providerAddForm.Name, required: true})
+		case providerAddFieldDriver:
+			fields = append(fields, renderField{label: "Driver", value: a.providerAddForm.Driver, required: true})
+		case providerAddFieldBaseURL:
+			note := ""
+			if strings.TrimSpace(a.providerAddForm.BaseURL) == "" && (driver == provider.DriverOpenAICompat || driver == provider.DriverGemini) {
+				note = "留空会自动填充默认地址"
+			}
+			fields = append(fields, renderField{
+				label:    "Base URL",
+				value:    a.providerAddForm.BaseURL,
+				required: baseURLRequired,
+				note:     note,
+			})
+		case providerAddFieldAPIStyle:
+			note := ""
+			if strings.TrimSpace(a.providerAddForm.APIStyle) == "" {
+				note = "默认 chat_completions"
+			}
+			fields = append(fields, renderField{label: "API Style", value: a.providerAddForm.APIStyle, note: note})
+		case providerAddFieldDeploymentMode:
+			fields = append(fields, renderField{label: "Deployment Mode", value: a.providerAddForm.DeploymentMode})
+		case providerAddFieldAPIVersion:
+			fields = append(fields, renderField{label: "API Version", value: a.providerAddForm.APIVersion})
+		case providerAddFieldAPIKey:
+			fields = append(fields, renderField{label: "API Key", value: maskedSecret(a.providerAddForm.APIKey), required: true})
+		}
+	}
+
+	for i, field := range fields {
+		prefix := "  "
+		if i == a.providerAddForm.Step {
+			prefix = "> "
+		}
+		sb.WriteString(prefix + field.label + ": ")
+		sb.WriteString(field.value)
+		if field.required {
+			sb.WriteString(" *")
+		}
+		if field.note != "" {
+			sb.WriteString("  (" + field.note + ")")
+		}
+		sb.WriteString("\n")
+	}
+
+	if a.providerAddForm.Error != "" {
+		label := "[Prompt]"
+		if a.providerAddForm.ErrorIsHard {
+			label = "[Error]"
+		}
+		sb.WriteString("\n" + label + " " + a.providerAddForm.Error + "\n")
+	}
+
+	sb.WriteString("\n[Tab] switch field  [Enter] confirm  [Esc] cancel")
+
+	return sb.String()
+}
+
+// maskedSecret 将敏感输入渲染为固定掩码，避免在终端界面泄露明文。
+func maskedSecret(value string) string {
+	if strings.TrimSpace(value) == "" {
+		return ""
+	}
+	return "******"
 }
 
 func (a App) renderPrompt(width int) string {
@@ -223,11 +316,11 @@ func (a App) renderPanel(title string, subtitle string, body string, width int, 
 func (a App) renderMessageBlockWithCopy(message providertypes.Message, width int, startCopyID int) (string, []copyCodeButtonBinding) {
 	switch message.Role {
 	case roleEvent:
-		return a.styles.inlineNotice.Width(width).Render("  > " + wrapPlain(message.Content, max(16, width-6))), nil
+		return a.styles.inlineNotice.Width(width).Render("  > " + wrapPlain(renderMessagePartsForDisplay(message.Parts), max(16, width-6))), nil
 	case roleError:
-		return a.styles.inlineError.Width(width).Render("  ! " + wrapPlain(message.Content, max(16, width-6))), nil
+		return a.styles.inlineError.Width(width).Render("  ! " + wrapPlain(renderMessagePartsForDisplay(message.Parts), max(16, width-6))), nil
 	case roleSystem:
-		return a.styles.inlineSystem.Width(width).Render("  - " + wrapPlain(message.Content, max(16, width-6))), nil
+		return a.styles.inlineSystem.Width(width).Render("  - " + wrapPlain(renderMessagePartsForDisplay(message.Parts), max(16, width-6))), nil
 	}
 
 	maxMessageWidth := tuiutils.Clamp(int(float64(width)*0.84), 24, width)
@@ -245,7 +338,7 @@ func (a App) renderMessageBlockWithCopy(message providertypes.Message, width int
 		return "", nil
 	}
 
-	content := strings.TrimSpace(message.Content)
+	content := strings.TrimSpace(renderMessagePartsForDisplay(message.Parts))
 	if content == "" && len(message.ToolCalls) > 0 {
 		names := make([]string, 0, len(message.ToolCalls))
 		for _, call := range message.ToolCalls {

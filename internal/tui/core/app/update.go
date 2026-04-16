@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/list"
@@ -16,6 +18,7 @@ import (
 
 	"neo-code/internal/config"
 	"neo-code/internal/memo"
+	"neo-code/internal/provider"
 	providertypes "neo-code/internal/provider/types"
 	agentruntime "neo-code/internal/runtime"
 	approvalflow "neo-code/internal/runtime/approval"
@@ -39,7 +42,12 @@ const (
 	pasteBurstThreshold = tuistate.PasteBurstThreshold
 )
 
+const providerAddSelectTimeout = 10 * time.Second
+
 var panelOrder = []panel{panelTranscript, panelActivity, panelInput}
+var persistProviderUserEnvVar = config.PersistUserEnvVar
+var deleteProviderUserEnvVar = config.DeleteUserEnvVar
+var lookupProviderUserEnvVar = config.LookupUserEnvVar
 
 func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
@@ -55,6 +63,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.height = typed.Height
 		a.applyComponentLayout(true)
 		return a, tea.Batch(cmds...)
+	case providerAddResultMsg:
+		a.handleProviderAddResultMsg(typed)
+		return a, nil
 	case RuntimeMsg:
 		transcriptDirty := a.handleRuntimeEvent(typed.Event)
 		if a.deferredEventCmd != nil {
@@ -229,6 +240,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if a.state.ActivePicker != pickerNone {
 			return a.updatePicker(typed)
 		}
+
 		if a.focus == panelInput {
 			if cmd, handled := a.updateCommandMenuSelection(typed); handled {
 				if cmd != nil {
@@ -338,13 +350,6 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 				return a, tea.Batch(cmds...)
 			}
 
-			// 如果不是立即执行的命令，再执行常规的输入重置
-			a.input.Reset()
-			a.state.InputText = ""
-			a.applyComponentLayout(true)
-			a.refreshCommandMenu()
-			a.resetPasteHeuristics()
-
 			switch strings.ToLower(input) {
 			case slashCommandHelp:
 				a.refreshHelpPicker()
@@ -380,6 +385,9 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 				}
 				a.openPicker(pickerSession, statusChooseSession, &a.sessionPicker, a.state.ActiveSessionID)
 				return a, tea.Batch(cmds...)
+			case slashCommandProviderAdd:
+				a.startProviderAddForm()
+				return a, tea.Batch(cmds...)
 			}
 
 			if strings.HasPrefix(input, slashPrefix) {
@@ -410,6 +418,20 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 				a.clearImageAttachments()
 				return a, tea.Batch(cmds...)
 			}
+			if a.hasImageAttachments() {
+				a.state.ExecutionError = "image attachments require session asset storage before sending"
+				a.state.StatusText = "Image attachments need session asset support"
+				a.appendActivity("multimodal", "Image attachments not sent", "Session asset storage is not available yet; images were not converted to text.", true)
+				a.clearImageAttachments()
+				return a, tea.Batch(cmds...)
+			}
+
+			// 如果不是立即执行的命令，再执行常规的输入重置
+			a.input.Reset()
+			a.state.InputText = ""
+			a.applyComponentLayout(true)
+			a.refreshCommandMenu()
+			a.resetPasteHeuristics()
 
 			a.clearActivities()
 			a.clearRunProgress()
@@ -420,17 +442,12 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 			a.state.StatusText = statusThinking
 			a.state.CurrentTool = ""
 
-			if a.hasImageAttachments() {
-				a.appendActivity("multimodal", "Sending message with image metadata", fmt.Sprintf("%d image(s) attached", len(a.pendingImageAttachments)), false)
-			}
-
-			composedInput := a.composeMessageWithImageAttachments(input)
-			a.activeMessages = append(a.activeMessages, providertypes.Message{Role: roleUser, Content: composedInput})
+			a.activeMessages = append(a.activeMessages, providertypes.Message{Role: roleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart(input)}})
 			a.rebuildTranscript()
 			runID := fmt.Sprintf("run-%d", a.now().UnixNano())
 			a.state.ActiveRunID = runID
 			requestedWorkdir := tuiutils.RequestedWorkdirForRun(a.state.CurrentWorkdir)
-			cmds = append(cmds, runAgent(a.runtime, runID, a.state.ActiveSessionID, requestedWorkdir, composedInput))
+			cmds = append(cmds, runAgent(a.runtime, runID, a.state.ActiveSessionID, requestedWorkdir, input))
 			a.clearImageAttachments()
 			return a, tea.Batch(cmds...)
 		}
@@ -617,18 +634,6 @@ func (a App) updatePicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return a, nil
 			}
 			return a, runModelSelection(a.providerSvc, item.id)
-		case pickerSession:
-			item, ok := a.sessionPicker.SelectedItem().(sessionItem)
-			a.closePicker()
-			if !ok {
-				return a, nil
-			}
-			if err := a.activateSessionByID(item.Summary.ID); err != nil {
-				a.state.ExecutionError = err.Error()
-				a.state.StatusText = err.Error()
-				a.appendActivity("system", "Failed to switch session", err.Error(), true)
-			}
-			return a, nil
 		case pickerHelp:
 			item, ok := a.helpPicker.SelectedItem().(selectionItem)
 			a.closePicker()
@@ -636,6 +641,17 @@ func (a App) updatePicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return a, nil
 			}
 			return a, a.runSlashCommandSelection(item.id)
+		case pickerSession:
+			a.closePicker()
+			if err := a.activateSelectedSession(); err != nil {
+				a.state.ExecutionError = err.Error()
+				a.state.StatusText = err.Error()
+				a.appendActivity("session", "Failed to activate session", err.Error(), true)
+				return a, nil
+			}
+			a.rebuildTranscript()
+			a.state.StatusText = statusReady
+			return a, nil
 		}
 	}
 
@@ -673,6 +689,8 @@ func (a App) updatePicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if disabled, path := a.fileBrowser.DidSelectDisabledFile(msg); disabled {
 			a.state.StatusText = fmt.Sprintf("[System] %s is not selectable.", filepath.Base(path))
 		}
+	case pickerProviderAdd:
+		return a.handleProviderAddFormInput(msg)
 	}
 	return a, cmd
 }
@@ -1036,7 +1054,7 @@ func runtimeEventToolResultHandler(a *App, event agentruntime.RuntimeEvent) bool
 	}
 	a.activeMessages = append(a.activeMessages, providertypes.Message{
 		Role:    roleTool,
-		Content: payload.Content,
+		Parts:   []providertypes.ContentPart{providertypes.NewTextPart(payload.Content)},
 		IsError: payload.IsError,
 	})
 	if payload.IsError {
@@ -1083,8 +1101,11 @@ func runtimeEventAgentDoneHandler(a *App, event agentruntime.RuntimeEvent) bool 
 	if strings.TrimSpace(a.state.ExecutionError) == "" {
 		a.state.StatusText = statusReady
 	}
-	if payload, ok := event.Payload.(providertypes.Message); ok && strings.TrimSpace(payload.Content) != "" && !a.lastAssistantMatches(payload.Content) {
-		a.activeMessages = append(a.activeMessages, providertypes.Message{Role: roleAssistant, Content: payload.Content})
+	if payload, ok := event.Payload.(providertypes.Message); ok {
+		content := renderMessagePartsForDisplay(payload.Parts)
+		if strings.TrimSpace(content) != "" && !a.lastAssistantMatches(content) {
+			a.activeMessages = append(a.activeMessages, providertypes.Message{Role: roleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart(content)}})
+		}
 		return true
 	}
 	return false
@@ -1241,12 +1262,13 @@ func (a *App) appendAssistantChunk(chunk string) {
 	}
 
 	if !a.state.StreamingReply || len(a.activeMessages) == 0 || a.activeMessages[len(a.activeMessages)-1].Role != roleAssistant {
-		a.activeMessages = append(a.activeMessages, providertypes.Message{Role: roleAssistant, Content: chunk})
+		a.activeMessages = append(a.activeMessages, providertypes.Message{Role: roleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart(chunk)}})
 		a.state.StreamingReply = true
 		return
 	}
 
-	a.activeMessages[len(a.activeMessages)-1].Content += chunk
+	content := renderMessagePartsForDisplay(a.activeMessages[len(a.activeMessages)-1].Parts)
+	a.activeMessages[len(a.activeMessages)-1].Parts = []providertypes.ContentPart{providertypes.NewTextPart(content + chunk)}
 }
 
 func (a *App) appendInlineMessage(role string, message string) {
@@ -1255,7 +1277,7 @@ func (a *App) appendInlineMessage(role string, message string) {
 		return
 	}
 
-	a.activeMessages = append(a.activeMessages, providertypes.Message{Role: role, Content: content})
+	a.activeMessages = append(a.activeMessages, providertypes.Message{Role: role, Parts: []providertypes.ContentPart{providertypes.NewTextPart(content)}})
 }
 
 func (a *App) appendActivity(kind string, title string, detail string, isError bool) {
@@ -1307,7 +1329,7 @@ func (a *App) lastAssistantMatches(content string) bool {
 	}
 
 	last := a.activeMessages[len(a.activeMessages)-1]
-	return last.Role == roleAssistant && strings.TrimSpace(last.Content) == strings.TrimSpace(content)
+	return last.Role == roleAssistant && strings.TrimSpace(renderMessagePartsForDisplay(last.Parts)) == strings.TrimSpace(content)
 }
 
 func (a *App) handleViewportKeys(vp *viewport.Model, msg tea.KeyMsg) {
@@ -1769,6 +1791,9 @@ func (a *App) handleImmediateSlashCommand(input string) (bool, tea.Cmd) {
 		}
 		a.openPicker(pickerSession, statusChooseSession, &a.sessionPicker, a.state.ActiveSessionID)
 		return true, nil
+	case slashCommandProviderAdd:
+		a.startProviderAddForm()
+		return true, nil
 	default:
 		return false, nil
 	}
@@ -1876,7 +1901,7 @@ func runAgent(runtime agentruntime.Runtime, runID string, sessionID string, work
 		agentruntime.UserInput{
 			SessionID: sessionID,
 			RunID:     strings.TrimSpace(runID),
-			Content:   content,
+			Parts:     []providertypes.ContentPart{providertypes.NewTextPart(content)},
 			Workdir:   workdir,
 		},
 		func(err error) tea.Msg { return runFinishedMsg{Err: err} },
@@ -2014,4 +2039,612 @@ func (a *App) setCurrentWorkdir(workdir string) {
 	}
 	a.state.CurrentWorkdir = trimmed
 
+}
+
+type providerAddFieldID int
+
+const (
+	providerAddFieldName providerAddFieldID = iota
+	providerAddFieldDriver
+	providerAddFieldBaseURL
+	providerAddFieldAPIStyle
+	providerAddFieldDeploymentMode
+	providerAddFieldAPIVersion
+	providerAddFieldAPIKey
+)
+
+func providerAddVisibleFields(driver string) []providerAddFieldID {
+	fields := []providerAddFieldID{
+		providerAddFieldName,
+		providerAddFieldDriver,
+		providerAddFieldBaseURL,
+	}
+
+	switch provider.NormalizeProviderDriver(driver) {
+	case provider.DriverOpenAICompat:
+		fields = append(fields, providerAddFieldAPIStyle)
+	case provider.DriverGemini:
+		fields = append(fields, providerAddFieldDeploymentMode)
+	case provider.DriverAnthropic:
+		fields = append(fields, providerAddFieldAPIVersion)
+	}
+
+	fields = append(fields, providerAddFieldAPIKey)
+	return fields
+}
+
+func clampProviderAddStep(form *providerAddFormState) {
+	if form == nil {
+		return
+	}
+	fields := providerAddVisibleFields(form.Driver)
+	if len(fields) == 0 {
+		form.Step = 0
+		return
+	}
+	if form.Step < 0 {
+		form.Step = 0
+	}
+	if form.Step >= len(fields) {
+		form.Step = len(fields) - 1
+	}
+}
+
+func currentProviderAddField(form *providerAddFormState) providerAddFieldID {
+	if form == nil {
+		return providerAddFieldName
+	}
+	clampProviderAddStep(form)
+	fields := providerAddVisibleFields(form.Driver)
+	if len(fields) == 0 {
+		return providerAddFieldName
+	}
+	return fields[form.Step]
+}
+
+func (a *App) startProviderAddForm() {
+	a.providerAddForm = &providerAddFormState{
+		Step:           0,
+		Name:           "",
+		Driver:         provider.DriverOpenAICompat,
+		BaseURL:        "",
+		APIStyle:       provider.OpenAICompatibleAPIStyleChatCompletions,
+		DeploymentMode: "",
+		APIVersion:     "",
+		APIKey:         "",
+		Error:          "",
+		ErrorIsHard:    false,
+		Drivers:        []string{provider.DriverOpenAICompat, provider.DriverGemini, provider.DriverAnthropic},
+	}
+	a.state.ActivePicker = pickerProviderAdd
+	a.state.StatusText = "Add new provider"
+	a.state.ExecutionError = ""
+}
+
+func (a *App) handleProviderAddFormInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if a.providerAddForm == nil || a.providerAddForm.Submitting {
+		return a, nil
+	}
+
+	typed := msg
+	prevStep := a.providerAddForm.Step
+	fields := providerAddVisibleFields(a.providerAddForm.Driver)
+	fieldCount := len(fields)
+	if fieldCount == 0 {
+		fieldCount = 1
+	}
+
+	switch {
+	case key.Matches(typed, a.keys.PrevPanel):
+		a.providerAddForm.Step = (a.providerAddForm.Step + fieldCount - 1) % fieldCount
+	case key.Matches(typed, a.keys.NextPanel):
+		a.providerAddForm.Step = (a.providerAddForm.Step + 1) % fieldCount
+	case key.Matches(typed, a.keys.Send):
+		return a, a.submitProviderAddForm()
+	case key.Matches(typed, a.keys.FocusInput):
+		a.providerAddForm = nil
+		a.state.ActivePicker = pickerNone
+		a.state.StatusText = statusReady
+	case typed.Type == tea.KeyBackspace:
+		switch currentProviderAddField(a.providerAddForm) {
+		case providerAddFieldName:
+			a.providerAddForm.Name = trimLastRune(a.providerAddForm.Name)
+		case providerAddFieldBaseURL:
+			a.providerAddForm.BaseURL = trimLastRune(a.providerAddForm.BaseURL)
+		case providerAddFieldAPIStyle:
+			a.providerAddForm.APIStyle = trimLastRune(a.providerAddForm.APIStyle)
+		case providerAddFieldDeploymentMode:
+			a.providerAddForm.DeploymentMode = trimLastRune(a.providerAddForm.DeploymentMode)
+		case providerAddFieldAPIVersion:
+			a.providerAddForm.APIVersion = trimLastRune(a.providerAddForm.APIVersion)
+		case providerAddFieldAPIKey:
+			a.providerAddForm.APIKey = trimLastRune(a.providerAddForm.APIKey)
+		}
+		return a, nil
+	case typed.Type == tea.KeyUp:
+		if currentProviderAddField(a.providerAddForm) == providerAddFieldDriver {
+			currentIdx := 0
+			for i, d := range a.providerAddForm.Drivers {
+				if d == a.providerAddForm.Driver {
+					currentIdx = i
+					break
+				}
+			}
+			currentIdx = (currentIdx - 1 + len(a.providerAddForm.Drivers)) % len(a.providerAddForm.Drivers)
+			a.providerAddForm.Driver = a.providerAddForm.Drivers[currentIdx]
+			clampProviderAddStep(a.providerAddForm)
+		}
+		return a, nil
+	case typed.Type == tea.KeyDown:
+		if currentProviderAddField(a.providerAddForm) == providerAddFieldDriver {
+			currentIdx := 0
+			for i, d := range a.providerAddForm.Drivers {
+				if d == a.providerAddForm.Driver {
+					currentIdx = i
+					break
+				}
+			}
+			currentIdx = (currentIdx + 1) % len(a.providerAddForm.Drivers)
+			a.providerAddForm.Driver = a.providerAddForm.Drivers[currentIdx]
+			clampProviderAddStep(a.providerAddForm)
+		}
+		return a, nil
+	default:
+		if len(typed.Runes) > 0 {
+			switch currentProviderAddField(a.providerAddForm) {
+			case providerAddFieldName:
+				a.providerAddForm.Name += string(typed.Runes)
+			case providerAddFieldBaseURL:
+				a.providerAddForm.BaseURL += string(typed.Runes)
+			case providerAddFieldAPIStyle:
+				a.providerAddForm.APIStyle += string(typed.Runes)
+			case providerAddFieldDeploymentMode:
+				a.providerAddForm.DeploymentMode += string(typed.Runes)
+			case providerAddFieldAPIVersion:
+				a.providerAddForm.APIVersion += string(typed.Runes)
+			case providerAddFieldAPIKey:
+				a.providerAddForm.APIKey += string(typed.Runes)
+			}
+		}
+	}
+
+	if prevStep != a.providerAddForm.Step {
+		a.providerAddForm.Error = ""
+		a.providerAddForm.ErrorIsHard = false
+	}
+
+	return a, nil
+}
+
+func (a *App) submitProviderAddForm() tea.Cmd {
+	if a.providerAddForm == nil {
+		return nil
+	}
+
+	request, validationErr := buildProviderAddRequest(*a.providerAddForm)
+	if validationErr != "" {
+		a.providerAddForm.Error = "Please update the form: " + validationErr
+		a.providerAddForm.ErrorIsHard = false
+		return nil
+	}
+
+	a.providerAddForm.Submitting = true
+	a.providerAddForm.Error = ""
+	a.providerAddForm.ErrorIsHard = false
+	a.state.StatusText = "Adding provider..."
+	a.appendActivity("provider", "Adding provider", request.Name, false)
+
+	return a.runProviderAddFlow(request)
+}
+
+type providerAddRequest struct {
+	Name           string
+	Driver         string
+	BaseURL        string
+	APIStyle       string
+	DeploymentMode string
+	APIVersion     string
+	APIKey         string
+}
+
+type providerAddResultMsg struct {
+	Name  string
+	Model string
+	Error string
+}
+
+func buildProviderAddRequest(form providerAddFormState) (providerAddRequest, string) {
+	request := providerAddRequest{
+		Name:           strings.TrimSpace(form.Name),
+		Driver:         provider.NormalizeProviderDriver(form.Driver),
+		BaseURL:        strings.TrimSpace(form.BaseURL),
+		APIStyle:       strings.TrimSpace(form.APIStyle),
+		DeploymentMode: strings.TrimSpace(form.DeploymentMode),
+		APIVersion:     strings.TrimSpace(form.APIVersion),
+		APIKey:         strings.TrimSpace(form.APIKey),
+	}
+
+	if request.Name == "" {
+		return providerAddRequest{}, "Name is required"
+	}
+	if request.Driver == "" {
+		return providerAddRequest{}, "Driver is required"
+	}
+	if request.APIKey == "" {
+		return providerAddRequest{}, "API Key is required"
+	}
+
+	switch request.Driver {
+	case provider.DriverOpenAICompat:
+		if request.BaseURL == "" {
+			request.BaseURL = config.OpenAIDefaultBaseURL
+		}
+		if request.APIStyle == "" {
+			request.APIStyle = provider.OpenAICompatibleAPIStyleChatCompletions
+		}
+		request.DeploymentMode = ""
+		request.APIVersion = ""
+	case provider.DriverGemini:
+		if request.BaseURL == "" {
+			request.BaseURL = config.GeminiDefaultBaseURL
+		}
+		request.APIStyle = ""
+		request.APIVersion = ""
+	case provider.DriverAnthropic:
+		if request.BaseURL == "" {
+			return providerAddRequest{}, "Base URL is required for anthropic provider"
+		}
+		request.APIStyle = ""
+		request.DeploymentMode = ""
+	default:
+		if request.BaseURL == "" {
+			return providerAddRequest{}, "Base URL is required for custom driver"
+		}
+		request.APIStyle = ""
+		request.DeploymentMode = ""
+		request.APIVersion = ""
+	}
+
+	return request, ""
+}
+
+func providerAddAPIKeyEnv(name string) string {
+	upper := strings.ToUpper(strings.TrimSpace(name))
+	if upper == "" {
+		return "CUSTOM_PROVIDER_API_KEY"
+	}
+
+	var b strings.Builder
+	lastUnderscore := false
+	for _, r := range upper {
+		if (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+			lastUnderscore = false
+			continue
+		}
+		if !lastUnderscore {
+			b.WriteByte('_')
+			lastUnderscore = true
+		}
+	}
+
+	normalized := strings.Trim(b.String(), "_")
+	if normalized == "" {
+		normalized = "CUSTOM_PROVIDER"
+	}
+	if normalized[0] >= '0' && normalized[0] <= '9' {
+		normalized = "P_" + normalized
+	}
+	return normalized + "_API_KEY"
+}
+
+// trimLastRune 按 UTF-8 rune 删除字符串末尾一个字符，避免按字节截断导致乱码。
+func trimLastRune(value string) string {
+	if value == "" {
+		return ""
+	}
+	_, size := utf8.DecodeLastRuneInString(value)
+	if size <= 0 || size > len(value) {
+		return ""
+	}
+	return value[:len(value)-size]
+}
+
+func sanitizeProviderAddError(err error, secrets ...string) string {
+	if err == nil {
+		return ""
+	}
+	text := strings.TrimSpace(err.Error())
+	if text == "" {
+		return "unknown error"
+	}
+
+	for _, secret := range secrets {
+		if trimmed := strings.TrimSpace(secret); trimmed != "" {
+			text = strings.ReplaceAll(text, trimmed, "[REDACTED]")
+			text = strings.ReplaceAll(text, filepath.ToSlash(trimmed), "[REDACTED]")
+		}
+	}
+	return text
+}
+
+type fileSnapshot struct {
+	Exists  bool
+	Content []byte
+}
+
+// loadFileSnapshot 读取目标文件当前快照，用于 provider add 失败时恢复原始状态。
+func loadFileSnapshot(path string) (fileSnapshot, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return fileSnapshot{}, nil
+		}
+		return fileSnapshot{}, err
+	}
+	return fileSnapshot{
+		Exists:  true,
+		Content: append([]byte(nil), data...),
+	}, nil
+}
+
+// restoreEnvFileSnapshot 将 .env 恢复到提交前快照，避免覆盖场景下丢失原有键值。
+func restoreEnvFileSnapshot(path string, snapshot fileSnapshot) error {
+	if !snapshot.Exists {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(path, snapshot.Content, 0o600)
+}
+
+// restoreProviderConfigSnapshot 恢复 provider.yaml 快照；若原先不存在则清理新建目录。
+func restoreProviderConfigSnapshot(baseDir string, providerName string, snapshot fileSnapshot) error {
+	providerDir := filepath.Join(baseDir, "providers", providerName)
+	if !snapshot.Exists {
+		return config.DeleteCustomProvider(baseDir, providerName)
+	}
+	if err := os.RemoveAll(providerDir); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(providerDir, 0o755); err != nil {
+		return err
+	}
+	providerPath := filepath.Join(providerDir, "provider.yaml")
+	return os.WriteFile(providerPath, snapshot.Content, 0o644)
+}
+
+func (a *App) runProviderAddFlow(request providerAddRequest) tea.Cmd {
+	baseDir := a.configManager.BaseDir()
+	configManager := a.configManager
+	providerSvc := a.providerSvc
+
+	return func() tea.Msg {
+		apiKeyEnv := providerAddAPIKeyEnv(request.Name)
+		previousProcessEnvValue, hadPreviousProcessEnv := os.LookupEnv(apiKeyEnv)
+		previousUserEnvValue, hadPreviousUserEnv, err := lookupProviderUserEnvVar(apiKeyEnv)
+		if err != nil {
+			return providerAddResultMsg{
+				Name:  request.Name,
+				Error: sanitizeProviderAddError(fmt.Errorf("lookup user environment variable: %w", err), request.APIKey, baseDir),
+			}
+		}
+
+		providerPath := filepath.Join(baseDir, "providers", request.Name, "provider.yaml")
+		providerSnapshot, err := loadFileSnapshot(providerPath)
+		if err != nil {
+			return providerAddResultMsg{
+				Name:  request.Name,
+				Error: sanitizeProviderAddError(fmt.Errorf("snapshot provider config: %w", err), request.APIKey, baseDir),
+			}
+		}
+
+		envPath := config.EnvFilePath(baseDir)
+		envSnapshot, err := loadFileSnapshot(envPath)
+		if err != nil {
+			return providerAddResultMsg{
+				Name:  request.Name,
+				Error: sanitizeProviderAddError(fmt.Errorf("snapshot env file: %w", err), request.APIKey, baseDir),
+			}
+		}
+
+		rollback := func(processEnvApplied bool, userEnvPersisted bool, envPersisted bool, providerSaved bool, originalErr error) error {
+			return rollbackProviderAddSideEffects(
+				baseDir,
+				request.Name,
+				apiKeyEnv,
+				processEnvApplied,
+				userEnvPersisted,
+				envPersisted,
+				hadPreviousProcessEnv,
+				previousProcessEnvValue,
+				hadPreviousUserEnv,
+				previousUserEnvValue,
+				providerSaved,
+				envPath,
+				envSnapshot,
+				providerSnapshot,
+				originalErr,
+			)
+		}
+
+		providerSaved := false
+		envPersisted := false
+		userEnvPersisted := false
+		processEnvApplied := false
+
+		if err := config.SaveCustomProvider(
+			baseDir,
+			request.Name,
+			request.Driver,
+			request.BaseURL,
+			apiKeyEnv,
+			request.APIStyle,
+			request.DeploymentMode,
+			request.APIVersion,
+		); err != nil {
+			return providerAddResultMsg{
+				Name:  request.Name,
+				Error: sanitizeProviderAddError(fmt.Errorf("save provider config: %w", err), request.APIKey, baseDir),
+			}
+		}
+		providerSaved = true
+		if err := config.PersistEnvVar(baseDir, apiKeyEnv, request.APIKey); err != nil {
+			err = rollback(processEnvApplied, userEnvPersisted, envPersisted, providerSaved, err)
+			return providerAddResultMsg{
+				Name:  request.Name,
+				Error: sanitizeProviderAddError(fmt.Errorf("persist api key: %w", err), request.APIKey, baseDir),
+			}
+		}
+		envPersisted = true
+		if err := persistProviderUserEnvVar(apiKeyEnv, request.APIKey); err != nil {
+			err = rollback(processEnvApplied, userEnvPersisted, envPersisted, providerSaved, err)
+			return providerAddResultMsg{
+				Name: request.Name,
+				Error: sanitizeProviderAddError(
+					fmt.Errorf("persist user environment variable: %w", err),
+					request.APIKey,
+					baseDir,
+				),
+			}
+		}
+		userEnvPersisted = true
+		if err := os.Setenv(apiKeyEnv, request.APIKey); err != nil {
+			err = rollback(processEnvApplied, userEnvPersisted, envPersisted, providerSaved, err)
+			return providerAddResultMsg{
+				Name:  request.Name,
+				Error: sanitizeProviderAddError(fmt.Errorf("apply api key env: %w", err), request.APIKey, baseDir),
+			}
+		}
+		processEnvApplied = true
+		if _, err := configManager.Reload(context.Background()); err != nil {
+			err = rollback(processEnvApplied, userEnvPersisted, envPersisted, providerSaved, err)
+			return providerAddResultMsg{
+				Name:  request.Name,
+				Error: sanitizeProviderAddError(fmt.Errorf("reload config snapshot: %w", err), request.APIKey, baseDir),
+			}
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), providerAddSelectTimeout)
+		defer cancel()
+
+		selection, err := providerSvc.SelectProvider(ctx, request.Name)
+		if err != nil {
+			err = rollback(processEnvApplied, userEnvPersisted, envPersisted, providerSaved, err)
+			if errors.Is(err, context.DeadlineExceeded) {
+				err = fmt.Errorf(
+					"model discovery timed out after %s; check base URL, API key, and network connectivity",
+					providerAddSelectTimeout,
+				)
+			}
+			return providerAddResultMsg{
+				Name:  request.Name,
+				Error: sanitizeProviderAddError(fmt.Errorf("select provider: %w", err), request.APIKey, baseDir),
+			}
+		}
+
+		return providerAddResultMsg{
+			Name:  request.Name,
+			Model: strings.TrimSpace(selection.ModelID),
+		}
+	}
+}
+
+// rollbackProviderAddSideEffects 回滚 provider add 过程中已落地的副作用，避免失败后残留配置与密钥。
+func rollbackProviderAddSideEffects(
+	baseDir string,
+	providerName string,
+	apiKeyEnv string,
+	processEnvApplied bool,
+	userEnvPersisted bool,
+	envPersisted bool,
+	hadPreviousEnv bool,
+	previousEnvValue string,
+	hadPreviousUserEnv bool,
+	previousUserEnvValue string,
+	providerSaved bool,
+	envPath string,
+	envSnapshot fileSnapshot,
+	providerSnapshot fileSnapshot,
+	originalErr error,
+) error {
+	rollbackErrs := make([]error, 0, 4)
+
+	if processEnvApplied {
+		if hadPreviousEnv {
+			if err := os.Setenv(apiKeyEnv, previousEnvValue); err != nil {
+				rollbackErrs = append(rollbackErrs, fmt.Errorf("restore process env: %w", err))
+			}
+		} else {
+			if err := os.Unsetenv(apiKeyEnv); err != nil {
+				rollbackErrs = append(rollbackErrs, fmt.Errorf("unset process env: %w", err))
+			}
+		}
+	}
+
+	if userEnvPersisted {
+		if hadPreviousUserEnv {
+			if err := persistProviderUserEnvVar(apiKeyEnv, previousUserEnvValue); err != nil {
+				rollbackErrs = append(rollbackErrs, fmt.Errorf("restore user env: %w", err))
+			}
+		} else {
+			if err := deleteProviderUserEnvVar(apiKeyEnv); err != nil {
+				rollbackErrs = append(rollbackErrs, fmt.Errorf("delete user env: %w", err))
+			}
+		}
+	}
+
+	if envPersisted {
+		if err := restoreEnvFileSnapshot(envPath, envSnapshot); err != nil {
+			rollbackErrs = append(rollbackErrs, fmt.Errorf("restore persisted env: %w", err))
+		}
+	}
+
+	if providerSaved {
+		if err := restoreProviderConfigSnapshot(baseDir, providerName, providerSnapshot); err != nil {
+			rollbackErrs = append(rollbackErrs, fmt.Errorf("restore provider config: %w", err))
+		}
+	}
+
+	if len(rollbackErrs) == 0 {
+		return originalErr
+	}
+	return fmt.Errorf("%w (rollback failed: %v)", originalErr, errors.Join(rollbackErrs...))
+}
+
+func (a *App) handleProviderAddResultMsg(msg providerAddResultMsg) {
+	if a.providerAddForm == nil {
+		return
+	}
+
+	if msg.Error != "" {
+		a.providerAddForm.Error = msg.Error
+		a.providerAddForm.ErrorIsHard = true
+		a.providerAddForm.Submitting = false
+		a.state.ExecutionError = msg.Error
+		a.state.StatusText = "Failed to add provider"
+		a.appendActivity("provider", "Failed to add provider", msg.Error, true)
+		return
+	}
+
+	a.providerAddForm = nil
+	a.state.ActivePicker = pickerNone
+	a.state.ExecutionError = ""
+	a.state.StatusText = "Provider added: " + msg.Name
+	a.state.CurrentProvider = msg.Name
+	if msg.Model != "" {
+		a.state.CurrentModel = msg.Model
+	}
+	a.appendActivity("provider", "Provider added", msg.Name, false)
+
+	if err := a.refreshProviderPicker(); err != nil {
+		a.appendActivity("system", "Failed to refresh providers", err.Error(), true)
+	}
+	if err := a.refreshModelPicker(); err != nil {
+		a.appendActivity("system", "Failed to refresh models", err.Error(), true)
+	}
 }

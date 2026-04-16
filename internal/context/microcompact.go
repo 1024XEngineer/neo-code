@@ -58,9 +58,8 @@ func microCompactMessagesWithPolicies(messages []providertypes.Message, policies
 
 		for messageIndex := span.Start + 1; messageIndex < span.End; messageIndex++ {
 			if shouldClearToolMessage(cloned[messageIndex], compactableIDs) {
-				cloned[messageIndex].Content = summarizeOrClear(
-					cloned[messageIndex], toolNames, summarizers,
-				)
+				summary := summarizeOrClear(cloned[messageIndex], toolNames, summarizers)
+				cloned[messageIndex].Parts = []providertypes.ContentPart{providertypes.NewTextPart(summary)}
 			}
 		}
 	}
@@ -154,7 +153,7 @@ func shouldClearToolMessage(message providertypes.Message, compactableIDs map[st
 		return false
 	}
 
-	content := strings.TrimSpace(message.Content)
+	content := strings.TrimSpace(renderDisplayParts(message.Parts))
 	return content != "" && content != microCompactClearedMessage
 }
 
@@ -178,7 +177,8 @@ func summarizeOrClear(
 		return microCompactClearedMessage
 	}
 
-	summary := summarizer(message.Content, message.ToolMetadata, message.IsError)
+	content := renderDisplayParts(message.Parts)
+	summary := summarizer(content, message.ToolMetadata, message.IsError)
 	if summary == "" {
 		return microCompactClearedMessage
 	}

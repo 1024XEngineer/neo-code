@@ -40,8 +40,8 @@ func (a *Accumulator) BuildMessage() (providertypes.Message, error) {
 	sort.Ints(ordered)
 
 	message := providertypes.Message{
-		Role:    providertypes.RoleAssistant,
-		Content: a.content.String(),
+		Role:  providertypes.RoleAssistant,
+		Parts: []providertypes.ContentPart{providertypes.NewTextPart(a.content.String())},
 	}
 	for _, index := range ordered {
 		call := a.toolCalls[index]

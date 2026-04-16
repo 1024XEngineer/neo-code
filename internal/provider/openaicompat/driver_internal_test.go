@@ -121,7 +121,7 @@ func TestFetchModelsAndGenerateExtraBranches(t *testing.T) {
 		t.Fatalf("New() error = %v", err)
 	}
 	err = p.Generate(context.Background(), providertypes.GenerateRequest{
-		Messages: []providertypes.Message{{Role: providertypes.RoleUser, Content: "hello"}},
+		Messages: []providertypes.Message{{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")}}},
 	}, nil)
 	if err == nil || !strings.Contains(err.Error(), `unsupported api_style "custom_style"`) {
 		t.Fatalf("expected unsupported api_style error, got %v", err)

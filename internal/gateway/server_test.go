@@ -199,6 +199,119 @@ func TestServerHandleConnectionRejectsOversizedFrame(t *testing.T) {
 	}
 }
 
+func TestServerHandleConnectionRelaysRuntimeEventAfterBindStream(t *testing.T) {
+	t.Parallel()
+
+	eventCh := make(chan RuntimeEvent, 1)
+	relay := NewStreamRelay(StreamRelayOptions{
+		Logger: log.New(io.Discard, "", 0),
+	})
+	server := &Server{
+		logger: log.New(io.Discard, "", 0),
+		relay:  relay,
+	}
+	relay.Start(context.Background(), &runtimePortEventStub{events: eventCh})
+
+	serverConn, clientConn := net.Pipe()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		server.handleConnection(context.Background(), serverConn, nil)
+	}()
+
+	encoder := json.NewEncoder(clientConn)
+	decoder := json.NewDecoder(clientConn)
+	if err := encoder.Encode(protocol.JSONRPCRequest{
+		JSONRPC: protocol.JSONRPCVersion,
+		ID:      json.RawMessage(`"bind-1"`),
+		Method:  protocol.MethodGatewayBindStream,
+		Params: json.RawMessage(`{
+			"session_id":"session-1",
+			"run_id":"run-1",
+			"channel":"ipc"
+		}`),
+	}); err != nil {
+		t.Fatalf("encode bind request: %v", err)
+	}
+
+	var bindResponse protocol.JSONRPCResponse
+	if err := decoder.Decode(&bindResponse); err != nil {
+		t.Fatalf("decode bind response: %v", err)
+	}
+	if bindResponse.Error != nil {
+		t.Fatalf("unexpected bind rpc error: %+v", bindResponse.Error)
+	}
+
+	eventCh <- RuntimeEvent{
+		Type:      RuntimeEventTypeRunProgress,
+		SessionID: "session-1",
+		RunID:     "run-1",
+		Payload: map[string]string{
+			"chunk": "hello",
+		},
+	}
+
+	type notificationPayload struct {
+		JSONRPC string          `json:"jsonrpc"`
+		Method  string          `json:"method"`
+		Params  json.RawMessage `json:"params"`
+	}
+	var notification notificationPayload
+	if err := decoder.Decode(&notification); err != nil {
+		t.Fatalf("decode notification: %v", err)
+	}
+	if notification.Method != protocol.MethodGatewayEvent {
+		t.Fatalf("notification method = %q, want %q", notification.Method, protocol.MethodGatewayEvent)
+	}
+
+	var eventFrame MessageFrame
+	if err := json.Unmarshal(notification.Params, &eventFrame); err != nil {
+		t.Fatalf("decode notification params frame: %v", err)
+	}
+	if eventFrame.SessionID != "session-1" || eventFrame.RunID != "run-1" {
+		t.Fatalf("event frame session/run mismatch: %#v", eventFrame)
+	}
+
+	_ = clientConn.Close()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("handleConnection did not exit")
+	}
+}
+
+type runtimePortEventStub struct {
+	events <-chan RuntimeEvent
+}
+
+func (s *runtimePortEventStub) Run(_ context.Context, _ RunInput) error {
+	return nil
+}
+
+func (s *runtimePortEventStub) Compact(_ context.Context, _ CompactInput) (CompactResult, error) {
+	return CompactResult{}, nil
+}
+
+func (s *runtimePortEventStub) ResolvePermission(_ context.Context, _ PermissionResolutionInput) error {
+	return nil
+}
+
+func (s *runtimePortEventStub) CancelActiveRun() bool {
+	return false
+}
+
+func (s *runtimePortEventStub) Events() <-chan RuntimeEvent {
+	return s.events
+}
+
+func (s *runtimePortEventStub) ListSessions(_ context.Context) ([]SessionSummary, error) {
+	return nil, nil
+}
+
+func (s *runtimePortEventStub) LoadSession(_ context.Context, _ string) (Session, error) {
+	return Session{}, nil
+}
+
 func decodeJSONRPCResultFrame(response protocol.JSONRPCResponse) (MessageFrame, error) {
 	if response.Result == nil {
 		return MessageFrame{}, errors.New("rpc result is nil")

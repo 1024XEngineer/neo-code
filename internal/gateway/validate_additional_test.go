@@ -70,6 +70,28 @@ func TestValidateFrameCancelAndListSessions(t *testing.T) {
 	if listErr != nil {
 		t.Fatalf("list_sessions request should be valid, got %v", listErr)
 	}
+
+	bindErr := ValidateFrame(MessageFrame{
+		Type:   FrameTypeRequest,
+		Action: FrameActionBindStream,
+	})
+	if bindErr == nil {
+		t.Fatal("bind_stream missing payload should be invalid")
+	}
+	if bindErr.Code != ErrorCodeMissingRequiredField.String() {
+		t.Fatalf("error code = %q, want %q", bindErr.Code, ErrorCodeMissingRequiredField.String())
+	}
+
+	bindValidErr := ValidateFrame(MessageFrame{
+		Type:   FrameTypeRequest,
+		Action: FrameActionBindStream,
+		Payload: map[string]string{
+			"session_id": "sess-1",
+		},
+	})
+	if bindValidErr != nil {
+		t.Fatalf("bind_stream request should be valid, got %v", bindValidErr)
+	}
 }
 
 func TestValidateResolvePermissionInvalidPayloadType(t *testing.T) {

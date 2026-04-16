@@ -2,8 +2,8 @@
 set -e
 
 # 配置仓库信息
-REPO="pionxe/neo-code" 
-PROJECT_NAME="neo-code"
+REPO="1024XEngineer/neo-code" 
+PROJECT_NAME="neocode"
 BINARY_NAME="neocode"
 
 echo "🚀 开始安装 $BINARY_NAME..."

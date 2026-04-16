@@ -31,7 +31,7 @@ func countMessageChars(messages []providertypes.Message) int {
 	total := 0
 	for _, message := range messages {
 		total += utf8.RuneCountInString(message.Role)
-		total += utf8.RuneCountInString(message.Content)
+		total += utf8.RuneCountInString(renderTranscriptParts(message.Parts))
 		total += utf8.RuneCountInString(message.ToolCallID)
 		for _, call := range message.ToolCalls {
 			total += utf8.RuneCountInString(call.ID)

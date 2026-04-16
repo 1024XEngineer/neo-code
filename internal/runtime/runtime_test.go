@@ -231,9 +231,9 @@ func (p *scriptedProvider) Generate(ctx context.Context, req providertypes.Gener
 				return ctx.Err()
 			}
 		}
-		if response.Message.Content != "" {
+		if renderPartsForTest(response.Message.Parts) != "" {
 			select {
-			case events <- providertypes.NewTextDeltaStreamEvent(response.Message.Content):
+			case events <- providertypes.NewTextDeltaStreamEvent(renderPartsForTest(response.Message.Parts)):
 			case <-ctx.Done():
 				return ctx.Err()
 			}
@@ -448,7 +448,7 @@ func TestServiceRun(t *testing.T) {
 	}{
 		{
 			name:  "normal dialogue exits after final assistant reply",
-			input: UserInput{RunID: "run-normal", Content: "hello"},
+			input: UserInput{RunID: "run-normal", Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")}},
 			providerStreams: [][]providertypes.StreamEvent{
 				{
 					providertypes.NewTextDeltaStreamEvent("plain "),
@@ -460,7 +460,7 @@ func TestServiceRun(t *testing.T) {
 					return agentcontext.BuildResult{
 						SystemPrompt: "custom system prompt",
 						Messages: []providertypes.Message{
-							{Role: "user", Content: "trimmed history"},
+							{Role: "user", Parts: []providertypes.ContentPart{providertypes.NewTextPart("trimmed history")}},
 						},
 					}, nil
 				},
@@ -480,14 +480,14 @@ func TestServiceRun(t *testing.T) {
 				if scripted.requests[0].SystemPrompt != "custom system prompt" {
 					t.Fatalf("expected system prompt from context builder, got %q", scripted.requests[0].SystemPrompt)
 				}
-				if len(scripted.requests[0].Messages) != 1 || scripted.requests[0].Messages[0].Content != "trimmed history" {
+				if len(scripted.requests[0].Messages) != 1 || renderPartsForTest(scripted.requests[0].Messages[0].Parts) != "trimmed history" {
 					t.Fatalf("expected messages from context builder, got %+v", scripted.requests[0].Messages)
 				}
 			},
 		},
 		{
 			name:  "tool call triggers execute and follow-up provider round",
-			input: UserInput{RunID: "run-tool", Content: "edit file"},
+			input: UserInput{RunID: "run-tool", Parts: []providertypes.ContentPart{providertypes.NewTextPart("edit file")}},
 			// 第一轮：工具调用事件流（tool_call_start + tool_call_delta）
 			// 第二轮：普通文本回复
 			providerStreams: [][]providertypes.StreamEvent{
@@ -534,10 +534,10 @@ func TestServiceRun(t *testing.T) {
 				for _, message := range second.Messages {
 					if message.Role == "tool" &&
 						message.ToolCallID == "call-1" &&
-						strings.Contains(message.Content, "tool result") &&
-						strings.Contains(message.Content, "tool: filesystem_edit") &&
-						strings.Contains(message.Content, "status: ok") &&
-						strings.Contains(message.Content, "content:\ntool output") {
+						strings.Contains(renderPartsForTest(message.Parts), "tool result") &&
+						strings.Contains(renderPartsForTest(message.Parts), "tool: filesystem_edit") &&
+						strings.Contains(renderPartsForTest(message.Parts), "status: ok") &&
+						strings.Contains(renderPartsForTest(message.Parts), "content:\ntool output") {
 						foundToolResult = true
 						break
 					}
@@ -547,7 +547,7 @@ func TestServiceRun(t *testing.T) {
 				}
 
 				session := onlySession(t, store)
-				if session.Messages[2].Role != providertypes.RoleTool || session.Messages[2].Content != "tool output" {
+				if session.Messages[2].Role != providertypes.RoleTool || renderPartsForTest(session.Messages[2].Parts) != "tool output" {
 					t.Fatalf("expected persisted tool message to keep raw content, got %+v", session.Messages[2])
 				}
 				if session.Messages[2].ToolMetadata["tool_name"] != "filesystem_edit" {
@@ -557,7 +557,7 @@ func TestServiceRun(t *testing.T) {
 		},
 		{
 			name:  "metadata-only tool result is projected on follow-up provider round",
-			input: UserInput{RunID: "run-tool-metadata-only", Content: "inspect file"},
+			input: UserInput{RunID: "run-tool-metadata-only", Parts: []providertypes.ContentPart{providertypes.NewTextPart("inspect file")}},
 			providerStreams: [][]providertypes.StreamEvent{
 				{
 					providertypes.NewToolCallStartStreamEvent(0, "call-1", "filesystem_read_file"),
@@ -601,12 +601,12 @@ func TestServiceRun(t *testing.T) {
 				for _, message := range second.Messages {
 					if message.Role == providertypes.RoleTool &&
 						message.ToolCallID == "call-1" &&
-						strings.Contains(message.Content, "tool result") &&
-						strings.Contains(message.Content, "tool: filesystem_read_file") &&
-						strings.Contains(message.Content, "meta.path: README.md") {
+						strings.Contains(renderPartsForTest(message.Parts), "tool result") &&
+						strings.Contains(renderPartsForTest(message.Parts), "tool: filesystem_read_file") &&
+						strings.Contains(renderPartsForTest(message.Parts), "meta.path: README.md") {
 						foundToolResult = true
-						if strings.Contains(message.Content, "content:\n") {
-							t.Fatalf("expected metadata-only projection to omit content section, got %q", message.Content)
+						if strings.Contains(renderPartsForTest(message.Parts), "content:\n") {
+							t.Fatalf("expected metadata-only projection to omit content section, got %q", renderPartsForTest(message.Parts))
 						}
 						break
 					}
@@ -616,7 +616,7 @@ func TestServiceRun(t *testing.T) {
 				}
 
 				session := onlySession(t, store)
-				if session.Messages[2].Role != providertypes.RoleTool || session.Messages[2].Content != "" {
+				if session.Messages[2].Role != providertypes.RoleTool || renderPartsForTest(session.Messages[2].Parts) != "" {
 					t.Fatalf("expected persisted tool message to keep empty raw content, got %+v", session.Messages[2])
 				}
 				if session.Messages[2].ToolMetadata["tool_name"] != "filesystem_read_file" ||
@@ -704,7 +704,7 @@ func TestServiceRunSchedulesMemoExtractionAfterFinalReply(t *testing.T) {
 	memoExtractor := &stubScheduledMemoExtractor{}
 	service.SetMemoExtractor(memoExtractor)
 
-	if err := service.Run(context.Background(), UserInput{RunID: "run-memo-schedule", Content: "hello"}); err != nil {
+	if err := service.Run(context.Background(), UserInput{RunID: "run-memo-schedule", Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")}}); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
 	if len(memoExtractor.calls) != 1 {
@@ -741,7 +741,7 @@ func TestServiceRunSkipsAutoMemoExtractionAfterRememberTool(t *testing.T) {
 	memoExtractor := &stubScheduledMemoExtractor{}
 	service.SetMemoExtractor(memoExtractor)
 
-	if err := service.Run(context.Background(), UserInput{RunID: "run-remember-skip", Content: "remember this"}); err != nil {
+	if err := service.Run(context.Background(), UserInput{RunID: "run-remember-skip", Parts: []providertypes.ContentPart{providertypes.NewTextPart("remember this")}}); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
 	if len(memoExtractor.calls) != 0 {
@@ -782,7 +782,7 @@ func TestServiceRunTrustsCallNameForRememberDetection(t *testing.T) {
 	memoExtractor := &stubScheduledMemoExtractor{}
 	service.SetMemoExtractor(memoExtractor)
 
-	if err := service.Run(context.Background(), UserInput{RunID: "run-forged-remember", Content: "edit file"}); err != nil {
+	if err := service.Run(context.Background(), UserInput{RunID: "run-forged-remember", Parts: []providertypes.ContentPart{providertypes.NewTextPart("edit file")}}); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
 	if len(memoExtractor.calls) != 1 {
@@ -816,7 +816,7 @@ func TestServiceRunSchedulesMemoExtractionOnlyAfterFinalCompletion(t *testing.T)
 	memoExtractor := &stubScheduledMemoExtractor{}
 	service.SetMemoExtractor(memoExtractor)
 
-	if err := service.Run(context.Background(), UserInput{RunID: "run-final-only", Content: "edit file"}); err != nil {
+	if err := service.Run(context.Background(), UserInput{RunID: "run-final-only", Parts: []providertypes.ContentPart{providertypes.NewTextPart("edit file")}}); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
 	if len(memoExtractor.calls) != 1 {
@@ -848,7 +848,7 @@ func TestServiceRunMergesLateToolCallMetadata(t *testing.T) {
 	}
 
 	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: scripted}, &stubContextBuilder{})
-	if err := service.Run(context.Background(), UserInput{RunID: "run-late-tool-metadata", Content: "edit"}); err != nil {
+	if err := service.Run(context.Background(), UserInput{RunID: "run-late-tool-metadata", Parts: []providertypes.ContentPart{providertypes.NewTextPart("edit")}}); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
 
@@ -899,7 +899,7 @@ func TestServiceRunRejectsToolCallWithoutID(t *testing.T) {
 	}
 
 	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: scripted}, &stubContextBuilder{})
-	err := service.Run(context.Background(), UserInput{RunID: "run-missing-tool-id", Content: "edit"})
+	err := service.Run(context.Background(), UserInput{RunID: "run-missing-tool-id", Parts: []providertypes.ContentPart{providertypes.NewTextPart("edit")}})
 	if err == nil || !containsError(err, "without id") {
 		t.Fatalf("expected missing tool id error, got %v", err)
 	}
@@ -925,7 +925,7 @@ func TestServiceRunRejectsMalformedProviderStreamEvent(t *testing.T) {
 	}
 
 	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: scripted}, nil)
-	err := service.Run(context.Background(), UserInput{RunID: "run-malformed-stream-event", Content: "hello"})
+	err := service.Run(context.Background(), UserInput{RunID: "run-malformed-stream-event", Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")}})
 	if err == nil || !containsError(err, "text_delta event payload is nil") {
 		t.Fatalf("expected malformed stream event error, got %v", err)
 	}
@@ -951,7 +951,7 @@ func TestServiceRunRejectsProviderCompletionWithoutMessageDone(t *testing.T) {
 	}
 
 	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: scripted}, &stubContextBuilder{})
-	err := service.Run(context.Background(), UserInput{RunID: "run-missing-message-done", Content: "hello"})
+	err := service.Run(context.Background(), UserInput{RunID: "run-missing-message-done", Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")}})
 	if err == nil || !containsError(err, "without message_done") {
 		t.Fatalf("expected missing message_done error, got %v", err)
 	}
@@ -985,7 +985,7 @@ func TestServiceRunMalformedProviderStreamEventDoesNotDeadlock(t *testing.T) {
 	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: scripted}, nil)
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- service.Run(context.Background(), UserInput{RunID: "run-malformed-stream-no-deadlock", Content: "hello"})
+		errCh <- service.Run(context.Background(), UserInput{RunID: "run-malformed-stream-no-deadlock", Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")}})
 	}()
 
 	select {
@@ -1037,7 +1037,7 @@ func TestServiceRunDelegatesToContextBuilder(t *testing.T) {
 			return agentcontext.BuildResult{
 				SystemPrompt: "delegated prompt",
 				Messages: []providertypes.Message{
-					{Role: "user", Content: "delegated message"},
+					{Role: "user", Parts: []providertypes.ContentPart{providertypes.NewTextPart("delegated message")}},
 				},
 			}, nil
 		},
@@ -1050,7 +1050,7 @@ func TestServiceRunDelegatesToContextBuilder(t *testing.T) {
 	}
 
 	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: scripted}, builder)
-	input := UserInput{SessionID: session.ID, RunID: "run-context-builder", Content: "hello"}
+	input := UserInput{SessionID: session.ID, RunID: "run-context-builder", Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")}}
 	if err := service.Run(context.Background(), input); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -1076,7 +1076,7 @@ func TestServiceRunDelegatesToContextBuilder(t *testing.T) {
 	if builder.lastInput.TaskState.Goal != "Finish task state rollout" {
 		t.Fatalf("expected session task state to be forwarded to builder, got %+v", builder.lastInput.TaskState)
 	}
-	if len(builder.lastInput.Messages) != 1 || builder.lastInput.Messages[0].Content != "hello" {
+	if len(builder.lastInput.Messages) != 1 || renderPartsForTest(builder.lastInput.Messages[0].Parts) != "hello" {
 		t.Fatalf("expected persisted session messages to be forwarded, got %+v", builder.lastInput.Messages)
 	}
 	if len(scripted.requests) != 1 {
@@ -1085,7 +1085,7 @@ func TestServiceRunDelegatesToContextBuilder(t *testing.T) {
 	if scripted.requests[0].SystemPrompt != "delegated prompt" {
 		t.Fatalf("expected delegated prompt, got %q", scripted.requests[0].SystemPrompt)
 	}
-	if len(scripted.requests[0].Messages) != 1 || scripted.requests[0].Messages[0].Content != "delegated message" {
+	if len(scripted.requests[0].Messages) != 1 || renderPartsForTest(scripted.requests[0].Messages[0].Parts) != "delegated message" {
 		t.Fatalf("expected delegated messages, got %+v", scripted.requests[0].Messages)
 	}
 }
@@ -1116,13 +1116,13 @@ func TestServiceRunCanDisableMicroCompactViaConfig(t *testing.T) {
 
 	scripted := &scriptedProvider{
 		responses: []scriptedResponse{{
-			Message:      providertypes.Message{Role: providertypes.RoleAssistant, Content: "done"},
+			Message:      providertypes.Message{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("done")}},
 			FinishReason: "stop",
 		}},
 	}
 
 	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: scripted}, builder)
-	if err := service.Run(context.Background(), UserInput{RunID: "run-disable-micro-compact", Content: "hello"}); err != nil {
+	if err := service.Run(context.Background(), UserInput{RunID: "run-disable-micro-compact", Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")}}); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
 
@@ -1146,7 +1146,7 @@ func TestServiceRunPersistsSessionProviderAndModel(t *testing.T) {
 	}
 
 	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: scripted}, nil)
-	if err := service.Run(context.Background(), UserInput{RunID: "run-session-provider-model", Content: "hello"}); err != nil {
+	if err := service.Run(context.Background(), UserInput{RunID: "run-session-provider-model", Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")}}); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
 
@@ -1173,34 +1173,34 @@ func TestServiceRunDefaultBuilderUsesToolManagerMicroCompactPolicies(t *testing.
 	session := agentsession.New("preserve history")
 	session.ID = "session-preserve-history"
 	session.Messages = []providertypes.Message{
-		{Role: providertypes.RoleUser, Content: "older user"},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("older user")}},
 		{
 			Role: providertypes.RoleAssistant,
 			ToolCalls: []providertypes.ToolCall{
 				{ID: "call-1", Name: "preserve_tool", Arguments: "{}"},
 			},
 		},
-		{Role: providertypes.RoleTool, ToolCallID: "call-1", Content: "preserved result"},
+		{Role: providertypes.RoleTool, ToolCallID: "call-1", Parts: []providertypes.ContentPart{providertypes.NewTextPart("preserved result")}},
 		{
 			Role: providertypes.RoleAssistant,
 			ToolCalls: []providertypes.ToolCall{
 				{ID: "call-2", Name: "bash", Arguments: "{}"},
 			},
 		},
-		{Role: providertypes.RoleTool, ToolCallID: "call-2", Content: "recent bash result"},
+		{Role: providertypes.RoleTool, ToolCallID: "call-2", Parts: []providertypes.ContentPart{providertypes.NewTextPart("recent bash result")}},
 		{
 			Role: providertypes.RoleAssistant,
 			ToolCalls: []providertypes.ToolCall{
 				{ID: "call-3", Name: "webfetch", Arguments: "{}"},
 			},
 		},
-		{Role: providertypes.RoleTool, ToolCallID: "call-3", Content: "latest webfetch result"},
+		{Role: providertypes.RoleTool, ToolCallID: "call-3", Parts: []providertypes.ContentPart{providertypes.NewTextPart("latest webfetch result")}},
 	}
 	store.sessions[session.ID] = cloneSession(session)
 
 	scripted := &scriptedProvider{
 		responses: []scriptedResponse{{
-			Message:      providertypes.Message{Role: providertypes.RoleAssistant, Content: "done"},
+			Message:      providertypes.Message{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("done")}},
 			FinishReason: "stop",
 		}},
 	}
@@ -1209,7 +1209,7 @@ func TestServiceRunDefaultBuilderUsesToolManagerMicroCompactPolicies(t *testing.
 	if err := service.Run(context.Background(), UserInput{
 		SessionID: session.ID,
 		RunID:     "run-preserve-history-policy",
-		Content:   "latest explicit instruction",
+		Parts:     []providertypes.ContentPart{providertypes.NewTextPart("latest explicit instruction")},
 	}); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -1217,7 +1217,7 @@ func TestServiceRunDefaultBuilderUsesToolManagerMicroCompactPolicies(t *testing.
 	if len(scripted.requests) != 1 {
 		t.Fatalf("expected 1 provider request, got %d", len(scripted.requests))
 	}
-	if got := scripted.requests[0].Messages[2].Content; got != "preserved result" {
+	if got := renderPartsForTest(scripted.requests[0].Messages[2].Parts); got != "preserved result" {
 		t.Fatalf("expected preserved tool result to remain visible, got %q", got)
 	}
 }
@@ -1236,34 +1236,34 @@ func TestServiceRunDefaultBuilderUsesGenericToolManagerMicroCompactPolicies(t *t
 	session := agentsession.New("preserve history by manager")
 	session.ID = "session-preserve-history-manager"
 	session.Messages = []providertypes.Message{
-		{Role: providertypes.RoleUser, Content: "older user"},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("older user")}},
 		{
 			Role: providertypes.RoleAssistant,
 			ToolCalls: []providertypes.ToolCall{
 				{ID: "call-1", Name: "preserve_tool", Arguments: "{}"},
 			},
 		},
-		{Role: providertypes.RoleTool, ToolCallID: "call-1", Content: "preserved result"},
+		{Role: providertypes.RoleTool, ToolCallID: "call-1", Parts: []providertypes.ContentPart{providertypes.NewTextPart("preserved result")}},
 		{
 			Role: providertypes.RoleAssistant,
 			ToolCalls: []providertypes.ToolCall{
 				{ID: "call-2", Name: "bash", Arguments: "{}"},
 			},
 		},
-		{Role: providertypes.RoleTool, ToolCallID: "call-2", Content: "recent bash result"},
+		{Role: providertypes.RoleTool, ToolCallID: "call-2", Parts: []providertypes.ContentPart{providertypes.NewTextPart("recent bash result")}},
 		{
 			Role: providertypes.RoleAssistant,
 			ToolCalls: []providertypes.ToolCall{
 				{ID: "call-3", Name: "webfetch", Arguments: "{}"},
 			},
 		},
-		{Role: providertypes.RoleTool, ToolCallID: "call-3", Content: "latest webfetch result"},
+		{Role: providertypes.RoleTool, ToolCallID: "call-3", Parts: []providertypes.ContentPart{providertypes.NewTextPart("latest webfetch result")}},
 	}
 	store.sessions[session.ID] = cloneSession(session)
 
 	scripted := &scriptedProvider{
 		responses: []scriptedResponse{{
-			Message:      providertypes.Message{Role: providertypes.RoleAssistant, Content: "done"},
+			Message:      providertypes.Message{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("done")}},
 			FinishReason: "stop",
 		}},
 	}
@@ -1272,7 +1272,7 @@ func TestServiceRunDefaultBuilderUsesGenericToolManagerMicroCompactPolicies(t *t
 	if err := service.Run(context.Background(), UserInput{
 		SessionID: session.ID,
 		RunID:     "run-preserve-history-generic-manager",
-		Content:   "latest explicit instruction",
+		Parts:     []providertypes.ContentPart{providertypes.NewTextPart("latest explicit instruction")},
 	}); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -1280,7 +1280,7 @@ func TestServiceRunDefaultBuilderUsesGenericToolManagerMicroCompactPolicies(t *t
 	if len(scripted.requests) != 1 {
 		t.Fatalf("expected 1 provider request, got %d", len(scripted.requests))
 	}
-	if got := scripted.requests[0].Messages[2].Content; got != "preserved result" {
+	if got := renderPartsForTest(scripted.requests[0].Messages[2].Parts); got != "preserved result" {
 		t.Fatalf("expected preserved tool result to remain visible, got %q", got)
 	}
 }
@@ -1307,7 +1307,7 @@ func TestServiceRunFailurePreservesExistingSessionProviderAndModel(t *testing.T)
 	session.Provider = config.OpenAIName
 	session.Model = "openai-original-model"
 	session.Messages = []providertypes.Message{
-		{Role: providertypes.RoleUser, Content: "earlier"},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("earlier")}},
 	}
 	store.sessions[session.ID] = cloneSession(session)
 
@@ -1320,7 +1320,7 @@ func TestServiceRunFailurePreservesExistingSessionProviderAndModel(t *testing.T)
 	err := service.Run(context.Background(), UserInput{
 		SessionID: session.ID,
 		RunID:     "run-preserve-metadata",
-		Content:   "continue",
+		Parts:     []providertypes.ContentPart{providertypes.NewTextPart("continue")},
 	})
 	if err == nil || !containsError(err, "factory failed") {
 		t.Fatalf("expected factory failure, got %v", err)
@@ -1336,7 +1336,7 @@ func TestServiceRunFailurePreservesExistingSessionProviderAndModel(t *testing.T)
 	if saved.Model != "openai-original-model" {
 		t.Fatalf("expected model to remain %q, got %q", "openai-original-model", saved.Model)
 	}
-	if len(saved.Messages) != 2 || saved.Messages[1].Content != "continue" {
+	if len(saved.Messages) != 2 || renderPartsForTest(saved.Messages[1].Parts) != "continue" {
 		t.Fatalf("expected failed run to append only user message, got %+v", saved.Messages)
 	}
 }
@@ -1370,7 +1370,7 @@ func TestServiceRunUsesToolManager(t *testing.T) {
 	}
 
 	service := NewWithFactory(manager, toolManager, store, &scriptedProviderFactory{provider: scripted}, &stubContextBuilder{})
-	if err := service.Run(context.Background(), UserInput{RunID: "run-tool-manager", Content: "edit file"}); err != nil {
+	if err := service.Run(context.Background(), UserInput{RunID: "run-tool-manager", Parts: []providertypes.ContentPart{providertypes.NewTextPart("edit file")}}); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
 
@@ -1391,7 +1391,7 @@ func TestServiceRunUsesToolManager(t *testing.T) {
 	foundToolMessage := false
 	for _, message := range session.Messages {
 		if message.Role == providertypes.RoleTool &&
-			message.Content == "tool manager output" &&
+			renderPartsForTest(message.Parts) == "tool manager output" &&
 			message.ToolMetadata["tool_name"] == "filesystem_edit" &&
 			message.ToolMetadata["path"] == "main.go" {
 			foundToolMessage = true
@@ -1445,7 +1445,7 @@ func TestServiceRunWaitsForPermissionResolutionAndContinues(t *testing.T) {
 	service := NewWithFactory(manager, toolManager, store, &scriptedProviderFactory{provider: scripted}, nil)
 	runErrCh := make(chan error, 1)
 	go func() {
-		runErrCh <- service.Run(context.Background(), UserInput{RunID: "run-permission-ask", Content: "fetch private"})
+		runErrCh <- service.Run(context.Background(), UserInput{RunID: "run-permission-ask", Parts: []providertypes.ContentPart{providertypes.NewTextPart("fetch private")}})
 	}()
 
 	var requestPayload PermissionRequestPayload
@@ -1559,7 +1559,7 @@ func TestServiceRunEmitsPermissionResolvedForDeny(t *testing.T) {
 	}
 
 	service := NewWithFactory(manager, toolManager, store, &scriptedProviderFactory{provider: scripted}, nil)
-	if err := service.Run(context.Background(), UserInput{RunID: "run-permission-deny", Content: "run bash"}); err != nil {
+	if err := service.Run(context.Background(), UserInput{RunID: "run-permission-deny", Parts: []providertypes.ContentPart{providertypes.NewTextPart("run bash")}}); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
 	if tool.callCount != 0 {
@@ -1647,7 +1647,7 @@ func TestServiceRunEmitsRememberScopeWhenSessionRejectMemoryHits(t *testing.T) {
 				FinishReason: "tool_calls",
 			},
 			{
-				Message:      providertypes.Message{Role: "assistant", Content: "done"},
+				Message:      providertypes.Message{Role: "assistant", Parts: []providertypes.ContentPart{providertypes.NewTextPart("done")}},
 				FinishReason: "stop",
 			},
 		},
@@ -1657,7 +1657,7 @@ func TestServiceRunEmitsRememberScopeWhenSessionRejectMemoryHits(t *testing.T) {
 	if err := service.Run(context.Background(), UserInput{
 		SessionID: "session-memory-reject",
 		RunID:     "run-memory-reject",
-		Content:   "fetch private",
+		Parts:     []providertypes.ContentPart{providertypes.NewTextPart("fetch private")},
 	}); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -1695,7 +1695,7 @@ func TestServiceRunHandlesToolManagerSpecError(t *testing.T) {
 	service := NewWithFactory(manager, toolManager, store, &scriptedProviderFactory{
 		provider: &scriptedProvider{},
 	}, nil)
-	input := UserInput{RunID: "run-tool-spec-error", Content: "hello"}
+	input := UserInput{RunID: "run-tool-spec-error", Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")}}
 	err := service.Run(context.Background(), input)
 	if err == nil || !containsError(err, "tool specs unavailable") {
 		t.Fatalf("expected tool spec error, got %v", err)
@@ -1723,7 +1723,7 @@ func TestServiceNewWithFactoryDefaultsToolManager(t *testing.T) {
 		},
 	}, nil)
 
-	if err := service.Run(context.Background(), UserInput{RunID: "run-default-tool-manager", Content: "hello"}); err != nil {
+	if err := service.Run(context.Background(), UserInput{RunID: "run-default-tool-manager", Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")}}); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
 
@@ -1745,7 +1745,8 @@ func TestServiceRunErrorPaths(t *testing.T) {
 	}{
 		{
 			name:      "empty input returns validation error",
-			input:     UserInput{Content: "   "},
+			input:     UserInput{Parts: []providertypes.ContentPart{providertypes.NewTextPart("   ")}},
+			provider:  &scriptedProvider{},
 			expectErr: "input content is empty",
 			assert: func(t *testing.T, store *memoryStore, provider *scriptedProvider, tool *stubTool) {
 				t.Helper()
@@ -1756,7 +1757,7 @@ func TestServiceRunErrorPaths(t *testing.T) {
 		},
 		{
 			name:  "repeated tool cycles continue until assistant completion",
-			input: UserInput{RunID: "run-many-tool-cycles", Content: "loop"},
+			input: UserInput{RunID: "run-many-tool-cycles", Parts: []providertypes.ContentPart{providertypes.NewTextPart("loop")}},
 			provider: func() *scriptedProvider {
 				responses := make([]scriptedResponse, 0, 10)
 				for i := 0; i < 9; i++ {
@@ -1774,7 +1775,7 @@ func TestServiceRunErrorPaths(t *testing.T) {
 					})
 				}
 				responses = append(responses, scriptedResponse{
-					Message:      providertypes.Message{Content: "done after many cycles"},
+					Message:      providertypes.Message{Parts: []providertypes.ContentPart{providertypes.NewTextPart("done after many cycles")}},
 					FinishReason: "stop",
 				})
 				return &scriptedProvider{responses: responses}
@@ -1790,14 +1791,14 @@ func TestServiceRunErrorPaths(t *testing.T) {
 				if got := len(session.Messages); got != 20 {
 					t.Fatalf("expected 20 persisted messages after 9 tool cycles and final answer, got %d", got)
 				}
-				if session.Messages[len(session.Messages)-1].Content != "done after many cycles" {
+				if renderPartsForTest(session.Messages[len(session.Messages)-1].Parts) != "done after many cycles" {
 					t.Fatalf("expected final assistant reply to be persisted, got %+v", session.Messages[len(session.Messages)-1])
 				}
 			},
 		},
 		{
 			name:       "provider factory error emits runtime error",
-			input:      UserInput{RunID: "run-factory-error", Content: "hello"},
+			input:      UserInput{RunID: "run-factory-error", Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")}},
 			factoryErr: errors.New("factory failed"),
 			expectErr:  "factory failed",
 			expectEvents: []EventType{
@@ -1810,7 +1811,7 @@ func TestServiceRunErrorPaths(t *testing.T) {
 			input: UserInput{
 				SessionID: "existing-session",
 				RunID:     "run-existing-session",
-				Content:   "continue",
+				Parts:     []providertypes.ContentPart{providertypes.NewTextPart("continue")},
 			},
 			provider: &scriptedProvider{
 				streams: [][]providertypes.StreamEvent{
@@ -1823,7 +1824,7 @@ func TestServiceRunErrorPaths(t *testing.T) {
 				CreatedAt: agentsession.New("seed").CreatedAt,
 				UpdatedAt: agentsession.New("seed").UpdatedAt,
 				Messages: []providertypes.Message{
-					{Role: "user", Content: "earlier"},
+					{Role: "user", Parts: []providertypes.ContentPart{providertypes.NewTextPart("earlier")}},
 				},
 			},
 			expectEvents: []EventType{EventUserMessage, EventAgentDone},
@@ -1840,7 +1841,7 @@ func TestServiceRunErrorPaths(t *testing.T) {
 		},
 		{
 			name:  "retryable provider error triggers runtime retry then succeeds",
-			input: UserInput{RunID: "run-retry-success", Content: "hello"},
+			input: UserInput{RunID: "run-retry-success", Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")}},
 			provider: func() *scriptedProvider {
 				callIdx := 0
 				return &scriptedProvider{
@@ -1871,14 +1872,14 @@ func TestServiceRunErrorPaths(t *testing.T) {
 				if len(session.Messages) != 2 {
 					t.Fatalf("expected user + assistant messages, got %d", len(session.Messages))
 				}
-				if session.Messages[1].Content != "recovered" {
-					t.Fatalf("expected assistant content %q, got %q", "recovered", session.Messages[1].Content)
+				if renderPartsForTest(session.Messages[1].Parts) != "recovered" {
+					t.Fatalf("expected assistant content %q, got %q", "recovered", renderPartsForTest(session.Messages[1].Parts))
 				}
 			},
 		},
 		{
 			name:  "non-retryable provider error does not trigger runtime retry",
-			input: UserInput{RunID: "run-no-retry", Content: "hello"},
+			input: UserInput{RunID: "run-no-retry", Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")}},
 			provider: &scriptedProvider{
 				name: "auth-error-no-retry",
 				chatFn: func(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error {
@@ -1901,7 +1902,7 @@ func TestServiceRunErrorPaths(t *testing.T) {
 		},
 		{
 			name:  "runtime retry exhausted emits error",
-			input: UserInput{RunID: "run-retry-exhausted", Content: "hello"},
+			input: UserInput{RunID: "run-retry-exhausted", Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")}},
 			provider: &scriptedProvider{
 				name: "always-500",
 				chatFn: func(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error {
@@ -1989,7 +1990,7 @@ func TestServiceCancelActiveRun(t *testing.T) {
 
 	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: scripted}, nil)
 	errCh := make(chan error, 1)
-	input := UserInput{RunID: "run-cancel-active", Content: "hello"}
+	input := UserInput{RunID: "run-cancel-active", Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")}}
 
 	go func() {
 		errCh <- service.Run(context.Background(), input)
@@ -2037,7 +2038,7 @@ func TestServiceRunSameSessionConcurrentNoMessageLoss(t *testing.T) {
 	errCh1 := make(chan error, 1)
 	errCh2 := make(chan error, 1)
 	go func() {
-		errCh1 <- service.Run(context.Background(), UserInput{SessionID: session.ID, RunID: "run-same-1", Content: "hello-1"})
+		errCh1 <- service.Run(context.Background(), UserInput{SessionID: session.ID, RunID: "run-same-1", Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello-1")}})
 	}()
 
 	select {
@@ -2047,7 +2048,7 @@ func TestServiceRunSameSessionConcurrentNoMessageLoss(t *testing.T) {
 	}
 
 	go func() {
-		errCh2 <- service.Run(context.Background(), UserInput{SessionID: session.ID, RunID: "run-same-2", Content: "hello-2"})
+		errCh2 <- service.Run(context.Background(), UserInput{SessionID: session.ID, RunID: "run-same-2", Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello-2")}})
 	}()
 
 	time.Sleep(120 * time.Millisecond)
@@ -2107,7 +2108,7 @@ func TestServiceRunCanceledByProvider(t *testing.T) {
 	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: scripted}, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
-	input := UserInput{RunID: "run-provider-cancel", Content: "hello"}
+	input := UserInput{RunID: "run-provider-cancel", Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")}}
 
 	go func() {
 		errCh <- service.Run(ctx, input)
@@ -2152,7 +2153,7 @@ func TestServiceRunPreservesProviderErrorAfterCancel(t *testing.T) {
 	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: scripted}, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
-	input := UserInput{RunID: "run-provider-error-after-cancel", Content: "hello"}
+	input := UserInput{RunID: "run-provider-error-after-cancel", Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")}}
 
 	go func() {
 		errCh <- service.Run(ctx, input)
@@ -2206,7 +2207,7 @@ func TestServiceRunCanceledDuringToolExecution(t *testing.T) {
 	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: scripted}, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
-	input := UserInput{RunID: "run-tool-cancel", Content: "edit file"}
+	input := UserInput{RunID: "run-tool-cancel", Parts: []providertypes.ContentPart{providertypes.NewTextPart("edit file")}}
 
 	go func() {
 		errCh <- service.Run(ctx, input)
@@ -2267,7 +2268,7 @@ func TestServiceRunPreservesToolErrorAfterCancel(t *testing.T) {
 	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: scripted}, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
-	input := UserInput{RunID: "run-tool-error-after-cancel", Content: "edit file"}
+	input := UserInput{RunID: "run-tool-error-after-cancel", Parts: []providertypes.ContentPart{providertypes.NewTextPart("edit file")}}
 
 	go func() {
 		errCh <- service.Run(ctx, input)
@@ -2311,7 +2312,7 @@ func TestServiceRunPreservesSessionSaveErrorAfterCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	input := UserInput{RunID: "run-save-error-after-cancel", Content: "hello"}
+	input := UserInput{RunID: "run-save-error-after-cancel", Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")}}
 	err := service.Run(ctx, input)
 	if !errors.Is(err, saveErr) {
 		t.Fatalf("expected save error %q, got %v", saveErr, err)
@@ -2356,7 +2357,7 @@ func TestServiceRunToolTimeoutIsNotCancellation(t *testing.T) {
 	}
 
 	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: scripted}, nil)
-	input := UserInput{RunID: "run-tool-timeout", Content: "edit file"}
+	input := UserInput{RunID: "run-tool-timeout", Parts: []providertypes.ContentPart{providertypes.NewTextPart("edit file")}}
 	if err := service.Run(context.Background(), input); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -2380,9 +2381,9 @@ func TestServiceCompactManualAppliesAndPersists(t *testing.T) {
 	session := agentsession.New("manual")
 	session.ID = "session-manual"
 	session.Messages = []providertypes.Message{
-		{Role: providertypes.RoleUser, Content: "older"},
-		{Role: providertypes.RoleAssistant, Content: "older answer"},
-		{Role: providertypes.RoleUser, Content: "before"},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("older")}},
+		{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("older answer")}},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("before")}},
 	}
 	store.sessions[session.ID] = cloneSession(session)
 
@@ -2393,8 +2394,8 @@ func TestServiceCompactManualAppliesAndPersists(t *testing.T) {
 	service.compactRunner = &stubCompactRunner{
 		result: contextcompact.Result{
 			Messages: []providertypes.Message{
-				{Role: providertypes.RoleAssistant, Content: "[compact_summary]\ndone:\n- ok\n\nin_progress:\n- continue"},
-				{Role: providertypes.RoleAssistant, Content: "latest"},
+				{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("[compact_summary]\ndone:\n- ok\n\nin_progress:\n- continue")}},
+				{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("latest")}},
 			},
 			Applied: true,
 			Metrics: contextcompact.Metrics{
@@ -2423,7 +2424,7 @@ func TestServiceCompactManualAppliesAndPersists(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load compacted session: %v", err)
 	}
-	if len(saved.Messages) != 2 || !strings.Contains(saved.Messages[0].Content, "compact_summary") {
+	if len(saved.Messages) != 2 || !strings.Contains(renderPartsForTest(saved.Messages[0].Parts), "compact_summary") {
 		t.Fatalf("expected persisted compacted messages, got %+v", saved.Messages)
 	}
 
@@ -2438,9 +2439,9 @@ func TestServiceCompactManualFailureReturnsError(t *testing.T) {
 	session := agentsession.New("manual-fail")
 	session.ID = "session-manual-fail"
 	session.Messages = []providertypes.Message{
-		{Role: providertypes.RoleUser, Content: "older"},
-		{Role: providertypes.RoleAssistant, Content: "older answer"},
-		{Role: providertypes.RoleUser, Content: "before"},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("older")}},
+		{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("older answer")}},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("before")}},
 	}
 	store.sessions[session.ID] = cloneSession(session)
 
@@ -2462,7 +2463,7 @@ func TestServiceCompactManualFailureReturnsError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load original session: %v", err)
 	}
-	if len(saved.Messages) != 3 || saved.Messages[2].Content != "before" {
+	if len(saved.Messages) != 3 || renderPartsForTest(saved.Messages[2].Parts) != "before" {
 		t.Fatalf("expected original session untouched, got %+v", saved.Messages)
 	}
 
@@ -2495,9 +2496,9 @@ func TestServiceCompactUsesSessionProviderAndModelWhenPresent(t *testing.T) {
 	session.Provider = config.OpenAIName
 	session.Model = "session-model"
 	session.Messages = []providertypes.Message{
-		{Role: providertypes.RoleUser, Content: "older"},
-		{Role: providertypes.RoleAssistant, Content: "older answer"},
-		{Role: providertypes.RoleUser, Content: "before"},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("older")}},
+		{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("older answer")}},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("before")}},
 	}
 	store.sessions[session.ID] = cloneSession(session)
 
@@ -2560,9 +2561,9 @@ func TestServiceCompactFallsBackToCurrentProviderWhenSessionMetadataMissing(t *t
 	session := agentsession.New("manual-fallback")
 	session.ID = "session-manual-fallback"
 	session.Messages = []providertypes.Message{
-		{Role: providertypes.RoleUser, Content: "older"},
-		{Role: providertypes.RoleAssistant, Content: "older answer"},
-		{Role: providertypes.RoleUser, Content: "before"},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("older")}},
+		{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("older answer")}},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("before")}},
 	}
 	store.sessions[session.ID] = cloneSession(session)
 
@@ -2601,8 +2602,8 @@ func TestServiceManualCompactThenRunContinuesToolRound(t *testing.T) {
 	session := agentsession.New("manual-continue")
 	session.ID = "session-manual-continue"
 	session.Messages = []providertypes.Message{
-		{Role: providertypes.RoleUser, Content: "legacy request"},
-		{Role: providertypes.RoleAssistant, Content: "legacy answer"},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("legacy request")}},
+		{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("legacy answer")}},
 	}
 	store.sessions[session.ID] = cloneSession(session)
 
@@ -2625,8 +2626,8 @@ func TestServiceManualCompactThenRunContinuesToolRound(t *testing.T) {
 		runFn: func(ctx context.Context, input contextcompact.Input) (contextcompact.Result, error) {
 			return contextcompact.Result{
 				Messages: []providertypes.Message{
-					{Role: providertypes.RoleAssistant, Content: "[compact_summary]\ndone:\n- archived\n\nin_progress:\n- continue"},
-					{Role: providertypes.RoleAssistant, Content: "latest answer"},
+					{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("[compact_summary]\ndone:\n- archived\n\nin_progress:\n- continue")}},
+					{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("latest answer")}},
 				},
 				Applied: true,
 				Metrics: contextcompact.Metrics{
@@ -2650,7 +2651,7 @@ func TestServiceManualCompactThenRunContinuesToolRound(t *testing.T) {
 	if err := service.Run(context.Background(), UserInput{
 		SessionID: session.ID,
 		RunID:     "run-after-manual",
-		Content:   "continue",
+		Parts:     []providertypes.ContentPart{providertypes.NewTextPart("continue")},
 	}); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -2663,7 +2664,7 @@ func TestServiceManualCompactThenRunContinuesToolRound(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load session: %v", err)
 	}
-	if len(saved.Messages) < 6 || !strings.Contains(saved.Messages[0].Content, "compact_summary") {
+	if len(saved.Messages) < 6 || !strings.Contains(renderPartsForTest(saved.Messages[0].Parts), "compact_summary") {
 		t.Fatalf("expected compacted history + new tool round, got %+v", saved.Messages)
 	}
 
@@ -2725,7 +2726,7 @@ func TestServiceSerializesRunAndCompact(t *testing.T) {
 		runErrCh <- service.Run(context.Background(), UserInput{
 			SessionID: session.ID,
 			RunID:     "run-serialized",
-			Content:   "hello",
+			Parts:     []providertypes.ContentPart{providertypes.NewTextPart("hello")},
 		})
 	}()
 
@@ -2837,7 +2838,7 @@ func TestServiceRunUsesSessionWorkdirForContextAndTools(t *testing.T) {
 	if err := service.Run(context.Background(), UserInput{
 		SessionID: session.ID,
 		RunID:     "run-session-workdir",
-		Content:   "edit",
+		Parts:     []providertypes.ContentPart{providertypes.NewTextPart("edit")},
 	}); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -2874,7 +2875,7 @@ func TestServiceRunUsesInputWorkdirForNewSession(t *testing.T) {
 	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: scripted}, builder)
 	if err := service.Run(context.Background(), UserInput{
 		RunID:   "run-new-session-workdir",
-		Content: "hello",
+		Parts:   []providertypes.ContentPart{providertypes.NewTextPart("hello")},
 		Workdir: draftRoot,
 	}); err != nil {
 		t.Fatalf("Run() error = %v", err)
@@ -3278,8 +3279,8 @@ func TestServiceRunFailsWhenInitialUserMessageSaveFails(t *testing.T) {
 
 	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: &scriptedProvider{}}, nil)
 	err := service.Run(context.Background(), UserInput{
-		RunID:   "run-initial-save-fail",
-		Content: "hello",
+		RunID: "run-initial-save-fail",
+		Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")},
 	})
 	if err == nil || !containsError(err, "save failed on first write") {
 		t.Fatalf("expected initial save error, got %v", err)
@@ -3306,8 +3307,8 @@ func TestServiceRunFailsWhenAssistantSaveFails(t *testing.T) {
 	}
 	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: scripted}, nil)
 	err := service.Run(context.Background(), UserInput{
-		RunID:   "run-assistant-save-fail",
-		Content: "hello",
+		RunID: "run-assistant-save-fail",
+		Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")},
 	})
 	if err == nil || !containsError(err, "save failed on assistant") {
 		t.Fatalf("expected assistant save error, got %v", err)
@@ -3393,7 +3394,7 @@ func TestCallProviderWithRetryReturnsCombinedForwardError(t *testing.T) {
 		request: providertypes.GenerateRequest{
 			Model:        "test-model",
 			SystemPrompt: "prompt",
-			Messages:     []providertypes.Message{{Role: providertypes.RoleUser, Content: "hello"}},
+			Messages:     []providertypes.Message{{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")}}},
 		},
 	}
 
@@ -3443,8 +3444,8 @@ func TestServiceRunPersistsAndRestoresTokenUsage(t *testing.T) {
 	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: scripted}, builder)
 
 	if err := service.Run(context.Background(), UserInput{
-		RunID:   "run-token-usage-first",
-		Content: "hello",
+		RunID: "run-token-usage-first",
+		Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")},
 	}); err != nil {
 		t.Fatalf("first Run() error = %v", err)
 	}
@@ -3493,7 +3494,7 @@ func TestServiceRunPersistsAndRestoresTokenUsage(t *testing.T) {
 	if err := service.Run(context.Background(), UserInput{
 		SessionID: firstSession.ID,
 		RunID:     "run-token-usage-second",
-		Content:   "continue",
+		Parts:     []providertypes.ContentPart{providertypes.NewTextPart("continue")},
 	}); err != nil {
 		t.Fatalf("second Run() error = %v", err)
 	}
@@ -3561,8 +3562,8 @@ func TestServiceRunAutoCompactsAndResetsSessionTokens(t *testing.T) {
 	session.TokenInputTotal = 100
 	session.TokenOutputTotal = 40
 	session.Messages = []providertypes.Message{
-		{Role: providertypes.RoleUser, Content: "older request"},
-		{Role: providertypes.RoleAssistant, Content: "older answer"},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("older request")}},
+		{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("older answer")}},
 	}
 	store.sessions[session.ID] = cloneSession(session)
 
@@ -3590,7 +3591,7 @@ func TestServiceRunAutoCompactsAndResetsSessionTokens(t *testing.T) {
 				FinishReason: "tool_calls",
 			},
 			{
-				Message:      providertypes.Message{Content: "done"},
+				Message:      providertypes.Message{Parts: []providertypes.ContentPart{providertypes.NewTextPart("done")}},
 				FinishReason: "stop",
 			},
 		},
@@ -3600,8 +3601,8 @@ func TestServiceRunAutoCompactsAndResetsSessionTokens(t *testing.T) {
 	compactRunner := &stubCompactRunner{
 		result: contextcompact.Result{
 			Messages: []providertypes.Message{
-				{Role: providertypes.RoleAssistant, Content: "[compact_summary]\ndone:\n- archived\n\nin_progress:\n- continue"},
-				{Role: providertypes.RoleAssistant, Content: "latest answer"},
+				{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("[compact_summary]\ndone:\n- archived\n\nin_progress:\n- continue")}},
+				{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("latest answer")}},
 			},
 			Applied: true,
 			Metrics: contextcompact.Metrics{
@@ -3619,7 +3620,7 @@ func TestServiceRunAutoCompactsAndResetsSessionTokens(t *testing.T) {
 	if err := service.Run(context.Background(), UserInput{
 		SessionID: session.ID,
 		RunID:     "run-auto-compact",
-		Content:   "continue",
+		Parts:     []providertypes.ContentPart{providertypes.NewTextPart("continue")},
 	}); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -3654,10 +3655,10 @@ func TestServiceRunAutoCompactsAndResetsSessionTokens(t *testing.T) {
 	if len(scripted.requests[0].Messages) != 2 {
 		t.Fatalf("expected rebuilt compacted context to be sent, got %+v", scripted.requests[0].Messages)
 	}
-	if scripted.requests[0].Messages[0].Content != "[compact_summary]\ndone:\n- archived\n\nin_progress:\n- continue" {
+	if renderPartsForTest(scripted.requests[0].Messages[0].Parts) != "[compact_summary]\ndone:\n- archived\n\nin_progress:\n- continue" {
 		t.Fatalf("expected first provider request to use compact summary, got %+v", scripted.requests[0].Messages)
 	}
-	if scripted.requests[0].Messages[1].Content != "latest answer" {
+	if renderPartsForTest(scripted.requests[0].Messages[1].Parts) != "latest answer" {
 		t.Fatalf("expected first provider request to use compacted latest answer, got %+v", scripted.requests[0].Messages)
 	}
 
@@ -3722,8 +3723,8 @@ func TestServiceRunAutoCompactNoopDoesNotDisableReactiveRetry(t *testing.T) {
 	session.ID = "session-auto-noop-reactive"
 	session.TokenInputTotal = 100
 	session.Messages = []providertypes.Message{
-		{Role: providertypes.RoleUser, Content: "older request"},
-		{Role: providertypes.RoleAssistant, Content: "older answer"},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("older request")}},
+		{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("older answer")}},
 	}
 	store.sessions[session.ID] = cloneSession(session)
 
@@ -3782,8 +3783,8 @@ func TestServiceRunAutoCompactNoopDoesNotDisableReactiveRetry(t *testing.T) {
 			case contextcompact.ModeReactive:
 				return contextcompact.Result{
 					Messages: []providertypes.Message{
-						{Role: providertypes.RoleAssistant, Content: "[compact_summary]\ndone:\n- archived\n\nin_progress:\n- continue"},
-						{Role: providertypes.RoleUser, Content: "continue"},
+						{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("[compact_summary]\ndone:\n- archived\n\nin_progress:\n- continue")}},
+						{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("continue")}},
 					},
 					Applied: true,
 					Metrics: contextcompact.Metrics{
@@ -3804,7 +3805,7 @@ func TestServiceRunAutoCompactNoopDoesNotDisableReactiveRetry(t *testing.T) {
 	if err := service.Run(context.Background(), UserInput{
 		SessionID: session.ID,
 		RunID:     "run-auto-noop-reactive",
-		Content:   "continue",
+		Parts:     []providertypes.ContentPart{providertypes.NewTextPart("continue")},
 	}); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -3833,8 +3834,8 @@ func TestServiceRunReactivelyCompactsOnContextTooLong(t *testing.T) {
 	session.TokenInputTotal = 220
 	session.TokenOutputTotal = 70
 	session.Messages = []providertypes.Message{
-		{Role: providertypes.RoleUser, Content: "older request"},
-		{Role: providertypes.RoleAssistant, Content: "older answer"},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("older request")}},
+		{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("older answer")}},
 	}
 	store.sessions[session.ID] = cloneSession(session)
 
@@ -3880,8 +3881,8 @@ func TestServiceRunReactivelyCompactsOnContextTooLong(t *testing.T) {
 	service.compactRunner = &stubCompactRunner{
 		result: contextcompact.Result{
 			Messages: []providertypes.Message{
-				{Role: providertypes.RoleAssistant, Content: "[compact_summary]\ndone:\n- archived\n\nin_progress:\n- continue"},
-				{Role: providertypes.RoleUser, Content: "continue"},
+				{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("[compact_summary]\ndone:\n- archived\n\nin_progress:\n- continue")}},
+				{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("continue")}},
 			},
 			Applied: true,
 			Metrics: contextcompact.Metrics{
@@ -3898,7 +3899,7 @@ func TestServiceRunReactivelyCompactsOnContextTooLong(t *testing.T) {
 	if err := service.Run(context.Background(), UserInput{
 		SessionID: session.ID,
 		RunID:     "run-reactive-compact",
-		Content:   "continue",
+		Parts:     []providertypes.ContentPart{providertypes.NewTextPart("continue")},
 	}); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -3933,8 +3934,8 @@ func TestServiceRunReactivelyCompactsOnContextTooLong(t *testing.T) {
 	if len(saved.Messages) != 3 {
 		t.Fatalf("expected compacted transcript plus final assistant reply, got %+v", saved.Messages)
 	}
-	if saved.Messages[2].Content != "recovered" {
-		t.Fatalf("expected final assistant reply %q, got %q", "recovered", saved.Messages[2].Content)
+	if renderPartsForTest(saved.Messages[2].Parts) != "recovered" {
+		t.Fatalf("expected final assistant reply %q, got %q", "recovered", renderPartsForTest(saved.Messages[2].Parts))
 	}
 
 	events := collectRuntimeEvents(service.Events())
@@ -3975,8 +3976,8 @@ func TestServiceRunReactiveCompactRetriesWithinSameRun(t *testing.T) {
 	session.ID = "session-reactive-single-loop"
 	session.TokenInputTotal = 160
 	session.Messages = []providertypes.Message{
-		{Role: providertypes.RoleUser, Content: "older request"},
-		{Role: providertypes.RoleAssistant, Content: "older answer"},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("older request")}},
+		{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("older answer")}},
 	}
 	store.sessions[session.ID] = cloneSession(session)
 
@@ -4010,8 +4011,8 @@ func TestServiceRunReactiveCompactRetriesWithinSameRun(t *testing.T) {
 	service.compactRunner = &stubCompactRunner{
 		result: contextcompact.Result{
 			Messages: []providertypes.Message{
-				{Role: providertypes.RoleAssistant, Content: "[compact_summary]\ndone:\n- archived\n\nin_progress:\n- continue"},
-				{Role: providertypes.RoleUser, Content: "continue"},
+				{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("[compact_summary]\ndone:\n- archived\n\nin_progress:\n- continue")}},
+				{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("continue")}},
 			},
 			Applied: true,
 			Metrics: contextcompact.Metrics{
@@ -4026,7 +4027,7 @@ func TestServiceRunReactiveCompactRetriesWithinSameRun(t *testing.T) {
 	if err := service.Run(context.Background(), UserInput{
 		SessionID: session.ID,
 		RunID:     "run-reactive-single-loop",
-		Content:   "continue",
+		Parts:     []providertypes.ContentPart{providertypes.NewTextPart("continue")},
 	}); err != nil {
 		t.Fatalf("Run() should recover after reactive compact, got %v", err)
 	}
@@ -4070,8 +4071,8 @@ func TestServiceRunReactiveCompactDegradesUpToMaxAttempts(t *testing.T) {
 	}
 
 	err := service.Run(context.Background(), UserInput{
-		RunID:   "run-reactive-compact-once",
-		Content: "continue",
+		RunID: "run-reactive-compact-once",
+		Parts: []providertypes.ContentPart{providertypes.NewTextPart("continue")},
 	})
 	if err == nil || !containsError(err, "prompt is too long") {
 		t.Fatalf("expected final context-too-long error, got %v", err)
@@ -4132,8 +4133,8 @@ func TestServiceRunDoesNotReactiveCompactOnPlainTextTokenThrottle(t *testing.T) 
 	service.compactRunner = &stubCompactRunner{}
 
 	err := service.Run(context.Background(), UserInput{
-		RunID:   "run-plain-text-token-throttle",
-		Content: "continue",
+		RunID: "run-plain-text-token-throttle",
+		Parts: []providertypes.ContentPart{providertypes.NewTextPart("continue")},
 	})
 	if err == nil || !containsError(err, throttleErr.Error()) {
 		t.Fatalf("expected plain text token throttle error, got %v", err)
@@ -4615,8 +4616,8 @@ func TestParallelToolCallsPhaseMigration(t *testing.T) {
 				},
 				{
 					Message: providertypes.Message{
-						Role:    providertypes.RoleAssistant,
-						Content: "done",
+						Role:  providertypes.RoleAssistant,
+						Parts: []providertypes.ContentPart{providertypes.NewTextPart("done")},
 					},
 					FinishReason: "stop",
 				},
@@ -4633,8 +4634,8 @@ func TestParallelToolCallsPhaseMigration(t *testing.T) {
 	)
 
 	input := UserInput{
-		RunID:   "run-parallel",
-		Content: "run parallel tools",
+		RunID: "run-parallel",
+		Parts: []providertypes.ContentPart{providertypes.NewTextPart("run parallel tools")},
 	}
 
 	if err := service.Run(context.Background(), input); err != nil {
@@ -4723,8 +4724,8 @@ func TestParallelToolCallsRespectConcurrencyLimit(t *testing.T) {
 				},
 				{
 					Message: providertypes.Message{
-						Role:    providertypes.RoleAssistant,
-						Content: "done",
+						Role:  providertypes.RoleAssistant,
+						Parts: []providertypes.ContentPart{providertypes.NewTextPart("done")},
 					},
 					FinishReason: "stop",
 				},
@@ -4740,7 +4741,7 @@ func TestParallelToolCallsRespectConcurrencyLimit(t *testing.T) {
 		nil,
 	)
 
-	if err := service.Run(context.Background(), UserInput{RunID: "run-parallel-limit", Content: "parallel"}); err != nil {
+	if err := service.Run(context.Background(), UserInput{RunID: "run-parallel-limit", Parts: []providertypes.ContentPart{providertypes.NewTextPart("parallel")}}); err != nil {
 		t.Fatalf("Run() failed: %v", err)
 	}
 
@@ -4783,8 +4784,8 @@ func TestParallelToolCallsSerializeSameToolName(t *testing.T) {
 				},
 				{
 					Message: providertypes.Message{
-						Role:    providertypes.RoleAssistant,
-						Content: "done",
+						Role:  providertypes.RoleAssistant,
+						Parts: []providertypes.ContentPart{providertypes.NewTextPart("done")},
 					},
 					FinishReason: "stop",
 				},
@@ -4800,7 +4801,7 @@ func TestParallelToolCallsSerializeSameToolName(t *testing.T) {
 		nil,
 	)
 
-	if err := service.Run(context.Background(), UserInput{RunID: "run-parallel-lock", Content: "parallel"}); err != nil {
+	if err := service.Run(context.Background(), UserInput{RunID: "run-parallel-lock", Parts: []providertypes.ContentPart{providertypes.NewTextPart("parallel")}}); err != nil {
 		t.Fatalf("Run() failed: %v", err)
 	}
 
@@ -4867,7 +4868,7 @@ func TestParallelToolCallsStopDispatchAfterFirstError(t *testing.T) {
 		nil,
 	)
 
-	err := service.Run(context.Background(), UserInput{RunID: "run-first-error-stop-dispatch", Content: "parallel"})
+	err := service.Run(context.Background(), UserInput{RunID: "run-first-error-stop-dispatch", Parts: []providertypes.ContentPart{providertypes.NewTextPart("parallel")}})
 	if err == nil {
 		t.Fatalf("expected run error when first tool result save fails")
 	}
@@ -4889,8 +4890,8 @@ func TestAgentDoneEventCarriesRunScopedEnvelope(t *testing.T) {
 				responses: []scriptedResponse{
 					{
 						Message: providertypes.Message{
-							Role:    providertypes.RoleAssistant,
-							Content: "done",
+							Role:  providertypes.RoleAssistant,
+							Parts: []providertypes.ContentPart{providertypes.NewTextPart("done")},
 						},
 						FinishReason: "stop",
 					},
@@ -4900,7 +4901,7 @@ func TestAgentDoneEventCarriesRunScopedEnvelope(t *testing.T) {
 		nil,
 	)
 
-	if err := service.Run(context.Background(), UserInput{RunID: "run-agent-done-envelope", Content: "hello"}); err != nil {
+	if err := service.Run(context.Background(), UserInput{RunID: "run-agent-done-envelope", Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")}}); err != nil {
 		t.Fatalf("Run() failed: %v", err)
 	}
 

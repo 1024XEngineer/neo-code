@@ -268,7 +268,7 @@ func TestFormatToolMessageForModel(t *testing.T) {
 
 	message := providertypes.Message{
 		Role:       providertypes.RoleTool,
-		Content:    "ok",
+		Parts:      []providertypes.ContentPart{providertypes.NewTextPart("ok")},
 		ToolCallID: "call-1",
 		ToolMetadata: map[string]string{
 			"tool_name":     "filesystem_edit",

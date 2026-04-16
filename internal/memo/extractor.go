@@ -38,7 +38,7 @@ func (r *RuleExtractor) Extract(ctx context.Context, messages []providertypes.Me
 	var lastUserMsg string
 	for i := len(messages) - 1; i >= 0; i-- {
 		if messages[i].Role == providertypes.RoleUser {
-			lastUserMsg = messages[i].Content
+			lastUserMsg = renderMemoParts(messages[i].Parts)
 			break
 		}
 	}

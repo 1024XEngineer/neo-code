@@ -1121,13 +1121,13 @@ func TestRuntimeMemoExtractorFuncSchedule(t *testing.T) {
 		if sessionID != "session-1" {
 			t.Fatalf("unexpected session id %q", sessionID)
 		}
-		if len(messages) != 1 || messages[0].Content != "hi" {
+		if len(messages) != 1 || renderPartsForTest(messages[0].Parts) != "hi" {
 			t.Fatalf("unexpected messages %+v", messages)
 		}
 	})
 
 	extractor.Schedule("session-1", []providertypes.Message{
-		{Role: providertypes.RoleUser, Content: "hi"},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("hi")}},
 	})
 
 	if !called {
@@ -1144,14 +1144,14 @@ func TestTextGenAdapterGenerate(t *testing.T) {
 		if prompt != "prompt" {
 			t.Fatalf("unexpected prompt %q", prompt)
 		}
-		if len(msgs) != 1 || msgs[0].Content != "msg" {
+		if len(msgs) != 1 || renderPartsForTest(msgs[0].Parts) != "msg" {
 			t.Fatalf("unexpected messages %+v", msgs)
 		}
 		return "ok", nil
 	})
 
 	result, err := adapter.Generate(context.Background(), "prompt", []providertypes.Message{
-		{Role: providertypes.RoleUser, Content: "msg"},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("msg")}},
 	})
 	if err != nil {
 		t.Fatalf("Generate() error = %v", err)
@@ -1173,7 +1173,7 @@ func TestNewMemoExtractorAdapterSkipsWhenSchedulerNil(t *testing.T) {
 	extractor := newMemoExtractorAdapter(nil, manager, nil)
 
 	extractor.Schedule("session-1", []providertypes.Message{
-		{Role: providertypes.RoleUser, Content: "remember this"},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("remember this")}},
 	})
 }
 
@@ -1187,7 +1187,7 @@ func TestNewMemoExtractorAdapterSkipsWhenResolveProviderFails(t *testing.T) {
 	extractor := newMemoExtractorAdapter(nil, manager, scheduler)
 
 	extractor.Schedule("session-1", []providertypes.Message{
-		{Role: providertypes.RoleUser, Content: "remember this"},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("remember this")}},
 	})
 
 	if scheduler.called {
@@ -1218,7 +1218,7 @@ func TestNewMemoExtractorAdapterSchedulesExtractorAndGenerates(t *testing.T) {
 	extractor := newMemoExtractorAdapter(factory, manager, scheduler)
 
 	inputMessages := []providertypes.Message{
-		{Role: providertypes.RoleUser, Content: "remember 我偏好 Go"},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("remember 我偏好 Go")}},
 	}
 	extractor.Schedule("session-1", inputMessages)
 
@@ -1266,14 +1266,14 @@ func TestNewMemoExtractorAdapterBuildsProviderSafeMemoWindow(t *testing.T) {
 	extractor := newMemoExtractorAdapter(factory, manager, scheduler)
 
 	inputMessages := []providertypes.Message{
-		{Role: providertypes.RoleUser, Content: "first"},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("first")}},
 		{
 			Role: providertypes.RoleAssistant,
 			ToolCalls: []providertypes.ToolCall{
 				{ID: "call_1", Name: "filesystem_read_file", Arguments: `{}`},
 			},
 		},
-		{Role: providertypes.RoleUser, Content: "second"},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("second")}},
 	}
 	extractor.Schedule("session-1", inputMessages)
 	if !scheduler.called || scheduler.extractor == nil {
@@ -1319,7 +1319,7 @@ func TestNewMemoExtractorAdapterKeepsScheduledConfigSnapshot(t *testing.T) {
 	scheduler := &stubMemoExtractorScheduler{}
 	extractor := newMemoExtractorAdapter(factory, manager, scheduler)
 
-	messages := []providertypes.Message{{Role: providertypes.RoleUser, Content: "remember snapshot"}}
+	messages := []providertypes.Message{{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("remember snapshot")}}}
 	extractor.Schedule("session-1", messages)
 	if !scheduler.called || scheduler.extractor == nil {
 		t.Fatalf("expected scheduler to receive extractor")
@@ -1358,7 +1358,7 @@ func TestNewMemoExtractorAdapterPropagatesFactoryBuildError(t *testing.T) {
 	extractor := newMemoExtractorAdapter(factory, manager, scheduler)
 
 	inputMessages := []providertypes.Message{
-		{Role: providertypes.RoleUser, Content: "remember coding style"},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("remember coding style")}},
 	}
 	extractor.Schedule("session-1", inputMessages)
 	if !scheduler.called || scheduler.extractor == nil {

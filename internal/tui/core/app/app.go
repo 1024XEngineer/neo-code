@@ -34,12 +34,13 @@ const (
 type pickerMode = tuistate.PickerMode
 
 const (
-	pickerNone     pickerMode = tuistate.PickerNone
-	pickerProvider pickerMode = tuistate.PickerProvider
-	pickerModel    pickerMode = tuistate.PickerModel
-	pickerSession  pickerMode = tuistate.PickerSession
-	pickerFile     pickerMode = tuistate.PickerFile
-	pickerHelp     pickerMode = tuistate.PickerHelp
+	pickerNone        pickerMode = tuistate.PickerNone
+	pickerProvider    pickerMode = tuistate.PickerProvider
+	pickerModel       pickerMode = tuistate.PickerModel
+	pickerSession     pickerMode = tuistate.PickerSession
+	pickerFile        pickerMode = tuistate.PickerFile
+	pickerHelp        pickerMode = tuistate.PickerHelp
+	pickerProviderAdd pickerMode = tuistate.PickerProviderAdd
 )
 
 type RuntimeMsg = tuistate.RuntimeMsg
@@ -108,6 +109,7 @@ type appRuntimeState struct {
 	pendingPermission        *permissionPromptState
 	pendingImageAttachments  []pendingImageAttachment
 	currentModelCapabilities modelCapabilityState
+	providerAddForm          *providerAddFormState
 }
 
 type pendingImageAttachment struct {
@@ -120,6 +122,22 @@ type pendingImageAttachment struct {
 type modelCapabilityState struct {
 	supportsImageInput bool
 	checked            bool
+}
+
+// providerAddFormState 保存添加新 provider 表单的状态。
+type providerAddFormState struct {
+	Step           int // 当前聚焦字段在“当前 driver 可见字段列表”中的索引
+	Name           string
+	Driver         string
+	BaseURL        string
+	APIStyle       string
+	DeploymentMode string
+	APIVersion     string
+	APIKey         string
+	Error          string
+	ErrorIsHard    bool
+	Submitting     bool
+	Drivers        []string // 可选的 Driver 列表
 }
 
 type App struct {
