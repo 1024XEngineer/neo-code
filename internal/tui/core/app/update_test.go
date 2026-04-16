@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
 
 	"neo-code/internal/config"
@@ -89,6 +90,13 @@ type stubRuntime struct {
 	loadSessionErr  error
 }
 
+type snapshotRuntime struct {
+	*stubRuntime
+	sessionContext any
+	sessionUsage   any
+	runSnapshot    any
+}
+
 func newStubRuntime() *stubRuntime {
 	return &stubRuntime{events: make(chan agentruntime.RuntimeEvent)}
 }
@@ -149,6 +157,18 @@ func (s *stubRuntime) ListSessionSkills(ctx context.Context, sessionID string) (
 
 func (s *stubRuntime) SetSessionWorkdir(ctx context.Context, sessionID string, workdir string) (agentsession.Session, error) {
 	return agentsession.NewWithWorkdir("draft", workdir), nil
+}
+
+func (s *snapshotRuntime) GetSessionContext(ctx context.Context, sessionID string) (any, error) {
+	return s.sessionContext, nil
+}
+
+func (s *snapshotRuntime) GetSessionUsage(ctx context.Context, sessionID string) (any, error) {
+	return s.sessionUsage, nil
+}
+
+func (s *snapshotRuntime) GetRunSnapshot(ctx context.Context, runID string) (any, error) {
+	return s.runSnapshot, nil
 }
 
 func newDefaultAppConfig() *config.Config {
@@ -2072,4 +2092,543 @@ func TestHandleForgetCommand(t *testing.T) {
 			t.Errorf("expected 'not enabled' message, got: %s", last.Content)
 		}
 	})
+}
+
+func TestNoteInputEditTracksPasteHeuristics(t *testing.T) {
+	app, _ := newTestApp(t)
+	base := time.Now()
+
+	app.noteInputEdit("a", "ab", tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("b")}, base)
+	if app.lastInputEditAt.IsZero() {
+		t.Fatalf("expected lastInputEditAt to be updated")
+	}
+
+	app.noteInputEdit("ab", "ab\ncd", tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x\ny")}, base.Add(time.Millisecond))
+	if !app.pasteMode {
+		t.Fatalf("expected pasteMode to be enabled for multiline runes")
+	}
+
+	app.noteInputEdit("ab\ncd", "ab\ncd", tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("z")}, base.Add(2*time.Millisecond))
+	if app.inputBurstCount == 0 {
+		t.Fatalf("expected burst count to remain when text unchanged path is skipped")
+	}
+}
+
+func TestActivateSelectedSession(t *testing.T) {
+	app, runtime := newTestApp(t)
+	runtime.loadSessions = map[string]agentsession.Session{
+		"s-active": {
+			ID:      "s-active",
+			Title:   "Active Session",
+			Workdir: app.state.CurrentWorkdir,
+			Messages: []providertypes.Message{
+				{Role: roleUser, Content: "hello"},
+			},
+		},
+	}
+
+	app.sessionPicker.SetItems([]list.Item{
+		sessionItem{Summary: agentsession.Summary{ID: "s-active", Title: "Active Session"}},
+	})
+	app.sessionPicker.Select(0)
+
+	if err := app.activateSelectedSession(); err != nil {
+		t.Fatalf("activateSelectedSession() error = %v", err)
+	}
+	if app.state.ActiveSessionID != "s-active" || app.state.ActiveSessionTitle != "Active Session" {
+		t.Fatalf("expected selected session to become active")
+	}
+	if len(app.activeMessages) != 1 {
+		t.Fatalf("expected active messages to be refreshed from session")
+	}
+}
+
+func TestMouseHandlersAndBounds(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.width = 120
+	app.height = 40
+	app.activities = []tuistate.ActivityEntry{{Kind: "test", Title: "activity"}}
+	app.transcript.SetContent(strings.Repeat("line\n", 100))
+	app.applyComponentLayout(true)
+
+	tx, ty, _, _ := app.transcriptBounds()
+	if !app.isMouseWithinTranscript(tea.MouseMsg{X: tx, Y: ty}) {
+		t.Fatalf("expected transcript bounds hit")
+	}
+	if app.isMouseWithinTranscript(tea.MouseMsg{X: tx - 1, Y: ty - 1}) {
+		t.Fatalf("expected transcript bounds miss")
+	}
+
+	app.pendingCopyID = 9
+	if app.handleTranscriptMouse(tea.MouseMsg{X: tx - 1, Y: ty - 1, Action: tea.MouseActionRelease}) {
+		t.Fatalf("expected outside transcript release to return false")
+	}
+	if app.pendingCopyID != 0 {
+		t.Fatalf("expected pending copy id to reset after release outside transcript")
+	}
+	if !app.handleTranscriptMouse(tea.MouseMsg{
+		X: tx, Y: ty, Button: tea.MouseButtonWheelDown, Action: tea.MouseActionPress,
+	}) {
+		t.Fatalf("expected transcript wheel down to be handled")
+	}
+
+	ix, iy, _, _ := app.inputBounds()
+	if !app.isMouseWithinInput(tea.MouseMsg{X: ix, Y: iy}) {
+		t.Fatalf("expected input bounds hit")
+	}
+	app.focus = panelTranscript
+	if !app.handleInputMouse(tea.MouseMsg{
+		X: ix, Y: iy, Button: tea.MouseButtonWheelUp, Action: tea.MouseActionPress,
+	}) {
+		t.Fatalf("expected input wheel to be handled")
+	}
+	if app.focus != panelInput {
+		t.Fatalf("expected input panel to gain focus")
+	}
+
+	ax, ay, _, _ := app.activityBounds()
+	if !app.isMouseWithinActivity(tea.MouseMsg{X: ax, Y: ay}) {
+		t.Fatalf("expected activity bounds hit")
+	}
+	app.focus = panelTranscript
+	if !app.handleActivityMouse(tea.MouseMsg{
+		X: ax, Y: ay, Button: tea.MouseButtonWheelDown, Action: tea.MouseActionPress,
+	}) {
+		t.Fatalf("expected activity wheel to be handled")
+	}
+	if app.focus != panelActivity {
+		t.Fatalf("expected activity panel to gain focus")
+	}
+}
+
+func TestComposerHelpers(t *testing.T) {
+	app, _ := newTestApp(t)
+	if got := app.composerBoxWidth(88); got != 88 {
+		t.Fatalf("composerBoxWidth() = %d, want 88", got)
+	}
+
+	app.input.SetHeight(1)
+	app.input.SetValue("line1\nline2")
+	before := app.input.Height()
+	app.growComposerForNewline()
+	if app.input.Height() <= before {
+		t.Fatalf("expected growComposerForNewline to increase height")
+	}
+
+	app.input.SetHeight(composerMaxHeight)
+	app.input.SetValue("line")
+	app.normalizeComposerHeight()
+	if app.input.Height() < composerMinHeight || app.input.Height() > composerMaxHeight {
+		t.Fatalf("normalizeComposerHeight should keep height in clamp range")
+	}
+}
+
+func TestCurrentProviderAddFieldAndInputHandling(t *testing.T) {
+	app, _ := newTestApp(t)
+	if got := currentProviderAddField(nil); got != providerAddFieldName {
+		t.Fatalf("currentProviderAddField(nil) = %v, want name field", got)
+	}
+
+	app.startProviderAddForm()
+	app.providerAddForm.Step = 999
+	if got := currentProviderAddField(app.providerAddForm); got != providerAddFieldAPIKey {
+		t.Fatalf("expected out-of-range step to clamp to last visible field, got %v", got)
+	}
+
+	app.providerAddForm.Step = 0
+	model, cmd := app.handleProviderAddFormInput(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
+	if cmd != nil {
+		t.Fatalf("expected nil cmd for rune input")
+	}
+	ptr, ok := model.(*App)
+	if !ok {
+		t.Fatalf("expected *App model, got %T", model)
+	}
+	app = *ptr
+	if app.providerAddForm.Name != "a" {
+		t.Fatalf("expected name field append, got %q", app.providerAddForm.Name)
+	}
+
+	model, _ = app.handleProviderAddFormInput(tea.KeyMsg{Type: tea.KeyTab})
+	ptr, ok = model.(*App)
+	if !ok {
+		t.Fatalf("expected *App model, got %T", model)
+	}
+	app = *ptr
+	if app.providerAddForm.Step == 0 {
+		t.Fatalf("expected tab to switch field")
+	}
+
+	app.providerAddForm.Step = 1 // driver
+	driverBefore := app.providerAddForm.Driver
+	model, _ = app.handleProviderAddFormInput(tea.KeyMsg{Type: tea.KeyDown})
+	ptr, ok = model.(*App)
+	if !ok {
+		t.Fatalf("expected *App model, got %T", model)
+	}
+	app = *ptr
+	if app.providerAddForm.Driver == driverBefore {
+		t.Fatalf("expected key down to switch driver")
+	}
+
+	app.providerAddForm.Step = 0
+	model, _ = app.handleProviderAddFormInput(tea.KeyMsg{Type: tea.KeyBackspace})
+	ptr, ok = model.(*App)
+	if !ok {
+		t.Fatalf("expected *App model, got %T", model)
+	}
+	app = *ptr
+	if app.providerAddForm.Name != "" {
+		t.Fatalf("expected backspace to remove name content")
+	}
+
+	model, cmd = app.handleProviderAddFormInput(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd != nil {
+		msg := cmd()
+		if _, ok := msg.(providerAddResultMsg); !ok {
+			t.Fatalf("expected providerAddResultMsg from submit cmd, got %T", msg)
+		}
+	}
+}
+
+func TestHandleProviderAddFormInputSubmittingNoop(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.startProviderAddForm()
+	app.providerAddForm.Submitting = true
+
+	model, cmd := app.handleProviderAddFormInput(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
+	if cmd != nil {
+		t.Fatalf("expected nil cmd while submitting")
+	}
+	ptr, ok := model.(*App)
+	if !ok {
+		t.Fatalf("expected *App model, got %T", model)
+	}
+	app = *ptr
+	if app.providerAddForm.Name != "" {
+		t.Fatalf("expected no mutation while submitting")
+	}
+}
+
+func TestListenForRuntimeEvent(t *testing.T) {
+	eventCh := make(chan agentruntime.RuntimeEvent, 1)
+	event := agentruntime.RuntimeEvent{RunID: "run-listen"}
+	eventCh <- event
+
+	cmd := ListenForRuntimeEvent(eventCh)
+	msg := cmd()
+	runtimeMsg, ok := msg.(RuntimeMsg)
+	if !ok {
+		t.Fatalf("expected RuntimeMsg, got %T", msg)
+	}
+	if runtimeMsg.Event.RunID != "run-listen" {
+		t.Fatalf("expected forwarded runtime event")
+	}
+
+	close(eventCh)
+	cmd = ListenForRuntimeEvent(eventCh)
+	msg = cmd()
+	if _, ok := msg.(RuntimeClosedMsg); !ok {
+		t.Fatalf("expected RuntimeClosedMsg after channel close, got %T", msg)
+	}
+}
+
+func TestBuildProviderAddRequest(t *testing.T) {
+	t.Run("validates required fields", func(t *testing.T) {
+		if _, err := buildProviderAddRequest(providerAddFormState{}); !strings.Contains(err, "Name is required") {
+			t.Fatalf("expected missing name error, got %q", err)
+		}
+		if _, err := buildProviderAddRequest(providerAddFormState{Name: "demo"}); !strings.Contains(err, "Driver is required") {
+			t.Fatalf("expected missing driver error, got %q", err)
+		}
+		if _, err := buildProviderAddRequest(providerAddFormState{Name: "demo", Driver: provider.DriverGemini}); !strings.Contains(err, "API Key is required") {
+			t.Fatalf("expected missing key error, got %q", err)
+		}
+	})
+
+	t.Run("openai compat applies defaults", func(t *testing.T) {
+		req, err := buildProviderAddRequest(providerAddFormState{
+			Name:   "openai-compat",
+			Driver: provider.DriverOpenAICompat,
+			APIKey: "k",
+		})
+		if err != "" {
+			t.Fatalf("unexpected error: %s", err)
+		}
+		if req.BaseURL != config.OpenAIDefaultBaseURL {
+			t.Fatalf("expected openai default base url, got %q", req.BaseURL)
+		}
+		if req.APIStyle != provider.OpenAICompatibleAPIStyleChatCompletions {
+			t.Fatalf("expected default api style")
+		}
+	})
+
+	t.Run("gemini applies defaults and clears unrelated fields", func(t *testing.T) {
+		req, err := buildProviderAddRequest(providerAddFormState{
+			Name:           "gemini",
+			Driver:         provider.DriverGemini,
+			APIKey:         "k",
+			APIStyle:       "x",
+			APIVersion:     "v",
+			DeploymentMode: "d",
+		})
+		if err != "" {
+			t.Fatalf("unexpected error: %s", err)
+		}
+		if req.BaseURL != config.GeminiDefaultBaseURL || req.APIStyle != "" || req.APIVersion != "" {
+			t.Fatalf("expected gemini normalization, got %+v", req)
+		}
+	})
+
+	t.Run("anthropic/custom require base url", func(t *testing.T) {
+		if _, err := buildProviderAddRequest(providerAddFormState{
+			Name:   "anthropic",
+			Driver: provider.DriverAnthropic,
+			APIKey: "k",
+		}); !strings.Contains(err, "Base URL is required") {
+			t.Fatalf("expected anthropic base url error, got %q", err)
+		}
+
+		if _, err := buildProviderAddRequest(providerAddFormState{
+			Name:    "custom",
+			Driver:  "custom-driver",
+			APIKey:  "k",
+			BaseURL: "",
+		}); !strings.Contains(err, "Base URL is required for custom driver") {
+			t.Fatalf("expected custom base url error, got %q", err)
+		}
+	})
+}
+
+func TestRefreshRuntimeSourceSnapshot(t *testing.T) {
+	app, runtime := newTestApp(t)
+	snapshot := &snapshotRuntime{
+		stubRuntime: runtime,
+		sessionContext: map[string]any{
+			"SessionID": "sess-1",
+			"Provider":  "provider-x",
+			"Model":     "model-x",
+			"Workdir":   "/tmp/work",
+			"Mode":      "agent",
+		},
+		sessionUsage: map[string]any{
+			"InputTokens":  11,
+			"OutputTokens": 7,
+			"TotalTokens":  18,
+		},
+		runSnapshot: map[string]any{
+			"RunID":     "run-9",
+			"SessionID": "sess-1",
+			"Context": map[string]any{
+				"Provider": "provider-y",
+				"Model":    "model-y",
+				"Workdir":  "/tmp/run",
+				"Mode":     "run",
+			},
+			"ToolStates": []any{
+				map[string]any{"ToolCallID": "tool-1", "ToolName": "bash", "Status": "running"},
+			},
+			"Usage": map[string]any{
+				"InputTokens":  3,
+				"OutputTokens": 4,
+				"TotalTokens":  7,
+			},
+			"SessionUsage": map[string]any{
+				"InputTokens":  20,
+				"OutputTokens": 9,
+				"TotalTokens":  29,
+			},
+		},
+	}
+	app.runtime = snapshot
+	app.state.ActiveSessionID = "sess-1"
+	app.state.ActiveRunID = "run-9"
+
+	app.refreshRuntimeSourceSnapshot()
+
+	if app.state.RunContext.Provider != "provider-y" || app.state.RunContext.Model != "model-y" {
+		t.Fatalf("expected run snapshot context to override run context, got %+v", app.state.RunContext)
+	}
+	if len(app.state.ToolStates) != 1 || app.state.ToolStates[0].ToolCallID != "tool-1" {
+		t.Fatalf("expected tool states from run snapshot")
+	}
+	if app.state.TokenUsage.RunTotalTokens != 7 || app.state.TokenUsage.SessionTotalTokens != 29 {
+		t.Fatalf("expected usage values from run snapshot, got %+v", app.state.TokenUsage)
+	}
+}
+
+func TestUpdatePickerProviderAndModelEnter(t *testing.T) {
+	app, _ := newTestApp(t)
+
+	app.providerPicker.SetItems([]list.Item{
+		selectionItem{id: "provider-a", name: "provider-a", description: "provider-a"},
+	})
+	app.openPicker(pickerProvider, statusChooseProvider, &app.providerPicker, "provider-a")
+	model, cmd := app.updatePicker(tea.KeyMsg{Type: tea.KeyEnter})
+	if model == nil || cmd == nil {
+		t.Fatalf("expected provider enter to return command")
+	}
+	app = model.(App)
+	if app.state.ActivePicker != pickerNone {
+		t.Fatalf("expected picker to close after provider enter")
+	}
+
+	app.modelPicker.SetItems([]list.Item{
+		selectionItem{id: "model-a", name: "model-a", description: "model-a"},
+	})
+	app.openPicker(pickerModel, statusChooseModel, &app.modelPicker, "model-a")
+	model, cmd = app.updatePicker(tea.KeyMsg{Type: tea.KeyEnter})
+	if model == nil || cmd == nil {
+		t.Fatalf("expected model enter to return command")
+	}
+	app = model.(App)
+	if app.state.ActivePicker != pickerNone {
+		t.Fatalf("expected picker to close after model enter")
+	}
+}
+
+func TestUpdatePickerRoutesToProviderAddFormHandler(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.startProviderAddForm()
+	app.state.ActivePicker = pickerProviderAdd
+
+	model, cmd := app.updatePicker(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")})
+	if cmd != nil {
+		t.Fatalf("expected nil cmd when editing provider add form")
+	}
+	ptr, ok := model.(*App)
+	if !ok {
+		t.Fatalf("expected *App model, got %T", model)
+	}
+	if ptr.providerAddForm == nil || ptr.providerAddForm.Name != "n" {
+		t.Fatalf("expected provider add form input to be routed")
+	}
+}
+
+func TestUpdateModelCatalogRefreshBranches(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.modelRefreshID = app.state.CurrentProvider
+
+	model, cmd := app.Update(modelCatalogRefreshMsg{
+		ProviderID: app.state.CurrentProvider,
+		Models: []providertypes.ModelDescriptor{
+			{ID: "m-new", Name: "m-new"},
+		},
+	})
+	if cmd != nil {
+		_ = cmd()
+	}
+	app = model.(App)
+	if app.modelRefreshID != "" {
+		t.Fatalf("expected refresh id to be cleared")
+	}
+	if len(app.modelPicker.Items()) == 0 {
+		t.Fatalf("expected model picker items to be replaced")
+	}
+
+	prevActivities := len(app.activities)
+	model, _ = app.Update(modelCatalogRefreshMsg{
+		ProviderID: app.state.CurrentProvider,
+		Err:        errors.New("refresh failed"),
+	})
+	app = model.(App)
+	if len(app.activities) <= prevActivities {
+		t.Fatalf("expected refresh error activity to be appended")
+	}
+
+	prevActivities = len(app.activities)
+	model, _ = app.Update(modelCatalogRefreshMsg{
+		ProviderID: "another-provider",
+		Err:        errors.New("ignored"),
+	})
+	app = model.(App)
+	if len(app.activities) != prevActivities {
+		t.Fatalf("expected mismatch provider refresh to be ignored")
+	}
+}
+
+func TestUpdateLocalAndWorkspaceCommandResultBranches(t *testing.T) {
+	app, _ := newTestApp(t)
+
+	model, _ := app.Update(localCommandResultMsg{Err: errors.New("local failed")})
+	app = model.(App)
+	if app.state.StatusText != "local failed" {
+		t.Fatalf("expected local command error status, got %q", app.state.StatusText)
+	}
+
+	model, _ = app.Update(localCommandResultMsg{Notice: "ok", ModelChanged: true})
+	app = model.(App)
+	if app.state.StatusText != "ok" {
+		t.Fatalf("expected local command success notice")
+	}
+
+	model, _ = app.Update(workspaceCommandResultMsg{Command: "", Err: errors.New("workspace failed")})
+	app = model.(App)
+	if app.state.StatusText != "workspace failed" {
+		t.Fatalf("expected workspace empty command error status")
+	}
+
+	model, _ = app.Update(workspaceCommandResultMsg{Command: "git status", Err: errors.New("boom")})
+	app = model.(App)
+	if !strings.Contains(app.state.StatusText, "Command failed") {
+		t.Fatalf("expected workspace command failed status")
+	}
+
+	model, _ = app.Update(workspaceCommandResultMsg{Command: "git status", Output: "clean"})
+	app = model.(App)
+	if app.state.StatusText != statusCommandDone {
+		t.Fatalf("expected workspace success status, got %q", app.state.StatusText)
+	}
+}
+
+func TestUpdateInputPanelSlashAndWorkspaceBranches(t *testing.T) {
+	app, _ := newTestApp(t)
+
+	app.input.SetValue("/provider")
+	app.state.InputText = "/provider"
+	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	app = model.(App)
+	if app.state.ActivePicker != pickerProvider {
+		t.Fatalf("expected /provider to open provider picker")
+	}
+
+	app.closePicker()
+	app.input.SetValue("/model")
+	app.state.InputText = "/model"
+	model, cmd := app.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	app = model.(App)
+	if app.state.ActivePicker != pickerModel {
+		t.Fatalf("expected /model to open model picker")
+	}
+	_ = cmd
+
+	app.closePicker()
+	app.input.SetValue("/provider add")
+	app.state.InputText = "/provider add"
+	model, _ = app.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	app = model.(App)
+	if app.state.ActivePicker != pickerProviderAdd || app.providerAddForm == nil {
+		t.Fatalf("expected /provider add to open provider add form")
+	}
+
+	app.providerAddForm = nil
+	app.state.ActivePicker = pickerNone
+	app.input.SetValue("& echo hi")
+	app.state.InputText = "& echo hi"
+	model, cmd = app.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	app = model.(App)
+	if app.state.StatusText != statusRunningCommand {
+		t.Fatalf("expected workspace command running status, got %q", app.state.StatusText)
+	}
+	if cmd == nil {
+		t.Fatalf("expected workspace command to return async cmd")
+	}
+
+	app.input.SetValue("&")
+	app.state.InputText = "&"
+	model, _ = app.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	app = model.(App)
+	if strings.TrimSpace(app.state.ExecutionError) == "" {
+		t.Fatalf("expected invalid workspace command error")
+	}
 }
