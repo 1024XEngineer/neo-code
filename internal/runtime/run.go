@@ -253,28 +253,11 @@ func (s *Service) prepareTurnSnapshot(ctx context.Context, state *runState) (tur
 	state.mu.Unlock()
 
 	limit := resolveNoProgressStreakLimit(cfg.Runtime)
-<<<<<<< codex/issue-294-auto-compact-threshold
-	systemPrompt := withSelfHealingReminder(builtContext.SystemPrompt, streak, limit)
-=======
 	repeatLimit := resolveRepeatCycleStreakLimit(cfg.Runtime)
-	systemPrompt := builtContext.SystemPrompt
-
-	if repeatStreak == repeatLimit-1 {
-		trimmed := strings.TrimSpace(systemPrompt)
-		if trimmed == "" {
-			systemPrompt = selfHealingRepeatReminder
-		} else {
-			systemPrompt = trimmed + "\n\n" + selfHealingRepeatReminder
-		}
-	} else if streak == limit-1 {
-		trimmed := strings.TrimSpace(systemPrompt)
-		if trimmed == "" {
-			systemPrompt = selfHealingReminder
-		} else {
-			systemPrompt = trimmed + "\n\n" + selfHealingReminder
-		}
+	systemPrompt, repeatInjected := withSelfHealingRepeatReminder(builtContext.SystemPrompt, repeatStreak, repeatLimit)
+	if !repeatInjected {
+		systemPrompt = withSelfHealingReminder(systemPrompt, streak, limit)
 	}
->>>>>>> main
 
 	model := strings.TrimSpace(cfg.CurrentModel)
 	return turnSnapshot{
@@ -481,6 +464,18 @@ func withSelfHealingReminder(systemPrompt string, streak int, limit int) string 
 		return selfHealingReminder
 	}
 	return trimmed + "\n\n" + selfHealingReminder
+}
+
+// withSelfHealingRepeatReminder 在重复循环临界轮次注入循环自愈提醒，避免模型继续相同工具调用。
+func withSelfHealingRepeatReminder(systemPrompt string, repeatStreak int, repeatLimit int) (string, bool) {
+	if repeatStreak != repeatLimit-1 {
+		return systemPrompt, false
+	}
+	trimmed := strings.TrimSpace(systemPrompt)
+	if trimmed == "" {
+		return selfHealingRepeatReminder, true
+	}
+	return trimmed + "\n\n" + selfHealingRepeatReminder, true
 }
 
 // autoCompactCacheKeyFromConfig 提取会影响自动压缩阈值解析的配置维度，用于 run 内缓存命中判断。
