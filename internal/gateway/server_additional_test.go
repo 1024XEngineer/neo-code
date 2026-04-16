@@ -238,6 +238,26 @@ func TestCloseReturnsContextErrorWhenWaitCanceled(t *testing.T) {
 	server.wg.Done()
 }
 
+func TestCloseStopsRelayBackgroundLoops(t *testing.T) {
+	relay := NewStreamRelay(StreamRelayOptions{
+		CleanupInterval: 5 * time.Millisecond,
+	})
+	relay.Start(context.Background(), nil)
+	waitForStreamRelayState(t, relay, true)
+
+	server := &Server{
+		relay: relay,
+		conns: make(map[net.Conn]struct{}),
+	}
+
+	closeCtx, cancelClose := context.WithTimeout(context.Background(), time.Second)
+	defer cancelClose()
+	if err := server.Close(closeCtx); err != nil {
+		t.Fatalf("close server: %v", err)
+	}
+	waitForStreamRelayState(t, relay, false)
+}
+
 func TestDecodeRPCRequestTrailingJSON(t *testing.T) {
 	reader := bufio.NewReader(strings.NewReader(`{"jsonrpc":"2.0","id":"x","method":"gateway.ping"} {"extra":1}` + "\n"))
 	_, err := decodeRPCRequest(reader)
@@ -338,7 +358,7 @@ func TestDispatchRPCRequestConvertsFrameErrorWithoutPayload(t *testing.T) {
 	server := &Server{}
 	originalHandlers := requestFrameHandlers
 	requestFrameHandlers = map[FrameAction]requestFrameHandler{
-		FrameActionPing: func(frame MessageFrame) MessageFrame {
+		FrameActionPing: func(_ context.Context, frame MessageFrame) MessageFrame {
 			return MessageFrame{
 				Type:      FrameTypeError,
 				Action:    frame.Action,

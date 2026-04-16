@@ -17,32 +17,34 @@ import (
 )
 
 const (
-	slashPrefix           = "/"
-	slashCommandHelp      = "/help"
-	slashCommandExit      = "/exit"
-	slashCommandClear     = "/clear"
-	slashCommandCompact   = "/compact"
-	slashCommandStatus    = "/status"
-	slashCommandProvider  = "/provider"
-	slashCommandModelPick = "/model"
-	slashCommandSession   = "/session"
-	slashCommandCWD       = "/cwd"
-	slashCommandMemo      = "/memo"
-	slashCommandRemember  = "/remember"
-	slashCommandForget    = "/forget"
+	slashPrefix             = "/"
+	slashCommandHelp        = "/help"
+	slashCommandExit        = "/exit"
+	slashCommandClear       = "/clear"
+	slashCommandCompact     = "/compact"
+	slashCommandStatus      = "/status"
+	slashCommandProvider    = "/provider"
+	slashCommandProviderAdd = "/provider add"
+	slashCommandModelPick   = "/model"
+	slashCommandSession     = "/session"
+	slashCommandCWD         = "/cwd"
+	slashCommandMemo        = "/memo"
+	slashCommandRemember    = "/remember"
+	slashCommandForget      = "/forget"
 
-	slashUsageHelp     = "/help"
-	slashUsageExit     = "/exit"
-	slashUsageClear    = "/clear"
-	slashUsageCompact  = "/compact"
-	slashUsageStatus   = "/status"
-	slashUsageProvider = "/provider"
-	slashUsageModel    = "/model"
-	slashUsageSession  = "/session"
-	slashUsageWorkdir  = "/cwd"
-	slashUsageMemo     = "/memo"
-	slashUsageRemember = "/remember <text>"
-	slashUsageForget   = "/forget <keyword>"
+	slashUsageHelp        = "/help"
+	slashUsageExit        = "/exit"
+	slashUsageClear       = "/clear"
+	slashUsageCompact     = "/compact"
+	slashUsageStatus      = "/status"
+	slashUsageProvider    = "/provider"
+	slashUsageProviderAdd = "/provider add"
+	slashUsageModel       = "/model"
+	slashUsageSession     = "/session"
+	slashUsageWorkdir     = "/cwd"
+	slashUsageMemo        = "/memo"
+	slashUsageRemember    = "/remember <text>"
+	slashUsageForget      = "/forget <keyword>"
 
 	commandMenuTitle       = "Suggestions"
 	providerPickerTitle    = "Select Provider"
@@ -55,6 +57,8 @@ const (
 	helpPickerSubtitle     = "Up/Down choose, Enter run, Esc cancel"
 	filePickerTitle        = "Browse Files"
 	filePickerSubtitle     = "Navigate folders, Enter choose file, Esc cancel"
+	providerAddTitle       = "Add New Provider"
+	providerAddSubtitle    = "Fill in details, Tab switch field, Enter confirm, Esc cancel"
 
 	activityTitle    = "Activity"
 	activitySubtitle = "Latest execution events"
@@ -123,6 +127,7 @@ var builtinSlashCommands = []slashCommand{
 	{Usage: slashUsageRemember, Description: "Save a persistent memo (/remember <text>)"},
 	{Usage: slashUsageForget, Description: "Remove memos matching keyword (/forget <keyword>)"},
 	{Usage: slashUsageProvider, Description: "Open the interactive provider picker"},
+	{Usage: slashUsageProviderAdd, Description: "Add a new custom provider"},
 	{Usage: slashUsageModel, Description: "Open the interactive model picker"},
 	{Usage: slashUsageSession, Description: "Switch to another session"},
 	{Usage: slashUsageExit, Description: "Exit NeoCode"},

@@ -54,6 +54,7 @@ type NetworkServerOptions struct {
 	HeartbeatInterval    time.Duration
 	MaxRequestBytes      int64
 	MaxStreamConnections int
+	Relay                *StreamRelay
 	listenFn             func(network, address string) (net.Listener, error)
 }
 
@@ -68,6 +69,7 @@ type NetworkServer struct {
 	maxRequestBytes      int64
 	maxStreamConnections int
 	listenFn             func(network, address string) (net.Listener, error)
+	relay                *StreamRelay
 
 	mu         sync.Mutex
 	server     *http.Server
@@ -124,6 +126,13 @@ func NewNetworkServer(options NetworkServerOptions) (*NetworkServer, error) {
 		maxStreamConnections = DefaultNetworkMaxStreamConnections
 	}
 
+	relay := options.Relay
+	if relay == nil {
+		relay = NewStreamRelay(StreamRelayOptions{
+			Logger: logger,
+		})
+	}
+
 	return &NetworkServer{
 		listenAddress:        listenAddress,
 		logger:               logger,
@@ -134,6 +143,7 @@ func NewNetworkServer(options NetworkServerOptions) (*NetworkServer, error) {
 		maxRequestBytes:      maxRequestBytes,
 		maxStreamConnections: maxStreamConnections,
 		listenFn:             listenFn,
+		relay:                relay,
 		wsConns:              make(map[*websocket.Conn]context.CancelFunc),
 		sseCancels:           make(map[int]context.CancelFunc),
 	}, nil
@@ -190,6 +200,10 @@ func (s *NetworkServer) ListenAddress() string {
 
 // Serve 启动网络访问面服务，并注册 HTTP/WebSocket/SSE 三类入口。
 func (s *NetworkServer) Serve(ctx context.Context, runtimePort RuntimePort) error {
+	if s.relay == nil {
+		s.relay = NewStreamRelay(StreamRelayOptions{Logger: s.logger})
+	}
+
 	listener, err := s.listenFn("tcp", s.listenAddress)
 	if err != nil {
 		return fmt.Errorf("gateway network listen failed: %w", err)
@@ -212,6 +226,7 @@ func (s *NetworkServer) Serve(ctx context.Context, runtimePort RuntimePort) erro
 	s.listenAddress = listener.Addr().String()
 	s.mu.Unlock()
 
+	s.relay.Start(ctx, runtimePort)
 	s.logger.Printf("network listening on %s", listener.Addr().String())
 
 	go func() {
@@ -233,9 +248,14 @@ func (s *NetworkServer) Close(ctx context.Context) error {
 	s.mu.Lock()
 	httpServer := s.server
 	listener := s.listener
+	relay := s.relay
 	s.server = nil
 	s.listener = nil
 	s.mu.Unlock()
+
+	if relay != nil {
+		relay.Stop()
+	}
 
 	if httpServer == nil && listener == nil {
 		return nil
@@ -344,6 +364,13 @@ func (s *NetworkServer) handleWebSocket(conn *websocket.Conn, runtimePort Runtim
 		parentContext = request.Context()
 	}
 	connectionContext, cancelConnection := context.WithCancel(parentContext)
+	relay := s.relay
+	if relay == nil {
+		relay = NewStreamRelay(StreamRelayOptions{Logger: s.logger})
+	}
+	connectionID := NewConnectionID()
+	connectionContext = WithConnectionID(connectionContext, connectionID)
+	connectionContext = WithStreamRelay(connectionContext, relay)
 
 	if !s.registerWSConnection(conn, cancelConnection) {
 		cancelConnection()
@@ -352,9 +379,43 @@ func (s *NetworkServer) handleWebSocket(conn *websocket.Conn, runtimePort Runtim
 		_ = conn.Close()
 		return
 	}
+
+	registerErr := relay.RegisterConnection(ConnectionRegistration{
+		ConnectionID: connectionID,
+		Channel:      StreamChannelWS,
+		Context:      connectionContext,
+		Cancel:       cancelConnection,
+		Write: func(message RelayMessage) error {
+			if message.Kind != relayMessageKindJSON {
+				return fmt.Errorf("websocket connection only supports json payload")
+			}
+			if s.writeTimeout > 0 {
+				if err := conn.SetWriteDeadline(time.Now().Add(s.writeTimeout)); err != nil {
+					return err
+				}
+			}
+			rawPayload, err := json.Marshal(message.Payload)
+			if err != nil {
+				return err
+			}
+			return websocket.Message.Send(conn, string(rawPayload))
+		},
+		Close: func() {
+			_ = conn.Close()
+		},
+	})
+	if registerErr != nil {
+		cancelConnection()
+		s.unregisterWSConnection(conn)
+		_ = conn.Close()
+		s.logger.Printf("register websocket connection failed: %v", registerErr)
+		return
+	}
+
 	defer func() {
 		cancelConnection()
 		s.unregisterWSConnection(conn)
+		relay.dropConnection(connectionID)
 		_ = conn.Close()
 	}()
 
@@ -363,10 +424,9 @@ func (s *NetworkServer) handleWebSocket(conn *websocket.Conn, runtimePort Runtim
 		conn.MaxPayloadBytes = maxPayloadBytes
 	}
 
-	var writeMu sync.Mutex
 	stopHeartbeat := make(chan struct{})
 	defer close(stopHeartbeat)
-	go s.runWSHeartbeatLoop(conn, &writeMu, stopHeartbeat)
+	go s.runWSHeartbeatLoop(relay, connectionID, stopHeartbeat)
 
 	for {
 		// 注意：此处不再强制上行读超时，避免单向推送场景下误杀健康连接。
@@ -388,18 +448,15 @@ func (s *NetworkServer) handleWebSocket(conn *websocket.Conn, runtimePort Runtim
 			rpcResponse = dispatchRPCRequestFn(connectionContext, rpcRequest, runtimePort)
 		}
 
-		if err := s.writeWebSocketMessage(conn, &writeMu, rpcResponse); err != nil {
+		if !relay.SendJSONRPCResponse(connectionID, rpcResponse) {
 			cancelConnection()
-			if !isConnectionClosedError(err) {
-				s.logger.Printf("websocket write failed: %v", err)
-			}
 			return
 		}
 	}
 }
 
 // runWSHeartbeatLoop 周期性推送 WebSocket 心跳帧，保证长连接可观测与保活。
-func (s *NetworkServer) runWSHeartbeatLoop(conn *websocket.Conn, writeMu *sync.Mutex, stop <-chan struct{}) {
+func (s *NetworkServer) runWSHeartbeatLoop(relay *StreamRelay, connectionID ConnectionID, stop <-chan struct{}) {
 	ticker := time.NewTicker(s.heartbeatInterval)
 	defer ticker.Stop()
 
@@ -408,31 +465,14 @@ func (s *NetworkServer) runWSHeartbeatLoop(conn *websocket.Conn, writeMu *sync.M
 		case <-stop:
 			return
 		case <-ticker.C:
-			if err := s.writeWebSocketMessage(conn, writeMu, map[string]any{
+			if !relay.SendJSONRPCPayload(connectionID, map[string]any{
 				"type":      "heartbeat",
 				"timestamp": time.Now().UTC().Format(time.RFC3339Nano),
-			}); err != nil {
+			}) {
 				return
 			}
 		}
 	}
-}
-
-// writeWebSocketMessage 将任意结构序列化后写入 WS 连接，并施加写超时约束。
-func (s *NetworkServer) writeWebSocketMessage(conn *websocket.Conn, writeMu *sync.Mutex, payload any) error {
-	if s.writeTimeout > 0 {
-		if err := conn.SetWriteDeadline(time.Now().Add(s.writeTimeout)); err != nil {
-			return err
-		}
-	}
-	rawPayload, err := json.Marshal(payload)
-	if err != nil {
-		return err
-	}
-
-	writeMu.Lock()
-	defer writeMu.Unlock()
-	return websocket.Message.Send(conn, string(rawPayload))
 }
 
 // handleSSERequest 处理 SSE 入口请求，先返回一次结果事件，再持续发送心跳事件。
@@ -455,10 +495,61 @@ func (s *NetworkServer) handleSSERequest(writer http.ResponseWriter, request *ht
 		http.Error(writer, "stream connection limit exceeded", http.StatusServiceUnavailable)
 		return
 	}
+	sseMessageCh := make(chan RelayMessage, DefaultStreamQueueSize)
+
+	relay := s.relay
+	if relay == nil {
+		relay = NewStreamRelay(StreamRelayOptions{Logger: s.logger})
+	}
+	streamConnectionID := NewConnectionID()
+	streamCtx = WithConnectionID(streamCtx, streamConnectionID)
+	streamCtx = WithStreamRelay(streamCtx, relay)
+
+	registerErr := relay.RegisterConnection(ConnectionRegistration{
+		ConnectionID: streamConnectionID,
+		Channel:      StreamChannelSSE,
+		Context:      streamCtx,
+		Cancel:       cancel,
+		Write: func(message RelayMessage) error {
+			if message.Kind != relayMessageKindSSE {
+				return fmt.Errorf("sse connection only supports sse events")
+			}
+			select {
+			case <-streamCtx.Done():
+				return context.Canceled
+			case sseMessageCh <- message:
+				return nil
+			}
+		},
+		Close: func() {},
+	})
+	if registerErr != nil {
+		cancel()
+		s.unregisterSSEConnection(connectionID)
+		http.Error(writer, "failed to register stream connection", http.StatusInternalServerError)
+		return
+	}
+
 	defer func() {
 		cancel()
 		s.unregisterSSEConnection(connectionID)
+		relay.dropConnection(streamConnectionID)
 	}()
+
+	queryValues := request.URL.Query()
+	sessionID := strings.TrimSpace(queryValues.Get("session_id"))
+	if sessionID != "" {
+		runID := strings.TrimSpace(queryValues.Get("run_id"))
+		if bindErr := relay.BindConnection(streamConnectionID, StreamBinding{
+			SessionID: sessionID,
+			RunID:     runID,
+			Channel:   StreamChannelSSE,
+			Explicit:  true,
+		}); bindErr != nil {
+			http.Error(writer, bindErr.Message, http.StatusBadRequest)
+			return
+		}
+	}
 
 	writer.Header().Set("Content-Type", "text/event-stream")
 	writer.Header().Set("Cache-Control", "no-cache")
@@ -467,7 +558,7 @@ func (s *NetworkServer) handleSSERequest(writer http.ResponseWriter, request *ht
 
 	rpcRequest := buildSSETriggerRequest(request)
 	rpcResponse := dispatchRPCRequestFn(streamCtx, rpcRequest, runtimePort)
-	if err := s.writeSSEEvent(writer, flusher, "result", rpcResponse); err != nil {
+	if !relay.SendSSEEvent(streamConnectionID, "result", rpcResponse) {
 		return
 	}
 
@@ -479,9 +570,16 @@ func (s *NetworkServer) handleSSERequest(writer http.ResponseWriter, request *ht
 		case <-streamCtx.Done():
 			return
 		case <-ticker.C:
-			if err := s.writeSSEEvent(writer, flusher, "heartbeat", map[string]string{
+			if !relay.SendSSEEvent(streamConnectionID, "heartbeat", map[string]string{
 				"timestamp": time.Now().UTC().Format(time.RFC3339Nano),
-			}); err != nil {
+			}) {
+				return
+			}
+		case message := <-sseMessageCh:
+			if strings.TrimSpace(message.Event) == "" {
+				return
+			}
+			if err := s.writeSSEEvent(writer, flusher, message.Event, message.Payload); err != nil {
 				return
 			}
 		}

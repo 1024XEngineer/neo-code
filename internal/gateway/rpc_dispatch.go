@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"strings"
 
 	"neo-code/internal/gateway/protocol"
 )
@@ -18,9 +19,23 @@ func dispatchRPCRequest(ctx context.Context, request protocol.JSONRPCRequest, ru
 		Action:    FrameAction(normalized.Action),
 		RequestID: normalized.RequestID,
 		SessionID: normalized.SessionID,
+		RunID:     normalized.RunID,
 		Workdir:   normalized.Workdir,
 		Payload:   normalized.Payload,
 	}
+
+	frame = hydrateFrameSessionFromConnection(ctx, frame)
+	if requiresSession(frame.Action) && strings.TrimSpace(frame.SessionID) == "" {
+		return protocol.NewJSONRPCErrorResponse(
+			normalized.ID,
+			protocol.NewJSONRPCError(
+				protocol.JSONRPCCodeInvalidParams,
+				"missing required field: session_id",
+				protocol.GatewayCodeMissingRequiredField,
+			),
+		)
+	}
+	applyAutomaticBinding(ctx, frame)
 
 	responseFrame := dispatchFrame(ctx, frame, runtimePort)
 	if responseFrame.Type != FrameTypeError {
@@ -56,4 +71,56 @@ func dispatchFrame(ctx context.Context, frame MessageFrame, runtimePort RuntimeP
 	}
 
 	return dispatchRequestFrame(ctx, frame, runtimePort)
+}
+
+// hydrateFrameSessionFromConnection 根据统一优先级为请求帧补齐 session_id：显式字段 > payload 参数 > 连接绑定兜底。
+func hydrateFrameSessionFromConnection(ctx context.Context, frame MessageFrame) MessageFrame {
+	if strings.TrimSpace(frame.SessionID) != "" {
+		return frame
+	}
+
+	payloadSessionID := strings.TrimSpace(extractSessionIDFromPayload(frame.Payload))
+	if payloadSessionID != "" {
+		frame.SessionID = payloadSessionID
+		return frame
+	}
+
+	relay, relayExists := StreamRelayFromContext(ctx)
+	connectionID, connectionExists := ConnectionIDFromContext(ctx)
+	if !relayExists || !connectionExists {
+		return frame
+	}
+
+	frame.SessionID = strings.TrimSpace(relay.ResolveFallbackSessionID(connectionID))
+	return frame
+}
+
+// requiresSession 判断指定动作在分发阶段是否必须携带 session_id。
+func requiresSession(action FrameAction) bool {
+	switch action {
+	case FrameActionBindStream, FrameActionRun, FrameActionCompact, FrameActionLoadSession, FrameActionResolvePermission:
+		return true
+	default:
+		return false
+	}
+}
+
+// applyAutomaticBinding 在请求分发前执行自动续绑与 ping 续期逻辑。
+func applyAutomaticBinding(ctx context.Context, frame MessageFrame) {
+	relay, relayExists := StreamRelayFromContext(ctx)
+	connectionID, connectionExists := ConnectionIDFromContext(ctx)
+	if !relayExists || !connectionExists {
+		return
+	}
+
+	if frame.Action == FrameActionPing {
+		relay.RefreshConnectionBindings(connectionID)
+		return
+	}
+
+	if frame.Action == FrameActionBindStream {
+		return
+	}
+
+	relay.AutoBindFromFrame(connectionID, frame)
 }

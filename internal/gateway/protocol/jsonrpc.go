@@ -14,6 +14,10 @@ const (
 const (
 	// MethodGatewayPing 表示网关探活方法。
 	MethodGatewayPing = "gateway.ping"
+	// MethodGatewayBindStream 表示客户端向网关声明流式订阅绑定的方法。
+	MethodGatewayBindStream = "gateway.bindStream"
+	// MethodGatewayEvent 表示网关向客户端推送运行时事件的通知方法。
+	MethodGatewayEvent = "gateway.event"
 	// MethodWakeOpenURL 表示 URL Scheme 唤醒方法。
 	MethodWakeOpenURL = "wake.openUrl"
 )
@@ -64,6 +68,13 @@ type JSONRPCResponse struct {
 	Error   *JSONRPCError   `json:"error,omitempty"`
 }
 
+// JSONRPCNotification 表示控制面向客户端主动推送的 JSON-RPC 通知。
+type JSONRPCNotification struct {
+	JSONRPC string `json:"jsonrpc"`
+	Method  string `json:"method"`
+	Params  any    `json:"params,omitempty"`
+}
+
 // JSONRPCError 表示 JSON-RPC 错误负载。
 type JSONRPCError struct {
 	Code    int               `json:"code"`
@@ -82,8 +93,16 @@ type NormalizedRequest struct {
 	RequestID string
 	Action    string
 	SessionID string
+	RunID     string
 	Workdir   string
 	Payload   any
+}
+
+// BindStreamParams 表示 gateway.bindStream 的标准化参数载荷。
+type BindStreamParams struct {
+	SessionID string `json:"session_id"`
+	RunID     string `json:"run_id,omitempty"`
+	Channel   string `json:"channel,omitempty"`
 }
 
 // NormalizeJSONRPCRequest 将 JSON-RPC 请求归一化为内部请求模型，并做方法级参数解析。
@@ -117,6 +136,16 @@ func NormalizeJSONRPCRequest(request JSONRPCRequest) (NormalizedRequest, *JSONRP
 	switch method {
 	case MethodGatewayPing:
 		normalized.Action = "ping"
+		return normalized, nil
+	case MethodGatewayBindStream:
+		params, parseErr := decodeBindStreamParams(request.Params)
+		if parseErr != nil {
+			return normalized, parseErr
+		}
+		normalized.Action = "bind_stream"
+		normalized.SessionID = params.SessionID
+		normalized.RunID = params.RunID
+		normalized.Payload = params
 		return normalized, nil
 	case MethodWakeOpenURL:
 		intent, parseErr := decodeWakeIntentParams(request.Params)
@@ -161,6 +190,15 @@ func NewJSONRPCErrorResponse(id json.RawMessage, rpcError *JSONRPCError) JSONRPC
 		JSONRPC: JSONRPCVersion,
 		ID:      cloneJSONRawMessage(id),
 		Error:   rpcError,
+	}
+}
+
+// NewJSONRPCNotification 创建 JSON-RPC 通知负载，供网关向客户端推送事件使用。
+func NewJSONRPCNotification(method string, params any) JSONRPCNotification {
+	return JSONRPCNotification{
+		JSONRPC: JSONRPCVersion,
+		Method:  strings.TrimSpace(method),
+		Params:  params,
 	}
 }
 
@@ -278,6 +316,54 @@ func decodeWakeIntentParams(raw json.RawMessage) (WakeIntent, *JSONRPCError) {
 		intent.Params = nil
 	}
 	return intent, nil
+}
+
+// decodeBindStreamParams 对 gateway.bindStream 的 params 执行反序列化与最小参数校验。
+func decodeBindStreamParams(raw json.RawMessage) (BindStreamParams, *JSONRPCError) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return BindStreamParams{}, NewJSONRPCError(
+			JSONRPCCodeInvalidParams,
+			"missing required field: params",
+			GatewayCodeMissingRequiredField,
+		)
+	}
+
+	var params BindStreamParams
+	if err := json.Unmarshal(trimmed, &params); err != nil {
+		return BindStreamParams{}, NewJSONRPCError(
+			JSONRPCCodeInvalidParams,
+			"invalid params for gateway.bindStream",
+			GatewayCodeInvalidFrame,
+		)
+	}
+
+	params.SessionID = strings.TrimSpace(params.SessionID)
+	params.RunID = strings.TrimSpace(params.RunID)
+	params.Channel = strings.ToLower(strings.TrimSpace(params.Channel))
+	if params.Channel == "" {
+		params.Channel = "all"
+	}
+
+	if params.SessionID == "" {
+		return BindStreamParams{}, NewJSONRPCError(
+			JSONRPCCodeInvalidParams,
+			"missing required field: params.session_id",
+			GatewayCodeMissingRequiredField,
+		)
+	}
+
+	switch params.Channel {
+	case "all", "ipc", "ws", "sse":
+	default:
+		return BindStreamParams{}, NewJSONRPCError(
+			JSONRPCCodeInvalidParams,
+			"invalid field: params.channel",
+			GatewayCodeInvalidAction,
+		)
+	}
+
+	return params, nil
 }
 
 // cloneJSONRawMessage 复制 RawMessage，避免共享底层切片导致的并发风险。

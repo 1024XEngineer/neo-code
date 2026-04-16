@@ -71,6 +71,38 @@ func TestNormalizeJSONRPCRequestWakeOpenURL(t *testing.T) {
 	}
 }
 
+func TestNormalizeJSONRPCRequestBindStream(t *testing.T) {
+	normalized, rpcErr := NormalizeJSONRPCRequest(JSONRPCRequest{
+		JSONRPC: JSONRPCVersion,
+		ID:      json.RawMessage(`"bind-1"`),
+		Method:  MethodGatewayBindStream,
+		Params: json.RawMessage(`{
+			"session_id":"session-1",
+			"run_id":"run-1",
+			"channel":"ws"
+		}`),
+	})
+	if rpcErr != nil {
+		t.Fatalf("normalize bindStream request: %v", rpcErr)
+	}
+	if normalized.Action != "bind_stream" {
+		t.Fatalf("action = %q, want %q", normalized.Action, "bind_stream")
+	}
+	if normalized.SessionID != "session-1" {
+		t.Fatalf("session_id = %q, want %q", normalized.SessionID, "session-1")
+	}
+	if normalized.RunID != "run-1" {
+		t.Fatalf("run_id = %q, want %q", normalized.RunID, "run-1")
+	}
+	params, ok := normalized.Payload.(BindStreamParams)
+	if !ok {
+		t.Fatalf("payload type = %T, want BindStreamParams", normalized.Payload)
+	}
+	if params.Channel != "ws" {
+		t.Fatalf("channel = %q, want %q", params.Channel, "ws")
+	}
+}
+
 func TestNormalizeJSONRPCRequestErrors(t *testing.T) {
 	testCases := []struct {
 		name            string
@@ -167,6 +199,38 @@ func TestNormalizeJSONRPCRequestErrors(t *testing.T) {
 			wantCode:        JSONRPCCodeInvalidParams,
 			wantGatewayCode: GatewayCodeInvalidFrame,
 		},
+		{
+			name: "bindStream missing params",
+			request: JSONRPCRequest{
+				JSONRPC: JSONRPCVersion,
+				ID:      json.RawMessage(`"x"`),
+				Method:  MethodGatewayBindStream,
+			},
+			wantCode:        JSONRPCCodeInvalidParams,
+			wantGatewayCode: GatewayCodeMissingRequiredField,
+		},
+		{
+			name: "bindStream missing session",
+			request: JSONRPCRequest{
+				JSONRPC: JSONRPCVersion,
+				ID:      json.RawMessage(`"x"`),
+				Method:  MethodGatewayBindStream,
+				Params:  json.RawMessage(`{"channel":"all"}`),
+			},
+			wantCode:        JSONRPCCodeInvalidParams,
+			wantGatewayCode: GatewayCodeMissingRequiredField,
+		},
+		{
+			name: "bindStream invalid channel",
+			request: JSONRPCRequest{
+				JSONRPC: JSONRPCVersion,
+				ID:      json.RawMessage(`"x"`),
+				Method:  MethodGatewayBindStream,
+				Params:  json.RawMessage(`{"session_id":"s-1","channel":"tcp"}`),
+			},
+			wantCode:        JSONRPCCodeInvalidParams,
+			wantGatewayCode: GatewayCodeInvalidAction,
+		},
 	}
 
 	for _, tc := range testCases {
@@ -253,6 +317,14 @@ func TestJSONRPCHelpers(t *testing.T) {
 	}
 	if MapGatewayCodeToJSONRPCCode("unknown") != JSONRPCCodeInternalError {
 		t.Fatal("unknown code should map to internal_error")
+	}
+
+	notification := NewJSONRPCNotification(MethodGatewayEvent, map[string]any{"message": "ok"})
+	if notification.JSONRPC != JSONRPCVersion {
+		t.Fatalf("notification jsonrpc = %q, want %q", notification.JSONRPC, JSONRPCVersion)
+	}
+	if notification.Method != MethodGatewayEvent {
+		t.Fatalf("notification method = %q, want %q", notification.Method, MethodGatewayEvent)
 	}
 }
 
