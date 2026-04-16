@@ -40,7 +40,7 @@ func ReadClipboardImage() ([]byte, error) {
 	}
 	data := clipboard.Read(clipboard.FmtImage)
 	if len(data) == 0 {
-		return nil, nil
+		return nil, errClipboardImageUnsupported
 	}
 	return data, nil
 }

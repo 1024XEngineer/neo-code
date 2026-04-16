@@ -9,7 +9,7 @@ import (
 )
 
 // CurrentTodoVersion 表示当前 Todo 结构版本。
-const CurrentTodoVersion = 2
+const CurrentTodoVersion = 3
 
 // TodoStatus 表示 Todo 项的状态枚举。
 type TodoStatus string
@@ -260,10 +260,14 @@ func (s *Session) UpdateTodo(id string, patch TodoPatch, expectedRevision int64)
 // ClaimTodo 用于 SubAgent 领取 Todo，并设置 owner 与执行中状态。
 func (s *Session) ClaimTodo(id string, ownerType string, ownerID string, expectedRevision int64) error {
 	status := TodoStatusInProgress
+	failureReason := ""
+	nextRetryAt := time.Time{}
 	patch := TodoPatch{
-		Status:    &status,
-		OwnerType: &ownerType,
-		OwnerID:   &ownerID,
+		Status:        &status,
+		OwnerType:     &ownerType,
+		OwnerID:       &ownerID,
+		FailureReason: &failureReason,
+		NextRetryAt:   &nextRetryAt,
 	}
 	return s.UpdateTodo(id, patch, expectedRevision)
 }
@@ -271,9 +275,15 @@ func (s *Session) ClaimTodo(id string, ownerType string, ownerID string, expecte
 // CompleteTodo 将 Todo 标记为完成并写入产物列表。
 func (s *Session) CompleteTodo(id string, artifacts []string, expectedRevision int64) error {
 	status := TodoStatusCompleted
+	failureReason := ""
+	retryCount := 0
+	nextRetryAt := time.Time{}
 	patch := TodoPatch{
-		Status:    &status,
-		Artifacts: &artifacts,
+		Status:        &status,
+		Artifacts:     &artifacts,
+		FailureReason: &failureReason,
+		RetryCount:    &retryCount,
+		NextRetryAt:   &nextRetryAt,
 	}
 	return s.UpdateTodo(id, patch, expectedRevision)
 }
@@ -281,9 +291,11 @@ func (s *Session) CompleteTodo(id string, artifacts []string, expectedRevision i
 // FailTodo 将 Todo 标记为失败并记录失败原因。
 func (s *Session) FailTodo(id string, reason string, expectedRevision int64) error {
 	status := TodoStatusFailed
+	nextRetryAt := time.Time{}
 	patch := TodoPatch{
 		Status:        &status,
 		FailureReason: &reason,
+		NextRetryAt:   &nextRetryAt,
 	}
 	return s.UpdateTodo(id, patch, expectedRevision)
 }
@@ -395,6 +407,15 @@ func normalizeTodoItem(item TodoItem) (TodoItem, error) {
 	item.Acceptance = normalizeTodoTextList(item.Acceptance)
 	item.Artifacts = normalizeTodoTextList(item.Artifacts)
 	item.FailureReason = strings.TrimSpace(item.FailureReason)
+	if item.RetryCount < 0 {
+		item.RetryCount = 0
+	}
+	if item.RetryLimit < 0 {
+		item.RetryLimit = 0
+	}
+	if !item.NextRetryAt.IsZero() {
+		item.NextRetryAt = item.NextRetryAt.UTC()
+	}
 	if item.Status == "" {
 		item.Status = TodoStatusPending
 	}
@@ -413,8 +434,11 @@ func normalizeTodoItem(item TodoItem) (TodoItem, error) {
 		return TodoItem{}, fmt.Errorf("session: invalid todo owner_type %q", item.OwnerType)
 	}
 
-	if item.Status != TodoStatusFailed {
+	if item.Status != TodoStatusFailed && item.Status != TodoStatusPending && item.Status != TodoStatusBlocked {
 		item.FailureReason = ""
+	}
+	if item.Status != TodoStatusPending && item.Status != TodoStatusFailed {
+		item.NextRetryAt = time.Time{}
 	}
 	return item, nil
 }
