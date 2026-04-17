@@ -596,6 +596,34 @@ func TestWorkerStepCancellationBranches(t *testing.T) {
 			t.Fatalf("state=%q, want %q", wr.State(), StateCanceled)
 		}
 	})
+
+	t.Run("engine deadline transitions timeout state", func(t *testing.T) {
+		t.Parallel()
+		wr, err := NewWorker(RoleResearcher, policy, EngineFunc(func(ctx context.Context, input StepInput) (StepOutput, error) {
+			_ = ctx
+			_ = input
+			return StepOutput{}, context.DeadlineExceeded
+		}))
+		if err != nil {
+			t.Fatalf("NewWorker() error = %v", err)
+		}
+		if err := wr.Start(Task{ID: "t-step-timeout", Goal: "goal"}, Budget{MaxSteps: 3}, Capability{}); err != nil {
+			t.Fatalf("Start() error = %v", err)
+		}
+		if _, err := wr.Step(context.Background()); !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("expected deadline exceeded, got %v", err)
+		}
+		if wr.State() != StateFailed {
+			t.Fatalf("state=%q, want %q", wr.State(), StateFailed)
+		}
+		result, err := wr.Result()
+		if err != nil {
+			t.Fatalf("Result() error = %v", err)
+		}
+		if result.StopReason != StopReasonTimeout {
+			t.Fatalf("stop reason=%q, want %q", result.StopReason, StopReasonTimeout)
+		}
+	})
 }
 
 func TestWorkerAdditionalUncoveredBranches(t *testing.T) {

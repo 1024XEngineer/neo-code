@@ -27,7 +27,21 @@ func executeTaskWithFactory(ctx context.Context, factory Factory, input schedule
 	for {
 		stepResult, stepErr := worker.Step(ctx)
 		if stepErr != nil {
-			if errors.Is(stepErr, context.Canceled) || errors.Is(stepErr, context.DeadlineExceeded) {
+			if errors.Is(stepErr, context.DeadlineExceeded) {
+				_ = worker.Stop(StopReasonTimeout)
+				result, resultErr := worker.Result()
+				if resultErr == nil {
+					return result, stepErr
+				}
+				return Result{
+					Role:       input.Role,
+					TaskID:     input.Task.ID,
+					State:      StateFailed,
+					StopReason: StopReasonTimeout,
+					Error:      strings.TrimSpace(stepErr.Error()),
+				}, stepErr
+			}
+			if errors.Is(stepErr, context.Canceled) {
 				_ = worker.Stop(StopReasonCanceled)
 				result, resultErr := worker.Result()
 				if resultErr == nil {

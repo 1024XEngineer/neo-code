@@ -24,6 +24,8 @@ const (
 	EventSubAgentStarted EventType = "subagent_started"
 	// EventSubAgentProgress 在子代理执行每一步后触发。
 	EventSubAgentProgress EventType = "subagent_progress"
+	// EventSubAgentRetried 在子代理任务进入重试后触发。
+	EventSubAgentRetried EventType = "subagent_retried"
 	// EventSubAgentCompleted 在子代理成功结束后触发。
 	EventSubAgentCompleted EventType = "subagent_completed"
 	// EventSubAgentFailed 在子代理失败结束后触发。
