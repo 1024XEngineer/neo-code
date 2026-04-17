@@ -18,7 +18,6 @@ import (
 
 	"neo-code/internal/config"
 	configstate "neo-code/internal/config/state"
-	"neo-code/internal/memo"
 	"neo-code/internal/provider"
 	providertypes "neo-code/internal/provider/types"
 	agentruntime "neo-code/internal/runtime"
@@ -63,6 +62,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		a.width = typed.Width
 		a.height = typed.Height
+		a.layoutCached = false
 		a.applyComponentLayout(true)
 		return a, tea.Batch(cmds...)
 	case providerAddResultMsg:
@@ -112,6 +112,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.clearRunProgress()
 		}
 		a.syncActiveSessionTitle()
+		a.syncTodosFromRun()
 		return a, tea.Batch(cmds...)
 	case permissionResolutionFinishedMsg:
 		if a.pendingPermission != nil && a.pendingPermission.Request.RequestID == typed.RequestID {
@@ -145,21 +146,6 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cfg := a.configManager.Get()
 		a.syncConfigState(cfg)
 		selectPickerItemByID(&a.modelPicker, cfg.CurrentModel)
-		return a, tea.Batch(cmds...)
-	case compactFinishedMsg:
-		a.state.IsCompacting = false
-		if typed.Err != nil && strings.TrimSpace(a.state.ExecutionError) == "" {
-			a.state.ExecutionError = typed.Err.Error()
-			a.state.StatusText = typed.Err.Error()
-		}
-		if err := a.refreshMessages(); err != nil && strings.TrimSpace(a.state.ActiveSessionID) != "" {
-			a.state.ExecutionError = err.Error()
-			a.state.StatusText = err.Error()
-			a.appendInlineMessage(roleError, err.Error())
-		}
-		a.syncActiveSessionTitle()
-		a.rebuildTranscript()
-		a.transcript.GotoBottom()
 		return a, tea.Batch(cmds...)
 	case localCommandResultMsg:
 		if typed.Err != nil {
@@ -220,6 +206,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if a.handleActivityMouse(typed) {
 			return a, tea.Batch(cmds...)
 		}
+		if a.handleTodoMouse(typed) {
+			return a, tea.Batch(cmds...)
+		}
 		if a.handleInputMouse(typed) {
 			return a, tea.Batch(cmds...)
 		}
@@ -256,7 +245,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return a, tea.Batch(cmds...)
 			}
 			if a.shouldHandleTabAsInput(typed) {
-				tabMsg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'\t'}, Paste: typed.Paste}
+				tabMsg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'	'}, Paste: typed.Paste}
 				return a.updateInputPanel(tabMsg, tabMsg, cmds)
 			}
 		}
@@ -293,6 +282,43 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case panelActivity:
 			a.handleViewportKeys(&a.activity, typed)
 			return a, tea.Batch(cmds...)
+		case panelTodo:
+			switch {
+			case key.Matches(typed, a.keys.ScrollUp):
+				a.moveTodoSelection(-1)
+			case key.Matches(typed, a.keys.ScrollDown):
+				a.moveTodoSelection(1)
+			case key.Matches(typed, a.keys.PageUp):
+				a.moveTodoSelection(-5)
+			case key.Matches(typed, a.keys.PageDown):
+				a.moveTodoSelection(5)
+			case key.Matches(typed, a.keys.Top):
+				if !a.todoCollapsed {
+					a.todoSelectedIndex = 0
+					a.rebuildTodo()
+				}
+			case key.Matches(typed, a.keys.Bottom):
+				if !a.todoCollapsed {
+					a.todoSelectedIndex = len(a.visibleTodoItems()) - 1
+					a.rebuildTodo()
+				}
+			case key.Matches(typed, a.keys.Send):
+				if a.todoCollapsed {
+					a.setTodoCollapsed(false)
+					a.state.StatusText = statusTodoExpanded
+					a.applyComponentLayout(false)
+				} else {
+					a.openSelectedTodoDetail()
+				}
+			case typed.Type == tea.KeyRunes && len(typed.Runes) == 1 && (typed.Runes[0] == 'c' || typed.Runes[0] == 'C'):
+				if a.toggleTodoCollapsed() {
+					a.state.StatusText = statusTodoCollapsed
+				} else {
+					a.state.StatusText = statusTodoExpanded
+				}
+				a.applyComponentLayout(false)
+			}
+			return a, tea.Batch(cmds...)
 		case panelInput:
 			return a.updateInputPanel(msg, typed, cmds)
 		}
@@ -326,9 +352,8 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 				return a, tea.Batch(cmds...)
 			}
 
-			// 先检查是否是立即执行的命令，如果处理了，就直接返回
 			if handled, cmd := a.handleImmediateSlashCommand(input); handled {
-				a.input.Reset() // 只有在命令被处理后才清空输入
+				a.input.Reset()
 				a.state.InputText = ""
 				a.applyComponentLayout(true)
 				a.refreshCommandMenu()
@@ -353,6 +378,11 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 				return a, tea.Batch(cmds...)
 			}
 
+			a.input.Reset()
+			a.state.InputText = ""
+			a.applyComponentLayout(true)
+			a.refreshCommandMenu()
+			a.resetPasteHeuristics()
 			switch strings.ToLower(input) {
 			case slashCommandHelp:
 				a.refreshHelpPicker()
@@ -432,7 +462,7 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 			}
 
 			// image capability precheck is intentionally disabled.
-			// 如果不是立即执行的命令，再执行常规的输入重置
+			// 保持与 CLI 一致，先允许输入提交流转，再由后续链路统一处理能力兜底。
 			a.input.Reset()
 			a.state.InputText = ""
 			a.applyComponentLayout(true)
@@ -488,7 +518,7 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 	return a, tea.Batch(cmds...)
 }
 
-// updatePendingPermissionInput 处理权限审批面板上的键盘交互（上下选择与回车确认）。
+// updatePendingPermissionInput handles keyboard interaction in the permission prompt.
 func (a *App) updatePendingPermissionInput(typed tea.KeyMsg) (tea.Cmd, bool) {
 	if a.pendingPermission == nil {
 		return nil, false
@@ -519,7 +549,6 @@ func (a *App) updatePendingPermissionInput(typed tea.KeyMsg) (tea.Cmd, bool) {
 	return nil, true
 }
 
-// submitPermissionDecision 触发一次权限审批提交命令。
 func (a *App) submitPermissionDecision(decision agentruntime.PermissionResolutionDecision) tea.Cmd {
 	if a.pendingPermission == nil {
 		return nil
@@ -747,6 +776,7 @@ func (a *App) refreshMessages() error {
 	if strings.TrimSpace(a.state.ActiveSessionID) == "" {
 		a.activeMessages = nil
 		a.clearActivities()
+		a.clearTodos()
 		return nil
 	}
 
@@ -757,13 +787,13 @@ func (a *App) refreshMessages() error {
 
 	a.activeMessages = session.Messages
 	a.clearActivities()
+	a.syncTodos(session.Todos)
 	a.state.ActiveSessionTitle = session.Title
 	a.setCurrentWorkdir(agentsession.EffectiveWorkdir(session.Workdir, a.configManager.Get().Workdir))
 	a.refreshRuntimeSourceSnapshot()
 	return nil
 }
 
-// resetSessionRuntimeState 在切换/刷新会话前清理运行态缓存，避免跨会话残留工具与用量展示。
 func (a *App) resetSessionRuntimeState() {
 	a.state.IsAgentRunning = false
 	a.state.StreamingReply = false
@@ -775,6 +805,38 @@ func (a *App) resetSessionRuntimeState() {
 	a.state.TokenUsage = tuistate.TokenUsageState{}
 	a.pendingPermission = nil
 	a.clearRunProgress()
+}
+
+func (a *App) refreshTodosFromSession(sessionID string) error {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return fmt.Errorf("session id is empty")
+	}
+	session, err := a.runtime.LoadSession(context.Background(), sessionID)
+	if err != nil {
+		return err
+	}
+	a.syncTodos(session.Todos)
+	a.applyComponentLayout(false)
+	return nil
+}
+
+func (a *App) syncTodosFromRun() {
+	sessionID := a.state.ActiveSessionID
+	if sessionID == "" {
+		return
+	}
+	session, err := a.runtime.LoadSession(context.Background(), sessionID)
+	if err != nil {
+		return
+	}
+	a.todoItems = nil
+	a.todoPanelVisible = false
+	a.todoSelectedIndex = 0
+	if len(session.Todos) > 0 {
+		a.syncTodos(session.Todos)
+	}
+	a.rebuildTodo()
 }
 
 func (a *App) activateSelectedSession() error {
@@ -810,7 +872,6 @@ func (a *App) activateSessionByID(sessionID string) error {
 	return fmt.Errorf("session not found: %s", sessionID)
 }
 
-// ensureSessionSwitchAllowed 统一阻止运行中切换到其他会话，避免 UI 脱离仍在执行的 run 上下文。
 func (a *App) ensureSessionSwitchAllowed(targetSessionID string) error {
 	targetSessionID = strings.TrimSpace(targetSessionID)
 	activeSessionID := strings.TrimSpace(a.state.ActiveSessionID)
@@ -844,7 +905,6 @@ func (a *App) syncConfigState(cfg config.Config) {
 	}
 }
 
-// refreshRuntimeSourceSnapshot 从 runtime 查询 context/token/tool 快照，用于会话切换或恢复时回填 UI。
 func (a *App) refreshRuntimeSourceSnapshot() {
 	sessionID := strings.TrimSpace(a.state.ActiveSessionID)
 	if sessionID != "" {
@@ -895,17 +955,15 @@ func (a *App) refreshRuntimeSourceSnapshot() {
 	}
 }
 
-// runtimeSessionContextSource 约束可选的会话上下文查询能力。
+// runtimeSessionContextSource 缂備焦鎷濋梽鍕焽椤愶箑鐭楁い鏍亹閸嬫挻寰勭仦鍓ф殸婵炴潙鍚嬫穱娲儊閼恒儳鈻斿┑鐘辫兌閻熸捇鏌￠崒姘闁绘搫绱曢幏鐘诲閿濆懎骞嬮梺鍛婃⒐缁嬪繘鍩€
 type runtimeSessionContextSource interface {
 	GetSessionContext(ctx context.Context, sessionID string) (any, error)
 }
 
-// runtimeSessionUsageSource 约束可选的会话 token 使用量查询能力。
 type runtimeSessionUsageSource interface {
 	GetSessionUsage(ctx context.Context, sessionID string) (any, error)
 }
 
-// runtimeRunSnapshotSource 约束可选的运行快照查询能力。
 type runtimeRunSnapshotSource interface {
 	GetRunSnapshot(ctx context.Context, runID string) (any, error)
 }
@@ -931,9 +989,10 @@ var runtimeEventHandlerRegistry = map[agentruntime.EventType]func(*App, agentrun
 	agentruntime.EventCompactError:                             runtimeEventCompactErrorHandler,
 	agentruntime.EventPhaseChanged:                             runtimeEventPhaseChangedHandler,
 	agentruntime.EventStopReasonDecided:                        runtimeEventStopReasonDecidedHandler,
+	agentruntime.EventTodoUpdated:                              runtimeEventTodoUpdatedHandler,
+	agentruntime.EventTodoConflict:                             runtimeEventTodoConflictHandler,
 }
 
-// runtimeEventPhaseChangedHandler 处理 phase 迁移并更新进度标签。
 func runtimeEventPhaseChangedHandler(a *App, event agentruntime.RuntimeEvent) bool {
 	payload, ok := event.Payload.(agentruntime.PhaseChangedPayload)
 	if !ok {
@@ -950,7 +1009,7 @@ func runtimeEventPhaseChangedHandler(a *App, event agentruntime.RuntimeEvent) bo
 	return false
 }
 
-// runtimeEventStopReasonDecidedHandler 处理唯一终止事实事件。
+// runtimeEventStopReasonDecidedHandler 婵犮垼娉涚€氼噣骞冩繝鍥ц埞妞ゆ牗鐟ч杈╃磽娴ｅ摜澧涙い鎺撶⊕缁傚秶鈧綆浜為弶钘壝瑰鍐惧剮婵炲棎鍨芥俊
 func runtimeEventStopReasonDecidedHandler(a *App, event agentruntime.RuntimeEvent) bool {
 	payload, ok := event.Payload.(agentruntime.StopReasonDecidedPayload)
 	if !ok {
@@ -985,7 +1044,86 @@ func runtimeEventStopReasonDecidedHandler(a *App, event agentruntime.RuntimeEven
 	return false
 }
 
-// handleRuntimeEvent 通过注册表分发 runtime 事件，避免巨型 switch 膨胀。
+func runtimeEventTodoUpdatedHandler(a *App, event agentruntime.RuntimeEvent) bool {
+	sessionID := strings.TrimSpace(event.SessionID)
+	if sessionID == "" {
+		sessionID = strings.TrimSpace(a.state.ActiveSessionID)
+	}
+	if strings.TrimSpace(sessionID) == "" || !strings.EqualFold(sessionID, strings.TrimSpace(a.state.ActiveSessionID)) {
+		return false
+	}
+
+	if err := a.refreshTodosFromSession(sessionID); err != nil {
+		a.appendActivity("todo", "Failed to refresh todo panel", err.Error(), true)
+		return false
+	}
+
+	payload, _ := parseTodoEventPayload(event.Payload)
+	action := strings.TrimSpace(payload.Action)
+	if action == "" {
+		action = "update"
+	}
+	a.appendActivity("todo", "Todo updated", action, false)
+	return false
+}
+
+func runtimeEventTodoConflictHandler(a *App, event agentruntime.RuntimeEvent) bool {
+	sessionID := strings.TrimSpace(event.SessionID)
+	if sessionID == "" {
+		sessionID = strings.TrimSpace(a.state.ActiveSessionID)
+	}
+	if strings.TrimSpace(sessionID) == "" || !strings.EqualFold(sessionID, strings.TrimSpace(a.state.ActiveSessionID)) {
+		return false
+	}
+
+	if err := a.refreshTodosFromSession(sessionID); err != nil {
+		a.appendActivity("todo", "Failed to refresh todo panel", err.Error(), true)
+		return false
+	}
+
+	payload, _ := parseTodoEventPayload(event.Payload)
+	reason := strings.TrimSpace(payload.Reason)
+	if reason == "" {
+		reason = "todo conflict"
+	}
+	a.appendActivity("todo", "Todo conflict", reason, true)
+	return false
+}
+
+func parseTodoEventPayload(payload any) (agentruntime.TodoEventPayload, bool) {
+	switch typed := payload.(type) {
+	case agentruntime.TodoEventPayload:
+		return typed, true
+	case *agentruntime.TodoEventPayload:
+		if typed == nil {
+			return agentruntime.TodoEventPayload{}, false
+		}
+		return *typed, true
+	case map[string]any:
+		action := ""
+		reason := ""
+		if raw, ok := typed["Action"]; ok && raw != nil {
+			action = strings.TrimSpace(fmt.Sprintf("%v", raw))
+		}
+		if raw, ok := typed["Reason"]; ok && raw != nil {
+			reason = strings.TrimSpace(fmt.Sprintf("%v", raw))
+		}
+		if action == "" {
+			if raw, ok := typed["action"]; ok && raw != nil {
+				action = strings.TrimSpace(fmt.Sprintf("%v", raw))
+			}
+		}
+		if reason == "" {
+			if raw, ok := typed["reason"]; ok && raw != nil {
+				reason = strings.TrimSpace(fmt.Sprintf("%v", raw))
+			}
+		}
+		return agentruntime.TodoEventPayload{Action: action, Reason: reason}, true
+	default:
+		return agentruntime.TodoEventPayload{}, false
+	}
+}
+
 func (a *App) handleRuntimeEvent(event agentruntime.RuntimeEvent) bool {
 	if !a.shouldHandleRuntimeEvent(event) {
 		return false
@@ -997,7 +1135,6 @@ func (a *App) handleRuntimeEvent(event agentruntime.RuntimeEvent) bool {
 	return handler(a, event)
 }
 
-// shouldHandleRuntimeEvent 校验事件与当前活跃会话/运行上下文的关联，避免跨会话污染 UI 状态。
 func (a *App) shouldHandleRuntimeEvent(event agentruntime.RuntimeEvent) bool {
 	activeSessionID := strings.TrimSpace(a.state.ActiveSessionID)
 	eventSessionID := strings.TrimSpace(event.SessionID)
@@ -1013,8 +1150,6 @@ func (a *App) shouldHandleRuntimeEvent(event agentruntime.RuntimeEvent) bool {
 	return true
 }
 
-// runtimeEventUserMessageHandler 处理用户消息进入运行队列后的状态同步。
-// runtimeEventInputNormalizedHandler 处理输入归一化完成事件并更新运行态提示。
 func runtimeEventInputNormalizedHandler(a *App, event agentruntime.RuntimeEvent) bool {
 	if strings.TrimSpace(event.RunID) != "" {
 		a.state.ActiveRunID = strings.TrimSpace(event.RunID)
@@ -1034,7 +1169,6 @@ func runtimeEventInputNormalizedHandler(a *App, event agentruntime.RuntimeEvent)
 	return false
 }
 
-// runtimeEventAssetSavedHandler 处理附件保存成功事件并写入活动面板。
 func runtimeEventAssetSavedHandler(a *App, event agentruntime.RuntimeEvent) bool {
 	payload, ok := event.Payload.(agentruntime.AssetSavedPayload)
 	if !ok {
@@ -1051,7 +1185,6 @@ func runtimeEventAssetSavedHandler(a *App, event agentruntime.RuntimeEvent) bool
 	return false
 }
 
-// runtimeEventAssetSaveFailedHandler 处理附件保存失败事件并同步错误状态。
 func runtimeEventAssetSaveFailedHandler(a *App, event agentruntime.RuntimeEvent) bool {
 	payload, ok := event.Payload.(agentruntime.AssetSaveFailedPayload)
 	if !ok {
@@ -1101,7 +1234,6 @@ func runtimeEventUserMessageHandler(a *App, event agentruntime.RuntimeEvent) boo
 	return true
 }
 
-// runtimeEventRunContextHandler 处理 runtime 上下文事件并回填界面状态。
 func runtimeEventRunContextHandler(a *App, event agentruntime.RuntimeEvent) bool {
 	payload, ok := tuiservices.ParseRunContextPayload(event.Payload)
 	if !ok {
@@ -1127,7 +1259,6 @@ func runtimeEventRunContextHandler(a *App, event agentruntime.RuntimeEvent) bool
 	return false
 }
 
-// runtimeEventToolStatusHandler 处理工具状态流转并更新当前工具展示。
 func runtimeEventToolStatusHandler(a *App, event agentruntime.RuntimeEvent) bool {
 	payload, ok := tuiservices.ParseToolStatusPayload(event.Payload)
 	if !ok {
@@ -1146,7 +1277,6 @@ func runtimeEventToolStatusHandler(a *App, event agentruntime.RuntimeEvent) bool
 	return false
 }
 
-// runtimeEventUsageHandler 处理 token 使用量更新。
 func runtimeEventUsageHandler(a *App, event agentruntime.RuntimeEvent) bool {
 	payload, ok := tuiservices.ParseUsagePayload(event.Payload)
 	if !ok {
@@ -1156,7 +1286,7 @@ func runtimeEventUsageHandler(a *App, event agentruntime.RuntimeEvent) bool {
 	return false
 }
 
-// runtimeEventToolCallThinkingHandler 处理工具规划阶段事件。
+// runtimeEventToolCallThinkingHandler 婵犮垼娉涚€氼噣骞冩繝鍌ゅ晠闁靛鍎卞鏃堟偡濞嗗繐顏╅柛銊︾箞濮婂ジ鎳滃▓鍨杸婵炲瓨绮岄鍕枎閵忋倕违
 func runtimeEventToolCallThinkingHandler(a *App, event agentruntime.RuntimeEvent) bool {
 	if payload, ok := event.Payload.(string); ok && strings.TrimSpace(payload) != "" {
 		a.state.CurrentTool = payload
@@ -1166,7 +1296,7 @@ func runtimeEventToolCallThinkingHandler(a *App, event agentruntime.RuntimeEvent
 	return false
 }
 
-// runtimeEventToolStartHandler 处理工具开始执行事件。
+// runtimeEventToolStartHandler 婵犮垼娉涚€氼噣骞冩繝鍌ゅ晠闁靛鍎卞鏃傗偓娈垮枓閸嬫挸鈹戦纰卞剱濠⒀呮櫕閹壆浠﹂懖鈺冩婵炲濮剧紙浼村焵
 func runtimeEventToolStartHandler(a *App, event agentruntime.RuntimeEvent) bool {
 	a.state.StatusText = statusRunningTool
 	a.state.StreamingReply = false
@@ -1178,7 +1308,6 @@ func runtimeEventToolStartHandler(a *App, event agentruntime.RuntimeEvent) bool 
 	return false
 }
 
-// runtimeEventToolResultHandler 处理工具执行结果并决定是否刷新对话区。
 func runtimeEventToolResultHandler(a *App, event agentruntime.RuntimeEvent) bool {
 	a.state.StreamingReply = false
 	a.state.CurrentTool = ""
@@ -1203,7 +1332,7 @@ func runtimeEventToolResultHandler(a *App, event agentruntime.RuntimeEvent) bool
 	return true
 }
 
-// runtimeEventAgentChunkHandler 处理模型流式增量输出。
+// runtimeEventAgentChunkHandler 婵犮垼娉涚€氼噣骞冩繝鍋界喖鍨惧畷鍥ｅ亾瀹勬噴瑙勬媴閸濄儳顢呮繝鈷€鍛槐闁革絿鍎ゅ蹇涘箻閸愬弶鐦旈梺
 func runtimeEventAgentChunkHandler(a *App, event agentruntime.RuntimeEvent) bool {
 	payload, ok := event.Payload.(string)
 	if !ok {
@@ -1216,7 +1345,6 @@ func runtimeEventAgentChunkHandler(a *App, event agentruntime.RuntimeEvent) bool
 	return true
 }
 
-// runtimeEventToolChunkHandler 处理工具流式输出片段。
 func runtimeEventToolChunkHandler(a *App, event agentruntime.RuntimeEvent) bool {
 	if payload, ok := event.Payload.(string); ok && strings.TrimSpace(payload) != "" {
 		a.state.StatusText = statusRunningTool
@@ -1225,7 +1353,7 @@ func runtimeEventToolChunkHandler(a *App, event agentruntime.RuntimeEvent) bool 
 	return false
 }
 
-// runtimeEventAgentDoneHandler 处理运行完成事件。
+// runtimeEventAgentDoneHandler 婵犮垼娉涚€氼噣骞冩繝鍐╀氦闁归偊鍨奸弨浠嬫倵閻熺増婀伴柛銊︾缁傚秶鈧絺鏅滈浠嬫煏
 func runtimeEventAgentDoneHandler(a *App, event agentruntime.RuntimeEvent) bool {
 	a.state.IsAgentRunning = false
 	a.state.StreamingReply = false
@@ -1246,8 +1374,7 @@ func runtimeEventAgentDoneHandler(a *App, event agentruntime.RuntimeEvent) bool 
 	return false
 }
 
-// runtimeEventRunCanceledHandler 处理运行取消事件。
-func runtimeEventRunCanceledHandler(a *App) bool {
+func runtimeEventRunCanceledHandler(a *App, event agentruntime.RuntimeEvent) bool {
 	a.state.IsAgentRunning = false
 	a.state.StreamingReply = false
 	a.state.CurrentTool = ""
@@ -1260,7 +1387,7 @@ func runtimeEventRunCanceledHandler(a *App) bool {
 	return false
 }
 
-// runtimeEventErrorHandler 处理运行时错误事件。
+// runtimeEventErrorHandler 婵犮垼娉涚€氼噣骞冩繝鍐╀氦闁归偊鍨奸弨浠嬫煛閸愩劎鍩ｉ柡浣革功閹风娀顢涘▎鎴犳婵炲濮剧紙浼村焵
 func runtimeEventErrorHandler(a *App, event agentruntime.RuntimeEvent) bool {
 	a.state.StatusText = statusError
 	a.state.IsAgentRunning = false
@@ -1277,7 +1404,6 @@ func runtimeEventErrorHandler(a *App, event agentruntime.RuntimeEvent) bool {
 	return false
 }
 
-// runtimeEventProviderRetryHandler 处理 provider 重试提示事件。
 func runtimeEventProviderRetryHandler(a *App, event agentruntime.RuntimeEvent) bool {
 	if payload, ok := event.Payload.(string); ok && strings.TrimSpace(payload) != "" {
 		a.state.StatusText = statusThinking
@@ -1287,7 +1413,6 @@ func runtimeEventProviderRetryHandler(a *App, event agentruntime.RuntimeEvent) b
 	return false
 }
 
-// runtimeEventPermissionRequestHandler 处理 permission_requested 事件并激活审批面板。
 func runtimeEventPermissionRequestHandler(a *App, event agentruntime.RuntimeEvent) bool {
 	payload, ok := parsePermissionRequestPayload(event.Payload)
 	if !ok {
@@ -1327,7 +1452,6 @@ func runtimeEventPermissionRequestHandler(a *App, event agentruntime.RuntimeEven
 	return false
 }
 
-// runtimeEventPermissionResolvedHandler 处理 permission_resolved 事件并清理审批面板状态。
 func runtimeEventPermissionResolvedHandler(a *App, event agentruntime.RuntimeEvent) bool {
 	payload, ok := parsePermissionResolvedPayload(event.Payload)
 	if !ok {
@@ -1348,7 +1472,7 @@ func runtimeEventPermissionResolvedHandler(a *App, event agentruntime.RuntimeEve
 	return false
 }
 
-// refreshPermissionPromptLayout 在布局已初始化时刷新权限面板相关排版。
+// refreshPermissionPromptLayout 闂侀潻璐熼崝宀€绮╂搴濇勃闁逞屽墮椤斿繘骞撻幒鎴犱淮婵犳鍠栭鍛偓鍨叀瀵喚鎹勯崫鍕幈闂佸搫鍊绘晶妤€顭囬崼銉︹挃闁规壆澧楀銊╂煛婢跺孩纭舵繛鏉戭樀瀹曟鎼归銏㈢懇闂佺粯顨呴悧鍕焵
 func (a *App) refreshPermissionPromptLayout() {
 	if a.width <= 0 || a.height <= 0 {
 		return
@@ -1356,7 +1480,6 @@ func (a *App) refreshPermissionPromptLayout() {
 	a.applyComponentLayout(false)
 }
 
-// runtimeEventCompactDoneHandler 处理 compact_applied 事件。
 func runtimeEventCompactDoneHandler(a *App, event agentruntime.RuntimeEvent) bool {
 	payload, ok := event.Payload.(agentruntime.CompactResult)
 	if !ok {
@@ -1379,7 +1502,6 @@ func runtimeEventCompactDoneHandler(a *App, event agentruntime.RuntimeEvent) boo
 	return true
 }
 
-// runtimeEventCompactErrorHandler 处理 compact 异常事件。
 func runtimeEventCompactErrorHandler(a *App, event agentruntime.RuntimeEvent) bool {
 	payload, ok := event.Payload.(agentruntime.CompactErrorPayload)
 	if !ok {
@@ -1435,9 +1557,10 @@ func (a *App) appendActivity(kind string, title string, detail string, isError b
 		IsError: isError,
 	})
 	if len(a.activities) > maxActivityEntries {
-		a.activities = append([]tuistate.ActivityEntry(nil), a.activities[len(a.activities)-maxActivityEntries:]...)
+		a.activities = a.activities[len(a.activities)-maxActivityEntries:]
 	}
 	a.syncActivityViewport(previousCount)
+	a.viewDirty = true
 }
 
 func (a *App) clearActivities() {
@@ -1573,7 +1696,7 @@ func (a App) inputBounds() (int, int, int, int) {
 	streamX := contentX
 	streamY := bodyY
 
-	inputY := streamY + a.transcript.Height + a.activityPreviewHeight() + a.commandMenuHeight(lay.contentWidth)
+	inputY := streamY + a.transcript.Height + a.activityPreviewHeight() + a.todoPreviewHeight() + a.commandMenuHeight(lay.contentWidth)
 	inputHeight := lipgloss.Height(a.renderPrompt(lay.contentWidth))
 	return streamX, inputY, lay.contentWidth, inputHeight
 }
@@ -1595,12 +1718,71 @@ func (a App) activityBounds() (int, int, int, int) {
 	return streamX, streamY + a.transcript.Height, lay.contentWidth, activityHeight
 }
 
+func (a App) todoBounds() (int, int, int, int) {
+	lay := a.computeLayout()
+	contentX := a.styles.doc.GetPaddingLeft()
+	contentY := a.styles.doc.GetPaddingTop()
+	headerHeight := headerBarHeight
+	bodyY := contentY + headerHeight
+
+	streamX := contentX
+	streamY := bodyY
+
+	todoHeight := a.todoPreviewHeight()
+	if todoHeight <= 0 {
+		return streamX, streamY + a.transcript.Height + a.activityPreviewHeight(), lay.contentWidth, 0
+	}
+	return streamX, streamY + a.transcript.Height + a.activityPreviewHeight(), lay.contentWidth, todoHeight
+}
+
 func (a App) isMouseWithinActivity(msg tea.MouseMsg) bool {
 	x, y, width, height := a.activityBounds()
 	if width <= 0 || height <= 0 {
 		return false
 	}
 	return msg.X >= x && msg.X < x+width && msg.Y >= y && msg.Y < y+height
+}
+
+func (a App) isMouseWithinTodo(msg tea.MouseMsg) bool {
+	x, y, width, height := a.todoBounds()
+	if width <= 0 || height <= 0 {
+		return false
+	}
+	return msg.X >= x && msg.X < x+width && msg.Y >= y && msg.Y < y+height
+}
+
+func (a App) isMouseWithinTodoHeader(msg tea.MouseMsg) bool {
+	if !a.isMouseWithinTodo(msg) {
+		return false
+	}
+	_, y, _, _ := a.todoBounds()
+	// top border + one-line panel header
+	return msg.Y <= y+1
+}
+
+func (a App) todoItemIndexAtMouse(msg tea.MouseMsg) (int, bool) {
+	if a.todoCollapsed || a.todo.Height <= 0 {
+		return 0, false
+	}
+	if !a.isMouseWithinTodo(msg) {
+		return 0, false
+	}
+
+	_, y, _, _ := a.todoBounds()
+	// one top border row + one panel header row
+	bodyRow := msg.Y - (y + 2)
+	if bodyRow < 0 || bodyRow >= a.todo.Height {
+		return 0, false
+	}
+
+	contentLine := a.todo.YOffset + bodyRow
+	// line 0 is table header
+	index := contentLine - 1
+	visibleCount := len(a.visibleTodoItems())
+	if index < 0 || index >= visibleCount {
+		return 0, false
+	}
+	return index, true
 }
 
 func (a *App) handleActivityMouse(msg tea.MouseMsg) bool {
@@ -1625,6 +1807,66 @@ func (a *App) handleActivityMouse(msg tea.MouseMsg) bool {
 			a.applyFocus()
 		}
 		a.activity.LineDown(mouseWheelStepLines)
+		return true
+	default:
+		return false
+	}
+}
+
+func (a *App) handleTodoMouse(msg tea.MouseMsg) bool {
+	if !a.todoPanelVisible || !a.isMouseWithinTodo(msg) {
+		return false
+	}
+	if a.state.ActivePicker != pickerNone {
+		return false
+	}
+
+	switch {
+	case msg.Button == tea.MouseButtonLeft && msg.Action == tea.MouseActionPress:
+		if a.focus != panelTodo {
+			a.focus = panelTodo
+			a.applyFocus()
+		}
+		if a.isMouseWithinTodoHeader(msg) {
+			if a.toggleTodoCollapsed() {
+				a.state.StatusText = statusTodoCollapsed
+			} else {
+				a.state.StatusText = statusTodoExpanded
+			}
+			a.applyComponentLayout(false)
+			return true
+		}
+		if a.todoCollapsed {
+			a.setTodoCollapsed(false)
+			a.state.StatusText = statusTodoExpanded
+			a.applyComponentLayout(false)
+			return true
+		}
+		if index, ok := a.todoItemIndexAtMouse(msg); ok {
+			a.todoSelectedIndex = index
+			a.rebuildTodo()
+			return true
+		}
+		return false
+	case msg.Button == tea.MouseButtonWheelUp && (msg.Action == tea.MouseActionPress || msg.Type == tea.MouseWheelUp):
+		if a.focus != panelTodo {
+			a.focus = panelTodo
+			a.applyFocus()
+		}
+		if a.todoCollapsed {
+			return true
+		}
+		a.moveTodoSelection(-mouseWheelStepLines)
+		return true
+	case msg.Button == tea.MouseButtonWheelDown && (msg.Action == tea.MouseActionPress || msg.Type == tea.MouseWheelDown):
+		if a.focus != panelTodo {
+			a.focus = panelTodo
+			a.applyFocus()
+		}
+		if a.todoCollapsed {
+			return true
+		}
+		a.moveTodoSelection(mouseWheelStepLines)
 		return true
 	default:
 		return false
@@ -1727,16 +1969,22 @@ func (a *App) applyFocus() {
 }
 
 func (a *App) applyComponentLayout(rebuildTranscript bool) {
+	a.layoutCached = true
+	a.cachedWidth = a.width
+	a.cachedHeight = a.height
+
 	lay := a.computeLayout()
 	prevTranscriptWidth := a.transcript.Width
 	prevActivityWidth := a.activity.Width
 	prevActivityHeight := a.activity.Height
+	prevTodoWidth := a.todo.Width
+	prevTodoHeight := a.todo.Height
 	a.help.ShowAll = a.state.ShowHelp
 	a.transcript.Width = lay.contentWidth
 	a.resizeCommandMenu()
 	a.input.SetWidth(a.composerInnerWidth(lay.contentWidth))
 	a.input.SetHeight(a.composerHeight())
-	transcriptHeight, activityHeight, _, _ := a.waterfallMetrics(a.transcript.Width, lay.contentHeight)
+	transcriptHeight, activityHeight, _, todoHeight := a.waterfallMetrics(a.transcript.Width, lay.contentHeight)
 	a.transcript.Height = transcriptHeight
 
 	if activityHeight > 0 {
@@ -1752,6 +2000,21 @@ func (a *App) applyComponentLayout(rebuildTranscript bool) {
 	} else {
 		a.activity.Width = max(10, lay.contentWidth-4)
 		a.activity.Height = 0
+	}
+
+	if todoHeight > 0 {
+		panelStyle := a.styles.panelFocused
+		frameHeight := panelStyle.GetVerticalFrameSize()
+		borderWidth := 2
+		paddingWidth := panelStyle.GetHorizontalFrameSize() - borderWidth
+		panelWidth := max(1, lay.contentWidth-borderWidth)
+		bodyWidth := max(10, panelWidth-paddingWidth)
+		bodyHeight := max(1, todoHeight-frameHeight-1)
+		a.todo.Width = bodyWidth
+		a.todo.Height = bodyHeight
+	} else {
+		a.todo.Width = max(10, lay.contentWidth-4)
+		a.todo.Height = 0
 	}
 
 	pickerLayout := a.buildPickerLayout(lay.contentWidth, lay.contentHeight)
@@ -1771,6 +2034,9 @@ func (a *App) applyComponentLayout(rebuildTranscript bool) {
 	}
 	if prevActivityWidth != a.activity.Width || prevActivityHeight != a.activity.Height {
 		a.rebuildActivity()
+	}
+	if prevTodoWidth != a.todo.Width || prevTodoHeight != a.todo.Height {
+		a.rebuildTodo()
 	}
 }
 
@@ -1872,7 +2138,7 @@ func (a *App) clearRunProgress() {
 }
 
 func (a *App) handleImmediateSlashCommand(input string) (bool, tea.Cmd) {
-	command, rest := splitFirstWord(strings.ToLower(strings.TrimSpace(input)))
+	command, _ := splitFirstWord(strings.ToLower(strings.TrimSpace(input)))
 	switch command {
 	case slashCommandExit:
 		return true, tea.Quit
@@ -1880,43 +2146,6 @@ func (a *App) handleImmediateSlashCommand(input string) (bool, tea.Cmd) {
 		a.startDraftSession()
 		a.state.StatusText = "[System] Cleared current draft/history."
 		return true, nil
-	case slashCommandCompact:
-		if strings.TrimSpace(rest) != "" {
-			errText := fmt.Sprintf("usage: %s", slashUsageCompact)
-			a.state.ExecutionError = errText
-			a.state.StatusText = errText
-			a.appendInlineMessage(roleError, errText)
-			a.rebuildTranscript()
-			return true, nil
-		}
-		if strings.TrimSpace(a.state.ActiveSessionID) == "" {
-			errText := "compact requires an existing session"
-			a.state.ExecutionError = errText
-			a.state.StatusText = errText
-			a.appendInlineMessage(roleError, errText)
-			a.rebuildTranscript()
-			return true, nil
-		}
-		if a.isBusy() {
-			errText := "compact is already running, please wait"
-			a.state.ExecutionError = errText
-			a.state.StatusText = errText
-			a.appendInlineMessage(roleError, errText)
-			a.rebuildTranscript()
-			return true, nil
-		}
-		a.state.IsCompacting = true
-		a.state.StreamingReply = false
-		a.state.CurrentTool = ""
-		a.state.StatusText = statusCompacting
-		a.state.ExecutionError = ""
-		return true, runCompact(a.runtime, a.state.ActiveSessionID)
-	case slashCommandMemo:
-		return true, a.handleMemoCommand()
-	case slashCommandRemember:
-		return true, a.handleRememberCommand(rest)
-	case slashCommandForget:
-		return true, a.handleForgetCommand(rest)
 	case slashCommandSession:
 		if err := a.ensureSessionSwitchAllowed(""); err != nil {
 			a.state.ExecutionError = err.Error()
@@ -1940,7 +2169,6 @@ func (a *App) handleImmediateSlashCommand(input string) (bool, tea.Cmd) {
 	}
 }
 
-// runSlashCommandSelection 根据 /help 弹层选中的命令执行对应 slash 行为。
 func (a *App) runSlashCommandSelection(command string) tea.Cmd {
 	command = strings.ToLower(strings.TrimSpace(command))
 	if command == "" {
@@ -1995,6 +2223,7 @@ func (a *App) startDraftSession() {
 	a.state.ActiveSessionTitle = draftSessionTitle
 	a.activeMessages = nil
 	a.clearActivities()
+	a.clearTodos()
 	a.state.IsCompacting = false
 	a.state.StatusText = statusDraft
 	a.state.ExecutionError = ""
@@ -2045,7 +2274,6 @@ func runAgent(runtime agentruntime.Runtime, input agentruntime.PrepareInput) tea
 	)
 }
 
-// runResolvePermission 提交一次权限审批决定到 runtime。
 func runResolvePermission(
 	runtime agentruntime.Runtime,
 	requestID string,
@@ -2067,115 +2295,18 @@ func runResolvePermission(
 	)
 }
 
-// runCompact 在独立命令中触发 runtime compact，并把结果回传给 TUI。
-func runCompact(runtime agentruntime.Runtime, sessionID string) tea.Cmd {
-	return tuiservices.RunCompactCmd(
-		runtime,
-		agentruntime.CompactInput{SessionID: sessionID},
-		func(err error) tea.Msg { return compactFinishedMsg{Err: err} },
-	)
-}
-
-// isBusy 统一判断当前界面是否存在进行中的 agent 或 compact 操作。
+// isBusy reports whether an agent run or compact operation is in progress.
 func (a App) isBusy() bool {
 	return tuiutils.IsBusy(a.state.IsAgentRunning, a.state.IsCompacting)
 }
 
-// handleMemoCommand 处理 /memo 命令，显示记忆索引内容。
-func (a *App) handleMemoCommand() tea.Cmd {
-	if a.memoSvc == nil {
-		a.appendInlineMessage(roleError, "[System] Memo service is not enabled.")
-		a.rebuildTranscript()
-		return nil
-	}
-	entries, err := a.memoSvc.List(context.Background())
-	if err != nil {
-		a.appendInlineMessage(roleError, fmt.Sprintf("[System] Failed to load memo: %s", err))
-		a.rebuildTranscript()
-		return nil
-	}
-	if len(entries) == 0 {
-		a.appendInlineMessage(roleSystem, "[System] No memos stored yet. Use /remember <text> to add one.")
-		a.rebuildTranscript()
-		return nil
-	}
-	var lines []string
-	lines = append(lines, fmt.Sprintf("[System] %d memo(s):", len(entries)))
-	for _, entry := range entries {
-		lines = append(lines, fmt.Sprintf("  [%s] %s", entry.Type, entry.Title))
-	}
-	a.appendInlineMessage(roleSystem, strings.Join(lines, "\n"))
-	a.rebuildTranscript()
-	return nil
-}
-
-// handleRememberCommand 处理 /remember <text> 命令，创建新的记忆条目。
-func (a *App) handleRememberCommand(text string) tea.Cmd {
-	text = strings.TrimSpace(text)
-	if a.memoSvc == nil {
-		a.appendInlineMessage(roleError, "[System] Memo service is not enabled.")
-		a.rebuildTranscript()
-		return nil
-	}
-	if text == "" {
-		a.appendInlineMessage(roleError, fmt.Sprintf("[System] Usage: %s", slashUsageRemember))
-		a.rebuildTranscript()
-		return nil
-	}
-	title := memo.NormalizeTitle(text)
-	entry := memo.Entry{
-		Type:    memo.TypeUser,
-		Title:   title,
-		Content: text,
-		Source:  memo.SourceUserManual,
-	}
-	if err := a.memoSvc.Add(context.Background(), entry); err != nil {
-		a.appendInlineMessage(roleError, fmt.Sprintf("[System] Failed to save memo: %s", err))
-		a.rebuildTranscript()
-		return nil
-	}
-	a.appendInlineMessage(roleSystem, fmt.Sprintf("[System] Memo saved: %s", title))
-	a.rebuildTranscript()
-	return nil
-}
-
-// handleForgetCommand 处理 /forget <keyword> 命令，删除匹配的记忆条目。
-func (a *App) handleForgetCommand(keyword string) tea.Cmd {
-	keyword = strings.TrimSpace(keyword)
-	if a.memoSvc == nil {
-		a.appendInlineMessage(roleError, "[System] Memo service is not enabled.")
-		a.rebuildTranscript()
-		return nil
-	}
-	if keyword == "" {
-		a.appendInlineMessage(roleError, fmt.Sprintf("[System] Usage: %s", slashUsageForget))
-		a.rebuildTranscript()
-		return nil
-	}
-	removed, err := a.memoSvc.Remove(context.Background(), keyword)
-	if err != nil {
-		a.appendInlineMessage(roleError, fmt.Sprintf("[System] Failed to remove memo: %s", err))
-		a.rebuildTranscript()
-		return nil
-	}
-	if removed == 0 {
-		a.appendInlineMessage(roleSystem, fmt.Sprintf("[System] No memos matching %q.", keyword))
-	} else {
-		a.appendInlineMessage(roleSystem, fmt.Sprintf("[System] Removed %d memo(s) matching %q.", removed, keyword))
-	}
-	a.rebuildTranscript()
-	return nil
-}
-
-// setCurrentWorkdir 统一设置当前工作目录，仅接受非空白且为绝对路径的值。
-// 非法值会被静默忽略，防止 runtime 事件或异常输入污染 UI 状态。
+// setCurrentWorkdir updates the current workdir only when the value is non-empty and absolute.
 func (a *App) setCurrentWorkdir(workdir string) {
 	trimmed := strings.TrimSpace(workdir)
 	if trimmed == "" || !filepath.IsAbs(trimmed) {
 		return
 	}
 	a.state.CurrentWorkdir = trimmed
-
 }
 
 type providerAddFieldID int
@@ -2293,6 +2424,8 @@ func (a *App) handleProviderAddFormInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		switch currentProviderAddField(a.providerAddForm) {
 		case providerAddFieldName:
 			a.providerAddForm.Name = trimLastRune(a.providerAddForm.Name)
+		case providerAddFieldDriver:
+			a.providerAddForm.Driver = trimLastRune(a.providerAddForm.Driver)
 		case providerAddFieldBaseURL:
 			a.providerAddForm.BaseURL = trimLastRune(a.providerAddForm.BaseURL)
 		case providerAddFieldAPIStyle:
@@ -2313,30 +2446,34 @@ func (a *App) handleProviderAddFormInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a, nil
 	case typed.Type == tea.KeyUp:
 		if currentProviderAddField(a.providerAddForm) == providerAddFieldDriver {
-			currentIdx := 0
+			currentIdx := -1
 			for i, d := range a.providerAddForm.Drivers {
 				if d == a.providerAddForm.Driver {
 					currentIdx = i
 					break
 				}
 			}
-			currentIdx = (currentIdx - 1 + len(a.providerAddForm.Drivers)) % len(a.providerAddForm.Drivers)
-			a.providerAddForm.Driver = a.providerAddForm.Drivers[currentIdx]
-			clampProviderAddStep(a.providerAddForm)
+			if currentIdx >= 0 {
+				currentIdx = (currentIdx - 1 + len(a.providerAddForm.Drivers)) % len(a.providerAddForm.Drivers)
+				a.providerAddForm.Driver = a.providerAddForm.Drivers[currentIdx]
+				clampProviderAddStep(a.providerAddForm)
+			}
 		}
 		return a, nil
 	case typed.Type == tea.KeyDown:
 		if currentProviderAddField(a.providerAddForm) == providerAddFieldDriver {
-			currentIdx := 0
+			currentIdx := -1
 			for i, d := range a.providerAddForm.Drivers {
 				if d == a.providerAddForm.Driver {
 					currentIdx = i
 					break
 				}
 			}
-			currentIdx = (currentIdx + 1) % len(a.providerAddForm.Drivers)
-			a.providerAddForm.Driver = a.providerAddForm.Drivers[currentIdx]
-			clampProviderAddStep(a.providerAddForm)
+			if currentIdx >= 0 {
+				currentIdx = (currentIdx + 1) % len(a.providerAddForm.Drivers)
+				a.providerAddForm.Driver = a.providerAddForm.Drivers[currentIdx]
+				clampProviderAddStep(a.providerAddForm)
+			}
 		}
 		return a, nil
 	default:
@@ -2525,7 +2662,6 @@ func normalizeProviderAddFieldValue(value string) string {
 	return strings.TrimSpace(sanitizeProviderAddInputRunes([]rune(value)))
 }
 
-// trimLastRune 按 UTF-8 rune 删除字符串末尾一个字符，避免按字节截断导致乱码。
 func trimLastRune(value string) string {
 	if value == "" {
 		return ""

@@ -25,7 +25,7 @@
 ## Memo 能力集成
 - `memo_remember` 与 `memo_recall` 作为标准工具暴露给模型，沿 `Runtime -> Tool Manager -> internal/tools/memo` 链路执行。
 - 自动记忆提取不作为单独工具暴露给模型，也不由 TUI 直接触发；它在 runtime 完成最终回复后由 memo 子系统后台调度。
-- TUI 目前只通过 Slash Command 展示和管理 memo（如 `/memo`、`/remember`、`/forget`），不会展示后台自动提取的中间状态。
+- TUI 不直接提供 memo 管理型 Slash Command；memo 的写入与召回由 runtime 工具链路驱动，不展示后台自动提取的中间状态。
 
 ## TUI 集成方式
 - 本地配置操作统一通过 Slash Command 完成，例如 Base URL、API Key 和模型选择

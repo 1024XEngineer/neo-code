@@ -79,13 +79,14 @@ func TestFocusLabelFromPanel(t *testing.T) {
 		{"sessions", tuistate.PanelSessions, "sessions"},
 		{"transcript", tuistate.PanelTranscript, "transcript"},
 		{"activity", tuistate.PanelActivity, "activity"},
+		{"todo", tuistate.PanelTodo, "todo"},
 		{"input falls to default", tuistate.PanelInput, "composer"},
 		{"unknown", tuistate.Panel(999), "composer"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := FocusLabelFromPanel(tt.focus, "sessions", "transcript", "activity", "composer"); got != tt.want {
+			if got := FocusLabelFromPanel(tt.focus, "sessions", "transcript", "activity", "todo", "composer"); got != tt.want {
 				t.Errorf("FocusLabelFromPanel() = %v, want %v", got, tt.want)
 			}
 		})

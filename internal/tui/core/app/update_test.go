@@ -14,7 +14,6 @@ import (
 
 	"neo-code/internal/config"
 	configstate "neo-code/internal/config/state"
-	"neo-code/internal/memo"
 	"neo-code/internal/provider"
 	providertypes "neo-code/internal/provider/types"
 	agentruntime "neo-code/internal/runtime"
@@ -283,7 +282,11 @@ func newTestApp(t *testing.T) (App, *stubRuntime) {
 		models = []providertypes.ModelDescriptor{{ID: providerCfg.Model, Name: providerCfg.Model}}
 	}
 
-	return newTestAppWithProviderService(t, stubProviderService{providers: providers, models: models})
+	app, runtime := newTestAppWithProviderService(t, stubProviderService{providers: providers, models: models})
+	app.layoutCached = true
+	app.cachedWidth = app.width
+	app.cachedHeight = app.height
+	return app, runtime
 }
 
 func TestSubmitProviderAddFormRequiresAnthropicBaseURL(t *testing.T) {
@@ -452,8 +455,8 @@ func TestTrimLastRune(t *testing.T) {
 	if got := trimLastRune("ab"); got != "a" {
 		t.Fatalf("trimLastRune(ascii) = %q, want a", got)
 	}
-	if got := trimLastRune("你好"); got != "你" {
-		t.Fatalf("trimLastRune(utf8) = %q, want 你", got)
+	if got := trimLastRune("\u4f60\u597d"); got != "\u4f60" {
+		t.Fatalf("trimLastRune(utf8) = %q, want %q", got, "\u4f60")
 	}
 }
 
@@ -1452,8 +1455,8 @@ func TestUpdateSendWithInlineImageReferenceUsesPreparePipeline(t *testing.T) {
 		}},
 	}
 
-	app.input.SetValue("请分析 @image:burn.png")
-	app.state.InputText = "请分析 @image:burn.png"
+	app.input.SetValue("analyze @image:burn.png")
+	app.state.InputText = "analyze @image:burn.png"
 
 	model, cmd := app.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	if cmd != nil {
@@ -1464,7 +1467,7 @@ func TestUpdateSendWithInlineImageReferenceUsesPreparePipeline(t *testing.T) {
 	if len(runtime.prepareInputs) != 1 {
 		t.Fatalf("expected one prepare input, got %+v", runtime.prepareInputs)
 	}
-	if runtime.prepareInputs[0].Text != "请分析" {
+	if runtime.prepareInputs[0].Text != "analyze" {
 		t.Fatalf("expected inline image token removed from text, got %q", runtime.prepareInputs[0].Text)
 	}
 	if len(runtime.prepareInputs[0].Images) != 1 || runtime.prepareInputs[0].Images[0].MimeType != "" {
@@ -1658,7 +1661,7 @@ func TestRuntimeEventAgentChunkHandler(t *testing.T) {
 func TestRuntimeEventRunCanceledHandler(t *testing.T) {
 	app, _ := newTestApp(t)
 	app.state.ActiveRunID = "run-3"
-	runtimeEventRunCanceledHandler(&app)
+	runtimeEventRunCanceledHandler(&app, agentruntime.RuntimeEvent{})
 	if app.state.StatusText != statusCanceled {
 		t.Fatalf("expected canceled status")
 	}
@@ -1869,8 +1872,8 @@ func TestRunSlashCommandSelectionWorkspaceAndLocal(t *testing.T) {
 	app.state.ActiveSessionID = ""
 	app.state.CurrentWorkdir = t.TempDir()
 
-	// /cwd 不是 handleImmediateSlashCommand 处理的命令，也不是 switch 中的已知命令，
-	// 所以走 default 分支返回 runLocalCommand -> localCommandResultMsg
+	// /cwd is not handled by handleImmediateSlashCommand and is not in the direct switch cases.
+	// It should therefore execute through runLocalCommand and return a localCommandResultMsg.
 	localCmd := app.runSlashCommandSelection("/cwd")
 	if localCmd == nil {
 		t.Fatalf("expected local slash cmd for /cwd")
@@ -1887,44 +1890,6 @@ func TestRunSlashCommandSelectionWorkspaceAndLocal(t *testing.T) {
 	}
 	if !strings.Contains(statusResult.Notice, "Status:") {
 		t.Fatalf("expected status output in local command result")
-	}
-}
-
-func TestHandleImmediateSlashCommandCompactBranches(t *testing.T) {
-	app, runtime := newTestApp(t)
-	app.state.ActiveSessionID = "session-1"
-
-	handled, cmd := app.handleImmediateSlashCommand(slashCommandCompact + " now")
-	if !handled || cmd != nil {
-		t.Fatalf("expected compact with args to be handled without cmd")
-	}
-	if !strings.Contains(app.state.StatusText, "usage:") {
-		t.Fatalf("expected usage error for compact with args")
-	}
-
-	app.state.ExecutionError = ""
-	app.state.IsCompacting = true
-	handled, cmd = app.handleImmediateSlashCommand(slashCommandCompact)
-	if !handled || cmd != nil {
-		t.Fatalf("expected compact busy branch to return handled with nil cmd")
-	}
-	if !strings.Contains(app.state.StatusText, "already running") {
-		t.Fatalf("expected busy message")
-	}
-
-	app.state.IsCompacting = false
-	app.state.IsAgentRunning = false
-	app.state.StatusText = ""
-	handled, cmd = app.handleImmediateSlashCommand(slashCommandCompact)
-	if !handled || cmd == nil {
-		t.Fatalf("expected compact success branch to return cmd")
-	}
-	msg := cmd()
-	if _, ok := msg.(compactFinishedMsg); !ok {
-		t.Fatalf("expected compactFinishedMsg, got %T", msg)
-	}
-	if len(runtime.resolveCalls) != 0 {
-		t.Fatalf("compact should not resolve permissions")
 	}
 }
 
@@ -2007,212 +1972,6 @@ func TestSetCurrentWorkdir(t *testing.T) {
 		app.setCurrentWorkdir("relative/path")
 		if app.state.CurrentWorkdir != "/original" {
 			t.Fatalf("expected no change, got %q", app.state.CurrentWorkdir)
-		}
-	})
-}
-
-// newTestAppWithMemo 创建一个注入了 memo 服务的测试 App。
-func newTestAppWithMemo(t *testing.T) (App, *stubRuntime) {
-	t.Helper()
-
-	cfg := newDefaultAppConfig()
-	cfg.Workdir = t.TempDir()
-	cfg.Memo.Enabled = true
-	if len(cfg.Providers) > 0 {
-		cfg.SelectedProvider = cfg.Providers[0].Name
-		cfg.CurrentModel = cfg.Providers[0].Model
-	}
-
-	manager := config.NewManager(config.NewLoader(cfg.Workdir, cfg))
-	if _, err := manager.Load(context.Background()); err != nil {
-		t.Fatalf("Load() error = %v", err)
-	}
-
-	var providers []configstate.ProviderOption
-	var models []providertypes.ModelDescriptor
-	if len(cfg.Providers) > 0 {
-		provider := cfg.Providers[0]
-		providers = []configstate.ProviderOption{
-			{ID: provider.Name, Name: provider.Name, Models: []providertypes.ModelDescriptor{{ID: provider.Model, Name: provider.Model}}},
-		}
-		models = []providertypes.ModelDescriptor{{ID: provider.Model, Name: provider.Model}}
-	}
-
-	// 创建真实的 memo 服务
-	memoStore := memo.NewFileStore(t.TempDir(), cfg.Workdir)
-	memoSvc := memo.NewService(memoStore, nil, cfg.Memo, nil)
-
-	runtime := newStubRuntime()
-	app, err := newApp(tuibootstrap.Container{
-		Config:          *cfg,
-		ConfigManager:   manager,
-		Runtime:         runtime,
-		ProviderService: stubProviderService{providers: providers, models: models},
-		MemoSvc:         memoSvc,
-	})
-	if err != nil {
-		t.Fatalf("newApp() error = %v", err)
-	}
-	return app, runtime
-}
-
-func TestHandleMemoCommand(t *testing.T) {
-	t.Parallel()
-
-	t.Run("shows no memos message when empty", func(t *testing.T) {
-		app, _ := newTestAppWithMemo(t)
-		cmd := app.handleMemoCommand()
-		if cmd != nil {
-			t.Error("expected nil cmd")
-		}
-		msgs := app.activeMessages
-		if len(msgs) == 0 {
-			t.Fatal("expected at least one inline message")
-		}
-		last := msgs[len(msgs)-1]
-		if !strings.Contains(messageText(last), "No memos stored yet") {
-			t.Errorf("expected 'no memos' message, got: %s", messageText(last))
-		}
-	})
-
-	t.Run("lists entries when memos exist", func(t *testing.T) {
-		app, _ := newTestAppWithMemo(t)
-		app.memoSvc.Add(context.Background(), memo.Entry{Type: memo.TypeUser, Title: "test entry", Content: "test", Source: memo.SourceUserManual})
-
-		app.handleMemoCommand()
-		msgs := app.activeMessages
-		last := msgs[len(msgs)-1]
-		if !strings.Contains(messageText(last), "1 memo(s)") {
-			t.Errorf("expected memo count, got: %s", messageText(last))
-		}
-		if !strings.Contains(messageText(last), "test entry") {
-			t.Errorf("expected entry title, got: %s", messageText(last))
-		}
-	})
-
-	t.Run("nil memoSvc shows error", func(t *testing.T) {
-		app, _ := newTestApp(t)
-		cmd := app.handleMemoCommand()
-		if cmd != nil {
-			t.Error("expected nil cmd")
-		}
-		msgs := app.activeMessages
-		if len(msgs) == 0 {
-			t.Fatal("expected at least one inline message")
-		}
-		last := msgs[len(msgs)-1]
-		if !strings.Contains(messageText(last), "not enabled") {
-			t.Errorf("expected 'not enabled' message, got: %s", messageText(last))
-		}
-	})
-}
-
-func TestHandleRememberCommand(t *testing.T) {
-	t.Parallel()
-
-	t.Run("saves memo and shows confirmation", func(t *testing.T) {
-		app, _ := newTestAppWithMemo(t)
-		cmd := app.handleRememberCommand("my preference")
-		if cmd != nil {
-			t.Error("expected nil cmd")
-		}
-		msgs := app.activeMessages
-		last := msgs[len(msgs)-1]
-		if !strings.Contains(messageText(last), "Memo saved") {
-			t.Errorf("expected saved confirmation, got: %s", messageText(last))
-		}
-		// Verify the entry was actually saved
-		entries, _ := app.memoSvc.List(context.Background())
-		if len(entries) != 1 {
-			t.Fatalf("expected 1 entry, got %d", len(entries))
-		}
-		if entries[0].Title != "my preference" {
-			t.Errorf("Title = %q, want %q", entries[0].Title, "my preference")
-		}
-	})
-
-	t.Run("empty text shows usage", func(t *testing.T) {
-		app, _ := newTestAppWithMemo(t)
-		app.handleRememberCommand("")
-		msgs := app.activeMessages
-		last := msgs[len(msgs)-1]
-		if !strings.Contains(messageText(last), "Usage") {
-			t.Errorf("expected usage message, got: %s", messageText(last))
-		}
-	})
-
-	t.Run("whitespace only text shows usage", func(t *testing.T) {
-		app, _ := newTestAppWithMemo(t)
-		app.handleRememberCommand("   ")
-		msgs := app.activeMessages
-		last := msgs[len(msgs)-1]
-		if !strings.Contains(messageText(last), "Usage") {
-			t.Errorf("expected usage message, got: %s", messageText(last))
-		}
-	})
-
-	t.Run("nil memoSvc shows error", func(t *testing.T) {
-		app, _ := newTestApp(t)
-		app.handleRememberCommand("something")
-		msgs := app.activeMessages
-		last := msgs[len(msgs)-1]
-		if !strings.Contains(messageText(last), "not enabled") {
-			t.Errorf("expected 'not enabled' message, got: %s", messageText(last))
-		}
-	})
-}
-
-func TestHandleForgetCommand(t *testing.T) {
-	t.Parallel()
-
-	t.Run("removes matching memos", func(t *testing.T) {
-		app, _ := newTestAppWithMemo(t)
-		app.memoSvc.Add(context.Background(), memo.Entry{Type: memo.TypeUser, Title: "remove me", Content: "test", Source: memo.SourceUserManual})
-		app.memoSvc.Add(context.Background(), memo.Entry{Type: memo.TypeFeedback, Title: "keep this", Content: "test2", Source: memo.SourceUserManual})
-
-		app.handleForgetCommand("remove")
-		msgs := app.activeMessages
-		last := msgs[len(msgs)-1]
-		if !strings.Contains(messageText(last), "Removed 1 memo") {
-			t.Errorf("expected removal confirmation, got: %s", messageText(last))
-		}
-		// Verify only one was removed
-		entries, _ := app.memoSvc.List(context.Background())
-		if len(entries) != 1 {
-			t.Fatalf("expected 1 remaining entry, got %d", len(entries))
-		}
-		if entries[0].Title != "keep this" {
-			t.Errorf("remaining entry Title = %q, want %q", entries[0].Title, "keep this")
-		}
-	})
-
-	t.Run("no match shows message", func(t *testing.T) {
-		app, _ := newTestAppWithMemo(t)
-		app.handleForgetCommand("nonexistent")
-		msgs := app.activeMessages
-		last := msgs[len(msgs)-1]
-		if !strings.Contains(messageText(last), "No memos matching") {
-			t.Errorf("expected no match message, got: %s", messageText(last))
-		}
-	})
-
-	t.Run("empty keyword shows usage", func(t *testing.T) {
-		app, _ := newTestAppWithMemo(t)
-		app.handleForgetCommand("")
-		msgs := app.activeMessages
-		last := msgs[len(msgs)-1]
-		if !strings.Contains(messageText(last), "Usage") {
-			t.Errorf("expected usage message, got: %s", messageText(last))
-		}
-	})
-
-	t.Run("nil memoSvc shows error", func(t *testing.T) {
-		app, _ := newTestApp(t)
-		app.handleForgetCommand("something")
-		msgs := app.activeMessages
-		last := msgs[len(msgs)-1]
-		if !strings.Contains(messageText(last), "not enabled") {
-			t.Errorf("expected 'not enabled' message, got: %s", messageText(last))
 		}
 	})
 }
@@ -2419,14 +2178,14 @@ func TestCurrentProviderAddFieldAndInputHandling(t *testing.T) {
 		t.Fatalf("expected backspace to remove name content")
 	}
 
-	app.providerAddForm.Name = "你好"
+	app.providerAddForm.Name = "\u4f60\u597d"
 	model, _ = app.handleProviderAddFormInput(tea.KeyMsg{Type: tea.KeyBackspace})
 	ptr, ok = model.(*App)
 	if !ok {
 		t.Fatalf("expected *App model, got %T", model)
 	}
 	app = *ptr
-	if app.providerAddForm.Name != "你" {
+	if app.providerAddForm.Name != "\u4f60" {
 		t.Fatalf("expected UTF-8 safe backspace result, got %q", app.providerAddForm.Name)
 	}
 
@@ -2794,24 +2553,6 @@ func TestUpdateLocalAndWorkspaceCommandResultBranches(t *testing.T) {
 	app = model.(App)
 	if app.state.StatusText != statusCommandDone {
 		t.Fatalf("expected workspace success status, got %q", app.state.StatusText)
-	}
-}
-
-func TestUpdateCompactFinishedAndRefreshMessagesError(t *testing.T) {
-	app, runtime := newTestApp(t)
-	app.state.ActiveSessionID = "session-error"
-	runtime.loadSessionErr = errors.New("load session failed")
-
-	model, _ := app.Update(compactFinishedMsg{Err: errors.New("compact failed")})
-	app = model.(App)
-	if app.state.IsCompacting {
-		t.Fatalf("expected compacting state to be cleared")
-	}
-	if app.state.ExecutionError != "load session failed" {
-		t.Fatalf("expected refresh message error to win, got %q", app.state.ExecutionError)
-	}
-	if len(app.activeMessages) == 0 || app.activeMessages[len(app.activeMessages)-1].Role != roleError {
-		t.Fatalf("expected inline error message appended")
 	}
 }
 

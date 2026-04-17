@@ -89,6 +89,9 @@ func TestRenderPermissionPrompt(t *testing.T) {
 				},
 				Selected: 0,
 			},
+			layoutCached: true,
+			cachedWidth:  128,
+			cachedHeight: 40,
 		},
 	}
 	rendered := app.renderPermissionPrompt()
@@ -163,6 +166,9 @@ func TestRenderPromptWithPendingPermission(t *testing.T) {
 				Request:  agentruntime.PermissionRequestPayload{ToolName: "bash", Target: "git status"},
 				Selected: 0,
 			},
+			layoutCached: true,
+			cachedWidth:  128,
+			cachedHeight: 40,
 		},
 	}
 	rendered := app.renderPrompt(80)

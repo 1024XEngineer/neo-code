@@ -12,7 +12,7 @@
 
 - runtime 已接入手动 compact、基于 token 阈值的自动 compact，以及 provider 上下文过长后的 `reactive` compact 自动恢复。
 - `internal/context/compact` 支持 `manual`、`auto` 与 `reactive` 三种 mode。
-- 用户通过 `/compact` 对当前会话执行一次上下文压缩。
+- 当前 TUI 不提供 `/compact` 入口；`manual` compact 由 runtime 接口触发。
 - compact 前会先写入完整 transcript，随后生成并校验新的 durable `TaskState` 与 display summary，再回写会话消息。
 
 ## 配置
@@ -64,7 +64,7 @@ context:
 
 ## 执行链路
 
-1. TUI 识别 `/compact` 并调用 `runtime.Compact(...)`。
+1. 由 runtime 触发 `runtime.Compact(...)`（手动或自动模式）。
 2. runtime 发出 `compact_start` 事件。
 3. compact runner 将原始消息写入 transcript（JSONL）。
 4. compact runner 根据策略构造归档消息与保留消息，并过滤旧的 `[compact_summary]` 展示摘要，避免“摘要的摘要”。

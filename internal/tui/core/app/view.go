@@ -89,9 +89,10 @@ func (a App) renderBody(lay layout) string {
 // waterfallMetrics 统一计算瀑布区各组件高度，确保渲染、布局与命中区域使用同一组尺寸。
 func (a App) waterfallMetrics(width int, height int) (int, int, int, int) {
 	activityHeight := a.activityPreviewHeight()
+	todoHeight := a.todoPreviewHeight()
 	menuHeight := a.commandMenuHeight(width)
-	transcriptHeight := max(6, height-activityHeight-menuHeight)
-	return transcriptHeight, activityHeight, menuHeight, 0
+	transcriptHeight := max(6, height-activityHeight-todoHeight-menuHeight)
+	return transcriptHeight, activityHeight, menuHeight, todoHeight
 }
 
 func (a App) renderWaterfall(width int, height int) string {
@@ -119,6 +120,9 @@ func (a App) renderWaterfall(width int, height int) string {
 	}
 	if activity := a.renderActivityPreview(width); activity != "" {
 		parts = append(parts, activity)
+	}
+	if todo := a.renderTodoPreview(width); todo != "" {
+		parts = append(parts, todo)
 	}
 	if menu := a.renderCommandMenu(width); menu != "" {
 		parts = append(parts, menu)
@@ -530,6 +534,7 @@ func (a App) focusLabel() string {
 		focusLabelSessions,
 		focusLabelTranscript,
 		focusLabelActivity,
+		focusLabelTodo,
 		focusLabelComposer,
 	)
 }

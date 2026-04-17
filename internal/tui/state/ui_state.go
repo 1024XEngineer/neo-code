@@ -9,6 +9,7 @@ const (
 	PanelSessions Panel = iota
 	PanelTranscript
 	PanelActivity
+	PanelTodo
 	PanelInput
 )
 

@@ -75,7 +75,7 @@ context:
 
 | 字段 | 说明 |
 |------|------|
-| `context.compact.manual_strategy` | `/compact` 手动压缩策略，支持 `keep_recent` / `full_replace` |
+| `context.compact.manual_strategy` | manual compact 策略，支持 `keep_recent` / `full_replace` |
 | `context.compact.manual_keep_recent_messages` | `keep_recent` 策略下保留的最近消息数 |
 | `context.compact.read_time_max_message_spans` | context 读时保留的 message span 上限，用于降低“继续”时较早文件读取结果被过早裁掉的风险 |
 | `context.compact.max_summary_chars` | compact summary 最大字符数 |

@@ -15,7 +15,7 @@ NeoCode 是一个在终端中运行的 AI 编码助手，采用 ReAct（Reason-A
 - 终端原生 TUI 交互体验（Bubble Tea）
 - Agent 可调用内置工具完成文件与命令相关任务
 - 支持 Provider/Model 切换（内建 `openai`、`gemini`、`openll`、`qiniu`）
-- 支持上下文压缩（`/compact`），帮助长会话保持可用
+- 支持上下文压缩能力（manual/auto/reactive），帮助长会话保持可用
 - 支持工作区隔离（`--workdir`、`/cwd`）
 - 会话持久化与恢复，降低重复沟通成本
 - 支持持久记忆查看、显式写入与后台自动提取，保留跨会话偏好与项目事实
@@ -112,12 +112,8 @@ go run ./cmd/neocode --workdir /path/to/workspace
 - `/help`：查看命令帮助
 - `/provider`：打开 provider 选择器
 - `/model`：打开 model 选择器
-- `/compact`：压缩当前会话上下文
 - `/status`：查看当前会话与运行状态
 - `/cwd [path]`：查看或设置当前会话工作区
-- `/memo`：查看记忆索引
-- `/remember <text>`：保存记忆
-- `/forget <keyword>`：按关键词删除记忆
 - `& <command>`：在当前工作区执行本地命令
 
 示例输入：

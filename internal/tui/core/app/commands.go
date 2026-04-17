@@ -21,30 +21,22 @@ const (
 	slashCommandHelp        = "/help"
 	slashCommandExit        = "/exit"
 	slashCommandClear       = "/clear"
-	slashCommandCompact     = "/compact"
 	slashCommandStatus      = "/status"
 	slashCommandProvider    = "/provider"
 	slashCommandProviderAdd = "/provider add"
 	slashCommandModelPick   = "/model"
 	slashCommandSession     = "/session"
 	slashCommandCWD         = "/cwd"
-	slashCommandMemo        = "/memo"
-	slashCommandRemember    = "/remember"
-	slashCommandForget      = "/forget"
 
 	slashUsageHelp        = "/help"
 	slashUsageExit        = "/exit"
 	slashUsageClear       = "/clear"
-	slashUsageCompact     = "/compact"
 	slashUsageStatus      = "/status"
 	slashUsageProvider    = "/provider"
 	slashUsageProviderAdd = "/provider add"
 	slashUsageModel       = "/model"
 	slashUsageSession     = "/session"
 	slashUsageWorkdir     = "/cwd"
-	slashUsageMemo        = "/memo"
-	slashUsageRemember    = "/remember <text>"
-	slashUsageForget      = "/forget <keyword>"
 
 	commandMenuTitle       = "Suggestions"
 	providerPickerTitle    = "Select Provider"
@@ -62,6 +54,7 @@ const (
 
 	activityTitle    = "Activity"
 	activitySubtitle = "Latest execution events"
+	todoTitle        = "Todos"
 
 	draftSessionTitle     = "Draft"
 	emptyConversationText = "No conversation yet.\nAsk NeoCode to inspect or change code, or type /help to browse local commands."
@@ -81,10 +74,12 @@ const (
 	statusApplyingCommand      = "Applying local command"
 	statusRunningCommand       = "Running command"
 	statusCommandDone          = "Command finished"
-	statusCompacting           = "Compacting context"
 	statusChooseProvider       = "Choose a provider"
 	statusChooseModel          = "Choose a model"
 	statusChooseSession        = "Choose a session"
+	statusTodoFilterChanged    = "Todo filter updated"
+	statusTodoCollapsed        = "Todo list collapsed"
+	statusTodoExpanded         = "Todo list expanded"
 	statusChooseHelp           = "Choose a slash command"
 	statusBrowseFile           = "Browse workspace files"
 	statusPermissionRequired   = "Permission required: choose a decision and press Enter"
@@ -94,6 +89,7 @@ const (
 	focusLabelSessions   = "Sessions"
 	focusLabelTranscript = "Transcript"
 	focusLabelActivity   = "Activity"
+	focusLabelTodo       = "Todo"
 	focusLabelComposer   = "Composer"
 
 	maxActivityEntries = 64
@@ -120,12 +116,8 @@ type commandSuggestion = tuicommands.CommandSuggestion
 var builtinSlashCommands = []slashCommand{
 	{Usage: slashUsageHelp, Description: "Show slash command help"},
 	{Usage: slashUsageClear, Description: "Clear the current draft transcript"},
-	{Usage: slashUsageCompact, Description: "Compact the current session context"},
 	{Usage: slashUsageStatus, Description: "Show current session and agent status"},
 	{Usage: slashUsageWorkdir, Description: "Show or set current session workspace root (/cwd [path])"},
-	{Usage: slashUsageMemo, Description: "Show persistent memo index"},
-	{Usage: slashUsageRemember, Description: "Save a persistent memo (/remember <text>)"},
-	{Usage: slashUsageForget, Description: "Remove memos matching keyword (/forget <keyword>)"},
 	{Usage: slashUsageProvider, Description: "Open the interactive provider picker"},
 	{Usage: slashUsageProviderAdd, Description: "Add a new custom provider"},
 	{Usage: slashUsageModel, Description: "Open the interactive model picker"},

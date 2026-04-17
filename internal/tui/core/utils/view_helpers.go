@@ -41,6 +41,7 @@ func FocusLabelFromPanel(
 	sessionsLabel string,
 	transcriptLabel string,
 	activityLabel string,
+	todoLabel string,
 	composerLabel string,
 ) string {
 	switch focus {
@@ -50,6 +51,8 @@ func FocusLabelFromPanel(
 		return transcriptLabel
 	case tuistate.PanelActivity:
 		return activityLabel
+	case tuistate.PanelTodo:
+		return todoLabel
 	default:
 		return composerLabel
 	}

@@ -106,6 +106,9 @@ func newPermissionTestApp(runtime agentruntime.Runtime) *App {
 			activities: []tuistate.ActivityEntry{
 				{Kind: "test", Title: "seed"},
 			},
+			layoutCached: true,
+			cachedWidth:  128,
+			cachedHeight: 40,
 		},
 	}
 	return app

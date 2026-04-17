@@ -40,6 +40,7 @@ func TestRenderPickerHelpMode(t *testing.T) {
 func TestRenderPickerSessionMode(t *testing.T) {
 	app, _ := newTestApp(t)
 	app.state.ActivePicker = pickerSession
+	app.layoutCached = false
 	app.sessionPicker.SetItems([]list.Item{
 		sessionItem{Summary: agentsession.Summary{
 			ID:        "session-1",
@@ -47,6 +48,7 @@ func TestRenderPickerSessionMode(t *testing.T) {
 			UpdatedAt: time.Now(),
 		}},
 	})
+	app.applyComponentLayout(false)
 
 	view := app.renderPicker(48, 14)
 	if !strings.Contains(view, sessionPickerTitle) {
