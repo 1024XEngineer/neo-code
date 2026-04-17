@@ -129,3 +129,40 @@ func TestBuildSessionAssetReaderOpenForwardsContext(t *testing.T) {
 		t.Fatalf("expected context canceled error, got %v", err)
 	}
 }
+
+func TestBuildSessionAssetReaderOpenFallsBackToBackgroundWhenNoContext(t *testing.T) {
+	t.Parallel()
+
+	svc := &Service{}
+	svc.SetSessionAssetStore(stubAssetStore{
+		openFunc: func(ctx context.Context, sessionID string, assetID string) (io.ReadCloser, agentsession.AssetMeta, error) {
+			if ctx == nil {
+				t.Fatalf("expected non-nil context")
+			}
+			if err := ctx.Err(); err != nil {
+				t.Fatalf("expected active context, got err=%v", err)
+			}
+			if sessionID != "session-bg" || assetID != "asset-bg" {
+				t.Fatalf("unexpected open args session=%q asset=%q", sessionID, assetID)
+			}
+			return io.NopCloser(bytes.NewReader([]byte("ok"))), agentsession.AssetMeta{
+				ID:       "asset-bg",
+				MimeType: "image/png",
+				Size:     2,
+			}, nil
+		},
+	})
+
+	reader := svc.buildSessionAssetReader(nil, "session-bg")
+	if reader == nil {
+		t.Fatalf("expected non-nil reader")
+	}
+	rc, mime, err := reader.Open(nil, "asset-bg")
+	if err != nil {
+		t.Fatalf("reader.Open() error = %v", err)
+	}
+	defer func() { _ = rc.Close() }()
+	if mime != "image/png" {
+		t.Fatalf("expected mime image/png, got %q", mime)
+	}
+}

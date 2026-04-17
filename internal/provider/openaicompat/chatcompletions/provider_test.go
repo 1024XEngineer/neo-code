@@ -334,6 +334,15 @@ func TestNewAndBuildRequest(t *testing.T) {
 func TestResolveSessionAssetDataURLVariants(t *testing.T) {
 	t.Parallel()
 
+	if _, _, err := resolveSessionAssetDataURL(context.Background(), stubSessionAssetReader{
+		assets: map[string]stubSessionAsset{
+			"asset-no-budget": {data: []byte("x"), mime: "image/png"},
+		},
+	}, &providertypes.AssetRef{ID: "asset-no-budget", MimeType: "image/png"}, 0); err == nil ||
+		!strings.Contains(err.Error(), "session_asset total exceeds") {
+		t.Fatalf("expected no budget error, got %v", err)
+	}
+
 	if _, _, err := resolveSessionAssetDataURL(nil, stubSessionAssetReader{
 		assets: map[string]stubSessionAsset{
 			"asset-nil-ctx": {data: []byte("x"), mime: "image/png"},
@@ -388,6 +397,19 @@ func TestResolveSessionAssetDataURLVariants(t *testing.T) {
 	}, &providertypes.AssetRef{ID: "asset-over-total", MimeType: "image/png"}, 4); err == nil ||
 		!strings.Contains(err.Error(), "session_asset total exceeds") {
 		t.Fatalf("expected total budget error, got %v", err)
+	}
+
+	if _, _, err := toOpenAIMessageWithBudget(context.Background(), providertypes.Message{
+		Role: providertypes.RoleUser,
+		Parts: []providertypes.ContentPart{
+			providertypes.NewSessionAssetImagePart("asset-negative-budget", "image/png"),
+		},
+	}, stubSessionAssetReader{
+		assets: map[string]stubSessionAsset{
+			"asset-negative-budget": {data: []byte("x"), mime: "image/png"},
+		},
+	}, -1); err == nil || !strings.Contains(err.Error(), "session_asset total exceeds") {
+		t.Fatalf("expected negative budget to fail as no budget, got %v", err)
 	}
 }
 

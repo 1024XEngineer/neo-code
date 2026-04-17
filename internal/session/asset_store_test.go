@@ -86,8 +86,14 @@ func TestJSONStoreAssetOpenAndStatRejectInvalidID(t *testing.T) {
 
 	store := NewJSONStore(t.TempDir(), t.TempDir())
 
+	if _, _, err := store.Open(context.Background(), "bad/session", "asset-ok"); err == nil {
+		t.Fatalf("expected invalid session id on open")
+	}
 	if _, _, err := store.Open(context.Background(), "session_ok", "../bad"); err == nil {
 		t.Fatalf("expected invalid asset id on open")
+	}
+	if _, err := store.Stat(context.Background(), "bad/session", "asset-ok"); err == nil {
+		t.Fatalf("expected invalid session id on stat")
 	}
 	if _, err := store.Stat(context.Background(), "session_ok", "../bad"); err == nil {
 		t.Fatalf("expected invalid asset id on stat")
@@ -191,6 +197,31 @@ func TestJSONStoreSaveAssetFailurePaths(t *testing.T) {
 			t.Fatalf("expected write temp asset error, got %v", err)
 		}
 	})
+}
+
+func TestJSONStoreOpenAndStatMissingStoredFiles(t *testing.T) {
+	t.Parallel()
+
+	store := NewJSONStore(t.TempDir(), t.TempDir())
+	sessionID := "session_missing_files"
+	meta, err := store.SaveAsset(context.Background(), sessionID, strings.NewReader("img"), "image/png")
+	if err != nil {
+		t.Fatalf("save seed asset: %v", err)
+	}
+
+	if err := os.Remove(store.assetPath(sessionID, meta.ID)); err != nil {
+		t.Fatalf("remove asset file: %v", err)
+	}
+	if _, _, err := store.Open(context.Background(), sessionID, meta.ID); err == nil {
+		t.Fatalf("expected open failure when asset binary is missing")
+	}
+
+	if err := os.Remove(store.assetMetaPath(sessionID, meta.ID)); err != nil {
+		t.Fatalf("remove asset meta file: %v", err)
+	}
+	if _, err := store.Stat(context.Background(), sessionID, meta.ID); err == nil {
+		t.Fatalf("expected stat failure when asset meta is missing")
+	}
 }
 
 type failingReader struct{}
