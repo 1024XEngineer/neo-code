@@ -311,16 +311,11 @@ func newApp(container tuibootstrap.Container) (App, error) {
 	return app, nil
 }
 
-type tickMsg time.Time
-
 func (a App) Init() tea.Cmd {
 	cmds := []tea.Cmd{
 		ListenForRuntimeEvent(a.runtime.Events()),
 		textarea.Blink,
 		a.spinner.Tick,
-		tea.Tick(100*time.Millisecond, func(t time.Time) tea.Msg {
-			return tickMsg(t)
-		}),
 	}
 	if cmd := runModelCatalogRefresh(a.providerSvc, a.modelRefreshID); cmd != nil {
 		cmds = append(cmds, cmd)

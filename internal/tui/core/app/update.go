@@ -130,9 +130,6 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		return a, tea.Batch(cmds...)
-	case tickMsg:
-		cmds = append(cmds, a.handleTickMsg(typed))
-		return a, tea.Batch(cmds...)
 	case modelCatalogRefreshMsg:
 		if strings.EqualFold(a.modelRefreshID, typed.ProviderID) {
 			a.modelRefreshID = ""
@@ -465,7 +462,7 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 			}
 
 			// image capability precheck is intentionally disabled.
-			// 婵″倹鐏夋稉宥嗘Ц缁斿宓嗛幍褑顢戦惃鍕嚒娴犮倧绱濋崘宥嗗⒔鐞涘苯鐖剁憴鍕畱鏉堟挸鍙嗛柌宥囩枂
+			// 当前暂不在发送前做图片能力预检，交由 runtime/provider 在执行阶段给出错误。
 			a.input.Reset()
 			a.state.InputText = ""
 			a.applyComponentLayout(true)
@@ -552,7 +549,7 @@ func (a *App) updatePendingPermissionInput(typed tea.KeyMsg) (tea.Cmd, bool) {
 	return nil, true
 }
 
-// submitPermissionDecision 闁荤喐鐟辩粻鎴ｃ亹閸屾稓鈻旈柍褜鍓欓埢搴ㄥ焺閸愨晝绉梻鍌氬閸旀洟顢橀幖浣哥閻熸瑥瀚徊鐟懊瑰┃鍨偓鏇㈠箠閳╁啰顩烽柕鍫濆暊閸?
+// submitPermissionDecision 提交当前权限请求的用户决策，并切换到提交中状态。
 func (a *App) submitPermissionDecision(decision agentruntime.PermissionResolutionDecision) tea.Cmd {
 	if a.pendingPermission == nil {
 		return nil
@@ -876,7 +873,7 @@ func (a *App) activateSessionByID(sessionID string) error {
 	return fmt.Errorf("session not found: %s", sessionID)
 }
 
-// ensureSessionSwitchAllowed 缂佺喍绔撮梼缁橆剾鏉╂劘顢戞稉顓炲瀼閹广垹鍩岄崗鏈电铂娴兼俺鐦介敍宀勪缉閸?UI 閼磋京顬囨禒宥呮躬閹笛嗩攽閻?run 娑撳﹣绗呴弬鍥モ偓
+// ensureSessionSwitchAllowed 校验会话切换条件，运行中仅允许保持当前会话。
 func (a *App) ensureSessionSwitchAllowed(targetSessionID string) error {
 	targetSessionID = strings.TrimSpace(targetSessionID)
 	activeSessionID := strings.TrimSpace(a.state.ActiveSessionID)
@@ -910,7 +907,7 @@ func (a *App) syncConfigState(cfg config.Config) {
 	}
 }
 
-// refreshRuntimeSourceSnapshot 婵?runtime 闂佸搫琚崕鎾敋?context/token/tool 闂婎偄娴傞崑鍡涘矗鎼淬劍鏅€光偓閳ь剟寮妶鍡欘洸閹煎瓨绻勭粣妤呮偣閸ャ劎绠撻柛銊ョ箻楠炴垿濮€閳ュ磭浠愰梺璇″幑閸ㄥ綊藝閺屻儱绫嶉悹铏瑰劋缁€鈧繝?UI闂?
+// refreshRuntimeSourceSnapshot 从 runtime 拉取上下文、用量与运行快照并同步到 UI 状态。
 func (a *App) refreshRuntimeSourceSnapshot() {
 	sessionID := strings.TrimSpace(a.state.ActiveSessionID)
 	if sessionID != "" {
@@ -961,17 +958,17 @@ func (a *App) refreshRuntimeSourceSnapshot() {
 	}
 }
 
-// runtimeSessionContextSource 缂備焦鎷濋梽鍕焽椤愶箑鐭楁い鏍亹閸嬫挻寰勭仦鍓ф殸婵炴潙鍚嬫穱娲儊閼恒儳鈻斿┑鐘辫兌閻熸捇鏌￠崒姘闁绘搫绱曢幏鐘诲閿濆懎骞嬮梺鍛婃⒐缁嬪繘鍩€
+// runtimeSessionContextSource 描述可读取会话上下文快照的 runtime 能力。
 type runtimeSessionContextSource interface {
 	GetSessionContext(ctx context.Context, sessionID string) (any, error)
 }
 
-// runtimeSessionUsageSource 缂備焦鎷濋梽鍕焽椤愶箑鐭楁い鏍亹閸嬫挻寰勭仦鍓ф殸婵炴潙鍚嬫穱娲儊?token 婵炶揪缍€濞夋洟寮妶澶嬬厒闊洦姊婚崣鈧柣鐘叉储閸ㄥジ宕楀鈧畷婵嗏槈閺嶃倕浜?
+// runtimeSessionUsageSource 描述可读取会话 token 用量快照的 runtime 能力。
 type runtimeSessionUsageSource interface {
 	GetSessionUsage(ctx context.Context, sessionID string) (any, error)
 }
 
-// runtimeRunSnapshotSource 缂備焦鎷濋梽鍕焽椤愶箑鐭楁い鏍亹閸嬫挻寰勭仦鍓ф殸闁哄鏅滈崝姗€銆侀幋锝囩杸妞ゆ劑鍊曞楣冩煛鐏炶鍔ユい鏇燁殜閹虫鎸婃径濠庢綕闂?
+// runtimeRunSnapshotSource 描述可读取运行态快照的 runtime 能力。
 type runtimeRunSnapshotSource interface {
 	GetRunSnapshot(ctx context.Context, runID string) (any, error)
 }
@@ -1001,7 +998,7 @@ var runtimeEventHandlerRegistry = map[agentruntime.EventType]func(*App, agentrun
 	agentruntime.EventTodoConflict:                             runtimeEventTodoConflictHandler,
 }
 
-// runtimeEventPhaseChangedHandler 婵犮垼娉涚€氼噣骞?phase 闁哄鏅欓懗鏈电昂濡ょ姷鍋犻崺鏍洪崸妤€妫橀柟宄扮灱缁犲骞栨潏楣冩闁绘牭绲跨划鍨┍閹典礁浜?
+// runtimeEventPhaseChangedHandler 根据运行阶段更新进度条文本与百分比。
 func runtimeEventPhaseChangedHandler(a *App, event agentruntime.RuntimeEvent) bool {
 	payload, ok := event.Payload.(agentruntime.PhaseChangedPayload)
 	if !ok {
@@ -1018,7 +1015,7 @@ func runtimeEventPhaseChangedHandler(a *App, event agentruntime.RuntimeEvent) bo
 	return false
 }
 
-// runtimeEventStopReasonDecidedHandler 婵犮垼娉涚€氼噣骞冩繝鍥ц埞妞ゆ牗鐟ч杈╃磽娴ｅ摜澧涙い鎺撶⊕缁傚秶鈧綆浜為弶钘壝瑰鍐惧剮婵炲棎鍨芥俊
+// runtimeEventStopReasonDecidedHandler 在运行结束时清理状态并写入停止原因。
 func runtimeEventStopReasonDecidedHandler(a *App, event agentruntime.RuntimeEvent) bool {
 	payload, ok := event.Payload.(agentruntime.StopReasonDecidedPayload)
 	if !ok {
@@ -1053,7 +1050,7 @@ func runtimeEventStopReasonDecidedHandler(a *App, event agentruntime.RuntimeEven
 	return false
 }
 
-// runtimeEventTodoUpdatedHandler 婵犮垼娉涚€氼噣骞?Todo 闂佸憡甯￠弨閬嶅蓟婵犲啰顩查悗锝傛櫆椤愪粙鏌ㄥ☉妯垮闁艰崵鍠栭弻鍛潩瀹曞洨鐣烘繛鏉戝悑娣囨椽鎯侀崐鐔虹杸妞ゆ劑鍊曞楣冩煛閸パ呮憼闁?Todo 闂傚倸鐗勯崹鍝勵熆濮椻偓婵?
+// runtimeEventTodoUpdatedHandler 处理 Todo 更新事件并刷新当前会话的 Todo 面板。
 func runtimeEventTodoUpdatedHandler(a *App, event agentruntime.RuntimeEvent) bool {
 	sessionID := strings.TrimSpace(event.SessionID)
 	if sessionID == "" {
@@ -1077,7 +1074,7 @@ func runtimeEventTodoUpdatedHandler(a *App, event agentruntime.RuntimeEvent) boo
 	return false
 }
 
-// runtimeEventTodoConflictHandler 婵犮垼娉涚€氼噣骞?Todo 闂佸憡鍔樼亸娆撴偘婵犲啰顩查悗锝傛櫆椤愪粙鏌ㄥ☉妯侯殭缂侇喖娴锋禒锕傚即閻橆喕绮甸梺鍦帛閸旀濡靛鍓佸祦閻犲搫鎼悡鏇㈡煛閸屾稒绶茬紓宥咁儔瀹曟粌顓奸崨顔兼笎闂佺粯鎸嗘担鎻掍壕
+// runtimeEventTodoConflictHandler 处理 Todo 冲突事件并提示冲突原因。
 func runtimeEventTodoConflictHandler(a *App, event agentruntime.RuntimeEvent) bool {
 	sessionID := strings.TrimSpace(event.SessionID)
 	if sessionID == "" {
@@ -1135,7 +1132,7 @@ func parseTodoEventPayload(payload any) (agentruntime.TodoEventPayload, bool) {
 	}
 }
 
-// handleRuntimeEvent 闂備緡鍋呮穱铏规崲閸愩劉鏋栭柕濞垮劚閺傗偓闁荤偞绋忛崝宀勫垂鎼淬劌鐭?runtime 婵炲瓨绮岄鍕枎閵忋倖鏅€光偓閸曨亞绱氶梺绋跨箰缁夋潙鈻旈弴銏犲瀭?switch 闂佽壈缈伴崝蹇涘磿婢舵劕违
+// handleRuntimeEvent 分发 runtime 事件到对应处理器，并返回是否需要重建 transcript。
 func (a *App) handleRuntimeEvent(event agentruntime.RuntimeEvent) bool {
 	if !a.shouldHandleRuntimeEvent(event) {
 		return false
@@ -1181,7 +1178,7 @@ func runtimeEventInputNormalizedHandler(a *App, event agentruntime.RuntimeEvent)
 	return false
 }
 
-// runtimeEventAssetSavedHandler 婢跺嫮鎮婇梽鍕娣囨繂鐡ㄩ幋鎰娴滃娆㈤獮璺哄晸閸忋儲妞块崝銊╂桨閺夎￥鈧?
+// runtimeEventAssetSavedHandler 处理资源落盘成功事件并记录活动日志。
 func runtimeEventAssetSavedHandler(a *App, event agentruntime.RuntimeEvent) bool {
 	payload, ok := event.Payload.(agentruntime.AssetSavedPayload)
 	if !ok {
@@ -1198,7 +1195,7 @@ func runtimeEventAssetSavedHandler(a *App, event agentruntime.RuntimeEvent) bool
 	return false
 }
 
-// runtimeEventAssetSaveFailedHandler 婢跺嫮鎮婇梽鍕娣囨繂鐡ㄦ径杈Е娴滃娆㈤獮璺烘倱濮濄儵鏁婄拠顖滃Ц閹降鈧?
+// runtimeEventAssetSaveFailedHandler 处理资源落盘失败事件并记录错误。
 func runtimeEventAssetSaveFailedHandler(a *App, event agentruntime.RuntimeEvent) bool {
 	payload, ok := event.Payload.(agentruntime.AssetSaveFailedPayload)
 	if !ok {
@@ -1248,7 +1245,7 @@ func runtimeEventUserMessageHandler(a *App, event agentruntime.RuntimeEvent) boo
 	return true
 }
 
-// runtimeEventRunContextHandler 婵犮垼娉涚€氼噣骞?runtime 婵炴垶鎸搁敃锝囩箔閸涙潙妫橀柛銉閻ㄦ垵霉閻樼儤纭鹃柤鑽ゅ枛瀹曞爼鎮欑拠褏绋忛梺浼欑到閻倸顭囨导瀛樺亹闁煎摜顣介崑鎾存媴绾版ê浜?
+// runtimeEventRunContextHandler 同步运行上下文信息到 UI。
 func runtimeEventRunContextHandler(a *App, event agentruntime.RuntimeEvent) bool {
 	payload, ok := tuiservices.ParseRunContextPayload(event.Payload)
 	if !ok {
@@ -1274,7 +1271,7 @@ func runtimeEventRunContextHandler(a *App, event agentruntime.RuntimeEvent) bool
 	return false
 }
 
-// runtimeEventToolStatusHandler 婵犮垼娉涚€氼噣骞冩繝鍌ゅ晠闁靛鍎卞鏃堟煟濡灝鐓愰柍褜鍏涢悞锔剧矈閿旇姤濮滄い鎺嗗亾闁艰崵鍠栧瀵糕偓娑櫳戦悡鈧悷婊呭閹稿憡鏅堕悩宸晠闁靛鍎卞鏃堟倶閻愬瓨绀堥柕鍥ㄥ哺婵?
+// runtimeEventToolStatusHandler 同步工具状态列表并更新当前工具提示。
 func runtimeEventToolStatusHandler(a *App, event agentruntime.RuntimeEvent) bool {
 	payload, ok := tuiservices.ParseToolStatusPayload(event.Payload)
 	if !ok {
@@ -1293,7 +1290,7 @@ func runtimeEventToolStatusHandler(a *App, event agentruntime.RuntimeEvent) bool
 	return false
 }
 
-// runtimeEventUsageHandler 婵犮垼娉涚€氼噣骞?token 婵炶揪缍€濞夋洟寮妶澶嬬厒闊洦姊圭痪顖炴煛閸屾繂鐒介柍
+// runtimeEventUsageHandler 同步 token 用量并刷新进度展示。
 func runtimeEventUsageHandler(a *App, event agentruntime.RuntimeEvent) bool {
 	payload, ok := tuiservices.ParseUsagePayload(event.Payload)
 	if !ok {
@@ -1303,7 +1300,7 @@ func runtimeEventUsageHandler(a *App, event agentruntime.RuntimeEvent) bool {
 	return false
 }
 
-// runtimeEventToolCallThinkingHandler 婵犮垼娉涚€氼噣骞冩繝鍌ゅ晠闁靛鍎卞鏃堟偡濞嗗繐顏╅柛銊︾箞濮婂ジ鎳滃▓鍨杸婵炲瓨绮岄鍕枎閵忋倕违
+// runtimeEventToolCallThinkingHandler 处理工具调用前思考事件。
 func runtimeEventToolCallThinkingHandler(a *App, event agentruntime.RuntimeEvent) bool {
 	if payload, ok := event.Payload.(string); ok && strings.TrimSpace(payload) != "" {
 		a.state.CurrentTool = payload
@@ -1313,7 +1310,7 @@ func runtimeEventToolCallThinkingHandler(a *App, event agentruntime.RuntimeEvent
 	return false
 }
 
-// runtimeEventToolStartHandler 婵犮垼娉涚€氼噣骞冩繝鍌ゅ晠闁靛鍎卞鏃傗偓娈垮枓閸嬫挸鈹戦纰卞剱濠⒀呮櫕閹壆浠﹂懖鈺冩婵炲濮剧紙浼村焵
+// runtimeEventToolStartHandler 处理工具开始执行事件。
 func runtimeEventToolStartHandler(a *App, event agentruntime.RuntimeEvent) bool {
 	a.state.StatusText = statusRunningTool
 	a.state.StreamingReply = false
@@ -1325,7 +1322,7 @@ func runtimeEventToolStartHandler(a *App, event agentruntime.RuntimeEvent) bool 
 	return false
 }
 
-// runtimeEventToolResultHandler 婵犮垼娉涚€氼噣骞冩繝鍌ゅ晠闁靛鍎卞鏃堟煙缁楁稑妫弨鐣岀磽娴ｈ灏伴柣蹇擃樀閻涱喚鎹勯崫鍕€柣搴ゎ潐绾板秴危閹间礁瑙﹂柨鏇楀亾闁糕晜鐩顒勫级濞嗘儳娈搁柣鐘叉处缁诲倻浜搁鐐参?
+// runtimeEventToolResultHandler 处理工具执行结果并追加到消息流。
 func runtimeEventToolResultHandler(a *App, event agentruntime.RuntimeEvent) bool {
 	a.state.StreamingReply = false
 	a.state.CurrentTool = ""
@@ -1350,7 +1347,7 @@ func runtimeEventToolResultHandler(a *App, event agentruntime.RuntimeEvent) bool
 	return true
 }
 
-// runtimeEventAgentChunkHandler 婵犮垼娉涚€氼噣骞冩繝鍋界喖鍨惧畷鍥ｅ亾瀹勬噴瑙勬媴閸濄儳顢呮繝鈷€鍛槐闁革絿鍎ゅ蹇涘箻閸愬弶鐦旈梺
+// runtimeEventAgentChunkHandler 处理助手流式分片并更新草稿回复。
 func runtimeEventAgentChunkHandler(a *App, event agentruntime.RuntimeEvent) bool {
 	payload, ok := event.Payload.(string)
 	if !ok {
@@ -1363,7 +1360,7 @@ func runtimeEventAgentChunkHandler(a *App, event agentruntime.RuntimeEvent) bool
 	return true
 }
 
-// runtimeEventToolChunkHandler 婵犮垼娉涚€氼噣骞冩繝鍌ゅ晠闁靛鍎卞鏃€绻涚紙鐘殿槮缂佹墎鍓濆蹇涘箻閸愬弶鐦旈梺缁橆殔濞诧箓顢欏畝鍕?
+// runtimeEventToolChunkHandler 处理工具流式输出分片。
 func runtimeEventToolChunkHandler(a *App, event agentruntime.RuntimeEvent) bool {
 	if payload, ok := event.Payload.(string); ok && strings.TrimSpace(payload) != "" {
 		a.state.StatusText = statusRunningTool
@@ -1372,7 +1369,7 @@ func runtimeEventToolChunkHandler(a *App, event agentruntime.RuntimeEvent) bool 
 	return false
 }
 
-// runtimeEventAgentDoneHandler 婵犮垼娉涚€氼噣骞冩繝鍐╀氦闁归偊鍨奸弨浠嬫倵閻熺増婀伴柛銊︾缁傚秶鈧絺鏅滈浠嬫煏
+// runtimeEventAgentDoneHandler 处理助手完成事件并收敛运行状态。
 func runtimeEventAgentDoneHandler(a *App, event agentruntime.RuntimeEvent) bool {
 	a.state.IsAgentRunning = false
 	a.state.StreamingReply = false
@@ -1406,7 +1403,7 @@ func runtimeEventRunCanceledHandler(a *App, event agentruntime.RuntimeEvent) boo
 	return false
 }
 
-// runtimeEventErrorHandler 婵犮垼娉涚€氼噣骞冩繝鍐╀氦闁归偊鍨奸弨浠嬫煛閸愩劎鍩ｉ柡浣革功閹风娀顢涘▎鎴犳婵炲濮剧紙浼村焵
+// runtimeEventErrorHandler 处理运行错误事件并写入错误状态。
 func runtimeEventErrorHandler(a *App, event agentruntime.RuntimeEvent) bool {
 	a.state.StatusText = statusError
 	a.state.IsAgentRunning = false
@@ -1423,7 +1420,7 @@ func runtimeEventErrorHandler(a *App, event agentruntime.RuntimeEvent) bool {
 	return false
 }
 
-// runtimeEventProviderRetryHandler 婵犮垼娉涚€氼噣骞?provider 闂備焦褰冪粔鐑芥儊椤栫偛绠甸柟閭﹀枔娴犳稑霉濠婂喚鍎庢繛鍡愬灲婵?
+// runtimeEventProviderRetryHandler 处理 provider 重试事件并追加活动提示。
 func runtimeEventProviderRetryHandler(a *App, event agentruntime.RuntimeEvent) bool {
 	if payload, ok := event.Payload.(string); ok && strings.TrimSpace(payload) != "" {
 		a.state.StatusText = statusThinking
@@ -1433,7 +1430,7 @@ func runtimeEventProviderRetryHandler(a *App, event agentruntime.RuntimeEvent) b
 	return false
 }
 
-// runtimeEventPermissionRequestHandler 婵犮垼娉涚€氼噣骞?permission_requested 婵炲瓨绮岄鍕枎閵忋倗宓侀柤鍝ユ暩鐠愮喐绻涢懠棰濆殭妞ゆ挻鎮傞獮宥堛亹閹烘挻銆冮梺鍝勵槼閿熴儵鍩€
+// runtimeEventPermissionRequestHandler 处理权限请求事件并弹出决策提示。
 func runtimeEventPermissionRequestHandler(a *App, event agentruntime.RuntimeEvent) bool {
 	payload, ok := parsePermissionRequestPayload(event.Payload)
 	if !ok {
@@ -1473,7 +1470,7 @@ func runtimeEventPermissionRequestHandler(a *App, event agentruntime.RuntimeEven
 	return false
 }
 
-// runtimeEventPermissionResolvedHandler 婵犮垼娉涚€氼噣骞?permission_resolved 婵炲瓨绮岄鍕枎閵忋倗宓侀柤鍝ユ暩椤忔悂鏌ｉ悙鍙夘棞妞ゆ挻鎮傞獮宥堛亹閹烘挻銆冮梺鍝勵槼濞夋洘鎱ㄩ幖浣哥畱濞达絿顣介崑
+// runtimeEventPermissionResolvedHandler 处理权限决策完成事件并清理提示状态。
 func runtimeEventPermissionResolvedHandler(a *App, event agentruntime.RuntimeEvent) bool {
 	payload, ok := parsePermissionResolvedPayload(event.Payload)
 	if !ok {
@@ -1494,7 +1491,7 @@ func runtimeEventPermissionResolvedHandler(a *App, event agentruntime.RuntimeEve
 	return false
 }
 
-// refreshPermissionPromptLayout 闂侀潻璐熼崝宀€绮╂搴濇勃闁逞屽墮椤斿繘骞撻幒鎴犱淮婵犳鍠栭鍛偓鍨叀瀵喚鎹勯崫鍕幈闂佸搫鍊绘晶妤€顭囬崼銉︹挃闁规壆澧楀銊╂煛婢跺孩纭舵繛鏉戭樀瀹曟鎼归銏㈢懇闂佺粯顨呴悧鍕焵
+// refreshPermissionPromptLayout 根据当前窗口与面板状态刷新权限提示布局。
 func (a *App) refreshPermissionPromptLayout() {
 	if a.width <= 0 || a.height <= 0 {
 		return
@@ -1502,7 +1499,7 @@ func (a *App) refreshPermissionPromptLayout() {
 	a.applyComponentLayout(false)
 }
 
-// runtimeEventCompactDoneHandler 婵犮垼娉涚€氼噣骞?compact_applied 婵炲瓨绮岄鍕枎閵忋倕违
+// runtimeEventCompactDoneHandler 处理压缩成功事件并展示压缩结果。
 func runtimeEventCompactDoneHandler(a *App, event agentruntime.RuntimeEvent) bool {
 	payload, ok := event.Payload.(agentruntime.CompactResult)
 	if !ok {
@@ -1525,7 +1522,7 @@ func runtimeEventCompactDoneHandler(a *App, event agentruntime.RuntimeEvent) boo
 	return true
 }
 
-// runtimeEventCompactErrorHandler 婵犮垼娉涚€氼噣骞?compact 閻庢鍠栭崐鎼佹偉閼哥數顩查悗锝傛櫆椤愪粙鏌?
+// runtimeEventCompactErrorHandler 处理压缩失败事件并展示错误。
 func runtimeEventCompactErrorHandler(a *App, event agentruntime.RuntimeEvent) bool {
 	payload, ok := event.Payload.(agentruntime.CompactErrorPayload)
 	if !ok {
@@ -1993,12 +1990,6 @@ func (a *App) applyFocus() {
 }
 
 func (a *App) applyComponentLayout(rebuildTranscript bool) {
-	if a.layoutCached && a.cachedWidth == a.width && a.cachedHeight == a.height {
-		if rebuildTranscript {
-			a.rebuildTranscript()
-		}
-		return
-	}
 	a.layoutCached = true
 	a.cachedWidth = a.width
 	a.cachedHeight = a.height
@@ -2199,7 +2190,7 @@ func (a *App) handleImmediateSlashCommand(input string) (bool, tea.Cmd) {
 	}
 }
 
-// runSlashCommandSelection 闂佸搫绉烽～澶婄暤?/help 閻庢鍠氶幊鎾绘儑娴煎瓨鐒诲璺侯槼閸橆剟鏌ｉ妸銉ヮ仼闁规枼鍓濈粋鎺楀Χ閸℃せ鎸冮柣鐐寸☉閼活垶顢氶鑺ュ劅?slash 闁荤偞绋戞總鏃傛嫻閻旂厧违
+// runSlashCommandSelection 执行 /help 弹层选择的命令并分发到对应入口。
 func (a *App) runSlashCommandSelection(command string) tea.Cmd {
 	command = strings.ToLower(strings.TrimSpace(command))
 	if command == "" {
@@ -2305,7 +2296,7 @@ func runAgent(runtime agentruntime.Runtime, input agentruntime.PrepareInput) tea
 	)
 }
 
-// runResolvePermission 闂佸湱绮崝鎺戭潩閿旂晫鈻旈柍褜鍓欓埢搴ㄥ焺閸愨晝绉梻鍌氬閸旀洟顢橀幖浣哥闁荤喐婢橀弸鈧柣搴ゎ潐閼归箖宕?runtime闂?
+// runResolvePermission 向 runtime 提交权限决策并回传异步结果消息。
 func runResolvePermission(
 	runtime agentruntime.Runtime,
 	requestID string,
@@ -2646,7 +2637,7 @@ func providerAddAPIKeyEnv(name string) string {
 	return normalized + "_API_KEY"
 }
 
-// trimLastRune 閹?UTF-8 rune 閸掔娀娅庣€涙顑佹稉鍙夋汞鐏忓彞绔存稉顏勭摟缁楋讣绱濋柆鍨帳閹稿鐡ч懞鍌涘焻閺傤厼顕遍懛缈犺础閻降鈧?
+// trimLastRune 按 UTF-8 rune 删除字符串最后一个字符，避免截断多字节字符。
 func trimLastRune(value string) string {
 	if value == "" {
 		return ""
@@ -2681,7 +2672,7 @@ type fileSnapshot struct {
 	Content []byte
 }
 
-// loadFileSnapshot 鐠囪褰囬惄顔界垼閺傚洣娆㈣ぐ鎾冲韫囶偆鍙庨敍宀€鏁ゆ禍?provider add 婢惰精瑙﹂弮鑸典划婢跺秴甯慨瀣Ц閹降鈧?
+// loadFileSnapshot 读取文件快照，用于 provider add 失败时回滚。
 func loadFileSnapshot(path string) (fileSnapshot, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -2696,7 +2687,7 @@ func loadFileSnapshot(path string) (fileSnapshot, error) {
 	}, nil
 }
 
-// restoreEnvFileSnapshot 鐏?.env 閹垹顦查崚鐗堝絹娴溿倕澧犺箛顐ゅ弾閿涘矂浼╅崗宥堫洬閻╂牕婧€閺咁垯绗呮稉銏犮亼閸樼喐婀侀柨顔尖偓绗衡偓
+// restoreEnvFileSnapshot 按快照恢复 .env 文件内容或删除新增文件。
 func restoreEnvFileSnapshot(path string, snapshot fileSnapshot) error {
 	if !snapshot.Exists {
 		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
@@ -2710,7 +2701,7 @@ func restoreEnvFileSnapshot(path string, snapshot fileSnapshot) error {
 	return os.WriteFile(path, snapshot.Content, 0o600)
 }
 
-// restoreProviderConfigSnapshot 閹垹顦?provider.yaml 韫囶偆鍙庨敍娑滃閸樼喎鍘涙稉宥呯摠閸︺劌鍨〒鍛倞閺傛澘缂撻惄顔肩秿閵?
+// restoreProviderConfigSnapshot 按快照恢复 provider.yaml 配置目录。
 func restoreProviderConfigSnapshot(baseDir string, providerName string, snapshot fileSnapshot) error {
 	providerDir := filepath.Join(baseDir, "providers", providerName)
 	if !snapshot.Exists {
@@ -2862,7 +2853,7 @@ func (a *App) runProviderAddFlow(request providerAddRequest) tea.Cmd {
 	}
 }
 
-// rollbackProviderAddSideEffects 閸ョ偞绮?provider add 鏉╁洨鈻兼稉顓炲嚒閽€钘夋勾閻ㄥ嫬澹囨担婊呮暏閿涘矂浼╅崗宥呫亼鐠愩儱鎮楀▓瀣殌闁板秶鐤嗘稉搴＄槕闁姐儯鈧?
+// rollbackProviderAddSideEffects 回滚 provider add 流程产生的环境变量与配置副作用。
 func rollbackProviderAddSideEffects(
 	baseDir string,
 	providerName string,
@@ -2955,10 +2946,4 @@ func (a *App) handleProviderAddResultMsg(msg providerAddResultMsg) {
 	if err := a.refreshModelPicker(); err != nil {
 		a.appendActivity("system", "Failed to refresh models", err.Error(), true)
 	}
-}
-
-func (a *App) handleTickMsg(msg tickMsg) tea.Cmd {
-	return tea.Tick(100*time.Millisecond, func(t time.Time) tea.Msg {
-		return tickMsg(t)
-	})
 }
