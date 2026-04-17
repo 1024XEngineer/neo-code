@@ -110,6 +110,52 @@ func TestExecuteUsesOSArgs(t *testing.T) {
 	}
 }
 
+func TestExecuteWaitsForSilentUpdateCheckCompletion(t *testing.T) {
+	originalLauncher := launchRootProgram
+	originalPreload := runGlobalPreload
+	originalSilentCheck := runSilentUpdateCheck
+	originalArgs := os.Args
+	t.Cleanup(func() {
+		launchRootProgram = originalLauncher
+		runGlobalPreload = originalPreload
+		runSilentUpdateCheck = originalSilentCheck
+		os.Args = originalArgs
+	})
+
+	_ = ConsumeUpdateNotice()
+	runGlobalPreload = func(context.Context) error { return nil }
+	launchRootProgram = func(context.Context, app.BootstrapOptions) error { return nil }
+	runSilentUpdateCheck = func(context.Context) {
+		done := make(chan struct{})
+		setSilentUpdateCheckDone(done)
+		go func() {
+			time.Sleep(50 * time.Millisecond)
+			setUpdateNotice("发现新版本: v0.2.1")
+			close(done)
+		}()
+	}
+	os.Args = []string{"neocode"}
+
+	if err := Execute(context.Background()); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if got := ConsumeUpdateNotice(); got == "" {
+		t.Fatal("expected update notice after Execute waits for silent check")
+	}
+}
+
+func TestWaitSilentUpdateCheckDoneReturnsOnTimeout(t *testing.T) {
+	blocked := make(chan struct{})
+	setSilentUpdateCheckDone(blocked)
+	t.Cleanup(func() { setSilentUpdateCheckDone(nil) })
+
+	start := time.Now()
+	waitSilentUpdateCheckDone(30 * time.Millisecond)
+	if elapsed := time.Since(start); elapsed < 20*time.Millisecond || elapsed > 150*time.Millisecond {
+		t.Fatalf("wait duration out of expected range, got %s", elapsed)
+	}
+}
+
 func TestDefaultRootProgramLauncherRunsProgram(t *testing.T) {
 	originalNewProgram := newRootProgram
 	t.Cleanup(func() { newRootProgram = originalNewProgram })
@@ -1195,6 +1241,15 @@ func TestShouldSkipGlobalPreload(t *testing.T) {
 	}
 	if shouldSkipGlobalPreload(nil) {
 		t.Fatal("nil command should not skip global preload")
+	}
+}
+
+func TestNormalizedCommandName(t *testing.T) {
+	if got := normalizedCommandName(nil); got != "" {
+		t.Fatalf("normalizedCommandName(nil) = %q, want empty", got)
+	}
+	if got := normalizedCommandName(&cobra.Command{Use: "URL-Dispatch"}); got != "url-dispatch" {
+		t.Fatalf("normalizedCommandName() = %q, want %q", got, "url-dispatch")
 	}
 }
 

@@ -57,8 +57,8 @@ func TestUpdateCommandShowsSuccessMessage(t *testing.T) {
 	runSilentUpdateCheck = func(context.Context) {}
 	runUpdateCommand = func(context.Context, updateCommandOptions) (updater.UpdateResult, error) {
 		return updater.UpdateResult{
-			CurrentVersion: "v0.1.0",
-			LatestVersion:  "v0.2.1",
+			CurrentVersion: "\x1b[31mv0.1.0\x1b[0m",
+			LatestVersion:  "\x1b[32mv0.2.1\x1b[0m\t",
 			Updated:        true,
 		}, nil
 	}
@@ -73,6 +73,12 @@ func TestUpdateCommandShowsSuccessMessage(t *testing.T) {
 
 	if got := stdout.String(); got == "" || !bytes.Contains(stdout.Bytes(), []byte("Updated successfully")) {
 		t.Fatalf("unexpected output: %q", got)
+	}
+	if strings.Contains(stdout.String(), "\x1b") {
+		t.Fatalf("expected sanitized output without ANSI sequence, got %q", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "v0.1.0 -> v0.2.1") {
+		t.Fatalf("unexpected output: %q", stdout.String())
 	}
 }
 
@@ -98,6 +104,35 @@ func TestUpdateCommandShowsUnknownLatestWhenLatestVersionEmpty(t *testing.T) {
 		t.Fatalf("ExecuteContext() error = %v", err)
 	}
 	if !strings.Contains(stdout.String(), "latest: unknown") {
+		t.Fatalf("unexpected output: %q", stdout.String())
+	}
+}
+
+func TestUpdateCommandSanitizesLatestVersionInUpToDateMessage(t *testing.T) {
+	originalRunner := runUpdateCommand
+	originalPreload := runGlobalPreload
+	originalSilentCheck := runSilentUpdateCheck
+	t.Cleanup(func() { runUpdateCommand = originalRunner })
+	t.Cleanup(func() { runGlobalPreload = originalPreload })
+	t.Cleanup(func() { runSilentUpdateCheck = originalSilentCheck })
+
+	runGlobalPreload = func(context.Context) error { return nil }
+	runSilentUpdateCheck = func(context.Context) {}
+	runUpdateCommand = func(context.Context, updateCommandOptions) (updater.UpdateResult, error) {
+		return updater.UpdateResult{Updated: false, LatestVersion: "\x1b[31mv0.2.1\x1b[0m\t\n"}, nil
+	}
+
+	command := NewRootCommand()
+	var stdout bytes.Buffer
+	command.SetOut(&stdout)
+	command.SetArgs([]string{"update"})
+	if err := command.ExecuteContext(context.Background()); err != nil {
+		t.Fatalf("ExecuteContext() error = %v", err)
+	}
+	if strings.Contains(stdout.String(), "\x1b") {
+		t.Fatalf("expected sanitized output without ANSI sequence, got %q", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "latest: v0.2.1") {
 		t.Fatalf("unexpected output: %q", stdout.String())
 	}
 }
@@ -214,5 +249,14 @@ func TestDefaultUpdateCommandRunnerReturnsUnderlyingError(t *testing.T) {
 	_, err := defaultUpdateCommandRunner(context.Background(), updateCommandOptions{})
 	if !errors.Is(err, expected) {
 		t.Fatalf("expected underlying error %v, got %v", expected, err)
+	}
+}
+
+func TestDisplayVersionForTerminal(t *testing.T) {
+	if got := displayVersionForTerminal("\x1b[31mv0.2.1\x1b[0m\t"); got != "v0.2.1" {
+		t.Fatalf("displayVersionForTerminal() = %q, want %q", got, "v0.2.1")
+	}
+	if got := displayVersionForTerminal(" \n\t"); got != "unknown" {
+		t.Fatalf("displayVersionForTerminal() empty = %q, want %q", got, "unknown")
 	}
 }

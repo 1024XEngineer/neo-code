@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -41,15 +40,14 @@ func newUpdateCommand() *cobra.Command {
 
 			out := cmd.OutOrStdout()
 			if !result.Updated {
-				latest := strings.TrimSpace(result.LatestVersion)
-				if latest == "" {
-					latest = "unknown"
-				}
+				latest := displayVersionForTerminal(result.LatestVersion)
 				_, _ = fmt.Fprintf(out, "Already up-to-date (latest: %s).\n", latest)
 				return nil
 			}
 
-			_, _ = fmt.Fprintf(out, "Updated successfully: %s -> %s\n", result.CurrentVersion, result.LatestVersion)
+			current := displayVersionForTerminal(result.CurrentVersion)
+			latest := displayVersionForTerminal(result.LatestVersion)
+			_, _ = fmt.Fprintf(out, "Updated successfully: %s -> %s\n", current, latest)
 			return nil
 		},
 	}
@@ -74,4 +72,13 @@ func defaultUpdateCommandRunner(ctx context.Context, options updateCommandOption
 		return updater.UpdateResult{}, err
 	}
 	return result, nil
+}
+
+// displayVersionForTerminal 清洗版本字符串并为不可用值提供统一回退文案。
+func displayVersionForTerminal(raw string) string {
+	version := sanitizeVersionForTerminal(raw)
+	if version == "" {
+		return "unknown"
+	}
+	return version
 }

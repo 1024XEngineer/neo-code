@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -25,8 +26,14 @@ var readCurrentVersion = version.Current
 var checkLatestRelease = updater.CheckLatest
 
 const silentUpdateCheckTimeout = 3 * time.Second
+const silentUpdateCheckDrainTimeout = 300 * time.Millisecond
 
 var ansiEscapeSequencePattern = regexp.MustCompile(`\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\)|[@-Z\\-_])`)
+
+var (
+	silentUpdateCheckMu   sync.Mutex
+	silentUpdateCheckDone <-chan struct{}
+)
 
 // GlobalFlags 描述 CLI 根命令当前支持的全局参数。
 type GlobalFlags struct {
@@ -37,7 +44,11 @@ type GlobalFlags struct {
 func Execute(ctx context.Context) error {
 	app.EnsureConsoleUTF8()
 	_ = ConsumeUpdateNotice()
-	return NewRootCommand().ExecuteContext(ctx)
+	setSilentUpdateCheckDone(nil)
+
+	err := NewRootCommand().ExecuteContext(ctx)
+	waitSilentUpdateCheckDone(silentUpdateCheckDrainTimeout)
+	return err
 }
 
 // NewRootCommand 创建 NeoCode 的 CLI 根命令。
@@ -116,11 +127,16 @@ func defaultGlobalPreload(ctx context.Context) error {
 func defaultSilentUpdateCheck(ctx context.Context) {
 	currentVersion := readCurrentVersion()
 	if !version.IsSemverRelease(currentVersion) {
+		setSilentUpdateCheckDone(nil)
 		return
 	}
 	parentCtx := context.WithoutCancel(ctx)
+	done := make(chan struct{})
+	setSilentUpdateCheckDone(done)
 
-	go func(parent context.Context, currentVersion string) {
+	go func(parent context.Context, currentVersion string, done chan struct{}) {
+		defer close(done)
+
 		checkCtx, cancel := context.WithTimeout(parent, silentUpdateCheckTimeout)
 		defer cancel()
 
@@ -137,23 +153,17 @@ func defaultSilentUpdateCheck(ctx context.Context) {
 			return
 		}
 		setUpdateNotice(fmt.Sprintf("\u53d1\u73b0\u65b0\u7248\u672c: %s\uff0c\u8fd0\u884c neocode update \u5373\u53ef\u5347\u7ea7", latestVersion))
-	}(parentCtx, currentVersion)
+	}(parentCtx, currentVersion, done)
 }
 
 // shouldSkipGlobalPreload 判断当前命令是否应跳过全局预加载逻辑。
 func shouldSkipGlobalPreload(cmd *cobra.Command) bool {
-	if cmd == nil {
-		return false
-	}
-	return strings.EqualFold(strings.TrimSpace(cmd.Name()), "url-dispatch")
+	return normalizedCommandName(cmd) == "url-dispatch"
 }
 
 // shouldSkipSilentUpdateCheck 判断当前命令是否应跳过静默更新检测。
 func shouldSkipSilentUpdateCheck(cmd *cobra.Command) bool {
-	if cmd == nil {
-		return false
-	}
-	switch strings.ToLower(strings.TrimSpace(cmd.Name())) {
+	switch normalizedCommandName(cmd) {
 	case "url-dispatch", "update":
 		return true
 	default:
@@ -172,4 +182,40 @@ func sanitizeVersionForTerminal(version string) string {
 		}
 	}
 	return strings.TrimSpace(builder.String())
+}
+
+// normalizedCommandName 返回标准化后的命令名，统一处理空命令与大小写。
+func normalizedCommandName(cmd *cobra.Command) string {
+	if cmd == nil {
+		return ""
+	}
+	return strings.ToLower(strings.TrimSpace(cmd.Name()))
+}
+
+// setSilentUpdateCheckDone 保存当前静默检测任务的完成信号通道。
+func setSilentUpdateCheckDone(done <-chan struct{}) {
+	silentUpdateCheckMu.Lock()
+	silentUpdateCheckDone = done
+	silentUpdateCheckMu.Unlock()
+}
+
+// waitSilentUpdateCheckDone 在命令退出阶段等待静默检测短暂收口，降低提示丢失概率。
+func waitSilentUpdateCheckDone(timeout time.Duration) {
+	if timeout <= 0 {
+		return
+	}
+
+	silentUpdateCheckMu.Lock()
+	done := silentUpdateCheckDone
+	silentUpdateCheckMu.Unlock()
+	if done == nil {
+		return
+	}
+
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-done:
+	case <-timer.C:
+	}
 }
