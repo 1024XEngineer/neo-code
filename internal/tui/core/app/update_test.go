@@ -1761,6 +1761,35 @@ func TestUpdatePickerSessionEnterActivatesSelectedSession(t *testing.T) {
 	}
 }
 
+func TestUpdatePickerSessionEnterWhileBusyRejectsSwitch(t *testing.T) {
+	app, runtime := newTestApp(t)
+	now := time.Now()
+	runtime.listSessions = []agentsession.Summary{
+		{ID: "s1", Title: "One", UpdatedAt: now.Add(-time.Minute)},
+		{ID: "s2", Title: "Two", UpdatedAt: now},
+	}
+	if err := app.refreshSessionPicker(); err != nil {
+		t.Fatalf("refreshSessionPicker() error = %v", err)
+	}
+	app.state.ActiveSessionID = "s1"
+	app.state.ActiveSessionTitle = "One"
+	app.state.IsAgentRunning = true
+	app.openPicker(pickerSession, statusChooseSession, &app.sessionPicker, "s1")
+	app.sessionPicker.Select(1)
+
+	model, cmd := app.updatePicker(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd != nil {
+		t.Fatalf("expected nil cmd for rejected session switch")
+	}
+	app = model.(App)
+	if app.state.ActiveSessionID != "s1" {
+		t.Fatalf("expected active session to remain unchanged, got %q", app.state.ActiveSessionID)
+	}
+	if !strings.Contains(app.state.ExecutionError, sessionSwitchBusyMessage) {
+		t.Fatalf("expected busy session switch error, got %q", app.state.ExecutionError)
+	}
+}
+
 func TestActivateSessionByIDNotFound(t *testing.T) {
 	app, _ := newTestApp(t)
 	app.state.Sessions = []agentsession.Summary{{ID: "s1", Title: "one"}}
@@ -1783,6 +1812,25 @@ func TestHandleImmediateSlashCommandSession(t *testing.T) {
 	}
 	if app.state.ActivePicker != pickerSession {
 		t.Fatalf("expected session picker opened by immediate slash command")
+	}
+}
+
+func TestHandleImmediateSlashCommandSessionWhileBusy(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.state.IsAgentRunning = true
+
+	handled, cmd := app.handleImmediateSlashCommand("/session")
+	if !handled {
+		t.Fatalf("expected /session to be handled immediately")
+	}
+	if cmd != nil {
+		t.Fatalf("expected busy /session to avoid returning cmd")
+	}
+	if app.state.ActivePicker != pickerNone {
+		t.Fatalf("expected session picker to stay closed while busy")
+	}
+	if !strings.Contains(app.state.ExecutionError, sessionSwitchBusyMessage) {
+		t.Fatalf("expected busy session switch error, got %q", app.state.ExecutionError)
 	}
 }
 

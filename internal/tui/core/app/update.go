@@ -44,6 +44,8 @@ const (
 
 const providerAddSelectTimeout = 10 * time.Second
 
+const sessionSwitchBusyMessage = "cannot switch sessions while run or compact is active"
+
 var panelOrder = []panel{panelTranscript, panelActivity, panelInput}
 var persistProviderUserEnvVar = config.PersistUserEnvVar
 var deleteProviderUserEnvVar = config.DeleteUserEnvVar
@@ -378,6 +380,12 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 				}
 				return a, tea.Batch(cmds...)
 			case slashCommandSession:
+				if err := a.ensureSessionSwitchAllowed(""); err != nil {
+					a.state.ExecutionError = err.Error()
+					a.state.StatusText = err.Error()
+					a.appendActivity("session", "Failed to open session picker", err.Error(), true)
+					return a, tea.Batch(cmds...)
+				}
 				if err := a.refreshSessionPicker(); err != nil {
 					a.state.ExecutionError = err.Error()
 					a.state.StatusText = err.Error()
@@ -774,6 +782,9 @@ func (a *App) activateSelectedSession() error {
 	if !ok {
 		return nil
 	}
+	if err := a.ensureSessionSwitchAllowed(item.Summary.ID); err != nil {
+		return err
+	}
 
 	a.state.ActiveSessionID = item.Summary.ID
 	a.state.ActiveSessionTitle = item.Summary.Title
@@ -784,6 +795,9 @@ func (a *App) activateSelectedSession() error {
 }
 
 func (a *App) activateSessionByID(sessionID string) error {
+	if err := a.ensureSessionSwitchAllowed(sessionID); err != nil {
+		return err
+	}
 	for _, s := range a.state.Sessions {
 		if s.ID == sessionID {
 			a.state.ActiveSessionID = s.ID
@@ -794,6 +808,16 @@ func (a *App) activateSessionByID(sessionID string) error {
 		}
 	}
 	return fmt.Errorf("session not found: %s", sessionID)
+}
+
+// ensureSessionSwitchAllowed 统一阻止运行中切换到其他会话，避免 UI 脱离仍在执行的 run 上下文。
+func (a *App) ensureSessionSwitchAllowed(targetSessionID string) error {
+	targetSessionID = strings.TrimSpace(targetSessionID)
+	activeSessionID := strings.TrimSpace(a.state.ActiveSessionID)
+	if !a.isBusy() || (targetSessionID != "" && strings.EqualFold(targetSessionID, activeSessionID)) {
+		return nil
+	}
+	return fmt.Errorf(sessionSwitchBusyMessage)
 }
 
 func (a *App) syncActiveSessionTitle() {
@@ -1894,6 +1918,12 @@ func (a *App) handleImmediateSlashCommand(input string) (bool, tea.Cmd) {
 	case slashCommandForget:
 		return true, a.handleForgetCommand(rest)
 	case slashCommandSession:
+		if err := a.ensureSessionSwitchAllowed(""); err != nil {
+			a.state.ExecutionError = err.Error()
+			a.state.StatusText = err.Error()
+			a.appendActivity("session", "Failed to open session picker", err.Error(), true)
+			return true, nil
+		}
 		if err := a.refreshSessionPicker(); err != nil {
 			a.state.ExecutionError = err.Error()
 			a.state.StatusText = err.Error()
