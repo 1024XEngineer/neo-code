@@ -24,6 +24,8 @@ type SpecListInput struct {
 type Manager interface {
 	ListAvailableSpecs(ctx context.Context, input SpecListInput) ([]providertypes.ToolSpec, error)
 	MicroCompactPolicy(name string) MicroCompactPolicy
+	MicroCompactSummarizer(name string) ContentSummarizer
+	// Execute 必须支持并发调用；runtime 可能在同一轮中并行调度多个工具调用。
 	Execute(ctx context.Context, input ToolCallInput) (ToolResult, error)
 	RememberSessionDecision(sessionID string, action security.Action, scope SessionPermissionScope) error
 }
@@ -37,6 +39,10 @@ type Executor interface {
 
 type microCompactPolicyExecutor interface {
 	MicroCompactPolicy(name string) MicroCompactPolicy
+}
+
+type microCompactSummarizerExecutor interface {
+	MicroCompactSummarizer(name string) ContentSummarizer
 }
 
 // WorkspaceSandbox enforces workspace-oriented constraints before execution.
@@ -243,6 +249,17 @@ func (m *DefaultManager) MicroCompactPolicy(name string) MicroCompactPolicy {
 		return source.MicroCompactPolicy(name)
 	}
 	return MicroCompactPolicyCompact
+}
+
+// MicroCompactSummarizer 返回工具的内容摘要器；未注册时返回 nil。
+func (m *DefaultManager) MicroCompactSummarizer(name string) ContentSummarizer {
+	if m == nil || m.executor == nil {
+		return nil
+	}
+	if source, ok := m.executor.(microCompactSummarizerExecutor); ok {
+		return source.MicroCompactSummarizer(name)
+	}
+	return nil
 }
 
 // Execute runs the tool if the permission engine allows it and the sandbox

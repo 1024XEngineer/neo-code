@@ -279,6 +279,61 @@ func TestDefaultBuilderBuildAppliesMicroCompactAfterTrim(t *testing.T) {
 	}
 }
 
+func TestNewBuilderWithToolPoliciesAndSummarizers(t *testing.T) {
+	t.Parallel()
+
+	builder := NewBuilderWithToolPoliciesAndSummarizers(
+		nil,
+		stubMicroCompactSummarizerSource{
+			"filesystem_read_file": func(content string, metadata map[string]string, isError bool) string {
+				return "[summary] read_file"
+			},
+		},
+	)
+
+	messages := []providertypes.Message{
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("older user")}},
+		{
+			Role: providertypes.RoleAssistant,
+			ToolCalls: []providertypes.ToolCall{
+				{ID: "call-1", Name: "filesystem_read_file", Arguments: "{}"},
+			},
+		},
+		{Role: providertypes.RoleTool, ToolCallID: "call-1", Parts: []providertypes.ContentPart{providertypes.NewTextPart("old read result")}},
+		{
+			Role: providertypes.RoleAssistant,
+			ToolCalls: []providertypes.ToolCall{
+				{ID: "call-2", Name: "bash", Arguments: "{}"},
+			},
+		},
+		{Role: providertypes.RoleTool, ToolCallID: "call-2", Parts: []providertypes.ContentPart{providertypes.NewTextPart("recent bash result")}},
+		{
+			Role: providertypes.RoleAssistant,
+			ToolCalls: []providertypes.ToolCall{
+				{ID: "call-3", Name: "webfetch", Arguments: "{}"},
+			},
+		},
+		{Role: providertypes.RoleTool, ToolCallID: "call-3", Parts: []providertypes.ContentPart{providertypes.NewTextPart("latest webfetch result")}},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("latest explicit instruction")}},
+	}
+
+	got, err := builder.Build(stdcontext.Background(), BuildInput{
+		Messages:  messages,
+		TaskState: agentsession.TaskState{Goal: "keep implementing task"},
+		Metadata:  testMetadata(t.TempDir()),
+	})
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	const summarizedMessageIndex = 2
+	if renderDisplayParts(got.Messages[summarizedMessageIndex].Parts) != "[summary] read_file" {
+		t.Fatalf(
+			"expected summarized older read result, got %q",
+			renderDisplayParts(got.Messages[summarizedMessageIndex].Parts),
+		)
+	}
+}
+
 func TestDefaultBuilderBuildSkipsMicroCompactWithoutEstablishedTaskState(t *testing.T) {
 	t.Parallel()
 

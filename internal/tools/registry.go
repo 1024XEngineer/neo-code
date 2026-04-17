@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sort"
 	"strings"
+	"sync"
 
 	providertypes "neo-code/internal/provider/types"
 	"neo-code/internal/security"
@@ -12,18 +13,21 @@ import (
 )
 
 type Registry struct {
-	tools                map[string]Tool
-	microCompactPolicies map[string]MicroCompactPolicy
-	mcpRegistry          *mcp.Registry
-	mcpFactory           *mcp.AdapterFactory
-	mcpExposureFilter    mcp.ExposureFilter
-	mcpExposureAudit     []mcp.ExposureDecision
+	tools                   map[string]Tool
+	microCompactPolicies    map[string]MicroCompactPolicy
+	microCompactSummarizers map[string]ContentSummarizer
+	microCompactSummaryMu   sync.RWMutex
+	mcpRegistry             *mcp.Registry
+	mcpFactory              *mcp.AdapterFactory
+	mcpExposureFilter       mcp.ExposureFilter
+	mcpExposureAudit        []mcp.ExposureDecision
 }
 
 func NewRegistry() *Registry {
 	return &Registry{
-		tools:                map[string]Tool{},
-		microCompactPolicies: map[string]MicroCompactPolicy{},
+		tools:                   map[string]Tool{},
+		microCompactPolicies:    map[string]MicroCompactPolicy{},
+		microCompactSummarizers: map[string]ContentSummarizer{},
 	}
 }
 
@@ -100,6 +104,34 @@ func (r *Registry) MicroCompactPolicy(name string) MicroCompactPolicy {
 		return MicroCompactPolicyPreserveHistory
 	}
 	return MicroCompactPolicyCompact
+}
+
+// RegisterSummarizer 为指定工具注册内容摘要器；传入 nil 移除已有条目。
+func (r *Registry) RegisterSummarizer(toolName string, summarizer ContentSummarizer) {
+	if r == nil {
+		return
+	}
+	name := strings.ToLower(strings.TrimSpace(toolName))
+	r.microCompactSummaryMu.Lock()
+	defer r.microCompactSummaryMu.Unlock()
+	if summarizer == nil {
+		delete(r.microCompactSummarizers, name)
+		return
+	}
+	r.microCompactSummarizers[name] = summarizer
+}
+
+// MicroCompactSummarizer 返回指定工具的内容摘要器；无注册时返回 nil。
+func (r *Registry) MicroCompactSummarizer(name string) ContentSummarizer {
+	if r == nil {
+		return nil
+	}
+	r.microCompactSummaryMu.RLock()
+	defer r.microCompactSummaryMu.RUnlock()
+	if r.microCompactSummarizers == nil {
+		return nil
+	}
+	return r.microCompactSummarizers[strings.ToLower(strings.TrimSpace(name))]
 }
 
 func (r *Registry) GetSpecs() []providertypes.ToolSpec {

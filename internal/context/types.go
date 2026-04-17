@@ -36,6 +36,11 @@ type MicroCompactPolicySource interface {
 	MicroCompactPolicy(name string) tools.MicroCompactPolicy
 }
 
+// MicroCompactSummarizerSource 定义 context 查找按工具内容摘要器的最小依赖。
+type MicroCompactSummarizerSource interface {
+	MicroCompactSummarizer(name string) tools.ContentSummarizer
+}
+
 // CompactOptions controls read-time compact behavior inside the context builder.
 type CompactOptions struct {
 	DisableMicroCompact           bool

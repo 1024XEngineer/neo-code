@@ -35,6 +35,10 @@ func (m *callbackToolManager) MicroCompactPolicy(name string) tools.MicroCompact
 	return tools.MicroCompactPolicyCompact
 }
 
+func (m *callbackToolManager) MicroCompactSummarizer(name string) tools.ContentSummarizer {
+	return nil
+}
+
 func (m *callbackToolManager) Execute(ctx context.Context, input tools.ToolCallInput) (tools.ToolResult, error) {
 	if m.executeFn != nil {
 		return m.executeFn(ctx, input)

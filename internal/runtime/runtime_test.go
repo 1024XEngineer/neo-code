@@ -380,6 +380,10 @@ func (m *stubToolManager) MicroCompactPolicy(name string) tools.MicroCompactPoli
 	return tools.MicroCompactPolicyCompact
 }
 
+func (m *stubToolManager) MicroCompactSummarizer(name string) tools.ContentSummarizer {
+	return nil
+}
+
 func (m *stubToolManager) Execute(ctx context.Context, input tools.ToolCallInput) (tools.ToolResult, error) {
 	m.mu.Lock()
 	m.executeCalls++

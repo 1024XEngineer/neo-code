@@ -79,7 +79,7 @@ func TestMicroCompactMessagesHandlesEmptyAndInvalidSpanInputs(t *testing.T) {
 			},
 		},
 	}
-	got := microCompactMessagesWithPolicies(assistantOnly, stubMicroCompactPolicySource{}, 0)
+	got := microCompactMessagesWithPolicies(assistantOnly, stubMicroCompactPolicySource{}, 0, nil)
 	if len(got) != 1 || len(got[0].ToolCalls) != 1 {
 		t.Fatalf("expected invalid tool call id path to keep message untouched, got %+v", got)
 	}
@@ -173,7 +173,7 @@ func TestMicroCompactMessagesKeepsPreservedToolsErrorsAndOrphans(t *testing.T) {
 
 	got := microCompactMessagesWithPolicies(messages, stubMicroCompactPolicySource{
 		"custom_tool": tools.MicroCompactPolicyPreserveHistory,
-	}, 0)
+	}, 0, nil)
 	if renderDisplayParts(got[1].Parts) != "custom result" {
 		t.Fatalf("expected preserved tool result to remain, got %q", renderDisplayParts(got[1].Parts))
 	}
@@ -225,7 +225,7 @@ func TestMicroCompactMessagesClearsOnlyNonPreservedResultsInMixedToolSpan(t *tes
 
 	got := microCompactMessagesWithPolicies(messages, stubMicroCompactPolicySource{
 		"custom_tool": tools.MicroCompactPolicyPreserveHistory,
-	}, 0)
+	}, 0, nil)
 	if renderDisplayParts(got[2].Parts) != microCompactClearedMessage {
 		t.Fatalf("expected default compactable tool result to be cleared, got %q", renderDisplayParts(got[2].Parts))
 	}
@@ -266,7 +266,7 @@ func TestMicroCompactMessagesTreatsNewToolsAsCompactableByDefault(t *testing.T) 
 		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("latest explicit instruction")}},
 	}
 
-	got := microCompactMessagesWithPolicies(messages, stubMicroCompactPolicySource{}, 0)
+	got := microCompactMessagesWithPolicies(messages, stubMicroCompactPolicySource{}, 0, nil)
 	if renderDisplayParts(got[2].Parts) != microCompactClearedMessage {
 		t.Fatalf("expected new tool result to be compacted by default, got %q", renderDisplayParts(got[2].Parts))
 	}
@@ -341,7 +341,7 @@ func TestMicroCompactMessagesSkipsToolMessagesWhenCompactableIDsMissing(t *testi
 		{Role: providertypes.RoleTool, ToolCallID: "orphan", Parts: []providertypes.ContentPart{providertypes.NewTextPart("orphan result")}},
 	}
 
-	got := microCompactMessagesWithPolicies(messages, stubMicroCompactPolicySource{}, 0)
+	got := microCompactMessagesWithPolicies(messages, stubMicroCompactPolicySource{}, 0, nil)
 	if renderDisplayParts(got[0].Parts) != "orphan result" {
 		t.Fatalf("expected orphan tool result to remain, got %q", renderDisplayParts(got[0].Parts))
 	}
