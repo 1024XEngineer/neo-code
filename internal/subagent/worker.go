@@ -137,7 +137,12 @@ func (w *worker) Step(ctx context.Context) (StepResult, error) {
 	stepOutput, err := w.engine.RunStep(ctx, input)
 	if err != nil {
 		w.mu.Lock()
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		if errors.Is(err, context.DeadlineExceeded) {
+			result := w.finishLocked(StateFailed, StopReasonTimeout, Output{}, err)
+			w.mu.Unlock()
+			return StepResult{State: result.State, Done: true, Step: result.StepCount}, err
+		}
+		if errors.Is(err, context.Canceled) {
 			result := w.finishLocked(StateCanceled, StopReasonCanceled, Output{}, nil)
 			w.mu.Unlock()
 			return StepResult{State: result.State, Done: true, Step: result.StepCount}, err
