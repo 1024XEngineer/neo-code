@@ -16,8 +16,11 @@ import (
 var persistUserEnvVarForCreate = config.PersistUserEnvVar
 var deleteUserEnvVarForCreate = config.DeleteUserEnvVar
 var lookupUserEnvVarForCreate = config.LookupUserEnvVar
+var saveCustomProviderForCreate = config.SaveCustomProvider
 
 const providerCreateRollbackReloadTimeout = 3 * time.Second
+const providerCreateCrossProcessLockName = ".provider-create.lock"
+const providerCreateCrossProcessLockRetryInterval = 50 * time.Millisecond
 
 // CreateCustomProviderInput 定义新增自定义 Provider 所需的输入参数。
 type CreateCustomProviderInput struct {
@@ -64,6 +67,12 @@ func (s *Service) CreateCustomProvider(ctx context.Context, input CreateCustomPr
 	s.manager.LockProviderCreate()
 	defer s.manager.UnlockProviderCreate()
 
+	releaseCrossProcessLock, err := lockProviderCreateCrossProcess(ctx, s.manager.BaseDir())
+	if err != nil {
+		return Selection{}, err
+	}
+	defer releaseCrossProcessLock()
+
 	cfgSnapshot := s.manager.Get()
 	if err := validateCustomProviderCreateConflict(cfgSnapshot, normalized); err != nil {
 		return Selection{}, err
@@ -109,7 +118,8 @@ func (s *Service) CreateCustomProvider(ctx context.Context, input CreateCustomPr
 		return rolledErr
 	}
 
-	if err := config.SaveCustomProvider(
+	providerSaved = true
+	if err := saveCustomProviderForCreate(
 		s.manager.BaseDir(),
 		normalized.Name,
 		normalized.Driver,
@@ -119,9 +129,8 @@ func (s *Service) CreateCustomProvider(ctx context.Context, input CreateCustomPr
 		normalized.DeploymentMode,
 		normalized.APIVersion,
 	); err != nil {
-		return Selection{}, fmt.Errorf("selection: save provider config: %w", err)
+		return Selection{}, rollback(fmt.Errorf("selection: save provider config: %w", err))
 	}
-	providerSaved = true
 
 	if err := persistUserEnvVarForCreate(normalized.APIKeyEnv, normalized.APIKey); err != nil {
 		return Selection{}, rollback(fmt.Errorf("selection: persist user env: %w", err))
@@ -278,4 +287,28 @@ func restoreProviderConfigSnapshot(baseDir string, providerName string, snapshot
 		return err
 	}
 	return os.WriteFile(filepath.Join(providerDir, "provider.yaml"), snapshot.Content, 0o644)
+}
+
+// lockProviderCreateCrossProcess 使用基于目录的锁，串行化同一工作目录下跨进程的创建流程。
+func lockProviderCreateCrossProcess(ctx context.Context, baseDir string) (func(), error) {
+	lockPath := filepath.Join(baseDir, providerCreateCrossProcessLockName)
+	for {
+		if err := os.Mkdir(lockPath, 0o700); err == nil {
+			return func() {
+				_ = os.Remove(lockPath)
+			}, nil
+		} else if !os.IsExist(err) {
+			return nil, fmt.Errorf("selection: acquire create lock: %w", err)
+		}
+
+		timer := time.NewTimer(providerCreateCrossProcessLockRetryInterval)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
+	}
 }

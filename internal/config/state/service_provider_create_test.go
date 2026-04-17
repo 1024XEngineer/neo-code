@@ -15,10 +15,11 @@ import (
 )
 
 func TestCreateCustomProviderSuccess(t *testing.T) {
-	restorePersist, restoreDelete, restoreLookup := stubUserEnvOpsForCreateProvider(t)
+	restorePersist, restoreDelete, restoreLookup, restoreSave := stubUserEnvOpsForCreateProvider(t)
 	defer restorePersist()
 	defer restoreDelete()
 	defer restoreLookup()
+	defer restoreSave()
 
 	manager := newSelectionTestManager(t, testDefaultConfig())
 	service := NewService(manager, newDriverSupporterStub(), catalogMethodsStub{
@@ -66,10 +67,11 @@ func TestCreateCustomProviderSuccess(t *testing.T) {
 }
 
 func TestCreateCustomProviderRollbackOnSelectFailure(t *testing.T) {
-	restorePersist, restoreDelete, restoreLookup := stubUserEnvOpsForCreateProvider(t)
+	restorePersist, restoreDelete, restoreLookup, restoreSave := stubUserEnvOpsForCreateProvider(t)
 	defer restorePersist()
 	defer restoreDelete()
 	defer restoreLookup()
+	defer restoreSave()
 
 	manager := newSelectionTestManager(t, testDefaultConfig())
 	service := NewService(manager, newDriverSupporterStub(), errorCatalogStub{err: context.DeadlineExceeded})
@@ -107,10 +109,11 @@ func TestCreateCustomProviderRollbackOnSelectFailure(t *testing.T) {
 }
 
 func TestCreateCustomProviderRejectsEnvConflicts(t *testing.T) {
-	restorePersist, restoreDelete, restoreLookup := stubUserEnvOpsForCreateProvider(t)
+	restorePersist, restoreDelete, restoreLookup, restoreSave := stubUserEnvOpsForCreateProvider(t)
 	defer restorePersist()
 	defer restoreDelete()
 	defer restoreLookup()
+	defer restoreSave()
 
 	manager := newSelectionTestManager(t, testDefaultConfig())
 	service := NewService(manager, newDriverSupporterStub(), catalogMethodsStub{
@@ -131,10 +134,11 @@ func TestCreateCustomProviderRejectsEnvConflicts(t *testing.T) {
 }
 
 func TestCreateCustomProviderRejectsProtectedEnvName(t *testing.T) {
-	restorePersist, restoreDelete, restoreLookup := stubUserEnvOpsForCreateProvider(t)
+	restorePersist, restoreDelete, restoreLookup, restoreSave := stubUserEnvOpsForCreateProvider(t)
 	defer restorePersist()
 	defer restoreDelete()
 	defer restoreLookup()
+	defer restoreSave()
 
 	manager := newSelectionTestManager(t, testDefaultConfig())
 	service := NewService(manager, newDriverSupporterStub(), catalogMethodsStub{
@@ -155,10 +159,11 @@ func TestCreateCustomProviderRejectsProtectedEnvName(t *testing.T) {
 }
 
 func TestCreateCustomProviderRejectsInvalidProviderName(t *testing.T) {
-	restorePersist, restoreDelete, restoreLookup := stubUserEnvOpsForCreateProvider(t)
+	restorePersist, restoreDelete, restoreLookup, restoreSave := stubUserEnvOpsForCreateProvider(t)
 	defer restorePersist()
 	defer restoreDelete()
 	defer restoreLookup()
+	defer restoreSave()
 
 	manager := newSelectionTestManager(t, testDefaultConfig())
 	service := NewService(manager, newDriverSupporterStub(), catalogMethodsStub{
@@ -179,10 +184,11 @@ func TestCreateCustomProviderRejectsInvalidProviderName(t *testing.T) {
 }
 
 func TestCreateCustomProviderSerializesAcrossServicesSharingManager(t *testing.T) {
-	restorePersist, restoreDelete, restoreLookup := stubUserEnvOpsForCreateProvider(t)
+	restorePersist, restoreDelete, restoreLookup, restoreSave := stubUserEnvOpsForCreateProvider(t)
 	defer restorePersist()
 	defer restoreDelete()
 	defer restoreLookup()
+	defer restoreSave()
 
 	manager := newSelectionTestManager(t, testDefaultConfig())
 	failingService := NewService(manager, newDriverSupporterStub(), errorCatalogStub{err: context.DeadlineExceeded})
@@ -271,6 +277,141 @@ func TestCreateCustomProviderSerializesAcrossServicesSharingManager(t *testing.T
 	}
 }
 
+func TestCreateCustomProviderRollbackOnSaveProviderFailure(t *testing.T) {
+	restorePersist, restoreDelete, restoreLookup, restoreSave := stubUserEnvOpsForCreateProvider(t)
+	defer restorePersist()
+	defer restoreDelete()
+	defer restoreLookup()
+	defer restoreSave()
+
+	manager := newSelectionTestManager(t, testDefaultConfig())
+	service := NewService(manager, newDriverSupporterStub(), catalogMethodsStub{
+		listModels: []providertypes.ModelDescriptor{{ID: "m1", Name: "m1"}},
+	})
+	input := CreateCustomProviderInput{
+		Name:      "save-failed-provider",
+		Driver:    provider.DriverOpenAICompat,
+		BaseURL:   "https://llm.example.com/v1",
+		APIKeyEnv: "SAVE_FAILED_PROVIDER_API_KEY",
+		APIKey:    "key",
+		APIStyle:  provider.OpenAICompatibleAPIStyleChatCompletions,
+	}
+
+	saveCustomProviderForCreate = func(
+		baseDir string,
+		name string,
+		driver string,
+		baseURL string,
+		apiKeyEnv string,
+		apiStyle string,
+		deploymentMode string,
+		apiVersion string,
+	) error {
+		providerDir := filepath.Join(baseDir, "providers", name)
+		if err := os.MkdirAll(providerDir, 0o755); err != nil {
+			return err
+		}
+		return context.DeadlineExceeded
+	}
+
+	if _, err := service.CreateCustomProvider(context.Background(), input); err == nil {
+		t.Fatal("expected CreateCustomProvider() to fail when saving provider config")
+	}
+
+	providerDir := filepath.Join(manager.BaseDir(), "providers", input.Name)
+	if _, statErr := os.Stat(providerDir); !os.IsNotExist(statErr) {
+		t.Fatalf("expected rollback to remove provider dir, stat err = %v", statErr)
+	}
+	if got := strings.TrimSpace(os.Getenv(input.APIKeyEnv)); got != "" {
+		t.Fatalf("expected process env to stay untouched, got %q", got)
+	}
+	cfg := manager.Get()
+	if _, err := cfg.ProviderByName(input.Name); err == nil {
+		t.Fatalf("expected provider %q absent after save failure rollback", input.Name)
+	}
+}
+
+func TestCreateCustomProviderSerializesAcrossManagersSharingBaseDir(t *testing.T) {
+	restorePersist, restoreDelete, restoreLookup, restoreSave := stubUserEnvOpsForCreateProvider(t)
+	defer restorePersist()
+	defer restoreDelete()
+	defer restoreLookup()
+	defer restoreSave()
+
+	baseDir := t.TempDir()
+	loaderA := configpkg.NewLoader(baseDir, testDefaultConfig())
+	loaderB := configpkg.NewLoader(baseDir, testDefaultConfig())
+	managerA := configpkg.NewManager(loaderA)
+	managerB := configpkg.NewManager(loaderB)
+	if _, err := managerA.Load(context.Background()); err != nil {
+		t.Fatalf("managerA.Load() error = %v", err)
+	}
+	if _, err := managerB.Load(context.Background()); err != nil {
+		t.Fatalf("managerB.Load() error = %v", err)
+	}
+
+	failingService := NewService(managerA, newDriverSupporterStub(), errorCatalogStub{err: context.DeadlineExceeded})
+	successService := NewService(managerB, newDriverSupporterStub(), catalogMethodsStub{
+		listModels: []providertypes.ModelDescriptor{{ID: "m1", Name: "m1"}},
+	})
+
+	reachedPersist := make(chan struct{})
+	releasePersist := make(chan struct{})
+	var notifyOnce sync.Once
+	persistUserEnvVarForCreate = func(key string, value string) error {
+		if value == "key-a" {
+			notifyOnce.Do(func() { close(reachedPersist) })
+			<-releasePersist
+		}
+		return nil
+	}
+
+	inputA := CreateCustomProviderInput{
+		Name:      "shared-by-managers",
+		Driver:    provider.DriverOpenAICompat,
+		BaseURL:   "https://shared.example.com/v1",
+		APIKeyEnv: "SHARED_BY_MANAGERS_API_KEY",
+		APIKey:    "key-a",
+		APIStyle:  provider.OpenAICompatibleAPIStyleChatCompletions,
+	}
+	inputB := inputA
+	inputB.APIKey = "key-b"
+
+	errACh := make(chan error, 1)
+	errBCh := make(chan error, 1)
+
+	go func() {
+		_, err := failingService.CreateCustomProvider(context.Background(), inputA)
+		errACh <- err
+	}()
+
+	select {
+	case <-reachedPersist:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting first create flow to reach persist stage")
+	}
+
+	go func() {
+		_, err := successService.CreateCustomProvider(context.Background(), inputB)
+		errBCh <- err
+	}()
+
+	select {
+	case err := <-errBCh:
+		t.Fatalf("expected second manager create to wait for cross-process lock, got early err=%v", err)
+	case <-time.After(120 * time.Millisecond):
+	}
+
+	close(releasePersist)
+
+	if err := <-errACh; err == nil {
+		t.Fatal("expected first manager create to fail on model selection")
+	}
+	if err := <-errBCh; err != nil {
+		t.Fatalf("expected second manager create to succeed, got %v", err)
+	}
+}
+
 func captureEnvForCreateProvider(t *testing.T, key string) func() {
 	t.Helper()
 
@@ -284,18 +425,21 @@ func captureEnvForCreateProvider(t *testing.T, key string) func() {
 	}
 }
 
-func stubUserEnvOpsForCreateProvider(t *testing.T) (func(), func(), func()) {
+func stubUserEnvOpsForCreateProvider(t *testing.T) (func(), func(), func(), func()) {
 	t.Helper()
 
 	prevPersist := persistUserEnvVarForCreate
 	prevDelete := deleteUserEnvVarForCreate
 	prevLookup := lookupUserEnvVarForCreate
+	prevSave := saveCustomProviderForCreate
 
 	persistUserEnvVarForCreate = func(key string, value string) error { return nil }
 	deleteUserEnvVarForCreate = func(key string) error { return nil }
 	lookupUserEnvVarForCreate = func(key string) (string, bool, error) { return "", false, nil }
+	saveCustomProviderForCreate = configpkg.SaveCustomProvider
 
 	return func() { persistUserEnvVarForCreate = prevPersist },
 		func() { deleteUserEnvVarForCreate = prevDelete },
-		func() { lookupUserEnvVarForCreate = prevLookup }
+		func() { lookupUserEnvVarForCreate = prevLookup },
+		func() { saveCustomProviderForCreate = prevSave }
 }
