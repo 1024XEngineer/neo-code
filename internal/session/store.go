@@ -399,6 +399,39 @@ func (s *JSONStore) Stat(ctx context.Context, sessionID string, assetID string) 
 	return s.statUnlocked(sessionID, assetID)
 }
 
+// DeleteAsset 删除指定会话附件的二进制与元数据文件，用于输入归一化失败后的清理。
+func (s *JSONStore) DeleteAsset(ctx context.Context, sessionID string, assetID string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := validateStorageID("session id", sessionID); err != nil {
+		return fmt.Errorf("session: %w", err)
+	}
+	if err := validateStorageID("asset id", assetID); err != nil {
+		return fmt.Errorf("session: %w", err)
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	target := s.assetPath(sessionID, assetID)
+	if err := ensurePathWithinBase(s.baseDir, target); err != nil {
+		return fmt.Errorf("session: resolve asset file path: %w", err)
+	}
+	if err := os.Remove(target); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("session: delete asset file: %w", err)
+	}
+
+	metaTarget := s.assetMetaPath(sessionID, assetID)
+	if err := ensurePathWithinBase(s.baseDir, metaTarget); err != nil {
+		return fmt.Errorf("session: resolve asset meta file path: %w", err)
+	}
+	if err := os.Remove(metaTarget); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("session: delete asset meta file: %w", err)
+	}
+	return nil
+}
+
 // statUnlocked 在调用方已持有读锁时读取附件元数据，避免重复加锁导致死锁风险。
 func (s *JSONStore) statUnlocked(sessionID string, assetID string) (AssetMeta, error) {
 	target := s.assetMetaPath(sessionID, assetID)

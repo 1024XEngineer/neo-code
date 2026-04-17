@@ -91,14 +91,10 @@ func normalizeToolSchemaForOpenAI(schema map[string]any) map[string]any {
 	typeName, _ := normalized["type"].(string)
 	if strings.TrimSpace(strings.ToLower(typeName)) != "object" {
 		normalized["type"] = "object"
-		normalized["x-neocode-schema-downgraded"] = true
 	}
 
 	if _, ok := normalized["properties"].(map[string]any); !ok {
 		normalized["properties"] = map[string]any{}
-		if strings.TrimSpace(strings.ToLower(typeName)) != "object" {
-			normalized["x-neocode-schema-downgraded"] = true
-		}
 	}
 	return normalized
 }
