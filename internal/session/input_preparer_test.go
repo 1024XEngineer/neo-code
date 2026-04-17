@@ -237,6 +237,76 @@ func TestInputPreparerPrepareErrors(t *testing.T) {
 			t.Fatalf("expected existing session to remain, load error = %v", loadErr)
 		}
 	})
+
+	t.Run("existing session cleanup removes previously saved assets on later failure", func(t *testing.T) {
+		existing := NewWithWorkdir("existing-cleanup", workdir)
+		if err := store.Save(context.Background(), &existing); err != nil {
+			t.Fatalf("Save() error = %v", err)
+		}
+
+		okImage := filepath.Join(workdir, "ok.png")
+		if err := os.WriteFile(okImage, minimalPNGBytes(), 0o644); err != nil {
+			t.Fatalf("write image: %v", err)
+		}
+
+		preparer := NewInputPreparer(store, store)
+		_, err := preparer.Prepare(context.Background(), PrepareInput{
+			SessionID: existing.ID,
+			Text:      "cleanup",
+			Images: []PrepareImageInput{
+				{Path: okImage},
+				{Path: "not-found.png", MimeType: "image/png"},
+			},
+			DefaultWorkdir: workdir,
+		})
+		if err == nil {
+			t.Fatalf("expected prepare error")
+		}
+
+		entries, readErr := os.ReadDir(store.assetsDir(existing.ID))
+		if readErr != nil {
+			t.Fatalf("ReadDir() error = %v", readErr)
+		}
+		if len(entries) != 0 {
+			t.Fatalf("expected no leftover assets, got %d files", len(entries))
+		}
+	})
+
+	t.Run("existing session workdir change is not persisted when prepare fails", func(t *testing.T) {
+		currentWorkdir := filepath.Join(workdir, "current")
+		if err := os.MkdirAll(currentWorkdir, 0o755); err != nil {
+			t.Fatalf("mkdir current workdir: %v", err)
+		}
+		targetWorkdir := filepath.Join(currentWorkdir, "nested")
+		if err := os.MkdirAll(targetWorkdir, 0o755); err != nil {
+			t.Fatalf("mkdir nested workdir: %v", err)
+		}
+
+		existing := NewWithWorkdir("existing-workdir", currentWorkdir)
+		if err := store.Save(context.Background(), &existing); err != nil {
+			t.Fatalf("Save() error = %v", err)
+		}
+
+		preparer := NewInputPreparer(store, store)
+		_, err := preparer.Prepare(context.Background(), PrepareInput{
+			SessionID:        existing.ID,
+			Text:             "will fail",
+			RequestedWorkdir: "nested",
+			Images:           []PrepareImageInput{{Path: "not-found.png", MimeType: "image/png"}},
+			DefaultWorkdir:   workdir,
+		})
+		if err == nil {
+			t.Fatalf("expected prepare error")
+		}
+
+		loaded, loadErr := store.Load(context.Background(), existing.ID)
+		if loadErr != nil {
+			t.Fatalf("Load() error = %v", loadErr)
+		}
+		if loaded.Workdir != currentWorkdir {
+			t.Fatalf("expected workdir to stay %q, got %q", currentWorkdir, loaded.Workdir)
+		}
+	})
 }
 
 func TestInputPreparerPrepareImagePathAndMimeValidation(t *testing.T) {

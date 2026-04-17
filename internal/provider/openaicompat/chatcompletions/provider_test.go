@@ -123,8 +123,8 @@ func TestNewAndBuildRequest(t *testing.T) {
 		if downgradedSchema["type"] != "object" {
 			t.Fatalf("expected downgraded schema type object, got %+v", downgradedSchema["type"])
 		}
-		if downgradedSchema["x-neocode-schema-downgraded"] != true {
-			t.Fatalf("expected downgrade marker, got %+v", downgradedSchema)
+		if _, ok := downgradedSchema["x-neocode-schema-downgraded"]; ok {
+			t.Fatalf("expected no custom downgrade marker in outbound schema, got %+v", downgradedSchema)
 		}
 
 		withSessionAsset, err := BuildRequest(context.Background(), testCfg("https://api.example.com/v1", "gpt-4.1", "test-key"), providertypes.GenerateRequest{

@@ -4,8 +4,10 @@ import (
 	"strings"
 	"testing"
 
+	providertypes "neo-code/internal/provider/types"
 	agentruntime "neo-code/internal/runtime"
 	"neo-code/internal/runtime/controlplane"
+	tuiservices "neo-code/internal/tui/services"
 )
 
 func TestRuntimeEventPhaseChangedHandlerBranches(t *testing.T) {
@@ -228,7 +230,7 @@ func TestRuntimeEventMultimodalHandlers(t *testing.T) {
 	}
 }
 
-func TestHandleRuntimeEventSetsSessionAndRoutesByRegistry(t *testing.T) {
+func TestHandleRuntimeEventRoutesByRegistryWithoutBindingTransientSession(t *testing.T) {
 	t.Parallel()
 
 	app, _ := newTestApp(t)
@@ -240,8 +242,8 @@ func TestHandleRuntimeEventSetsSessionAndRoutesByRegistry(t *testing.T) {
 	if handled {
 		t.Fatalf("expected asset_saved handler to return false")
 	}
-	if app.state.ActiveSessionID != "session-1" {
-		t.Fatalf("expected active session to be set from event, got %q", app.state.ActiveSessionID)
+	if app.state.ActiveSessionID != "" {
+		t.Fatalf("expected active session to stay empty for non-stable event, got %q", app.state.ActiveSessionID)
 	}
 	if len(app.activities) == 0 || app.activities[len(app.activities)-1].Title != "Saved attachment" {
 		t.Fatalf("expected saved attachment activity")
@@ -249,5 +251,37 @@ func TestHandleRuntimeEventSetsSessionAndRoutesByRegistry(t *testing.T) {
 
 	if app.handleRuntimeEvent(agentruntime.RuntimeEvent{Type: "unknown_event", SessionID: "session-1"}) {
 		t.Fatalf("expected unknown event handler result to be false")
+	}
+}
+
+func TestHandleRuntimeEventBindsSessionFromStableEvents(t *testing.T) {
+	t.Parallel()
+
+	app, _ := newTestApp(t)
+
+	app.handleRuntimeEvent(agentruntime.RuntimeEvent{
+		Type:      agentruntime.EventUserMessage,
+		SessionID: "session-user",
+		RunID:     "run-1",
+		Payload: providertypes.Message{
+			Role:  providertypes.RoleUser,
+			Parts: []providertypes.ContentPart{providertypes.NewTextPart("hi")},
+		},
+	})
+	if app.state.ActiveSessionID != "session-user" {
+		t.Fatalf("expected active session from user_message, got %q", app.state.ActiveSessionID)
+	}
+
+	app.state.ActiveSessionID = ""
+	app.handleRuntimeEvent(agentruntime.RuntimeEvent{
+		Type:      agentruntime.EventType(tuiservices.RuntimeEventRunContext),
+		SessionID: "session-context",
+		Payload: tuiservices.RuntimeRunContextPayload{
+			Provider: "openai",
+			Model:    "gpt-5.4",
+		},
+	})
+	if app.state.ActiveSessionID != "session-context" {
+		t.Fatalf("expected active session from run_context, got %q", app.state.ActiveSessionID)
 	}
 }

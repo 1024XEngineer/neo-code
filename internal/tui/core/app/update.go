@@ -966,9 +966,6 @@ func (a *App) handleRuntimeEvent(event agentruntime.RuntimeEvent) bool {
 	if !a.shouldHandleRuntimeEvent(event) {
 		return false
 	}
-	if a.state.ActiveSessionID == "" {
-		a.state.ActiveSessionID = event.SessionID
-	}
 	handler, ok := runtimeEventHandlerRegistry[event.Type]
 	if !ok {
 		return false
@@ -1051,6 +1048,9 @@ func runtimeEventUserMessageHandler(a *App, event agentruntime.RuntimeEvent) boo
 	if runID != "" {
 		a.state.ActiveRunID = runID
 	}
+	if sessionID := strings.TrimSpace(event.SessionID); sessionID != "" {
+		a.state.ActiveSessionID = sessionID
+	}
 	a.state.StatusText = statusThinking
 	a.state.StreamingReply = false
 	a.state.CurrentTool = ""
@@ -1085,6 +1085,9 @@ func runtimeEventRunContextHandler(a *App, event agentruntime.RuntimeEvent) bool
 	}
 	mapped := tuiservices.MapRunContextPayload(event.RunID, event.SessionID, payload)
 	a.state.RunContext = mapped
+	if strings.TrimSpace(mapped.SessionID) != "" {
+		a.state.ActiveSessionID = strings.TrimSpace(mapped.SessionID)
+	}
 	if strings.TrimSpace(mapped.RunID) != "" {
 		a.state.ActiveRunID = mapped.RunID
 	}

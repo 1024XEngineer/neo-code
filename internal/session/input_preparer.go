@@ -70,6 +70,10 @@ type InputPreparer struct {
 	assetStore AssetStore
 }
 
+type assetCleanupStore interface {
+	DeleteAsset(ctx context.Context, sessionID string, assetID string) error
+}
+
 // NewInputPreparer 创建会话输入归一化组件。
 func NewInputPreparer(store Store, assetStore AssetStore) *InputPreparer {
 	return &InputPreparer{
@@ -96,7 +100,7 @@ func (p *InputPreparer) Prepare(ctx context.Context, input PrepareInput) (Prepar
 	}
 
 	sessionTitle := buildSessionTitle(trimmedText, len(input.Images) > 0)
-	session, sessionCreated, err := p.loadOrCreateSession(
+	session, sessionCreated, pendingUpdate, err := p.loadOrCreateSession(
 		ctx,
 		input.SessionID,
 		sessionTitle,
@@ -117,6 +121,7 @@ func (p *InputPreparer) Prepare(ctx context.Context, input PrepareInput) (Prepar
 		path := strings.TrimSpace(image.Path)
 		if path == "" {
 			p.rollbackCreatedSession(ctx, session.ID, sessionCreated)
+			p.cleanupSavedAssets(ctx, session.ID, savedAssets)
 			return PreparedInput{}, &AssetSaveError{
 				SessionID: session.ID,
 				Index:     index,
@@ -129,6 +134,7 @@ func (p *InputPreparer) Prepare(ctx context.Context, input PrepareInput) (Prepar
 		meta, err := p.saveImageAsset(ctx, session.ID, session.Workdir, path, mimeType)
 		if err != nil {
 			p.rollbackCreatedSession(ctx, session.ID, sessionCreated)
+			p.cleanupSavedAssets(ctx, session.ID, savedAssets)
 			return PreparedInput{}, &AssetSaveError{
 				SessionID: session.ID,
 				Index:     index,
@@ -142,7 +148,13 @@ func (p *InputPreparer) Prepare(ctx context.Context, input PrepareInput) (Prepar
 
 	if err := providertypes.ValidateParts(parts); err != nil {
 		p.rollbackCreatedSession(ctx, session.ID, sessionCreated)
+		p.cleanupSavedAssets(ctx, session.ID, savedAssets)
 		return PreparedInput{}, fmt.Errorf("session: normalize parts: %w", err)
+	}
+	if err := p.persistSessionWorkdirUpdate(ctx, pendingUpdate); err != nil {
+		p.rollbackCreatedSession(ctx, session.ID, sessionCreated)
+		p.cleanupSavedAssets(ctx, session.ID, savedAssets)
+		return PreparedInput{}, err
 	}
 
 	return PreparedInput{
@@ -302,47 +314,53 @@ func resolveImagePath(workdir string, path string) (string, error) {
 	return resolved, nil
 }
 
+// sessionWorkdirUpdate 描述已有会话 workdir 的待提交变更，确保 Prepare 成功后再落盘。
+type sessionWorkdirUpdate struct {
+	session Session
+	dirty   bool
+}
+
 func (p *InputPreparer) loadOrCreateSession(
 	ctx context.Context,
 	sessionID string,
 	title string,
 	defaultWorkdir string,
 	requestedWorkdir string,
-) (Session, bool, error) {
+) (Session, bool, sessionWorkdirUpdate, error) {
 	if strings.TrimSpace(sessionID) == "" {
 		sessionWorkdir, err := resolveWorkdirForInput(defaultWorkdir, "", requestedWorkdir)
 		if err != nil {
-			return Session{}, false, err
+			return Session{}, false, sessionWorkdirUpdate{}, err
 		}
 		session := NewWithWorkdir(title, sessionWorkdir)
 		if err := p.store.Save(ctx, &session); err != nil {
-			return Session{}, false, err
+			return Session{}, false, sessionWorkdirUpdate{}, err
 		}
-		return session, true, nil
+		return session, true, sessionWorkdirUpdate{}, nil
 	}
 
 	session, err := p.store.Load(ctx, sessionID)
 	if err != nil {
-		return Session{}, false, err
+		return Session{}, false, sessionWorkdirUpdate{}, err
 	}
 	if strings.TrimSpace(requestedWorkdir) == "" && strings.TrimSpace(session.Workdir) != "" {
-		return session, false, nil
+		return session, false, sessionWorkdirUpdate{}, nil
 	}
 
 	resolved, err := resolveWorkdirForInput(defaultWorkdir, session.Workdir, requestedWorkdir)
 	if err != nil {
-		return Session{}, false, err
+		return Session{}, false, sessionWorkdirUpdate{}, err
 	}
 	if session.Workdir == resolved {
-		return session, false, nil
+		return session, false, sessionWorkdirUpdate{}, nil
 	}
 
 	session.Workdir = resolved
 	session.UpdatedAt = time.Now()
-	if err := p.store.Save(ctx, &session); err != nil {
-		return Session{}, false, err
-	}
-	return session, false, nil
+	return session, false, sessionWorkdirUpdate{
+		session: session,
+		dirty:   true,
+	}, nil
 }
 
 // rollbackCreatedSession 在本次 Prepare 新建会话后发生错误时回滚会话目录，避免残留孤儿会话。
@@ -354,6 +372,34 @@ func (p *InputPreparer) rollbackCreatedSession(ctx context.Context, sessionID st
 		return
 	}
 	_ = p.store.DeleteSession(ctx, sessionID)
+}
+
+// persistSessionWorkdirUpdate 在 Prepare 其余步骤完成后统一提交会话 workdir 更新，避免失败时出现部分提交。
+func (p *InputPreparer) persistSessionWorkdirUpdate(ctx context.Context, pending sessionWorkdirUpdate) error {
+	if !pending.dirty {
+		return nil
+	}
+	if err := p.store.Save(ctx, &pending.session); err != nil {
+		return err
+	}
+	return nil
+}
+
+// cleanupSavedAssets 在 Prepare 失败时尽力回收已落盘的附件，减少 existing session 残留垃圾文件。
+func (p *InputPreparer) cleanupSavedAssets(ctx context.Context, sessionID string, assets []AssetMeta) {
+	if len(assets) == 0 || ctx.Err() != nil {
+		return
+	}
+	cleanupStore, ok := p.assetStore.(assetCleanupStore)
+	if !ok {
+		return
+	}
+	for _, asset := range assets {
+		if strings.TrimSpace(asset.ID) == "" {
+			continue
+		}
+		_ = cleanupStore.DeleteAsset(ctx, sessionID, asset.ID)
+	}
 }
 
 func resolveWorkdirForInput(defaultWorkdir string, currentWorkdir string, requestedWorkdir string) (string, error) {
