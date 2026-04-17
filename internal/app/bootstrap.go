@@ -193,13 +193,15 @@ func BuildRuntime(ctx context.Context, opts BootstrapOptions) (RuntimeBundle, er
 	}
 	needCleanup = false
 
+	closeBundle := combineRuntimeClosers(toolsCleanup, sessionStore.Close)
+
 	return RuntimeBundle{
 		Config:            cfg,
 		ConfigManager:     manager,
 		Runtime:           runtimeSvc,
 		ProviderSelection: providerSelection,
 		MemoService:       memoSvc,
-		Close:             toolsCleanup,
+		Close:             closeBundle,
 	}, nil
 }
 
@@ -326,4 +328,20 @@ type runtimeAutoCompactThresholdResolverFunc func(ctx context.Context, cfg confi
 
 func (f runtimeAutoCompactThresholdResolverFunc) ResolveAutoCompactThreshold(ctx context.Context, cfg config.Config) (int, error) {
 	return f(ctx, cfg)
+}
+
+// combineRuntimeClosers 按顺序执行 runtime 初始化阶段注册的清理函数。
+func combineRuntimeClosers(closers ...func() error) func() error {
+	return func() error {
+		var firstErr error
+		for _, closer := range closers {
+			if closer == nil {
+				continue
+			}
+			if err := closer(); err != nil && firstErr == nil {
+				firstErr = err
+			}
+		}
+		return firstErr
+	}
 }

@@ -9,223 +9,178 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	providertypes "neo-code/internal/provider/types"
 )
 
-func TestJSONStoreSaveAssetOpenAndStat(t *testing.T) {
-	t.Parallel()
+func TestSQLiteStoreSaveAssetOpenAndStat(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+	session, err := store.CreateSession(ctx, CreateSessionInput{ID: "session_assets", Title: "assets"})
+	if err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
 
-	store := NewJSONStore(t.TempDir(), t.TempDir())
-	sessionID := "session_asset_round_trip"
-	payload := []byte("fake-image-bytes")
-
-	meta, err := store.SaveAsset(context.Background(), sessionID, bytes.NewReader(payload), "image/png")
+	payload := []byte("image-bytes")
+	meta, err := store.SaveAsset(ctx, session.ID, bytes.NewReader(payload), "image/png")
 	if err != nil {
 		t.Fatalf("SaveAsset() error = %v", err)
 	}
-	if meta.ID == "" || meta.MimeType != "image/png" || meta.Size != int64(len(payload)) {
-		t.Fatalf("unexpected saved meta: %+v", meta)
+	if meta.ID == "" || meta.Size != int64(len(payload)) {
+		t.Fatalf("unexpected asset meta: %+v", meta)
 	}
 
-	statMeta, err := store.Stat(context.Background(), sessionID, meta.ID)
+	statMeta, err := store.Stat(ctx, session.ID, meta.ID)
 	if err != nil {
 		t.Fatalf("Stat() error = %v", err)
 	}
 	if statMeta != meta {
-		t.Fatalf("expected stat meta %+v, got %+v", meta, statMeta)
+		t.Fatalf("Stat() = %+v, want %+v", statMeta, meta)
 	}
 
-	rc, openMeta, err := store.Open(context.Background(), sessionID, meta.ID)
+	rc, openMeta, err := store.Open(ctx, session.ID, meta.ID)
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
-	defer func() { _ = rc.Close() }()
+	defer rc.Close()
 	data, err := io.ReadAll(rc)
 	if err != nil {
-		t.Fatalf("ReadAll(open) error = %v", err)
+		t.Fatalf("ReadAll() error = %v", err)
 	}
 	if string(data) != string(payload) {
-		t.Fatalf("unexpected open payload: got %q want %q", string(data), string(payload))
+		t.Fatalf("unexpected open payload %q, want %q", string(data), string(payload))
 	}
 	if openMeta != meta {
-		t.Fatalf("expected open meta %+v, got %+v", meta, openMeta)
-	}
-
-	assetPath := store.assetPath(sessionID, meta.ID)
-	if _, err := os.Stat(assetPath); err != nil {
-		t.Fatalf("expected asset file %q exists, err=%v", assetPath, err)
-	}
-	if _, err := os.Stat(store.assetMetaPath(sessionID, meta.ID)); err != nil {
-		t.Fatalf("expected asset meta file exists, err=%v", err)
+		t.Fatalf("Open() meta = %+v, want %+v", openMeta, meta)
 	}
 }
 
-func TestJSONStoreSaveAssetRejectsInvalidInput(t *testing.T) {
-	t.Parallel()
+func TestSQLiteStoreSaveAssetRejectsInvalidInput(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+	if _, err := store.CreateSession(ctx, CreateSessionInput{ID: "session_assets_invalid", Title: "assets"}); err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
 
-	store := NewJSONStore(t.TempDir(), t.TempDir())
-	sessionID := "session_asset_invalid"
-
-	if _, err := store.SaveAsset(context.Background(), sessionID, nil, "image/png"); err == nil {
+	if _, err := store.SaveAsset(ctx, "session_assets_invalid", nil, "image/png"); err == nil {
 		t.Fatalf("expected nil reader error")
 	}
-	if _, err := store.SaveAsset(context.Background(), sessionID, strings.NewReader("x"), ""); err == nil {
-		t.Fatalf("expected empty mime error")
+	if _, err := store.SaveAsset(ctx, "session_assets_invalid", strings.NewReader("x"), ""); err == nil {
+		t.Fatalf("expected empty mime type error")
 	}
-	if _, err := store.SaveAsset(context.Background(), sessionID, strings.NewReader("x"), "text/plain"); err == nil {
-		t.Fatalf("expected unsupported mime error")
+	if _, err := store.SaveAsset(ctx, "session_assets_invalid", strings.NewReader("x"), "text/plain"); err == nil {
+		t.Fatalf("expected unsupported mime type error")
 	}
-	if _, err := store.SaveAsset(context.Background(), "../bad", strings.NewReader("x"), "image/png"); err == nil {
+	if _, err := store.SaveAsset(ctx, "missing", strings.NewReader("x"), "image/png"); err == nil {
+		t.Fatalf("expected missing session error")
+	}
+	if _, _, err := store.Open(ctx, "bad/session", "asset_ok"); err == nil {
 		t.Fatalf("expected invalid session id error")
 	}
-}
-
-func TestJSONStoreAssetOpenAndStatRejectInvalidID(t *testing.T) {
-	t.Parallel()
-
-	store := NewJSONStore(t.TempDir(), t.TempDir())
-
-	if _, _, err := store.Open(context.Background(), "bad/session", "asset-ok"); err == nil {
-		t.Fatalf("expected invalid session id on open")
-	}
-	if _, _, err := store.Open(context.Background(), "session_ok", "../bad"); err == nil {
-		t.Fatalf("expected invalid asset id on open")
-	}
-	if _, err := store.Stat(context.Background(), "bad/session", "asset-ok"); err == nil {
-		t.Fatalf("expected invalid session id on stat")
-	}
-	if _, err := store.Stat(context.Background(), "session_ok", "../bad"); err == nil {
-		t.Fatalf("expected invalid asset id on stat")
+	if _, err := store.Stat(ctx, "session_assets_invalid", "../bad"); err == nil {
+		t.Fatalf("expected invalid asset id error")
 	}
 }
 
-func TestJSONStoreAssetStoreRespectsCanceledContext(t *testing.T) {
-	t.Parallel()
+func TestSQLiteStoreSaveAssetRejectsOversizedPayload(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+	session, err := store.CreateSession(ctx, CreateSessionInput{ID: "session_assets_big", Title: "assets"})
+	if err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
 
-	store := NewJSONStore(t.TempDir(), t.TempDir())
+	oversized := bytes.NewReader(bytes.Repeat([]byte("x"), int(1+MaxSessionAssetBytesForTest())))
+	if _, err := store.SaveAsset(ctx, session.ID, oversized, "image/png"); err == nil {
+		t.Fatalf("expected oversize error")
+	}
+}
+
+func TestSQLiteStoreOpenReturnsFileErrorWhenPayloadMissing(t *testing.T) {
+	ctx := context.Background()
+	baseDir, err := os.MkdirTemp("", "session-base-")
+	if err != nil {
+		t.Fatalf("MkdirTemp() baseDir error = %v", err)
+	}
+	workspaceRoot, err := os.MkdirTemp("", "session-workspace-")
+	if err != nil {
+		t.Fatalf("MkdirTemp() workspaceRoot error = %v", err)
+	}
+	store := NewStore(baseDir, workspaceRoot)
+	t.Cleanup(func() {
+		_ = store.Close()
+		_ = os.RemoveAll(baseDir)
+		_ = os.RemoveAll(workspaceRoot)
+	})
+	session, err := store.CreateSession(ctx, CreateSessionInput{ID: "session_assets_missing_file", Title: "assets"})
+	if err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+
+	meta, err := store.SaveAsset(ctx, session.ID, strings.NewReader("img"), "image/png")
+	if err != nil {
+		t.Fatalf("SaveAsset() error = %v", err)
+	}
+	target := filepath.Join(assetsDirectory(baseDir, workspaceRoot), session.ID, meta.ID+".bin")
+	if err := os.Remove(target); err != nil {
+		t.Fatalf("remove target asset: %v", err)
+	}
+
+	if _, _, err := store.Open(ctx, session.ID, meta.ID); err == nil {
+		t.Fatalf("expected missing payload file error")
+	}
+}
+
+func TestSQLiteStoreAssetMethodsRespectContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	if _, err := store.SaveAsset(ctx, "session_ctx_cancel", strings.NewReader("x"), "image/png"); err == nil {
+	store := newTestStore(t)
+	if _, err := store.SaveAsset(ctx, "session_assets_ctx", strings.NewReader("x"), "image/png"); err == nil {
 		t.Fatalf("expected canceled SaveAsset error")
 	}
-	if _, _, err := store.Open(ctx, "session_ctx_cancel", "asset_x"); err == nil {
+	if _, _, err := store.Open(ctx, "session_assets_ctx", "asset_x"); err == nil {
 		t.Fatalf("expected canceled Open error")
 	}
-	if _, err := store.Stat(ctx, "session_ctx_cancel", "asset_x"); err == nil {
+	if _, err := store.Stat(ctx, "session_assets_ctx", "asset_x"); err == nil {
 		t.Fatalf("expected canceled Stat error")
 	}
 }
 
-func TestJSONStoreSaveAssetRejectsOversizedPayload(t *testing.T) {
-	t.Parallel()
+func MaxSessionAssetBytesForTest() int64 {
+	return 20 * 1024 * 1024
+}
 
-	store := NewJSONStore(t.TempDir(), t.TempDir())
-	oversized := bytes.NewReader(make([]byte, providertypes.MaxSessionAssetBytes+1))
+func TestSQLiteStoreOpenMissingAssetReturnsNotExist(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+	if _, err := store.CreateSession(ctx, CreateSessionInput{ID: "session_assets_missing_meta", Title: "assets"}); err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
 
-	if _, err := store.SaveAsset(context.Background(), "session_oversize", oversized, "image/png"); err == nil ||
-		!strings.Contains(err.Error(), "asset size exceeds") {
-		t.Fatalf("expected oversized payload rejection, got %v", err)
+	_, _, err := store.Open(ctx, "session_assets_missing_meta", "asset_missing")
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected os.ErrNotExist, got %v", err)
 	}
 }
 
-func TestDecodeStoredAssetMetaRejectsNonImageMIME(t *testing.T) {
-	t.Parallel()
-
-	_, err := decodeStoredAssetMeta([]byte(`{"id":"asset_ok","mime_type":"text/plain","size":1}`))
-	if err == nil || !strings.Contains(err.Error(), "unsupported asset mime type") {
-		t.Fatalf("expected non-image mime rejection, got %v", err)
-	}
-}
-
-func TestDecodeAndEncodeStoredAssetMetaValidation(t *testing.T) {
-	t.Parallel()
-
-	if _, err := decodeStoredAssetMeta([]byte(`{`)); err == nil || !strings.Contains(err.Error(), "decode asset meta") {
-		t.Fatalf("expected decode error, got %v", err)
-	}
-	if _, err := decodeStoredAssetMeta([]byte(`{"id":"bad/asset","mime_type":"image/png","size":1}`)); err == nil ||
-		!strings.Contains(err.Error(), "unsupported characters") {
-		t.Fatalf("expected invalid asset id error, got %v", err)
-	}
-	if _, err := decodeStoredAssetMeta([]byte(`{"id":"asset_ok","mime_type":"   ","size":1}`)); err == nil ||
-		!strings.Contains(err.Error(), "mime_type is empty") {
-		t.Fatalf("expected empty mime_type error, got %v", err)
-	}
-
-	if _, err := encodeStoredAssetMeta(AssetMeta{ID: "bad/asset", MimeType: "image/png", Size: 1}); err == nil ||
-		!strings.Contains(err.Error(), "unsupported characters") {
-		t.Fatalf("expected invalid asset id encode error, got %v", err)
-	}
-	if _, err := encodeStoredAssetMeta(AssetMeta{ID: "asset_ok", MimeType: "   ", Size: 1}); err == nil ||
-		!strings.Contains(err.Error(), "asset mime type is empty") {
-		t.Fatalf("expected empty mime encode error, got %v", err)
-	}
-}
-
-func TestJSONStoreSaveAssetFailurePaths(t *testing.T) {
-	t.Parallel()
-
-	t.Run("create assets dir failed", func(t *testing.T) {
-		t.Parallel()
-
-		baseDir := t.TempDir()
-		workspaceRoot := t.TempDir()
-		store := NewJSONStore(baseDir, workspaceRoot)
-
-		assetsDir := store.assetsDir("session_assets_dir_fail")
-		if err := os.MkdirAll(filepath.Dir(assetsDir), 0o755); err != nil {
-			t.Fatalf("mkdir parent: %v", err)
-		}
-		if err := os.WriteFile(assetsDir, []byte("blocked"), 0o644); err != nil {
-			t.Fatalf("write blocker file: %v", err)
-		}
-
-		if _, err := store.SaveAsset(context.Background(), "session_assets_dir_fail", strings.NewReader("x"), "image/png"); err == nil ||
-			!strings.Contains(err.Error(), "create assets dir") {
-			t.Fatalf("expected create assets dir error, got %v", err)
-		}
-	})
-
-	t.Run("copy temp asset failed", func(t *testing.T) {
-		t.Parallel()
-
-		store := NewJSONStore(t.TempDir(), t.TempDir())
-		if _, err := store.SaveAsset(context.Background(), "session_copy_fail", failingReader{}, "image/png"); err == nil ||
-			!strings.Contains(err.Error(), "write temp asset") {
-			t.Fatalf("expected write temp asset error, got %v", err)
-		}
-	})
-}
-
-func TestJSONStoreOpenAndStatMissingStoredFiles(t *testing.T) {
-	t.Parallel()
-
-	store := NewJSONStore(t.TempDir(), t.TempDir())
-	sessionID := "session_missing_files"
-	meta, err := store.SaveAsset(context.Background(), sessionID, strings.NewReader("img"), "image/png")
+func TestSQLiteStoreAssetMetaRejectsEscapedRelativePath(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+	session, err := store.CreateSession(ctx, CreateSessionInput{ID: "session_assets_escape", Title: "assets"})
 	if err != nil {
-		t.Fatalf("save seed asset: %v", err)
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+	db, err := store.ensureDB(ctx)
+	if err != nil {
+		t.Fatalf("ensureDB() error = %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `
+INSERT INTO session_assets (id, session_id, mime_type, size_bytes, relative_path, created_at_ms)
+VALUES ('asset_escape', ?, 'image/png', 4, '../escape.bin', 0)
+`, session.ID); err != nil {
+		t.Fatalf("insert escaped asset meta: %v", err)
 	}
 
-	if err := os.Remove(store.assetPath(sessionID, meta.ID)); err != nil {
-		t.Fatalf("remove asset file: %v", err)
+	if _, err := store.Stat(ctx, session.ID, "asset_escape"); err == nil || !strings.Contains(err.Error(), "escapes base dir") {
+		t.Fatalf("expected escaped relative path error, got %v", err)
 	}
-	if _, _, err := store.Open(context.Background(), sessionID, meta.ID); err == nil {
-		t.Fatalf("expected open failure when asset binary is missing")
-	}
-
-	if err := os.Remove(store.assetMetaPath(sessionID, meta.ID)); err != nil {
-		t.Fatalf("remove asset meta file: %v", err)
-	}
-	if _, err := store.Stat(context.Background(), sessionID, meta.ID); err == nil {
-		t.Fatalf("expected stat failure when asset meta is missing")
-	}
-}
-
-type failingReader struct{}
-
-func (failingReader) Read(_ []byte) (int, error) {
-	return 0, errors.New("read failure")
 }

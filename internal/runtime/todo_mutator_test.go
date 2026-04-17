@@ -14,21 +14,22 @@ type mutatorStore struct {
 	err  error
 }
 
-func (s *mutatorStore) Save(ctx context.Context, session *agentsession.Session) error {
+func (s *mutatorStore) CreateSession(ctx context.Context, input agentsession.CreateSessionInput) (agentsession.Session, error) {
 	if err := ctx.Err(); err != nil {
-		return err
+		return agentsession.Session{}, err
 	}
 	if s.err != nil {
-		return s.err
+		return agentsession.Session{}, s.err
 	}
-	if session == nil {
-		return errors.New("nil session")
+	session := agentsession.NewWithWorkdir(input.Title, input.Workdir)
+	if input.ID != "" {
+		session.ID = input.ID
 	}
-	s.last = cloneSessionForPersistence(*session)
-	return nil
+	s.last = cloneSessionForPersistence(session)
+	return cloneSessionForPersistence(session), nil
 }
 
-func (s *mutatorStore) Load(ctx context.Context, id string) (agentsession.Session, error) {
+func (s *mutatorStore) LoadSession(ctx context.Context, id string) (agentsession.Session, error) {
 	if err := ctx.Err(); err != nil {
 		return agentsession.Session{}, err
 	}
@@ -43,6 +44,74 @@ func (s *mutatorStore) ListSummaries(ctx context.Context) ([]agentsession.Summar
 		return nil, err
 	}
 	return nil, nil
+}
+
+func (s *mutatorStore) AppendMessages(ctx context.Context, input agentsession.AppendMessagesInput) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if s.err != nil {
+		return s.err
+	}
+	if s.last.ID != input.SessionID {
+		return errors.New("not found")
+	}
+	s.last.Messages = append(s.last.Messages, cloneMessagesForPersistence(input.Messages)...)
+	s.last.UpdatedAt = input.UpdatedAt
+	s.last.Provider = input.Provider
+	s.last.Model = input.Model
+	s.last.Workdir = input.Workdir
+	s.last.TokenInputTotal += input.TokenInputDelta
+	s.last.TokenOutputTotal += input.TokenOutputDelta
+	return nil
+}
+
+func (s *mutatorStore) UpdateSessionState(ctx context.Context, input agentsession.UpdateSessionStateInput) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if s.err != nil {
+		return s.err
+	}
+	if s.last.ID != "" && s.last.ID != input.SessionID {
+		return errors.New("not found")
+	}
+	s.last.ID = input.SessionID
+	s.last.Title = input.Title
+	s.last.UpdatedAt = input.UpdatedAt
+	s.last.Provider = input.Provider
+	s.last.Model = input.Model
+	s.last.Workdir = input.Workdir
+	s.last.TaskState = input.TaskState.Clone()
+	s.last.ActivatedSkills = agentsessionCloneSkillActivations(input.ActivatedSkills)
+	s.last.Todos = cloneTodosForPersistence(input.Todos)
+	s.last.TokenInputTotal = input.TokenInputTotal
+	s.last.TokenOutputTotal = input.TokenOutputTotal
+	return nil
+}
+
+func (s *mutatorStore) ReplaceTranscript(ctx context.Context, input agentsession.ReplaceTranscriptInput) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if s.err != nil {
+		return s.err
+	}
+	if s.last.ID != "" && s.last.ID != input.SessionID {
+		return errors.New("not found")
+	}
+	s.last.ID = input.SessionID
+	s.last.Messages = cloneMessagesForPersistence(input.Messages)
+	s.last.UpdatedAt = input.UpdatedAt
+	s.last.Provider = input.Provider
+	s.last.Model = input.Model
+	s.last.Workdir = input.Workdir
+	s.last.TaskState = input.TaskState.Clone()
+	s.last.ActivatedSkills = agentsessionCloneSkillActivations(input.ActivatedSkills)
+	s.last.Todos = cloneTodosForPersistence(input.Todos)
+	s.last.TokenInputTotal = input.TokenInputTotal
+	s.last.TokenOutputTotal = input.TokenOutputTotal
+	return nil
 }
 
 func TestRuntimeSessionMutatorMutateAndSave(t *testing.T) {

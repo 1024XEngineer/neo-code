@@ -180,7 +180,7 @@ func (s *Service) ListSessions(ctx context.Context) ([]agentsession.Summary, err
 
 // LoadSession 按 id 加载完整会话内容。
 func (s *Service) LoadSession(ctx context.Context, id string) (agentsession.Session, error) {
-	session, err := s.sessionStore.Load(ctx, id)
+	session, err := s.sessionStore.LoadSession(ctx, id)
 	if err != nil {
 		return agentsession.Session{}, err
 	}

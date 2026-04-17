@@ -55,11 +55,14 @@ type saveHookStore struct {
 	saveHook func()
 }
 
-func (s *saveHookStore) Save(ctx context.Context, session *agentsession.Session) error {
+func (s *saveHookStore) beforeSave(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if s.saveHook != nil {
 		s.saveHook()
 	}
-	return s.base.Save(ctx, session)
+	return nil
 }
 
 type postSaveHookStore struct {
@@ -68,28 +71,72 @@ type postSaveHookStore struct {
 	once     sync.Once
 }
 
-func (s *postSaveHookStore) Save(ctx context.Context, session *agentsession.Session) error {
-	err := s.base.Save(ctx, session)
+func (s *postSaveHookStore) afterSave(err error) error {
 	if err == nil && s.saveHook != nil {
 		s.once.Do(s.saveHook)
 	}
 	return err
 }
 
-func (s *saveHookStore) Load(ctx context.Context, id string) (agentsession.Session, error) {
-	return s.base.Load(ctx, id)
+func (s *saveHookStore) CreateSession(ctx context.Context, input agentsession.CreateSessionInput) (agentsession.Session, error) {
+	if err := s.beforeSave(ctx); err != nil {
+		return agentsession.Session{}, err
+	}
+	return s.base.CreateSession(ctx, input)
+}
+
+func (s *saveHookStore) LoadSession(ctx context.Context, id string) (agentsession.Session, error) {
+	return s.base.LoadSession(ctx, id)
 }
 
 func (s *saveHookStore) ListSummaries(ctx context.Context) ([]agentsession.Summary, error) {
 	return s.base.ListSummaries(ctx)
 }
 
-func (s *postSaveHookStore) Load(ctx context.Context, id string) (agentsession.Session, error) {
-	return s.base.Load(ctx, id)
+func (s *saveHookStore) AppendMessages(ctx context.Context, input agentsession.AppendMessagesInput) error {
+	if err := s.beforeSave(ctx); err != nil {
+		return err
+	}
+	return s.base.AppendMessages(ctx, input)
+}
+
+func (s *saveHookStore) UpdateSessionState(ctx context.Context, input agentsession.UpdateSessionStateInput) error {
+	if err := s.beforeSave(ctx); err != nil {
+		return err
+	}
+	return s.base.UpdateSessionState(ctx, input)
+}
+
+func (s *saveHookStore) ReplaceTranscript(ctx context.Context, input agentsession.ReplaceTranscriptInput) error {
+	if err := s.beforeSave(ctx); err != nil {
+		return err
+	}
+	return s.base.ReplaceTranscript(ctx, input)
+}
+
+func (s *postSaveHookStore) CreateSession(ctx context.Context, input agentsession.CreateSessionInput) (agentsession.Session, error) {
+	session, err := s.base.CreateSession(ctx, input)
+	return session, s.afterSave(err)
+}
+
+func (s *postSaveHookStore) LoadSession(ctx context.Context, id string) (agentsession.Session, error) {
+	return s.base.LoadSession(ctx, id)
 }
 
 func (s *postSaveHookStore) ListSummaries(ctx context.Context) ([]agentsession.Summary, error) {
 	return s.base.ListSummaries(ctx)
+}
+
+func (s *postSaveHookStore) AppendMessages(ctx context.Context, input agentsession.AppendMessagesInput) error {
+	return s.afterSave(s.base.AppendMessages(ctx, input))
+}
+
+func (s *postSaveHookStore) UpdateSessionState(ctx context.Context, input agentsession.UpdateSessionStateInput) error {
+	return s.afterSave(s.base.UpdateSessionState(ctx, input))
+}
+
+func (s *postSaveHookStore) ReplaceTranscript(ctx context.Context, input agentsession.ReplaceTranscriptInput) error {
+	return s.afterSave(s.base.ReplaceTranscript(ctx, input))
 }
 
 func TestResolveCompactProviderSelectionResolveErrorBranch(t *testing.T) {

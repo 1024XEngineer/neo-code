@@ -2,8 +2,6 @@ package session
 
 import (
 	"context"
-	"os"
-	"strings"
 	"testing"
 	"time"
 
@@ -11,8 +9,6 @@ import (
 )
 
 func TestSessionSkillActivationHelpers(t *testing.T) {
-	t.Parallel()
-
 	session := New("skills")
 	if !session.ActivateSkill("  Go_Review  ") {
 		t.Fatalf("expected first activation to report change")
@@ -37,94 +33,46 @@ func TestSessionSkillActivationHelpers(t *testing.T) {
 	}
 }
 
-func TestJSONStoreSaveLoadRoundTripActivatedSkills(t *testing.T) {
-	t.Parallel()
-
-	baseDir := t.TempDir()
-	workspaceRoot := t.TempDir()
-	store := NewJSONStore(baseDir, workspaceRoot)
-
-	session := &Session{
-		SchemaVersion: CurrentSchemaVersion,
-		ID:            "skills-round-trip",
-		Title:         "Skills Round Trip",
-		CreatedAt:     time.Now().Add(-time.Minute),
-		UpdatedAt:     time.Now(),
-		TaskState:     TaskState{},
+func TestSQLiteStoreRoundTripActivatedSkills(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+	session, err := store.CreateSession(ctx, CreateSessionInput{
+		ID:        "skills_round_trip",
+		Title:     "Skills Round Trip",
+		CreatedAt: time.Now().Add(-time.Minute),
+		UpdatedAt: time.Now(),
 		ActivatedSkills: []SkillActivation{
 			{SkillID: "  zeta "},
 			{SkillID: "go_review"},
 			{SkillID: "go-review"},
 		},
-		Messages: []providertypes.Message{{Role: "user", Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")}}},
-	}
-
-	if err := store.Save(context.Background(), session); err != nil {
-		t.Fatalf("save session with activated skills: %v", err)
+	})
+	if err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
 	}
 	if got := session.ActiveSkillIDs(); len(got) != 2 || got[0] != "go-review" || got[1] != "zeta" {
 		t.Fatalf("expected normalized in-memory activations, got %+v", got)
 	}
 
-	loaded, err := store.Load(context.Background(), session.ID)
+	if err := store.AppendMessages(ctx, AppendMessagesInput{
+		SessionID: session.ID,
+		Messages: []providertypes.Message{
+			{Role: "user", Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")}},
+		},
+	}); err != nil {
+		t.Fatalf("AppendMessages() error = %v", err)
+	}
+
+	loaded, err := store.LoadSession(ctx, session.ID)
 	if err != nil {
-		t.Fatalf("load session with activated skills: %v", err)
+		t.Fatalf("LoadSession() error = %v", err)
 	}
 	if got := loaded.ActiveSkillIDs(); len(got) != 2 || got[0] != "go-review" || got[1] != "zeta" {
 		t.Fatalf("expected normalized loaded activations, got %+v", got)
 	}
-
-	rawPath := sessionFilePathForTest(baseDir, workspaceRoot, session.ID)
-	raw, err := os.ReadFile(rawPath)
-	if err != nil {
-		t.Fatalf("read saved session: %v", err)
-	}
-	if !strings.Contains(string(raw), "\"activated_skills\"") {
-		t.Fatalf("expected persisted activated_skills field, got:\n%s", string(raw))
-	}
-}
-
-func TestJSONStoreLoadAllowsMissingActivatedSkillsField(t *testing.T) {
-	t.Parallel()
-
-	baseDir := t.TempDir()
-	workspaceRoot := t.TempDir()
-	store := NewJSONStore(baseDir, workspaceRoot)
-
-	mustWriteSessionFile(t, sessionFilePathForTest(baseDir, workspaceRoot, "no-activated-skills"), strings.Join([]string{
-		`{`,
-		`  "schema_version": 2,`,
-		`  "id": "no-activated-skills",`,
-		`  "title": "No Activated Skills",`,
-		`  "created_at": "2026-04-15T10:00:00Z",`,
-		`  "updated_at": "2026-04-15T10:05:00Z",`,
-		`  "task_state": {`,
-		`    "goal": "",`,
-		`    "progress": [],`,
-		`    "open_items": [],`,
-		`    "next_step": "",`,
-		`    "blockers": [],`,
-		`    "key_artifacts": [],`,
-		`    "decisions": [],`,
-		`    "user_constraints": [],`,
-		`    "last_updated_at": "2026-04-15T10:05:00Z"`,
-		`  },`,
-		`  "messages": []`,
-		`}`,
-	}, "\n"))
-
-	loaded, err := store.Load(context.Background(), "no-activated-skills")
-	if err != nil {
-		t.Fatalf("load session without activated_skills field: %v", err)
-	}
-	if len(loaded.ActiveSkillIDs()) != 0 {
-		t.Fatalf("expected no activated skills, got %+v", loaded.ActiveSkillIDs())
-	}
 }
 
 func TestSkillActivationHelpersHandleNilSessionAndBlankInput(t *testing.T) {
-	t.Parallel()
-
 	var nilSession *Session
 	if nilSession.ActivateSkill("go-review") {
 		t.Fatalf("expected nil session activate to be no-op")
@@ -143,8 +91,6 @@ func TestSkillActivationHelpersHandleNilSessionAndBlankInput(t *testing.T) {
 }
 
 func TestSkillActivationCloneHelpers(t *testing.T) {
-	t.Parallel()
-
 	original := []SkillActivation{{SkillID: "go-review"}, {SkillID: "zeta"}}
 	cloned := cloneSkillActivations(original)
 	if len(cloned) != len(original) {

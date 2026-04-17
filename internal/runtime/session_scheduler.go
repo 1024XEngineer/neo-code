@@ -24,13 +24,14 @@ func (s *Service) loadOrCreateSession(
 			return agentsession.Session{}, err
 		}
 		session := agentsession.NewWithWorkdir(title, sessionWorkdir)
-		if err := s.sessionStore.Save(ctx, &session); err != nil {
+		session, err = s.sessionStore.CreateSession(ctx, createSessionInputFromSession(session))
+		if err != nil {
 			return agentsession.Session{}, err
 		}
 		return session, nil
 	}
 
-	session, err := s.sessionStore.Load(ctx, sessionID)
+	session, err := s.sessionStore.LoadSession(ctx, sessionID)
 	if err != nil {
 		return agentsession.Session{}, err
 	}
@@ -48,7 +49,7 @@ func (s *Service) loadOrCreateSession(
 
 	session.Workdir = resolved
 	session.UpdatedAt = time.Now()
-	if err := s.sessionStore.Save(ctx, &session); err != nil {
+	if err := s.sessionStore.UpdateSessionState(ctx, sessionStateInputFromSession(session)); err != nil {
 		return agentsession.Session{}, err
 	}
 	return session, nil

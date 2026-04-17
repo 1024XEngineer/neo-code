@@ -120,7 +120,7 @@ func (m *runtimeSessionMutator) mutateAndSave(mutate func(session *agentsession.
 		return err
 	}
 	sessionSnapshot.UpdatedAt = time.Now()
-	if err := m.service.sessionStore.Save(m.ctx, &sessionSnapshot); err != nil {
+	if err := m.service.sessionStore.UpdateSessionState(m.ctx, sessionStateInputFromSession(sessionSnapshot)); err != nil {
 		m.state.mu.Unlock()
 		return err
 	}

@@ -76,7 +76,7 @@ func (s *Service) Compact(ctx context.Context, input CompactInput) (CompactResul
 	}()
 
 	cfg := s.configManager.Get()
-	session, err := s.sessionStore.Load(ctx, input.SessionID)
+	session, err := s.sessionStore.LoadSession(ctx, input.SessionID)
 	if err != nil {
 		return CompactResult{}, err
 	}
@@ -144,7 +144,7 @@ func (s *Service) runCompactForSession(
 		session.TokenInputTotal = 0
 		session.TokenOutputTotal = 0
 		session.UpdatedAt = time.Now()
-		if err := s.sessionStore.Save(ctx, &session); err != nil {
+		if err := s.sessionStore.ReplaceTranscript(ctx, replaceTranscriptInputFromSession(session)); err != nil {
 			session.Messages = originalMessages
 			session.TaskState = originalTaskState
 			session.TokenInputTotal = originalTokenInputTotal

@@ -6,9 +6,6 @@ import (
 )
 
 const (
-	// CurrentSchemaVersion 表示当前会话持久化结构的唯一合法版本。
-	CurrentSchemaVersion = 2
-
 	// taskStateMaxFieldChars 限制 TaskState 单值字段的最大字符数，避免异常大文本污染持久化与后续 prompt。
 	taskStateMaxFieldChars = 2000
 	// taskStateMaxListItems 限制 TaskState 列表字段的最大条目数，避免模型输出超大数组导致上下文膨胀。
@@ -77,6 +74,11 @@ func ClampTaskStateBoundaries(state TaskState) TaskState {
 	state.Decisions = truncateTaskStateList(state.Decisions)
 	state.UserConstraints = truncateTaskStateList(state.UserConstraints)
 	return state
+}
+
+// normalizeAndClampTaskState 先规范化再限幅，保证持久化前后的 task_state 行为一致。
+func normalizeAndClampTaskState(state TaskState) TaskState {
+	return ClampTaskStateBoundaries(NormalizeTaskState(state))
 }
 
 // normalizeTaskStateList 对任务状态中的字符串列表做去空、去重并保留顺序。

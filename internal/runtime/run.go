@@ -139,8 +139,14 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 			if strings.TrimSpace(turnResult.assistant.Role) == "" {
 				turnResult.assistant.Role = providertypes.RoleAssistant
 			}
-			state.recordUsage(turnResult.inputTokens, turnResult.outputTokens)
-			if err := s.appendAssistantMessageAndSave(ctx, &state, snapshot, turnResult.assistant); err != nil {
+			if err := s.appendAssistantMessageAndSave(
+				ctx,
+				&state,
+				snapshot,
+				turnResult.assistant,
+				turnResult.inputTokens,
+				turnResult.outputTokens,
+			); err != nil {
 				return s.handleRunError(ctx, state.runID, state.session.ID, err)
 			}
 			s.emitTokenUsage(ctx, &state, turnResult)

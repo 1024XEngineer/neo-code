@@ -78,7 +78,7 @@ func (s *Service) ListSessionSkills(ctx context.Context, sessionID string) ([]Se
 		return nil, errors.New("runtime: session id is empty")
 	}
 
-	session, err := s.sessionStore.Load(ctx, sessionID)
+	session, err := s.sessionStore.LoadSession(ctx, sessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -180,7 +180,7 @@ func (s *Service) mutateSessionSkills(
 		releaseLockRef()
 	}()
 
-	session, err := s.sessionStore.Load(ctx, sessionID)
+	session, err := s.sessionStore.LoadSession(ctx, sessionID)
 	if err != nil {
 		return agentsession.Session{}, false, err
 	}
@@ -189,7 +189,7 @@ func (s *Service) mutateSessionSkills(
 	}
 
 	session.UpdatedAt = time.Now()
-	if err := s.sessionStore.Save(ctx, &session); err != nil {
+	if err := s.sessionStore.UpdateSessionState(ctx, sessionStateInputFromSession(session)); err != nil {
 		return agentsession.Session{}, false, err
 	}
 	return session, true, nil

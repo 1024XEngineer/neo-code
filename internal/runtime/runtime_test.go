@@ -27,6 +27,7 @@ import (
 )
 
 type memoryStore struct {
+	mu       sync.Mutex
 	sessions map[string]agentsession.Session
 	saves    int
 }
@@ -49,7 +50,8 @@ func newMemoryStore() *memoryStore {
 	return &memoryStore{sessions: map[string]agentsession.Session{}}
 }
 
-func (s *failingStore) Save(ctx context.Context, session *agentsession.Session) error {
+// nextSaveError 模拟旧 save hook 语义，对所有持久化写操作统一计数注入失败。
+func (s *failingStore) nextSaveError(ctx context.Context) error {
 	s.saveCalls++
 	if s.failOnSave > 0 && s.saveCalls == s.failOnSave {
 		return s.saveErr
@@ -57,28 +59,50 @@ func (s *failingStore) Save(ctx context.Context, session *agentsession.Session) 
 	if s.ignoreContextErr && s.saveErr != nil {
 		return s.saveErr
 	}
-	if s.Store == nil {
-		return nil
-	}
-	return s.Store.Save(ctx, session)
-}
-
-func (s *memoryStore) Save(ctx context.Context, session *agentsession.Session) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if session == nil {
-		return errors.New("nil session")
-	}
-	s.saves++
-	s.sessions[session.ID] = cloneSession(*session)
 	return nil
 }
 
-func (s *memoryStore) Load(ctx context.Context, id string) (agentsession.Session, error) {
+// CreateSession 在内存中创建一条完整会话记录，供 runtime 测试使用。
+func (s *memoryStore) CreateSession(ctx context.Context, input agentsession.CreateSessionInput) (agentsession.Session, error) {
 	if err := ctx.Err(); err != nil {
 		return agentsession.Session{}, err
 	}
+	session := agentsession.NewWithWorkdir(input.Title, input.Workdir)
+	if strings.TrimSpace(input.ID) != "" {
+		session.ID = input.ID
+	}
+	if !input.CreatedAt.IsZero() {
+		session.CreatedAt = input.CreatedAt
+	}
+	if !input.UpdatedAt.IsZero() {
+		session.UpdatedAt = input.UpdatedAt
+	}
+	session.Provider = input.Provider
+	session.Model = input.Model
+	session.TaskState = input.TaskState.Clone()
+	session.ActivatedSkills = agentsessionCloneSkillActivations(input.ActivatedSkills)
+	session.Todos = cloneTodosForPersistence(input.Todos)
+	session.TokenInputTotal = input.TokenInputTotal
+	session.TokenOutputTotal = input.TokenOutputTotal
+	session.Messages = []providertypes.Message{}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.saves++
+	s.sessions[session.ID] = cloneSession(session)
+	return cloneSession(session), nil
+}
+
+// LoadSession 从内存快照返回完整会话副本。
+func (s *memoryStore) LoadSession(ctx context.Context, id string) (agentsession.Session, error) {
+	if err := ctx.Err(); err != nil {
+		return agentsession.Session{}, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	session, ok := s.sessions[id]
 	if !ok {
 		return agentsession.Session{}, errors.New("not found")
@@ -86,10 +110,18 @@ func (s *memoryStore) Load(ctx context.Context, id string) (agentsession.Session
 	return cloneSession(session), nil
 }
 
+// Load 作为测试辅助别名保留，便于沿用现有断言代码。
+func (s *memoryStore) Load(ctx context.Context, id string) (agentsession.Session, error) {
+	return s.LoadSession(ctx, id)
+}
+
+// ListSummaries 返回所有会话摘要。
 func (s *memoryStore) ListSummaries(ctx context.Context) ([]agentsession.Summary, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	summaries := make([]agentsession.Summary, 0, len(s.sessions))
 	for _, session := range s.sessions {
 		summaries = append(summaries, agentsession.Summary{
@@ -100,6 +132,150 @@ func (s *memoryStore) ListSummaries(ctx context.Context) ([]agentsession.Summary
 		})
 	}
 	return summaries, nil
+}
+
+// AppendMessages 追加消息并同步更新会话头的增量字段。
+func (s *memoryStore) AppendMessages(ctx context.Context, input agentsession.AppendMessagesInput) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	session, ok := s.sessions[input.SessionID]
+	if !ok {
+		return errors.New("not found")
+	}
+	session.Messages = append(session.Messages, cloneMessagesForPersistence(input.Messages)...)
+	if !input.UpdatedAt.IsZero() {
+		session.UpdatedAt = input.UpdatedAt
+	}
+	session.Provider = input.Provider
+	session.Model = input.Model
+	session.Workdir = input.Workdir
+	session.TokenInputTotal += input.TokenInputDelta
+	session.TokenOutputTotal += input.TokenOutputDelta
+	s.saves++
+	s.sessions[input.SessionID] = cloneSession(session)
+	return nil
+}
+
+// UpdateSessionState 只覆写会话头字段，不改消息正文。
+func (s *memoryStore) UpdateSessionState(ctx context.Context, input agentsession.UpdateSessionStateInput) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	session, ok := s.sessions[input.SessionID]
+	if !ok {
+		return errors.New("not found")
+	}
+	session.Title = input.Title
+	if !input.UpdatedAt.IsZero() {
+		session.UpdatedAt = input.UpdatedAt
+	}
+	session.Provider = input.Provider
+	session.Model = input.Model
+	session.Workdir = input.Workdir
+	session.TaskState = input.TaskState.Clone()
+	session.ActivatedSkills = agentsessionCloneSkillActivations(input.ActivatedSkills)
+	session.Todos = cloneTodosForPersistence(input.Todos)
+	session.TokenInputTotal = input.TokenInputTotal
+	session.TokenOutputTotal = input.TokenOutputTotal
+	s.saves++
+	s.sessions[input.SessionID] = cloneSession(session)
+	return nil
+}
+
+// ReplaceTranscript 用新的消息切片替换原会话 transcript，并同步会话头状态。
+func (s *memoryStore) ReplaceTranscript(ctx context.Context, input agentsession.ReplaceTranscriptInput) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	session, ok := s.sessions[input.SessionID]
+	if !ok {
+		return errors.New("not found")
+	}
+	session.Messages = cloneMessagesForPersistence(input.Messages)
+	if !input.UpdatedAt.IsZero() {
+		session.UpdatedAt = input.UpdatedAt
+	}
+	session.Provider = input.Provider
+	session.Model = input.Model
+	session.Workdir = input.Workdir
+	session.TaskState = input.TaskState.Clone()
+	session.ActivatedSkills = agentsessionCloneSkillActivations(input.ActivatedSkills)
+	session.Todos = cloneTodosForPersistence(input.Todos)
+	session.TokenInputTotal = input.TokenInputTotal
+	session.TokenOutputTotal = input.TokenOutputTotal
+	s.saves++
+	s.sessions[input.SessionID] = cloneSession(session)
+	return nil
+}
+
+// CreateSession 转发到底层 Store，并按旧 save 计数规则注入失败。
+func (s *failingStore) CreateSession(ctx context.Context, input agentsession.CreateSessionInput) (agentsession.Session, error) {
+	if err := s.nextSaveError(ctx); err != nil {
+		return agentsession.Session{}, err
+	}
+	if s.Store == nil {
+		return agentsession.Session{}, nil
+	}
+	return s.Store.CreateSession(ctx, input)
+}
+
+// LoadSession 直接透传到底层 Store。
+func (s *failingStore) LoadSession(ctx context.Context, id string) (agentsession.Session, error) {
+	if s.Store == nil {
+		return agentsession.Session{}, errors.New("not found")
+	}
+	return s.Store.LoadSession(ctx, id)
+}
+
+// ListSummaries 直接透传到底层 Store。
+func (s *failingStore) ListSummaries(ctx context.Context) ([]agentsession.Summary, error) {
+	if s.Store == nil {
+		return nil, nil
+	}
+	return s.Store.ListSummaries(ctx)
+}
+
+// AppendMessages 转发到底层 Store，并按写入次数注入失败。
+func (s *failingStore) AppendMessages(ctx context.Context, input agentsession.AppendMessagesInput) error {
+	if err := s.nextSaveError(ctx); err != nil {
+		return err
+	}
+	if s.Store == nil {
+		return nil
+	}
+	return s.Store.AppendMessages(ctx, input)
+}
+
+// UpdateSessionState 转发到底层 Store，并按写入次数注入失败。
+func (s *failingStore) UpdateSessionState(ctx context.Context, input agentsession.UpdateSessionStateInput) error {
+	if err := s.nextSaveError(ctx); err != nil {
+		return err
+	}
+	if s.Store == nil {
+		return nil
+	}
+	return s.Store.UpdateSessionState(ctx, input)
+}
+
+// ReplaceTranscript 转发到底层 Store，并按写入次数注入失败。
+func (s *failingStore) ReplaceTranscript(ctx context.Context, input agentsession.ReplaceTranscriptInput) error {
+	if err := s.nextSaveError(ctx); err != nil {
+		return err
+	}
+	if s.Store == nil {
+		return nil
+	}
+	return s.Store.ReplaceTranscript(ctx, input)
 }
 
 // blockingLoadStore 用于并发测试：首次 Load 阻塞，以验证同 session 的锁时序。
@@ -120,20 +296,36 @@ func newBlockingLoadStore() *blockingLoadStore {
 	}
 }
 
-func (s *blockingLoadStore) Save(ctx context.Context, session *agentsession.Session) error {
+// CreateSession 在阻塞加载测试桩中创建会话记录。
+func (s *blockingLoadStore) CreateSession(ctx context.Context, input agentsession.CreateSessionInput) (agentsession.Session, error) {
 	if err := ctx.Err(); err != nil {
-		return err
+		return agentsession.Session{}, err
 	}
-	if session == nil {
-		return errors.New("nil session")
+	session := agentsession.NewWithWorkdir(input.Title, input.Workdir)
+	if strings.TrimSpace(input.ID) != "" {
+		session.ID = input.ID
 	}
+	if !input.CreatedAt.IsZero() {
+		session.CreatedAt = input.CreatedAt
+	}
+	if !input.UpdatedAt.IsZero() {
+		session.UpdatedAt = input.UpdatedAt
+	}
+	session.Provider = input.Provider
+	session.Model = input.Model
+	session.TaskState = input.TaskState.Clone()
+	session.ActivatedSkills = agentsessionCloneSkillActivations(input.ActivatedSkills)
+	session.Todos = cloneTodosForPersistence(input.Todos)
+	session.TokenInputTotal = input.TokenInputTotal
+	session.TokenOutputTotal = input.TokenOutputTotal
 	s.mu.Lock()
-	s.sessions[session.ID] = cloneSession(*session)
+	s.sessions[session.ID] = cloneSession(session)
 	s.mu.Unlock()
-	return nil
+	return cloneSession(session), nil
 }
 
-func (s *blockingLoadStore) Load(ctx context.Context, id string) (agentsession.Session, error) {
+// LoadSession 首次调用时阻塞，用于验证同 session 锁时序。
+func (s *blockingLoadStore) LoadSession(ctx context.Context, id string) (agentsession.Session, error) {
 	if err := ctx.Err(); err != nil {
 		return agentsession.Session{}, err
 	}
@@ -157,6 +349,84 @@ func (s *blockingLoadStore) Load(ctx context.Context, id string) (agentsession.S
 		return agentsession.Session{}, errors.New("not found")
 	}
 	return cloneSession(session), nil
+}
+
+// AppendMessages 在阻塞加载测试桩中追加消息。
+func (s *blockingLoadStore) AppendMessages(ctx context.Context, input agentsession.AppendMessagesInput) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	session, ok := s.sessions[input.SessionID]
+	if !ok {
+		return errors.New("not found")
+	}
+	session.Messages = append(session.Messages, cloneMessagesForPersistence(input.Messages)...)
+	if !input.UpdatedAt.IsZero() {
+		session.UpdatedAt = input.UpdatedAt
+	}
+	session.Provider = input.Provider
+	session.Model = input.Model
+	session.Workdir = input.Workdir
+	session.TokenInputTotal += input.TokenInputDelta
+	session.TokenOutputTotal += input.TokenOutputDelta
+	s.sessions[input.SessionID] = cloneSession(session)
+	return nil
+}
+
+// UpdateSessionState 在阻塞加载测试桩中更新会话头。
+func (s *blockingLoadStore) UpdateSessionState(ctx context.Context, input agentsession.UpdateSessionStateInput) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	session, ok := s.sessions[input.SessionID]
+	if !ok {
+		return errors.New("not found")
+	}
+	session.Title = input.Title
+	if !input.UpdatedAt.IsZero() {
+		session.UpdatedAt = input.UpdatedAt
+	}
+	session.Provider = input.Provider
+	session.Model = input.Model
+	session.Workdir = input.Workdir
+	session.TaskState = input.TaskState.Clone()
+	session.ActivatedSkills = agentsessionCloneSkillActivations(input.ActivatedSkills)
+	session.Todos = cloneTodosForPersistence(input.Todos)
+	session.TokenInputTotal = input.TokenInputTotal
+	session.TokenOutputTotal = input.TokenOutputTotal
+	s.sessions[input.SessionID] = cloneSession(session)
+	return nil
+}
+
+// ReplaceTranscript 在阻塞加载测试桩中重写会话消息。
+func (s *blockingLoadStore) ReplaceTranscript(ctx context.Context, input agentsession.ReplaceTranscriptInput) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	session, ok := s.sessions[input.SessionID]
+	if !ok {
+		return errors.New("not found")
+	}
+	session.Messages = cloneMessagesForPersistence(input.Messages)
+	if !input.UpdatedAt.IsZero() {
+		session.UpdatedAt = input.UpdatedAt
+	}
+	session.Provider = input.Provider
+	session.Model = input.Model
+	session.Workdir = input.Workdir
+	session.TaskState = input.TaskState.Clone()
+	session.ActivatedSkills = agentsessionCloneSkillActivations(input.ActivatedSkills)
+	session.Todos = cloneTodosForPersistence(input.Todos)
+	session.TokenInputTotal = input.TokenInputTotal
+	session.TokenOutputTotal = input.TokenOutputTotal
+	s.sessions[input.SessionID] = cloneSession(session)
+	return nil
 }
 
 func (s *blockingLoadStore) ListSummaries(ctx context.Context) ([]agentsession.Summary, error) {

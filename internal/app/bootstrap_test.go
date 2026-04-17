@@ -749,6 +749,13 @@ func TestBuildRuntimeSucceedsWhenSkillsRootMissing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildRuntime() error = %v", err)
 	}
+	if bundle.Close != nil {
+		t.Cleanup(func() {
+			if err := bundle.Close(); err != nil {
+				t.Fatalf("bundle.Close() error = %v", err)
+			}
+		})
+	}
 	if bundle.Runtime == nil {
 		t.Fatalf("expected runtime bundle to be created")
 	}
@@ -761,8 +768,20 @@ func TestBuildRuntimeSucceedsWhenSkillsRootMissing(t *testing.T) {
 	}
 
 	store := agentsession.NewStore(bundle.ConfigManager.BaseDir(), bundle.Config.Workdir)
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Fatalf("store.Close() error = %v", err)
+		}
+	})
 	session := agentsession.New("missing root session")
-	if err := store.Save(context.Background(), &session); err != nil {
+	session, err = store.CreateSession(context.Background(), agentsession.CreateSessionInput{
+		ID:        session.ID,
+		Title:     session.Title,
+		CreatedAt: session.CreatedAt,
+		UpdatedAt: session.UpdatedAt,
+		Workdir:   session.Workdir,
+	})
+	if err != nil {
 		t.Fatalf("save session: %v", err)
 	}
 
@@ -800,10 +819,29 @@ func TestBuildRuntimeInjectsSkillsRegistryWhenRootExists(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildRuntime() error = %v", err)
 	}
+	if bundle.Close != nil {
+		t.Cleanup(func() {
+			if err := bundle.Close(); err != nil {
+				t.Fatalf("bundle.Close() error = %v", err)
+			}
+		})
+	}
 
 	store := agentsession.NewStore(bundle.ConfigManager.BaseDir(), bundle.Config.Workdir)
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Fatalf("store.Close() error = %v", err)
+		}
+	})
 	session := agentsession.New("skill session")
-	if err := store.Save(context.Background(), &session); err != nil {
+	session, err = store.CreateSession(context.Background(), agentsession.CreateSessionInput{
+		ID:        session.ID,
+		Title:     session.Title,
+		CreatedAt: session.CreatedAt,
+		UpdatedAt: session.UpdatedAt,
+		Workdir:   session.Workdir,
+	})
+	if err != nil {
 		t.Fatalf("save session: %v", err)
 	}
 
@@ -817,7 +855,7 @@ func TestBuildRuntimeInjectsSkillsRegistryWhenRootExists(t *testing.T) {
 		t.Fatalf("ActivateSessionSkill() error = %v", err)
 	}
 
-	loaded, err := store.Load(context.Background(), session.ID)
+	loaded, err := store.LoadSession(context.Background(), session.ID)
 	if err != nil {
 		t.Fatalf("load session: %v", err)
 	}

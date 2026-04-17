@@ -12,9 +12,19 @@ import (
 
 const projectsDirName = "projects"
 
-// sessionDirectory 负责根据工作区根目录计算会话分桶目录。
-func sessionDirectory(baseDir string, workspaceRoot string) string {
-	return filepath.Join(baseDir, projectsDirName, HashWorkspaceRoot(workspaceRoot), sessionsDirName)
+// projectDirectory 负责根据工作区根目录计算当前会话数据库所在目录。
+func projectDirectory(baseDir string, workspaceRoot string) string {
+	return filepath.Join(baseDir, projectsDirName, HashWorkspaceRoot(workspaceRoot))
+}
+
+// databasePath 返回当前工作区级 SQLite 数据库文件路径。
+func databasePath(baseDir string, workspaceRoot string) string {
+	return filepath.Join(projectDirectory(baseDir, workspaceRoot), sessionDatabaseFileName)
+}
+
+// assetsDirectory 返回当前工作区附件根目录。
+func assetsDirectory(baseDir string, workspaceRoot string) string {
+	return filepath.Join(projectDirectory(baseDir, workspaceRoot), assetsDirName)
 }
 
 // HashWorkspaceRoot 为规范化后的工作区根目录生成稳定哈希，供 session 和 memo 等包共享。

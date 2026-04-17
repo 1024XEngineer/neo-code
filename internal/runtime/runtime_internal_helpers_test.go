@@ -22,22 +22,34 @@ type stubMemoExtractor struct {
 }
 
 type lockProbeStore struct {
-	saveFn func(ctx context.Context, session *agentsession.Session) error
+	appendFn func(ctx context.Context, input agentsession.AppendMessagesInput) error
 }
 
-func (s *lockProbeStore) Save(ctx context.Context, session *agentsession.Session) error {
-	if s.saveFn == nil {
+func (s *lockProbeStore) CreateSession(ctx context.Context, input agentsession.CreateSessionInput) (agentsession.Session, error) {
+	return agentsession.Session{}, errors.New("not implemented")
+}
+
+func (s *lockProbeStore) AppendMessages(ctx context.Context, input agentsession.AppendMessagesInput) error {
+	if s.appendFn == nil {
 		return nil
 	}
-	return s.saveFn(ctx, session)
+	return s.appendFn(ctx, input)
 }
 
-func (s *lockProbeStore) Load(ctx context.Context, id string) (agentsession.Session, error) {
+func (s *lockProbeStore) LoadSession(ctx context.Context, id string) (agentsession.Session, error) {
 	return agentsession.Session{}, errors.New("not implemented")
 }
 
 func (s *lockProbeStore) ListSummaries(ctx context.Context) ([]agentsession.Summary, error) {
 	return nil, errors.New("not implemented")
+}
+
+func (s *lockProbeStore) UpdateSessionState(ctx context.Context, input agentsession.UpdateSessionStateInput) error {
+	return errors.New("not implemented")
+}
+
+func (s *lockProbeStore) ReplaceTranscript(ctx context.Context, input agentsession.ReplaceTranscriptInput) error {
+	return errors.New("not implemented")
 }
 
 func (s *stubMemoExtractor) Schedule(_ string, messages []providertypes.Message) {
@@ -137,7 +149,14 @@ func TestAppendAssistantMessageAndSaveMetadataBranches(t *testing.T) {
 		model:          "gpt-4.1",
 	}
 
-	if err := service.appendAssistantMessageAndSave(context.Background(), &state, snapshot, providertypes.Message{Role: providertypes.RoleAssistant}); err != nil {
+	if err := service.appendAssistantMessageAndSave(
+		context.Background(),
+		&state,
+		snapshot,
+		providertypes.Message{Role: providertypes.RoleAssistant},
+		0,
+		0,
+	); err != nil {
 		t.Fatalf("appendAssistantMessageAndSave() error = %v", err)
 	}
 	if store.saves != 1 {
@@ -147,7 +166,14 @@ func TestAppendAssistantMessageAndSaveMetadataBranches(t *testing.T) {
 	store.saves = 0
 	state.session.Provider = snapshot.providerConfig.Name
 	state.session.Model = snapshot.model
-	if err := service.appendAssistantMessageAndSave(context.Background(), &state, snapshot, providertypes.Message{Role: providertypes.RoleAssistant}); err != nil {
+	if err := service.appendAssistantMessageAndSave(
+		context.Background(),
+		&state,
+		snapshot,
+		providertypes.Message{Role: providertypes.RoleAssistant},
+		0,
+		0,
+	); err != nil {
 		t.Fatalf("appendAssistantMessageAndSave() error = %v", err)
 	}
 	if store.saves != 0 {
@@ -309,7 +335,7 @@ func TestAppendToolMessageAndSaveUnlocksStateBeforePersist(t *testing.T) {
 	state := newRunState("run-append-tool-lock", session)
 
 	store := &lockProbeStore{
-		saveFn: func(_ context.Context, _ *agentsession.Session) error {
+		appendFn: func(_ context.Context, _ agentsession.AppendMessagesInput) error {
 			locked := make(chan struct{})
 			go func() {
 				state.mu.Lock()
