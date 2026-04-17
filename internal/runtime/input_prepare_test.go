@@ -19,7 +19,7 @@ func TestServicePrepareUserInputEmitsNormalizeAndAssetSaved(t *testing.T) {
 	svc, _ := newPrepareTestService(t, workdir, true)
 
 	imagePath := filepath.Join(workdir, "img.png")
-	if err := os.WriteFile(imagePath, []byte("fake-png"), 0o644); err != nil {
+	if err := os.WriteFile(imagePath, minimalPNGBytesForRuntimeTest(), 0o644); err != nil {
 		t.Fatalf("write image: %v", err)
 	}
 
@@ -73,6 +73,9 @@ func TestServicePrepareUserInputEmitsAssetSaveFailed(t *testing.T) {
 	failedEvent := mustReadRuntimeEvent(t, svc.Events())
 	if failedEvent.Type != EventAssetSaveFailed {
 		t.Fatalf("expected event %q, got %q", EventAssetSaveFailed, failedEvent.Type)
+	}
+	if failedEvent.SessionID == "" {
+		t.Fatalf("expected asset_save_failed event to include session id")
 	}
 	payload, ok := failedEvent.Payload.(AssetSaveFailedPayload)
 	if !ok || payload.Index != 0 {
@@ -148,5 +151,19 @@ func mustReadRuntimeEvent(t *testing.T, events <-chan RuntimeEvent) RuntimeEvent
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for runtime event")
 		return RuntimeEvent{}
+	}
+}
+
+func minimalPNGBytesForRuntimeTest() []byte {
+	return []byte{
+		0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+		0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+		0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+		0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
+		0x89, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x44, 0x41,
+		0x54, 0x78, 0x9c, 0x63, 0xf8, 0xcf, 0xc0, 0x00,
+		0x00, 0x03, 0x01, 0x01, 0x00, 0xc9, 0xfe, 0x92,
+		0xef, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e,
+		0x44, 0xae, 0x42, 0x60, 0x82,
 	}
 }

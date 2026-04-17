@@ -278,6 +278,29 @@ func TestAbsorbInlineImageReferencesPreservesWhitespaceLayout(t *testing.T) {
 	}
 }
 
+func TestAbsorbInlineImageReferencesSupportsQuotedPathWithSpaces(t *testing.T) {
+	app, _ := newTestApp(t)
+	root := t.TempDir()
+	app.state.CurrentWorkdir = root
+
+	normalized, absorbed, err := app.absorbInlineImageReferences(`请分析 @image:"charts/sales q1.png" 趋势`)
+	if err != nil {
+		t.Fatalf("absorbInlineImageReferences() error = %v", err)
+	}
+	if absorbed != 1 {
+		t.Fatalf("expected absorbed image count to be 1, got %d", absorbed)
+	}
+	if normalized != "请分析  趋势" {
+		t.Fatalf("unexpected normalized text: %q", normalized)
+	}
+	if app.getImageAttachmentCount() != 1 {
+		t.Fatalf("expected one pending image attachment")
+	}
+	if !strings.HasSuffix(app.getImageAttachments()[0].Path, filepath.FromSlash("charts/sales q1.png")) {
+		t.Fatalf("unexpected queued path: %q", app.getImageAttachments()[0].Path)
+	}
+}
+
 func TestGetAndClearImageAttachments(t *testing.T) {
 	app, _ := newTestApp(t)
 	app.pendingImageAttachments = []pendingImageAttachment{

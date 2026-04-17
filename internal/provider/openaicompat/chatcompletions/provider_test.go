@@ -97,11 +97,34 @@ func TestNewAndBuildRequest(t *testing.T) {
 		if gotSchema["type"] != "object" {
 			t.Fatalf("expected sanitized schema type object, got %+v", gotSchema["type"])
 		}
-		if _, ok := gotSchema["oneOf"]; ok {
-			t.Fatalf("expected sanitized schema to drop top-level oneOf, got %+v", gotSchema)
+		if _, ok := gotSchema["oneOf"]; !ok {
+			t.Fatalf("expected top-level oneOf to be preserved, got %+v", gotSchema)
 		}
 		if _, ok := toolSchemaWithTopLevelCombinator["oneOf"]; !ok {
 			t.Fatalf("expected original schema not to be mutated")
+		}
+
+		downgradedPayload, err := BuildRequest(context.Background(), testCfg("https://api.example.com/v1", "gpt-4.1", "test-key"), providertypes.GenerateRequest{
+			Messages: []providertypes.Message{
+				{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")}},
+			},
+			Tools: []providertypes.ToolSpec{{
+				Name:        "non_object_schema",
+				Description: "schema root is string",
+				Schema: map[string]any{
+					"type": "string",
+				},
+			}},
+		})
+		if err != nil {
+			t.Fatalf("BuildRequest() downgrade schema error = %v", err)
+		}
+		downgradedSchema := downgradedPayload.Tools[0].Function.Parameters
+		if downgradedSchema["type"] != "object" {
+			t.Fatalf("expected downgraded schema type object, got %+v", downgradedSchema["type"])
+		}
+		if downgradedSchema["x-neocode-schema-downgraded"] != true {
+			t.Fatalf("expected downgrade marker, got %+v", downgradedSchema)
 		}
 
 		withSessionAsset, err := BuildRequest(context.Background(), testCfg("https://api.example.com/v1", "gpt-4.1", "test-key"), providertypes.GenerateRequest{

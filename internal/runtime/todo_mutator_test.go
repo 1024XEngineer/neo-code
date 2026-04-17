@@ -45,6 +45,16 @@ func (s *mutatorStore) ListSummaries(ctx context.Context) ([]agentsession.Summar
 	return nil, nil
 }
 
+func (s *mutatorStore) DeleteSession(ctx context.Context, id string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if s.last.ID == id {
+		s.last = agentsession.Session{}
+	}
+	return nil
+}
+
 func TestRuntimeSessionMutatorMutateAndSave(t *testing.T) {
 	t.Parallel()
 

@@ -41,9 +41,10 @@ type PreparedInput struct {
 
 // AssetSaveError 描述图片落盘阶段的结构化失败信息，便于上层统一事件化处理。
 type AssetSaveError struct {
-	Index int
-	Path  string
-	Err   error
+	SessionID string
+	Index     int
+	Path      string
+	Err       error
 }
 
 func (e *AssetSaveError) Error() string {
@@ -117,20 +118,22 @@ func (p *InputPreparer) Prepare(ctx context.Context, input PrepareInput) (Prepar
 		if path == "" {
 			p.rollbackCreatedSession(ctx, session.ID, sessionCreated)
 			return PreparedInput{}, &AssetSaveError{
-				Index: index,
-				Path:  path,
-				Err:   fmt.Errorf("image path is empty"),
+				SessionID: session.ID,
+				Index:     index,
+				Path:      path,
+				Err:       fmt.Errorf("image path is empty"),
 			}
 		}
 		mimeType := strings.TrimSpace(image.MimeType)
 
-		meta, err := p.saveImageAsset(ctx, session.ID, path, mimeType)
+		meta, err := p.saveImageAsset(ctx, session.ID, session.Workdir, path, mimeType)
 		if err != nil {
 			p.rollbackCreatedSession(ctx, session.ID, sessionCreated)
 			return PreparedInput{}, &AssetSaveError{
-				Index: index,
-				Path:  path,
-				Err:   err,
+				SessionID: session.ID,
+				Index:     index,
+				Path:      path,
+				Err:       err,
 			}
 		}
 		savedAssets = append(savedAssets, meta)
@@ -150,10 +153,17 @@ func (p *InputPreparer) Prepare(ctx context.Context, input PrepareInput) (Prepar
 	}, nil
 }
 
-func (p *InputPreparer) saveImageAsset(ctx context.Context, sessionID string, path string, mimeType string) (AssetMeta, error) {
-	absolutePath, err := filepath.Abs(path)
+// saveImageAsset 按会话工作目录解析并校验图片路径后落盘，禁止越界访问工作目录外文件。
+func (p *InputPreparer) saveImageAsset(
+	ctx context.Context,
+	sessionID string,
+	workdir string,
+	path string,
+	mimeType string,
+) (AssetMeta, error) {
+	absolutePath, err := resolveImagePath(workdir, path)
 	if err != nil {
-		return AssetMeta{}, fmt.Errorf("resolve image path: %w", err)
+		return AssetMeta{}, err
 	}
 
 	file, err := os.Open(absolutePath)
@@ -176,22 +186,33 @@ func (p *InputPreparer) saveImageAsset(ctx context.Context, sessionID string, pa
 	return meta, nil
 }
 
-// resolveImageMimeType 解析图片 MIME 类型，优先使用显式传入值，其次回退到扩展名与文件头探测。
+// resolveImageMimeType 解析图片 MIME 类型，仅允许 image/*，并要求声明值与文件头探测一致。
 func resolveImageMimeType(path string, declared string, file *os.File) (string, error) {
-	if normalized := strings.ToLower(strings.TrimSpace(declared)); normalized != "" {
-		return normalized, nil
+	detected, err := detectImageMimeTypeFromFile(file)
+	if err != nil {
+		return "", err
 	}
 
-	extMime := strings.ToLower(strings.TrimSpace(mime.TypeByExtension(strings.ToLower(filepath.Ext(path)))))
-	if extMime != "" {
-		if idx := strings.Index(extMime, ";"); idx >= 0 {
-			extMime = strings.TrimSpace(extMime[:idx])
+	declaredMime := normalizeMimeType(declared)
+	if declaredMime != "" {
+		if !strings.HasPrefix(declaredMime, "image/") {
+			return "", fmt.Errorf("declared mime type %q is not an image", declared)
 		}
-		if strings.HasPrefix(extMime, "image/") {
-			return extMime, nil
+		if declaredMime != detected {
+			return "", fmt.Errorf("declared mime type %q mismatches detected %q", declaredMime, detected)
 		}
+		return detected, nil
 	}
 
+	extMime := normalizeMimeType(mime.TypeByExtension(strings.ToLower(filepath.Ext(path))))
+	if extMime != "" && strings.HasPrefix(extMime, "image/") && extMime != detected {
+		return "", fmt.Errorf("file extension mime %q mismatches detected %q", extMime, detected)
+	}
+	return detected, nil
+}
+
+// detectImageMimeTypeFromFile 根据文件头探测 MIME，且要求结果为 image/*。
+func detectImageMimeTypeFromFile(file *os.File) (string, error) {
 	buffer := make([]byte, 512)
 	n, readErr := file.Read(buffer)
 	if readErr != nil && readErr != io.EOF {
@@ -206,6 +227,55 @@ func resolveImageMimeType(path string, declared string, file *os.File) (string, 
 		return detected, nil
 	}
 	return "", fmt.Errorf("unsupported image format")
+}
+
+// normalizeMimeType 清洗 MIME 字符串并移除参数段，返回小写标准形式。
+func normalizeMimeType(value string) string {
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	if normalized == "" {
+		return ""
+	}
+	if idx := strings.Index(normalized, ";"); idx >= 0 {
+		normalized = strings.TrimSpace(normalized[:idx])
+	}
+	return normalized
+}
+
+// resolveImagePath 以会话工作目录为基准解析图片路径并强制限制在工作目录内。
+func resolveImagePath(workdir string, path string) (string, error) {
+	base := strings.TrimSpace(workdir)
+	if base == "" {
+		return "", fmt.Errorf("resolve image path: workdir is empty")
+	}
+	baseAbs, err := filepath.Abs(base)
+	if err != nil {
+		return "", fmt.Errorf("resolve image path base: %w", err)
+	}
+
+	target := strings.TrimSpace(path)
+	if target == "" {
+		return "", fmt.Errorf("resolve image path: path is empty")
+	}
+	if !filepath.IsAbs(target) {
+		target = filepath.Join(baseAbs, target)
+	}
+
+	targetAbs, err := filepath.Abs(target)
+	if err != nil {
+		return "", fmt.Errorf("resolve image path: %w", err)
+	}
+	if err := ensurePathWithinBase(baseAbs, targetAbs); err != nil {
+		return "", fmt.Errorf("resolve image path: %w", err)
+	}
+
+	resolved := targetAbs
+	if linkTarget, linkErr := filepath.EvalSymlinks(targetAbs); linkErr == nil {
+		if err := ensurePathWithinBase(baseAbs, linkTarget); err != nil {
+			return "", fmt.Errorf("resolve image path: %w", err)
+		}
+		resolved = linkTarget
+	}
+	return resolved, nil
 }
 
 func (p *InputPreparer) loadOrCreateSession(
@@ -256,18 +326,10 @@ func (p *InputPreparer) rollbackCreatedSession(ctx context.Context, sessionID st
 	if !created {
 		return
 	}
-	store, ok := p.store.(*JSONStore)
-	if !ok {
-		return
-	}
 	if err := ctx.Err(); err != nil {
 		return
 	}
-	target := store.sessionDir(sessionID)
-	if err := ensurePathWithinBase(store.baseDir, target); err != nil {
-		return
-	}
-	_ = os.RemoveAll(target)
+	_ = p.store.DeleteSession(ctx, sessionID)
 }
 
 func resolveWorkdirForInput(defaultWorkdir string, currentWorkdir string, requestedWorkdir string) (string, error) {

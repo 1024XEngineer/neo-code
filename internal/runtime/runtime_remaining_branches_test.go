@@ -80,12 +80,20 @@ func (s *saveHookStore) ListSummaries(ctx context.Context) ([]agentsession.Summa
 	return s.base.ListSummaries(ctx)
 }
 
+func (s *saveHookStore) DeleteSession(ctx context.Context, id string) error {
+	return s.base.DeleteSession(ctx, id)
+}
+
 func (s *postSaveHookStore) Load(ctx context.Context, id string) (agentsession.Session, error) {
 	return s.base.Load(ctx, id)
 }
 
 func (s *postSaveHookStore) ListSummaries(ctx context.Context) ([]agentsession.Summary, error) {
 	return s.base.ListSummaries(ctx)
+}
+
+func (s *postSaveHookStore) DeleteSession(ctx context.Context, id string) error {
+	return s.base.DeleteSession(ctx, id)
 }
 
 func TestResolveCompactProviderSelectionResolveErrorBranch(t *testing.T) {

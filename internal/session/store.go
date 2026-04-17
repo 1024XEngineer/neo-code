@@ -61,6 +61,7 @@ type Store interface {
 	Save(ctx context.Context, session *Session) error
 	Load(ctx context.Context, id string) (Session, error)
 	ListSummaries(ctx context.Context) ([]Summary, error)
+	DeleteSession(ctx context.Context, id string) error
 }
 
 // JSONStore 是基于 JSON 文件的会话存储实现。
@@ -219,6 +220,28 @@ func (s *JSONStore) ListSummaries(ctx context.Context) ([]Summary, error) {
 	})
 
 	return summaries, nil
+}
+
+// DeleteSession 删除指定会话目录及其附件，供创建后失败回滚等场景复用。
+func (s *JSONStore) DeleteSession(ctx context.Context, id string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := validateStorageID("session id", id); err != nil {
+		return fmt.Errorf("session: %w", err)
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	target := s.sessionDir(id)
+	if err := ensurePathWithinBase(s.baseDir, target); err != nil {
+		return fmt.Errorf("session: resolve session dir path: %w", err)
+	}
+	if err := os.RemoveAll(target); err != nil {
+		return fmt.Errorf("session: delete session dir: %w", err)
+	}
+	return nil
 }
 
 // filePath 生成会话 ID 对应的 JSON 文件路径。

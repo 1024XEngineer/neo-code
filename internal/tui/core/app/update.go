@@ -963,6 +963,9 @@ func runtimeEventStopReasonDecidedHandler(a *App, event agentruntime.RuntimeEven
 
 // handleRuntimeEvent 通过注册表分发 runtime 事件，避免巨型 switch 膨胀。
 func (a *App) handleRuntimeEvent(event agentruntime.RuntimeEvent) bool {
+	if !a.shouldHandleRuntimeEvent(event) {
+		return false
+	}
 	if a.state.ActiveSessionID == "" {
 		a.state.ActiveSessionID = event.SessionID
 	}
@@ -971,6 +974,22 @@ func (a *App) handleRuntimeEvent(event agentruntime.RuntimeEvent) bool {
 		return false
 	}
 	return handler(a, event)
+}
+
+// shouldHandleRuntimeEvent 校验事件与当前活跃会话/运行上下文的关联，避免跨会话污染 UI 状态。
+func (a *App) shouldHandleRuntimeEvent(event agentruntime.RuntimeEvent) bool {
+	activeSessionID := strings.TrimSpace(a.state.ActiveSessionID)
+	eventSessionID := strings.TrimSpace(event.SessionID)
+	if activeSessionID != "" && eventSessionID != "" && !strings.EqualFold(activeSessionID, eventSessionID) {
+		return false
+	}
+
+	activeRunID := strings.TrimSpace(a.state.ActiveRunID)
+	eventRunID := strings.TrimSpace(event.RunID)
+	if activeRunID != "" && eventRunID != "" && !strings.EqualFold(activeRunID, eventRunID) {
+		return false
+	}
+	return true
 }
 
 // runtimeEventUserMessageHandler 处理用户消息进入运行队列后的状态同步。

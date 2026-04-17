@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	providertypes "neo-code/internal/provider/types"
@@ -44,7 +45,7 @@ func TestInputPreparerPrepareTextAndImage(t *testing.T) {
 	preparer := NewInputPreparer(store, store)
 
 	imagePath := filepath.Join(workdir, "img.png")
-	payload := []byte("fake-png")
+	payload := minimalPNGBytes()
 	if err := os.WriteFile(imagePath, payload, 0o644); err != nil {
 		t.Fatalf("write image: %v", err)
 	}
@@ -93,7 +94,7 @@ func TestInputPreparerPrepareImageInfersMimeWhenMissing(t *testing.T) {
 	preparer := NewInputPreparer(store, store)
 
 	imagePath := filepath.Join(workdir, "auto.png")
-	if err := os.WriteFile(imagePath, []byte("fake-png"), 0o644); err != nil {
+	if err := os.WriteFile(imagePath, minimalPNGBytes(), 0o644); err != nil {
 		t.Fatalf("write image: %v", err)
 	}
 
@@ -121,7 +122,7 @@ func TestInputPreparerPrepareImageOnlyUsesImageTitle(t *testing.T) {
 	preparer := NewInputPreparer(store, store)
 
 	imagePath := filepath.Join(workdir, "only.png")
-	if err := os.WriteFile(imagePath, []byte("img"), 0o644); err != nil {
+	if err := os.WriteFile(imagePath, minimalPNGBytes(), 0o644); err != nil {
 		t.Fatalf("write image: %v", err)
 	}
 
@@ -192,6 +193,9 @@ func TestInputPreparerPrepareErrors(t *testing.T) {
 		if saveErr.Index != 0 {
 			t.Fatalf("expected save error index 0, got %d", saveErr.Index)
 		}
+		if saveErr.SessionID == "" {
+			t.Fatalf("expected save error session id")
+		}
 	})
 
 	t.Run("new session is rolled back when asset save fails", func(t *testing.T) {
@@ -233,6 +237,89 @@ func TestInputPreparerPrepareErrors(t *testing.T) {
 			t.Fatalf("expected existing session to remain, load error = %v", loadErr)
 		}
 	})
+}
+
+func TestInputPreparerPrepareImagePathAndMimeValidation(t *testing.T) {
+	t.Parallel()
+
+	workdir := t.TempDir()
+	store := NewStore(t.TempDir(), workdir)
+	preparer := NewInputPreparer(store, store)
+
+	t.Run("relative path is resolved by workdir", func(t *testing.T) {
+		relativeDir := filepath.Join(workdir, "images")
+		if err := os.MkdirAll(relativeDir, 0o755); err != nil {
+			t.Fatalf("mkdir images: %v", err)
+		}
+		imagePath := filepath.Join(relativeDir, "a.png")
+		if err := os.WriteFile(imagePath, minimalPNGBytes(), 0o644); err != nil {
+			t.Fatalf("write image: %v", err)
+		}
+
+		result, err := preparer.Prepare(context.Background(), PrepareInput{
+			Text:           "relative path",
+			Images:         []PrepareImageInput{{Path: filepath.Join("images", "a.png")}},
+			DefaultWorkdir: workdir,
+		})
+		if err != nil {
+			t.Fatalf("Prepare() error = %v", err)
+		}
+		if len(result.SavedAssets) != 1 || result.SavedAssets[0].MimeType != "image/png" {
+			t.Fatalf("unexpected saved assets: %+v", result.SavedAssets)
+		}
+	})
+
+	t.Run("path outside workdir is rejected", func(t *testing.T) {
+		outside := filepath.Join(t.TempDir(), "outside.png")
+		if err := os.WriteFile(outside, minimalPNGBytes(), 0o644); err != nil {
+			t.Fatalf("write outside image: %v", err)
+		}
+
+		_, err := preparer.Prepare(context.Background(), PrepareInput{
+			Text:           "outside",
+			Images:         []PrepareImageInput{{Path: outside, MimeType: "image/png"}},
+			DefaultWorkdir: workdir,
+		})
+		if err == nil {
+			t.Fatalf("expected outside workdir error")
+		}
+		if !strings.Contains(err.Error(), "escapes base dir") {
+			t.Fatalf("expected escapes base dir error, got %v", err)
+		}
+	})
+
+	t.Run("declared mime mismatch with file header is rejected", func(t *testing.T) {
+		imagePath := filepath.Join(workdir, "declared-mismatch.png")
+		if err := os.WriteFile(imagePath, minimalPNGBytes(), 0o644); err != nil {
+			t.Fatalf("write image: %v", err)
+		}
+
+		_, err := preparer.Prepare(context.Background(), PrepareInput{
+			Text:           "declared mismatch",
+			Images:         []PrepareImageInput{{Path: imagePath, MimeType: "image/jpeg"}},
+			DefaultWorkdir: workdir,
+		})
+		if err == nil {
+			t.Fatalf("expected mime mismatch error")
+		}
+		if !strings.Contains(err.Error(), "mismatches detected") {
+			t.Fatalf("expected mismatch error, got %v", err)
+		}
+	})
+}
+
+func minimalPNGBytes() []byte {
+	return []byte{
+		0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+		0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+		0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+		0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
+		0x89, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x44, 0x41,
+		0x54, 0x78, 0x9c, 0x63, 0xf8, 0xcf, 0xc0, 0x00,
+		0x00, 0x03, 0x01, 0x01, 0x00, 0xc9, 0xfe, 0x92,
+		0xef, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e,
+		0x44, 0xae, 0x42, 0x60, 0x82,
+	}
 }
 
 func TestInputPreparerPrepareUpdatesExistingSessionWorkdir(t *testing.T) {

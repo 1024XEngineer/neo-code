@@ -102,6 +102,14 @@ func (s *memoryStore) ListSummaries(ctx context.Context) ([]agentsession.Summary
 	return summaries, nil
 }
 
+func (s *memoryStore) DeleteSession(ctx context.Context, id string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	delete(s.sessions, id)
+	return nil
+}
+
 // blockingLoadStore 用于并发测试：首次 Load 阻塞，以验证同 session 的锁时序。
 type blockingLoadStore struct {
 	mu             sync.Mutex
@@ -175,6 +183,16 @@ func (s *blockingLoadStore) ListSummaries(ctx context.Context) ([]agentsession.S
 		})
 	}
 	return summaries, nil
+}
+
+func (s *blockingLoadStore) DeleteSession(ctx context.Context, id string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	delete(s.sessions, id)
+	s.mu.Unlock()
+	return nil
 }
 
 type scriptedProvider struct {

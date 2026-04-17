@@ -227,26 +227,17 @@ func (a *App) absorbInlineImageReferences(input string) (string, int, error) {
 	var builder strings.Builder
 	absorbed := 0
 	for i := 0; i < len(input); {
-		if isInlineTokenSpace(input[i]) {
-			builder.WriteByte(input[i])
-			i++
+		imagePath, end, ok := parseInlineImageReferenceAt(input, i)
+		if ok && looksLikeImagePath(imagePath) {
+			if err := a.queueImageAttachmentForPrepare(imagePath); err != nil {
+				return "", absorbed, err
+			}
+			absorbed++
+			i = end
 			continue
 		}
-
-		start := i
-		for i < len(input) && !isInlineTokenSpace(input[i]) {
-			i++
-		}
-		token := input[start:i]
-		imagePath, ok := a.parseInlineImagePathToken(token)
-		if !ok {
-			builder.WriteString(token)
-			continue
-		}
-		if err := a.queueImageAttachmentForPrepare(imagePath); err != nil {
-			return "", absorbed, err
-		}
-		absorbed++
+		builder.WriteByte(input[i])
+		i++
 	}
 
 	return strings.TrimSpace(builder.String()), absorbed, nil
@@ -264,13 +255,10 @@ func isInlineTokenSpace(ch byte) bool {
 
 // parseInlineImagePathToken 识别 @image:<path> 形式的图片路径令牌，并映射为待发送路径。
 func (a *App) parseInlineImagePathToken(token string) (string, bool) {
-	trimmed := strings.TrimSpace(token)
-	if !strings.HasPrefix(trimmed, imageReferencePrefix) {
+	path, _, ok := parseInlineImageReferenceAt(strings.TrimSpace(token), 0)
+	if !ok {
 		return "", false
 	}
-
-	path := strings.TrimPrefix(trimmed, imageReferencePrefix)
-	path = strings.Trim(path, `"'`)
 	path = strings.TrimSpace(path)
 	if path == "" || !looksLikeImagePath(path) {
 		return "", false
@@ -285,6 +273,90 @@ func (a *App) parseInlineImagePathToken(token string) (string, bool) {
 		resolved = filepath.Join(base, resolved)
 	}
 	return resolved, true
+}
+
+// parseInlineImageReferenceAt 从输入指定位置解析 @image:<path>，支持引号与空格路径。
+func parseInlineImageReferenceAt(input string, start int) (path string, end int, ok bool) {
+	if start < 0 || start >= len(input) {
+		return "", 0, false
+	}
+	if start > 0 && !isInlineTokenSpace(input[start-1]) {
+		return "", 0, false
+	}
+	if !strings.HasPrefix(input[start:], imageReferencePrefix) {
+		return "", 0, false
+	}
+
+	cursor := start + len(imageReferencePrefix)
+	if cursor >= len(input) {
+		return "", 0, false
+	}
+
+	quotedPath, quotedEnd, quoted := readQuotedInlinePath(input, cursor)
+	if quoted {
+		if strings.TrimSpace(quotedPath) == "" {
+			return "", 0, false
+		}
+		return strings.TrimSpace(quotedPath), quotedEnd, true
+	}
+
+	unquotedPath, unquotedEnd := readUnquotedInlinePath(input, cursor)
+	unquotedPath = strings.TrimSpace(unquotedPath)
+	if unquotedPath == "" {
+		return "", 0, false
+	}
+	return unquotedPath, unquotedEnd, true
+}
+
+// readQuotedInlinePath 读取带引号路径，支持 \" 和 \' 转义。
+func readQuotedInlinePath(input string, start int) (string, int, bool) {
+	if start >= len(input) {
+		return "", 0, false
+	}
+	quote := input[start]
+	if quote != '"' && quote != '\'' {
+		return "", 0, false
+	}
+	var builder strings.Builder
+	for i := start + 1; i < len(input); i++ {
+		ch := input[i]
+		if ch == '\\' && i+1 < len(input) {
+			next := input[i+1]
+			if next == quote || next == '\\' {
+				builder.WriteByte(next)
+				i++
+				continue
+			}
+		}
+		if ch == quote {
+			return builder.String(), i + 1, true
+		}
+		builder.WriteByte(ch)
+	}
+	return "", 0, false
+}
+
+// readUnquotedInlinePath 读取非引号路径，遇到空白或换行结束，支持反斜杠转义空白字符。
+func readUnquotedInlinePath(input string, start int) (string, int) {
+	var builder strings.Builder
+	end := start
+	for end < len(input) {
+		ch := input[end]
+		if isInlineTokenSpace(ch) {
+			break
+		}
+		if ch == '\\' && end+1 < len(input) {
+			next := input[end+1]
+			if isInlineTokenSpace(next) {
+				builder.WriteByte(next)
+				end += 2
+				continue
+			}
+		}
+		builder.WriteByte(ch)
+		end++
+	}
+	return builder.String(), end
 }
 
 // queueImageAttachmentForPrepare 将图片路径排队为待发送附件，不在 TUI 层做文件系统和 MIME 硬校验。

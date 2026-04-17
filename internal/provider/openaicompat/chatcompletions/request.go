@@ -77,8 +77,8 @@ func BuildRequest(ctx context.Context, cfg provider.RuntimeConfig, req providert
 	return payload, nil
 }
 
-// normalizeToolSchemaForOpenAI 归一化工具参数 schema，避免 OpenAI chat-completions 顶层关键字约束报错。
-// 仅收敛顶层结构：保证 type=object，并移除顶层 oneOf/anyOf/allOf/enum/not；嵌套语义保持原样。
+// normalizeToolSchemaForOpenAI 归一化工具参数 schema，避免修改调用方原始结构并尽量保持语义。
+// 仅在缺失 schema 或明显非法（非 object 顶层）时做最小兼容降级，不再删除顶层组合约束关键字。
 func normalizeToolSchemaForOpenAI(schema map[string]any) map[string]any {
 	normalized := cloneSchemaTopLevel(schema)
 	if len(normalized) == 0 {
@@ -91,17 +91,15 @@ func normalizeToolSchemaForOpenAI(schema map[string]any) map[string]any {
 	typeName, _ := normalized["type"].(string)
 	if strings.TrimSpace(strings.ToLower(typeName)) != "object" {
 		normalized["type"] = "object"
+		normalized["x-neocode-schema-downgraded"] = true
 	}
 
 	if _, ok := normalized["properties"].(map[string]any); !ok {
 		normalized["properties"] = map[string]any{}
+		if strings.TrimSpace(strings.ToLower(typeName)) != "object" {
+			normalized["x-neocode-schema-downgraded"] = true
+		}
 	}
-
-	delete(normalized, "oneOf")
-	delete(normalized, "anyOf")
-	delete(normalized, "allOf")
-	delete(normalized, "enum")
-	delete(normalized, "not")
 	return normalized
 }
 

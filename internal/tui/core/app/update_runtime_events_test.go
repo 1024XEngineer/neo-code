@@ -131,3 +131,33 @@ func TestRuntimeEventHandlerRegistryContainsRenamedEvents(t *testing.T) {
 		t.Fatalf("expected compact_applied handler to be registered")
 	}
 }
+
+func TestShouldHandleRuntimeEventFiltersBySessionAndRun(t *testing.T) {
+	t.Parallel()
+
+	app, _ := newTestApp(t)
+	app.state.ActiveSessionID = "session-active"
+	app.state.ActiveRunID = "run-active"
+
+	if app.shouldHandleRuntimeEvent(agentruntime.RuntimeEvent{
+		Type:      agentruntime.EventAgentChunk,
+		SessionID: "session-other",
+		RunID:     "run-active",
+	}) {
+		t.Fatalf("expected mismatched session event to be ignored")
+	}
+	if app.shouldHandleRuntimeEvent(agentruntime.RuntimeEvent{
+		Type:      agentruntime.EventAgentChunk,
+		SessionID: "session-active",
+		RunID:     "run-other",
+	}) {
+		t.Fatalf("expected mismatched run event to be ignored")
+	}
+	if !app.shouldHandleRuntimeEvent(agentruntime.RuntimeEvent{
+		Type:      agentruntime.EventAgentChunk,
+		SessionID: "session-active",
+		RunID:     "run-active",
+	}) {
+		t.Fatalf("expected matched event to be handled")
+	}
+}

@@ -83,6 +83,9 @@ func (s *Service) emitPrepareFailure(ctx context.Context, input PrepareInput, er
 
 	var saveErr *agentsession.AssetSaveError
 	if errors.As(err, &saveErr) {
+		if session := strings.TrimSpace(saveErr.SessionID); session != "" {
+			sessionID = session
+		}
 		return s.emit(ctx, EventAssetSaveFailed, runID, sessionID, AssetSaveFailedPayload{
 			Index:   saveErr.Index,
 			Path:    strings.TrimSpace(saveErr.Path),

@@ -40,6 +40,10 @@ func (s *lockProbeStore) ListSummaries(ctx context.Context) ([]agentsession.Summ
 	return nil, errors.New("not implemented")
 }
 
+func (s *lockProbeStore) DeleteSession(ctx context.Context, id string) error {
+	return errors.New("not implemented")
+}
+
 func (s *stubMemoExtractor) Schedule(_ string, messages []providertypes.Message) {
 	s.mu.Lock()
 	s.calls++
