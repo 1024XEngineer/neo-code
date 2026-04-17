@@ -5,7 +5,6 @@ import (
 	"errors"
 	"strings"
 	"testing"
-	"time"
 
 	"neo-code/internal/runtime/controlplane"
 	"neo-code/internal/subagent"
@@ -182,6 +181,50 @@ func TestServiceRunSubAgentTaskFailureFlows(t *testing.T) {
 		})
 	})
 
+	t.Run("context deadline should emit failed timeout", func(t *testing.T) {
+		t.Parallel()
+
+		service := NewWithFactory(nil, nil, nil, nil, nil)
+		service.SetSubAgentFactory(stubSubAgentFactory{
+			create: func(role subagent.Role) (subagent.WorkerRuntime, error) {
+				return &stubSubAgentWorker{
+					current:   subagent.StateRunning,
+					stepErr:   context.DeadlineExceeded,
+					resultErr: errors.New("no result"),
+					result: subagent.Result{
+						Role:   role,
+						TaskID: "task-timeout",
+					},
+				}, nil
+			},
+		})
+
+		result, err := service.RunSubAgentTask(context.Background(), SubAgentTaskInput{
+			RunID: "sub-run-timeout-emit",
+			Role:  subagent.RoleReviewer,
+			Task: subagent.Task{
+				ID:   "task-timeout",
+				Goal: "review",
+			},
+		})
+		if err == nil || !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("error = %v, want context deadline exceeded", err)
+		}
+		if result.State != subagent.StateFailed {
+			t.Fatalf("result state = %q, want %q", result.State, subagent.StateFailed)
+		}
+		if result.StopReason != subagent.StopReasonTimeout {
+			t.Fatalf("stop reason = %q, want %q", result.StopReason, subagent.StopReasonTimeout)
+		}
+
+		events := collectRuntimeEvents(service.Events())
+		assertEventSequence(t, events, []EventType{
+			EventSubAgentStarted,
+			EventSubAgentProgress,
+			EventSubAgentFailed,
+		})
+	})
+
 	t.Run("worker start failed by disallowed capability", func(t *testing.T) {
 		t.Parallel()
 
@@ -340,9 +383,8 @@ func TestServiceRunSubAgentTaskInputValidation(t *testing.T) {
 		t.Fatalf("expected invalid role error")
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Nanosecond)
-	defer cancel()
-	time.Sleep(2 * time.Millisecond)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
 	if _, err := service.RunSubAgentTask(ctx, SubAgentTaskInput{
 		RunID: "sub-run-timeout",
 		Role:  subagent.RoleCoder,

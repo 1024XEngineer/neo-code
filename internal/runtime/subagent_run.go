@@ -72,7 +72,22 @@ func (s *Service) RunSubAgentTask(ctx context.Context, input SubAgentTaskInput) 
 		emitSubAgentProgress(s, input, stepResult, stepErr)
 
 		if stepErr != nil {
-			if errors.Is(stepErr, context.Canceled) || errors.Is(stepErr, context.DeadlineExceeded) {
+			if errors.Is(stepErr, context.DeadlineExceeded) {
+				_ = worker.Stop(subagent.StopReasonTimeout)
+				result, resultErr := worker.Result()
+				if resultErr != nil {
+					result = subagent.Result{
+						Role:       input.Role,
+						TaskID:     input.Task.ID,
+						State:      subagent.StateFailed,
+						StopReason: subagent.StopReasonTimeout,
+						Error:      errorText(stepErr),
+					}
+				}
+				emitSubAgentTerminal(s, ctx, input, result)
+				return result, stepErr
+			}
+			if errors.Is(stepErr, context.Canceled) {
 				_ = worker.Stop(subagent.StopReasonCanceled)
 				result, resultErr := worker.Result()
 				if resultErr != nil {

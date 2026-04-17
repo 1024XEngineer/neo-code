@@ -37,10 +37,43 @@ type ContextFileSelector func(todo agentsession.TodoItem, snapshot map[string]ag
 // RetryBackoff 计算第 N 次重试的退避时长。
 type RetryBackoff func(attempt int) time.Duration
 
+// SchedulerFailureStrategy 描述任务失败后的调度策略。
+type SchedulerFailureStrategy string
+
+const (
+	// SchedulerFailureContinueOnError 表示失败任务仅影响自身，调度继续推进其他可执行任务。
+	SchedulerFailureContinueOnError SchedulerFailureStrategy = "continue_on_error"
+	// SchedulerFailureFailFast 表示任一任务进入不可重试失败后，立即中断本轮调度。
+	SchedulerFailureFailFast SchedulerFailureStrategy = "fail_fast"
+)
+
+// SchedulerRecoveryStrategy 描述调度器启动时如何处理遗留 in_progress 任务。
+type SchedulerRecoveryStrategy string
+
+const (
+	// SchedulerRecoveryRetry 表示把遗留 in_progress 任务恢复到可重试状态。
+	SchedulerRecoveryRetry SchedulerRecoveryStrategy = "retry"
+	// SchedulerRecoveryFail 表示把遗留 in_progress 任务直接标记失败。
+	SchedulerRecoveryFail SchedulerRecoveryStrategy = "fail"
+)
+
 // SchedulerEventType 描述调度器可观测事件类型。
 type SchedulerEventType string
 
 const (
+	// SchedulerEventSubAgentStarted 对齐 issue #278 的标准开始事件。
+	SchedulerEventSubAgentStarted SchedulerEventType = "subagent_started"
+	// SchedulerEventSubAgentProgress 对齐 issue #278 的标准进度事件。
+	SchedulerEventSubAgentProgress SchedulerEventType = "subagent_progress"
+	// SchedulerEventSubAgentCompleted 对齐 issue #278 的标准完成事件。
+	SchedulerEventSubAgentCompleted SchedulerEventType = "subagent_completed"
+	// SchedulerEventSubAgentFailed 对齐 issue #278 的标准失败事件。
+	SchedulerEventSubAgentFailed SchedulerEventType = "subagent_failed"
+	// SchedulerEventSubAgentCanceled 对齐 issue #278 的标准取消事件。
+	SchedulerEventSubAgentCanceled SchedulerEventType = "subagent_canceled"
+	// SchedulerEventSubAgentRetried 对齐 issue #278 的标准重试事件。
+	SchedulerEventSubAgentRetried SchedulerEventType = "subagent_retried"
+
 	// SchedulerEventQueued 表示任务进入可调度队列。
 	SchedulerEventQueued SchedulerEventType = "queued"
 	// SchedulerEventClaimed 表示任务已经被领取。
@@ -83,6 +116,7 @@ type ScheduleResult struct {
 	Succeeded   []string
 	Failed      []string
 	Retried     map[string]int
+	Recovered   []string
 	BlockedLeft []string
 }
 
@@ -92,8 +126,13 @@ type SchedulerConfig struct {
 	DefaultRole    Role
 	DefaultBudget  Budget
 	MaxRetries     int
+	RetryBaseDelay time.Duration
+	RetryMaxDelay  time.Duration
 	WorkerIDPrefix string
 	PollInterval   time.Duration
+	FailureMode    SchedulerFailureStrategy
+	RecoveryMode   SchedulerRecoveryStrategy
+	RecoveryReason string
 	Clock          func() time.Time
 	RoleSelector   RoleSelector
 	BudgetSelector BudgetSelector
@@ -125,8 +164,26 @@ func (c SchedulerConfig) normalize() SchedulerConfig {
 	if out.MaxRetries < 0 {
 		out.MaxRetries = 0
 	}
+	if out.RetryBaseDelay <= 0 {
+		out.RetryBaseDelay = time.Second
+	}
+	if out.RetryMaxDelay <= 0 {
+		out.RetryMaxDelay = 30 * time.Second
+	}
+	if out.RetryMaxDelay < out.RetryBaseDelay {
+		out.RetryMaxDelay = out.RetryBaseDelay
+	}
 	if out.PollInterval <= 0 {
 		out.PollInterval = 200 * time.Millisecond
+	}
+	if out.FailureMode != SchedulerFailureFailFast {
+		out.FailureMode = SchedulerFailureContinueOnError
+	}
+	if out.RecoveryMode != SchedulerRecoveryFail {
+		out.RecoveryMode = SchedulerRecoveryRetry
+	}
+	if out.RecoveryReason == "" {
+		out.RecoveryReason = "recovered interrupted subagent execution"
 	}
 	if out.WorkerIDPrefix == "" {
 		out.WorkerIDPrefix = "subagent"
@@ -141,7 +198,7 @@ func (c SchedulerConfig) normalize() SchedulerConfig {
 		out.BudgetSelector = defaultBudgetSelector
 	}
 	if out.Backoff == nil {
-		out.Backoff = defaultRetryBackoff
+		out.Backoff = defaultRetryBackoffWithBounds(out.RetryBaseDelay, out.RetryMaxDelay)
 	}
 	if out.Capabilities == nil {
 		out.Capabilities = func(todo agentsession.TodoItem) Capability {
@@ -198,10 +255,48 @@ func defaultBudgetSelector(todo agentsession.TodoItem, defaults Budget) Budget {
 	return defaults
 }
 
-// defaultRetryBackoff 提供线性重试退避。
+// defaultRetryBackoff 提供指数退避默认策略。
 func defaultRetryBackoff(attempt int) time.Duration {
-	if attempt <= 0 {
-		return 0
+	return defaultRetryBackoffWithBounds(time.Second, 30*time.Second)(attempt)
+}
+
+// defaultRetryBackoffWithBounds 提供指数退避并带上限保护。
+func defaultRetryBackoffWithBounds(base, max time.Duration) RetryBackoff {
+	if base <= 0 {
+		base = time.Second
 	}
-	return time.Duration(attempt) * time.Second
+	if max <= 0 {
+		max = 30 * time.Second
+	}
+	if max < base {
+		max = base
+	}
+
+	return func(attempt int) time.Duration {
+		if attempt <= 0 {
+			return 0
+		}
+		delay := base
+		for i := 1; i < attempt; i++ {
+			if delay >= max/2 {
+				delay = max
+				break
+			}
+			delay *= 2
+		}
+		if delay > max {
+			return max
+		}
+		return delay
+	}
+}
+
+// failFastEnabled 判断调度器是否开启 fail-fast 策略。
+func (c SchedulerConfig) failFastEnabled() bool {
+	return c.FailureMode == SchedulerFailureFailFast
+}
+
+// recoveryAsFailure 判断恢复阶段是否直接失败遗留任务。
+func (c SchedulerConfig) recoveryAsFailure() bool {
+	return c.RecoveryMode == SchedulerRecoveryFail
 }
