@@ -300,6 +300,46 @@ func TestRebuildTaskContextSliceEmptyTodoAllowlistMeansNone(t *testing.T) {
 	}
 }
 
+func TestRebuildTaskContextSliceEmptyRelatedFileAllowlistMeansNone(t *testing.T) {
+	t.Parallel()
+
+	task := agentsession.TodoItem{
+		ID:           "task-rebuild-empty-related",
+		Content:      "空文件白名单语义",
+		Status:       agentsession.TodoStatusInProgress,
+		Dependencies: []string{"dep-a"},
+	}
+	todos := map[string]agentsession.TodoItem{
+		"task-rebuild-empty-related": task,
+		"dep-a": {
+			ID:        "dep-a",
+			Content:   "依赖",
+			Status:    agentsession.TodoStatusCompleted,
+			Artifacts: []string{"artifacts/dep-a.txt"},
+		},
+	}
+
+	rebuilt, err := RebuildTaskContextSlice(TaskContextRebuildInput{
+		Descriptor: TaskContextDescriptor{
+			TaskID:            "task-rebuild-empty-related",
+			DependencyTaskIDs: []string{"dep-a"},
+			RelatedFilePaths:  []string{},
+		},
+		Todos:    todos,
+		MaxChars: 4000,
+	})
+	if err != nil {
+		t.Fatalf("RebuildTaskContextSlice() error = %v", err)
+	}
+
+	if len(rebuilt.RelatedFiles) != 0 {
+		t.Fatalf("RelatedFiles len = %d, want 0", len(rebuilt.RelatedFiles))
+	}
+	if len(rebuilt.Descriptor.RelatedFilePaths) != 0 {
+		t.Fatalf("Descriptor.RelatedFilePaths = %v, want empty", rebuilt.Descriptor.RelatedFilePaths)
+	}
+}
+
 func TestRebuildTaskContextSliceNilTodoAllowlistKeepsSnapshotFragments(t *testing.T) {
 	t.Parallel()
 
@@ -475,6 +515,38 @@ func TestBuildTaskContextSliceExtremeBudgetKeepsNonEmptyGoal(t *testing.T) {
 	})
 	if strings.TrimSpace(slice.Goal) == "" {
 		t.Fatalf("Goal should remain non-empty under extreme budget")
+	}
+}
+
+func TestBuildTaskContextSliceTinyBudgetNeverExceedsLimit(t *testing.T) {
+	t.Parallel()
+
+	task := agentsession.TodoItem{
+		ID:           "task-very-long-id",
+		Content:      "这是一个非常长的目标描述，用于触发预算极限裁剪",
+		Status:       agentsession.TodoStatusInProgress,
+		Acceptance:   []string{"验收条件A"},
+		Dependencies: []string{"dep-a"},
+	}
+	todos := map[string]agentsession.TodoItem{
+		"task-very-long-id": task,
+		"dep-a": {
+			ID:        "dep-a",
+			Status:    agentsession.TodoStatusCompleted,
+			Artifacts: []string{"artifacts/dep-a.txt"},
+		},
+	}
+	slice := BuildTaskContextSlice(TaskContextSliceInput{
+		Task:     task,
+		Todos:    todos,
+		MaxChars: 6,
+	})
+
+	if !slice.Truncated {
+		t.Fatalf("Truncated = false, want true")
+	}
+	if got := len([]rune(slice.Render())); got > 6 {
+		t.Fatalf("rendered chars exceed tiny budget: got %d, budget 6", got)
 	}
 }
 

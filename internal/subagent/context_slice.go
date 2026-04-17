@@ -167,6 +167,7 @@ func RebuildTaskContextSlice(input TaskContextRebuildInput) (TaskContextSlice, e
 	})
 
 	slice.DependencyArtifacts = filterByAllowlist(slice.DependencyArtifacts, descriptor.ArtifactRefs)
+	slice.RelatedFiles = filterRelatedFilesByPath(slice.RelatedFiles, descriptor.RelatedFilePaths)
 	slice.TodoFragment = filterTodoFragmentsByID(slice.TodoFragment, descriptor.TodoFragmentIDs)
 	slice.Truncated = enforceTaskContextBudget(&slice, slice.BudgetChars) || slice.Truncated
 	slice.Descriptor = buildTaskContextDescriptor(slice, descriptor.DependencyTaskIDs)
@@ -482,10 +483,47 @@ func enforceTaskContextBudget(slice *TaskContextSlice, maxChars int) bool {
 		}
 		if currentChars > maxChars && len(slice.Acceptance) == 0 && len(slice.TodoFragment) == 0 &&
 			len([]rune(strings.TrimSpace(slice.Goal))) <= 1 {
+			if forceFitTaskContextBudget(slice, maxChars, &currentChars) {
+				truncated = true
+			}
 			return true
 		}
 	}
 	return true
+}
+
+// forceFitTaskContextBudget 在极端预算下执行硬性收缩，确保渲染长度不超过预算。
+func forceFitTaskContextBudget(slice *TaskContextSlice, maxChars int, currentChars *int) bool {
+	if slice == nil || currentChars == nil || maxChars < 0 || *currentChars <= maxChars {
+		return false
+	}
+	changed := false
+	refreshChars := func() {
+		*currentChars = contextSliceRuneCount(*slice)
+	}
+	for *currentChars > maxChars {
+		switch {
+		case strings.TrimSpace(slice.TaskID) != "":
+			slice.TaskID = trimOneRune(slice.TaskID)
+		case len(slice.Acceptance) > 0:
+			slice.Acceptance = nil
+		case len(slice.TodoFragment) > 0:
+			slice.TodoFragment = nil
+		case len(slice.DependencyArtifacts) > 0:
+			slice.DependencyArtifacts = nil
+		case len(slice.RelatedFiles) > 0:
+			slice.RelatedFiles = nil
+		case len(slice.ActivatedSkills) > 0:
+			slice.ActivatedSkills = nil
+		case strings.TrimSpace(slice.Goal) != "":
+			slice.Goal = trimOneRune(slice.Goal)
+		default:
+			return changed
+		}
+		changed = true
+		refreshChars()
+	}
+	return changed
 }
 
 // buildTaskContextDescriptor 生成可用于 compact 后重建的 descriptor。
