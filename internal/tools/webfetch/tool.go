@@ -60,12 +60,8 @@ type validationContextKey string
 
 const bypassTargetValidationKey validationContextKey = "webfetch_bypass_target_validation"
 
-// WithUnsafeBypassTargetValidation 返回跳过目标地址安全校验的上下文，仅用于受控测试场景。
-func WithUnsafeBypassTargetValidation(ctx context.Context) context.Context {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	return context.WithValue(ctx, bypassTargetValidationKey, true)
+var lookupIPAddr = func(ctx context.Context, host string) ([]net.IPAddr, error) {
+	return net.DefaultResolver.LookupIPAddr(ctx, host)
 }
 
 // New creates a webfetch tool with bounded responses and content-type filtering.
@@ -83,11 +79,11 @@ func newHTTPClient(timeout time.Duration) *http.Client {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	dialer := &net.Dialer{Timeout: timeout}
 	transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
-		dialAddress, err := resolveDialAddress(ctx, address)
+		dialAddresses, err := resolveDialAddresses(ctx, address)
 		if err != nil {
 			return nil, err
 		}
-		return dialer.DialContext(ctx, network, dialAddress)
+		return dialFirstReachable(ctx, dialer.DialContext, network, dialAddresses)
 	}
 
 	return &http.Client{
@@ -203,7 +199,7 @@ func validateFetchTarget(ctx context.Context, target string) error {
 
 	lookupCtx, cancel := context.WithTimeout(ctx, time.Second)
 	defer cancel()
-	records, err := net.DefaultResolver.LookupIPAddr(lookupCtx, hostname)
+	records, err := lookupIPAddr(lookupCtx, hostname)
 	if err != nil {
 		return fmt.Errorf("%s: resolve host: %w", toolName, err)
 	}
@@ -218,46 +214,71 @@ func validateFetchTarget(ctx context.Context, target string) error {
 	return nil
 }
 
-// resolveDialAddress 在真实拨号前校验并收敛最终目标地址，避免 DNS 重绑定导致的 TOCTOU 绕过。
-func resolveDialAddress(ctx context.Context, address string) (string, error) {
+// resolveDialAddresses 在真实拨号前校验并收敛可用目标地址集合，避免 DNS 重绑定导致的 TOCTOU 绕过。
+func resolveDialAddresses(ctx context.Context, address string) ([]string, error) {
 	host, port, err := net.SplitHostPort(address)
 	if err != nil {
-		return "", fmt.Errorf("%s: invalid dial address", toolName)
+		return nil, fmt.Errorf("%s: invalid dial address", toolName)
 	}
 	host = strings.TrimSpace(host)
 	if host == "" {
-		return "", fmt.Errorf("%s: url host is empty", toolName)
+		return nil, fmt.Errorf("%s: url host is empty", toolName)
 	}
 	if bypassTargetValidation(ctx) {
-		return address, nil
+		return []string{address}, nil
 	}
 	if isLocalHostName(host) {
-		return "", fmt.Errorf("%s: target host is blocked", toolName)
+		return nil, fmt.Errorf("%s: target host is blocked", toolName)
 	}
 
 	if ip := net.ParseIP(host); ip != nil {
 		if isBlockedIP(ip) {
-			return "", fmt.Errorf("%s: target host is blocked", toolName)
+			return nil, fmt.Errorf("%s: target host is blocked", toolName)
 		}
-		return net.JoinHostPort(ip.String(), port), nil
+		return []string{net.JoinHostPort(ip.String(), port)}, nil
 	}
 
 	lookupCtx, cancel := context.WithTimeout(ctx, time.Second)
 	defer cancel()
-	records, err := net.DefaultResolver.LookupIPAddr(lookupCtx, host)
+	records, err := lookupIPAddr(lookupCtx, host)
 	if err != nil {
-		return "", fmt.Errorf("%s: resolve host: %w", toolName, err)
-	}
-	for _, record := range records {
-		if isBlockedIP(record.IP) {
-			continue
-		}
-		return net.JoinHostPort(record.IP.String(), port), nil
+		return nil, fmt.Errorf("%s: resolve host: %w", toolName, err)
 	}
 	if len(records) == 0 {
-		return "", fmt.Errorf("%s: resolve host: empty result", toolName)
+		return nil, fmt.Errorf("%s: resolve host: empty result", toolName)
 	}
-	return "", fmt.Errorf("%s: target host is blocked", toolName)
+
+	allowed := make([]string, 0, len(records))
+	for _, record := range records {
+		if !isBlockedIP(record.IP) {
+			allowed = append(allowed, net.JoinHostPort(record.IP.String(), port))
+		}
+	}
+	if len(allowed) == 0 {
+		return nil, fmt.Errorf("%s: target host is blocked", toolName)
+	}
+	return allowed, nil
+}
+
+type dialContextFunc func(ctx context.Context, network, address string) (net.Conn, error)
+
+// dialFirstReachable 依次尝试多个候选地址，命中首个可连通地址后立即返回，全部失败时返回最后一次错误。
+func dialFirstReachable(ctx context.Context, dialFn dialContextFunc, network string, addresses []string) (net.Conn, error) {
+	if len(addresses) == 0 {
+		return nil, fmt.Errorf("%s: invalid dial address", toolName)
+	}
+	var lastErr error
+	for _, address := range addresses {
+		conn, err := dialFn(ctx, network, address)
+		if err == nil {
+			return conn, nil
+		}
+		lastErr = err
+	}
+	if lastErr != nil {
+		return nil, lastErr
+	}
+	return nil, fmt.Errorf("%s: invalid dial address", toolName)
 }
 
 // bypassTargetValidation 判断当前上下文是否显式跳过目标地址安全校验，仅供包内测试使用。

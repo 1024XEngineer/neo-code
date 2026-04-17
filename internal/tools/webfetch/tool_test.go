@@ -3,6 +3,8 @@ package webfetch
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -15,7 +17,7 @@ import (
 )
 
 func executionContextAllowLoopback() context.Context {
-	return WithUnsafeBypassTargetValidation(context.Background())
+	return context.WithValue(context.Background(), bypassTargetValidationKey, true)
 }
 
 func TestToolExecute(t *testing.T) {
@@ -449,4 +451,98 @@ func TestFetchBlocksLoopbackAtDial(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "target host is blocked") {
 		t.Fatalf("expected loopback dial to be blocked, got %v", err)
 	}
+}
+
+func TestResolveDialAddressesPrefersAllowedSet(t *testing.T) {
+	originalLookup := lookupIPAddr
+	t.Cleanup(func() {
+		lookupIPAddr = originalLookup
+	})
+	lookupIPAddr = func(ctx context.Context, host string) ([]net.IPAddr, error) {
+		return []net.IPAddr{
+			{IP: net.ParseIP("203.0.113.1")},
+			{IP: net.ParseIP("127.0.0.1")},
+			{IP: net.ParseIP("198.51.100.2")},
+		}, nil
+	}
+
+	addresses, err := resolveDialAddresses(context.Background(), "example.com:443")
+	if err != nil {
+		t.Fatalf("resolveDialAddresses() error = %v", err)
+	}
+	if len(addresses) != 2 {
+		t.Fatalf("expected 2 allowed addresses, got %v", addresses)
+	}
+	if addresses[0] != "203.0.113.1:443" || addresses[1] != "198.51.100.2:443" {
+		t.Fatalf("unexpected addresses order: %v", addresses)
+	}
+}
+
+func TestResolveDialAddressesBlockedOrEmpty(t *testing.T) {
+	t.Run("empty dns result", func(t *testing.T) {
+		originalLookup := lookupIPAddr
+		t.Cleanup(func() {
+			lookupIPAddr = originalLookup
+		})
+		lookupIPAddr = func(ctx context.Context, host string) ([]net.IPAddr, error) {
+			return nil, nil
+		}
+
+		_, err := resolveDialAddresses(context.Background(), "example.com:80")
+		if err == nil || !strings.Contains(err.Error(), "empty result") {
+			t.Fatalf("expected empty result error, got %v", err)
+		}
+	})
+
+	t.Run("all blocked", func(t *testing.T) {
+		originalLookup := lookupIPAddr
+		t.Cleanup(func() {
+			lookupIPAddr = originalLookup
+		})
+		lookupIPAddr = func(ctx context.Context, host string) ([]net.IPAddr, error) {
+			return []net.IPAddr{{IP: net.ParseIP("127.0.0.1")}}, nil
+		}
+
+		_, err := resolveDialAddresses(context.Background(), "example.com:80")
+		if err == nil || !strings.Contains(err.Error(), "target host is blocked") {
+			t.Fatalf("expected blocked target error, got %v", err)
+		}
+	})
+}
+
+func TestDialFirstReachable(t *testing.T) {
+	t.Parallel()
+
+	t.Run("fallback to later address", func(t *testing.T) {
+		var called []string
+		connA, connB := net.Pipe()
+		t.Cleanup(func() {
+			_ = connA.Close()
+			_ = connB.Close()
+		})
+
+		conn, err := dialFirstReachable(context.Background(), func(ctx context.Context, network, address string) (net.Conn, error) {
+			called = append(called, address)
+			if address != "198.51.100.2:443" {
+				return nil, errors.New("dial failed")
+			}
+			return connA, nil
+		}, "tcp", []string{"203.0.113.1:443", "192.0.2.1:443", "198.51.100.2:443"})
+		if err != nil {
+			t.Fatalf("dialFirstReachable() error = %v", err)
+		}
+		_ = conn.Close()
+		if strings.Join(called, ",") != "203.0.113.1:443,192.0.2.1:443,198.51.100.2:443" {
+			t.Fatalf("unexpected dial sequence: %v", called)
+		}
+	})
+
+	t.Run("return last error", func(t *testing.T) {
+		_, err := dialFirstReachable(context.Background(), func(ctx context.Context, network, address string) (net.Conn, error) {
+			return nil, errors.New("last dial error")
+		}, "tcp", []string{"198.51.100.2:443"})
+		if err == nil || !strings.Contains(err.Error(), "last dial error") {
+			t.Fatalf("expected last dial error, got %v", err)
+		}
+	})
 }

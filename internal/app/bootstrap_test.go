@@ -8,10 +8,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -27,7 +26,6 @@ import (
 	"neo-code/internal/skills"
 	"neo-code/internal/tools"
 	"neo-code/internal/tools/mcp"
-	"neo-code/internal/tools/webfetch"
 	"neo-code/internal/tui"
 )
 
@@ -141,12 +139,6 @@ func TestBuildRuntimeRejectsUnsupportedSelectedProviderDriverOnStartup(t *testin
 func TestBuildToolRegistryUsesWebFetchConfig(t *testing.T) {
 	t.Parallel()
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/plain")
-		_, _ = w.Write([]byte("1234567890"))
-	}))
-	defer server.Close()
-
 	cfg := config.StaticDefaults().Clone()
 	cfg.Workdir = t.TempDir()
 	cfg.Tools.WebFetch.MaxResponseBytes = 4
@@ -163,23 +155,17 @@ func TestBuildToolRegistryUsesWebFetchConfig(t *testing.T) {
 		t.Fatalf("registry.Get(webfetch) error = %v", err)
 	}
 
-	args, err := json.Marshal(map[string]string{"url": server.URL})
-	if err != nil {
-		t.Fatalf("marshal args: %v", err)
+	concrete := reflect.ValueOf(tool)
+	if concrete.Kind() != reflect.Ptr {
+		t.Fatalf("expected pointer tool, got %T", tool)
 	}
-
-	result, execErr := tool.Execute(webfetch.WithUnsafeBypassTargetValidation(context.Background()), tools.ToolCallInput{
-		Name:      "webfetch",
-		Arguments: args,
-	})
-	if execErr != nil {
-		t.Fatalf("webfetch execute error = %v", execErr)
+	cfgField := concrete.Elem().FieldByName("cfg")
+	if !cfgField.IsValid() {
+		t.Fatalf("expected webfetch tool cfg field")
 	}
-	if truncated, ok := result.Metadata["truncated"].(bool); !ok || !truncated {
-		t.Fatalf("expected truncated metadata, got %+v", result.Metadata)
-	}
-	if result.Content == "" {
-		t.Fatalf("expected formatted webfetch content")
+	maxBytesField := cfgField.FieldByName("MaxResponseBytes")
+	if maxBytesField.Int() != 4 {
+		t.Fatalf("expected MaxResponseBytes=4, got %d", maxBytesField.Int())
 	}
 }
 
