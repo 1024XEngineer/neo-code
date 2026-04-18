@@ -29,6 +29,11 @@ type schedulerStoreWithClaimError struct {
 func newSchedulerStore(t *testing.T, items []agentsession.TodoItem) *schedulerStore {
 	t.Helper()
 	session := agentsession.New("scheduler")
+	for idx := range items {
+		if strings.TrimSpace(items[idx].Executor) == "" {
+			items[idx].Executor = agentsession.TodoExecutorSubAgent
+		}
+	}
 	if err := session.ReplaceTodos(items); err != nil {
 		t.Fatalf("ReplaceTodos() error = %v", err)
 	}

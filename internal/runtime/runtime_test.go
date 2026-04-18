@@ -4998,7 +4998,7 @@ func TestParallelToolCallsPhaseMigration(t *testing.T) {
 
 	events := collectRuntimeEvents(service.Events())
 
-	// We expect EventPhaseChanged to emit plan -> execute -> verify
+	// We expect EventPhaseChanged to emit plan -> execute -> dispatch -> verify.
 	var phaseChanges []PhaseChangedPayload
 	for _, e := range events {
 		if e.Type == EventPhaseChanged {
@@ -5010,7 +5010,8 @@ func TestParallelToolCallsPhaseMigration(t *testing.T) {
 	expectedTransitions := []PhaseChangedPayload{
 		{From: "", To: "plan"},
 		{From: "plan", To: "execute"},
-		{From: "execute", To: "verify"},
+		{From: "execute", To: "dispatch"},
+		{From: "dispatch", To: "verify"},
 		{From: "verify", To: "plan"},
 	}
 
@@ -5269,7 +5270,7 @@ func TestAgentDoneEventCarriesRunScopedEnvelope(t *testing.T) {
 	if doneEvent.Turn == turnUnspecified {
 		t.Fatalf("expected run-scoped turn, got %d", doneEvent.Turn)
 	}
-	if doneEvent.Phase != string(controlplane.PhasePlan) {
-		t.Fatalf("expected phase=%q, got %q", controlplane.PhasePlan, doneEvent.Phase)
+	if doneEvent.Phase != string(controlplane.PhaseDispatch) {
+		t.Fatalf("expected phase=%q, got %q", controlplane.PhaseDispatch, doneEvent.Phase)
 	}
 }

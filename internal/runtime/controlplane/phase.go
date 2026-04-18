@@ -1,6 +1,6 @@
 package controlplane
 
-// Phase 表示单轮 ReAct 内的显式阶段（plan -> execute -> verify）。
+// Phase 表示单轮 ReAct 内的显式阶段（plan -> execute -> dispatch -> verify）。
 type Phase string
 
 const (
@@ -8,6 +8,8 @@ const (
 	PhasePlan Phase = "plan"
 	// PhaseExecute 执行阶段：执行本批次全部工具调用。
 	PhaseExecute Phase = "execute"
+	// PhaseDispatch 调度阶段：执行 Todo 驱动的子代理任务派发。
+	PhaseDispatch Phase = "dispatch"
 	// PhaseVerify 验证阶段：工具结果已回灌，等待下一轮 provider 校验或收尾。
 	PhaseVerify Phase = "verify"
 )

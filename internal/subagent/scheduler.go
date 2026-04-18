@@ -147,6 +147,9 @@ func (s *Scheduler) recoverInterruptedTodos() ([]string, []string, error) {
 	recovered := make([]string, 0, len(items))
 	failed := make([]string, 0, len(items))
 	for _, item := range items {
+		if !todoDispatchableBySubAgent(item) {
+			continue
+		}
 		if item.Status != agentsession.TodoStatusInProgress {
 			continue
 		}
@@ -243,6 +246,9 @@ func (s *Scheduler) collectReadyTasks(
 	for _, id := range graph.order {
 		item, ok := snapshot[id]
 		if !ok || item.Status.IsTerminal() {
+			continue
+		}
+		if !todoDispatchableBySubAgent(item) {
 			continue
 		}
 		if _, running := state.running[id]; running {
@@ -793,6 +799,11 @@ func dependenciesCompleted(item agentsession.TodoItem, byID map[string]agentsess
 	return true
 }
 
+// todoDispatchableBySubAgent 判断任务是否应由 SubAgent 调度器执行。
+func todoDispatchableBySubAgent(item agentsession.TodoItem) bool {
+	return strings.EqualFold(strings.TrimSpace(item.Executor), agentsession.TodoExecutorSubAgent)
+}
+
 // hasSchedulablePotential 判断当前非终态任务是否仍可能通过调度推进到可执行状态。
 func hasSchedulablePotential(order []string, byID map[string]agentsession.TodoItem) bool {
 	memo := make(map[string]bool, len(byID))
@@ -806,6 +817,9 @@ func hasSchedulablePotential(order []string, byID map[string]agentsession.TodoIt
 		}
 		if item.Status == agentsession.TodoStatusCompleted {
 			return true
+		}
+		if !todoDispatchableBySubAgent(item) {
+			return false
 		}
 		if item.Status == agentsession.TodoStatusFailed || item.Status == agentsession.TodoStatusCanceled {
 			return false
@@ -832,6 +846,9 @@ func hasSchedulablePotential(order []string, byID map[string]agentsession.TodoIt
 	for _, id := range order {
 		item, ok := byID[id]
 		if !ok || item.Status.IsTerminal() {
+			continue
+		}
+		if !todoDispatchableBySubAgent(item) {
 			continue
 		}
 		if satisfiable(id) {
