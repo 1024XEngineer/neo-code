@@ -69,7 +69,7 @@ func (e runtimeSubAgentEngine) RunStep(ctx context.Context, input subagent.StepI
 	runtimeConfig, model, toolTimeout, err := e.resolveSettings()
 	if err != nil {
 		if errors.Is(err, errSubAgentRuntimeUnavailable) {
-			return fallbackSubAgentStep(input), nil
+			return subagent.StepOutput{}, err
 		}
 		return subagent.StepOutput{}, err
 	}
@@ -221,6 +221,7 @@ func (e runtimeSubAgentEngine) generateStepMessage(
 }
 
 // executeSubAgentToolCallBatch 顺序执行本轮工具调用并转换为后续模型输入消息。
+// 返回值中的计数仅统计真正执行成功且被允许的工具调用次数。
 func executeSubAgentToolCallBatch(
 	ctx context.Context,
 	service *Service,
@@ -243,8 +244,7 @@ func executeSubAgentToolCallBatch(
 		if !toolAllowed(allowedTools, normalizedCall.Name) {
 			denied := subagentCapabilityDeniedResult(stepInput, normalizedCall)
 			results = append(results, denied)
-			emitCapabilityDeniedEvent(service, stepInput, normalizedCall.Name)
-			executed++
+			emitCapabilityDeniedEvent(ctx, service, stepInput, normalizedCall.Name)
 			continue
 		}
 
@@ -262,8 +262,13 @@ func executeSubAgentToolCallBatch(
 		if execErr != nil && strings.TrimSpace(message.Parts[0].Text) == "" {
 			message.Parts[0] = providertypes.NewTextPart(strings.TrimSpace(execErr.Error()))
 		}
+		if execErr != nil && !isRecoverableSubAgentToolError(execErr) {
+			return results, executed, execErr
+		}
 		results = append(results, message)
-		executed++
+		if execErr == nil {
+			executed++
+		}
 	}
 	return results, executed, nil
 }
@@ -469,13 +474,22 @@ func normalizeToolAllowlist(items []string) map[string]struct{} {
 	return set
 }
 
-// toolAllowed 判断工具名是否在 allowlist 内；allowlist 为空时默认放行。
+// toolAllowed 判断工具名是否在 allowlist 内；allowlist 为空时默认拒绝。
 func toolAllowed(allowlist map[string]struct{}, toolName string) bool {
 	if len(allowlist) == 0 {
-		return true
+		return false
 	}
 	_, ok := allowlist[strings.ToLower(strings.TrimSpace(toolName))]
 	return ok
+}
+
+// isRecoverableSubAgentToolError 判断工具调用错误是否可回灌给模型继续推理。
+func isRecoverableSubAgentToolError(err error) bool {
+	if err == nil {
+		return true
+	}
+	var permissionErr *tools.PermissionDecisionError
+	return errors.As(err, &permissionErr)
 }
 
 // subagentCapabilityDeniedResult 构造 capability 越权时回灌给模型的标准 tool 消息。
@@ -491,11 +505,11 @@ func subagentCapabilityDeniedResult(input subagent.StepInput, call providertypes
 }
 
 // emitCapabilityDeniedEvent 发射 capability 越权拒绝事件。
-func emitCapabilityDeniedEvent(service *Service, input subagent.StepInput, toolName string) {
+func emitCapabilityDeniedEvent(ctx context.Context, service *Service, input subagent.StepInput, toolName string) {
 	if service == nil {
 		return
 	}
-	_ = service.emit(context.Background(), EventSubAgentToolCallDenied, input.RunID, input.SessionID, SubAgentToolCallEventPayload{
+	_ = service.emit(ctx, EventSubAgentToolCallDenied, input.RunID, input.SessionID, SubAgentToolCallEventPayload{
 		Role:      input.Role,
 		TaskID:    input.Task.ID,
 		ToolName:  strings.TrimSpace(toolName),
@@ -525,26 +539,6 @@ func subAgentToolResultToMessage(call providertypes.ToolCall, result subagent.To
 		Parts:        []providertypes.ContentPart{providertypes.NewTextPart(strings.TrimSpace(result.Content))},
 		IsError:      result.IsError,
 		ToolMetadata: tools.SanitizeToolMetadata(name, metadata),
-	}
-}
-
-// fallbackSubAgentStep 在 runtime 依赖不可用时返回可验证的保底输出，避免子代理直接崩溃。
-func fallbackSubAgentStep(input subagent.StepInput) subagent.StepOutput {
-	summary := strings.TrimSpace(input.Task.ExpectedOutput)
-	if summary == "" {
-		summary = strings.TrimSpace(input.Task.Goal)
-	}
-	return subagent.StepOutput{
-		Delta: "subagent fallback engine completed",
-		Done:  true,
-		Output: subagent.Output{
-			Summary:     summary,
-			Findings:    []string{"fallback-engine: runtime dependencies unavailable"},
-			Patches:     []string{"fallback-engine: no code changes"},
-			Risks:       []string{"fallback-engine: no provider/tool verification"},
-			NextActions: []string{"initialize runtime config/provider to enable tool-call loop"},
-			Artifacts:   []string{"subagent-fallback"},
-		},
 	}
 }
 

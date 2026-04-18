@@ -35,3 +35,26 @@ func TestTaskValidateAllowsEmptyOrMatchedContextSliceTaskID(t *testing.T) {
 		})
 	}
 }
+
+func TestTaskValidateRequiresIDAndGoal(t *testing.T) {
+	t.Parallel()
+
+	if err := (Task{Goal: "goal"}).Validate(); err == nil {
+		t.Fatalf("expected task id required error")
+	}
+	if err := (Task{ID: "task-id"}).Validate(); err == nil {
+		t.Fatalf("expected task goal required error")
+	}
+}
+
+func TestBudgetNormalizeFallbacks(t *testing.T) {
+	t.Parallel()
+
+	normalized := (Budget{}).normalize(Budget{})
+	if normalized.MaxSteps != 6 {
+		t.Fatalf("MaxSteps = %d, want 6", normalized.MaxSteps)
+	}
+	if normalized.Timeout <= 0 {
+		t.Fatalf("Timeout should be > 0")
+	}
+}

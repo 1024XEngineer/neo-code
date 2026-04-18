@@ -220,9 +220,6 @@ func subAgentResultError(result subagent.Result) error {
 
 // resolveSubAgentExecutionAgentID 生成子代理执行身份，供权限链路透传审计。
 func resolveSubAgentExecutionAgentID(input SubAgentTaskInput) string {
-	if agentID := strings.TrimSpace(input.AgentID); agentID != "" {
-		return agentID
-	}
 	role := strings.TrimSpace(string(input.Role))
 	taskID := strings.TrimSpace(input.Task.ID)
 	if role == "" {

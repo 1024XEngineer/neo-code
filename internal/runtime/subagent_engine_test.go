@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	providertypes "neo-code/internal/provider/types"
 	"neo-code/internal/subagent"
@@ -159,6 +160,59 @@ func TestRuntimeSubAgentEngineRunStepCapabilityDenied(t *testing.T) {
 	assertSubAgentToolEventPayload(t, events, EventSubAgentToolCallDenied, "bash", permissionDecisionDeny, false)
 }
 
+func TestRuntimeSubAgentEngineRequiredModeCapabilityDeniedDoesNotSatisfyRequirement(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	providerImpl := &scriptedProvider{
+		responses: []scriptedResponse{
+			{
+				Message: providertypes.Message{
+					Role: providertypes.RoleAssistant,
+					ToolCalls: []providertypes.ToolCall{
+						{ID: "call-bash", Name: "bash", Arguments: `{"command":"echo hi"}`},
+					},
+				},
+				FinishReason: "tool_calls",
+			},
+			{
+				Message: providertypes.Message{
+					Role: providertypes.RoleAssistant,
+					Parts: []providertypes.ContentPart{
+						providertypes.NewTextPart(subAgentDonePayload),
+					},
+				},
+				FinishReason: "stop",
+			},
+		},
+	}
+	toolManager := &stubToolManager{
+		specs: []providertypes.ToolSpec{{Name: "bash", Schema: map[string]any{"type": "object"}}},
+	}
+	service := NewWithFactory(manager, toolManager, newMemoryStore(), &scriptedProviderFactory{provider: providerImpl}, nil)
+	policy, err := subagent.DefaultRolePolicy(subagent.RoleCoder)
+	if err != nil {
+		t.Fatalf("DefaultRolePolicy() error = %v", err)
+	}
+	policy.ToolUseMode = subagent.ToolUseModeRequired
+	policy.MaxToolCallsPerStep = 2
+	engine := runtimeSubAgentEngine{service: service, role: subagent.RoleCoder, policy: policy}
+
+	stepInput := newRuntimeSubAgentStepInput(t, service, policy, subagent.Task{
+		ID:   "task-required-denied",
+		Goal: "must call allowed tool",
+	})
+	stepInput.Budget = subagent.Budget{MaxSteps: 4}
+	stepInput.Capability = subagent.Capability{AllowedTools: []string{"filesystem_read_file"}}
+	stepInput.RunID = "run-subagent-required-denied"
+	stepInput.SessionID = "session-subagent-required-denied"
+
+	_, err = engine.RunStep(context.Background(), stepInput)
+	if err == nil || !strings.Contains(err.Error(), "requires at least one tool call") {
+		t.Fatalf("expected required-mode error, got %v", err)
+	}
+}
+
 func TestRuntimeSubAgentEngineRunStepRequiredModeWithoutToolFails(t *testing.T) {
 	t.Parallel()
 
@@ -204,7 +258,7 @@ func TestRuntimeSubAgentEngineRunStepRequiredModeWithoutToolFails(t *testing.T) 
 	}
 }
 
-func TestRuntimeSubAgentEngineFallbackWhenRuntimeUnavailable(t *testing.T) {
+func TestRuntimeSubAgentEngineUnavailableDepsShouldFailByDefault(t *testing.T) {
 	t.Parallel()
 
 	policy, err := subagent.DefaultRolePolicy(subagent.RoleReviewer)
@@ -221,14 +275,8 @@ func TestRuntimeSubAgentEngineFallbackWhenRuntimeUnavailable(t *testing.T) {
 		Policy: policy,
 		Task:   subagent.Task{ID: "task-fallback", Goal: "review"},
 	})
-	if err != nil {
-		t.Fatalf("RunStep() error = %v", err)
-	}
-	if !step.Done {
-		t.Fatalf("expected fallback step done")
-	}
-	if step.Output.Summary != "review" {
-		t.Fatalf("summary = %q, want %q", step.Output.Summary, "review")
+	if err == nil || !errors.Is(err, errSubAgentRuntimeUnavailable) {
+		t.Fatalf("expected runtime unavailable error, got output=%+v err=%v", step, err)
 	}
 }
 
@@ -255,6 +303,133 @@ func TestRuntimeSubAgentEngineRunStepProviderBuildFailureReturnsError(t *testing
 	})
 	if err == nil || !strings.Contains(err.Error(), "build subagent provider") {
 		t.Fatalf("expected build provider error, got %v", err)
+	}
+}
+
+func TestRuntimeSubAgentEngineDisabledModeRejectsAnyToolCall(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	providerImpl := &scriptedProvider{
+		responses: []scriptedResponse{
+			{
+				Message: providertypes.Message{
+					Role: providertypes.RoleAssistant,
+					ToolCalls: []providertypes.ToolCall{
+						{ID: "call-1", Name: "filesystem_read_file", Arguments: `{"path":"README.md"}`},
+					},
+				},
+				FinishReason: "tool_calls",
+			},
+		},
+	}
+	service := NewWithFactory(
+		manager,
+		&stubToolManager{specs: []providertypes.ToolSpec{{Name: "filesystem_read_file"}}},
+		newMemoryStore(),
+		&scriptedProviderFactory{provider: providerImpl},
+		nil,
+	)
+	policy, err := subagent.DefaultRolePolicy(subagent.RoleCoder)
+	if err != nil {
+		t.Fatalf("DefaultRolePolicy() error = %v", err)
+	}
+	policy.ToolUseMode = subagent.ToolUseModeDisabled
+	engine := runtimeSubAgentEngine{service: service, role: subagent.RoleCoder, policy: policy}
+	stepInput := newRuntimeSubAgentStepInput(t, service, policy, subagent.Task{ID: "task-disabled", Goal: "no tools"})
+
+	_, err = engine.RunStep(context.Background(), stepInput)
+	if err == nil || !strings.Contains(err.Error(), "tool_use_mode is disabled") {
+		t.Fatalf("expected disabled mode error, got %v", err)
+	}
+}
+
+func TestRuntimeSubAgentEngineMaxToolCallsExceeded(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	providerImpl := &scriptedProvider{
+		responses: []scriptedResponse{
+			{
+				Message: providertypes.Message{
+					Role: providertypes.RoleAssistant,
+					ToolCalls: []providertypes.ToolCall{
+						{ID: "call-1", Name: "filesystem_read_file", Arguments: `{"path":"README.md"}`},
+					},
+				},
+				FinishReason: "tool_calls",
+			},
+			{
+				Message: providertypes.Message{
+					Role: providertypes.RoleAssistant,
+					ToolCalls: []providertypes.ToolCall{
+						{ID: "call-2", Name: "filesystem_read_file", Arguments: `{"path":"README.md"}`},
+					},
+				},
+				FinishReason: "tool_calls",
+			},
+		},
+	}
+	toolManager := &stubToolManager{
+		specs: []providertypes.ToolSpec{{Name: "filesystem_read_file", Schema: map[string]any{"type": "object"}}},
+		executeFn: func(ctx context.Context, input tools.ToolCallInput) (tools.ToolResult, error) {
+			return tools.ToolResult{ToolCallID: input.ID, Name: input.Name, Content: "ok"}, nil
+		},
+	}
+	service := NewWithFactory(manager, toolManager, newMemoryStore(), &scriptedProviderFactory{provider: providerImpl}, nil)
+	policy, err := subagent.DefaultRolePolicy(subagent.RoleCoder)
+	if err != nil {
+		t.Fatalf("DefaultRolePolicy() error = %v", err)
+	}
+	policy.MaxToolCallsPerStep = 1
+	engine := runtimeSubAgentEngine{service: service, role: subagent.RoleCoder, policy: policy}
+	stepInput := newRuntimeSubAgentStepInput(t, service, policy, subagent.Task{ID: "task-max-calls", Goal: "call twice"})
+	stepInput.Budget = subagent.Budget{MaxSteps: 4}
+	stepInput.Capability = subagent.Capability{AllowedTools: []string{"filesystem_read_file"}}
+
+	_, err = engine.RunStep(context.Background(), stepInput)
+	if err == nil || !strings.Contains(err.Error(), "max_tool_calls_per_step exceeded") {
+		t.Fatalf("expected max tool calls exceeded error, got %v", err)
+	}
+}
+
+func TestRuntimeSubAgentEngineAbortOnNonRecoverableToolError(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	providerImpl := &scriptedProvider{
+		responses: []scriptedResponse{
+			{
+				Message: providertypes.Message{
+					Role: providertypes.RoleAssistant,
+					ToolCalls: []providertypes.ToolCall{
+						{ID: "call-1", Name: "filesystem_read_file", Arguments: `{"path":"README.md"}`},
+					},
+				},
+				FinishReason: "tool_calls",
+			},
+			{
+				Message: providertypes.Message{
+					Role:  providertypes.RoleAssistant,
+					Parts: []providertypes.ContentPart{providertypes.NewTextPart(subAgentDonePayload)},
+				},
+				FinishReason: "stop",
+			},
+		},
+	}
+	service := NewWithFactory(manager, &stubToolManager{}, newMemoryStore(), &scriptedProviderFactory{provider: providerImpl}, nil)
+	policy, err := subagent.DefaultRolePolicy(subagent.RoleCoder)
+	if err != nil {
+		t.Fatalf("DefaultRolePolicy() error = %v", err)
+	}
+	engine := runtimeSubAgentEngine{service: service, role: subagent.RoleCoder, policy: policy}
+	stepInput := newRuntimeSubAgentStepInput(t, service, policy, subagent.Task{ID: "task-non-recoverable", Goal: "tool fail"})
+	stepInput.Capability = subagent.Capability{AllowedTools: []string{"filesystem_read_file"}}
+	stepInput.Executor = failingToolExecutor{err: errors.New("manager unavailable")}
+
+	_, err = engine.RunStep(context.Background(), stepInput)
+	if err == nil || !strings.Contains(err.Error(), "manager unavailable") {
+		t.Fatalf("expected non-recoverable tool error, got %v", err)
 	}
 }
 
@@ -309,6 +484,32 @@ func TestParseSubAgentOutput(t *testing.T) {
 	}
 }
 
+func TestEmitCapabilityDeniedEventRespectsContextCancellation(t *testing.T) {
+	t.Parallel()
+
+	service := &Service{events: make(chan RuntimeEvent, 1)}
+	service.events <- RuntimeEvent{Type: EventSubAgentProgress}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	done := make(chan struct{}, 1)
+	go func() {
+		emitCapabilityDeniedEvent(ctx, service, subagent.StepInput{
+			RunID:     "run-cap-denied-canceled",
+			SessionID: "session-cap-denied-canceled",
+			Role:      subagent.RoleCoder,
+			Task:      subagent.Task{ID: "task-cap-denied-canceled"},
+		}, "bash")
+		done <- struct{}{}
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("emitCapabilityDeniedEvent() blocked when context is canceled")
+	}
+}
+
 func assertSubAgentToolEventPayload(
 	t *testing.T,
 	events []RuntimeEvent,
@@ -354,4 +555,31 @@ func newRuntimeSubAgentStepInput(
 		Workdir:  t.TempDir(),
 		Executor: newSubAgentRuntimeToolExecutor(service),
 	}
+}
+
+type failingToolExecutor struct {
+	err error
+}
+
+func (f failingToolExecutor) ListToolSpecs(
+	ctx context.Context,
+	input subagent.ToolSpecListInput,
+) ([]providertypes.ToolSpec, error) {
+	_ = ctx
+	_ = input
+	return []providertypes.ToolSpec{{Name: "filesystem_read_file", Schema: map[string]any{"type": "object"}}}, nil
+}
+
+func (f failingToolExecutor) ExecuteTool(
+	ctx context.Context,
+	input subagent.ToolExecutionInput,
+) (subagent.ToolExecutionResult, error) {
+	_ = ctx
+	_ = input
+	return subagent.ToolExecutionResult{
+		Name:     "filesystem_read_file",
+		Content:  "",
+		Decision: "error",
+		IsError:  true,
+	}, f.err
 }

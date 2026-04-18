@@ -72,7 +72,7 @@ func (e *subAgentRuntimeToolExecutor) ExecuteTool(
 		Decision:  subAgentToolDecisionPending,
 		ElapsedMS: 0,
 	}
-	e.emit(runID, sessionID, EventSubAgentToolCallStarted, payload)
+	e.emit(ctx, runID, sessionID, EventSubAgentToolCallStarted, payload)
 
 	result, execErr := e.service.executeToolCallWithPermission(ctx, permissionExecutionInput{
 		RunID:       runID,
@@ -124,7 +124,7 @@ func (e *subAgentRuntimeToolExecutor) ExecuteTool(
 	if strings.EqualFold(decision, permissionDecisionDeny) || strings.EqualFold(decision, stringPermissionDecisionAsk) {
 		eventType = EventSubAgentToolCallDenied
 	}
-	e.emit(runID, sessionID, eventType, eventPayload)
+	e.emit(ctx, runID, sessionID, eventType, eventPayload)
 	return output, execErr
 }
 
@@ -141,23 +141,27 @@ func resolveToolExecutionDecision(execErr error) string {
 }
 
 // emit 发出子代理工具调用事件，失败路径按 best-effort 忽略。
-func (e *subAgentRuntimeToolExecutor) emit(runID string, sessionID string, eventType EventType, payload SubAgentToolCallEventPayload) {
+func (e *subAgentRuntimeToolExecutor) emit(
+	ctx context.Context,
+	runID string,
+	sessionID string,
+	eventType EventType,
+	payload SubAgentToolCallEventPayload,
+) {
 	if e == nil || e.service == nil {
 		return
 	}
-	_ = e.service.emit(context.Background(), eventType, strings.TrimSpace(runID), strings.TrimSpace(sessionID), payload)
+	_ = e.service.emit(ctx, eventType, strings.TrimSpace(runID), strings.TrimSpace(sessionID), payload)
 }
 
-// filterToolSpecsByAllowlist 按工具名白名单过滤 schema 列表，白名单为空时返回全量。
+// filterToolSpecsByAllowlist 按工具名白名单过滤 schema 列表，白名单为空时默认拒绝全部。
 func filterToolSpecsByAllowlist(specs []providertypes.ToolSpec, allowlist []string) []providertypes.ToolSpec {
 	if len(specs) == 0 {
 		return nil
 	}
 	normalizedAllowlist := normalizeAllowlist(allowlist)
 	if len(normalizedAllowlist) == 0 {
-		result := make([]providertypes.ToolSpec, len(specs))
-		copy(result, specs)
-		return result
+		return nil
 	}
 	filtered := make([]providertypes.ToolSpec, 0, len(specs))
 	for _, spec := range specs {

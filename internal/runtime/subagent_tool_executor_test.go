@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -34,10 +35,10 @@ func TestSubAgentRuntimeToolExecutorListToolSpecs(t *testing.T) {
 		allow    []string
 		wantSize int
 	}{
-		{name: "no allowlist", allow: nil, wantSize: 2},
+		{name: "no allowlist", allow: nil, wantSize: 0},
 		{name: "single allowlist", allow: []string{"bash"}, wantSize: 1},
 		{name: "case-insensitive allowlist", allow: []string{"FILESYSTEM_READ_FILE"}, wantSize: 1},
-		{name: "empty allowlist behaves as full set", allow: []string{""}, wantSize: 2},
+		{name: "empty allowlist denies all", allow: []string{""}, wantSize: 0},
 	}
 
 	for _, tt := range tests {
@@ -161,4 +162,118 @@ func TestSubAgentRuntimeToolExecutorExecuteToolEvents(t *testing.T) {
 		assertEventSequence(t, events, []EventType{EventSubAgentToolCallStarted, EventSubAgentToolCallDenied})
 		assertSubAgentToolEventPayload(t, events, EventSubAgentToolCallDenied, "bash", string(security.DecisionDeny), false)
 	})
+
+	t.Run("non-permission error should include elapsed and error payload", func(t *testing.T) {
+		t.Parallel()
+
+		service := NewWithFactory(
+			newRuntimeConfigManager(t),
+			&stubToolManager{
+				executeFn: func(ctx context.Context, input tools.ToolCallInput) (tools.ToolResult, error) {
+					_ = ctx
+					_ = input
+					return tools.ToolResult{}, errors.New("tool manager down")
+				},
+			},
+			newMemoryStore(),
+			&scriptedProviderFactory{provider: &scriptedProvider{}},
+			nil,
+		)
+		executor := newSubAgentRuntimeToolExecutor(service)
+		_, execErr := executor.ExecuteTool(context.Background(), subagent.ToolExecutionInput{
+			RunID:     "run-subagent-tool-error",
+			SessionID: "session-subagent-tool-error",
+			TaskID:    "task-subagent-tool-error",
+			Role:      subagent.RoleCoder,
+			AgentID:   "subagent:error",
+			Workdir:   t.TempDir(),
+			Timeout:   2 * time.Second,
+			Call: providertypes.ToolCall{
+				ID:        "call-error",
+				Name:      "filesystem_read_file",
+				Arguments: `{"path":"README.md"}`,
+			},
+		})
+		if execErr == nil {
+			t.Fatalf("expected execution error")
+		}
+
+		events := collectRuntimeEvents(service.Events())
+		assertEventSequence(t, events, []EventType{EventSubAgentToolCallStarted, EventSubAgentToolCallResult})
+		for _, evt := range events {
+			if evt.Type != EventSubAgentToolCallResult {
+				continue
+			}
+			payload, ok := evt.Payload.(SubAgentToolCallEventPayload)
+			if !ok {
+				t.Fatalf("payload type = %T, want SubAgentToolCallEventPayload", evt.Payload)
+			}
+			if payload.ElapsedMS < 0 {
+				t.Fatalf("elapsed_ms = %d, want >= 0", payload.ElapsedMS)
+			}
+			if !strings.Contains(payload.Error, "tool manager down") {
+				t.Fatalf("error = %q, want contain tool manager down", payload.Error)
+			}
+			return
+		}
+		t.Fatalf("result event not found")
+	})
+}
+
+func TestSubAgentToolEventEmitRespectsContextCancellation(t *testing.T) {
+	t.Parallel()
+
+	service := NewWithFactory(
+		newRuntimeConfigManager(t),
+		&stubToolManager{
+			executeFn: func(ctx context.Context, input tools.ToolCallInput) (tools.ToolResult, error) {
+				_ = input
+				if err := ctx.Err(); err != nil {
+					return tools.ToolResult{}, err
+				}
+				return tools.ToolResult{
+					ToolCallID: input.ID,
+					Name:       input.Name,
+					Content:    "ok",
+				}, nil
+			},
+		},
+		newMemoryStore(),
+		&scriptedProviderFactory{provider: &scriptedProvider{}},
+		nil,
+	)
+	service.events = make(chan RuntimeEvent, 1)
+	service.events <- RuntimeEvent{Type: EventSubAgentProgress}
+	executor := newSubAgentRuntimeToolExecutor(service)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := executor.ExecuteTool(ctx, subagent.ToolExecutionInput{
+			RunID:     "run-subagent-tool-canceled",
+			SessionID: "session-subagent-tool-canceled",
+			TaskID:    "task-subagent-tool-canceled",
+			Role:      subagent.RoleCoder,
+			AgentID:   "subagent:canceled",
+			Workdir:   t.TempDir(),
+			Timeout:   2 * time.Second,
+			Call: providertypes.ToolCall{
+				ID:        "call-canceled",
+				Name:      "filesystem_read_file",
+				Arguments: `{"path":"README.md"}`,
+			},
+		})
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if err == nil || !errors.Is(err, context.Canceled) {
+			t.Fatalf("expected context canceled error, got %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("ExecuteTool() blocked when event channel is full and context canceled")
+	}
 }

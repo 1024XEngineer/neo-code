@@ -259,6 +259,41 @@ func TestWorkerRejectsInvalidOutputContract(t *testing.T) {
 	}
 }
 
+func TestValidateDefaultWorkspacePath(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		workspace string
+		wantErr   bool
+	}{
+		{name: "current directory", workspace: ".", wantErr: true},
+		{name: "filesystem root", workspace: string(filepath.Separator), wantErr: true},
+		{name: "normal path", workspace: filepath.Join(string(filepath.Separator), "tmp", "workspace"), wantErr: false},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			err := validateDefaultWorkspacePath(tt.workspace)
+			if tt.wantErr && err == nil {
+				t.Fatalf("expected error for workspace=%q", tt.workspace)
+			}
+			if !tt.wantErr && err != nil {
+				t.Fatalf("unexpected error for workspace=%q: %v", tt.workspace, err)
+			}
+		})
+	}
+}
+
+func TestWithExecutionContextOnNilWorker(t *testing.T) {
+	t.Parallel()
+
+	opt := withExecutionContext(ExecutionContext{ToolExecutor: noopToolExecutor{}})
+	opt(nil)
+}
+
 func TestWorkerStartCapabilityPolicyGuard(t *testing.T) {
 	t.Parallel()
 

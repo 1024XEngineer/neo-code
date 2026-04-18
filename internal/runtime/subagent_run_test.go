@@ -286,6 +286,51 @@ func TestServiceRunSubAgentTaskFailureFlows(t *testing.T) {
 	})
 }
 
+func TestResolveSubAgentExecutionAgentID(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		input SubAgentTaskInput
+		want  string
+	}{
+		{
+			name: "ignore untrusted external agent id",
+			input: SubAgentTaskInput{
+				AgentID: "forged-agent",
+				Role:    subagent.RoleCoder,
+				Task:    subagent.Task{ID: "task-1"},
+			},
+			want: "coder:task-1",
+		},
+		{
+			name: "empty task id falls back to role",
+			input: SubAgentTaskInput{
+				Role: subagent.RoleReviewer,
+			},
+			want: "reviewer",
+		},
+		{
+			name: "empty role and task id falls back to subagent",
+			input: SubAgentTaskInput{
+				Role: subagent.Role(""),
+			},
+			want: "subagent",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := resolveSubAgentExecutionAgentID(tt.input)
+			if got != tt.want {
+				t.Fatalf("resolveSubAgentExecutionAgentID() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 type stubSubAgentFactory struct {
 	create func(role subagent.Role) (subagent.WorkerRuntime, error)
 }
