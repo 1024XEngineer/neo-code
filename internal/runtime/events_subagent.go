@@ -15,6 +15,9 @@ type SubAgentEventPayload struct {
 	State      subagent.State      `json:"state"`
 	StopReason subagent.StopReason `json:"stop_reason,omitempty"`
 	Step       int                 `json:"step,omitempty"`
+	QueueSize  int                 `json:"queue_size,omitempty"`
+	Running    int                 `json:"running,omitempty"`
+	Reason     string              `json:"reason,omitempty"`
 	Delta      string              `json:"delta,omitempty"`
 	Error      string              `json:"error,omitempty"`
 }
@@ -37,12 +40,16 @@ const (
 	EventSubAgentProgress EventType = "subagent_progress"
 	// EventSubAgentRetried 在子代理任务进入重试后触发。
 	EventSubAgentRetried EventType = "subagent_retried"
+	// EventSubAgentBlocked 在子代理任务被阻塞（依赖或退避）时触发。
+	EventSubAgentBlocked EventType = "subagent_blocked"
 	// EventSubAgentCompleted 在子代理成功结束后触发。
 	EventSubAgentCompleted EventType = "subagent_completed"
 	// EventSubAgentFailed 在子代理失败结束后触发。
 	EventSubAgentFailed EventType = "subagent_failed"
 	// EventSubAgentCanceled 在子代理被取消后触发。
 	EventSubAgentCanceled EventType = "subagent_canceled"
+	// EventSubAgentFinished 在一次调度轮次结束后触发。
+	EventSubAgentFinished EventType = "subagent_finished"
 	// EventSubAgentToolCallStarted 在子代理发起工具调用时触发。
 	EventSubAgentToolCallStarted EventType = "subagent_tool_call_started"
 	// EventSubAgentToolCallResult 在子代理工具调用返回后触发。

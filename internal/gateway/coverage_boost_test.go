@@ -301,7 +301,10 @@ func TestStreamRelayRuntimeAndWriterBranches(t *testing.T) {
 	if !relay.SendJSONRPCPayload(writeErrConnID, map[string]string{"trigger": "drop"}) {
 		t.Fatal("send payload should enqueue")
 	}
-	time.Sleep(60 * time.Millisecond)
+	deadline := time.Now().Add(2 * time.Second)
+	for atomic.LoadInt32(&closedCount) == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
 	if atomic.LoadInt32(&closedCount) == 0 {
 		t.Fatal("connection close should be called after write failure")
 	}

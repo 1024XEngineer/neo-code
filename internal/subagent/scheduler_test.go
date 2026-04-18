@@ -29,6 +29,11 @@ type schedulerStoreWithClaimError struct {
 func newSchedulerStore(t *testing.T, items []agentsession.TodoItem) *schedulerStore {
 	t.Helper()
 	session := agentsession.New("scheduler")
+	for idx := range items {
+		if strings.TrimSpace(items[idx].Executor) == "" {
+			items[idx].Executor = agentsession.TodoExecutorSubAgent
+		}
+	}
 	if err := session.ReplaceTodos(items); err != nil {
 		t.Fatalf("ReplaceTodos() error = %v", err)
 	}
@@ -1018,6 +1023,49 @@ func TestSchedulerRunProgressEventDeduplicatedForRetryBackoff(t *testing.T) {
 	defer mu.Unlock()
 	if progressCount != 1 {
 		t.Fatalf("progressCount = %d, want 1", progressCount)
+	}
+}
+
+func TestSchedulerRunDispatchOnceReturnsWithoutPolling(t *testing.T) {
+	t.Parallel()
+
+	store := newSchedulerStore(t, []agentsession.TodoItem{
+		{
+			ID:          "backoff-once",
+			Content:     "wait retry window",
+			Status:      agentsession.TodoStatusPending,
+			RetryCount:  1,
+			RetryLimit:  3,
+			NextRetryAt: time.Now().Add(5 * time.Second),
+		},
+	})
+	factory := newScriptedFactory(func(ctx context.Context, taskID string, attempt int, input StepInput) (StepOutput, error) {
+		_ = ctx
+		_ = taskID
+		_ = attempt
+		_ = input
+		return successStep("unused"), nil
+	})
+
+	startedAt := time.Now()
+	scheduler, err := NewScheduler(store, factory, SchedulerConfig{
+		MaxConcurrency: 1,
+		PollInterval:   time.Second,
+		DispatchOnce:   true,
+	})
+	if err != nil {
+		t.Fatalf("NewScheduler() error = %v", err)
+	}
+
+	result, err := scheduler.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if elapsed := time.Since(startedAt); elapsed > 300*time.Millisecond {
+		t.Fatalf("Run() elapsed = %v, want <= 300ms", elapsed)
+	}
+	if !contains(result.BlockedLeft, "backoff-once") {
+		t.Fatalf("BlockedLeft = %v, want backoff-once", result.BlockedLeft)
 	}
 }
 

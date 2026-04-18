@@ -9,7 +9,7 @@ import (
 )
 
 // CurrentTodoVersion 表示当前 Todo 结构版本。
-const CurrentTodoVersion = 3
+const CurrentTodoVersion = 4
 
 // TodoStatus 表示 Todo 项的状态枚举。
 type TodoStatus string
@@ -38,6 +38,13 @@ const (
 	TodoOwnerTypeSubAgent = "subagent"
 )
 
+const (
+	// TodoExecutorAgent 表示任务由主 Agent 执行。
+	TodoExecutorAgent = "agent"
+	// TodoExecutorSubAgent 表示任务由 SubAgent 调度执行。
+	TodoExecutorSubAgent = "subagent"
+)
+
 // TodoItem 表示会话级结构化待办项。
 type TodoItem struct {
 	ID            string     `json:"id"`
@@ -45,6 +52,7 @@ type TodoItem struct {
 	Status        TodoStatus `json:"status"`
 	Dependencies  []string   `json:"dependencies,omitempty"`
 	Priority      int        `json:"priority,omitempty"`
+	Executor      string     `json:"executor,omitempty"`
 	OwnerType     string     `json:"owner_type,omitempty"`
 	OwnerID       string     `json:"owner_id,omitempty"`
 	Acceptance    []string   `json:"acceptance,omitempty"`
@@ -64,6 +72,7 @@ type TodoPatch struct {
 	Status        *TodoStatus
 	Dependencies  *[]string
 	Priority      *int
+	Executor      *string
 	OwnerType     *string
 	OwnerID       *string
 	Acceptance    *[]string
@@ -402,6 +411,10 @@ func normalizeTodoItem(item TodoItem) (TodoItem, error) {
 	item.ID = strings.TrimSpace(item.ID)
 	item.Content = strings.TrimSpace(item.Content)
 	item.Dependencies = normalizeTodoDependencies(item.Dependencies)
+	item.Executor = normalizeTodoExecutor(item.Executor)
+	if item.Executor == "" {
+		item.Executor = TodoExecutorAgent
+	}
 	item.OwnerType = normalizeTodoOwnerType(item.OwnerType)
 	item.OwnerID = strings.TrimSpace(item.OwnerID)
 	item.Acceptance = normalizeTodoTextList(item.Acceptance)
@@ -430,6 +443,8 @@ func normalizeTodoItem(item TodoItem) (TodoItem, error) {
 		return TodoItem{}, fmt.Errorf("session: todo %q content is empty", item.ID)
 	case !item.Status.Valid():
 		return TodoItem{}, fmt.Errorf("session: invalid todo status %q", item.Status)
+	case !isValidTodoExecutor(item.Executor):
+		return TodoItem{}, fmt.Errorf("session: invalid todo executor %q", item.Executor)
 	case !isValidTodoOwnerType(item.OwnerType):
 		return TodoItem{}, fmt.Errorf("session: invalid todo owner_type %q", item.OwnerType)
 	}
@@ -534,6 +549,9 @@ func applyTodoPatch(item TodoItem, patch TodoPatch) (TodoItem, error) {
 	if patch.Priority != nil {
 		next.Priority = *patch.Priority
 	}
+	if patch.Executor != nil {
+		next.Executor = normalizeTodoExecutor(*patch.Executor)
+	}
 	if patch.OwnerType != nil {
 		next.OwnerType = normalizeTodoOwnerType(*patch.OwnerType)
 	}
@@ -579,6 +597,21 @@ func applyTodoPatch(item TodoItem, patch TodoPatch) (TodoItem, error) {
 // normalizeTodoOwnerType 规范化 owner_type 字段。
 func normalizeTodoOwnerType(ownerType string) string {
 	return strings.ToLower(strings.TrimSpace(ownerType))
+}
+
+// normalizeTodoExecutor 规范化 executor 字段。
+func normalizeTodoExecutor(executor string) string {
+	return strings.ToLower(strings.TrimSpace(executor))
+}
+
+// isValidTodoExecutor 判断 executor 是否受支持。
+func isValidTodoExecutor(executor string) bool {
+	switch normalizeTodoExecutor(executor) {
+	case TodoExecutorAgent, TodoExecutorSubAgent:
+		return true
+	default:
+		return false
+	}
 }
 
 // isValidTodoOwnerType 判断 owner_type 是否受支持。

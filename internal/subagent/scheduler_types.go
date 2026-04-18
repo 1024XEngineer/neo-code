@@ -148,7 +148,9 @@ type SchedulerConfig struct {
 	ContextMaxDependencyArtifacts int
 	ContextMaxRelatedFiles        int
 
-	Observer SchedulerObserver
+	// DispatchOnce=true 时仅执行单轮调度判定并立即返回，避免进入轮询等待。
+	DispatchOnce bool
+	Observer     SchedulerObserver
 }
 
 // normalize 返回带默认值的配置副本，避免执行阶段出现隐式零值。

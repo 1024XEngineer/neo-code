@@ -103,7 +103,10 @@ func loadCustomProviders(baseDir string) ([]ProviderConfig, error) {
 	entries, err := os.ReadDir(providersDir)
 	if err != nil {
 		if os.IsNotExist(err) {
-			if _, statErr := os.Stat(providersDir); statErr == nil {
+			if info, statErr := os.Stat(providersDir); statErr == nil {
+				if !info.IsDir() {
+					return nil, fmt.Errorf("config: read providers dir: %w", err)
+				}
 				return nil, fmt.Errorf("config: read providers dir: %w", err)
 			} else if !os.IsNotExist(statErr) {
 				return nil, fmt.Errorf("config: read providers dir: %w", statErr)
