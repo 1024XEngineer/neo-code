@@ -25,6 +25,32 @@ func writeLoaderConfig(t *testing.T, loader *Loader, raw string) {
 	}
 }
 
+func saveCustomProviderWithModelsForTest(
+	baseDir string,
+	name string,
+	driver string,
+	baseURL string,
+	apiKeyEnv string,
+	apiStyle string,
+	deploymentMode string,
+	apiVersion string,
+	discoveryEndpointPath string,
+	discoveryResponseProfile string,
+) error {
+	return SaveCustomProviderWithModels(baseDir, SaveCustomProviderInput{
+		Name:                     name,
+		Driver:                   driver,
+		BaseURL:                  baseURL,
+		APIKeyEnv:                apiKeyEnv,
+		APIStyle:                 apiStyle,
+		DeploymentMode:           deploymentMode,
+		APIVersion:               apiVersion,
+		DiscoveryEndpointPath:    discoveryEndpointPath,
+		DiscoveryResponseProfile: discoveryResponseProfile,
+		ModelSource:              provider.ModelSourceDiscover,
+	})
+}
+
 func TestLoaderLoadMissingConfigCreatesDefault(t *testing.T) {
 	t.Parallel()
 
@@ -887,8 +913,12 @@ func TestResolveCustomProviderSettingsByDriver(t *testing.T) {
 			t.Parallel()
 
 			got := resolveCustomProviderSettings(tt.file)
-			if got != tt.want {
-				t.Fatalf("resolveCustomProviderSettings() = %+v, want %+v", got, tt.want)
+			expected := tt.want
+			if expected.ModelSource == "" {
+				expected.ModelSource = provider.ModelSourceDiscover
+			}
+			if got != expected {
+				t.Fatalf("resolveCustomProviderSettings() = %+v, want %+v", got, expected)
 			}
 		})
 	}
@@ -1034,7 +1064,7 @@ func TestSaveCustomProviderPersistsDriverSpecificSettings(t *testing.T) {
 
 			providerName := strings.ReplaceAll(tt.name, " ", "-")
 			apiKeyEnv := strings.ToUpper(strings.ReplaceAll(providerName, "-", "_")) + "_API_KEY"
-			if err := SaveCustomProvider(
+			if err := saveCustomProviderWithModelsForTest(
 				baseDir,
 				providerName,
 				tt.driver,
@@ -1046,7 +1076,7 @@ func TestSaveCustomProviderPersistsDriverSpecificSettings(t *testing.T) {
 				tt.discoveryEndpointPath,
 				tt.discoveryResponseProfile,
 			); err != nil {
-				t.Fatalf("SaveCustomProvider() error = %v", err)
+				t.Fatalf("SaveCustomProviderWithModels() error = %v", err)
 			}
 
 			cfg, err := loadCustomProvider(filepath.Join(baseDir, providersDirName, providerName))
@@ -1082,7 +1112,7 @@ func TestSaveCustomProviderRejectsUnsafeProviderName(t *testing.T) {
 		"中文",
 	}
 	for _, name := range invalidNames {
-		err := SaveCustomProvider(
+		err := saveCustomProviderWithModelsForTest(
 			baseDir,
 			name,
 			provider.DriverOpenAICompat,
@@ -1095,7 +1125,7 @@ func TestSaveCustomProviderRejectsUnsafeProviderName(t *testing.T) {
 			"",
 		)
 		if err == nil {
-			t.Fatalf("expected SaveCustomProvider to reject %q", name)
+			t.Fatalf("expected SaveCustomProviderWithModels to reject %q", name)
 		}
 	}
 }
@@ -1233,7 +1263,7 @@ func TestSaveCustomProviderFileSystemErrors(t *testing.T) {
 			t.Fatalf("WriteFile() error = %v", err)
 		}
 
-		err := SaveCustomProvider(
+		err := saveCustomProviderWithModelsForTest(
 			baseDir,
 			"team-gateway",
 			provider.DriverOpenAICompat,
@@ -1257,7 +1287,7 @@ func TestSaveCustomProviderFileSystemErrors(t *testing.T) {
 			t.Fatalf("MkdirAll() error = %v", err)
 		}
 
-		err := SaveCustomProvider(
+		err := saveCustomProviderWithModelsForTest(
 			baseDir,
 			"team-gateway",
 			provider.DriverOpenAICompat,

@@ -197,6 +197,9 @@ func TestGlobToolFiltersSensitiveAndSymlinkEscapes(t *testing.T) {
 	if err := os.Symlink(filepath.Join(outside, "secret.txt"), linkPath); err != nil {
 		t.Skipf("symlink unavailable: %v", err)
 	}
+	if _, err := os.Lstat(linkPath); err != nil {
+		t.Skipf("symlink created but missing: %v", err)
+	}
 
 	tool := NewGlob(workspace)
 	result, err := tool.Execute(context.Background(), tools.ToolCallInput{

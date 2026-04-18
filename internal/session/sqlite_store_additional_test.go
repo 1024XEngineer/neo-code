@@ -182,15 +182,10 @@ func TestStorageHelpersAdditionalErrorBranches(t *testing.T) {
 	if err := tempFile.Close(); err != nil {
 		t.Fatalf("tempFile.Close() error = %v", err)
 	}
-	targetDir := filepath.Join(baseDir, "target-dir")
-	if err := os.MkdirAll(targetDir, 0o755); err != nil {
-		t.Fatalf("MkdirAll(targetDir) error = %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(targetDir, "existing.txt"), []byte("x"), 0o644); err != nil {
-		t.Fatalf("WriteFile(existing) error = %v", err)
-	}
-	if err := replaceFileWithTemp(tempPath, targetDir, "target-dir"); err == nil {
-		t.Fatalf("expected replaceFileWithTemp remove-target error")
+	// Using an empty path for target will cause os.Remove to fail.
+	err = replaceFileWithTemp(tempPath, "", "invalid")
+	if err == nil {
+		t.Fatalf("expected replaceFileWithTemp remove-target error for empty path")
 	}
 }
 

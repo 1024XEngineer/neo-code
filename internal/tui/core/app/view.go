@@ -193,6 +193,24 @@ func (a App) renderProviderAddForm() string {
 	if a.providerAddForm == nil {
 		return "No form active"
 	}
+	if a.providerAddForm.Stage == providerAddFormStageManualModels {
+		var sb strings.Builder
+		sb.WriteString("Manual Model JSON（id/name 必填）\n")
+		sb.WriteString("[Shift+Tab] 返回字段页  [Enter] 提交  [Esc] 取消\n\n")
+		content := strings.TrimSpace(a.providerAddForm.ManualModelsJSON)
+		if content == "" {
+			content = providerAddManualModelsJSONTemplate
+		}
+		sb.WriteString(content)
+		if a.providerAddForm.Error != "" {
+			label := "[Prompt]"
+			if a.providerAddForm.ErrorIsHard {
+				label = "[Error]"
+			}
+			sb.WriteString("\n\n" + label + " " + a.providerAddForm.Error)
+		}
+		return sb.String()
+	}
 
 	var sb strings.Builder
 	driver := provider.NormalizeProviderDriver(a.providerAddForm.Driver)

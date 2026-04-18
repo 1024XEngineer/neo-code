@@ -105,6 +105,10 @@ func (s *Service) modelsForProvider(ctx context.Context, input provider.CatalogI
 
 	configuredModels := providertypes.MergeModelDescriptors(input.ConfiguredModels)
 	defaultModels := providertypes.MergeModelDescriptors(input.DefaultModels)
+	if input.DisableDiscovery {
+		return providertypes.MergeModelDescriptors(configuredModels, defaultModels), nil
+	}
+
 	snapshot := s.catalogSnapshot(ctx, input)
 
 	models := snapshot.models

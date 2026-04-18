@@ -122,6 +122,7 @@ type pendingImageAttachment struct {
 
 // providerAddFormState 保存添加新 provider 表单的状态。
 type providerAddFormState struct {
+	Stage                    providerAddFormStage
 	Step                     int // 当前聚焦字段在“当前 driver 可见字段列表”中的索引
 	Name                     string
 	Driver                   string
@@ -131,6 +132,7 @@ type providerAddFormState struct {
 	APIVersion               string
 	DiscoveryEndpointPath    string
 	DiscoveryResponseProfile string
+	ManualModelsJSON         string
 	APIKeyEnv                string
 	APIKey                   string
 	Error                    string
@@ -138,6 +140,13 @@ type providerAddFormState struct {
 	Submitting               bool
 	Drivers                  []string // 可选的 Driver 列表
 }
+
+type providerAddFormStage int
+
+const (
+	providerAddFormStageFields providerAddFormStage = iota
+	providerAddFormStageManualModels
+)
 
 type App struct {
 	state tuistate.UIState

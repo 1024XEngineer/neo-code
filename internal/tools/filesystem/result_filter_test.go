@@ -18,6 +18,9 @@ func TestResultPathFilterEvaluateReasons(t *testing.T) {
 	if err := os.Symlink(filepath.Join(outside, "target.txt"), linkPath); err != nil {
 		t.Skipf("symlink unavailable: %v", err)
 	}
+	if _, err := os.Lstat(linkPath); err != nil {
+		t.Skipf("symlink created but missing: %v", err)
+	}
 
 	filter, err := newResultPathFilter(workspace)
 	if err != nil {

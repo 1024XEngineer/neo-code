@@ -36,5 +36,6 @@ type CatalogInput struct {
 	Identity               ProviderIdentity
 	ConfiguredModels       []providertypes.ModelDescriptor
 	DefaultModels          []providertypes.ModelDescriptor
+	DisableDiscovery       bool
 	ResolveDiscoveryConfig func() (RuntimeConfig, error)
 }

@@ -196,13 +196,13 @@ func TestProviderConfigResolveAPIKey(t *testing.T) {
 	}{
 		{
 			name:     "success",
-			envKey:   "OPENAI_API_KEY",
+			envKey:   "NEOCODE_TEST_API_KEY_SUCCESS",
 			envValue: "secret-value",
 		},
 		{
 			name:      "missing",
-			envKey:    "OPENAI_API_KEY",
-			expectErr: "environment variable OPENAI_API_KEY is empty",
+			envKey:    "NEOCODE_TEST_API_KEY_MISSING",
+			expectErr: "environment variable NEOCODE_TEST_API_KEY_MISSING is empty",
 		},
 	}
 

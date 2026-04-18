@@ -45,6 +45,7 @@ const (
 
 const providerAddSelectTimeout = 10 * time.Second
 const providerAddNonPersistentEnvWarning = "API key is applied to the current process only on this platform; persist it in your shell profile for future sessions."
+const providerAddManualModelsJSONTemplate = "[\n  {\n    \"id\": \"model-id\",\n    \"name\": \"Model Name\"\n  }\n]"
 
 const sessionSwitchBusyMessage = "cannot switch sessions while run or compact is active"
 
@@ -2227,6 +2228,7 @@ func currentProviderAddField(form *providerAddFormState) providerAddFieldID {
 
 func (a *App) startProviderAddForm() {
 	a.providerAddForm = &providerAddFormState{
+		Stage:                    providerAddFormStageFields,
 		Step:                     0,
 		Name:                     "",
 		Driver:                   provider.DriverOpenAICompat,
@@ -2236,6 +2238,7 @@ func (a *App) startProviderAddForm() {
 		APIVersion:               "",
 		DiscoveryEndpointPath:    provider.DiscoveryEndpointPathModels,
 		DiscoveryResponseProfile: provider.DiscoveryResponseProfileOpenAI,
+		ManualModelsJSON:         "",
 		APIKeyEnv:                "",
 		APIKey:                   "",
 		Error:                    "",
@@ -2253,6 +2256,34 @@ func (a *App) handleProviderAddFormInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	typed := msg
+	if a.providerAddForm.Stage == providerAddFormStageManualModels {
+		switch {
+		case key.Matches(typed, a.keys.Send):
+			return a, a.submitProviderAddForm()
+		case key.Matches(typed, a.keys.FocusInput):
+			a.providerAddForm = nil
+			a.state.ActivePicker = pickerNone
+			a.state.StatusText = statusReady
+			return a, nil
+		case key.Matches(typed, a.keys.PrevPanel):
+			a.providerAddForm.Stage = providerAddFormStageFields
+			a.providerAddForm.Error = ""
+			a.providerAddForm.ErrorIsHard = false
+			return a, nil
+		case typed.Type == tea.KeyBackspace:
+			a.providerAddForm.ManualModelsJSON = trimLastRune(a.providerAddForm.ManualModelsJSON)
+			return a, nil
+		case key.Matches(typed, a.keys.Newline):
+			a.providerAddForm.ManualModelsJSON += "\n"
+			return a, nil
+		default:
+			if len(typed.Runes) > 0 {
+				a.providerAddForm.ManualModelsJSON += sanitizeProviderAddJSONInputRunes(typed.Runes)
+			}
+			return a, nil
+		}
+	}
+
 	prevStep := a.providerAddForm.Step
 	fields := providerAddVisibleFields(a.providerAddForm.Driver)
 	fieldCount := len(fields)
@@ -2367,6 +2398,21 @@ func (a *App) submitProviderAddForm() tea.Cmd {
 		a.providerAddForm.ErrorIsHard = false
 		return nil
 	}
+	if request.ModelSource == provider.ModelSourceManual && a.providerAddForm.Stage == providerAddFormStageFields {
+		a.providerAddForm.Stage = providerAddFormStageManualModels
+		a.providerAddForm.Error = ""
+		a.providerAddForm.ErrorIsHard = false
+		if strings.TrimSpace(a.providerAddForm.ManualModelsJSON) == "" {
+			a.providerAddForm.ManualModelsJSON = providerAddManualModelsJSONTemplate
+		}
+		a.state.StatusText = "Fill manual model JSON"
+		return nil
+	}
+	if request.ModelSource == provider.ModelSourceManual && strings.TrimSpace(request.ManualModelsJSON) == "" {
+		a.providerAddForm.Error = "Please update the form: Model JSON is required for manual model source"
+		a.providerAddForm.ErrorIsHard = false
+		return nil
+	}
 
 	a.providerAddForm.Submitting = true
 	a.providerAddForm.Error = ""
@@ -2381,6 +2427,8 @@ type providerAddRequest struct {
 	Name                     string
 	Driver                   string
 	BaseURL                  string
+	ModelSource              string
+	ManualModelsJSON         string
 	APIStyle                 string
 	DeploymentMode           string
 	APIVersion               string
@@ -2402,6 +2450,7 @@ func buildProviderAddRequest(form providerAddFormState) (providerAddRequest, str
 		Name:                     normalizeProviderAddFieldValue(form.Name),
 		Driver:                   provider.NormalizeProviderDriver(normalizeProviderAddFieldValue(form.Driver)),
 		BaseURL:                  normalizeProviderAddFieldValue(form.BaseURL),
+		ManualModelsJSON:         strings.TrimSpace(form.ManualModelsJSON),
 		APIStyle:                 normalizeProviderAddFieldValue(form.APIStyle),
 		DeploymentMode:           normalizeProviderAddFieldValue(form.DeploymentMode),
 		APIVersion:               normalizeProviderAddFieldValue(form.APIVersion),
@@ -2460,6 +2509,14 @@ func buildProviderAddRequest(form providerAddFormState) (providerAddRequest, str
 		request.DeploymentMode = ""
 		request.APIVersion = ""
 	}
+
+	if request.DiscoveryEndpointPath == "" {
+		request.ModelSource = provider.ModelSourceManual
+		request.DiscoveryResponseProfile = ""
+		return request, ""
+	}
+
+	request.ModelSource = provider.ModelSourceDiscover
 	normalizedProtocols, err := provider.NormalizeProviderProtocolSettings(
 		request.Driver,
 		"",
@@ -2495,6 +2552,29 @@ func sanitizeProviderAddInputRunes(runes []rune) string {
 	builder.Grow(len(runes))
 	for _, r := range runes {
 		if unicode.IsControl(r) || unicode.In(r, unicode.Cf) {
+			continue
+		}
+		builder.WriteRune(r)
+	}
+	return builder.String()
+}
+
+// sanitizeProviderAddJSONInputRunes 过滤不可见格式控制字符，保留 JSON 编辑需要的换行与制表符。
+func sanitizeProviderAddJSONInputRunes(runes []rune) string {
+	if len(runes) == 0 {
+		return ""
+	}
+
+	var builder strings.Builder
+	builder.Grow(len(runes))
+	for _, r := range runes {
+		if unicode.In(r, unicode.Cf) {
+			continue
+		}
+		if unicode.IsControl(r) && r != '\n' && r != '\r' && r != '\t' {
+			continue
+		}
+		if r == '\r' {
 			continue
 		}
 		builder.WriteRune(r)
@@ -2549,6 +2629,8 @@ func (a *App) runProviderAddFlow(request providerAddRequest) tea.Cmd {
 			Name:                     request.Name,
 			Driver:                   request.Driver,
 			BaseURL:                  request.BaseURL,
+			ModelSource:              request.ModelSource,
+			ManualModelsJSON:         request.ManualModelsJSON,
 			APIStyle:                 request.APIStyle,
 			DeploymentMode:           request.DeploymentMode,
 			APIVersion:               request.APIVersion,
