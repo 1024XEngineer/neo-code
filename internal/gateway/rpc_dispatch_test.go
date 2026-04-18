@@ -87,7 +87,7 @@ func TestHydrateFrameSessionFromConnectionFallback(t *testing.T) {
 
 func TestApplyAutomaticBindingPingRefreshesTTL(t *testing.T) {
 	relay := NewStreamRelay(StreamRelayOptions{
-		BindingTTL: 20 * time.Millisecond,
+		BindingTTL: 100 * time.Millisecond,
 	})
 	baseContext, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -118,15 +118,32 @@ func TestApplyAutomaticBindingPingRefreshesTTL(t *testing.T) {
 		t.Fatalf("bind connection: %v", bindErr)
 	}
 
-	time.Sleep(10 * time.Millisecond)
+	key := bindingKey{sessionID: "session-ping", runID: ""}
+	relay.mu.RLock()
+	beforeState := relay.connectionBindings[connectionID][key]
+	relay.mu.RUnlock()
+	if beforeState == nil {
+		t.Fatal("expected binding state to exist before ping")
+	}
+	expireBefore := beforeState.expireAt
+
+	time.Sleep(20 * time.Millisecond)
 	applyAutomaticBinding(connectionContext, MessageFrame{
 		Type:   FrameTypeRequest,
 		Action: FrameActionPing,
 	})
-	time.Sleep(15 * time.Millisecond)
-	if !relay.RefreshConnectionBindings(connectionID) {
-		t.Fatal("expected ping to refresh existing bindings")
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		relay.mu.RLock()
+		afterState := relay.connectionBindings[connectionID][key]
+		relay.mu.RUnlock()
+		if afterState != nil && afterState.expireAt.After(expireBefore) {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
+	t.Fatal("expected ping to refresh binding ttl")
 }
 
 func TestDispatchFrameValidationBranches(t *testing.T) {
