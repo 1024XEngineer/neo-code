@@ -258,6 +258,209 @@ func TestRunAutoDispatchesExistingSubAgentTodosWithoutToolCalls(t *testing.T) {
 	assertEventContains(t, events, EventSubAgentFinished)
 }
 
+func TestRunKeepsDrivingAgentPathForMixedExecutorDependencies(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManagerWithProviderEnvs(t, nil)
+	store := newMemoryStore()
+	scripted := &scriptedProvider{
+		responses: []scriptedResponse{
+			{
+				Message: providertypes.Message{
+					Role:  providertypes.RoleAssistant,
+					Parts: []providertypes.ContentPart{providertypes.NewTextPart("continue planning")},
+				},
+			},
+			{
+				Message: providertypes.Message{
+					Role: providertypes.RoleAssistant,
+					ToolCalls: []providertypes.ToolCall{
+						{
+							ID:        "todo-claim-agent",
+							Name:      tools.ToolNameTodoWrite,
+							Arguments: `{"action":"claim","id":"agent-1","owner_type":"agent","owner_id":"main-agent"}`,
+						},
+						{
+							ID:        "todo-complete-agent",
+							Name:      tools.ToolNameTodoWrite,
+							Arguments: `{"action":"complete","id":"agent-1","artifacts":["agent-1.done"]}`,
+						},
+					},
+				},
+				FinishReason: "tool_calls",
+			},
+			{
+				Message: providertypes.Message{
+					Role:  providertypes.RoleAssistant,
+					Parts: []providertypes.ContentPart{providertypes.NewTextPart("all done")},
+				},
+			},
+		},
+	}
+	service := NewWithFactory(
+		manager,
+		func() tools.Manager {
+			registry := tools.NewRegistry()
+			registry.Register(todotool.New())
+			return registry
+		}(),
+		store,
+		&scriptedProviderFactory{provider: scripted},
+		&stubContextBuilder{},
+	)
+	service.SetSubAgentFactory(newSuccessSubAgentFactory())
+
+	seed := agentsession.New("dispatch-mixed-deps")
+	seed.Workdir = manager.Get().Workdir
+	if err := seed.ReplaceTodos([]agentsession.TodoItem{
+		{
+			ID:       "agent-1",
+			Content:  "agent prerequisite",
+			Executor: agentsession.TodoExecutorAgent,
+		},
+		{
+			ID:           "sub-1",
+			Content:      "subagent follow-up",
+			Executor:     agentsession.TodoExecutorSubAgent,
+			Dependencies: []string{"agent-1"},
+		},
+	}); err != nil {
+		t.Fatalf("ReplaceTodos(seed) error = %v", err)
+	}
+	saveSessionToMemoryStore(store, seed)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := service.Run(ctx, UserInput{
+		SessionID: seed.ID,
+		RunID:     "run-mixed-dependency-keep-driving",
+		Parts:     []providertypes.ContentPart{providertypes.NewTextPart("continue")},
+	}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if scripted.callCount != 3 {
+		t.Fatalf("provider call count = %d, want 3", scripted.callCount)
+	}
+
+	session := firstSessionFromMemoryStore(t, store)
+	agentTodo, ok := session.FindTodo("agent-1")
+	if !ok || agentTodo.Status != agentsession.TodoStatusCompleted {
+		t.Fatalf("agent todo = %+v, want completed", agentTodo)
+	}
+	subTodo, ok := session.FindTodo("sub-1")
+	if !ok || subTodo.Status != agentsession.TodoStatusCompleted {
+		t.Fatalf("sub todo = %+v, want completed", subTodo)
+	}
+}
+
+func TestHasSubAgentTodoWaitingForAgentDependency(t *testing.T) {
+	t.Parallel()
+
+	if !hasSubAgentTodoWaitingForAgentDependency([]agentsession.TodoItem{
+		{
+			ID:       "agent",
+			Executor: agentsession.TodoExecutorAgent,
+			Status:   agentsession.TodoStatusPending,
+		},
+		{
+			ID:           "sub",
+			Executor:     agentsession.TodoExecutorSubAgent,
+			Status:       agentsession.TodoStatusBlocked,
+			Dependencies: []string{"agent"},
+		},
+	}) {
+		t.Fatalf("expected pending agent dependency to require follow-up")
+	}
+
+	if hasSubAgentTodoWaitingForAgentDependency([]agentsession.TodoItem{
+		{
+			ID:       "agent",
+			Executor: agentsession.TodoExecutorAgent,
+			Status:   agentsession.TodoStatusCompleted,
+		},
+		{
+			ID:           "sub",
+			Executor:     agentsession.TodoExecutorSubAgent,
+			Status:       agentsession.TodoStatusBlocked,
+			Dependencies: []string{"agent"},
+		},
+	}) {
+		t.Fatalf("completed agent dependency should not require follow-up")
+	}
+}
+
+func TestEmitSubAgentSchedulerEventEmitsOnlySchedulerSpecificEvents(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManagerWithProviderEnvs(t, nil)
+	store := newMemoryStore()
+	service := NewWithFactory(
+		manager,
+		tools.NewRegistry(),
+		store,
+		&scriptedProviderFactory{provider: &scriptedProvider{}},
+		&stubContextBuilder{},
+	)
+	state := newRunState("run-emit-scheduler-events", agentsession.New("emit-scheduler-events"))
+
+	service.emitSubAgentSchedulerEvent(context.Background(), &state, subagent.SchedulerEvent{
+		Type:    subagent.SchedulerEventSubAgentStarted,
+		TaskID:  "task-1",
+		Attempt: 1,
+	})
+	service.emitSubAgentSchedulerEvent(context.Background(), &state, subagent.SchedulerEvent{
+		Type:    subagent.SchedulerEventSubAgentCompleted,
+		TaskID:  "task-1",
+		Attempt: 1,
+	})
+	service.emitSubAgentSchedulerEvent(context.Background(), &state, subagent.SchedulerEvent{
+		Type:    subagent.SchedulerEventSubAgentRetried,
+		TaskID:  "task-1",
+		Attempt: 2,
+		Reason:  "retry_after_failure",
+	})
+	service.emitSubAgentSchedulerEvent(context.Background(), &state, subagent.SchedulerEvent{
+		Type:   subagent.SchedulerEventBlocked,
+		TaskID: "task-2",
+		Reason: "dependency_unmet",
+	})
+	service.emitSubAgentSchedulerEvent(context.Background(), &state, subagent.SchedulerEvent{
+		Type:      subagent.SchedulerEventFinished,
+		QueueSize: 3,
+		Running:   0,
+	})
+
+	events := collectRuntimeEvents(service.Events())
+	if len(events) != 3 {
+		t.Fatalf("event count = %d, want 3", len(events))
+	}
+	assertEventContains(t, events, EventSubAgentRetried)
+	assertEventContains(t, events, EventSubAgentBlocked)
+	assertEventContains(t, events, EventSubAgentFinished)
+
+	for _, event := range events {
+		if event.Type != EventSubAgentFinished {
+			continue
+		}
+		payload, ok := event.Payload.(SubAgentEventPayload)
+		if !ok {
+			t.Fatalf("payload type = %T, want SubAgentEventPayload", event.Payload)
+		}
+		if payload.TaskID != "" {
+			t.Fatalf("finished payload task_id = %q, want empty", payload.TaskID)
+		}
+		if payload.State != "" {
+			t.Fatalf("finished payload state = %q, want empty", payload.State)
+		}
+		if payload.Reason != "dispatch_round_finished" {
+			t.Fatalf("finished payload reason = %q, want dispatch_round_finished", payload.Reason)
+		}
+		if payload.QueueSize != 3 || payload.Running != 0 {
+			t.Fatalf("finished payload queue/running = %d/%d, want 3/0", payload.QueueSize, payload.Running)
+		}
+	}
+}
+
 func newSuccessSubAgentFactory() subagent.Factory {
 	return subagent.NewWorkerFactory(func(role subagent.Role, policy subagent.RolePolicy) subagent.Engine {
 		_ = role

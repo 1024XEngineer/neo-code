@@ -119,6 +119,9 @@ func (s *Scheduler) Run(ctx context.Context) (ScheduleResult, error) {
 		}
 
 		if len(state.running) == 0 {
+			if s.cfg.DispatchOnce {
+				return finalize(result), nil
+			}
 			if !hasSchedulablePotential(graph.order, snapshot) {
 				return finalize(result), nil
 			}

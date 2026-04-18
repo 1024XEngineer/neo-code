@@ -17,7 +17,7 @@ const (
 )
 
 // dispatchTodos 在当前轮次执行一次 Todo DAG 调度，并把子代理事件映射到 runtime 事件流。
-// 返回值表示本轮是否产生了可观测进展（成功/失败/重试/恢复），用于驱动 runtime 后续控制流。
+// 返回值表示 runtime 是否应继续下一轮推理（存在进展，或需继续驱动 agent 路径补齐依赖）。
 func (s *Service) dispatchTodos(ctx context.Context, state *runState, snapshot turnSnapshot) (bool, error) {
 	if s == nil || state == nil {
 		return false, nil
@@ -43,6 +43,7 @@ func (s *Service) dispatchTodos(ctx context.Context, state *runState, snapshot t
 			PollInterval:   defaultSubAgentDispatchPollDelay,
 			FailureMode:    subagent.SchedulerFailureContinueOnError,
 			RecoveryMode:   subagent.SchedulerRecoveryRetry,
+			DispatchOnce:   true,
 			Observer: func(event subagent.SchedulerEvent) {
 				s.emitSubAgentSchedulerEvent(ctx, state, event)
 			},
@@ -60,7 +61,13 @@ func (s *Service) dispatchTodos(ctx context.Context, state *runState, snapshot t
 		len(result.Failed) > 0 ||
 		len(result.Recovered) > 0 ||
 		len(result.Retried) > 0
-	return progressed, nil
+	if progressed {
+		return true, nil
+	}
+	if hasSubAgentTodoWaitingForAgentDependency(store.ListTodos()) {
+		return true, nil
+	}
+	return false, nil
 }
 
 // hasDispatchableSubAgentTodo 判断当前会话是否存在需要调度的 SubAgent 任务。
@@ -84,6 +91,35 @@ func resolveSubAgentDispatchConcurrency() int {
 	return defaultSubAgentDispatchConcurrency
 }
 
+// hasSubAgentTodoWaitingForAgentDependency 判断是否存在需要继续由 agent 路径补齐依赖的子任务。
+func hasSubAgentTodoWaitingForAgentDependency(items []agentsession.TodoItem) bool {
+	if len(items) == 0 {
+		return false
+	}
+	byID := make(map[string]agentsession.TodoItem, len(items))
+	for _, item := range items {
+		byID[item.ID] = item
+	}
+	for _, item := range items {
+		if item.Status.IsTerminal() {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(item.Executor), agentsession.TodoExecutorSubAgent) {
+			continue
+		}
+		for _, depID := range item.Dependencies {
+			dependency, ok := byID[depID]
+			if !ok || dependency.Status.IsTerminal() {
+				continue
+			}
+			if strings.EqualFold(strings.TrimSpace(dependency.Executor), agentsession.TodoExecutorAgent) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // emitSubAgentSchedulerEvent 把 scheduler 事件映射为 runtime 事件。
 func (s *Service) emitSubAgentSchedulerEvent(ctx context.Context, state *runState, event subagent.SchedulerEvent) {
 	if s == nil || state == nil {
@@ -94,35 +130,19 @@ func (s *Service) emitSubAgentSchedulerEvent(ctx context.Context, state *runStat
 		TaskID: strings.TrimSpace(event.TaskID),
 		Step:   event.Attempt,
 		Reason: strings.TrimSpace(event.Reason),
-		Delta:  strings.TrimSpace(event.Reason),
 	}
 
 	switch event.Type {
-	case subagent.SchedulerEventSubAgentStarted:
-		payload.State = subagent.StateRunning
-		_ = s.emitRunScoped(ctx, EventSubAgentStarted, state, payload)
-	case subagent.SchedulerEventSubAgentProgress:
-		payload.State = subagent.StateRunning
-		_ = s.emitRunScoped(ctx, EventSubAgentProgress, state, payload)
 	case subagent.SchedulerEventSubAgentRetried:
-		payload.State = subagent.StateRunning
 		_ = s.emitRunScoped(ctx, EventSubAgentRetried, state, payload)
-	case subagent.SchedulerEventSubAgentCompleted:
-		payload.State = subagent.StateSucceeded
-		_ = s.emitRunScoped(ctx, EventSubAgentCompleted, state, payload)
-	case subagent.SchedulerEventSubAgentFailed:
-		payload.State = subagent.StateFailed
-		payload.Error = payload.Reason
-		_ = s.emitRunScoped(ctx, EventSubAgentFailed, state, payload)
-	case subagent.SchedulerEventSubAgentCanceled:
-		payload.State = subagent.StateCanceled
-		payload.Error = payload.Reason
-		_ = s.emitRunScoped(ctx, EventSubAgentCanceled, state, payload)
 	case subagent.SchedulerEventBlocked:
-		payload.State = subagent.StateRunning
 		_ = s.emitRunScoped(ctx, EventSubAgentBlocked, state, payload)
 	case subagent.SchedulerEventFinished:
-		payload.State = subagent.StateRunning
+		payload.TaskID = ""
+		payload.Step = 0
+		payload.Reason = "dispatch_round_finished"
+		payload.QueueSize = event.QueueSize
+		payload.Running = event.Running
 		payload.Delta = fmt.Sprintf("blocked_left=%d running=%d", event.QueueSize, event.Running)
 		_ = s.emitRunScoped(ctx, EventSubAgentFinished, state, payload)
 	}

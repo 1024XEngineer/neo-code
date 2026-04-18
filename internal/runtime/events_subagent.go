@@ -15,6 +15,8 @@ type SubAgentEventPayload struct {
 	State      subagent.State      `json:"state"`
 	StopReason subagent.StopReason `json:"stop_reason,omitempty"`
 	Step       int                 `json:"step,omitempty"`
+	QueueSize  int                 `json:"queue_size,omitempty"`
+	Running    int                 `json:"running,omitempty"`
 	Reason     string              `json:"reason,omitempty"`
 	Delta      string              `json:"delta,omitempty"`
 	Error      string              `json:"error,omitempty"`

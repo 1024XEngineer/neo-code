@@ -202,6 +202,25 @@ func TestToolMetadataMethods(t *testing.T) {
 	if _, ok := properties["items"]; !ok {
 		t.Fatalf("Schema() should include items property")
 	}
+	patch, ok := properties["patch"].(map[string]any)
+	if !ok {
+		t.Fatalf("Schema() patch should be object, got %T", properties["patch"])
+	}
+	patchProps, ok := patch["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("Schema() patch.properties should be object, got %T", patch["properties"])
+	}
+	patchExecutor, ok := patchProps["executor"].(map[string]any)
+	if !ok {
+		t.Fatalf("Schema() patch.executor should be object, got %T", patchProps["executor"])
+	}
+	enumValues, ok := patchExecutor["enum"].([]string)
+	if !ok {
+		t.Fatalf("Schema() patch.executor.enum should be []string, got %T", patchExecutor["enum"])
+	}
+	if len(enumValues) != 2 || enumValues[0] != "agent" || enumValues[1] != "subagent" {
+		t.Fatalf("Schema() patch.executor.enum = %v, want [agent subagent]", enumValues)
+	}
 	artifacts, ok := properties["artifacts"].(map[string]any)
 	if !ok {
 		t.Fatalf("Schema() artifacts should be object, got %T", properties["artifacts"])

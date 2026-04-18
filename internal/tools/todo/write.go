@@ -130,6 +130,51 @@ func (t *Tool) Schema() map[string]any {
 			},
 			"patch": map[string]any{
 				"type": "object",
+				"properties": map[string]any{
+					"content": map[string]any{
+						"type": "string",
+					},
+					"status": map[string]any{
+						"type": "string",
+					},
+					"dependencies": map[string]any{
+						"type": "array",
+						"items": map[string]any{
+							"type": "string",
+						},
+					},
+					"priority": map[string]any{
+						"type": "integer",
+					},
+					"executor": map[string]any{
+						"type": "string",
+						"enum": []string{
+							"agent",
+							"subagent",
+						},
+					},
+					"owner_type": map[string]any{
+						"type": "string",
+					},
+					"owner_id": map[string]any{
+						"type": "string",
+					},
+					"acceptance": map[string]any{
+						"type": "array",
+						"items": map[string]any{
+							"type": "string",
+						},
+					},
+					"artifacts": map[string]any{
+						"type": "array",
+						"items": map[string]any{
+							"type": "string",
+						},
+					},
+					"failure_reason": map[string]any{
+						"type": "string",
+					},
+				},
 			},
 			"status": map[string]any{
 				"type": "string",
