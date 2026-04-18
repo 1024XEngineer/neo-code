@@ -2117,6 +2117,12 @@ func (a *App) handleForgetCommand(keyword string) tea.Cmd {
 
 // runMemoSystemTool 通过 runtime 的系统工具入口执行 memo 相关 slash 命令。
 func (a *App) runMemoSystemTool(toolName string, arguments map[string]any) tea.Cmd {
+	if a.memoSvc == nil {
+		a.appendInlineMessage(roleError, "[System] Memo service is not enabled.")
+		a.rebuildTranscript()
+		return nil
+	}
+
 	payload, err := json.Marshal(arguments)
 	if err != nil {
 		a.appendInlineMessage(roleError, fmt.Sprintf("[System] Failed to encode memo command: %s", err))

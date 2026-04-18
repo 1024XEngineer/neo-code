@@ -2113,7 +2113,7 @@ func TestHandleMemoCommand(t *testing.T) {
 	})
 
 	t.Run("routes through runtime system tool", func(t *testing.T) {
-		app, runtime := newTestApp(t)
+		app, runtime := newTestAppWithMemo(t)
 		cmd := app.handleMemoCommand()
 		if cmd == nil {
 			t.Fatal("expected async cmd")
@@ -2196,7 +2196,7 @@ func TestHandleRememberCommand(t *testing.T) {
 	})
 
 	t.Run("routes through runtime system tool", func(t *testing.T) {
-		app, runtime := newTestApp(t)
+		app, runtime := newTestAppWithMemo(t)
 		cmd := app.handleRememberCommand("something")
 		if cmd == nil {
 			t.Fatal("expected async cmd")
@@ -2256,7 +2256,7 @@ func TestHandleForgetCommand(t *testing.T) {
 	})
 
 	t.Run("routes through runtime system tool", func(t *testing.T) {
-		app, runtime := newTestApp(t)
+		app, runtime := newTestAppWithMemo(t)
 		cmd := app.handleForgetCommand("something")
 		if cmd == nil {
 			t.Fatal("expected async cmd")
@@ -2269,6 +2269,34 @@ func TestHandleForgetCommand(t *testing.T) {
 			t.Fatalf("ToolName = %q, want %q", runtime.systemToolCalls[0].ToolName, tools.ToolNameMemoRemove)
 		}
 	})
+}
+
+func TestMemoCommandsShowNotEnabledWhenNil(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		cmd  func(*App) tea.Cmd
+	}{
+		{"memo", (*App).handleMemoCommand},
+		{"remember", func(a *App) tea.Cmd { return a.handleRememberCommand("x") }},
+		{"forget", func(a *App) tea.Cmd { return a.handleForgetCommand("x") }},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			app, _ := newTestApp(t)
+			cmd := tt.cmd(&app)
+			if cmd != nil {
+				t.Fatal("expected nil cmd when memo is disabled")
+			}
+			msgs := app.activeMessages
+			last := msgs[len(msgs)-1]
+			if !strings.Contains(messageText(last), "not enabled") {
+				t.Errorf("expected 'not enabled' message, got: %s", messageText(last))
+			}
+		})
+	}
 }
 
 func TestNoteInputEditTracksPasteHeuristics(t *testing.T) {

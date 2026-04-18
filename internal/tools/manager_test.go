@@ -114,7 +114,7 @@ func TestDefaultManagerMicroCompactPolicy(t *testing.T) {
 	t.Run("executor without policy support defaults to compact", func(t *testing.T) {
 		t.Parallel()
 
-			manager, err := NewManager(executorWithoutOptionalCompactFeatures{}, mustAllowEngine(t), nil)
+		manager, err := NewManager(executorWithoutOptionalCompactFeatures{}, mustAllowEngine(t), nil)
 		if err != nil {
 			t.Fatalf("new manager: %v", err)
 		}
@@ -154,7 +154,7 @@ func TestDefaultManagerMicroCompactSummarizer(t *testing.T) {
 	t.Run("executor without summarizer support returns nil", func(t *testing.T) {
 		t.Parallel()
 
-			manager, err := NewManager(executorWithoutOptionalCompactFeatures{}, mustAllowEngine(t), nil)
+		manager, err := NewManager(executorWithoutOptionalCompactFeatures{}, mustAllowEngine(t), nil)
 		if err != nil {
 			t.Fatalf("new manager: %v", err)
 		}
@@ -171,7 +171,7 @@ func TestDefaultManagerMicroCompactSummarizer(t *testing.T) {
 			return "summary:" + content
 		})
 
-			manager, err := NewManager(registry, mustAllowEngine(t), nil)
+		manager, err := NewManager(registry, mustAllowEngine(t), nil)
 		if err != nil {
 			t.Fatalf("new manager: %v", err)
 		}
