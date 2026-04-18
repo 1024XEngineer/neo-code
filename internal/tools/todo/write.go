@@ -54,6 +54,13 @@ func (t *Tool) Schema() map[string]any {
 			"priority": map[string]any{
 				"type": "integer",
 			},
+			"executor": map[string]any{
+				"type": "string",
+				"enum": []string{
+					"agent",
+					"subagent",
+				},
+			},
 			"owner_type": map[string]any{
 				"type": "string",
 			},
@@ -129,6 +136,13 @@ func (t *Tool) Schema() map[string]any {
 			},
 			"expected_revision": map[string]any{
 				"type": "integer",
+			},
+			"executor": map[string]any{
+				"type": "string",
+				"enum": []string{
+					"agent",
+					"subagent",
+				},
 			},
 			"owner_type": map[string]any{
 				"type": "string",

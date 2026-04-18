@@ -48,6 +48,7 @@ type writeInput struct {
 	Patch            *todoPatchInput         `json:"patch,omitempty"`
 	Status           agentsession.TodoStatus `json:"status,omitempty"`
 	ExpectedRevision int64                   `json:"expected_revision,omitempty"`
+	Executor         string                  `json:"executor,omitempty"`
 	OwnerType        string                  `json:"owner_type,omitempty"`
 	OwnerID          string                  `json:"owner_id,omitempty"`
 	Artifacts        []string                `json:"artifacts,omitempty"`
@@ -64,6 +65,7 @@ type todoPatchInput struct {
 	Status        *agentsession.TodoStatus `json:"status,omitempty"`
 	Dependencies  *[]string                `json:"dependencies,omitempty"`
 	Priority      *int                     `json:"priority,omitempty"`
+	Executor      *string                  `json:"executor,omitempty"`
 	OwnerType     *string                  `json:"owner_type,omitempty"`
 	OwnerID       *string                  `json:"owner_id,omitempty"`
 	Acceptance    *[]string                `json:"acceptance,omitempty"`
@@ -80,6 +82,7 @@ func (p *todoPatchInput) toSessionPatch() agentsession.TodoPatch {
 		Status:        p.Status,
 		Dependencies:  p.Dependencies,
 		Priority:      p.Priority,
+		Executor:      p.Executor,
 		OwnerType:     p.OwnerType,
 		OwnerID:       p.OwnerID,
 		Acceptance:    p.Acceptance,
@@ -96,6 +99,7 @@ type todoWireItem struct {
 	Status        agentsession.TodoStatus `json:"status,omitempty"`
 	Dependencies  []string                `json:"dependencies,omitempty"`
 	Priority      int                     `json:"priority,omitempty"`
+	Executor      string                  `json:"executor,omitempty"`
 	OwnerType     string                  `json:"owner_type,omitempty"`
 	OwnerID       string                  `json:"owner_id,omitempty"`
 	Acceptance    []string                `json:"acceptance,omitempty"`
@@ -122,6 +126,7 @@ func parseInput(raw []byte) (writeInput, error) {
 	}
 	input.Action = strings.ToLower(strings.TrimSpace(input.Action))
 	input.ID = strings.TrimSpace(input.ID)
+	input.Executor = strings.TrimSpace(input.Executor)
 	input.OwnerType = strings.TrimSpace(input.OwnerType)
 	input.OwnerID = strings.TrimSpace(input.OwnerID)
 	input.Reason = strings.TrimSpace(input.Reason)
@@ -188,6 +193,7 @@ func decodeLegacyItem(rawItem json.RawMessage) (agentsession.TodoItem, error) {
 		Status:        wire.Status,
 		Dependencies:  wire.Dependencies,
 		Priority:      wire.Priority,
+		Executor:      wire.Executor,
 		OwnerType:     wire.OwnerType,
 		OwnerID:       wire.OwnerID,
 		Acceptance:    wire.Acceptance,
@@ -203,6 +209,9 @@ func validateInputLimits(input writeInput) error {
 		return fmt.Errorf("%w: expected_revision must be >= 0", errTodoInvalidArguments)
 	}
 	if err := ensureTodoWriteTextLength("id", input.ID); err != nil {
+		return err
+	}
+	if err := ensureTodoWriteTextLength("executor", input.Executor); err != nil {
 		return err
 	}
 	if err := ensureTodoWriteTextLength("owner_type", input.OwnerType); err != nil {
@@ -254,6 +263,7 @@ func ensureTodoWriteItemLength(field string, item agentsession.TodoItem) error {
 	}{
 		{field: field + ".id", value: item.ID},
 		{field: field + ".content", value: item.Content},
+		{field: field + ".executor", value: item.Executor},
 		{field: field + ".owner_type", value: item.OwnerType},
 		{field: field + ".owner_id", value: item.OwnerID},
 		{field: field + ".failure_reason", value: item.FailureReason},
@@ -284,6 +294,11 @@ func ensureTodoWritePatchLength(patch todoPatchInput) error {
 	}
 	if patch.OwnerType != nil {
 		if err := ensureTodoWriteTextLength("patch.owner_type", *patch.OwnerType); err != nil {
+			return err
+		}
+	}
+	if patch.Executor != nil {
+		if err := ensureTodoWriteTextLength("patch.executor", *patch.Executor); err != nil {
 			return err
 		}
 	}
@@ -404,7 +419,15 @@ func renderTodos(action string, items []agentsession.TodoItem) string {
 	lines = append(lines, "todos:")
 	for _, item := range items {
 		lines = append(lines,
-			fmt.Sprintf("- [%s] %s (rev=%d, p=%d) %s", item.Status, item.ID, item.Revision, item.Priority, item.Content),
+			fmt.Sprintf(
+				"- [%s] %s (rev=%d, p=%d, executor=%s) %s",
+				item.Status,
+				item.ID,
+				item.Revision,
+				item.Priority,
+				strings.TrimSpace(item.Executor),
+				item.Content,
+			),
 		)
 	}
 	return strings.Join(lines, "\n")

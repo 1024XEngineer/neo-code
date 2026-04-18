@@ -14,6 +14,7 @@ const (
 	maxPromptTodoIDLength = 80
 	maxPromptTodoTextLen  = 240
 	maxPromptTodoDeps     = 8
+	maxPromptExecutorLen  = 32
 	maxPromptOwnerLen     = 64
 )
 
@@ -67,6 +68,10 @@ func (todosSource) Sections(ctx context.Context, input BuildInput) ([]promptSect
 				quotedDeps = append(quotedDeps, fmt.Sprintf("%q", dep))
 			}
 			lines = append(lines, fmt.Sprintf("  deps: %s", strings.Join(quotedDeps, ", ")))
+		}
+		executor := sanitizePromptValue(item.Executor, maxPromptExecutorLen)
+		if executor != "" {
+			lines = append(lines, fmt.Sprintf("  executor: %q", executor))
 		}
 		if strings.TrimSpace(item.OwnerType) != "" || strings.TrimSpace(item.OwnerID) != "" {
 			ownerType := sanitizePromptValue(item.OwnerType, maxPromptOwnerLen)

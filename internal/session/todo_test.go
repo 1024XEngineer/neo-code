@@ -485,3 +485,64 @@ func TestApplyTodoPatchCoverage(t *testing.T) {
 		t.Fatalf("terminal transition should fail with invalid transition, got %v", err)
 	}
 }
+
+func TestTodoExecutorNormalizationAndValidation(t *testing.T) {
+	t.Parallel()
+
+	session := New("todo-executor")
+	if err := session.AddTodo(TodoItem{
+		ID:       "task-1",
+		Content:  "run with subagent",
+		Executor: " SubAgent ",
+	}); err != nil {
+		t.Fatalf("AddTodo(task-1) error = %v", err)
+	}
+	item, ok := session.FindTodo("task-1")
+	if !ok {
+		t.Fatalf("FindTodo(task-1) not found")
+	}
+	if item.Executor != TodoExecutorSubAgent {
+		t.Fatalf("executor = %q, want %q", item.Executor, TodoExecutorSubAgent)
+	}
+
+	if err := session.AddTodo(TodoItem{
+		ID:       "task-invalid",
+		Content:  "invalid executor",
+		Executor: "robot",
+	}); err == nil || !strings.Contains(err.Error(), "invalid todo executor") {
+		t.Fatalf("AddTodo(task-invalid) error = %v, want invalid executor", err)
+	}
+}
+
+func TestSessionUpdateTodoExecutorPatch(t *testing.T) {
+	t.Parallel()
+
+	session := New("todo-executor-patch")
+	if err := session.AddTodo(TodoItem{
+		ID:      "task-1",
+		Content: "run with agent by default",
+	}); err != nil {
+		t.Fatalf("AddTodo(task-1) error = %v", err)
+	}
+	item, ok := session.FindTodo("task-1")
+	if !ok {
+		t.Fatalf("FindTodo(task-1) not found")
+	}
+	if item.Executor != TodoExecutorAgent {
+		t.Fatalf("default executor = %q, want %q", item.Executor, TodoExecutorAgent)
+	}
+
+	executor := "subagent"
+	if err := session.UpdateTodo("task-1", TodoPatch{
+		Executor: &executor,
+	}, item.Revision); err != nil {
+		t.Fatalf("UpdateTodo(task-1) error = %v", err)
+	}
+	updated, ok := session.FindTodo("task-1")
+	if !ok {
+		t.Fatalf("FindTodo(task-1) not found after update")
+	}
+	if updated.Executor != TodoExecutorSubAgent {
+		t.Fatalf("executor = %q, want %q", updated.Executor, TodoExecutorSubAgent)
+	}
+}

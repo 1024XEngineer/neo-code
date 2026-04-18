@@ -373,12 +373,13 @@ func TestToolExecuteReasonMapping(t *testing.T) {
 func TestParseInput(t *testing.T) {
 	t.Parallel()
 
-	raw := []byte(`{"action":" ADD ","id":"  a  ","owner_type":" SubAgent ","owner_id":" worker "}`)
+	raw := []byte(`{"action":" ADD ","id":"  a  ","executor":" SubAgent ","owner_type":" SubAgent ","owner_id":" worker "}`)
 	input, err := parseInput(raw)
 	if err != nil {
 		t.Fatalf("parseInput() error = %v", err)
 	}
-	if input.Action != "add" || input.ID != "a" || input.OwnerType != "SubAgent" || input.OwnerID != "worker" {
+	if input.Action != "add" || input.ID != "a" || input.Executor != "SubAgent" ||
+		input.OwnerType != "SubAgent" || input.OwnerID != "worker" {
 		t.Fatalf("parseInput() got %+v", input)
 	}
 
@@ -431,6 +432,12 @@ func TestParseInput(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "expected_revision must be >= 0") {
 		t.Fatalf("parseInput() expected invalid arguments for negative expected_revision, err=%v", err)
 	}
+
+	tooLongExecutor := strings.Repeat("x", maxTodoWriteTextLen+1)
+	_, err = parseInput([]byte(`{"action":"update","id":"a","patch":{"executor":"` + tooLongExecutor + `"}}`))
+	if err == nil || !strings.Contains(err.Error(), "patch.executor exceeds max length") {
+		t.Fatalf("parseInput() expected invalid arguments for too long patch.executor, err=%v", err)
+	}
 }
 
 func TestTodoPatchInputToSessionPatch(t *testing.T) {
@@ -440,6 +447,7 @@ func TestTodoPatchInputToSessionPatch(t *testing.T) {
 	status := agentsession.TodoStatusInProgress
 	dependencies := []string{"a"}
 	priority := 2
+	executor := agentsession.TodoExecutorSubAgent
 	ownerType := agentsession.TodoOwnerTypeSubAgent
 	ownerID := "worker-1"
 	acceptance := []string{"done"}
@@ -451,6 +459,7 @@ func TestTodoPatchInputToSessionPatch(t *testing.T) {
 		Status:        &status,
 		Dependencies:  &dependencies,
 		Priority:      &priority,
+		Executor:      &executor,
 		OwnerType:     &ownerType,
 		OwnerID:       &ownerID,
 		Acceptance:    &acceptance,
@@ -526,6 +535,7 @@ func TestCommonHelpersCoverage(t *testing.T) {
 			Status:       agentsession.TodoStatusPending,
 			Priority:     1,
 			Revision:     1,
+			Executor:     agentsession.TodoExecutorSubAgent,
 			Dependencies: []string{"a"},
 		},
 		{
@@ -534,6 +544,7 @@ func TestCommonHelpersCoverage(t *testing.T) {
 			Status:    agentsession.TodoStatusInProgress,
 			Priority:  5,
 			Revision:  2,
+			Executor:  agentsession.TodoExecutorSubAgent,
 			OwnerType: agentsession.TodoOwnerTypeSubAgent,
 			OwnerID:   "worker-1",
 		},
@@ -542,6 +553,9 @@ func TestCommonHelpersCoverage(t *testing.T) {
 	rendered := renderTodos("plan", items)
 	if !strings.Contains(rendered, "- [in_progress] a") || !strings.Contains(rendered, "- [pending] b") {
 		t.Fatalf("renderTodos() missing expected todos content: %q", rendered)
+	}
+	if !strings.Contains(rendered, "executor=subagent") {
+		t.Fatalf("renderTodos() should include executor, got %q", rendered)
 	}
 	if !strings.Contains(renderTodos("plan", nil), "count: 0") {
 		t.Fatalf("renderTodos(nil) should include count 0")
