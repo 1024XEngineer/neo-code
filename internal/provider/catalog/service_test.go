@@ -190,7 +190,7 @@ func TestListProviderModelsReturnsDiscoveryErrorOnCacheMiss(t *testing.T) {
 	}), newMemoryStore())
 
 	_, err := service.ListProviderModels(context.Background(), customGatewayProviderSource())
-	if err == nil || !strings.Contains(err.Error(), "OPENAI_API_KEY") {
+	if err == nil || !strings.Contains(err.Error(), testAPIKeyEnv) {
 		t.Fatalf("expected discovery-time api key error, got %v", err)
 	}
 }
@@ -636,7 +636,9 @@ func newRegistry(t *testing.T, name string, discover provider.DiscoveryFunc) *pr
 }
 
 func openAIProviderSource() provider.CatalogInput {
-	return mustCatalogInput(nil, config.OpenAIProvider())
+	providerCfg := config.OpenAIProvider()
+	providerCfg.APIKeyEnv = testAPIKeyEnv
+	return mustCatalogInput(nil, providerCfg)
 }
 
 func customGatewayProviderSource() provider.CatalogInput {
@@ -741,7 +743,7 @@ func (s *memoryStore) Save(ctx context.Context, modelCatalog ModelCatalog) error
 	return nil
 }
 
-const testAPIKeyEnv = "OPENAI_API_KEY"
+const testAPIKeyEnv = "NEOCODE_TEST_CATALOG_API_KEY"
 
 type failSaveStore struct {
 	*memoryStore

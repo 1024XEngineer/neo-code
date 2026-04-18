@@ -140,10 +140,37 @@ custom provider 通过单独文件声明，而不是写进 `config.yaml`：
 name: company-gateway
 driver: openaicompat
 api_key_env: COMPANY_GATEWAY_API_KEY
+model_source: discover
 openai_compatible:
   base_url: https://llm.example.com/v1
   api_style: chat_completions
 ```
+
+`model_source` 语义如下：
+
+- `discover`（默认）：通过 discovery（如 `/models`）拉取模型列表。
+- `manual`：不触发 discovery，优先使用 `models` 中声明的模型列表。
+
+`manual` 模式示例：
+
+```yaml
+name: company-gateway-manual
+driver: openaicompat
+api_key_env: COMPANY_GATEWAY_API_KEY
+model_source: manual
+openai_compatible:
+  base_url: https://llm.example.com/v1
+models:
+  - id: gpt-4o-mini
+    name: GPT-4o Mini
+    context_window: 128000
+```
+
+迁移与兼容性说明：
+
+- 老配置未声明 `model_source` 时，默认按 `discover` 处理。
+- `manual` 模式下必须提供 `models`，否则会在加载/创建阶段报错。
+- `manual` 模式会忽略 discovery 相关字段（如 `discovery_endpoint_path`、`discovery_response_profile`）。
 
 ## Auto Compact 失败与校验补充
 

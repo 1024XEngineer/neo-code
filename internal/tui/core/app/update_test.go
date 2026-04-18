@@ -431,6 +431,34 @@ func TestSubmitProviderAddFormRedactsSensitiveError(t *testing.T) {
 	}
 }
 
+func TestSubmitProviderAddFormTransitionsToManualStageWhenDiscoveryEndpointEmpty(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.startProviderAddForm()
+
+	app.providerAddForm.Name = "manual-stage-gateway"
+	app.providerAddForm.Driver = provider.DriverOpenAICompat
+	app.providerAddForm.APIKeyEnv = "MANUAL_STAGE_GATEWAY_API_KEY"
+	app.providerAddForm.APIKey = "sk-manual-stage"
+	app.providerAddForm.DiscoveryEndpointPath = ""
+
+	cmd := app.submitProviderAddForm()
+	if cmd != nil {
+		t.Fatalf("expected no async command when entering manual JSON stage")
+	}
+	if app.providerAddForm == nil {
+		t.Fatalf("expected provider form to remain open")
+	}
+	if app.providerAddForm.Stage != providerAddFormStageManualModels {
+		t.Fatalf("expected form stage manual models, got %v", app.providerAddForm.Stage)
+	}
+	if strings.TrimSpace(app.providerAddForm.ManualModelsJSON) != strings.TrimSpace(providerAddManualModelsJSONTemplate) {
+		t.Fatalf("expected manual model template to be prefilled, got %q", app.providerAddForm.ManualModelsJSON)
+	}
+	if app.state.StatusText != "Fill manual model JSON" {
+		t.Fatalf("expected manual stage status text, got %q", app.state.StatusText)
+	}
+}
+
 func TestSubmitProviderAddFormRequiresAPIKeyEnv(t *testing.T) {
 	app, _ := newTestApp(t)
 	app.startProviderAddForm()
@@ -2400,7 +2428,7 @@ func TestBuildProviderAddRequest(t *testing.T) {
 		}
 	})
 
-	t.Run("openai compat applies defaults", func(t *testing.T) {
+	t.Run("openai compat defaults to manual source when discovery endpoint is empty", func(t *testing.T) {
 		req, err := buildProviderAddRequest(providerAddFormState{
 			Name:      "openai-compat",
 			Driver:    provider.DriverOpenAICompat,
@@ -2415,6 +2443,31 @@ func TestBuildProviderAddRequest(t *testing.T) {
 		}
 		if req.APIStyle != provider.OpenAICompatibleAPIStyleChatCompletions {
 			t.Fatalf("expected default api style")
+		}
+		if req.ModelSource != provider.ModelSourceManual {
+			t.Fatalf("expected manual model source, got %q", req.ModelSource)
+		}
+		if req.DiscoveryEndpointPath != "" {
+			t.Fatalf("expected empty discovery endpoint in manual mode, got %q", req.DiscoveryEndpointPath)
+		}
+		if req.DiscoveryResponseProfile != "" {
+			t.Fatalf("expected empty discovery response profile in manual mode, got %q", req.DiscoveryResponseProfile)
+		}
+	})
+
+	t.Run("openai compat discover mode normalizes discovery settings", func(t *testing.T) {
+		req, err := buildProviderAddRequest(providerAddFormState{
+			Name:                  "openai-compat-discover",
+			Driver:                provider.DriverOpenAICompat,
+			APIKey:                "k",
+			APIKeyEnv:             "OPENAI_COMPAT_DISCOVER_API_KEY",
+			DiscoveryEndpointPath: provider.DiscoveryEndpointPathModels,
+		})
+		if err != "" {
+			t.Fatalf("unexpected error: %s", err)
+		}
+		if req.ModelSource != provider.ModelSourceDiscover {
+			t.Fatalf("expected discover model source, got %q", req.ModelSource)
 		}
 		if req.DiscoveryEndpointPath != provider.DiscoveryEndpointPathModels {
 			t.Fatalf("expected default discovery endpoint, got %q", req.DiscoveryEndpointPath)
@@ -2486,6 +2539,7 @@ func TestBuildProviderAddRequest(t *testing.T) {
 			Driver:                   provider.DriverOpenAICompat,
 			APIKey:                   "k",
 			APIKeyEnv:                "OPENAI_COMPAT_API_KEY",
+			DiscoveryEndpointPath:    provider.DiscoveryEndpointPathModels,
 			DiscoveryResponseProfile: "unsupported-profile",
 		}); !strings.Contains(err, "unsupported") {
 			t.Fatalf("expected invalid discovery response profile error, got %q", err)

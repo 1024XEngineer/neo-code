@@ -28,4 +28,7 @@ const (
 	DiscoveryResponseProfileOpenAI  = "openai"
 	DiscoveryResponseProfileGemini  = "gemini"
 	DiscoveryResponseProfileGeneric = "generic"
+
+	ModelSourceDiscover = "discover"
+	ModelSourceManual   = "manual"
 )

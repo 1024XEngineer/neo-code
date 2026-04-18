@@ -24,6 +24,7 @@ type ProviderConfig struct {
 	BaseURL                  string                          `yaml:"base_url"`
 	Model                    string                          `yaml:"model"`
 	APIKeyEnv                string                          `yaml:"api_key_env"`
+	ModelSource              string                          `yaml:"-"`
 	ChatProtocol             string                          `yaml:"-"`
 	ChatEndpointPath         string                          `yaml:"-"`
 	DiscoveryProtocol        string                          `yaml:"-"`
@@ -77,6 +78,18 @@ func (p ProviderConfig) Validate() error {
 	if strings.TrimSpace(p.APIKeyEnv) == "" {
 		return fmt.Errorf("provider %q api_key_env is empty", p.Name)
 	}
+
+	normalizedModelSource := provider.NormalizeModelSource(p.ModelSource)
+	if normalizedModelSource == "" {
+		normalizedModelSource = provider.ModelSourceDiscover
+	}
+	if normalizedModelSource == provider.ModelSourceManual && strings.TrimSpace(p.DiscoveryEndpointPath) != "" {
+		return fmt.Errorf("provider %q manual model source must not set discovery_endpoint_path", p.Name)
+	}
+	if normalizedModelSource == provider.ModelSourceManual && len(p.Models) == 0 {
+		return fmt.Errorf("provider %q manual model source requires non-empty models", p.Name)
+	}
+
 	normalizedProtocols, err := provider.NormalizeProviderProtocolSettings(
 		p.Driver,
 		p.ChatProtocol,
@@ -305,6 +318,7 @@ func OpenAIProvider() ProviderConfig {
 		BaseURL:                  OpenAIDefaultBaseURL,
 		Model:                    OpenAIDefaultModel,
 		APIKeyEnv:                OpenAIDefaultAPIKeyEnv,
+		ModelSource:              provider.ModelSourceDiscover,
 		ChatProtocol:             provider.ChatProtocolOpenAIChatCompletions,
 		ChatEndpointPath:         "/chat/completions",
 		DiscoveryProtocol:        provider.DiscoveryProtocolOpenAIModels,
@@ -325,6 +339,7 @@ func GeminiProvider() ProviderConfig {
 		BaseURL:                  GeminiDefaultBaseURL,
 		Model:                    GeminiDefaultModel,
 		APIKeyEnv:                GeminiDefaultAPIKeyEnv,
+		ModelSource:              provider.ModelSourceDiscover,
 		ChatProtocol:             provider.ChatProtocolOpenAIChatCompletions,
 		ChatEndpointPath:         "/chat/completions",
 		DiscoveryProtocol:        provider.DiscoveryProtocolGeminiModels,
@@ -345,6 +360,7 @@ func OpenLLProvider() ProviderConfig {
 		BaseURL:                  OpenLLDefaultBaseURL,
 		Model:                    OpenLLDefaultModel,
 		APIKeyEnv:                OpenLLDefaultAPIKeyEnv,
+		ModelSource:              provider.ModelSourceDiscover,
 		ChatProtocol:             provider.ChatProtocolOpenAIChatCompletions,
 		ChatEndpointPath:         "/chat/completions",
 		DiscoveryProtocol:        provider.DiscoveryProtocolOpenAIModels,
@@ -365,6 +381,7 @@ func QiniuProvider() ProviderConfig {
 		BaseURL:                  QiniuDefaultBaseURL,
 		Model:                    QiniuDefaultModel,
 		APIKeyEnv:                QiniuDefaultAPIKeyEnv,
+		ModelSource:              provider.ModelSourceDiscover,
 		ChatProtocol:             provider.ChatProtocolOpenAIChatCompletions,
 		ChatEndpointPath:         "/chat/completions",
 		DiscoveryProtocol:        provider.DiscoveryProtocolOpenAIModels,

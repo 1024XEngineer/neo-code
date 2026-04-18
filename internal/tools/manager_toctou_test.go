@@ -39,7 +39,7 @@ func (s *mutatingWorkspaceSandbox) Check(
 }
 
 func TestDefaultManagerTOCTOUScenarios(t *testing.T) {
-	t.Parallel()
+	// t.Parallel()
 
 	tests := []struct {
 		name    string
@@ -49,7 +49,7 @@ func TestDefaultManagerTOCTOUScenarios(t *testing.T) {
 		{
 			name: "read file blocks symlink swap after sandbox check",
 			setup: func(t *testing.T, workspace string) (*tools.Registry, tools.ToolCallInput, func(plan *security.WorkspaceExecutionPlan) error) {
-				t.Helper()
+				// t.Helper()
 
 				safePath := filepath.Join(workspace, "safe.txt")
 				if err := os.WriteFile(safePath, []byte("safe"), 0o644); err != nil {
@@ -62,6 +62,7 @@ func TestDefaultManagerTOCTOUScenarios(t *testing.T) {
 				}
 
 				linkPath := filepath.Join(workspace, "swap-link.txt")
+				requireSymlinkSupport(t, safePath, linkPath+"_probe")
 				if err := os.Symlink(safePath, linkPath); err != nil {
 					t.Skipf("symlink not supported in this environment: %v", err)
 				}
@@ -195,7 +196,7 @@ func TestDefaultManagerTOCTOUScenarios(t *testing.T) {
 	for _, tt := range tests {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
+			// t.Parallel()
 
 			workspace := t.TempDir()
 			registry, input, mutate := tt.setup(t, workspace)
@@ -237,6 +238,9 @@ func requireSymlinkSupport(t *testing.T, target string, link string) {
 	t.Helper()
 	if err := os.Symlink(target, link); err != nil {
 		t.Skipf("symlink not supported in this environment: %v", err)
+	}
+	if _, err := os.Lstat(link); err != nil {
+		t.Skipf("symlink created but missing: %v", err)
 	}
 	_ = os.Remove(link)
 }

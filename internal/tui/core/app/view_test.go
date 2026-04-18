@@ -308,6 +308,21 @@ func TestRenderProviderAddFormPromptLabel(t *testing.T) {
 	}
 }
 
+func TestRenderProviderAddFormManualModelsStage(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.startProviderAddForm()
+	app.providerAddForm.Stage = providerAddFormStageManualModels
+	app.providerAddForm.ManualModelsJSON = ""
+
+	form := app.renderProviderAddForm()
+	if !strings.Contains(form, "Manual Model JSON") {
+		t.Fatalf("expected manual model json title, got %q", form)
+	}
+	if !strings.Contains(form, "\"id\": \"model-id\"") {
+		t.Fatalf("expected manual model json template, got %q", form)
+	}
+}
+
 func TestViewSmallWindowHint(t *testing.T) {
 	app, _ := newTestApp(t)
 	app.width = 40

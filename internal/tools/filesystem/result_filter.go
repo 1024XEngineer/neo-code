@@ -2,6 +2,7 @@ package filesystem
 
 import (
 	"path/filepath"
+	goruntime "runtime"
 	"strings"
 )
 
@@ -54,6 +55,10 @@ func (f *resultPathFilter) evaluate(path string) (relative string, reason string
 
 // isPathWithinRoot 判断目标路径是否仍在工作区根目录之内。
 func isPathWithinRoot(root string, candidate string) bool {
+	if goruntime.GOOS == "windows" {
+		root = strings.ToLower(root)
+		candidate = strings.ToLower(candidate)
+	}
 	rel, err := filepath.Rel(root, candidate)
 	if err != nil {
 		return false

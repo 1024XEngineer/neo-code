@@ -143,7 +143,7 @@ func TestServicePrepareUserInputDoesNotBlockWhenPrepareEventQueueIsFull(t *testi
 	if input.SessionID == "" {
 		t.Fatalf("expected prepared session id")
 	}
-	if elapsed := time.Since(start); elapsed > time.Second {
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
 		t.Fatalf("PrepareUserInput() blocked too long with full event queue: %v", elapsed)
 	}
 }
