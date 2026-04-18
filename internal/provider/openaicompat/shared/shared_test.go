@@ -128,3 +128,50 @@ func TestSetBearerAuthorization(t *testing.T) {
 		}
 	})
 }
+
+func TestApplyAuthHeaders(t *testing.T) {
+	t.Parallel()
+
+	t.Run("x_api_key", func(t *testing.T) {
+		t.Parallel()
+
+		header := http.Header{}
+		ApplyAuthHeaders(header, provider.RuntimeConfig{
+			AuthStrategy: provider.AuthStrategyXAPIKey,
+			APIKey:       "x-key",
+		})
+		if got := header.Get("X-API-Key"); got != "x-key" {
+			t.Fatalf("expected x-api-key header, got %q", got)
+		}
+	})
+
+	t.Run("anthropic default version", func(t *testing.T) {
+		t.Parallel()
+
+		header := http.Header{}
+		ApplyAuthHeaders(header, provider.RuntimeConfig{
+			AuthStrategy: provider.AuthStrategyAnthropic,
+			APIKey:       "anthropic-key",
+		})
+		if got := header.Get("x-api-key"); got != "anthropic-key" {
+			t.Fatalf("expected anthropic x-api-key, got %q", got)
+		}
+		if got := header.Get("anthropic-version"); got == "" {
+			t.Fatal("expected default anthropic version")
+		}
+	})
+
+	t.Run("anthropic explicit version", func(t *testing.T) {
+		t.Parallel()
+
+		header := http.Header{}
+		ApplyAuthHeaders(header, provider.RuntimeConfig{
+			AuthStrategy: provider.AuthStrategyAnthropic,
+			APIKey:       "anthropic-key",
+			APIVersion:   "2024-01-01",
+		})
+		if got := header.Get("anthropic-version"); got != "2024-01-01" {
+			t.Fatalf("expected explicit anthropic version, got %q", got)
+		}
+	})
+}
