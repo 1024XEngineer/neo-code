@@ -286,8 +286,5 @@ func looksLikeSingleModelObject(raw map[string]any) bool {
 	if modelID, ok := lookupObjectValue(raw, "modelId"); ok && strings.TrimSpace(fmt.Sprint(modelID)) != "" {
 		return true
 	}
-	if name, ok := lookupObjectValue(raw, "name"); ok && strings.TrimSpace(fmt.Sprint(name)) != "" {
-		return true
-	}
 	return false
 }

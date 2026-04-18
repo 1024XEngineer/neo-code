@@ -3,8 +3,10 @@ package httpdiscovery
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"neo-code/internal/provider"
@@ -54,5 +56,30 @@ func TestDiscoverRawModelsRejectsInvalidEndpointPath(t *testing.T) {
 	})
 	if err == nil || !provider.IsDiscoveryConfigError(err) {
 		t.Fatalf("expected discovery config error, got %v", err)
+	}
+}
+
+func TestDiscoverRawModelsRejectsTooLargeResponseBody(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[{"id":"gpt-4.1"}],"padding":"` + strings.Repeat("x", int(maxDiscoveryResponseBodyBytes)) + `"}`))
+	}))
+	defer server.Close()
+
+	_, err := DiscoverRawModels(context.Background(), server.Client(), RequestConfig{
+		BaseURL:           server.URL,
+		DiscoveryProtocol: provider.DiscoveryProtocolOpenAIModels,
+	})
+	if err == nil {
+		t.Fatal("expected oversized body error")
+	}
+	var pErr *provider.ProviderError
+	if !errors.As(err, &pErr) {
+		t.Fatalf("expected provider error, got %T: %v", err, err)
+	}
+	if pErr.StatusCode != http.StatusRequestEntityTooLarge {
+		t.Fatalf("expected status 413, got %d", pErr.StatusCode)
 	}
 }

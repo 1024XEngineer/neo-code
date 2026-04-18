@@ -14,6 +14,8 @@ import (
 	"neo-code/internal/provider/discovery"
 )
 
+const maxDiscoveryResponseBodyBytes int64 = 2 * 1024 * 1024
+
 // RequestConfig 描述通用 HTTP discovery 请求的必要输入。
 type RequestConfig struct {
 	BaseURL           string
@@ -72,8 +74,20 @@ func DiscoverRawModels(ctx context.Context, client *http.Client, cfg RequestConf
 		return nil, parseHTTPError(resp)
 	}
 
+	limitedBody := io.LimitReader(resp.Body, maxDiscoveryResponseBodyBytes+1)
+	rawPayload, err := io.ReadAll(limitedBody)
+	if err != nil {
+		return nil, fmt.Errorf("provider discovery: read models response: %w", err)
+	}
+	if int64(len(rawPayload)) > maxDiscoveryResponseBodyBytes {
+		return nil, provider.NewProviderErrorFromStatus(
+			http.StatusRequestEntityTooLarge,
+			fmt.Sprintf("provider discovery: models response body too large (limit=%d bytes)", maxDiscoveryResponseBodyBytes),
+		)
+	}
+
 	var payload any
-	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+	if err := json.Unmarshal(rawPayload, &payload); err != nil {
 		return nil, fmt.Errorf("provider discovery: decode models response: %w", err)
 	}
 

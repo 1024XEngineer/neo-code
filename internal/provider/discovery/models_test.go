@@ -87,6 +87,14 @@ func TestExtractRawModels(t *testing.T) {
 			wantLen: 1,
 		},
 		{
+			name: "single object with name only should not be treated as model",
+			payload: map[string]any{
+				"name": "not-a-model",
+			},
+			profile: provider.DiscoveryResponseProfileOpenAI,
+			wantErr: true,
+		},
+		{
 			name: "unsupported payload type",
 			payload: map[string]any{
 				"data": "unexpected",
