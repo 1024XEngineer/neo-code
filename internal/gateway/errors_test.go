@@ -10,6 +10,7 @@ func TestStableErrorCodes(t *testing.T) {
 		ErrorCodeMissingRequiredField,
 		ErrorCodeUnsupportedAction,
 		ErrorCodeInternalError,
+		ErrorCodeTimeout,
 		ErrorCodeUnauthorized,
 		ErrorCodeAccessDenied,
 	}

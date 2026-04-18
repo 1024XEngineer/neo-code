@@ -65,6 +65,7 @@ func dispatchRPCRequest(ctx context.Context, request protocol.JSONRPCRequest, ru
 		Payload:   normalized.Payload,
 	}
 
+	frame = hydrateFrameRunPayload(frame)
 	frame = hydrateFrameSessionFromConnection(ctx, frame)
 	if requiresSession(frame.Action) && strings.TrimSpace(frame.SessionID) == "" {
 		if metrics != nil {
@@ -255,10 +256,71 @@ func hydrateFrameSessionFromConnection(ctx context.Context, frame MessageFrame) 
 	return frame
 }
 
+// hydrateFrameRunPayload 将 gateway.run 的参数映射到 MessageFrame 统一字段，供后续校验与处理复用。
+func hydrateFrameRunPayload(frame MessageFrame) MessageFrame {
+	if frame.Action != FrameActionRun {
+		return frame
+	}
+
+	var params protocol.RunParams
+	switch typed := frame.Payload.(type) {
+	case protocol.RunParams:
+		params = typed
+	case *protocol.RunParams:
+		if typed == nil {
+			return frame
+		}
+		params = *typed
+	default:
+		return frame
+	}
+
+	if strings.TrimSpace(frame.SessionID) == "" {
+		frame.SessionID = strings.TrimSpace(params.SessionID)
+	}
+	if strings.TrimSpace(frame.RunID) == "" {
+		frame.RunID = strings.TrimSpace(params.RunID)
+	}
+	if strings.TrimSpace(frame.Workdir) == "" {
+		frame.Workdir = strings.TrimSpace(params.Workdir)
+	}
+	if strings.TrimSpace(frame.InputText) == "" {
+		frame.InputText = strings.TrimSpace(params.InputText)
+	}
+	if len(frame.InputParts) == 0 {
+		frame.InputParts = convertProtocolRunInputParts(params.InputParts)
+	}
+	return frame
+}
+
+// convertProtocolRunInputParts 将 protocol 层 run input parts 转换为 gateway 协议分片结构。
+func convertProtocolRunInputParts(parts []protocol.RunInputPart) []InputPart {
+	if len(parts) == 0 {
+		return nil
+	}
+
+	converted := make([]InputPart, 0, len(parts))
+	for _, part := range parts {
+		convertedPart := InputPart{
+			Type: InputPartType(strings.ToLower(strings.TrimSpace(part.Type))),
+			Text: strings.TrimSpace(part.Text),
+		}
+		if part.Media != nil {
+			convertedPart.Media = &Media{
+				URI:      strings.TrimSpace(part.Media.URI),
+				MimeType: strings.TrimSpace(part.Media.MimeType),
+				FileName: strings.TrimSpace(part.Media.FileName),
+			}
+		}
+		converted = append(converted, convertedPart)
+	}
+	return converted
+}
+
 // requiresSession 判断指定动作在分发阶段是否必须携带 session_id。
 func requiresSession(action FrameAction) bool {
 	switch action {
-	case FrameActionBindStream, FrameActionRun, FrameActionCompact, FrameActionLoadSession, FrameActionResolvePermission:
+	case FrameActionBindStream, FrameActionRun, FrameActionCompact, FrameActionLoadSession:
 		return true
 	default:
 		return false

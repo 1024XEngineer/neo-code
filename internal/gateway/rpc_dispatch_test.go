@@ -10,10 +10,43 @@ import (
 	"neo-code/internal/gateway/protocol"
 )
 
+type rpcRunCaptureRuntimeStub struct {
+	runInput RunInput
+}
+
+func (s *rpcRunCaptureRuntimeStub) Run(_ context.Context, input RunInput) error {
+	s.runInput = input
+	return nil
+}
+
+func (s *rpcRunCaptureRuntimeStub) Compact(_ context.Context, _ CompactInput) (CompactResult, error) {
+	return CompactResult{}, nil
+}
+
+func (s *rpcRunCaptureRuntimeStub) ResolvePermission(_ context.Context, _ PermissionResolutionInput) error {
+	return nil
+}
+
+func (s *rpcRunCaptureRuntimeStub) CancelActiveRun() bool {
+	return false
+}
+
+func (s *rpcRunCaptureRuntimeStub) Events() <-chan RuntimeEvent {
+	return nil
+}
+
+func (s *rpcRunCaptureRuntimeStub) ListSessions(_ context.Context) ([]SessionSummary, error) {
+	return nil, nil
+}
+
+func (s *rpcRunCaptureRuntimeStub) LoadSession(_ context.Context, _ string) (Session, error) {
+	return Session{}, nil
+}
+
 func TestDispatchRPCRequestResultEncodeError(t *testing.T) {
 	originalHandlers := requestFrameHandlers
 	requestFrameHandlers = map[FrameAction]requestFrameHandler{
-		FrameActionPing: func(_ context.Context, frame MessageFrame) MessageFrame {
+		FrameActionPing: func(_ context.Context, frame MessageFrame, _ RuntimePort) MessageFrame {
 			return MessageFrame{
 				Type:      FrameTypeAck,
 				Action:    FrameActionPing,
@@ -266,6 +299,70 @@ func TestDispatchRPCRequestMissingSessionAndAuthHelpers(t *testing.T) {
 	}
 	if gatewayCode := protocol.GatewayCodeFromJSONRPCError(response.Error); gatewayCode != protocol.GatewayCodeMissingRequiredField {
 		t.Fatalf("gateway_code = %q, want %q", gatewayCode, protocol.GatewayCodeMissingRequiredField)
+	}
+}
+
+func TestDispatchRPCRequestResolvePermissionDoesNotRequireSession(t *testing.T) {
+	ctx := WithRequestSource(context.Background(), RequestSourceIPC)
+	ctx = WithRequestACL(ctx, NewStrictControlPlaneACL())
+
+	response := dispatchRPCRequest(ctx, protocol.JSONRPCRequest{
+		JSONRPC: protocol.JSONRPCVersion,
+		ID:      json.RawMessage(`"req-resolve-no-session"`),
+		Method:  protocol.MethodGatewayResolvePermission,
+		Params:  json.RawMessage(`{"request_id":"perm-1","decision":"reject"}`),
+	}, &runtimePortCompileStub{})
+	if response.Error != nil {
+		t.Fatalf("resolve permission should pass without session_id, got error: %+v", response.Error)
+	}
+
+	frame, err := decodeJSONRPCResultFrame(response)
+	if err != nil {
+		t.Fatalf("decode resolve permission result frame: %v", err)
+	}
+	if frame.Action != FrameActionResolvePermission {
+		t.Fatalf("response action = %q, want %q", frame.Action, FrameActionResolvePermission)
+	}
+}
+
+func TestDispatchRPCRequestRunHydratesInputPartsAndFallbackRunID(t *testing.T) {
+	ctx := WithRequestSource(context.Background(), RequestSourceIPC)
+	ctx = WithRequestACL(ctx, NewStrictControlPlaneACL())
+	runtimeStub := &rpcRunCaptureRuntimeStub{}
+
+	response := dispatchRPCRequest(ctx, protocol.JSONRPCRequest{
+		JSONRPC: protocol.JSONRPCVersion,
+		ID:      json.RawMessage(`"req-run-hydrate"`),
+		Method:  protocol.MethodGatewayRun,
+		Params: json.RawMessage(`{
+			"session_id":"session-run-1",
+			"input_parts":[
+				{"type":"text","text":"hello world"},
+				{"type":"image","media":{"uri":"C:/tmp/pic.png","mime_type":"image/png"}}
+			]
+		}`),
+	}, runtimeStub)
+	if response.Error != nil {
+		t.Fatalf("run response error: %+v", response.Error)
+	}
+
+	if runtimeStub.runInput.SessionID != "session-run-1" {
+		t.Fatalf("runtime run session_id = %q, want %q", runtimeStub.runInput.SessionID, "session-run-1")
+	}
+	if runtimeStub.runInput.RunID != "req-run-hydrate" {
+		t.Fatalf("runtime run run_id = %q, want %q", runtimeStub.runInput.RunID, "req-run-hydrate")
+	}
+	if len(runtimeStub.runInput.InputParts) != 2 {
+		t.Fatalf("runtime run input_parts len = %d, want %d", len(runtimeStub.runInput.InputParts), 2)
+	}
+	if runtimeStub.runInput.InputParts[0].Type != InputPartTypeText {
+		t.Fatalf("runtime text part type = %q, want %q", runtimeStub.runInput.InputParts[0].Type, InputPartTypeText)
+	}
+	if runtimeStub.runInput.InputParts[1].Type != InputPartTypeImage {
+		t.Fatalf("runtime image part type = %q, want %q", runtimeStub.runInput.InputParts[1].Type, InputPartTypeImage)
+	}
+	if runtimeStub.runInput.InputParts[1].Media == nil || runtimeStub.runInput.InputParts[1].Media.URI != "C:/tmp/pic.png" {
+		t.Fatalf("runtime image media = %#v, want uri %q", runtimeStub.runInput.InputParts[1].Media, "C:/tmp/pic.png")
 	}
 }
 

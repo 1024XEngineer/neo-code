@@ -18,6 +18,18 @@ const (
 	MethodGatewayPing = "gateway.ping"
 	// MethodGatewayBindStream 表示客户端向网关声明流式订阅绑定的方法。
 	MethodGatewayBindStream = "gateway.bindStream"
+	// MethodGatewayRun 表示通过网关触发一次运行时执行。
+	MethodGatewayRun = "gateway.run"
+	// MethodGatewayCompact 表示通过网关触发一次会话压缩。
+	MethodGatewayCompact = "gateway.compact"
+	// MethodGatewayCancel 表示取消当前活跃运行。
+	MethodGatewayCancel = "gateway.cancel"
+	// MethodGatewayListSessions 表示查询会话摘要列表。
+	MethodGatewayListSessions = "gateway.listSessions"
+	// MethodGatewayLoadSession 表示加载单个会话详情。
+	MethodGatewayLoadSession = "gateway.loadSession"
+	// MethodGatewayResolvePermission 表示提交权限审批决策。
+	MethodGatewayResolvePermission = "gateway.resolvePermission"
 	// MethodGatewayEvent 表示网关向客户端推送运行时事件的通知方法。
 	MethodGatewayEvent = "gateway.event"
 	// MethodWakeOpenURL 表示 URL Scheme 唤醒方法。
@@ -50,6 +62,8 @@ const (
 	GatewayCodeUnsupportedAction = "unsupported_action"
 	// GatewayCodeInternalError 表示网关内部错误。
 	GatewayCodeInternalError = "internal_error"
+	// GatewayCodeTimeout 表示网关处理请求时发生超时。
+	GatewayCodeTimeout = "timeout"
 	// GatewayCodeUnsafePath 表示路径存在安全风险。
 	GatewayCodeUnsafePath = "unsafe_path"
 	// GatewayCodeUnauthorized 表示请求未通过认证校验。
@@ -116,6 +130,52 @@ type BindStreamParams struct {
 	Channel   string `json:"channel,omitempty"`
 }
 
+// RunInputMedia 用于承载 gateway.run 中图片分片的媒体元数据。
+type RunInputMedia struct {
+	URI      string `json:"uri"`
+	MimeType string `json:"mime_type"`
+	FileName string `json:"file_name,omitempty"`
+}
+
+// RunInputPart 表示 gateway.run 中的单个输入分片。
+type RunInputPart struct {
+	Type  string         `json:"type"`
+	Text  string         `json:"text,omitempty"`
+	Media *RunInputMedia `json:"media,omitempty"`
+}
+
+// RunParams 表示 gateway.run 的参数载荷。
+type RunParams struct {
+	SessionID  string         `json:"session_id,omitempty"`
+	RunID      string         `json:"run_id,omitempty"`
+	InputText  string         `json:"input_text,omitempty"`
+	InputParts []RunInputPart `json:"input_parts,omitempty"`
+	Workdir    string         `json:"workdir,omitempty"`
+}
+
+// CancelParams 表示 gateway.cancel 可选参数。
+type CancelParams struct {
+	SessionID string `json:"session_id,omitempty"`
+	RunID     string `json:"run_id,omitempty"`
+}
+
+// CompactParams 表示 gateway.compact 参数。
+type CompactParams struct {
+	SessionID string `json:"session_id"`
+	RunID     string `json:"run_id,omitempty"`
+}
+
+// LoadSessionParams 表示 gateway.loadSession 参数。
+type LoadSessionParams struct {
+	SessionID string `json:"session_id"`
+}
+
+// ResolvePermissionParams 表示 gateway.resolvePermission 参数。
+type ResolvePermissionParams struct {
+	RequestID string `json:"request_id"`
+	Decision  string `json:"decision"`
+}
+
 // NormalizeJSONRPCRequest 将 JSON-RPC 请求归一化为内部请求模型，并做方法级参数解析。
 func NormalizeJSONRPCRequest(request JSONRPCRequest) (NormalizedRequest, *JSONRPCError) {
 	normalized := NormalizedRequest{}
@@ -164,6 +224,57 @@ func NormalizeJSONRPCRequest(request JSONRPCRequest) (NormalizedRequest, *JSONRP
 		normalized.Action = "bind_stream"
 		normalized.SessionID = params.SessionID
 		normalized.RunID = params.RunID
+		normalized.Payload = params
+		return normalized, nil
+	case MethodGatewayRun:
+		params, parseErr := decodeRunParams(request.Params)
+		if parseErr != nil {
+			return normalized, parseErr
+		}
+		normalized.Action = "run"
+		normalized.SessionID = strings.TrimSpace(params.SessionID)
+		normalized.RunID = strings.TrimSpace(params.RunID)
+		normalized.Workdir = strings.TrimSpace(params.Workdir)
+		normalized.Payload = params
+		return normalized, nil
+	case MethodGatewayCompact:
+		params, parseErr := decodeCompactParams(request.Params)
+		if parseErr != nil {
+			return normalized, parseErr
+		}
+		normalized.Action = "compact"
+		normalized.SessionID = strings.TrimSpace(params.SessionID)
+		normalized.RunID = strings.TrimSpace(params.RunID)
+		normalized.Payload = params
+		return normalized, nil
+	case MethodGatewayCancel:
+		params, parseErr := decodeCancelParams(request.Params)
+		if parseErr != nil {
+			return normalized, parseErr
+		}
+		normalized.Action = "cancel"
+		normalized.SessionID = strings.TrimSpace(params.SessionID)
+		normalized.RunID = strings.TrimSpace(params.RunID)
+		normalized.Payload = params
+		return normalized, nil
+	case MethodGatewayListSessions:
+		normalized.Action = "list_sessions"
+		return normalized, nil
+	case MethodGatewayLoadSession:
+		params, parseErr := decodeLoadSessionParams(request.Params)
+		if parseErr != nil {
+			return normalized, parseErr
+		}
+		normalized.Action = "load_session"
+		normalized.SessionID = strings.TrimSpace(params.SessionID)
+		normalized.Payload = params
+		return normalized, nil
+	case MethodGatewayResolvePermission:
+		params, parseErr := decodeResolvePermissionParams(request.Params)
+		if parseErr != nil {
+			return normalized, parseErr
+		}
+		normalized.Action = "resolve_permission"
 		normalized.Payload = params
 		return normalized, nil
 	case MethodWakeOpenURL:
@@ -255,6 +366,8 @@ func MapGatewayCodeToJSONRPCCode(gatewayCode string) int {
 		GatewayCodeAccessDenied:
 		return JSONRPCCodeInvalidParams
 	case GatewayCodeInternalError:
+		return JSONRPCCodeInternalError
+	case GatewayCodeTimeout:
 		return JSONRPCCodeInternalError
 	default:
 		return JSONRPCCodeInternalError
@@ -414,6 +527,167 @@ func decodeBindStreamParams(raw json.RawMessage) (BindStreamParams, *JSONRPCErro
 		)
 	}
 
+	return params, nil
+}
+
+// decodeRunParams 对 gateway.run 的 params 执行反序列化与字段清理。
+func decodeRunParams(raw json.RawMessage) (RunParams, *JSONRPCError) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return RunParams{}, NewJSONRPCError(
+			JSONRPCCodeInvalidParams,
+			"missing required field: params",
+			GatewayCodeMissingRequiredField,
+		)
+	}
+
+	var params RunParams
+	if err := json.Unmarshal(trimmed, &params); err != nil {
+		return RunParams{}, NewJSONRPCError(
+			JSONRPCCodeInvalidParams,
+			"invalid params for gateway.run",
+			GatewayCodeInvalidFrame,
+		)
+	}
+
+	params.SessionID = strings.TrimSpace(params.SessionID)
+	params.RunID = strings.TrimSpace(params.RunID)
+	params.InputText = strings.TrimSpace(params.InputText)
+	params.Workdir = strings.TrimSpace(params.Workdir)
+	if len(params.InputParts) == 0 {
+		params.InputParts = nil
+	} else {
+		for index := range params.InputParts {
+			params.InputParts[index].Type = strings.ToLower(strings.TrimSpace(params.InputParts[index].Type))
+			params.InputParts[index].Text = strings.TrimSpace(params.InputParts[index].Text)
+			if params.InputParts[index].Media != nil {
+				params.InputParts[index].Media.URI = strings.TrimSpace(params.InputParts[index].Media.URI)
+				params.InputParts[index].Media.MimeType = strings.TrimSpace(params.InputParts[index].Media.MimeType)
+				params.InputParts[index].Media.FileName = strings.TrimSpace(params.InputParts[index].Media.FileName)
+			}
+		}
+	}
+	return params, nil
+}
+
+// decodeCancelParams 对 gateway.cancel 的 params 执行反序列化，缺省或 null 视为空参数。
+func decodeCancelParams(raw json.RawMessage) (CancelParams, *JSONRPCError) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return CancelParams{}, nil
+	}
+
+	var params CancelParams
+	if err := json.Unmarshal(trimmed, &params); err != nil {
+		return CancelParams{}, NewJSONRPCError(
+			JSONRPCCodeInvalidParams,
+			"invalid params for gateway.cancel",
+			GatewayCodeInvalidFrame,
+		)
+	}
+	params.SessionID = strings.TrimSpace(params.SessionID)
+	params.RunID = strings.TrimSpace(params.RunID)
+	return params, nil
+}
+
+// decodeCompactParams 对 gateway.compact 的 params 执行反序列化与必填字段校验。
+func decodeCompactParams(raw json.RawMessage) (CompactParams, *JSONRPCError) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return CompactParams{}, NewJSONRPCError(
+			JSONRPCCodeInvalidParams,
+			"missing required field: params",
+			GatewayCodeMissingRequiredField,
+		)
+	}
+
+	var params CompactParams
+	if err := json.Unmarshal(trimmed, &params); err != nil {
+		return CompactParams{}, NewJSONRPCError(
+			JSONRPCCodeInvalidParams,
+			"invalid params for gateway.compact",
+			GatewayCodeInvalidFrame,
+		)
+	}
+	params.SessionID = strings.TrimSpace(params.SessionID)
+	params.RunID = strings.TrimSpace(params.RunID)
+	if params.SessionID == "" {
+		return CompactParams{}, NewJSONRPCError(
+			JSONRPCCodeInvalidParams,
+			"missing required field: params.session_id",
+			GatewayCodeMissingRequiredField,
+		)
+	}
+	return params, nil
+}
+
+// decodeLoadSessionParams 对 gateway.loadSession 的 params 执行反序列化与必填字段校验。
+func decodeLoadSessionParams(raw json.RawMessage) (LoadSessionParams, *JSONRPCError) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return LoadSessionParams{}, NewJSONRPCError(
+			JSONRPCCodeInvalidParams,
+			"missing required field: params",
+			GatewayCodeMissingRequiredField,
+		)
+	}
+
+	var params LoadSessionParams
+	if err := json.Unmarshal(trimmed, &params); err != nil {
+		return LoadSessionParams{}, NewJSONRPCError(
+			JSONRPCCodeInvalidParams,
+			"invalid params for gateway.loadSession",
+			GatewayCodeInvalidFrame,
+		)
+	}
+	params.SessionID = strings.TrimSpace(params.SessionID)
+	if params.SessionID == "" {
+		return LoadSessionParams{}, NewJSONRPCError(
+			JSONRPCCodeInvalidParams,
+			"missing required field: params.session_id",
+			GatewayCodeMissingRequiredField,
+		)
+	}
+	return params, nil
+}
+
+// decodeResolvePermissionParams 对 gateway.resolvePermission 的 params 执行反序列化与决策校验。
+func decodeResolvePermissionParams(raw json.RawMessage) (ResolvePermissionParams, *JSONRPCError) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return ResolvePermissionParams{}, NewJSONRPCError(
+			JSONRPCCodeInvalidParams,
+			"missing required field: params",
+			GatewayCodeMissingRequiredField,
+		)
+	}
+
+	var params ResolvePermissionParams
+	if err := json.Unmarshal(trimmed, &params); err != nil {
+		return ResolvePermissionParams{}, NewJSONRPCError(
+			JSONRPCCodeInvalidParams,
+			"invalid params for gateway.resolvePermission",
+			GatewayCodeInvalidFrame,
+		)
+	}
+	params.RequestID = strings.TrimSpace(params.RequestID)
+	params.Decision = strings.ToLower(strings.TrimSpace(params.Decision))
+	if params.RequestID == "" {
+		return ResolvePermissionParams{}, NewJSONRPCError(
+			JSONRPCCodeInvalidParams,
+			"missing required field: params.request_id",
+			GatewayCodeMissingRequiredField,
+		)
+	}
+	switch params.Decision {
+	case "allow_once", "allow_session", "reject":
+	default:
+		return ResolvePermissionParams{}, NewJSONRPCError(
+			JSONRPCCodeInvalidParams,
+			"invalid field: params.decision",
+			GatewayCodeInvalidAction,
+		)
+	}
 	return params, nil
 }
 

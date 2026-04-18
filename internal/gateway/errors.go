@@ -18,6 +18,8 @@ const (
 	ErrorCodeUnsupportedAction ErrorCode = "unsupported_action"
 	// ErrorCodeInternalError 表示网关内部错误。
 	ErrorCodeInternalError ErrorCode = "internal_error"
+	// ErrorCodeTimeout 表示网关下游调用超时。
+	ErrorCodeTimeout ErrorCode = "timeout"
 	// ErrorCodeUnauthorized 表示请求未通过认证校验。
 	ErrorCodeUnauthorized ErrorCode = "unauthorized"
 	// ErrorCodeAccessDenied 表示请求已认证但未通过 ACL 校验。
@@ -31,6 +33,7 @@ var stableErrorCodes = map[string]struct{}{
 	string(ErrorCodeMissingRequiredField):     {},
 	string(ErrorCodeUnsupportedAction):        {},
 	string(ErrorCodeInternalError):            {},
+	string(ErrorCodeTimeout):                  {},
 	string(ErrorCodeUnauthorized):             {},
 	string(ErrorCodeAccessDenied):             {},
 }

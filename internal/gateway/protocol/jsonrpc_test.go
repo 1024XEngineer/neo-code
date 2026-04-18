@@ -125,6 +125,150 @@ func TestNormalizeJSONRPCRequestBindStream(t *testing.T) {
 	}
 }
 
+func TestNormalizeJSONRPCRequestRuntimeMethods(t *testing.T) {
+	runRequest := JSONRPCRequest{
+		JSONRPC: JSONRPCVersion,
+		ID:      json.RawMessage(`"run-1"`),
+		Method:  MethodGatewayRun,
+		Params: json.RawMessage(`{
+			"session_id":" session-1 ",
+			"run_id":" run-1 ",
+			"input_text":" hello ",
+			"workdir":" /tmp/work ",
+			"input_parts":[
+				{"type":" TEXT ","text":" world "},
+				{"type":" image ","media":{"uri":" /tmp/a.png ","mime_type":" image/png ","file_name":" a.png "}}
+			]
+		}`),
+	}
+	normalized, rpcErr := NormalizeJSONRPCRequest(runRequest)
+	if rpcErr != nil {
+		t.Fatalf("normalize run request: %v", rpcErr)
+	}
+	if normalized.Action != "run" {
+		t.Fatalf("run action = %q, want %q", normalized.Action, "run")
+	}
+	if normalized.SessionID != "session-1" || normalized.RunID != "run-1" || normalized.Workdir != "/tmp/work" {
+		t.Fatalf("normalized run identifiers = %#v", normalized)
+	}
+	runParams, ok := normalized.Payload.(RunParams)
+	if !ok {
+		t.Fatalf("run payload type = %T, want RunParams", normalized.Payload)
+	}
+	if runParams.InputText != "hello" {
+		t.Fatalf("run input_text = %q, want %q", runParams.InputText, "hello")
+	}
+	if len(runParams.InputParts) != 2 {
+		t.Fatalf("run input_parts len = %d, want 2", len(runParams.InputParts))
+	}
+	if runParams.InputParts[0].Type != "text" || runParams.InputParts[0].Text != "world" {
+		t.Fatalf("run text part = %#v, want normalized text part", runParams.InputParts[0])
+	}
+	if runParams.InputParts[1].Type != "image" || runParams.InputParts[1].Media == nil || runParams.InputParts[1].Media.URI != "/tmp/a.png" {
+		t.Fatalf("run image part = %#v, want normalized image part", runParams.InputParts[1])
+	}
+	if runParams.InputParts[1].Media.MimeType != "image/png" || runParams.InputParts[1].Media.FileName != "a.png" {
+		t.Fatalf("run image media = %#v, want trimmed mime/file_name", runParams.InputParts[1].Media)
+	}
+
+	compactNormalized, rpcErr := NormalizeJSONRPCRequest(JSONRPCRequest{
+		JSONRPC: JSONRPCVersion,
+		ID:      json.RawMessage(`"compact-1"`),
+		Method:  MethodGatewayCompact,
+		Params:  json.RawMessage(`{"session_id":" s-1 ","run_id":" r-1 "}`),
+	})
+	if rpcErr != nil {
+		t.Fatalf("normalize compact request: %v", rpcErr)
+	}
+	if compactNormalized.Action != "compact" || compactNormalized.SessionID != "s-1" || compactNormalized.RunID != "r-1" {
+		t.Fatalf("compact normalized = %#v", compactNormalized)
+	}
+
+	cancelNormalized, rpcErr := NormalizeJSONRPCRequest(JSONRPCRequest{
+		JSONRPC: JSONRPCVersion,
+		ID:      json.RawMessage(`"cancel-1"`),
+		Method:  MethodGatewayCancel,
+	})
+	if rpcErr != nil {
+		t.Fatalf("normalize cancel request: %v", rpcErr)
+	}
+	if cancelNormalized.Action != "cancel" {
+		t.Fatalf("cancel action = %q, want %q", cancelNormalized.Action, "cancel")
+	}
+	cancelParams, ok := cancelNormalized.Payload.(CancelParams)
+	if !ok {
+		t.Fatalf("cancel payload type = %T, want CancelParams", cancelNormalized.Payload)
+	}
+	if cancelParams.SessionID != "" || cancelParams.RunID != "" {
+		t.Fatalf("cancel payload = %#v, want empty params", cancelParams)
+	}
+
+	cancelWithParams, rpcErr := NormalizeJSONRPCRequest(JSONRPCRequest{
+		JSONRPC: JSONRPCVersion,
+		ID:      json.RawMessage(`"cancel-2"`),
+		Method:  MethodGatewayCancel,
+		Params:  json.RawMessage(`{"session_id":" s-1 ","run_id":" r-1 "}`),
+	})
+	if rpcErr != nil {
+		t.Fatalf("normalize cancel request with params: %v", rpcErr)
+	}
+	cancelWithParamsPayload, ok := cancelWithParams.Payload.(CancelParams)
+	if !ok {
+		t.Fatalf("cancel payload type = %T, want CancelParams", cancelWithParams.Payload)
+	}
+	if cancelWithParamsPayload.SessionID != "s-1" || cancelWithParamsPayload.RunID != "r-1" {
+		t.Fatalf("cancel payload = %#v, want trimmed session_id/run_id", cancelWithParamsPayload)
+	}
+
+	listNormalized, rpcErr := NormalizeJSONRPCRequest(JSONRPCRequest{
+		JSONRPC: JSONRPCVersion,
+		ID:      json.RawMessage(`"list-1"`),
+		Method:  MethodGatewayListSessions,
+	})
+	if rpcErr != nil {
+		t.Fatalf("normalize list request: %v", rpcErr)
+	}
+	if listNormalized.Action != "list_sessions" {
+		t.Fatalf("list action = %q, want %q", listNormalized.Action, "list_sessions")
+	}
+
+	loadNormalized, rpcErr := NormalizeJSONRPCRequest(JSONRPCRequest{
+		JSONRPC: JSONRPCVersion,
+		ID:      json.RawMessage(`"load-1"`),
+		Method:  MethodGatewayLoadSession,
+		Params:  json.RawMessage(`{"session_id":" s-1 "}`),
+	})
+	if rpcErr != nil {
+		t.Fatalf("normalize load request: %v", rpcErr)
+	}
+	if loadNormalized.Action != "load_session" || loadNormalized.SessionID != "s-1" {
+		t.Fatalf("load normalized = %#v", loadNormalized)
+	}
+	if _, ok := loadNormalized.Payload.(LoadSessionParams); !ok {
+		t.Fatalf("load payload type = %T, want LoadSessionParams", loadNormalized.Payload)
+	}
+
+	resolveNormalized, rpcErr := NormalizeJSONRPCRequest(JSONRPCRequest{
+		JSONRPC: JSONRPCVersion,
+		ID:      json.RawMessage(`"resolve-1"`),
+		Method:  MethodGatewayResolvePermission,
+		Params:  json.RawMessage(`{"request_id":" req-1 ","decision":" ALLOW_SESSION "}`),
+	})
+	if rpcErr != nil {
+		t.Fatalf("normalize resolve_permission request: %v", rpcErr)
+	}
+	if resolveNormalized.Action != "resolve_permission" {
+		t.Fatalf("resolve action = %q, want %q", resolveNormalized.Action, "resolve_permission")
+	}
+	resolveParams, ok := resolveNormalized.Payload.(ResolvePermissionParams)
+	if !ok {
+		t.Fatalf("resolve payload type = %T, want ResolvePermissionParams", resolveNormalized.Payload)
+	}
+	if resolveParams.RequestID != "req-1" || resolveParams.Decision != "allow_session" {
+		t.Fatalf("resolve payload = %#v, want normalized request_id/decision", resolveParams)
+	}
+}
+
 func TestNormalizeJSONRPCRequestErrors(t *testing.T) {
 	testCases := []struct {
 		name            string
@@ -274,6 +418,145 @@ func TestNormalizeJSONRPCRequestErrors(t *testing.T) {
 			wantCode:        JSONRPCCodeInvalidParams,
 			wantGatewayCode: GatewayCodeInvalidAction,
 		},
+		{
+			name: "run missing params",
+			request: JSONRPCRequest{
+				JSONRPC: JSONRPCVersion,
+				ID:      json.RawMessage(`"x"`),
+				Method:  MethodGatewayRun,
+			},
+			wantCode:        JSONRPCCodeInvalidParams,
+			wantGatewayCode: GatewayCodeMissingRequiredField,
+		},
+		{
+			name: "run invalid params",
+			request: JSONRPCRequest{
+				JSONRPC: JSONRPCVersion,
+				ID:      json.RawMessage(`"x"`),
+				Method:  MethodGatewayRun,
+				Params:  json.RawMessage(`{invalid}`),
+			},
+			wantCode:        JSONRPCCodeInvalidParams,
+			wantGatewayCode: GatewayCodeInvalidFrame,
+		},
+		{
+			name: "cancel invalid params",
+			request: JSONRPCRequest{
+				JSONRPC: JSONRPCVersion,
+				ID:      json.RawMessage(`"x"`),
+				Method:  MethodGatewayCancel,
+				Params:  json.RawMessage(`{invalid}`),
+			},
+			wantCode:        JSONRPCCodeInvalidParams,
+			wantGatewayCode: GatewayCodeInvalidFrame,
+		},
+		{
+			name: "compact missing params",
+			request: JSONRPCRequest{
+				JSONRPC: JSONRPCVersion,
+				ID:      json.RawMessage(`"x"`),
+				Method:  MethodGatewayCompact,
+			},
+			wantCode:        JSONRPCCodeInvalidParams,
+			wantGatewayCode: GatewayCodeMissingRequiredField,
+		},
+		{
+			name: "compact invalid params",
+			request: JSONRPCRequest{
+				JSONRPC: JSONRPCVersion,
+				ID:      json.RawMessage(`"x"`),
+				Method:  MethodGatewayCompact,
+				Params:  json.RawMessage(`{invalid}`),
+			},
+			wantCode:        JSONRPCCodeInvalidParams,
+			wantGatewayCode: GatewayCodeInvalidFrame,
+		},
+		{
+			name: "compact missing session_id",
+			request: JSONRPCRequest{
+				JSONRPC: JSONRPCVersion,
+				ID:      json.RawMessage(`"x"`),
+				Method:  MethodGatewayCompact,
+				Params:  json.RawMessage(`{"run_id":"r-1"}`),
+			},
+			wantCode:        JSONRPCCodeInvalidParams,
+			wantGatewayCode: GatewayCodeMissingRequiredField,
+		},
+		{
+			name: "loadSession missing params",
+			request: JSONRPCRequest{
+				JSONRPC: JSONRPCVersion,
+				ID:      json.RawMessage(`"x"`),
+				Method:  MethodGatewayLoadSession,
+			},
+			wantCode:        JSONRPCCodeInvalidParams,
+			wantGatewayCode: GatewayCodeMissingRequiredField,
+		},
+		{
+			name: "loadSession invalid params",
+			request: JSONRPCRequest{
+				JSONRPC: JSONRPCVersion,
+				ID:      json.RawMessage(`"x"`),
+				Method:  MethodGatewayLoadSession,
+				Params:  json.RawMessage(`{invalid}`),
+			},
+			wantCode:        JSONRPCCodeInvalidParams,
+			wantGatewayCode: GatewayCodeInvalidFrame,
+		},
+		{
+			name: "loadSession missing session_id",
+			request: JSONRPCRequest{
+				JSONRPC: JSONRPCVersion,
+				ID:      json.RawMessage(`"x"`),
+				Method:  MethodGatewayLoadSession,
+				Params:  json.RawMessage(`{"session_id":"  "}`),
+			},
+			wantCode:        JSONRPCCodeInvalidParams,
+			wantGatewayCode: GatewayCodeMissingRequiredField,
+		},
+		{
+			name: "resolvePermission missing params",
+			request: JSONRPCRequest{
+				JSONRPC: JSONRPCVersion,
+				ID:      json.RawMessage(`"x"`),
+				Method:  MethodGatewayResolvePermission,
+			},
+			wantCode:        JSONRPCCodeInvalidParams,
+			wantGatewayCode: GatewayCodeMissingRequiredField,
+		},
+		{
+			name: "resolvePermission invalid params",
+			request: JSONRPCRequest{
+				JSONRPC: JSONRPCVersion,
+				ID:      json.RawMessage(`"x"`),
+				Method:  MethodGatewayResolvePermission,
+				Params:  json.RawMessage(`{invalid}`),
+			},
+			wantCode:        JSONRPCCodeInvalidParams,
+			wantGatewayCode: GatewayCodeInvalidFrame,
+		},
+		{
+			name: "resolvePermission missing request_id",
+			request: JSONRPCRequest{
+				JSONRPC: JSONRPCVersion,
+				ID:      json.RawMessage(`"x"`),
+				Method:  MethodGatewayResolvePermission,
+				Params:  json.RawMessage(`{"decision":"allow_once"}`),
+			},
+			wantCode:        JSONRPCCodeInvalidParams,
+			wantGatewayCode: GatewayCodeMissingRequiredField,
+		},
+		{
+			name: "resolvePermission invalid decision",
+			request: JSONRPCRequest{
+				JSONRPC: JSONRPCVersion,
+				ID:      json.RawMessage(`"x"`),
+				Method:  MethodGatewayResolvePermission,
+				Params:  json.RawMessage(`{"request_id":"req-1","decision":"invalid"}`),
+			},
+			wantCode:        JSONRPCCodeInvalidParams,
+			wantGatewayCode: GatewayCodeInvalidAction,
+		},
 	}
 
 	for _, tc := range testCases {
@@ -363,6 +646,9 @@ func TestJSONRPCHelpers(t *testing.T) {
 	}
 	if MapGatewayCodeToJSONRPCCode(GatewayCodeAccessDenied) != JSONRPCCodeInvalidParams {
 		t.Fatal("access_denied should map to invalid_params")
+	}
+	if MapGatewayCodeToJSONRPCCode(GatewayCodeTimeout) != JSONRPCCodeInternalError {
+		t.Fatal("timeout should map to internal_error")
 	}
 	if MapGatewayCodeToJSONRPCCode("unknown") != JSONRPCCodeInternalError {
 		t.Fatal("unknown code should map to internal_error")

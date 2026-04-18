@@ -27,16 +27,17 @@ const (
 )
 
 var (
-	runGatewayCommand     = defaultGatewayCommandRunner
-	runURLDispatchCommand = defaultURLDispatchCommandRunner
-	newGatewayServer      = defaultNewGatewayServer
-	newGatewayNetwork     = defaultNewGatewayNetworkServer
-	dispatchURLThroughIPC = urlscheme.Dispatch
-	newAuthManager        = gatewayauth.NewManager
-	loadAuthToken         = loadGatewayAuthToken
-	exitProcess           = os.Exit
-	writeDispatchError    = writeURLDispatchErrorOutput
-	writeDispatchSuccess  = writeURLDispatchSuccessOutput
+	runGatewayCommand       = defaultGatewayCommandRunner
+	runURLDispatchCommand   = defaultURLDispatchCommandRunner
+	newGatewayServer        = defaultNewGatewayServer
+	newGatewayNetwork       = defaultNewGatewayNetworkServer
+	dispatchURLThroughIPC   = urlscheme.Dispatch
+	newAuthManager          = gatewayauth.NewManager
+	loadAuthToken           = loadGatewayAuthToken
+	exitProcess             = os.Exit
+	writeDispatchError      = writeURLDispatchErrorOutput
+	writeDispatchSuccess    = writeURLDispatchSuccessOutput
+	buildGatewayRuntimePort = defaultBuildGatewayRuntimePort
 )
 
 type gatewayCommandOptions struct {
@@ -45,6 +46,7 @@ type gatewayCommandOptions struct {
 	LogLevel      string
 	TokenFile     string
 	ACLMode       string
+	Workdir       string
 
 	MaxFrameBytes            int
 	IPCMaxConnections        int
@@ -114,6 +116,7 @@ func newGatewayCommand() *cobra.Command {
 				LogLevel:      normalizedLogLevel,
 				TokenFile:     strings.TrimSpace(options.TokenFile),
 				ACLMode:       strings.TrimSpace(options.ACLMode),
+				Workdir:       strings.TrimSpace(mustReadInheritedWorkdir(cmd)),
 
 				MaxFrameBytes:            options.MaxFrameBytes,
 				IPCMaxConnections:        options.IPCMaxConnections,
@@ -177,6 +180,18 @@ func normalizeGatewayLogLevel(logLevel string) (string, error) {
 	}
 }
 
+// mustReadInheritedWorkdir 在子命令中安全读取继承的 --workdir，读取失败时回退为空值。
+func mustReadInheritedWorkdir(cmd *cobra.Command) string {
+	if cmd == nil {
+		return ""
+	}
+	workdir, err := cmd.Flags().GetString("workdir")
+	if err != nil {
+		return ""
+	}
+	return workdir
+}
+
 // defaultGatewayCommandRunner 使用网关服务骨架启动本地 IPC 监听并处理信号退出。
 func defaultGatewayCommandRunner(ctx context.Context, options gatewayCommandOptions) error {
 	logger := log.New(os.Stderr, "neocode-gateway: ", log.LstdFlags)
@@ -215,6 +230,16 @@ func defaultGatewayCommandRunner(ctx context.Context, options gatewayCommandOpti
 		Logger:  logger,
 		Metrics: metrics,
 	})
+
+	runtimePort, closeRuntimePort, err := buildGatewayRuntimePort(signalContext, options.Workdir)
+	if err != nil {
+		return fmt.Errorf("initialize gateway runtime: %w", err)
+	}
+	defer func() {
+		if closeRuntimePort != nil {
+			_ = closeRuntimePort()
+		}
+	}()
 
 	ipcServer, err := newGatewayServer(gateway.ServerOptions{
 		ListenAddress:  options.ListenAddress,
@@ -259,7 +284,7 @@ func defaultGatewayCommandRunner(ctx context.Context, options gatewayCommandOpti
 	logger.Printf("gateway network listen address: %s", networkServer.ListenAddress())
 
 	go func() {
-		serveErr := networkServer.Serve(signalContext, nil)
+		serveErr := networkServer.Serve(signalContext, runtimePort)
 		if serveErr != nil && signalContext.Err() == nil {
 			logger.Printf(
 				"warning: HTTP server failed to start on %s (port in use?), but IPC server is still running: %v",
@@ -269,7 +294,7 @@ func defaultGatewayCommandRunner(ctx context.Context, options gatewayCommandOpti
 		}
 	}()
 
-	return ipcServer.Serve(signalContext, nil)
+	return ipcServer.Serve(signalContext, runtimePort)
 }
 
 // buildGatewayControlPlaneACL 基于配置构造控制面 ACL 策略，未知模式直接拒绝启动。

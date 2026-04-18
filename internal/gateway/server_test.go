@@ -95,8 +95,8 @@ func TestServerHandleConnectionUnsupportedAction(t *testing.T) {
 	if err := encoder.Encode(protocol.JSONRPCRequest{
 		JSONRPC: protocol.JSONRPCVersion,
 		ID:      json.RawMessage(`"req-2"`),
-		Method:  "gateway.run",
-		Params:  json.RawMessage(`{"input_text":"hello"}`),
+		Method:  "gateway.unknownMethod",
+		Params:  json.RawMessage(`{}`),
 	}); err != nil {
 		t.Fatalf("encode request: %v", err)
 	}

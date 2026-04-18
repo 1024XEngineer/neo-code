@@ -15,11 +15,17 @@ const (
 )
 
 var allowedRPCMethodMetricLabels = map[string]struct{}{
-	strings.ToLower(protocol.MethodGatewayAuthenticate): {},
-	strings.ToLower(protocol.MethodGatewayPing):         {},
-	strings.ToLower(protocol.MethodGatewayBindStream):   {},
-	strings.ToLower(protocol.MethodGatewayEvent):        {},
-	strings.ToLower(protocol.MethodWakeOpenURL):         {},
+	strings.ToLower(protocol.MethodGatewayAuthenticate):      {},
+	strings.ToLower(protocol.MethodGatewayPing):              {},
+	strings.ToLower(protocol.MethodGatewayBindStream):        {},
+	strings.ToLower(protocol.MethodGatewayRun):               {},
+	strings.ToLower(protocol.MethodGatewayCompact):           {},
+	strings.ToLower(protocol.MethodGatewayCancel):            {},
+	strings.ToLower(protocol.MethodGatewayListSessions):      {},
+	strings.ToLower(protocol.MethodGatewayLoadSession):       {},
+	strings.ToLower(protocol.MethodGatewayResolvePermission): {},
+	strings.ToLower(protocol.MethodGatewayEvent):             {},
+	strings.ToLower(protocol.MethodWakeOpenURL):              {},
 }
 
 // GatewayMetrics 维护网关关键指标，并同时提供 Prometheus 与 JSON 视图。

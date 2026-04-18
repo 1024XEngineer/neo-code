@@ -1,12 +1,76 @@
 package gateway
 
 import (
+	"bytes"
 	"context"
+	"errors"
+	"log"
+	"strings"
 	"testing"
+	"time"
 
 	"neo-code/internal/gateway/handlers"
 	"neo-code/internal/gateway/protocol"
 )
+
+type bootstrapRuntimeStub struct {
+	runFn               func(ctx context.Context, input RunInput) error
+	compactFn           func(ctx context.Context, input CompactInput) (CompactResult, error)
+	resolvePermissionFn func(ctx context.Context, input PermissionResolutionInput) error
+	cancelActiveRunFn   func() bool
+	events              <-chan RuntimeEvent
+	listSessionsFn      func(ctx context.Context) ([]SessionSummary, error)
+	loadSessionFn       func(ctx context.Context, id string) (Session, error)
+}
+
+func (s *bootstrapRuntimeStub) Run(ctx context.Context, input RunInput) error {
+	if s != nil && s.runFn != nil {
+		return s.runFn(ctx, input)
+	}
+	return nil
+}
+
+func (s *bootstrapRuntimeStub) Compact(ctx context.Context, input CompactInput) (CompactResult, error) {
+	if s != nil && s.compactFn != nil {
+		return s.compactFn(ctx, input)
+	}
+	return CompactResult{}, nil
+}
+
+func (s *bootstrapRuntimeStub) ResolvePermission(ctx context.Context, input PermissionResolutionInput) error {
+	if s != nil && s.resolvePermissionFn != nil {
+		return s.resolvePermissionFn(ctx, input)
+	}
+	return nil
+}
+
+func (s *bootstrapRuntimeStub) CancelActiveRun() bool {
+	if s != nil && s.cancelActiveRunFn != nil {
+		return s.cancelActiveRunFn()
+	}
+	return false
+}
+
+func (s *bootstrapRuntimeStub) Events() <-chan RuntimeEvent {
+	if s == nil {
+		return nil
+	}
+	return s.events
+}
+
+func (s *bootstrapRuntimeStub) ListSessions(ctx context.Context) ([]SessionSummary, error) {
+	if s != nil && s.listSessionsFn != nil {
+		return s.listSessionsFn(ctx)
+	}
+	return nil, nil
+}
+
+func (s *bootstrapRuntimeStub) LoadSession(ctx context.Context, id string) (Session, error) {
+	if s != nil && s.loadSessionFn != nil {
+		return s.loadSessionFn(ctx, id)
+	}
+	return Session{}, nil
+}
 
 func TestDispatchRequestFramePing(t *testing.T) {
 	response := dispatchRequestFrame(context.Background(), MessageFrame{
@@ -84,7 +148,7 @@ func TestDispatchRequestFrameWakeOpenURLMissingPath(t *testing.T) {
 func TestDispatchRequestFrameUnsupportedAction(t *testing.T) {
 	response := dispatchRequestFrame(context.Background(), MessageFrame{
 		Type:   FrameTypeRequest,
-		Action: FrameActionRun,
+		Action: FrameAction("unknown_action"),
 	}, nil)
 
 	if response.Type != FrameTypeError {
@@ -326,4 +390,480 @@ func TestHandleAuthenticateFrameBranches(t *testing.T) {
 			t.Fatal("expected auth state to be marked authenticated")
 		}
 	})
+}
+
+func TestHandleRunFrameGeneratesFallbackRunIDAndTimeout(t *testing.T) {
+	const requestID = "req-run-fallback-1"
+	stub := &bootstrapRuntimeStub{
+		runFn: func(ctx context.Context, input RunInput) error {
+			if input.RunID != requestID {
+				t.Fatalf("runtime input run_id = %q, want %q", input.RunID, requestID)
+			}
+			deadline, hasDeadline := ctx.Deadline()
+			if !hasDeadline {
+				t.Fatal("runtime context should include timeout deadline")
+			}
+			remaining := time.Until(deadline)
+			if remaining <= 0 {
+				t.Fatalf("runtime deadline should be in future, remaining=%v", remaining)
+			}
+			if remaining > defaultRuntimeOperationTimeout+time.Second {
+				t.Fatalf("runtime deadline too long, remaining=%v", remaining)
+			}
+			return nil
+		},
+	}
+
+	response := handleRunFrame(context.Background(), MessageFrame{
+		Type:      FrameTypeRequest,
+		Action:    FrameActionRun,
+		RequestID: requestID,
+		InputText: "hello",
+	}, stub)
+	if response.Type != FrameTypeAck {
+		t.Fatalf("response type = %q, want %q", response.Type, FrameTypeAck)
+	}
+	if response.RunID != requestID {
+		t.Fatalf("response run_id = %q, want %q", response.RunID, requestID)
+	}
+}
+
+func TestHandleRunFrameBranches(t *testing.T) {
+	t.Run("runtime unavailable", func(t *testing.T) {
+		response := handleRunFrame(context.Background(), MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionRun,
+			RequestID: "req-run-unavailable",
+			InputText: "hello",
+		}, nil)
+		if response.Type != FrameTypeError {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+		}
+		if response.Error == nil || response.Error.Code != ErrorCodeInternalError.String() {
+			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeInternalError.String())
+		}
+	})
+
+	t.Run("runtime canceled error", func(t *testing.T) {
+		stub := &bootstrapRuntimeStub{
+			runFn: func(_ context.Context, _ RunInput) error {
+				return context.Canceled
+			},
+		}
+		response := handleRunFrame(context.Background(), MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionRun,
+			RequestID: "req-run-canceled",
+			InputText: "hello",
+		}, stub)
+		if response.Type != FrameTypeError {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+		}
+		if response.Error == nil || response.Error.Code != ErrorCodeInvalidAction.String() {
+			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeInvalidAction.String())
+		}
+	})
+}
+
+func TestRuntimeCallFailedFrameSanitizesErrorAndMapsCode(t *testing.T) {
+	var buf bytes.Buffer
+	ctx := WithGatewayLogger(context.Background(), log.New(&buf, "", 0))
+	frame := MessageFrame{
+		Type:      FrameTypeRequest,
+		Action:    FrameActionRun,
+		RequestID: "req-safe-1",
+		SessionID: "session-safe-1",
+		RunID:     "run-safe-1",
+	}
+
+	internalErr := runtimeCallFailedFrame(ctx, frame, errors.New("db password leaked"), "run")
+	if internalErr.Error == nil {
+		t.Fatal("internal error response should include frame error payload")
+	}
+	if internalErr.Error.Code != ErrorCodeInternalError.String() {
+		t.Fatalf("error code = %q, want %q", internalErr.Error.Code, ErrorCodeInternalError.String())
+	}
+	if internalErr.Error.Message != "run failed" {
+		t.Fatalf("error message = %q, want %q", internalErr.Error.Message, "run failed")
+	}
+	if strings.Contains(internalErr.Error.Message, "password") {
+		t.Fatalf("error message leaked internal details: %q", internalErr.Error.Message)
+	}
+	if !strings.Contains(buf.String(), "db password leaked") {
+		t.Fatalf("server log should contain internal error details, got %q", buf.String())
+	}
+
+	timeoutErr := runtimeCallFailedFrame(context.Background(), frame, context.DeadlineExceeded, "run")
+	if timeoutErr.Error == nil || timeoutErr.Error.Code != ErrorCodeTimeout.String() {
+		t.Fatalf("timeout error payload = %#v, want timeout", timeoutErr.Error)
+	}
+	if timeoutErr.Error.Message != "run timed out" {
+		t.Fatalf("timeout message = %q, want %q", timeoutErr.Error.Message, "run timed out")
+	}
+
+	canceledErr := runtimeCallFailedFrame(context.Background(), frame, context.Canceled, "run")
+	if canceledErr.Error == nil || canceledErr.Error.Code != ErrorCodeInvalidAction.String() {
+		t.Fatalf("canceled error payload = %#v, want invalid_action", canceledErr.Error)
+	}
+	if canceledErr.Error.Message != "run canceled" {
+		t.Fatalf("canceled message = %q, want %q", canceledErr.Error.Message, "run canceled")
+	}
+}
+
+func TestNormalizeRunID(t *testing.T) {
+	if got := normalizeRunID("run-explicit", "req-1"); got != "run-explicit" {
+		t.Fatalf("explicit run_id = %q, want %q", got, "run-explicit")
+	}
+	if got := normalizeRunID("", "req-2"); got != "req-2" {
+		t.Fatalf("fallback request_id = %q, want %q", got, "req-2")
+	}
+	if got := normalizeRunID("", ""); !strings.HasPrefix(got, "run_") {
+		t.Fatalf("generated run_id = %q, want prefix %q", got, "run_")
+	}
+}
+
+func TestWithRuntimeOperationTimeoutFromNilContext(t *testing.T) {
+	ctx, cancel := withRuntimeOperationTimeout(nil)
+	defer cancel()
+	if ctx == nil {
+		t.Fatal("timeout wrapper should return non-nil context")
+	}
+	deadline, hasDeadline := ctx.Deadline()
+	if !hasDeadline {
+		t.Fatal("timeout wrapper should set deadline")
+	}
+	remaining := time.Until(deadline)
+	if remaining <= 0 {
+		t.Fatalf("timeout deadline should be in future, remaining=%v", remaining)
+	}
+}
+
+func TestHandleCompactFrameBranches(t *testing.T) {
+	t.Run("runtime unavailable", func(t *testing.T) {
+		response := handleCompactFrame(context.Background(), MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionCompact,
+			RequestID: "compact-unavailable",
+			SessionID: "session-1",
+		}, nil)
+		if response.Type != FrameTypeError {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+		}
+		if response.Error == nil || response.Error.Code != ErrorCodeInternalError.String() {
+			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeInternalError.String())
+		}
+	})
+
+	t.Run("success", func(t *testing.T) {
+		stub := &bootstrapRuntimeStub{
+			compactFn: func(ctx context.Context, input CompactInput) (CompactResult, error) {
+				if input.SessionID != "session-compact" {
+					t.Fatalf("compact session_id = %q, want %q", input.SessionID, "session-compact")
+				}
+				if _, ok := ctx.Deadline(); !ok {
+					t.Fatal("compact should use timeout context")
+				}
+				return CompactResult{Applied: true, BeforeChars: 100, AfterChars: 50}, nil
+			},
+		}
+		response := handleCompactFrame(context.Background(), MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionCompact,
+			RequestID: "compact-ok",
+			SessionID: "session-compact",
+		}, stub)
+		if response.Type != FrameTypeAck {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeAck)
+		}
+		if response.Action != FrameActionCompact {
+			t.Fatalf("response action = %q, want %q", response.Action, FrameActionCompact)
+		}
+	})
+
+	t.Run("runtime timeout", func(t *testing.T) {
+		stub := &bootstrapRuntimeStub{
+			compactFn: func(_ context.Context, _ CompactInput) (CompactResult, error) {
+				return CompactResult{}, context.DeadlineExceeded
+			},
+		}
+		response := handleCompactFrame(context.Background(), MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionCompact,
+			RequestID: "compact-timeout",
+			SessionID: "session-compact",
+		}, stub)
+		if response.Type != FrameTypeError {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+		}
+		if response.Error == nil || response.Error.Code != ErrorCodeTimeout.String() {
+			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeTimeout.String())
+		}
+	})
+}
+
+func TestHandleCancelListLoadResolveBranches(t *testing.T) {
+	t.Run("cancel runtime unavailable", func(t *testing.T) {
+		response := handleCancelFrame(context.Background(), MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionCancel,
+			RequestID: "cancel-unavailable",
+		}, nil)
+		if response.Type != FrameTypeError {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+		}
+		if response.Error == nil || response.Error.Code != ErrorCodeInternalError.String() {
+			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeInternalError.String())
+		}
+	})
+
+	t.Run("cancel success", func(t *testing.T) {
+		stub := &bootstrapRuntimeStub{cancelActiveRunFn: func() bool { return true }}
+		response := handleCancelFrame(context.Background(), MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionCancel,
+			RequestID: "cancel-1",
+		}, stub)
+		if response.Type != FrameTypeAck {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeAck)
+		}
+		payload, ok := response.Payload.(map[string]any)
+		if !ok {
+			t.Fatalf("cancel payload type = %T, want map[string]any", response.Payload)
+		}
+		if canceled, _ := payload["canceled"].(bool); !canceled {
+			t.Fatalf("cancel payload canceled = %v, want true", payload["canceled"])
+		}
+	})
+
+	t.Run("list sessions runtime unavailable", func(t *testing.T) {
+		response := handleListSessionsFrame(context.Background(), MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionListSessions,
+			RequestID: "list-unavailable",
+		}, nil)
+		if response.Type != FrameTypeError {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+		}
+		if response.Error == nil || response.Error.Code != ErrorCodeInternalError.String() {
+			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeInternalError.String())
+		}
+	})
+
+	t.Run("list sessions success", func(t *testing.T) {
+		stub := &bootstrapRuntimeStub{
+			listSessionsFn: func(ctx context.Context) ([]SessionSummary, error) {
+				if _, ok := ctx.Deadline(); !ok {
+					t.Fatal("list sessions should use timeout context")
+				}
+				return []SessionSummary{{ID: "s-1"}}, nil
+			},
+		}
+		response := handleListSessionsFrame(context.Background(), MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionListSessions,
+			RequestID: "list-1",
+		}, stub)
+		if response.Type != FrameTypeAck {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeAck)
+		}
+	})
+
+	t.Run("list sessions runtime error", func(t *testing.T) {
+		stub := &bootstrapRuntimeStub{
+			listSessionsFn: func(_ context.Context) ([]SessionSummary, error) {
+				return nil, errors.New("list failed internals")
+			},
+		}
+		response := handleListSessionsFrame(context.Background(), MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionListSessions,
+			RequestID: "list-failed",
+		}, stub)
+		if response.Type != FrameTypeError {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+		}
+		if response.Error == nil || response.Error.Code != ErrorCodeInternalError.String() {
+			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeInternalError.String())
+		}
+		if response.Error.Message != "list_sessions failed" {
+			t.Fatalf("response message = %q, want %q", response.Error.Message, "list_sessions failed")
+		}
+	})
+
+	t.Run("load session runtime unavailable", func(t *testing.T) {
+		response := handleLoadSessionFrame(context.Background(), MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionLoadSession,
+			RequestID: "load-unavailable",
+			SessionID: "session-load",
+		}, nil)
+		if response.Type != FrameTypeError {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+		}
+		if response.Error == nil || response.Error.Code != ErrorCodeInternalError.String() {
+			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeInternalError.String())
+		}
+	})
+
+	t.Run("load session success", func(t *testing.T) {
+		stub := &bootstrapRuntimeStub{
+			loadSessionFn: func(ctx context.Context, id string) (Session, error) {
+				if _, ok := ctx.Deadline(); !ok {
+					t.Fatal("load session should use timeout context")
+				}
+				if id != "session-load" {
+					t.Fatalf("load session id = %q, want %q", id, "session-load")
+				}
+				return Session{ID: id}, nil
+			},
+		}
+		response := handleLoadSessionFrame(context.Background(), MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionLoadSession,
+			RequestID: "load-1",
+			SessionID: "session-load",
+		}, stub)
+		if response.Type != FrameTypeAck {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeAck)
+		}
+	})
+
+	t.Run("load session runtime error", func(t *testing.T) {
+		stub := &bootstrapRuntimeStub{
+			loadSessionFn: func(_ context.Context, _ string) (Session, error) {
+				return Session{}, errors.New("load failed internals")
+			},
+		}
+		response := handleLoadSessionFrame(context.Background(), MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionLoadSession,
+			RequestID: "load-failed",
+			SessionID: "session-load",
+		}, stub)
+		if response.Type != FrameTypeError {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+		}
+		if response.Error == nil || response.Error.Code != ErrorCodeInternalError.String() {
+			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeInternalError.String())
+		}
+		if response.Error.Message != "load_session failed" {
+			t.Fatalf("response message = %q, want %q", response.Error.Message, "load_session failed")
+		}
+	})
+
+	t.Run("resolve permission runtime unavailable", func(t *testing.T) {
+		response := handleResolvePermissionFrame(context.Background(), MessageFrame{
+			Type:   FrameTypeRequest,
+			Action: FrameActionResolvePermission,
+			Payload: map[string]any{
+				"request_id": "perm-1",
+				"decision":   string(PermissionResolutionReject),
+			},
+		}, nil)
+		if response.Type != FrameTypeError {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+		}
+		if response.Error == nil || response.Error.Code != ErrorCodeInternalError.String() {
+			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeInternalError.String())
+		}
+	})
+
+	t.Run("resolve permission invalid payload", func(t *testing.T) {
+		response := handleResolvePermissionFrame(context.Background(), MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionResolvePermission,
+			RequestID: "resolve-invalid-payload",
+			Payload:   "bad",
+		}, &bootstrapRuntimeStub{})
+		if response.Type != FrameTypeError {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+		}
+		if response.Error == nil || response.Error.Code != ErrorCodeInvalidAction.String() {
+			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeInvalidAction.String())
+		}
+	})
+
+	t.Run("resolve permission invalid decision", func(t *testing.T) {
+		response := handleResolvePermissionFrame(context.Background(), MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionResolvePermission,
+			RequestID: "resolve-invalid-decision",
+			Payload: map[string]any{
+				"request_id": "perm-1",
+				"decision":   "allow_forever",
+			},
+		}, &bootstrapRuntimeStub{})
+		if response.Type != FrameTypeError {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+		}
+		if response.Error == nil || response.Error.Code != ErrorCodeInvalidAction.String() {
+			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeInvalidAction.String())
+		}
+	})
+
+	t.Run("resolve permission success", func(t *testing.T) {
+		stub := &bootstrapRuntimeStub{
+			resolvePermissionFn: func(ctx context.Context, input PermissionResolutionInput) error {
+				if _, ok := ctx.Deadline(); !ok {
+					t.Fatal("resolve permission should use timeout context")
+				}
+				if input.RequestID != "perm-1" {
+					t.Fatalf("permission request_id = %q, want %q", input.RequestID, "perm-1")
+				}
+				return nil
+			},
+		}
+		response := handleResolvePermissionFrame(context.Background(), MessageFrame{
+			Type:   FrameTypeRequest,
+			Action: FrameActionResolvePermission,
+			Payload: map[string]any{
+				"request_id": "perm-1",
+				"decision":   string(PermissionResolutionReject),
+			},
+		}, stub)
+		if response.Type != FrameTypeAck {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeAck)
+		}
+	})
+
+	t.Run("resolve permission runtime error", func(t *testing.T) {
+		stub := &bootstrapRuntimeStub{
+			resolvePermissionFn: func(_ context.Context, _ PermissionResolutionInput) error {
+				return errors.New("resolve failed internals")
+			},
+		}
+		response := handleResolvePermissionFrame(context.Background(), MessageFrame{
+			Type:   FrameTypeRequest,
+			Action: FrameActionResolvePermission,
+			Payload: map[string]any{
+				"request_id": "perm-2",
+				"decision":   string(PermissionResolutionReject),
+			},
+		}, stub)
+		if response.Type != FrameTypeError {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+		}
+		if response.Error == nil || response.Error.Code != ErrorCodeInternalError.String() {
+			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeInternalError.String())
+		}
+		if response.Error.Message != "resolve_permission failed" {
+			t.Fatalf("response message = %q, want %q", response.Error.Message, "resolve_permission failed")
+		}
+	})
+}
+
+func TestRuntimeCallFailedFrameNilErrorFallback(t *testing.T) {
+	response := runtimeCallFailedFrame(context.Background(), MessageFrame{
+		Type:   FrameTypeRequest,
+		Action: FrameActionRun,
+	}, nil, "")
+	if response.Type != FrameTypeError {
+		t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+	}
+	if response.Error == nil || response.Error.Code != ErrorCodeInternalError.String() {
+		t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeInternalError.String())
+	}
+	if response.Error.Message != "runtime operation failed" {
+		t.Fatalf("response message = %q, want %q", response.Error.Message, "runtime operation failed")
+	}
 }

@@ -193,6 +193,20 @@ go run ./cmd/neocode --workdir /path/to/workspace
   - `http_read/write/shutdown_sec=15/15/2`
 - 详细设计文档：[`docs/gateway-detailed-design.md`](docs/gateway-detailed-design.md)
 
+### Gateway JSON-RPC 方法清单（当前实现）
+
+- `gateway.authenticate`：连接级鉴权握手
+- `gateway.ping`：探活
+- `gateway.bindStream`：会话流绑定
+- `gateway.run`：发起一次运行
+- `gateway.compact`：触发会话压缩
+- `gateway.cancel`：取消当前活跃运行
+- `gateway.listSessions`：查询会话摘要列表
+- `gateway.loadSession`：加载单个会话详情
+- `gateway.resolvePermission`：提交权限审批结果
+- `wake.openUrl`：处理 `neocode://` 唤醒请求
+- `gateway.event`：网关推送的通知事件（notification）
+
 ## License
 
 MIT
