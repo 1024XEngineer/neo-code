@@ -78,8 +78,7 @@ func (t *RememberTool) MicroCompactPolicy() tools.MicroCompactPolicy {
 func (t *RememberTool) Execute(ctx context.Context, call tools.ToolCallInput) (tools.ToolResult, error) {
 	var args rememberInput
 	if err := json.Unmarshal(call.Arguments, &args); err != nil {
-		err = fmt.Errorf("%s: %w", rememberToolName, err)
-		return tools.NewErrorResult(rememberToolName, "invalid arguments", err.Error(), nil), err
+		return invalidArgumentsError(rememberToolName, err)
 	}
 
 	args.Type = strings.TrimSpace(args.Type)

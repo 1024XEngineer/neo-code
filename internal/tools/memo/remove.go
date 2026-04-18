@@ -44,11 +44,7 @@ func (t *RemoveTool) Schema() map[string]any {
 				"type":        "string",
 				"description": "Keyword to match against memory title, type, keywords, or content.",
 			},
-			"scope": map[string]any{
-				"type":        "string",
-				"description": "Optional scope filter: all, user, or project.",
-				"enum":        []string{"all", "user", "project"},
-			},
+			"scope": memoScopePropertySchema(),
 		},
 		"required": []string{"keyword"},
 	}
@@ -63,8 +59,7 @@ func (t *RemoveTool) MicroCompactPolicy() tools.MicroCompactPolicy {
 func (t *RemoveTool) Execute(ctx context.Context, call tools.ToolCallInput) (tools.ToolResult, error) {
 	var args removeInput
 	if err := json.Unmarshal(call.Arguments, &args); err != nil {
-		err = fmt.Errorf("%s: %w", removeToolName, err)
-		return tools.NewErrorResult(removeToolName, "invalid arguments", err.Error(), nil), err
+		return invalidArgumentsError(removeToolName, err)
 	}
 	if t.svc == nil {
 		return nilServiceError(removeToolName)
@@ -95,26 +90,4 @@ func (t *RemoveTool) Execute(ctx context.Context, call tools.ToolCallInput) (too
 		Name:    removeToolName,
 		Content: fmt.Sprintf("Removed %d memo(s) matching %q.", removed, args.Keyword),
 	}, nil
-}
-
-// parseMemoScope 解析 memo scope，并根据 allowAll 决定是否接受 all。
-func parseMemoScope(raw string, allowAll bool) (memo.Scope, error) {
-	normalized := strings.ToLower(strings.TrimSpace(raw))
-	if normalized == "" {
-		if allowAll {
-			return memo.ScopeAll, nil
-		}
-		return memo.ScopeProject, fmt.Errorf("memo: scope is required")
-	}
-	switch memo.Scope(normalized) {
-	case memo.ScopeUser:
-		return memo.ScopeUser, nil
-	case memo.ScopeProject:
-		return memo.ScopeProject, nil
-	case memo.ScopeAll:
-		if allowAll {
-			return memo.ScopeAll, nil
-		}
-	}
-	return "", fmt.Errorf("memo: unsupported scope %q", raw)
 }

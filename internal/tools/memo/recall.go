@@ -50,11 +50,7 @@ func (t *RecallTool) Schema() map[string]any {
 				"type":        "string",
 				"description": "Search keyword to find matching memory entries (searches title, type, content, and keywords).",
 			},
-			"scope": map[string]any{
-				"type":        "string",
-				"description": "Optional scope filter: all, user, or project.",
-				"enum":        []string{"all", "user", "project"},
-			},
+			"scope": memoScopePropertySchema(),
 		},
 		"required": []string{"keyword"},
 	}
@@ -69,8 +65,7 @@ func (t *RecallTool) MicroCompactPolicy() tools.MicroCompactPolicy {
 func (t *RecallTool) Execute(ctx context.Context, call tools.ToolCallInput) (tools.ToolResult, error) {
 	var args recallInput
 	if err := json.Unmarshal(call.Arguments, &args); err != nil {
-		wrappedErr := fmt.Errorf("%s: %w", recallToolName, err)
-		return tools.NewErrorResult(recallToolName, "invalid arguments", wrappedErr.Error(), nil), wrappedErr
+		return invalidArgumentsError(recallToolName, err)
 	}
 
 	args.Keyword = strings.TrimSpace(args.Keyword)

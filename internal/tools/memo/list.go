@@ -39,11 +39,7 @@ func (t *ListTool) Schema() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"scope": map[string]any{
-				"type":        "string",
-				"description": "Optional scope filter: all, user, or project.",
-				"enum":        []string{"all", "user", "project"},
-			},
+			"scope": memoScopePropertySchema(),
 		},
 	}
 }
@@ -62,8 +58,7 @@ func (t *ListTool) Execute(ctx context.Context, call tools.ToolCallInput) (tools
 	var args listInput
 	if len(call.Arguments) > 0 {
 		if err := json.Unmarshal(call.Arguments, &args); err != nil {
-			err = fmt.Errorf("%s: %w", listToolName, err)
-			return tools.NewErrorResult(listToolName, "invalid arguments", err.Error(), nil), err
+			return invalidArgumentsError(listToolName, err)
 		}
 	}
 
