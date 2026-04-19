@@ -171,6 +171,47 @@ func TestResolveCompactProviderSelectionResolveErrorBranch(t *testing.T) {
 	}
 }
 
+func TestResolveCompactProviderSelectionSessionBranchInjectsRuntimeAssetLimits(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	if err := manager.Update(context.Background(), func(cfg *config.Config) error {
+		cfg.Runtime.Assets.MaxSessionAssetBytes = 1024
+		cfg.Runtime.Assets.MaxSessionAssetsTotalBytes = 4096
+		return nil
+	}); err != nil {
+		t.Fatalf("update config: %v", err)
+	}
+	cfg := manager.Get()
+
+	resolved, model, err := resolveCompactProviderSelection(agentsession.Session{
+		Provider: cfg.SelectedProvider,
+		Model:    "session-model",
+	}, cfg)
+	if err != nil {
+		t.Fatalf("resolveCompactProviderSelection() error = %v", err)
+	}
+	if model != "session-model" {
+		t.Fatalf("expected model=session-model, got %q", model)
+	}
+
+	expected := cfg.Runtime.ResolveSessionAssetLimits()
+	if resolved.SessionAssetLimits.MaxSessionAssetBytes != expected.MaxSessionAssetBytes {
+		t.Fatalf(
+			"expected MaxSessionAssetBytes=%d, got %d",
+			expected.MaxSessionAssetBytes,
+			resolved.SessionAssetLimits.MaxSessionAssetBytes,
+		)
+	}
+	if resolved.SessionAssetLimits.MaxSessionAssetsTotalBytes != expected.MaxSessionAssetsTotalBytes {
+		t.Fatalf(
+			"expected MaxSessionAssetsTotalBytes=%d, got %d",
+			expected.MaxSessionAssetsTotalBytes,
+			resolved.SessionAssetLimits.MaxSessionAssetsTotalBytes,
+		)
+	}
+}
+
 func TestGenerateStreamingMessageHooksAndContextDoneBranches(t *testing.T) {
 	t.Parallel()
 

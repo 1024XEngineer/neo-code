@@ -141,9 +141,9 @@ name: company-gateway
 driver: openaicompat
 api_key_env: COMPANY_GATEWAY_API_KEY
 model_source: discover
-openai_compatible:
-  base_url: https://llm.example.com/v1
-  api_style: chat_completions
+base_url: https://llm.example.com/v1
+chat_endpoint_path: /chat/completions
+discovery_endpoint_path: /models
 ```
 
 `model_source` 语义如下：
@@ -158,8 +158,8 @@ name: company-gateway-manual
 driver: openaicompat
 api_key_env: COMPANY_GATEWAY_API_KEY
 model_source: manual
-openai_compatible:
-  base_url: https://llm.example.com/v1
+base_url: https://llm.example.com/v1
+chat_endpoint_path: /chat/completions
 models:
   - id: gpt-4o-mini
     name: GPT-4o Mini
@@ -171,6 +171,17 @@ models:
 - 老配置未声明 `model_source` 时，默认按 `discover` 处理。
 - `manual` 模式下必须提供 `models`，否则会在加载/创建阶段报错。
 - `manual` 模式会忽略 discovery 相关字段（如 `discovery_endpoint_path`、`discovery_response_profile`）。
+- 旧版嵌套字段（如 `openai_compatible/gemini/anthropic`）在严格校验下会被拒绝，升级前请先执行迁移脚本：
+
+```bash
+go run ./scripts/migrate_provider_yaml.go --base-dir ~/.neocode
+```
+
+仅预览不落盘：
+
+```bash
+go run ./scripts/migrate_provider_yaml.go --base-dir ~/.neocode --dry-run
+```
 
 ## Auto Compact 失败与校验补充
 
