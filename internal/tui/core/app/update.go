@@ -2166,6 +2166,7 @@ type providerAddFieldID int
 const (
 	providerAddFieldName providerAddFieldID = iota
 	providerAddFieldDriver
+	providerAddFieldModelSource
 	providerAddFieldBaseURL
 	providerAddFieldAPIStyle
 	providerAddFieldDeploymentMode
@@ -2176,10 +2177,11 @@ const (
 	providerAddFieldAPIKey
 )
 
-func providerAddVisibleFields(driver string) []providerAddFieldID {
+func providerAddVisibleFields(driver string, modelSource string) []providerAddFieldID {
 	fields := []providerAddFieldID{
 		providerAddFieldName,
 		providerAddFieldDriver,
+		providerAddFieldModelSource,
 		providerAddFieldBaseURL,
 	}
 
@@ -2192,7 +2194,9 @@ func providerAddVisibleFields(driver string) []providerAddFieldID {
 		fields = append(fields, providerAddFieldAPIVersion)
 	}
 
-	fields = append(fields, providerAddFieldDiscoveryEndpointPath, providerAddFieldDiscoveryResponseProfile)
+	if provider.NormalizeModelSource(strings.TrimSpace(modelSource)) == provider.ModelSourceDiscover {
+		fields = append(fields, providerAddFieldDiscoveryEndpointPath, providerAddFieldDiscoveryResponseProfile)
+	}
 	fields = append(fields, providerAddFieldAPIKeyEnv, providerAddFieldAPIKey)
 	return fields
 }
@@ -2201,7 +2205,7 @@ func clampProviderAddStep(form *providerAddFormState) {
 	if form == nil {
 		return
 	}
-	fields := providerAddVisibleFields(form.Driver)
+	fields := providerAddVisibleFields(form.Driver, form.ModelSource)
 	if len(fields) == 0 {
 		form.Step = 0
 		return
@@ -2219,7 +2223,7 @@ func currentProviderAddField(form *providerAddFormState) providerAddFieldID {
 		return providerAddFieldName
 	}
 	clampProviderAddStep(form)
-	fields := providerAddVisibleFields(form.Driver)
+	fields := providerAddVisibleFields(form.Driver, form.ModelSource)
 	if len(fields) == 0 {
 		return providerAddFieldName
 	}
@@ -2232,6 +2236,7 @@ func (a *App) startProviderAddForm() {
 		Step:                     0,
 		Name:                     "",
 		Driver:                   provider.DriverOpenAICompat,
+		ModelSource:              provider.ModelSourceDiscover,
 		BaseURL:                  "",
 		APIStyle:                 provider.OpenAICompatibleAPIStyleChatCompletions,
 		DeploymentMode:           "",
@@ -2244,6 +2249,7 @@ func (a *App) startProviderAddForm() {
 		Error:                    "",
 		ErrorIsHard:              false,
 		Drivers:                  []string{provider.DriverOpenAICompat, provider.DriverGemini, provider.DriverAnthropic},
+		ModelSources:             []string{provider.ModelSourceDiscover, provider.ModelSourceManual},
 	}
 	a.state.ActivePicker = pickerProviderAdd
 	a.state.StatusText = "Add new provider"
@@ -2285,7 +2291,7 @@ func (a *App) handleProviderAddFormInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	prevStep := a.providerAddForm.Step
-	fields := providerAddVisibleFields(a.providerAddForm.Driver)
+	fields := providerAddVisibleFields(a.providerAddForm.Driver, a.providerAddForm.ModelSource)
 	fieldCount := len(fields)
 	if fieldCount == 0 {
 		fieldCount = 1
@@ -2336,6 +2342,17 @@ func (a *App) handleProviderAddFormInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			currentIdx = (currentIdx - 1 + len(a.providerAddForm.Drivers)) % len(a.providerAddForm.Drivers)
 			a.providerAddForm.Driver = a.providerAddForm.Drivers[currentIdx]
 			clampProviderAddStep(a.providerAddForm)
+		} else if currentProviderAddField(a.providerAddForm) == providerAddFieldModelSource {
+			currentIdx := 0
+			for i, source := range a.providerAddForm.ModelSources {
+				if source == a.providerAddForm.ModelSource {
+					currentIdx = i
+					break
+				}
+			}
+			currentIdx = (currentIdx - 1 + len(a.providerAddForm.ModelSources)) % len(a.providerAddForm.ModelSources)
+			a.providerAddForm.ModelSource = a.providerAddForm.ModelSources[currentIdx]
+			clampProviderAddStep(a.providerAddForm)
 		}
 		return a, nil
 	case typed.Type == tea.KeyDown:
@@ -2349,6 +2366,17 @@ func (a *App) handleProviderAddFormInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			currentIdx = (currentIdx + 1) % len(a.providerAddForm.Drivers)
 			a.providerAddForm.Driver = a.providerAddForm.Drivers[currentIdx]
+			clampProviderAddStep(a.providerAddForm)
+		} else if currentProviderAddField(a.providerAddForm) == providerAddFieldModelSource {
+			currentIdx := 0
+			for i, source := range a.providerAddForm.ModelSources {
+				if source == a.providerAddForm.ModelSource {
+					currentIdx = i
+					break
+				}
+			}
+			currentIdx = (currentIdx + 1) % len(a.providerAddForm.ModelSources)
+			a.providerAddForm.ModelSource = a.providerAddForm.ModelSources[currentIdx]
 			clampProviderAddStep(a.providerAddForm)
 		}
 		return a, nil
@@ -2449,6 +2477,7 @@ func buildProviderAddRequest(form providerAddFormState) (providerAddRequest, str
 	request := providerAddRequest{
 		Name:                     normalizeProviderAddFieldValue(form.Name),
 		Driver:                   provider.NormalizeProviderDriver(normalizeProviderAddFieldValue(form.Driver)),
+		ModelSource:              provider.NormalizeModelSource(normalizeProviderAddFieldValue(form.ModelSource)),
 		BaseURL:                  normalizeProviderAddFieldValue(form.BaseURL),
 		ManualModelsJSON:         strings.TrimSpace(form.ManualModelsJSON),
 		APIStyle:                 normalizeProviderAddFieldValue(form.APIStyle),
@@ -2465,6 +2494,9 @@ func buildProviderAddRequest(form providerAddFormState) (providerAddRequest, str
 	}
 	if request.Driver == "" {
 		return providerAddRequest{}, "Driver is required"
+	}
+	if request.ModelSource == "" {
+		return providerAddRequest{}, "Model Source must be discover or manual"
 	}
 	if request.APIKey == "" {
 		return providerAddRequest{}, "API Key is required"
@@ -2510,13 +2542,16 @@ func buildProviderAddRequest(form providerAddFormState) (providerAddRequest, str
 		request.APIVersion = ""
 	}
 
-	if request.DiscoveryEndpointPath == "" {
-		request.ModelSource = provider.ModelSourceManual
+	if request.ModelSource == provider.ModelSourceManual {
+		request.DiscoveryEndpointPath = ""
 		request.DiscoveryResponseProfile = ""
 		return request, ""
 	}
 
-	request.ModelSource = provider.ModelSourceDiscover
+	if request.DiscoveryEndpointPath == "" {
+		return providerAddRequest{}, "Discovery Endpoint is required for discover model source"
+	}
+
 	normalizedProtocols, err := provider.NormalizeProviderProtocolSettings(
 		request.Driver,
 		"",

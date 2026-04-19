@@ -420,15 +420,15 @@ func TestSubmitProviderAddFormRedactsSensitiveError(t *testing.T) {
 	}
 }
 
-func TestSubmitProviderAddFormTransitionsToManualStageWhenDiscoveryEndpointEmpty(t *testing.T) {
+func TestSubmitProviderAddFormTransitionsToManualStageWhenModelSourceManual(t *testing.T) {
 	app, _ := newTestApp(t)
 	app.startProviderAddForm()
 
 	app.providerAddForm.Name = "manual-stage-gateway"
 	app.providerAddForm.Driver = provider.DriverOpenAICompat
+	app.providerAddForm.ModelSource = provider.ModelSourceManual
 	app.providerAddForm.APIKeyEnv = "MANUAL_STAGE_GATEWAY_API_KEY"
 	app.providerAddForm.APIKey = "sk-manual-stage"
-	app.providerAddForm.DiscoveryEndpointPath = ""
 
 	cmd := app.submitProviderAddForm()
 	if cmd != nil {
@@ -2454,7 +2454,7 @@ func TestCurrentProviderAddFieldAndInputHandling(t *testing.T) {
 		t.Fatalf("expected name field append, got %q", app.providerAddForm.Name)
 	}
 
-	app.providerAddForm.Step = 6 // api key env
+	app.providerAddForm.Step = 7 // api key env
 	model, cmd = app.handleProviderAddFormInput(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'\x00', 'D', 'E', 'E', 'P'}})
 	if cmd != nil {
 		t.Fatalf("expected nil cmd for env key rune input")
@@ -2488,6 +2488,18 @@ func TestCurrentProviderAddFieldAndInputHandling(t *testing.T) {
 	app = *ptr
 	if app.providerAddForm.Driver == driverBefore {
 		t.Fatalf("expected key down to switch driver")
+	}
+
+	app.providerAddForm.Step = 2 // model source
+	modelSourceBefore := app.providerAddForm.ModelSource
+	model, _ = app.handleProviderAddFormInput(tea.KeyMsg{Type: tea.KeyDown})
+	ptr, ok = model.(*App)
+	if !ok {
+		t.Fatalf("expected *App model, got %T", model)
+	}
+	app = *ptr
+	if app.providerAddForm.ModelSource == modelSourceBefore {
+		t.Fatalf("expected key down to switch model source")
 	}
 
 	app.providerAddForm.Step = 0
@@ -2571,43 +2583,40 @@ func TestBuildProviderAddRequest(t *testing.T) {
 		if _, err := buildProviderAddRequest(providerAddFormState{Name: "demo"}); !strings.Contains(err, "Driver is required") {
 			t.Fatalf("expected missing driver error, got %q", err)
 		}
-		if _, err := buildProviderAddRequest(providerAddFormState{Name: "demo", Driver: provider.DriverGemini}); !strings.Contains(err, "API Key is required") {
+		if _, err := buildProviderAddRequest(providerAddFormState{
+			Name:   "demo",
+			Driver: provider.DriverGemini,
+		}); !strings.Contains(err, "Model Source") {
+			t.Fatalf("expected missing model source error, got %q", err)
+		}
+		if _, err := buildProviderAddRequest(providerAddFormState{
+			Name:        "demo",
+			Driver:      provider.DriverGemini,
+			ModelSource: provider.ModelSourceManual,
+		}); !strings.Contains(err, "API Key is required") {
 			t.Fatalf("expected missing key error, got %q", err)
 		}
 		if _, err := buildProviderAddRequest(providerAddFormState{
-			Name:      "demo",
-			Driver:    provider.DriverGemini,
-			APIKey:    "k",
-			APIKeyEnv: "",
+			Name:        "demo",
+			Driver:      provider.DriverGemini,
+			ModelSource: provider.ModelSourceManual,
+			APIKey:      "k",
+			APIKeyEnv:   "",
 		}); !strings.Contains(err, "API Key Env is required") {
 			t.Fatalf("expected missing env key error, got %q", err)
 		}
 	})
 
-	t.Run("openai compat defaults to manual source when discovery endpoint is empty", func(t *testing.T) {
+	t.Run("openai compat discover mode requires explicit discovery endpoint path", func(t *testing.T) {
 		req, err := buildProviderAddRequest(providerAddFormState{
-			Name:      "openai-compat",
-			Driver:    provider.DriverOpenAICompat,
-			APIKey:    "k",
-			APIKeyEnv: "OPENAI_COMPAT_API_KEY",
+			Name:        "openai-compat",
+			Driver:      provider.DriverOpenAICompat,
+			ModelSource: provider.ModelSourceDiscover,
+			APIKey:      "k",
+			APIKeyEnv:   "OPENAI_COMPAT_API_KEY",
 		})
-		if err != "" {
-			t.Fatalf("unexpected error: %s", err)
-		}
-		if req.BaseURL != config.OpenAIDefaultBaseURL {
-			t.Fatalf("expected openai default base url, got %q", req.BaseURL)
-		}
-		if req.APIStyle != provider.OpenAICompatibleAPIStyleChatCompletions {
-			t.Fatalf("expected default api style")
-		}
-		if req.ModelSource != provider.ModelSourceManual {
-			t.Fatalf("expected manual model source, got %q", req.ModelSource)
-		}
-		if req.DiscoveryEndpointPath != "" {
-			t.Fatalf("expected empty discovery endpoint in manual mode, got %q", req.DiscoveryEndpointPath)
-		}
-		if req.DiscoveryResponseProfile != "" {
-			t.Fatalf("expected empty discovery response profile in manual mode, got %q", req.DiscoveryResponseProfile)
+		if !strings.Contains(err, "Discovery Endpoint is required") {
+			t.Fatalf("expected missing discovery endpoint error, got %q and req=%+v", err, req)
 		}
 	})
 
@@ -2615,6 +2624,7 @@ func TestBuildProviderAddRequest(t *testing.T) {
 		req, err := buildProviderAddRequest(providerAddFormState{
 			Name:                  "openai-compat-discover",
 			Driver:                provider.DriverOpenAICompat,
+			ModelSource:           provider.ModelSourceDiscover,
 			APIKey:                "k",
 			APIKeyEnv:             "OPENAI_COMPAT_DISCOVER_API_KEY",
 			DiscoveryEndpointPath: provider.DiscoveryEndpointPathModels,
@@ -2635,10 +2645,11 @@ func TestBuildProviderAddRequest(t *testing.T) {
 
 	t.Run("strips control chars from env key before validation", func(t *testing.T) {
 		req, err := buildProviderAddRequest(providerAddFormState{
-			Name:      "openai-compat",
-			Driver:    provider.DriverOpenAICompat,
-			APIKey:    "k",
-			APIKeyEnv: "\x00OPENAI_COMPAT_API_KEY",
+			Name:        "openai-compat",
+			Driver:      provider.DriverOpenAICompat,
+			ModelSource: provider.ModelSourceManual,
+			APIKey:      "k",
+			APIKeyEnv:   "\x00OPENAI_COMPAT_API_KEY",
 		})
 		if err != "" {
 			t.Fatalf("unexpected error: %s", err)
@@ -2650,10 +2661,11 @@ func TestBuildProviderAddRequest(t *testing.T) {
 
 	t.Run("rejects protected env key", func(t *testing.T) {
 		if _, err := buildProviderAddRequest(providerAddFormState{
-			Name:      "openai-compat",
-			Driver:    provider.DriverOpenAICompat,
-			APIKey:    "k",
-			APIKeyEnv: "PATH",
+			Name:        "openai-compat",
+			Driver:      provider.DriverOpenAICompat,
+			ModelSource: provider.ModelSourceManual,
+			APIKey:      "k",
+			APIKeyEnv:   "PATH",
 		}); !strings.Contains(err, "protected") {
 			t.Fatalf("expected protected env key error, got %q", err)
 		}
@@ -2663,6 +2675,7 @@ func TestBuildProviderAddRequest(t *testing.T) {
 		req, err := buildProviderAddRequest(providerAddFormState{
 			Name:           "gemini",
 			Driver:         provider.DriverGemini,
+			ModelSource:    provider.ModelSourceManual,
 			APIKey:         "k",
 			APIKeyEnv:      "GEMINI_GATEWAY_API_KEY",
 			APIStyle:       "x",
@@ -2681,6 +2694,7 @@ func TestBuildProviderAddRequest(t *testing.T) {
 		if _, err := buildProviderAddRequest(providerAddFormState{
 			Name:                  "openai-compat",
 			Driver:                provider.DriverOpenAICompat,
+			ModelSource:           provider.ModelSourceDiscover,
 			APIKey:                "k",
 			APIKeyEnv:             "OPENAI_COMPAT_API_KEY",
 			DiscoveryEndpointPath: "https://api.example.com/models",
@@ -2693,6 +2707,7 @@ func TestBuildProviderAddRequest(t *testing.T) {
 		if _, err := buildProviderAddRequest(providerAddFormState{
 			Name:                     "openai-compat",
 			Driver:                   provider.DriverOpenAICompat,
+			ModelSource:              provider.ModelSourceDiscover,
 			APIKey:                   "k",
 			APIKeyEnv:                "OPENAI_COMPAT_API_KEY",
 			DiscoveryEndpointPath:    provider.DiscoveryEndpointPathModels,
@@ -2704,22 +2719,42 @@ func TestBuildProviderAddRequest(t *testing.T) {
 
 	t.Run("anthropic/custom require base url", func(t *testing.T) {
 		if _, err := buildProviderAddRequest(providerAddFormState{
-			Name:      "anthropic",
-			Driver:    provider.DriverAnthropic,
-			APIKey:    "k",
-			APIKeyEnv: "ANTHROPIC_GATEWAY_API_KEY",
+			Name:        "anthropic",
+			Driver:      provider.DriverAnthropic,
+			ModelSource: provider.ModelSourceManual,
+			APIKey:      "k",
+			APIKeyEnv:   "ANTHROPIC_GATEWAY_API_KEY",
 		}); !strings.Contains(err, "Base URL is required") {
 			t.Fatalf("expected anthropic base url error, got %q", err)
 		}
 
 		if _, err := buildProviderAddRequest(providerAddFormState{
-			Name:      "custom",
-			Driver:    "custom-driver",
-			APIKey:    "k",
-			APIKeyEnv: "CUSTOM_DRIVER_API_KEY",
-			BaseURL:   "",
+			Name:        "custom",
+			Driver:      "custom-driver",
+			ModelSource: provider.ModelSourceManual,
+			APIKey:      "k",
+			APIKeyEnv:   "CUSTOM_DRIVER_API_KEY",
+			BaseURL:     "",
 		}); !strings.Contains(err, "Base URL is required for custom driver") {
 			t.Fatalf("expected custom base url error, got %q", err)
+		}
+	})
+
+	t.Run("manual source clears discovery settings", func(t *testing.T) {
+		req, err := buildProviderAddRequest(providerAddFormState{
+			Name:                     "manual",
+			Driver:                   provider.DriverOpenAICompat,
+			ModelSource:              provider.ModelSourceManual,
+			APIKey:                   "k",
+			APIKeyEnv:                "MANUAL_GATEWAY_API_KEY",
+			DiscoveryEndpointPath:    provider.DiscoveryEndpointPathModels,
+			DiscoveryResponseProfile: provider.DiscoveryResponseProfileGeneric,
+		})
+		if err != "" {
+			t.Fatalf("unexpected error: %s", err)
+		}
+		if req.DiscoveryEndpointPath != "" || req.DiscoveryResponseProfile != "" {
+			t.Fatalf("expected manual mode to clear discovery settings, got %+v", req)
 		}
 	})
 }

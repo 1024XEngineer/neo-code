@@ -126,6 +126,7 @@ type providerAddFormState struct {
 	Step                     int // 当前聚焦字段在“当前 driver 可见字段列表”中的索引
 	Name                     string
 	Driver                   string
+	ModelSource              string
 	BaseURL                  string
 	APIStyle                 string
 	DeploymentMode           string
@@ -139,6 +140,7 @@ type providerAddFormState struct {
 	ErrorIsHard              bool
 	Submitting               bool
 	Drivers                  []string // 可选的 Driver 列表
+	ModelSources             []string // 可选的模型来源列表
 }
 
 type providerAddFormStage int
