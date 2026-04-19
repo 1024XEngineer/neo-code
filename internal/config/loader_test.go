@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"neo-code/internal/provider"
+	providertypes "neo-code/internal/provider/types"
 )
 
 func writeLoaderConfig(t *testing.T, loader *Loader, raw string) {
@@ -1264,6 +1265,125 @@ func TestSaveCustomProviderRejectsManualSourceWithoutModels(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "manual model source requires non-empty models") {
 		t.Fatalf("expected manual source empty models validation error, got %v", err)
+	}
+}
+
+func TestSaveCustomProviderRejectsInvalidModelSource(t *testing.T) {
+	t.Parallel()
+
+	err := SaveCustomProviderWithModels(t.TempDir(), SaveCustomProviderInput{
+		Name:        "invalid-model-source",
+		Driver:      provider.DriverOpenAICompat,
+		BaseURL:     "https://llm.example.com/v1",
+		APIKeyEnv:   "INVALID_MODEL_SOURCE_API_KEY",
+		ModelSource: "manul",
+	})
+	if err == nil || !strings.Contains(err.Error(), "unsupported model_source") {
+		t.Fatalf("expected invalid model_source error, got %v", err)
+	}
+}
+
+func TestSaveCustomProviderManualModelsPersistOptionalFields(t *testing.T) {
+	t.Parallel()
+
+	baseDir := t.TempDir()
+	const providerName = "manual-models-provider"
+	err := SaveCustomProviderWithModels(baseDir, SaveCustomProviderInput{
+		Name:        providerName,
+		Driver:      provider.DriverOpenAICompat,
+		BaseURL:     "https://llm.example.com/v1",
+		APIKeyEnv:   "MANUAL_MODELS_PROVIDER_API_KEY",
+		ModelSource: provider.ModelSourceManual,
+		Models: []providertypes.ModelDescriptor{
+			{
+				ID:   "manual-model-1",
+				Name: "Manual Model 1",
+			},
+			{
+				ID:              "manual-model-2",
+				Name:            "Manual Model 2",
+				ContextWindow:   131072,
+				MaxOutputTokens: 8192,
+			},
+			{
+				ID:   "Manual-Model-1",
+				Name: "Duplicate by key should be merged",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("SaveCustomProviderWithModels() error = %v", err)
+	}
+
+	cfg, err := loadCustomProvider(filepath.Join(baseDir, providersDirName, providerName))
+	if err != nil {
+		t.Fatalf("loadCustomProvider() error = %v", err)
+	}
+	if cfg.ModelSource != provider.ModelSourceManual {
+		t.Fatalf("expected model source manual, got %q", cfg.ModelSource)
+	}
+	if cfg.DiscoveryEndpointPath != "" || cfg.DiscoveryResponseProfile != "" {
+		t.Fatalf("expected discovery settings to be empty in manual mode, got %+v", cfg)
+	}
+	if len(cfg.Models) != 2 {
+		t.Fatalf("expected merged model list with 2 entries, got %+v", cfg.Models)
+	}
+	if cfg.Models[0].ContextWindow != 0 || cfg.Models[0].MaxOutputTokens != 0 {
+		t.Fatalf("expected optional fields omitted for model-1, got %+v", cfg.Models[0])
+	}
+	if cfg.Models[1].ContextWindow != 131072 || cfg.Models[1].MaxOutputTokens != 8192 {
+		t.Fatalf("expected optional fields persisted for model-2, got %+v", cfg.Models[1])
+	}
+}
+
+func TestToCustomProviderModelFiles(t *testing.T) {
+	t.Parallel()
+
+	if got := toCustomProviderModelFiles(nil); got != nil {
+		t.Fatalf("expected nil result for empty models, got %+v", got)
+	}
+
+	converted := toCustomProviderModelFiles([]providertypes.ModelDescriptor{
+		{
+			ID:   "model-a",
+			Name: "Model A",
+		},
+		{
+			ID:              "model-b",
+			Name:            "Model B",
+			ContextWindow:   32768,
+			MaxOutputTokens: 2048,
+		},
+		{
+			ID:   "Model-A",
+			Name: "Merged duplicate key",
+		},
+	})
+	if len(converted) != 2 {
+		t.Fatalf("expected merged model count 2, got %+v", converted)
+	}
+	if converted[0].ID != "model-a" || converted[0].Name != "Model A" {
+		t.Fatalf("expected normalized merge result for model-a, got %+v", converted[0])
+	}
+	if converted[0].ContextWindow != nil || converted[0].MaxOutputTokens != nil {
+		t.Fatalf("expected model-a optional pointers nil, got %+v", converted[0])
+	}
+	if converted[1].ContextWindow == nil || *converted[1].ContextWindow != 32768 {
+		t.Fatalf("expected model-b context window pointer, got %+v", converted[1])
+	}
+	if converted[1].MaxOutputTokens == nil || *converted[1].MaxOutputTokens != 2048 {
+		t.Fatalf("expected model-b max output tokens pointer, got %+v", converted[1])
+	}
+}
+
+func TestValidateCustomProviderName(t *testing.T) {
+	t.Parallel()
+
+	if err := ValidateCustomProviderName("team.gateway_01"); err != nil {
+		t.Fatalf("expected valid provider name, got %v", err)
+	}
+	if err := ValidateCustomProviderName("../escape"); err == nil {
+		t.Fatal("expected invalid provider name rejection")
 	}
 }
 
