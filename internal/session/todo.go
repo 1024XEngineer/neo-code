@@ -121,11 +121,11 @@ func (from TodoStatus) ValidTransition(to TodoStatus) bool {
 	}
 	switch from {
 	case TodoStatusPending:
-		return to == TodoStatusInProgress || to == TodoStatusBlocked || to == TodoStatusCanceled
+		return to == TodoStatusInProgress || to == TodoStatusBlocked || to == TodoStatusFailed || to == TodoStatusCanceled
 	case TodoStatusInProgress:
 		return to == TodoStatusCompleted || to == TodoStatusFailed || to == TodoStatusBlocked || to == TodoStatusCanceled
 	case TodoStatusBlocked:
-		return to == TodoStatusPending || to == TodoStatusInProgress || to == TodoStatusCanceled
+		return to == TodoStatusPending || to == TodoStatusInProgress || to == TodoStatusFailed || to == TodoStatusCanceled
 	default:
 		return false
 	}

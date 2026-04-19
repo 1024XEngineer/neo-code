@@ -496,8 +496,6 @@ func (s *Scheduler) startReadyTasks(
 			ID:             item.ID,
 			Goal:           strings.TrimSpace(item.Content),
 			ExpectedOutput: strings.Join(item.Acceptance, "\n"),
-			FailureReason:  strings.TrimSpace(item.FailureReason),
-			RetryCount:     item.RetryCount,
 			ContextSlice:   contextSlice,
 		}
 
