@@ -146,6 +146,12 @@ sequenceDiagram
 | `gateway.authenticate` | request/response | 连接级鉴权，成功后复用认证态 |
 | `gateway.ping` | request/response | 健康探针 |
 | `gateway.bindStream` | request/response | 会话流绑定 |
+| `gateway.run` | request/response | 发起一次运行请求 |
+| `gateway.compact` | request/response | 触发一次会话压缩 |
+| `gateway.cancel` | request/response | 按 `run_id` 精确取消目标运行（`run_id` 必填） |
+| `gateway.listSessions` | request/response | 查询会话摘要列表 |
+| `gateway.loadSession` | request/response | 加载单个会话详情 |
+| `gateway.resolvePermission` | request/response | 提交权限审批决策 |
 | `wake.openUrl` | request/response | URL Scheme 唤醒入口 |
 | `gateway.event` | notification | Gateway 推送运行时事件 |
 
@@ -156,10 +162,10 @@ sequenceDiagram
 | `Run(ctx, input)` | 发起一次运行编排 |
 | `Compact(ctx, input)` | 执行会话压缩 |
 | `ResolvePermission(ctx, input)` | 回填权限审批结果 |
-| `CancelActiveRun()` | 取消活动运行 |
+| `CancelRun(ctx, input)` | 按 `run_id` 精确取消目标运行 |
 | `Events()` | 订阅运行时事件流 |
 | `ListSessions(ctx)` | 获取会话摘要 |
-| `LoadSession(ctx, id)` | 加载会话详情 |
+| `LoadSession(ctx, input)` | 按 `session_id` 加载会话详情（含主体信息） |
 
 ## 6. 安全与治理基线
 
@@ -175,7 +181,7 @@ sequenceDiagram
 - 错误返回统一：
   - JSON-RPC：`error.code`
   - Gateway 稳定码：`error.data.gateway_code`
-- 关键稳定码：`unauthorized`, `access_denied`, `invalid_frame`, `unsupported_action`
+- 关键稳定码：`unauthorized`, `access_denied`, `invalid_frame`, `unsupported_action`, `timeout`（runtime 调用超时）
 
 ### 6.3 默认治理参数
 

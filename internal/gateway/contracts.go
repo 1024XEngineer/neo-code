@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// RuntimeEventType 表示运行事件类型。
+// RuntimeEventType 表示运行时事件类型。
 type RuntimeEventType string
 
 const (
@@ -13,7 +13,7 @@ const (
 	RuntimeEventTypeRunProgress RuntimeEventType = "run_progress"
 	// RuntimeEventTypeRunDone 表示运行完成事件。
 	RuntimeEventTypeRunDone RuntimeEventType = "run_done"
-	// RuntimeEventTypeRunError 表示运行错误事件。
+	// RuntimeEventTypeRunError 表示运行失败事件。
 	RuntimeEventTypeRunError RuntimeEventType = "run_error"
 )
 
@@ -23,7 +23,7 @@ type PermissionResolutionDecision string
 const (
 	// PermissionResolutionAllowOnce 表示仅本次允许。
 	PermissionResolutionAllowOnce PermissionResolutionDecision = "allow_once"
-	// PermissionResolutionAllowSession 表示在当前会话中持续允许。
+	// PermissionResolutionAllowSession 表示在当前会话持续允许。
 	PermissionResolutionAllowSession PermissionResolutionDecision = "allow_session"
 	// PermissionResolutionReject 表示拒绝本次审批。
 	PermissionResolutionReject PermissionResolutionDecision = "reject"
@@ -31,6 +31,8 @@ const (
 
 // PermissionResolutionInput 表示一次权限审批决策输入。
 type PermissionResolutionInput struct {
+	// SubjectID 是请求方身份主体标识。
+	SubjectID string `json:"subject_id,omitempty"`
 	// RequestID 是待审批请求标识。
 	RequestID string `json:"request_id"`
 	// Decision 是审批决策值。
@@ -39,6 +41,8 @@ type PermissionResolutionInput struct {
 
 // RunInput 表示网关向下游运行端口发起 run 动作时的输入。
 type RunInput struct {
+	// SubjectID 是请求方身份主体标识。
+	SubjectID string
 	// RequestID 是客户端请求标识。
 	RequestID string
 	// SessionID 是会话标识。
@@ -55,12 +59,34 @@ type RunInput struct {
 
 // CompactInput 表示网关向下游运行端口发起 compact 动作时的输入。
 type CompactInput struct {
+	// SubjectID 是请求方身份主体标识。
+	SubjectID string
 	// RequestID 是客户端请求标识。
 	RequestID string
 	// SessionID 是会话标识。
 	SessionID string
 	// RunID 是运行标识。
 	RunID string
+}
+
+// CancelInput 表示 gateway.cancel 动作的下游输入。
+type CancelInput struct {
+	// SubjectID 是请求方身份主体标识。
+	SubjectID string
+	// RequestID 是客户端请求标识。
+	RequestID string
+	// SessionID 是可选会话标识。
+	SessionID string
+	// RunID 是必须显式指定的目标运行标识。
+	RunID string
+}
+
+// LoadSessionInput 表示 gateway.loadSession 动作的下游输入。
+type LoadSessionInput struct {
+	// SubjectID 是请求方身份主体标识。
+	SubjectID string
+	// SessionID 是目标会话标识。
+	SessionID string
 }
 
 // CompactResult 表示 compact 动作完成后返回的结果。
@@ -89,7 +115,7 @@ type RuntimeEvent struct {
 	RunID string `json:"run_id,omitempty"`
 	// SessionID 是会话标识。
 	SessionID string `json:"session_id,omitempty"`
-	// Payload 是事件扩展负载。
+	// Payload 是事件扩展载荷。
 	Payload any `json:"payload,omitempty"`
 }
 
@@ -153,14 +179,14 @@ type RuntimePort interface {
 	Compact(ctx context.Context, input CompactInput) (CompactResult, error)
 	// ResolvePermission 向运行时提交一次权限审批决策。
 	ResolvePermission(ctx context.Context, input PermissionResolutionInput) error
-	// CancelActiveRun 取消当前活跃运行。
-	CancelActiveRun() bool
+	// CancelRun 按 run_id 精确取消运行态任务。
+	CancelRun(ctx context.Context, input CancelInput) (bool, error)
 	// Events 返回统一运行事件流。
 	Events() <-chan RuntimeEvent
 	// ListSessions 返回会话摘要列表。
 	ListSessions(ctx context.Context) ([]SessionSummary, error)
 	// LoadSession 加载指定会话详情。
-	LoadSession(ctx context.Context, id string) (Session, error)
+	LoadSession(ctx context.Context, input LoadSessionInput) (Session, error)
 }
 
 // Gateway 定义网关主契约。
@@ -170,3 +196,4 @@ type Gateway interface {
 	// Close 优雅关闭网关服务。
 	Close(ctx context.Context) error
 }
+

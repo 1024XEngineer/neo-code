@@ -15,12 +15,19 @@ func (a stubTokenAuthenticator) ValidateToken(token string) bool {
 	return token == a.token
 }
 
+func (a stubTokenAuthenticator) ResolveSubjectID(token string) (string, bool) {
+	if !a.ValidateToken(token) {
+		return "", false
+	}
+	return "local_admin", true
+}
+
 func TestConnectionAuthState(t *testing.T) {
 	state := NewConnectionAuthState()
 	if state.IsAuthenticated() {
 		t.Fatal("new state should be unauthenticated")
 	}
-	state.MarkAuthenticated()
+	state.MarkAuthenticated("local_admin")
 	if !state.IsAuthenticated() {
 		t.Fatal("state should be authenticated")
 	}
@@ -142,7 +149,7 @@ func TestRequestContextNilAndTypeMismatchBranches(t *testing.T) {
 
 func TestConnectionAuthStateNilReceiver(t *testing.T) {
 	var state *ConnectionAuthState
-	state.MarkAuthenticated()
+	state.MarkAuthenticated("local_admin")
 	if state.IsAuthenticated() {
 		t.Fatal("nil state should remain unauthenticated")
 	}

@@ -61,7 +61,7 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 	var statePtr *runState
 
 	runCtx, cancel := context.WithCancel(ctx)
-	runToken := s.startRun(cancel)
+	runToken := s.startRun(cancel, input.RunID)
 	defer func() {
 		cancel()
 		s.finishRun(runToken)

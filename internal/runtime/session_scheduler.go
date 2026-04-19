@@ -56,17 +56,30 @@ func (s *Service) loadOrCreateSession(
 }
 
 // startRun 记录当前激活的运行取消句柄，并分配一个新的运行令牌。
-func (s *Service) startRun(cancel context.CancelFunc) uint64 {
+func (s *Service) startRun(cancel context.CancelFunc, runID ...string) uint64 {
 	s.runMu.Lock()
 	defer s.runMu.Unlock()
 	if s.activeRunCancels == nil {
 		s.activeRunCancels = make(map[uint64]context.CancelFunc)
+	}
+	if s.activeRunByID == nil {
+		s.activeRunByID = make(map[string]uint64)
+	}
+	if s.activeRunTokenIDs == nil {
+		s.activeRunTokenIDs = make(map[uint64]string)
 	}
 
 	s.nextRunToken++
 	token := s.nextRunToken
 	s.activeRunToken = token
 	s.activeRunCancels[token] = cancel
+	if len(runID) > 0 {
+		normalizedRunID := strings.TrimSpace(runID[0])
+		if normalizedRunID != "" {
+			s.activeRunByID[normalizedRunID] = token
+			s.activeRunTokenIDs[token] = normalizedRunID
+		}
+	}
 	return token
 }
 
@@ -76,6 +89,12 @@ func (s *Service) finishRun(token uint64) {
 	defer s.runMu.Unlock()
 
 	delete(s.activeRunCancels, token)
+	if runID, exists := s.activeRunTokenIDs[token]; exists {
+		delete(s.activeRunTokenIDs, token)
+		if mappedToken, ok := s.activeRunByID[runID]; ok && mappedToken == token {
+			delete(s.activeRunByID, runID)
+		}
+	}
 	if s.activeRunToken != token {
 		return
 	}

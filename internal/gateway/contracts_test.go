@@ -17,8 +17,8 @@ func (s *runtimePortCompileStub) ResolvePermission(_ context.Context, _ Permissi
 	return nil
 }
 
-func (s *runtimePortCompileStub) CancelActiveRun() bool {
-	return false
+func (s *runtimePortCompileStub) CancelRun(_ context.Context, _ CancelInput) (bool, error) {
+	return false, nil
 }
 
 func (s *runtimePortCompileStub) Events() <-chan RuntimeEvent {
@@ -29,7 +29,7 @@ func (s *runtimePortCompileStub) ListSessions(_ context.Context) ([]SessionSumma
 	return nil, nil
 }
 
-func (s *runtimePortCompileStub) LoadSession(_ context.Context, _ string) (Session, error) {
+func (s *runtimePortCompileStub) LoadSession(_ context.Context, _ LoadSessionInput) (Session, error) {
 	return Session{}, nil
 }
 

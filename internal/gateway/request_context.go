@@ -19,6 +19,7 @@ type gatewayLoggerContextKey struct{}
 type ConnectionAuthState struct {
 	mu            sync.RWMutex
 	authenticated bool
+	subjectID     string
 }
 
 // NewConnectionAuthState 创建连接认证状态对象。
@@ -27,12 +28,13 @@ func NewConnectionAuthState() *ConnectionAuthState {
 }
 
 // MarkAuthenticated 将当前连接标记为已认证。
-func (s *ConnectionAuthState) MarkAuthenticated() {
+func (s *ConnectionAuthState) MarkAuthenticated(subjectID string) {
 	if s == nil {
 		return
 	}
 	s.mu.Lock()
 	s.authenticated = true
+	s.subjectID = strings.TrimSpace(subjectID)
 	s.mu.Unlock()
 }
 
@@ -44,6 +46,16 @@ func (s *ConnectionAuthState) IsAuthenticated() bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.authenticated
+}
+
+// SubjectID 返回当前连接绑定的主体标识。
+func (s *ConnectionAuthState) SubjectID() string {
+	if s == nil {
+		return ""
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return strings.TrimSpace(s.subjectID)
 }
 
 // WithRequestSource 向上下文写入请求来源。
@@ -180,4 +192,28 @@ func GatewayLoggerFromContext(ctx context.Context) (*log.Logger, bool) {
 		return nil, false
 	}
 	return logger, true
+}
+
+// AuthenticatedSubjectIDFromContext 从上下文解析已认证主体标识。
+func AuthenticatedSubjectIDFromContext(ctx context.Context) string {
+	if authState, ok := ConnectionAuthStateFromContext(ctx); ok {
+		if subjectID := strings.TrimSpace(authState.SubjectID()); subjectID != "" {
+			return subjectID
+		}
+	}
+
+	authenticator, ok := TokenAuthenticatorFromContext(ctx)
+	if !ok {
+		return ""
+	}
+	requestToken := RequestTokenFromContext(ctx)
+	if requestToken == "" {
+		return ""
+	}
+
+	subjectID, valid := authenticator.ResolveSubjectID(requestToken)
+	if !valid {
+		return ""
+	}
+	return strings.TrimSpace(subjectID)
 }

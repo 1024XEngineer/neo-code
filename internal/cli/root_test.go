@@ -281,6 +281,17 @@ func TestGatewaySubcommandRejectsInvalidLogLevel(t *testing.T) {
 	}
 }
 
+func TestMustReadInheritedWorkdirBranches(t *testing.T) {
+	if got := mustReadInheritedWorkdir(nil); got != "" {
+		t.Fatalf("mustReadInheritedWorkdir(nil) = %q, want empty", got)
+	}
+
+	cmd := &cobra.Command{}
+	if got := mustReadInheritedWorkdir(cmd); got != "" {
+		t.Fatalf("mustReadInheritedWorkdir(cmd without workdir flag) = %q, want empty", got)
+	}
+}
+
 func TestDefaultGatewayCommandRunnerSuccess(t *testing.T) {
 	originalNewGatewayServer := newGatewayServer
 	originalNewGatewayNetwork := newGatewayNetwork
@@ -312,6 +323,27 @@ func TestDefaultGatewayCommandRunnerSuccess(t *testing.T) {
 	}
 	if !networkServer.closeCalled {
 		t.Fatal("expected network server Close to be called")
+	}
+}
+
+func TestDefaultGatewayCommandRunnerReturnsBuildRuntimePortError(t *testing.T) {
+	originalBuildGatewayRuntimePort := buildGatewayRuntimePort
+	t.Cleanup(func() { buildGatewayRuntimePort = originalBuildGatewayRuntimePort })
+
+	buildGatewayRuntimePort = func(context.Context, string) (gateway.RuntimePort, func() error, error) {
+		return nil, nil, errors.New("build runtime port failed")
+	}
+
+	err := defaultGatewayCommandRunner(context.Background(), gatewayCommandOptions{
+		ListenAddress: "stub://gateway",
+		HTTPAddress:   "127.0.0.1:8080",
+		LogLevel:      "info",
+	})
+	if err == nil {
+		t.Fatal("expected build runtime port error")
+	}
+	if !strings.Contains(err.Error(), "initialize gateway runtime") {
+		t.Fatalf("error = %v, want contains initialize gateway runtime", err)
 	}
 }
 

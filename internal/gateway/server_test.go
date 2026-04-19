@@ -95,8 +95,8 @@ func TestServerHandleConnectionUnsupportedAction(t *testing.T) {
 	if err := encoder.Encode(protocol.JSONRPCRequest{
 		JSONRPC: protocol.JSONRPCVersion,
 		ID:      json.RawMessage(`"req-2"`),
-		Method:  "gateway.run",
-		Params:  json.RawMessage(`{"input_text":"hello"}`),
+		Method:  "gateway.unknownMethod",
+		Params:  json.RawMessage(`{}`),
 	}); err != nil {
 		t.Fatalf("encode request: %v", err)
 	}
@@ -381,8 +381,8 @@ func (s *runtimePortEventStub) ResolvePermission(_ context.Context, _ Permission
 	return nil
 }
 
-func (s *runtimePortEventStub) CancelActiveRun() bool {
-	return false
+func (s *runtimePortEventStub) CancelRun(_ context.Context, _ CancelInput) (bool, error) {
+	return false, nil
 }
 
 func (s *runtimePortEventStub) Events() <-chan RuntimeEvent {
@@ -393,7 +393,7 @@ func (s *runtimePortEventStub) ListSessions(_ context.Context) ([]SessionSummary
 	return nil, nil
 }
 
-func (s *runtimePortEventStub) LoadSession(_ context.Context, _ string) (Session, error) {
+func (s *runtimePortEventStub) LoadSession(_ context.Context, _ LoadSessionInput) (Session, error) {
 	return Session{}, nil
 }
 

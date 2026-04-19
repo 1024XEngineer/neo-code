@@ -243,7 +243,7 @@ func TestRuntimeLoadOrCreateAndEmitBranches(t *testing.T) {
 	}
 	<-done
 
-	canceled := make([]string, 0, 2)
+	canceled := make([]string, 0, 4)
 	token1 := service.startRun(func() { canceled = append(canceled, "run-1") })
 	token2 := service.startRun(func() { canceled = append(canceled, "run-2") })
 	service.finishRun(token1)
@@ -269,6 +269,35 @@ func TestRuntimeLoadOrCreateAndEmitBranches(t *testing.T) {
 	service.finishRun(token1)
 	if service.CancelActiveRun() {
 		t.Fatalf("expected no active run after all runs finished")
+	}
+
+	token3 := service.startRun(func() { canceled = append(canceled, "run-3") }, "run-3")
+	token4 := service.startRun(func() { canceled = append(canceled, "run-4") }, "run-4")
+	if mapped := service.activeRunByID["run-3"]; mapped != token3 {
+		t.Fatalf("expected run-3 to map token3, got %d", mapped)
+	}
+	if mapped := service.activeRunByID["run-4"]; mapped != token4 {
+		t.Fatalf("expected run-4 to map token4, got %d", mapped)
+	}
+	if service.CancelRun("") {
+		t.Fatalf("expected empty run_id cancel to fail")
+	}
+	if service.CancelRun("run-missing") {
+		t.Fatalf("expected missing run_id cancel to fail")
+	}
+	if !service.CancelRun("run-3") {
+		t.Fatalf("expected run-3 cancel to succeed")
+	}
+	if len(canceled) != 2 || canceled[1] != "run-3" {
+		t.Fatalf("expected cancel history [run-2 run-3], got %v", canceled)
+	}
+	service.finishRun(token3)
+	service.finishRun(token4)
+	if _, exists := service.activeRunByID["run-3"]; exists {
+		t.Fatalf("expected run-3 mapping to be cleaned")
+	}
+	if _, exists := service.activeRunByID["run-4"]; exists {
+		t.Fatalf("expected run-4 mapping to be cleaned")
 	}
 }
 

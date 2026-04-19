@@ -18,10 +18,14 @@ const (
 	ErrorCodeUnsupportedAction ErrorCode = "unsupported_action"
 	// ErrorCodeInternalError 表示网关内部错误。
 	ErrorCodeInternalError ErrorCode = "internal_error"
+	// ErrorCodeTimeout 表示网关下游调用超时。
+	ErrorCodeTimeout ErrorCode = "timeout"
 	// ErrorCodeUnauthorized 表示请求未通过认证校验。
 	ErrorCodeUnauthorized ErrorCode = "unauthorized"
-	// ErrorCodeAccessDenied 表示请求已认证但未通过 ACL 校验。
+	// ErrorCodeAccessDenied 表示请求已认证但未通过 ACL 或资源授权校验。
 	ErrorCodeAccessDenied ErrorCode = "access_denied"
+	// ErrorCodeResourceNotFound 表示目标资源不存在或不可见。
+	ErrorCodeResourceNotFound ErrorCode = "resource_not_found"
 )
 
 var stableErrorCodes = map[string]struct{}{
@@ -31,8 +35,10 @@ var stableErrorCodes = map[string]struct{}{
 	string(ErrorCodeMissingRequiredField):     {},
 	string(ErrorCodeUnsupportedAction):        {},
 	string(ErrorCodeInternalError):            {},
+	string(ErrorCodeTimeout):                  {},
 	string(ErrorCodeUnauthorized):             {},
 	string(ErrorCodeAccessDenied):             {},
+	string(ErrorCodeResourceNotFound):         {},
 }
 
 // String 返回错误码的字符串值。
@@ -48,13 +54,14 @@ func NewFrameError(code ErrorCode, message string) *FrameError {
 	}
 }
 
-// NewMissingRequiredFieldError 创建缺少必填字段的错误对象。
+// NewMissingRequiredFieldError 创建缺少必填字段错误对象。
 func NewMissingRequiredFieldError(field string) *FrameError {
 	return NewFrameError(ErrorCodeMissingRequiredField, fmt.Sprintf("missing required field: %s", field))
 }
 
-// IsStableErrorCode 判断给定字符串是否为网关稳定错误码。
+// IsStableErrorCode 判断给定字符串是否属于网关稳定错误码。
 func IsStableErrorCode(code string) bool {
 	_, exists := stableErrorCodes[code]
 	return exists
 }
+

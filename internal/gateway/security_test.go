@@ -16,7 +16,7 @@ func TestStrictACLAllowlist(t *testing.T) {
 		{source: RequestSourceWS, method: "wake.openUrl", want: true},
 		{source: RequestSourceSSE, method: "gateway.ping", want: true},
 		{source: RequestSourceSSE, method: "wake.openUrl", want: false},
-		{source: RequestSourceHTTP, method: "gateway.run", want: false},
+		{source: RequestSourceHTTP, method: "gateway.run", want: true},
 		{source: RequestSourceUnknown, method: "gateway.ping", want: false},
 	}
 	for _, tc := range cases {

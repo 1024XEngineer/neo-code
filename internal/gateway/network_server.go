@@ -920,8 +920,10 @@ func (s *NetworkServer) decorateRequestContext(base context.Context, source Requ
 	}
 	if s.authenticator != nil {
 		ctx = WithTokenAuthenticator(ctx, s.authenticator)
-		if trimmedToken != "" && s.authenticator.ValidateToken(trimmedToken) {
-			authState.MarkAuthenticated()
+		if trimmedToken != "" {
+			if subjectID, valid := s.authenticator.ResolveSubjectID(trimmedToken); valid && strings.TrimSpace(subjectID) != "" {
+				authState.MarkAuthenticated(subjectID)
+			}
 		}
 	}
 	if s.acl != nil {

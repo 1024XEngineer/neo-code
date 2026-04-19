@@ -14,7 +14,7 @@ func TestEmitRequestLogAuthStateAndSourceFallback(t *testing.T) {
 		buffer := &bytes.Buffer{}
 		logger := log.New(buffer, "", 0)
 		authState := NewConnectionAuthState()
-		authState.MarkAuthenticated()
+	authState.MarkAuthenticated("local_admin")
 		ctx := WithConnectionAuthState(context.Background(), authState)
 		ctx = WithConnectionID(ctx, ConnectionID("conn-1"))
 

@@ -10,10 +10,51 @@ import (
 	"neo-code/internal/gateway/protocol"
 )
 
+type rpcRunCaptureRuntimeStub struct {
+	runInput      RunInput
+	runCh         chan RunInput
+	loadSessionFn func(ctx context.Context, input LoadSessionInput) (Session, error)
+}
+
+func (s *rpcRunCaptureRuntimeStub) Run(_ context.Context, input RunInput) error {
+	s.runInput = input
+	if s.runCh != nil {
+		s.runCh <- input
+	}
+	return nil
+}
+
+func (s *rpcRunCaptureRuntimeStub) Compact(_ context.Context, _ CompactInput) (CompactResult, error) {
+	return CompactResult{}, nil
+}
+
+func (s *rpcRunCaptureRuntimeStub) ResolvePermission(_ context.Context, _ PermissionResolutionInput) error {
+	return nil
+}
+
+func (s *rpcRunCaptureRuntimeStub) CancelRun(_ context.Context, _ CancelInput) (bool, error) {
+	return false, nil
+}
+
+func (s *rpcRunCaptureRuntimeStub) Events() <-chan RuntimeEvent {
+	return nil
+}
+
+func (s *rpcRunCaptureRuntimeStub) ListSessions(_ context.Context) ([]SessionSummary, error) {
+	return nil, nil
+}
+
+func (s *rpcRunCaptureRuntimeStub) LoadSession(ctx context.Context, input LoadSessionInput) (Session, error) {
+	if s.loadSessionFn != nil {
+		return s.loadSessionFn(ctx, input)
+	}
+	return Session{}, nil
+}
+
 func TestDispatchRPCRequestResultEncodeError(t *testing.T) {
 	originalHandlers := requestFrameHandlers
 	requestFrameHandlers = map[FrameAction]requestFrameHandler{
-		FrameActionPing: func(_ context.Context, frame MessageFrame) MessageFrame {
+		FrameActionPing: func(_ context.Context, frame MessageFrame, _ RuntimePort) MessageFrame {
 			return MessageFrame{
 				Type:      FrameTypeAck,
 				Action:    FrameActionPing,
@@ -181,7 +222,7 @@ func TestDispatchRPCRequestUnauthorizedAndAccessDenied(t *testing.T) {
 	deniedContext := WithRequestACL(baseContext, deniedACL)
 	deniedContext = WithRequestToken(deniedContext, "t-1")
 	deniedContext = WithConnectionAuthState(deniedContext, authState)
-	authState.MarkAuthenticated()
+	authState.MarkAuthenticated("local_admin")
 
 	deniedResponse := dispatchRPCRequest(deniedContext, protocol.JSONRPCRequest{
 		JSONRPC: protocol.JSONRPCVersion,
@@ -266,6 +307,131 @@ func TestDispatchRPCRequestMissingSessionAndAuthHelpers(t *testing.T) {
 	}
 	if gatewayCode := protocol.GatewayCodeFromJSONRPCError(response.Error); gatewayCode != protocol.GatewayCodeMissingRequiredField {
 		t.Fatalf("gateway_code = %q, want %q", gatewayCode, protocol.GatewayCodeMissingRequiredField)
+	}
+}
+
+func TestDispatchRPCRequestRunMissingSessionAtDispatchLayer(t *testing.T) {
+	metrics := NewGatewayMetrics()
+	ctx := WithRequestSource(context.Background(), RequestSourceHTTP)
+	ctx = WithGatewayMetrics(ctx, metrics)
+	ctx = WithRequestACL(ctx, NewStrictControlPlaneACL())
+
+	response := dispatchRPCRequest(ctx, protocol.JSONRPCRequest{
+		JSONRPC: protocol.JSONRPCVersion,
+		ID:      json.RawMessage(`"req-run-missing-session"`),
+		Method:  protocol.MethodGatewayRun,
+		Params:  json.RawMessage(`{"input_text":"hello"}`),
+	}, &runtimePortCompileStub{})
+	if response.Error == nil {
+		t.Fatal("expected missing session error at dispatch layer")
+	}
+	if gatewayCode := protocol.GatewayCodeFromJSONRPCError(response.Error); gatewayCode != protocol.GatewayCodeMissingRequiredField {
+		t.Fatalf("gateway_code = %q, want %q", gatewayCode, protocol.GatewayCodeMissingRequiredField)
+	}
+}
+
+func TestDispatchRPCRequestResolvePermissionDoesNotRequireSession(t *testing.T) {
+	ctx := WithRequestSource(context.Background(), RequestSourceIPC)
+	ctx = WithRequestACL(ctx, NewStrictControlPlaneACL())
+
+	response := dispatchRPCRequest(ctx, protocol.JSONRPCRequest{
+		JSONRPC: protocol.JSONRPCVersion,
+		ID:      json.RawMessage(`"req-resolve-no-session"`),
+		Method:  protocol.MethodGatewayResolvePermission,
+		Params:  json.RawMessage(`{"request_id":"perm-1","decision":"reject"}`),
+	}, &runtimePortCompileStub{})
+	if response.Error != nil {
+		t.Fatalf("resolve permission should pass without session_id, got error: %+v", response.Error)
+	}
+
+	frame, err := decodeJSONRPCResultFrame(response)
+	if err != nil {
+		t.Fatalf("decode resolve permission result frame: %v", err)
+	}
+	if frame.Action != FrameActionResolvePermission {
+		t.Fatalf("response action = %q, want %q", frame.Action, FrameActionResolvePermission)
+	}
+}
+
+func TestDispatchRPCRequestRunHydratesInputPartsAndFallbackRunID(t *testing.T) {
+	ctx := WithRequestSource(context.Background(), RequestSourceIPC)
+	ctx = WithRequestACL(ctx, NewStrictControlPlaneACL())
+	runtimeStub := &rpcRunCaptureRuntimeStub{runCh: make(chan RunInput, 1)}
+
+	response := dispatchRPCRequest(ctx, protocol.JSONRPCRequest{
+		JSONRPC: protocol.JSONRPCVersion,
+		ID:      json.RawMessage(`"req-run-hydrate"`),
+		Method:  protocol.MethodGatewayRun,
+		Params: json.RawMessage(`{
+			"session_id":"session-run-1",
+			"input_parts":[
+				{"type":"text","text":"hello world"},
+				{"type":"image","media":{"uri":"C:/tmp/pic.png","mime_type":"image/png"}}
+			]
+		}`),
+	}, runtimeStub)
+	if response.Error != nil {
+		t.Fatalf("run response error: %+v", response.Error)
+	}
+
+	var captured RunInput
+	select {
+	case captured = <-runtimeStub.runCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("runtime run input was not captured")
+	}
+
+	if captured.SessionID != "session-run-1" {
+		t.Fatalf("runtime run session_id = %q, want %q", captured.SessionID, "session-run-1")
+	}
+	if captured.RunID != "req-run-hydrate" {
+		t.Fatalf("runtime run run_id = %q, want %q", captured.RunID, "req-run-hydrate")
+	}
+	if len(captured.InputParts) != 2 {
+		t.Fatalf("runtime run input_parts len = %d, want %d", len(captured.InputParts), 2)
+	}
+	if captured.InputParts[0].Type != InputPartTypeText {
+		t.Fatalf("runtime text part type = %q, want %q", captured.InputParts[0].Type, InputPartTypeText)
+	}
+	if captured.InputParts[1].Type != InputPartTypeImage {
+		t.Fatalf("runtime image part type = %q, want %q", captured.InputParts[1].Type, InputPartTypeImage)
+	}
+	if captured.InputParts[1].Media == nil || captured.InputParts[1].Media.URI != "C:/tmp/pic.png" {
+		t.Fatalf("runtime image media = %#v, want uri %q", captured.InputParts[1].Media, "C:/tmp/pic.png")
+	}
+}
+
+func TestDispatchRPCRequest_DenyCrossSubjectLoadSession(t *testing.T) {
+	authState := NewConnectionAuthState()
+	authState.MarkAuthenticated("subject_intruder")
+
+	ctx := WithRequestSource(context.Background(), RequestSourceIPC)
+	ctx = WithConnectionAuthState(ctx, authState)
+	ctx = WithRequestACL(ctx, NewStrictControlPlaneACL())
+
+	runtimeStub := &rpcRunCaptureRuntimeStub{
+		loadSessionFn: func(_ context.Context, input LoadSessionInput) (Session, error) {
+			if input.SubjectID != "subject_owner" {
+				return Session{}, ErrRuntimeAccessDenied
+			}
+			return Session{ID: input.SessionID}, nil
+		},
+	}
+
+	response := dispatchRPCRequest(ctx, protocol.JSONRPCRequest{
+		JSONRPC: protocol.JSONRPCVersion,
+		ID:      json.RawMessage(`"req-load-deny"`),
+		Method:  protocol.MethodGatewayLoadSession,
+		Params:  json.RawMessage(`{"session_id":"session-1"}`),
+	}, runtimeStub)
+	if response.Error == nil {
+		t.Fatal("expected access denied error")
+	}
+	if response.Error.Code != protocol.JSONRPCCodeInvalidParams {
+		t.Fatalf("rpc error code = %d, want %d", response.Error.Code, protocol.JSONRPCCodeInvalidParams)
+	}
+	if gatewayCode := protocol.GatewayCodeFromJSONRPCError(response.Error); gatewayCode != ErrorCodeAccessDenied.String() {
+		t.Fatalf("gateway_code = %q, want %q", gatewayCode, ErrorCodeAccessDenied.String())
 	}
 }
 
@@ -371,5 +537,65 @@ func TestDispatchRPCRequestMetricsUnknownMethodCollapsed(t *testing.T) {
 	snapshot := metrics.Snapshot()
 	if snapshot["gateway_requests_total"]["ipc|unknown_method|error"] == 0 {
 		t.Fatalf("expected unknown_method metric label, snapshot=%#v", snapshot["gateway_requests_total"])
+	}
+}
+
+func TestDispatchRPCRequestMetricsACLDeniedAndFrameErrorLabels(t *testing.T) {
+	metrics := NewGatewayMetrics()
+	denyACL := &ControlPlaneACL{
+		mode:    ACLModeStrict,
+		allow:   map[RequestSource]map[string]struct{}{},
+		enabled: true,
+	}
+	deniedCtx := WithRequestSource(context.Background(), RequestSourceHTTP)
+	deniedCtx = WithGatewayMetrics(deniedCtx, metrics)
+	deniedCtx = WithRequestACL(deniedCtx, denyACL)
+	deniedCtx = WithConnectionAuthState(deniedCtx, NewConnectionAuthState())
+	deniedCtx = WithRequestToken(deniedCtx, "token-a")
+	deniedCtx = WithTokenAuthenticator(deniedCtx, staticTokenAuthenticator{token: "token-a"})
+
+	denied := dispatchRPCRequest(deniedCtx, protocol.JSONRPCRequest{
+		JSONRPC: protocol.JSONRPCVersion,
+		ID:      json.RawMessage(`"req-denied-metric"`),
+		Method:  protocol.MethodGatewayPing,
+		Params:  json.RawMessage(`{}`),
+	}, nil)
+	if denied.Error == nil {
+		t.Fatal("expected acl denied response")
+	}
+
+	originalHandlers := requestFrameHandlers
+	requestFrameHandlers = map[FrameAction]requestFrameHandler{
+		FrameActionPing: func(_ context.Context, frame MessageFrame, _ RuntimePort) MessageFrame {
+			return MessageFrame{
+				Type:      FrameTypeError,
+				Action:    frame.Action,
+				RequestID: frame.RequestID,
+				Error:     NewFrameError(ErrorCodeAccessDenied, "denied by handler"),
+			}
+		},
+	}
+	t.Cleanup(func() { requestFrameHandlers = originalHandlers })
+
+	frameErrCtx := WithRequestSource(context.Background(), RequestSourceHTTP)
+	frameErrCtx = WithGatewayMetrics(frameErrCtx, metrics)
+	frameErrCtx = WithRequestACL(frameErrCtx, NewStrictControlPlaneACL())
+	frameErrCtx = WithConnectionAuthState(frameErrCtx, NewConnectionAuthState())
+	frameErrCtx = WithRequestToken(frameErrCtx, "token-b")
+	frameErrCtx = WithTokenAuthenticator(frameErrCtx, staticTokenAuthenticator{token: "token-b"})
+
+	frameErrResponse := dispatchRPCRequest(frameErrCtx, protocol.JSONRPCRequest{
+		JSONRPC: protocol.JSONRPCVersion,
+		ID:      json.RawMessage(`"req-frame-err"`),
+		Method:  protocol.MethodGatewayPing,
+		Params:  json.RawMessage(`{}`),
+	}, nil)
+	if frameErrResponse.Error == nil {
+		t.Fatal("expected frame error response")
+	}
+
+	snapshot := metrics.Snapshot()
+	if snapshot["gateway_acl_denied_total"]["http|gateway.ping"] < 2 {
+		t.Fatalf("expected acl denied metric >= 2, snapshot=%#v", snapshot["gateway_acl_denied_total"])
 	}
 }

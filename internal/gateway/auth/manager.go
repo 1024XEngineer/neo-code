@@ -15,6 +15,7 @@ import (
 const (
 	// DefaultAuthRelativePath 定义默认凭证文件相对路径。
 	DefaultAuthRelativePath = ".neocode/auth.json"
+	DefaultLocalSubjectID   = "local_admin"
 	// credentialSchemaVersion 定义凭证文件结构版本号。
 	credentialSchemaVersion = 1
 	// tokenRandomByteLength 定义静默认证 Token 的随机字节长度。
@@ -87,6 +88,14 @@ func (m *Manager) ValidateToken(token string) bool {
 		return false
 	}
 	return strings.TrimSpace(token) != "" && strings.TrimSpace(token) == strings.TrimSpace(m.credentials.Token)
+}
+
+// ResolveSubjectID 鍦?token 閫氳繃鏍￠獙鏃惰繑鍥炵ǔ瀹氱殑 subject_id銆?
+func (m *Manager) ResolveSubjectID(token string) (string, bool) {
+	if !m.ValidateToken(token) {
+		return "", false
+	}
+	return DefaultLocalSubjectID, true
 }
 
 // LoadTokenFromFile 从指定路径读取静默认证 Token。

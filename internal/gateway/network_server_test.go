@@ -1321,6 +1321,13 @@ func (a staticTokenAuthenticator) ValidateToken(token string) bool {
 	return strings.TrimSpace(token) != "" && strings.TrimSpace(token) == strings.TrimSpace(a.token)
 }
 
+func (a staticTokenAuthenticator) ResolveSubjectID(token string) (string, bool) {
+	if !a.ValidateToken(token) {
+		return "", false
+	}
+	return "local_admin", true
+}
+
 func (w *noFlushResponseWriter) Header() http.Header {
 	return w.header
 }
