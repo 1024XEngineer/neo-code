@@ -87,6 +87,18 @@ func TestResolveChatEndpointURL(t *testing.T) {
 			want:    "https://api.example.com/v1/text/chatcompletion_v2",
 		},
 		{
+			name:    "appends non-slash-prefixed path and trims base slash",
+			baseURL: " https://api.example.com/v1/ ",
+			path:    "chat/completions",
+			want:    "https://api.example.com/v1/chat/completions",
+		},
+		{
+			name:    "rejects absolute chat endpoint path",
+			baseURL: "https://api.example.com/v1",
+			path:    "https://api.example.com/chat/completions",
+			wantErr: "chat endpoint path",
+		},
+		{
 			name:    "invalid base url in direct mode returns actionable error",
 			baseURL: "api.example.com/v1",
 			path:    "/",

@@ -2,6 +2,22 @@ package types
 
 import "testing"
 
+func TestDefaultSessionAssetLimits(t *testing.T) {
+	t.Parallel()
+
+	got := DefaultSessionAssetLimits()
+	if got.MaxSessionAssetBytes != MaxSessionAssetBytes {
+		t.Fatalf("expected MaxSessionAssetBytes=%d, got %d", MaxSessionAssetBytes, got.MaxSessionAssetBytes)
+	}
+	if got.MaxSessionAssetsTotalBytes != MaxSessionAssetsTotalBytes {
+		t.Fatalf(
+			"expected MaxSessionAssetsTotalBytes=%d, got %d",
+			MaxSessionAssetsTotalBytes,
+			got.MaxSessionAssetsTotalBytes,
+		)
+	}
+}
+
 func TestNormalizeSessionAssetLimits(t *testing.T) {
 	t.Parallel()
 
