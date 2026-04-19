@@ -267,9 +267,3 @@ config: environment variable OPENAI_API_KEY is empty
 - [添加 Provider](./adding-providers.md)
 - [配置管理详细设计](../config-management-detail-design.md)
 - [Context Compact](../context-compact.md)
-
-## runtime.assets��������
-
-- `runtime.assets.max_session_asset_bytes`������ `session_asset` ������ֽ�����Ĭ�� 20 MiB����
-- `runtime.assets.max_session_assets_total_bytes`������ provider ������ȫ�� `session_asset` ԭʼ�������ֽ����ޣ�Ĭ�� 20 MiB����
-- �������û�������ʱ�·��� session �洢�� provider ���󹹽�������·�������Ա���Ӳ���޶��ס�
