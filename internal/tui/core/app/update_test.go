@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -3074,7 +3075,7 @@ func TestUpdateInputPanelTypingPathAndProviderAddFormExtraBranches(t *testing.T)
 
 	app.startProviderAddForm()
 	app.providerAddForm.Driver = provider.DriverAnthropic
-	app.providerAddForm.Step = 3 // api version
+	app.providerAddForm.Step = 4 // api version
 	modelPtr, _ = app.handleProviderAddFormInput(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("2024-10-01")})
 	app = *modelPtr.(*App)
 	if app.providerAddForm.APIVersion == "" {
@@ -3320,15 +3321,26 @@ func TestSlashSelectionAndProviderAddUtilityBranches(t *testing.T) {
 		t.Fatalf("expected /clear branch to update status")
 	}
 
-	fields := providerAddVisibleFields(provider.DriverOpenAICompat)
+	fields := providerAddVisibleFields(provider.DriverOpenAICompat, provider.ModelSourceDiscover)
 	if len(fields) == 0 || fields[0] != providerAddFieldName {
 		t.Fatalf("expected provider add visible fields to start from name field")
+	}
+	if !slices.Contains(fields, providerAddFieldDiscoveryEndpointPath) ||
+		!slices.Contains(fields, providerAddFieldDiscoveryResponseProfile) {
+		t.Fatalf("expected discover source to include discovery fields")
+	}
+
+	manualFields := providerAddVisibleFields(provider.DriverOpenAICompat, provider.ModelSourceManual)
+	if slices.Contains(manualFields, providerAddFieldDiscoveryEndpointPath) ||
+		slices.Contains(manualFields, providerAddFieldDiscoveryResponseProfile) {
+		t.Fatalf("expected manual source to exclude discovery fields")
 	}
 	clampProviderAddStep(nil)
 
 	if _, err := buildProviderAddRequest(providerAddFormState{
 		Name:                  "custom-provider",
 		Driver:                "custom-driver",
+		ModelSource:           provider.ModelSourceDiscover,
 		BaseURL:               "https://example.com",
 		DiscoveryEndpointPath: "/models",
 		APIKeyEnv:             "CUSTOM_PROVIDER_API_KEY",
