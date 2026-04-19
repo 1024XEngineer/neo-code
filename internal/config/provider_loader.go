@@ -327,11 +327,7 @@ func resolveCustomProviderSettings(file customProviderFile) customProviderSettin
 	}
 	settings.ModelFieldAliases = encodeModelFieldAliases(file.ModelFieldAliases)
 	if settings.ModelSource == "" {
-		if len(file.Models) > 0 && strings.TrimSpace(settings.DiscoveryEndpointPath) == "" {
-			settings.ModelSource = provider.ModelSourceManual
-		} else {
-			settings.ModelSource = provider.ModelSourceDiscover
-		}
+		settings.ModelSource = provider.ModelSourceDiscover
 	}
 
 	return settings
@@ -407,12 +403,19 @@ func SaveCustomProviderWithModels(baseDir string, input SaveCustomProviderInput)
 	discoveryEndpointPath := strings.TrimSpace(input.DiscoveryEndpointPath)
 	discoveryResponseProfile := strings.TrimSpace(input.DiscoveryResponseProfile)
 	modelSource := provider.NormalizeModelSource(input.ModelSource)
+	if strings.TrimSpace(input.ModelSource) != "" && modelSource == "" {
+		return fmt.Errorf("config: unsupported model_source %q", input.ModelSource)
+	}
 	if modelSource == "" {
 		modelSource = provider.ModelSourceDiscover
 	}
+	normalizedModels := providertypes.MergeModelDescriptors(input.Models)
 	if modelSource == provider.ModelSourceManual {
 		discoveryEndpointPath = ""
 		discoveryResponseProfile = ""
+		if len(normalizedModels) == 0 {
+			return fmt.Errorf("config: provider %q manual model source requires non-empty models", strings.TrimSpace(name))
+		}
 	}
 
 	if err := validateCustomProviderName(name); err != nil {
@@ -479,7 +482,7 @@ func SaveCustomProviderWithModels(baseDir string, input SaveCustomProviderInput)
 		cfg.DiscoveryResponseProfile = discoveryResponseProfile
 	}
 	if modelSource == provider.ModelSourceManual {
-		cfg.Models = toCustomProviderModelFiles(input.Models)
+		cfg.Models = toCustomProviderModelFiles(normalizedModels)
 	}
 
 	data, err := yaml.Marshal(cfg)

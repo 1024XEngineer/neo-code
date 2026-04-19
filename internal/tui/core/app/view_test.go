@@ -282,6 +282,9 @@ func TestRenderProviderAddFormMasksAPIKeyAndShowsHints(t *testing.T) {
 	if !strings.Contains(form, "API Key: ******") {
 		t.Fatalf("expected masked api key, got %q", form)
 	}
+	if !strings.Contains(form, "Model Source: discover") {
+		t.Fatalf("expected model source field, got %q", form)
+	}
 	if !strings.Contains(form, "留空会自动填充默认地址") {
 		t.Fatalf("expected base url hint, got %q", form)
 	}
