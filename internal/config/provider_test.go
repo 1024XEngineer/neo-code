@@ -440,6 +440,33 @@ func TestCustomProviderModelsRejectsNonPositiveMaxOutputTokens(t *testing.T) {
 	}
 }
 
+func TestNormalizeCustomProviderModelsRejectsZeroLimits(t *testing.T) {
+	t.Parallel()
+
+	_, err := NormalizeCustomProviderModels([]providertypes.ModelDescriptor{
+		{
+			ID:            "deepseek-coder",
+			Name:          "DeepSeek Coder",
+			ContextWindow: 0,
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "context_window") {
+		t.Fatalf("expected context_window validation error, got %v", err)
+	}
+
+	_, err = NormalizeCustomProviderModels([]providertypes.ModelDescriptor{
+		{
+			ID:              "deepseek-coder",
+			Name:            "DeepSeek Coder",
+			ContextWindow:   ManualModelOptionalIntUnset,
+			MaxOutputTokens: 0,
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "max_output_tokens") {
+		t.Fatalf("expected max_output_tokens validation error, got %v", err)
+	}
+}
+
 func TestCustomProviderModelsRejectsDuplicateID(t *testing.T) {
 	t.Parallel()
 

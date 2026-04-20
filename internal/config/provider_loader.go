@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 
+	"neo-code/internal/provider"
 	providertypes "neo-code/internal/provider/types"
 
 	"gopkg.in/yaml.v3"
@@ -146,6 +147,7 @@ func customProviderModels(models []customProviderModelFile) ([]providertypes.Mod
 	}
 
 	descriptors := make([]providertypes.ModelDescriptor, 0, len(models))
+	seen := make(map[string]struct{}, len(models))
 	for index, model := range models {
 		id := strings.TrimSpace(model.ID)
 		if id == "" {
@@ -157,9 +159,16 @@ func customProviderModels(models []customProviderModelFile) ([]providertypes.Mod
 		}
 
 		descriptor := providertypes.ModelDescriptor{
-			ID:   id,
-			Name: name,
+			ID:              id,
+			Name:            name,
+			ContextWindow:   ManualModelOptionalIntUnset,
+			MaxOutputTokens: ManualModelOptionalIntUnset,
 		}
+		key := provider.NormalizeKey(id)
+		if _, exists := seen[key]; exists {
+			return nil, fmt.Errorf("models[%d].id %q is duplicated", index, id)
+		}
+		seen[key] = struct{}{}
 		if model.ContextWindow != nil {
 			if *model.ContextWindow <= 0 {
 				return nil, fmt.Errorf("models[%d].context_window must be greater than 0", index)
@@ -174,7 +183,7 @@ func customProviderModels(models []customProviderModelFile) ([]providertypes.Mod
 		}
 		descriptors = append(descriptors, descriptor)
 	}
-	return NormalizeCustomProviderModels(descriptors)
+	return descriptors, nil
 }
 
 // SaveCustomProviderInput 定义自定义 Provider 的持久化字段。

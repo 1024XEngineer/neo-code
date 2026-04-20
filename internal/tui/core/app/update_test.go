@@ -3471,6 +3471,27 @@ func TestSlashSelectionAndProviderAddUtilityBranches(t *testing.T) {
 	app.handleProviderAddResultMsg(providerAddResultMsg{Name: "unused"})
 }
 
+func TestSyncProviderAddOpenAICompatModeDefaults(t *testing.T) {
+	t.Parallel()
+
+	form := &providerAddFormState{
+		Driver:           provider.DriverOpenAICompat,
+		ChatAPIMode:      provider.ChatAPIModeResponses,
+		ChatEndpointPath: "/chat/completions",
+	}
+	syncProviderAddOpenAICompatModeDefaults(form, provider.ChatAPIModeChatCompletions)
+	if form.ChatEndpointPath != "/responses" {
+		t.Fatalf("expected default endpoint to follow responses mode, got %q", form.ChatEndpointPath)
+	}
+
+	form.ChatAPIMode = provider.ChatAPIModeChatCompletions
+	form.ChatEndpointPath = "/custom/chat"
+	syncProviderAddOpenAICompatModeDefaults(form, provider.ChatAPIModeResponses)
+	if form.ChatEndpointPath != "/custom/chat" {
+		t.Fatalf("expected custom endpoint unchanged, got %q", form.ChatEndpointPath)
+	}
+}
+
 func TestRunProviderAddFlowDeadlineExceededBranch(t *testing.T) {
 	service := stubProviderService{
 		createErr: context.DeadlineExceeded,

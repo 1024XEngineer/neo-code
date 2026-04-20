@@ -291,8 +291,10 @@ func parseManualModelsJSON(raw string) ([]providertypes.ModelDescriptor, error) 
 		seen[key] = struct{}{}
 
 		descriptor := providertypes.ModelDescriptor{
-			ID:   id,
-			Name: name,
+			ID:              id,
+			Name:            name,
+			ContextWindow:   config.ManualModelOptionalIntUnset,
+			MaxOutputTokens: config.ManualModelOptionalIntUnset,
 		}
 		if model.ContextWindow != nil {
 			if *model.ContextWindow <= 0 {

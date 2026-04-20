@@ -8,6 +8,9 @@ import (
 	providertypes "neo-code/internal/provider/types"
 )
 
+// ManualModelOptionalIntUnset 用于区分“未填写可选数值字段”和“显式输入 0”。
+const ManualModelOptionalIntUnset = -1
+
 // NormalizeCustomProviderInput 统一归一化 custom provider 的输入字段，并执行协议/模型来源的组合校验。
 func NormalizeCustomProviderInput(input SaveCustomProviderInput) (SaveCustomProviderInput, error) {
 	normalized := SaveCustomProviderInput{
@@ -40,7 +43,7 @@ func NormalizeCustomProviderInput(input SaveCustomProviderInput) (SaveCustomProv
 		normalized.ModelSource = ModelSourceDiscover
 	}
 
-	models, err := NormalizeCustomProviderModels(input.Models)
+	models, err := normalizeCustomProviderModels(input.Models, true)
 	if err != nil {
 		return SaveCustomProviderInput{}, err
 	}
@@ -109,6 +112,14 @@ func NormalizeCustomProviderInput(input SaveCustomProviderInput) (SaveCustomProv
 
 // NormalizeCustomProviderModels 统一归一化 custom provider 的模型描述并校验必填字段和边界条件。
 func NormalizeCustomProviderModels(models []providertypes.ModelDescriptor) ([]providertypes.ModelDescriptor, error) {
+	return normalizeCustomProviderModels(models, false)
+}
+
+// normalizeCustomProviderModels 统一归一化 custom provider 模型列表，并在需要时兼容历史的零值省略语义。
+func normalizeCustomProviderModels(
+	models []providertypes.ModelDescriptor,
+	allowZeroAsUnset bool,
+) ([]providertypes.ModelDescriptor, error) {
 	if len(models) == 0 {
 		return nil, nil
 	}
@@ -124,10 +135,16 @@ func NormalizeCustomProviderModels(models []providertypes.ModelDescriptor) ([]pr
 		if name == "" {
 			return nil, fmt.Errorf("config: models[%d].name is empty", index)
 		}
-		if model.ContextWindow < 0 {
+		contextWindow := model.ContextWindow
+		if contextWindow == ManualModelOptionalIntUnset || (allowZeroAsUnset && contextWindow == 0) {
+			contextWindow = 0
+		} else if contextWindow <= 0 {
 			return nil, fmt.Errorf("config: models[%d].context_window must be greater than 0", index)
 		}
-		if model.MaxOutputTokens < 0 {
+		maxOutputTokens := model.MaxOutputTokens
+		if maxOutputTokens == ManualModelOptionalIntUnset || (allowZeroAsUnset && maxOutputTokens == 0) {
+			maxOutputTokens = 0
+		} else if maxOutputTokens <= 0 {
 			return nil, fmt.Errorf("config: models[%d].max_output_tokens must be greater than 0", index)
 		}
 
@@ -141,8 +158,8 @@ func NormalizeCustomProviderModels(models []providertypes.ModelDescriptor) ([]pr
 			ID:              id,
 			Name:            name,
 			Description:     strings.TrimSpace(model.Description),
-			ContextWindow:   model.ContextWindow,
-			MaxOutputTokens: model.MaxOutputTokens,
+			ContextWindow:   contextWindow,
+			MaxOutputTokens: maxOutputTokens,
 			CapabilityHints: model.CapabilityHints,
 		})
 	}
