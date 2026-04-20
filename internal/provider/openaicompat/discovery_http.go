@@ -79,7 +79,7 @@ func DiscoverRawModels(ctx context.Context, client *http.Client, cfg RequestConf
 		)
 	}
 
-	responseProfile, err := resolveResponseProfile(cfg.Driver, cfg.ResponseProfile)
+	responseProfile, err := resolveResponseProfile(cfg.ResponseProfile)
 	if err != nil {
 		return nil, provider.NewDiscoveryConfigError(err.Error())
 	}
@@ -94,7 +94,7 @@ func DiscoverRawModels(ctx context.Context, client *http.Client, cfg RequestConf
 		return nil, fmt.Errorf("provider discovery: build models request: %w", err)
 	}
 	req.Header.Set("Accept", "application/json")
-	applyAuthHeaders(req.Header, cfg.APIKey, cfg.Driver)
+	applyAuthHeaders(req.Header, cfg.APIKey)
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -155,7 +155,7 @@ func DiscoverModelDescriptors(
 }
 
 // resolveResponseProfile 根据 driver 与显式配置确定响应提取策略。
-func resolveResponseProfile(driver string, profile string) (string, error) {
+func resolveResponseProfile(profile string) (string, error) {
 	normalizedProfile, err := provider.NormalizeProviderDiscoveryResponseProfile(profile)
 	if err != nil {
 		return "", err
@@ -163,7 +163,7 @@ func resolveResponseProfile(driver string, profile string) (string, error) {
 	if normalizedProfile != "" {
 		return normalizedProfile, nil
 	}
-	return defaultResponseProfileForDriver(driver), nil
+	return provider.DiscoveryResponseProfileOpenAI, nil
 }
 
 // parseHTTPError 将 discovery HTTP 错误映射为可分类 ProviderError。
@@ -284,10 +284,8 @@ func isTimeoutTransportError(err error) bool {
 	return errors.As(err, &netErr) && netErr.Timeout()
 }
 
-const anthropicVersionHeaderValue = "2023-06-01"
-
-// applyAuthHeaders 根据 driver 注入 discover 所需鉴权头。
-func applyAuthHeaders(header http.Header, apiKey string, driver string) {
+// applyAuthHeaders 为 openai-compatible 模型发现请求注入鉴权头。
+func applyAuthHeaders(header http.Header, apiKey string) {
 	if header == nil {
 		return
 	}
@@ -295,25 +293,5 @@ func applyAuthHeaders(header http.Header, apiKey string, driver string) {
 	if trimmed == "" {
 		return
 	}
-	switch provider.NormalizeProviderDriver(driver) {
-	case provider.DriverGemini:
-		header.Set("X-API-Key", trimmed)
-		header.Set("X-Goog-Api-Key", trimmed)
-	case provider.DriverAnthropic:
-		header.Set("X-API-Key", trimmed)
-		header.Set("anthropic-version", anthropicVersionHeaderValue)
-	default:
-		header.Set("Authorization", "Bearer "+trimmed)
-	}
-}
-
-func defaultResponseProfileForDriver(driver string) string {
-	switch provider.NormalizeProviderDriver(driver) {
-	case provider.DriverOpenAICompat:
-		return provider.DiscoveryResponseProfileOpenAI
-	case provider.DriverGemini:
-		return provider.DiscoveryResponseProfileGemini
-	default:
-		return provider.DiscoveryResponseProfileGeneric
-	}
+	header.Set("Authorization", "Bearer "+trimmed)
 }

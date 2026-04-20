@@ -31,8 +31,8 @@ func TestDriverDiscover(t *testing.T) {
 	t.Parallel()
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/models" {
-			t.Fatalf("expected /models path, got %s", r.URL.Path)
+		if r.URL.Path != "/models" && r.URL.Path != "/v1/models" {
+			t.Fatalf("expected /models or /v1/models path, got %s", r.URL.Path)
 		}
 		if got := r.Header.Get("x-api-key"); got != "test-key" {
 			t.Fatalf("expected anthropic x-api-key header, got %q", got)

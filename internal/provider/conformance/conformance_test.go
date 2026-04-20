@@ -210,7 +210,7 @@ func TestDiscoverContractAcrossDrivers(t *testing.T) {
 					DiscoveryEndpointPath: "/models",
 				}
 			},
-			expectedPath:   "/models",
+			expectedPath:   "/v1/models",
 			expectedHeader: "x-api-key",
 			responseBody:   `{"data":[{"id":"claude-3-7-sonnet","display_name":"Claude 3.7 Sonnet"}],"has_more":false}`,
 		},

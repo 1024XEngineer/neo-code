@@ -48,7 +48,7 @@ func NormalizeCustomProviderInput(input SaveCustomProviderInput) (SaveCustomProv
 	normalizedDiscoveryEndpointPath := normalized.DiscoveryEndpointPath
 	if normalized.ModelSource == provider.ModelSourceManual {
 		normalizedDiscoveryEndpointPath = ""
-	} else if strings.TrimSpace(normalizedDiscoveryEndpointPath) == "" {
+	} else if requiresDiscoveryEndpointPath(normalized.Driver) && strings.TrimSpace(normalizedDiscoveryEndpointPath) == "" {
 		return SaveCustomProviderInput{}, fmt.Errorf(
 			"config: provider %q model_source discover requires discovery_endpoint_path; "+
 				"if provider does not expose discover endpoint, set model_source to manual",
@@ -60,13 +60,17 @@ func NormalizeCustomProviderInput(input SaveCustomProviderInput) (SaveCustomProv
 	if err != nil {
 		return SaveCustomProviderInput{}, fmt.Errorf("config: normalize provider chat endpoint path: %w", err)
 	}
-	discoveryEndpointPath, _, err := provider.NormalizeProviderDiscoverySettings(
-		normalized.Driver,
-		normalizedDiscoveryEndpointPath,
-		"",
-	)
-	if err != nil {
-		return SaveCustomProviderInput{}, fmt.Errorf("config: normalize provider discovery settings: %w", err)
+	discoveryEndpointPath := ""
+	if normalized.ModelSource != provider.ModelSourceManual && strings.TrimSpace(normalizedDiscoveryEndpointPath) != "" {
+		var err error
+		discoveryEndpointPath, _, err = provider.NormalizeProviderDiscoverySettings(
+			normalized.Driver,
+			normalizedDiscoveryEndpointPath,
+			"",
+		)
+		if err != nil {
+			return SaveCustomProviderInput{}, fmt.Errorf("config: normalize provider discovery settings: %w", err)
+		}
 	}
 
 	if normalized.Driver == provider.DriverOpenAICompat {
@@ -85,7 +89,7 @@ func NormalizeCustomProviderInput(input SaveCustomProviderInput) (SaveCustomProv
 		return normalized, nil
 	}
 
-	if strings.TrimSpace(discoveryEndpointPath) == "" {
+	if requiresDiscoveryEndpointPath(normalized.Driver) && strings.TrimSpace(discoveryEndpointPath) == "" {
 		return SaveCustomProviderInput{}, fmt.Errorf(
 			"config: provider %q model_source discover requires discovery_endpoint_path; "+
 				"if provider does not expose discover endpoint, set model_source to manual",

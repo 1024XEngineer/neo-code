@@ -85,6 +85,7 @@ func (p ProviderConfig) Validate() error {
 		return fmt.Errorf("provider %q manual model source requires non-empty models", p.Name)
 	}
 	if p.Source == ProviderSourceCustom && normalizedModelSource == provider.ModelSourceDiscover &&
+		requiresDiscoveryEndpointPath(p.Driver) &&
 		strings.TrimSpace(p.DiscoveryEndpointPath) == "" {
 		return fmt.Errorf(
 			"provider %q model source discover requires discovery_endpoint_path; set model_source to manual if endpoint is unavailable",
@@ -214,15 +215,17 @@ func providerIdentityFromConfig(cfg ProviderConfig) (provider.ProviderIdentity, 
 		return provider.NormalizeProviderIdentity(identity)
 	}
 
+	normalizedDriver := normalizeProviderDriver(cfg.Driver)
+	if normalizedDriver == provider.DriverGemini || normalizedDriver == provider.DriverAnthropic {
+		return provider.NormalizeProviderIdentity(identity)
+	}
+
 	discoveryEndpointPath, responseProfile, err := normalizeProviderDiscoverySettingsFromConfig(cfg)
 	if err != nil {
 		return provider.ProviderIdentity{}, err
 	}
 	identity.DiscoveryEndpointPath = discoveryEndpointPath
-	if normalizeProviderDriver(cfg.Driver) != provider.DriverGemini &&
-		normalizeProviderDriver(cfg.Driver) != provider.DriverAnthropic {
-		identity.ResponseProfile = responseProfile
-	}
+	identity.ResponseProfile = responseProfile
 	return provider.NormalizeProviderIdentity(identity)
 }
 
@@ -257,14 +260,22 @@ func normalizeProviderRuntimePathsFromConfig(cfg ProviderConfig) (string, string
 	if err != nil {
 		return "", "", err
 	}
-	discoveryEndpointPath, _, err := normalizeProviderDiscoverySettingsFromConfig(cfg)
-	if err != nil {
-		return "", "", err
+	discoveryEndpointPath := ""
+	if requiresDiscoveryEndpointPath(cfg.Driver) || strings.TrimSpace(cfg.DiscoveryEndpointPath) != "" {
+		discoveryEndpointPath, _, err = normalizeProviderDiscoverySettingsFromConfig(cfg)
+		if err != nil {
+			return "", "", err
+		}
 	}
 	if normalizeProviderDriver(cfg.Driver) != provider.DriverOpenAICompat {
 		chatEndpointPath = ""
 	}
 	return chatEndpointPath, discoveryEndpointPath, nil
+}
+
+// requiresDiscoveryEndpointPath 标记哪些 driver 的 discover 仍依赖 HTTP endpoint 配置。
+func requiresDiscoveryEndpointPath(driver string) bool {
+	return normalizeProviderDriver(driver) == provider.DriverOpenAICompat
 }
 
 // sanitizeRuntimeBaseURL 对运行时 base_url 做最小安全规整，确保不会透传 userinfo 等敏感片段。
@@ -357,7 +368,7 @@ func GeminiProvider() ProviderConfig {
 		Model:                 GeminiDefaultModel,
 		APIKeyEnv:             GeminiDefaultAPIKeyEnv,
 		ModelSource:           provider.ModelSourceDiscover,
-		ChatEndpointPath:      "/models",
+		ChatEndpointPath:      "",
 		DiscoveryEndpointPath: provider.DiscoveryEndpointPathModels,
 		Source:                ProviderSourceBuiltin,
 	}

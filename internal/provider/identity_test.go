@@ -67,11 +67,8 @@ func TestNormalizeProviderIdentityShrinksSDKDriverFields(t *testing.T) {
 	if identity.BaseURL != "https://api.example.com/v1" {
 		t.Fatalf("expected normalized base url %q, got %q", "https://api.example.com/v1", identity.BaseURL)
 	}
-	if identity.ChatEndpointPath != "" || identity.ResponseProfile != "" {
-		t.Fatalf("expected sdk driver identity to keep only discovery cache fields, got %+v", identity)
-	}
-	if identity.DiscoveryEndpointPath != "/models" {
-		t.Fatalf("expected normalized discovery settings, got %+v", identity)
+	if identity.ChatEndpointPath != "" || identity.ResponseProfile != "" || identity.DiscoveryEndpointPath != "" {
+		t.Fatalf("expected sdk driver identity to keep only driver/base_url, got %+v", identity)
 	}
 }
 
@@ -126,8 +123,8 @@ func TestNormalizeProviderIdentityAnthropicAndUnknownDriver(t *testing.T) {
 	if anthropicIdentity.ChatEndpointPath != "" || anthropicIdentity.ResponseProfile != "" {
 		t.Fatalf("expected anthropic identity to drop protocol matrix fields, got %+v", anthropicIdentity)
 	}
-	if anthropicIdentity.DiscoveryEndpointPath != DiscoveryEndpointPathModels {
-		t.Fatalf("expected anthropic discovery endpoint %q, got %+v", DiscoveryEndpointPathModels, anthropicIdentity)
+	if anthropicIdentity.DiscoveryEndpointPath != "" {
+		t.Fatalf("expected anthropic identity to omit discovery endpoint, got %+v", anthropicIdentity)
 	}
 
 	fallbackIdentity, err := NormalizeProviderIdentity(ProviderIdentity{

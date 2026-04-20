@@ -4,13 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/http"
 	"strconv"
 	"strings"
-	"time"
 
 	anthropic "github.com/anthropics/anthropic-sdk-go"
-	anthroption "github.com/anthropics/anthropic-sdk-go/option"
 
 	"neo-code/internal/provider"
 	providertypes "neo-code/internal/provider/types"
@@ -37,19 +34,7 @@ func New(cfg provider.RuntimeConfig) (*Provider, error) {
 		return nil, errors.New(errorPrefix + "api key is empty")
 	}
 
-	apiKey := strings.TrimSpace(cfg.APIKey)
-
-	httpClient := &http.Client{
-		Timeout: 90 * time.Second,
-	}
-	options := []anthroption.RequestOption{
-		anthroption.WithHTTPClient(httpClient),
-		anthroption.WithAPIKey(apiKey),
-	}
-	if strings.TrimSpace(cfg.BaseURL) != "" {
-		options = append(options, anthroption.WithBaseURL(strings.TrimSpace(cfg.BaseURL)))
-	}
-	client := anthropic.NewClient(options...)
+	client := newSDKClient(cfg)
 
 	return &Provider{
 		cfg:    cfg,

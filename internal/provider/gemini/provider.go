@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
-	"time"
 
 	"google.golang.org/genai"
 
@@ -28,24 +27,9 @@ func New(cfg provider.RuntimeConfig) (*Provider, error) {
 	if strings.TrimSpace(cfg.APIKey) == "" {
 		return nil, errors.New(errorPrefix + "api key is empty")
 	}
-
-	httpClient := &http.Client{
-		Timeout: 90 * time.Second,
-	}
-	clientConfig := &genai.ClientConfig{
-		APIKey:     strings.TrimSpace(cfg.APIKey),
-		Backend:    genai.BackendGeminiAPI,
-		HTTPClient: httpClient,
-	}
-	if strings.TrimSpace(cfg.BaseURL) != "" {
-		clientConfig.HTTPOptions = genai.HTTPOptions{
-			BaseURL:    strings.TrimSpace(cfg.BaseURL),
-			APIVersion: "/",
-		}
-	}
-	client, err := genai.NewClient(context.Background(), clientConfig)
+	client, err := newSDKClient(context.Background(), cfg)
 	if err != nil {
-		return nil, fmt.Errorf("%screate sdk client: %w", errorPrefix, err)
+		return nil, err
 	}
 
 	return &Provider{

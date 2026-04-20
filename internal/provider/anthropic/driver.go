@@ -2,11 +2,15 @@ package anthropic
 
 import (
 	"context"
+	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
+	anthropic "github.com/anthropics/anthropic-sdk-go"
+	anthroption "github.com/anthropics/anthropic-sdk-go/option"
+
 	"neo-code/internal/provider"
-	"neo-code/internal/provider/openaicompat"
 	providertypes "neo-code/internal/provider/types"
 )
 
@@ -21,17 +25,51 @@ func Driver() provider.DriverDefinition {
 			return New(cfg)
 		},
 		Discover: func(ctx context.Context, cfg provider.RuntimeConfig) ([]providertypes.ModelDescriptor, error) {
-			httpClient := &http.Client{
-				Timeout: 90 * time.Second,
+			client := newSDKClient(cfg)
+
+			descriptors := make([]providertypes.ModelDescriptor, 0, 64)
+			pager := client.Models.ListAutoPaging(ctx, anthropic.ModelListParams{})
+			for pager.Next() {
+				model := pager.Current()
+				modelID := strings.TrimSpace(model.ID)
+				if modelID == "" {
+					continue
+				}
+				displayName := strings.TrimSpace(model.DisplayName)
+				if displayName == "" {
+					displayName = modelID
+				}
+				descriptors = append(descriptors, providertypes.ModelDescriptor{
+					ID:              modelID,
+					Name:            displayName,
+					ContextWindow:   int(model.MaxInputTokens),
+					MaxOutputTokens: int(model.MaxTokens),
+				})
 			}
-			requestCfg, err := openaicompat.RequestConfigFromRuntime(cfg)
-			if err != nil {
-				return nil, err
+			if err := pager.Err(); err != nil {
+				return nil, fmt.Errorf("%sdiscover models via sdk: %w", errorPrefix, err)
 			}
-			return openaicompat.DiscoverModelDescriptors(ctx, httpClient, requestCfg)
+			return providertypes.MergeModelDescriptors(descriptors), nil
 		},
 		ValidateCatalogIdentity: validateCatalogIdentity,
 	}
+}
+
+// newSDKClient 构造 Anthropic SDK 客户端，供生成与模型发现链路共享连接配置。
+func newSDKClient(cfg provider.RuntimeConfig) anthropic.Client {
+	apiKey := strings.TrimSpace(cfg.APIKey)
+
+	httpClient := &http.Client{
+		Timeout: 90 * time.Second,
+	}
+	options := []anthroption.RequestOption{
+		anthroption.WithHTTPClient(httpClient),
+		anthroption.WithAPIKey(apiKey),
+	}
+	if strings.TrimSpace(cfg.BaseURL) != "" {
+		options = append(options, anthroption.WithBaseURL(strings.TrimSpace(cfg.BaseURL)))
+	}
+	return anthropic.NewClient(options...)
 }
 
 // validateCatalogIdentity 在 SDK 模式下不再限制 endpoint 相关字段。

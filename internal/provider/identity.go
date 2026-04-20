@@ -222,18 +222,9 @@ func NormalizeProviderIdentity(identity ProviderIdentity) (ProviderIdentity, err
 			DiscoveryEndpointPath: discoveryEndpointPath,
 		}, nil
 	case DriverGemini, DriverAnthropic:
-		discoveryEndpointPath, _, err := NormalizeProviderDiscoverySettings(
-			identity.Driver,
-			identity.DiscoveryEndpointPath,
-			"",
-		)
-		if err != nil {
-			return ProviderIdentity{}, err
-		}
 		return ProviderIdentity{
-			Driver:                normalizedDriver,
-			BaseURL:               normalizedBaseURL,
-			DiscoveryEndpointPath: discoveryEndpointPath,
+			Driver:  normalizedDriver,
+			BaseURL: normalizedBaseURL,
 		}, nil
 	default:
 		discoveryEndpointPath, responseProfile, err := NormalizeProviderDiscoverySettings(
