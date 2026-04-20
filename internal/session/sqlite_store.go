@@ -177,6 +177,9 @@ INSERT INTO sessions (
 		session.TokenOutputTotal,
 	)
 	if err != nil {
+		if isSQLiteSessionUniqueConstraintError(err) {
+			return Session{}, wrapSessionAlreadyExists(err)
+		}
 		return Session{}, fmt.Errorf("session: insert session %s: %w", session.ID, err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -1306,6 +1309,14 @@ func wrapSessionNotFound(cause error) error {
 	return fmt.Errorf("%w: %w", ErrSessionNotFound, fmt.Errorf("%w: %w", os.ErrNotExist, cause))
 }
 
+// wrapSessionAlreadyExists 统一包装会话重复创建错误，确保上层可通过 ErrSessionAlreadyExists 做精确判断。
+func wrapSessionAlreadyExists(cause error) error {
+	if cause == nil {
+		cause = os.ErrExist
+	}
+	return fmt.Errorf("%w: %w", ErrSessionAlreadyExists, fmt.Errorf("%w: %w", os.ErrExist, cause))
+}
+
 // cloneMessage 深拷贝消息，避免共享底层切片和映射。
 // mapSessionAssetInsertError 统一收敛附件元数据插入阶段的缺失会话语义，避免向上泄漏底层 SQLite 错误。
 func mapSessionAssetInsertError(assetID string, err error) error {
@@ -1322,6 +1333,18 @@ func isSQLiteForeignKeyConstraintError(err error) bool {
 		return sqliteErr.Code() == sqlite3.SQLITE_CONSTRAINT_FOREIGNKEY
 	}
 	return false
+}
+
+// isSQLiteSessionUniqueConstraintError 判断底层错误是否为 SQLite 主键/唯一约束失败。
+func isSQLiteSessionUniqueConstraintError(err error) bool {
+	var sqliteErr *sqlitedriver.Error
+	if !errors.As(err, &sqliteErr) {
+		return false
+	}
+	code := sqliteErr.Code()
+	return code == sqlite3.SQLITE_CONSTRAINT ||
+		code == sqlite3.SQLITE_CONSTRAINT_PRIMARYKEY ||
+		code == sqlite3.SQLITE_CONSTRAINT_UNIQUE
 }
 
 func cloneMessage(message providertypes.Message) providertypes.Message {

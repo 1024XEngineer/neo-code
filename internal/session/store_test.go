@@ -122,6 +122,28 @@ func TestSQLiteStoreLifecycleRoundTrip(t *testing.T) {
 	}
 }
 
+func TestSQLiteStoreCreateSessionDuplicateReturnsSentinel(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := newTestStore(t)
+	input := CreateSessionInput{ID: "dup_session", Title: "dup"}
+	if _, err := store.CreateSession(ctx, input); err != nil {
+		t.Fatalf("first CreateSession() error = %v", err)
+	}
+
+	_, err := store.CreateSession(ctx, input)
+	if err == nil {
+		t.Fatalf("expected duplicate CreateSession() to fail")
+	}
+	if !errors.Is(err, ErrSessionAlreadyExists) {
+		t.Fatalf("expected ErrSessionAlreadyExists, got %v", err)
+	}
+	if !errors.Is(err, os.ErrExist) {
+		t.Fatalf("expected os.ErrExist chain, got %v", err)
+	}
+}
+
 func TestSQLiteStoreListSummariesSortedAndLegacyJSONIgnored(t *testing.T) {
 	ctx := context.Background()
 	baseDir, err := os.MkdirTemp("", "session-base-")

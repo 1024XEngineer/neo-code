@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"fmt"
+	"os"
 	"testing"
 
 	agentsession "neo-code/internal/session"
@@ -160,7 +161,7 @@ func TestServiceCreateSessionDuplicateCreateFallsBackToLoad(t *testing.T) {
 			memoryStore: newMemoryStore(),
 			missingErr:  fmt.Errorf("load session row: %w", agentsession.ErrSessionNotFound),
 		},
-		createErr: fmt.Errorf("unique constraint failed"),
+		createErr: fmt.Errorf("sqlite: %w", agentsession.ErrSessionAlreadyExists),
 		loaded:    agentsession.Session{ID: "session-dup", Title: "loaded"},
 	}
 	service := &Service{
@@ -190,9 +191,15 @@ func TestCreateSessionErrorPredicates(t *testing.T) {
 	if isRuntimeSessionAlreadyExistsError(nil) {
 		t.Fatalf("isRuntimeSessionAlreadyExistsError(nil) should be false")
 	}
+	if !isRuntimeSessionAlreadyExistsError(fmt.Errorf("wrapped: %w", agentsession.ErrSessionAlreadyExists)) {
+		t.Fatalf("wrapped ErrSessionAlreadyExists should be detected")
+	}
+	if !isRuntimeSessionAlreadyExistsError(fmt.Errorf("wrapped: %w", os.ErrExist)) {
+		t.Fatalf("wrapped os.ErrExist should be detected")
+	}
 	for _, text := range []string{"already exists", "UNIQUE CONSTRAINT", "duplicate key"} {
-		if !isRuntimeSessionAlreadyExistsError(fmt.Errorf("%s", text)) {
-			t.Fatalf("expected %q to be treated as already exists", text)
+		if isRuntimeSessionAlreadyExistsError(fmt.Errorf("%s", text)) {
+			t.Fatalf("plain text %q should not be treated as already exists", text)
 		}
 	}
 }

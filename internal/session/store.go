@@ -28,6 +28,9 @@ var storageIDPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$`)
 // ErrSessionNotFound 表示会话在存储层不存在，用于 runtime 做精确错误分流。
 var ErrSessionNotFound = errors.New("session: session not found")
 
+// ErrSessionAlreadyExists 表示会话在存储层已存在，用于 runtime 处理并发创建冲突。
+var ErrSessionAlreadyExists = errors.New("session: session already exists")
+
 // Session 表示单个会话的运行态与持久化聚合模型。
 type Session struct {
 	ID               string

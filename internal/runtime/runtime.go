@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"errors"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -310,10 +311,7 @@ func isRuntimeSessionAlreadyExistsError(err error) bool {
 	if err == nil {
 		return false
 	}
-	normalized := strings.ToLower(strings.TrimSpace(err.Error()))
-	return strings.Contains(normalized, "already exists") ||
-		strings.Contains(normalized, "unique constraint") ||
-		strings.Contains(normalized, "duplicate")
+	return errors.Is(err, agentsession.ErrSessionAlreadyExists) || errors.Is(err, os.ErrExist)
 }
 
 // SetAutoCompactThresholdResolver 注入自动压缩阈值解析能力，避免 runtime 直接处理模型目录细节。

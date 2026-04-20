@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"strings"
 	"sync"
@@ -17,10 +18,11 @@ import (
 )
 
 const (
-	defaultGatewayRPCRequestTimeout  = 8 * time.Second
-	defaultGatewayRPCRetryCount      = 1
-	defaultGatewayNotificationBuffer = 64
-	defaultGatewayNotificationQueue  = 256
+	defaultGatewayRPCRequestTimeout          = 8 * time.Second
+	defaultGatewayRPCRetryCount              = 1
+	defaultGatewayNotificationBuffer         = 64
+	defaultGatewayNotificationQueue          = 256
+	defaultGatewayNotificationEnqueueTimeout = 3 * time.Second
 )
 
 // GatewayRPCClientOptions 描述网关 JSON-RPC 客户端的初始化参数。
@@ -107,11 +109,12 @@ type GatewayRPCClient struct {
 	conn    net.Conn
 	pending map[string]chan gatewayRPCResponse
 
-	notifications     chan gatewayRPCNotification
-	notificationQueue chan gatewayRPCNotification
-	notificationWG    sync.WaitGroup
-	notificationStart sync.Once
-	sequence          uint64
+	notifications              chan gatewayRPCNotification
+	notificationQueue          chan gatewayRPCNotification
+	notificationEnqueueTimeout time.Duration
+	notificationWG             sync.WaitGroup
+	notificationStart          sync.Once
+	sequence                   uint64
 }
 
 // NewGatewayRPCClient 创建网关 RPC 客户端，并在启动时静默读取认证 Token。
@@ -146,15 +149,16 @@ func NewGatewayRPCClient(options GatewayRPCClientOptions) (*GatewayRPCClient, er
 	}
 
 	return &GatewayRPCClient{
-		listenAddress:     listenAddress,
-		token:             token,
-		requestTimeout:    requestTimeout,
-		retryCount:        retryCount,
-		dialFn:            dialFn,
-		closed:            make(chan struct{}),
-		pending:           make(map[string]chan gatewayRPCResponse),
-		notifications:     make(chan gatewayRPCNotification, defaultGatewayNotificationBuffer),
-		notificationQueue: make(chan gatewayRPCNotification, defaultGatewayNotificationQueue),
+		listenAddress:              listenAddress,
+		token:                      token,
+		requestTimeout:             requestTimeout,
+		retryCount:                 retryCount,
+		dialFn:                     dialFn,
+		closed:                     make(chan struct{}),
+		pending:                    make(map[string]chan gatewayRPCResponse),
+		notifications:              make(chan gatewayRPCNotification, defaultGatewayNotificationBuffer),
+		notificationQueue:          make(chan gatewayRPCNotification, defaultGatewayNotificationQueue),
+		notificationEnqueueTimeout: defaultGatewayNotificationEnqueueTimeout,
 	}, nil
 }
 
@@ -232,7 +236,6 @@ func (c *GatewayRPCClient) Close() error {
 	c.closeOnce.Do(func() {
 		close(c.closed)
 		firstErr = c.forceCloseWithError(errors.New("gateway rpc client closed"))
-		close(c.notificationQueue)
 		c.notificationWG.Wait()
 		close(c.notifications)
 	})
@@ -372,7 +375,9 @@ func (c *GatewayRPCClient) readLoop(conn net.Conn) {
 			if paramsRaw, hasParams := envelope["params"]; hasParams {
 				notification.Params = cloneJSONRawMessage(paramsRaw)
 			}
-			c.enqueueNotification(notification)
+			if !c.enqueueNotification(notification) {
+				return
+			}
 			continue
 		}
 
@@ -387,7 +392,7 @@ func (c *GatewayRPCClient) readLoop(conn net.Conn) {
 	}
 }
 
-// startNotificationDispatcher 启动通知转发协程，确保 readLoop 不会被 UI 消费速度阻塞。
+// startNotificationDispatcher 启动通知转发协程，配合 enqueue 超时保护避免 readLoop 长时间背压阻塞。
 func (c *GatewayRPCClient) startNotificationDispatcher() {
 	c.notificationStart.Do(func() {
 		c.notificationWG.Add(1)
@@ -412,12 +417,25 @@ func (c *GatewayRPCClient) startNotificationDispatcher() {
 	})
 }
 
-// enqueueNotification 以阻塞方式投递通知，确保 gateway.event 不会因队列满被静默丢弃。
-func (c *GatewayRPCClient) enqueueNotification(notification gatewayRPCNotification) {
+// enqueueNotification 投递通知到内部队列；若背压持续超时则主动断开连接，避免 readLoop 无限阻塞。
+func (c *GatewayRPCClient) enqueueNotification(notification gatewayRPCNotification) bool {
+	enqueueTimeout := c.notificationEnqueueTimeout
+	if enqueueTimeout <= 0 {
+		enqueueTimeout = defaultGatewayNotificationEnqueueTimeout
+	}
+	timer := time.NewTimer(enqueueTimeout)
+	defer timer.Stop()
+
 	select {
 	case <-c.closed:
-		return
+		return false
 	case c.notificationQueue <- notification:
+		return true
+	case <-timer.C:
+		err := fmt.Errorf("gateway rpc client: notification queue blocked for %s", enqueueTimeout)
+		log.Printf("warning: gateway rpc client force close due to notification backpressure method=%s err=%v", notification.Method, err)
+		_ = c.forceCloseWithError(err)
+		return false
 	}
 }
 

@@ -443,7 +443,7 @@ func TestGatewayRPCClientReadLoopAdditionalBranches(t *testing.T) {
 	_ = client.Close()
 }
 
-func TestGatewayRPCClientNotificationDispatcherStopsOnQueueClose(t *testing.T) {
+func TestGatewayRPCClientNotificationDispatcherStopsOnCloseSignal(t *testing.T) {
 	t.Parallel()
 
 	client := &GatewayRPCClient{
@@ -453,7 +453,7 @@ func TestGatewayRPCClientNotificationDispatcherStopsOnQueueClose(t *testing.T) {
 		notificationQueue: make(chan gatewayRPCNotification, 1),
 	}
 	client.startNotificationDispatcher()
-	close(client.notificationQueue)
+	close(client.closed)
 	client.notificationWG.Wait()
 }
 
@@ -507,6 +507,79 @@ func TestGatewayRPCClientEnqueueNotificationDoesNotDropUnderQueuePressure(t *tes
 		case <-time.After(5 * time.Second):
 			t.Fatalf("expected %d notifications, got %d", total, i)
 		}
+	}
+}
+
+func TestGatewayRPCClientReadLoopFailsFastOnNotificationBackpressure(t *testing.T) {
+	t.Parallel()
+
+	clientConn, serverConn := net.Pipe()
+	t.Cleanup(func() {
+		_ = clientConn.Close()
+		_ = serverConn.Close()
+	})
+
+	client := &GatewayRPCClient{
+		closed:                     make(chan struct{}),
+		pending:                    make(map[string]chan gatewayRPCResponse),
+		notifications:              make(chan gatewayRPCNotification),
+		notificationQueue:          make(chan gatewayRPCNotification, 1),
+		notificationEnqueueTimeout: 50 * time.Millisecond,
+	}
+	client.startNotificationDispatcher()
+	t.Cleanup(func() { _ = client.Close() })
+
+	readDone := make(chan struct{})
+	go func() {
+		defer close(readDone)
+		client.readLoop(clientConn)
+	}()
+	encoder := json.NewEncoder(serverConn)
+	if err := encoder.Encode(map[string]any{"method": protocol.MethodGatewayEvent, "params": map[string]any{"idx": 1}}); err != nil {
+		t.Fatalf("encode first notification: %v", err)
+	}
+	if err := encoder.Encode(map[string]any{"method": protocol.MethodGatewayEvent, "params": map[string]any{"idx": 2}}); err != nil {
+		t.Fatalf("encode second notification: %v", err)
+	}
+	if err := encoder.Encode(map[string]any{"method": protocol.MethodGatewayEvent, "params": map[string]any{"idx": 3}}); err != nil {
+		t.Fatalf("encode third notification: %v", err)
+	}
+
+	select {
+	case <-readDone:
+	case <-time.After(time.Second):
+		t.Fatalf("expected readLoop to fail-fast on sustained notification backpressure")
+	}
+}
+
+func TestGatewayRPCClientEnqueueNotificationUnblocksOnClose(t *testing.T) {
+	t.Parallel()
+
+	client := &GatewayRPCClient{
+		closed:                     make(chan struct{}),
+		pending:                    make(map[string]chan gatewayRPCResponse),
+		notifications:              make(chan gatewayRPCNotification),
+		notificationQueue:          make(chan gatewayRPCNotification, 1),
+		notificationEnqueueTimeout: time.Second,
+	}
+	client.startNotificationDispatcher()
+
+	// 首条通知占满队列，第二条通知会阻塞在 enqueue，关闭客户端后应立即退出。
+	client.notificationQueue <- gatewayRPCNotification{Method: protocol.MethodGatewayEvent}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		client.enqueueNotification(gatewayRPCNotification{Method: protocol.MethodGatewayEvent})
+	}()
+
+	time.Sleep(20 * time.Millisecond)
+	_ = client.Close()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatalf("enqueueNotification should unblock when client closes")
 	}
 }
 
