@@ -162,8 +162,13 @@ func (a *App) refreshCommandMenu() {
 
 	items, meta := a.buildCommandMenuItems(input, a.transcript.Width)
 	if len(items) == 0 {
+		hadSuggestions := len(a.commandMenu.Items()) > 0
 		a.commandMenu.SetItems(nil)
 		a.commandMenuMeta = tuistate.CommandMenuMeta{}
+		if hadSuggestions {
+			a.resizeCommandMenu()
+			a.applyComponentLayout(false)
+		}
 		return
 	}
 

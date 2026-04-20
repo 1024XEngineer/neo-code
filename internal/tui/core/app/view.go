@@ -411,7 +411,12 @@ func (a App) renderPanel(title string, subtitle string, body string, width int, 
 	return lipgloss.Place(width, height, lipgloss.Left, lipgloss.Top, panel)
 }
 
-func (a App) renderMessageBlockWithCopy(message providertypes.Message, width int, startCopyID int) (string, []copyCodeButtonBinding) {
+func (a App) renderMessageBlockWithCopy(message providertypes.Message, width int, startCopyID int, showTag ...bool) (string, []copyCodeButtonBinding) {
+	includeTag := true
+	if len(showTag) > 0 {
+		includeTag = showTag[0]
+	}
+
 	switch message.Role {
 	case roleEvent:
 		return a.styles.inlineNotice.Width(width).Render("  > " + wrapPlain(renderMessagePartsForDisplay(message.Parts), max(16, width-6))), nil
@@ -457,6 +462,10 @@ func (a App) renderMessageBlockWithCopy(message providertypes.Message, width int
 	} else {
 		contentBlock, copyButtons = a.renderMessageContentWithCopy(content, maxMessageWidth-2, bodyStyle, startCopyID)
 	}
+	if message.Role == roleAssistant && !includeTag {
+		return contentBlock, copyButtons
+	}
+
 	tagLine := tagStyle.Render(tag)
 	blockAlign := lipgloss.Left
 	if message.Role == roleUser {
@@ -510,11 +519,10 @@ func (a App) commandMenuHeight(width int) int {
 func (a App) renderHelp(width int) string {
 	a.help.ShowAll = a.state.ShowHelp
 	helpContent := a.help.View(a.keys)
-	lines := []string{}
-	if errLine := a.footerErrorLine(width); errLine != "" {
-		lines = append(lines, errLine)
+	lines := []string{
+		a.footerErrorLine(width),
+		helpContent,
 	}
-	lines = append(lines, helpContent)
 	footerContent := strings.Join(lines, "\n")
 	// Keep help content stretched to full width to avoid clipping at borders.
 	return a.styles.footer.Width(width).Render(footerContent)
@@ -527,10 +535,10 @@ func (a App) footerErrorLine(width int) string {
 
 	message := strings.TrimSpace(a.footerErrorText)
 	if message == "" {
-		return ""
+		return lipgloss.NewStyle().Width(width).Render(" ")
 	}
 	if !a.footerErrorUntil.IsZero() && a.now().After(a.footerErrorUntil) {
-		return ""
+		return lipgloss.NewStyle().Width(width).Render(" ")
 	}
 
 	return lipgloss.NewStyle().
@@ -543,60 +551,12 @@ func (a App) renderMessageContentWithCopy(content string, width int, bodyStyle l
 	if a.markdownRenderer == nil {
 		return bodyStyle.Render(emptyMessageText), nil
 	}
-
-	segments := splitMarkdownSegments(content)
-	if len(segments) == 1 && segments[0].Kind == markdownSegmentText {
-		rendered, err := a.markdownRenderer.Render(content, max(16, width-2))
-		if err != nil {
-			return bodyStyle.Render(emptyMessageText), nil
-		}
-		rendered = trimRenderedTrailingWhitespace(rendered)
-		return bodyStyle.Render(normalizeBlockRightEdge(rendered, max(1, width))), nil
-	}
-
-	renderedParts := make([]string, 0, len(segments))
-	copyBindings := make([]copyCodeButtonBinding, 0, 2)
-	nextCopyID := startCopyID
-
-	for _, segment := range segments {
-		switch segment.Kind {
-		case markdownSegmentText:
-			if strings.TrimSpace(segment.Text) == "" {
-				continue
-			}
-			rendered, err := a.markdownRenderer.Render(segment.Text, max(16, width-2))
-			if err != nil {
-				continue
-			}
-			rendered = trimRenderedTrailingWhitespace(rendered)
-			renderedParts = append(renderedParts, bodyStyle.Render(normalizeBlockRightEdge(rendered, max(1, width))))
-		case markdownSegmentCode:
-			code := strings.TrimRight(segment.Code, "\n")
-			if code == "" {
-				continue
-			}
-			buttonText := fmt.Sprintf(copyCodeButton, nextCopyID)
-			button := a.styles.codeCopyButton.Render(buttonText)
-			renderedCode, err := a.markdownRenderer.Render(segment.Fenced, max(16, width-2))
-			if err != nil {
-				codeTextWidth := max(8, width-4)
-				renderedCode = a.styles.codeBlock.Width(width).Render(a.styles.codeText.Width(codeTextWidth).Render(wrapCodeBlock(code, codeTextWidth)))
-			}
-			codeBlock := lipgloss.JoinVertical(
-				lipgloss.Left,
-				button,
-				trimRenderedTrailingWhitespace(renderedCode),
-			)
-			renderedParts = append(renderedParts, codeBlock)
-			copyBindings = append(copyBindings, copyCodeButtonBinding{ID: nextCopyID, Code: code})
-			nextCopyID++
-		}
-	}
-
-	if len(renderedParts) == 0 {
+	rendered, err := a.markdownRenderer.Render(content, max(16, width-2))
+	if err != nil {
 		return bodyStyle.Render(emptyMessageText), nil
 	}
-	return lipgloss.JoinVertical(lipgloss.Left, renderedParts...), copyBindings
+	rendered = trimRenderedTrailingWhitespace(rendered)
+	return bodyStyle.Render(normalizeBlockRightEdge(rendered, max(1, width))), nil
 }
 
 func normalizeBlockRightEdge(content string, maxWidth int) string {

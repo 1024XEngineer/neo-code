@@ -928,17 +928,25 @@ func TestSplitMarkdownSegmentsIndented(t *testing.T) {
 	}
 }
 
-func TestSplitIndentedCodeSegmentsDetectsCodeFeaturesInCodeMode(t *testing.T) {
+func TestSplitIndentedCodeSegmentsDoesNotGuessByKeywords(t *testing.T) {
 	content := "func main() {\nreturn 1\n}\nplain text"
 	segments := splitIndentedCodeSegments(content)
-	if len(segments) < 2 {
-		t.Fatalf("expected code and text segments, got %d", len(segments))
+	if len(segments) != 1 {
+		t.Fatalf("expected plain text segment only, got %d", len(segments))
 	}
-	if segments[0].Kind != markdownSegmentCode {
-		t.Fatalf("expected first segment to be code")
+	if segments[0].Kind != markdownSegmentText {
+		t.Fatalf("expected text segment, got kind=%v", segments[0].Kind)
 	}
-	if !strings.Contains(segments[0].Code, "return 1") {
-		t.Fatalf("expected code segment to include return statement, got %q", segments[0].Code)
+}
+
+func TestSplitMarkdownSegmentsMarkdownSyntaxNotMisclassifiedAsCode(t *testing.T) {
+	content := "# Title\n- item one\n- item two\n\n**bold** and `inline`"
+	segments := splitMarkdownSegments(content)
+	if len(segments) != 1 {
+		t.Fatalf("expected markdown to stay as one text segment, got %d", len(segments))
+	}
+	if segments[0].Kind != markdownSegmentText {
+		t.Fatalf("expected text segment, got kind=%v", segments[0].Kind)
 	}
 }
 
@@ -1811,6 +1819,64 @@ func TestShouldHandleTabAsInput(t *testing.T) {
 	}
 }
 
+func TestSlashTabCompletionDoesNotMoveInput(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.width = 100
+	app.height = 28
+	app.focus = panelInput
+	app.state.ActivePicker = pickerNone
+	app.input.SetValue("/he")
+	app.state.InputText = "/he"
+	app.applyComponentLayout(true)
+	app.refreshCommandMenu()
+	if !app.commandMenuHasSuggestions() {
+		t.Fatalf("expected slash suggestions before tab completion")
+	}
+	_, inputYBefore, _, _ := app.inputBounds()
+
+	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyTab})
+	app = model.(App)
+	_, inputYAfterTab, _, _ := app.inputBounds()
+	if inputYAfterTab != inputYBefore {
+		t.Fatalf("expected input Y to stay stable after slash tab completion, before=%d after=%d", inputYBefore, inputYAfterTab)
+	}
+	if got := strings.TrimSpace(app.input.Value()); got != slashUsageHelp {
+		t.Fatalf("expected completed slash command %q, got %q", slashUsageHelp, got)
+	}
+	if app.commandMenuHasSuggestions() {
+		t.Fatalf("expected command menu to clear for complete slash command")
+	}
+}
+
+func TestManualSlashCompletionDoesNotMoveInput(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.width = 100
+	app.height = 28
+	app.focus = panelInput
+	app.state.ActivePicker = pickerNone
+	app.input.SetValue("/hel")
+	app.state.InputText = "/hel"
+	app.applyComponentLayout(true)
+	app.refreshCommandMenu()
+	if !app.commandMenuHasSuggestions() {
+		t.Fatalf("expected slash suggestions before manual completion")
+	}
+	_, inputYBefore, _, _ := app.inputBounds()
+
+	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("p")})
+	app = model.(App)
+	_, inputYAfter, _, _ := app.inputBounds()
+	if inputYAfter != inputYBefore {
+		t.Fatalf("expected input Y to stay stable after manual slash completion, before=%d after=%d", inputYBefore, inputYAfter)
+	}
+	if got := strings.TrimSpace(app.input.Value()); got != slashUsageHelp {
+		t.Fatalf("expected input value %q, got %q", slashUsageHelp, got)
+	}
+	if app.commandMenuHasSuggestions() {
+		t.Fatalf("expected command menu to clear for complete slash command")
+	}
+}
+
 func TestFocusNextPrev(t *testing.T) {
 	app, _ := newTestApp(t)
 	app.focus = panelTranscript
@@ -2235,12 +2301,8 @@ func TestMouseHandlersAndBounds(t *testing.T) {
 		t.Fatalf("expected transcript bounds miss")
 	}
 
-	app.pendingCopyID = 9
 	if app.handleTranscriptMouse(tea.MouseMsg{X: tx - 1, Y: ty - 1, Action: tea.MouseActionRelease}) {
 		t.Fatalf("expected outside transcript release to return false")
-	}
-	if app.pendingCopyID != 0 {
-		t.Fatalf("expected pending copy id to reset after release outside transcript")
 	}
 	if !app.handleTranscriptMouse(tea.MouseMsg{
 		X: tx, Y: ty, Button: tea.MouseButtonWheelDown, Action: tea.MouseActionPress,
@@ -3509,6 +3571,27 @@ func TestSetTranscriptContentNormalizesTabStops(t *testing.T) {
 	}
 	if got := app.transcript.View(); !strings.Contains(got, "a    b") {
 		t.Fatalf("expected normalized tabs in viewport content, got %q", got)
+	}
+}
+
+func TestRebuildTranscriptCollapsesConsecutiveAssistantTags(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.width = 120
+	app.height = 32
+	app.applyComponentLayout(true)
+	app.activeMessages = []providertypes.Message{
+		{Role: roleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("first chunk")}},
+		{Role: roleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("second chunk")}},
+		{Role: roleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("third chunk")}},
+	}
+
+	app.rebuildTranscript()
+	plain := copyCodeANSIPattern.ReplaceAllString(app.transcriptContent, "")
+	if count := strings.Count(plain, messageTagAgent); count != 1 {
+		t.Fatalf("expected one agent tag for consecutive assistant chunks, got %d in %q", count, plain)
+	}
+	if !strings.Contains(plain, "first chunk") || !strings.Contains(plain, "second chunk") || !strings.Contains(plain, "third chunk") {
+		t.Fatalf("expected all assistant chunks to be present, got %q", plain)
 	}
 }
 

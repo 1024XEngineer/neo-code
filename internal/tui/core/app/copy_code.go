@@ -34,15 +34,6 @@ var (
 	copyCodeButtonPattern = regexp.MustCompile(`\[Copy code #([0-9]+)\]`)
 	copyCodeANSIPattern   = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]`)
 	clipboardWriteAll     = tuiinfra.CopyText
-
-	codeFeaturePatterns = []*regexp.Regexp{
-		regexp.MustCompile(`^[[:space:]]*(func|if|for|while|switch|case|return|class|def|const|let|var|import|export|package|struct|enum|interface|public|private|static|void|int|string|bool|nil|null|true|false)\b`),
-		regexp.MustCompile(`=>|->|::`),
-		regexp.MustCompile(`[})];?\s*$`),
-		regexp.MustCompile(`^\s*(//|#|/\*|\*)`),
-		regexp.MustCompile(`:=|=>`),
-		regexp.MustCompile(`\([a-zA-Z_][a-zA-Z0-9_]*(\s*,\s*[a-zA-Z_][a-zA-Z0-9_]*)*\)\s*{?$`),
-	}
 )
 
 func splitMarkdownSegments(content string) []markdownSegment {
@@ -132,7 +123,6 @@ func splitIndentedCodeSegments(content string) []markdownSegment {
 	textLines := make([]string, 0, len(lines))
 	codeLines := make([]string, 0, len(lines))
 	inCode := false
-	codeFeatureCount := 0
 
 	flushText := func() {
 		if len(textLines) == 0 {
@@ -160,17 +150,13 @@ func splitIndentedCodeSegments(content string) []markdownSegment {
 			Code:   code,
 		})
 		codeLines = codeLines[:0]
-		codeFeatureCount = 0
 	}
 
 	for _, line := range lines {
 		indented := isIndentedCodeLine(line)
 		if inCode {
-			if indented || hasCodeFeatures(line) {
+			if indented {
 				codeLines = append(codeLines, trimCodeIndent(line))
-				if hasCodeFeatures(line) {
-					codeFeatureCount++
-				}
 				continue
 			}
 			if strings.TrimSpace(line) == "" {
@@ -183,15 +169,12 @@ func splitIndentedCodeSegments(content string) []markdownSegment {
 			inCode = false
 		}
 
-		if indented || hasCodeFeatures(line) {
+		if indented {
 			if !inCode {
 				flushText()
 				inCode = true
 			}
 			codeLines = append(codeLines, trimCodeIndent(line))
-			if hasCodeFeatures(line) {
-				codeFeatureCount++
-			}
 			continue
 		}
 
@@ -234,23 +217,7 @@ func isFenceCloseLine(line string) bool {
 }
 
 func isIndentedCodeLine(line string) bool {
-	if strings.HasPrefix(line, "\t") || strings.HasPrefix(line, "    ") {
-		return true
-	}
-	return hasCodeFeatures(line)
-}
-
-func hasCodeFeatures(line string) bool {
-	trimmed := strings.TrimLeft(line, " \t")
-	if trimmed == "" {
-		return false
-	}
-	for _, pattern := range codeFeaturePatterns {
-		if pattern.MatchString(line) {
-			return true
-		}
-	}
-	return false
+	return strings.HasPrefix(line, "\t") || strings.HasPrefix(line, "    ")
 }
 
 func trimCodeIndent(line string) string {

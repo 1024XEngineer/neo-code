@@ -1837,7 +1837,6 @@ func (a *App) handleTranscriptMouse(msg tea.MouseMsg) bool {
 
 	if !a.isMouseWithinTranscript(msg) {
 		if msg.Action == tea.MouseActionRelease || msg.Type == tea.MouseRelease {
-			a.pendingCopyID = 0
 			a.transcriptScrollbarDrag = false
 		}
 		return false
@@ -1845,24 +1844,9 @@ func (a *App) handleTranscriptMouse(msg tea.MouseMsg) bool {
 
 	switch {
 	case msg.Button == tea.MouseButtonLeft && msg.Action == tea.MouseActionPress:
-		if buttonID, ok := a.copyButtonIDAtMouse(msg); ok {
-			a.pendingCopyID = buttonID
-			return true
-		}
-		a.pendingCopyID = 0
 		return false
 	case msg.Action == tea.MouseActionRelease || msg.Type == tea.MouseRelease:
-		defer func() { a.pendingCopyID = 0 }()
-
-		buttonID, ok := a.copyButtonIDAtMouse(msg)
-		if !ok {
-			return false
-		}
-
-		if a.pendingCopyID != 0 && a.pendingCopyID != buttonID {
-			return false
-		}
-		return a.copyCodeBlockByID(buttonID)
+		return false
 	default:
 		return false
 	}
@@ -2307,32 +2291,40 @@ func (a *App) normalizeComposerHeight() {
 
 func (a *App) rebuildTranscript() {
 	width := max(24, a.transcript.Width)
+	a.setCodeCopyBlocks(nil)
 	if len(a.activeMessages) == 0 {
-		a.setCodeCopyBlocks(nil)
 		a.setTranscriptContent(a.styles.empty.Width(width).Render(emptyConversationText))
 		a.transcript.GotoTop()
 		return
 	}
 
 	atBottom := a.transcript.AtBottom()
-	blocks := make([]string, 0, len(a.activeMessages))
-	copyButtons := make([]copyCodeButtonBinding, 0, 4)
-	nextCopyID := 1
+	var builder strings.Builder
+	hasBlock := false
+	previousRole := ""
 	for _, message := range a.activeMessages {
 		if message.Role == roleTool {
 			continue
 		}
-		rendered, bindings := a.renderMessageBlockWithCopy(message, width, nextCopyID)
+		continuation := message.Role == roleAssistant && previousRole == roleAssistant
+		rendered, _ := a.renderMessageBlockWithCopy(message, width, 0, !continuation)
 		if rendered == "" {
 			continue
 		}
-		blocks = append(blocks, rendered)
-		copyButtons = append(copyButtons, bindings...)
-		nextCopyID += len(bindings)
-	}
-	a.setCodeCopyBlocks(copyButtons)
 
-	a.setTranscriptContent(strings.Join(blocks, "\n\n"))
+		if hasBlock {
+			separator := "\n\n"
+			if continuation {
+				separator = "\n"
+			}
+			builder.WriteString(separator)
+		}
+		builder.WriteString(rendered)
+		hasBlock = true
+		previousRole = message.Role
+	}
+
+	a.setTranscriptContent(builder.String())
 	if atBottom {
 		a.transcript.GotoBottom()
 	}

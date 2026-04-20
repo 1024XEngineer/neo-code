@@ -471,6 +471,29 @@ func TestRenderHelpErrorToastExpires(t *testing.T) {
 	}
 }
 
+func TestRenderHelpKeepsStableHeightWithoutError(t *testing.T) {
+	app, _ := newTestApp(t)
+	base := time.Unix(1_700_000_000, 0)
+	app.nowFn = func() time.Time { return base }
+
+	noError := app.renderHelp(80)
+	noErrorHeight := lipgloss.Height(noError)
+
+	app.showFooterError("permission denied")
+	withError := app.renderHelp(80)
+	withErrorHeight := lipgloss.Height(withError)
+	if withErrorHeight != noErrorHeight {
+		t.Fatalf("expected stable footer height, noError=%d withError=%d", noErrorHeight, withErrorHeight)
+	}
+
+	app.nowFn = func() time.Time { return base.Add(footerErrorFlashDuration + 50*time.Millisecond) }
+	expired := app.renderHelp(80)
+	expiredHeight := lipgloss.Height(expired)
+	if expiredHeight != noErrorHeight {
+		t.Fatalf("expected stable footer height after toast expires, noError=%d expired=%d", noErrorHeight, expiredHeight)
+	}
+}
+
 func TestRenderMessageContentWithCopyBranches(t *testing.T) {
 	app, _ := newTestApp(t)
 
@@ -486,11 +509,8 @@ func TestRenderMessageContentWithCopyBranches(t *testing.T) {
 	if strings.TrimSpace(rendered) == "" {
 		t.Fatalf("expected rendered markdown content")
 	}
-	if len(bindings) != 1 {
-		t.Fatalf("expected one copy binding, got %d", len(bindings))
-	}
-	if bindings[0].ID != 3 || !strings.Contains(bindings[0].Code, "fmt.Println") {
-		t.Fatalf("unexpected binding: %+v", bindings[0])
+	if len(bindings) != 0 {
+		t.Fatalf("expected no copy bindings, got %d", len(bindings))
 	}
 
 	app, _ = newTestApp(t)
@@ -520,8 +540,8 @@ func TestRenderMessageContentWithCopyCodeFallbackAndEmptySegments(t *testing.T) 
 	if strings.TrimSpace(rendered) == "" {
 		t.Fatalf("expected rendered output")
 	}
-	if len(bindings) != 1 || bindings[0].ID != 7 {
-		t.Fatalf("expected one binding with id 7, got %+v", bindings)
+	if len(bindings) != 0 {
+		t.Fatalf("expected no bindings, got %+v", bindings)
 	}
 }
 

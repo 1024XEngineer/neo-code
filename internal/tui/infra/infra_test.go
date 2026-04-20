@@ -188,6 +188,22 @@ func TestCachedMarkdownRendererBasic(t *testing.T) {
 	}
 }
 
+func TestCachedMarkdownRendererRemovesHeadingHashPrefix(t *testing.T) {
+	renderer := NewCachedMarkdownRenderer("dark", 4, "(empty)")
+	out, err := renderer.Render("#### Heading Example", 60)
+	if err != nil {
+		t.Fatalf("Render(heading) error = %v", err)
+	}
+
+	plain := markdownANSIPattern.ReplaceAllString(out, "")
+	if strings.Contains(plain, "#### ") {
+		t.Fatalf("expected heading hash prefix to be removed, got %q", plain)
+	}
+	if !strings.Contains(plain, "Heading Example") {
+		t.Fatalf("expected heading text to remain, got %q", plain)
+	}
+}
+
 func TestCachedMarkdownRendererCacheEviction(t *testing.T) {
 	renderer := NewCachedMarkdownRenderer("dark", 1, "(empty)")
 
