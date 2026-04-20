@@ -471,7 +471,7 @@ func TestRenderHelpErrorToastExpires(t *testing.T) {
 	}
 }
 
-func TestRenderHelpKeepsStableHeightWithoutError(t *testing.T) {
+func TestRenderHelpExpandsOnlyWhenErrorVisible(t *testing.T) {
 	app, _ := newTestApp(t)
 	base := time.Unix(1_700_000_000, 0)
 	app.nowFn = func() time.Time { return base }
@@ -482,15 +482,15 @@ func TestRenderHelpKeepsStableHeightWithoutError(t *testing.T) {
 	app.showFooterError("permission denied")
 	withError := app.renderHelp(80)
 	withErrorHeight := lipgloss.Height(withError)
-	if withErrorHeight != noErrorHeight {
-		t.Fatalf("expected stable footer height, noError=%d withError=%d", noErrorHeight, withErrorHeight)
+	if withErrorHeight <= noErrorHeight {
+		t.Fatalf("expected footer to grow while error is visible, noError=%d withError=%d", noErrorHeight, withErrorHeight)
 	}
 
 	app.nowFn = func() time.Time { return base.Add(footerErrorFlashDuration + 50*time.Millisecond) }
 	expired := app.renderHelp(80)
 	expiredHeight := lipgloss.Height(expired)
 	if expiredHeight != noErrorHeight {
-		t.Fatalf("expected stable footer height after toast expires, noError=%d expired=%d", noErrorHeight, expiredHeight)
+		t.Fatalf("expected footer height to return after toast expires, noError=%d expired=%d", noErrorHeight, expiredHeight)
 	}
 }
 

@@ -138,24 +138,6 @@ func TestRoleConstants(t *testing.T) {
 	}
 }
 
-func TestCopyCodeButton(t *testing.T) {
-	if copyCodeButton == "" {
-		t.Error("copyCodeButton should not be empty")
-	}
-}
-
-func TestStatusCodeCopied(t *testing.T) {
-	if statusCodeCopied == "" {
-		t.Error("statusCodeCopied should not be empty")
-	}
-}
-
-func TestStatusCodeCopyError(t *testing.T) {
-	if statusCodeCopyError == "" {
-		t.Error("statusCodeCopyError should not be empty")
-	}
-}
-
 func TestMaxActivityEntries(t *testing.T) {
 	if maxActivityEntries == 0 {
 		t.Error("maxActivityEntries should not be zero")

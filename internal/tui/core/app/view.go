@@ -519,9 +519,10 @@ func (a App) commandMenuHeight(width int) int {
 func (a App) renderHelp(width int) string {
 	a.help.ShowAll = a.state.ShowHelp
 	helpContent := a.help.View(a.keys)
-	lines := []string{
-		a.footerErrorLine(width),
-		helpContent,
+	lines := []string{helpContent}
+	errorLine := a.footerErrorLine(width)
+	if strings.TrimSpace(errorLine) != "" {
+		lines = append([]string{errorLine}, lines...)
 	}
 	footerContent := strings.Join(lines, "\n")
 	// Keep help content stretched to full width to avoid clipping at borders.
@@ -535,10 +536,10 @@ func (a App) footerErrorLine(width int) string {
 
 	message := strings.TrimSpace(a.footerErrorText)
 	if message == "" {
-		return lipgloss.NewStyle().Width(width).Render(" ")
+		return ""
 	}
 	if !a.footerErrorUntil.IsZero() && a.now().After(a.footerErrorUntil) {
-		return lipgloss.NewStyle().Width(width).Render(" ")
+		return ""
 	}
 
 	return lipgloss.NewStyle().

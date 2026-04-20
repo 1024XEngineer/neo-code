@@ -105,9 +105,8 @@ func newPermissionTestApp(runtime agentruntime.Runtime) *App {
 			activity:      viewport.New(0, 0),
 		},
 		appRuntimeState: appRuntimeState{
-			nowFn:          time.Now,
-			codeCopyBlocks: map[int]string{},
-			focus:          panelInput,
+			nowFn: time.Now,
+			focus: panelInput,
 			activities: []tuistate.ActivityEntry{
 				{Kind: "test", Title: "seed"},
 			},

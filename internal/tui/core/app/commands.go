@@ -106,7 +106,6 @@ const (
 	messageTagUser  = "[ YOU ]"
 	messageTagAgent = "[ NEO ]"
 	messageTagTool  = "[ TOOL ]"
-	copyCodeButton  = "[Copy code #%d]"
 
 	roleUser      = "user"
 	roleAssistant = "assistant"
@@ -114,9 +113,6 @@ const (
 	roleEvent     = "event"
 	roleError     = "error"
 	roleSystem    = "system"
-
-	statusCodeCopied    = "Copied code block #%d"
-	statusCodeCopyError = "Failed to copy code block"
 )
 
 type slashCommand = tuicommands.SlashCommand

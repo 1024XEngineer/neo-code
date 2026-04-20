@@ -1844,10 +1844,8 @@ func (a *App) handleTranscriptMouse(msg tea.MouseMsg) bool {
 
 	switch {
 	case msg.Button == tea.MouseButtonLeft && msg.Action == tea.MouseActionPress:
-		a.pendingCopyID = 0
 		return false
 	case msg.Action == tea.MouseActionRelease || msg.Type == tea.MouseRelease:
-		a.pendingCopyID = 0
 		return false
 	default:
 		return false
@@ -2293,7 +2291,6 @@ func (a *App) normalizeComposerHeight() {
 
 func (a *App) rebuildTranscript() {
 	width := max(24, a.transcript.Width)
-	a.setCodeCopyBlocks(nil)
 	if len(a.activeMessages) == 0 {
 		a.setTranscriptContent(a.styles.empty.Width(width).Render(emptyConversationText))
 		a.transcript.GotoTop()
@@ -2306,6 +2303,8 @@ func (a *App) rebuildTranscript() {
 	previousRole := ""
 	for _, message := range a.activeMessages {
 		if message.Role == roleTool {
+			// tool 消息在 transcript 中不直接展示，但必须打断 assistant 连续分段判断。
+			previousRole = roleTool
 			continue
 		}
 		continuation := message.Role == roleAssistant && previousRole == roleAssistant

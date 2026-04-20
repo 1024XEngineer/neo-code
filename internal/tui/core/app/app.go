@@ -99,8 +99,6 @@ type appComponents struct {
 
 // appRuntimeState 聚合运行期易变字段，降低 App 顶层字段密度。
 type appRuntimeState struct {
-	codeCopyBlocks          map[int]string
-	pendingCopyID           int
 	deferredEventCmd        tea.Cmd
 	deferredLogPersistCmd   tea.Cmd
 	nowFn                   func() time.Time
@@ -308,13 +306,12 @@ func newApp(container tuibootstrap.Container) (App, error) {
 			markdownRenderer: markdownRenderer,
 		},
 		appRuntimeState: appRuntimeState{
-			codeCopyBlocks: make(map[int]string),
-			nowFn:          time.Now,
-			focus:          panelInput,
-			todoFilter:     todoFilterAll,
-			layoutCached:   true,
-			cachedWidth:    128,
-			cachedHeight:   40,
+			nowFn:        time.Now,
+			focus:        panelInput,
+			todoFilter:   todoFilterAll,
+			layoutCached: true,
+			cachedWidth:  128,
+			cachedHeight: 40,
 		},
 		width:  128,
 		height: 40,
