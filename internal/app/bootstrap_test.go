@@ -1418,6 +1418,29 @@ func TestResolveBootstrapRuntimeMode(t *testing.T) {
 	}
 }
 
+func TestBuildRuntimeRejectsInvalidRuntimeMode(t *testing.T) {
+	t.Parallel()
+
+	_, err := BuildRuntime(context.Background(), BootstrapOptions{RuntimeMode: "invalid"})
+	if err == nil {
+		t.Fatalf("expected invalid runtime mode error")
+	}
+}
+
+func TestDefaultNewRemoteRuntimeAdapterReturnsInitError(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	_, err := defaultNewRemoteRuntimeAdapter(services.RemoteRuntimeAdapterOptions{
+		ListenAddress: "ipc://127.0.0.1",
+		TokenFile:     home + "/missing-token.json",
+	})
+	if err == nil {
+		t.Fatalf("expected defaultNewRemoteRuntimeAdapter to fail when token is missing")
+	}
+}
+
 func TestBuildRuntimeGatewayModeUsesRemoteAdapter(t *testing.T) {
 	disableBuiltinProviderAPIKeys(t)
 

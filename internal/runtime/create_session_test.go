@@ -85,3 +85,114 @@ func TestServiceCreateSessionReturnsOriginalErrorWhenMissingErrorIsNotSentinel(t
 		t.Fatalf("CreateSession() should not create on non-sentinel error, saves=%d", store.memoryStore.saves)
 	}
 }
+
+type createSessionDuplicateStore struct {
+	*createSessionUpsertStore
+	createErr error
+	loadHits  int
+	loaded    agentsession.Session
+	loadErr   error
+}
+
+func (s *createSessionDuplicateStore) LoadSession(ctx context.Context, id string) (agentsession.Session, error) {
+	if err := ctx.Err(); err != nil {
+		return agentsession.Session{}, err
+	}
+	s.loadHits++
+	if s.loadHits == 1 {
+		return agentsession.Session{}, s.missingErr
+	}
+	if s.loadErr != nil {
+		return agentsession.Session{}, s.loadErr
+	}
+	return s.loaded, nil
+}
+
+func (s *createSessionDuplicateStore) CreateSession(ctx context.Context, input agentsession.CreateSessionInput) (agentsession.Session, error) {
+	if err := ctx.Err(); err != nil {
+		return agentsession.Session{}, err
+	}
+	if s.createErr != nil {
+		return agentsession.Session{}, s.createErr
+	}
+	return s.memoryStore.CreateSession(ctx, input)
+}
+
+func TestServiceCreateSessionBranches(t *testing.T) {
+	t.Parallel()
+
+	store := &createSessionUpsertStore{
+		memoryStore: newMemoryStore(),
+		missingErr:  fmt.Errorf("load session row: %w", agentsession.ErrSessionNotFound),
+	}
+	service := &Service{
+		configManager: newRuntimeConfigManager(t),
+		sessionStore:  store,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := service.CreateSession(ctx, "session-canceled"); err == nil {
+		t.Fatalf("CreateSession() should reject canceled context")
+	}
+	if _, err := service.CreateSession(context.Background(), "   "); err == nil {
+		t.Fatalf("CreateSession() should reject empty session id")
+	}
+}
+
+func TestServiceCreateSessionReturnsWorkdirResolutionError(t *testing.T) {
+	t.Parallel()
+
+	service := &Service{
+		sessionStore: newMemoryStore(),
+		// 不注入 configManager 会使默认 workdir 为空，触发 resolveWorkdirForSession 错误路径。
+	}
+	if _, err := service.CreateSession(context.Background(), "session-workdir"); err == nil {
+		t.Fatalf("CreateSession() should fail when default workdir cannot be resolved")
+	}
+}
+
+func TestServiceCreateSessionDuplicateCreateFallsBackToLoad(t *testing.T) {
+	t.Parallel()
+
+	store := &createSessionDuplicateStore{
+		createSessionUpsertStore: &createSessionUpsertStore{
+			memoryStore: newMemoryStore(),
+			missingErr:  fmt.Errorf("load session row: %w", agentsession.ErrSessionNotFound),
+		},
+		createErr: fmt.Errorf("unique constraint failed"),
+		loaded:    agentsession.Session{ID: "session-dup", Title: "loaded"},
+	}
+	service := &Service{
+		configManager: newRuntimeConfigManager(t),
+		sessionStore:  store,
+	}
+
+	loaded, err := service.CreateSession(context.Background(), "session-dup")
+	if err != nil {
+		t.Fatalf("CreateSession() duplicate fallback error = %v", err)
+	}
+	if loaded.ID != "session-dup" || loaded.Title != "loaded" {
+		t.Fatalf("CreateSession() loaded session = %#v", loaded)
+	}
+}
+
+func TestCreateSessionErrorPredicates(t *testing.T) {
+	t.Parallel()
+
+	if isRuntimeSessionNotFoundError(nil) {
+		t.Fatalf("isRuntimeSessionNotFoundError(nil) should be false")
+	}
+	if !isRuntimeSessionNotFoundError(fmt.Errorf("wrapped: %w", agentsession.ErrSessionNotFound)) {
+		t.Fatalf("wrapped ErrSessionNotFound should be detected")
+	}
+
+	if isRuntimeSessionAlreadyExistsError(nil) {
+		t.Fatalf("isRuntimeSessionAlreadyExistsError(nil) should be false")
+	}
+	for _, text := range []string{"already exists", "UNIQUE CONSTRAINT", "duplicate key"} {
+		if !isRuntimeSessionAlreadyExistsError(fmt.Errorf("%s", text)) {
+			t.Fatalf("expected %q to be treated as already exists", text)
+		}
+	}
+}

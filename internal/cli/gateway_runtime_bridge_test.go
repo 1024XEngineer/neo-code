@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"errors"
+	"os"
 	"testing"
 	"time"
 
@@ -98,6 +99,50 @@ func (s *runtimeStub) DeactivateSessionSkill(context.Context, string, string) er
 
 func (s *runtimeStub) ListSessionSkills(context.Context, string) ([]agentruntime.SessionSkillState, error) {
 	return nil, nil
+}
+
+type runtimeWithoutCreator struct {
+	base *runtimeStub
+}
+
+func (r *runtimeWithoutCreator) Submit(ctx context.Context, input agentruntime.PrepareInput) error {
+	return r.base.Submit(ctx, input)
+}
+func (r *runtimeWithoutCreator) PrepareUserInput(ctx context.Context, input agentruntime.PrepareInput) (agentruntime.UserInput, error) {
+	return r.base.PrepareUserInput(ctx, input)
+}
+func (r *runtimeWithoutCreator) Run(ctx context.Context, input agentruntime.UserInput) error {
+	return r.base.Run(ctx, input)
+}
+func (r *runtimeWithoutCreator) Compact(ctx context.Context, input agentruntime.CompactInput) (agentruntime.CompactResult, error) {
+	return r.base.Compact(ctx, input)
+}
+func (r *runtimeWithoutCreator) ExecuteSystemTool(ctx context.Context, input agentruntime.SystemToolInput) (tools.ToolResult, error) {
+	return r.base.ExecuteSystemTool(ctx, input)
+}
+func (r *runtimeWithoutCreator) ResolvePermission(ctx context.Context, input agentruntime.PermissionResolutionInput) error {
+	return r.base.ResolvePermission(ctx, input)
+}
+func (r *runtimeWithoutCreator) CancelActiveRun() bool {
+	return r.base.CancelActiveRun()
+}
+func (r *runtimeWithoutCreator) Events() <-chan agentruntime.RuntimeEvent {
+	return r.base.Events()
+}
+func (r *runtimeWithoutCreator) ListSessions(ctx context.Context) ([]agentsession.Summary, error) {
+	return r.base.ListSessions(ctx)
+}
+func (r *runtimeWithoutCreator) LoadSession(ctx context.Context, id string) (agentsession.Session, error) {
+	return r.base.LoadSession(ctx, id)
+}
+func (r *runtimeWithoutCreator) ActivateSessionSkill(ctx context.Context, sessionID string, skillID string) error {
+	return r.base.ActivateSessionSkill(ctx, sessionID, skillID)
+}
+func (r *runtimeWithoutCreator) DeactivateSessionSkill(ctx context.Context, sessionID string, skillID string) error {
+	return r.base.DeactivateSessionSkill(ctx, sessionID, skillID)
+}
+func (r *runtimeWithoutCreator) ListSessionSkills(ctx context.Context, sessionID string) ([]agentruntime.SessionSkillState, error) {
+	return r.base.ListSessionSkills(ctx, sessionID)
 }
 
 func TestNewGatewayRuntimePortBridgeRuntimeUnavailable(t *testing.T) {
@@ -299,6 +344,51 @@ func TestGatewayRuntimePortBridgeRuntimeMethods(t *testing.T) {
 	}
 	if len(session.Messages[0].ToolCalls) != 1 || session.Messages[0].ToolCalls[0].Name != "bash" {
 		t.Fatalf("message tool calls = %#v, want trimmed tool call", session.Messages[0].ToolCalls)
+	}
+}
+
+func TestGatewayRuntimePortBridgeLoadSessionNotFoundBranches(t *testing.T) {
+	t.Parallel()
+
+	base := &runtimeStub{
+		loadErr: errors.New("session not found"),
+	}
+	bridgeWithoutCreator, err := newGatewayRuntimePortBridge(context.Background(), &runtimeWithoutCreator{base: base})
+	if err != nil {
+		t.Fatalf("new bridge without creator: %v", err)
+	}
+	t.Cleanup(func() { _ = bridgeWithoutCreator.Close() })
+
+	if _, err := bridgeWithoutCreator.LoadSession(context.Background(), gateway.LoadSessionInput{
+		SubjectID: testBridgeSubjectID,
+		SessionID: "s-1",
+	}); !errors.Is(err, gateway.ErrRuntimeResourceNotFound) {
+		t.Fatalf("expected ErrRuntimeResourceNotFound, got %v", err)
+	}
+
+	stub := &runtimeStub{
+		loadErr:   errors.New("file does not exist"),
+		createErr: errors.New("create failed"),
+	}
+	bridgeWithCreator, err := newGatewayRuntimePortBridge(context.Background(), stub)
+	if err != nil {
+		t.Fatalf("new bridge with creator: %v", err)
+	}
+	t.Cleanup(func() { _ = bridgeWithCreator.Close() })
+
+	if _, err := bridgeWithCreator.LoadSession(context.Background(), gateway.LoadSessionInput{
+		SubjectID: testBridgeSubjectID,
+		SessionID: "s-2",
+	}); err == nil || err.Error() != "create failed" {
+		t.Fatalf("expected create failed error, got %v", err)
+	}
+}
+
+func TestIsRuntimeNotFoundErrorIncludesOSErrNotExist(t *testing.T) {
+	t.Parallel()
+
+	if !isRuntimeNotFoundError(os.ErrNotExist) {
+		t.Fatalf("os.ErrNotExist should be treated as runtime not found")
 	}
 }
 

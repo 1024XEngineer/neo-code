@@ -228,6 +228,76 @@ func TestNormalizeCreateSessionInputDefaultsGeneratedID(t *testing.T) {
 	}
 }
 
+func TestSQLiteStoreCreateSessionPropagatesEnsureStorageDirsError(t *testing.T) {
+	t.Parallel()
+
+	store := &SQLiteStore{
+		projectDir: filepath.Join(t.TempDir(), "project"),
+		assetsDir:  filepath.Join(t.TempDir(), "assets"),
+		dbPath:     filepath.Join("/dev/null", "db.sqlite"),
+	}
+	_, err := store.CreateSession(context.Background(), CreateSessionInput{ID: "s1", Title: "title"})
+	if err == nil {
+		t.Fatalf("expected CreateSession() to fail when db dir cannot be created")
+	}
+}
+
+func TestSQLiteStoreEnsureStorageDirsErrorBranches(t *testing.T) {
+	t.Parallel()
+
+	dbDirErrStore := &SQLiteStore{
+		projectDir: filepath.Join(t.TempDir(), "project"),
+		assetsDir:  filepath.Join(t.TempDir(), "assets"),
+		dbPath:     filepath.Join("/dev/null", "db.sqlite"),
+	}
+	if err := dbDirErrStore.ensureStorageDirs(); err == nil || !strings.Contains(err.Error(), "create db dir") {
+		t.Fatalf("expected create db dir error, got %v", err)
+	}
+
+	projectDirErrStore := &SQLiteStore{
+		projectDir: filepath.Join("/dev/null", "project"),
+		assetsDir:  filepath.Join(t.TempDir(), "assets"),
+		dbPath:     filepath.Join(t.TempDir(), "db.sqlite"),
+	}
+	if err := projectDirErrStore.ensureStorageDirs(); err == nil || !strings.Contains(err.Error(), "create project dir") {
+		t.Fatalf("expected create project dir error, got %v", err)
+	}
+
+	assetsDirErrStore := &SQLiteStore{
+		projectDir: filepath.Join(t.TempDir(), "project"),
+		assetsDir:  filepath.Join("/dev/null", "assets"),
+		dbPath:     filepath.Join(t.TempDir(), "db.sqlite"),
+	}
+	if err := assetsDirErrStore.ensureStorageDirs(); err == nil || !strings.Contains(err.Error(), "create assets dir") {
+		t.Fatalf("expected create assets dir error, got %v", err)
+	}
+}
+
+func TestSQLiteStoreInitializePropagatesStorageDirError(t *testing.T) {
+	t.Parallel()
+
+	store := &SQLiteStore{
+		projectDir: filepath.Join(t.TempDir(), "project"),
+		assetsDir:  filepath.Join(t.TempDir(), "assets"),
+		dbPath:     filepath.Join("/dev/null", "db.sqlite"),
+	}
+	if err := store.initialize(context.Background()); err == nil {
+		t.Fatalf("expected initialize() to fail when storage dirs are invalid")
+	}
+}
+
+func TestWrapSessionNotFoundWithNilCause(t *testing.T) {
+	t.Parallel()
+
+	err := wrapSessionNotFound(nil)
+	if !errors.Is(err, ErrSessionNotFound) {
+		t.Fatalf("expected ErrSessionNotFound, got %v", err)
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected os.ErrNotExist, got %v", err)
+	}
+}
+
 func TestResolveUpdatedAtReturnsProvidedValue(t *testing.T) {
 	t.Parallel()
 
