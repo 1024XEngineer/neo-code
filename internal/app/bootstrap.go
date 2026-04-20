@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"log"
 	"path/filepath"
 	"strings"
@@ -29,24 +30,39 @@ import (
 	"neo-code/internal/tools/todo"
 	"neo-code/internal/tools/webfetch"
 	"neo-code/internal/tui"
+	"neo-code/internal/tui/services"
 )
 
 const utf8CodePage = 65001
+
+const (
+	// RuntimeModeLocal 表示继续使用进程内 runtime 直连模式。
+	RuntimeModeLocal = "local"
+	// RuntimeModeGateway 表示通过 Gateway JSON-RPC 转发 runtime 调用。
+	RuntimeModeGateway = "gateway"
+)
 
 var (
 	setConsoleOutputCodePage = platformSetConsoleOutputCodePage
 	setConsoleInputCodePage  = platformSetConsoleInputCodePage
 	buildToolManagerFunc     = buildToolManager
 	newTUIWithMemo           = tui.NewWithMemo
+	newRemoteRuntimeAdapter  = defaultNewRemoteRuntimeAdapter
 )
 
 // BootstrapOptions 描述应用启动时可注入的运行时选项。
 type BootstrapOptions struct {
-	Workdir string
+	Workdir     string
+	RuntimeMode string
 }
 
 type memoExtractorScheduler interface {
 	ScheduleWithExtractor(sessionID string, messages []providertypes.Message, extractor memo.Extractor)
+}
+
+type runtimeWithClose interface {
+	agentruntime.Runtime
+	Close() error
 }
 
 func newMemoExtractorAdapter(
@@ -107,6 +123,11 @@ func EnsureConsoleUTF8() {
 
 // BuildRuntime 构建 CLI 与 TUI 共用的运行时依赖。
 func BuildRuntime(ctx context.Context, opts BootstrapOptions) (RuntimeBundle, error) {
+	runtimeMode, err := resolveBootstrapRuntimeMode(opts.RuntimeMode)
+	if err != nil {
+		return RuntimeBundle{}, err
+	}
+
 	defaultCfg, err := bootstrapDefaultConfig(opts)
 	if err != nil {
 		return RuntimeBundle{}, err
@@ -198,14 +219,26 @@ func BuildRuntime(ctx context.Context, opts BootstrapOptions) (RuntimeBundle, er
 			memo.NewAutoExtractor(nil, memoSvc, time.Duration(cfg.Memo.ExtractTimeoutSec)*time.Second),
 		))
 	}
+
+	runtimeImpl := agentruntime.Runtime(runtimeSvc)
+	closeFns := []func() error{toolsCleanup, sessionStore.Close}
+	if runtimeMode == RuntimeModeGateway {
+		remoteRuntime, remoteErr := newRemoteRuntimeAdapter(services.RemoteRuntimeAdapterOptions{})
+		if remoteErr != nil {
+			return RuntimeBundle{}, remoteErr
+		}
+		runtimeImpl = remoteRuntime
+		closeFns = append([]func() error{remoteRuntime.Close}, closeFns...)
+	}
+
 	needCleanup = false
 
-	closeBundle := combineRuntimeClosers(toolsCleanup, sessionStore.Close)
+	closeBundle := combineRuntimeClosers(closeFns...)
 
 	return RuntimeBundle{
 		Config:            cfg,
 		ConfigManager:     manager,
-		Runtime:           runtimeSvc,
+		Runtime:           runtimeImpl,
 		ProviderSelection: providerSelection,
 		MemoService:       memoSvc,
 		Close:             closeBundle,
@@ -252,6 +285,20 @@ func bootstrapDefaultConfig(opts BootstrapOptions) (*config.Config, error) {
 // resolveBootstrapWorkdir 将 CLI 传入的工作区解析为存在的绝对目录。
 func resolveBootstrapWorkdir(workdir string) (string, error) {
 	return agentsession.ResolveExistingDir(workdir)
+}
+
+// resolveBootstrapRuntimeMode 归一化并校验 runtime 运行模式。
+func resolveBootstrapRuntimeMode(mode string) (string, error) {
+	normalized := strings.ToLower(strings.TrimSpace(mode))
+	if normalized == "" {
+		return RuntimeModeLocal, nil
+	}
+	switch normalized {
+	case RuntimeModeLocal, RuntimeModeGateway:
+		return normalized, nil
+	default:
+		return "", errors.New("bootstrap: runtime mode must be local or gateway")
+	}
 }
 
 func buildToolRegistry(cfg config.Config) (*tools.Registry, func() error, error) {
@@ -309,6 +356,15 @@ func buildMCPAgentExposureRules(configs []config.MCPAgentExposureConfig) []mcp.A
 		})
 	}
 	return rules
+}
+
+// defaultNewRemoteRuntimeAdapter 构建默认的 Gateway runtime 适配器。
+func defaultNewRemoteRuntimeAdapter(options services.RemoteRuntimeAdapterOptions) (runtimeWithClose, error) {
+	adapter, err := services.NewRemoteRuntimeAdapter(options)
+	if err != nil {
+		return nil, err
+	}
+	return adapter, nil
 }
 
 func buildToolManager(registry *tools.Registry) (tools.Manager, error) {

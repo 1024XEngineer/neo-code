@@ -243,12 +243,14 @@ $env:GEMINI_API_KEY = "AI..."
 
 不要把这两层职责混在一起理解。
 
-## CLI Workdir 覆盖
+## CLI 运行参数覆盖
 
-工作目录不写入 `config.yaml`，只通过启动参数覆盖：
+工作目录与运行模式都不写入 `config.yaml`，只通过启动参数覆盖：
 
 ```bash
 go run ./cmd/neocode --workdir /path/to/workspace
+go run ./cmd/neocode --runtime-mode local
+go run ./cmd/neocode --runtime-mode gateway
 ```
 
 说明：
@@ -256,6 +258,9 @@ go run ./cmd/neocode --workdir /path/to/workspace
 - `--workdir` 只影响本次进程
 - 不会回写到 `config.yaml`
 - 工具根目录与 session 隔离都会使用该工作区
+- `--runtime-mode` 默认为 `local`，可切换为 `gateway`
+- `gateway` 模式会通过本地 Gateway（优先 IPC）转发 runtime 请求
+- 连接或握手失败会直接退出（Fail Fast），不会自动回退到 `local`
 
 ## 常见错误
 

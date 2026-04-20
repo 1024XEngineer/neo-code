@@ -34,12 +34,13 @@ var (
 	silentUpdateCheckDone <-chan struct{}
 )
 
-// GlobalFlags 描述 CLI 根命令当前支持的全局参数。
+// GlobalFlags 描述根命令共享的全局启动参数。
 type GlobalFlags struct {
-	Workdir string
+	Workdir     string
+	RuntimeMode string
 }
 
-// Execute 负责执行 NeoCode 的 CLI 根命令。
+// Execute 执行 NeoCode 根命令入口，并在退出前等待静默更新检查收尾。
 func Execute(ctx context.Context) error {
 	app.EnsureConsoleUTF8()
 	_ = ConsumeUpdateNotice()
@@ -50,7 +51,7 @@ func Execute(ctx context.Context) error {
 	return err
 }
 
-// NewRootCommand 创建 NeoCode 的 CLI 根命令。
+// NewRootCommand 构建 NeoCode 的根命令及全局参数绑定。
 func NewRootCommand() *cobra.Command {
 	settings := viper.New()
 	flags := &GlobalFlags{}
@@ -74,14 +75,24 @@ func NewRootCommand() *cobra.Command {
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			flags.Workdir = strings.TrimSpace(settings.GetString("workdir"))
+			flags.RuntimeMode = strings.ToLower(strings.TrimSpace(settings.GetString("runtime-mode")))
+			switch flags.RuntimeMode {
+			case "", app.RuntimeModeLocal:
+				flags.RuntimeMode = app.RuntimeModeLocal
+			case app.RuntimeModeGateway:
+			default:
+				return fmt.Errorf("invalid --runtime-mode %q, must be local or gateway", flags.RuntimeMode)
+			}
 			return launchRootProgram(cmd.Context(), app.BootstrapOptions{
-				Workdir: flags.Workdir,
+				Workdir:     flags.Workdir,
+				RuntimeMode: flags.RuntimeMode,
 			})
 		},
 	}
-
-	cmd.PersistentFlags().String("workdir", "", "工作目录（覆盖本次运行工作区）")
+	cmd.PersistentFlags().String("workdir", "", "workdir override for current run")
+	cmd.PersistentFlags().String("runtime-mode", app.RuntimeModeLocal, "runtime mode (local/gateway)")
 	_ = settings.BindPFlag("workdir", cmd.PersistentFlags().Lookup("workdir"))
+	_ = settings.BindPFlag("runtime-mode", cmd.PersistentFlags().Lookup("runtime-mode"))
 	cmd.AddCommand(
 		newGatewayCommand(),
 		newURLDispatchCommand(),
@@ -91,7 +102,7 @@ func NewRootCommand() *cobra.Command {
 	return cmd
 }
 
-// defaultRootProgramLauncher 负责在默认根命令路径下启动 TUI。
+// defaultRootProgramLauncher 负责创建并运行 TUI Program，同时保证清理函数被正确执行。
 func defaultRootProgramLauncher(ctx context.Context, opts app.BootstrapOptions) (err error) {
 	program, cleanup, err := newRootProgram(ctx, opts)
 	if err != nil {
@@ -114,7 +125,7 @@ func defaultRootProgramLauncher(ctx context.Context, opts app.BootstrapOptions) 
 	return err
 }
 
-// defaultGlobalPreload 负责执行启动前预检查，避免在命令执行前遗漏上下文取消信号。
+// defaultGlobalPreload 执行全局预加载钩子；当前仅做上下文取消检查。
 func defaultGlobalPreload(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -122,7 +133,7 @@ func defaultGlobalPreload(ctx context.Context) error {
 	return nil
 }
 
-// defaultSilentUpdateCheck 在后台异步检查新版本并缓存退出后提示文案。
+// defaultSilentUpdateCheck 在后台静默检查是否有新版本，并写入一次性升级提示。
 func defaultSilentUpdateCheck(ctx context.Context) {
 	currentVersion := readCurrentVersion()
 	if !version.IsSemverRelease(currentVersion) {
@@ -155,12 +166,12 @@ func defaultSilentUpdateCheck(ctx context.Context) {
 	}(parentCtx, currentVersion, done)
 }
 
-// shouldSkipGlobalPreload 判断当前命令是否应跳过全局预加载逻辑。
+// shouldSkipGlobalPreload 判断当前子命令是否跳过全局预加载。
 func shouldSkipGlobalPreload(cmd *cobra.Command) bool {
 	return normalizedCommandName(cmd) == "url-dispatch"
 }
 
-// shouldSkipSilentUpdateCheck 判断当前命令是否应跳过静默更新检测。
+// shouldSkipSilentUpdateCheck 判断当前子命令是否跳过静默更新检查。
 func shouldSkipSilentUpdateCheck(cmd *cobra.Command) bool {
 	switch normalizedCommandName(cmd) {
 	case "url-dispatch", "update":
@@ -170,7 +181,7 @@ func shouldSkipSilentUpdateCheck(cmd *cobra.Command) bool {
 	}
 }
 
-// sanitizeVersionForTerminal 清洗远端版本字符串，避免 ANSI 控制序列或不可见字符污染终端输出。
+// sanitizeVersionForTerminal 清理版本号中的 ANSI 控制字符与不可打印字符，避免污染终端输出。
 func sanitizeVersionForTerminal(version string) string {
 	cleaned := ansiEscapeSequencePattern.ReplaceAllString(version, "")
 	var builder strings.Builder
@@ -183,7 +194,7 @@ func sanitizeVersionForTerminal(version string) string {
 	return strings.TrimSpace(builder.String())
 }
 
-// normalizedCommandName 返回标准化后的命令名，统一处理空命令与大小写。
+// normalizedCommandName 返回小写且去空白后的命令名，便于统一比较。
 func normalizedCommandName(cmd *cobra.Command) string {
 	if cmd == nil {
 		return ""
@@ -191,14 +202,14 @@ func normalizedCommandName(cmd *cobra.Command) string {
 	return strings.ToLower(strings.TrimSpace(cmd.Name()))
 }
 
-// setSilentUpdateCheckDone 保存当前静默检测任务的完成信号通道。
+// setSilentUpdateCheckDone 原子地更新静默检查完成信号通道。
 func setSilentUpdateCheckDone(done <-chan struct{}) {
 	silentUpdateCheckMu.Lock()
 	silentUpdateCheckDone = done
 	silentUpdateCheckMu.Unlock()
 }
 
-// waitSilentUpdateCheckDone 在命令退出阶段等待静默检测短暂收口，降低提示丢失概率。
+// waitSilentUpdateCheckDone 在给定超时时间内等待静默更新检查结束，超时后直接返回。
 func waitSilentUpdateCheckDone(timeout time.Duration) {
 	if timeout <= 0 {
 		return

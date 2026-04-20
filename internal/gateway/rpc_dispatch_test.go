@@ -540,6 +540,70 @@ func TestDispatchRPCRequestMetricsUnknownMethodCollapsed(t *testing.T) {
 	}
 }
 
+func TestDispatchRPCRequestMetricsGrowForTUIMethodSequence(t *testing.T) {
+	metrics := NewGatewayMetrics()
+	authState := NewConnectionAuthState()
+	ctx := WithRequestSource(context.Background(), RequestSourceIPC)
+	ctx = WithGatewayMetrics(ctx, metrics)
+	ctx = WithRequestACL(ctx, NewStrictControlPlaneACL())
+	ctx = WithConnectionAuthState(ctx, authState)
+	ctx = WithTokenAuthenticator(ctx, staticTokenAuthenticator{token: "token-tui"})
+
+	authenticate := dispatchRPCRequest(ctx, protocol.JSONRPCRequest{
+		JSONRPC: protocol.JSONRPCVersion,
+		ID:      json.RawMessage(`"req-auth-tui"`),
+		Method:  protocol.MethodGatewayAuthenticate,
+		Params:  json.RawMessage(`{"token":"token-tui"}`),
+	}, &runtimePortCompileStub{})
+	if authenticate.Error != nil {
+		t.Fatalf("authenticate response error: %+v", authenticate.Error)
+	}
+
+	run := dispatchRPCRequest(ctx, protocol.JSONRPCRequest{
+		JSONRPC: protocol.JSONRPCVersion,
+		ID:      json.RawMessage(`"req-run-tui"`),
+		Method:  protocol.MethodGatewayRun,
+		Params:  json.RawMessage(`{"session_id":"session-tui","input_text":"hello"}`),
+	}, &runtimePortCompileStub{})
+	if run.Error != nil {
+		t.Fatalf("run response error: %+v", run.Error)
+	}
+
+	compact := dispatchRPCRequest(ctx, protocol.JSONRPCRequest{
+		JSONRPC: protocol.JSONRPCVersion,
+		ID:      json.RawMessage(`"req-compact-tui"`),
+		Method:  protocol.MethodGatewayCompact,
+		Params:  json.RawMessage(`{"session_id":"session-tui"}`),
+	}, &runtimePortCompileStub{})
+	if compact.Error != nil {
+		t.Fatalf("compact response error: %+v", compact.Error)
+	}
+
+	listSessions := dispatchRPCRequest(ctx, protocol.JSONRPCRequest{
+		JSONRPC: protocol.JSONRPCVersion,
+		ID:      json.RawMessage(`"req-list-tui"`),
+		Method:  protocol.MethodGatewayListSessions,
+		Params:  json.RawMessage(`{}`),
+	}, &runtimePortCompileStub{})
+	if listSessions.Error != nil {
+		t.Fatalf("listSessions response error: %+v", listSessions.Error)
+	}
+
+	snapshot := metrics.Snapshot()["gateway_requests_total"]
+	if snapshot["ipc|gateway.authenticate|ok"] == 0 {
+		t.Fatalf("expected authenticate metric to grow, snapshot=%#v", snapshot)
+	}
+	if snapshot["ipc|gateway.run|ok"] == 0 {
+		t.Fatalf("expected run metric to grow, snapshot=%#v", snapshot)
+	}
+	if snapshot["ipc|gateway.compact|ok"] == 0 {
+		t.Fatalf("expected compact metric to grow, snapshot=%#v", snapshot)
+	}
+	if snapshot["ipc|gateway.listsessions|ok"] == 0 {
+		t.Fatalf("expected listSessions metric to grow, snapshot=%#v", snapshot)
+	}
+}
+
 func TestDispatchRPCRequestMetricsACLDeniedAndFrameErrorLabels(t *testing.T) {
 	metrics := NewGatewayMetrics()
 	denyACL := &ControlPlaneACL{

@@ -65,6 +65,45 @@ func TestNewRootCommandAllowsEmptyWorkdir(t *testing.T) {
 	if captured.Workdir != "" {
 		t.Fatalf("expected empty workdir override, got %q", captured.Workdir)
 	}
+	if captured.RuntimeMode != app.RuntimeModeLocal {
+		t.Fatalf("expected default runtime mode %q, got %q", app.RuntimeModeLocal, captured.RuntimeMode)
+	}
+}
+
+func TestNewRootCommandPassesRuntimeModeFlagToLauncher(t *testing.T) {
+	originalLauncher := launchRootProgram
+	t.Cleanup(func() { launchRootProgram = originalLauncher })
+
+	var captured app.BootstrapOptions
+	launchRootProgram = func(ctx context.Context, opts app.BootstrapOptions) error {
+		captured = opts
+		return nil
+	}
+
+	cmd := NewRootCommand()
+	cmd.SetArgs([]string{"--runtime-mode", app.RuntimeModeGateway})
+	if err := cmd.ExecuteContext(context.Background()); err != nil {
+		t.Fatalf("ExecuteContext() error = %v", err)
+	}
+	if captured.RuntimeMode != app.RuntimeModeGateway {
+		t.Fatalf("expected runtime mode %q, got %q", app.RuntimeModeGateway, captured.RuntimeMode)
+	}
+}
+
+func TestNewRootCommandRejectsInvalidRuntimeMode(t *testing.T) {
+	originalPreload := runGlobalPreload
+	t.Cleanup(func() { runGlobalPreload = originalPreload })
+	runGlobalPreload = func(context.Context) error { return nil }
+
+	cmd := NewRootCommand()
+	cmd.SetArgs([]string{"--runtime-mode", "invalid"})
+	err := cmd.ExecuteContext(context.Background())
+	if err == nil {
+		t.Fatalf("expected invalid runtime mode error")
+	}
+	if !strings.Contains(err.Error(), "invalid --runtime-mode") {
+		t.Fatalf("unexpected error: %v", err)
+	}
 }
 
 func TestNewRootCommandReturnsLauncherError(t *testing.T) {
