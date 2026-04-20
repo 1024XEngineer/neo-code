@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"hash/fnv"
+	"errors"
 	"log"
 	"strings"
 	"sync"
@@ -228,7 +229,7 @@ func (a *AutoExtractor) extractAndStore(extractor Extractor, messages []provider
 	if err != nil {
 		if errors.Is(err, ErrExtractionNoJSONArray) || errors.Is(err, ErrExtractionIncompleteJSONArray) {
 			a.logError("memo: auto extract skipped (protocol_mismatch): %v", err)
-			return
+			return true
 		}
 		a.logError("memo: auto extract failed: %v", err)
 		return false
