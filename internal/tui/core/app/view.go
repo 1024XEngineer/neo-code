@@ -302,6 +302,13 @@ func (a App) renderProviderAddForm() string {
 				required: true,
 				note:     note,
 			})
+		case providerAddFieldChatAPIMode:
+			note := "仅 openaicompat 生效；chat_completions 或 responses"
+			fields = append(fields, renderField{
+				label: "Chat API Mode",
+				value: a.providerAddForm.ChatAPIMode,
+				note:  note,
+			})
 		case providerAddFieldBaseURL:
 			note := ""
 			if strings.TrimSpace(a.providerAddForm.BaseURL) == "" &&

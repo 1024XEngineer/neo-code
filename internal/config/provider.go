@@ -25,6 +25,7 @@ type ProviderConfig struct {
 	Model                 string                          `yaml:"model"`
 	APIKeyEnv             string                          `yaml:"api_key_env"`
 	ModelSource           string                          `yaml:"-"`
+	ChatAPIMode           string                          `yaml:"-"`
 	ChatEndpointPath      string                          `yaml:"-"`
 	DiscoveryEndpointPath string                          `yaml:"-"`
 	Models                []providertypes.ModelDescriptor `yaml:"-"`
@@ -64,6 +65,9 @@ func (p ProviderConfig) Validate() error {
 	if normalizedDriver == "" {
 		return fmt.Errorf("provider %q driver is empty", p.Name)
 	}
+	if normalizedDriver != provider.DriverOpenAICompat && strings.TrimSpace(p.ChatAPIMode) != "" {
+		return fmt.Errorf("provider %q chat_api_mode is only supported for openaicompat driver", p.Name)
+	}
 	if strings.TrimSpace(p.BaseURL) == "" && !allowsEmptyBaseURL(normalizedDriver) {
 		return fmt.Errorf("provider %q base_url is empty", p.Name)
 	}
@@ -83,6 +87,9 @@ func (p ProviderConfig) Validate() error {
 	}
 	if normalizedModelSource == ModelSourceManual && len(p.Models) == 0 {
 		return fmt.Errorf("provider %q manual model source requires non-empty models", p.Name)
+	}
+	if _, err := provider.NormalizeProviderChatAPIMode(p.ChatAPIMode); err != nil {
+		return fmt.Errorf("provider %q: %w", p.Name, err)
 	}
 	if p.Source == ProviderSourceCustom && normalizedModelSource == ModelSourceDiscover &&
 		requiresDiscoveryEndpointPath(p.Driver) &&
@@ -196,9 +203,14 @@ func normalizeProviderDriver(driver string) string {
 // providerIdentityFromConfig 根据 provider 配置构造用于去重与缓存的规范化连接身份。
 func providerIdentityFromConfig(cfg ProviderConfig) (provider.ProviderIdentity, error) {
 	baseURL := identityBaseURL(cfg)
+	chatAPIMode, err := provider.NormalizeProviderChatAPIMode(cfg.ChatAPIMode)
+	if err != nil {
+		return provider.ProviderIdentity{}, err
+	}
 	identity := provider.ProviderIdentity{
-		Driver:  cfg.Driver,
-		BaseURL: baseURL,
+		Driver:      cfg.Driver,
+		BaseURL:     baseURL,
+		ChatAPIMode: chatAPIMode,
 	}
 
 	if normalizeProviderDriver(cfg.Driver) == provider.DriverOpenAICompat {
@@ -234,6 +246,13 @@ func (p ResolvedProviderConfig) ToRuntimeConfig() (provider.RuntimeConfig, error
 	if err != nil {
 		return provider.RuntimeConfig{}, err
 	}
+	chatAPIMode, err := provider.NormalizeProviderChatAPIMode(p.ChatAPIMode)
+	if err != nil {
+		return provider.RuntimeConfig{}, err
+	}
+	if normalizeProviderDriver(p.Driver) != provider.DriverOpenAICompat {
+		chatAPIMode = ""
+	}
 	baseURL := sanitizeRuntimeBaseURL(p.BaseURL)
 
 	return provider.RuntimeConfig{
@@ -243,6 +262,7 @@ func (p ResolvedProviderConfig) ToRuntimeConfig() (provider.RuntimeConfig, error
 		DefaultModel:          p.Model,
 		APIKey:                p.APIKey,
 		SessionAssetLimits:    p.SessionAssetLimits,
+		ChatAPIMode:           chatAPIMode,
 		ChatEndpointPath:      chatEndpointPath,
 		DiscoveryEndpointPath: discoveryEndpointPath,
 	}, nil
@@ -352,6 +372,7 @@ func OpenAIProvider() ProviderConfig {
 		Model:                 OpenAIDefaultModel,
 		APIKeyEnv:             OpenAIDefaultAPIKeyEnv,
 		ModelSource:           ModelSourceDiscover,
+		ChatAPIMode:           provider.ChatAPIModeChatCompletions,
 		ChatEndpointPath:      "/chat/completions",
 		DiscoveryEndpointPath: provider.DiscoveryEndpointPathModels,
 		Source:                ProviderSourceBuiltin,
@@ -382,6 +403,7 @@ func OpenLLProvider() ProviderConfig {
 		Model:                 OpenLLDefaultModel,
 		APIKeyEnv:             OpenLLDefaultAPIKeyEnv,
 		ModelSource:           ModelSourceDiscover,
+		ChatAPIMode:           provider.ChatAPIModeChatCompletions,
 		ChatEndpointPath:      "/chat/completions",
 		DiscoveryEndpointPath: provider.DiscoveryEndpointPathModels,
 		Source:                ProviderSourceBuiltin,
@@ -397,6 +419,7 @@ func QiniuProvider() ProviderConfig {
 		Model:                 QiniuDefaultModel,
 		APIKeyEnv:             QiniuDefaultAPIKeyEnv,
 		ModelSource:           ModelSourceDiscover,
+		ChatAPIMode:           provider.ChatAPIModeChatCompletions,
 		ChatEndpointPath:      "/chat/completions",
 		DiscoveryEndpointPath: provider.DiscoveryEndpointPathModels,
 		Source:                ProviderSourceBuiltin,

@@ -149,6 +149,7 @@ driver: openaicompat
 api_key_env: COMPANY_GATEWAY_API_KEY
 model_source: discover
 base_url: https://llm.example.com/v1
+chat_api_mode: chat_completions
 chat_endpoint_path: /chat/completions
 discovery_endpoint_path: /models
 ```
@@ -157,6 +158,12 @@ discovery_endpoint_path: /models
 
 - `discover`（默认）：通过 discovery（如 `/models`）拉取模型列表。
 - `manual`：不触发 discovery，优先使用 `models` 中声明的模型列表。
+
+`chat_api_mode`（仅 `openaicompat` 生效）语义如下：
+
+- `chat_completions`：按 Chat Completions 协议发送请求。
+- `responses`：按 Responses 协议发送请求。
+- 省略时按默认 `chat_completions` 处理；`chat_endpoint_path` 仅负责路由，不再决定协议模式。
 
 `manual` 模式示例：
 
@@ -177,8 +184,8 @@ models:
 
 - 老配置未声明 `model_source` 时，默认按 `discover` 处理。
 - `manual` 模式下必须提供 `models`，否则会在加载/创建阶段报错。
-- `manual` 模式会忽略 discovery 相关字段（如 `discovery_endpoint_path`、`discovery_response_profile`）。
-- `provider.yaml` 仅支持平铺字段：`name/driver/base_url/api_key_env/model_source/chat_endpoint_path/discovery_endpoint_path/models`。
+- `manual` 模式会忽略 discovery 相关字段（如 `discovery_endpoint_path`）。
+- `provider.yaml` 仅支持平铺字段：`name/driver/base_url/api_key_env/model_source/chat_api_mode/chat_endpoint_path/discovery_endpoint_path/models`。
 
 ## Auto Compact 失败与校验补充
 

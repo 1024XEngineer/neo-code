@@ -157,6 +157,7 @@ type providerAddFormState struct {
 	Name                  string
 	Driver                string
 	ModelSource           string
+	ChatAPIMode           string
 	BaseURL               string
 	ChatEndpointPath      string
 	DiscoveryEndpointPath string
@@ -168,6 +169,7 @@ type providerAddFormState struct {
 	Submitting            bool
 	Drivers               []string // 可选的 Driver 列表
 	ModelSources          []string // 可选的模型来源列表
+	ChatAPIModes          []string // openaicompat 可选聊天协议模式
 }
 
 type providerAddFormStage int

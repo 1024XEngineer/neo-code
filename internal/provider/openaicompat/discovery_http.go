@@ -28,11 +28,10 @@ var (
 
 // RequestConfig 描述通用 HTTP discovery 请求所需参数。
 type RequestConfig struct {
-	Driver          string
-	BaseURL         string
-	EndpointPath    string
-	ResponseProfile string
-	APIKey          string
+	Driver       string
+	BaseURL      string
+	EndpointPath string
+	APIKey       string
 }
 
 // RequestConfigFromRuntime 基于运行时配置生成 discovery/http 请求参数。
@@ -48,11 +47,10 @@ func RequestConfigFromRuntime(cfg provider.RuntimeConfig) (RequestConfig, error)
 	}
 
 	return RequestConfig{
-		Driver:          cfg.Driver,
-		BaseURL:         cfg.BaseURL,
-		EndpointPath:    discoveryEndpointPath,
-		ResponseProfile: discoveryResponseProfileOpenAI,
-		APIKey:          cfg.APIKey,
+		Driver:       cfg.Driver,
+		BaseURL:      cfg.BaseURL,
+		EndpointPath: discoveryEndpointPath,
+		APIKey:       cfg.APIKey,
 	}, nil
 }
 
@@ -73,11 +71,6 @@ func DiscoverRawModels(ctx context.Context, client *http.Client, cfg RequestConf
 		return nil, provider.NewDiscoveryConfigError(
 			"provider discovery endpoint path is empty; set discovery_endpoint_path or switch to model_source=manual",
 		)
-	}
-
-	responseProfile, err := resolveResponseProfile(cfg.ResponseProfile)
-	if err != nil {
-		return nil, provider.NewDiscoveryConfigError(err.Error())
 	}
 
 	endpoint := strings.TrimRight(strings.TrimSpace(cfg.BaseURL), "/")
@@ -121,7 +114,7 @@ func DiscoverRawModels(ctx context.Context, client *http.Client, cfg RequestConf
 		return nil, fmt.Errorf("provider discovery: decode models response: %w", err)
 	}
 
-	rawModels, err := ExtractRawModels(payload, responseProfile)
+	rawModels, err := ExtractRawModels(payload, discoveryResponseProfileGeneric)
 	if err != nil {
 		return nil, fmt.Errorf("provider discovery: decode models response: %w", err)
 	}
@@ -148,20 +141,6 @@ func DiscoverModelDescriptors(
 		descriptors = append(descriptors, descriptor)
 	}
 	return providertypes.MergeModelDescriptors(descriptors), nil
-}
-
-// resolveResponseProfile 根据 driver 与显式配置确定响应提取策略。
-func resolveResponseProfile(profile string) (string, error) {
-	switch strings.ToLower(strings.TrimSpace(profile)) {
-	case "", discoveryResponseProfileOpenAI:
-		return discoveryResponseProfileOpenAI, nil
-	case discoveryResponseProfileGemini:
-		return discoveryResponseProfileGemini, nil
-	case discoveryResponseProfileGeneric:
-		return discoveryResponseProfileGeneric, nil
-	default:
-		return "", fmt.Errorf("provider discovery response profile %q is unsupported", profile)
-	}
 }
 
 // parseHTTPError 将 discovery HTTP 错误映射为可分类 ProviderError。

@@ -11,6 +11,7 @@ import (
 type ProviderIdentity struct {
 	Driver                string `json:"driver"`
 	BaseURL               string `json:"base_url"`
+	ChatAPIMode           string `json:"chat_api_mode,omitempty"`
 	ChatEndpointPath      string `json:"chat_endpoint_path,omitempty"`
 	DiscoveryEndpointPath string `json:"discovery_endpoint_path,omitempty"`
 }
@@ -18,6 +19,9 @@ type ProviderIdentity struct {
 // Key 返回稳定的 provider 身份键，用于缓存命名与去重。
 func (i ProviderIdentity) Key() string {
 	parts := []string{i.Driver, i.BaseURL}
+	if strings.TrimSpace(i.ChatAPIMode) != "" {
+		parts = append(parts, i.ChatAPIMode)
+	}
 	if strings.TrimSpace(i.ChatEndpointPath) != "" {
 		parts = append(parts, i.ChatEndpointPath)
 	}
@@ -167,6 +171,10 @@ func NormalizeProviderIdentity(identity ProviderIdentity) (ProviderIdentity, err
 
 	switch normalizedDriver {
 	case DriverOpenAICompat:
+		chatAPIMode, err := NormalizeProviderChatAPIMode(identity.ChatAPIMode)
+		if err != nil {
+			return ProviderIdentity{}, err
+		}
 		chatEndpointPath, err := NormalizeProviderChatEndpointPath(identity.ChatEndpointPath)
 		if err != nil {
 			return ProviderIdentity{}, err
@@ -178,6 +186,7 @@ func NormalizeProviderIdentity(identity ProviderIdentity) (ProviderIdentity, err
 		return ProviderIdentity{
 			Driver:                normalizedDriver,
 			BaseURL:               normalizedBaseURL,
+			ChatAPIMode:           chatAPIMode,
 			ChatEndpointPath:      chatEndpointPath,
 			DiscoveryEndpointPath: discoveryEndpointPath,
 		}, nil

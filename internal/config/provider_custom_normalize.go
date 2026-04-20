@@ -14,6 +14,7 @@ func NormalizeCustomProviderInput(input SaveCustomProviderInput) (SaveCustomProv
 		Name:                  strings.TrimSpace(input.Name),
 		Driver:                normalizeProviderDriver(strings.TrimSpace(input.Driver)),
 		BaseURL:               strings.TrimSpace(input.BaseURL),
+		ChatAPIMode:           strings.TrimSpace(input.ChatAPIMode),
 		ChatEndpointPath:      strings.TrimSpace(input.ChatEndpointPath),
 		APIKeyEnv:             strings.TrimSpace(input.APIKeyEnv),
 		DiscoveryEndpointPath: strings.TrimSpace(input.DiscoveryEndpointPath),
@@ -45,6 +46,11 @@ func NormalizeCustomProviderInput(input SaveCustomProviderInput) (SaveCustomProv
 	}
 	normalized.Models = models
 
+	chatAPIMode, err := provider.NormalizeProviderChatAPIMode(normalized.ChatAPIMode)
+	if err != nil {
+		return SaveCustomProviderInput{}, fmt.Errorf("config: normalize provider chat api mode: %w", err)
+	}
+
 	normalizedDiscoveryEndpointPath := normalized.DiscoveryEndpointPath
 	if normalized.ModelSource == ModelSourceManual {
 		normalizedDiscoveryEndpointPath = ""
@@ -73,8 +79,10 @@ func NormalizeCustomProviderInput(input SaveCustomProviderInput) (SaveCustomProv
 	}
 
 	if normalized.Driver == provider.DriverOpenAICompat {
+		normalized.ChatAPIMode = chatAPIMode
 		normalized.ChatEndpointPath = chatEndpointPath
 	} else {
+		normalized.ChatAPIMode = ""
 		normalized.ChatEndpointPath = ""
 	}
 	if normalized.ModelSource == ModelSourceManual {

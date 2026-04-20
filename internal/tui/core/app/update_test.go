@@ -2357,7 +2357,7 @@ func TestCurrentProviderAddFieldAndInputHandling(t *testing.T) {
 		t.Fatalf("expected name field append, got %q", app.providerAddForm.Name)
 	}
 
-	app.providerAddForm.Step = 6 // api key env
+	app.providerAddForm.Step = 7 // api key env
 	model, cmd = app.handleProviderAddFormInput(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'\x00', 'D', 'E', 'E', 'P'}})
 	if cmd != nil {
 		t.Fatalf("expected nil cmd for env key rune input")
@@ -2528,6 +2528,7 @@ func TestBuildProviderAddRequest(t *testing.T) {
 			Name:                  "openai-compat-discover",
 			Driver:                provider.DriverOpenAICompat,
 			ModelSource:           config.ModelSourceDiscover,
+			ChatAPIMode:           provider.ChatAPIModeResponses,
 			ChatEndpointPath:      "/chat/completions",
 			APIKey:                "k",
 			APIKeyEnv:             "OPENAI_COMPAT_DISCOVER_API_KEY",
@@ -2544,6 +2545,26 @@ func TestBuildProviderAddRequest(t *testing.T) {
 		}
 		if req.ChatEndpointPath != "/chat/completions" {
 			t.Fatalf("expected default chat endpoint, got %q", req.ChatEndpointPath)
+		}
+		if req.ChatAPIMode != provider.ChatAPIModeResponses {
+			t.Fatalf("expected chat api mode responses, got %q", req.ChatAPIMode)
+		}
+	})
+
+	t.Run("openai compat defaults chat api mode to chat_completions", func(t *testing.T) {
+		req, err := buildProviderAddRequest(providerAddFormState{
+			Name:                  "openai-compat-default-mode",
+			Driver:                provider.DriverOpenAICompat,
+			ModelSource:           config.ModelSourceDiscover,
+			APIKey:                "k",
+			APIKeyEnv:             "OPENAI_COMPAT_DEFAULT_MODE_API_KEY",
+			DiscoveryEndpointPath: provider.DiscoveryEndpointPathModels,
+		})
+		if err != "" {
+			t.Fatalf("unexpected error: %s", err)
+		}
+		if req.ChatAPIMode != provider.ChatAPIModeChatCompletions {
+			t.Fatalf("expected default chat api mode, got %q", req.ChatAPIMode)
 		}
 	})
 
@@ -2651,6 +2672,20 @@ func TestBuildProviderAddRequest(t *testing.T) {
 			t.Fatalf("expected manual mode to clear discovery settings, got %+v", req)
 		}
 	})
+}
+
+func TestParseProviderAddManualModelsJSONRejectsNonPositiveNumericFields(t *testing.T) {
+	t.Parallel()
+
+	_, err := parseProviderAddManualModelsJSON(`[{"id":"m1","name":"Model 1","context_window":0}]`)
+	if err == nil || !strings.Contains(err.Error(), "context_window") {
+		t.Fatalf("expected context_window validation error, got %v", err)
+	}
+
+	_, err = parseProviderAddManualModelsJSON(`[{"id":"m1","name":"Model 1","max_output_tokens":0}]`)
+	if err == nil || !strings.Contains(err.Error(), "max_output_tokens") {
+		t.Fatalf("expected max_output_tokens validation error, got %v", err)
+	}
 }
 
 func TestRefreshRuntimeSourceSnapshot(t *testing.T) {
@@ -3124,7 +3159,7 @@ func TestUpdateInputPanelTypingPathAndProviderAddFormExtraBranches(t *testing.T)
 
 	app.startProviderAddForm()
 	app.providerAddForm.Driver = "unknown-driver"
-	app.providerAddForm.Step = 4 // chat endpoint
+	app.providerAddForm.Step = 5 // chat endpoint
 	modelPtr, _ = app.handleProviderAddFormInput(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("2024-10-01")})
 	app = *modelPtr.(*App)
 	if app.providerAddForm.ChatEndpointPath == "" {
@@ -3375,7 +3410,8 @@ func TestSlashSelectionAndProviderAddUtilityBranches(t *testing.T) {
 		t.Fatalf("expected provider add visible fields to start from name field")
 	}
 	if !slices.Contains(fields, providerAddFieldDiscoveryEndpointPath) ||
-		!slices.Contains(fields, providerAddFieldChatEndpointPath) {
+		!slices.Contains(fields, providerAddFieldChatEndpointPath) ||
+		!slices.Contains(fields, providerAddFieldChatAPIMode) {
 		t.Fatalf("expected discover source to include discovery fields")
 	}
 
@@ -3383,6 +3419,10 @@ func TestSlashSelectionAndProviderAddUtilityBranches(t *testing.T) {
 	if slices.Contains(manualFields, providerAddFieldDiscoveryEndpointPath) ||
 		slices.Contains(manualFields, providerAddFieldDiscoveryEndpointPath) {
 		t.Fatalf("expected manual source to exclude discovery fields")
+	}
+	geminiFields := providerAddVisibleFields(provider.DriverGemini, config.ModelSourceDiscover)
+	if slices.Contains(geminiFields, providerAddFieldChatAPIMode) {
+		t.Fatalf("expected non-openai driver to exclude chat api mode field")
 	}
 	clampProviderAddStep(nil)
 

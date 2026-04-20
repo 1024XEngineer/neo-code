@@ -1265,6 +1265,45 @@ data: [DONE]
 	}
 }
 
+func TestGenerate_UsesDirectBaseURLWithResponsesModeWhenChatEndpointPathEmpty(t *testing.T) {
+	t.Setenv(config.OpenAIDefaultAPIKeyEnv, "test-key")
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/text/chatcompletion_v2" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(`data: {"type":"response.output_text.delta","delta":"ok"}
+data: {"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}
+data: [DONE]
+
+`))
+	}))
+	defer server.Close()
+
+	cfg := resolvedConfig(server.URL+"/v1/text/chatcompletion_v2", config.OpenAIDefaultModel)
+	cfg.ChatEndpointPath = ""
+	cfg.ChatAPIMode = provider.ChatAPIModeResponses
+	p, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	p.client = server.Client()
+
+	events := make(chan providertypes.StreamEvent, 4)
+	err = p.Generate(context.Background(), providertypes.GenerateRequest{
+		Model:    config.OpenAIDefaultModel,
+		Messages: []providertypes.Message{{Role: "user", Parts: []providertypes.ContentPart{providertypes.NewTextPart("hi")}}},
+	}, events)
+	if err != nil {
+		t.Fatalf("Generate() error = %v", err)
+	}
+	drained := drainStreamEvents(events)
+	if len(drained) != 2 || drained[0].Type != providertypes.StreamEventTextDelta || drained[1].Type != providertypes.StreamEventMessageDone {
+		t.Fatalf("unexpected events: %+v", drained)
+	}
+}
+
 func TestGenerate_UsesDirectBaseURLWhenChatEndpointPathSlash(t *testing.T) {
 	t.Setenv(config.OpenAIDefaultAPIKeyEnv, "test-key")
 

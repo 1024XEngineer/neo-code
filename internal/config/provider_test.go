@@ -322,6 +322,23 @@ func TestProviderConfigValidateRejectsInvalidDiscoverySettings(t *testing.T) {
 	}
 }
 
+func TestProviderConfigValidateRejectsChatAPIModeForNonOpenAICompatDriver(t *testing.T) {
+	t.Parallel()
+
+	cfg := ProviderConfig{
+		Name:        "gemini",
+		Driver:      providerpkg.DriverGemini,
+		BaseURL:     GeminiDefaultBaseURL,
+		Model:       GeminiDefaultModel,
+		APIKeyEnv:   "TEST_KEY",
+		ChatAPIMode: providerpkg.ChatAPIModeResponses,
+		Source:      ProviderSourceBuiltin,
+	}
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "chat_api_mode") {
+		t.Fatalf("expected chat_api_mode validation error, got %v", err)
+	}
+}
+
 func TestProviderConfigValidateRejectsBaseURLWithUserinfo(t *testing.T) {
 	t.Parallel()
 
@@ -633,6 +650,7 @@ func TestResolvedProviderConfigToRuntimeConfig(t *testing.T) {
 			MaxSessionAssetBytes:       1024,
 			MaxSessionAssetsTotalBytes: 2048,
 		},
+		ChatAPIMode:           "",
 		ChatEndpointPath:      "",
 		DiscoveryEndpointPath: providerpkg.DiscoveryEndpointPathModels,
 	}
@@ -699,6 +717,7 @@ func TestResolvedProviderConfigToRuntimeConfigUsesNormalizedOpenAICompatPaths(t 
 			Driver:           "openaicompat",
 			BaseURL:          "https://llm.example.com/v1",
 			Model:            "gpt-5.4",
+			ChatAPIMode:      providerpkg.ChatAPIModeResponses,
 			ChatEndpointPath: "/responses",
 		},
 		APIKey: "secret-key",
@@ -710,6 +729,9 @@ func TestResolvedProviderConfigToRuntimeConfigUsesNormalizedOpenAICompatPaths(t 
 	}
 	if got.ChatEndpointPath != "/responses" {
 		t.Fatalf("expected normalized chat endpoint path %q, got %q", "/responses", got.ChatEndpointPath)
+	}
+	if got.ChatAPIMode != providerpkg.ChatAPIModeResponses {
+		t.Fatalf("expected chat api mode %q, got %q", providerpkg.ChatAPIModeResponses, got.ChatAPIMode)
 	}
 }
 

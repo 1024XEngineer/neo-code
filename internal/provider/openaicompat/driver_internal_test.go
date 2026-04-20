@@ -57,6 +57,19 @@ func TestDriverClosuresAndSupportedProtocol(t *testing.T) {
 		t.Fatalf("expected default execution mode, got mode=%q err=%v", got, err)
 	}
 	if got, err := resolveExecutionMode(provider.RuntimeConfig{
+		Driver:      DriverName,
+		ChatAPIMode: provider.ChatAPIModeResponses,
+	}); err != nil || got != executionModeResponses {
+		t.Fatalf("expected explicit responses execution mode, got mode=%q err=%v", got, err)
+	}
+	if got, err := resolveExecutionMode(provider.RuntimeConfig{
+		Driver:           DriverName,
+		ChatAPIMode:      provider.ChatAPIModeResponses,
+		ChatEndpointPath: "/chat/completions",
+	}); err != nil || got != executionModeResponses {
+		t.Fatalf("expected explicit mode to override endpoint inference, got mode=%q err=%v", got, err)
+	}
+	if got, err := resolveExecutionMode(provider.RuntimeConfig{
 		Driver:           DriverName,
 		ChatEndpointPath: "/responses",
 	}); err != nil || got != executionModeResponses {
@@ -71,6 +84,12 @@ func TestDriverClosuresAndSupportedProtocol(t *testing.T) {
 	if _, err := resolveExecutionMode(provider.RuntimeConfig{Driver: provider.DriverAnthropic}); err == nil ||
 		!strings.Contains(err.Error(), "unsupported") {
 		t.Fatalf("expected unsupported anthropic driver error, got %v", err)
+	}
+	if _, err := resolveExecutionMode(provider.RuntimeConfig{
+		Driver:      DriverName,
+		ChatAPIMode: "unknown",
+	}); err == nil || !strings.Contains(err.Error(), "chat_api_mode") {
+		t.Fatalf("expected unsupported chat_api_mode error, got %v", err)
 	}
 }
 

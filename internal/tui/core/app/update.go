@@ -2877,6 +2877,7 @@ const (
 	providerAddFieldName providerAddFieldID = iota
 	providerAddFieldDriver
 	providerAddFieldModelSource
+	providerAddFieldChatAPIMode
 	providerAddFieldBaseURL
 	providerAddFieldChatEndpointPath
 	providerAddFieldDiscoveryEndpointPath
@@ -2889,9 +2890,14 @@ func providerAddVisibleFields(driver string, modelSource string) []providerAddFi
 		providerAddFieldName,
 		providerAddFieldDriver,
 		providerAddFieldModelSource,
+	}
+	if provider.NormalizeProviderDriver(driver) == provider.DriverOpenAICompat {
+		fields = append(fields, providerAddFieldChatAPIMode)
+	}
+	fields = append(fields,
 		providerAddFieldBaseURL,
 		providerAddFieldChatEndpointPath,
-	}
+	)
 
 	if config.NormalizeModelSource(strings.TrimSpace(modelSource)) == config.ModelSourceDiscover {
 		fields = append(fields, providerAddFieldDiscoveryEndpointPath)
@@ -2932,7 +2938,7 @@ func currentProviderAddField(form *providerAddFormState) providerAddFieldID {
 // isProviderAddEnumField 判断当前新增 Provider 表单焦点是否在枚举字段（Driver/Model Source）。
 func isProviderAddEnumField(form *providerAddFormState) bool {
 	switch currentProviderAddField(form) {
-	case providerAddFieldDriver, providerAddFieldModelSource:
+	case providerAddFieldDriver, providerAddFieldModelSource, providerAddFieldChatAPIMode:
 		return true
 	default:
 		return false
@@ -2946,6 +2952,7 @@ func (a *App) startProviderAddForm() {
 		Name:                  "",
 		Driver:                provider.DriverOpenAICompat,
 		ModelSource:           config.ModelSourceDiscover,
+		ChatAPIMode:           provider.ChatAPIModeChatCompletions,
 		BaseURL:               "",
 		ChatEndpointPath:      providerAddDefaultChatEndpointPath(provider.DriverOpenAICompat),
 		DiscoveryEndpointPath: provider.DiscoveryEndpointPathModels,
@@ -2956,6 +2963,7 @@ func (a *App) startProviderAddForm() {
 		ErrorIsHard:           false,
 		Drivers:               []string{provider.DriverOpenAICompat, provider.DriverGemini, provider.DriverAnthropic},
 		ModelSources:          []string{config.ModelSourceDiscover, config.ModelSourceManual},
+		ChatAPIModes:          []string{provider.ChatAPIModeChatCompletions, provider.ChatAPIModeResponses},
 	}
 	a.state.ActivePicker = pickerProviderAdd
 	a.state.StatusText = "Add new provider"
@@ -3057,6 +3065,17 @@ func (a *App) handleProviderAddFormInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			currentIdx = (currentIdx - 1 + len(a.providerAddForm.ModelSources)) % len(a.providerAddForm.ModelSources)
 			a.providerAddForm.ModelSource = a.providerAddForm.ModelSources[currentIdx]
 			clampProviderAddStep(a.providerAddForm)
+		} else if currentProviderAddField(a.providerAddForm) == providerAddFieldChatAPIMode {
+			currentIdx := 0
+			for i, mode := range a.providerAddForm.ChatAPIModes {
+				if mode == a.providerAddForm.ChatAPIMode {
+					currentIdx = i
+					break
+				}
+			}
+			currentIdx = (currentIdx - 1 + len(a.providerAddForm.ChatAPIModes)) % len(a.providerAddForm.ChatAPIModes)
+			a.providerAddForm.ChatAPIMode = a.providerAddForm.ChatAPIModes[currentIdx]
+			clampProviderAddStep(a.providerAddForm)
 		}
 		return a, nil
 	case typed.Type == tea.KeyDown || (isProviderAddEnumField(a.providerAddForm) && key.Matches(typed, a.keys.ScrollDown)):
@@ -3085,6 +3104,17 @@ func (a *App) handleProviderAddFormInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			currentIdx = (currentIdx + 1) % len(a.providerAddForm.ModelSources)
 			a.providerAddForm.ModelSource = a.providerAddForm.ModelSources[currentIdx]
+			clampProviderAddStep(a.providerAddForm)
+		} else if currentProviderAddField(a.providerAddForm) == providerAddFieldChatAPIMode {
+			currentIdx := 0
+			for i, mode := range a.providerAddForm.ChatAPIModes {
+				if mode == a.providerAddForm.ChatAPIMode {
+					currentIdx = i
+					break
+				}
+			}
+			currentIdx = (currentIdx + 1) % len(a.providerAddForm.ChatAPIModes)
+			a.providerAddForm.ChatAPIMode = a.providerAddForm.ChatAPIModes[currentIdx]
 			clampProviderAddStep(a.providerAddForm)
 		}
 		return a, nil
@@ -3161,6 +3191,7 @@ type providerAddRequest struct {
 	Name                  string
 	Driver                string
 	BaseURL               string
+	ChatAPIMode           string
 	ChatEndpointPath      string
 	ModelSource           string
 	ManualModelsJSON      string
@@ -3220,6 +3251,13 @@ func syncProviderAddDriverDefaults(form *providerAddFormState, previousDriver st
 	if currentChatPath == "" || currentChatPath == oldChatPath {
 		form.ChatEndpointPath = newChatPath
 	}
+	if provider.NormalizeProviderDriver(form.Driver) == provider.DriverOpenAICompat {
+		if _, err := provider.NormalizeProviderChatAPIMode(form.ChatAPIMode); err != nil || strings.TrimSpace(form.ChatAPIMode) == "" {
+			form.ChatAPIMode = provider.DefaultProviderChatAPIMode()
+		}
+	} else {
+		form.ChatAPIMode = ""
+	}
 }
 
 func buildProviderAddRequest(form providerAddFormState) (providerAddRequest, string) {
@@ -3227,6 +3265,7 @@ func buildProviderAddRequest(form providerAddFormState) (providerAddRequest, str
 		Name:                  normalizeProviderAddFieldValue(form.Name),
 		Driver:                provider.NormalizeProviderDriver(normalizeProviderAddFieldValue(form.Driver)),
 		ModelSource:           config.NormalizeModelSource(normalizeProviderAddFieldValue(form.ModelSource)),
+		ChatAPIMode:           normalizeProviderAddFieldValue(form.ChatAPIMode),
 		BaseURL:               normalizeProviderAddFieldValue(form.BaseURL),
 		ChatEndpointPath:      normalizeProviderAddFieldValue(form.ChatEndpointPath),
 		ManualModelsJSON:      strings.TrimSpace(form.ManualModelsJSON),
@@ -3256,6 +3295,19 @@ func buildProviderAddRequest(form providerAddFormState) (providerAddRequest, str
 	if config.IsProtectedEnvVarName(request.APIKeyEnv) {
 		return providerAddRequest{}, fmt.Sprintf("API Key Env %q is protected", request.APIKeyEnv)
 	}
+	normalizedMode, err := provider.NormalizeProviderChatAPIMode(request.ChatAPIMode)
+	if err != nil {
+		return providerAddRequest{}, err.Error()
+	}
+	if request.Driver == provider.DriverOpenAICompat {
+		if normalizedMode == "" {
+			normalizedMode = provider.DefaultProviderChatAPIMode()
+		}
+		request.ChatAPIMode = normalizedMode
+	} else {
+		request.ChatAPIMode = ""
+	}
+
 	if strings.TrimSpace(request.ChatEndpointPath) == "" {
 		request.ChatEndpointPath = providerAddDefaultChatEndpointPath(request.Driver)
 	}
@@ -3295,6 +3347,7 @@ func buildProviderAddRequest(form providerAddFormState) (providerAddRequest, str
 		Name:                  request.Name,
 		Driver:                request.Driver,
 		BaseURL:               request.BaseURL,
+		ChatAPIMode:           request.ChatAPIMode,
 		ChatEndpointPath:      request.ChatEndpointPath,
 		APIKeyEnv:             request.APIKeyEnv,
 		DiscoveryEndpointPath: request.DiscoveryEndpointPath,
@@ -3308,6 +3361,7 @@ func buildProviderAddRequest(form providerAddFormState) (providerAddRequest, str
 	request.Name = normalizedInput.Name
 	request.Driver = normalizedInput.Driver
 	request.BaseURL = normalizedInput.BaseURL
+	request.ChatAPIMode = normalizedInput.ChatAPIMode
 	request.ChatEndpointPath = normalizedInput.ChatEndpointPath
 	request.APIKeyEnv = normalizedInput.APIKeyEnv
 	request.ModelSource = normalizedInput.ModelSource
@@ -3355,9 +3409,15 @@ func parseProviderAddManualModelsJSON(raw string) ([]providertypes.ModelDescript
 			Name: strings.TrimSpace(model.Name),
 		}
 		if model.ContextWindow != nil {
+			if *model.ContextWindow <= 0 {
+				return nil, fmt.Errorf("parse manual model json: models.context_window must be greater than 0")
+			}
 			descriptor.ContextWindow = *model.ContextWindow
 		}
 		if model.MaxOutputTokens != nil {
+			if *model.MaxOutputTokens <= 0 {
+				return nil, fmt.Errorf("parse manual model json: models.max_output_tokens must be greater than 0")
+			}
 			descriptor.MaxOutputTokens = *model.MaxOutputTokens
 		}
 		descriptors = append(descriptors, descriptor)
@@ -3451,6 +3511,7 @@ func (a *App) runProviderAddFlow(request providerAddRequest) tea.Cmd {
 			Name:                  request.Name,
 			Driver:                request.Driver,
 			BaseURL:               request.BaseURL,
+			ChatAPIMode:           request.ChatAPIMode,
 			ChatEndpointPath:      request.ChatEndpointPath,
 			ModelSource:           request.ModelSource,
 			ManualModelsJSON:      request.ManualModelsJSON,

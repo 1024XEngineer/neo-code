@@ -371,9 +371,6 @@ func TestRequestConfigFromRuntime(t *testing.T) {
 	if cfg.EndpointPath != provider.DiscoveryEndpointPathModels {
 		t.Fatalf("expected endpoint path %q, got %q", provider.DiscoveryEndpointPathModels, cfg.EndpointPath)
 	}
-	if cfg.ResponseProfile != discoveryResponseProfileOpenAI {
-		t.Fatalf("expected response profile %q, got %q", discoveryResponseProfileOpenAI, cfg.ResponseProfile)
-	}
 	if cfg.APIKey != "test-key" {
 		t.Fatalf("expected api key to be preserved, got %q", cfg.APIKey)
 	}

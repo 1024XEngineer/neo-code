@@ -24,6 +24,7 @@ type customProviderFile struct {
 	Driver                string                    `yaml:"driver"`
 	APIKeyEnv             string                    `yaml:"api_key_env"`
 	ModelSource           string                    `yaml:"model_source,omitempty"`
+	ChatAPIMode           string                    `yaml:"chat_api_mode,omitempty"`
 	BaseURL               string                    `yaml:"base_url,omitempty"`
 	ChatEndpointPath      string                    `yaml:"chat_endpoint_path,omitempty"`
 	DiscoveryEndpointPath string                    `yaml:"discovery_endpoint_path,omitempty"`
@@ -109,6 +110,7 @@ func loadCustomProvider(providerDir string) (ProviderConfig, error) {
 		BaseURL:               strings.TrimSpace(file.BaseURL),
 		APIKeyEnv:             strings.TrimSpace(file.APIKeyEnv),
 		ModelSource:           strings.TrimSpace(file.ModelSource),
+		ChatAPIMode:           strings.TrimSpace(file.ChatAPIMode),
 		ChatEndpointPath:      strings.TrimSpace(file.ChatEndpointPath),
 		DiscoveryEndpointPath: strings.TrimSpace(file.DiscoveryEndpointPath),
 		Models:                models,
@@ -123,6 +125,7 @@ func loadCustomProvider(providerDir string) (ProviderConfig, error) {
 		BaseURL:               normalizedInput.BaseURL,
 		APIKeyEnv:             normalizedInput.APIKeyEnv,
 		ModelSource:           normalizedInput.ModelSource,
+		ChatAPIMode:           normalizedInput.ChatAPIMode,
 		ChatEndpointPath:      normalizedInput.ChatEndpointPath,
 		DiscoveryEndpointPath: normalizedInput.DiscoveryEndpointPath,
 		Models:                normalizedInput.Models,
@@ -179,6 +182,7 @@ type SaveCustomProviderInput struct {
 	Name                  string
 	Driver                string
 	BaseURL               string
+	ChatAPIMode           string
 	ChatEndpointPath      string
 	APIKeyEnv             string
 	DiscoveryEndpointPath string
@@ -203,6 +207,7 @@ func SaveCustomProviderWithModels(baseDir string, input SaveCustomProviderInput)
 		Driver:      normalizedInput.Driver,
 		APIKeyEnv:   normalizedInput.APIKeyEnv,
 		ModelSource: normalizedInput.ModelSource,
+		ChatAPIMode: normalizedInput.ChatAPIMode,
 	}
 
 	cfg.BaseURL = normalizedInput.BaseURL

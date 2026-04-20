@@ -259,6 +259,68 @@ discovery_endpoint_path: /models
 	}
 }
 
+func TestLoaderLoadCustomProviderWithChatAPIMode(t *testing.T) {
+	t.Parallel()
+
+	loader := NewLoader(t.TempDir(), testDefaultConfig())
+	customDir := filepath.Join(loader.BaseDir(), providersDirName, "responses-gateway")
+	if err := os.MkdirAll(customDir, 0o755); err != nil {
+		t.Fatalf("mkdir custom provider dir: %v", err)
+	}
+
+	providerYAML := `
+name: responses-gateway
+driver: openaicompat
+base_url: https://llm.example.com/v1
+api_key_env: RESPONSES_GATEWAY_API_KEY
+chat_api_mode: responses
+chat_endpoint_path: /
+discovery_endpoint_path: /models
+`
+	if err := os.WriteFile(filepath.Join(customDir, customProviderConfigName), []byte(strings.TrimSpace(providerYAML)+"\n"), 0o644); err != nil {
+		t.Fatalf("write provider.yaml: %v", err)
+	}
+
+	cfg, err := loader.Load(context.Background())
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	loadedProvider, err := cfg.ProviderByName("responses-gateway")
+	if err != nil {
+		t.Fatalf("ProviderByName() error = %v", err)
+	}
+	if loadedProvider.ChatAPIMode != provider.ChatAPIModeResponses {
+		t.Fatalf("expected chat_api_mode responses, got %q", loadedProvider.ChatAPIMode)
+	}
+}
+
+func TestLoaderRejectsCustomProviderWithInvalidChatAPIMode(t *testing.T) {
+	t.Parallel()
+
+	loader := NewLoader(t.TempDir(), testDefaultConfig())
+	customDir := filepath.Join(loader.BaseDir(), providersDirName, "invalid-chat-mode")
+	if err := os.MkdirAll(customDir, 0o755); err != nil {
+		t.Fatalf("mkdir custom provider dir: %v", err)
+	}
+
+	providerYAML := `
+name: invalid-chat-mode
+driver: openaicompat
+base_url: https://llm.example.com/v1
+api_key_env: INVALID_CHAT_MODE_API_KEY
+chat_api_mode: unknown
+discovery_endpoint_path: /models
+`
+	if err := os.WriteFile(filepath.Join(customDir, customProviderConfigName), []byte(strings.TrimSpace(providerYAML)+"\n"), 0o644); err != nil {
+		t.Fatalf("write provider.yaml: %v", err)
+	}
+
+	_, err := loader.Load(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "chat_api_mode") {
+		t.Fatalf("expected invalid chat_api_mode rejection, got %v", err)
+	}
+}
+
 func TestLoaderLoadsCustomProvidersFromProvidersDirectory(t *testing.T) {
 	t.Parallel()
 
@@ -1078,6 +1140,7 @@ func TestSaveCustomProviderAndLoadCustomProviderStayConsistent(t *testing.T) {
 		name                 string
 		input                SaveCustomProviderInput
 		wantModelSource      string
+		wantChatAPIMode      string
 		wantChatPath         string
 		wantDiscoveryPath    string
 		wantModelDescriptors int
@@ -1090,9 +1153,11 @@ func TestSaveCustomProviderAndLoadCustomProviderStayConsistent(t *testing.T) {
 				BaseURL:               "https://llm.example.com/v1",
 				APIKeyEnv:             "ROUNDTRIP_DISCOVER_API_KEY",
 				ModelSource:           ModelSourceDiscover,
+				ChatAPIMode:           provider.ChatAPIModeResponses,
 				DiscoveryEndpointPath: "/models",
 			},
 			wantModelSource:      ModelSourceDiscover,
+			wantChatAPIMode:      provider.ChatAPIModeResponses,
 			wantChatPath:         "",
 			wantDiscoveryPath:    "/models",
 			wantModelDescriptors: 0,
@@ -1116,6 +1181,7 @@ func TestSaveCustomProviderAndLoadCustomProviderStayConsistent(t *testing.T) {
 				},
 			},
 			wantModelSource:      ModelSourceManual,
+			wantChatAPIMode:      "",
 			wantChatPath:         "",
 			wantDiscoveryPath:    "",
 			wantModelDescriptors: 1,
@@ -1150,6 +1216,9 @@ func TestSaveCustomProviderAndLoadCustomProviderStayConsistent(t *testing.T) {
 			}
 			if loaded.ModelSource != tt.wantModelSource {
 				t.Fatalf("expected model_source %q, got %q", tt.wantModelSource, loaded.ModelSource)
+			}
+			if loaded.ChatAPIMode != tt.wantChatAPIMode {
+				t.Fatalf("expected chat_api_mode %q, got %q", tt.wantChatAPIMode, loaded.ChatAPIMode)
 			}
 			if loaded.ChatEndpointPath != tt.wantChatPath {
 				t.Fatalf("expected chat endpoint %q, got %q", tt.wantChatPath, loaded.ChatEndpointPath)

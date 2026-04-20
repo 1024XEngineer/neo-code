@@ -1,304 +1,124 @@
 # 扩展 Provider
 
-本文档说明如何为 NeoCode 添加新的 Provider。
+本文档说明在当前架构下如何为 NeoCode 添加/扩展 Provider。
 
-## 架构概览
+## 架构与边界
 
-NeoCode 的 provider 架构采用**集中式配置 + 驱动复用**的设计：
+当前主链路：`runtime -> provider -> 协议实现 / SDK 实现`。
 
-### 两层分离
+- `internal/config` 负责 provider 配置装配与校验。
+- `internal/provider` 根包只保留最小公共契约（`RuntimeConfig`、`ProviderIdentity`、错误分类与少量 helper）。
+- `internal/provider/openaicompat` 负责 OpenAI-compatible 协议细节（含 `chat/completions` 与 `responses`）。
+- `internal/provider/gemini`、`internal/provider/anthropic` 是基于官方 SDK 的薄适配器。
+- `runtime` 只消费统一流事件，不感知厂商协议细节。
 
-- **配置层**（`internal/config/builtin_providers.go`）：集中管理所有 provider 的元数据
-  - Provider 名称、Driver 名称
-  - Base URL、默认模型、API Key 环境变量名
+## 方式一：新增 OpenAI-compatible Provider（推荐）
 
-- **驱动层**（`internal/provider/openai/` 等）：负责实际的 API 协议实现
-  - 请求构造、响应解析
-  - 流式输出、Tool Call 处理
-  - 动态模型发现（如 `GET /models`）与结果归一化
+适用于“接口兼容 OpenAI”的网关或模型服务。
 
-### 驱动复用
-
-一个驱动可被多个 provider 复用。当前所有内置 provider 都复用 `openai` 驱动：
-
-```go
-// internal/config/builtin_providers.go
-OpenAIProvider()   // Driver: "openai"
-GeminiProvider()   // Driver: "openai" (OpenAI-compatible API)
-OpenLLProvider()   // Driver: "openai" (OpenAI-compatible API)
-```
-
-## 方式一：添加 OpenAI 兼容 Provider（推荐）
-
-适用于 OpenAI 兼容接口（大多数第三方服务）。只需在配置层添加，无需编写新驱动。
-
-### 步骤：添加 DeepSeek
-
-**1. 在 `internal/config/builtin_providers.go` 添加常量和配置：**
+### 1. 在 `internal/config/provider.go` 增加内置配置
 
 ```go
 const (
-    // ... 现有常量 ...
-
-    DeepSeekName             = "deepseek"
-    DeepSeekDefaultBaseURL   = "https://api.deepseek.com/v1"
-    DeepSeekDefaultModel     = "deepseek-chat"
-    DeepSeekDefaultAPIKeyEnv = "DEEPSEEK_API_KEY"
+	DeepSeekName             = "deepseek"
+	DeepSeekDefaultBaseURL   = "https://api.deepseek.com/v1"
+	DeepSeekDefaultModel     = "deepseek-chat"
+	DeepSeekDefaultAPIKeyEnv = "DEEPSEEK_API_KEY"
 )
 
-// DeepSeekProvider 返回 DeepSeek provider 的默认配置。
 func DeepSeekProvider() ProviderConfig {
-    return ProviderConfig{
-        Name:      DeepSeekName,
-        Driver:    "openai",                    // 复用 openai 驱动
-        BaseURL:   DeepSeekDefaultBaseURL,
-        Model:     DeepSeekDefaultModel,
-        APIKeyEnv: DeepSeekDefaultAPIKeyEnv,
-    }
+	return ProviderConfig{
+		Name:                  DeepSeekName,
+		Driver:                provider.DriverOpenAICompat,
+		BaseURL:               DeepSeekDefaultBaseURL,
+		Model:                 DeepSeekDefaultModel,
+		APIKeyEnv:             DeepSeekDefaultAPIKeyEnv,
+		ModelSource:           ModelSourceDiscover,
+		ChatAPIMode:           provider.ChatAPIModeChatCompletions,
+		ChatEndpointPath:      "/chat/completions",
+		DiscoveryEndpointPath: provider.DiscoveryEndpointPathModels,
+		Source:                ProviderSourceBuiltin,
+	}
 }
 ```
 
-**2. 在 `DefaultProviders()` 中注册：**
+### 2. 在 `DefaultProviders()` 注册
 
 ```go
 func DefaultProviders() []ProviderConfig {
-    return []ProviderConfig{
-        OpenAIProvider(),
-        GeminiProvider(),
-        OpenLLProvider(),
-        DeepSeekProvider(),  // 新增
-    }
+	return []ProviderConfig{
+		OpenAIProvider(),
+		GeminiProvider(),
+		OpenLLProvider(),
+		QiniuProvider(),
+		DeepSeekProvider(),
+	}
 }
 ```
 
-**3. 设置环境变量并测试：**
+### 3. 配置环境变量并验证
 
 ```bash
 export DEEPSEEK_API_KEY="your-api-key"
 go run ./cmd/neocode
 ```
 
-### 优点
+## 方式二：实现新 Driver
 
-- ✅ 无需编写新代码，只需配置
-- ✅ 自动继承 openai 驱动的所有功能（流式、Tool Call）
-- ✅ 配置集中管理，易于维护
-- ✅ 用户无需修改 YAML 文件
+适用于协议与现有三类驱动都不兼容的厂商。
 
-## 方式二：实现新驱动
+### 1. 新建 `internal/provider/<driver>/`
 
-适用于协议不兼容的厂商（如 Anthropic、Google 原生 API）。
+实现至少以下内容：
 
-### 步骤：添加 Anthropic
+- `driver.go`：暴露 `Driver()`，返回 `provider.DriverDefinition`
+- `provider.go`：`New(cfg provider.RuntimeConfig)` 和 `Generate(...)`
+-（可选）`request.go` / `stream.go` / `discovery_*.go`
 
-**1. 在 `internal/provider/anthropic/anthropic.go` 实现驱动：**
+### 2. 在 provider 注册处接入
 
-```go
-package anthropic
+将新 `DriverDefinition` 注册到 provider registry（沿用现有注册入口模式）。
 
-import (
-    "context"
-    "errors"
-    "net/http"
-    "strings"
-    "time"
+### 3. 在 `internal/config/provider.go` 增加内置 provider（如果需要）
 
-    "neo-code/internal/config"
-    domain "neo-code/internal/provider"
-)
+`Driver` 指向新驱动名，并补默认模型与 `api_key_env`。
 
-const (
-    Name           = "anthropic"
-    DefaultBaseURL = "https://api.anthropic.com/v1"
-)
+## 自定义 provider.yaml（外部接入）
 
-// Provider 实现 domain.Provider 接口
-type Provider struct {
-    cfg    config.ResolvedProviderConfig
-    client *http.Client
-}
+路径：`~/.neocode/providers/<name>/provider.yaml`
 
-// New 构造函数
-func New(cfg config.ResolvedProviderConfig) (*Provider, error) {
-    if strings.TrimSpace(cfg.APIKey) == "" {
-        return nil, errors.New("anthropic provider: api key is empty")
-    }
-    return &Provider{
-        cfg:    cfg,
-        client: &http.Client{Timeout: 60 * time.Second},
-    }, nil
-}
-
-// Chat 实现流式对话接口
-func (p *Provider) Chat(ctx context.Context, req domain.ChatRequest, events chan<- domain.StreamEvent) (domain.ChatResponse, error) {
-    // 1. 将 domain.ChatRequest 转换为 Anthropic API 格式
-    // 2. 调用 Anthropic API（流式 SSE）
-    // 3. 解析响应，推送 StreamEventTextDelta / StreamEventToolCallStart
-    // 4. 返回 domain.ChatResponse
-}
-
-// Driver 返回驱动定义
-func Driver() domain.DriverDefinition {
-    return domain.DriverDefinition{
-        Name: Name,
-        Build: func(ctx context.Context, cfg config.ResolvedProviderConfig) (domain.Provider, error) {
-            return New(cfg)
-        },
-    }
-}
-```
-
-**2. 在 `internal/provider/builtin/builtin.go` 注册驱动：**
-
-```go
-import (
-    "neo-code/internal/provider/anthropic"
-    "neo-code/internal/provider/openai"
-)
-
-func Register(registry *provider.Registry) error {
-    if registry == nil {
-        return errors.New("builtin provider registry is nil")
-    }
-    if err := registry.Register(openai.Driver()); err != nil {
-        return err
-    }
-    return registry.Register(anthropic.Driver())  // 新增
-}
-```
-
-**3. 在 `internal/config/builtin_providers.go` 添加配置：**
-
-```go
-const (
-    // ... 现有常量 ...
-
-    AnthropicName             = "anthropic"
-    AnthropicDefaultBaseURL   = "https://api.anthropic.com/v1"
-    AnthropicDefaultModel     = "claude-sonnet-4-20250514"
-    AnthropicDefaultAPIKeyEnv = "ANTHROPIC_API_KEY"
-)
-
-func AnthropicProvider() ProviderConfig {
-    return ProviderConfig{
-        Name:      AnthropicName,
-        Driver:    "anthropic",               // 使用新的 anthropic 驱动
-        BaseURL:   AnthropicDefaultBaseURL,
-        Model:     AnthropicDefaultModel,
-        APIKeyEnv: AnthropicDefaultAPIKeyEnv,
-    }
-}
-
-func DefaultProviders() []ProviderConfig {
-    return []ProviderConfig{
-        OpenAIProvider(),
-        GeminiProvider(),
-        OpenLLProvider(),
-        AnthropicProvider(),  // 新增
-    }
-}
-```
-
-## 关键接口与类型
-
-### 核心接口
-
-| 类型 | 位置 | 说明 |
-|------|------|------|
-| `Provider` | `internal/provider/types.go` | 核心接口，定义 `Chat` 方法 |
-| `DriverDefinition` | `internal/provider/registry.go` | 驱动定义：`Name` + `Build` 构造函数 |
-| `Registry` | `internal/provider/registry.go` | 驱动注册中心 |
-
-### 数据结构
-
-| 类型 | 位置 | 说明 |
-|------|------|------|
-| `ChatRequest` | `internal/provider/types.go` | 请求：`Model`、`SystemPrompt`、`Messages`、`Tools` |
-| `ChatResponse` | `internal/provider/types.go` | 响应：`Message`、`FinishReason`、`Usage` |
-| `StreamEvent` | `internal/provider/types.go` | 流式事件：`TextDelta`、`ToolCallStart` |
-| `ProviderConfig` | `internal/config/model.go` | 配置：`Name`、`Driver`、`BaseURL`、`Model`、`APIKeyEnv` |
-
-## 设计约束
-
-### 必须遵守
-
-✅ **配置集中管理**
-- 所有内置 provider 配置统一在 `internal/config/builtin_providers.go`
-- 不再为每个 provider 创建独立的包
-
-✅ **API Key 安全**
-- 只从环境变量读取，不写入 `config.yaml`
-- 不硬编码在源码中
-
-✅ **驱动职责清晰**
-- 驱动只负责协议构造与响应解析
-- 不持有 provider 元数据；模型目录由 driver 发现，缓存与合并由 service 处理
-
-✅ **架构分层**
-- 厂商差异收敛在 `internal/provider/` 内
-- `runtime`、`tui` 等上层模块只依赖统一的 `Provider` 接口
-- `base_url` 不在 TUI 中展示给用户
-
-### 最佳实践
-
-1. **优先复用现有驱动**
-   - 大多数 OpenAI 兼容服务无需编写新驱动
-   - 只需在配置层添加即可
-
-2. **配置即代码**
-   - provider 配置随代码版本发布
-   - 用户无需手动配置 providers 列表
-
-3. **测试覆盖**
-   - 新驱动必须添加完整的单元测试
-   - 使用 `httptest.NewServer` 模拟 HTTP 调用
-   - 不使用真实 API Key
-
-## 示例：当前内置 Provider
-
-```go
-// internal/config/builtin_providers.go
-
-func DefaultProviders() []ProviderConfig {
-    return []ProviderConfig{
-        OpenAIProvider(),  // OpenAI 官方 API
-        GeminiProvider(),  // Google Gemini (OpenAI-compatible)
-        OpenLLProvider(),  // OpenLL 服务 (OpenAI-compatible)
-        QiniuProvider(),   // 七牛云推理服务 (OpenAI-compatible)
-    }
-}
-```
-
-所有内置 provider 都通过代码集中注册。模型选择器展示的候选模型由默认模型、动态发现结果和本地缓存共同组成。
-
-## custom provider 模型元数据补齐
-
-对于复用 `openaicompat` 驱动的 custom provider，如果上游 `GET /models` 不能返回可靠的上下文窗口信息，可以在：
-
-```text
-~/.neocode/providers/<provider-name>/provider.yaml
-```
-
-中显式声明 `models`：
+示例（OpenAI-compatible + responses 直连）：
 
 ```yaml
 name: company-gateway
 driver: openaicompat
-base_url: https://llm.example.com/v1
+base_url: https://llm.example.com/v1/text/chatcompletion_v2
 api_key_env: COMPANY_GATEWAY_API_KEY
 model_source: discover
-chat_endpoint_path: /chat/completions
+chat_api_mode: responses
+chat_endpoint_path: /
 discovery_endpoint_path: /models
-models:
-  - id: deepseek-coder
-    name: DeepSeek Coder
-    context_window: 131072
-    max_output_tokens: 8192
 ```
 
-约束如下：
+说明：
 
-- `models[].id` 必须非空。
-- `models[].context_window` 和 `models[].max_output_tokens` 如果显式配置，必须大于 `0`。
-- 同一个 `provider.yaml` 中重复的模型 `id` 会在加载阶段直接报错。
-- 这些元数据会进入统一的 model catalog 合并链路，优先级仍为“配置模型元数据优先于 discovery/default”。
+- `chat_api_mode` 仅 `openaicompat` 生效，可选值：`chat_completions` / `responses`。
+- `chat_endpoint_path` 为空或 `/` 表示直连 `base_url`，不会自动补子路径。
+- `model_source: manual` 时必须提供 `models`，且会忽略 `discovery_endpoint_path`。
+
+## 测试要求
+
+新增或修改 provider 后，至少执行：
+
+```bash
+go test ./internal/provider/...
+go test ./internal/config/...
+go test ./internal/runtime/...
+```
+
+涉及协议变更时，优先补：
+
+- 请求组装与响应解析
+- tool call 解析
+- 流式事件映射
+- discovery 错误分类与边界

@@ -8,11 +8,12 @@ func TestProviderIdentityKeyIncludesDriverSpecificFields(t *testing.T) {
 	identity := ProviderIdentity{
 		Driver:                "openaicompat",
 		BaseURL:               "https://api.example.com/v1",
+		ChatAPIMode:           ChatAPIModeResponses,
 		ChatEndpointPath:      "/responses",
 		DiscoveryEndpointPath: "/v2/models",
 	}
 
-	if got, want := identity.Key(), "openaicompat|https://api.example.com/v1|/responses|/v2/models"; got != want {
+	if got, want := identity.Key(), "openaicompat|https://api.example.com/v1|responses|/responses|/v2/models"; got != want {
 		t.Fatalf("expected identity key %q, got %q", want, got)
 	}
 }
@@ -173,17 +174,34 @@ func TestNormalizeProviderIdentityOpenAICompatKeepsOnlyPaths(t *testing.T) {
 	identity, err := NormalizeProviderIdentity(ProviderIdentity{
 		Driver:                DriverOpenAICompat,
 		BaseURL:               "https://api.example.com/v1",
+		ChatAPIMode:           " responses ",
 		ChatEndpointPath:      "/responses",
 		DiscoveryEndpointPath: "/models",
 	})
 	if err != nil {
 		t.Fatalf("NormalizeProviderIdentity() error = %v", err)
 	}
+	if identity.ChatAPIMode != ChatAPIModeResponses {
+		t.Fatalf("expected chat api mode %q, got %q", ChatAPIModeResponses, identity.ChatAPIMode)
+	}
 	if identity.ChatEndpointPath != "/responses" {
 		t.Fatalf("expected chat endpoint path %q, got %q", "/responses", identity.ChatEndpointPath)
 	}
 	if identity.DiscoveryEndpointPath != DiscoveryEndpointPathModels {
 		t.Fatalf("expected discovery endpoint %q, got %q", DiscoveryEndpointPathModels, identity.DiscoveryEndpointPath)
+	}
+}
+
+func TestNormalizeProviderIdentityRejectsInvalidChatAPIMode(t *testing.T) {
+	t.Parallel()
+
+	_, err := NormalizeProviderIdentity(ProviderIdentity{
+		Driver:      DriverOpenAICompat,
+		BaseURL:     "https://api.example.com/v1",
+		ChatAPIMode: "unknown",
+	})
+	if err == nil {
+		t.Fatal("expected invalid chat_api_mode to fail")
 	}
 }
 

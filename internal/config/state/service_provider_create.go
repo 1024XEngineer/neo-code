@@ -34,6 +34,7 @@ type CreateCustomProviderInput struct {
 	Name                  string
 	Driver                string
 	BaseURL               string
+	ChatAPIMode           string
 	ChatEndpointPath      string
 	APIKeyEnv             string
 	APIKey                string
@@ -46,6 +47,7 @@ type createCustomProviderNormalizedInput struct {
 	Name                  string
 	Driver                string
 	BaseURL               string
+	ChatAPIMode           string
 	ChatEndpointPath      string
 	APIKeyEnv             string
 	APIKey                string
@@ -133,6 +135,7 @@ func (s *Service) CreateCustomProvider(ctx context.Context, input CreateCustomPr
 		Name:                  normalized.Name,
 		Driver:                normalized.Driver,
 		BaseURL:               normalized.BaseURL,
+		ChatAPIMode:           normalized.ChatAPIMode,
 		ChatEndpointPath:      normalized.ChatEndpointPath,
 		APIKeyEnv:             normalized.APIKeyEnv,
 		ModelSource:           normalized.ModelSource,
@@ -180,6 +183,7 @@ func normalizeCreateCustomProviderInput(input CreateCustomProviderInput) (create
 		Name:                  strings.TrimSpace(input.Name),
 		Driver:                strings.TrimSpace(input.Driver),
 		BaseURL:               strings.TrimSpace(input.BaseURL),
+		ChatAPIMode:           strings.TrimSpace(input.ChatAPIMode),
 		ChatEndpointPath:      strings.TrimSpace(input.ChatEndpointPath),
 		APIKeyEnv:             strings.TrimSpace(input.APIKeyEnv),
 		APIKey:                strings.TrimSpace(input.APIKey),
@@ -217,6 +221,7 @@ func normalizeCreateCustomProviderInput(input CreateCustomProviderInput) (create
 		Name:                  normalized.Name,
 		Driver:                normalized.Driver,
 		BaseURL:               normalized.BaseURL,
+		ChatAPIMode:           normalized.ChatAPIMode,
 		ChatEndpointPath:      normalized.ChatEndpointPath,
 		APIKeyEnv:             normalized.APIKeyEnv,
 		DiscoveryEndpointPath: normalized.DiscoveryEndpointPath,
@@ -230,6 +235,7 @@ func normalizeCreateCustomProviderInput(input CreateCustomProviderInput) (create
 	normalized.Name = normalizedProviderInput.Name
 	normalized.Driver = normalizedProviderInput.Driver
 	normalized.BaseURL = normalizedProviderInput.BaseURL
+	normalized.ChatAPIMode = normalizedProviderInput.ChatAPIMode
 	normalized.ChatEndpointPath = normalizedProviderInput.ChatEndpointPath
 	normalized.APIKeyEnv = normalizedProviderInput.APIKeyEnv
 	normalized.ModelSource = normalizedProviderInput.ModelSource

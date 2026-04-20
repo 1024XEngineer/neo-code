@@ -17,8 +17,8 @@ const errorPrefix = "openaicompat provider: "
 const (
 	chatEndpointPathCompletions = "/chat/completions"
 	chatEndpointPathResponses   = "/responses"
-	executionModeCompletions    = "chat_completions"
-	executionModeResponses      = "responses"
+	executionModeCompletions    = provider.ChatAPIModeChatCompletions
+	executionModeResponses      = provider.ChatAPIModeResponses
 )
 
 // validateRuntimeConfig 校验 OpenAI-compatible 运行时最小配置，避免请求阶段才暴露空配置错误。
@@ -115,6 +115,13 @@ func resolveExecutionMode(cfg provider.RuntimeConfig) (string, error) {
 			fmt.Sprintf("openaicompat provider: driver %q is unsupported", cfg.Driver),
 		)
 	}
+	explicitMode, err := provider.NormalizeProviderChatAPIMode(cfg.ChatAPIMode)
+	if err != nil {
+		return "", provider.NewDiscoveryConfigError(err.Error())
+	}
+	if explicitMode != "" {
+		return explicitMode, nil
+	}
 
 	normalizedPath, err := provider.NormalizeProviderChatEndpointPath(cfg.ChatEndpointPath)
 	if err != nil {
@@ -122,10 +129,12 @@ func resolveExecutionMode(cfg provider.RuntimeConfig) (string, error) {
 	}
 	trimmedPath := strings.Trim(strings.ToLower(strings.TrimSpace(normalizedPath)), "/")
 	switch {
-	case normalizedPath == "", normalizedPath == "/", trimmedPath == "chat/completions", strings.HasSuffix(trimmedPath, "/chat/completions"):
+	case trimmedPath == "chat/completions", strings.HasSuffix(trimmedPath, "/chat/completions"):
 		return executionModeCompletions, nil
 	case trimmedPath == "responses", strings.HasSuffix(trimmedPath, "/responses"):
 		return executionModeResponses, nil
+	case normalizedPath == "", normalizedPath == "/":
+		return provider.DefaultProviderChatAPIMode(), nil
 	default:
 		return "", provider.NewDiscoveryConfigError(
 			fmt.Sprintf("openaicompat provider: unsupported chat endpoint path %q", normalizedPath),
