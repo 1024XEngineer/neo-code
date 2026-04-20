@@ -36,10 +36,40 @@ func TestNormalizeProviderIdentityUsesDriverSpecificNormalization(t *testing.T) 
 		t.Fatalf("expected normalized base url %q, got %q", "https://api.example.com/v1", identity.BaseURL)
 	}
 	if identity.ChatEndpointPath != "" {
-		t.Fatalf("expected default chat/completions path to be omitted from identity, got %q", identity.ChatEndpointPath)
+		t.Fatalf("expected empty chat endpoint path to stay empty in identity, got %q", identity.ChatEndpointPath)
 	}
 	if identity.DiscoveryEndpointPath != "/models" {
 		t.Fatalf("expected normalized discovery endpoint path %q, got %q", "/models", identity.DiscoveryEndpointPath)
+	}
+}
+
+func TestNormalizeProviderIdentityOpenAICompatPreservesChatEndpointSemanticDifference(t *testing.T) {
+	t.Parallel()
+
+	directIdentity, err := NormalizeProviderIdentity(ProviderIdentity{
+		Driver:                DriverOpenAICompat,
+		BaseURL:               "https://api.example.com/v1",
+		ChatEndpointPath:      "",
+		DiscoveryEndpointPath: "/models",
+	})
+	if err != nil {
+		t.Fatalf("NormalizeProviderIdentity() direct error = %v", err)
+	}
+	chatIdentity, err := NormalizeProviderIdentity(ProviderIdentity{
+		Driver:                DriverOpenAICompat,
+		BaseURL:               "https://api.example.com/v1",
+		ChatEndpointPath:      "/chat/completions",
+		DiscoveryEndpointPath: "/models",
+	})
+	if err != nil {
+		t.Fatalf("NormalizeProviderIdentity() chat error = %v", err)
+	}
+
+	if directIdentity.Key() == chatIdentity.Key() {
+		t.Fatalf("expected distinct identity keys for direct mode and /chat/completions, got %q", directIdentity.Key())
+	}
+	if chatIdentity.ChatEndpointPath != "/chat/completions" {
+		t.Fatalf("expected /chat/completions to be preserved, got %q", chatIdentity.ChatEndpointPath)
 	}
 }
 

@@ -94,6 +94,17 @@ func ToOpenAIMessage(ctx context.Context, message providertypes.Message, assetRe
 	return msg, err
 }
 
+// ToOpenAIMessageWithBudget 将通用 Message 转换为 OpenAI 协议消息格式，并应用会话附件预算限制。
+func ToOpenAIMessageWithBudget(
+	ctx context.Context,
+	message providertypes.Message,
+	assetReader providertypes.SessionAssetReader,
+	remainingAssetBudget int64,
+	assetLimits providertypes.SessionAssetLimits,
+) (Message, int64, error) {
+	return toOpenAIMessageWithBudget(ctx, message, assetReader, remainingAssetBudget, assetLimits)
+}
+
 // toOpenAIMessageWithBudget 将通用 Message 转换为 OpenAI 协议消息格式，并记录 session_asset 消耗字节数。
 func toOpenAIMessageWithBudget(
 	ctx context.Context,

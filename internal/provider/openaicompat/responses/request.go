@@ -33,11 +33,21 @@ func BuildRequest(ctx context.Context, cfg provider.RuntimeConfig, req providert
 		payload.Instructions = req.SystemPrompt
 	}
 
+	assetLimits := providertypes.NormalizeSessionAssetLimits(cfg.SessionAssetLimits)
+	var usedSessionAssetBytes int64
 	for _, message := range req.Messages {
-		items, err := toResponsesInputItems(ctx, message, req.SessionAssetReader)
+		remainingSessionAssetBytes := assetLimits.MaxSessionAssetsTotalBytes - usedSessionAssetBytes
+		items, consumedBytes, err := toResponsesInputItems(
+			ctx,
+			message,
+			req.SessionAssetReader,
+			remainingSessionAssetBytes,
+			assetLimits,
+		)
 		if err != nil {
 			return Request{}, err
 		}
+		usedSessionAssetBytes += consumedBytes
 		payload.Input = append(payload.Input, items...)
 	}
 
@@ -62,20 +72,28 @@ func toResponsesInputItems(
 	ctx context.Context,
 	message providertypes.Message,
 	assetReader providertypes.SessionAssetReader,
-) ([]InputItem, error) {
-	openaiMessage, err := chatcompletions.ToOpenAIMessage(ctx, message, assetReader)
+	remainingAssetBudget int64,
+	assetLimits providertypes.SessionAssetLimits,
+) ([]InputItem, int64, error) {
+	openaiMessage, consumedBytes, err := chatcompletions.ToOpenAIMessageWithBudget(
+		ctx,
+		message,
+		assetReader,
+		remainingAssetBudget,
+		assetLimits,
+	)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
 	switch strings.TrimSpace(openaiMessage.Role) {
 	case providertypes.RoleSystem:
-		return nil, nil
+		return nil, consumedBytes, nil
 	case providertypes.RoleUser, providertypes.RoleAssistant:
 		items := make([]InputItem, 0, 1+len(openaiMessage.ToolCalls))
 		contentParts, err := toResponsesContentParts(openaiMessage.Content)
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		if len(contentParts) > 0 {
 			items = append(items, InputItem{
@@ -96,23 +114,23 @@ func toResponsesInputItems(
 				})
 			}
 		}
-		return items, nil
+		return items, consumedBytes, nil
 	case providertypes.RoleTool:
 		callID := strings.TrimSpace(openaiMessage.ToolCallID)
 		if callID == "" {
-			return nil, errors.New(errorPrefix + "tool result message requires tool_call_id")
+			return nil, 0, errors.New(errorPrefix + "tool result message requires tool_call_id")
 		}
 		output, err := renderToolOutput(openaiMessage.Content)
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		return []InputItem{{
 			Type:   "function_call_output",
 			CallID: callID,
 			Output: output,
-		}}, nil
+		}}, consumedBytes, nil
 	default:
-		return nil, fmt.Errorf("%sunsupported message role %q", errorPrefix, openaiMessage.Role)
+		return nil, 0, fmt.Errorf("%sunsupported message role %q", errorPrefix, openaiMessage.Role)
 	}
 }
 

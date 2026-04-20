@@ -175,9 +175,6 @@ func NormalizeProviderIdentity(identity ProviderIdentity) (ProviderIdentity, err
 		if err != nil {
 			return ProviderIdentity{}, err
 		}
-		if chatEndpointPath == "/chat/completions" {
-			chatEndpointPath = ""
-		}
 		return ProviderIdentity{
 			Driver:                normalizedDriver,
 			BaseURL:               normalizedBaseURL,

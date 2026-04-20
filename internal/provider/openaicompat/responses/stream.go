@@ -58,6 +58,7 @@ func ConsumeStream(
 				Function: responseFunctionCall{
 					Arguments: event.Delta,
 				},
+				ArgumentsMode: responseToolCallArgumentsMergeAppend,
 			}
 			if err := mergeToolCallDelta(ctx, events, toolCalls, delta); err != nil {
 				return err
@@ -65,6 +66,10 @@ func ConsumeStream(
 		case "response.output_item.added", "response.output_item.done":
 			if event.Item == nil || strings.TrimSpace(event.Item.Type) != "function_call" {
 				return nil
+			}
+			argumentsMode := responseToolCallArgumentsMergeAppend
+			if strings.TrimSpace(event.Type) == "response.output_item.done" {
+				argumentsMode = responseToolCallArgumentsMergeReplace
 			}
 			toolIndex := resolveToolCallIndex(event.OutputIndex, event.Item.ID, itemToolCallMap, &nextToolCallSlot)
 			toolCallID := strings.TrimSpace(event.Item.CallID)
@@ -78,6 +83,7 @@ func ConsumeStream(
 					Name:      strings.TrimSpace(event.Item.Name),
 					Arguments: event.Item.Arguments,
 				},
+				ArgumentsMode: argumentsMode,
 			}
 			if err := mergeToolCallDelta(ctx, events, toolCalls, delta); err != nil {
 				return err
@@ -194,10 +200,18 @@ type responseFunctionCall struct {
 }
 
 type responseToolCallDelta struct {
-	Index    int
-	ID       string
-	Function responseFunctionCall
+	Index         int
+	ID            string
+	Function      responseFunctionCall
+	ArgumentsMode responseToolCallArgumentsMergeMode
 }
+
+type responseToolCallArgumentsMergeMode int
+
+const (
+	responseToolCallArgumentsMergeAppend responseToolCallArgumentsMergeMode = iota
+	responseToolCallArgumentsMergeReplace
+)
 
 // mergeToolCallDelta 将单个 tool call 增量合并到累积状态，并在必要时发出统一事件。
 func mergeToolCallDelta(
@@ -227,9 +241,29 @@ func mergeToolCallDelta(
 	}
 
 	if args := delta.Function.Arguments; args != "" {
-		call.Arguments += args
-		if err := provider.EmitToolCallDelta(ctx, events, delta.Index, call.ID, args); err != nil {
-			return err
+		switch delta.ArgumentsMode {
+		case responseToolCallArgumentsMergeReplace:
+			if call.Arguments == args {
+				return nil
+			}
+			emitDelta := args
+			if strings.HasPrefix(args, call.Arguments) {
+				emitDelta = strings.TrimPrefix(args, call.Arguments)
+			}
+			call.Arguments = args
+			if emitDelta != "" {
+				if err := provider.EmitToolCallDelta(ctx, events, delta.Index, call.ID, emitDelta); err != nil {
+					return err
+				}
+			}
+		default:
+			if strings.HasSuffix(call.Arguments, args) {
+				return nil
+			}
+			call.Arguments += args
+			if err := provider.EmitToolCallDelta(ctx, events, delta.Index, call.ID, args); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

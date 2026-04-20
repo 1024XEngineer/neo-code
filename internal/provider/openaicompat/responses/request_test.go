@@ -2,12 +2,26 @@ package responses
 
 import (
 	"context"
+	"io"
 	"strings"
 	"testing"
 
 	"neo-code/internal/provider"
 	providertypes "neo-code/internal/provider/types"
 )
+
+type stubAssetReader struct {
+	data map[string][]byte
+	mime map[string]string
+}
+
+func (s *stubAssetReader) Open(_ context.Context, assetID string) (io.ReadCloser, string, error) {
+	content, ok := s.data[assetID]
+	if !ok {
+		return nil, "", io.EOF
+	}
+	return io.NopCloser(strings.NewReader(string(content))), s.mime[assetID], nil
+}
 
 func TestBuildRequestUsesDefaultModelAndMapsMessages(t *testing.T) {
 	t.Parallel()
@@ -112,6 +126,44 @@ func TestBuildRequestValidationErrors(t *testing.T) {
 		})
 		if err == nil || !strings.Contains(err.Error(), "tool result message requires tool_call_id") {
 			t.Fatalf("expected tool_call_id error, got %v", err)
+		}
+	})
+
+	t.Run("session asset total budget respects runtime limits", func(t *testing.T) {
+		t.Parallel()
+
+		assetReader := &stubAssetReader{
+			data: map[string][]byte{
+				"asset_1": []byte("PN"),
+				"asset_2": []byte("PN"),
+			},
+			mime: map[string]string{
+				"asset_1": "image/png",
+				"asset_2": "image/png",
+			},
+		}
+
+		_, err := BuildRequest(context.Background(), provider.RuntimeConfig{
+			DefaultModel: "m",
+			SessionAssetLimits: providertypes.SessionAssetLimits{
+				MaxSessionAssetBytes:       2,
+				MaxSessionAssetsTotalBytes: 3,
+			},
+		}, providertypes.GenerateRequest{
+			Messages: []providertypes.Message{
+				{
+					Role:  providertypes.RoleUser,
+					Parts: []providertypes.ContentPart{providertypes.NewSessionAssetImagePart("asset_1", "image/png")},
+				},
+				{
+					Role:  providertypes.RoleUser,
+					Parts: []providertypes.ContentPart{providertypes.NewSessionAssetImagePart("asset_2", "image/png")},
+				},
+			},
+			SessionAssetReader: assetReader,
+		})
+		if err == nil || !strings.Contains(err.Error(), "session_asset total exceeds 3 bytes") {
+			t.Fatalf("expected runtime session asset total budget error, got %v", err)
 		}
 	})
 }

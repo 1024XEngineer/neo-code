@@ -65,6 +65,49 @@ func TestConsumeStreamCompletedWithToolCalls(t *testing.T) {
 	}
 }
 
+func TestConsumeStreamToolCallArgumentsAddedDeltaDoneNoDuplicate(t *testing.T) {
+	t.Parallel()
+
+	sseBody := strings.Join([]string{
+		`data: {"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","id":"item_1","call_id":"call_1","name":"read_file","arguments":"{\"path\":\"README.md\"}"}}`,
+		"",
+		`data: {"type":"response.function_call_arguments.delta","output_index":0,"item_id":"item_1","delta":"{\"path\":\"README.md\"}"}`,
+		"",
+		`data: {"type":"response.output_item.done","output_index":0,"item":{"type":"function_call","id":"item_1","call_id":"call_1","name":"read_file","arguments":"{\"path\":\"README.md\"}"}}`,
+		"",
+		`data: {"type":"response.completed","response":{"status":"completed"}}`,
+		"",
+		"data: [DONE]",
+		"",
+	}, "\n")
+
+	events := make(chan providertypes.StreamEvent, 16)
+	err := ConsumeStream(context.Background(), strings.NewReader(sseBody), events)
+	if err != nil {
+		t.Fatalf("ConsumeStream() error = %v", err)
+	}
+
+	collected := drainStreamEvents(events)
+	if len(collected) != 3 {
+		t.Fatalf("expected 3 events, got %d", len(collected))
+	}
+
+	start, err := collected[0].ToolCallStartValue()
+	if err != nil || start.Name != "read_file" {
+		t.Fatalf("expected tool start event, got err=%v event=%+v", err, collected[0])
+	}
+	delta, err := collected[1].ToolCallDeltaValue()
+	if err != nil {
+		t.Fatalf("expected tool delta event, got err=%v event=%+v", err, collected[1])
+	}
+	if delta.ArgumentsDelta != `{"path":"README.md"}` {
+		t.Fatalf("expected single non-duplicated arguments delta, got %q", delta.ArgumentsDelta)
+	}
+	if _, err := collected[2].MessageDoneValue(); err != nil {
+		t.Fatalf("expected message done event, got err=%v event=%+v", err, collected[2])
+	}
+}
+
 func TestConsumeStreamIncompleteAndFailures(t *testing.T) {
 	t.Parallel()
 
