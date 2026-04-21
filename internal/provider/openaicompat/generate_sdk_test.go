@@ -152,3 +152,17 @@ func TestMapOpenAIError(t *testing.T) {
 		t.Fatal("did not expect non-openai error to be mapped")
 	}
 }
+
+func TestWrapSDKRequestError(t *testing.T) {
+	t.Parallel()
+
+	wrapped := wrapSDKRequestError(io.EOF, "send request")
+	if !strings.Contains(wrapped.Error(), "send request") {
+		t.Fatalf("expected wrapped action in error, got %v", wrapped)
+	}
+
+	mapped := wrapSDKRequestError(&openai.Error{Message: "invalid key", StatusCode: 401}, "send request")
+	if !strings.Contains(mapped.Error(), "auth_failed") {
+		t.Fatalf("expected mapped provider error, got %v", mapped)
+	}
+}

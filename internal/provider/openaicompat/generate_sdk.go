@@ -236,10 +236,7 @@ func (p *Provider) generateChatCompletionsWithCompatibleStream(
 		option.WithHeader("Accept", "text/event-stream"),
 	)
 	if err != nil {
-		if mapped, ok := mapOpenAIError(err); ok {
-			return mapped
-		}
-		return fmt.Errorf("%ssend request: %w", errorPrefix, err)
+		return wrapSDKRequestError(err, "send request")
 	}
 	defer resp.Body.Close()
 
@@ -276,7 +273,7 @@ func (p *Provider) generateSDKResponses(
 		option.WithHeader("Accept", "text/event-stream"),
 	)
 	if err != nil {
-		return fmt.Errorf("%ssend request: %w", errorPrefix, err)
+		return wrapSDKRequestError(err, "send request")
 	}
 	defer resp.Body.Close()
 
@@ -285,6 +282,14 @@ func (p *Provider) generateSDKResponses(
 	}
 
 	return responses.EmitFromStream(ctx, resp.Body, events)
+}
+
+// wrapSDKRequestError 将 SDK 请求错误映射为统一 ProviderError；无法映射时保留原始错误链。
+func wrapSDKRequestError(err error, action string) error {
+	if mapped, ok := mapOpenAIError(err); ok {
+		return mapped
+	}
+	return fmt.Errorf("%s%s: %w", errorPrefix, strings.TrimSpace(action), err)
 }
 
 func (p *Provider) newSDKClient() openai.Client {
