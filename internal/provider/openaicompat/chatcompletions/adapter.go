@@ -171,12 +171,10 @@ func ConsumeStream(
 	}
 
 	for {
-		if !done {
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			default:
-			}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
 		}
 
 		line, err := reader.ReadLine()
@@ -208,10 +206,21 @@ func ConsumeStream(
 					return flushErr
 				}
 				done = true
+				return provider.EmitMessageDone(ctx, events, finishReason, &usage)
 			} else {
 				dataLines = append(dataLines, data)
 			}
 		case line == "":
+			if flushErr := flushDataLines(); flushErr != nil {
+				return flushErr
+			}
+			if done {
+				return provider.EmitMessageDone(ctx, events, finishReason, &usage)
+			}
+		default:
+			if len(dataLines) == 0 {
+				break
+			}
 			if flushErr := flushDataLines(); flushErr != nil {
 				return flushErr
 			}

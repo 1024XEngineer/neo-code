@@ -130,8 +130,9 @@ func TestToOpenAIMessageMapsToolCallsAndSessionAsset(t *testing.T) {
 	if err != nil {
 		t.Fatalf("toOpenAIMessageWithBudget() error = %v", err)
 	}
-	if used <= 0 {
-		t.Fatalf("expected consumed session asset bytes, got %d", used)
+	expectedBudgetBytes := provider.EstimateDataURLTransportBytes(int64(len("PNG")), "image/png")
+	if used != expectedBudgetBytes {
+		t.Fatalf("expected consumed session asset bytes=%d, got %d", expectedBudgetBytes, used)
 	}
 	parts, ok := msg.Content.([]MessageContentPart)
 	if !ok || len(parts) != 2 {
@@ -142,5 +143,23 @@ func TestToOpenAIMessageMapsToolCallsAndSessionAsset(t *testing.T) {
 	}
 	if len(msg.ToolCalls) != 1 || msg.ToolCalls[0].Function.Name != "read_file" {
 		t.Fatalf("expected mapped tool call, got %+v", msg.ToolCalls)
+	}
+}
+
+func TestToOpenAIMessageWithBudgetRejectsDataURLTransportOverhead(t *testing.T) {
+	t.Parallel()
+
+	reader := &stubAssetReader{
+		data: map[string][]byte{"asset_1": []byte("PN")},
+		mime: map[string]string{"asset_1": "image/png"},
+	}
+	_, _, err := toOpenAIMessageWithBudget(context.Background(), providertypes.Message{
+		Role: providertypes.RoleUser,
+		Parts: []providertypes.ContentPart{
+			providertypes.NewSessionAssetImagePart("asset_1", "image/png"),
+		},
+	}, reader, 4, session.MaxSessionAssetBytes, provider.DefaultRequestAssetBudget())
+	if err == nil || !strings.Contains(err.Error(), "session_asset total exceeds") {
+		t.Fatalf("expected total budget error, got %v", err)
 	}
 }

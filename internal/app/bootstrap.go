@@ -162,9 +162,16 @@ func BuildRuntime(ctx context.Context, opts BootstrapOptions) (RuntimeBundle, er
 	if err != nil {
 		return RuntimeBundle{}, err
 	}
+	var sessionStore *agentsession.SQLiteStore
 	needCleanup := true
 	defer func() {
-		if needCleanup && toolsCleanup != nil {
+		if !needCleanup {
+			return
+		}
+		if sessionStore != nil {
+			_ = sessionStore.Close()
+		}
+		if toolsCleanup != nil {
 			_ = toolsCleanup()
 		}
 	}()
@@ -176,7 +183,7 @@ func BuildRuntime(ctx context.Context, opts BootstrapOptions) (RuntimeBundle, er
 
 	// Session Store 绑定到启动时的 workdir 哈希分桶，整个应用生命周期内不可变。
 	// 这意味着所有会话都归属到启动时指定的项目目录下，运行时不会因配置变更而迁移存储位置。
-	sessionStore := agentsession.NewStore(loader.BaseDir(), cfg.Workdir)
+	sessionStore = agentsession.NewStore(loader.BaseDir(), cfg.Workdir)
 
 	// 启动时自动清理过期会话，避免数据库无限膨胀。
 	if _, err := cleanupExpiredSessions(ctx, sessionStore, agentsession.DefaultSessionMaxAge); err != nil {

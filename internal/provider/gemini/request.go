@@ -13,8 +13,6 @@ import (
 	"neo-code/internal/session"
 )
 
-const maxSessionAssetsTotalBytes = provider.MaxSessionAssetsTotalBytes
-
 // BuildRequest 将通用 GenerateRequest 直接转换为 Gemini SDK 入参，避免中间协议结构。
 func BuildRequest(
 	ctx context.Context,

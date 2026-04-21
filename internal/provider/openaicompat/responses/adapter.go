@@ -14,7 +14,7 @@ import (
 )
 
 // EmitFromStream 消费 Responses SSE 流并发出统一流式事件。
-// 本函数使用简单的 bufio.Scanner 替代原有的 sse.Reader 以减少依赖。
+// 本函数基于受限行读取器按 SSE 事件边界聚合 data 段，替代原有的 sse.Reader 以减少依赖并控制内存占用。
 func EmitFromStream(
 	ctx context.Context,
 	body io.Reader,
@@ -31,6 +31,13 @@ func EmitFromStream(
 	)
 
 	reader := newBoundedLineReader(body, maxSSELineSize, maxSSEStreamTotalSize)
+	emitDone := func() error {
+		reason := strings.TrimSpace(finishReason)
+		if reason == "" {
+			reason = "stop"
+		}
+		return provider.EmitMessageDone(ctx, events, reason, &usage)
+	}
 	processPayload := func(payload string) error {
 		if strings.TrimSpace(payload) == "[DONE]" {
 			done = true
@@ -40,7 +47,17 @@ func EmitFromStream(
 		if err := json.Unmarshal([]byte(payload), &event); err != nil {
 			return fmt.Errorf("%sdecode stream chunk: %w", errorPrefix, err)
 		}
-		if err := processEvent(ctx, events, &event, &usage, &finishReason, toolCalls, itemToolCallMap, &nextToolCallSlot); err != nil {
+		if err := processEvent(
+			ctx,
+			events,
+			&event,
+			&usage,
+			&finishReason,
+			&done,
+			toolCalls,
+			itemToolCallMap,
+			&nextToolCallSlot,
+		); err != nil {
 			return err
 		}
 		return nil
@@ -68,23 +85,24 @@ func EmitFromStream(
 	}
 
 	for {
-		if !done {
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			default:
-			}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
 		}
 
 		line, err := reader.ReadLine()
 		if err != nil && !errors.Is(err, io.EOF) {
+			if done {
+				if flushErr := flushDataLines(); flushErr != nil {
+					return flushErr
+				}
+				return emitDone()
+			}
 			if flushErr := flushDataLines(); flushErr != nil {
 				return flushErr
 			}
-			if done {
-				break
-			}
-			return fmt.Errorf("%sstream read error: %w", errorPrefix, err)
+			return fmt.Errorf("%w: %w", provider.ErrStreamInterrupted, err)
 		}
 
 		switch {
@@ -99,6 +117,7 @@ func EmitFromStream(
 					return flushErr
 				}
 				done = true
+				return emitDone()
 			} else {
 				dataLines = append(dataLines, data)
 			}
@@ -106,21 +125,31 @@ func EmitFromStream(
 			if flushErr := flushDataLines(); flushErr != nil {
 				return flushErr
 			}
+			if done {
+				return emitDone()
+			}
+		default:
+			if len(dataLines) == 0 {
+				break
+			}
+			if flushErr := flushDataLines(); flushErr != nil {
+				return flushErr
+			}
+			if done {
+				return emitDone()
+			}
 		}
 
 		if errors.Is(err, io.EOF) {
 			if flushErr := flushDataLines(); flushErr != nil {
 				return flushErr
 			}
-			break
+			if done {
+				return emitDone()
+			}
+			return fmt.Errorf("%w: missing completion marker before EOF", provider.ErrStreamInterrupted)
 		}
 	}
-
-	reason := strings.TrimSpace(finishReason)
-	if reason == "" {
-		reason = "stop"
-	}
-	return provider.EmitMessageDone(ctx, events, reason, &usage)
 }
 
 const (
@@ -189,6 +218,7 @@ func processEvent(
 	event *streamEvent,
 	usage *providertypes.Usage,
 	finishReason *string,
+	done *bool,
 	toolCalls map[int]*providertypes.ToolCall,
 	itemToolCallMap map[string]int,
 	nextToolCallSlot *int,
@@ -237,9 +267,11 @@ func processEvent(
 	case "response.completed":
 		extractUsage(usage, event.Response)
 		*finishReason = resolveFinishReason("completed", event.Response)
+		*done = true
 	case "response.incomplete":
 		extractUsage(usage, event.Response)
 		*finishReason = resolveFinishReason("incomplete", event.Response)
+		*done = true
 	case "response.failed":
 		if event.Response != nil && event.Response.Error != nil && strings.TrimSpace(event.Response.Error.Message) != "" {
 			return errors.New(strings.TrimSpace(event.Response.Error.Message))

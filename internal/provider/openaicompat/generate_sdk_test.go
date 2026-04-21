@@ -1,7 +1,9 @@
 package openaicompat
 
 import (
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"testing"
@@ -123,6 +125,20 @@ func TestConvertToSDKMessageMapsMultipartUserContent(t *testing.T) {
 	}
 }
 
+func TestConvertToChatCompletionParamsEnablesUsageInStream(t *testing.T) {
+	t.Parallel()
+
+	params := convertToChatCompletionParams(chatcompletions.Request{
+		Model: "gpt-4o-mini",
+		Messages: []chatcompletions.Message{
+			{Role: "user", Content: "hello"},
+		},
+	})
+	if !params.StreamOptions.IncludeUsage.Valid() || !params.StreamOptions.IncludeUsage.Value {
+		t.Fatalf("expected stream_options.include_usage=true, got %+v", params.StreamOptions)
+	}
+}
+
 func TestShouldFallbackToCompatibleChatStream(t *testing.T) {
 	t.Parallel()
 
@@ -131,6 +147,12 @@ func TestShouldFallbackToCompatibleChatStream(t *testing.T) {
 	}
 	if !shouldFallbackToCompatibleChatStream(errors.New("SDK stream error: invalid character '[' after top-level value")) {
 		t.Fatal("expected fallback for weak SSE decode error")
+	}
+	if !shouldFallbackToCompatibleChatStream(fmt.Errorf("SDK stream error: %w", &json.SyntaxError{Offset: 1})) {
+		t.Fatal("expected fallback for json syntax error")
+	}
+	if !shouldFallbackToCompatibleChatStream(fmt.Errorf("SDK stream error: %w", io.ErrUnexpectedEOF)) {
+		t.Fatal("expected fallback for unexpected EOF")
 	}
 	if shouldFallbackToCompatibleChatStream(errors.New("context deadline exceeded")) {
 		t.Fatal("did not expect fallback for non-decode error")
@@ -150,5 +172,19 @@ func TestMapOpenAIError(t *testing.T) {
 
 	if _, ok := mapOpenAIError(io.EOF); ok {
 		t.Fatal("did not expect non-openai error to be mapped")
+	}
+}
+
+func TestWrapSDKRequestError(t *testing.T) {
+	t.Parallel()
+
+	wrapped := wrapSDKRequestError(io.EOF, "send request")
+	if !strings.Contains(wrapped.Error(), "send request") {
+		t.Fatalf("expected wrapped action in error, got %v", wrapped)
+	}
+
+	mapped := wrapSDKRequestError(&openai.Error{Message: "invalid key", StatusCode: 401}, "send request")
+	if !strings.Contains(mapped.Error(), "auth_failed") {
+		t.Fatalf("expected mapped provider error, got %v", mapped)
 	}
 }

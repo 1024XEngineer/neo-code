@@ -16,7 +16,6 @@ import (
 )
 
 const defaultMaxTokens = 4096
-const 你好maxSessionAssetsTotalBytes = provider.MaxSessionAssetsTotalBytes
 
 // BuildRequest 将通用 GenerateRequest 直接转换为 Anthropic SDK 入参。
 func BuildRequest(ctx context.Context, cfg provider.RuntimeConfig, req providertypes.GenerateRequest) (anthropic.MessageNewParams, error) {

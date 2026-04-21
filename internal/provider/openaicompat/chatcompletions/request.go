@@ -175,7 +175,7 @@ func toOpenAIMessageWithBudget(
 					if assetReader == nil {
 						return Message{}, 0, errors.New("session_asset reader is not configured")
 					}
-					imageURL, readBytes, err := resolveSessionAssetDataURL(
+					imageURL, consumedBudgetBytes, err := resolveSessionAssetDataURL(
 						ctx,
 						assetReader,
 						part.Image.Asset,
@@ -186,7 +186,7 @@ func toOpenAIMessageWithBudget(
 					if err != nil {
 						return Message{}, 0, err
 					}
-					usedAssetBytes += readBytes
+					usedAssetBytes += consumedBudgetBytes
 					contentParts = append(contentParts, MessageContentPart{
 						Type: "image_url",
 						ImageURL: &ImageURL{
@@ -240,6 +240,11 @@ func resolveSessionAssetDataURL(
 	if err != nil {
 		return "", 0, err
 	}
+	normalizedBudget := provider.NormalizeRequestAssetBudget(requestBudget, maxSessionAssetBytes)
+	transportBytes := provider.EstimateDataURLTransportBytes(readBytes, normalizedMime)
+	if transportBytes > remainingBudget {
+		return "", 0, fmt.Errorf("session_asset total exceeds %d bytes", normalizedBudget.MaxSessionAssetsTotalBytes)
+	}
 	encoded := base64.StdEncoding.EncodeToString(data)
-	return fmt.Sprintf("data:%s;base64,%s", normalizedMime, encoded), readBytes, nil
+	return fmt.Sprintf("data:%s;base64,%s", normalizedMime, encoded), transportBytes, nil
 }

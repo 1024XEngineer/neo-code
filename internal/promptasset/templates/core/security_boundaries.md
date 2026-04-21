@@ -1,0 +1,6 @@
+- You operate strictly within the current workspace. Do not read, write, or execute commands targeting files outside the provided workdir.
+- API keys and credentials are referenced by environment variable name only. Never write plaintext secrets into source files, configuration files, or tool arguments.
+- For potentially destructive operations (e.g., `rm`, `git push --force`, schema migrations), call the relevant tool and let the runtime permission layer decide whether to ask, allow, or deny. Do not pre-emptively reject user requests.
+- `bash` commands must be non-interactive, time-bounded, and output-limited. Do not run blocking or infinite processes.
+- Session data and local runtime state are not persisted to external databases. All state lives within the workspace or session files.
+- Do not attempt to bypass the permission layer or work around access restrictions by using alternative tools or paths.

@@ -20,6 +20,8 @@ import (
 const (
 	defaultGatewayRPCRequestTimeout          = 8 * time.Second
 	defaultGatewayRPCRetryCount              = 1
+	defaultGatewayRPCHeartbeatInterval       = 10 * time.Second
+	defaultGatewayRPCHeartbeatTimeout        = 5 * time.Second
 	defaultGatewayNotificationBuffer         = 64
 	defaultGatewayNotificationQueue          = 256
 	defaultGatewayNotificationEnqueueTimeout = 3 * time.Second
@@ -31,6 +33,8 @@ type GatewayRPCClientOptions struct {
 	TokenFile            string
 	RequestTimeout       time.Duration
 	RetryCount           int
+	HeartbeatInterval    time.Duration
+	HeartbeatTimeout     time.Duration
 	Dial                 func(address string) (net.Conn, error)
 	ResolveListenAddress func(override string) (string, error)
 }
@@ -95,11 +99,13 @@ type gatewayRPCResponse struct {
 
 // GatewayRPCClient 维护与 Gateway 的长连接、请求关联与通知分发。
 type GatewayRPCClient struct {
-	listenAddress  string
-	token          string
-	requestTimeout time.Duration
-	retryCount     int
-	dialFn         func(address string) (net.Conn, error)
+	listenAddress     string
+	token             string
+	requestTimeout    time.Duration
+	retryCount        int
+	heartbeatInterval time.Duration
+	heartbeatTimeout  time.Duration
+	dialFn            func(address string) (net.Conn, error)
 
 	closeOnce sync.Once
 	closed    chan struct{}
@@ -108,6 +114,9 @@ type GatewayRPCClient struct {
 	stateMu sync.Mutex
 	conn    net.Conn
 	pending map[string]chan gatewayRPCResponse
+
+	heartbeatCancel context.CancelFunc
+	heartbeatWG     sync.WaitGroup
 
 	notifications              chan gatewayRPCNotification
 	notificationQueue          chan gatewayRPCNotification
@@ -143,6 +152,19 @@ func NewGatewayRPCClient(options GatewayRPCClientOptions) (*GatewayRPCClient, er
 		retryCount = defaultGatewayRPCRetryCount
 	}
 
+	heartbeatInterval := options.HeartbeatInterval
+	if heartbeatInterval <= 0 {
+		heartbeatInterval = defaultGatewayRPCHeartbeatInterval
+	}
+
+	heartbeatTimeout := options.HeartbeatTimeout
+	if heartbeatTimeout <= 0 {
+		heartbeatTimeout = defaultGatewayRPCHeartbeatTimeout
+	}
+	if requestTimeout > 0 && heartbeatTimeout > requestTimeout {
+		heartbeatTimeout = requestTimeout
+	}
+
 	dialFn := options.Dial
 	if dialFn == nil {
 		dialFn = transport.Dial
@@ -153,6 +175,8 @@ func NewGatewayRPCClient(options GatewayRPCClientOptions) (*GatewayRPCClient, er
 		token:                      token,
 		requestTimeout:             requestTimeout,
 		retryCount:                 retryCount,
+		heartbeatInterval:          heartbeatInterval,
+		heartbeatTimeout:           heartbeatTimeout,
 		dialFn:                     dialFn,
 		closed:                     make(chan struct{}),
 		pending:                    make(map[string]chan gatewayRPCResponse),
@@ -236,6 +260,7 @@ func (c *GatewayRPCClient) Close() error {
 	c.closeOnce.Do(func() {
 		close(c.closed)
 		firstErr = c.forceCloseWithError(errors.New("gateway rpc client closed"))
+		c.heartbeatWG.Wait()
 		c.notificationWG.Wait()
 		close(c.notifications)
 	})
@@ -334,24 +359,31 @@ func (c *GatewayRPCClient) writeRequest(conn net.Conn, request protocol.JSONRPCR
 
 func (c *GatewayRPCClient) ensureConnected() (net.Conn, error) {
 	c.stateMu.Lock()
-	defer c.stateMu.Unlock()
-
 	if c.conn != nil {
-		return c.conn, nil
+		conn := c.conn
+		c.stateMu.Unlock()
+		return conn, nil
 	}
 	select {
 	case <-c.closed:
+		c.stateMu.Unlock()
 		return nil, errors.New("gateway rpc client is closed")
 	default:
 	}
 
 	conn, err := c.dialFn(c.listenAddress)
 	if err != nil {
+		c.stateMu.Unlock()
 		return nil, fmt.Errorf("dial gateway %s: %w", c.listenAddress, err)
 	}
+	heartbeatCtx, heartbeatCancel := context.WithCancel(context.Background())
 	c.conn = conn
+	c.heartbeatCancel = heartbeatCancel
+	c.heartbeatWG.Add(1)
 	c.startNotificationDispatcher()
+	c.stateMu.Unlock()
 	go c.readLoop(conn)
+	c.startHeartbeat(heartbeatCtx, conn)
 	return conn, nil
 }
 
@@ -475,7 +507,12 @@ func (c *GatewayRPCClient) resetConnection() {
 	c.stateMu.Lock()
 	conn := c.conn
 	c.conn = nil
+	heartbeatCancel := c.heartbeatCancel
+	c.heartbeatCancel = nil
 	c.stateMu.Unlock()
+	if heartbeatCancel != nil {
+		heartbeatCancel()
+	}
 	if conn != nil {
 		_ = conn.Close()
 	}
@@ -485,9 +522,15 @@ func (c *GatewayRPCClient) forceCloseWithError(cause error) error {
 	c.stateMu.Lock()
 	conn := c.conn
 	c.conn = nil
+	heartbeatCancel := c.heartbeatCancel
+	c.heartbeatCancel = nil
 	pending := c.pending
 	c.pending = make(map[string]chan gatewayRPCResponse)
 	c.stateMu.Unlock()
+
+	if heartbeatCancel != nil {
+		heartbeatCancel()
+	}
 
 	if conn != nil {
 		_ = conn.Close()
@@ -501,6 +544,66 @@ func (c *GatewayRPCClient) forceCloseWithError(cause error) error {
 		ch <- gatewayRPCResponse{TransportErr: transportErr}
 	}
 	return nil
+}
+
+// startHeartbeat 启动连接级保活协程，定期发送 gateway.ping，避免网关在空闲窗口触发读超时断开。
+func (c *GatewayRPCClient) startHeartbeat(ctx context.Context, conn net.Conn) {
+	interval := c.heartbeatInterval
+	if interval <= 0 {
+		interval = defaultGatewayRPCHeartbeatInterval
+	}
+	timeout := c.heartbeatTimeout
+	if timeout <= 0 {
+		timeout = defaultGatewayRPCHeartbeatTimeout
+	}
+
+	go func() {
+		defer c.heartbeatWG.Done()
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-c.closed:
+				return
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
+
+			if !c.isConnectionCurrent(conn) {
+				return
+			}
+
+			pingCtx, cancel := context.WithTimeout(ctx, timeout)
+			err := c.CallWithOptions(
+				pingCtx,
+				protocol.MethodGatewayPing,
+				map[string]any{},
+				nil,
+				GatewayRPCCallOptions{
+					Timeout: timeout,
+					Retries: 0,
+				},
+			)
+			cancel()
+
+			if err == nil {
+				continue
+			}
+			if !c.isConnectionCurrent(conn) {
+				return
+			}
+			log.Printf("warning: gateway rpc heartbeat ping failed: %v", err)
+		}
+	}()
+}
+
+// isConnectionCurrent 判断给定连接是否仍是当前活动连接，用于约束心跳协程不跨连接存活。
+func (c *GatewayRPCClient) isConnectionCurrent(conn net.Conn) bool {
+	c.stateMu.Lock()
+	defer c.stateMu.Unlock()
+	return c.conn == conn
 }
 
 func mapGatewayRPCError(method string, rpcError *protocol.JSONRPCError) error {

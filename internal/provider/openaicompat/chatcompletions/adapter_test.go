@@ -3,8 +3,12 @@ package chatcompletions
 import (
 	"context"
 	"errors"
+	"io"
 	"strings"
 	"testing"
+	"time"
+
+	openai "github.com/openai/openai-go/v3"
 
 	"neo-code/internal/provider"
 	providertypes "neo-code/internal/provider/types"
@@ -83,6 +87,38 @@ func TestConsumeStreamEOFWithoutDoneAndWithoutFinishReason(t *testing.T) {
 	}
 }
 
+func TestConsumeStreamReturnsImmediatelyAfterDoneWithoutEventSeparator(t *testing.T) {
+	t.Parallel()
+
+	reader, writer := io.Pipe()
+	events := make(chan providertypes.StreamEvent, 4)
+	result := make(chan error, 1)
+
+	go func() {
+		result <- ConsumeStream(context.Background(), reader, events)
+	}()
+
+	_, writeErr := io.WriteString(
+		writer,
+		"data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n"+
+			"data: [DONE]\n",
+	)
+	if writeErr != nil {
+		t.Fatalf("write stream payload failed: %v", writeErr)
+	}
+
+	select {
+	case err := <-result:
+		if err != nil {
+			t.Fatalf("ConsumeStream() error = %v", err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("ConsumeStream should return immediately after [DONE]")
+	}
+
+	_ = writer.Close()
+}
+
 func drainEvents(events <-chan providertypes.StreamEvent) []providertypes.StreamEvent {
 	out := make([]providertypes.StreamEvent, 0, len(events))
 	for {
@@ -93,4 +129,111 @@ func drainEvents(events <-chan providertypes.StreamEvent) []providertypes.Stream
 			return out
 		}
 	}
+}
+
+func TestEmitFromSDKStream(t *testing.T) {
+	t.Parallel()
+
+	stream := &fakeSDKStream{
+		chunks: []openai.ChatCompletionChunk{
+			{
+				Choices: []openai.ChatCompletionChunkChoice{
+					{
+						Delta: openai.ChatCompletionChunkChoiceDelta{
+							Content: "hello",
+							ToolCalls: []openai.ChatCompletionChunkChoiceDeltaToolCall{
+								{
+									Index: 0,
+									ID:    "call_1",
+									Function: openai.ChatCompletionChunkChoiceDeltaToolCallFunction{
+										Name:      "read_file",
+										Arguments: `{"path":"README.md"}`,
+									},
+								},
+							},
+						},
+						FinishReason: "",
+					},
+				},
+			},
+			{
+				Usage: openai.CompletionUsage{
+					PromptTokens:     1,
+					CompletionTokens: 2,
+					TotalTokens:      3,
+				},
+				Choices: []openai.ChatCompletionChunkChoice{
+					{
+						Delta:        openai.ChatCompletionChunkChoiceDelta{},
+						FinishReason: "stop",
+					},
+				},
+			},
+		},
+	}
+
+	events := make(chan providertypes.StreamEvent, 8)
+	if err := EmitFromSDKStream(context.Background(), stream, events); err != nil {
+		t.Fatalf("EmitFromSDKStream() error = %v", err)
+	}
+
+	drained := drainEvents(events)
+	if len(drained) != 4 {
+		t.Fatalf("expected 4 events, got %d (%+v)", len(drained), drained)
+	}
+	if _, err := drained[0].TextDeltaValue(); err != nil {
+		t.Fatalf("expected text delta event, got err=%v", err)
+	}
+	if _, err := drained[1].ToolCallStartValue(); err != nil {
+		t.Fatalf("expected tool call start event, got err=%v", err)
+	}
+	if _, err := drained[2].ToolCallDeltaValue(); err != nil {
+		t.Fatalf("expected tool call delta event, got err=%v", err)
+	}
+	done, err := drained[3].MessageDoneValue()
+	if err != nil {
+		t.Fatalf("expected message done event, got err=%v", err)
+	}
+	if done.Usage == nil || done.Usage.TotalTokens != 3 {
+		t.Fatalf("expected usage total tokens 3, got %+v", done.Usage)
+	}
+}
+
+func TestEmitFromSDKStreamErrors(t *testing.T) {
+	t.Parallel()
+
+	events := make(chan providertypes.StreamEvent, 4)
+	if err := EmitFromSDKStream(context.Background(), struct{}{}, events); err == nil {
+		t.Fatal("expected invalid stream type error")
+	}
+
+	errStream := &fakeSDKStream{err: errors.New("decode failed")}
+	if err := EmitFromSDKStream(context.Background(), errStream, events); err == nil || !strings.Contains(err.Error(), "SDK stream error") {
+		t.Fatalf("expected SDK stream error, got %v", err)
+	}
+}
+
+type fakeSDKStream struct {
+	chunks []openai.ChatCompletionChunk
+	index  int
+	err    error
+}
+
+func (s *fakeSDKStream) Next() bool {
+	if s.index >= len(s.chunks) {
+		return false
+	}
+	s.index++
+	return true
+}
+
+func (s *fakeSDKStream) Current() openai.ChatCompletionChunk {
+	if s.index == 0 {
+		return openai.ChatCompletionChunk{}
+	}
+	return s.chunks[s.index-1]
+}
+
+func (s *fakeSDKStream) Err() error {
+	return s.err
 }

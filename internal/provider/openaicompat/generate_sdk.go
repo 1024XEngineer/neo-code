@@ -2,8 +2,10 @@ package openaicompat
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 
@@ -31,6 +33,7 @@ func (p *Provider) generateSDKChatCompletions(
 	params := convertToChatCompletionParams(payload)
 
 	stream := client.Chat.Completions.NewStreaming(ctx, params)
+	defer func() { _ = stream.Close() }()
 	if err := chatcompletions.EmitFromSDKStream(ctx, stream, events); err != nil {
 		if mapped, ok := mapOpenAIError(err); ok {
 			return mapped
@@ -47,6 +50,9 @@ func (p *Provider) generateSDKChatCompletions(
 func convertToChatCompletionParams(req chatcompletions.Request) openai.ChatCompletionNewParams {
 	params := openai.ChatCompletionNewParams{
 		Model: openai.ChatModel(req.Model),
+		StreamOptions: openai.ChatCompletionStreamOptionsParam{
+			IncludeUsage: openai.Bool(true),
+		},
 	}
 
 	messages := make([]openai.ChatCompletionMessageParamUnion, 0, len(req.Messages))
@@ -179,9 +185,27 @@ func shouldFallbackToCompatibleChatStream(err error) bool {
 	if err == nil {
 		return false
 	}
+
+	var syntaxErr *json.SyntaxError
+	if errors.As(err, &syntaxErr) {
+		return true
+	}
+	var typeErr *json.UnmarshalTypeError
+	if errors.As(err, &typeErr) {
+		return true
+	}
+	if errors.Is(err, io.ErrUnexpectedEOF) {
+		return true
+	}
+
 	message := strings.ToLower(strings.TrimSpace(safeErrorMessage(err)))
+	if !strings.Contains(message, "sdk stream error") {
+		return false
+	}
 	return strings.Contains(message, "after top-level value") ||
-		strings.Contains(message, "invalid character") && strings.Contains(message, "[done]")
+		strings.Contains(message, "invalid character") ||
+		strings.Contains(message, "cannot unmarshal") ||
+		strings.Contains(message, "unexpected end of json input")
 }
 
 // mapOpenAIError 将 SDK 错误映射为统一的 ProviderError，便于 runtime 做分级处理。
@@ -236,10 +260,7 @@ func (p *Provider) generateChatCompletionsWithCompatibleStream(
 		option.WithHeader("Accept", "text/event-stream"),
 	)
 	if err != nil {
-		if mapped, ok := mapOpenAIError(err); ok {
-			return mapped
-		}
-		return fmt.Errorf("%ssend request: %w", errorPrefix, err)
+		return wrapSDKRequestError(err, "send request")
 	}
 	defer resp.Body.Close()
 
@@ -276,7 +297,7 @@ func (p *Provider) generateSDKResponses(
 		option.WithHeader("Accept", "text/event-stream"),
 	)
 	if err != nil {
-		return fmt.Errorf("%ssend request: %w", errorPrefix, err)
+		return wrapSDKRequestError(err, "send request")
 	}
 	defer resp.Body.Close()
 
@@ -285,6 +306,14 @@ func (p *Provider) generateSDKResponses(
 	}
 
 	return responses.EmitFromStream(ctx, resp.Body, events)
+}
+
+// wrapSDKRequestError 将 SDK 请求错误映射为统一 ProviderError；无法映射时保留原始错误链。
+func wrapSDKRequestError(err error, action string) error {
+	if mapped, ok := mapOpenAIError(err); ok {
+		return mapped
+	}
+	return fmt.Errorf("%s%s: %w", errorPrefix, strings.TrimSpace(action), err)
 }
 
 func (p *Provider) newSDKClient() openai.Client {
