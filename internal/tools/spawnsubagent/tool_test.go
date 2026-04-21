@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"neo-code/internal/security"
 	agentsession "neo-code/internal/session"
 	"neo-code/internal/subagent"
 	"neo-code/internal/tools"
@@ -276,6 +277,9 @@ func TestToolExecuteInlineMode(t *testing.T) {
 	t.Parallel()
 
 	tool := New()
+	parentToken := &security.CapabilityToken{
+		AllowedTools: []string{"spawn_subagent", "filesystem_read_file"},
+	}
 	invoker := &stubSubAgentInvoker{
 		result: tools.SubAgentRunResult{
 			Role:       subagent.RoleCoder,
@@ -295,9 +299,10 @@ func TestToolExecuteInlineMode(t *testing.T) {
 		Name:            tools.ToolNameSpawnSubAgent,
 		AgentID:         "agent-main",
 		Workdir:         "/tmp/workdir",
+		CapabilityToken: parentToken,
 		SubAgentInvoker: invoker,
 		Arguments: []byte(`{
-			"prompt":"review code quality",
+				"prompt":"review code quality",
 			"id":"inline-1",
 			"role":"coder",
 			"max_steps":3,
@@ -315,6 +320,9 @@ func TestToolExecuteInlineMode(t *testing.T) {
 	}
 	if invoker.last.Timeout != 90*time.Second {
 		t.Fatalf("timeout = %v, want 90s", invoker.last.Timeout)
+	}
+	if invoker.last.ParentCapabilityToken == nil || len(invoker.last.ParentCapabilityToken.AllowedTools) == 0 {
+		t.Fatalf("parent capability token should be forwarded: %+v", invoker.last.ParentCapabilityToken)
 	}
 }
 

@@ -158,6 +158,9 @@ func TestBuildSubAgentInitialMessagesAndOutputParserEdges(t *testing.T) {
 	if _, err := extractSubAgentJSONObject("no json"); err == nil {
 		t.Fatalf("expected missing json error")
 	}
+	if _, err := extractSubAgentJSONObject(`{"example":true}`); err == nil {
+		t.Fatalf("expected required contract keys error")
+	}
 }
 
 func TestRuntimeSubAgentResolveSettingsAndToolExecutorEdges(t *testing.T) {

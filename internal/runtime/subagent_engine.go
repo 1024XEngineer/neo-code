@@ -44,15 +44,6 @@ var subAgentOutputRequiredKeys = []string{
 	"artifacts",
 }
 
-type subAgentOutputJSON struct {
-	Summary     string   `json:"summary"`
-	Findings    []string `json:"findings"`
-	Patches     []string `json:"patches"`
-	Risks       []string `json:"risks"`
-	NextActions []string `json:"next_actions"`
-	Artifacts   []string `json:"artifacts"`
-}
-
 // runtimeSubAgentEngine 提供基于 runtime provider + tools 的子代理执行引擎。
 type runtimeSubAgentEngine struct {
 	service *Service
@@ -421,18 +412,11 @@ func parseSubAgentOutput(text string) (subagent.Output, error) {
 	if err != nil {
 		return subagent.Output{}, err
 	}
-	var payload subAgentOutputJSON
-	if err := json.Unmarshal([]byte(jsonText), &payload); err != nil {
-		return subagent.Output{}, fmt.Errorf("runtime: parse subagent output json: %w", err)
+	payload, err := parseSubAgentOutputPayload(jsonText)
+	if err != nil {
+		return subagent.Output{}, err
 	}
-	return subagent.Output{
-		Summary:     strings.TrimSpace(payload.Summary),
-		Findings:    payload.Findings,
-		Patches:     payload.Patches,
-		Risks:       payload.Risks,
-		NextActions: payload.NextActions,
-		Artifacts:   payload.Artifacts,
-	}, nil
+	return payload, nil
 }
 
 // extractSubAgentJSONObject 从文本中提取最可能的输出 JSON，优先选择包含输出契约字段的对象。
@@ -486,12 +470,65 @@ func extractSubAgentJSONObject(text string) (string, error) {
 		return contractObject, nil
 	}
 	if lastObject != "" {
-		return lastObject, nil
+		return "", errors.New("runtime: subagent output json object missing required contract keys")
 	}
 	if strings.Contains(text, "{") {
 		return "", errors.New("runtime: subagent output contains incomplete json object")
 	}
 	return "", errors.New("runtime: subagent output does not contain json object")
+}
+
+// parseSubAgentOutputPayload 按严格契约解析输出字段，要求必需键存在且类型匹配。
+func parseSubAgentOutputPayload(jsonText string) (subagent.Output, error) {
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(jsonText), &payload); err != nil {
+		return subagent.Output{}, fmt.Errorf("runtime: parse subagent output json: %w", err)
+	}
+	for _, key := range subAgentOutputRequiredKeys {
+		if _, ok := payload[key]; !ok {
+			return subagent.Output{}, fmt.Errorf("runtime: subagent output missing required key %q", key)
+		}
+	}
+
+	var output subagent.Output
+	if err := decodeSubAgentOutputString(payload, "summary", &output.Summary); err != nil {
+		return subagent.Output{}, err
+	}
+	output.Summary = strings.TrimSpace(output.Summary)
+	if err := decodeSubAgentOutputStringList(payload, "findings", &output.Findings); err != nil {
+		return subagent.Output{}, err
+	}
+	if err := decodeSubAgentOutputStringList(payload, "patches", &output.Patches); err != nil {
+		return subagent.Output{}, err
+	}
+	if err := decodeSubAgentOutputStringList(payload, "risks", &output.Risks); err != nil {
+		return subagent.Output{}, err
+	}
+	if err := decodeSubAgentOutputStringList(payload, "next_actions", &output.NextActions); err != nil {
+		return subagent.Output{}, err
+	}
+	if err := decodeSubAgentOutputStringList(payload, "artifacts", &output.Artifacts); err != nil {
+		return subagent.Output{}, err
+	}
+	return output, nil
+}
+
+// decodeSubAgentOutputString 按键解析字符串字段并保留统一错误前缀。
+func decodeSubAgentOutputString(payload map[string]json.RawMessage, key string, target *string) error {
+	if err := json.Unmarshal(payload[key], target); err != nil {
+		return fmt.Errorf("runtime: subagent output key %q must be string: %w", key, err)
+	}
+	return nil
+}
+
+// decodeSubAgentOutputStringList 按键解析字符串数组字段并保留统一错误前缀。
+func decodeSubAgentOutputStringList(payload map[string]json.RawMessage, key string, target *[]string) error {
+	var values []string
+	if err := json.Unmarshal(payload[key], &values); err != nil {
+		return fmt.Errorf("runtime: subagent output key %q must be []string: %w", key, err)
+	}
+	*target = values
+	return nil
 }
 
 // matchesSubAgentOutputContract 判断 JSON 文本是否包含子代理输出契约必需字段。

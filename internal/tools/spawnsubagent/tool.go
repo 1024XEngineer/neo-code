@@ -195,16 +195,17 @@ func (t *Tool) executeInlineMode(
 	}
 
 	runResult, runErr := call.SubAgentInvoker.Run(ctx, tools.SubAgentRunInput{
-		CallerAgent:  strings.TrimSpace(call.AgentID),
-		Role:         role,
-		TaskID:       taskID,
-		Goal:         strings.TrimSpace(input.Prompt),
-		ExpectedOut:  strings.TrimSpace(input.ExpectedOutput),
-		Workdir:      strings.TrimSpace(call.Workdir),
-		MaxSteps:     input.MaxSteps,
-		Timeout:      time.Duration(input.TimeoutSec) * time.Second,
-		AllowedTools: append([]string(nil), input.AllowedTools...),
-		AllowedPaths: append([]string(nil), input.AllowedPaths...),
+		CallerAgent:           strings.TrimSpace(call.AgentID),
+		ParentCapabilityToken: call.CapabilityToken,
+		Role:                  role,
+		TaskID:                taskID,
+		Goal:                  strings.TrimSpace(input.Prompt),
+		ExpectedOut:           strings.TrimSpace(input.ExpectedOutput),
+		Workdir:               strings.TrimSpace(call.Workdir),
+		MaxSteps:              input.MaxSteps,
+		Timeout:               time.Duration(input.TimeoutSec) * time.Second,
+		AllowedTools:          append([]string(nil), input.AllowedTools...),
+		AllowedPaths:          append([]string(nil), input.AllowedPaths...),
 	})
 
 	isError := runErr != nil || runResult.State == subagent.StateFailed || runResult.State == subagent.StateCanceled

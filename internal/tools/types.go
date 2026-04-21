@@ -38,18 +38,19 @@ type SessionMutator interface {
 
 // SubAgentRunInput 描述一次通过工具触发的子代理即时执行请求。
 type SubAgentRunInput struct {
-	RunID        string
-	SessionID    string
-	CallerAgent  string
-	Role         subagent.Role
-	TaskID       string
-	Goal         string
-	ExpectedOut  string
-	Workdir      string
-	MaxSteps     int
-	Timeout      time.Duration
-	AllowedTools []string
-	AllowedPaths []string
+	RunID                 string
+	SessionID             string
+	CallerAgent           string
+	ParentCapabilityToken *security.CapabilityToken
+	Role                  subagent.Role
+	TaskID                string
+	Goal                  string
+	ExpectedOut           string
+	Workdir               string
+	MaxSteps              int
+	Timeout               time.Duration
+	AllowedTools          []string
+	AllowedPaths          []string
 }
 
 // SubAgentRunResult 描述子代理执行完成后的结构化结果。

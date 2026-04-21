@@ -563,6 +563,16 @@ func TestParseSubAgentOutput(t *testing.T) {
 				`{"summary":"s","findings":["f"],"patches":["p"],"risks":["r"],"next_actions":["n"],"artifacts":["a"]}`,
 			}, "\n"),
 		},
+		{
+			name:    "single non-contract object should fail",
+			input:   `{"example":true}`,
+			wantErr: true,
+		},
+		{
+			name:    "contract object with wrong types should fail",
+			input:   `{"summary":123,"findings":["f"],"patches":["p"],"risks":["r"],"next_actions":["n"],"artifacts":["a"]}`,
+			wantErr: true,
+		},
 	}
 
 	for _, tt := range tests {
