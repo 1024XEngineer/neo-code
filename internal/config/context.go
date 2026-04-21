@@ -12,7 +12,7 @@ const (
 	DefaultAutoCompactInputTokenThreshold         = 0
 	DefaultAutoCompactReserveTokens               = 13000
 	DefaultAutoCompactFallbackInputTokenThreshold = 100000
-	DefaultMicroCompactRetainedToolSpans          = 2
+	DefaultMicroCompactRetainedToolSpans          = 6
 	DefaultCompactReadTimeMaxMessageSpans         = 24
 
 	CompactManualStrategyKeepRecent  = "keep_recent"

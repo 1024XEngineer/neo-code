@@ -195,6 +195,9 @@ func TestDefaultBuilderBuildUsesSpanTrimPolicyWhenTrimPolicyIsUnset(t *testing.T
 	got, err := builder.Build(stdcontext.Background(), BuildInput{
 		Messages:  messages,
 		TaskState: agentsession.TaskState{Goal: "keep implementing task"},
+		Compact: CompactOptions{
+			MicroCompactRetainedToolSpans: 2,
+		},
 	})
 	if err != nil {
 		t.Fatalf("Build() error = %v", err)
@@ -261,6 +264,9 @@ func TestDefaultBuilderBuildAppliesMicroCompactAfterTrim(t *testing.T) {
 	got, err := builder.Build(stdcontext.Background(), BuildInput{
 		Messages:  messages,
 		TaskState: agentsession.TaskState{Goal: "keep implementing task"},
+		Compact: CompactOptions{
+			MicroCompactRetainedToolSpans: 2,
+		},
 	})
 	if err != nil {
 		t.Fatalf("Build() error = %v", err)
@@ -278,6 +284,117 @@ func TestDefaultBuilderBuildAppliesMicroCompactAfterTrim(t *testing.T) {
 		t.Fatalf("expected latest tool result to stay visible, got %q", renderDisplayParts(got.Messages[6].Parts))
 	}
 }
+
+func TestDefaultBuilderBuildDefaultsPinCheckerForLiteralBuilder(t *testing.T) {
+	t.Parallel()
+
+	builder := &DefaultBuilder{
+		promptSources: []promptSectionSource{
+			stubPromptSectionSource{sections: []promptSection{{Title: "Stub", Content: "body"}}},
+		},
+	}
+
+	messages := []providertypes.Message{
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("older user")}},
+		{
+			Role: providertypes.RoleAssistant,
+			ToolCalls: []providertypes.ToolCall{
+				{ID: "call-1", Name: "filesystem_write_file", Arguments: `{"path":"README.md"}`},
+			},
+		},
+		{
+			Role:       providertypes.RoleTool,
+			ToolCallID: "call-1",
+			Parts:      []providertypes.ContentPart{providertypes.NewTextPart("README content")},
+			ToolMetadata: map[string]string{
+				"path": "/project/README.md",
+			},
+		},
+		{
+			Role: providertypes.RoleAssistant,
+			ToolCalls: []providertypes.ToolCall{
+				{ID: "call-2", Name: "bash", Arguments: "{}"},
+			},
+		},
+		{Role: providertypes.RoleTool, ToolCallID: "call-2", Parts: []providertypes.ContentPart{providertypes.NewTextPart("recent bash result")}},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("latest explicit instruction")}},
+		{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("current reply")}},
+	}
+
+	got, err := builder.Build(stdcontext.Background(), BuildInput{
+		Messages:  messages,
+		TaskState: agentsession.TaskState{Goal: "keep implementing task"},
+		Compact: CompactOptions{
+			MicroCompactRetainedToolSpans: 1,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	projectedText := renderDisplayParts(got.Messages[2].Parts)
+	if projectedText == microCompactClearedMessage {
+		t.Fatalf("expected pinned README result to avoid cleared placeholder, got %q", projectedText)
+	}
+	if !strings.Contains(projectedText, "README content") {
+		t.Fatalf("expected pinned README result to retain content, got %q", projectedText)
+	}
+}
+
+func TestDefaultBuilderBuildRespectsExplicitPinCheckerOverride(t *testing.T) {
+	t.Parallel()
+
+	builder := &DefaultBuilder{
+		promptSources: []promptSectionSource{
+			stubPromptSectionSource{sections: []promptSection{{Title: "Stub", Content: "body"}}},
+		},
+		microCompactPinChecker: noopPinChecker{},
+	}
+
+	messages := []providertypes.Message{
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("older user")}},
+		{
+			Role: providertypes.RoleAssistant,
+			ToolCalls: []providertypes.ToolCall{
+				{ID: "call-1", Name: "filesystem_write_file", Arguments: `{"path":"README.md"}`},
+			},
+		},
+		{
+			Role:       providertypes.RoleTool,
+			ToolCallID: "call-1",
+			Parts:      []providertypes.ContentPart{providertypes.NewTextPart("README content")},
+			ToolMetadata: map[string]string{
+				"path": "/project/README.md",
+			},
+		},
+		{
+			Role: providertypes.RoleAssistant,
+			ToolCalls: []providertypes.ToolCall{
+				{ID: "call-2", Name: "bash", Arguments: "{}"},
+			},
+		},
+		{Role: providertypes.RoleTool, ToolCallID: "call-2", Parts: []providertypes.ContentPart{providertypes.NewTextPart("recent bash result")}},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("latest explicit instruction")}},
+		{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("current reply")}},
+	}
+
+	got, err := builder.Build(stdcontext.Background(), BuildInput{
+		Messages:  messages,
+		TaskState: agentsession.TaskState{Goal: "keep implementing task"},
+		Compact: CompactOptions{
+			MicroCompactRetainedToolSpans: 1,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if renderDisplayParts(got.Messages[2].Parts) != microCompactClearedMessage {
+		t.Fatalf("expected explicit noop pin checker to allow compaction, got %q", renderDisplayParts(got.Messages[2].Parts))
+	}
+}
+
+type noopPinChecker struct{}
+
+func (noopPinChecker) ShouldPin(string, map[string]string) bool { return false }
 
 func TestNewBuilderWithToolPoliciesAndSummarizers(t *testing.T) {
 	t.Parallel()
@@ -320,7 +437,10 @@ func TestNewBuilderWithToolPoliciesAndSummarizers(t *testing.T) {
 	got, err := builder.Build(stdcontext.Background(), BuildInput{
 		Messages:  messages,
 		TaskState: agentsession.TaskState{Goal: "keep implementing task"},
-		Metadata:  testMetadata(t.TempDir()),
+		Compact: CompactOptions{
+			MicroCompactRetainedToolSpans: 2,
+		},
+		Metadata: testMetadata(t.TempDir()),
 	})
 	if err != nil {
 		t.Fatalf("Build() error = %v", err)

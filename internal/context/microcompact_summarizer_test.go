@@ -55,8 +55,9 @@ func TestMicroCompactWithSummarizerProducesSummary(t *testing.T) {
 	got := microCompactMessagesWithPolicies(
 		messages,
 		stubMicroCompactPolicySource{},
-		0,
+		2,
 		stubMicroCompactSummarizerSource{"bash": bashSummarizer},
+		nil,
 	)
 
 	if renderDisplayParts(got[2].Parts) == microCompactClearedMessage {
@@ -111,12 +112,13 @@ func TestMicroCompactWithoutSummarizerFallsBackToClear(t *testing.T) {
 	got := microCompactMessagesWithPolicies(
 		messages,
 		stubMicroCompactPolicySource{},
-		0,
+		2,
 		stubMicroCompactSummarizerSource{
 			"bash": func(content string, metadata map[string]string, isError bool) string {
 				return "[summary] bash: " + content
 			},
 		},
+		nil,
 	)
 
 	// read_file 没有 summarizer，应回退到清除
@@ -161,12 +163,13 @@ func TestMicroCompactMixedSpanWithSummarizer(t *testing.T) {
 	got := microCompactMessagesWithPolicies(
 		messages,
 		stubMicroCompactPolicySource{},
-		0,
+		2,
 		stubMicroCompactSummarizerSource{
 			"bash": func(content string, metadata map[string]string, isError bool) string {
 				return "[summary] " + content
 			},
 		},
+		nil,
 	)
 
 	// call-1 bash 在旧 span，有 summarizer，应生成摘要
@@ -212,12 +215,13 @@ func TestMicroCompactSummarizerReturnsEmptyFallsBackToClear(t *testing.T) {
 	got := microCompactMessagesWithPolicies(
 		messages,
 		stubMicroCompactPolicySource{},
-		0,
+		2,
 		stubMicroCompactSummarizerSource{
 			"bash": func(content string, metadata map[string]string, isError bool) string {
 				return "" // 返回空
 			},
 		},
+		nil,
 	)
 
 	if renderDisplayParts(got[2].Parts) != microCompactClearedMessage {
@@ -361,7 +365,7 @@ func TestHasCompactableToolMessage(t *testing.T) {
 			{Role: providertypes.RoleTool, ToolCallID: "call-1", Parts: []providertypes.ContentPart{providertypes.NewTextPart("output")}},
 			{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("u")}},
 		}
-		if !hasCompactableToolMessage(messages, span, ids) {
+		if !hasCompactableToolMessage(messages, span, ids, nil, nil) {
 			t.Fatal("expected compactable tool message to be found")
 		}
 	})
@@ -372,7 +376,7 @@ func TestHasCompactableToolMessage(t *testing.T) {
 			{Role: providertypes.RoleTool, ToolCallID: "call-1", IsError: true, Parts: []providertypes.ContentPart{providertypes.NewTextPart("error")}},
 			{Role: providertypes.RoleTool, ToolCallID: "call-2", Parts: []providertypes.ContentPart{providertypes.NewTextPart("other")}},
 		}
-		if hasCompactableToolMessage(messages, span, ids) {
+		if hasCompactableToolMessage(messages, span, ids, nil, nil) {
 			t.Fatal("expected no compactable tool message")
 		}
 	})

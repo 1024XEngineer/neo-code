@@ -25,6 +25,7 @@ context:
   compact:
     manual_strategy: keep_recent
     manual_keep_recent_messages: 10
+    micro_compact_retained_tool_spans: 6
     read_time_max_message_spans: 24
     max_summary_chars: 1200
     micro_compact_disabled: false
@@ -41,6 +42,8 @@ context:
   在 `keep_recent` 模式下保留最近消息数量，并按 tool call 与 tool result 的原子块整体保留。
 - `read_time_max_message_spans`
   控制 `context.Builder` 读时 trim 可保留的 message span 上限；该值越大，普通“继续”续跑时越不容易在未触发 compact 前丢掉较早的文件读取结果。
+- `micro_compact_retained_tool_spans`
+  控制 read-time micro compact 默认保留原始内容的最近可压缩工具块数量；默认值为 `6`，显式配置为更小值时可更积极地回收旧工具结果。
 - `max_summary_chars`
   控制 compact summary 的最大字符数。
 - `micro_compact_disabled`
@@ -61,6 +64,7 @@ context:
 
 新增工具时，micro compact 策略不再由 `context` 层静态白名单维护，而是由 `internal/tools` 中的工具实现声明。
 默认情况下，已注册工具都会参与 micro compact；只有显式声明保留历史结果的工具才会跳过旧结果清理。
+默认 pin 仅对 `filesystem_write_file` 与 `filesystem_edit` 这类文件内容修改工具生效，用于保留 `README`、spec/schema、`go.mod`、`package.json` 等关键产物的最近结果；`.env*` 不参与默认 pin，避免敏感内容在上下文中滞留更久。
 但 micro compact 只有在当前会话已经建立非空 `TaskState` 时才会生效；没有 durable task state 时，context 仅做 trim，不清理旧 tool result。
 
 ## 执行链路

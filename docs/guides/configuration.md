@@ -56,6 +56,7 @@ context:
   compact:
     manual_strategy: keep_recent
     manual_keep_recent_messages: 10
+    micro_compact_retained_tool_spans: 6
     read_time_max_message_spans: 24
     max_summary_chars: 1200
     micro_compact_disabled: false
@@ -81,6 +82,7 @@ context:
 |------|------|
 | `context.compact.manual_strategy` | `/compact` 手动压缩策略，支持 `keep_recent` / `full_replace` |
 | `context.compact.manual_keep_recent_messages` | `keep_recent` 策略下保留的最近消息数 |
+| `context.compact.micro_compact_retained_tool_spans` | read-time micro compact 默认保留原始内容的最近可压缩工具块数量，默认 `6` |
 | `context.compact.read_time_max_message_spans` | context 读时保留的 message span 上限，用于降低“继续”时较早文件读取结果被过早裁掉的风险 |
 | `context.compact.max_summary_chars` | compact summary 最大字符数 |
 | `context.compact.micro_compact_disabled` | 是否关闭默认启用的 micro compact |
@@ -88,6 +90,8 @@ context:
 | `context.auto_compact.input_token_threshold` | 自动压缩输入 token 阈值 |
 | `context.auto_compact.reserve_tokens` | 自动阈值推导时预留 token 缓冲（`resolved_threshold = context_window - reserve_tokens`） |
 | `context.auto_compact.fallback_input_token_threshold` | 自动推导失败时使用的保底阈值 |
+
+默认 pin 仅对 `filesystem_write_file` 与 `filesystem_edit` 这类文件修改工具生效，用于保留关键产物文件的最近结果；`.env*` 不参与默认 pin，避免敏感内容在上下文中保留更久。
 
 ### `runtime` 字段
 

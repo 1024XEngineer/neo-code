@@ -13,6 +13,7 @@ type DefaultBuilder struct {
 	trimPolicy              messageTrimPolicy
 	microCompactPolicies    MicroCompactPolicySource
 	microCompactSummarizers MicroCompactSummarizerSource
+	microCompactPinChecker  MicroCompactPinChecker
 }
 
 // newDefaultBuilder 统一构建默认上下文构建器，避免多个构造函数重复装配相同依赖。
@@ -26,6 +27,7 @@ func newDefaultBuilder(
 		trimPolicy:              spanMessageTrimPolicy{},
 		microCompactPolicies:    policies,
 		microCompactSummarizers: summarizers,
+		microCompactPinChecker:  NewDefaultPinChecker(),
 	}
 }
 
@@ -89,13 +91,17 @@ func (b *DefaultBuilder) Build(ctx context.Context, input BuildInput) (BuildResu
 	if trimPolicy == nil {
 		trimPolicy = spanMessageTrimPolicy{}
 	}
+	pinChecker := b.microCompactPinChecker
+	if pinChecker == nil {
+		pinChecker = NewDefaultPinChecker()
+	}
 
 	shouldAutoCompact := input.Compact.AutoCompactThreshold > 0 &&
 		input.Metadata.SessionInputTokens >= input.Compact.AutoCompactThreshold
 
 	return BuildResult{
 		SystemPrompt:         composeSystemPrompt(sections...),
-		Messages:             applyReadTimeContextProjection(trimPolicy.Trim(input.Messages, input.Compact), input.TaskState, input.Compact, b.microCompactPolicies, b.microCompactSummarizers),
+		Messages:             applyReadTimeContextProjection(trimPolicy.Trim(input.Messages, input.Compact), input.TaskState, input.Compact, b.microCompactPolicies, b.microCompactSummarizers, pinChecker),
 		AutoCompactSuggested: shouldAutoCompact,
 	}, nil
 }
@@ -107,12 +113,13 @@ func applyReadTimeContextProjection(
 	options CompactOptions,
 	policies MicroCompactPolicySource,
 	summarizers MicroCompactSummarizerSource,
+	pinChecker MicroCompactPinChecker,
 ) []providertypes.Message {
 	if options.DisableMicroCompact || !taskState.Established() {
 		return ProjectToolMessagesForModel(cloneContextMessages(messages))
 	} else {
 		return ProjectToolMessagesForModel(
-			microCompactMessagesWithPolicies(messages, policies, options.MicroCompactRetainedToolSpans, summarizers),
+			microCompactMessagesWithPolicies(messages, policies, options.MicroCompactRetainedToolSpans, summarizers, pinChecker),
 		)
 	}
 }

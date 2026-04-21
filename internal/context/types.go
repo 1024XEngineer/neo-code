@@ -41,6 +41,11 @@ type MicroCompactSummarizerSource interface {
 	MicroCompactSummarizer(name string) tools.ContentSummarizer
 }
 
+// MicroCompactPinChecker 定义上下文层判断单个工具结果是否应钉住（不参与微压缩）的接口。
+type MicroCompactPinChecker interface {
+	ShouldPin(toolName string, metadata map[string]string) bool
+}
+
 // CompactOptions controls read-time compact behavior inside the context builder.
 type CompactOptions struct {
 	DisableMicroCompact           bool
