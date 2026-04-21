@@ -171,6 +171,43 @@ func TestBuildToolRegistryUsesWebFetchConfig(t *testing.T) {
 	}
 }
 
+func TestBuildToolRegistryRegistersSpawnSubAgent(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.StaticDefaults().Clone()
+	cfg.Workdir = t.TempDir()
+
+	registry, cleanup, err := buildToolRegistry(cfg)
+	if err != nil {
+		t.Fatalf("buildToolRegistry() error = %v", err)
+	}
+	if cleanup != nil {
+		defer cleanup()
+	}
+
+	tool, err := registry.Get(tools.ToolNameSpawnSubAgent)
+	if err != nil {
+		t.Fatalf("registry.Get(spawn_subagent) error = %v", err)
+	}
+	if tool.Name() != tools.ToolNameSpawnSubAgent {
+		t.Fatalf("tool.Name() = %q, want %q", tool.Name(), tools.ToolNameSpawnSubAgent)
+	}
+	specs, err := registry.ListAvailableSpecs(context.Background(), tools.SpecListInput{})
+	if err != nil {
+		t.Fatalf("ListAvailableSpecs() error = %v", err)
+	}
+	found := false
+	for _, spec := range specs {
+		if spec.Name == tools.ToolNameSpawnSubAgent {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected %q in available specs, got %+v", tools.ToolNameSpawnSubAgent, specs)
+	}
+}
+
 func TestBuildMCPRegistryFromConfig(t *testing.T) {
 	stubClient := &stubMCPServerClient{
 		tools: []mcp.ToolDescriptor{
