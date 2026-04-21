@@ -1848,7 +1848,7 @@ func (a *App) handleTranscriptMouse(msg tea.MouseMsg) bool {
 	switch {
 	case msg.Button == tea.MouseButtonLeft && msg.Action == tea.MouseActionPress:
 		return a.beginTextSelection(msg)
-	case msg.Button == tea.MouseButtonLeft && (msg.Action == tea.MouseActionMotion || msg.Type == tea.MouseMotion):
+	case (msg.Action == tea.MouseActionMotion || msg.Type == tea.MouseMotion) && a.textSelection.dragging:
 		return a.updateTextSelection(msg)
 	case msg.Action == tea.MouseActionRelease || msg.Type == tea.MouseRelease:
 		return a.finishTextSelection()
@@ -2314,6 +2314,8 @@ func (a *App) rebuildTranscript() {
 	previousRole := ""
 	for _, message := range a.activeMessages {
 		if message.Role == roleTool {
+			// tool 消息在 transcript 中不直接展示，但需要打断 assistant 连续分段。
+			previousRole = roleTool
 			continue
 		}
 		continuation := message.Role == roleAssistant && previousRole == roleAssistant
@@ -2375,7 +2377,6 @@ func (a *App) highlightTranscriptContent(content string) string {
 		selStart = max(0, min(selStart, lineWidth))
 		selEnd = max(selStart, min(selEnd, lineWidth))
 		if selEnd <= selStart {
-			lines[i] = plain
 			continue
 		}
 		prefix := ansi.Cut(plain, 0, selStart)

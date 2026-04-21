@@ -269,11 +269,8 @@ func (a App) textSelectionRange(lines []string) (startLine int, startCol int, en
 	if !a.textSelection.active || len(lines) == 0 {
 		return 0, 0, 0, 0, false
 	}
-	sLine, sCol, sOk := a.normalizeSelectionPosition(lines, a.textSelection.startLine, a.textSelection.startCol)
-	eLine, eCol, eOk := a.normalizeSelectionPosition(lines, a.textSelection.endLine, a.textSelection.endCol)
-	if !sOk || !eOk {
-		return 0, 0, 0, 0, false
-	}
+	sLine, sCol, _ := a.normalizeSelectionPosition(lines, a.textSelection.startLine, a.textSelection.startCol)
+	eLine, eCol, _ := a.normalizeSelectionPosition(lines, a.textSelection.endLine, a.textSelection.endCol)
 	if sLine > eLine || (sLine == eLine && sCol > eCol) {
 		sLine, eLine = eLine, sLine
 		sCol, eCol = eCol, sCol
@@ -358,15 +355,6 @@ func (a *App) copySelectionToClipboard() {
 		}
 		if i == endLine {
 			to = endCol
-		}
-		if from < 0 {
-			from = 0
-		}
-		if to > lineWidth {
-			to = lineWidth
-		}
-		if to < from {
-			to = from
 		}
 		selectedLines = append(selectedLines, ansi.Cut(plain, from, to))
 	}

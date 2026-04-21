@@ -125,6 +125,22 @@ func TestRenderWaterfallThinkingState(t *testing.T) {
 	}
 }
 
+func TestRenderWaterfallSelectionHint(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.state.ActivePicker = pickerNone
+	app.textSelection.active = true
+	app.textSelection.startLine = 0
+	app.textSelection.startCol = 0
+	app.textSelection.endLine = 0
+	app.textSelection.endCol = 1
+	app.setTranscriptContent("hello")
+
+	view := app.renderWaterfall(80, 24)
+	if !strings.Contains(view, "已选择内容，右键复制") {
+		t.Fatalf("expected selection hint in waterfall view")
+	}
+}
+
 func TestApplyComponentLayoutKeepsTranscriptHeightInSyncWithWaterfall(t *testing.T) {
 	app, _ := newTestApp(t)
 	app.width = 100
