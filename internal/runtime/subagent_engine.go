@@ -266,14 +266,16 @@ func executeSubAgentToolCallBatch(
 		}
 
 		execResult, execErr := stepInput.Executor.ExecuteTool(ctx, subagent.ToolExecutionInput{
-			RunID:     stepInput.RunID,
-			SessionID: stepInput.SessionID,
-			TaskID:    stepInput.Task.ID,
-			Role:      stepInput.Role,
-			AgentID:   stepInput.AgentID,
-			Workdir:   stepInput.Workdir,
-			Timeout:   toolTimeout,
-			Call:      normalizedCall,
+			RunID:           stepInput.RunID,
+			SessionID:       stepInput.SessionID,
+			TaskID:          stepInput.Task.ID,
+			Role:            stepInput.Role,
+			AgentID:         stepInput.AgentID,
+			Workdir:         stepInput.Workdir,
+			Timeout:         toolTimeout,
+			Call:            normalizedCall,
+			CapabilityToken: nil,
+			Capability:      stepInput.Capability,
 		})
 		message := subAgentToolResultToMessage(normalizedCall, execResult)
 		if execErr != nil && strings.TrimSpace(message.Parts[0].Text) == "" {

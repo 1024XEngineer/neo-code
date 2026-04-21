@@ -463,6 +463,14 @@ func inferLegacyTodoExecutor(item TodoItem) string {
 	if normalizeTodoOwnerType(item.OwnerType) == TodoOwnerTypeSubAgent {
 		return TodoExecutorSubAgent
 	}
+	if item.RetryCount > 0 || item.RetryLimit > 0 {
+		return TodoExecutorSubAgent
+	}
+	if item.Status == TodoStatusBlocked || item.Status == TodoStatusInProgress || item.Status == TodoStatusFailed {
+		if strings.TrimSpace(item.FailureReason) != "" || !item.NextRetryAt.IsZero() {
+			return TodoExecutorSubAgent
+		}
+	}
 	return TodoExecutorAgent
 }
 

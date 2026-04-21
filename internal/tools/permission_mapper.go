@@ -28,7 +28,7 @@ func buildPermissionAction(input ToolCallInput) (security.Action, error) {
 	}
 
 	switch strings.ToLower(toolName) {
-	case "bash":
+	case ToolNameBash:
 		action.Type = security.ActionTypeBash
 		action.Payload.Operation = "command"
 		action.Payload.TargetType = security.TargetTypeCommand
@@ -38,61 +38,69 @@ func buildPermissionAction(input ToolCallInput) (security.Action, error) {
 		if action.Payload.SandboxTarget == "" {
 			action.Payload.SandboxTarget = "."
 		}
-	case "filesystem_read_file":
+	case ToolNameFilesystemReadFile:
 		action.Type = security.ActionTypeRead
 		action.Payload.Operation = "read_file"
 		action.Payload.TargetType = security.TargetTypePath
 		action.Payload.Target = extractStringArgument(input.Arguments, "path")
 		action.Payload.SandboxTargetType = security.TargetTypePath
 		action.Payload.SandboxTarget = action.Payload.Target
-	case "filesystem_grep":
+	case ToolNameFilesystemGrep:
 		action.Type = security.ActionTypeRead
 		action.Payload.Operation = "grep"
 		action.Payload.TargetType = security.TargetTypeDirectory
 		action.Payload.Target = extractStringArgument(input.Arguments, "dir")
 		action.Payload.SandboxTargetType = security.TargetTypeDirectory
 		action.Payload.SandboxTarget = action.Payload.Target
-	case "filesystem_glob":
+	case ToolNameFilesystemGlob:
 		action.Type = security.ActionTypeRead
 		action.Payload.Operation = "glob"
 		action.Payload.TargetType = security.TargetTypeDirectory
 		action.Payload.Target = extractStringArgument(input.Arguments, "dir")
 		action.Payload.SandboxTargetType = security.TargetTypeDirectory
 		action.Payload.SandboxTarget = action.Payload.Target
-	case "webfetch":
+	case ToolNameWebFetch:
 		action.Type = security.ActionTypeRead
 		action.Payload.Operation = "fetch"
 		action.Payload.TargetType = security.TargetTypeURL
 		action.Payload.Target = extractStringArgument(input.Arguments, "url")
-	case "filesystem_write_file":
+	case ToolNameFilesystemWriteFile:
 		action.Type = security.ActionTypeWrite
 		action.Payload.Operation = "write_file"
 		action.Payload.TargetType = security.TargetTypePath
 		action.Payload.Target = extractStringArgument(input.Arguments, "path")
 		action.Payload.SandboxTargetType = security.TargetTypePath
 		action.Payload.SandboxTarget = action.Payload.Target
-	case "filesystem_edit":
+	case ToolNameFilesystemEdit:
 		action.Type = security.ActionTypeWrite
 		action.Payload.Operation = "edit"
 		action.Payload.TargetType = security.TargetTypePath
 		action.Payload.Target = extractStringArgument(input.Arguments, "path")
 		action.Payload.SandboxTargetType = security.TargetTypePath
 		action.Payload.SandboxTarget = action.Payload.Target
-	case "todo_write":
+	case ToolNameTodoWrite:
 		action.Type = security.ActionTypeWrite
 		action.Payload.Operation = "todo_write"
 		action.Payload.TargetType = security.TargetTypePath
 		action.Payload.Target = extractStringArgument(input.Arguments, "id")
-	case "memo_remember":
+	case ToolNameSpawnSubAgent:
+		action.Type = security.ActionTypeWrite
+		action.Payload.Operation = ToolNameSpawnSubAgent
+		action.Payload.TargetType = security.TargetTypePath
+		action.Payload.Target = extractSpawnSubAgentTarget(input.Arguments)
+		if action.Payload.Target == "" {
+			return security.Action{}, fmt.Errorf("tools: spawn_subagent permission target is empty")
+		}
+	case ToolNameMemoRemember:
 		action.Type = security.ActionTypeWrite
 		action.Payload.Operation = "memo_remember"
-	case "memo_recall":
+	case ToolNameMemoRecall:
 		action.Type = security.ActionTypeRead
 		action.Payload.Operation = "memo_recall"
-	case "memo_list":
+	case ToolNameMemoList:
 		action.Type = security.ActionTypeRead
 		action.Payload.Operation = "memo_list"
-	case "memo_remove":
+	case ToolNameMemoRemove:
 		action.Type = security.ActionTypeWrite
 		action.Payload.Operation = "memo_remove"
 	default:
@@ -137,6 +145,7 @@ func extractStringArgument(raw []byte, key string) string {
 	}
 	return strings.TrimSpace(value)
 }
+
 // extractSpawnSubAgentTarget 提取 spawn_subagent 的稳定权限目标，优先 items[].id，再回退 id/prompt。
 func extractSpawnSubAgentTarget(raw []byte) string {
 	if len(raw) == 0 {

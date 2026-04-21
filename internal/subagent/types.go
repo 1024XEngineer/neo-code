@@ -7,6 +7,7 @@ import (
 	"time"
 
 	providertypes "neo-code/internal/provider/types"
+	"neo-code/internal/security"
 )
 
 // Role 表示子代理的执行角色。
@@ -214,14 +215,16 @@ type ToolSpecListInput struct {
 
 // ToolExecutionInput 描述一次子代理工具执行请求。
 type ToolExecutionInput struct {
-	RunID     string
-	SessionID string
-	TaskID    string
-	Role      Role
-	AgentID   string
-	Workdir   string
-	Timeout   time.Duration
-	Call      providertypes.ToolCall
+	RunID           string
+	SessionID       string
+	TaskID          string
+	Role            Role
+	AgentID         string
+	Workdir         string
+	Timeout         time.Duration
+	Call            providertypes.ToolCall
+	Capability      Capability
+	CapabilityToken *security.CapabilityToken
 }
 
 // ToolExecutionResult 描述子代理工具执行后的标准结果。

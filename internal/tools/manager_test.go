@@ -1212,6 +1212,24 @@ func TestBuildPermissionAction(t *testing.T) {
 			wantTarget:   "todo-1",
 		},
 		{
+			name: "spawn subagent maps to write action",
+			input: ToolCallInput{
+				Name:      ToolNameSpawnSubAgent,
+				Arguments: []byte(`{"items":[{"id":"task-a"},{"id":"task-b"}]}`),
+			},
+			wantType:     security.ActionTypeWrite,
+			wantResource: ToolNameSpawnSubAgent,
+			wantTarget:   "task-a,task-b",
+		},
+		{
+			name: "spawn subagent empty target returns error",
+			input: ToolCallInput{
+				Name:      ToolNameSpawnSubAgent,
+				Arguments: []byte(`{"prompt":"   ","id":"  ","items":[{"id":" "}]}`),
+			},
+			wantErr: "spawn_subagent permission target is empty",
+		},
+		{
 			name: "mcp tool maps to mcp action",
 			input: ToolCallInput{
 				Name:      "mcp.github.create_issue",
@@ -1274,6 +1292,7 @@ func TestPermissionMapperHelpers(t *testing.T) {
 		input      []byte
 		key        string
 		want       string
+		spawn      bool
 		serverTool string
 		serverWant string
 	}{
@@ -1305,16 +1324,43 @@ func TestPermissionMapperHelpers(t *testing.T) {
 			name:  "extract spawn target from items",
 			input: []byte(`{"items":[{"id":"task-a"},{"id":" task-b "}],"id":"fallback"}`),
 			want:  "task-a,task-b",
+			spawn: true,
 		},
 		{
 			name:  "extract spawn target falls back to top level id",
 			input: []byte(`{"id":"legacy-task"}`),
 			want:  "legacy-task",
+			spawn: true,
 		},
 		{
 			name:  "extract spawn target falls back to prompt",
 			input: []byte(`{"prompt":"analyze auth module for vulnerabilities"}`),
 			want:  "analyze auth module for vulnerabilities",
+			spawn: true,
+		},
+		{
+			name:  "extract spawn target falls back to content",
+			input: []byte(`{"content":"write regression tests first"}`),
+			want:  "write regression tests first",
+			spawn: true,
+		},
+		{
+			name:  "extract spawn target trims prompt to max length",
+			input: []byte(`{"prompt":"abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz"}`),
+			want:  "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzab...",
+			spawn: true,
+		},
+		{
+			name:  "extract spawn target empty when no fallback",
+			input: []byte(`{"items":[{"id":" "}]}`),
+			want:  "",
+			spawn: true,
+		},
+		{
+			name:  "extract spawn target invalid json returns empty",
+			input: []byte(`{invalid`),
+			want:  "",
+			spawn: true,
 		},
 		{
 			name:       "mcp server target with server and tool",
@@ -1341,6 +1387,11 @@ func TestPermissionMapperHelpers(t *testing.T) {
 			if tt.key != "" {
 				if got := extractStringArgument(tt.input, tt.key); got != tt.want {
 					t.Fatalf("expected %q, got %q", tt.want, got)
+				}
+			}
+			if tt.spawn {
+				if got := extractSpawnSubAgentTarget(tt.input); got != tt.want {
+					t.Fatalf("expected spawn target %q, got %q", tt.want, got)
 				}
 			}
 			if tt.serverTool != "" {

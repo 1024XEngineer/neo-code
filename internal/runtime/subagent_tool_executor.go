@@ -3,18 +3,21 @@ package runtime
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
 	providertypes "neo-code/internal/provider/types"
+	"neo-code/internal/security"
 	"neo-code/internal/subagent"
 	"neo-code/internal/tools"
 )
 
 const (
-	subAgentToolDecisionPending = "pending"
-	stringPermissionDecisionAsk = "ask"
-	defaultSubAgentToolTimeout  = 20 * time.Second
+	subAgentToolDecisionPending  = "pending"
+	stringPermissionDecisionAsk  = "ask"
+	defaultSubAgentToolTimeout   = 20 * time.Second
+	defaultSubAgentCapabilityTTL = 15 * time.Minute
 )
 
 // subAgentRuntimeToolExecutor 将 subagent 工具调用桥接到 runtime 的统一执行链路。
@@ -79,6 +82,7 @@ func (e *subAgentRuntimeToolExecutor) ExecuteTool(
 		SessionID:   sessionID,
 		TaskID:      taskID,
 		AgentID:     agentID,
+		Capability:  e.resolveCapabilityToken(input),
 		Call:        input.Call,
 		Workdir:     workdir,
 		ToolTimeout: timeout,
@@ -126,6 +130,59 @@ func (e *subAgentRuntimeToolExecutor) ExecuteTool(
 	}
 	e.emit(ctx, runID, sessionID, eventType, eventPayload)
 	return output, execErr
+}
+
+type capabilitySignerProvider interface {
+	CapabilitySigner() *security.CapabilitySigner
+}
+
+// resolveCapabilityToken 生成并签发子代理工具调用的 capability token，用于在权限链路硬执行能力边界。
+func (e *subAgentRuntimeToolExecutor) resolveCapabilityToken(input subagent.ToolExecutionInput) *security.CapabilityToken {
+	if input.CapabilityToken != nil {
+		token := input.CapabilityToken.Normalize()
+		return &token
+	}
+	if e == nil || e.service == nil {
+		return nil
+	}
+	toolsList := normalizeAllowlistToList(input.Capability.AllowedTools)
+	pathsList := normalizePathAllowlist(input.Capability.AllowedPaths)
+	if len(toolsList) == 0 && len(pathsList) == 0 {
+		return nil
+	}
+
+	signerProvider, ok := e.service.toolManager.(capabilitySignerProvider)
+	if !ok {
+		return nil
+	}
+	signer := signerProvider.CapabilitySigner()
+	if signer == nil {
+		return nil
+	}
+
+	toolName := strings.TrimSpace(input.Call.Name)
+	if len(toolsList) == 0 && toolName != "" {
+		toolsList = []string{toolName}
+	}
+	if len(toolsList) == 0 {
+		return nil
+	}
+	now := time.Now().UTC()
+	token := security.CapabilityToken{
+		ID:            fmt.Sprintf("subagent-%d-%s", now.UnixNano(), strings.TrimSpace(input.TaskID)),
+		TaskID:        strings.TrimSpace(input.TaskID),
+		AgentID:       strings.TrimSpace(input.AgentID),
+		IssuedAt:      now,
+		ExpiresAt:     now.Add(defaultSubAgentCapabilityTTL),
+		AllowedTools:  toolsList,
+		AllowedPaths:  pathsList,
+		NetworkPolicy: security.NetworkPolicy{Mode: security.NetworkPermissionAllowAll},
+	}
+	signed, err := signer.Sign(token)
+	if err != nil {
+		return nil
+	}
+	return &signed
 }
 
 // resolveToolExecutionDecision 根据工具执行错误映射统一的权限决策结果。
@@ -191,6 +248,48 @@ func normalizeAllowlist(items []string) map[string]struct{} {
 		result[normalized] = struct{}{}
 	}
 	return result
+}
+
+// normalizeAllowlistToList 规整白名单并输出稳定顺序列表，便于写入 capability token。
+func normalizeAllowlistToList(items []string) []string {
+	seen := normalizeAllowlist(items)
+	if len(seen) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(seen))
+	for _, item := range items {
+		normalized := strings.ToLower(strings.TrimSpace(item))
+		if normalized == "" {
+			continue
+		}
+		if _, ok := seen[normalized]; !ok {
+			continue
+		}
+		out = append(out, normalized)
+		delete(seen, normalized)
+	}
+	return out
+}
+
+// normalizePathAllowlist 规整路径白名单并去重，避免 capability token 带入空路径。
+func normalizePathAllowlist(items []string) []string {
+	if len(items) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(items))
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		path := strings.TrimSpace(item)
+		if path == "" {
+			continue
+		}
+		if _, exists := seen[path]; exists {
+			continue
+		}
+		seen[path] = struct{}{}
+		out = append(out, path)
+	}
+	return out
 }
 
 // cloneToolMetadata 深拷贝工具元数据，避免后续修改污染事件载荷。
