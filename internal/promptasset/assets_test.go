@@ -9,8 +9,8 @@ func TestCoreSections(t *testing.T) {
 	t.Parallel()
 
 	sections := CoreSections()
-	if len(sections) != 4 {
-		t.Fatalf("expected 4 core sections, got %d", len(sections))
+	if len(sections) != 6 {
+		t.Fatalf("expected 6 core sections, got %d", len(sections))
 	}
 
 	wantTitles := []string{
@@ -18,6 +18,8 @@ func TestCoreSections(t *testing.T) {
 		"Tool Usage",
 		"Failure Recovery",
 		"Response Style",
+		"Security Boundaries",
+		"Context Management",
 	}
 	for index, want := range wantTitles {
 		if sections[index].Title != want {
@@ -66,9 +68,9 @@ func TestSubagentRolePrompts(t *testing.T) {
 		prompt string
 		want   string
 	}{
-		{name: "researcher", prompt: ResearcherRolePrompt(), want: "研究型子代理"},
-		{name: "coder", prompt: CoderRolePrompt(), want: "实现型子代理"},
-		{name: "reviewer", prompt: ReviewerRolePrompt(), want: "审查型子代理"},
+		{name: "researcher", prompt: ResearcherRolePrompt(), want: "research sub-agent"},
+		{name: "coder", prompt: CoderRolePrompt(), want: "implementation sub-agent"},
+		{name: "reviewer", prompt: ReviewerRolePrompt(), want: "review sub-agent"},
 	}
 
 	for _, tt := range tests {

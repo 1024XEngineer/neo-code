@@ -92,6 +92,14 @@ func loadCoreSections() []Section {
 			Title:   "Response Style",
 			Content: mustReadTemplate("templates/core/response_style.md"),
 		},
+		{
+			Title:   "Security Boundaries",
+			Content: mustReadTemplate("templates/core/security_boundaries.md"),
+		},
+		{
+			Title:   "Context Management",
+			Content: mustReadTemplate("templates/core/context_management.md"),
+		},
 	}
 }
 
