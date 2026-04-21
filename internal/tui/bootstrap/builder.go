@@ -8,7 +8,7 @@ import (
 	configstate "neo-code/internal/config/state"
 	"neo-code/internal/memo"
 	providertypes "neo-code/internal/provider/types"
-	agentruntime "neo-code/internal/runtime"
+	tuiservices "neo-code/internal/tui/services"
 )
 
 // ProviderService 定义 TUI 需要注入的 provider 交互能力。
@@ -25,7 +25,7 @@ type ProviderService interface {
 type Options struct {
 	Config          *config.Config
 	ConfigManager   *config.Manager
-	Runtime         agentruntime.Runtime
+	Runtime         tuiservices.Runtime
 	ProviderService ProviderService
 	MemoSvc         *memo.Service
 	Mode            Mode
@@ -36,7 +36,7 @@ type Options struct {
 type Container struct {
 	Config          config.Config
 	ConfigManager   *config.Manager
-	Runtime         agentruntime.Runtime
+	Runtime         tuiservices.Runtime
 	ProviderService ProviderService
 	MemoSvc         *memo.Service
 	Mode            Mode

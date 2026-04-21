@@ -68,7 +68,7 @@ type memoExtractorScheduler interface {
 }
 
 type runtimeWithClose interface {
-	agentruntime.Runtime
+	services.Runtime
 	Close() error
 }
 
@@ -130,8 +130,7 @@ func EnsureConsoleUTF8() {
 
 // BuildRuntime 构建 CLI 与 TUI 共用的运行时依赖。
 func BuildRuntime(ctx context.Context, opts BootstrapOptions) (RuntimeBundle, error) {
-	runtimeMode, err := resolveBootstrapRuntimeMode(opts.RuntimeMode)
-	if err != nil {
+	if _, err := resolveBootstrapRuntimeMode(opts.RuntimeMode); err != nil {
 		return RuntimeBundle{}, err
 	}
 
@@ -241,14 +240,6 @@ func BuildRuntime(ctx context.Context, opts BootstrapOptions) (RuntimeBundle, er
 
 	runtimeImpl := agentruntime.Runtime(runtimeSvc)
 	closeFns := []func() error{toolsCleanup, sessionStore.Close}
-	if runtimeMode == RuntimeModeGateway {
-		remoteRuntime, remoteErr := newRemoteRuntimeAdapter(services.RemoteRuntimeAdapterOptions{})
-		if remoteErr != nil {
-			return RuntimeBundle{}, remoteErr
-		}
-		runtimeImpl = remoteRuntime
-		closeFns = append([]func() error{remoteRuntime.Close}, closeFns...)
-	}
 
 	needCleanup = false
 
@@ -271,10 +262,27 @@ func NewProgram(ctx context.Context, opts BootstrapOptions) (*tea.Program, func(
 		return nil, nil, err
 	}
 
-	tuiApp, err := newTUIWithMemo(&bundle.Config, bundle.ConfigManager, bundle.Runtime, bundle.ProviderSelection, bundle.MemoService)
+	runtimeMode, err := resolveBootstrapRuntimeMode(opts.RuntimeMode)
 	if err != nil {
 		if bundle.Close != nil {
 			_ = bundle.Close()
+		}
+		return nil, nil, err
+	}
+
+	tuiRuntime, tuiRuntimeClose, err := buildTUIRuntimeForMode(ctx, runtimeMode, bundle.Runtime)
+	if err != nil {
+		if bundle.Close != nil {
+			_ = bundle.Close()
+		}
+		return nil, nil, err
+	}
+	cleanup := combineRuntimeClosers(tuiRuntimeClose, bundle.Close)
+
+	tuiApp, err := newTUIWithMemo(&bundle.Config, bundle.ConfigManager, tuiRuntime, bundle.ProviderSelection, bundle.MemoService)
+	if err != nil {
+		if cleanup != nil {
+			_ = cleanup()
 		}
 		return nil, nil, err
 	}
@@ -282,7 +290,7 @@ func NewProgram(ctx context.Context, opts BootstrapOptions) (*tea.Program, func(
 		tuiApp,
 		tea.WithAltScreen(),
 		tea.WithMouseCellMotion(),
-	), bundle.Close, nil
+	), cleanup, nil
 }
 
 // bootstrapDefaultConfig 负责计算本次启动应使用的默认配置快照。
@@ -310,7 +318,7 @@ func resolveBootstrapWorkdir(workdir string) (string, error) {
 func resolveBootstrapRuntimeMode(mode string) (string, error) {
 	normalized := strings.ToLower(strings.TrimSpace(mode))
 	if normalized == "" {
-		return RuntimeModeLocal, nil
+		return RuntimeModeGateway, nil
 	}
 	switch normalized {
 	case RuntimeModeLocal, RuntimeModeGateway:
@@ -384,6 +392,24 @@ func defaultNewRemoteRuntimeAdapter(options services.RemoteRuntimeAdapterOptions
 		return nil, err
 	}
 	return adapter, nil
+}
+
+// buildTUIRuntimeForMode 根据运行模式为 TUI 构建契约化 runtime，并返回对应清理函数。
+func buildTUIRuntimeForMode(
+	ctx context.Context,
+	mode string,
+	localRuntime agentruntime.Runtime,
+) (services.Runtime, func() error, error) {
+	if strings.EqualFold(strings.TrimSpace(mode), RuntimeModeGateway) {
+		remoteRuntime, err := newRemoteRuntimeAdapter(services.RemoteRuntimeAdapterOptions{})
+		if err != nil {
+			return nil, nil, err
+		}
+		return remoteRuntime, remoteRuntime.Close, nil
+	}
+	_ = ctx
+	adapter := newRuntimeContractAdapter(localRuntime)
+	return adapter, adapter.Close, nil
 }
 
 func buildToolManager(registry *tools.Registry) (tools.Manager, error) {

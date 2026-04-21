@@ -3,16 +3,17 @@
 本文件是本仓库的 AI 协作规则。任何 AI 在本项目中进行改写、续写、重构、修复、补测试或补文档时，都应优先遵守本文件。
 
 ## 1. 任务目标
-- 本仓库的目标是实现 `NeoCode Coding Agent MVP`。
-- 当前主链路必须始终围绕以下闭环保持可用：
-  `用户输入 -> Agent 推理 -> 调用工具 -> 获取结果 -> 继续推理 -> UI 展示`
+- 本仓库的目标是实现 `NeoCode Coding Agent`。
+- 系统已完成控制面与数据面解耦，当前主链路必须始终围绕以下闭环保持可用：
+  `用户输入(TUI) -> 网关中继(Gateway) -> Agent推理(Runtime) -> 调用工具(Tools) -> 结果回传 -> UI展示`
 - 做改动时，优先保证主链路可运行、模块边界清晰、实现可验证。
 
 ## 2. 最高优先级规则
 - 不要为了“可能兼容旧版本”破坏当前架构；若新设计已确定，优先直接切换到新实现。
 - 不允许过度设计、过度包装
 - 项目中可能存在语义不清的地方，必须要谨慎分析
-- 不要跨层直连；新功能默认沿 `TUI -> Runtime -> Provider / Tool Manager` 主链路设计。
+- **强制编码准则 (防乱码)**：所有文件的读取、修改、重写操作必须强制使用标准 **UTF-8 (无 BOM)** 编码。严禁使用破坏多字节字符的正则替换；严禁在输出中文注释时出现截断或混入 GBK 等其他编码。发现乱码先修编码再修逻辑。
+- 不要跨层直连；新功能默认沿 `TUI -> Gateway -> Runtime -> Provider / Tool Manager` 主链路设计。
 - 不要把模型厂商差异泄漏到 `runtime`、`tui` 或上层调用方。
 - 不要在 `runtime` 或 `tui` 里直接写工具执行逻辑；所有可被模型调用的能力必须进入 `internal/tools`。
 - 不要把会话状态、消息历史、工具调用记录散落到 UI；这些状态优先由 `runtime` 管理。
@@ -23,13 +24,14 @@
 
 ### 3.1 关键目录
 - `cmd/neocode`：CLI 入口。
-- `internal/app`：应用装配与 bootstrap，负责连接 config、provider、tools、runtime、tui。
-- `internal/config`：配置模型、YAML 加载、环境变量管理、配置校验和并发安全访问。
-- `internal/provider`：provider 抽象、领域模型和各厂商适配器。
-- `internal/runtime`：ReAct 主循环、事件流、Prompt 编排、token 累积与自动压缩触发。
-- `internal/session`：会话领域模型、存储抽象与 JSON 持久化实现。
+- `internal/app`：应用装配与 bootstrap，负责组装 Gateway、Runtime、TUI 等组件。
+- `internal/config`：配置模型、YAML 加载、环境变量管理及校验。
+- `internal/tui`：纯 UI 渲染层、Bubble Tea 状态机。仅负责消费事件并展示，不存业务状态。
+- `internal/gateway`：协议路由中枢。负责 IPC/网络监听、JSON-RPC 归一化、ACL 鉴权和流式事件中继。
+- `internal/runtime`：业务大脑。负责 ReAct 循环、事件流、Prompt 编排、Token 累积与压缩触发。不接触 UI。
+- `internal/provider`：各厂商模型适配器、请求组装与流式响应解析。
+- `internal/session`：会话领域模型、存储抽象与 JSON/SQLite 持久化。
 - `internal/tools`：工具契约、注册表、参数校验和具体工具实现。
-- `internal/tui`：Bubble Tea 状态机、渲染层、Slash Command 和事件桥接。
 - `docs`：架构、配置、事件流、会话持久化等说明文档。
 
 ### 3.2 模块职责

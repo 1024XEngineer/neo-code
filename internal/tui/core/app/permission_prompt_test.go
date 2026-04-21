@@ -6,8 +6,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/textarea"
 
-	agentruntime "neo-code/internal/runtime"
-	approvalflow "neo-code/internal/runtime/approval"
+	agentruntime "neo-code/internal/tui/services"
 )
 
 func TestNormalizePermissionPromptSelectionWrap(t *testing.T) {
@@ -31,19 +30,19 @@ func TestNormalizePermissionPromptSelectionEmptyOptions(t *testing.T) {
 
 func TestPermissionPromptOptionAt(t *testing.T) {
 	option := permissionPromptOptionAt(-1)
-	if option.Decision != approvalflow.DecisionReject {
+	if option.Decision != agentruntime.DecisionReject {
 		t.Fatalf("expected wrapped option to be reject, got %q", option.Decision)
 	}
 }
 
 func TestParsePermissionShortcut(t *testing.T) {
 	tests := map[string]agentruntime.PermissionResolutionDecision{
-		"y":      approvalflow.DecisionAllowOnce,
-		"once":   approvalflow.DecisionAllowOnce,
-		"a":      approvalflow.DecisionAllowSession,
-		"always": approvalflow.DecisionAllowSession,
-		"n":      approvalflow.DecisionReject,
-		"deny":   approvalflow.DecisionReject,
+		"y":      agentruntime.DecisionAllowOnce,
+		"once":   agentruntime.DecisionAllowOnce,
+		"a":      agentruntime.DecisionAllowSession,
+		"always": agentruntime.DecisionAllowSession,
+		"n":      agentruntime.DecisionReject,
+		"deny":   agentruntime.DecisionReject,
 	}
 	for input, want := range tests {
 		got, ok := parsePermissionShortcut(input)

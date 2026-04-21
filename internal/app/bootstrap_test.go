@@ -38,7 +38,7 @@ func TestNewProgram(t *testing.T) {
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 
-	program, cleanup, err := NewProgram(context.Background(), BootstrapOptions{})
+	program, cleanup, err := NewProgram(context.Background(), BootstrapOptions{RuntimeMode: RuntimeModeLocal})
 	if err != nil {
 		t.Fatalf("NewProgram() error = %v", err)
 	}
@@ -73,7 +73,7 @@ func TestNewProgramNormalizesInvalidCurrentModelOnStartup(t *testing.T) {
 		t.Fatalf("write config: %v", err)
 	}
 
-	program, cleanup, err := NewProgram(context.Background(), BootstrapOptions{})
+	program, cleanup, err := NewProgram(context.Background(), BootstrapOptions{RuntimeMode: RuntimeModeLocal})
 	if err != nil {
 		t.Fatalf("NewProgram() error = %v", err)
 	}
@@ -1075,14 +1075,14 @@ func TestNewProgramCleansResourcesWhenTUIBuildFails(t *testing.T) {
 	newTUIWithMemo = func(
 		cfg *config.Config,
 		configManager *config.Manager,
-		runtime agentruntime.Runtime,
+		runtime services.Runtime,
 		providerSvc tui.ProviderController,
 		memoSvc *memo.Service,
 	) (tui.App, error) {
 		return tui.App{}, errors.New("tui init failed")
 	}
 
-	_, cleanup, err := NewProgram(context.Background(), BootstrapOptions{})
+	_, cleanup, err := NewProgram(context.Background(), BootstrapOptions{RuntimeMode: RuntimeModeLocal})
 	if cleanup != nil {
 		t.Fatalf("expected nil cleanup on NewProgram failure")
 	}
@@ -1445,8 +1445,8 @@ func TestResolveBootstrapRuntimeMode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolveBootstrapRuntimeMode() error = %v", err)
 	}
-	if mode != RuntimeModeLocal {
-		t.Fatalf("expected default mode %q, got %q", RuntimeModeLocal, mode)
+	if mode != RuntimeModeGateway {
+		t.Fatalf("expected default mode %q, got %q", RuntimeModeGateway, mode)
 	}
 
 	mode, err = resolveBootstrapRuntimeMode(" GATEWAY ")
@@ -1486,47 +1486,40 @@ func TestDefaultNewRemoteRuntimeAdapterReturnsInitError(t *testing.T) {
 	}
 }
 
-func TestBuildRuntimeGatewayModeUsesRemoteAdapter(t *testing.T) {
+func TestBuildTUIRuntimeForModeGatewayUsesRemoteAdapter(t *testing.T) {
 	disableBuiltinProviderAPIKeys(t)
-
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("USERPROFILE", home)
 
 	originalFactory := newRemoteRuntimeAdapter
 	t.Cleanup(func() { newRemoteRuntimeAdapter = originalFactory })
 
 	stubRuntime := &stubRemoteRuntimeForBootstrap{
-		events: make(chan agentruntime.RuntimeEvent),
+		events: make(chan services.RuntimeEvent),
 	}
 	newRemoteRuntimeAdapter = func(_ services.RemoteRuntimeAdapterOptions) (runtimeWithClose, error) {
 		return stubRuntime, nil
 	}
 
-	bundle, err := BuildRuntime(context.Background(), BootstrapOptions{RuntimeMode: RuntimeModeGateway})
+	localRuntime := &stubRuntimeForBootstrap{events: make(chan agentruntime.RuntimeEvent)}
+	runtimeSvc, cleanup, err := buildTUIRuntimeForMode(context.Background(), RuntimeModeGateway, localRuntime)
 	if err != nil {
-		t.Fatalf("BuildRuntime() error = %v", err)
+		t.Fatalf("buildTUIRuntimeForMode() error = %v", err)
 	}
-	if bundle.Runtime != stubRuntime {
+	if runtimeSvc != stubRuntime {
 		t.Fatalf("expected gateway runtime adapter to be wired")
 	}
-	if bundle.Close == nil {
+	if cleanup == nil {
 		t.Fatalf("expected non-nil close function")
 	}
-	if err := bundle.Close(); err != nil {
-		t.Fatalf("bundle.Close() error = %v", err)
+	if err := cleanup(); err != nil {
+		t.Fatalf("cleanup() error = %v", err)
 	}
 	if !stubRuntime.closed {
 		t.Fatalf("expected remote runtime close to be called")
 	}
 }
 
-func TestBuildRuntimeGatewayModeFailsFastWhenAdapterInitFails(t *testing.T) {
+func TestBuildTUIRuntimeForModeGatewayFailsFastWhenAdapterInitFails(t *testing.T) {
 	disableBuiltinProviderAPIKeys(t)
-
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("USERPROFILE", home)
 
 	originalFactory := newRemoteRuntimeAdapter
 	t.Cleanup(func() { newRemoteRuntimeAdapter = originalFactory })
@@ -1535,7 +1528,8 @@ func TestBuildRuntimeGatewayModeFailsFastWhenAdapterInitFails(t *testing.T) {
 		return nil, errors.New("gateway connect failed")
 	}
 
-	_, err := BuildRuntime(context.Background(), BootstrapOptions{RuntimeMode: RuntimeModeGateway})
+	localRuntime := &stubRuntimeForBootstrap{events: make(chan agentruntime.RuntimeEvent)}
+	_, _, err := buildTUIRuntimeForMode(context.Background(), RuntimeModeGateway, localRuntime)
 	if err == nil {
 		t.Fatalf("expected gateway mode fail-fast error")
 	}
@@ -1549,38 +1543,100 @@ type stubToolForBootstrap struct {
 	content string
 }
 
-type stubRemoteRuntimeForBootstrap struct {
-	closed bool
+type stubRuntimeForBootstrap struct {
 	events chan agentruntime.RuntimeEvent
 }
 
-func (s *stubRemoteRuntimeForBootstrap) Submit(context.Context, agentruntime.PrepareInput) error {
+func (s *stubRuntimeForBootstrap) Submit(context.Context, agentruntime.PrepareInput) error {
 	return nil
 }
 
-func (s *stubRemoteRuntimeForBootstrap) PrepareUserInput(
+func (s *stubRuntimeForBootstrap) PrepareUserInput(
 	context.Context,
 	agentruntime.PrepareInput,
 ) (agentruntime.UserInput, error) {
 	return agentruntime.UserInput{}, nil
 }
 
-func (s *stubRemoteRuntimeForBootstrap) Run(context.Context, agentruntime.UserInput) error {
+func (s *stubRuntimeForBootstrap) Run(context.Context, agentruntime.UserInput) error {
 	return nil
 }
 
-func (s *stubRemoteRuntimeForBootstrap) Compact(context.Context, agentruntime.CompactInput) (agentruntime.CompactResult, error) {
+func (s *stubRuntimeForBootstrap) Compact(context.Context, agentruntime.CompactInput) (agentruntime.CompactResult, error) {
 	return agentruntime.CompactResult{}, nil
 }
 
-func (s *stubRemoteRuntimeForBootstrap) ExecuteSystemTool(
+func (s *stubRuntimeForBootstrap) ExecuteSystemTool(
 	context.Context,
 	agentruntime.SystemToolInput,
 ) (tools.ToolResult, error) {
 	return tools.ToolResult{}, nil
 }
 
-func (s *stubRemoteRuntimeForBootstrap) ResolvePermission(context.Context, agentruntime.PermissionResolutionInput) error {
+func (s *stubRuntimeForBootstrap) ResolvePermission(context.Context, agentruntime.PermissionResolutionInput) error {
+	return nil
+}
+
+func (s *stubRuntimeForBootstrap) CancelActiveRun() bool {
+	return false
+}
+
+func (s *stubRuntimeForBootstrap) Events() <-chan agentruntime.RuntimeEvent {
+	return s.events
+}
+
+func (s *stubRuntimeForBootstrap) ListSessions(context.Context) ([]agentsession.Summary, error) {
+	return nil, nil
+}
+
+func (s *stubRuntimeForBootstrap) LoadSession(context.Context, string) (agentsession.Session, error) {
+	return agentsession.Session{}, nil
+}
+
+func (s *stubRuntimeForBootstrap) ActivateSessionSkill(context.Context, string, string) error {
+	return nil
+}
+
+func (s *stubRuntimeForBootstrap) DeactivateSessionSkill(context.Context, string, string) error {
+	return nil
+}
+
+func (s *stubRuntimeForBootstrap) ListSessionSkills(context.Context, string) ([]agentruntime.SessionSkillState, error) {
+	return nil, nil
+}
+
+type stubRemoteRuntimeForBootstrap struct {
+	closed bool
+	events chan services.RuntimeEvent
+}
+
+func (s *stubRemoteRuntimeForBootstrap) Submit(context.Context, services.PrepareInput) error {
+	return nil
+}
+
+func (s *stubRemoteRuntimeForBootstrap) PrepareUserInput(
+	context.Context,
+	services.PrepareInput,
+) (services.UserInput, error) {
+	return services.UserInput{}, nil
+}
+
+func (s *stubRemoteRuntimeForBootstrap) Run(context.Context, services.UserInput) error {
+	return nil
+}
+
+func (s *stubRemoteRuntimeForBootstrap) Compact(context.Context, services.CompactInput) (services.CompactResult, error) {
+	return services.CompactResult{}, nil
+}
+
+func (s *stubRemoteRuntimeForBootstrap) ExecuteSystemTool(
+	context.Context,
+	services.SystemToolInput,
+) (tools.ToolResult, error) {
+	return tools.ToolResult{}, nil
+}
+
+func (s *stubRemoteRuntimeForBootstrap) ResolvePermission(context.Context, services.PermissionResolutionInput) error {
 	return nil
 }
 
@@ -1588,7 +1644,7 @@ func (s *stubRemoteRuntimeForBootstrap) CancelActiveRun() bool {
 	return false
 }
 
-func (s *stubRemoteRuntimeForBootstrap) Events() <-chan agentruntime.RuntimeEvent {
+func (s *stubRemoteRuntimeForBootstrap) Events() <-chan services.RuntimeEvent {
 	return s.events
 }
 
@@ -1608,7 +1664,7 @@ func (s *stubRemoteRuntimeForBootstrap) DeactivateSessionSkill(context.Context, 
 	return nil
 }
 
-func (s *stubRemoteRuntimeForBootstrap) ListSessionSkills(context.Context, string) ([]agentruntime.SessionSkillState, error) {
+func (s *stubRemoteRuntimeForBootstrap) ListSessionSkills(context.Context, string) ([]services.SessionSkillState, error) {
 	return nil, nil
 }
 

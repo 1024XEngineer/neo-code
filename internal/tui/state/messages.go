@@ -1,13 +1,10 @@
 package state
 
-import (
-	providertypes "neo-code/internal/provider/types"
-	agentruntime "neo-code/internal/runtime"
-)
+import providertypes "neo-code/internal/provider/types"
 
 // RuntimeMsg 封装 runtime 事件流消息。
 type RuntimeMsg struct {
-	Event agentruntime.RuntimeEvent
+	Event any
 }
 
 // RuntimeClosedMsg 表示 runtime 事件通道已关闭。
@@ -55,6 +52,6 @@ type WorkspaceCommandResultMsg struct {
 // PermissionResolutionFinishedMsg 表示一次权限审批提交完成结果。
 type PermissionResolutionFinishedMsg struct {
 	RequestID string
-	Decision  agentruntime.PermissionResolutionDecision
+	Decision  string
 	Err       error
 }

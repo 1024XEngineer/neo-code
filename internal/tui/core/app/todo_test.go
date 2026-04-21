@@ -8,8 +8,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	agentruntime "neo-code/internal/runtime"
 	agentsession "neo-code/internal/session"
+	agentruntime "neo-code/internal/tui/services"
 )
 
 func TestParseTodoFilter(t *testing.T) {

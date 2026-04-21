@@ -7,7 +7,6 @@ import (
 
 	"neo-code/internal/gateway"
 	"neo-code/internal/gateway/protocol"
-	agentruntime "neo-code/internal/runtime"
 	"neo-code/internal/tools"
 )
 
@@ -19,7 +18,7 @@ func TestDecodeRuntimeEventFromGatewayNotificationRestoresStringPayload(t *testi
 		SessionID: "session-1",
 		RunID:     "run-1",
 		Payload: map[string]any{
-			"runtime_event_type": string(agentruntime.EventAgentChunk),
+			"runtime_event_type": string(EventAgentChunk),
 			"turn":               2,
 			"phase":              "thinking",
 			"timestamp":          timestamp.Format(time.RFC3339Nano),
@@ -32,8 +31,8 @@ func TestDecodeRuntimeEventFromGatewayNotificationRestoresStringPayload(t *testi
 	if err != nil {
 		t.Fatalf("decodeRuntimeEventFromGatewayNotification() error = %v", err)
 	}
-	if event.Type != agentruntime.EventAgentChunk {
-		t.Fatalf("event.Type = %q, want %q", event.Type, agentruntime.EventAgentChunk)
+	if event.Type != EventAgentChunk {
+		t.Fatalf("event.Type = %q, want %q", event.Type, EventAgentChunk)
 	}
 	if event.SessionID != "session-1" || event.RunID != "run-1" {
 		t.Fatalf("unexpected ids: %#v", event)
@@ -57,7 +56,7 @@ func TestDecodeRuntimeEventFromGatewayNotificationRestoresToolResultPayload(t *t
 		SessionID: "session-2",
 		RunID:     "run-2",
 		Payload: map[string]any{
-			"runtime_event_type": string(agentruntime.EventToolResult),
+			"runtime_event_type": string(EventToolResult),
 			"payload": map[string]any{
 				"ToolCallID": "call-1",
 				"Name":       "bash",
@@ -89,7 +88,7 @@ func TestDecodeRuntimeEventFromGatewayNotificationSupportsNestedEnvelope(t *test
 		Payload: map[string]any{
 			"type": "run_progress",
 			"payload": map[string]any{
-				"runtime_event_type": string(agentruntime.EventError),
+				"runtime_event_type": string(EventError),
 				"payload":            "boom",
 			},
 		},
@@ -99,8 +98,8 @@ func TestDecodeRuntimeEventFromGatewayNotificationSupportsNestedEnvelope(t *test
 	if err != nil {
 		t.Fatalf("decodeRuntimeEventFromGatewayNotification() error = %v", err)
 	}
-	if event.Type != agentruntime.EventError {
-		t.Fatalf("event.Type = %q, want %q", event.Type, agentruntime.EventError)
+	if event.Type != EventError {
+		t.Fatalf("event.Type = %q, want %q", event.Type, EventError)
 	}
 	if payload, ok := event.Payload.(string); !ok || payload != "boom" {
 		t.Fatalf("event.Payload = %#v, want %q", event.Payload, "boom")
@@ -119,8 +118,8 @@ func TestGatewayStreamClientEmitsDecodeErrorAsRuntimeErrorEvent(t *testing.T) {
 
 	select {
 	case event := <-client.Events():
-		if event.Type != agentruntime.EventError {
-			t.Fatalf("event.Type = %q, want %q", event.Type, agentruntime.EventError)
+		if event.Type != EventError {
+			t.Fatalf("event.Type = %q, want %q", event.Type, EventError)
 		}
 		payload, ok := event.Payload.(string)
 		if !ok || payload == "" {

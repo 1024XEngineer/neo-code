@@ -28,7 +28,10 @@ type runtimeSessionCreator interface {
 
 // defaultBuildGatewayRuntimePort 构建网关运行时 RuntimePort 适配器，并返回对应资源清理函数。
 func defaultBuildGatewayRuntimePort(ctx context.Context, workdir string) (gateway.RuntimePort, func() error, error) {
-	bundle, err := app.BuildRuntime(ctx, app.BootstrapOptions{Workdir: strings.TrimSpace(workdir)})
+	bundle, err := app.BuildRuntime(ctx, app.BootstrapOptions{
+		Workdir:     strings.TrimSpace(workdir),
+		RuntimeMode: app.RuntimeModeLocal,
+	})
 	if err != nil {
 		return nil, nil, err
 	}

@@ -12,48 +12,46 @@ import (
 
 	configstate "neo-code/internal/config/state"
 	providertypes "neo-code/internal/provider/types"
-	agentruntime "neo-code/internal/runtime"
-	approvalflow "neo-code/internal/runtime/approval"
 )
 
 type stubRunner struct {
-	lastInput agentruntime.UserInput
+	lastInput UserInput
 	err       error
 }
 
-func (s *stubRunner) Run(ctx context.Context, input agentruntime.UserInput) error {
+func (s *stubRunner) Run(ctx context.Context, input UserInput) error {
 	s.lastInput = input
 	return s.err
 }
 
 type stubSubmitter struct {
-	lastInput agentruntime.PrepareInput
+	lastInput PrepareInput
 	err       error
 }
 
-func (s *stubSubmitter) Submit(ctx context.Context, input agentruntime.PrepareInput) error {
+func (s *stubSubmitter) Submit(ctx context.Context, input PrepareInput) error {
 	s.lastInput = input
 	return s.err
 }
 
 type stubCompactor struct {
-	lastInput agentruntime.CompactInput
+	lastInput CompactInput
 	err       error
 }
 
-func (s *stubCompactor) Compact(ctx context.Context, input agentruntime.CompactInput) (agentruntime.CompactResult, error) {
+func (s *stubCompactor) Compact(ctx context.Context, input CompactInput) (CompactResult, error) {
 	s.lastInput = input
-	return agentruntime.CompactResult{}, s.err
+	return CompactResult{}, s.err
 }
 
 type stubPermissionResolver struct {
-	lastInput   agentruntime.PermissionResolutionInput
+	lastInput   PermissionResolutionInput
 	err         error
 	deadline    time.Time
 	hasDeadline bool
 }
 
-func (s *stubPermissionResolver) ResolvePermission(ctx context.Context, input agentruntime.PermissionResolutionInput) error {
+func (s *stubPermissionResolver) ResolvePermission(ctx context.Context, input PermissionResolutionInput) error {
 	s.lastInput = input
 	s.deadline, s.hasDeadline = ctx.Deadline()
 	return s.err
@@ -78,24 +76,24 @@ func (s *stubProvider) ListModels(ctx context.Context) ([]providertypes.ModelDes
 }
 
 func TestListenForRuntimeEventCmd(t *testing.T) {
-	ch := make(chan agentruntime.RuntimeEvent, 1)
-	event := agentruntime.RuntimeEvent{Type: agentruntime.EventUserMessage}
+	ch := make(chan RuntimeEvent, 1)
+	event := RuntimeEvent{Type: EventUserMessage}
 	ch <- event
 
 	msg := ListenForRuntimeEventCmd(
 		ch,
-		func(e agentruntime.RuntimeEvent) tea.Msg { return e },
+		func(e RuntimeEvent) tea.Msg { return e },
 		func() tea.Msg { return "closed" },
 	)()
-	got, ok := msg.(agentruntime.RuntimeEvent)
-	if !ok || got.Type != agentruntime.EventUserMessage {
+	got, ok := msg.(RuntimeEvent)
+	if !ok || got.Type != EventUserMessage {
 		t.Fatalf("expected runtime event msg, got %T %#v", msg, msg)
 	}
 
 	close(ch)
 	msg = ListenForRuntimeEventCmd(
 		ch,
-		func(e agentruntime.RuntimeEvent) tea.Msg { return e },
+		func(e RuntimeEvent) tea.Msg { return e },
 		func() tea.Msg { return "closed" },
 	)()
 	if gotClosed, ok := msg.(string); !ok || gotClosed != "closed" {
@@ -105,7 +103,7 @@ func TestListenForRuntimeEventCmd(t *testing.T) {
 
 func TestRunAgentCmd(t *testing.T) {
 	runner := &stubRunner{err: errors.New("boom")}
-	input := agentruntime.UserInput{SessionID: "s1", Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")}, Workdir: "D:/"}
+	input := UserInput{SessionID: "s1", Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")}, Workdir: "D:/"}
 	msg := RunAgentCmd(runner, input, func(err error) tea.Msg { return err })()
 	if runner.lastInput.SessionID != "s1" || renderPartsForTest(runner.lastInput.Parts) != "hello" {
 		t.Fatalf("unexpected runner input: %+v", runner.lastInput)
@@ -117,12 +115,12 @@ func TestRunAgentCmd(t *testing.T) {
 
 func TestRunSubmitCmd(t *testing.T) {
 	runner := &stubSubmitter{err: errors.New("run failed")}
-	prepareInput := agentruntime.PrepareInput{
+	prepareInput := PrepareInput{
 		SessionID: "s1",
 		RunID:     "run-1",
 		Workdir:   "D:/",
 		Text:      "hello",
-		Images:    []agentruntime.UserImageInput{{Path: "C:/a.png", MimeType: "image/png"}},
+		Images:    []UserImageInput{{Path: "C:/a.png", MimeType: "image/png"}},
 	}
 	msg := RunSubmitCmd(runner, prepareInput, func(err error) tea.Msg { return err })()
 	if runner.lastInput.RunID != "run-1" || len(runner.lastInput.Images) != 1 {
@@ -135,7 +133,7 @@ func TestRunSubmitCmd(t *testing.T) {
 
 func TestRunCompactCmd(t *testing.T) {
 	compactor := &stubCompactor{err: errors.New("compact failed")}
-	input := agentruntime.CompactInput{SessionID: "s2"}
+	input := CompactInput{SessionID: "s2"}
 	msg := RunCompactCmd(compactor, input, func(err error) tea.Msg { return err })()
 	if compactor.lastInput.SessionID != "s2" {
 		t.Fatalf("unexpected compact input: %+v", compactor.lastInput)
@@ -147,35 +145,35 @@ func TestRunCompactCmd(t *testing.T) {
 
 func TestRunResolvePermissionCmd(t *testing.T) {
 	resolver := &stubPermissionResolver{err: errors.New("permission failed")}
-	input := agentruntime.PermissionResolutionInput{
+	input := PermissionResolutionInput{
 		RequestID: "perm-1",
-		Decision:  approvalflow.DecisionAllowSession,
+		Decision:  DecisionAllowSession,
 	}
 	msg := RunResolvePermissionCmd(
 		resolver,
 		input,
-		func(in agentruntime.PermissionResolutionInput, err error) tea.Msg {
+		func(in PermissionResolutionInput, err error) tea.Msg {
 			return struct {
-				Input agentruntime.PermissionResolutionInput
+				Input PermissionResolutionInput
 				Err   error
 			}{Input: in, Err: err}
 		},
 	)()
 
 	got, ok := msg.(struct {
-		Input agentruntime.PermissionResolutionInput
+		Input PermissionResolutionInput
 		Err   error
 	})
 	if !ok {
 		t.Fatalf("expected wrapped permission result message, got %T %#v", msg, msg)
 	}
-	if got.Input.RequestID != "perm-1" || got.Input.Decision != approvalflow.DecisionAllowSession {
+	if got.Input.RequestID != "perm-1" || got.Input.Decision != DecisionAllowSession {
 		t.Fatalf("unexpected permission input forwarded: %+v", got.Input)
 	}
 	if got.Err == nil || got.Err.Error() != "permission failed" {
 		t.Fatalf("expected forwarded permission error, got %#v", got.Err)
 	}
-	if resolver.lastInput.RequestID != "perm-1" || resolver.lastInput.Decision != approvalflow.DecisionAllowSession {
+	if resolver.lastInput.RequestID != "perm-1" || resolver.lastInput.Decision != DecisionAllowSession {
 		t.Fatalf("unexpected resolver input: %+v", resolver.lastInput)
 	}
 	if !resolver.hasDeadline {

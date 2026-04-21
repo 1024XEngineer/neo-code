@@ -18,12 +18,10 @@ import (
 	configstate "neo-code/internal/config/state"
 	"neo-code/internal/provider"
 	providertypes "neo-code/internal/provider/types"
-	agentruntime "neo-code/internal/runtime"
-	approvalflow "neo-code/internal/runtime/approval"
 	agentsession "neo-code/internal/session"
 	"neo-code/internal/tools"
 	tuibootstrap "neo-code/internal/tui/bootstrap"
-	tuiservices "neo-code/internal/tui/services"
+	agentruntime "neo-code/internal/tui/services"
 	tuistate "neo-code/internal/tui/state"
 )
 
@@ -603,13 +601,13 @@ func TestRefreshSessionPickerSelectsActiveSession(t *testing.T) {
 }
 
 func TestParsePermissionShortcutFromKeyInput(t *testing.T) {
-	if decision, ok := parsePermissionShortcut("y"); !ok || decision != approvalflow.DecisionAllowOnce {
+	if decision, ok := parsePermissionShortcut("y"); !ok || decision != agentruntime.DecisionAllowOnce {
 		t.Fatalf("expected allow_once, got %v (ok=%v)", decision, ok)
 	}
-	if decision, ok := parsePermissionShortcut("a"); !ok || decision != approvalflow.DecisionAllowSession {
+	if decision, ok := parsePermissionShortcut("a"); !ok || decision != agentruntime.DecisionAllowSession {
 		t.Fatalf("expected allow_session, got %v (ok=%v)", decision, ok)
 	}
-	if decision, ok := parsePermissionShortcut("n"); !ok || decision != approvalflow.DecisionReject {
+	if decision, ok := parsePermissionShortcut("n"); !ok || decision != agentruntime.DecisionReject {
 		t.Fatalf("expected reject, got %v (ok=%v)", decision, ok)
 	}
 	if _, ok := parsePermissionShortcut("x"); ok {
@@ -684,7 +682,7 @@ func TestUpdatePermissionResolveFlow(t *testing.T) {
 	if len(runtime.resolveCalls) != 1 || runtime.resolveCalls[0].RequestID != "perm-3" {
 		t.Fatalf("expected ResolvePermission to be called")
 	}
-	if runtime.resolveCalls[0].Decision != approvalflow.DecisionAllowOnce {
+	if runtime.resolveCalls[0].Decision != agentruntime.DecisionAllowOnce {
 		t.Fatalf("unexpected decision forwarded: %s", runtime.resolveCalls[0].Decision)
 	}
 
@@ -707,7 +705,7 @@ func TestUpdatePermissionResolvedError(t *testing.T) {
 
 	model, _ := app.Update(permissionResolutionFinishedMsg{
 		RequestID: "perm-4",
-		Decision:  approvalflow.DecisionAllowOnce,
+		Decision:  string(agentruntime.DecisionAllowOnce),
 		Err:       errors.New("boom"),
 	})
 	app = model.(App)
@@ -722,7 +720,7 @@ func TestUpdatePermissionResolvedError(t *testing.T) {
 
 func TestRunResolvePermissionCommand(t *testing.T) {
 	runtime := newStubRuntime()
-	cmd := runResolvePermission(runtime, "perm-5", approvalflow.DecisionAllowSession)
+	cmd := runResolvePermission(runtime, "perm-5", agentruntime.DecisionAllowSession)
 	if cmd == nil {
 		t.Fatalf("expected command")
 	}
@@ -731,7 +729,7 @@ func TestRunResolvePermissionCommand(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected permissionResolutionFinishedMsg, got %T", msg)
 	}
-	if resolved.RequestID != "perm-5" || resolved.Decision != approvalflow.DecisionAllowSession {
+	if resolved.RequestID != "perm-5" || resolved.Decision != string(agentruntime.DecisionAllowSession) {
 		t.Fatalf("unexpected resolved msg: %#v", resolved)
 	}
 	if len(runtime.resolveCalls) != 1 {
@@ -762,7 +760,7 @@ func TestUpdatePermissionResolutionFinishedMsgIgnoresMismatch(t *testing.T) {
 	}
 	model, cmd := app.Update(permissionResolutionFinishedMsg{
 		RequestID: "perm-8",
-		Decision:  approvalflow.DecisionAllowOnce,
+		Decision:  string(agentruntime.DecisionAllowOnce),
 	})
 	if model == nil {
 		t.Fatalf("expected model")
@@ -801,7 +799,7 @@ func TestUpdatePermissionRejectFlow(t *testing.T) {
 	msg := cmd()
 	next, _ := app.Update(msg)
 	app = next.(App)
-	if len(runtime.resolveCalls) != 1 || runtime.resolveCalls[0].Decision != approvalflow.DecisionReject {
+	if len(runtime.resolveCalls) != 1 || runtime.resolveCalls[0].Decision != agentruntime.DecisionReject {
 		t.Fatalf("expected reject decision to be submitted")
 	}
 	if app.state.StatusText != statusPermissionSubmitted {
@@ -1195,7 +1193,7 @@ func TestRuntimeEventUserMessageHandlerDeduplicatesByRunID(t *testing.T) {
 
 func TestRuntimeEventRunContextHandler(t *testing.T) {
 	app, _ := newTestApp(t)
-	payload := tuiservices.RuntimeRunContextPayload{
+	payload := agentruntime.RuntimeRunContextPayload{
 		Provider: "p1",
 		Model:    "m1",
 		Workdir:  "/tmp",
@@ -1504,7 +1502,7 @@ func TestHandleImmediateSlashCommandSessionWhileBusy(t *testing.T) {
 
 func TestRuntimeEventToolStatusHandler(t *testing.T) {
 	app, _ := newTestApp(t)
-	payload := tuiservices.RuntimeToolStatusPayload{ToolCallID: "tool-1", ToolName: "bash", Status: string(tuistate.ToolLifecyclePlanned)}
+	payload := agentruntime.RuntimeToolStatusPayload{ToolCallID: "tool-1", ToolName: "bash", Status: string(tuistate.ToolLifecyclePlanned)}
 	handled := runtimeEventToolStatusHandler(&app, agentruntime.RuntimeEvent{Payload: payload})
 	if handled {
 		t.Fatalf("expected false")
@@ -1521,7 +1519,7 @@ func TestRuntimeEventToolStatusHandler(t *testing.T) {
 
 func TestRuntimeEventUsageHandler(t *testing.T) {
 	app, _ := newTestApp(t)
-	payload := tuiservices.RuntimeUsagePayload{Run: tuiservices.RuntimeUsageSnapshot{InputTokens: 1, OutputTokens: 2, TotalTokens: 3}}
+	payload := agentruntime.RuntimeUsagePayload{Run: agentruntime.RuntimeUsageSnapshot{InputTokens: 1, OutputTokens: 2, TotalTokens: 3}}
 	handled := runtimeEventUsageHandler(&app, agentruntime.RuntimeEvent{Payload: payload})
 	if handled {
 		t.Fatalf("expected false")
@@ -2361,7 +2359,11 @@ func TestListenForRuntimeEvent(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected RuntimeMsg, got %T", msg)
 	}
-	if runtimeMsg.Event.RunID != "run-listen" {
+	forwarded, ok := runtimeMsg.Event.(agentruntime.RuntimeEvent)
+	if !ok {
+		t.Fatalf("expected runtime event payload, got %T", runtimeMsg.Event)
+	}
+	if forwarded.RunID != "run-listen" {
 		t.Fatalf("expected forwarded runtime event")
 	}
 

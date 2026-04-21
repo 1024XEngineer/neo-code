@@ -9,8 +9,6 @@ import (
 	"neo-code/internal/gateway"
 	"neo-code/internal/gateway/protocol"
 	providertypes "neo-code/internal/provider/types"
-	agentruntime "neo-code/internal/runtime"
-	"neo-code/internal/runtime/controlplane"
 )
 
 type streamInvalidJSONMarshaler struct {
@@ -54,7 +52,7 @@ func TestDecodeRuntimeEventFromGatewayNotificationUsesCurrentTimeWhenTimestampMi
 		Type:   gateway.FrameTypeEvent,
 		Action: gateway.FrameActionRun,
 		Payload: map[string]any{
-			"runtime_event_type": string(agentruntime.EventError),
+			"runtime_event_type": string(EventError),
 			"payload":            "boom",
 		},
 	})
@@ -76,13 +74,13 @@ func TestExtractRuntimeEnvelopeFallbackMarshalling(t *testing.T) {
 		Payload map[string]any `json:"payload"`
 	}
 	envelope, ok := extractRuntimeEnvelope(payloadEnvelope{Payload: map[string]any{
-		"RuntimeEventType": string(agentruntime.EventError),
+		"RuntimeEventType": string(EventError),
 		"payload":          "x",
 	}})
 	if !ok {
 		t.Fatalf("expected envelope to be detected")
 	}
-	if got := streamReadMapString(envelope, "runtime_event_type"); got != string(agentruntime.EventError) {
+	if got := streamReadMapString(envelope, "runtime_event_type"); got != string(EventError) {
 		t.Fatalf("runtime_event_type = %q", got)
 	}
 
@@ -96,13 +94,13 @@ func TestRestoreRuntimePayloadCoversSpecializedTypes(t *testing.T) {
 
 	cases := []struct {
 		name      string
-		eventType agentruntime.EventType
+		eventType EventType
 		payload   any
 		assertFn  func(t *testing.T, got any)
 	}{
 		{
 			name:      "user message",
-			eventType: agentruntime.EventUserMessage,
+			eventType: EventUserMessage,
 			payload:   map[string]any{"Role": string(providertypes.RoleAssistant)},
 			assertFn: func(t *testing.T, got any) {
 				t.Helper()
@@ -113,33 +111,33 @@ func TestRestoreRuntimePayloadCoversSpecializedTypes(t *testing.T) {
 		},
 		{
 			name:      "permission request",
-			eventType: agentruntime.EventPermissionRequested,
+			eventType: EventPermissionRequested,
 			payload:   map[string]any{"RequestID": "req-1"},
 			assertFn: func(t *testing.T, got any) {
 				t.Helper()
-				if v, ok := got.(agentruntime.PermissionRequestPayload); !ok || v.RequestID != "req-1" {
+				if v, ok := got.(PermissionRequestPayload); !ok || v.RequestID != "req-1" {
 					t.Fatalf("payload = %#v", got)
 				}
 			},
 		},
 		{
 			name:      "stop reason",
-			eventType: agentruntime.EventStopReasonDecided,
+			eventType: EventStopReasonDecided,
 			payload:   map[string]any{"reason": "  max_rounds  "},
 			assertFn: func(t *testing.T, got any) {
 				t.Helper()
-				value, ok := got.(agentruntime.StopReasonDecidedPayload)
+				value, ok := got.(StopReasonDecidedPayload)
 				if !ok {
 					t.Fatalf("payload type = %T", got)
 				}
-				if value.Reason != controlplane.StopReason("max_rounds") {
+				if value.Reason != StopReason("max_rounds") {
 					t.Fatalf("reason = %q", value.Reason)
 				}
 			},
 		},
 		{
 			name:      "runtime usage payload",
-			eventType: agentruntime.EventType(RuntimeEventUsage),
+			eventType: EventType(RuntimeEventUsage),
 			payload:   map[string]any{"delta": map[string]any{"inputtokens": 1}},
 			assertFn: func(t *testing.T, got any) {
 				t.Helper()
@@ -150,7 +148,7 @@ func TestRestoreRuntimePayloadCoversSpecializedTypes(t *testing.T) {
 		},
 		{
 			name:      "string payload",
-			eventType: agentruntime.EventToolChunk,
+			eventType: EventToolChunk,
 			payload:   42,
 			assertFn: func(t *testing.T, got any) {
 				t.Helper()
@@ -161,7 +159,7 @@ func TestRestoreRuntimePayloadCoversSpecializedTypes(t *testing.T) {
 		},
 		{
 			name:      "default passthrough",
-			eventType: agentruntime.EventType("unknown"),
+			eventType: EventType("unknown"),
 			payload:   map[string]any{"k": "v"},
 			assertFn: func(t *testing.T, got any) {
 				t.Helper()
@@ -187,22 +185,22 @@ func TestRestoreRuntimePayloadCoversSpecializedTypes(t *testing.T) {
 func TestDecodeRuntimePayloadAndMapHelpers(t *testing.T) {
 	t.Parallel()
 
-	typed, err := decodeRuntimePayload[agentruntime.InputNormalizedPayload](agentruntime.InputNormalizedPayload{TextLength: 1})
+	typed, err := decodeRuntimePayload[InputNormalizedPayload](InputNormalizedPayload{TextLength: 1})
 	if err != nil || typed.TextLength != 1 {
 		t.Fatalf("typed decode mismatch, got (%#v, %v)", typed, err)
 	}
 
-	ptrValue := &agentruntime.InputNormalizedPayload{ImageCount: 3}
-	decodedPtr, err := decodeRuntimePayload[agentruntime.InputNormalizedPayload](ptrValue)
+	ptrValue := &InputNormalizedPayload{ImageCount: 3}
+	decodedPtr, err := decodeRuntimePayload[InputNormalizedPayload](ptrValue)
 	if err != nil || decodedPtr.ImageCount != 3 {
 		t.Fatalf("pointer decode mismatch, got (%#v, %v)", decodedPtr, err)
 	}
 
-	var nilPtr *agentruntime.InputNormalizedPayload
-	if _, err := decodeRuntimePayload[agentruntime.InputNormalizedPayload](nilPtr); err == nil {
+	var nilPtr *InputNormalizedPayload
+	if _, err := decodeRuntimePayload[InputNormalizedPayload](nilPtr); err == nil {
 		t.Fatalf("expected nil pointer decode error")
 	}
-	if _, err := decodeRuntimePayload[agentruntime.InputNormalizedPayload](nil); err == nil {
+	if _, err := decodeRuntimePayload[InputNormalizedPayload](nil); err == nil {
 		t.Fatalf("expected nil payload decode error")
 	}
 
@@ -250,14 +248,14 @@ func TestGatewayStreamClientRunSkipsNonGatewayEventsAndStopsOnClose(t *testing.T
 		Type:   gateway.FrameTypeEvent,
 		Action: gateway.FrameActionRun,
 		Payload: map[string]any{
-			"runtime_event_type": string(agentruntime.EventAgentChunk),
+			"runtime_event_type": string(EventAgentChunk),
 			"payload":            "ok",
 		},
 	})
 
 	select {
 	case event := <-client.Events():
-		if event.Type != agentruntime.EventAgentChunk {
+		if event.Type != EventAgentChunk {
 			t.Fatalf("event.Type = %q", event.Type)
 		}
 	case <-time.After(2 * time.Second):
@@ -293,22 +291,22 @@ func TestRestoreRuntimePayloadAdditionalBranches(t *testing.T) {
 	t.Parallel()
 
 	payloadCases := []struct {
-		eventType agentruntime.EventType
+		eventType EventType
 		payload   any
 	}{
-		{eventType: agentruntime.EventAgentDone, payload: map[string]any{"Role": string(providertypes.RoleAssistant)}},
-		{eventType: agentruntime.EventToolStart, payload: map[string]any{"Name": "bash"}},
-		{eventType: agentruntime.EventPermissionResolved, payload: map[string]any{"RequestID": "req-1"}},
-		{eventType: agentruntime.EventCompactApplied, payload: map[string]any{"Applied": true}},
-		{eventType: agentruntime.EventCompactError, payload: map[string]any{"message": "boom"}},
-		{eventType: agentruntime.EventPhaseChanged, payload: map[string]any{"from": "a", "to": "b"}},
-		{eventType: agentruntime.EventInputNormalized, payload: map[string]any{"text_length": 3}},
-		{eventType: agentruntime.EventAssetSaved, payload: map[string]any{"asset_id": "asset-1"}},
-		{eventType: agentruntime.EventAssetSaveFailed, payload: map[string]any{"message": "x"}},
-		{eventType: agentruntime.EventTodoUpdated, payload: map[string]any{"action": "replace"}},
-		{eventType: agentruntime.EventTodoConflict, payload: map[string]any{"action": "conflict"}},
-		{eventType: agentruntime.EventType(RuntimeEventRunContext), payload: map[string]any{"provider": "openai"}},
-		{eventType: agentruntime.EventType(RuntimeEventToolStatus), payload: map[string]any{"status": "running"}},
+		{eventType: EventAgentDone, payload: map[string]any{"Role": string(providertypes.RoleAssistant)}},
+		{eventType: EventToolStart, payload: map[string]any{"Name": "bash"}},
+		{eventType: EventPermissionResolved, payload: map[string]any{"RequestID": "req-1"}},
+		{eventType: EventCompactApplied, payload: map[string]any{"Applied": true}},
+		{eventType: EventCompactError, payload: map[string]any{"message": "boom"}},
+		{eventType: EventPhaseChanged, payload: map[string]any{"from": "a", "to": "b"}},
+		{eventType: EventInputNormalized, payload: map[string]any{"text_length": 3}},
+		{eventType: EventAssetSaved, payload: map[string]any{"asset_id": "asset-1"}},
+		{eventType: EventAssetSaveFailed, payload: map[string]any{"message": "x"}},
+		{eventType: EventTodoUpdated, payload: map[string]any{"action": "replace"}},
+		{eventType: EventTodoConflict, payload: map[string]any{"action": "conflict"}},
+		{eventType: EventType(RuntimeEventRunContext), payload: map[string]any{"provider": "openai"}},
+		{eventType: EventType(RuntimeEventToolStatus), payload: map[string]any{"status": "running"}},
 	}
 
 	for _, tc := range payloadCases {
@@ -317,7 +315,7 @@ func TestRestoreRuntimePayloadAdditionalBranches(t *testing.T) {
 		}
 	}
 
-	if _, err := restoreRuntimePayload(agentruntime.EventStopReasonDecided, map[string]any{"reason": func() {}}); err == nil {
+	if _, err := restoreRuntimePayload(EventStopReasonDecided, map[string]any{"reason": func() {}}); err == nil {
 		t.Fatalf("stop reason payload should return decode error for non-serializable field")
 	}
 }
@@ -332,10 +330,10 @@ func TestStreamHelperBranches(t *testing.T) {
 		t.Fatalf("decodeStringPayload(string) mismatch")
 	}
 
-	if _, err := decodeRuntimePayload[agentruntime.PhaseChangedPayload](func() {}); err == nil {
+	if _, err := decodeRuntimePayload[PhaseChangedPayload](func() {}); err == nil {
 		t.Fatalf("decodeRuntimePayload should fail on marshal error")
 	}
-	if _, err := decodeRuntimePayload[agentruntime.PhaseChangedPayload](map[string]any{"from": map[string]any{"bad": make(chan int)}}); err == nil {
+	if _, err := decodeRuntimePayload[PhaseChangedPayload](map[string]any{"from": map[string]any{"bad": make(chan int)}}); err == nil {
 		t.Fatalf("decodeRuntimePayload should fail on invalid nested payload")
 	}
 
@@ -415,7 +413,7 @@ func TestGatewayStreamDecodeAndEnvelopeExtraBranches(t *testing.T) {
 		Type:   gateway.FrameTypeEvent,
 		Action: gateway.FrameActionRun,
 		Payload: map[string]any{
-			"runtime_event_type": string(agentruntime.EventToolResult),
+			"runtime_event_type": string(EventToolResult),
 			"payload":            "not-an-object",
 		},
 	})
@@ -431,7 +429,7 @@ func TestGatewayStreamDecodeAndEnvelopeExtraBranches(t *testing.T) {
 	}
 	if envelope, ok := extractRuntimeEnvelope(struct {
 		RuntimeEventType string `json:"runtime_event_type"`
-	}{RuntimeEventType: string(agentruntime.EventError)}); !ok || streamReadMapString(envelope, "runtime_event_type") == "" {
+	}{RuntimeEventType: string(EventError)}); !ok || streamReadMapString(envelope, "runtime_event_type") == "" {
 		t.Fatalf("expected runtime_event_type detection after marshal/unmarshal")
 	}
 

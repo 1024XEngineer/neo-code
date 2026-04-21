@@ -12,7 +12,6 @@ import (
 	"neo-code/internal/gateway"
 	"neo-code/internal/gateway/protocol"
 	providertypes "neo-code/internal/provider/types"
-	agentruntime "neo-code/internal/runtime"
 )
 
 func TestNewRemoteRuntimeAdapterBranches(t *testing.T) {
@@ -97,21 +96,21 @@ func TestRemoteRuntimeAdapterPrepareUserInputAndRun(t *testing.T) {
 		},
 		notifications: make(chan gatewayRPCNotification),
 	}
-	streamClient := &stubRemoteStreamClient{events: make(chan agentruntime.RuntimeEvent)}
+	streamClient := &stubRemoteStreamClient{events: make(chan RuntimeEvent)}
 	adapter := newRemoteRuntimeAdapterWithClients(rpcClient, streamClient, time.Second, 1)
 	t.Cleanup(func() { _ = adapter.Close() })
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := adapter.PrepareUserInput(ctx, agentruntime.PrepareInput{}); err == nil {
+	if _, err := adapter.PrepareUserInput(ctx, PrepareInput{}); err == nil {
 		t.Fatalf("expected context cancellation error")
 	}
 
-	input, err := adapter.PrepareUserInput(context.Background(), agentruntime.PrepareInput{
+	input, err := adapter.PrepareUserInput(context.Background(), PrepareInput{
 		SessionID: "  ",
 		RunID:     "",
 		Text:      "  hello  ",
-		Images: []agentruntime.UserImageInput{
+		Images: []UserImageInput{
 			{Path: "   "},
 			{Path: " /tmp/a.png ", MimeType: " image/png "},
 		},
@@ -164,15 +163,15 @@ func TestRemoteRuntimeAdapterCompactResolvePermissionAndListSessions(t *testing.
 		},
 		notifications: make(chan gatewayRPCNotification),
 	}
-	streamClient := &stubRemoteStreamClient{events: make(chan agentruntime.RuntimeEvent)}
+	streamClient := &stubRemoteStreamClient{events: make(chan RuntimeEvent)}
 	adapter := newRemoteRuntimeAdapterWithClients(rpcClient, streamClient, time.Second, 2)
 	t.Cleanup(func() { _ = adapter.Close() })
 
-	if _, err := adapter.Compact(context.Background(), agentruntime.CompactInput{}); err == nil {
+	if _, err := adapter.Compact(context.Background(), CompactInput{}); err == nil {
 		t.Fatalf("expected compact empty session id error")
 	}
 
-	compactResult, err := adapter.Compact(context.Background(), agentruntime.CompactInput{SessionID: "s1", RunID: "r1"})
+	compactResult, err := adapter.Compact(context.Background(), CompactInput{SessionID: "s1", RunID: "r1"})
 	if err != nil {
 		t.Fatalf("Compact() error = %v", err)
 	}
@@ -180,7 +179,7 @@ func TestRemoteRuntimeAdapterCompactResolvePermissionAndListSessions(t *testing.
 		t.Fatalf("compact result mismatch: %#v", compactResult)
 	}
 
-	if err := adapter.ResolvePermission(context.Background(), agentruntime.PermissionResolutionInput{RequestID: " req ", Decision: "APPROVE"}); err != nil {
+	if err := adapter.ResolvePermission(context.Background(), PermissionResolutionInput{RequestID: " req ", Decision: "APPROVE"}); err != nil {
 		t.Fatalf("ResolvePermission() error = %v", err)
 	}
 
@@ -198,7 +197,7 @@ func TestRemoteRuntimeAdapterUnsupportedSkillMethods(t *testing.T) {
 
 	adapter := newRemoteRuntimeAdapterWithClients(
 		&stubRemoteRPCClient{notifications: make(chan gatewayRPCNotification)},
-		&stubRemoteStreamClient{events: make(chan agentruntime.RuntimeEvent)},
+		&stubRemoteStreamClient{events: make(chan RuntimeEvent)},
 		time.Second,
 		1,
 	)
@@ -218,7 +217,7 @@ func TestRemoteRuntimeAdapterUnsupportedSkillMethods(t *testing.T) {
 func TestRemoteRuntimeAdapterCallFrameAndDecodeHelpers(t *testing.T) {
 	t.Parallel()
 
-	adapter := newRemoteRuntimeAdapterWithClients(nil, &stubRemoteStreamClient{events: make(chan agentruntime.RuntimeEvent)}, time.Second, 1)
+	adapter := newRemoteRuntimeAdapterWithClients(nil, &stubRemoteStreamClient{events: make(chan RuntimeEvent)}, time.Second, 1)
 	t.Cleanup(func() { _ = adapter.Close() })
 
 	if _, err := adapter.callFrame(context.Background(), protocol.MethodGatewayPing, nil, GatewayRPCCallOptions{}); err == nil {
@@ -270,7 +269,7 @@ func TestRemoteRuntimeAdapterCallFrameAndDecodeHelpers(t *testing.T) {
 func TestRemoteRuntimeAdapterEventObservationAndActiveRunState(t *testing.T) {
 	t.Parallel()
 
-	eventCh := make(chan agentruntime.RuntimeEvent, 3)
+	eventCh := make(chan RuntimeEvent, 3)
 	streamClient := &stubRemoteStreamClient{events: eventCh}
 	adapter := newRemoteRuntimeAdapterWithClients(
 		&stubRemoteRPCClient{notifications: make(chan gatewayRPCNotification)},
@@ -280,8 +279,8 @@ func TestRemoteRuntimeAdapterEventObservationAndActiveRunState(t *testing.T) {
 	)
 	t.Cleanup(func() { _ = adapter.Close() })
 
-	eventCh <- agentruntime.RuntimeEvent{Type: agentruntime.EventAgentChunk, RunID: "run-a", SessionID: "session-a"}
-	eventCh <- agentruntime.RuntimeEvent{Type: agentruntime.EventAgentDone, RunID: "run-a", SessionID: "session-a"}
+	eventCh <- RuntimeEvent{Type: EventAgentChunk, RunID: "run-a", SessionID: "session-a"}
+	eventCh <- RuntimeEvent{Type: EventAgentDone, RunID: "run-a", SessionID: "session-a"}
 	close(eventCh)
 
 	for i := 0; i < 2; i++ {
@@ -310,7 +309,7 @@ func TestRemoteRuntimeAdapterEventObservationAndActiveRunState(t *testing.T) {
 	}
 
 	adapter.setActiveRun("run-c", "session-c")
-	adapter.observeEvent(agentruntime.RuntimeEvent{Type: agentruntime.EventError})
+	adapter.observeEvent(RuntimeEvent{Type: EventError})
 	runID, sessionID = adapter.activeRun()
 	if runID != "run-c" || sessionID != "session-c" {
 		t.Fatalf("event error without run id should not clear active run, got run=%q session=%q", runID, sessionID)
@@ -322,7 +321,7 @@ func TestNewRemoteRuntimeAdapterWithClientsNormalizesRetryCount(t *testing.T) {
 
 	adapter := newRemoteRuntimeAdapterWithClients(
 		&stubRemoteRPCClient{notifications: make(chan gatewayRPCNotification)},
-		&stubRemoteStreamClient{events: make(chan agentruntime.RuntimeEvent)},
+		&stubRemoteStreamClient{events: make(chan RuntimeEvent)},
 		time.Second,
 		0,
 	)
@@ -348,7 +347,7 @@ func TestRemoteRuntimeAdapterUsesDefaultRetryWhenOptionsZero(t *testing.T) {
 	}
 	adapter := newRemoteRuntimeAdapterWithClients(
 		rpcClient,
-		&stubRemoteStreamClient{events: make(chan agentruntime.RuntimeEvent)},
+		&stubRemoteStreamClient{events: make(chan RuntimeEvent)},
 		time.Second,
 		0,
 	)
@@ -376,7 +375,7 @@ func TestRemoteRuntimeAdapterLoadSessionAndCancelErrorPaths(t *testing.T) {
 		},
 		notifications: make(chan gatewayRPCNotification),
 	}
-	adapter := newRemoteRuntimeAdapterWithClients(rpcClient, &stubRemoteStreamClient{events: make(chan agentruntime.RuntimeEvent)}, time.Second, 1)
+	adapter := newRemoteRuntimeAdapterWithClients(rpcClient, &stubRemoteStreamClient{events: make(chan RuntimeEvent)}, time.Second, 1)
 	t.Cleanup(func() { _ = adapter.Close() })
 
 	if _, err := adapter.LoadSession(context.Background(), " "); err == nil {
@@ -401,10 +400,10 @@ func TestRemoteRuntimeAdapterSubmitAndCompactErrorPaths(t *testing.T) {
 		},
 		notifications: make(chan gatewayRPCNotification),
 	}
-	adapter := newRemoteRuntimeAdapterWithClients(rpcClient, &stubRemoteStreamClient{events: make(chan agentruntime.RuntimeEvent)}, time.Second, 1)
+	adapter := newRemoteRuntimeAdapterWithClients(rpcClient, &stubRemoteStreamClient{events: make(chan RuntimeEvent)}, time.Second, 1)
 	t.Cleanup(func() { _ = adapter.Close() })
 
-	if err := adapter.Submit(context.Background(), agentruntime.PrepareInput{}); err == nil || !strings.Contains(err.Error(), "bind failed") {
+	if err := adapter.Submit(context.Background(), PrepareInput{}); err == nil || !strings.Contains(err.Error(), "bind failed") {
 		t.Fatalf("expected bind failed submit error, got %v", err)
 	}
 	methods := rpcClient.snapshotMethods()
@@ -417,17 +416,17 @@ func TestRemoteRuntimeAdapterSubmitAndCompactErrorPaths(t *testing.T) {
 	}
 
 	rpcClient.authErr = errors.New("auth failed")
-	if _, err := adapter.Compact(context.Background(), agentruntime.CompactInput{SessionID: "s-1"}); err == nil || !strings.Contains(err.Error(), "auth failed") {
+	if _, err := adapter.Compact(context.Background(), CompactInput{SessionID: "s-1"}); err == nil || !strings.Contains(err.Error(), "auth failed") {
 		t.Fatalf("expected compact auth error, got %v", err)
 	}
 	rpcClient.authErr = nil
 	rpcClient.callErrs[protocol.MethodGatewayBindStream] = errors.New("bind compact failed")
-	if _, err := adapter.Compact(context.Background(), agentruntime.CompactInput{SessionID: "s-1"}); err == nil || !strings.Contains(err.Error(), "bind compact failed") {
+	if _, err := adapter.Compact(context.Background(), CompactInput{SessionID: "s-1"}); err == nil || !strings.Contains(err.Error(), "bind compact failed") {
 		t.Fatalf("expected compact bind error, got %v", err)
 	}
 	rpcClient.callErrs[protocol.MethodGatewayBindStream] = nil
 	rpcClient.callErrs[protocol.MethodGatewayCompact] = errors.New("compact failed")
-	if _, err := adapter.Compact(context.Background(), agentruntime.CompactInput{SessionID: "s-1"}); err == nil || !strings.Contains(err.Error(), "compact failed") {
+	if _, err := adapter.Compact(context.Background(), CompactInput{SessionID: "s-1"}); err == nil || !strings.Contains(err.Error(), "compact failed") {
 		t.Fatalf("expected compact rpc error, got %v", err)
 	}
 }
@@ -438,7 +437,7 @@ func TestRemoteRuntimeAdapterListAndLoadSessionErrorPaths(t *testing.T) {
 	rpcClient := &stubRemoteRPCClient{
 		notifications: make(chan gatewayRPCNotification),
 	}
-	adapter := newRemoteRuntimeAdapterWithClients(rpcClient, &stubRemoteStreamClient{events: make(chan agentruntime.RuntimeEvent)}, time.Second, 1)
+	adapter := newRemoteRuntimeAdapterWithClients(rpcClient, &stubRemoteStreamClient{events: make(chan RuntimeEvent)}, time.Second, 1)
 	t.Cleanup(func() { _ = adapter.Close() })
 
 	rpcClient.authErr = errors.New("auth failed")
@@ -497,7 +496,7 @@ func TestRemoteRuntimeAdapterRenderInputHelpers(t *testing.T) {
 		t.Fatalf("renderInputImagesFromParts() = %#v", images)
 	}
 
-	params := buildGatewayRunParams(" s ", " r ", agentruntime.PrepareInput{Text: " hi ", Workdir: " /w ", Images: []agentruntime.UserImageInput{{Path: " /img.png ", MimeType: " image/png "}, {Path: " "}}})
+	params := buildGatewayRunParams(" s ", " r ", PrepareInput{Text: " hi ", Workdir: " /w ", Images: []UserImageInput{{Path: " /img.png ", MimeType: " image/png "}, {Path: " "}}})
 	if params.SessionID != "s" || params.RunID != "r" || params.Workdir != "/w" || params.InputText != "hi" || len(params.InputParts) != 1 {
 		t.Fatalf("buildGatewayRunParams() = %#v", params)
 	}

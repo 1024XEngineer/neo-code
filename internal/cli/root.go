@@ -77,9 +77,9 @@ func NewRootCommand() *cobra.Command {
 			flags.Workdir = strings.TrimSpace(settings.GetString("workdir"))
 			flags.RuntimeMode = strings.ToLower(strings.TrimSpace(settings.GetString("runtime-mode")))
 			switch flags.RuntimeMode {
-			case "", app.RuntimeModeLocal:
-				flags.RuntimeMode = app.RuntimeModeLocal
-			case app.RuntimeModeGateway:
+			case "", app.RuntimeModeGateway:
+				flags.RuntimeMode = app.RuntimeModeGateway
+			case app.RuntimeModeLocal:
 			default:
 				return fmt.Errorf("invalid --runtime-mode %q, must be local or gateway", flags.RuntimeMode)
 			}
@@ -90,7 +90,7 @@ func NewRootCommand() *cobra.Command {
 		},
 	}
 	cmd.PersistentFlags().String("workdir", "", "workdir override for current run")
-	cmd.PersistentFlags().String("runtime-mode", app.RuntimeModeLocal, "runtime mode (local/gateway)")
+	cmd.PersistentFlags().String("runtime-mode", app.RuntimeModeGateway, "runtime mode (local/gateway)")
 	_ = settings.BindPFlag("workdir", cmd.PersistentFlags().Lookup("workdir"))
 	_ = settings.BindPFlag("runtime-mode", cmd.PersistentFlags().Lookup("runtime-mode"))
 	cmd.AddCommand(

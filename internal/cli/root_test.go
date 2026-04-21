@@ -65,8 +65,8 @@ func TestNewRootCommandAllowsEmptyWorkdir(t *testing.T) {
 	if captured.Workdir != "" {
 		t.Fatalf("expected empty workdir override, got %q", captured.Workdir)
 	}
-	if captured.RuntimeMode != app.RuntimeModeLocal {
-		t.Fatalf("expected default runtime mode %q, got %q", app.RuntimeModeLocal, captured.RuntimeMode)
+	if captured.RuntimeMode != app.RuntimeModeGateway {
+		t.Fatalf("expected default runtime mode %q, got %q", app.RuntimeModeGateway, captured.RuntimeMode)
 	}
 }
 

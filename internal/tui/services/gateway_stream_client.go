@@ -11,19 +11,17 @@ import (
 	"neo-code/internal/gateway"
 	"neo-code/internal/gateway/protocol"
 	providertypes "neo-code/internal/provider/types"
-	agentruntime "neo-code/internal/runtime"
-	"neo-code/internal/runtime/controlplane"
 	"neo-code/internal/tools"
 )
 
-// GatewayStreamClient 负责消费 gateway.event 通知并恢复为 runtime 事件。
+// GatewayStreamClient 负责消费 gateway.event 并恢复为 TUI 事件。
 type GatewayStreamClient struct {
 	source <-chan gatewayRPCNotification
 
 	closeOnce sync.Once
 	closeCh   chan struct{}
 	done      chan struct{}
-	events    chan agentruntime.RuntimeEvent
+	events    chan RuntimeEvent
 }
 
 // NewGatewayStreamClient 创建并启动网关事件流消费者。
@@ -32,18 +30,18 @@ func NewGatewayStreamClient(source <-chan gatewayRPCNotification) *GatewayStream
 		source:  source,
 		closeCh: make(chan struct{}),
 		done:    make(chan struct{}),
-		events:  make(chan agentruntime.RuntimeEvent, 128),
+		events:  make(chan RuntimeEvent, 128),
 	}
 	go client.run()
 	return client
 }
 
-// Events 返回恢复后的 runtime 事件流。
-func (c *GatewayStreamClient) Events() <-chan agentruntime.RuntimeEvent {
+// Events 返回恢复后的事件流。
+func (c *GatewayStreamClient) Events() <-chan RuntimeEvent {
 	return c.events
 }
 
-// Close 停止事件消费并释放内部资源。
+// Close 停止事件消费并释放资源。
 func (c *GatewayStreamClient) Close() error {
 	c.closeOnce.Do(func() {
 		close(c.closeCh)
@@ -52,7 +50,7 @@ func (c *GatewayStreamClient) Close() error {
 	return nil
 }
 
-// run 持续读取网关通知并向上游输出 runtime 事件。
+// run 持续读取网关通知并向上游输出事件。
 func (c *GatewayStreamClient) run() {
 	defer close(c.done)
 	defer close(c.events)
@@ -74,8 +72,8 @@ func (c *GatewayStreamClient) run() {
 				select {
 				case <-c.closeCh:
 					return
-				case c.events <- agentruntime.RuntimeEvent{
-					Type:      agentruntime.EventError,
+				case c.events <- RuntimeEvent{
+					Type:      EventError,
 					Timestamp: time.Now().UTC(),
 					Payload:   fmt.Sprintf("gateway stream decode error: %v", err),
 				}:
@@ -92,27 +90,27 @@ func (c *GatewayStreamClient) run() {
 	}
 }
 
-// decodeRuntimeEventFromGatewayNotification 将单条 gateway.event 通知还原为 runtime 事件。
-func decodeRuntimeEventFromGatewayNotification(notification gatewayRPCNotification) (agentruntime.RuntimeEvent, error) {
+// decodeRuntimeEventFromGatewayNotification 将 gateway.event 通知还原为事件。
+func decodeRuntimeEventFromGatewayNotification(notification gatewayRPCNotification) (RuntimeEvent, error) {
 	var frame gateway.MessageFrame
 	if len(notification.Params) == 0 {
-		return agentruntime.RuntimeEvent{}, fmt.Errorf("gateway.event params is empty")
+		return RuntimeEvent{}, fmt.Errorf("gateway.event params is empty")
 	}
 	if err := json.Unmarshal(notification.Params, &frame); err != nil {
-		return agentruntime.RuntimeEvent{}, fmt.Errorf("decode gateway.event frame: %w", err)
+		return RuntimeEvent{}, fmt.Errorf("decode gateway.event frame: %w", err)
 	}
 
 	envelope, ok := extractRuntimeEnvelope(frame.Payload)
 	if !ok {
-		return agentruntime.RuntimeEvent{}, fmt.Errorf("missing runtime event envelope")
+		return RuntimeEvent{}, fmt.Errorf("missing runtime event envelope")
 	}
 
-	eventType := agentruntime.EventType(strings.TrimSpace(streamReadMapString(envelope, "runtime_event_type")))
+	eventType := EventType(strings.TrimSpace(streamReadMapString(envelope, "runtime_event_type")))
 	if eventType == "" {
-		return agentruntime.RuntimeEvent{}, fmt.Errorf("missing runtime_event_type")
+		return RuntimeEvent{}, fmt.Errorf("missing runtime_event_type")
 	}
 
-	event := agentruntime.RuntimeEvent{
+	event := RuntimeEvent{
 		Type:           eventType,
 		RunID:          strings.TrimSpace(frame.RunID),
 		SessionID:      strings.TrimSpace(frame.SessionID),
@@ -128,13 +126,13 @@ func decodeRuntimeEventFromGatewayNotification(notification gatewayRPCNotificati
 	rawPayload, _ := streamReadMapValue(envelope, "payload")
 	restoredPayload, err := restoreRuntimePayload(event.Type, rawPayload)
 	if err != nil {
-		return agentruntime.RuntimeEvent{}, err
+		return RuntimeEvent{}, err
 	}
 	event.Payload = restoredPayload
 	return event, nil
 }
 
-// extractRuntimeEnvelope 从网关事件 payload 中抽取 runtime 事件包裹层。
+// extractRuntimeEnvelope 从网关 payload 中提取事件包裹层。
 func extractRuntimeEnvelope(payload any) (map[string]any, bool) {
 	switch typed := payload.(type) {
 	case map[string]any:
@@ -175,59 +173,58 @@ func extractRuntimeEnvelope(payload any) (map[string]any, bool) {
 }
 
 // restoreRuntimePayload 按事件类型将 payload 恢复为 TUI 可消费的强类型结构。
-func restoreRuntimePayload(eventType agentruntime.EventType, payload any) (any, error) {
+func restoreRuntimePayload(eventType EventType, payload any) (any, error) {
 	switch eventType {
-	case agentruntime.EventUserMessage, agentruntime.EventAgentDone:
+	case EventUserMessage, EventAgentDone:
 		return decodeRuntimePayload[providertypes.Message](payload)
-	case agentruntime.EventToolStart:
+	case EventToolStart:
 		return decodeRuntimePayload[providertypes.ToolCall](payload)
-	case agentruntime.EventToolResult:
+	case EventToolResult:
 		return decodeRuntimePayload[tools.ToolResult](payload)
-	case agentruntime.EventPermissionRequested:
-		return decodeRuntimePayload[agentruntime.PermissionRequestPayload](payload)
-	case agentruntime.EventPermissionResolved:
-		return decodeRuntimePayload[agentruntime.PermissionResolvedPayload](payload)
-	case agentruntime.EventCompactApplied:
-		return decodeRuntimePayload[agentruntime.CompactResult](payload)
-	case agentruntime.EventCompactError:
-		return decodeRuntimePayload[agentruntime.CompactErrorPayload](payload)
-	case agentruntime.EventPhaseChanged:
-		return decodeRuntimePayload[agentruntime.PhaseChangedPayload](payload)
-	case agentruntime.EventStopReasonDecided:
+	case EventPermissionRequested:
+		return decodeRuntimePayload[PermissionRequestPayload](payload)
+	case EventPermissionResolved:
+		return decodeRuntimePayload[PermissionResolvedPayload](payload)
+	case EventCompactApplied:
+		return decodeRuntimePayload[CompactResult](payload)
+	case EventCompactError:
+		return decodeRuntimePayload[CompactErrorPayload](payload)
+	case EventPhaseChanged:
+		return decodeRuntimePayload[PhaseChangedPayload](payload)
+	case EventStopReasonDecided:
 		return decodeStopReasonPayload(payload)
-	case agentruntime.EventInputNormalized:
-		return decodeRuntimePayload[agentruntime.InputNormalizedPayload](payload)
-	case agentruntime.EventAssetSaved:
-		return decodeRuntimePayload[agentruntime.AssetSavedPayload](payload)
-	case agentruntime.EventAssetSaveFailed:
-		return decodeRuntimePayload[agentruntime.AssetSaveFailedPayload](payload)
-	case agentruntime.EventTodoUpdated, agentruntime.EventTodoConflict:
-		return decodeRuntimePayload[agentruntime.TodoEventPayload](payload)
-	case agentruntime.EventType(RuntimeEventRunContext):
+	case EventInputNormalized:
+		return decodeRuntimePayload[InputNormalizedPayload](payload)
+	case EventAssetSaved:
+		return decodeRuntimePayload[AssetSavedPayload](payload)
+	case EventAssetSaveFailed:
+		return decodeRuntimePayload[AssetSaveFailedPayload](payload)
+	case EventTodoUpdated, EventTodoConflict:
+		return decodeRuntimePayload[TodoEventPayload](payload)
+	case EventType(RuntimeEventRunContext):
 		return decodeRuntimePayload[RuntimeRunContextPayload](payload)
-	case agentruntime.EventType(RuntimeEventToolStatus):
+	case EventType(RuntimeEventToolStatus):
 		return decodeRuntimePayload[RuntimeToolStatusPayload](payload)
-	case agentruntime.EventType(RuntimeEventUsage):
+	case EventType(RuntimeEventUsage):
 		return decodeRuntimePayload[RuntimeUsagePayload](payload)
-	case agentruntime.EventAgentChunk, agentruntime.EventToolChunk, agentruntime.EventError,
-		agentruntime.EventProviderRetry, agentruntime.EventToolCallThinking:
+	case EventAgentChunk, EventToolChunk, EventError, EventProviderRetry, EventToolCallThinking:
 		return decodeStringPayload(payload), nil
 	default:
 		return payload, nil
 	}
 }
 
-// decodeStopReasonPayload 额外约束 stop reason 的枚举类型，避免字符串漂移。
-func decodeStopReasonPayload(payload any) (agentruntime.StopReasonDecidedPayload, error) {
-	decoded, err := decodeRuntimePayload[agentruntime.StopReasonDecidedPayload](payload)
+// decodeStopReasonPayload 约束 stop reason 枚举类型，避免字符串漂移。
+func decodeStopReasonPayload(payload any) (StopReasonDecidedPayload, error) {
+	decoded, err := decodeRuntimePayload[StopReasonDecidedPayload](payload)
 	if err != nil {
-		return agentruntime.StopReasonDecidedPayload{}, err
+		return StopReasonDecidedPayload{}, err
 	}
-	decoded.Reason = controlplane.StopReason(strings.TrimSpace(string(decoded.Reason)))
+	decoded.Reason = StopReason(strings.TrimSpace(string(decoded.Reason)))
 	return decoded, nil
 }
 
-// decodeStringPayload 兼容字符串类事件的 payload 解码。
+// decodeStringPayload 兼容字符串类事件 payload 解码。
 func decodeStringPayload(payload any) string {
 	switch typed := payload.(type) {
 	case string:
@@ -314,7 +311,7 @@ func streamReadMapString(m map[string]any, key string) string {
 	}
 }
 
-// streamReadMapInt 从动态 map 中读取整数字段，兼容 number/string。
+// streamReadMapInt 从动态 map 中读取整数，兼容 number/string。
 func streamReadMapInt(m map[string]any, key string) int {
 	value, ok := streamReadMapValue(m, key)
 	if !ok || value == nil {
@@ -372,7 +369,7 @@ func streamReadMapTime(m map[string]any, key string) time.Time {
 	}
 }
 
-// normalizeMapLookupKey 将键名归一化后用于宽松匹配。
+// normalizeMapLookupKey 将键名归一化用于宽松匹配。
 func normalizeMapLookupKey(key string) string {
 	replacer := strings.NewReplacer("_", "", "-", "", " ", "")
 	return strings.ToLower(replacer.Replace(strings.TrimSpace(key)))

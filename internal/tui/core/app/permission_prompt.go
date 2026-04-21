@@ -7,38 +7,37 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
-	agentruntime "neo-code/internal/runtime"
-	approvalflow "neo-code/internal/runtime/approval"
+	tuiservices "neo-code/internal/tui/services"
 )
 
 // permissionPromptOption 表示权限审批面板中的一个可选项。
 type permissionPromptOption struct {
 	Label    string
 	Hint     string
-	Decision agentruntime.PermissionResolutionDecision
+	Decision tuiservices.PermissionResolutionDecision
 }
 
 var permissionPromptOptions = []permissionPromptOption{
 	{
 		Label:    "Allow once",
 		Hint:     "Approve this request once",
-		Decision: approvalflow.DecisionAllowOnce,
+		Decision: tuiservices.DecisionAllowOnce,
 	},
 	{
 		Label:    "Allow session",
 		Hint:     "Approve similar requests for this session",
-		Decision: approvalflow.DecisionAllowSession,
+		Decision: tuiservices.DecisionAllowSession,
 	},
 	{
 		Label:    "Reject",
 		Hint:     "Reject this request",
-		Decision: approvalflow.DecisionReject,
+		Decision: tuiservices.DecisionReject,
 	},
 }
 
 // permissionPromptState 保存当前待审批请求与选项状态。
 type permissionPromptState struct {
-	Request    agentruntime.PermissionRequestPayload
+	Request    tuiservices.PermissionRequestPayload
 	Selected   int
 	Submitting bool
 }
@@ -64,14 +63,14 @@ func permissionPromptOptionAt(selected int) permissionPromptOption {
 }
 
 // parsePermissionShortcut 将快捷输入映射为审批决策。
-func parsePermissionShortcut(input string) (agentruntime.PermissionResolutionDecision, bool) {
+func parsePermissionShortcut(input string) (tuiservices.PermissionResolutionDecision, bool) {
 	switch strings.ToLower(strings.TrimSpace(input)) {
 	case "y", "yes", "once":
-		return approvalflow.DecisionAllowOnce, true
+		return tuiservices.DecisionAllowOnce, true
 	case "a", "always":
-		return approvalflow.DecisionAllowSession, true
+		return tuiservices.DecisionAllowSession, true
 	case "n", "no", "reject", "deny":
-		return approvalflow.DecisionReject, true
+		return tuiservices.DecisionReject, true
 	default:
 		return "", false
 	}
@@ -137,32 +136,32 @@ func sanitizePermissionDisplayText(value string) string {
 }
 
 // parsePermissionRequestPayload 解析权限请求事件载荷。
-func parsePermissionRequestPayload(payload any) (agentruntime.PermissionRequestPayload, bool) {
+func parsePermissionRequestPayload(payload any) (tuiservices.PermissionRequestPayload, bool) {
 	switch typed := payload.(type) {
-	case agentruntime.PermissionRequestPayload:
+	case tuiservices.PermissionRequestPayload:
 		return typed, true
-	case *agentruntime.PermissionRequestPayload:
+	case *tuiservices.PermissionRequestPayload:
 		if typed == nil {
-			return agentruntime.PermissionRequestPayload{}, false
+			return tuiservices.PermissionRequestPayload{}, false
 		}
 		return *typed, true
 	default:
-		return agentruntime.PermissionRequestPayload{}, false
+		return tuiservices.PermissionRequestPayload{}, false
 	}
 }
 
 // parsePermissionResolvedPayload 解析权限决议事件载荷。
-func parsePermissionResolvedPayload(payload any) (agentruntime.PermissionResolvedPayload, bool) {
+func parsePermissionResolvedPayload(payload any) (tuiservices.PermissionResolvedPayload, bool) {
 	switch typed := payload.(type) {
-	case agentruntime.PermissionResolvedPayload:
+	case tuiservices.PermissionResolvedPayload:
 		return typed, true
-	case *agentruntime.PermissionResolvedPayload:
+	case *tuiservices.PermissionResolvedPayload:
 		if typed == nil {
-			return agentruntime.PermissionResolvedPayload{}, false
+			return tuiservices.PermissionResolvedPayload{}, false
 		}
 		return *typed, true
 	default:
-		return agentruntime.PermissionResolvedPayload{}, false
+		return tuiservices.PermissionResolvedPayload{}, false
 	}
 }
 

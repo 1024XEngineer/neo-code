@@ -6,44 +6,38 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	agentruntime "neo-code/internal/runtime"
 	"neo-code/internal/tools"
 )
 
 const permissionResolveTimeout = 10 * time.Second
 
-// Runner 定义执行 runtime run 所需最小能力。
+// Runner 定义执行 run 所需的最小能力。
 type Runner interface {
-	Run(ctx context.Context, input agentruntime.UserInput) error
+	Run(ctx context.Context, input UserInput) error
 }
 
-// PreparedRunner 定义“输入归一化 + run”链路所需最小能力。
-// Submitter 定义 runtime 单入口提交所需的最小能力。
+// Submitter 定义单入口提交所需能力。
 type Submitter interface {
-	Submit(ctx context.Context, input agentruntime.PrepareInput) error
+	Submit(ctx context.Context, input PrepareInput) error
 }
 
-// Compactor 定义执行 runtime compact 所需最小能力。
+// Compactor 定义执行 compact 所需能力。
 type Compactor interface {
-	Compact(ctx context.Context, input agentruntime.CompactInput) (agentruntime.CompactResult, error)
+	Compact(ctx context.Context, input CompactInput) (CompactResult, error)
 }
 
-// SystemToolRunner 定义执行 runtime 系统工具入口所需最小能力。
+// SystemToolRunner 定义执行系统工具能力。
 type SystemToolRunner interface {
-	ExecuteSystemTool(ctx context.Context, input agentruntime.SystemToolInput) (tools.ToolResult, error)
+	ExecuteSystemTool(ctx context.Context, input SystemToolInput) (tools.ToolResult, error)
 }
 
-// PermissionResolver 定义权限审批提交所需最小能力。
+// PermissionResolver 定义提交权限决策能力。
 type PermissionResolver interface {
-	ResolvePermission(ctx context.Context, input agentruntime.PermissionResolutionInput) error
+	ResolvePermission(ctx context.Context, input PermissionResolutionInput) error
 }
 
-// ListenForRuntimeEventCmd 监听 runtime 事件通道，并将结果映射为 UI 消息。
-func ListenForRuntimeEventCmd(
-	sub <-chan agentruntime.RuntimeEvent,
-	eventMsg func(agentruntime.RuntimeEvent) tea.Msg,
-	closedMsg func() tea.Msg,
-) tea.Cmd {
+// ListenForRuntimeEventCmd 监听事件通道并映射为 UI 消息。
+func ListenForRuntimeEventCmd(sub <-chan RuntimeEvent, eventMsg func(RuntimeEvent) tea.Msg, closedMsg func() tea.Msg) tea.Cmd {
 	return func() tea.Msg {
 		event, ok := <-sub
 		if !ok {
@@ -53,56 +47,43 @@ func ListenForRuntimeEventCmd(
 	}
 }
 
-// RunAgentCmd 执行 runtime run，并将执行结果回传为 UI 消息。
-func RunAgentCmd(
-	runtime Runner,
-	input agentruntime.UserInput,
-	doneMsg func(error) tea.Msg,
-) tea.Cmd {
+// RunAgentCmd 执行 run 并回传结果。
+func RunAgentCmd(runtime Runner, input UserInput, doneMsg func(error) tea.Msg) tea.Cmd {
 	return func() tea.Msg {
 		err := runtime.Run(context.Background(), input)
 		return doneMsg(err)
 	}
 }
 
-// RunPreparedAgentCmd 先执行输入归一化，再执行 runtime run，并将结果映射为 UI 消息。
-// RunSubmitCmd 执行 runtime 单入口提交，并将结果映射为 UI 消息。
-func RunSubmitCmd(runtime Submitter, input agentruntime.PrepareInput, doneMsg func(error) tea.Msg) tea.Cmd {
+// RunSubmitCmd 执行 submit 并回传结果。
+func RunSubmitCmd(runtime Submitter, input PrepareInput, doneMsg func(error) tea.Msg) tea.Cmd {
 	return func() tea.Msg {
 		err := runtime.Submit(context.Background(), input)
 		return doneMsg(err)
 	}
 }
 
-// RunCompactCmd 执行 runtime compact，并将结果映射为 UI 消息。
-func RunCompactCmd(
-	runtime Compactor,
-	input agentruntime.CompactInput,
-	doneMsg func(error) tea.Msg,
-) tea.Cmd {
+// RunCompactCmd 执行 compact 并回传结果。
+func RunCompactCmd(runtime Compactor, input CompactInput, doneMsg func(error) tea.Msg) tea.Cmd {
 	return func() tea.Msg {
 		_, err := runtime.Compact(context.Background(), input)
 		return doneMsg(err)
 	}
 }
 
-// RunSystemToolCmd 执行 runtime 系统工具入口，并将结果映射为 UI 消息。
-func RunSystemToolCmd(
-	runtime SystemToolRunner,
-	input agentruntime.SystemToolInput,
-	doneMsg func(tools.ToolResult, error) tea.Msg,
-) tea.Cmd {
+// RunSystemToolCmd 执行系统工具并回传结果。
+func RunSystemToolCmd(runtime SystemToolRunner, input SystemToolInput, doneMsg func(tools.ToolResult, error) tea.Msg) tea.Cmd {
 	return func() tea.Msg {
 		result, err := runtime.ExecuteSystemTool(context.Background(), input)
 		return doneMsg(result, err)
 	}
 }
 
-// RunResolvePermissionCmd 提交权限审批决定，并将结果映射为 UI 消息。
+// RunResolvePermissionCmd 提交权限决策并回传结果。
 func RunResolvePermissionCmd(
 	runtime PermissionResolver,
-	input agentruntime.PermissionResolutionInput,
-	doneMsg func(agentruntime.PermissionResolutionInput, error) tea.Msg,
+	input PermissionResolutionInput,
+	doneMsg func(PermissionResolutionInput, error) tea.Msg,
 ) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), permissionResolveTimeout)

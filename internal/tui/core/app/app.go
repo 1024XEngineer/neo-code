@@ -18,8 +18,8 @@ import (
 	configstate "neo-code/internal/config/state"
 	"neo-code/internal/memo"
 	providertypes "neo-code/internal/provider/types"
-	agentruntime "neo-code/internal/runtime"
 	tuibootstrap "neo-code/internal/tui/bootstrap"
+	tuiservices "neo-code/internal/tui/services"
 	tuistate "neo-code/internal/tui/state"
 )
 
@@ -73,7 +73,7 @@ type ProviderController interface {
 type appServices struct {
 	configManager *config.Manager
 	providerSvc   ProviderController
-	runtime       agentruntime.Runtime
+	runtime       tuiservices.Runtime
 	memoSvc       *memo.Service
 }
 
@@ -151,7 +151,7 @@ type pendingImageAttachment struct {
 // providerAddFormState 保存添加新 provider 表单的状态。
 type providerAddFormState struct {
 	Stage                 providerAddFormStage
-	Step                  int // 当前聚焦字段在“当前 driver 可见字段列表”中的索引
+	Step                  int
 	Name                  string
 	Driver                string
 	ModelSource           string
@@ -165,9 +165,9 @@ type providerAddFormState struct {
 	Error                 string
 	ErrorIsHard           bool
 	Submitting            bool
-	Drivers               []string // 可选的 Driver 列表
-	ModelSources          []string // 可选的模型来源列表
-	ChatAPIModes          []string // openaicompat 可选聊天协议模式
+	Drivers               []string
+	ModelSources          []string
+	ChatAPIModes          []string
 }
 
 type providerAddFormStage int
@@ -187,7 +187,7 @@ type App struct {
 	styles styles
 }
 
-func New(cfg *config.Config, configManager *config.Manager, runtime agentruntime.Runtime, providerSvc ProviderController) (App, error) {
+func New(cfg *config.Config, configManager *config.Manager, runtime tuiservices.Runtime, providerSvc ProviderController) (App, error) {
 	return NewWithBootstrap(tuibootstrap.Options{
 		Config:          cfg,
 		ConfigManager:   configManager,
@@ -197,7 +197,7 @@ func New(cfg *config.Config, configManager *config.Manager, runtime agentruntime
 }
 
 // NewWithMemo 创建带 memo 服务的 TUI App。
-func NewWithMemo(cfg *config.Config, configManager *config.Manager, runtime agentruntime.Runtime, providerSvc ProviderController, memoSvc *memo.Service) (App, error) {
+func NewWithMemo(cfg *config.Config, configManager *config.Manager, runtime tuiservices.Runtime, providerSvc ProviderController, memoSvc *memo.Service) (App, error) {
 	return NewWithBootstrap(tuibootstrap.Options{
 		Config:          cfg,
 		ConfigManager:   configManager,
@@ -279,7 +279,7 @@ func newApp(container tuibootstrap.Container) (App, error) {
 			StatusText:      statusReady,
 			CurrentProvider: cfg.SelectedProvider,
 			CurrentModel:    cfg.CurrentModel,
-			// Workdir 在启动阶段由 config 校验过，此处直接使用。
+			// CurrentWorkdir 初始化为启动配置中的工作目录，避免启动阶段丢失目录上下文。
 			CurrentWorkdir:     cfg.Workdir,
 			ActiveSessionTitle: draftSessionTitle,
 			Focus:              panelInput,
