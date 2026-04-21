@@ -379,6 +379,7 @@ func (c *GatewayRPCClient) ensureConnected() (net.Conn, error) {
 	heartbeatCtx, heartbeatCancel := context.WithCancel(context.Background())
 	c.conn = conn
 	c.heartbeatCancel = heartbeatCancel
+	c.heartbeatWG.Add(1)
 	c.startNotificationDispatcher()
 	c.stateMu.Unlock()
 	go c.readLoop(conn)
@@ -556,7 +557,6 @@ func (c *GatewayRPCClient) startHeartbeat(ctx context.Context, conn net.Conn) {
 		timeout = defaultGatewayRPCHeartbeatTimeout
 	}
 
-	c.heartbeatWG.Add(1)
 	go func() {
 		defer c.heartbeatWG.Done()
 		ticker := time.NewTicker(interval)
