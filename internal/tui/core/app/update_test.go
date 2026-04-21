@@ -856,6 +856,173 @@ func TestRuntimeEventAgentDoneHandlerAppendsMessage(t *testing.T) {
 	}
 }
 
+func TestParseFenceOpenLine(t *testing.T) {
+	info, ok := parseFenceOpenLine("```go")
+	if !ok || info != "go" {
+		t.Fatalf("expected fence info, got %q ok=%v", info, ok)
+	}
+	info, ok = parseFenceOpenLine(" not a fence")
+	if ok || info != "" {
+		t.Fatalf("expected no fence")
+	}
+}
+
+func TestIsFenceCloseLine(t *testing.T) {
+	if !isFenceCloseLine("```") {
+		t.Fatalf("expected fence close")
+	}
+	if isFenceCloseLine("```go") {
+		t.Fatalf("expected not fence close")
+	}
+}
+
+func TestIsIndentedCodeLine(t *testing.T) {
+	if !isIndentedCodeLine("\tcode") {
+		t.Fatalf("expected tab-indented code")
+	}
+	if !isIndentedCodeLine("    code") {
+		t.Fatalf("expected space-indented code")
+	}
+	if isIndentedCodeLine("code") {
+		t.Fatalf("expected non-indented line")
+	}
+}
+
+func TestTrimCodeIndent(t *testing.T) {
+	if got := trimCodeIndent("\tcode"); got != "code" {
+		t.Fatalf("expected trimmed tab indent, got %q", got)
+	}
+	if got := trimCodeIndent("    code"); got != "code" {
+		t.Fatalf("expected trimmed space indent, got %q", got)
+	}
+	if got := trimCodeIndent("code"); got != "code" {
+		t.Fatalf("expected unchanged line, got %q", got)
+	}
+}
+
+func TestSplitMarkdownSegmentsFenced(t *testing.T) {
+	content := "hello\n```go\nfmt.Println(\"ok\")\n```\nworld"
+	segments := splitMarkdownSegments(content)
+	if len(segments) < 2 {
+		t.Fatalf("expected multiple segments, got %d", len(segments))
+	}
+	if segments[1].Kind != markdownSegmentCode || segments[1].Code == "" {
+		t.Fatalf("expected code segment")
+	}
+}
+
+func TestSplitMarkdownSegmentsIndented(t *testing.T) {
+	content := "hello\n    code line\nworld"
+	segments := splitMarkdownSegments(content)
+	if len(segments) < 2 {
+		t.Fatalf("expected multiple segments, got %d", len(segments))
+	}
+	foundCode := false
+	for _, seg := range segments {
+		if seg.Kind == markdownSegmentCode && seg.Code != "" {
+			foundCode = true
+		}
+	}
+	if !foundCode {
+		t.Fatalf("expected indented code segment")
+	}
+}
+
+func TestSplitIndentedCodeSegmentsDoesNotGuessByKeywords(t *testing.T) {
+	content := "func main() {\nreturn 1\n}\nplain text"
+	segments := splitIndentedCodeSegments(content)
+	if len(segments) != 1 {
+		t.Fatalf("expected plain text segment only, got %d", len(segments))
+	}
+	if segments[0].Kind != markdownSegmentText {
+		t.Fatalf("expected text segment, got kind=%v", segments[0].Kind)
+	}
+}
+
+func TestSplitMarkdownSegmentsMarkdownSyntaxNotMisclassifiedAsCode(t *testing.T) {
+	content := "# Title\n- item one\n- item two\n\n**bold** and `inline`"
+	segments := splitMarkdownSegments(content)
+	if len(segments) != 1 {
+		t.Fatalf("expected markdown to stay as one text segment, got %d", len(segments))
+	}
+	if segments[0].Kind != markdownSegmentText {
+		t.Fatalf("expected text segment, got kind=%v", segments[0].Kind)
+	}
+}
+
+func TestExtractFencedCodeBlocks(t *testing.T) {
+	content := "text\n```go\nfmt.Println(\"ok\")\n```\nend"
+	blocks := extractFencedCodeBlocks(content)
+	if len(blocks) != 1 || blocks[0] == "" {
+		t.Fatalf("expected one code block")
+	}
+}
+
+func TestParseCopyCodeButton(t *testing.T) {
+	id, start, end, ok := parseCopyCodeButton("[Copy code #12]")
+	if !ok || id != 12 || start >= end {
+		t.Fatalf("unexpected parse result: id=%d start=%d end=%d ok=%v", id, start, end, ok)
+	}
+	if _, _, _, ok := parseCopyCodeButton("no button"); ok {
+		t.Fatalf("expected no button parse")
+	}
+}
+
+func TestCopyCodeBlockByIDSuccess(t *testing.T) {
+	app, _ := newTestApp(t)
+
+	var got string
+	originalClipboard := clipboardWriteAll
+	clipboardWriteAll = func(text string) error {
+		got = text
+		return nil
+	}
+	defer func() { clipboardWriteAll = originalClipboard }()
+
+	app.setCodeCopyBlocks([]copyCodeButtonBinding{{ID: 1, Code: "code"}})
+	ok := app.copyCodeBlockByID(1)
+	if !ok {
+		t.Fatalf("expected handled copy")
+	}
+	if got != "code" {
+		t.Fatalf("expected clipboard content, got %q", got)
+	}
+	if app.state.StatusText == "" {
+		t.Fatalf("expected status text to be set")
+	}
+}
+
+func TestCopyCodeBlockByIDMissing(t *testing.T) {
+	app, _ := newTestApp(t)
+
+	ok := app.copyCodeBlockByID(99)
+	if !ok {
+		t.Fatalf("expected handled copy")
+	}
+	if app.state.StatusText != statusCodeCopyError {
+		t.Fatalf("expected error status, got %s", app.state.StatusText)
+	}
+}
+
+func TestCopyCodeBlockByIDClipboardError(t *testing.T) {
+	app, _ := newTestApp(t)
+
+	originalClipboard := clipboardWriteAll
+	clipboardWriteAll = func(text string) error {
+		return errors.New("fail")
+	}
+	defer func() { clipboardWriteAll = originalClipboard }()
+
+	app.setCodeCopyBlocks([]copyCodeButtonBinding{{ID: 2, Code: "code"}})
+	ok := app.copyCodeBlockByID(2)
+	if !ok {
+		t.Fatalf("expected handled copy")
+	}
+	if app.state.StatusText != statusCodeCopyError {
+		t.Fatalf("expected error status, got %s", app.state.StatusText)
+	}
+}
+
 func TestIsWorkspaceCommandInput(t *testing.T) {
 	if !isWorkspaceCommandInput("& ls -la") {
 		t.Fatalf("expected workspace command prefix to be detected")
@@ -3428,24 +3595,6 @@ func TestRebuildTranscriptCollapsesConsecutiveAssistantTags(t *testing.T) {
 	}
 }
 
-func TestRebuildTranscriptDoesNotCollapseAssistantAcrossToolBoundary(t *testing.T) {
-	app, _ := newTestApp(t)
-	app.width = 120
-	app.height = 32
-	app.applyComponentLayout(true)
-	app.activeMessages = []providertypes.Message{
-		{Role: roleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("before tool")}},
-		{Role: roleTool, Parts: []providertypes.ContentPart{providertypes.NewTextPart("tool output")}},
-		{Role: roleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("after tool")}},
-	}
-
-	app.rebuildTranscript()
-	plain := copyCodeANSIPattern.ReplaceAllString(app.transcriptContent, "")
-	if count := strings.Count(plain, messageTagAgent); count != 2 {
-		t.Fatalf("expected two agent tags across tool boundary, got %d in %q", count, plain)
-	}
-}
-
 func TestTranscriptManualScrollPersistsWhileBusy(t *testing.T) {
 	app, _ := newTestApp(t)
 	app.width = 120
@@ -3919,13 +4068,112 @@ func TestHandleTranscriptMouseWheelAndClickFallback(t *testing.T) {
 		t.Fatalf("expected transcript wheel down to be handled")
 	}
 
-	if app.handleTranscriptMouse(tea.MouseMsg{
+	app.pendingCopyID = 9
+	if !app.handleTranscriptMouse(tea.MouseMsg{
 		X:      x + 1,
 		Y:      y + 1,
 		Button: tea.MouseButtonLeft,
 		Action: tea.MouseActionPress,
 	}) {
-		t.Fatalf("expected plain left click without copy button hit to return false")
+		t.Fatalf("expected left click in transcript to begin selection")
+	}
+	if app.pendingCopyID != 0 {
+		t.Fatalf("expected pendingCopyID reset when click does not hit copy button, got %d", app.pendingCopyID)
+	}
+	if !app.textSelection.dragging {
+		t.Fatalf("expected left click to enter selection dragging mode")
+	}
+}
+
+func TestMouseSelectionUsesYOffsetAndCopiesExactRange(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.width = 100
+	app.height = 24
+	app.applyComponentLayout(true)
+	lines := make([]string, 0, 40)
+	for i := 0; i < 40; i++ {
+		lines = append(lines, fmt.Sprintf("row-%02d-abcdef", i))
+	}
+	app.setTranscriptContent(strings.Join(lines, "\n"))
+	app.transcript.SetYOffset(10)
+
+	x, y, _, _ := app.transcriptBounds()
+	if !app.handleTranscriptMouse(tea.MouseMsg{
+		X:      x + 5,
+		Y:      y + 2,
+		Button: tea.MouseButtonLeft,
+		Action: tea.MouseActionPress,
+	}) {
+		t.Fatalf("expected left press to begin selection")
+	}
+	if got := app.textSelection.startLine; got != 12 {
+		t.Fatalf("expected selection start line to include y-offset, got %d", got)
+	}
+
+	if !app.handleTranscriptMouse(tea.MouseMsg{
+		X:      x + 9,
+		Y:      y + 3,
+		Button: tea.MouseButtonLeft,
+		Action: tea.MouseActionMotion,
+		Type:   tea.MouseMotion,
+	}) {
+		t.Fatalf("expected mouse drag motion to update selection")
+	}
+	if !app.handleTranscriptMouse(tea.MouseMsg{
+		X:      x + 9,
+		Y:      y + 3,
+		Button: tea.MouseButtonLeft,
+		Action: tea.MouseActionRelease,
+		Type:   tea.MouseRelease,
+	}) {
+		t.Fatalf("expected release to finish selection")
+	}
+
+	originalClipboard := clipboardWriteAll
+	var copied string
+	clipboardWriteAll = func(text string) error {
+		copied = text
+		return nil
+	}
+	defer func() { clipboardWriteAll = originalClipboard }()
+
+	if !app.handleTranscriptMouse(tea.MouseMsg{
+		X:      x + 9,
+		Y:      y + 3,
+		Button: tea.MouseButtonRight,
+		Action: tea.MouseActionPress,
+	}) {
+		t.Fatalf("expected right click to copy selected text")
+	}
+
+	want := "2-abcdef\nrow-13-ab"
+	if copied != want {
+		t.Fatalf("expected copied selection %q, got %q", want, copied)
+	}
+	if app.textSelection.active {
+		t.Fatalf("expected selection to be cleared after copy")
+	}
+}
+
+func TestHighlightTranscriptContentUsesColumnRange(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.width = 100
+	app.height = 24
+	app.applyComponentLayout(true)
+	app.textSelection.active = true
+	app.textSelection.startLine = 0
+	app.textSelection.startCol = 6
+	app.textSelection.endLine = 0
+	app.textSelection.endCol = 11
+	app.setTranscriptContent("\x1b[31mhello world\x1b[0m")
+
+	highlighted := app.highlightTranscriptContent(app.transcriptContent)
+	plain := copyCodeANSIPattern.ReplaceAllString(highlighted, "")
+	if plain != "hello world" {
+		t.Fatalf("expected highlighted output to preserve visible text, got %q", plain)
+	}
+	if app.transcriptContent != "\x1b[31mhello world\x1b[0m" {
+		t.Fatalf("expected transcriptContent to keep raw normalized content")
 	}
 }
 

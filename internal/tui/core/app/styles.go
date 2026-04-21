@@ -18,6 +18,8 @@ const (
 	purpleAccent = "#a78bfa"
 	purpleLight  = "#c4b5fd"
 	coralAccent  = "#f09070"
+	selectionBg  = "#355070"
+	selectionFg  = "#f7fafc"
 
 	errorRed      = "#f87171"
 	successGreen  = "#34d399"
@@ -80,7 +82,6 @@ type styles struct {
 }
 
 func newStyles() styles {
-	subtleText := lipgloss.AdaptiveColor{Light: oliveGray, Dark: lightText2}
 	headerAccent := lipgloss.AdaptiveColor{Light: coralAccent, Dark: purpleLight}
 
 	panel := lipgloss.NewStyle().
@@ -191,7 +192,8 @@ func newStyles() styles {
 			BorderForeground(lipgloss.Color(purpleAccent)).
 			Padding(0, 1),
 		footer: lipgloss.NewStyle().
-			Foreground(subtleText),
+			Foreground(lipgloss.Color(lightText)).
+			Bold(true),
 		badgeUser:    badge("", purpleAccent),
 		badgeAgent:   badge("", coralAccent),
 		badgeSuccess: badge("", successGreen),

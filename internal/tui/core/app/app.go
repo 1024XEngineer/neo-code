@@ -136,9 +136,19 @@ type appRuntimeState struct {
 	logPersistVersion       int
 	transcriptContent       string
 	transcriptScrollbarDrag bool
-	footerErrorLast         string
-	footerErrorText         string
-	footerErrorUntil        time.Time
+
+	textSelection struct {
+		active    bool
+		dragging  bool
+		startLine int
+		startCol  int
+		endLine   int
+		endCol    int
+	}
+
+	footerErrorLast  string
+	footerErrorText  string
+	footerErrorUntil time.Time
 }
 
 type pendingImageAttachment struct {
@@ -257,6 +267,23 @@ func newApp(container tuibootstrap.Container) (App, error) {
 
 	h := help.New()
 	h.ShowAll = false
+	h.ShortSeparator = " • "
+	h.Styles.ShortKey = lipgloss.NewStyle().
+		Foreground(lipgloss.Color(selectionFg)).
+		Bold(true).
+		Underline(true)
+	h.Styles.ShortDesc = lipgloss.NewStyle().
+		Foreground(lipgloss.Color(lightText)).
+		Bold(true)
+	h.Styles.ShortSeparator = lipgloss.NewStyle().
+		Foreground(lipgloss.Color(coralAccent)).
+		Bold(true)
+	h.Styles.FullKey = h.Styles.ShortKey.Copy()
+	h.Styles.FullDesc = h.Styles.ShortDesc.Copy()
+	h.Styles.FullSeparator = h.Styles.ShortSeparator.Copy()
+	h.Styles.Ellipsis = lipgloss.NewStyle().
+		Foreground(lipgloss.Color(warningYellow)).
+		Bold(true)
 
 	commandMenu := newCommandMenuModel(uiStyles)
 
