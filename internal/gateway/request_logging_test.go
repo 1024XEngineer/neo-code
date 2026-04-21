@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"neo-code/internal/gateway/protocol"
 )
 
 func TestEmitRequestLogAuthStateAndSourceFallback(t *testing.T) {
@@ -21,7 +23,7 @@ func TestEmitRequestLogAuthStateAndSourceFallback(t *testing.T) {
 		emitRequestLog(ctx, logger, RequestLogEntry{
 			RequestID: " req-1 ",
 			SessionID: " session-1 ",
-			Method:    " gateway.ping ",
+			Method:    " gateway.run ",
 			Status:    "ok",
 		})
 		output := buffer.String()
@@ -43,7 +45,7 @@ func TestEmitRequestLogAuthStateAndSourceFallback(t *testing.T) {
 
 		emitRequestLog(ctx, logger, RequestLogEntry{
 			RequestID: "req-2",
-			Method:    "gateway.ping",
+			Method:    "gateway.run",
 			Source:    string(RequestSourceHTTP),
 			Status:    "error",
 		})
@@ -57,7 +59,7 @@ func TestEmitRequestLogAuthStateAndSourceFallback(t *testing.T) {
 		logger := log.New(buffer, "", 0)
 		emitRequestLog(context.Background(), logger, RequestLogEntry{
 			RequestID: "req-3",
-			Method:    "gateway.ping",
+			Method:    "gateway.run",
 			Source:    string(RequestSourceIPC),
 			Status:    "ok",
 		})
@@ -71,6 +73,21 @@ func TestEmitRequestLogAuthStateAndSourceFallback(t *testing.T) {
 			RequestID: "req-noop",
 		})
 	})
+}
+
+func TestEmitRequestLogMutesGatewayPing(t *testing.T) {
+	buffer := &bytes.Buffer{}
+	logger := log.New(buffer, "", 0)
+
+	emitRequestLog(context.Background(), logger, RequestLogEntry{
+		RequestID: "req-ping",
+		Method:    protocol.MethodGatewayPing,
+		Source:    string(RequestSourceIPC),
+		Status:    "ok",
+	})
+	if buffer.Len() != 0 {
+		t.Fatalf("gateway.ping log should be muted, got %q", buffer.String())
+	}
 }
 
 func TestRequestLatencyMS(t *testing.T) {

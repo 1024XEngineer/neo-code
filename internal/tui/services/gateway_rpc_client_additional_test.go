@@ -8,7 +8,9 @@ import (
 	"io"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -632,12 +634,12 @@ func TestGatewayRPCClientAutoSpawnWhenGatewayUnavailable(t *testing.T) {
 			_ context.Context,
 			listenAddress string,
 			_ func(address string) (net.Conn, error),
-		) error {
+		) (*exec.Cmd, error) {
 			if listenAddress != "test://gateway" {
 				t.Fatalf("auto spawn listen address = %q", listenAddress)
 			}
 			atomic.AddInt32(&autoSpawnCount, 1)
-			return nil
+			return nil, nil
 		},
 		Dial: func(_ string) (net.Conn, error) {
 			attempt := atomic.AddInt32(&dialCount, 1)
@@ -694,9 +696,9 @@ func TestGatewayRPCClientDoesNotAutoSpawnOnNonUnavailableDialError(t *testing.T)
 			_ context.Context,
 			_ string,
 			_ func(address string) (net.Conn, error),
-		) error {
+		) (*exec.Cmd, error) {
 			atomic.AddInt32(&autoSpawnCount, 1)
-			return nil
+			return nil, nil
 		},
 		Dial: func(_ string) (net.Conn, error) {
 			return nil, errors.New("permission denied")
@@ -737,4 +739,93 @@ func TestIsGatewayUnavailableDialError(t *testing.T) {
 	if isGatewayUnavailableDialError(errors.New("permission denied")) {
 		t.Fatalf("permission denied should not be treated as gateway unavailable")
 	}
+}
+
+func TestOpenGatewayAutoSpawnLogFileRotatesPreviousLog(t *testing.T) {
+	t.Parallel()
+
+	logPath := filepath.Join(t.TempDir(), "gateway_auto.log")
+	if err := os.WriteFile(logPath, []byte("previous-run-log"), 0o600); err != nil {
+		t.Fatalf("write previous log: %v", err)
+	}
+	if err := os.WriteFile(logPath+".bak", []byte("old-backup"), 0o600); err != nil {
+		t.Fatalf("write old backup log: %v", err)
+	}
+
+	logFile, err := openGatewayAutoSpawnLogFile(logPath)
+	if err != nil {
+		t.Fatalf("openGatewayAutoSpawnLogFile() error = %v", err)
+	}
+	if _, err := logFile.WriteString("current-run-log"); err != nil {
+		_ = logFile.Close()
+		t.Fatalf("write current log: %v", err)
+	}
+	if err := logFile.Close(); err != nil {
+		t.Fatalf("close current log: %v", err)
+	}
+
+	backupContent, err := os.ReadFile(logPath + ".bak")
+	if err != nil {
+		t.Fatalf("read backup log: %v", err)
+	}
+	if string(backupContent) != "previous-run-log" {
+		t.Fatalf("backup log content = %q, want previous-run-log", string(backupContent))
+	}
+
+	currentContent, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read current log: %v", err)
+	}
+	if string(currentContent) != "current-run-log" {
+		t.Fatalf("current log content = %q, want current-run-log", string(currentContent))
+	}
+}
+
+func TestGatewayRPCClientCloseStopsSpawnedGatewayProcess(t *testing.T) {
+	spawnedCmd := startLongRunningProcessForGatewayRPCTest(t)
+
+	client := &GatewayRPCClient{
+		closed:            make(chan struct{}),
+		pending:           make(map[string]chan gatewayRPCResponse),
+		notifications:     make(chan gatewayRPCNotification, 1),
+		notificationQueue: make(chan gatewayRPCNotification, 1),
+		spawnedCmd:        spawnedCmd,
+	}
+
+	if err := client.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if state := spawnedCmd.ProcessState; state != nil && state.Exited() {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("auto-spawned process should exit after client close")
+}
+
+func startLongRunningProcessForGatewayRPCTest(t *testing.T) *exec.Cmd {
+	t.Helper()
+
+	var cmd *exec.Cmd
+	if runtime.GOOS == "windows" {
+		cmd = exec.Command("cmd", "/c", "ping -n 120 127.0.0.1 >NUL")
+	} else {
+		cmd = exec.Command("sh", "-c", "sleep 120")
+	}
+
+	if err := cmd.Start(); err != nil {
+		t.Skipf("start long running process failed: %v", err)
+	}
+	t.Cleanup(func() {
+		if cmd.Process != nil {
+			_ = cmd.Process.Kill()
+		}
+		go func() {
+			_ = cmd.Wait()
+		}()
+	})
+	return cmd
 }

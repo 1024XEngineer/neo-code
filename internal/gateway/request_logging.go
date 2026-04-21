@@ -6,6 +6,8 @@ import (
 	"log"
 	"strings"
 	"time"
+
+	"neo-code/internal/gateway/protocol"
 )
 
 // RequestLogEntry 表示统一结构化请求日志字段。
@@ -45,6 +47,9 @@ func emitRequestLog(ctx context.Context, logger *log.Logger, entry RequestLogEnt
 	entry.RequestID = strings.TrimSpace(entry.RequestID)
 	entry.SessionID = strings.TrimSpace(entry.SessionID)
 	entry.Method = strings.TrimSpace(entry.Method)
+	if shouldMuteRequestLog(entry.Method) {
+		return
+	}
 
 	raw, err := json.Marshal(entry)
 	if err != nil {
@@ -52,6 +57,11 @@ func emitRequestLog(ctx context.Context, logger *log.Logger, entry RequestLogEnt
 		return
 	}
 	logger.Print(string(raw))
+}
+
+// shouldMuteRequestLog 判断是否应静音该请求日志，避免高频保活心跳造成日志风暴。
+func shouldMuteRequestLog(method string) bool {
+	return strings.EqualFold(strings.TrimSpace(method), protocol.MethodGatewayPing)
 }
 
 // requestStartTime 返回用于统计请求耗时的起始时间。

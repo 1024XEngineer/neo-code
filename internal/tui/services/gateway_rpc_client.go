@@ -42,7 +42,7 @@ type gatewayAutoSpawnFunc func(
 	ctx context.Context,
 	listenAddress string,
 	dialFn func(address string) (net.Conn, error),
-) error
+) (*exec.Cmd, error)
 
 // GatewayRPCClientOptions 描述网关 JSON-RPC 客户端的初始化参数。
 type GatewayRPCClientOptions struct {
@@ -128,6 +128,7 @@ type GatewayRPCClient struct {
 	disableAutoSpawn  bool
 	autoSpawnFn       gatewayAutoSpawnFunc
 	autoSpawnAttempt  bool
+	spawnedCmd        *exec.Cmd
 
 	closeOnce sync.Once
 	closed    chan struct{}
@@ -289,6 +290,10 @@ func (c *GatewayRPCClient) Close() error {
 	c.closeOnce.Do(func() {
 		close(c.closed)
 		firstErr = c.forceCloseWithError(errors.New("gateway rpc client closed"))
+		spawnedCmd := c.detachSpawnedCmd()
+		if stopErr := stopSpawnedGatewayProcess(spawnedCmd); stopErr != nil && firstErr == nil {
+			firstErr = stopErr
+		}
 		c.heartbeatWG.Wait()
 		c.notificationWG.Wait()
 		close(c.notifications)
@@ -426,9 +431,22 @@ func (c *GatewayRPCClient) ensureConnected(ctx context.Context) (net.Conn, error
 			listenAddress := c.listenAddress
 			dialFn := c.dialFn
 			c.stateMu.Unlock()
-			if spawnErr := autoSpawnFn(ctx, listenAddress, dialFn); spawnErr != nil {
+			spawnedCmd, spawnErr := autoSpawnFn(ctx, listenAddress, dialFn)
+			if spawnErr != nil {
 				return nil, fmt.Errorf("dial gateway %s: %w; auto-spawn gateway failed: %w", listenAddress, err, spawnErr)
 			}
+			c.stateMu.Lock()
+			select {
+			case <-c.closed:
+				c.stateMu.Unlock()
+				_ = stopSpawnedGatewayProcess(spawnedCmd)
+				return nil, errors.New("gateway rpc client is closed")
+			default:
+			}
+			if c.spawnedCmd == nil && spawnedCmd != nil {
+				c.spawnedCmd = spawnedCmd
+			}
+			c.stateMu.Unlock()
 			autoSpawnTriggered = true
 			continue
 		}
@@ -439,6 +457,14 @@ func (c *GatewayRPCClient) ensureConnected(ctx context.Context) (net.Conn, error
 		}
 		return nil, fmt.Errorf("dial gateway %s: %w", c.listenAddress, err)
 	}
+}
+
+func (c *GatewayRPCClient) detachSpawnedCmd() *exec.Cmd {
+	c.stateMu.Lock()
+	defer c.stateMu.Unlock()
+	spawnedCmd := c.spawnedCmd
+	c.spawnedCmd = nil
+	return spawnedCmd
 }
 
 func (c *GatewayRPCClient) readLoop(conn net.Conn) {
@@ -741,15 +767,15 @@ func defaultAutoSpawnGateway(
 	ctx context.Context,
 	listenAddress string,
 	dialFn func(address string) (net.Conn, error),
-) error {
+) (*exec.Cmd, error) {
 	executablePath, err := os.Executable()
 	if err != nil {
-		return fmt.Errorf("resolve current executable: %w", err)
+		return nil, fmt.Errorf("resolve current executable: %w", err)
 	}
 
 	logSink, err := openGatewayAutoSpawnOutput()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer func() {
 		_ = logSink.Close()
@@ -759,13 +785,14 @@ func defaultAutoSpawnGateway(
 	cmd.Stdout = logSink
 	cmd.Stderr = logSink
 	if startErr := cmd.Start(); startErr != nil {
-		return fmt.Errorf("start gateway process: %w", startErr)
+		return nil, fmt.Errorf("start gateway process: %w", startErr)
 	}
 
 	if waitErr := waitGatewayReadyAfterAutoSpawn(ctx, listenAddress, dialFn); waitErr != nil {
-		return waitErr
+		_ = stopSpawnedGatewayProcess(cmd)
+		return nil, waitErr
 	}
-	return nil
+	return cmd, nil
 }
 
 // waitGatewayReadyAfterAutoSpawn 轮询探测网关连通性，直到连接可用或超时。
@@ -817,13 +844,11 @@ func waitGatewayReadyAfterAutoSpawn(
 func openGatewayAutoSpawnOutput() (*os.File, error) {
 	logPath, pathErr := resolveGatewayAutoSpawnLogPath()
 	if pathErr == nil {
-		logDir := filepath.Dir(logPath)
-		if mkdirErr := os.MkdirAll(logDir, gatewayAutoSpawnLogDirPerm); mkdirErr == nil {
-			logFile, openErr := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, gatewayAutoSpawnLogFilePerm)
-			if openErr == nil {
-				return logFile, nil
-			}
+		logFile, openErr := openGatewayAutoSpawnLogFile(logPath)
+		if openErr == nil {
+			return logFile, nil
 		}
+		pathErr = openErr
 	}
 
 	devNullFile, devNullErr := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
@@ -836,6 +861,43 @@ func openGatewayAutoSpawnOutput() (*os.File, error) {
 	return devNullFile, nil
 }
 
+// openGatewayAutoSpawnLogFile 在写入新日志前先执行备份轮转，避免单文件无限膨胀并保留上次现场。
+func openGatewayAutoSpawnLogFile(logPath string) (*os.File, error) {
+	logDir := filepath.Dir(logPath)
+	if err := os.MkdirAll(logDir, gatewayAutoSpawnLogDirPerm); err != nil {
+		return nil, fmt.Errorf("create gateway auto-spawn log dir: %w", err)
+	}
+	if err := rotateGatewayAutoSpawnLog(logPath); err != nil {
+		return nil, err
+	}
+
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, gatewayAutoSpawnLogFilePerm)
+	if err != nil {
+		return nil, fmt.Errorf("open gateway auto-spawn log file: %w", err)
+	}
+	return logFile, nil
+}
+
+// rotateGatewayAutoSpawnLog 将上一轮日志移动到 .bak，覆盖旧备份，确保本轮启动使用全新日志文件。
+func rotateGatewayAutoSpawnLog(logPath string) error {
+	_, err := os.Stat(logPath)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("stat gateway auto-spawn log file: %w", err)
+	}
+
+	backupPath := logPath + ".bak"
+	if err := os.Remove(backupPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("remove gateway auto-spawn backup log: %w", err)
+	}
+	if err := os.Rename(logPath, backupPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("backup gateway auto-spawn log file: %w", err)
+	}
+	return nil
+}
+
 // resolveGatewayAutoSpawnLogPath 解析自动拉起网关日志文件路径。
 func resolveGatewayAutoSpawnLogPath() (string, error) {
 	homeDir, err := os.UserHomeDir()
@@ -843,6 +905,30 @@ func resolveGatewayAutoSpawnLogPath() (string, error) {
 		return "", fmt.Errorf("resolve user home dir: %w", err)
 	}
 	return filepath.Join(homeDir, defaultGatewayAutoSpawnLogRelativePath), nil
+}
+
+// stopSpawnedGatewayProcess 结束 Auto-Spawn 产生的后台网关进程，并异步 Wait 回收系统资源。
+func stopSpawnedGatewayProcess(cmd *exec.Cmd) error {
+	if cmd == nil || cmd.Process == nil {
+		return nil
+	}
+
+	if state := cmd.ProcessState; state != nil && state.Exited() {
+		go func() {
+			_ = cmd.Wait()
+		}()
+		return nil
+	}
+
+	killErr := cmd.Process.Kill()
+	if killErr != nil && !errors.Is(killErr, os.ErrProcessDone) {
+		return fmt.Errorf("kill auto-spawned gateway process: %w", killErr)
+	}
+
+	go func() {
+		_ = cmd.Wait()
+	}()
+	return nil
 }
 
 // isGatewayUnavailableDialError 判定拨号失败是否属于“网关未启动/不可达”的可自动拉起场景。
