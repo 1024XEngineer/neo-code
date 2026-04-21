@@ -11,6 +11,7 @@ import (
 	agentcontext "neo-code/internal/context"
 	providertypes "neo-code/internal/provider/types"
 	"neo-code/internal/runtime/controlplane"
+	agentsession "neo-code/internal/session"
 	"neo-code/internal/tools"
 )
 
@@ -420,6 +421,53 @@ func TestResolveStreakLimitDefaults(t *testing.T) {
 	}
 	if got := resolveRepeatCycleStreakLimit(config.RuntimeConfig{MaxRepeatCycleStreak: 6}); got != 6 {
 		t.Fatalf("expected explicit repeat limit 6, got %d", got)
+	}
+}
+
+func TestComputeTodoStateSignature(t *testing.T) {
+	t.Parallel()
+
+	if got := computeTodoStateSignature(nil); got != "" {
+		t.Fatalf("computeTodoStateSignature(nil) = %q", got)
+	}
+
+	base := []agentsession.TodoItem{
+		{
+			ID:       "t1",
+			Content:  "task",
+			Status:   agentsession.TodoStatusPending,
+			Executor: agentsession.TodoExecutorAgent,
+		},
+	}
+	sig1 := computeTodoStateSignature(base)
+	if strings.TrimSpace(sig1) == "" {
+		t.Fatal("expected non-empty signature")
+	}
+
+	same := []agentsession.TodoItem{
+		{
+			ID:       "t1",
+			Content:  "task",
+			Status:   agentsession.TodoStatusPending,
+			Executor: agentsession.TodoExecutorAgent,
+		},
+	}
+	sig2 := computeTodoStateSignature(same)
+	if sig1 != sig2 {
+		t.Fatalf("expected stable signature, got %q vs %q", sig1, sig2)
+	}
+
+	changed := []agentsession.TodoItem{
+		{
+			ID:       "t1",
+			Content:  "task",
+			Status:   agentsession.TodoStatusCompleted,
+			Executor: agentsession.TodoExecutorAgent,
+		},
+	}
+	sig3 := computeTodoStateSignature(changed)
+	if sig3 == sig1 {
+		t.Fatalf("expected changed signature when todo state changes")
 	}
 }
 

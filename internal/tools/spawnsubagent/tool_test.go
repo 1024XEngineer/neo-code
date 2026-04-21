@@ -438,3 +438,96 @@ func TestResolveSpawnOrderWithExistingDependency(t *testing.T) {
 		t.Fatalf("resolveSpawnOrder() = %s, want [t1 t2]", string(raw))
 	}
 }
+
+func TestParseSpawnInputInlineValidationBranches(t *testing.T) {
+	t.Parallel()
+
+	tooLong := strings.Repeat("x", maxSpawnTextLen+1)
+	tooMany := make([]string, 0, maxSpawnListItems+1)
+	for i := 0; i < maxSpawnListItems+1; i++ {
+		tooMany = append(tooMany, fmt.Sprintf("item-%d", i))
+	}
+
+	tests := []struct {
+		name    string
+		raw     string
+		wantErr string
+	}{
+		{
+			name:    "unsupported explicit mode",
+			raw:     `{"mode":"dag","prompt":"do it"}`,
+			wantErr: `unsupported mode "dag"`,
+		},
+		{
+			name:    "role invalid",
+			raw:     `{"prompt":"do it","role":"manager"}`,
+			wantErr: `unsupported role "manager"`,
+		},
+		{
+			name:    "mode and inferred mode mismatch",
+			raw:     `{"mode":"todo","prompt":"do it"}`,
+			wantErr: "items is empty",
+		},
+		{
+			name:    "prompt too long",
+			raw:     `{"prompt":"` + tooLong + `"}`,
+			wantErr: "prompt exceeds max length",
+		},
+		{
+			name:    "id too long",
+			raw:     `{"prompt":"ok","id":"` + tooLong + `"}`,
+			wantErr: "id exceeds max length",
+		},
+		{
+			name:    "expected output too long",
+			raw:     `{"prompt":"ok","expected_output":"` + tooLong + `"}`,
+			wantErr: "expected_output exceeds max length",
+		},
+		{
+			name:    "allowed tools too many",
+			raw:     `{"prompt":"ok","allowed_tools":["` + strings.Join(tooMany, `","`) + `"]}`,
+			wantErr: "allowed_tools exceeds max items",
+		},
+		{
+			name:    "allowed paths too many",
+			raw:     `{"prompt":"ok","allowed_paths":["` + strings.Join(tooMany, `","`) + `"]}`,
+			wantErr: "allowed_paths exceeds max items",
+		},
+		{
+			name:    "negative max steps",
+			raw:     `{"prompt":"ok","max_steps":-1}`,
+			wantErr: "max_steps must be >= 0",
+		},
+		{
+			name:    "negative timeout",
+			raw:     `{"prompt":"ok","timeout_sec":-1}`,
+			wantErr: "timeout_sec must be >= 0",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := parseSpawnInput([]byte(tt.raw))
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("parseSpawnInput() err = %v, want contains %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestDefaultInlineTaskIDAndRenderTodoSpawnResultEmpty(t *testing.T) {
+	t.Parallel()
+
+	if got := defaultInlineTaskID("   "); got != "spawn-subagent-inline" {
+		t.Fatalf("defaultInlineTaskID(blank) = %q", got)
+	}
+	if got := defaultInlineTaskID("review tests"); !strings.HasPrefix(got, "spawn-inline-") {
+		t.Fatalf("defaultInlineTaskID(nonblank) = %q", got)
+	}
+
+	rendered := renderTodoSpawnResult(nil)
+	if !strings.Contains(rendered, "created_count: 0") || strings.Contains(rendered, "created_ids:") {
+		t.Fatalf("renderTodoSpawnResult(nil) = %q", rendered)
+	}
+}

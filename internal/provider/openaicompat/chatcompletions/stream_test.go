@@ -148,6 +148,41 @@ func TestExtractAndMergeHelpers(t *testing.T) {
 	}
 }
 
+func TestExportedStreamHelperWrappers(t *testing.T) {
+	t.Parallel()
+
+	usage := providertypes.Usage{}
+	ExtractStreamUsage(&usage, &Usage{PromptTokens: 2, CompletionTokens: 5, TotalTokens: 7})
+	if usage.InputTokens != 2 || usage.OutputTokens != 5 || usage.TotalTokens != 7 {
+		t.Fatalf("unexpected usage after ExtractStreamUsage: %+v", usage)
+	}
+
+	events := make(chan providertypes.StreamEvent, 4)
+	toolCalls := map[int]*providertypes.ToolCall{}
+	err := MergeToolCallDelta(context.Background(), events, toolCalls, ToolCallDelta{
+		Index: 1,
+		ID:    "call_2",
+		Function: FunctionCall{
+			Name:      "run",
+			Arguments: "{\"cmd\":\"pwd\"}",
+		},
+	})
+	if err != nil {
+		t.Fatalf("MergeToolCallDelta() error = %v", err)
+	}
+	if toolCalls[1] == nil || toolCalls[1].Name != "run" {
+		t.Fatalf("expected tool call state to be updated, got %+v", toolCalls[1])
+	}
+
+	collected := drainChatEvents(events)
+	if len(collected) != 2 {
+		t.Fatalf("expected tool start+delta events, got %d", len(collected))
+	}
+	if _, err := collected[0].ToolCallStartValue(); err != nil {
+		t.Fatalf("expected first wrapper event tool start, got %v", err)
+	}
+}
+
 func drainChatEvents(events <-chan providertypes.StreamEvent) []providertypes.StreamEvent {
 	out := make([]providertypes.StreamEvent, 0, len(events))
 	for {

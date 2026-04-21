@@ -1265,3 +1265,40 @@ func TestResolveToolExecutionTimeoutForSpawnSubagent(t *testing.T) {
 		t.Fatalf("expected non-spawn tool to keep base timeout %v, got %v", base, got)
 	}
 }
+
+func TestResolveToolExecutionTimeoutFallbackAndHelpers(t *testing.T) {
+	t.Parallel()
+
+	got := resolveToolExecutionTimeout(providertypes.ToolCall{
+		Name:      tools.ToolNameSpawnSubAgent,
+		Arguments: `{"prompt":"review","timeout_sec":10}`,
+	}, 0)
+	if got != minInlineSubAgentToolTimeout {
+		t.Fatalf("expected clamped min timeout %v, got %v", minInlineSubAgentToolTimeout, got)
+	}
+
+	mode, timeout := parseSpawnSubAgentRuntimeOptions("")
+	if mode != "" || timeout != 0 {
+		t.Fatalf("unexpected empty parse result mode=%q timeout=%v", mode, timeout)
+	}
+
+	mode, timeout = parseSpawnSubAgentRuntimeOptions("{")
+	if mode != "" || timeout != 0 {
+		t.Fatalf("unexpected invalid json parse result mode=%q timeout=%v", mode, timeout)
+	}
+
+	mode, timeout = parseSpawnSubAgentRuntimeOptions(`{"mode":" inline ","timeout_sec":12}`)
+	if mode != "inline" || timeout != 12*time.Second {
+		t.Fatalf("unexpected parsed options mode=%q timeout=%v", mode, timeout)
+	}
+
+	if got := clampDuration(5*time.Second, 10*time.Second, 20*time.Second); got != 10*time.Second {
+		t.Fatalf("expected lower clamp, got %v", got)
+	}
+	if got := clampDuration(25*time.Second, 10*time.Second, 20*time.Second); got != 20*time.Second {
+		t.Fatalf("expected upper clamp, got %v", got)
+	}
+	if got := clampDuration(15*time.Second, 10*time.Second, 20*time.Second); got != 15*time.Second {
+		t.Fatalf("expected unchanged clamp, got %v", got)
+	}
+}

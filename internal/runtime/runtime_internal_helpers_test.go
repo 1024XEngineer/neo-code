@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -83,6 +84,43 @@ func TestValidateUserInputPartsAcceptsPureImage(t *testing.T) {
 	}
 	if err := validateUserInputParts(parts); err != nil {
 		t.Fatalf("validateUserInputParts() error = %v", err)
+	}
+}
+
+func TestValidateUserInputPartsRejectsInvalidAndEmptyContent(t *testing.T) {
+	t.Parallel()
+
+	if err := validateUserInputParts(nil); err == nil || err.Error() != "runtime: input parts is empty" {
+		t.Fatalf("expected empty parts error, got %v", err)
+	}
+
+	err := validateUserInputParts([]providertypes.ContentPart{{Kind: providertypes.ContentPartKind("unknown")}})
+	if err == nil || !strings.Contains(err.Error(), "invalid input parts") {
+		t.Fatalf("expected invalid parts error, got %v", err)
+	}
+
+	err = validateUserInputParts([]providertypes.ContentPart{providertypes.NewTextPart(" \t ")})
+	if err == nil || err.Error() != "runtime: input content is empty" {
+		t.Fatalf("expected empty content error, got %v", err)
+	}
+}
+
+func TestSessionTitleFromParts(t *testing.T) {
+	t.Parallel()
+
+	title := sessionTitleFromParts([]providertypes.ContentPart{
+		providertypes.NewTextPart("   "),
+		providertypes.NewTextPart("  First line  "),
+	})
+	if title != "First line" {
+		t.Fatalf("sessionTitleFromParts() = %q, want %q", title, "First line")
+	}
+
+	title = sessionTitleFromParts([]providertypes.ContentPart{
+		providertypes.NewRemoteImagePart("https://example.com/image.png"),
+	})
+	if title != "Image Message" {
+		t.Fatalf("sessionTitleFromParts(image) = %q", title)
 	}
 }
 

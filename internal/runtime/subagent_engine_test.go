@@ -622,6 +622,68 @@ func TestEmitCapabilityDeniedEventRespectsContextCancellation(t *testing.T) {
 	}
 }
 
+func TestEmitCapabilityDeniedEventEmitsPayload(t *testing.T) {
+	t.Parallel()
+
+	service := &Service{events: make(chan RuntimeEvent, 1)}
+	emitCapabilityDeniedEvent(context.Background(), service, subagent.StepInput{
+		RunID:     "run-cap-denied",
+		SessionID: "session-cap-denied",
+		Role:      subagent.RoleReviewer,
+		Task:      subagent.Task{ID: "task-cap-denied"},
+	}, "  bash  ")
+
+	select {
+	case event := <-service.Events():
+		if event.Type != EventSubAgentToolCallDenied {
+			t.Fatalf("event type = %q, want %q", event.Type, EventSubAgentToolCallDenied)
+		}
+		payload, ok := event.Payload.(SubAgentToolCallEventPayload)
+		if !ok {
+			t.Fatalf("payload type = %T", event.Payload)
+		}
+		if payload.ToolName != "bash" || payload.Decision != permissionDecisionDeny || payload.Error != "capability denied" {
+			t.Fatalf("unexpected payload: %+v", payload)
+		}
+	default:
+		t.Fatal("expected capability denied event to be emitted")
+	}
+}
+
+func TestParseSubAgentOutputPayloadAndMaxIntBranches(t *testing.T) {
+	t.Parallel()
+
+	_, err := parseSubAgentOutputPayload(`{"summary":"x"`)
+	if err == nil || !strings.Contains(err.Error(), "parse subagent output json") {
+		t.Fatalf("expected invalid json error, got %v", err)
+	}
+
+	_, err = parseSubAgentOutputPayload(`{"summary":"s","findings":[],"patches":[],"risks":[],"next_actions":[]}`)
+	if err == nil || !strings.Contains(err.Error(), `missing required key "artifacts"`) {
+		t.Fatalf("expected missing key error, got %v", err)
+	}
+
+	_, err = parseSubAgentOutputPayload(`{"summary":"s","findings":"bad","patches":[],"risks":[],"next_actions":[],"artifacts":[]}`)
+	if err == nil || !strings.Contains(err.Error(), `must be []string`) {
+		t.Fatalf("expected []string type error, got %v", err)
+	}
+
+	out, err := parseSubAgentOutputPayload(`{"summary":" ok ","findings":["f"],"patches":[],"risks":[],"next_actions":[],"artifacts":[]}`)
+	if err != nil {
+		t.Fatalf("parseSubAgentOutputPayload() unexpected error: %v", err)
+	}
+	if out.Summary != "ok" {
+		t.Fatalf("expected summary to be trimmed, got %q", out.Summary)
+	}
+
+	if got := maxInt(4, 9); got != 9 {
+		t.Fatalf("maxInt(4,9) = %d", got)
+	}
+	if got := maxInt(11, 2); got != 11 {
+		t.Fatalf("maxInt(11,2) = %d", got)
+	}
+}
+
 func assertSubAgentToolEventPayload(
 	t *testing.T,
 	events []RuntimeEvent,
