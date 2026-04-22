@@ -409,20 +409,14 @@ func TestParseInput(t *testing.T) {
 		t.Fatalf("parseInput() got %+v", input)
 	}
 
-	input, err = parseInput([]byte(`{"action":"add","item":{"id":"task-1","title":"legacy-title"}}`))
-	if err != nil {
-		t.Fatalf("parseInput() legacy item title error = %v", err)
-	}
-	if input.Item == nil || input.Item.Content != "legacy-title" {
-		t.Fatalf("parseInput() legacy item title mapping failed, got %+v", input.Item)
+	_, err = parseInput([]byte(`{"action":"add","item":{"id":"task-1","title":"legacy-title"}}`))
+	if err == nil || !strings.Contains(err.Error(), "item.content") {
+		t.Fatalf("parseInput() expected migration error for item.title, err=%v", err)
 	}
 
-	input, err = parseInput([]byte(`{"action":"plan","items":[{"id":"task-1","title":"legacy-1"},{"id":"task-2","content":"new-2"}]}`))
-	if err != nil {
-		t.Fatalf("parseInput() legacy items title error = %v", err)
-	}
-	if len(input.Items) != 2 || input.Items[0].Content != "legacy-1" || input.Items[1].Content != "new-2" {
-		t.Fatalf("parseInput() legacy items mapping failed, got %+v", input.Items)
+	_, err = parseInput([]byte(`{"action":"plan","items":[{"id":"task-1","title":"legacy-1"},{"id":"task-2","content":"new-2"}]}`))
+	if err == nil || !strings.Contains(err.Error(), "items[0].content") {
+		t.Fatalf("parseInput() expected migration error for items[].title, err=%v", err)
 	}
 
 	_, err = parseInput([]byte(`{`))

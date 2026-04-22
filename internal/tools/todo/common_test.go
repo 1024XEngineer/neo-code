@@ -1,7 +1,6 @@
 package todo
 
 import (
-	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -10,7 +9,7 @@ import (
 	"neo-code/internal/tools"
 )
 
-func TestParseInputAndLegacyCompatBranches(t *testing.T) {
+func TestParseInputAndLegacyBranches(t *testing.T) {
 	t.Parallel()
 
 	oversized := []byte(`{"action":"add","item":{"id":"a","content":"` + strings.Repeat("x", maxTodoWriteArgumentsBytes) + `"}}`)
@@ -25,27 +24,29 @@ func TestParseInputAndLegacyCompatBranches(t *testing.T) {
 		"owner_type":" subagent ",
 		"owner_id":" worker-1 ",
 		"reason":"  blocked by dep ",
-		"items":[{"id":"a","title":"legacy title","status":"pending"}],
-		"item":{"id":"b","title":"legacy single"}
+		"items":[{"id":"a","content":"task a","status":"pending"}],
+		"item":{"id":"b","content":"task b"}
 	}`))
 	if err != nil {
-		t.Fatalf("parseInput(legacy) err = %v", err)
+		t.Fatalf("parseInput(normal) err = %v", err)
 	}
 	if input.Action != actionPlan || input.ID != "task-1" || input.Executor != "subagent" {
 		t.Fatalf("normalized input = %+v", input)
 	}
-	if len(input.Items) != 1 || input.Items[0].Content != "legacy title" {
-		t.Fatalf("legacy items mapping failed: %+v", input.Items)
+	if len(input.Items) != 1 || input.Items[0].Content != "task a" {
+		t.Fatalf("items mapping failed: %+v", input.Items)
 	}
-	if input.Item == nil || input.Item.Content != "legacy single" {
-		t.Fatalf("legacy item mapping failed: %+v", input.Item)
+	if input.Item == nil || input.Item.Content != "task b" {
+		t.Fatalf("item mapping failed: %+v", input.Item)
 	}
 
-	if err := applyLegacyTitleCompat([]byte(`{"items":[]}`), nil); err == nil || !strings.Contains(err.Error(), "invalid input payload") {
-		t.Fatalf("applyLegacyTitleCompat(nil) err = %v", err)
+	_, err = parseInput([]byte(`{"action":"add","item":{"id":"task-1","title":"legacy"}}`))
+	if err == nil || !strings.Contains(err.Error(), "item.content") {
+		t.Fatalf("parseInput(legacy item.title) err = %v", err)
 	}
-	if _, err := decodeLegacyItem(json.RawMessage(`{`)); err == nil || !strings.Contains(err.Error(), "parse arguments") {
-		t.Fatalf("decodeLegacyItem(invalid) err = %v", err)
+	_, err = parseInput([]byte(`{"action":"plan","items":[{"id":"task-1","title":"legacy"}]}`))
+	if err == nil || !strings.Contains(err.Error(), "items[0].content") {
+		t.Fatalf("parseInput(legacy items[].title) err = %v", err)
 	}
 }
 

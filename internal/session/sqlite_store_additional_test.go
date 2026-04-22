@@ -739,7 +739,7 @@ func TestCleanupExpiredSessionAssetsStopsOnCanceledContext(t *testing.T) {
 	}
 }
 
-func TestBuildSessionFromRowInfersLegacySubAgentExecutor(t *testing.T) {
+func TestBuildSessionFromRowDefaultsMissingExecutorToAgent(t *testing.T) {
 	t.Parallel()
 
 	nowMS := toUnixMillis(time.Now().UTC())
@@ -760,15 +760,15 @@ func TestBuildSessionFromRowInfersLegacySubAgentExecutor(t *testing.T) {
 	if len(session.Todos) != 1 {
 		t.Fatalf("todos len = %d, want 1", len(session.Todos))
 	}
-	if session.Todos[0].Executor != TodoExecutorSubAgent {
-		t.Fatalf("legacy todo executor = %q, want %q", session.Todos[0].Executor, TodoExecutorSubAgent)
+	if session.Todos[0].Executor != TodoExecutorAgent {
+		t.Fatalf("legacy todo executor = %q, want %q", session.Todos[0].Executor, TodoExecutorAgent)
 	}
 	if session.TodoVersion != CurrentTodoVersion {
 		t.Fatalf("todo_version = %d, want %d", session.TodoVersion, CurrentTodoVersion)
 	}
 }
 
-func TestBuildSessionFromRowInfersLegacySubAgentExecutorByRetrySignals(t *testing.T) {
+func TestBuildSessionFromRowRetrySignalsDoNotInferSubAgentExecutor(t *testing.T) {
 	t.Parallel()
 
 	now := time.Now().UTC()
@@ -793,7 +793,7 @@ func TestBuildSessionFromRowInfersLegacySubAgentExecutorByRetrySignals(t *testin
 	if len(session.Todos) != 1 {
 		t.Fatalf("todos len = %d, want 1", len(session.Todos))
 	}
-	if session.Todos[0].Executor != TodoExecutorSubAgent {
-		t.Fatalf("legacy retry todo executor = %q, want %q", session.Todos[0].Executor, TodoExecutorSubAgent)
+	if session.Todos[0].Executor != TodoExecutorAgent {
+		t.Fatalf("legacy retry todo executor = %q, want %q", session.Todos[0].Executor, TodoExecutorAgent)
 	}
 }

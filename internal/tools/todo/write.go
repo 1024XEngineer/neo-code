@@ -48,10 +48,6 @@ func (t *Tool) Schema() map[string]any {
 			"content": map[string]any{
 				"type": "string",
 			},
-			"title": map[string]any{
-				"type":        "string",
-				"description": "Legacy alias of content; content is preferred.",
-			},
 			"status": map[string]any{
 				"type": "string",
 				"enum": statusEnum,
@@ -97,7 +93,7 @@ func (t *Tool) Schema() map[string]any {
 				"type": "integer",
 			},
 		},
-		"required": []string{"id"},
+		"required": []string{"id", "content"},
 	}
 
 	return map[string]any{
@@ -123,17 +119,6 @@ func (t *Tool) Schema() map[string]any {
 			"item": map[string]any{
 				"allOf": []any{
 					todoItemSchema,
-					map[string]any{
-						"type": "object",
-						"anyOf": []any{
-							map[string]any{
-								"required": []string{"content"},
-							},
-							map[string]any{
-								"required": []string{"title"},
-							},
-						},
-					},
 				},
 			},
 			"id": map[string]any{

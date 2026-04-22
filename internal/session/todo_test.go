@@ -401,8 +401,8 @@ func TestTodoInternalHelpers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("normalizeTodoItem(legacy-subagent) error = %v", err)
 	}
-	if legacySubAgent.Executor != TodoExecutorSubAgent {
-		t.Fatalf("legacy executor = %q, want %q", legacySubAgent.Executor, TodoExecutorSubAgent)
+	if legacySubAgent.Executor != TodoExecutorAgent {
+		t.Fatalf("legacy executor = %q, want %q", legacySubAgent.Executor, TodoExecutorAgent)
 	}
 
 	legacyRetrySubAgent, err := normalizeTodoItem(TodoItem{
@@ -417,8 +417,8 @@ func TestTodoInternalHelpers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("normalizeTodoItem(legacy-retry-subagent) error = %v", err)
 	}
-	if legacyRetrySubAgent.Executor != TodoExecutorSubAgent {
-		t.Fatalf("legacy retry executor = %q, want %q", legacyRetrySubAgent.Executor, TodoExecutorSubAgent)
+	if legacyRetrySubAgent.Executor != TodoExecutorAgent {
+		t.Fatalf("legacy retry executor = %q, want %q", legacyRetrySubAgent.Executor, TodoExecutorAgent)
 	}
 }
 
