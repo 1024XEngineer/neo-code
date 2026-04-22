@@ -409,8 +409,8 @@ func TestParseGitCommandParts(t *testing.T) {
 			tokens:     []string{"git", "-c", "core.editor=vim", "--config-env=core.fsmonitor=GIT_FSMONITOR", "status", "--short", "README.md"},
 			wantOK:     true,
 			wantSubcmd: "status",
-			wantFlags:  []string{"--config-env=core.fsmonitor=git_fsmonitor", "--short", "-c=core.editor=vim"},
-			wantArgs:   []string{"readme.md"},
+			wantFlags:  []string{"--config-env=core.fsmonitor=GIT_FSMONITOR", "--short", "-c=core.editor=vim"},
+			wantArgs:   []string{"README.md"},
 		},
 	}
 
@@ -548,8 +548,21 @@ func TestNormalizeGitArgs(t *testing.T) {
 	if strings.Join(flags, ",") != "--max-count=5,--pretty=oneline" {
 		t.Fatalf("unexpected flags: %v", flags)
 	}
-	if strings.Join(args, ",") != "readme.md,docs/guide.md" {
+	if strings.Join(args, ",") != "README.md,docs/Guide.md" {
 		t.Fatalf("unexpected args: %v", args)
+	}
+}
+
+func TestAnalyzeBashCommandFingerprintDistinguishesCaseSensitiveArgs(t *testing.T) {
+	t.Parallel()
+
+	upper := AnalyzeBashCommand("git checkout Feature")
+	lower := AnalyzeBashCommand("git checkout feature")
+	if upper.Classification != BashIntentClassificationLocalMutation || lower.Classification != BashIntentClassificationLocalMutation {
+		t.Fatalf("expected local mutation classification, got %q and %q", upper.Classification, lower.Classification)
+	}
+	if upper.PermissionFingerprint == lower.PermissionFingerprint {
+		t.Fatalf("expected different fingerprint for case-sensitive args, got %q", upper.PermissionFingerprint)
 	}
 }
 
