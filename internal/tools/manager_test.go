@@ -3,8 +3,10 @@ package tools
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -69,6 +71,10 @@ func (s *stubSandbox) Check(ctx context.Context, action security.Action) (*secur
 		return nil, err
 	}
 	return s.plan, s.err
+}
+
+func isWindowsRuntime() bool {
+	return runtime.GOOS == "windows"
 }
 
 func mustAllowEngine(t *testing.T) security.PermissionEngine {
@@ -234,6 +240,15 @@ func TestDefaultManagerListAvailableSpecsBoundaries(t *testing.T) {
 func TestDefaultManagerExecute(t *testing.T) {
 	t.Parallel()
 
+	lowRiskOutsidePath := filepath.Join(string(filepath.Separator), "tmp", "snake_game.py")
+	workspaceRoot := filepath.Join(string(filepath.Separator), "workspace", "project")
+	protectedOutsidePath := filepath.Join(string(filepath.Separator), "etc", "hosts")
+	if isWindowsRuntime() {
+		lowRiskOutsidePath = `C:\Users\tester\Desktop\SnakeGame\snake_game.py`
+		workspaceRoot = `C:\workspace\project`
+		protectedOutsidePath = `C:\Windows\System32\drivers\etc\hosts`
+	}
+
 	tests := []struct {
 		name              string
 		rules             []security.Rule
@@ -302,6 +317,36 @@ func TestDefaultManagerExecute(t *testing.T) {
 			expectSandboxRuns: 1,
 		},
 		{
+			name: "low risk outside workspace write becomes ask",
+			input: ToolCallInput{
+				ID:        "call-6",
+				Name:      "filesystem_write_file",
+				Arguments: []byte(fmt.Sprintf(`{"path":%q,"content":"hi"}`, lowRiskOutsidePath)),
+				Workdir:   workspaceRoot,
+				SessionID: "session-low-risk-outside",
+			},
+			sandboxErr:        fmt.Errorf("security: path %q escapes workspace root", lowRiskOutsidePath),
+			expectErr:         sandboxExternalWriteApprovalReason,
+			expectContent:     []string{"tool error", "reason: " + sandboxExternalWriteApprovalReason},
+			expectDecision:    "ask",
+			expectCalls:       0,
+			expectSandboxRuns: 1,
+		},
+		{
+			name: "protected outside path keeps hard sandbox reject",
+			input: ToolCallInput{
+				ID:        "call-7",
+				Name:      "filesystem_write_file",
+				Arguments: []byte(fmt.Sprintf(`{"path":%q,"content":"hi"}`, protectedOutsidePath)),
+				Workdir:   workspaceRoot,
+			},
+			sandboxErr:        fmt.Errorf("security: path %q escapes workspace root", protectedOutsidePath),
+			expectErr:         "escapes workspace root",
+			expectContent:     []string{"tool error", "reason: workspace sandbox rejected action", "target: " + protectedOutsidePath},
+			expectCalls:       0,
+			expectSandboxRuns: 1,
+		},
+		{
 			name: "unknown tool uses executor error",
 			input: ToolCallInput{
 				ID:   "call-4",
@@ -364,6 +409,319 @@ func TestDefaultManagerExecute(t *testing.T) {
 				t.Fatalf("expected sandbox runs %d, got %d", tt.expectSandboxRuns, sandbox.callCount)
 			}
 		})
+	}
+}
+
+func TestDefaultManagerSandboxOutsideWriteSessionMemory(t *testing.T) {
+	t.Parallel()
+
+	outsidePath := filepath.Join(string(filepath.Separator), "tmp", "snake_game.py")
+	workspaceRoot := filepath.Join(string(filepath.Separator), "workspace", "project")
+	if isWindowsRuntime() {
+		outsidePath = `C:\Users\tester\Desktop\SnakeGame\snake_game.py`
+		workspaceRoot = `C:\workspace\project`
+	}
+
+	registry := NewRegistry()
+	writeTool := &managerStubTool{name: "filesystem_write_file", content: "ok"}
+	registry.Register(writeTool)
+
+	manager, err := NewManager(registry, mustAllowEngine(t), &stubSandbox{
+		err: fmt.Errorf("security: path %q escapes workspace root", outsidePath),
+	})
+	if err != nil {
+		t.Fatalf("new manager: %v", err)
+	}
+
+	input := ToolCallInput{
+		ID:        "call-outside-ask",
+		Name:      "filesystem_write_file",
+		Arguments: []byte(fmt.Sprintf(`{"path":%q,"content":"hi"}`, outsidePath)),
+		Workdir:   workspaceRoot,
+		SessionID: "session-outside-ask",
+	}
+
+	_, execErr := manager.Execute(context.Background(), input)
+	var permissionErr *PermissionDecisionError
+	if !errors.As(execErr, &permissionErr) || permissionErr.Decision() != "ask" {
+		t.Fatalf("expected initial ask decision, got %v", execErr)
+	}
+
+	if rememberErr := manager.RememberSessionDecision(input.SessionID, permissionErr.Action(), SessionPermissionScopeAlways); rememberErr != nil {
+		t.Fatalf("remember outside write allow: %v", rememberErr)
+	}
+
+	_, err = manager.Execute(context.Background(), input)
+	if err != nil {
+		t.Fatalf("expected remembered allow retry to execute, got %v", err)
+	}
+	if writeTool.callCount != 1 {
+		t.Fatalf("expected write tool to execute after remembered allow, got %d", writeTool.callCount)
+	}
+}
+
+func TestSandboxOutsideWriteApprovalCandidate(t *testing.T) {
+	t.Parallel()
+
+	workspaceRoot := filepath.Join(string(filepath.Separator), "workspace", "project")
+	lowRiskPath := filepath.Join(string(filepath.Separator), "tmp", "sample.py")
+	protectedPath := filepath.Join(string(filepath.Separator), "etc", "hosts")
+	highRiskExecutable := filepath.Join(string(filepath.Separator), "tmp", "sample.exe")
+	startupProfilePath := filepath.Join(string(filepath.Separator), "home", "tester", ".bashrc")
+	if isWindowsRuntime() {
+		workspaceRoot = `C:\workspace\project`
+		lowRiskPath = `C:\Users\tester\Desktop\sample.py`
+		protectedPath = `C:\Windows\System32\drivers\etc\hosts`
+		highRiskExecutable = `C:\Users\tester\Desktop\sample.exe`
+		startupProfilePath = `C:\Users\tester\Documents\PowerShell\Microsoft.PowerShell_profile.ps1`
+	}
+
+	buildAction := func(target string, toolName string) security.Action {
+		return security.Action{
+			Type: security.ActionTypeWrite,
+			Payload: security.ActionPayload{
+				ToolName:      toolName,
+				Resource:      toolName,
+				Operation:     "write_file",
+				Workdir:       workspaceRoot,
+				TargetType:    security.TargetTypePath,
+				Target:        target,
+				SandboxTarget: target,
+			},
+		}
+	}
+
+	tests := []struct {
+		name       string
+		action     security.Action
+		sandboxErr error
+		want       bool
+	}{
+		{
+			name:       "boundary violation low risk file asks approval",
+			action:     buildAction(lowRiskPath, "filesystem_write_file"),
+			sandboxErr: fmt.Errorf("security: path %q escapes workspace root", lowRiskPath),
+			want:       true,
+		},
+		{
+			name:       "non-boundary sandbox error keeps hard reject",
+			action:     buildAction(lowRiskPath, "filesystem_write_file"),
+			sandboxErr: errors.New("workspace denied"),
+			want:       false,
+		},
+		{
+			name:       "protected system path keeps hard reject",
+			action:     buildAction(protectedPath, "filesystem_write_file"),
+			sandboxErr: fmt.Errorf("security: path %q escapes workspace root", protectedPath),
+			want:       false,
+		},
+		{
+			name:       "high risk executable extension keeps hard reject",
+			action:     buildAction(highRiskExecutable, "filesystem_write_file"),
+			sandboxErr: fmt.Errorf("security: path %q escapes workspace root", highRiskExecutable),
+			want:       false,
+		},
+		{
+			name:       "write tool not in allowlist keeps hard reject",
+			action:     buildAction(lowRiskPath, "filesystem_edit"),
+			sandboxErr: fmt.Errorf("security: path %q escapes workspace root", lowRiskPath),
+			want:       false,
+		},
+		{
+			name:       "symlink workspace escape keeps hard reject",
+			action:     buildAction(lowRiskPath, "filesystem_write_file"),
+			sandboxErr: fmt.Errorf("security: path %q escapes workspace root via symlink", filepath.Join("link", "sample.py")),
+			want:       false,
+		},
+		{
+			name:       "startup profile path keeps hard reject",
+			action:     buildAction(startupProfilePath, "filesystem_write_file"),
+			sandboxErr: fmt.Errorf("security: path %q escapes workspace root", startupProfilePath),
+			want:       false,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := isSandboxOutsideWriteApprovalCandidate(tt.action, tt.sandboxErr)
+			if got != tt.want {
+				t.Fatalf("expected %v, got %v", tt.want, got)
+			}
+		})
+	}
+}
+
+func TestSandboxOutsideWriteUtilityHelpers(t *testing.T) {
+	t.Parallel()
+
+	t.Run("candidate requires write action", func(t *testing.T) {
+		t.Parallel()
+		action := security.Action{
+			Type: security.ActionTypeRead,
+			Payload: security.ActionPayload{
+				ToolName:      ToolNameFilesystemWriteFile,
+				Resource:      ToolNameFilesystemWriteFile,
+				Workdir:       "/workspace/project",
+				Target:        "/tmp/note.txt",
+				SandboxTarget: "/tmp/note.txt",
+			},
+		}
+		if got := isSandboxOutsideWriteApprovalCandidate(action, errors.New(`security: path "/tmp/note.txt" escapes workspace root`)); got {
+			t.Fatalf("expected non-write action not to be candidate")
+		}
+	})
+
+	t.Run("candidate requires resolvable target path", func(t *testing.T) {
+		t.Parallel()
+		action := security.Action{
+			Type: security.ActionTypeWrite,
+			Payload: security.ActionPayload{
+				ToolName: ToolNameFilesystemWriteFile,
+				Resource: ToolNameFilesystemWriteFile,
+				Workdir:  "/workspace/project",
+			},
+		}
+		if got := isSandboxOutsideWriteApprovalCandidate(action, errors.New(`security: path "/tmp/note.txt" escapes workspace root`)); got {
+			t.Fatalf("expected empty target not to be candidate")
+		}
+	})
+
+	t.Run("workspace error recognizers handle nil", func(t *testing.T) {
+		t.Parallel()
+		if isWorkspaceBoundaryViolationError(nil) {
+			t.Fatalf("expected nil error not to be workspace boundary violation")
+		}
+		if isWorkspaceSymlinkViolationError(nil) {
+			t.Fatalf("expected nil error not to be workspace symlink violation")
+		}
+	})
+
+	t.Run("resolve action sandbox target path branches", func(t *testing.T) {
+		t.Parallel()
+		if got := resolveActionSandboxTargetPath(security.Action{}); got != "" {
+			t.Fatalf("expected empty target path, got %q", got)
+		}
+
+		actionWithTarget := security.Action{
+			Payload: security.ActionPayload{
+				Target:  "logs/app.log",
+				Workdir: "/workspace/project",
+			},
+		}
+		resolved := resolveActionSandboxTargetPath(actionWithTarget)
+		if !strings.HasSuffix(filepath.ToSlash(resolved), "/workspace/project/logs/app.log") {
+			t.Fatalf("expected target fallback with workdir join, got %q", resolved)
+		}
+
+		actionWithSandboxTarget := security.Action{
+			Payload: security.ActionPayload{
+				Target:        "/tmp/ignored.txt",
+				SandboxTarget: "/tmp/final.txt",
+			},
+		}
+		if got := resolveActionSandboxTargetPath(actionWithSandboxTarget); filepath.Clean(got) != filepath.Clean("/tmp/final.txt") {
+			t.Fatalf("expected sandbox target to win, got %q", got)
+		}
+	})
+
+	t.Run("low risk path rejects empty path", func(t *testing.T) {
+		t.Parallel()
+		if isLowRiskExternalWritePath(" . ") {
+			t.Fatalf("expected dot path to be rejected")
+		}
+	})
+
+	t.Run("startup profile detector os branches", func(t *testing.T) {
+		t.Parallel()
+		if isUserStartupProfilePathForOS(".", "linux") {
+			t.Fatalf("expected dot path not to be startup profile")
+		}
+		if isUserStartupProfilePathForOS(" / ", "linux") {
+			t.Fatalf("expected root path not to be startup profile")
+		}
+		if !isUserStartupProfilePathForOS(`/Users/tester/Documents/WindowsPowerShell/custom_profile.ps1`, "windows") {
+			t.Fatalf("expected windows powershell profile directory to be recognized")
+		}
+		if !isUserStartupProfilePathForOS(`/Users/tester/Documents/PowerShell/custom_profile.ps1`, "windows") {
+			t.Fatalf("expected powershell profile directory to be recognized")
+		}
+		if isUserStartupProfilePathForOS(`/Users/tester/Documents/PowerShell/readme.txt`, "windows") {
+			t.Fatalf("expected non-ps1 path not to be startup profile")
+		}
+		if !isUserStartupProfilePathForOS(`/home/tester/.config/fish/config.fish`, "linux") {
+			t.Fatalf("expected fish config path to be startup profile")
+		}
+	})
+
+	t.Run("system protected path detector os branches", func(t *testing.T) {
+		t.Parallel()
+		if !isSystemProtectedPathForOS("/", "linux") {
+			t.Fatalf("expected linux root to be protected")
+		}
+		if !isSystemProtectedPathForOS("/home/tester/.ssh/config", "linux") {
+			t.Fatalf("expected .ssh path to be protected")
+		}
+		if isSystemProtectedPathForOS("/home/tester/Documents/notes.txt", "linux") {
+			t.Fatalf("expected regular linux user path not to be protected")
+		}
+		if !isSystemProtectedPathForOS(`C:\Windows\System32\drivers\etc\hosts`, "windows") {
+			t.Fatalf("expected windows system path to be protected")
+		}
+		if !isSystemProtectedPathForOS(`C:\Users\tester\AppData\Roaming\config`, "windows") {
+			t.Fatalf("expected appdata path to be protected")
+		}
+		if !isSystemProtectedPathForOS(`C:`, "windows") {
+			t.Fatalf("expected windows drive root to be protected")
+		}
+		if isSystemProtectedPathForOS(`C:\Users\tester\Desktop\note.txt`, "windows") {
+			t.Fatalf("expected regular windows user path not to be protected")
+		}
+	})
+
+	t.Run("error message handles nil", func(t *testing.T) {
+		t.Parallel()
+		if got := errorMessage(nil); got != "" {
+			t.Fatalf("expected empty error message for nil error, got %q", got)
+		}
+	})
+}
+
+func TestSandboxErrorDetailsIncludesWorkspaceContext(t *testing.T) {
+	t.Parallel()
+
+	action := security.Action{
+		Type: security.ActionTypeWrite,
+		Payload: security.ActionPayload{
+			ToolName:      "filesystem_write_file",
+			Resource:      "filesystem_write_file",
+			Workdir:       `C:\workspace\project`,
+			Target:        `C:\Users\tester\Desktop\SnakeGame\snake_game.py`,
+			SandboxTarget: `C:\Users\tester\Desktop\SnakeGame\snake_game.py`,
+		},
+	}
+	if !isWindowsRuntime() {
+		action.Payload.Workdir = "/workspace/project"
+		action.Payload.Target = "/tmp/snake_game.py"
+		action.Payload.SandboxTarget = "/tmp/snake_game.py"
+	}
+
+	details := sandboxErrorDetails(action, errors.New("security: path escapes workspace root"))
+	for _, fragment := range []string{
+		"security: path escapes workspace root",
+		"workdir: " + action.Payload.Workdir,
+		"target: " + action.Payload.Target,
+		"sandbox_target: " + action.Payload.SandboxTarget,
+	} {
+		if !strings.Contains(details, fragment) {
+			t.Fatalf("expected details containing %q, got %q", fragment, details)
+		}
+	}
+
+	withoutPrefix := sandboxErrorDetails(action, errors.New("path escapes workspace root"))
+	if !strings.Contains(withoutPrefix, "security: path escapes workspace root") {
+		t.Fatalf("expected details to normalize security prefix, got %q", withoutPrefix)
 	}
 }
 
@@ -1357,12 +1715,6 @@ func TestPermissionMapperHelpers(t *testing.T) {
 			spawn: true,
 		},
 		{
-			name:  "extract string argument falls back for unescaped windows path",
-			key:   "path",
-			input: []byte(`{"path":"C:\workspace\safe\note.txt"}`),
-			want:  `C:\workspace\safe\note.txt`,
-		},
-		{
 			name:  "extract spawn target invalid json returns empty",
 			input: []byte(`{invalid`),
 			want:  "",
@@ -1883,6 +2235,26 @@ func TestDefaultManagerExecuteCapabilityTokenValidation(t *testing.T) {
 				}
 			},
 			expectErr: "requires non-empty action agent_id",
+		},
+		{
+			name: "deny agent mismatch",
+			buildInput: func(t *testing.T, manager *DefaultManager) ToolCallInput {
+				t.Helper()
+				signed, err := manager.CapabilitySigner().Sign(baseToken)
+				if err != nil {
+					t.Fatalf("sign token: %v", err)
+				}
+				return ToolCallInput{
+					ID:              "call-agent-mismatch",
+					Name:            "filesystem_read_file",
+					Arguments:       []byte(`{"path":"README.md"}`),
+					Workdir:         workdir,
+					TaskID:          baseToken.TaskID,
+					AgentID:         "agent-other",
+					CapabilityToken: &signed,
+				}
+			},
+			expectErr: "agent_id does not match action",
 		},
 	}
 

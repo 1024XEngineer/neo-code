@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -66,6 +68,13 @@ var (
 	ErrPermissionApprovalRequired = errors.New("tools: permission approval required")
 	// ErrCapabilityDenied 标记拒绝由 capability token 触发。
 	ErrCapabilityDenied = errors.New("tools: capability denied")
+)
+
+const (
+	// sandboxExternalWriteApprovalRuleID 是工作区外低风险写入的审批规则标识。
+	sandboxExternalWriteApprovalRuleID = "workspace-sandbox:external-write-ask"
+	// sandboxExternalWriteApprovalReason 是工作区外低风险写入需要审批时的统一提示。
+	sandboxExternalWriteApprovalReason = "workspace write outside workdir requires approval"
 )
 
 // PermissionDecisionError reports a non-allow permission decision.
@@ -322,21 +331,304 @@ func (m *DefaultManager) Execute(ctx context.Context, input ToolCallInput) (Tool
 		return result, permissionErrorFromDecision(decision)
 	}
 
-	plan, err := m.sandbox.Check(ctx, action)
-	if err != nil {
-		result := NewErrorResult(input.Name, "workspace sandbox rejected action", err.Error(), actionMetadata(action))
-		result.ToolCallID = input.ID
-		return result, err
-	}
+		plan, err := m.sandbox.Check(ctx, action)
+		if err != nil {
+			if decision, decisionMatched := resolveSandboxOutsideWriteDecision(input, action, err, m.sessionDecisions); decisionMatched {
+				if decision.Decision != security.DecisionAllow {
+					result := blockedToolResult(input, decision)
+					return result, permissionErrorFromDecision(decision)
+				}
+				m.auditCapabilityDecision(action, string(security.DecisionAllow), decision.Reason)
+				return m.executeAndEnrich(ctx, input, action)
+			} else {
+				result := NewErrorResult(input.Name, "workspace sandbox rejected action", sandboxErrorDetails(action, err), actionMetadata(action))
+				result.ToolCallID = input.ID
+				return result, err
+			}
+		} else if plan != nil {
+			input.WorkspacePlan = plan
+		}
 	m.auditCapabilityDecision(action, string(security.DecisionAllow), "")
 
-	if plan != nil {
-		input.WorkspacePlan = plan
-	}
+	return m.executeAndEnrich(ctx, input, action)
+}
 
+// executeAndEnrich 执行工具并基于本地权限动作补齐受信结构化事实，避免外部元数据越过信任边界。
+func (m *DefaultManager) executeAndEnrich(ctx context.Context, input ToolCallInput, action security.Action) (ToolResult, error) {
 	result, execErr := m.executor.Execute(ctx, input)
 	result = EnrichToolResultFacts(action, result)
 	return result, execErr
+}
+
+// resolveSandboxOutsideWriteDecision 将“工作区外低风险写入”沙箱拒绝收敛为 ask/remembered allow/remembered deny。
+func resolveSandboxOutsideWriteDecision(
+	input ToolCallInput,
+	action security.Action,
+	sandboxErr error,
+	sessionMemory *sessionPermissionMemory,
+) (security.CheckResult, bool) {
+	if !isSandboxOutsideWriteApprovalCandidate(action, sandboxErr) {
+		return security.CheckResult{}, false
+	}
+
+	decision := security.CheckResult{
+		Decision: security.DecisionAsk,
+		Action:   action,
+		Rule: &security.Rule{
+			ID:       sandboxExternalWriteApprovalRuleID,
+			Type:     action.Type,
+			Resource: action.Payload.Resource,
+			Decision: security.DecisionAsk,
+			Reason:   sandboxExternalWriteApprovalReason,
+		},
+		Reason: sandboxExternalWriteApprovalReason,
+	}
+
+	if sessionMemory != nil {
+		if rememberedDecision, rememberedScope, ok := sessionMemory.resolve(input.SessionID, action); ok {
+			decision = security.CheckResult{
+				Decision: rememberedDecision,
+				Action:   action,
+				Rule: &security.Rule{
+					ID:       "session-memory:" + string(rememberedScope),
+					Type:     action.Type,
+					Resource: action.Payload.Resource,
+					Decision: rememberedDecision,
+					Reason:   sessionDecisionReason(rememberedScope),
+				},
+				Reason: sessionDecisionReason(rememberedScope),
+			}
+		}
+	}
+
+	return decision, true
+}
+
+// isSandboxOutsideWriteApprovalCandidate 判断当前沙箱错误是否可升级为“工作区外低风险写入审批”。
+func isSandboxOutsideWriteApprovalCandidate(action security.Action, sandboxErr error) bool {
+	if isWorkspaceSymlinkViolationError(sandboxErr) {
+		return false
+	}
+	if !isWorkspaceBoundaryViolationError(sandboxErr) {
+		return false
+	}
+	if action.Type != security.ActionTypeWrite {
+		return false
+	}
+	resource := strings.TrimSpace(strings.ToLower(action.Payload.Resource))
+	toolName := strings.TrimSpace(strings.ToLower(action.Payload.ToolName))
+	if resource != ToolNameFilesystemWriteFile && toolName != ToolNameFilesystemWriteFile {
+		return false
+	}
+
+	targetPath := resolveActionSandboxTargetPath(action)
+	if targetPath == "" {
+		return false
+	}
+	return isLowRiskExternalWritePath(targetPath)
+}
+
+// isWorkspaceBoundaryViolationError 判断错误是否由工作区边界校验触发。
+func isWorkspaceBoundaryViolationError(err error) bool {
+	message := strings.ToLower(strings.TrimSpace(errorMessage(err)))
+	if message == "" {
+		return false
+	}
+	return strings.Contains(message, "escapes workspace root") ||
+		strings.Contains(message, "different volume than workspace root")
+}
+
+// isWorkspaceSymlinkViolationError 判断沙箱拒绝是否来自符号链接越界逃逸。
+func isWorkspaceSymlinkViolationError(err error) bool {
+	message := strings.ToLower(strings.TrimSpace(errorMessage(err)))
+	if message == "" {
+		return false
+	}
+	return strings.Contains(message, "escapes workspace root via symlink")
+}
+
+// resolveActionSandboxTargetPath 将 action 的 sandbox target 解析为可判定风险的绝对路径。
+func resolveActionSandboxTargetPath(action security.Action) string {
+	target := strings.TrimSpace(action.Payload.SandboxTarget)
+	if target == "" {
+		target = strings.TrimSpace(action.Payload.Target)
+	}
+	if target == "" {
+		return ""
+	}
+	if !filepath.IsAbs(target) && strings.TrimSpace(action.Payload.Workdir) != "" {
+		target = filepath.Join(strings.TrimSpace(action.Payload.Workdir), target)
+	}
+	if absoluteTarget, err := filepath.Abs(target); err == nil {
+		target = absoluteTarget
+	}
+	return filepath.Clean(target)
+}
+
+// isLowRiskExternalWritePath 判断工作区外写入目标是否属于可审批放行的低风险路径。
+func isLowRiskExternalWritePath(targetPath string) bool {
+	cleaned := strings.TrimSpace(filepath.Clean(targetPath))
+	if cleaned == "" || cleaned == "." {
+		return false
+	}
+	if isSystemProtectedPath(cleaned) {
+		return false
+	}
+	if isUserStartupProfilePath(cleaned) {
+		return false
+	}
+	if isHighRiskExecutableExtension(filepath.Ext(cleaned)) {
+		return false
+	}
+	return true
+}
+
+// isUserStartupProfilePath 判断路径是否命中用户级 shell/profile 启动文件，命中后必须保持硬拒绝。
+func isUserStartupProfilePath(path string) bool {
+	return isUserStartupProfilePathForOS(path, runtime.GOOS)
+}
+
+// isUserStartupProfilePathForOS 按指定操作系统判定路径是否命中用户级 shell/profile 启动文件。
+func isUserStartupProfilePathForOS(path string, goos string) bool {
+	cleaned := strings.ToLower(strings.TrimSpace(filepath.Clean(path)))
+	if cleaned == "" || cleaned == "." {
+		return false
+	}
+
+	base := filepath.Base(cleaned)
+	switch base {
+	case ".bashrc", ".bash_profile", ".bash_login", ".profile",
+		".zshrc", ".zprofile", ".zlogin", ".zshenv", ".cshrc", ".tcshrc",
+		"profile.ps1", "microsoft.powershell_profile.ps1",
+		"microsoft.vscode_profile.ps1", "profile":
+		return true
+	}
+
+	segments := splitPathSegments(cleaned)
+	if len(segments) == 0 {
+		return false
+	}
+	if strings.EqualFold(strings.TrimSpace(goos), "windows") {
+		for i := 0; i+2 < len(segments); i++ {
+			if segments[i] == "documents" && segments[i+1] == "windowspowershell" && strings.HasSuffix(base, ".ps1") {
+				return true
+			}
+			if segments[i] == "documents" && segments[i+1] == "powershell" && strings.HasSuffix(base, ".ps1") {
+				return true
+			}
+		}
+		return false
+	}
+	for i := 0; i+2 < len(segments); i++ {
+		if segments[i] == ".config" && segments[i+1] == "fish" && base == "config.fish" {
+			return true
+		}
+	}
+	return false
+}
+
+// isSystemProtectedPath 判定路径是否命中系统受保护目录，命中后必须保持硬拒绝。
+func isSystemProtectedPath(path string) bool {
+	return isSystemProtectedPathForOS(path, runtime.GOOS)
+}
+
+// isSystemProtectedPathForOS 按指定操作系统判定路径是否命中系统受保护目录。
+func isSystemProtectedPathForOS(path string, goos string) bool {
+	normalized := strings.ToLower(filepath.Clean(path))
+	if strings.EqualFold(strings.TrimSpace(goos), "windows") {
+		volume := strings.ToLower(filepath.VolumeName(normalized))
+		if volume == "" && len(normalized) >= 2 && normalized[1] == ':' {
+			volume = normalized[:2]
+		}
+		rest := strings.TrimPrefix(normalized, volume)
+		rest = strings.TrimLeft(rest, `\/`)
+		if rest == "" {
+			return true
+		}
+		segments := splitPathSegments(rest)
+		switch segments[0] {
+		case "windows", "program files", "program files (x86)", "programdata",
+			"$recycle.bin", "system volume information", "recovery", "boot":
+			return true
+		}
+		if len(segments) >= 3 && segments[0] == "users" && segments[2] == "appdata" {
+			return true
+		}
+	} else {
+		trimmed := strings.TrimLeft(normalized, "/")
+		segments := splitPathSegments(trimmed)
+		if len(segments) == 0 {
+			return true
+		}
+		switch segments[0] {
+		case "etc", "bin", "sbin", "usr", "var", "lib", "lib64", "boot", "proc", "sys", "dev", "run", "root":
+			return true
+		}
+	}
+
+	for _, segment := range splitPathSegments(normalized) {
+		if segment == ".ssh" {
+			return true
+		}
+	}
+	return false
+}
+
+// isHighRiskExecutableExtension 识别高风险可执行文件后缀，命中后不走审批放行链路。
+func isHighRiskExecutableExtension(extension string) bool {
+	switch strings.ToLower(strings.TrimSpace(extension)) {
+	case ".exe", ".dll", ".sys", ".bat", ".cmd", ".com", ".scr", ".msi", ".reg":
+		return true
+	default:
+		return false
+	}
+}
+
+// splitPathSegments 把路径按目录分隔符拆成稳定片段，忽略空片段。
+func splitPathSegments(path string) []string {
+	normalized := strings.ReplaceAll(path, "\\", "/")
+	rawSegments := strings.Split(normalized, "/")
+	segments := make([]string, 0, len(rawSegments))
+	for _, segment := range rawSegments {
+		trimmed := strings.TrimSpace(segment)
+		if trimmed == "" {
+			continue
+		}
+		segments = append(segments, trimmed)
+	}
+	return segments
+}
+
+// sandboxErrorDetails 生成可回灌给模型的沙箱拒绝详情，便于模型正确感知失败原因。
+func sandboxErrorDetails(action security.Action, sandboxErr error) string {
+	securityMessage := strings.TrimSpace(errorMessage(sandboxErr))
+	if securityMessage == "" {
+		securityMessage = "sandbox rejected action"
+	}
+	if !strings.HasPrefix(strings.ToLower(securityMessage), "security:") {
+		securityMessage = "security: " + securityMessage
+	}
+	parts := []string{
+		securityMessage,
+	}
+	if workdir := strings.TrimSpace(action.Payload.Workdir); workdir != "" {
+		parts = append(parts, "workdir: "+workdir)
+	}
+	if target := strings.TrimSpace(action.Payload.Target); target != "" {
+		parts = append(parts, "target: "+target)
+	}
+	if sandboxTarget := strings.TrimSpace(action.Payload.SandboxTarget); sandboxTarget != "" {
+		parts = append(parts, "sandbox_target: "+sandboxTarget)
+	}
+	return strings.Join(parts, "\n")
+}
+
+// errorMessage 提取错误文本，统一处理 nil 输入避免重复分支。
+func errorMessage(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
 }
 
 // verifyCapabilityToken 校验 capability token 的签名、绑定关系与时效性。
