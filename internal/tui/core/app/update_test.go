@@ -2109,7 +2109,7 @@ func TestHandleSkillCommandValidationAndGatewayErrors(t *testing.T) {
 		t.Fatalf("expected /skills usage error, got %q", app.state.StatusText)
 	}
 
-	runtime.activateSkillErr = errors.New("unsupported_action_in_gateway_mode")
+	runtime.activateSkillErr = tuiservices.ErrUnsupportedActionInGatewayMode
 	handled, cmd = app.handleImmediateSlashCommand("/skill use go-review")
 	if !handled || cmd == nil {
 		t.Fatalf("expected /skill use to produce cmd on gateway error")
@@ -4187,4 +4187,39 @@ func TestRebuildActivityWithHeightAndPersistPathGuard(t *testing.T) {
 
 	app.state.ActiveSessionID = "___"
 	app.persistLogEntriesForActiveSession()
+}
+
+func TestUpdateIgnoresStaleSkillCommandResultBySession(t *testing.T) {
+	t.Parallel()
+
+	app, _ := newTestApp(t)
+	app.state.ActiveSessionID = "session-current"
+	app.state.StatusText = "before"
+
+	model, _ := app.Update(skillCommandResultMsg{
+		Notice:           "should be ignored",
+		RequestSessionID: "session-old",
+	})
+	app = model.(App)
+
+	if app.state.StatusText != "before" {
+		t.Fatalf("expected stale skill result to be ignored, got status %q", app.state.StatusText)
+	}
+}
+
+func TestUpdateAcceptsSkillCommandResultForCurrentSession(t *testing.T) {
+	t.Parallel()
+
+	app, _ := newTestApp(t)
+	app.state.ActiveSessionID = "session-current"
+
+	model, _ := app.Update(skillCommandResultMsg{
+		Notice:           "Skill command completed.",
+		RequestSessionID: "session-current",
+	})
+	app = model.(App)
+
+	if app.state.StatusText != "Skill command completed." {
+		t.Fatalf("expected status to be updated, got %q", app.state.StatusText)
+	}
 }

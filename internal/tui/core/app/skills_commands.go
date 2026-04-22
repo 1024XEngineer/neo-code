@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -13,27 +14,30 @@ import (
 	tuiservices "neo-code/internal/tui/services"
 )
 
-const unsupportedSkillActionReason = "unsupported_action_in_gateway_mode"
+const (
+	maxRenderedSkillsCount = 50
+	maxSkillFieldLength    = 120
+)
+
+var ansiEscapePattern = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]`)
 
 // skillCommandResultMsg 承载 skills 相关 slash 命令的异步执行结果。
 type skillCommandResultMsg struct {
-	Notice string
-	Err    error
+	Notice           string
+	Err              error
+	RequestSessionID string
 }
 
 // handleSkillsCommand 处理 `/skills`，输出当前可用技能列表与会话激活状态。
 func (a *App) handleSkillsCommand() tea.Cmd {
 	sessionID := strings.TrimSpace(a.state.ActiveSessionID)
-	return tuiservices.RunLocalCommandCmd(
+	return a.runSkillCommand(sessionID,
 		func(ctx context.Context) (string, error) {
 			states, err := a.runtime.ListAvailableSkills(ctx, sessionID)
 			if err != nil {
 				return "", normalizeSkillCommandError(err)
 			}
 			return formatAvailableSkills(states, sessionID), nil
-		},
-		func(notice string, err error) tea.Msg {
-			return skillCommandResultMsg{Notice: notice, Err: err}
 		},
 	)
 }
@@ -48,20 +52,12 @@ func (a *App) handleSkillCommand(rest string) tea.Cmd {
 		return a.handleSkillOffCommand(argument)
 	case "active":
 		if strings.TrimSpace(argument) != "" {
-			errText := fmt.Sprintf("usage: %s", slashUsageSkillActive)
-			a.state.ExecutionError = errText
-			a.state.StatusText = errText
-			a.appendInlineMessage(roleError, errText)
-			a.rebuildTranscript()
+			a.applyInlineCommandError(fmt.Sprintf("usage: %s", slashUsageSkillActive))
 			return nil
 		}
 		return a.handleSkillActiveCommand()
 	default:
-		errText := "usage: /skill use <id> | /skill off <id> | /skill active"
-		a.state.ExecutionError = errText
-		a.state.StatusText = errText
-		a.appendInlineMessage(roleError, errText)
-		a.rebuildTranscript()
+		a.applyInlineCommandError("usage: /skill use <id> | /skill off <id> | /skill active")
 		return nil
 	}
 }
@@ -74,23 +70,16 @@ func (a *App) handleSkillUseCommand(skillID string) tea.Cmd {
 	}
 	normalizedSkillID := strings.TrimSpace(skillID)
 	if normalizedSkillID == "" || isSkillUsagePlaceholder(normalizedSkillID) {
-		errText := fmt.Sprintf("usage: %s", slashUsageSkillUse)
-		a.state.ExecutionError = errText
-		a.state.StatusText = errText
-		a.appendInlineMessage(roleError, errText)
-		a.rebuildTranscript()
+		a.applyInlineCommandError(fmt.Sprintf("usage: %s", slashUsageSkillUse))
 		return nil
 	}
 
-	return tuiservices.RunLocalCommandCmd(
+	return a.runSkillCommand(sessionID,
 		func(ctx context.Context) (string, error) {
 			if err := a.runtime.ActivateSessionSkill(ctx, sessionID, normalizedSkillID); err != nil {
 				return "", normalizeSkillCommandError(err)
 			}
-			return fmt.Sprintf("Skill activated: %s", normalizedSkillID), nil
-		},
-		func(notice string, err error) tea.Msg {
-			return skillCommandResultMsg{Notice: notice, Err: err}
+			return fmt.Sprintf("Skill activated: %s", sanitizeSkillDisplayText(normalizedSkillID, "(unknown)")), nil
 		},
 	)
 }
@@ -103,23 +92,16 @@ func (a *App) handleSkillOffCommand(skillID string) tea.Cmd {
 	}
 	normalizedSkillID := strings.TrimSpace(skillID)
 	if normalizedSkillID == "" || isSkillUsagePlaceholder(normalizedSkillID) {
-		errText := fmt.Sprintf("usage: %s", slashUsageSkillOff)
-		a.state.ExecutionError = errText
-		a.state.StatusText = errText
-		a.appendInlineMessage(roleError, errText)
-		a.rebuildTranscript()
+		a.applyInlineCommandError(fmt.Sprintf("usage: %s", slashUsageSkillOff))
 		return nil
 	}
 
-	return tuiservices.RunLocalCommandCmd(
+	return a.runSkillCommand(sessionID,
 		func(ctx context.Context) (string, error) {
 			if err := a.runtime.DeactivateSessionSkill(ctx, sessionID, normalizedSkillID); err != nil {
 				return "", normalizeSkillCommandError(err)
 			}
-			return fmt.Sprintf("Skill deactivated: %s", normalizedSkillID), nil
-		},
-		func(notice string, err error) tea.Msg {
-			return skillCommandResultMsg{Notice: notice, Err: err}
+			return fmt.Sprintf("Skill deactivated: %s", sanitizeSkillDisplayText(normalizedSkillID, "(unknown)")), nil
 		},
 	)
 }
@@ -136,16 +118,13 @@ func (a *App) handleSkillActiveCommand() tea.Cmd {
 	if !ok {
 		return nil
 	}
-	return tuiservices.RunLocalCommandCmd(
+	return a.runSkillCommand(sessionID,
 		func(ctx context.Context) (string, error) {
 			states, err := a.runtime.ListSessionSkills(ctx, sessionID)
 			if err != nil {
 				return "", normalizeSkillCommandError(err)
 			}
 			return formatSessionSkills(states), nil
-		},
-		func(notice string, err error) tea.Msg {
-			return skillCommandResultMsg{Notice: notice, Err: err}
 		},
 	)
 }
@@ -156,12 +135,18 @@ func (a *App) requireActiveSessionForSkillCommand() (string, bool) {
 	if sessionID != "" {
 		return sessionID, true
 	}
-	errText := "skill command requires an active session; send one message first or switch session via /session"
-	a.state.ExecutionError = errText
-	a.state.StatusText = errText
-	a.appendInlineMessage(roleError, errText)
-	a.rebuildTranscript()
+	a.applyInlineCommandError("skill command requires an active session; send one message first or switch session via /session")
 	return "", false
+}
+
+// runSkillCommand 统一封装 skills 相关本地命令的异步执行与结果消息封装。
+func (a *App) runSkillCommand(sessionID string, run func(context.Context) (string, error)) tea.Cmd {
+	return tuiservices.RunLocalCommandCmd(
+		run,
+		func(notice string, err error) tea.Msg {
+			return skillCommandResultMsg{Notice: notice, Err: err, RequestSessionID: sessionID}
+		},
+	)
 }
 
 // normalizeSkillCommandError 将 gateway 不支持等底层错误映射为可读的命令反馈。
@@ -169,7 +154,7 @@ func normalizeSkillCommandError(err error) error {
 	if err == nil {
 		return nil
 	}
-	if strings.Contains(strings.ToLower(err.Error()), unsupportedSkillActionReason) {
+	if errors.Is(err, tuiservices.ErrUnsupportedActionInGatewayMode) {
 		return errors.New("gateway 模式暂不支持 skills 管理，请切换到 local runtime")
 	}
 	return err
@@ -180,13 +165,14 @@ func formatAvailableSkills(states []agentruntime.AvailableSkillState, sessionID 
 	if len(states) == 0 {
 		return "No skills found in local registry."
 	}
-	rows := make([]string, 0, len(states)+2)
+	rows := make([]string, 0, min(len(states), maxRenderedSkillsCount)+3)
 	header := "Available skills:"
 	if strings.TrimSpace(sessionID) != "" {
 		header += " (active marks from current session)"
 	}
 	rows = append(rows, header)
-	for _, state := range states {
+	visibleCount := min(len(states), maxRenderedSkillsCount)
+	for _, state := range states[:visibleCount] {
 		scope := strings.TrimSpace(string(state.Descriptor.Scope))
 		if scope == "" {
 			scope = "explicit"
@@ -195,19 +181,23 @@ func formatAvailableSkills(states []agentruntime.AvailableSkillState, sessionID 
 		if state.Active {
 			status = "active"
 		}
-		description := strings.TrimSpace(state.Descriptor.Description)
-		if description == "" {
-			description = "-"
-		}
+		description := sanitizeSkillDisplayText(state.Descriptor.Description, "-")
+		id := sanitizeSkillDisplayText(state.Descriptor.ID, "(unknown)")
+		source := sanitizeSkillDisplayText(string(state.Descriptor.Source.Kind), "unknown")
+		version := sanitizeSkillDisplayText(state.Descriptor.Version, "-")
+		scope = sanitizeSkillDisplayText(scope, "explicit")
 		rows = append(rows, fmt.Sprintf(
 			"- %s [%s] scope=%s source=%s version=%s | %s",
-			state.Descriptor.ID,
+			id,
 			status,
 			scope,
-			state.Descriptor.Source.Kind,
-			strings.TrimSpace(state.Descriptor.Version),
+			source,
+			version,
 			description,
 		))
+	}
+	if len(states) > visibleCount {
+		rows = append(rows, fmt.Sprintf("... and %d more skills", len(states)-visibleCount))
 	}
 	return strings.Join(rows, "\n")
 }
@@ -227,18 +217,31 @@ func formatSessionSkills(states []agentruntime.SessionSkillState) string {
 	rows = append(rows, "Active skills:")
 	for _, state := range normalized {
 		if state.Missing {
-			rows = append(rows, fmt.Sprintf("- %s [missing]", state.SkillID))
+			rows = append(rows, fmt.Sprintf("- %s [missing]", sanitizeSkillDisplayText(state.SkillID, "(unknown)")))
 			continue
 		}
 		if state.Descriptor == nil {
-			rows = append(rows, fmt.Sprintf("- %s [active]", state.SkillID))
+			rows = append(rows, fmt.Sprintf("- %s [active]", sanitizeSkillDisplayText(state.SkillID, "(unknown)")))
 			continue
 		}
-		description := strings.TrimSpace(state.Descriptor.Description)
-		if description == "" {
-			description = "-"
-		}
-		rows = append(rows, fmt.Sprintf("- %s [active] %s", state.Descriptor.ID, description))
+		description := sanitizeSkillDisplayText(state.Descriptor.Description, "-")
+		id := sanitizeSkillDisplayText(state.Descriptor.ID, "(unknown)")
+		rows = append(rows, fmt.Sprintf("- %s [active] %s", id, description))
 	}
 	return strings.Join(rows, "\n")
+}
+
+// sanitizeSkillDisplayText 清理并截断技能展示文本，避免控制字符污染和超长输出影响渲染。
+func sanitizeSkillDisplayText(value string, fallback string) string {
+	cleaned := sanitizePermissionDisplayText(ansiEscapePattern.ReplaceAllString(value, ""))
+	if strings.TrimSpace(cleaned) == "" {
+		cleaned = strings.TrimSpace(fallback)
+	}
+	if strings.TrimSpace(cleaned) == "" {
+		return ""
+	}
+	if len([]rune(cleaned)) <= maxSkillFieldLength {
+		return cleaned
+	}
+	return string([]rune(cleaned)[:maxSkillFieldLength-3]) + "..."
 }

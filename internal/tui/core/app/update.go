@@ -222,6 +222,11 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return a, tea.Batch(cmds...)
 	case skillCommandResultMsg:
+		requestSessionID := strings.TrimSpace(typed.RequestSessionID)
+		activeSessionID := strings.TrimSpace(a.state.ActiveSessionID)
+		if requestSessionID != "" && !strings.EqualFold(requestSessionID, activeSessionID) {
+			return a, tea.Batch(cmds...)
+		}
 		if typed.Err != nil {
 			a.state.ExecutionError = typed.Err.Error()
 			a.state.StatusText = typed.Err.Error()
@@ -1187,10 +1192,7 @@ func runtimeEventSkillActivatedHandler(a *App, event agentruntime.RuntimeEvent) 
 	if !ok {
 		return false
 	}
-	skillID := strings.TrimSpace(payload.SkillID)
-	if skillID == "" {
-		skillID = "(unknown)"
-	}
+	skillID := sanitizeSkillDisplayText(payload.SkillID, "(unknown)")
 	a.appendActivity("skills", "Skill activated", skillID, false)
 	return false
 }
@@ -1201,10 +1203,7 @@ func runtimeEventSkillDeactivatedHandler(a *App, event agentruntime.RuntimeEvent
 	if !ok {
 		return false
 	}
-	skillID := strings.TrimSpace(payload.SkillID)
-	if skillID == "" {
-		skillID = "(unknown)"
-	}
+	skillID := sanitizeSkillDisplayText(payload.SkillID, "(unknown)")
 	a.appendActivity("skills", "Skill deactivated", skillID, false)
 	return false
 }
@@ -1215,10 +1214,7 @@ func runtimeEventSkillMissingHandler(a *App, event agentruntime.RuntimeEvent) bo
 	if !ok {
 		return false
 	}
-	skillID := strings.TrimSpace(payload.SkillID)
-	if skillID == "" {
-		skillID = "(unknown)"
-	}
+	skillID := sanitizeSkillDisplayText(payload.SkillID, "(unknown)")
 	a.appendActivity("skills", "Skill missing in registry", skillID, true)
 	return false
 }
@@ -1691,6 +1687,18 @@ func (a *App) appendInlineMessage(role string, message string) {
 	}
 
 	a.activeMessages = append(a.activeMessages, providertypes.Message{Role: role, Parts: []providertypes.ContentPart{providertypes.NewTextPart(content)}})
+}
+
+// applyInlineCommandError 统一写入命令错误并刷新转录区，确保错误提示立即可见。
+func (a *App) applyInlineCommandError(message string) {
+	message = strings.TrimSpace(message)
+	if message == "" {
+		return
+	}
+	a.state.ExecutionError = message
+	a.state.StatusText = message
+	a.appendInlineMessage(roleError, message)
+	a.rebuildTranscript()
 }
 
 func (a *App) appendActivity(kind string, title string, detail string, isError bool) {
@@ -2476,27 +2484,15 @@ func (a *App) handleImmediateSlashCommand(input string) (bool, tea.Cmd) {
 		return true, nil
 	case slashCommandCompact:
 		if strings.TrimSpace(rest) != "" {
-			errText := fmt.Sprintf("usage: %s", slashUsageCompact)
-			a.state.ExecutionError = errText
-			a.state.StatusText = errText
-			a.appendInlineMessage(roleError, errText)
-			a.rebuildTranscript()
+			a.applyInlineCommandError(fmt.Sprintf("usage: %s", slashUsageCompact))
 			return true, nil
 		}
 		if strings.TrimSpace(a.state.ActiveSessionID) == "" {
-			errText := "compact requires an existing session"
-			a.state.ExecutionError = errText
-			a.state.StatusText = errText
-			a.appendInlineMessage(roleError, errText)
-			a.rebuildTranscript()
+			a.applyInlineCommandError("compact requires an existing session")
 			return true, nil
 		}
 		if a.isBusy() {
-			errText := "compact is already running, please wait"
-			a.state.ExecutionError = errText
-			a.state.StatusText = errText
-			a.appendInlineMessage(roleError, errText)
-			a.rebuildTranscript()
+			a.applyInlineCommandError("compact is already running, please wait")
 			return true, nil
 		}
 		a.state.IsCompacting = true
@@ -2513,11 +2509,7 @@ func (a *App) handleImmediateSlashCommand(input string) (bool, tea.Cmd) {
 		return true, a.handleForgetCommand(rest)
 	case slashCommandSkills:
 		if strings.TrimSpace(rest) != "" {
-			errText := fmt.Sprintf("usage: %s", slashUsageSkills)
-			a.state.ExecutionError = errText
-			a.state.StatusText = errText
-			a.appendInlineMessage(roleError, errText)
-			a.rebuildTranscript()
+			a.applyInlineCommandError(fmt.Sprintf("usage: %s", slashUsageSkills))
 			return true, nil
 		}
 		return true, a.handleSkillsCommand()

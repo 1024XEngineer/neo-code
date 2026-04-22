@@ -355,6 +355,14 @@ func TestRuntimeSkillEventHandlers(t *testing.T) {
 	if !last.IsError || !strings.Contains(last.Detail, "(unknown)") {
 		t.Fatalf("expected unknown fallback for missing event, got %+v", last)
 	}
+
+	runtimeEventSkillActivatedHandler(&app, agentruntime.RuntimeEvent{
+		Payload: agentruntime.SessionSkillEventPayload{SkillID: "go\x1b[31m-review"},
+	})
+	last = app.activities[len(app.activities)-1]
+	if strings.Contains(last.Detail, "\x1b") {
+		t.Fatalf("expected sanitized skill id in activity detail, got %+v", last)
+	}
 }
 
 func TestParseSessionSkillEventPayloadBranches(t *testing.T) {

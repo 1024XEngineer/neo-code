@@ -25,6 +25,8 @@ const (
 var (
 	newGatewayRPCClientFactory    = NewGatewayRPCClient
 	newGatewayStreamClientFactory = NewGatewayStreamClient
+	// ErrUnsupportedActionInGatewayMode 标记 gateway runtime 当前不支持的本地动作。
+	ErrUnsupportedActionInGatewayMode = errors.New(unsupportedActionInGatewayMode)
 )
 
 // RemoteRuntimeAdapterOptions 描述远程 Runtime 适配器的初始化参数。
@@ -59,10 +61,9 @@ type RemoteRuntimeAdapter struct {
 	done      chan struct{}
 	events    chan agentruntime.RuntimeEvent
 
-	activeMu       sync.Mutex
-	activeRunID    string
-	activeSession  string
-	lastCancelSent time.Time
+	activeMu      sync.Mutex
+	activeRunID   string
+	activeSession string
 }
 
 // NewRemoteRuntimeAdapter 创建远程 Runtime 适配器，并在启动阶段执行 fail-fast 认证连通性检查。
@@ -240,10 +241,8 @@ func (r *RemoteRuntimeAdapter) Compact(ctx context.Context, input agentruntime.C
 }
 
 // ExecuteSystemTool 在 gateway 模式下显式不支持，避免任何本地 fallback。
-func (r *RemoteRuntimeAdapter) ExecuteSystemTool(ctx context.Context, input agentruntime.SystemToolInput) (tools.ToolResult, error) {
-	_ = ctx
-	_ = input
-	return tools.ToolResult{}, errors.New(unsupportedActionInGatewayMode)
+func (r *RemoteRuntimeAdapter) ExecuteSystemTool(context.Context, agentruntime.SystemToolInput) (tools.ToolResult, error) {
+	return tools.ToolResult{}, unsupportedGatewayActionError()
 }
 
 // ResolvePermission 转发 gateway.resolvePermission 请求。
@@ -360,36 +359,26 @@ func (r *RemoteRuntimeAdapter) LoadSession(ctx context.Context, id string) (agen
 }
 
 // ActivateSessionSkill 在 gateway 模式下显式不支持。
-func (r *RemoteRuntimeAdapter) ActivateSessionSkill(ctx context.Context, sessionID string, skillID string) error {
-	_ = ctx
-	_ = sessionID
-	_ = skillID
-	return errors.New(unsupportedActionInGatewayMode)
+func (r *RemoteRuntimeAdapter) ActivateSessionSkill(context.Context, string, string) error {
+	return unsupportedGatewayActionError()
 }
 
 // DeactivateSessionSkill 在 gateway 模式下显式不支持。
-func (r *RemoteRuntimeAdapter) DeactivateSessionSkill(ctx context.Context, sessionID string, skillID string) error {
-	_ = ctx
-	_ = sessionID
-	_ = skillID
-	return errors.New(unsupportedActionInGatewayMode)
+func (r *RemoteRuntimeAdapter) DeactivateSessionSkill(context.Context, string, string) error {
+	return unsupportedGatewayActionError()
 }
 
 // ListSessionSkills 在 gateway 模式下显式不支持。
-func (r *RemoteRuntimeAdapter) ListSessionSkills(ctx context.Context, sessionID string) ([]agentruntime.SessionSkillState, error) {
-	_ = ctx
-	_ = sessionID
-	return nil, errors.New(unsupportedActionInGatewayMode)
+func (r *RemoteRuntimeAdapter) ListSessionSkills(context.Context, string) ([]agentruntime.SessionSkillState, error) {
+	return nil, unsupportedGatewayActionError()
 }
 
 // ListAvailableSkills 在 gateway 模式下显式不支持。
 func (r *RemoteRuntimeAdapter) ListAvailableSkills(
-	ctx context.Context,
-	sessionID string,
+	context.Context,
+	string,
 ) ([]agentruntime.AvailableSkillState, error) {
-	_ = ctx
-	_ = sessionID
-	return nil, errors.New(unsupportedActionInGatewayMode)
+	return nil, unsupportedGatewayActionError()
 }
 
 // Close 关闭远程适配器并结束事件桥接。
@@ -496,11 +485,13 @@ func (r *RemoteRuntimeAdapter) observeEvent(event agentruntime.RuntimeEvent) {
 func (r *RemoteRuntimeAdapter) setActiveRun(runID string, sessionID string) {
 	r.activeMu.Lock()
 	defer r.activeMu.Unlock()
-	if strings.TrimSpace(runID) != "" {
-		r.activeRunID = strings.TrimSpace(runID)
+	normalizedRunID := strings.TrimSpace(runID)
+	normalizedSessionID := strings.TrimSpace(sessionID)
+	if normalizedRunID != "" {
+		r.activeRunID = normalizedRunID
 	}
-	if strings.TrimSpace(sessionID) != "" {
-		r.activeSession = strings.TrimSpace(sessionID)
+	if normalizedSessionID != "" {
+		r.activeSession = normalizedSessionID
 	}
 }
 
@@ -528,6 +519,11 @@ func (r *RemoteRuntimeAdapter) activeRun() (string, string) {
 	r.activeMu.Lock()
 	defer r.activeMu.Unlock()
 	return strings.TrimSpace(r.activeRunID), strings.TrimSpace(r.activeSession)
+}
+
+// unsupportedGatewayActionError 返回 gateway 模式下不支持本地动作时的统一错误。
+func unsupportedGatewayActionError() error {
+	return ErrUnsupportedActionInGatewayMode
 }
 
 func buildGatewayRunParams(sessionID string, runID string, input agentruntime.PrepareInput) protocol.RunParams {

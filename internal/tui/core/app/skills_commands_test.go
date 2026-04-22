@@ -2,11 +2,13 @@ package tui
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
 	agentruntime "neo-code/internal/runtime"
 	"neo-code/internal/skills"
+	tuiservices "neo-code/internal/tui/services"
 )
 
 func TestFormatAvailableSkills(t *testing.T) {
@@ -62,9 +64,13 @@ func TestSkillCommandErrorAndPlaceholderHelpers(t *testing.T) {
 		t.Fatalf("did not expect normal id as placeholder")
 	}
 
-	unsupported := normalizeSkillCommandError(errors.New("unsupported_action_in_gateway_mode"))
+	unsupported := normalizeSkillCommandError(tuiservices.ErrUnsupportedActionInGatewayMode)
 	if unsupported == nil || !strings.Contains(strings.ToLower(unsupported.Error()), "gateway") {
 		t.Fatalf("expected gateway hint, got %v", unsupported)
+	}
+	containsButNotSentinel := errors.New("skill id unsupported_action_in_gateway_mode is invalid")
+	if normalizeSkillCommandError(containsButNotSentinel) != containsButNotSentinel {
+		t.Fatalf("expected plain error passthrough when only message contains gateway marker")
 	}
 	plain := errors.New("plain")
 	if normalizeSkillCommandError(plain) != plain {
@@ -128,7 +134,7 @@ func TestHandleSkillsAndActiveCommandErrorBranches(t *testing.T) {
 	t.Parallel()
 
 	app, runtime := newTestApp(t)
-	runtime.availableSkillsErr = errors.New(unsupportedSkillActionReason)
+	runtime.availableSkillsErr = tuiservices.ErrUnsupportedActionInGatewayMode
 	runtime.sessionSkillsErr = errors.New("list failed")
 
 	skillsCmd := app.handleSkillsCommand()
@@ -203,5 +209,50 @@ func TestFormatHelpersCoverFallbackBranches(t *testing.T) {
 	}
 	if !strings.Contains(sessionText, "- Alpha [active] -") {
 		t.Fatalf("expected empty-description fallback, got %q", sessionText)
+	}
+}
+
+func TestFormatSkillHelpersSanitizeAndLimitOutput(t *testing.T) {
+	t.Parallel()
+
+	evil := "go\x1b[31m-review"
+	longDescription := strings.Repeat("x", maxSkillFieldLength+20)
+	text := formatAvailableSkills([]agentruntime.AvailableSkillState{
+		{
+			Descriptor: skills.Descriptor{
+				ID:          evil,
+				Description: longDescription,
+				Scope:       skills.ScopeSession,
+				Version:     "v1",
+				Source:      skills.Source{Kind: skills.SourceKindLocal},
+			},
+			Active: true,
+		},
+	}, "session-1")
+	if strings.Contains(text, "\x1b") {
+		t.Fatalf("expected ansi control chars to be stripped, got %q", text)
+	}
+	if !strings.Contains(text, "go-review [active]") {
+		t.Fatalf("expected sanitized skill id, got %q", text)
+	}
+	if !strings.Contains(text, "...") {
+		t.Fatalf("expected long description to be truncated, got %q", text)
+	}
+
+	states := make([]agentruntime.AvailableSkillState, 0, maxRenderedSkillsCount+1)
+	for i := 0; i < maxRenderedSkillsCount+1; i++ {
+		states = append(states, agentruntime.AvailableSkillState{
+			Descriptor: skills.Descriptor{
+				ID:          fmt.Sprintf("skill-%02d", i),
+				Description: "desc",
+				Scope:       skills.ScopeSession,
+				Version:     "v1",
+				Source:      skills.Source{Kind: skills.SourceKindLocal},
+			},
+		})
+	}
+	limited := formatAvailableSkills(states, "")
+	if !strings.Contains(limited, "... and 1 more skills") {
+		t.Fatalf("expected overflow summary, got %q", limited)
 	}
 }

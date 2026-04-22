@@ -16,6 +16,21 @@ import (
 	"neo-code/internal/tools"
 )
 
+func newRemoteRuntimeAdapterForTest(
+	t *testing.T,
+	rpcClient *stubRemoteRPCClient,
+) (*RemoteRuntimeAdapter, *stubRemoteStreamClient) {
+	t.Helper()
+
+	if rpcClient.notifications == nil {
+		rpcClient.notifications = make(chan gatewayRPCNotification)
+	}
+	streamClient := &stubRemoteStreamClient{events: make(chan agentruntime.RuntimeEvent)}
+	adapter := newRemoteRuntimeAdapterWithClients(rpcClient, streamClient, time.Second, 1)
+	t.Cleanup(func() { _ = adapter.Close() })
+	return adapter, streamClient
+}
+
 func TestRemoteRuntimeAdapterSubmitAuthenticatesBindsPreloadsAndRuns(t *testing.T) {
 	rpcClient := &stubRemoteRPCClient{
 		frames: map[string]gateway.MessageFrame{
@@ -37,11 +52,8 @@ func TestRemoteRuntimeAdapterSubmitAuthenticatesBindsPreloadsAndRuns(t *testing.
 				RunID:     "run-1",
 			},
 		},
-		notifications: make(chan gatewayRPCNotification),
 	}
-	streamClient := &stubRemoteStreamClient{events: make(chan agentruntime.RuntimeEvent)}
-	adapter := newRemoteRuntimeAdapterWithClients(rpcClient, streamClient, time.Second, 1)
-	t.Cleanup(func() { _ = adapter.Close() })
+	adapter, _ := newRemoteRuntimeAdapterForTest(t, rpcClient)
 
 	err := adapter.Submit(context.Background(), agentruntime.PrepareInput{
 		SessionID: "session-1",
@@ -97,12 +109,9 @@ func TestRemoteRuntimeAdapterSubmitAuthenticatesBindsPreloadsAndRuns(t *testing.
 
 func TestRemoteRuntimeAdapterSubmitFailFastOnAuthenticateError(t *testing.T) {
 	rpcClient := &stubRemoteRPCClient{
-		authErr:       errors.New("auth failed"),
-		notifications: make(chan gatewayRPCNotification),
+		authErr: errors.New("auth failed"),
 	}
-	streamClient := &stubRemoteStreamClient{events: make(chan agentruntime.RuntimeEvent)}
-	adapter := newRemoteRuntimeAdapterWithClients(rpcClient, streamClient, time.Second, 1)
-	t.Cleanup(func() { _ = adapter.Close() })
+	adapter, _ := newRemoteRuntimeAdapterForTest(t, rpcClient)
 
 	err := adapter.Submit(context.Background(), agentruntime.PrepareInput{
 		SessionID: "session-1",
@@ -122,11 +131,8 @@ func TestRemoteRuntimeAdapterSubmitFailFastOnBindStreamError(t *testing.T) {
 		callErrs: map[string]error{
 			protocol.MethodGatewayBindStream: errors.New("stream bind failed"),
 		},
-		notifications: make(chan gatewayRPCNotification),
 	}
-	streamClient := &stubRemoteStreamClient{events: make(chan agentruntime.RuntimeEvent)}
-	adapter := newRemoteRuntimeAdapterWithClients(rpcClient, streamClient, time.Second, 1)
-	t.Cleanup(func() { _ = adapter.Close() })
+	adapter, _ := newRemoteRuntimeAdapterForTest(t, rpcClient)
 
 	err := adapter.Submit(context.Background(), agentruntime.PrepareInput{
 		SessionID: "session-1",
@@ -144,15 +150,13 @@ func TestRemoteRuntimeAdapterSubmitFailFastOnBindStreamError(t *testing.T) {
 }
 
 func TestRemoteRuntimeAdapterExecuteSystemToolUnsupported(t *testing.T) {
-	rpcClient := &stubRemoteRPCClient{notifications: make(chan gatewayRPCNotification)}
-	streamClient := &stubRemoteStreamClient{events: make(chan agentruntime.RuntimeEvent)}
-	adapter := newRemoteRuntimeAdapterWithClients(rpcClient, streamClient, time.Second, 1)
-	t.Cleanup(func() { _ = adapter.Close() })
+	rpcClient := &stubRemoteRPCClient{}
+	adapter, _ := newRemoteRuntimeAdapterForTest(t, rpcClient)
 
 	_, err := adapter.ExecuteSystemTool(context.Background(), agentruntime.SystemToolInput{
 		ToolName: "bash",
 	})
-	if err == nil || err.Error() != unsupportedActionInGatewayMode {
+	if err == nil || !errors.Is(err, ErrUnsupportedActionInGatewayMode) {
 		t.Fatalf("expected unsupported_action_in_gateway_mode, got %v", err)
 	}
 }
@@ -180,11 +184,8 @@ func TestRemoteRuntimeAdapterLoadSessionMinimalMapping(t *testing.T) {
 				},
 			},
 		},
-		notifications: make(chan gatewayRPCNotification),
 	}
-	streamClient := &stubRemoteStreamClient{events: make(chan agentruntime.RuntimeEvent)}
-	adapter := newRemoteRuntimeAdapterWithClients(rpcClient, streamClient, time.Second, 1)
-	t.Cleanup(func() { _ = adapter.Close() })
+	adapter, _ := newRemoteRuntimeAdapterForTest(t, rpcClient)
 
 	session, err := adapter.LoadSession(context.Background(), "session-9")
 	if err != nil {
@@ -213,12 +214,9 @@ func TestRemoteRuntimeAdapterCancelActiveRunSendsGatewayCancel(t *testing.T) {
 				Action: gateway.FrameActionCancel,
 			},
 		},
-		notifications: make(chan gatewayRPCNotification),
-		methodCh:      methodCh,
+		methodCh: methodCh,
 	}
-	streamClient := &stubRemoteStreamClient{events: make(chan agentruntime.RuntimeEvent)}
-	adapter := newRemoteRuntimeAdapterWithClients(rpcClient, streamClient, time.Second, 1)
-	t.Cleanup(func() { _ = adapter.Close() })
+	adapter, _ := newRemoteRuntimeAdapterForTest(t, rpcClient)
 
 	if canceled := adapter.CancelActiveRun(); canceled {
 		t.Fatalf("expected no active run to cancel")
@@ -240,9 +238,8 @@ func TestRemoteRuntimeAdapterCancelActiveRunSendsGatewayCancel(t *testing.T) {
 }
 
 func TestRemoteRuntimeAdapterCloseClosesUnderlyingClients(t *testing.T) {
-	rpcClient := &stubRemoteRPCClient{notifications: make(chan gatewayRPCNotification)}
-	streamClient := &stubRemoteStreamClient{events: make(chan agentruntime.RuntimeEvent)}
-	adapter := newRemoteRuntimeAdapterWithClients(rpcClient, streamClient, time.Second, 1)
+	rpcClient := &stubRemoteRPCClient{}
+	adapter, streamClient := newRemoteRuntimeAdapterForTest(t, rpcClient)
 
 	if err := adapter.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
