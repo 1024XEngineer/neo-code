@@ -1468,6 +1468,7 @@ func TestBuildPermissionAction(t *testing.T) {
 		input        ToolCallInput
 		wantType     security.ActionType
 		wantResource string
+		wantOp       string
 		wantTarget   string
 		wantSandbox  string
 		wantSemantic string
@@ -1483,6 +1484,7 @@ func TestBuildPermissionAction(t *testing.T) {
 			},
 			wantType:     security.ActionTypeBash,
 			wantResource: "bash",
+			wantOp:       "command",
 			wantTarget:   "echo hi",
 			wantSandbox:  "scripts",
 			wantClass:    BashIntentClassificationUnknown,
@@ -1496,6 +1498,7 @@ func TestBuildPermissionAction(t *testing.T) {
 			},
 			wantType:     security.ActionTypeBash,
 			wantResource: "bash",
+			wantOp:       "command",
 			wantTarget:   "echo hi",
 			wantSandbox:  ".",
 			wantClass:    BashIntentClassificationUnknown,
@@ -1509,6 +1512,7 @@ func TestBuildPermissionAction(t *testing.T) {
 			},
 			wantType:     security.ActionTypeBash,
 			wantResource: "bash_git_read_only",
+			wantOp:       "git_status",
 			wantTarget:   "git status --short --branch",
 			wantSandbox:  ".",
 			wantSemantic: "git",
@@ -1523,11 +1527,42 @@ func TestBuildPermissionAction(t *testing.T) {
 			},
 			wantType:     security.ActionTypeBash,
 			wantResource: "bash_git_remote_op",
+			wantOp:       "git_push",
 			wantTarget:   "git push origin main",
 			wantSandbox:  ".",
 			wantSemantic: "git",
 			wantClass:    BashIntentClassificationRemoteOp,
 			wantFPPrefix: "bash.git|remote_op|push",
+		},
+		{
+			name: "git checkout dot maps destructive semantic resource",
+			input: ToolCallInput{
+				Name:      "bash",
+				Arguments: []byte(`{"command":"git checkout ."}`),
+			},
+			wantType:     security.ActionTypeBash,
+			wantResource: "bash_git_destructive",
+			wantOp:       "git_checkout",
+			wantTarget:   "git checkout .",
+			wantSandbox:  ".",
+			wantSemantic: "git",
+			wantClass:    BashIntentClassificationDestructive,
+			wantFPPrefix: "bash.git|destructive|checkout",
+		},
+		{
+			name: "git only maps unknown semantic operation",
+			input: ToolCallInput{
+				Name:      "bash",
+				Arguments: []byte(`{"command":"git -c core.editor=vim"}`),
+			},
+			wantType:     security.ActionTypeBash,
+			wantResource: "bash_git_unknown",
+			wantOp:       "git_unknown",
+			wantTarget:   "git -c core.editor=vim",
+			wantSandbox:  ".",
+			wantSemantic: "git",
+			wantClass:    BashIntentClassificationUnknown,
+			wantFPPrefix: "bash.git.unknown|sha256=",
 		},
 		{
 			name: "read file maps to read action",
@@ -1537,6 +1572,7 @@ func TestBuildPermissionAction(t *testing.T) {
 			},
 			wantType:     security.ActionTypeRead,
 			wantResource: "filesystem_read_file",
+			wantOp:       "read_file",
 			wantTarget:   "main.go",
 			wantSandbox:  "main.go",
 		},
@@ -1548,6 +1584,7 @@ func TestBuildPermissionAction(t *testing.T) {
 			},
 			wantType:     security.ActionTypeRead,
 			wantResource: "filesystem_grep",
+			wantOp:       "grep",
 			wantTarget:   "internal",
 			wantSandbox:  "internal",
 		},
@@ -1559,6 +1596,7 @@ func TestBuildPermissionAction(t *testing.T) {
 			},
 			wantType:     security.ActionTypeRead,
 			wantResource: "filesystem_glob",
+			wantOp:       "glob",
 			wantTarget:   "cmd",
 			wantSandbox:  "cmd",
 		},
@@ -1570,6 +1608,7 @@ func TestBuildPermissionAction(t *testing.T) {
 			},
 			wantType:     security.ActionTypeWrite,
 			wantResource: "filesystem_write_file",
+			wantOp:       "write_file",
 			wantTarget:   "main.go",
 			wantSandbox:  "main.go",
 		},
@@ -1581,6 +1620,7 @@ func TestBuildPermissionAction(t *testing.T) {
 			},
 			wantType:     security.ActionTypeRead,
 			wantResource: "webfetch",
+			wantOp:       "fetch",
 			wantTarget:   "https://example.com",
 		},
 		{
@@ -1591,6 +1631,7 @@ func TestBuildPermissionAction(t *testing.T) {
 			},
 			wantType:     security.ActionTypeWrite,
 			wantResource: "filesystem_edit",
+			wantOp:       "edit",
 			wantTarget:   "main.go",
 			wantSandbox:  "main.go",
 		},
@@ -1602,6 +1643,7 @@ func TestBuildPermissionAction(t *testing.T) {
 			},
 			wantType:     security.ActionTypeWrite,
 			wantResource: "todo_write",
+			wantOp:       "todo_write",
 			wantTarget:   "todo-1",
 		},
 		{
@@ -1612,6 +1654,7 @@ func TestBuildPermissionAction(t *testing.T) {
 			},
 			wantType:     security.ActionTypeWrite,
 			wantResource: ToolNameSpawnSubAgent,
+			wantOp:       ToolNameSpawnSubAgent,
 			wantTarget:   "task-a,task-b",
 		},
 		{
@@ -1630,6 +1673,7 @@ func TestBuildPermissionAction(t *testing.T) {
 			},
 			wantType:     security.ActionTypeMCP,
 			wantResource: "mcp.github.create_issue",
+			wantOp:       "invoke",
 			wantTarget:   "mcp.github.create_issue",
 		},
 		{
@@ -1666,6 +1710,9 @@ func TestBuildPermissionAction(t *testing.T) {
 			}
 			if action.Payload.Resource != tt.wantResource {
 				t.Fatalf("expected resource %q, got %q", tt.wantResource, action.Payload.Resource)
+			}
+			if tt.wantOp != "" && action.Payload.Operation != tt.wantOp {
+				t.Fatalf("expected operation %q, got %q", tt.wantOp, action.Payload.Operation)
 			}
 			if action.Payload.Target != tt.wantTarget {
 				t.Fatalf("expected target %q, got %q", tt.wantTarget, action.Payload.Target)

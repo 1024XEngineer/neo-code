@@ -463,3 +463,35 @@ func TestSessionPermissionMemoryAllowsRemoteGitRememberForNonAlwaysScopes(t *tes
 		})
 	}
 }
+
+func TestNormalizePermissionCommandTarget(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{
+			name: "empty returns wildcard",
+			raw:  " \n\t ",
+			want: "*",
+		},
+		{
+			name: "normalizes line endings and spaces",
+			raw:  "Get-ChildItem   -Force\r\n|   Select-String    'TODO'\r",
+			want: "get-childitem -force | select-string 'todo'",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := normalizePermissionCommandTarget(tt.raw); got != tt.want {
+				t.Fatalf("normalizePermissionCommandTarget() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
