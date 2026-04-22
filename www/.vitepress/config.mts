@@ -39,10 +39,29 @@ export default defineConfig({
       link: '/',
       themeConfig: {
         nav: [
-          { text: '首页', link: '/' },
-          { text: '文档入口', link: '/docs/' },
+          { text: '文档', link: '/docs/quick-start' },
           { text: 'GitHub', link: repoUrl }
         ],
+        sidebar: {
+          '/docs/': [
+            { text: '快速开始', link: '/docs/quick-start' },
+            {
+              text: '使用指南',
+              items: [
+                { text: '配置', link: '/docs/guides/configuration' },
+                { text: '切换模型', link: '/docs/guides/providers' },
+                { text: 'MCP 配置', link: '/docs/guides/mcp' },
+                { text: '更新升级', link: '/docs/guides/update' }
+              ]
+            },
+            {
+              text: '参考',
+              items: [
+                { text: '架构概览', link: '/docs/reference/architecture' }
+              ]
+            }
+          ]
+        },
         footer: {
           message: '围绕可验证主链路构建的本地 Coding Agent。',
           copyright: 'MIT Licensed'
@@ -64,10 +83,29 @@ export default defineConfig({
       description: 'A local Go + Bubble Tea coding agent built around a verifiable ReAct loop.',
       themeConfig: {
         nav: [
-          { text: 'Home', link: '/en/' },
-          { text: 'Docs', link: '/en/docs/' },
+          { text: 'Docs', link: '/en/docs/quick-start' },
           { text: 'GitHub', link: repoUrl }
         ],
+        sidebar: {
+          '/en/docs/': [
+            { text: 'Quick Start', link: '/en/docs/quick-start' },
+            {
+              text: 'Guides',
+              items: [
+                { text: 'Configuration', link: '/en/docs/guides/configuration' },
+                { text: 'Switching Models', link: '/en/docs/guides/providers' },
+                { text: 'MCP Configuration', link: '/en/docs/guides/mcp' },
+                { text: 'Updating', link: '/en/docs/guides/update' }
+              ]
+            },
+            {
+              text: 'Reference',
+              items: [
+                { text: 'Architecture', link: '/en/docs/reference/architecture' }
+              ]
+            }
+          ]
+        },
         footer: {
           message: 'A local coding agent shaped around a verifiable execution loop.',
           copyright: 'MIT Licensed'
