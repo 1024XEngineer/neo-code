@@ -225,6 +225,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		requestSessionID := strings.TrimSpace(typed.RequestSessionID)
 		activeSessionID := strings.TrimSpace(a.state.ActiveSessionID)
 		if requestSessionID != "" && !strings.EqualFold(requestSessionID, activeSessionID) {
+			a.recordStaleSkillCommandResult(requestSessionID, activeSessionID, typed.Err)
 			return a, tea.Batch(cmds...)
 		}
 		if typed.Err != nil {
@@ -1699,6 +1700,15 @@ func (a *App) applyInlineCommandError(message string) {
 	a.state.StatusText = message
 	a.appendInlineMessage(roleError, message)
 	a.rebuildTranscript()
+}
+
+// recordStaleSkillCommandResult 记录来自旧会话的技能命令结果，避免在会话切换后错误被静默丢弃。
+func (a *App) recordStaleSkillCommandResult(requestSessionID, activeSessionID string, runErr error) {
+	detail := fmt.Sprintf("result from session %q ignored after switching to %q", requestSessionID, activeSessionID)
+	if runErr != nil {
+		detail = fmt.Sprintf("%s; original error: %s", detail, runErr.Error())
+	}
+	a.appendActivity("skills", "Ignored stale skill command result", detail, runErr != nil)
 }
 
 func (a *App) appendActivity(kind string, title string, detail string, isError bool) {

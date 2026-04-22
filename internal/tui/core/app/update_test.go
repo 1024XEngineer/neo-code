@@ -4189,22 +4189,46 @@ func TestRebuildActivityWithHeightAndPersistPathGuard(t *testing.T) {
 	app.persistLogEntriesForActiveSession()
 }
 
+func updateWithSkillCommandResult(t *testing.T, app App, result skillCommandResultMsg) App {
+	t.Helper()
+
+	model, _ := app.Update(result)
+	return model.(App)
+}
+
+func assertIgnoredStaleSkillResultActivity(t *testing.T, app App, beforeActivities int, wantError bool) tuistate.ActivityEntry {
+	t.Helper()
+
+	if len(app.activities) != beforeActivities+1 {
+		t.Fatalf("expected stale skill result to be logged, got %d activities", len(app.activities))
+	}
+	last := app.activities[len(app.activities)-1]
+	if last.Title != "Ignored stale skill command result" {
+		t.Fatalf("expected stale result activity title, got %q", last.Title)
+	}
+	if last.IsError != wantError {
+		t.Fatalf("expected stale result error flag=%v, got %v", wantError, last.IsError)
+	}
+	return last
+}
+
 func TestUpdateIgnoresStaleSkillCommandResultBySession(t *testing.T) {
 	t.Parallel()
 
 	app, _ := newTestApp(t)
 	app.state.ActiveSessionID = "session-current"
 	app.state.StatusText = "before"
+	beforeActivities := len(app.activities)
 
-	model, _ := app.Update(skillCommandResultMsg{
+	app = updateWithSkillCommandResult(t, app, skillCommandResultMsg{
 		Notice:           "should be ignored",
 		RequestSessionID: "session-old",
 	})
-	app = model.(App)
 
 	if app.state.StatusText != "before" {
 		t.Fatalf("expected stale skill result to be ignored, got status %q", app.state.StatusText)
 	}
+	assertIgnoredStaleSkillResultActivity(t, app, beforeActivities, false)
 }
 
 func TestUpdateAcceptsSkillCommandResultForCurrentSession(t *testing.T) {
@@ -4213,13 +4237,34 @@ func TestUpdateAcceptsSkillCommandResultForCurrentSession(t *testing.T) {
 	app, _ := newTestApp(t)
 	app.state.ActiveSessionID = "session-current"
 
-	model, _ := app.Update(skillCommandResultMsg{
+	app = updateWithSkillCommandResult(t, app, skillCommandResultMsg{
 		Notice:           "Skill command completed.",
 		RequestSessionID: "session-current",
 	})
-	app = model.(App)
 
 	if app.state.StatusText != "Skill command completed." {
 		t.Fatalf("expected status to be updated, got %q", app.state.StatusText)
+	}
+}
+
+func TestUpdateLogsStaleSkillCommandErrorBySession(t *testing.T) {
+	t.Parallel()
+
+	app, _ := newTestApp(t)
+	app.state.ActiveSessionID = "session-current"
+	app.state.StatusText = "before"
+	beforeActivities := len(app.activities)
+
+	app = updateWithSkillCommandResult(t, app, skillCommandResultMsg{
+		Err:              errors.New("activate failed"),
+		RequestSessionID: "session-old",
+	})
+
+	if app.state.StatusText != "before" {
+		t.Fatalf("expected stale skill error to keep current status, got %q", app.state.StatusText)
+	}
+	last := assertIgnoredStaleSkillResultActivity(t, app, beforeActivities, true)
+	if !strings.Contains(last.Detail, "activate failed") {
+		t.Fatalf("expected stale error detail to include original error, got %q", last.Detail)
 	}
 }
