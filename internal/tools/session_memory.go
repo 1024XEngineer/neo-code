@@ -75,7 +75,7 @@ func (m *sessionPermissionMemory) remember(sessionID string, action security.Act
 	default:
 		return fmt.Errorf("tools: unsupported session permission scope %q", scope)
 	}
-	if shouldSkipSessionPermissionRemember(action) {
+	if shouldSkipSessionPermissionRemember(action, scope) {
 		return nil
 	}
 
@@ -237,13 +237,14 @@ func normalizePermissionCommandTarget(raw string) string {
 	return strings.ToLower(strings.Join(strings.Fields(trimmed), " "))
 }
 
-// shouldSkipSessionPermissionRemember 判断当前 action 是否应跳过会话级记忆。
-func shouldSkipSessionPermissionRemember(action security.Action) bool {
+// shouldSkipSessionPermissionRemember 判断当前 action 在给定 scope 下是否应跳过会话级记忆。
+func shouldSkipSessionPermissionRemember(action security.Action, scope SessionPermissionScope) bool {
 	if action.Type != security.ActionTypeBash {
 		return false
 	}
 	if !strings.EqualFold(strings.TrimSpace(action.Payload.SemanticType), "git") {
 		return false
 	}
-	return strings.EqualFold(strings.TrimSpace(action.Payload.SemanticClass), BashIntentClassificationRemoteOp)
+	return scope == SessionPermissionScopeAlways &&
+		strings.EqualFold(strings.TrimSpace(action.Payload.SemanticClass), BashIntentClassificationRemoteOp)
 }

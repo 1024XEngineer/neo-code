@@ -399,3 +399,67 @@ func TestSessionPermissionMemorySkipsRemoteGitRemember(t *testing.T) {
 		t.Fatalf("expected remote git action not to be cached")
 	}
 }
+
+func TestSessionPermissionMemoryAllowsRemoteGitRememberForNonAlwaysScopes(t *testing.T) {
+	t.Parallel()
+
+	remoteAction := security.Action{
+		Type: security.ActionTypeBash,
+		Payload: security.ActionPayload{
+			ToolName:              "bash",
+			Resource:              "bash_git_remote_op",
+			TargetType:            security.TargetTypeCommand,
+			Target:                "git push origin main",
+			SemanticType:          "git",
+			SemanticClass:         BashIntentClassificationRemoteOp,
+			PermissionFingerprint: "bash.git|remote_op|push|a=origin,main",
+		},
+	}
+
+	tests := []struct {
+		name      string
+		sessionID string
+		scope     SessionPermissionScope
+		validate  func(t *testing.T, memory *sessionPermissionMemory)
+	}{
+		{
+			name:      "once can be remembered for remote git",
+			sessionID: "session-git-remote-once",
+			scope:     SessionPermissionScopeOnce,
+			validate: func(t *testing.T, memory *sessionPermissionMemory) {
+				t.Helper()
+				if _, _, ok := memory.resolve("session-git-remote-once", remoteAction); !ok {
+					t.Fatalf("expected remote git once decision to be cached")
+				}
+				if _, _, ok := memory.resolve("session-git-remote-once", remoteAction); ok {
+					t.Fatalf("expected remote git once decision to be consumed")
+				}
+			},
+		},
+		{
+			name:      "reject can be remembered for remote git",
+			sessionID: "session-git-remote-reject",
+			scope:     SessionPermissionScopeReject,
+			validate: func(t *testing.T, memory *sessionPermissionMemory) {
+				t.Helper()
+				decision, scope, ok := memory.resolve("session-git-remote-reject", remoteAction)
+				if !ok || decision != security.DecisionDeny || scope != SessionPermissionScopeReject {
+					t.Fatalf("expected remote git reject decision to be cached, got decision=%q scope=%q ok=%v", decision, scope, ok)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			memory := newSessionPermissionMemory()
+			if err := memory.remember(tt.sessionID, remoteAction, tt.scope); err != nil {
+				t.Fatalf("remember remote action: %v", err)
+			}
+			tt.validate(t, memory)
+		})
+	}
+}

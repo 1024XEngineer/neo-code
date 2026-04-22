@@ -66,6 +66,22 @@ func TestAnalyzeBashCommandClassifiesGitCommand(t *testing.T) {
 			wantPrefix: "bash.git|read_only|branch",
 		},
 		{
+			name:       "git status with -c config injection is unknown",
+			command:    "git -c core.fsmonitor='echo pwn' status",
+			wantIsGit:  true,
+			wantClass:  BashIntentClassificationUnknown,
+			wantSubcmd: "status",
+			wantPrefix: "bash.git|unknown|status",
+		},
+		{
+			name:       "git status with config-env is unknown",
+			command:    "git --config-env=core.fsmonitor=GIT_FSMONITOR status",
+			wantIsGit:  true,
+			wantClass:  BashIntentClassificationUnknown,
+			wantSubcmd: "status",
+			wantPrefix: "bash.git|unknown|status",
+		},
+		{
 			name:        "non git command is unknown",
 			command:     "Get-ChildItem -Force",
 			wantIsGit:   false,

@@ -131,17 +131,13 @@ func AnalyzeBashCommand(command string) BashSemanticIntent {
 		}
 	}
 	if len(tokens) < 2 {
-		return BashSemanticIntent{
-			IsGit:                 true,
-			Classification:        BashIntentClassificationUnknown,
-			NormalizedIntent:      "git",
-			PermissionFingerprint: buildSemanticFingerprint("bash.git.unknown", trimmed),
-			ParseError:            true,
-		}
+		return buildUnknownGitIntent(trimmed)
 	}
 
-	subcommand := strings.ToLower(strings.TrimSpace(tokens[1]))
-	flags, args := normalizeGitArgs(tokens[2:])
+	subcommand, flags, args, ok := parseGitCommandParts(tokens)
+	if !ok {
+		return buildUnknownGitIntent(trimmed)
+	}
 	classification := classifyGitIntent(subcommand, flags, args)
 	normalizedIntent := buildNormalizedGitIntent(subcommand, flags, args)
 	return BashSemanticIntent{
@@ -151,6 +147,60 @@ func AnalyzeBashCommand(command string) BashSemanticIntent {
 		NormalizedIntent:      normalizedIntent,
 		PermissionFingerprint: buildGitPermissionFingerprint(classification, subcommand, flags, args),
 	}
+}
+
+// buildUnknownGitIntent 构建 git 命令解析失败时的统一返回结构。
+func buildUnknownGitIntent(command string) BashSemanticIntent {
+	return BashSemanticIntent{
+		IsGit:                 true,
+		Classification:        BashIntentClassificationUnknown,
+		NormalizedIntent:      "git",
+		PermissionFingerprint: buildSemanticFingerprint("bash.git.unknown", command),
+		ParseError:            true,
+	}
+}
+
+// parseGitCommandParts 解析 git 全局参数与子命令，避免将 -c 等全局参数误判为子命令。
+func parseGitCommandParts(tokens []string) (string, []string, []string, bool) {
+	if len(tokens) < 2 {
+		return "", nil, nil, false
+	}
+
+	globalFlags := make([]string, 0, len(tokens))
+	cursor := 1
+	subcommand := ""
+	for ; cursor < len(tokens); cursor++ {
+		token := strings.TrimSpace(tokens[cursor])
+		if token == "" {
+			continue
+		}
+		if token == "--" {
+			break
+		}
+		if strings.HasPrefix(token, "-") {
+			key, value := splitGitFlagToken(token)
+			if value == "" && cursor+1 < len(tokens) && shouldConsumeGitFlagValue(key, tokens[cursor+1]) {
+				cursor++
+				value = strings.ToLower(strings.TrimSpace(tokens[cursor]))
+			}
+			if value == "" {
+				globalFlags = append(globalFlags, strings.ToLower(key))
+			} else {
+				globalFlags = append(globalFlags, strings.ToLower(key)+"="+value)
+			}
+			continue
+		}
+		subcommand = strings.ToLower(token)
+		cursor++
+		break
+	}
+	if subcommand == "" {
+		return "", nil, nil, false
+	}
+	flags, args := normalizeGitArgs(tokens[cursor:])
+	flags = append(flags, globalFlags...)
+	sort.Strings(flags)
+	return subcommand, flags, args, true
 }
 
 // containsShellControlOperators 检测命令中是否存在复合控制符。
@@ -321,6 +371,9 @@ func shouldConsumeGitFlagValue(flag string, _ string) bool {
 
 // classifyGitIntent 根据子命令与参数推导权限分类。
 func classifyGitIntent(subcommand string, flags []string, args []string) string {
+	if hasRiskyGitConfigFlag(flags) {
+		return BashIntentClassificationUnknown
+	}
 	if _, ok := gitSubcommandRemote[subcommand]; ok {
 		return BashIntentClassificationRemoteOp
 	}
@@ -377,6 +430,11 @@ func classifyGitIntent(subcommand string, flags []string, args []string) string 
 		return BashIntentClassificationLocalMutation
 	}
 	return BashIntentClassificationUnknown
+}
+
+// hasRiskyGitConfigFlag 判断是否包含可能改变 Git 执行语义的配置注入参数。
+func hasRiskyGitConfigFlag(flags []string) bool {
+	return hasGitFlag(flags, "-c", "--config-env")
 }
 
 // hasGitFlag 判断 flags 中是否命中指定 flag（支持 key=value 形式）。
