@@ -28,17 +28,49 @@ func TestApplyToolExecutionCompletionTracksWriteAndVerification(t *testing.T) {
 	t.Parallel()
 
 	written := applyToolExecutionCompletion(controlplane.CompletionState{}, toolExecutionSummary{
-		HasSuccessfulWorkspaceWrite: true,
+		Results: []tools.ToolResult{
+			{Facts: tools.ToolExecutionFacts{WorkspaceWrite: true}},
+		},
 	})
 	if !written.HasUnverifiedWrites {
 		t.Fatalf("expected successful write to require verification, got %+v", written)
 	}
 
 	verified := applyToolExecutionCompletion(written, toolExecutionSummary{
-		HasSuccessfulVerification: true,
+		Results: []tools.ToolResult{
+			{Facts: tools.ToolExecutionFacts{VerificationPerformed: true, VerificationPassed: true}},
+		},
 	})
 	if verified.HasUnverifiedWrites {
 		t.Fatalf("expected explicit verification to clear pending write, got %+v", verified)
+	}
+}
+
+func TestApplyToolExecutionCompletionKeepsUnverifiedWhenVerifyBeforeWrite(t *testing.T) {
+	t.Parallel()
+
+	got := applyToolExecutionCompletion(controlplane.CompletionState{}, toolExecutionSummary{
+		Results: []tools.ToolResult{
+			{Facts: tools.ToolExecutionFacts{VerificationPerformed: true, VerificationPassed: true}},
+			{Facts: tools.ToolExecutionFacts{WorkspaceWrite: true}},
+		},
+	})
+	if !got.HasUnverifiedWrites {
+		t.Fatalf("expected write after verify to remain unverified, got %+v", got)
+	}
+}
+
+func TestApplyToolExecutionCompletionClearsWhenVerifyAfterWrite(t *testing.T) {
+	t.Parallel()
+
+	got := applyToolExecutionCompletion(controlplane.CompletionState{}, toolExecutionSummary{
+		Results: []tools.ToolResult{
+			{Facts: tools.ToolExecutionFacts{WorkspaceWrite: true}},
+			{Facts: tools.ToolExecutionFacts{VerificationPerformed: true, VerificationPassed: true}},
+		},
+	})
+	if got.HasUnverifiedWrites {
+		t.Fatalf("expected verify after write to clear unverified flag, got %+v", got)
 	}
 }
 

@@ -32,11 +32,25 @@ func collectCompletionState(
 
 // applyToolExecutionCompletion 更新一轮工具执行后的 completion 事实。
 func applyToolExecutionCompletion(current controlplane.CompletionState, summary toolExecutionSummary) controlplane.CompletionState {
-	if summary.HasSuccessfulWorkspaceWrite {
-		current.HasUnverifiedWrites = true
+	if len(summary.Results) == 0 {
+		if summary.HasSuccessfulWorkspaceWrite {
+			current.HasUnverifiedWrites = true
+		}
+		if summary.HasSuccessfulVerification {
+			current.HasUnverifiedWrites = false
+		}
+		return current
 	}
-	if summary.HasSuccessfulVerification {
-		current.HasUnverifiedWrites = false
+	for _, result := range summary.Results {
+		if result.IsError {
+			continue
+		}
+		if result.Facts.WorkspaceWrite {
+			current.HasUnverifiedWrites = true
+		}
+		if result.Facts.VerificationPerformed && result.Facts.VerificationPassed {
+			current.HasUnverifiedWrites = false
+		}
 	}
 	return current
 }
