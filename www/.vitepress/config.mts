@@ -1,129 +1,187 @@
-import { defineConfig } from 'vitepress'
+import { defineConfig } from "vitepress";
 
-const repoUrl = 'https://github.com/1024XEngineer/neo-code'
+const repoUrl = "https://github.com/1024XEngineer/neo-code";
+const docsBase = `${repoUrl}/blob/main/docs`;
 
 export default defineConfig({
-  title: 'NeoCode',
-  description: '基于 Go + Bubble Tea 的本地 Coding Agent',
-  lang: 'zh-CN',
-  base: '/neo-code/',
+  title: "NeoCode",
+  description: "基于 Go + Bubble Tea 的本地 Coding Agent 用户指南",
+  lang: "zh-CN",
+  base: "/neo-code/",
   cleanUrls: true,
   lastUpdated: true,
   head: [
-    ['meta', { name: 'theme-color', content: '#0f766e' }],
-    ['meta', { property: 'og:title', content: 'NeoCode' }],
+    ["meta", { name: "theme-color", content: "#0f766e" }],
+    ["meta", { property: "og:title", content: "NeoCode 用户指南" }],
     [
-      'meta',
+      "meta",
       {
-        property: 'og:description',
-        content: '一个围绕 ReAct 主链路构建的本地 Go + Bubble Tea Coding Agent。'
-      }
+        property: "og:description",
+        content:
+          "围绕真实命令、配置与 Gateway 使用场景整理的 NeoCode 用户指导网站。",
+      },
     ],
-    ['meta', { property: 'og:type', content: 'website' }],
-    ['link', { rel: 'icon', href: '/neo-code/brand/neocode-mark.svg' }]
+    ["meta", { property: "og:type", content: "website" }],
+    ["link", { rel: "icon", href: "/neo-code/brand/neocode-mark.svg" }],
   ],
-  themeConfig: {
-    logo: '/brand/neocode-mark.svg',
-    siteTitle: 'NeoCode',
-    search: {
-      provider: 'local'
+  markdown: {
+    config(md) {
+      md.linkify.set({ fuzzyLink: false });
     },
-    socialLinks: [
-      { icon: 'github', link: repoUrl }
-    ]
+  },
+  themeConfig: {
+    logo: "/brand/neocode-mark.svg",
+    siteTitle: "NeoCode",
+    search: {
+      provider: "local",
+    },
+    socialLinks: [{ icon: "github", link: repoUrl }],
   },
   locales: {
     root: {
-      label: '简体中文',
-      lang: 'zh-CN',
-      link: '/',
+      label: "简体中文",
+      lang: "zh-CN",
+      link: "/",
       themeConfig: {
         nav: [
-          { text: '文档', link: '/docs/quick-start' },
-          { text: 'GitHub', link: repoUrl }
+          { text: "开始使用", link: "/guide/" },
+          { text: "配置", link: "/guide/configuration" },
+          { text: "命令与会话", link: "/guide/quick-start" },
+          { text: "Gateway", link: "/guide/gateway" },
+          { text: "深入阅读", link: "/reference/" },
+          { text: "GitHub", link: repoUrl },
         ],
         sidebar: {
-          '/docs/': [
-            { text: '快速开始', link: '/docs/quick-start' },
+          "/guide/": [
             {
-              text: '使用指南',
+              text: "开始使用",
               items: [
-                { text: '配置', link: '/docs/guides/configuration' },
-                { text: '切换模型', link: '/docs/guides/providers' },
-                { text: 'MCP 配置', link: '/docs/guides/mcp' },
-                { text: '更新升级', link: '/docs/guides/update' }
-              ]
+                { text: "总览", link: "/guide/" },
+                { text: "NeoCode 是什么", link: "/guide/getting-started" },
+                { text: "安装与运行", link: "/guide/install" },
+                { text: "首次上手", link: "/guide/quick-start" },
+              ],
             },
             {
-              text: '参考',
+              text: "日常使用",
               items: [
-                { text: '架构概览', link: '/docs/reference/architecture' }
-              ]
-            }
-          ]
-        },
-        footer: {
-          message: '围绕可验证主链路构建的本地 Coding Agent。',
-          copyright: 'MIT Licensed'
+                { text: "配置入口", link: "/guide/configuration" },
+                { text: "工作区与会话", link: "/guide/workspace-session" },
+                { text: "记忆与 Skills", link: "/guide/memo-skills" },
+                { text: "Gateway 与 URL Dispatch", link: "/guide/gateway" },
+                { text: "升级与版本检查", link: "/guide/update" },
+              ],
+            },
+          ],
+          "/reference/": [
+            {
+              text: "深入阅读",
+              items: [
+                { text: "文档导航", link: "/reference/" },
+                { text: "旧入口兼容页", link: "/docs/" },
+              ],
+            },
+          ],
+          "/docs/": [
+            {
+              text: "文档入口",
+              items: [
+                { text: "总览", link: "/docs/" },
+                { text: "开始使用", link: "/guide/" },
+                { text: "深入阅读", link: "/reference/" },
+              ],
+            },
+          ],
+          "/": [
+            {
+              text: "快速导航",
+              items: [
+                { text: "开始使用", link: "/guide/" },
+                { text: "安装与运行", link: "/guide/install" },
+                { text: "首次上手", link: "/guide/quick-start" },
+                { text: "配置入口", link: "/guide/configuration" },
+              ],
+            },
+          ],
         },
         outline: {
-          label: '本页目录'
+          level: [2, 3],
+          label: "本页目录",
         },
-        returnToTopLabel: '返回顶部',
-        sidebarMenuLabel: '菜单',
-        darkModeSwitchLabel: '主题',
-        lightModeSwitchTitle: '切换到浅色模式',
-        darkModeSwitchTitle: '切换到深色模式'
-      }
+        docFooter: {
+          prev: "上一页",
+          next: "下一页",
+        },
+        editLink: {
+          pattern: `${repoUrl}/edit/main/www/:path`,
+          text: "在 GitHub 上编辑此页",
+        },
+        footer: {
+          message: "围绕真实命令、配置与主链路整理的 NeoCode 用户指南。",
+          copyright: "MIT Licensed",
+        },
+        returnToTopLabel: "返回顶部",
+        sidebarMenuLabel: "菜单",
+        darkModeSwitchLabel: "主题",
+        lightModeSwitchTitle: "切换到浅色模式",
+        darkModeSwitchTitle: "切换到深色模式",
+      },
     },
     en: {
-      label: 'English',
-      lang: 'en-US',
-      link: '/en/',
-      description: 'A local Go + Bubble Tea coding agent built around a verifiable ReAct loop.',
+      label: "English",
+      lang: "en-US",
+      link: "/en/",
+      description:
+        "A compact NeoCode docs entrypoint focused on current, verifiable behavior.",
       themeConfig: {
         nav: [
-          { text: 'Docs', link: '/en/docs/quick-start' },
-          { text: 'GitHub', link: repoUrl }
+          { text: "Home", link: "/en/" },
+          { text: "Docs", link: "/en/docs/" },
+          { text: "GitHub", link: repoUrl },
         ],
         sidebar: {
-          '/en/docs/': [
-            { text: 'Quick Start', link: '/en/docs/quick-start' },
+          "/en/docs/": [
             {
-              text: 'Guides',
+              text: "Overview",
               items: [
-                { text: 'Configuration', link: '/en/docs/guides/configuration' },
-                { text: 'Switching Models', link: '/en/docs/guides/providers' },
-                { text: 'MCP Configuration', link: '/en/docs/guides/mcp' },
-                { text: 'Updating', link: '/en/docs/guides/update' }
-              ]
+                { text: "Docs Index", link: "/en/docs/" },
+                { text: "Chinese Guide", link: "/guide/" },
+                { text: "Architecture Notes", link: "/reference/" },
+              ],
             },
-            {
-              text: 'Reference',
-              items: [
-                { text: 'Architecture', link: '/en/docs/reference/architecture' }
-              ]
-            }
-          ]
-        },
-        footer: {
-          message: 'A local coding agent shaped around a verifiable execution loop.',
-          copyright: 'MIT Licensed'
+          ],
         },
         outline: {
-          label: 'On this page'
+          level: [2, 3],
+          label: "On this page",
         },
-        returnToTopLabel: 'Back to top',
-        sidebarMenuLabel: 'Menu',
-        darkModeSwitchLabel: 'Appearance',
-        lightModeSwitchTitle: 'Switch to light theme',
-        darkModeSwitchTitle: 'Switch to dark theme'
-      }
-    }
+        docFooter: {
+          prev: "Previous page",
+          next: "Next page",
+        },
+        editLink: {
+          pattern: `${repoUrl}/edit/main/www/:path`,
+          text: "Edit this page on GitHub",
+        },
+        footer: {
+          message:
+            "A compact docs entrypoint built from NeoCode's current implementation.",
+          copyright: "MIT Licensed",
+        },
+        returnToTopLabel: "Back to top",
+        sidebarMenuLabel: "Menu",
+        darkModeSwitchLabel: "Appearance",
+        lightModeSwitchTitle: "Switch to light theme",
+        darkModeSwitchTitle: "Switch to dark theme",
+      },
+    },
   },
-  markdown: {
-    config(md) {
-      md.linkify.set({ fuzzyLink: false })
-    }
-  }
-})
+  sitemap: {
+    hostname: "https://1024xengineer.github.io/neo-code/",
+  },
+  vite: {
+    define: {
+      __NEOCODE_DOCS_BASE__: JSON.stringify(docsBase),
+    },
+  },
+});

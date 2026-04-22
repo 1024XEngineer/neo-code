@@ -10,14 +10,14 @@ hero:
     alt: NeoCode
   actions:
     - theme: brand
-      text: Quick Start
-      link: /en/docs/quick-start
+      text: Docs Index
+      link: /en/docs/
+    - theme: alt
+      text: 中文用户指南
+      link: /guide/
     - theme: alt
       text: GitHub
       link: https://github.com/1024XEngineer/neo-code
-    - theme: alt
-      text: 中文
-      link: /
 
 features:
   - title: Fully local
@@ -28,10 +28,27 @@ features:
     details: One config file manages OpenAI, Gemini, Ollama, and more. Switch between models without changing code.
 ---
 
-<section class="home-section quickstart">
+<section class="home-section compact">
   <p class="eyebrow">Quick Start</p>
-  <h2>Pick an entry point and get started</h2>
-
-  <p>Use the install script for the fastest path to a working setup. Run from source if you want to explore the code.</p>
+  <h2>Run NeoCode, then choose the guide depth you need</h2>
   <QuickStartCards locale="en" />
+</section>
+
+<section class="home-section">
+  <p class="eyebrow">Entry Points</p>
+  <h2>Where to go next</h2>
+  <div class="doc-grid">
+    <a class="doc-card" href="/neo-code/en/docs/">
+      <strong>English docs index</strong>
+      <span>A short overview with links into the Chinese guide and repository docs.</span>
+    </a>
+    <a class="doc-card" href="/neo-code/guide/">
+      <strong>Chinese guide</strong>
+      <span>The primary user guide covering install, quick start, configuration, sessions, memo, skills, and Gateway usage.</span>
+    </a>
+    <a class="doc-card" href="/neo-code/reference/">
+      <strong>Reference index</strong>
+      <span>Curated links to runtime, gateway, configuration, and skills design notes.</span>
+    </a>
+  </div>
 </section>

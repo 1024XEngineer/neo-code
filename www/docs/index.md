@@ -1,24 +1,27 @@
-# 文档
+---
+title: 文档总览
+description: 旧入口兼容页，帮助你从旧的 /docs/ 路径切换到新的用户指南与参考文档。
+---
 
-欢迎来到 NeoCode 文档。
+# 文档总览
 
-## 快速导航
+`/docs/` 现在作为兼容入口保留，新的阅读路径分成两类：
 
-- [快速开始](./quick-start) — 安装、配置 API Key、启动
+- [开始使用与用户指南](/guide/)：安装、首次上手、配置、工作区、会话、记忆、Skills、Gateway 与升级说明。
+- [深入阅读与设计文档](/reference/)：汇总仓库 `docs/` 中的设计文档和适用场景。
 
-### 使用指南
+## 推荐阅读顺序
 
-- [配置](./guides/configuration) — 配置文件结构与字段说明
-- [切换模型](./guides/providers) — 内置 provider 与自定义 provider
-- [MCP 配置](./guides/mcp) — 接入外部工具
-- [更新升级](./guides/update) — 版本管理
+1. [NeoCode 是什么](/guide/getting-started)
+2. [安装与运行](/guide/install)
+3. [首次上手](/guide/quick-start)
+4. [配置入口](/guide/configuration)
+5. [Gateway 与 URL Dispatch](/guide/gateway)
 
-### 参考
+## 直接跳转
 
-- [架构概览](./reference/architecture) — 核心层级与设计原则
-
-## 参与项目
-
-- [仓库主页](https://github.com/1024XEngineer/neo-code)
-- [Issue 列表](https://github.com/1024XEngineer/neo-code/issues)
-- [Pull Request 列表](https://github.com/1024XEngineer/neo-code/pulls)
+- [开始使用](/guide/)
+- [配置与 Provider](/guide/configuration)
+- [工作区与会话](/guide/workspace-session)
+- [记忆与 Skills](/guide/memo-skills)
+- [深入阅读](/reference/)

@@ -1,24 +1,28 @@
-# Docs
+---
+title: Docs Index
+description: A compact English entrypoint that links to the primary Chinese guide and repository design documents.
+---
 
-Welcome to the NeoCode documentation.
+# Docs Index
 
-## Quick navigation
+The Chinese guide is the primary documentation set for NeoCode right now. This page stays short on purpose and only links to the most useful entry points.
 
-- [Quick Start](./quick-start) — Install, set API keys, and run
+## Start Here
 
-### Guides
+- [Chinese guide overview](/guide/)
+- [Install and run](/guide/install)
+- [Quick start](/guide/quick-start)
+- [Configuration](/guide/configuration)
+- [Gateway and URL dispatch](/guide/gateway)
 
-- [Configuration](./guides/configuration) — Config file structure and fields
-- [Switching Models](./guides/providers) — Built-in and custom providers
-- [MCP Configuration](./guides/mcp) — Connect external tools
-- [Updating](./guides/update) — Version management
+## Repository Docs
 
-### Reference
+- [Reference index](/reference/)
+- [README](https://github.com/1024XEngineer/neo-code/blob/main/README.md)
+- [Configuration guide](https://github.com/1024XEngineer/neo-code/blob/main/docs/guides/configuration.md)
+- [Gateway detailed design](https://github.com/1024XEngineer/neo-code/blob/main/docs/gateway-detailed-design.md)
 
-- [Architecture Overview](./reference/architecture) — Core layers and design principles
+## Notes
 
-## Project links
-
-- [Repository](https://github.com/1024XEngineer/neo-code)
-- [Issues](https://github.com/1024XEngineer/neo-code/issues)
-- [Pull Requests](https://github.com/1024XEngineer/neo-code/pulls)
+- The guide content only covers behavior that exists in the repository today.
+- The previous `/docs/` route is now a compatibility entrypoint in Chinese.

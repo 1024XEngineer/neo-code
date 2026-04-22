@@ -10,14 +10,14 @@ hero:
     alt: NeoCode
   actions:
     - theme: brand
-      text: 快速开始
-      link: /docs/quick-start
+      text: 开始使用
+      link: /guide/
+    - theme: alt
+      text: 首次上手
+      link: /guide/quick-start
     - theme: alt
       text: GitHub
       link: https://github.com/1024XEngineer/neo-code
-    - theme: alt
-      text: English
-      link: /en/
 
 features:
   - title: 完全本地
@@ -28,10 +28,39 @@ features:
     details: 一份配置管理 OpenAI、Gemini、Ollama 等多个模型服务，随时切换，无需改代码。
 ---
 
-<section class="home-section quickstart">
+<section class="home-section compact">
   <p class="eyebrow">Quick Start</p>
-  <h2>选一个入口，直接开始</h2>
-
-  <p>想先试用就走安装脚本；想参与开发就从源码运行。</p>
+  <h2>先安装，再开始用</h2>
   <QuickStartCards locale="zh" />
+</section>
+
+<section class="home-section">
+  <p class="eyebrow">Guide</p>
+  <h2>常用入口</h2>
+  <div class="doc-grid">
+    <a class="doc-card" href="/neo-code/guide/install">
+      <strong>安装与运行</strong>
+      <span>安装脚本、源码运行和环境要求。</span>
+    </a>
+    <a class="doc-card" href="/neo-code/guide/quick-start">
+      <strong>首次上手</strong>
+      <span>第一次提问、常用 Slash 命令和 Provider / Model 切换。</span>
+    </a>
+    <a class="doc-card" href="/neo-code/guide/configuration">
+      <strong>配置</strong>
+      <span><code>config.yaml</code>、custom provider 和环境变量。</span>
+    </a>
+    <a class="doc-card" href="/neo-code/guide/workspace-session">
+      <strong>工作区与会话</strong>
+      <span><code>--workdir</code>、<code>/cwd</code>、会话切换和上下文压缩。</span>
+    </a>
+    <a class="doc-card" href="/neo-code/guide/memo-skills">
+      <strong>记忆与 Skills</strong>
+      <span><code>/memo</code>、<code>/remember</code>、<code>/forget</code> 和 Skills。</span>
+    </a>
+    <a class="doc-card" href="/neo-code/guide/gateway">
+      <strong>Gateway 使用</strong>
+      <span><code>neocode gateway</code>、<code>url-dispatch</code> 和网络访问面。</span>
+    </a>
+  </div>
 </section>
