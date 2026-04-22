@@ -3,23 +3,24 @@ package tui
 import "github.com/charmbracelet/bubbles/key"
 
 type keyMap struct {
-	Send        key.Binding
-	Newline     key.Binding
-	CancelAgent key.Binding
-	NewSession  key.Binding
-	NextPanel   key.Binding
-	PrevPanel   key.Binding
-	FocusInput  key.Binding
-	ToggleHelp  key.Binding
-	Quit        key.Binding
-	ScrollUp    key.Binding
-	ScrollDown  key.Binding
-	PageUp      key.Binding
-	PageDown    key.Binding
-	Top         key.Binding
-	Bottom      key.Binding
-	PasteImage  key.Binding
-	LogViewer   key.Binding
+	Send          key.Binding
+	Newline       key.Binding
+	CancelAgent   key.Binding
+	NewSession    key.Binding
+	OpenWorkspace key.Binding
+	NextPanel     key.Binding
+	PrevPanel     key.Binding
+	FocusInput    key.Binding
+	ToggleHelp    key.Binding
+	Quit          key.Binding
+	ScrollUp      key.Binding
+	ScrollDown    key.Binding
+	PageUp        key.Binding
+	PageDown      key.Binding
+	Top           key.Binding
+	Bottom        key.Binding
+	PasteImage    key.Binding
+	LogViewer     key.Binding
 }
 
 func newKeyMap() keyMap {
@@ -39,6 +40,10 @@ func newKeyMap() keyMap {
 		NewSession: key.NewBinding(
 			key.WithKeys("ctrl+n"),
 			key.WithHelp("Ctrl+N", "New session"),
+		),
+		OpenWorkspace: key.NewBinding(
+			key.WithKeys("ctrl+o"),
+			key.WithHelp("Ctrl+O", "Workspace"),
 		),
 		NextPanel: key.NewBinding(
 			key.WithKeys("tab"),
@@ -102,6 +107,7 @@ func (k keyMap) ShortHelp() []key.Binding {
 func (k keyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.Send, k.Newline, k.CancelAgent, k.NewSession},
+		{k.OpenWorkspace},
 		{k.FocusInput, k.NextPanel, k.PrevPanel},
 		{k.ToggleHelp, k.Quit, k.PasteImage, k.ScrollUp},
 		{k.PageUp, k.PageDown, k.Top, k.Bottom},

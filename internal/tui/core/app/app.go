@@ -150,9 +150,14 @@ type appRuntimeState struct {
 		endCol    int
 	}
 
-	footerErrorLast  string
-	footerErrorText  string
-	footerErrorUntil time.Time
+	footerErrorLast    string
+	footerErrorText    string
+	footerErrorUntil   time.Time
+	startupVisible     bool
+	startupTick        int
+	startupTypingIndex int
+	startupCursorOn    bool
+	startupPulsePhase  float64
 }
 
 type pendingImageAttachment struct {

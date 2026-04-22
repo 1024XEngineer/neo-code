@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"math"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -23,6 +24,32 @@ const headerBarHeight = 2
 const transcriptScrollbarWidth = 3
 const startupCommandMenuMinReservedHeight = 8
 
+const startupStandbyLabel = "Standby"
+const startupSubtitleText = "AI-Powered CLI Workspace"
+const startupTypingPlaceholder = "Ask NeoCode to inspect, edit, or build..."
+const startupBreathCycleTicks = 45
+
+const startupLogoASCII = `███╗   ██╗███████╗██████╗  ██████╗ ██████╗ ██████╗ ███████╗
+████╗  ██║██╔════╝██╔═══██╗██╔════╝██╔═══██╗██╔══██╗██╔════╝
+██╔██╗ ██║█████╗  ██║   ██║██║     ██║   ██║██║  ██║█████╗  
+██║╚██╗██║██╔══╝  ██║   ██║██║     ██║   ██║██║  ██║██╔══╝  
+██║ ╚████║███████╗╚██████╔╝╚██████╗╚██████╔╝██████╔╝███████╗
+╚═╝  ╚═══╝╚══════╝ ╚═════╝  ╚═════╝ ╚═════╝ ╚═════╝ ╚══════╝`
+
+type startupMenuItem struct {
+	Key    string
+	Action string
+}
+
+var startupMenuItems = []startupMenuItem{
+	{Key: "Enter", Action: "Send the Prompt to LLM"},
+	{Key: "Ctrl+J", Action: "Insert a New Line"},
+	{Key: "Ctrl+W", Action: "Cancel Current Run"},
+	{Key: "Ctrl+L", Action: "Open Log Viewer"},
+	{Key: "Ctrl+Q", Action: "Toggle Help Panel"},
+	{Key: "Ctrl+U", Action: "Exit NeoCode"},
+}
+
 const (
 	pickerPanelHorizontalInset = 8
 	pickerPanelVerticalInset   = 4
@@ -43,6 +70,10 @@ type pickerLayoutSpec struct {
 }
 
 func (a App) View() string {
+	if a.startupVisible {
+		return strings.TrimRight(a.renderStartupView(max(0, a.width), max(0, a.height)), "\n")
+	}
+
 	docWidth := max(0, a.width-a.styles.doc.GetHorizontalFrameSize())
 	docHeight := max(0, a.height-a.styles.doc.GetVerticalFrameSize())
 	if docWidth < 60 || docHeight < 20 {

@@ -367,10 +367,125 @@ func newTestApp(t *testing.T) (App, *stubRuntime) {
 	}
 
 	app, runtime := newTestAppWithProviderService(t, stubProviderService{providers: providers, models: models})
+	app.startupVisible = false
 	app.layoutCached = true
 	app.cachedWidth = app.width
 	app.cachedHeight = app.height
 	return app, runtime
+}
+
+func TestStartupKeyEscQuits(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.startupVisible = true
+
+	model, cmd := app.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	next := model.(App)
+	if !next.startupVisible {
+		t.Fatalf("expected startup to stay visible before quit command is consumed")
+	}
+	if cmd == nil {
+		t.Fatalf("expected quit command")
+	}
+	if _, ok := cmd().(tea.QuitMsg); !ok {
+		t.Fatalf("expected tea.QuitMsg from quit command")
+	}
+}
+
+func TestStartupSlashTransitionsToComposer(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.startupVisible = true
+
+	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
+	next := model.(App)
+	if next.startupVisible {
+		t.Fatalf("expected startup to be dismissed")
+	}
+	if got := next.input.Value(); got != "/" {
+		t.Fatalf("expected composer input '/', got %q", got)
+	}
+	if got := next.state.InputText; got != "/" {
+		t.Fatalf("expected state input '/', got %q", got)
+	}
+	if len(next.commandMenu.Items()) == 0 {
+		t.Fatalf("expected slash suggestions to be visible")
+	}
+}
+
+func TestStartupRegularInputDismissesStartup(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.startupVisible = true
+
+	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}})
+	next := model.(App)
+	if next.startupVisible {
+		t.Fatalf("expected startup to be dismissed")
+	}
+	if got := next.input.Value(); got != "h" {
+		t.Fatalf("expected composer input to receive typed rune, got %q", got)
+	}
+}
+
+func TestStartupCtrlONavigatesToWorkspaceBrowser(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.startupVisible = true
+
+	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyCtrlO})
+	next := model.(App)
+	if next.startupVisible {
+		t.Fatalf("expected startup to be dismissed")
+	}
+	if next.state.ActivePicker != pickerFile {
+		t.Fatalf("expected file picker active, got %v", next.state.ActivePicker)
+	}
+}
+
+func TestStartupCtrlNStartsDraftSession(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.startupVisible = true
+	app.state.ActiveSessionID = "session-1"
+	app.state.ActiveSessionTitle = "Old Session"
+	app.input.SetValue("old content")
+
+	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyCtrlN})
+	next := model.(App)
+	if next.startupVisible {
+		t.Fatalf("expected startup to be dismissed")
+	}
+	if next.state.ActiveSessionID != "" {
+		t.Fatalf("expected draft session id to be empty")
+	}
+	if next.state.ActiveSessionTitle != draftSessionTitle {
+		t.Fatalf("expected draft session title, got %q", next.state.ActiveSessionTitle)
+	}
+	if got := next.input.Value(); got != "" {
+		t.Fatalf("expected composer reset, got %q", got)
+	}
+}
+
+func TestStartupTickAdvancesTypingAndPulse(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.startupVisible = true
+	app.startupTypingIndex = 0
+	app.startupPulsePhase = 0
+
+	var model tea.Model = app
+	for i := 0; i < startupTypingStartDelayTicks; i++ {
+		next, cmd := model.(App).Update(tickMsg(time.Now()))
+		model = next
+		if cmd == nil {
+			t.Fatalf("expected recurring startup tick command at step %d", i)
+		}
+	}
+	final := model.(App)
+	if final.startupTick == 0 {
+		t.Fatalf("expected startup tick to advance")
+	}
+	if final.startupTypingIndex == 0 {
+		t.Fatalf("expected startup typing index to advance")
+	}
+	if final.startupPulsePhase == 0 {
+		t.Fatalf("expected startup pulse phase to advance")
+	}
 }
 
 func TestSubmitProviderAddFormRequiresCustomDriverBaseURL(t *testing.T) {

@@ -30,3 +30,16 @@ func TestFullHelpIncludesLogViewer(t *testing.T) {
 		t.Fatalf("expected full help to include log viewer binding")
 	}
 }
+
+func TestFullHelpIncludesOpenWorkspace(t *testing.T) {
+	keys := newKeyMap()
+	help := keys.FullHelp()
+	for _, row := range help {
+		for _, binding := range row {
+			if binding.Help().Key == keys.OpenWorkspace.Help().Key {
+				return
+			}
+		}
+	}
+	t.Fatalf("expected full help to include open workspace binding")
+}
