@@ -10,7 +10,7 @@ const (
 	EvidenceTodoStateChanged ProgressEvidenceKind = "TODO_STATE_CHANGED"
 	// EvidenceWriteApplied 表示本轮产生了有效文件改动。
 	EvidenceWriteApplied ProgressEvidenceKind = "WRITE_APPLIED"
-	// EvidenceVerifyPassed 表示本轮存在明确的验证成功信号。
+	// EvidenceVerifyPassed 表示本轮存在明确的验证成功信号（仅与写入证据组合后算业务推进）。
 	EvidenceVerifyPassed ProgressEvidenceKind = "VERIFY_PASSED"
 	// EvidenceNewInfoNonDup 表示本轮引入了去重后的新信息。
 	EvidenceNewInfoNonDup ProgressEvidenceKind = "NEW_INFO_NON_DUP"
@@ -163,9 +163,9 @@ func summarizeEvidence(records []ProgressEvidenceRecord) evidenceFlags {
 	var flags evidenceFlags
 	for _, record := range records {
 		switch record.Kind {
-		case EvidenceTaskStateChanged, EvidenceTodoStateChanged, EvidenceVerifyPassed:
+		case EvidenceTaskStateChanged, EvidenceTodoStateChanged:
 			flags.strongCount++
-		case EvidenceWriteApplied:
+		case EvidenceWriteApplied, EvidenceVerifyPassed:
 			flags.mediumCount++
 		case EvidenceNewInfoNonDup:
 			flags.weakCount++

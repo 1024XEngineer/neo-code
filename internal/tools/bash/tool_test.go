@@ -197,6 +197,12 @@ func TestToolExecuteEmitsVerificationMetadataWhenExplicitlyRequested(t *testing.
 	if scope, _ := result.Metadata["verification_scope"].(string); scope != "workspace" {
 		t.Fatalf("expected verification_scope=workspace, got %#v", result.Metadata["verification_scope"])
 	}
+	if !result.Facts.VerificationPerformed || !result.Facts.VerificationPassed {
+		t.Fatalf("expected verification facts to be populated, got %+v", result.Facts)
+	}
+	if result.Facts.VerificationScope != "workspace" {
+		t.Fatalf("expected verification fact scope workspace, got %q", result.Facts.VerificationScope)
+	}
 }
 
 func mustMarshalArgs(t *testing.T, value any) []byte {

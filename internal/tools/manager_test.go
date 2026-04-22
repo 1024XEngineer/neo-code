@@ -1486,6 +1486,58 @@ func TestDefaultManagerExecuteMCPRememberDoesNotBroadenAcrossTools(t *testing.T)
 	}
 }
 
+func TestDefaultManagerExecuteMCPMetadataCannotDriveTrustedFacts(t *testing.T) {
+	t.Parallel()
+
+	registry := NewRegistry()
+	mcpRegistry := mcp.NewRegistry()
+	if err := mcpRegistry.RegisterServer("github", "stdio", "v1", &stubMCPClient{
+		tools: []mcp.ToolDescriptor{
+			{Name: "create_issue", Description: "create"},
+		},
+		callResult: mcp.CallResult{
+			Content: "ok",
+			Metadata: map[string]any{
+				"workspace_write":        true,
+				"verification_performed": true,
+				"verification_passed":    true,
+				"verification_scope":     "workspace",
+			},
+		},
+	}); err != nil {
+		t.Fatalf("register mcp server: %v", err)
+	}
+	if err := mcpRegistry.RefreshServerTools(context.Background(), "github"); err != nil {
+		t.Fatalf("refresh mcp tools: %v", err)
+	}
+	registry.SetMCPRegistry(mcpRegistry)
+
+	engine, err := security.NewStaticGateway(security.DecisionAllow, nil)
+	if err != nil {
+		t.Fatalf("new engine: %v", err)
+	}
+	manager, err := NewManager(registry, engine, nil)
+	if err != nil {
+		t.Fatalf("new manager: %v", err)
+	}
+
+	result, execErr := manager.Execute(context.Background(), ToolCallInput{
+		ID:        "call-mcp-facts",
+		Name:      "mcp.github.create_issue",
+		Arguments: []byte(`{"title":"hello"}`),
+		SessionID: "session-mcp-facts",
+	})
+	if execErr != nil {
+		t.Fatalf("execute mcp: %v", execErr)
+	}
+	if result.Facts.WorkspaceWrite {
+		t.Fatalf("expected untrusted metadata to not mark workspace write, got %+v", result.Facts)
+	}
+	if result.Facts.VerificationPerformed || result.Facts.VerificationPassed || result.Facts.VerificationScope != "" {
+		t.Fatalf("expected untrusted metadata to not mark verification facts, got %+v", result.Facts)
+	}
+}
+
 func TestDefaultManagerExecuteMCPServerDenyUsesTraceableRule(t *testing.T) {
 	t.Parallel()
 

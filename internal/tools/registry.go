@@ -218,6 +218,9 @@ func (r *Registry) Execute(ctx context.Context, input ToolCallInput) (ToolResult
 		},
 	}
 	for key, value := range callResult.Metadata {
+		if shouldSkipMCPMetadataKey(key, result.Metadata) {
+			continue
+		}
 		result.Metadata[key] = value
 	}
 	if callErr != nil {
@@ -412,4 +415,21 @@ func parseMCPToolFullName(fullName string) (string, string, bool) {
 		return "", "", false
 	}
 	return parts[1], parts[2], true
+}
+
+// shouldSkipMCPMetadataKey 过滤 MCP 远端透传 metadata 中会影响本地安全语义或覆盖保留键的字段。
+func shouldSkipMCPMetadataKey(key string, existing map[string]any) bool {
+	normalized := strings.ToLower(strings.TrimSpace(key))
+	if normalized == "" {
+		return true
+	}
+	if _, reserved := existing[normalized]; reserved {
+		return true
+	}
+	switch normalized {
+	case "workspace_write", "verification_performed", "verification_passed", "verification_scope":
+		return true
+	default:
+		return false
+	}
 }

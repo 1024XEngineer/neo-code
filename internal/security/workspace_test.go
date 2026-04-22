@@ -553,6 +553,31 @@ func TestCanonicalWorkspaceRootPermissionErrorFallsBackToAbsoluteRoot(t *testing
 	}
 }
 
+func TestCanonicalWorkspaceRootPermissionErrorRejectsSymlinkRoot(t *testing.T) {
+	base := t.TempDir()
+	realRoot := filepath.Join(base, "real")
+	if err := os.MkdirAll(realRoot, 0o755); err != nil {
+		t.Fatalf("mkdir real root: %v", err)
+	}
+	linkRoot := filepath.Join(base, "root-link")
+	if err := os.Symlink(realRoot, linkRoot); err != nil {
+		t.Skipf("symlink not supported in this environment: %v", err)
+	}
+
+	originalEvalSymlinks := evalSymlinks
+	evalSymlinks = func(path string) (string, error) {
+		return "", os.ErrPermission
+	}
+	defer func() {
+		evalSymlinks = originalEvalSymlinks
+	}()
+
+	_, err := NewWorkspaceSandbox().canonicalWorkspaceRoot(linkRoot)
+	if err == nil || !strings.Contains(err.Error(), "permission denied") {
+		t.Fatalf("expected symlink root to reject permission fallback, got %v", err)
+	}
+}
+
 func TestAbsoluteWorkspaceTarget(t *testing.T) {
 	t.Parallel()
 

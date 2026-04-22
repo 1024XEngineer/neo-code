@@ -26,6 +26,9 @@ func TestRuntimeEventPhaseChangedHandlerBranches(t *testing.T) {
 		{to: " plan ", wantValue: 0.3, wantLabel: "Planning"},
 		{to: "execute", wantValue: 0.6, wantLabel: "Running tools"},
 		{to: "VERIFY", wantValue: 0.82, wantLabel: "Verifying"},
+		{to: "compacting", wantValue: 0.9, wantLabel: "Compacting context"},
+		{to: " waiting_permission ", wantValue: 0.88, wantLabel: "Awaiting permission"},
+		{to: "stopped", wantValue: 1, wantLabel: "Stopped"},
 	}
 	for _, tc := range cases {
 		app.clearRunProgress()

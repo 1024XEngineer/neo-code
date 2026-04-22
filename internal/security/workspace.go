@@ -263,6 +263,13 @@ func resolveCanonicalWorkspaceRoot(absoluteRoot string) (string, bool, error) {
 		if !errors.Is(err, os.ErrPermission) {
 			return "", false, fmt.Errorf("security: resolve workspace root: %w", err)
 		}
+		allowed, inspectErr := canFallbackToCandidateOnPermission(absoluteRoot, absoluteRoot)
+		if inspectErr != nil {
+			return "", false, inspectErr
+		}
+		if !allowed {
+			return "", false, fmt.Errorf("security: resolve workspace root %q: %w", absoluteRoot, err)
+		}
 		canonicalRoot = absoluteRoot
 	}
 

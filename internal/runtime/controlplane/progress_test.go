@@ -143,3 +143,25 @@ func TestEvaluateProgressUnknownSubgoalDoesNotAdvanceRepeat(t *testing.T) {
 		t.Fatalf("repeat streak = %d, want 0", got.LastScore.RepeatCycleStreak)
 	}
 }
+
+func TestEvaluateProgressVerifyPassedAloneIsNotBusinessProgress(t *testing.T) {
+	t.Parallel()
+
+	got := EvaluateProgress(ProgressState{}, ProgressInput{
+		RunState: RunStateVerify,
+		Evidence: []ProgressEvidenceRecord{
+			{Kind: EvidenceVerifyPassed},
+		},
+		NoProgressLimit:  3,
+		RepeatCycleLimit: 3,
+	})
+	if got.LastScore.HasBusinessProgress {
+		t.Fatalf("expected verify-passed alone to not count as business progress")
+	}
+	if got.LastScore.StrongEvidenceCount != 0 {
+		t.Fatalf("strong evidence = %d, want 0", got.LastScore.StrongEvidenceCount)
+	}
+	if got.LastScore.MediumEvidenceCount != 1 {
+		t.Fatalf("medium evidence = %d, want 1", got.LastScore.MediumEvidenceCount)
+	}
+}

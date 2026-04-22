@@ -1077,6 +1077,12 @@ func runtimeEventPhaseChangedHandler(a *App, event agentruntime.RuntimeEvent) bo
 		a.setRunProgress(0.6, "Running tools")
 	case "verify":
 		a.setRunProgress(0.82, "Verifying")
+	case "compacting":
+		a.setRunProgress(0.9, "Compacting context")
+	case "waiting_permission":
+		a.setRunProgress(0.88, "Awaiting permission")
+	case "stopped":
+		a.setRunProgress(1, "Stopped")
 	}
 	return false
 }

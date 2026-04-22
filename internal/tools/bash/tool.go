@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"time"
 
 	"neo-code/internal/tools"
@@ -96,6 +97,7 @@ func (t *Tool) Execute(ctx context.Context, call tools.ToolCallInput) (tools.Too
 
 	result, err := t.executor.Execute(ctx, call, in.Command, in.Workdir)
 	result.Metadata = withVerificationMetadata(result.Metadata, in, err == nil && !result.IsError)
+	result.Facts = withVerificationFacts(result.Facts, in, err == nil && !result.IsError)
 	return result, err
 }
 
@@ -115,4 +117,19 @@ func withVerificationMetadata(metadata map[string]any, in input, succeeded bool)
 	}
 	metadata["verification_scope"] = scope
 	return metadata
+}
+
+// withVerificationFacts 在 bash 调用显式声明验证意图时写入受信的结构化事实。
+func withVerificationFacts(facts tools.ToolExecutionFacts, in input, succeeded bool) tools.ToolExecutionFacts {
+	scope := strings.TrimSpace(in.VerificationScope)
+	if !in.Verification && scope == "" {
+		return facts
+	}
+	facts.VerificationPerformed = true
+	facts.VerificationPassed = succeeded
+	if scope == "" {
+		scope = "workspace"
+	}
+	facts.VerificationScope = scope
+	return facts
 }
