@@ -144,9 +144,14 @@ func (e *PolicyEngine) Check(ctx context.Context, action Action) (CheckResult, e
 }
 
 // NewRecommendedPolicyEngine 返回推荐安全策略：
-// bash=ask, filesystem write=ask, filesystem read敏感路径=ask/deny, webfetch白名单allow其余ask。
+// git 语义命令均需审批，filesystem write=ask，filesystem read敏感路径=ask/deny，webfetch 白名单 allow 其余 ask。
 func NewRecommendedPolicyEngine() (*PolicyEngine, error) {
 	const (
+		reasonAskGitReadOnly      = "git read-only operation requires approval"
+		reasonAskGitRemote        = "git remote operation requires approval"
+		reasonAskGitDestructive   = "git destructive operation requires approval"
+		reasonAskGitMutation      = "git local mutation requires approval"
+		reasonAskGitUnknown       = "git command semantic unknown, requires approval"
 		reasonAskBash             = "bash command requires approval"
 		reasonAskFilesystemWrite  = "filesystem write requires approval"
 		reasonDenyPrivateKeyRead  = "reading private key material is blocked"
@@ -180,6 +185,46 @@ func NewRecommendedPolicyEngine() (*PolicyEngine, error) {
 			TargetTypes:          []TargetType{TargetTypePath, TargetTypeDirectory},
 			RequireHostMissing:   false,
 			RequireHostMatch:     false,
+		},
+		{
+			ID:               "ask-bash-git-read-only",
+			Priority:         860,
+			Decision:         DecisionAsk,
+			Reason:           reasonAskGitReadOnly,
+			ActionTypes:      []ActionType{ActionTypeBash},
+			ResourcePatterns: []string{"bash_git_read_only"},
+		},
+		{
+			ID:               "ask-bash-git-remote-op",
+			Priority:         855,
+			Decision:         DecisionAsk,
+			Reason:           reasonAskGitRemote,
+			ActionTypes:      []ActionType{ActionTypeBash},
+			ResourcePatterns: []string{"bash_git_remote_op"},
+		},
+		{
+			ID:               "ask-bash-git-destructive",
+			Priority:         850,
+			Decision:         DecisionAsk,
+			Reason:           reasonAskGitDestructive,
+			ActionTypes:      []ActionType{ActionTypeBash},
+			ResourcePatterns: []string{"bash_git_destructive"},
+		},
+		{
+			ID:               "ask-bash-git-local-mutation",
+			Priority:         845,
+			Decision:         DecisionAsk,
+			Reason:           reasonAskGitMutation,
+			ActionTypes:      []ActionType{ActionTypeBash},
+			ResourcePatterns: []string{"bash_git_local_mutation"},
+		},
+		{
+			ID:               "ask-bash-git-unknown",
+			Priority:         840,
+			Decision:         DecisionAsk,
+			Reason:           reasonAskGitUnknown,
+			ActionTypes:      []ActionType{ActionTypeBash},
+			ResourcePatterns: []string{"bash_git_unknown"},
 		},
 		{
 			ID:               "ask-all-bash",

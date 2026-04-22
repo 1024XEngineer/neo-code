@@ -37,8 +37,8 @@ export QINIU_API_KEY="your_key_here"</code></pre>
       <div class="quickstart-links">
         <p>Workspace isolation: <code>--workdir</code></p>
         <p>Gateway mode: <code>--runtime-mode gateway</code></p>
-        <p><a href="https://github.com/1024XEngineer/neo-code/blob/main/README.md">README</a></p>
-        <p><a href="/neo-code/en/docs/">Docs index</a></p>
+        <p><a href="/neo-code/en/docs/guides/configuration">Configuration guide</a></p>
+        <p><a href="/neo-code/en/docs/">Docs</a></p>
       </div>
     </article>
   </div>
@@ -75,8 +75,8 @@ export QINIU_API_KEY="your_key_here"</code></pre>
       <div class="quickstart-links">
         <p>工作区隔离：<code>--workdir</code></p>
         <p>网关模式：<code>--runtime-mode gateway</code></p>
-        <p><a href="https://github.com/1024XEngineer/neo-code/blob/main/README.md">README</a></p>
-        <p><a href="/neo-code/docs/">文档入口页</a></p>
+        <p><a href="/neo-code/docs/guides/configuration">配置指南</a></p>
+        <p><a href="/neo-code/docs/">文档</a></p>
       </div>
     </article>
   </div>

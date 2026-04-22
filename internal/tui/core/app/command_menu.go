@@ -8,6 +8,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	agentsession "neo-code/internal/session"
 	tuicomponents "neo-code/internal/tui/components"
@@ -114,6 +115,85 @@ func (s selectionItem) Description() string {
 
 func (s selectionItem) FilterValue() string {
 	return strings.ToLower(s.id + " " + s.name + " " + s.description)
+}
+
+type pickerSelectionDelegate struct{}
+
+func (d pickerSelectionDelegate) Height() int {
+	return 2
+}
+
+func (d pickerSelectionDelegate) Spacing() int {
+	return 0
+}
+
+func (d pickerSelectionDelegate) Update(msg tea.Msg, m *list.Model) tea.Cmd {
+	return nil
+}
+
+func (d pickerSelectionDelegate) Render(w io.Writer, m list.Model, index int, item list.Item) {
+	title, subtitle := pickerItemText(item)
+	selected := index == m.Index()
+
+	rowWidth := max(12, m.Width())
+	contentWidth := max(8, rowWidth-2) // left rail + spacing
+
+	titleWidth := max(4, contentWidth)
+	title = tuiutils.TrimMiddle(strings.TrimSpace(title), titleWidth)
+	subtitle = tuiutils.TrimMiddle(strings.TrimSpace(subtitle), contentWidth)
+	if subtitle == "" {
+		subtitle = " "
+	}
+
+	mainStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(warmSilver))
+	subStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(charcoal))
+	rowStyle := lipgloss.NewStyle().Width(contentWidth)
+	railStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(charcoal)).
+		Width(1)
+	railGlyph := " "
+
+	if selected {
+		mainStyle = mainStyle.Copy().
+			Foreground(lipgloss.Color(lightText)).
+			Bold(true)
+		subStyle = subStyle.Copy().
+			Foreground(lipgloss.Color(lightText2))
+		railStyle = railStyle.Copy().
+			Foreground(lipgloss.Color(lightText))
+		railGlyph = "|"
+	}
+
+	mainLine := mainStyle.Width(titleWidth).Render(title)
+	subLine := subStyle.Width(contentWidth).Render(subtitle)
+	row := rowStyle.Render(mainLine + "\n" + subLine)
+
+	gap := lipgloss.NewStyle().Width(1).Render(" ")
+	lines := strings.Split(row, "\n")
+	for i := range lines {
+		lines[i] = railStyle.Render(railGlyph) + gap + lines[i]
+	}
+	fmt.Fprint(w, strings.Join(lines, "\n"))
+}
+
+func pickerItemText(item list.Item) (string, string) {
+	switch entry := item.(type) {
+	case selectionItem:
+		return strings.TrimSpace(entry.name), strings.TrimSpace(entry.description)
+	case sessionItem:
+		return strings.TrimSpace(entry.Summary.Title), strings.TrimSpace(entry.Summary.UpdatedAt.Format("01-02 15:04"))
+	default:
+		var title, subtitle string
+		if titled, ok := item.(interface{ Title() string }); ok {
+			title = strings.TrimSpace(titled.Title())
+		}
+		if described, ok := item.(interface{ Description() string }); ok {
+			subtitle = strings.TrimSpace(described.Description())
+		}
+		return title, subtitle
+	}
 }
 
 type sessionDelegate struct {

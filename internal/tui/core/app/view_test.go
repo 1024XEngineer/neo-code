@@ -245,19 +245,50 @@ func TestRenderWaterfallThinkingState(t *testing.T) {
 	}
 }
 
-func TestRenderWaterfallSelectionHint(t *testing.T) {
+func TestRenderWaterfallShowsStartupScreenForEmptyDraft(t *testing.T) {
 	app, _ := newTestApp(t)
 	app.state.ActivePicker = pickerNone
-	app.setTranscriptContent("hello")
-	app.textSelection.active = true
-	app.textSelection.startLine = 0
-	app.textSelection.startCol = 0
-	app.textSelection.endLine = 0
-	app.textSelection.endCol = 1
+	app.logViewerVisible = false
+	app.state.IsAgentRunning = false
+	app.state.IsCompacting = false
+	app.activeMessages = nil
+	app.input.SetValue("")
 
-	view := app.renderWaterfall(80, 24)
-	if !strings.Contains(view, "已选择内容，右键复制") {
-		t.Fatalf("expected selection hint in waterfall view")
+	view := app.renderWaterfall(100, 26)
+	if !strings.Contains(view, "AI-POWERED CLI WORKSPACE") {
+		t.Fatalf("expected startup subtitle in waterfall, got %q", view)
+	}
+	if !strings.Contains(view, "Ctrl+N") {
+		t.Fatalf("expected startup shortcut hint, got %q", view)
+	}
+}
+
+func TestRenderWaterfallKeepsStartupScreenWhileTypingUntilUnlocked(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.state.ActivePicker = pickerNone
+	app.activeMessages = nil
+	app.input.SetValue("hello")
+
+	view := app.renderWaterfall(100, 26)
+	if !strings.Contains(view, "AI-POWERED CLI WORKSPACE") {
+		t.Fatalf("expected startup screen to remain while typing before first send")
+	}
+
+	app.startupScreenLocked = false
+	view = app.renderWaterfall(100, 26)
+	if strings.Contains(view, "AI-POWERED CLI WORKSPACE") {
+		t.Fatalf("expected startup screen hidden after unlock")
+	}
+
+	app.startupScreenLocked = true
+	app.input.SetValue("")
+	app.activeMessages = []providertypes.Message{
+		{Role: roleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("ready")}},
+	}
+	app.rebuildTranscript()
+	view = app.renderWaterfall(100, 26)
+	if strings.Contains(view, "AI-POWERED CLI WORKSPACE") {
+		t.Fatalf("expected startup screen hidden once transcript has messages")
 	}
 }
 
@@ -319,12 +350,12 @@ func TestComputeLayoutUsesRenderedHeaderHeight(t *testing.T) {
 	}
 }
 
-func TestRenderUserMessageKeepsTagAndBodyRightAligned(t *testing.T) {
+func TestRenderUserMessagePlacesTagOnLeft(t *testing.T) {
 	app, _ := newTestApp(t)
 
 	block, _ := app.renderMessageBlockWithCopy(providertypes.Message{
 		Role:  roleUser,
-		Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello right aligned")},
+		Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello left aligned")},
 	}, 72, 1)
 
 	plain := copyCodeANSIPattern.ReplaceAllString(block, "")
@@ -342,7 +373,7 @@ func TestRenderUserMessageKeepsTagAndBodyRightAligned(t *testing.T) {
 		if strings.Contains(line, messageTagUser) {
 			tagLine = line
 		}
-		if strings.Contains(line, "hello right aligned") {
+		if strings.Contains(line, "hello left aligned") {
 			contentLine = line
 		}
 	}
@@ -350,10 +381,13 @@ func TestRenderUserMessageKeepsTagAndBodyRightAligned(t *testing.T) {
 		t.Fatalf("expected user tag and content lines, got %q", plain)
 	}
 
-	tagRightEdge := lipgloss.Width(strings.TrimRight(tagLine, " "))
-	bodyRightEdge := lipgloss.Width(strings.TrimRight(contentLine, " "))
-	if tagRightEdge != bodyRightEdge {
-		t.Fatalf("expected user tag and body right edges to match, got tag=%d body=%d\n%q\n%q", tagRightEdge, bodyRightEdge, tagLine, contentLine)
+	tagLeading := len(tagLine) - len(strings.TrimLeft(tagLine, " "))
+	if tagLeading > 1 {
+		t.Fatalf("expected user tag to be left aligned, got line %q", tagLine)
+	}
+	contentLeading := len(contentLine) - len(strings.TrimLeft(contentLine, " "))
+	if contentLeading < 2 || contentLeading > 6 {
+		t.Fatalf("expected user body to keep a small left indent, got %q", contentLine)
 	}
 }
 
@@ -429,8 +463,8 @@ func TestRenderProviderAddFormMasksAPIKeyAndShowsHints(t *testing.T) {
 	if !strings.Contains(form, "留空会自动填充默认地址") {
 		t.Fatalf("expected base url hint, got %q", form)
 	}
-	if !strings.Contains(form, "留空会按 Chat API Mode 自动回填默认端点") {
-		t.Fatalf("expected chat endpoint autofill hint, got %q", form)
+	if !strings.Contains(form, "Chat Endpoint:   (") || !strings.Contains(form, "Chat API Mode") || !strings.Contains(form, "自动回填默认端点") {
+		t.Fatalf("expected chat endpoint auto-fill hint, got %q", form)
 	}
 	if !strings.Contains(form, "[Error] input invalid") {
 		t.Fatalf("expected hard error label, got %q", form)
@@ -440,7 +474,7 @@ func TestRenderProviderAddFormMasksAPIKeyAndShowsHints(t *testing.T) {
 func TestRenderProviderAddFormPromptLabel(t *testing.T) {
 	app, _ := newTestApp(t)
 	app.startProviderAddForm()
-	app.providerAddForm.Driver = "custom-driver"
+	app.providerAddForm.Driver = "anthropic"
 	app.providerAddForm.Error = "continue input"
 	app.providerAddForm.ErrorIsHard = false
 
@@ -542,6 +576,16 @@ func TestRenderHeaderIncludesWorkdirFallback(t *testing.T) {
 	header := app.renderHeader(120)
 	if !strings.Contains(header, "cwd: -") {
 		t.Fatalf("expected workdir fallback in header, got %q", header)
+	}
+}
+
+func TestComposeHeaderLineKeepsRightSectionVisible(t *testing.T) {
+	line := composeHeaderLine("NeoCode / model / Ready", "cwd: /tmp/workdir", 48)
+	if !strings.Contains(line, "cwd: /tmp/workdir") {
+		t.Fatalf("expected right section in composed header, got %q", line)
+	}
+	if got := lipgloss.Width(line); got < lipgloss.Width("cwd: /tmp/workdir") {
+		t.Fatalf("expected composed header width to include right section, got %d", got)
 	}
 }
 

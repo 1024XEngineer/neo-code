@@ -4,7 +4,7 @@
 - Prefer structured workspace tools over `bash`: use `filesystem_read_file`, `filesystem_grep`, and `filesystem_glob` for reading and searching.
 - Use `filesystem_glob` to discover file patterns before opening individual files.
 - Use `filesystem_grep` to locate symbols or keywords across the codebase efficiently.
-- Read tool results carefully before acting. Treat `status`, `truncated`, `tool_call_id`, `meta.*`, and `content` as the authoritative outcome of that call.
+- Read tool results carefully before acting. Treat `status`, `ok`, `truncated`, `tool_call_id`, `meta.*`, and `content` as the authoritative outcome of that call.
 
 ## Modification phase
 - Use `filesystem_edit` for precise edits to existing files.
@@ -27,6 +27,8 @@
 ## Bash usage
 - When using `bash`, avoid interactive or blocking commands and pass non-interactive flags when they are available.
 - Stay within the current workspace unless the user clearly asks for something else.
+- Use Git through `bash` with this order: inspect (`git status`/`git diff`/`git log`), then mutate, then verify (`git status`/`git diff`), then summarize.
+- Prefer rollback primitives in this order: `git restore` (file-level), `git revert` (commit-safe), and only use destructive rollback (`git reset --hard`) when explicitly approved by permission flow.
 
 ## Permission and decision flow
 - For risky operations, call the relevant tool first and let the runtime permission layer decide ask/allow/deny.

@@ -375,6 +375,176 @@ func TestAppendToolMessageAndSaveFallsBackToCallNameForToolMetadata(t *testing.T
 	}
 }
 
+func TestAppendToolMessageAndSaveMarksMetadataOkFalseAsError(t *testing.T) {
+	t.Parallel()
+
+	store := newMemoryStore()
+	session := newRuntimeSession("session-append-tool-ok-false")
+	store.sessions[session.ID] = cloneSession(session)
+
+	service := &Service{sessionStore: store}
+	state := newRunState("run-append-tool-ok-false", session)
+	call := providertypes.ToolCall{ID: "call-1", Name: "bash"}
+	result := tools.ToolResult{
+		Name:    "bash",
+		Content: "",
+		Metadata: map[string]any{
+			"ok": false,
+		},
+	}
+
+	if err := service.appendToolMessageAndSave(context.Background(), &state, call, result); err != nil {
+		t.Fatalf("appendToolMessageAndSave() error = %v", err)
+	}
+
+	msg := state.session.Messages[0]
+	if !msg.IsError {
+		t.Fatalf("expected message to be marked as error when metadata ok=false")
+	}
+	if got := renderPartsForTest(msg.Parts); got != "tool execution failed (ok=false)" {
+		t.Fatalf("expected fallback error content, got %q", got)
+	}
+}
+
+func TestAppendToolMessageAndSaveMarksStringAndNumericOkFalseAsError(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		metadata map[string]any
+	}{
+		{
+			name: "string false",
+			metadata: map[string]any{
+				"ok": "false",
+			},
+		},
+		{
+			name: "string zero",
+			metadata: map[string]any{
+				"ok": "0",
+			},
+		},
+		{
+			name: "numeric zero",
+			metadata: map[string]any{
+				"ok": 0,
+			},
+		},
+		{
+			name: "float zero",
+			metadata: map[string]any{
+				"ok": 0.0,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			store := newMemoryStore()
+			session := newRuntimeSession("session-append-tool-ok-false-" + strings.ReplaceAll(tt.name, " ", "-"))
+			store.sessions[session.ID] = cloneSession(session)
+
+			service := &Service{sessionStore: store}
+			state := newRunState("run-append-tool-ok-false-"+strings.ReplaceAll(tt.name, " ", "-"), session)
+			call := providertypes.ToolCall{ID: "call-1", Name: "bash"}
+			result := tools.ToolResult{
+				Name:     "bash",
+				Content:  "",
+				Metadata: tt.metadata,
+			}
+
+			if err := service.appendToolMessageAndSave(context.Background(), &state, call, result); err != nil {
+				t.Fatalf("appendToolMessageAndSave() error = %v", err)
+			}
+
+			msg := state.session.Messages[0]
+			if !msg.IsError {
+				t.Fatalf("expected message to be marked as error when metadata ok=%v", tt.metadata["ok"])
+			}
+			if got := renderPartsForTest(msg.Parts); got != "tool execution failed (ok=false)" {
+				t.Fatalf("expected fallback error content, got %q", got)
+			}
+		})
+	}
+}
+
+func TestAppendToolMessageAndSaveMarksExitCodeNonZeroAsError(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		exitCode any
+	}{
+		{name: "int", exitCode: 1},
+		{name: "string", exitCode: "2"},
+		{name: "float", exitCode: 3.0},
+		{name: "float fractional", exitCode: 0.5},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			store := newMemoryStore()
+			session := newRuntimeSession("session-append-tool-exit-code-" + tt.name)
+			store.sessions[session.ID] = cloneSession(session)
+
+			service := &Service{sessionStore: store}
+			state := newRunState("run-append-tool-exit-code-"+tt.name, session)
+			call := providertypes.ToolCall{ID: "call-1", Name: "bash"}
+			result := tools.ToolResult{
+				Name:    "bash",
+				Content: "",
+				Metadata: map[string]any{
+					"exit_code": tt.exitCode,
+				},
+			}
+
+			if err := service.appendToolMessageAndSave(context.Background(), &state, call, result); err != nil {
+				t.Fatalf("appendToolMessageAndSave() error = %v", err)
+			}
+
+			msg := state.session.Messages[0]
+			if !msg.IsError {
+				t.Fatalf("expected message to be marked as error when metadata exit_code=%v", tt.exitCode)
+			}
+		})
+	}
+}
+
+func TestAppendToolMessageAndSaveDoesNotMarkInvalidOkStringAsError(t *testing.T) {
+	t.Parallel()
+
+	store := newMemoryStore()
+	session := newRuntimeSession("session-append-tool-invalid-ok")
+	store.sessions[session.ID] = cloneSession(session)
+
+	service := &Service{sessionStore: store}
+	state := newRunState("run-append-tool-invalid-ok", session)
+	call := providertypes.ToolCall{ID: "call-1", Name: "bash"}
+	result := tools.ToolResult{
+		Name:    "bash",
+		Content: "",
+		Metadata: map[string]any{
+			"ok": "not-bool",
+		},
+	}
+
+	if err := service.appendToolMessageAndSave(context.Background(), &state, call, result); err != nil {
+		t.Fatalf("appendToolMessageAndSave() error = %v", err)
+	}
+
+	msg := state.session.Messages[0]
+	if msg.IsError {
+		t.Fatalf("expected invalid ok string to keep non-error result")
+	}
+}
+
 func TestAppendToolMessageAndSaveUnlocksStateBeforePersist(t *testing.T) {
 	t.Parallel()
 

@@ -15,6 +15,8 @@ type GitState struct {
 	Available bool
 	Branch    string
 	Dirty     bool
+	Ahead     int
+	Behind    int
 }
 
 // SystemState is the summarized runtime metadata exposed to the prompt builder.

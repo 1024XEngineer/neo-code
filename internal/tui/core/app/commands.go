@@ -109,8 +109,8 @@ const (
 
 	maxActivityEntries = 64
 
-	messageTagUser  = "[ YOU ]"
-	messageTagAgent = "[ NEO ]"
+	messageTagUser  = "◇ YOU"
+	messageTagAgent = "◆ NEO"
 	messageTagTool  = "[ TOOL ]"
 
 	roleUser      = "user"
@@ -145,7 +145,7 @@ var builtinSlashCommands = []slashCommand{
 }
 
 func newSelectionPicker(items []list.Item) list.Model {
-	delegate := list.NewDefaultDelegate()
+	delegate := pickerSelectionDelegate{}
 	picker := list.New(items, delegate, 0, 0)
 	picker.Title = ""
 	picker.SetShowHelp(false)

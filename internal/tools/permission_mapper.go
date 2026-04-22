@@ -29,10 +29,34 @@ func buildPermissionAction(input ToolCallInput) (security.Action, error) {
 
 	switch strings.ToLower(toolName) {
 	case ToolNameBash:
+		intent := AnalyzeBashCommand(extractStringArgument(input.Arguments, "command"))
 		action.Type = security.ActionTypeBash
 		action.Payload.Operation = "command"
 		action.Payload.TargetType = security.TargetTypeCommand
 		action.Payload.Target = extractStringArgument(input.Arguments, "command")
+		action.Payload.SemanticType = ""
+		action.Payload.SemanticClass = intent.Classification
+		action.Payload.NormalizedIntent = intent.NormalizedIntent
+		action.Payload.PermissionFingerprint = intent.PermissionFingerprint
+		if intent.IsGit {
+			action.Payload.SemanticType = "git"
+			action.Payload.Operation = "git_" + strings.TrimSpace(intent.Subcommand)
+			switch intent.Classification {
+			case BashIntentClassificationReadOnly:
+				action.Payload.Resource = "bash_git_read_only"
+			case BashIntentClassificationLocalMutation:
+				action.Payload.Resource = "bash_git_local_mutation"
+			case BashIntentClassificationRemoteOp:
+				action.Payload.Resource = "bash_git_remote_op"
+			case BashIntentClassificationDestructive:
+				action.Payload.Resource = "bash_git_destructive"
+			default:
+				action.Payload.Resource = "bash_git_unknown"
+			}
+			if strings.TrimSpace(intent.Subcommand) == "" {
+				action.Payload.Operation = "git_unknown"
+			}
+		}
 		action.Payload.SandboxTargetType = security.TargetTypeDirectory
 		action.Payload.SandboxTarget = extractStringArgument(input.Arguments, "workdir")
 		if action.Payload.SandboxTarget == "" {

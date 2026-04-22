@@ -90,9 +90,14 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.applyComponentLayout(true)
 		return a, tea.Batch(cmds...)
 	case tickMsg:
-		a.advanceStartupAnimation()
-		if a.startupVisible {
-			cmds = append(cmds, startupAnimationTickCmd())
+		now := time.Time(typed)
+		needNextTick := false
+
+		if !a.footerErrorUntil.IsZero() && now.Before(a.footerErrorUntil) {
+			needNextTick = true
+		}
+		if needNextTick {
+			cmds = append(cmds, appTickCmd())
 		}
 		return a, tea.Batch(cmds...)
 	case providerAddResultMsg:
@@ -578,6 +583,7 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 
 			a.clearActivities()
 			a.clearRunProgress()
+			a.startupScreenLocked = false
 			a.state.IsAgentRunning = true
 			a.state.IsCompacting = false
 			a.state.StreamingReply = false
@@ -2159,7 +2165,7 @@ func (a App) inputBounds() (int, int, int, int) {
 	streamX := contentX
 	streamY := bodyY
 
-	inputY := streamY + a.transcript.Height + a.activityPreviewHeight() + a.todoPreviewHeight() + a.commandMenuHeight(lay.contentWidth)
+	inputY := streamY + a.transcript.Height + a.activityPreviewHeight() + a.todoPreviewHeight() + a.commandMenuHeight(lay.contentWidth, lay.contentHeight)
 	inputHeight := lipgloss.Height(a.renderPrompt(lay.contentWidth))
 	return streamX, inputY, lay.contentWidth, inputHeight
 }
@@ -2772,6 +2778,10 @@ func (a App) currentStatusSnapshot() tuistatus.Snapshot {
 func (a *App) startDraftSession() {
 	a.dismissStartup()
 	a.setActiveSessionID("")
+	a.startupScreenLocked = true
+	a.startupIntroActive = false
+	a.startupIntroFrame = 0
+	a.startupLoopFrame = 0
 	a.state.ActiveSessionTitle = draftSessionTitle
 	a.activeMessages = nil
 	a.clearActivities()
@@ -2858,6 +2868,16 @@ func runCompact(runtime tuiservices.Runtime, sessionID string) tea.Cmd {
 func (a *App) setActiveSessionID(sessionID string) {
 	next := strings.TrimSpace(sessionID)
 	current := strings.TrimSpace(a.state.ActiveSessionID)
+	if next == "" {
+		a.startupScreenLocked = true
+		a.startupIntroActive = false
+		a.startupIntroFrame = 0
+		if current != "" {
+			a.startupLoopFrame = 0
+		}
+	} else {
+		a.startupScreenLocked = false
+	}
 	if strings.EqualFold(current, next) {
 		a.state.ActiveSessionID = next
 		return

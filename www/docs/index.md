@@ -1,31 +1,21 @@
-# 文档入口
+# 文档
 
-NeoCode 第一版站点先承担“项目介绍页 + 文档入口”的职责，不复制仓库里的实现文档。
-下面的链接会直接跳转到 GitHub 仓库中的原始 Markdown。
+欢迎来到 NeoCode 文档。
 
-## 快速开始
+## 快速导航
 
-- [README](https://github.com/1024XEngineer/neo-code/blob/main/README.md)
-- [配置指南](https://github.com/1024XEngineer/neo-code/blob/main/docs/guides/configuration.md)
-- [更新与升级](https://github.com/1024XEngineer/neo-code/blob/main/docs/guides/update.md)
+- [快速开始](./quick-start) — 安装、配置 API Key、启动
 
-## 架构与运行时
+### 使用指南
 
-- [Runtime / Provider 事件流](https://github.com/1024XEngineer/neo-code/blob/main/docs/runtime-provider-event-flow.md)
-- [Context Compact 说明](https://github.com/1024XEngineer/neo-code/blob/main/docs/context-compact.md)
-- [Session 持久化设计](https://github.com/1024XEngineer/neo-code/blob/main/docs/session-persistence-design.md)
-- [Gateway 详细设计](https://github.com/1024XEngineer/neo-code/blob/main/docs/gateway-detailed-design.md)
+- [配置](./guides/configuration) — 配置文件结构与字段说明
+- [切换模型](./guides/providers) — 内置 provider 与自定义 provider
+- [MCP 配置](./guides/mcp) — 接入外部工具
+- [更新升级](./guides/update) — 版本管理
 
-## 配置与扩展
+### 参考
 
-- [扩展 Provider](https://github.com/1024XEngineer/neo-code/blob/main/docs/guides/adding-providers.md)
-- [MCP 配置指南](https://github.com/1024XEngineer/neo-code/blob/main/docs/guides/mcp-configuration.md)
-- [Config 管理详细设计](https://github.com/1024XEngineer/neo-code/blob/main/docs/config-management-detail-design.md)
-
-## 工具与交互
-
-- [Tools 与 TUI 集成](https://github.com/1024XEngineer/neo-code/blob/main/docs/tools-and-tui-integration.md)
-- [Provider Schema 策略](https://github.com/1024XEngineer/neo-code/blob/main/docs/provider-schema-strategy.md)
+- [架构概览](./reference/architecture) — 核心层级与设计原则
 
 ## 参与项目
 

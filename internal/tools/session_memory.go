@@ -75,6 +75,9 @@ func (m *sessionPermissionMemory) remember(sessionID string, action security.Act
 	default:
 		return fmt.Errorf("tools: unsupported session permission scope %q", scope)
 	}
+	if shouldSkipSessionPermissionRemember(action, scope) {
+		return nil
+	}
 
 	actionKey := sessionPermissionActionKey(action)
 	m.mu.Lock()
@@ -150,6 +153,13 @@ func sessionPermissionCategory(action security.Action) string {
 			return "filesystem_write"
 		}
 	case security.ActionTypeBash:
+		if strings.EqualFold(strings.TrimSpace(action.Payload.SemanticType), "git") {
+			semanticClass := strings.ToLower(strings.TrimSpace(action.Payload.SemanticClass))
+			if semanticClass == "" {
+				semanticClass = BashIntentClassificationUnknown
+			}
+			return "bash_git_" + semanticClass
+		}
 		return "bash"
 	case security.ActionTypeMCP:
 		if serverIdentity := mcpServerTarget(action.Payload.Target); serverIdentity != "" {
@@ -167,6 +177,11 @@ func sessionPermissionCategory(action security.Action) string {
 
 // sessionPermissionTargetScope 基于 action 的 target 生成最小授权范围键。
 func sessionPermissionTargetScope(action security.Action) string {
+	if action.Type == security.ActionTypeBash {
+		if fingerprint := strings.TrimSpace(action.Payload.PermissionFingerprint); fingerprint != "" {
+			return fingerprint
+		}
+	}
 	target := strings.TrimSpace(action.Payload.Target)
 	if target == "" {
 		return "*"
@@ -220,4 +235,16 @@ func normalizePermissionCommandTarget(raw string) string {
 	trimmed = strings.ReplaceAll(trimmed, "\r\n", "\n")
 	trimmed = strings.ReplaceAll(trimmed, "\r", "\n")
 	return strings.ToLower(strings.Join(strings.Fields(trimmed), " "))
+}
+
+// shouldSkipSessionPermissionRemember 判断当前 action 在给定 scope 下是否应跳过会话级记忆。
+func shouldSkipSessionPermissionRemember(action security.Action, scope SessionPermissionScope) bool {
+	if action.Type != security.ActionTypeBash {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(action.Payload.SemanticType), "git") {
+		return false
+	}
+	return scope == SessionPermissionScopeAlways &&
+		strings.EqualFold(strings.TrimSpace(action.Payload.SemanticClass), BashIntentClassificationRemoteOp)
 }

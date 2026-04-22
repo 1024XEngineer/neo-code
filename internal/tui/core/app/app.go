@@ -136,6 +136,10 @@ type appRuntimeState struct {
 	logPersistVersion       int
 	transcriptContent       string
 	transcriptScrollbarDrag bool
+	startupScreenLocked     bool
+	startupIntroActive      bool
+	startupIntroFrame       int
+	startupLoopFrame        int
 
 	textSelection struct {
 		active    bool
@@ -274,23 +278,19 @@ func newApp(container tuibootstrap.Container) (App, error) {
 
 	h := help.New()
 	h.ShowAll = false
-	h.ShortSeparator = " • "
+	h.ShortSeparator = " | "
 	h.Styles.ShortKey = lipgloss.NewStyle().
-		Foreground(lipgloss.Color(selectionFg)).
-		Bold(true).
-		Underline(true)
+		Foreground(lipgloss.Color(purpleAccent)).
+		Bold(true)
 	h.Styles.ShortDesc = lipgloss.NewStyle().
-		Foreground(lipgloss.Color(lightText)).
-		Bold(true)
+		Foreground(lipgloss.Color(lightText2))
 	h.Styles.ShortSeparator = lipgloss.NewStyle().
-		Foreground(lipgloss.Color(coralAccent)).
-		Bold(true)
+		Foreground(lipgloss.Color(midGray))
 	h.Styles.FullKey = h.Styles.ShortKey.Copy()
 	h.Styles.FullDesc = h.Styles.ShortDesc.Copy()
 	h.Styles.FullSeparator = h.Styles.ShortSeparator.Copy()
 	h.Styles.Ellipsis = lipgloss.NewStyle().
-		Foreground(lipgloss.Color(warningYellow)).
-		Bold(true)
+		Foreground(lipgloss.Color(oliveGray))
 
 	commandMenu := newCommandMenuModel(uiStyles)
 
@@ -340,15 +340,15 @@ func newApp(container tuibootstrap.Container) (App, error) {
 			markdownRenderer: markdownRenderer,
 		},
 		appRuntimeState: appRuntimeState{
-			nowFn:             time.Now,
-			focus:             panelInput,
-			todoFilter:        todoFilterAll,
-			layoutCached:      true,
-			cachedWidth:       128,
-			cachedHeight:      40,
-			startupVisible:    true,
-			startupCursorOn:   true,
-			startupPulsePhase: 0,
+			nowFn:        time.Now,
+			focus:        panelInput,
+			todoFilter:   todoFilterAll,
+			layoutCached: true,
+			cachedWidth:  128,
+			cachedHeight: 40,
+			// 初始进入草稿态时锁定启动页，直到发送或切换 session 才退出。
+			startupScreenLocked: true,
+			startupIntroActive:  false,
 		},
 		width:  128,
 		height: 40,
@@ -383,10 +383,16 @@ func (a App) Init() tea.Cmd {
 		ListenForRuntimeEvent(a.runtime.Events()),
 		textarea.Blink,
 		a.spinner.Tick,
-		startupAnimationTickCmd(),
+		appTickCmd(),
 	}
 	if cmd := runModelCatalogRefresh(a.providerSvc, a.modelRefreshID); cmd != nil {
 		cmds = append(cmds, cmd)
 	}
 	return tea.Batch(cmds...)
+}
+
+func appTickCmd() tea.Cmd {
+	return tea.Tick(100*time.Millisecond, func(t time.Time) tea.Msg {
+		return tickMsg(t)
+	})
 }

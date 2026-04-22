@@ -1361,6 +1361,32 @@ func TestNewWithBootstrapMissingDependencies(t *testing.T) {
 	}
 }
 
+func TestStartupScreenIsStaticByDefault(t *testing.T) {
+	app, _ := newTestApp(t)
+	if app.startupIntroActive {
+		t.Fatalf("expected startup intro animation to be disabled by default")
+	}
+}
+
+func TestStartupScreenTickDoesNotAnimateLogo(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.startupScreenLocked = true
+	app.startupIntroFrame = 7
+	app.startupLoopFrame = 11
+
+	model, cmd := app.Update(tickMsg(time.Unix(1_700_000_000, 0)))
+	app = model.(App)
+	if app.startupIntroFrame != 7 {
+		t.Fatalf("expected static startup intro frame, got %d", app.startupIntroFrame)
+	}
+	if app.startupLoopFrame != 11 {
+		t.Fatalf("expected static startup loop frame, got %d", app.startupLoopFrame)
+	}
+	if cmd != nil {
+		t.Fatalf("expected no follow-up tick when only startup screen is visible")
+	}
+}
+
 func TestNewUsesBootstrap(t *testing.T) {
 	cfg := newDefaultAppConfig()
 	cfg.Workdir = t.TempDir()
@@ -3858,6 +3884,37 @@ func TestSetTranscriptContentNormalizesTabStops(t *testing.T) {
 	}
 }
 
+func TestStartupScreenUnlocksAfterSend(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.width = 100
+	app.height = 24
+	app.applyComponentLayout(true)
+	app.startupScreenLocked = true
+	app.input.SetValue("hello")
+	app.state.InputText = "hello"
+
+	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	app = model.(App)
+	if app.startupScreenLocked {
+		t.Fatalf("expected startup screen to unlock after sending first message")
+	}
+}
+
+func TestSetActiveSessionIDTogglesStartupScreenLock(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.startupScreenLocked = true
+
+	app.setActiveSessionID("session-1")
+	if app.startupScreenLocked {
+		t.Fatalf("expected switching to session to unlock startup screen")
+	}
+
+	app.setActiveSessionID("")
+	if !app.startupScreenLocked {
+		t.Fatalf("expected returning to draft to relock startup screen")
+	}
+}
+
 func TestRebuildTranscriptCollapsesConsecutiveAssistantTags(t *testing.T) {
 	app, _ := newTestApp(t)
 	app.width = 120
@@ -4282,6 +4339,11 @@ func TestUpdateFocusInputNewSessionAndTodoScroll(t *testing.T) {
 	app.width = 100
 	app.height = 24
 	app.applyComponentLayout(true)
+	app.startupScreenLocked = false
+	app.activeMessages = []providertypes.Message{
+		{Role: roleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("existing message")}},
+	}
+	app.rebuildTranscript()
 
 	app.focus = panelTranscript
 	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyEsc})
@@ -4294,6 +4356,15 @@ func TestUpdateFocusInputNewSessionAndTodoScroll(t *testing.T) {
 	app = model.(App)
 	if len(runtime.listSessions) != 0 && strings.TrimSpace(app.state.ActiveSessionID) == "" {
 		t.Fatalf("expected Ctrl+N to create or activate draft session")
+	}
+	if !app.startupScreenLocked {
+		t.Fatalf("expected Ctrl+N to relock startup screen")
+	}
+	if len(app.activeMessages) != 0 {
+		t.Fatalf("expected Ctrl+N to clear transcript messages")
+	}
+	if view := app.renderWaterfall(100, 24); !strings.Contains(view, "AI-POWERED CLI WORKSPACE") {
+		t.Fatalf("expected startup screen after Ctrl+N, got %q", view)
 	}
 
 	app.focus = panelTodo

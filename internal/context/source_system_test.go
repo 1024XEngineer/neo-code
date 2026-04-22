@@ -36,7 +36,7 @@ func TestCollectSystemStateIncludesGitSummaryFromSingleCall(t *testing.T) {
 		if strings.Join(args, " ") != "status --short --branch" {
 			return "", errors.New("unexpected git command")
 		}
-		return "## feature/context...origin/feature/context\n M internal/context/builder.go\n", nil
+		return "## feature/context...origin/feature/context [ahead 2, behind 1]\n M internal/context/builder.go\n", nil
 	}
 
 	state, err := collectSystemState(context.Background(), testMetadata("/workspace"), runner)
@@ -56,6 +56,9 @@ func TestCollectSystemStateIncludesGitSummaryFromSingleCall(t *testing.T) {
 	if !state.Git.Dirty {
 		t.Fatalf("expected dirty git state")
 	}
+	if state.Git.Ahead != 2 || state.Git.Behind != 1 {
+		t.Fatalf("expected ahead=2 behind=1, got %+v", state.Git)
+	}
 
 	section := renderPromptSection(renderSystemStateSection(state))
 	if !strings.Contains(section, "branch=`feature/context`") {
@@ -63,6 +66,9 @@ func TestCollectSystemStateIncludesGitSummaryFromSingleCall(t *testing.T) {
 	}
 	if !strings.Contains(section, "dirty=`dirty`") {
 		t.Fatalf("expected dirty marker in system section, got %q", section)
+	}
+	if !strings.Contains(section, "ahead=`2`, behind=`1`") {
+		t.Fatalf("expected ahead/behind counters in system section, got %q", section)
 	}
 	if strings.Contains(section, "internal/context/builder.go") {
 		t.Fatalf("did not expect full git status output in system section, got %q", section)
@@ -149,10 +155,23 @@ func TestParseGitStatusSummaryHandlesCleanDetachedAndBranchlessOutput(t *testing
 		t.Fatalf("unexpected dirty state without branch header: %+v", dirtyWithoutBranch)
 	}
 
-	if got := parseGitBranchLine("No commits yet on feature/bootstrap"); got != "feature/bootstrap" {
-		t.Fatalf("expected unborn branch name, got %q", got)
+	branch, ahead, behind := parseGitBranchLine("No commits yet on feature/bootstrap")
+	if branch != "feature/bootstrap" {
+		t.Fatalf("expected unborn branch name, got %q", branch)
 	}
-	if got := parseGitBranchLine("HEAD detached at abc123"); got != "detached" {
-		t.Fatalf("expected detached HEAD marker, got %q", got)
+	if ahead != 0 || behind != 0 {
+		t.Fatalf("expected unborn branch counters to be zero, got ahead=%d behind=%d", ahead, behind)
+	}
+	branch, ahead, behind = parseGitBranchLine("HEAD detached at abc123")
+	if branch != "detached" {
+		t.Fatalf("expected detached HEAD marker, got %q", branch)
+	}
+	if ahead != 0 || behind != 0 {
+		t.Fatalf("expected detached counters to be zero, got ahead=%d behind=%d", ahead, behind)
+	}
+
+	branch, ahead, behind = parseGitBranchLine("main...origin/main [ahead 2, behind 3]")
+	if branch != "main" || ahead != 2 || behind != 3 {
+		t.Fatalf("expected ahead/behind parsed, got branch=%q ahead=%d behind=%d", branch, ahead, behind)
 	}
 }

@@ -58,15 +58,23 @@ const (
 
 // ActionPayload is the normalized structured context used by policy and sandbox.
 type ActionPayload struct {
-	ToolName   string
-	Resource   string
-	Operation  string
-	SessionID  string
-	TaskID     string
-	AgentID    string
-	Workdir    string
-	TargetType TargetType
-	Target     string
+	ToolName  string
+	Resource  string
+	Operation string
+	// SemanticType 表示可选的语义域，例如 git。
+	SemanticType string
+	// SemanticClass 表示语义分类，例如 read_only/remote_op/destructive。
+	SemanticClass string
+	// NormalizedIntent 保存归一化后的语义意图文本，用于审计与展示。
+	NormalizedIntent string
+	// PermissionFingerprint 保存用于会话级权限复用的稳定指纹。
+	PermissionFingerprint string
+	SessionID             string
+	TaskID                string
+	AgentID               string
+	Workdir               string
+	TargetType            TargetType
+	Target                string
 	// SandboxTargetType is the target kind used specifically for workspace boundary
 	// checks. It falls back to TargetType when unset so callers can keep permission
 	// display metadata separate from the path actually validated by the sandbox.

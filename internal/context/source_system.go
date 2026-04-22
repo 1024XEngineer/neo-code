@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -59,29 +60,65 @@ func parseGitStatusSummary(output string) GitState {
 	state := GitState{Available: true}
 	firstLine := trimmed[0]
 	if strings.HasPrefix(firstLine, "## ") {
-		state.Branch = parseGitBranchLine(strings.TrimPrefix(firstLine, "## "))
+		state.Branch, state.Ahead, state.Behind = parseGitBranchLine(strings.TrimPrefix(firstLine, "## "))
 		trimmed = trimmed[1:]
 	}
 	state.Dirty = len(trimmed) > 0
 	return state
 }
 
-// parseGitBranchLine 从 git branch 摘要行中提取用户可读的分支名称。
-func parseGitBranchLine(line string) string {
+// parseGitBranchLine 从 git branch 摘要行中提取分支名与 ahead/behind 计数。
+func parseGitBranchLine(line string) (string, int, int) {
 	line = strings.TrimSpace(line)
 	switch {
 	case line == "":
-		return ""
+		return "", 0, 0
 	case strings.HasPrefix(line, "No commits yet on "):
-		return strings.TrimSpace(strings.TrimPrefix(line, "No commits yet on "))
+		return strings.TrimSpace(strings.TrimPrefix(line, "No commits yet on ")), 0, 0
 	case strings.HasPrefix(line, "HEAD "):
-		return "detached"
+		return "detached", 0, 0
 	default:
+		ahead, behind := parseGitTrackingCounters(line)
 		if index := strings.Index(line, "..."); index >= 0 {
 			line = line[:index]
 		}
-		return strings.TrimSpace(line)
+		return strings.TrimSpace(line), ahead, behind
 	}
+}
+
+// parseGitTrackingCounters 解析 [ahead N, behind M] 片段中的追踪计数。
+func parseGitTrackingCounters(line string) (int, int) {
+	start := strings.Index(line, "[")
+	end := strings.LastIndex(line, "]")
+	if start < 0 || end <= start {
+		return 0, 0
+	}
+
+	segment := strings.TrimSpace(line[start+1 : end])
+	if segment == "" {
+		return 0, 0
+	}
+
+	parts := strings.Split(segment, ",")
+	ahead := 0
+	behind := 0
+	for _, part := range parts {
+		fields := strings.Fields(strings.TrimSpace(part))
+		if len(fields) != 2 {
+			continue
+		}
+		value, err := strconv.Atoi(fields[1])
+		if err != nil {
+			continue
+		}
+		switch strings.ToLower(fields[0]) {
+		case "ahead":
+			ahead = value
+		case "behind":
+			behind = value
+		}
+	}
+	return ahead, behind
 }
 
 func renderSystemStateSection(state SystemState) promptSection {
@@ -97,7 +134,13 @@ func renderSystemStateSection(state SystemState) promptSection {
 		if state.Git.Dirty {
 			dirty = "dirty"
 		}
-		lines = append(lines, fmt.Sprintf("- git: branch=`%s`, dirty=`%s`", promptValue(state.Git.Branch), dirty))
+		lines = append(lines, fmt.Sprintf(
+			"- git: branch=`%s`, dirty=`%s`, ahead=`%d`, behind=`%d`",
+			promptValue(state.Git.Branch),
+			dirty,
+			state.Git.Ahead,
+			state.Git.Behind,
+		))
 	} else {
 		lines = append(lines, "- git: unavailable")
 	}

@@ -164,6 +164,17 @@ func TestToolExecuteErrorFormattingAndTruncation(t *testing.T) {
 			if tt.expectMetadata && result.Metadata["workdir"] == "" {
 				t.Fatalf("expected workdir metadata, got %#v", result.Metadata)
 			}
+			if tt.expectMetadata {
+				if _, exists := result.Metadata["ok"]; !exists {
+					t.Fatalf("expected ok metadata, got %#v", result.Metadata)
+				}
+				if _, exists := result.Metadata["exit_code"]; !exists {
+					t.Fatalf("expected exit_code metadata, got %#v", result.Metadata)
+				}
+				if _, exists := result.Metadata["classification"]; !exists {
+					t.Fatalf("expected classification metadata, got %#v", result.Metadata)
+				}
+			}
 			if truncated, _ := result.Metadata["truncated"].(bool); truncated != tt.expectTruncate {
 				t.Fatalf("expected truncated=%v, got %#v", tt.expectTruncate, result.Metadata["truncated"])
 			}

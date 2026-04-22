@@ -24,6 +24,15 @@
 - `memo_list`
 - `memo_remove`
 
+## Bash Git 语义治理
+- 不新增 `git_*` 工具，Git 能力统一走 `bash`，并在工具层执行前做语义解析。
+- `bash` 调用会被归类为：`read_only`、`local_mutation`、`remote_op`、`destructive`、`unknown`。
+- 推荐策略默认：
+  - `bash_git_read_only`、`bash_git_remote_op`、`bash_git_destructive`、`bash_git_local_mutation`、`bash_git_unknown` 统一走审批。
+  - 非 Git 或无法判定语义的 `bash` 命令走兜底审批。
+- Session 级权限记忆基于 `permission_fingerprint`，同义写法可复用授权；`remote_op` 不复用 `allow_session`，每次都要求审批。
+- `bash` ToolResult 会附带结构化字段：`ok`、`classification`、`normalized_intent`、`permission_fingerprint`、`exit_code`，并通过 `status/ok/meta.*` 回灌模型。
+
 ## Memo 能力集成
 - `memo_remember`、`memo_recall`、`memo_list`、`memo_remove` 作为标准工具暴露给模型，沿 `Runtime -> Tool Manager -> internal/tools/memo` 链路执行。
 - 自动记忆提取不作为单独工具暴露给模型，也不由 TUI 直接触发；它在 runtime 完成最终回复后由 memo 子系统后台调度。

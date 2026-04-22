@@ -380,23 +380,23 @@ func (m *DefaultManager) Execute(ctx context.Context, input ToolCallInput) (Tool
 		return result, permissionErrorFromDecision(decision)
 	}
 
-		plan, err := m.sandbox.Check(ctx, action)
-		if err != nil {
-			if decision, decisionMatched := resolveSandboxOutsideWriteDecision(input, action, err, m.sessionDecisions); decisionMatched {
-				if decision.Decision != security.DecisionAllow {
-					result := blockedToolResult(input, decision)
-					return result, permissionErrorFromDecision(decision)
-				}
-				m.auditCapabilityDecision(action, string(security.DecisionAllow), decision.Reason)
-				return m.executor.Execute(ctx, input)
-			} else {
-				result := NewErrorResult(input.Name, "workspace sandbox rejected action", sandboxErrorDetails(action, err), actionMetadata(action))
-				result.ToolCallID = input.ID
-				return result, err
+	plan, err := m.sandbox.Check(ctx, action)
+	if err != nil {
+		if decision, decisionMatched := resolveSandboxOutsideWriteDecision(input, action, err, m.sessionDecisions); decisionMatched {
+			if decision.Decision != security.DecisionAllow {
+				result := blockedToolResult(input, decision)
+				return result, permissionErrorFromDecision(decision)
 			}
-		} else if plan != nil {
-			input.WorkspacePlan = plan
+			m.auditCapabilityDecision(action, string(security.DecisionAllow), decision.Reason)
+			return m.executor.Execute(ctx, input)
+		} else {
+			result := NewErrorResult(input.Name, "workspace sandbox rejected action", sandboxErrorDetails(action, err), actionMetadata(action))
+			result.ToolCallID = input.ID
+			return result, err
 		}
+	} else if plan != nil {
+		input.WorkspacePlan = plan
+	}
 	m.auditCapabilityDecision(action, string(security.DecisionAllow), "")
 
 	return m.executor.Execute(ctx, input)
@@ -850,6 +850,18 @@ func actionMetadata(action security.Action) map[string]any {
 	if action.Payload.SandboxTarget != "" {
 		metadata["permission_sandbox_target"] = action.Payload.SandboxTarget
 	}
+	if semanticType := strings.TrimSpace(action.Payload.SemanticType); semanticType != "" {
+		metadata["permission_semantic_type"] = semanticType
+	}
+	if semanticClass := strings.TrimSpace(action.Payload.SemanticClass); semanticClass != "" {
+		metadata["permission_semantic_class"] = semanticClass
+	}
+	if normalizedIntent := strings.TrimSpace(action.Payload.NormalizedIntent); normalizedIntent != "" {
+		metadata["permission_normalized_intent"] = normalizedIntent
+	}
+	if fingerprint := strings.TrimSpace(action.Payload.PermissionFingerprint); fingerprint != "" {
+		metadata["permission_fingerprint"] = fingerprint
+	}
 	if strings.TrimSpace(action.Payload.TaskID) != "" {
 		metadata["permission_task_id"] = strings.TrimSpace(action.Payload.TaskID)
 	}
@@ -870,6 +882,18 @@ func permissionDetails(decision security.CheckResult) string {
 	}
 	if decision.Action.Payload.TargetType != "" && strings.TrimSpace(decision.Action.Payload.Target) != "" {
 		parts = append(parts, fmt.Sprintf("%s: %s", decision.Action.Payload.TargetType, decision.Action.Payload.Target))
+	}
+	if semanticType := strings.TrimSpace(decision.Action.Payload.SemanticType); semanticType != "" {
+		parts = append(parts, "semantic_type: "+semanticType)
+	}
+	if semanticClass := strings.TrimSpace(decision.Action.Payload.SemanticClass); semanticClass != "" {
+		parts = append(parts, "semantic_class: "+semanticClass)
+	}
+	if normalizedIntent := strings.TrimSpace(decision.Action.Payload.NormalizedIntent); normalizedIntent != "" {
+		parts = append(parts, "normalized_intent: "+normalizedIntent)
+	}
+	if fingerprint := strings.TrimSpace(decision.Action.Payload.PermissionFingerprint); fingerprint != "" {
+		parts = append(parts, "permission_fingerprint: "+fingerprint)
 	}
 	if strings.TrimSpace(decision.Reason) != "" {
 		parts = append(parts, "policy: "+strings.TrimSpace(decision.Reason))

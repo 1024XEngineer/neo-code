@@ -19,6 +19,10 @@ const (
 	purpleAccent = "#a78bfa"
 	purpleLight  = "#c4b5fd"
 	coralAccent  = "#f09070"
+	neoBadge     = "#bd93f9"
+	youBadge     = "#8be9fd"
+	neoText      = "#f5f7fb"
+	youText      = "#e5e7eb"
 	selectionBg  = "#355070"
 	selectionFg  = "#f7fafc"
 
@@ -166,15 +170,14 @@ func newStyles() styles {
 			Foreground(lipgloss.Color(oliveGray)),
 		streamContent: lipgloss.NewStyle().
 			Foreground(lipgloss.Color(lightText)),
-		messageUserTag:  tagStyle(purpleAccent),
-		messageAgentTag: tagStyle(purpleLight),
+		messageUserTag:  tagStyle(youBadge),
+		messageAgentTag: tagStyle(neoBadge),
 		messageBody: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(lightText2)).
-			MarginLeft(2),
+			Foreground(lipgloss.Color(neoText)).
+			MarginLeft(3),
 		messageUserBody: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(purpleAccent)).
-			Bold(true).
-			MarginRight(8),
+			Foreground(lipgloss.Color(youText)).
+			MarginLeft(3),
 		inlineNotice: lipgloss.NewStyle().
 			Foreground(lipgloss.Color(oliveGray)).
 			Italic(true),
@@ -222,8 +225,11 @@ func newStyles() styles {
 			BorderForeground(lipgloss.Color(purpleAccent)).
 			Padding(0, 1),
 		footer: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(lightText)).
-			Bold(true),
+			Foreground(lipgloss.Color(lightText2)).
+			BorderTop(true).
+			BorderForeground(lipgloss.Color(borderDark)).
+			Align(lipgloss.Center).
+			PaddingTop(1),
 		badgeUser:    badge("", purpleAccent),
 		badgeAgent:   badge("", coralAccent),
 		badgeSuccess: badge("", successGreen),
@@ -277,7 +283,7 @@ func tagStyle(fg string) lipgloss.Style {
 	return lipgloss.NewStyle().
 		Bold(true).
 		Foreground(lipgloss.Color(fg)).
-		Padding(0, 1)
+		Padding(0, 0)
 }
 
 func badge(bg string, fg string) lipgloss.Style {

@@ -64,6 +64,7 @@ func (e *defaultSecurityExecutor) Execute(
 		err := errors.New("bash: command is empty")
 		return tools.NewErrorResult("bash", tools.NormalizeErrorReason("bash", err), "", nil), err
 	}
+	intent := tools.AnalyzeBashCommand(command)
 
 	base := strings.TrimSpace(call.Workdir)
 	if base == "" {
@@ -86,26 +87,54 @@ func (e *defaultSecurityExecutor) Execute(
 	binary, args := shellCommand(e.shell, command)
 	output, runErr := e.runner.CombinedOutput(runCtx, binary, args, workdir)
 	content := string(output)
+	metadata := bashResultMetadata(workdir, intent, commandExitCode(runErr), runErr == nil)
 	if runErr != nil {
 		result := tools.NewErrorResult(
 			"bash",
 			tools.NormalizeErrorReason("bash", runErr),
 			content,
-			map[string]any{"workdir": workdir},
+			metadata,
 		)
 		result = tools.ApplyOutputLimit(result, tools.DefaultOutputLimitBytes)
 		return result, runErr
 	}
 
 	result := tools.ToolResult{
-		Name:    "bash",
-		Content: content,
-		Metadata: map[string]any{
-			"workdir": workdir,
-		},
+		Name:     "bash",
+		Content:  content,
+		Metadata: metadata,
 	}
 	result = tools.ApplyOutputLimit(result, tools.DefaultOutputLimitBytes)
 	return result, nil
+}
+
+// bashResultMetadata 构造 bash 工具统一元数据，确保模型可见执行语义与成功标记。
+func bashResultMetadata(workdir string, intent tools.BashSemanticIntent, exitCode int, ok bool) map[string]any {
+	metadata := map[string]any{
+		"workdir":        workdir,
+		"ok":             ok,
+		"exit_code":      exitCode,
+		"classification": strings.TrimSpace(intent.Classification),
+	}
+	if normalized := strings.TrimSpace(intent.NormalizedIntent); normalized != "" {
+		metadata["normalized_intent"] = normalized
+	}
+	if fingerprint := strings.TrimSpace(intent.PermissionFingerprint); fingerprint != "" {
+		metadata["permission_fingerprint"] = fingerprint
+	}
+	return metadata
+}
+
+// commandExitCode 提取命令退出码；无法确定时返回 -1。
+func commandExitCode(err error) int {
+	if err == nil {
+		return 0
+	}
+	var exitErr interface{ ExitCode() int }
+	if errors.As(err, &exitErr) {
+		return exitErr.ExitCode()
+	}
+	return -1
 }
 
 func shellCommand(shell string, command string) (string, []string) {

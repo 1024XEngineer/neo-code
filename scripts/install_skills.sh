@@ -3,7 +3,7 @@
 set -eu
 
 ROOT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
-SRC_DIR="$ROOT_DIR/.skills"
+SRC_DIR="$ROOT_DIR/.agents/skills"
 
 if [ ! -d "$SRC_DIR" ]; then
 	echo "技能目录不存在: $SRC_DIR" >&2

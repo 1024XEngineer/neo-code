@@ -131,6 +131,17 @@ func TestDefaultSecurityExecutorExecute(t *testing.T) {
 					t.Fatalf("expected workdir metadata containing %q, got %q", tt.expectMeta, got)
 				}
 			}
+			if tt.expectMeta != "" {
+				if _, exists := result.Metadata["ok"]; !exists {
+					t.Fatalf("expected ok metadata to exist, got %#v", result.Metadata)
+				}
+				if _, exists := result.Metadata["exit_code"]; !exists {
+					t.Fatalf("expected exit_code metadata to exist, got %#v", result.Metadata)
+				}
+				if _, exists := result.Metadata["classification"]; !exists {
+					t.Fatalf("expected classification metadata to exist, got %#v", result.Metadata)
+				}
+			}
 		})
 	}
 }

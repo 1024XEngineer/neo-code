@@ -1,33 +1,23 @@
-# Docs Index
+# Docs
 
-The first VitePress version is an entry point, not a migrated documentation tree.
-The links below intentionally point to the Markdown files already maintained in the repository.
+Welcome to the NeoCode documentation.
 
-## Getting Started
+## Quick navigation
 
-- [README](https://github.com/1024XEngineer/neo-code/blob/main/README.md)
-- [Configuration Guide](https://github.com/1024XEngineer/neo-code/blob/main/docs/guides/configuration.md)
-- [Upgrade Guide](https://github.com/1024XEngineer/neo-code/blob/main/docs/guides/update.md)
+- [Quick Start](./quick-start) — Install, set API keys, and run
 
-## Architecture and Runtime
+### Guides
 
-- [Runtime / Provider Event Flow](https://github.com/1024XEngineer/neo-code/blob/main/docs/runtime-provider-event-flow.md)
-- [Context Compact](https://github.com/1024XEngineer/neo-code/blob/main/docs/context-compact.md)
-- [Session Persistence Design](https://github.com/1024XEngineer/neo-code/blob/main/docs/session-persistence-design.md)
-- [Gateway Detailed Design](https://github.com/1024XEngineer/neo-code/blob/main/docs/gateway-detailed-design.md)
+- [Configuration](./guides/configuration) — Config file structure and fields
+- [Switching Models](./guides/providers) — Built-in and custom providers
+- [MCP Configuration](./guides/mcp) — Connect external tools
+- [Updating](./guides/update) — Version management
 
-## Configuration and Extension
+### Reference
 
-- [Adding Providers](https://github.com/1024XEngineer/neo-code/blob/main/docs/guides/adding-providers.md)
-- [MCP Configuration Guide](https://github.com/1024XEngineer/neo-code/blob/main/docs/guides/mcp-configuration.md)
-- [Config Management Detailed Design](https://github.com/1024XEngineer/neo-code/blob/main/docs/config-management-detail-design.md)
+- [Architecture Overview](./reference/architecture) — Core layers and design principles
 
-## Tools and Interaction
-
-- [Tools and TUI Integration](https://github.com/1024XEngineer/neo-code/blob/main/docs/tools-and-tui-integration.md)
-- [Provider Schema Strategy](https://github.com/1024XEngineer/neo-code/blob/main/docs/provider-schema-strategy.md)
-
-## Project Links
+## Project links
 
 - [Repository](https://github.com/1024XEngineer/neo-code)
 - [Issues](https://github.com/1024XEngineer/neo-code/issues)

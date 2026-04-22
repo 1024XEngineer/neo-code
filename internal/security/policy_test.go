@@ -22,7 +22,60 @@ func TestPolicyEngineRecommendedRules(t *testing.T) {
 		wantRuleID   string
 	}{
 		{
-			name: "bash always ask",
+			name: "git read-only bash ask",
+			action: Action{
+				Type: ActionTypeBash,
+				Payload: ActionPayload{
+					ToolName:              "bash",
+					Resource:              "bash_git_read_only",
+					Operation:             "git_status",
+					SemanticType:          "git",
+					SemanticClass:         "read_only",
+					NormalizedIntent:      "git status",
+					TargetType:            TargetTypeCommand,
+					Target:                "git status --short --branch",
+					PermissionFingerprint: "bash.git|read_only|status",
+				},
+			},
+			wantDecision: DecisionAsk,
+			wantRuleID:   "ask-bash-git-read-only",
+		},
+		{
+			name: "git remote bash ask",
+			action: Action{
+				Type: ActionTypeBash,
+				Payload: ActionPayload{
+					ToolName:      "bash",
+					Resource:      "bash_git_remote_op",
+					Operation:     "git_push",
+					SemanticType:  "git",
+					SemanticClass: "remote_op",
+					TargetType:    TargetTypeCommand,
+					Target:        "git push origin main",
+				},
+			},
+			wantDecision: DecisionAsk,
+			wantRuleID:   "ask-bash-git-remote-op",
+		},
+		{
+			name: "git destructive bash ask",
+			action: Action{
+				Type: ActionTypeBash,
+				Payload: ActionPayload{
+					ToolName:      "bash",
+					Resource:      "bash_git_destructive",
+					Operation:     "git_reset",
+					SemanticType:  "git",
+					SemanticClass: "destructive",
+					TargetType:    TargetTypeCommand,
+					Target:        "git reset --hard HEAD~1",
+				},
+			},
+			wantDecision: DecisionAsk,
+			wantRuleID:   "ask-bash-git-destructive",
+		},
+		{
+			name: "bash fallback ask",
 			action: Action{
 				Type: ActionTypeBash,
 				Payload: ActionPayload{

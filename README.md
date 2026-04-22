@@ -194,7 +194,7 @@ Gateway 转发与自动拉起说明：
 
 ## 在仓库内直接创建 Issue（Skills + 自动化）
 
-仓库提供三类同前缀 skill（位于 `.skills/`）：
+仓库提供三类同前缀 skill（位于 `.agents/skills/`）：
 
 - `issue-rfc-proposal`（提案类，RFC 风格）
 - `issue-rfc-architecture`（架构类，RFC 风格）

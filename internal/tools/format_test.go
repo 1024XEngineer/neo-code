@@ -283,6 +283,7 @@ func TestFormatToolMessageForModel(t *testing.T) {
 		"tool result",
 		"tool: filesystem_edit",
 		"status: ok",
+		"ok: true",
 		"tool_call_id: call-1",
 		"truncated: true",
 		"meta.path: internal/context/prompt.go",

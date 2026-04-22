@@ -15,31 +15,36 @@ const (
 	DefaultOutputLimitBytes = 64 * 1024
 	truncatedSuffix         = "\n...[truncated]"
 
-	maxProjectedToolMetadataKeys     = 6
+	maxProjectedToolMetadataKeys     = 12
 	maxProjectedToolMetadataValueLen = 160
 )
 
 var projectedToolMetadataAllowlist = map[string]struct{}{
-	"bytes":              {},
-	"count":              {},
-	"emitted_bytes":      {},
-	"filtered_count":     {},
-	"http_status":        {},
-	"matched_count":      {},
-	"matched_files":      {},
-	"matched_lines":      {},
-	"mcp_server_id":      {},
-	"mcp_tool_name":      {},
-	"path":               {},
-	"relative_path":      {},
-	"replacement_length": {},
-	"returned_count":     {},
-	"root":               {},
-	"search_length":      {},
-	"status_code":        {},
-	"tool_name":          {},
-	"truncated":          {},
-	"workdir":            {},
+	"bytes":                  {},
+	"count":                  {},
+	"emitted_bytes":          {},
+	"filtered_count":         {},
+	"http_status":            {},
+	"matched_count":          {},
+	"matched_files":          {},
+	"matched_lines":          {},
+	"mcp_server_id":          {},
+	"mcp_tool_name":          {},
+	"ok":                     {},
+	"classification":         {},
+	"normalized_intent":      {},
+	"permission_fingerprint": {},
+	"exit_code":              {},
+	"path":                   {},
+	"relative_path":          {},
+	"replacement_length":     {},
+	"returned_count":         {},
+	"root":                   {},
+	"search_length":          {},
+	"status_code":            {},
+	"tool_name":              {},
+	"truncated":              {},
+	"workdir":                {},
 }
 
 // ApplyOutputLimit truncates tool output content and adds a truncated metadata flag.
@@ -115,6 +120,7 @@ func FormatToolMessageForModel(message providertypes.Message) string {
 		status = "error"
 	}
 	lines = append(lines, "status: "+status)
+	lines = append(lines, fmt.Sprintf("ok: %t", !message.IsError))
 
 	if toolCallID := strings.TrimSpace(message.ToolCallID); toolCallID != "" {
 		lines = append(lines, "tool_call_id: "+toolCallID)
