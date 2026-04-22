@@ -179,7 +179,7 @@ func sessionPermissionCategory(action security.Action) string {
 func sessionPermissionTargetScope(action security.Action) string {
 	if action.Type == security.ActionTypeBash {
 		if fingerprint := strings.TrimSpace(action.Payload.PermissionFingerprint); fingerprint != "" {
-			return strings.ToLower(fingerprint)
+			return fingerprint
 		}
 	}
 	target := strings.TrimSpace(action.Payload.Target)

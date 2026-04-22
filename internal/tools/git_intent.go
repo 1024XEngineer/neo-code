@@ -180,12 +180,13 @@ func parseGitCommandParts(tokens []string) (string, []string, []string, bool) {
 			key, value := splitGitFlagToken(token)
 			if value == "" && cursor+1 < len(tokens) && shouldConsumeGitFlagValue(key, tokens[cursor+1]) {
 				cursor++
-				value = strings.ToLower(strings.TrimSpace(tokens[cursor]))
+				value = strings.TrimSpace(tokens[cursor])
 			}
+			normalizedFlag := canonicalizeGitFlagKey(key)
 			if value == "" {
-				globalFlags = append(globalFlags, canonicalizeGitFlagKey(key))
+				globalFlags = append(globalFlags, normalizedFlag)
 			} else {
-				globalFlags = append(globalFlags, canonicalizeGitFlagKey(key)+"="+value)
+				globalFlags = append(globalFlags, normalizedFlag+"="+value)
 			}
 			continue
 		}
@@ -328,7 +329,7 @@ func normalizeGitArgs(tokens []string) ([]string, []string) {
 		}
 		if token == "--" {
 			for j := idx + 1; j < len(tokens); j++ {
-				arg := strings.ToLower(strings.TrimSpace(tokens[j]))
+				arg := strings.TrimSpace(tokens[j])
 				if arg != "" {
 					args = append(args, arg)
 				}
@@ -339,16 +340,17 @@ func normalizeGitArgs(tokens []string) ([]string, []string) {
 			key, value := splitGitFlagToken(token)
 			if value == "" && idx+1 < len(tokens) && shouldConsumeGitFlagValue(key, tokens[idx+1]) {
 				idx++
-				value = strings.ToLower(strings.TrimSpace(tokens[idx]))
+				value = strings.TrimSpace(tokens[idx])
 			}
+			normalizedFlag := canonicalizeGitFlagKey(key)
 			if value == "" {
-				flags = append(flags, canonicalizeGitFlagKey(key))
+				flags = append(flags, normalizedFlag)
 			} else {
-				flags = append(flags, canonicalizeGitFlagKey(key)+"="+value)
+				flags = append(flags, normalizedFlag+"="+value)
 			}
 			continue
 		}
-		args = append(args, strings.ToLower(token))
+		args = append(args, token)
 	}
 	sort.Strings(flags)
 	return flags, args
@@ -359,7 +361,7 @@ func splitGitFlagToken(token string) (string, string) {
 	trimmed := strings.TrimSpace(token)
 	if idx := strings.Index(trimmed, "="); idx > 0 {
 		key := strings.TrimSpace(trimmed[:idx])
-		value := strings.ToLower(strings.TrimSpace(trimmed[idx+1:]))
+		value := strings.TrimSpace(trimmed[idx+1:])
 		return key, value
 	}
 	return trimmed, ""

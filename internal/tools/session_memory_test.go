@@ -374,6 +374,38 @@ func TestSessionPermissionMemoryResolveMatchesNormalizedCommandScope(t *testing.
 	}
 }
 
+func TestSessionPermissionMemoryUsesCaseSensitiveFingerprintScope(t *testing.T) {
+	t.Parallel()
+
+	memory := newSessionPermissionMemory()
+	sessionID := "session-bash-fingerprint-case"
+	remembered := security.Action{
+		Type: security.ActionTypeBash,
+		Payload: security.ActionPayload{
+			ToolName:              "bash",
+			Resource:              "bash_git_local_mutation",
+			TargetType:            security.TargetTypeCommand,
+			Target:                "git checkout Feature",
+			SemanticType:          "git",
+			SemanticClass:         BashIntentClassificationLocalMutation,
+			PermissionFingerprint: "bash.git|local_mutation|checkout|sha256=ABCDEF",
+		},
+	}
+	if err := memory.remember(sessionID, remembered, SessionPermissionScopeAlways); err != nil {
+		t.Fatalf("remember bash action: %v", err)
+	}
+
+	if _, _, ok := memory.resolve(sessionID, remembered); !ok {
+		t.Fatalf("expected same fingerprint to hit session memory")
+	}
+
+	differentCase := remembered
+	differentCase.Payload.PermissionFingerprint = "bash.git|local_mutation|checkout|sha256=abcdef"
+	if _, _, ok := memory.resolve(sessionID, differentCase); ok {
+		t.Fatalf("expected different-case fingerprint to miss session memory")
+	}
+}
+
 func TestSessionPermissionMemorySkipsRemoteGitRemember(t *testing.T) {
 	t.Parallel()
 
