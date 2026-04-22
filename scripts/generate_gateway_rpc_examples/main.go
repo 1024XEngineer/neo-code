@@ -499,15 +499,16 @@ func replaceGeneratedBlock(documentContent, generatedContent string) (string, er
 	if startIndex < 0 {
 		return "", fmt.Errorf("未找到自动生成起始标记 %q", beginMarker)
 	}
-	endIndex := strings.Index(documentContent, endMarker)
-	if endIndex < 0 {
+	contentStart := startIndex + len(beginMarker)
+	endOffset := strings.Index(documentContent[contentStart:], endMarker)
+	if endOffset < 0 {
 		return "", fmt.Errorf("未找到自动生成结束标记 %q", endMarker)
 	}
+	endIndex := contentStart + endOffset
 	if endIndex < startIndex {
 		return "", fmt.Errorf("自动生成区块标记顺序非法")
 	}
 
-	contentStart := startIndex + len(beginMarker)
 	replaced := documentContent[:contentStart] + "\n" + generatedContent + "\n" + documentContent[endIndex:]
 	return replaced, nil
 }
