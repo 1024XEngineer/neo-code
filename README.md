@@ -179,6 +179,47 @@ Gateway 转发与自动拉起说明：
 - 不提交明文密钥、个人配置或会话数据
 - 不提交无关改动与临时文件
 
+## 在仓库内直接创建 Issue（Skills + 自动化）
+
+仓库提供三类同前缀 skill（位于 `.skills/`）：
+
+- `issue-rfc-proposal`（提案类，RFC 风格）
+- `issue-rfc-architecture`（架构类，RFC 风格）
+- `issue-rfc-implementation`（实现类，执行单风格）
+
+先安装 skills 到仓库内常见 AI Coding 工具目录：
+
+```bash
+make install-skills
+```
+
+默认会安装到以下目录（均在仓库内）：
+
+- `.codex/skills`
+- `.claude/skills`
+- `.cursor/skills`
+- `.windsurf/skills`
+
+如需自定义安装目标，可设置环境变量 `SKILL_INSTALL_TARGETS`（冒号分隔目录）：
+
+```bash
+SKILL_INSTALL_TARGETS=".codex/skills:.claude/skills" make install-skills
+```
+
+Skill 内部调用脚本 `scripts/create_issue.sh` 创建 issue。你也可以直接执行脚本：
+
+```bash
+./scripts/create_issue.sh --type proposal --title "统一会话中断恢复语义"
+./scripts/create_issue.sh --type architecture --title "Runtime 与 Session 账本边界梳理"
+./scripts/create_issue.sh --type implementation --title "补齐流式中断持久化" --labels "bug,priority-high"
+```
+
+脚本可选参数：
+
+- `--repo <owner/repo>`：指定目标仓库（默认自动识别当前仓库）
+- `--body-file <path>`：自定义 issue 正文文件（不传则使用内置模板）
+- `--labels <a,b,c>`：追加标签（逗号分隔）
+
 ## 网关运维与安全（GW-06）
 
 - 静默认证（Silent Auth）：

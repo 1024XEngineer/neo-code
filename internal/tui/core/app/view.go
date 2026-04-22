@@ -125,6 +125,13 @@ func (a App) renderWaterfall(width int, height int) string {
 			Italic(true)
 		parts = append(parts, thinkingStyle.Render("Thinking..."))
 	}
+	if a.hasTextSelection() {
+		selStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color(selectionFg)).
+			Background(lipgloss.Color(selectionBg)).
+			Padding(0, 1)
+		parts = append(parts, selStyle.Render("已选择内容，右键复制"))
+	}
 	if todo := a.renderTodoPreview(width); todo != "" {
 		parts = append(parts, todo)
 	}

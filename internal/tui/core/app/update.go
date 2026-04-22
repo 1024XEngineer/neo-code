@@ -17,6 +17,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"neo-code/internal/config"
 	configstate "neo-code/internal/config/state"
@@ -49,7 +50,7 @@ const providerAddManualModelsJSONTemplate = "[\n  {\n    \"id\": \"model-id\",\n
 const sessionSwitchBusyMessage = "cannot switch sessions while run or compact is active"
 const logViewerEntryLimit = 500
 const logViewerPersistDebounce = 300 * time.Millisecond
-const footerErrorFlashDuration = 4 * time.Second
+const footerErrorFlashDuration = 8 * time.Second
 
 type sessionLogPersistenceRuntime interface {
 	LoadSessionLogEntries(ctx context.Context, sessionID string) ([]tuiservices.SessionLogEntry, error)
@@ -332,6 +333,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, tea.Batch(cmds...)
 		}
 		if key.Matches(typed, a.keys.FocusInput) {
+			a.clearTextSelection()
 			a.focus = panelInput
 			a.applyFocus()
 			return a, tea.Batch(cmds...)
@@ -1945,14 +1947,23 @@ func (a *App) handleTranscriptMouse(msg tea.MouseMsg) bool {
 	if !a.isMouseWithinTranscript(msg) {
 		if msg.Action == tea.MouseActionRelease || msg.Type == tea.MouseRelease {
 			a.transcriptScrollbarDrag = false
+			a.finishTextSelection()
 		}
 		return false
 	}
 
 	switch {
 	case msg.Button == tea.MouseButtonLeft && msg.Action == tea.MouseActionPress:
-		return false
+		return a.beginTextSelection(msg)
+	case (msg.Action == tea.MouseActionMotion || msg.Type == tea.MouseMotion) && a.textSelection.dragging:
+		return a.updateTextSelection(msg)
 	case msg.Action == tea.MouseActionRelease || msg.Type == tea.MouseRelease:
+		return a.finishTextSelection()
+	case msg.Button == tea.MouseButtonRight && msg.Action == tea.MouseActionPress:
+		if a.hasTextSelection() {
+			a.copySelectionToClipboard()
+			return true
+		}
 		return false
 	default:
 		return false
@@ -2410,7 +2421,7 @@ func (a *App) rebuildTranscript() {
 	previousRole := ""
 	for _, message := range a.activeMessages {
 		if message.Role == roleTool {
-			// tool 消息不渲染到 transcript，但它会打断 assistant 连续块折叠。
+			// tool 消息在 transcript 中不直接展示，但需要打断 assistant 连续分段。
 			previousRole = roleTool
 			continue
 		}
@@ -2440,8 +2451,55 @@ func (a *App) rebuildTranscript() {
 
 func (a *App) setTranscriptContent(content string) {
 	normalized := normalizeTranscriptForDisplay(content)
+	contentChanged := a.transcriptContent != normalized
+	if contentChanged && a.textSelection.active && !a.textSelection.dragging {
+		a.textSelection.active = false
+		a.textSelection.dragging = false
+		a.textSelection.startLine = 0
+		a.textSelection.startCol = 0
+		a.textSelection.endLine = 0
+		a.textSelection.endCol = 0
+	}
 	a.transcriptContent = normalized
+	if a.hasTextSelection() {
+		a.transcript.SetContent(a.highlightTranscriptContent(normalized))
+		return
+	}
 	a.transcript.SetContent(normalized)
+}
+
+func (a *App) highlightTranscriptContent(content string) string {
+	lines := strings.Split(content, "\n")
+	startLine, startCol, endLine, endCol, ok := a.textSelectionRange(lines)
+	if !ok {
+		return content
+	}
+
+	highlightStyle := lipgloss.NewStyle().
+		Background(lipgloss.Color(selectionBg)).
+		Foreground(lipgloss.Color(selectionFg))
+
+	for i := startLine; i <= endLine && i < len(lines); i++ {
+		lineWidth := ansi.StringWidth(lines[i])
+		selStart := 0
+		selEnd := lineWidth
+		if i == startLine {
+			selStart = startCol
+		}
+		if i == endLine {
+			selEnd = endCol
+		}
+		selStart = max(0, min(selStart, lineWidth))
+		selEnd = max(selStart, min(selEnd, lineWidth))
+		if selEnd <= selStart {
+			continue
+		}
+		prefix := ansi.Cut(lines[i], 0, selStart)
+		selected := ansi.Cut(lines[i], selStart, selEnd)
+		suffix := ansi.Cut(lines[i], selEnd, lineWidth)
+		lines[i] = prefix + highlightStyle.Render(selected) + suffix
+	}
+	return strings.Join(lines, "\n")
 }
 
 func normalizeTranscriptForDisplay(content string) string {
