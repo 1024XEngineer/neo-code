@@ -60,3 +60,47 @@ func TestResolveWorkspacePathRejectsSymlinkEscape(t *testing.T) {
 		t.Fatalf("expected symlink escape to be rejected")
 	}
 }
+
+func TestResolveWorkspacePathRejectsEmptyRoot(t *testing.T) {
+	t.Parallel()
+
+	if _, _, err := ResolveWorkspacePath("   ", "a.txt"); err == nil {
+		t.Fatalf("expected empty root to be rejected")
+	}
+}
+
+func TestResolveWorkspacePathRejectsAbsoluteTargetOutsideWorkspace(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "outside.txt")
+	if _, _, err := ResolveWorkspacePath(root, outside); err == nil {
+		t.Fatalf("expected absolute outside path to be rejected")
+	}
+}
+
+func TestResolveWorkspacePathRejectsRootThatIsNotDirectory(t *testing.T) {
+	t.Parallel()
+
+	rootDir := t.TempDir()
+	rootFile := filepath.Join(rootDir, "root.txt")
+	if err := os.WriteFile(rootFile, []byte("x"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	if _, _, err := ResolveWorkspacePath(rootFile, "a.txt"); err == nil {
+		t.Fatalf("expected non-directory root to be rejected")
+	}
+}
+
+func TestResolveWorkspacePathRejectsInvalidPathInput(t *testing.T) {
+	t.Parallel()
+
+	if _, _, err := ResolveWorkspacePath(string([]byte{0}), "a.txt"); err == nil {
+		t.Fatalf("expected invalid root path to be rejected")
+	}
+
+	root := t.TempDir()
+	if _, _, err := ResolveWorkspacePath(root, string([]byte{0})); err == nil {
+		t.Fatalf("expected invalid target path to be rejected")
+	}
+}

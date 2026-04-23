@@ -95,3 +95,14 @@ func TestRepositoryContextSourceReturnsContextError(t *testing.T) {
 		t.Fatalf("expected context error")
 	}
 }
+
+func TestIndentBlockHandlesEmptyAndMultilineInput(t *testing.T) {
+	t.Parallel()
+
+	if got := indentBlock(" \n\t", "  "); got != "" {
+		t.Fatalf("indentBlock(empty) = %q, want empty", got)
+	}
+	if got := indentBlock("a\r\nb", "--"); got != "--a\n--b" {
+		t.Fatalf("indentBlock(multiline) = %q, want %q", got, "--a\n--b")
+	}
+}

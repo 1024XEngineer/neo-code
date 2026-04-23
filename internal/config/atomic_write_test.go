@@ -58,4 +58,7 @@ func TestIsBestEffortDirectorySyncError(t *testing.T) {
 	if !isBestEffortDirectorySyncError(&os.PathError{Op: "sync", Path: "/tmp", Err: syscall.EPERM}) {
 		t.Fatalf("expected wrapped EPERM to be treated as best-effort")
 	}
+	if !isBestEffortDirectorySyncError(os.ErrInvalid) {
+		t.Fatalf("expected os.ErrInvalid to be treated as best-effort")
+	}
 }
