@@ -120,6 +120,24 @@ func TestResolveGatewayLaunchSpecWithDeps(t *testing.T) {
 	})
 }
 
+func TestResolveGatewayLaunchSpec(t *testing.T) {
+	executablePath, err := os.Executable()
+	if err != nil {
+		t.Fatalf("os.Executable() error = %v", err)
+	}
+
+	spec, err := ResolveGatewayLaunchSpec(ResolveOptions{ExplicitBinary: executablePath})
+	if err != nil {
+		t.Fatalf("ResolveGatewayLaunchSpec() error = %v", err)
+	}
+	if spec.LaunchMode != LaunchModeExplicitPath {
+		t.Fatalf("launch mode = %q, want %q", spec.LaunchMode, LaunchModeExplicitPath)
+	}
+	if spec.Executable == "" {
+		t.Fatal("executable should not be empty")
+	}
+}
+
 func TestStartDetachedGateway(t *testing.T) {
 	t.Run("empty executable rejected", func(t *testing.T) {
 		err := StartDetachedGateway(LaunchSpec{})

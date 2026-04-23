@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -554,6 +555,33 @@ func TestDispatcherResolveAddressUsesTransportResolver(t *testing.T) {
 	}
 	if got != want {
 		t.Fatalf("resolved address = %q, want %q", got, want)
+	}
+}
+
+func TestNewDispatcherResolveLaunchSpecUsesEnvAndAuthMode(t *testing.T) {
+	executablePath, err := os.Executable()
+	if err != nil {
+		t.Fatalf("os.Executable() error = %v", err)
+	}
+	t.Setenv(launcher.EnvGatewayBinary, executablePath)
+
+	dispatcher := NewDispatcher()
+	spec, err := dispatcher.resolveLaunchSpecFn()
+	if err != nil {
+		t.Fatalf("resolve launch spec: %v", err)
+	}
+	if spec.LaunchMode != launcher.LaunchModeExplicitPath {
+		t.Fatalf("launch mode = %q, want %q", spec.LaunchMode, launcher.LaunchModeExplicitPath)
+	}
+	if strings.TrimSpace(spec.Executable) == "" {
+		t.Fatal("resolved executable should not be empty")
+	}
+
+	if got := resolveAuthMode("   "); got != "disabled" {
+		t.Fatalf("resolveAuthMode(disabled) = %q, want %q", got, "disabled")
+	}
+	if got := resolveAuthMode("token-1"); got != "required" {
+		t.Fatalf("resolveAuthMode(required) = %q, want %q", got, "required")
 	}
 }
 
