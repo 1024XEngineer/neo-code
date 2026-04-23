@@ -5,6 +5,7 @@ import (
 	"context"
 	"io/fs"
 	"os"
+	pathpkg "path"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -30,6 +31,32 @@ var blockedRepositorySnippetExtensions = map[string]struct{}{
 	".der": {},
 	".cer": {},
 	".crt": {},
+}
+
+var blockedRepositorySnippetBaseNames = map[string]struct{}{
+	".npmrc":           {},
+	".pypirc":          {},
+	".netrc":           {},
+	".git-credentials": {},
+	"id_rsa":           {},
+	"id_dsa":           {},
+	"id_ecdsa":         {},
+	"id_ed25519":       {},
+	"authorized_keys":  {},
+	"known_hosts":      {},
+	"credentials":      {},
+	".terraformrc":     {},
+	"terraform.rc":     {},
+}
+
+var blockedRepositorySnippetPathSuffixes = []string{
+	"/.aws/credentials",
+	"/.aws/config",
+	"/.docker/config.json",
+	"/.kube/config",
+	"/.config/gcloud/application_default_credentials.json",
+	"/.config/gcloud/credentials.db",
+	"/.config/gcloud/access_tokens.db",
 }
 
 // retrieveByPath 按路径读取目标文件的受限片段。
@@ -330,7 +357,7 @@ func allowRepositorySnippetByPath(path string) (bool, error) {
 	if info.IsDir() {
 		return false, nil
 	}
-	return allowRepositorySnippetByNameAndSize(filepath.Base(path), info.Size()), nil
+	return allowRepositorySnippetByPathAndSize(path, info.Size()), nil
 }
 
 // allowRepositorySnippetByEntry 基于遍历条目检查文件是否允许进入 repository 片段。
@@ -339,23 +366,36 @@ func allowRepositorySnippetByEntry(path string, entry fs.DirEntry) bool {
 	if err != nil || info.IsDir() {
 		return false
 	}
-	return allowRepositorySnippetByNameAndSize(filepath.Base(path), info.Size())
+	return allowRepositorySnippetByPathAndSize(path, info.Size())
 }
 
-// allowRepositorySnippetByNameAndSize 基于名称与大小过滤敏感文件和高成本文件。
-func allowRepositorySnippetByNameAndSize(name string, size int64) bool {
+// allowRepositorySnippetByPathAndSize 基于路径与大小过滤敏感文件和高成本文件。
+func allowRepositorySnippetByPathAndSize(path string, size int64) bool {
 	if size < 0 || size > maxRepositorySnippetFileBytes {
 		return false
 	}
-	lowerName := strings.ToLower(strings.TrimSpace(name))
-	if lowerName == "" {
+	normalizedPath := strings.ToLower(filepath.ToSlash(strings.TrimSpace(path)))
+	if normalizedPath == "" {
 		return false
 	}
-	if lowerName == ".env" || strings.HasPrefix(lowerName, ".env.") {
+	baseName := pathpkg.Base(normalizedPath)
+	if baseName == "." || baseName == "" {
 		return false
 	}
-	if _, blocked := blockedRepositorySnippetExtensions[filepath.Ext(lowerName)]; blocked {
+	if baseName == ".env" || strings.HasPrefix(baseName, ".env.") {
 		return false
+	}
+	if _, blocked := blockedRepositorySnippetBaseNames[baseName]; blocked {
+		return false
+	}
+	if _, blocked := blockedRepositorySnippetExtensions[filepath.Ext(baseName)]; blocked {
+		return false
+	}
+	pathWithSentinel := "/" + strings.TrimPrefix(normalizedPath, "/")
+	for _, suffix := range blockedRepositorySnippetPathSuffixes {
+		if strings.HasSuffix(pathWithSentinel, suffix) {
+			return false
+		}
 	}
 	return true
 }

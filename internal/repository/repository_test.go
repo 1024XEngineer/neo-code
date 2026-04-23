@@ -30,12 +30,13 @@ func TestSummaryParsesBranchDirtyAheadBehindAndRepresentativeFiles(t *testing.T)
 	t.Parallel()
 
 	service := newTestService(func(ctx context.Context, workdir string, args ...string) (string, error) {
-		return strings.Join([]string{
+		return nulJoin(
 			"## feature/repository...origin/feature/repository [ahead 2, behind 1]",
 			" M internal/context/source_system.go",
-			"R  old/name.go -> new/name.go",
+			"R  new/name.go",
+			"old/name.go",
 			"?? internal/repository/service.go",
-		}, "\n"), nil
+		), nil
 	})
 
 	summary, err := service.Summary(context.Background(), t.TempDir())
@@ -88,16 +89,17 @@ func TestChangedFilesRespectsStatusNormalizationAndSnippetRules(t *testing.T) {
 
 	service := newTestService(func(ctx context.Context, dir string, args ...string) (string, error) {
 		switch strings.Join(args, " ") {
-		case "status --porcelain=v1 --branch --untracked-files=normal":
-			return strings.Join([]string{
+		case "status --porcelain=v1 -z --branch --untracked-files=normal":
+			return nulJoin(
 				"## main...origin/main [ahead 1]",
 				" M pkg/changed.go",
 				"A  pkg/new.go",
 				"?? pkg/untracked.go",
 				"D  pkg/deleted.go",
-				"R  pkg/old.go -> pkg/renamed.go",
+				"R  pkg/renamed.go",
+				"pkg/old.go",
 				"UU pkg/conflicted.go",
-			}, "\n"), nil
+			), nil
 		case "diff --unified=3 HEAD -- pkg/changed.go":
 			return "@@ -1,1 +1,1 @@\n-func Old() {}\n+func Changed() {}\n", nil
 		case "diff --unified=3 HEAD -- pkg/new.go":
@@ -134,7 +136,7 @@ func TestChangedFilesAppliesLimitAndTruncation(t *testing.T) {
 		for i := 0; i < 60; i++ {
 			lines = append(lines, " M file"+strconv.Itoa(i)+".go")
 		}
-		return strings.Join(lines, "\n"), nil
+		return nulJoin(lines...), nil
 	})
 
 	result, err := service.ChangedFiles(context.Background(), t.TempDir(), ChangedFilesOptions{})
@@ -156,8 +158,8 @@ func TestChangedFilesMarksTruncatedWhenSingleSnippetExceedsLineLimit(t *testing.
 	mustWriteFile(t, filepath.Join(workdir, "pkg", "long.go"), "package pkg\n")
 	service := newTestService(func(ctx context.Context, workdir string, args ...string) (string, error) {
 		switch strings.Join(args, " ") {
-		case "status --porcelain=v1 --branch --untracked-files=normal":
-			return "## main\n M pkg/long.go\n", nil
+		case "status --porcelain=v1 -z --branch --untracked-files=normal":
+			return nulJoin("## main", " M pkg/long.go"), nil
 		case "diff --unified=3 HEAD -- pkg/long.go":
 			lines := []string{"@@ -1,1 +1,25 @@"}
 			for i := 0; i < 25; i++ {
@@ -202,8 +204,8 @@ func TestChangedFilesMarksTruncatedWhenTotalSnippetBudgetExceeded(t *testing.T) 
 	}
 
 	service := newTestService(func(ctx context.Context, dir string, args ...string) (string, error) {
-		if strings.Join(args, " ") == "status --porcelain=v1 --branch --untracked-files=normal" {
-			return strings.Join(statusLines, "\n"), nil
+		if strings.Join(args, " ") == "status --porcelain=v1 -z --branch --untracked-files=normal" {
+			return nulJoin(statusLines...), nil
 		}
 		return "", nil
 	})
@@ -228,19 +230,25 @@ func TestChangedFilesBlocksSensitiveLargeAndBinarySnippets(t *testing.T) {
 
 	workdir := t.TempDir()
 	mustWriteFile(t, filepath.Join(workdir, ".env"), "API_KEY=secret\n")
+	mustWriteFile(t, filepath.Join(workdir, ".npmrc"), "token=secret\n")
+	mustWriteFile(t, filepath.Join(workdir, ".aws", "credentials"), "[default]\naws_access_key_id=secret\n")
+	mustWriteFile(t, filepath.Join(workdir, ".ssh", "id_rsa"), "PRIVATE KEY\n")
 	mustWriteFile(t, filepath.Join(workdir, "pkg", "cert.pem"), "-----BEGIN PRIVATE KEY-----\nsecret\n")
 	mustWriteFile(t, filepath.Join(workdir, "pkg", "bin.dat"), string([]byte{0x00, 0x01, 0x02}))
 	mustWriteFile(t, filepath.Join(workdir, "pkg", "large.txt"), strings.Repeat("x", maxRepositorySnippetFileBytes+1))
 
 	service := newTestService(func(ctx context.Context, dir string, args ...string) (string, error) {
-		if strings.Join(args, " ") == "status --porcelain=v1 --branch --untracked-files=normal" {
-			return strings.Join([]string{
+		if strings.Join(args, " ") == "status --porcelain=v1 -z --branch --untracked-files=normal" {
+			return nulJoin(
 				"## main",
 				"?? .env",
+				"?? .npmrc",
+				"?? .aws/credentials",
+				"?? .ssh/id_rsa",
 				"?? pkg/cert.pem",
 				"?? pkg/bin.dat",
 				"?? pkg/large.txt",
-			}, "\n"), nil
+			), nil
 		}
 		return "", nil
 	})
@@ -266,8 +274,8 @@ func TestChangedFilesBlocksModifiedSensitiveDiffSnippet(t *testing.T) {
 
 	service := newTestService(func(ctx context.Context, dir string, args ...string) (string, error) {
 		switch strings.Join(args, " ") {
-		case "status --porcelain=v1 --branch --untracked-files=normal":
-			return "## main\n M .env\n", nil
+		case "status --porcelain=v1 -z --branch --untracked-files=normal":
+			return nulJoin("## main", " M .env"), nil
 		case "diff --unified=3 HEAD -- .env":
 			return "@@ -1,1 +1,1 @@\n-API_KEY=old\n+API_KEY=new\n", nil
 		default:
@@ -298,8 +306,8 @@ func TestChangedFilesRespectsSnippetFileCountLimit(t *testing.T) {
 
 	service := newTestService(func(ctx context.Context, dir string, args ...string) (string, error) {
 		switch strings.Join(args, " ") {
-		case "status --porcelain=v1 --branch --untracked-files=normal":
-			return "## main\n?? pkg/one.go\n?? pkg/two.go\n", nil
+		case "status --porcelain=v1 -z --branch --untracked-files=normal":
+			return nulJoin("## main", "?? pkg/one.go", "?? pkg/two.go"), nil
 		default:
 			return "", nil
 		}
@@ -456,6 +464,8 @@ func TestRetrieveSkipsSensitiveLargeAndBinaryFiles(t *testing.T) {
 
 	workdir := t.TempDir()
 	mustWriteFile(t, filepath.Join(workdir, ".env"), "API_KEY=secret\n")
+	mustWriteFile(t, filepath.Join(workdir, ".npmrc"), "token=secret\n")
+	mustWriteFile(t, filepath.Join(workdir, ".aws", "credentials"), "[default]\naws_access_key_id=secret\n")
 	mustWriteFile(t, filepath.Join(workdir, "pkg", "notes.key"), "private")
 	mustWriteFile(t, filepath.Join(workdir, "pkg", "bin.dat"), string([]byte{0x00, 0x01, 0x02, 0x03}))
 	mustWriteFile(t, filepath.Join(workdir, "pkg", "target.txt"), "match line\n")
@@ -474,6 +484,26 @@ func TestRetrieveSkipsSensitiveLargeAndBinaryFiles(t *testing.T) {
 	}
 	if len(pathHits) != 0 {
 		t.Fatalf("expected sensitive path retrieval to be filtered, got %+v", pathHits)
+	}
+	pathHits, err = service.Retrieve(context.Background(), workdir, RetrievalQuery{
+		Mode:  RetrievalModePath,
+		Value: ".npmrc",
+	})
+	if err != nil {
+		t.Fatalf("Retrieve(path npmrc) error = %v", err)
+	}
+	if len(pathHits) != 0 {
+		t.Fatalf("expected .npmrc retrieval to be filtered, got %+v", pathHits)
+	}
+	pathHits, err = service.Retrieve(context.Background(), workdir, RetrievalQuery{
+		Mode:  RetrievalModePath,
+		Value: ".aws/credentials",
+	})
+	if err != nil {
+		t.Fatalf("Retrieve(path aws credentials) error = %v", err)
+	}
+	if len(pathHits) != 0 {
+		t.Fatalf("expected aws credentials retrieval to be filtered, got %+v", pathHits)
 	}
 
 	textHits, err := service.Retrieve(context.Background(), workdir, RetrievalQuery{
@@ -534,4 +564,11 @@ func newTestService(gitRunner func(ctx context.Context, workdir string, args ...
 		gitRunner: gitRunner,
 		readFile:  readFile,
 	}
+}
+
+func nulJoin(records ...string) string {
+	if len(records) == 0 {
+		return ""
+	}
+	return strings.Join(records, "\x00") + "\x00"
 }

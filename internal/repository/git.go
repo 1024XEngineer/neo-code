@@ -45,7 +45,7 @@ func (s *Service) loadGitSnapshot(ctx context.Context, workdir string) (gitSnaps
 		return gitSnapshot{}, nil
 	}
 
-	output, err := s.gitRunner(ctx, workdir, "status", "--porcelain=v1", "--branch", "--untracked-files=normal")
+	output, err := s.gitRunner(ctx, workdir, "status", "--porcelain=v1", "-z", "--branch", "--untracked-files=normal")
 	if err != nil {
 		if isContextError(err) {
 			return gitSnapshot{}, err
@@ -139,22 +139,23 @@ func (s *Service) readFileHeadSnippet(workdir string, relativePath string) (snip
 
 // parseGitSnapshot 将 porcelain=v1 --branch 输出归一化为内部快照。
 func parseGitSnapshot(output string) gitSnapshot {
-	lines := splitNonEmptyLines(output)
-	if len(lines) == 0 {
+	records := splitNulRecords(output)
+	if len(records) == 0 {
 		return gitSnapshot{}
 	}
 
 	snapshot := gitSnapshot{InGitRepo: true}
-	if strings.HasPrefix(lines[0], "## ") {
-		snapshot.Branch, snapshot.Ahead, snapshot.Behind = parseBranchLine(strings.TrimPrefix(lines[0], "## "))
-		lines = lines[1:]
+	if strings.HasPrefix(records[0], "## ") {
+		snapshot.Branch, snapshot.Ahead, snapshot.Behind = parseBranchLine(strings.TrimPrefix(records[0], "## "))
+		records = records[1:]
 	}
 
-	snapshot.Entries = make([]gitChangedEntry, 0, len(lines))
-	for _, line := range lines {
-		entry, ok := parseChangedEntry(line)
+	snapshot.Entries = make([]gitChangedEntry, 0, len(records))
+	for index := 0; index < len(records); index++ {
+		entry, consumed, ok := parseChangedRecord(records[index:])
 		if ok {
 			snapshot.Entries = append(snapshot.Entries, entry)
+			index += consumed - 1
 		}
 	}
 	return snapshot
@@ -216,37 +217,53 @@ func parseTrackingCounters(line string) (int, int) {
 }
 
 // parseChangedEntry 将 porcelain 行归一化为单个变更条目。
-func parseChangedEntry(line string) (gitChangedEntry, bool) {
-	if len(line) < 3 {
-		return gitChangedEntry{}, false
+// splitNulRecords 按 NUL record 拆分 -z 输出，并忽略尾部空 record。
+func splitNulRecords(output string) []string {
+	records := strings.Split(output, "\x00")
+	for len(records) > 0 && records[len(records)-1] == "" {
+		records = records[:len(records)-1]
 	}
-	x := line[0]
-	y := line[1]
-	pathPart := strings.TrimSpace(line[3:])
+	return records
+}
+
+// parseChangedRecord 将单条或双条 -z record 归一化为结构化变更条目。
+func parseChangedRecord(records []string) (gitChangedEntry, int, bool) {
+	if len(records) == 0 || len(records[0]) < 4 {
+		return gitChangedEntry{}, 1, false
+	}
+	record := records[0]
+	x := record[0]
+	y := record[1]
+	pathPart := filepathSlashClean(record[3:])
 	if x == '?' && y == '?' {
 		if pathPart == "" {
-			return gitChangedEntry{}, false
+			return gitChangedEntry{}, 1, false
 		}
-		return gitChangedEntry{Path: filepathSlashClean(pathPart), Status: StatusUntracked}, true
+		return gitChangedEntry{Path: pathPart, Status: StatusUntracked}, 1, true
 	}
 
 	status := normalizeStatus(x, y)
 	if status == "" {
-		return gitChangedEntry{}, false
+		return gitChangedEntry{}, 1, false
 	}
 
 	entry := gitChangedEntry{Status: status}
-	if status == StatusRenamed && strings.Contains(pathPart, " -> ") {
-		parts := strings.SplitN(pathPart, " -> ", 2)
-		entry.OldPath = filepathSlashClean(strings.TrimSpace(parts[0]))
-		entry.Path = filepathSlashClean(strings.TrimSpace(parts[1]))
-	} else {
-		entry.Path = filepathSlashClean(pathPart)
+	if status == StatusRenamed {
+		if len(records) < 2 {
+			return gitChangedEntry{}, 1, false
+		}
+		entry.Path = pathPart
+		entry.OldPath = filepathSlashClean(records[1])
+		if entry.Path == "" || entry.OldPath == "" {
+			return gitChangedEntry{}, 2, false
+		}
+		return entry, 2, true
 	}
-	if entry.Path == "" {
-		return gitChangedEntry{}, false
+	if pathPart == "" {
+		return gitChangedEntry{}, 1, false
 	}
-	return entry, true
+	entry.Path = pathPart
+	return entry, 1, true
 }
 
 // normalizeStatus 将 porcelain 的 XY 状态对映射为稳定的归一化状态。

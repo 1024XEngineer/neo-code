@@ -221,31 +221,34 @@ func TestGitParsingHelpers(t *testing.T) {
 	}
 
 	tests := []struct {
-		line    string
-		ok      bool
-		status  ChangedFileStatus
-		path    string
-		oldPath string
+		records  []string
+		ok       bool
+		consumed int
+		status   ChangedFileStatus
+		path     string
+		oldPath  string
 	}{
-		{line: "", ok: false},
-		{line: "?? ", ok: false},
-		{line: "?? pkg/new.go", ok: true, status: StatusUntracked, path: filepath.Clean("pkg/new.go")},
-		{line: "R  old.go -> new.go", ok: true, status: StatusRenamed, path: filepath.Clean("new.go"), oldPath: filepath.Clean("old.go")},
-		{line: " M pkg/mod.go", ok: true, status: StatusModified, path: filepath.Clean("pkg/mod.go")},
-		{line: " D pkg/deleted.go", ok: true, status: StatusDeleted, path: filepath.Clean("pkg/deleted.go")},
-		{line: "?? \t", ok: false},
-		{line: "XY file.txt", ok: false},
+		{records: nil, ok: false, consumed: 1},
+		{records: []string{"?? "}, ok: false, consumed: 1},
+		{records: []string{"?? pkg/new.go"}, ok: true, consumed: 1, status: StatusUntracked, path: filepath.Clean("pkg/new.go")},
+		{records: []string{"R  new.go", "old.go"}, ok: true, consumed: 2, status: StatusRenamed, path: filepath.Clean("new.go"), oldPath: filepath.Clean("old.go")},
+		{records: []string{" M pkg/mod.go"}, ok: true, consumed: 1, status: StatusModified, path: filepath.Clean("pkg/mod.go")},
+		{records: []string{" D pkg/deleted.go"}, ok: true, consumed: 1, status: StatusDeleted, path: filepath.Clean("pkg/deleted.go")},
+		{records: []string{"XY file.txt"}, ok: false, consumed: 1},
 	}
 	for _, tt := range tests {
-		got, ok := parseChangedEntry(tt.line)
+		got, consumed, ok := parseChangedRecord(tt.records)
 		if ok != tt.ok {
-			t.Fatalf("parseChangedEntry(%q) ok=%t, want %t", tt.line, ok, tt.ok)
+			t.Fatalf("parseChangedRecord(%v) ok=%t, want %t", tt.records, ok, tt.ok)
+		}
+		if consumed != tt.consumed {
+			t.Fatalf("parseChangedRecord(%v) consumed=%d, want %d", tt.records, consumed, tt.consumed)
 		}
 		if !ok {
 			continue
 		}
 		if got.Status != tt.status || got.Path != tt.path || got.OldPath != tt.oldPath {
-			t.Fatalf("parseChangedEntry(%q) = %+v, want status=%q path=%q old=%q", tt.line, got, tt.status, tt.path, tt.oldPath)
+			t.Fatalf("parseChangedRecord(%v) = %+v, want status=%q path=%q old=%q", tt.records, got, tt.status, tt.path, tt.oldPath)
 		}
 	}
 
@@ -496,8 +499,8 @@ func TestRetrieveAndServiceEdgeCases(t *testing.T) {
 		serviceWithCancelledDiff := &Service{
 			gitRunner: func(ctx context.Context, dir string, args ...string) (string, error) {
 				switch strings.Join(args, " ") {
-				case "status --porcelain=v1 --branch --untracked-files=normal":
-					return "## main\nA  pkg/new.go", nil
+				case "status --porcelain=v1 -z --branch --untracked-files=normal":
+					return nulJoin("## main", "A  pkg/new.go"), nil
 				case "diff --unified=3 HEAD -- pkg/new.go":
 					return "", context.DeadlineExceeded
 				default:
@@ -557,9 +560,23 @@ func TestRepositoryCoverageExtraBranches(t *testing.T) {
 			t.Fatalf("parseGitSnapshot(empty) = %+v", emptySnapshot)
 		}
 
-		snapshot := parseGitSnapshot(" M a.go\n?? b.go")
+		snapshot := parseGitSnapshot(nulJoin(" M a.go", "?? b.go"))
 		if !snapshot.InGitRepo || len(snapshot.Entries) != 2 {
 			t.Fatalf("parseGitSnapshot(without branch line) = %+v", snapshot)
+		}
+		quoted := parseGitSnapshot(nulJoin(
+			` M dir with space/file name.txt`,
+			`R  dir with space/new name.txt`,
+			`dir with space/old name.txt`,
+		))
+		if len(quoted.Entries) != 2 {
+			t.Fatalf("expected quoted-path snapshot entries, got %+v", quoted)
+		}
+		if quoted.Entries[0].Path != filepath.Clean("dir with space/file name.txt") {
+			t.Fatalf("expected clean path with spaces, got %+v", quoted.Entries[0])
+		}
+		if quoted.Entries[1].Path != filepath.Clean("dir with space/new name.txt") || quoted.Entries[1].OldPath != filepath.Clean("dir with space/old name.txt") {
+			t.Fatalf("expected rename paths with spaces, got %+v", quoted.Entries[1])
 		}
 
 		ahead, behind := parseTrackingCounters("main [ahead 2, weird, behind 1, ahead nope]")
@@ -771,7 +788,7 @@ func TestRepositoryCoverageExtraBranches(t *testing.T) {
 			for i := 0; i < representativeChangedFilesLimit+2; i++ {
 				lines = append(lines, fmt.Sprintf(" M file%d.go", i))
 			}
-			return strings.Join(lines, "\n"), nil
+			return nulJoin(lines...), nil
 		})
 		summary, err := service.Summary(context.Background(), t.TempDir())
 		if err != nil {

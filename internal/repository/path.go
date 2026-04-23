@@ -132,6 +132,10 @@ func walkWorkspaceFiles(
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	canonicalRoot, _, err := security.ResolveWorkspacePath(root, ".")
+	if err != nil {
+		return err
+	}
 	return filepath.WalkDir(scope, func(path string, entry fs.DirEntry, err error) error {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ctxErr
@@ -145,7 +149,7 @@ func walkWorkspaceFiles(
 		if entry.IsDir() {
 			return nil
 		}
-		_, resolvedPath, resolveErr := security.ResolveWorkspacePath(root, path)
+		resolvedPath, resolveErr := security.ResolveWorkspacePathFromRoot(canonicalRoot, path)
 		if resolveErr != nil {
 			return resolveErr
 		}

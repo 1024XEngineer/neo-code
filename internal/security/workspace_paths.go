@@ -24,16 +24,24 @@ func ResolveWorkspacePath(root string, target string) (string, string, error) {
 		return "", "", err
 	}
 
-	absoluteTarget, err := absoluteWorkspaceTarget(canonicalRoot, target)
+	absoluteTarget, err := ResolveWorkspacePathFromRoot(canonicalRoot, target)
 	if err != nil {
 		return "", "", err
 	}
-	if !isWithinWorkspace(canonicalRoot, absoluteTarget) {
-		return "", "", fmt.Errorf("security: path %q escapes workspace root", target)
-	}
-
-	if _, err := ensureNoSymlinkEscape(canonicalRoot, absoluteTarget, target); err != nil {
-		return "", "", err
-	}
 	return canonicalRoot, absoluteTarget, nil
+}
+
+// ResolveWorkspacePathFromRoot 在已知 canonical workspace root 的前提下解析并校验目标路径。
+func ResolveWorkspacePathFromRoot(root string, target string) (string, error) {
+	absoluteTarget, err := absoluteWorkspaceTarget(root, target)
+	if err != nil {
+		return "", err
+	}
+	if !isWithinWorkspace(root, absoluteTarget) {
+		return "", fmt.Errorf("security: path %q escapes workspace root", target)
+	}
+	if _, err := ensureNoSymlinkEscape(root, absoluteTarget, target); err != nil {
+		return "", err
+	}
+	return absoluteTarget, nil
 }

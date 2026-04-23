@@ -27,6 +27,28 @@ func TestResolveWorkspacePathResolvesInsideWorkspace(t *testing.T) {
 	}
 }
 
+func TestResolveWorkspacePathFromRootMatchesWorkspaceValidation(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	targetDir := filepath.Join(root, "pkg")
+	if err := os.MkdirAll(targetDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+
+	resolvedRoot, _, err := ResolveWorkspacePath(root, ".")
+	if err != nil {
+		t.Fatalf("ResolveWorkspacePath(root, dot) error = %v", err)
+	}
+	resolvedTarget, err := ResolveWorkspacePathFromRoot(resolvedRoot, "pkg")
+	if err != nil {
+		t.Fatalf("ResolveWorkspacePathFromRoot() error = %v", err)
+	}
+	if !samePathKey(resolvedTarget, targetDir) {
+		t.Fatalf("expected resolved target %q, got %q", targetDir, resolvedTarget)
+	}
+}
+
 func TestResolveWorkspacePathRejectsTraversal(t *testing.T) {
 	t.Parallel()
 
