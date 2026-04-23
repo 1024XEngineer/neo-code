@@ -203,7 +203,6 @@ func NewRecommendedPolicyEngine() (*PolicyEngine, error) {
 			Reason:                reasonDenyGitPrivateRead,
 			ActionTypes:           []ActionType{ActionTypeBash},
 			ResourcePatterns:      []string{"bash_git_read_only"},
-			RequireSensitivePath:  true,
 			RequirePrivateKeyPath: true,
 		},
 		{
@@ -307,10 +306,10 @@ func NewRecommendedPolicyEngine() (*PolicyEngine, error) {
 func normalizePolicyRule(rule PolicyRule) PolicyRule {
 	rule.ID = strings.TrimSpace(rule.ID)
 	rule.Reason = strings.TrimSpace(rule.Reason)
-	rule.ActionTypes = normalizeActionTypes(rule.ActionTypes)
+	rule.ActionTypes = normalizeTypedList(rule.ActionTypes)
 	rule.ResourcePatterns = normalizeLowerList(rule.ResourcePatterns)
 	rule.ToolCategories = normalizeLowerList(rule.ToolCategories)
-	rule.TargetTypes = normalizeTargetTypes(rule.TargetTypes)
+	rule.TargetTypes = normalizeTypedList(rule.TargetTypes)
 	rule.PathPatterns = normalizePathPatterns(rule.PathPatterns)
 	rule.PathSegmentKeywords = normalizeLowerList(rule.PathSegmentKeywords)
 	rule.PathBasenamePatterns = normalizeLowerList(rule.PathBasenamePatterns)
@@ -318,24 +317,14 @@ func normalizePolicyRule(rule PolicyRule) PolicyRule {
 	return rule
 }
 
-func normalizeActionTypes(values []ActionType) []ActionType {
-	out := make([]ActionType, 0, len(values))
+// normalizeTypedList 统一裁剪基于字符串别名的枚举列表，避免重复保留空白值。
+func normalizeTypedList[T ~string](values []T) []T {
+	out := make([]T, 0, len(values))
 	for _, value := range values {
 		if strings.TrimSpace(string(value)) == "" {
 			continue
 		}
-		out = append(out, ActionType(strings.TrimSpace(string(value))))
-	}
-	return out
-}
-
-func normalizeTargetTypes(values []TargetType) []TargetType {
-	out := make([]TargetType, 0, len(values))
-	for _, value := range values {
-		if strings.TrimSpace(string(value)) == "" {
-			continue
-		}
-		out = append(out, TargetType(strings.TrimSpace(string(value))))
+		out = append(out, T(strings.TrimSpace(string(value))))
 	}
 	return out
 }
@@ -409,17 +398,8 @@ func newActionView(action Action) actionView {
 }
 
 func matchesPolicyRule(rule PolicyRule, view actionView) bool {
-	if len(rule.ActionTypes) > 0 {
-		matched := false
-		for _, actionType := range rule.ActionTypes {
-			if view.action.Type == actionType {
-				matched = true
-				break
-			}
-		}
-		if !matched {
-			return false
-		}
+	if len(rule.ActionTypes) > 0 && !containsValue(rule.ActionTypes, view.action.Type) {
+		return false
 	}
 
 	if len(rule.ResourcePatterns) > 0 && !matchesAnyPattern(view.resource, rule.ResourcePatterns) {
@@ -429,17 +409,8 @@ func matchesPolicyRule(rule PolicyRule, view actionView) bool {
 		return false
 	}
 
-	if len(rule.TargetTypes) > 0 {
-		matched := false
-		for _, targetType := range rule.TargetTypes {
-			if view.targetType == targetType {
-				matched = true
-				break
-			}
-		}
-		if !matched {
-			return false
-		}
+	if len(rule.TargetTypes) > 0 && !containsValue(rule.TargetTypes, view.targetType) {
+		return false
 	}
 
 	if rule.RequireSensitivePath && !view.sensitive {
@@ -637,18 +608,18 @@ func classifyPrivateKeyPath(normalizedTargetPath string) bool {
 
 // classifySensitiveGitReadOnlyCommand 从 git 只读命令中提取潜在路径片段，并复用敏感路径判定。
 func classifySensitiveGitReadOnlyCommand(command string) bool {
-	for _, candidate := range extractGitReadOnlyPathCandidates(command) {
-		if classifySensitivePath(candidate) {
-			return true
-		}
-	}
-	return false
+	return classifyGitReadOnlyCommandPath(command, classifySensitivePath)
 }
 
 // classifyPrivateKeyGitReadOnlyCommand 从 git 只读命令中提取潜在路径并识别私钥材料。
 func classifyPrivateKeyGitReadOnlyCommand(command string) bool {
+	return classifyGitReadOnlyCommandPath(command, classifyPrivateKeyPath)
+}
+
+// classifyGitReadOnlyCommandPath 复用 git 只读命令路径提取逻辑，对候选路径执行具体分类判定。
+func classifyGitReadOnlyCommandPath(command string, classify func(string) bool) bool {
 	for _, candidate := range extractGitReadOnlyPathCandidates(command) {
-		if classifyPrivateKeyPath(candidate) {
+		if classify(candidate) {
 			return true
 		}
 	}
@@ -771,6 +742,16 @@ func parseURLHost(raw string) string {
 	}
 	host := strings.ToLower(strings.TrimSpace(parsed.Hostname()))
 	return strings.TrimPrefix(host, ".")
+}
+
+// containsValue 判断枚举切片中是否包含给定值，供规则匹配复用。
+func containsValue[T comparable](values []T, target T) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
 }
 
 func containsString(values []string, target string) bool {
