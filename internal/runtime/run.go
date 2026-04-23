@@ -538,7 +538,19 @@ func (s *Service) evaluateTurnBudget(
 ) (controlplane.TurnBudgetDecision, error) {
 	providerEstimate, err := modelProvider.EstimateInputTokens(ctx, snapshot.Request)
 	if err != nil {
-		return controlplane.TurnBudgetDecision{}, err
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return controlplane.TurnBudgetDecision{}, err
+		}
+		s.emitRunScoped(ctx, EventBudgetEstimateFailed, state, newBudgetEstimateFailedPayload(snapshot.ID, err))
+		decision := controlplane.TurnBudgetDecision{
+			ID:                 snapshot.ID,
+			Action:             controlplane.TurnBudgetActionAllow,
+			Reason:             controlplane.BudgetDecisionReasonEstimateFailedBypass,
+			PromptBudget:       snapshot.PromptBudget,
+			EstimateGatePolicy: provider.EstimateGateAdvisory,
+		}
+		s.emitRunScoped(ctx, EventBudgetChecked, state, newBudgetCheckedPayload(decision))
+		return decision, nil
 	}
 	estimate := newTurnBudgetEstimate(snapshot.ID, providerEstimate)
 	decision := controlplane.DecideTurnBudget(

@@ -19,6 +19,8 @@ const (
 const (
 	// BudgetDecisionReasonWithinBudget 表示估算在预算范围内。
 	BudgetDecisionReasonWithinBudget = "within_budget"
+	// BudgetDecisionReasonEstimateFailedBypass 表示估算失败后跳过预算门禁并放行。
+	BudgetDecisionReasonEstimateFailedBypass = "estimate_failed_bypass"
 	// BudgetDecisionReasonExceedsBudgetFirstTime 表示首次超预算，需要先 compact。
 	BudgetDecisionReasonExceedsBudgetFirstTime = "exceeds_budget_first_time"
 	// BudgetDecisionReasonExceedsBudgetAfterCompactStop 表示 compact 后仍超预算且可门禁，必须停止。

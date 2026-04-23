@@ -4707,6 +4707,123 @@ func TestServiceRunAllowsAfterProactiveCompactWhenEstimateAdvisory(t *testing.T)
 	}
 }
 
+func TestServiceRunBypassesBudgetGateWhenEstimateFails(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	if err := manager.Update(context.Background(), func(cfg *config.Config) error {
+		cfg.Context.Budget.PromptBudget = 10
+		cfg.Context.Budget.FallbackPromptBudget = 10
+		return nil
+	}); err != nil {
+		t.Fatalf("update config: %v", err)
+	}
+
+	store := newMemoryStore()
+	registry := tools.NewRegistry()
+	scripted := &scriptedProvider{
+		estimateFn: func(ctx context.Context, req providertypes.GenerateRequest) (providertypes.BudgetEstimate, error) {
+			_ = ctx
+			_ = req
+			return providertypes.BudgetEstimate{}, errors.New("estimate unavailable")
+		},
+		responses: []scriptedResponse{
+			{
+				Message: providertypes.Message{
+					Role:  providertypes.RoleAssistant,
+					Parts: []providertypes.ContentPart{providertypes.NewTextPart("继续执行")},
+				},
+				FinishReason: "stop",
+			},
+		},
+	}
+
+	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: scripted}, &stubContextBuilder{})
+
+	if err := service.Run(context.Background(), UserInput{
+		RunID: "run-budget-estimate-failed-bypass",
+		Parts: []providertypes.ContentPart{providertypes.NewTextPart("continue")},
+	}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if scripted.callCount != 1 {
+		t.Fatalf("expected provider Generate to be called once, got %d calls", scripted.callCount)
+	}
+
+	events := collectRuntimeEvents(service.Events())
+	foundDiagnostic := false
+	foundBudgetChecked := false
+	var stopPayload StopReasonDecidedPayload
+	for _, event := range events {
+		switch event.Type {
+		case EventBudgetEstimateFailed:
+			payload, ok := event.Payload.(BudgetEstimateFailedPayload)
+			if !ok {
+				t.Fatalf("expected BudgetEstimateFailedPayload, got %T", event.Payload)
+			}
+			if payload.Message == "" {
+				t.Fatalf("expected non-empty estimate failure message")
+			}
+			foundDiagnostic = true
+		case EventBudgetChecked:
+			payload, ok := event.Payload.(BudgetCheckedPayload)
+			if !ok {
+				t.Fatalf("expected BudgetCheckedPayload, got %T", event.Payload)
+			}
+			if payload.Action != string(controlplane.TurnBudgetActionAllow) {
+				t.Fatalf("expected budget action allow, got %q", payload.Action)
+			}
+			if payload.Reason != controlplane.BudgetDecisionReasonEstimateFailedBypass {
+				t.Fatalf("expected reason %q, got %q", controlplane.BudgetDecisionReasonEstimateFailedBypass, payload.Reason)
+			}
+			foundBudgetChecked = true
+		case EventStopReasonDecided:
+			payload, ok := event.Payload.(StopReasonDecidedPayload)
+			if !ok {
+				t.Fatalf("expected StopReasonDecidedPayload, got %T", event.Payload)
+			}
+			stopPayload = payload
+		}
+	}
+	if !foundDiagnostic {
+		t.Fatalf("expected budget_estimate_failed event")
+	}
+	if !foundBudgetChecked {
+		t.Fatalf("expected budget_checked event")
+	}
+	if stopPayload.Reason != controlplane.StopReasonCompleted {
+		t.Fatalf("expected stop reason %q, got %q", controlplane.StopReasonCompleted, stopPayload.Reason)
+	}
+	assertNoEventType(t, events, EventError)
+}
+
+func TestServiceRunFailsWhenEstimateContextCanceled(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	store := newMemoryStore()
+	registry := tools.NewRegistry()
+	scripted := &scriptedProvider{
+		estimateFn: func(ctx context.Context, req providertypes.GenerateRequest) (providertypes.BudgetEstimate, error) {
+			_ = ctx
+			_ = req
+			return providertypes.BudgetEstimate{}, context.Canceled
+		},
+	}
+
+	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: scripted}, &stubContextBuilder{})
+	err := service.Run(context.Background(), UserInput{
+		RunID: "run-budget-estimate-canceled",
+		Parts: []providertypes.ContentPart{providertypes.NewTextPart("continue")},
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got %v", err)
+	}
+
+	events := collectRuntimeEvents(service.Events())
+	assertNoEventType(t, events, EventBudgetEstimateFailed)
+}
+
 func TestServiceRunReconcilesUnknownOutputUsage(t *testing.T) {
 	t.Parallel()
 

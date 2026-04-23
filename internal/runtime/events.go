@@ -39,6 +39,13 @@ type BudgetCheckedPayload struct {
 	EstimateGatePolicy   string `json:"estimate_gate_policy,omitempty"`
 }
 
+// BudgetEstimateFailedPayload 描述预算估算失败时的降级诊断信息。
+type BudgetEstimateFailedPayload struct {
+	AttemptSeq  int    `json:"attempt_seq"`
+	RequestHash string `json:"request_hash"`
+	Message     string `json:"message"`
+}
+
 // ProgressEvaluatedPayload 汇总 progress 控制面的评估结果。
 type ProgressEvaluatedPayload struct {
 	Score controlplane.ProgressScore `json:"score"`
@@ -73,6 +80,18 @@ func newBudgetCheckedPayload(decision controlplane.TurnBudgetDecision) BudgetChe
 		EstimateSource:       decision.EstimateSource,
 		EstimateGatePolicy:   decision.EstimateGatePolicy,
 	}
+}
+
+// newBudgetEstimateFailedPayload 将估算失败错误转换为 runtime 诊断事件 payload。
+func newBudgetEstimateFailedPayload(id controlplane.TurnBudgetID, err error) BudgetEstimateFailedPayload {
+	payload := BudgetEstimateFailedPayload{
+		AttemptSeq:  id.AttemptSeq,
+		RequestHash: id.RequestHash,
+	}
+	if err != nil {
+		payload.Message = err.Error()
+	}
+	return payload
 }
 
 // newLedgerReconciledPayload 将 usage observation 与调和结果拼装为对外事件 payload。
@@ -200,6 +219,8 @@ const (
 	EventPhaseChanged EventType = "phase_changed"
 	// EventBudgetChecked 表示预算控制面对冻结请求完成一次预算决策。
 	EventBudgetChecked EventType = "budget_checked"
+	// EventBudgetEstimateFailed 表示预算估算失败并进入降级放行。
+	EventBudgetEstimateFailed EventType = "budget_estimate_failed"
 	// EventProgressEvaluated 表示 progress 评估完成。
 	EventProgressEvaluated EventType = "progress_evaluated"
 	// EventStopReasonDecided 表示 stop reason 已决议。
