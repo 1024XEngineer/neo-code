@@ -6,12 +6,14 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"net"
 	"strings"
 	"testing"
 	"time"
 
 	"neo-code/internal/gateway"
+	"neo-code/internal/gateway/launcher"
 	"neo-code/internal/gateway/protocol"
 	"neo-code/internal/gateway/transport"
 )
@@ -276,6 +278,159 @@ func TestDispatcherDispatchInputAndDialErrors(t *testing.T) {
 	if dialDispatchErr.Code != ErrorCodeGatewayUnavailable {
 		t.Fatalf("dial error code = %q, want %q", dialDispatchErr.Code, ErrorCodeGatewayUnavailable)
 	}
+}
+
+func TestDispatcherDialGatewayWithSingleLaunchFallback(t *testing.T) {
+	t.Run("launch succeeds and second dial succeeds", func(t *testing.T) {
+		dialCalls := 0
+		dispatcher := &Dispatcher{
+			dialFn: func(string) (net.Conn, error) {
+				dialCalls++
+				if dialCalls == 1 {
+					return nil, errors.New("not ready")
+				}
+				return &stubDispatchConn{}, nil
+			},
+			autoLaunchGateway: true,
+			resolveLaunchSpecFn: func() (launcher.LaunchSpec, error) {
+				return launcher.LaunchSpec{
+					LaunchMode: launcher.LaunchModePathBinary,
+					Executable: "/usr/local/bin/neocode-gateway",
+				}, nil
+			},
+			startGatewayFn: func(launcher.LaunchSpec) error { return nil },
+			nowFn:          time.Now,
+			sleepFn:        func(time.Duration) {},
+		}
+
+		connection, err := dispatcher.dialGatewayWithFallback(context.Background(), "stub://gateway", "wake-1", "")
+		if err != nil {
+			t.Fatalf("dialGatewayWithFallback() error = %v", err)
+		}
+		if connection == nil {
+			t.Fatal("expected non-nil connection")
+		}
+		if dialCalls != 3 {
+			t.Fatalf("dial calls = %d, want %d", dialCalls, 3)
+		}
+	})
+
+	t.Run("single fallback and deterministic error", func(t *testing.T) {
+		dialCalls := 0
+		now := time.Unix(200, 0)
+		dispatcher := &Dispatcher{
+			dialFn: func(string) (net.Conn, error) {
+				dialCalls++
+				return nil, errors.New("still unreachable")
+			},
+			autoLaunchGateway: true,
+			resolveLaunchSpecFn: func() (launcher.LaunchSpec, error) {
+				return launcher.LaunchSpec{
+					LaunchMode: launcher.LaunchModePathBinary,
+					Executable: "/usr/local/bin/neocode-gateway",
+				}, nil
+			},
+			startGatewayFn: func(launcher.LaunchSpec) error { return nil },
+			nowFn: func() time.Time {
+				current := now
+				now = now.Add(4 * time.Second)
+				return current
+			},
+			sleepFn: func(time.Duration) {},
+		}
+
+		_, err := dispatcher.dialGatewayWithFallback(context.Background(), "stub://gateway", "wake-2", "")
+		if err == nil {
+			t.Fatal("expected unreachable error")
+		}
+		var dispatchErr *DispatchError
+		if !errors.As(err, &dispatchErr) {
+			t.Fatalf("error type = %T, want *DispatchError", err)
+		}
+		if dispatchErr.Code != ErrorCodeGatewayUnavailable {
+			t.Fatalf("error code = %q, want %q", dispatchErr.Code, ErrorCodeGatewayUnavailable)
+		}
+		if !strings.Contains(dispatchErr.Message, "launch gateway failed") {
+			t.Fatalf("error message = %q, want contains launch failure", dispatchErr.Message)
+		}
+		if dialCalls != 2 {
+			t.Fatalf("dial calls = %d, want %d", dialCalls, 2)
+		}
+	})
+}
+
+func TestDispatcherLaunchDecisionLogWhitelistFields(t *testing.T) {
+	assertPayload := func(t *testing.T, entry launchDecisionLogEntry, expected map[string]string) {
+		t.Helper()
+		buffer := &bytes.Buffer{}
+		dispatcher := &Dispatcher{
+			logger: log.New(buffer, "", 0),
+		}
+		dispatcher.emitLaunchDecisionLog(entry)
+
+		var payload map[string]any
+		if err := json.Unmarshal(buffer.Bytes(), &payload); err != nil {
+			t.Fatalf("decode launch log payload: %v", err)
+		}
+		for fieldName, expectedValue := range expected {
+			value, ok := payload[fieldName]
+			if !ok {
+				t.Fatalf("missing field %q", fieldName)
+			}
+			textValue, ok := value.(string)
+			if !ok {
+				t.Fatalf("field %q type = %T, want string", fieldName, value)
+			}
+			if textValue != expectedValue {
+				t.Fatalf("field %q = %q, want %q", fieldName, textValue, expectedValue)
+			}
+		}
+	}
+
+	assertPayload(t, launchDecisionLogEntry{
+		RequestID:     "wake-123",
+		Method:        protocol.MethodWakeOpenURL,
+		Source:        "url-dispatch",
+		Status:        "launch_attempt",
+		GatewayCode:   "",
+		ListenAddress: "127.0.0.1:8080",
+		AuthMode:      "required",
+		LaunchMode:    launcher.LaunchModePathBinary,
+		ResolvedExec:  "/usr/local/bin/neocode-gateway",
+	}, map[string]string{
+		"request_id":     "wake-123",
+		"method":         protocol.MethodWakeOpenURL,
+		"source":         "url-dispatch",
+		"status":         "launch_attempt",
+		"gateway_code":   "",
+		"listen_address": "127.0.0.1:8080",
+		"auth_mode":      "required",
+		"launch_mode":    launcher.LaunchModePathBinary,
+		"resolved_exec":  "/usr/local/bin/neocode-gateway",
+	})
+
+	assertPayload(t, launchDecisionLogEntry{
+		RequestID:     "wake-124",
+		Method:        protocol.MethodWakeOpenURL,
+		Source:        "url-dispatch",
+		Status:        "launch_failed",
+		GatewayCode:   ErrorCodeGatewayUnavailable,
+		ListenAddress: "127.0.0.1:8080",
+		AuthMode:      "disabled",
+		LaunchMode:    launcher.LaunchModeFallbackSubcommand,
+		ResolvedExec:  "/usr/local/bin/neocode",
+		Message:       "launch failed",
+	}, map[string]string{
+		"request_id":     "wake-124",
+		"method":         protocol.MethodWakeOpenURL,
+		"source":         "url-dispatch",
+		"status":         "launch_failed",
+		"gateway_code":   ErrorCodeGatewayUnavailable,
+		"listen_address": "127.0.0.1:8080",
+		"auth_mode":      "disabled",
+		"launch_mode":    launcher.LaunchModeFallbackSubcommand,
+		"resolved_exec":  "/usr/local/bin/neocode",
+	})
 }
 
 func TestDispatcherDispatchFailsFastOnCanceledContextBeforeIO(t *testing.T) {

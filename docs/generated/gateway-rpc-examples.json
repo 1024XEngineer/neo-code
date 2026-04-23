@@ -1,0 +1,75 @@
+{
+  "gateway.bindStream": {
+    "request": {
+      "jsonrpc": "2.0",
+      "id": "bind-1",
+      "method": "gateway.bindStream",
+      "params": {
+        "session_id": "sess-1",
+        "run_id": "run-1",
+        "channel": "ws"
+      }
+    },
+    "response": {
+      "jsonrpc": "2.0",
+      "id": "bind-1",
+      "result": {
+        "type": "ack",
+        "action": "bind_stream",
+        "request_id": "bind-1",
+        "run_id": "run-1",
+        "session_id": "sess-1",
+        "payload": {
+          "channel": "ws",
+          "message": "stream binding updated"
+        }
+      }
+    }
+  },
+  "gateway.run": {
+    "request": {
+      "jsonrpc": "2.0",
+      "id": "run-req-1",
+      "method": "gateway.run",
+      "params": {
+        "session_id": "sess-1",
+        "run_id": "run-1",
+        "input_text": "Please review README",
+        "input_parts": [
+          {
+            "type": "text",
+            "text": "Please review README"
+          }
+        ],
+        "workdir": "/workspace/demo"
+      }
+    },
+    "response": {
+      "jsonrpc": "2.0",
+      "id": "run-req-1",
+      "result": {
+        "type": "ack",
+        "action": "run",
+        "request_id": "run-req-1",
+        "run_id": "run-1",
+        "session_id": "sess-1",
+        "payload": {
+          "message": "run accepted"
+        }
+      }
+    }
+  },
+  "common.error": {
+    "response": {
+      "jsonrpc": "2.0",
+      "id": "req-err-1",
+      "error": {
+        "code": -32602,
+        "message": "unauthorized",
+        "data": {
+          "gateway_code": "unauthorized"
+        }
+      }
+    }
+  }
+}

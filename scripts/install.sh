@@ -1,61 +1,149 @@
-#!/bin/bash
-set -e
+#!/usr/bin/env bash
+set -euo pipefail
 
-# 配置仓库信息
-REPO="1024XEngineer/neo-code" 
-PROJECT_NAME="neocode"
-BINARY_NAME="neocode"
+REPO="1024XEngineer/neo-code"
+DEFAULT_FLAVOR="full"
 
-echo "🚀 开始安装 $BINARY_NAME..."
+flavor="$DEFAULT_FLAVOR"
+dry_run=0
 
-# 1. 获取系统和架构信息
-OS="$(uname -s)"
-ARCH="$(uname -m)"
+usage() {
+  cat <<'USAGE'
+Usage: install.sh [--flavor full|gateway] [--dry-run]
 
-if [ "$OS" = "Linux" ]; then
-    OS_NAME="Linux"
-elif [ "$OS" = "Darwin" ]; then
-    OS_NAME="Darwin"
+Options:
+  --flavor   Install artifact flavor. Default: full
+  --dry-run  Print resolved asset URLs/checksum URL and exit without installing
+  -h, --help Show this help message
+USAGE
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --flavor)
+      if [[ $# -lt 2 ]]; then
+        echo "Error: --flavor requires a value" >&2
+        exit 1
+      fi
+      flavor="$(echo "$2" | tr '[:upper:]' '[:lower:]')"
+      shift 2
+      ;;
+    --dry-run)
+      dry_run=1
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "Error: unknown argument: $1" >&2
+      usage
+      exit 1
+      ;;
+  esac
+done
+
+case "$flavor" in
+  full)
+    asset_prefix="neocode"
+    binary_name="neocode"
+    ;;
+  gateway)
+    asset_prefix="neocode-gateway"
+    binary_name="neocode-gateway"
+    ;;
+  *)
+    echo "Error: unsupported --flavor value: $flavor (expected full|gateway)" >&2
+    exit 1
+    ;;
+esac
+
+os="$(uname -s)"
+arch="$(uname -m)"
+
+case "$os" in
+  Linux) os_name="Linux" ;;
+  Darwin) os_name="Darwin" ;;
+  *)
+    echo "Error: unsupported operating system: $os" >&2
+    exit 1
+    ;;
+esac
+
+case "$arch" in
+  x86_64|amd64) arch_name="x86_64" ;;
+  aarch64|arm64) arch_name="arm64" ;;
+  *)
+    echo "Error: unsupported architecture: $arch" >&2
+    exit 1
+    ;;
+esac
+
+if [[ -n "${NEOCODE_INSTALL_LATEST_TAG:-}" ]]; then
+  latest_tag="${NEOCODE_INSTALL_LATEST_TAG}"
 else
-    echo "❌ 不支持的操作系统: $OS"
+  echo "Resolving latest release metadata..."
+  latest_tag="$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" | sed -n 's/.*"tag_name":[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)"
+  if [[ -z "$latest_tag" ]]; then
+    echo "Error: failed to resolve latest release tag from GitHub API" >&2
     exit 1
+  fi
 fi
 
-if [ "$ARCH" = "x86_64" ] || [ "$ARCH" = "amd64" ]; then
-    ARCH_NAME="x86_64"
-elif [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then
-    ARCH_NAME="arm64"
+asset_name="${asset_prefix}_${os_name}_${arch_name}.tar.gz"
+download_url="https://github.com/${REPO}/releases/download/${latest_tag}/${asset_name}"
+checksum_url="https://github.com/${REPO}/releases/download/${latest_tag}/checksums.txt"
+
+if [[ "$dry_run" -eq 1 ]]; then
+  echo "flavor=${flavor}"
+  echo "asset=${asset_name}"
+  echo "download_url=${download_url}"
+  echo "checksum_url=${checksum_url}"
+  exit 0
+fi
+
+temp_dir="$(mktemp -d)"
+cleanup() {
+  rm -rf "${temp_dir}"
+}
+trap cleanup EXIT
+
+archive_path="${temp_dir}/${asset_name}"
+checksums_path="${temp_dir}/checksums.txt"
+
+echo "Downloading ${asset_name}..."
+curl -fsSL -o "${archive_path}" "${download_url}"
+
+echo "Downloading checksums..."
+curl -fsSL -o "${checksums_path}" "${checksum_url}"
+
+expected_checksum="$(awk -v asset="${asset_name}" '$2 == asset || $2 == "*"asset { print $1; exit }' "${checksums_path}")"
+if [[ -z "${expected_checksum}" ]]; then
+  echo "Error: failed to find checksum entry for ${asset_name}" >&2
+  exit 1
+fi
+
+if command -v sha256sum >/dev/null 2>&1; then
+  actual_checksum="$(sha256sum "${archive_path}" | awk '{print $1}')"
+elif command -v shasum >/dev/null 2>&1; then
+  actual_checksum="$(shasum -a 256 "${archive_path}" | awk '{print $1}')"
 else
-    echo "❌ 不支持的系统架构: $ARCH"
-    exit 1
+  echo "Error: sha256sum/shasum is required to verify checksums" >&2
+  exit 1
 fi
 
-# 2. 从 GitHub API 获取最新 Release 版本号
-echo "🔍 正在获取最新版本信息..."
-LATEST_TAG=$(curl -s "https://api.github.com/repos/$REPO/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
-
-if [ -z "$LATEST_TAG" ]; then
-    echo "❌ 无法获取最新版本，请检查网络或 GitHub 访问权限。"
-    exit 1
+if [[ "${actual_checksum}" != "${expected_checksum}" ]]; then
+  echo "Error: checksum verification failed for ${asset_name}" >&2
+  echo "Expected: ${expected_checksum}" >&2
+  echo "Actual:   ${actual_checksum}" >&2
+  exit 1
 fi
-echo "📦 发现最新版本: $LATEST_TAG"
 
-# 3. 拼接下载链接 (匹配 GoReleaser 默认命名)
-TAR_FILE="${PROJECT_NAME}_${OS_NAME}_${ARCH_NAME}.tar.gz"
-DOWNLOAD_URL="https://github.com/$REPO/releases/download/$LATEST_TAG/$TAR_FILE"
+echo "Extracting ${binary_name}..."
+tar -xzf "${archive_path}" -C "${temp_dir}" "${binary_name}"
 
-# 4. 下载并解压
-echo "⬇️  正在下载: $DOWNLOAD_URL"
-curl -L -o "$TAR_FILE" "$DOWNLOAD_URL"
+echo "Installing ${binary_name} to /usr/local/bin (sudo may prompt)..."
+sudo mv "${temp_dir}/${binary_name}" /usr/local/bin/
 
-echo "📦 正在解压..."
-tar -xzf "$TAR_FILE" "$BINARY_NAME"
-
-# 5. 安装到全局 PATH
-echo "⚙️  正在安装到 /usr/local/bin (此步可能需要输入密码以获取 sudo 权限)..."
-sudo mv "$BINARY_NAME" /usr/local/bin/
-
-# 6. 清理临时文件
-rm "$TAR_FILE"
-
-echo "✅ 安装成功！请在终端运行 '$BINARY_NAME --help' 开始使用。"
+echo "Installed ${binary_name} (${flavor}) from ${latest_tag}."
