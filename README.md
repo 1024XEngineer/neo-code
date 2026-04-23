@@ -181,6 +181,7 @@ Gateway 转发与自动拉起说明：
 3. 完成开发并确保改动聚焦、边界清晰。
 4. 本地自检：
    ```bash
+   make docs-gateway-check
    gofmt -w ./cmd ./internal
    go test ./...
    go build ./...
