@@ -1,3 +1,6 @@
+//go:build gatewaydocgen
+// +build gatewaydocgen
+
 package main
 
 import (

@@ -1,4 +1,4 @@
-﻿package cli
+package cli
 
 import (
 	"context"
@@ -107,16 +107,18 @@ func newGatewayCommand() *cobra.Command {
 	return newGatewayServerCommand("gateway", "Start local gateway server", mustReadInheritedWorkdir)
 }
 
-// NewGatewayStandaloneCommand 鍒涘缓 gateway-only 鐙珛鍏ュ彛鍛戒护锛岀‘淇濅粎鏆撮湶缃戝叧鏈嶅姟璇箟銆?func NewGatewayStandaloneCommand() *cobra.Command {
+// NewGatewayStandaloneCommand 鍒涘缓 gateway-only 鐙珛鍏ュ彛鍛戒护锛岀‘淇濅粎鏆撮湶缃戝叧鏈嶅姟璇箟銆?
+func NewGatewayStandaloneCommand() *cobra.Command {
 	standaloneWorkdir := ""
 	command := newGatewayServerCommand("neocode-gateway", "Start NeoCode gateway-only server", func(*cobra.Command) string {
 		return standaloneWorkdir
 	})
-	command.Flags().StringVar(&standaloneWorkdir, "workdir", "", "宸ヤ綔鐩綍锛堣鐩栨湰娆¤繍琛屽伐浣滃尯锛?)
+	command.Flags().StringVar(&standaloneWorkdir, "workdir", "", "workdir override for this gateway process")
 	return command
 }
 
-// newGatewayServerCommand 鏋勫缓缃戝叧鍚姩鍛戒护锛屽苟澶嶇敤缁熶竴鍙傛暟褰掍竴鍖栦笌鎵ц璺緞銆?func newGatewayServerCommand(use, short string, readWorkdir func(*cobra.Command) string) *cobra.Command {
+// newGatewayServerCommand 鏋勫缓缃戝叧鍚姩鍛戒护锛屽苟澶嶇敤缁熶竴鍙傛暟褰掍竴鍖栦笌鎵ц璺緞銆?
+func newGatewayServerCommand(use, short string, readWorkdir func(*cobra.Command) string) *cobra.Command {
 	options := &gatewayCommandOptions{}
 
 	cmd := &cobra.Command{
@@ -193,7 +195,8 @@ func newGatewayCommand() *cobra.Command {
 	return cmd
 }
 
-// normalizeGatewayLogLevel 瀵圭綉鍏虫棩蹇楃骇鍒仛褰掍竴鍖栧苟鏍￠獙鍚堟硶鍊笺€?func normalizeGatewayLogLevel(logLevel string) (string, error) {
+// normalizeGatewayLogLevel 瀵圭綉鍏虫棩蹇楃骇鍒仛褰掍竴鍖栧苟鏍￠獙鍚堟硶鍊笺€?
+func normalizeGatewayLogLevel(logLevel string) (string, error) {
 	normalized := strings.ToLower(strings.TrimSpace(logLevel))
 	switch normalized {
 	case "debug", "info", "warn", "error":
@@ -203,7 +206,8 @@ func newGatewayCommand() *cobra.Command {
 	}
 }
 
-// mustReadInheritedWorkdir 鍦ㄥ瓙鍛戒护涓畨鍏ㄨ鍙栫户鎵跨殑 --workdir锛岃鍙栧け璐ユ椂鍥為€€涓虹┖鍊笺€?func mustReadInheritedWorkdir(cmd *cobra.Command) string {
+// mustReadInheritedWorkdir 鍦ㄥ瓙鍛戒护涓畨鍏ㄨ鍙栫户鎵跨殑 --workdir锛岃鍙栧け璐ユ椂鍥為€€涓虹┖鍊笺€?
+func mustReadInheritedWorkdir(cmd *cobra.Command) string {
 	if cmd == nil {
 		return ""
 	}
@@ -214,7 +218,8 @@ func newGatewayCommand() *cobra.Command {
 	return workdir
 }
 
-// defaultGatewayCommandRunner 浣跨敤缃戝叧鏈嶅姟楠ㄦ灦鍚姩鏈湴 IPC 鐩戝惉骞跺鐞嗕俊鍙烽€€鍑恒€?func defaultGatewayCommandRunner(ctx context.Context, options gatewayCommandOptions) error {
+// defaultGatewayCommandRunner 浣跨敤缃戝叧鏈嶅姟楠ㄦ灦鍚姩鏈湴 IPC 鐩戝惉骞跺鐞嗕俊鍙烽€€鍑恒€?
+func defaultGatewayCommandRunner(ctx context.Context, options gatewayCommandOptions) error {
 	logger := log.New(os.Stderr, "neocode-gateway: ", log.LstdFlags)
 	logger.Printf("starting gateway (log-level=%s)", options.LogLevel)
 
@@ -336,7 +341,8 @@ type gatewayIdleShutdownController struct {
 	timer *time.Timer
 }
 
-// newGatewayIdleShutdownController 鍒涘缓缃戝叧绌洪棽鑷€€鎺у埗鍣細杩炴帴鏁板綊闆跺悗寤惰繜閫€鍑猴紝鏈夎繛鎺ユ仮澶嶅垯鍙栨秷閫€鍑恒€?func newGatewayIdleShutdownController(logger *log.Logger, cancel context.CancelFunc) *gatewayIdleShutdownController {
+// newGatewayIdleShutdownController 鍒涘缓缃戝叧绌洪棽鑷€€鎺у埗鍣細杩炴帴鏁板綊闆跺悗寤惰繜閫€鍑猴紝鏈夎繛鎺ユ仮澶嶅垯鍙栨秷閫€鍑恒€?
+func newGatewayIdleShutdownController(logger *log.Logger, cancel context.CancelFunc) *gatewayIdleShutdownController {
 	return &gatewayIdleShutdownController{
 		logger:      logger,
 		idleTimeout: defaultGatewayIdleShutdownDelay,
@@ -344,7 +350,8 @@ type gatewayIdleShutdownController struct {
 	}
 }
 
-// observe 鎺ユ敹 IPC 娲昏穬杩炴帴鏁板揩鐓у苟缁存姢绌洪棽閫€鍑鸿鏃跺櫒銆?func (c *gatewayIdleShutdownController) observe(active int) {
+// observe 鎺ユ敹 IPC 娲昏穬杩炴帴鏁板揩鐓у苟缁存姢绌洪棽閫€鍑鸿鏃跺櫒銆?
+func (c *gatewayIdleShutdownController) observe(active int) {
 	if c == nil {
 		return
 	}
@@ -384,7 +391,8 @@ type gatewayIdleShutdownController struct {
 	})
 }
 
-// close 閲婃斁绌洪棽閫€鍑烘帶鍒跺櫒鎸佹湁鐨勮鏃跺櫒璧勬簮銆?func (c *gatewayIdleShutdownController) close() {
+// close 閲婃斁绌洪棽閫€鍑烘帶鍒跺櫒鎸佹湁鐨勮鏃跺櫒璧勬簮銆?
+func (c *gatewayIdleShutdownController) close() {
 	if c == nil {
 		return
 	}
@@ -396,7 +404,8 @@ type gatewayIdleShutdownController struct {
 	}
 }
 
-// buildGatewayControlPlaneACL 鍩轰簬閰嶇疆鏋勯€犳帶鍒堕潰 ACL 绛栫暐锛屾湭鐭ユā寮忕洿鎺ユ嫆缁濆惎鍔ㄣ€?func buildGatewayControlPlaneACL(aclMode string) (*gateway.ControlPlaneACL, error) {
+// buildGatewayControlPlaneACL 鍩轰簬閰嶇疆鏋勯€犳帶鍒堕潰 ACL 绛栫暐锛屾湭鐭ユā寮忕洿鎺ユ嫆缁濆惎鍔ㄣ€?
+func buildGatewayControlPlaneACL(aclMode string) (*gateway.ControlPlaneACL, error) {
 	normalizedACLMode := strings.ToLower(strings.TrimSpace(aclMode))
 	if normalizedACLMode == "" {
 		normalizedACLMode = string(gateway.ACLModeStrict)
@@ -409,7 +418,8 @@ type gatewayIdleShutdownController struct {
 	}
 }
 
-// applyGatewayFlagOverrides 灏?CLI flags 瑕嗙洊鍒扮綉鍏抽厤缃紝浼樺厛绾ч珮浜?config.yaml銆?func applyGatewayFlagOverrides(gatewayConfig *config.GatewayConfig, options gatewayCommandOptions) {
+// applyGatewayFlagOverrides 灏?CLI flags 瑕嗙洊鍒扮綉鍏抽厤缃紝浼樺厛绾ч珮浜?config.yaml銆?
+func applyGatewayFlagOverrides(gatewayConfig *config.GatewayConfig, options gatewayCommandOptions) {
 	if gatewayConfig == nil {
 		return
 	}
@@ -449,15 +459,18 @@ type gatewayIdleShutdownController struct {
 	}
 }
 
-// defaultNewGatewayServer 鍒涘缓榛樿缃戝叧鏈嶅姟瀹炰緥锛屼緵鍛戒护灞傚惎鍔ㄦ祦绋嬭皟鐢ㄣ€?func defaultNewGatewayServer(options gateway.ServerOptions) (gatewayServer, error) {
+// defaultNewGatewayServer 鍒涘缓榛樿缃戝叧鏈嶅姟瀹炰緥锛屼緵鍛戒护灞傚惎鍔ㄦ祦绋嬭皟鐢ㄣ€?
+func defaultNewGatewayServer(options gateway.ServerOptions) (gatewayServer, error) {
 	return gateway.NewServer(options)
 }
 
-// defaultNewGatewayNetworkServer 鍒涘缓榛樿缃戝叧缃戠粶璁块棶闈㈡湇鍔″疄渚嬶紝渚涘懡浠ゅ眰鍚姩娴佺▼璋冪敤銆?func defaultNewGatewayNetworkServer(options gateway.NetworkServerOptions) (gatewayNetworkServer, error) {
+// defaultNewGatewayNetworkServer 鍒涘缓榛樿缃戝叧缃戠粶璁块棶闈㈡湇鍔″疄渚嬶紝渚涘懡浠ゅ眰鍚姩娴佺▼璋冪敤銆?
+func defaultNewGatewayNetworkServer(options gateway.NetworkServerOptions) (gatewayNetworkServer, error) {
 	return gateway.NewNetworkServer(options)
 }
 
-// newURLDispatchCommand 鍒涘缓 URL Scheme 娲惧彂瀛愬懡浠ら鏋讹紝浠呭仛鍙傛暟鏀舵暃涓庤皟鐢ㄨ浆鍙戙€?func newURLDispatchCommand() *cobra.Command {
+// newURLDispatchCommand 鍒涘缓 URL Scheme 娲惧彂瀛愬懡浠ら鏋讹紝浠呭仛鍙傛暟鏀舵暃涓庤皟鐢ㄨ浆鍙戙€?
+func newURLDispatchCommand() *cobra.Command {
 	options := &urlDispatchCommandOptions{}
 
 	cmd := &cobra.Command{
@@ -499,7 +512,8 @@ type gatewayIdleShutdownController struct {
 	return cmd
 }
 
-// defaultURLDispatchCommandRunner 鎵ц URL 鍞ら啋璇锋眰骞跺皢缁撴灉浠ョ粨鏋勫寲 JSON 杈撳嚭銆?func defaultURLDispatchCommandRunner(ctx context.Context, options urlDispatchCommandOptions) error {
+// defaultURLDispatchCommandRunner 鎵ц URL 鍞ら啋璇锋眰骞跺皢缁撴灉浠ョ粨鏋勫寲 JSON 杈撳嚭銆?
+func defaultURLDispatchCommandRunner(ctx context.Context, options urlDispatchCommandOptions) error {
 	authToken, authErr := loadAuthToken(options.TokenFile)
 	if authErr != nil {
 		writeErr := writeDispatchError(os.Stderr, authErr)
@@ -535,7 +549,8 @@ type gatewayIdleShutdownController struct {
 	return nil
 }
 
-// loadGatewayAuthToken 璇诲彇闈欓粯璁よ瘉 token锛涜嫢鏂囦欢涓嶅瓨鍦ㄥ垯鍥為€€涓虹┖浠ュ吋瀹规棤閴存潈妯″紡銆?func loadGatewayAuthToken(path string) (string, error) {
+// loadGatewayAuthToken 璇诲彇闈欓粯璁よ瘉 token锛涜嫢鏂囦欢涓嶅瓨鍦ㄥ垯鍥為€€涓虹┖浠ュ吋瀹规棤閴存潈妯″紡銆?
+func loadGatewayAuthToken(path string) (string, error) {
 	token, err := gatewayauth.LoadTokenFromFile(path)
 	if err == nil {
 		return token, nil
@@ -549,7 +564,8 @@ type gatewayIdleShutdownController struct {
 	return "", err
 }
 
-// normalizeDispatchURL 瀵?url-dispatch 杈撳叆鍋氭渶灏忓綊涓€鍖栵紝璇︾粏鏍￠獙浜ょ敱 dispatcher 瀹屾垚銆?func normalizeDispatchURL(rawURL string) (string, error) {
+// normalizeDispatchURL 瀵?url-dispatch 杈撳叆鍋氭渶灏忓綊涓€鍖栵紝璇︾粏鏍￠獙浜ょ敱 dispatcher 瀹屾垚銆?
+func normalizeDispatchURL(rawURL string) (string, error) {
 	normalized := strings.TrimSpace(rawURL)
 	if normalized == "" {
 		return "", errors.New("missing required --url or positional <url>")
@@ -557,7 +573,8 @@ type gatewayIdleShutdownController struct {
 	return normalized, nil
 }
 
-// writeURLDispatchSuccessOutput 灏?url-dispatch 鎴愬姛缁撴灉杈撳嚭涓虹粨鏋勫寲 JSON銆?func writeURLDispatchSuccessOutput(writer io.Writer, result urlscheme.DispatchResult) error {
+// writeURLDispatchSuccessOutput 灏?url-dispatch 鎴愬姛缁撴灉杈撳嚭涓虹粨鏋勫寲 JSON銆?
+func writeURLDispatchSuccessOutput(writer io.Writer, result urlscheme.DispatchResult) error {
 	return encodeJSONLine(writer, urlDispatchSuccessOutput{
 		Status:        "ok",
 		ListenAddress: result.ListenAddress,
@@ -567,7 +584,8 @@ type gatewayIdleShutdownController struct {
 	})
 }
 
-// writeURLDispatchErrorOutput 灏?url-dispatch 閿欒缁撴灉杈撳嚭涓虹粨鏋勫寲 JSON銆?func writeURLDispatchErrorOutput(writer io.Writer, err error) error {
+// writeURLDispatchErrorOutput 灏?url-dispatch 閿欒缁撴灉杈撳嚭涓虹粨鏋勫寲 JSON銆?
+func writeURLDispatchErrorOutput(writer io.Writer, err error) error {
 	code := "internal_error"
 	message := err.Error()
 
@@ -584,14 +602,15 @@ type gatewayIdleShutdownController struct {
 	})
 }
 
-// writeURLDispatchFallbackErrorOutput 鍦ㄧ粨鏋勫寲閿欒杈撳嚭澶辫触鏃舵彁渚涘厹搴?JSON锛岄伩鍏嶅懡浠ら潤榛橀€€鍑恒€?func writeURLDispatchFallbackErrorOutput(writer io.Writer) error {
+// writeURLDispatchFallbackErrorOutput 鍦ㄧ粨鏋勫寲閿欒杈撳嚭澶辫触鏃舵彁渚涘厹搴?JSON锛岄伩鍏嶅懡浠ら潤榛橀€€鍑恒€?
+func writeURLDispatchFallbackErrorOutput(writer io.Writer) error {
 	_, err := fmt.Fprintln(writer, fallbackDispatchErrorJSON)
 	return err
 }
 
-// encodeJSONLine 灏嗗璞＄紪鐮佷负鍗曡 JSON锛屽苟鍐欏叆鐩爣杈撳嚭娴併€?func encodeJSONLine(writer io.Writer, payload any) error {
+// encodeJSONLine 灏嗗璞＄紪鐮佷负鍗曡 JSON锛屽苟鍐欏叆鐩爣杈撳嚭娴併€?
+func encodeJSONLine(writer io.Writer, payload any) error {
 	encoder := json.NewEncoder(writer)
 	encoder.SetEscapeHTML(false)
 	return encoder.Encode(payload)
 }
-
