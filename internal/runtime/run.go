@@ -128,11 +128,13 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 	maxTurns := resolveRuntimeMaxTurns(initialCfg.Runtime)
 	for turn := 0; ; turn++ {
 		if turn >= maxTurns {
+			state.maxTurnsReached = true
+			state.maxTurnsLimit = maxTurns
 			return s.handleRunError(
 				ctx,
 				state.runID,
 				state.session.ID,
-				fmt.Errorf("runtime: max turn limit reached (%d)", maxTurns),
+				newMaxTurnLimitError(maxTurns),
 			)
 		}
 		state.turn = turn

@@ -79,6 +79,38 @@ func TestEmitRunTerminationUsesFallbackContextWhenCanceled(t *testing.T) {
 	assertEventContains(t, events, EventStopReasonDecided)
 }
 
+func TestEmitRunTerminationMapsMaxTurnsToDedicatedStopReason(t *testing.T) {
+	t.Parallel()
+
+	s := NewWithFactory(newRuntimeConfigManager(t), &stubToolManager{}, newMemoryStore(), &scriptedProviderFactory{
+		provider: &scriptedProvider{},
+	}, nil)
+
+	state := newRunState("run-max-turns", agentsessionFixture(t))
+	state.maxTurnsReached = true
+	state.maxTurnsLimit = 40
+
+	s.emitRunTermination(context.Background(), UserInput{RunID: "run-max-turns", SessionID: state.session.ID}, &state, nil)
+
+	events := collectRuntimeEvents(s.Events())
+	assertEventContains(t, events, EventStopReasonDecided)
+	for _, event := range events {
+		if event.Type != EventStopReasonDecided {
+			continue
+		}
+		payload, ok := event.Payload.(StopReasonDecidedPayload)
+		if !ok {
+			t.Fatalf("expected StopReasonDecidedPayload, got %T", event.Payload)
+		}
+		if payload.Reason != controlplane.StopReasonMaxTurnsReached {
+			t.Fatalf("stop reason = %q, want %q", payload.Reason, controlplane.StopReasonMaxTurnsReached)
+		}
+		if payload.Detail != "runtime: max turn limit reached (40)" {
+			t.Fatalf("stop detail = %q, want max turn detail", payload.Detail)
+		}
+	}
+}
+
 func agentsessionFixture(t *testing.T) agentsession.Session {
 	t.Helper()
 	s := agentsession.New("t")

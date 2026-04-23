@@ -28,6 +28,13 @@ func TestAnalyzeBashCommandClassifiesGitCommand(t *testing.T) {
 			wantSubCmd: "status",
 		},
 		{
+			name:       "git cat-file is unknown and must require approval",
+			command:    "git cat-file -p HEAD:.env",
+			wantIsGit:  true,
+			wantClass:  BashIntentClassificationUnknown,
+			wantSubCmd: "cat-file",
+		},
+		{
 			name:       "git push is remote",
 			command:    "git push origin main",
 			wantIsGit:  true,

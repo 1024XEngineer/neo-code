@@ -143,14 +143,23 @@ func (s *Service) emitRunTermination(ctx context.Context, input UserInput, state
 	}
 
 	in := controlplane.StopInput{}
-	if state != nil && state.budgetExceeded {
+	if state != nil && state.maxTurnsReached {
+		in.MaxTurnsReached = true
+		in.MaxTurnsLimit = state.maxTurnsLimit
+	} else if state != nil && state.budgetExceeded {
 		in.BudgetExceeded = true
 	} else if err != nil {
-		switch {
-		case errors.Is(err, context.Canceled):
-			in.UserInterrupted = true
-		default:
-			in.FatalError = err
+		var maxTurnErr maxTurnLimitError
+		if errors.As(err, &maxTurnErr) {
+			in.MaxTurnsReached = true
+			in.MaxTurnsLimit = maxTurnErr.Limit()
+		} else {
+			switch {
+			case errors.Is(err, context.Canceled):
+				in.UserInterrupted = true
+			default:
+				in.FatalError = err
+			}
 		}
 	} else {
 		in.Completed = true

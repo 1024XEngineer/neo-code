@@ -24,6 +24,24 @@ func TestDecideStopReasonPriority(t *testing.T) {
 			wantReason: StopReasonUserInterrupt,
 		},
 		{
+			name: "user_interrupt_wins_over_max_turns",
+			in: StopInput{
+				UserInterrupted: true,
+				MaxTurnsReached: true,
+				MaxTurnsLimit:   40,
+			},
+			wantReason: StopReasonUserInterrupt,
+		},
+		{
+			name: "max_turns_wins_over_fatal",
+			in: StopInput{
+				MaxTurnsReached: true,
+				MaxTurnsLimit:   40,
+				FatalError:      errSample,
+			},
+			wantReason: StopReasonMaxTurnsReached,
+		},
+		{
 			name: "fatal_error_wins_over_completed",
 			in: StopInput{
 				FatalError: errSample,
@@ -63,7 +81,18 @@ func TestDecideStopReasonPriority(t *testing.T) {
 func TestDecideStopReasonDetails(t *testing.T) {
 	t.Parallel()
 
-	reason, detail := DecideStopReason(StopInput{})
+	reason, detail := DecideStopReason(StopInput{
+		MaxTurnsReached: true,
+		MaxTurnsLimit:   40,
+	})
+	if reason != StopReasonMaxTurnsReached {
+		t.Fatalf("reason = %q, want %q", reason, StopReasonMaxTurnsReached)
+	}
+	if detail != "runtime: max turn limit reached (40)" {
+		t.Fatalf("detail = %q, want max turn detail", detail)
+	}
+
+	reason, detail = DecideStopReason(StopInput{})
 	if reason != StopReasonFatalError {
 		t.Fatalf("reason = %q, want %q", reason, StopReasonFatalError)
 	}

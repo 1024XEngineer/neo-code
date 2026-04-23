@@ -3,12 +3,15 @@ package controlplane
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 )
 
 // StopInput 汇总最终 stop 决议所需的信号。
 type StopInput struct {
 	UserInterrupted bool
+	MaxTurnsReached bool
+	MaxTurnsLimit   int
 	BudgetExceeded  bool
 	FatalError      error
 	Completed       bool
@@ -18,6 +21,12 @@ type StopInput struct {
 func DecideStopReason(in StopInput) (StopReason, string) {
 	if in.UserInterrupted {
 		return StopReasonUserInterrupt, ""
+	}
+	if in.MaxTurnsReached {
+		if in.MaxTurnsLimit > 0 {
+			return StopReasonMaxTurnsReached, fmt.Sprintf("runtime: max turn limit reached (%d)", in.MaxTurnsLimit)
+		}
+		return StopReasonMaxTurnsReached, ""
 	}
 	if in.BudgetExceeded {
 		return StopReasonBudgetExceeded, ""

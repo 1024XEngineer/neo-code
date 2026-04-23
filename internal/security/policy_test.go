@@ -79,6 +79,25 @@ func TestPolicyEngineRecommendedRules(t *testing.T) {
 			wantRuleID:   "deny-bash-git-read-only-private-keys",
 		},
 		{
+			name: "git read-only quoted private key deny",
+			action: Action{
+				Type: ActionTypeBash,
+				Payload: ActionPayload{
+					ToolName:              "bash",
+					Resource:              "bash_git_read_only",
+					Operation:             "git_show",
+					SemanticType:          "git",
+					SemanticClass:         "read_only",
+					NormalizedIntent:      "git show",
+					TargetType:            TargetTypeCommand,
+					Target:                "git show 'HEAD:.ssh/id_rsa'",
+					PermissionFingerprint: "bash.git|read_only|show",
+				},
+			},
+			wantDecision: DecisionDeny,
+			wantRuleID:   "deny-bash-git-read-only-private-keys",
+		},
+		{
 			name: "git remote bash ask",
 			action: Action{
 				Type: ActionTypeBash,
@@ -270,6 +289,34 @@ func TestPolicyEngineRecommendedRules(t *testing.T) {
 				t.Fatalf("expected rule id %q, got %+v", tt.wantRuleID, result.Rule)
 			}
 		})
+	}
+}
+
+func TestClassifySensitiveGitReadOnlyCommandPathspecVariants(t *testing.T) {
+	t.Parallel()
+
+	if !classifySensitiveGitReadOnlyCommand(`git show "HEAD:.env.production"`) {
+		t.Fatalf("expected quoted HEAD:path env selector to be sensitive")
+	}
+	if !classifySensitiveGitReadOnlyCommand(`git diff -- ":(glob)**/.env"`) {
+		t.Fatalf("expected pathspec magic env selector to be sensitive")
+	}
+	if classifySensitiveGitReadOnlyCommand(`git status --short`) {
+		t.Fatalf("expected plain git status to be non-sensitive")
+	}
+}
+
+func TestClassifyPrivateKeyGitReadOnlyCommandVariants(t *testing.T) {
+	t.Parallel()
+
+	if !classifyPrivateKeyGitReadOnlyCommand(`git show 'HEAD:.ssh/id_rsa'`) {
+		t.Fatalf("expected quoted private key selector to be detected")
+	}
+	if !classifyPrivateKeyGitReadOnlyCommand(`git show HEAD:secrets/deploy.pem`) {
+		t.Fatalf("expected pem selector to be detected as private key")
+	}
+	if classifyPrivateKeyGitReadOnlyCommand(`git show HEAD:README.md`) {
+		t.Fatalf("expected regular file selector to be non-private-key")
 	}
 }
 

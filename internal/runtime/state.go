@@ -28,6 +28,8 @@ type runState struct {
 	compactingCount         int
 	stopEmitted             bool
 	budgetExceeded          bool
+	maxTurnsReached         bool
+	maxTurnsLimit           int
 	hasUnknownUsage         bool
 	completion              controlplane.CompletionState
 	progress                controlplane.ProgressState

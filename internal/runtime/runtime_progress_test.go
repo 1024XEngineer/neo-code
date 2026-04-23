@@ -375,6 +375,9 @@ func TestRunStopsWhenMaxTurnsReached(t *testing.T) {
 	if providerCalls != 1 {
 		t.Fatalf("providerCalls = %d, want 1", providerCalls)
 	}
+
+	events := collectRuntimeEvents(service.Events())
+	assertStopReasonDecided(t, events, controlplane.StopReasonMaxTurnsReached, "runtime: max turn limit reached (1)")
 }
 
 func TestComputeToolSignatureNormalizationAndFallback(t *testing.T) {
