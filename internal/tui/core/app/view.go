@@ -193,7 +193,7 @@ func (a App) renderWaterfall(width int, height int) string {
 	if a.hasTextSelection() {
 		selStyle := lipgloss.NewStyle().
 			Foreground(lipgloss.Color(selectionFg)).
-			Background(lipgloss.Color(selectionBg)).
+			UnsetBackground().
 			Padding(0, 1)
 		parts = append(parts, selStyle.Render("已选择内容，右键复制"))
 	}
@@ -238,8 +238,8 @@ func (a App) renderTranscriptScrollbar(width int, height int) string {
 	}
 
 	track := strings.Repeat(" ", width)
-	trackStyle := lipgloss.NewStyle().Background(lipgloss.Color(purpleBg2))
-	thumbStyle := lipgloss.NewStyle().Background(lipgloss.Color(purpleAccent))
+	trackStyle := lipgloss.NewStyle().UnsetBackground()
+	thumbStyle := lipgloss.NewStyle().UnsetBackground()
 
 	maxOffset := a.transcriptMaxOffset()
 	thumbHeight := height

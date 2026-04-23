@@ -123,7 +123,7 @@ func newStyles() styles {
 	return styles{
 		doc: lipgloss.NewStyle().
 			Padding(1, 2, 0, 2).
-			Background(lipgloss.Color(startupBackgroundColor)),
+			UnsetBackground(),
 		headerBar: lipgloss.NewStyle().
 			UnsetBackground(),
 		headerBrand: lipgloss.NewStyle().
@@ -254,7 +254,7 @@ func newStyles() styles {
 		startupMenuItem: lipgloss.NewStyle(),
 		startupKeyCap: lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#ffffff")).
-			Background(lipgloss.Color(startupKeyCapBGColor)).
+			UnsetBackground().
 			Padding(0, 1),
 		startupMenuAction: lipgloss.NewStyle().
 			Foreground(lipgloss.Color(startupMenuActionColor)),
@@ -268,7 +268,7 @@ func newStyles() styles {
 			Foreground(lipgloss.Color(startupMetaColor)),
 		startupCursor: lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#000000")).
-			Background(lipgloss.Color("#ffffff")).
+			UnsetBackground().
 			Reverse(true),
 		startupFooter: lipgloss.NewStyle().
 			Foreground(lipgloss.Color(startupFooterColor)).

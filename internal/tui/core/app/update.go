@@ -2509,7 +2509,7 @@ func (a *App) highlightTranscriptContent(content string) string {
 	}
 
 	highlightStyle := lipgloss.NewStyle().
-		Background(lipgloss.Color(selectionBg)).
+		UnsetBackground().
 		Foreground(lipgloss.Color(selectionFg))
 
 	for i := startLine; i <= endLine && i < len(lines); i++ {
@@ -2693,7 +2693,7 @@ func (a App) currentStatusSnapshot() tuistatus.Snapshot {
 
 func (a *App) startDraftSession() {
 	a.setActiveSessionID("")
-	a.startupScreenLocked = false
+	a.startupScreenLocked = true
 	a.state.ActiveSessionTitle = draftSessionTitle
 	a.activeMessages = nil
 	a.clearActivities()

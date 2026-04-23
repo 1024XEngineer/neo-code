@@ -2351,6 +2351,7 @@ func TestStartDraftSessionResetsRunState(t *testing.T) {
 	app.state.TokenUsage = tuistate.TokenUsageState{RunTotalTokens: 123}
 	app.activities = []tuistate.ActivityEntry{{Title: "activity"}}
 	app.state.CurrentWorkdir = t.TempDir()
+	app.startupScreenLocked = false
 
 	app.startDraftSession()
 
@@ -2368,6 +2369,9 @@ func TestStartDraftSessionResetsRunState(t *testing.T) {
 	}
 	if len(app.activities) != 0 {
 		t.Fatalf("expected activities to be cleared")
+	}
+	if !app.startupScreenLocked {
+		t.Fatalf("expected startupScreenLocked to remain true after new session")
 	}
 }
 func TestSetCurrentWorkdir(t *testing.T) {

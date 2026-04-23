@@ -87,7 +87,7 @@ func (a App) renderStartupScreen(width int, height int) string {
 		Padding(0, 1)
 	menuKeyStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color(lightText)).
-		Background(lipgloss.Color(startupMinimalKeyBG)).
+		UnsetBackground().
 		Bold(true).
 		Padding(0, 1).
 		Align(lipgloss.Center).
