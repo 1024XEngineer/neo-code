@@ -154,7 +154,7 @@ func TestBuildRequestSupportsImageParts(t *testing.T) {
 				},
 			},
 		},
-		SessionAssetReader: stubSessionAssetReader{
+		SessionAssetReader: &stubSessionAssetReader{
 			assets: map[string]stubSessionAsset{
 				"asset-1": {data: []byte("image-bytes"), mime: "image/png"},
 			},
@@ -199,7 +199,7 @@ func TestBuildRequestRejectsSessionAssetWithoutReader(t *testing.T) {
 	}
 }
 
-func TestEstimateInputTokensReturnsGateableLocalEstimate(t *testing.T) {
+func TestEstimateInputTokensReturnsAdvisoryLocalEstimate(t *testing.T) {
 	t.Parallel()
 
 	p, err := New(provider.RuntimeConfig{
@@ -225,11 +225,64 @@ func TestEstimateInputTokensReturnsGateableLocalEstimate(t *testing.T) {
 	if estimate.EstimateSource != provider.EstimateSourceLocal {
 		t.Fatalf("estimate source = %q, want %q", estimate.EstimateSource, provider.EstimateSourceLocal)
 	}
-	if estimate.GatePolicy != provider.EstimateGateGateable {
-		t.Fatalf("gate policy = %q, want %q", estimate.GatePolicy, provider.EstimateGateGateable)
+	if estimate.GatePolicy != provider.EstimateGateAdvisory {
+		t.Fatalf("gate policy = %q, want %q", estimate.GatePolicy, provider.EstimateGateAdvisory)
 	}
 	if estimate.EstimatedInputTokens <= 0 {
 		t.Fatalf("expected positive estimate tokens, got %d", estimate.EstimatedInputTokens)
+	}
+}
+
+func TestEstimateThenGenerateReusesPreparedRequest(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w, "event: message_start\n")
+		_, _ = fmt.Fprint(w, "data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":4}}}\n\n")
+		_, _ = fmt.Fprint(w, "event: content_block_start\n")
+		_, _ = fmt.Fprint(w, "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"ok\"}}\n\n")
+		_, _ = fmt.Fprint(w, "event: message_delta\n")
+		_, _ = fmt.Fprint(w, "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":1}}\n\n")
+		_, _ = fmt.Fprint(w, "event: message_stop\n")
+		_, _ = fmt.Fprint(w, "data: {\"type\":\"message_stop\"}\n\n")
+	}))
+	defer server.Close()
+
+	p, err := New(provider.RuntimeConfig{
+		Driver:         provider.DriverAnthropic,
+		BaseURL:        server.URL,
+		DefaultModel:   "claude-3-7-sonnet",
+		APIKeyEnv:      "ANTHROPIC_TEST_KEY",
+		APIKeyResolver: provider.StaticAPIKeyResolver("test-key"),
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	reader := &stubSessionAssetReader{
+		maxOpen: 1,
+		assets: map[string]stubSessionAsset{
+			"asset-1": {data: []byte("image-bytes"), mime: "image/png"},
+		},
+	}
+	request := providertypes.GenerateRequest{
+		Messages: []providertypes.Message{{
+			Role:  providertypes.RoleUser,
+			Parts: []providertypes.ContentPart{providertypes.NewSessionAssetImagePart("asset-1", "image/png")},
+		}},
+		SessionAssetReader: reader,
+	}
+	if _, err := p.EstimateInputTokens(context.Background(), request); err != nil {
+		t.Fatalf("EstimateInputTokens() error = %v", err)
+	}
+
+	events := make(chan providertypes.StreamEvent, 8)
+	if err := p.Generate(context.Background(), request, events); err != nil {
+		t.Fatalf("Generate() error = %v", err)
+	}
+	if reader.openCount != 1 {
+		t.Fatalf("expected session asset to be opened once, got %d", reader.openCount)
 	}
 }
 
@@ -252,10 +305,16 @@ type stubSessionAsset struct {
 }
 
 type stubSessionAssetReader struct {
-	assets map[string]stubSessionAsset
+	assets    map[string]stubSessionAsset
+	openCount int
+	maxOpen   int
 }
 
-func (r stubSessionAssetReader) Open(_ context.Context, assetID string) (io.ReadCloser, string, error) {
+func (r *stubSessionAssetReader) Open(_ context.Context, assetID string) (io.ReadCloser, string, error) {
+	if r.maxOpen > 0 && r.openCount >= r.maxOpen {
+		return nil, "", fmt.Errorf("open limit exceeded for asset: %s", assetID)
+	}
+	r.openCount++
 	asset, ok := r.assets[assetID]
 	if !ok {
 		return nil, "", fmt.Errorf("asset not found: %s", assetID)

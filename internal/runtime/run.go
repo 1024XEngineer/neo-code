@@ -147,7 +147,12 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 				continue
 			}
 
-			decision, err := s.evaluateTurnBudget(ctx, &state, snapshot)
+			modelProvider, err := s.providerFactory.Build(ctx, snapshot.ProviderConfig)
+			if err != nil {
+				return s.handleRunError(ctx, state.runID, state.session.ID, err)
+			}
+
+			decision, err := s.evaluateTurnBudget(ctx, &state, snapshot, modelProvider)
 			if err != nil {
 				return s.handleRunError(ctx, state.runID, state.session.ID, err)
 			}
@@ -168,7 +173,7 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 				return nil
 			}
 
-			turnOutput, err := s.callProviderWithRetry(ctx, &state, snapshot)
+			turnOutput, err := s.callProviderWithRetry(ctx, &state, snapshot, modelProvider)
 			if err != nil {
 				if provider.IsContextTooLong(err) &&
 					state.reactiveCompactAttempts < snapshot.Config.Context.Budget.MaxReactiveCompacts {
@@ -388,6 +393,7 @@ func (s *Service) callProviderWithRetry(
 	ctx context.Context,
 	state *runState,
 	snapshot TurnBudgetSnapshot,
+	initialProvider provider.Provider,
 ) (turnProviderOutput, error) {
 	var lastErr error
 
@@ -405,9 +411,13 @@ func (s *Service) callProviderWithRetry(
 			}
 		}
 
-		modelProvider, err := s.providerFactory.Build(ctx, snapshot.ProviderConfig)
-		if err != nil {
-			return turnProviderOutput{}, err
+		modelProvider := initialProvider
+		if retryAttempt > 0 {
+			var err error
+			modelProvider, err = s.providerFactory.Build(ctx, snapshot.ProviderConfig)
+			if err != nil {
+				return turnProviderOutput{}, err
+			}
 		}
 
 		streamOutcome := generateStreamingMessage(ctx, modelProvider, snapshot.Request, streaming.Hooks{
@@ -524,11 +534,8 @@ func (s *Service) evaluateTurnBudget(
 	ctx context.Context,
 	state *runState,
 	snapshot TurnBudgetSnapshot,
+	modelProvider provider.Provider,
 ) (controlplane.TurnBudgetDecision, error) {
-	modelProvider, err := s.providerFactory.Build(ctx, snapshot.ProviderConfig)
-	if err != nil {
-		return controlplane.TurnBudgetDecision{}, err
-	}
 	providerEstimate, err := modelProvider.EstimateInputTokens(ctx, snapshot.Request)
 	if err != nil {
 		return controlplane.TurnBudgetDecision{}, err

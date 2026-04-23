@@ -1,8 +1,12 @@
 package provider
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"math"
+
+	providertypes "neo-code/internal/provider/types"
 )
 
 const (
@@ -28,4 +32,14 @@ func EstimateTextTokens(text string) int {
 		return 0
 	}
 	return int(math.Ceil(float64(len([]byte(text))) / 4.0 * localEstimateSlack))
+}
+
+// BuildGenerateRequestSignature 生成 GenerateRequest 的稳定签名，用于估算与发送阶段的请求复用匹配。
+func BuildGenerateRequestSignature(req providertypes.GenerateRequest) string {
+	encoded, err := json.Marshal(req)
+	if err != nil {
+		return ""
+	}
+	hash := sha256.Sum256(encoded)
+	return hex.EncodeToString(hash[:])
 }

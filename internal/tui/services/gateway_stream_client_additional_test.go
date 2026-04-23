@@ -317,6 +317,57 @@ func TestGatewayStreamClientRunSkipsNonGatewayEventsAndStopsOnClose(t *testing.T
 	}
 }
 
+func TestGatewayStreamClientRunStopsOnPayloadVersionMismatch(t *testing.T) {
+	t.Parallel()
+
+	source := make(chan gatewayRPCNotification, 3)
+	client := NewGatewayStreamClient(source)
+
+	source <- buildGatewayEventNotification(t, gateway.MessageFrame{
+		Type:   gateway.FrameTypeEvent,
+		Action: gateway.FrameActionRun,
+		Payload: map[string]any{
+			"runtime_event_type": string(EventAgentChunk),
+			"payload_version":    runtimeEventPayloadVersion - 1,
+			"payload":            "legacy",
+		},
+	})
+	source <- buildGatewayEventNotification(t, gateway.MessageFrame{
+		Type:   gateway.FrameTypeEvent,
+		Action: gateway.FrameActionRun,
+		Payload: map[string]any{
+			"runtime_event_type": string(EventAgentChunk),
+			"payload_version":    runtimeEventPayloadVersion,
+			"payload":            "ok",
+		},
+	})
+
+	select {
+	case event, ok := <-client.Events():
+		if !ok {
+			t.Fatalf("events channel closed before decode error event")
+		}
+		if event.Type != EventError {
+			t.Fatalf("event.Type = %q, want %q", event.Type, EventError)
+		}
+		payload, payloadOK := event.Payload.(string)
+		if !payloadOK || !containsAll(payload, "payload_version", "want") {
+			t.Fatalf("event.Payload = %#v", event.Payload)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("timed out waiting for decode error event")
+	}
+
+	select {
+	case _, ok := <-client.Events():
+		if ok {
+			t.Fatalf("expected stream to stop after payload version mismatch")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("timed out waiting for events channel close")
+	}
+}
+
 func containsAll(input string, subs ...string) bool {
 	for _, sub := range subs {
 		if !strings.Contains(input, sub) {

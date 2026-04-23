@@ -606,7 +606,12 @@ func TestRunAndProviderRetryRemainingBranches(t *testing.T) {
 		}()
 		service := &Service{providerFactory: &scriptedProviderFactory{provider: providerRetry}, events: make(chan RuntimeEvent, 8)}
 		state := newRunState("run-retry-backoff", newRuntimeSession("session-retry-backoff"))
-		_, err := service.callProviderWithRetry(ctx, &state, TurnBudgetSnapshot{ProviderConfig: provider.RuntimeConfig{Name: "x"}})
+		_, err := service.callProviderWithRetry(
+			ctx,
+			&state,
+			TurnBudgetSnapshot{ProviderConfig: provider.RuntimeConfig{Name: "x"}},
+			providerRetry,
+		)
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("expected context.Canceled, got %v", err)
 		}
@@ -621,7 +626,12 @@ func TestRunAndProviderRetryRemainingBranches(t *testing.T) {
 		}}
 		service := &Service{providerFactory: &scriptedProviderFactory{provider: providerRetry}, events: make(chan RuntimeEvent, 8)}
 		state := newRunState("run-retry-ctx-check", newRuntimeSession("session-retry-ctx-check"))
-		_, err := service.callProviderWithRetry(ctx, &state, TurnBudgetSnapshot{ProviderConfig: provider.RuntimeConfig{Name: "x"}})
+		_, err := service.callProviderWithRetry(
+			ctx,
+			&state,
+			TurnBudgetSnapshot{ProviderConfig: provider.RuntimeConfig{Name: "x"}},
+			providerRetry,
+		)
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("expected context.Canceled, got %v", err)
 		}

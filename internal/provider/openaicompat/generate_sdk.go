@@ -21,14 +21,9 @@ import (
 // generateSDKChatCompletions 走 SDK chat/completions 发送请求
 func (p *Provider) generateSDKChatCompletions(
 	ctx context.Context,
-	req providertypes.GenerateRequest,
+	payload chatcompletions.Request,
 	events chan<- providertypes.StreamEvent,
 ) error {
-	payload, err := chatcompletions.BuildRequest(ctx, p.cfg, req)
-	if err != nil {
-		return err
-	}
-
 	client, err := p.newSDKClient()
 	if err != nil {
 		return err
@@ -280,13 +275,9 @@ func (p *Provider) generateChatCompletionsWithCompatibleStream(
 // generateSDKResponses 走 SDK responses 发送请求，复用本地流事件映射。
 func (p *Provider) generateSDKResponses(
 	ctx context.Context,
-	req providertypes.GenerateRequest,
+	payload responses.Request,
 	events chan<- providertypes.StreamEvent,
 ) error {
-	payload, err := responses.BuildRequest(ctx, p.cfg, req)
-	if err != nil {
-		return err
-	}
 	endpoint, err := resolveChatEndpoint(p.cfg)
 	if err != nil {
 		return err

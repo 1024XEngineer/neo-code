@@ -71,14 +71,18 @@ func (c *GatewayStreamClient) run() {
 
 			event, err := decodeRuntimeEventFromGatewayNotification(notification)
 			if err != nil {
+				errMessage := fmt.Sprintf("gateway stream decode error: %v", err)
 				select {
 				case <-c.closeCh:
 					return
 				case c.events <- RuntimeEvent{
 					Type:      EventError,
 					Timestamp: time.Now().UTC(),
-					Payload:   fmt.Sprintf("gateway stream decode error: %v", err),
+					Payload:   errMessage,
 				}:
+				}
+				if isRuntimePayloadVersionMismatch(errMessage) {
+					return
 				}
 				continue
 			}
@@ -90,6 +94,13 @@ func (c *GatewayStreamClient) run() {
 			}
 		}
 	}
+}
+
+// isRuntimePayloadVersionMismatch 判断错误是否由 runtime 事件版本不匹配触发，用于快速停止消费避免噪声洪泛。
+func isRuntimePayloadVersionMismatch(errMessage string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(errMessage))
+	return strings.Contains(normalized, "payload_version") &&
+		strings.Contains(normalized, "unsupported")
 }
 
 // decodeRuntimeEventFromGatewayNotification 将 gateway.event 通知还原为事件。

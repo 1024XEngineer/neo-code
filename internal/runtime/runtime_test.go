@@ -1022,7 +1022,7 @@ func TestServiceRun(t *testing.T) {
 				t.Fatalf("Run() error = %v", err)
 			}
 
-			expectedProviderBuilds := tt.expectProviderCalls * 2
+			expectedProviderBuilds := tt.expectProviderCalls
 			if factory.calls != expectedProviderBuilds {
 				t.Fatalf("expected %d provider builds, got %d", expectedProviderBuilds, factory.calls)
 			}
@@ -3797,6 +3797,7 @@ func TestCallProviderWithRetryReturnsCombinedForwardError(t *testing.T) {
 		context.Background(),
 		&state,
 		snapshot,
+		scripted,
 	)
 	if err == nil || !containsError(err, "provider stream handling failed after provider error") {
 		t.Fatalf("expected combined forward/provider error, got %v", err)

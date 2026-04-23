@@ -3,6 +3,7 @@ package openaicompat
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -245,7 +246,7 @@ func TestDiscoverModelsParsesNestedContainerAndAliasFields(t *testing.T) {
 	}
 }
 
-func TestEstimateInputTokensReturnsGateableLocalEstimate(t *testing.T) {
+func TestEstimateInputTokensReturnsAdvisoryLocalEstimate(t *testing.T) {
 	t.Parallel()
 
 	p, err := New(resolvedConfig("", ""))
@@ -264,11 +265,58 @@ func TestEstimateInputTokensReturnsGateableLocalEstimate(t *testing.T) {
 	if estimate.EstimateSource != provider.EstimateSourceLocal {
 		t.Fatalf("estimate source = %q, want %q", estimate.EstimateSource, provider.EstimateSourceLocal)
 	}
-	if estimate.GatePolicy != provider.EstimateGateGateable {
-		t.Fatalf("gate policy = %q, want %q", estimate.GatePolicy, provider.EstimateGateGateable)
+	if estimate.GatePolicy != provider.EstimateGateAdvisory {
+		t.Fatalf("gate policy = %q, want %q", estimate.GatePolicy, provider.EstimateGateAdvisory)
 	}
 	if estimate.EstimatedInputTokens <= 0 {
 		t.Fatalf("expected positive estimate tokens, got %d", estimate.EstimatedInputTokens)
+	}
+}
+
+func TestEstimateThenGenerateReusesPreparedRequest(t *testing.T) {
+	t.Setenv(config.OpenAIDefaultAPIKeyEnv, "test-key")
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(`data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}
+data: [DONE]
+
+`))
+	}))
+	defer server.Close()
+
+	p, err := New(resolvedConfig(server.URL, "gpt-4.1"))
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	p.client = server.Client()
+
+	reader := &singleUseSessionAssetReader{
+		maxOpen: 1,
+		assets: map[string]sessionAsset{
+			"asset-1": {data: []byte("image-bytes"), mime: "image/png"},
+		},
+	}
+	request := providertypes.GenerateRequest{
+		Model: "gpt-4.1",
+		Messages: []providertypes.Message{
+			{
+				Role:  providertypes.RoleUser,
+				Parts: []providertypes.ContentPart{providertypes.NewSessionAssetImagePart("asset-1", "image/png")},
+			},
+		},
+		SessionAssetReader: reader,
+	}
+	if _, err := p.EstimateInputTokens(context.Background(), request); err != nil {
+		t.Fatalf("EstimateInputTokens() error = %v", err)
+	}
+
+	events := make(chan providertypes.StreamEvent, 8)
+	if err := p.Generate(context.Background(), request, events); err != nil {
+		t.Fatalf("Generate() error = %v", err)
+	}
+	if reader.openCount != 1 {
+		t.Fatalf("expected session asset to be opened once, got %d", reader.openCount)
 	}
 }
 
@@ -732,4 +780,31 @@ func (r *cancelAfterDoneReader) Read(p []byte) (int, error) {
 	}
 	r.cancel()
 	return 0, r.err
+}
+
+type sessionAsset struct {
+	data []byte
+	mime string
+	err  error
+}
+
+type singleUseSessionAssetReader struct {
+	assets    map[string]sessionAsset
+	openCount int
+	maxOpen   int
+}
+
+func (r *singleUseSessionAssetReader) Open(_ context.Context, assetID string) (io.ReadCloser, string, error) {
+	if r.maxOpen > 0 && r.openCount >= r.maxOpen {
+		return nil, "", fmt.Errorf("open limit exceeded for asset: %s", assetID)
+	}
+	r.openCount++
+	asset, ok := r.assets[assetID]
+	if !ok {
+		return nil, "", fmt.Errorf("asset not found: %s", assetID)
+	}
+	if asset.err != nil {
+		return nil, "", asset.err
+	}
+	return io.NopCloser(strings.NewReader(string(asset.data))), asset.mime, nil
 }
