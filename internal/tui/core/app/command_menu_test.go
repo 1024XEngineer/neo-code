@@ -264,7 +264,7 @@ func TestPickerItemTextFallbackBranches(t *testing.T) {
 }
 
 func TestPickerSelectionDelegateMethods(t *testing.T) {
-	delegate := pickerSelectionDelegate{}
+	delegate := newPickerSelectionDelegate()
 	if delegate.Height() != 2 {
 		t.Fatalf("Height() = %d, want 2", delegate.Height())
 	}
@@ -277,7 +277,7 @@ func TestPickerSelectionDelegateMethods(t *testing.T) {
 }
 
 func TestPickerSelectionDelegateRenderBranches(t *testing.T) {
-	delegate := pickerSelectionDelegate{}
+	delegate := newPickerSelectionDelegate()
 	model := list.New([]list.Item{
 		selectionItem{id: "m1", name: "Model A", description: "desc"},
 	}, delegate, 24, 2)

@@ -4,7 +4,6 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
-	"github.com/muesli/termenv"
 )
 
 const (
@@ -114,8 +113,6 @@ type styles struct {
 }
 
 func newStyles() styles {
-	lipgloss.SetColorProfile(termenv.TrueColor)
-
 	headerAccent := lipgloss.AdaptiveColor{Light: coralAccent, Dark: purpleLight}
 
 	panel := lipgloss.NewStyle().

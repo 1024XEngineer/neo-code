@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"path/filepath"
 	"strings"
 	"time"
@@ -52,11 +51,6 @@ const sessionSwitchBusyMessage = "cannot switch sessions while run or compact is
 const logViewerEntryLimit = 500
 const logViewerPersistDebounce = 300 * time.Millisecond
 const footerErrorFlashDuration = 8 * time.Second
-const startupAnimationTickInterval = 180 * time.Millisecond
-const startupTypingStartDelayTicks = 6
-const startupTypingStepTicks = 1
-const startupCursorBlinkStepTicks = 3
-const startupPulseStepTicks = 1
 
 type sessionLogPersistenceRuntime interface {
 	LoadSessionLogEntries(ctx context.Context, sessionID string) ([]tuiservices.SessionLogEntry, error)
@@ -97,10 +91,6 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		now := time.Time(typed)
 		needNextTick := false
 
-		if a.startupVisible {
-			a.advanceStartupAnimation()
-			needNextTick = true
-		}
 		if !a.footerErrorUntil.IsZero() && now.Before(a.footerErrorUntil) {
 			needNextTick = true
 		}
@@ -308,11 +298,6 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, tea.Batch(cmds...)
 		}
 	case tea.KeyMsg:
-		if a.startupVisible {
-			if model, cmd, handled := a.handleStartupKey(typed, cmds); handled {
-				return model, cmd
-			}
-		}
 		if key.Matches(typed, a.keys.Quit) {
 			return a, tea.Quit
 		}
@@ -692,97 +677,6 @@ func (a App) now() time.Time {
 		return time.Now()
 	}
 	return a.nowFn()
-}
-
-// startupAnimationTickCmd 发送启动页动画节拍消息，用于驱动呼吸灯与打字机效果。
-func startupAnimationTickCmd() tea.Cmd {
-	return tea.Tick(startupAnimationTickInterval, func(t time.Time) tea.Msg {
-		return tickMsg(t)
-	})
-}
-
-// advanceStartupAnimation 推进启动页动效状态，包括呼吸 phase、打字索引与光标闪烁。
-func (a *App) advanceStartupAnimation() {
-	if !a.startupVisible {
-		return
-	}
-	a.startupTick++
-
-	if startupPulseStepTicks > 0 && a.startupTick%startupPulseStepTicks == 0 {
-		if startupBreathCycleTicks > 0 {
-			step := 2 * math.Pi / float64(startupBreathCycleTicks)
-			a.startupPulsePhase += step
-			if a.startupPulsePhase >= 2*math.Pi {
-				a.startupPulsePhase -= 2 * math.Pi
-			}
-		}
-	}
-	if startupCursorBlinkStepTicks > 0 && a.startupTick%startupCursorBlinkStepTicks == 0 {
-		a.startupCursorOn = !a.startupCursorOn
-	}
-	if a.startupTick < startupTypingStartDelayTicks {
-		return
-	}
-	if startupTypingStepTicks > 0 && a.startupTick%startupTypingStepTicks != 0 {
-		return
-	}
-	maxChars := len([]rune(startupTypingPlaceholder))
-	if a.startupTypingIndex < maxChars {
-		a.startupTypingIndex++
-	}
-}
-
-// dismissStartup 隐藏启动页并恢复输入焦点，确保后续按键进入主流程处理。
-func (a *App) dismissStartup() {
-	if !a.startupVisible {
-		return
-	}
-	a.startupVisible = false
-	a.focus = panelInput
-	a.applyFocus()
-	a.applyComponentLayout(false)
-}
-
-// handleStartupKey 处理启动页专属按键网关，必要时切换到主线输入流程。
-func (a App) handleStartupKey(typed tea.KeyMsg, cmds []tea.Cmd) (tea.Model, tea.Cmd, bool) {
-	switch {
-	case key.Matches(typed, a.keys.NewSession):
-		a.dismissStartup()
-		a.startDraftSession()
-		return a, tea.Batch(cmds...), true
-	case key.Matches(typed, a.keys.OpenWorkspace):
-		a.dismissStartup()
-		a.openFileBrowser()
-		return a, tea.Batch(cmds...), true
-	case typed.Type == tea.KeyRunes && len(typed.Runes) == 1 && typed.Runes[0] == '/':
-		a.dismissStartup()
-		a.input.SetValue("/")
-		a.state.InputText = a.input.Value()
-		a.refreshCommandMenu()
-		a.applyComponentLayout(false)
-		return a, tea.Batch(cmds...), true
-	case key.Matches(typed, a.keys.FocusInput):
-		a.dismissStartup()
-		return a, tea.Batch(cmds...), true
-	case key.Matches(typed, a.keys.Quit):
-		return a, tea.Quit, true
-	case isStartupRegularInput(typed):
-		a.dismissStartup()
-		model, cmd := a.updateInputPanel(typed, typed, cmds)
-		return model, cmd, true
-	default:
-		return a, tea.Batch(cmds...), true
-	}
-}
-
-// isStartupRegularInput 判断按键是否属于可直接落入输入框的常规字符输入。
-func isStartupRegularInput(msg tea.KeyMsg) bool {
-	switch msg.Type {
-	case tea.KeyRunes, tea.KeySpace:
-		return true
-	default:
-		return false
-	}
 }
 
 type logPersistFlushMsg struct {
@@ -2787,7 +2681,6 @@ func (a App) currentStatusSnapshot() tuistatus.Snapshot {
 }
 
 func (a *App) startDraftSession() {
-	a.dismissStartup()
 	a.setActiveSessionID("")
 	a.startupScreenLocked = false
 	a.startupIntroActive = false

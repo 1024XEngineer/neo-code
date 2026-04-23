@@ -117,7 +117,39 @@ func (s selectionItem) FilterValue() string {
 	return strings.ToLower(s.id + " " + s.name + " " + s.description)
 }
 
-type pickerSelectionDelegate struct{}
+type pickerSelectionDelegate struct {
+	mainStyle         lipgloss.Style
+	mainSelectedStyle lipgloss.Style
+	subStyle          lipgloss.Style
+	subSelectedStyle  lipgloss.Style
+	rowStyle          lipgloss.Style
+	railStyle         lipgloss.Style
+	railSelectedStyle lipgloss.Style
+	gap               string
+}
+
+// newPickerSelectionDelegate 构建选择器行渲染所需的稳定样式，避免每次 Render 重建样式对象。
+func newPickerSelectionDelegate() pickerSelectionDelegate {
+	return pickerSelectionDelegate{
+		mainStyle: lipgloss.NewStyle().
+			Foreground(lipgloss.Color(warmSilver)),
+		mainSelectedStyle: lipgloss.NewStyle().
+			Foreground(lipgloss.Color(lightText)).
+			Bold(true),
+		subStyle: lipgloss.NewStyle().
+			Foreground(lipgloss.Color(charcoal)),
+		subSelectedStyle: lipgloss.NewStyle().
+			Foreground(lipgloss.Color(lightText2)),
+		rowStyle: lipgloss.NewStyle(),
+		railStyle: lipgloss.NewStyle().
+			Foreground(lipgloss.Color(charcoal)).
+			Width(1),
+		railSelectedStyle: lipgloss.NewStyle().
+			Foreground(lipgloss.Color(lightText)).
+			Width(1),
+		gap: lipgloss.NewStyle().Width(1).Render(" "),
+	}
+}
 
 func (d pickerSelectionDelegate) Height() int {
 	return 2
@@ -145,24 +177,16 @@ func (d pickerSelectionDelegate) Render(w io.Writer, m list.Model, index int, it
 		subtitle = " "
 	}
 
-	mainStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(warmSilver))
-	subStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(charcoal))
-	rowStyle := lipgloss.NewStyle().Width(contentWidth)
-	railStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(charcoal)).
-		Width(1)
+	mainStyle := d.mainStyle
+	subStyle := d.subStyle
+	rowStyle := d.rowStyle.Width(contentWidth)
+	railStyle := d.railStyle
 	railGlyph := " "
 
 	if selected {
-		mainStyle = mainStyle.Copy().
-			Foreground(lipgloss.Color(lightText)).
-			Bold(true)
-		subStyle = subStyle.Copy().
-			Foreground(lipgloss.Color(lightText2))
-		railStyle = railStyle.Copy().
-			Foreground(lipgloss.Color(lightText))
+		mainStyle = d.mainSelectedStyle
+		subStyle = d.subSelectedStyle
+		railStyle = d.railSelectedStyle
 		railGlyph = "|"
 	}
 
@@ -170,10 +194,9 @@ func (d pickerSelectionDelegate) Render(w io.Writer, m list.Model, index int, it
 	subLine := subStyle.Width(contentWidth).Render(subtitle)
 	row := rowStyle.Render(mainLine + "\n" + subLine)
 
-	gap := lipgloss.NewStyle().Width(1).Render(" ")
 	lines := strings.Split(row, "\n")
 	for i := range lines {
-		lines[i] = railStyle.Render(railGlyph) + gap + lines[i]
+		lines[i] = railStyle.Render(railGlyph) + d.gap + lines[i]
 	}
 	fmt.Fprint(w, strings.Join(lines, "\n"))
 }

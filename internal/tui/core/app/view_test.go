@@ -8,7 +8,6 @@ import (
 
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/charmbracelet/x/ansi"
 
 	providertypes "neo-code/internal/provider/types"
 	agentsession "neo-code/internal/session"
@@ -37,122 +36,19 @@ func TestRenderPickerHelpMode(t *testing.T) {
 	}
 }
 
-func TestViewStartupVisibleRendersStartupSections(t *testing.T) {
+func TestViewStartupScreenRendersStartupSections(t *testing.T) {
 	app, _ := newTestApp(t)
-	app.startupVisible = true
+	app.startupScreenLocked = true
 	app.width = 120
 	app.height = 36
-	app.startupTypingIndex = len([]rune(startupTypingPlaceholder))
 
 	view := app.View()
 	plain := copyCodeANSIPattern.ReplaceAllString(view, "")
-	if !strings.Contains(plain, strings.ToUpper(startupSubtitleText)) {
+	if !strings.Contains(plain, "AI-POWERED CLI WORKSPACE") {
 		t.Fatalf("expected startup subtitle in view")
 	}
-	if !strings.Contains(plain, "Send the Prompt to LLM") {
+	if !strings.Contains(plain, "Quick Actions") {
 		t.Fatalf("expected startup action description in view")
-	}
-	if strings.Contains(plain, "Ctrl+N") {
-		t.Fatalf("expected legacy startup action to be removed")
-	}
-}
-
-func TestStartupTypingTextClamp(t *testing.T) {
-	app, _ := newTestApp(t)
-	app.startupVisible = true
-	app.startupTypingIndex = 999
-
-	got := app.startupTypingText()
-	if got != startupTypingPlaceholder {
-		t.Fatalf("expected full placeholder text, got %q", got)
-	}
-}
-
-func TestStartupBlackLinePadsToRequestedWidth(t *testing.T) {
-	app, _ := newTestApp(t)
-
-	line := app.startupBlackLine(20, app.styles.startupHeaderMeta.Render("cwd"))
-	if got := ansi.StringWidth(line); got != 20 {
-		t.Fatalf("expected rendered width 20, got %d", got)
-	}
-}
-
-func TestStartupCenterWithinAnchorKeepsAnchorWidth(t *testing.T) {
-	app, _ := newTestApp(t)
-
-	centered := app.startupCenterWithinAnchor(40, app.styles.startupSubtitle.Render(strings.ToUpper(startupSubtitleText)))
-	if got := ansi.StringWidth(centered); got != 40 {
-		t.Fatalf("expected centered line width 40, got %d", got)
-	}
-}
-
-func TestStartupInputLineDoesNotContainKeyCapBackgroundCode(t *testing.T) {
-	app, _ := newTestApp(t)
-	app.startupVisible = true
-	app.width = 120
-	app.height = 36
-	app.startupTypingIndex = len([]rune(startupTypingPlaceholder))
-
-	view := app.View()
-	lines := strings.Split(view, "\n")
-	inputLine := ""
-	for _, line := range lines {
-		if strings.Contains(line, startupTypingPlaceholder) {
-			inputLine = line
-			break
-		}
-	}
-	if inputLine == "" {
-		t.Fatalf("expected startup input line in rendered view")
-	}
-	if strings.Contains(inputLine, "48;2;26;26;26m") {
-		t.Fatalf("expected input line not to inherit keycap background code")
-	}
-}
-
-func TestStartupMenuLinesAlignedAsCenteredBlock(t *testing.T) {
-	app, _ := newTestApp(t)
-
-	lines := app.renderStartupMenuLines()
-	if len(lines) != len(startupMenuItems) {
-		t.Fatalf("expected %d startup menu lines, got %d", len(startupMenuItems), len(lines))
-	}
-
-	expectedWidth := ansi.StringWidth(lines[0])
-	actionColumn := -1
-	for i, line := range lines {
-		if got := ansi.StringWidth(line); got != expectedWidth {
-			t.Fatalf("expected line %d width %d, got %d", i, expectedWidth, got)
-		}
-
-		plain := copyCodeANSIPattern.ReplaceAllString(line, "")
-		action := startupMenuItems[i].Action
-		idx := strings.Index(plain, action)
-		if idx < 0 {
-			t.Fatalf("expected action %q in menu line %q", action, plain)
-		}
-		if actionColumn == -1 {
-			actionColumn = idx
-			continue
-		}
-		if idx != actionColumn {
-			t.Fatalf("expected action column %d, got %d for line %d", actionColumn, idx, i)
-		}
-	}
-}
-
-func TestStartupMenuLinesDoNotWrapKeyCaps(t *testing.T) {
-	app, _ := newTestApp(t)
-
-	lines := app.renderStartupMenuLines()
-	for i, line := range lines {
-		if strings.Contains(line, "\n") {
-			t.Fatalf("expected startup menu line %d to stay single-line, got wrapped content", i)
-		}
-		plain := copyCodeANSIPattern.ReplaceAllString(line, "")
-		if !strings.Contains(plain, startupMenuItems[i].Key) {
-			t.Fatalf("expected menu line %d to contain key %q, got %q", i, startupMenuItems[i].Key, plain)
-		}
 	}
 }
 
@@ -247,6 +143,7 @@ func TestRenderWaterfallThinkingState(t *testing.T) {
 
 func TestRenderWaterfallShowsStartupScreenForEmptyDraft(t *testing.T) {
 	app, _ := newTestApp(t)
+	app.startupScreenLocked = true
 	app.state.ActivePicker = pickerNone
 	app.logViewerVisible = false
 	app.state.IsAgentRunning = false
@@ -265,6 +162,7 @@ func TestRenderWaterfallShowsStartupScreenForEmptyDraft(t *testing.T) {
 
 func TestRenderWaterfallKeepsStartupScreenWhileTypingUntilUnlocked(t *testing.T) {
 	app, _ := newTestApp(t)
+	app.startupScreenLocked = true
 	app.state.ActivePicker = pickerNone
 	app.activeMessages = nil
 	app.input.SetValue("hello")

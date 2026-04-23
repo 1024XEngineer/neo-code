@@ -145,7 +145,7 @@ var builtinSlashCommands = []slashCommand{
 }
 
 func newSelectionPicker(items []list.Item) list.Model {
-	delegate := pickerSelectionDelegate{}
+	delegate := newPickerSelectionDelegate()
 	picker := list.New(items, delegate, 0, 0)
 	picker.Title = ""
 	picker.SetShowHelp(false)

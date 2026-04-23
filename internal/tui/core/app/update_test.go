@@ -367,7 +367,7 @@ func newTestApp(t *testing.T) (App, *stubRuntime) {
 	}
 
 	app, runtime := newTestAppWithProviderService(t, stubProviderService{providers: providers, models: models})
-	app.startupVisible = false
+	app.startupScreenLocked = false
 	app.layoutCached = true
 	app.cachedWidth = app.width
 	app.cachedHeight = app.height
@@ -376,12 +376,12 @@ func newTestApp(t *testing.T) (App, *stubRuntime) {
 
 func TestStartupKeyEscFocusesInput(t *testing.T) {
 	app, _ := newTestApp(t)
-	app.startupVisible = true
+	app.startupScreenLocked = true
 
 	model, cmd := app.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	next := model.(App)
-	if next.startupVisible {
-		t.Fatalf("expected startup to be dismissed by Esc")
+	if !next.startupScreenLocked {
+		t.Fatalf("expected Esc to keep startup screen locked")
 	}
 	if next.focus != panelInput {
 		t.Fatalf("expected Esc to focus input panel from startup")
@@ -395,12 +395,12 @@ func TestStartupKeyEscFocusesInput(t *testing.T) {
 
 func TestStartupSlashTransitionsToComposer(t *testing.T) {
 	app, _ := newTestApp(t)
-	app.startupVisible = true
+	app.startupScreenLocked = true
 
 	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
 	next := model.(App)
-	if next.startupVisible {
-		t.Fatalf("expected startup to be dismissed")
+	if !next.startupScreenLocked {
+		t.Fatalf("expected startup to remain locked before first send")
 	}
 	if got := next.input.Value(); got != "/" {
 		t.Fatalf("expected composer input '/', got %q", got)
@@ -415,12 +415,12 @@ func TestStartupSlashTransitionsToComposer(t *testing.T) {
 
 func TestStartupRegularInputDismissesStartup(t *testing.T) {
 	app, _ := newTestApp(t)
-	app.startupVisible = true
+	app.startupScreenLocked = true
 
 	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}})
 	next := model.(App)
-	if next.startupVisible {
-		t.Fatalf("expected startup to be dismissed")
+	if !next.startupScreenLocked {
+		t.Fatalf("expected startup to remain locked before first send")
 	}
 	if got := next.input.Value(); got != "h" {
 		t.Fatalf("expected composer input to receive typed rune, got %q", got)
@@ -429,12 +429,12 @@ func TestStartupRegularInputDismissesStartup(t *testing.T) {
 
 func TestStartupCtrlONavigatesToWorkspaceBrowser(t *testing.T) {
 	app, _ := newTestApp(t)
-	app.startupVisible = true
+	app.startupScreenLocked = true
 
 	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyCtrlO})
 	next := model.(App)
-	if next.startupVisible {
-		t.Fatalf("expected startup to be dismissed")
+	if !next.startupScreenLocked {
+		t.Fatalf("expected opening workspace picker not to unlock startup")
 	}
 	if next.state.ActivePicker != pickerFile {
 		t.Fatalf("expected file picker active, got %v", next.state.ActivePicker)
@@ -443,15 +443,15 @@ func TestStartupCtrlONavigatesToWorkspaceBrowser(t *testing.T) {
 
 func TestStartupCtrlNStartsDraftSession(t *testing.T) {
 	app, _ := newTestApp(t)
-	app.startupVisible = true
+	app.startupScreenLocked = true
 	app.state.ActiveSessionID = "session-1"
 	app.state.ActiveSessionTitle = "Old Session"
 	app.input.SetValue("old content")
 
 	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyCtrlN})
 	next := model.(App)
-	if next.startupVisible {
-		t.Fatalf("expected startup to be dismissed")
+	if next.startupScreenLocked {
+		t.Fatalf("expected Ctrl+N to unlock startup")
 	}
 	if next.state.ActiveSessionID != "" {
 		t.Fatalf("expected draft session id to be empty")
@@ -461,32 +461,6 @@ func TestStartupCtrlNStartsDraftSession(t *testing.T) {
 	}
 	if got := next.input.Value(); got != "" {
 		t.Fatalf("expected composer reset, got %q", got)
-	}
-}
-
-func TestStartupTickAdvancesTypingAndPulse(t *testing.T) {
-	app, _ := newTestApp(t)
-	app.startupVisible = true
-	app.startupTypingIndex = 0
-	app.startupPulsePhase = 0
-
-	var model tea.Model = app
-	for i := 0; i < startupTypingStartDelayTicks; i++ {
-		next, cmd := model.(App).Update(tickMsg(time.Now()))
-		model = next
-		if cmd == nil {
-			t.Fatalf("expected recurring startup tick command at step %d", i)
-		}
-	}
-	final := model.(App)
-	if final.startupTick == 0 {
-		t.Fatalf("expected startup tick to advance")
-	}
-	if final.startupTypingIndex == 0 {
-		t.Fatalf("expected startup typing index to advance")
-	}
-	if final.startupPulsePhase == 0 {
-		t.Fatalf("expected startup pulse phase to advance")
 	}
 }
 

@@ -154,11 +154,6 @@ type appRuntimeState struct {
 	footerErrorText    string
 	footerErrorUntil   time.Time
 	deferredFooterTick tea.Cmd
-	startupVisible     bool
-	startupTick        int
-	startupTypingIndex int
-	startupCursorOn    bool
-	startupPulsePhase  float64
 }
 
 type pendingImageAttachment struct {
