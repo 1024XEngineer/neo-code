@@ -12,16 +12,16 @@ import (
 )
 
 const (
-	defaultRetrievalLimit = 20
-	maxRetrievalLimit     = 50
-	defaultContextLines   = 3
-	maxContextLines       = 8
-	maxSnippetLines       = 20
-	maxRetrievalFileBytes = 256 * 1024
-	binaryProbePrefixSize = 1024
+	defaultRetrievalLimit         = 20
+	maxRetrievalLimit             = 50
+	defaultContextLines           = 3
+	maxContextLines               = 8
+	maxSnippetLines               = 20
+	maxRepositorySnippetFileBytes = 256 * 1024
+	binaryProbePrefixSize         = 1024
 )
 
-var blockedSensitiveExtensions = map[string]struct{}{
+var blockedRepositorySnippetExtensions = map[string]struct{}{
 	".key": {},
 	".pem": {},
 	".p12": {},
@@ -41,7 +41,11 @@ func (s *Service) retrieveByPath(ctx context.Context, root string, query Retriev
 	if err != nil {
 		return nil, err
 	}
-	if !allowRetrievalReadByPath(target) {
+	allowed, gateErr := allowRepositorySnippetByPath(target)
+	if gateErr != nil {
+		return nil, gateErr
+	}
+	if !allowed {
 		return []RetrievalHit{}, nil
 	}
 	content, err := s.readFile(target)
@@ -276,7 +280,7 @@ func sortRetrievalHits(hits []RetrievalHit) {
 
 // readRetrievalText 读取并过滤检索候选文件，失败时按“无命中”处理。
 func (s *Service) readRetrievalText(path string, entry fs.DirEntry) (string, bool) {
-	if !allowRetrievalReadByEntry(path, entry) {
+	if !allowRepositorySnippetByEntry(path, entry) {
 		return "", false
 	}
 	content, err := s.readFile(path)
@@ -314,27 +318,33 @@ func readFile(path string) ([]byte, error) {
 	return os.ReadFile(path)
 }
 
-// allowRetrievalReadByPath 校验路径模式下目标文件是否允许读取。
-func allowRetrievalReadByPath(path string) bool {
+// allowRepositorySnippetByPath 基于路径检查文件是否允许进入 repository 片段。
+func allowRepositorySnippetByPath(path string) (bool, error) {
 	info, err := os.Stat(path)
-	if err != nil || info.IsDir() {
-		return false
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, err
 	}
-	return allowRetrievalByNameAndSize(filepath.Base(path), info.Size())
+	if info.IsDir() {
+		return false, nil
+	}
+	return allowRepositorySnippetByNameAndSize(filepath.Base(path), info.Size()), nil
 }
 
-// allowRetrievalReadByEntry 校验遍历模式下命中文件是否允许读取。
-func allowRetrievalReadByEntry(path string, entry fs.DirEntry) bool {
+// allowRepositorySnippetByEntry 基于遍历条目检查文件是否允许进入 repository 片段。
+func allowRepositorySnippetByEntry(path string, entry fs.DirEntry) bool {
 	info, err := entry.Info()
 	if err != nil || info.IsDir() {
 		return false
 	}
-	return allowRetrievalByNameAndSize(filepath.Base(path), info.Size())
+	return allowRepositorySnippetByNameAndSize(filepath.Base(path), info.Size())
 }
 
-// allowRetrievalByNameAndSize 基于文件名和大小过滤敏感文件与高成本文件。
-func allowRetrievalByNameAndSize(name string, size int64) bool {
-	if size < 0 || size > maxRetrievalFileBytes {
+// allowRepositorySnippetByNameAndSize 基于名称与大小过滤敏感文件和高成本文件。
+func allowRepositorySnippetByNameAndSize(name string, size int64) bool {
+	if size < 0 || size > maxRepositorySnippetFileBytes {
 		return false
 	}
 	lowerName := strings.ToLower(strings.TrimSpace(name))
@@ -344,7 +354,7 @@ func allowRetrievalByNameAndSize(name string, size int64) bool {
 	if lowerName == ".env" || strings.HasPrefix(lowerName, ".env.") {
 		return false
 	}
-	if _, blocked := blockedSensitiveExtensions[filepath.Ext(lowerName)]; blocked {
+	if _, blocked := blockedRepositorySnippetExtensions[filepath.Ext(lowerName)]; blocked {
 		return false
 	}
 	return true

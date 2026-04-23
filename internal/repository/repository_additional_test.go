@@ -38,7 +38,7 @@ func TestLoadGitSnapshotGuardsAndErrorFallbacks(t *testing.T) {
 		}
 	})
 
-	t.Run("non git and generic error fallback to empty", func(t *testing.T) {
+	t.Run("non git returns empty and generic error bubbles up", func(t *testing.T) {
 		t.Parallel()
 
 		service := &Service{
@@ -57,12 +57,9 @@ func TestLoadGitSnapshotGuardsAndErrorFallbacks(t *testing.T) {
 		service.gitRunner = func(ctx context.Context, workdir string, args ...string) (string, error) {
 			return "", errors.New("boom")
 		}
-		snapshot, err = service.loadGitSnapshot(context.Background(), t.TempDir())
-		if err != nil {
-			t.Fatalf("loadGitSnapshot(generic err) err = %v", err)
-		}
-		if snapshot.InGitRepo || len(snapshot.Entries) != 0 {
-			t.Fatalf("expected empty snapshot, got %+v", snapshot)
+		_, err = service.loadGitSnapshot(context.Background(), t.TempDir())
+		if err == nil {
+			t.Fatalf("expected generic git error to bubble up")
 		}
 	})
 
@@ -85,8 +82,11 @@ func TestChangedFileSnippetBranches(t *testing.T) {
 	t.Parallel()
 
 	workdir := t.TempDir()
+	mustWriteFile(t, filepath.Join(workdir, "pkg", "modified.go"), "package pkg\n\nfunc New(){}\n")
+	mustWriteFile(t, filepath.Join(workdir, "pkg", "renamed.go"), "package pkg\n\nfunc Renamed(){}\n")
 	mustWriteFile(t, filepath.Join(workdir, "pkg", "added.go"), "package pkg\n\nfunc Added() {}\n")
 	mustWriteFile(t, filepath.Join(workdir, "pkg", "untracked.go"), "package pkg\n\nfunc NewFile() {}\n")
+	mustWriteFile(t, filepath.Join(workdir, "pkg", "error.go"), "package pkg\n\nfunc Error(){}\n")
 
 	service := &Service{
 		gitRunner: func(ctx context.Context, dir string, args ...string) (string, error) {
@@ -157,14 +157,16 @@ func TestSnippetReadersAndParsers(t *testing.T) {
 				return "", errors.New("ignored")
 			},
 		}
-		if snippet, err := service.readDiffSnippet(context.Background(), "", "a.go"); err != nil || snippet != (snippetResult{}) {
-			t.Fatalf("readDiffSnippet(non-context err) = (%+v, %v)", snippet, err)
+		workdir := t.TempDir()
+		mustWriteFile(t, filepath.Join(workdir, "a.go"), "package main\n")
+		if _, err := service.readDiffSnippet(context.Background(), workdir, "a.go"); err == nil {
+			t.Fatalf("expected readDiffSnippet non-context error to bubble up")
 		}
 
 		service.gitRunner = func(ctx context.Context, workdir string, args ...string) (string, error) {
 			return "", context.DeadlineExceeded
 		}
-		_, err := service.readDiffSnippet(context.Background(), "", "a.go")
+		_, err := service.readDiffSnippet(context.Background(), workdir, "a.go")
 		if !errors.Is(err, context.DeadlineExceeded) {
 			t.Fatalf("readDiffSnippet() err = %v, want deadline exceeded", err)
 		}
@@ -186,12 +188,10 @@ func TestSnippetReadersAndParsers(t *testing.T) {
 		service.readFile = func(path string) ([]byte, error) {
 			return nil, errors.New("read failed")
 		}
-		snippet, err := service.readFileHeadSnippet(workdir, "missing.txt")
-		if err != nil {
-			t.Fatalf("readFileHeadSnippet() err = %v", err)
-		}
-		if snippet != (snippetResult{}) {
-			t.Fatalf("expected empty snippet on read error, got %+v", snippet)
+		mustWriteFile(t, filepath.Join(workdir, "existing.txt"), "ok")
+		_, err = service.readFileHeadSnippet(workdir, "existing.txt")
+		if err == nil {
+			t.Fatalf("expected readFileHeadSnippet to return read error")
 		}
 	})
 }
@@ -506,6 +506,7 @@ func TestRetrieveAndServiceEdgeCases(t *testing.T) {
 			},
 			readFile: readFile,
 		}
+		mustWriteFile(t, filepath.Join(workdir, "pkg", "new.go"), "package pkg\n\nfunc New(){}\n")
 		_, err = serviceWithCancelledDiff.ChangedFiles(context.Background(), workdir, ChangedFilesOptions{IncludeSnippets: true})
 		if !errors.Is(err, context.DeadlineExceeded) {
 			t.Fatalf("ChangedFiles() err = %v, want deadline exceeded", err)

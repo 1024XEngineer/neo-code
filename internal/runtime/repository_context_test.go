@@ -13,25 +13,19 @@ import (
 )
 
 type stubRepositoryFactService struct {
-	summaryFn          func(ctx context.Context, workdir string) (repository.Summary, error)
 	changedFilesFn     func(ctx context.Context, workdir string, opts repository.ChangedFilesOptions) (repository.ChangedFilesContext, error)
 	retrieveFn         func(ctx context.Context, workdir string, query repository.RetrievalQuery) ([]repository.RetrievalHit, error)
-	summaryCalls       int
 	changedFilesCalls  int
 	retrieveCalls      int
 	lastChangedOptions repository.ChangedFilesOptions
 	lastRetrieveQuery  repository.RetrievalQuery
 }
 
-func (s *stubRepositoryFactService) Summary(ctx context.Context, workdir string) (repository.Summary, error) {
-	s.summaryCalls++
-	if s.summaryFn != nil {
-		return s.summaryFn(ctx, workdir)
-	}
-	return repository.Summary{}, nil
-}
-
-func (s *stubRepositoryFactService) ChangedFiles(ctx context.Context, workdir string, opts repository.ChangedFilesOptions) (repository.ChangedFilesContext, error) {
+func (s *stubRepositoryFactService) ChangedFiles(
+	ctx context.Context,
+	workdir string,
+	opts repository.ChangedFilesOptions,
+) (repository.ChangedFilesContext, error) {
 	s.changedFilesCalls++
 	s.lastChangedOptions = opts
 	if s.changedFilesFn != nil {
@@ -40,7 +34,11 @@ func (s *stubRepositoryFactService) ChangedFiles(ctx context.Context, workdir st
 	return repository.ChangedFilesContext{}, nil
 }
 
-func (s *stubRepositoryFactService) Retrieve(ctx context.Context, workdir string, query repository.RetrievalQuery) ([]repository.RetrievalHit, error) {
+func (s *stubRepositoryFactService) Retrieve(
+	ctx context.Context,
+	workdir string,
+	query repository.RetrievalQuery,
+) ([]repository.RetrievalHit, error) {
 	s.retrieveCalls++
 	s.lastRetrieveQuery = query
 	if s.retrieveFn != nil {
@@ -64,7 +62,7 @@ func TestBuildRepositoryContextSkipsWithoutAnchors(t *testing.T) {
 
 	repoService := &stubRepositoryFactService{}
 	state := newRepositoryTestState(t.TempDir(), "解释一下 runtime 架构")
-	service := &Service{repositoryService: repoService}
+	service := &Service{repositoryService: repoService, events: make(chan RuntimeEvent, 8)}
 
 	repoContext, err := service.buildRepositoryContext(context.Background(), &state, state.session.Workdir)
 	if err != nil {
@@ -73,8 +71,8 @@ func TestBuildRepositoryContextSkipsWithoutAnchors(t *testing.T) {
 	if repoContext.ChangedFiles != nil || repoContext.Retrieval != nil {
 		t.Fatalf("expected empty repository context, got %+v", repoContext)
 	}
-	if repoService.summaryCalls != 0 || repoService.changedFilesCalls != 0 || repoService.retrieveCalls != 0 {
-		t.Fatalf("expected no repository calls, got summary=%d changed=%d retrieve=%d", repoService.summaryCalls, repoService.changedFilesCalls, repoService.retrieveCalls)
+	if repoService.changedFilesCalls != 0 || repoService.retrieveCalls != 0 {
+		t.Fatalf("expected no repository calls, got changed=%d retrieve=%d", repoService.changedFilesCalls, repoService.retrieveCalls)
 	}
 }
 
@@ -82,9 +80,6 @@ func TestBuildRepositoryContextUsesChangedFilesForCurrentDiffRequest(t *testing.
 	t.Parallel()
 
 	repoService := &stubRepositoryFactService{
-		summaryFn: func(ctx context.Context, workdir string) (repository.Summary, error) {
-			return repository.Summary{InGitRepo: true, Dirty: true, ChangedFileCount: 3}, nil
-		},
 		changedFilesFn: func(ctx context.Context, workdir string, opts repository.ChangedFilesOptions) (repository.ChangedFilesContext, error) {
 			return repository.ChangedFilesContext{
 				Files: []repository.ChangedFile{
@@ -96,7 +91,7 @@ func TestBuildRepositoryContextUsesChangedFilesForCurrentDiffRequest(t *testing.
 		},
 	}
 	state := newRepositoryTestState(t.TempDir(), "review 我的改动并解释当前 diff")
-	service := &Service{repositoryService: repoService}
+	service := &Service{repositoryService: repoService, events: make(chan RuntimeEvent, 8)}
 
 	repoContext, err := service.buildRepositoryContext(context.Background(), &state, state.session.Workdir)
 	if err != nil {
@@ -105,8 +100,69 @@ func TestBuildRepositoryContextUsesChangedFilesForCurrentDiffRequest(t *testing.
 	if repoContext.ChangedFiles == nil || len(repoContext.ChangedFiles.Files) != 1 {
 		t.Fatalf("expected changed files context, got %+v", repoContext.ChangedFiles)
 	}
-	if !repoService.lastChangedOptions.IncludeSnippets || repoService.lastChangedOptions.Limit != defaultAutoChangedFilesWithDiff {
-		t.Fatalf("unexpected changed files options: %+v", repoService.lastChangedOptions)
+	if repoService.changedFilesCalls != 1 {
+		t.Fatalf("expected a single changed-files scan, got %d", repoService.changedFilesCalls)
+	}
+	if !repoService.lastChangedOptions.IncludeSnippets {
+		t.Fatalf("expected snippets to be enabled, got %+v", repoService.lastChangedOptions)
+	}
+	if repoService.lastChangedOptions.Limit != defaultAutoChangedFilesWithDiff {
+		t.Fatalf("expected changed-files limit %d, got %+v", defaultAutoChangedFilesWithDiff, repoService.lastChangedOptions)
+	}
+	if repoService.lastChangedOptions.SnippetFileCountLimit != maxAutoSnippetChangedFilesCount {
+		t.Fatalf("expected snippet file count limit %d, got %+v", maxAutoSnippetChangedFilesCount, repoService.lastChangedOptions)
+	}
+}
+
+func TestBuildRepositoryContextSkipsImplicitLargeChangedSet(t *testing.T) {
+	t.Parallel()
+
+	repoService := &stubRepositoryFactService{
+		changedFilesFn: func(ctx context.Context, workdir string, opts repository.ChangedFilesOptions) (repository.ChangedFilesContext, error) {
+			return repository.ChangedFilesContext{
+				Files:         []repository.ChangedFile{{Path: "internal/runtime/run.go", Status: repository.StatusModified}},
+				ReturnedCount: 1,
+				TotalCount:    maxAutoChangedFilesCount + 1,
+			}, nil
+		},
+	}
+	state := newRepositoryTestState(t.TempDir(), "fix 这个 bug")
+	service := &Service{repositoryService: repoService, events: make(chan RuntimeEvent, 8)}
+
+	repoContext, err := service.buildRepositoryContext(context.Background(), &state, state.session.Workdir)
+	if err != nil {
+		t.Fatalf("buildRepositoryContext() error = %v", err)
+	}
+	if repoContext.ChangedFiles != nil {
+		t.Fatalf("expected implicit large changed set to be skipped, got %+v", repoContext.ChangedFiles)
+	}
+	if repoService.changedFilesCalls != 1 {
+		t.Fatalf("expected a single changed-files call, got %d", repoService.changedFilesCalls)
+	}
+}
+
+func TestBuildRepositoryContextInjectsExplicitLargeChangedSet(t *testing.T) {
+	t.Parallel()
+
+	repoService := &stubRepositoryFactService{
+		changedFilesFn: func(ctx context.Context, workdir string, opts repository.ChangedFilesOptions) (repository.ChangedFilesContext, error) {
+			return repository.ChangedFilesContext{
+				Files:         []repository.ChangedFile{{Path: "internal/runtime/run.go", Status: repository.StatusModified}},
+				ReturnedCount: 1,
+				TotalCount:    maxAutoChangedFilesCount + 5,
+				Truncated:     true,
+			}, nil
+		},
+	}
+	state := newRepositoryTestState(t.TempDir(), "review 我的改动")
+	service := &Service{repositoryService: repoService, events: make(chan RuntimeEvent, 8)}
+
+	repoContext, err := service.buildRepositoryContext(context.Background(), &state, state.session.Workdir)
+	if err != nil {
+		t.Fatalf("buildRepositoryContext() error = %v", err)
+	}
+	if repoContext.ChangedFiles == nil || repoContext.ChangedFiles.TotalCount <= maxAutoChangedFilesCount {
+		t.Fatalf("expected explicit changed-files intent to keep truncated large set, got %+v", repoContext.ChangedFiles)
 	}
 }
 
@@ -125,7 +181,7 @@ func TestBuildRepositoryContextUsesPathRetrievalWithHighestPriority(t *testing.T
 		},
 	}
 	state := newRepositoryTestState(t.TempDir(), "看看 internal/runtime/run.go 里 ExecuteSystemTool 是怎么处理的")
-	service := &Service{repositoryService: repoService}
+	service := &Service{repositoryService: repoService, events: make(chan RuntimeEvent, 8)}
 
 	repoContext, err := service.buildRepositoryContext(context.Background(), &state, state.session.Workdir)
 	if err != nil {
@@ -149,7 +205,7 @@ func TestBuildRepositoryContextUsesSymbolAndTextRetrievalAnchors(t *testing.T) {
 			},
 		}
 		state := newRepositoryTestState(t.TempDir(), "ExecuteSystemTool 在哪定义，帮我解释一下")
-		service := &Service{repositoryService: repoService}
+		service := &Service{repositoryService: repoService, events: make(chan RuntimeEvent, 8)}
 
 		repoContext, err := service.buildRepositoryContext(context.Background(), &state, state.session.Workdir)
 		if err != nil {
@@ -167,7 +223,7 @@ func TestBuildRepositoryContextUsesSymbolAndTextRetrievalAnchors(t *testing.T) {
 			},
 		}
 		state := newRepositoryTestState(t.TempDir(), "找 `permission_requested` 在哪里处理")
-		service := &Service{repositoryService: repoService}
+		service := &Service{repositoryService: repoService, events: make(chan RuntimeEvent, 8)}
 
 		repoContext, err := service.buildRepositoryContext(context.Background(), &state, state.session.Workdir)
 		if err != nil {
@@ -200,6 +256,7 @@ func TestPrepareTurnBudgetSnapshotPassesRepositoryContextToBuilder(t *testing.T)
 		toolManager:       tools.NewRegistry(),
 		repositoryService: repoService,
 		providerFactory:   &scriptedProviderFactory{provider: &scriptedProvider{}},
+		events:            make(chan RuntimeEvent, 8),
 	}
 	state := newRepositoryTestState(t.TempDir(), "请 review 当前改动")
 
@@ -213,25 +270,82 @@ func TestPrepareTurnBudgetSnapshotPassesRepositoryContextToBuilder(t *testing.T)
 	}
 }
 
-func TestBuildRepositoryContextSwallowsNonFatalRepositoryErrors(t *testing.T) {
+func TestBuildRepositoryContextEmitsUnavailableEventForChangedFilesFailure(t *testing.T) {
 	t.Parallel()
 
 	repoService := &stubRepositoryFactService{
 		changedFilesFn: func(ctx context.Context, workdir string, opts repository.ChangedFilesOptions) (repository.ChangedFilesContext, error) {
 			return repository.ChangedFilesContext{}, errors.New("git unavailable")
 		},
-		retrieveFn: func(ctx context.Context, workdir string, query repository.RetrievalQuery) ([]repository.RetrievalHit, error) {
-			return nil, errors.New("read failed")
-		},
 	}
-	state := newRepositoryTestState(t.TempDir(), "review 当前改动，并找 `permission_requested`")
-	service := &Service{repositoryService: repoService}
+	service := &Service{
+		repositoryService: repoService,
+		events:            make(chan RuntimeEvent, 8),
+	}
+	state := newRepositoryTestState(t.TempDir(), "review 我的改动")
 
 	repoContext, err := service.buildRepositoryContext(context.Background(), &state, state.session.Workdir)
 	if err != nil {
 		t.Fatalf("buildRepositoryContext() error = %v", err)
 	}
 	if repoContext != (agentcontext.RepositoryContext{}) {
-		t.Fatalf("expected empty repository context on non-fatal failures, got %+v", repoContext)
+		t.Fatalf("expected empty repository context on failure, got %+v", repoContext)
 	}
+
+	events := collectRuntimeEvents(service.Events())
+	assertEventContains(t, events, EventRepositoryContextUnavailable)
+	for _, event := range events {
+		if event.Type != EventRepositoryContextUnavailable {
+			continue
+		}
+		payload, ok := event.Payload.(RepositoryContextUnavailablePayload)
+		if !ok {
+			t.Fatalf("payload type = %T, want RepositoryContextUnavailablePayload", event.Payload)
+		}
+		if payload.Stage != "changed_files" || payload.Mode != "" || payload.Reason == "" {
+			t.Fatalf("unexpected payload: %+v", payload)
+		}
+		return
+	}
+	t.Fatalf("expected repository unavailable event payload")
+}
+
+func TestBuildRepositoryContextEmitsUnavailableEventForRetrievalFailure(t *testing.T) {
+	t.Parallel()
+
+	repoService := &stubRepositoryFactService{
+		retrieveFn: func(ctx context.Context, workdir string, query repository.RetrievalQuery) ([]repository.RetrievalHit, error) {
+			return nil, errors.New("read failed")
+		},
+	}
+	service := &Service{
+		repositoryService: repoService,
+		events:            make(chan RuntimeEvent, 8),
+	}
+	state := newRepositoryTestState(t.TempDir(), "找 `permission_requested` 在哪里处理")
+
+	repoContext, err := service.buildRepositoryContext(context.Background(), &state, state.session.Workdir)
+	if err != nil {
+		t.Fatalf("buildRepositoryContext() error = %v", err)
+	}
+	if repoContext != (agentcontext.RepositoryContext{}) {
+		t.Fatalf("expected empty repository context on retrieval failure, got %+v", repoContext)
+	}
+
+	events := collectRuntimeEvents(service.Events())
+	assertEventContains(t, events, EventRepositoryContextUnavailable)
+	for _, event := range events {
+		if event.Type != EventRepositoryContextUnavailable {
+			continue
+		}
+		payload, ok := event.Payload.(RepositoryContextUnavailablePayload)
+		if !ok {
+			t.Fatalf("payload type = %T, want RepositoryContextUnavailablePayload", event.Payload)
+		}
+		if payload.Stage != "retrieval" || payload.Mode != "text" || payload.Reason == "" {
+			t.Fatalf("unexpected payload: %+v", payload)
+		}
+		return
+	}
+	t.Fatalf("expected repository unavailable event payload")
 }

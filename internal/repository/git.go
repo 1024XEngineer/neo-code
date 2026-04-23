@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"errors"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
@@ -52,7 +53,7 @@ func (s *Service) loadGitSnapshot(ctx context.Context, workdir string) (gitSnaps
 		if isNotGitRepository(output, err) {
 			return gitSnapshot{}, nil
 		}
-		return gitSnapshot{}, nil
+		return gitSnapshot{}, err
 	}
 
 	return parseGitSnapshot(output), nil
@@ -86,12 +87,23 @@ func (s *Service) readDiffSnippet(ctx context.Context, workdir string, path stri
 	if s == nil || s.gitRunner == nil {
 		return snippetResult{}, nil
 	}
+	_, target, err := resolveWorkspacePath(workdir, path)
+	if err != nil {
+		return snippetResult{}, err
+	}
+	allowed, err := allowRepositorySnippetByPath(target)
+	if err != nil {
+		return snippetResult{}, err
+	}
+	if !allowed {
+		return snippetResult{}, nil
+	}
 	output, err := s.gitRunner(ctx, workdir, "diff", "--unified=3", "HEAD", "--", filepath.ToSlash(path))
 	if err != nil {
 		if isContextError(err) {
 			return snippetResult{}, err
 		}
-		return snippetResult{}, nil
+		return snippetResult{}, err
 	}
 	return trimSnippetText(output, maxChangedSnippetLinesPerFile), nil
 }
@@ -105,8 +117,21 @@ func (s *Service) readFileHeadSnippet(workdir string, relativePath string) (snip
 	if err != nil {
 		return snippetResult{}, err
 	}
+	allowed, err := allowRepositorySnippetByPath(target)
+	if err != nil {
+		return snippetResult{}, err
+	}
+	if !allowed {
+		return snippetResult{}, nil
+	}
 	content, err := s.readFile(target)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return snippetResult{}, nil
+		}
+		return snippetResult{}, err
+	}
+	if isBinaryContent(content) {
 		return snippetResult{}, nil
 	}
 	return trimSnippetText(string(content), maxChangedSnippetLinesPerFile), nil

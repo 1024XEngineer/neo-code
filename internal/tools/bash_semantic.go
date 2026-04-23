@@ -34,6 +34,9 @@ var gitReadOnlySubcommands = map[string]struct{}{
 	"status":    {},
 	"rev-parse": {},
 	"describe":  {},
+	"diff":      {},
+	"log":       {},
+	"show":      {},
 }
 
 var gitRemoteSubcommands = map[string]struct{}{

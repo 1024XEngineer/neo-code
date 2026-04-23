@@ -52,17 +52,21 @@ func (s *Service) buildRepositoryContext(ctx context.Context, state *runState, a
 		if isRepositoryContextFatalError(err) {
 			return agentcontext.RepositoryContext{}, err
 		}
+		s.emitRepositoryContextUnavailable(ctx, state, "changed_files", "", err)
 	} else {
 		repoContext.ChangedFiles = changedFiles
 	}
 
-	retrieval, err := s.maybeBuildRetrievalContext(ctx, repoService, activeWorkdir, latestUserText)
-	if err != nil {
-		if isRepositoryContextFatalError(err) {
-			return agentcontext.RepositoryContext{}, err
+	if query, ok := autoRetrievalQueryFromUserText(latestUserText); ok {
+		retrieval, retrievalErr := s.buildRetrievalContextForQuery(ctx, repoService, activeWorkdir, query)
+		if retrievalErr != nil {
+			if isRepositoryContextFatalError(retrievalErr) {
+				return agentcontext.RepositoryContext{}, retrievalErr
+			}
+			s.emitRepositoryContextUnavailable(ctx, state, "retrieval", string(query.Mode), retrievalErr)
+		} else {
+			repoContext.Retrieval = retrieval
 		}
-	} else {
-		repoContext.Retrieval = retrieval
 	}
 
 	return repoContext, nil
@@ -84,28 +88,9 @@ func (s *Service) maybeBuildChangedFilesContext(
 	userText string,
 ) (*agentcontext.RepositoryChangedFilesSection, error) {
 	explicitChangedFilesIntent := shouldAutoInjectChangedFiles(userText)
-	needsSummaryGate := !explicitChangedFilesIntent || shouldAutoIncludeChangedFileSnippets(userText)
-	includeSnippets := false
+	includeSnippets := shouldAutoIncludeChangedFileSnippets(userText)
 	if !explicitChangedFilesIntent && !mentionsFixOrReviewIntent(userText) {
 		return nil, nil
-	}
-
-	if needsSummaryGate {
-		summary, err := repoService.Summary(ctx, workdir)
-		if err != nil {
-			return nil, err
-		}
-		if !explicitChangedFilesIntent {
-			if !summary.InGitRepo || !summary.Dirty || summary.ChangedFileCount > maxAutoChangedFilesCount {
-				return nil, nil
-			}
-		}
-		includeSnippets = shouldAutoIncludeChangedFileSnippets(userText) &&
-			summary.InGitRepo &&
-			summary.ChangedFileCount > 0 &&
-			summary.ChangedFileCount <= maxAutoSnippetChangedFilesCount
-	} else if shouldAutoIncludeChangedFileSnippets(userText) {
-		includeSnippets = false
 	}
 
 	limit := defaultAutoChangedFilesLimit
@@ -113,13 +98,17 @@ func (s *Service) maybeBuildChangedFilesContext(
 		limit = defaultAutoChangedFilesWithDiff
 	}
 	changed, err := repoService.ChangedFiles(ctx, workdir, repository.ChangedFilesOptions{
-		Limit:           limit,
-		IncludeSnippets: includeSnippets,
+		Limit:                 limit,
+		IncludeSnippets:       includeSnippets,
+		SnippetFileCountLimit: maxAutoSnippetChangedFilesCount,
 	})
 	if err != nil {
 		return nil, err
 	}
 	if len(changed.Files) == 0 {
+		return nil, nil
+	}
+	if !explicitChangedFilesIntent && (changed.TotalCount <= 0 || changed.TotalCount > maxAutoChangedFilesCount) {
 		return nil, nil
 	}
 	return &agentcontext.RepositoryChangedFilesSection{
@@ -130,18 +119,13 @@ func (s *Service) maybeBuildChangedFilesContext(
 	}, nil
 }
 
-// maybeBuildRetrievalContext 只在用户文本包含明确路径/符号/关键字锚点时执行一次定向检索。
-func (s *Service) maybeBuildRetrievalContext(
+// buildRetrievalContextForQuery 基于已解析出的显式锚点执行单次定向检索并投影为 context 结构。
+func (s *Service) buildRetrievalContextForQuery(
 	ctx context.Context,
 	repoService repositoryFactService,
 	workdir string,
-	userText string,
+	query repository.RetrievalQuery,
 ) (*agentcontext.RepositoryRetrievalSection, error) {
-	query, ok := autoRetrievalQueryFromUserText(userText)
-	if !ok {
-		return nil, nil
-	}
-
 	hits, err := repoService.Retrieve(ctx, workdir, query)
 	if err != nil {
 		return nil, err
@@ -156,6 +140,24 @@ func (s *Service) maybeBuildRetrievalContext(
 		Mode:      string(query.Mode),
 		Query:     query.Value,
 	}, nil
+}
+
+// emitRepositoryContextUnavailable 记录 repository 事实获取失败但已降级为空上下文的可观测事件。
+func (s *Service) emitRepositoryContextUnavailable(
+	ctx context.Context,
+	state *runState,
+	stage string,
+	mode string,
+	err error,
+) {
+	if s == nil || s.events == nil || err == nil {
+		return
+	}
+	_ = s.emitRunScoped(ctx, EventRepositoryContextUnavailable, state, RepositoryContextUnavailablePayload{
+		Stage:  strings.TrimSpace(stage),
+		Mode:   strings.TrimSpace(mode),
+		Reason: strings.TrimSpace(err.Error()),
+	})
 }
 
 // latestUserText 提取最近一条用户消息中的纯文本内容，用于轻量触发判断。

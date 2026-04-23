@@ -54,6 +54,9 @@ var hardenedGitReadOnlySubcommands = map[string]struct{}{
 	"status":    {},
 	"rev-parse": {},
 	"describe":  {},
+	"diff":      {},
+	"log":       {},
+	"show":      {},
 }
 
 // NewDefaultSecurityExecutor returns the default secure bash executor.

@@ -37,8 +37,9 @@ type Summary struct {
 
 // ChangedFilesOptions 控制变更上下文的输出上限与片段策略。
 type ChangedFilesOptions struct {
-	Limit           int
-	IncludeSnippets bool
+	Limit                 int
+	IncludeSnippets       bool
+	SnippetFileCountLimit int
 }
 
 // ChangedFilesContext 表示围绕当前变更集裁剪后的结构化上下文。
@@ -135,6 +136,10 @@ func (s *Service) ChangedFiles(ctx context.Context, workdir string, opts Changed
 	}
 
 	limit := normalizeLimit(opts.Limit, defaultChangedFilesLimit, maxChangedFilesLimit)
+	includeSnippets := opts.IncludeSnippets
+	if includeSnippets && opts.SnippetFileCountLimit > 0 && len(snapshot.Entries) > opts.SnippetFileCountLimit {
+		includeSnippets = false
+	}
 	entries := snapshot.Entries
 	truncated := false
 	if len(entries) > limit {
@@ -150,7 +155,7 @@ func (s *Service) ChangedFiles(ctx context.Context, workdir string, opts Changed
 			OldPath: entry.OldPath,
 			Status:  entry.Status,
 		}
-		if opts.IncludeSnippets {
+		if includeSnippets {
 			snippet, snippetErr := s.changedFileSnippet(ctx, workdir, entry)
 			if snippetErr != nil {
 				return ChangedFilesContext{}, snippetErr

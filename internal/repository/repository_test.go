@@ -73,10 +73,16 @@ func TestChangedFilesRespectsStatusNormalizationAndSnippetRules(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(workdir, "pkg"), 0o755); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
 	}
+	if err := os.WriteFile(filepath.Join(workdir, "pkg", "changed.go"), []byte("package pkg\n\nfunc Changed() {}\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
 	if err := os.WriteFile(filepath.Join(workdir, "pkg", "new.go"), []byte("package pkg\n\nfunc Added() {}\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(workdir, "pkg", "untracked.go"), []byte("package pkg\n\nfunc Untracked() {}\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workdir, "pkg", "renamed.go"), []byte("package pkg\n\nfunc Renamed() {}\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 
@@ -146,6 +152,8 @@ func TestChangedFilesAppliesLimitAndTruncation(t *testing.T) {
 func TestChangedFilesMarksTruncatedWhenSingleSnippetExceedsLineLimit(t *testing.T) {
 	t.Parallel()
 
+	workdir := t.TempDir()
+	mustWriteFile(t, filepath.Join(workdir, "pkg", "long.go"), "package pkg\n")
 	service := newTestService(func(ctx context.Context, workdir string, args ...string) (string, error) {
 		switch strings.Join(args, " ") {
 		case "status --porcelain=v1 --branch --untracked-files=normal":
@@ -161,7 +169,7 @@ func TestChangedFilesMarksTruncatedWhenSingleSnippetExceedsLineLimit(t *testing.
 		}
 	})
 
-	result, err := service.ChangedFiles(context.Background(), t.TempDir(), ChangedFilesOptions{
+	result, err := service.ChangedFiles(context.Background(), workdir, ChangedFilesOptions{
 		IncludeSnippets: true,
 	})
 	if err != nil {
@@ -212,6 +220,124 @@ func TestChangedFilesMarksTruncatedWhenTotalSnippetBudgetExceeded(t *testing.T) 
 	last := result.Files[len(result.Files)-1]
 	if last.Snippet != "" {
 		t.Fatalf("expected last snippet to be dropped after total budget is exhausted, got %q", last.Snippet)
+	}
+}
+
+func TestChangedFilesBlocksSensitiveLargeAndBinarySnippets(t *testing.T) {
+	t.Parallel()
+
+	workdir := t.TempDir()
+	mustWriteFile(t, filepath.Join(workdir, ".env"), "API_KEY=secret\n")
+	mustWriteFile(t, filepath.Join(workdir, "pkg", "cert.pem"), "-----BEGIN PRIVATE KEY-----\nsecret\n")
+	mustWriteFile(t, filepath.Join(workdir, "pkg", "bin.dat"), string([]byte{0x00, 0x01, 0x02}))
+	mustWriteFile(t, filepath.Join(workdir, "pkg", "large.txt"), strings.Repeat("x", maxRepositorySnippetFileBytes+1))
+
+	service := newTestService(func(ctx context.Context, dir string, args ...string) (string, error) {
+		if strings.Join(args, " ") == "status --porcelain=v1 --branch --untracked-files=normal" {
+			return strings.Join([]string{
+				"## main",
+				"?? .env",
+				"?? pkg/cert.pem",
+				"?? pkg/bin.dat",
+				"?? pkg/large.txt",
+			}, "\n"), nil
+		}
+		return "", nil
+	})
+
+	result, err := service.ChangedFiles(context.Background(), workdir, ChangedFilesOptions{
+		IncludeSnippets: true,
+	})
+	if err != nil {
+		t.Fatalf("ChangedFiles() error = %v", err)
+	}
+	for _, file := range result.Files {
+		if file.Snippet != "" {
+			t.Fatalf("expected filtered file to have empty snippet, got %+v", file)
+		}
+	}
+}
+
+func TestChangedFilesBlocksModifiedSensitiveDiffSnippet(t *testing.T) {
+	t.Parallel()
+
+	workdir := t.TempDir()
+	mustWriteFile(t, filepath.Join(workdir, ".env"), "API_KEY=secret\n")
+
+	service := newTestService(func(ctx context.Context, dir string, args ...string) (string, error) {
+		switch strings.Join(args, " ") {
+		case "status --porcelain=v1 --branch --untracked-files=normal":
+			return "## main\n M .env\n", nil
+		case "diff --unified=3 HEAD -- .env":
+			return "@@ -1,1 +1,1 @@\n-API_KEY=old\n+API_KEY=new\n", nil
+		default:
+			return "", nil
+		}
+	})
+
+	result, err := service.ChangedFiles(context.Background(), workdir, ChangedFilesOptions{
+		IncludeSnippets: true,
+	})
+	if err != nil {
+		t.Fatalf("ChangedFiles() error = %v", err)
+	}
+	if len(result.Files) != 1 {
+		t.Fatalf("expected single changed file, got %+v", result.Files)
+	}
+	if result.Files[0].Snippet != "" {
+		t.Fatalf("expected sensitive modified file to have empty snippet, got %+v", result.Files[0])
+	}
+}
+
+func TestChangedFilesRespectsSnippetFileCountLimit(t *testing.T) {
+	t.Parallel()
+
+	workdir := t.TempDir()
+	mustWriteFile(t, filepath.Join(workdir, "pkg", "one.go"), "package pkg\n\nfunc One() {}\n")
+	mustWriteFile(t, filepath.Join(workdir, "pkg", "two.go"), "package pkg\n\nfunc Two() {}\n")
+
+	service := newTestService(func(ctx context.Context, dir string, args ...string) (string, error) {
+		switch strings.Join(args, " ") {
+		case "status --porcelain=v1 --branch --untracked-files=normal":
+			return "## main\n?? pkg/one.go\n?? pkg/two.go\n", nil
+		default:
+			return "", nil
+		}
+	})
+
+	allowed, err := service.ChangedFiles(context.Background(), workdir, ChangedFilesOptions{
+		IncludeSnippets:       true,
+		SnippetFileCountLimit: 2,
+	})
+	if err != nil {
+		t.Fatalf("ChangedFiles() allow error = %v", err)
+	}
+	if allowed.Files[0].Snippet == "" || allowed.Files[1].Snippet == "" {
+		t.Fatalf("expected snippets when total count does not exceed limit, got %+v", allowed.Files)
+	}
+
+	blocked, err := service.ChangedFiles(context.Background(), workdir, ChangedFilesOptions{
+		IncludeSnippets:       true,
+		SnippetFileCountLimit: 1,
+	})
+	if err != nil {
+		t.Fatalf("ChangedFiles() block error = %v", err)
+	}
+	if blocked.Files[0].Snippet != "" || blocked.Files[1].Snippet != "" {
+		t.Fatalf("expected snippets to be suppressed after count limit, got %+v", blocked.Files)
+	}
+}
+
+func TestSummaryReturnsErrorForUnexpectedGitFailure(t *testing.T) {
+	t.Parallel()
+
+	service := newTestService(func(ctx context.Context, workdir string, args ...string) (string, error) {
+		return "fatal: permission denied", errors.New("exit status 128")
+	})
+
+	_, err := service.Summary(context.Background(), t.TempDir())
+	if err == nil {
+		t.Fatalf("expected unexpected git failure to be returned")
 	}
 }
 
@@ -334,7 +460,7 @@ func TestRetrieveSkipsSensitiveLargeAndBinaryFiles(t *testing.T) {
 	mustWriteFile(t, filepath.Join(workdir, "pkg", "bin.dat"), string([]byte{0x00, 0x01, 0x02, 0x03}))
 	mustWriteFile(t, filepath.Join(workdir, "pkg", "target.txt"), "match line\n")
 
-	largeContent := strings.Repeat("x", maxRetrievalFileBytes+1)
+	largeContent := strings.Repeat("x", maxRepositorySnippetFileBytes+1)
 	mustWriteFile(t, filepath.Join(workdir, "pkg", "large.txt"), largeContent)
 
 	service := NewService()
