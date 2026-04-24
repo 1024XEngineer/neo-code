@@ -248,13 +248,13 @@ func prioritizeToolSpecsBySkillHints(
 // emitSkillMissingOnce 在同一次 run 内只上报一次指定 skill 的缺失事件，避免重复噪音。
 func (s *Service) emitSkillMissingOnce(ctx context.Context, state *runState, skillID string) {
 	if state == nil {
-		_ = s.emitRunScoped(ctx, EventSkillMissing, state, SessionSkillEventPayload{SkillID: skillID})
+		s.emitRunScoped(ctx, EventSkillMissing, state, SessionSkillEventPayload{SkillID: skillID})
 		return
 	}
 	if !state.markSkillMissingReported(skillID) {
 		return
 	}
-	_ = s.emitRunScoped(ctx, EventSkillMissing, state, SessionSkillEventPayload{SkillID: skillID})
+	s.emitRunScoped(ctx, EventSkillMissing, state, SessionSkillEventPayload{SkillID: skillID})
 }
 
 // collectSkillToolHints 收集并规范化激活 skills 中的 tool_hints，用于工具排序提示。

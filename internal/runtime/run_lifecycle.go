@@ -14,9 +14,6 @@ import (
 
 // setBaseRunState 更新主链生命周期状态，并触发有效运行态重计算。
 func (s *Service) setBaseRunState(ctx context.Context, state *runState, next controlplane.RunState) error {
-	if state == nil {
-		return nil
-	}
 	if !isBaseLifecycleState(next) {
 		return errors.New("runtime: invalid base lifecycle state")
 	}
@@ -87,7 +84,7 @@ func (s *Service) refreshEffectiveRunState(ctx context.Context, state *runState)
 	state.lifecycle = next
 	state.mu.Unlock()
 
-	_ = s.emitRunScoped(ctx, EventPhaseChanged, state, PhaseChangedPayload{
+	s.emitRunScoped(ctx, EventPhaseChanged, state, PhaseChangedPayload{
 		From: string(from),
 		To:   string(next),
 	})
@@ -96,9 +93,6 @@ func (s *Service) refreshEffectiveRunState(ctx context.Context, state *runState)
 
 // deriveEffectiveRunState 统一推导当前有效运行态，临时治理态优先级高于 base 主链态。
 func deriveEffectiveRunState(state *runState) controlplane.RunState {
-	if state == nil {
-		return ""
-	}
 	if state.waitingPermissionCount > 0 {
 		return controlplane.RunStateWaitingPermission
 	}
@@ -126,6 +120,7 @@ func (s *Service) emitRunTermination(ctx context.Context, input UserInput, state
 	runID := strings.TrimSpace(input.RunID)
 	sessionID := strings.TrimSpace(input.SessionID)
 	if state != nil {
+		state.mu.Lock()
 		if strings.TrimSpace(state.runID) != "" {
 			runID = state.runID
 		}
@@ -133,6 +128,7 @@ func (s *Service) emitRunTermination(ctx context.Context, input UserInput, state
 			sessionID = state.session.ID
 		}
 		if state.stopEmitted {
+			state.mu.Unlock()
 			return
 		}
 		state.stopEmitted = true
@@ -140,6 +136,7 @@ func (s *Service) emitRunTermination(ctx context.Context, input UserInput, state
 		state.lifecycle = controlplane.RunStateStopped
 		state.waitingPermissionCount = 0
 		state.compactingCount = 0
+		state.mu.Unlock()
 	}
 
 	in := controlplane.StopInput{}
@@ -201,10 +198,7 @@ func stopReasonEmitContext(ctx context.Context) (context.Context, context.Cancel
 }
 
 // handleRunError 统一转换 runtime 终止错误，保证取消语义收敛到同一路径。
-func (s *Service) handleRunError(ctx context.Context, runID string, sessionID string, err error) error {
-	_ = ctx
-	_ = runID
-	_ = sessionID
+func (s *Service) handleRunError(err error) error {
 	if errors.Is(err, context.Canceled) {
 		return context.Canceled
 	}

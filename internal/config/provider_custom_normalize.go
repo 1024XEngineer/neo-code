@@ -99,13 +99,6 @@ func NormalizeCustomProviderInput(input SaveCustomProviderInput) (SaveCustomProv
 		return normalized, nil
 	}
 
-	if requiresDiscoveryEndpointPath(normalized.Driver) && strings.TrimSpace(discoveryEndpointPath) == "" {
-		return SaveCustomProviderInput{}, fmt.Errorf(
-			"config: provider %q model_source discover requires discovery_endpoint_path; "+
-				"if provider does not expose discover endpoint, set model_source to manual",
-			normalized.Name,
-		)
-	}
 	normalized.DiscoveryEndpointPath = discoveryEndpointPath
 	return normalized, nil
 }

@@ -99,7 +99,7 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 
 	initialCfg, err := s.loadConfigSnapshot(ctx)
 	if err != nil {
-		return s.handleRunError(ctx, input.RunID, input.SessionID, err)
+		return s.handleRunError(err)
 	}
 	sessionID := strings.TrimSpace(input.SessionID)
 	releaseSessionLock := s.bindSessionLock(sessionID)
@@ -110,7 +110,7 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 	sessionTitle := sessionTitleFromParts(input.Parts)
 	session, err := s.loadOrCreateSession(ctx, input.SessionID, sessionTitle, initialCfg.Workdir, input.Workdir)
 	if err != nil {
-		return s.handleRunError(ctx, input.RunID, input.SessionID, err)
+		return s.handleRunError(err)
 	}
 
 	if sessionID == "" {
@@ -126,7 +126,7 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 	}
 	statePtr = &state
 	if err := s.appendUserMessageAndSave(ctx, &state, input.Parts); err != nil {
-		return s.handleRunError(ctx, state.runID, state.session.ID, err)
+		return s.handleRunError(err)
 	}
 
 	maxTurns := resolveRuntimeMaxTurns(initialCfg.Runtime)
@@ -134,29 +134,24 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 		if turn >= maxTurns {
 			state.maxTurnsReached = true
 			state.maxTurnsLimit = maxTurns
-			return s.handleRunError(
-				ctx,
-				state.runID,
-				state.session.ID,
-				newMaxTurnLimitError(maxTurns),
-			)
+			return s.handleRunError(newMaxTurnLimitError(maxTurns))
 		}
 		state.turn = turn
 		state.compactCount = 0
 		state.nextAttemptSeq = 1
 		if err := s.setBaseRunState(ctx, &state, controlplane.RunStatePlan); err != nil {
-			return s.handleRunError(ctx, state.runID, state.session.ID, err)
+			return s.handleRunError(err)
 		}
 
 	turnAttempt:
 		for {
 			if err := ctx.Err(); err != nil {
-				return s.handleRunError(ctx, state.runID, state.session.ID, err)
+				return s.handleRunError(err)
 			}
 
 			snapshot, rebuilt, err := s.prepareTurnBudgetSnapshot(ctx, &state)
 			if err != nil {
-				return s.handleRunError(ctx, state.runID, state.session.ID, err)
+				return s.handleRunError(err)
 			}
 			if rebuilt {
 				continue
@@ -164,12 +159,12 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 
 			modelProvider, err := s.providerFactory.Build(ctx, snapshot.ProviderConfig)
 			if err != nil {
-				return s.handleRunError(ctx, state.runID, state.session.ID, err)
+				return s.handleRunError(err)
 			}
 
 			decision, err := s.evaluateTurnBudget(ctx, &state, snapshot, modelProvider)
 			if err != nil {
-				return s.handleRunError(ctx, state.runID, state.session.ID, err)
+				return s.handleRunError(err)
 			}
 			switch decision.Action {
 			case controlplane.TurnBudgetActionCompact:
@@ -180,7 +175,7 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 					contextcompact.ModeProactive,
 					compactErrorBestEffort,
 				); err != nil {
-					return s.handleRunError(ctx, state.runID, state.session.ID, err)
+					return s.handleRunError(err)
 				}
 				continue
 			case controlplane.TurnBudgetActionStop:
@@ -201,7 +196,7 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 					_, _ = s.applyCompactForState(ctx, &state, degradedCfg, contextcompact.ModeReactive, compactErrorBestEffort)
 					continue
 				}
-				return s.handleRunError(ctx, state.runID, state.session.ID, err)
+				return s.handleRunError(err)
 			}
 
 			if strings.TrimSpace(turnOutput.assistant.Role) == "" {
@@ -209,7 +204,7 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 			}
 			reconciled, err := s.reconcileLedger(&state, decision, turnOutput.usageObservation)
 			if err != nil {
-				return s.handleRunError(ctx, state.runID, state.session.ID, err)
+				return s.handleRunError(err)
 			}
 			if err := s.appendAssistantMessageAndSave(
 				ctx,
@@ -219,7 +214,7 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 				reconciled.inputTokens,
 				reconciled.outputTokens,
 			); err != nil {
-				return s.handleRunError(ctx, state.runID, state.session.ID, err)
+				return s.handleRunError(err)
 			}
 			s.emitLedgerReconciled(ctx, &state, turnOutput.usageObservation, reconciled)
 			s.emitTokenUsage(ctx, &state, reconciled)
@@ -239,7 +234,7 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 
 			if len(turnOutput.assistant.ToolCalls) == 0 {
 				if err := s.setBaseRunState(ctx, &state, controlplane.RunStateVerify); err != nil {
-					return s.handleRunError(ctx, state.runID, state.session.ID, err)
+					return s.handleRunError(err)
 				}
 
 				s.emitRunScoped(ctx, EventVerificationStarted, &state, VerificationStartedPayload{
@@ -247,7 +242,7 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 				})
 				acceptanceDecision, err := s.beforeAcceptFinal(ctx, &state, snapshot, turnOutput.assistant, completed)
 				if err != nil {
-					return s.handleRunError(ctx, state.runID, state.session.ID, err)
+					return s.handleRunError(err)
 				}
 				for _, result := range acceptanceDecision.VerifierResults {
 					s.emitRunScoped(ctx, EventVerificationStageFinished, &state, VerificationStageFinishedPayload{
@@ -288,7 +283,7 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 						reminder = finalContinueReminder
 					}
 					if err := s.appendSystemMessageAndSave(ctx, &state, reminder); err != nil {
-						return s.handleRunError(ctx, state.runID, state.session.ID, err)
+						return s.handleRunError(err)
 					}
 					state.mu.Lock()
 					progressInput := collectProgressInput(
@@ -329,11 +324,11 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 			beforeTask := state.session.TaskState.Clone()
 			beforeTodos := cloneTodosForPersistence(state.session.Todos)
 			if err := s.setBaseRunState(ctx, &state, controlplane.RunStateExecute); err != nil {
-				return s.handleRunError(ctx, state.runID, state.session.ID, err)
+				return s.handleRunError(err)
 			}
 			summary, err := s.executeAssistantToolCalls(ctx, &state, snapshot, turnOutput.assistant)
 			if err != nil {
-				return s.handleRunError(ctx, state.runID, state.session.ID, err)
+				return s.handleRunError(err)
 			}
 
 			state.mu.Lock()
@@ -356,7 +351,7 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 
 			s.emitRunScoped(ctx, EventProgressEvaluated, &state, ProgressEvaluatedPayload{Score: currentScore})
 			if err := s.setBaseRunState(ctx, &state, controlplane.RunStateVerify); err != nil {
-				return s.handleRunError(ctx, state.runID, state.session.ID, err)
+				return s.handleRunError(err)
 			}
 			break
 		}

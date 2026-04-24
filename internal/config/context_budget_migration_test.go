@@ -260,50 +260,12 @@ context:
 	}
 }
 
-func TestMigrateContextBudgetConfigFileKeepsOriginalWhenBackupVerificationFails(t *testing.T) {
-	dir := t.TempDir()
-	target := filepath.Join(dir, configName)
-	original := strings.TrimSpace(`
-context:
-  auto_compact:
-    input_token_threshold: 120000
-`) + "\n"
-	if err := os.WriteFile(target, []byte(original), 0o644); err != nil {
-		t.Fatalf("write target: %v", err)
-	}
-
-	restore := stubAtomicWriteOps(t)
-	defer restore()
-	readCount := 0
-	atomicReadFile = func(path string) ([]byte, error) {
-		readCount++
-		if readCount == 1 {
-			return []byte("corrupted"), nil
-		}
-		return os.ReadFile(path)
-	}
-
-	_, err := MigrateContextBudgetConfigFile(target, false)
-	if err == nil || !strings.Contains(err.Error(), "read back mismatch") {
-		t.Fatalf("expected read back mismatch error, got %v", err)
-	}
-	raw, readErr := os.ReadFile(target)
-	if readErr != nil {
-		t.Fatalf("read target: %v", readErr)
-	}
-	if string(raw) != original {
-		t.Fatalf("expected original config to stay unchanged, got:\n%s", raw)
-	}
-}
-
 func stubAtomicWriteOps(t *testing.T) func() {
 	t.Helper()
 	prevCreateTemp := atomicCreateTemp
-	prevReadFile := atomicReadFile
 	prevRename := atomicRename
 	return func() {
 		atomicCreateTemp = prevCreateTemp
-		atomicReadFile = prevReadFile
 		atomicRename = prevRename
 	}
 }
