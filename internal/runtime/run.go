@@ -234,7 +234,7 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 
 			if len(turnOutput.assistant.ToolCalls) == 0 {
 				if err := s.setBaseRunState(ctx, &state, controlplane.RunStateVerify); err != nil {
-					return s.handleRunError(ctx, state.runID, state.session.ID, err)
+					return s.handleRunError(err)
 				}
 
 				s.emitRunScoped(ctx, EventVerificationStarted, &state, VerificationStartedPayload{
@@ -242,7 +242,7 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 				})
 				acceptanceDecision, err := s.beforeAcceptFinal(ctx, &state, snapshot, turnOutput.assistant, completed)
 				if err != nil {
-					return s.handleRunError(ctx, state.runID, state.session.ID, err)
+					return s.handleRunError(err)
 				}
 				for _, result := range acceptanceDecision.VerifierResults {
 					s.emitRunScoped(ctx, EventVerificationStageFinished, &state, VerificationStageFinishedPayload{
@@ -283,7 +283,7 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 						reminder = finalContinueReminder
 					}
 					if err := s.appendSystemMessageAndSave(ctx, &state, reminder); err != nil {
-						return s.handleRunError(ctx, state.runID, state.session.ID, err)
+						return s.handleRunError(err)
 					}
 					state.mu.Lock()
 					progressInput := collectProgressInput(
