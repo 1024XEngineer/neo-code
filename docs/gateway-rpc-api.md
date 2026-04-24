@@ -106,12 +106,12 @@ type BindStreamParams struct {
 {
   "jsonrpc": "2.0",
   "id": "bind-1",
-    "result": {
-      "type": "ack",
-      "action": "bind_stream",
-      "request_id": "bind-1",
-      "session_id": "sess-1",
-      "run_id": "run-1",
+  "result": {
+    "type": "ack",
+    "action": "bind_stream",
+    "request_id": "bind-1",
+    "session_id": "sess-1",
+    "run_id": "run-1",
     "payload": {
       "message": "stream binding updated",
       "channel": "ws"
@@ -182,12 +182,12 @@ type RunParams struct {
 {
   "jsonrpc": "2.0",
   "id": "run-req-1",
-    "result": {
-      "type": "ack",
-      "action": "run",
-      "request_id": "run-req-1",
-      "session_id": "sess-1",
-      "run_id": "run-1",
+  "result": {
+    "type": "ack",
+    "action": "run",
+    "request_id": "run-req-1",
+    "session_id": "sess-1",
+    "run_id": "run-1",
     "payload": {
       "message": "run accepted"
     }

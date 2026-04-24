@@ -9,6 +9,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -1282,11 +1283,13 @@ func TestDispatcherLaunchGatewayBranches(t *testing.T) {
 	})
 
 	t.Run("start gateway failed", func(t *testing.T) {
+		var capturedSpec launcher.LaunchSpec
 		dispatcher := &Dispatcher{
 			resolveLaunchSpecFn: func() (launcher.LaunchSpec, error) {
 				return launcher.LaunchSpec{LaunchMode: launcher.LaunchModePathBinary, Executable: "/tmp/neocode-gateway"}, nil
 			},
-			startGatewayFn: func(launcher.LaunchSpec) error {
+			startGatewayFn: func(spec launcher.LaunchSpec) error {
+				capturedSpec = spec
 				return errors.New("start failed")
 			},
 		}
@@ -1294,6 +1297,9 @@ func TestDispatcherLaunchGatewayBranches(t *testing.T) {
 		err := dispatcher.launchGateway(context.Background(), "stub://gateway", "wake-launch-5", "")
 		if err == nil || !strings.Contains(err.Error(), "start failed") {
 			t.Fatalf("expected start failed error, got %v", err)
+		}
+		if !reflect.DeepEqual(capturedSpec.Args, []string{"--listen", "stub://gateway"}) {
+			t.Fatalf("launch args = %#v, want %#v", capturedSpec.Args, []string{"--listen", "stub://gateway"})
 		}
 	})
 }
@@ -1495,6 +1501,24 @@ func TestDispatcherEmitLaunchDecisionLogNilGuards(t *testing.T) {
 
 	dispatcher = &Dispatcher{}
 	dispatcher.emitLaunchDecisionLog(launchDecisionLogEntry{})
+}
+
+func TestBuildGatewayLaunchArgs(t *testing.T) {
+	t.Run("appends listen argument when provided", func(t *testing.T) {
+		got := buildGatewayLaunchArgs([]string{"gateway"}, " unix:///tmp/neocode.sock ")
+		want := []string{"gateway", "--listen", "unix:///tmp/neocode.sock"}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("buildGatewayLaunchArgs() = %#v, want %#v", got, want)
+		}
+	})
+
+	t.Run("keeps base args when listen is empty", func(t *testing.T) {
+		got := buildGatewayLaunchArgs([]string{"gateway"}, "   ")
+		want := []string{"gateway"}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("buildGatewayLaunchArgs() = %#v, want %#v", got, want)
+		}
+	})
 }
 
 type cancelOnWriteErrorConn struct {

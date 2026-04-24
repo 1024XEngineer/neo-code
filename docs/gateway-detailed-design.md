@@ -73,7 +73,7 @@ stateDiagram-v2
 
 1. `NEOCODE_GATEWAY_BIN` 显式路径
 2. `PATH` 中的 `neocode-gateway`
-3. 当前可执行回退 `neocode gateway`
+3. `PATH` 中的 `neocode` 并追加子命令 `gateway`
 
 约束：仅允许一次受控回退，失败后返回确定性错误。
 

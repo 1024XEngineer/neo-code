@@ -41,7 +41,7 @@ go run ./cmd/neocode url-dispatch --url "neocode://review?path=README.md"
 
 1. `NEOCODE_GATEWAY_BIN` 显式路径
 2. `PATH` 中 `neocode-gateway`
-3. 回退当前可执行 `neocode gateway`
+3. `PATH` 中 `neocode` 并追加子命令 `gateway`
 
 ## 安装脚本
 

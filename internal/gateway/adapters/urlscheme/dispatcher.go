@@ -370,7 +370,9 @@ func (d *Dispatcher) launchGateway(ctx context.Context, listenAddress string, re
 		LaunchMode:    spec.LaunchMode,
 		ResolvedExec:  spec.Executable,
 	})
-	if err := startGatewayFn(spec); err != nil {
+	launchSpec := spec
+	launchSpec.Args = buildGatewayLaunchArgs(spec.Args, listenAddress)
+	if err := startGatewayFn(launchSpec); err != nil {
 		d.emitLaunchDecisionLog(launchDecisionLogEntry{
 			RequestID:     requestID,
 			Method:        string(protocol.MethodWakeOpenURL),
@@ -413,6 +415,16 @@ func (d *Dispatcher) launchGateway(ctx context.Context, listenAddress string, re
 		ResolvedExec:  spec.Executable,
 	})
 	return nil
+}
+
+// buildGatewayLaunchArgs 构造自动拉起参数，确保子进程监听地址与调度重拨地址一致。
+func buildGatewayLaunchArgs(baseArgs []string, listenAddress string) []string {
+	args := append([]string(nil), baseArgs...)
+	normalizedListenAddress := strings.TrimSpace(listenAddress)
+	if normalizedListenAddress == "" {
+		return args
+	}
+	return append(args, "--listen", normalizedListenAddress)
 }
 
 // waitGatewayReady 在单次回退窗口内轮询网关连通性，超时后返回确定性错误。

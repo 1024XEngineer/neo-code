@@ -4,8 +4,8 @@ install-skills:
 	@./scripts/install_skills.sh
 
 docs-gateway:
-	@go run ./scripts/generate_gateway_rpc_examples
+	@go run -tags gatewaydocgen ./scripts/generate_gateway_rpc_examples.go
 
 docs-gateway-check:
-	@go run ./scripts/generate_gateway_rpc_examples
-	@git diff --exit-code -- docs/reference/gateway-rpc-api.md
+	@go run -tags gatewaydocgen ./scripts/generate_gateway_rpc_examples.go
+	@git diff --exit-code -- docs/generated/gateway-rpc-examples.json

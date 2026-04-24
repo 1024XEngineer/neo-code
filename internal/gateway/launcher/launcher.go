@@ -14,7 +14,7 @@ const (
 	LaunchModeExplicitPath = "explicit_path"
 	// LaunchModePathBinary 表示命中 PATH 中的 neocode-gateway。
 	LaunchModePathBinary = "path_neocode_gateway"
-	// LaunchModeFallbackSubcommand 表示回退到当前可执行的 gateway 子命令。
+	// LaunchModeFallbackSubcommand 表示回退到 PATH 中 neocode 的 gateway 子命令。
 	LaunchModeFallbackSubcommand = "fallback_neocode_gateway_subcommand"
 )
 
@@ -31,9 +31,9 @@ type ResolveOptions struct {
 }
 
 // ResolveGatewayLaunchSpec 解析网关可执行发现顺序：
-// 显式路径(NEOCODE_GATEWAY_BIN) > PATH(neocode-gateway) > 当前可执行 + gateway 子命令。
+// 显式路径(NEOCODE_GATEWAY_BIN) > PATH(neocode-gateway) > PATH(neocode) + gateway 子命令。
 func ResolveGatewayLaunchSpec(options ResolveOptions) (LaunchSpec, error) {
-	return resolveGatewayLaunchSpecWithDeps(options, exec.LookPath, os.Executable)
+	return resolveGatewayLaunchSpecWithDeps(options, exec.LookPath)
 }
 
 // StartDetachedGateway 以非阻塞方式拉起网关进程并释放父进程句柄。
@@ -55,7 +55,6 @@ func StartDetachedGateway(spec LaunchSpec) error {
 func resolveGatewayLaunchSpecWithDeps(
 	options ResolveOptions,
 	lookPathFn func(string) (string, error),
-	executableFn func() (string, error),
 ) (LaunchSpec, error) {
 	resolveByLookup := func(binary string) (string, error) {
 		resolved, err := lookPathFn(strings.TrimSpace(binary))
@@ -84,18 +83,14 @@ func resolveGatewayLaunchSpecWithDeps(
 		}, nil
 	}
 
-	currentExecutable, err := executableFn()
+	resolvedFallbackExecutable, err := resolveByLookup("neocode")
 	if err != nil {
-		return LaunchSpec{}, fmt.Errorf("resolve current executable: %w", err)
-	}
-	trimmedCurrentExecutable := strings.TrimSpace(currentExecutable)
-	if trimmedCurrentExecutable == "" {
-		return LaunchSpec{}, fmt.Errorf("resolve current executable: empty executable path")
+		return LaunchSpec{}, err
 	}
 
 	return LaunchSpec{
 		LaunchMode: LaunchModeFallbackSubcommand,
-		Executable: trimmedCurrentExecutable,
+		Executable: resolvedFallbackExecutable,
 		Args:       []string{"gateway"},
 	}, nil
 }

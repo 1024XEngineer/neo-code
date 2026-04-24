@@ -20,9 +20,6 @@ func TestResolveGatewayLaunchSpecWithDeps(t *testing.T) {
 				}
 				return "", errors.New("unexpected lookup")
 			},
-			func() (string, error) {
-				return "/usr/local/bin/neocode", nil
-			},
 		)
 		if err != nil {
 			t.Fatalf("resolveGatewayLaunchSpecWithDeps() error = %v", err)
@@ -47,9 +44,6 @@ func TestResolveGatewayLaunchSpecWithDeps(t *testing.T) {
 				}
 				return "", errors.New("unexpected lookup")
 			},
-			func() (string, error) {
-				return "/usr/local/bin/neocode", nil
-			},
 		)
 		if err != nil {
 			t.Fatalf("resolveGatewayLaunchSpecWithDeps() error = %v", err)
@@ -65,14 +59,18 @@ func TestResolveGatewayLaunchSpecWithDeps(t *testing.T) {
 		}
 	})
 
-	t.Run("fallback to current executable subcommand", func(t *testing.T) {
+	t.Run("fallback to neocode subcommand", func(t *testing.T) {
 		spec, err := resolveGatewayLaunchSpecWithDeps(
 			ResolveOptions{},
-			func(string) (string, error) {
-				return "", errors.New("not found")
-			},
-			func() (string, error) {
-				return "/usr/local/bin/neocode", nil
+			func(binary string) (string, error) {
+				switch binary {
+				case "neocode-gateway":
+					return "", errors.New("not found")
+				case "neocode":
+					return "/usr/local/bin/neocode", nil
+				default:
+					return "", errors.New("unexpected lookup")
+				}
 			},
 		)
 		if err != nil {
@@ -95,23 +93,20 @@ func TestResolveGatewayLaunchSpecWithDeps(t *testing.T) {
 			func(string) (string, error) {
 				return "", errors.New("missing")
 			},
-			func() (string, error) {
-				return "/usr/local/bin/neocode", nil
-			},
 		)
 		if err == nil {
 			t.Fatal("expected explicit lookup error")
 		}
 	})
 
-	t.Run("fallback fails when current executable unavailable", func(t *testing.T) {
+	t.Run("fallback fails when neocode is unavailable", func(t *testing.T) {
 		_, err := resolveGatewayLaunchSpecWithDeps(
 			ResolveOptions{},
-			func(string) (string, error) {
-				return "", errors.New("not found")
-			},
-			func() (string, error) {
-				return "", errors.New("unavailable")
+			func(binary string) (string, error) {
+				if binary == "neocode-gateway" || binary == "neocode" {
+					return "", errors.New("not found")
+				}
+				return "", errors.New("unexpected lookup")
 			},
 		)
 		if err == nil {
