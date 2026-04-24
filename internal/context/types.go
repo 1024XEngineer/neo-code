@@ -79,6 +79,14 @@ type MicroCompactPinChecker interface {
 	ShouldPin(toolName string, metadata map[string]string) bool
 }
 
+// MicroCompactConfig 聚合微压缩所需的三个依赖源，简化 Builder 构造参数。
+// 三个子接口仍各自遵循接口隔离原则；MicroCompactConfig 仅作为构造时的参数打包容器。
+type MicroCompactConfig struct {
+	Policies    MicroCompactPolicySource
+	Summarizers MicroCompactSummarizerSource
+	PinChecker  MicroCompactPinChecker
+}
+
 // CompactOptions controls read-time compact behavior inside the context builder.
 type CompactOptions struct {
 	DisableMicroCompact           bool
