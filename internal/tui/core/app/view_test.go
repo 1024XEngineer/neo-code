@@ -769,6 +769,8 @@ func TestRenderActivityLineAndScrollbarHelpers(t *testing.T) {
 	app.transcript.SetYOffset(3)
 	if got := app.renderTranscriptScrollbar(2, 5); got == "" {
 		t.Fatalf("expected non-empty scrollbar when transcript is scrollable")
+	} else if !strings.Contains(got, "█") {
+		t.Fatalf("expected scrollbar thumb to use solid block glyph, got %q", got)
 	}
 }
 
