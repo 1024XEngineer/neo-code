@@ -1,6 +1,7 @@
 package infra
 
 import (
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -75,7 +76,6 @@ func TestNormalizeOpenResourceTargetAllowsHTTPAndHTTPS(t *testing.T) {
 	tests := []string{
 		"https://www.modelscope.cn/",
 		"http://localhost:8080",
-		"file:///tmp/modelscope-guide.html",
 	}
 	for _, target := range tests {
 		target := target
@@ -93,31 +93,29 @@ func TestNormalizeOpenResourceTargetAllowsHTTPAndHTTPS(t *testing.T) {
 	}
 }
 
-func TestNormalizeOpenResourceTargetResolvesLocalFilePath(t *testing.T) {
-	t.Parallel()
-
+func TestNormalizeOpenResourceTargetResolvesRelativeFilePathViaAbsResolver(t *testing.T) {
 	root := t.TempDir()
 	filePath := filepath.Join(root, "modelscope-guide.html")
 	if err := os.WriteFile(filePath, []byte("guide"), 0o644); err != nil {
 		t.Fatalf("write file: %v", err)
 	}
-	oldWD, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("Getwd() error = %v", err)
-	}
-	if err := os.Chdir(root); err != nil {
-		t.Fatalf("Chdir(root) error = %v", err)
+	oldAbsResolver := absPathForOpenResource
+	absPathForOpenResource = func(path string) (string, error) {
+		if path == "modelscope-guide.html" {
+			return filePath, nil
+		}
+		return oldAbsResolver(path)
 	}
 	t.Cleanup(func() {
-		_ = os.Chdir(oldWD)
+		absPathForOpenResource = oldAbsResolver
 	})
 
-	got, err := normalizeOpenResourceTarget("modelscope-guide.html")
+	got, err := normalizeOpenResourceLocalPath("modelscope-guide.html")
 	if err != nil {
-		t.Fatalf("normalizeOpenResourceTarget() error = %v", err)
+		t.Fatalf("normalizeOpenResourceLocalPath() error = %v", err)
 	}
 	if got != filePath {
-		t.Fatalf("normalizeOpenResourceTarget() = %q, want %q", got, filePath)
+		t.Fatalf("normalizeOpenResourceLocalPath() = %q, want %q", got, filePath)
 	}
 }
 
@@ -154,6 +152,64 @@ func TestNormalizeOpenResourceTargetRejectsInvalidTargets(t *testing.T) {
 			_, err := normalizeOpenResourceTarget(tt.target)
 			if err == nil || !strings.Contains(err.Error(), tt.errorPart) {
 				t.Fatalf("normalizeOpenResourceTarget() error = %v, want contains %q", err, tt.errorPart)
+			}
+		})
+	}
+}
+
+func TestNormalizeOpenResourceTargetValidatesFileURLPath(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	filePath := filepath.Join(root, "modelscope-guide.html")
+	if err := os.WriteFile(filePath, []byte("guide"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+
+	fileURL := (&url.URL{Scheme: "file", Path: filepath.ToSlash(filePath)}).String()
+	got, err := normalizeOpenResourceTarget(fileURL)
+	if err != nil {
+		t.Fatalf("normalizeOpenResourceTarget(fileURL) error = %v", err)
+	}
+	if got != filePath {
+		t.Fatalf("normalizeOpenResourceTarget(fileURL) = %q, want %q", got, filePath)
+	}
+}
+
+func TestNormalizeOpenResourceTargetRejectsInvalidFileURLTargets(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	tests := []struct {
+		name      string
+		target    string
+		errorPart string
+	}{
+		{
+			name:      "unsupported-host",
+			target:    "file://example.com/tmp/guide.html",
+			errorPart: "unsupported file url host",
+		},
+		{
+			name:      "missing-file",
+			target:    (&url.URL{Scheme: "file", Path: filepath.ToSlash(filepath.Join(root, "missing.html"))}).String(),
+			errorPart: "stat",
+		},
+		{
+			name:      "directory",
+			target:    (&url.URL{Scheme: "file", Path: filepath.ToSlash(root)}).String(),
+			errorPart: "is a directory",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := normalizeOpenResourceTarget(tt.target)
+			if err == nil || !strings.Contains(err.Error(), tt.errorPart) {
+				t.Fatalf("normalizeOpenResourceTarget(%q) error = %v, want contains %q", tt.target, err, tt.errorPart)
 			}
 		})
 	}
