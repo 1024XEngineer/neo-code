@@ -324,6 +324,57 @@ func TestRenderStartupScreenQuickActionsHasNoBorderBox(t *testing.T) {
 	}
 }
 
+func TestRenderStartupScreenCompactMenuAndInvalidSize(t *testing.T) {
+	app, _ := newTestApp(t)
+
+	if got := app.renderStartupScreen(0, 20); got != "" {
+		t.Fatalf("expected empty output when width<=0, got %q", got)
+	}
+	if got := app.renderStartupScreen(80, 0); got != "" {
+		t.Fatalf("expected empty output when height<=0, got %q", got)
+	}
+
+	compact := copyCodeANSIPattern.ReplaceAllString(app.renderStartupScreen(30, 16), "")
+	if !strings.Contains(compact, "NeoCode") {
+		t.Fatalf("expected fallback logo text for narrow width, got %q", compact)
+	}
+}
+
+func TestStartupContentWidthForWideViewport(t *testing.T) {
+	got := startupContentWidth(200)
+	if got != 148 {
+		t.Fatalf("expected startupContentWidth(200)=148, got %d", got)
+	}
+}
+
+func TestStartupPromptWidthForWideViewport(t *testing.T) {
+	got := startupPromptWidth(200)
+	if got != 156 {
+		t.Fatalf("expected startupPromptWidth(200)=156, got %d", got)
+	}
+}
+
+func TestStartupCenterPadLineCutsLongContent(t *testing.T) {
+	got := startupCenterPadLine("0123456789", 4)
+	if got != "0123" {
+		t.Fatalf("expected cut line to width 4, got %q", got)
+	}
+}
+
+func TestStartupQuickActionKeyWidthBranches(t *testing.T) {
+	if got := startupQuickActionKeyWidth(0); got != 0 {
+		t.Fatalf("expected key width 0 for non-positive card width, got %d", got)
+	}
+
+	if got := startupQuickActionKeyWidth(10); got != 4 {
+		t.Fatalf("expected key width clamp to min 4 for narrow card, got %d", got)
+	}
+
+	if got := startupQuickActionKeyWidth(100); got != 6 {
+		t.Fatalf("expected key width to keep longest shortcut width 6, got %d", got)
+	}
+}
+
 func TestApplyComponentLayoutKeepsTranscriptHeightInSyncWithWaterfall(t *testing.T) {
 	app, _ := newTestApp(t)
 	app.width = 100
