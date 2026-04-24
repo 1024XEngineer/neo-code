@@ -39,7 +39,7 @@ func ResolveWorkspacePathFromRoot(root string, target string) (string, error) {
 		return "", err
 	}
 	if !isWithinWorkspace(root, absoluteTarget) {
-		return "", fmt.Errorf("security: path %q escapes workspace root", target)
+		return "", fmt.Errorf("security: path %q escapes workspace root: %w", target, ErrWorkspaceBoundaryViolation)
 	}
 	if _, err := ensureNoSymlinkEscape(root, absoluteTarget, target); err != nil {
 		return "", err
@@ -55,7 +55,7 @@ func ResolveWorkspaceWalkPathFromRoot(root string, target string, entry fs.DirEn
 		return "", err
 	}
 	if !isWithinWorkspace(root, absoluteTarget) {
-		return "", fmt.Errorf("security: path %q escapes workspace root", target)
+		return "", fmt.Errorf("security: path %q escapes workspace root: %w", target, ErrWorkspaceBoundaryViolation)
 	}
 	if isVerifiedRegularWalkEntry(entry) {
 		return absoluteTarget, nil

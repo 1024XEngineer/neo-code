@@ -163,7 +163,7 @@ func (s *Service) emitRepositoryContextUnavailable(
 	if s == nil || s.events == nil || err == nil {
 		return
 	}
-	_ = s.emitRunScoped(ctx, EventRepositoryContextUnavailable, state, RepositoryContextUnavailablePayload{
+	s.emitRunScoped(ctx, EventRepositoryContextUnavailable, state, RepositoryContextUnavailablePayload{
 		Stage:  strings.TrimSpace(stage),
 		Mode:   strings.TrimSpace(mode),
 		Reason: strings.TrimSpace(err.Error()),

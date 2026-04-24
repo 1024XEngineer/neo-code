@@ -113,12 +113,6 @@ func (s *Service) acquireSessionLock(sessionID string) (*sync.RWMutex, func()) {
 	return s.acquireSessionLockEntry(sessionID)
 }
 
-// acquireSessionRLock 获取指定会话读锁并返回释放引用的函数。
-// 读锁允许同一会话的多个并发读取，适用于 LoadSession 等只读操作。
-func (s *Service) acquireSessionRLock(sessionID string) (*sync.RWMutex, func()) {
-	return s.acquireSessionLockEntry(sessionID)
-}
-
 // acquireSessionLockEntry 获取指定会话的锁条目并增加引用计数。
 func (s *Service) acquireSessionLockEntry(sessionID string) (*sync.RWMutex, func()) {
 	s.sessionMu.Lock()

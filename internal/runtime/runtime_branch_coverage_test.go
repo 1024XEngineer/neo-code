@@ -90,7 +90,6 @@ func TestTransitionRunPhaseNoopBranches(t *testing.T) {
 	t.Parallel()
 
 	service := &Service{events: make(chan RuntimeEvent, 4)}
-	service.setBaseRunState(context.Background(), nil, controlplane.RunStatePlan)
 
 	state := newRunState("run-phase", newRuntimeSession("session-phase"))
 	state.lifecycle = controlplane.RunStatePlan
@@ -114,9 +113,7 @@ func TestEmitRunScopedNilStateFallsBackToBaseEnvelope(t *testing.T) {
 	t.Parallel()
 
 	service := &Service{events: make(chan RuntimeEvent, 4)}
-	if err := service.emitRunScoped(context.Background(), EventAgentChunk, nil, "chunk"); err != nil {
-		t.Fatalf("emitRunScoped() error = %v", err)
-	}
+	service.emitRunScoped(context.Background(), EventAgentChunk, nil, "chunk")
 
 	events := collectRuntimeEvents(service.Events())
 	if len(events) != 1 {
