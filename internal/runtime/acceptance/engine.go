@@ -142,9 +142,13 @@ func runHookStage(
 func aggregateVerificationDecision(gate verify.VerificationGateDecision) AcceptanceDecision {
 	firstFail := firstResultByStatus(gate.Results, verify.VerificationFail)
 	if firstFail != nil {
+		stopReason := gate.Reason
+		if stopReason == "" || stopReason == controlplane.StopReasonAccepted {
+			stopReason = controlplane.StopReasonVerificationFailed
+		}
 		return AcceptanceDecision{
 			Status:             AcceptanceFailed,
-			StopReason:         controlplane.StopReasonVerificationFailed,
+			StopReason:         stopReason,
 			ErrorClass:         firstFail.ErrorClass,
 			UserVisibleSummary: "验证未通过，任务失败。",
 			InternalSummary:    "at least one verifier returned fail",

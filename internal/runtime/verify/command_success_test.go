@@ -54,6 +54,7 @@ func TestCommandSuccessVerifierVerifyFinalMissingCommand(t *testing.T) {
 		verifierCfg := cfg.Verifiers[commandSuccessVerifierName]
 		verifierCfg.Required = true
 		verifierCfg.Command = ""
+		verifierCfg.FailClosed = false
 		cfg.Verifiers[commandSuccessVerifierName] = verifierCfg
 
 		result, err := (CommandSuccessVerifier{}).VerifyFinal(context.Background(), FinalVerifyInput{VerificationConfig: cfg})
@@ -65,6 +66,43 @@ func TestCommandSuccessVerifierVerifyFinalMissingCommand(t *testing.T) {
 		}
 		if result.ErrorClass != ErrorClassEnvMissing {
 			t.Fatalf("error_class = %q, want %q", result.ErrorClass, ErrorClassEnvMissing)
+		}
+	})
+
+	t.Run("required missing command with fail_closed returns fail", func(t *testing.T) {
+		t.Parallel()
+		cfg := verifyConfigForCommandTests()
+		verifierCfg := cfg.Verifiers[commandSuccessVerifierName]
+		verifierCfg.Required = true
+		verifierCfg.Command = ""
+		verifierCfg.FailClosed = true
+		cfg.Verifiers[commandSuccessVerifierName] = verifierCfg
+
+		result, err := (CommandSuccessVerifier{}).VerifyFinal(context.Background(), FinalVerifyInput{VerificationConfig: cfg})
+		if err != nil {
+			t.Fatalf("VerifyFinal() error = %v", err)
+		}
+		if result.Status != VerificationFail {
+			t.Fatalf("status = %q, want %q", result.Status, VerificationFail)
+		}
+	})
+
+	t.Run("required missing command with fail_open returns pass", func(t *testing.T) {
+		t.Parallel()
+		cfg := verifyConfigForCommandTests()
+		verifierCfg := cfg.Verifiers[commandSuccessVerifierName]
+		verifierCfg.Required = true
+		verifierCfg.Command = ""
+		verifierCfg.FailOpen = true
+		verifierCfg.FailClosed = false
+		cfg.Verifiers[commandSuccessVerifierName] = verifierCfg
+
+		result, err := (CommandSuccessVerifier{}).VerifyFinal(context.Background(), FinalVerifyInput{VerificationConfig: cfg})
+		if err != nil {
+			t.Fatalf("VerifyFinal() error = %v", err)
+		}
+		if result.Status != VerificationPass {
+			t.Fatalf("status = %q, want %q", result.Status, VerificationPass)
 		}
 	})
 

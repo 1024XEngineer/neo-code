@@ -280,7 +280,11 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 					s.triggerMemoExtraction(state.session.ID, state.session.Messages, state.rememberedThisRun)
 					return nil
 				case acceptance.AcceptanceContinue:
-					if err := s.appendSystemMessageAndSave(ctx, &state, finalContinueReminder); err != nil {
+					reminder := strings.TrimSpace(acceptanceDecision.ContinueHint)
+					if reminder == "" {
+						reminder = finalContinueReminder
+					}
+					if err := s.appendSystemMessageAndSave(ctx, &state, reminder); err != nil {
 						return s.handleRunError(ctx, state.runID, state.session.ID, err)
 					}
 					state.mu.Lock()
@@ -295,6 +299,7 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 						snapshot.RepeatCycleStreakLimit,
 					)
 					state.progress = controlplane.EvaluateProgress(state.progress, progressInput)
+					state.finalInterceptStreak = state.progress.LastScore.NoProgressStreak
 					currentScore := state.progress.LastScore
 					state.mu.Unlock()
 					s.emitRunScoped(ctx, EventProgressEvaluated, &state, ProgressEvaluatedPayload{Score: currentScore})

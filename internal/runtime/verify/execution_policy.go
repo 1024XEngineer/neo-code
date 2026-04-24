@@ -150,6 +150,9 @@ func isCommandAllowed(commandName string, raw string, policy config.Verification
 		if _, ok := readonlyGitSubcommands[sub]; !ok {
 			return false, fmt.Sprintf("git subcommand %q is not read-only", sub)
 		}
+		if denied, reason := hasDangerousGitArguments(raw); denied {
+			return false, reason
+		}
 	}
 	return true, ""
 }
@@ -183,6 +186,32 @@ func gitSubcommand(command string) string {
 		return ""
 	}
 	return fields[1]
+}
+
+// hasDangerousGitArguments 校验只读 git 子命令是否携带可能产生写入副作用的参数。
+func hasDangerousGitArguments(command string) (bool, string) {
+	fields := commandFields(command)
+	if len(fields) < 2 || fields[0] != "git" {
+		return false, ""
+	}
+	args := fields[2:]
+	for _, arg := range args {
+		switch {
+		case arg == "-o" || arg == "--output" || strings.HasPrefix(arg, "--output="):
+			return true, "git output redirection flags are not allowed"
+		case arg == "-c" || strings.HasPrefix(arg, "-c"):
+			return true, "git -c config override is not allowed"
+		case arg == "--config-env" || strings.HasPrefix(arg, "--config-env="):
+			return true, "git --config-env is not allowed"
+		case arg == "--git-dir" || strings.HasPrefix(arg, "--git-dir="):
+			return true, "git --git-dir is not allowed"
+		case arg == "--work-tree" || strings.HasPrefix(arg, "--work-tree="):
+			return true, "git --work-tree is not allowed"
+		case arg == "--ext-diff" || arg == "--external-diff":
+			return true, "git external diff hooks are not allowed"
+		}
+	}
+	return false, ""
 }
 
 // normalizedCommandSet 将命令列表规整为小写集合，便于白名单/拒绝名单判断。

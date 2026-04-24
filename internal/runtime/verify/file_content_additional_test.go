@@ -87,6 +87,39 @@ func TestFileExistsVerifierAdditionalBranches(t *testing.T) {
 			t.Fatalf("unexpected result: %+v", result)
 		}
 	})
+
+	t.Run("symlink escaping workdir should be denied", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+		workdir := filepath.Join(root, "work")
+		outside := filepath.Join(root, "outside")
+		if err := os.MkdirAll(workdir, 0o755); err != nil {
+			t.Fatalf("MkdirAll(workdir) error = %v", err)
+		}
+		if err := os.MkdirAll(outside, 0o755); err != nil {
+			t.Fatalf("MkdirAll(outside) error = %v", err)
+		}
+		outsideFile := filepath.Join(outside, "secret.txt")
+		if err := os.WriteFile(outsideFile, []byte("secret"), 0o644); err != nil {
+			t.Fatalf("WriteFile(outside) error = %v", err)
+		}
+		if err := os.Symlink(outsideFile, filepath.Join(workdir, "link.txt")); err != nil {
+			t.Skipf("symlink is not available on this platform: %v", err)
+		}
+
+		result, err := v.VerifyFinal(context.Background(), FinalVerifyInput{
+			Workdir: workdir,
+			Metadata: map[string]any{
+				"expected_files": []string{"link.txt"},
+			},
+		})
+		if err != nil {
+			t.Fatalf("VerifyFinal() error = %v", err)
+		}
+		if result.Status != VerificationFail || result.ErrorClass != ErrorClassPermissionDenied {
+			t.Fatalf("unexpected symlink denied result: %+v", result)
+		}
+	})
 }
 
 func TestContentMatchVerifierAdditionalBranches(t *testing.T) {
@@ -145,6 +178,41 @@ func TestContentMatchVerifierAdditionalBranches(t *testing.T) {
 		collectMissingTokens(missing, "a.txt", "hello", []string{" hello ", "", "world"})
 		if len(missing["a.txt"]) != 1 || missing["a.txt"][0] != "world" {
 			t.Fatalf("missing tokens = %#v", missing)
+		}
+	})
+
+	t.Run("symlink escaping workdir should be denied", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+		workdir := filepath.Join(root, "work")
+		outside := filepath.Join(root, "outside")
+		if err := os.MkdirAll(workdir, 0o755); err != nil {
+			t.Fatalf("MkdirAll(workdir) error = %v", err)
+		}
+		if err := os.MkdirAll(outside, 0o755); err != nil {
+			t.Fatalf("MkdirAll(outside) error = %v", err)
+		}
+		outsideFile := filepath.Join(outside, "secret.txt")
+		if err := os.WriteFile(outsideFile, []byte("secret-token"), 0o644); err != nil {
+			t.Fatalf("WriteFile(outside) error = %v", err)
+		}
+		if err := os.Symlink(outsideFile, filepath.Join(workdir, "link.txt")); err != nil {
+			t.Skipf("symlink is not available on this platform: %v", err)
+		}
+
+		result, err := v.VerifyFinal(context.Background(), FinalVerifyInput{
+			Workdir: workdir,
+			Metadata: map[string]any{
+				"content_match": map[string][]string{
+					"link.txt": []string{"secret-token"},
+				},
+			},
+		})
+		if err != nil {
+			t.Fatalf("VerifyFinal() error = %v", err)
+		}
+		if result.Status != VerificationFail || result.ErrorClass != ErrorClassPermissionDenied {
+			t.Fatalf("unexpected symlink denied result: %+v", result)
 		}
 	})
 }

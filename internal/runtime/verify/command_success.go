@@ -41,12 +41,25 @@ func (v CommandSuccessVerifier) VerifyFinal(ctx context.Context, input FinalVeri
 	command := strings.TrimSpace(cfg.Command)
 	if command == "" {
 		if cfg.Required {
+			status := VerificationSoftBlock
+			summary := "verification command is required but missing"
+			reason := "missing verifier command configuration"
+			errorClass := ErrorClassEnvMissing
+			if cfg.FailClosed {
+				status = VerificationFail
+			}
+			if cfg.FailOpen {
+				status = VerificationPass
+				summary = "verification command missing but ignored by fail_open policy"
+				reason = "optionalized by fail_open policy"
+				errorClass = ""
+			}
 			return VerificationResult{
 				Name:       name,
-				Status:     VerificationSoftBlock,
-				Summary:    "verification command is required but missing",
-				Reason:     "missing verifier command configuration",
-				ErrorClass: ErrorClassEnvMissing,
+				Status:     status,
+				Summary:    summary,
+				Reason:     reason,
+				ErrorClass: errorClass,
 			}, nil
 		}
 		return VerificationResult{

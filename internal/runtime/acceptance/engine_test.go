@@ -61,6 +61,30 @@ func TestEngineEvaluateFinalAggregation(t *testing.T) {
 		}
 	})
 
+	t.Run("fail keeps detailed stop reason from gate", func(t *testing.T) {
+		t.Parallel()
+		engine := NewEngine(staticPolicy{
+			verifiers: []verify.FinalVerifier{
+				staticVerifier{
+					name: "build",
+					result: verify.VerificationResult{
+						Name:       "build",
+						Status:     verify.VerificationFail,
+						Reason:     "missing verifier command configuration",
+						ErrorClass: verify.ErrorClassEnvMissing,
+					},
+				},
+			},
+		})
+		decision, err := engine.EvaluateFinal(context.Background(), makeInput())
+		if err != nil {
+			t.Fatalf("EvaluateFinal() error = %v", err)
+		}
+		if decision.StopReason != controlplane.StopReasonVerificationConfigMissing {
+			t.Fatalf("stop_reason = %q, want %q", decision.StopReason, controlplane.StopReasonVerificationConfigMissing)
+		}
+	})
+
 	t.Run("any hard_block -> incomplete", func(t *testing.T) {
 		t.Parallel()
 		engine := NewEngine(staticPolicy{

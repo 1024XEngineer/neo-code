@@ -2,6 +2,7 @@ package verify
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 )
@@ -146,12 +147,37 @@ func resolvePathWithinWorkdir(workdir string, rawPath string) (string, error) {
 		return "", fmt.Errorf("resolve path: %w", err)
 	}
 
-	rel, err := filepath.Rel(workdirAbs, resolvedPath)
-	if err != nil {
-		return "", fmt.Errorf("check path relation: %w", err)
-	}
-	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+	if err := ensurePathWithinBase(workdirAbs, resolvedPath); err != nil {
 		return "", fmt.Errorf("path %q is outside workdir", rawPath)
 	}
+
+	// 对已存在路径追加真实路径校验，防止通过符号链接逃逸 workdir。
+	workdirReal, err := filepath.EvalSymlinks(workdirAbs)
+	if err != nil {
+		workdirReal = workdirAbs
+	}
+	resolvedReal, err := filepath.EvalSymlinks(resolvedPath)
+	switch {
+	case err == nil:
+		if err := ensurePathWithinBase(workdirReal, resolvedReal); err != nil {
+			return "", fmt.Errorf("path %q resolves outside workdir", rawPath)
+		}
+	case os.IsNotExist(err):
+		// 目标不存在时由上层 verifier 按 missing 处理；此处只做已存在路径的边界约束。
+	default:
+		return "", fmt.Errorf("resolve symlink path: %w", err)
+	}
 	return resolvedPath, nil
+}
+
+// ensurePathWithinBase 校验目标路径仍位于基准目录内，避免路径穿越或边界越权。
+func ensurePathWithinBase(base string, target string) error {
+	rel, err := filepath.Rel(base, target)
+	if err != nil {
+		return fmt.Errorf("check path relation: %w", err)
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("outside base path")
+	}
+	return nil
 }

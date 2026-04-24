@@ -39,6 +39,10 @@ func (s *Service) beforeAcceptFinal(
 	if maxNoProgress <= 0 {
 		maxNoProgress = 3
 	}
+	noProgressStreak := state.progress.LastScore.NoProgressStreak
+	if noProgressStreak < 0 {
+		noProgressStreak = 0
+	}
 	maxTurnsLimit := state.maxTurnsLimit
 	maxTurnsReached := state.maxTurnsReached
 	if !maxTurnsReached {
@@ -66,19 +70,27 @@ func (s *Service) beforeAcceptFinal(
 				Turn:                 state.turn,
 				MaxTurns:             resolveRuntimeMaxTurns(snapshot.Config.Runtime),
 				MaxTurnsReached:      maxTurnsReached,
-				FinalInterceptStreak: state.finalInterceptStreak,
+				FinalInterceptStreak: noProgressStreak,
 			},
 			Metadata: map[string]any{
 				"task_type": inferTaskType(state),
 			},
 			VerificationConfig: verificationCfg,
 		},
-		NoProgressExceeded: state.finalInterceptStreak >= maxNoProgress,
+		NoProgressExceeded: maxNoProgress > 0 && noProgressStreak >= maxNoProgress,
 		MaxTurnsReached:    maxTurnsReached,
 		MaxTurnsLimit:      maxTurnsLimit,
 	}
 
-	return engine.EvaluateFinal(ctx, input)
+	decision, err := engine.EvaluateFinal(ctx, input)
+	if err != nil {
+		return acceptance.AcceptanceDecision{}, err
+	}
+	// 继续分支复用 runtime progress 结果，避免把“final 被拦截”误判为“无进展”。
+	if decision.Status == acceptance.AcceptanceContinue && hasRuntimeProgress(state) {
+		decision.HasProgress = true
+	}
+	return decision, nil
 }
 
 // recordAcceptanceTerminal 将 acceptance 输出映射为 runtime 唯一终态记录。
@@ -204,4 +216,13 @@ func applyAcceptanceResultProgress(state *runState, decision acceptance.Acceptan
 	default:
 		state.finalInterceptStreak = 0
 	}
+}
+
+// hasRuntimeProgress 判断 runtime 当前快照是否存在业务或探索进展。
+func hasRuntimeProgress(state *runState) bool {
+	if state == nil {
+		return false
+	}
+	score := state.progress.LastScore
+	return score.HasBusinessProgress || score.HasExplorationProgress
 }

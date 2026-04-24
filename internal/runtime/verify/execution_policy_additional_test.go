@@ -3,6 +3,7 @@ package verify
 import (
 	"context"
 	"errors"
+	"runtime"
 	"testing"
 
 	"neo-code/internal/config"
@@ -34,14 +35,20 @@ func TestPolicyCommandExecutorExecuteBranches(t *testing.T) {
 
 	t.Run("command timeout", func(t *testing.T) {
 		t.Parallel()
+		timeoutCommand := "sh -c 'sleep 2'"
+		allowedCommand := "sh"
+		if runtime.GOOS == "windows" {
+			timeoutCommand = "powershell -NoLogo -NoProfile -NonInteractive -Command Start-Sleep -Seconds 2"
+			allowedCommand = "powershell"
+		}
 		policy := config.VerificationExecutionPolicyConfig{
 			Mode:             "non_interactive",
-			AllowedCommands:  []string{"sh"},
+			AllowedCommands:  []string{allowedCommand},
 			DefaultTimeout:   1,
 			DefaultOutputCap: 1024,
 		}
 		result, err := PolicyCommandExecutor{}.Execute(context.Background(), CommandExecutionRequest{
-			Command: "sh -c 'sleep 2'",
+			Command: timeoutCommand,
 			Policy:  policy,
 		})
 		if err == nil || !errors.Is(err, ErrVerificationExecutionError) {
@@ -54,21 +61,27 @@ func TestPolicyCommandExecutorExecuteBranches(t *testing.T) {
 
 	t.Run("non-zero exit code", func(t *testing.T) {
 		t.Parallel()
+		failCommand := "sh -c 'exit 7'"
+		allowedCommand := "sh"
+		if runtime.GOOS == "windows" {
+			failCommand = "go tool definitely-not-a-real-tool"
+			allowedCommand = "go"
+		}
 		policy := config.VerificationExecutionPolicyConfig{
 			Mode:             "non_interactive",
-			AllowedCommands:  []string{"sh"},
+			AllowedCommands:  []string{allowedCommand},
 			DefaultTimeout:   5,
 			DefaultOutputCap: 1024,
 		}
 		result, err := PolicyCommandExecutor{}.Execute(context.Background(), CommandExecutionRequest{
-			Command: "sh -c 'exit 7'",
+			Command: failCommand,
 			Policy:  policy,
 		})
 		if err != nil {
 			t.Fatalf("expected nil err for exit status, got %v", err)
 		}
-		if result.ExitCode != 7 {
-			t.Fatalf("exit code = %d, want 7", result.ExitCode)
+		if result.ExitCode == 0 {
+			t.Fatalf("exit code = %d, want non-zero", result.ExitCode)
 		}
 	})
 }
@@ -101,6 +114,15 @@ func TestExecutionPolicyHelpers(t *testing.T) {
 		if ok, _ := isCommandAllowed("git", "git checkout .", policy); ok {
 			t.Fatalf("git write subcommand should be denied")
 		}
+		if ok, _ := isCommandAllowed("git", "git diff --output=../leak.txt", policy); ok {
+			t.Fatalf("git output flag should be denied")
+		}
+		if ok, _ := isCommandAllowed("git", "git show -o ../leak.txt", policy); ok {
+			t.Fatalf("git short output flag should be denied")
+		}
+		if ok, _ := isCommandAllowed("git", "git diff -c core.pager=cat", policy); ok {
+			t.Fatalf("git -c override should be denied")
+		}
 	})
 
 	t.Run("basic parser helpers", func(t *testing.T) {
@@ -116,6 +138,12 @@ func TestExecutionPolicyHelpers(t *testing.T) {
 		}
 		if gitSubcommand("go test") != "" {
 			t.Fatalf("gitSubcommand should be empty for non-git")
+		}
+		if denied, _ := hasDangerousGitArguments("git diff --output=tmp.txt"); !denied {
+			t.Fatalf("expected dangerous git output argument to be denied")
+		}
+		if denied, _ := hasDangerousGitArguments("git status"); denied {
+			t.Fatalf("git status should not be denied by dangerous argument checker")
 		}
 		set := normalizedCommandSet([]string{" Go  ", "", "GIT status"})
 		if _, ok := set["go"]; !ok {

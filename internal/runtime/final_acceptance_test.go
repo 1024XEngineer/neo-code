@@ -46,6 +46,34 @@ func TestBeforeAcceptFinalDecisionPaths(t *testing.T) {
 		}
 	})
 
+	t.Run("continue carries runtime progress signal", func(t *testing.T) {
+		t.Parallel()
+		state := newRunState("run-continue-progress", agentsession.New("continue-progress"))
+		state.progress.LastScore.HasBusinessProgress = true
+		required := true
+		state.session.Todos = []agentsession.TodoItem{
+			{
+				ID:       "todo-1",
+				Content:  "do work",
+				Status:   agentsession.TodoStatusPending,
+				Required: &required,
+			},
+		}
+		decision, err := service.beforeAcceptFinal(context.Background(), &state, snapshot, providertypes.Message{
+			Role:  providertypes.RoleAssistant,
+			Parts: []providertypes.ContentPart{providertypes.NewTextPart("done")},
+		}, true)
+		if err != nil {
+			t.Fatalf("beforeAcceptFinal() error = %v", err)
+		}
+		if decision.Status != "continue" {
+			t.Fatalf("status = %q, want continue", decision.Status)
+		}
+		if !decision.HasProgress {
+			t.Fatalf("expected continue decision to carry runtime progress")
+		}
+	})
+
 	t.Run("all converged -> accepted", func(t *testing.T) {
 		t.Parallel()
 		state := newRunState("run-accepted", agentsession.New("accepted"))
@@ -195,7 +223,7 @@ func TestFinalAcceptanceHelperBranches(t *testing.T) {
 		cfg := config.StaticDefaults().Clone()
 		cfg.Runtime.Verification.MaxNoProgress = 0
 		state := newRunState("run-max-no-progress-default", agentsession.New("max-no-progress-default"))
-		state.finalInterceptStreak = 3
+		state.progress.LastScore.NoProgressStreak = 3
 		required := true
 		state.session.Todos = []agentsession.TodoItem{
 			{ID: "todo-1", Content: "pending", Status: agentsession.TodoStatusPending, Required: &required},

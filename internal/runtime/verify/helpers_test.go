@@ -1,6 +1,7 @@
 package verify
 
 import (
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -119,5 +120,31 @@ func TestResolvePathWithinWorkdir(t *testing.T) {
 	}
 	if _, err := resolvePathWithinWorkdir(workdir, "../outside.txt"); err == nil {
 		t.Fatalf("expected traversal error")
+	}
+}
+
+func TestResolvePathWithinWorkdirRejectsSymlinkEscape(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	workdir := filepath.Join(root, "work")
+	outsideDir := filepath.Join(root, "outside")
+	if err := os.MkdirAll(workdir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(workdir) error = %v", err)
+	}
+	if err := os.MkdirAll(outsideDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(outside) error = %v", err)
+	}
+	outsideFile := filepath.Join(outsideDir, "secret.txt")
+	if err := os.WriteFile(outsideFile, []byte("secret"), 0o644); err != nil {
+		t.Fatalf("WriteFile(outside) error = %v", err)
+	}
+	linkPath := filepath.Join(workdir, "link.txt")
+	if err := os.Symlink(outsideFile, linkPath); err != nil {
+		t.Skipf("symlink is not available on this platform: %v", err)
+	}
+
+	if _, err := resolvePathWithinWorkdir(workdir, "link.txt"); err == nil {
+		t.Fatalf("expected symlink escape to be denied")
 	}
 }
