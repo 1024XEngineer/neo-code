@@ -265,7 +265,10 @@ func resolveExecutionMode(cfg provider.RuntimeConfig) (string, error) {
 		return provider.DefaultProviderChatAPIMode(), nil
 	default:
 		return "", provider.NewDiscoveryConfigError(
-			fmt.Sprintf("openaicompat provider: unsupported chat endpoint path %q", normalizedPath),
+			fmt.Sprintf(
+				"openaicompat provider: unsupported chat endpoint path %q without explicit chat_api_mode; set chat_api_mode to chat_completions or responses",
+				normalizedPath,
+			),
 		)
 	}
 }

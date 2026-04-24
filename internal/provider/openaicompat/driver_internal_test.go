@@ -65,6 +65,13 @@ func TestDriverClosuresAndSupportedProtocol(t *testing.T) {
 	}
 	if got, err := resolveExecutionMode(provider.RuntimeConfig{
 		Driver:           DriverName,
+		ChatAPIMode:      provider.ChatAPIModeChatCompletions,
+		ChatEndpointPath: "/v1/text/chatcompletion_v2",
+	}); err != nil || got != executionModeCompletions {
+		t.Fatalf("expected explicit completions mode with custom path, got mode=%q err=%v", got, err)
+	}
+	if got, err := resolveExecutionMode(provider.RuntimeConfig{
+		Driver:           DriverName,
 		ChatAPIMode:      provider.ChatAPIModeResponses,
 		ChatEndpointPath: "/chat/completions",
 	}); err != nil || got != executionModeResponses {
@@ -81,6 +88,12 @@ func TestDriverClosuresAndSupportedProtocol(t *testing.T) {
 		ChatEndpointPath: "/responses",
 	}); err != nil || got != executionModeResponses {
 		t.Fatalf("expected endpoint inferred responses mode, got mode=%q err=%v", got, err)
+	}
+	if _, err := resolveExecutionMode(provider.RuntimeConfig{
+		Driver:           DriverName,
+		ChatEndpointPath: "/v1/text/chatcompletion_v2",
+	}); err == nil || !strings.Contains(err.Error(), "set chat_api_mode") {
+		t.Fatalf("expected custom path to require explicit chat_api_mode, got %v", err)
 	}
 	if _, err := resolveExecutionMode(provider.RuntimeConfig{Driver: provider.DriverAnthropic}); err == nil ||
 		!strings.Contains(err.Error(), "unsupported") {

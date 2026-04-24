@@ -2857,6 +2857,28 @@ func TestBuildProviderAddRequest(t *testing.T) {
 		}
 	})
 
+	t.Run("openai compat keeps explicit custom endpoint path", func(t *testing.T) {
+		req, err := buildProviderAddRequest(providerAddFormState{
+			Name:                  "openai-compat-custom-endpoint",
+			Driver:                provider.DriverOpenAICompat,
+			ModelSource:           config.ModelSourceDiscover,
+			ChatAPIMode:           provider.ChatAPIModeChatCompletions,
+			ChatEndpointPath:      "/v1/text/chatcompletion_v2",
+			APIKey:                "k",
+			APIKeyEnv:             "OPENAI_COMPAT_CUSTOM_ENDPOINT_API_KEY",
+			DiscoveryEndpointPath: provider.DiscoveryEndpointPathModels,
+		})
+		if err != "" {
+			t.Fatalf("unexpected error: %s", err)
+		}
+		if req.ChatEndpointPath != "/v1/text/chatcompletion_v2" {
+			t.Fatalf("expected custom endpoint path preserved, got %q", req.ChatEndpointPath)
+		}
+		if req.ChatAPIMode != provider.ChatAPIModeChatCompletions {
+			t.Fatalf("expected chat api mode completions, got %q", req.ChatAPIMode)
+		}
+	})
+
 	t.Run("strips control chars from env key before validation", func(t *testing.T) {
 		req, err := buildProviderAddRequest(providerAddFormState{
 			Name:                  "openai-compat",

@@ -10,6 +10,7 @@ import (
 
 	openai "github.com/openai/openai-go/v3"
 
+	"neo-code/internal/provider"
 	"neo-code/internal/provider/openaicompat/chatcompletions"
 )
 
@@ -54,12 +55,128 @@ func TestResolveChatEndpointPathByMode(t *testing.T) {
 			mode: "responses",
 			want: "/responses",
 		},
+		{
+			name: "fills chat completions path for explicit completions mode",
+			path: "",
+			mode: "chat_completions",
+			want: "/chat/completions",
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := resolveChatEndpointPathByMode(tt.path, tt.mode); got != tt.want {
 				t.Fatalf("resolveChatEndpointPathByMode(%q, %q) = %q, want %q", tt.path, tt.mode, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestResolveChatEndpointUsesExplicitModeFallbackAndCustomPath(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		cfg  provider.RuntimeConfig
+		want string
+	}{
+		{
+			name: "explicit responses mode falls back to responses path",
+			cfg: provider.RuntimeConfig{
+				BaseURL:          "https://api.example.com/v1",
+				ChatAPIMode:      provider.ChatAPIModeResponses,
+				ChatEndpointPath: "",
+			},
+			want: "https://api.example.com/v1/responses",
+		},
+		{
+			name: "explicit completions mode falls back to completions path",
+			cfg: provider.RuntimeConfig{
+				BaseURL:          "https://api.example.com/v1",
+				ChatAPIMode:      provider.ChatAPIModeChatCompletions,
+				ChatEndpointPath: "",
+			},
+			want: "https://api.example.com/v1/chat/completions",
+		},
+		{
+			name: "custom path stays unchanged when explicit mode is set",
+			cfg: provider.RuntimeConfig{
+				BaseURL:          "https://api.example.com/v1",
+				ChatAPIMode:      provider.ChatAPIModeChatCompletions,
+				ChatEndpointPath: "/v1/text/chatcompletion_v2",
+			},
+			want: "https://api.example.com/v1/v1/text/chatcompletion_v2",
+		},
+		{
+			name: "slash keeps direct base url mode",
+			cfg: provider.RuntimeConfig{
+				BaseURL:          "https://api.example.com/v1",
+				ChatAPIMode:      provider.ChatAPIModeResponses,
+				ChatEndpointPath: "/",
+			},
+			want: "https://api.example.com/v1",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := resolveChatEndpoint(tt.cfg)
+			if err != nil {
+				t.Fatalf("resolveChatEndpoint() error = %v", err)
+			}
+			if got != tt.want {
+				t.Fatalf("resolveChatEndpoint() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestShouldUseCompatibleChatCompletionsEndpoint(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		cfg  provider.RuntimeConfig
+		want bool
+	}{
+		{
+			name: "default completions endpoint uses sdk path",
+			cfg: provider.RuntimeConfig{
+				BaseURL:          "https://api.example.com/v1",
+				ChatEndpointPath: "",
+			},
+			want: false,
+		},
+		{
+			name: "explicit default completions endpoint uses sdk path",
+			cfg: provider.RuntimeConfig{
+				BaseURL:          "https://api.example.com/v1",
+				ChatEndpointPath: "/chat/completions",
+			},
+			want: false,
+		},
+		{
+			name: "custom completions endpoint uses compatible path",
+			cfg: provider.RuntimeConfig{
+				BaseURL:          "https://api.example.com",
+				ChatEndpointPath: "/v1/text/chatcompletion_v2",
+			},
+			want: true,
+		},
+		{
+			name: "direct base url mode uses compatible path",
+			cfg: provider.RuntimeConfig{
+				BaseURL:          "https://api.example.com/v1/text/chatcompletion_v2",
+				ChatEndpointPath: "/",
+			},
+			want: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := shouldUseCompatibleChatCompletionsEndpoint(tt.cfg); got != tt.want {
+				t.Fatalf("shouldUseCompatibleChatCompletionsEndpoint() = %v, want %v", got, tt.want)
 			}
 		})
 	}
