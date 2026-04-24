@@ -24,6 +24,10 @@ func (p *Provider) generateSDKChatCompletions(
 	payload chatcompletions.Request,
 	events chan<- providertypes.StreamEvent,
 ) error {
+	if shouldUseCompatibleChatCompletionsEndpoint(p.cfg) {
+		return p.generateChatCompletionsWithCompatibleStream(ctx, payload, events)
+	}
+
 	client, err := p.newSDKClient()
 	if err != nil {
 		return err
@@ -270,6 +274,24 @@ func (p *Provider) generateChatCompletionsWithCompatibleStream(
 	}
 
 	return chatcompletions.ConsumeStream(ctx, resp.Body, events)
+}
+
+// shouldUseCompatibleChatCompletionsEndpoint 判断 chat/completions 是否需要绕过 SDK 默认端点拼接。
+func shouldUseCompatibleChatCompletionsEndpoint(cfg provider.RuntimeConfig) bool {
+	resolvedEndpoint, err := provider.ResolveChatEndpointURL(
+		cfg.BaseURL,
+		resolveChatEndpointPathByMode(cfg.ChatEndpointPath, provider.ChatAPIModeChatCompletions),
+	)
+	if err != nil {
+		return false
+	}
+
+	defaultEndpoint, err := provider.ResolveChatEndpointURL(cfg.BaseURL, chatEndpointPathCompletions)
+	if err != nil {
+		return false
+	}
+
+	return strings.TrimSpace(resolvedEndpoint) != strings.TrimSpace(defaultEndpoint)
 }
 
 // generateSDKResponses 走 SDK responses 发送请求，复用本地流事件映射。

@@ -105,6 +105,7 @@ discovery_endpoint_path: /models
 
 - `chat_api_mode` 仅 `openaicompat` 生效，可选值：`chat_completions` / `responses`。
 - `chat_endpoint_path` 为 `/` 表示直连 `base_url`；为空时会按 `chat_api_mode` 自动回填默认子路径（`/chat/completions` 或 `/responses`）。
+- 当 `chat_api_mode` 已显式指定时，`chat_endpoint_path` 可使用任意以 `/` 开头的相对路径；未显式指定时，仅支持标准端点推断（`/chat/completions`、`/responses`、`/`）。
 - `model_source: manual` 时必须提供 `models`，且会忽略 `discovery_endpoint_path`。
 
 ## 测试要求

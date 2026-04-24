@@ -67,6 +67,48 @@ func TestCreateCustomProviderSuccess(t *testing.T) {
 	}
 }
 
+func TestCreateCustomProviderPreservesExplicitCustomChatEndpoint(t *testing.T) {
+	restorePersist, restoreDelete, restoreLookup, restoreSaveWithModels := stubUserEnvOpsForCreateProvider(t)
+	defer restorePersist()
+	defer restoreDelete()
+	defer restoreLookup()
+	defer restoreSaveWithModels()
+
+	manager := newSelectionTestManager(t, testDefaultConfig())
+	service := NewService(manager, newDriverSupporterStub(), catalogMethodsStub{
+		listModels: []providertypes.ModelDescriptor{
+			{ID: "custom-model", Name: "custom-model"},
+		},
+	})
+
+	input := CreateCustomProviderInput{
+		Name:                  "custom-chat-endpoint-provider",
+		Driver:                provider.DriverOpenAICompat,
+		BaseURL:               "https://llm.example.com/v1",
+		ChatAPIMode:           provider.ChatAPIModeChatCompletions,
+		ChatEndpointPath:      "/v1/text/chatcompletion_v2",
+		APIKeyEnv:             "CUSTOM_CHAT_ENDPOINT_PROVIDER_API_KEY",
+		APIKey:                "test-key",
+		DiscoveryEndpointPath: provider.DiscoveryEndpointPathModels,
+	}
+
+	if _, err := service.CreateCustomProvider(context.Background(), input); err != nil {
+		t.Fatalf("CreateCustomProvider() error = %v", err)
+	}
+
+	cfg := manager.Get()
+	providerCfg, err := cfg.ProviderByName(input.Name)
+	if err != nil {
+		t.Fatalf("expected provider %q in config, got %v", input.Name, err)
+	}
+	if providerCfg.ChatEndpointPath != input.ChatEndpointPath {
+		t.Fatalf("expected chat endpoint path %q, got %q", input.ChatEndpointPath, providerCfg.ChatEndpointPath)
+	}
+	if providerCfg.ChatAPIMode != input.ChatAPIMode {
+		t.Fatalf("expected chat api mode %q, got %q", input.ChatAPIMode, providerCfg.ChatAPIMode)
+	}
+}
+
 func TestCreateCustomProviderManualSourceRequiresModelJSON(t *testing.T) {
 	restorePersist, restoreDelete, restoreLookup, restoreSaveWithModels := stubUserEnvOpsForCreateProvider(t)
 	defer restorePersist()

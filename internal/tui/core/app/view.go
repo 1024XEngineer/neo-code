@@ -45,7 +45,7 @@ type pickerLayoutSpec struct {
 func (a App) View() string {
 	docWidth := max(0, a.width-a.styles.doc.GetHorizontalFrameSize())
 	docHeight := max(0, a.height-a.styles.doc.GetVerticalFrameSize())
-	if docWidth < 73 || docHeight < 36 {
+	if docWidth < 60 || docHeight < 30 {
 		return strings.TrimRight(a.styles.doc.Render(lipgloss.Place(docWidth, docHeight, lipgloss.Left, lipgloss.Top, "Window too small.\nPlease resize to at least 73x36.")), "\n")
 	}
 
