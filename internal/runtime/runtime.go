@@ -262,6 +262,17 @@ func (s *Service) Events() <-chan RuntimeEvent {
 	return s.events
 }
 
+// loadConfigSnapshot 在运行关键路径前主动从磁盘刷新一次配置快照，确保跨进程修改后的 provider/model 可见。
+func (s *Service) loadConfigSnapshot(ctx context.Context) (config.Config, error) {
+	if s == nil || s.configManager == nil {
+		return config.Config{}, errors.New("runtime: config manager is nil")
+	}
+	if ctx != nil && ctx.Err() != nil {
+		return s.configManager.Get(), nil
+	}
+	return s.configManager.Load(context.Background())
+}
+
 // ListSessions 返回当前会话存储中的所有摘要。
 func (s *Service) ListSessions(ctx context.Context) ([]agentsession.Summary, error) {
 	return s.sessionStore.ListSummaries(ctx)

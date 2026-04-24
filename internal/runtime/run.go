@@ -96,7 +96,10 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 		return err
 	}
 
-	initialCfg := s.configManager.Get()
+	initialCfg, err := s.loadConfigSnapshot(ctx)
+	if err != nil {
+		return s.handleRunError(ctx, input.RunID, input.SessionID, err)
+	}
 	sessionID := strings.TrimSpace(input.SessionID)
 	releaseSessionLock := s.bindSessionLock(sessionID)
 	defer func() {
@@ -296,7 +299,10 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 
 // prepareTurnBudgetSnapshot 基于当前会话状态冻结一次预算尝试所需的 request 与预算事实。
 func (s *Service) prepareTurnBudgetSnapshot(ctx context.Context, state *runState) (TurnBudgetSnapshot, bool, error) {
-	cfg := s.configManager.Get()
+	cfg, err := s.loadConfigSnapshot(ctx)
+	if err != nil {
+		return TurnBudgetSnapshot{}, false, err
+	}
 	activeWorkdir := agentsession.EffectiveWorkdir(state.session.Workdir, cfg.Workdir)
 	activeSkills, err := s.resolveActiveSkills(ctx, state)
 	if err != nil {
