@@ -11,6 +11,7 @@ import (
 
 	"neo-code/internal/gateway/handlers"
 	"neo-code/internal/gateway/protocol"
+	toolkits "neo-code/internal/tools"
 )
 
 const (
@@ -22,6 +23,13 @@ const (
 type requestFrameHandler func(ctx context.Context, frame MessageFrame, runtimePort RuntimePort) MessageFrame
 
 var wakeOpenURLHandler = handlers.NewWakeOpenURLHandler()
+
+var allowedSystemToolNames = map[string]struct{}{
+	toolkits.ToolNameMemoList:     {},
+	toolkits.ToolNameMemoRemember: {},
+	toolkits.ToolNameMemoRecall:   {},
+	toolkits.ToolNameMemoRemove:   {},
+}
 
 var requestFrameHandlers = map[FrameAction]requestFrameHandler{
 	FrameActionAuthenticate: func(ctx context.Context, frame MessageFrame, _ RuntimePort) MessageFrame {
@@ -726,6 +734,9 @@ func normalizeExecuteSystemToolParams(params protocol.ExecuteSystemToolParams) (
 	}
 	if normalized.ToolName == "" {
 		return executeSystemToolParams{}, NewMissingRequiredFieldError("payload.tool_name")
+	}
+	if _, allowed := allowedSystemToolNames[normalized.ToolName]; !allowed {
+		return executeSystemToolParams{}, NewFrameError(ErrorCodeInvalidAction, "invalid execute_system_tool tool_name")
 	}
 
 	arguments := bytes.TrimSpace(params.Arguments)

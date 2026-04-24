@@ -644,6 +644,34 @@ func TestHandleExecuteSystemToolFrameBranches(t *testing.T) {
 		}
 	})
 
+	t.Run("reject non-memo system tool", func(t *testing.T) {
+		called := false
+		stub := &bootstrapRuntimeStub{
+			executeSystemToolFn: func(_ context.Context, _ ExecuteSystemToolInput) (tools.ToolResult, error) {
+				called = true
+				return tools.ToolResult{}, nil
+			},
+		}
+		response := handleExecuteSystemToolFrame(context.Background(), MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionExecuteSystemTool,
+			RequestID: "exec-invalid-tool-1",
+			Payload: protocol.ExecuteSystemToolParams{
+				ToolName:  "bash",
+				Arguments: []byte("{}"),
+			},
+		}, stub)
+		if response.Type != FrameTypeError {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+		}
+		if response.Error == nil || response.Error.Code != ErrorCodeInvalidAction.String() {
+			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeInvalidAction.String())
+		}
+		if called {
+			t.Fatal("runtime executeSystemTool should not be called for non-whitelisted tools")
+		}
+	})
+
 	t.Run("success", func(t *testing.T) {
 		stub := &bootstrapRuntimeStub{
 			executeSystemToolFn: func(ctx context.Context, input ExecuteSystemToolInput) (tools.ToolResult, error) {

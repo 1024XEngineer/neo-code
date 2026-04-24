@@ -158,6 +158,7 @@
 - `gateway.bindStream`
 - `gateway.run`
 - `gateway.compact`
+- `gateway.executeSystemTool`
 - `gateway.cancel`
 - `gateway.listSessions`
 - `gateway.loadSession`

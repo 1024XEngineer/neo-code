@@ -21,7 +21,7 @@
 
 | 层级 | 范围 | 兼容承诺 |
 | --- | --- | --- |
-| Stable Core | `gateway.authenticate`、`gateway.ping`、`gateway.bindStream`、`gateway.run`、`gateway.compact`、`gateway.cancel`、`gateway.listSessions`、`gateway.loadSession`、`gateway.resolvePermission`、`gateway.event` | 小版本（`v1.x`）内默认向后兼容；破坏性变更必须走废弃流程。 |
+| Stable Core | `gateway.authenticate`、`gateway.ping`、`gateway.bindStream`、`gateway.run`、`gateway.compact`、`gateway.executeSystemTool`、`gateway.cancel`、`gateway.listSessions`、`gateway.loadSession`、`gateway.resolvePermission`、`gateway.event` | 小版本（`v1.x`）内默认向后兼容；破坏性变更必须走废弃流程。 |
 | Experimental | `wake.openUrl` 等实验能力 | 允许在小版本内调整；调用方必须具备能力探测与降级路径。 |
 
 ## 4. 版本语义

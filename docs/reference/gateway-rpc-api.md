@@ -453,7 +453,40 @@ Observation：
 
 ---
 
-## 6. gateway.cancel
+## 6. gateway.executeSystemTool
+
+Method: `gateway.executeSystemTool`  
+Stability: `Stable`  
+Auth Required: `Yes`
+
+Request Schema（Go Struct）：
+
+```go
+type ExecuteSystemToolParams struct {
+	SessionID string          `json:"session_id,omitempty"`
+	RunID     string          `json:"run_id,omitempty"`
+	Workdir   string          `json:"workdir,omitempty"`
+	ToolName  string          `json:"tool_name"` // MUST
+	Arguments json.RawMessage `json:"arguments,omitempty"`
+}
+```
+
+Request 约束：
+1. `tool_name` `MUST` 非空。  
+2. 网关层 `MUST` 对 `tool_name` 做白名单校验。  
+3. 当前白名单仅包含 memo 系统工具：`memo_list`、`memo_remember`、`memo_recall`、`memo_remove`。
+
+Response Schema：
+1. Success：返回 `ack`，`payload` 为系统工具执行结果。  
+2. Failure：统一 `error` 信封；白名单外工具返回 `gateway_code=invalid_action`。
+
+Observation：
+1. 此方法计入 `gateway_requests_total{method="gateway.executeSystemTool",...}`。  
+2. 白名单拒绝会记录结构化请求日志，便于审计非预期调用来源。
+
+---
+
+## 7. gateway.cancel
 
 Method: `gateway.cancel`  
 Stability: `Stable`  
@@ -497,7 +530,7 @@ Observation：
 
 ---
 
-## 7. gateway.listSessions
+## 8. gateway.listSessions
 
 Method: `gateway.listSessions`  
 Stability: `Stable`  
@@ -552,7 +585,7 @@ Observation：
 
 ---
 
-## 8. gateway.loadSession
+## 9. gateway.loadSession
 
 Method: `gateway.loadSession`  
 Stability: `Stable`  
@@ -600,7 +633,7 @@ Observation：
 
 ---
 
-## 9. gateway.resolvePermission
+## 10. gateway.resolvePermission
 
 Method: `gateway.resolvePermission`  
 Stability: `Stable`  
@@ -644,7 +677,7 @@ Observation：
 
 ---
 
-## 10. wake.openUrl
+## 11. wake.openUrl
 
 Method: `wake.openUrl`  
 Stability: `Experimental`  
@@ -694,7 +727,7 @@ Observation：
 
 ---
 
-## 11. gateway.event（服务端通知）
+## 12. gateway.event（服务端通知）
 
 Method: `gateway.event`  
 Stability: `Stable`  
@@ -1034,6 +1067,74 @@ Failure Response：
   }
 }
 ```
+
+### gateway.executeSystemTool
+
+Request：
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "req-exec-tool-1",
+  "method": "gateway.executeSystemTool",
+  "params": {
+    "session_id": "session-demo-1",
+    "run_id": "run-demo-1",
+    "workdir": "C:/workspace/demo",
+    "tool_name": "memo_list",
+    "arguments": {}
+  }
+}
+```
+
+Success Response：
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "req-exec-tool-1",
+  "result": {
+    "type": "ack",
+    "action": "execute_system_tool",
+    "request_id": "req-exec-tool-1",
+    "run_id": "run-demo-1",
+    "session_id": "session-demo-1",
+    "payload": {
+      "ToolCallID": "",
+      "Name": "memo_list",
+      "Content": "[memo] listed successfully",
+      "IsError": false,
+      "Metadata": null,
+      "Facts": {
+        "WorkspaceWrite": false,
+        "VerificationPerformed": false,
+        "VerificationPassed": false,
+        "VerificationScope": ""
+      }
+    }
+  }
+}
+```
+
+Failure Response：
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "req-exec-tool-1",
+  "error": {
+    "code": -32602,
+    "message": "invalid execute_system_tool tool_name",
+    "data": {
+      "gateway_code": "invalid_action"
+    }
+  }
+}
+```
+
+Notes：
+
+1. `tool_name` 在网关层按白名单校验，当前仅允许 memo 系统工具。
 
 ### gateway.cancel
 

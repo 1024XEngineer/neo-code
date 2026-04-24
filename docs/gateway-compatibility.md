@@ -9,7 +9,7 @@
 
 当前分层：
 
-1. Stable Core：`gateway.authenticate`、`gateway.ping`、`gateway.bindStream`、`gateway.run`、`gateway.compact`、`gateway.cancel`、`gateway.listSessions`、`gateway.loadSession`、`gateway.resolvePermission`、`gateway.event`
+1. Stable Core：`gateway.authenticate`、`gateway.ping`、`gateway.bindStream`、`gateway.run`、`gateway.compact`、`gateway.executeSystemTool`、`gateway.cancel`、`gateway.listSessions`、`gateway.loadSession`、`gateway.resolvePermission`、`gateway.event`
 2. Experimental：`wake.openUrl`
 
 ## 2. 字段弃用生命周期（必须遵守）

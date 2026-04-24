@@ -244,6 +244,31 @@ type CompactParams struct {
 
 ---
 
+## Method: gateway.executeSystemTool
+
+- Stability: Stable
+- Auth Required: Yes
+- Request Schema:
+
+```go
+type ExecuteSystemToolParams struct {
+	SessionID string          `json:"session_id,omitempty"`
+	RunID     string          `json:"run_id,omitempty"`
+	Workdir   string          `json:"workdir,omitempty"`
+	ToolName  string          `json:"tool_name"` // MUST
+	Arguments json.RawMessage `json:"arguments,omitempty"`
+}
+```
+
+- Response Schema:
+  - Success: `ack` + tool result payload
+  - Failure: 标准 `error`（`missing_required_field` / `invalid_action` 等）
+- Runtime Restriction:
+  - 网关层对 `tool_name` 实施白名单校验。
+  - 当前仅允许 memo 系统工具：`memo_list`、`memo_remember`、`memo_recall`、`memo_remove`。
+
+---
+
 ## Method: gateway.cancel
 
 - Stability: Stable

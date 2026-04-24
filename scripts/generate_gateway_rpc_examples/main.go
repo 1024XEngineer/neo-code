@@ -12,6 +12,7 @@ import (
 	"neo-code/internal/gateway"
 	"neo-code/internal/gateway/protocol"
 	"neo-code/internal/runtime/controlplane"
+	"neo-code/internal/tools"
 )
 
 const (
@@ -245,6 +246,31 @@ func buildMethodExamples() ([]methodExample, error) {
 		gateway.ErrorCodeTimeout.String(),
 	)
 
+	executeSystemToolRequest := buildRequest("req-exec-tool-1", protocol.MethodGatewayExecuteSystemTool, protocol.ExecuteSystemToolParams{
+		SessionID: sessionID,
+		RunID:     runID,
+		Workdir:   "C:/workspace/demo",
+		ToolName:  tools.ToolNameMemoList,
+		Arguments: json.RawMessage("{}"),
+	})
+	executeSystemToolSuccess := buildSuccessResponse("req-exec-tool-1", gateway.MessageFrame{
+		Type:      gateway.FrameTypeAck,
+		Action:    gateway.FrameActionExecuteSystemTool,
+		RequestID: "req-exec-tool-1",
+		SessionID: sessionID,
+		RunID:     runID,
+		Payload: tools.ToolResult{
+			Name:    tools.ToolNameMemoList,
+			Content: "[memo] listed successfully",
+		},
+	})
+	executeSystemToolFailure := buildFailureResponse(
+		"req-exec-tool-1",
+		protocol.MapGatewayCodeToJSONRPCCode(gateway.ErrorCodeInvalidAction.String()),
+		"invalid execute_system_tool tool_name",
+		gateway.ErrorCodeInvalidAction.String(),
+	)
+
 	cancelRequest := buildRequest("req-cancel-1", protocol.MethodGatewayCancel, protocol.CancelParams{
 		SessionID: sessionID,
 		RunID:     runID,
@@ -423,6 +449,15 @@ func buildMethodExamples() ([]methodExample, error) {
 			Request: compactRequest,
 			Success: compactSuccess,
 			Failure: compactFailure,
+		},
+		{
+			Method:  protocol.MethodGatewayExecuteSystemTool,
+			Request: executeSystemToolRequest,
+			Success: executeSystemToolSuccess,
+			Failure: executeSystemToolFailure,
+			Notes: []string{
+				"`tool_name` 在网关层按白名单校验，当前仅允许 memo 系统工具。",
+			},
 		},
 		{
 			Method:  protocol.MethodGatewayCancel,
