@@ -45,8 +45,8 @@ type pickerLayoutSpec struct {
 func (a App) View() string {
 	docWidth := max(0, a.width-a.styles.doc.GetHorizontalFrameSize())
 	docHeight := max(0, a.height-a.styles.doc.GetVerticalFrameSize())
-	if docWidth < 60 || docHeight < 20 {
-		return strings.TrimRight(a.styles.doc.Render(lipgloss.Place(docWidth, docHeight, lipgloss.Left, lipgloss.Top, "Window too small.\nPlease resize to at least 60x20.")), "\n")
+	if docWidth < 73 || docHeight < 36 {
+		return strings.TrimRight(a.styles.doc.Render(lipgloss.Place(docWidth, docHeight, lipgloss.Left, lipgloss.Top, "Window too small.\nPlease resize to at least 73x36.")), "\n")
 	}
 
 	lay := a.computeLayout()
@@ -201,9 +201,6 @@ func (a App) renderWaterfall(width int, height int) string {
 		parts = append(parts, todo)
 	}
 	menu := a.renderCommandMenu(width)
-	if a.shouldRenderStartupScreen() {
-		menu = a.padStartupCommandMenuSlot(width, menu, a.commandMenuHeight(width, height))
-	}
 	if menu != "" {
 		parts = append(parts, menu)
 	}
@@ -216,7 +213,7 @@ func (a App) renderWaterfall(width int, height int) string {
 func (a App) renderTranscriptWithScrollbar(totalWidth int, content string) string {
 	scrollbarWidth := a.transcriptScrollbarWidth(totalWidth)
 	if scrollbarWidth <= 0 || a.transcriptMaxOffset() <= 0 {
-		return a.styles.streamContent.Render(content)
+		return a.styles.streamContent.Width(max(1, totalWidth)).Render(content)
 	}
 
 	contentWidth := max(1, totalWidth-scrollbarWidth)
@@ -667,13 +664,8 @@ func (a App) startupPanelWidth(totalWidth int) int {
 }
 
 func (a App) commandMenuHeight(width int, totalHeight int) int {
+	_ = totalHeight
 	menu := a.renderCommandMenu(width)
-	if a.shouldRenderStartupScreen() {
-		reserved := a.startupCommandMenuReserveHeight(menu)
-		promptHeight := lipgloss.Height(a.renderPrompt(width))
-		availableMenuHeight := max(0, totalHeight-a.activityPreviewHeight()-a.todoPreviewHeight()-promptHeight-6)
-		return min(reserved, availableMenuHeight)
-	}
 	if strings.TrimSpace(menu) == "" {
 		return 0
 	}

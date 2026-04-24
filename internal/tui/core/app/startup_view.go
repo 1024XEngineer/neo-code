@@ -5,15 +5,16 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
 
 const startupLogo = `
-███╗   ██╗███████╗ ██████╗ ██████╗  ██████╗ ██████╗ ███████╗
-████╗  ██║██╔════╝██╔═══██╗██╔═══╝ ██╔═══██╗██╔══██╗██╔════╝
+ ███╗   ██╗███████╗ ██████╗ ██████╗  ██████╗ ██████╗ ███████╗
+ ████╗  ██║██╔════╝██╔═══██╗██╔═══╝ ██╔═══██╗██╔══██╗██╔════╝
 ██╔██╗ ██║█████╗  ██║   ██║██║     ██║   ██║██║  ██║█████╗
 ██║╚██╗██║██╔══╝  ██║   ██║██║     ██║   ██║██║  ██║██╔══╝
-██║ ╚████║███████╗╚██████╔╝██████╗ ╚██████╔╝██████╔╝███████╗
-╚═╝  ╚═══╝╚══════╝ ╚═════╝ ╚═════╝  ╚═════╝ ╚═════╝ ╚══════╝`
+ ██║ ╚████║███████╗╚██████╔╝██████╗ ╚██████╔╝██████╔╝███████╗
+ ╚═╝  ╚═══╝╚══════╝ ╚═════╝ ╚═════╝  ╚═════╝ ╚═════╝ ╚══════╝`
 
 type startupQuickActionItem struct {
 	Key   string
@@ -21,17 +22,11 @@ type startupQuickActionItem struct {
 }
 
 var startupQuickActions = []startupQuickActionItem{
-	{Key: "Ctrl+N", Label: "New Chat"},
-	{Key: "/", Label: "Open Command Palette"},
-	{Key: "Ctrl+L", Label: "Open Log Viewer"},
-	{Key: "Ctrl+U", Label: "Exit NeoCode"},
+	{Key: "Ctrl+N", Label: "New Chat            "},
+	{Key: "     /", Label: "Open Command Palette"},
+	{Key: "Ctrl+L", Label: "Open Log Viewer     "},
+	{Key: "Ctrl+U", Label: "Exit NeoCode        "},
 }
-
-const startupGoldenRatio = 1.61803398875
-
-const (
-	startupMinimalKeyBG = "#2a2538"
-)
 
 func (a App) shouldRenderStartupScreen() bool {
 	if a.state.ActivePicker != pickerNone || a.logViewerVisible || a.pendingPermission != nil {
@@ -50,15 +45,19 @@ func (a App) shouldRenderStartupScreen() bool {
 }
 
 func (a App) renderStartupScreen(width int, height int) string {
+	if width <= 0 || height <= 0 {
+		return ""
+	}
+
 	logoCanvasWidth := startupLogoCanvasWidth(startupLogo)
-	maxWidth := max(44, width-6)
+	maxWidth := max(1, width-4)
 	panelWidth := min(maxWidth, startupPromptWidth(width))
-	contentWidth := min(maxWidth, max(startupContentWidth(width), logoCanvasWidth+2))
+	contentWidth := min(maxWidth, startupContentWidth(width))
 	contentWidth = max(contentWidth, panelWidth)
 
-	cardWidth := max(46, min(contentWidth, 72))
-	keyWidth := 9
-	labelWidth := max(20, cardWidth-keyWidth-4)
+	cardOuterWidth := min(contentWidth, 72)
+	compactMenu := cardOuterWidth < 46
+	cardInnerWidth := cardOuterWidth
 
 	logoStyle := lipgloss.NewStyle().
 		Bold(true).
@@ -81,34 +80,40 @@ func (a App) renderStartupScreen(width int, height int) string {
 		Align(lipgloss.Center).
 		MarginBottom(1)
 
-	cardStyle := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color(borderDark)).
-		Padding(0, 1)
 	menuKeyStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color(lightText)).
-		UnsetBackground().
-		Bold(true).
-		Padding(0, 1).
-		Align(lipgloss.Center).
-		Width(keyWidth)
+		Bold(true)
+
 	menuLabelStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(lightText))
+
+	menuLineStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color(lightText)).
-		Width(labelWidth)
+		Width(contentWidth).
+		Align(lipgloss.Center)
 
 	logoContent := startupCenterPadLines(strings.Split(startupLogo, "\n"), logoCanvasWidth)
+	if contentWidth < logoCanvasWidth {
+		logoContent = startupCenterPadLine("NeoCode", contentWidth)
+	}
 
 	menuLines := make([]string, 0, len(startupQuickActions))
 	for _, item := range startupQuickActions {
-		menuLines = append(menuLines, lipgloss.JoinHorizontal(
+		if compactMenu {
+			compactLine := item.Key + "  " + item.Label
+			menuLines = append(menuLines, menuLineStyle.Render(compactStatusText(compactLine, max(8, cardInnerWidth))))
+			continue
+		}
+		line := lipgloss.JoinHorizontal(
 			lipgloss.Left,
 			menuKeyStyle.Render(item.Key),
 			"  ",
 			menuLabelStyle.Render(item.Label),
-		))
+		)
+		menuLines = append(menuLines, menuLineStyle.Render(line))
 	}
 
-	card := cardStyle.Width(cardWidth).Render(strings.Join(menuLines, "\n"))
+	card := strings.Join(menuLines, "\n")
 	menuBlock := lipgloss.NewStyle().
 		Width(contentWidth).
 		Align(lipgloss.Center).
@@ -123,26 +128,37 @@ func (a App) renderStartupScreen(width int, height int) string {
 		menuBlock,
 	)
 
+	fixedTopOffset := 6
+
+	paddedContent := lipgloss.NewStyle().
+		MarginTop(fixedTopOffset).
+		Render(content)
 	return lipgloss.Place(
 		width,
 		height,
 		lipgloss.Center,
-		lipgloss.Center,
-		content,
+		lipgloss.Top,
+		paddedContent,
 		lipgloss.WithWhitespaceChars(" "),
 	)
 }
 
 func startupContentWidth(totalWidth int) int {
-	maxWidth := max(44, totalWidth-6)
-	target := int(math.Round(float64(totalWidth) * 0.62))
-	return max(56, min(maxWidth, target))
+	maxWidth := max(1, totalWidth-4)
+	if totalWidth <= 120 {
+		return maxWidth
+	}
+	target := int(math.Round(float64(totalWidth) * 0.74))
+	return max(40, min(maxWidth, target))
 }
 
 func startupPromptWidth(totalWidth int) int {
-	maxWidth := max(24, totalWidth-2)
-	target := int(math.Round(float64(totalWidth) / startupGoldenRatio))
-	return max(60, min(maxWidth, target))
+	maxWidth := max(1, totalWidth-2)
+	if totalWidth <= 128 {
+		return maxWidth
+	}
+	target := int(math.Round(float64(totalWidth) * 0.78))
+	return max(72, min(maxWidth, target))
 }
 
 func startupLogoCanvasWidth(logo string) int {
@@ -163,9 +179,24 @@ func startupCenterPadLines(lines []string, width int) string {
 }
 
 func startupCenterPadLine(line string, width int) string {
+	if width > 0 && lipgloss.Width(line) > width {
+		line = ansi.Cut(line, 0, width)
+	}
 	target := max(width, lipgloss.Width(line))
 	w := lipgloss.Width(line)
 	left := max(0, (target-w)/2)
 	right := max(0, target-w-left)
 	return strings.Repeat(" ", left) + line + strings.Repeat(" ", right)
+}
+
+func startupQuickActionKeyWidth(cardWidth int) int {
+	if cardWidth <= 0 {
+		return 0
+	}
+	longest := 0
+	for _, item := range startupQuickActions {
+		longest = max(longest, lipgloss.Width(item.Key))
+	}
+	maxAllowed := max(4, cardWidth-12)
+	return max(4, min(longest, maxAllowed))
 }
