@@ -144,6 +144,27 @@ func TestRuntimeConfigValidate(t *testing.T) {
 	}).Validate(); err == nil {
 		t.Fatal("expected validation error for assets.max_session_assets_total_bytes=-1")
 	}
+
+	if err := (RuntimeConfig{
+		MaxNoProgressStreak:  1,
+		MaxRepeatCycleStreak: 1,
+		MaxTurns:             1,
+		Verification: VerificationConfig{
+			DefaultTaskPolicy: "unknown",
+			MaxNoProgress:     1,
+			MaxRetries:        0,
+			Verifiers: map[string]VerifierConfig{
+				"todo_convergence": {FailOpen: true, FailClosed: true},
+			},
+			ExecutionPolicy: VerificationExecutionPolicyConfig{
+				Mode:             "non_interactive",
+				DefaultTimeout:   1,
+				DefaultOutputCap: 1,
+			},
+		},
+	}).Validate(); err == nil {
+		t.Fatal("expected validation error for invalid verification config")
+	}
 }
 
 func TestRuntimeAssetsConfigZeroValuesResolveToDefaults(t *testing.T) {

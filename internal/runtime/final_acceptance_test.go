@@ -6,6 +6,7 @@ import (
 
 	"neo-code/internal/config"
 	providertypes "neo-code/internal/provider/types"
+	"neo-code/internal/runtime/acceptance"
 	agentsession "neo-code/internal/session"
 )
 
@@ -171,6 +172,91 @@ func TestInferTaskTypeSupportsChineseKeywords(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestFinalAcceptanceHelperBranches(t *testing.T) {
+	t.Parallel()
+
+	t.Run("beforeAcceptFinal nil state", func(t *testing.T) {
+		t.Parallel()
+		service := &Service{}
+		decision, err := service.beforeAcceptFinal(context.Background(), nil, TurnBudgetSnapshot{}, providertypes.Message{}, true)
+		if err != nil {
+			t.Fatalf("beforeAcceptFinal() error = %v", err)
+		}
+		if decision.Status != "" {
+			t.Fatalf("expected empty decision for nil state, got %+v", decision)
+		}
+	})
+
+	t.Run("maxNoProgress fallback to default", func(t *testing.T) {
+		t.Parallel()
+		service := &Service{}
+		cfg := config.StaticDefaults().Clone()
+		cfg.Runtime.Verification.MaxNoProgress = 0
+		state := newRunState("run-max-no-progress-default", agentsession.New("max-no-progress-default"))
+		state.finalInterceptStreak = 3
+		required := true
+		state.session.Todos = []agentsession.TodoItem{
+			{ID: "todo-1", Content: "pending", Status: agentsession.TodoStatusPending, Required: &required},
+		}
+		decision, err := service.beforeAcceptFinal(context.Background(), &state, TurnBudgetSnapshot{
+			Config:  cfg,
+			Workdir: t.TempDir(),
+		}, providertypes.Message{}, true)
+		if err != nil {
+			t.Fatalf("beforeAcceptFinal() error = %v", err)
+		}
+		if decision.Status != "incomplete" {
+			t.Fatalf("status = %q, want incomplete", decision.Status)
+		}
+	})
+
+	t.Run("recordAcceptanceTerminal nil state no panic", func(t *testing.T) {
+		t.Parallel()
+		recordAcceptanceTerminal(nil, acceptance.AcceptanceDecision{})
+	})
+
+	t.Run("renderPartsForVerification non-text ignored", func(t *testing.T) {
+		t.Parallel()
+		got := renderPartsForVerification([]providertypes.ContentPart{
+			{Kind: providertypes.ContentPartImage, Text: "ignored"},
+			providertypes.NewTextPart(" ok "),
+		})
+		if got != "ok" {
+			t.Fatalf("renderPartsForVerification() = %q, want %q", got, "ok")
+		}
+	})
+
+	t.Run("inferTaskType nil state", func(t *testing.T) {
+		t.Parallel()
+		if got := inferTaskType(nil); got != "unknown" {
+			t.Fatalf("inferTaskType(nil) = %q, want unknown", got)
+		}
+	})
+
+	t.Run("applyAcceptanceResultProgress branches", func(t *testing.T) {
+		t.Parallel()
+		state := newRunState("run-progress", agentsession.New("progress"))
+		state.finalInterceptStreak = 2
+
+		applyAcceptanceResultProgress(&state, acceptance.AcceptanceDecision{Status: acceptance.AcceptanceContinue, HasProgress: true})
+		if state.finalInterceptStreak != 0 {
+			t.Fatalf("streak = %d, want 0 after progress", state.finalInterceptStreak)
+		}
+
+		applyAcceptanceResultProgress(&state, acceptance.AcceptanceDecision{Status: acceptance.AcceptanceContinue, HasProgress: false})
+		if state.finalInterceptStreak != 1 {
+			t.Fatalf("streak = %d, want 1 after continue without progress", state.finalInterceptStreak)
+		}
+
+		applyAcceptanceResultProgress(&state, acceptance.AcceptanceDecision{Status: acceptance.AcceptanceAccepted})
+		if state.finalInterceptStreak != 0 {
+			t.Fatalf("streak = %d, want 0 after non-continue", state.finalInterceptStreak)
+		}
+
+		applyAcceptanceResultProgress(nil, acceptance.AcceptanceDecision{Status: acceptance.AcceptanceContinue})
+	})
 }
 
 func boolPtr(value bool) *bool {

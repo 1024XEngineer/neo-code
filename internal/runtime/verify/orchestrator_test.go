@@ -78,6 +78,19 @@ func TestOrchestratorRunFinalVerification(t *testing.T) {
 		}
 	})
 
+	t.Run("hard block without waiting external maps to todo_not_converged", func(t *testing.T) {
+		t.Parallel()
+		decision, err := (Orchestrator{Verifiers: []FinalVerifier{
+			stubFinalVerifier{name: "todo", result: VerificationResult{Name: "todo", Status: VerificationHardBlock}},
+		}}).RunFinalVerification(context.Background(), FinalVerifyInput{})
+		if err != nil {
+			t.Fatalf("RunFinalVerification() error = %v", err)
+		}
+		if decision.Passed || decision.Reason != controlplane.StopReasonTodoNotConverged {
+			t.Fatalf("unexpected decision: %+v", decision)
+		}
+	})
+
 	t.Run("soft block keeps todo_not_converged", func(t *testing.T) {
 		t.Parallel()
 		decision, err := (Orchestrator{Verifiers: []FinalVerifier{

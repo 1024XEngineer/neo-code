@@ -59,6 +59,19 @@ func TestRunConfiguredHooks(t *testing.T) {
 		}
 	})
 
+	t.Run("all hooks filtered or nil returns nil", func(t *testing.T) {
+		t.Parallel()
+		spec := makeSpec()
+		spec.Priority = 100
+		err := runConfiguredHooks(context.Background(), spec, "before", []prioritizedHook{
+			{priority: 10, hook: nil},
+			{priority: 10, hook: namedHook{name: "low"}},
+		}, FinalAcceptanceInput{})
+		if err != nil {
+			t.Fatalf("runConfiguredHooks() error = %v", err)
+		}
+	})
+
 	t.Run("hook error includes stage and hook name", func(t *testing.T) {
 		t.Parallel()
 		spec := makeSpec()
@@ -90,6 +103,11 @@ func TestHookPolicyAndDecision(t *testing.T) {
 	}
 	if !strings.Contains(decision.InternalSummary, "before") {
 		t.Fatalf("unexpected internal summary: %q", decision.InternalSummary)
+	}
+
+	emptyDecision := hookFailureDecision("after", errors.New(""))
+	if !strings.Contains(emptyDecision.InternalSummary, "acceptance hook failed") {
+		t.Fatalf("expected default hook failure detail, got %q", emptyDecision.InternalSummary)
 	}
 }
 

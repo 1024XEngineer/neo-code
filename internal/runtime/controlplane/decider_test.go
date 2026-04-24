@@ -99,4 +99,27 @@ func TestDecideStopReasonDetails(t *testing.T) {
 	if detail != "runtime: stop reason undetermined" {
 		t.Fatalf("detail = %q, want undetermined detail", detail)
 	}
+
+	reason, detail = DecideStopReason(StopInput{
+		PreDecidedReason: StopReasonCompatibilityFallback,
+		PreDecidedDetail: "  fallback  ",
+	})
+	if reason != StopReasonCompatibilityFallback || detail != "fallback" {
+		t.Fatalf("pre-decided mismatch, got (%q, %q)", reason, detail)
+	}
+
+	reason, detail = DecideStopReason(StopInput{MaxTurnsReached: true})
+	if reason != StopReasonMaxTurnExceeded || detail != "" {
+		t.Fatalf("max-turn no-limit mismatch, got (%q, %q)", reason, detail)
+	}
+
+	reason, detail = DecideStopReason(StopInput{RetryExhausted: true})
+	if reason != StopReasonRetryExhausted || detail != "" {
+		t.Fatalf("retry exhausted mismatch, got (%q, %q)", reason, detail)
+	}
+
+	reason, detail = DecideStopReason(StopInput{VerificationFailed: true})
+	if reason != StopReasonVerificationFailed || detail != "" {
+		t.Fatalf("verification failed mismatch, got (%q, %q)", reason, detail)
+	}
 }

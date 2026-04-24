@@ -89,6 +89,25 @@ func TestGitDiffVerifierVerifyFinal(t *testing.T) {
 			t.Fatalf("changed_files = %#v, want %#v", files, []string{"a.go", "b.go"})
 		}
 	})
+
+	t.Run("uses default command when verifier command empty", func(t *testing.T) {
+		t.Parallel()
+		cfg := verifyConfigForGitDiffTests()
+		verifierCfg := cfg.Verifiers[gitDiffVerifierName]
+		verifierCfg.Command = "   "
+		cfg.Verifiers[gitDiffVerifierName] = verifierCfg
+
+		result, err := (GitDiffVerifier{}).VerifyFinal(context.Background(), FinalVerifyInput{
+			Workdir:            t.TempDir(),
+			VerificationConfig: cfg,
+		})
+		if err != nil {
+			t.Fatalf("VerifyFinal() error = %v", err)
+		}
+		if result.Status != VerificationFail && result.Status != VerificationPass {
+			t.Fatalf("unexpected status %q", result.Status)
+		}
+	})
 }
 
 func TestGitDiffVerifierName(t *testing.T) {
