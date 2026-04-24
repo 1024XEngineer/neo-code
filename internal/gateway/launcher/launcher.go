@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 )
 
@@ -56,41 +57,97 @@ func resolveGatewayLaunchSpecWithDeps(
 	options ResolveOptions,
 	lookPathFn func(string) (string, error),
 ) (LaunchSpec, error) {
-	resolveByLookup := func(binary string) (string, error) {
-		resolved, err := lookPathFn(strings.TrimSpace(binary))
-		if err != nil {
-			return "", fmt.Errorf("resolve executable %q: %w", strings.TrimSpace(binary), err)
-		}
-		return strings.TrimSpace(resolved), nil
-	}
-
 	explicitBinary := strings.TrimSpace(options.ExplicitBinary)
 	if explicitBinary != "" {
-		resolved, err := resolveByLookup(explicitBinary)
+		if err := validateExplicitGatewayBinary(explicitBinary); err != nil {
+			return LaunchSpec{}, err
+		}
+		spec, err := resolveLaunchSpecCandidate(
+			lookPathFn,
+			explicitBinary,
+			LaunchModeExplicitPath,
+			nil,
+			"explicit gateway binary",
+		)
 		if err != nil {
 			return LaunchSpec{}, err
 		}
-		return LaunchSpec{
-			LaunchMode: LaunchModeExplicitPath,
-			Executable: resolved,
-		}, nil
+		return spec, nil
 	}
 
-	if resolved, err := resolveByLookup("neocode-gateway"); err == nil {
-		return LaunchSpec{
-			LaunchMode: LaunchModePathBinary,
-			Executable: resolved,
-		}, nil
+	resolvedPathBinary, err := resolveExecutablePath(lookPathFn, "neocode-gateway")
+	if err == nil {
+		return resolveLaunchSpecFromResolvedPath(
+			resolvedPathBinary,
+			LaunchModePathBinary,
+			nil,
+			"PATH neocode-gateway",
+		)
 	}
 
-	resolvedFallbackExecutable, err := resolveByLookup("neocode")
+	return resolveLaunchSpecCandidate(
+		lookPathFn,
+		"neocode",
+		LaunchModeFallbackSubcommand,
+		[]string{"gateway"},
+		"PATH neocode",
+	)
+}
+
+// resolveLaunchSpecCandidate 统一处理可执行查找、绝对路径校验与 LaunchSpec 构造。
+func resolveLaunchSpecCandidate(
+	lookPathFn func(string) (string, error),
+	binary string,
+	launchMode string,
+	args []string,
+	source string,
+) (LaunchSpec, error) {
+	resolvedPath, err := resolveExecutablePath(lookPathFn, binary)
 	if err != nil {
 		return LaunchSpec{}, err
 	}
+	return resolveLaunchSpecFromResolvedPath(resolvedPath, launchMode, args, source)
+}
 
+// resolveLaunchSpecFromResolvedPath 基于已解析的路径构造启动规格，并保留绝对路径校验。
+func resolveLaunchSpecFromResolvedPath(
+	resolvedPath string,
+	launchMode string,
+	args []string,
+	source string,
+) (LaunchSpec, error) {
+	if err := validateResolvedExecutablePath(resolvedPath, source); err != nil {
+		return LaunchSpec{}, err
+	}
 	return LaunchSpec{
-		LaunchMode: LaunchModeFallbackSubcommand,
-		Executable: resolvedFallbackExecutable,
-		Args:       []string{"gateway"},
+		LaunchMode: launchMode,
+		Executable: resolvedPath,
+		Args:       append([]string(nil), args...),
 	}, nil
+}
+
+// resolveExecutablePath 统一处理可执行路径查找与空白归一化。
+func resolveExecutablePath(lookPathFn func(string) (string, error), binary string) (string, error) {
+	trimmedBinary := strings.TrimSpace(binary)
+	resolvedPath, err := lookPathFn(trimmedBinary)
+	if err != nil {
+		return "", fmt.Errorf("resolve executable %q: %w", trimmedBinary, err)
+	}
+	return strings.TrimSpace(resolvedPath), nil
+}
+
+// validateExplicitGatewayBinary 校验显式配置的网关二进制路径，禁止使用相对路径降低 PATH 劫持风险。
+func validateExplicitGatewayBinary(explicitBinary string) error {
+	if !filepath.IsAbs(explicitBinary) {
+		return fmt.Errorf("explicit gateway binary must be an absolute path: %q", explicitBinary)
+	}
+	return nil
+}
+
+// validateResolvedExecutablePath 校验解析后的可执行路径必须为绝对路径，避免执行不受控相对路径目标。
+func validateResolvedExecutablePath(resolvedPath string, source string) error {
+	if !filepath.IsAbs(resolvedPath) {
+		return fmt.Errorf("resolved executable from %s is not an absolute path: %q", source, resolvedPath)
+	}
+	return nil
 }

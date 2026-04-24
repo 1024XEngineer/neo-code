@@ -20,6 +20,43 @@ import (
 	"neo-code/internal/gateway/transport"
 )
 
+// newStubDispatcher 创建测试用调度器，统一默认依赖并允许按需覆盖。
+func newStubDispatcher(overrides func(*Dispatcher)) *Dispatcher {
+	dispatcher := &Dispatcher{
+		resolveListenAddressFn: func(string) (string, error) { return "stub://gateway", nil },
+		dialFn:                 func(string) (net.Conn, error) { return &stubDispatchConn{}, nil },
+		requestIDFn:            func() string { return "wake-test" },
+	}
+	if overrides != nil {
+		overrides(dispatcher)
+	}
+	return dispatcher
+}
+
+// assertDispatchErrorCode 校验错误会被映射为指定的 DispatchError 码。
+func assertDispatchErrorCode(t *testing.T, err error, wantCode string) *DispatchError {
+	t.Helper()
+
+	var dispatchErr *DispatchError
+	if !errors.As(err, &dispatchErr) {
+		t.Fatalf("error type = %T, want *DispatchError", err)
+	}
+	if dispatchErr.Code != wantCode {
+		t.Fatalf("error code = %q, want %q", dispatchErr.Code, wantCode)
+	}
+	return dispatchErr
+}
+
+// assertDispatchErrorMessageContains 校验结构化错误包含预期消息片段。
+func assertDispatchErrorMessageContains(t *testing.T, err error, wantCode string, wantMessage string) {
+	t.Helper()
+
+	dispatchErr := assertDispatchErrorCode(t, err, wantCode)
+	if !strings.Contains(dispatchErr.Message, wantMessage) {
+		t.Fatalf("error message = %q, want contains %q", dispatchErr.Message, wantMessage)
+	}
+}
+
 func TestDispatcherDispatchSuccess(t *testing.T) {
 	serverConn, clientConn := net.Pipe()
 	t.Cleanup(func() {
@@ -27,17 +64,14 @@ func TestDispatcherDispatchSuccess(t *testing.T) {
 		_ = clientConn.Close()
 	})
 
-	dispatcher := &Dispatcher{
-		resolveListenAddressFn: func(string) (string, error) {
-			return "stub://gateway", nil
-		},
-		dialFn: func(string) (net.Conn, error) {
+	dispatcher := newStubDispatcher(func(dispatcher *Dispatcher) {
+		dispatcher.dialFn = func(string) (net.Conn, error) {
 			return clientConn, nil
-		},
-		requestIDFn: func() string {
+		}
+		dispatcher.requestIDFn = func() string {
 			return "wake-1"
-		},
-	}
+		}
+	})
 
 	done := make(chan struct{})
 	go func() {
@@ -115,11 +149,10 @@ func TestDispatcherDispatchReturnsGatewayError(t *testing.T) {
 		_ = clientConn.Close()
 	})
 
-	dispatcher := &Dispatcher{
-		resolveListenAddressFn: func(string) (string, error) { return "stub://gateway", nil },
-		dialFn:                 func(string) (net.Conn, error) { return clientConn, nil },
-		requestIDFn:            func() string { return "wake-2" },
-	}
+	dispatcher := newStubDispatcher(func(dispatcher *Dispatcher) {
+		dispatcher.dialFn = func(string) (net.Conn, error) { return clientConn, nil }
+		dispatcher.requestIDFn = func() string { return "wake-2" }
+	})
 
 	go func() {
 		decoder := json.NewDecoder(serverConn)
@@ -144,13 +177,7 @@ func TestDispatcherDispatchReturnsGatewayError(t *testing.T) {
 		t.Fatal("expected gateway error")
 	}
 
-	var dispatchErr *DispatchError
-	if !errors.As(err, &dispatchErr) {
-		t.Fatalf("error type = %T, want *DispatchError", err)
-	}
-	if dispatchErr.Code != gateway.ErrorCodeInvalidAction.String() {
-		t.Fatalf("error code = %q, want %q", dispatchErr.Code, gateway.ErrorCodeInvalidAction.String())
-	}
+	assertDispatchErrorCode(t, err, gateway.ErrorCodeInvalidAction.String())
 }
 
 func TestDispatcherDispatchReturnsUnexpectedResponseError(t *testing.T) {
@@ -160,11 +187,10 @@ func TestDispatcherDispatchReturnsUnexpectedResponseError(t *testing.T) {
 		_ = clientConn.Close()
 	})
 
-	dispatcher := &Dispatcher{
-		resolveListenAddressFn: func(string) (string, error) { return "stub://gateway", nil },
-		dialFn:                 func(string) (net.Conn, error) { return clientConn, nil },
-		requestIDFn:            func() string { return "wake-3" },
-	}
+	dispatcher := newStubDispatcher(func(dispatcher *Dispatcher) {
+		dispatcher.dialFn = func(string) (net.Conn, error) { return clientConn, nil }
+		dispatcher.requestIDFn = func() string { return "wake-3" }
+	})
 
 	go func() {
 		decoder := json.NewDecoder(serverConn)
@@ -188,13 +214,7 @@ func TestDispatcherDispatchReturnsUnexpectedResponseError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected unexpected response error")
 	}
-	var dispatchErr *DispatchError
-	if !errors.As(err, &dispatchErr) {
-		t.Fatalf("error type = %T, want *DispatchError", err)
-	}
-	if dispatchErr.Code != ErrorCodeUnexpectedResponse {
-		t.Fatalf("error code = %q, want %q", dispatchErr.Code, ErrorCodeUnexpectedResponse)
-	}
+	assertDispatchErrorCode(t, err, ErrorCodeUnexpectedResponse)
 }
 
 func TestDispatcherDispatchReturnsCorrelationMismatchError(t *testing.T) {
@@ -204,11 +224,10 @@ func TestDispatcherDispatchReturnsCorrelationMismatchError(t *testing.T) {
 		_ = clientConn.Close()
 	})
 
-	dispatcher := &Dispatcher{
-		resolveListenAddressFn: func(string) (string, error) { return "stub://gateway", nil },
-		dialFn:                 func(string) (net.Conn, error) { return clientConn, nil },
-		requestIDFn:            func() string { return "wake-9" },
-	}
+	dispatcher := newStubDispatcher(func(dispatcher *Dispatcher) {
+		dispatcher.dialFn = func(string) (net.Conn, error) { return clientConn, nil }
+		dispatcher.requestIDFn = func() string { return "wake-9" }
+	})
 
 	go func() {
 		decoder := json.NewDecoder(serverConn)
@@ -232,26 +251,16 @@ func TestDispatcherDispatchReturnsCorrelationMismatchError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected correlation mismatch error")
 	}
-	var dispatchErr *DispatchError
-	if !errors.As(err, &dispatchErr) {
-		t.Fatalf("error type = %T, want *DispatchError", err)
-	}
-	if dispatchErr.Code != ErrorCodeUnexpectedResponse {
-		t.Fatalf("error code = %q, want %q", dispatchErr.Code, ErrorCodeUnexpectedResponse)
-	}
-	if !strings.Contains(dispatchErr.Message, "frame correlation failed") {
-		t.Fatalf("error message = %q, want correlation failure", dispatchErr.Message)
-	}
+	assertDispatchErrorMessageContains(t, err, ErrorCodeUnexpectedResponse, "frame correlation failed")
 }
 
 func TestDispatcherDispatchInputAndDialErrors(t *testing.T) {
-	dispatcher := &Dispatcher{
-		resolveListenAddressFn: func(string) (string, error) { return "stub://gateway", nil },
-		dialFn: func(string) (net.Conn, error) {
+	dispatcher := newStubDispatcher(func(dispatcher *Dispatcher) {
+		dispatcher.dialFn = func(string) (net.Conn, error) {
 			return nil, errors.New("dial failed")
-		},
-		requestIDFn: func() string { return "wake-4" },
-	}
+		}
+		dispatcher.requestIDFn = func() string { return "wake-4" }
+	})
 
 	_, parseErr := dispatcher.Dispatch(context.Background(), DispatchRequest{
 		RawURL: "http://review?path=README.md",
@@ -259,13 +268,7 @@ func TestDispatcherDispatchInputAndDialErrors(t *testing.T) {
 	if parseErr == nil {
 		t.Fatal("expected parse error")
 	}
-	var parseDispatchErr *DispatchError
-	if !errors.As(parseErr, &parseDispatchErr) {
-		t.Fatalf("parse error type = %T, want *DispatchError", parseErr)
-	}
-	if parseDispatchErr.Code != "invalid_scheme" {
-		t.Fatalf("parse error code = %q, want %q", parseDispatchErr.Code, "invalid_scheme")
-	}
+	assertDispatchErrorCode(t, parseErr, "invalid_scheme")
 
 	_, dialErr := dispatcher.Dispatch(context.Background(), DispatchRequest{
 		RawURL: "neocode://review?path=README.md",
@@ -273,13 +276,7 @@ func TestDispatcherDispatchInputAndDialErrors(t *testing.T) {
 	if dialErr == nil {
 		t.Fatal("expected dial error")
 	}
-	var dialDispatchErr *DispatchError
-	if !errors.As(dialErr, &dialDispatchErr) {
-		t.Fatalf("dial error type = %T, want *DispatchError", dialErr)
-	}
-	if dialDispatchErr.Code != ErrorCodeGatewayUnavailable {
-		t.Fatalf("dial error code = %q, want %q", dialDispatchErr.Code, ErrorCodeGatewayUnavailable)
-	}
+	assertDispatchErrorCode(t, dialErr, ErrorCodeGatewayUnavailable)
 }
 
 func TestDispatcherDialGatewayWithSingleLaunchFallback(t *testing.T) {
@@ -1342,6 +1339,9 @@ func TestDispatcherWaitGatewayReadyBranches(t *testing.T) {
 		}
 		if !strings.Contains(err.Error(), "did not become reachable") && !errors.Is(err, context.DeadlineExceeded) {
 			t.Fatalf("expected timeout-related error, got %v", err)
+		}
+		if !errors.Is(err, context.DeadlineExceeded) && !strings.Contains(err.Error(), "40ms") {
+			t.Fatalf("error = %v, want contains %q when timeout message is returned", err, "40ms")
 		}
 		if sleepCalls != 0 {
 			t.Fatalf("sleepCalls = %d, want %d", sleepCalls, 0)

@@ -6,9 +6,25 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 )
+
+// assertLaunchSpecEqual 校验解析出的启动规格，保持测试断言结构一致。
+func assertLaunchSpecEqual(t *testing.T, spec LaunchSpec, want LaunchSpec) {
+	t.Helper()
+
+	if spec.LaunchMode != want.LaunchMode {
+		t.Fatalf("launch mode = %q, want %q", spec.LaunchMode, want.LaunchMode)
+	}
+	if spec.Executable != want.Executable {
+		t.Fatalf("executable = %q, want %q", spec.Executable, want.Executable)
+	}
+	if !reflect.DeepEqual(spec.Args, want.Args) {
+		t.Fatalf("args = %#v, want %#v", spec.Args, want.Args)
+	}
+}
 
 func TestResolveGatewayLaunchSpecWithDeps(t *testing.T) {
 	t.Run("explicit binary has highest priority", func(t *testing.T) {
@@ -24,15 +40,10 @@ func TestResolveGatewayLaunchSpecWithDeps(t *testing.T) {
 		if err != nil {
 			t.Fatalf("resolveGatewayLaunchSpecWithDeps() error = %v", err)
 		}
-		if spec.LaunchMode != LaunchModeExplicitPath {
-			t.Fatalf("launch mode = %q, want %q", spec.LaunchMode, LaunchModeExplicitPath)
-		}
-		if spec.Executable != "/opt/tools/neocode-gateway" {
-			t.Fatalf("executable = %q, want %q", spec.Executable, "/opt/tools/neocode-gateway")
-		}
-		if len(spec.Args) != 0 {
-			t.Fatalf("args = %#v, want empty", spec.Args)
-		}
+		assertLaunchSpecEqual(t, spec, LaunchSpec{
+			LaunchMode: LaunchModeExplicitPath,
+			Executable: "/opt/tools/neocode-gateway",
+		})
 	})
 
 	t.Run("path binary preferred over fallback", func(t *testing.T) {
@@ -48,15 +59,10 @@ func TestResolveGatewayLaunchSpecWithDeps(t *testing.T) {
 		if err != nil {
 			t.Fatalf("resolveGatewayLaunchSpecWithDeps() error = %v", err)
 		}
-		if spec.LaunchMode != LaunchModePathBinary {
-			t.Fatalf("launch mode = %q, want %q", spec.LaunchMode, LaunchModePathBinary)
-		}
-		if spec.Executable != "/usr/local/bin/neocode-gateway" {
-			t.Fatalf("executable = %q, want %q", spec.Executable, "/usr/local/bin/neocode-gateway")
-		}
-		if len(spec.Args) != 0 {
-			t.Fatalf("args = %#v, want empty", spec.Args)
-		}
+		assertLaunchSpecEqual(t, spec, LaunchSpec{
+			LaunchMode: LaunchModePathBinary,
+			Executable: "/usr/local/bin/neocode-gateway",
+		})
 	})
 
 	t.Run("fallback to neocode subcommand", func(t *testing.T) {
@@ -76,15 +82,11 @@ func TestResolveGatewayLaunchSpecWithDeps(t *testing.T) {
 		if err != nil {
 			t.Fatalf("resolveGatewayLaunchSpecWithDeps() error = %v", err)
 		}
-		if spec.LaunchMode != LaunchModeFallbackSubcommand {
-			t.Fatalf("launch mode = %q, want %q", spec.LaunchMode, LaunchModeFallbackSubcommand)
-		}
-		if spec.Executable != "/usr/local/bin/neocode" {
-			t.Fatalf("executable = %q, want %q", spec.Executable, "/usr/local/bin/neocode")
-		}
-		if !reflect.DeepEqual(spec.Args, []string{"gateway"}) {
-			t.Fatalf("args = %#v, want %#v", spec.Args, []string{"gateway"})
-		}
+		assertLaunchSpecEqual(t, spec, LaunchSpec{
+			LaunchMode: LaunchModeFallbackSubcommand,
+			Executable: "/usr/local/bin/neocode",
+			Args:       []string{"gateway"},
+		})
 	})
 
 	t.Run("explicit binary lookup failure returns error", func(t *testing.T) {
@@ -96,6 +98,67 @@ func TestResolveGatewayLaunchSpecWithDeps(t *testing.T) {
 		)
 		if err == nil {
 			t.Fatal("expected explicit lookup error")
+		}
+	})
+
+	t.Run("explicit binary must be absolute path", func(t *testing.T) {
+		lookupCalled := false
+		_, err := resolveGatewayLaunchSpecWithDeps(
+			ResolveOptions{ExplicitBinary: "neocode-gateway"},
+			func(string) (string, error) {
+				lookupCalled = true
+				return "", nil
+			},
+		)
+		if err == nil {
+			t.Fatal("expected explicit path validation error")
+		}
+		if lookupCalled {
+			t.Fatal("lookPath should not be called for invalid explicit path")
+		}
+	})
+
+	t.Run("path binary resolution rejects non-absolute path", func(t *testing.T) {
+		_, err := resolveGatewayLaunchSpecWithDeps(
+			ResolveOptions{},
+			func(binary string) (string, error) {
+				switch binary {
+				case "neocode-gateway":
+					return "neocode-gateway", nil
+				case "neocode":
+					return "/usr/local/bin/neocode", nil
+				default:
+					return "", errors.New("unexpected lookup")
+				}
+			},
+		)
+		if err == nil {
+			t.Fatal("expected non-absolute path resolution error")
+		}
+		if !strings.Contains(err.Error(), "not an absolute path") {
+			t.Fatalf("error = %v, want contains %q", err, "not an absolute path")
+		}
+	})
+
+	t.Run("fallback binary resolution rejects non-absolute path", func(t *testing.T) {
+		_, err := resolveGatewayLaunchSpecWithDeps(
+			ResolveOptions{},
+			func(binary string) (string, error) {
+				switch binary {
+				case "neocode-gateway":
+					return "", errors.New("not found")
+				case "neocode":
+					return "neocode", nil
+				default:
+					return "", errors.New("unexpected lookup")
+				}
+			},
+		)
+		if err == nil {
+			t.Fatal("expected non-absolute fallback path resolution error")
+		}
+		if !strings.Contains(err.Error(), "not an absolute path") {
+			t.Fatalf("error = %v, want contains %q", err, "not an absolute path")
 		}
 	})
 
