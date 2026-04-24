@@ -18,6 +18,7 @@ type RuntimeConfig struct {
 	MaxNoProgressStreak  int                 `yaml:"max_no_progress_streak,omitempty"`
 	MaxRepeatCycleStreak int                 `yaml:"max_repeat_cycle_streak,omitempty"`
 	MaxTurns             int                 `yaml:"max_turns,omitempty"`
+	Verification         VerificationConfig  `yaml:"verification,omitempty"`
 	Assets               RuntimeAssetsConfig `yaml:"assets,omitempty"`
 }
 
@@ -33,6 +34,7 @@ func defaultRuntimeConfig() RuntimeConfig {
 		MaxNoProgressStreak:  DefaultMaxNoProgressStreak,
 		MaxRepeatCycleStreak: DefaultMaxRepeatCycleStreak,
 		MaxTurns:             DefaultMaxTurns,
+		Verification:         defaultVerificationConfig(),
 		Assets:               defaultRuntimeAssetsConfig(),
 	}
 }
@@ -51,6 +53,7 @@ func (c RuntimeConfig) Clone() RuntimeConfig {
 		MaxNoProgressStreak:  c.MaxNoProgressStreak,
 		MaxRepeatCycleStreak: c.MaxRepeatCycleStreak,
 		MaxTurns:             c.MaxTurns,
+		Verification:         c.Verification.Clone(),
 		Assets:               c.Assets.Clone(),
 	}
 }
@@ -69,6 +72,7 @@ func (c *RuntimeConfig) ApplyDefaults(defaults RuntimeConfig) {
 	if c.MaxTurns <= 0 {
 		c.MaxTurns = defaults.MaxTurns
 	}
+	c.Verification.ApplyDefaults(defaults.Verification)
 	c.Assets.ApplyDefaults(defaults.Assets)
 }
 
@@ -82,6 +86,11 @@ func (c RuntimeConfig) Validate() error {
 	}
 	if c.MaxTurns < 0 {
 		return errors.New("max_turns must be greater than or equal to 0")
+	}
+	verification := c.Verification.Clone()
+	verification.ApplyDefaults(defaultVerificationConfig())
+	if err := verification.Validate(); err != nil {
+		return err
 	}
 	if err := c.Assets.Validate(); err != nil {
 		return err

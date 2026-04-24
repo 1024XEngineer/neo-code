@@ -58,16 +58,18 @@ type writeInput struct {
 }
 
 type todoPatchInput struct {
-	Content       *string                  `json:"content,omitempty"`
-	Status        *agentsession.TodoStatus `json:"status,omitempty"`
-	Dependencies  *[]string                `json:"dependencies,omitempty"`
-	Priority      *int                     `json:"priority,omitempty"`
-	Executor      *string                  `json:"executor,omitempty"`
-	OwnerType     *string                  `json:"owner_type,omitempty"`
-	OwnerID       *string                  `json:"owner_id,omitempty"`
-	Acceptance    *[]string                `json:"acceptance,omitempty"`
-	Artifacts     *[]string                `json:"artifacts,omitempty"`
-	FailureReason *string                  `json:"failure_reason,omitempty"`
+	Content       *string                         `json:"content,omitempty"`
+	Status        *agentsession.TodoStatus        `json:"status,omitempty"`
+	Required      *bool                           `json:"required,omitempty"`
+	BlockedReason *agentsession.TodoBlockedReason `json:"blocked_reason,omitempty"`
+	Dependencies  *[]string                       `json:"dependencies,omitempty"`
+	Priority      *int                            `json:"priority,omitempty"`
+	Executor      *string                         `json:"executor,omitempty"`
+	OwnerType     *string                         `json:"owner_type,omitempty"`
+	OwnerID       *string                         `json:"owner_id,omitempty"`
+	Acceptance    *[]string                       `json:"acceptance,omitempty"`
+	Artifacts     *[]string                       `json:"artifacts,omitempty"`
+	FailureReason *string                         `json:"failure_reason,omitempty"`
 }
 
 func (p *todoPatchInput) toSessionPatch() agentsession.TodoPatch {
@@ -77,6 +79,8 @@ func (p *todoPatchInput) toSessionPatch() agentsession.TodoPatch {
 	return agentsession.TodoPatch{
 		Content:       p.Content,
 		Status:        p.Status,
+		Required:      p.Required,
+		BlockedReason: p.BlockedReason,
 		Dependencies:  p.Dependencies,
 		Priority:      p.Priority,
 		Executor:      p.Executor,
@@ -172,6 +176,7 @@ func normalizeWriteInputObject(payload map[string]any) {
 func normalizeTodoPatchObject(payload map[string]any) {
 	normalizeStringField(payload, "content")
 	normalizeStringField(payload, "status")
+	normalizeStringField(payload, "blocked_reason")
 	normalizeStringField(payload, "executor")
 	normalizeStringField(payload, "owner_type")
 	normalizeStringField(payload, "owner_id")
@@ -186,6 +191,7 @@ func normalizeTodoItemObject(payload map[string]any) {
 	normalizeStringField(payload, "id")
 	normalizeStringField(payload, "content")
 	normalizeStringField(payload, "status")
+	normalizeStringField(payload, "blocked_reason")
 	normalizeStringField(payload, "executor")
 	normalizeStringField(payload, "owner_type")
 	normalizeStringField(payload, "owner_id")
@@ -381,6 +387,7 @@ func ensureTodoWriteItemLength(field string, item agentsession.TodoItem) error {
 	}{
 		{field: field + ".id", value: item.ID},
 		{field: field + ".content", value: item.Content},
+		{field: field + ".blocked_reason", value: string(item.BlockedReason)},
 		{field: field + ".executor", value: item.Executor},
 		{field: field + ".owner_type", value: item.OwnerType},
 		{field: field + ".owner_id", value: item.OwnerID},
@@ -407,6 +414,11 @@ func ensureTodoWriteItemLength(field string, item agentsession.TodoItem) error {
 func ensureTodoWritePatchLength(patch todoPatchInput) error {
 	if patch.Content != nil {
 		if err := ensureTodoWriteTextLength("patch.content", *patch.Content); err != nil {
+			return err
+		}
+	}
+	if patch.BlockedReason != nil {
+		if err := ensureTodoWriteTextLength("patch.blocked_reason", string(*patch.BlockedReason)); err != nil {
 			return err
 		}
 	}

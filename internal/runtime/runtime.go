@@ -12,6 +12,7 @@ import (
 	"neo-code/internal/config"
 	agentcontext "neo-code/internal/context"
 	contextcompact "neo-code/internal/context/compact"
+	"neo-code/internal/context/repository"
 	"neo-code/internal/provider"
 	"neo-code/internal/provider/builtin"
 	providertypes "neo-code/internal/provider/types"
@@ -112,6 +113,12 @@ type BudgetResolver interface {
 	ResolvePromptBudget(ctx context.Context, cfg config.Config) (int, string, error)
 }
 
+// repositoryFactService 约束 runtime 条件化获取仓库事实所需的最小能力。
+type repositoryFactService interface {
+	Inspect(ctx context.Context, workdir string, opts repository.InspectOptions) (repository.InspectResult, error)
+	Retrieve(ctx context.Context, workdir string, query repository.RetrievalQuery) (repository.RetrievalResult, error)
+}
+
 type Service struct {
 	configManager     *config.Manager
 	sessionStore      agentsession.Store
@@ -120,6 +127,7 @@ type Service struct {
 	toolManager       tools.Manager
 	providerFactory   ProviderFactory
 	contextBuilder    agentcontext.Builder
+	repositoryService repositoryFactService
 	compactRunner     contextcompact.Runner
 	approvalBroker    *approval.Broker
 	memoExtractor     MemoExtractor
@@ -179,6 +187,7 @@ func NewWithFactory(
 		toolManager:        toolManager,
 		providerFactory:    providerFactory,
 		contextBuilder:     contextBuilder,
+		repositoryService:  repository.NewService(),
 		approvalBroker:     approval.NewBroker(),
 		events:             make(chan RuntimeEvent, 128),
 		sessionLocks:       make(map[string]*sessionLockEntry),
@@ -251,6 +260,20 @@ func (s *Service) CancelRun(runID string) bool {
 // Events 返回 runtime 事件通道，供上层 UI 订阅。
 func (s *Service) Events() <-chan RuntimeEvent {
 	return s.events
+}
+
+// loadConfigSnapshot 在运行关键路径前主动从磁盘刷新一次配置快照，确保跨进程修改后的 provider/model 可见。
+func (s *Service) loadConfigSnapshot(ctx context.Context) (config.Config, error) {
+	if s == nil || s.configManager == nil {
+		return config.Config{}, errors.New("runtime: config manager is nil")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return s.configManager.Get(), nil
+	}
+	return s.configManager.Load(ctx)
 }
 
 // ListSessions 返回当前会话存储中的所有摘要。

@@ -325,7 +325,7 @@ func TestDefaultManagerExecute(t *testing.T) {
 				Workdir:   workspaceRoot,
 				SessionID: "session-low-risk-outside",
 			},
-			sandboxErr:        fmt.Errorf("security: path %q escapes workspace root", lowRiskOutsidePath),
+			sandboxErr:        fmt.Errorf("security: path %q escapes workspace root: %w", lowRiskOutsidePath, security.ErrWorkspaceBoundaryViolation),
 			expectErr:         sandboxExternalWriteApprovalReason,
 			expectContent:     []string{"tool error", "reason: " + sandboxExternalWriteApprovalReason},
 			expectDecision:    "ask",
@@ -340,7 +340,7 @@ func TestDefaultManagerExecute(t *testing.T) {
 				Arguments: []byte(fmt.Sprintf(`{"path":%q,"content":"hi"}`, protectedOutsidePath)),
 				Workdir:   workspaceRoot,
 			},
-			sandboxErr:        fmt.Errorf("security: path %q escapes workspace root", protectedOutsidePath),
+			sandboxErr:        fmt.Errorf("security: path %q escapes workspace root: %w", protectedOutsidePath, security.ErrWorkspaceBoundaryViolation),
 			expectErr:         "escapes workspace root",
 			expectContent:     []string{"tool error", "reason: workspace sandbox rejected action", "target: " + protectedOutsidePath},
 			expectCalls:       0,
@@ -427,7 +427,7 @@ func TestDefaultManagerSandboxOutsideWriteSessionMemory(t *testing.T) {
 	registry.Register(writeTool)
 
 	manager, err := NewManager(registry, mustAllowEngine(t), &stubSandbox{
-		err: fmt.Errorf("security: path %q escapes workspace root", outsidePath),
+		err: fmt.Errorf("security: path %q escapes workspace root: %w", outsidePath, security.ErrWorkspaceBoundaryViolation),
 	})
 	if err != nil {
 		t.Fatalf("new manager: %v", err)
@@ -500,7 +500,7 @@ func TestSandboxOutsideWriteApprovalCandidate(t *testing.T) {
 		{
 			name:       "boundary violation low risk file asks approval",
 			action:     buildAction(lowRiskPath, "filesystem_write_file"),
-			sandboxErr: fmt.Errorf("security: path %q escapes workspace root", lowRiskPath),
+			sandboxErr: fmt.Errorf("security: path %q escapes workspace root: %w", lowRiskPath, security.ErrWorkspaceBoundaryViolation),
 			want:       true,
 		},
 		{
@@ -512,31 +512,31 @@ func TestSandboxOutsideWriteApprovalCandidate(t *testing.T) {
 		{
 			name:       "protected system path keeps hard reject",
 			action:     buildAction(protectedPath, "filesystem_write_file"),
-			sandboxErr: fmt.Errorf("security: path %q escapes workspace root", protectedPath),
+			sandboxErr: fmt.Errorf("security: path %q escapes workspace root: %w", protectedPath, security.ErrWorkspaceBoundaryViolation),
 			want:       false,
 		},
 		{
 			name:       "high risk executable extension keeps hard reject",
 			action:     buildAction(highRiskExecutable, "filesystem_write_file"),
-			sandboxErr: fmt.Errorf("security: path %q escapes workspace root", highRiskExecutable),
+			sandboxErr: fmt.Errorf("security: path %q escapes workspace root: %w", highRiskExecutable, security.ErrWorkspaceBoundaryViolation),
 			want:       false,
 		},
 		{
 			name:       "write tool not in allowlist keeps hard reject",
 			action:     buildAction(lowRiskPath, "filesystem_edit"),
-			sandboxErr: fmt.Errorf("security: path %q escapes workspace root", lowRiskPath),
+			sandboxErr: fmt.Errorf("security: path %q escapes workspace root: %w", lowRiskPath, security.ErrWorkspaceBoundaryViolation),
 			want:       false,
 		},
 		{
 			name:       "symlink workspace escape keeps hard reject",
 			action:     buildAction(lowRiskPath, "filesystem_write_file"),
-			sandboxErr: fmt.Errorf("security: path %q escapes workspace root via symlink", filepath.Join("link", "sample.py")),
+			sandboxErr: fmt.Errorf("security: path %q escapes workspace root via symlink: %w", filepath.Join("link", "sample.py"), security.ErrWorkspaceSymlinkViolation),
 			want:       false,
 		},
 		{
 			name:       "startup profile path keeps hard reject",
 			action:     buildAction(startupProfilePath, "filesystem_write_file"),
-			sandboxErr: fmt.Errorf("security: path %q escapes workspace root", startupProfilePath),
+			sandboxErr: fmt.Errorf("security: path %q escapes workspace root: %w", startupProfilePath, security.ErrWorkspaceBoundaryViolation),
 			want:       false,
 		},
 	}
@@ -568,7 +568,7 @@ func TestSandboxOutsideWriteUtilityHelpers(t *testing.T) {
 				SandboxTarget: "/tmp/note.txt",
 			},
 		}
-		if got := isSandboxOutsideWriteApprovalCandidate(action, errors.New(`security: path "/tmp/note.txt" escapes workspace root`)); got {
+		if got := isSandboxOutsideWriteApprovalCandidate(action, fmt.Errorf("security: path %q escapes workspace root: %w", "/tmp/note.txt", security.ErrWorkspaceBoundaryViolation)); got {
 			t.Fatalf("expected non-write action not to be candidate")
 		}
 	})
@@ -583,7 +583,7 @@ func TestSandboxOutsideWriteUtilityHelpers(t *testing.T) {
 				Workdir:  "/workspace/project",
 			},
 		}
-		if got := isSandboxOutsideWriteApprovalCandidate(action, errors.New(`security: path "/tmp/note.txt" escapes workspace root`)); got {
+		if got := isSandboxOutsideWriteApprovalCandidate(action, fmt.Errorf("security: path %q escapes workspace root: %w", "/tmp/note.txt", security.ErrWorkspaceBoundaryViolation)); got {
 			t.Fatalf("expected empty target not to be candidate")
 		}
 	})
@@ -1520,19 +1520,34 @@ func TestBuildPermissionAction(t *testing.T) {
 			wantFPPrefix: "bash.git|read_only|status",
 		},
 		{
-			name: "git log maps unknown semantic resource for safety",
+			name: "git log maps read-only semantic resource",
 			input: ToolCallInput{
 				Name:      "bash",
 				Arguments: []byte(`{"command":"git log --oneline -5"}`),
 			},
 			wantType:     security.ActionTypeBash,
-			wantResource: "bash_git_unknown",
+			wantResource: "bash_git_read_only",
 			wantOp:       "git_log",
 			wantTarget:   "git log --oneline -5",
 			wantSandbox:  ".",
 			wantSemantic: "git",
+			wantClass:    BashIntentClassificationReadOnly,
+			wantFPPrefix: "bash.git|read_only|log",
+		},
+		{
+			name: "git diff output file maps unknown semantic resource",
+			input: ToolCallInput{
+				Name:      "bash",
+				Arguments: []byte(`{"command":"git diff --output=out.txt origin/main...HEAD"}`),
+			},
+			wantType:     security.ActionTypeBash,
+			wantResource: "bash_git_unknown",
+			wantOp:       "git_diff",
+			wantTarget:   "git diff --output=out.txt origin/main...HEAD",
+			wantSandbox:  ".",
+			wantSemantic: "git",
 			wantClass:    BashIntentClassificationUnknown,
-			wantFPPrefix: "bash.git|unknown|log",
+			wantFPPrefix: "bash.git|unknown|diff",
 		},
 		{
 			name: "git remote bash maps semantic resource",

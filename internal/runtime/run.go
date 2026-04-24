@@ -16,6 +16,7 @@ import (
 	"neo-code/internal/promptasset"
 	"neo-code/internal/provider"
 	providertypes "neo-code/internal/provider/types"
+	"neo-code/internal/runtime/acceptance"
 	"neo-code/internal/runtime/controlplane"
 	"neo-code/internal/runtime/streaming"
 	agentsession "neo-code/internal/session"
@@ -96,7 +97,10 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 		return err
 	}
 
-	initialCfg := s.configManager.Get()
+	initialCfg, err := s.loadConfigSnapshot(ctx)
+	if err != nil {
+		return s.handleRunError(err)
+	}
 	sessionID := strings.TrimSpace(input.SessionID)
 	releaseSessionLock := s.bindSessionLock(sessionID)
 	defer func() {
@@ -106,7 +110,7 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 	sessionTitle := sessionTitleFromParts(input.Parts)
 	session, err := s.loadOrCreateSession(ctx, input.SessionID, sessionTitle, initialCfg.Workdir, input.Workdir)
 	if err != nil {
-		return s.handleRunError(ctx, input.RunID, input.SessionID, err)
+		return s.handleRunError(err)
 	}
 
 	if sessionID == "" {
@@ -122,7 +126,7 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 	}
 	statePtr = &state
 	if err := s.appendUserMessageAndSave(ctx, &state, input.Parts); err != nil {
-		return s.handleRunError(ctx, state.runID, state.session.ID, err)
+		return s.handleRunError(err)
 	}
 
 	maxTurns := resolveRuntimeMaxTurns(initialCfg.Runtime)
@@ -130,28 +134,24 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 		if turn >= maxTurns {
 			state.maxTurnsReached = true
 			state.maxTurnsLimit = maxTurns
-			return s.handleRunError(
-				ctx,
-				state.runID,
-				state.session.ID,
-				newMaxTurnLimitError(maxTurns),
-			)
+			return s.handleRunError(newMaxTurnLimitError(maxTurns))
 		}
 		state.turn = turn
 		state.compactCount = 0
 		state.nextAttemptSeq = 1
 		if err := s.setBaseRunState(ctx, &state, controlplane.RunStatePlan); err != nil {
-			return s.handleRunError(ctx, state.runID, state.session.ID, err)
+			return s.handleRunError(err)
 		}
 
+	turnAttempt:
 		for {
 			if err := ctx.Err(); err != nil {
-				return s.handleRunError(ctx, state.runID, state.session.ID, err)
+				return s.handleRunError(err)
 			}
 
 			snapshot, rebuilt, err := s.prepareTurnBudgetSnapshot(ctx, &state)
 			if err != nil {
-				return s.handleRunError(ctx, state.runID, state.session.ID, err)
+				return s.handleRunError(err)
 			}
 			if rebuilt {
 				continue
@@ -159,12 +159,12 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 
 			modelProvider, err := s.providerFactory.Build(ctx, snapshot.ProviderConfig)
 			if err != nil {
-				return s.handleRunError(ctx, state.runID, state.session.ID, err)
+				return s.handleRunError(err)
 			}
 
 			decision, err := s.evaluateTurnBudget(ctx, &state, snapshot, modelProvider)
 			if err != nil {
-				return s.handleRunError(ctx, state.runID, state.session.ID, err)
+				return s.handleRunError(err)
 			}
 			switch decision.Action {
 			case controlplane.TurnBudgetActionCompact:
@@ -175,7 +175,7 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 					contextcompact.ModeProactive,
 					compactErrorBestEffort,
 				); err != nil {
-					return s.handleRunError(ctx, state.runID, state.session.ID, err)
+					return s.handleRunError(err)
 				}
 				continue
 			case controlplane.TurnBudgetActionStop:
@@ -196,7 +196,7 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 					_, _ = s.applyCompactForState(ctx, &state, degradedCfg, contextcompact.ModeReactive, compactErrorBestEffort)
 					continue
 				}
-				return s.handleRunError(ctx, state.runID, state.session.ID, err)
+				return s.handleRunError(err)
 			}
 
 			if strings.TrimSpace(turnOutput.assistant.Role) == "" {
@@ -204,7 +204,7 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 			}
 			reconciled, err := s.reconcileLedger(&state, decision, turnOutput.usageObservation)
 			if err != nil {
-				return s.handleRunError(ctx, state.runID, state.session.ID, err)
+				return s.handleRunError(err)
 			}
 			if err := s.appendAssistantMessageAndSave(
 				ctx,
@@ -214,7 +214,7 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 				reconciled.inputTokens,
 				reconciled.outputTokens,
 			); err != nil {
-				return s.handleRunError(ctx, state.runID, state.session.ID, err)
+				return s.handleRunError(err)
 			}
 			s.emitLedgerReconciled(ctx, &state, turnOutput.usageObservation, reconciled)
 			s.emitTokenUsage(ctx, &state, reconciled)
@@ -233,38 +233,102 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 			state.mu.Unlock()
 
 			if len(turnOutput.assistant.ToolCalls) == 0 {
-				if completed {
+				if err := s.setBaseRunState(ctx, &state, controlplane.RunStateVerify); err != nil {
+					return s.handleRunError(err)
+				}
+
+				s.emitRunScoped(ctx, EventVerificationStarted, &state, VerificationStartedPayload{
+					CompletionPassed: completed,
+				})
+				acceptanceDecision, err := s.beforeAcceptFinal(ctx, &state, snapshot, turnOutput.assistant, completed)
+				if err != nil {
+					return s.handleRunError(err)
+				}
+				for _, result := range acceptanceDecision.VerifierResults {
+					s.emitRunScoped(ctx, EventVerificationStageFinished, &state, VerificationStageFinishedPayload{
+						Name:       result.Name,
+						Status:     result.Status,
+						Summary:    result.Summary,
+						Reason:     result.Reason,
+						ErrorClass: result.ErrorClass,
+					})
+				}
+				s.emitRunScoped(ctx, EventVerificationFinished, &state, VerificationFinishedPayload{
+					AcceptanceStatus: acceptanceDecision.Status,
+					StopReason:       acceptanceDecision.StopReason,
+					ErrorClass:       acceptanceDecision.ErrorClass,
+				})
+				s.emitRunScoped(ctx, EventAcceptanceDecided, &state, AcceptanceDecidedPayload{
+					Status:             acceptanceDecision.Status,
+					StopReason:         acceptanceDecision.StopReason,
+					ErrorClass:         acceptanceDecision.ErrorClass,
+					UserVisibleSummary: acceptanceDecision.UserVisibleSummary,
+					InternalSummary:    acceptanceDecision.InternalSummary,
+					ContinueHint:       acceptanceDecision.ContinueHint,
+				})
+				applyAcceptanceResultProgress(&state, acceptanceDecision)
+
+				switch acceptanceDecision.Status {
+				case acceptance.AcceptanceAccepted:
+					s.emitRunScoped(ctx, EventVerificationCompleted, &state, VerificationCompletedPayload{
+						StopReason: acceptanceDecision.StopReason,
+					})
+					recordAcceptanceTerminal(&state, acceptanceDecision)
 					s.emitRunScoped(ctx, EventAgentDone, &state, turnOutput.assistant)
 					s.triggerMemoExtraction(state.session.ID, state.session.Messages, state.rememberedThisRun)
 					return nil
+				case acceptance.AcceptanceContinue:
+					reminder := strings.TrimSpace(acceptanceDecision.ContinueHint)
+					if reminder == "" {
+						reminder = finalContinueReminder
+					}
+					if err := s.appendSystemMessageAndSave(ctx, &state, reminder); err != nil {
+						return s.handleRunError(err)
+					}
+					state.mu.Lock()
+					progressInput := collectProgressInput(
+						controlplane.RunStateVerify,
+						state.session.TaskState.Clone(),
+						state.session.TaskState.Clone(),
+						cloneTodosForPersistence(state.session.Todos),
+						cloneTodosForPersistence(state.session.Todos),
+						toolExecutionSummary{},
+						snapshot.NoProgressStreakLimit,
+						snapshot.RepeatCycleStreakLimit,
+					)
+					state.progress = controlplane.EvaluateProgress(state.progress, progressInput)
+					state.finalInterceptStreak = state.progress.LastScore.NoProgressStreak
+					currentScore := state.progress.LastScore
+					state.mu.Unlock()
+					s.emitRunScoped(ctx, EventProgressEvaluated, &state, ProgressEvaluatedPayload{Score: currentScore})
+					break turnAttempt
+				case acceptance.AcceptanceIncomplete:
+					recordAcceptanceTerminal(&state, acceptanceDecision)
+					s.emitRunScoped(ctx, EventAgentDone, &state, turnOutput.assistant)
+					return nil
+				case acceptance.AcceptanceFailed:
+					s.emitRunScoped(ctx, EventVerificationFailed, &state, VerificationFailedPayload{
+						StopReason: acceptanceDecision.StopReason,
+						ErrorClass: acceptanceDecision.ErrorClass,
+					})
+					recordAcceptanceTerminal(&state, acceptanceDecision)
+					s.emitRunScoped(ctx, EventAgentDone, &state, turnOutput.assistant)
+					return nil
+				default:
+					recordAcceptanceTerminal(&state, acceptanceDecision)
+					s.emitRunScoped(ctx, EventAgentDone, &state, turnOutput.assistant)
+					return nil
 				}
-				state.mu.Lock()
-				progressInput := collectProgressInput(
-					controlplane.RunStatePlan,
-					state.session.TaskState.Clone(),
-					state.session.TaskState.Clone(),
-					cloneTodosForPersistence(state.session.Todos),
-					cloneTodosForPersistence(state.session.Todos),
-					toolExecutionSummary{},
-					snapshot.NoProgressStreakLimit,
-					snapshot.RepeatCycleStreakLimit,
-				)
-				state.progress = controlplane.EvaluateProgress(state.progress, progressInput)
-				currentScore := state.progress.LastScore
-				state.mu.Unlock()
-
-				s.emitRunScoped(ctx, EventProgressEvaluated, &state, ProgressEvaluatedPayload{Score: currentScore})
-				break
 			}
 
 			beforeTask := state.session.TaskState.Clone()
 			beforeTodos := cloneTodosForPersistence(state.session.Todos)
 			if err := s.setBaseRunState(ctx, &state, controlplane.RunStateExecute); err != nil {
-				return s.handleRunError(ctx, state.runID, state.session.ID, err)
+				return s.handleRunError(err)
 			}
 			summary, err := s.executeAssistantToolCalls(ctx, &state, snapshot, turnOutput.assistant)
 			if err != nil {
-				return s.handleRunError(ctx, state.runID, state.session.ID, err)
+				return s.handleRunError(err)
 			}
 
 			state.mu.Lock()
@@ -287,7 +351,7 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 
 			s.emitRunScoped(ctx, EventProgressEvaluated, &state, ProgressEvaluatedPayload{Score: currentScore})
 			if err := s.setBaseRunState(ctx, &state, controlplane.RunStateVerify); err != nil {
-				return s.handleRunError(ctx, state.runID, state.session.ID, err)
+				return s.handleRunError(err)
 			}
 			break
 		}
@@ -296,18 +360,27 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 
 // prepareTurnBudgetSnapshot 基于当前会话状态冻结一次预算尝试所需的 request 与预算事实。
 func (s *Service) prepareTurnBudgetSnapshot(ctx context.Context, state *runState) (TurnBudgetSnapshot, bool, error) {
-	cfg := s.configManager.Get()
+	cfg, err := s.loadConfigSnapshot(ctx)
+	if err != nil {
+		return TurnBudgetSnapshot{}, false, err
+	}
 	activeWorkdir := agentsession.EffectiveWorkdir(state.session.Workdir, cfg.Workdir)
 	activeSkills, err := s.resolveActiveSkills(ctx, state)
 	if err != nil {
 		return TurnBudgetSnapshot{}, false, err
 	}
+	repositorySummary, repositoryContext, err := s.buildRepositoryContext(ctx, state, activeWorkdir)
+	if err != nil {
+		return TurnBudgetSnapshot{}, false, err
+	}
 
 	builtContext, err := s.contextBuilder.Build(ctx, agentcontext.BuildInput{
-		Messages:     state.session.Messages,
-		TaskState:    state.session.TaskState,
-		Todos:        cloneTodosForPersistence(state.session.Todos),
-		ActiveSkills: activeSkills,
+		Messages:          state.session.Messages,
+		TaskState:         state.session.TaskState,
+		Todos:             cloneTodosForPersistence(state.session.Todos),
+		ActiveSkills:      activeSkills,
+		RepositorySummary: repositorySummary,
+		Repository:        repositoryContext,
 		Metadata: agentcontext.Metadata{
 			Workdir:             activeWorkdir,
 			Shell:               cfg.Shell,

@@ -107,13 +107,14 @@ func TestTransitionRunPhaseInvalidTransitionReturnsError(t *testing.T) {
 
 	service := &Service{events: make(chan RuntimeEvent, 4)}
 	state := newRunState("run-invalid-phase", newRuntimeSession("session-invalid-phase"))
-	state.lifecycle = controlplane.RunStatePlan
+	state.lifecycle = controlplane.RunStateCompacting
+	state.baseLifecycle = controlplane.RunStateCompacting
 
-	err := service.setBaseRunState(context.Background(), &state, controlplane.RunStateVerify)
+	err := service.setBaseRunState(context.Background(), &state, controlplane.RunStateExecute)
 	if err == nil {
 		t.Fatalf("expected invalid transition to return error")
 	}
-	if state.lifecycle != controlplane.RunStatePlan {
+	if state.lifecycle != controlplane.RunStateCompacting {
 		t.Fatalf("expected lifecycle to remain unchanged, got %q", state.lifecycle)
 	}
 	if events := collectRuntimeEvents(service.Events()); len(events) != 0 {

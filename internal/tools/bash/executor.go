@@ -54,6 +54,9 @@ var hardenedGitReadOnlySubcommands = map[string]struct{}{
 	"status":    {},
 	"rev-parse": {},
 	"describe":  {},
+	"diff":      {},
+	"log":       {},
+	"show":      {},
 }
 
 // NewDefaultSecurityExecutor returns the default secure bash executor.
@@ -189,6 +192,9 @@ func isHardenedGitReadOnlySubcommand(subcommand string) bool {
 func sanitizeGitReadOnlyEnv(baseEnv []string) ([]string, error) {
 	filtered := make(map[string]string, len(baseEnv)+16)
 	for _, entry := range baseEnv {
+		if shouldIgnoreInheritedEnvEntry(entry) {
+			continue
+		}
 		key, value, ok := splitEnvEntry(entry)
 		if !ok {
 			return nil, fmt.Errorf("bash: invalid environment entry %q", entry)
@@ -214,6 +220,11 @@ func sanitizeGitReadOnlyEnv(baseEnv []string) ([]string, error) {
 		env = append(env, key+"="+filtered[key])
 	}
 	return env, nil
+}
+
+// shouldIgnoreInheritedEnvEntry 过滤 Windows 等平台注入的伪环境项，避免误判为非法 KEY=VALUE。
+func shouldIgnoreInheritedEnvEntry(entry string) bool {
+	return strings.HasPrefix(entry, "=")
 }
 
 // splitEnvEntry 拆解 KEY=VALUE 形态的环境项，拒绝异常格式避免隐式继承污染值。

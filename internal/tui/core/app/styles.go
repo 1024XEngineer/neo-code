@@ -18,6 +18,10 @@ const (
 	purpleAccent = "#a78bfa"
 	purpleLight  = "#c4b5fd"
 	coralAccent  = "#f09070"
+	neoBadge     = "#bd93f9"
+	youBadge     = "#8be9fd"
+	neoText      = "#f5f7fb"
+	youText      = "#e5e7eb"
 	selectionBg  = "#355070"
 	selectionFg  = "#f7fafc"
 
@@ -32,6 +36,16 @@ const (
 
 	borderDark  = "#3d3654"
 	borderLight = "#4a4268"
+
+	startupBackgroundColor = "#000000"
+	startupLogoBaseColor   = "#f3f4f6"
+	startupMetaColor       = "#6b7280"
+	startupHeaderColor     = "#4b5563"
+	startupMenuActionColor = "#9ca3af"
+	startupKeyCapBGColor   = "#1a1a1a"
+	startupDividerColor    = "#1f2937"
+	startupPromptColor     = "#bd93f9"
+	startupFooterColor     = "#4b5563"
 )
 
 type styles struct {
@@ -79,6 +93,23 @@ type styles struct {
 	badgeWarning      lipgloss.Style
 	badgeError        lipgloss.Style
 	badgeMuted        lipgloss.Style
+	startupRoot       lipgloss.Style
+	startupHeader     lipgloss.Style
+	startupBrand      lipgloss.Style
+	startupHeaderMeta lipgloss.Style
+	startupSeparator  lipgloss.Style
+	startupLogo       lipgloss.Style
+	startupSubtitle   lipgloss.Style
+	startupMenu       lipgloss.Style
+	startupMenuItem   lipgloss.Style
+	startupKeyCap     lipgloss.Style
+	startupMenuAction lipgloss.Style
+	startupInput      lipgloss.Style
+	startupDivider    lipgloss.Style
+	startupPrompt     lipgloss.Style
+	startupTyping     lipgloss.Style
+	startupCursor     lipgloss.Style
+	startupFooter     lipgloss.Style
 }
 
 func newStyles() styles {
@@ -136,15 +167,14 @@ func newStyles() styles {
 			Foreground(lipgloss.Color(oliveGray)),
 		streamContent: lipgloss.NewStyle().
 			Foreground(lipgloss.Color(lightText)),
-		messageUserTag:  tagStyle(purpleAccent),
-		messageAgentTag: tagStyle(purpleLight),
+		messageUserTag:  tagStyle(youBadge),
+		messageAgentTag: tagStyle(neoBadge),
 		messageBody: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(lightText2)).
-			MarginLeft(2),
+			Foreground(lipgloss.Color(neoText)).
+			MarginLeft(3),
 		messageUserBody: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(purpleAccent)).
-			Bold(true).
-			MarginRight(8),
+			Foreground(lipgloss.Color(youText)).
+			MarginLeft(3),
 		inlineNotice: lipgloss.NewStyle().
 			Foreground(lipgloss.Color(oliveGray)).
 			Italic(true),
@@ -192,14 +222,57 @@ func newStyles() styles {
 			BorderForeground(lipgloss.Color(purpleAccent)).
 			Padding(0, 1),
 		footer: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(lightText)).
-			Bold(true),
+			Foreground(lipgloss.Color(lightText2)).
+			BorderTop(true).
+			BorderForeground(lipgloss.Color(borderDark)).
+			Align(lipgloss.Center).
+			PaddingTop(1),
 		badgeUser:    badge("", purpleAccent),
 		badgeAgent:   badge("", coralAccent),
 		badgeSuccess: badge("", successGreen),
 		badgeWarning: badge("", warningYellow),
 		badgeError:   badge("", errorRed),
 		badgeMuted:   badge("", stoneGray),
+		startupRoot: lipgloss.NewStyle().
+			UnsetBackground(),
+		startupHeader: lipgloss.NewStyle().
+			Foreground(lipgloss.Color(startupHeaderColor)),
+		startupBrand: lipgloss.NewStyle().
+			Foreground(lipgloss.Color(startupHeaderColor)).
+			Bold(true),
+		startupHeaderMeta: lipgloss.NewStyle().
+			Foreground(lipgloss.Color(startupHeaderColor)),
+		startupSeparator: lipgloss.NewStyle().
+			Foreground(lipgloss.Color(startupHeaderColor)),
+		startupLogo: lipgloss.NewStyle().
+			Foreground(lipgloss.Color(startupLogoBaseColor)).
+			Bold(true),
+		startupSubtitle: lipgloss.NewStyle().
+			Foreground(lipgloss.Color(startupMetaColor)).
+			Align(lipgloss.Center),
+		startupMenu:     lipgloss.NewStyle(),
+		startupMenuItem: lipgloss.NewStyle(),
+		startupKeyCap: lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#ffffff")).
+			UnsetBackground().
+			Padding(0, 1),
+		startupMenuAction: lipgloss.NewStyle().
+			Foreground(lipgloss.Color(startupMenuActionColor)),
+		startupInput: lipgloss.NewStyle(),
+		startupDivider: lipgloss.NewStyle().
+			Foreground(lipgloss.Color(startupDividerColor)),
+		startupPrompt: lipgloss.NewStyle().
+			Foreground(lipgloss.Color(startupPromptColor)).
+			Bold(true),
+		startupTyping: lipgloss.NewStyle().
+			Foreground(lipgloss.Color(startupMetaColor)),
+		startupCursor: lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#000000")).
+			UnsetBackground().
+			Reverse(true),
+		startupFooter: lipgloss.NewStyle().
+			Foreground(lipgloss.Color(startupFooterColor)).
+			Align(lipgloss.Center),
 	}
 }
 
@@ -207,7 +280,7 @@ func tagStyle(fg string) lipgloss.Style {
 	return lipgloss.NewStyle().
 		Bold(true).
 		Foreground(lipgloss.Color(fg)).
-		Padding(0, 1)
+		Padding(0, 0)
 }
 
 func badge(bg string, fg string) lipgloss.Style {

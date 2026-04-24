@@ -50,6 +50,41 @@ Skills 不会改变：
 - 每个 Skill 目录要求存在 `SKILL.md`
 - 也支持 root 目录直接放一个 `SKILL.md`
 
+### 仓库内置 Skills
+
+NeoCode 仓库本身也维护了一套 Skills，位于：
+
+```text
+.agents/skills/
+```
+
+包含三类：
+
+- `issue-rfc-proposal` — 提案类 Issue（RFC 风格）
+- `issue-rfc-architecture` — 架构类 Issue（RFC 风格）
+- `issue-rfc-implementation` — 实现类 Issue（执行单风格）
+
+可以通过 `make` 一键安装到常用 AI 工具目录：
+
+```bash
+make install-skills
+```
+
+默认会安装到以下位置：
+
+```text
+.codex/skills
+.claude/skills
+.cursor/skills
+.windsurf/skills
+```
+
+如果需要自定义目标，设置 `SKILL_INSTALL_TARGETS`：
+
+```bash
+SKILL_INSTALL_TARGETS=".codex/skills:.claude/skills" make install-skills
+```
+
 ## 会话内 Skills 命令
 
 ```text

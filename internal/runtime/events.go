@@ -3,7 +3,9 @@ package runtime
 import (
 	"time"
 
+	"neo-code/internal/runtime/acceptance"
 	"neo-code/internal/runtime/controlplane"
+	"neo-code/internal/runtime/verify"
 )
 
 // EventType 标识 runtime 事件类型。
@@ -55,6 +57,48 @@ type ProgressEvaluatedPayload struct {
 type StopReasonDecidedPayload struct {
 	Reason controlplane.StopReason `json:"reason"`
 	Detail string                  `json:"detail,omitempty"`
+}
+
+// VerificationStartedPayload 描述 final 验收验证开始事件。
+type VerificationStartedPayload struct {
+	CompletionPassed bool `json:"completion_passed"`
+}
+
+// VerificationStageFinishedPayload 描述单个 verifier 阶段完成事件。
+type VerificationStageFinishedPayload struct {
+	Name       string                    `json:"name"`
+	Status     verify.VerificationStatus `json:"status"`
+	Summary    string                    `json:"summary,omitempty"`
+	Reason     string                    `json:"reason,omitempty"`
+	ErrorClass verify.ErrorClass         `json:"error_class,omitempty"`
+}
+
+// VerificationFinishedPayload 描述整体验证流程结束事件。
+type VerificationFinishedPayload struct {
+	AcceptanceStatus acceptance.AcceptanceStatus `json:"acceptance_status"`
+	StopReason       controlplane.StopReason     `json:"stop_reason,omitempty"`
+	ErrorClass       verify.ErrorClass           `json:"error_class,omitempty"`
+}
+
+// VerificationCompletedPayload 描述验证通过并可完成的事件。
+type VerificationCompletedPayload struct {
+	StopReason controlplane.StopReason `json:"stop_reason,omitempty"`
+}
+
+// VerificationFailedPayload 描述验证失败事件。
+type VerificationFailedPayload struct {
+	StopReason controlplane.StopReason `json:"stop_reason,omitempty"`
+	ErrorClass verify.ErrorClass       `json:"error_class,omitempty"`
+}
+
+// AcceptanceDecidedPayload 描述 acceptance engine 决议结果。
+type AcceptanceDecidedPayload struct {
+	Status             acceptance.AcceptanceStatus `json:"status"`
+	StopReason         controlplane.StopReason     `json:"stop_reason,omitempty"`
+	ErrorClass         verify.ErrorClass           `json:"error_class,omitempty"`
+	UserVisibleSummary string                      `json:"user_visible_summary,omitempty"`
+	InternalSummary    string                      `json:"internal_summary,omitempty"`
+	ContinueHint       string                      `json:"continue_hint,omitempty"`
 }
 
 // LedgerReconciledPayload 为账本对账预留负载。
@@ -176,6 +220,13 @@ type AssetSaveFailedPayload struct {
 	Message string `json:"message"`
 }
 
+// RepositoryContextUnavailablePayload 描述 repository 事实注入失败但主链继续时的诊断信息。
+type RepositoryContextUnavailablePayload struct {
+	Stage  string `json:"stage"`
+	Mode   string `json:"mode,omitempty"`
+	Reason string `json:"reason"`
+}
+
 const (
 	// EventUserMessage 表示用户消息已写入会话。
 	EventUserMessage EventType = "user_message"
@@ -225,6 +276,18 @@ const (
 	EventProgressEvaluated EventType = "progress_evaluated"
 	// EventStopReasonDecided 表示 stop reason 已决议。
 	EventStopReasonDecided EventType = "stop_reason_decided"
+	// EventVerificationStarted 表示 final 验证流程开始。
+	EventVerificationStarted EventType = "verification_started"
+	// EventVerificationStageFinished 表示单个 verifier 阶段完成。
+	EventVerificationStageFinished EventType = "verification_stage_finished"
+	// EventVerificationFinished 表示 final 验证流程结束。
+	EventVerificationFinished EventType = "verification_finished"
+	// EventVerificationCompleted 表示验证通过并可完成。
+	EventVerificationCompleted EventType = "verification_completed"
+	// EventVerificationFailed 表示验证失败。
+	EventVerificationFailed EventType = "verification_failed"
+	// EventAcceptanceDecided 表示 acceptance 决议已生成。
+	EventAcceptanceDecided EventType = "acceptance_decided"
 	// EventLedgerReconciled 表示本轮 usage 已按新账本语义完成调和。
 	EventLedgerReconciled EventType = "ledger_reconciled"
 	// EventTodoUpdated 表示 todo_write 成功更新。
@@ -239,6 +302,8 @@ const (
 	EventAssetSaved EventType = "asset_saved"
 	// EventAssetSaveFailed 表示本轮用户输入附件持久化失败。
 	EventAssetSaveFailed EventType = "asset_save_failed"
+	// EventRepositoryContextUnavailable 表示本轮 repository 事实本应获取但失败，已降级为空上下文。
+	EventRepositoryContextUnavailable EventType = "repository_context_unavailable"
 )
 
 // TokenUsagePayload 承载单轮 token 用量统计。

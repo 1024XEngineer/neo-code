@@ -75,6 +75,30 @@ func (s *Service) appendAssistantMessageAndSave(
 	return nil
 }
 
+// appendSystemMessageAndSave 将系统提醒消息追加到会话并持久化。
+func (s *Service) appendSystemMessageAndSave(ctx context.Context, state *runState, text string) error {
+	if state == nil {
+		return nil
+	}
+	message := providertypes.Message{
+		Role: providertypes.RoleSystem,
+		Parts: []providertypes.ContentPart{
+			providertypes.NewTextPart(strings.TrimSpace(text)),
+		},
+	}
+	state.session.Messages = append(state.session.Messages, message)
+	state.touchSession()
+	return s.sessionStore.AppendMessages(ctx, agentsession.AppendMessagesInput{
+		SessionID:       state.session.ID,
+		Messages:        []providertypes.Message{message},
+		UpdatedAt:       state.session.UpdatedAt,
+		Provider:        state.session.Provider,
+		Model:           state.session.Model,
+		Workdir:         state.session.Workdir,
+		HasUnknownUsage: state.session.HasUnknownUsage,
+	})
+}
+
 // appendToolMessageAndSave 将工具原始结果写回会话，持久化时仅追加一条 tool message。
 func (s *Service) appendToolMessageAndSave(
 	ctx context.Context,

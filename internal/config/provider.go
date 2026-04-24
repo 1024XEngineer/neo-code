@@ -261,7 +261,6 @@ func resolveRuntimeAPIKey(envName string) (string, error) {
 	if exists {
 		trimmedUserValue := strings.TrimSpace(userValue)
 		if trimmedUserValue != "" {
-			_ = os.Setenv(envName, trimmedUserValue)
 			return trimmedUserValue, nil
 		}
 	}
@@ -362,22 +361,31 @@ const (
 	QiniuDefaultBaseURL   = "https://api.qnaigc.com/v1"
 	QiniuDefaultModel     = "z-ai/glm-5.1"
 	QiniuDefaultAPIKeyEnv = "QINIU_API_KEY"
+
+	ModelScopeName             = "modelscope"
+	ModelScopeDefaultBaseURL   = "https://api-inference.modelscope.cn/v1"
+	ModelScopeDefaultModel     = "Qwen/Qwen2.5-7B-Instruct"
+	ModelScopeDefaultAPIKeyEnv = "MODELSCOPE_API_KEY"
 )
 
-// OpenAIProvider returns the builtin OpenAI provider definition.
-func OpenAIProvider() ProviderConfig {
+func newBuiltinOpenAICompatProvider(name, baseURL, model, apiKeyEnv string) ProviderConfig {
 	return ProviderConfig{
-		Name:                  OpenAIName,
+		Name:                  name,
 		Driver:                provider.DriverOpenAICompat,
-		BaseURL:               OpenAIDefaultBaseURL,
-		Model:                 OpenAIDefaultModel,
-		APIKeyEnv:             OpenAIDefaultAPIKeyEnv,
+		BaseURL:               baseURL,
+		Model:                 model,
+		APIKeyEnv:             apiKeyEnv,
 		ModelSource:           ModelSourceDiscover,
 		ChatAPIMode:           provider.ChatAPIModeChatCompletions,
 		ChatEndpointPath:      "/chat/completions",
 		DiscoveryEndpointPath: provider.DiscoveryEndpointPathModels,
 		Source:                ProviderSourceBuiltin,
 	}
+}
+
+// OpenAIProvider returns the builtin OpenAI provider definition.
+func OpenAIProvider() ProviderConfig {
+	return newBuiltinOpenAICompatProvider(OpenAIName, OpenAIDefaultBaseURL, OpenAIDefaultModel, OpenAIDefaultAPIKeyEnv)
 }
 
 // GeminiProvider returns the builtin Gemini provider definition.
@@ -397,34 +405,17 @@ func GeminiProvider() ProviderConfig {
 
 // OpenLLProvider returns the builtin OpenLL provider definition.
 func OpenLLProvider() ProviderConfig {
-	return ProviderConfig{
-		Name:                  OpenLLName,
-		Driver:                provider.DriverOpenAICompat,
-		BaseURL:               OpenLLDefaultBaseURL,
-		Model:                 OpenLLDefaultModel,
-		APIKeyEnv:             OpenLLDefaultAPIKeyEnv,
-		ModelSource:           ModelSourceDiscover,
-		ChatAPIMode:           provider.ChatAPIModeChatCompletions,
-		ChatEndpointPath:      "/chat/completions",
-		DiscoveryEndpointPath: provider.DiscoveryEndpointPathModels,
-		Source:                ProviderSourceBuiltin,
-	}
+	return newBuiltinOpenAICompatProvider(OpenLLName, OpenLLDefaultBaseURL, OpenLLDefaultModel, OpenLLDefaultAPIKeyEnv)
 }
 
 // QiniuProvider returns the builtin Qiniu provider definition.
 func QiniuProvider() ProviderConfig {
-	return ProviderConfig{
-		Name:                  QiniuName,
-		Driver:                provider.DriverOpenAICompat,
-		BaseURL:               QiniuDefaultBaseURL,
-		Model:                 QiniuDefaultModel,
-		APIKeyEnv:             QiniuDefaultAPIKeyEnv,
-		ModelSource:           ModelSourceDiscover,
-		ChatAPIMode:           provider.ChatAPIModeChatCompletions,
-		ChatEndpointPath:      "/chat/completions",
-		DiscoveryEndpointPath: provider.DiscoveryEndpointPathModels,
-		Source:                ProviderSourceBuiltin,
-	}
+	return newBuiltinOpenAICompatProvider(QiniuName, QiniuDefaultBaseURL, QiniuDefaultModel, QiniuDefaultAPIKeyEnv)
+}
+
+// ModelScopeProvider 返回内置的 ModelScope provider 配置。
+func ModelScopeProvider() ProviderConfig {
+	return newBuiltinOpenAICompatProvider(ModelScopeName, ModelScopeDefaultBaseURL, ModelScopeDefaultModel, ModelScopeDefaultAPIKeyEnv)
 }
 
 // DefaultProviders returns all builtin provider definitions.
@@ -434,5 +425,6 @@ func DefaultProviders() []ProviderConfig {
 		GeminiProvider(),
 		OpenLLProvider(),
 		QiniuProvider(),
+		ModelScopeProvider(),
 	}
 }

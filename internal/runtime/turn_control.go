@@ -189,6 +189,9 @@ func computeSubgoalFingerprint(
 // hasPendingAgentTodos 判断当前 session 中是否仍存在未闭合 todo。
 func hasPendingAgentTodos(items []agentsession.TodoItem) bool {
 	for _, item := range items {
+		if !item.RequiredValue() {
+			continue
+		}
 		if item.Status.IsTerminal() {
 			continue
 		}

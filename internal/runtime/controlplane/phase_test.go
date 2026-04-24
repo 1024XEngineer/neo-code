@@ -34,7 +34,7 @@ func TestValidateRunStateTransitionMainlineAndGovernanceStates(t *testing.T) {
 func TestValidateRunStateTransitionRejectsInvalidJump(t *testing.T) {
 	t.Parallel()
 
-	if err := ValidateRunStateTransition(RunStatePlan, RunStateVerify); err == nil {
+	if err := ValidateRunStateTransition(RunStateCompacting, RunStateExecute); err == nil {
 		t.Fatalf("expected invalid transition to return error")
 	}
 }

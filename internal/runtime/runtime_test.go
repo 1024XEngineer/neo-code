@@ -15,6 +15,7 @@ import (
 	"neo-code/internal/config"
 	agentcontext "neo-code/internal/context"
 	contextcompact "neo-code/internal/context/compact"
+	"neo-code/internal/context/repository"
 	"neo-code/internal/provider"
 	providertypes "neo-code/internal/provider/types"
 	approvalflow "neo-code/internal/runtime/approval"
@@ -1798,6 +1799,98 @@ func TestServiceRunUsesToolManager(t *testing.T) {
 	}
 }
 
+func TestServiceRunReloadsConfigSnapshotBeforeBuildingProvider(t *testing.T) {
+	geminiEnv := runtimeTestAPIKeyEnv(t) + "_GEMINI"
+	openaiEnv := runtimeTestAPIKeyEnv(t) + "_OPENAI"
+	setRuntimeProviderEnv(t, openaiEnv, "openai-key")
+	setRuntimeProviderEnv(t, geminiEnv, "gemini-key")
+
+	manager, externalManager := newSharedRuntimeConfigManagers(t, map[string]string{
+		config.OpenAIName: openaiEnv,
+		config.GeminiName: geminiEnv,
+	})
+
+	workdir := t.TempDir()
+	if err := manager.Update(context.Background(), func(cfg *config.Config) error {
+		cfg.Workdir = workdir
+		cfg.ToolTimeoutSec = 1
+		cfg.SelectedProvider = config.OpenAIName
+		cfg.CurrentModel = config.OpenAIDefaultModel
+		return nil
+	}); err != nil {
+		t.Fatalf("seed primary manager config: %v", err)
+	}
+	if _, err := externalManager.Load(context.Background()); err != nil {
+		t.Fatalf("reload external manager after seed: %v", err)
+	}
+
+	scripted := &scriptedProvider{
+		streams: [][]providertypes.StreamEvent{
+			{providertypes.NewTextDeltaStreamEvent("switched")},
+		},
+	}
+	factory := &scriptedProviderFactory{provider: scripted}
+	service := NewWithFactory(manager, tools.NewRegistry(), newMemoryStore(), factory, &stubContextBuilder{})
+
+	if err := externalManager.Update(context.Background(), func(cfg *config.Config) error {
+		cfg.SelectedProvider = config.GeminiName
+		cfg.CurrentModel = "gemini-current-model"
+		return nil
+	}); err != nil {
+		t.Fatalf("update shared config externally: %v", err)
+	}
+
+	if err := service.Run(context.Background(), UserInput{
+		RunID: "run-reload-config-snapshot",
+		Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")},
+	}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	if len(factory.configs) == 0 || factory.configs[0].Name != config.GeminiName {
+		t.Fatalf("expected run to rebuild provider with %q, got %+v", config.GeminiName, factory.configs)
+	}
+	if len(scripted.requests) == 0 || scripted.requests[0].Model != "gemini-current-model" {
+		t.Fatalf("expected run request model %q, got %+v", "gemini-current-model", scripted.requests)
+	}
+}
+
+func TestServiceLoadConfigSnapshotUsesContextAndNilFallback(t *testing.T) {
+	manager := newRuntimeConfigManager(t)
+	service := NewWithFactory(manager, tools.NewRegistry(), newMemoryStore(), nil, nil)
+
+	snapshot, err := service.loadConfigSnapshot(nil)
+	if err != nil {
+		t.Fatalf("loadConfigSnapshot(nil) error = %v", err)
+	}
+	if strings.TrimSpace(snapshot.SelectedProvider) == "" {
+		t.Fatalf("expected selected provider to be loaded, got %+v", snapshot)
+	}
+}
+
+func TestServiceLoadConfigSnapshotUsesCachedConfigWhenContextCanceled(t *testing.T) {
+	manager := newRuntimeConfigManager(t)
+	service := NewWithFactory(manager, tools.NewRegistry(), newMemoryStore(), nil, nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	snapshot, err := service.loadConfigSnapshot(ctx)
+	if err != nil {
+		t.Fatalf("loadConfigSnapshot(canceled) error = %v", err)
+	}
+	if strings.TrimSpace(snapshot.SelectedProvider) == "" {
+		t.Fatalf("expected cached selected provider, got %+v", snapshot)
+	}
+}
+
+func TestServiceLoadConfigSnapshotRejectsNilConfigManager(t *testing.T) {
+	service := &Service{}
+	if _, err := service.loadConfigSnapshot(context.Background()); err == nil || !strings.Contains(err.Error(), "config manager is nil") {
+		t.Fatalf("expected config manager nil error, got %v", err)
+	}
+}
+
 func TestServiceRunWaitsForPermissionResolutionAndContinues(t *testing.T) {
 	t.Parallel()
 
@@ -2991,6 +3084,82 @@ func TestServiceCompactFallsBackToCurrentProviderWhenSessionMetadataMissing(t *t
 	}
 }
 
+func TestServiceCompactReloadsConfigSnapshotForFallbackSelection(t *testing.T) {
+	geminiEnv := runtimeTestAPIKeyEnv(t) + "_GEMINI"
+	openaiEnv := runtimeTestAPIKeyEnv(t) + "_OPENAI"
+	tempHome := t.TempDir()
+	setRuntimeEnv(t, "USERPROFILE", tempHome)
+	setRuntimeEnv(t, "HOME", tempHome)
+	setRuntimeProviderEnv(t, openaiEnv, "openai-key")
+	setRuntimeProviderEnv(t, geminiEnv, "gemini-key")
+
+	manager, externalManager := newSharedRuntimeConfigManagers(t, map[string]string{
+		config.OpenAIName: openaiEnv,
+		config.GeminiName: geminiEnv,
+	})
+
+	workdir := t.TempDir()
+	if err := manager.Update(context.Background(), func(cfg *config.Config) error {
+		cfg.Workdir = workdir
+		cfg.ToolTimeoutSec = 1
+		cfg.SelectedProvider = config.OpenAIName
+		cfg.CurrentModel = config.OpenAIDefaultModel
+		cfg.Context.Compact.ManualStrategy = config.CompactManualStrategyFullReplace
+		return nil
+	}); err != nil {
+		t.Fatalf("seed primary manager config: %v", err)
+	}
+	if _, err := externalManager.Load(context.Background()); err != nil {
+		t.Fatalf("reload external manager after seed: %v", err)
+	}
+
+	store := newMemoryStore()
+	session := agentsession.New("manual-fallback-reload")
+	session.ID = "session-manual-fallback-reload"
+	session.Messages = []providertypes.Message{
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("older")}},
+		{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("older answer")}},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("before")}},
+	}
+	store.sessions[session.ID] = cloneSession(session)
+
+	registry := tools.NewRegistry()
+	registry.Register(&stubTool{name: "filesystem_read_file", content: "ok"})
+
+	scripted := &scriptedProvider{
+		streams: [][]providertypes.StreamEvent{
+			{providertypes.NewTextDeltaStreamEvent(`{"task_state":{"goal":"Fallback to latest provider selection","progress":["Used freshly reloaded config"],"open_items":[],"next_step":"Continue compact flow","blockers":[],"key_artifacts":["gemini-current-model"],"decisions":["Reload config before fallback provider selection"],"user_constraints":[]},"display_summary":"[compact_summary]\ndone:\n- ok\n\nin_progress:\n- continue\n\ndecisions:\n- reloaded current selection\n\ncode_changes:\n- none\n\nconstraints:\n- none"}`)},
+		},
+	}
+	factory := &scriptedProviderFactory{provider: scripted}
+	service := NewWithFactory(manager, registry, store, factory, &stubContextBuilder{})
+
+	if err := externalManager.Update(context.Background(), func(cfg *config.Config) error {
+		cfg.SelectedProvider = config.GeminiName
+		cfg.CurrentModel = "gemini-current-model"
+		return nil
+	}); err != nil {
+		t.Fatalf("update shared config externally: %v", err)
+	}
+
+	result, err := service.Compact(context.Background(), CompactInput{
+		SessionID: session.ID,
+		RunID:     "run-manual-fallback-reload-provider",
+	})
+	if err != nil {
+		t.Fatalf("Compact() error = %v", err)
+	}
+	if !result.Applied {
+		t.Fatalf("expected compact to apply")
+	}
+	if len(factory.configs) != 1 || factory.configs[0].Name != config.GeminiName {
+		t.Fatalf("expected compact to rebuild provider with %q, got %+v", config.GeminiName, factory.configs)
+	}
+	if len(scripted.requests) != 1 || scripted.requests[0].Model != "gemini-current-model" {
+		t.Fatalf("expected compact request model %q, got %+v", "gemini-current-model", scripted.requests)
+	}
+}
+
 func TestServiceManualCompactThenRunContinuesToolRound(t *testing.T) {
 	manager := newRuntimeConfigManager(t)
 	store := newMemoryStore()
@@ -3335,6 +3504,36 @@ func newRuntimeConfigManagerWithProviderEnvs(t *testing.T, providerEnvs map[stri
 	return manager
 }
 
+func newSharedRuntimeConfigManagers(t *testing.T, providerEnvs map[string]string) (*config.Manager, *config.Manager) {
+	t.Helper()
+
+	defaults := config.StaticDefaults()
+	defaults.Providers = config.DefaultProviders()
+	if len(defaults.Providers) > 0 {
+		defaults.SelectedProvider = defaults.Providers[0].Name
+		defaults.CurrentModel = defaults.Providers[0].Model
+	}
+	for providerName, envKey := range providerEnvs {
+		for i := range defaults.Providers {
+			if provider.NormalizeKey(defaults.Providers[i].Name) == provider.NormalizeKey(providerName) {
+				defaults.Providers[i].APIKeyEnv = envKey
+				break
+			}
+		}
+	}
+
+	baseDir := t.TempDir()
+	manager := config.NewManager(config.NewLoader(baseDir, defaults))
+	externalManager := config.NewManager(config.NewLoader(baseDir, defaults))
+	if _, err := manager.Load(context.Background()); err != nil {
+		t.Fatalf("load primary config: %v", err)
+	}
+	if _, err := externalManager.Load(context.Background()); err != nil {
+		t.Fatalf("load external config: %v", err)
+	}
+	return manager, externalManager
+}
+
 func runtimeTestAPIKeyEnv(t *testing.T) string {
 	t.Helper()
 
@@ -3502,6 +3701,28 @@ func cloneBuildInput(input agentcontext.BuildInput) agentcontext.BuildInput {
 	cloned.Messages = append([]providertypes.Message(nil), input.Messages...)
 	cloned.TaskState = input.TaskState.Clone()
 	cloned.ActiveSkills = append([]skills.Skill(nil), input.ActiveSkills...)
+	if input.RepositorySummary != nil {
+		summary := *input.RepositorySummary
+		cloned.RepositorySummary = &summary
+	}
+	if input.Repository.ChangedFiles != nil {
+		files := append([]repository.ChangedFile(nil), input.Repository.ChangedFiles.Files...)
+		cloned.Repository.ChangedFiles = &agentcontext.RepositoryChangedFilesSection{
+			Files:         files,
+			Truncated:     input.Repository.ChangedFiles.Truncated,
+			ReturnedCount: input.Repository.ChangedFiles.ReturnedCount,
+			TotalCount:    input.Repository.ChangedFiles.TotalCount,
+		}
+	}
+	if input.Repository.Retrieval != nil {
+		hits := append([]repository.RetrievalHit(nil), input.Repository.Retrieval.Hits...)
+		cloned.Repository.Retrieval = &agentcontext.RepositoryRetrievalSection{
+			Hits:      hits,
+			Truncated: input.Repository.Retrieval.Truncated,
+			Mode:      input.Repository.Retrieval.Mode,
+			Query:     input.Repository.Retrieval.Query,
+		}
+	}
 	return cloned
 }
 
@@ -5381,7 +5602,7 @@ func TestAgentDoneEventCarriesRunScopedEnvelope(t *testing.T) {
 	if doneEvent.Turn == turnUnspecified {
 		t.Fatalf("expected run-scoped turn, got %d", doneEvent.Turn)
 	}
-	if doneEvent.Phase != string(controlplane.RunStatePlan) {
-		t.Fatalf("expected phase=%q, got %q", controlplane.RunStatePlan, doneEvent.Phase)
+	if doneEvent.Phase != string(controlplane.RunStateVerify) {
+		t.Fatalf("expected phase=%q, got %q", controlplane.RunStateVerify, doneEvent.Phase)
 	}
 }

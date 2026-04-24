@@ -24,6 +24,17 @@ curl -fsSL https://raw.githubusercontent.com/1024XEngineer/neo-code/main/scripts
 irm https://raw.githubusercontent.com/1024XEngineer/neo-code/main/scripts/install.ps1 | iex
 ```
 
+安装脚本会自动从 GitHub Releases 下载最新稳定版二进制文件：
+
+- macOS / Linux：下载并解压到 `/usr/local/bin/`（可能需要 `sudo` 权限）
+- Windows：下载并解压到 `%LOCALAPPDATA%\NeoCode`，同时更新用户 `PATH`
+
+安装完成后，在终端直接运行：
+
+```bash
+neocode
+```
+
 ## 从源码运行
 
 ```bash

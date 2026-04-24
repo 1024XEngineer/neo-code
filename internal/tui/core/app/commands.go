@@ -52,19 +52,21 @@ const (
 	slashUsageSkillOff    = "/skill off <id>"
 	slashUsageSkillActive = "/skill active"
 
-	commandMenuTitle       = "Suggestions"
-	providerPickerTitle    = "Select Provider"
-	providerPickerSubtitle = "Up/Down choose, Enter confirm, Esc cancel"
-	modelPickerTitle       = "Select Model"
-	modelPickerSubtitle    = "Up/Down choose, Enter confirm, Esc cancel"
-	sessionPickerTitle     = "Select Session"
-	sessionPickerSubtitle  = "Up/Down choose, Enter confirm, Esc cancel"
-	helpPickerTitle        = "Slash Commands"
-	helpPickerSubtitle     = "Up/Down choose, Enter run, Esc cancel"
-	filePickerTitle        = "Browse Files"
-	filePickerSubtitle     = "Navigate folders, Enter choose file, Esc cancel"
-	providerAddTitle       = "Add New Provider"
-	providerAddSubtitle    = "Fill in details, Tab switch field, Enter confirm, Esc cancel"
+	commandMenuTitle        = "Suggestions"
+	providerPickerTitle     = "Select Provider"
+	providerPickerSubtitle  = "Up/Down choose, Enter confirm, Esc cancel"
+	modelPickerTitle        = "Select Model"
+	modelPickerSubtitle     = "Up/Down choose, Enter confirm, Esc cancel"
+	sessionPickerTitle      = "Select Session"
+	sessionPickerSubtitle   = "Up/Down choose, Enter confirm, Esc cancel"
+	helpPickerTitle         = "Slash Commands"
+	helpPickerSubtitle      = "Up/Down choose, Enter run, Esc cancel"
+	filePickerTitle         = "Browse Files"
+	filePickerSubtitle      = "Navigate folders, Enter choose file, Esc cancel"
+	providerAddTitle        = "Add New Provider"
+	providerAddSubtitle     = "Fill in details, Tab switch field, Enter confirm, Esc cancel"
+	modelScopeGuideTitle    = "ModelScope Setup"
+	modelScopeGuideSubtitle = "Guide -> Login -> Token -> Paste token, Enter continue, Esc cancel"
 
 	activityTitle    = "Activity"
 	activitySubtitle = "Latest execution events"
@@ -107,8 +109,8 @@ const (
 
 	maxActivityEntries = 64
 
-	messageTagUser  = "[ YOU ]"
-	messageTagAgent = "[ NEO ]"
+	messageTagUser  = "◇ YOU"
+	messageTagAgent = "◆ NEO"
 	messageTagTool  = "[ TOOL ]"
 
 	roleUser      = "user"
@@ -143,7 +145,7 @@ var builtinSlashCommands = []slashCommand{
 }
 
 func newSelectionPicker(items []list.Item) list.Model {
-	delegate := list.NewDefaultDelegate()
+	delegate := newPickerSelectionDelegate()
 	picker := list.New(items, delegate, 0, 0)
 	picker.Title = ""
 	picker.SetShowHelp(false)

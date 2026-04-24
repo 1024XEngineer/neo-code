@@ -547,11 +547,11 @@ func TestDefaultProvidersReturnsAllBuiltins(t *testing.T) {
 	t.Parallel()
 
 	providers := DefaultProviders()
-	if len(providers) != 4 {
-		t.Fatalf("expected 4 builtin providers, got %d", len(providers))
+	if len(providers) != 5 {
+		t.Fatalf("expected 5 builtin providers, got %d", len(providers))
 	}
 
-	expectedNames := []string{OpenAIName, GeminiName, OpenLLName, QiniuName}
+	expectedNames := []string{OpenAIName, GeminiName, OpenLLName, QiniuName, ModelScopeName}
 	for i, provider := range providers {
 		if provider.Name != expectedNames[i] {
 			t.Fatalf("expected provider[%d] name %q, got %q", i, expectedNames[i], provider.Name)
@@ -622,6 +622,34 @@ func TestOpenLLProviderConfig(t *testing.T) {
 	}
 	if provider.APIKeyEnv != OpenLLDefaultAPIKeyEnv {
 		t.Fatalf("expected API key env %q, got %q", OpenLLDefaultAPIKeyEnv, provider.APIKeyEnv)
+	}
+}
+
+func TestModelScopeProviderConfig(t *testing.T) {
+	t.Parallel()
+
+	provider := ModelScopeProvider()
+
+	if provider.Name != ModelScopeName {
+		t.Fatalf("expected name %q, got %q", ModelScopeName, provider.Name)
+	}
+	if provider.Driver != "openaicompat" {
+		t.Fatalf("expected driver %q, got %q", "openaicompat", provider.Driver)
+	}
+	if provider.BaseURL != ModelScopeDefaultBaseURL {
+		t.Fatalf("expected base URL %q, got %q", ModelScopeDefaultBaseURL, provider.BaseURL)
+	}
+	if provider.Model != ModelScopeDefaultModel {
+		t.Fatalf("expected default model %q, got %q", ModelScopeDefaultModel, provider.Model)
+	}
+	if provider.APIKeyEnv != ModelScopeDefaultAPIKeyEnv {
+		t.Fatalf("expected API key env %q, got %q", ModelScopeDefaultAPIKeyEnv, provider.APIKeyEnv)
+	}
+	if provider.Source != ProviderSourceBuiltin {
+		t.Fatalf("expected builtin source, got %q", provider.Source)
+	}
+	if provider.DiscoveryEndpointPath != providerpkg.DiscoveryEndpointPathModels {
+		t.Fatalf("expected discovery endpoint %q, got %q", providerpkg.DiscoveryEndpointPathModels, provider.DiscoveryEndpointPath)
 	}
 }
 

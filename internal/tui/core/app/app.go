@@ -49,6 +49,7 @@ const (
 	pickerFile        pickerMode = tuistate.PickerFile
 	pickerHelp        pickerMode = tuistate.PickerHelp
 	pickerProviderAdd pickerMode = tuistate.PickerProviderAdd
+	pickerModelScope  pickerMode = tuistate.PickerModelScopeGuide
 )
 
 type RuntimeMsg = tuistate.RuntimeMsg
@@ -123,6 +124,7 @@ type appRuntimeState struct {
 	pendingPermission       *permissionPromptState
 	pendingImageAttachments []pendingImageAttachment
 	providerAddForm         *providerAddFormState
+	modelScopeGuide         *modelScopeGuideState
 	layoutCached            bool
 	cachedWidth             int
 	cachedHeight            int
@@ -135,6 +137,7 @@ type appRuntimeState struct {
 	logPersistVersion       int
 	transcriptContent       string
 	transcriptScrollbarDrag bool
+	startupScreenLocked     bool
 
 	textSelection struct {
 		active    bool
@@ -145,9 +148,10 @@ type appRuntimeState struct {
 		endCol    int
 	}
 
-	footerErrorLast  string
-	footerErrorText  string
-	footerErrorUntil time.Time
+	footerErrorLast    string
+	footerErrorText    string
+	footerErrorUntil   time.Time
+	deferredFooterTick tea.Cmd
 }
 
 type pendingImageAttachment struct {
@@ -185,6 +189,28 @@ const (
 	providerAddFormStageFields providerAddFormStage = iota
 	providerAddFormStageManualModels
 )
+
+// modelScopeGuideStep 定义 ModelScope 半引导流程中的阶段。
+type modelScopeGuideStep int
+
+const (
+	modelScopeGuideStepGuide modelScopeGuideStep = iota
+	modelScopeGuideStepLogin
+	modelScopeGuideStepToken
+	modelScopeGuideStepPasteToken
+)
+
+// modelScopeGuideState 保存 ModelScope 半引导流程的运行时状态。
+type modelScopeGuideState struct {
+	ProviderID string
+	APIKeyEnv  string
+	GuidePath  string
+	Step       modelScopeGuideStep
+	Token      string
+	Submitting bool
+	Error      string
+	Notice     string
+}
 
 type App struct {
 	state tuistate.UIState
@@ -268,23 +294,19 @@ func newApp(container tuibootstrap.Container) (App, error) {
 
 	h := help.New()
 	h.ShowAll = false
-	h.ShortSeparator = " • "
+	h.ShortSeparator = " | "
 	h.Styles.ShortKey = lipgloss.NewStyle().
-		Foreground(lipgloss.Color(selectionFg)).
-		Bold(true).
-		Underline(true)
+		Foreground(lipgloss.Color(purpleAccent)).
+		Bold(true)
 	h.Styles.ShortDesc = lipgloss.NewStyle().
-		Foreground(lipgloss.Color(lightText)).
-		Bold(true)
+		Foreground(lipgloss.Color(lightText2))
 	h.Styles.ShortSeparator = lipgloss.NewStyle().
-		Foreground(lipgloss.Color(coralAccent)).
-		Bold(true)
+		Foreground(lipgloss.Color(midGray))
 	h.Styles.FullKey = h.Styles.ShortKey.Copy()
 	h.Styles.FullDesc = h.Styles.ShortDesc.Copy()
 	h.Styles.FullSeparator = h.Styles.ShortSeparator.Copy()
 	h.Styles.Ellipsis = lipgloss.NewStyle().
-		Foreground(lipgloss.Color(warningYellow)).
-		Bold(true)
+		Foreground(lipgloss.Color(oliveGray))
 
 	commandMenu := newCommandMenuModel(uiStyles)
 
@@ -340,6 +362,8 @@ func newApp(container tuibootstrap.Container) (App, error) {
 			layoutCached: true,
 			cachedWidth:  128,
 			cachedHeight: 40,
+			// 初始进入草稿态时锁定启动页，直到发送或切换 session 才退出。
+			startupScreenLocked: true,
 		},
 		width:  128,
 		height: 40,
@@ -374,12 +398,16 @@ func (a App) Init() tea.Cmd {
 		ListenForRuntimeEvent(a.runtime.Events()),
 		textarea.Blink,
 		a.spinner.Tick,
-		tea.Tick(100*time.Millisecond, func(t time.Time) tea.Msg {
-			return tickMsg(t)
-		}),
+		appTickCmd(),
 	}
 	if cmd := runModelCatalogRefresh(a.providerSvc, a.modelRefreshID); cmd != nil {
 		cmds = append(cmds, cmd)
 	}
 	return tea.Batch(cmds...)
+}
+
+func appTickCmd() tea.Cmd {
+	return tea.Tick(100*time.Millisecond, func(t time.Time) tea.Msg {
+		return tickMsg(t)
+	})
 }

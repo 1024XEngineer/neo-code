@@ -472,21 +472,13 @@ func isSandboxOutsideWriteApprovalCandidate(action security.Action, sandboxErr e
 
 // isWorkspaceBoundaryViolationError 判断错误是否由工作区边界校验触发。
 func isWorkspaceBoundaryViolationError(err error) bool {
-	message := strings.ToLower(strings.TrimSpace(errorMessage(err)))
-	if message == "" {
-		return false
-	}
-	return strings.Contains(message, "escapes workspace root") ||
-		strings.Contains(message, "different volume than workspace root")
+	return errors.Is(err, security.ErrWorkspaceBoundaryViolation) ||
+		errors.Is(err, security.ErrWorkspaceVolumeMismatch)
 }
 
 // isWorkspaceSymlinkViolationError 判断沙箱拒绝是否来自符号链接越界逃逸。
 func isWorkspaceSymlinkViolationError(err error) bool {
-	message := strings.ToLower(strings.TrimSpace(errorMessage(err)))
-	if message == "" {
-		return false
-	}
-	return strings.Contains(message, "escapes workspace root via symlink")
+	return errors.Is(err, security.ErrWorkspaceSymlinkViolation)
 }
 
 // resolveActionSandboxTargetPath 将 action 的 sandbox target 解析为可判定风险的绝对路径。

@@ -75,7 +75,10 @@ func (s *Service) Compact(ctx context.Context, input CompactInput) (CompactResul
 		releaseLockRef()
 	}()
 
-	cfg := s.configManager.Get()
+	cfg, err := s.loadConfigSnapshot(ctx)
+	if err != nil {
+		return CompactResult{}, err
+	}
 	session, err := s.sessionStore.LoadSession(ctx, input.SessionID)
 	if err != nil {
 		return CompactResult{}, err

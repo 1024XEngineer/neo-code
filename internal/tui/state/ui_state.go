@@ -24,6 +24,7 @@ const (
 	PickerFile
 	PickerHelp
 	PickerProviderAdd
+	PickerModelScopeGuide
 )
 
 // UIState 保存顶层界面状态快照，仅作为数据容器使用。

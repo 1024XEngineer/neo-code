@@ -26,6 +26,7 @@ var allowedRunStateTransitions = map[RunState]map[RunState]struct{}{
 	},
 	RunStatePlan: {
 		RunStatePlan:              {},
+		RunStateVerify:            {},
 		RunStateExecute:           {},
 		RunStateCompacting:        {},
 		RunStateWaitingPermission: {},

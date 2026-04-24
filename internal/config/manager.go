@@ -92,12 +92,8 @@ func (m *Manager) ConfigPath() string {
 	return m.loader.ConfigPath()
 }
 
-// LockProviderCreate 锁定自定义 Provider 创建事务，确保同一 Manager 维度串行执行。
-func (m *Manager) LockProviderCreate() {
+// AcquireProviderCreateLock 锁定自定义 Provider 创建事务，返回释放函数。
+func (m *Manager) AcquireProviderCreateLock() func() {
 	m.providerCreateMu.Lock()
-}
-
-// UnlockProviderCreate 释放自定义 Provider 创建事务锁。
-func (m *Manager) UnlockProviderCreate() {
-	m.providerCreateMu.Unlock()
+	return m.providerCreateMu.Unlock
 }

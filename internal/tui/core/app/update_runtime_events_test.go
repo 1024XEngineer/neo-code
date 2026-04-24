@@ -140,6 +140,13 @@ func TestRuntimeEventStopReasonDecidedHandlerBranches(t *testing.T) {
 	}
 
 	runtimeEventStopReasonDecidedHandler(&app, agentruntime.RuntimeEvent{
+		Payload: agentruntime.StopReasonDecidedPayload{Reason: agentruntime.StopReasonCompatibilityFallback},
+	})
+	if app.state.ExecutionError != "" || app.state.StatusText != "Completed via compatibility fallback" {
+		t.Fatalf("expected compatibility fallback to be non-error, got status=%q err=%q", app.state.StatusText, app.state.ExecutionError)
+	}
+
+	runtimeEventStopReasonDecidedHandler(&app, agentruntime.RuntimeEvent{
 		Payload: agentruntime.StopReasonDecidedPayload{Reason: agentruntime.StopReason("STOP_UNKNOWN")},
 	})
 	if !strings.Contains(app.state.ExecutionError, "unknown stop reason") {
@@ -170,6 +177,24 @@ func TestRuntimeEventHandlerRegistryContainsRenamedEvents(t *testing.T) {
 	}
 	if _, ok := runtimeEventHandlerRegistry[agentruntime.EventSkillMissing]; !ok {
 		t.Fatalf("expected skill_missing handler to be registered")
+	}
+	if _, ok := runtimeEventHandlerRegistry[agentruntime.EventVerificationStarted]; !ok {
+		t.Fatalf("expected verification_started handler to be registered")
+	}
+	if _, ok := runtimeEventHandlerRegistry[agentruntime.EventVerificationStageFinished]; !ok {
+		t.Fatalf("expected verification_stage_finished handler to be registered")
+	}
+	if _, ok := runtimeEventHandlerRegistry[agentruntime.EventVerificationFinished]; !ok {
+		t.Fatalf("expected verification_finished handler to be registered")
+	}
+	if _, ok := runtimeEventHandlerRegistry[agentruntime.EventVerificationCompleted]; !ok {
+		t.Fatalf("expected verification_completed handler to be registered")
+	}
+	if _, ok := runtimeEventHandlerRegistry[agentruntime.EventVerificationFailed]; !ok {
+		t.Fatalf("expected verification_failed handler to be registered")
+	}
+	if _, ok := runtimeEventHandlerRegistry[agentruntime.EventAcceptanceDecided]; !ok {
+		t.Fatalf("expected acceptance_decided handler to be registered")
 	}
 }
 
@@ -265,6 +290,102 @@ func TestRuntimeEventMultimodalHandlers(t *testing.T) {
 	}
 	if handled := runtimeEventAssetSaveFailedHandler(&app, agentruntime.RuntimeEvent{Payload: true}); handled {
 		t.Fatalf("expected invalid asset_save_failed payload to return false")
+	}
+}
+
+func TestRuntimeEventVerificationAndAcceptanceHandlers(t *testing.T) {
+	t.Parallel()
+
+	app, _ := newTestApp(t)
+
+	if handled := runtimeEventVerificationStartedHandler(&app, agentruntime.RuntimeEvent{Payload: "bad"}); handled {
+		t.Fatalf("expected invalid verification_started payload to return false")
+	}
+	runtimeEventVerificationStartedHandler(&app, agentruntime.RuntimeEvent{
+		Payload: agentruntime.VerificationStartedPayload{CompletionPassed: false},
+	})
+	if !app.runProgressKnown || app.runProgressValue != 0.84 || app.runProgressLabel != "Verifying acceptance" {
+		t.Fatalf("unexpected progress after verification_started: known=%v value=%v label=%q", app.runProgressKnown, app.runProgressValue, app.runProgressLabel)
+	}
+	if len(app.activities) == 0 || app.activities[len(app.activities)-1].Title != "Verification started" {
+		t.Fatalf("expected verification started activity, got %+v", app.activities)
+	}
+
+	runtimeEventVerificationStartedHandler(&app, agentruntime.RuntimeEvent{
+		Payload: agentruntime.VerificationStartedPayload{CompletionPassed: true},
+	})
+	if app.runProgressValue != 0.88 {
+		t.Fatalf("progress value = %v, want 0.88 when completion passed", app.runProgressValue)
+	}
+
+	if handled := runtimeEventVerificationStageFinishedHandler(&app, agentruntime.RuntimeEvent{Payload: 1}); handled {
+		t.Fatalf("expected invalid stage payload to return false")
+	}
+	runtimeEventVerificationStageFinishedHandler(&app, agentruntime.RuntimeEvent{
+		Payload: agentruntime.VerificationStageFinishedPayload{
+			Name:    "git_diff",
+			Status:  "fail",
+			Summary: "",
+			Reason:  "",
+		},
+	})
+	stage := app.activities[len(app.activities)-1]
+	if stage.Title != "Verifier stage: git_diff" || stage.Detail != "no summary" || !stage.IsError {
+		t.Fatalf("unexpected stage activity: %+v", stage)
+	}
+
+	if handled := runtimeEventVerificationFinishedHandler(&app, agentruntime.RuntimeEvent{Payload: true}); handled {
+		t.Fatalf("expected invalid verification_finished payload to return false")
+	}
+	runtimeEventVerificationFinishedHandler(&app, agentruntime.RuntimeEvent{
+		Payload: agentruntime.VerificationFinishedPayload{
+			AcceptanceStatus: "accepted",
+			StopReason:       agentruntime.StopReasonAccepted,
+		},
+	})
+	if app.runProgressValue != 0.92 || app.runProgressLabel != "Verification finished" {
+		t.Fatalf("unexpected progress after verification_finished: value=%v label=%q", app.runProgressValue, app.runProgressLabel)
+	}
+
+	if handled := runtimeEventVerificationCompletedHandler(&app, agentruntime.RuntimeEvent{Payload: 1}); handled {
+		t.Fatalf("expected invalid verification_completed payload to return false")
+	}
+	runtimeEventVerificationCompletedHandler(&app, agentruntime.RuntimeEvent{
+		Payload: agentruntime.VerificationCompletedPayload{},
+	})
+	completed := app.activities[len(app.activities)-1]
+	if completed.Title != "Verification completed" || completed.Detail != "accepted" || completed.IsError {
+		t.Fatalf("unexpected completed activity: %+v", completed)
+	}
+
+	if handled := runtimeEventVerificationFailedHandler(&app, agentruntime.RuntimeEvent{Payload: 1}); handled {
+		t.Fatalf("expected invalid verification_failed payload to return false")
+	}
+	runtimeEventVerificationFailedHandler(&app, agentruntime.RuntimeEvent{
+		Payload: agentruntime.VerificationFailedPayload{
+			StopReason: agentruntime.StopReasonVerificationFailed,
+			ErrorClass: "test_failure",
+		},
+	})
+	failed := app.activities[len(app.activities)-1]
+	if failed.Title != "Verification failed" || !strings.Contains(failed.Detail, "test_failure") || !failed.IsError {
+		t.Fatalf("unexpected failed activity: %+v", failed)
+	}
+
+	if handled := runtimeEventAcceptanceDecidedHandler(&app, agentruntime.RuntimeEvent{Payload: nil}); handled {
+		t.Fatalf("expected invalid acceptance payload to return false")
+	}
+	runtimeEventAcceptanceDecidedHandler(&app, agentruntime.RuntimeEvent{
+		Payload: agentruntime.AcceptanceDecidedPayload{
+			Status:             "failed",
+			UserVisibleSummary: "",
+			InternalSummary:    "",
+			ContinueHint:       "provide missing files",
+		},
+	})
+	acceptance := app.activities[len(app.activities)-1]
+	if acceptance.Title != "Acceptance decided (failed)" || acceptance.Detail != "provide missing files" || !acceptance.IsError {
+		t.Fatalf("unexpected acceptance activity: %+v", acceptance)
 	}
 }
 

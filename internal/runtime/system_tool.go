@@ -42,7 +42,7 @@ func (s *Service) ExecuteSystemTool(ctx context.Context, input SystemToolInput) 
 		loaded agentsession.Session
 	)
 	if sessionID != "" {
-		sessionMu, releaseLockRef := s.acquireSessionRLock(sessionID)
+		sessionMu, releaseLockRef := s.acquireSessionLock(sessionID)
 		sessionMu.RLock()
 
 		session, err := s.sessionStore.LoadSession(ctx, sessionID)
@@ -68,7 +68,7 @@ func (s *Service) ExecuteSystemTool(ctx context.Context, input SystemToolInput) 
 	}
 
 	if state != nil {
-		_ = s.emitRunScoped(ctx, EventToolStart, state, call)
+		s.emitRunScoped(ctx, EventToolStart, state, call)
 	} else {
 		_ = s.emit(ctx, EventToolStart, runID, sessionID, call)
 	}
@@ -96,7 +96,7 @@ func (s *Service) ExecuteSystemTool(ctx context.Context, input SystemToolInput) 
 		if loaded.ID != "" {
 			state.session = loaded
 		}
-		_ = s.emitRunScoped(ctx, EventToolResult, state, result)
+		s.emitRunScoped(ctx, EventToolResult, state, result)
 		s.emitTodoToolEvent(ctx, state, call, result, execErr)
 	} else {
 		_ = s.emit(ctx, EventToolResult, runID, sessionID, result)

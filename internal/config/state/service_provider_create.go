@@ -75,8 +75,8 @@ func (s *Service) CreateCustomProvider(ctx context.Context, input CreateCustomPr
 		return Selection{}, err
 	}
 
-	s.manager.LockProviderCreate()
-	defer s.manager.UnlockProviderCreate()
+	releaseProviderLock := s.manager.AcquireProviderCreateLock()
+	defer releaseProviderLock()
 
 	releaseCrossProcessLock, err := lockProviderCreateCrossProcess(ctx, s.manager.BaseDir())
 	if err != nil {

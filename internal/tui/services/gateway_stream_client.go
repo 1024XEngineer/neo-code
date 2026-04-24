@@ -215,6 +215,18 @@ func restoreRuntimePayload(eventType EventType, payload any) (any, error) {
 		return decodeRuntimePayload[PhaseChangedPayload](payload)
 	case EventStopReasonDecided:
 		return decodeStopReasonPayload(payload)
+	case EventVerificationStarted:
+		return decodeRuntimePayload[VerificationStartedPayload](payload)
+	case EventVerificationStageFinished:
+		return decodeRuntimePayload[VerificationStageFinishedPayload](payload)
+	case EventVerificationFinished:
+		return decodeRuntimePayload[VerificationFinishedPayload](payload)
+	case EventVerificationCompleted:
+		return decodeRuntimePayload[VerificationCompletedPayload](payload)
+	case EventVerificationFailed:
+		return decodeRuntimePayload[VerificationFailedPayload](payload)
+	case EventAcceptanceDecided:
+		return decodeRuntimePayload[AcceptanceDecidedPayload](payload)
 	case EventInputNormalized:
 		return decodeRuntimePayload[InputNormalizedPayload](payload)
 	case EventAssetSaved:
@@ -242,8 +254,27 @@ func decodeStopReasonPayload(payload any) (StopReasonDecidedPayload, error) {
 	if err != nil {
 		return StopReasonDecidedPayload{}, err
 	}
-	decoded.Reason = StopReason(strings.TrimSpace(string(decoded.Reason)))
+	decoded.Reason = normalizeStopReasonCompatibility(decoded.Reason)
 	return decoded, nil
+}
+
+// normalizeStopReasonCompatibility 统一兼容 runtime 新旧 stop reason 枚举值。
+func normalizeStopReasonCompatibility(reason StopReason) StopReason {
+	normalized := strings.ToLower(strings.TrimSpace(string(reason)))
+	switch normalized {
+	case "stop_completed":
+		return StopReasonAccepted
+	case "stop_user_interrupt":
+		return StopReasonUserInterrupt
+	case "stop_fatal_error":
+		return StopReasonFatalError
+	case "stop_max_turns_reached":
+		return StopReasonMaxTurnExceeded
+	case "stop_budget_exceeded":
+		return StopReasonBudgetExceeded
+	default:
+		return StopReason(normalized)
+	}
 }
 
 // decodeStringPayload 兼容字符串类事件 payload 解码。

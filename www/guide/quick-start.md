@@ -75,3 +75,4 @@ go run ./cmd/neocode
 - 想了解配置文件和自定义 Provider：看 [配置入口](./configuration)
 - 想理解工作区、会话切换和压缩：看 [工作区与会话](./workspace-session)
 - 想启用记忆和 Skills：看 [记忆与 Skills](./memo-skills)
+- 想手动升级或了解静默版本检测：看 [升级与版本检查](./update)

@@ -30,6 +30,11 @@ type runState struct {
 	budgetExceeded          bool
 	maxTurnsReached         bool
 	maxTurnsLimit           int
+	finalInterceptStreak    int
+	terminalStatus          controlplane.TerminalStatus
+	terminalStopReason      controlplane.StopReason
+	terminalStopDetail      string
+	terminalSet             bool
 	hasUnknownUsage         bool
 	completion              controlplane.CompletionState
 	progress                controlplane.ProgressState
@@ -90,4 +95,15 @@ func (s *runState) markSkillMissingReported(skillID string) bool {
 	}
 	s.reportedMissingSkills[normalized] = struct{}{}
 	return true
+}
+
+// markTerminalDecision 记录本次运行的唯一终态裁决结果，供统一 stop reason 发射使用。
+func (s *runState) markTerminalDecision(status controlplane.TerminalStatus, reason controlplane.StopReason, detail string) {
+	if s == nil {
+		return
+	}
+	s.terminalStatus = status
+	s.terminalStopReason = reason
+	s.terminalStopDetail = detail
+	s.terminalSet = true
 }

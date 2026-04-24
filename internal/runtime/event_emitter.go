@@ -22,16 +22,17 @@ func (s *Service) emit(ctx context.Context, kind EventType, runID string, sessio
 	})
 }
 
-// emitRunScoped 携带当前 run 的 turn/phase 元数据发出事件。
-func (s *Service) emitRunScoped(ctx context.Context, kind EventType, state *runState, payload any) error {
+// emitRunScoped 携带当前 run 的 turn/phase 元数据发出事件。事件投递为 best-effort，不返回错误。
+func (s *Service) emitRunScoped(ctx context.Context, kind EventType, state *runState, payload any) {
 	if state == nil {
-		return s.emit(ctx, kind, "", "", payload)
+		_ = s.emit(ctx, kind, "", "", payload)
+		return
 	}
 	phase := ""
 	if state.lifecycle != "" {
 		phase = string(state.lifecycle)
 	}
-	return s.emitWithEnvelope(ctx, RuntimeEvent{
+	_ = s.emitWithEnvelope(ctx, RuntimeEvent{
 		Type:           kind,
 		RunID:          state.runID,
 		SessionID:      state.session.ID,

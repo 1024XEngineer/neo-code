@@ -9,7 +9,7 @@ import (
 )
 
 // CurrentTodoVersion 表示当前 Todo 结构版本。
-const CurrentTodoVersion = 4
+const CurrentTodoVersion = 5
 
 // TodoStatus 表示 Todo 项的状态枚举。
 type TodoStatus string
@@ -27,6 +27,22 @@ const (
 	TodoStatusFailed TodoStatus = "failed"
 	// TodoStatusCanceled 表示已取消。
 	TodoStatusCanceled TodoStatus = "canceled"
+)
+
+// TodoBlockedReason 表示 blocked todo 的结构化阻塞原因。
+type TodoBlockedReason string
+
+const (
+	// TodoBlockedReasonInternalDependency 表示被内部依赖阻塞。
+	TodoBlockedReasonInternalDependency TodoBlockedReason = "internal_dependency"
+	// TodoBlockedReasonPermissionWait 表示等待权限审批。
+	TodoBlockedReasonPermissionWait TodoBlockedReason = "permission_wait"
+	// TodoBlockedReasonUserInputWait 表示等待用户补充输入。
+	TodoBlockedReasonUserInputWait TodoBlockedReason = "user_input_wait"
+	// TodoBlockedReasonExternalResourceWait 表示等待外部资源就绪。
+	TodoBlockedReasonExternalResourceWait TodoBlockedReason = "external_resource_wait"
+	// TodoBlockedReasonUnknown 表示未知阻塞原因或旧数据缺省值。
+	TodoBlockedReasonUnknown TodoBlockedReason = "unknown"
 )
 
 const (
@@ -47,29 +63,33 @@ const (
 
 // TodoItem 表示会话级结构化待办项。
 type TodoItem struct {
-	ID            string     `json:"id"`
-	Content       string     `json:"content"`
-	Status        TodoStatus `json:"status"`
-	Dependencies  []string   `json:"dependencies,omitempty"`
-	Priority      int        `json:"priority,omitempty"`
-	Executor      string     `json:"executor,omitempty"`
-	OwnerType     string     `json:"owner_type,omitempty"`
-	OwnerID       string     `json:"owner_id,omitempty"`
-	Acceptance    []string   `json:"acceptance,omitempty"`
-	Artifacts     []string   `json:"artifacts,omitempty"`
-	FailureReason string     `json:"failure_reason,omitempty"`
-	RetryCount    int        `json:"retry_count,omitempty"`
-	RetryLimit    int        `json:"retry_limit,omitempty"`
-	NextRetryAt   time.Time  `json:"next_retry_at,omitempty"`
-	Revision      int64      `json:"revision"`
-	CreatedAt     time.Time  `json:"created_at"`
-	UpdatedAt     time.Time  `json:"updated_at"`
+	ID            string            `json:"id"`
+	Content       string            `json:"content"`
+	Status        TodoStatus        `json:"status"`
+	Required      *bool             `json:"required,omitempty"`
+	BlockedReason TodoBlockedReason `json:"blocked_reason,omitempty"`
+	Dependencies  []string          `json:"dependencies,omitempty"`
+	Priority      int               `json:"priority,omitempty"`
+	Executor      string            `json:"executor,omitempty"`
+	OwnerType     string            `json:"owner_type,omitempty"`
+	OwnerID       string            `json:"owner_id,omitempty"`
+	Acceptance    []string          `json:"acceptance,omitempty"`
+	Artifacts     []string          `json:"artifacts,omitempty"`
+	FailureReason string            `json:"failure_reason,omitempty"`
+	RetryCount    int               `json:"retry_count,omitempty"`
+	RetryLimit    int               `json:"retry_limit,omitempty"`
+	NextRetryAt   time.Time         `json:"next_retry_at,omitempty"`
+	Revision      int64             `json:"revision"`
+	CreatedAt     time.Time         `json:"created_at"`
+	UpdatedAt     time.Time         `json:"updated_at"`
 }
 
 // TodoPatch 表示对 Todo 可选字段的更新补丁。
 type TodoPatch struct {
 	Content       *string
 	Status        *TodoStatus
+	Required      *bool
+	BlockedReason *TodoBlockedReason
 	Dependencies  *[]string
 	Priority      *int
 	Executor      *string
@@ -88,7 +108,28 @@ func (i TodoItem) Clone() TodoItem {
 	i.Dependencies = append([]string(nil), i.Dependencies...)
 	i.Acceptance = append([]string(nil), i.Acceptance...)
 	i.Artifacts = append([]string(nil), i.Artifacts...)
+	if i.Required != nil {
+		required := *i.Required
+		i.Required = &required
+	}
 	return i
+}
+
+// RequiredValue 返回 todo 是否为 required，兼容旧数据缺省值 true。
+func (i TodoItem) RequiredValue() bool {
+	if i.Required == nil {
+		return true
+	}
+	return *i.Required
+}
+
+// BlockedReasonValue 返回 todo 阻塞原因，兼容旧数据缺省值 unknown。
+func (i TodoItem) BlockedReasonValue() TodoBlockedReason {
+	normalized := normalizeTodoBlockedReason(i.BlockedReason)
+	if normalized == "" {
+		return TodoBlockedReasonUnknown
+	}
+	return normalized
 }
 
 // Valid 判断当前状态值是否为受支持状态。
@@ -265,11 +306,13 @@ func (s *Session) UpdateTodo(id string, patch TodoPatch, expectedRevision int64)
 func (s *Session) ClaimTodo(id string, ownerType string, ownerID string, expectedRevision int64) error {
 	status := TodoStatusInProgress
 	failureReason := ""
+	blockedReason := TodoBlockedReasonUnknown
 	nextRetryAt := time.Time{}
 	patch := TodoPatch{
 		Status:        &status,
 		OwnerType:     &ownerType,
 		OwnerID:       &ownerID,
+		BlockedReason: &blockedReason,
 		FailureReason: &failureReason,
 		NextRetryAt:   &nextRetryAt,
 	}
@@ -280,11 +323,13 @@ func (s *Session) ClaimTodo(id string, ownerType string, ownerID string, expecte
 func (s *Session) CompleteTodo(id string, artifacts []string, expectedRevision int64) error {
 	status := TodoStatusCompleted
 	failureReason := ""
+	blockedReason := TodoBlockedReasonUnknown
 	retryCount := 0
 	nextRetryAt := time.Time{}
 	patch := TodoPatch{
 		Status:        &status,
 		Artifacts:     &artifacts,
+		BlockedReason: &blockedReason,
 		FailureReason: &failureReason,
 		RetryCount:    &retryCount,
 		NextRetryAt:   &nextRetryAt,
@@ -295,9 +340,11 @@ func (s *Session) CompleteTodo(id string, artifacts []string, expectedRevision i
 // FailTodo 将 Todo 标记为失败并记录失败原因。
 func (s *Session) FailTodo(id string, reason string, expectedRevision int64) error {
 	status := TodoStatusFailed
+	blockedReason := TodoBlockedReasonUnknown
 	nextRetryAt := time.Time{}
 	patch := TodoPatch{
 		Status:        &status,
+		BlockedReason: &blockedReason,
 		FailureReason: &reason,
 		NextRetryAt:   &nextRetryAt,
 	}
@@ -410,6 +457,11 @@ func normalizeTodoItem(item TodoItem) (TodoItem, error) {
 	if item.Executor == "" {
 		item.Executor = TodoExecutorAgent
 	}
+	item.BlockedReason = normalizeTodoBlockedReason(item.BlockedReason)
+	if item.Required != nil {
+		required := *item.Required
+		item.Required = &required
+	}
 	item.OwnerType = normalizeTodoOwnerType(item.OwnerType)
 	item.OwnerID = strings.TrimSpace(item.OwnerID)
 	item.Acceptance = normalizeTodoTextList(item.Acceptance)
@@ -438,6 +490,8 @@ func normalizeTodoItem(item TodoItem) (TodoItem, error) {
 		return TodoItem{}, fmt.Errorf("session: todo %q content is empty", item.ID)
 	case !item.Status.Valid():
 		return TodoItem{}, fmt.Errorf("session: invalid todo status %q", item.Status)
+	case !isValidTodoBlockedReason(item.BlockedReason):
+		return TodoItem{}, fmt.Errorf("session: invalid todo blocked_reason %q", item.BlockedReason)
 	case !isValidTodoExecutor(item.Executor):
 		return TodoItem{}, fmt.Errorf("session: invalid todo executor %q", item.Executor)
 	case !isValidTodoOwnerType(item.OwnerType):
@@ -446,6 +500,13 @@ func normalizeTodoItem(item TodoItem) (TodoItem, error) {
 
 	if item.Status != TodoStatusFailed && item.Status != TodoStatusPending && item.Status != TodoStatusBlocked {
 		item.FailureReason = ""
+	}
+	if item.Status != TodoStatusBlocked {
+		item.BlockedReason = TodoBlockedReasonUnknown
+	}
+	if item.Required == nil {
+		defaultRequired := true
+		item.Required = &defaultRequired
 	}
 	if item.Status != TodoStatusPending && item.Status != TodoStatusFailed {
 		item.NextRetryAt = time.Time{}
@@ -541,6 +602,14 @@ func applyTodoPatch(item TodoItem, patch TodoPatch) (TodoItem, error) {
 	if patch.Dependencies != nil {
 		next.Dependencies = normalizeTodoDependencies(*patch.Dependencies)
 	}
+	if patch.Required != nil {
+		required := *patch.Required
+		next.Required = &required
+	}
+	if patch.BlockedReason != nil {
+		reason := normalizeTodoBlockedReason(*patch.BlockedReason)
+		next.BlockedReason = reason
+	}
 	if patch.Priority != nil {
 		next.Priority = *patch.Priority
 	}
@@ -587,6 +656,29 @@ func applyTodoPatch(item TodoItem, patch TodoPatch) (TodoItem, error) {
 		return TodoItem{}, err
 	}
 	return normalized, nil
+}
+
+// normalizeTodoBlockedReason 规整 blocked_reason 字段并提供 unknown 缺省语义。
+func normalizeTodoBlockedReason(reason TodoBlockedReason) TodoBlockedReason {
+	normalized := strings.ToLower(strings.TrimSpace(string(reason)))
+	if normalized == "" {
+		return TodoBlockedReasonUnknown
+	}
+	return TodoBlockedReason(normalized)
+}
+
+// isValidTodoBlockedReason 判断 blocked_reason 是否受支持。
+func isValidTodoBlockedReason(reason TodoBlockedReason) bool {
+	switch normalizeTodoBlockedReason(reason) {
+	case TodoBlockedReasonInternalDependency,
+		TodoBlockedReasonPermissionWait,
+		TodoBlockedReasonUserInputWait,
+		TodoBlockedReasonExternalResourceWait,
+		TodoBlockedReasonUnknown:
+		return true
+	default:
+		return false
+	}
 }
 
 // normalizeTodoOwnerType 规范化 owner_type 字段。

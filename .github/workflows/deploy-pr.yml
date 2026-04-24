@@ -1,0 +1,30 @@
+name: Deploy PR Preview (Has Secrets)
+on:
+  workflow_run:
+    workflows: ["Build PR (No Secrets)"] # 必须和第一棒的 name 保持完全一致
+    types:
+      - completed
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    # 确保第一棒成功了，这棒才跑
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    steps:
+      # 关键：用特殊的权限下载第一棒暂存的包裹
+      - name: Download Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: pr-dist-folder
+          path: dist # 下载到当前环境的 dist 目录
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ github.event.workflow_run.id }}
+
+      # 直接拿下载好的静态文件去发布，不用再 install 和 build 了
+      - name: Deploy to Cloudflare Pages
+        uses: cloudflare/pages-action@v1
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          projectName: 'neocode-docs'
+          directory: 'dist' # 直接推送刚才下载的 dist 目录

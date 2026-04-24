@@ -1,0 +1,44 @@
+name: Cloudflare Pages Direct Deployment
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      deployments: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Dependencies
+        run: pnpm install
+        working-directory: ./www # 假设你的目录叫 www
+
+
+
+      - name: Build Docs
+        run: CF_PAGES=1 pnpm run docs:build
+        working-directory: ./www
+
+      # 魔法时刻：强推到 Cloudflare Pages
+      - name: Deploy to Cloudflare Pages
+        uses: cloudflare/pages-action@v1
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          projectName: 'neocode-docs' # 填你在第二步创建的 Cloudflare 项目名
+          directory: 'www/.vitepress/dist' # 构建输出的路径
+          gitHubToken: ${{ secrets.GITHUB_TOKEN }}

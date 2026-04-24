@@ -6,12 +6,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net"
+	"os"
 	"strings"
 	"sync/atomic"
 	"time"
 
 	"neo-code/internal/gateway"
+	"neo-code/internal/gateway/launcher"
 	"neo-code/internal/gateway/protocol"
 	"neo-code/internal/gateway/transport"
 )
@@ -27,6 +30,10 @@ const (
 	ErrorCodeInternal = "internal_error"
 	// defaultDispatchIOTimeout 表示单次调度读写超时时间。
 	defaultDispatchIOTimeout = 10 * time.Second
+	// defaultGatewayLaunchTimeout 表示自动拉起网关后等待可连通的最长时间。
+	defaultGatewayLaunchTimeout = 3 * time.Second
+	// defaultGatewayLaunchRetryInterval 表示等待网关可连通时的轮询间隔。
+	defaultGatewayLaunchRetryInterval = 100 * time.Millisecond
 )
 
 var dispatchRequestCounter uint64
@@ -64,6 +71,12 @@ type Dispatcher struct {
 	resolveListenAddressFn func(string) (string, error)
 	dialFn                 func(address string) (net.Conn, error)
 	requestIDFn            func() string
+	resolveLaunchSpecFn    func() (launcher.LaunchSpec, error)
+	startGatewayFn         func(launcher.LaunchSpec) error
+	nowFn                  func() time.Time
+	sleepFn                func(time.Duration)
+	autoLaunchGateway      bool
+	logger                 *log.Logger
 }
 
 // NewDispatcher 创建默认 URL Scheme 调度器。
@@ -72,6 +85,16 @@ func NewDispatcher() *Dispatcher {
 		resolveListenAddressFn: transport.ResolveListenAddress,
 		dialFn:                 transport.Dial,
 		requestIDFn:            nextDispatchRequestID,
+		resolveLaunchSpecFn: func() (launcher.LaunchSpec, error) {
+			return launcher.ResolveGatewayLaunchSpec(launcher.ResolveOptions{
+				ExplicitBinary: strings.TrimSpace(os.Getenv(launcher.EnvGatewayBinary)),
+			})
+		},
+		startGatewayFn:    launcher.StartDetachedGateway,
+		nowFn:             time.Now,
+		sleepFn:           time.Sleep,
+		autoLaunchGateway: true,
+		logger:            log.New(os.Stderr, "url-dispatch: ", log.LstdFlags),
 	}
 }
 
@@ -87,9 +110,10 @@ func (d *Dispatcher) Dispatch(ctx context.Context, request DispatchRequest) (Dis
 		return DispatchResult{}, newDispatchError(ErrorCodeInternal, fmt.Sprintf("resolve listen address: %v", err))
 	}
 
-	conn, err := d.dialFn(listenAddress)
+	requestID := d.requestIDFn()
+	conn, err := d.dialGatewayWithFallback(ctx, listenAddress, requestID, request.AuthToken)
 	if err != nil {
-		return DispatchResult{}, newDispatchError(ErrorCodeGatewayUnavailable, fmt.Sprintf("dial gateway failed: %v", err))
+		return DispatchResult{}, err
 	}
 	defer func() {
 		_ = conn.Close()
@@ -114,7 +138,7 @@ func (d *Dispatcher) Dispatch(ctx context.Context, request DispatchRequest) (Dis
 	requestFrame := gateway.MessageFrame{
 		Type:      gateway.FrameTypeRequest,
 		Action:    gateway.FrameActionWakeOpenURL,
-		RequestID: d.requestIDFn(),
+		RequestID: requestID,
 		SessionID: intent.SessionID,
 		Workdir:   intent.Workdir,
 		Payload:   intent,
@@ -142,31 +166,17 @@ func (d *Dispatcher) Dispatch(ctx context.Context, request DispatchRequest) (Dis
 	if err != nil {
 		return DispatchResult{}, err
 	}
-	if strings.TrimSpace(rpcResponse.JSONRPC) != protocol.JSONRPCVersion {
-		return DispatchResult{}, newDispatchError(
-			ErrorCodeUnexpectedResponse,
-			"unexpected response jsonrpc version",
-		)
-	}
-	if !rawJSONMessageEqual(rpcResponse.ID, rpcRequest.ID) {
-		return DispatchResult{}, newDispatchError(ErrorCodeUnexpectedResponse, "rpc correlation failed: id mismatch")
-	}
-	if rpcResponse.Error != nil && rpcResponse.Result != nil {
-		return DispatchResult{}, newDispatchError(
-			ErrorCodeUnexpectedResponse,
-			"unexpected response payload: both result and error are present",
-		)
-	}
-	if rpcResponse.Error != nil {
-		return DispatchResult{}, toDispatchErrorFromJSONRPC(rpcResponse.Error)
-	}
-	if rpcResponse.Result == nil {
-		return DispatchResult{}, newDispatchError(ErrorCodeUnexpectedResponse, "gateway response missing result payload")
-	}
-
-	responseFrame, err := decodeResponseFrameResult(rpcResponse.Result)
+	responseFrame, err := validateRPCFrameResponse(
+		rpcResponse,
+		rpcRequest.ID,
+		"unexpected response jsonrpc version",
+		"rpc correlation failed: id mismatch",
+		"unexpected response payload: both result and error are present",
+		"gateway response missing result payload",
+		"decode response frame: %v",
+	)
 	if err != nil {
-		return DispatchResult{}, newDispatchError(ErrorCodeUnexpectedResponse, fmt.Sprintf("decode response frame: %v", err))
+		return DispatchResult{}, err
 	}
 	if responseFrame.Action != requestFrame.Action || responseFrame.RequestID != requestFrame.RequestID {
 		return DispatchResult{}, newDispatchError(
@@ -214,21 +224,17 @@ func (d *Dispatcher) authenticate(ctx context.Context, conn net.Conn, token stri
 	if err != nil {
 		return err
 	}
-	if strings.TrimSpace(authResponse.JSONRPC) != protocol.JSONRPCVersion {
-		return newDispatchError(ErrorCodeUnexpectedResponse, "unexpected auth response jsonrpc version")
-	}
-	if !rawJSONMessageEqual(authResponse.ID, authRequest.ID) {
-		return newDispatchError(ErrorCodeUnexpectedResponse, "rpc correlation failed: auth id mismatch")
-	}
-	if authResponse.Error != nil {
-		return toDispatchErrorFromJSONRPC(authResponse.Error)
-	}
-	if authResponse.Result == nil {
-		return newDispatchError(ErrorCodeUnexpectedResponse, "gateway auth response missing result payload")
-	}
-	frame, err := decodeResponseFrameResult(authResponse.Result)
+	frame, err := validateRPCFrameResponse(
+		authResponse,
+		authRequest.ID,
+		"unexpected auth response jsonrpc version",
+		"rpc correlation failed: auth id mismatch",
+		"unexpected response payload: both result and error are present",
+		"gateway auth response missing result payload",
+		"decode auth response frame: %v",
+	)
 	if err != nil {
-		return newDispatchError(ErrorCodeUnexpectedResponse, fmt.Sprintf("decode auth response frame: %v", err))
+		return err
 	}
 	if frame.Type != gateway.FrameTypeAck || frame.Action != gateway.FrameActionAuthenticate || frame.RequestID != authRequestID {
 		return newDispatchError(ErrorCodeUnexpectedResponse, "unexpected auth response frame")
@@ -261,6 +267,252 @@ func (d *Dispatcher) callRPC(ctx context.Context, conn net.Conn, request protoco
 		return protocol.JSONRPCResponse{}, newDispatchError(ErrorCodeUnexpectedResponse, fmt.Sprintf("decode response rpc: %v", err))
 	}
 	return response, nil
+}
+
+type launchDecisionLogEntry struct {
+	RequestID     string `json:"request_id"`
+	Method        string `json:"method"`
+	Source        string `json:"source"`
+	Status        string `json:"status"`
+	GatewayCode   string `json:"gateway_code"`
+	ListenAddress string `json:"listen_address"`
+	AuthMode      string `json:"auth_mode"`
+	LaunchMode    string `json:"launch_mode,omitempty"`
+	ResolvedExec  string `json:"resolved_exec,omitempty"`
+	Message       string `json:"message,omitempty"`
+}
+
+// dialGatewayWithFallback 先尝试直连网关，若失败且启用了自动拉起则按约定发现顺序拉起后重拨一次。
+func (d *Dispatcher) dialGatewayWithFallback(
+	ctx context.Context,
+	listenAddress string,
+	requestID string,
+	authToken string,
+) (net.Conn, error) {
+	connection, err := d.dialFn(listenAddress)
+	if err == nil {
+		return connection, nil
+	}
+	if !d.autoLaunchGateway {
+		return nil, newDispatchError(ErrorCodeGatewayUnavailable, fmt.Sprintf("dial gateway failed: %v", err))
+	}
+	if launchErr := d.launchGateway(ctx, listenAddress, requestID, authToken); launchErr != nil {
+		return nil, newDispatchError(
+			ErrorCodeGatewayUnavailable,
+			fmt.Sprintf("dial gateway failed: %v; launch gateway failed: %v", err, launchErr),
+		)
+	}
+	retriedConnection, retryErr := d.dialFn(listenAddress)
+	if retryErr != nil {
+		return nil, newDispatchError(
+			ErrorCodeGatewayUnavailable,
+			fmt.Sprintf("dial gateway failed after single fallback: %v", retryErr),
+		)
+	}
+	return retriedConnection, nil
+}
+
+// launchGateway 按固定发现顺序拉起网关，并在单次回退窗口内等待网关可连通。
+func (d *Dispatcher) launchGateway(ctx context.Context, listenAddress string, requestID string, authToken string) error {
+	if err := ensureDispatchContextActive(ctx); err != nil {
+		return err
+	}
+
+	resolveLaunchSpecFn := d.resolveLaunchSpecFn
+	if resolveLaunchSpecFn == nil {
+		return errors.New("gateway launcher is unavailable")
+	}
+	startGatewayFn := d.startGatewayFn
+	if startGatewayFn == nil {
+		return errors.New("gateway launcher start function is unavailable")
+	}
+
+	spec, err := resolveLaunchSpecFn()
+	if err != nil {
+		d.emitLaunchFailureLog(requestID, listenAddress, authToken, launcher.LaunchSpec{}, err)
+		return err
+	}
+
+	d.emitLaunchDecisionLog(newLaunchDecisionLogEntry(
+		requestID,
+		listenAddress,
+		authToken,
+		"launch_attempt",
+		"",
+		spec,
+		"",
+	))
+	launchSpec := spec
+	launchSpec.Args = buildGatewayLaunchArgs(spec.Args, listenAddress)
+	if err := startGatewayFn(launchSpec); err != nil {
+		d.emitLaunchFailureLog(requestID, listenAddress, authToken, spec, err)
+		return err
+	}
+
+	if err := d.waitGatewayReady(ctx, listenAddress); err != nil {
+		d.emitLaunchFailureLog(requestID, listenAddress, authToken, spec, err)
+		return err
+	}
+
+	d.emitLaunchDecisionLog(newLaunchDecisionLogEntry(
+		requestID,
+		listenAddress,
+		authToken,
+		"launch_ready",
+		"",
+		spec,
+		"",
+	))
+	return nil
+}
+
+// validateRPCFrameResponse 统一校验 JSON-RPC 基础字段并解码结果帧，保持调度与鉴权分支一致。
+func validateRPCFrameResponse(
+	response protocol.JSONRPCResponse,
+	expectedID json.RawMessage,
+	versionMismatchMessage string,
+	idMismatchMessage string,
+	dualPayloadMessage string,
+	missingResultMessage string,
+	decodeFrameMessageFormat string,
+) (gateway.MessageFrame, error) {
+	if strings.TrimSpace(response.JSONRPC) != protocol.JSONRPCVersion {
+		return gateway.MessageFrame{}, newDispatchError(ErrorCodeUnexpectedResponse, versionMismatchMessage)
+	}
+	if !rawJSONMessageEqual(response.ID, expectedID) {
+		return gateway.MessageFrame{}, newDispatchError(ErrorCodeUnexpectedResponse, idMismatchMessage)
+	}
+	if response.Error != nil && response.Result != nil {
+		return gateway.MessageFrame{}, newDispatchError(ErrorCodeUnexpectedResponse, dualPayloadMessage)
+	}
+	if response.Error != nil {
+		return gateway.MessageFrame{}, toDispatchErrorFromJSONRPC(response.Error)
+	}
+	if response.Result == nil {
+		return gateway.MessageFrame{}, newDispatchError(ErrorCodeUnexpectedResponse, missingResultMessage)
+	}
+
+	frame, err := decodeResponseFrameResult(response.Result)
+	if err != nil {
+		return gateway.MessageFrame{}, newDispatchError(
+			ErrorCodeUnexpectedResponse,
+			fmt.Sprintf(decodeFrameMessageFormat, err),
+		)
+	}
+	return frame, nil
+}
+
+// buildGatewayLaunchArgs 构造自动拉起参数，确保子进程监听地址与调度重拨地址一致。
+func buildGatewayLaunchArgs(baseArgs []string, listenAddress string) []string {
+	args := append([]string(nil), baseArgs...)
+	normalizedListenAddress := strings.TrimSpace(listenAddress)
+	if normalizedListenAddress == "" {
+		return args
+	}
+	return append(args, "--listen", normalizedListenAddress)
+}
+
+// waitGatewayReady 在单次回退窗口内轮询网关连通性，超时后返回确定性错误。
+func (d *Dispatcher) waitGatewayReady(ctx context.Context, listenAddress string) error {
+	nowFn := d.nowFn
+	if nowFn == nil {
+		nowFn = time.Now
+	}
+	sleepFn := d.sleepFn
+	if sleepFn == nil {
+		sleepFn = time.Sleep
+	}
+
+	startTime := nowFn()
+	deadline := startTime.Add(defaultGatewayLaunchTimeout)
+	if ctx != nil {
+		if ctxDeadline, ok := ctx.Deadline(); ok && ctxDeadline.Before(deadline) {
+			deadline = ctxDeadline
+		}
+	}
+	effectiveTimeout := deadline.Sub(startTime)
+	if effectiveTimeout < 0 {
+		effectiveTimeout = 0
+	}
+
+	for {
+		if err := ensureDispatchContextActive(ctx); err != nil {
+			return err
+		}
+		connection, err := d.dialFn(listenAddress)
+		if err == nil {
+			_ = connection.Close()
+			return nil
+		}
+		if !nowFn().Before(deadline) {
+			return fmt.Errorf("gateway did not become reachable within %s", effectiveTimeout)
+		}
+		sleepFn(defaultGatewayLaunchRetryInterval)
+	}
+}
+
+// emitLaunchDecisionLog 输出 launcher 决策日志，采用字段白名单断言友好的结构化 JSON。
+func (d *Dispatcher) emitLaunchDecisionLog(entry launchDecisionLogEntry) {
+	if d == nil || d.logger == nil {
+		return
+	}
+	raw, err := json.Marshal(entry)
+	if err != nil {
+		d.logger.Printf(`{"status":"launch_log_encode_failed","message":"%s"}`, strings.TrimSpace(err.Error()))
+		return
+	}
+	d.logger.Print(string(raw))
+}
+
+// newLaunchDecisionLogEntry 构造统一的网关拉起日志字段，避免各分支重复拼装。
+func newLaunchDecisionLogEntry(
+	requestID string,
+	listenAddress string,
+	authToken string,
+	status string,
+	gatewayCode string,
+	spec launcher.LaunchSpec,
+	message string,
+) launchDecisionLogEntry {
+	return launchDecisionLogEntry{
+		RequestID:     requestID,
+		Method:        string(protocol.MethodWakeOpenURL),
+		Source:        "url-dispatch",
+		Status:        status,
+		GatewayCode:   gatewayCode,
+		ListenAddress: listenAddress,
+		AuthMode:      resolveAuthMode(authToken),
+		LaunchMode:    spec.LaunchMode,
+		ResolvedExec:  spec.Executable,
+		Message:       message,
+	}
+}
+
+// emitLaunchFailureLog 输出统一的启动失败日志，保持失败分支字段稳定。
+func (d *Dispatcher) emitLaunchFailureLog(
+	requestID string,
+	listenAddress string,
+	authToken string,
+	spec launcher.LaunchSpec,
+	err error,
+) {
+	d.emitLaunchDecisionLog(newLaunchDecisionLogEntry(
+		requestID,
+		listenAddress,
+		authToken,
+		"launch_failed",
+		ErrorCodeGatewayUnavailable,
+		spec,
+		err.Error(),
+	))
+}
+
+// resolveAuthMode 归一化调度鉴权模式，便于日志与兼容性测试稳定断言。
+func resolveAuthMode(authToken string) string {
+	if strings.TrimSpace(authToken) == "" {
+		return "disabled"
+	}
+	return "required"
 }
 
 // Dispatch 使用默认调度器执行 URL 转发。

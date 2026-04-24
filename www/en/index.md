@@ -25,7 +25,7 @@ features:
   - title: Terminal-native
     details: TUI interface. No browser needed. Works directly inside your shell workflow.
   - title: Multi-model support
-    details: One config file manages OpenAI, Gemini, Ollama, and more. Switch between models without changing code.
+    details: Built-in support for OpenAI, Gemini, OpenLL, Qiniu and more. Switch between models without changing code.
 ---
 
 <section class="home-section compact">
@@ -41,6 +41,10 @@ features:
     <a class="doc-card" href="/neo-code/en/docs/">
       <strong>English docs index</strong>
       <span>A short overview with links into the Chinese guide and repository docs.</span>
+    </a>
+    <a class="doc-card" href="/neo-code/guide/install">
+      <strong>Set credentials</strong>
+      <span>Configure <code>OPENAI_API_KEY</code>, <code>GEMINI_API_KEY</code>, and other provider API keys.</span>
     </a>
     <a class="doc-card" href="/neo-code/guide/">
       <strong>Chinese guide</strong>

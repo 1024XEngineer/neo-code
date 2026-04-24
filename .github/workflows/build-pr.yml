@@ -1,0 +1,40 @@
+name: Build PR (No Secrets)
+on:
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Dependencies
+        run: pnpm install
+        working-directory: ./www
+
+      - name: Setup Cloudflare Environment
+        run: echo "CF_PAGES=1" >> $GITHUB_ENV
+
+      - name: Build Docs
+        run: pnpm run docs:build
+        working-directory: ./www
+
+      # 关键：打包完成后，把 dist 文件夹上传暂存
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr-dist-folder
+          path: www/.vitepress/dist/
+          retention-days: 1 # 只保存1天，省空间

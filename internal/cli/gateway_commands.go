@@ -102,19 +102,38 @@ func defaultNewAuthManager(path string) (gateway.TokenAuthenticator, error) {
 	return gatewayauth.NewManager(path)
 }
 
-// newGatewayCommand 创建并返回网关子命令，负责启动本地 Gateway 进程。
+// newGatewayCommand 创建并返回根命令下的 gateway 子命令，负责启动本地 Gateway 进程。
 func newGatewayCommand() *cobra.Command {
+	return newGatewayServerCommand("gateway", "Start local gateway server", mustReadInheritedWorkdir)
+}
+
+// NewGatewayStandaloneCommand 创建 gateway-only 独立入口命令，确保仅暴露网关服务语义。
+func NewGatewayStandaloneCommand() *cobra.Command {
+	standaloneWorkdir := ""
+	command := newGatewayServerCommand("neocode-gateway", "Start NeoCode gateway-only server", func(*cobra.Command) string {
+		return standaloneWorkdir
+	})
+	command.Flags().StringVar(&standaloneWorkdir, "workdir", "", "workdir override for this gateway process")
+	return command
+}
+
+// newGatewayServerCommand 构建网关启动命令，并复用统一参数归一化与执行路径。
+func newGatewayServerCommand(use, short string, readWorkdir func(*cobra.Command) string) *cobra.Command {
 	options := &gatewayCommandOptions{}
 
 	cmd := &cobra.Command{
-		Use:          "gateway",
-		Short:        "Start local gateway server",
+		Use:          strings.TrimSpace(use),
+		Short:        strings.TrimSpace(short),
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			normalizedLogLevel, err := normalizeGatewayLogLevel(options.LogLevel)
 			if err != nil {
 				return err
+			}
+			normalizedWorkdir := ""
+			if readWorkdir != nil {
+				normalizedWorkdir = strings.TrimSpace(readWorkdir(cmd))
 			}
 
 			return runGatewayCommand(cmd.Context(), gatewayCommandOptions{
@@ -123,7 +142,7 @@ func newGatewayCommand() *cobra.Command {
 				LogLevel:      normalizedLogLevel,
 				TokenFile:     strings.TrimSpace(options.TokenFile),
 				ACLMode:       strings.TrimSpace(options.ACLMode),
-				Workdir:       strings.TrimSpace(mustReadInheritedWorkdir(cmd)),
+				Workdir:       normalizedWorkdir,
 
 				MaxFrameBytes:            options.MaxFrameBytes,
 				IPCMaxConnections:        options.IPCMaxConnections,
@@ -199,7 +218,7 @@ func mustReadInheritedWorkdir(cmd *cobra.Command) string {
 	return workdir
 }
 
-// defaultGatewayCommandRunner 使用网关服务骨架启动本地 IPC 监听并处理信号退出。
+// defaultGatewayCommandRunner 使用网关服务骨架启动本地 IPC 监听并处理中断退出。
 func defaultGatewayCommandRunner(ctx context.Context, options gatewayCommandOptions) error {
 	logger := log.New(os.Stderr, "neocode-gateway: ", log.LstdFlags)
 	logger.Printf("starting gateway (log-level=%s)", options.LogLevel)
@@ -322,7 +341,7 @@ type gatewayIdleShutdownController struct {
 	timer *time.Timer
 }
 
-// newGatewayIdleShutdownController 创建网关空闲自退控制器：连接数归零后延迟退出，有连接恢复则取消退出。
+// newGatewayIdleShutdownController 创建网关空闲退出控制器：连接归零后延迟退出，连接恢复则取消退出。
 func newGatewayIdleShutdownController(logger *log.Logger, cancel context.CancelFunc) *gatewayIdleShutdownController {
 	return &gatewayIdleShutdownController{
 		logger:      logger,
@@ -445,7 +464,7 @@ func defaultNewGatewayServer(options gateway.ServerOptions) (gatewayServer, erro
 	return gateway.NewServer(options)
 }
 
-// defaultNewGatewayNetworkServer 创建默认网关网络访问面服务实例，供命令层启动流程调用。
+// defaultNewGatewayNetworkServer 创建默认网关网络访问服务实例，供命令层启动流程调用。
 func defaultNewGatewayNetworkServer(options gateway.NetworkServerOptions) (gatewayNetworkServer, error) {
 	return gateway.NewNetworkServer(options)
 }
@@ -530,7 +549,7 @@ func defaultURLDispatchCommandRunner(ctx context.Context, options urlDispatchCom
 	return nil
 }
 
-// loadGatewayAuthToken 读取静默认证 token；若文件不存在则回退为空以兼容无鉴权模式。
+// loadGatewayAuthToken 读取默认认证 token；若文件不存在则回退为空以兼容无鉴权模式。
 func loadGatewayAuthToken(path string) (string, error) {
 	token, err := gatewayauth.LoadTokenFromFile(path)
 	if err == nil {

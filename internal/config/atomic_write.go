@@ -1,7 +1,6 @@
 package config
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"os"
@@ -12,12 +11,11 @@ import (
 
 var (
 	atomicCreateTemp = os.CreateTemp
-	atomicReadFile   = os.ReadFile
 	atomicRename     = os.Rename
 	atomicGOOS       = runtime.GOOS
 )
 
-// writeFileAtomically 通过同目录临时文件与原子替换写入目标文件，并在写后做回读校验。
+// writeFileAtomically 通过同目录临时文件与原子替换写入目标文件。
 func writeFileAtomically(path string, data []byte, perm os.FileMode) error {
 	dir := filepath.Dir(path)
 	pattern := "." + filepath.Base(path) + ".tmp-*"
@@ -53,13 +51,6 @@ func writeFileAtomically(path string, data []byte, perm os.FileMode) error {
 	}
 	cleanupTemp = false
 
-	written, err := atomicReadFile(path)
-	if err != nil {
-		return fmt.Errorf("read back written file: %w", err)
-	}
-	if !bytes.Equal(written, data) {
-		return errors.New("read back mismatch")
-	}
 	if err := fsyncDirectory(dir); err != nil {
 		return fmt.Errorf("sync target directory: %w", err)
 	}
@@ -76,8 +67,14 @@ func fsyncDirectory(dir string) error {
 		return err
 	}
 	defer handle.Close()
-	if err := handle.Sync(); err != nil && !errors.Is(err, syscall.EINVAL) && !errors.Is(err, os.ErrInvalid) {
+	if err := handle.Sync(); err != nil && !isBestEffortDirectorySyncError(err) {
 		return err
 	}
 	return nil
+}
+
+// isBestEffortDirectorySyncError 判断目录 fsync 是否因为平台或文件系统限制而允许退化为 best-effort。
+func isBestEffortDirectorySyncError(err error) bool {
+	return errors.Is(err, syscall.EINVAL) ||
+		errors.Is(err, os.ErrInvalid)
 }

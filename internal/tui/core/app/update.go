@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -46,6 +47,11 @@ const (
 const providerAddSelectTimeout = 10 * time.Second
 const providerAddNonPersistentEnvWarning = "API key is applied to the current process only on this platform; persist it in your shell profile for future sessions."
 const providerAddManualModelsJSONTemplate = "[\n  {\n    \"id\": \"model-id\",\n    \"name\": \"Model Name\"\n  }\n]"
+const modelScopeGuideSelectTimeout = 12 * time.Second
+const modelScopeGuideRollbackTimeout = 8 * time.Second
+const modelScopeLoginURL = "https://www.modelscope.cn/"
+const modelScopeAuthURL = "https://www.modelscope.cn/my/settings/account"
+const modelScopeTokenURL = "https://www.modelscope.cn/my/access/token"
 
 const sessionSwitchBusyMessage = "cannot switch sessions while run or compact is active"
 const logViewerEntryLimit = 500
@@ -62,10 +68,18 @@ var supportsUserEnvPersistence = config.SupportsUserEnvPersistence
 var persistProviderUserEnvVar = config.PersistUserEnvVar
 var deleteProviderUserEnvVar = config.DeleteUserEnvVar
 var lookupProviderUserEnvVar = config.LookupUserEnvVar
+var openExternalResource = tuiinfra.OpenExternalResource
 
 func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 	var spinCmd tea.Cmd
+	batchUpdateCmds := func() tea.Cmd {
+		if a.deferredFooterTick != nil {
+			cmds = append(cmds, a.deferredFooterTick)
+			a.deferredFooterTick = nil
+		}
+		return tea.Batch(cmds...)
+	}
 	a.syncFooterErrorToast()
 	a.spinner, spinCmd = a.spinner.Update(msg)
 	if a.isBusy() {
@@ -75,6 +89,10 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, a.deferredLogPersistCmd)
 		a.deferredLogPersistCmd = nil
 	}
+	if a.deferredFooterTick != nil {
+		cmds = append(cmds, a.deferredFooterTick)
+		a.deferredFooterTick = nil
+	}
 
 	switch typed := msg.(type) {
 	case tea.WindowSizeMsg:
@@ -82,15 +100,34 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.height = typed.Height
 		a.layoutCached = false
 		a.applyComponentLayout(true)
-		return a, tea.Batch(cmds...)
+		return a, batchUpdateCmds()
+	case tickMsg:
+		now := time.Time(typed)
+		needNextTick := false
+
+		if !a.footerErrorUntil.IsZero() && now.Before(a.footerErrorUntil) {
+			needNextTick = true
+		}
+		if needNextTick {
+			cmds = append(cmds, appTickCmd())
+		}
+		return a, batchUpdateCmds()
 	case providerAddResultMsg:
 		a.handleProviderAddResultMsg(typed)
-		return a, nil
+		return a, batchUpdateCmds()
+	case modelScopeGuideOpenResultMsg:
+		a.handleModelScopeGuideOpenResultMsg(typed)
+		return a, batchUpdateCmds()
+	case modelScopeGuideSubmitResultMsg:
+		if cmd := a.handleModelScopeGuideSubmitResultMsg(typed); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+		return a, batchUpdateCmds()
 	case RuntimeMsg:
 		runtimeEvent, ok := typed.Event.(tuiservices.RuntimeEvent)
 		if !ok {
 			cmds = append(cmds, ListenForRuntimeEvent(a.runtime.Events()))
-			return a, tea.Batch(cmds...)
+			return a, batchUpdateCmds()
 		}
 		transcriptDirty := a.handleRuntimeEvent(runtimeEvent)
 		if a.deferredEventCmd != nil {
@@ -102,13 +139,13 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.rebuildTranscript()
 		}
 		cmds = append(cmds, ListenForRuntimeEvent(a.runtime.Events()))
-		return a, tea.Batch(cmds...)
+		return a, batchUpdateCmds()
 	case logPersistFlushMsg:
 		if typed.Version != a.logPersistVersion || !a.logPersistDirty {
-			return a, tea.Batch(cmds...)
+			return a, batchUpdateCmds()
 		}
 		a.persistLogEntriesForActiveSession()
-		return a, tea.Batch(cmds...)
+		return a, batchUpdateCmds()
 	case RuntimeClosedMsg:
 		a.state.IsAgentRunning = false
 		a.state.StreamingReply = false
@@ -120,7 +157,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if strings.TrimSpace(a.state.StatusText) == "" {
 			a.state.StatusText = statusRuntimeClosed
 		}
-		return a, tea.Batch(cmds...)
+		return a, batchUpdateCmds()
 	case runFinishedMsg:
 		if typed.Err != nil {
 			a.state.IsAgentRunning = false
@@ -142,7 +179,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		a.syncActiveSessionTitle()
 		a.syncTodosFromRun()
-		return a, tea.Batch(cmds...)
+		return a, batchUpdateCmds()
 	case permissionResolutionFinishedMsg:
 		if a.pendingPermission != nil && a.pendingPermission.Request.RequestID == typed.RequestID {
 			if typed.Err != nil {
@@ -158,24 +195,24 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				a.refreshPermissionPromptLayout()
 			}
 		}
-		return a, tea.Batch(cmds...)
+		return a, batchUpdateCmds()
 	case modelCatalogRefreshMsg:
 		if strings.EqualFold(a.modelRefreshID, typed.ProviderID) {
 			a.modelRefreshID = ""
 		}
 		if !strings.EqualFold(strings.TrimSpace(a.state.CurrentProvider), strings.TrimSpace(typed.ProviderID)) {
-			return a, tea.Batch(cmds...)
+			return a, batchUpdateCmds()
 		}
 		if typed.Err != nil {
 			a.appendActivity("provider", "Failed to refresh models", typed.Err.Error(), true)
-			return a, tea.Batch(cmds...)
+			return a, batchUpdateCmds()
 		}
 
 		replacePickerItems(&a.modelPicker, mapModelItems(typed.Models))
 		cfg := a.configManager.Get()
 		a.syncConfigState(cfg)
 		selectPickerItemByID(&a.modelPicker, cfg.CurrentModel)
-		return a, tea.Batch(cmds...)
+		return a, batchUpdateCmds()
 	case compactFinishedMsg:
 		a.state.IsCompacting = false
 		if typed.Err != nil && strings.TrimSpace(a.state.ExecutionError) == "" {
@@ -190,7 +227,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.syncActiveSessionTitle()
 		a.rebuildTranscript()
 		a.transcript.GotoBottom()
-		return a, tea.Batch(cmds...)
+		return a, batchUpdateCmds()
 	case localCommandResultMsg:
 		if typed.Err != nil {
 			a.state.ExecutionError = typed.Err.Error()
@@ -206,13 +243,13 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					a.state.ExecutionError = err.Error()
 					a.state.StatusText = err.Error()
 					a.appendActivity("system", "Failed to refresh providers", err.Error(), true)
-					return a, tea.Batch(cmds...)
+					return a, batchUpdateCmds()
 				}
 				if err := a.refreshModelPicker(); err != nil {
 					a.state.ExecutionError = err.Error()
 					a.state.StatusText = err.Error()
 					a.appendActivity("system", "Failed to refresh models", err.Error(), true)
-					return a, tea.Batch(cmds...)
+					return a, batchUpdateCmds()
 				}
 				a.selectCurrentProvider(cfg.SelectedProvider)
 				a.selectCurrentModel(cfg.CurrentModel)
@@ -224,13 +261,13 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			a.appendActivity("command", typed.Notice, "", false)
 		}
-		return a, tea.Batch(cmds...)
+		return a, batchUpdateCmds()
 	case skillCommandResultMsg:
 		requestSessionID := strings.TrimSpace(typed.RequestSessionID)
 		activeSessionID := strings.TrimSpace(a.state.ActiveSessionID)
 		if requestSessionID != "" && !strings.EqualFold(requestSessionID, activeSessionID) {
 			a.recordStaleSkillCommandResult(requestSessionID, activeSessionID, typed.Err)
-			return a, tea.Batch(cmds...)
+			return a, batchUpdateCmds()
 		}
 		if typed.Err != nil {
 			a.state.ExecutionError = typed.Err.Error()
@@ -250,19 +287,19 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, tea.Batch(cmds...)
 	case tea.MouseMsg:
 		if a.logViewerVisible && a.handleLogViewerMouse(typed) {
-			return a, tea.Batch(cmds...)
+			return a, batchUpdateCmds()
 		}
 		if a.handleTranscriptMouse(typed) {
-			return a, tea.Batch(cmds...)
+			return a, batchUpdateCmds()
 		}
 		if a.handleActivityMouse(typed) {
-			return a, tea.Batch(cmds...)
+			return a, batchUpdateCmds()
 		}
 		if a.handleTodoMouse(typed) {
-			return a, tea.Batch(cmds...)
+			return a, batchUpdateCmds()
 		}
 		if a.handleInputMouse(typed) {
-			return a, tea.Batch(cmds...)
+			return a, batchUpdateCmds()
 		}
 	case tea.KeyMsg:
 		if key.Matches(typed, a.keys.Quit) {
@@ -272,20 +309,20 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.state.ShowHelp = !a.state.ShowHelp
 			a.help.ShowAll = a.state.ShowHelp
 			a.applyComponentLayout(true)
-			return a, tea.Batch(cmds...)
+			return a, batchUpdateCmds()
 		}
 		if a.state.IsAgentRunning && key.Matches(typed, a.keys.CancelAgent) {
 			if a.runtime.CancelActiveRun() {
 				a.state.StatusText = statusCanceling
 			}
-			return a, tea.Batch(cmds...)
+			return a, batchUpdateCmds()
 		}
 		if a.state.ActivePicker != pickerNone {
 			return a.updatePicker(typed)
 		}
 		if a.logViewerVisible {
 			if handled := a.handleLogViewerKey(typed); handled {
-				return a, tea.Batch(cmds...)
+				return a, batchUpdateCmds()
 			}
 		}
 
@@ -294,12 +331,12 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if cmd != nil {
 					cmds = append(cmds, cmd)
 				}
-				return a, tea.Batch(cmds...)
+				return a, batchUpdateCmds()
 			}
 		}
 		if a.focus == panelInput && key.Matches(typed, a.keys.NextPanel) {
 			if a.applySelectedCommandSuggestion() {
-				return a, tea.Batch(cmds...)
+				return a, batchUpdateCmds()
 			}
 			if a.shouldHandleTabAsInput(typed) {
 				tabMsg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'	'}, Paste: typed.Paste}
@@ -308,21 +345,25 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if key.Matches(typed, a.keys.NextPanel) {
 			a.focusNext()
-			return a, tea.Batch(cmds...)
+			return a, batchUpdateCmds()
 		}
 		if key.Matches(typed, a.keys.PrevPanel) {
 			a.focusPrev()
-			return a, tea.Batch(cmds...)
+			return a, batchUpdateCmds()
 		}
 		if key.Matches(typed, a.keys.FocusInput) {
 			a.clearTextSelection()
 			a.focus = panelInput
 			a.applyFocus()
-			return a, tea.Batch(cmds...)
+			return a, batchUpdateCmds()
 		}
 		if key.Matches(typed, a.keys.NewSession) && !a.isBusy() {
 			a.startDraftSession()
-			return a, tea.Batch(cmds...)
+			return a, batchUpdateCmds()
+		}
+		if key.Matches(typed, a.keys.OpenWorkspace) {
+			a.openFileBrowser()
+			return a, batchUpdateCmds()
 		}
 
 		if key.Matches(typed, a.keys.PasteImage) {
@@ -330,7 +371,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				a.state.StatusText = err.Error()
 				a.appendActivity("multimodal", "Failed to paste image", err.Error(), true)
 			}
-			return a, tea.Batch(cmds...)
+			return a, batchUpdateCmds()
 		}
 
 		if key.Matches(typed, a.keys.LogViewer) {
@@ -340,16 +381,16 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.logViewerPrevStatus = strings.TrimSpace(a.state.StatusText)
 			a.state.StatusText = "Log viewer"
 			a.applyComponentLayout(false)
-			return a, tea.Batch(cmds...)
+			return a, batchUpdateCmds()
 		}
 
 		switch a.focus {
 		case panelTranscript:
 			a.handleViewportKeys(&a.transcript, typed)
-			return a, tea.Batch(cmds...)
+			return a, batchUpdateCmds()
 		case panelActivity:
 			a.handleViewportKeys(&a.activity, typed)
-			return a, tea.Batch(cmds...)
+			return a, batchUpdateCmds()
 		case panelTodo:
 			switch {
 			case key.Matches(typed, a.keys.ScrollUp):
@@ -386,25 +427,32 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				a.applyComponentLayout(false)
 			}
-			return a, tea.Batch(cmds...)
+			return a, batchUpdateCmds()
 		case panelInput:
 			return a.updateInputPanel(msg, typed, cmds)
 		}
 	}
 
-	return a, tea.Batch(cmds...)
+	return a, batchUpdateCmds()
 }
 
 func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (tea.Model, tea.Cmd) {
 	now := a.now()
 	effectiveTyped := typed
+	batchUpdateCmds := func() tea.Cmd {
+		if a.deferredFooterTick != nil {
+			cmds = append(cmds, a.deferredFooterTick)
+			a.deferredFooterTick = nil
+		}
+		return tea.Batch(cmds...)
+	}
 
 	if a.pendingPermission != nil {
 		if cmd, handled := a.updatePendingPermissionInput(typed); handled {
 			if cmd != nil {
 				cmds = append(cmds, cmd)
 			}
-			return a, tea.Batch(cmds...)
+			return a, batchUpdateCmds()
 		}
 	}
 
@@ -417,7 +465,7 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 			input := strings.TrimSpace(a.input.Value())
 			hasImages := a.hasImageAttachments()
 			if (input == "" && !hasImages) || a.isBusy() {
-				return a, tea.Batch(cmds...)
+				return a, batchUpdateCmds()
 			}
 
 			if handled, cmd := a.handleImmediateSlashCommand(input); handled {
@@ -429,7 +477,7 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 				if cmd != nil {
 					cmds = append(cmds, cmd)
 				}
-				return a, tea.Batch(cmds...)
+				return a, batchUpdateCmds()
 			}
 
 			if isImageReferenceInput(input) {
@@ -443,7 +491,7 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 				a.applyComponentLayout(true)
 				a.refreshCommandMenu()
 				a.resetPasteHeuristics()
-				return a, tea.Batch(cmds...)
+				return a, batchUpdateCmds()
 			}
 
 			a.input.Reset()
@@ -455,46 +503,46 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 			case slashCommandHelp:
 				a.refreshHelpPicker()
 				a.openHelpPicker()
-				return a, tea.Batch(cmds...)
+				return a, batchUpdateCmds()
 			case slashCommandProvider:
 				if err := a.refreshProviderPicker(); err != nil {
 					a.state.ExecutionError = err.Error()
 					a.state.StatusText = err.Error()
 					a.appendActivity("system", "Failed to refresh providers", err.Error(), true)
-					return a, tea.Batch(cmds...)
+					return a, batchUpdateCmds()
 				}
 				a.openProviderPicker()
-				return a, tea.Batch(cmds...)
+				return a, batchUpdateCmds()
 			case slashCommandModelPick:
 				if err := a.refreshModelPicker(); err != nil {
 					a.state.ExecutionError = err.Error()
 					a.state.StatusText = err.Error()
 					a.appendActivity("system", "Failed to refresh models", err.Error(), true)
-					return a, tea.Batch(cmds...)
+					return a, batchUpdateCmds()
 				}
 				a.openModelPicker()
 				if cmd := a.requestModelCatalogRefresh(a.state.CurrentProvider); cmd != nil {
 					cmds = append(cmds, cmd)
 				}
-				return a, tea.Batch(cmds...)
+				return a, batchUpdateCmds()
 			case slashCommandSession:
 				if err := a.ensureSessionSwitchAllowed(""); err != nil {
 					a.state.ExecutionError = err.Error()
 					a.state.StatusText = err.Error()
 					a.appendActivity("session", "Failed to open session picker", err.Error(), true)
-					return a, tea.Batch(cmds...)
+					return a, batchUpdateCmds()
 				}
 				if err := a.refreshSessionPicker(); err != nil {
 					a.state.ExecutionError = err.Error()
 					a.state.StatusText = err.Error()
 					a.appendActivity("system", "Failed to refresh sessions", err.Error(), true)
-					return a, tea.Batch(cmds...)
+					return a, batchUpdateCmds()
 				}
 				a.openPicker(pickerSession, statusChooseSession, &a.sessionPicker, a.state.ActiveSessionID)
-				return a, tea.Batch(cmds...)
+				return a, batchUpdateCmds()
 			case slashCommandProviderAdd:
 				a.startProviderAddForm()
-				return a, tea.Batch(cmds...)
+				return a, batchUpdateCmds()
 			}
 
 			if strings.HasPrefix(input, slashPrefix) {
@@ -507,7 +555,7 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 				a.state.ExecutionError = err.Error()
 				a.state.StatusText = err.Error()
 				a.appendActivity("multimodal", "Failed to absorb inline image reference", err.Error(), true)
-				return a, tea.Batch(cmds...)
+				return a, batchUpdateCmds()
 			}
 			if absorbedImages > 0 {
 				input = normalizedInput
@@ -523,6 +571,7 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 
 			a.clearActivities()
 			a.clearRunProgress()
+			a.startupScreenLocked = false
 			a.state.IsAgentRunning = true
 			a.state.IsCompacting = false
 			a.state.StreamingReply = false
@@ -548,7 +597,7 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 				Images:    images,
 			}))
 			a.clearImageAttachments()
-			return a, tea.Batch(cmds...)
+			return a, batchUpdateCmds()
 		}
 	}
 
@@ -567,7 +616,7 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 	a.applyComponentLayout(false)
 	a.refreshCommandMenu()
 	cmds = append(cmds, cmd)
-	return a, tea.Batch(cmds...)
+	return a, batchUpdateCmds()
 }
 
 // updatePendingPermissionInput handles keyboard interaction in the permission prompt.
@@ -735,6 +784,9 @@ func (a App) updatePicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if !ok {
 				return a, nil
 			}
+			if cmd, started := a.maybeStartModelScopeGuideFromProvider(item.id); started {
+				return a, cmd
+			}
 			return a, runProviderSelection(a.providerSvc, item.name)
 		case pickerModel:
 			item, ok := a.modelPicker.SelectedItem().(selectionItem)
@@ -800,8 +852,369 @@ func (a App) updatePicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case pickerProviderAdd:
 		return a.handleProviderAddFormInput(msg)
+	case pickerModelScope:
+		return a.handleModelScopeGuideInput(msg)
 	}
 	return a, cmd
+}
+
+// maybeStartModelScopeGuideFromProvider 在选择 modelscope 且未配置 token 时进入半引导流程。
+func (a *App) maybeStartModelScopeGuideFromProvider(providerID string) (tea.Cmd, bool) {
+	if !strings.EqualFold(strings.TrimSpace(providerID), config.ModelScopeName) {
+		return nil, false
+	}
+
+	currentConfig := a.configManager.Get()
+	providerConfig, err := currentConfig.ProviderByName(providerID)
+	if err != nil {
+		return nil, false
+	}
+
+	apiKeyEnv := strings.TrimSpace(providerConfig.APIKeyEnv)
+	if apiKeyEnv == "" {
+		return nil, false
+	}
+	if strings.TrimSpace(os.Getenv(apiKeyEnv)) != "" {
+		return nil, false
+	}
+	if userValue, exists, lookupErr := lookupProviderUserEnvVar(apiKeyEnv); lookupErr == nil && exists &&
+		strings.TrimSpace(userValue) != "" {
+		return nil, false
+	}
+
+	guidePath := a.resolveModelScopeGuidePath()
+	a.modelScopeGuide = &modelScopeGuideState{
+		ProviderID: strings.TrimSpace(providerID),
+		APIKeyEnv:  apiKeyEnv,
+		GuidePath:  guidePath,
+		Step:       modelScopeGuideStepGuide,
+	}
+	a.state.ActivePicker = pickerModelScope
+	a.state.StatusText = "ModelScope setup guide"
+	a.state.ExecutionError = ""
+	if strings.TrimSpace(guidePath) == "" {
+		a.modelScopeGuide.Step = modelScopeGuideStepLogin
+		a.modelScopeGuide.Notice = "Guide HTML not found, fallback to ModelScope login page."
+		return a.runModelScopeGuideOpen(modelScopeLoginURL), true
+	}
+	return a.runModelScopeGuideOpen(guidePath), true
+}
+
+// resolveModelScopeGuidePath 解析 ModelScope 指导页的本地路径；文件不存在时返回空字符串。
+func (a *App) resolveModelScopeGuidePath() string {
+	baseDir := strings.TrimSpace(a.configManager.BaseDir())
+	if baseDir == "" {
+		return ""
+	}
+	candidate := filepath.Join(baseDir, "modelscope-guide.html")
+	info, err := os.Stat(candidate)
+	if err != nil || info.IsDir() {
+		return ""
+	}
+	return candidate
+}
+
+// handleModelScopeGuideInput 处理 ModelScope 半引导流程中的键盘交互。
+func (a *App) handleModelScopeGuideInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if a.modelScopeGuide == nil {
+		return a, nil
+	}
+	if key.Matches(msg, a.keys.FocusInput) {
+		a.modelScopeGuide = nil
+		a.closePicker()
+		a.state.StatusText = "ModelScope setup canceled"
+		return a, nil
+	}
+	if a.modelScopeGuide.Submitting {
+		return a, nil
+	}
+
+	guide := a.modelScopeGuide
+	switch {
+	case msg.String() == "enter":
+		if guide.Step == modelScopeGuideStepPasteToken {
+			return a, a.submitModelScopeGuideToken(guide)
+		}
+		if target, ok := modelScopeGuideOpenTarget(guide.Step, guide.GuidePath); ok {
+			return a, a.runModelScopeGuideOpen(target)
+		}
+	case msg.Type == tea.KeyBackspace || msg.Type == tea.KeyCtrlH:
+		if guide.Step == modelScopeGuideStepPasteToken {
+			guide.Token = trimLastRune(guide.Token)
+			clearModelScopeGuideFeedback(guide)
+		}
+	case msg.Type == tea.KeyRunes && len(msg.Runes) > 0:
+		if guide.Step == modelScopeGuideStepPasteToken {
+			guide.Token += sanitizeProviderAddInputRunes(msg.Runes)
+			clearModelScopeGuideFeedback(guide)
+		}
+	}
+
+	return a, nil
+}
+
+// modelScopeGuideOpenTarget 返回当前引导步骤对应的外部资源目标。
+func modelScopeGuideOpenTarget(step modelScopeGuideStep, guidePath string) (string, bool) {
+	switch step {
+	case modelScopeGuideStepGuide:
+		target := strings.TrimSpace(guidePath)
+		if target == "" {
+			return modelScopeLoginURL, true
+		}
+		return target, true
+	case modelScopeGuideStepLogin:
+		return modelScopeLoginURL, true
+	case modelScopeGuideStepToken:
+		return modelScopeTokenURL, true
+	default:
+		return "", false
+	}
+}
+
+// submitModelScopeGuideToken 校验并提交用户粘贴的 token。
+func (a *App) submitModelScopeGuideToken(guide *modelScopeGuideState) tea.Cmd {
+	token := strings.TrimSpace(guide.Token)
+	if token == "" {
+		guide.Error = "Token is required."
+		return nil
+	}
+	guide.Submitting = true
+	clearModelScopeGuideFeedback(guide)
+	a.state.StatusText = "Validating ModelScope token..."
+	return a.runModelScopeGuideSubmit(guide.ProviderID, guide.APIKeyEnv, token)
+}
+
+// runModelScopeGuideOpen 异步打开 ModelScope 引导资源（本地 HTML 或网页 URL）。
+func (a *App) runModelScopeGuideOpen(target string) tea.Cmd {
+	openTarget := strings.TrimSpace(target)
+	if openTarget == "" {
+		return nil
+	}
+	return func() tea.Msg {
+		if err := openExternalResource(openTarget); err != nil {
+			return modelScopeGuideOpenResultMsg{
+				Target: openTarget,
+				Error:  sanitizeProviderAddError(err),
+			}
+		}
+		return modelScopeGuideOpenResultMsg{Target: openTarget}
+	}
+}
+
+// handleModelScopeGuideOpenResultMsg 处理页面打开结果，并推进引导状态机。
+func (a *App) handleModelScopeGuideOpenResultMsg(msg modelScopeGuideOpenResultMsg) {
+	if a.modelScopeGuide == nil {
+		return
+	}
+
+	guide := a.modelScopeGuide
+	if strings.TrimSpace(msg.Error) != "" {
+		guide.Error = msg.Error
+		guide.Notice = ""
+		a.state.ExecutionError = msg.Error
+		a.state.StatusText = "ModelScope guide open failed"
+		a.appendActivity("provider", "ModelScope guide open failed", msg.Error, true)
+		return
+	}
+
+	guide.Error = ""
+	guide.Notice = "Opened: " + strings.TrimSpace(msg.Target)
+	a.state.ExecutionError = ""
+	a.state.StatusText = "ModelScope guide opened"
+	if nextStep, advanced := advanceModelScopeGuideStep(guide.Step, msg.Target); advanced {
+		guide.Step = nextStep
+	}
+}
+
+// advanceModelScopeGuideStep 根据打开结果推进引导步骤。
+func advanceModelScopeGuideStep(current modelScopeGuideStep, target string) (modelScopeGuideStep, bool) {
+	switch current {
+	case modelScopeGuideStepGuide:
+		return modelScopeGuideStepLogin, true
+	case modelScopeGuideStepLogin:
+		return modelScopeGuideStepToken, true
+	case modelScopeGuideStepToken:
+		if strings.TrimSpace(target) == modelScopeTokenURL {
+			return modelScopeGuideStepPasteToken, true
+		}
+	}
+	return current, false
+}
+
+// clearModelScopeGuideFeedback 清空引导面板上的错误和提示信息。
+func clearModelScopeGuideFeedback(guide *modelScopeGuideState) {
+	if guide == nil {
+		return
+	}
+	guide.Error = ""
+	guide.Notice = ""
+}
+
+// runModelScopeGuideSubmit 在设置 token 后完成 provider 选择与最小可用校验。
+func (a *App) runModelScopeGuideSubmit(providerID string, apiKeyEnv string, token string) tea.Cmd {
+	providerSvc := a.providerSvc
+	baseDir := a.configManager.BaseDir()
+	previousSelection := a.configManager.Get()
+	previousProviderID := strings.TrimSpace(previousSelection.SelectedProvider)
+	previousModelID := strings.TrimSpace(previousSelection.CurrentModel)
+
+	return func() tea.Msg {
+		trimmedToken := strings.TrimSpace(token)
+		trimmedEnvName := strings.TrimSpace(apiKeyEnv)
+		if trimmedToken == "" {
+			return modelScopeGuideSubmitResultMsg{Error: "ModelScope token is empty"}
+		}
+		if err := config.ValidateEnvVarName(trimmedEnvName); err != nil {
+			return modelScopeGuideSubmitResultMsg{Error: sanitizeProviderAddError(err)}
+		}
+		if config.IsProtectedEnvVarName(trimmedEnvName) {
+			return modelScopeGuideSubmitResultMsg{
+				Error: fmt.Sprintf("ModelScope token env %q is protected", trimmedEnvName),
+			}
+		}
+
+		previousValue, hadPreviousValue := os.LookupEnv(trimmedEnvName)
+		restoreEnv := func() {
+			if hadPreviousValue {
+				_ = os.Setenv(trimmedEnvName, previousValue)
+				return
+			}
+			_ = os.Unsetenv(trimmedEnvName)
+		}
+		if setErr := os.Setenv(trimmedEnvName, trimmedToken); setErr != nil {
+			return modelScopeGuideSubmitResultMsg{Error: sanitizeProviderAddError(setErr)}
+		}
+		failWithRollback := func(rawErr error, stage string) modelScopeGuideSubmitResultMsg {
+			restoreEnv()
+			wrappedErr := fmt.Errorf("%s: %w", stage, rawErr)
+			if rollbackErr := rollbackModelScopeGuideSelection(providerSvc, previousProviderID, previousModelID); rollbackErr != nil {
+				wrappedErr = fmt.Errorf("%w; rollback selection: %v", wrappedErr, rollbackErr)
+			}
+			return modelScopeGuideSubmitResultMsg{
+				Error: sanitizeProviderAddError(wrappedErr, trimmedToken, baseDir),
+			}
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), modelScopeGuideSelectTimeout)
+		defer cancel()
+
+		selection, selectErr := providerSvc.SelectProvider(ctx, providerID)
+		if selectErr != nil {
+			return failWithRollback(selectErr, "select provider")
+		}
+		if _, listErr := providerSvc.ListModels(ctx); listErr != nil {
+			return failWithRollback(listErr, "verify token")
+		}
+
+		if persistErr := persistProviderUserEnvVar(trimmedEnvName, trimmedToken); persistErr != nil {
+			return failWithRollback(persistErr, "persist token env")
+		}
+
+		return modelScopeGuideSubmitResultMsg{
+			Selection: selection,
+			Warning:   providerAddPersistenceWarning(),
+		}
+	}
+}
+
+// rollbackModelScopeGuideSelection 在引导流程失败时回滚 provider/model 选择，避免配置状态漂移。
+func rollbackModelScopeGuideSelection(providerSvc ProviderController, providerID string, modelID string) error {
+	normalizedProviderID := strings.TrimSpace(providerID)
+	normalizedModelID := strings.TrimSpace(modelID)
+	if normalizedProviderID == "" || providerSvc == nil {
+		return nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), modelScopeGuideRollbackTimeout)
+	defer cancel()
+
+	if _, err := providerSvc.SelectProvider(ctx, normalizedProviderID); err != nil {
+		return fmt.Errorf("rollback provider selection: %w", err)
+	}
+	if normalizedModelID == "" {
+		return nil
+	}
+	if _, err := providerSvc.SetCurrentModel(ctx, normalizedModelID); err != nil {
+		return fmt.Errorf("rollback model selection: %w", err)
+	}
+	return nil
+}
+
+// handleModelScopeGuideSubmitResultMsg 处理 token 校验结果，成功后关闭向导，失败时回退并提示下一步。
+func (a *App) handleModelScopeGuideSubmitResultMsg(msg modelScopeGuideSubmitResultMsg) tea.Cmd {
+	if a.modelScopeGuide == nil {
+		return nil
+	}
+
+	guide := a.modelScopeGuide
+	guide.Submitting = false
+	if strings.TrimSpace(msg.Error) != "" {
+		guide.Error = msg.Error
+		guide.Notice = ""
+		guide.Step = modelScopeGuideStepPasteToken
+		a.state.ExecutionError = msg.Error
+		a.state.StatusText = "ModelScope token validation failed"
+		a.appendActivity("provider", "ModelScope token validation failed", msg.Error, true)
+
+		if isModelScopeAuthOrPermissionError(msg.Error) {
+			guide.Notice = "Detected auth/permission issue, opening Aliyun account binding page."
+			guide.Step = modelScopeGuideStepToken
+			return a.runModelScopeGuideOpen(modelScopeAuthURL)
+		}
+		return nil
+	}
+
+	guideProviderID := strings.TrimSpace(guide.ProviderID)
+	a.modelScopeGuide = nil
+	a.state.ActivePicker = pickerNone
+	a.state.ExecutionError = ""
+	if strings.TrimSpace(msg.Selection.ProviderID) != "" {
+		a.state.CurrentProvider = strings.TrimSpace(msg.Selection.ProviderID)
+	} else {
+		a.state.CurrentProvider = guideProviderID
+	}
+	if strings.TrimSpace(msg.Selection.ModelID) != "" {
+		a.state.CurrentModel = strings.TrimSpace(msg.Selection.ModelID)
+	}
+	a.state.StatusText = "ModelScope provider selected"
+	a.appendActivity("provider", "ModelScope setup completed", a.state.CurrentProvider, false)
+	if strings.TrimSpace(msg.Warning) != "" {
+		a.appendActivity("provider", "Provider key persistence", strings.TrimSpace(msg.Warning), false)
+	}
+
+	if err := a.refreshProviderPicker(); err != nil {
+		a.appendActivity("system", "Failed to refresh providers", err.Error(), true)
+	}
+	if err := a.refreshModelPicker(); err != nil {
+		a.appendActivity("system", "Failed to refresh models", err.Error(), true)
+	}
+	return a.requestModelCatalogRefresh(a.state.CurrentProvider)
+}
+
+// isModelScopeAuthOrPermissionError 判断错误是否指向认证或权限未完成场景。
+func isModelScopeAuthOrPermissionError(raw string) bool {
+	lowered := strings.ToLower(strings.TrimSpace(raw))
+	if lowered == "" {
+		return false
+	}
+	keywords := []string{
+		"401",
+		"403",
+		"unauthorized",
+		"forbidden",
+		"permission",
+		"access denied",
+		"auth",
+		"认证",
+		"实名",
+		"aliyun",
+	}
+	for _, keyword := range keywords {
+		if strings.Contains(lowered, keyword) {
+			return true
+		}
+	}
+	return false
 }
 
 func (a *App) refreshSessionPicker() error {
@@ -1054,6 +1467,12 @@ var runtimeEventHandlerRegistry = map[tuiservices.EventType]func(*App, tuiservic
 	tuiservices.EventCompactError:                             runtimeEventCompactErrorHandler,
 	tuiservices.EventTokenUsage:                               runtimeEventTokenUsageHandler,
 	tuiservices.EventPhaseChanged:                             runtimeEventPhaseChangedHandler,
+	tuiservices.EventVerificationStarted:                      runtimeEventVerificationStartedHandler,
+	tuiservices.EventVerificationStageFinished:                runtimeEventVerificationStageFinishedHandler,
+	tuiservices.EventVerificationFinished:                     runtimeEventVerificationFinishedHandler,
+	tuiservices.EventVerificationCompleted:                    runtimeEventVerificationCompletedHandler,
+	tuiservices.EventVerificationFailed:                       runtimeEventVerificationFailedHandler,
+	tuiservices.EventAcceptanceDecided:                        runtimeEventAcceptanceDecidedHandler,
 	tuiservices.EventStopReasonDecided:                        runtimeEventStopReasonDecidedHandler,
 	tuiservices.EventTodoUpdated:                              runtimeEventTodoUpdatedHandler,
 	tuiservices.EventTodoConflict:                             runtimeEventTodoConflictHandler,
@@ -1078,6 +1497,112 @@ func runtimeEventPhaseChangedHandler(a *App, event tuiservices.RuntimeEvent) boo
 	return false
 }
 
+// runtimeEventVerificationStartedHandler 处理验证流程开始事件并更新运行进度提示。
+func runtimeEventVerificationStartedHandler(a *App, event tuiservices.RuntimeEvent) bool {
+	payload, ok := event.Payload.(tuiservices.VerificationStartedPayload)
+	if !ok {
+		return false
+	}
+	progress := 0.84
+	if payload.CompletionPassed {
+		progress = 0.88
+	}
+	a.setRunProgress(progress, "Verifying acceptance")
+	a.appendActivity("verify", "Verification started", fmt.Sprintf("completion_passed=%t", payload.CompletionPassed), false)
+	return false
+}
+
+// runtimeEventVerificationStageFinishedHandler 处理单个 verifier 阶段完成事件。
+func runtimeEventVerificationStageFinishedHandler(a *App, event tuiservices.RuntimeEvent) bool {
+	payload, ok := event.Payload.(tuiservices.VerificationStageFinishedPayload)
+	if !ok {
+		return false
+	}
+	status := strings.ToLower(strings.TrimSpace(payload.Status))
+	detail := strings.TrimSpace(payload.Summary)
+	if detail == "" {
+		detail = strings.TrimSpace(payload.Reason)
+	}
+	if detail == "" {
+		detail = "no summary"
+	}
+	title := "Verifier stage finished"
+	if name := strings.TrimSpace(payload.Name); name != "" {
+		title = "Verifier stage: " + name
+	}
+	isError := status == "fail" || status == "hard_block"
+	a.appendActivity("verify", title, detail, isError)
+	return false
+}
+
+// runtimeEventVerificationFinishedHandler 处理验证总流程结束事件。
+func runtimeEventVerificationFinishedHandler(a *App, event tuiservices.RuntimeEvent) bool {
+	payload, ok := event.Payload.(tuiservices.VerificationFinishedPayload)
+	if !ok {
+		return false
+	}
+	a.setRunProgress(0.92, "Verification finished")
+	detail := fmt.Sprintf("acceptance=%s stop_reason=%s", payload.AcceptanceStatus, payload.StopReason)
+	a.appendActivity("verify", "Verification finished", detail, false)
+	return false
+}
+
+// runtimeEventVerificationCompletedHandler 处理验证通过事件。
+func runtimeEventVerificationCompletedHandler(a *App, event tuiservices.RuntimeEvent) bool {
+	payload, ok := event.Payload.(tuiservices.VerificationCompletedPayload)
+	if !ok {
+		return false
+	}
+	detail := strings.TrimSpace(string(payload.StopReason))
+	if detail == "" {
+		detail = "accepted"
+	}
+	a.appendActivity("verify", "Verification completed", detail, false)
+	return false
+}
+
+// runtimeEventVerificationFailedHandler 处理验证失败事件。
+func runtimeEventVerificationFailedHandler(a *App, event tuiservices.RuntimeEvent) bool {
+	payload, ok := event.Payload.(tuiservices.VerificationFailedPayload)
+	if !ok {
+		return false
+	}
+	detail := strings.TrimSpace(string(payload.StopReason))
+	if detail == "" {
+		detail = "verification_failed"
+	}
+	if class := strings.TrimSpace(string(payload.ErrorClass)); class != "" {
+		detail = detail + " (" + class + ")"
+	}
+	a.appendActivity("verify", "Verification failed", detail, true)
+	return false
+}
+
+// runtimeEventAcceptanceDecidedHandler 处理 acceptance 决策事件并记录可观测日志。
+func runtimeEventAcceptanceDecidedHandler(a *App, event tuiservices.RuntimeEvent) bool {
+	payload, ok := event.Payload.(tuiservices.AcceptanceDecidedPayload)
+	if !ok {
+		return false
+	}
+	status := strings.TrimSpace(payload.Status)
+	if status == "" {
+		status = "unknown"
+	}
+	detail := strings.TrimSpace(payload.UserVisibleSummary)
+	if detail == "" {
+		detail = strings.TrimSpace(payload.InternalSummary)
+	}
+	if detail == "" {
+		detail = strings.TrimSpace(payload.ContinueHint)
+	}
+	if detail == "" {
+		detail = "acceptance decision generated"
+	}
+	isError := strings.EqualFold(status, "failed")
+	a.appendActivity("acceptance", "Acceptance decided ("+status+")", detail, isError)
+	return false
+}
+
 // runtimeEventStopReasonDecidedHandler 处理运行结束原因并统一更新状态与活动日志。
 func runtimeEventStopReasonDecidedHandler(a *App, event tuiservices.RuntimeEvent) bool {
 	payload, ok := event.Payload.(tuiservices.StopReasonDecidedPayload)
@@ -1093,14 +1618,57 @@ func runtimeEventStopReasonDecidedHandler(a *App, event tuiservices.RuntimeEvent
 
 	reason := strings.ToLower(strings.TrimSpace(string(payload.Reason)))
 	switch reason {
+	case "stop_completed":
+		reason = strings.ToLower(string(tuiservices.StopReasonAccepted))
+	case "stop_user_interrupt":
+		reason = strings.ToLower(string(tuiservices.StopReasonUserInterrupt))
+	case "stop_fatal_error":
+		reason = strings.ToLower(string(tuiservices.StopReasonFatalError))
+	case "stop_max_turns_reached":
+		reason = strings.ToLower(string(tuiservices.StopReasonMaxTurnExceeded))
+	case "stop_budget_exceeded":
+		reason = strings.ToLower(string(tuiservices.StopReasonBudgetExceeded))
+	}
+	switch reason {
 	case strings.ToLower(string(tuiservices.StopReasonCompleted)):
 		if strings.TrimSpace(a.state.ExecutionError) == "" {
 			a.state.StatusText = statusReady
 		}
+	case strings.ToLower(string(tuiservices.StopReasonCompatibilityFallback)):
+		detail := strings.TrimSpace(payload.Detail)
+		if detail == "" {
+			detail = "Completed via compatibility fallback"
+		}
+		a.state.ExecutionError = ""
+		a.state.StatusText = detail
+		a.appendActivity("run", "Run completed (compatibility fallback)", detail, false)
+	case strings.ToLower(string(tuiservices.StopReasonTodoNotConverged)),
+		strings.ToLower(string(tuiservices.StopReasonTodoWaitingExternal)),
+		strings.ToLower(string(tuiservices.StopReasonNoProgressAfterFinalIntercept)),
+		strings.ToLower(string(tuiservices.StopReasonMaxTurnExceededWithUnconvergedTodos)),
+		strings.ToLower(string(tuiservices.StopReasonMaxTurnExceededWithFailedVerification)):
+		detail := strings.TrimSpace(payload.Detail)
+		if detail == "" {
+			detail = "Task is incomplete"
+		}
+		a.state.ExecutionError = ""
+		a.state.StatusText = detail
+		a.appendActivity("run", "Run incomplete", detail, false)
 	case strings.ToLower(string(tuiservices.StopReasonUserInterrupt)):
 		a.state.ExecutionError = ""
 		a.state.StatusText = statusCanceled
 		a.appendActivity("run", "Canceled current run", "", false)
+	case strings.ToLower(string(tuiservices.StopReasonRetryExhausted)),
+		strings.ToLower(string(tuiservices.StopReasonVerificationFailed)),
+		strings.ToLower(string(tuiservices.StopReasonVerificationExecutionDenied)),
+		strings.ToLower(string(tuiservices.StopReasonVerificationExecutionError)):
+		detail := strings.TrimSpace(payload.Detail)
+		if detail == "" {
+			detail = "Verification failed"
+		}
+		a.state.ExecutionError = detail
+		a.state.StatusText = detail
+		a.appendActivity("run", "Verification failed", detail, true)
 	case strings.ToLower(string(tuiservices.StopReasonBudgetExceeded)):
 		detail := strings.TrimSpace(payload.Detail)
 		if detail == "" {
@@ -1766,6 +2334,8 @@ func (a *App) showFooterError(message string) {
 	}
 	a.footerErrorText = message
 	a.footerErrorUntil = a.now().Add(footerErrorFlashDuration)
+	// 新错误出现时主动补发一次 tick，确保空闲状态下也能驱动自动消失。
+	a.deferredFooterTick = appTickCmd()
 }
 
 func (a *App) clearActivities() {
@@ -2045,7 +2615,7 @@ func (a App) inputBounds() (int, int, int, int) {
 	streamX := contentX
 	streamY := bodyY
 
-	inputY := streamY + a.transcript.Height + a.activityPreviewHeight() + a.todoPreviewHeight() + a.commandMenuHeight(lay.contentWidth)
+	inputY := streamY + a.transcript.Height + a.activityPreviewHeight() + a.todoPreviewHeight() + a.commandMenuHeight(lay.contentWidth, lay.contentHeight)
 	inputHeight := lipgloss.Height(a.renderPrompt(lay.contentWidth))
 	return streamX, inputY, lay.contentWidth, inputHeight
 }
@@ -2473,7 +3043,7 @@ func (a *App) highlightTranscriptContent(content string) string {
 	}
 
 	highlightStyle := lipgloss.NewStyle().
-		Background(lipgloss.Color(selectionBg)).
+		UnsetBackground().
 		Foreground(lipgloss.Color(selectionFg))
 
 	for i := startLine; i <= endLine && i < len(lines); i++ {
@@ -2657,6 +3227,7 @@ func (a App) currentStatusSnapshot() tuistatus.Snapshot {
 
 func (a *App) startDraftSession() {
 	a.setActiveSessionID("")
+	a.startupScreenLocked = false
 	a.state.ActiveSessionTitle = draftSessionTitle
 	a.activeMessages = nil
 	a.clearActivities()
@@ -2743,6 +3314,9 @@ func runCompact(runtime tuiservices.Runtime, sessionID string) tea.Cmd {
 func (a *App) setActiveSessionID(sessionID string) {
 	next := strings.TrimSpace(sessionID)
 	current := strings.TrimSpace(a.state.ActiveSessionID)
+	if next != "" {
+		a.startupScreenLocked = false
+	}
 	if strings.EqualFold(current, next) {
 		a.state.ActiveSessionID = next
 		return
@@ -3359,6 +3933,17 @@ type providerAddResultMsg struct {
 	Model   string
 	Error   string
 	Warning string
+}
+
+type modelScopeGuideOpenResultMsg struct {
+	Target string
+	Error  string
+}
+
+type modelScopeGuideSubmitResultMsg struct {
+	Selection configstate.Selection
+	Error     string
+	Warning   string
 }
 
 // providerAddDefaultChatEndpointPath 返回 provider add 表单的驱动默认聊天端点路径。

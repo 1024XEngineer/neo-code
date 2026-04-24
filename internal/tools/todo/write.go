@@ -38,6 +38,13 @@ func (t *Tool) Schema() map[string]any {
 		string(agentsession.TodoStatusFailed),
 		string(agentsession.TodoStatusCanceled),
 	}
+	blockedReasonEnum := []string{
+		string(agentsession.TodoBlockedReasonInternalDependency),
+		string(agentsession.TodoBlockedReasonPermissionWait),
+		string(agentsession.TodoBlockedReasonUserInputWait),
+		string(agentsession.TodoBlockedReasonExternalResourceWait),
+		string(agentsession.TodoBlockedReasonUnknown),
+	}
 
 	todoItemSchema := map[string]any{
 		"type": "object",
@@ -51,6 +58,13 @@ func (t *Tool) Schema() map[string]any {
 			"status": map[string]any{
 				"type": "string",
 				"enum": statusEnum,
+			},
+			"required": map[string]any{
+				"type": "boolean",
+			},
+			"blocked_reason": map[string]any{
+				"type": "string",
+				"enum": blockedReasonEnum,
 			},
 			"dependencies": map[string]any{
 				"type": "array",
@@ -133,6 +147,13 @@ func (t *Tool) Schema() map[string]any {
 					"status": map[string]any{
 						"type": "string",
 						"enum": statusEnum,
+					},
+					"required": map[string]any{
+						"type": "boolean",
+					},
+					"blocked_reason": map[string]any{
+						"type": "string",
+						"enum": blockedReasonEnum,
 					},
 					"dependencies": map[string]any{
 						"type": "array",

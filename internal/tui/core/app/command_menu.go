@@ -8,6 +8,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	agentsession "neo-code/internal/session"
 	tuicomponents "neo-code/internal/tui/components"
@@ -114,6 +115,108 @@ func (s selectionItem) Description() string {
 
 func (s selectionItem) FilterValue() string {
 	return strings.ToLower(s.id + " " + s.name + " " + s.description)
+}
+
+type pickerSelectionDelegate struct {
+	mainStyle         lipgloss.Style
+	mainSelectedStyle lipgloss.Style
+	subStyle          lipgloss.Style
+	subSelectedStyle  lipgloss.Style
+	rowStyle          lipgloss.Style
+	railStyle         lipgloss.Style
+	railSelectedStyle lipgloss.Style
+	gap               string
+}
+
+// newPickerSelectionDelegate 构建选择器行渲染所需的稳定样式，避免每次 Render 重建样式对象。
+func newPickerSelectionDelegate() pickerSelectionDelegate {
+	return pickerSelectionDelegate{
+		mainStyle: lipgloss.NewStyle().
+			Foreground(lipgloss.Color(warmSilver)),
+		mainSelectedStyle: lipgloss.NewStyle().
+			Foreground(lipgloss.Color(lightText)).
+			Bold(true),
+		subStyle: lipgloss.NewStyle().
+			Foreground(lipgloss.Color(charcoal)),
+		subSelectedStyle: lipgloss.NewStyle().
+			Foreground(lipgloss.Color(lightText2)),
+		rowStyle: lipgloss.NewStyle(),
+		railStyle: lipgloss.NewStyle().
+			Foreground(lipgloss.Color(charcoal)).
+			Width(1),
+		railSelectedStyle: lipgloss.NewStyle().
+			Foreground(lipgloss.Color(lightText)).
+			Width(1),
+		gap: lipgloss.NewStyle().Width(1).Render(" "),
+	}
+}
+
+func (d pickerSelectionDelegate) Height() int {
+	return 2
+}
+
+func (d pickerSelectionDelegate) Spacing() int {
+	return 0
+}
+
+func (d pickerSelectionDelegate) Update(msg tea.Msg, m *list.Model) tea.Cmd {
+	return nil
+}
+
+func (d pickerSelectionDelegate) Render(w io.Writer, m list.Model, index int, item list.Item) {
+	title, subtitle := pickerItemText(item)
+	selected := index == m.Index()
+
+	rowWidth := max(12, m.Width())
+	contentWidth := max(8, rowWidth-2) // left rail + spacing
+
+	titleWidth := max(4, contentWidth)
+	title = tuiutils.TrimMiddle(strings.TrimSpace(title), titleWidth)
+	subtitle = tuiutils.TrimMiddle(strings.TrimSpace(subtitle), contentWidth)
+	if subtitle == "" {
+		subtitle = " "
+	}
+
+	mainStyle := d.mainStyle
+	subStyle := d.subStyle
+	rowStyle := d.rowStyle.Width(contentWidth)
+	railStyle := d.railStyle
+	railGlyph := " "
+
+	if selected {
+		mainStyle = d.mainSelectedStyle
+		subStyle = d.subSelectedStyle
+		railStyle = d.railSelectedStyle
+		railGlyph = "|"
+	}
+
+	mainLine := mainStyle.Width(titleWidth).Render(title)
+	subLine := subStyle.Width(contentWidth).Render(subtitle)
+	row := rowStyle.Render(mainLine + "\n" + subLine)
+
+	lines := strings.Split(row, "\n")
+	for i := range lines {
+		lines[i] = railStyle.Render(railGlyph) + d.gap + lines[i]
+	}
+	fmt.Fprint(w, strings.Join(lines, "\n"))
+}
+
+func pickerItemText(item list.Item) (string, string) {
+	switch entry := item.(type) {
+	case selectionItem:
+		return strings.TrimSpace(entry.name), strings.TrimSpace(entry.description)
+	case sessionItem:
+		return strings.TrimSpace(entry.Summary.Title), strings.TrimSpace(entry.Summary.UpdatedAt.Format("01-02 15:04"))
+	default:
+		var title, subtitle string
+		if titled, ok := item.(interface{ Title() string }); ok {
+			title = strings.TrimSpace(titled.Title())
+		}
+		if described, ok := item.(interface{ Description() string }); ok {
+			subtitle = strings.TrimSpace(described.Description())
+		}
+		return title, subtitle
+	}
 }
 
 type sessionDelegate struct {

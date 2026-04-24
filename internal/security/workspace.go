@@ -12,7 +12,13 @@ import (
 	"sync"
 )
 
-var evalSymlinks = filepath.EvalSymlinks
+var (
+	evalSymlinks = filepath.EvalSymlinks
+
+	ErrWorkspaceBoundaryViolation = errors.New("security: escapes workspace root")
+	ErrWorkspaceSymlinkViolation  = errors.New("security: escapes workspace root via symlink")
+	ErrWorkspaceVolumeMismatch    = errors.New("security: different volume than workspace root")
+)
 
 // WorkspaceSandbox enforces workspace-relative path boundaries for tool actions.
 type WorkspaceSandbox struct {
@@ -167,7 +173,7 @@ func (s *WorkspaceSandbox) validateWorkspacePlan(plan workspacePlan) (*Workspace
 		return nil, err
 	}
 	if !isWithinWorkspace(root, target) {
-		return nil, fmt.Errorf("security: path %q escapes workspace root", plan.target)
+		return nil, fmt.Errorf("security: path %q escapes workspace root: %w", plan.target, ErrWorkspaceBoundaryViolation)
 	}
 
 	anchorPath, err := ensureNoSymlinkEscape(root, target, plan.target)
@@ -285,6 +291,9 @@ func absoluteWorkspaceTarget(root string, target string) (string, error) {
 	if trimmedTarget == "" {
 		trimmedTarget = "."
 	}
+	if hasTraversal(trimmedTarget) {
+		return "", fmt.Errorf("security: path %q escapes workspace root: %w", target, ErrWorkspaceBoundaryViolation)
+	}
 	if !filepath.IsAbs(trimmedTarget) {
 		trimmedTarget = filepath.Join(root, trimmedTarget)
 	}
@@ -351,7 +360,7 @@ func ensureResolvedPathWithinWorkspace(root string, candidate string, original s
 		return fmt.Errorf("security: resolve symlink %q: %w", candidate, err)
 	}
 	if !isWithinWorkspace(root, resolved) {
-		return fmt.Errorf("security: path %q escapes workspace root via symlink", original)
+		return fmt.Errorf("security: path %q escapes workspace root via symlink: %w", original, ErrWorkspaceSymlinkViolation)
 	}
 	return nil
 }
@@ -424,7 +433,7 @@ func validateTargetVolume(root string, target string) error {
 		return nil
 	}
 	if !strings.EqualFold(rootVolume, targetVolume) {
-		return fmt.Errorf("security: path %q is on different volume than workspace root", target)
+		return fmt.Errorf("security: path %q is on different volume than workspace root: %w", target, ErrWorkspaceVolumeMismatch)
 	}
 	return nil
 }

@@ -6,15 +6,56 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"net"
+	"os"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	"neo-code/internal/gateway"
+	"neo-code/internal/gateway/launcher"
 	"neo-code/internal/gateway/protocol"
 	"neo-code/internal/gateway/transport"
 )
+
+// newStubDispatcher 创建测试用调度器，统一默认依赖并允许按需覆盖。
+func newStubDispatcher(overrides func(*Dispatcher)) *Dispatcher {
+	dispatcher := &Dispatcher{
+		resolveListenAddressFn: func(string) (string, error) { return "stub://gateway", nil },
+		dialFn:                 func(string) (net.Conn, error) { return &stubDispatchConn{}, nil },
+		requestIDFn:            func() string { return "wake-test" },
+	}
+	if overrides != nil {
+		overrides(dispatcher)
+	}
+	return dispatcher
+}
+
+// assertDispatchErrorCode 校验错误会被映射为指定的 DispatchError 码。
+func assertDispatchErrorCode(t *testing.T, err error, wantCode string) *DispatchError {
+	t.Helper()
+
+	var dispatchErr *DispatchError
+	if !errors.As(err, &dispatchErr) {
+		t.Fatalf("error type = %T, want *DispatchError", err)
+	}
+	if dispatchErr.Code != wantCode {
+		t.Fatalf("error code = %q, want %q", dispatchErr.Code, wantCode)
+	}
+	return dispatchErr
+}
+
+// assertDispatchErrorMessageContains 校验结构化错误包含预期消息片段。
+func assertDispatchErrorMessageContains(t *testing.T, err error, wantCode string, wantMessage string) {
+	t.Helper()
+
+	dispatchErr := assertDispatchErrorCode(t, err, wantCode)
+	if !strings.Contains(dispatchErr.Message, wantMessage) {
+		t.Fatalf("error message = %q, want contains %q", dispatchErr.Message, wantMessage)
+	}
+}
 
 func TestDispatcherDispatchSuccess(t *testing.T) {
 	serverConn, clientConn := net.Pipe()
@@ -23,17 +64,14 @@ func TestDispatcherDispatchSuccess(t *testing.T) {
 		_ = clientConn.Close()
 	})
 
-	dispatcher := &Dispatcher{
-		resolveListenAddressFn: func(string) (string, error) {
-			return "stub://gateway", nil
-		},
-		dialFn: func(string) (net.Conn, error) {
+	dispatcher := newStubDispatcher(func(dispatcher *Dispatcher) {
+		dispatcher.dialFn = func(string) (net.Conn, error) {
 			return clientConn, nil
-		},
-		requestIDFn: func() string {
+		}
+		dispatcher.requestIDFn = func() string {
 			return "wake-1"
-		},
-	}
+		}
+	})
 
 	done := make(chan struct{})
 	go func() {
@@ -111,11 +149,10 @@ func TestDispatcherDispatchReturnsGatewayError(t *testing.T) {
 		_ = clientConn.Close()
 	})
 
-	dispatcher := &Dispatcher{
-		resolveListenAddressFn: func(string) (string, error) { return "stub://gateway", nil },
-		dialFn:                 func(string) (net.Conn, error) { return clientConn, nil },
-		requestIDFn:            func() string { return "wake-2" },
-	}
+	dispatcher := newStubDispatcher(func(dispatcher *Dispatcher) {
+		dispatcher.dialFn = func(string) (net.Conn, error) { return clientConn, nil }
+		dispatcher.requestIDFn = func() string { return "wake-2" }
+	})
 
 	go func() {
 		decoder := json.NewDecoder(serverConn)
@@ -140,13 +177,7 @@ func TestDispatcherDispatchReturnsGatewayError(t *testing.T) {
 		t.Fatal("expected gateway error")
 	}
 
-	var dispatchErr *DispatchError
-	if !errors.As(err, &dispatchErr) {
-		t.Fatalf("error type = %T, want *DispatchError", err)
-	}
-	if dispatchErr.Code != gateway.ErrorCodeInvalidAction.String() {
-		t.Fatalf("error code = %q, want %q", dispatchErr.Code, gateway.ErrorCodeInvalidAction.String())
-	}
+	assertDispatchErrorCode(t, err, gateway.ErrorCodeInvalidAction.String())
 }
 
 func TestDispatcherDispatchReturnsUnexpectedResponseError(t *testing.T) {
@@ -156,11 +187,10 @@ func TestDispatcherDispatchReturnsUnexpectedResponseError(t *testing.T) {
 		_ = clientConn.Close()
 	})
 
-	dispatcher := &Dispatcher{
-		resolveListenAddressFn: func(string) (string, error) { return "stub://gateway", nil },
-		dialFn:                 func(string) (net.Conn, error) { return clientConn, nil },
-		requestIDFn:            func() string { return "wake-3" },
-	}
+	dispatcher := newStubDispatcher(func(dispatcher *Dispatcher) {
+		dispatcher.dialFn = func(string) (net.Conn, error) { return clientConn, nil }
+		dispatcher.requestIDFn = func() string { return "wake-3" }
+	})
 
 	go func() {
 		decoder := json.NewDecoder(serverConn)
@@ -184,13 +214,7 @@ func TestDispatcherDispatchReturnsUnexpectedResponseError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected unexpected response error")
 	}
-	var dispatchErr *DispatchError
-	if !errors.As(err, &dispatchErr) {
-		t.Fatalf("error type = %T, want *DispatchError", err)
-	}
-	if dispatchErr.Code != ErrorCodeUnexpectedResponse {
-		t.Fatalf("error code = %q, want %q", dispatchErr.Code, ErrorCodeUnexpectedResponse)
-	}
+	assertDispatchErrorCode(t, err, ErrorCodeUnexpectedResponse)
 }
 
 func TestDispatcherDispatchReturnsCorrelationMismatchError(t *testing.T) {
@@ -200,11 +224,10 @@ func TestDispatcherDispatchReturnsCorrelationMismatchError(t *testing.T) {
 		_ = clientConn.Close()
 	})
 
-	dispatcher := &Dispatcher{
-		resolveListenAddressFn: func(string) (string, error) { return "stub://gateway", nil },
-		dialFn:                 func(string) (net.Conn, error) { return clientConn, nil },
-		requestIDFn:            func() string { return "wake-9" },
-	}
+	dispatcher := newStubDispatcher(func(dispatcher *Dispatcher) {
+		dispatcher.dialFn = func(string) (net.Conn, error) { return clientConn, nil }
+		dispatcher.requestIDFn = func() string { return "wake-9" }
+	})
 
 	go func() {
 		decoder := json.NewDecoder(serverConn)
@@ -228,26 +251,16 @@ func TestDispatcherDispatchReturnsCorrelationMismatchError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected correlation mismatch error")
 	}
-	var dispatchErr *DispatchError
-	if !errors.As(err, &dispatchErr) {
-		t.Fatalf("error type = %T, want *DispatchError", err)
-	}
-	if dispatchErr.Code != ErrorCodeUnexpectedResponse {
-		t.Fatalf("error code = %q, want %q", dispatchErr.Code, ErrorCodeUnexpectedResponse)
-	}
-	if !strings.Contains(dispatchErr.Message, "frame correlation failed") {
-		t.Fatalf("error message = %q, want correlation failure", dispatchErr.Message)
-	}
+	assertDispatchErrorMessageContains(t, err, ErrorCodeUnexpectedResponse, "frame correlation failed")
 }
 
 func TestDispatcherDispatchInputAndDialErrors(t *testing.T) {
-	dispatcher := &Dispatcher{
-		resolveListenAddressFn: func(string) (string, error) { return "stub://gateway", nil },
-		dialFn: func(string) (net.Conn, error) {
+	dispatcher := newStubDispatcher(func(dispatcher *Dispatcher) {
+		dispatcher.dialFn = func(string) (net.Conn, error) {
 			return nil, errors.New("dial failed")
-		},
-		requestIDFn: func() string { return "wake-4" },
-	}
+		}
+		dispatcher.requestIDFn = func() string { return "wake-4" }
+	})
 
 	_, parseErr := dispatcher.Dispatch(context.Background(), DispatchRequest{
 		RawURL: "http://review?path=README.md",
@@ -255,13 +268,7 @@ func TestDispatcherDispatchInputAndDialErrors(t *testing.T) {
 	if parseErr == nil {
 		t.Fatal("expected parse error")
 	}
-	var parseDispatchErr *DispatchError
-	if !errors.As(parseErr, &parseDispatchErr) {
-		t.Fatalf("parse error type = %T, want *DispatchError", parseErr)
-	}
-	if parseDispatchErr.Code != "invalid_scheme" {
-		t.Fatalf("parse error code = %q, want %q", parseDispatchErr.Code, "invalid_scheme")
-	}
+	assertDispatchErrorCode(t, parseErr, "invalid_scheme")
 
 	_, dialErr := dispatcher.Dispatch(context.Background(), DispatchRequest{
 		RawURL: "neocode://review?path=README.md",
@@ -269,13 +276,160 @@ func TestDispatcherDispatchInputAndDialErrors(t *testing.T) {
 	if dialErr == nil {
 		t.Fatal("expected dial error")
 	}
-	var dialDispatchErr *DispatchError
-	if !errors.As(dialErr, &dialDispatchErr) {
-		t.Fatalf("dial error type = %T, want *DispatchError", dialErr)
+	assertDispatchErrorCode(t, dialErr, ErrorCodeGatewayUnavailable)
+}
+
+func TestDispatcherDialGatewayWithSingleLaunchFallback(t *testing.T) {
+	t.Run("launch succeeds and second dial succeeds", func(t *testing.T) {
+		dialCalls := 0
+		dispatcher := &Dispatcher{
+			dialFn: func(string) (net.Conn, error) {
+				dialCalls++
+				if dialCalls == 1 {
+					return nil, errors.New("not ready")
+				}
+				return &stubDispatchConn{}, nil
+			},
+			autoLaunchGateway: true,
+			resolveLaunchSpecFn: func() (launcher.LaunchSpec, error) {
+				return launcher.LaunchSpec{
+					LaunchMode: launcher.LaunchModePathBinary,
+					Executable: "/usr/local/bin/neocode-gateway",
+				}, nil
+			},
+			startGatewayFn: func(launcher.LaunchSpec) error { return nil },
+			nowFn:          time.Now,
+			sleepFn:        func(time.Duration) {},
+		}
+
+		connection, err := dispatcher.dialGatewayWithFallback(context.Background(), "stub://gateway", "wake-1", "")
+		if err != nil {
+			t.Fatalf("dialGatewayWithFallback() error = %v", err)
+		}
+		if connection == nil {
+			t.Fatal("expected non-nil connection")
+		}
+		if dialCalls != 3 {
+			t.Fatalf("dial calls = %d, want %d", dialCalls, 3)
+		}
+	})
+
+	t.Run("single fallback and deterministic error", func(t *testing.T) {
+		dialCalls := 0
+		now := time.Unix(200, 0)
+		dispatcher := &Dispatcher{
+			dialFn: func(string) (net.Conn, error) {
+				dialCalls++
+				return nil, errors.New("still unreachable")
+			},
+			autoLaunchGateway: true,
+			resolveLaunchSpecFn: func() (launcher.LaunchSpec, error) {
+				return launcher.LaunchSpec{
+					LaunchMode: launcher.LaunchModePathBinary,
+					Executable: "/usr/local/bin/neocode-gateway",
+				}, nil
+			},
+			startGatewayFn: func(launcher.LaunchSpec) error { return nil },
+			nowFn: func() time.Time {
+				current := now
+				now = now.Add(4 * time.Second)
+				return current
+			},
+			sleepFn: func(time.Duration) {},
+		}
+
+		_, err := dispatcher.dialGatewayWithFallback(context.Background(), "stub://gateway", "wake-2", "")
+		if err == nil {
+			t.Fatal("expected unreachable error")
+		}
+		var dispatchErr *DispatchError
+		if !errors.As(err, &dispatchErr) {
+			t.Fatalf("error type = %T, want *DispatchError", err)
+		}
+		if dispatchErr.Code != ErrorCodeGatewayUnavailable {
+			t.Fatalf("error code = %q, want %q", dispatchErr.Code, ErrorCodeGatewayUnavailable)
+		}
+		if !strings.Contains(dispatchErr.Message, "launch gateway failed") {
+			t.Fatalf("error message = %q, want contains launch failure", dispatchErr.Message)
+		}
+		if dialCalls != 2 {
+			t.Fatalf("dial calls = %d, want %d", dialCalls, 2)
+		}
+	})
+}
+
+func TestDispatcherLaunchDecisionLogWhitelistFields(t *testing.T) {
+	assertPayload := func(t *testing.T, entry launchDecisionLogEntry, expected map[string]string) {
+		t.Helper()
+		buffer := &bytes.Buffer{}
+		dispatcher := &Dispatcher{
+			logger: log.New(buffer, "", 0),
+		}
+		dispatcher.emitLaunchDecisionLog(entry)
+
+		var payload map[string]any
+		if err := json.Unmarshal(buffer.Bytes(), &payload); err != nil {
+			t.Fatalf("decode launch log payload: %v", err)
+		}
+		for fieldName, expectedValue := range expected {
+			value, ok := payload[fieldName]
+			if !ok {
+				t.Fatalf("missing field %q", fieldName)
+			}
+			textValue, ok := value.(string)
+			if !ok {
+				t.Fatalf("field %q type = %T, want string", fieldName, value)
+			}
+			if textValue != expectedValue {
+				t.Fatalf("field %q = %q, want %q", fieldName, textValue, expectedValue)
+			}
+		}
 	}
-	if dialDispatchErr.Code != ErrorCodeGatewayUnavailable {
-		t.Fatalf("dial error code = %q, want %q", dialDispatchErr.Code, ErrorCodeGatewayUnavailable)
-	}
+
+	assertPayload(t, launchDecisionLogEntry{
+		RequestID:     "wake-123",
+		Method:        protocol.MethodWakeOpenURL,
+		Source:        "url-dispatch",
+		Status:        "launch_attempt",
+		GatewayCode:   "",
+		ListenAddress: "127.0.0.1:8080",
+		AuthMode:      "required",
+		LaunchMode:    launcher.LaunchModePathBinary,
+		ResolvedExec:  "/usr/local/bin/neocode-gateway",
+	}, map[string]string{
+		"request_id":     "wake-123",
+		"method":         protocol.MethodWakeOpenURL,
+		"source":         "url-dispatch",
+		"status":         "launch_attempt",
+		"gateway_code":   "",
+		"listen_address": "127.0.0.1:8080",
+		"auth_mode":      "required",
+		"launch_mode":    launcher.LaunchModePathBinary,
+		"resolved_exec":  "/usr/local/bin/neocode-gateway",
+	})
+
+	assertPayload(t, launchDecisionLogEntry{
+		RequestID:     "wake-124",
+		Method:        protocol.MethodWakeOpenURL,
+		Source:        "url-dispatch",
+		Status:        "launch_failed",
+		GatewayCode:   ErrorCodeGatewayUnavailable,
+		ListenAddress: "127.0.0.1:8080",
+		AuthMode:      "disabled",
+		LaunchMode:    launcher.LaunchModeFallbackSubcommand,
+		ResolvedExec:  "/usr/local/bin/neocode",
+		Message:       "launch failed",
+	}, map[string]string{
+		"request_id":     "wake-124",
+		"method":         protocol.MethodWakeOpenURL,
+		"source":         "url-dispatch",
+		"status":         "launch_failed",
+		"gateway_code":   ErrorCodeGatewayUnavailable,
+		"listen_address": "127.0.0.1:8080",
+		"auth_mode":      "disabled",
+		"launch_mode":    launcher.LaunchModeFallbackSubcommand,
+		"resolved_exec":  "/usr/local/bin/neocode",
+	})
 }
 
 func TestDispatcherDispatchFailsFastOnCanceledContextBeforeIO(t *testing.T) {
@@ -399,6 +553,33 @@ func TestDispatcherResolveAddressUsesTransportResolver(t *testing.T) {
 	}
 	if got != want {
 		t.Fatalf("resolved address = %q, want %q", got, want)
+	}
+}
+
+func TestNewDispatcherResolveLaunchSpecUsesEnvAndAuthMode(t *testing.T) {
+	executablePath, err := os.Executable()
+	if err != nil {
+		t.Fatalf("os.Executable() error = %v", err)
+	}
+	t.Setenv(launcher.EnvGatewayBinary, executablePath)
+
+	dispatcher := NewDispatcher()
+	spec, err := dispatcher.resolveLaunchSpecFn()
+	if err != nil {
+		t.Fatalf("resolve launch spec: %v", err)
+	}
+	if spec.LaunchMode != launcher.LaunchModeExplicitPath {
+		t.Fatalf("launch mode = %q, want %q", spec.LaunchMode, launcher.LaunchModeExplicitPath)
+	}
+	if strings.TrimSpace(spec.Executable) == "" {
+		t.Fatal("resolved executable should not be empty")
+	}
+
+	if got := resolveAuthMode("   "); got != "disabled" {
+		t.Fatalf("resolveAuthMode(disabled) = %q, want %q", got, "disabled")
+	}
+	if got := resolveAuthMode("token-1"); got != "required" {
+		t.Fatalf("resolveAuthMode(required) = %q, want %q", got, "required")
 	}
 }
 
@@ -994,6 +1175,392 @@ func TestDispatcherJSONRPCHelpers(t *testing.T) {
 	if _, err := marshalJSONRawMessage(make(chan int)); err == nil {
 		t.Fatal("expected marshalJSONRawMessage failure")
 	}
+}
+
+func TestDispatcherDispatchErrorFrameBranches(t *testing.T) {
+	t.Run("error frame missing error payload", func(t *testing.T) {
+		dispatcher := &Dispatcher{
+			resolveListenAddressFn: func(string) (string, error) { return "stub://gateway", nil },
+			dialFn: func(string) (net.Conn, error) {
+				return &stubDispatchConn{
+					readBuffer: bytes.NewBufferString(
+						`{"jsonrpc":"2.0","id":"wake-err-1","result":{"type":"error","action":"wake.openUrl","request_id":"wake-err-1"}}` + "\n",
+					),
+				}, nil
+			},
+			requestIDFn: func() string { return "wake-err-1" },
+		}
+
+		_, err := dispatcher.Dispatch(context.Background(), DispatchRequest{RawURL: "neocode://review?path=README.md"})
+		if err == nil || !strings.Contains(err.Error(), "missing error payload") {
+			t.Fatalf("expected missing error payload error, got %v", err)
+		}
+	})
+
+	t.Run("error frame propagates gateway code and message", func(t *testing.T) {
+		dispatcher := &Dispatcher{
+			resolveListenAddressFn: func(string) (string, error) { return "stub://gateway", nil },
+			dialFn: func(string) (net.Conn, error) {
+				return &stubDispatchConn{
+					readBuffer: bytes.NewBufferString(
+						`{"jsonrpc":"2.0","id":"wake-err-2","result":{"type":"error","action":"wake.openUrl","request_id":"wake-err-2","error":{"code":"unauthorized","message":"denied"}}}` + "\n",
+					),
+				}, nil
+			},
+			requestIDFn: func() string { return "wake-err-2" },
+		}
+
+		_, err := dispatcher.Dispatch(context.Background(), DispatchRequest{RawURL: "neocode://review?path=README.md"})
+		var dispatchErr *DispatchError
+		if !errors.As(err, &dispatchErr) {
+			t.Fatalf("error type = %T, want *DispatchError", err)
+		}
+		if dispatchErr.Code != "unauthorized" {
+			t.Fatalf("error code = %q, want %q", dispatchErr.Code, "unauthorized")
+		}
+		if dispatchErr.Message != "denied" {
+			t.Fatalf("error message = %q, want %q", dispatchErr.Message, "denied")
+		}
+	})
+}
+
+func TestDispatcherLaunchGatewayBranches(t *testing.T) {
+	t.Run("context canceled before launch", func(t *testing.T) {
+		dispatcher := &Dispatcher{}
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		err := dispatcher.launchGateway(ctx, "stub://gateway", "wake-launch-1", "")
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("launchGateway error = %v, want context canceled", err)
+		}
+	})
+
+	t.Run("missing resolve launch function", func(t *testing.T) {
+		dispatcher := &Dispatcher{
+			startGatewayFn: func(launcher.LaunchSpec) error { return nil },
+		}
+
+		err := dispatcher.launchGateway(context.Background(), "stub://gateway", "wake-launch-2", "")
+		if err == nil || !strings.Contains(err.Error(), "launcher is unavailable") {
+			t.Fatalf("expected launcher unavailable error, got %v", err)
+		}
+	})
+
+	t.Run("missing start gateway function", func(t *testing.T) {
+		dispatcher := &Dispatcher{
+			resolveLaunchSpecFn: func() (launcher.LaunchSpec, error) {
+				return launcher.LaunchSpec{LaunchMode: launcher.LaunchModePathBinary, Executable: "/tmp/neocode-gateway"}, nil
+			},
+		}
+
+		err := dispatcher.launchGateway(context.Background(), "stub://gateway", "wake-launch-3", "")
+		if err == nil || !strings.Contains(err.Error(), "start function is unavailable") {
+			t.Fatalf("expected start function unavailable error, got %v", err)
+		}
+	})
+
+	t.Run("resolve launch spec failed and emits failure log", func(t *testing.T) {
+		buffer := &bytes.Buffer{}
+		dispatcher := &Dispatcher{
+			resolveLaunchSpecFn: func() (launcher.LaunchSpec, error) {
+				return launcher.LaunchSpec{}, errors.New("resolve failed")
+			},
+			startGatewayFn: func(launcher.LaunchSpec) error { return nil },
+			logger:         log.New(buffer, "", 0),
+		}
+
+		err := dispatcher.launchGateway(context.Background(), "stub://gateway", "wake-launch-4", "token")
+		if err == nil || !strings.Contains(err.Error(), "resolve failed") {
+			t.Fatalf("expected resolve failed error, got %v", err)
+		}
+		if !strings.Contains(buffer.String(), `"status":"launch_failed"`) {
+			t.Fatalf("expected launch_failed log, got %q", buffer.String())
+		}
+	})
+
+	t.Run("start gateway failed", func(t *testing.T) {
+		var capturedSpec launcher.LaunchSpec
+		dispatcher := &Dispatcher{
+			resolveLaunchSpecFn: func() (launcher.LaunchSpec, error) {
+				return launcher.LaunchSpec{LaunchMode: launcher.LaunchModePathBinary, Executable: "/tmp/neocode-gateway"}, nil
+			},
+			startGatewayFn: func(spec launcher.LaunchSpec) error {
+				capturedSpec = spec
+				return errors.New("start failed")
+			},
+		}
+
+		err := dispatcher.launchGateway(context.Background(), "stub://gateway", "wake-launch-5", "")
+		if err == nil || !strings.Contains(err.Error(), "start failed") {
+			t.Fatalf("expected start failed error, got %v", err)
+		}
+		if !reflect.DeepEqual(capturedSpec.Args, []string{"--listen", "stub://gateway"}) {
+			t.Fatalf("launch args = %#v, want %#v", capturedSpec.Args, []string{"--listen", "stub://gateway"})
+		}
+	})
+}
+
+func TestDispatcherWaitGatewayReadyBranches(t *testing.T) {
+	t.Run("uses default now and sleep functions", func(t *testing.T) {
+		dispatcher := &Dispatcher{
+			dialFn: func(string) (net.Conn, error) {
+				return &stubDispatchConn{}, nil
+			},
+		}
+		if err := dispatcher.waitGatewayReady(context.Background(), "stub://gateway"); err != nil {
+			t.Fatalf("waitGatewayReady() error = %v", err)
+		}
+	})
+
+	t.Run("context deadline short-circuits retry window", func(t *testing.T) {
+		base := time.Unix(300, 0)
+		now := base
+		sleepCalls := 0
+		dispatcher := &Dispatcher{
+			dialFn: func(string) (net.Conn, error) {
+				return nil, errors.New("unreachable")
+			},
+			nowFn: func() time.Time {
+				current := now
+				now = now.Add(50 * time.Millisecond)
+				return current
+			},
+			sleepFn: func(time.Duration) {
+				sleepCalls++
+			},
+		}
+
+		ctx, cancel := context.WithDeadline(context.Background(), base.Add(40*time.Millisecond))
+		defer cancel()
+		err := dispatcher.waitGatewayReady(ctx, "stub://gateway")
+		if err == nil {
+			t.Fatal("expected timeout-related error")
+		}
+		if !strings.Contains(err.Error(), "did not become reachable") && !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("expected timeout-related error, got %v", err)
+		}
+		if !errors.Is(err, context.DeadlineExceeded) && !strings.Contains(err.Error(), "40ms") {
+			t.Fatalf("error = %v, want contains %q when timeout message is returned", err, "40ms")
+		}
+		if sleepCalls != 0 {
+			t.Fatalf("sleepCalls = %d, want %d", sleepCalls, 0)
+		}
+	})
+
+	t.Run("retries once then succeeds and sleeps", func(t *testing.T) {
+		base := time.Unix(400, 0)
+		now := base
+		dialCalls := 0
+		sleepCalls := 0
+		dispatcher := &Dispatcher{
+			dialFn: func(string) (net.Conn, error) {
+				dialCalls++
+				if dialCalls == 1 {
+					return nil, errors.New("not ready")
+				}
+				return &stubDispatchConn{}, nil
+			},
+			nowFn: func() time.Time {
+				current := now
+				now = now.Add(10 * time.Millisecond)
+				return current
+			},
+			sleepFn: func(time.Duration) {
+				sleepCalls++
+			},
+		}
+
+		if err := dispatcher.waitGatewayReady(context.Background(), "stub://gateway"); err != nil {
+			t.Fatalf("waitGatewayReady() error = %v", err)
+		}
+		if dialCalls != 2 {
+			t.Fatalf("dialCalls = %d, want %d", dialCalls, 2)
+		}
+		if sleepCalls != 1 {
+			t.Fatalf("sleepCalls = %d, want %d", sleepCalls, 1)
+		}
+	})
+}
+
+func TestDispatcherCallRPCAdditionalBranches(t *testing.T) {
+	t.Run("context canceled before encode", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		dispatcher := &Dispatcher{}
+		_, err := dispatcher.callRPC(ctx, &stubDispatchConn{}, protocol.JSONRPCRequest{})
+		var dispatchErr *DispatchError
+		if !errors.As(err, &dispatchErr) {
+			t.Fatalf("error type = %T, want *DispatchError", err)
+		}
+		if dispatchErr.Code != ErrorCodeInternal {
+			t.Fatalf("error code = %q, want %q", dispatchErr.Code, ErrorCodeInternal)
+		}
+	})
+
+	t.Run("encode error with context canceled during write", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		conn := &cancelOnWriteErrorConn{cancel: cancel}
+		dispatcher := &Dispatcher{}
+
+		_, err := dispatcher.callRPC(ctx, conn, protocol.JSONRPCRequest{JSONRPC: protocol.JSONRPCVersion})
+		var dispatchErr *DispatchError
+		if !errors.As(err, &dispatchErr) {
+			t.Fatalf("error type = %T, want *DispatchError", err)
+		}
+		if dispatchErr.Code != ErrorCodeInternal {
+			t.Fatalf("error code = %q, want %q", dispatchErr.Code, ErrorCodeInternal)
+		}
+		if !strings.Contains(dispatchErr.Message, context.Canceled.Error()) {
+			t.Fatalf("error message = %q, want contains %q", dispatchErr.Message, context.Canceled.Error())
+		}
+	})
+
+	t.Run("context canceled after encode before decode", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		conn := &cancelAfterWriteConn{cancel: cancel}
+		dispatcher := &Dispatcher{}
+
+		_, err := dispatcher.callRPC(ctx, conn, protocol.JSONRPCRequest{JSONRPC: protocol.JSONRPCVersion})
+		var dispatchErr *DispatchError
+		if !errors.As(err, &dispatchErr) {
+			t.Fatalf("error type = %T, want *DispatchError", err)
+		}
+		if dispatchErr.Code != ErrorCodeInternal {
+			t.Fatalf("error code = %q, want %q", dispatchErr.Code, ErrorCodeInternal)
+		}
+		if !strings.Contains(dispatchErr.Message, context.Canceled.Error()) {
+			t.Fatalf("error message = %q, want contains %q", dispatchErr.Message, context.Canceled.Error())
+		}
+	})
+
+	t.Run("decode error with canceled context", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		conn := &cancelOnReadErrorConn{cancel: cancel}
+		dispatcher := &Dispatcher{}
+
+		_, err := dispatcher.callRPC(ctx, conn, protocol.JSONRPCRequest{JSONRPC: protocol.JSONRPCVersion})
+		var dispatchErr *DispatchError
+		if !errors.As(err, &dispatchErr) {
+			t.Fatalf("error type = %T, want *DispatchError", err)
+		}
+		if dispatchErr.Code != ErrorCodeInternal {
+			t.Fatalf("error code = %q, want %q", dispatchErr.Code, ErrorCodeInternal)
+		}
+	})
+}
+
+func TestDispatcherAuthenticateAdditionalBranches(t *testing.T) {
+	t.Run("auth response version mismatch", func(t *testing.T) {
+		dispatcher := &Dispatcher{
+			requestIDFn: func() string { return "wake-auth-extra-1" },
+		}
+		conn := &stubDispatchConn{
+			readBuffer: bytes.NewBufferString(`{"jsonrpc":"1.0","id":"wake-auth-extra-1-auth","result":{}}` + "\n"),
+		}
+
+		err := dispatcher.authenticate(context.Background(), conn, "token")
+		if err == nil || !strings.Contains(err.Error(), "jsonrpc version") {
+			t.Fatalf("expected auth version mismatch, got %v", err)
+		}
+	})
+
+	t.Run("auth id mismatch", func(t *testing.T) {
+		dispatcher := &Dispatcher{
+			requestIDFn: func() string { return "wake-auth-extra-2" },
+		}
+		conn := &stubDispatchConn{
+			readBuffer: bytes.NewBufferString(`{"jsonrpc":"2.0","id":"other-auth-id","result":{}}` + "\n"),
+		}
+
+		err := dispatcher.authenticate(context.Background(), conn, "token")
+		if err == nil || !strings.Contains(err.Error(), "auth id mismatch") {
+			t.Fatalf("expected auth id mismatch, got %v", err)
+		}
+	})
+
+	t.Run("decode auth response frame failed", func(t *testing.T) {
+		dispatcher := &Dispatcher{
+			requestIDFn: func() string { return "wake-auth-extra-3" },
+		}
+		conn := &stubDispatchConn{
+			readBuffer: bytes.NewBufferString(`{"jsonrpc":"2.0","id":"wake-auth-extra-3-auth","result":"bad-frame"}` + "\n"),
+		}
+
+		err := dispatcher.authenticate(context.Background(), conn, "token")
+		if err == nil || !strings.Contains(err.Error(), "decode auth response frame") {
+			t.Fatalf("expected decode auth frame failure, got %v", err)
+		}
+	})
+}
+
+func TestDispatcherEmitLaunchDecisionLogNilGuards(t *testing.T) {
+	var dispatcher *Dispatcher
+	dispatcher.emitLaunchDecisionLog(launchDecisionLogEntry{})
+
+	dispatcher = &Dispatcher{}
+	dispatcher.emitLaunchDecisionLog(launchDecisionLogEntry{})
+}
+
+func TestBuildGatewayLaunchArgs(t *testing.T) {
+	t.Run("appends listen argument when provided", func(t *testing.T) {
+		got := buildGatewayLaunchArgs([]string{"gateway"}, " unix:///tmp/neocode.sock ")
+		want := []string{"gateway", "--listen", "unix:///tmp/neocode.sock"}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("buildGatewayLaunchArgs() = %#v, want %#v", got, want)
+		}
+	})
+
+	t.Run("keeps base args when listen is empty", func(t *testing.T) {
+		got := buildGatewayLaunchArgs([]string{"gateway"}, "   ")
+		want := []string{"gateway"}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("buildGatewayLaunchArgs() = %#v, want %#v", got, want)
+		}
+	})
+}
+
+type cancelOnWriteErrorConn struct {
+	stubDispatchConn
+	cancel context.CancelFunc
+}
+
+func (c *cancelOnWriteErrorConn) Write(_ []byte) (int, error) {
+	c.cancel()
+	return 0, errors.New("write failed")
+}
+
+func (c *cancelOnWriteErrorConn) Read(_ []byte) (int, error) {
+	return 0, io.EOF
+}
+
+type cancelAfterWriteConn struct {
+	stubDispatchConn
+	cancel context.CancelFunc
+}
+
+func (c *cancelAfterWriteConn) Write(payload []byte) (int, error) {
+	c.cancel()
+	return len(payload), nil
+}
+
+func (c *cancelAfterWriteConn) Read(_ []byte) (int, error) {
+	return 0, io.EOF
+}
+
+type cancelOnReadErrorConn struct {
+	stubDispatchConn
+	cancel context.CancelFunc
+}
+
+func (c *cancelOnReadErrorConn) Write(payload []byte) (int, error) {
+	return len(payload), nil
+}
+
+func (c *cancelOnReadErrorConn) Read(_ []byte) (int, error) {
+	c.cancel()
+	return 0, io.EOF
 }
 
 type stubDispatchConn struct {

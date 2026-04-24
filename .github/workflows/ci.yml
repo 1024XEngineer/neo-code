@@ -37,8 +37,91 @@ jobs:
       - name: Build
         run: go build ./...
 
+      - name: Gateway-only smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          socket_path="/tmp/neocode-gateway-${RANDOM}.sock"
+          http_port="$((18080 + RANDOM % 1000))"
+          http_addr="127.0.0.1:${http_port}"
+          gateway_bin="/tmp/neocode-gateway"
+          gateway_log="/tmp/neocode-gateway.log"
+
+          go build -o "${gateway_bin}" ./cmd/neocode-gateway
+          "${gateway_bin}" --listen "${socket_path}" --http-listen "${http_addr}" --log-level info >"${gateway_log}" 2>&1 &
+          gateway_pid=$!
+
+          cleanup() {
+            if kill -0 "${gateway_pid}" >/dev/null 2>&1; then
+              kill "${gateway_pid}" || true
+              wait "${gateway_pid}" || true
+            fi
+            rm -f "${socket_path}" "${gateway_bin}" /tmp/gateway-healthz.json /tmp/gateway-rpc.json
+          }
+          trap cleanup EXIT
+
+          for _ in $(seq 1 60); do
+            if curl -fsS "http://${http_addr}/healthz" > /tmp/gateway-healthz.json; then
+              break
+            fi
+            sleep 0.2
+          done
+          test -s /tmp/gateway-healthz.json
+
+          rpc_status="$(curl -sS -o /tmp/gateway-rpc.json -w "%{http_code}" \
+            -X POST "http://${http_addr}/rpc" \
+            -H "Content-Type: application/json" \
+            -d '{"jsonrpc":"2.0","id":"smoke-1","method":"gateway.ping","params":{}}')"
+          if [[ "${rpc_status}" != "401" ]]; then
+            echo "unexpected /rpc status: ${rpc_status}" >&2
+            cat /tmp/gateway-rpc.json >&2
+            cat "${gateway_log}" >&2 || true
+            exit 1
+          fi
+          grep -q '"gateway_code":"unauthorized"' /tmp/gateway-rpc.json
+
       - name: Test with coverage
         run: go test ./... -covermode=atomic -coverprofile=coverage.out
+
+      - name: Install script dry-run regression (bash)
+        shell: bash
+        env:
+          NEOCODE_INSTALL_LATEST_TAG: v0.0.0-test
+        run: |
+          set -euo pipefail
+
+          full_output="$(bash ./scripts/install.sh --flavor full --dry-run)"
+          gateway_output="$(bash ./scripts/install.sh --flavor gateway --dry-run)"
+
+          echo "${full_output}" | grep -Eq '^asset=neocode_(Linux|Darwin)_(x86_64|arm64)\.tar\.gz$'
+          echo "${gateway_output}" | grep -Eq '^asset=neocode-gateway_(Linux|Darwin)_(x86_64|arm64)\.tar\.gz$'
+          echo "${full_output}" | grep -Eq '^download_url=https://github.com/1024XEngineer/neo-code/releases/download/.+/neocode_(Linux|Darwin)_(x86_64|arm64)\.tar\.gz$'
+          echo "${gateway_output}" | grep -Eq '^download_url=https://github.com/1024XEngineer/neo-code/releases/download/.+/neocode-gateway_(Linux|Darwin)_(x86_64|arm64)\.tar\.gz$'
+          echo "${full_output}" | grep -Eq '^checksum_url=https://github.com/1024XEngineer/neo-code/releases/download/.+/checksums\.txt$'
+          echo "${gateway_output}" | grep -Eq '^checksum_url=https://github.com/1024XEngineer/neo-code/releases/download/.+/checksums\.txt$'
+
+      - name: Install script dry-run regression (PowerShell)
+        shell: pwsh
+        env:
+          NEOCODE_INSTALL_LATEST_TAG: v0.0.0-test
+        run: |
+          $fullLines = & ./scripts/install.ps1 -Flavor full -DryRun
+          $gatewayLines = & ./scripts/install.ps1 -Flavor gateway -DryRun
+
+          $fullAsset = ($fullLines | Where-Object { $_ -like 'asset=*' } | Select-Object -First 1)
+          $gatewayAsset = ($gatewayLines | Where-Object { $_ -like 'asset=*' } | Select-Object -First 1)
+          $fullDownload = ($fullLines | Where-Object { $_ -like 'download_url=*' } | Select-Object -First 1)
+          $gatewayDownload = ($gatewayLines | Where-Object { $_ -like 'download_url=*' } | Select-Object -First 1)
+          $fullChecksum = ($fullLines | Where-Object { $_ -like 'checksum_url=*' } | Select-Object -First 1)
+          $gatewayChecksum = ($gatewayLines | Where-Object { $_ -like 'checksum_url=*' } | Select-Object -First 1)
+
+          if ($fullAsset -notmatch '^asset=neocode_Windows_(x86_64|arm64)\.zip$') { throw "Unexpected full asset line: $fullAsset" }
+          if ($gatewayAsset -notmatch '^asset=neocode-gateway_Windows_(x86_64|arm64)\.zip$') { throw "Unexpected gateway asset line: $gatewayAsset" }
+          if ($fullDownload -notmatch '^download_url=https://github.com/1024XEngineer/neo-code/releases/download/.+/neocode_Windows_(x86_64|arm64)\.zip$') { throw "Unexpected full download URL: $fullDownload" }
+          if ($gatewayDownload -notmatch '^download_url=https://github.com/1024XEngineer/neo-code/releases/download/.+/neocode-gateway_Windows_(x86_64|arm64)\.zip$') { throw "Unexpected gateway download URL: $gatewayDownload" }
+          if ($fullChecksum -notmatch '^checksum_url=https://github.com/1024XEngineer/neo-code/releases/download/.+/checksums\.txt$') { throw "Unexpected full checksum URL: $fullChecksum" }
+          if ($gatewayChecksum -notmatch '^checksum_url=https://github.com/1024XEngineer/neo-code/releases/download/.+/checksums\.txt$') { throw "Unexpected gateway checksum URL: $gatewayChecksum" }
 
       - name: Upload coverage to Codecov
         continue-on-error: true

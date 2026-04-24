@@ -185,22 +185,91 @@ type PhaseChangedPayload struct {
 type StopReason string
 
 const (
-	// StopReasonCompleted 表示 runtime 当前协议中的正常完成原因。
-	StopReasonCompleted StopReason = "STOP_COMPLETED"
 	// StopReasonUserInterrupt 表示 runtime 当前协议中的用户中断原因。
-	StopReasonUserInterrupt StopReason = "STOP_USER_INTERRUPT"
+	StopReasonUserInterrupt StopReason = "user_interrupt"
 	// StopReasonFatalError 表示 runtime 当前协议中的不可恢复错误原因。
-	StopReasonFatalError StopReason = "STOP_FATAL_ERROR"
-	// StopReasonMaxTurnsReached 表示 runtime 达到最大轮次上限后的受控停止原因。
-	StopReasonMaxTurnsReached StopReason = "STOP_MAX_TURNS_REACHED"
+	StopReasonFatalError StopReason = "fatal_error"
 	// StopReasonBudgetExceeded 表示 runtime 当前协议中的预算超限停止原因。
-	StopReasonBudgetExceeded StopReason = "STOP_BUDGET_EXCEEDED"
+	StopReasonBudgetExceeded StopReason = "budget_exceeded"
+	// StopReasonMaxTurnExceeded 表示 runtime 达到最大轮次上限后的受控停止原因。
+	StopReasonMaxTurnExceeded StopReason = "max_turn_exceeded"
+	// StopReasonRetryExhausted 表示 todo 重试耗尽。
+	StopReasonRetryExhausted StopReason = "retry_exhausted"
+	// StopReasonVerificationFailed 表示验证失败。
+	StopReasonVerificationFailed StopReason = "verification_failed"
+	// StopReasonAccepted 表示双门控通过并被 acceptance 接受。
+	StopReasonAccepted StopReason = "accepted"
+	// StopReasonTodoNotConverged 表示 required todo 未收敛。
+	StopReasonTodoNotConverged StopReason = "todo_not_converged"
+	// StopReasonTodoWaitingExternal 表示 todo 等待外部输入。
+	StopReasonTodoWaitingExternal StopReason = "todo_waiting_external"
+	// StopReasonNoProgressAfterFinalIntercept 表示 final 被拦截后长期无进展。
+	StopReasonNoProgressAfterFinalIntercept StopReason = "no_progress_after_final_intercept"
+	// StopReasonMaxTurnExceededWithUnconvergedTodos 表示 max turn + todo 未收敛。
+	StopReasonMaxTurnExceededWithUnconvergedTodos StopReason = "max_turn_exceeded_with_unconverged_todos"
+	// StopReasonMaxTurnExceededWithFailedVerification 表示 max turn + verification 失败。
+	StopReasonMaxTurnExceededWithFailedVerification StopReason = "max_turn_exceeded_with_failed_verification"
+	// StopReasonVerificationConfigMissing 表示 verification 必需配置缺失。
+	StopReasonVerificationConfigMissing StopReason = "verification_config_missing"
+	// StopReasonVerificationExecutionDenied 表示 verification 命令被策略拒绝。
+	StopReasonVerificationExecutionDenied StopReason = "verification_execution_denied"
+	// StopReasonVerificationExecutionError 表示 verification 命令执行异常。
+	StopReasonVerificationExecutionError StopReason = "verification_execution_error"
+	// StopReasonCompatibilityFallback 表示走兼容回退路径。
+	StopReasonCompatibilityFallback StopReason = "compatibility_fallback"
+
+	// StopReasonCompleted 兼容旧命名，等价 accepted。
+	StopReasonCompleted StopReason = StopReasonAccepted
+	// StopReasonMaxTurnsReached 兼容旧命名，等价 max_turn_exceeded。
+	StopReasonMaxTurnsReached StopReason = StopReasonMaxTurnExceeded
 )
 
 // StopReasonDecidedPayload 描述停止原因决策结果。
 type StopReasonDecidedPayload struct {
 	Reason StopReason `json:"reason"`
 	Detail string     `json:"detail,omitempty"`
+}
+
+// VerificationStartedPayload 描述 final 验证阶段开始。
+type VerificationStartedPayload struct {
+	CompletionPassed bool `json:"completion_passed"`
+}
+
+// VerificationStageFinishedPayload 描述单个 verifier 阶段结果。
+type VerificationStageFinishedPayload struct {
+	Name       string `json:"name"`
+	Status     string `json:"status"`
+	Summary    string `json:"summary,omitempty"`
+	Reason     string `json:"reason,omitempty"`
+	ErrorClass string `json:"error_class,omitempty"`
+}
+
+// VerificationFinishedPayload 描述验证流程结束结果。
+type VerificationFinishedPayload struct {
+	AcceptanceStatus string     `json:"acceptance_status"`
+	StopReason       StopReason `json:"stop_reason,omitempty"`
+	ErrorClass       string     `json:"error_class,omitempty"`
+}
+
+// VerificationCompletedPayload 描述验证通过并可完成。
+type VerificationCompletedPayload struct {
+	StopReason StopReason `json:"stop_reason,omitempty"`
+}
+
+// VerificationFailedPayload 描述验证失败信息。
+type VerificationFailedPayload struct {
+	StopReason StopReason `json:"stop_reason,omitempty"`
+	ErrorClass string     `json:"error_class,omitempty"`
+}
+
+// AcceptanceDecidedPayload 描述 acceptance 引擎输出。
+type AcceptanceDecidedPayload struct {
+	Status             string     `json:"status"`
+	StopReason         StopReason `json:"stop_reason,omitempty"`
+	ErrorClass         string     `json:"error_class,omitempty"`
+	UserVisibleSummary string     `json:"user_visible_summary,omitempty"`
+	InternalSummary    string     `json:"internal_summary,omitempty"`
+	ContinueHint       string     `json:"continue_hint,omitempty"`
 }
 
 // TokenUsagePayload 描述 runtime 当前 token_usage 事件载荷。
@@ -243,32 +312,38 @@ type AssetSaveFailedPayload struct {
 }
 
 const (
-	EventUserMessage         EventType = "user_message"
-	EventAgentChunk          EventType = "agent_chunk"
-	EventAgentDone           EventType = "agent_done"
-	EventToolStart           EventType = "tool_start"
-	EventToolResult          EventType = "tool_result"
-	EventToolChunk           EventType = "tool_chunk"
-	EventRunCanceled         EventType = "run_canceled"
-	EventError               EventType = "error"
-	EventToolCallThinking    EventType = "tool_call_thinking"
-	EventProviderRetry       EventType = "provider_retry"
-	EventPermissionRequested EventType = "permission_requested"
-	EventPermissionResolved  EventType = "permission_resolved"
-	EventCompactStart        EventType = "compact_start"
-	EventCompactApplied      EventType = "compact_applied"
-	EventCompactError        EventType = "compact_error"
-	EventTokenUsage          EventType = "token_usage"
-	EventSkillActivated      EventType = "skill_activated"
-	EventSkillDeactivated    EventType = "skill_deactivated"
-	EventSkillMissing        EventType = "skill_missing"
-	EventPhaseChanged        EventType = "phase_changed"
-	EventProgressEvaluated   EventType = "progress_evaluated"
-	EventStopReasonDecided   EventType = "stop_reason_decided"
-	EventTodoUpdated         EventType = "todo_updated"
-	EventTodoConflict        EventType = "todo_conflict"
-	EventTodoSummaryInjected EventType = "todo_summary_injected"
-	EventInputNormalized     EventType = "input_normalized"
-	EventAssetSaved          EventType = "asset_saved"
-	EventAssetSaveFailed     EventType = "asset_save_failed"
+	EventUserMessage               EventType = "user_message"
+	EventAgentChunk                EventType = "agent_chunk"
+	EventAgentDone                 EventType = "agent_done"
+	EventToolStart                 EventType = "tool_start"
+	EventToolResult                EventType = "tool_result"
+	EventToolChunk                 EventType = "tool_chunk"
+	EventRunCanceled               EventType = "run_canceled"
+	EventError                     EventType = "error"
+	EventToolCallThinking          EventType = "tool_call_thinking"
+	EventProviderRetry             EventType = "provider_retry"
+	EventPermissionRequested       EventType = "permission_requested"
+	EventPermissionResolved        EventType = "permission_resolved"
+	EventCompactStart              EventType = "compact_start"
+	EventCompactApplied            EventType = "compact_applied"
+	EventCompactError              EventType = "compact_error"
+	EventTokenUsage                EventType = "token_usage"
+	EventSkillActivated            EventType = "skill_activated"
+	EventSkillDeactivated          EventType = "skill_deactivated"
+	EventSkillMissing              EventType = "skill_missing"
+	EventPhaseChanged              EventType = "phase_changed"
+	EventProgressEvaluated         EventType = "progress_evaluated"
+	EventStopReasonDecided         EventType = "stop_reason_decided"
+	EventVerificationStarted       EventType = "verification_started"
+	EventVerificationStageFinished EventType = "verification_stage_finished"
+	EventVerificationFinished      EventType = "verification_finished"
+	EventVerificationCompleted     EventType = "verification_completed"
+	EventVerificationFailed        EventType = "verification_failed"
+	EventAcceptanceDecided         EventType = "acceptance_decided"
+	EventTodoUpdated               EventType = "todo_updated"
+	EventTodoConflict              EventType = "todo_conflict"
+	EventTodoSummaryInjected       EventType = "todo_summary_injected"
+	EventInputNormalized           EventType = "input_normalized"
+	EventAssetSaved                EventType = "asset_saved"
+	EventAssetSaveFailed           EventType = "asset_save_failed"
 )

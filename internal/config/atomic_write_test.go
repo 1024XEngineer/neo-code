@@ -1,7 +1,10 @@
 package config
 
 import (
+	"os"
 	"path/filepath"
+	"runtime"
+	"syscall"
 	"testing"
 )
 
@@ -32,6 +35,10 @@ func TestFsyncDirectoryNonWindowsReturnsOpenErrorForMissingDirectory(t *testing.
 }
 
 func TestFsyncDirectoryNonWindowsSucceedsForExistingDirectory(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("directory sync semantics are not testable on a Windows host under forced non-windows mode")
+	}
+
 	previousGOOS := atomicGOOS
 	atomicGOOS = "linux"
 	defer func() {
@@ -41,5 +48,22 @@ func TestFsyncDirectoryNonWindowsSucceedsForExistingDirectory(t *testing.T) {
 	dir := t.TempDir()
 	if err := fsyncDirectory(dir); err != nil {
 		t.Fatalf("fsyncDirectory() error = %v", err)
+	}
+}
+
+func TestIsBestEffortDirectorySyncError(t *testing.T) {
+	t.Parallel()
+
+	if !isBestEffortDirectorySyncError(syscall.EINVAL) {
+		t.Fatalf("expected EINVAL to be treated as best-effort")
+	}
+	if !isBestEffortDirectorySyncError(os.ErrInvalid) {
+		t.Fatalf("expected os.ErrInvalid to be treated as best-effort")
+	}
+	if isBestEffortDirectorySyncError(syscall.EACCES) {
+		t.Fatalf("expected EACCES to fail hard")
+	}
+	if isBestEffortDirectorySyncError(&os.PathError{Op: "sync", Path: "/tmp", Err: syscall.EPERM}) {
+		t.Fatalf("expected wrapped EPERM to fail hard")
 	}
 }

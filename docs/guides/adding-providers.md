@@ -51,6 +51,7 @@ func DefaultProviders() []ProviderConfig {
 		GeminiProvider(),
 		OpenLLProvider(),
 		QiniuProvider(),
+		ModelScopeProvider(),
 		DeepSeekProvider(),
 	}
 }

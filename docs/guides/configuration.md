@@ -149,7 +149,7 @@ NeoCode 采用 “builtin provider + custom provider” 双来源模型。
 内置 provider 定义于：
 
 ```text
-internal/config/builtin_providers.go
+internal/config/provider.go
 ```
 
 当前内置 provider：
@@ -158,6 +158,7 @@ internal/config/builtin_providers.go
 - `gemini`
 - `openll`
 - `qiniu`
+- `modelscope`
 
 ### custom provider
 
@@ -200,12 +201,14 @@ API Key 只从系统环境变量读取。
 | `gemini` | `GEMINI_API_KEY` |
 | `openll` | `AI_API_KEY` |
 | `qiniu` | `QINIU_API_KEY` |
+| `modelscope` | `MODELSCOPE_API_KEY` |
 
 示例：
 
 ```bash
 export OPENAI_API_KEY="sk-..."
 export GEMINI_API_KEY="AI..."
+export MODELSCOPE_API_KEY="ms-..."
 ```
 
 Windows PowerShell：
@@ -213,6 +216,7 @@ Windows PowerShell：
 ```powershell
 $env:OPENAI_API_KEY = "sk-..."
 $env:GEMINI_API_KEY = "AI..."
+$env:MODELSCOPE_API_KEY = "ms-..."
 ```
 
 ## CLI 运行参数覆盖

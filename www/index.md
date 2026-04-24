@@ -25,7 +25,7 @@ features:
   - title: 终端原生
     details: TUI 界面，无需浏览器，和你的 shell 工作流无缝集成，直接在终端中对话和操作。
   - title: 多模型支持
-    details: 一份配置管理 OpenAI、Gemini、Ollama 等多个模型服务，随时切换，无需改代码。
+    details: 内置 OpenAI、Gemini、OpenLL、Qiniu 等多个模型服务，通过配置随时切换，无需改代码。
 ---
 
 <section class="home-section compact">
@@ -45,6 +45,10 @@ features:
     <a class="doc-card" href="/neo-code/guide/quick-start">
       <strong>首次上手</strong>
       <span>第一次提问、常用 Slash 命令和 Provider / Model 切换。</span>
+    </a>
+    <a class="doc-card" href="/neo-code/guide/install">
+      <strong>配置环境变量</strong>
+      <span>设置 <code>OPENAI_API_KEY</code>、<code>GEMINI_API_KEY</code> 等 API Key 环境变量。</span>
     </a>
     <a class="doc-card" href="/neo-code/guide/configuration">
       <strong>配置</strong>

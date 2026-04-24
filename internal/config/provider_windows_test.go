@@ -53,9 +53,6 @@ func TestProviderConfigResolveAPIKeyFallsBackToUserEnv(t *testing.T) {
 	if got != envValue {
 		t.Fatalf("ResolveAPIKey() = %q, want %q", got, envValue)
 	}
-	if processGot := os.Getenv(envName); processGot != envValue {
-		t.Fatalf("expected process env synchronized to %q, got %q", envValue, processGot)
-	}
 }
 
 func containsPermissionDenied(err error) bool {

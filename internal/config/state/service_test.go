@@ -18,6 +18,7 @@ const (
 	GeminiName           = configpkg.GeminiName
 	OpenLLName           = configpkg.OpenLLName
 	QiniuName            = configpkg.QiniuName
+	ModelScopeName       = configpkg.ModelScopeName
 	QiniuDefaultModel    = configpkg.QiniuDefaultModel
 	OpenAIDefaultModel   = configpkg.OpenAIDefaultModel
 	ProviderSourceCustom = configpkg.ProviderSourceCustom
@@ -53,10 +54,11 @@ func TestSelectionServiceListProviderOptionsUsesCatalogModels(t *testing.T) {
 		t.Fatalf("ListProviderOptions() error = %v", err)
 	}
 	expected := map[string]int{
-		OpenAIName: 2,
-		GeminiName: 2,
-		OpenLLName: 2,
-		QiniuName:  2,
+		OpenAIName:     2,
+		GeminiName:     2,
+		OpenLLName:     2,
+		QiniuName:      2,
+		ModelScopeName: 2,
 	}
 	if len(items) != len(expected) {
 		t.Fatalf("expected only builtin providers, got %d", len(items))

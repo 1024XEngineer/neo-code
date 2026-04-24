@@ -1,11 +1,17 @@
 package tui
 
 import (
+	"bytes"
+	"io"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
+
+	agentsession "neo-code/internal/session"
 )
 
 func TestCommandMenuItem(t *testing.T) {
@@ -195,5 +201,104 @@ func TestOpenFileBrowserUsesAbsoluteWorkdir(t *testing.T) {
 	}
 	if app.state.ActivePicker != pickerFile {
 		t.Fatalf("expected file picker to be active")
+	}
+}
+
+func TestSessionItemAccessors(t *testing.T) {
+	updatedAt := time.Date(2026, 4, 22, 8, 30, 0, 0, time.UTC)
+	item := sessionItem{Summary: agentsession.Summary{Title: "Session A", UpdatedAt: updatedAt}}
+	if item.Title() != "Session A" {
+		t.Fatalf("Title() = %q, want Session A", item.Title())
+	}
+	if item.Description() != "04-22 08:30" {
+		t.Fatalf("Description() = %q, want 04-22 08:30", item.Description())
+	}
+	if item.FilterValue() != "session a" {
+		t.Fatalf("FilterValue() = %q, want session a", item.FilterValue())
+	}
+}
+
+type titledOnlyItem struct{ title string }
+
+func (i titledOnlyItem) Title() string { return i.title }
+func (i titledOnlyItem) FilterValue() string {
+	return i.title
+}
+
+type describedOnlyItem struct{ description string }
+
+func (i describedOnlyItem) Description() string { return i.description }
+func (i describedOnlyItem) FilterValue() string {
+	return i.description
+}
+
+type invalidListItem struct{}
+
+func (invalidListItem) FilterValue() string { return "invalid" }
+
+func TestPickerItemTextFallbackBranches(t *testing.T) {
+	title, subtitle := pickerItemText(titledOnlyItem{title: "  only-title  "})
+	if title != "only-title" || subtitle != "" {
+		t.Fatalf("unexpected title-only result: title=%q subtitle=%q", title, subtitle)
+	}
+	title, subtitle = pickerItemText(describedOnlyItem{description: "  only-desc  "})
+	if title != "" || subtitle != "only-desc" {
+		t.Fatalf("unexpected desc-only result: title=%q subtitle=%q", title, subtitle)
+	}
+}
+
+func TestPickerSelectionDelegateMethods(t *testing.T) {
+	delegate := newPickerSelectionDelegate()
+	if delegate.Height() != 2 {
+		t.Fatalf("Height() = %d, want 2", delegate.Height())
+	}
+	if delegate.Spacing() != 0 {
+		t.Fatalf("Spacing() = %d, want 0", delegate.Spacing())
+	}
+	if cmd := delegate.Update(tea.KeyMsg{Type: tea.KeyDown}, nil); cmd != nil {
+		t.Fatalf("expected nil cmd from delegate update, got %T", cmd)
+	}
+}
+
+func TestPickerSelectionDelegateRenderBranches(t *testing.T) {
+	delegate := newPickerSelectionDelegate()
+	model := list.New([]list.Item{
+		selectionItem{id: "m1", name: "Model A", description: "desc"},
+	}, delegate, 24, 2)
+	model.Select(0)
+
+	var out bytes.Buffer
+	delegate.Render(&out, model, 0, selectionItem{id: "m1", name: "Model A", description: "desc"})
+	if !strings.Contains(out.String(), "|") {
+		t.Fatalf("expected selected row indicator, got %q", out.String())
+	}
+
+	out.Reset()
+	delegate.Render(&out, model, 1, selectionItem{id: "m2", name: "Model B", description: ""})
+	if strings.TrimSpace(out.String()) == "" {
+		t.Fatalf("expected non-selected row to render")
+	}
+
+	out.Reset()
+	delegate.Render(io.Discard, model, 0, invalidListItem{})
+}
+
+func TestSessionDelegateMethodsAndRenderGuard(t *testing.T) {
+	delegate := sessionDelegate{styles: newStyles()}
+	if delegate.Height() != 3 {
+		t.Fatalf("Height() = %d, want 3", delegate.Height())
+	}
+	if delegate.Spacing() != 1 {
+		t.Fatalf("Spacing() = %d, want 1", delegate.Spacing())
+	}
+	if cmd := delegate.Update(tea.KeyMsg{Type: tea.KeyUp}, nil); cmd != nil {
+		t.Fatalf("expected nil cmd from session delegate update, got %T", cmd)
+	}
+
+	model := list.New(nil, delegate, 24, 3)
+	var out bytes.Buffer
+	delegate.Render(&out, model, 0, invalidListItem{})
+	if out.Len() != 0 {
+		t.Fatalf("expected guard branch to skip invalid item render, got %q", out.String())
 	}
 }

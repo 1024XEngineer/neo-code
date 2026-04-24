@@ -9,6 +9,7 @@ import (
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/lipgloss"
 
+	"neo-code/internal/config"
 	providertypes "neo-code/internal/provider/types"
 	agentsession "neo-code/internal/session"
 	tuistate "neo-code/internal/tui/state"
@@ -33,6 +34,22 @@ func TestRenderPickerHelpMode(t *testing.T) {
 	}
 	if !strings.Contains(view, helpPickerSubtitle) {
 		t.Fatalf("expected help picker subtitle in view")
+	}
+}
+
+func TestViewStartupScreenRendersStartupSections(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.startupScreenLocked = true
+	app.width = 120
+	app.height = 40
+
+	view := app.View()
+	plain := copyCodeANSIPattern.ReplaceAllString(view, "")
+	if !strings.Contains(plain, "AI-POWERED CLI WORKSPACE") {
+		t.Fatalf("expected startup subtitle in view")
+	}
+	if !strings.Contains(plain, "Quick Actions") {
+		t.Fatalf("expected startup action description in view")
 	}
 }
 
@@ -83,6 +100,67 @@ func TestRenderPickerProviderAndFileMode(t *testing.T) {
 	if !strings.Contains(providerAddView, providerAddTitle) {
 		t.Fatalf("expected provider add title")
 	}
+
+	app.modelScopeGuide = &modelScopeGuideState{
+		ProviderID: config.ModelScopeName,
+		APIKeyEnv:  config.ModelScopeDefaultAPIKeyEnv,
+		Step:       modelScopeGuideStepPasteToken,
+		Token:      "test-token",
+	}
+	app.state.ActivePicker = pickerModelScope
+	modelScopeView := app.renderPicker(48, 14)
+	if !strings.Contains(modelScopeView, modelScopeGuideTitle) {
+		t.Fatalf("expected modelscope guide title")
+	}
+}
+
+func TestRenderModelScopeGuideBranches(t *testing.T) {
+	app, _ := newTestApp(t)
+	if got := app.renderModelScopeGuide(); !strings.Contains(got, "not active") {
+		t.Fatalf("expected inactive guide message, got %q", got)
+	}
+
+	app.modelScopeGuide = &modelScopeGuideState{
+		ProviderID: config.ModelScopeName,
+		APIKeyEnv:  config.ModelScopeDefaultAPIKeyEnv,
+		GuidePath:  "/tmp/modelscope-guide.html",
+		Step:       modelScopeGuideStepGuide,
+	}
+	guideView := app.renderModelScopeGuide()
+	if !strings.Contains(guideView, "Step 1/4") || !strings.Contains(guideView, "Guide HTML: /tmp/modelscope-guide.html") {
+		t.Fatalf("expected step 1 guide content, got %q", guideView)
+	}
+
+	app.modelScopeGuide.Step = modelScopeGuideStepLogin
+	loginView := app.renderModelScopeGuide()
+	if !strings.Contains(loginView, "Step 2/4") {
+		t.Fatalf("expected step 2 login content, got %q", loginView)
+	}
+
+	app.modelScopeGuide.Step = modelScopeGuideStepToken
+	tokenView := app.renderModelScopeGuide()
+	if !strings.Contains(tokenView, "Step 3/4") {
+		t.Fatalf("expected step 3 token content, got %q", tokenView)
+	}
+
+	app.modelScopeGuide.Step = modelScopeGuideStepPasteToken
+	app.modelScopeGuide.Token = "abc123xyz"
+	app.modelScopeGuide.Notice = "notice text"
+	app.modelScopeGuide.Error = "error text"
+	app.modelScopeGuide.Submitting = true
+	pasteView := app.renderModelScopeGuide()
+	if !strings.Contains(pasteView, "Step 4/4") {
+		t.Fatalf("expected step 4 paste token content, got %q", pasteView)
+	}
+	if strings.Contains(pasteView, app.modelScopeGuide.Token) {
+		t.Fatalf("expected token to be masked in view, got %q", pasteView)
+	}
+	if !strings.Contains(pasteView, "[Notice] notice text") || !strings.Contains(pasteView, "[Error] error text") {
+		t.Fatalf("expected notice and error sections, got %q", pasteView)
+	}
+	if !strings.Contains(pasteView, "Submitting token...") {
+		t.Fatalf("expected submitting hint, got %q", pasteView)
+	}
 }
 
 func TestBuildPickerLayoutExpandsPopupSpace(t *testing.T) {
@@ -125,19 +203,175 @@ func TestRenderWaterfallThinkingState(t *testing.T) {
 	}
 }
 
-func TestRenderWaterfallSelectionHint(t *testing.T) {
+func TestRenderWaterfallShowsStartupScreenForEmptyDraft(t *testing.T) {
 	app, _ := newTestApp(t)
+	app.startupScreenLocked = true
 	app.state.ActivePicker = pickerNone
-	app.setTranscriptContent("hello")
-	app.textSelection.active = true
-	app.textSelection.startLine = 0
-	app.textSelection.startCol = 0
-	app.textSelection.endLine = 0
-	app.textSelection.endCol = 1
+	app.logViewerVisible = false
+	app.state.IsAgentRunning = false
+	app.state.IsCompacting = false
+	app.activeMessages = nil
+	app.input.SetValue("")
 
-	view := app.renderWaterfall(80, 24)
-	if !strings.Contains(view, "已选择内容，右键复制") {
-		t.Fatalf("expected selection hint in waterfall view")
+	view := app.renderWaterfall(100, 26)
+	if !strings.Contains(view, "AI-POWERED CLI WORKSPACE") {
+		t.Fatalf("expected startup subtitle in waterfall, got %q", view)
+	}
+	if !strings.Contains(view, "Ctrl+N") {
+		t.Fatalf("expected startup shortcut hint, got %q", view)
+	}
+}
+
+func TestRenderWaterfallKeepsStartupScreenWhileTypingUntilUnlocked(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.startupScreenLocked = true
+	app.state.ActivePicker = pickerNone
+	app.activeMessages = nil
+	app.input.SetValue("hello")
+
+	view := app.renderWaterfall(100, 26)
+	if !strings.Contains(view, "AI-POWERED CLI WORKSPACE") {
+		t.Fatalf("expected startup screen to remain while typing before first send")
+	}
+
+	app.startupScreenLocked = false
+	view = app.renderWaterfall(100, 26)
+	if strings.Contains(view, "AI-POWERED CLI WORKSPACE") {
+		t.Fatalf("expected startup screen hidden after unlock")
+	}
+
+	app.startupScreenLocked = true
+	app.input.SetValue("")
+	app.activeMessages = []providertypes.Message{
+		{Role: roleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("ready")}},
+	}
+	app.rebuildTranscript()
+	view = app.renderWaterfall(100, 26)
+	if strings.Contains(view, "AI-POWERED CLI WORKSPACE") {
+		t.Fatalf("expected startup screen hidden once transcript has messages")
+	}
+}
+
+func TestStartupWidthsClampToAvailableSpace(t *testing.T) {
+	widths := []int{24, 32, 48, 64, 96}
+	for _, width := range widths {
+		maxContent := max(1, width-4)
+		if got := startupContentWidth(width); got > maxContent {
+			t.Fatalf("expected startup content width <= %d for viewport %d, got %d", maxContent, width, got)
+		}
+
+		maxPrompt := max(1, width-2)
+		if got := startupPromptWidth(width); got > maxPrompt {
+			t.Fatalf("expected startup prompt width <= %d for viewport %d, got %d", maxPrompt, width, got)
+		}
+	}
+}
+
+func TestRenderStartupScreenFitsNarrowViewport(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.startupScreenLocked = true
+	app.state.ActivePicker = pickerNone
+	app.activeMessages = nil
+	app.input.SetValue("")
+
+	const viewportWidth = 64
+	view := copyCodeANSIPattern.ReplaceAllString(app.renderWaterfall(viewportWidth, 24), "")
+	if !strings.Contains(view, "Quick Actions") {
+		t.Fatalf("expected startup quick actions in narrow viewport")
+	}
+
+	for _, line := range strings.Split(view, "\n") {
+		if got := lipgloss.Width(line); got > viewportWidth {
+			t.Fatalf("expected line width <= %d, got %d in line %q", viewportWidth, got, line)
+		}
+	}
+}
+
+func TestRenderPromptUsesAvailableWidthOnStartup(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.startupScreenLocked = true
+	app.state.ActivePicker = pickerNone
+	app.activeMessages = nil
+	app.input.SetValue("")
+
+	const viewportWidth = 112
+	prompt := copyCodeANSIPattern.ReplaceAllString(app.renderPrompt(viewportWidth), "")
+	if got := lipgloss.Height(prompt); got > 4 {
+		t.Fatalf("expected startup prompt to stay on one content row, got height %d: %q", got, prompt)
+	}
+	for _, line := range strings.Split(prompt, "\n") {
+		if got := lipgloss.Width(line); got > viewportWidth {
+			t.Fatalf("expected prompt line width <= %d, got %d in line %q", viewportWidth, got, line)
+		}
+	}
+}
+
+func TestRenderStartupScreenQuickActionsHasNoBorderBox(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.startupScreenLocked = true
+	app.state.ActivePicker = pickerNone
+	app.activeMessages = nil
+	app.input.SetValue("")
+
+	view := copyCodeANSIPattern.ReplaceAllString(app.renderStartupScreen(100, 20), "")
+	if strings.ContainsRune(view, '\u256d') ||
+		strings.ContainsRune(view, '\u256e') ||
+		strings.ContainsRune(view, '\u2570') ||
+		strings.ContainsRune(view, '\u256f') ||
+		strings.ContainsRune(view, '\u2502') ||
+		strings.ContainsRune(view, '\u2500') {
+		t.Fatalf("expected quick actions section without box border, got %q", view)
+	}
+}
+
+func TestRenderStartupScreenCompactMenuAndInvalidSize(t *testing.T) {
+	app, _ := newTestApp(t)
+
+	if got := app.renderStartupScreen(0, 20); got != "" {
+		t.Fatalf("expected empty output when width<=0, got %q", got)
+	}
+	if got := app.renderStartupScreen(80, 0); got != "" {
+		t.Fatalf("expected empty output when height<=0, got %q", got)
+	}
+
+	compact := copyCodeANSIPattern.ReplaceAllString(app.renderStartupScreen(30, 16), "")
+	if !strings.Contains(compact, "NeoCode") {
+		t.Fatalf("expected fallback logo text for narrow width, got %q", compact)
+	}
+}
+
+func TestStartupContentWidthForWideViewport(t *testing.T) {
+	got := startupContentWidth(200)
+	if got != 148 {
+		t.Fatalf("expected startupContentWidth(200)=148, got %d", got)
+	}
+}
+
+func TestStartupPromptWidthForWideViewport(t *testing.T) {
+	got := startupPromptWidth(200)
+	if got != 156 {
+		t.Fatalf("expected startupPromptWidth(200)=156, got %d", got)
+	}
+}
+
+func TestStartupCenterPadLineCutsLongContent(t *testing.T) {
+	got := startupCenterPadLine("0123456789", 4)
+	if got != "0123" {
+		t.Fatalf("expected cut line to width 4, got %q", got)
+	}
+}
+
+func TestStartupQuickActionKeyWidthBranches(t *testing.T) {
+	if got := startupQuickActionKeyWidth(0); got != 0 {
+		t.Fatalf("expected key width 0 for non-positive card width, got %d", got)
+	}
+
+	if got := startupQuickActionKeyWidth(10); got != 4 {
+		t.Fatalf("expected key width clamp to min 4 for narrow card, got %d", got)
+	}
+
+	if got := startupQuickActionKeyWidth(100); got != 6 {
+		t.Fatalf("expected key width to keep longest shortcut width 6, got %d", got)
 	}
 }
 
@@ -199,12 +433,12 @@ func TestComputeLayoutUsesRenderedHeaderHeight(t *testing.T) {
 	}
 }
 
-func TestRenderUserMessageKeepsTagAndBodyRightAligned(t *testing.T) {
+func TestRenderUserMessagePlacesTagOnLeft(t *testing.T) {
 	app, _ := newTestApp(t)
 
 	block, _ := app.renderMessageBlockWithCopy(providertypes.Message{
 		Role:  roleUser,
-		Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello right aligned")},
+		Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello left aligned")},
 	}, 72, 1)
 
 	plain := copyCodeANSIPattern.ReplaceAllString(block, "")
@@ -222,7 +456,7 @@ func TestRenderUserMessageKeepsTagAndBodyRightAligned(t *testing.T) {
 		if strings.Contains(line, messageTagUser) {
 			tagLine = line
 		}
-		if strings.Contains(line, "hello right aligned") {
+		if strings.Contains(line, "hello left aligned") {
 			contentLine = line
 		}
 	}
@@ -230,10 +464,13 @@ func TestRenderUserMessageKeepsTagAndBodyRightAligned(t *testing.T) {
 		t.Fatalf("expected user tag and content lines, got %q", plain)
 	}
 
-	tagRightEdge := lipgloss.Width(strings.TrimRight(tagLine, " "))
-	bodyRightEdge := lipgloss.Width(strings.TrimRight(contentLine, " "))
-	if tagRightEdge != bodyRightEdge {
-		t.Fatalf("expected user tag and body right edges to match, got tag=%d body=%d\n%q\n%q", tagRightEdge, bodyRightEdge, tagLine, contentLine)
+	tagLeading := len(tagLine) - len(strings.TrimLeft(tagLine, " "))
+	if tagLeading > 1 {
+		t.Fatalf("expected user tag to be left aligned, got line %q", tagLine)
+	}
+	contentLeading := len(contentLine) - len(strings.TrimLeft(contentLine, " "))
+	if contentLeading < 2 || contentLeading > 6 {
+		t.Fatalf("expected user body to keep a small left indent, got %q", contentLine)
 	}
 }
 
@@ -309,8 +546,8 @@ func TestRenderProviderAddFormMasksAPIKeyAndShowsHints(t *testing.T) {
 	if !strings.Contains(form, "留空会自动填充默认地址") {
 		t.Fatalf("expected base url hint, got %q", form)
 	}
-	if !strings.Contains(form, "留空会按 Chat API Mode 自动回填默认端点") {
-		t.Fatalf("expected chat endpoint autofill hint, got %q", form)
+	if !strings.Contains(form, "Chat Endpoint:   (") || !strings.Contains(form, "Chat API Mode") || !strings.Contains(form, "自动回填默认端点") {
+		t.Fatalf("expected chat endpoint auto-fill hint, got %q", form)
 	}
 	if !strings.Contains(form, "[Error] input invalid") {
 		t.Fatalf("expected hard error label, got %q", form)
@@ -320,7 +557,7 @@ func TestRenderProviderAddFormMasksAPIKeyAndShowsHints(t *testing.T) {
 func TestRenderProviderAddFormPromptLabel(t *testing.T) {
 	app, _ := newTestApp(t)
 	app.startProviderAddForm()
-	app.providerAddForm.Driver = "custom-driver"
+	app.providerAddForm.Driver = "anthropic"
 	app.providerAddForm.Error = "continue input"
 	app.providerAddForm.ErrorIsHard = false
 
@@ -359,7 +596,7 @@ func TestViewSmallWindowHint(t *testing.T) {
 func TestViewNormalIncludesHeaderAndBody(t *testing.T) {
 	app, _ := newTestApp(t)
 	app.width = 100
-	app.height = 30
+	app.height = 40
 	app.state.CurrentModel = "test-model"
 	app.state.CurrentWorkdir = "/tmp/workdir"
 	app.state.StatusText = "running"
@@ -425,6 +662,28 @@ func TestRenderHeaderIncludesWorkdirFallback(t *testing.T) {
 	}
 }
 
+func TestComposeHeaderLineKeepsRightSectionVisible(t *testing.T) {
+	line := composeHeaderLine("NeoCode / model / Ready", "cwd: /tmp/workdir", 48)
+	if !strings.Contains(line, "cwd: /tmp/workdir") {
+		t.Fatalf("expected right section in composed header, got %q", line)
+	}
+	if got := lipgloss.Width(line); got < lipgloss.Width("cwd: /tmp/workdir") {
+		t.Fatalf("expected composed header width to include right section, got %d", got)
+	}
+}
+
+func TestComposeHeaderLineDoesNotOverflowTightWidth(t *testing.T) {
+	right := "cwd: /tmp/workdir"
+	width := lipgloss.Width(right)
+	line := composeHeaderLine("NeoCode / model / status", right, width)
+	if got := lipgloss.Width(line); got > width {
+		t.Fatalf("expected composed header width <= %d, got %d (%q)", width, got, line)
+	}
+	if !strings.Contains(line, right) {
+		t.Fatalf("expected right section preserved, got %q", line)
+	}
+}
+
 func TestRenderPanelAndActivityPreview(t *testing.T) {
 	app, _ := newTestApp(t)
 	panel := app.renderPanel("Title", "Sub", "Body", 60, 8, true)
@@ -457,13 +716,13 @@ func TestRenderPanelAndActivityPreview(t *testing.T) {
 func TestRenderHelpShowsCtrlLAndError(t *testing.T) {
 	app, _ := newTestApp(t)
 	app.state.StatusText = statusReady
-	rendered := app.renderHelp(80)
+	rendered := copyCodeANSIPattern.ReplaceAllString(app.renderHelp(80), "")
 	if !strings.Contains(rendered, "Ctrl+L Log viewer") {
 		t.Fatalf("expected footer help to include log viewer shortcut, got %q", rendered)
 	}
 
 	app.showFooterError("permission denied")
-	rendered = app.renderHelp(80)
+	rendered = copyCodeANSIPattern.ReplaceAllString(app.renderHelp(80), "")
 	if !strings.Contains(rendered, "Error: permission denied") {
 		t.Fatalf("expected footer to surface execution error, got %q", rendered)
 	}
@@ -475,13 +734,13 @@ func TestRenderHelpErrorToastExpires(t *testing.T) {
 	app.nowFn = func() time.Time { return base }
 
 	app.showFooterError("permission denied")
-	rendered := app.renderHelp(80)
+	rendered := copyCodeANSIPattern.ReplaceAllString(app.renderHelp(80), "")
 	if !strings.Contains(rendered, "Error: permission denied") {
 		t.Fatalf("expected footer toast to show immediately, got %q", rendered)
 	}
 
 	app.nowFn = func() time.Time { return base.Add(footerErrorFlashDuration + 50*time.Millisecond) }
-	rendered = app.renderHelp(80)
+	rendered = copyCodeANSIPattern.ReplaceAllString(app.renderHelp(80), "")
 	if strings.Contains(rendered, "Error: permission denied") {
 		t.Fatalf("expected footer toast to auto-hide after flash duration, got %q", rendered)
 	}
@@ -695,6 +954,8 @@ func TestRenderActivityLineAndScrollbarHelpers(t *testing.T) {
 	app.transcript.SetYOffset(3)
 	if got := app.renderTranscriptScrollbar(2, 5); got == "" {
 		t.Fatalf("expected non-empty scrollbar when transcript is scrollable")
+	} else if !strings.ContainsRune(got, '\u2588') {
+		t.Fatalf("expected scrollbar thumb to use solid block glyph, got %q", got)
 	}
 }
 

@@ -33,13 +33,13 @@ func TestDecideStopReasonPriority(t *testing.T) {
 			wantReason: StopReasonUserInterrupt,
 		},
 		{
-			name: "max_turns_wins_over_fatal",
+			name: "fatal_wins_over_max_turns",
 			in: StopInput{
 				MaxTurnsReached: true,
 				MaxTurnsLimit:   40,
 				FatalError:      errSample,
 			},
-			wantReason: StopReasonMaxTurnsReached,
+			wantReason: StopReasonFatalError,
 		},
 		{
 			name: "fatal_error_wins_over_completed",
@@ -85,8 +85,8 @@ func TestDecideStopReasonDetails(t *testing.T) {
 		MaxTurnsReached: true,
 		MaxTurnsLimit:   40,
 	})
-	if reason != StopReasonMaxTurnsReached {
-		t.Fatalf("reason = %q, want %q", reason, StopReasonMaxTurnsReached)
+	if reason != StopReasonMaxTurnExceeded {
+		t.Fatalf("reason = %q, want %q", reason, StopReasonMaxTurnExceeded)
 	}
 	if detail != "runtime: max turn limit reached (40)" {
 		t.Fatalf("detail = %q, want max turn detail", detail)
@@ -98,5 +98,28 @@ func TestDecideStopReasonDetails(t *testing.T) {
 	}
 	if detail != "runtime: stop reason undetermined" {
 		t.Fatalf("detail = %q, want undetermined detail", detail)
+	}
+
+	reason, detail = DecideStopReason(StopInput{
+		PreDecidedReason: StopReasonCompatibilityFallback,
+		PreDecidedDetail: "  fallback  ",
+	})
+	if reason != StopReasonCompatibilityFallback || detail != "fallback" {
+		t.Fatalf("pre-decided mismatch, got (%q, %q)", reason, detail)
+	}
+
+	reason, detail = DecideStopReason(StopInput{MaxTurnsReached: true})
+	if reason != StopReasonMaxTurnExceeded || detail != "" {
+		t.Fatalf("max-turn no-limit mismatch, got (%q, %q)", reason, detail)
+	}
+
+	reason, detail = DecideStopReason(StopInput{RetryExhausted: true})
+	if reason != StopReasonRetryExhausted || detail != "" {
+		t.Fatalf("retry exhausted mismatch, got (%q, %q)", reason, detail)
+	}
+
+	reason, detail = DecideStopReason(StopInput{VerificationFailed: true})
+	if reason != StopReasonVerificationFailed || detail != "" {
+		t.Fatalf("verification failed mismatch, got (%q, %q)", reason, detail)
 	}
 }

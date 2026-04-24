@@ -2,7 +2,6 @@ package runtime
 
 import (
 	"bytes"
-	"context"
 	"errors"
 	"log"
 	"testing"
@@ -32,7 +31,7 @@ func TestHandleRunErrorProviderErrorDoesNotWriteStdLog(t *testing.T) {
 		log.SetPrefix(oldPrefix)
 	})
 
-	err := service.handleRunError(context.Background(), "run-1", "session-1", providerErr)
+	err := service.handleRunError(providerErr)
 	if !errors.Is(err, providerErr) {
 		t.Fatalf("expected provider error passthrough, got %v", err)
 	}

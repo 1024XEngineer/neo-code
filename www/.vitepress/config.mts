@@ -1,15 +1,42 @@
 import { defineConfig } from "vitepress";
 
+// --- 环境变量检测逻辑 ---
+const isVercel = process.env.VERCEL === "1";
+const isCFPages = process.env.CF_PAGES === "1"; 
+
+const isRootDeploy = isVercel || isCFPages;
+
 const repoUrl = "https://github.com/1024XEngineer/neo-code";
 const docsBase = `${repoUrl}/blob/main/docs`;
-const siteUrl = "https://1024xengineer.github.io/neo-code/";
+
+// 核心修改 1：动态基础路径
+const base = isRootDeploy ? "/" : "/neo-code/";
+
+// 👇👇👇 新增这段调试日志 👇👇👇
+console.log("====== VitePress Build Info ======");
+console.log("VERCEL Env:", process.env.VERCEL);
+console.log("CF_PAGES Env:", process.env.CF_PAGES);
+console.log("Final Base Path:", base);
+console.log("==================================");
+
+// 核心修改 2：动态站点 URL
+let siteUrl = "https://1024xengineer.github.io/neo-code/";
+if (isVercel) {
+  siteUrl = `https://${process.env.VERCEL_URL || 'neocode-docs.vercel.app'}/`;
+} else if (isCFPages) {
+  siteUrl = "https://neocode-docs.pages.dev/"; 
+}
+
 const brandImageUrl = `${siteUrl}brand/neocode-mark.png`;
 
 export default defineConfig({
   title: "NeoCode",
   description: "基于 Go + Bubble Tea 的本地 Coding Agent 用户指南",
   lang: "zh-CN",
-  base: "/neo-code/",
+  
+  // 使用动态计算的 base
+  base: base,
+  
   cleanUrls: true,
   lastUpdated: true,
   head: [
@@ -19,8 +46,7 @@ export default defineConfig({
       "meta",
       {
         property: "og:description",
-        content:
-          "围绕真实命令、配置与 Gateway 使用场景整理的 NeoCode 用户指导网站。",
+        content: "围绕真实命令、配置与 Gateway 使用场景整理的 NeoCode 用户指导网站。",
       },
     ],
     ["meta", { property: "og:type", content: "website" }],
@@ -32,7 +58,8 @@ export default defineConfig({
       },
     ],
     ["meta", { name: "twitter:card", content: "summary" }],
-    ["link", { rel: "icon", href: "/neo-code/brand/neocode-mark.png" }],
+    // Favicon 路径随 base 变化
+    ["link", { rel: "icon", href: `${base}brand/neocode-mark.png` }],
   ],
   markdown: {
     config(md) {
@@ -40,7 +67,7 @@ export default defineConfig({
     },
   },
   themeConfig: {
-    logo: "/brand/neocode-mark.png",
+    logo: "/brand/neocode-mark.png", 
     siteTitle: "NeoCode",
     search: {
       provider: "local",
@@ -114,10 +141,7 @@ export default defineConfig({
             },
           ],
         },
-        outline: {
-          level: [2, 3],
-          label: "本页目录",
-        },
+        outline: false,
         docFooter: {
           prev: "上一页",
           next: "下一页",
@@ -161,10 +185,7 @@ export default defineConfig({
             },
           ],
         },
-        outline: {
-          level: [2, 3],
-          label: "On this page",
-        },
+        outline: false,
         docFooter: {
           prev: "Previous page",
           next: "Next page",
