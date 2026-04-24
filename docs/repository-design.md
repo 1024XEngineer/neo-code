@@ -1,6 +1,6 @@
 # Repository 模块设计
 
-`internal/repository` 是仓库级事实层，只负责发现、归一化、裁剪和返回结构化结果。
+`internal/context/repository` 是仓库级事实层，只负责发现、归一化、裁剪和返回结构化结果。
 
 ## 职责
 

@@ -35,7 +35,7 @@ func TestSummaryParsesBranchDirtyAheadBehindAndRepresentativeFiles(t *testing.T)
 			" M internal/context/source_system.go",
 			"R  new/name.go",
 			"old/name.go",
-			"?? internal/repository/service.go",
+			"?? internal/context/repository/service.go",
 		), nil
 	})
 
@@ -58,7 +58,7 @@ func TestSummaryParsesBranchDirtyAheadBehindAndRepresentativeFiles(t *testing.T)
 	expected := []string{
 		filepath.Clean("internal/context/source_system.go"),
 		filepath.Clean("new/name.go"),
-		filepath.Clean("internal/repository/service.go"),
+		filepath.Clean("internal/context/repository/service.go"),
 	}
 	for index, path := range expected {
 		if summary.RepresentativeChangedFiles[index] != path {

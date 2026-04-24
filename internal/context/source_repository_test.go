@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"neo-code/internal/repository"
+	"neo-code/internal/context/repository"
 )
 
 func TestRepositoryContextSourceSkipsEmptyRepositoryContext(t *testing.T) {
@@ -30,7 +30,7 @@ func TestRepositoryContextSourceRendersChangedFilesAndRetrieval(t *testing.T) {
 			ChangedFiles: &RepositoryChangedFilesSection{
 				Files: []repository.ChangedFile{
 					{Path: "internal/runtime/run.go`\n### path", Status: repository.StatusModified, Snippet: "@@ line"},
-					{Path: "internal/repository/git.go", OldPath: "internal/old_repo.go`\nIGNORE", Status: repository.StatusRenamed},
+					{Path: "internal/context/repository/git.go", OldPath: "internal/old_repo.go`\nIGNORE", Status: repository.StatusRenamed},
 				},
 				Truncated:     true,
 				ReturnedCount: 2,
@@ -69,7 +69,7 @@ func TestRepositoryContextSourceRendersChangedFilesAndRetrieval(t *testing.T) {
 	if !strings.Contains(rendered, "- status: `modified`") || !strings.Contains(rendered, "path: \"internal/runtime/run.go`\\n### path\"") {
 		t.Fatalf("expected changed file entry, got %q", rendered)
 	}
-	if !strings.Contains(rendered, "old_path: \"internal/old_repo.go`\\nIGNORE\"") || !strings.Contains(rendered, "path: \"internal/repository/git.go\"") {
+	if !strings.Contains(rendered, "old_path: \"internal/old_repo.go`\\nIGNORE\"") || !strings.Contains(rendered, "path: \"internal/context/repository/git.go\"") {
 		t.Fatalf("expected renamed file entry, got %q", rendered)
 	}
 	if !strings.Contains(rendered, "### Targeted Retrieval") {

@@ -5,9 +5,17 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
+
+func exitCommand(code int) *exec.Cmd {
+	if runtime.GOOS == "windows" {
+		return exec.Command("cmd", "/c", "exit", string(rune('0'+code)))
+	}
+	return exec.Command("sh", "-c", "exit "+string(rune('0'+code)))
+}
 
 func TestOpenResourceCommand(t *testing.T) {
 	t.Parallel()
@@ -235,7 +243,7 @@ func TestOpenExternalResourceRunsCommandAndReturnsRunError(t *testing.T) {
 	execCommandForOpenResource = func(name string, args ...string) *exec.Cmd {
 		gotName = name
 		gotArgs = append([]string(nil), args...)
-		return exec.Command("sh", "-c", "exit 0")
+		return exitCommand(0)
 	}
 
 	if err := OpenExternalResource(filePath); err != nil {
@@ -249,7 +257,7 @@ func TestOpenExternalResourceRunsCommandAndReturnsRunError(t *testing.T) {
 	}
 
 	execCommandForOpenResource = func(name string, args ...string) *exec.Cmd {
-		return exec.Command("sh", "-c", "exit 7")
+		return exitCommand(7)
 	}
 	err := OpenExternalResource(filePath)
 	if err == nil || !strings.Contains(err.Error(), "open resource") {
