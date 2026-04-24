@@ -24,66 +24,66 @@ func NewEngine(policy AcceptancePolicy) *Engine {
 
 // EvaluateFinal 执行 final 验收并输出结构化决策。
 func (e *Engine) EvaluateFinal(ctx context.Context, input FinalAcceptanceInput) (AcceptanceDecision, error) {
+	var decision AcceptanceDecision
 	if !input.CompletionGate.Passed {
-		return AcceptanceDecision{
+		decision = AcceptanceDecision{
 			Status:             AcceptanceContinue,
 			StopReason:         controlplane.StopReasonTodoNotConverged,
 			UserVisibleSummary: "当前回合尚未达到可收尾条件，继续执行。",
 			InternalSummary:    "completion gate did not pass",
 			ContinueHint:       "There are unfinished required todos or unmet acceptance checks. Continue execution. Do not finalize yet.",
 			HasProgress:        false,
-		}, nil
-	}
-
-	verificationCfg := input.VerificationInput.VerificationConfig
-	hookCfg := verificationCfg.Hooks
-	verifierEnabled := verificationCfg.EnabledValue()
-
-	var decision AcceptanceDecision
-	if verifierEnabled {
-		verifiers := e.policy.ResolveVerifiers(input.VerificationInput)
-		if hookDecision, failed := runHookStage(
-			ctx,
-			hookCfg.BeforeVerification,
-			hookStageBeforeVerification,
-			beforeVerificationHooks(len(verifiers)),
-			input,
-		); failed {
-			return hookDecision, nil
 		}
-
-		orch := verify.Orchestrator{Verifiers: verifiers}
-		gateDecision, err := orch.RunFinalVerification(ctx, input.VerificationInput)
-		if err != nil {
-			return AcceptanceDecision{}, err
-		}
-		if hookDecision, failed := runHookStage(
-			ctx,
-			hookCfg.AfterVerification,
-			hookStageAfterVerification,
-			afterVerificationHooks(len(gateDecision.Results)),
-			input,
-		); failed {
-			return hookDecision, nil
-		}
-		decision = aggregateVerificationDecision(gateDecision)
 	} else {
-		decision = AcceptanceDecision{
-			Status:             AcceptanceAccepted,
-			StopReason:         controlplane.StopReasonCompatibilityFallback,
-			UserVisibleSummary: "已通过兼容路径接受 final（验证引擎关闭）。",
-			InternalSummary:    "verification disabled, compatibility fallback accepted",
-			HasProgress:        true,
+		verificationCfg := input.VerificationInput.VerificationConfig
+		hookCfg := verificationCfg.Hooks
+		verifierEnabled := verificationCfg.EnabledValue()
+
+		if verifierEnabled {
+			verifiers := e.policy.ResolveVerifiers(input.VerificationInput)
+			if hookDecision, failed := runHookStage(
+				ctx,
+				hookCfg.BeforeVerification,
+				hookStageBeforeVerification,
+				beforeVerificationHooks(len(verifiers)),
+				input,
+			); failed {
+				return hookDecision, nil
+			}
+
+			orch := verify.Orchestrator{Verifiers: verifiers}
+			gateDecision, err := orch.RunFinalVerification(ctx, input.VerificationInput)
+			if err != nil {
+				return AcceptanceDecision{}, err
+			}
+			if hookDecision, failed := runHookStage(
+				ctx,
+				hookCfg.AfterVerification,
+				hookStageAfterVerification,
+				afterVerificationHooks(len(gateDecision.Results)),
+				input,
+			); failed {
+				return hookDecision, nil
+			}
+			decision = aggregateVerificationDecision(gateDecision)
+		} else {
+			decision = AcceptanceDecision{
+				Status:             AcceptanceAccepted,
+				StopReason:         controlplane.StopReasonCompatibilityFallback,
+				UserVisibleSummary: "已通过兼容路径接受 final（验证引擎关闭）。",
+				InternalSummary:    "verification disabled, compatibility fallback accepted",
+				HasProgress:        true,
+			}
 		}
-	}
-	if hookDecision, failed := runHookStage(
-		ctx,
-		hookCfg.BeforeCompletionDecision,
-		hookStageBeforeCompletionDecision,
-		beforeCompletionDecisionHooks(),
-		input,
-	); failed {
-		return hookDecision, nil
+		if hookDecision, failed := runHookStage(
+			ctx,
+			hookCfg.BeforeCompletionDecision,
+			hookStageBeforeCompletionDecision,
+			beforeCompletionDecisionHooks(),
+			input,
+		); failed {
+			return hookDecision, nil
+		}
 	}
 	if input.NoProgressExceeded && decision.Status == AcceptanceContinue {
 		decision.Status = AcceptanceIncomplete

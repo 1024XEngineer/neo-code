@@ -46,6 +46,25 @@ func TestBeforeAcceptFinalDecisionPaths(t *testing.T) {
 		}
 	})
 
+	t.Run("completion gate false with no progress exceeded -> incomplete", func(t *testing.T) {
+		t.Parallel()
+		state := newRunState("run-continue-no-progress", agentsession.New("continue-no-progress"))
+		state.progress.LastScore.NoProgressStreak = snapshot.Config.Runtime.Verification.MaxNoProgress
+		decision, err := service.beforeAcceptFinal(context.Background(), &state, snapshot, providertypes.Message{
+			Role:  providertypes.RoleAssistant,
+			Parts: []providertypes.ContentPart{providertypes.NewTextPart("done")},
+		}, false)
+		if err != nil {
+			t.Fatalf("beforeAcceptFinal() error = %v", err)
+		}
+		if decision.Status != "incomplete" {
+			t.Fatalf("status = %q, want incomplete", decision.Status)
+		}
+		if decision.StopReason != "no_progress_after_final_intercept" {
+			t.Fatalf("stop_reason = %q, want no_progress_after_final_intercept", decision.StopReason)
+		}
+	})
+
 	t.Run("continue carries runtime progress signal", func(t *testing.T) {
 		t.Parallel()
 		state := newRunState("run-continue-progress", agentsession.New("continue-progress"))
