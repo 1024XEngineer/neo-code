@@ -45,6 +45,37 @@ neocode update --prerelease
 - `available-assets-count`
 - `candidate-assets`（最多展示前 10 个，单项最长 120 字符）
 
+## 双产物安装建议
+
+1. Full 模式：安装 `neocode`。
+2. Gateway 模式：安装 `neocode-gateway`。
+
+安装脚本支持 flavor：
+
+```bash
+bash ./scripts/install.sh --flavor full
+bash ./scripts/install.sh --flavor gateway
+```
+
+```powershell
+.\scripts\install.ps1 -Flavor full
+.\scripts\install.ps1 -Flavor gateway
+```
+
+## 升级后验证（推荐）
+
+1. `GET /healthz` 返回 200。
+2. `/rpc` 未鉴权请求返回预期失败（`gateway_code=unauthorized`）。
+3. 必要时执行一次最小 `gateway.run` 冒烟。
+
+## 回滚步骤
+
+1. 停止当前网关进程。
+2. 回退到上一版已验证二进制。
+3. 重新启动并执行“升级后验证（推荐）”步骤。
+
+若回滚后仍异常，优先检查配置文件兼容性与 token 文件状态。
+
 ## 版本来源
 
 - 发布构建会通过 `ldflags` 注入版本号到 `internal/version.Version`。
