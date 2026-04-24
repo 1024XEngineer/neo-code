@@ -1,8 +1,10 @@
 package repository
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -18,9 +20,19 @@ const (
 	maxChangedFilesLimit            = 200
 	maxChangedSnippetLinesPerFile   = 20
 	maxChangedSnippetTotalLines     = 200
+	maxChangedDiffBytes             = 64 * 1024
 )
 
-type gitCommandRunner func(ctx context.Context, workdir string, args ...string) (string, error)
+type gitCommandOptions struct {
+	MaxOutputBytes int
+}
+
+type gitCommandOutput struct {
+	text      string
+	truncated bool
+}
+
+type gitCommandRunner func(ctx context.Context, workdir string, opts gitCommandOptions, args ...string) (gitCommandOutput, error)
 
 type gitSnapshot struct {
 	InGitRepo bool
@@ -45,18 +57,18 @@ func (s *Service) loadGitSnapshot(ctx context.Context, workdir string) (gitSnaps
 		return gitSnapshot{}, nil
 	}
 
-	output, err := s.gitRunner(ctx, workdir, "status", "--porcelain=v1", "-z", "--branch", "--untracked-files=normal")
+	output, err := s.gitRunner(ctx, workdir, gitCommandOptions{}, "status", "--porcelain=v1", "-z", "--branch", "--untracked-files=normal")
 	if err != nil {
 		if isContextError(err) {
 			return gitSnapshot{}, err
 		}
-		if isNotGitRepository(output, err) {
+		if isNotGitRepository(output.text, err) || isAmbiguousGitStatusOutsideRepo(workdir, output.text, err) {
 			return gitSnapshot{}, nil
 		}
 		return gitSnapshot{}, err
 	}
 
-	return parseGitSnapshot(output), nil
+	return parseGitSnapshot(output.text), nil
 }
 
 // changedFileSnippet 按固定语义为单个变更条目生成受限片段。
@@ -98,14 +110,18 @@ func (s *Service) readDiffSnippet(ctx context.Context, workdir string, path stri
 	if !allowed {
 		return snippetResult{}, nil
 	}
-	output, err := s.gitRunner(ctx, workdir, "diff", "--unified=3", "HEAD", "--", filepath.ToSlash(path))
+	output, err := s.gitRunner(ctx, workdir, gitCommandOptions{MaxOutputBytes: maxChangedDiffBytes}, "diff", "--unified=3", "HEAD", "--", filepath.ToSlash(path))
 	if err != nil {
 		if isContextError(err) {
 			return snippetResult{}, err
 		}
 		return snippetResult{}, err
 	}
-	return trimSnippetText(output, maxChangedSnippetLinesPerFile), nil
+	snippet := trimSnippetText(output.text, maxChangedSnippetLinesPerFile)
+	if output.truncated {
+		snippet.truncated = true
+	}
+	return snippet, nil
 }
 
 // readFileHeadSnippet 读取工作树文件头部片段，供新增或未跟踪文件回退使用。
@@ -290,13 +306,44 @@ func normalizeStatus(x byte, y byte) ChangedFileStatus {
 }
 
 // runGitCommand 统一执行 git 子命令，并在超时后主动取消。
-func runGitCommand(ctx context.Context, workdir string, args ...string) (string, error) {
+func runGitCommand(ctx context.Context, workdir string, opts gitCommandOptions, args ...string) (gitCommandOutput, error) {
 	timeoutCtx, cancel := context.WithTimeout(ctx, gitCommandTimeout)
 	defer cancel()
 
 	command := exec.CommandContext(timeoutCtx, "git", append([]string{"-C", workdir}, args...)...)
-	output, err := command.CombinedOutput()
-	return string(output), err
+	buffer := &gitOutputBuffer{maxBytes: opts.MaxOutputBytes}
+	command.Stdout = buffer
+	command.Stderr = io.MultiWriter(buffer)
+	err := command.Run()
+	return gitCommandOutput{text: buffer.String(), truncated: buffer.truncated}, err
+}
+
+type gitOutputBuffer struct {
+	bytes.Buffer
+	maxBytes  int
+	truncated bool
+}
+
+func (b *gitOutputBuffer) Write(p []byte) (int, error) {
+	if b.maxBytes > 0 {
+		remaining := b.maxBytes - b.Len()
+		if remaining > 0 {
+			if len(p) > remaining {
+				_, _ = b.Buffer.Write(p[:remaining])
+				b.truncated = true
+			} else {
+				_, _ = b.Buffer.Write(p)
+			}
+		} else {
+			b.truncated = true
+		}
+		return len(p), nil
+	}
+	return b.Buffer.Write(p)
+}
+
+func (b *gitOutputBuffer) String() string {
+	return string(bytes.ToValidUTF8(b.Buffer.Bytes(), nil))
 }
 
 // isNotGitRepository 判断命令失败是否只是因为当前目录不是 git 仓库。
@@ -309,6 +356,34 @@ func isNotGitRepository(output string, err error) bool {
 		return true
 	}
 	return strings.Contains(strings.ToLower(err.Error()), "not a git repository")
+}
+
+// isAmbiguousGitStatusOutsideRepo 处理 git status 在非仓库目录中仅返回 exit status 128 的模糊场景。
+func isAmbiguousGitStatusOutsideRepo(workdir string, output string, err error) bool {
+	if err == nil || strings.TrimSpace(output) != "" || !strings.Contains(strings.ToLower(err.Error()), "exit status 128") {
+		return false
+	}
+	info, statErr := os.Stat(workdir)
+	if statErr != nil || !info.IsDir() {
+		return false
+	}
+	return !hasGitMetadataAncestor(workdir)
+}
+
+// hasGitMetadataAncestor 向上查找 .git 元数据入口，用于区分真实仓库与空目录。
+func hasGitMetadataAncestor(workdir string) bool {
+	current := filepath.Clean(workdir)
+	for {
+		gitPath := filepath.Join(current, ".git")
+		if _, err := os.Stat(gitPath); err == nil {
+			return true
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return false
+		}
+		current = parent
+	}
 }
 
 // isContextError 用于保留上下文取消与超时等主链路错误语义。

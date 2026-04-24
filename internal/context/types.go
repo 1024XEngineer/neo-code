@@ -17,19 +17,29 @@ type Builder interface {
 
 // BuildInput contains the runtime state needed to assemble model context.
 type BuildInput struct {
-	Messages     []providertypes.Message
-	TaskState    agentsession.TaskState
-	Todos        []agentsession.TodoItem
-	ActiveSkills []skills.Skill
-	Repository   RepositoryContext
-	Metadata     Metadata
-	Compact      CompactOptions
+	Messages          []providertypes.Message
+	TaskState         agentsession.TaskState
+	Todos             []agentsession.TodoItem
+	ActiveSkills      []skills.Skill
+	RepositorySummary *RepositorySummarySection
+	Repository        RepositoryContext
+	Metadata          Metadata
+	Compact           CompactOptions
 }
 
 // BuildResult is the provider-facing context produced for a single round.
 type BuildResult struct {
 	SystemPrompt string
 	Messages     []providertypes.Message
+}
+
+// RepositorySummarySection 承载 runtime 已决策好的最小 repository summary 投影。
+type RepositorySummarySection struct {
+	InGitRepo bool
+	Branch    string
+	Dirty     bool
+	Ahead     int
+	Behind    int
 }
 
 // RepositoryContext 承载 runtime 已决策好的 repository 事实投影，供 context 只读渲染。

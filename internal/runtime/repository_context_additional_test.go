@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"testing"
 
 	providertypes "neo-code/internal/provider/types"
@@ -18,15 +19,15 @@ func TestBuildRepositoryContextEarlyReturnAndFatalPaths(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := service.buildRepositoryContext(ctx, &state, state.session.Workdir); !errors.Is(err, context.Canceled) {
+	if _, _, err := service.buildRepositoryContext(ctx, &state, state.session.Workdir); !errors.Is(err, context.Canceled) {
 		t.Fatalf("buildRepositoryContext(canceled) err = %v", err)
 	}
 
-	if got, err := service.buildRepositoryContext(context.Background(), nil, state.session.Workdir); err != nil || got.ChangedFiles != nil || got.Retrieval != nil {
-		t.Fatalf("buildRepositoryContext(nil state) = (%+v, %v)", got, err)
+	if summary, got, err := service.buildRepositoryContext(context.Background(), nil, state.session.Workdir); err != nil || summary != nil || got.ChangedFiles != nil || got.Retrieval != nil {
+		t.Fatalf("buildRepositoryContext(nil state) = (%+v, %+v, %v)", summary, got, err)
 	}
-	if got, err := service.buildRepositoryContext(context.Background(), &state, " "); err != nil || got.ChangedFiles != nil || got.Retrieval != nil {
-		t.Fatalf("buildRepositoryContext(empty workdir) = (%+v, %v)", got, err)
+	if summary, got, err := service.buildRepositoryContext(context.Background(), &state, " "); err != nil || summary != nil || got.ChangedFiles != nil || got.Retrieval != nil {
+		t.Fatalf("buildRepositoryContext(empty workdir) = (%+v, %+v, %v)", summary, got, err)
 	}
 
 	nonUserState := newRepositoryTestState(t.TempDir(), "ignored")
@@ -34,30 +35,28 @@ func TestBuildRepositoryContextEarlyReturnAndFatalPaths(t *testing.T) {
 		Role:  providertypes.RoleAssistant,
 		Parts: []providertypes.ContentPart{providertypes.NewTextPart("assistant")},
 	}}
-	if got, err := service.buildRepositoryContext(context.Background(), &nonUserState, nonUserState.session.Workdir); err != nil || got.ChangedFiles != nil || got.Retrieval != nil {
-		t.Fatalf("buildRepositoryContext(no user text) = (%+v, %v)", got, err)
+	if summary, got, err := service.buildRepositoryContext(context.Background(), &nonUserState, nonUserState.session.Workdir); err != nil || got.ChangedFiles != nil || got.Retrieval != nil || summary != nil {
+		t.Fatalf("buildRepositoryContext(no user text) = (%+v, %+v, %v)", summary, got, err)
 	}
 
-	fatalFromChanged := &Service{
+	fatalFromInspect := &Service{
 		repositoryService: &stubRepositoryFactService{
-			changedFilesFn: func(ctx context.Context, workdir string, opts repository.ChangedFilesOptions) (repository.ChangedFilesContext, error) {
-				return repository.ChangedFilesContext{}, context.DeadlineExceeded
+			inspectFn: func(ctx context.Context, workdir string, opts repository.InspectOptions) (repository.InspectResult, error) {
+				return repository.InspectResult{}, context.DeadlineExceeded
 			},
 		},
 		events: make(chan RuntimeEvent, 8),
 	}
-	if _, err := fatalFromChanged.buildRepositoryContext(context.Background(), &state, state.session.Workdir); !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("expected fatal changed-files error, got %v", err)
+	if _, _, err := fatalFromInspect.buildRepositoryContext(context.Background(), &state, state.session.Workdir); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected fatal inspect error, got %v", err)
 	}
 
+	workdir := t.TempDir()
+	mustRuntimeWriteFile(t, filepath.Join(workdir, "README.md"), "# readme\n")
 	fatalFromRetrieval := &Service{
 		repositoryService: &stubRepositoryFactService{
-			changedFilesFn: func(ctx context.Context, workdir string, opts repository.ChangedFilesOptions) (repository.ChangedFilesContext, error) {
-				return repository.ChangedFilesContext{
-					Files:         []repository.ChangedFile{{Path: "a.go", Status: repository.StatusModified}},
-					ReturnedCount: 1,
-					TotalCount:    1,
-				}, nil
+			inspectFn: func(ctx context.Context, workdir string, opts repository.InspectOptions) (repository.InspectResult, error) {
+				return repository.InspectResult{Summary: repository.Summary{InGitRepo: true, Branch: "main"}}, nil
 			},
 			retrieveFn: func(ctx context.Context, workdir string, query repository.RetrievalQuery) (repository.RetrievalResult, error) {
 				return repository.RetrievalResult{}, context.Canceled
@@ -65,175 +64,74 @@ func TestBuildRepositoryContextEarlyReturnAndFatalPaths(t *testing.T) {
 		},
 		events: make(chan RuntimeEvent, 8),
 	}
-	retrievalState := newRepositoryTestState(t.TempDir(), "review 当前改动并看 internal/runtime/run.go")
-	_, err := fatalFromRetrieval.buildRepositoryContext(context.Background(), &retrievalState, retrievalState.session.Workdir)
+	retrievalState := newRepositoryTestState(workdir, "看看 README.md")
+	_, _, err := fatalFromRetrieval.buildRepositoryContext(context.Background(), &retrievalState, retrievalState.session.Workdir)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected fatal retrieval error, got %v", err)
 	}
 }
 
-func TestRepositoryContextBranchFunctions(t *testing.T) {
+func TestRepositoryContextHelpers(t *testing.T) {
 	t.Parallel()
 
-	service := &Service{repositoryService: &stubRepositoryFactService{}, events: make(chan RuntimeEvent, 8)}
 	workdir := t.TempDir()
+	mustRuntimeWriteFile(t, filepath.Join(workdir, "README.md"), "# readme\n")
+	mustRuntimeWriteFile(t, filepath.Join(workdir, "internal", "runtime", "run.go"), "package runtime\n")
 
-	t.Run("repositoryFacts fallback", func(t *testing.T) {
-		t.Parallel()
+	if got := changedFilesLimitForUserText(false); got != defaultAutoChangedFilesLimit {
+		t.Fatalf("changedFilesLimitForUserText(false) = %d", got)
+	}
+	if got := changedFilesLimitForUserText(true); got != defaultAutoChangedFilesWithDiff {
+		t.Fatalf("changedFilesLimitForUserText(true) = %d", got)
+	}
 
-		if got := ((*Service)(nil)).repositoryFacts(); got == nil {
-			t.Fatalf("expected default repository service for nil runtime")
-		}
-		if got := (&Service{}).repositoryFacts(); got == nil {
-			t.Fatalf("expected default repository service for missing repositoryService")
-		}
+	if projectRepositorySummary(repository.Summary{}) != nil {
+		t.Fatalf("expected nil summary projection for non-git")
+	}
+	summary := projectRepositorySummary(repository.Summary{
+		InGitRepo: true,
+		Branch:    "main",
+		Dirty:     true,
+		Ahead:     2,
+		Behind:    1,
 	})
-
-	t.Run("changed files context decisions", func(t *testing.T) {
-		t.Parallel()
-
-		noIntent, err := service.maybeBuildChangedFilesContext(context.Background(), service.repositoryFacts(), workdir, "解释一下架构")
-		if err != nil || noIntent != nil {
-			t.Fatalf("maybeBuildChangedFilesContext(no intent) = (%+v, %v)", noIntent, err)
-		}
-
-		repoService := &stubRepositoryFactService{
-			changedFilesFn: func(ctx context.Context, workdir string, opts repository.ChangedFilesOptions) (repository.ChangedFilesContext, error) {
-				return repository.ChangedFilesContext{
-					Files:         []repository.ChangedFile{{Path: "a.go", Status: repository.StatusModified}},
-					ReturnedCount: 1,
-					TotalCount:    1,
-				}, nil
-			},
-		}
-		section, err := service.maybeBuildChangedFilesContext(context.Background(), repoService, workdir, "当前改动有哪些")
-		if err != nil || section == nil {
-			t.Fatalf("maybeBuildChangedFilesContext(explicit) = (%+v, %v)", section, err)
-		}
-		if repoService.lastChangedOptions.IncludeSnippets {
-			t.Fatalf("expected snippets disabled for explicit intent without snippet keywords")
-		}
-
-		repoService = &stubRepositoryFactService{
-			changedFilesFn: func(ctx context.Context, workdir string, opts repository.ChangedFilesOptions) (repository.ChangedFilesContext, error) {
-				return repository.ChangedFilesContext{
-					Files:         []repository.ChangedFile{{Path: "a.go", Status: repository.StatusModified}},
-					ReturnedCount: 1,
-					TotalCount:    maxAutoChangedFilesCount + 1,
-				}, nil
-			},
-		}
-		section, err = service.maybeBuildChangedFilesContext(context.Background(), repoService, workdir, "请修复这个 bug")
-		if err != nil || section != nil {
-			t.Fatalf("expected oversized implicit changed files to be skipped, got (%+v, %v)", section, err)
-		}
-
-		repoService = &stubRepositoryFactService{
-			changedFilesFn: func(ctx context.Context, workdir string, opts repository.ChangedFilesOptions) (repository.ChangedFilesContext, error) {
-				return repository.ChangedFilesContext{}, errors.New("changed failed")
-			},
-		}
-		if _, err := service.maybeBuildChangedFilesContext(context.Background(), repoService, workdir, "请修复 bug"); err == nil {
-			t.Fatalf("expected changed-files error")
-		}
-
-		repoService = &stubRepositoryFactService{
-			changedFilesFn: func(ctx context.Context, workdir string, opts repository.ChangedFilesOptions) (repository.ChangedFilesContext, error) {
-				return repository.ChangedFilesContext{}, nil
-			},
-		}
-		section, err = service.maybeBuildChangedFilesContext(context.Background(), repoService, workdir, "请修复 bug 并 review diff")
-		if err != nil || section != nil {
-			t.Fatalf("expected nil changed-files section when no files returned, got (%+v, %v)", section, err)
-		}
-	})
-
-	t.Run("retrieval context decisions", func(t *testing.T) {
-		t.Parallel()
-
-		repoService := &stubRepositoryFactService{}
-		if query, ok := autoRetrievalQueryFromUserText("解释这个模块"); ok {
-			t.Fatalf("expected no query, got %+v", query)
-		}
-		if repoService.retrieveCalls != 0 {
-			t.Fatalf("expected no retrieval calls without anchors")
-		}
-
-		repoService = &stubRepositoryFactService{
-			retrieveFn: func(ctx context.Context, workdir string, query repository.RetrievalQuery) (repository.RetrievalResult, error) {
-				return repository.RetrievalResult{}, errors.New("retrieve failed")
-			},
-		}
-		query, ok := autoRetrievalQueryFromUserText("请看 internal/runtime/run.go")
-		if !ok {
-			t.Fatalf("expected path query")
-		}
-		if _, err := service.buildRetrievalContextForQuery(context.Background(), repoService, workdir, query); err == nil {
-			t.Fatalf("expected retrieval error")
-		}
-
-		repoService = &stubRepositoryFactService{
-			retrieveFn: func(ctx context.Context, workdir string, query repository.RetrievalQuery) (repository.RetrievalResult, error) {
-				return repository.RetrievalResult{}, nil
-			},
-		}
-		section, err := service.buildRetrievalContextForQuery(context.Background(), repoService, workdir, query)
-		if err != nil || section != nil {
-			t.Fatalf("expected nil retrieval section when no hits, got (%+v, %v)", section, err)
-		}
-	})
-}
-
-func TestRepositoryContextTextExtractionAndAnchors(t *testing.T) {
-	t.Parallel()
-
-	messages := []providertypes.Message{
-		{
-			Role: providertypes.RoleAssistant,
-			Parts: []providertypes.ContentPart{
-				providertypes.NewTextPart("assistant"),
-			},
-		},
-		{
-			Role: providertypes.RoleUser,
-			Parts: []providertypes.ContentPart{
-				{Kind: providertypes.ContentPartImage},
-				providertypes.NewTextPart("  foo  "),
-				providertypes.NewTextPart("bar"),
-			},
-		},
-	}
-	if got := latestUserText(messages); got != "foo\nbar" {
-		t.Fatalf("latestUserText() = %q, want %q", got, "foo\nbar")
-	}
-	if got := latestUserText(nil); got != "" {
-		t.Fatalf("latestUserText(nil) = %q, want empty", got)
+	if summary == nil || summary.Branch != "main" || !summary.Dirty || summary.Ahead != 2 || summary.Behind != 1 {
+		t.Fatalf("unexpected summary projection: %+v", summary)
 	}
 
-	if !shouldAutoInjectChangedFiles("请看 changed files") || shouldAutoInjectChangedFiles("just chat") {
-		t.Fatalf("shouldAutoInjectChangedFiles() mismatch")
+	if changedFilesProjectionForUserText("解释架构", repository.ChangedFilesContext{
+		Files:         []repository.ChangedFile{{Path: "a.go", Status: repository.StatusModified}},
+		ReturnedCount: 1,
+		TotalCount:    maxAutoChangedFilesCount + 1,
+	}) != nil {
+		t.Fatalf("expected implicit large changed-files set to be dropped")
 	}
-	if shouldAutoInjectChangedFiles("   ") {
-		t.Fatalf("expected empty input to not trigger changed-files injection")
-	}
-	if !shouldAutoIncludeChangedFileSnippets("please review diff") || shouldAutoIncludeChangedFileSnippets("just explain") {
-		t.Fatalf("shouldAutoIncludeChangedFileSnippets() mismatch")
-	}
-	if shouldAutoIncludeChangedFileSnippets(" ") {
-		t.Fatalf("expected empty input to not trigger snippet inclusion")
-	}
-	if !mentionsFixOrReviewIntent("debug this bug") || mentionsFixOrReviewIntent("architecture overview") {
-		t.Fatalf("mentionsFixOrReviewIntent() mismatch")
-	}
-	if mentionsFixOrReviewIntent(" ") {
-		t.Fatalf("expected empty input to not trigger fix/review intent")
+	if projection := changedFilesProjectionForUserText("review 我的改动", repository.ChangedFilesContext{
+		Files:         []repository.ChangedFile{{Path: "a.go", Status: repository.StatusModified}},
+		ReturnedCount: 1,
+		TotalCount:    maxAutoChangedFilesCount + 1,
+		Truncated:     true,
+	}); projection == nil || !projection.Truncated {
+		t.Fatalf("expected explicit changed-files projection, got %+v", projection)
 	}
 
-	if _, ok := autoPathRetrievalQuery("no path here"); ok {
-		t.Fatalf("expected no path query")
+	if query, ok := autoRetrievalQueryFromUserText(workdir, "解释这个模块"); ok {
+		t.Fatalf("expected no query, got %+v", query)
 	}
-	if query, ok := autoPathRetrievalQuery("`internal\\runtime\\run.go`"); !ok || query.Mode != repository.RetrievalModePath {
-		t.Fatalf("autoPathRetrievalQuery() = (%+v, %t)", query, ok)
+	if query, ok := autoPathRetrievalQuery(workdir, "`internal/runtime/run.go`"); !ok || query.Mode != repository.RetrievalModePath {
+		t.Fatalf("autoPathRetrievalQuery(subdir) = (%+v, %t)", query, ok)
+	}
+	if query, ok := autoPathRetrievalQuery(workdir, "README.md"); !ok || query.Value != "README.md" {
+		t.Fatalf("autoPathRetrievalQuery(root) = (%+v, %t)", query, ok)
+	}
+	if _, ok := autoPathRetrievalQuery(workdir, "missing.go"); ok {
+		t.Fatalf("expected missing root file to not trigger path retrieval")
+	}
+	if workspacePathAnchorExists(workdir, "README.md") == false {
+		t.Fatalf("expected README.md to exist as anchor")
+	}
+	if workspacePathAnchorExists(workdir, "missing.go") {
+		t.Fatalf("expected missing anchor to be rejected")
 	}
 
 	if _, ok := autoSymbolRetrievalQuery("BuildWidget 在吗"); ok {
@@ -250,16 +148,25 @@ func TestRepositoryContextTextExtractionAndAnchors(t *testing.T) {
 		t.Fatalf("autoTextRetrievalQuery() = (%+v, %t)", query, ok)
 	}
 
-	if query, ok := autoRetrievalQueryFromUserText("看看 internal/runtime/run.go 的 BuildWidget 和 `permission_requested`"); !ok || query.Mode != repository.RetrievalModePath {
+	if query, ok := autoRetrievalQueryFromUserText(workdir, "看看 README.md 的 BuildWidget 和 `permission_requested`"); !ok || query.Mode != repository.RetrievalModePath {
 		t.Fatalf("expected path query to win priority, got (%+v, %t)", query, ok)
 	}
 
+	if !shouldAutoInjectChangedFiles("请看 changed files") || shouldAutoInjectChangedFiles("just chat") {
+		t.Fatalf("shouldAutoInjectChangedFiles() mismatch")
+	}
+	if !shouldAutoIncludeChangedFileSnippets("please review diff") || shouldAutoIncludeChangedFileSnippets("just explain") {
+		t.Fatalf("shouldAutoIncludeChangedFileSnippets() mismatch")
+	}
+	if !mentionsFixOrReviewIntent("debug this bug") || mentionsFixOrReviewIntent("architecture overview") {
+		t.Fatalf("mentionsFixOrReviewIntent() mismatch")
+	}
 	if !isRepositoryContextFatalError(context.Canceled) || !isRepositoryContextFatalError(context.DeadlineExceeded) || isRepositoryContextFatalError(errors.New("x")) {
 		t.Fatalf("isRepositoryContextFatalError() mismatch")
 	}
 }
 
-func TestBuildRepositoryContextWithoutUserText(t *testing.T) {
+func TestBuildRepositoryContextWithoutUserTextStillProjectsSummary(t *testing.T) {
 	t.Parallel()
 
 	session := agentsession.NewWithWorkdir("repo test", t.TempDir())
@@ -270,11 +177,23 @@ func TestBuildRepositoryContextWithoutUserText(t *testing.T) {
 		},
 	}}
 	state := newRunState("run-no-user-text", session)
-	service := &Service{repositoryService: &stubRepositoryFactService{}, events: make(chan RuntimeEvent, 8)}
+	service := &Service{
+		repositoryService: &stubRepositoryFactService{
+			inspectFn: func(ctx context.Context, workdir string, opts repository.InspectOptions) (repository.InspectResult, error) {
+				return repository.InspectResult{
+					Summary: repository.Summary{InGitRepo: true, Branch: "main", Dirty: true},
+				}, nil
+			},
+		},
+		events: make(chan RuntimeEvent, 8),
+	}
 
-	got, err := service.buildRepositoryContext(context.Background(), &state, session.Workdir)
+	summary, got, err := service.buildRepositoryContext(context.Background(), &state, session.Workdir)
 	if err != nil {
 		t.Fatalf("buildRepositoryContext() err = %v", err)
+	}
+	if summary == nil || summary.Branch != "main" {
+		t.Fatalf("expected summary even without retrieval anchors, got %+v", summary)
 	}
 	if got.ChangedFiles != nil || got.Retrieval != nil {
 		t.Fatalf("expected empty repository context, got %+v", got)

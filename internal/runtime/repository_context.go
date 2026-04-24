@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	agentcontext "neo-code/internal/context"
 	providertypes "neo-code/internal/provider/types"
 	"neo-code/internal/repository"
+	"neo-code/internal/security"
 )
 
 const (
@@ -25,43 +27,55 @@ const (
 )
 
 var (
-	pathAnchorPattern   = regexp.MustCompile(`(?i)([a-z0-9_.-]+[\\/])+[a-z0-9_.-]+\.(go|md|ya?ml|json|toml|txt|sh)`)
+	pathAnchorPattern   = regexp.MustCompile(`(?i)(?:[a-z0-9_.-]+[\\/])*[a-z0-9_.-]+\.(go|md|ya?ml|json|toml|txt|sh)\b`)
 	symbolAnchorPattern = regexp.MustCompile(`\b[A-Z][A-Za-z0-9_]{2,}\b`)
 	quotedTextPattern   = regexp.MustCompile("`([^`]+)`|\"([^\"]+)\"|'([^']+)'")
 )
 
-// buildRepositoryContext 按当前轮输入意图条件化构建 repository 上下文，避免默认膨胀 prompt。
-func (s *Service) buildRepositoryContext(ctx context.Context, state *runState, activeWorkdir string) (agentcontext.RepositoryContext, error) {
+// buildRepositoryContext 按当前轮输入意图统一编排 repository summary、changed-files 与 retrieval 投影。
+func (s *Service) buildRepositoryContext(
+	ctx context.Context,
+	state *runState,
+	activeWorkdir string,
+) (*agentcontext.RepositorySummarySection, agentcontext.RepositoryContext, error) {
 	if err := ctx.Err(); err != nil {
-		return agentcontext.RepositoryContext{}, err
+		return nil, agentcontext.RepositoryContext{}, err
 	}
 	if strings.TrimSpace(activeWorkdir) == "" || state == nil {
-		return agentcontext.RepositoryContext{}, nil
+		return nil, agentcontext.RepositoryContext{}, nil
 	}
 
 	latestUserText := latestUserText(state.session.Messages)
-	if latestUserText == "" {
-		return agentcontext.RepositoryContext{}, nil
-	}
-
 	repoService := s.repositoryFacts()
 	repoContext := agentcontext.RepositoryContext{}
+	var summarySection *agentcontext.RepositorySummarySection
 
-	changedFiles, err := s.maybeBuildChangedFilesContext(ctx, repoService, activeWorkdir, latestUserText)
-	if err != nil {
-		if isRepositoryContextFatalError(err) {
-			return agentcontext.RepositoryContext{}, err
+	includeChangedFiles := latestUserText != "" && (shouldAutoInjectChangedFiles(latestUserText) || mentionsFixOrReviewIntent(latestUserText))
+	includeChangedSnippets := latestUserText != "" && shouldAutoIncludeChangedFileSnippets(latestUserText)
+	inspectResult, inspectErr := repoService.Inspect(ctx, activeWorkdir, repository.InspectOptions{
+		ChangedFilesLimit:                changedFilesLimitForUserText(includeChangedSnippets),
+		IncludeChangedFileSnippets:       includeChangedSnippets,
+		ChangedFileSnippetFileCountLimit: maxAutoSnippetChangedFilesCount,
+	})
+	if inspectErr != nil {
+		if isRepositoryContextFatalError(inspectErr) {
+			return nil, agentcontext.RepositoryContext{}, inspectErr
 		}
-		s.emitRepositoryContextUnavailable(ctx, state, "changed_files", "", err)
+		s.emitRepositoryContextUnavailable(ctx, state, "summary", "", inspectErr)
 	} else {
-		repoContext.ChangedFiles = changedFiles
+		summarySection = projectRepositorySummary(inspectResult.Summary)
+		if includeChangedFiles {
+			if changedFiles := changedFilesProjectionForUserText(latestUserText, inspectResult.ChangedFiles); changedFiles != nil {
+				repoContext.ChangedFiles = changedFiles
+			}
+		}
 	}
 
-	if query, ok := autoRetrievalQueryFromUserText(latestUserText); ok {
+	if query, ok := autoRetrievalQueryFromUserText(activeWorkdir, latestUserText); ok {
 		retrieval, retrievalErr := s.buildRetrievalContextForQuery(ctx, repoService, activeWorkdir, query)
 		if retrievalErr != nil {
 			if isRepositoryContextFatalError(retrievalErr) {
-				return agentcontext.RepositoryContext{}, retrievalErr
+				return nil, agentcontext.RepositoryContext{}, retrievalErr
 			}
 			s.emitRepositoryContextUnavailable(ctx, state, "retrieval", string(query.Mode), retrievalErr)
 		} else {
@@ -69,7 +83,7 @@ func (s *Service) buildRepositoryContext(ctx context.Context, state *runState, a
 		}
 	}
 
-	return repoContext, nil
+	return summarySection, repoContext, nil
 }
 
 // repositoryFacts 返回 runtime 当前使用的 repository 事实服务，并在缺省时回落到默认实现。
@@ -80,43 +94,40 @@ func (s *Service) repositoryFacts() repositoryFactService {
 	return repository.NewService()
 }
 
-// maybeBuildChangedFilesContext 仅在当前问题明显围绕改动集时提取 changed-files 上下文。
-func (s *Service) maybeBuildChangedFilesContext(
-	ctx context.Context,
-	repoService repositoryFactService,
-	workdir string,
-	userText string,
-) (*agentcontext.RepositoryChangedFilesSection, error) {
-	explicitChangedFilesIntent := shouldAutoInjectChangedFiles(userText)
-	includeSnippets := shouldAutoIncludeChangedFileSnippets(userText)
-	if !explicitChangedFilesIntent && !mentionsFixOrReviewIntent(userText) {
-		return nil, nil
-	}
-
-	limit := defaultAutoChangedFilesLimit
+func changedFilesLimitForUserText(includeSnippets bool) int {
 	if includeSnippets {
-		limit = defaultAutoChangedFilesWithDiff
+		return defaultAutoChangedFilesWithDiff
 	}
-	changed, err := repoService.ChangedFiles(ctx, workdir, repository.ChangedFilesOptions{
-		Limit:                 limit,
-		IncludeSnippets:       includeSnippets,
-		SnippetFileCountLimit: maxAutoSnippetChangedFilesCount,
-	})
-	if err != nil {
-		return nil, err
+	return defaultAutoChangedFilesLimit
+}
+
+func projectRepositorySummary(summary repository.Summary) *agentcontext.RepositorySummarySection {
+	if !summary.InGitRepo {
+		return nil
 	}
+	return &agentcontext.RepositorySummarySection{
+		InGitRepo: true,
+		Branch:    summary.Branch,
+		Dirty:     summary.Dirty,
+		Ahead:     summary.Ahead,
+		Behind:    summary.Behind,
+	}
+}
+
+func changedFilesProjectionForUserText(userText string, changed repository.ChangedFilesContext) *agentcontext.RepositoryChangedFilesSection {
+	explicitChangedFilesIntent := shouldAutoInjectChangedFiles(userText)
 	if len(changed.Files) == 0 {
-		return nil, nil
+		return nil
 	}
 	if !explicitChangedFilesIntent && (changed.TotalCount <= 0 || changed.TotalCount > maxAutoChangedFilesCount) {
-		return nil, nil
+		return nil
 	}
 	return &agentcontext.RepositoryChangedFilesSection{
 		Files:         append([]repository.ChangedFile(nil), changed.Files...),
 		Truncated:     changed.Truncated,
 		ReturnedCount: changed.ReturnedCount,
 		TotalCount:    changed.TotalCount,
-	}, nil
+	}
 }
 
 // buildRetrievalContextForQuery 基于已解析出的显式锚点执行单次定向检索并投影为 context 结构。
@@ -262,8 +273,8 @@ func mentionsFixOrReviewIntent(userText string) bool {
 }
 
 // autoRetrievalQueryFromUserText 基于显式锚点抽取本轮至多一组自动 retrieval 请求。
-func autoRetrievalQueryFromUserText(userText string) (repository.RetrievalQuery, bool) {
-	if pathQuery, ok := autoPathRetrievalQuery(userText); ok {
+func autoRetrievalQueryFromUserText(workdir string, userText string) (repository.RetrievalQuery, bool) {
+	if pathQuery, ok := autoPathRetrievalQuery(workdir, userText); ok {
 		return pathQuery, true
 	}
 	if symbolQuery, ok := autoSymbolRetrievalQuery(userText); ok {
@@ -276,18 +287,36 @@ func autoRetrievalQueryFromUserText(userText string) (repository.RetrievalQuery,
 }
 
 // autoPathRetrievalQuery 从文本中提取最明确的路径锚点，并映射为 path 模式检索。
-func autoPathRetrievalQuery(userText string) (repository.RetrievalQuery, bool) {
+func autoPathRetrievalQuery(workdir string, userText string) (repository.RetrievalQuery, bool) {
 	match := pathAnchorPattern.FindString(strings.TrimSpace(userText))
 	if strings.TrimSpace(match) == "" {
 		return repository.RetrievalQuery{}, false
 	}
 	normalized := filepath.ToSlash(strings.Trim(match, "`\"'"))
+	if !workspacePathAnchorExists(workdir, normalized) {
+		return repository.RetrievalQuery{}, false
+	}
 	return repository.RetrievalQuery{
 		Mode:         repository.RetrievalModePath,
 		Value:        normalized,
 		Limit:        defaultAutoPathRetrievalLimit,
 		ContextLines: defaultAutoRetrievalContextLines,
 	}, true
+}
+
+func workspacePathAnchorExists(workdir string, path string) bool {
+	if strings.TrimSpace(workdir) == "" || strings.TrimSpace(path) == "" {
+		return false
+	}
+	_, target, err := security.ResolveWorkspacePath(workdir, filepath.ToSlash(path))
+	if err != nil {
+		return false
+	}
+	info, err := os.Stat(target)
+	if err != nil {
+		return false
+	}
+	return !info.IsDir()
 }
 
 // autoSymbolRetrievalQuery 仅在句式明显指向符号定义/实现时抽取 Go-first 符号检索。

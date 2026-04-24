@@ -67,6 +67,38 @@ func TestSummaryParsesBranchDirtyAheadBehindAndRepresentativeFiles(t *testing.T)
 	}
 }
 
+func TestInspectSharesSnapshotForSummaryAndChangedFiles(t *testing.T) {
+	t.Parallel()
+
+	calls := 0
+	service := &Service{
+		gitRunner: func(ctx context.Context, workdir string, opts gitCommandOptions, args ...string) (gitCommandOutput, error) {
+			calls++
+			if strings.Join(args, " ") != "status --porcelain=v1 -z --branch --untracked-files=normal" {
+				t.Fatalf("unexpected git args: %v", args)
+			}
+			return gitCommandOutput{text: nulJoin("## main", " M internal/runtime/run.go")}, nil
+		},
+		readFile: readFile,
+	}
+
+	result, err := service.Inspect(context.Background(), t.TempDir(), InspectOptions{
+		ChangedFilesLimit: 10,
+	})
+	if err != nil {
+		t.Fatalf("Inspect() error = %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("expected Inspect() to load a single snapshot, got %d calls", calls)
+	}
+	if !result.Summary.InGitRepo || result.Summary.Branch != "main" {
+		t.Fatalf("unexpected summary: %+v", result.Summary)
+	}
+	if result.ChangedFiles.TotalCount != 1 || len(result.ChangedFiles.Files) != 1 {
+		t.Fatalf("unexpected changed-files context: %+v", result.ChangedFiles)
+	}
+}
+
 func TestChangedFilesRespectsStatusNormalizationAndSnippetRules(t *testing.T) {
 	t.Parallel()
 
@@ -240,6 +272,11 @@ func TestChangedFilesBlocksSensitiveLargeAndBinarySnippets(t *testing.T) {
 	mustWriteFile(t, filepath.Join(workdir, "pkg", "cert.pem"), "-----BEGIN PRIVATE KEY-----\nsecret\n")
 	mustWriteFile(t, filepath.Join(workdir, "pkg", "issuer.p8"), "PRIVATE KEY\n")
 	mustWriteFile(t, filepath.Join(workdir, "config", "secrets.yml"), "token: secret\n")
+	mustWriteFile(t, filepath.Join(workdir, "pkg", "secrets.txt"), "secret dump\n")
+	mustWriteFile(t, filepath.Join(workdir, "pkg", "private-secrets.md"), "private material\n")
+	mustWriteFile(t, filepath.Join(workdir, "pkg", "token_dump.log"), "token dump\n")
+	mustWriteFile(t, filepath.Join(workdir, "pkg", "credentials.json"), "{\"token\":\"secret\"}\n")
+	mustWriteFile(t, filepath.Join(workdir, "pkg", "secrets"), "secret dump\n")
 	mustWriteFile(t, filepath.Join(workdir, "pkg", "bin.dat"), string([]byte{0x00, 0x01, 0x02}))
 	mustWriteFile(t, filepath.Join(workdir, "pkg", "large.txt"), strings.Repeat("x", maxRepositorySnippetFileBytes+1))
 
@@ -255,6 +292,11 @@ func TestChangedFilesBlocksSensitiveLargeAndBinarySnippets(t *testing.T) {
 				"?? pkg/cert.pem",
 				"?? pkg/issuer.p8",
 				"?? config/secrets.yml",
+				"?? pkg/secrets.txt",
+				"?? pkg/private-secrets.md",
+				"?? pkg/token_dump.log",
+				"?? pkg/credentials.json",
+				"?? pkg/secrets",
 				"?? pkg/bin.dat",
 				"?? pkg/large.txt",
 			), nil
@@ -484,6 +526,11 @@ func TestRetrieveSkipsSensitiveLargeAndBinaryFiles(t *testing.T) {
 	mustWriteFile(t, filepath.Join(workdir, "config", "secrets.yml"), "token: secret\n")
 	mustWriteFile(t, filepath.Join(workdir, "pkg", "issuer.p8"), "PRIVATE KEY\n")
 	mustWriteFile(t, filepath.Join(workdir, "pkg", "notes.key"), "private")
+	mustWriteFile(t, filepath.Join(workdir, "pkg", "secrets.txt"), "secret dump\n")
+	mustWriteFile(t, filepath.Join(workdir, "pkg", "private-secrets.md"), "private material\n")
+	mustWriteFile(t, filepath.Join(workdir, "pkg", "token_dump.log"), "token dump\n")
+	mustWriteFile(t, filepath.Join(workdir, "pkg", "credentials.json"), "{\"token\":\"secret\"}\n")
+	mustWriteFile(t, filepath.Join(workdir, "pkg", "secrets"), "secret dump\n")
 	mustWriteFile(t, filepath.Join(workdir, "pkg", "bin.dat"), string([]byte{0x00, 0x01, 0x02, 0x03}))
 	mustWriteFile(t, filepath.Join(workdir, "pkg", "target.txt"), "match line\n")
 
@@ -552,6 +599,24 @@ func TestRetrieveSkipsSensitiveLargeAndBinaryFiles(t *testing.T) {
 	if len(pathResult.Hits) != 0 {
 		t.Fatalf("expected .p8 retrieval to be filtered, got %+v", pathResult)
 	}
+	for _, blocked := range []string{
+		"pkg/secrets.txt",
+		"pkg/private-secrets.md",
+		"pkg/token_dump.log",
+		"pkg/credentials.json",
+		"pkg/secrets",
+	} {
+		pathResult, err = service.Retrieve(context.Background(), workdir, RetrievalQuery{
+			Mode:  RetrievalModePath,
+			Value: blocked,
+		})
+		if err != nil {
+			t.Fatalf("Retrieve(path %s) error = %v", blocked, err)
+		}
+		if len(pathResult.Hits) != 0 {
+			t.Fatalf("expected %s retrieval to be filtered, got %+v", blocked, pathResult)
+		}
+	}
 
 	textResult, err := service.Retrieve(context.Background(), workdir, RetrievalQuery{
 		Mode:  RetrievalModeText,
@@ -611,9 +676,17 @@ func mustWriteFile(t *testing.T, path string, content string) {
 
 func newTestService(gitRunner func(ctx context.Context, workdir string, args ...string) (string, error)) *Service {
 	return &Service{
-		gitRunner: gitRunner,
-		readFile:  readFile,
+		gitRunner: func(ctx context.Context, workdir string, opts gitCommandOptions, args ...string) (gitCommandOutput, error) {
+			output, err := gitRunner(ctx, workdir, args...)
+			return gitCommandOutput{text: output}, err
+		},
+		readFile: readFile,
 	}
+}
+
+func runGitCommandTestRunner(ctx context.Context, workdir string, args ...string) (string, error) {
+	output, err := runGitCommand(ctx, workdir, gitCommandOptions{}, args...)
+	return output.text, err
 }
 
 func nulJoin(records ...string) string {

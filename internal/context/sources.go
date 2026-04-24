@@ -5,8 +5,6 @@ import (
 	"os"
 	"sync"
 	"time"
-
-	"neo-code/internal/repository"
 )
 
 // promptSectionSource 约束单个 prompt section 来源的最小能力，避免 Builder 持有具体细节。
@@ -51,17 +49,13 @@ type projectRulesSource struct {
 }
 
 // systemStateSource 只负责收集并渲染运行时系统摘要。
-type systemStateSource struct {
-	summary repositorySummaryFunc
-}
+type systemStateSource struct{}
 
 // Sections 汇总 workdir、shell、provider、model 与 git 摘要信息。
 func (s *systemStateSource) Sections(ctx context.Context, input BuildInput) ([]promptSection, error) {
-	systemState, err := collectSystemState(ctx, input.Metadata, s.summary)
+	systemState, err := collectSystemState(ctx, input.Metadata, input.RepositorySummary)
 	if err != nil {
 		return nil, err
 	}
 	return []promptSection{renderSystemStateSection(systemState)}, nil
 }
-
-type repositorySummaryFunc func(ctx context.Context, workdir string) (repository.Summary, error)

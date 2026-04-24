@@ -2,15 +2,12 @@ package context
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
-
-	"neo-code/internal/repository"
 )
 
-// collectSystemState 汇总运行时上下文，并通过 repository summary 获取 git 摘要。
-func collectSystemState(ctx context.Context, metadata Metadata, summaryProvider repositorySummaryFunc) (SystemState, error) {
+// collectSystemState 汇总运行时上下文，并消费 runtime 已准备好的 repository summary 投影。
+func collectSystemState(ctx context.Context, metadata Metadata, summary *RepositorySummarySection) (SystemState, error) {
 	state := SystemState{
 		Workdir:  strings.TrimSpace(metadata.Workdir),
 		Shell:    strings.TrimSpace(metadata.Shell),
@@ -21,25 +18,13 @@ func collectSystemState(ctx context.Context, metadata Metadata, summaryProvider 
 	if err := ctx.Err(); err != nil {
 		return state, err
 	}
-	if summaryProvider == nil || state.Workdir == "" {
-		return state, nil
-	}
-
-	summary, err := summaryProvider(ctx, state.Workdir)
-	if err != nil {
-		if isContextError(err) {
-			return state, err
-		}
-		return state, nil
-	}
-
 	state.Git = toGitState(summary)
 	return state, nil
 }
 
-// toGitState 将 repository 层的结构化摘要映射为 context 当前使用的最小 git 状态。
-func toGitState(summary repository.Summary) GitState {
-	if !summary.InGitRepo {
+// toGitState 将 runtime 提供的 repository summary 投影映射为最小 git 状态。
+func toGitState(summary *RepositorySummarySection) GitState {
+	if summary == nil || !summary.InGitRepo {
 		return GitState{}
 	}
 	return GitState{
@@ -87,8 +72,4 @@ func promptValue(value string) string {
 		return "unknown"
 	}
 	return value
-}
-
-func isContextError(err error) bool {
-	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }

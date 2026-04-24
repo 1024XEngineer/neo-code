@@ -63,11 +63,15 @@ var blockedRepositorySnippetPathSuffixes = []string{
 }
 
 var blockedRepositorySnippetConfigExtensions = map[string]struct{}{
+	".cfg":  {},
 	".conf": {},
 	".env":  {},
 	".ini":  {},
 	".json": {},
+	".log":  {},
+	".md":   {},
 	".toml": {},
+	".txt":  {},
 	".yaml": {},
 	".yml":  {},
 }
@@ -75,8 +79,13 @@ var blockedRepositorySnippetConfigExtensions = map[string]struct{}{
 var blockedRepositorySnippetConfigKeywords = []string{
 	"credential",
 	"credentials",
+	"passwd",
+	"password",
+	"private",
 	"secret",
 	"secrets",
+	"token",
+	"tokens",
 }
 
 var errRetrievalLimitReached = errors.New("repository: retrieval limit reached")
@@ -464,21 +473,29 @@ func allowRepositorySnippetByPathAndSize(path string, size int64) bool {
 			return false
 		}
 	}
-	if isSensitiveRepositoryConfigPath(baseName, pathWithSentinel) {
+	if isSensitiveRepositoryConfigPath(baseName) {
 		return false
 	}
 	return true
 }
 
 // isSensitiveRepositoryConfigPath 识别常见明文凭据或 secrets 配置文件命名。
-func isSensitiveRepositoryConfigPath(baseName string, normalizedPath string) bool {
+func isSensitiveRepositoryConfigPath(baseName string) bool {
 	extension := filepath.Ext(baseName)
+	nameWithoutExt := strings.TrimSuffix(baseName, extension)
+	if extension == "" {
+		for _, keyword := range blockedRepositorySnippetConfigKeywords {
+			if strings.Contains(nameWithoutExt, keyword) {
+				return true
+			}
+		}
+		return false
+	}
 	if _, ok := blockedRepositorySnippetConfigExtensions[extension]; !ok {
 		return false
 	}
-	nameWithoutExt := strings.TrimSuffix(baseName, extension)
 	for _, keyword := range blockedRepositorySnippetConfigKeywords {
-		if strings.Contains(nameWithoutExt, keyword) || strings.Contains(normalizedPath, "/"+keyword+".") || strings.Contains(normalizedPath, "/"+keyword+"s.") {
+		if strings.Contains(nameWithoutExt, keyword) {
 			return true
 		}
 	}

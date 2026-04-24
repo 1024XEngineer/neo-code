@@ -115,7 +115,7 @@ type BudgetResolver interface {
 
 // repositoryFactService 约束 runtime 条件化获取仓库事实所需的最小能力。
 type repositoryFactService interface {
-	ChangedFiles(ctx context.Context, workdir string, opts repository.ChangedFilesOptions) (repository.ChangedFilesContext, error)
+	Inspect(ctx context.Context, workdir string, opts repository.InspectOptions) (repository.InspectResult, error)
 	Retrieve(ctx context.Context, workdir string, query repository.RetrievalQuery) (repository.RetrievalResult, error)
 }
 

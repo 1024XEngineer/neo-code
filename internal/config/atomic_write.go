@@ -85,8 +85,5 @@ func fsyncDirectory(dir string) error {
 // isBestEffortDirectorySyncError 判断目录 fsync 是否因为平台或文件系统限制而允许退化为 best-effort。
 func isBestEffortDirectorySyncError(err error) bool {
 	return errors.Is(err, syscall.EINVAL) ||
-		errors.Is(err, os.ErrInvalid) ||
-		errors.Is(err, syscall.EPERM) ||
-		errors.Is(err, syscall.EACCES) ||
-		os.IsPermission(err)
+		errors.Is(err, os.ErrInvalid)
 }

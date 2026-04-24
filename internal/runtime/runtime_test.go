@@ -3503,6 +3503,10 @@ func cloneBuildInput(input agentcontext.BuildInput) agentcontext.BuildInput {
 	cloned.Messages = append([]providertypes.Message(nil), input.Messages...)
 	cloned.TaskState = input.TaskState.Clone()
 	cloned.ActiveSkills = append([]skills.Skill(nil), input.ActiveSkills...)
+	if input.RepositorySummary != nil {
+		summary := *input.RepositorySummary
+		cloned.RepositorySummary = &summary
+	}
 	if input.Repository.ChangedFiles != nil {
 		files := append([]repository.ChangedFile(nil), input.Repository.ChangedFiles.Files...)
 		cloned.Repository.ChangedFiles = &agentcontext.RepositoryChangedFilesSection{

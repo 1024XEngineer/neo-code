@@ -42,8 +42,8 @@ func TestLoadGitSnapshotGuardsAndErrorFallbacks(t *testing.T) {
 		t.Parallel()
 
 		service := &Service{
-			gitRunner: func(ctx context.Context, workdir string, args ...string) (string, error) {
-				return "fatal: not a git repository", errors.New("exit status 128")
+			gitRunner: func(ctx context.Context, workdir string, opts gitCommandOptions, args ...string) (gitCommandOutput, error) {
+				return gitCommandOutput{text: "fatal: not a git repository"}, errors.New("exit status 128")
 			},
 		}
 		snapshot, err := service.loadGitSnapshot(context.Background(), t.TempDir())
@@ -54,8 +54,8 @@ func TestLoadGitSnapshotGuardsAndErrorFallbacks(t *testing.T) {
 			t.Fatalf("expected empty snapshot, got %+v", snapshot)
 		}
 
-		service.gitRunner = func(ctx context.Context, workdir string, args ...string) (string, error) {
-			return "", errors.New("boom")
+		service.gitRunner = func(ctx context.Context, workdir string, opts gitCommandOptions, args ...string) (gitCommandOutput, error) {
+			return gitCommandOutput{}, errors.New("boom")
 		}
 		_, err = service.loadGitSnapshot(context.Background(), t.TempDir())
 		if err == nil {
@@ -67,8 +67,8 @@ func TestLoadGitSnapshotGuardsAndErrorFallbacks(t *testing.T) {
 		t.Parallel()
 
 		service := &Service{
-			gitRunner: func(ctx context.Context, workdir string, args ...string) (string, error) {
-				return "", context.DeadlineExceeded
+			gitRunner: func(ctx context.Context, workdir string, opts gitCommandOptions, args ...string) (gitCommandOutput, error) {
+				return gitCommandOutput{}, context.DeadlineExceeded
 			},
 		}
 		_, err := service.loadGitSnapshot(context.Background(), t.TempDir())
@@ -89,19 +89,19 @@ func TestChangedFileSnippetBranches(t *testing.T) {
 	mustWriteFile(t, filepath.Join(workdir, "pkg", "error.go"), "package pkg\n\nfunc Error(){}\n")
 
 	service := &Service{
-		gitRunner: func(ctx context.Context, dir string, args ...string) (string, error) {
+		gitRunner: func(ctx context.Context, dir string, opts gitCommandOptions, args ...string) (gitCommandOutput, error) {
 			command := strings.Join(args, " ")
 			switch command {
 			case "diff --unified=3 HEAD -- pkg/modified.go":
-				return "@@ -1,1 +1,1 @@\n-func Old(){}\n+func New(){}\n", nil
+				return gitCommandOutput{text: "@@ -1,1 +1,1 @@\n-func Old(){}\n+func New(){}\n"}, nil
 			case "diff --unified=3 HEAD -- pkg/renamed.go":
-				return "@@ -1,1 +1,1 @@\n-old\n+new\n", nil
+				return gitCommandOutput{text: "@@ -1,1 +1,1 @@\n-old\n+new\n"}, nil
 			case "diff --unified=3 HEAD -- pkg/added.go":
-				return "", nil
+				return gitCommandOutput{}, nil
 			case "diff --unified=3 HEAD -- pkg/error.go":
-				return "", context.Canceled
+				return gitCommandOutput{}, context.Canceled
 			default:
-				return "", nil
+				return gitCommandOutput{}, nil
 			}
 		},
 		readFile: readFile,
@@ -153,8 +153,8 @@ func TestSnippetReadersAndParsers(t *testing.T) {
 		}
 
 		service := &Service{
-			gitRunner: func(ctx context.Context, workdir string, args ...string) (string, error) {
-				return "", errors.New("ignored")
+			gitRunner: func(ctx context.Context, workdir string, opts gitCommandOptions, args ...string) (gitCommandOutput, error) {
+				return gitCommandOutput{}, errors.New("ignored")
 			},
 		}
 		workdir := t.TempDir()
@@ -163,8 +163,8 @@ func TestSnippetReadersAndParsers(t *testing.T) {
 			t.Fatalf("expected readDiffSnippet non-context error to bubble up")
 		}
 
-		service.gitRunner = func(ctx context.Context, workdir string, args ...string) (string, error) {
-			return "", context.DeadlineExceeded
+		service.gitRunner = func(ctx context.Context, workdir string, opts gitCommandOptions, args ...string) (gitCommandOutput, error) {
+			return gitCommandOutput{}, context.DeadlineExceeded
 		}
 		_, err := service.readDiffSnippet(context.Background(), workdir, "a.go")
 		if !errors.Is(err, context.DeadlineExceeded) {
@@ -194,6 +194,47 @@ func TestSnippetReadersAndParsers(t *testing.T) {
 			t.Fatalf("expected readFileHeadSnippet to return read error")
 		}
 	})
+}
+
+func TestChangedFilesMarksTruncatedWhenDiffOutputHitsByteCap(t *testing.T) {
+	t.Parallel()
+
+	workdir := t.TempDir()
+	mustWriteFile(t, filepath.Join(workdir, "pkg", "changed.go"), "package pkg\n")
+	service := &Service{
+		gitRunner: func(ctx context.Context, dir string, opts gitCommandOptions, args ...string) (gitCommandOutput, error) {
+			switch strings.Join(args, " ") {
+			case "status --porcelain=v1 -z --branch --untracked-files=normal":
+				return gitCommandOutput{text: nulJoin("## main", " M pkg/changed.go")}, nil
+			case "diff --unified=3 HEAD -- pkg/changed.go":
+				return gitCommandOutput{
+					text:      "@@ -1,1 +1,2 @@\n-" + strings.Repeat("x", maxSnippetLineRunes+32) + "\n+" + strings.Repeat("y", maxSnippetLineRunes+32),
+					truncated: true,
+				}, nil
+			default:
+				return gitCommandOutput{}, nil
+			}
+		},
+		readFile: readFile,
+	}
+
+	result, err := service.ChangedFiles(context.Background(), workdir, ChangedFilesOptions{
+		IncludeSnippets: true,
+	})
+	if err != nil {
+		t.Fatalf("ChangedFiles() error = %v", err)
+	}
+	if !result.Truncated {
+		t.Fatalf("expected changed-files context to mark diff byte truncation")
+	}
+	if len(result.Files) != 1 || result.Files[0].Snippet == "" {
+		t.Fatalf("expected snippet output, got %+v", result.Files)
+	}
+	for _, line := range strings.Split(result.Files[0].Snippet, "\n") {
+		if len([]rune(line)) > maxSnippetLineRunes {
+			t.Fatalf("expected snippet line to be capped at %d runes, got %d", maxSnippetLineRunes, len([]rune(line)))
+		}
+	}
 }
 
 func TestGitParsingHelpers(t *testing.T) {
@@ -378,7 +419,7 @@ func TestRetrieveAndServiceEdgeCases(t *testing.T) {
 	mustWriteFile(t, filepath.Join(workdir, "pkg", "defs.go"), "package pkg\n\ntype Widget struct{}\n\nfunc BuildWidget() {}\nconst WidgetName = \"x\"\nvar WidgetVar = 1\n")
 	mustWriteFile(t, filepath.Join(workdir, "pkg", "notes.txt"), "Widget WidgetName")
 
-	service := newTestService(runGitCommand)
+	service := newTestService(runGitCommandTestRunner)
 
 	t.Run("retrieve path guards and not exist", func(t *testing.T) {
 		t.Parallel()
@@ -502,14 +543,14 @@ func TestRetrieveAndServiceEdgeCases(t *testing.T) {
 		}
 
 		serviceWithCancelledDiff := &Service{
-			gitRunner: func(ctx context.Context, dir string, args ...string) (string, error) {
+			gitRunner: func(ctx context.Context, dir string, opts gitCommandOptions, args ...string) (gitCommandOutput, error) {
 				switch strings.Join(args, " ") {
 				case "status --porcelain=v1 -z --branch --untracked-files=normal":
-					return nulJoin("## main", "A  pkg/new.go"), nil
+					return gitCommandOutput{text: nulJoin("## main", "A  pkg/new.go")}, nil
 				case "diff --unified=3 HEAD -- pkg/new.go":
-					return "", context.DeadlineExceeded
+					return gitCommandOutput{}, context.DeadlineExceeded
 				default:
-					return "", nil
+					return gitCommandOutput{}, nil
 				}
 			},
 			readFile: readFile,
@@ -543,15 +584,15 @@ func TestRepositoryCoverageExtraBranches(t *testing.T) {
 	t.Run("runGitCommand success and failure", func(t *testing.T) {
 		t.Parallel()
 
-		out, err := runGitCommand(context.Background(), t.TempDir(), "--version")
+		out, err := runGitCommand(context.Background(), t.TempDir(), gitCommandOptions{}, "--version")
 		if err != nil {
 			t.Fatalf("runGitCommand(--version) err = %v", err)
 		}
-		if !strings.Contains(strings.ToLower(out), "git version") {
-			t.Fatalf("unexpected git --version output: %q", out)
+		if !strings.Contains(strings.ToLower(out.text), "git version") {
+			t.Fatalf("unexpected git --version output: %q", out.text)
 		}
 
-		_, err = runGitCommand(context.Background(), t.TempDir(), "unknown-subcommand-for-test")
+		_, err = runGitCommand(context.Background(), t.TempDir(), gitCommandOptions{}, "unknown-subcommand-for-test")
 		if err == nil {
 			t.Fatalf("expected runGitCommand invalid subcommand to fail")
 		}
@@ -679,7 +720,7 @@ func TestRepositoryCoverageExtraBranches(t *testing.T) {
 		}, "\n"))
 		mustWriteFile(t, filepath.Join(root, "pkg", "match.txt"), "hit\nhit\nhit")
 
-		svc := newTestService(runGitCommand)
+		svc := newTestService(runGitCommandTestRunner)
 		canceledCtx, cancel := context.WithCancel(context.Background())
 		cancel()
 		if _, err := svc.retrieveByGlob(canceledCtx, root, root, RetrievalQuery{Mode: RetrievalModeGlob, Value: "*.go", Limit: 1}); !errors.Is(err, context.Canceled) {

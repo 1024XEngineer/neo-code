@@ -16,6 +16,8 @@ var errInvalidMode = errors.New("repository: invalid retrieval mode")
 
 type fileReader func(path string) ([]byte, error)
 
+const maxSnippetLineRunes = 512
+
 // normalizeRetrievalQuery 统一校验检索请求并补齐默认值。
 func normalizeRetrievalQuery(workdir string, query RetrievalQuery) (string, string, RetrievalQuery, error) {
 	normalized := query
@@ -84,10 +86,19 @@ func trimSnippetText(text string, maxLines int) snippetResult {
 	if len(lines) == 0 || maxLines <= 0 {
 		return snippetResult{}
 	}
+	truncated := false
+	for index, line := range lines {
+		shortened, changed := truncateSnippetLine(line, maxSnippetLineRunes)
+		if changed {
+			truncated = true
+		}
+		lines[index] = shortened
+	}
 
 	result := snippetResult{
-		text:  strings.Join(lines, "\n"),
-		lines: len(lines),
+		text:      strings.Join(lines, "\n"),
+		lines:     len(lines),
+		truncated: truncated,
 	}
 	if len(lines) > maxLines {
 		result.text = strings.Join(lines[:maxLines], "\n")
@@ -95,6 +106,17 @@ func trimSnippetText(text string, maxLines int) snippetResult {
 		result.truncated = true
 	}
 	return result
+}
+
+func truncateSnippetLine(line string, maxRunes int) (string, bool) {
+	if maxRunes <= 0 {
+		return "", line != ""
+	}
+	runes := []rune(line)
+	if len(runes) <= maxRunes {
+		return line, false
+	}
+	return string(runes[:maxRunes]), true
 }
 
 // snippetAroundLine 生成命中行上下文片段，并返回建议的 line hint。

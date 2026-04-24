@@ -43,6 +43,13 @@ type ChangedFilesOptions struct {
 	SnippetFileCountLimit int
 }
 
+// InspectOptions 控制一次 inspection 中 changed-files 的裁剪策略。
+type InspectOptions struct {
+	ChangedFilesLimit                int
+	IncludeChangedFileSnippets       bool
+	ChangedFileSnippetFileCountLimit int
+}
+
 // ChangedFilesContext 表示围绕当前变更集裁剪后的结构化上下文。
 type ChangedFilesContext struct {
 	Files         []ChangedFile
@@ -83,6 +90,12 @@ type RetrievalResult struct {
 	Truncated bool
 }
 
+// InspectResult 表示一次共享快照 inspection 产出的仓库摘要与变更上下文。
+type InspectResult struct {
+	Summary      Summary
+	ChangedFiles ChangedFilesContext
+}
+
 // Service 提供轻量仓库摘要、变更上下文与定向检索能力。
 type Service struct {
 	gitRunner gitCommandRunner
@@ -103,16 +116,49 @@ func NewService() *Service {
 	}
 }
 
+// Inspect 基于一次共享 git 快照返回仓库摘要与变更上下文。
+func (s *Service) Inspect(ctx context.Context, workdir string, opts InspectOptions) (InspectResult, error) {
+	snapshot, err := s.loadGitSnapshot(ctx, workdir)
+	if err != nil {
+		return InspectResult{}, err
+	}
+	if !snapshot.InGitRepo {
+		return InspectResult{}, nil
+	}
+	changedFiles, err := s.inspectChangedFiles(ctx, workdir, snapshot, opts)
+	if err != nil {
+		return InspectResult{}, err
+	}
+
+	return InspectResult{
+		Summary:      summaryFromSnapshot(snapshot),
+		ChangedFiles: changedFiles,
+	}, nil
+}
+
+func (s *Service) inspectChangedFiles(
+	ctx context.Context,
+	workdir string,
+	snapshot gitSnapshot,
+	opts InspectOptions,
+) (ChangedFilesContext, error) {
+	return s.changedFilesFromSnapshot(ctx, workdir, snapshot, ChangedFilesOptions{
+		Limit:                 opts.ChangedFilesLimit,
+		IncludeSnippets:       opts.IncludeChangedFileSnippets,
+		SnippetFileCountLimit: opts.ChangedFileSnippetFileCountLimit,
+	})
+}
+
 // Summary 返回 workdir 的结构化仓库摘要。
 func (s *Service) Summary(ctx context.Context, workdir string) (Summary, error) {
-	snapshot, err := s.loadGitSnapshot(ctx, workdir)
+	result, err := s.Inspect(ctx, workdir, InspectOptions{})
 	if err != nil {
 		return Summary{}, err
 	}
-	if !snapshot.InGitRepo {
-		return Summary{}, nil
-	}
+	return result.Summary, nil
+}
 
+func summaryFromSnapshot(snapshot gitSnapshot) Summary {
 	paths := make([]string, 0, minInt(len(snapshot.Entries), representativeChangedFilesLimit))
 	for index, entry := range snapshot.Entries {
 		if index >= representativeChangedFilesLimit {
@@ -129,19 +175,29 @@ func (s *Service) Summary(ctx context.Context, workdir string) (Summary, error) 
 		Behind:                     snapshot.Behind,
 		ChangedFileCount:           len(snapshot.Entries),
 		RepresentativeChangedFiles: paths,
-	}, nil
+	}
 }
 
 // ChangedFiles 返回围绕当前变更集裁剪后的结构化上下文。
 func (s *Service) ChangedFiles(ctx context.Context, workdir string, opts ChangedFilesOptions) (ChangedFilesContext, error) {
-	snapshot, err := s.loadGitSnapshot(ctx, workdir)
+	result, err := s.Inspect(ctx, workdir, InspectOptions{
+		ChangedFilesLimit:                opts.Limit,
+		IncludeChangedFileSnippets:       opts.IncludeSnippets,
+		ChangedFileSnippetFileCountLimit: opts.SnippetFileCountLimit,
+	})
 	if err != nil {
 		return ChangedFilesContext{}, err
 	}
-	if !snapshot.InGitRepo {
-		return ChangedFilesContext{}, nil
-	}
+	return result.ChangedFiles, nil
+}
 
+// changedFilesFromSnapshot 基于共享快照派生 changed-files 上下文，避免同轮重复 git 扫描。
+func (s *Service) changedFilesFromSnapshot(
+	ctx context.Context,
+	workdir string,
+	snapshot gitSnapshot,
+	opts ChangedFilesOptions,
+) (ChangedFilesContext, error) {
 	limit := normalizeLimit(opts.Limit, defaultChangedFilesLimit, maxChangedFilesLimit)
 	includeSnippets := opts.IncludeSnippets
 	if includeSnippets && opts.SnippetFileCountLimit > 0 && len(snapshot.Entries) > opts.SnippetFileCountLimit {

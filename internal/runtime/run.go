@@ -302,17 +302,18 @@ func (s *Service) prepareTurnBudgetSnapshot(ctx context.Context, state *runState
 	if err != nil {
 		return TurnBudgetSnapshot{}, false, err
 	}
-	repositoryContext, err := s.buildRepositoryContext(ctx, state, activeWorkdir)
+	repositorySummary, repositoryContext, err := s.buildRepositoryContext(ctx, state, activeWorkdir)
 	if err != nil {
 		return TurnBudgetSnapshot{}, false, err
 	}
 
 	builtContext, err := s.contextBuilder.Build(ctx, agentcontext.BuildInput{
-		Messages:     state.session.Messages,
-		TaskState:    state.session.TaskState,
-		Todos:        cloneTodosForPersistence(state.session.Todos),
-		ActiveSkills: activeSkills,
-		Repository:   repositoryContext,
+		Messages:          state.session.Messages,
+		TaskState:         state.session.TaskState,
+		Todos:             cloneTodosForPersistence(state.session.Todos),
+		ActiveSkills:      activeSkills,
+		RepositorySummary: repositorySummary,
+		Repository:        repositoryContext,
 		Metadata: agentcontext.Metadata{
 			Workdir:             activeWorkdir,
 			Shell:               cfg.Shell,
