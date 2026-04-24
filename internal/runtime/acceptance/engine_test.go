@@ -165,6 +165,47 @@ func TestEngineEvaluateFinalCompletionGateAndRetry(t *testing.T) {
 		}
 	})
 
+	t.Run("completion gate false with no-progress exceeded -> incomplete", func(t *testing.T) {
+		t.Parallel()
+		decision, err := engine.EvaluateFinal(context.Background(), FinalAcceptanceInput{
+			CompletionGate:     CompletionGateDecision{Passed: false},
+			NoProgressExceeded: true,
+			VerificationInput: verify.FinalVerifyInput{
+				VerificationConfig: verifyEnabledConfig(),
+			},
+		})
+		if err != nil {
+			t.Fatalf("EvaluateFinal() error = %v", err)
+		}
+		if decision.Status != AcceptanceIncomplete {
+			t.Fatalf("status = %q, want %q", decision.Status, AcceptanceIncomplete)
+		}
+		if decision.StopReason != controlplane.StopReasonNoProgressAfterFinalIntercept {
+			t.Fatalf("stop_reason = %q, want %q", decision.StopReason, controlplane.StopReasonNoProgressAfterFinalIntercept)
+		}
+	})
+
+	t.Run("completion gate false with max turns reached -> incomplete", func(t *testing.T) {
+		t.Parallel()
+		decision, err := engine.EvaluateFinal(context.Background(), FinalAcceptanceInput{
+			CompletionGate:  CompletionGateDecision{Passed: false},
+			MaxTurnsReached: true,
+			MaxTurnsLimit:   7,
+			VerificationInput: verify.FinalVerifyInput{
+				VerificationConfig: verifyEnabledConfig(),
+			},
+		})
+		if err != nil {
+			t.Fatalf("EvaluateFinal() error = %v", err)
+		}
+		if decision.Status != AcceptanceIncomplete {
+			t.Fatalf("status = %q, want %q", decision.Status, AcceptanceIncomplete)
+		}
+		if decision.StopReason != controlplane.StopReasonMaxTurnExceededWithUnconvergedTodos {
+			t.Fatalf("stop_reason = %q, want %q", decision.StopReason, controlplane.StopReasonMaxTurnExceededWithUnconvergedTodos)
+		}
+	})
+
 	t.Run("retry exhausted overrides", func(t *testing.T) {
 		t.Parallel()
 		decision, err := engine.EvaluateFinal(context.Background(), FinalAcceptanceInput{
@@ -173,6 +214,28 @@ func TestEngineEvaluateFinalCompletionGateAndRetry(t *testing.T) {
 				VerificationConfig: verifyEnabledConfig(),
 				Todos: []verify.TodoSnapshot{
 					{ID: "todo-1", Required: true, RetryCount: 2, RetryLimit: 2},
+				},
+			},
+		})
+		if err != nil {
+			t.Fatalf("EvaluateFinal() error = %v", err)
+		}
+		if decision.Status != AcceptanceFailed {
+			t.Fatalf("status = %q, want %q", decision.Status, AcceptanceFailed)
+		}
+		if decision.StopReason != controlplane.StopReasonRetryExhausted {
+			t.Fatalf("stop_reason = %q, want %q", decision.StopReason, controlplane.StopReasonRetryExhausted)
+		}
+	})
+
+	t.Run("completion gate false and retry exhausted -> failed", func(t *testing.T) {
+		t.Parallel()
+		decision, err := engine.EvaluateFinal(context.Background(), FinalAcceptanceInput{
+			CompletionGate: CompletionGateDecision{Passed: false},
+			VerificationInput: verify.FinalVerifyInput{
+				VerificationConfig: verifyEnabledConfig(),
+				Todos: []verify.TodoSnapshot{
+					{ID: "todo-1", Required: true, RetryCount: 1, RetryLimit: 1},
 				},
 			},
 		})
