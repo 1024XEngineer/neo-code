@@ -17,6 +17,7 @@ import (
 	contextcompact "neo-code/internal/context/compact"
 	"neo-code/internal/provider"
 	providertypes "neo-code/internal/provider/types"
+	"neo-code/internal/repository"
 	approvalflow "neo-code/internal/runtime/approval"
 	"neo-code/internal/runtime/controlplane"
 	"neo-code/internal/runtime/streaming"
@@ -3502,6 +3503,28 @@ func cloneBuildInput(input agentcontext.BuildInput) agentcontext.BuildInput {
 	cloned.Messages = append([]providertypes.Message(nil), input.Messages...)
 	cloned.TaskState = input.TaskState.Clone()
 	cloned.ActiveSkills = append([]skills.Skill(nil), input.ActiveSkills...)
+	if input.RepositorySummary != nil {
+		summary := *input.RepositorySummary
+		cloned.RepositorySummary = &summary
+	}
+	if input.Repository.ChangedFiles != nil {
+		files := append([]repository.ChangedFile(nil), input.Repository.ChangedFiles.Files...)
+		cloned.Repository.ChangedFiles = &agentcontext.RepositoryChangedFilesSection{
+			Files:         files,
+			Truncated:     input.Repository.ChangedFiles.Truncated,
+			ReturnedCount: input.Repository.ChangedFiles.ReturnedCount,
+			TotalCount:    input.Repository.ChangedFiles.TotalCount,
+		}
+	}
+	if input.Repository.Retrieval != nil {
+		hits := append([]repository.RetrievalHit(nil), input.Repository.Retrieval.Hits...)
+		cloned.Repository.Retrieval = &agentcontext.RepositoryRetrievalSection{
+			Hits:      hits,
+			Truncated: input.Repository.Retrieval.Truncated,
+			Mode:      input.Repository.Retrieval.Mode,
+			Query:     input.Repository.Retrieval.Query,
+		}
+	}
 	return cloned
 }
 

@@ -15,6 +15,7 @@ import (
 	"neo-code/internal/provider"
 	"neo-code/internal/provider/builtin"
 	providertypes "neo-code/internal/provider/types"
+	"neo-code/internal/repository"
 	"neo-code/internal/runtime/approval"
 	"neo-code/internal/security"
 	agentsession "neo-code/internal/session"
@@ -112,6 +113,12 @@ type BudgetResolver interface {
 	ResolvePromptBudget(ctx context.Context, cfg config.Config) (int, string, error)
 }
 
+// repositoryFactService 约束 runtime 条件化获取仓库事实所需的最小能力。
+type repositoryFactService interface {
+	Inspect(ctx context.Context, workdir string, opts repository.InspectOptions) (repository.InspectResult, error)
+	Retrieve(ctx context.Context, workdir string, query repository.RetrievalQuery) (repository.RetrievalResult, error)
+}
+
 type Service struct {
 	configManager     *config.Manager
 	sessionStore      agentsession.Store
@@ -120,6 +127,7 @@ type Service struct {
 	toolManager       tools.Manager
 	providerFactory   ProviderFactory
 	contextBuilder    agentcontext.Builder
+	repositoryService repositoryFactService
 	compactRunner     contextcompact.Runner
 	approvalBroker    *approval.Broker
 	memoExtractor     MemoExtractor
@@ -179,6 +187,7 @@ func NewWithFactory(
 		toolManager:        toolManager,
 		providerFactory:    providerFactory,
 		contextBuilder:     contextBuilder,
+		repositoryService:  repository.NewService(),
 		approvalBroker:     approval.NewBroker(),
 		events:             make(chan RuntimeEvent, 128),
 		sessionLocks:       make(map[string]*sessionLockEntry),

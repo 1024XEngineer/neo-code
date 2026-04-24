@@ -644,6 +644,29 @@ func TestValidateTargetVolume(t *testing.T) {
 	}
 }
 
+func TestAbsoluteWorkspaceTargetPreservesBackslashesOnPOSIX(t *testing.T) {
+	t.Parallel()
+
+	if runtime.GOOS == "windows" {
+		t.Skip("backslash is a native path separator on Windows")
+	}
+
+	root := t.TempDir()
+	target := `dir\file.txt`
+	got, err := absoluteWorkspaceTarget(root, target)
+	if err != nil {
+		t.Fatalf("absoluteWorkspaceTarget() error: %v", err)
+	}
+
+	wantAbs, err := filepath.Abs(filepath.Join(root, target))
+	if err != nil {
+		t.Fatalf("filepath.Abs(%q): %v", target, err)
+	}
+	if got != filepath.Clean(wantAbs) {
+		t.Fatalf("absoluteWorkspaceTarget() = %q, want %q", got, filepath.Clean(wantAbs))
+	}
+}
+
 func TestNormalizeVolumeName(t *testing.T) {
 	t.Parallel()
 

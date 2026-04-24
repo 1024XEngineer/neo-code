@@ -157,7 +157,8 @@ Gateway 转发与自动拉起说明：
 
 ## 内部结构补充
 
-- `internal/context`：负责主会话 system prompt 的 section 组装、动态上下文注入与消息裁剪。
+- `internal/context`：负责消费仓库/运行时事实并组装主会话 system prompt、动态上下文注入与消息裁剪。
+- `internal/repository`：负责仓库级事实发现与裁剪，统一提供 repo summary、changed-files context 与 targeted retrieval。
 - `internal/runtime`：负责 ReAct 主循环、tool 调用编排、compact 触发与 reminder 注入时机。
 - `internal/subagent`：负责子代理角色策略、执行约束与输出契约。
 - `internal/promptasset`：负责受版本管理的静态 prompt 模板资产，使用 `go:embed` 编译进程序，供 `context`、`runtime`、`subagent` 读取。
@@ -169,6 +170,7 @@ Gateway 转发与自动拉起说明：
 - [Runtime/Provider 事件流](docs/runtime-provider-event-flow.md)
 - [Session 持久化设计](docs/session-persistence-design.md)
 - [Context Compact 说明](docs/context-compact.md)
+- [Repository 模块设计](docs/repository-design.md)
 - [Tools 与 TUI 集成](docs/tools-and-tui-integration.md)
 - [Skills 设计与使用](docs/skills-system-design.md)
 - [MCP 配置指南](docs/guides/mcp-configuration.md)

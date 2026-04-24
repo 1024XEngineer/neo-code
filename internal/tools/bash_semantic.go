@@ -34,6 +34,9 @@ var gitReadOnlySubcommands = map[string]struct{}{
 	"status":    {},
 	"rev-parse": {},
 	"describe":  {},
+	"diff":      {},
+	"log":       {},
+	"show":      {},
 }
 
 var gitRemoteSubcommands = map[string]struct{}{
@@ -179,6 +182,9 @@ func classifyGitIntent(subcommand string, flags []string, args []string) string 
 		return BashIntentClassificationRemoteOp
 	}
 	if _, ok := gitReadOnlySubcommands[subcommand]; ok {
+		if hasGitReadOnlyWriteSideEffect(subcommand, args) {
+			return BashIntentClassificationUnknown
+		}
 		return BashIntentClassificationReadOnly
 	}
 	switch subcommand {
@@ -207,6 +213,31 @@ func classifyGitIntent(subcommand string, flags []string, args []string) string 
 		return BashIntentClassificationLocalMutation
 	}
 	return BashIntentClassificationUnknown
+}
+
+// hasGitReadOnlyWriteSideEffect 检查只读 Git 子命令是否携带会产生写副作用的参数。
+func hasGitReadOnlyWriteSideEffect(subcommand string, args []string) bool {
+	switch subcommand {
+	case "diff", "log", "show":
+	default:
+		return false
+	}
+
+	for index := 0; index < len(args); index++ {
+		token := strings.TrimSpace(args[index])
+		if token == "" {
+			continue
+		}
+		if token == "--" {
+			break
+		}
+		key := gitFlagKey(token)
+		if key != "--output" {
+			continue
+		}
+		return true
+	}
+	return false
 }
 
 // hasRiskyGitConfigFlag 判断命令是否带有可能注入执行语义的高风险配置参数。

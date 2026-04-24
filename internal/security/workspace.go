@@ -285,6 +285,9 @@ func absoluteWorkspaceTarget(root string, target string) (string, error) {
 	if trimmedTarget == "" {
 		trimmedTarget = "."
 	}
+	if hasTraversal(trimmedTarget) {
+		return "", fmt.Errorf("security: path %q escapes workspace root", target)
+	}
 	if !filepath.IsAbs(trimmedTarget) {
 		trimmedTarget = filepath.Join(root, trimmedTarget)
 	}

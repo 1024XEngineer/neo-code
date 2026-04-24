@@ -1018,6 +1018,9 @@ func TestCapabilityLowLevelBranchCoverage(t *testing.T) {
 	if !hasTraversal("a/../b") {
 		t.Fatalf("path containing '/../' should be traversal")
 	}
+	if !hasTraversal("a\\..\\b") {
+		t.Fatalf("path containing '\\..\\' should be traversal")
+	}
 	if !allowPathByList([]string{"/repo"}, "/repo") {
 		t.Fatalf("expected exact path allow")
 	}

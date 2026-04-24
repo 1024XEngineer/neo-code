@@ -176,6 +176,13 @@ type AssetSaveFailedPayload struct {
 	Message string `json:"message"`
 }
 
+// RepositoryContextUnavailablePayload 描述 repository 事实注入失败但主链继续时的诊断信息。
+type RepositoryContextUnavailablePayload struct {
+	Stage  string `json:"stage"`
+	Mode   string `json:"mode,omitempty"`
+	Reason string `json:"reason"`
+}
+
 const (
 	// EventUserMessage 表示用户消息已写入会话。
 	EventUserMessage EventType = "user_message"
@@ -239,6 +246,8 @@ const (
 	EventAssetSaved EventType = "asset_saved"
 	// EventAssetSaveFailed 表示本轮用户输入附件持久化失败。
 	EventAssetSaveFailed EventType = "asset_save_failed"
+	// EventRepositoryContextUnavailable 表示本轮 repository 事实本应获取但失败，已降级为空上下文。
+	EventRepositoryContextUnavailable EventType = "repository_context_unavailable"
 )
 
 // TokenUsagePayload 承载单轮 token 用量统计。

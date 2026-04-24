@@ -187,16 +187,34 @@ func TestBuildCommandEnvRejectsUnstableReadOnlyIntent(t *testing.T) {
 	}
 }
 
-func TestBuildCommandEnvRejectsUnsupportedReadOnlySubcommand(t *testing.T) {
+func TestBuildCommandEnvAllowsExpandedReadOnlyGitSubcommands(t *testing.T) {
 	t.Parallel()
 
-	_, _, err := buildCommandEnv(tools.BashSemanticIntent{
-		IsGit:          true,
-		Classification: tools.BashIntentClassificationReadOnly,
-		Subcommand:     "show",
-	})
-	if err == nil || !strings.Contains(err.Error(), "is not allowed for auto execution") {
-		t.Fatalf("buildCommandEnv() error = %v, want unsupported subcommand error", err)
+	for _, subcommand := range []string{"diff", "log", "show"} {
+		env, hardened, err := buildCommandEnv(tools.BashSemanticIntent{
+			IsGit:          true,
+			Classification: tools.BashIntentClassificationReadOnly,
+			Subcommand:     subcommand,
+		})
+		if err != nil {
+			t.Fatalf("buildCommandEnv(%q) error = %v", subcommand, err)
+		}
+		if !hardened {
+			t.Fatalf("expected env hardening for %q", subcommand)
+		}
+
+		lookup := map[string]string{}
+		for _, entry := range env {
+			if idx := strings.Index(entry, "="); idx > 0 {
+				lookup[entry[:idx]] = entry[idx+1:]
+			}
+		}
+		if lookup["GIT_CONFIG_NOSYSTEM"] != "1" {
+			t.Fatalf("%q missing GIT_CONFIG_NOSYSTEM hardening", subcommand)
+		}
+		if lookup["GIT_PAGER"] != "cat" || lookup["PAGER"] != "cat" {
+			t.Fatalf("%q missing pager hardening: %+v", subcommand, lookup)
+		}
 	}
 }
 
@@ -246,6 +264,25 @@ func TestSanitizeGitReadOnlyEnv(t *testing.T) {
 	}
 	if lookup["GIT_CONFIG_GLOBAL"] != wantNull {
 		t.Fatalf("GIT_CONFIG_GLOBAL = %q, want %q", lookup["GIT_CONFIG_GLOBAL"], wantNull)
+	}
+}
+
+func TestSanitizeGitReadOnlyEnvIgnoresWindowsPseudoEntries(t *testing.T) {
+	t.Parallel()
+
+	env, err := sanitizeGitReadOnlyEnv([]string{
+		"=::=::\\",
+		"=C:=C:\\workspace",
+		"PATH=/usr/bin",
+	})
+	if err != nil {
+		t.Fatalf("sanitizeGitReadOnlyEnv() error = %v", err)
+	}
+
+	for _, entry := range env {
+		if strings.HasPrefix(entry, "=") {
+			t.Fatalf("expected pseudo env entry to be dropped, got %q", entry)
+		}
 	}
 }
 

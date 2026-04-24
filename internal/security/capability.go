@@ -576,6 +576,7 @@ func resolveActionPath(target string, workdir string) string {
 // hasTraversal 判断原始路径文本是否包含明显 traversal 段。
 func hasTraversal(path string) bool {
 	normalized := filepath.ToSlash(strings.TrimSpace(path))
+	normalized = strings.ReplaceAll(normalized, `\`, "/")
 	if normalized == "" {
 		return false
 	}
