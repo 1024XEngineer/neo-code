@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
-	"time"
 
 	anthropic "github.com/anthropics/anthropic-sdk-go"
 	anthroption "github.com/anthropics/anthropic-sdk-go/option"
@@ -66,7 +65,7 @@ func newSDKClient(cfg provider.RuntimeConfig) (anthropic.Client, error) {
 	}
 
 	httpClient := &http.Client{
-		Timeout: 90 * time.Second,
+		Timeout: provider.DefaultSDKRequestTimeout,
 	}
 	options := []anthroption.RequestOption{
 		anthroption.WithHTTPClient(httpClient),

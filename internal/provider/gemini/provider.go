@@ -5,9 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/rand/v2"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"google.golang.org/genai"
 
@@ -17,12 +20,21 @@ import (
 
 const errorPrefix = "gemini provider: "
 
+const (
+	defaultGenerateRetryMax = 2
+	generateRetryBaseWait   = 1 * time.Second
+	generateRetryMaxWait    = 5 * time.Second
+)
+
 // Provider 封装 Gemini native 协议的请求发送与流式响应解析。
 type Provider struct {
 	cfg provider.RuntimeConfig
 
 	mu       sync.Mutex
 	prepared *preparedRequest
+
+	retryBackoff func(attempt int) time.Duration
+	retryWait    func(ctx context.Context, wait time.Duration) error
 }
 
 type preparedRequest struct {
@@ -67,7 +79,11 @@ func New(cfg provider.RuntimeConfig) (*Provider, error) {
 	if strings.TrimSpace(cfg.APIKeyEnv) == "" {
 		return nil, errors.New(errorPrefix + "api_key_env is empty")
 	}
-	return &Provider{cfg: cfg}, nil
+	return &Provider{
+		cfg:          cfg,
+		retryBackoff: generateRetryBackoff,
+		retryWait:    waitForRetry,
+	}, nil
 }
 
 // Generate 发起 Gemini 流式请求，并将 SDK chunk 转为统一流式事件。
@@ -84,9 +100,46 @@ func (p *Provider) Generate(ctx context.Context, req providertypes.GenerateReque
 	if normalizedModel == "" {
 		return errors.New(errorPrefix + "model is empty")
 	}
+	var lastErr error
+	for attempt := 0; attempt <= defaultGenerateRetryMax; attempt++ {
+		if attempt > 0 {
+			wait := generateRetryBaseWait
+			if p.retryBackoff != nil {
+				wait = p.retryBackoff(attempt)
+			}
+			if p.retryWait != nil {
+				if err := p.retryWait(ctx, wait); err != nil {
+					return err
+				}
+			}
+		}
+
+		started, err := p.generateOnce(ctx, normalizedModel, contents, config, events)
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+		if started || !isRetryableGenerateError(err) {
+			return err
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+	}
+	return lastErr
+}
+
+// generateOnce 执行一次 Gemini 流式请求，并在未收到任何输出时返回可重试错误。
+func (p *Provider) generateOnce(
+	ctx context.Context,
+	model string,
+	contents []*genai.Content,
+	config *genai.GenerateContentConfig,
+	events chan<- providertypes.StreamEvent,
+) (bool, error) {
 	client, err := newSDKClient(ctx, p.cfg)
 	if err != nil {
-		return err
+		return false, err
 	}
 
 	var (
@@ -95,15 +148,12 @@ func (p *Provider) Generate(ctx context.Context, req providertypes.GenerateReque
 		hasPayload   bool
 		callSeq      int
 	)
-	for chunk, streamErr := range client.Models.GenerateContentStream(ctx, normalizedModel, contents, config) {
+	for chunk, streamErr := range client.Models.GenerateContentStream(ctx, model, contents, config) {
 		if streamErr != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil {
-				return ctxErr
+				return hasPayload, ctxErr
 			}
-			if mappedErr := mapGeminiSDKError(streamErr); mappedErr != nil {
-				return mappedErr
-			}
-			return fmt.Errorf("%sstream generate: %w", errorPrefix, streamErr)
+			return hasPayload, normalizeGenerateError(streamErr)
 		}
 
 		if chunk == nil {
@@ -125,7 +175,7 @@ func (p *Provider) Generate(ctx context.Context, req providertypes.GenerateReque
 				}
 				if strings.TrimSpace(part.Text) != "" {
 					if err := provider.EmitTextDelta(ctx, events, part.Text); err != nil {
-						return err
+						return hasPayload, err
 					}
 				}
 				if part.FunctionCall == nil {
@@ -142,25 +192,25 @@ func (p *Provider) Generate(ctx context.Context, req providertypes.GenerateReque
 					continue
 				}
 				if err := provider.EmitToolCallStart(ctx, events, callSeq-1, callID, name); err != nil {
-					return err
+					return hasPayload, err
 				}
 				argsJSON, err := encodeArguments(part.FunctionCall.Args)
 				if err != nil {
-					return err
+					return hasPayload, err
 				}
 				if err := provider.EmitToolCallDelta(ctx, events, callSeq-1, callID, argsJSON); err != nil {
-					return err
+					return hasPayload, err
 				}
 			}
 		}
 	}
 	if !hasPayload {
-		return fmt.Errorf("%w: empty gemini stream payload", provider.ErrStreamInterrupted)
+		return false, fmt.Errorf("%w: empty gemini stream payload", provider.ErrStreamInterrupted)
 	}
 	if !usage.InputObserved && !usage.OutputObserved {
-		return provider.EmitMessageDone(ctx, events, finishReason, nil)
+		return true, provider.EmitMessageDone(ctx, events, finishReason, nil)
 	}
-	return provider.EmitMessageDone(ctx, events, finishReason, &usage)
+	return true, provider.EmitMessageDone(ctx, events, finishReason, &usage)
 }
 
 // storePreparedRequest 缓存估算阶段的 Gemini 构建结果，供同轮发送直接复用。
@@ -231,6 +281,77 @@ func encodeArguments(args map[string]any) (string, error) {
 // normalizeFinishReason 规范化 Gemini finish reason，便于上层统一处理。
 func normalizeFinishReason(raw string) string {
 	return strings.ToLower(strings.TrimSpace(raw))
+}
+
+// normalizeGenerateError 统一归类 Gemini 流式生成错误，避免把网络异常直接泄漏到 runtime。
+func normalizeGenerateError(err error) error {
+	if mappedErr := mapGeminiSDKError(err); mappedErr != nil {
+		return mappedErr
+	}
+
+	message := strings.TrimSpace(err.Error())
+	if message == "" {
+		message = "unknown stream error"
+	}
+	if isTimeoutGenerateError(err) {
+		return provider.NewTimeoutProviderError("gemini generate timeout: " + message)
+	}
+
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		return provider.NewNetworkProviderError("gemini generate network error: " + message)
+	}
+	return fmt.Errorf("%sstream generate: %w", errorPrefix, err)
+}
+
+// isRetryableGenerateError 判断 Gemini provider 是否应在请求级重试当前错误。
+func isRetryableGenerateError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var providerErr *provider.ProviderError
+	return errors.As(err, &providerErr) && providerErr.Retryable
+}
+
+// isTimeoutGenerateError 判断 Gemini 流式生成错误是否由超时触发。
+func isTimeoutGenerateError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var netErr net.Error
+	return errors.As(err, &netErr) && netErr.Timeout()
+}
+
+// generateRetryBackoff 计算 Gemini provider 请求级重试的指数退避时长。
+func generateRetryBackoff(attempt int) time.Duration {
+	if attempt <= 0 {
+		return 0
+	}
+	wait := generateRetryBaseWait << (attempt - 1)
+	jitter := float64(wait) * (0.5 + rand.Float64())
+	wait = time.Duration(jitter)
+	if wait > generateRetryMaxWait {
+		wait = generateRetryMaxWait
+	}
+	return wait
+}
+
+// waitForRetry 在重试窗口内等待，同时尊重上层上下文取消。
+func waitForRetry(ctx context.Context, wait time.Duration) error {
+	if wait <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 // mapGeminiSDKError 将 Gemini SDK 错误映射为 provider 领域错误，仅保留状态码级别兜底。

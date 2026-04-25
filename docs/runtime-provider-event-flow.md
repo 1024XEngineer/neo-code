@@ -14,7 +14,6 @@
 - `phase_changed`
 - `progress_evaluated`
 - `stop_reason_decided`
-- `provider_retry`
 - `permission_requested`
 - `permission_resolved`
 - `budget_checked`

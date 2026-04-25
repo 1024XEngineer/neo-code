@@ -3,12 +3,15 @@ package gemini
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"neo-code/internal/provider"
 	providertypes "neo-code/internal/provider/types"
@@ -322,6 +325,177 @@ func TestEstimateThenGenerateReusesPreparedRequest(t *testing.T) {
 	}
 }
 
+func TestProviderGenerateRetriesRetryableErrorBeforeStreamStarts(t *testing.T) {
+	t.Parallel()
+
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if requests == 1 {
+			http.Error(w, "temporary", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w, "data: {\"candidates\":[{\"index\":0,\"content\":{\"parts\":[{\"text\":\"retry ok\"}]}}],\"usageMetadata\":{\"promptTokenCount\":2,\"candidatesTokenCount\":1,\"totalTokenCount\":3}}\n\n")
+		_, _ = fmt.Fprint(w, "data: {\"candidates\":[{\"index\":0,\"finishReason\":\"STOP\",\"content\":{\"parts\":[]}}]}\n\n")
+	}))
+	defer server.Close()
+
+	p, err := New(provider.RuntimeConfig{
+		Driver:         provider.DriverGemini,
+		BaseURL:        server.URL,
+		DefaultModel:   "gemini-2.5-flash",
+		APIKeyEnv:      "GEMINI_TEST_KEY",
+		APIKeyResolver: provider.StaticAPIKeyResolver("test-key"),
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	p.retryBackoff = func(attempt int) time.Duration {
+		_ = attempt
+		return 0
+	}
+	p.retryWait = func(ctx context.Context, wait time.Duration) error {
+		_ = ctx
+		_ = wait
+		return nil
+	}
+
+	events := make(chan providertypes.StreamEvent, 8)
+	if err := p.Generate(context.Background(), providertypes.GenerateRequest{
+		Messages: []providertypes.Message{{
+			Role:  providertypes.RoleUser,
+			Parts: []providertypes.ContentPart{providertypes.NewTextPart("hi")},
+		}},
+	}, events); err != nil {
+		t.Fatalf("Generate() error = %v", err)
+	}
+	if requests != 2 {
+		t.Fatalf("expected 2 requests after retry, got %d", requests)
+	}
+	if len(drainEvents(events)) == 0 {
+		t.Fatal("expected stream events after retry recovery")
+	}
+}
+
+func TestProviderGenerateReturnsRetryableErrorAfterRetryExhausted(t *testing.T) {
+	t.Parallel()
+
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		http.Error(w, "temporary", http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	p, err := New(provider.RuntimeConfig{
+		Driver:         provider.DriverGemini,
+		BaseURL:        server.URL,
+		DefaultModel:   "gemini-2.5-flash",
+		APIKeyEnv:      "GEMINI_TEST_KEY",
+		APIKeyResolver: provider.StaticAPIKeyResolver("test-key"),
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	p.retryBackoff = func(attempt int) time.Duration {
+		_ = attempt
+		return 0
+	}
+	p.retryWait = func(ctx context.Context, wait time.Duration) error {
+		_ = ctx
+		_ = wait
+		return nil
+	}
+
+	events := make(chan providertypes.StreamEvent, 8)
+	err = p.Generate(context.Background(), providertypes.GenerateRequest{
+		Messages: []providertypes.Message{{
+			Role:  providertypes.RoleUser,
+			Parts: []providertypes.ContentPart{providertypes.NewTextPart("hi")},
+		}},
+	}, events)
+	if err == nil {
+		t.Fatal("expected retryable error after exhausting retries")
+	}
+	if requests != defaultGenerateRetryMax+1 {
+		t.Fatalf("expected %d requests, got %d", defaultGenerateRetryMax+1, requests)
+	}
+
+	var providerErr *provider.ProviderError
+	if !errors.As(err, &providerErr) || !providerErr.Retryable {
+		t.Fatalf("expected retryable provider error, got %v", err)
+	}
+}
+
+func TestProviderGenerateRetryStateResetsAfterSuccess(t *testing.T) {
+	t.Parallel()
+
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if requests == 1 {
+			http.Error(w, "temporary", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w, "data: {\"candidates\":[{\"index\":0,\"content\":{\"parts\":[{\"text\":\"ok\"}]}}],\"usageMetadata\":{\"promptTokenCount\":2,\"candidatesTokenCount\":1,\"totalTokenCount\":3}}\n\n")
+		_, _ = fmt.Fprint(w, "data: {\"candidates\":[{\"index\":0,\"finishReason\":\"STOP\",\"content\":{\"parts\":[]}}]}\n\n")
+	}))
+	defer server.Close()
+
+	p, err := New(provider.RuntimeConfig{
+		Driver:         provider.DriverGemini,
+		BaseURL:        server.URL,
+		DefaultModel:   "gemini-2.5-flash",
+		APIKeyEnv:      "GEMINI_TEST_KEY",
+		APIKeyResolver: provider.StaticAPIKeyResolver("test-key"),
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	p.retryBackoff = func(attempt int) time.Duration {
+		_ = attempt
+		return 0
+	}
+	p.retryWait = func(ctx context.Context, wait time.Duration) error {
+		_ = ctx
+		_ = wait
+		return nil
+	}
+
+	for i := 0; i < 2; i++ {
+		events := make(chan providertypes.StreamEvent, 8)
+		if err := p.Generate(context.Background(), providertypes.GenerateRequest{
+			Messages: []providertypes.Message{{
+				Role:  providertypes.RoleUser,
+				Parts: []providertypes.ContentPart{providertypes.NewTextPart("hi")},
+			}},
+		}, events); err != nil {
+			t.Fatalf("Generate() call %d error = %v", i+1, err)
+		}
+	}
+	if requests != 3 {
+		t.Fatalf("expected second request to start from a fresh retry window, got %d total requests", requests)
+	}
+}
+
+func TestNormalizeGenerateErrorMapsNetworkTimeouts(t *testing.T) {
+	t.Parallel()
+
+	timeoutErr := timeoutNetError{message: "i/o timeout"}
+	err := normalizeGenerateError(timeoutErr)
+	var providerErr *provider.ProviderError
+	if !errors.As(err, &providerErr) || providerErr.Code != provider.ErrorCodeTimeout {
+		t.Fatalf("expected timeout provider error, got %v", err)
+	}
+
+	err = normalizeGenerateError(net.UnknownNetworkError("dns failure"))
+	if !errors.As(err, &providerErr) || providerErr.Code != provider.ErrorCodeNetwork {
+		t.Fatalf("expected network provider error, got %v", err)
+	}
+}
+
 func drainEvents(events <-chan providertypes.StreamEvent) []providertypes.StreamEvent {
 	var drained []providertypes.StreamEvent
 	for {
@@ -338,6 +512,22 @@ type stubSessionAsset struct {
 	data []byte
 	mime string
 	err  error
+}
+
+type timeoutNetError struct {
+	message string
+}
+
+func (e timeoutNetError) Error() string {
+	return e.message
+}
+
+func (e timeoutNetError) Timeout() bool {
+	return true
+}
+
+func (e timeoutNetError) Temporary() bool {
+	return true
 }
 
 type stubSessionAssetReader struct {

@@ -183,7 +183,7 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 				return nil
 			}
 
-			turnOutput, err := s.callProviderWithRetry(ctx, &state, snapshot, modelProvider)
+			turnOutput, err := s.callProvider(ctx, &state, snapshot, modelProvider)
 			if err != nil {
 				if provider.IsContextTooLong(err) &&
 					state.reactiveCompactAttempts < snapshot.Config.Context.Budget.MaxReactiveCompacts {
@@ -479,73 +479,35 @@ func resolveRuntimeMaxTurns(rc config.RuntimeConfig) int {
 	return rc.MaxTurns
 }
 
-// callProviderWithRetry 使用冻结后的 TurnBudgetSnapshot 执行 provider 调用与必要重试。
-func (s *Service) callProviderWithRetry(
+// callProvider 使用冻结后的 TurnBudgetSnapshot 执行单次 provider 调用。
+func (s *Service) callProvider(
 	ctx context.Context,
 	state *runState,
 	snapshot TurnBudgetSnapshot,
-	initialProvider provider.Provider,
+	modelProvider provider.Provider,
 ) (turnProviderOutput, error) {
-	var lastErr error
-
-	for retryAttempt := 0; retryAttempt <= defaultProviderRetryMax; retryAttempt++ {
-		if retryAttempt > 0 {
-			wait := providerRetryBackoff(retryAttempt)
-			s.emitRunScoped(ctx, EventProviderRetry, state,
-				fmt.Sprintf("retrying provider call (attempt %d/%d, wait=%.1fs)...",
-					retryAttempt, defaultProviderRetryMax, wait.Seconds()))
-
-			select {
-			case <-ctx.Done():
-				return turnProviderOutput{}, ctx.Err()
-			case <-time.After(wait):
-			}
-		}
-
-		modelProvider := initialProvider
-		if retryAttempt > 0 {
-			var err error
-			modelProvider, err = s.providerFactory.Build(ctx, snapshot.ProviderConfig)
-			if err != nil {
-				return turnProviderOutput{}, err
-			}
-		}
-
-		streamOutcome := generateStreamingMessage(ctx, modelProvider, snapshot.Request, streaming.Hooks{
-			OnTextDelta: func(text string) {
-				s.emitRunScoped(ctx, EventAgentChunk, state, text)
-			},
-			OnToolCallStart: func(payload providertypes.ToolCallStartPayload) {
-				s.emitRunScoped(ctx, EventToolCallThinking, state, payload.Name)
-			},
-		})
-		if streamOutcome.err != nil {
-			lastErr = streamOutcome.err
-			if !isRetryableProviderError(lastErr) {
-				return turnProviderOutput{}, lastErr
-			}
-			if ctx.Err() != nil {
-				return turnProviderOutput{}, ctx.Err()
-			}
-			continue
-		}
-
-		return turnProviderOutput{
-			assistant: streamOutcome.message,
-			usageObservation: newTurnBudgetUsageObservation(
-				snapshot.ID,
-				streamOutcome.inputTokens,
-				streamOutcome.outputTokens,
-				streamOutcome.inputObserved,
-				streamOutcome.outputObserved,
-			),
-		}, nil
+	streamOutcome := generateStreamingMessage(ctx, modelProvider, snapshot.Request, streaming.Hooks{
+		OnTextDelta: func(text string) {
+			s.emitRunScoped(ctx, EventAgentChunk, state, text)
+		},
+		OnToolCallStart: func(payload providertypes.ToolCallStartPayload) {
+			s.emitRunScoped(ctx, EventToolCallThinking, state, payload.Name)
+		},
+	})
+	if streamOutcome.err != nil {
+		return turnProviderOutput{}, streamOutcome.err
 	}
 
-	if lastErr == nil {
-		lastErr = errors.New("max retries exceeded")
-	}
-	return turnProviderOutput{}, fmt.Errorf("runtime: max retries exhausted, last error: %w", lastErr)
+	return turnProviderOutput{
+		assistant: streamOutcome.message,
+		usageObservation: newTurnBudgetUsageObservation(
+			snapshot.ID,
+			streamOutcome.inputTokens,
+			streamOutcome.outputTokens,
+			streamOutcome.inputObserved,
+			streamOutcome.outputObserved,
+		),
+	}, nil
 }
 
 // emitTokenUsage 在单轮 provider 调用成功后发出 token_usage 事件。

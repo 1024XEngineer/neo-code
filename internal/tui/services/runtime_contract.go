@@ -321,7 +321,6 @@ const (
 	EventRunCanceled               EventType = "run_canceled"
 	EventError                     EventType = "error"
 	EventToolCallThinking          EventType = "tool_call_thinking"
-	EventProviderRetry             EventType = "provider_retry"
 	EventPermissionRequested       EventType = "permission_requested"
 	EventPermissionResolved        EventType = "permission_resolved"
 	EventCompactStart              EventType = "compact_start"

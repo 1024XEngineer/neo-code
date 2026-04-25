@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"strings"
 	"sync"
-	"time"
 
 	"neo-code/internal/provider"
 	"neo-code/internal/provider/openaicompat/chatcompletions"
@@ -131,7 +130,7 @@ func New(cfg provider.RuntimeConfig, opts ...buildOption) (*Provider, error) {
 	return &Provider{
 		cfg: cfg,
 		client: &http.Client{
-			Timeout:   90 * time.Second,
+			Timeout:   provider.DefaultSDKRequestTimeout,
 			Transport: o.transport,
 		},
 	}, nil

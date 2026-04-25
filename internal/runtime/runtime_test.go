@@ -2350,18 +2350,12 @@ func TestServiceRunErrorPaths(t *testing.T) {
 					},
 				}
 			}(),
-			expectEvents: []EventType{EventUserMessage, EventProviderRetry, EventAgentDone},
+			expectErr:    "internal server error",
+			expectEvents: []EventType{EventUserMessage, EventStopReasonDecided},
 			assert: func(t *testing.T, store *memoryStore, scripted *scriptedProvider, tool *stubTool) {
 				t.Helper()
-				if scripted.callCount < 2 {
-					t.Fatalf("expected at least 2 provider calls (initial + retry), got %d", scripted.callCount)
-				}
-				session := onlySession(t, store)
-				if len(session.Messages) != 2 {
-					t.Fatalf("expected user + assistant messages, got %d", len(session.Messages))
-				}
-				if renderPartsForTest(session.Messages[1].Parts) != "recovered" {
-					t.Fatalf("expected assistant content %q, got %q", "recovered", renderPartsForTest(session.Messages[1].Parts))
+				if scripted.callCount != 1 {
+					t.Fatalf("expected runtime to call provider once, got %d", scripted.callCount)
 				}
 			},
 		},
@@ -2389,7 +2383,7 @@ func TestServiceRunErrorPaths(t *testing.T) {
 			},
 		},
 		{
-			name:  "runtime retry exhausted emits error",
+			name:  "retryable provider error does not trigger runtime retry",
 			input: UserInput{RunID: "run-retry-exhausted", Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")}},
 			provider: &scriptedProvider{
 				name: "always-500",
@@ -2403,13 +2397,11 @@ func TestServiceRunErrorPaths(t *testing.T) {
 				},
 			},
 			expectErr:    "internal server error",
-			expectEvents: []EventType{EventUserMessage, EventProviderRetry, EventStopReasonDecided},
+			expectEvents: []EventType{EventUserMessage, EventStopReasonDecided},
 			assert: func(t *testing.T, store *memoryStore, scripted *scriptedProvider, tool *stubTool) {
 				t.Helper()
-				// 1 initial + 2 retries = 3 calls
-				if scripted.callCount != defaultProviderRetryMax+1 {
-					t.Fatalf("expected %d provider calls (1 initial + %d retries), got %d",
-						defaultProviderRetryMax+1, defaultProviderRetryMax, scripted.callCount)
+				if scripted.callCount != 1 {
+					t.Fatalf("expected runtime not to retry provider calls, got %d", scripted.callCount)
 				}
 			},
 		},
@@ -3785,75 +3777,6 @@ func TestWorkdirHelperFunctions(t *testing.T) {
 	})
 }
 
-func TestIsRetryableProviderError(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name string
-		err  error
-		want bool
-	}{
-		{"nil error", nil, false},
-		{"retryable provider error", &provider.ProviderError{Retryable: true}, true},
-		{"non-retryable provider error", &provider.ProviderError{Retryable: false}, false},
-		{"plain error", errors.New("something failed"), false},
-		{"wrapped retryable", fmt.Errorf("wrapped: %w", &provider.ProviderError{Retryable: true}), true},
-		{"stream interrupted sentinel", provider.ErrStreamInterrupted, false},
-	}
-
-	for _, tt := range tests {
-		tt := tt
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			if got := isRetryableProviderError(tt.err); got != tt.want {
-				t.Fatalf("isRetryableProviderError() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
-func TestProviderRetryBackoff(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name    string
-		attempt int
-		min     time.Duration
-		max     time.Duration
-	}{
-		{
-			name:    "first retry stays within jittered base window",
-			attempt: 1,
-			min:     500 * time.Millisecond,
-			max:     1500 * time.Millisecond,
-		},
-		{
-			name:    "second retry stays within jittered doubled window",
-			attempt: 2,
-			min:     1 * time.Second,
-			max:     3 * time.Second,
-		},
-		{
-			name:    "large retry is capped at max wait",
-			attempt: 20,
-			min:     providerRetryMaxWait,
-			max:     providerRetryMaxWait,
-		},
-	}
-
-	for _, tt := range tests {
-		tt := tt
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			got := providerRetryBackoff(tt.attempt)
-			if got < tt.min || got > tt.max {
-				t.Fatalf("providerRetryBackoff(%d) = %v, want within [%v, %v]", tt.attempt, got, tt.min, tt.max)
-			}
-		})
-	}
-}
-
 func TestStreamAccumulatorBuildMessageRejectsMissingToolName(t *testing.T) {
 	t.Parallel()
 
@@ -4014,7 +3937,7 @@ func TestCallProviderWithRetryReturnsCombinedForwardError(t *testing.T) {
 		},
 	}
 
-	_, err := service.callProviderWithRetry(
+	_, err := service.callProvider(
 		context.Background(),
 		&state,
 		snapshot,

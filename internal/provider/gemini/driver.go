@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
-	"time"
 
 	"google.golang.org/genai"
 
@@ -71,7 +70,7 @@ func newSDKClient(ctx context.Context, cfg provider.RuntimeConfig) (*genai.Clien
 		return nil, err
 	}
 	httpClient := &http.Client{
-		Timeout: 90 * time.Second,
+		Timeout: provider.DefaultSDKRequestTimeout,
 	}
 	clientConfig := &genai.ClientConfig{
 		APIKey:     apiKey,
