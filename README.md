@@ -2,6 +2,33 @@
 
 > 基于 Go + Bubble Tea 的本地 Coding Agent
 
+<p align="center">
+  <a href="https://go.dev/">
+    <img src="https://img.shields.io/badge/Go-1.25%2B-00ADD8?logo=go&logoColor=white" alt="Go Version" />
+  </a>
+  <a href="https://github.com/1024XEngineer/neo-code/actions/workflows/ci.yml">
+    <img src="https://img.shields.io/github/actions/workflow/status/1024XEngineer/neo-code/ci.yml?branch=main&label=CI" alt="CI Status" />
+  </a>
+  <a href="https://github.com/1024XEngineer/neo-code/blob/main/LICENSE">
+    <img src="https://img.shields.io/github/license/1024XEngineer/neo-code?color=97CA00" alt="License" />
+  </a>
+  <a href="https://github.com/1024XEngineer/neo-code">
+    <img src="https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-4EAA25" alt="Platform" />
+  </a>
+</p>
+
+<p align="center">
+  <a href="https://1024xengineer.github.io/neo-code/">
+    <img src="https://img.shields.io/badge/Docs-Official-1677FF?logo=readthedocs&logoColor=white" alt="Docs" />
+  </a>
+  <a href="https://github.com/1024XEngineer/neo-code/issues">
+    <img src="https://img.shields.io/badge/Issues-Welcome-ff69b4" alt="Issues" />
+  </a>
+  <a href="https://github.com/1024XEngineer/neo-code/discussions">
+    <img src="https://img.shields.io/badge/Community-Discussions-5865F2" alt="Community" />
+  </a>
+</p>
+
 ## NeoCode 是什么？
 NeoCode 是一个在终端中运行的 AI 编码助手，采用 ReAct（Reason-Act-Observe）循环模式，围绕以下主链路工作：
 

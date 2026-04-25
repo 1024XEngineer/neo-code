@@ -9,30 +9,14 @@ import (
 
 // DefaultBuilder preserves the current runtime context-building behavior.
 type DefaultBuilder struct {
-	promptSources           []promptSectionSource
-	trimPolicy              messageTrimPolicy
-	microCompactPolicies    MicroCompactPolicySource
-	microCompactSummarizers MicroCompactSummarizerSource
-	microCompactPinChecker  MicroCompactPinChecker
+	promptSources   []promptSectionSource
+	trimPolicy      messageTrimPolicy
+	microCompactCfg MicroCompactConfig
 }
 
-// newDefaultBuilder 统一构建默认上下文构建器，避免多个构造函数重复装配相同依赖。
-func newDefaultBuilder(
-	policies MicroCompactPolicySource,
-	summarizers MicroCompactSummarizerSource,
-	memoSource SectionSource,
-) Builder {
-	return &DefaultBuilder{
-		promptSources:           newPromptSources(memoSource),
-		trimPolicy:              spanMessageTrimPolicy{},
-		microCompactPolicies:    policies,
-		microCompactSummarizers: summarizers,
-		microCompactPinChecker:  NewDefaultPinChecker(),
-	}
-}
-
-// newPromptSources 组装系统提示词来源列表，并按约定将 memoSource 插入到 systemState 之前。
-func newPromptSources(memoSource SectionSource) []promptSectionSource {
+// newPromptSources 组装系统提示词来源列表，将额外 SectionSource 插入到 systemState 之前。
+// nil 元素会被跳过，不会影响来源顺序。
+func newPromptSources(extra ...SectionSource) []promptSectionSource {
 	sources := []promptSectionSource{
 		corePromptSource{},
 		&projectRulesSource{},
@@ -40,37 +24,60 @@ func newPromptSources(memoSource SectionSource) []promptSectionSource {
 		todosSource{},
 		skillPromptSource{},
 	}
-	if memoSource != nil {
-		sources = append(sources, memoSource)
+	for _, src := range extra {
+		if src != nil {
+			sources = append(sources, src)
+		}
 	}
 	sources = append(sources, repositoryContextSource{})
 	return append(sources, &systemStateSource{})
 }
 
+// NewConfiguredBuilder 基于聚合配置和可选 SectionSource 列表构建上下文构建器，是推荐的统一构造入口。
+// cfg.PinChecker 为 nil 时自动使用默认 pin checker；sources 中 nil 元素会被跳过。
+func NewConfiguredBuilder(cfg MicroCompactConfig, sources ...SectionSource) Builder {
+	if cfg.PinChecker == nil {
+		cfg.PinChecker = NewDefaultPinChecker()
+	}
+	return &DefaultBuilder{
+		promptSources:   newPromptSources(sources...),
+		trimPolicy:      spanMessageTrimPolicy{},
+		microCompactCfg: cfg,
+	}
+}
+
 // NewBuilder returns the default context builder implementation.
 func NewBuilder() Builder {
-	return NewBuilderWithToolPolicies(nil)
+	return NewConfiguredBuilder(MicroCompactConfig{})
 }
 
 // NewBuilderWithToolPolicies 返回带工具 micro compact 策略源的默认上下文构建器。
+//
+// Deprecated: 使用 NewConfiguredBuilder 替代。
 func NewBuilderWithToolPolicies(policies MicroCompactPolicySource) Builder {
-	return newDefaultBuilder(policies, nil, nil)
+	return NewConfiguredBuilder(MicroCompactConfig{Policies: policies})
 }
 
 // NewBuilderWithToolPoliciesAndSummarizers 返回带工具策略与内容摘要器的上下文构建器。
+//
+// Deprecated: 使用 NewConfiguredBuilder 替代。
 func NewBuilderWithToolPoliciesAndSummarizers(policies MicroCompactPolicySource, summarizers MicroCompactSummarizerSource) Builder {
-	return newDefaultBuilder(policies, summarizers, nil)
+	return NewConfiguredBuilder(MicroCompactConfig{Policies: policies, Summarizers: summarizers})
 }
 
 // NewBuilderWithMemo 返回带记忆注入能力的上下文构建器。
 // memoSource 为 nil 时等价于 NewBuilderWithToolPolicies。
+//
+// Deprecated: 使用 NewConfiguredBuilder 替代。
 func NewBuilderWithMemo(policies MicroCompactPolicySource, memoSource SectionSource) Builder {
-	return NewBuilderWithMemoAndSummarizers(policies, nil, memoSource)
+	return NewConfiguredBuilder(MicroCompactConfig{Policies: policies}, memoSource)
 }
 
 // NewBuilderWithMemoAndSummarizers 返回带记忆注入与内容摘要器的上下文构建器。
+//
+// Deprecated: 使用 NewConfiguredBuilder 替代。
 func NewBuilderWithMemoAndSummarizers(policies MicroCompactPolicySource, summarizers MicroCompactSummarizerSource, memoSource SectionSource) Builder {
-	return newDefaultBuilder(policies, summarizers, memoSource)
+	return NewConfiguredBuilder(MicroCompactConfig{Policies: policies, Summarizers: summarizers}, memoSource)
 }
 
 // Build assembles the provider-facing context for the current round.
@@ -92,7 +99,7 @@ func (b *DefaultBuilder) Build(ctx context.Context, input BuildInput) (BuildResu
 	if trimPolicy == nil {
 		trimPolicy = spanMessageTrimPolicy{}
 	}
-	pinChecker := b.microCompactPinChecker
+	pinChecker := b.microCompactCfg.PinChecker
 	if pinChecker == nil {
 		pinChecker = NewDefaultPinChecker()
 	}
@@ -103,8 +110,8 @@ func (b *DefaultBuilder) Build(ctx context.Context, input BuildInput) (BuildResu
 			trimPolicy.Trim(input.Messages, input.Compact),
 			input.TaskState,
 			input.Compact,
-			b.microCompactPolicies,
-			b.microCompactSummarizers,
+			b.microCompactCfg.Policies,
+			b.microCompactCfg.Summarizers,
 			pinChecker,
 		),
 	}, nil
@@ -119,11 +126,17 @@ func applyReadTimeContextProjection(
 	summarizers MicroCompactSummarizerSource,
 	pinChecker MicroCompactPinChecker,
 ) []providertypes.Message {
+	projectedMessages := cloneContextMessages(messages)
 	if options.DisableMicroCompact || !taskState.Established() {
-		return ProjectToolMessagesForModel(cloneContextMessages(messages))
-	} else {
-		return ProjectToolMessagesForModel(
-			microCompactMessagesWithPolicies(messages, policies, options.MicroCompactRetainedToolSpans, summarizers, pinChecker),
-		)
+		return ProjectToolMessagesForModel(projectedMessages)
 	}
+
+	projectedMessages = microCompactMessagesWithPolicies(
+		projectedMessages,
+		policies,
+		options.MicroCompactRetainedToolSpans,
+		summarizers,
+		pinChecker,
+	)
+	return ProjectToolMessagesForModel(projectedMessages)
 }

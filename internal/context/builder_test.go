@@ -190,6 +190,7 @@ func TestDefaultBuilderBuildUsesSpanTrimPolicyWhenTrimPolicyIsUnset(t *testing.T
 		promptSources: []promptSectionSource{
 			stubPromptSectionSource{sections: []promptSection{{Title: "Stub", Content: "body"}}},
 		},
+		microCompactCfg: MicroCompactConfig{PinChecker: NewDefaultPinChecker()},
 	}
 
 	got, err := builder.Build(stdcontext.Background(), BuildInput{
@@ -232,6 +233,7 @@ func TestDefaultBuilderBuildAppliesMicroCompactAfterTrim(t *testing.T) {
 		promptSources: []promptSectionSource{
 			stubPromptSectionSource{sections: []promptSection{{Title: "Stub", Content: "body"}}},
 		},
+		microCompactCfg: MicroCompactConfig{PinChecker: NewDefaultPinChecker()},
 	}
 
 	messages := []providertypes.Message{
@@ -292,6 +294,7 @@ func TestDefaultBuilderBuildDefaultsPinCheckerForLiteralBuilder(t *testing.T) {
 		promptSources: []promptSectionSource{
 			stubPromptSectionSource{sections: []promptSection{{Title: "Stub", Content: "body"}}},
 		},
+		microCompactCfg: MicroCompactConfig{PinChecker: NewDefaultPinChecker()},
 	}
 
 	messages := []providertypes.Message{
@@ -347,7 +350,7 @@ func TestDefaultBuilderBuildRespectsExplicitPinCheckerOverride(t *testing.T) {
 		promptSources: []promptSectionSource{
 			stubPromptSectionSource{sections: []promptSection{{Title: "Stub", Content: "body"}}},
 		},
-		microCompactPinChecker: noopPinChecker{},
+		microCompactCfg: MicroCompactConfig{PinChecker: noopPinChecker{}},
 	}
 
 	messages := []providertypes.Message{
@@ -461,6 +464,7 @@ func TestDefaultBuilderBuildSkipsMicroCompactWithoutEstablishedTaskState(t *test
 		promptSources: []promptSectionSource{
 			stubPromptSectionSource{sections: []promptSection{{Title: "Stub", Content: "body"}}},
 		},
+		microCompactCfg: MicroCompactConfig{PinChecker: NewDefaultPinChecker()},
 	}
 
 	messages := []providertypes.Message{
@@ -497,6 +501,7 @@ func TestDefaultBuilderBuildSkipsMicroCompactWhenDisabled(t *testing.T) {
 		promptSources: []promptSectionSource{
 			stubPromptSectionSource{sections: []promptSection{{Title: "Stub", Content: "body"}}},
 		},
+		microCompactCfg: MicroCompactConfig{PinChecker: NewDefaultPinChecker()},
 	}
 
 	messages := []providertypes.Message{
@@ -550,8 +555,9 @@ func TestDefaultBuilderBuildHonorsToolMicroCompactPolicies(t *testing.T) {
 		promptSources: []promptSectionSource{
 			stubPromptSectionSource{sections: []promptSection{{Title: "Stub", Content: "body"}}},
 		},
-		microCompactPolicies: stubMicroCompactPolicySource{
-			"custom_tool": tools.MicroCompactPolicyPreserveHistory,
+		microCompactCfg: MicroCompactConfig{
+			Policies:   stubMicroCompactPolicySource{"custom_tool": tools.MicroCompactPolicyPreserveHistory},
+			PinChecker: NewDefaultPinChecker(),
 		},
 	}
 
@@ -875,6 +881,158 @@ func TestNewBuilderWithMemo(t *testing.T) {
 		}
 		if strings.Contains(result.SystemPrompt, "## Memo") {
 			t.Error("nil memo source should not inject Memo section")
+		}
+	})
+}
+
+func TestNewConfiguredBuilder(t *testing.T) {
+	t.Parallel()
+
+	t.Run("empty config defaults pin checker", func(t *testing.T) {
+		builder := NewConfiguredBuilder(MicroCompactConfig{})
+		input := BuildInput{
+			Messages: []providertypes.Message{{Role: "user", Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")}}},
+			Metadata: testMetadata(t.TempDir()),
+		}
+		result, err := builder.Build(stdcontext.Background(), input)
+		if err != nil {
+			t.Fatalf("Build() error = %v", err)
+		}
+		if result.SystemPrompt == "" {
+			t.Fatalf("expected non-empty system prompt")
+		}
+	})
+
+	t.Run("with policies and summarizers", func(t *testing.T) {
+		cfg := MicroCompactConfig{
+			Policies: stubMicroCompactPolicySource{},
+			Summarizers: stubMicroCompactSummarizerSource{
+				"filesystem_read_file": func(content string, metadata map[string]string, isError bool) string {
+					return "[summary] read_file"
+				},
+			},
+		}
+		builder := NewConfiguredBuilder(cfg)
+		messages := []providertypes.Message{
+			{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("older user")}},
+			{
+				Role: providertypes.RoleAssistant,
+				ToolCalls: []providertypes.ToolCall{
+					{ID: "call-1", Name: "filesystem_read_file", Arguments: "{}"},
+				},
+			},
+			{Role: providertypes.RoleTool, ToolCallID: "call-1", Parts: []providertypes.ContentPart{providertypes.NewTextPart("old read result")}},
+			{
+				Role: providertypes.RoleAssistant,
+				ToolCalls: []providertypes.ToolCall{
+					{ID: "call-2", Name: "bash", Arguments: "{}"},
+				},
+			},
+			{Role: providertypes.RoleTool, ToolCallID: "call-2", Parts: []providertypes.ContentPart{providertypes.NewTextPart("recent bash result")}},
+			{
+				Role: providertypes.RoleAssistant,
+				ToolCalls: []providertypes.ToolCall{
+					{ID: "call-3", Name: "bash", Arguments: "{}"},
+				},
+			},
+			{Role: providertypes.RoleTool, ToolCallID: "call-3", Parts: []providertypes.ContentPart{providertypes.NewTextPart("latest bash result")}},
+			{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("latest explicit instruction")}},
+		}
+		got, err := builder.Build(stdcontext.Background(), BuildInput{
+			Messages:  messages,
+			TaskState: agentsession.TaskState{Goal: "keep implementing task"},
+			Compact: CompactOptions{
+				MicroCompactRetainedToolSpans: 2,
+			},
+			Metadata: testMetadata(t.TempDir()),
+		})
+		if err != nil {
+			t.Fatalf("Build() error = %v", err)
+		}
+		if renderDisplayParts(got.Messages[2].Parts) != "[summary] read_file" {
+			t.Fatalf("expected summarized older read result, got %q", renderDisplayParts(got.Messages[2].Parts))
+		}
+	})
+
+	t.Run("with custom pin checker", func(t *testing.T) {
+		cfg := MicroCompactConfig{
+			PinChecker: noopPinChecker{},
+		}
+		builder := NewConfiguredBuilder(cfg)
+		messages := []providertypes.Message{
+			{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("older user")}},
+			{
+				Role: providertypes.RoleAssistant,
+				ToolCalls: []providertypes.ToolCall{
+					{ID: "call-1", Name: "filesystem_write_file", Arguments: `{"path":"README.md"}`},
+				},
+			},
+			{
+				Role:         providertypes.RoleTool,
+				ToolCallID:   "call-1",
+				Parts:        []providertypes.ContentPart{providertypes.NewTextPart("README content")},
+				ToolMetadata: map[string]string{"path": "/project/README.md"},
+			},
+			{
+				Role: providertypes.RoleAssistant,
+				ToolCalls: []providertypes.ToolCall{
+					{ID: "call-2", Name: "bash", Arguments: "{}"},
+				},
+			},
+			{Role: providertypes.RoleTool, ToolCallID: "call-2", Parts: []providertypes.ContentPart{providertypes.NewTextPart("recent bash result")}},
+			{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("latest explicit instruction")}},
+			{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("current reply")}},
+		}
+		got, err := builder.Build(stdcontext.Background(), BuildInput{
+			Messages:  messages,
+			TaskState: agentsession.TaskState{Goal: "keep implementing task"},
+			Compact: CompactOptions{
+				MicroCompactRetainedToolSpans: 1,
+			},
+		})
+		if err != nil {
+			t.Fatalf("Build() error = %v", err)
+		}
+		if renderDisplayParts(got.Messages[2].Parts) != microCompactClearedMessage {
+			t.Fatalf("expected noop pin checker to allow compaction, got %q", renderDisplayParts(got.Messages[2].Parts))
+		}
+	})
+
+	t.Run("with extra section sources", func(t *testing.T) {
+		extraSource := stubPromptSectionSource{
+			sections: []promptSection{{Title: "Custom", Content: "custom section body"}},
+		}
+		builder := NewConfiguredBuilder(MicroCompactConfig{}, extraSource)
+		input := BuildInput{
+			Messages: []providertypes.Message{{Role: "user", Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")}}},
+			Metadata: testMetadata(t.TempDir()),
+		}
+		result, err := builder.Build(stdcontext.Background(), input)
+		if err != nil {
+			t.Fatalf("Build() error = %v", err)
+		}
+		if !strings.Contains(result.SystemPrompt, "## Custom") {
+			t.Errorf("expected Custom section in system prompt")
+		}
+		if !strings.Contains(result.SystemPrompt, "custom section body") {
+			t.Errorf("expected custom section content in system prompt")
+		}
+	})
+
+	t.Run("nil section sources are skipped", func(t *testing.T) {
+		builder := NewConfiguredBuilder(MicroCompactConfig{}, nil, stubPromptSectionSource{
+			sections: []promptSection{{Title: "Extra", Content: "extra body"}},
+		}, nil)
+		input := BuildInput{
+			Messages: []providertypes.Message{{Role: "user", Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")}}},
+			Metadata: testMetadata(t.TempDir()),
+		}
+		result, err := builder.Build(stdcontext.Background(), input)
+		if err != nil {
+			t.Fatalf("Build() error = %v", err)
+		}
+		if !strings.Contains(result.SystemPrompt, "## Extra") {
+			t.Errorf("expected Extra section in system prompt")
 		}
 	})
 }
