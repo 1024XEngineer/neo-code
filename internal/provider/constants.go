@@ -14,6 +14,8 @@ const (
 const (
 	// DefaultGenerateMaxRetries 定义生成链路默认额外重试次数，不含首次尝试。
 	DefaultGenerateMaxRetries = 5
+	// MaxGenerateMaxRetries 定义生成链路允许的额外重试次数上限，避免异常配置导致极长重试循环。
+	MaxGenerateMaxRetries = 20
 	// DefaultGenerateStartTimeout 定义生成链路等待首个有效 payload 的默认窗口。
 	DefaultGenerateStartTimeout = 60 * time.Second
 	// DefaultGenerateIdleTimeout 定义首包后默认的流空闲超时窗口。
@@ -30,6 +32,9 @@ const (
 func NormalizeGenerateMaxRetries(value int) int {
 	if value <= 0 {
 		return DefaultGenerateMaxRetries
+	}
+	if value > MaxGenerateMaxRetries {
+		return MaxGenerateMaxRetries
 	}
 	return value
 }

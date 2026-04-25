@@ -84,7 +84,7 @@ func (p ProviderConfig) Validate() error {
 	if strings.TrimSpace(p.APIKeyEnv) == "" {
 		return fmt.Errorf("provider %q api_key_env is empty", p.Name)
 	}
-	if err := validateOptionalNonNegativeGenerateControl("generate_max_retries", p.GenerateMaxRetries); err != nil {
+	if err := validateOptionalGenerateMaxRetries(p.GenerateMaxRetries); err != nil {
 		return fmt.Errorf("provider %q: %w", p.Name, err)
 	}
 	if err := validateOptionalGenerateDurationSeconds("generate_start_timeout_sec", p.GenerateStartTimeoutSec); err != nil {
@@ -126,6 +126,17 @@ func (p ProviderConfig) Validate() error {
 func validateOptionalNonNegativeGenerateControl(field string, value int) error {
 	if value < 0 {
 		return fmt.Errorf("%s must be greater than or equal to 0", field)
+	}
+	return nil
+}
+
+// validateOptionalGenerateMaxRetries 校验额外重试次数，防止超大值导致生成阶段重试循环过长。
+func validateOptionalGenerateMaxRetries(value int) error {
+	if err := validateOptionalNonNegativeGenerateControl("generate_max_retries", value); err != nil {
+		return err
+	}
+	if value > provider.MaxGenerateMaxRetries {
+		return fmt.Errorf("generate_max_retries must be less than or equal to %d", provider.MaxGenerateMaxRetries)
 	}
 	return nil
 }

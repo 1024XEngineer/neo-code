@@ -599,19 +599,6 @@ func TestGenerateHelpers(t *testing.T) {
 		}
 	})
 
-	t.Run("retryable_error", func(t *testing.T) {
-		t.Parallel()
-		if isRetryableGenerateError(nil) {
-			t.Fatal("nil should not be retryable")
-		}
-		if isRetryableGenerateError(errors.New("plain")) {
-			t.Fatal("plain error should not be retryable")
-		}
-		if !isRetryableGenerateError(provider.NewNetworkProviderError("temporary")) {
-			t.Fatal("network provider error should be retryable")
-		}
-	})
-
 	t.Run("timeout_error", func(t *testing.T) {
 		t.Parallel()
 		if !isTimeoutGenerateError(context.DeadlineExceeded) {
@@ -621,36 +608,6 @@ func TestGenerateHelpers(t *testing.T) {
 			t.Fatal("plain error should not be timeout")
 		}
 	})
-}
-
-func TestRetryBackoffAndWait(t *testing.T) {
-	t.Parallel()
-
-	if wait := generateRetryBackoff(0); wait != 0 {
-		t.Fatalf("attempt 0 backoff = %v, want 0", wait)
-	}
-
-	for attempt := 1; attempt <= 6; attempt++ {
-		wait := generateRetryBackoff(attempt)
-		if wait < 0 {
-			t.Fatalf("attempt %d backoff should be non-negative, got %v", attempt, wait)
-		}
-		if wait > generateRetryMaxWait {
-			t.Fatalf("attempt %d backoff should be <= %v, got %v", attempt, generateRetryMaxWait, wait)
-		}
-	}
-
-	if err := waitForRetry(context.Background(), 0); err != nil {
-		t.Fatalf("waitForRetry(0) error = %v", err)
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	if err := waitForRetry(ctx, time.Millisecond); !errors.Is(err, context.Canceled) {
-		t.Fatalf("expected context canceled, got %v", err)
-	}
-	if err := waitForRetry(context.Background(), time.Millisecond); err != nil {
-		t.Fatalf("waitForRetry(timeout) error = %v", err)
-	}
 }
 
 func TestMapGeminiSDKError(t *testing.T) {

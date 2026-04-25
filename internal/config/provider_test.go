@@ -381,6 +381,13 @@ func TestProviderConfigValidateRejectsNegativeGenerateControls(t *testing.T) {
 			errContain: "generate_max_retries",
 		},
 		{
+			name: "retries exceed upper bound",
+			mutate: func(cfg *ProviderConfig) {
+				cfg.GenerateMaxRetries = providerpkg.MaxGenerateMaxRetries + 1
+			},
+			errContain: "generate_max_retries",
+		},
+		{
 			name: "negative start timeout",
 			mutate: func(cfg *ProviderConfig) {
 				cfg.GenerateStartTimeoutSec = -1
