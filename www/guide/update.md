@@ -13,6 +13,22 @@ description: NeoCode 当前的静默版本检查与 update 子命令说明。
 - 为了不打断 Bubble Tea TUI，提示会在应用退出、终端屏幕恢复后输出
 - `url-dispatch` 和 `update` 子命令会跳过该检测
 
+## 查看版本
+
+查看当前版本并检查最新稳定版：
+
+```bash
+neocode version
+```
+
+包含预发布版本：
+
+```bash
+neocode version --prerelease
+```
+
+当远端"语义最新版本"在当前平台不可安装时，`version` 会同时给出"可安装的最高版本"升级提示。
+
 ## 手动升级
 
 升级到最新稳定版：

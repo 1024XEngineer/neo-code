@@ -82,6 +82,7 @@ export default defineConfig({
       themeConfig: {
         nav: [
           { text: "开始使用", link: "/guide/" },
+          { text: "为什么选择 NeoCode", link: "/guide/why-neocode" },
           { text: "配置", link: "/guide/configuration" },
           { text: "命令与会话", link: "/guide/quick-start" },
           { text: "Gateway", link: "/guide/gateway" },
@@ -94,6 +95,7 @@ export default defineConfig({
               text: "开始使用",
               items: [
                 { text: "总览", link: "/guide/" },
+                { text: "为什么选择 NeoCode", link: "/guide/why-neocode" },
                 { text: "NeoCode 是什么", link: "/guide/getting-started" },
                 { text: "安装与运行", link: "/guide/install" },
                 { text: "首次上手", link: "/guide/quick-start" },
@@ -105,6 +107,8 @@ export default defineConfig({
                 { text: "配置入口", link: "/guide/configuration" },
                 { text: "工作区与会话", link: "/guide/workspace-session" },
                 { text: "记忆与 Skills", link: "/guide/memo-skills" },
+                { text: "工具与权限", link: "/guide/tools-permissions" },
+                { text: "子代理与验证器", link: "/guide/subagent-verification" },
                 { text: "Gateway 与 URL Dispatch", link: "/guide/gateway" },
                 { text: "升级与版本检查", link: "/guide/update" },
               ],

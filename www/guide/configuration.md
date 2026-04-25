@@ -60,11 +60,11 @@ context:
     read_time_max_message_spans: 24
     max_summary_chars: 1200
     micro_compact_disabled: false
-  auto_compact:
-    enabled: false
-    input_token_threshold: 0
+  budget:
+    prompt_budget: 0
     reserve_tokens: 13000
-    fallback_input_token_threshold: 100000
+    fallback_prompt_budget: 100000
+    max_reactive_compacts: 3
 ```
 
 ## 用户最常关心的字段
@@ -80,14 +80,30 @@ context:
 
 - `context.compact.manual_strategy`：`/compact` 的手动压缩策略
 - `context.compact.manual_keep_recent_messages`：保留的最近消息数
-- `context.auto_compact.enabled`：是否启用自动压缩
-- `context.auto_compact.reserve_tokens`：自动阈值推导时的预留 token
+- `context.budget.prompt_budget`：显式输入预算；`> 0` 时直接使用，`0` 表示自动推导
+- `context.budget.reserve_tokens`：自动推导输入预算时，从模型窗口中预留给输出、tool call、system prompt 的缓冲
+- `context.budget.fallback_prompt_budget`：模型窗口不可用或推导失败时使用的保底输入预算
+- `context.budget.max_reactive_compacts`：单次 Run 内允许的 reactive compact 最大次数
 
 ### `runtime` 相关
 
-- `runtime.max_no_progress_streak`：连续无进展轮次的熔断阈值
-- `runtime.max_repeat_cycle_streak`：重复调用同一工具参数时的熔断阈值
+- `runtime.max_no_progress_streak`：连续无进展轮次的提醒阈值，默认 `5`
+- `runtime.max_repeat_cycle_streak`：重复调用同一工具参数时的提醒阈值，默认 `3`
+- `runtime.max_turns`：单次 Run 的最大推理轮数上限，默认 `40`
 - `runtime.assets.*`：单个与总 `session_asset` 大小限制
+
+### `verification` 相关
+
+- `verification.enabled`：是否启用验证引擎，默认 `true`
+- `verification.final_intercept`：是否在任务收尾前拦截并触发验证，默认 `true`
+- `verification.max_no_progress`：验证无进展时的最大重试次数，默认 `3`
+- `verification.max_retries`：验证失败后的最大重试次数，默认 `2`
+- `verification.verifiers.<name>.enabled`：是否启用该验证器
+- `verification.verifiers.<name>.required`：该验证器是否为硬性要求
+- `verification.verifiers.<name>.timeout_sec`：该验证器的执行超时
+- `verification.verifiers.<name>.fail_closed`：验证器异常时是否按失败处理
+
+验证器的详细说明见 [子代理与验证器](./subagent-verification)。
 
 ## custom provider 示例
 
@@ -128,6 +144,7 @@ discovery_endpoint_path: /models
 | `gemini` | `GEMINI_API_KEY` |
 | `openll` | `AI_API_KEY` |
 | `qiniu` | `QINIU_API_KEY` |
+| `modelscope` | `MODELSCOPE_API_KEY` |
 
 ## 继续阅读
 

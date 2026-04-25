@@ -23,6 +23,34 @@ description: 说明 /memo、/remember、/forget 与 Skills 的发现、激活和
 
 这适合保留跨会话的偏好、项目事实或反复重复的上下文前提。
 
+### 记忆类型
+
+每条记忆都有一个 `type` 字段，影响记忆的用途和检索优先级：
+
+| 类型 | 用途 | 示例 |
+|------|------|------|
+| `user` | 用户偏好与个人设定 | "我习惯用 powershell"、"优先用中文回复" |
+| `feedback` | 纠正与指导 | "不要自动删除测试文件"、"修改前先确认" |
+| `project` | 项目事实与决策 | "本项目使用 Go 1.25"、"API 响应格式为 JSON-RPC" |
+| `reference` | 外部资源引用 | "设计文档在 docs/ 目录"、"API 规范见 reference/gateway-rpc-api.md" |
+
+### 记忆 Scope
+
+记忆按 scope 分为两类：
+
+- **user scope**：跨所有工作区和会话生效的个人偏好
+- **project scope**：仅在工作区级别生效的项目事实
+
+`/memo` 命令会按 scope 分组展示记忆索引。
+
+### 后台自动提取
+
+除了通过 `/remember` 显式写入记忆外，NeoCode 还支持后台自动提取：
+
+- 当会话中出现明确的用户偏好或项目事实时，Agent 可以通过 `memo_remember` 工具自动保存
+- 自动提取的记忆同样遵循类型和 scope 规则
+- 你可以通过 `/memo` 查看所有记忆（包括自动提取的），用 `/forget` 删除不需要的
+
 ## Skills 是什么
 
 Skills 是 NeoCode 的“能力提示层”，不是新的执行层。它们影响：

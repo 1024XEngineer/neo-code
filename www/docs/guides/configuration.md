@@ -60,11 +60,11 @@ context:
     read_time_max_message_spans: 24
     max_summary_chars: 1200
     micro_compact_disabled: false
-  auto_compact:
-    enabled: false
-    input_token_threshold: 0
+  budget:
+    prompt_budget: 0
     reserve_tokens: 13000
-    fallback_input_token_threshold: 100000
+    fallback_prompt_budget: 100000
+    max_reactive_compacts: 3
 ```
 
 ### 基础字段
@@ -86,19 +86,35 @@ context:
 | `context.compact.read_time_max_message_spans` | context 读时保留的 message span 上限 |
 | `context.compact.max_summary_chars` | compact summary 最大字符数 |
 | `context.compact.micro_compact_disabled` | 是否关闭默认启用的 micro compact |
-| `context.auto_compact.enabled` | 是否启用自动压缩 |
-| `context.auto_compact.input_token_threshold` | 自动压缩输入 token 阈值 |
-| `context.auto_compact.reserve_tokens` | 自动阈值推导时预留 token 缓冲 |
-| `context.auto_compact.fallback_input_token_threshold` | 自动推导失败时使用的保底阈值 |
+| `context.budget.prompt_budget` | 显式输入预算；`> 0` 时直接使用，`0` 表示自动推导 |
+| `context.budget.reserve_tokens` | 自动推导输入预算时，从模型窗口中预留给输出、tool call、system prompt 的缓冲 |
+| `context.budget.fallback_prompt_budget` | 模型窗口不可用或推导失败时使用的保底输入预算 |
+| `context.budget.max_reactive_compacts` | 单次 Run 内允许的 reactive compact 最大次数 |
 
 ### `runtime` 字段
 
 | 字段 | 说明 |
 |------|------|
-| `runtime.max_no_progress_streak` | 连续"无进展"轮次熔断阈值，默认 `3` |
-| `runtime.max_repeat_cycle_streak` | 连续"重复调用同一工具参数"轮次熔断阈值，默认 `3` |
+| `runtime.max_no_progress_streak` | 连续"无进展"轮次提醒阈值，默认 `5` |
+| `runtime.max_repeat_cycle_streak` | 连续"重复调用同一工具参数"提醒阈值，默认 `3` |
+| `runtime.max_turns` | 单次 Run 的最大推理轮数上限，默认 `40` |
 | `runtime.assets.max_session_asset_bytes` | 单个 session asset 最大字节数，默认 20 MiB |
 | `runtime.assets.max_session_assets_total_bytes` | 单次请求可携带的 session asset 总字节上限，默认 20 MiB |
+
+### `verification` 字段
+
+| 字段 | 说明 |
+|------|------|
+| `verification.enabled` | 是否启用验证引擎，默认 `true` |
+| `verification.final_intercept` | 是否在任务收尾前拦截并触发验证，默认 `true` |
+| `verification.max_no_progress` | 验证无进展时的最大重试次数，默认 `3` |
+| `verification.max_retries` | 验证失败后的最大重试次数，默认 `2` |
+| `verification.verifiers.<name>.enabled` | 是否启用该验证器 |
+| `verification.verifiers.<name>.required` | 该验证器是否为硬性要求 |
+| `verification.verifiers.<name>.timeout_sec` | 该验证器的执行超时 |
+| `verification.verifiers.<name>.fail_closed` | 验证器异常时是否按失败处理 |
+| `verification.execution_policy.allowed_commands` | 验证器可执行的命令白名单 |
+| `verification.execution_policy.denied_commands` | 验证器禁止执行的命令黑名单 |
 
 ### `tools` 字段
 
@@ -132,10 +148,12 @@ API Key 只从系统环境变量读取。
 | `gemini` | `GEMINI_API_KEY` |
 | `openll` | `AI_API_KEY` |
 | `qiniu` | `QINIU_API_KEY` |
+| `modelscope` | `MODELSCOPE_API_KEY` |
 
 ```bash
 export OPENAI_API_KEY="sk-..."
 export GEMINI_API_KEY="AI..."
+export MODELSCOPE_API_KEY="ms-..."
 ```
 
 ## CLI 运行参数覆盖
@@ -151,6 +169,10 @@ neocode --workdir /path/to/workspace
 ### 旧字段被拒绝
 
 如果在 `config.yaml` 中包含 `workdir`、`providers` 等字段，当前版本会报未知字段错误。处理方式是手动删除这些字段。
+
+### 旧 `context.auto_compact` 字段
+
+如果配置中只存在 `context.auto_compact`，启动时 preflight 会自动迁移为 `context.budget`，并写入 `config.yaml.bak` 备份。如果 `context.auto_compact` 与 `context.budget` 同时存在，启动会直接报错，需要手动合并后再启动。
 
 ### API Key 未设置
 

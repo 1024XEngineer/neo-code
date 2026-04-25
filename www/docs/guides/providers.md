@@ -12,6 +12,7 @@ NeoCode 支持多个模型服务商（provider），可以随时切换。
 | `gemini` | `GEMINI_API_KEY` |
 | `openll` | `AI_API_KEY` |
 | `qiniu` | `QINIU_API_KEY` |
+| `modelscope` | `MODELSCOPE_API_KEY` |
 
 ## 在 TUI 中切换
 

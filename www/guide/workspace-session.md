@@ -31,17 +31,39 @@ go run ./cmd/neocode --workdir /path/to/workspace
 
 ## 上下文压缩
 
-当会话越来越长时，可以使用：
+当会话越来越长时，上下文会占用越来越多的 token 预算。NeoCode 提供三种压缩机制：
+
+### 手动压缩
 
 ```text
 /compact
 ```
 
-当前实现支持：
+手动压缩将当前会话历史替换为摘要，保留继续完成任务所需的上下文。压缩策略由 `context.compact.manual_strategy` 控制：
 
-- 手动压缩策略
-- 自动压缩相关阈值配置
-- 读时 micro compact
+- `keep_recent`：保留最近 N 条消息 + 历史摘要（默认）
+- `full_replace`：用完整摘要替换所有历史
+
+### Micro Compact（读时压缩）
+
+每次 Runtime 读取上下文时，自动对较早的工具调用结果进行压缩：
+
+- 保留最近 N 个工具块的原始内容（由 `context.compact.micro_compact_retained_tool_spans` 控制，默认 6）
+- 更早的工具块只保留摘要
+- `memo_recall` 和 `memo_list` 的结果不参与 micro compact（策略为 `preserve_history`）
+
+Micro Compact 默认启用，可通过 `context.compact.micro_compact_disabled: true` 关闭。
+
+### Reactive Compact（预算触发压缩）
+
+当输入 token 超过预算时，Runtime 会自动触发 reactive compact：
+
+- 预算由 `context.budget.prompt_budget` 控制
+- `prompt_budget > 0` 时直接使用该值作为输入预算上限
+- `prompt_budget = 0`（默认）时，自动从模型窗口推导输入预算，预留 `reserve_tokens` 给输出和 system prompt
+- 单次 Run 内最多触发 `max_reactive_compacts` 次 reactive compact（默认 3 次）
+
+如果 reactive compact 后仍超预算，Run 会因预算不足而终止。
 
 压缩策略的目标是保留继续完成任务所需的上下文，而不是让 UI 自己保存散落状态。
 

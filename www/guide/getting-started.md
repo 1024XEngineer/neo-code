@@ -23,11 +23,16 @@ NeoCode 更适合这些场景：
 
 - Bubble Tea TUI 交互界面
 - 本地 Gateway 进程与 URL Scheme 派发入口
-- Provider / Model 选择
-- 会话持久化与恢复
-- 上下文压缩与自动压缩配置
-- 记忆查看、写入、删除
+- Provider / Model 选择（内置 openai、gemini、openll、qiniu、modelscope，支持自定义接入）
+- 会话持久化与恢复（SQLite 存储）
+- 上下文压缩与预算门禁（`context.budget`）
+- 记忆查看、写入、删除（含后台自动提取）
 - Skills 发现、激活、停用和会话恢复
+- 13 个内置工具（文件操作、Bash、WebFetch、Todo、子代理、记忆）
+- MCP stdio 接入，支持外部工具注册
+- 子代理编排（researcher / coder / reviewer 三种角色）
+- 验收验证器（build / test / lint / typecheck 等）
+- 工具权限审批与 Bash 语义治理
 
 ## 模块怎么分工
 
@@ -38,6 +43,10 @@ NeoCode 更适合这些场景：
 - `internal/runtime`：ReAct 主循环、tool result 回灌、停止条件、事件派发
 - `internal/provider`：模型协议差异、请求组装和流式响应解析
 - `internal/tools`：工具契约、参数校验、执行与结果收敛
+- `internal/security`：权限审批、能力策略与工作区安全
+- `internal/subagent`：子代理角色策略、执行约束与输出契约
+- `internal/context`：Prompt 构建与上下文裁剪
+- `internal/session`：会话持久化（SQLite 存储）
 
 ## 接下来读什么
 

@@ -52,6 +52,7 @@ go run ./cmd/neocode
 - `gemini`
 - `openll`
 - `qiniu`
+- `modelscope`
 
 你可以通过交互入口切换：
 
