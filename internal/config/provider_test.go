@@ -782,7 +782,7 @@ func TestResolvedProviderConfigToRuntimeConfig(t *testing.T) {
 		ChatAPIMode:           "",
 		ChatEndpointPath:      "",
 		DiscoveryEndpointPath: providerpkg.DiscoveryEndpointPathModels,
-		GenerateMaxRetries:    providerpkg.DefaultGenerateMaxRetries,
+		GenerateMaxRetries:    0,
 		GenerateStartTimeout:  providerpkg.DefaultGenerateStartTimeout,
 		GenerateIdleTimeout:   providerpkg.DefaultGenerateIdleTimeout,
 	}

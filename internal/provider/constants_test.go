@@ -10,7 +10,7 @@ func TestNormalizeGenerateMaxRetries(t *testing.T) {
 		input int
 		want  int
 	}{
-		{name: "non positive fallback", input: 0, want: DefaultGenerateMaxRetries},
+		{name: "zero keeps explicit value", input: 0, want: 0},
 		{name: "negative fallback", input: -1, want: DefaultGenerateMaxRetries},
 		{name: "keep in range", input: 3, want: 3},
 		{name: "clamp upper bound", input: MaxGenerateMaxRetries + 10, want: MaxGenerateMaxRetries},

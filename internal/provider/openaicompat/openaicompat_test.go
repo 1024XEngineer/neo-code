@@ -347,6 +347,7 @@ data: [DONE]
 
 	cfg := resolvedConfig(server.URL, "gpt-4.1")
 	cfg.ChatEndpointPath = "/gateway/chat/completions"
+	cfg.GenerateMaxRetries = 1
 	p, err := New(cfg)
 	if err != nil {
 		t.Fatalf("New() error = %v", err)

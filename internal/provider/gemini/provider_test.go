@@ -34,11 +34,12 @@ func TestProviderGenerate(t *testing.T) {
 	defer server.Close()
 
 	p, err := New(provider.RuntimeConfig{
-		Driver:         provider.DriverGemini,
-		BaseURL:        server.URL,
-		DefaultModel:   "gemini-2.5-flash",
-		APIKeyEnv:      "GEMINI_TEST_KEY",
-		APIKeyResolver: provider.StaticAPIKeyResolver("test-key"),
+		Driver:             provider.DriverGemini,
+		BaseURL:            server.URL,
+		DefaultModel:       "gemini-2.5-flash",
+		APIKeyEnv:          "GEMINI_TEST_KEY",
+		APIKeyResolver:     provider.StaticAPIKeyResolver("test-key"),
+		GenerateMaxRetries: 1,
 	})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
@@ -109,11 +110,12 @@ func TestProviderGenerateOmitsUsageWhenProviderDidNotReturnUsage(t *testing.T) {
 	defer server.Close()
 
 	p, err := New(provider.RuntimeConfig{
-		Driver:         provider.DriverGemini,
-		BaseURL:        server.URL,
-		DefaultModel:   "gemini-2.5-flash",
-		APIKeyEnv:      "GEMINI_TEST_KEY",
-		APIKeyResolver: provider.StaticAPIKeyResolver("test-key"),
+		Driver:             provider.DriverGemini,
+		BaseURL:            server.URL,
+		DefaultModel:       "gemini-2.5-flash",
+		APIKeyEnv:          "GEMINI_TEST_KEY",
+		APIKeyResolver:     provider.StaticAPIKeyResolver("test-key"),
+		GenerateMaxRetries: defaultGenerateRetryMax,
 	})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
@@ -291,11 +293,12 @@ func TestEstimateThenGenerateReusesPreparedRequest(t *testing.T) {
 	defer server.Close()
 
 	p, err := New(provider.RuntimeConfig{
-		Driver:         provider.DriverGemini,
-		BaseURL:        server.URL,
-		DefaultModel:   "gemini-2.5-flash",
-		APIKeyEnv:      "GEMINI_TEST_KEY",
-		APIKeyResolver: provider.StaticAPIKeyResolver("test-key"),
+		Driver:             provider.DriverGemini,
+		BaseURL:            server.URL,
+		DefaultModel:       "gemini-2.5-flash",
+		APIKeyEnv:          "GEMINI_TEST_KEY",
+		APIKeyResolver:     provider.StaticAPIKeyResolver("test-key"),
+		GenerateMaxRetries: 1,
 	})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
@@ -344,11 +347,12 @@ func TestProviderGenerateRetriesRetryableErrorBeforeStreamStarts(t *testing.T) {
 	defer server.Close()
 
 	p, err := New(provider.RuntimeConfig{
-		Driver:         provider.DriverGemini,
-		BaseURL:        server.URL,
-		DefaultModel:   "gemini-2.5-flash",
-		APIKeyEnv:      "GEMINI_TEST_KEY",
-		APIKeyResolver: provider.StaticAPIKeyResolver("test-key"),
+		Driver:             provider.DriverGemini,
+		BaseURL:            server.URL,
+		DefaultModel:       "gemini-2.5-flash",
+		APIKeyEnv:          "GEMINI_TEST_KEY",
+		APIKeyResolver:     provider.StaticAPIKeyResolver("test-key"),
+		GenerateMaxRetries: 1,
 	})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
@@ -391,11 +395,12 @@ func TestProviderGenerateReturnsRetryableErrorAfterRetryExhausted(t *testing.T) 
 	defer server.Close()
 
 	p, err := New(provider.RuntimeConfig{
-		Driver:         provider.DriverGemini,
-		BaseURL:        server.URL,
-		DefaultModel:   "gemini-2.5-flash",
-		APIKeyEnv:      "GEMINI_TEST_KEY",
-		APIKeyResolver: provider.StaticAPIKeyResolver("test-key"),
+		Driver:             provider.DriverGemini,
+		BaseURL:            server.URL,
+		DefaultModel:       "gemini-2.5-flash",
+		APIKeyEnv:          "GEMINI_TEST_KEY",
+		APIKeyResolver:     provider.StaticAPIKeyResolver("test-key"),
+		GenerateMaxRetries: defaultGenerateRetryMax,
 	})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
@@ -447,11 +452,12 @@ func TestProviderGenerateRetryStateResetsAfterSuccess(t *testing.T) {
 	defer server.Close()
 
 	p, err := New(provider.RuntimeConfig{
-		Driver:         provider.DriverGemini,
-		BaseURL:        server.URL,
-		DefaultModel:   "gemini-2.5-flash",
-		APIKeyEnv:      "GEMINI_TEST_KEY",
-		APIKeyResolver: provider.StaticAPIKeyResolver("test-key"),
+		Driver:             provider.DriverGemini,
+		BaseURL:            server.URL,
+		DefaultModel:       "gemini-2.5-flash",
+		APIKeyEnv:          "GEMINI_TEST_KEY",
+		APIKeyResolver:     provider.StaticAPIKeyResolver("test-key"),
+		GenerateMaxRetries: 1,
 	})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
@@ -509,11 +515,12 @@ func TestProviderGenerateReturnsRetryWaitError(t *testing.T) {
 	defer server.Close()
 
 	p, err := New(provider.RuntimeConfig{
-		Driver:         provider.DriverGemini,
-		BaseURL:        server.URL,
-		DefaultModel:   "gemini-2.5-flash",
-		APIKeyEnv:      "GEMINI_TEST_KEY",
-		APIKeyResolver: provider.StaticAPIKeyResolver("test-key"),
+		Driver:             provider.DriverGemini,
+		BaseURL:            server.URL,
+		DefaultModel:       "gemini-2.5-flash",
+		APIKeyEnv:          "GEMINI_TEST_KEY",
+		APIKeyResolver:     provider.StaticAPIKeyResolver("test-key"),
+		GenerateMaxRetries: 1,
 	})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)

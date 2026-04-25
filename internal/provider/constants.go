@@ -28,9 +28,9 @@ const (
 	DefaultSDKRequestTimeout = 10 * time.Minute
 )
 
-// NormalizeGenerateMaxRetries 归一化生成链路额外重试次数，非正值回退到默认值。
+// NormalizeGenerateMaxRetries 归一化生成链路额外重试次数，负值回退到默认值。
 func NormalizeGenerateMaxRetries(value int) int {
-	if value <= 0 {
+	if value < 0 {
 		return DefaultGenerateMaxRetries
 	}
 	if value > MaxGenerateMaxRetries {

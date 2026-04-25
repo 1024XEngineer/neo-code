@@ -24,10 +24,7 @@ import (
 )
 
 const (
-	defaultProviderRetryMax = 2
-	providerRetryBaseWait   = 1 * time.Second
-	providerRetryMaxWait    = 5 * time.Second
-	defaultToolParallelism  = 4
+	defaultToolParallelism = 4
 
 	terminationEventEmitTimeout = 500 * time.Millisecond
 )
