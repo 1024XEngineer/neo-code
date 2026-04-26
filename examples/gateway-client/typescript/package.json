@@ -1,0 +1,22 @@
+{
+  "name": "@neocode/gateway-client-example",
+  "version": "0.1.0",
+  "description": "A minimal TypeScript client example for NeoCode Gateway",
+  "main": "src/client.ts",
+  "scripts": {
+    "build": "tsc",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "neocode",
+    "gateway",
+    "client",
+    "typescript"
+  ],
+  "author": "NeoCode Team",
+  "license": "MIT",
+  "devDependencies": {
+    "typescript": "^5.0.0",
+    "@types/node": "^18.0.0"
+  }
+}
