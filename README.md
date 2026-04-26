@@ -150,20 +150,6 @@ neocode --workdir /path/to/your/project
 - [升级与版本检查](https://neocode-docs.pages.dev/guide/update)
 - [排障与常见问题](https://neocode-docs.pages.dev/guide/troubleshooting)
 
-仓库内设计文档：
-
-- [配置管理设计](docs/config-management-detail-design.md)
-- [扩展 Provider](docs/guides/adding-providers.md)
-- [Runtime / Provider 事件流](docs/runtime-provider-event-flow.md)
-- [Session 持久化设计](docs/session-persistence-design.md)
-- [Context Compact 说明](docs/context-compact.md)
-- [Repository 模块设计](docs/repository-design.md)
-- [Tools 与 TUI 集成](docs/tools-and-tui-integration.md)
-- [Skills 设计与使用](docs/skills-system-design.md)
-- [MCP 配置指南](docs/guides/mcp-configuration.md)
-- [ModelScope 半引导配置](docs/guides/modelscope-provider-setup.md)
-- [更新与升级（实现说明）](docs/guides/update.md)
-
 文档站源码位于 `www/`，本地预览：
 
 ```bash
