@@ -6,8 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
+	"sync/atomic"
 
 	openai "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
@@ -36,14 +38,58 @@ func (p *Provider) generateSDKChatCompletions(
 
 	stream := client.Chat.Completions.NewStreaming(ctx, params)
 	defer func() { _ = stream.Close() }()
-	if err := chatcompletions.EmitFromSDKStream(ctx, stream, events); err != nil {
+	payloadStarted, err := emitSDKChatCompletionStream(ctx, stream, events)
+	if err != nil {
 		if mapped, ok := mapOpenAIError(err); ok {
 			return mapped
 		}
-		if !shouldFallbackToCompatibleChatStream(err) {
+		if !shouldFallbackToCompatibleChatStream(err, payloadStarted) {
 			return err
 		}
 		return p.generateChatCompletionsWithCompatibleStream(ctx, payload, events)
+	}
+	return nil
+}
+
+// emitSDKChatCompletionStream 转发 SDK typed stream 事件，并额外记录是否已真正发出有效 payload。
+func emitSDKChatCompletionStream(
+	ctx context.Context,
+	stream any,
+	events chan<- providertypes.StreamEvent,
+) (bool, error) {
+	proxyEvents := make(chan providertypes.StreamEvent, 16)
+	forwardErrCh := make(chan error, 1)
+	var payloadStarted atomic.Bool
+
+	go func() {
+		forwardErrCh <- forwardSDKStreamEvents(ctx, proxyEvents, events, &payloadStarted)
+	}()
+
+	err := chatcompletions.EmitFromSDKStream(ctx, stream, proxyEvents)
+	close(proxyEvents)
+	forwardErr := <-forwardErrCh
+	if err == nil {
+		err = forwardErr
+	}
+	return payloadStarted.Load(), err
+}
+
+// forwardSDKStreamEvents 负责把 SDK 事件转发给上层，同时只按有效 payload 规则标记流已开始。
+func forwardSDKStreamEvents(
+	ctx context.Context,
+	source <-chan providertypes.StreamEvent,
+	target chan<- providertypes.StreamEvent,
+	payloadStarted *atomic.Bool,
+) error {
+	for event := range source {
+		if provider.IsEffectiveGeneratePayloadEvent(event) {
+			payloadStarted.Store(true)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case target <- event:
+		}
 	}
 	return nil
 }
@@ -183,8 +229,11 @@ func toSDKAssistantToolCalls(calls []chatcompletions.ToolCall) []openai.ChatComp
 }
 
 // shouldFallbackToCompatibleChatStream 判断是否需要从 SDK typed stream 降级到兼容流解析。
-func shouldFallbackToCompatibleChatStream(err error) bool {
+func shouldFallbackToCompatibleChatStream(err error, payloadStarted bool) bool {
 	if err == nil {
+		return false
+	}
+	if payloadStarted {
 		return false
 	}
 
@@ -332,10 +381,48 @@ func (p *Provider) generateSDKResponses(
 
 // wrapSDKRequestError 将 SDK 请求错误映射为统一 ProviderError；无法映射时保留原始错误链。
 func wrapSDKRequestError(err error, action string) error {
+	if err == nil {
+		return nil
+	}
 	if mapped, ok := mapOpenAIError(err); ok {
 		return mapped
 	}
+	if errors.Is(err, context.Canceled) {
+		return err
+	}
+	message := strings.TrimSpace(safeErrorMessage(err))
+	if message == "" {
+		message = "unknown transport error"
+	}
+	if isSDKTransportTimeout(err) {
+		return provider.NewTimeoutProviderError(
+			fmt.Sprintf("%s%s timeout: %s", errorPrefix, strings.TrimSpace(action), message),
+		)
+	}
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return provider.NewNetworkProviderError(
+			fmt.Sprintf("%s%s: %s", errorPrefix, strings.TrimSpace(action), message),
+		)
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		return provider.NewNetworkProviderError(
+			fmt.Sprintf("%s%s: %s", errorPrefix, strings.TrimSpace(action), message),
+		)
+	}
 	return fmt.Errorf("%s%s: %w", errorPrefix, strings.TrimSpace(action), err)
+}
+
+// isSDKTransportTimeout 统一识别 OpenAI-compatible 发送阶段的超时错误。
+func isSDKTransportTimeout(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var netErr net.Error
+	return errors.As(err, &netErr) && netErr.Timeout()
 }
 
 func (p *Provider) newSDKClient() (openai.Client, error) {
@@ -344,8 +431,9 @@ func (p *Provider) newSDKClient() (openai.Client, error) {
 		return openai.Client{}, err
 	}
 	return openai.NewClient(
-		option.WithHTTPClient(p.client),
+		option.WithHTTPClient(p.generateClient),
 		option.WithAPIKey(apiKey),
+		option.WithMaxRetries(0),
 		option.WithBaseURL(strings.TrimRight(strings.TrimSpace(p.cfg.BaseURL), "/")),
 	), nil
 }

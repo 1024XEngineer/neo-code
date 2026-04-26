@@ -241,7 +241,7 @@ func restoreRuntimePayload(eventType EventType, payload any) (any, error) {
 		return decodeRuntimePayload[RuntimeToolStatusPayload](payload)
 	case EventType(RuntimeEventUsage):
 		return decodeRuntimePayload[RuntimeUsagePayload](payload)
-	case EventAgentChunk, EventToolChunk, EventError, EventProviderRetry, EventToolCallThinking:
+	case EventAgentChunk, EventToolChunk, EventError, EventToolCallThinking:
 		return decodeStringPayload(payload), nil
 	default:
 		return payload, nil

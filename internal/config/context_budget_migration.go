@@ -56,7 +56,7 @@ func MigrateContextBudgetConfigFile(path string, dryRun bool) (ContextBudgetMigr
 	}
 	result.Notes = append(result.Notes, notes...)
 	if !changed {
-		result.Reason = "未检测到 context.auto_compact"
+		result.Reason = "未检测到需要升级的配置字段"
 		return result, nil
 	}
 
@@ -81,44 +81,55 @@ func MigrateContextBudgetConfigContent(raw []byte) ([]byte, bool, []string, erro
 	if len(bytes.TrimSpace(raw)) == 0 {
 		return raw, false, nil, nil
 	}
-	if !bytes.Contains(raw, []byte("auto_compact")) {
-		return raw, false, nil, nil
-	}
 
 	var doc map[string]any
 	if err := yaml.Unmarshal(raw, &doc); err != nil {
 		return nil, false, nil, err
 	}
-	contextValue, ok := doc["context"]
-	if !ok {
+	if doc == nil {
+		doc = make(map[string]any)
+	}
+
+	changed := false
+	if _, exists := doc["generate_start_timeout_sec"]; !exists {
+		doc["generate_start_timeout_sec"] = DefaultGenerateStartTimeoutSec
+		changed = true
+	}
+
+	var notes []string
+	contextValue, hasContext := doc["context"]
+	if hasContext {
+		contextMap, ok := migrationStringMap(contextValue)
+		if !ok {
+			return nil, false, nil, errors.New("context must be a mapping")
+		}
+
+		autoValue, hasAutoCompact := contextMap["auto_compact"]
+		if hasAutoCompact {
+			if _, hasBudget := contextMap["budget"]; hasBudget {
+				return nil, false, nil, errors.New("context.auto_compact and context.budget cannot both exist")
+			}
+
+			autoMap, ok := migrationStringMap(autoValue)
+			if !ok {
+				return nil, false, nil, errors.New("context.auto_compact must be a mapping")
+			}
+			budgetMap := make(map[string]any)
+			migrationMoveField(autoMap, budgetMap, "input_token_threshold", "prompt_budget")
+			migrationMoveField(autoMap, budgetMap, "reserve_tokens", "reserve_tokens")
+			migrationMoveField(autoMap, budgetMap, "fallback_input_token_threshold", "fallback_prompt_budget")
+			notes = collectContextBudgetMigrationNotes(autoMap)
+
+			delete(contextMap, "auto_compact")
+			contextMap["budget"] = budgetMap
+			doc["context"] = contextMap
+			changed = true
+		}
+	}
+
+	if !changed {
 		return raw, false, nil, nil
 	}
-	contextMap, ok := migrationStringMap(contextValue)
-	if !ok {
-		return nil, false, nil, errors.New("context must be a mapping")
-	}
-
-	autoValue, hasAutoCompact := contextMap["auto_compact"]
-	if !hasAutoCompact {
-		return raw, false, nil, nil
-	}
-	if _, hasBudget := contextMap["budget"]; hasBudget {
-		return nil, false, nil, errors.New("context.auto_compact and context.budget cannot both exist")
-	}
-
-	autoMap, ok := migrationStringMap(autoValue)
-	if !ok {
-		return nil, false, nil, errors.New("context.auto_compact must be a mapping")
-	}
-	budgetMap := make(map[string]any)
-	migrationMoveField(autoMap, budgetMap, "input_token_threshold", "prompt_budget")
-	migrationMoveField(autoMap, budgetMap, "reserve_tokens", "reserve_tokens")
-	migrationMoveField(autoMap, budgetMap, "fallback_input_token_threshold", "fallback_prompt_budget")
-	notes := collectContextBudgetMigrationNotes(autoMap)
-
-	delete(contextMap, "auto_compact")
-	contextMap["budget"] = budgetMap
-	doc["context"] = contextMap
 
 	out, err := yaml.Marshal(doc)
 	if err != nil {

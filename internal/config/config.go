@@ -10,32 +10,35 @@ import (
 )
 
 const (
-	DefaultWorkdir        = "."
-	DefaultToolTimeoutSec = 20
+	DefaultWorkdir                 = "."
+	DefaultToolTimeoutSec          = 20
+	DefaultGenerateStartTimeoutSec = 90
 )
 
 type Config struct {
-	Providers        []ProviderConfig `yaml:"-"`
-	SelectedProvider string           `yaml:"selected_provider"`
-	CurrentModel     string           `yaml:"current_model"`
-	Workdir          string           `yaml:"-"`
-	Shell            string           `yaml:"shell"`
-	ToolTimeoutSec   int              `yaml:"tool_timeout_sec,omitempty"`
-	Runtime          RuntimeConfig    `yaml:"runtime,omitempty"`
-	Context          ContextConfig    `yaml:"context,omitempty"`
-	Tools            ToolsConfig      `yaml:"tools,omitempty"`
-	Memo             MemoConfig       `yaml:"memo,omitempty"`
-	Gateway          GatewayConfig    `yaml:"gateway,omitempty"`
+	Providers               []ProviderConfig `yaml:"-"`
+	SelectedProvider        string           `yaml:"selected_provider"`
+	CurrentModel            string           `yaml:"current_model"`
+	Workdir                 string           `yaml:"-"`
+	Shell                   string           `yaml:"shell"`
+	ToolTimeoutSec          int              `yaml:"tool_timeout_sec,omitempty"`
+	GenerateStartTimeoutSec int              `yaml:"generate_start_timeout_sec,omitempty"`
+	Runtime                 RuntimeConfig    `yaml:"runtime,omitempty"`
+	Context                 ContextConfig    `yaml:"context,omitempty"`
+	Tools                   ToolsConfig      `yaml:"tools,omitempty"`
+	Memo                    MemoConfig       `yaml:"memo,omitempty"`
+	Gateway                 GatewayConfig    `yaml:"gateway,omitempty"`
 }
 
 // StaticDefaults 返回 config 层负责的静态默认值骨架，不包含 provider 装配和选择状态修复。
 func StaticDefaults() *Config {
 	return &Config{
-		Workdir:        DefaultWorkdir,
-		Shell:          defaultShell(),
-		ToolTimeoutSec: DefaultToolTimeoutSec,
-		Runtime:        defaultRuntimeConfig(),
-		Context:        defaultContextConfig(),
+		Workdir:                 DefaultWorkdir,
+		Shell:                   defaultShell(),
+		ToolTimeoutSec:          DefaultToolTimeoutSec,
+		GenerateStartTimeoutSec: DefaultGenerateStartTimeoutSec,
+		Runtime:                 defaultRuntimeConfig(),
+		Context:                 defaultContextConfig(),
 		Tools: ToolsConfig{
 			WebFetch: defaultWebFetchConfig(),
 			MCP:      defaultMCPConfig(),
@@ -75,6 +78,9 @@ func (c *Config) applyStaticDefaults(defaults Config) {
 	if c.ToolTimeoutSec <= 0 {
 		c.ToolTimeoutSec = defaults.ToolTimeoutSec
 	}
+	if c.GenerateStartTimeoutSec <= 0 {
+		c.GenerateStartTimeoutSec = defaults.GenerateStartTimeoutSec
+	}
 	c.Runtime.ApplyDefaults(defaults.Runtime)
 	c.Context.ApplyDefaults(defaults.Context)
 	c.Tools.ApplyDefaults(defaults.Tools)
@@ -91,6 +97,9 @@ func (c *Config) ValidateSnapshot() error {
 	}
 	if len(c.Providers) == 0 {
 		return errors.New("config: providers is empty")
+	}
+	if err := validateOptionalGenerateDurationSeconds("generate_start_timeout_sec", c.GenerateStartTimeoutSec); err != nil {
+		return fmt.Errorf("config: %w", err)
 	}
 
 	seen := make(map[string]struct{}, len(c.Providers))

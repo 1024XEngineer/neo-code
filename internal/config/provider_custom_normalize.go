@@ -14,13 +14,15 @@ const ManualModelOptionalIntUnset = -1
 // NormalizeCustomProviderInput 统一归一化 custom provider 的输入字段，并执行协议/模型来源的组合校验。
 func NormalizeCustomProviderInput(input SaveCustomProviderInput) (SaveCustomProviderInput, error) {
 	normalized := SaveCustomProviderInput{
-		Name:                  strings.TrimSpace(input.Name),
-		Driver:                normalizeProviderDriver(strings.TrimSpace(input.Driver)),
-		BaseURL:               strings.TrimSpace(input.BaseURL),
-		ChatAPIMode:           strings.TrimSpace(input.ChatAPIMode),
-		ChatEndpointPath:      strings.TrimSpace(input.ChatEndpointPath),
-		APIKeyEnv:             strings.TrimSpace(input.APIKeyEnv),
-		DiscoveryEndpointPath: strings.TrimSpace(input.DiscoveryEndpointPath),
+		Name:                   strings.TrimSpace(input.Name),
+		Driver:                 normalizeProviderDriver(strings.TrimSpace(input.Driver)),
+		BaseURL:                strings.TrimSpace(input.BaseURL),
+		ChatAPIMode:            strings.TrimSpace(input.ChatAPIMode),
+		ChatEndpointPath:       strings.TrimSpace(input.ChatEndpointPath),
+		APIKeyEnv:              strings.TrimSpace(input.APIKeyEnv),
+		GenerateMaxRetries:     normalizeOptionalGenerateInt(input.GenerateMaxRetries),
+		GenerateIdleTimeoutSec: normalizeOptionalGenerateInt(input.GenerateIdleTimeoutSec),
+		DiscoveryEndpointPath:  strings.TrimSpace(input.DiscoveryEndpointPath),
 	}
 
 	if err := validateCustomProviderName(normalized.Name); err != nil {
@@ -96,11 +98,35 @@ func NormalizeCustomProviderInput(input SaveCustomProviderInput) (SaveCustomProv
 			)
 		}
 		normalized.DiscoveryEndpointPath = ""
-		return normalized, nil
+		return normalized, validateNormalizedCustomProviderInput(normalized)
 	}
 
 	normalized.DiscoveryEndpointPath = discoveryEndpointPath
-	return normalized, nil
+	return normalized, validateNormalizedCustomProviderInput(normalized)
+}
+
+// normalizeOptionalGenerateInt 归一化可选的生成控制字段，仅保留调用方原始输入，避免在保存前静默吞掉非法值。
+func normalizeOptionalGenerateInt(value int) int {
+	return value
+}
+
+// validateNormalizedCustomProviderInput 复用统一的 provider 配置校验，避免 custom provider 保存路径和加载路径出现两套规则。
+func validateNormalizedCustomProviderInput(input SaveCustomProviderInput) error {
+	cfg := ProviderConfig{
+		Name:                   input.Name,
+		Driver:                 input.Driver,
+		BaseURL:                input.BaseURL,
+		APIKeyEnv:              input.APIKeyEnv,
+		GenerateMaxRetries:     input.GenerateMaxRetries,
+		GenerateIdleTimeoutSec: input.GenerateIdleTimeoutSec,
+		ModelSource:            input.ModelSource,
+		ChatAPIMode:            input.ChatAPIMode,
+		ChatEndpointPath:       input.ChatEndpointPath,
+		DiscoveryEndpointPath:  input.DiscoveryEndpointPath,
+		Models:                 input.Models,
+		Source:                 ProviderSourceCustom,
+	}
+	return cfg.Validate()
 }
 
 // NormalizeCustomProviderModels 统一归一化 custom provider 的模型描述并校验必填字段和边界条件。

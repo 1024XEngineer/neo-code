@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"google.golang.org/genai"
 
@@ -17,12 +19,17 @@ import (
 
 const errorPrefix = "gemini provider: "
 
+const defaultGenerateRetryMax = provider.DefaultGenerateMaxRetries
+
 // Provider 封装 Gemini native 协议的请求发送与流式响应解析。
 type Provider struct {
 	cfg provider.RuntimeConfig
 
 	mu       sync.Mutex
 	prepared *preparedRequest
+
+	retryBackoff func(attempt int) time.Duration
+	retryWait    func(ctx context.Context, wait time.Duration) error
 }
 
 type preparedRequest struct {
@@ -62,15 +69,17 @@ func (p *Provider) EstimateInputTokens(
 	}, nil
 }
 
-// New 创建 Gemini native provider 实例，并初始化官方 SDK 客户端。
+// New 创建 Gemini native provider 实例。
 func New(cfg provider.RuntimeConfig) (*Provider, error) {
 	if strings.TrimSpace(cfg.APIKeyEnv) == "" {
 		return nil, errors.New(errorPrefix + "api_key_env is empty")
 	}
-	return &Provider{cfg: cfg}, nil
+	return &Provider{
+		cfg: cfg,
+	}, nil
 }
 
-// Generate 发起 Gemini 流式请求，并将 SDK chunk 转为统一流式事件。
+// Generate 发起 Gemini 流式请求，并将重试与超时语义收敛到 provider 公共 runner。
 func (p *Provider) Generate(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error {
 	model, contents, config, ok := p.takePreparedRequest(provider.BuildGenerateRequestSignature(req))
 	if !ok {
@@ -84,7 +93,24 @@ func (p *Provider) Generate(ctx context.Context, req providertypes.GenerateReque
 	if normalizedModel == "" {
 		return errors.New(errorPrefix + "model is empty")
 	}
-	client, err := newSDKClient(ctx, p.cfg)
+
+	return provider.RunGenerateWithRetryUsing(ctx, p.cfg, events, p.retryBackoff, p.retryWait, func(
+		attemptCtx context.Context,
+		attemptEvents chan<- providertypes.StreamEvent,
+	) error {
+		return p.generateOnce(attemptCtx, normalizedModel, contents, config, attemptEvents)
+	})
+}
+
+// generateOnce 执行一次 Gemini 流式尝试，并将 SDK chunk 转为统一流式事件。
+func (p *Provider) generateOnce(
+	ctx context.Context,
+	model string,
+	contents []*genai.Content,
+	config *genai.GenerateContentConfig,
+	events chan<- providertypes.StreamEvent,
+) error {
+	client, err := newGenerateSDKClient(ctx, p.cfg)
 	if err != nil {
 		return err
 	}
@@ -92,24 +118,21 @@ func (p *Provider) Generate(ctx context.Context, req providertypes.GenerateReque
 	var (
 		finishReason string
 		usage        providertypes.Usage
-		hasPayload   bool
+		hasChunk     bool
 		callSeq      int
 	)
-	for chunk, streamErr := range client.Models.GenerateContentStream(ctx, normalizedModel, contents, config) {
+	for chunk, streamErr := range client.Models.GenerateContentStream(ctx, model, contents, config) {
 		if streamErr != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return ctxErr
 			}
-			if mappedErr := mapGeminiSDKError(streamErr); mappedErr != nil {
-				return mappedErr
-			}
-			return fmt.Errorf("%sstream generate: %w", errorPrefix, streamErr)
+			return normalizeGenerateError(streamErr)
 		}
 
 		if chunk == nil {
 			continue
 		}
-		hasPayload = true
+		hasChunk = true
 		extractUsage(&usage, chunk.UsageMetadata)
 
 		for _, candidate := range chunk.Candidates {
@@ -154,7 +177,7 @@ func (p *Provider) Generate(ctx context.Context, req providertypes.GenerateReque
 			}
 		}
 	}
-	if !hasPayload {
+	if !hasChunk {
 		return fmt.Errorf("%w: empty gemini stream payload", provider.ErrStreamInterrupted)
 	}
 	if !usage.InputObserved && !usage.OutputObserved {
@@ -231,6 +254,39 @@ func encodeArguments(args map[string]any) (string, error) {
 // normalizeFinishReason 规范化 Gemini finish reason，便于上层统一处理。
 func normalizeFinishReason(raw string) string {
 	return strings.ToLower(strings.TrimSpace(raw))
+}
+
+// normalizeGenerateError 统一归类 Gemini 流式生成错误，避免把网络异常直接泄漏到 runtime。
+func normalizeGenerateError(err error) error {
+	if mappedErr := mapGeminiSDKError(err); mappedErr != nil {
+		return mappedErr
+	}
+
+	message := strings.TrimSpace(err.Error())
+	if message == "" {
+		message = "unknown stream error"
+	}
+	if isTimeoutGenerateError(err) {
+		return provider.NewTimeoutProviderError("gemini generate timeout: " + message)
+	}
+
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		return provider.NewNetworkProviderError("gemini generate network error: " + message)
+	}
+	return fmt.Errorf("%sstream generate: %w", errorPrefix, err)
+}
+
+// isTimeoutGenerateError 判断 Gemini 流式生成错误是否由超时触发。
+func isTimeoutGenerateError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var netErr net.Error
+	return errors.As(err, &netErr) && netErr.Timeout()
 }
 
 // mapGeminiSDKError 将 Gemini SDK 错误映射为 provider 领域错误，仅保留状态码级别兜底。

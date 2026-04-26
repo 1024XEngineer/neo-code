@@ -1916,14 +1916,6 @@ func TestRuntimeEventErrorHandler(t *testing.T) {
 	}
 }
 
-func TestRuntimeEventProviderRetryHandler(t *testing.T) {
-	app, _ := newTestApp(t)
-	runtimeEventProviderRetryHandler(&app, agentruntime.RuntimeEvent{Payload: "retry"})
-	if app.state.StatusText != statusThinking {
-		t.Fatalf("expected thinking status")
-	}
-}
-
 func TestRuntimeEventCompactDoneHandler(t *testing.T) {
 	app, _ := newTestApp(t)
 	payload := agentruntime.CompactResult{TriggerMode: "auto", SavedRatio: 0.5, BeforeChars: 10, AfterChars: 5, TranscriptPath: "path"}

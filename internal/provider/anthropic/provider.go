@@ -57,7 +57,7 @@ func (p *Provider) EstimateInputTokens(
 	}, nil
 }
 
-// New 创建 Anthropic provider 实例，并初始化官方 SDK 客户端。
+// New 创建 Anthropic provider 实例。
 func New(cfg provider.RuntimeConfig) (*Provider, error) {
 	if strings.TrimSpace(cfg.APIKeyEnv) == "" {
 		return nil, errors.New(errorPrefix + "api_key_env is empty")
@@ -65,7 +65,7 @@ func New(cfg provider.RuntimeConfig) (*Provider, error) {
 	return &Provider{cfg: cfg}, nil
 }
 
-// Generate 发起 Anthropic 流式请求，并将 typed stream 转为统一事件。
+// Generate 发起 Anthropic 流式请求，并将重试与超时语义收敛到 provider 公共 runner。
 func (p *Provider) Generate(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error {
 	params, ok := p.takePreparedRequest(provider.BuildGenerateRequestSignature(req))
 	if !ok {
@@ -76,7 +76,21 @@ func (p *Provider) Generate(ctx context.Context, req providertypes.GenerateReque
 		}
 	}
 
-	client, err := newSDKClient(p.cfg)
+	return provider.RunGenerateWithRetry(ctx, p.cfg, events, func(
+		attemptCtx context.Context,
+		attemptEvents chan<- providertypes.StreamEvent,
+	) error {
+		return p.generateOnce(attemptCtx, params, attemptEvents)
+	})
+}
+
+// generateOnce 执行一次 Anthropic 流式尝试，并将 typed stream 转为统一事件。
+func (p *Provider) generateOnce(
+	ctx context.Context,
+	params anthropic.MessageNewParams,
+	events chan<- providertypes.StreamEvent,
+) error {
+	client, err := newGenerateSDKClient(p.cfg)
 	if err != nil {
 		return err
 	}
@@ -86,13 +100,13 @@ func (p *Provider) Generate(ctx context.Context, req providertypes.GenerateReque
 	var (
 		finishReason string
 		usage        providertypes.Usage
-		hasPayload   bool
+		hasChunk     bool
 		toolCallSeq  int
 	)
 	toolCalls := make(map[int]toolCallState)
 
 	for streamReader.Next() {
-		hasPayload = true
+		hasChunk = true
 		event := streamReader.Current()
 		switch variant := event.AsAny().(type) {
 		case anthropic.MessageStartEvent:
@@ -186,7 +200,7 @@ func (p *Provider) Generate(ctx context.Context, req providertypes.GenerateReque
 		}
 		return fmt.Errorf("%sstream receive: %w", errorPrefix, streamErr)
 	}
-	if !hasPayload {
+	if !hasChunk {
 		return fmt.Errorf("%w: empty anthropic stream payload", provider.ErrStreamInterrupted)
 	}
 	for index, state := range toolCalls {

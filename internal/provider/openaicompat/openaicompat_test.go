@@ -43,8 +43,11 @@ func TestWithTransport(t *testing.T) {
 		t.Fatalf("New() error = %v", err)
 	}
 
-	if p.client.Transport != customTransport {
-		t.Fatal("expected custom transport to be set")
+	if p.generateClient.Transport != customTransport {
+		t.Fatal("expected generate client transport to be set")
+	}
+	if p.discoveryClient.Transport != customTransport {
+		t.Fatal("expected discovery client transport to be set")
 	}
 }
 
@@ -104,7 +107,7 @@ func TestNewDefaultTransportWhenNoOption(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
-	if p.client.Transport == nil {
+	if p.generateClient.Transport == nil {
 		t.Fatal("expected default transport to be set")
 	}
 }
@@ -139,7 +142,7 @@ func TestDiscoverModels(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
-	p.client = server.Client()
+	p.discoveryClient = server.Client()
 
 	models, err := p.DiscoverModels(context.Background())
 	if err != nil {
@@ -175,7 +178,7 @@ func TestDiscoverModelsUsesConfiguredDiscoveryEndpointPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
-	p.client = server.Client()
+	p.discoveryClient = server.Client()
 
 	models, err := p.DiscoverModels(context.Background())
 	if err != nil {
@@ -204,7 +207,7 @@ func TestDiscoverModelsParsesGeminiProfileModelList(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
-	p.client = server.Client()
+	p.discoveryClient = server.Client()
 
 	models, err := p.DiscoverModels(context.Background())
 	if err != nil {
@@ -235,7 +238,7 @@ func TestDiscoverModelsParsesNestedContainerAndAliasFields(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
-	p.client = server.Client()
+	p.discoveryClient = server.Client()
 
 	models, err := p.DiscoverModels(context.Background())
 	if err != nil {
@@ -289,7 +292,7 @@ data: [DONE]
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
-	p.client = server.Client()
+	p.discoveryClient = server.Client()
 
 	reader := &singleUseSessionAssetReader{
 		maxOpen: 1,
@@ -320,6 +323,85 @@ data: [DONE]
 	}
 }
 
+func TestGenerateRetriesReuseFrozenRequestPayload(t *testing.T) {
+	t.Setenv(config.OpenAIDefaultAPIKeyEnv, "test-key")
+
+	attempts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/gateway/chat/completions" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		attempts++
+		if attempts == 1 {
+			w.WriteHeader(http.StatusTooManyRequests)
+			_, _ = w.Write([]byte(`{"error":{"message":"retry later"}}`))
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(`data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}
+data: [DONE]
+
+`))
+	}))
+	defer server.Close()
+
+	cfg := resolvedConfig(server.URL, "gpt-4.1")
+	cfg.ChatEndpointPath = "/gateway/chat/completions"
+	cfg.GenerateMaxRetries = 1
+	p, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	p.generateClient = server.Client()
+
+	reader := &singleUseSessionAssetReader{
+		maxOpen: 1,
+		assets: map[string]sessionAsset{
+			"asset-1": {data: []byte("image-bytes"), mime: "image/png"},
+		},
+	}
+	request := providertypes.GenerateRequest{
+		Model: "gpt-4.1",
+		Messages: []providertypes.Message{
+			{
+				Role:  providertypes.RoleUser,
+				Parts: []providertypes.ContentPart{providertypes.NewSessionAssetImagePart("asset-1", "image/png")},
+			},
+		},
+		SessionAssetReader: reader,
+	}
+
+	events := make(chan providertypes.StreamEvent, 8)
+	if err := p.Generate(context.Background(), request, events); err != nil {
+		t.Fatalf("Generate() error = %v", err)
+	}
+	if attempts != 2 {
+		t.Fatalf("expected 2 attempts, got %d", attempts)
+	}
+	if reader.openCount != 1 {
+		t.Fatalf("expected session asset to be opened once across retries, got %d", reader.openCount)
+	}
+}
+
+func TestNewCreatesDedicatedDiscoveryClient(t *testing.T) {
+	t.Parallel()
+
+	customTransport := &http.Transport{}
+	p, err := New(resolvedConfig("https://api.example.com/v1", "gpt-4.1"), withTransport(customTransport))
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	if p.discoveryClient.Timeout != provider.DefaultSDKRequestTimeout {
+		t.Fatalf("expected discovery timeout %s, got %s", provider.DefaultSDKRequestTimeout, p.discoveryClient.Timeout)
+	}
+	if p.discoveryClient.Transport != customTransport {
+		t.Fatalf("expected discovery client to preserve custom transport")
+	}
+	if p.generateClient == p.discoveryClient {
+		t.Fatal("expected generate and discovery clients to stay separated")
+	}
+}
+
 func TestDiscoverModelsOpenAIProfileFallsBackToGenericListKeys(t *testing.T) {
 	t.Parallel()
 
@@ -338,7 +420,7 @@ func TestDiscoverModelsOpenAIProfileFallsBackToGenericListKeys(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
-	p.client = server.Client()
+	p.discoveryClient = server.Client()
 
 	models, err := p.DiscoverModels(context.Background())
 	if err != nil {
@@ -365,7 +447,7 @@ func TestDiscoverModelsParsesStringModelIDs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
-	p.client = server.Client()
+	p.discoveryClient = server.Client()
 
 	models, err := p.DiscoverModels(context.Background())
 	if err != nil {
@@ -476,7 +558,7 @@ func TestBuildRequest_EmptyModelReturnsError(t *testing.T) {
 			APIKeyEnv:      "OPENAI_TEST_KEY",
 			APIKeyResolver: provider.StaticAPIKeyResolver("test-key"),
 		},
-		client: &http.Client{},
+		generateClient: &http.Client{},
 	}
 
 	_, buildErr := chatcompletions.BuildRequest(context.Background(), p.cfg, providertypes.GenerateRequest{})
@@ -641,7 +723,7 @@ data: [DONE]
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
-	p.client = server.Client()
+	p.generateClient = server.Client()
 
 	events := make(chan providertypes.StreamEvent, 8)
 	err = p.Generate(context.Background(), providertypes.GenerateRequest{
@@ -674,7 +756,7 @@ func TestDiscoverModelsSkipsInvalidEntriesAndDedupes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
-	p.client = server.Client()
+	p.discoveryClient = server.Client()
 
 	models, err := p.DiscoverModels(context.Background())
 	if err != nil {

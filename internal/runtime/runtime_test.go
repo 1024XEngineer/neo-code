@@ -2350,18 +2350,12 @@ func TestServiceRunErrorPaths(t *testing.T) {
 					},
 				}
 			}(),
-			expectEvents: []EventType{EventUserMessage, EventProviderRetry, EventAgentDone},
+			expectErr:    "internal server error",
+			expectEvents: []EventType{EventUserMessage, EventStopReasonDecided},
 			assert: func(t *testing.T, store *memoryStore, scripted *scriptedProvider, tool *stubTool) {
 				t.Helper()
-				if scripted.callCount < 2 {
-					t.Fatalf("expected at least 2 provider calls (initial + retry), got %d", scripted.callCount)
-				}
-				session := onlySession(t, store)
-				if len(session.Messages) != 2 {
-					t.Fatalf("expected user + assistant messages, got %d", len(session.Messages))
-				}
-				if renderPartsForTest(session.Messages[1].Parts) != "recovered" {
-					t.Fatalf("expected assistant content %q, got %q", "recovered", renderPartsForTest(session.Messages[1].Parts))
+				if scripted.callCount != 1 {
+					t.Fatalf("expected runtime to call provider once, got %d", scripted.callCount)
 				}
 			},
 		},
@@ -2389,7 +2383,7 @@ func TestServiceRunErrorPaths(t *testing.T) {
 			},
 		},
 		{
-			name:  "runtime retry exhausted emits error",
+			name:  "retryable provider error does not trigger runtime retry",
 			input: UserInput{RunID: "run-retry-exhausted", Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")}},
 			provider: &scriptedProvider{
 				name: "always-500",
@@ -2403,13 +2397,11 @@ func TestServiceRunErrorPaths(t *testing.T) {
 				},
 			},
 			expectErr:    "internal server error",
-			expectEvents: []EventType{EventUserMessage, EventProviderRetry, EventStopReasonDecided},
+			expectEvents: []EventType{EventUserMessage, EventStopReasonDecided},
 			assert: func(t *testing.T, store *memoryStore, scripted *scriptedProvider, tool *stubTool) {
 				t.Helper()
-				// 1 initial + 2 retries = 3 calls
-				if scripted.callCount != defaultProviderRetryMax+1 {
-					t.Fatalf("expected %d provider calls (1 initial + %d retries), got %d",
-						defaultProviderRetryMax+1, defaultProviderRetryMax, scripted.callCount)
+				if scripted.callCount != 1 {
+					t.Fatalf("expected runtime not to retry provider calls, got %d", scripted.callCount)
 				}
 			},
 		},
@@ -3785,75 +3777,6 @@ func TestWorkdirHelperFunctions(t *testing.T) {
 	})
 }
 
-func TestIsRetryableProviderError(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name string
-		err  error
-		want bool
-	}{
-		{"nil error", nil, false},
-		{"retryable provider error", &provider.ProviderError{Retryable: true}, true},
-		{"non-retryable provider error", &provider.ProviderError{Retryable: false}, false},
-		{"plain error", errors.New("something failed"), false},
-		{"wrapped retryable", fmt.Errorf("wrapped: %w", &provider.ProviderError{Retryable: true}), true},
-		{"stream interrupted sentinel", provider.ErrStreamInterrupted, false},
-	}
-
-	for _, tt := range tests {
-		tt := tt
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			if got := isRetryableProviderError(tt.err); got != tt.want {
-				t.Fatalf("isRetryableProviderError() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
-func TestProviderRetryBackoff(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name    string
-		attempt int
-		min     time.Duration
-		max     time.Duration
-	}{
-		{
-			name:    "first retry stays within jittered base window",
-			attempt: 1,
-			min:     500 * time.Millisecond,
-			max:     1500 * time.Millisecond,
-		},
-		{
-			name:    "second retry stays within jittered doubled window",
-			attempt: 2,
-			min:     1 * time.Second,
-			max:     3 * time.Second,
-		},
-		{
-			name:    "large retry is capped at max wait",
-			attempt: 20,
-			min:     providerRetryMaxWait,
-			max:     providerRetryMaxWait,
-		},
-	}
-
-	for _, tt := range tests {
-		tt := tt
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			got := providerRetryBackoff(tt.attempt)
-			if got < tt.min || got > tt.max {
-				t.Fatalf("providerRetryBackoff(%d) = %v, want within [%v, %v]", tt.attempt, got, tt.min, tt.max)
-			}
-		})
-	}
-}
-
 func TestStreamAccumulatorBuildMessageRejectsMissingToolName(t *testing.T) {
 	t.Parallel()
 
@@ -4014,7 +3937,7 @@ func TestCallProviderWithRetryReturnsCombinedForwardError(t *testing.T) {
 		},
 	}
 
-	_, err := service.callProviderWithRetry(
+	_, err := service.callProvider(
 		context.Background(),
 		&state,
 		snapshot,
@@ -4924,6 +4847,173 @@ func TestServiceRunAllowsAfterProactiveCompactWhenEstimateAdvisory(t *testing.T)
 		budgetGatePolicies[0] != provider.EstimateGateAdvisory ||
 		budgetGatePolicies[1] != provider.EstimateGateAdvisory {
 		t.Fatalf("expected advisory estimates, got %v", budgetGatePolicies)
+	}
+	if stopPayload.Reason != controlplane.StopReasonCompleted {
+		t.Fatalf("expected stop reason %q, got %q", controlplane.StopReasonCompleted, stopPayload.Reason)
+	}
+}
+
+func TestServiceRunStopsAfterNoOpProactiveCompactWhenEstimateGateable(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	if err := manager.Update(context.Background(), func(cfg *config.Config) error {
+		cfg.Context.Budget.PromptBudget = 10
+		cfg.Context.Budget.FallbackPromptBudget = 10
+		return nil
+	}); err != nil {
+		t.Fatalf("update config: %v", err)
+	}
+
+	store := newMemoryStore()
+	registry := tools.NewRegistry()
+	scripted := &scriptedProvider{
+		estimateFn: func(ctx context.Context, req providertypes.GenerateRequest) (providertypes.BudgetEstimate, error) {
+			_ = ctx
+			_ = req
+			return providertypes.BudgetEstimate{
+				EstimatedInputTokens: 99,
+				EstimateSource:       provider.EstimateSourceLocal,
+				GatePolicy:           provider.EstimateGateGateable,
+			}, nil
+		},
+	}
+
+	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: scripted}, &stubContextBuilder{})
+	service.compactRunner = &stubCompactRunner{
+		result: contextcompact.Result{
+			Applied: false,
+			Metrics: contextcompact.Metrics{
+				TriggerMode: string(contextcompact.ModeProactive),
+			},
+		},
+	}
+
+	if err := service.Run(context.Background(), UserInput{
+		RunID: "run-budget-gateable-stop-noop-compact",
+		Parts: []providertypes.ContentPart{providertypes.NewTextPart("continue")},
+	}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	compactRunner := service.compactRunner.(*stubCompactRunner)
+	if len(compactRunner.calls) != 1 {
+		t.Fatalf("expected one proactive compact attempt, got %d", len(compactRunner.calls))
+	}
+	if scripted.callCount != 0 {
+		t.Fatalf("expected provider Generate to be skipped after no-op compact budget stop, got %d calls", scripted.callCount)
+	}
+
+	events := collectRuntimeEvents(service.Events())
+	var budgetActions []string
+	var stopPayload StopReasonDecidedPayload
+	for _, event := range events {
+		switch event.Type {
+		case EventBudgetChecked:
+			payload, ok := event.Payload.(BudgetCheckedPayload)
+			if !ok {
+				t.Fatalf("expected BudgetCheckedPayload, got %T", event.Payload)
+			}
+			budgetActions = append(budgetActions, payload.Action)
+		case EventStopReasonDecided:
+			payload, ok := event.Payload.(StopReasonDecidedPayload)
+			if !ok {
+				t.Fatalf("expected StopReasonDecidedPayload, got %T", event.Payload)
+			}
+			stopPayload = payload
+		}
+	}
+
+	if len(budgetActions) != 2 || budgetActions[0] != "compact" || budgetActions[1] != "stop" {
+		t.Fatalf("expected budget actions [compact stop], got %v", budgetActions)
+	}
+	if stopPayload.Reason != controlplane.StopReasonBudgetExceeded {
+		t.Fatalf("expected stop reason %q, got %q", controlplane.StopReasonBudgetExceeded, stopPayload.Reason)
+	}
+}
+
+func TestServiceRunAllowsAfterNoOpProactiveCompactWhenEstimateAdvisory(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	if err := manager.Update(context.Background(), func(cfg *config.Config) error {
+		cfg.Context.Budget.PromptBudget = 10
+		cfg.Context.Budget.FallbackPromptBudget = 10
+		return nil
+	}); err != nil {
+		t.Fatalf("update config: %v", err)
+	}
+
+	store := newMemoryStore()
+	registry := tools.NewRegistry()
+	scripted := &scriptedProvider{
+		estimateFn: func(ctx context.Context, req providertypes.GenerateRequest) (providertypes.BudgetEstimate, error) {
+			_ = ctx
+			_ = req
+			return providertypes.BudgetEstimate{
+				EstimatedInputTokens: 99,
+				EstimateSource:       provider.EstimateSourceLocal,
+				GatePolicy:           provider.EstimateGateAdvisory,
+			}, nil
+		},
+		responses: []scriptedResponse{
+			{
+				Message: providertypes.Message{
+					Role:  providertypes.RoleAssistant,
+					Parts: []providertypes.ContentPart{providertypes.NewTextPart("继续执行")},
+				},
+				FinishReason: "stop",
+			},
+		},
+	}
+
+	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: scripted}, &stubContextBuilder{})
+	service.compactRunner = &stubCompactRunner{
+		result: contextcompact.Result{
+			Applied: false,
+			Metrics: contextcompact.Metrics{
+				TriggerMode: string(contextcompact.ModeProactive),
+			},
+		},
+	}
+
+	if err := service.Run(context.Background(), UserInput{
+		RunID: "run-budget-advisory-allow-noop-compact",
+		Parts: []providertypes.ContentPart{providertypes.NewTextPart("continue")},
+	}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	compactRunner := service.compactRunner.(*stubCompactRunner)
+	if len(compactRunner.calls) != 1 {
+		t.Fatalf("expected one proactive compact attempt, got %d", len(compactRunner.calls))
+	}
+	if scripted.callCount != 1 {
+		t.Fatalf("expected provider Generate to be called once after no-op compact, got %d calls", scripted.callCount)
+	}
+
+	events := collectRuntimeEvents(service.Events())
+	var budgetActions []string
+	var stopPayload StopReasonDecidedPayload
+	for _, event := range events {
+		switch event.Type {
+		case EventBudgetChecked:
+			payload, ok := event.Payload.(BudgetCheckedPayload)
+			if !ok {
+				t.Fatalf("expected BudgetCheckedPayload, got %T", event.Payload)
+			}
+			budgetActions = append(budgetActions, payload.Action)
+		case EventStopReasonDecided:
+			payload, ok := event.Payload.(StopReasonDecidedPayload)
+			if !ok {
+				t.Fatalf("expected StopReasonDecidedPayload, got %T", event.Payload)
+			}
+			stopPayload = payload
+		}
+	}
+
+	if len(budgetActions) != 2 || budgetActions[0] != "compact" || budgetActions[1] != "allow" {
+		t.Fatalf("expected budget actions [compact allow], got %v", budgetActions)
 	}
 	if stopPayload.Reason != controlplane.StopReasonCompleted {
 		t.Fatalf("expected stop reason %q, got %q", controlplane.StopReasonCompleted, stopPayload.Reason)

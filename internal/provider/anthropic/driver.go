@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
-	"time"
 
 	anthropic "github.com/anthropics/anthropic-sdk-go"
 	anthroption "github.com/anthropics/anthropic-sdk-go/option"
@@ -25,7 +24,7 @@ func Driver() provider.DriverDefinition {
 			return New(cfg)
 		},
 		Discover: func(ctx context.Context, cfg provider.RuntimeConfig) ([]providertypes.ModelDescriptor, error) {
-			client, err := newSDKClient(cfg)
+			client, err := newDiscoverySDKClient(cfg)
 			if err != nil {
 				return nil, err
 			}
@@ -58,19 +57,34 @@ func Driver() provider.DriverDefinition {
 	}
 }
 
-// newSDKClient 构造 Anthropic SDK 客户端，供生成与模型发现链路共享连接配置。
-func newSDKClient(cfg provider.RuntimeConfig) (anthropic.Client, error) {
+// newDiscoverySDKClient 构造模型发现使用的 Anthropic SDK 客户端。
+func newDiscoverySDKClient(cfg provider.RuntimeConfig) (anthropic.Client, error) {
+	return newSDKClient(cfg, true)
+}
+
+// newGenerateSDKClient 构造生成链路使用的 Anthropic SDK 客户端，并关闭 SDK 内建重试。
+func newGenerateSDKClient(cfg provider.RuntimeConfig) (anthropic.Client, error) {
+	return newSDKClient(cfg, false)
+}
+
+// newSDKClient 根据调用场景构造 Anthropic SDK 客户端，避免生成链路被底层超时与重试抢占控制权。
+func newSDKClient(cfg provider.RuntimeConfig, discovery bool) (anthropic.Client, error) {
 	apiKey, err := cfg.ResolveAPIKeyValue()
 	if err != nil {
 		return anthropic.Client{}, err
 	}
 
-	httpClient := &http.Client{
-		Timeout: 90 * time.Second,
+	httpClient := &http.Client{}
+	if discovery {
+		httpClient.Timeout = provider.DefaultSDKRequestTimeout
 	}
+
 	options := []anthroption.RequestOption{
 		anthroption.WithHTTPClient(httpClient),
 		anthroption.WithAPIKey(apiKey),
+	}
+	if !discovery {
+		options = append(options, anthroption.WithMaxRetries(0))
 	}
 	if strings.TrimSpace(cfg.BaseURL) != "" {
 		options = append(options, anthroption.WithBaseURL(strings.TrimSpace(cfg.BaseURL)))

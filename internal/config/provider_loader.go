@@ -21,15 +21,17 @@ const (
 )
 
 type customProviderFile struct {
-	Name                  string                    `yaml:"name"`
-	Driver                string                    `yaml:"driver"`
-	APIKeyEnv             string                    `yaml:"api_key_env"`
-	ModelSource           string                    `yaml:"model_source,omitempty"`
-	ChatAPIMode           string                    `yaml:"chat_api_mode,omitempty"`
-	BaseURL               string                    `yaml:"base_url,omitempty"`
-	ChatEndpointPath      string                    `yaml:"chat_endpoint_path,omitempty"`
-	DiscoveryEndpointPath string                    `yaml:"discovery_endpoint_path,omitempty"`
-	Models                []customProviderModelFile `yaml:"models,omitempty"`
+	Name                   string                    `yaml:"name"`
+	Driver                 string                    `yaml:"driver"`
+	APIKeyEnv              string                    `yaml:"api_key_env"`
+	GenerateMaxRetries     int                       `yaml:"generate_max_retries,omitempty"`
+	GenerateIdleTimeoutSec int                       `yaml:"generate_idle_timeout_sec,omitempty"`
+	ModelSource            string                    `yaml:"model_source,omitempty"`
+	ChatAPIMode            string                    `yaml:"chat_api_mode,omitempty"`
+	BaseURL                string                    `yaml:"base_url,omitempty"`
+	ChatEndpointPath       string                    `yaml:"chat_endpoint_path,omitempty"`
+	DiscoveryEndpointPath  string                    `yaml:"discovery_endpoint_path,omitempty"`
+	Models                 []customProviderModelFile `yaml:"models,omitempty"`
 }
 
 type customProviderModelFile struct {
@@ -109,31 +111,35 @@ func loadCustomProvider(providerDir string) (ProviderConfig, error) {
 	}
 
 	normalizedInput, err := NormalizeCustomProviderInput(SaveCustomProviderInput{
-		Name:                  strings.TrimSpace(file.Name),
-		Driver:                strings.TrimSpace(file.Driver),
-		BaseURL:               strings.TrimSpace(file.BaseURL),
-		APIKeyEnv:             strings.TrimSpace(file.APIKeyEnv),
-		ModelSource:           strings.TrimSpace(file.ModelSource),
-		ChatAPIMode:           strings.TrimSpace(file.ChatAPIMode),
-		ChatEndpointPath:      strings.TrimSpace(file.ChatEndpointPath),
-		DiscoveryEndpointPath: strings.TrimSpace(file.DiscoveryEndpointPath),
-		Models:                models,
+		Name:                   strings.TrimSpace(file.Name),
+		Driver:                 strings.TrimSpace(file.Driver),
+		BaseURL:                strings.TrimSpace(file.BaseURL),
+		APIKeyEnv:              strings.TrimSpace(file.APIKeyEnv),
+		GenerateMaxRetries:     file.GenerateMaxRetries,
+		GenerateIdleTimeoutSec: file.GenerateIdleTimeoutSec,
+		ModelSource:            strings.TrimSpace(file.ModelSource),
+		ChatAPIMode:            strings.TrimSpace(file.ChatAPIMode),
+		ChatEndpointPath:       strings.TrimSpace(file.ChatEndpointPath),
+		DiscoveryEndpointPath:  strings.TrimSpace(file.DiscoveryEndpointPath),
+		Models:                 models,
 	})
 	if err != nil {
 		return ProviderConfig{}, fmt.Errorf("config: custom provider %q: %w", filepath.Base(providerDir), err)
 	}
 
 	cfg := ProviderConfig{
-		Name:                  normalizedInput.Name,
-		Driver:                normalizedInput.Driver,
-		BaseURL:               normalizedInput.BaseURL,
-		APIKeyEnv:             normalizedInput.APIKeyEnv,
-		ModelSource:           normalizedInput.ModelSource,
-		ChatAPIMode:           normalizedInput.ChatAPIMode,
-		ChatEndpointPath:      normalizedInput.ChatEndpointPath,
-		DiscoveryEndpointPath: normalizedInput.DiscoveryEndpointPath,
-		Models:                normalizedInput.Models,
-		Source:                ProviderSourceCustom,
+		Name:                   normalizedInput.Name,
+		Driver:                 normalizedInput.Driver,
+		BaseURL:                normalizedInput.BaseURL,
+		APIKeyEnv:              normalizedInput.APIKeyEnv,
+		GenerateMaxRetries:     normalizedInput.GenerateMaxRetries,
+		GenerateIdleTimeoutSec: normalizedInput.GenerateIdleTimeoutSec,
+		ModelSource:            normalizedInput.ModelSource,
+		ChatAPIMode:            normalizedInput.ChatAPIMode,
+		ChatEndpointPath:       normalizedInput.ChatEndpointPath,
+		DiscoveryEndpointPath:  normalizedInput.DiscoveryEndpointPath,
+		Models:                 normalizedInput.Models,
+		Source:                 ProviderSourceCustom,
 	}
 
 	if err := cfg.Validate(); err != nil {
@@ -191,15 +197,17 @@ func customProviderModels(models []customProviderModelFile) ([]providertypes.Mod
 
 // SaveCustomProviderInput 定义自定义 Provider 的持久化字段。
 type SaveCustomProviderInput struct {
-	Name                  string
-	Driver                string
-	BaseURL               string
-	ChatAPIMode           string
-	ChatEndpointPath      string
-	APIKeyEnv             string
-	DiscoveryEndpointPath string
-	ModelSource           string
-	Models                []providertypes.ModelDescriptor
+	Name                   string
+	Driver                 string
+	BaseURL                string
+	ChatAPIMode            string
+	ChatEndpointPath       string
+	APIKeyEnv              string
+	GenerateMaxRetries     int
+	GenerateIdleTimeoutSec int
+	DiscoveryEndpointPath  string
+	ModelSource            string
+	Models                 []providertypes.ModelDescriptor
 }
 
 // SaveCustomProviderWithModels 保存自定义 provider，并可在 manual 模式下写入手工模型列表。
@@ -215,11 +223,13 @@ func SaveCustomProviderWithModels(baseDir string, input SaveCustomProviderInput)
 	}
 
 	cfg := customProviderFile{
-		Name:        normalizedInput.Name,
-		Driver:      normalizedInput.Driver,
-		APIKeyEnv:   normalizedInput.APIKeyEnv,
-		ModelSource: normalizedInput.ModelSource,
-		ChatAPIMode: normalizedInput.ChatAPIMode,
+		Name:                   normalizedInput.Name,
+		Driver:                 normalizedInput.Driver,
+		APIKeyEnv:              normalizedInput.APIKeyEnv,
+		GenerateMaxRetries:     normalizedInput.GenerateMaxRetries,
+		GenerateIdleTimeoutSec: normalizedInput.GenerateIdleTimeoutSec,
+		ModelSource:            normalizedInput.ModelSource,
+		ChatAPIMode:            normalizedInput.ChatAPIMode,
 	}
 
 	cfg.BaseURL = normalizedInput.BaseURL

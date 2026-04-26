@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	providertypes "neo-code/internal/provider/types"
 	"neo-code/internal/session"
@@ -27,6 +28,9 @@ type RuntimeConfig struct {
 	ChatAPIMode           string
 	ChatEndpointPath      string
 	DiscoveryEndpointPath string
+	GenerateMaxRetries    int
+	GenerateStartTimeout  time.Duration
+	GenerateIdleTimeout   time.Duration
 }
 
 // ResolveAPIKeyValue 在 provider 即将发起请求前解析当前配置引用的 API Key。
@@ -56,6 +60,21 @@ func (c RuntimeConfig) ResolveAPIKeyValue() (string, error) {
 		return "", fmt.Errorf("provider runtime config: environment variable %s is empty", envName)
 	}
 	return value, nil
+}
+
+// ResolvedGenerateMaxRetries 返回运行时已归一化的生成重试次数。
+func (c RuntimeConfig) ResolvedGenerateMaxRetries() int {
+	return NormalizeGenerateMaxRetries(c.GenerateMaxRetries)
+}
+
+// ResolvedGenerateStartTimeout 返回运行时已归一化的生成首包超时。
+func (c RuntimeConfig) ResolvedGenerateStartTimeout() time.Duration {
+	return NormalizeGenerateStartTimeout(c.GenerateStartTimeout)
+}
+
+// ResolvedGenerateIdleTimeout 返回运行时已归一化的生成空闲超时。
+func (c RuntimeConfig) ResolvedGenerateIdleTimeout() time.Duration {
+	return NormalizeGenerateIdleTimeout(c.GenerateIdleTimeout)
 }
 
 // StaticAPIKeyResolver 返回一个仅供测试和受控注入场景使用的固定密钥解析器。

@@ -45,6 +45,7 @@
 - `workdir`
 - `shell`
 - `tool_timeout_sec`
+- `generate_start_timeout_sec`
 - `context`
 - `tools`
 
@@ -69,7 +70,9 @@ custom provider 来自：
 ```
 
 当前只接受明确受支持的字段；未知字段会直接报错，不做“旧格式自动迁移”。
-`provider.yaml` 只支持平铺字段：`name/driver/base_url/api_key_env/model_source/chat_endpoint_path/discovery_endpoint_path/models`。
+`provider.yaml` 只支持平铺字段：`name/driver/base_url/api_key_env/model_source/chat_api_mode/chat_endpoint_path/discovery_endpoint_path/generate_max_retries/generate_idle_timeout_sec/models`。
+
+`generate_start_timeout_sec` 已上移到根 `config.yaml` 顶层，启动 preflight 会自动将缺失字段补写为默认值 `90`。
 
 ## 加载流程
 
@@ -101,6 +104,7 @@ custom provider 来自：
 - `current_model`
 - `shell`
 - `tool_timeout_sec`
+- `generate_start_timeout_sec`
 - `context`
 - `tools`
 

@@ -26,12 +26,27 @@ func assertLaunchSpecEqual(t *testing.T, spec LaunchSpec, want LaunchSpec) {
 	}
 }
 
+func testAbsolutePath(name string) string {
+	if runtime.GOOS == "windows" {
+		return `C:\tools\` + name
+	}
+	return "/opt/tools/" + name
+}
+
+func testPathBinary(name string) string {
+	if runtime.GOOS == "windows" {
+		return `C:\usr\local\bin\` + name
+	}
+	return "/usr/local/bin/" + name
+}
+
 func TestResolveGatewayLaunchSpecWithDeps(t *testing.T) {
 	t.Run("explicit binary has highest priority", func(t *testing.T) {
+		executable := testAbsolutePath("neocode-gateway")
 		spec, err := resolveGatewayLaunchSpecWithDeps(
-			ResolveOptions{ExplicitBinary: "/opt/tools/neocode-gateway"},
+			ResolveOptions{ExplicitBinary: executable},
 			func(binary string) (string, error) {
-				if binary == "/opt/tools/neocode-gateway" {
+				if binary == executable {
 					return binary, nil
 				}
 				return "", errors.New("unexpected lookup")
@@ -42,16 +57,17 @@ func TestResolveGatewayLaunchSpecWithDeps(t *testing.T) {
 		}
 		assertLaunchSpecEqual(t, spec, LaunchSpec{
 			LaunchMode: LaunchModeExplicitPath,
-			Executable: "/opt/tools/neocode-gateway",
+			Executable: executable,
 		})
 	})
 
 	t.Run("path binary preferred over fallback", func(t *testing.T) {
+		executable := testPathBinary("neocode-gateway")
 		spec, err := resolveGatewayLaunchSpecWithDeps(
 			ResolveOptions{},
 			func(binary string) (string, error) {
 				if binary == "neocode-gateway" {
-					return "/usr/local/bin/neocode-gateway", nil
+					return executable, nil
 				}
 				return "", errors.New("unexpected lookup")
 			},
@@ -61,11 +77,12 @@ func TestResolveGatewayLaunchSpecWithDeps(t *testing.T) {
 		}
 		assertLaunchSpecEqual(t, spec, LaunchSpec{
 			LaunchMode: LaunchModePathBinary,
-			Executable: "/usr/local/bin/neocode-gateway",
+			Executable: executable,
 		})
 	})
 
 	t.Run("fallback to neocode subcommand", func(t *testing.T) {
+		executable := testPathBinary("neocode")
 		spec, err := resolveGatewayLaunchSpecWithDeps(
 			ResolveOptions{},
 			func(binary string) (string, error) {
@@ -73,7 +90,7 @@ func TestResolveGatewayLaunchSpecWithDeps(t *testing.T) {
 				case "neocode-gateway":
 					return "", errors.New("not found")
 				case "neocode":
-					return "/usr/local/bin/neocode", nil
+					return executable, nil
 				default:
 					return "", errors.New("unexpected lookup")
 				}
@@ -84,7 +101,7 @@ func TestResolveGatewayLaunchSpecWithDeps(t *testing.T) {
 		}
 		assertLaunchSpecEqual(t, spec, LaunchSpec{
 			LaunchMode: LaunchModeFallbackSubcommand,
-			Executable: "/usr/local/bin/neocode",
+			Executable: executable,
 			Args:       []string{"gateway"},
 		})
 	})
@@ -112,6 +129,27 @@ func TestResolveGatewayLaunchSpecWithDeps(t *testing.T) {
 		)
 		if err == nil {
 			t.Fatal("expected explicit path validation error")
+		}
+		if lookupCalled {
+			t.Fatal("lookPath should not be called for invalid explicit path")
+		}
+	})
+
+	t.Run("unix style path is not treated as absolute on windows", func(t *testing.T) {
+		if runtime.GOOS != "windows" {
+			t.Skip("windows-only path semantics")
+		}
+
+		lookupCalled := false
+		_, err := resolveGatewayLaunchSpecWithDeps(
+			ResolveOptions{ExplicitBinary: "/tools/neocode-gateway.exe"},
+			func(string) (string, error) {
+				lookupCalled = true
+				return "", nil
+			},
+		)
+		if err == nil {
+			t.Fatal("expected windows unix-style path validation error")
 		}
 		if lookupCalled {
 			t.Fatal("lookPath should not be called for invalid explicit path")

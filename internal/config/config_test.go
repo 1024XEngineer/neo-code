@@ -818,6 +818,9 @@ func TestLoaderLoadAndSaveRoundTrip(t *testing.T) {
 	if reloaded.Tools.WebFetch.MaxResponseBytes != 1024 {
 		t.Fatalf("expected max_response_bytes %d, got %d", 1024, reloaded.Tools.WebFetch.MaxResponseBytes)
 	}
+	if reloaded.GenerateStartTimeoutSec != DefaultGenerateStartTimeoutSec {
+		t.Fatalf("expected generate_start_timeout_sec %d, got %d", DefaultGenerateStartTimeoutSec, reloaded.GenerateStartTimeoutSec)
+	}
 	if len(reloaded.Tools.WebFetch.SupportedContentTypes) != 2 {
 		t.Fatalf("expected persisted supported content types, got %+v", reloaded.Tools.WebFetch.SupportedContentTypes)
 	}

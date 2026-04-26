@@ -138,7 +138,7 @@ func resolveExecutablePath(lookPathFn func(string) (string, error), binary strin
 
 // validateExplicitGatewayBinary 校验显式配置的网关二进制路径，禁止使用相对路径降低 PATH 劫持风险。
 func validateExplicitGatewayBinary(explicitBinary string) error {
-	if !filepath.IsAbs(explicitBinary) {
+	if !isAbsolutePath(explicitBinary) {
 		return fmt.Errorf("explicit gateway binary must be an absolute path: %q", explicitBinary)
 	}
 	return nil
@@ -146,8 +146,13 @@ func validateExplicitGatewayBinary(explicitBinary string) error {
 
 // validateResolvedExecutablePath 校验解析后的可执行路径必须为绝对路径，避免执行不受控相对路径目标。
 func validateResolvedExecutablePath(resolvedPath string, source string) error {
-	if !filepath.IsAbs(resolvedPath) {
+	if !isAbsolutePath(resolvedPath) {
 		return fmt.Errorf("resolved executable from %s is not an absolute path: %q", source, resolvedPath)
 	}
 	return nil
+}
+
+// isAbsolutePath 按当前平台原生语义校验绝对路径，避免放宽到依赖环境状态的跨平台路径解释。
+func isAbsolutePath(p string) bool {
+	return filepath.IsAbs(p)
 }

@@ -619,24 +619,16 @@ func TestRunAndProviderRetryRemainingBranches(t *testing.T) {
 		}
 	})
 
-	t.Run("callProviderWithRetry exits on context done during backoff wait", func(t *testing.T) {
+	t.Run("callProvider returns context error from provider", func(t *testing.T) {
 		t.Parallel()
 		ctx, cancel := context.WithCancel(context.Background())
-		firstCallDone := make(chan struct{}, 1)
 		providerRetry := &scriptedProvider{chatFn: func(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error {
-			select {
-			case firstCallDone <- struct{}{}:
-			default:
-			}
-			return &provider.ProviderError{StatusCode: 500, Code: provider.ErrorCodeServer, Message: "retry", Retryable: true}
-		}}
-		go func() {
-			<-firstCallDone
 			cancel()
-		}()
+			return ctx.Err()
+		}}
 		service := &Service{providerFactory: &scriptedProviderFactory{provider: providerRetry}, events: make(chan RuntimeEvent, 8)}
 		state := newRunState("run-retry-backoff", newRuntimeSession("session-retry-backoff"))
-		_, err := service.callProviderWithRetry(
+		_, err := service.callProvider(
 			ctx,
 			&state,
 			TurnBudgetSnapshot{ProviderConfig: provider.RuntimeConfig{Name: "x"}},
@@ -647,23 +639,24 @@ func TestRunAndProviderRetryRemainingBranches(t *testing.T) {
 		}
 	})
 
-	t.Run("callProviderWithRetry checks ctx after retryable stream error", func(t *testing.T) {
+	t.Run("callProvider returns retryable provider error without retry", func(t *testing.T) {
 		t.Parallel()
-		ctx, cancel := context.WithCancel(context.Background())
 		providerRetry := &scriptedProvider{chatFn: func(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error {
-			cancel()
 			return &provider.ProviderError{StatusCode: 500, Code: provider.ErrorCodeServer, Message: "retry", Retryable: true}
 		}}
 		service := &Service{providerFactory: &scriptedProviderFactory{provider: providerRetry}, events: make(chan RuntimeEvent, 8)}
 		state := newRunState("run-retry-ctx-check", newRuntimeSession("session-retry-ctx-check"))
-		_, err := service.callProviderWithRetry(
-			ctx,
+		_, err := service.callProvider(
+			context.Background(),
 			&state,
 			TurnBudgetSnapshot{ProviderConfig: provider.RuntimeConfig{Name: "x"}},
 			providerRetry,
 		)
-		if !errors.Is(err, context.Canceled) {
-			t.Fatalf("expected context.Canceled, got %v", err)
+		if err == nil || !containsError(err, "retry") {
+			t.Fatalf("expected retryable provider error, got %v", err)
+		}
+		if providerRetry.callCount != 1 {
+			t.Fatalf("expected provider to be called once, got %d", providerRetry.callCount)
 		}
 	})
 }

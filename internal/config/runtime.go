@@ -10,7 +10,7 @@ import (
 const (
 	DefaultMaxNoProgressStreak  = 5
 	DefaultMaxRepeatCycleStreak = 3
-	DefaultMaxTurns             = 40
+	DefaultMaxTurns             = 90
 )
 
 // RuntimeConfig 定义 runtime 层的可调参数。

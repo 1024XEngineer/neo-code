@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
-	"time"
 
 	"google.golang.org/genai"
 
@@ -24,7 +23,7 @@ func Driver() provider.DriverDefinition {
 			return New(cfg)
 		},
 		Discover: func(ctx context.Context, cfg provider.RuntimeConfig) ([]providertypes.ModelDescriptor, error) {
-			client, err := newSDKClient(ctx, cfg)
+			client, err := newDiscoverySDKClient(ctx, cfg)
 			if err != nil {
 				return nil, err
 			}
@@ -64,14 +63,25 @@ func Driver() provider.DriverDefinition {
 	}
 }
 
-// newSDKClient 构造 Gemini SDK 客户端，供生成与模型发现链路共享连接配置。
-func newSDKClient(ctx context.Context, cfg provider.RuntimeConfig) (*genai.Client, error) {
+// newDiscoverySDKClient 构造模型发现使用的 Gemini SDK 客户端。
+func newDiscoverySDKClient(ctx context.Context, cfg provider.RuntimeConfig) (*genai.Client, error) {
+	return newSDKClient(ctx, cfg, true)
+}
+
+// newGenerateSDKClient 构造生成链路使用的 Gemini SDK 客户端。
+func newGenerateSDKClient(ctx context.Context, cfg provider.RuntimeConfig) (*genai.Client, error) {
+	return newSDKClient(ctx, cfg, false)
+}
+
+// newSDKClient 根据调用场景构造 Gemini SDK 客户端，避免生成链路被底层总超时抢占控制权。
+func newSDKClient(ctx context.Context, cfg provider.RuntimeConfig, discovery bool) (*genai.Client, error) {
 	apiKey, err := cfg.ResolveAPIKeyValue()
 	if err != nil {
 		return nil, err
 	}
-	httpClient := &http.Client{
-		Timeout: 90 * time.Second,
+	httpClient := &http.Client{}
+	if discovery {
+		httpClient.Timeout = provider.DefaultSDKRequestTimeout
 	}
 	clientConfig := &genai.ClientConfig{
 		APIKey:     apiKey,

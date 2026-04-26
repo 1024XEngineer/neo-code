@@ -246,8 +246,6 @@ const (
 	EventError EventType = "error"
 	// EventToolCallThinking 表示模型发起工具调用思考阶段。
 	EventToolCallThinking EventType = "tool_call_thinking"
-	// EventProviderRetry 表示 provider 调用重试。
-	EventProviderRetry EventType = "provider_retry"
 	// EventPermissionRequested 表示发起权限请求。
 	EventPermissionRequested EventType = "permission_requested"
 	// EventPermissionResolved 表示权限请求已决议。

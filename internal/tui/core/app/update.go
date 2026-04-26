@@ -1641,7 +1641,6 @@ var runtimeEventHandlerRegistry = map[tuiservices.EventType]func(*App, tuiservic
 	tuiservices.EventAgentChunk:                               runtimeEventAgentChunkHandler,
 	tuiservices.EventToolChunk:                                runtimeEventToolChunkHandler,
 	tuiservices.EventAgentDone:                                runtimeEventAgentDoneHandler,
-	tuiservices.EventProviderRetry:                            runtimeEventProviderRetryHandler,
 	tuiservices.EventPermissionRequested:                      runtimeEventPermissionRequestHandler,
 	tuiservices.EventPermissionResolved:                       runtimeEventPermissionResolvedHandler,
 	tuiservices.EventCompactApplied:                           runtimeEventCompactDoneHandler,
@@ -2308,15 +2307,6 @@ func runtimeEventErrorHandler(a *App, event tuiservices.RuntimeEvent) bool {
 		a.state.ExecutionError = payload
 		a.state.StatusText = payload
 		a.appendActivity("run", "Runtime error", payload, true)
-	}
-	return false
-}
-
-func runtimeEventProviderRetryHandler(a *App, event tuiservices.RuntimeEvent) bool {
-	if payload, ok := event.Payload.(string); ok && strings.TrimSpace(payload) != "" {
-		a.state.StatusText = statusThinking
-		a.runProgressKnown = false
-		a.appendActivity("provider", "Retrying provider call", payload, false)
 	}
 	return false
 }

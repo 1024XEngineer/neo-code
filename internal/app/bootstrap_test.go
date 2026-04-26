@@ -121,6 +121,45 @@ context:
 	}
 }
 
+func TestBuildSharedConfigDepsPersistsGenerateStartTimeoutDefault(t *testing.T) {
+	disableBuiltinProviderAPIKeys(t)
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("OPENAI_API_KEY", "test-key")
+
+	configDir := filepath.Join(home, ".neocode")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	configPath := filepath.Join(configDir, "config.yaml")
+	raw := "selected_provider: openai\ncurrent_model: gpt-5.4\nshell: powershell\n"
+	if err := os.WriteFile(configPath, []byte(raw), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	shared, _, _, err := BuildSharedConfigDeps(context.Background(), BootstrapOptions{})
+	if err != nil {
+		t.Fatalf("BuildSharedConfigDeps() error = %v", err)
+	}
+	if shared.Config.GenerateStartTimeoutSec != config.DefaultGenerateStartTimeoutSec {
+		t.Fatalf(
+			"expected generate_start_timeout_sec=%d, got %d",
+			config.DefaultGenerateStartTimeoutSec,
+			shared.Config.GenerateStartTimeoutSec,
+		)
+	}
+
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	if !strings.Contains(string(data), "generate_start_timeout_sec: 90") {
+		t.Fatalf("expected config to persist generate_start_timeout_sec, got:\n%s", string(data))
+	}
+}
+
 func TestBuildSharedConfigDepsReturnsPreflightError(t *testing.T) {
 	disableBuiltinProviderAPIKeys(t)
 

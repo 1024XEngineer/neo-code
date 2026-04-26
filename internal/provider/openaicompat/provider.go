@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"strings"
 	"sync"
-	"time"
 
 	"neo-code/internal/provider"
 	"neo-code/internal/provider/openaicompat/chatcompletions"
@@ -35,10 +34,11 @@ func validateRuntimeConfig(cfg provider.RuntimeConfig) error {
 	return nil
 }
 
-// Provider 封装 OpenAI-compatible 协议的运行时配置与 HTTP 客户端。
+// Provider 封装 OpenAI-compatible 协议的运行时配置和 HTTP 客户端。
 type Provider struct {
-	cfg    provider.RuntimeConfig
-	client *http.Client
+	cfg             provider.RuntimeConfig
+	generateClient  *http.Client
+	discoveryClient *http.Client
 
 	mu       sync.Mutex
 	prepared *preparedRequest
@@ -128,10 +128,14 @@ func New(cfg provider.RuntimeConfig, opts ...buildOption) (*Provider, error) {
 		apply(o)
 	}
 
+	streamClient := &http.Client{
+		Transport: o.transport,
+	}
 	return &Provider{
-		cfg: cfg,
-		client: &http.Client{
-			Timeout:   90 * time.Second,
+		cfg:            cfg,
+		generateClient: streamClient,
+		discoveryClient: &http.Client{
+			Timeout:   provider.DefaultSDKRequestTimeout,
 			Transport: o.transport,
 		},
 	}, nil
@@ -143,42 +147,62 @@ func (p *Provider) DiscoverModels(ctx context.Context) ([]providertypes.ModelDes
 	if err != nil {
 		return nil, err
 	}
-	return DiscoverModelDescriptors(ctx, p.client, requestCfg)
+	return DiscoverModelDescriptors(ctx, p.discoveryClient, requestCfg)
 }
 
-// Generate 发起流式生成请求。
+// Generate 发起流式生成请求，并将重试与超时语义收敛到 provider 公共 runner。
 func (p *Provider) Generate(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error {
 	mode, err := resolveExecutionMode(p.cfg)
 	if err != nil {
 		return err
 	}
+	signature := provider.BuildGenerateRequestSignature(req)
+
+	var completionsPayload chatcompletions.Request
+	var responsesPayload responses.Request
 
 	switch mode {
 	case executionModeCompletions:
-		signature := provider.BuildGenerateRequestSignature(req)
 		if payload, ok := p.takePreparedChatCompletionsRequest(mode, signature); ok {
-			return p.generateSDKChatCompletions(ctx, payload, events)
+			completionsPayload = payload
+		} else {
+			payload, buildErr := chatcompletions.BuildRequest(ctx, p.cfg, req)
+			if buildErr != nil {
+				return buildErr
+			}
+			completionsPayload = payload
 		}
-		payload, buildErr := chatcompletions.BuildRequest(ctx, p.cfg, req)
-		if buildErr != nil {
-			return buildErr
-		}
-		return p.generateSDKChatCompletions(ctx, payload, events)
 	case executionModeResponses:
-		signature := provider.BuildGenerateRequestSignature(req)
 		if payload, ok := p.takePreparedResponsesRequest(mode, signature); ok {
-			return p.generateSDKResponses(ctx, payload, events)
+			responsesPayload = payload
+		} else {
+			payload, buildErr := responses.BuildRequest(ctx, p.cfg, req)
+			if buildErr != nil {
+				return buildErr
+			}
+			responsesPayload = payload
 		}
-		payload, buildErr := responses.BuildRequest(ctx, p.cfg, req)
-		if buildErr != nil {
-			return buildErr
-		}
-		return p.generateSDKResponses(ctx, payload, events)
 	default:
 		return provider.NewDiscoveryConfigError(
 			fmt.Sprintf("openaicompat provider: driver %q resolved unsupported execution mode %q", p.cfg.Driver, mode),
 		)
 	}
+
+	return provider.RunGenerateWithRetry(ctx, p.cfg, events, func(
+		attemptCtx context.Context,
+		attemptEvents chan<- providertypes.StreamEvent,
+	) error {
+		switch mode {
+		case executionModeCompletions:
+			return p.generateSDKChatCompletions(attemptCtx, completionsPayload, attemptEvents)
+		case executionModeResponses:
+			return p.generateSDKResponses(attemptCtx, responsesPayload, attemptEvents)
+		default:
+			return provider.NewDiscoveryConfigError(
+				fmt.Sprintf("openaicompat provider: driver %q resolved unsupported execution mode %q", p.cfg.Driver, mode),
+			)
+		}
+	})
 }
 
 // storePreparedRequest 缓存估算阶段已构建请求，供同轮发送复用以避免重复构建。

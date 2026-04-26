@@ -1362,6 +1362,112 @@ func TestSaveCustomProviderManualModelsPersistOptionalFields(t *testing.T) {
 	}
 }
 
+func TestSaveAndLoadCustomProviderPersistsGenerateControls(t *testing.T) {
+	t.Parallel()
+
+	baseDir := t.TempDir()
+	const providerName = "retry-controls-provider"
+	err := SaveCustomProviderWithModels(baseDir, SaveCustomProviderInput{
+		Name:                   providerName,
+		Driver:                 provider.DriverOpenAICompat,
+		BaseURL:                "https://llm.example.com/v1",
+		APIKeyEnv:              "RETRY_CONTROLS_PROVIDER_API_KEY",
+		ModelSource:            ModelSourceDiscover,
+		DiscoveryEndpointPath:  provider.DiscoveryEndpointPathModels,
+		GenerateMaxRetries:     7,
+		GenerateIdleTimeoutSec: 420,
+	})
+	if err != nil {
+		t.Fatalf("SaveCustomProviderWithModels() error = %v", err)
+	}
+
+	cfg, err := loadCustomProvider(filepath.Join(baseDir, providersDirName, providerName))
+	if err != nil {
+		t.Fatalf("loadCustomProvider() error = %v", err)
+	}
+	if cfg.GenerateMaxRetries != 7 {
+		t.Fatalf("expected GenerateMaxRetries=7, got %d", cfg.GenerateMaxRetries)
+	}
+	if cfg.GenerateIdleTimeoutSec != 420 {
+		t.Fatalf("expected GenerateIdleTimeoutSec=420, got %d", cfg.GenerateIdleTimeoutSec)
+	}
+}
+
+func TestSaveCustomProviderOmitsDefaultGenerateControlsWhenUnset(t *testing.T) {
+	t.Parallel()
+
+	baseDir := t.TempDir()
+	const providerName = "omit-default-generate-controls"
+	err := SaveCustomProviderWithModels(baseDir, SaveCustomProviderInput{
+		Name:                  providerName,
+		Driver:                provider.DriverOpenAICompat,
+		BaseURL:               "https://llm.example.com/v1",
+		APIKeyEnv:             "OMIT_DEFAULT_GENERATE_CONTROLS_API_KEY",
+		ModelSource:           ModelSourceDiscover,
+		DiscoveryEndpointPath: provider.DiscoveryEndpointPathModels,
+	})
+	if err != nil {
+		t.Fatalf("SaveCustomProviderWithModels() error = %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(baseDir, providersDirName, providerName, customProviderConfigName))
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	content := string(data)
+	if strings.Contains(content, "generate_max_retries") {
+		t.Fatalf("expected generate_max_retries to be omitted, got %q", content)
+	}
+	if strings.Contains(content, "generate_idle_timeout_sec") {
+		t.Fatalf("expected generate_idle_timeout_sec to be omitted, got %q", content)
+	}
+}
+
+func TestLoaderRejectsCustomProviderGenerateStartTimeoutField(t *testing.T) {
+	t.Parallel()
+
+	loader := NewLoader(t.TempDir(), testDefaultConfig())
+	customDir := filepath.Join(loader.BaseDir(), providersDirName, "company-gateway")
+	if err := os.MkdirAll(customDir, 0o755); err != nil {
+		t.Fatalf("mkdir custom provider dir: %v", err)
+	}
+
+	providerYAML := `
+name: company-gateway
+driver: openaicompat
+base_url: https://llm.example.com/v1
+api_key_env: COMPANY_GATEWAY_API_KEY
+generate_start_timeout_sec: 75
+discovery_endpoint_path: /models
+`
+	if err := os.WriteFile(filepath.Join(customDir, customProviderConfigName), []byte(strings.TrimSpace(providerYAML)+"\n"), 0o644); err != nil {
+		t.Fatalf("write provider.yaml: %v", err)
+	}
+
+	_, err := loader.Load(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "field generate_start_timeout_sec not found") {
+		t.Fatalf("expected unknown field rejection for generate_start_timeout_sec, got %v", err)
+	}
+}
+
+func TestSaveCustomProviderRejectsNegativeGenerateControls(t *testing.T) {
+	t.Parallel()
+
+	baseDir := t.TempDir()
+	err := SaveCustomProviderWithModels(baseDir, SaveCustomProviderInput{
+		Name:                   "invalid-generate-controls",
+		Driver:                 provider.DriverOpenAICompat,
+		BaseURL:                "https://llm.example.com/v1",
+		APIKeyEnv:              "INVALID_GENERATE_CONTROLS_API_KEY",
+		ModelSource:            ModelSourceDiscover,
+		DiscoveryEndpointPath:  provider.DiscoveryEndpointPathModels,
+		GenerateIdleTimeoutSec: -1,
+	})
+	if err == nil || !strings.Contains(err.Error(), "generate_idle_timeout_sec") {
+		t.Fatalf("expected negative generate control to be rejected, got %v", err)
+	}
+}
+
 func TestToCustomProviderModelFiles(t *testing.T) {
 	t.Parallel()
 
@@ -1896,5 +2002,34 @@ func TestLoaderSaveRoundTripsCompactExtendedFields(t *testing.T) {
 	}
 	if loaded.Context.Compact.MaxArchivedPromptChars != 3072 {
 		t.Fatalf("expected round-trip max_archived_prompt_chars=3072, got %d", loaded.Context.Compact.MaxArchivedPromptChars)
+	}
+}
+
+func TestLoaderSaveAndLoadPersistsGenerateStartTimeoutSec(t *testing.T) {
+	t.Parallel()
+
+	loader := NewLoader(t.TempDir(), testDefaultConfig())
+	cfg := loader.DefaultConfig()
+	cfg.GenerateStartTimeoutSec = 120
+
+	if err := loader.Save(context.Background(), &cfg); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	data, err := os.ReadFile(loader.ConfigPath())
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	text := string(data)
+	if !strings.Contains(text, "generate_start_timeout_sec: 120") {
+		t.Fatalf("expected generate_start_timeout_sec to be persisted, got:\n%s", text)
+	}
+
+	loaded, err := loader.Load(context.Background())
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if loaded.GenerateStartTimeoutSec != 120 {
+		t.Fatalf("expected GenerateStartTimeoutSec=120 after reload, got %d", loaded.GenerateStartTimeoutSec)
 	}
 }

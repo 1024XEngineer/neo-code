@@ -3,11 +3,9 @@ package runtime
 import (
 	"context"
 	"errors"
-	"math/rand/v2"
 	"strings"
 	"time"
 
-	"neo-code/internal/provider"
 	providertypes "neo-code/internal/provider/types"
 	"neo-code/internal/runtime/controlplane"
 )
@@ -203,26 +201,6 @@ func (s *Service) handleRunError(err error) error {
 		return context.Canceled
 	}
 	return err
-}
-
-// isRetryableProviderError 判断 provider 错误是否允许 runtime 级重试。
-func isRetryableProviderError(err error) bool {
-	var providerErr *provider.ProviderError
-	if !errors.As(err, &providerErr) {
-		return false
-	}
-	return providerErr.Retryable
-}
-
-// providerRetryBackoff 计算 runtime 级 provider 重试等待时长。
-func providerRetryBackoff(attempt int) time.Duration {
-	wait := providerRetryBaseWait << (attempt - 1)
-	jitter := float64(wait) * (0.5 + rand.Float64())
-	wait = time.Duration(jitter)
-	if wait > providerRetryMaxWait {
-		wait = providerRetryMaxWait
-	}
-	return wait
 }
 
 // cloneMessages 深拷贝消息切片，避免后台调度读取到后续运行态修改。
