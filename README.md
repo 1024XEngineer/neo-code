@@ -61,9 +61,8 @@ NeoCode 是一个运行在本地开发环境中的 AI Coding Agent。
 ## 预览
 
 ![NeoCode TUI 对话视图](docs/assert/readme/preview-1.png)
-![](F:\Qiniu\neo-code\docs\assert\readme\preview-4.png)
-
-![preview-5](F:\Qiniu\neo-code\docs\assert\readme\preview-5.png)
+![NeoCode TUI 执行视图](docs/assert/readme/preview-4.png)
+![NeoCode Gateway 交互示例](docs/assert/readme/preview-5.png)
 
 ---
 

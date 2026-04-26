@@ -61,9 +61,8 @@ Core loop:
 ## Preview
 
 ![NeoCode TUI chat view](docs/assert/readme/preview-1.png)
-![](F:\Qiniu\neo-code\docs\assert\readme\preview-4.png)
-
-![preview-5](F:\Qiniu\neo-code\docs\assert\readme\preview-5.png)
+![NeoCode TUI execution view](docs/assert/readme/preview-4.png)
+![NeoCode Gateway interaction example](docs/assert/readme/preview-5.png)
 
 ---
 
