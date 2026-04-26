@@ -2,6 +2,8 @@ name: Deploy VitePress Site
 
 on:
   push:
+    branches:
+      - main
     tags:
       - "v*"
   workflow_dispatch:
