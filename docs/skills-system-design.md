@@ -18,7 +18,8 @@ Skills 不影响：
 
 ## 2. 发现机制（Discovery）
 当前本地发现路径：
-- `~/.neocode/skills/`（首选）
+- `<workspace>/.neocode/skills/`（项目级，优先）
+- `~/.neocode/skills/`（全局）
 - `~/.codex/skills/`（当 `~/.neocode/skills/` 不存在时自动回退）
 
 加载规则：
@@ -26,6 +27,7 @@ Skills 不影响：
 - 每个 skill 目录要求存在 `SKILL.md`
 - 也支持 root 目录直接放置一个 `SKILL.md`
 - 缺失文件、无效 metadata、空内容会记录为 `LoadIssue`，不阻塞其它 skill 加载
+- 同 ID 冲突按 `project > global` 覆盖
 
 ## 3. 加载机制（Loader + Registry）
 核心模块：
@@ -112,6 +114,8 @@ Runtime 会发出以下 skills 事件（供 TUI/日志调试）：
 - `skill_activated`
 - `skill_deactivated`
 - `skill_missing`
+
+`/skills` 列表会展示来源层级（`project` / `global`），用于定位覆盖关系。
 
 ## 9. 兼容与扩展
 当前 focus 是本地 skills；后续如需引入 remote source / marketplace，可在 `Loader` 与 `Registry` 层扩展，不需要改动 runtime 主执行链路。

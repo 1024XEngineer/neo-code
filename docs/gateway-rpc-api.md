@@ -345,6 +345,7 @@ type ListAvailableSkillsParams struct {
 
 - Response Schema:
   - Success: `ack` + `payload.skills`（可见技能状态数组，含 `active` 标记）
+  - `payload.skills[*].descriptor.source.layer`（可选）：`project|global`，用于区分技能来源层级
   - Failure: 标准 `error`（`invalid_action` / `access_denied` 等）
 - Observation:
   - `gateway_requests_total{method="gateway.listAvailableSkills",...}`

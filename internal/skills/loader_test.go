@@ -383,6 +383,30 @@ id: heading-fallback
 	}
 }
 
+func TestLocalLoaderWithSourceLayer(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeSkillFile(t, root, "go-review", `---
+id: go-review
+name: Go Review
+---
+## Instruction
+review`)
+
+	loader := NewLocalLoaderWithSourceLayer(root, SourceLayerProject)
+	snapshot, err := loader.Load(context.Background())
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if len(snapshot.Skills) != 1 {
+		t.Fatalf("skills count = %d, want 1", len(snapshot.Skills))
+	}
+	if got := snapshot.Skills[0].Descriptor.Source.Layer; got != SourceLayerProject {
+		t.Fatalf("source layer = %q, want %q", got, SourceLayerProject)
+	}
+}
+
 func requireLoadIssue(t *testing.T, snapshot Snapshot, desc string, match func(LoadIssue) bool) {
 	t.Helper()
 	for _, issue := range snapshot.Issues {

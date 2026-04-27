@@ -1100,13 +1100,63 @@ func TestBuildSkillsRegistryKeepsInstanceWhenRefreshFails(t *testing.T) {
 	canceledCtx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	registry := buildSkillsRegistry(canceledCtx, baseDir)
+	registry := buildSkillsRegistry(canceledCtx, baseDir, "")
 	if registry == nil {
 		t.Fatalf("expected non-nil registry even when refresh fails")
 	}
 	_, _, err := registry.Get(context.Background(), "missing")
 	if !errors.Is(err, skills.ErrSkillNotFound) {
 		t.Fatalf("expected empty catalog behavior, got %v", err)
+	}
+}
+
+func TestBuildSkillsRegistryPrefersWorkspaceSkillsOverGlobal(t *testing.T) {
+	t.Parallel()
+
+	baseDir := filepath.Join(t.TempDir(), ".neocode")
+	if err := os.MkdirAll(baseDir, 0o755); err != nil {
+		t.Fatalf("mkdir base dir: %v", err)
+	}
+	workspace := t.TempDir()
+	globalSkillsRoot := filepath.Join(baseDir, "skills")
+	projectSkillsRoot := filepath.Join(workspace, ".neocode", "skills")
+
+	writeBootstrapSkillFile(t, globalSkillsRoot, "go-review", "global instruction")
+	writeBootstrapSkillFile(t, projectSkillsRoot, "go-review", "project instruction")
+
+	registry := buildSkillsRegistry(context.Background(), baseDir, workspace)
+	descriptor, content, err := registry.Get(context.Background(), "go-review")
+	if err != nil {
+		t.Fatalf("registry.Get() error = %v", err)
+	}
+	if got := descriptor.Source.Layer; got != skills.SourceLayerProject {
+		t.Fatalf("source layer = %q, want %q", got, skills.SourceLayerProject)
+	}
+	if got := strings.TrimSpace(content.Instruction); got != "project instruction" {
+		t.Fatalf("instruction = %q, want %q", got, "project instruction")
+	}
+}
+
+func TestBuildSkillsRegistryUsesGlobalSkillsWhenWorkspaceMissing(t *testing.T) {
+	t.Parallel()
+
+	baseDir := filepath.Join(t.TempDir(), ".neocode")
+	if err := os.MkdirAll(baseDir, 0o755); err != nil {
+		t.Fatalf("mkdir base dir: %v", err)
+	}
+	globalSkillsRoot := filepath.Join(baseDir, "skills")
+	writeBootstrapSkillFile(t, globalSkillsRoot, "go-review", "global instruction")
+
+	registry := buildSkillsRegistry(context.Background(), baseDir, filepath.Join(t.TempDir(), "missing-workspace"))
+	descriptor, content, err := registry.Get(context.Background(), "go-review")
+	if err != nil {
+		t.Fatalf("registry.Get() error = %v", err)
+	}
+	if got := descriptor.Source.Layer; got != skills.SourceLayerGlobal {
+		t.Fatalf("source layer = %q, want %q", got, skills.SourceLayerGlobal)
+	}
+	if got := strings.TrimSpace(content.Instruction); got != "global instruction" {
+		t.Fatalf("instruction = %q, want %q", got, "global instruction")
 	}
 }
 
@@ -2142,6 +2192,25 @@ func TestHelperProcessAppMCPStdioServer(t *testing.T) {
 		if err := writeFramedForAppTest(os.Stdout, rawResponse); err != nil {
 			os.Exit(5)
 		}
+	}
+}
+
+func writeBootstrapSkillFile(t *testing.T, root string, id string, instruction string) {
+	t.Helper()
+	skillRoot := filepath.Join(root, id)
+	if err := os.MkdirAll(skillRoot, 0o755); err != nil {
+		t.Fatalf("mkdir skill root: %v", err)
+	}
+	raw := strings.Join([]string{
+		"---",
+		"id: " + id,
+		"name: " + id,
+		"---",
+		"## Instruction",
+		instruction,
+	}, "\n")
+	if err := os.WriteFile(filepath.Join(skillRoot, "SKILL.md"), []byte(raw), 0o644); err != nil {
+		t.Fatalf("write skill file: %v", err)
 	}
 }
 

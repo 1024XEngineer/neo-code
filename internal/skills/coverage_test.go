@@ -66,6 +66,35 @@ func TestActivationScopeValidateCases(t *testing.T) {
 	}
 }
 
+func TestSourceLayerValidateCases(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		layer   SourceLayer
+		wantErr bool
+	}{
+		{name: "empty", layer: ""},
+		{name: "global", layer: SourceLayerGlobal},
+		{name: "project", layer: SourceLayerProject},
+		{name: "builtin", layer: SourceLayerBuiltin},
+		{name: "invalid", layer: SourceLayer("x"), wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			err := tt.layer.Validate()
+			if tt.wantErr && err == nil {
+				t.Fatalf("expected error for layer=%q", tt.layer)
+			}
+			if !tt.wantErr && err != nil {
+				t.Fatalf("unexpected error for layer=%q: %v", tt.layer, err)
+			}
+		})
+	}
+}
+
 func TestDescriptorValidateCases(t *testing.T) {
 	t.Parallel()
 
@@ -112,6 +141,14 @@ func TestDescriptorValidateCases(t *testing.T) {
 				return d
 			},
 			wantError: "invalid source kind",
+		},
+		{
+			name: "invalid source layer",
+			mutate: func(d Descriptor) Descriptor {
+				d.Source.Layer = SourceLayer("unknown")
+				return d
+			},
+			wantError: "invalid source layer",
 		},
 		{
 			name: "invalid scope",
@@ -629,6 +666,7 @@ do it`
 		skillDir,
 		skillPath,
 		raw,
+		"",
 		func(Descriptor) error { return errors.New("descriptor broken") },
 	)
 	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "descriptor broken") {

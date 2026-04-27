@@ -12,6 +12,7 @@ import (
 	"neo-code/internal/gateway"
 	"neo-code/internal/gateway/protocol"
 	providertypes "neo-code/internal/provider/types"
+	"neo-code/internal/skills"
 )
 
 func TestNewRemoteRuntimeAdapterBranches(t *testing.T) {
@@ -255,7 +256,8 @@ func TestRemoteRuntimeAdapterSkillMethods(t *testing.T) {
 								Description: "Review Go code",
 								Version:     "v1",
 								Source: gateway.SkillSource{
-									Kind: "local",
+									Kind:  "local",
+									Layer: "project",
 								},
 								Scope: "session",
 							},
@@ -289,6 +291,9 @@ func TestRemoteRuntimeAdapterSkillMethods(t *testing.T) {
 	}
 	if len(availableSkills) != 1 || availableSkills[0].Descriptor.ID != "go-review" || !availableSkills[0].Active {
 		t.Fatalf("available skills = %#v, want one active go-review skill", availableSkills)
+	}
+	if availableSkills[0].Descriptor.Source.Layer != skills.SourceLayerProject {
+		t.Fatalf("available skills source layer = %q, want %q", availableSkills[0].Descriptor.Source.Layer, skills.SourceLayerProject)
 	}
 
 	params := rpcClient.snapshotParams()
