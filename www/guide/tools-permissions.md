@@ -1,6 +1,6 @@
 ---
 title: 工具与权限
-description: Agent 能做什么，什么时候需要你确认，Allow、Ask、Deny 怎么选。
+description: Agent 能做什么，什么时候需要你确认，Allow once、Allow session、Reject 怎么选。
 ---
 
 # 工具与权限
@@ -17,7 +17,7 @@ NeoCode 通过工具与你的项目交互。只读操作通常自动执行；写
 | 写入文件 | `filesystem_write_file` | 是 |
 | 编辑文件 | `filesystem_edit` | 是 |
 | 执行命令 | `bash` | 视风险而定 |
-| 抓取网页 | `webfetch` | 否 |
+| 抓取网页 | `webfetch` | 视域名策略而定 |
 | 管理任务列表 | `todo_write` | 否 |
 | 保存/读取/删除记忆 | `memo_*` | 否 |
 | 启动子代理 | `spawn_subagent` | 否 |
@@ -29,28 +29,36 @@ NeoCode 通过工具与你的项目交互。只读操作通常自动执行；写
 当 Agent 请求写入文件或执行命令时，NeoCode 会弹出确认界面：
 
 ```text
-◆ NEO wants to run: filesystem_write_file
-  path: src/main.go
-  content: (428 bytes)
+Permission request: filesystem_write_file (write_file)
+Target: src/main.go
 
-  [Allow] [Ask] [Deny]
+Use Up/Down to choose, Enter to confirm (shortcuts: y=once, a=session, n=reject)
+> Allow once    - Approve this request once
+  Allow session - Approve similar requests for this session
+  Reject        - Reject this request
 ```
 
 | 选择 | 含义 | 适合场景 |
 |---|---|---|
-| Allow | 允许执行，并记住相同操作的决策 | 已确认安全的连续修改 |
-| Ask | 本次按默认审批流程处理，后续仍询问 | 默认选择，适合多数任务 |
-| Deny | 拒绝本次执行 | 路径不对、命令危险、范围失控 |
+| `Allow once` | 只批准本次请求 | 一次性写入、单次测试，或仍想逐项确认 |
+| `Allow session` | 批准当前会话内相似请求 | 已确认安全的连续修改或重复测试 |
+| `Reject` | 拒绝本次请求 | 路径不对、命令危险、范围失控 |
 
 ## 怎么判断
 
 | 场景 | 建议 |
 |---|---|
 | 读取文件、搜索代码 | 通常可以放行 |
-| 写测试、改小范围代码 | Ask，确认路径后允许 |
+| 写测试、改小范围代码 | 先检查路径，安全时选 `Allow once`；连续重复操作可选 `Allow session` |
 | 运行项目已有测试命令 | 通常可以允许 |
-| 删除文件、重置 Git、批量改写 | 要求解释，确认后再决定 |
-| 涉及密钥、本地配置或不想改的目录 | Deny |
+| 删除文件、重置 Git、批量改写 | 要求解释，确认后通常只对明确安全的单次请求选 `Allow once` |
+| 涉及密钥、本地配置或不想改的目录 | `Reject` |
+
+## WebFetch 域名策略
+
+`webfetch` 用来抓取 HTTP/HTTPS 网页内容。当前推荐策略默认允许 `github.com` 和 `*.github.com`，其他外部域名会触发权限确认。
+
+工具自身也有安全边界：它只支持 `http` 和 `https`，会阻止 `localhost`、私网、链路本地等目标，并阻止自动重定向绕过校验。也就是说，权限确认决定是否允许访问外部域名，工具仍会拦截明显不安全的目标。
 
 ## Full Access 模式
 

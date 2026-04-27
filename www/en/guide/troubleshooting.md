@@ -72,15 +72,16 @@ This page is organized by symptom, likely causes, and practical fixes.
 
 ### Likely causes
 
-- Current decision is `Ask`
+- The current session has not approved similar requests with `Allow session`
 - Tool arguments changed, so it is a new operation
 - The action is risky enough to require confirmation
 
 ### Fix
 
-1. Use `Allow` for stable, trusted repeated actions.
-2. Keep `Ask` for unknown repositories or risky commands.
-3. When unsure, ask the agent to explain the command and its impact first.
+1. Use `Allow session` for stable, trusted repeated actions.
+2. For unknown repositories or risky commands, review each prompt and use `Allow once` only for clearly safe single requests.
+3. Use `Reject` when the path, command, or scope is not what you expect.
+4. When unsure, ask the agent to explain the command and its impact first.
 
 See [Tools & Permissions](./tools-permissions) for details.
 

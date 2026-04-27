@@ -46,6 +46,8 @@ Then:
 Please apply the proposed fix and run the smallest relevant tests. If tests fail, analyze and continue fixing.
 ```
 
+For deletes, Git resets, or broad rewrites, inspect the requested action first. Use `Allow once` only for a clearly safe single request; use `Reject` if the path, command, or scope is not what you expect.
+
 ## 5. Add tests
 
 ```text

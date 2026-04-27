@@ -56,13 +56,15 @@ Good prompts include the goal, scope, and verification command.
 
 ## Approvals
 
-NeoCode asks before file writes and risky commands.
+NeoCode asks before file writes, non-default external web domains, and risky commands.
 
 | Choice | Best for |
 |---|---|
-| Allow | Confirmed safe repeated operations |
-| Ask | Default choice for most work |
-| Deny | Wrong path, risky command, or uncontrolled scope |
+| `Allow once` | Approve only this request, useful for a single edit or step-by-step review |
+| `Allow session` | Approve similar requests in the current session, useful for trusted repeated operations |
+| `Reject` | Block this request when the path, command, or scope is wrong |
+
+The prompt supports shortcuts: `y=once`, `a=session`, `n=reject`.
 
 See [Tools & Permissions](./tools-permissions) for details.
 

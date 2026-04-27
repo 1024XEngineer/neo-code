@@ -1,6 +1,6 @@
 ---
 title: Tools & Permissions
-description: What the agent can do and how to choose Allow, Ask, or Deny.
+description: What the agent can do and how to choose Allow once, Allow session, or Reject.
 ---
 
 # Tools & Permissions
@@ -17,7 +17,7 @@ NeoCode uses tools to interact with your project. Read-only actions usually run 
 | Write files | `filesystem_write_file` | Yes |
 | Edit files | `filesystem_edit` | Yes |
 | Run commands | `bash` | Depends on risk |
-| Fetch web pages | `webfetch` | No |
+| Fetch web pages | `webfetch` | Depends on domain policy |
 | Manage task list | `todo_write` | No |
 | Manage memory | `memo_*` | No |
 | Start subagents | `spawn_subagent` | No |
@@ -27,28 +27,36 @@ MCP tools use names like `mcp.<server-id>.<tool>`. See [MCP Tools](./mcp).
 ## Approval choices
 
 ```text
-◆ NEO wants to run: filesystem_write_file
-  path: src/main.go
-  content: (428 bytes)
+Permission request: filesystem_write_file (write_file)
+Target: src/main.go
 
-  [Allow] [Ask] [Deny]
+Use Up/Down to choose, Enter to confirm (shortcuts: y=once, a=session, n=reject)
+> Allow once    - Approve this request once
+  Allow session - Approve similar requests for this session
+  Reject        - Reject this request
 ```
 
 | Choice | Meaning | Best for |
 |---|---|---|
-| Allow | Approve and remember the same decision | Confirmed safe repeated operations |
-| Ask | Keep asking next time | Default for most tasks |
-| Deny | Block this action | Wrong path, risky command, or uncontrolled scope |
+| `Allow once` | Approve only this request | One-off writes, a single test command, or step-by-step review |
+| `Allow session` | Approve similar requests for the current session | Confirmed safe repeated edits or test runs |
+| `Reject` | Block this request | Wrong path, risky command, or uncontrolled scope |
 
 ## How to decide
 
 | Scenario | Recommendation |
 |---|---|
 | Reading and searching files | Usually allow |
-| Small code or test edits | Ask, then allow after checking paths |
+| Small code or test edits | Check paths first, then use `Allow once`; use `Allow session` for trusted repeated operations |
 | Existing test command | Usually allow |
-| Deletes, Git reset, broad rewrites | Ask for explanation first |
-| Secrets or local config | Deny |
+| Deletes, Git reset, broad rewrites | Request an explanation first, then usually approve only a clearly safe single request with `Allow once` |
+| Secrets or local config | `Reject` |
+
+## WebFetch Domain Policy
+
+`webfetch` fetches HTTP/HTTPS pages. The current recommended policy allows `github.com` and `*.github.com` by default. Other external domains trigger an approval prompt.
+
+The tool also has its own safety boundary: it only supports `http` and `https`, blocks localhost, private-network, link-local, and similar targets, and blocks automatic redirects from bypassing validation. Approval decides whether an external domain may be fetched; the tool still rejects clearly unsafe targets.
 
 ## Full Access
 
@@ -63,10 +71,10 @@ Use Full Access only when you understand the task risk, trust the workspace, and
 | Category | Examples | Handling |
 |---|---|---|
 | Read-only | `git status`, `git log`, `ls` | Auto-allow |
-| Local changes | `git commit`, `go build` | Ask |
-| Remote interaction | `git push`, `git fetch` | Ask |
-| Destructive | `git reset --hard`, `rm` | Ask |
-| Unknown | Compound commands, parse failures | Ask |
+| Local changes | `git commit`, `go build` | Needs approval |
+| Remote interaction | `git push`, `git fetch` | Needs approval |
+| Destructive | `git reset --hard`, `rm` | Needs approval |
+| Unknown | Compound commands, parse failures | Needs approval |
 
 ## File scope
 
