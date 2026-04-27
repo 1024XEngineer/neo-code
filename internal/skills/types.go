@@ -25,6 +25,25 @@ func (k SourceKind) Validate() error {
 	}
 }
 
+// SourceLayer 表示技能来源所在的加载层级（project/global/builtin）。
+type SourceLayer string
+
+const (
+	SourceLayerGlobal  SourceLayer = "global"
+	SourceLayerProject SourceLayer = "project"
+	SourceLayerBuiltin SourceLayer = "builtin"
+)
+
+// Validate 校验技能来源层级是否合法；空值用于兼容旧数据。
+func (l SourceLayer) Validate() error {
+	switch l {
+	case "", SourceLayerGlobal, SourceLayerProject, SourceLayerBuiltin:
+		return nil
+	default:
+		return fmt.Errorf("skills: invalid source layer %q", l)
+	}
+}
+
 // ActivationScope controls where the skill should be visible/active.
 type ActivationScope string
 
@@ -48,6 +67,7 @@ func (s ActivationScope) Validate() error {
 // Source describes the origin of one skill.
 type Source struct {
 	Kind     SourceKind
+	Layer    SourceLayer
 	RootDir  string
 	SkillDir string
 	FilePath string
@@ -72,6 +92,9 @@ func (d Descriptor) Validate() error {
 		return fmt.Errorf("skills: descriptor name is empty")
 	}
 	if err := d.Source.Kind.Validate(); err != nil {
+		return err
+	}
+	if err := d.Source.Layer.Validate(); err != nil {
 		return err
 	}
 	if err := d.Scope.Validate(); err != nil {

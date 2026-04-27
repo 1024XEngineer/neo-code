@@ -25,13 +25,19 @@ func TestFormatAvailableSkills(t *testing.T) {
 				Description: "review go code",
 				Scope:       skills.ScopeSession,
 				Version:     "v1",
-				Source:      skills.Source{Kind: skills.SourceKindLocal},
+				Source: skills.Source{
+					Kind:  skills.SourceKindLocal,
+					Layer: skills.SourceLayerProject,
+				},
 			},
 			Active: true,
 		},
 	}, "session-1")
 	if !strings.Contains(text, "go-review [active]") {
 		t.Fatalf("expected active entry, got %q", text)
+	}
+	if !strings.Contains(text, "source=project/local") {
+		t.Fatalf("expected source layer label, got %q", text)
 	}
 }
 

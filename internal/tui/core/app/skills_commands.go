@@ -10,6 +10,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"neo-code/internal/skills"
 	tuiservices "neo-code/internal/tui/services"
 )
 
@@ -182,7 +183,7 @@ func formatAvailableSkills(states []tuiservices.AvailableSkillState, sessionID s
 		}
 		description := sanitizeSkillDisplayText(state.Descriptor.Description, "-")
 		id := sanitizeSkillDisplayText(state.Descriptor.ID, "(unknown)")
-		source := sanitizeSkillDisplayText(string(state.Descriptor.Source.Kind), "unknown")
+		source := sanitizeSkillDisplayText(formatSkillDisplaySource(state.Descriptor.Source), "unknown")
 		version := sanitizeSkillDisplayText(state.Descriptor.Version, "-")
 		scope = sanitizeSkillDisplayText(scope, "explicit")
 		rows = append(rows, fmt.Sprintf(
@@ -199,6 +200,20 @@ func formatAvailableSkills(states []tuiservices.AvailableSkillState, sessionID s
 		rows = append(rows, fmt.Sprintf("... and %d more skills", len(states)-visibleCount))
 	}
 	return strings.Join(rows, "\n")
+}
+
+// formatSkillDisplaySource 组装 skills 来源展示文本，优先展示层级信息以便定位覆盖关系。
+func formatSkillDisplaySource(source skills.Source) string {
+	kind := strings.TrimSpace(string(source.Kind))
+	layer := strings.TrimSpace(string(source.Layer))
+	switch {
+	case layer != "" && kind != "":
+		return layer + "/" + kind
+	case layer != "":
+		return layer
+	default:
+		return kind
+	}
 }
 
 // formatSessionSkills 渲染 `/skill active` 输出，并明确缺失技能状态。

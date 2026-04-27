@@ -581,6 +581,7 @@ Response Schema：
 Observation：
 1. 计入 `gateway_requests_total{method="gateway.listAvailableSkills",...}`。  
 2. 当携带 `session_id` 时，返回值中的 `active` 字段表示会话激活态。  
+3. `payload.skills[*].descriptor.source.layer` 可选返回 `project/global`，用于区分项目层与全局层来源。  
 
 ---
 
@@ -1374,7 +1375,8 @@ Success Response：
             "description": "Review Go code with actionable findings.",
             "version": "1.0.0",
             "source": {
-              "kind": "local"
+              "kind": "local",
+              "layer": "project"
             },
             "scope": "session"
           }
@@ -1436,7 +1438,8 @@ Success Response：
             "description": "Review Go code with actionable findings.",
             "version": "1.0.0",
             "source": {
-              "kind": "local"
+              "kind": "local",
+              "layer": "project"
             },
             "scope": "session"
           },

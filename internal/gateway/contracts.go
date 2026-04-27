@@ -227,6 +227,8 @@ type SessionSummary struct {
 type SkillSource struct {
 	// Kind 表示技能来源类型（local/builtin）。
 	Kind string `json:"kind"`
+	// Layer 表示技能来源层级（project/global）。
+	Layer string `json:"layer,omitempty"`
 	// RootDir 表示来源根目录。
 	RootDir string `json:"root_dir,omitempty"`
 	// SkillDir 表示技能目录。
