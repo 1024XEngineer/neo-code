@@ -271,3 +271,25 @@ func TestStartDetachedGateway(t *testing.T) {
 		t.Fatalf("expected marker file %q to be created", markerPath)
 	})
 }
+
+func TestLaunchTerminalBranches(t *testing.T) {
+	t.Run("empty command rejected", func(t *testing.T) {
+		err := LaunchTerminal("   ")
+		if err == nil {
+			t.Fatal("expected empty command error")
+		}
+		if !strings.Contains(err.Error(), "empty terminal command") {
+			t.Fatalf("error = %v, want contains %q", err, "empty terminal command")
+		}
+	})
+
+	t.Run("unsupported platform returns sentinel", func(t *testing.T) {
+		if runtime.GOOS == "windows" || runtime.GOOS == "darwin" {
+			t.Skip("unsupported branch only applies to non-windows/non-darwin")
+		}
+		err := LaunchTerminal("neocode --session session-1")
+		if !errors.Is(err, ErrTerminalUnsupported) {
+			t.Fatalf("error = %v, want wrapped %v", err, ErrTerminalUnsupported)
+		}
+	})
+}

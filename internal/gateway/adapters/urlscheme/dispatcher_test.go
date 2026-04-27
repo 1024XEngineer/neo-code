@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net"
@@ -140,6 +141,158 @@ func TestDispatcherDispatchSuccess(t *testing.T) {
 	}
 
 	<-done
+}
+
+func TestDispatcherDispatchRunLaunchesTerminal(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	t.Cleanup(func() {
+		_ = serverConn.Close()
+		_ = clientConn.Close()
+	})
+
+	launchedCommand := ""
+	dispatcher := newStubDispatcher(func(dispatcher *Dispatcher) {
+		dispatcher.dialFn = func(string) (net.Conn, error) {
+			return clientConn, nil
+		}
+		dispatcher.requestIDFn = func() string {
+			return "wake-run-1"
+		}
+		dispatcher.launchTerminalFn = func(command string) error {
+			launchedCommand = command
+			return nil
+		}
+	})
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		decoder := json.NewDecoder(serverConn)
+		encoder := json.NewEncoder(serverConn)
+
+		var rpcRequest protocol.JSONRPCRequest
+		if err := decoder.Decode(&rpcRequest); err != nil {
+			t.Errorf("decode request rpc: %v", err)
+			return
+		}
+		if err := encoder.Encode(protocol.JSONRPCResponse{
+			JSONRPC: protocol.JSONRPCVersion,
+			ID:      rpcRequest.ID,
+			Result: mustMarshalRawJSON(t, gateway.MessageFrame{
+				Type:      gateway.FrameTypeAck,
+				Action:    gateway.FrameActionWakeOpenURL,
+				RequestID: "wake-run-1",
+				SessionID: "session-run-1",
+				Payload: map[string]any{
+					"message": "wake intent accepted",
+					"action":  "run",
+				},
+			}),
+		}); err != nil {
+			t.Errorf("encode response rpc: %v", err)
+		}
+	}()
+
+	result, err := dispatcher.Dispatch(context.Background(), DispatchRequest{
+		RawURL: "neocode://run?prompt=hello",
+	})
+	if err != nil {
+		t.Fatalf("dispatch url: %v", err)
+	}
+	if !result.TerminalLaunched {
+		t.Fatal("expected terminal launched flag to be true")
+	}
+	if launchedCommand != "neocode --session session-run-1" {
+		t.Fatalf("launched command = %q, want %q", launchedCommand, "neocode --session session-run-1")
+	}
+	<-done
+}
+
+func TestDispatcherDispatchRunRequiresSessionIDInAck(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	t.Cleanup(func() {
+		_ = serverConn.Close()
+		_ = clientConn.Close()
+	})
+
+	dispatcher := newStubDispatcher(func(dispatcher *Dispatcher) {
+		dispatcher.dialFn = func(string) (net.Conn, error) {
+			return clientConn, nil
+		}
+		dispatcher.requestIDFn = func() string {
+			return "wake-run-2"
+		}
+		dispatcher.launchTerminalFn = func(string) error { return nil }
+	})
+
+	go func() {
+		decoder := json.NewDecoder(serverConn)
+		encoder := json.NewEncoder(serverConn)
+		var rpcRequest protocol.JSONRPCRequest
+		_ = decoder.Decode(&rpcRequest)
+		_ = encoder.Encode(protocol.JSONRPCResponse{
+			JSONRPC: protocol.JSONRPCVersion,
+			ID:      rpcRequest.ID,
+			Result: mustMarshalRawJSON(t, gateway.MessageFrame{
+				Type:      gateway.FrameTypeAck,
+				Action:    gateway.FrameActionWakeOpenURL,
+				RequestID: "wake-run-2",
+			}),
+		})
+	}()
+
+	_, err := dispatcher.Dispatch(context.Background(), DispatchRequest{
+		RawURL: "neocode://run?prompt=hello",
+	})
+	if err == nil {
+		t.Fatal("expected missing session_id error")
+	}
+	assertDispatchErrorCode(t, err, ErrorCodeUnexpectedResponse)
+}
+
+func TestDispatcherDispatchRunMapsUnsupportedTerminalLauncher(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	t.Cleanup(func() {
+		_ = serverConn.Close()
+		_ = clientConn.Close()
+	})
+
+	dispatcher := newStubDispatcher(func(dispatcher *Dispatcher) {
+		dispatcher.dialFn = func(string) (net.Conn, error) {
+			return clientConn, nil
+		}
+		dispatcher.requestIDFn = func() string {
+			return "wake-run-3"
+		}
+		dispatcher.launchTerminalFn = func(string) error {
+			return fmt.Errorf("%w: linux", launcher.ErrTerminalUnsupported)
+		}
+	})
+
+	go func() {
+		decoder := json.NewDecoder(serverConn)
+		encoder := json.NewEncoder(serverConn)
+		var rpcRequest protocol.JSONRPCRequest
+		_ = decoder.Decode(&rpcRequest)
+		_ = encoder.Encode(protocol.JSONRPCResponse{
+			JSONRPC: protocol.JSONRPCVersion,
+			ID:      rpcRequest.ID,
+			Result: mustMarshalRawJSON(t, gateway.MessageFrame{
+				Type:      gateway.FrameTypeAck,
+				Action:    gateway.FrameActionWakeOpenURL,
+				RequestID: "wake-run-3",
+				SessionID: "session-run-3",
+			}),
+		})
+	}()
+
+	_, err := dispatcher.Dispatch(context.Background(), DispatchRequest{
+		RawURL: "neocode://run?prompt=hello",
+	})
+	if err == nil {
+		t.Fatal("expected terminal launcher error")
+	}
+	assertDispatchErrorCode(t, err, ErrorCodeNotSupported)
 }
 
 func TestDispatcherDispatchReturnsGatewayError(t *testing.T) {

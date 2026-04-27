@@ -73,6 +73,14 @@ func (h *WakeOpenURLHandler) Handle(intent protocol.WakeIntent) (WakeOpenURLResu
 				"unsafe review path",
 			)
 		}
+	case protocol.WakeActionRun:
+		prompt := strings.TrimSpace(intent.Params["prompt"])
+		if prompt == "" {
+			return WakeOpenURLResult{}, newWakeError(
+				WakeErrorCodeMissingRequiredField,
+				"missing required field: params.prompt",
+			)
+		}
 	}
 
 	return WakeOpenURLResult{

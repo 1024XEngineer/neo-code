@@ -47,9 +47,10 @@ type DispatchRequest struct {
 
 // DispatchResult 表示 URL Scheme 调度输出。
 type DispatchResult struct {
-	ListenAddress string               `json:"listen_address"`
-	Request       gateway.MessageFrame `json:"request"`
-	Response      gateway.MessageFrame `json:"response"`
+	ListenAddress    string               `json:"listen_address"`
+	Request          gateway.MessageFrame `json:"request"`
+	Response         gateway.MessageFrame `json:"response"`
+	TerminalLaunched bool                 `json:"terminal_launched,omitempty"`
 }
 
 // DispatchError 表示调度过程中的结构化错误。
@@ -73,6 +74,7 @@ type Dispatcher struct {
 	requestIDFn            func() string
 	resolveLaunchSpecFn    func() (launcher.LaunchSpec, error)
 	startGatewayFn         func(launcher.LaunchSpec) error
+	launchTerminalFn       func(string) error
 	nowFn                  func() time.Time
 	sleepFn                func(time.Duration)
 	autoLaunchGateway      bool
@@ -91,6 +93,7 @@ func NewDispatcher() *Dispatcher {
 			})
 		},
 		startGatewayFn:    launcher.StartDetachedGateway,
+		launchTerminalFn:  launcher.LaunchTerminal,
 		nowFn:             time.Now,
 		sleepFn:           time.Sleep,
 		autoLaunchGateway: true,
@@ -187,10 +190,35 @@ func (d *Dispatcher) Dispatch(ctx context.Context, request DispatchRequest) (Dis
 
 	switch responseFrame.Type {
 	case gateway.FrameTypeAck:
+		terminalLaunched := false
+		if strings.EqualFold(strings.TrimSpace(intent.Action), protocol.WakeActionRun) {
+			sessionID := strings.TrimSpace(responseFrame.SessionID)
+			if sessionID == "" {
+				return DispatchResult{}, newDispatchError(
+					ErrorCodeUnexpectedResponse,
+					"wake.run response missing session_id",
+				)
+			}
+			if d.launchTerminalFn == nil {
+				return DispatchResult{}, newDispatchError(ErrorCodeInternal, "terminal launcher is unavailable")
+			}
+			launchCommand := fmt.Sprintf("neocode --session %s", sessionID)
+			if launchErr := d.launchTerminalFn(launchCommand); launchErr != nil {
+				if errors.Is(launchErr, launcher.ErrTerminalUnsupported) {
+					return DispatchResult{}, newDispatchError(ErrorCodeNotSupported, launchErr.Error())
+				}
+				return DispatchResult{}, newDispatchError(
+					ErrorCodeInternal,
+					fmt.Sprintf("launch terminal failed: %v", launchErr),
+				)
+			}
+			terminalLaunched = true
+		}
 		return DispatchResult{
-			ListenAddress: listenAddress,
-			Request:       requestFrame,
-			Response:      responseFrame,
+			ListenAddress:    listenAddress,
+			Request:          requestFrame,
+			Response:         responseFrame,
+			TerminalLaunched: terminalLaunched,
 		}, nil
 	case gateway.FrameTypeError:
 		if responseFrame.Error == nil {

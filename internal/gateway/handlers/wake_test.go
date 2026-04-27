@@ -54,6 +54,36 @@ func TestWakeOpenURLHandlerHandleMissingPath(t *testing.T) {
 	}
 }
 
+func TestWakeOpenURLHandlerHandleRunSuccess(t *testing.T) {
+	handler := NewWakeOpenURLHandler()
+	result, err := handler.Handle(protocol.WakeIntent{
+		Action: protocol.WakeActionRun,
+		Params: map[string]string{
+			"prompt": "write a server",
+		},
+	})
+	if err != nil {
+		t.Fatalf("handle wake run intent: %v", err)
+	}
+	if result.Action != protocol.WakeActionRun {
+		t.Fatalf("result action = %q, want %q", result.Action, protocol.WakeActionRun)
+	}
+}
+
+func TestWakeOpenURLHandlerHandleRunMissingPrompt(t *testing.T) {
+	handler := NewWakeOpenURLHandler()
+	_, err := handler.Handle(protocol.WakeIntent{
+		Action: protocol.WakeActionRun,
+		Params: map[string]string{},
+	})
+	if err == nil {
+		t.Fatal("expected missing prompt error")
+	}
+	if err.Code != WakeErrorCodeMissingRequiredField {
+		t.Fatalf("error code = %q, want %q", err.Code, WakeErrorCodeMissingRequiredField)
+	}
+}
+
 func TestWakeOpenURLHandlerHandleUnsafePath(t *testing.T) {
 	testCases := []string{
 		"../../etc/passwd",

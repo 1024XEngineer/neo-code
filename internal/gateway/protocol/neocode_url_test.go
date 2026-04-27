@@ -142,8 +142,24 @@ func TestIsSupportedWakeAction(t *testing.T) {
 	if !IsSupportedWakeAction("review") {
 		t.Fatal("review should be supported")
 	}
+	if !IsSupportedWakeAction("run") {
+		t.Fatal("run should be supported")
+	}
 	if IsSupportedWakeAction("open") {
 		t.Fatal("open should not be supported")
+	}
+}
+
+func TestParseNeoCodeURLRunAction(t *testing.T) {
+	intent, err := ParseNeoCodeURL("neocode://run?prompt=write%20hello")
+	if err != nil {
+		t.Fatalf("parse neocode url: %v", err)
+	}
+	if intent.Action != WakeActionRun {
+		t.Fatalf("action = %q, want %q", intent.Action, WakeActionRun)
+	}
+	if got := intent.Params["prompt"]; got != "write hello" {
+		t.Fatalf("params[prompt] = %q, want %q", got, "write hello")
 	}
 }
 

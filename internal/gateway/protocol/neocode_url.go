@@ -23,10 +23,13 @@ const (
 const (
 	// WakeActionReview 表示 review 唤醒动作。
 	WakeActionReview = "review"
+	// WakeActionRun 表示 run 唤醒动作。
+	WakeActionRun = "run"
 )
 
 var supportedWakeActionSet = map[string]struct{}{
 	WakeActionReview: {},
+	WakeActionRun:    {},
 }
 
 // WakeIntent 表示从 neocode:// URL 解析得到的标准化唤醒意图。

@@ -549,6 +549,9 @@ func defaultURLDispatchCommandRunner(ctx context.Context, options urlDispatchCom
 		exitProcess(1)
 		return nil
 	}
+	if result.TerminalLaunched {
+		exitProcess(0)
+	}
 	return nil
 }
 
