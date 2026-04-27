@@ -9,7 +9,7 @@ import (
 	providertypes "neo-code/internal/provider/types"
 )
 
-func TestRebuildTranscriptDoesNotCollapseAssistantAcrossToolBoundary(t *testing.T) {
+func TestRebuildTranscriptCollapsesAssistantAcrossHiddenToolBoundary(t *testing.T) {
 	app, _ := newTestApp(t)
 	app.width = 120
 	app.height = 32
@@ -22,8 +22,8 @@ func TestRebuildTranscriptDoesNotCollapseAssistantAcrossToolBoundary(t *testing.
 
 	app.rebuildTranscript()
 	plain := copyCodeANSIPattern.ReplaceAllString(app.transcriptContent, "")
-	if count := strings.Count(plain, messageTagAgent); count != 2 {
-		t.Fatalf("expected two agent tags across tool boundary, got %d in %q", count, plain)
+	if count := strings.Count(plain, messageTagAgent); count != 1 {
+		t.Fatalf("expected one agent tag when tool messages are hidden, got %d in %q", count, plain)
 	}
 }
 

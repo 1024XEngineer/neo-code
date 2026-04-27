@@ -107,6 +107,7 @@ type appRuntimeState struct {
 	inputBurstStart         time.Time
 	inputBurstCount         int
 	pasteMode               bool
+	pasteSessionBase        string
 	activeMessages          []providertypes.Message
 	activities              []tuistate.ActivityEntry
 	todoItems               []todoViewItem
@@ -122,7 +123,9 @@ type appRuntimeState struct {
 	runProgressLabel        string
 	lastUserMessageRunID    string
 	pendingPermission       *permissionPromptState
+	queuedIntervention      *queuedInterventionInput
 	pendingImageAttachments []pendingImageAttachment
+	pendingPasteBuffers     []pendingPasteBuffer
 	providerAddForm         *providerAddFormState
 	modelScopeGuide         *modelScopeGuideState
 	layoutCached            bool
@@ -159,6 +162,16 @@ type pendingImageAttachment struct {
 	MimeType string
 	Size     int64
 	Name     string
+}
+
+type pendingPasteBuffer struct {
+	Placeholder string
+	Content     string
+}
+
+type queuedInterventionInput struct {
+	Text   string
+	Images []tuiservices.UserImageInput
 }
 
 // providerAddFormState 保存添加新 provider 表单的状态。

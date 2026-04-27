@@ -8,6 +8,8 @@ import (
 	glamourstyles "github.com/charmbracelet/glamour/styles"
 )
 
+const markdownNeutralCodeBackground = "#3f3f46"
+
 // NewGlamourTermRenderer 创建指定宽度的 Glamour 终端渲染器。
 func NewGlamourTermRenderer(style string, width int) (*glamour.TermRenderer, error) {
 	if cfg, ok := resolveStyleWithoutHeadingHashes(style); ok {
@@ -87,9 +89,13 @@ func stripNonCodeHighlightBackgrounds(cfg *ansi.StyleConfig) {
 	clearBlockHighlights(&cfg.HTMLSpan)
 	clearBlockHighlights(&cfg.Table.StyleBlock)
 
+	applyNeutralCodeBackground(&cfg.Code.StylePrimitive)
+	applyNeutralCodeBackground(&cfg.CodeBlock.StylePrimitive)
+
 	// Keep neutral code backgrounds for readability, but drop token-level color blocks.
 	if cfg.CodeBlock.Chroma != nil {
 		clearChromaTokenHighlights(cfg.CodeBlock.Chroma)
+		applyNeutralCodeBackground(&cfg.CodeBlock.Chroma.Background)
 	}
 }
 
@@ -105,6 +111,35 @@ func clearPrimitiveHighlights(primitive *ansi.StylePrimitive) {
 		return
 	}
 	primitive.BackgroundColor = nil
+	primitive.Inverse = nil
+	clearPrimitiveDecorations(primitive)
+}
+
+func clearPrimitiveDecorations(primitive *ansi.StylePrimitive) {
+	if primitive == nil {
+		return
+	}
+	primitive.Color = nil
+	primitive.Underline = nil
+	primitive.Bold = nil
+	primitive.Upper = nil
+	primitive.Lower = nil
+	primitive.Title = nil
+	primitive.Italic = nil
+	primitive.CrossedOut = nil
+	primitive.Faint = nil
+	primitive.Conceal = nil
+	primitive.Overlined = nil
+	primitive.Blink = nil
+	primitive.Format = ""
+}
+
+func applyNeutralCodeBackground(primitive *ansi.StylePrimitive) {
+	if primitive == nil {
+		return
+	}
+	gray := markdownNeutralCodeBackground
+	primitive.BackgroundColor = &gray
 	primitive.Inverse = nil
 }
 

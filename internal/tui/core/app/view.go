@@ -287,8 +287,9 @@ func (a App) renderTranscriptScrollbar(width int, height int) string {
 	}
 
 	blank := strings.Repeat(" ", width)
-	thumb := strings.Repeat("█", width)
-	thumbStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(stoneGray))
+	thumbStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(stoneGray)).
+		Background(lipgloss.Color(stoneGray))
 
 	maxOffset := a.transcriptMaxOffset()
 	thumbHeight := height
@@ -307,7 +308,7 @@ func (a App) renderTranscriptScrollbar(width int, height int) string {
 	lines := make([]string, 0, height)
 	for row := 0; row < height; row++ {
 		if row >= thumbTop && row < thumbTop+thumbHeight {
-			lines = append(lines, thumbStyle.Render(thumb))
+			lines = append(lines, thumbStyle.Render(blank))
 			continue
 		}
 		lines = append(lines, blank)
@@ -650,19 +651,11 @@ func (a App) renderMessageBlockWithCopy(message providertypes.Message, width int
 	}
 
 	content := strings.TrimSpace(renderMessagePartsForDisplay(message.Parts))
-	if content == "" && len(message.ToolCalls) > 0 {
-		names := make([]string, 0, len(message.ToolCalls))
-		for _, call := range message.ToolCalls {
-			names = append(names, call.Name)
-		}
-		content = "Tool calls: " + strings.Join(names, ", ")
-	}
 	if content == "" {
+		if message.Role == roleAssistant {
+			return "", nil
+		}
 		content = emptyMessageText
-	}
-
-	if message.Role == roleAssistant && content == emptyMessageText && len(message.ToolCalls) == 0 {
-		return "", nil
 	}
 
 	contentBlock, copyButtons := a.renderMessageContentWithCopy(content, maxMessageWidth-2, bodyStyle, startCopyID)
@@ -776,7 +769,7 @@ func (a App) renderMessageContentWithCopy(content string, width int, bodyStyle l
 		return bodyStyle.Render(emptyMessageText), nil
 	}
 	rendered = trimRenderedTrailingWhitespace(rendered)
-	return bodyStyle.Render(normalizeBlockRightEdge(rendered, max(1, width))), nil
+	return bodyStyle.Render(rendered), nil
 }
 
 func normalizeBlockRightEdge(content string, maxWidth int) string {

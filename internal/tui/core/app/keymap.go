@@ -91,7 +91,7 @@ func newKeyMap() keyMap {
 		),
 		PasteImage: key.NewBinding(
 			key.WithKeys("ctrl+v"),
-			key.WithHelp("Ctrl+V", "Paste image"),
+			key.WithHelp("Ctrl+V", "Paste"),
 		),
 		LogViewer: key.NewBinding(
 			key.WithKeys("ctrl+l"),

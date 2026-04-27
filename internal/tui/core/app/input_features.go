@@ -4,7 +4,10 @@ import (
 	"fmt"
 	tuiinfra "neo-code/internal/tui/infra"
 	tuiservices "neo-code/internal/tui/services"
+	"net/url"
+	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
@@ -26,6 +29,7 @@ const (
 )
 
 var readClipboardImage = tuiinfra.ReadClipboardImage
+var readClipboardText = tuiinfra.ReadClipboardText
 var saveClipboardImageToTempFile = tuiinfra.SaveImageToTempFile
 
 func (a *App) refreshFileCandidates() error {
@@ -314,25 +318,10 @@ func looksLikeImagePath(path string) bool {
 }
 
 func (a *App) applyFileReference(path string) error {
-	path = strings.TrimSpace(path)
-	if path == "" {
-		return fmt.Errorf("file path is empty")
+	reference, err := a.fileReferenceForPath(path)
+	if err != nil {
+		return err
 	}
-
-	resolved := filepath.ToSlash(path)
-	if workdir := strings.TrimSpace(a.state.CurrentWorkdir); workdir != "" {
-		base, errBase := filepath.Abs(workdir)
-		target, errTarget := filepath.Abs(path)
-		if errBase == nil && errTarget == nil {
-			if rel, errRel := filepath.Rel(base, target); errRel == nil && !strings.HasPrefix(rel, "..") {
-				resolved = filepath.ToSlash(rel)
-			} else {
-				resolved = filepath.ToSlash(target)
-			}
-		}
-	}
-	resolved = strings.TrimPrefix(resolved, "./")
-	reference := fileReferencePrefix + resolved
 
 	current := a.input.Value()
 	if start, end, _, ok := currentReferenceToken(current); ok {
@@ -354,6 +343,28 @@ func (a *App) applyFileReference(path string) error {
 	a.refreshCommandMenu()
 	a.state.StatusText = fmt.Sprintf("[System] Added file reference %s.", reference)
 	return nil
+}
+
+func (a App) fileReferenceForPath(path string) (string, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return "", fmt.Errorf("file path is empty")
+	}
+
+	resolved := filepath.ToSlash(path)
+	if workdir := strings.TrimSpace(a.state.CurrentWorkdir); workdir != "" {
+		base, errBase := filepath.Abs(workdir)
+		target, errTarget := filepath.Abs(path)
+		if errBase == nil && errTarget == nil {
+			if rel, errRel := filepath.Rel(base, target); errRel == nil && !strings.HasPrefix(rel, "..") {
+				resolved = filepath.ToSlash(rel)
+			} else {
+				resolved = filepath.ToSlash(target)
+			}
+		}
+	}
+	resolved = strings.TrimPrefix(resolved, "./")
+	return fileReferencePrefix + resolved, nil
 }
 
 func isImageReferenceInput(input string) bool {
@@ -424,22 +435,125 @@ func (a *App) addImageFromClipboard() error {
 		return fmt.Errorf("maximum %d image attachments allowed", maxImageAttachments)
 	}
 
-	data, err := readClipboardImage()
-	if err != nil {
-		return fmt.Errorf("failed to read clipboard image: %w", err)
+	data, imageErr := readClipboardImage()
+	if imageErr == nil && len(data) > 0 {
+		tmpPath, err := saveClipboardImageToTempFile(data, "paste")
+		if err != nil {
+			return fmt.Errorf("failed to save clipboard image: %w", err)
+		}
+		if err := a.queueImageAttachmentForPrepare(tmpPath); err != nil {
+			return err
+		}
+		a.state.StatusText = "[System] Added image from clipboard"
+		return nil
 	}
 
-	if data == nil || len(data) == 0 {
-		return fmt.Errorf("no image in clipboard")
+	if path, ok := clipboardImagePathFromText(a.state.CurrentWorkdir); ok {
+		if err := a.queueImageAttachmentForPrepare(path); err != nil {
+			return err
+		}
+		a.state.StatusText = "[System] Added image from clipboard path"
+		return nil
 	}
 
-	tmpPath, err := saveClipboardImageToTempFile(data, "paste")
+	if imageErr != nil {
+		return fmt.Errorf("failed to read clipboard image: %w", imageErr)
+	}
+	return fmt.Errorf("no image in clipboard")
+}
+
+func clipboardImagePathFromText(currentWorkdir string) (string, bool) {
+	text, err := readClipboardText()
 	if err != nil {
-		return fmt.Errorf("failed to save clipboard image: %w", err)
+		return "", false
 	}
-	if err := a.queueImageAttachmentForPrepare(tmpPath); err != nil {
-		return err
+	for _, line := range splitClipboardLines(text) {
+		candidate := strings.TrimSpace(line)
+		if candidate == "" {
+			continue
+		}
+		candidate = strings.Trim(candidate, "\"'")
+		candidate = normalizeClipboardFileURL(candidate)
+		if !looksLikeImagePath(candidate) {
+			continue
+		}
+		if filepath.IsAbs(candidate) {
+			return candidate, true
+		}
+		if strings.TrimSpace(currentWorkdir) == "" {
+			continue
+		}
+		return filepath.Join(currentWorkdir, candidate), true
 	}
-	a.state.StatusText = "[System] Added image from clipboard"
-	return nil
+	return "", false
+}
+
+func clipboardFileReferencePathsFromText(text string, currentWorkdir string) ([]string, bool) {
+	lines := splitClipboardLines(text)
+	if len(lines) == 0 {
+		return nil, false
+	}
+
+	paths := make([]string, 0, len(lines))
+	for _, line := range lines {
+		candidate := strings.TrimSpace(line)
+		if candidate == "" {
+			continue
+		}
+
+		candidate = strings.Trim(candidate, "\"'")
+		candidate = normalizeClipboardFileURL(candidate)
+		if candidate == "" {
+			return nil, false
+		}
+
+		resolved := candidate
+		if !filepath.IsAbs(resolved) {
+			if strings.TrimSpace(currentWorkdir) == "" {
+				return nil, false
+			}
+			resolved = filepath.Join(currentWorkdir, resolved)
+		}
+
+		info, err := os.Stat(resolved)
+		if err != nil || info.IsDir() {
+			return nil, false
+		}
+		paths = append(paths, resolved)
+	}
+
+	if len(paths) == 0 {
+		return nil, false
+	}
+	return paths, true
+}
+
+func splitClipboardLines(text string) []string {
+	normalized := strings.ReplaceAll(text, "\r\n", "\n")
+	normalized = strings.ReplaceAll(normalized, "\r", "\n")
+	return strings.Split(normalized, "\n")
+}
+
+func normalizeClipboardFileURL(candidate string) string {
+	trimmed := strings.TrimSpace(candidate)
+	if !strings.HasPrefix(strings.ToLower(trimmed), "file://") {
+		return trimmed
+	}
+
+	parsed, err := url.Parse(trimmed)
+	if err != nil {
+		return strings.TrimPrefix(strings.TrimPrefix(trimmed, "file:///"), "file://")
+	}
+
+	path := parsed.Path
+	if parsed.Host != "" {
+		path = "//" + parsed.Host + path
+	}
+	if decoded, decodeErr := url.PathUnescape(path); decodeErr == nil {
+		path = decoded
+	}
+	if runtime.GOOS == "windows" && len(path) >= 3 && path[0] == '/' && path[2] == ':' {
+		path = path[1:]
+	}
+	return path
 }

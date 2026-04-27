@@ -27,7 +27,7 @@ func RenderCommandMenuRow(data CommandMenuRowData) string {
 	}
 	contentWidth := max(12, data.Width-lipgloss.Width(prefix))
 	usageStyle := data.UsageStyle
-	if data.Highlight || data.Selected {
+	if data.Selected {
 		usageStyle = data.UsageMatchStyle
 	}
 	descriptionStyle := data.DescriptionStyle

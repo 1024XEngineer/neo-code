@@ -9,6 +9,7 @@ import (
 )
 
 var markdownANSIPattern = regexp.MustCompile(`\x1b\[[0-9;]*m`)
+var markdownTableSeparatorPattern = regexp.MustCompile(`^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$`)
 
 // CachedMarkdownRenderer 负责按宽度复用渲染器并缓存渲染结果。
 type CachedMarkdownRenderer struct {
@@ -43,6 +44,7 @@ func (r *CachedMarkdownRenderer) Render(content string, width int) (string, erro
 	if strings.TrimSpace(content) == "" {
 		return r.emptyPlaceholder, nil
 	}
+	content = normalizeMarkdownForTerminal(content)
 
 	renderWidth := max(16, width)
 	cacheKey := fmt.Sprintf("%d:%s", renderWidth, content)
@@ -67,6 +69,74 @@ func (r *CachedMarkdownRenderer) Render(content string, width int) (string, erro
 
 	r.cacheResult(cacheKey, rendered)
 	return rendered, nil
+}
+
+func normalizeMarkdownForTerminal(content string) string {
+	return fenceMarkdownTables(content)
+}
+
+func fenceMarkdownTables(content string) string {
+	lines := strings.Split(content, "\n")
+	if len(lines) < 2 {
+		return content
+	}
+
+	result := make([]string, 0, len(lines))
+	for i := 0; i < len(lines); i++ {
+		if !isMarkdownTableHeader(lines, i) {
+			result = append(result, lines[i])
+			continue
+		}
+
+		indent := leadingWhitespace(lines[i])
+		end := i + 2
+		for end < len(lines) {
+			trimmed := strings.TrimSpace(lines[end])
+			if trimmed == "" || strings.HasPrefix(trimmed, "```") {
+				break
+			}
+			if !strings.Contains(trimmed, "|") {
+				break
+			}
+			end++
+		}
+
+		result = append(result, indent+"```text")
+		for row := i; row < end; row++ {
+			result = append(result, strings.TrimRight(lines[row], " \t"))
+		}
+		result = append(result, indent+"```")
+		i = end - 1
+	}
+
+	return strings.Join(result, "\n")
+}
+
+func isMarkdownTableHeader(lines []string, index int) bool {
+	if index+1 >= len(lines) {
+		return false
+	}
+	header := strings.TrimSpace(lines[index])
+	separator := strings.TrimSpace(lines[index+1])
+	if header == "" || separator == "" {
+		return false
+	}
+	if strings.HasPrefix(header, "```") || strings.HasPrefix(separator, "```") {
+		return false
+	}
+	if !strings.Contains(header, "|") {
+		return false
+	}
+	return markdownTableSeparatorPattern.MatchString(separator)
+}
+
+func leadingWhitespace(line string) string {
+	for i := 0; i < len(line); i++ {
+		if line[i] != ' ' && line[i] != '\t' {
+			return line[:i]
+		}
+	}
+	return line
 }
 
 // SetMaxCacheEntries 调整渲染结果缓存上限。

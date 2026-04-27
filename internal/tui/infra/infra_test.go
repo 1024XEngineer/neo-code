@@ -114,6 +114,22 @@ func TestCachedMarkdownRendererRemovesHeadingHashPrefix(t *testing.T) {
 	}
 }
 
+func TestNormalizeMarkdownForTerminalFencesTables(t *testing.T) {
+	input := strings.Join([]string{
+		"| col1 | col2 |",
+		"| ---- | ---- |",
+		"| a    | b    |",
+	}, "\n")
+
+	normalized := normalizeMarkdownForTerminal(input)
+	if !strings.Contains(normalized, "```text") {
+		t.Fatalf("expected markdown table to be fenced, got %q", normalized)
+	}
+	if !strings.Contains(normalized, "| col1 | col2 |") {
+		t.Fatalf("expected original table rows to remain in fenced block")
+	}
+}
+
 func TestCachedMarkdownRendererCacheEviction(t *testing.T) {
 	renderer := NewCachedMarkdownRenderer("dark", 1, "(empty)")
 

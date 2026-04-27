@@ -946,8 +946,8 @@ func TestRenderMessageBlockWithCopyExtraBranches(t *testing.T) {
 		},
 	}, 50, 1)
 	assistantPlain := copyCodeANSIPattern.ReplaceAllString(assistantBlock, "")
-	if !strings.Contains(assistantPlain, "bash") {
-		t.Fatalf("expected tool calls summary in assistant block")
+	if strings.TrimSpace(assistantPlain) != "" {
+		t.Fatalf("expected assistant tool-call-only block to be hidden, got %q", assistantPlain)
 	}
 
 	userBlock, _ := app.renderMessageBlockWithCopy(providertypes.Message{
@@ -1082,8 +1082,14 @@ func TestRenderActivityLineAndScrollbarHelpers(t *testing.T) {
 	app.transcript.SetYOffset(3)
 	if got := app.renderTranscriptScrollbar(2, 5); got == "" {
 		t.Fatalf("expected non-empty scrollbar when transcript is scrollable")
-	} else if !strings.ContainsRune(got, '\u2588') {
-		t.Fatalf("expected scrollbar thumb to use solid block glyph, got %q", got)
+	} else {
+		plain := copyCodeANSIPattern.ReplaceAllString(got, "")
+		if strings.ContainsRune(plain, '\u2588') {
+			t.Fatalf("expected scrollbar thumb to avoid glyph blocks, got %q", plain)
+		}
+		if strings.Count(plain, "\n") != 4 {
+			t.Fatalf("expected scrollbar height to stay continuous with 5 rows, got %q", plain)
+		}
 	}
 }
 

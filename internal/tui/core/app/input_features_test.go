@@ -376,6 +376,7 @@ func TestAddImageFromClipboardUnsupported(t *testing.T) {
 func TestAddImageFromClipboardSuccess(t *testing.T) {
 	app, _ := newTestApp(t)
 	originalRead := readClipboardImage
+	originalReadText := readClipboardText
 	originalSave := saveClipboardImageToTempFile
 	readClipboardImage = func() ([]byte, error) {
 		return []byte("image-bytes"), nil
@@ -389,6 +390,7 @@ func TestAddImageFromClipboardSuccess(t *testing.T) {
 	}
 	defer func() {
 		readClipboardImage = originalRead
+		readClipboardText = originalReadText
 		saveClipboardImageToTempFile = originalSave
 	}()
 
@@ -403,9 +405,11 @@ func TestAddImageFromClipboardSuccess(t *testing.T) {
 func TestAddImageFromClipboardBranches(t *testing.T) {
 	app, _ := newTestApp(t)
 	originalRead := readClipboardImage
+	originalReadText := readClipboardText
 	originalSave := saveClipboardImageToTempFile
 	defer func() {
 		readClipboardImage = originalRead
+		readClipboardText = originalReadText
 		saveClipboardImageToTempFile = originalSave
 	}()
 
@@ -420,6 +424,98 @@ func TestAddImageFromClipboardBranches(t *testing.T) {
 	}
 	if err := app.addImageFromClipboard(); err == nil {
 		t.Fatalf("expected save failure error")
+	}
+}
+
+func TestAddImageFromClipboardFallsBackToClipboardPath(t *testing.T) {
+	app, _ := newTestApp(t)
+	root := t.TempDir()
+	imagePath := filepath.Join(root, "clip.png")
+	if err := os.WriteFile(imagePath, []byte("png"), 0o644); err != nil {
+		t.Fatalf("write image: %v", err)
+	}
+
+	originalRead := readClipboardImage
+	originalReadText := readClipboardText
+	originalSave := saveClipboardImageToTempFile
+	defer func() {
+		readClipboardImage = originalRead
+		readClipboardText = originalReadText
+		saveClipboardImageToTempFile = originalSave
+	}()
+
+	readClipboardImage = func() ([]byte, error) { return nil, errors.New("image clipboard unavailable") }
+	readClipboardText = func() (string, error) { return imagePath, nil }
+	saveClipboardImageToTempFile = func(data []byte, prefix string) (string, error) {
+		t.Fatalf("expected clipboard path fallback not to save raw image bytes")
+		return "", nil
+	}
+
+	if err := app.addImageFromClipboard(); err != nil {
+		t.Fatalf("addImageFromClipboard() fallback error = %v", err)
+	}
+	if app.getImageAttachmentCount() != 1 {
+		t.Fatalf("expected one fallback image attachment")
+	}
+	if got := app.getImageAttachments()[0].Path; got == "" {
+		t.Fatalf("expected attachment path to be populated")
+	}
+	if app.state.StatusText != "[System] Added image from clipboard path" {
+		t.Fatalf("unexpected fallback status: %q", app.state.StatusText)
+	}
+}
+
+func TestClipboardImagePathFromTextSupportsFileURL(t *testing.T) {
+	root := t.TempDir()
+	rawPath := filepath.Join(root, "space name.png")
+	fileURL := "file:///" + strings.ReplaceAll(rawPath, "\\", "/")
+	fileURL = strings.ReplaceAll(fileURL, " ", "%20")
+
+	originalReadText := readClipboardText
+	defer func() { readClipboardText = originalReadText }()
+	readClipboardText = func() (string, error) { return fileURL, nil }
+
+	path, ok := clipboardImagePathFromText("")
+	if !ok {
+		t.Fatalf("expected file:// clipboard path to be recognized")
+	}
+	if filepath.Clean(path) != filepath.Clean(rawPath) {
+		t.Fatalf("expected decoded file URL path %q, got %q", rawPath, path)
+	}
+}
+
+func TestClipboardFileReferencePathsFromText(t *testing.T) {
+	root := t.TempDir()
+	first := filepath.Join(root, "docs", "a.txt")
+	second := filepath.Join(root, "README.md")
+	if err := os.MkdirAll(filepath.Dir(first), 0o755); err != nil {
+		t.Fatalf("mkdir first: %v", err)
+	}
+	if err := os.WriteFile(first, []byte("a"), 0o644); err != nil {
+		t.Fatalf("write first: %v", err)
+	}
+	if err := os.WriteFile(second, []byte("b"), 0o644); err != nil {
+		t.Fatalf("write second: %v", err)
+	}
+
+	paths, ok := clipboardFileReferencePathsFromText(first+"\n"+second, root)
+	if !ok {
+		t.Fatalf("expected valid clipboard file paths")
+	}
+	if len(paths) != 2 {
+		t.Fatalf("expected two resolved paths, got %v", paths)
+	}
+}
+
+func TestClipboardFileReferencePathsFromTextRejectsMixedInput(t *testing.T) {
+	root := t.TempDir()
+	valid := filepath.Join(root, "a.txt")
+	if err := os.WriteFile(valid, []byte("a"), 0o644); err != nil {
+		t.Fatalf("write valid file: %v", err)
+	}
+
+	if _, ok := clipboardFileReferencePathsFromText(valid+"\nhello world", root); ok {
+		t.Fatalf("expected mixed clipboard content to stay as plain text")
 	}
 }
 
