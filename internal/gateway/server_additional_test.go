@@ -356,8 +356,7 @@ func TestDispatchRPCRequestInvalidIDReturnsNullID(t *testing.T) {
 
 func TestDispatchRPCRequestConvertsFrameErrorWithoutPayload(t *testing.T) {
 	server := &Server{}
-	originalHandlers := requestFrameHandlers
-	requestFrameHandlers = map[FrameAction]requestFrameHandler{
+	installHandlerRegistryForTest(t, map[FrameAction]requestFrameHandler{
 		FrameActionPing: func(_ context.Context, frame MessageFrame, _ RuntimePort) MessageFrame {
 			return MessageFrame{
 				Type:      FrameTypeError,
@@ -366,9 +365,6 @@ func TestDispatchRPCRequestConvertsFrameErrorWithoutPayload(t *testing.T) {
 				Error:     nil,
 			}
 		},
-	}
-	t.Cleanup(func() {
-		requestFrameHandlers = originalHandlers
 	})
 
 	response := server.dispatchRPCRequest(context.Background(), protocol.JSONRPCRequest{

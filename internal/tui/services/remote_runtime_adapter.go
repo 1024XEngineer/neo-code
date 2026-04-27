@@ -716,6 +716,7 @@ func mapGatewaySessionToRuntimeSession(source gateway.Session) agentsession.Sess
 func mapGatewaySkillSource(source gateway.SkillSource) skills.Source {
 	return skills.Source{
 		Kind:     skills.SourceKind(strings.TrimSpace(source.Kind)),
+		Layer:    skills.SourceLayer(strings.TrimSpace(source.Layer)),
 		RootDir:  strings.TrimSpace(source.RootDir),
 		SkillDir: strings.TrimSpace(source.SkillDir),
 		FilePath: strings.TrimSpace(source.FilePath),

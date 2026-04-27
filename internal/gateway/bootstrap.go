@@ -31,35 +31,9 @@ var allowedSystemToolNames = map[string]struct{}{
 	toolkits.ToolNameMemoRemove:   {},
 }
 
-var requestFrameHandlers = map[FrameAction]requestFrameHandler{
-	FrameActionAuthenticate: func(ctx context.Context, frame MessageFrame, _ RuntimePort) MessageFrame {
-		return handleAuthenticateFrame(ctx, frame)
-	},
-	FrameActionPing: func(ctx context.Context, frame MessageFrame, _ RuntimePort) MessageFrame {
-		return handlePingFrame(ctx, frame)
-	},
-	FrameActionBindStream: func(ctx context.Context, frame MessageFrame, _ RuntimePort) MessageFrame {
-		return handleBindStreamFrame(ctx, frame)
-	},
-	FrameActionWakeOpenURL: func(ctx context.Context, frame MessageFrame, _ RuntimePort) MessageFrame {
-		return handleWakeOpenURLFrame(ctx, frame)
-	},
-	FrameActionRun:                    handleRunFrame,
-	FrameActionCompact:                handleCompactFrame,
-	FrameActionExecuteSystemTool:      handleExecuteSystemToolFrame,
-	FrameActionActivateSessionSkill:   handleActivateSessionSkillFrame,
-	FrameActionDeactivateSessionSkill: handleDeactivateSessionSkillFrame,
-	FrameActionListSessionSkills:      handleListSessionSkillsFrame,
-	FrameActionListAvailableSkills:    handleListAvailableSkillsFrame,
-	FrameActionCancel:                 handleCancelFrame,
-	FrameActionListSessions:           handleListSessionsFrame,
-	FrameActionLoadSession:            handleLoadSessionFrame,
-	FrameActionResolvePermission:      handleResolvePermissionFrame,
-}
-
 // dispatchRequestFrame 统一分发 request 帧到对应处理器。
 func dispatchRequestFrame(ctx context.Context, frame MessageFrame, runtimePort RuntimePort) MessageFrame {
-	handler, ok := requestFrameHandlers[frame.Action]
+	handler, ok := defaultRegistry.Lookup(frame.Action)
 	if !ok {
 		return errorFrame(frame, NewFrameError(ErrorCodeUnsupportedAction, "action is not implemented in gateway step 2"))
 	}

@@ -26,6 +26,11 @@ NeoCode 是一个在终端里运行的本地 AI 编码助手。它不是云端 S
 2. [使用示例](./examples) — 4 个可直接复制的场景
 3. [配置指南](./configuration) — 切模型、换 shell、加 Provider
 
+## 仓库 README（快速总览）
+
+- [README（中文）](https://github.com/1024XEngineer/neo-code/blob/main/README.md)
+- [README (English)](https://github.com/1024XEngineer/neo-code/blob/main/README.en.md)
+
 ## 日常使用
 
 已经在用了，查操作和配置：

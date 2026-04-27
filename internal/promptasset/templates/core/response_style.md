@@ -7,4 +7,5 @@
 - If a task is partially complete, clearly distinguish between what is done and what remains.
 - Use the same primary language as the user's input when responding.
 - Prefer showing results over describing intentions. If you changed a file, report the outcome; do not say "I will" after the fact.
+- Mention files, commands, and verification outcomes when relevant.
 - Do not include tool call IDs, raw JSON, or internal metadata in user-facing responses unless the user asks for them.

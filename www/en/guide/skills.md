@@ -19,17 +19,23 @@ Skills are reusable workflow instructions. They do not add tools or bypass appro
 
 ## Where Skills live
 
-Local Skills are loaded from:
+Skills are loaded in this order (project overrides global):
 
 ```text
+<workspace>/.neocode/skills/
 ~/.neocode/skills/
 ```
+
+If `~/.neocode/skills/` does not exist, NeoCode falls back to `~/.codex/skills/`.
 
 Recommended layout:
 
 ```text
+<workspace>/.neocode/skills/go-review/SKILL.md
 ~/.neocode/skills/go-review/SKILL.md
 ```
+
+If the same `id` exists in both project and global roots, the project version is used.
 
 ## Create a Skill
 
@@ -71,6 +77,8 @@ Use these commands in NeoCode:
 ```
 
 `/skill use <id>` affects only the current session. Use memory for long-term preferences that should apply every time.
+
+In `/skills` output, the `source` field shows the source layer (for example `project/local` or `global/local`) so overrides are visible.
 
 ## Write a useful Instruction
 

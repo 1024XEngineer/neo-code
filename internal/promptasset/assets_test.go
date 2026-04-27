@@ -32,6 +32,29 @@ func TestCoreSections(t *testing.T) {
 	}
 }
 
+func TestCorePromptContainsOperationalGuidance(t *testing.T) {
+	t.Parallel()
+
+	prompt := joinCoreSectionContent()
+	wantSubstrings := []string{
+		"## Instruction priority",
+		"`completion_gate`",
+		"`verification_gate`",
+		"`acceptance_decision`",
+		"MCP tools may appear dynamically as `mcp.<server>.<tool>`",
+		"Required todos are acceptance-relevant",
+		"set verification intent",
+		"A subagent is a helper, not the source of final truth",
+		"Preserve existing user or repository changes",
+		"Use UTF-8-safe reads and edits",
+	}
+	for _, want := range wantSubstrings {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("expected core prompt to contain %q", want)
+		}
+	}
+}
+
 func TestRuntimeReminderTemplates(t *testing.T) {
 	t.Parallel()
 
@@ -41,6 +64,15 @@ func TestRuntimeReminderTemplates(t *testing.T) {
 	if !strings.Contains(RepeatCycleReminder(), "exact same arguments") {
 		t.Fatalf("expected repeat-cycle reminder guidance, got %q", RepeatCycleReminder())
 	}
+}
+
+func joinCoreSectionContent() string {
+	sections := CoreSections()
+	parts := make([]string, 0, len(sections))
+	for _, section := range sections {
+		parts = append(parts, section.Content)
+	}
+	return strings.Join(parts, "\n\n")
 }
 
 func TestCompactSystemPromptInterpolatesPlaceholders(t *testing.T) {

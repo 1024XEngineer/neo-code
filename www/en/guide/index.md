@@ -15,6 +15,11 @@ From zero to running in 3 minutes:
 2. [Usage Examples](./examples) — 4 copy-pasteable scenarios
 3. [Configuration](./configuration) — switch models, custom providers
 
+## Repository README (quick overview)
+
+- [README (Chinese)](https://github.com/1024XEngineer/neo-code/blob/main/README.md)
+- [README (English)](https://github.com/1024XEngineer/neo-code/blob/main/README.en.md)
+
 ## Daily use
 
 Already using it? Look up operations and config:

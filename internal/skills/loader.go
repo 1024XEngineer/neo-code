@@ -23,7 +23,8 @@ var errSkillFileTooLarge = errors.New("skill file exceeds size limit")
 
 // LocalLoader scans one root directory and loads local skills.
 type LocalLoader struct {
-	root string
+	root  string
+	layer SourceLayer
 
 	absPath            func(string) (string, error)
 	statPath           func(string) (os.FileInfo, error)
@@ -36,8 +37,19 @@ type LocalLoader struct {
 
 // NewLocalLoader creates a loader for one local skills root.
 func NewLocalLoader(root string) *LocalLoader {
+	return newLocalLoader(root, "")
+}
+
+// NewLocalLoaderWithSourceLayer 创建本地 skills loader，并显式标注来源层级（project/global）。
+func NewLocalLoaderWithSourceLayer(root string, layer SourceLayer) *LocalLoader {
+	return newLocalLoader(root, normalizeSourceLayer(layer))
+}
+
+// newLocalLoader 统一构造本地 loader，避免不同入口的默认值分叉。
+func newLocalLoader(root string, layer SourceLayer) *LocalLoader {
 	return &LocalLoader{
 		root:               strings.TrimSpace(root),
+		layer:              layer,
 		absPath:            filepath.Abs,
 		statPath:           os.Stat,
 		lstatPath:          os.Lstat,
@@ -45,6 +57,16 @@ func NewLocalLoader(root string) *LocalLoader {
 		readSkillFile:      readFileWithLimit,
 		maxFileBytes:       defaultMaxSkillFileBytes,
 		validateDescriptor: Descriptor.Validate,
+	}
+}
+
+// normalizeSourceLayer 归一化来源层级，非法值降级为空以兼容历史数据与测试注入。
+func normalizeSourceLayer(layer SourceLayer) SourceLayer {
+	switch layer {
+	case SourceLayerProject, SourceLayerGlobal, SourceLayerBuiltin:
+		return layer
+	default:
+		return ""
 	}
 }
 
@@ -213,6 +235,7 @@ func (l *LocalLoader) Load(ctx context.Context) (Snapshot, error) {
 			skillDir,
 			skillPath,
 			string(data),
+			l.layer,
 			validateDescriptor,
 		)
 		if len(parseIssues) > 0 {
@@ -239,12 +262,13 @@ type skillFrontMatter struct {
 
 // parseLocalSkill 解析单个本地技能文件并返回结构化结果与非致命问题。
 func parseLocalSkill(root, skillDir, skillPath, raw string) (Skill, []LoadIssue, error) {
-	return parseLocalSkillWithValidator(root, skillDir, skillPath, raw, Descriptor.Validate)
+	return parseLocalSkillWithValidator(root, skillDir, skillPath, raw, "", Descriptor.Validate)
 }
 
 // parseLocalSkillWithValidator 与 parseLocalSkill 逻辑一致，但允许注入校验器以覆盖异常分支测试。
 func parseLocalSkillWithValidator(
 	root, skillDir, skillPath, raw string,
+	layer SourceLayer,
 	validateDescriptor func(Descriptor) error,
 ) (Skill, []LoadIssue, error) {
 	metaText, body, hasMeta, splitErr := splitFrontMatter(raw)
@@ -350,6 +374,7 @@ func parseLocalSkillWithValidator(
 		Version:     version,
 		Source: Source{
 			Kind:     SourceKindLocal,
+			Layer:    normalizeSourceLayer(layer),
 			RootDir:  root,
 			SkillDir: skillDir,
 			FilePath: skillPath,

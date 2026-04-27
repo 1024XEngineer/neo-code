@@ -227,6 +227,8 @@ type SessionSummary struct {
 type SkillSource struct {
 	// Kind 表示技能来源类型（local/builtin）。
 	Kind string `json:"kind"`
+	// Layer 表示技能来源层级（project/global）。
+	Layer string `json:"layer,omitempty"`
 	// RootDir 表示来源根目录。
 	RootDir string `json:"root_dir,omitempty"`
 	// SkillDir 表示技能目录。
@@ -302,5 +304,15 @@ type Gateway interface {
 	// Serve 启动网关服务并绑定运行端口。
 	Serve(ctx context.Context, runtimePort RuntimePort) error
 	// Close 优雅关闭网关服务。
+	Close(ctx context.Context) error
+}
+
+// TransportAdapter defines the shared lifecycle contract for gateway transports.
+type TransportAdapter interface {
+	// ListenAddress returns the listening address for this transport.
+	ListenAddress() string
+	// Serve starts the transport and binds it to the runtime port.
+	Serve(ctx context.Context, runtimePort RuntimePort) error
+	// Close gracefully shuts down the transport.
 	Close(ctx context.Context) error
 }

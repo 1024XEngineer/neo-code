@@ -125,7 +125,7 @@ func TestDefaultToolUsagePromptIncludesPermissionAndAntiLoopGuidance(t *testing.
 	if !strings.Contains(toolUsage, "`todo_write`") {
 		t.Fatalf("expected Tool Usage to mention todo_write for task state, got %q", toolUsage)
 	}
-	if !strings.Contains(toolUsage, "Execute Todos sequentially in the main loop") {
+	if !strings.Contains(toolUsage, "Execute todos sequentially in the main loop") {
 		t.Fatalf("expected Tool Usage to enforce sequential todo execution, got %q", toolUsage)
 	}
 	if !strings.Contains(toolUsage, "`spawn_subagent` only supports `mode=inline`") {
@@ -152,13 +152,13 @@ func TestDefaultToolUsagePromptIncludesPermissionAndAntiLoopGuidance(t *testing.
 	if !strings.Contains(toolUsage, "Do not repeat the same tool call with identical arguments") {
 		t.Fatalf("expected Tool Usage to include anti-loop guidance, got %q", toolUsage)
 	}
-	if !strings.Contains(toolUsage, "focused verification call") {
+	if !strings.Contains(toolUsage, "narrowest meaningful verification call") {
 		t.Fatalf("expected Tool Usage to limit write verification retries, got %q", toolUsage)
 	}
 	if !strings.Contains(toolUsage, "stop using tools and give the user the result") {
 		t.Fatalf("expected Tool Usage to tell the agent when to stop, got %q", toolUsage)
 	}
-	if !strings.Contains(toolUsage, "`status`, `ok`, `truncated`, `tool_call_id`, `meta.*`, and `content`") {
+	if !strings.Contains(toolUsage, "`status`, `ok`, `tool_call_id`, `truncated`, `meta.*`, exit codes, and `content`") {
 		t.Fatalf("expected Tool Usage to explain structured tool results, got %q", toolUsage)
 	}
 	if !strings.Contains(toolUsage, "inspect (`git status`/`git diff`/`git log`)") {

@@ -85,18 +85,6 @@ type urlDispatchErrorOutput struct {
 	Message string `json:"message"`
 }
 
-type gatewayServer interface {
-	ListenAddress() string
-	Serve(ctx context.Context, runtimePort gateway.RuntimePort) error
-	Close(ctx context.Context) error
-}
-
-type gatewayNetworkServer interface {
-	ListenAddress() string
-	Serve(ctx context.Context, runtimePort gateway.RuntimePort) error
-	Close(ctx context.Context) error
-}
-
 // defaultNewAuthManager 创建默认网关认证器，并把具体持久化实现收敛在 CLI 装配层内部。
 func defaultNewAuthManager(path string) (gateway.TokenAuthenticator, error) {
 	return gatewayauth.NewManager(path)
@@ -308,28 +296,43 @@ func defaultGatewayCommandRunner(ctx context.Context, options gatewayCommandOpti
 		_ = ipcServer.Close(context.Background())
 		return err
 	}
+	type transportAdapterEntry struct {
+		name    string
+		adapter gateway.TransportAdapter
+	}
+	transportAdapters := []transportAdapterEntry{
+		{name: "ipc", adapter: ipcServer},
+		{name: "network", adapter: networkServer},
+	}
 	defer func() {
 		relay.Stop()
-		_ = networkServer.Close(context.Background())
-		_ = ipcServer.Close(context.Background())
-	}()
-
-	logger.Printf("gateway ipc listen address: %s", ipcServer.ListenAddress())
-	logger.Printf("gateway network listen address: %s", networkServer.ListenAddress())
-	idleCloser.observe(0)
-
-	go func() {
-		serveErr := networkServer.Serve(runtimeContext, runtimePort)
-		if serveErr != nil && runtimeContext.Err() == nil {
-			logger.Printf(
-				"warning: HTTP server failed to start on %s (port in use?), but IPC server is still running: %v",
-				networkServer.ListenAddress(),
-				serveErr,
-			)
+		for index := len(transportAdapters) - 1; index >= 0; index-- {
+			_ = transportAdapters[index].adapter.Close(context.Background())
 		}
 	}()
 
-	return ipcServer.Serve(runtimeContext, runtimePort)
+	for _, entry := range transportAdapters {
+		logger.Printf("gateway %s listen address: %s", entry.name, entry.adapter.ListenAddress())
+	}
+	idleCloser.observe(0)
+
+	for index, entry := range transportAdapters {
+		if index == 0 {
+			continue
+		}
+		go func(networkAdapter gateway.TransportAdapter) {
+			serveErr := networkAdapter.Serve(runtimeContext, runtimePort)
+			if serveErr != nil && runtimeContext.Err() == nil {
+				logger.Printf(
+					"warning: HTTP server failed to start on %s (port in use?), but IPC server is still running: %v",
+					networkAdapter.ListenAddress(),
+					serveErr,
+				)
+			}
+		}(entry.adapter)
+	}
+
+	return transportAdapters[0].adapter.Serve(runtimeContext, runtimePort)
 }
 
 type gatewayIdleShutdownController struct {
@@ -460,12 +463,12 @@ func applyGatewayFlagOverrides(gatewayConfig *config.GatewayConfig, options gate
 }
 
 // defaultNewGatewayServer 创建默认网关服务实例，供命令层启动流程调用。
-func defaultNewGatewayServer(options gateway.ServerOptions) (gatewayServer, error) {
+func defaultNewGatewayServer(options gateway.ServerOptions) (gateway.TransportAdapter, error) {
 	return gateway.NewServer(options)
 }
 
 // defaultNewGatewayNetworkServer 创建默认网关网络访问服务实例，供命令层启动流程调用。
-func defaultNewGatewayNetworkServer(options gateway.NetworkServerOptions) (gatewayNetworkServer, error) {
+func defaultNewGatewayNetworkServer(options gateway.NetworkServerOptions) (gateway.TransportAdapter, error) {
 	return gateway.NewNetworkServer(options)
 }
 

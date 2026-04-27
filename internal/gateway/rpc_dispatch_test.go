@@ -104,8 +104,7 @@ func (s *rpcRunCaptureRuntimeStub) LoadSession(ctx context.Context, input LoadSe
 }
 
 func TestDispatchRPCRequestResultEncodeError(t *testing.T) {
-	originalHandlers := requestFrameHandlers
-	requestFrameHandlers = map[FrameAction]requestFrameHandler{
+	installHandlerRegistryForTest(t, map[FrameAction]requestFrameHandler{
 		FrameActionPing: func(_ context.Context, frame MessageFrame, _ RuntimePort) MessageFrame {
 			return MessageFrame{
 				Type:      FrameTypeAck,
@@ -116,9 +115,6 @@ func TestDispatchRPCRequestResultEncodeError(t *testing.T) {
 				},
 			}
 		},
-	}
-	t.Cleanup(func() {
-		requestFrameHandlers = originalHandlers
 	})
 
 	response := dispatchRPCRequest(context.Background(), protocol.JSONRPCRequest{
@@ -892,8 +888,7 @@ func TestDispatchRPCRequestMetricsACLDeniedAndFrameErrorLabels(t *testing.T) {
 		t.Fatal("expected acl denied response")
 	}
 
-	originalHandlers := requestFrameHandlers
-	requestFrameHandlers = map[FrameAction]requestFrameHandler{
+	installHandlerRegistryForTest(t, map[FrameAction]requestFrameHandler{
 		FrameActionPing: func(_ context.Context, frame MessageFrame, _ RuntimePort) MessageFrame {
 			return MessageFrame{
 				Type:      FrameTypeError,
@@ -902,8 +897,7 @@ func TestDispatchRPCRequestMetricsACLDeniedAndFrameErrorLabels(t *testing.T) {
 				Error:     NewFrameError(ErrorCodeAccessDenied, "denied by handler"),
 			}
 		},
-	}
-	t.Cleanup(func() { requestFrameHandlers = originalHandlers })
+	})
 
 	frameErrCtx := WithRequestSource(context.Background(), RequestSourceHTTP)
 	frameErrCtx = WithGatewayMetrics(frameErrCtx, metrics)

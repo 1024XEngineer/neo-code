@@ -449,6 +449,7 @@ func convertRuntimeSessionToGatewaySession(session agentsession.Session) gateway
 func convertRuntimeSkillSource(source skills.Source) gateway.SkillSource {
 	return gateway.SkillSource{
 		Kind:     strings.TrimSpace(string(source.Kind)),
+		Layer:    strings.TrimSpace(string(source.Layer)),
 		RootDir:  strings.TrimSpace(source.RootDir),
 		SkillDir: strings.TrimSpace(source.SkillDir),
 		FilePath: strings.TrimSpace(source.FilePath),

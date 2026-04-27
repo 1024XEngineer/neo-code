@@ -306,11 +306,11 @@ func TestDefaultGatewayCommandRunnerSuccess(t *testing.T) {
 	newAuthManager = stubGatewayAuthManagerBuilder()
 
 	server := &stubGatewayServer{listenAddress: "stub://gateway"}
-	newGatewayServer = func(options gateway.ServerOptions) (gatewayServer, error) {
+	newGatewayServer = func(options gateway.ServerOptions) (gateway.TransportAdapter, error) {
 		return server, nil
 	}
 	networkServer := &stubGatewayServer{listenAddress: "127.0.0.1:8080"}
-	newGatewayNetwork = func(options gateway.NetworkServerOptions) (gatewayNetworkServer, error) {
+	newGatewayNetwork = func(options gateway.NetworkServerOptions) (gateway.TransportAdapter, error) {
 		return networkServer, nil
 	}
 
@@ -372,10 +372,10 @@ func TestDefaultGatewayCommandRunnerReturnsConstructorError(t *testing.T) {
 	newAuthManager = stubGatewayAuthManagerBuilder()
 
 	expected := errors.New("new gateway server failed")
-	newGatewayServer = func(options gateway.ServerOptions) (gatewayServer, error) {
+	newGatewayServer = func(options gateway.ServerOptions) (gateway.TransportAdapter, error) {
 		return nil, expected
 	}
-	newGatewayNetwork = func(options gateway.NetworkServerOptions) (gatewayNetworkServer, error) {
+	newGatewayNetwork = func(options gateway.NetworkServerOptions) (gateway.TransportAdapter, error) {
 		return &stubGatewayServer{listenAddress: "127.0.0.1:8080"}, nil
 	}
 
@@ -418,10 +418,10 @@ func TestDefaultGatewayCommandRunnerReturnsAuthManagerError(t *testing.T) {
 	newAuthManager = func(string) (gateway.TokenAuthenticator, error) {
 		return nil, errors.New("auth manager failed")
 	}
-	newGatewayServer = func(options gateway.ServerOptions) (gatewayServer, error) {
+	newGatewayServer = func(options gateway.ServerOptions) (gateway.TransportAdapter, error) {
 		return &stubGatewayServer{listenAddress: "stub://gateway"}, nil
 	}
-	newGatewayNetwork = func(options gateway.NetworkServerOptions) (gatewayNetworkServer, error) {
+	newGatewayNetwork = func(options gateway.NetworkServerOptions) (gateway.TransportAdapter, error) {
 		return &stubGatewayServer{listenAddress: "127.0.0.1:8080"}, nil
 	}
 
@@ -453,11 +453,11 @@ func TestDefaultGatewayCommandRunnerReturnsServeError(t *testing.T) {
 		listenAddress: "stub://gateway",
 		serveErr:      expected,
 	}
-	newGatewayServer = func(options gateway.ServerOptions) (gatewayServer, error) {
+	newGatewayServer = func(options gateway.ServerOptions) (gateway.TransportAdapter, error) {
 		return server, nil
 	}
 	networkServer := &stubGatewayServer{listenAddress: "127.0.0.1:8080"}
-	newGatewayNetwork = func(options gateway.NetworkServerOptions) (gatewayNetworkServer, error) {
+	newGatewayNetwork = func(options gateway.NetworkServerOptions) (gateway.TransportAdapter, error) {
 		return networkServer, nil
 	}
 
@@ -491,14 +491,14 @@ func TestDefaultGatewayCommandRunnerDegradesWhenNetworkServeFails(t *testing.T) 
 	newAuthManager = stubGatewayAuthManagerBuilder()
 
 	ipcServer := &stubGatewayServer{listenAddress: "stub://gateway"}
-	newGatewayServer = func(options gateway.ServerOptions) (gatewayServer, error) {
+	newGatewayServer = func(options gateway.ServerOptions) (gateway.TransportAdapter, error) {
 		return ipcServer, nil
 	}
 	networkServer := &stubGatewayServer{
 		listenAddress: "127.0.0.1:8080",
 		serveErr:      errors.New("bind: address already in use"),
 	}
-	newGatewayNetwork = func(options gateway.NetworkServerOptions) (gatewayNetworkServer, error) {
+	newGatewayNetwork = func(options gateway.NetworkServerOptions) (gateway.TransportAdapter, error) {
 		return networkServer, nil
 	}
 
@@ -536,10 +536,10 @@ func TestDefaultGatewayCommandRunnerReturnsNetworkConstructorError(t *testing.T)
 
 	networkErr := errors.New("new network server failed")
 	ipcServer := &stubGatewayServer{listenAddress: "stub://gateway"}
-	newGatewayServer = func(options gateway.ServerOptions) (gatewayServer, error) {
+	newGatewayServer = func(options gateway.ServerOptions) (gateway.TransportAdapter, error) {
 		return ipcServer, nil
 	}
-	newGatewayNetwork = func(options gateway.NetworkServerOptions) (gatewayNetworkServer, error) {
+	newGatewayNetwork = func(options gateway.NetworkServerOptions) (gateway.TransportAdapter, error) {
 		return nil, networkErr
 	}
 

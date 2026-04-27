@@ -67,3 +67,5 @@ func (s *runtimePortCompileStub) LoadSession(_ context.Context, _ LoadSessionInp
 }
 
 var _ RuntimePort = (*runtimePortCompileStub)(nil)
+var _ TransportAdapter = (*Server)(nil)
+var _ TransportAdapter = (*NetworkServer)(nil)

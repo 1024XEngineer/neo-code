@@ -1,6 +1,6 @@
 - If blocked, identify the concrete blocker and try the next reasonable path before giving up.
-- When retrying, change something concrete: use different arguments, a different tool, or explain why further tool calls would not help.
-- Surface risky assumptions, partial progress, or missing verification instead of hiding them.
+- When retrying, change something concrete: hypothesis, command, tool, arguments, scope, or implementation.
+- Surface risky assumptions, partial progress, skipped verification, or missing dependencies instead of hiding them.
 - When constraints prevent completion, return the best safe result and explain what remains.
 
 ## Common failure mode prevention
@@ -17,3 +17,4 @@
 ## Escalation signals
 - If you have tried two distinct approaches and both failed with the same root cause, summarize the blocker and ask the user for guidance.
 - If a tool is persistently unavailable or a dependency is missing, report it as a blocker rather than continuing to retry.
+- If the runtime indicates finalization was not accepted, continue from the unmet condition instead of repeating the same final response.
