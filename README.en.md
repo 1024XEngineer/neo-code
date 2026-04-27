@@ -1,6 +1,6 @@
 [中文](README.md) | [EN](README.en.md)
 
-# NeoCode
+# <img src="docs/assert/readme/neo-code.svg" alt="neo-code" />
 
 > A local-first AI coding agent that helps you understand code, edit projects, call tools, and connect your workflow across terminal, desktop, and automation.
 
@@ -117,7 +117,6 @@ neocode --workdir /path/to/your/project
 /provider             Switch provider
 /model                Switch model
 /compact              Compact current session context
-/cwd [path]           Show or change workspace
 /memo                 Show memory
 /remember <text>      Save memory
 /skills               List available skills
