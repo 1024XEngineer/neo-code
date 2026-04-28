@@ -108,7 +108,7 @@ generate_idle_timeout_sec: 300
 - `chat_endpoint_path` 为 `/` 表示直连 `base_url`；为空时会按 `chat_api_mode` 自动回填默认子路径（`/chat/completions` 或 `/responses`）。
 - 当 `chat_api_mode` 已显式指定时，`chat_endpoint_path` 可使用任意以 `/` 开头的相对路径；未显式指定时，仅支持标准端点推断（`/chat/completions`、`/responses`、`/`）。
 - `model_source: manual` 时必须提供 `models`，且会忽略 `discovery_endpoint_path`。
-- `generate_max_retries` / `generate_idle_timeout_sec` 用于控制 provider 级生成重试和流空闲超时；未填写或 `<= 0` 时会分别回退到 `5 / 300`。其中 `generate_max_retries` 必须 `<= 20`。
+- `generate_max_retries` / `generate_idle_timeout_sec` 用于控制 provider 级生成重试和流空闲超时；`generate_max_retries` 未填写时默认使用 `5`，显式填写 `0` 表示关闭生成重试，`generate_idle_timeout_sec` 未填写或 `<= 0` 时回退到 `300`。其中 `generate_max_retries` 必须 `<= 20`。
 - `generate_start_timeout_sec` 已改为根 `config.yaml` 顶层字段，不再允许写入 `provider.yaml`；启动时缺失会自动补写默认值 `90`。
 
 ## 测试要求

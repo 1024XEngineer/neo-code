@@ -179,7 +179,7 @@ generate_idle_timeout_sec: 300
 
 新增的生成链路控制字段含义如下：
 
-- `generate_max_retries`：额外重试次数，不含首次尝试；`<= 0` 时回退默认值 `5`，且必须 `<= 20`。
+- `generate_max_retries`：额外重试次数，不含首次尝试；未填写时默认使用 `5`，显式填写 `0` 表示关闭生成重试，且必须 `<= 20`。
 - `generate_start_timeout_sec`：写在 `config.yaml` 顶层，从发请求到收到首个有效流 payload 的最长等待窗口；`<= 0` 时回退默认值 `90`。
 - `generate_idle_timeout_sec`：首包后连续没有任何新 payload 的最长空闲窗口；`<= 0` 时回退默认值 `300`。
 

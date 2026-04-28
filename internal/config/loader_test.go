@@ -1393,6 +1393,55 @@ func TestSaveAndLoadCustomProviderPersistsGenerateControls(t *testing.T) {
 	}
 }
 
+func TestSaveAndLoadCustomProviderPreservesExplicitZeroGenerateRetries(t *testing.T) {
+	t.Parallel()
+
+	baseDir := t.TempDir()
+	const providerName = "zero-retry-provider"
+	err := SaveCustomProviderWithModels(baseDir, SaveCustomProviderInput{
+		Name:                   providerName,
+		Driver:                 provider.DriverOpenAICompat,
+		BaseURL:                "https://llm.example.com/v1",
+		APIKeyEnv:              "ZERO_RETRY_PROVIDER_API_KEY",
+		ModelSource:            ModelSourceDiscover,
+		DiscoveryEndpointPath:  provider.DiscoveryEndpointPathModels,
+		GenerateMaxRetries:     0,
+		GenerateMaxRetriesSet:  true,
+		GenerateIdleTimeoutSec: 420,
+	})
+	if err != nil {
+		t.Fatalf("SaveCustomProviderWithModels() error = %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(baseDir, providersDirName, providerName, customProviderConfigName))
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	content := string(data)
+	if !strings.Contains(content, "generate_max_retries: 0") {
+		t.Fatalf("expected generate_max_retries: 0 to be persisted, got %q", content)
+	}
+
+	cfg, err := loadCustomProvider(filepath.Join(baseDir, providersDirName, providerName))
+	if err != nil {
+		t.Fatalf("loadCustomProvider() error = %v", err)
+	}
+	if !cfg.GenerateMaxRetriesSet {
+		t.Fatal("expected explicit zero retry setting to remain marked as configured")
+	}
+	runtimeCfg, err := cfg.Resolve()
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	providerRuntimeCfg, err := runtimeCfg.ToRuntimeConfig()
+	if err != nil {
+		t.Fatalf("ToRuntimeConfig() error = %v", err)
+	}
+	if providerRuntimeCfg.GenerateMaxRetries != 0 {
+		t.Fatalf("expected explicit zero retry setting to disable retries, got %d", providerRuntimeCfg.GenerateMaxRetries)
+	}
+}
+
 func TestSaveCustomProviderOmitsDefaultGenerateControlsWhenUnset(t *testing.T) {
 	t.Parallel()
 
@@ -1420,6 +1469,43 @@ func TestSaveCustomProviderOmitsDefaultGenerateControlsWhenUnset(t *testing.T) {
 	}
 	if strings.Contains(content, "generate_idle_timeout_sec") {
 		t.Fatalf("expected generate_idle_timeout_sec to be omitted, got %q", content)
+	}
+}
+
+func TestLoadCustomProviderUsesDefaultGenerateRetriesWhenUnset(t *testing.T) {
+	t.Parallel()
+
+	baseDir := t.TempDir()
+	const providerName = "default-retry-provider"
+	err := SaveCustomProviderWithModels(baseDir, SaveCustomProviderInput{
+		Name:                  providerName,
+		Driver:                provider.DriverOpenAICompat,
+		BaseURL:               "https://llm.example.com/v1",
+		APIKeyEnv:             "DEFAULT_RETRY_PROVIDER_API_KEY",
+		ModelSource:           ModelSourceDiscover,
+		DiscoveryEndpointPath: provider.DiscoveryEndpointPathModels,
+	})
+	if err != nil {
+		t.Fatalf("SaveCustomProviderWithModels() error = %v", err)
+	}
+
+	cfg, err := loadCustomProvider(filepath.Join(baseDir, providersDirName, providerName))
+	if err != nil {
+		t.Fatalf("loadCustomProvider() error = %v", err)
+	}
+	if cfg.GenerateMaxRetriesSet {
+		t.Fatal("expected omitted generate_max_retries to remain unset")
+	}
+	resolved, err := cfg.Resolve()
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	runtimeCfg, err := resolved.ToRuntimeConfig()
+	if err != nil {
+		t.Fatalf("ToRuntimeConfig() error = %v", err)
+	}
+	if runtimeCfg.GenerateMaxRetries != provider.DefaultGenerateMaxRetries {
+		t.Fatalf("expected omitted generate_max_retries to use default %d, got %d", provider.DefaultGenerateMaxRetries, runtimeCfg.GenerateMaxRetries)
 	}
 }
 

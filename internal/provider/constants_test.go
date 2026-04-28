@@ -59,3 +59,11 @@ func TestNormalizeGenerateIdleTimeout(t *testing.T) {
 		t.Fatalf("NormalizeGenerateIdleTimeout(4s) = %s, want %s", got, want)
 	}
 }
+
+func TestDefaultGenerateRetryMaxWait(t *testing.T) {
+	t.Parallel()
+
+	if DefaultGenerateRetryMaxWait != 7*time.Second {
+		t.Fatalf("DefaultGenerateRetryMaxWait = %s, want 7s", DefaultGenerateRetryMaxWait)
+	}
+}

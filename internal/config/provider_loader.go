@@ -24,7 +24,7 @@ type customProviderFile struct {
 	Name                   string                    `yaml:"name"`
 	Driver                 string                    `yaml:"driver"`
 	APIKeyEnv              string                    `yaml:"api_key_env"`
-	GenerateMaxRetries     int                       `yaml:"generate_max_retries,omitempty"`
+	GenerateMaxRetries     *int                      `yaml:"generate_max_retries,omitempty"`
 	GenerateIdleTimeoutSec int                       `yaml:"generate_idle_timeout_sec,omitempty"`
 	ModelSource            string                    `yaml:"model_source,omitempty"`
 	ChatAPIMode            string                    `yaml:"chat_api_mode,omitempty"`
@@ -115,7 +115,8 @@ func loadCustomProvider(providerDir string) (ProviderConfig, error) {
 		Driver:                 strings.TrimSpace(file.Driver),
 		BaseURL:                strings.TrimSpace(file.BaseURL),
 		APIKeyEnv:              strings.TrimSpace(file.APIKeyEnv),
-		GenerateMaxRetries:     file.GenerateMaxRetries,
+		GenerateMaxRetries:     optionalIntValue(file.GenerateMaxRetries),
+		GenerateMaxRetriesSet:  file.GenerateMaxRetries != nil,
 		GenerateIdleTimeoutSec: file.GenerateIdleTimeoutSec,
 		ModelSource:            strings.TrimSpace(file.ModelSource),
 		ChatAPIMode:            strings.TrimSpace(file.ChatAPIMode),
@@ -133,6 +134,7 @@ func loadCustomProvider(providerDir string) (ProviderConfig, error) {
 		BaseURL:                normalizedInput.BaseURL,
 		APIKeyEnv:              normalizedInput.APIKeyEnv,
 		GenerateMaxRetries:     normalizedInput.GenerateMaxRetries,
+		GenerateMaxRetriesSet:  normalizedInput.GenerateMaxRetriesSet,
 		GenerateIdleTimeoutSec: normalizedInput.GenerateIdleTimeoutSec,
 		ModelSource:            normalizedInput.ModelSource,
 		ChatAPIMode:            normalizedInput.ChatAPIMode,
@@ -204,6 +206,7 @@ type SaveCustomProviderInput struct {
 	ChatEndpointPath       string
 	APIKeyEnv              string
 	GenerateMaxRetries     int
+	GenerateMaxRetriesSet  bool
 	GenerateIdleTimeoutSec int
 	DiscoveryEndpointPath  string
 	ModelSource            string
@@ -226,7 +229,7 @@ func SaveCustomProviderWithModels(baseDir string, input SaveCustomProviderInput)
 		Name:                   normalizedInput.Name,
 		Driver:                 normalizedInput.Driver,
 		APIKeyEnv:              normalizedInput.APIKeyEnv,
-		GenerateMaxRetries:     normalizedInput.GenerateMaxRetries,
+		GenerateMaxRetries:     optionalIntPointer(normalizedInput.GenerateMaxRetries, normalizedInput.GenerateMaxRetriesSet || normalizedInput.GenerateMaxRetries > 0),
 		GenerateIdleTimeoutSec: normalizedInput.GenerateIdleTimeoutSec,
 		ModelSource:            normalizedInput.ModelSource,
 		ChatAPIMode:            normalizedInput.ChatAPIMode,
@@ -312,4 +315,21 @@ func validateCustomProviderName(name string) error {
 		return fmt.Errorf("config: provider name %q contains unsupported character %q", name, string(r))
 	}
 	return nil
+}
+
+// optionalIntValue 统一读取可选整数字段，避免缺省值和显式零值在解析阶段丢失原始语义。
+func optionalIntValue(value *int) int {
+	if value == nil {
+		return 0
+	}
+	return *value
+}
+
+// optionalIntPointer 根据是否显式配置决定是否输出 YAML 字段，保留“未配置”和“显式 0”两种语义差异。
+func optionalIntPointer(value int, configured bool) *int {
+	if !configured {
+		return nil
+	}
+	out := value
+	return &out
 }

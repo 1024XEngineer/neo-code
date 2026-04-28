@@ -23,7 +23,7 @@ const (
 	// DefaultGenerateRetryBaseWait 定义生成链路重试退避的基础等待时长。
 	DefaultGenerateRetryBaseWait = 1 * time.Second
 	// DefaultGenerateRetryMaxWait 定义生成链路重试退避的最大等待时长。
-	DefaultGenerateRetryMaxWait = 5 * time.Second
+	DefaultGenerateRetryMaxWait = 7 * time.Second
 	// DefaultSDKRequestTimeout 定义非生成链路访问外部模型 SDK 的统一保底超时。
 	DefaultSDKRequestTimeout = 10 * time.Minute
 )
