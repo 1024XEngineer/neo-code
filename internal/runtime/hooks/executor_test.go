@@ -2,6 +2,7 @@ package hooks
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -382,5 +383,281 @@ func TestExecutorRunSaturationProtection(t *testing.T) {
 	time.Sleep(20 * time.Millisecond)
 	if got := executor.inFlight.Load(); got != 0 {
 		t.Fatalf("inFlight = %d, want 0 after release", got)
+	}
+}
+
+func TestNewExecutorDefaults(t *testing.T) {
+	t.Parallel()
+
+	executor := NewExecutor(nil, nil, 0)
+	if executor == nil {
+		t.Fatalf("NewExecutor() = nil, want non-nil")
+	}
+	if executor.registry == nil {
+		t.Fatalf("registry = nil, want auto-created registry")
+	}
+	if executor.defaultTimeout != DefaultHookTimeout {
+		t.Fatalf("defaultTimeout = %v, want %v", executor.defaultTimeout, DefaultHookTimeout)
+	}
+	if executor.maxInFlight != DefaultMaxInFlightHooks {
+		t.Fatalf("maxInFlight = %d, want %d", executor.maxInFlight, DefaultMaxInFlightHooks)
+	}
+}
+
+func TestExecutorRunNilReceiverOrRegistry(t *testing.T) {
+	t.Parallel()
+
+	var nilExecutor *Executor
+	if out := nilExecutor.Run(nil, HookPointBeforeToolCall, HookContext{}); len(out.Results) != 0 || out.Blocked {
+		t.Fatalf("nil executor Run() = %+v, want zero output", out)
+	}
+
+	executor := &Executor{}
+	if out := executor.Run(nil, HookPointBeforeToolCall, HookContext{}); len(out.Results) != 0 || out.Blocked {
+		t.Fatalf("nil registry Run() = %+v, want zero output", out)
+	}
+}
+
+func TestExecutorRunWithNilContextAndEmitter(t *testing.T) {
+	t.Parallel()
+
+	registry := NewRegistry()
+	executor := NewExecutor(registry, nil, 100*time.Millisecond)
+	if err := registry.Register(HookSpec{
+		ID:    "hook-pass",
+		Point: HookPointBeforeToolCall,
+		Handler: func(ctx context.Context, input HookContext) HookResult {
+			if ctx == nil {
+				t.Fatalf("handler ctx is nil")
+			}
+			_ = input
+			return HookResult{Status: HookResultPass}
+		},
+	}); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+
+	out := executor.Run(nil, HookPointBeforeToolCall, HookContext{})
+	if len(out.Results) != 1 {
+		t.Fatalf("len(out.Results) = %d, want 1", len(out.Results))
+	}
+	if out.Results[0].Status != HookResultPass {
+		t.Fatalf("status = %q, want pass", out.Results[0].Status)
+	}
+}
+
+func TestExecutorRunInvalidStatus(t *testing.T) {
+	t.Parallel()
+
+	registry := NewRegistry()
+	executor := NewExecutor(registry, nil, 100*time.Millisecond)
+	if err := registry.Register(HookSpec{
+		ID:    "hook-invalid-status",
+		Point: HookPointBeforeToolCall,
+		Handler: func(context.Context, HookContext) HookResult {
+			return HookResult{Status: HookResultStatus("unknown")}
+		},
+	}); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+
+	out := executor.Run(context.Background(), HookPointBeforeToolCall, HookContext{})
+	if len(out.Results) != 1 {
+		t.Fatalf("len(out.Results) = %d, want 1", len(out.Results))
+	}
+	if out.Results[0].Status != HookResultFailed {
+		t.Fatalf("status = %q, want failed", out.Results[0].Status)
+	}
+	if !strings.Contains(out.Results[0].Error, "invalid status") {
+		t.Fatalf("error = %q, want invalid status", out.Results[0].Error)
+	}
+}
+
+func TestExecutorRunFailedResultBackfill(t *testing.T) {
+	t.Parallel()
+
+	t.Run("failed with message only", func(t *testing.T) {
+		t.Parallel()
+		registry := NewRegistry()
+		executor := NewExecutor(registry, nil, 100*time.Millisecond)
+		if err := registry.Register(HookSpec{
+			ID:    "hook-message-only",
+			Point: HookPointBeforeToolCall,
+			Handler: func(context.Context, HookContext) HookResult {
+				return HookResult{Status: HookResultFailed, Message: "failed-message-only"}
+			},
+		}); err != nil {
+			t.Fatalf("Register() error = %v", err)
+		}
+		out := executor.Run(context.Background(), HookPointBeforeToolCall, HookContext{})
+		got := out.Results[0]
+		if got.Error != "failed-message-only" {
+			t.Fatalf("Error = %q, want failed-message-only", got.Error)
+		}
+	})
+
+	t.Run("failed with empty message and error", func(t *testing.T) {
+		t.Parallel()
+		registry := NewRegistry()
+		executor := NewExecutor(registry, nil, 100*time.Millisecond)
+		if err := registry.Register(HookSpec{
+			ID:    "hook-empty-failed",
+			Point: HookPointBeforeToolCall,
+			Handler: func(context.Context, HookContext) HookResult {
+				return HookResult{Status: HookResultFailed}
+			},
+		}); err != nil {
+			t.Fatalf("Register() error = %v", err)
+		}
+		out := executor.Run(context.Background(), HookPointBeforeToolCall, HookContext{})
+		got := out.Results[0]
+		if got.Error != "hook returned failed status" {
+			t.Fatalf("Error = %q, want hook returned failed status", got.Error)
+		}
+		if got.Message != "hook returned failed status" {
+			t.Fatalf("Message = %q, want hook returned failed status", got.Message)
+		}
+	})
+}
+
+func TestExecutorRunDefaultStatusAndTimingFallback(t *testing.T) {
+	t.Parallel()
+
+	registry := NewRegistry()
+	executor := NewExecutor(registry, nil, 100*time.Millisecond)
+	first := time.Unix(100, 0)
+	second := first.Add(-10 * time.Millisecond)
+	var nowCalls atomic.Int32
+	executor.now = func() time.Time {
+		if nowCalls.Add(1) == 1 {
+			return first
+		}
+		return second
+	}
+
+	if err := registry.Register(HookSpec{
+		ID:    "hook-empty-result",
+		Point: HookPointBeforeToolCall,
+		Handler: func(context.Context, HookContext) HookResult {
+			return HookResult{}
+		},
+	}); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+
+	out := executor.Run(context.Background(), HookPointBeforeToolCall, HookContext{})
+	if len(out.Results) != 1 {
+		t.Fatalf("len(out.Results) = %d, want 1", len(out.Results))
+	}
+	got := out.Results[0]
+	if got.Status != HookResultPass {
+		t.Fatalf("Status = %q, want pass", got.Status)
+	}
+	if got.StartedAt != first {
+		t.Fatalf("StartedAt = %v, want %v", got.StartedAt, first)
+	}
+	if got.DurationMS != 0 {
+		t.Fatalf("DurationMS = %d, want 0", got.DurationMS)
+	}
+	if got.HookID != "hook-empty-result" {
+		t.Fatalf("HookID = %q, want hook-empty-result", got.HookID)
+	}
+	if got.Point != HookPointBeforeToolCall {
+		t.Fatalf("Point = %q, want %q", got.Point, HookPointBeforeToolCall)
+	}
+}
+
+func TestExecutorRunCanceledContext(t *testing.T) {
+	t.Parallel()
+
+	registry := NewRegistry()
+	executor := NewExecutor(registry, nil, 100*time.Millisecond)
+	if err := registry.Register(HookSpec{
+		ID:    "hook-canceled",
+		Point: HookPointBeforeToolCall,
+		Handler: func(ctx context.Context, input HookContext) HookResult {
+			<-ctx.Done()
+			_ = input
+			return HookResult{Status: HookResultPass}
+		},
+	}); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	out := executor.Run(ctx, HookPointBeforeToolCall, HookContext{})
+	if len(out.Results) != 1 {
+		t.Fatalf("len(out.Results) = %d, want 1", len(out.Results))
+	}
+	if out.Results[0].Status != HookResultFailed {
+		t.Fatalf("Status = %q, want failed", out.Results[0].Status)
+	}
+	if !strings.Contains(out.Results[0].Error, "canceled") {
+		t.Fatalf("Error = %q, want canceled", out.Results[0].Error)
+	}
+}
+
+func TestExecutorWithHookTimeoutNoTimeoutPath(t *testing.T) {
+	t.Parallel()
+
+	executor := NewExecutor(NewRegistry(), nil, 100*time.Millisecond)
+	executor.defaultTimeout = 0
+
+	ctx, cancel := executor.withHookTimeout(context.Background(), 0)
+	defer cancel()
+
+	select {
+	case <-ctx.Done():
+		t.Fatalf("context done unexpectedly: %v", ctx.Err())
+	default:
+	}
+}
+
+func TestExecutorSlotAndEmitterHelpers(t *testing.T) {
+	t.Parallel()
+
+	executor := NewExecutor(NewRegistry(), nil, 100*time.Millisecond)
+	executor.maxInFlight = 0
+	if !executor.tryAcquireSlot() {
+		t.Fatalf("tryAcquireSlot() = false, want true when limit <= 0")
+	}
+
+	executor.maxInFlight = -1
+	executor.releaseSlot()
+
+	executor.emitBestEffort(context.Background(), HookEvent{})
+
+	var nilExecutor *Executor
+	nilExecutor.releaseSlot()
+	nilExecutor.emitBestEffort(context.Background(), HookEvent{})
+}
+
+func TestExecutorRunSetsFailedEventErrorOnInvalidStatus(t *testing.T) {
+	t.Parallel()
+
+	registry := NewRegistry()
+	emitter := &recordingEmitter{err: errors.New("emit failed")}
+	executor := NewExecutor(registry, emitter, 100*time.Millisecond)
+	if err := registry.Register(HookSpec{
+		ID:    "hook-invalid",
+		Point: HookPointBeforeToolCall,
+		Handler: func(context.Context, HookContext) HookResult {
+			return HookResult{Status: HookResultStatus("bad")}
+		},
+	}); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+
+	_ = executor.Run(context.Background(), HookPointBeforeToolCall, HookContext{})
+	events := emitter.snapshot()
+	if len(events) != 2 {
+		t.Fatalf("len(events) = %d, want 2", len(events))
+	}
+	if events[1].Type != HookEventFailed {
+		t.Fatalf("events[1].Type = %q, want hook_failed", events[1].Type)
+	}
+	if events[1].Error == "" {
+		t.Fatalf("events[1].Error is empty")
 	}
 }

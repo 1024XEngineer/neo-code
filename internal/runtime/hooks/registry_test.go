@@ -188,3 +188,33 @@ func TestRegistryConcurrentRegisterAndResolve(t *testing.T) {
 		t.Fatalf("Resolve() len = %d, want %d", got, total)
 	}
 }
+
+func TestRegistryNilAndEmptyInputs(t *testing.T) {
+	t.Parallel()
+
+	var nilRegistry *Registry
+
+	if err := nilRegistry.Register(HookSpec{
+		ID:      "hook-a",
+		Point:   HookPointBeforeToolCall,
+		Handler: func(context.Context, HookContext) HookResult { return HookResult{Status: HookResultPass} },
+	}); !errors.Is(err, ErrInvalidHookSpec) {
+		t.Fatalf("nil Register() error = %v, want ErrInvalidHookSpec", err)
+	}
+
+	if err := nilRegistry.Remove("hook-a"); !errors.Is(err, ErrHookNotFound) {
+		t.Fatalf("nil Remove() error = %v, want ErrHookNotFound", err)
+	}
+
+	if got := nilRegistry.Resolve(HookPointBeforeToolCall); got != nil {
+		t.Fatalf("nil Resolve() = %#v, want nil", got)
+	}
+
+	registry := NewRegistry()
+	if err := registry.Remove(" \n\t "); !errors.Is(err, ErrHookNotFound) {
+		t.Fatalf("Remove(blank) error = %v, want ErrHookNotFound", err)
+	}
+	if got := registry.Resolve(HookPoint(" \t ")); got != nil {
+		t.Fatalf("Resolve(blank point) = %#v, want nil", got)
+	}
+}

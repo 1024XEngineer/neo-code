@@ -1,0 +1,125 @@
+package hooks
+
+import (
+	"context"
+	"errors"
+	"testing"
+)
+
+func TestHookSpecNormalizeAndValidateDefaults(t *testing.T) {
+	t.Parallel()
+
+	spec, err := (HookSpec{
+		ID:      "  hook-1  ",
+		Point:   HookPoint(" before_tool_call "),
+		Handler: func(context.Context, HookContext) HookResult { return HookResult{} },
+	}).normalizeAndValidate()
+	if err != nil {
+		t.Fatalf("normalizeAndValidate() error = %v", err)
+	}
+	if spec.ID != "hook-1" {
+		t.Fatalf("ID = %q, want hook-1", spec.ID)
+	}
+	if spec.Point != HookPointBeforeToolCall {
+		t.Fatalf("Point = %q, want %q", spec.Point, HookPointBeforeToolCall)
+	}
+	if spec.Scope != HookScopeInternal {
+		t.Fatalf("Scope = %q, want %q", spec.Scope, HookScopeInternal)
+	}
+	if spec.Kind != HookKindFunction {
+		t.Fatalf("Kind = %q, want %q", spec.Kind, HookKindFunction)
+	}
+	if spec.Mode != HookModeSync {
+		t.Fatalf("Mode = %q, want %q", spec.Mode, HookModeSync)
+	}
+	if spec.FailurePolicy != FailurePolicyFailOpen {
+		t.Fatalf("FailurePolicy = %q, want %q", spec.FailurePolicy, FailurePolicyFailOpen)
+	}
+}
+
+func TestHookSpecNormalizeAndValidateErrors(t *testing.T) {
+	t.Parallel()
+
+	handler := func(context.Context, HookContext) HookResult { return HookResult{} }
+	cases := []struct {
+		name string
+		spec HookSpec
+	}{
+		{
+			name: "missing id",
+			spec: HookSpec{
+				Point:   HookPointBeforeToolCall,
+				Handler: handler,
+			},
+		},
+		{
+			name: "missing point",
+			spec: HookSpec{
+				ID:      "hook-1",
+				Handler: handler,
+			},
+		},
+		{
+			name: "unsupported point",
+			spec: HookSpec{
+				ID:      "hook-1",
+				Point:   HookPoint("unsupported"),
+				Handler: handler,
+			},
+		},
+		{
+			name: "missing handler",
+			spec: HookSpec{
+				ID:    "hook-1",
+				Point: HookPointBeforeToolCall,
+			},
+		},
+		{
+			name: "unsupported scope",
+			spec: HookSpec{
+				ID:      "hook-1",
+				Point:   HookPointBeforeToolCall,
+				Scope:   HookScopeUser,
+				Handler: handler,
+			},
+		},
+		{
+			name: "unsupported kind",
+			spec: HookSpec{
+				ID:      "hook-1",
+				Point:   HookPointBeforeToolCall,
+				Kind:    HookKindHTTP,
+				Handler: handler,
+			},
+		},
+		{
+			name: "unsupported mode",
+			spec: HookSpec{
+				ID:      "hook-1",
+				Point:   HookPointBeforeToolCall,
+				Mode:    HookModeAsync,
+				Handler: handler,
+			},
+		},
+		{
+			name: "invalid failure policy",
+			spec: HookSpec{
+				ID:            "hook-1",
+				Point:         HookPointBeforeToolCall,
+				FailurePolicy: FailurePolicy("ignore"),
+				Handler:       handler,
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := tc.spec.normalizeAndValidate()
+			if !errors.Is(err, ErrInvalidHookSpec) {
+				t.Fatalf("normalizeAndValidate() error = %v, want ErrInvalidHookSpec", err)
+			}
+		})
+	}
+}

@@ -1,6 +1,10 @@
 package hooks
 
-import "testing"
+import (
+	"reflect"
+	"testing"
+	"time"
+)
 
 func TestHookContextCloneDeepCopyMetadata(t *testing.T) {
 	t.Parallel()
@@ -89,5 +93,83 @@ func TestHookContextCloneDeepCopyStructFields(t *testing.T) {
 	}
 	if got := originPayload.Ref.Flag; got != true {
 		t.Fatalf("original Ref.Flag = %v, want true", got)
+	}
+}
+
+func TestHookContextCloneNoMetadata(t *testing.T) {
+	t.Parallel()
+
+	original := HookContext{RunID: "run-1", SessionID: "session-1"}
+	cloned := original.Clone()
+	if cloned.RunID != original.RunID || cloned.SessionID != original.SessionID {
+		t.Fatalf("Clone() basic fields mismatch: got %+v, want %+v", cloned, original)
+	}
+	if cloned.Metadata != nil {
+		t.Fatalf("Clone().Metadata = %#v, want nil", cloned.Metadata)
+	}
+}
+
+func TestCloneMetadataValueNil(t *testing.T) {
+	t.Parallel()
+
+	if got := cloneMetadataValue(nil); got != nil {
+		t.Fatalf("cloneMetadataValue(nil) = %#v, want nil", got)
+	}
+}
+
+func TestDeepCloneValueEdgeCases(t *testing.T) {
+	t.Parallel()
+
+	invalid := deepCloneValue(reflect.Value{})
+	if invalid.IsValid() {
+		t.Fatalf("deepCloneValue(invalid).IsValid() = true, want false")
+	}
+
+	var nilPtr *int
+	clonedNilPtr := deepCloneValue(reflect.ValueOf(nilPtr))
+	if !clonedNilPtr.IsNil() {
+		t.Fatalf("cloned nil pointer should be nil")
+	}
+
+	var nilMap map[string]int
+	clonedNilMap := deepCloneValue(reflect.ValueOf(nilMap))
+	if !clonedNilMap.IsNil() {
+		t.Fatalf("cloned nil map should be nil")
+	}
+
+	var nilSlice []int
+	clonedNilSlice := deepCloneValue(reflect.ValueOf(nilSlice))
+	if !clonedNilSlice.IsNil() {
+		t.Fatalf("cloned nil slice should be nil")
+	}
+
+	// 走到 interface nil 分支。
+	nilIfaceValue := reflect.New(reflect.TypeOf((*any)(nil)).Elem()).Elem()
+	clonedNilIface := deepCloneValue(nilIfaceValue)
+	if !clonedNilIface.IsNil() {
+		t.Fatalf("cloned nil interface should be nil")
+	}
+
+	arr := [2]map[string]int{
+		{"a": 1},
+		{"b": 2},
+	}
+	clonedArr := deepCloneValue(reflect.ValueOf(arr)).Interface().([2]map[string]int)
+	clonedArr[0]["a"] = 99
+	if arr[0]["a"] != 1 {
+		t.Fatalf("array nested map shared, got %d, want 1", arr[0]["a"])
+	}
+
+	// time.Time 的内部字段不可 set，可覆盖 struct 分支中的 CanSet=false 路径。
+	valueWithTime := struct {
+		When time.Time
+	}{
+		When: time.Now(),
+	}
+	clonedWithTime := deepCloneValue(reflect.ValueOf(valueWithTime)).Interface().(struct {
+		When time.Time
+	})
+	if !clonedWithTime.When.Equal(valueWithTime.When) {
+		t.Fatalf("cloned struct with time mismatch")
 	}
 }

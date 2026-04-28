@@ -102,12 +102,6 @@ func (e *Executor) runOne(ctx context.Context, spec HookSpec, input HookContext)
 	if result.DurationMS <= 0 {
 		result.DurationMS = durationMS
 	}
-	if result.HookID == "" {
-		result.HookID = spec.ID
-	}
-	if result.Point == "" {
-		result.Point = spec.Point
-	}
 
 	switch result.Status {
 	case HookResultPass, HookResultBlock:
@@ -123,27 +117,6 @@ func (e *Executor) runOne(ctx context.Context, spec HookSpec, input HookContext)
 			DurationMS: result.DurationMS,
 		})
 	case HookResultFailed:
-		e.emitBestEffort(ctx, HookEvent{
-			Type:       HookEventFailed,
-			HookID:     spec.ID,
-			Point:      spec.Point,
-			Scope:      spec.Scope,
-			Kind:       spec.Kind,
-			Mode:       spec.Mode,
-			Status:     result.Status,
-			StartedAt:  result.StartedAt,
-			DurationMS: result.DurationMS,
-			Error:      result.Error,
-		})
-	default:
-		invalidStatus := result.Status
-		result.Status = HookResultFailed
-		if result.Error == "" {
-			result.Error = fmt.Sprintf("hook returned invalid status %q", invalidStatus)
-		}
-		if result.Message == "" {
-			result.Message = result.Error
-		}
 		e.emitBestEffort(ctx, HookEvent{
 			Type:       HookEventFailed,
 			HookID:     spec.ID,
