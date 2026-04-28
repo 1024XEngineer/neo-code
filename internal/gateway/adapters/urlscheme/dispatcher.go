@@ -39,13 +39,6 @@ const (
 
 var dispatchRequestCounter uint64
 
-// DispatchRequest 表示基于原始 URL 的派发请求。
-type DispatchRequest struct {
-	RawURL        string
-	ListenAddress string
-	AuthToken     string
-}
-
 // WakeDispatchRequest 表示基于已标准化 WakeIntent 的派发请求。
 type WakeDispatchRequest struct {
 	Intent        protocol.WakeIntent
@@ -105,21 +98,8 @@ func NewDispatcher() *Dispatcher {
 		nowFn:             time.Now,
 		sleepFn:           time.Sleep,
 		autoLaunchGateway: true,
-		logger:            log.New(os.Stderr, "url-dispatch: ", log.LstdFlags),
+		logger:            log.New(os.Stderr, "wake-dispatch: ", log.LstdFlags),
 	}
-}
-
-// Dispatch 解析 neocode:// URL 后派发 wake.openUrl 请求。
-func (d *Dispatcher) Dispatch(ctx context.Context, request DispatchRequest) (DispatchResult, error) {
-	intent, err := protocol.ParseNeoCodeURL(request.RawURL)
-	if err != nil {
-		return DispatchResult{}, toDispatchError(err)
-	}
-	return d.DispatchWakeIntent(ctx, WakeDispatchRequest{
-		Intent:        intent,
-		ListenAddress: request.ListenAddress,
-		AuthToken:     request.AuthToken,
-	})
 }
 
 // DispatchWakeIntent 直接派发 WakeIntent，避免 URL 二次编解码。
@@ -248,7 +228,7 @@ func (d *Dispatcher) DispatchWakeIntent(ctx context.Context, request WakeDispatc
 	}
 }
 
-// normalizeWakeDispatchIntent 统一整理并校验 daemon/url-dispatch 共用的意图数据。
+// normalizeWakeDispatchIntent 统一整理并校验 daemon 等入口共用的意图数据。
 func normalizeWakeDispatchIntent(intent protocol.WakeIntent) (protocol.WakeIntent, error) {
 	normalizedAction := strings.ToLower(strings.TrimSpace(intent.Action))
 	if !protocol.IsSupportedWakeAction(normalizedAction) {
@@ -571,7 +551,7 @@ func newLaunchDecisionLogEntry(
 	return launchDecisionLogEntry{
 		RequestID:     requestID,
 		Method:        string(protocol.MethodWakeOpenURL),
-		Source:        "url-dispatch",
+		Source:        "wake-dispatch",
 		Status:        status,
 		GatewayCode:   gatewayCode,
 		ListenAddress: listenAddress,
@@ -609,9 +589,9 @@ func resolveAuthMode(authToken string) string {
 	return "required"
 }
 
-// Dispatch 是便捷入口，直接创建默认 Dispatcher 执行派发。
-func Dispatch(ctx context.Context, request DispatchRequest) (DispatchResult, error) {
-	return NewDispatcher().Dispatch(ctx, request)
+// DispatchWakeIntent 是便捷入口，直接创建默认 Dispatcher 执行派发。
+func DispatchWakeIntent(ctx context.Context, request WakeDispatchRequest) (DispatchResult, error) {
+	return NewDispatcher().DispatchWakeIntent(ctx, request)
 }
 
 // applyDispatchDeadline 为连接设置派发 IO 截止时间。
@@ -711,12 +691,6 @@ func toDispatchError(err error) error {
 	if err == nil {
 		return nil
 	}
-
-	var parseErr *protocol.ParseError
-	if errors.As(err, &parseErr) {
-		return newDispatchError(parseErr.Code, parseErr.Message)
-	}
-
 	var dispatchErr *DispatchError
 	if errors.As(err, &dispatchErr) {
 		return dispatchErr
@@ -725,7 +699,7 @@ func toDispatchError(err error) error {
 	return newDispatchError(ErrorCodeInternal, err.Error())
 }
 
-// nextDispatchRequestID 生成 url-dispatch 请求 ID。
+// nextDispatchRequestID 生成 wake 请求 ID。
 func nextDispatchRequestID() string {
 	sequence := atomic.AddUint64(&dispatchRequestCounter, 1)
 	return fmt.Sprintf("wake-%d", sequence)

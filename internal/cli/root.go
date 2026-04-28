@@ -93,8 +93,6 @@ func NewRootCommand() *cobra.Command {
 		newGatewayCommand(),
 		newDaemonCommand(),
 		newMigrateCommand(),
-		newURLRegisterCommand(),
-		newURLDispatchCommand(),
 		newVersionCommand(),
 		newUpdateCommand(),
 	)
@@ -165,13 +163,13 @@ func defaultSilentUpdateCheck(ctx context.Context) {
 
 // shouldSkipGlobalPreload 判断当前子命令是否跳过全局预加载。
 func shouldSkipGlobalPreload(cmd *cobra.Command) bool {
-	return normalizedCommandName(cmd) == "url-dispatch" || commandAnnotationEnabled(cmd, commandAnnotationSkipGlobalPreload)
+	return commandAnnotationEnabled(cmd, commandAnnotationSkipGlobalPreload)
 }
 
 // shouldSkipSilentUpdateCheck 判断当前子命令是否跳过静默更新检查。
 func shouldSkipSilentUpdateCheck(cmd *cobra.Command) bool {
 	switch normalizedCommandName(cmd) {
-	case "url-dispatch", "update", "version":
+	case "update", "version":
 		return true
 	default:
 		return commandAnnotationEnabled(cmd, commandAnnotationSkipSilentUpdateCheck)

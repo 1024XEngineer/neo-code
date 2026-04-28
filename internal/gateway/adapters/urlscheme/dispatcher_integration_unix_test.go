@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"neo-code/internal/gateway"
+	"neo-code/internal/gateway/protocol"
 	"neo-code/internal/gateway/transport"
 )
 
@@ -37,8 +38,12 @@ func TestDispatchEndToEndWithGatewayServer(t *testing.T) {
 		t.Fatalf("wait gateway ready: %v", err)
 	}
 
-	successResult, err := Dispatch(context.Background(), DispatchRequest{
-		RawURL:        "neocode://review?path=README.md",
+	successResult, err := DispatchWakeIntent(context.Background(), WakeDispatchRequest{
+		Intent: protocol.WakeIntent{
+			Action: protocol.WakeActionReview,
+			Params: map[string]string{"path": "README.md"},
+			RawURL: "http://neocode:18921/review?path=README.md",
+		},
 		ListenAddress: socketPath,
 	})
 	if err != nil {
@@ -51,8 +56,12 @@ func TestDispatchEndToEndWithGatewayServer(t *testing.T) {
 		t.Fatalf("response action = %q, want %q", successResult.Response.Action, gateway.FrameActionWakeOpenURL)
 	}
 
-	_, err = Dispatch(context.Background(), DispatchRequest{
-		RawURL:        "neocode://open?path=README.md",
+	_, err = DispatchWakeIntent(context.Background(), WakeDispatchRequest{
+		Intent: protocol.WakeIntent{
+			Action: "open",
+			Params: map[string]string{"path": "README.md"},
+			RawURL: "http://neocode:18921/open?path=README.md",
+		},
 		ListenAddress: socketPath,
 	})
 	if err == nil {

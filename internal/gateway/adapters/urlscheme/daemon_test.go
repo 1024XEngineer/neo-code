@@ -207,3 +207,42 @@ func TestDispatchWakeIntentRejectsInvalidAction(t *testing.T) {
 		t.Fatalf("error message = %q, want contains invalid wake action", dispatchErr.Message)
 	}
 }
+
+func newStubDispatcher(customize func(*Dispatcher)) *Dispatcher {
+	dispatcher := NewDispatcher()
+	dispatcher.autoLaunchGateway = false
+	dispatcher.resolveListenAddressFn = func(listenAddress string) (string, error) {
+		if strings.TrimSpace(listenAddress) == "" {
+			return "inmemory", nil
+		}
+		return listenAddress, nil
+	}
+	if customize != nil {
+		customize(dispatcher)
+	}
+	return dispatcher
+}
+
+func mustMarshalRawJSON(t *testing.T, payload any) json.RawMessage {
+	t.Helper()
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	return raw
+}
+
+func assertDispatchErrorCode(t *testing.T, err error, code string) *DispatchError {
+	t.Helper()
+	if err == nil {
+		t.Fatal("expected dispatch error")
+	}
+	var dispatchErr *DispatchError
+	if !errors.As(err, &dispatchErr) {
+		t.Fatalf("error type = %T, want *DispatchError", err)
+	}
+	if dispatchErr.Code != code {
+		t.Fatalf("dispatch error code = %q, want %q", dispatchErr.Code, code)
+	}
+	return dispatchErr
+}
