@@ -1689,7 +1689,7 @@ Request：
     "params": {
       "path": "README.md"
     },
-    "raw_url": "neocode://review?path=README.md"
+    "raw_url": "http://neocode:18921/review?path=README.md"
   }
 }
 ```

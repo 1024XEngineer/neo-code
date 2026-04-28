@@ -66,6 +66,10 @@ func (s *runtimePortCompileStub) LoadSession(_ context.Context, _ LoadSessionInp
 	return Session{}, nil
 }
 
+func (s *runtimePortCompileStub) CreateSession(_ context.Context, _ CreateSessionInput) (string, error) {
+	return "", nil
+}
+
 var _ RuntimePort = (*runtimePortCompileStub)(nil)
 var _ TransportAdapter = (*Server)(nil)
 var _ TransportAdapter = (*NetworkServer)(nil)

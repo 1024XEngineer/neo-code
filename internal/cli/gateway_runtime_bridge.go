@@ -270,6 +270,7 @@ func (b *gatewayRuntimePortBridge) LoadSession(ctx context.Context, input gatewa
 	session, err := b.runtime.LoadSession(ctx, sessionID)
 	if err != nil {
 		if isRuntimeNotFoundError(err) {
+			// TODO: 待 TUI Submit 显式调用 gateway.createSession 后移除此 upsert。
 			creator, ok := b.runtime.(runtimeSessionCreator)
 			if !ok {
 				return gateway.Session{}, gateway.ErrRuntimeResourceNotFound
@@ -284,6 +285,23 @@ func (b *gatewayRuntimePortBridge) LoadSession(ctx context.Context, input gatewa
 	}
 
 	return convertRuntimeSessionToGatewaySession(session), nil
+}
+
+// CreateSession 创建或加载指定会话，并返回最终可用的会话标识。
+func (b *gatewayRuntimePortBridge) CreateSession(ctx context.Context, input gateway.CreateSessionInput) (string, error) {
+	if err := b.ensureRuntimeAccess(input.SubjectID); err != nil {
+		return "", err
+	}
+
+	creator, ok := b.runtime.(runtimeSessionCreator)
+	if !ok {
+		return "", fmt.Errorf("gateway runtime bridge: runtime does not support create_session")
+	}
+	session, err := creator.CreateSession(ctx, strings.TrimSpace(input.SessionID))
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(session.ID), nil
 }
 
 // Close 主动停止桥接事件泵，避免网关关闭后后台协程悬挂。

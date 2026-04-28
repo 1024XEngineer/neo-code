@@ -19,6 +19,7 @@ type RuntimeConfig struct {
 	MaxRepeatCycleStreak int                 `yaml:"max_repeat_cycle_streak,omitempty"`
 	MaxTurns             int                 `yaml:"max_turns,omitempty"`
 	Verification         VerificationConfig  `yaml:"verification,omitempty"`
+	Hooks                RuntimeHooksConfig  `yaml:"hooks,omitempty"`
 	Assets               RuntimeAssetsConfig `yaml:"assets,omitempty"`
 }
 
@@ -35,6 +36,7 @@ func defaultRuntimeConfig() RuntimeConfig {
 		MaxRepeatCycleStreak: DefaultMaxRepeatCycleStreak,
 		MaxTurns:             DefaultMaxTurns,
 		Verification:         defaultVerificationConfig(),
+		Hooks:                defaultRuntimeHooksConfig(),
 		Assets:               defaultRuntimeAssetsConfig(),
 	}
 }
@@ -54,6 +56,7 @@ func (c RuntimeConfig) Clone() RuntimeConfig {
 		MaxRepeatCycleStreak: c.MaxRepeatCycleStreak,
 		MaxTurns:             c.MaxTurns,
 		Verification:         c.Verification.Clone(),
+		Hooks:                c.Hooks.Clone(),
 		Assets:               c.Assets.Clone(),
 	}
 }
@@ -73,6 +76,7 @@ func (c *RuntimeConfig) ApplyDefaults(defaults RuntimeConfig) {
 		c.MaxTurns = defaults.MaxTurns
 	}
 	c.Verification.ApplyDefaults(defaults.Verification)
+	c.Hooks.ApplyDefaults(defaults.Hooks)
 	c.Assets.ApplyDefaults(defaults.Assets)
 }
 
@@ -90,6 +94,11 @@ func (c RuntimeConfig) Validate() error {
 	verification := c.Verification.Clone()
 	verification.ApplyDefaults(defaultVerificationConfig())
 	if err := verification.Validate(); err != nil {
+		return err
+	}
+	hooks := c.Hooks.Clone()
+	hooks.ApplyDefaults(defaultRuntimeHooksConfig())
+	if err := hooks.Validate(); err != nil {
 		return err
 	}
 	if err := c.Assets.Validate(); err != nil {

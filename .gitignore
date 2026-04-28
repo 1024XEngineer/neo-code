@@ -41,7 +41,7 @@ data/
 workspace.xml
 .vscode/
 .claude/
-
+.windsurf/
 # VitePress / frontend build artifacts
 www/.vitepress/cache/
 www/.vitepress/dist/

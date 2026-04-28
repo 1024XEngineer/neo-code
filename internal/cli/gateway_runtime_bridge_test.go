@@ -248,6 +248,11 @@ func TestNewGatewayRuntimePortBridgeRuntimeUnavailable(t *testing.T) {
 	}); err == nil {
 		t.Fatal("expected load_session error for nil bridge")
 	}
+	if _, err := nilBridge.CreateSession(context.Background(), gateway.CreateSessionInput{
+		SubjectID: testBridgeSubjectID,
+	}); err == nil {
+		t.Fatal("expected create_session error for nil bridge")
+	}
 	if err := nilBridge.Close(); err != nil {
 		t.Fatalf("close nil bridge: %v", err)
 	}
@@ -723,6 +728,70 @@ func TestGatewayRuntimePortBridgeLoadSessionNoUpsertOnPlainStringNotFoundError(t
 	if stub.createID != "" {
 		t.Fatalf("create should not be called for plain string error, got createID=%q", stub.createID)
 	}
+}
+
+func TestGatewayRuntimePortBridgeCreateSession(t *testing.T) {
+	now := time.Now()
+	stub := &runtimeStub{
+		createSession: agentsession.Session{
+			ID:        "session-created",
+			Title:     "New Session",
+			Workdir:   "/tmp/work",
+			CreatedAt: now,
+			UpdatedAt: now,
+		},
+	}
+	bridge, err := newGatewayRuntimePortBridge(context.Background(), stub)
+	if err != nil {
+		t.Fatalf("new bridge: %v", err)
+	}
+	defer bridge.Close()
+
+	sessionID, err := bridge.CreateSession(context.Background(), gateway.CreateSessionInput{
+		SubjectID: testBridgeSubjectID,
+		SessionID: " session-created ",
+	})
+	if err != nil {
+		t.Fatalf("create_session: %v", err)
+	}
+	if stub.createID != "session-created" {
+		t.Fatalf("create id = %q, want %q", stub.createID, "session-created")
+	}
+	if sessionID != "session-created" {
+		t.Fatalf("session_id = %q, want %q", sessionID, "session-created")
+	}
+}
+
+func TestGatewayRuntimePortBridgeCreateSessionBranches(t *testing.T) {
+	t.Run("subject denied", func(t *testing.T) {
+		stub := &runtimeStub{}
+		bridge, err := newGatewayRuntimePortBridge(context.Background(), stub)
+		if err != nil {
+			t.Fatalf("new bridge: %v", err)
+		}
+		defer bridge.Close()
+
+		if _, err := bridge.CreateSession(context.Background(), gateway.CreateSessionInput{
+			SubjectID: "external_subject",
+		}); !errors.Is(err, gateway.ErrRuntimeAccessDenied) {
+			t.Fatalf("expected ErrRuntimeAccessDenied, got %v", err)
+		}
+	})
+
+	t.Run("runtime no creator", func(t *testing.T) {
+		base := &runtimeStub{}
+		bridge, err := newGatewayRuntimePortBridge(context.Background(), &runtimeWithoutCreator{base: base})
+		if err != nil {
+			t.Fatalf("new bridge: %v", err)
+		}
+		defer bridge.Close()
+
+		if _, err := bridge.CreateSession(context.Background(), gateway.CreateSessionInput{
+			SubjectID: testBridgeSubjectID,
+		}); err == nil {
+			t.Fatal("expected runtime creator unavailable error")
+		}
+	})
 }
 
 func TestGatewayRuntimePortBridgeRunEventBridge(t *testing.T) {

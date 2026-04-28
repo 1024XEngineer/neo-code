@@ -241,6 +241,9 @@ func normalizeToolResultContent(content string) string {
 
 // classifyToolError 为错误结果生成轻量分类，避免直接依赖完整错误文案。
 func classifyToolError(result tools.ToolResult) string {
+	if explicit := strings.TrimSpace(result.ErrorClass); explicit != "" {
+		return explicit
+	}
 	trimmed := strings.ToLower(strings.TrimSpace(result.Content))
 	switch {
 	case strings.Contains(trimmed, "timeout"):

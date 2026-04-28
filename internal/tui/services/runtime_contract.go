@@ -302,6 +302,30 @@ type AssetSaveFailedPayload struct {
 	Message string `json:"message"`
 }
 
+// HookEventPayload 描述 hook 生命周期事件。
+type HookEventPayload struct {
+	HookID     string    `json:"hook_id"`
+	Point      string    `json:"point"`
+	Scope      string    `json:"scope"`
+	Kind       string    `json:"kind"`
+	Mode       string    `json:"mode"`
+	Status     string    `json:"status,omitempty"`
+	Message    string    `json:"message,omitempty"`
+	StartedAt  time.Time `json:"started_at,omitempty"`
+	DurationMS int64     `json:"duration_ms,omitempty"`
+	Error      string    `json:"error,omitempty"`
+}
+
+// HookBlockedPayload 描述 hook 阻断事件。
+type HookBlockedPayload struct {
+	HookID     string `json:"hook_id"`
+	Point      string `json:"point"`
+	ToolCallID string `json:"tool_call_id,omitempty"`
+	ToolName   string `json:"tool_name,omitempty"`
+	Reason     string `json:"reason,omitempty"`
+	Enforced   bool   `json:"enforced"`
+}
+
 const (
 	EventUserMessage               EventType = "user_message"
 	EventAgentChunk                EventType = "agent_chunk"
@@ -336,4 +360,8 @@ const (
 	EventInputNormalized           EventType = "input_normalized"
 	EventAssetSaved                EventType = "asset_saved"
 	EventAssetSaveFailed           EventType = "asset_save_failed"
+	EventHookStarted               EventType = "hook_started"
+	EventHookFinished              EventType = "hook_finished"
+	EventHookFailed                EventType = "hook_failed"
+	EventHookBlocked               EventType = "hook_blocked"
 )

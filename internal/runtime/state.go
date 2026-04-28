@@ -39,6 +39,7 @@ type runState struct {
 	hasUnknownUsage         bool
 	completion              controlplane.CompletionState
 	progress                controlplane.ProgressState
+	hookAnnotations         []string
 	reportedMissingSkills   map[string]struct{}
 }
 

@@ -17,6 +17,7 @@ import (
 	"neo-code/internal/provider/builtin"
 	providertypes "neo-code/internal/provider/types"
 	"neo-code/internal/runtime/approval"
+	runtimehooks "neo-code/internal/runtime/hooks"
 	"neo-code/internal/security"
 	agentsession "neo-code/internal/session"
 	"neo-code/internal/skills"
@@ -130,6 +131,7 @@ type Service struct {
 	memoExtractor     MemoExtractor
 	skillsRegistry    skills.Registry
 	budgetResolver    BudgetResolver
+	hookExecutor      HookExecutor
 
 	events             chan RuntimeEvent
 	sessionMu          sync.Mutex
@@ -181,7 +183,7 @@ func NewWithFactory(
 		})
 	}
 
-	return &Service{
+	service := &Service{
 		configManager:      configManager,
 		sessionStore:       sessionStore,
 		toolManager:        toolManager,
@@ -196,6 +198,8 @@ func NewWithFactory(
 		activeRunByID:      make(map[string]uint64),
 		activeRunTokenIDs:  make(map[uint64]string),
 	}
+	service.hookExecutor = runtimehooks.NewExecutor(runtimehooks.NewRegistry(), newHookRuntimeEventEmitter(service), runtimehooks.DefaultHookTimeout)
+	return service
 }
 
 // SetMemoExtractor 设置可选记忆提取钩子，由 Run 在结束时异步触发。
@@ -297,7 +301,7 @@ func (s *Service) CreateSession(ctx context.Context, id string) (agentsession.Se
 	}
 	sessionID := strings.TrimSpace(id)
 	if sessionID == "" {
-		return agentsession.Session{}, errors.New("runtime: session id is empty")
+		sessionID = agentsession.NewID("session")
 	}
 	defaultWorkdir := ""
 	if s.configManager != nil {
@@ -348,4 +352,9 @@ func isRuntimeSessionAlreadyExistsError(err error) bool {
 // SetBudgetResolver 注入 prompt budget 解析能力，避免 runtime 直接感知模型目录细节。
 func (s *Service) SetBudgetResolver(resolver BudgetResolver) {
 	s.budgetResolver = resolver
+}
+
+// SetHookExecutor 设置 runtime 生命周期 hook 执行器；传入 nil 可禁用 hook 执行。
+func (s *Service) SetHookExecutor(executor HookExecutor) {
+	s.hookExecutor = executor
 }

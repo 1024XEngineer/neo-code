@@ -159,7 +159,19 @@ func dispatchRPCRequest(ctx context.Context, request protocol.JSONRPCRequest, ru
 // authorizeRPCRequest 统一执行控制面认证与 ACL 授权。
 func authorizeRPCRequest(ctx context.Context, method, action string) *protocol.JSONRPCError {
 	normalizedAction := strings.ToLower(strings.TrimSpace(action))
+	normalizedMethod := strings.ToLower(strings.TrimSpace(method))
 	if normalizedAction == string(FrameActionAuthenticate) {
+		if !isMethodAllowedByACL(ctx, method) {
+			return protocol.NewJSONRPCError(
+				protocol.MapGatewayCodeToJSONRPCCode(ErrorCodeAccessDenied.String()),
+				"access denied",
+				ErrorCodeAccessDenied.String(),
+			)
+		}
+		return nil
+	}
+	if RequestSourceFromContext(ctx) == RequestSourceIPC &&
+		normalizedMethod == strings.ToLower(strings.TrimSpace(protocol.MethodWakeOpenURL)) {
 		if !isMethodAllowedByACL(ctx, method) {
 			return protocol.NewJSONRPCError(
 				protocol.MapGatewayCodeToJSONRPCCode(ErrorCodeAccessDenied.String()),

@@ -29,6 +29,23 @@ runtime:
   max_no_progress_streak: 5
   max_repeat_cycle_streak: 3
   max_turns: 90
+  hooks:
+    enabled: true
+    user_hooks_enabled: true
+    default_timeout_sec: 2
+    default_failure_policy: warn_only
+    items:
+      - id: warn-bash
+        enabled: true
+        point: before_tool_call
+        scope: user
+        kind: builtin
+        mode: sync
+        handler: warn_on_tool_call
+        priority: 100
+        params:
+          tool_name: bash
+          message: "bash tool is invoked"
   assets:
     max_session_asset_bytes: 20971520
     max_session_assets_total_bytes: 20971520
@@ -94,8 +111,31 @@ context:
 | `runtime.max_no_progress_streak` | 连续“无进展”轮次提醒阈值，默认 `5`；达到 `limit-1` 起会向模型注入纠偏提示，不会直接终止运行 |
 | `runtime.max_repeat_cycle_streak` | 连续“重复调用同一工具参数”提醒阈值，默认 `3`；达到阈值后触发重复循环提醒，不会直接终止运行 |
 | `runtime.max_turns` | 单次 Run 的最大推理轮数上限，默认 `40`；达到上限后直接终止并返回明确 stop reason |
+| `runtime.hooks.enabled` | hooks 总开关；关闭后不执行 runtime hooks |
+| `runtime.hooks.user_hooks_enabled` | user hooks 开关；关闭后不加载 `runtime.hooks.items` |
+| `runtime.hooks.default_timeout_sec` | user hook 默认超时秒数，需 `> 0` |
+| `runtime.hooks.default_failure_policy` | 默认失败策略，支持 `warn_only` / `fail_open` / `fail_closed` |
+| `runtime.hooks.items` | user builtin hooks 列表；仅支持 `scope=user`、`kind=builtin`、`mode=sync` |
 | `runtime.assets.max_session_asset_bytes` | 单个 `session_asset` 最大原始字节数，默认 `20971520`（20 MiB）；`0` 或未配置时回退默认值 |
 | `runtime.assets.max_session_assets_total_bytes` | 单次请求可携带的 `session_asset` 原始总字节上限，默认 `20971520`（20 MiB）；`0` 或未配置时回退默认值 |
+
+### `runtime.hooks.items` 字段约束
+
+| 字段 | 说明 |
+|------|------|
+| `id` | hook 唯一标识，同一配置文件内不可重复 |
+| `enabled` | 是否启用该 hook，默认 `true` |
+| `point` | 仅支持 `before_tool_call` / `after_tool_result` / `before_completion_decision` |
+| `scope` | P2 固定为 `user` |
+| `kind` | P2 固定为 `builtin` |
+| `mode` | P2 固定为 `sync` |
+| `handler` | 仅支持 `require_file_exists` / `warn_on_tool_call` / `add_context_note` |
+| `priority` | 同一 hook point 内执行优先级，数值越大越先执行 |
+| `timeout_sec` | 覆盖默认超时；未配置时继承 `runtime.hooks.default_timeout_sec` |
+| `failure_policy` | 覆盖默认失败策略；未配置时继承 `runtime.hooks.default_failure_policy` |
+| `params` | handler 参数；不同 handler 使用不同键 |
+
+> 注意：`warn_only` 在 runtime 内部映射为 `fail_open`，表示记录失败但不阻断主链。
 
 ## Budget 解析规则
 
@@ -179,7 +219,7 @@ generate_idle_timeout_sec: 300
 
 新增的生成链路控制字段含义如下：
 
-- `generate_max_retries`：额外重试次数，不含首次尝试；`<= 0` 时回退默认值 `5`，且必须 `<= 20`。
+- `generate_max_retries`：额外重试次数，不含首次尝试；未填写时默认使用 `5`，显式填写 `0` 表示关闭生成重试，且必须 `<= 20`。
 - `generate_start_timeout_sec`：写在 `config.yaml` 顶层，从发请求到收到首个有效流 payload 的最长等待窗口；`<= 0` 时回退默认值 `90`。
 - `generate_idle_timeout_sec`：首包后连续没有任何新 payload 的最长空闲窗口；`<= 0` 时回退默认值 `300`。
 

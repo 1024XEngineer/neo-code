@@ -13,6 +13,7 @@ import (
 	"neo-code/internal/config"
 	configstate "neo-code/internal/config/state"
 	agentcontext "neo-code/internal/context"
+	"neo-code/internal/gateway/protocol"
 	"neo-code/internal/memo"
 	"neo-code/internal/provider"
 	"neo-code/internal/provider/builtin"
@@ -55,7 +56,9 @@ var (
 
 // BootstrapOptions 描述应用启动时可注入的运行时选项。
 type BootstrapOptions struct {
-	Workdir string
+	Workdir      string
+	SessionID    string
+	WakeInputB64 string
 }
 
 type memoExtractorScheduler interface {
@@ -212,6 +215,9 @@ func BuildGatewayServerDeps(ctx context.Context, opts BootstrapOptions) (Runtime
 			return resolution.PromptBudget, string(resolution.Source), nil
 		},
 	))
+	if err := agentruntime.ConfigureRuntimeHooks(runtimeSvc, cfg); err != nil {
+		return RuntimeBundle{}, err
+	}
 
 	// 注入记忆提取钩子：当 AutoExtract 启用且 memoSvc 可用时，ReAct 循环完成后异步提取记忆。
 	if memoSvc != nil && cfg.Memo.AutoExtract {
@@ -261,6 +267,29 @@ func NewProgram(ctx context.Context, opts BootstrapOptions) (*tea.Program, func(
 			_ = cleanup()
 		}
 		return nil, nil, err
+	}
+	if sessionID := strings.TrimSpace(opts.SessionID); sessionID != "" {
+		if err := tuiApp.HydrateSession(ctx, sessionID); err != nil {
+			if cleanup != nil {
+				_ = cleanup()
+			}
+			return nil, nil, err
+		}
+	}
+	if encodedWakeInput := strings.TrimSpace(opts.WakeInputB64); encodedWakeInput != "" {
+		wakeInput, decodeErr := protocol.DecodeWakeStartupInput(encodedWakeInput)
+		if decodeErr != nil {
+			if cleanup != nil {
+				_ = cleanup()
+			}
+			return nil, nil, decodeErr
+		}
+		if configureErr := tuiApp.ConfigureStartupWakeInput(wakeInput.Text, wakeInput.Workdir); configureErr != nil {
+			if cleanup != nil {
+				_ = cleanup()
+			}
+			return nil, nil, configureErr
+		}
 	}
 	return tea.NewProgram(
 		tuiApp,

@@ -41,8 +41,8 @@ func (r *ActionRegistry) initCore() {
 	r.core[FrameActionBindStream] = func(ctx context.Context, frame MessageFrame, _ RuntimePort) MessageFrame {
 		return handleBindStreamFrame(ctx, frame)
 	}
-	r.core[FrameActionWakeOpenURL] = func(ctx context.Context, frame MessageFrame, _ RuntimePort) MessageFrame {
-		return handleWakeOpenURLFrame(ctx, frame)
+	r.core[FrameActionWakeOpenURL] = func(ctx context.Context, frame MessageFrame, runtimePort RuntimePort) MessageFrame {
+		return handleWakeOpenURLFrame(ctx, frame, runtimePort)
 	}
 	r.core[FrameActionRun] = handleRunFrame
 	r.core[FrameActionCompact] = handleCompactFrame

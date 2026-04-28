@@ -2172,6 +2172,71 @@ func TestUpdateSendAmpersandInputAsPlainText(t *testing.T) {
 	}
 }
 
+func TestConfigureStartupWakeInputRejectsEmptyText(t *testing.T) {
+	app, _ := newTestApp(t)
+
+	if err := app.ConfigureStartupWakeInput("   ", ""); err == nil {
+		t.Fatal("expected empty startup wake input error")
+	}
+}
+
+func TestUpdateStartupWakeSubmitMsgTriggersSubmitPipeline(t *testing.T) {
+	app, runtime := newTestApp(t)
+	workdir := t.TempDir()
+
+	if err := app.ConfigureStartupWakeInput("hello from wake", workdir); err != nil {
+		t.Fatalf("ConfigureStartupWakeInput() error = %v", err)
+	}
+	if app.startupWakeSubmitInput == nil {
+		t.Fatal("expected startup wake input to be configured")
+	}
+
+	model, cmd := app.Update(startupWakeSubmitMsg{Input: *app.startupWakeSubmitInput})
+	if cmd == nil {
+		t.Fatal("expected startup wake submit command")
+	}
+	_ = cmd()
+	app = model.(App)
+
+	if app.startupWakeSubmitInput != nil {
+		t.Fatal("expected startup wake input to be cleared after first submit")
+	}
+	if !app.state.IsAgentRunning {
+		t.Fatal("expected app to enter running state")
+	}
+	if app.state.CurrentWorkdir != workdir {
+		t.Fatalf("current workdir = %q, want %q", app.state.CurrentWorkdir, workdir)
+	}
+	if len(runtime.prepareInputs) != 1 {
+		t.Fatalf("expected one prepare input, got %+v", runtime.prepareInputs)
+	}
+	if runtime.prepareInputs[0].Text != "hello from wake" {
+		t.Fatalf("prepare input text = %q, want %q", runtime.prepareInputs[0].Text, "hello from wake")
+	}
+	if runtime.prepareInputs[0].Workdir != workdir {
+		t.Fatalf("prepare input workdir = %q, want %q", runtime.prepareInputs[0].Workdir, workdir)
+	}
+	if app.input.Value() != "" || app.state.InputText != "" {
+		t.Fatalf("expected startup wake submit to clear input, got input=%q state=%q", app.input.Value(), app.state.InputText)
+	}
+}
+
+func TestUpdateStartupWakeSubmitMsgWithEmptyTextNoop(t *testing.T) {
+	app, runtime := newTestApp(t)
+
+	model, cmd := app.Update(startupWakeSubmitMsg{Input: startupWakeSubmitInput{Text: "  "}})
+	app = model.(App)
+	if cmd != nil {
+		t.Fatal("expected nil command for empty startup wake input")
+	}
+	if app.state.IsAgentRunning {
+		t.Fatal("expected app to remain idle")
+	}
+	if len(runtime.prepareInputs) != 0 {
+		t.Fatalf("expected no prepare input, got %+v", runtime.prepareInputs)
+	}
+}
+
 func TestUpdateSendWithInlineImageReferenceUsesPreparePipeline(t *testing.T) {
 	app, runtime := newTestApp(t)
 	root := t.TempDir()
@@ -3763,8 +3828,6 @@ func TestBuildProviderAddRequest(t *testing.T) {
 }
 
 func TestParseProviderAddManualModelsJSONRejectsNonPositiveNumericFields(t *testing.T) {
-	t.Parallel()
-
 	_, err := parseProviderAddManualModelsJSON(`[{"id":"m1","name":"Model 1","context_window":0}]`)
 	if err == nil || !strings.Contains(err.Error(), "context_window") {
 		t.Fatalf("expected context_window validation error, got %v", err)
@@ -5254,8 +5317,6 @@ func TestSlashSelectionAndProviderAddUtilityBranches(t *testing.T) {
 }
 
 func TestSyncProviderAddOpenAICompatModeDefaults(t *testing.T) {
-	t.Parallel()
-
 	form := &providerAddFormState{
 		Driver:           provider.DriverOpenAICompat,
 		ChatAPIMode:      provider.ChatAPIModeResponses,
@@ -6136,8 +6197,6 @@ func assertIgnoredStaleSkillResultActivity(t *testing.T, app App, beforeActiviti
 }
 
 func TestUpdateIgnoresStaleSkillCommandResultBySession(t *testing.T) {
-	t.Parallel()
-
 	app, _ := newTestApp(t)
 	app.state.ActiveSessionID = "session-current"
 	app.state.StatusText = "before"
@@ -6155,8 +6214,6 @@ func TestUpdateIgnoresStaleSkillCommandResultBySession(t *testing.T) {
 }
 
 func TestUpdateAcceptsSkillCommandResultForCurrentSession(t *testing.T) {
-	t.Parallel()
-
 	app, _ := newTestApp(t)
 	app.state.ActiveSessionID = "session-current"
 
@@ -6171,8 +6228,6 @@ func TestUpdateAcceptsSkillCommandResultForCurrentSession(t *testing.T) {
 }
 
 func TestUpdateLogsStaleSkillCommandErrorBySession(t *testing.T) {
-	t.Parallel()
-
 	app, _ := newTestApp(t)
 	app.state.ActiveSessionID = "session-current"
 	app.state.StatusText = "before"

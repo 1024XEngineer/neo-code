@@ -139,8 +139,12 @@ func TestServiceCreateSessionBranches(t *testing.T) {
 	if _, err := service.CreateSession(ctx, "session-canceled"); err == nil {
 		t.Fatalf("CreateSession() should reject canceled context")
 	}
-	if _, err := service.CreateSession(context.Background(), "   "); err == nil {
-		t.Fatalf("CreateSession() should reject empty session id")
+	created, err := service.CreateSession(context.Background(), "   ")
+	if err != nil {
+		t.Fatalf("CreateSession() should auto-generate id for empty input, got error: %v", err)
+	}
+	if created.ID == "" || len(created.ID) <= len("session_") || created.ID[:len("session_")] != "session_" {
+		t.Fatalf("CreateSession() generated id = %q, want prefix %q", created.ID, "session_")
 	}
 }
 

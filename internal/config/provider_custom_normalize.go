@@ -21,6 +21,7 @@ func NormalizeCustomProviderInput(input SaveCustomProviderInput) (SaveCustomProv
 		ChatEndpointPath:       strings.TrimSpace(input.ChatEndpointPath),
 		APIKeyEnv:              strings.TrimSpace(input.APIKeyEnv),
 		GenerateMaxRetries:     normalizeOptionalGenerateInt(input.GenerateMaxRetries),
+		GenerateMaxRetriesSet:  input.GenerateMaxRetriesSet || input.GenerateMaxRetries > 0,
 		GenerateIdleTimeoutSec: normalizeOptionalGenerateInt(input.GenerateIdleTimeoutSec),
 		DiscoveryEndpointPath:  strings.TrimSpace(input.DiscoveryEndpointPath),
 	}
@@ -118,6 +119,7 @@ func validateNormalizedCustomProviderInput(input SaveCustomProviderInput) error 
 		BaseURL:                input.BaseURL,
 		APIKeyEnv:              input.APIKeyEnv,
 		GenerateMaxRetries:     input.GenerateMaxRetries,
+		GenerateMaxRetriesSet:  input.GenerateMaxRetriesSet,
 		GenerateIdleTimeoutSec: input.GenerateIdleTimeoutSec,
 		ModelSource:            input.ModelSource,
 		ChatAPIMode:            input.ChatAPIMode,

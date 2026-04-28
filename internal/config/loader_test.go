@@ -101,6 +101,80 @@ func TestLoaderLoadMalformedYAML(t *testing.T) {
 	}
 }
 
+func TestLoaderLoadRuntimeHooksConfig(t *testing.T) {
+	t.Parallel()
+
+	loader := NewLoader(t.TempDir(), testDefaultConfig())
+	raw := `
+selected_provider: openai
+current_model: gpt-4.1
+shell: powershell
+runtime:
+  hooks:
+    enabled: true
+    user_hooks_enabled: true
+    default_timeout_sec: 3
+    default_failure_policy: warn_only
+    items:
+      - id: warn-bash
+        enabled: true
+        point: before_tool_call
+        scope: user
+        kind: builtin
+        mode: sync
+        handler: warn_on_tool_call
+        priority: 100
+        timeout_sec: 2
+        failure_policy: warn_only
+        params:
+          tool_name: bash
+          message: "bash is called"
+`
+	writeLoaderConfig(t, loader, raw)
+	cfg, err := loader.Load(context.Background())
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg == nil {
+		t.Fatal("cfg is nil")
+	}
+	if !cfg.Runtime.Hooks.IsEnabled() || !cfg.Runtime.Hooks.IsUserHooksEnabled() {
+		t.Fatalf("unexpected hook switches: %+v", cfg.Runtime.Hooks)
+	}
+	if len(cfg.Runtime.Hooks.Items) != 1 {
+		t.Fatalf("len(items)=%d, want 1", len(cfg.Runtime.Hooks.Items))
+	}
+	item := cfg.Runtime.Hooks.Items[0]
+	if item.Handler != "warn_on_tool_call" {
+		t.Fatalf("handler=%q, want warn_on_tool_call", item.Handler)
+	}
+}
+
+func TestLoaderRejectsUnsupportedRuntimeHookHandler(t *testing.T) {
+	t.Parallel()
+
+	loader := NewLoader(t.TempDir(), testDefaultConfig())
+	raw := `
+selected_provider: openai
+current_model: gpt-4.1
+shell: powershell
+runtime:
+  hooks:
+    items:
+      - id: invalid-handler
+        point: before_tool_call
+        scope: user
+        kind: builtin
+        mode: sync
+        handler: shell_exec
+`
+	writeLoaderConfig(t, loader, raw)
+	_, err := loader.Load(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "runtime.hooks.items[0]") {
+		t.Fatalf("expected runtime hooks validation error, got %v", err)
+	}
+}
+
 func TestLoaderRejectsLegacyWorkdirKey(t *testing.T) {
 	t.Parallel()
 
@@ -1393,6 +1467,55 @@ func TestSaveAndLoadCustomProviderPersistsGenerateControls(t *testing.T) {
 	}
 }
 
+func TestSaveAndLoadCustomProviderPreservesExplicitZeroGenerateRetries(t *testing.T) {
+	t.Parallel()
+
+	baseDir := t.TempDir()
+	const providerName = "zero-retry-provider"
+	err := SaveCustomProviderWithModels(baseDir, SaveCustomProviderInput{
+		Name:                   providerName,
+		Driver:                 provider.DriverOpenAICompat,
+		BaseURL:                "https://llm.example.com/v1",
+		APIKeyEnv:              "ZERO_RETRY_PROVIDER_API_KEY",
+		ModelSource:            ModelSourceDiscover,
+		DiscoveryEndpointPath:  provider.DiscoveryEndpointPathModels,
+		GenerateMaxRetries:     0,
+		GenerateMaxRetriesSet:  true,
+		GenerateIdleTimeoutSec: 420,
+	})
+	if err != nil {
+		t.Fatalf("SaveCustomProviderWithModels() error = %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(baseDir, providersDirName, providerName, customProviderConfigName))
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	content := string(data)
+	if !strings.Contains(content, "generate_max_retries: 0") {
+		t.Fatalf("expected generate_max_retries: 0 to be persisted, got %q", content)
+	}
+
+	cfg, err := loadCustomProvider(filepath.Join(baseDir, providersDirName, providerName))
+	if err != nil {
+		t.Fatalf("loadCustomProvider() error = %v", err)
+	}
+	if !cfg.GenerateMaxRetriesSet {
+		t.Fatal("expected explicit zero retry setting to remain marked as configured")
+	}
+	runtimeCfg, err := cfg.Resolve()
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	providerRuntimeCfg, err := runtimeCfg.ToRuntimeConfig()
+	if err != nil {
+		t.Fatalf("ToRuntimeConfig() error = %v", err)
+	}
+	if providerRuntimeCfg.GenerateMaxRetries != 0 {
+		t.Fatalf("expected explicit zero retry setting to disable retries, got %d", providerRuntimeCfg.GenerateMaxRetries)
+	}
+}
+
 func TestSaveCustomProviderOmitsDefaultGenerateControlsWhenUnset(t *testing.T) {
 	t.Parallel()
 
@@ -1420,6 +1543,43 @@ func TestSaveCustomProviderOmitsDefaultGenerateControlsWhenUnset(t *testing.T) {
 	}
 	if strings.Contains(content, "generate_idle_timeout_sec") {
 		t.Fatalf("expected generate_idle_timeout_sec to be omitted, got %q", content)
+	}
+}
+
+func TestLoadCustomProviderUsesDefaultGenerateRetriesWhenUnset(t *testing.T) {
+	t.Parallel()
+
+	baseDir := t.TempDir()
+	const providerName = "default-retry-provider"
+	err := SaveCustomProviderWithModels(baseDir, SaveCustomProviderInput{
+		Name:                  providerName,
+		Driver:                provider.DriverOpenAICompat,
+		BaseURL:               "https://llm.example.com/v1",
+		APIKeyEnv:             "DEFAULT_RETRY_PROVIDER_API_KEY",
+		ModelSource:           ModelSourceDiscover,
+		DiscoveryEndpointPath: provider.DiscoveryEndpointPathModels,
+	})
+	if err != nil {
+		t.Fatalf("SaveCustomProviderWithModels() error = %v", err)
+	}
+
+	cfg, err := loadCustomProvider(filepath.Join(baseDir, providersDirName, providerName))
+	if err != nil {
+		t.Fatalf("loadCustomProvider() error = %v", err)
+	}
+	if cfg.GenerateMaxRetriesSet {
+		t.Fatal("expected omitted generate_max_retries to remain unset")
+	}
+	resolved, err := cfg.Resolve()
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	runtimeCfg, err := resolved.ToRuntimeConfig()
+	if err != nil {
+		t.Fatalf("ToRuntimeConfig() error = %v", err)
+	}
+	if runtimeCfg.GenerateMaxRetries != provider.DefaultGenerateMaxRetries {
+		t.Fatalf("expected omitted generate_max_retries to use default %d, got %d", provider.DefaultGenerateMaxRetries, runtimeCfg.GenerateMaxRetries)
 	}
 }
 

@@ -480,7 +480,7 @@ func buildMethodExamples() ([]methodExample, error) {
 		Params: map[string]string{
 			"path": "README.md",
 		},
-		RawURL: "neocode://review?path=README.md",
+		RawURL: "http://neocode:18921/review?path=README.md",
 	})
 	wakeSuccess := buildSuccessResponse("req-wake-1", gateway.MessageFrame{
 		Type:      gateway.FrameTypeAck,

@@ -18,6 +18,7 @@ const (
 	// defaultRuntimeOperationTimeout 定义网关调用 runtime 的硬超时，避免资源长期占用。
 	defaultRuntimeOperationTimeout = 30 * time.Minute
 	defaultLocalSubjectID          = "local_admin"
+	wakeReviewPromptTemplate       = "请审查文件 %s"
 )
 
 type requestFrameHandler func(ctx context.Context, frame MessageFrame, runtimePort RuntimePort) MessageFrame
@@ -119,8 +120,8 @@ func handleBindStreamFrame(ctx context.Context, frame MessageFrame) MessageFrame
 	}
 }
 
-// handleWakeOpenURLFrame 处理 wake.openUrl 请求。
-func handleWakeOpenURLFrame(_ context.Context, frame MessageFrame) MessageFrame {
+// handleWakeOpenURLFrame 处理 wake.openUrl 请求，并在 run/review 场景下串联 runtime.run。
+func handleWakeOpenURLFrame(ctx context.Context, frame MessageFrame, runtimePort RuntimePort) MessageFrame {
 	intent, err := decodeWakeIntent(frame.Payload)
 	if err != nil {
 		return errorFrame(frame, NewFrameError(ErrorCodeInvalidFrame, "invalid wake payload"))
@@ -130,9 +131,34 @@ func handleWakeOpenURLFrame(_ context.Context, frame MessageFrame) MessageFrame 
 	if wakeErr != nil {
 		return errorFrame(frame, toFrameError(wakeErr))
 	}
-	sessionID := intent.SessionID
-	if strings.TrimSpace(sessionID) == "" {
-		sessionID = strings.TrimSpace(frame.SessionID)
+	normalizedAction := strings.ToLower(strings.TrimSpace(intent.Action))
+	sessionID := strings.TrimSpace(intent.SessionID)
+	if normalizedAction == protocol.WakeActionRun || normalizedAction == protocol.WakeActionReview {
+		if runtimePort == nil {
+			return runtimePortUnavailableFrame(frame)
+		}
+		subjectID, subjectErr := resolveWakeRunSubjectID(ctx)
+		if subjectErr != nil {
+			return errorFrame(frame, subjectErr)
+		}
+		if sessionID != "" {
+			exists, existsErr := wakeSessionExists(ctx, runtimePort, sessionID)
+			if existsErr != nil {
+				return errorFrame(frame, NewFrameError(ErrorCodeInternalError, "failed to validate wake session"))
+			}
+			if !exists {
+				return errorFrame(frame, NewFrameError(ErrorCodeResourceNotFound, "wake session not found"))
+			}
+		} else {
+			createdSessionID, createErr := runtimePort.CreateSession(ctx, CreateSessionInput{
+				SubjectID: subjectID,
+				SessionID: sessionID,
+			})
+			if createErr != nil {
+				return errorFrame(frame, NewFrameError(ErrorCodeInternalError, "failed to create wake session"))
+			}
+			sessionID = strings.TrimSpace(createdSessionID)
+		}
 	}
 
 	return MessageFrame{
@@ -144,6 +170,37 @@ func handleWakeOpenURLFrame(_ context.Context, frame MessageFrame) MessageFrame 
 	}
 }
 
+// wakeSessionExists 通过只读会话摘要查询判断目标会话是否存在，避免触发加载路径中的隐式创建逻辑。
+func wakeSessionExists(ctx context.Context, runtimePort RuntimePort, sessionID string) (bool, error) {
+	targetID := strings.TrimSpace(sessionID)
+	if targetID == "" {
+		return false, nil
+	}
+	summaries, err := runtimePort.ListSessions(ctx)
+	if err != nil {
+		return false, err
+	}
+	for _, summary := range summaries {
+		if strings.EqualFold(strings.TrimSpace(summary.ID), targetID) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// detachWakeRunContext 为 wake.run 创建脱离连接取消信号的上下文，避免短连接提前中断后台 run。
+func detachWakeRunContext(ctx context.Context) context.Context {
+	if ctx == nil {
+		return context.Background()
+	}
+	return context.WithoutCancel(ctx)
+}
+
+// buildWakeReviewPrompt 构造 review 唤醒转换为 runtime.run 时的统一输入文案。
+func buildWakeReviewPrompt(path string) string {
+	return fmt.Sprintf(wakeReviewPromptTemplate, strings.TrimSpace(path))
+}
+
 // handleRunFrame 处理 gateway.run，采用“受理即返回”的异步执行模型。
 func handleRunFrame(ctx context.Context, frame MessageFrame, runtimePort RuntimePort) MessageFrame {
 	if runtimePort == nil {
@@ -153,10 +210,19 @@ func handleRunFrame(ctx context.Context, frame MessageFrame, runtimePort Runtime
 	if subjectErr != nil {
 		return errorFrame(frame, subjectErr)
 	}
+	return dispatchRunFrameWithSubjectID(ctx, frame, runtimePort, subjectID)
+}
 
+// dispatchRunFrameWithSubjectID 使用已解析主体执行 run 受理逻辑，避免同一请求链路重复鉴权。
+func dispatchRunFrameWithSubjectID(
+	ctx context.Context,
+	frame MessageFrame,
+	runtimePort RuntimePort,
+	subjectID string,
+) MessageFrame {
 	effectiveRunID := normalizeRunID(strings.TrimSpace(frame.RunID), strings.TrimSpace(frame.RequestID))
 	input := RunInput{
-		SubjectID:  subjectID,
+		SubjectID:  strings.TrimSpace(subjectID),
 		RequestID:  strings.TrimSpace(frame.RequestID),
 		SessionID:  strings.TrimSpace(frame.SessionID),
 		RunID:      effectiveRunID,
@@ -607,6 +673,18 @@ func deriveRuntimeExecutionContext(ctx context.Context) context.Context {
 		return context.WithoutCancel(ctx)
 	}
 	return ctx
+}
+
+// resolveWakeRunSubjectID 为 wake.run 提供主体解析，并在 IPC 免鉴权路径回退到 local_admin。
+func resolveWakeRunSubjectID(ctx context.Context) (string, *FrameError) {
+	subjectID, subjectErr := requireAuthenticatedSubjectID(ctx)
+	if subjectErr == nil {
+		return subjectID, nil
+	}
+	if RequestSourceFromContext(ctx) == RequestSourceIPC && subjectErr.Code == ErrorCodeUnauthorized.String() {
+		return defaultLocalSubjectID, nil
+	}
+	return "", subjectErr
 }
 
 // requireAuthenticatedSubjectID 从上下文中提取已认证主体。

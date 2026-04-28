@@ -63,6 +63,7 @@ func TestDecodeRuntimeEventFromGatewayNotificationRestoresToolResultPayload(t *t
 				"Name":       "bash",
 				"Content":    "ok",
 				"IsError":    false,
+				"ErrorClass": "hook_blocked",
 			},
 		},
 	})
@@ -77,6 +78,114 @@ func TestDecodeRuntimeEventFromGatewayNotificationRestoresToolResultPayload(t *t
 	}
 	if toolResult.ToolCallID != "call-1" || toolResult.Name != "bash" || toolResult.Content != "ok" || toolResult.IsError {
 		t.Fatalf("unexpected tool result payload: %#v", toolResult)
+	}
+	if toolResult.ErrorClass != "hook_blocked" {
+		t.Fatalf("toolResult.ErrorClass = %q, want %q", toolResult.ErrorClass, "hook_blocked")
+	}
+}
+
+func TestDecodeRuntimeEventFromGatewayNotificationRestoresHookBlockedPayload(t *testing.T) {
+	notification := buildGatewayEventNotification(t, gateway.MessageFrame{
+		Type:      gateway.FrameTypeEvent,
+		Action:    gateway.FrameActionRun,
+		SessionID: "session-hook",
+		RunID:     "run-hook",
+		Payload: map[string]any{
+			"runtime_event_type": string(EventHookBlocked),
+			"payload_version":    runtimeEventPayloadVersion,
+			"payload": map[string]any{
+				"hook_id":      "block-before-tool",
+				"point":        "before_tool_call",
+				"tool_call_id": "call-2",
+				"tool_name":    "bash",
+				"reason":       "blocked by policy",
+				"enforced":     true,
+			},
+		},
+	})
+
+	event, err := decodeRuntimeEventFromGatewayNotification(notification)
+	if err != nil {
+		t.Fatalf("decodeRuntimeEventFromGatewayNotification() error = %v", err)
+	}
+	payload, ok := event.Payload.(HookBlockedPayload)
+	if !ok {
+		t.Fatalf("event.Payload type = %T, want HookBlockedPayload", event.Payload)
+	}
+	if payload.HookID != "block-before-tool" || payload.Point != "before_tool_call" || payload.ToolName != "bash" || !payload.Enforced {
+		t.Fatalf("unexpected hook blocked payload: %#v", payload)
+	}
+}
+
+func TestDecodeRuntimeEventFromGatewayNotificationRestoresHookLifecyclePayload(t *testing.T) {
+	notification := buildGatewayEventNotification(t, gateway.MessageFrame{
+		Type:      gateway.FrameTypeEvent,
+		Action:    gateway.FrameActionRun,
+		SessionID: "session-hook",
+		RunID:     "run-hook",
+		Payload: map[string]any{
+			"runtime_event_type": string(EventHookStarted),
+			"payload_version":    runtimeEventPayloadVersion,
+			"payload": map[string]any{
+				"hook_id":     "observe-after-tool",
+				"point":       "after_tool_result",
+				"status":      "pass",
+				"duration_ms": 9,
+				"scope":       "internal",
+				"kind":        "function",
+				"mode":        "sync",
+				"started_at":  "2026-04-20T10:30:00Z",
+				"error":       "",
+			},
+		},
+	})
+
+	event, err := decodeRuntimeEventFromGatewayNotification(notification)
+	if err != nil {
+		t.Fatalf("decodeRuntimeEventFromGatewayNotification() error = %v", err)
+	}
+	payload, ok := event.Payload.(HookEventPayload)
+	if !ok {
+		t.Fatalf("event.Payload type = %T, want HookEventPayload", event.Payload)
+	}
+	if payload.HookID != "observe-after-tool" || payload.Point != "after_tool_result" || payload.Status != "pass" || payload.DurationMS != 9 {
+		t.Fatalf("unexpected hook lifecycle payload: %#v", payload)
+	}
+}
+
+func TestDecodeRuntimeEventFromGatewayNotificationRestoresHookEventPayloadMessage(t *testing.T) {
+	notification := buildGatewayEventNotification(t, gateway.MessageFrame{
+		Type:      gateway.FrameTypeEvent,
+		Action:    gateway.FrameActionRun,
+		SessionID: "session-hook-msg",
+		RunID:     "run-hook-msg",
+		Payload: map[string]any{
+			"runtime_event_type": string(EventHookFinished),
+			"payload_version":    runtimeEventPayloadVersion,
+			"payload": map[string]any{
+				"hook_id":     "warn-before-tool",
+				"point":       "before_tool_call",
+				"scope":       "user",
+				"kind":        "function",
+				"mode":        "sync",
+				"status":      "pass",
+				"message":     "tool call warning",
+				"duration_ms": 1,
+				"started_at":  time.Now().UTC().Format(time.RFC3339Nano),
+			},
+		},
+	})
+
+	event, err := decodeRuntimeEventFromGatewayNotification(notification)
+	if err != nil {
+		t.Fatalf("decodeRuntimeEventFromGatewayNotification() error = %v", err)
+	}
+	payload, ok := event.Payload.(HookEventPayload)
+	if !ok {
+		t.Fatalf("event.Payload type = %T, want HookEventPayload", event.Payload)
+	}
+	if payload.Scope != "user" || payload.Message != "tool call warning" {
+		t.Fatalf("unexpected hook event payload: %#v", payload)
 	}
 }
 

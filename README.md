@@ -124,6 +124,50 @@ neocode --workdir /path/to/your/project
 /skill off <id>       停用 skill
 ```
 
+### 5. url scheme使用
+详细指南链接： [HTTP URL 唤醒使用指南（用户故事版）](https://neocode-docs.pages.dev/guide/http-daemon-wake-user-guide)
+
+```bash
+# 启动本地 HTTP daemon（默认 127.0.0.1:18921）
+go run ./cmd/neocode daemon serve
+
+# 安装用户态自启动 + best-effort hosts 别名写入（127.0.0.1 neocode）
+go run ./cmd/neocode daemon install
+
+# 查看运行与安装状态
+go run ./cmd/neocode daemon status
+
+# 卸载自启动配置
+go run ./cmd/neocode daemon uninstall
+```
+
+可点击链接示例：
+
+```text
+http://neocode:18921/review?path=README.md
+http://neocode:18921/run?prompt=写一个简单的HTTP服务器
+```
+
+> 当前支持动作：
+> - `review`：必须携带 `path` 参数。
+> - `run`：必须携带 `prompt` 参数，网关会返回 `session_id` 并触发终端接管链路。
+
+会话接管启动方式：
+
+```bash
+go run ./cmd/neocode --session <session_id>
+```
+
+> 当传入 `--session` 时，TUI 会优先按会话历史中的 `workdir` 进行上下文接管；若该路径在本地失效，会保留当前工作区并显示告警。
+>
+> Linux（及其他非 Windows/macOS）当前尚未接入自动弹窗终端；`wake.run` 会返回 `not_supported`，可手动执行 `neocode --session <session_id>` 接管。
+>
+> `daemon serve` 不提供 `--token-file`，默认仅监听 `127.0.0.1`，并限制 Host 白名单为 `neocode` / `localhost` / `127.0.0.1`。
+>
+> Linux 自启动策略：优先 `systemd --user`，若不可用则回落到 `~/.config/autostart/neocode-daemon.desktop`。
+>
+> 若未通过安装脚本安装（例如 `go build` / 裸二进制），请手动执行一次 `neocode daemon install`。
+
 ---
 
 ## Gateway / MCP / Skills

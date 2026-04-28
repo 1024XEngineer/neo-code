@@ -18,6 +18,7 @@ import (
 	providertypes "neo-code/internal/provider/types"
 	"neo-code/internal/runtime/acceptance"
 	"neo-code/internal/runtime/controlplane"
+	runtimehooks "neo-code/internal/runtime/hooks"
 	"neo-code/internal/runtime/streaming"
 	agentsession "neo-code/internal/session"
 	"neo-code/internal/tools"
@@ -252,6 +253,27 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 			if !hasToolCalls {
 				if err := s.setBaseRunState(ctx, &state, controlplane.RunStateVerify); err != nil {
 					return s.handleRunError(err)
+				}
+				completionHookOutput := s.runHookPoint(
+					ctx,
+					&state,
+					runtimehooks.HookPointBeforeCompletionDecision,
+					runtimehooks.HookContext{
+						Metadata: map[string]any{
+							"completion_passed": completed,
+							"has_tool_calls":    hasToolCalls,
+							"assistant_role":    strings.TrimSpace(turnOutput.assistant.Role),
+							"workdir":           strings.TrimSpace(snapshot.Workdir),
+						},
+					},
+				)
+				if completionHookOutput.Blocked {
+					s.emitRunScoped(ctx, EventHookBlocked, &state, HookBlockedPayload{
+						HookID:   strings.TrimSpace(completionHookOutput.BlockedBy),
+						Point:    string(runtimehooks.HookPointBeforeCompletionDecision),
+						Reason:   findHookBlockMessage(completionHookOutput),
+						Enforced: false,
+					})
 				}
 
 				s.emitRunScoped(ctx, EventVerificationStarted, &state, VerificationStartedPayload{

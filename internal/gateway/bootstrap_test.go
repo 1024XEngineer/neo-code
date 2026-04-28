@@ -16,6 +16,7 @@ import (
 
 type bootstrapRuntimeStub struct {
 	runFn               func(ctx context.Context, input RunInput) error
+	createSessionFn     func(ctx context.Context, input CreateSessionInput) (string, error)
 	compactFn           func(ctx context.Context, input CompactInput) (CompactResult, error)
 	executeSystemToolFn func(ctx context.Context, input ExecuteSystemToolInput) (tools.ToolResult, error)
 	activateSkillFn     func(ctx context.Context, input SessionSkillMutationInput) error
@@ -122,6 +123,13 @@ func (s *bootstrapRuntimeStub) LoadSession(ctx context.Context, input LoadSessio
 	return Session{}, nil
 }
 
+func (s *bootstrapRuntimeStub) CreateSession(ctx context.Context, input CreateSessionInput) (string, error) {
+	if s != nil && s.createSessionFn != nil {
+		return s.createSessionFn(ctx, input)
+	}
+	return strings.TrimSpace(input.SessionID), nil
+}
+
 func TestDispatchRequestFramePing(t *testing.T) {
 	response := dispatchRequestFrame(context.Background(), MessageFrame{
 		Type:      FrameTypeRequest,
@@ -137,24 +145,142 @@ func TestDispatchRequestFramePing(t *testing.T) {
 	}
 }
 
-func TestDispatchRequestFrameWakeOpenURLSuccess(t *testing.T) {
+func TestDispatchRequestFrameWakeOpenURLReviewSuccess(t *testing.T) {
+	createInputs := make(chan CreateSessionInput, 1)
+	stub := &bootstrapRuntimeStub{
+		createSessionFn: func(_ context.Context, input CreateSessionInput) (string, error) {
+			createInputs <- input
+			return "session-review-created", nil
+		},
+	}
+
 	response := dispatchRequestFrame(context.Background(), MessageFrame{
-		Type:   FrameTypeRequest,
-		Action: FrameActionWakeOpenURL,
+		Type:      FrameTypeRequest,
+		Action:    FrameActionWakeOpenURL,
+		RequestID: "req-wake-review",
 		Payload: map[string]any{
-			"action": "review",
+			"action":  "review",
+			"workdir": "/workspace/repo",
 			"params": map[string]string{
 				"path": "README.md",
 			},
 		},
-		RequestID: "req-wake",
-	}, nil)
+	}, stub)
 
 	if response.Type != FrameTypeAck {
 		t.Fatalf("response type = %q, want %q", response.Type, FrameTypeAck)
 	}
 	if response.Action != FrameActionWakeOpenURL {
 		t.Fatalf("response action = %q, want %q", response.Action, FrameActionWakeOpenURL)
+	}
+	if response.SessionID != "session-review-created" {
+		t.Fatalf("response session_id = %q, want %q", response.SessionID, "session-review-created")
+	}
+
+	select {
+	case createInput := <-createInputs:
+		if createInput.SubjectID != defaultLocalSubjectID {
+			t.Fatalf("create session subject_id = %q, want %q", createInput.SubjectID, defaultLocalSubjectID)
+		}
+		if createInput.SessionID != "" {
+			t.Fatalf("create session input session_id = %q, want empty", createInput.SessionID)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected wake.review to create session")
+	}
+}
+
+func TestDispatchRequestFrameWakeOpenURLReviewAllowsSessionIDWithoutWorkdir(t *testing.T) {
+	var createCalled bool
+	stub := &bootstrapRuntimeStub{
+		createSessionFn: func(_ context.Context, _ CreateSessionInput) (string, error) {
+			createCalled = true
+			return "", nil
+		},
+		listSessionsFn: func(_ context.Context) ([]SessionSummary, error) {
+			return []SessionSummary{{ID: "session-review-keep"}}, nil
+		},
+	}
+
+	response := dispatchRequestFrame(context.Background(), MessageFrame{
+		Type:      FrameTypeRequest,
+		Action:    FrameActionWakeOpenURL,
+		RequestID: "req-wake-review-session",
+		Payload: map[string]any{
+			"action":     "review",
+			"session_id": "session-review-keep",
+			"params": map[string]string{
+				"path": "README.md",
+			},
+		},
+	}, stub)
+
+	if response.Type != FrameTypeAck {
+		t.Fatalf("response type = %q, want %q", response.Type, FrameTypeAck)
+	}
+	if response.SessionID != "session-review-keep" {
+		t.Fatalf("response session_id = %q, want %q", response.SessionID, "session-review-keep")
+	}
+	if createCalled {
+		t.Fatal("expected wake.review with session_id not to create session")
+	}
+}
+
+func TestDispatchRequestFrameWakeOpenURLRunWithSessionIDResumesWithoutCreate(t *testing.T) {
+	var createCalled bool
+	stub := &bootstrapRuntimeStub{
+		createSessionFn: func(_ context.Context, _ CreateSessionInput) (string, error) {
+			createCalled = true
+			return "", nil
+		},
+		listSessionsFn: func(_ context.Context) ([]SessionSummary, error) {
+			return []SessionSummary{{ID: "session-run-resume"}}, nil
+		},
+	}
+
+	response := dispatchRequestFrame(context.Background(), MessageFrame{
+		Type:      FrameTypeRequest,
+		Action:    FrameActionWakeOpenURL,
+		RequestID: "req-wake-run-session",
+		Payload: map[string]any{
+			"action":     "run",
+			"session_id": "session-run-resume",
+		},
+	}, stub)
+
+	if response.Type != FrameTypeAck {
+		t.Fatalf("response type = %q, want %q", response.Type, FrameTypeAck)
+	}
+	if response.SessionID != "session-run-resume" {
+		t.Fatalf("response session_id = %q, want %q", response.SessionID, "session-run-resume")
+	}
+	if createCalled {
+		t.Fatal("expected wake.run with session_id not to create session")
+	}
+}
+
+func TestDispatchRequestFrameWakeOpenURLRunSessionNotFound(t *testing.T) {
+	stub := &bootstrapRuntimeStub{
+		listSessionsFn: func(_ context.Context) ([]SessionSummary, error) {
+			return []SessionSummary{{ID: "session-other"}}, nil
+		},
+	}
+
+	response := dispatchRequestFrame(context.Background(), MessageFrame{
+		Type:      FrameTypeRequest,
+		Action:    FrameActionWakeOpenURL,
+		RequestID: "req-wake-run-session-missing",
+		Payload: map[string]any{
+			"action":     "run",
+			"session_id": "session-missing",
+		},
+	}, stub)
+
+	if response.Type != FrameTypeError {
+		t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+	}
+	if response.Error == nil || response.Error.Code != ErrorCodeResourceNotFound.String() {
+		t.Fatalf("error = %#v, want code %q", response.Error, ErrorCodeResourceNotFound.String())
 	}
 }
 
@@ -192,6 +318,203 @@ func TestDispatchRequestFrameWakeOpenURLMissingPath(t *testing.T) {
 	}
 	if response.Error == nil || response.Error.Code != ErrorCodeMissingRequiredField.String() {
 		t.Fatalf("error = %#v, want code %q", response.Error, ErrorCodeMissingRequiredField.String())
+	}
+}
+
+func TestDispatchRequestFrameWakeOpenURLReviewMissingWorkdirAndSessionID(t *testing.T) {
+	response := dispatchRequestFrame(context.Background(), MessageFrame{
+		Type:   FrameTypeRequest,
+		Action: FrameActionWakeOpenURL,
+		Payload: map[string]any{
+			"action": "review",
+			"params": map[string]string{
+				"path": "README.md",
+			},
+		},
+	}, nil)
+
+	if response.Type != FrameTypeError {
+		t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+	}
+	if response.Error == nil || response.Error.Code != ErrorCodeMissingRequiredField.String() {
+		t.Fatalf("error = %#v, want code %q", response.Error, ErrorCodeMissingRequiredField.String())
+	}
+	if response.Error.Message != "missing required field: workdir or session_id for review" {
+		t.Fatalf("error message = %q, want %q", response.Error.Message, "missing required field: workdir or session_id for review")
+	}
+}
+
+func TestDispatchRequestFrameWakeOpenURLRunSuccess(t *testing.T) {
+	createInputs := make(chan CreateSessionInput, 1)
+	stub := &bootstrapRuntimeStub{
+		createSessionFn: func(_ context.Context, input CreateSessionInput) (string, error) {
+			createInputs <- input
+			return "session-created-by-runtime", nil
+		},
+	}
+
+	response := dispatchRequestFrame(context.Background(), MessageFrame{
+		Type:      FrameTypeRequest,
+		Action:    FrameActionWakeOpenURL,
+		RequestID: "req-wake-run",
+		Payload: map[string]any{
+			"action": "run",
+			"params": map[string]string{
+				"prompt": "写一个简单的HTTP服务器",
+			},
+		},
+	}, stub)
+
+	if response.Type != FrameTypeAck {
+		t.Fatalf("response type = %q, want %q", response.Type, FrameTypeAck)
+	}
+	if response.Action != FrameActionWakeOpenURL {
+		t.Fatalf("response action = %q, want %q", response.Action, FrameActionWakeOpenURL)
+	}
+	if response.SessionID != "session-created-by-runtime" {
+		t.Fatalf("response session_id = %q, want %q", response.SessionID, "session-created-by-runtime")
+	}
+
+	select {
+	case createInput := <-createInputs:
+		if createInput.SubjectID != defaultLocalSubjectID {
+			t.Fatalf("create session subject_id = %q, want %q", createInput.SubjectID, defaultLocalSubjectID)
+		}
+		if createInput.SessionID != "" {
+			t.Fatalf("create session input session_id = %q, want empty", createInput.SessionID)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected wake.run to create session")
+	}
+}
+
+func TestDispatchRequestFrameWakeOpenURLRunCanceledParentStillCreatesSession(t *testing.T) {
+	createInputs := make(chan CreateSessionInput, 1)
+	stub := &bootstrapRuntimeStub{
+		createSessionFn: func(_ context.Context, input CreateSessionInput) (string, error) {
+			createInputs <- input
+			return "session-detached-run", nil
+		},
+	}
+
+	parentCtx, cancelParent := context.WithCancel(context.Background())
+	cancelParent()
+
+	response := dispatchRequestFrame(parentCtx, MessageFrame{
+		Type:      FrameTypeRequest,
+		Action:    FrameActionWakeOpenURL,
+		RequestID: "req-wake-run-canceled-parent",
+		Payload: map[string]any{
+			"action": "run",
+			"params": map[string]string{
+				"prompt": "echo hello",
+			},
+		},
+	}, stub)
+
+	if response.Type != FrameTypeAck {
+		t.Fatalf("response type = %q, want %q", response.Type, FrameTypeAck)
+	}
+
+	select {
+	case createInput := <-createInputs:
+		if createInput.SubjectID != defaultLocalSubjectID {
+			t.Fatalf("create session subject_id = %q, want %q", createInput.SubjectID, defaultLocalSubjectID)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected wake.run to create session")
+	}
+}
+
+func TestDispatchRequestFrameWakeOpenURLRunAllowsIPCUnauthenticatedFallback(t *testing.T) {
+	createInputs := make(chan CreateSessionInput, 1)
+	stub := &bootstrapRuntimeStub{
+		createSessionFn: func(_ context.Context, input CreateSessionInput) (string, error) {
+			createInputs <- input
+			return "session-ipc-fallback", nil
+		},
+	}
+
+	ctx := WithRequestSource(context.Background(), RequestSourceIPC)
+	ctx = WithTokenAuthenticator(ctx, stubTokenAuthenticator{token: "token-1"})
+
+	response := dispatchRequestFrame(ctx, MessageFrame{
+		Type:      FrameTypeRequest,
+		Action:    FrameActionWakeOpenURL,
+		RequestID: "req-wake-run-ipc-fallback",
+		Payload: map[string]any{
+			"action": "run",
+			"params": map[string]string{
+				"prompt": "hello",
+			},
+		},
+	}, stub)
+
+	if response.Type != FrameTypeAck {
+		t.Fatalf("response type = %q, want %q", response.Type, FrameTypeAck)
+	}
+	if response.SessionID != "session-ipc-fallback" {
+		t.Fatalf("response session_id = %q, want %q", response.SessionID, "session-ipc-fallback")
+	}
+
+	select {
+	case createInput := <-createInputs:
+		if createInput.SubjectID != defaultLocalSubjectID {
+			t.Fatalf("create session subject_id = %q, want %q", createInput.SubjectID, defaultLocalSubjectID)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected wake.run to create session in ipc fallback path")
+	}
+}
+
+func TestDispatchRequestFrameWakeOpenURLRunCreateSessionFailed(t *testing.T) {
+	stub := &bootstrapRuntimeStub{
+		createSessionFn: func(_ context.Context, _ CreateSessionInput) (string, error) {
+			return "", errors.New("create failed")
+		},
+	}
+
+	response := dispatchRequestFrame(context.Background(), MessageFrame{
+		Type:      FrameTypeRequest,
+		Action:    FrameActionWakeOpenURL,
+		RequestID: "req-wake-run-create-failed",
+		Payload: map[string]any{
+			"action": "run",
+			"params": map[string]string{
+				"prompt": "hello",
+			},
+		},
+	}, stub)
+
+	if response.Type != FrameTypeError {
+		t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+	}
+	if response.Error == nil || response.Error.Code != ErrorCodeInternalError.String() {
+		t.Fatalf("error = %#v, want code %q", response.Error, ErrorCodeInternalError.String())
+	}
+	if response.Error.Message != "failed to create wake session" {
+		t.Fatalf("error message = %q, want %q", response.Error.Message, "failed to create wake session")
+	}
+}
+
+func TestDispatchRequestFrameWakeOpenURLRunRequiresRuntimePort(t *testing.T) {
+	response := dispatchRequestFrame(context.Background(), MessageFrame{
+		Type:      FrameTypeRequest,
+		Action:    FrameActionWakeOpenURL,
+		RequestID: "req-wake-run-no-runtime",
+		Payload: map[string]any{
+			"action": "run",
+			"params": map[string]string{
+				"prompt": "hello",
+			},
+		},
+	}, nil)
+
+	if response.Type != FrameTypeError {
+		t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+	}
+	if response.Error == nil || response.Error.Code != ErrorCodeInternalError.String() {
+		t.Fatalf("error = %#v, want code %q", response.Error, ErrorCodeInternalError.String())
 	}
 }
 
@@ -491,6 +814,22 @@ func TestHandleRunFrameBranches(t *testing.T) {
 		}
 		if response.Error == nil || response.Error.Code != ErrorCodeInternalError.String() {
 			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeInternalError.String())
+		}
+	})
+
+	t.Run("requires authenticated subject when authenticator exists", func(t *testing.T) {
+		ctx := WithTokenAuthenticator(context.Background(), stubTokenAuthenticator{token: "token-1"})
+		response := handleRunFrame(ctx, MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionRun,
+			RequestID: "req-run-unauthorized",
+			InputText: "hello",
+		}, &bootstrapRuntimeStub{})
+		if response.Type != FrameTypeError {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+		}
+		if response.Error == nil || response.Error.Code != ErrorCodeUnauthorized.String() {
+			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeUnauthorized.String())
 		}
 	})
 
@@ -1429,6 +1768,31 @@ func TestRequireAuthenticatedSubjectIDBranches(t *testing.T) {
 	})
 }
 
+func TestResolveWakeRunSubjectIDBranches(t *testing.T) {
+	t.Run("ipc unauthorized fallback to local admin", func(t *testing.T) {
+		ctx := WithRequestSource(context.Background(), RequestSourceIPC)
+		ctx = WithTokenAuthenticator(ctx, stubTokenAuthenticator{token: "token-1"})
+
+		subjectID, frameErr := resolveWakeRunSubjectID(ctx)
+		if frameErr != nil {
+			t.Fatalf("unexpected frame error: %#v", frameErr)
+		}
+		if subjectID != defaultLocalSubjectID {
+			t.Fatalf("subject_id = %q, want %q", subjectID, defaultLocalSubjectID)
+		}
+	})
+
+	t.Run("http unauthorized keeps error", func(t *testing.T) {
+		ctx := WithRequestSource(context.Background(), RequestSourceHTTP)
+		ctx = WithTokenAuthenticator(ctx, stubTokenAuthenticator{token: "token-1"})
+
+		_, frameErr := resolveWakeRunSubjectID(ctx)
+		if frameErr == nil || frameErr.Code != ErrorCodeUnauthorized.String() {
+			t.Fatalf("frame error = %#v, want %q", frameErr, ErrorCodeUnauthorized.String())
+		}
+	})
+}
+
 func TestDeriveRuntimeExecutionContextBranches(t *testing.T) {
 	if got := deriveRuntimeExecutionContext(nil); got == nil {
 		t.Fatal("nil input should return non-nil context")
@@ -1444,6 +1808,19 @@ func TestDeriveRuntimeExecutionContextBranches(t *testing.T) {
 	otherCtx := WithRequestSource(context.Background(), RequestSourceIPC)
 	if got := deriveRuntimeExecutionContext(otherCtx); got != otherCtx {
 		t.Fatal("non-http context should be returned as-is")
+	}
+}
+
+func TestDetachWakeRunContextBranches(t *testing.T) {
+	if got := detachWakeRunContext(nil); got == nil {
+		t.Fatal("nil input should return non-nil context")
+	}
+
+	parentCtx, cancelParent := context.WithCancel(context.Background())
+	detached := detachWakeRunContext(parentCtx)
+	cancelParent()
+	if detached.Err() != nil {
+		t.Fatalf("detached context should ignore parent cancel, got %v", detached.Err())
 	}
 }
 

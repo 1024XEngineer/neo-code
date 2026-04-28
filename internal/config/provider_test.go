@@ -776,7 +776,7 @@ func TestResolvedProviderConfigToRuntimeConfig(t *testing.T) {
 		ChatAPIMode:           "",
 		ChatEndpointPath:      "",
 		DiscoveryEndpointPath: providerpkg.DiscoveryEndpointPathModels,
-		GenerateMaxRetries:    0,
+		GenerateMaxRetries:    providerpkg.DefaultGenerateMaxRetries,
 		GenerateStartTimeout:  providerpkg.DefaultGenerateStartTimeout,
 		GenerateIdleTimeout:   providerpkg.DefaultGenerateIdleTimeout,
 	}
@@ -799,6 +799,30 @@ func TestResolvedProviderConfigToRuntimeConfig(t *testing.T) {
 		got.GenerateStartTimeout != want.GenerateStartTimeout ||
 		got.GenerateIdleTimeout != want.GenerateIdleTimeout {
 		t.Fatalf("ToRuntimeConfig() = %+v, want %+v", got, want)
+	}
+}
+
+func TestResolvedProviderConfigToRuntimeConfigPreservesExplicitZeroGenerateRetries(t *testing.T) {
+	t.Parallel()
+
+	resolved := ResolvedProviderConfig{
+		ProviderConfig: ProviderConfig{
+			Name:                  "company-gateway",
+			Driver:                "openaicompat",
+			BaseURL:               "https://llm.example.com/v1",
+			Model:                 "server-default",
+			APIKeyEnv:             "COMPANY_GATEWAY_KEY",
+			GenerateMaxRetries:    0,
+			GenerateMaxRetriesSet: true,
+		},
+	}
+
+	got, err := resolved.ToRuntimeConfig()
+	if err != nil {
+		t.Fatalf("ToRuntimeConfig() error = %v", err)
+	}
+	if got.GenerateMaxRetries != 0 {
+		t.Fatalf("expected explicit GenerateMaxRetries=0 to disable retries, got %d", got.GenerateMaxRetries)
 	}
 }
 

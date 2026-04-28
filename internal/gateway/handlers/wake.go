@@ -51,6 +51,8 @@ func (h *WakeOpenURLHandler) Handle(intent protocol.WakeIntent) (WakeOpenURLResu
 	_ = h
 
 	action := strings.ToLower(strings.TrimSpace(intent.Action))
+	sessionID := strings.TrimSpace(intent.SessionID)
+	isResumeOnly := sessionID != ""
 	if !protocol.IsSupportedWakeAction(action) {
 		return WakeOpenURLResult{}, newWakeError(
 			WakeErrorCodeInvalidAction,
@@ -60,18 +62,36 @@ func (h *WakeOpenURLHandler) Handle(intent protocol.WakeIntent) (WakeOpenURLResu
 
 	switch action {
 	case protocol.WakeActionReview:
-		path := strings.TrimSpace(intent.Params["path"])
-		if path == "" {
-			return WakeOpenURLResult{}, newWakeError(
-				WakeErrorCodeMissingRequiredField,
-				"missing required field: params.path",
-			)
+		if !isResumeOnly {
+			path := strings.TrimSpace(intent.Params["path"])
+			if path == "" {
+				return WakeOpenURLResult{}, newWakeError(
+					WakeErrorCodeMissingRequiredField,
+					"missing required field: params.path",
+				)
+			}
+			if !isSafeReviewPath(path) {
+				return WakeOpenURLResult{}, newWakeError(
+					WakeErrorCodeUnsafePath,
+					"unsafe review path",
+				)
+			}
+			if strings.TrimSpace(intent.Workdir) == "" {
+				return WakeOpenURLResult{}, newWakeError(
+					WakeErrorCodeMissingRequiredField,
+					"missing required field: workdir or session_id for review",
+				)
+			}
 		}
-		if !isSafeReviewPath(path) {
-			return WakeOpenURLResult{}, newWakeError(
-				WakeErrorCodeUnsafePath,
-				"unsafe review path",
-			)
+	case protocol.WakeActionRun:
+		if !isResumeOnly {
+			prompt := strings.TrimSpace(intent.Params["prompt"])
+			if prompt == "" {
+				return WakeOpenURLResult{}, newWakeError(
+					WakeErrorCodeMissingRequiredField,
+					"missing required field: params.prompt",
+				)
+			}
 		}
 	}
 

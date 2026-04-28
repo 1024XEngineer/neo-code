@@ -12,8 +12,6 @@ import (
 )
 
 func TestFormatAvailableSkills(t *testing.T) {
-	t.Parallel()
-
 	if got := formatAvailableSkills(nil, ""); !strings.Contains(got, "No skills found") {
 		t.Fatalf("expected empty message, got %q", got)
 	}
@@ -42,8 +40,6 @@ func TestFormatAvailableSkills(t *testing.T) {
 }
 
 func TestFormatSessionSkills(t *testing.T) {
-	t.Parallel()
-
 	if got := formatSessionSkills(nil); !strings.Contains(got, "No active skills") {
 		t.Fatalf("expected empty active message, got %q", got)
 	}
@@ -61,8 +57,6 @@ func TestFormatSessionSkills(t *testing.T) {
 }
 
 func TestSkillCommandErrorAndPlaceholderHelpers(t *testing.T) {
-	t.Parallel()
-
 	if !isSkillUsagePlaceholder("<id>") {
 		t.Fatalf("expected placeholder marker")
 	}
@@ -105,8 +99,6 @@ func TestSkillCommandErrorAndPlaceholderHelpers(t *testing.T) {
 }
 
 func TestHandleSkillCommandUsageBranches(t *testing.T) {
-	t.Parallel()
-
 	app, _ := newTestApp(t)
 
 	if cmd := app.handleSkillCommand("active unexpected"); cmd != nil {
@@ -125,8 +117,6 @@ func TestHandleSkillCommandUsageBranches(t *testing.T) {
 }
 
 func TestHandleSkillUseAndOffValidationBranches(t *testing.T) {
-	t.Parallel()
-
 	app, _ := newTestApp(t)
 	app.state.ActiveSessionID = "session-skills"
 
@@ -154,8 +144,6 @@ func TestHandleSkillUseAndOffValidationBranches(t *testing.T) {
 }
 
 func TestHandleSkillsAndActiveCommandErrorBranches(t *testing.T) {
-	t.Parallel()
-
 	app, runtime := newTestApp(t)
 	runtime.availableSkillsErr = &tuiservices.GatewayRPCError{
 		Method:      protocol.MethodGatewayListAvailableSkills,
@@ -207,8 +195,6 @@ func TestHandleSkillsAndActiveCommandErrorBranches(t *testing.T) {
 }
 
 func TestFormatHelpersCoverFallbackBranches(t *testing.T) {
-	t.Parallel()
-
 	text := formatAvailableSkills([]tuiservices.AvailableSkillState{
 		{
 			Descriptor: skills.Descriptor{
@@ -241,8 +227,6 @@ func TestFormatHelpersCoverFallbackBranches(t *testing.T) {
 }
 
 func TestFormatSkillHelpersSanitizeAndLimitOutput(t *testing.T) {
-	t.Parallel()
-
 	evil := "go\x1b[31m-review"
 	longDescription := strings.Repeat("x", maxSkillFieldLength+20)
 	text := formatAvailableSkills([]tuiservices.AvailableSkillState{

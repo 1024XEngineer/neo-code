@@ -39,7 +39,9 @@ var (
 
 // GlobalFlags 描述根命令共享的全局启动参数。
 type GlobalFlags struct {
-	Workdir string
+	Workdir      string
+	Session      string
+	WakeInputB64 string
 }
 
 // Execute 执行 NeoCode 根命令入口，并在退出前等待静默更新检查收尾。
@@ -77,17 +79,26 @@ func NewRootCommand() *cobra.Command {
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			flags.Workdir = strings.TrimSpace(settings.GetString("workdir"))
+			flags.Session = strings.TrimSpace(settings.GetString("session"))
+			flags.WakeInputB64 = strings.TrimSpace(settings.GetString("wake-input-b64"))
 			return launchRootProgram(cmd.Context(), app.BootstrapOptions{
-				Workdir: flags.Workdir,
+				Workdir:      flags.Workdir,
+				SessionID:    flags.Session,
+				WakeInputB64: flags.WakeInputB64,
 			})
 		},
 	}
 	cmd.PersistentFlags().String("workdir", "", "workdir override for current run")
+	cmd.PersistentFlags().String("session", "", "session id to hydrate on startup")
+	cmd.PersistentFlags().String("wake-input-b64", "", "internal wake startup payload")
+	_ = cmd.PersistentFlags().MarkHidden("wake-input-b64")
 	_ = settings.BindPFlag("workdir", cmd.PersistentFlags().Lookup("workdir"))
+	_ = settings.BindPFlag("session", cmd.PersistentFlags().Lookup("session"))
+	_ = settings.BindPFlag("wake-input-b64", cmd.PersistentFlags().Lookup("wake-input-b64"))
 	cmd.AddCommand(
 		newGatewayCommand(),
+		newDaemonCommand(),
 		newMigrateCommand(),
-		newURLDispatchCommand(),
 		newVersionCommand(),
 		newUpdateCommand(),
 	)
@@ -158,13 +169,13 @@ func defaultSilentUpdateCheck(ctx context.Context) {
 
 // shouldSkipGlobalPreload 判断当前子命令是否跳过全局预加载。
 func shouldSkipGlobalPreload(cmd *cobra.Command) bool {
-	return normalizedCommandName(cmd) == "url-dispatch" || commandAnnotationEnabled(cmd, commandAnnotationSkipGlobalPreload)
+	return commandAnnotationEnabled(cmd, commandAnnotationSkipGlobalPreload)
 }
 
 // shouldSkipSilentUpdateCheck 判断当前子命令是否跳过静默更新检查。
 func shouldSkipSilentUpdateCheck(cmd *cobra.Command) bool {
 	switch normalizedCommandName(cmd) {
-	case "url-dispatch", "update", "version":
+	case "update", "version":
 		return true
 	default:
 		return commandAnnotationEnabled(cmd, commandAnnotationSkipSilentUpdateCheck)

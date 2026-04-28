@@ -19,6 +19,7 @@ import (
 
 	"neo-code/internal/config"
 	configstate "neo-code/internal/config/state"
+	"neo-code/internal/gateway/protocol"
 	"neo-code/internal/memo"
 	"neo-code/internal/provider"
 	providertypes "neo-code/internal/provider/types"
@@ -1801,6 +1802,137 @@ func TestNewProgramUsesRemoteRuntimeAdapter(t *testing.T) {
 	}
 }
 
+func TestNewProgramHydratesSessionWhenSessionFlagProvided(t *testing.T) {
+	disableBuiltinProviderAPIKeys(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	originalFactory := newRemoteRuntimeAdapter
+	t.Cleanup(func() { newRemoteRuntimeAdapter = originalFactory })
+
+	stubRuntime := &stubRemoteRuntimeForBootstrap{
+		events: make(chan services.RuntimeEvent),
+		loadSessions: map[string]agentsession.Session{
+			"session-startup": {
+				ID:      "session-startup",
+				Title:   "Hydrated Session",
+				Workdir: home,
+			},
+		},
+	}
+	newRemoteRuntimeAdapter = func(_ services.RemoteRuntimeAdapterOptions) (runtimeWithClose, error) {
+		return stubRuntime, nil
+	}
+
+	_, cleanup, err := NewProgram(context.Background(), BootstrapOptions{SessionID: "session-startup"})
+	if err != nil {
+		t.Fatalf("NewProgram() error = %v", err)
+	}
+	if cleanup == nil {
+		t.Fatal("expected non-nil cleanup")
+	}
+	if err := cleanup(); err != nil {
+		t.Fatalf("cleanup() error = %v", err)
+	}
+	if len(stubRuntime.loadSessionCalls) != 1 || stubRuntime.loadSessionCalls[0] != "session-startup" {
+		t.Fatalf("load session calls = %#v, want [\"session-startup\"]", stubRuntime.loadSessionCalls)
+	}
+}
+
+func TestNewProgramFailsFastWhenHydrationFails(t *testing.T) {
+	disableBuiltinProviderAPIKeys(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	originalFactory := newRemoteRuntimeAdapter
+	t.Cleanup(func() { newRemoteRuntimeAdapter = originalFactory })
+
+	stubRuntime := &stubRemoteRuntimeForBootstrap{
+		events:         make(chan services.RuntimeEvent),
+		loadSessionErr: errors.New("load session failed"),
+	}
+	newRemoteRuntimeAdapter = func(_ services.RemoteRuntimeAdapterOptions) (runtimeWithClose, error) {
+		return stubRuntime, nil
+	}
+
+	_, cleanup, err := NewProgram(context.Background(), BootstrapOptions{SessionID: "session-missing"})
+	if cleanup != nil {
+		t.Fatalf("expected nil cleanup on hydration failure")
+	}
+	if err == nil || !strings.Contains(err.Error(), "load session failed") {
+		t.Fatalf("expected hydration error, got %v", err)
+	}
+	if !stubRuntime.closed {
+		t.Fatal("expected runtime cleanup on hydration failure")
+	}
+}
+
+func TestNewProgramAcceptsWakeStartupPayload(t *testing.T) {
+	disableBuiltinProviderAPIKeys(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	originalFactory := newRemoteRuntimeAdapter
+	t.Cleanup(func() { newRemoteRuntimeAdapter = originalFactory })
+
+	stubRuntime := &stubRemoteRuntimeForBootstrap{
+		events: make(chan services.RuntimeEvent),
+	}
+	newRemoteRuntimeAdapter = func(_ services.RemoteRuntimeAdapterOptions) (runtimeWithClose, error) {
+		return stubRuntime, nil
+	}
+
+	encodedWakeInput, err := protocol.EncodeWakeStartupInput(protocol.WakeStartupInput{
+		Text:    "hello from wake",
+		Workdir: home,
+	})
+	if err != nil {
+		t.Fatalf("EncodeWakeStartupInput() error = %v", err)
+	}
+
+	_, cleanup, err := NewProgram(context.Background(), BootstrapOptions{WakeInputB64: encodedWakeInput})
+	if err != nil {
+		t.Fatalf("NewProgram() error = %v", err)
+	}
+	if cleanup == nil {
+		t.Fatal("expected non-nil cleanup")
+	}
+	if err := cleanup(); err != nil {
+		t.Fatalf("cleanup() error = %v", err)
+	}
+}
+
+func TestNewProgramFailsFastWhenWakeStartupPayloadInvalid(t *testing.T) {
+	disableBuiltinProviderAPIKeys(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	originalFactory := newRemoteRuntimeAdapter
+	t.Cleanup(func() { newRemoteRuntimeAdapter = originalFactory })
+
+	stubRuntime := &stubRemoteRuntimeForBootstrap{
+		events: make(chan services.RuntimeEvent),
+	}
+	newRemoteRuntimeAdapter = func(_ services.RemoteRuntimeAdapterOptions) (runtimeWithClose, error) {
+		return stubRuntime, nil
+	}
+
+	_, cleanup, err := NewProgram(context.Background(), BootstrapOptions{WakeInputB64: "not-base64"})
+	if cleanup != nil {
+		t.Fatal("expected nil cleanup when wake payload decode failed")
+	}
+	if err == nil {
+		t.Fatal("expected wake payload decode error")
+	}
+	if !stubRuntime.closed {
+		t.Fatal("expected runtime cleanup on wake payload decode failure")
+	}
+}
+
 func TestNewProgramFailsFastWhenRemoteAdapterInitFails(t *testing.T) {
 	disableBuiltinProviderAPIKeys(t)
 	home := t.TempDir()
@@ -1891,8 +2023,11 @@ func (s *stubRuntimeForBootstrap) ListSessionSkills(context.Context, string) ([]
 }
 
 type stubRemoteRuntimeForBootstrap struct {
-	closed bool
-	events chan services.RuntimeEvent
+	closed           bool
+	events           chan services.RuntimeEvent
+	loadSessionErr   error
+	loadSessionCalls []string
+	loadSessions     map[string]agentsession.Session
 }
 
 func (s *stubRemoteRuntimeForBootstrap) Submit(context.Context, services.PrepareInput) error {
@@ -1937,8 +2072,17 @@ func (s *stubRemoteRuntimeForBootstrap) ListSessions(context.Context) ([]agentse
 	return nil, nil
 }
 
-func (s *stubRemoteRuntimeForBootstrap) LoadSession(context.Context, string) (agentsession.Session, error) {
-	return agentsession.Session{}, nil
+func (s *stubRemoteRuntimeForBootstrap) LoadSession(ctx context.Context, sessionID string) (agentsession.Session, error) {
+	s.loadSessionCalls = append(s.loadSessionCalls, sessionID)
+	if s.loadSessionErr != nil {
+		return agentsession.Session{}, s.loadSessionErr
+	}
+	if s.loadSessions != nil {
+		if session, ok := s.loadSessions[sessionID]; ok {
+			return session, nil
+		}
+	}
+	return agentsession.Session{ID: sessionID, Title: "Hydrated"}, nil
 }
 
 func (s *stubRemoteRuntimeForBootstrap) ActivateSessionSkill(context.Context, string, string) error {

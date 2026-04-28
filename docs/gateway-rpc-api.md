@@ -441,4 +441,4 @@ type ResolvePermissionParams struct {
 - Response Schema: `ack` 或标准 `error`
 - Observation:
   - 统计进入 `gateway_requests_total{method="wake.openUrl",...}`
-  - 与 url-dispatch 自动拉起链路联动
+  - 与 daemon dispatcher 自动拉起链路联动

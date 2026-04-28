@@ -28,6 +28,7 @@ type ProviderConfig struct {
 	Model                  string                          `yaml:"model"`
 	APIKeyEnv              string                          `yaml:"api_key_env"`
 	GenerateMaxRetries     int                             `yaml:"generate_max_retries,omitempty"`
+	GenerateMaxRetriesSet  bool                            `yaml:"-"`
 	GenerateIdleTimeoutSec int                             `yaml:"generate_idle_timeout_sec,omitempty"`
 	ModelSource            string                          `yaml:"-"`
 	ChatAPIMode            string                          `yaml:"-"`
@@ -169,6 +170,14 @@ func (p ProviderConfig) Resolve() (ResolvedProviderConfig, error) {
 	}, nil
 }
 
+// resolveGenerateMaxRetries 统一解析 provider 级生成重试次数，兼容“未配置使用默认值”和“显式 0 关闭重试”两种语义。
+func (p ProviderConfig) resolveGenerateMaxRetries() int {
+	if p.GenerateMaxRetriesSet || p.GenerateMaxRetries > 0 {
+		return provider.NormalizeGenerateMaxRetries(p.GenerateMaxRetries)
+	}
+	return provider.DefaultGenerateMaxRetries
+}
+
 func cloneProviders(providers []ProviderConfig) []ProviderConfig {
 	if len(providers) == 0 {
 		return nil
@@ -283,7 +292,7 @@ func (p ResolvedProviderConfig) ToRuntimeConfig() (provider.RuntimeConfig, error
 		ChatAPIMode:           chatAPIMode,
 		ChatEndpointPath:      chatEndpointPath,
 		DiscoveryEndpointPath: discoveryEndpointPath,
-		GenerateMaxRetries:    provider.NormalizeGenerateMaxRetries(p.GenerateMaxRetries),
+		GenerateMaxRetries:    p.resolveGenerateMaxRetries(),
 		GenerateStartTimeout:  provider.NormalizeGenerateStartTimeout(time.Duration(p.GenerateStartTimeoutSec) * time.Second),
 		GenerateIdleTimeout:   provider.NormalizeGenerateIdleTimeout(time.Duration(p.GenerateIdleTimeoutSec) * time.Second),
 	}, nil

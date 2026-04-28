@@ -134,6 +134,7 @@ type appRuntimeState struct {
 	queuedIntervention      *queuedInterventionInput
 	pendingAutoPermission   *autoPermissionApprovalState
 	pendingFullAccessPrompt *fullAccessPromptState
+	startupWakeSubmitInput  *startupWakeSubmitInput
 	fullAccessModeEnabled   bool
 	pendingImageAttachments []pendingImageAttachment
 	pendingTextPastes       []pendingTextPaste
@@ -184,6 +185,11 @@ type pendingTextPaste struct {
 type queuedInterventionInput struct {
 	Text   string
 	Images []tuiservices.UserImageInput
+}
+
+type startupWakeSubmitInput struct {
+	Text    string
+	Workdir string
 }
 
 // providerAddFormState 保存添加新 provider 表单的状态。
@@ -424,6 +430,9 @@ func (a App) Init() tea.Cmd {
 		textarea.Blink,
 		a.spinner.Tick,
 		appTickCmd(),
+	}
+	if a.startupWakeSubmitInput != nil {
+		cmds = append(cmds, emitStartupWakeSubmitCmd(*a.startupWakeSubmitInput))
 	}
 	if cmd := runModelCatalogRefresh(a.providerSvc, a.modelRefreshID); cmd != nil {
 		cmds = append(cmds, cmd)

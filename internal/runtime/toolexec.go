@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	providertypes "neo-code/internal/provider/types"
+	runtimehooks "neo-code/internal/runtime/hooks"
 	"neo-code/internal/tools"
 )
 
@@ -110,6 +111,37 @@ func (s *Service) executeOneToolCall(
 	toolLock.Lock()
 	defer toolLock.Unlock()
 
+	beforeToolHookOutput := s.runHookPoint(ctx, state, runtimehooks.HookPointBeforeToolCall, runtimehooks.HookContext{
+		Metadata: map[string]any{
+			"tool_call_id":   strings.TrimSpace(call.ID),
+			"tool_name":      strings.TrimSpace(call.Name),
+			"tool_arguments": strings.TrimSpace(call.Arguments),
+			"workdir":        strings.TrimSpace(snapshot.Workdir),
+		},
+	})
+	if beforeToolHookOutput.Blocked {
+		reason := findHookBlockMessage(beforeToolHookOutput)
+		result := tools.NewErrorResult(call.Name, hookErrorClassBlocked, reason, map[string]any{
+			"hook_id": beforeToolHookOutput.BlockedBy,
+			"point":   string(runtimehooks.HookPointBeforeToolCall),
+		})
+		result.ToolCallID = call.ID
+		result.ErrorClass = hookErrorClassBlocked
+		s.emitRunScoped(ctx, EventHookBlocked, state, HookBlockedPayload{
+			HookID:     strings.TrimSpace(beforeToolHookOutput.BlockedBy),
+			Point:      string(runtimehooks.HookPointBeforeToolCall),
+			ToolCallID: strings.TrimSpace(call.ID),
+			ToolName:   strings.TrimSpace(call.Name),
+			Reason:     reason,
+			Enforced:   true,
+		})
+		if err := s.appendToolMessageAndSave(ctx, state, call, result); err != nil {
+			return result, false, err
+		}
+		s.emitRunScoped(ctx, EventToolResult, state, result)
+		return result, false, nil
+	}
+
 	s.emitRunScoped(ctx, EventToolStart, state, call)
 
 	result, execErr := s.executeToolCallWithPermission(ctx, permissionExecutionInput{
@@ -125,11 +157,13 @@ func (s *Service) executeOneToolCall(
 	})
 
 	if errors.Is(execErr, context.Canceled) {
+		s.emitAfterToolResultHook(ctx, state, call, result, execErr)
 		return result, false, execErr
 	}
 	if execErr != nil && strings.TrimSpace(result.Content) == "" {
 		result.Content = execErr.Error()
 	}
+	s.emitAfterToolResultHook(ctx, state, call, result, execErr)
 
 	if err := s.appendToolMessageAndSave(ctx, state, call, result); err != nil {
 		if execErr != nil && errors.Is(err, context.Canceled) {
@@ -245,4 +279,36 @@ func hasSuccessfulWorkspaceWriteFact(result tools.ToolResult, execErr error) boo
 		return false
 	}
 	return result.Facts.WorkspaceWrite
+}
+
+func summarizeHookResultContent(content string) string {
+	trimmed := strings.TrimSpace(content)
+	if len(trimmed) <= 256 {
+		return trimmed
+	}
+	return trimmed[:256]
+}
+
+// emitAfterToolResultHook 在工具结果确定后触发 after_tool_result 挂点，仅提供只读摘要元信息。
+func (s *Service) emitAfterToolResultHook(
+	ctx context.Context,
+	state *runState,
+	call providertypes.ToolCall,
+	result tools.ToolResult,
+	execErr error,
+) {
+	afterToolHookMetadata := map[string]any{
+		"tool_call_id":            strings.TrimSpace(call.ID),
+		"tool_name":               strings.TrimSpace(call.Name),
+		"is_error":                result.IsError,
+		"error_class":             strings.TrimSpace(result.ErrorClass),
+		"result_content_preview":  summarizeHookResultContent(result.Content),
+		"result_metadata_present": len(result.Metadata) > 0,
+	}
+	if execErr != nil {
+		afterToolHookMetadata["execution_error"] = strings.TrimSpace(execErr.Error())
+	}
+	_ = s.runHookPoint(ctx, state, runtimehooks.HookPointAfterToolResult, runtimehooks.HookContext{
+		Metadata: afterToolHookMetadata,
+	})
 }

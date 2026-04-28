@@ -147,3 +147,11 @@ echo "Installing ${binary_name} to /usr/local/bin (sudo may prompt)..."
 sudo mv "${temp_dir}/${binary_name}" /usr/local/bin/
 
 echo "Installed ${binary_name} (${flavor}) from ${latest_tag}."
+
+if [[ "${flavor}" == "full" ]]; then
+  echo "Installing HTTP daemon autostart..."
+  if ! /usr/local/bin/neocode daemon install >/dev/null 2>&1; then
+    echo "Warning: failed to install HTTP daemon autostart automatically." >&2
+    echo "Run '/usr/local/bin/neocode daemon install' manually after installation." >&2
+  fi
+fi

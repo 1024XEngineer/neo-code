@@ -14,6 +14,8 @@ import (
 type rpcRunCaptureRuntimeStub struct {
 	runInput            RunInput
 	runCh               chan RunInput
+	createSessionID     string
+	createSessionFn     func(ctx context.Context, input CreateSessionInput) (string, error)
 	executeSystemToolIn ExecuteSystemToolInput
 	executeSystemToolFn func(ctx context.Context, input ExecuteSystemToolInput) (tools.ToolResult, error)
 	activateSkillFn     func(ctx context.Context, input SessionSkillMutationInput) error
@@ -101,6 +103,14 @@ func (s *rpcRunCaptureRuntimeStub) LoadSession(ctx context.Context, input LoadSe
 		return s.loadSessionFn(ctx, input)
 	}
 	return Session{}, nil
+}
+
+func (s *rpcRunCaptureRuntimeStub) CreateSession(ctx context.Context, input CreateSessionInput) (string, error) {
+	s.createSessionID = strings.TrimSpace(input.SessionID)
+	if s.createSessionFn != nil {
+		return s.createSessionFn(ctx, input)
+	}
+	return s.createSessionID, nil
 }
 
 func TestDispatchRPCRequestResultEncodeError(t *testing.T) {
@@ -736,6 +746,22 @@ func TestAuthorizeRPCRequestBranches(t *testing.T) {
 	err = authorizeRPCRequest(ctx, protocol.MethodGatewayPing, string(FrameActionPing))
 	if err == nil || protocol.GatewayCodeFromJSONRPCError(err) != ErrorCodeUnauthorized.String() {
 		t.Fatalf("unauthenticated request error = %#v, want unauthorized", err)
+	}
+
+	wakeCtx := WithRequestSource(context.Background(), RequestSourceIPC)
+	wakeCtx = WithRequestACL(wakeCtx, NewStrictControlPlaneACL())
+	wakeCtx = WithTokenAuthenticator(wakeCtx, staticTokenAuthenticator{token: "token-2"})
+	err = authorizeRPCRequest(wakeCtx, protocol.MethodWakeOpenURL, string(FrameActionWakeOpenURL))
+	if err != nil {
+		t.Fatalf("ipc wake.openUrl should bypass authentication, got %#v", err)
+	}
+
+	wakeDeniedCtx := WithRequestSource(context.Background(), RequestSourceIPC)
+	wakeDeniedCtx = WithRequestACL(wakeDeniedCtx, denyACL)
+	wakeDeniedCtx = WithTokenAuthenticator(wakeDeniedCtx, staticTokenAuthenticator{token: "token-3"})
+	err = authorizeRPCRequest(wakeDeniedCtx, protocol.MethodWakeOpenURL, string(FrameActionWakeOpenURL))
+	if err == nil || protocol.GatewayCodeFromJSONRPCError(err) != ErrorCodeAccessDenied.String() {
+		t.Fatalf("wake.openUrl acl error = %#v, want access_denied", err)
 	}
 }
 

@@ -3,7 +3,6 @@ package cli
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -18,27 +17,21 @@ import (
 
 	"neo-code/internal/config"
 	"neo-code/internal/gateway"
-	"neo-code/internal/gateway/adapters/urlscheme"
 	gatewayauth "neo-code/internal/gateway/auth"
 )
 
 const (
 	defaultGatewayLogLevel          = "info"
-	fallbackDispatchErrorJSON       = `{"status":"error","code":"internal_error","message":"failed to encode or write error output"}`
 	defaultGatewayIdleShutdownDelay = 30 * time.Second
 )
 
 var (
 	runGatewayCommand       = defaultGatewayCommandRunner
-	runURLDispatchCommand   = defaultURLDispatchCommandRunner
 	newGatewayServer        = defaultNewGatewayServer
 	newGatewayNetwork       = defaultNewGatewayNetworkServer
-	dispatchURLThroughIPC   = urlscheme.Dispatch
+	resolveExecutablePath   = os.Executable
 	newAuthManager          = defaultNewAuthManager
-	loadAuthToken           = loadGatewayAuthToken
 	exitProcess             = os.Exit
-	writeDispatchError      = writeURLDispatchErrorOutput
-	writeDispatchSuccess    = writeURLDispatchSuccessOutput
 	buildGatewayRuntimePort = defaultBuildGatewayRuntimePort
 )
 
@@ -63,26 +56,6 @@ type gatewayCommandOptions struct {
 
 	MetricsEnabled           bool
 	MetricsEnabledOverridden bool
-}
-
-type urlDispatchCommandOptions struct {
-	URL           string
-	ListenAddress string
-	TokenFile     string
-}
-
-type urlDispatchSuccessOutput struct {
-	Status        string `json:"status"`
-	ListenAddress string `json:"listen_address"`
-	Action        string `json:"action"`
-	RequestID     string `json:"request_id,omitempty"`
-	Payload       any    `json:"payload,omitempty"`
-}
-
-type urlDispatchErrorOutput struct {
-	Status  string `json:"status"`
-	Code    string `json:"code"`
-	Message string `json:"message"`
 }
 
 // defaultNewAuthManager 创建默认网关认证器，并把具体持久化实现收敛在 CLI 装配层内部。
@@ -470,145 +443,6 @@ func defaultNewGatewayServer(options gateway.ServerOptions) (gateway.TransportAd
 // defaultNewGatewayNetworkServer 创建默认网关网络访问服务实例，供命令层启动流程调用。
 func defaultNewGatewayNetworkServer(options gateway.NetworkServerOptions) (gateway.TransportAdapter, error) {
 	return gateway.NewNetworkServer(options)
-}
-
-// newURLDispatchCommand 创建 URL Scheme 派发子命令骨架，仅做参数收敛与调用转发。
-func newURLDispatchCommand() *cobra.Command {
-	options := &urlDispatchCommandOptions{}
-
-	cmd := &cobra.Command{
-		Use:           "url-dispatch [url]",
-		Short:         "Dispatch a neocode:// URL to gateway",
-		SilenceUsage:  true,
-		SilenceErrors: true,
-		Args:          cobra.MaximumNArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			urlValue := strings.TrimSpace(options.URL)
-			if urlValue == "" && len(args) == 1 {
-				urlValue = strings.TrimSpace(args[0])
-			}
-			if urlValue == "" {
-				return errors.New("missing required --url or positional <url>")
-			}
-			normalizedURL, err := normalizeDispatchURL(urlValue)
-			if err != nil {
-				return err
-			}
-
-			dispatchErr := runURLDispatchCommand(cmd.Context(), urlDispatchCommandOptions{
-				URL:           normalizedURL,
-				ListenAddress: strings.TrimSpace(options.ListenAddress),
-				TokenFile:     strings.TrimSpace(options.TokenFile),
-			})
-			if dispatchErr != nil {
-				exitProcess(1)
-				return nil
-			}
-			return nil
-		},
-	}
-
-	cmd.Flags().StringVar(&options.URL, "url", "", "neocode:// URL to dispatch")
-	cmd.Flags().StringVar(&options.ListenAddress, "listen", "", "gateway listen address override")
-	cmd.Flags().StringVar(&options.TokenFile, "token-file", "", "gateway auth token file path (default ~/.neocode/auth.json)")
-
-	return cmd
-}
-
-// defaultURLDispatchCommandRunner 执行 URL 唤醒请求并将结果以结构化 JSON 输出。
-func defaultURLDispatchCommandRunner(ctx context.Context, options urlDispatchCommandOptions) error {
-	authToken, authErr := loadAuthToken(options.TokenFile)
-	if authErr != nil {
-		writeErr := writeDispatchError(os.Stderr, authErr)
-		if writeErr != nil {
-			_ = writeURLDispatchFallbackErrorOutput(os.Stderr)
-		}
-		exitProcess(1)
-		return nil
-	}
-
-	result, err := dispatchURLThroughIPC(ctx, urlscheme.DispatchRequest{
-		RawURL:        options.URL,
-		ListenAddress: options.ListenAddress,
-		AuthToken:     authToken,
-	})
-	if err != nil {
-		writeErr := writeDispatchError(os.Stderr, err)
-		if writeErr != nil {
-			_ = writeURLDispatchFallbackErrorOutput(os.Stderr)
-		}
-		exitProcess(1)
-		return nil
-	}
-
-	if err := writeDispatchSuccess(os.Stdout, result); err != nil {
-		writeErr := writeDispatchError(os.Stderr, err)
-		if writeErr != nil {
-			_ = writeURLDispatchFallbackErrorOutput(os.Stderr)
-		}
-		exitProcess(1)
-		return nil
-	}
-	return nil
-}
-
-// loadGatewayAuthToken 读取默认认证 token；若文件不存在则回退为空以兼容无鉴权模式。
-func loadGatewayAuthToken(path string) (string, error) {
-	token, err := gatewayauth.LoadTokenFromFile(path)
-	if err == nil {
-		return token, nil
-	}
-	if errors.Is(err, os.ErrNotExist) {
-		return "", nil
-	}
-	if strings.Contains(strings.ToLower(err.Error()), "no such file") {
-		return "", nil
-	}
-	return "", err
-}
-
-// normalizeDispatchURL 对 url-dispatch 输入做最小归一化，详细校验交由 dispatcher 完成。
-func normalizeDispatchURL(rawURL string) (string, error) {
-	normalized := strings.TrimSpace(rawURL)
-	if normalized == "" {
-		return "", errors.New("missing required --url or positional <url>")
-	}
-	return normalized, nil
-}
-
-// writeURLDispatchSuccessOutput 将 url-dispatch 成功结果输出为结构化 JSON。
-func writeURLDispatchSuccessOutput(writer io.Writer, result urlscheme.DispatchResult) error {
-	return encodeJSONLine(writer, urlDispatchSuccessOutput{
-		Status:        "ok",
-		ListenAddress: result.ListenAddress,
-		Action:        string(result.Response.Action),
-		RequestID:     result.Response.RequestID,
-		Payload:       result.Response.Payload,
-	})
-}
-
-// writeURLDispatchErrorOutput 将 url-dispatch 错误结果输出为结构化 JSON。
-func writeURLDispatchErrorOutput(writer io.Writer, err error) error {
-	code := "internal_error"
-	message := err.Error()
-
-	var dispatchErr *urlscheme.DispatchError
-	if errors.As(err, &dispatchErr) {
-		code = dispatchErr.Code
-		message = dispatchErr.Message
-	}
-
-	return encodeJSONLine(writer, urlDispatchErrorOutput{
-		Status:  "error",
-		Code:    code,
-		Message: message,
-	})
-}
-
-// writeURLDispatchFallbackErrorOutput 在结构化错误输出失败时提供兜底 JSON，避免命令静默退出。
-func writeURLDispatchFallbackErrorOutput(writer io.Writer) error {
-	_, err := fmt.Fprintln(writer, fallbackDispatchErrorJSON)
-	return err
 }
 
 // encodeJSONLine 将对象编码为单行 JSON，并写入目标输出流。

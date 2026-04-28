@@ -424,6 +424,10 @@ func (s *runtimePortEventStub) LoadSession(_ context.Context, _ LoadSessionInput
 	return Session{}, nil
 }
 
+func (s *runtimePortEventStub) CreateSession(_ context.Context, _ CreateSessionInput) (string, error) {
+	return "", nil
+}
+
 func decodeJSONRPCResultFrame(response protocol.JSONRPCResponse) (MessageFrame, error) {
 	if response.Result == nil {
 		return MessageFrame{}, errors.New("rpc result is nil")

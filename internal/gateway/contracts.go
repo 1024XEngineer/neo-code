@@ -141,6 +141,14 @@ type LoadSessionInput struct {
 	SessionID string
 }
 
+// CreateSessionInput 表示 gateway.createSession 动作的下游输入。
+type CreateSessionInput struct {
+	// SubjectID 是请求方身份主体标识。
+	SubjectID string
+	// SessionID 是可选会话标识，留空时由 runtime 生成。
+	SessionID string
+}
+
 // CompactResult 表示 compact 动作完成后返回的结果。
 type CompactResult struct {
 	// Applied 表示是否实际应用压缩结果。
@@ -297,6 +305,8 @@ type RuntimePort interface {
 	ListSessions(ctx context.Context) ([]SessionSummary, error)
 	// LoadSession 加载指定会话详情。
 	LoadSession(ctx context.Context, input LoadSessionInput) (Session, error)
+	// CreateSession 创建并返回可用会话标识。
+	CreateSession(ctx context.Context, input CreateSessionInput) (string, error)
 }
 
 // Gateway 定义网关主契约。
