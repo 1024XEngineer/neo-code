@@ -1696,6 +1696,9 @@ func runtimeEventHookFinishedHandler(a *App, event tuiservices.RuntimeEvent) boo
 		status = "pass"
 	}
 	detail := fmt.Sprintf("%s (%dms)", status, payload.DurationMS)
+	if message := strings.TrimSpace(payload.Message); message != "" {
+		detail = detail + " · " + message
+	}
 	a.appendActivity("hook", "Hook finished: "+hookID, detail, false)
 	return false
 }
@@ -1712,6 +1715,9 @@ func runtimeEventHookFailedHandler(a *App, event tuiservices.RuntimeEvent) bool 
 	detail := strings.TrimSpace(payload.Error)
 	if detail == "" {
 		detail = "hook execution failed"
+	}
+	if message := strings.TrimSpace(payload.Message); message != "" {
+		detail = message + " · " + detail
 	}
 	a.appendActivity("hook", "Hook failed: "+hookID, detail, true)
 	return false

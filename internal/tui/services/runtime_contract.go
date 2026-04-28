@@ -310,6 +310,7 @@ type HookEventPayload struct {
 	Kind       string    `json:"kind"`
 	Mode       string    `json:"mode"`
 	Status     string    `json:"status,omitempty"`
+	Message    string    `json:"message,omitempty"`
 	StartedAt  time.Time `json:"started_at,omitempty"`
 	DurationMS int64     `json:"duration_ms,omitempty"`
 	Error      string    `json:"error,omitempty"`

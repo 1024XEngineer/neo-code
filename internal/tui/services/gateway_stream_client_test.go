@@ -117,6 +117,42 @@ func TestDecodeRuntimeEventFromGatewayNotificationRestoresHookBlockedPayload(t *
 	}
 }
 
+func TestDecodeRuntimeEventFromGatewayNotificationRestoresHookEventPayloadMessage(t *testing.T) {
+	notification := buildGatewayEventNotification(t, gateway.MessageFrame{
+		Type:      gateway.FrameTypeEvent,
+		Action:    gateway.FrameActionRun,
+		SessionID: "session-hook-msg",
+		RunID:     "run-hook-msg",
+		Payload: map[string]any{
+			"runtime_event_type": string(EventHookFinished),
+			"payload_version":    runtimeEventPayloadVersion,
+			"payload": map[string]any{
+				"hook_id":     "warn-before-tool",
+				"point":       "before_tool_call",
+				"scope":       "user",
+				"kind":        "function",
+				"mode":        "sync",
+				"status":      "pass",
+				"message":     "tool call warning",
+				"duration_ms": 1,
+				"started_at":  time.Now().UTC().Format(time.RFC3339Nano),
+			},
+		},
+	})
+
+	event, err := decodeRuntimeEventFromGatewayNotification(notification)
+	if err != nil {
+		t.Fatalf("decodeRuntimeEventFromGatewayNotification() error = %v", err)
+	}
+	payload, ok := event.Payload.(HookEventPayload)
+	if !ok {
+		t.Fatalf("event.Payload type = %T, want HookEventPayload", event.Payload)
+	}
+	if payload.Scope != "user" || payload.Message != "tool call warning" {
+		t.Fatalf("unexpected hook event payload: %#v", payload)
+	}
+}
+
 func TestDecodeRuntimeEventFromGatewayNotificationSupportsNestedEnvelope(t *testing.T) {
 	notification := buildGatewayEventNotification(t, gateway.MessageFrame{
 		Type:      gateway.FrameTypeEvent,
