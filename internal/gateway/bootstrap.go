@@ -18,6 +18,7 @@ const (
 	// defaultRuntimeOperationTimeout 定义网关调用 runtime 的硬超时，避免资源长期占用。
 	defaultRuntimeOperationTimeout = 30 * time.Minute
 	defaultLocalSubjectID          = "local_admin"
+	wakeReviewPromptTemplate       = "请审查文件 %s"
 )
 
 type requestFrameHandler func(ctx context.Context, frame MessageFrame, runtimePort RuntimePort) MessageFrame
@@ -119,7 +120,7 @@ func handleBindStreamFrame(ctx context.Context, frame MessageFrame) MessageFrame
 	}
 }
 
-// handleWakeOpenURLFrame 处理 wake.openUrl 请求，并在 run 场景下串联 runtime.run。
+// handleWakeOpenURLFrame 处理 wake.openUrl 请求，并在 run/review 场景下串联 runtime.run。
 func handleWakeOpenURLFrame(ctx context.Context, frame MessageFrame, runtimePort RuntimePort) MessageFrame {
 	intent, err := decodeWakeIntent(frame.Payload)
 	if err != nil {
@@ -130,8 +131,9 @@ func handleWakeOpenURLFrame(ctx context.Context, frame MessageFrame, runtimePort
 	if wakeErr != nil {
 		return errorFrame(frame, toFrameError(wakeErr))
 	}
+	normalizedAction := strings.ToLower(strings.TrimSpace(intent.Action))
 	sessionID := strings.TrimSpace(intent.SessionID)
-	if strings.EqualFold(strings.TrimSpace(intent.Action), protocol.WakeActionRun) {
+	if normalizedAction == protocol.WakeActionRun || normalizedAction == protocol.WakeActionReview {
 		if runtimePort == nil {
 			return runtimePortUnavailableFrame(frame)
 		}
@@ -147,19 +149,25 @@ func handleWakeOpenURLFrame(ctx context.Context, frame MessageFrame, runtimePort
 			return errorFrame(frame, NewFrameError(ErrorCodeInternalError, "failed to create wake session"))
 		}
 		sessionID = strings.TrimSpace(createdSessionID)
+		runInputText := strings.TrimSpace(intent.Params["prompt"])
+		runFailureMessage := "wake run failed"
+		if normalizedAction == protocol.WakeActionReview {
+			runInputText = buildWakeReviewPrompt(intent.Params["path"])
+			runFailureMessage = "wake review failed"
+		}
 		runResponse := dispatchRunFrameWithSubjectID(detachWakeRunContext(ctx), MessageFrame{
 			Type:      FrameTypeRequest,
 			Action:    FrameActionRun,
 			RequestID: strings.TrimSpace(frame.RequestID),
 			SessionID: sessionID,
 			Workdir:   strings.TrimSpace(intent.Workdir),
-			InputText: strings.TrimSpace(intent.Params["prompt"]),
+			InputText: runInputText,
 		}, runtimePort, subjectID)
 		if runResponse.Type == FrameTypeError {
 			if runResponse.Error != nil {
 				return errorFrame(frame, runResponse.Error)
 			}
-			return errorFrame(frame, NewFrameError(ErrorCodeInternalError, "wake run failed"))
+			return errorFrame(frame, NewFrameError(ErrorCodeInternalError, runFailureMessage))
 		}
 	}
 
@@ -178,6 +186,11 @@ func detachWakeRunContext(ctx context.Context) context.Context {
 		return context.Background()
 	}
 	return context.WithoutCancel(ctx)
+}
+
+// buildWakeReviewPrompt 构造 review 唤醒转换为 runtime.run 时的统一输入文案。
+func buildWakeReviewPrompt(path string) string {
+	return fmt.Sprintf(wakeReviewPromptTemplate, strings.TrimSpace(path))
 }
 
 // handleRunFrame 处理 gateway.run，采用“受理即返回”的异步执行模型。

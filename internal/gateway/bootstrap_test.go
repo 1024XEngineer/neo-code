@@ -145,24 +145,121 @@ func TestDispatchRequestFramePing(t *testing.T) {
 	}
 }
 
-func TestDispatchRequestFrameWakeOpenURLSuccess(t *testing.T) {
+func TestDispatchRequestFrameWakeOpenURLReviewSuccess(t *testing.T) {
+	runInputs := make(chan RunInput, 1)
+	createInputs := make(chan CreateSessionInput, 1)
+	stub := &bootstrapRuntimeStub{
+		createSessionFn: func(_ context.Context, input CreateSessionInput) (string, error) {
+			createInputs <- input
+			return "session-review-created", nil
+		},
+		runFn: func(_ context.Context, input RunInput) error {
+			runInputs <- input
+			return nil
+		},
+	}
+
 	response := dispatchRequestFrame(context.Background(), MessageFrame{
-		Type:   FrameTypeRequest,
-		Action: FrameActionWakeOpenURL,
+		Type:      FrameTypeRequest,
+		Action:    FrameActionWakeOpenURL,
+		RequestID: "req-wake-review",
 		Payload: map[string]any{
-			"action": "review",
+			"action":  "review",
+			"workdir": "/workspace/repo",
 			"params": map[string]string{
 				"path": "README.md",
 			},
 		},
-		RequestID: "req-wake",
-	}, nil)
+	}, stub)
 
 	if response.Type != FrameTypeAck {
 		t.Fatalf("response type = %q, want %q", response.Type, FrameTypeAck)
 	}
 	if response.Action != FrameActionWakeOpenURL {
 		t.Fatalf("response action = %q, want %q", response.Action, FrameActionWakeOpenURL)
+	}
+	if response.SessionID != "session-review-created" {
+		t.Fatalf("response session_id = %q, want %q", response.SessionID, "session-review-created")
+	}
+
+	select {
+	case createInput := <-createInputs:
+		if createInput.SubjectID != defaultLocalSubjectID {
+			t.Fatalf("create session subject_id = %q, want %q", createInput.SubjectID, defaultLocalSubjectID)
+		}
+		if createInput.SessionID != "" {
+			t.Fatalf("create session input session_id = %q, want empty", createInput.SessionID)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected wake.review to create session before run")
+	}
+
+	select {
+	case input := <-runInputs:
+		if input.SessionID != "session-review-created" {
+			t.Fatalf("runtime session_id = %q, want %q", input.SessionID, "session-review-created")
+		}
+		if input.InputText != "请审查文件 README.md" {
+			t.Fatalf("runtime input_text = %q, want %q", input.InputText, "请审查文件 README.md")
+		}
+		if input.Workdir != "/workspace/repo" {
+			t.Fatalf("runtime workdir = %q, want %q", input.Workdir, "/workspace/repo")
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected wake.review to dispatch runtime.Run asynchronously")
+	}
+}
+
+func TestDispatchRequestFrameWakeOpenURLReviewAllowsSessionIDWithoutWorkdir(t *testing.T) {
+	runInputs := make(chan RunInput, 1)
+	createInputs := make(chan CreateSessionInput, 1)
+	stub := &bootstrapRuntimeStub{
+		createSessionFn: func(_ context.Context, input CreateSessionInput) (string, error) {
+			createInputs <- input
+			return input.SessionID, nil
+		},
+		runFn: func(_ context.Context, input RunInput) error {
+			runInputs <- input
+			return nil
+		},
+	}
+
+	response := dispatchRequestFrame(context.Background(), MessageFrame{
+		Type:      FrameTypeRequest,
+		Action:    FrameActionWakeOpenURL,
+		RequestID: "req-wake-review-session",
+		Payload: map[string]any{
+			"action":     "review",
+			"session_id": "session-review-keep",
+			"params": map[string]string{
+				"path": "README.md",
+			},
+		},
+	}, stub)
+
+	if response.Type != FrameTypeAck {
+		t.Fatalf("response type = %q, want %q", response.Type, FrameTypeAck)
+	}
+	if response.SessionID != "session-review-keep" {
+		t.Fatalf("response session_id = %q, want %q", response.SessionID, "session-review-keep")
+	}
+
+	select {
+	case createInput := <-createInputs:
+		if createInput.SessionID != "session-review-keep" {
+			t.Fatalf("create session input session_id = %q, want %q", createInput.SessionID, "session-review-keep")
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected wake.review with session_id to create/load session")
+	}
+
+	select {
+	case input := <-runInputs:
+		if input.SessionID != "session-review-keep" {
+			t.Fatalf("runtime session_id = %q, want %q", input.SessionID, "session-review-keep")
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected wake.review with session_id to invoke runtime.Run")
 	}
 }
 
@@ -200,6 +297,29 @@ func TestDispatchRequestFrameWakeOpenURLMissingPath(t *testing.T) {
 	}
 	if response.Error == nil || response.Error.Code != ErrorCodeMissingRequiredField.String() {
 		t.Fatalf("error = %#v, want code %q", response.Error, ErrorCodeMissingRequiredField.String())
+	}
+}
+
+func TestDispatchRequestFrameWakeOpenURLReviewMissingWorkdirAndSessionID(t *testing.T) {
+	response := dispatchRequestFrame(context.Background(), MessageFrame{
+		Type:   FrameTypeRequest,
+		Action: FrameActionWakeOpenURL,
+		Payload: map[string]any{
+			"action": "review",
+			"params": map[string]string{
+				"path": "README.md",
+			},
+		},
+	}, nil)
+
+	if response.Type != FrameTypeError {
+		t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+	}
+	if response.Error == nil || response.Error.Code != ErrorCodeMissingRequiredField.String() {
+		t.Fatalf("error = %#v, want code %q", response.Error, ErrorCodeMissingRequiredField.String())
+	}
+	if response.Error.Message != "missing required field: workdir or session_id for review" {
+		t.Fatalf("error message = %q, want %q", response.Error.Message, "missing required field: workdir or session_id for review")
 	}
 }
 

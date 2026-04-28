@@ -9,7 +9,8 @@ import (
 func TestWakeOpenURLHandlerHandleSuccess(t *testing.T) {
 	handler := NewWakeOpenURLHandler()
 	result, err := handler.Handle(protocol.WakeIntent{
-		Action: protocol.WakeActionReview,
+		Action:  protocol.WakeActionReview,
+		Workdir: "/workspace",
 		Params: map[string]string{
 			"path": "README.md",
 		},
@@ -44,13 +45,44 @@ func TestWakeOpenURLHandlerHandleInvalidAction(t *testing.T) {
 func TestWakeOpenURLHandlerHandleMissingPath(t *testing.T) {
 	handler := NewWakeOpenURLHandler()
 	_, err := handler.Handle(protocol.WakeIntent{
-		Action: protocol.WakeActionReview,
+		Action:  protocol.WakeActionReview,
+		Workdir: "/workspace",
 	})
 	if err == nil {
 		t.Fatal("expected missing path error")
 	}
 	if err.Code != WakeErrorCodeMissingRequiredField {
 		t.Fatalf("error code = %q, want %q", err.Code, WakeErrorCodeMissingRequiredField)
+	}
+}
+
+func TestWakeOpenURLHandlerHandleReviewMissingWorkdirAndSessionID(t *testing.T) {
+	handler := NewWakeOpenURLHandler()
+	_, err := handler.Handle(protocol.WakeIntent{
+		Action: protocol.WakeActionReview,
+		Params: map[string]string{
+			"path": "README.md",
+		},
+	})
+	if err == nil {
+		t.Fatal("expected missing workdir/session_id error")
+	}
+	if err.Code != WakeErrorCodeMissingRequiredField {
+		t.Fatalf("error code = %q, want %q", err.Code, WakeErrorCodeMissingRequiredField)
+	}
+}
+
+func TestWakeOpenURLHandlerHandleReviewAllowsSessionIDWithoutWorkdir(t *testing.T) {
+	handler := NewWakeOpenURLHandler()
+	_, err := handler.Handle(protocol.WakeIntent{
+		Action:    protocol.WakeActionReview,
+		SessionID: "session-review-1",
+		Params: map[string]string{
+			"path": "README.md",
+		},
+	})
+	if err != nil {
+		t.Fatalf("review with session_id should pass, got error: %v", err)
 	}
 }
 
@@ -97,7 +129,8 @@ func TestWakeOpenURLHandlerHandleUnsafePath(t *testing.T) {
 	handler := NewWakeOpenURLHandler()
 	for _, path := range testCases {
 		_, err := handler.Handle(protocol.WakeIntent{
-			Action: protocol.WakeActionReview,
+			Action:  protocol.WakeActionReview,
+			Workdir: "/workspace",
 			Params: map[string]string{
 				"path": path,
 			},

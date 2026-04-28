@@ -73,6 +73,12 @@ func (h *WakeOpenURLHandler) Handle(intent protocol.WakeIntent) (WakeOpenURLResu
 				"unsafe review path",
 			)
 		}
+		if strings.TrimSpace(intent.SessionID) == "" && strings.TrimSpace(intent.Workdir) == "" {
+			return WakeOpenURLResult{}, newWakeError(
+				WakeErrorCodeMissingRequiredField,
+				"missing required field: workdir or session_id for review",
+			)
+		}
 	case protocol.WakeActionRun:
 		prompt := strings.TrimSpace(intent.Params["prompt"])
 		if prompt == "" {
