@@ -227,6 +227,29 @@ type RepositoryContextUnavailablePayload struct {
 	Reason string `json:"reason"`
 }
 
+// HookEventPayload 描述 hook 生命周期事件负载。
+type HookEventPayload struct {
+	HookID     string    `json:"hook_id"`
+	Point      string    `json:"point"`
+	Scope      string    `json:"scope"`
+	Kind       string    `json:"kind"`
+	Mode       string    `json:"mode"`
+	Status     string    `json:"status,omitempty"`
+	StartedAt  time.Time `json:"started_at,omitempty"`
+	DurationMS int64     `json:"duration_ms,omitempty"`
+	Error      string    `json:"error,omitempty"`
+}
+
+// HookBlockedPayload 描述 hook 阻断事件负载。
+type HookBlockedPayload struct {
+	HookID     string `json:"hook_id"`
+	Point      string `json:"point"`
+	ToolCallID string `json:"tool_call_id,omitempty"`
+	ToolName   string `json:"tool_name,omitempty"`
+	Reason     string `json:"reason,omitempty"`
+	Enforced   bool   `json:"enforced"`
+}
+
 const (
 	// EventUserMessage 表示用户消息已写入会话。
 	EventUserMessage EventType = "user_message"
@@ -302,6 +325,14 @@ const (
 	EventAssetSaveFailed EventType = "asset_save_failed"
 	// EventRepositoryContextUnavailable 表示本轮 repository 事实本应获取但失败，已降级为空上下文。
 	EventRepositoryContextUnavailable EventType = "repository_context_unavailable"
+	// EventHookStarted 表示 hook 执行开始。
+	EventHookStarted EventType = "hook_started"
+	// EventHookFinished 表示 hook 执行结束。
+	EventHookFinished EventType = "hook_finished"
+	// EventHookFailed 表示 hook 执行失败。
+	EventHookFailed EventType = "hook_failed"
+	// EventHookBlocked 表示某个 hook 返回 block（是否生效由 payload.enforced 决定）。
+	EventHookBlocked EventType = "hook_blocked"
 )
 
 // TokenUsagePayload 承载单轮 token 用量统计。

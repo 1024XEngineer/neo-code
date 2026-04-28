@@ -94,6 +94,8 @@ type ToolResult struct {
 	Name       string
 	Content    string
 	IsError    bool
+	// ErrorClass 表示机器可读的错误分类（例如 hook_blocked/permission_denied）。
+	ErrorClass string
 	Metadata   map[string]any
 	Facts      ToolExecutionFacts
 }

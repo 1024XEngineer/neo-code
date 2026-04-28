@@ -137,3 +137,16 @@ func TestHasSuccessfulVerificationResultRequiresStructuredFacts(t *testing.T) {
 		t.Fatalf("expected incomplete verification facts to be ignored")
 	}
 }
+
+func TestClassifyToolErrorPrefersExplicitErrorClass(t *testing.T) {
+	t.Parallel()
+
+	got := classifyToolError(tools.ToolResult{
+		IsError:    true,
+		ErrorClass: " hook_blocked ",
+		Content:    "permission denied",
+	})
+	if got != "hook_blocked" {
+		t.Fatalf("classifyToolError() = %q, want hook_blocked", got)
+	}
+}
