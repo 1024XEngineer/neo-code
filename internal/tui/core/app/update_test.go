@@ -1036,9 +1036,15 @@ func TestRuntimeEventToolResultHandlerUpdatesMessages(t *testing.T) {
 	if !handled {
 		t.Fatalf("expected handler to return true")
 	}
-	last := app.activeMessages[len(app.activeMessages)-1]
-	if last.Role != roleTool || messageText(last) != "ok" {
-		t.Fatalf("unexpected tool message: %#v", last)
+	var toolMsg *providertypes.Message
+	for i := len(app.activeMessages) - 1; i >= 0; i-- {
+		if app.activeMessages[i].Role == roleTool {
+			toolMsg = &app.activeMessages[i]
+			break
+		}
+	}
+	if toolMsg == nil || messageText(*toolMsg) != "ok" {
+		t.Fatalf("unexpected tool message list: %#v", app.activeMessages)
 	}
 }
 
@@ -5444,6 +5450,41 @@ func TestTranscriptManualScrollPersistsWhileBusy(t *testing.T) {
 	app.applyComponentLayout(false)
 	if app.transcript.YOffset != 6 {
 		t.Fatalf("expected applyComponentLayout to keep manual offset while busy, got %d", app.transcript.YOffset)
+	}
+}
+
+func TestAppendActivityAppendsInlineLogMessage(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.width = 120
+	app.height = 30
+	app.applyComponentLayout(true)
+
+	app.appendActivity("tool", "success", "", false)
+	plain := copyCodeANSIPattern.ReplaceAllString(app.transcriptContent, "")
+	if !strings.Contains(plain, "tool: success") {
+		t.Fatalf("expected inline log message in transcript, got %q", plain)
+	}
+}
+
+func TestInlineLogDoesNotBreakAssistantContinuationTag(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.width = 120
+	app.height = 30
+	app.applyComponentLayout(true)
+	app.activeMessages = []providertypes.Message{
+		{Role: roleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("第一段")}},
+	}
+
+	app.appendActivity("tool", "success", "", false)
+	app.activeMessages = append(app.activeMessages, providertypes.Message{
+		Role:  roleAssistant,
+		Parts: []providertypes.ContentPart{providertypes.NewTextPart("第二段")},
+	})
+	app.rebuildTranscript()
+
+	plain := copyCodeANSIPattern.ReplaceAllString(app.transcriptContent, "")
+	if count := strings.Count(plain, messageTagAgent); count != 1 {
+		t.Fatalf("expected assistant tag rendered once across inline log continuation, got %d in %q", count, plain)
 	}
 }
 

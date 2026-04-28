@@ -59,6 +59,7 @@ const logViewerPersistDebounce = 300 * time.Millisecond
 const footerErrorFlashDuration = 8 * time.Second
 const pasteTxnFlushDebounce = 140 * time.Millisecond
 const duplicatePasteSuppressWindow = 1200 * time.Millisecond
+const inlineLogMarker = "[[neo-log]] "
 
 type sessionLogPersistenceRuntime interface {
 	LoadSessionLogEntries(ctx context.Context, sessionID string) ([]tuiservices.SessionLogEntry, error)
@@ -3282,6 +3283,33 @@ func (a *App) appendActivity(kind string, title string, detail string, isError b
 	a.syncActivityViewport(previousCount)
 	a.viewDirty = true
 	a.addLogEntry(kind, title, detail)
+	a.appendInlineMessage(roleSystem, formatActivityInlineLog(kind, title, detail))
+	a.rebuildTranscript()
+}
+
+func formatActivityInlineLog(kind string, title string, detail string) string {
+	category := strings.TrimSpace(kind)
+	if category == "" {
+		category = "log"
+	}
+	content := strings.TrimSpace(title)
+	detail = strings.TrimSpace(detail)
+	if content == "" {
+		content = detail
+		detail = ""
+	}
+	if detail != "" {
+		content = content + " | " + detail
+	}
+	return inlineLogMarker + category + ": " + strings.TrimSpace(content)
+}
+
+func isInlineLogMessage(message providertypes.Message) bool {
+	if message.Role != roleSystem {
+		return false
+	}
+	content := strings.TrimSpace(renderMessagePartsForDisplay(message.Parts))
+	return strings.HasPrefix(content, inlineLogMarker)
 }
 
 func (a *App) syncFooterErrorToast() {
@@ -3970,7 +3998,11 @@ func (a *App) rebuildTranscript() {
 	hasBlock := false
 	lastRenderedRole := ""
 	for _, message := range a.activeMessages {
+		inlineLog := isInlineLogMessage(message)
 		continuation := message.Role == roleAssistant && lastRenderedRole == roleAssistant
+		if inlineLog && lastRenderedRole == roleAssistant {
+			continuation = true
+		}
 		rendered, _ := a.renderMessageBlockWithCopy(message, width, 0, !continuation)
 		if rendered == "" {
 			continue
@@ -3985,7 +4017,9 @@ func (a *App) rebuildTranscript() {
 		}
 		builder.WriteString(rendered)
 		hasBlock = true
-		lastRenderedRole = message.Role
+		if !inlineLog {
+			lastRenderedRole = message.Role
+		}
 	}
 
 	if queued := a.renderQueuedInterventionBlock(width); strings.TrimSpace(queued) != "" {

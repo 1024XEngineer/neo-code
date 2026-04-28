@@ -616,6 +616,7 @@ func (a App) renderMessageBlockWithCopy(message providertypes.Message, width int
 	if len(showTag) > 0 {
 		includeTag = showTag[0]
 	}
+	maxMessageWidth := tuiutils.Clamp(int(float64(width)*0.84), 24, width)
 
 	switch message.Role {
 	case roleEvent:
@@ -623,10 +624,17 @@ func (a App) renderMessageBlockWithCopy(message providertypes.Message, width int
 	case roleError:
 		return a.styles.inlineError.Width(width).Render("  ! " + wrapPlain(renderMessagePartsForDisplay(message.Parts), max(16, width-6))), nil
 	case roleSystem:
-		return a.styles.inlineSystem.Width(width).Render("  - " + wrapPlain(renderMessagePartsForDisplay(message.Parts), max(16, width-6))), nil
+		content := strings.TrimSpace(renderMessagePartsForDisplay(message.Parts))
+		if strings.HasPrefix(content, inlineLogMarker) {
+			content = strings.TrimSpace(strings.TrimPrefix(content, inlineLogMarker))
+			logStyle := a.styles.messageBody.Copy().
+				Foreground(lipgloss.Color(oliveGray)).
+				Faint(true).
+				PaddingLeft(4)
+			return logStyle.Width(maxMessageWidth).Render(wrapPlain(content, max(16, maxMessageWidth-2))), nil
+		}
+		return a.styles.inlineSystem.Width(width).Render("  - " + wrapPlain(content, max(16, width-6))), nil
 	}
-
-	maxMessageWidth := tuiutils.Clamp(int(float64(width)*0.84), 24, width)
 	tag := messageTagAgent
 	tagStyle := a.styles.messageAgentTag
 	bodyStyle := a.styles.messageBody
