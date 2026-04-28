@@ -204,3 +204,137 @@ func TestRuntimeHooksConfigValidateWarnOnToolCallRequiresTarget(t *testing.T) {
 		t.Fatal("expected warn_on_tool_call without target to fail validation")
 	}
 }
+
+func TestRuntimeHooksConfigEdgeBranches(t *testing.T) {
+	t.Parallel()
+
+	t.Run("apply defaults fallback when defaults pointers are nil", func(t *testing.T) {
+		t.Parallel()
+		cfg := RuntimeHooksConfig{}
+		cfg.ApplyDefaults(RuntimeHooksConfig{
+			DefaultTimeoutSec:    5,
+			DefaultFailurePolicy: runtimeHookFailurePolicyFailOpen,
+		})
+		if cfg.Enabled == nil || !*cfg.Enabled {
+			t.Fatal("expected enabled fallback to true")
+		}
+		if cfg.UserHooksEnabled == nil || !*cfg.UserHooksEnabled {
+			t.Fatal("expected user_hooks_enabled fallback to true")
+		}
+	})
+
+	t.Run("validate root errors and duplicate id", func(t *testing.T) {
+		t.Parallel()
+		cfg := RuntimeHooksConfig{
+			DefaultTimeoutSec:    0,
+			DefaultFailurePolicy: runtimeHookFailurePolicyWarnOnly,
+		}
+		if err := cfg.Validate(); err == nil {
+			t.Fatal("expected timeout validation error")
+		}
+
+		cfg = RuntimeHooksConfig{
+			DefaultTimeoutSec:    2,
+			DefaultFailurePolicy: "bad",
+		}
+		if err := cfg.Validate(); err == nil {
+			t.Fatal("expected default failure policy validation error")
+		}
+
+		cfg = RuntimeHooksConfig{
+			DefaultTimeoutSec:    2,
+			DefaultFailurePolicy: runtimeHookFailurePolicyWarnOnly,
+			Items: []RuntimeHookItemConfig{
+				{ID: "dup", Point: runtimeHookPointBeforeToolCall, Scope: runtimeHookScopeUser, Kind: runtimeHookKindBuiltIn, Mode: runtimeHookModeSync, Handler: runtimeHookHandlerWarnOnToolCall, TimeoutSec: 1, Params: map[string]any{"tool_name": "bash"}},
+				{ID: " DUP ", Point: runtimeHookPointBeforeToolCall, Scope: runtimeHookScopeUser, Kind: runtimeHookKindBuiltIn, Mode: runtimeHookModeSync, Handler: runtimeHookHandlerWarnOnToolCall, TimeoutSec: 1, Params: map[string]any{"tool_name": "bash"}},
+			},
+		}
+		if err := cfg.Validate(); err == nil {
+			t.Fatal("expected duplicate id error")
+		}
+	})
+
+	t.Run("item validate missing id and timeout", func(t *testing.T) {
+		t.Parallel()
+		if err := (RuntimeHookItemConfig{}).Validate(runtimeHookFailurePolicyWarnOnly); err == nil {
+			t.Fatal("expected missing id error")
+		}
+		item := RuntimeHookItemConfig{
+			ID:      "x",
+			Point:   runtimeHookPointBeforeToolCall,
+			Scope:   runtimeHookScopeUser,
+			Kind:    runtimeHookKindBuiltIn,
+			Mode:    runtimeHookModeSync,
+			Handler: runtimeHookHandlerAddContextNote,
+			Params:  map[string]any{"note": "ok"},
+		}
+		if err := item.Validate(runtimeHookFailurePolicyWarnOnly); err == nil {
+			t.Fatal("expected timeout error")
+		}
+	})
+
+	t.Run("helper functions", func(t *testing.T) {
+		t.Parallel()
+		if !(RuntimeHooksConfig{Enabled: boolPtr(true)}).IsEnabled() {
+			t.Fatal("expected enabled true")
+		}
+		if (RuntimeHooksConfig{Enabled: boolPtr(false)}).IsEnabled() {
+			t.Fatal("expected enabled false")
+		}
+		if !(RuntimeHooksConfig{}).IsEnabled() {
+			t.Fatal("expected enabled default true when nil")
+		}
+		if !(RuntimeHooksConfig{UserHooksEnabled: boolPtr(true)}).IsUserHooksEnabled() {
+			t.Fatal("expected user hooks enabled true")
+		}
+		if (RuntimeHooksConfig{UserHooksEnabled: boolPtr(false)}).IsUserHooksEnabled() {
+			t.Fatal("expected user hooks enabled false")
+		}
+		if !(RuntimeHooksConfig{}).IsUserHooksEnabled() {
+			t.Fatal("expected user hooks default true when nil")
+		}
+		if (RuntimeHookItemConfig{Enabled: boolPtr(false)}).IsEnabled() {
+			t.Fatal("expected item disabled false")
+		}
+		if !(RuntimeHookItemConfig{}).IsEnabled() {
+			t.Fatal("expected item default enabled when nil")
+		}
+		if err := validateRuntimeHookFailurePolicy(runtimeHookFailurePolicyFailClose); err != nil {
+			t.Fatalf("expected fail_close valid, got %v", err)
+		}
+		if err := validateRuntimeHookFailurePolicy("bad"); err == nil {
+			t.Fatal("expected invalid policy error")
+		}
+
+		original := map[string]any{
+			"a": []any{"x", map[string]any{"b": "c"}},
+		}
+		cloned, ok := cloneRuntimeHookParamValue(original).(map[string]any)
+		if !ok {
+			t.Fatal("expected cloned map")
+		}
+		clonedSlice := cloned["a"].([]any)
+		nested := clonedSlice[1].(map[string]any)
+		nested["b"] = "changed"
+		origNested := original["a"].([]any)[1].(map[string]any)
+		if origNested["b"] == "changed" {
+			t.Fatal("expected deep clone for nested map in slice")
+		}
+
+		if hasWarnOnToolCallTargets(nil) {
+			t.Fatal("nil params should be false")
+		}
+		if !hasWarnOnToolCallTargets(map[string]any{"tool_name": "bash"}) {
+			t.Fatal("tool_name should pass")
+		}
+		if !hasWarnOnToolCallTargets(map[string]any{"tool_names": []string{"", "bash"}}) {
+			t.Fatal("tool_names []string should pass")
+		}
+		if !hasWarnOnToolCallTargets(map[string]any{"tool_names": []any{"", "bash"}}) {
+			t.Fatal("tool_names []any should pass")
+		}
+		if hasWarnOnToolCallTargets(map[string]any{"tool_names": "bash"}) {
+			t.Fatal("tool_names scalar should fail")
+		}
+	})
+}
