@@ -184,6 +184,52 @@ func TestSelectionServiceListModelsSnapshotRejectsUnsupportedDriver(t *testing.T
 	}
 }
 
+func TestSelectionServiceRefreshModelsUsesRefreshPathAndRepairsCurrentModel(t *testing.T) {
+	t.Parallel()
+
+	manager := newSelectionTestManager(t, testDefaultConfig())
+	if err := manager.Update(context.Background(), func(cfg *configpkg.Config) error {
+		cfg.CurrentModel = "removed-model"
+		return nil
+	}); err != nil {
+		t.Fatalf("seed current model: %v", err)
+	}
+
+	service := NewService(manager, newDriverSupporterStub(), catalogMethodsStub{
+		listModels: []providertypes.ModelDescriptor{
+			{ID: OpenAIDefaultModel, Name: "GPT Default"},
+			{ID: "gpt-5.4-mini", Name: "GPT Mini"},
+		},
+	})
+
+	models, err := service.RefreshModels(context.Background())
+	if err != nil {
+		t.Fatalf("RefreshModels() error = %v", err)
+	}
+	if len(models) != 2 {
+		t.Fatalf("expected refreshed models, got %+v", models)
+	}
+
+	cfg := manager.Get()
+	if cfg.CurrentModel != OpenAIDefaultModel {
+		t.Fatalf("expected current model repaired to provider default, got %q", cfg.CurrentModel)
+	}
+}
+
+func TestSelectionServiceRefreshModelsReturnsNoModelsAvailable(t *testing.T) {
+	t.Parallel()
+
+	manager := newSelectionTestManager(t, testDefaultConfig())
+	service := NewService(manager, newDriverSupporterStub(), catalogMethodsStub{
+		listModels: nil,
+	})
+
+	_, err := service.RefreshModels(context.Background())
+	if !errors.Is(err, ErrNoModelsAvailable) {
+		t.Fatalf("expected ErrNoModelsAvailable, got %v", err)
+	}
+}
+
 func TestSelectionServiceSelectProviderAndSetCurrentModel(t *testing.T) {
 	manager := newSelectionTestManager(t, testDefaultConfig())
 
