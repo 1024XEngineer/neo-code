@@ -70,11 +70,7 @@ export default defineConfig({
       themeConfig: {
         nav: [
           { text: "快速开始", link: "/guide/" },
-          { text: "日常使用", link: "/guide/daily-use" },
-          { text: "核心概念", link: "/guide/slash-commands" },
-          { text: "排障", link: "/guide/troubleshooting" },
           { text: "进阶与设计", link: "/reference/" },
-          { text: "GitHub", link: repoUrl },
         ],
         sidebar: {
           "/guide/": [
@@ -169,11 +165,7 @@ export default defineConfig({
       themeConfig: {
         nav: [
           { text: "Getting Started", link: "/en/guide/" },
-          { text: "Daily Use", link: "/en/guide/daily-use" },
-          { text: "Concepts", link: "/en/guide/slash-commands" },
-          { text: "Troubleshooting", link: "/en/guide/troubleshooting" },
           { text: "Reference", link: "/reference/" },
-          { text: "GitHub", link: repoUrl },
         ],
         sidebar: {
           "/en/guide/": [
