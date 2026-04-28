@@ -3,12 +3,14 @@ package runtime
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	providertypes "neo-code/internal/provider/types"
 	approvalflow "neo-code/internal/runtime/approval"
+	"neo-code/internal/runtime/controlplane"
 	runtimehooks "neo-code/internal/runtime/hooks"
 	"neo-code/internal/tools"
 )
@@ -265,5 +267,156 @@ func TestRunBeforeCompletionDecisionHookBlockIsObservedOnly(t *testing.T) {
 		if payload.Point != string(runtimehooks.HookPointBeforeCompletionDecision) {
 			t.Fatalf("payload.Point = %q, want %q", payload.Point, runtimehooks.HookPointBeforeCompletionDecision)
 		}
+	}
+}
+
+func TestHookIntegrationHelpersBranches(t *testing.T) {
+	t.Parallel()
+
+	if got := firstNonBlank(" ", "\n", "value", "ignored"); got != "value" {
+		t.Fatalf("firstNonBlank() = %q, want value", got)
+	}
+	if got := firstNonBlank(" ", "\n"); got != "" {
+		t.Fatalf("firstNonBlank() = %q, want empty", got)
+	}
+
+	if got := findHookBlockMessage(runtimehooks.RunOutput{}); got != "" {
+		t.Fatalf("findHookBlockMessage() for non-blocked output = %q, want empty", got)
+	}
+	if got := findHookBlockMessage(runtimehooks.RunOutput{
+		Blocked:   true,
+		BlockedBy: "hook-1",
+		Results:   []runtimehooks.HookResult{{HookID: "hook-1", Message: " denied "}},
+	}); got != "denied" {
+		t.Fatalf("findHookBlockMessage() from message = %q, want denied", got)
+	}
+	if got := findHookBlockMessage(runtimehooks.RunOutput{
+		Blocked:   true,
+		BlockedBy: "hook-2",
+		Results:   []runtimehooks.HookResult{{HookID: "hook-2", Error: " failed "}},
+	}); got != "failed" {
+		t.Fatalf("findHookBlockMessage() from error = %q, want failed", got)
+	}
+	if got := findHookBlockMessage(runtimehooks.RunOutput{
+		Blocked:   true,
+		BlockedBy: "hook-3",
+		Results:   []runtimehooks.HookResult{{HookID: "other", Message: "ignored"}},
+	}); got != "hook blocked by hook-3" {
+		t.Fatalf("findHookBlockMessage() fallback by hook id = %q", got)
+	}
+	if got := findHookBlockMessage(runtimehooks.RunOutput{
+		Blocked: true,
+		Results: []runtimehooks.HookResult{{HookID: "other", Message: "ignored"}},
+	}); got != "hook blocked" {
+		t.Fatalf("findHookBlockMessage() default fallback = %q", got)
+	}
+
+	wrapped := withRuntimeHookEnvelope(nil, hookRuntimeEnvelope{RunID: "run-1"})
+	envelope, ok := runtimeHookEnvelopeFromContext(wrapped)
+	if !ok || envelope.RunID != "run-1" {
+		t.Fatalf("runtimeHookEnvelopeFromContext() = (%+v,%v), want run-1", envelope, ok)
+	}
+	if _, ok := runtimeHookEnvelopeFromContext(nil); ok {
+		t.Fatalf("runtimeHookEnvelopeFromContext(nil) should return ok=false")
+	}
+	if _, ok := runtimeHookEnvelopeFromContext(context.Background()); ok {
+		t.Fatalf("runtimeHookEnvelopeFromContext(background) should return ok=false")
+	}
+
+	state := newRunState(" run-id ", newRuntimeSession("session-x"))
+	state.turn = 3
+	if got := hookRunIDFromState(&state); got != "run-id" {
+		t.Fatalf("hookRunIDFromState() = %q", got)
+	}
+	if got := hookSessionIDFromState(&state); got != "session-x" {
+		t.Fatalf("hookSessionIDFromState() = %q", got)
+	}
+	if got := hookTurnFromState(&state); got != 3 {
+		t.Fatalf("hookTurnFromState() = %d", got)
+	}
+	if got := hookPhaseFromState(&state); got != "" {
+		t.Fatalf("hookPhaseFromState() without lifecycle = %q, want empty", got)
+	}
+	state.lifecycle = controlplane.RunStateExecute
+	if got := hookPhaseFromState(&state); got != string(controlplane.RunStateExecute) {
+		t.Fatalf("hookPhaseFromState() with lifecycle = %q", got)
+	}
+	if got := hookRunIDFromState(nil); got != "" {
+		t.Fatalf("hookRunIDFromState(nil) = %q, want empty", got)
+	}
+	if got := hookSessionIDFromState(nil); got != "" {
+		t.Fatalf("hookSessionIDFromState(nil) = %q, want empty", got)
+	}
+	if got := hookTurnFromState(nil); got != turnUnspecified {
+		t.Fatalf("hookTurnFromState(nil) = %d, want %d", got, turnUnspecified)
+	}
+}
+
+func TestSummarizeHookResultContentTruncatesLongContent(t *testing.T) {
+	t.Parallel()
+
+	if got := summarizeHookResultContent(" short "); got != "short" {
+		t.Fatalf("summarizeHookResultContent() short = %q", got)
+	}
+	long := strings.Repeat("x", 300)
+	got := summarizeHookResultContent(long)
+	if len(got) != 256 {
+		t.Fatalf("summarizeHookResultContent() len = %d, want 256", len(got))
+	}
+}
+
+func TestHookRuntimeEventEmitterBranches(t *testing.T) {
+	t.Parallel()
+
+	if err := (&hookRuntimeEventEmitter{}).EmitHookEvent(context.Background(), runtimehooks.HookEvent{
+		Type: runtimehooks.HookEventStarted,
+	}); err != nil {
+		t.Fatalf("EmitHookEvent() with nil service error = %v", err)
+	}
+
+	service := &Service{events: make(chan RuntimeEvent, 8)}
+	emitter := newHookRuntimeEventEmitter(service)
+	if err := emitter.EmitHookEvent(context.Background(), runtimehooks.HookEvent{}); err != nil {
+		t.Fatalf("EmitHookEvent() blank type error = %v", err)
+	}
+	if got := len(collectRuntimeEvents(service.Events())); got != 0 {
+		t.Fatalf("expected blank event type to be ignored, got %d events", got)
+	}
+
+	startedAt := time.Date(2026, 4, 20, 10, 30, 0, 0, time.UTC)
+	ctx := withRuntimeHookEnvelope(context.Background(), hookRuntimeEnvelope{
+		RunID:     "run-evt",
+		SessionID: "session-evt",
+		Turn:      2,
+		Phase:     "execute",
+	})
+	if err := emitter.EmitHookEvent(ctx, runtimehooks.HookEvent{
+		Type:       runtimehooks.HookEventFinished,
+		HookID:     "hook-evt",
+		Point:      runtimehooks.HookPointAfterToolResult,
+		Scope:      runtimehooks.HookScopeInternal,
+		Kind:       runtimehooks.HookKindFunction,
+		Mode:       runtimehooks.HookModeSync,
+		Status:     runtimehooks.HookResultPass,
+		StartedAt:  startedAt,
+		DurationMS: 12,
+		Error:      "",
+	}); err != nil {
+		t.Fatalf("EmitHookEvent() finished error = %v", err)
+	}
+	events := collectRuntimeEvents(service.Events())
+	if len(events) != 1 {
+		t.Fatalf("events len = %d, want 1", len(events))
+	}
+	evt := events[0]
+	if evt.Type != EventHookFinished || evt.RunID != "run-evt" || evt.SessionID != "session-evt" || evt.Turn != 2 || evt.Phase != "execute" {
+		t.Fatalf("unexpected runtime event envelope: %+v", evt)
+	}
+	payload, ok := evt.Payload.(HookEventPayload)
+	if !ok {
+		t.Fatalf("payload type = %T, want HookEventPayload", evt.Payload)
+	}
+	if payload.HookID != "hook-evt" || payload.Point != string(runtimehooks.HookPointAfterToolResult) || payload.DurationMS != 12 {
+		t.Fatalf("unexpected payload: %+v", payload)
 	}
 }
