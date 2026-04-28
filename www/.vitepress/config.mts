@@ -95,6 +95,7 @@ export default defineConfig({
               text: "日常使用",
               items: [
                 { text: "日常使用", link: "/guide/daily-use" },
+                { text: "HTTP URL 唤醒指南", link: "/guide/http-daemon-wake-user-guide" },
                 { text: "配置指南", link: "/guide/configuration" },
                 { text: "工具与权限", link: "/guide/tools-permissions" },
               ],
