@@ -114,6 +114,17 @@ try {
 		Write-Host "Updated PATH. Re-open PowerShell/CMD to apply changes." -ForegroundColor Yellow
 	}
 
+	if ($Flavor -eq "full") {
+		$NeoCodeExecutablePath = Join-Path $InstallDir "neocode.exe"
+		Write-Host "Installing HTTP daemon autostart..."
+		try {
+			& $NeoCodeExecutablePath daemon install | Out-Null
+		}
+		catch {
+			Write-Warning "Failed to install HTTP daemon autostart automatically."
+			Write-Warning "Run '$NeoCodeExecutablePath daemon install' manually after installation."
+		}
+	}
 	Write-Host "Installed $BinaryName ($Flavor) from $LatestTag." -ForegroundColor Green
 }
 finally {

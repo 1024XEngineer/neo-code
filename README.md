@@ -181,3 +181,35 @@ go build ./...
 ## License
 
 MIT
+## HTTP Daemon 唤醒（Step 2.5 并存）
+
+为解决多数文档平台不支持直接点击 `neocode://` 的问题，新增本机 HTTP daemon 入口，当前与 URL Scheme 并存。
+
+```bash
+# 启动本地 HTTP daemon（默认 127.0.0.1:18921）
+go run ./cmd/neocode daemon serve
+
+# 安装用户态自启动 + best-effort hosts 别名写入（127.0.0.1 neocode）
+go run ./cmd/neocode daemon install
+
+# 查看运行与安装状态
+go run ./cmd/neocode daemon status
+
+# 卸载自启动配置
+go run ./cmd/neocode daemon uninstall
+```
+
+可点击链接示例：
+
+```text
+http://neocode:18921/review?path=README.md
+http://neocode:18921/run?prompt=写一个简单的HTTP服务器
+```
+
+说明：
+
+- 当前为并存期：`neocode://` 与 `http://neocode:18921/...` 可同时使用。
+- `daemon serve` 不提供 `--token-file`，默认仅监听 `127.0.0.1`，并限制 Host 白名单为 `neocode` / `localhost` / `127.0.0.1`。
+- Linux 自启动策略：优先 `systemd --user`，若不可用则回落到 `~/.config/autostart/neocode-daemon.desktop`。
+- 若未通过安装脚本安装（例如 `go build` / 裸二进制），请手动执行一次 `neocode daemon install`。
+
