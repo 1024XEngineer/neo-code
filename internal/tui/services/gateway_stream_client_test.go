@@ -63,6 +63,7 @@ func TestDecodeRuntimeEventFromGatewayNotificationRestoresToolResultPayload(t *t
 				"Name":       "bash",
 				"Content":    "ok",
 				"IsError":    false,
+				"ErrorClass": "hook_blocked",
 			},
 		},
 	})
@@ -77,6 +78,42 @@ func TestDecodeRuntimeEventFromGatewayNotificationRestoresToolResultPayload(t *t
 	}
 	if toolResult.ToolCallID != "call-1" || toolResult.Name != "bash" || toolResult.Content != "ok" || toolResult.IsError {
 		t.Fatalf("unexpected tool result payload: %#v", toolResult)
+	}
+	if toolResult.ErrorClass != "hook_blocked" {
+		t.Fatalf("toolResult.ErrorClass = %q, want %q", toolResult.ErrorClass, "hook_blocked")
+	}
+}
+
+func TestDecodeRuntimeEventFromGatewayNotificationRestoresHookBlockedPayload(t *testing.T) {
+	notification := buildGatewayEventNotification(t, gateway.MessageFrame{
+		Type:      gateway.FrameTypeEvent,
+		Action:    gateway.FrameActionRun,
+		SessionID: "session-hook",
+		RunID:     "run-hook",
+		Payload: map[string]any{
+			"runtime_event_type": string(EventHookBlocked),
+			"payload_version":    runtimeEventPayloadVersion,
+			"payload": map[string]any{
+				"hook_id":      "block-before-tool",
+				"point":        "before_tool_call",
+				"tool_call_id": "call-2",
+				"tool_name":    "bash",
+				"reason":       "blocked by policy",
+				"enforced":     true,
+			},
+		},
+	})
+
+	event, err := decodeRuntimeEventFromGatewayNotification(notification)
+	if err != nil {
+		t.Fatalf("decodeRuntimeEventFromGatewayNotification() error = %v", err)
+	}
+	payload, ok := event.Payload.(HookBlockedPayload)
+	if !ok {
+		t.Fatalf("event.Payload type = %T, want HookBlockedPayload", event.Payload)
+	}
+	if payload.HookID != "block-before-tool" || payload.Point != "before_tool_call" || payload.ToolName != "bash" || !payload.Enforced {
+		t.Fatalf("unexpected hook blocked payload: %#v", payload)
 	}
 }
 

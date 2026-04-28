@@ -233,6 +233,10 @@ func restoreRuntimePayload(eventType EventType, payload any) (any, error) {
 		return decodeRuntimePayload[AssetSavedPayload](payload)
 	case EventAssetSaveFailed:
 		return decodeRuntimePayload[AssetSaveFailedPayload](payload)
+	case EventHookStarted, EventHookFinished, EventHookFailed:
+		return decodeRuntimePayload[HookEventPayload](payload)
+	case EventHookBlocked:
+		return decodeRuntimePayload[HookBlockedPayload](payload)
 	case EventTodoUpdated, EventTodoConflict:
 		return decodeRuntimePayload[TodoEventPayload](payload)
 	case EventType(RuntimeEventRunContext):
