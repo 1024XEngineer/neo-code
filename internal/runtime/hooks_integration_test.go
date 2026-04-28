@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -227,11 +228,17 @@ func TestRunBeforeCompletionDecisionHookBlockIsObservedOnly(t *testing.T) {
 	}
 	service := NewWithFactory(manager, &stubToolManager{}, store, &scriptedProviderFactory{provider: scripted}, &stubContextBuilder{})
 
+	var capturedWorkdir string
 	registry := runtimehooks.NewRegistry()
 	if err := registry.Register(runtimehooks.HookSpec{
 		ID:    "block-before-completion",
 		Point: runtimehooks.HookPointBeforeCompletionDecision,
 		Handler: func(ctx context.Context, input runtimehooks.HookContext) runtimehooks.HookResult {
+			if raw, ok := input.Metadata["workdir"]; ok {
+				if text, ok := raw.(string); ok {
+					capturedWorkdir = strings.TrimSpace(text)
+				}
+			}
 			return runtimehooks.HookResult{Status: runtimehooks.HookResultBlock, Message: "blocked but non-authoritative"}
 		},
 	}); err != nil {
@@ -265,6 +272,9 @@ func TestRunBeforeCompletionDecisionHookBlockIsObservedOnly(t *testing.T) {
 		if payload.Point != string(runtimehooks.HookPointBeforeCompletionDecision) {
 			t.Fatalf("payload.Point = %q, want %q", payload.Point, runtimehooks.HookPointBeforeCompletionDecision)
 		}
+	}
+	if capturedWorkdir == "" {
+		t.Fatalf("expected before_completion_decision hook metadata to include workdir")
 	}
 }
 

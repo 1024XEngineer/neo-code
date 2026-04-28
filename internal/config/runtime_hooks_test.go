@@ -178,3 +178,29 @@ func TestRuntimeHooksConfigValidateItemFailurePolicy(t *testing.T) {
 		t.Fatal("expected invalid item failure_policy to be rejected")
 	}
 }
+
+func TestRuntimeHooksConfigValidateWarnOnToolCallRequiresTarget(t *testing.T) {
+	t.Parallel()
+
+	cfg := RuntimeHooksConfig{
+		Enabled:              boolPtr(true),
+		UserHooksEnabled:     boolPtr(true),
+		DefaultTimeoutSec:    2,
+		DefaultFailurePolicy: runtimeHookFailurePolicyWarnOnly,
+		Items: []RuntimeHookItemConfig{
+			{
+				ID:            "warn-missing-target",
+				Point:         runtimeHookPointBeforeToolCall,
+				Scope:         runtimeHookScopeUser,
+				Kind:          runtimeHookKindBuiltIn,
+				Mode:          runtimeHookModeSync,
+				Handler:       runtimeHookHandlerWarnOnToolCall,
+				TimeoutSec:    2,
+				FailurePolicy: runtimeHookFailurePolicyWarnOnly,
+			},
+		},
+	}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected warn_on_tool_call without target to fail validation")
+	}
+}

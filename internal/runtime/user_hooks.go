@@ -24,18 +24,15 @@ func configureRuntimeHooksFromConfig(service *Service, cfg config.Config) error 
 	if service == nil {
 		return nil
 	}
+	baseExecutor := unwrapBaseHookExecutor(service.hookExecutor)
 	hooksCfg := cfg.Runtime.Hooks.Clone()
 	hooksCfg.ApplyDefaults(config.StaticDefaults().Runtime.Hooks)
 	if !hooksCfg.IsEnabled() {
-		service.SetHookExecutor(nil)
+		service.SetHookExecutor(baseExecutor)
 		return nil
 	}
 	if !hooksCfg.IsUserHooksEnabled() {
-		service.SetHookExecutor(runtimehooks.NewExecutor(
-			runtimehooks.NewRegistry(),
-			newHookRuntimeEventEmitter(service),
-			runtimehooks.DefaultHookTimeout,
-		))
+		service.SetHookExecutor(baseExecutor)
 		return nil
 	}
 
@@ -55,19 +52,66 @@ func configureRuntimeHooksFromConfig(service *Service, cfg config.Config) error 
 		registered++
 	}
 	if registered == 0 {
-		service.SetHookExecutor(runtimehooks.NewExecutor(
-			runtimehooks.NewRegistry(),
-			newHookRuntimeEventEmitter(service),
-			runtimehooks.DefaultHookTimeout,
-		))
+		service.SetHookExecutor(baseExecutor)
 		return nil
 	}
-	service.SetHookExecutor(runtimehooks.NewExecutor(
+	userExecutor := runtimehooks.NewExecutor(
 		registry,
 		newHookRuntimeEventEmitter(service),
 		time.Duration(hooksCfg.DefaultTimeoutSec)*time.Second,
-	))
+	)
+	service.SetHookExecutor(&userComposedHookExecutor{base: baseExecutor, user: userExecutor})
 	return nil
+}
+
+type userComposedHookExecutor struct {
+	base HookExecutor
+	user HookExecutor
+}
+
+func (e *userComposedHookExecutor) Run(
+	ctx context.Context,
+	point runtimehooks.HookPoint,
+	input runtimehooks.HookContext,
+) runtimehooks.RunOutput {
+	baseOutput := runHookExecutorSafely(e.base, ctx, point, input)
+	if baseOutput.Blocked {
+		return baseOutput
+	}
+	userOutput := runHookExecutorSafely(e.user, ctx, point, input)
+	if len(baseOutput.Results) == 0 {
+		return userOutput
+	}
+	if len(userOutput.Results) == 0 {
+		return baseOutput
+	}
+	combined := runtimehooks.RunOutput{
+		Results: append(append([]runtimehooks.HookResult{}, baseOutput.Results...), userOutput.Results...),
+	}
+	if userOutput.Blocked {
+		combined.Blocked = true
+		combined.BlockedBy = userOutput.BlockedBy
+	}
+	return combined
+}
+
+func unwrapBaseHookExecutor(executor HookExecutor) HookExecutor {
+	if composed, ok := executor.(*userComposedHookExecutor); ok {
+		return composed.base
+	}
+	return executor
+}
+
+func runHookExecutorSafely(
+	executor HookExecutor,
+	ctx context.Context,
+	point runtimehooks.HookPoint,
+	input runtimehooks.HookContext,
+) runtimehooks.RunOutput {
+	if executor == nil {
+		return runtimehooks.RunOutput{}
+	}
+	return executor.Run(ctx, point, input)
 }
 
 // buildUserHookSpec 将 user builtin hook 配置转换为 runtime 可执行 HookSpec。
@@ -138,6 +182,9 @@ func buildUserBuiltinHookHandler(
 	case "warn_on_tool_call":
 		targetTool := strings.ToLower(strings.TrimSpace(readHookParamString(params, "tool_name")))
 		targetTools := normalizeHookParamStringSlice(readHookParamStringSlice(params, "tool_names"))
+		if targetTool == "" && len(targetTools) == 0 {
+			return nil, fmt.Errorf("handler warn_on_tool_call requires params.tool_name or params.tool_names")
+		}
 		defaultMessage := "tool call matched warn_on_tool_call"
 		if customMessage := strings.TrimSpace(readHookParamString(params, "message")); customMessage != "" {
 			defaultMessage = customMessage
@@ -147,9 +194,6 @@ func buildUserBuiltinHookHandler(
 			toolName := strings.ToLower(strings.TrimSpace(readHookContextMetadataString(input, "tool_name")))
 			if toolName == "" {
 				return runtimehooks.HookResult{Status: runtimehooks.HookResultPass}
-			}
-			if targetTool == "" && len(targetTools) == 0 {
-				return runtimehooks.HookResult{Status: runtimehooks.HookResultPass, Message: defaultMessage}
 			}
 			if targetTool != "" && toolName == targetTool {
 				return runtimehooks.HookResult{Status: runtimehooks.HookResultPass, Message: defaultMessage}

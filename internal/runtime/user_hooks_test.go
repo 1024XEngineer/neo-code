@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -184,8 +185,8 @@ func TestConfigureRuntimeHooksFromConfig(t *testing.T) {
 	if err := configureRuntimeHooksFromConfig(service, cfg); err != nil {
 		t.Fatalf("disable user hooks error = %v", err)
 	}
-	if service.hookExecutor == nil {
-		t.Fatal("expected hook executor to remain available when user hooks disabled")
+	if service.hookExecutor != nil {
+		t.Fatal("expected nil hook executor when base executor is nil and user hooks are disabled")
 	}
 
 	cfg.Runtime.Hooks.Enabled = runtimeBoolPtr(false)
@@ -195,6 +196,80 @@ func TestConfigureRuntimeHooksFromConfig(t *testing.T) {
 	if service.hookExecutor != nil {
 		t.Fatal("expected hook executor disabled when hooks.enabled=false")
 	}
+}
+
+func TestConfigureRuntimeHooksFromConfigKeepsBaseExecutorAndComposes(t *testing.T) {
+	t.Parallel()
+
+	workdir := t.TempDir()
+	cfg := *config.StaticDefaults()
+	cfg.Workdir = workdir
+	cfg.Runtime.Hooks.Items = []config.RuntimeHookItemConfig{
+		{
+			ID:      "warn-before-tool",
+			Enabled: runtimeBoolPtr(true),
+			Point:   "before_tool_call",
+			Scope:   "user",
+			Kind:    "builtin",
+			Mode:    "sync",
+			Handler: "warn_on_tool_call",
+			Params: map[string]any{
+				"tool_name": "bash",
+				"message":   "warn",
+			},
+		},
+	}
+	cfg.Runtime.Hooks.ApplyDefaults(config.StaticDefaults().Runtime.Hooks)
+
+	base := &countingHookExecutor{
+		output: runtimehooks.RunOutput{
+			Results: []runtimehooks.HookResult{
+				{HookID: "base", Scope: runtimehooks.HookScopeInternal, Status: runtimehooks.HookResultPass},
+			},
+		},
+	}
+	service := &Service{
+		hookExecutor: base,
+		events:       make(chan RuntimeEvent, 32),
+	}
+	if err := configureRuntimeHooksFromConfig(service, cfg); err != nil {
+		t.Fatalf("configureRuntimeHooksFromConfig() error = %v", err)
+	}
+	if service.hookExecutor == nil {
+		t.Fatal("expected composed hook executor")
+	}
+
+	output := service.hookExecutor.Run(context.Background(), runtimehooks.HookPointBeforeToolCall, runtimehooks.HookContext{
+		Metadata: map[string]any{"tool_name": "bash"},
+	})
+	if base.calls.Load() == 0 {
+		t.Fatal("expected base executor to be invoked")
+	}
+	if len(output.Results) < 2 {
+		t.Fatalf("expected combined results from base+user, got %+v", output.Results)
+	}
+
+	cfg.Runtime.Hooks.UserHooksEnabled = runtimeBoolPtr(false)
+	if err := configureRuntimeHooksFromConfig(service, cfg); err != nil {
+		t.Fatalf("reconfigure disable user hooks error = %v", err)
+	}
+	if service.hookExecutor != base {
+		t.Fatalf("expected base executor to be restored, got %T", service.hookExecutor)
+	}
+}
+
+type countingHookExecutor struct {
+	calls  atomic.Int32
+	output runtimehooks.RunOutput
+}
+
+func (e *countingHookExecutor) Run(
+	_ context.Context,
+	_ runtimehooks.HookPoint,
+	_ runtimehooks.HookContext,
+) runtimehooks.RunOutput {
+	e.calls.Add(1)
+	return e.output
 }
 
 func runtimeBoolPtr(value bool) *bool {

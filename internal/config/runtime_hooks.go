@@ -253,6 +253,9 @@ func (c RuntimeHookItemConfig) Validate(defaultFailurePolicy string) error {
 	default:
 		return fmt.Errorf("handler %q is not supported", c.Handler)
 	}
+	if handler == runtimeHookHandlerWarnOnToolCall && !hasWarnOnToolCallTargets(c.Params) {
+		return fmt.Errorf("handler %q requires params.tool_name or params.tool_names", c.Handler)
+	}
 	return nil
 }
 
@@ -290,4 +293,33 @@ func cloneRuntimeHookParamValue(value any) any {
 	default:
 		return value
 	}
+}
+
+func hasWarnOnToolCallTargets(params map[string]any) bool {
+	if len(params) == 0 {
+		return false
+	}
+	toolNameRaw, hasToolName := params["tool_name"]
+	if hasToolName && strings.TrimSpace(fmt.Sprintf("%v", toolNameRaw)) != "" {
+		return true
+	}
+	toolNamesRaw, hasToolNames := params["tool_names"]
+	if !hasToolNames || toolNamesRaw == nil {
+		return false
+	}
+	switch typed := toolNamesRaw.(type) {
+	case []string:
+		for _, item := range typed {
+			if strings.TrimSpace(item) != "" {
+				return true
+			}
+		}
+	case []any:
+		for _, item := range typed {
+			if strings.TrimSpace(fmt.Sprintf("%v", item)) != "" {
+				return true
+			}
+		}
+	}
+	return false
 }

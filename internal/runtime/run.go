@@ -263,6 +263,7 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 							"completion_passed": completed,
 							"has_tool_calls":    hasToolCalls,
 							"assistant_role":    strings.TrimSpace(turnOutput.assistant.Role),
+							"workdir":           strings.TrimSpace(snapshot.Workdir),
 						},
 					},
 				)
