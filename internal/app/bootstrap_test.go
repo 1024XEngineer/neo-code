@@ -19,6 +19,7 @@ import (
 
 	"neo-code/internal/config"
 	configstate "neo-code/internal/config/state"
+	"neo-code/internal/gateway/protocol"
 	"neo-code/internal/memo"
 	"neo-code/internal/provider"
 	providertypes "neo-code/internal/provider/types"
@@ -1865,6 +1866,70 @@ func TestNewProgramFailsFastWhenHydrationFails(t *testing.T) {
 	}
 	if !stubRuntime.closed {
 		t.Fatal("expected runtime cleanup on hydration failure")
+	}
+}
+
+func TestNewProgramAcceptsWakeStartupPayload(t *testing.T) {
+	disableBuiltinProviderAPIKeys(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	originalFactory := newRemoteRuntimeAdapter
+	t.Cleanup(func() { newRemoteRuntimeAdapter = originalFactory })
+
+	stubRuntime := &stubRemoteRuntimeForBootstrap{
+		events: make(chan services.RuntimeEvent),
+	}
+	newRemoteRuntimeAdapter = func(_ services.RemoteRuntimeAdapterOptions) (runtimeWithClose, error) {
+		return stubRuntime, nil
+	}
+
+	encodedWakeInput, err := protocol.EncodeWakeStartupInput(protocol.WakeStartupInput{
+		Text:    "hello from wake",
+		Workdir: home,
+	})
+	if err != nil {
+		t.Fatalf("EncodeWakeStartupInput() error = %v", err)
+	}
+
+	_, cleanup, err := NewProgram(context.Background(), BootstrapOptions{WakeInputB64: encodedWakeInput})
+	if err != nil {
+		t.Fatalf("NewProgram() error = %v", err)
+	}
+	if cleanup == nil {
+		t.Fatal("expected non-nil cleanup")
+	}
+	if err := cleanup(); err != nil {
+		t.Fatalf("cleanup() error = %v", err)
+	}
+}
+
+func TestNewProgramFailsFastWhenWakeStartupPayloadInvalid(t *testing.T) {
+	disableBuiltinProviderAPIKeys(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	originalFactory := newRemoteRuntimeAdapter
+	t.Cleanup(func() { newRemoteRuntimeAdapter = originalFactory })
+
+	stubRuntime := &stubRemoteRuntimeForBootstrap{
+		events: make(chan services.RuntimeEvent),
+	}
+	newRemoteRuntimeAdapter = func(_ services.RemoteRuntimeAdapterOptions) (runtimeWithClose, error) {
+		return stubRuntime, nil
+	}
+
+	_, cleanup, err := NewProgram(context.Background(), BootstrapOptions{WakeInputB64: "not-base64"})
+	if cleanup != nil {
+		t.Fatal("expected nil cleanup when wake payload decode failed")
+	}
+	if err == nil {
+		t.Fatal("expected wake payload decode error")
+	}
+	if !stubRuntime.closed {
+		t.Fatal("expected runtime cleanup on wake payload decode failure")
 	}
 }
 

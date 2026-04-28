@@ -13,6 +13,7 @@ import (
 	"neo-code/internal/config"
 	configstate "neo-code/internal/config/state"
 	agentcontext "neo-code/internal/context"
+	"neo-code/internal/gateway/protocol"
 	"neo-code/internal/memo"
 	"neo-code/internal/provider"
 	"neo-code/internal/provider/builtin"
@@ -55,8 +56,9 @@ var (
 
 // BootstrapOptions 描述应用启动时可注入的运行时选项。
 type BootstrapOptions struct {
-	Workdir   string
-	SessionID string
+	Workdir      string
+	SessionID    string
+	WakeInputB64 string
 }
 
 type memoExtractorScheduler interface {
@@ -269,6 +271,21 @@ func NewProgram(ctx context.Context, opts BootstrapOptions) (*tea.Program, func(
 				_ = cleanup()
 			}
 			return nil, nil, err
+		}
+	}
+	if encodedWakeInput := strings.TrimSpace(opts.WakeInputB64); encodedWakeInput != "" {
+		wakeInput, decodeErr := protocol.DecodeWakeStartupInput(encodedWakeInput)
+		if decodeErr != nil {
+			if cleanup != nil {
+				_ = cleanup()
+			}
+			return nil, nil, decodeErr
+		}
+		if configureErr := tuiApp.ConfigureStartupWakeInput(wakeInput.Text, wakeInput.Workdir); configureErr != nil {
+			if cleanup != nil {
+				_ = cleanup()
+			}
+			return nil, nil, configureErr
 		}
 	}
 	return tea.NewProgram(

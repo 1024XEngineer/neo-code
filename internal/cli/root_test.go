@@ -115,6 +115,49 @@ func TestExecuteUsesOSArgs(t *testing.T) {
 	}
 }
 
+func TestNewRootCommandPassesWakeInputFlagToLauncher(t *testing.T) {
+	originalLauncher := launchRootProgram
+	t.Cleanup(func() { launchRootProgram = originalLauncher })
+
+	var captured app.BootstrapOptions
+	launchRootProgram = func(ctx context.Context, opts app.BootstrapOptions) error {
+		captured = opts
+		return nil
+	}
+
+	cmd := NewRootCommand()
+	cmd.SetArgs([]string{"--wake-input-b64", "payload-123"})
+	if err := cmd.ExecuteContext(context.Background()); err != nil {
+		t.Fatalf("ExecuteContext() error = %v", err)
+	}
+	if captured.WakeInputB64 != "payload-123" {
+		t.Fatalf("wake input = %q, want %q", captured.WakeInputB64, "payload-123")
+	}
+}
+
+func TestExecuteUsesOSArgsWithWakeInput(t *testing.T) {
+	originalLauncher := launchRootProgram
+	originalArgs := os.Args
+	t.Cleanup(func() {
+		launchRootProgram = originalLauncher
+		os.Args = originalArgs
+	})
+
+	var captured app.BootstrapOptions
+	launchRootProgram = func(ctx context.Context, opts app.BootstrapOptions) error {
+		captured = opts
+		return nil
+	}
+	os.Args = []string{"neocode", "--wake-input-b64", "payload-xyz"}
+
+	if err := Execute(context.Background()); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if captured.WakeInputB64 != "payload-xyz" {
+		t.Fatalf("wake input = %q, want %q", captured.WakeInputB64, "payload-xyz")
+	}
+}
+
 func TestExecuteWaitsForSilentUpdateCheckCompletion(t *testing.T) {
 	originalLauncher := launchRootProgram
 	originalPreload := runGlobalPreload
