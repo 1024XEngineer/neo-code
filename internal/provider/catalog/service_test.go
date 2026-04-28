@@ -397,6 +397,50 @@ func TestListProviderModelsRefreshesWhenCatalogSnapshotIsEmpty(t *testing.T) {
 	}
 }
 
+func TestRefreshProviderModelsReturnsConfiguredModelsWhenDiscoveryDisabled(t *testing.T) {
+	t.Parallel()
+
+	service := NewService("", newRegistry(t, openaicompat.DriverName, nil), newMemoryStore())
+	providerCfg := customGatewayProvider()
+	providerCfg.ModelSource = config.ModelSourceManual
+	providerCfg.Models = []providertypes.ModelDescriptor{{ID: "manual-model", Name: "Manual Model"}}
+
+	models, err := service.RefreshProviderModels(context.Background(), mustCatalogInput(t, providerCfg))
+	if err != nil {
+		t.Fatalf("RefreshProviderModels() error = %v", err)
+	}
+	if len(models) != 1 || models[0].ID != "manual-model" {
+		t.Fatalf("expected configured models without discovery, got %+v", models)
+	}
+}
+
+func TestRefreshProviderModelsDiscoversAndPersists(t *testing.T) {
+	t.Setenv(testAPIKeyEnv, "test-key")
+
+	registry := newRegistry(t, openaicompat.DriverName, func(ctx context.Context, cfg provider.RuntimeConfig) ([]providertypes.ModelDescriptor, error) {
+		return []providertypes.ModelDescriptor{{ID: "fresh-model", Name: "Fresh Model"}}, nil
+	})
+	store := newMemoryStore()
+	service := NewService("", registry, store)
+
+	input := customGatewayProviderSource()
+	models, err := service.RefreshProviderModels(context.Background(), input)
+	if err != nil {
+		t.Fatalf("RefreshProviderModels() error = %v", err)
+	}
+	if len(models) != 1 || models[0].ID != "fresh-model" {
+		t.Fatalf("expected discovered models, got %+v", models)
+	}
+
+	cached, err := store.Load(context.Background(), input.Identity)
+	if err != nil {
+		t.Fatalf("load cached catalog: %v", err)
+	}
+	if len(cached.Models) != 1 || cached.Models[0].ID != "fresh-model" {
+		t.Fatalf("expected refreshed models to be persisted, got %+v", cached.Models)
+	}
+}
+
 func TestDiscoverAndPersistFailurePaths(t *testing.T) {
 	t.Run("unsupported driver", func(t *testing.T) {
 		service := NewService("", provider.NewRegistry(), newMemoryStore())
