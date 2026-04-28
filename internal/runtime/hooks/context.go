@@ -79,6 +79,17 @@ func deepCloneValue(value reflect.Value) reflect.Value {
 			clonedArray.Index(i).Set(deepCloneValue(value.Index(i)))
 		}
 		return clonedArray
+	case reflect.Struct:
+		clonedStruct := reflect.New(value.Type()).Elem()
+		clonedStruct.Set(value)
+		for i := 0; i < value.NumField(); i++ {
+			target := clonedStruct.Field(i)
+			if !target.CanSet() {
+				continue
+			}
+			target.Set(deepCloneValue(value.Field(i)))
+		}
+		return clonedStruct
 	default:
 		return value
 	}
