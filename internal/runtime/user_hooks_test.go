@@ -256,6 +256,14 @@ func TestConfigureRuntimeHooksFromConfigKeepsBaseExecutorAndComposes(t *testing.
 	if service.hookExecutor != base {
 		t.Fatalf("expected base executor to be restored, got %T", service.hookExecutor)
 	}
+
+	cfg.Runtime.Hooks.Enabled = runtimeBoolPtr(false)
+	if err := configureRuntimeHooksFromConfig(service, cfg); err != nil {
+		t.Fatalf("reconfigure disable all hooks error = %v", err)
+	}
+	if service.hookExecutor != nil {
+		t.Fatalf("expected hooks.enabled=false to force nil executor, got %T", service.hookExecutor)
+	}
 }
 
 type countingHookExecutor struct {

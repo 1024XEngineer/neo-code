@@ -28,7 +28,7 @@ func configureRuntimeHooksFromConfig(service *Service, cfg config.Config) error 
 	hooksCfg := cfg.Runtime.Hooks.Clone()
 	hooksCfg.ApplyDefaults(config.StaticDefaults().Runtime.Hooks)
 	if !hooksCfg.IsEnabled() {
-		service.SetHookExecutor(baseExecutor)
+		service.SetHookExecutor(nil)
 		return nil
 	}
 	if !hooksCfg.IsUserHooksEnabled() {
