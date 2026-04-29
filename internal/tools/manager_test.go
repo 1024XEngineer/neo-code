@@ -1844,9 +1844,9 @@ func TestPermissionMapperHelpers(t *testing.T) {
 			spawnLabel: true,
 		},
 		{
-			name:      "extract spawn sandbox path from allowed_paths",
+			name:      "extract spawn sandbox path falls back when multiple allowed_paths are present",
 			input:     []byte(`{"allowed_paths":[" ","README.md","docs"]}`),
-			want:      "README.md",
+			want:      ".",
 			spawnPath: true,
 		},
 		{

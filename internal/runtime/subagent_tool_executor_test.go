@@ -560,6 +560,60 @@ func TestSubAgentRuntimeToolExecutorExecuteToolEvents(t *testing.T) {
 			t.Fatalf("decision = %q, want %q", result.Decision, permissionDecisionAllow)
 		}
 	})
+
+	t.Run("without parent token should still enforce allowed_paths boundary", func(t *testing.T) {
+		t.Parallel()
+
+		registry := tools.NewRegistry()
+		registry.Register(&stubTool{name: tools.ToolNameFilesystemReadFile, content: "ok"})
+		gateway, err := security.NewStaticGateway(security.DecisionAllow, nil)
+		if err != nil {
+			t.Fatalf("NewStaticGateway() error = %v", err)
+		}
+		manager, err := tools.NewManager(registry, gateway, nil)
+		if err != nil {
+			t.Fatalf("NewManager() error = %v", err)
+		}
+		service := NewWithFactory(
+			newRuntimeConfigManager(t),
+			manager,
+			newMemoryStore(),
+			&scriptedProviderFactory{provider: &scriptedProvider{}},
+			nil,
+		)
+		executor := newSubAgentRuntimeToolExecutor(service)
+
+		workdir := t.TempDir()
+		allowed := filepath.Join(workdir, "safe")
+		denied := filepath.Join(workdir, "unsafe", "note.txt")
+		result, execErr := executor.ExecuteTool(context.Background(), subagent.ToolExecutionInput{
+			RunID:     "run-subagent-no-parent-path-deny",
+			SessionID: "session-subagent-no-parent-path-deny",
+			TaskID:    "task-subagent-no-parent-path-deny",
+			Role:      subagent.RoleCoder,
+			AgentID:   "subagent:no-parent-path-deny",
+			Workdir:   workdir,
+			Timeout:   2 * time.Second,
+			Capability: subagent.Capability{
+				AllowedTools: []string{tools.ToolNameFilesystemReadFile},
+				AllowedPaths: []string{allowed},
+			},
+			Call: providertypes.ToolCall{
+				ID:        "call-no-parent-path-deny",
+				Name:      tools.ToolNameFilesystemReadFile,
+				Arguments: `{"path":"` + denied + `"}`,
+			},
+		})
+		if execErr == nil {
+			t.Fatalf("expected capability deny error")
+		}
+		if !errors.Is(execErr, tools.ErrCapabilityDenied) {
+			t.Fatalf("expected ErrCapabilityDenied, got %v", execErr)
+		}
+		if result.Decision != permissionDecisionDeny {
+			t.Fatalf("decision = %q, want %q", result.Decision, permissionDecisionDeny)
+		}
+	})
 }
 
 func TestSubAgentToolEventEmitRespectsContextCancellation(t *testing.T) {
@@ -641,6 +695,54 @@ func TestResolveSubAgentCapabilityToken(t *testing.T) {
 		})
 		if got != nil {
 			t.Fatalf("expected nil token without parent capability token, got %+v", got)
+		}
+	})
+
+	t.Run("without parent token should mint constrained token when signer is available", func(t *testing.T) {
+		t.Parallel()
+
+		registry := tools.NewRegistry()
+		registry.Register(&stubTool{name: tools.ToolNameFilesystemReadFile, content: "ok"})
+		gateway, err := security.NewStaticGateway(security.DecisionAllow, nil)
+		if err != nil {
+			t.Fatalf("NewStaticGateway() error = %v", err)
+		}
+		manager, err := tools.NewManager(registry, gateway, nil)
+		if err != nil {
+			t.Fatalf("NewManager() error = %v", err)
+		}
+		service := NewWithFactory(
+			newRuntimeConfigManager(t),
+			manager,
+			newMemoryStore(),
+			&scriptedProviderFactory{provider: &scriptedProvider{}},
+			nil,
+		)
+		executor := newSubAgentRuntimeToolExecutor(service).(*subAgentRuntimeToolExecutor)
+		workdir := t.TempDir()
+		got := executor.resolveCapabilityToken(subagent.ToolExecutionInput{
+			TaskID:  "task-mint-no-parent",
+			AgentID: "subagent:mint-no-parent",
+			Workdir: workdir,
+			Call: providertypes.ToolCall{
+				Name: tools.ToolNameFilesystemReadFile,
+			},
+			Capability: subagent.Capability{
+				AllowedTools: []string{tools.ToolNameFilesystemReadFile},
+				AllowedPaths: []string{workdir},
+			},
+		})
+		if got == nil {
+			t.Fatalf("expected minted capability token")
+		}
+		if got.TaskID != "task-mint-no-parent" || got.AgentID != "subagent:mint-no-parent" {
+			t.Fatalf("unexpected token binding: %+v", got)
+		}
+		if len(got.AllowedPaths) != 1 || !samePath(got.AllowedPaths[0], workdir) {
+			t.Fatalf("allowed_paths = %v, want [%s]", got.AllowedPaths, workdir)
+		}
+		if err := manager.CapabilitySigner().Verify(*got); err != nil {
+			t.Fatalf("verify minted token: %v", err)
 		}
 	})
 
@@ -763,4 +865,8 @@ func TestSubAgentCapabilityAllowlistHelpers(t *testing.T) {
 	if got := normalizePathAllowlist([]string{" ", "/a", "/a", "/b"}); len(got) != 2 || got[0] != "/a" || got[1] != "/b" {
 		t.Fatalf("normalizePathAllowlist unexpected result: %v", got)
 	}
+}
+
+func samePath(left string, right string) bool {
+	return strings.EqualFold(filepath.Clean(left), filepath.Clean(right))
 }

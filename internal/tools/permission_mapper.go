@@ -236,12 +236,16 @@ func extractSpawnSubAgentSandboxPath(raw []byte, workdir string) string {
 	if err := json.Unmarshal(raw, &payload); err != nil {
 		return defaultTarget
 	}
+	paths := make([]string, 0, len(payload.AllowedPaths))
 	for _, item := range payload.AllowedPaths {
 		trimmed := strings.TrimSpace(item)
 		if trimmed == "" {
 			continue
 		}
-		return trimmed
+		paths = append(paths, trimmed)
+	}
+	if len(paths) == 1 {
+		return paths[0]
 	}
 	return defaultTarget
 }
