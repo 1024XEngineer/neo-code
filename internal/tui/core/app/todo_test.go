@@ -231,7 +231,7 @@ func TestSetAndToggleTodoCollapsed(t *testing.T) {
 func TestOpenSelectedTodoDetail(t *testing.T) {
 	app, _ := newTestApp(t)
 	app.todoItems = []todoViewItem{
-		{ID: "todo-1", Title: "Plan", Status: "pending", Priority: 2, Owner: "agent/neo", UpdatedAt: time.Now()},
+		{ID: "todo-1", Title: "Plan", Status: "pending", Executor: "subagent", Priority: 2, Owner: "agent/neo", UpdatedAt: time.Now()},
 	}
 	app.todoPanelVisible = true
 	app.todoSelectedIndex = 0
@@ -243,6 +243,29 @@ func TestOpenSelectedTodoDetail(t *testing.T) {
 	last := app.activeMessages[len(app.activeMessages)-1]
 	if !strings.Contains(messageText(last), "[Todo] todo-1") {
 		t.Fatalf("expected todo detail in transcript, got %q", messageText(last))
+	}
+	if !strings.Contains(messageText(last), "executor: subagent") {
+		t.Fatalf("expected executor field in todo detail, got %q", messageText(last))
+	}
+}
+
+func TestMapTodoViewItemsCarriesExecutor(t *testing.T) {
+	now := time.Now()
+	items := []agentsession.TodoItem{
+		{
+			ID:        "todo-e",
+			Content:   "executor",
+			Status:    agentsession.TodoStatusPending,
+			Executor:  agentsession.TodoExecutorSubAgent,
+			UpdatedAt: now,
+		},
+	}
+	got := mapTodoViewItems(items)
+	if len(got) != 1 {
+		t.Fatalf("expected one mapped item, got %d", len(got))
+	}
+	if got[0].Executor != agentsession.TodoExecutorSubAgent {
+		t.Fatalf("mapped executor = %q, want %q", got[0].Executor, agentsession.TodoExecutorSubAgent)
 	}
 }
 

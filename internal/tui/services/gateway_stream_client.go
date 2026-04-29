@@ -243,6 +243,10 @@ func restoreRuntimePayload(eventType EventType, payload any) (any, error) {
 		return decodeRuntimePayload[RepoHooksTrustStoreInvalidPayload](payload)
 	case EventTodoUpdated, EventTodoConflict:
 		return decodeRuntimePayload[TodoEventPayload](payload)
+	case EventSubAgentStarted, EventSubAgentProgress, EventSubAgentRetried, EventSubAgentBlocked, EventSubAgentCompleted, EventSubAgentFailed, EventSubAgentCanceled, EventSubAgentFinished:
+		return decodeRuntimePayload[SubAgentEventPayload](payload)
+	case EventSubAgentToolCallStarted, EventSubAgentToolCallResult, EventSubAgentToolCallDenied:
+		return decodeRuntimePayload[SubAgentToolCallEventPayload](payload)
 	case EventType(RuntimeEventRunContext):
 		return decodeRuntimePayload[RuntimeRunContextPayload](payload)
 	case EventType(RuntimeEventToolStatus):

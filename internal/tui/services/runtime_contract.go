@@ -280,6 +280,31 @@ type TodoEventPayload struct {
 	Reason string `json:"reason,omitempty"`
 }
 
+// SubAgentEventPayload 描述子代理执行生命周期事件载荷。
+type SubAgentEventPayload struct {
+	Role       string `json:"role"`
+	TaskID     string `json:"task_id"`
+	State      string `json:"state"`
+	StopReason string `json:"stop_reason,omitempty"`
+	Step       int    `json:"step,omitempty"`
+	QueueSize  int    `json:"queue_size,omitempty"`
+	Running    int    `json:"running,omitempty"`
+	Reason     string `json:"reason,omitempty"`
+	Delta      string `json:"delta,omitempty"`
+	Error      string `json:"error,omitempty"`
+}
+
+// SubAgentToolCallEventPayload 描述子代理工具调用事件载荷。
+type SubAgentToolCallEventPayload struct {
+	Role      string `json:"role"`
+	TaskID    string `json:"task_id"`
+	ToolName  string `json:"tool_name"`
+	Decision  string `json:"decision"`
+	ElapsedMS int64  `json:"elapsed_ms"`
+	Truncated bool   `json:"truncated"`
+	Error     string `json:"error,omitempty"`
+}
+
 // InputNormalizedPayload 描述输入归一化摘要。
 type InputNormalizedPayload struct {
 	TextLength int `json:"text_length"`
@@ -385,4 +410,15 @@ const (
 	EventRepoHooksLoaded            EventType = "repo_hooks_loaded"
 	EventRepoHooksSkippedUntrusted  EventType = "repo_hooks_skipped_untrusted"
 	EventRepoHooksTrustStoreInvalid EventType = "repo_hooks_trust_store_invalid"
+	EventSubAgentStarted            EventType = "subagent_started"
+	EventSubAgentProgress           EventType = "subagent_progress"
+	EventSubAgentRetried            EventType = "subagent_retried"
+	EventSubAgentBlocked            EventType = "subagent_blocked"
+	EventSubAgentCompleted          EventType = "subagent_completed"
+	EventSubAgentFailed             EventType = "subagent_failed"
+	EventSubAgentCanceled           EventType = "subagent_canceled"
+	EventSubAgentFinished           EventType = "subagent_finished"
+	EventSubAgentToolCallStarted    EventType = "subagent_tool_call_started"
+	EventSubAgentToolCallResult     EventType = "subagent_tool_call_result"
+	EventSubAgentToolCallDenied     EventType = "subagent_tool_call_denied"
 )

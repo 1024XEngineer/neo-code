@@ -207,6 +207,15 @@ func TestRuntimeEventHandlerRegistryContainsRenamedEvents(t *testing.T) {
 	if _, ok := runtimeEventHandlerRegistry[agentruntime.EventRepoHooksTrustStoreInvalid]; !ok {
 		t.Fatalf("expected repo_hooks_trust_store_invalid handler to be registered")
 	}
+	if _, ok := runtimeEventHandlerRegistry[agentruntime.EventSubAgentStarted]; !ok {
+		t.Fatalf("expected subagent_started handler to be registered")
+	}
+	if _, ok := runtimeEventHandlerRegistry[agentruntime.EventSubAgentFailed]; !ok {
+		t.Fatalf("expected subagent_failed handler to be registered")
+	}
+	if _, ok := runtimeEventHandlerRegistry[agentruntime.EventSubAgentToolCallResult]; !ok {
+		t.Fatalf("expected subagent_tool_call_result handler to be registered")
+	}
 }
 
 func TestRuntimeEventHookHandlers(t *testing.T) {
@@ -335,6 +344,64 @@ func TestRuntimeEventRepoHookLifecycleHandlers(t *testing.T) {
 	last = app.activities[len(app.activities)-1]
 	if last.Title != "Repo hooks trust store invalid" || last.Detail != "trust store is missing" {
 		t.Fatalf("unexpected trust_store_invalid activity: %+v", last)
+	}
+}
+
+func TestRuntimeEventSubAgentHandlers(t *testing.T) {
+	app, _ := newTestApp(t)
+	if runtimeEventSubAgentLifecycleHandler(&app, agentruntime.RuntimeEvent{
+		Type:    agentruntime.EventSubAgentStarted,
+		Payload: "bad",
+	}) {
+		t.Fatalf("expected invalid subagent lifecycle payload to return false")
+	}
+	runtimeEventSubAgentLifecycleHandler(&app, agentruntime.RuntimeEvent{
+		Type: agentruntime.EventSubAgentProgress,
+		Payload: agentruntime.SubAgentEventPayload{
+			Role:   "coder",
+			TaskID: "task-1",
+			State:  "running",
+			Step:   2,
+			Delta:  "working",
+		},
+	})
+	last := app.activities[len(app.activities)-1]
+	if last.Title != "SubAgent progress" || !strings.Contains(last.Detail, "task=task-1") || last.IsError {
+		t.Fatalf("unexpected subagent progress activity: %+v", last)
+	}
+
+	runtimeEventSubAgentLifecycleHandler(&app, agentruntime.RuntimeEvent{
+		Type: agentruntime.EventSubAgentFailed,
+		Payload: agentruntime.SubAgentEventPayload{
+			Role:  "reviewer",
+			State: "failed",
+			Error: "boom",
+		},
+	})
+	last = app.activities[len(app.activities)-1]
+	if last.Title != "SubAgent failed" || !strings.Contains(last.Detail, "error=boom") || !last.IsError {
+		t.Fatalf("unexpected subagent failed activity: %+v", last)
+	}
+
+	if runtimeEventSubAgentToolCallHandler(&app, agentruntime.RuntimeEvent{
+		Type:    agentruntime.EventSubAgentToolCallStarted,
+		Payload: 1,
+	}) {
+		t.Fatalf("expected invalid subagent tool call payload to return false")
+	}
+	runtimeEventSubAgentToolCallHandler(&app, agentruntime.RuntimeEvent{
+		Type: agentruntime.EventSubAgentToolCallResult,
+		Payload: agentruntime.SubAgentToolCallEventPayload{
+			Role:      "coder",
+			TaskID:    "task-2",
+			ToolName:  "bash",
+			Decision:  "allow",
+			ElapsedMS: 88,
+		},
+	})
+	last = app.activities[len(app.activities)-1]
+	if last.Title != "SubAgent tool call result" || !strings.Contains(last.Detail, "tool=bash") || last.IsError {
+		t.Fatalf("unexpected subagent tool call result activity: %+v", last)
 	}
 }
 

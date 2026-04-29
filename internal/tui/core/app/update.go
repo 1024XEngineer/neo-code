@@ -2024,6 +2024,17 @@ var runtimeEventHandlerRegistry = map[tuiservices.EventType]func(*App, tuiservic
 	tuiservices.EventRepoHooksLoaded:                          runtimeEventRepoHooksLoadedHandler,
 	tuiservices.EventRepoHooksSkippedUntrusted:                runtimeEventRepoHooksSkippedUntrustedHandler,
 	tuiservices.EventRepoHooksTrustStoreInvalid:               runtimeEventRepoHooksTrustStoreInvalidHandler,
+	tuiservices.EventSubAgentStarted:                          runtimeEventSubAgentLifecycleHandler,
+	tuiservices.EventSubAgentProgress:                         runtimeEventSubAgentLifecycleHandler,
+	tuiservices.EventSubAgentRetried:                          runtimeEventSubAgentLifecycleHandler,
+	tuiservices.EventSubAgentBlocked:                          runtimeEventSubAgentLifecycleHandler,
+	tuiservices.EventSubAgentCompleted:                        runtimeEventSubAgentLifecycleHandler,
+	tuiservices.EventSubAgentFailed:                           runtimeEventSubAgentLifecycleHandler,
+	tuiservices.EventSubAgentCanceled:                         runtimeEventSubAgentLifecycleHandler,
+	tuiservices.EventSubAgentFinished:                         runtimeEventSubAgentLifecycleHandler,
+	tuiservices.EventSubAgentToolCallStarted:                  runtimeEventSubAgentToolCallHandler,
+	tuiservices.EventSubAgentToolCallResult:                   runtimeEventSubAgentToolCallHandler,
+	tuiservices.EventSubAgentToolCallDenied:                   runtimeEventSubAgentToolCallHandler,
 }
 
 func hookActivityLabel(source string, hookID string) string {
@@ -2155,6 +2166,107 @@ func runtimeEventRepoHooksTrustStoreInvalidHandler(a *App, event tuiservices.Run
 		reason = "trust store is invalid"
 	}
 	a.appendActivity("hook", "Repo hooks trust store invalid", reason, false)
+	return false
+}
+
+// runtimeEventSubAgentLifecycleHandler 统一处理 subagent 生命周期事件并写入活动区/日志。
+func runtimeEventSubAgentLifecycleHandler(a *App, event tuiservices.RuntimeEvent) bool {
+	payload, ok := event.Payload.(tuiservices.SubAgentEventPayload)
+	if !ok {
+		return false
+	}
+	eventType := strings.TrimSpace(string(event.Type))
+	title := "SubAgent event"
+	switch event.Type {
+	case tuiservices.EventSubAgentStarted:
+		title = "SubAgent started"
+	case tuiservices.EventSubAgentProgress:
+		title = "SubAgent progress"
+	case tuiservices.EventSubAgentRetried:
+		title = "SubAgent retried"
+	case tuiservices.EventSubAgentBlocked:
+		title = "SubAgent blocked"
+	case tuiservices.EventSubAgentCompleted:
+		title = "SubAgent completed"
+	case tuiservices.EventSubAgentFailed:
+		title = "SubAgent failed"
+	case tuiservices.EventSubAgentCanceled:
+		title = "SubAgent canceled"
+	case tuiservices.EventSubAgentFinished:
+		title = "SubAgent finished"
+	default:
+		title = "SubAgent event: " + fallbackText(eventType, "unknown")
+	}
+
+	details := make([]string, 0, 6)
+	if role := strings.TrimSpace(payload.Role); role != "" {
+		details = append(details, "role="+role)
+	}
+	if taskID := strings.TrimSpace(payload.TaskID); taskID != "" {
+		details = append(details, "task="+taskID)
+	}
+	if state := strings.TrimSpace(payload.State); state != "" {
+		details = append(details, "state="+state)
+	}
+	if reason := strings.TrimSpace(payload.StopReason); reason != "" {
+		details = append(details, "stop="+reason)
+	}
+	if payload.Step > 0 {
+		details = append(details, fmt.Sprintf("step=%d", payload.Step))
+	}
+	if message := strings.TrimSpace(payload.Reason); message != "" {
+		details = append(details, message)
+	} else if message := strings.TrimSpace(payload.Delta); message != "" {
+		details = append(details, message)
+	}
+	if errText := strings.TrimSpace(payload.Error); errText != "" {
+		details = append(details, "error="+errText)
+	}
+
+	isError := event.Type == tuiservices.EventSubAgentFailed
+	a.appendActivity("subagent", title, strings.Join(details, " | "), isError)
+	return false
+}
+
+// runtimeEventSubAgentToolCallHandler 处理 subagent 工具调用相关事件并写入活动区/日志。
+func runtimeEventSubAgentToolCallHandler(a *App, event tuiservices.RuntimeEvent) bool {
+	payload, ok := event.Payload.(tuiservices.SubAgentToolCallEventPayload)
+	if !ok {
+		return false
+	}
+	title := "SubAgent tool call"
+	switch event.Type {
+	case tuiservices.EventSubAgentToolCallStarted:
+		title = "SubAgent tool call started"
+	case tuiservices.EventSubAgentToolCallResult:
+		title = "SubAgent tool call result"
+	case tuiservices.EventSubAgentToolCallDenied:
+		title = "SubAgent tool call denied"
+	}
+
+	details := make([]string, 0, 6)
+	if role := strings.TrimSpace(payload.Role); role != "" {
+		details = append(details, "role="+role)
+	}
+	if taskID := strings.TrimSpace(payload.TaskID); taskID != "" {
+		details = append(details, "task="+taskID)
+	}
+	details = append(details, "tool="+fallbackText(strings.TrimSpace(payload.ToolName), "unknown"))
+	if decision := strings.TrimSpace(payload.Decision); decision != "" {
+		details = append(details, "decision="+decision)
+	}
+	if payload.ElapsedMS > 0 {
+		details = append(details, fmt.Sprintf("elapsed=%dms", payload.ElapsedMS))
+	}
+	if payload.Truncated {
+		details = append(details, "truncated=true")
+	}
+	if errText := strings.TrimSpace(payload.Error); errText != "" {
+		details = append(details, "error="+errText)
+	}
+
+	isError := event.Type == tuiservices.EventSubAgentToolCallDenied || strings.TrimSpace(payload.Error) != ""
+	a.appendActivity("subagent", title, strings.Join(details, " | "), isError)
 	return false
 }
 
