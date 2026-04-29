@@ -34,16 +34,14 @@ import (
 )
 
 const (
-	composerMinHeight        = tuistate.ComposerMinHeight
-	composerMaxHeight        = tuistate.ComposerMaxHeight
-	composerPromptWidth      = tuistate.ComposerPromptWidth
-	mouseWheelStepLines      = tuistate.MouseWheelStepLines
-	pasteBurstWindow         = tuistate.PasteBurstWindow
-	pasteEnterGuard          = tuistate.PasteEnterGuard
-	pasteSessionGuard        = tuistate.PasteSessionGuard
-	pasteBurstThreshold      = tuistate.PasteBurstThreshold
-	pastePlaceholderMinLines = tuistate.PastePlaceholderMinLines
-	pastePlaceholderMinChars = tuistate.PastePlaceholderMinChars
+	composerMinHeight   = tuistate.ComposerMinHeight
+	composerMaxHeight   = tuistate.ComposerMaxHeight
+	composerPromptWidth = tuistate.ComposerPromptWidth
+	mouseWheelStepLines = tuistate.MouseWheelStepLines
+	pasteBurstWindow    = tuistate.PasteBurstWindow
+	pasteEnterGuard     = tuistate.PasteEnterGuard
+	pasteSessionGuard   = tuistate.PasteSessionGuard
+	pasteBurstThreshold = tuistate.PasteBurstThreshold
 )
 
 const providerAddSelectTimeout = 10 * time.Second
@@ -59,6 +57,10 @@ const sessionSwitchBusyMessage = "cannot switch sessions while run or compact is
 const logViewerEntryLimit = 500
 const logViewerPersistDebounce = 300 * time.Millisecond
 const footerErrorFlashDuration = 8 * time.Second
+const pasteTxnFlushDebounce = 140 * time.Millisecond
+const pastedTextLoadDebounce = 180 * time.Millisecond
+const duplicatePasteSuppressWindow = 1200 * time.Millisecond
+const inlineLogMarker = "[[neo-log]] "
 const sessionWorkdirMissingWarning = "Session workspace not found, keeping current workspace."
 
 type sessionLogPersistenceRuntime interface {
@@ -72,12 +74,13 @@ var persistProviderUserEnvVar = config.PersistUserEnvVar
 var deleteProviderUserEnvVar = config.DeleteUserEnvVar
 var lookupProviderUserEnvVar = config.LookupUserEnvVar
 var openExternalResource = tuiinfra.OpenExternalResource
+var savePastedTextToTempFile = tuiinfra.SaveTextToTempFile
 
 type startupWakeSubmitMsg struct {
 	Input startupWakeSubmitInput
 }
 
-// emitStartupWakeSubmitCmd 在启动阶段投递一次性自动提交消息，用于复用普通输入提交流程。
+// emitStartupWakeSubmitCmd dispatches one startup wake submission message.
 func emitStartupWakeSubmitCmd(input startupWakeSubmitInput) tea.Cmd {
 	return func() tea.Msg {
 		return startupWakeSubmitMsg{Input: input}
@@ -91,6 +94,10 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if a.deferredFooterTick != nil {
 			cmds = append(cmds, a.deferredFooterTick)
 			a.deferredFooterTick = nil
+		}
+		if a.deferredPastedTextLoadCmd != nil {
+			cmds = append(cmds, a.deferredPastedTextLoadCmd)
+			a.deferredPastedTextLoadCmd = nil
 		}
 		return tea.Batch(cmds...)
 	}
@@ -126,6 +133,31 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, appTickCmd())
 		}
 		return a, batchUpdateCmds()
+	case pasteTxnFlushMsg:
+		if typed.Version != a.pasteTxnVersion || !a.pasteTxnActive {
+			return a, batchUpdateCmds()
+		}
+		a.flushPasteTransaction()
+		return a, batchUpdateCmds()
+	case pastedTextLoadReadyMsg:
+		if !a.loadingPastedText {
+			return a, batchUpdateCmds()
+		}
+		a.loadingPastedText = false
+		if a.state.StatusText == statusLoadingPastedText {
+			a.state.StatusText = statusReady
+		}
+		if !a.pendingSendAfterPasteLoad {
+			return a, batchUpdateCmds()
+		}
+		a.pendingSendAfterPasteLoad = false
+		a.skipNextSendPasteLoadWait = true
+		if strings.TrimSpace(a.input.Value()) == "" && !a.hasImageAttachments() {
+			a.skipNextSendPasteLoadWait = false
+			return a, batchUpdateCmds()
+		}
+		enter := tea.KeyMsg{Type: tea.KeyEnter}
+		return a.updateInputPanel(enter, enter, cmds)
 	case startupWakeSubmitMsg:
 		if cmd := a.handleStartupWakeSubmitMsg(typed); cmd != nil {
 			cmds = append(cmds, cmd)
@@ -325,7 +357,15 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, batchUpdateCmds()
 		}
 	case tea.KeyMsg:
+		if typed.Type == tea.KeyCtrlC && a.hasTextSelection() {
+			a.copySelectionToClipboard()
+			return a, batchUpdateCmds()
+		}
 		if key.Matches(typed, a.keys.Quit) {
+			if a.hasTextSelection() {
+				a.copySelectionToClipboard()
+				return a, batchUpdateCmds()
+			}
 			return a, tea.Quit
 		}
 		if key.Matches(typed, a.keys.ToggleHelp) {
@@ -471,6 +511,10 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 			cmds = append(cmds, a.deferredFooterTick)
 			a.deferredFooterTick = nil
 		}
+		if a.deferredPastedTextLoadCmd != nil {
+			cmds = append(cmds, a.deferredPastedTextLoadCmd)
+			a.deferredPastedTextLoadCmd = nil
+		}
 		return tea.Batch(cmds...)
 	}
 
@@ -482,42 +526,140 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 			return a, batchUpdateCmds()
 		}
 	}
-
-	if key.Matches(typed, a.keys.PasteImage) {
-		pastedText, handled, err := a.handleClipboardPasteShortcut()
-		if handled {
-			if err != nil {
-				a.state.StatusText = err.Error()
-				a.appendActivity("multimodal", "Failed to paste from clipboard", err.Error(), true)
-				return a, batchUpdateCmds()
-			}
-			if pastedText == "" {
-				return a, batchUpdateCmds()
-			}
-			msg = tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(pastedText), Paste: true}
-			typed = msg.(tea.KeyMsg)
-			effectiveTyped = typed
+	if a.consumePendingCtrlVPasteEcho(typed, now) {
+		return a, batchUpdateCmds()
+	}
+	if typed.Type == tea.KeyRunes && len(typed.Runes) > 0 && a.hasPendingCtrlVPasteEcho(now) {
+		if strings.TrimSpace(a.pendingCtrlVPasteEcho) != "" || isPotentialCtrlVPasteEchoChunk(typed) {
+			return a, batchUpdateCmds()
 		}
 	}
+	if !typed.Paste && !a.pasteTxnActive && typed.Type == tea.KeyRunes && len(typed.Runes) > 0 && a.tryPrimePasteFromClipboard(typed, now) {
+		return a, batchUpdateCmds()
+	}
+	if a.pasteTxnActive && !a.shouldCapturePasteTxnChunk(typed) {
+		a.flushPasteTransaction()
+	}
+	if a.shouldCapturePasteTxnChunk(typed) {
+		a.appendPasteTxnChunk(string(typed.Runes))
+		cmds = append(cmds, schedulePasteTxnFlush(a.pasteTxnVersion))
+		return a, batchUpdateCmds()
+	}
+	if key.Matches(typed, a.keys.Send) && a.pasteTxnActive {
+		a.flushPasteTransaction()
+	}
+
+	if key.Matches(typed, a.keys.PasteImage) {
+		if err := a.addImageFromClipboard(); err == nil {
+			a.applyComponentLayout(false)
+			a.refreshCommandMenu()
+			return a, batchUpdateCmds()
+		}
+		// No image payload: proactively process clipboard text to avoid raw echo rendering.
+		text, err := readClipboardText()
+		if err != nil || strings.TrimSpace(text) == "" {
+			return a, batchUpdateCmds()
+		}
+		pastedText := normalizeClipboardText(text)
+		trimmed := strings.TrimSpace(pastedText)
+		if handled, applyErr := a.applyPastedFileReferences(trimmed); handled {
+			if applyErr != nil {
+				a.state.StatusText = applyErr.Error()
+				a.appendActivity("multimodal", "Failed to parse pasted file references", applyErr.Error(), true)
+			}
+			a.pendingCtrlVPasteEcho = pastedText
+			a.pendingCtrlVEchoUntil = now.Add(2 * time.Second)
+			return a, batchUpdateCmds()
+		}
+		msg = tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(pastedText), Paste: true}
+		typed = msg.(tea.KeyMsg)
+		effectiveTyped = typed
+		a.pendingCtrlVPasteEcho = pastedText
+		a.pendingCtrlVEchoUntil = now.Add(2 * time.Second)
+	}
+
+	if typed.Paste {
+		pastedText := normalizeClipboardText(string(typed.Runes))
+		clipboardText := ""
+		if clipText, err := readClipboardText(); err == nil {
+			clipboardText = normalizeClipboardText(clipText)
+		}
+		if strings.TrimSpace(clipboardText) != "" &&
+			(strings.TrimSpace(pastedText) == "" || strings.Contains(clipboardText, pastedText) || strings.Contains(pastedText, clipboardText)) {
+			pastedText = clipboardText
+			a.pendingCtrlVPasteEcho = clipboardText
+			a.pendingCtrlVEchoUntil = now.Add(2 * time.Second)
+		}
+		trimmed := strings.TrimSpace(pastedText)
+		if trimmed == "" {
+			// Some terminals emit an empty paste event for image-only clipboard payloads.
+			if err := a.addImageFromClipboard(); err == nil {
+				a.applyComponentLayout(false)
+				a.refreshCommandMenu()
+				return a, batchUpdateCmds()
+			}
+			// Empty paste with no resolvable clipboard payload: ignore silently.
+			return a, batchUpdateCmds()
+		}
+		if handled, err := a.applyPastedFileReferences(trimmed); handled {
+			if err != nil {
+				a.state.StatusText = err.Error()
+				a.appendActivity("multimodal", "Failed to parse pasted file references", err.Error(), true)
+			}
+			return a, batchUpdateCmds()
+		}
+		msg = tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(pastedText), Paste: true}
+		typed = msg.(tea.KeyMsg)
+		effectiveTyped = typed
+	}
 	if key.Matches(typed, a.keys.Send) {
+		currentInput := a.input.Value()
+		needsPasteLoad := a.shouldDeferSendForPastedTextLoad(currentInput)
+		if a.pendingSendAfterPasteLoad && !a.loadingPastedText {
+			a.pendingSendAfterPasteLoad = false
+		}
+		if a.pendingSendAfterPasteLoad {
+			return a, batchUpdateCmds()
+		}
+		if !a.skipNextSendPasteLoadWait && a.loadingPastedText && needsPasteLoad {
+			a.pendingSendAfterPasteLoad = true
+			a.state.StatusText = statusLoadingPastedText
+			return a, batchUpdateCmds()
+		}
+		if a.loadingPastedText && !needsPasteLoad {
+			a.loadingPastedText = false
+			if a.state.StatusText == statusLoadingPastedText {
+				a.state.StatusText = statusReady
+			}
+		}
+		a.skipNextSendPasteLoadWait = false
 		if a.shouldTreatEnterAsNewline(typed, now) {
 			a.growComposerForNewline()
 			msg = tea.KeyMsg{Type: tea.KeyEnter}
 			effectiveTyped = tea.KeyMsg{Type: tea.KeyEnter, Paste: true}
 		} else {
-			rawInput := a.input.Value()
+			rawInput := currentInput
+			resolvedInput, resolveErr := a.resolvePendingTextPastes(rawInput)
+			if resolveErr != nil {
+				a.state.ExecutionError = resolveErr.Error()
+				a.state.StatusText = resolveErr.Error()
+				a.appendActivity("multimodal", "Failed to resolve pasted content", resolveErr.Error(), true)
+				return a, batchUpdateCmds()
+			}
+			rawInput = resolvedInput
 			hasImages := a.hasImageAttachments()
 			if strings.TrimSpace(rawInput) == "" && !hasImages {
 				return a, batchUpdateCmds()
 			}
-			input := strings.TrimSpace(a.expandPendingPastePlaceholders(rawInput))
+			input := strings.TrimSpace(rawInput)
 			images := a.collectPendingImageInputs()
 
 			if a.isBusy() {
 				a.queueInterventionInput(input, images)
+				a.rebuildTranscript()
 				a.input.Reset()
 				a.state.InputText = ""
-				a.clearImageAttachments()
+				a.clearComposerAttachments()
 				a.applyComponentLayout(true)
 				a.refreshCommandMenu()
 				a.resetPasteHeuristics()
@@ -535,6 +677,7 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 			if handled, cmd := a.handleImmediateSlashCommand(input); handled {
 				a.input.Reset()
 				a.state.InputText = ""
+				a.clearPendingTextPastes()
 				a.applyComponentLayout(true)
 				a.refreshCommandMenu()
 				a.resetPasteHeuristics()
@@ -552,6 +695,7 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 				}
 				a.input.Reset()
 				a.state.InputText = ""
+				a.clearPendingTextPastes()
 				a.applyComponentLayout(true)
 				a.refreshCommandMenu()
 				a.resetPasteHeuristics()
@@ -560,6 +704,7 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 
 			a.input.Reset()
 			a.state.InputText = ""
+			a.clearPendingTextPastes()
 			a.applyComponentLayout(true)
 			a.refreshCommandMenu()
 			a.resetPasteHeuristics()
@@ -631,7 +776,7 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 			if cmd := a.beginAgentRun(input, images); cmd != nil {
 				cmds = append(cmds, cmd)
 			}
-			a.clearImageAttachments()
+			a.clearComposerAttachments()
 			return a, batchUpdateCmds()
 		}
 	}
@@ -641,8 +786,11 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 		msg = tea.KeyMsg{Type: tea.KeyEnter}
 		effectiveTyped = tea.KeyMsg{Type: tea.KeyEnter}
 	}
-	msg, effectiveTyped = a.maybeCollapseLongPaste(msg, effectiveTyped)
-
+	var skipInputUpdate bool
+	msg, effectiveTyped, skipInputUpdate = a.maybeCollapseLongPaste(msg, effectiveTyped, now)
+	if skipInputUpdate {
+		return a, batchUpdateCmds()
+	}
 	before := a.input.Value()
 	var cmd tea.Cmd
 	a.input, cmd = a.input.Update(msg)
@@ -704,7 +852,7 @@ func (a *App) submitPermissionDecision(decision tuiservices.PermissionResolution
 	return runResolvePermission(a.runtime, requestID, decision)
 }
 
-// toggleFullAccessMode 处理 Full Access 模式的启停切换；启用前必须经过风险确认。
+// toggleFullAccessMode 处理 Full Access 模式的启停切换；启用前必须经过风险确认?
 func (a *App) toggleFullAccessMode() {
 	if a.fullAccessModeEnabled {
 		a.disableFullAccessMode()
@@ -714,7 +862,7 @@ func (a *App) toggleFullAccessMode() {
 	a.openFullAccessPrompt()
 }
 
-// updatePendingFullAccessPromptInput 处理 Full Access 风险确认弹窗的键盘交互。
+// updatePendingFullAccessPromptInput 处理 Full Access 风险确认弹窗的键盘交互?
 func (a *App) updatePendingFullAccessPromptInput(typed tea.KeyMsg) (tea.Cmd, bool) {
 	if a.pendingFullAccessPrompt == nil {
 		return nil, false
@@ -744,7 +892,7 @@ func (a *App) updatePendingFullAccessPromptInput(typed tea.KeyMsg) (tea.Cmd, boo
 	return nil, true
 }
 
-// applyFullAccessPromptSelection 根据风险确认结果更新 Full Access 模式，并按需自动处理待审批请求。
+// applyFullAccessPromptSelection 根据风险确认结果更新 Full Access 模式，并按需自动处理待审批请求?
 func (a *App) applyFullAccessPromptSelection(enable bool) tea.Cmd {
 	a.pendingFullAccessPrompt = nil
 	if !enable {
@@ -778,7 +926,7 @@ func (a *App) openFullAccessPrompt() {
 	a.refreshPermissionPromptLayout()
 }
 
-// disableFullAccessMode 关闭 Full Access 模式并刷新提示区布局。
+// disableFullAccessMode 关闭 Full Access 模式并刷新提示区布局?
 func (a *App) disableFullAccessMode() {
 	a.fullAccessModeEnabled = false
 	a.pendingFullAccessPrompt = nil
@@ -788,7 +936,7 @@ func (a *App) disableFullAccessMode() {
 	a.refreshPermissionPromptLayout()
 }
 
-// handleAutoPermissionResolutionFinished 处理 Full Access 自动审批回执，并在失败时回退到手动审批。
+// handleAutoPermissionResolutionFinished 处理 Full Access 自动审批回执，并在失败时回退到手动审批?
 func (a *App) handleAutoPermissionResolutionFinished(msg permissionResolutionFinishedMsg) bool {
 	if a.pendingAutoPermission == nil || a.pendingAutoPermission.Request.RequestID != msg.RequestID {
 		return false
@@ -816,7 +964,7 @@ func (a *App) handleAutoPermissionResolutionFinished(msg permissionResolutionFin
 	return true
 }
 
-// handlePermissionResolutionFinished 更新手动审批提交流程的成功或失败状态。
+// handlePermissionResolutionFinished 更新手动审批提交流程的成功或失败状态?
 func (a *App) handlePermissionResolutionFinished(msg permissionResolutionFinishedMsg) {
 	if a.pendingPermission == nil || a.pendingPermission.Request.RequestID != msg.RequestID {
 		return
@@ -848,15 +996,43 @@ type logPersistFlushMsg struct {
 	Version int
 }
 
-// scheduleLogPersistFlush 在短暂静默后触发日志落盘，避免每条活动都同步刷盘。
+type pasteTxnFlushMsg struct {
+	Version int
+}
+
+type pastedTextLoadReadyMsg struct{}
+
+// scheduleLogPersistFlush triggers log persistence with debounce.
 func scheduleLogPersistFlush(version int) tea.Cmd {
 	return tea.Tick(logViewerPersistDebounce, func(time.Time) tea.Msg {
 		return logPersistFlushMsg{Version: version}
 	})
 }
 
+func schedulePasteTxnFlush(version int) tea.Cmd {
+	return tea.Tick(pasteTxnFlushDebounce, func(time.Time) tea.Msg {
+		return pasteTxnFlushMsg{Version: version}
+	})
+}
+
+func schedulePastedTextLoadReady() tea.Cmd {
+	return tea.Tick(pastedTextLoadDebounce, func(time.Time) tea.Msg {
+		return pastedTextLoadReadyMsg{}
+	})
+}
+
+func (a *App) beginPastedTextLoading() {
+	if !a.loadingPastedText {
+		a.deferredPastedTextLoadCmd = schedulePastedTextLoadReady()
+	}
+	a.loadingPastedText = true
+	a.state.StatusText = statusLoadingPastedText
+	a.pendingSendAfterPasteLoad = false
+	a.skipNextSendPasteLoadWait = false
+}
+
 func (a *App) shouldTreatEnterAsNewline(typed tea.KeyMsg, now time.Time) bool {
-	if !key.Matches(typed, a.keys.Send) || a.state.IsAgentRunning {
+	if !key.Matches(typed, a.keys.Send) {
 		return false
 	}
 	if typed.Paste {
@@ -939,30 +1115,30 @@ func (a *App) noteInputEdit(before string, after string, typed tea.KeyMsg, now t
 	}
 }
 
-func (a *App) maybeCollapseLongPaste(msg tea.Msg, typed tea.KeyMsg) (tea.Msg, tea.KeyMsg) {
-	if typed.Type != tea.KeyRunes || len(typed.Runes) == 0 {
-		return msg, typed
+func (a *App) maybeCollapseLongPaste(msg tea.Msg, typed tea.KeyMsg, now time.Time) (tea.Msg, tea.KeyMsg, bool) {
+	if typed.Type != tea.KeyRunes || !typed.Paste || len(typed.Runes) == 0 {
+		return msg, typed, false
 	}
 
-	raw := string(typed.Runes)
-	if !shouldCollapsePastedText(raw) {
-		return msg, typed
+	content := normalizeClipboardText(string(typed.Runes))
+	if token, ok := parsePasteSummaryToken(content); ok && strings.HasSuffix(a.input.Value(), token) {
+		return msg, typed, true
 	}
-	lineCount := pastedLineCount(raw)
-
-	placeholder := formatPastePlaceholder(lineCount)
-	a.pendingPasteBuffers = append(a.pendingPasteBuffers, pendingPasteBuffer{
-		Placeholder: placeholder,
-		Content:     raw,
-	})
-	a.state.StatusText = fmt.Sprintf("[System] Pasted %d lines as placeholder.", lineCount)
-
-	collapsed := tea.KeyMsg{
-		Type:  tea.KeyRunes,
-		Runes: []rune(placeholder),
-		Paste: true,
+	if a.shouldSuppressDuplicatePasteContent(content, now) {
+		return msg, typed, true
 	}
-	return collapsed, collapsed
+	summarized, _, err := a.summarizePastedText(content)
+	if err != nil {
+		a.state.StatusText = err.Error()
+		a.appendActivity("multimodal", "Failed to summarize pasted content", err.Error(), true)
+		return msg, typed, false
+	}
+	if summarized == content {
+		a.recordRecentPastedContent(content, now)
+		return msg, typed, false
+	}
+	next := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(summarized), Paste: true}
+	return next, next, false
 }
 
 func (a *App) maybeCollapseLongPasteAfterInput(before string, typed tea.KeyMsg) {
@@ -985,55 +1161,217 @@ func (a *App) maybeCollapseLongPasteAfterInput(before string, typed tea.KeyMsg) 
 
 func (a *App) tryCollapseInsertedSegment(before string, after string) bool {
 	prefix, inserted, suffix, ok := extractInsertedSegment(before, after)
-	if !ok || !shouldCollapsePastedText(inserted) {
+	if !ok {
 		return false
 	}
 
-	lineCount := pastedLineCount(inserted)
-	placeholder := formatPastePlaceholder(lineCount)
-	a.pendingPasteBuffers = append(a.pendingPasteBuffers, pendingPasteBuffer{
-		Placeholder: placeholder,
-		Content:     inserted,
-	})
+	summarized, summarizedOK, err := a.summarizePastedText(inserted)
+	if err != nil {
+		a.state.StatusText = err.Error()
+		a.appendActivity("multimodal", "Failed to summarize pasted content", err.Error(), true)
+		return false
+	}
+	if !summarizedOK {
+		return false
+	}
 
-	collapsed := prefix + placeholder + suffix
+	collapsed := prefix + summarized + suffix
 	a.input.SetValue(collapsed)
 	a.state.InputText = collapsed
-	a.state.StatusText = fmt.Sprintf("[System] Pasted %d lines as placeholder.", lineCount)
 	a.pasteSessionBase = collapsed
 	return true
 }
 
-func (a App) expandPendingPastePlaceholders(input string) string {
-	if len(a.pendingPasteBuffers) == 0 || strings.TrimSpace(input) == "" {
-		return input
+func (a *App) summarizePastedText(content string) (text string, summarized bool, err error) {
+	normalized := normalizeClipboardText(content)
+	if !shouldSummarizePastedText(normalized) {
+		return normalized, false, nil
+	}
+	lineCount := countPasteLines(normalized)
+	token := formatPasteSummaryToken(lineCount)
+	now := a.now()
+	if a.shouldReusePasteSummaryToken(token, normalized, now) {
+		a.beginPastedTextLoading()
+		a.recordRecentPastedContent(normalized, now)
+		a.lastSummarizedPasteText = normalized
+		a.lastSummarizedPasteAt = now
+		a.lastSummarizedPasteToken = token
+		return token, true, nil
+	}
+	path, saveErr := savePastedTextToTempFile(normalized, "paste")
+	if saveErr != nil {
+		return "", false, fmt.Errorf("failed to persist pasted text: %w", saveErr)
+	}
+	a.pendingTextPastes = append(a.pendingTextPastes, pendingTextPaste{
+		Token:     token,
+		FilePath:  path,
+		LineCount: lineCount,
+	})
+	a.beginPastedTextLoading()
+	a.recordRecentPastedContent(normalized, now)
+	a.lastSummarizedPasteText = normalized
+	a.lastSummarizedPasteAt = now
+	a.lastSummarizedPasteToken = token
+	return token, true, nil
+}
+
+func (a App) shouldSuppressDuplicatePasteContent(content string, now time.Time) bool {
+	normalized := normalizeClipboardText(content)
+	if strings.TrimSpace(normalized) == "" {
+		return false
+	}
+	if !shouldSummarizePastedText(normalized) {
+		if a.lastPastedContentAt.IsZero() || now.Sub(a.lastPastedContentAt) > duplicatePasteSuppressWindow {
+			return false
+		}
+		if normalized != a.lastPastedContent {
+			return false
+		}
+		return strings.HasSuffix(a.input.Value(), normalized)
+	}
+	token := formatPasteSummaryToken(countPasteLines(normalized))
+	if token == "" {
+		return false
+	}
+	if strings.HasSuffix(a.input.Value(), token) {
+		// In one paste transaction, terminals may emit multiple chunks with slightly different
+		// payload boundaries (e.g. trailing newline differences). Once the token is already
+		// visible at the cursor, suppress additional injections in the same paste session.
+		if a.pasteTxnActive || a.hasPendingCtrlVPasteEcho(now) {
+			return true
+		}
+		if !a.lastPasteLikeAt.IsZero() && now.Sub(a.lastPasteLikeAt) <= pasteSessionGuard {
+			return true
+		}
+		if token == a.lastSummarizedPasteToken &&
+			!a.lastSummarizedPasteAt.IsZero() &&
+			now.Sub(a.lastSummarizedPasteAt) <= duplicatePasteSuppressWindow {
+			return true
+		}
+	}
+	if a.lastSummarizedPasteAt.IsZero() || now.Sub(a.lastSummarizedPasteAt) > duplicatePasteSuppressWindow {
+		return false
+	}
+	if normalized != a.lastSummarizedPasteText {
+		return false
+	}
+	return token == a.lastSummarizedPasteToken && strings.HasSuffix(a.input.Value(), token)
+}
+
+func formatPasteSummaryToken(lineCount int) string {
+	return fmt.Sprintf("[paste %d LINE]", lineCount)
+}
+
+func parsePasteSummaryToken(content string) (string, bool) {
+	trimmed := strings.TrimSpace(content)
+	if !strings.HasPrefix(trimmed, "[paste ") || !strings.HasSuffix(trimmed, " LINE]") {
+		return "", false
+	}
+	body := strings.TrimSuffix(strings.TrimPrefix(trimmed, "[paste "), " LINE]")
+	if body == "" {
+		return "", false
+	}
+	for _, r := range body {
+		if r < '0' || r > '9' {
+			return "", false
+		}
+	}
+	return trimmed, true
+}
+
+func (a App) shouldReusePasteSummaryToken(token string, normalized string, now time.Time) bool {
+	if token == "" || !strings.HasSuffix(a.input.Value(), token) || !a.hasPendingTextPasteToken(token) {
+		return false
+	}
+	if normalized == a.lastSummarizedPasteText &&
+		token == a.lastSummarizedPasteToken &&
+		!a.lastSummarizedPasteAt.IsZero() &&
+		now.Sub(a.lastSummarizedPasteAt) <= pasteSessionGuard {
+		return true
+	}
+	if a.pasteTxnActive || a.hasPendingCtrlVPasteEcho(now) {
+		return true
+	}
+	return !a.lastPasteLikeAt.IsZero() && now.Sub(a.lastPasteLikeAt) <= pasteSessionGuard
+}
+
+func (a App) hasPendingTextPasteToken(token string) bool {
+	for _, pending := range a.pendingTextPastes {
+		if pending.Token == token {
+			return true
+		}
+	}
+	return false
+}
+
+func shouldSummarizePastedText(content string) bool {
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" {
+		return false
+	}
+	return countPasteLines(trimmed) > 1
+}
+
+func countPasteLines(content string) int {
+	if content == "" {
+		return 0
+	}
+	return strings.Count(content, "\n") + 1
+}
+
+func (a *App) resolvePendingTextPastes(input string) (string, error) {
+	if strings.TrimSpace(input) == "" || len(a.pendingTextPastes) == 0 {
+		return input, nil
 	}
 
 	expanded := input
-	for _, buffer := range a.pendingPasteBuffers {
-		if strings.TrimSpace(buffer.Placeholder) == "" {
+	for _, pending := range a.pendingTextPastes {
+		if pending.Token == "" || pending.FilePath == "" {
 			continue
 		}
-		expanded = strings.Replace(expanded, buffer.Placeholder, buffer.Content, 1)
+		if !strings.Contains(expanded, pending.Token) {
+			continue
+		}
+		data, err := os.ReadFile(pending.FilePath)
+		if err != nil {
+			return "", fmt.Errorf("failed to read pasted content: %w", err)
+		}
+		expanded = strings.Replace(expanded, pending.Token, string(data), 1)
 	}
-	return expanded
+	return expanded, nil
 }
 
-func pastedLineCount(content string) int {
-	normalized := strings.ReplaceAll(content, "\r\n", "\n")
-	normalized = strings.ReplaceAll(normalized, "\r", "\n")
-	if normalized == "" {
-		return 0
+func (a *App) clearPendingTextPastes() {
+	if len(a.pendingTextPastes) == 0 {
+		return
 	}
-	return strings.Count(normalized, "\n") + 1
+	for _, pending := range a.pendingTextPastes {
+		if strings.TrimSpace(pending.FilePath) == "" {
+			continue
+		}
+		_ = os.Remove(pending.FilePath)
+	}
+	a.pendingTextPastes = nil
 }
 
-func shouldCollapsePastedText(content string) bool {
-	lineCount := pastedLineCount(content)
-	if lineCount >= pastePlaceholderMinLines {
-		return true
+func (a *App) clearComposerAttachments() {
+	a.clearImageAttachments()
+	a.clearPendingTextPastes()
+}
+
+func (a App) shouldDeferSendForPastedTextLoad(input string) bool {
+	if strings.TrimSpace(input) == "" || len(a.pendingTextPastes) == 0 {
+		return false
 	}
-	return lineCount > 1 && utf8.RuneCountInString(content) >= pastePlaceholderMinChars
+	for _, pending := range a.pendingTextPastes {
+		if pending.Token == "" {
+			continue
+		}
+		if strings.Contains(input, pending.Token) {
+			return true
+		}
+	}
+	return false
 }
 
 func shouldTreatInputDeltaAsPaste(typed tea.KeyMsg, pasteMode bool) bool {
@@ -1071,21 +1409,318 @@ func extractInsertedSegment(before string, after string) (prefix string, inserte
 		true
 }
 
-func formatPastePlaceholder(lineCount int) string {
-	if lineCount < 0 {
-		lineCount = 0
-	}
-	return fmt.Sprintf("[paste %d line]", lineCount)
+func normalizeClipboardText(content string) string {
+	normalized := strings.ReplaceAll(content, "\r\n", "\n")
+	return strings.ReplaceAll(normalized, "\r", "\n")
 }
 
 func (a *App) resetPasteHeuristics() {
 	a.lastInputEditAt = time.Time{}
 	a.lastPasteLikeAt = time.Time{}
+	a.pendingCtrlVPasteEcho = ""
+	a.pendingCtrlVEchoUntil = time.Time{}
+	a.deferredPastedTextLoadCmd = nil
+	a.loadingPastedText = false
+	a.pendingSendAfterPasteLoad = false
+	a.skipNextSendPasteLoadWait = false
+	a.lastPastedContent = ""
+	a.lastPastedContentAt = time.Time{}
+	a.pasteTxnActive = false
+	a.pasteTxnBuffer = ""
+	a.pasteTxnVersion = 0
 	a.inputBurstStart = time.Time{}
 	a.inputBurstCount = 0
 	a.pasteMode = false
 	a.pasteSessionBase = ""
-	a.pendingPasteBuffers = nil
+}
+
+func (a *App) consumePendingCtrlVPasteEcho(typed tea.KeyMsg, now time.Time) bool {
+	if a.pendingCtrlVPasteEcho == "" && (a.pendingCtrlVEchoUntil.IsZero() || now.After(a.pendingCtrlVEchoUntil)) {
+		return false
+	}
+	if !a.pendingCtrlVEchoUntil.IsZero() && now.After(a.pendingCtrlVEchoUntil) {
+		a.pendingCtrlVPasteEcho = ""
+		a.pendingCtrlVEchoUntil = time.Time{}
+		return false
+	}
+	if typed.Type == tea.KeyEnter {
+		if strings.TrimSpace(a.pendingCtrlVPasteEcho) == "" {
+			return false
+		}
+		return true
+	}
+	if typed.Type != tea.KeyRunes || len(typed.Runes) == 0 {
+		return false
+	}
+	chunk := normalizeClipboardText(string(typed.Runes))
+	if chunk == "" {
+		return false
+	}
+
+	// During the immediate post-Ctrl+V window, aggressively swallow multi-rune echoes.
+	likelyEchoChunk := len(typed.Runes) > 1 || strings.ContainsRune(chunk, '\n') || strings.ContainsRune(chunk, '\t')
+	if a.pendingCtrlVPasteEcho == "" {
+		if likelyEchoChunk {
+			return true
+		}
+		return false
+	}
+
+	remaining := a.pendingCtrlVPasteEcho
+	if strings.HasPrefix(remaining, chunk) {
+		a.pendingCtrlVPasteEcho = strings.TrimPrefix(remaining, chunk)
+		if a.pendingCtrlVPasteEcho == "" {
+			a.pendingCtrlVEchoUntil = now.Add(300 * time.Millisecond)
+		}
+		return true
+	}
+	if matchPasteEchoLoosely(remaining, chunk) {
+		a.pendingCtrlVPasteEcho = trimPrefixByRuneCount(remaining, len([]rune(chunk)))
+		if a.pendingCtrlVPasteEcho == "" {
+			a.pendingCtrlVEchoUntil = now.Add(300 * time.Millisecond)
+		}
+		return true
+	}
+	if likelyEchoChunk {
+		a.pendingCtrlVPasteEcho = trimPrefixByRuneCount(remaining, len([]rune(chunk)))
+		if a.pendingCtrlVPasteEcho == "" {
+			a.pendingCtrlVEchoUntil = now.Add(300 * time.Millisecond)
+		}
+		return true
+	}
+	return false
+}
+
+func (a App) hasPendingCtrlVPasteEcho(now time.Time) bool {
+	if strings.TrimSpace(a.pendingCtrlVPasteEcho) != "" {
+		return true
+	}
+	return !a.pendingCtrlVEchoUntil.IsZero() && now.Before(a.pendingCtrlVEchoUntil)
+}
+
+func (a *App) recordRecentPastedContent(content string, now time.Time) {
+	normalized := normalizeClipboardText(content)
+	if strings.TrimSpace(normalized) == "" {
+		return
+	}
+	a.lastPastedContent = normalized
+	a.lastPastedContentAt = now
+}
+
+func trimPrefixByRuneCount(content string, runes int) string {
+	if runes <= 0 || content == "" {
+		return content
+	}
+	rs := []rune(content)
+	if runes >= len(rs) {
+		return ""
+	}
+	return string(rs[runes:])
+}
+
+func normalizeEchoWhitespace(content string) string {
+	normalized := normalizeClipboardText(content)
+	normalized = strings.ReplaceAll(normalized, "\t", " ")
+	return strings.Join(strings.Fields(normalized), " ")
+}
+
+func matchPasteEchoLoosely(expected string, chunk string) bool {
+	if strings.HasPrefix(chunk, expected) {
+		return true
+	}
+	expectedNorm := normalizeEchoWhitespace(expected)
+	chunkNorm := normalizeEchoWhitespace(chunk)
+	if expectedNorm == "" || chunkNorm == "" {
+		return false
+	}
+	return strings.HasPrefix(expectedNorm, chunkNorm) || strings.HasPrefix(chunkNorm, expectedNorm)
+}
+
+func isPotentialCtrlVPasteEchoChunk(typed tea.KeyMsg) bool {
+	if typed.Type != tea.KeyRunes || len(typed.Runes) == 0 {
+		return false
+	}
+	chunk := normalizeClipboardText(string(typed.Runes))
+	if chunk == "" {
+		return false
+	}
+	return len(typed.Runes) > 1 ||
+		strings.ContainsRune(chunk, '\n') ||
+		strings.ContainsRune(chunk, '\r') ||
+		strings.ContainsRune(chunk, '\t')
+}
+
+func (a *App) tryPrimePasteFromClipboard(typed tea.KeyMsg, now time.Time) bool {
+	if typed.Type != tea.KeyRunes || len(typed.Runes) == 0 {
+		return false
+	}
+	if !isPotentialCtrlVPasteEchoChunk(typed) {
+		return false
+	}
+	chunk := normalizeClipboardText(string(typed.Runes))
+	if chunk == "" {
+		return false
+	}
+	clip, err := readClipboardText()
+	if err != nil {
+		return false
+	}
+	clip = normalizeClipboardText(clip)
+	if strings.TrimSpace(clip) == "" {
+		return false
+	}
+	if !(strings.HasPrefix(clip, chunk) || matchPasteEchoLoosely(clip, chunk)) {
+		return false
+	}
+
+	trimmed := strings.TrimSpace(clip)
+	if handled, err := a.applyPastedFileReferences(trimmed); handled {
+		if err != nil {
+			a.state.StatusText = err.Error()
+			a.appendActivity("multimodal", "Failed to parse pasted file references", err.Error(), true)
+		}
+		a.pendingCtrlVPasteEcho = clip
+		a.pendingCtrlVEchoUntil = now.Add(2 * time.Second)
+		return true
+	}
+	if a.shouldSuppressDuplicatePasteContent(clip, now) {
+		a.pendingCtrlVPasteEcho = clip
+		a.pendingCtrlVEchoUntil = now.Add(2 * time.Second)
+		return true
+	}
+
+	insert := clip
+	if summarized, ok, summarizeErr := a.summarizePastedText(insert); summarizeErr == nil {
+		if ok {
+			insert = summarized
+		}
+	} else {
+		a.state.StatusText = summarizeErr.Error()
+		a.appendActivity("multimodal", "Failed to summarize pasted content", summarizeErr.Error(), true)
+	}
+	before := a.input.Value()
+	var cmd tea.Cmd
+	a.input, cmd = a.input.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(insert), Paste: true})
+	_ = cmd
+	a.state.InputText = a.input.Value()
+	a.noteInputEdit(before, a.state.InputText, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(insert), Paste: true}, now)
+	a.normalizeComposerHeight()
+	a.applyComponentLayout(false)
+	a.refreshCommandMenu()
+	a.recordRecentPastedContent(insert, now)
+
+	a.pendingCtrlVPasteEcho = clip
+	a.pendingCtrlVEchoUntil = now.Add(2 * time.Second)
+	return true
+}
+
+func (a App) shouldCapturePasteTxnChunk(typed tea.KeyMsg) bool {
+	if typed.Type != tea.KeyRunes || len(typed.Runes) == 0 {
+		return false
+	}
+	if typed.Paste {
+		return false
+	}
+	if a.pasteTxnActive {
+		return true
+	}
+	chunk := string(typed.Runes)
+	if len(typed.Runes) > 1 {
+		return true
+	}
+	if a.shouldCaptureSingleRunePasteChunk(typed) {
+		return true
+	}
+	return strings.ContainsRune(chunk, '\n') || strings.ContainsRune(chunk, '\r') || strings.ContainsRune(chunk, '\t')
+}
+
+func (a App) shouldCaptureSingleRunePasteChunk(typed tea.KeyMsg) bool {
+	if typed.Type != tea.KeyRunes || len(typed.Runes) != 1 || typed.Paste {
+		return false
+	}
+	if strings.TrimSpace(a.input.Value()) != "" {
+		return false
+	}
+	clip, err := readClipboardText()
+	if err != nil {
+		return false
+	}
+	clip = normalizeClipboardText(clip)
+	if strings.TrimSpace(clip) == "" {
+		return false
+	}
+	chunk := normalizeClipboardText(string(typed.Runes))
+	return strings.HasPrefix(clip, chunk) || matchPasteEchoLoosely(clip, chunk)
+}
+
+func (a *App) appendPasteTxnChunk(chunk string) {
+	if chunk == "" {
+		return
+	}
+	chunk = normalizeClipboardText(chunk)
+	if !a.pasteTxnActive {
+		a.pasteTxnActive = true
+		a.pasteTxnBuffer = chunk
+		a.pasteTxnVersion++
+		return
+	}
+	a.pasteTxnBuffer += chunk
+	a.pasteTxnVersion++
+}
+
+func (a *App) flushPasteTransaction() {
+	if !a.pasteTxnActive {
+		return
+	}
+	content := normalizeClipboardText(a.pasteTxnBuffer)
+	a.pasteTxnActive = false
+	a.pasteTxnBuffer = ""
+	a.pasteTxnVersion = 0
+
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" {
+		return
+	}
+	if clip, err := readClipboardText(); err == nil {
+		clip = normalizeClipboardText(clip)
+		clipTrimmed := strings.TrimSpace(clip)
+		if clipTrimmed != "" && (strings.HasPrefix(clip, content) || strings.Contains(clip, content) || strings.Contains(content, clip)) {
+			content = clip
+			trimmed = clipTrimmed
+			a.pendingCtrlVPasteEcho = clip
+			a.pendingCtrlVEchoUntil = a.now().Add(2 * time.Second)
+		}
+	}
+	if handled, err := a.applyPastedFileReferences(trimmed); handled {
+		if err != nil {
+			a.state.StatusText = err.Error()
+			a.appendActivity("multimodal", "Failed to parse pasted file references", err.Error(), true)
+		}
+		return
+	}
+	if a.shouldSuppressDuplicatePasteContent(content, a.now()) {
+		return
+	}
+
+	insert := content
+	if summarized, ok, summarizeErr := a.summarizePastedText(insert); summarizeErr == nil {
+		if ok {
+			insert = summarized
+		}
+	} else {
+		a.state.StatusText = summarizeErr.Error()
+		a.appendActivity("multimodal", "Failed to summarize pasted content", summarizeErr.Error(), true)
+	}
+	before := a.input.Value()
+	var cmd tea.Cmd
+	a.input, cmd = a.input.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(insert), Paste: true})
+	_ = cmd
+	a.state.InputText = a.input.Value()
+	a.noteInputEdit(before, a.state.InputText, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(insert), Paste: true}, a.now())
+	a.normalizeComposerHeight()
+	a.applyComponentLayout(false)
+	a.refreshCommandMenu()
+	a.recordRecentPastedContent(insert, a.now())
 }
 
 func (a *App) handleClipboardPasteShortcut() (string, bool, error) {
@@ -1139,6 +1774,45 @@ func (a *App) handleClipboardPasteShortcut() (string, bool, error) {
 	return text, true, nil
 }
 
+func (a *App) applyPastedFileReferences(text string) (bool, error) {
+	paths, ok := clipboardFileReferencePathsFromText(text, a.state.CurrentWorkdir)
+	if !ok {
+		return false, nil
+	}
+
+	references := make([]string, 0, len(paths))
+	for _, path := range paths {
+		if tuiinfra.IsSupportedImageFormat(path) || looksLikeImagePath(path) {
+			if err := a.addImageAttachment(path); err != nil {
+				return true, err
+			}
+			continue
+		}
+		reference, err := a.fileReferenceForPath(path)
+		if err != nil {
+			return true, err
+		}
+		references = append(references, reference)
+	}
+
+	if len(references) > 0 {
+		combined := strings.Join(references, " ")
+		current := strings.TrimSpace(a.input.Value())
+		if current == "" {
+			current = combined
+		} else {
+			current = current + " " + combined
+		}
+		a.input.SetValue(current)
+		a.state.InputText = current
+		a.normalizeComposerHeight()
+		a.applyComponentLayout(false)
+		a.refreshCommandMenu()
+		a.state.StatusText = fmt.Sprintf("[System] Added %d file reference(s) from paste.", len(references))
+	}
+	return true, nil
+}
+
 func (a App) collectPendingImageInputs() []tuiservices.UserImageInput {
 	images := make([]tuiservices.UserImageInput, 0, len(a.pendingImageAttachments))
 	for _, attachment := range a.pendingImageAttachments {
@@ -1170,6 +1844,7 @@ func (a *App) dispatchQueuedInterventionIfIdle() tea.Cmd {
 
 	queued := a.queuedIntervention
 	a.queuedIntervention = nil
+	a.rebuildTranscript()
 	if queued == nil {
 		return nil
 	}
@@ -1345,7 +2020,7 @@ func isPickerFilterEditKey(msg tea.KeyMsg) bool {
 	}
 }
 
-// maybeStartModelScopeGuideFromProvider 在选择 modelscope 且未配置 token 时进入半引导流程。
+// maybeStartModelScopeGuideFromProvider 在选择 modelscope 且未配置 token 时进入半引导流程?
 func (a *App) maybeStartModelScopeGuideFromProvider(providerID string) (tea.Cmd, bool) {
 	if !strings.EqualFold(strings.TrimSpace(providerID), config.ModelScopeName) {
 		return nil, false
@@ -1387,7 +2062,7 @@ func (a *App) maybeStartModelScopeGuideFromProvider(providerID string) (tea.Cmd,
 	return a.runModelScopeGuideOpen(guidePath), true
 }
 
-// resolveModelScopeGuidePath 解析 ModelScope 指导页的本地路径；文件不存在时返回空字符串。
+// resolveModelScopeGuidePath 解析 ModelScope 指导页的本地路径；文件不存在时返回空字符串?
 func (a *App) resolveModelScopeGuidePath() string {
 	baseDir := strings.TrimSpace(a.configManager.BaseDir())
 	if baseDir == "" {
@@ -1782,7 +2457,7 @@ func (a *App) HydrateSession(ctx context.Context, sessionID string) error {
 	return nil
 }
 
-// ConfigureStartupWakeInput 配置启动阶段的一次性自动提交输入，不会直接触发 runtime 调用。
+// ConfigureStartupWakeInput 配置启动阶段的一次性自动提交输入，不会直接触发 runtime 调用?
 func (a *App) ConfigureStartupWakeInput(text string, workdir string) error {
 	normalizedText := strings.TrimSpace(text)
 	if normalizedText == "" {
@@ -2841,7 +3516,7 @@ func runtimeEventPermissionRequestHandler(a *App, event tuiservices.RuntimeEvent
 	return false
 }
 
-// beginAutoPermissionApproval 在 Full Access 模式下直接提交 session 级审批，并记录回执所需状态。
+// beginAutoPermissionApproval Full Access 模式下直接提session 级审批，并记录回执所需状态
 func (a *App) beginAutoPermissionApproval(payload tuiservices.PermissionRequestPayload) bool {
 	if !a.fullAccessModeEnabled {
 		return false
@@ -3004,6 +3679,33 @@ func (a *App) appendActivity(kind string, title string, detail string, isError b
 	a.syncActivityViewport(previousCount)
 	a.viewDirty = true
 	a.addLogEntry(kind, title, detail)
+	a.appendInlineMessage(roleSystem, formatActivityInlineLog(kind, title, detail))
+	a.rebuildTranscript()
+}
+
+func formatActivityInlineLog(kind string, title string, detail string) string {
+	category := strings.TrimSpace(kind)
+	if category == "" {
+		category = "log"
+	}
+	content := strings.TrimSpace(title)
+	detail = strings.TrimSpace(detail)
+	if content == "" {
+		content = detail
+		detail = ""
+	}
+	if detail != "" {
+		content = content + " | " + detail
+	}
+	return inlineLogMarker + category + ": " + strings.TrimSpace(content)
+}
+
+func isInlineLogMessage(message providertypes.Message) bool {
+	if message.Role != roleSystem {
+		return false
+	}
+	content := strings.TrimSpace(renderMessagePartsForDisplay(message.Parts))
+	return strings.HasPrefix(content, inlineLogMarker)
 }
 
 func (a *App) syncFooterErrorToast() {
@@ -3596,7 +4298,8 @@ func (a *App) applyComponentLayout(rebuildTranscript bool) {
 	a.help.ShowAll = a.state.ShowHelp
 	a.transcript.Width = max(1, lay.contentWidth-a.transcriptScrollbarWidth(lay.contentWidth))
 	a.resizeCommandMenu()
-	a.input.SetWidth(a.composerInnerWidth(lay.contentWidth))
+	promptWidth := a.startupPanelWidth(lay.contentWidth)
+	a.input.SetWidth(a.composerInnerWidth(promptWidth))
 	a.input.SetHeight(a.composerHeight())
 	transcriptHeight, activityHeight, _, todoHeight := a.waterfallMetrics(lay.contentWidth, lay.contentHeight)
 	a.transcript.Height = transcriptHeight
@@ -3652,6 +4355,9 @@ func (a App) composerInnerWidth(totalWidth int) int {
 }
 
 func (a App) composerHeight() int {
+	if a.input.Value() == "" {
+		return composerMinHeight
+	}
 	return tuiutils.Clamp(a.input.LineCount(), composerMinHeight, composerMaxHeight)
 }
 
@@ -3672,7 +4378,13 @@ func (a *App) normalizeComposerHeight() {
 func (a *App) rebuildTranscript() {
 	width := max(24, a.transcript.Width)
 	if len(a.activeMessages) == 0 {
-		a.setTranscriptContent(a.styles.empty.Width(width).Render(emptyConversationText))
+		queued := a.renderQueuedInterventionBlock(width)
+		if strings.TrimSpace(queued) == "" {
+			a.setTranscriptContent(a.styles.empty.Width(width).Render(emptyConversationText))
+			a.transcript.GotoTop()
+			return
+		}
+		a.setTranscriptContent(queued)
 		a.transcript.GotoTop()
 		return
 	}
@@ -3682,7 +4394,11 @@ func (a *App) rebuildTranscript() {
 	hasBlock := false
 	lastRenderedRole := ""
 	for _, message := range a.activeMessages {
+		inlineLog := isInlineLogMessage(message)
 		continuation := message.Role == roleAssistant && lastRenderedRole == roleAssistant
+		if inlineLog && lastRenderedRole == roleAssistant {
+			continuation = true
+		}
 		rendered, _ := a.renderMessageBlockWithCopy(message, width, 0, !continuation)
 		if rendered == "" {
 			continue
@@ -3697,7 +4413,17 @@ func (a *App) rebuildTranscript() {
 		}
 		builder.WriteString(rendered)
 		hasBlock = true
-		lastRenderedRole = message.Role
+		if !inlineLog {
+			lastRenderedRole = message.Role
+		}
+	}
+
+	if queued := a.renderQueuedInterventionBlock(width); strings.TrimSpace(queued) != "" {
+		if hasBlock {
+			builder.WriteString("\n\n")
+		}
+		builder.WriteString(queued)
+		hasBlock = true
 	}
 
 	if !hasBlock {
@@ -3963,7 +4689,7 @@ func (a *App) requestModelCatalogRefresh(providerID string) tea.Cmd {
 	return runModelCatalogRefresh(a.providerSvc, providerID)
 }
 
-// handleStartupWakeSubmitMsg 处理启动期的一次性唤醒输入，并沿用普通发送链路触发 Submit。
+// handleStartupWakeSubmitMsg 处理启动期的一次性唤醒输入，并沿用普通发送链路触Submit
 func (a *App) handleStartupWakeSubmitMsg(msg startupWakeSubmitMsg) tea.Cmd {
 	a.startupWakeSubmitInput = nil
 	text := strings.TrimSpace(msg.Input.Text)
@@ -4234,7 +4960,8 @@ func (a *App) setTranscriptOffsetFromScrollbarY(mouseY int) {
 	}
 }
 
-// isBusy reports whether an agent run or compact operation is in progress.
+// isBusy reports whether a runtime operation is in progress.
+// Pasted-text loading is intentionally excluded so typing and navigation remain available.
 func (a App) isBusy() bool {
 	return tuiutils.IsBusy(a.state.IsAgentRunning, a.state.IsCompacting)
 }
@@ -4303,7 +5030,7 @@ func (a *App) runMemoSystemTool(toolName string, arguments map[string]any) tea.C
 	)
 }
 
-// normalizeMemoCommandErrorMessage 将 memo 命令的底层错误映射为用户可读提示，避免暴露内部 sentinel 文本。
+// normalizeMemoCommandErrorMessage memo 命令的底层错误映射为用户可读提示，避免暴露内sentinel 文本
 func normalizeMemoCommandErrorMessage(err error) string {
 	if err == nil {
 		return "memo command failed"
@@ -4318,7 +5045,7 @@ func normalizeMemoCommandErrorMessage(err error) string {
 	return message
 }
 
-// syncSessionWorkdir 依据会话快照更新当前工作区；若路径失效可选择展示告警并保留现有目录。
+// syncSessionWorkdir 依据会话快照更新当前工作区；若路径失效可选择展示告警并保留现有目录
 func (a *App) syncSessionWorkdir(sessionWorkdir string, warnOnMissing bool) {
 	resolved := strings.TrimSpace(agentsession.EffectiveWorkdir(sessionWorkdir, a.configManager.Get().Workdir))
 	if resolved == "" || !filepath.IsAbs(resolved) {

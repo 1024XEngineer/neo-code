@@ -409,6 +409,46 @@ func TestStartupKeyEscFocusesInput(t *testing.T) {
 	}
 }
 
+func TestCtrlCCopiesSelectionInsteadOfQuitting(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.transcriptContent = "hello world"
+	app.transcript.SetContent("hello world")
+	app.textSelection.active = true
+	app.textSelection.startLine = 0
+	app.textSelection.startCol = 0
+	app.textSelection.endLine = 0
+	app.textSelection.endCol = 5
+	if !app.hasTextSelection() {
+		t.Fatalf("expected selection precondition")
+	}
+
+	originalClipboardWriteAll := clipboardWriteAll
+	defer func() { clipboardWriteAll = originalClipboardWriteAll }()
+	copied := ""
+	clipboardWriteAll = func(text string) error {
+		copied = text
+		return nil
+	}
+
+	model, cmd := app.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	if cmd != nil {
+		if _, ok := cmd().(tea.QuitMsg); ok {
+			t.Fatalf("expected Ctrl+C with selection not to quit")
+		}
+	}
+
+	next := model.(App)
+	if copied != "hello" {
+		t.Fatalf("expected copied selection \"hello\", got %q", copied)
+	}
+	if next.state.StatusText != "Copied selected text" {
+		t.Fatalf("expected copied status, got %q", next.state.StatusText)
+	}
+	if next.hasTextSelection() {
+		t.Fatalf("expected selection to clear after copy")
+	}
+}
+
 func TestStartupSlashTransitionsToComposer(t *testing.T) {
 	app, _ := newTestApp(t)
 	app.startupScreenLocked = true
@@ -432,6 +472,9 @@ func TestStartupSlashTransitionsToComposer(t *testing.T) {
 func TestStartupRegularInputDismissesStartup(t *testing.T) {
 	app, _ := newTestApp(t)
 	app.startupScreenLocked = true
+	originalReadText := readClipboardText
+	defer func() { readClipboardText = originalReadText }()
+	readClipboardText = func() (string, error) { return "", errors.New("clipboard unavailable") }
 
 	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}})
 	next := model.(App)
@@ -993,9 +1036,15 @@ func TestRuntimeEventToolResultHandlerUpdatesMessages(t *testing.T) {
 	if !handled {
 		t.Fatalf("expected handler to return true")
 	}
-	last := app.activeMessages[len(app.activeMessages)-1]
-	if last.Role != roleTool || messageText(last) != "ok" {
-		t.Fatalf("unexpected tool message: %#v", last)
+	var toolMsg *providertypes.Message
+	for i := len(app.activeMessages) - 1; i >= 0; i-- {
+		if app.activeMessages[i].Role == roleTool {
+			toolMsg = &app.activeMessages[i]
+			break
+		}
+	}
+	if toolMsg == nil || messageText(*toolMsg) != "ok" {
+		t.Fatalf("unexpected tool message list: %#v", app.activeMessages)
 	}
 }
 
@@ -1430,8 +1479,10 @@ func TestRuntimeEventRunContextHandler(t *testing.T) {
 	}
 }
 
-func TestUpdatePasteImageShortcutFailure(t *testing.T) {
+func TestUpdateCtrlVPasteWithoutImageDoesNotMutateInput(t *testing.T) {
 	app, _ := newTestApp(t)
+	app.input.SetValue("seed")
+	app.state.InputText = "seed"
 
 	originalReadImage := readClipboardImage
 	originalReadText := readClipboardText
@@ -1447,13 +1498,14 @@ func TestUpdatePasteImageShortcutFailure(t *testing.T) {
 		_ = cmd()
 	}
 	app = model.(App)
-	if !strings.Contains(strings.ToLower(app.state.StatusText), "clipboard") {
-		t.Fatalf("expected clipboard failure status, got %q", app.state.StatusText)
+	if app.input.Value() != "seed" {
+		t.Fatalf("expected Ctrl+V without image payload to keep input unchanged, got %q", app.input.Value())
 	}
 }
 
-func TestUpdateCtrlVPastesClipboardTextAsInput(t *testing.T) {
+func TestUpdateCtrlVPasteInsertsRawTextAndSuppressesTerminalEcho(t *testing.T) {
 	app, _ := newTestApp(t)
+	pasted := "line-1\nline-2\nline-3\nline-4\nline-5\nline-6"
 
 	originalReadImage := readClipboardImage
 	originalReadText := readClipboardText
@@ -1462,13 +1514,7 @@ func TestUpdateCtrlVPastesClipboardTextAsInput(t *testing.T) {
 		readClipboardText = originalReadText
 	}()
 	readClipboardImage = func() ([]byte, error) { return nil, errors.New("no image") }
-
-	lineCount := pastePlaceholderMinLines + 1
-	lines := make([]string, 0, lineCount)
-	for i := 0; i < lineCount; i++ {
-		lines = append(lines, fmt.Sprintf("line-%d", i+1))
-	}
-	readClipboardText = func() (string, error) { return strings.Join(lines, "\n"), nil }
+	readClipboardText = func() (string, error) { return pasted, nil }
 
 	model, cmd := app.Update(tea.KeyMsg{Type: tea.KeyCtrlV})
 	if cmd != nil {
@@ -1476,28 +1522,82 @@ func TestUpdateCtrlVPastesClipboardTextAsInput(t *testing.T) {
 	}
 	app = model.(App)
 
-	expected := formatPastePlaceholder(lineCount)
+	expected := "[paste 6 LINE]"
 	if app.input.Value() != expected {
-		t.Fatalf("expected pasted clipboard text to collapse into %q, got %q", expected, app.input.Value())
+		t.Fatalf("expected Ctrl+V to insert summarized pasted text %q immediately, got %q", expected, app.input.Value())
+	}
+	if app.pendingCtrlVPasteEcho == "" {
+		t.Fatalf("expected pending ctrl+v echo buffer to be populated")
+	}
+
+	model, cmd = app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("line-1\nline-2\n"), Paste: false})
+	if cmd != nil {
+		_ = cmd()
+	}
+	app = model.(App)
+	if app.input.Value() != expected {
+		t.Fatalf("expected echoed raw chunk to be swallowed, got %q", app.input.Value())
 	}
 }
 
-func TestUpdateCtrlVPastesClipboardFilesAsReferences(t *testing.T) {
+func TestUpdateSingleRuneInputDoesNotPrimeFromClipboard(t *testing.T) {
 	app, _ := newTestApp(t)
-	root := t.TempDir()
-	app.state.CurrentWorkdir = root
+	clipboardText := strings.Join([]string{
+		"xackage tui",
+		"import (",
+		`"strings"`,
+		`"time"`,
+		")",
+	}, "\n")
 
-	first := filepath.Join(root, "docs", "a.txt")
-	second := filepath.Join(root, "README.md")
-	if err := os.MkdirAll(filepath.Dir(first), 0o755); err != nil {
-		t.Fatalf("mkdir: %v", err)
+	originalReadText := readClipboardText
+	defer func() { readClipboardText = originalReadText }()
+	readClipboardText = func() (string, error) { return clipboardText, nil }
+
+	model, cmd := app.Update(tea.KeyMsg{
+		Type:  tea.KeyRunes,
+		Runes: []rune("p"),
+		Paste: false,
+	})
+	if cmd != nil {
+		_ = cmd()
 	}
-	if err := os.WriteFile(first, []byte("a"), 0o644); err != nil {
-		t.Fatalf("write first: %v", err)
+	app = model.(App)
+
+	if app.input.Value() != "p" {
+		t.Fatalf("expected single-rune input to stay as regular typing, got %q", app.input.Value())
 	}
-	if err := os.WriteFile(second, []byte("b"), 0o644); err != nil {
-		t.Fatalf("write second: %v", err)
+}
+
+func TestUpdateEnterDoesNotSendWhilePasteEchoPending(t *testing.T) {
+	app, runtime := newTestApp(t)
+	now := time.Now()
+	app.nowFn = func() time.Time { return now }
+	app.pendingCtrlVPasteEcho = "long pasted payload"
+	app.pendingCtrlVEchoUntil = now.Add(time.Second)
+	app.input.SetValue("long pasted payload")
+	app.state.InputText = app.input.Value()
+
+	model, cmd := app.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd != nil {
+		_ = cmd()
 	}
+	app = model.(App)
+
+	if len(runtime.prepareInputs) != 0 {
+		t.Fatalf("expected enter to avoid send while paste echo pending, got %d submits", len(runtime.prepareInputs))
+	}
+}
+
+func TestUpdateCtrlVPasteSuppressesWhitespaceMismatchedEchoChunk(t *testing.T) {
+	app, _ := newTestApp(t)
+	pasted := strings.Join([]string{
+		"lastInputEd\t todoFilter\t todoFilter",
+		"todoSelectedIndex\t int",
+		"todoPanelVisible\t bool",
+		"inputBurstCount\t int",
+		"pasteMode\t bool",
+	}, "\n")
 
 	originalReadImage := readClipboardImage
 	originalReadText := readClipboardText
@@ -1506,24 +1606,32 @@ func TestUpdateCtrlVPastesClipboardFilesAsReferences(t *testing.T) {
 		readClipboardText = originalReadText
 	}()
 	readClipboardImage = func() ([]byte, error) { return nil, errors.New("no image") }
-	readClipboardText = func() (string, error) { return first + "\n" + second, nil }
+	readClipboardText = func() (string, error) { return pasted, nil }
 
 	model, cmd := app.Update(tea.KeyMsg{Type: tea.KeyCtrlV})
 	if cmd != nil {
 		_ = cmd()
 	}
 	app = model.(App)
+	if app.input.Value() != "[paste 5 LINE]" {
+		t.Fatalf("expected immediate summarized pasted text to match clipboard content, got %q", app.input.Value())
+	}
 
-	input := app.input.Value()
-	if !strings.Contains(input, "@docs/a.txt") || !strings.Contains(input, "@README.md") {
-		t.Fatalf("expected pasted files to become references, got %q", input)
+	// Simulate terminal echo chunk where tabs are expanded to spaces.
+	model, cmd = app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("lastInputEd    todoFilter"), Paste: false})
+	if cmd != nil {
+		_ = cmd()
+	}
+	app = model.(App)
+	if app.input.Value() != "[paste 5 LINE]" {
+		t.Fatalf("expected whitespace-mismatched echoed raw chunk to be swallowed, got %q", app.input.Value())
 	}
 }
 
-func TestUpdateLongPasteUsesPlaceholderAndExpandsOnSend(t *testing.T) {
-	app, runtime := newTestApp(t)
+func TestUpdatePasteEventKeepsLongTextAsInput(t *testing.T) {
+	app, _ := newTestApp(t)
 
-	lineCount := pastePlaceholderMinLines + 2
+	lineCount := 5
 	lines := make([]string, 0, lineCount)
 	for i := 0; i < lineCount; i++ {
 		lines = append(lines, fmt.Sprintf("line-%d", i+1))
@@ -1540,15 +1648,275 @@ func TestUpdateLongPasteUsesPlaceholderAndExpandsOnSend(t *testing.T) {
 	}
 	app = model.(App)
 
-	placeholder := formatPastePlaceholder(lineCount)
-	if app.input.Value() != placeholder {
-		t.Fatalf("expected placeholder %q, got %q", placeholder, app.input.Value())
+	expected := "[paste 5 LINE]"
+	if app.input.Value() != expected {
+		t.Fatalf("expected pasted clipboard text to stay summarized as %q, got %q", expected, app.input.Value())
 	}
-	if len(app.pendingPasteBuffers) != 1 {
-		t.Fatalf("expected one buffered paste payload, got %d", len(app.pendingPasteBuffers))
+}
+
+func TestUpdatePasteEventSuppressesDuplicateSummaryToken(t *testing.T) {
+	app, _ := newTestApp(t)
+	now := time.Unix(1_720_000_000, 0)
+	app.nowFn = func() time.Time { return now }
+
+	pasted := "line-1\nline-2\nline-3\nline-4\nline-5"
+	msg := tea.KeyMsg{
+		Type:  tea.KeyRunes,
+		Runes: []rune(pasted),
+		Paste: true,
+	}
+
+	model, cmd := app.Update(msg)
+	if cmd != nil {
+		_ = cmd()
+	}
+	app = model.(App)
+
+	model, cmd = app.Update(msg)
+	if cmd != nil {
+		_ = cmd()
+	}
+	app = model.(App)
+
+	if got := app.input.Value(); got != "[paste 5 LINE]" {
+		t.Fatalf("expected duplicate paste event to keep a single summary token, got %q", got)
+	}
+	if len(app.pendingTextPastes) != 1 {
+		t.Fatalf("expected one pending text paste entry after duplicate suppression, got %d", len(app.pendingTextPastes))
+	}
+}
+
+func TestUpdatePasteEventSuppressesDuplicateSummaryTokenAcrossContentVariants(t *testing.T) {
+	app, _ := newTestApp(t)
+	now := time.Unix(1_720_000_000, 0)
+	app.nowFn = func() time.Time { return now }
+
+	first := "line-1\nline-2\nline-3\nline-4\nline-5"
+	second := "line-1 \nline-2\nline-3\nline-4\nline-5"
+
+	model, cmd := app.Update(tea.KeyMsg{
+		Type:  tea.KeyRunes,
+		Runes: []rune(first),
+		Paste: true,
+	})
+	if cmd != nil {
+		_ = cmd()
+	}
+	app = model.(App)
+
+	now = now.Add(2 * time.Second)
+	model, cmd = app.Update(tea.KeyMsg{
+		Type:  tea.KeyRunes,
+		Runes: []rune(second),
+		Paste: true,
+	})
+	if cmd != nil {
+		_ = cmd()
+	}
+	app = model.(App)
+
+	if got := app.input.Value(); got != "[paste 5 LINE]" {
+		t.Fatalf("expected duplicate paste variants to keep a single summary token, got %q", got)
+	}
+	if len(app.pendingTextPastes) != 1 {
+		t.Fatalf("expected one pending text paste entry for duplicate variants, got %d", len(app.pendingTextPastes))
+	}
+}
+
+func TestUpdatePasteEventSuppressesDuplicateSingleLineContent(t *testing.T) {
+	app, _ := newTestApp(t)
+	now := time.Unix(1_720_000_000, 0)
+	app.nowFn = func() time.Time { return now }
+
+	msg := tea.KeyMsg{
+		Type:  tea.KeyRunes,
+		Runes: []rune("single-line-paste"),
+		Paste: true,
+	}
+
+	model, cmd := app.Update(msg)
+	if cmd != nil {
+		_ = cmd()
+	}
+	app = model.(App)
+
+	model, cmd = app.Update(msg)
+	if cmd != nil {
+		_ = cmd()
+	}
+	app = model.(App)
+
+	if got := app.input.Value(); got != "single-line-paste" {
+		t.Fatalf("expected duplicate single-line paste to be suppressed, got %q", got)
+	}
+}
+
+func TestUpdateSingleLineCtrlVPasteEnterDoesNotReinsertPaste(t *testing.T) {
+	app, runtime := newTestApp(t)
+	now := time.Unix(1_720_000_000, 0)
+	app.nowFn = func() time.Time { return now }
+
+	pasted := "single-line-paste"
+	originalReadImage := readClipboardImage
+	originalReadText := readClipboardText
+	defer func() {
+		readClipboardImage = originalReadImage
+		readClipboardText = originalReadText
+	}()
+	readClipboardImage = func() ([]byte, error) { return nil, errors.New("no image") }
+	readClipboardText = func() (string, error) { return pasted, nil }
+
+	model, cmd := app.Update(tea.KeyMsg{Type: tea.KeyCtrlV})
+	if cmd != nil {
+		_ = cmd()
+	}
+	app = model.(App)
+	if got := app.input.Value(); got != pasted {
+		t.Fatalf("expected single-line Ctrl+V paste inserted once, got %q", got)
 	}
 
 	model, cmd = app.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd != nil {
+		_ = cmd()
+	}
+	app = model.(App)
+	if got := app.input.Value(); got != pasted {
+		t.Fatalf("expected Enter during echo window not to reinsert paste, got %q", got)
+	}
+	if len(runtime.prepareInputs) != 0 {
+		t.Fatalf("expected Enter during echo window not to submit yet, got %d submits", len(runtime.prepareInputs))
+	}
+
+	now = now.Add(3 * time.Second)
+	model, cmd = app.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd != nil {
+		_ = cmd()
+	}
+	app = model.(App)
+	if len(runtime.prepareInputs) != 1 || runtime.prepareInputs[0].Text != pasted {
+		t.Fatalf("expected delayed Enter to submit single-line paste once, got %+v", runtime.prepareInputs)
+	}
+}
+
+func TestUpdatePasteEventConvertsClipboardFilesAsReferences(t *testing.T) {
+	app, _ := newTestApp(t)
+	root := t.TempDir()
+	app.state.CurrentWorkdir = root
+
+	first := filepath.Join(root, "docs", "a.txt")
+	second := filepath.Join(root, "README.md")
+	if err := os.MkdirAll(filepath.Dir(first), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(first, []byte("a"), 0o644); err != nil {
+		t.Fatalf("write first: %v", err)
+	}
+	if err := os.WriteFile(second, []byte("b"), 0o644); err != nil {
+		t.Fatalf("write second: %v", err)
+	}
+
+	model, cmd := app.Update(tea.KeyMsg{
+		Type:  tea.KeyRunes,
+		Runes: []rune(first + "\n" + second),
+		Paste: true,
+	})
+	if cmd != nil {
+		_ = cmd()
+	}
+	app = model.(App)
+
+	input := app.input.Value()
+	if !strings.Contains(input, "@docs/a.txt") || !strings.Contains(input, "@README.md") {
+		t.Fatalf("expected pasted files to become references, got %q", input)
+	}
+}
+
+func TestUpdatePasteEventSingleImagePathAsAttachment(t *testing.T) {
+	app, _ := newTestApp(t)
+	root := t.TempDir()
+	app.state.CurrentWorkdir = root
+
+	imagePath := filepath.Join(root, "clip.png")
+	if err := os.WriteFile(imagePath, []byte("png"), 0o644); err != nil {
+		t.Fatalf("write image: %v", err)
+	}
+
+	model, cmd := app.Update(tea.KeyMsg{
+		Type:  tea.KeyRunes,
+		Runes: []rune(imagePath),
+		Paste: true,
+	})
+	if cmd != nil {
+		_ = cmd()
+	}
+	app = model.(App)
+
+	if app.getImageAttachmentCount() != 1 {
+		t.Fatalf("expected one image attachment from pasted path, got %d", app.getImageAttachmentCount())
+	}
+	if app.input.Value() != "" {
+		t.Fatalf("expected input to stay empty when pasting image path as attachment, got %q", app.input.Value())
+	}
+}
+
+func TestUpdateLongPasteSendsRawText(t *testing.T) {
+	app, runtime := newTestApp(t)
+
+	lineCount := 6
+	lines := make([]string, 0, lineCount)
+	for i := 0; i < lineCount; i++ {
+		lines = append(lines, fmt.Sprintf("line-%d", i+1))
+	}
+	pasted := strings.Join(lines, "\n")
+
+	model, cmd := app.Update(tea.KeyMsg{
+		Type:  tea.KeyRunes,
+		Runes: []rune(pasted),
+		Paste: true,
+	})
+	var loadReadyMsg tea.Msg
+	if cmd != nil {
+		emitted := cmd()
+		switch msg := emitted.(type) {
+		case pastedTextLoadReadyMsg:
+			loadReadyMsg = msg
+		case tea.BatchMsg:
+			for _, child := range msg {
+				if child == nil {
+					continue
+				}
+				if ready, ok := child().(pastedTextLoadReadyMsg); ok {
+					loadReadyMsg = ready
+					break
+				}
+			}
+		}
+	}
+	app = model.(App)
+
+	if app.input.Value() != "[paste 6 LINE]" {
+		t.Fatalf("expected summarized pasted text in input, got %q", app.input.Value())
+	}
+	if app.state.StatusText != statusLoadingPastedText {
+		t.Fatalf("expected loading status immediately after long paste detection, got %q", app.state.StatusText)
+	}
+
+	model, cmd = app.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	app = model.(App)
+	if app.state.StatusText != statusLoadingPastedText {
+		t.Fatalf("expected loading status before resolving pasted placeholders, got %q", app.state.StatusText)
+	}
+	if len(runtime.prepareInputs) != 0 {
+		t.Fatalf("expected send to defer while pasted placeholders are loading")
+	}
+	if loadReadyMsg == nil {
+		t.Fatalf("expected deferred load command message before send")
+	}
+	if cmd != nil {
+		t.Fatalf("expected Enter while loading pasted text to wait for existing load completion")
+	}
+
+	model, cmd = app.Update(loadReadyMsg)
 	if cmd != nil {
 		_ = cmd()
 	}
@@ -1558,33 +1926,251 @@ func TestUpdateLongPasteUsesPlaceholderAndExpandsOnSend(t *testing.T) {
 		t.Fatalf("expected one prepare input after send, got %d", len(runtime.prepareInputs))
 	}
 	if runtime.prepareInputs[0].Text != pasted {
-		t.Fatalf("expected expanded pasted text in prepare input")
-	}
-	if len(app.pendingPasteBuffers) != 0 {
-		t.Fatalf("expected paste placeholders to reset after send")
+		t.Fatalf("expected raw pasted text in prepare input")
 	}
 }
 
-func TestMaybeCollapseLongPasteAfterInputFallback(t *testing.T) {
+func TestUpdateEnterWithPastePlaceholderShowsLoadingAndAutoSends(t *testing.T) {
+	app, runtime := newTestApp(t)
+	pasted := "line-1\nline-2\nline-3\nline-4\nline-5\nline-6"
+
+	model, cmd := app.Update(tea.KeyMsg{
+		Type:  tea.KeyRunes,
+		Runes: []rune(pasted),
+		Paste: true,
+	})
+	var delayed tea.Msg
+	if cmd != nil {
+		emitted := cmd()
+		switch msg := emitted.(type) {
+		case pastedTextLoadReadyMsg:
+			delayed = msg
+		case tea.BatchMsg:
+			for _, child := range msg {
+				if child == nil {
+					continue
+				}
+				if ready, ok := child().(pastedTextLoadReadyMsg); ok {
+					delayed = ready
+					break
+				}
+			}
+		}
+	}
+	app = model.(App)
+
+	model, cmd = app.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	app = model.(App)
+	if app.state.StatusText != statusLoadingPastedText {
+		t.Fatalf("expected loading status while resolving pasted text, got %q", app.state.StatusText)
+	}
+	if !app.loadingPastedText || !app.pendingSendAfterPasteLoad {
+		t.Fatalf("expected loading flags to be enabled")
+	}
+	if delayed == nil {
+		t.Fatalf("expected deferred load-ready message")
+	}
+	if cmd != nil {
+		t.Fatalf("expected no extra load-ready command from Enter while paste loading is already active")
+	}
+
+	model, cmd = app.Update(delayed)
+	if cmd != nil {
+		_ = cmd()
+	}
+	app = model.(App)
+	if len(runtime.prepareInputs) != 1 {
+		t.Fatalf("expected deferred send to run once, got %d", len(runtime.prepareInputs))
+	}
+	if runtime.prepareInputs[0].Text != pasted {
+		t.Fatalf("expected deferred send text to match pasted content")
+	}
+	if app.loadingPastedText || app.pendingSendAfterPasteLoad {
+		t.Fatalf("expected loading flags cleared after deferred send")
+	}
+}
+
+func TestUpdatePasteLoadingClearsAfterLoadReadyWithoutSend(t *testing.T) {
+	app, _ := newTestApp(t)
+	pasted := "line-1\nline-2\nline-3\nline-4\nline-5\nline-6"
+
+	model, cmd := app.Update(tea.KeyMsg{
+		Type:  tea.KeyRunes,
+		Runes: []rune(pasted),
+		Paste: true,
+	})
+	var delayed tea.Msg
+	if cmd != nil {
+		emitted := cmd()
+		switch msg := emitted.(type) {
+		case pastedTextLoadReadyMsg:
+			delayed = msg
+		case tea.BatchMsg:
+			for _, child := range msg {
+				if child == nil {
+					continue
+				}
+				if ready, ok := child().(pastedTextLoadReadyMsg); ok {
+					delayed = ready
+					break
+				}
+			}
+		}
+	}
+	app = model.(App)
+	if app.state.StatusText != statusLoadingPastedText {
+		t.Fatalf("expected loading status after long paste, got %q", app.state.StatusText)
+	}
+	if delayed == nil {
+		t.Fatalf("expected load-ready command after long paste")
+	}
+
+	model, cmd = app.Update(delayed)
+	if cmd != nil {
+		_ = cmd()
+	}
+	app = model.(App)
+	if app.loadingPastedText {
+		t.Fatalf("expected loading flag cleared when load-ready event arrives")
+	}
+	if app.state.StatusText != statusReady {
+		t.Fatalf("expected status to return to ready after load completion, got %q", app.state.StatusText)
+	}
+}
+
+func TestUpdateDirectPasteEventKeepsIncomingPayload(t *testing.T) {
+	app, _ := newTestApp(t)
+	pasted := "a\nb\nc\nd\ne"
+
+	model, cmd := app.Update(tea.KeyMsg{
+		Type:  tea.KeyRunes,
+		Runes: []rune(pasted),
+		Paste: true,
+	})
+	if cmd != nil {
+		_ = cmd()
+	}
+	app = model.(App)
+
+	expected := "[paste 5 LINE]"
+	if app.input.Value() != expected {
+		t.Fatalf("expected direct paste event to keep incoming summarized text %q, got %q", expected, app.input.Value())
+	}
+}
+
+func TestUpdatePasteLikeRunesWithoutPasteFlagStayRaw(t *testing.T) {
+	app, _ := newTestApp(t)
+	pasted := "line-1\nline-2\nline-3\nline-4\nline-5"
+
+	model, cmd := app.Update(tea.KeyMsg{
+		Type:  tea.KeyRunes,
+		Runes: []rune(pasted),
+		Paste: false,
+	})
+	if cmd != nil {
+		_ = cmd()
+	}
+	app = model.(App)
+	model, cmd = app.Update(pasteTxnFlushMsg{Version: app.pasteTxnVersion})
+	if cmd != nil {
+		_ = cmd()
+	}
+	app = model.(App)
+
+	expected := "[paste 5 LINE]"
+	if app.input.Value() != expected {
+		t.Fatalf("expected paste-like rune burst to stay summarized as %q, got %q", expected, app.input.Value())
+	}
+}
+
+func TestUpdatePasteLikeRunesChunksAppendRawText(t *testing.T) {
+	app, _ := newTestApp(t)
+
+	chunk := "a1\na2\na3\na4"
+	for i := 0; i < 4; i++ {
+		model, cmd := app.Update(tea.KeyMsg{
+			Type:  tea.KeyRunes,
+			Runes: []rune(chunk),
+			Paste: false,
+		})
+		if cmd != nil {
+			_ = cmd()
+		}
+		app = model.(App)
+	}
+	model, cmd := app.Update(pasteTxnFlushMsg{Version: app.pasteTxnVersion})
+	if cmd != nil {
+		_ = cmd()
+	}
+	app = model.(App)
+
+	expected := "[paste 13 LINE]"
+	if app.input.Value() != expected {
+		t.Fatalf("expected chunked paste to append summarized text %q, got %q", expected, app.input.Value())
+	}
+}
+
+func TestUpdatePasteTxnAvoidsPartialPrefixRenderBeforeRawClipboardInsert(t *testing.T) {
+	app, _ := newTestApp(t)
+	clipboardText := strings.Join([]string{
+		"lastInputEd\ttodoFilter\ttodoFilter",
+		"todoSelectedIndex\tint",
+		"todoPanelVisible\tbool",
+		"inputBurstCount\tint",
+		"pasteMode\tbool",
+		"pasteSessionBase\tstring",
+		"activeMessages\t[]providertypes.Message",
+		"activities\t[]tuistate.ActivityEntry",
+		"todoItems\t[]todoViewItem",
+		"todoFilter\ttodoFilter",
+	}, "\n")
+	originalReadText := readClipboardText
+	defer func() { readClipboardText = originalReadText }()
+	readClipboardText = func() (string, error) { return clipboardText, nil }
+
+	model, cmd := app.Update(tea.KeyMsg{
+		Type:  tea.KeyRunes,
+		Runes: []rune("lastInputEd"),
+		Paste: false,
+	})
+	if cmd != nil {
+		_ = cmd()
+	}
+	app = model.(App)
+	if app.input.Value() != "[paste 10 LINE]" {
+		t.Fatalf("expected first chunk to prime clipboard summarized payload insert, got %q", app.input.Value())
+	}
+
+	rest := "\ttodoFilter\n\ttodoSelectedIndex\n\ttodoPanelVisible\n\ttodoItems"
+	model, cmd = app.Update(tea.KeyMsg{
+		Type:  tea.KeyRunes,
+		Runes: []rune(rest),
+		Paste: false,
+	})
+	if cmd != nil {
+		_ = cmd()
+	}
+	app = model.(App)
+
+	if app.input.Value() != "[paste 10 LINE]" {
+		t.Fatalf("expected full clipboard payload to remain summarized, got %q", app.input.Value())
+	}
+}
+
+func TestMaybeCollapseLongPasteAfterInputFallbackCollapses(t *testing.T) {
 	app, _ := newTestApp(t)
 	app.pasteMode = true
 
 	before := "prefix "
-	inserted := strings.Repeat("A", 120) + "\n" + strings.Repeat("B", 120) + "\n" + strings.Repeat("C", 120)
+	inserted := strings.Repeat("A", 120) + "\n" + strings.Repeat("B", 120) + "\n" + strings.Repeat("C", 120) + "\n" + strings.Repeat("D", 120)
 	after := before + inserted
 	app.input.SetValue(after)
 	app.state.InputText = after
 
 	app.maybeCollapseLongPasteAfterInput(before, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
 
-	if app.input.Value() == after {
-		t.Fatalf("expected fallback collapse to replace long multiline paste")
-	}
-	if len(app.pendingPasteBuffers) != 1 {
-		t.Fatalf("expected one pending paste buffer, got %d", len(app.pendingPasteBuffers))
-	}
-	if !strings.Contains(app.input.Value(), "[paste ") {
-		t.Fatalf("expected collapsed placeholder in input, got %q", app.input.Value())
+	if app.input.Value() != "prefix [paste 4 LINE]" {
+		t.Fatalf("expected fallback collapse to replace long multiline paste, got %q", app.input.Value())
 	}
 }
 
@@ -1610,6 +2196,13 @@ func TestUpdateSendWhileBusyQueuesInterventionAndDispatchesAfterCancel(t *testin
 	}
 	if app.state.StatusText != statusInterventionCanceling {
 		t.Fatalf("expected intervention canceling status, got %q", app.state.StatusText)
+	}
+	plain := copyCodeANSIPattern.ReplaceAllString(app.transcriptContent, "")
+	if !strings.Contains(plain, messageTagUser+" queue") {
+		t.Fatalf("expected queued intervention marker in transcript, got %q", plain)
+	}
+	if !strings.Contains(plain, "follow up request") {
+		t.Fatalf("expected queued intervention text in transcript, got %q", plain)
 	}
 
 	model, cmd = app.Update(RuntimeMsg{Event: agentruntime.RuntimeEvent{
@@ -1645,8 +2238,40 @@ func TestUpdateSendWhileBusyQueuesInterventionAndDispatchesAfterCancel(t *testin
 	if runtime.prepareInputs[0].Text != "follow up request" {
 		t.Fatalf("expected queued intervention text to submit, got %q", runtime.prepareInputs[0].Text)
 	}
+	plain = copyCodeANSIPattern.ReplaceAllString(app.transcriptContent, "")
+	if strings.Contains(plain, messageTagUser+" queue") {
+		t.Fatalf("expected queued intervention marker cleared after dispatch, got %q", plain)
+	}
 	if !app.state.IsAgentRunning {
 		t.Fatalf("expected app to re-enter running state for queued intervention")
+	}
+}
+
+func TestUpdateEnterWhileRunningTreatsRecentPasteAsNewline(t *testing.T) {
+	app, runtime := newTestApp(t)
+	now := time.Now()
+	app.nowFn = func() time.Time { return now }
+	app.state.IsAgentRunning = true
+	app.input.SetValue("line one")
+	app.state.InputText = "line one"
+	app.pasteMode = true
+	app.lastPasteLikeAt = now
+	app.lastInputEditAt = now
+
+	model, cmd := app.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd != nil {
+		_ = cmd()
+	}
+	app = model.(App)
+
+	if runtime.cancelInvoked {
+		t.Fatalf("expected Enter to stay in composer newline path, but runtime cancel was invoked")
+	}
+	if app.queuedIntervention != nil {
+		t.Fatalf("expected no queued intervention when Enter is treated as newline")
+	}
+	if got := app.input.Value(); got != "line one\n" {
+		t.Fatalf("expected newline inserted while running, got %q", got)
 	}
 }
 
@@ -2387,7 +3012,7 @@ func TestUpdatePickerHelpSelectionRunsSlashCommand(t *testing.T) {
 	app.state.CurrentWorkdir = t.TempDir()
 	app.refreshHelpPicker()
 	app.openHelpPicker()
-	selectPickerItemByID(&app.helpPicker, slashUsageWorkdir)
+	selectPickerItemByID(&app.helpPicker, slashUsageMemo)
 
 	model, cmd := app.updatePicker(tea.KeyMsg{Type: tea.KeyEnter})
 	if model == nil {
@@ -2395,21 +3020,10 @@ func TestUpdatePickerHelpSelectionRunsSlashCommand(t *testing.T) {
 	}
 	app = model.(App)
 	if app.state.ActivePicker != pickerNone {
-		t.Fatalf("expected help picker to close after selecting /cwd")
+		t.Fatalf("expected help picker to close after selecting /memo")
 	}
 	if cmd == nil {
-		t.Fatalf("expected local slash command cmd")
-	}
-	msg := cmd()
-	result, ok := msg.(localCommandResultMsg)
-	if !ok {
-		t.Fatalf("expected localCommandResultMsg, got %T", msg)
-	}
-	if result.Err == nil {
-		t.Fatalf("expected local slash command result error for /cwd")
-	}
-	if !strings.Contains(strings.ToLower(result.Err.Error()), "unknown command") {
-		t.Fatalf("expected unknown command error, got %v", result.Err)
+		t.Fatalf("expected cmd after selecting /memo")
 	}
 }
 
@@ -2461,11 +3075,11 @@ func TestRunSlashCommandSelectionWorkspaceAndLocal(t *testing.T) {
 	app.state.ActiveSessionID = ""
 	app.state.CurrentWorkdir = t.TempDir()
 
-	// /cwd is not handled by handleImmediateSlashCommand and is not in the direct switch cases.
+	// /unknown-local is not handled by handleImmediateSlashCommand and is not in the direct switch cases.
 	// It should therefore execute through runLocalCommand and return a localCommandResultMsg.
-	localCmd := app.runSlashCommandSelection("/cwd")
+	localCmd := app.runSlashCommandSelection("/unknown-local")
 	if localCmd == nil {
-		t.Fatalf("expected local slash cmd for /cwd")
+		t.Fatalf("expected local slash cmd for /unknown-local")
 	}
 }
 
@@ -3030,6 +3644,36 @@ func TestComposerHelpers(t *testing.T) {
 	app.normalizeComposerHeight()
 	if app.input.Height() < composerMinHeight || app.input.Height() > composerMaxHeight {
 		t.Fatalf("normalizeComposerHeight should keep height in clamp range")
+	}
+
+	app.input.SetValue("")
+	app.normalizeComposerHeight()
+	if app.input.Height() != composerMinHeight {
+		t.Fatalf("expected empty composer to reset to min height, got %d", app.input.Height())
+	}
+}
+
+func TestApplyComponentLayoutUsesStartupPromptWidthForInput(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.startupScreenLocked = true
+	app.state.ActivePicker = pickerNone
+	app.state.IsAgentRunning = false
+	app.state.IsCompacting = false
+	app.activeMessages = nil
+	app.input.SetValue("")
+	app.width = 120
+	app.height = 40
+
+	if !app.shouldRenderStartupScreen() {
+		t.Fatalf("expected startup screen precondition")
+	}
+	lay := app.computeLayout()
+	fullWidth := app.composerInnerWidth(lay.contentWidth)
+
+	app.applyComponentLayout(false)
+
+	if app.input.Width() >= fullWidth {
+		t.Fatalf("expected startup input width to be narrower than full width (%d), got %d", fullWidth, app.input.Width())
 	}
 }
 
@@ -4893,8 +5537,7 @@ func TestSlashSelectionAndProviderAddUtilityBranches(t *testing.T) {
 	}
 
 	manualFields := providerAddVisibleFields(provider.DriverOpenAICompat, config.ModelSourceManual)
-	if slices.Contains(manualFields, providerAddFieldDiscoveryEndpointPath) ||
-		slices.Contains(manualFields, providerAddFieldDiscoveryEndpointPath) {
+	if slices.Contains(manualFields, providerAddFieldDiscoveryEndpointPath) {
 		t.Fatalf("expected manual source to exclude discovery fields")
 	}
 	geminiFields := providerAddVisibleFields(provider.DriverGemini, config.ModelSourceDiscover)
@@ -5121,6 +5764,41 @@ func TestTranscriptManualScrollPersistsWhileBusy(t *testing.T) {
 	app.applyComponentLayout(false)
 	if app.transcript.YOffset != 6 {
 		t.Fatalf("expected applyComponentLayout to keep manual offset while busy, got %d", app.transcript.YOffset)
+	}
+}
+
+func TestAppendActivityAppendsInlineLogMessage(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.width = 120
+	app.height = 30
+	app.applyComponentLayout(true)
+
+	app.appendActivity("tool", "success", "", false)
+	plain := copyCodeANSIPattern.ReplaceAllString(app.transcriptContent, "")
+	if !strings.Contains(plain, "tool: success") {
+		t.Fatalf("expected inline log message in transcript, got %q", plain)
+	}
+}
+
+func TestInlineLogDoesNotBreakAssistantContinuationTag(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.width = 120
+	app.height = 30
+	app.applyComponentLayout(true)
+	app.activeMessages = []providertypes.Message{
+		{Role: roleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("第一段")}},
+	}
+
+	app.appendActivity("tool", "success", "", false)
+	app.activeMessages = append(app.activeMessages, providertypes.Message{
+		Role:  roleAssistant,
+		Parts: []providertypes.ContentPart{providertypes.NewTextPart("第二段")},
+	})
+	app.rebuildTranscript()
+
+	plain := copyCodeANSIPattern.ReplaceAllString(app.transcriptContent, "")
+	if count := strings.Count(plain, messageTagAgent); count != 1 {
+		t.Fatalf("expected assistant tag rendered once across inline log continuation, got %d in %q", count, plain)
 	}
 }
 

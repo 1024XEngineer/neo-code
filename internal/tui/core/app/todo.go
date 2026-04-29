@@ -289,7 +289,7 @@ func (a *App) rebuildTodo() {
 	a.todoSelectedIndex = clampTodoSelection(a.todoSelectedIndex, len(visible))
 
 	lines := []string{
-		fmt.Sprintf("ID  Title  Status  Priority  Owner  Updated At"),
+		"ID  Title  Status  Priority  Owner  Updated At",
 	}
 	if len(visible) == 0 {
 		lines = append(lines, fmt.Sprintf("No todos for filter %q.", a.todoFilter))

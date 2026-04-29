@@ -99,52 +99,66 @@ type appComponents struct {
 
 // appRuntimeState 聚合运行期易变字段，降低 App 顶层字段密度。
 type appRuntimeState struct {
-	deferredEventCmd        tea.Cmd
-	deferredLogPersistCmd   tea.Cmd
-	nowFn                   func() time.Time
-	lastInputEditAt         time.Time
-	lastPasteLikeAt         time.Time
-	inputBurstStart         time.Time
-	inputBurstCount         int
-	pasteMode               bool
-	pasteSessionBase        string
-	activeMessages          []providertypes.Message
-	activities              []tuistate.ActivityEntry
-	todoItems               []todoViewItem
-	todoFilter              todoFilter
-	todoSelectedIndex       int
-	todoPanelVisible        bool
-	todoCollapsed           bool
-	fileCandidates          []string
-	modelRefreshID          string
-	focus                   panel
-	runProgressValue        float64
-	runProgressKnown        bool
-	runProgressLabel        string
-	lastUserMessageRunID    string
-	pendingPermission       *permissionPromptState
-	queuedIntervention      *queuedInterventionInput
-	pendingAutoPermission   *autoPermissionApprovalState
-	pendingFullAccessPrompt *fullAccessPromptState
-	startupWakeSubmitInput  *startupWakeSubmitInput
-	fullAccessModeEnabled   bool
-	pendingImageAttachments []pendingImageAttachment
-	pendingPasteBuffers     []pendingPasteBuffer
-	providerAddForm         *providerAddFormState
-	modelScopeGuide         *modelScopeGuideState
-	layoutCached            bool
-	cachedWidth             int
-	cachedHeight            int
-	viewDirty               bool
-	logViewerVisible        bool
-	logViewerOffset         int
-	logViewerPrevStatus     string
-	logEntries              []logEntry
-	logPersistDirty         bool
-	logPersistVersion       int
-	transcriptContent       string
-	transcriptScrollbarDrag bool
-	startupScreenLocked     bool
+	deferredEventCmd          tea.Cmd
+	deferredLogPersistCmd     tea.Cmd
+	nowFn                     func() time.Time
+	lastInputEditAt           time.Time
+	lastPasteLikeAt           time.Time
+	pendingCtrlVPasteEcho     string
+	pendingCtrlVEchoUntil     time.Time
+	deferredPastedTextLoadCmd tea.Cmd
+	loadingPastedText         bool
+	pendingSendAfterPasteLoad bool
+	skipNextSendPasteLoadWait bool
+	pasteTxnActive            bool
+	pasteTxnBuffer            string
+	pasteTxnVersion           int
+	inputBurstStart           time.Time
+	inputBurstCount           int
+	pasteMode                 bool
+	pasteSessionBase          string
+	lastSummarizedPasteText   string
+	lastSummarizedPasteAt     time.Time
+	lastSummarizedPasteToken  string
+	lastPastedContent         string
+	lastPastedContentAt       time.Time
+	activeMessages            []providertypes.Message
+	activities                []tuistate.ActivityEntry
+	todoItems                 []todoViewItem
+	todoFilter                todoFilter
+	todoSelectedIndex         int
+	todoPanelVisible          bool
+	todoCollapsed             bool
+	fileCandidates            []string
+	modelRefreshID            string
+	focus                     panel
+	runProgressValue          float64
+	runProgressKnown          bool
+	runProgressLabel          string
+	lastUserMessageRunID      string
+	pendingPermission         *permissionPromptState
+	queuedIntervention        *queuedInterventionInput
+	pendingAutoPermission     *autoPermissionApprovalState
+	pendingFullAccessPrompt   *fullAccessPromptState
+	startupWakeSubmitInput    *startupWakeSubmitInput
+	fullAccessModeEnabled     bool
+	pendingImageAttachments   []pendingImageAttachment
+	pendingTextPastes         []pendingTextPaste
+	providerAddForm           *providerAddFormState
+	modelScopeGuide           *modelScopeGuideState
+	layoutCached              bool
+	cachedWidth               int
+	cachedHeight              int
+	viewDirty                 bool
+	logViewerVisible          bool
+	logViewerOffset           int
+	logViewerPrevStatus       string
+	logEntries                []logEntry
+	logPersistDirty           bool
+	logPersistVersion         int
+	transcriptContent         string
+	transcriptScrollbarDrag   bool
+	startupScreenLocked       bool
 
 	textSelection struct {
 		active    bool
@@ -168,9 +182,10 @@ type pendingImageAttachment struct {
 	Name     string
 }
 
-type pendingPasteBuffer struct {
-	Placeholder string
-	Content     string
+type pendingTextPaste struct {
+	Token     string
+	FilePath  string
+	LineCount int
 }
 
 type queuedInterventionInput struct {

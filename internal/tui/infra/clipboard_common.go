@@ -29,6 +29,27 @@ func SaveImageToTempFile(data []byte, prefix string) (string, error) {
 	return tmpFile, nil
 }
 
+func SaveTextToTempFile(content string, prefix string) (string, error) {
+	pattern := "paste-*.txt"
+	if cleaned := sanitizeTempPrefix(prefix); cleaned != "" {
+		pattern = cleaned + "-*.txt"
+	}
+
+	tempDir := strings.TrimSpace(os.Getenv("TMPDIR"))
+	f, err := os.CreateTemp(tempDir, pattern)
+	if err != nil {
+		return "", err
+	}
+	tmpFile := f.Name()
+	_ = f.Close()
+	if err = os.WriteFile(tmpFile, []byte(content), 0o600); err != nil {
+		_ = os.Remove(tmpFile)
+		return "", err
+	}
+
+	return tmpFile, nil
+}
+
 // sanitizeTempPrefix 过滤临时文件名前缀中的不安全字符，避免路径注入与非法命名。
 func sanitizeTempPrefix(prefix string) string {
 	if prefix == "" {
