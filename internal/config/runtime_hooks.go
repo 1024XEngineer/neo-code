@@ -30,6 +30,15 @@ const (
 	runtimeHookPointBeforeToolCall           = "before_tool_call"
 	runtimeHookPointAfterToolResult          = "after_tool_result"
 	runtimeHookPointBeforeCompletionDecision = "before_completion_decision"
+	runtimeHookPointBeforePermissionDecision = "before_permission_decision"
+	runtimeHookPointAfterToolFailure         = "after_tool_failure"
+	runtimeHookPointSessionStart             = "session_start"
+	runtimeHookPointSessionEnd               = "session_end"
+	runtimeHookPointUserPromptSubmit         = "user_prompt_submit"
+	runtimeHookPointPreCompact               = "pre_compact"
+	runtimeHookPointPostCompact              = "post_compact"
+	runtimeHookPointSubAgentStart            = "subagent_start"
+	runtimeHookPointSubAgentStop             = "subagent_stop"
 )
 
 const (
@@ -222,9 +231,23 @@ func (c RuntimeHookItemConfig) Validate(defaultFailurePolicy string) error {
 	}
 	point := strings.TrimSpace(c.Point)
 	switch point {
-	case runtimeHookPointBeforeToolCall, runtimeHookPointAfterToolResult, runtimeHookPointBeforeCompletionDecision:
+	case runtimeHookPointBeforeToolCall,
+		runtimeHookPointAfterToolResult,
+		runtimeHookPointBeforeCompletionDecision,
+		runtimeHookPointBeforePermissionDecision,
+		runtimeHookPointAfterToolFailure,
+		runtimeHookPointSessionStart,
+		runtimeHookPointSessionEnd,
+		runtimeHookPointUserPromptSubmit,
+		runtimeHookPointPreCompact,
+		runtimeHookPointPostCompact,
+		runtimeHookPointSubAgentStart,
+		runtimeHookPointSubAgentStop:
 	default:
 		return fmt.Errorf("point %q is not supported", c.Point)
+	}
+	if !runtimeHookPointUserAllowed(point) {
+		return fmt.Errorf("point %q does not allow user hooks", c.Point)
 	}
 
 	if normalizedScope := strings.ToLower(strings.TrimSpace(c.Scope)); normalizedScope != runtimeHookScopeUser {
@@ -322,4 +345,13 @@ func hasWarnOnToolCallTargets(params map[string]any) bool {
 		}
 	}
 	return false
+}
+
+func runtimeHookPointUserAllowed(point string) bool {
+	switch strings.ToLower(strings.TrimSpace(point)) {
+	case runtimeHookPointBeforePermissionDecision, runtimeHookPointPreCompact, runtimeHookPointSubAgentStart:
+		return false
+	default:
+		return true
+	}
 }

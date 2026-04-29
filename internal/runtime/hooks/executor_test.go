@@ -111,6 +111,36 @@ func TestExecutorRunBlockShortCircuit(t *testing.T) {
 	}
 }
 
+func TestExecutorRunDowngradesBlockForObserveOnlyPoint(t *testing.T) {
+	t.Parallel()
+
+	registry := NewRegistry()
+	executor := NewExecutor(registry, nil, 200*time.Millisecond)
+	if err := registry.Register(HookSpec{
+		ID:    "hook-observe-only",
+		Point: HookPointAfterToolFailure,
+		Handler: func(context.Context, HookContext) HookResult {
+			return HookResult{Status: HookResultBlock, Message: "should downgrade"}
+		},
+	}); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+
+	output := executor.Run(context.Background(), HookPointAfterToolFailure, HookContext{})
+	if output.Blocked {
+		t.Fatalf("blocked = true, want false for observe-only point")
+	}
+	if len(output.Results) != 1 {
+		t.Fatalf("len(results) = %d, want 1", len(output.Results))
+	}
+	if output.Results[0].Status != HookResultPass {
+		t.Fatalf("status = %q, want pass after downgrade", output.Results[0].Status)
+	}
+	if output.Results[0].Message == "" {
+		t.Fatal("expected downgraded result to retain message for observability")
+	}
+}
+
 func TestExecutorRunTimeout(t *testing.T) {
 	t.Parallel()
 

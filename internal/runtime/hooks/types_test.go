@@ -133,3 +133,30 @@ func TestHookSpecNormalizeAndValidateErrors(t *testing.T) {
 		})
 	}
 }
+
+func TestHookPointCapabilities(t *testing.T) {
+	t.Parallel()
+
+	capability, ok := HookPointCapabilities(HookPointBeforePermissionDecision)
+	if !ok {
+		t.Fatal("expected before_permission_decision capability to exist")
+	}
+	if capability.UserAllowed {
+		t.Fatal("before_permission_decision should not allow user hooks")
+	}
+	if !capability.CanBlock {
+		t.Fatal("before_permission_decision should allow block")
+	}
+
+	capability, ok = HookPointCapabilities(HookPointAfterToolFailure)
+	if !ok {
+		t.Fatal("expected after_tool_failure capability to exist")
+	}
+	if capability.CanBlock {
+		t.Fatal("after_tool_failure should be observe-only")
+	}
+
+	if _, exists := HookPointCapabilities(HookPoint("unknown")); exists {
+		t.Fatal("unknown hook point should not have capability")
+	}
+}

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"neo-code/internal/runtime/controlplane"
+	runtimehooks "neo-code/internal/runtime/hooks"
 	"neo-code/internal/subagent"
 )
 
@@ -45,6 +46,30 @@ func (s *Service) RunSubAgentTask(ctx context.Context, input SubAgentTaskInput) 
 		task.Workspace = strings.TrimSpace(cfg.Workdir)
 	}
 
+	startHookOutput := s.runHookPoint(ctx, nil, runtimehooks.HookPointSubAgentStart, runtimehooks.HookContext{
+		RunID:     strings.TrimSpace(input.RunID),
+		SessionID: strings.TrimSpace(input.SessionID),
+		Metadata: map[string]any{
+			"task_id":   strings.TrimSpace(task.ID),
+			"role":      string(input.Role),
+			"workspace": strings.TrimSpace(task.Workspace),
+			"tool_name": "spawn_subagent",
+			"trigger":   "subagent_start",
+			"workdir":   strings.TrimSpace(task.Workspace),
+		},
+	})
+	if startHookOutput.Blocked {
+		reason := findHookBlockMessage(startHookOutput)
+		_ = s.emit(ctx, EventHookBlocked, strings.TrimSpace(input.RunID), strings.TrimSpace(input.SessionID), HookBlockedPayload{
+			HookID:   strings.TrimSpace(startHookOutput.BlockedBy),
+			Source:   string(findHookBlockSource(startHookOutput)),
+			Point:    string(runtimehooks.HookPointSubAgentStart),
+			Reason:   reason,
+			Enforced: true,
+		})
+		return subagent.Result{}, errors.New(reason)
+	}
+
 	factory := s.SubAgentFactory()
 	worker, err := factory.Create(input.Role)
 	if err != nil {
@@ -78,6 +103,7 @@ func (s *Service) RunSubAgentTask(ctx context.Context, input SubAgentTaskInput) 
 					result = fallbackSubAgentResult(input.Role, task.ID, subagent.StateFailed, subagent.StopReasonTimeout, stepErr)
 				}
 				emitSubAgentTerminal(s, ctx, input, result)
+				emitSubAgentStopHook(s, ctx, input, result)
 				return result, stepErr
 			}
 			if errors.Is(stepErr, context.Canceled) {
@@ -87,15 +113,19 @@ func (s *Service) RunSubAgentTask(ctx context.Context, input SubAgentTaskInput) 
 					result = fallbackSubAgentResult(input.Role, task.ID, subagent.StateCanceled, subagent.StopReasonCanceled, stepErr)
 				}
 				emitSubAgentTerminal(s, ctx, input, result)
+				emitSubAgentStopHook(s, ctx, input, result)
 				return result, stepErr
 			}
 
 			result, resultErr := worker.Result()
 			if resultErr != nil {
+				fallback := fallbackSubAgentResult(input.Role, task.ID, subagent.StateFailed, subagent.StopReasonError, stepErr)
 				emitSubAgentFailed(s, ctx, input.RunID, input.SessionID, input.Role, task.ID, stepErr)
-				return subagent.Result{}, stepErr
+				emitSubAgentStopHook(s, ctx, input, fallback)
+				return fallback, stepErr
 			}
 			emitSubAgentTerminal(s, ctx, input, result)
+			emitSubAgentStopHook(s, ctx, input, result)
 			return result, stepErr
 		}
 
@@ -105,15 +135,37 @@ func (s *Service) RunSubAgentTask(ctx context.Context, input SubAgentTaskInput) 
 
 		result, err := worker.Result()
 		if err != nil {
+			fallback := fallbackSubAgentResult(input.Role, task.ID, subagent.StateFailed, subagent.StopReasonError, err)
 			emitSubAgentFailed(s, ctx, input.RunID, input.SessionID, input.Role, task.ID, err)
-			return subagent.Result{}, err
+			emitSubAgentStopHook(s, ctx, input, fallback)
+			return fallback, err
 		}
 		emitSubAgentTerminal(s, ctx, input, result)
+		emitSubAgentStopHook(s, ctx, input, result)
 		if result.State == subagent.StateSucceeded {
 			return result, nil
 		}
 		return result, subAgentResultError(result)
 	}
+}
+
+// emitSubAgentStopHook 在子代理结束后触发 subagent_stop 观测挂点。
+func emitSubAgentStopHook(s *Service, ctx context.Context, input SubAgentTaskInput, result subagent.Result) {
+	if s == nil {
+		return
+	}
+	_ = s.runHookPoint(ctx, nil, runtimehooks.HookPointSubAgentStop, runtimehooks.HookContext{
+		RunID:     strings.TrimSpace(input.RunID),
+		SessionID: strings.TrimSpace(input.SessionID),
+		Metadata: map[string]any{
+			"task_id":     strings.TrimSpace(result.TaskID),
+			"role":        string(result.Role),
+			"state":       string(result.State),
+			"stop_reason": string(result.StopReason),
+			"step_count":  result.StepCount,
+			"error":       strings.TrimSpace(result.Error),
+		},
+	})
 }
 
 // emitSubAgentFailed 统一发射子代理失败事件，避免重复构造相同载荷。

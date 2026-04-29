@@ -12,6 +12,7 @@ import (
 	providertypes "neo-code/internal/provider/types"
 	approvalflow "neo-code/internal/runtime/approval"
 	"neo-code/internal/runtime/controlplane"
+	runtimehooks "neo-code/internal/runtime/hooks"
 	"neo-code/internal/security"
 	"neo-code/internal/tools"
 )
@@ -114,6 +115,41 @@ func (s *Service) executeToolCallWithPermission(ctx context.Context, input permi
 	if !errors.As(execErr, &permissionErr) {
 		return result, execErr
 	}
+
+	beforePermissionHookOutput := s.runHookPoint(ctx, input.State, runtimehooks.HookPointBeforePermissionDecision, runtimehooks.HookContext{
+		RunID:     strings.TrimSpace(input.RunID),
+		SessionID: strings.TrimSpace(input.SessionID),
+		Metadata: map[string]any{
+			"tool_call_id": strings.TrimSpace(input.Call.ID),
+			"tool_name":    strings.TrimSpace(input.Call.Name),
+			"decision":     strings.TrimSpace(permissionErr.Decision()),
+			"reason":       strings.TrimSpace(permissionErr.Reason()),
+			"rule_id":      strings.TrimSpace(permissionErr.RuleID()),
+			"workdir":      strings.TrimSpace(input.Workdir),
+		},
+	})
+	if beforePermissionHookOutput.Blocked {
+		reason := findHookBlockMessage(beforePermissionHookOutput)
+		blockSource := findHookBlockSource(beforePermissionHookOutput)
+		blockedResult := tools.NewErrorResult(input.Call.Name, hookErrorClassBlocked, reason, map[string]any{
+			"hook_id":     beforePermissionHookOutput.BlockedBy,
+			"hook_source": string(blockSource),
+			"point":       string(runtimehooks.HookPointBeforePermissionDecision),
+		})
+		blockedResult.ToolCallID = input.Call.ID
+		blockedResult.ErrorClass = hookErrorClassBlocked
+		_ = s.emit(ctx, EventHookBlocked, strings.TrimSpace(input.RunID), strings.TrimSpace(input.SessionID), HookBlockedPayload{
+			HookID:     strings.TrimSpace(beforePermissionHookOutput.BlockedBy),
+			Source:     string(blockSource),
+			Point:      string(runtimehooks.HookPointBeforePermissionDecision),
+			ToolCallID: strings.TrimSpace(input.Call.ID),
+			ToolName:   strings.TrimSpace(input.Call.Name),
+			Reason:     reason,
+			Enforced:   true,
+		})
+		return blockedResult, errors.New(reason)
+	}
+
 	if !strings.EqualFold(permissionErr.Decision(), string(security.DecisionAsk)) {
 		s.emitPermissionResolved(
 			ctx,

@@ -75,7 +75,7 @@ func TestRuntimeHooksConfigValidateUnsupportedFields(t *testing.T) {
 		},
 		{
 			ID:      "bad-point",
-			Point:   "session_start",
+			Point:   "unknown_point",
 			Scope:   runtimeHookScopeUser,
 			Kind:    runtimeHookKindBuiltIn,
 			Mode:    runtimeHookModeSync,
@@ -90,6 +90,33 @@ func TestRuntimeHooksConfigValidateUnsupportedFields(t *testing.T) {
 		if err := cfg.Validate(); err == nil {
 			t.Fatalf("expected validate error for item=%+v", item)
 		}
+	}
+}
+
+func TestRuntimeHooksConfigValidateRejectsDisallowedUserPoint(t *testing.T) {
+	t.Parallel()
+
+	cfg := RuntimeHooksConfig{
+		Enabled:              boolPtr(true),
+		UserHooksEnabled:     boolPtr(true),
+		DefaultTimeoutSec:    2,
+		DefaultFailurePolicy: runtimeHookFailurePolicyWarnOnly,
+		Items: []RuntimeHookItemConfig{
+			{
+				ID:            "deny-pre-compact",
+				Point:         runtimeHookPointPreCompact,
+				Scope:         runtimeHookScopeUser,
+				Kind:          runtimeHookKindBuiltIn,
+				Mode:          runtimeHookModeSync,
+				Handler:       runtimeHookHandlerAddContextNote,
+				TimeoutSec:    2,
+				FailurePolicy: runtimeHookFailurePolicyWarnOnly,
+				Params:        map[string]any{"note": "test"},
+			},
+		},
+	}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected user-disallowed point to fail validation")
 	}
 }
 

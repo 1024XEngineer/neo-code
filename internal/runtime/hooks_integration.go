@@ -79,11 +79,13 @@ func (s *Service) runHookPoint(
 	if s == nil || s.hookExecutor == nil {
 		return runtimehooks.RunOutput{}
 	}
-	input.RunID = firstNonBlank(input.RunID, hookRunIDFromState(state))
-	input.SessionID = firstNonBlank(input.SessionID, hookSessionIDFromState(state))
+	runID := firstNonBlank(hookRunIDFromState(state), input.RunID)
+	sessionID := firstNonBlank(hookSessionIDFromState(state), input.SessionID)
+	input.RunID = firstNonBlank(input.RunID, runID)
+	input.SessionID = firstNonBlank(input.SessionID, sessionID)
 	scopedCtx := withRuntimeHookEnvelope(ctx, hookRuntimeEnvelope{
-		RunID:     hookRunIDFromState(state),
-		SessionID: hookSessionIDFromState(state),
+		RunID:     runID,
+		SessionID: sessionID,
 		Turn:      hookTurnFromState(state),
 		Phase:     hookPhaseFromState(state),
 	})

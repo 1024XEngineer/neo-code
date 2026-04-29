@@ -161,12 +161,16 @@ func (s *Service) executeOneToolCall(
 
 	if errors.Is(execErr, context.Canceled) {
 		s.emitAfterToolResultHook(ctx, state, call, result, execErr, snapshot.Workdir)
+		s.emitAfterToolFailureHook(ctx, state, call, result, execErr, snapshot.Workdir)
 		return result, false, execErr
 	}
 	if execErr != nil && strings.TrimSpace(result.Content) == "" {
 		result.Content = execErr.Error()
 	}
 	s.emitAfterToolResultHook(ctx, state, call, result, execErr, snapshot.Workdir)
+	if execErr != nil || result.IsError {
+		s.emitAfterToolFailureHook(ctx, state, call, result, execErr, snapshot.Workdir)
+	}
 
 	if err := s.appendToolMessageAndSave(ctx, state, call, result); err != nil {
 		if execErr != nil && errors.Is(err, context.Canceled) {
@@ -315,5 +319,32 @@ func (s *Service) emitAfterToolResultHook(
 	}
 	_ = s.runHookPoint(ctx, state, runtimehooks.HookPointAfterToolResult, runtimehooks.HookContext{
 		Metadata: afterToolHookMetadata,
+	})
+}
+
+// emitAfterToolFailureHook 在工具失败后触发 after_tool_failure 挂点，仅提供只读失败摘要。
+func (s *Service) emitAfterToolFailureHook(
+	ctx context.Context,
+	state *runState,
+	call providertypes.ToolCall,
+	result tools.ToolResult,
+	execErr error,
+	workdir string,
+) {
+	afterToolFailureMetadata := map[string]any{
+		"tool_call_id": strings.TrimSpace(call.ID),
+		"tool_name":    strings.TrimSpace(call.Name),
+		"is_error":     result.IsError,
+		"error_class":  strings.TrimSpace(result.ErrorClass),
+		"workdir":      strings.TrimSpace(workdir),
+	}
+	if execErr != nil {
+		afterToolFailureMetadata["execution_error"] = strings.TrimSpace(execErr.Error())
+	}
+	if preview := summarizeHookResultContent(result.Content); preview != "" {
+		afterToolFailureMetadata["result_content_preview"] = preview
+	}
+	_ = s.runHookPoint(ctx, state, runtimehooks.HookPointAfterToolFailure, runtimehooks.HookContext{
+		Metadata: afterToolFailureMetadata,
 	})
 }

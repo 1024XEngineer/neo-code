@@ -9,6 +9,7 @@ import (
 	"neo-code/internal/config"
 	contextcompact "neo-code/internal/context/compact"
 	providertypes "neo-code/internal/provider/types"
+	runtimehooks "neo-code/internal/runtime/hooks"
 	agentsession "neo-code/internal/session"
 )
 
@@ -127,6 +128,27 @@ func (s *Service) runCompactForSession(
 	originalTokenOutputTotal := session.TokenOutputTotal
 	originalHasUnknownUsage := session.HasUnknownUsage
 	originalUpdatedAt := session.UpdatedAt
+
+	preCompactHookOutput := s.runHookPoint(ctx, nil, runtimehooks.HookPointPreCompact, runtimehooks.HookContext{
+		RunID:     strings.TrimSpace(runID),
+		SessionID: strings.TrimSpace(session.ID),
+		Metadata: map[string]any{
+			"workdir":      strings.TrimSpace(agentsession.EffectiveWorkdir(session.Workdir, cfg.Workdir)),
+			"trigger_mode": string(mode),
+		},
+	})
+	if preCompactHookOutput.Blocked {
+		reason := findHookBlockMessage(preCompactHookOutput)
+		_ = s.emit(ctx, EventHookBlocked, strings.TrimSpace(runID), strings.TrimSpace(session.ID), HookBlockedPayload{
+			HookID:   strings.TrimSpace(preCompactHookOutput.BlockedBy),
+			Source:   string(findHookBlockSource(preCompactHookOutput)),
+			Point:    string(runtimehooks.HookPointPreCompact),
+			Reason:   reason,
+			Enforced: true,
+		})
+		return failCompact(errors.New(reason))
+	}
+
 	s.emit(ctx, EventCompactStart, runID, session.ID, string(mode))
 
 	result, err := runner.Run(ctx, contextcompact.Input{
@@ -159,6 +181,16 @@ func (s *Service) runCompactForSession(
 			return failCompact(err)
 		}
 	}
+
+	_ = s.runHookPoint(ctx, nil, runtimehooks.HookPointPostCompact, runtimehooks.HookContext{
+		RunID:     strings.TrimSpace(runID),
+		SessionID: strings.TrimSpace(session.ID),
+		Metadata: map[string]any{
+			"workdir":      strings.TrimSpace(agentsession.EffectiveWorkdir(session.Workdir, cfg.Workdir)),
+			"trigger_mode": string(mode),
+			"applied":      result.Applied,
+		},
+	})
 
 	s.emit(ctx, EventCompactApplied, runID, session.ID, fromCompactResult(result))
 	return session, result, nil

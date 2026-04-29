@@ -126,6 +126,33 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 		state.capabilityToken = &token
 	}
 	statePtr = &state
+
+	effectiveWorkdir := agentsession.EffectiveWorkdir(state.session.Workdir, initialCfg.Workdir)
+	_ = s.runHookPoint(ctx, &state, runtimehooks.HookPointSessionStart, runtimehooks.HookContext{
+		Metadata: map[string]any{
+			"session_id": state.session.ID,
+			"run_id":     strings.TrimSpace(input.RunID),
+			"workdir":    strings.TrimSpace(effectiveWorkdir),
+		},
+	})
+
+	submitHookOutput := s.runHookPoint(ctx, &state, runtimehooks.HookPointUserPromptSubmit, runtimehooks.HookContext{
+		Metadata: map[string]any{
+			"session_id": state.session.ID,
+			"run_id":     strings.TrimSpace(input.RunID),
+			"workdir":    strings.TrimSpace(effectiveWorkdir),
+		},
+	})
+	if submitHookOutput.Blocked {
+		s.emitRunScoped(ctx, EventHookBlocked, &state, HookBlockedPayload{
+			HookID:   strings.TrimSpace(submitHookOutput.BlockedBy),
+			Source:   string(findHookBlockSource(submitHookOutput)),
+			Point:    string(runtimehooks.HookPointUserPromptSubmit),
+			Reason:   findHookBlockMessage(submitHookOutput),
+			Enforced: true,
+		})
+		return s.handleRunError(errors.New(findHookBlockMessage(submitHookOutput)))
+	}
 	if err := s.appendUserMessageAndSave(ctx, &state, input.Parts); err != nil {
 		return s.handleRunError(err)
 	}

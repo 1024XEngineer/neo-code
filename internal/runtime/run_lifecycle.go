@@ -8,6 +8,7 @@ import (
 
 	providertypes "neo-code/internal/provider/types"
 	"neo-code/internal/runtime/controlplane"
+	runtimehooks "neo-code/internal/runtime/hooks"
 )
 
 // setBaseRunState 更新主链生命周期状态，并触发有效运行态重计算。
@@ -166,6 +167,16 @@ func (s *Service) emitRunTermination(ctx context.Context, input UserInput, state
 	reason, detail := controlplane.DecideStopReason(in)
 	turn := turnUnspecified
 	phase := ""
+	if state != nil {
+		_ = s.runHookPoint(ctx, state, runtimehooks.HookPointSessionEnd, runtimehooks.HookContext{
+			RunID:     strings.TrimSpace(runID),
+			SessionID: strings.TrimSpace(sessionID),
+			Metadata: map[string]any{
+				"stop_reason": string(reason),
+				"detail":      strings.TrimSpace(detail),
+			},
+		})
+	}
 	if state != nil {
 		turn = state.turn
 		if state.lifecycle != "" {

@@ -316,9 +316,21 @@ func validateRepoHookItem(item config.RuntimeHookItemConfig) error {
 	switch point {
 	case string(runtimehooks.HookPointBeforeToolCall),
 		string(runtimehooks.HookPointAfterToolResult),
-		string(runtimehooks.HookPointBeforeCompletionDecision):
+		string(runtimehooks.HookPointBeforeCompletionDecision),
+		string(runtimehooks.HookPointBeforePermissionDecision),
+		string(runtimehooks.HookPointAfterToolFailure),
+		string(runtimehooks.HookPointSessionStart),
+		string(runtimehooks.HookPointSessionEnd),
+		string(runtimehooks.HookPointUserPromptSubmit),
+		string(runtimehooks.HookPointPreCompact),
+		string(runtimehooks.HookPointPostCompact),
+		string(runtimehooks.HookPointSubAgentStart),
+		string(runtimehooks.HookPointSubAgentStop):
 	default:
 		return fmt.Errorf("point %q is not supported", item.Point)
+	}
+	if capability, ok := runtimehooks.HookPointCapabilities(runtimehooks.HookPoint(point)); ok && !capability.UserAllowed {
+		return fmt.Errorf("point %q does not allow repo hooks", item.Point)
 	}
 	if strings.ToLower(strings.TrimSpace(item.Scope)) != repoHookScopeValue {
 		return fmt.Errorf("scope %q is not supported", item.Scope)

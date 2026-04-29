@@ -65,6 +65,7 @@ func (e *Executor) Run(ctx context.Context, point HookPoint, input HookContext) 
 			hookInput = sanitizeUserHookContext(hookInput)
 		}
 		result := e.runOne(ctx, spec, hookInput)
+		result = normalizeHookResultByCapability(spec.Point, result)
 		output.Results = append(output.Results, result)
 
 		if result.Status == HookResultBlock {
@@ -81,6 +82,24 @@ func (e *Executor) Run(ctx context.Context, point HookPoint, input HookContext) 
 		}
 	}
 	return output
+}
+
+// normalizeHookResultByCapability 根据 HookPoint 能力矩阵约束单条结果。
+func normalizeHookResultByCapability(point HookPoint, result HookResult) HookResult {
+	capability, ok := HookPointCapabilities(point)
+	if !ok {
+		return result
+	}
+	if result.Status == HookResultBlock && !capability.CanBlock {
+		result.Status = HookResultPass
+		if strings.TrimSpace(result.Message) == "" {
+			result.Message = "hook block downgraded: point does not allow blocking"
+		}
+		if strings.TrimSpace(result.Error) == "" {
+			result.Error = "hook block downgraded"
+		}
+	}
+	return result
 }
 
 func (e *Executor) runOne(ctx context.Context, spec HookSpec, input HookContext) HookResult {
@@ -282,6 +301,25 @@ func sanitizeUserHookContext(input HookContext) HookContext {
 		"result_metadata_present": {},
 		"execution_error":         {},
 		"workdir":                 {},
+		"session_id":              {},
+		"run_id":                  {},
+		"task_id":                 {},
+		"role":                    {},
+		"workspace":               {},
+		"trigger":                 {},
+		"state":                   {},
+		"stop_reason":             {},
+		"step_count":              {},
+		"error":                   {},
+		"trigger_mode":            {},
+		"applied":                 {},
+		"decision":                {},
+		"reason":                  {},
+		"rule_id":                 {},
+		"completion_passed":       {},
+		"has_tool_calls":          {},
+		"assistant_role":          {},
+		"detail":                  {},
 	}
 	for key, value := range input.Metadata {
 		normalizedKey := strings.ToLower(strings.TrimSpace(key))

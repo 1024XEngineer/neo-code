@@ -419,7 +419,8 @@ func TestValidateRepoHookItemBranches(t *testing.T) {
 		edit func(*config.RuntimeHookItemConfig)
 	}{
 		{name: "missing id", edit: func(item *config.RuntimeHookItemConfig) { item.ID = "" }},
-		{name: "bad point", edit: func(item *config.RuntimeHookItemConfig) { item.Point = "session_start" }},
+		{name: "bad point", edit: func(item *config.RuntimeHookItemConfig) { item.Point = "unknown_point" }},
+		{name: "repo disallowed point", edit: func(item *config.RuntimeHookItemConfig) { item.Point = "pre_compact" }},
 		{name: "bad scope", edit: func(item *config.RuntimeHookItemConfig) { item.Scope = "user" }},
 		{name: "bad kind", edit: func(item *config.RuntimeHookItemConfig) { item.Kind = "command" }},
 		{name: "bad mode", edit: func(item *config.RuntimeHookItemConfig) { item.Mode = "async" }},
