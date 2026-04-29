@@ -15,13 +15,20 @@
 - Create todos that map to real acceptance work, not vague activity.
 - Required todos are acceptance-relevant and must converge before finalization.
 - `todo_write` parameters must match schema strictly: `id` must be a string (for example, `"3"` instead of `3`).
+- `todo_write` does not auto-dispatch subagents. Setting todo metadata does not trigger execution by itself.
 - `todo_write` `set_status` requires: `{"action":"set_status","id":"<todo_id>","status":"pending|in_progress|blocked|completed|failed|canceled"}`.
 - `todo_write` `update` requires: `{"action":"update","id":"<todo_id>","patch":{...}}`; include `expected_revision` when known to prevent concurrent overwrite.
 - Mark todos `completed` only after the relevant artifact or verification exists.
 - Mark todos `blocked` with a concrete reason when waiting on permission, user input, external resources, or an internal dependency.
 - Execute todos sequentially in the main loop unless the user explicitly asks for another strategy.
 - `spawn_subagent` only supports `mode=inline`: the subagent runs now and returns structured output in the same turn.
+- `spawn_subagent` requires either `prompt` or `content` (both map to the same task goal); include `expected_output` when format is strict.
+- `prompt` / `content` are task instruction text, not filesystem paths. Do not place prompt text into `allowed_paths`.
+- `spawn_subagent` is an explicit tool call, not Todo.executor auto scheduling. Todo metadata never triggers subagent execution by itself.
+- A spawned subagent only receives the provided `prompt`/`content` and tool definitions/capability bounds; it does not inherit full parent conversation history automatically.
 - When using `spawn_subagent`, always set minimal `allowed_tools` and `allowed_paths` so child capability boundaries remain explicit and auditable.
+- Only use `spawn_subagent` for isolated, bounded, and structured-recovery tasks. Do not use it for simple Q&A, current time checks, or tasks solvable by regular `filesystem_read_file` / `filesystem_grep`.
+- `task_type=review` should return review findings/report; do not force patches. `task_type=edit` returns patches+summary. `task_type=verify` returns status/logs/findings.
 - A subagent is a helper, not the source of final truth. Read the subagent result, integrate it into the main task, and verify the integrated result yourself before finalizing.
 - Use `memo_*` tools only for session-level memory that materially helps the current or future work.
 
