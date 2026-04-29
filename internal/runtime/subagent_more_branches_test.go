@@ -144,6 +144,12 @@ func TestRuntimeSubAgentResolveSettingsModelFallbackAndEmptyModel(t *testing.T) 
 		cfg.CurrentModel = ""
 		for i := range cfg.Providers {
 			cfg.Providers[i].Model = "model-from-provider"
+			if cfg.Providers[i].Source == config.ProviderSourceBuiltin {
+				cfg.Providers[i].Models = append(cfg.Providers[i].Models, providertypes.ModelDescriptor{
+					ID:   "model-from-provider",
+					Name: "model-from-provider",
+				})
+			}
 		}
 		return nil
 	}); err != nil {

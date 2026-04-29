@@ -255,6 +255,10 @@ func (additionalCatalogStub) ListProviderModelsCached(_ context.Context, _ provi
 	return nil, nil
 }
 
+func (additionalCatalogStub) RefreshProviderModels(_ context.Context, _ provider.CatalogInput) ([]providertypes.ModelDescriptor, error) {
+	return nil, nil
+}
+
 type denyAllDriverSupporter struct{}
 
 func (*denyAllDriverSupporter) Supports(_ string) bool { return false }
@@ -514,6 +518,13 @@ func (s catalogMethodsStubForAdditional) ListProviderModelsCached(_ context.Cont
 		return nil, s.cachedErr
 	}
 	return s.cachedModels, nil
+}
+
+func (s catalogMethodsStubForAdditional) RefreshProviderModels(_ context.Context, _ provider.CatalogInput) ([]providertypes.ModelDescriptor, error) {
+	if s.listErr != nil {
+		return nil, s.listErr
+	}
+	return s.listModels, nil
 }
 
 type catalogMethodCallsForAdditional struct {

@@ -3608,7 +3608,7 @@ func TestUpdatePickerProviderEnterSkipsModelScopeGuideWhenTokenExists(t *testing
 
 func TestHandleModelScopeGuideInputSubmitSuccess(t *testing.T) {
 	app, _ := newTestAppWithProviderService(t, stubProviderService{
-		models: []providertypes.ModelDescriptor{{ID: "Qwen/Qwen2.5-7B-Instruct", Name: "Qwen"}},
+		models: []providertypes.ModelDescriptor{{ID: config.ModelScopeDefaultModel, Name: "Qwen"}},
 	})
 	app.modelScopeGuide = &modelScopeGuideState{
 		ProviderID: config.ModelScopeName,
@@ -3710,7 +3710,7 @@ func TestRunModelScopeGuideSubmitRollsBackSelectionWhenVerifyFails(t *testing.T)
 	var selectedModels []string
 	app, _ := newTestApp(t)
 	app.providerSvc = stubProviderService{
-		models:        []providertypes.ModelDescriptor{{ID: "Qwen/Qwen2.5-7B-Instruct", Name: "Qwen"}},
+		models:        []providertypes.ModelDescriptor{{ID: config.ModelScopeDefaultModel, Name: "Qwen"}},
 		listModelsErr: errors.New("modelscope verify failed"),
 		selectHook: func(providerID string) {
 			selectedProviders = append(selectedProviders, providerID)
@@ -3752,7 +3752,7 @@ func TestRunModelScopeGuideSubmitRollsBackSelectionWhenPersistFails(t *testing.T
 	var selectedProviders []string
 	var selectedModels []string
 	providerSvc := stubProviderService{
-		models: []providertypes.ModelDescriptor{{ID: "Qwen/Qwen2.5-7B-Instruct", Name: "Qwen"}},
+		models: []providertypes.ModelDescriptor{{ID: config.ModelScopeDefaultModel, Name: "Qwen"}},
 		selectHook: func(providerID string) {
 			selectedProviders = append(selectedProviders, providerID)
 		},

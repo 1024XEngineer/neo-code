@@ -26,6 +26,7 @@ func testDefaultProviderConfig() ProviderConfig {
 		BaseURL:   testBaseURL,
 		Model:     testModel,
 		APIKeyEnv: testAPIKeyEnv,
+		Models:    cloneBuiltinModels(openAIStaticModels),
 		Source:    ProviderSourceBuiltin,
 	}
 }

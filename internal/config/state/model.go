@@ -43,6 +43,7 @@ type ModelCatalog interface {
 	ListProviderModels(ctx context.Context, input provider.CatalogInput) ([]providertypes.ModelDescriptor, error)
 	ListProviderModelsSnapshot(ctx context.Context, input provider.CatalogInput) ([]providertypes.ModelDescriptor, error)
 	ListProviderModelsCached(ctx context.Context, input provider.CatalogInput) ([]providertypes.ModelDescriptor, error)
+	RefreshProviderModels(ctx context.Context, input provider.CatalogInput) ([]providertypes.ModelDescriptor, error)
 }
 
 // selectionFromConfig 将配置快照映射为当前选择结果。
@@ -97,8 +98,9 @@ func catalogInputFromProvider(cfg config.ProviderConfig) (provider.CatalogInput,
 	input := provider.CatalogInput{
 		Identity:         identity,
 		ConfiguredModels: providertypes.CloneModelDescriptors(cloned.Models),
-		DisableDiscovery: cloned.Source == config.ProviderSourceCustom &&
-			config.NormalizeModelSource(cloned.ModelSource) == config.ModelSourceManual,
+		DisableDiscovery: cloned.Source == config.ProviderSourceBuiltin ||
+			(cloned.Source == config.ProviderSourceCustom &&
+				config.NormalizeModelSource(cloned.ModelSource) == config.ModelSourceManual),
 		ResolveDiscoveryConfig: func() (provider.RuntimeConfig, error) {
 			resolved, err := cloned.Resolve()
 			if err != nil {
@@ -108,7 +110,10 @@ func catalogInputFromProvider(cfg config.ProviderConfig) (provider.CatalogInput,
 		},
 	}
 	if cloned.Source != config.ProviderSourceCustom {
-		input.DefaultModels = providertypes.DescriptorsFromIDs([]string{cloned.Model})
+		input.DefaultModels = providertypes.CloneModelDescriptors(cloned.Models)
+		if len(input.DefaultModels) == 0 {
+			input.DefaultModels = providertypes.DescriptorsFromIDs([]string{cloned.Model})
+		}
 	}
 	return input, nil
 }
