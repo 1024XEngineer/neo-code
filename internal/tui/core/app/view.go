@@ -171,7 +171,7 @@ func (a App) renderBody(lay layout) string {
 	return a.renderWaterfall(lay.contentWidth, lay.contentHeight)
 }
 
-// waterfallMetrics 缁熶竴璁＄畻鐎戝竷鍖哄悇缁勪欢楂樺害锛岀‘淇濇覆鏌撱€佸竷灞€涓庡懡涓尯鍩熶娇鐢ㄥ悓涓€缁勫昂瀵搞€?
+// waterfallMetrics 统一计算瀑布区各组件高度，确保渲染、布局与命中区域使用同一组尺寸。
 func (a App) waterfallMetrics(width int, height int) (int, int, int, int) {
 	activityHeight := 0
 	todoHeight := 0
@@ -918,7 +918,7 @@ func (a App) renderLogViewer(width int, height int) string {
 		positionTotal = maxOffset + 1
 	}
 	lines = append(lines, "")
-	lines = append(lines, headerStyle.Render(fmt.Sprintf("  Use Up/Down/PgUp/PgDn to scroll (%d/%d) 路 Ctrl+L or Esc to close", positionCurrent, positionTotal)))
+	lines = append(lines, headerStyle.Render(fmt.Sprintf("  Use Up/Down/PgUp/PgDn to scroll (%d/%d) · Ctrl+L or Esc to close", positionCurrent, positionTotal)))
 
 	content := lipgloss.JoinVertical(lipgloss.Left, lines...)
 
