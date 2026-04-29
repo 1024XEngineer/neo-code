@@ -58,6 +58,7 @@ const logViewerEntryLimit = 500
 const logViewerPersistDebounce = 300 * time.Millisecond
 const footerErrorFlashDuration = 8 * time.Second
 const pasteTxnFlushDebounce = 140 * time.Millisecond
+const pastedTextLoadDebounce = 180 * time.Millisecond
 const duplicatePasteSuppressWindow = 1200 * time.Millisecond
 const inlineLogMarker = "[[neo-log]] "
 const sessionWorkdirMissingWarning = "Session workspace not found, keeping current workspace."
@@ -134,6 +135,25 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		a.flushPasteTransaction()
 		return a, batchUpdateCmds()
+	case pastedTextLoadReadyMsg:
+		if !a.loadingPastedText {
+			return a, batchUpdateCmds()
+		}
+		a.loadingPastedText = false
+		if a.state.StatusText == statusLoadingPastedText {
+			a.state.StatusText = statusReady
+		}
+		if !a.pendingSendAfterPasteLoad {
+			return a, batchUpdateCmds()
+		}
+		a.pendingSendAfterPasteLoad = false
+		a.skipNextSendPasteLoadWait = true
+		if strings.TrimSpace(a.input.Value()) == "" && !a.hasImageAttachments() {
+			a.skipNextSendPasteLoadWait = false
+			return a, batchUpdateCmds()
+		}
+		enter := tea.KeyMsg{Type: tea.KeyEnter}
+		return a.updateInputPanel(enter, enter, cmds)
 	case startupWakeSubmitMsg:
 		if cmd := a.handleStartupWakeSubmitMsg(typed); cmd != nil {
 			cmds = append(cmds, cmd)
@@ -482,12 +502,18 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (tea.Model, tea.Cmd) {
 	now := a.now()
 	effectiveTyped := typed
+	loadingPastedTextBefore := a.loadingPastedText
 	batchUpdateCmds := func() tea.Cmd {
 		if a.deferredFooterTick != nil {
 			cmds = append(cmds, a.deferredFooterTick)
 			a.deferredFooterTick = nil
 		}
 		return tea.Batch(cmds...)
+	}
+	appendPastedTextLoadReadyIfNeeded := func() {
+		if !loadingPastedTextBefore && a.loadingPastedText {
+			cmds = append(cmds, schedulePastedTextLoadReady())
+		}
 	}
 
 	if a.pendingPermission != nil {
@@ -507,6 +533,7 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 		}
 	}
 	if !typed.Paste && !a.pasteTxnActive && typed.Type == tea.KeyRunes && len(typed.Runes) > 0 && a.tryPrimePasteFromClipboard(typed, now) {
+		appendPastedTextLoadReadyIfNeeded()
 		return a, batchUpdateCmds()
 	}
 	if a.pasteTxnActive && !a.shouldCapturePasteTxnChunk(typed) {
@@ -588,12 +615,22 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 		effectiveTyped = typed
 	}
 	if key.Matches(typed, a.keys.Send) {
+		if a.pendingSendAfterPasteLoad {
+			return a, batchUpdateCmds()
+		}
+		currentInput := a.input.Value()
+		if !a.skipNextSendPasteLoadWait && a.loadingPastedText && a.shouldDeferSendForPastedTextLoad(currentInput) {
+			a.pendingSendAfterPasteLoad = true
+			a.state.StatusText = statusLoadingPastedText
+			return a, batchUpdateCmds()
+		}
+		a.skipNextSendPasteLoadWait = false
 		if a.shouldTreatEnterAsNewline(typed, now) {
 			a.growComposerForNewline()
 			msg = tea.KeyMsg{Type: tea.KeyEnter}
 			effectiveTyped = tea.KeyMsg{Type: tea.KeyEnter, Paste: true}
 		} else {
-			rawInput := a.input.Value()
+			rawInput := currentInput
 			resolvedInput, resolveErr := a.resolvePendingTextPastes(rawInput)
 			if resolveErr != nil {
 				a.state.ExecutionError = resolveErr.Error()
@@ -744,6 +781,7 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 	var skipInputUpdate bool
 	msg, effectiveTyped, skipInputUpdate = a.maybeCollapseLongPaste(msg, effectiveTyped, now)
 	if skipInputUpdate {
+		appendPastedTextLoadReadyIfNeeded()
 		return a, batchUpdateCmds()
 	}
 	before := a.input.Value()
@@ -756,6 +794,7 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 	a.applyComponentLayout(false)
 	a.refreshCommandMenu()
 	cmds = append(cmds, cmd)
+	appendPastedTextLoadReadyIfNeeded()
 	return a, batchUpdateCmds()
 }
 
@@ -955,6 +994,8 @@ type pasteTxnFlushMsg struct {
 	Version int
 }
 
+type pastedTextLoadReadyMsg struct{}
+
 // scheduleLogPersistFlush triggers log persistence with debounce.
 func scheduleLogPersistFlush(version int) tea.Cmd {
 	return tea.Tick(logViewerPersistDebounce, func(time.Time) tea.Msg {
@@ -965,6 +1006,12 @@ func scheduleLogPersistFlush(version int) tea.Cmd {
 func schedulePasteTxnFlush(version int) tea.Cmd {
 	return tea.Tick(pasteTxnFlushDebounce, func(time.Time) tea.Msg {
 		return pasteTxnFlushMsg{Version: version}
+	})
+}
+
+func schedulePastedTextLoadReady() tea.Cmd {
+	return tea.Tick(pastedTextLoadDebounce, func(time.Time) tea.Msg {
+		return pastedTextLoadReadyMsg{}
 	})
 }
 
@@ -1058,6 +1105,9 @@ func (a *App) maybeCollapseLongPaste(msg tea.Msg, typed tea.KeyMsg, now time.Tim
 	}
 
 	content := normalizeClipboardText(string(typed.Runes))
+	if token, ok := parsePasteSummaryToken(content); ok && strings.HasSuffix(a.input.Value(), token) {
+		return msg, typed, true
+	}
 	if a.shouldSuppressDuplicatePasteContent(content, now) {
 		return msg, typed, true
 	}
@@ -1121,7 +1171,18 @@ func (a *App) summarizePastedText(content string) (text string, summarized bool,
 		return normalized, false, nil
 	}
 	lineCount := countPasteLines(normalized)
-	token := fmt.Sprintf("[paste %d LINE]", lineCount)
+	token := formatPasteSummaryToken(lineCount)
+	now := a.now()
+	if a.shouldReusePasteSummaryToken(token, normalized, now) {
+		a.loadingPastedText = true
+		a.state.StatusText = statusLoadingPastedText
+		a.pendingSendAfterPasteLoad = false
+		a.skipNextSendPasteLoadWait = false
+		a.lastSummarizedPasteText = normalized
+		a.lastSummarizedPasteAt = now
+		a.lastSummarizedPasteToken = token
+		return token, true, nil
+	}
 	path, saveErr := savePastedTextToTempFile(normalized, "paste")
 	if saveErr != nil {
 		return "", false, fmt.Errorf("failed to persist pasted text: %w", saveErr)
@@ -1131,8 +1192,12 @@ func (a *App) summarizePastedText(content string) (text string, summarized bool,
 		FilePath:  path,
 		LineCount: lineCount,
 	})
+	a.loadingPastedText = true
+	a.state.StatusText = statusLoadingPastedText
+	a.pendingSendAfterPasteLoad = false
+	a.skipNextSendPasteLoadWait = false
 	a.lastSummarizedPasteText = normalized
-	a.lastSummarizedPasteAt = a.now()
+	a.lastSummarizedPasteAt = now
 	a.lastSummarizedPasteToken = token
 	return token, true, nil
 }
@@ -1142,17 +1207,79 @@ func (a App) shouldSuppressDuplicatePasteContent(content string, now time.Time) 
 	if !shouldSummarizePastedText(normalized) {
 		return false
 	}
+	token := formatPasteSummaryToken(countPasteLines(normalized))
+	if token == "" {
+		return false
+	}
+	if strings.HasSuffix(a.input.Value(), token) {
+		// In one paste transaction, terminals may emit multiple chunks with slightly different
+		// payload boundaries (e.g. trailing newline differences). Once the token is already
+		// visible at the cursor, suppress additional injections in the same paste session.
+		if a.pasteTxnActive || a.hasPendingCtrlVPasteEcho(now) {
+			return true
+		}
+		if !a.lastPasteLikeAt.IsZero() && now.Sub(a.lastPasteLikeAt) <= pasteSessionGuard {
+			return true
+		}
+		if token == a.lastSummarizedPasteToken &&
+			!a.lastSummarizedPasteAt.IsZero() &&
+			now.Sub(a.lastSummarizedPasteAt) <= duplicatePasteSuppressWindow {
+			return true
+		}
+	}
 	if a.lastSummarizedPasteAt.IsZero() || now.Sub(a.lastSummarizedPasteAt) > duplicatePasteSuppressWindow {
 		return false
 	}
 	if normalized != a.lastSummarizedPasteText {
 		return false
 	}
-	token := fmt.Sprintf("[paste %d LINE]", countPasteLines(normalized))
-	if token == "" || token != a.lastSummarizedPasteToken {
+	return token == a.lastSummarizedPasteToken && strings.HasSuffix(a.input.Value(), token)
+}
+
+func formatPasteSummaryToken(lineCount int) string {
+	return fmt.Sprintf("[paste %d LINE]", lineCount)
+}
+
+func parsePasteSummaryToken(content string) (string, bool) {
+	trimmed := strings.TrimSpace(content)
+	if !strings.HasPrefix(trimmed, "[paste ") || !strings.HasSuffix(trimmed, " LINE]") {
+		return "", false
+	}
+	body := strings.TrimSuffix(strings.TrimPrefix(trimmed, "[paste "), " LINE]")
+	if body == "" {
+		return "", false
+	}
+	for _, r := range body {
+		if r < '0' || r > '9' {
+			return "", false
+		}
+	}
+	return trimmed, true
+}
+
+func (a App) shouldReusePasteSummaryToken(token string, normalized string, now time.Time) bool {
+	if token == "" || !strings.HasSuffix(a.input.Value(), token) || !a.hasPendingTextPasteToken(token) {
 		return false
 	}
-	return strings.HasSuffix(a.input.Value(), token)
+	if normalized == a.lastSummarizedPasteText &&
+		token == a.lastSummarizedPasteToken &&
+		!a.lastSummarizedPasteAt.IsZero() &&
+		now.Sub(a.lastSummarizedPasteAt) <= pasteSessionGuard {
+		return true
+	}
+	if a.pasteTxnActive || a.hasPendingCtrlVPasteEcho(now) {
+		return true
+	}
+	return !a.lastPasteLikeAt.IsZero() && now.Sub(a.lastPasteLikeAt) <= pasteSessionGuard
+}
+
+func (a App) hasPendingTextPasteToken(token string) bool {
+	for _, pending := range a.pendingTextPastes {
+		if pending.Token == token {
+			return true
+		}
+	}
+	return false
 }
 
 func shouldSummarizePastedText(content string) bool {
@@ -1210,6 +1337,21 @@ func (a *App) clearComposerAttachments() {
 	a.clearPendingTextPastes()
 }
 
+func (a App) shouldDeferSendForPastedTextLoad(input string) bool {
+	if strings.TrimSpace(input) == "" || len(a.pendingTextPastes) == 0 {
+		return false
+	}
+	for _, pending := range a.pendingTextPastes {
+		if pending.Token == "" {
+			continue
+		}
+		if strings.Contains(input, pending.Token) {
+			return true
+		}
+	}
+	return false
+}
+
 func shouldTreatInputDeltaAsPaste(typed tea.KeyMsg, pasteMode bool) bool {
 	if typed.Paste || pasteMode {
 		return true
@@ -1255,6 +1397,9 @@ func (a *App) resetPasteHeuristics() {
 	a.lastPasteLikeAt = time.Time{}
 	a.pendingCtrlVPasteEcho = ""
 	a.pendingCtrlVEchoUntil = time.Time{}
+	a.loadingPastedText = false
+	a.pendingSendAfterPasteLoad = false
+	a.skipNextSendPasteLoadWait = false
 	a.pasteTxnActive = false
 	a.pasteTxnBuffer = ""
 	a.pasteTxnVersion = 0
@@ -4722,7 +4867,7 @@ func (a *App) setTranscriptOffsetFromScrollbarY(mouseY int) {
 
 // isBusy reports whether an agent run or compact operation is in progress.
 func (a App) isBusy() bool {
-	return tuiutils.IsBusy(a.state.IsAgentRunning, a.state.IsCompacting)
+	return tuiutils.IsBusy(a.state.IsAgentRunning, a.state.IsCompacting) || a.loadingPastedText
 }
 
 func (a *App) handleMemoCommand() tea.Cmd {

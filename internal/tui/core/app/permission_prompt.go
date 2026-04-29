@@ -13,24 +13,24 @@ import (
 // permissionPromptOption 表示权限审批面板中的一个可选项。
 type permissionPromptOption struct {
 	Label    string
-	Hint     string
+	Shortcut string
 	Decision tuiservices.PermissionResolutionDecision
 }
 
 var permissionPromptOptions = []permissionPromptOption{
 	{
 		Label:    "Allow once",
-		Hint:     "Approve this request once",
+		Shortcut: "y",
 		Decision: tuiservices.DecisionAllowOnce,
 	},
 	{
 		Label:    "Allow session",
-		Hint:     "Approve similar requests for this session",
+		Shortcut: "a",
 		Decision: tuiservices.DecisionAllowSession,
 	},
 	{
 		Label:    "Reject",
-		Hint:     "Reject this request",
+		Shortcut: "n",
 		Decision: tuiservices.DecisionReject,
 	},
 }
@@ -84,14 +84,18 @@ func parsePermissionShortcut(input string) (tuiservices.PermissionResolutionDeci
 // formatPermissionPromptLines 构造权限审批面板展示文本。
 func formatPermissionPromptLines(state permissionPromptState) []string {
 	normalizedIdx := normalizePermissionPromptSelection(state.Selected)
+	target := fallbackText(sanitizePermissionDisplayText(state.Request.Target), "(empty)")
+	if len(target) > 72 {
+		target = target[:69] + "..."
+	}
 	lines := []string{
 		fmt.Sprintf(
 			"Permission request: %s (%s)",
 			fallbackText(sanitizePermissionDisplayText(state.Request.ToolName), "unknown_tool"),
 			fallbackText(sanitizePermissionDisplayText(state.Request.Operation), "unknown"),
 		),
-		fmt.Sprintf("Target: %s", fallbackText(sanitizePermissionDisplayText(state.Request.Target), "(empty)")),
-		"Use Up/Down to choose, Enter to confirm (shortcuts: y=once, a=session, n=reject)",
+		fmt.Sprintf("Target: %s", target),
+		"Keys: Up/Down Enter | y once | a session | n reject",
 	}
 
 	for index, item := range permissionPromptOptions {
@@ -99,7 +103,7 @@ func formatPermissionPromptLines(state permissionPromptState) []string {
 		if normalizedIdx == index {
 			prefix = "> "
 		}
-		lines = append(lines, fmt.Sprintf("%s%s  - %s", prefix, item.Label, item.Hint))
+		lines = append(lines, fmt.Sprintf("%s[%s] %s", prefix, item.Shortcut, item.Label))
 	}
 
 	if state.Submitting {

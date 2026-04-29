@@ -1686,6 +1686,43 @@ func TestUpdatePasteEventSuppressesDuplicateSummaryToken(t *testing.T) {
 	}
 }
 
+func TestUpdatePasteEventSuppressesDuplicateSummaryTokenAcrossContentVariants(t *testing.T) {
+	app, _ := newTestApp(t)
+	now := time.Unix(1_720_000_000, 0)
+	app.nowFn = func() time.Time { return now }
+
+	first := "line-1\nline-2\nline-3\nline-4\nline-5"
+	second := "line-1 \nline-2\nline-3\nline-4\nline-5"
+
+	model, cmd := app.Update(tea.KeyMsg{
+		Type:  tea.KeyRunes,
+		Runes: []rune(first),
+		Paste: true,
+	})
+	if cmd != nil {
+		_ = cmd()
+	}
+	app = model.(App)
+
+	now = now.Add(2 * time.Second)
+	model, cmd = app.Update(tea.KeyMsg{
+		Type:  tea.KeyRunes,
+		Runes: []rune(second),
+		Paste: true,
+	})
+	if cmd != nil {
+		_ = cmd()
+	}
+	app = model.(App)
+
+	if got := app.input.Value(); got != "[paste 5 LINE]" {
+		t.Fatalf("expected duplicate paste variants to keep a single summary token, got %q", got)
+	}
+	if len(app.pendingTextPastes) != 1 {
+		t.Fatalf("expected one pending text paste entry for duplicate variants, got %d", len(app.pendingTextPastes))
+	}
+}
+
 func TestUpdatePasteEventConvertsClipboardFilesAsReferences(t *testing.T) {
 	app, _ := newTestApp(t)
 	root := t.TempDir()
@@ -1762,16 +1799,49 @@ func TestUpdateLongPasteSendsRawText(t *testing.T) {
 		Runes: []rune(pasted),
 		Paste: true,
 	})
+	var loadReadyMsg tea.Msg
 	if cmd != nil {
-		_ = cmd()
+		emitted := cmd()
+		switch msg := emitted.(type) {
+		case pastedTextLoadReadyMsg:
+			loadReadyMsg = msg
+		case tea.BatchMsg:
+			for _, child := range msg {
+				if child == nil {
+					continue
+				}
+				if ready, ok := child().(pastedTextLoadReadyMsg); ok {
+					loadReadyMsg = ready
+					break
+				}
+			}
+		}
 	}
 	app = model.(App)
 
 	if app.input.Value() != "[paste 6 LINE]" {
 		t.Fatalf("expected summarized pasted text in input, got %q", app.input.Value())
 	}
+	if app.state.StatusText != statusLoadingPastedText {
+		t.Fatalf("expected loading status immediately after long paste detection, got %q", app.state.StatusText)
+	}
 
 	model, cmd = app.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	app = model.(App)
+	if app.state.StatusText != statusLoadingPastedText {
+		t.Fatalf("expected loading status before resolving pasted placeholders, got %q", app.state.StatusText)
+	}
+	if len(runtime.prepareInputs) != 0 {
+		t.Fatalf("expected send to defer while pasted placeholders are loading")
+	}
+	if loadReadyMsg == nil {
+		t.Fatalf("expected deferred load command message before send")
+	}
+	if cmd != nil {
+		t.Fatalf("expected Enter while loading pasted text to wait for existing load completion")
+	}
+
+	model, cmd = app.Update(loadReadyMsg)
 	if cmd != nil {
 		_ = cmd()
 	}
@@ -1782,6 +1852,114 @@ func TestUpdateLongPasteSendsRawText(t *testing.T) {
 	}
 	if runtime.prepareInputs[0].Text != pasted {
 		t.Fatalf("expected raw pasted text in prepare input")
+	}
+}
+
+func TestUpdateEnterWithPastePlaceholderShowsLoadingAndAutoSends(t *testing.T) {
+	app, runtime := newTestApp(t)
+	pasted := "line-1\nline-2\nline-3\nline-4\nline-5\nline-6"
+
+	model, cmd := app.Update(tea.KeyMsg{
+		Type:  tea.KeyRunes,
+		Runes: []rune(pasted),
+		Paste: true,
+	})
+	var delayed tea.Msg
+	if cmd != nil {
+		emitted := cmd()
+		switch msg := emitted.(type) {
+		case pastedTextLoadReadyMsg:
+			delayed = msg
+		case tea.BatchMsg:
+			for _, child := range msg {
+				if child == nil {
+					continue
+				}
+				if ready, ok := child().(pastedTextLoadReadyMsg); ok {
+					delayed = ready
+					break
+				}
+			}
+		}
+	}
+	app = model.(App)
+
+	model, cmd = app.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	app = model.(App)
+	if app.state.StatusText != statusLoadingPastedText {
+		t.Fatalf("expected loading status while resolving pasted text, got %q", app.state.StatusText)
+	}
+	if !app.loadingPastedText || !app.pendingSendAfterPasteLoad {
+		t.Fatalf("expected loading flags to be enabled")
+	}
+	if delayed == nil {
+		t.Fatalf("expected deferred load-ready message")
+	}
+	if cmd != nil {
+		t.Fatalf("expected no extra load-ready command from Enter while paste loading is already active")
+	}
+
+	model, cmd = app.Update(delayed)
+	if cmd != nil {
+		_ = cmd()
+	}
+	app = model.(App)
+	if len(runtime.prepareInputs) != 1 {
+		t.Fatalf("expected deferred send to run once, got %d", len(runtime.prepareInputs))
+	}
+	if runtime.prepareInputs[0].Text != pasted {
+		t.Fatalf("expected deferred send text to match pasted content")
+	}
+	if app.loadingPastedText || app.pendingSendAfterPasteLoad {
+		t.Fatalf("expected loading flags cleared after deferred send")
+	}
+}
+
+func TestUpdatePasteLoadingClearsAfterLoadReadyWithoutSend(t *testing.T) {
+	app, _ := newTestApp(t)
+	pasted := "line-1\nline-2\nline-3\nline-4\nline-5\nline-6"
+
+	model, cmd := app.Update(tea.KeyMsg{
+		Type:  tea.KeyRunes,
+		Runes: []rune(pasted),
+		Paste: true,
+	})
+	var delayed tea.Msg
+	if cmd != nil {
+		emitted := cmd()
+		switch msg := emitted.(type) {
+		case pastedTextLoadReadyMsg:
+			delayed = msg
+		case tea.BatchMsg:
+			for _, child := range msg {
+				if child == nil {
+					continue
+				}
+				if ready, ok := child().(pastedTextLoadReadyMsg); ok {
+					delayed = ready
+					break
+				}
+			}
+		}
+	}
+	app = model.(App)
+	if app.state.StatusText != statusLoadingPastedText {
+		t.Fatalf("expected loading status after long paste, got %q", app.state.StatusText)
+	}
+	if delayed == nil {
+		t.Fatalf("expected load-ready command after long paste")
+	}
+
+	model, cmd = app.Update(delayed)
+	if cmd != nil {
+		_ = cmd()
+	}
+	app = model.(App)
+	if app.loadingPastedText {
+		t.Fatalf("expected loading flag cleared when load-ready event arrives")
+	}
+	if app.state.StatusText != statusReady {
+		t.Fatalf("expected status to return to ready after load completion, got %q", app.state.StatusText)
 	}
 }
 
