@@ -231,6 +231,20 @@ func TestNormalizeCreateSessionInputDefaultsGeneratedID(t *testing.T) {
 	}
 }
 
+func TestNormalizeCreateSessionInputNormalizesMultilineTitle(t *testing.T) {
+	t.Parallel()
+
+	session, err := normalizeCreateSessionInput(CreateSessionInput{
+		Title: "  first line\n\tsecond line   third  ",
+	})
+	if err != nil {
+		t.Fatalf("normalizeCreateSessionInput() error = %v", err)
+	}
+	if session.Title != "first line second line third" {
+		t.Fatalf("normalized title = %q, want single-line collapsed whitespace", session.Title)
+	}
+}
+
 func TestSQLiteStoreCreateSessionPropagatesEnsureStorageDirsError(t *testing.T) {
 	t.Parallel()
 

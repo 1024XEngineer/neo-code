@@ -1723,6 +1723,61 @@ func TestUpdatePasteEventSuppressesDuplicateSummaryTokenAcrossContentVariants(t 
 	}
 }
 
+func TestUpdatePasteEventSingleSessionPinsSingleTokenAcrossChunks(t *testing.T) {
+	app, _ := newTestApp(t)
+	now := time.Unix(1_720_000_000, 0)
+	app.nowFn = func() time.Time { return now }
+
+	makeLines := func(prefix string, n int) string {
+		lines := make([]string, 0, n)
+		for i := 0; i < n; i++ {
+			lines = append(lines, fmt.Sprintf("%s-%d", prefix, i+1))
+		}
+		return strings.Join(lines, "\n")
+	}
+
+	first := makeLines("big", 386)
+	second := makeLines("small", 3)
+	third := makeLines("tiny", 2)
+
+	model, cmd := app.Update(tea.KeyMsg{
+		Type:  tea.KeyRunes,
+		Runes: []rune(first),
+		Paste: true,
+	})
+	if cmd != nil {
+		_ = cmd()
+	}
+	app = model.(App)
+
+	model, cmd = app.Update(tea.KeyMsg{
+		Type:  tea.KeyRunes,
+		Runes: []rune(second),
+		Paste: true,
+	})
+	if cmd != nil {
+		_ = cmd()
+	}
+	app = model.(App)
+
+	model, cmd = app.Update(tea.KeyMsg{
+		Type:  tea.KeyRunes,
+		Runes: []rune(third),
+		Paste: true,
+	})
+	if cmd != nil {
+		_ = cmd()
+	}
+	app = model.(App)
+
+	if got := app.input.Value(); got != "[paste 386 LINE]" {
+		t.Fatalf("expected one pinned token in single paste session, got %q", got)
+	}
+	if len(app.pendingTextPastes) != 1 {
+		t.Fatalf("expected one pending paste record for pinned session token, got %d", len(app.pendingTextPastes))
+	}
+}
+
 func TestUpdatePasteEventSuppressesDuplicateSingleLineContent(t *testing.T) {
 	app, _ := newTestApp(t)
 	now := time.Unix(1_720_000_000, 0)

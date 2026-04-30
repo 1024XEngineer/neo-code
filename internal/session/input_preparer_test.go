@@ -509,6 +509,68 @@ func TestInputPreparerPrepareUpdatesExistingSessionWorkdir(t *testing.T) {
 	}
 }
 
+func TestInputPreparerPreparePromotesDefaultSessionTitle(t *testing.T) {
+	t.Parallel()
+
+	workdir := t.TempDir()
+	store := newInputPreparerTestStore(t, workdir)
+	preparer := NewInputPreparer(store, store)
+
+	session := NewWithWorkdir(defaultSessionTitle, workdir)
+	if err := createSessionForPreparerTest(context.Background(), store, session); err != nil {
+		t.Fatalf("createSessionForPreparerTest() error = %v", err)
+	}
+
+	result, err := preparer.Prepare(context.Background(), PrepareInput{
+		SessionID:      session.ID,
+		Text:           "investigate session title regression",
+		DefaultWorkdir: workdir,
+	})
+	if err != nil {
+		t.Fatalf("Prepare() error = %v", err)
+	}
+	if result.SessionID != session.ID {
+		t.Fatalf("expected session id %q, got %q", session.ID, result.SessionID)
+	}
+
+	loaded, err := store.LoadSession(context.Background(), session.ID)
+	if err != nil {
+		t.Fatalf("LoadSession() error = %v", err)
+	}
+	if loaded.Title != "investigate session title regression" {
+		t.Fatalf("expected promoted title, got %q", loaded.Title)
+	}
+}
+
+func TestInputPreparerPrepareKeepsExistingNonDefaultTitle(t *testing.T) {
+	t.Parallel()
+
+	workdir := t.TempDir()
+	store := newInputPreparerTestStore(t, workdir)
+	preparer := NewInputPreparer(store, store)
+
+	session := NewWithWorkdir("Already Titled", workdir)
+	if err := createSessionForPreparerTest(context.Background(), store, session); err != nil {
+		t.Fatalf("createSessionForPreparerTest() error = %v", err)
+	}
+
+	if _, err := preparer.Prepare(context.Background(), PrepareInput{
+		SessionID:      session.ID,
+		Text:           "follow-up prompt should not replace title",
+		DefaultWorkdir: workdir,
+	}); err != nil {
+		t.Fatalf("Prepare() error = %v", err)
+	}
+
+	loaded, err := store.LoadSession(context.Background(), session.ID)
+	if err != nil {
+		t.Fatalf("LoadSession() error = %v", err)
+	}
+	if loaded.Title != "Already Titled" {
+		t.Fatalf("expected original title to be kept, got %q", loaded.Title)
+	}
+}
+
 func TestInputPreparerPrepareWorkdirUpdatePreservesConcurrentSessionHeadChanges(t *testing.T) {
 	t.Parallel()
 

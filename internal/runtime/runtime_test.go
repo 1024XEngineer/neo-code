@@ -189,6 +189,26 @@ func (s *memoryStore) UpdateSessionWorkdir(ctx context.Context, input agentsessi
 	return nil
 }
 
+func (s *memoryStore) UpdateSessionTitle(ctx context.Context, input agentsession.UpdateSessionTitleInput) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	session, ok := s.sessions[input.SessionID]
+	if !ok {
+		return errors.New("not found")
+	}
+	session.Title = strings.TrimSpace(input.Title)
+	if !input.UpdatedAt.IsZero() {
+		session.UpdatedAt = input.UpdatedAt
+	}
+	s.saves++
+	s.sessions[input.SessionID] = cloneSession(session)
+	return nil
+}
+
 func (s *memoryStore) UpdateSessionState(ctx context.Context, input agentsession.UpdateSessionStateInput) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -3360,6 +3380,42 @@ func TestServiceConstructorsAndDelegates(t *testing.T) {
 	sessionStore := agentsession.NewSQLiteStore(t.TempDir(), t.TempDir())
 	if sessionStore == nil {
 		t.Fatalf("expected JSON session store")
+	}
+}
+
+func TestServiceListSessionsPromotesDefaultTitlesFromUserMessages(t *testing.T) {
+	manager := newRuntimeConfigManager(t)
+	store := newMemoryStore()
+	service := NewWithFactory(manager, tools.NewRegistry(), store, nil, nil)
+
+	session := agentsession.New("New Session")
+	session.Messages = []providertypes.Message{
+		{
+			Role: providertypes.RoleUser,
+			Parts: []providertypes.ContentPart{
+				providertypes.NewTextPart("Investigate /session title issue"),
+			},
+		},
+	}
+	store.sessions[session.ID] = cloneSession(session)
+
+	summaries, err := service.ListSessions(context.Background())
+	if err != nil {
+		t.Fatalf("ListSessions() error = %v", err)
+	}
+	if len(summaries) != 1 {
+		t.Fatalf("expected 1 summary, got %d", len(summaries))
+	}
+	if summaries[0].Title != "Investigate /session title issue" {
+		t.Fatalf("summary title = %q, want promoted title", summaries[0].Title)
+	}
+
+	loaded, err := store.LoadSession(context.Background(), session.ID)
+	if err != nil {
+		t.Fatalf("LoadSession() error = %v", err)
+	}
+	if loaded.Title != "Investigate /session title issue" {
+		t.Fatalf("stored title = %q, want promoted title", loaded.Title)
 	}
 }
 
