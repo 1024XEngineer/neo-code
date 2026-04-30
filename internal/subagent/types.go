@@ -80,6 +80,7 @@ func (c Capability) normalize() Capability {
 // Task 表示单个子代理任务输入。
 type Task struct {
 	ID             string
+	TaskType       TaskType
 	Goal           string
 	ExpectedOutput string
 	Workspace      string
@@ -96,6 +97,9 @@ func (t Task) Validate() error {
 	}
 	if strings.TrimSpace(t.Goal) == "" {
 		return errorsf("task goal is required")
+	}
+	if strings.TrimSpace(string(t.TaskType)) != "" && !t.TaskType.Valid() {
+		return errorsf("task type %q is invalid", t.TaskType)
 	}
 	contextTaskID := strings.TrimSpace(t.ContextSlice.TaskID)
 	if contextTaskID != "" && !strings.EqualFold(contextTaskID, strings.TrimSpace(t.ID)) {
@@ -149,6 +153,9 @@ func (s State) Terminal() bool {
 // Output 定义子代理标准结构化输出。
 type Output struct {
 	Summary     string
+	Report      string
+	Status      string
+	Logs        []string
 	Findings    []string
 	Patches     []string
 	Risks       []string
@@ -159,6 +166,9 @@ type Output struct {
 // normalize 归一化输出，避免重复与空项。
 func (o Output) normalize() Output {
 	o.Summary = strings.TrimSpace(o.Summary)
+	o.Report = strings.TrimSpace(o.Report)
+	o.Status = strings.TrimSpace(o.Status)
+	o.Logs = dedupeAndTrim(o.Logs)
 	o.Findings = dedupeAndTrim(o.Findings)
 	o.Patches = dedupeAndTrim(o.Patches)
 	o.Risks = dedupeAndTrim(o.Risks)
