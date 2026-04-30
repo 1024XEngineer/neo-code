@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -193,16 +194,53 @@ func (t *Tool) executeInlineMode(
 }
 
 // resolveSpawnAllowedPaths 归一化路径白名单；为空时默认收敛到当前 workdir（或 "."）。
+// 当存在 workdir 时，会把相对路径解析为 workdir 下的绝对路径，避免 capability 路径比较失配。
 func resolveSpawnAllowedPaths(paths []string, workdir string) []string {
 	normalized := normalizeStringList(paths)
 	if len(normalized) > 0 {
-		return normalized
+		resolved := make([]string, 0, len(normalized))
+		for _, item := range normalized {
+			resolved = append(resolved, resolveSpawnAllowedPath(item, workdir))
+		}
+		return normalizeStringList(resolved)
 	}
 	defaultPath := strings.TrimSpace(workdir)
 	if defaultPath == "" {
 		defaultPath = "."
+	} else {
+		defaultPath = resolveSpawnAllowedPath(defaultPath, workdir)
 	}
 	return []string{defaultPath}
+}
+
+// resolveSpawnAllowedPath 在保持语义稳定的前提下解析单个 allowed_path。
+func resolveSpawnAllowedPath(path string, workdir string) string {
+	candidate := strings.TrimSpace(path)
+	if candidate == "" {
+		return ""
+	}
+	if !isAbsolutePathLike(candidate) && strings.TrimSpace(workdir) != "" {
+		candidate = filepath.Join(strings.TrimSpace(workdir), candidate)
+	}
+	candidate = filepath.Clean(candidate)
+	if filepath.IsAbs(candidate) {
+		if absolute, err := filepath.Abs(candidate); err == nil {
+			candidate = absolute
+		}
+	}
+	return candidate
+}
+
+// isAbsolutePathLike 判断路径是否已经具备绝对路径语义（含类 Unix 根路径）。
+func isAbsolutePathLike(path string) bool {
+	trimmed := strings.TrimSpace(path)
+	if trimmed == "" {
+		return false
+	}
+	if filepath.IsAbs(trimmed) {
+		return true
+	}
+	return strings.HasPrefix(trimmed, "/") || strings.HasPrefix(trimmed, `\`)
 }
 
 // parseSpawnInput 负责解析并校验 spawn_subagent 输入。
@@ -249,7 +287,7 @@ func parseSpawnInput(raw []byte) (spawnInput, error) {
 	input.Role = strings.ToLower(strings.TrimSpace(input.Role))
 	input.TaskType = strings.ToLower(strings.TrimSpace(input.TaskType))
 	if input.TaskType == "" {
-		input.TaskType = string(subagent.TaskTypeEdit)
+		input.TaskType = string(subagent.TaskTypeReview)
 	}
 	if input.Role != "" {
 		role := subagent.Role(input.Role)

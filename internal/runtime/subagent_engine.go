@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -34,15 +35,6 @@ const (
 )
 
 var errSubAgentRuntimeUnavailable = errors.New("runtime: subagent runtime dependencies unavailable")
-
-var subAgentOutputRequiredKeys = []string{
-	"summary",
-	"findings",
-	"patches",
-	"risks",
-	"next_actions",
-	"artifacts",
-}
 
 // runtimeSubAgentEngine 提供基于 runtime provider + tools 的子代理执行引擎。
 type runtimeSubAgentEngine struct {
@@ -97,10 +89,11 @@ func (e runtimeSubAgentEngine) RunStep(ctx context.Context, input subagent.StepI
 		toolSpecs = nil
 	}
 
-	systemPrompt := buildSubAgentSystemPrompt(input.Policy, allowedTools, allowedPaths)
+	requiredSections := subagent.RequiredSectionsForTaskType(input.Task.TaskType)
+	systemPrompt := buildSubAgentSystemPrompt(input.Policy, input.Task.TaskType, requiredSections, allowedTools, allowedPaths)
 	messages := buildSubAgentInitialMessages(input)
 	totalToolCalls := 0
-	maxTurns := resolveSubAgentMaxTurns(input.Policy.DefaultBudget.MaxSteps)
+	maxTurns := resolveSubAgentMaxTurns(input.Budget.MaxSteps)
 
 	for turn := 1; turn <= maxTurns; turn++ {
 		messages = trimSubAgentMessageWindow(messages)
@@ -118,7 +111,7 @@ func (e runtimeSubAgentEngine) RunStep(ctx context.Context, input subagent.StepI
 			if input.Policy.ToolUseMode == subagent.ToolUseModeRequired && totalToolCalls == 0 {
 				return subagent.StepOutput{}, errors.New("runtime: subagent policy requires at least one tool call")
 			}
-			output, err := parseSubAgentOutput(renderAssistantText(assistant))
+			output, err := parseSubAgentOutput(renderAssistantText(assistant), requiredSections)
 			if err != nil {
 				return subagent.StepOutput{}, err
 			}
@@ -287,8 +280,14 @@ func executeSubAgentToolCallBatch(
 func buildSubAgentInitialMessages(input subagent.StepInput) []providertypes.Message {
 	lines := []string{
 		"task_id: " + strings.TrimSpace(input.Task.ID),
+		"task_type: " + strings.TrimSpace(string(subagent.TaskType(input.Task.TaskType))),
 		"goal: " + strings.TrimSpace(input.Task.Goal),
 	}
+	normalizedTaskType := subagent.TaskType(strings.TrimSpace(string(input.Task.TaskType)))
+	if normalizedTaskType == "" {
+		normalizedTaskType = subagent.TaskTypeEdit
+	}
+	lines = append(lines, "output_json_template: "+subagentTaskTypeJSONExample(normalizedTaskType))
 	if expected := strings.TrimSpace(input.Task.ExpectedOutput); expected != "" {
 		lines = append(lines, "expected_output: "+expected)
 	}
@@ -325,20 +324,41 @@ func buildSubAgentInitialMessages(input subagent.StepInput) []providertypes.Mess
 }
 
 // buildSubAgentSystemPrompt 构建子代理策略提示词，约束工具决策、能力边界与输出契约。
-func buildSubAgentSystemPrompt(policy subagent.RolePolicy, allowedTools []string, allowedPaths []string) string {
+func buildSubAgentSystemPrompt(
+	policy subagent.RolePolicy,
+	taskType subagent.TaskType,
+	requiredSections []string,
+	allowedTools []string,
+	allowedPaths []string,
+) string {
 	maxToolCallsPerStep := effectiveMaxToolCallsPerStep(policy.MaxToolCallsPerStep)
+	normalizedTaskType := subagent.TaskType(strings.TrimSpace(string(taskType)))
+	if normalizedTaskType == "" {
+		normalizedTaskType = subagent.TaskTypeEdit
+	}
 	lines := []string{strings.TrimSpace(policy.SystemPrompt)}
 	lines = append(lines,
 		"你是子代理执行引擎的一部分，必须根据任务目标自主决定是否调用工具。",
+		"你不会自动继承父代理完整对话历史；可用上下文仅来自当前 task 输入、allowed_* 能力边界以及本步内消息窗口。",
 		"当需要外部事实、文件状态或命令执行结果时必须调用工具；纯推理可直接完成。",
 		"工具能力边界由 runtime 安全层强制执行，越权调用会收到 denied/tool error 结果，不允许绕过。",
 		"如需文件访问，只能访问 allowed_paths 范围内路径；如需工具调用，只能使用 allowed_tools 列表。",
+		"prompt/content 是任务文本，不是路径；路径白名单只能来自 allowed_paths。",
 		"你只处理当前 task，不直接驱动 todo 状态机。",
 		"工具失败后优先换参数或换工具，若仍失败则在输出中明确风险与后续动作。",
-		"最终输出必须是 JSON 对象，且必须包含键：summary, findings, patches, risks, next_actions, artifacts。",
-		"字段类型约束：summary(string)、findings/patches/risks/next_actions/artifacts(string数组)。",
+		"遇到 denied、capability token path not allowed、permission denied 等权限错误时，不要对同一参数无限重试；最多重试一次并输出结构化结论。",
+		"最终输出必须是 JSON 对象，字段需与 task_type 契约匹配。",
+		"task_type=review: 必须返回 report(string), findings([]string)。不要强制返回 patches。",
+		"task_type=edit: 必须返回 summary(string), findings([]string), patches([]string)。",
+		"task_type=verify: 必须返回 status(string), logs([]string), findings([]string)。",
+		"字段类型硬约束：findings/logs/patches/risks/next_actions/artifacts 必须是字符串数组，不允许对象数组。",
+		"可选字段：risks([]string), next_actions([]string), artifacts([]string), summary/report/status/logs（在类型允许时补充）。",
 		"输出时只返回单个 JSON 对象，不要附加 Markdown 代码块、解释性前后缀或额外文本。",
 		"该 JSON 将被 runtime 直接解析并回传父代理，任何非 JSON 噪声都可能导致任务失败。",
+		"若达到调用预算或连续失败，请立即结束并按 task_type 契约输出失败结论，不要空转。",
+		"输出 JSON 示例（必须严格遵守数组字段类型）: "+subagentTaskTypeJSONExample(normalizedTaskType),
+		fmt.Sprintf("task_type: %s", normalizedTaskType),
+		"required_sections: "+strings.Join(requiredSections, ", "),
 		fmt.Sprintf("tool_use_mode: %s", policy.ToolUseMode),
 		fmt.Sprintf("max_tool_calls_per_step: %d", maxToolCallsPerStep),
 	)
@@ -407,12 +427,12 @@ func effectiveMaxToolCallsPerStep(limit int) int {
 }
 
 // parseSubAgentOutput 从 assistant 文本中提取并解析结构化 JSON 输出。
-func parseSubAgentOutput(text string) (subagent.Output, error) {
-	jsonText, err := extractSubAgentJSONObject(text)
+func parseSubAgentOutput(text string, requiredSections []string) (subagent.Output, error) {
+	jsonText, err := extractSubAgentJSONObject(text, requiredSections)
 	if err != nil {
 		return subagent.Output{}, err
 	}
-	payload, err := parseSubAgentOutputPayload(jsonText)
+	payload, err := parseSubAgentOutputPayload(jsonText, requiredSections)
 	if err != nil {
 		return subagent.Output{}, err
 	}
@@ -420,7 +440,7 @@ func parseSubAgentOutput(text string) (subagent.Output, error) {
 }
 
 // extractSubAgentJSONObject 从文本中提取最可能的输出 JSON，优先选择包含输出契约字段的对象。
-func extractSubAgentJSONObject(text string) (string, error) {
+func extractSubAgentJSONObject(text string, requiredSections []string) (string, error) {
 	depth := 0
 	inString := false
 	escaped := false
@@ -459,7 +479,7 @@ func extractSubAgentJSONObject(text string) (string, error) {
 			if depth == 0 && start >= 0 {
 				candidate := strings.TrimSpace(text[start : index+1])
 				lastObject = candidate
-				if matchesSubAgentOutputContract(candidate) {
+				if matchesSubAgentOutputContract(candidate, requiredSections) {
 					contractObject = candidate
 				}
 				start = -1
@@ -479,36 +499,65 @@ func extractSubAgentJSONObject(text string) (string, error) {
 }
 
 // parseSubAgentOutputPayload 按严格契约解析输出字段，要求必需键存在且类型匹配。
-func parseSubAgentOutputPayload(jsonText string) (subagent.Output, error) {
+func parseSubAgentOutputPayload(jsonText string, requiredSections []string) (subagent.Output, error) {
 	var payload map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(jsonText), &payload); err != nil {
 		return subagent.Output{}, fmt.Errorf("runtime: parse subagent output json: %w", err)
 	}
-	for _, key := range subAgentOutputRequiredKeys {
+	for _, key := range requiredSections {
 		if _, ok := payload[key]; !ok {
 			return subagent.Output{}, fmt.Errorf("runtime: subagent output missing required key %q", key)
 		}
 	}
 
 	var output subagent.Output
-	if err := decodeSubAgentOutputString(payload, "summary", &output.Summary); err != nil {
-		return subagent.Output{}, err
+	if _, ok := payload["summary"]; ok {
+		if err := decodeSubAgentOutputString(payload, "summary", &output.Summary); err != nil {
+			return subagent.Output{}, err
+		}
+	}
+	if _, ok := payload["report"]; ok {
+		if err := decodeSubAgentOutputString(payload, "report", &output.Report); err != nil {
+			return subagent.Output{}, err
+		}
+	}
+	if _, ok := payload["status"]; ok {
+		if err := decodeSubAgentOutputString(payload, "status", &output.Status); err != nil {
+			return subagent.Output{}, err
+		}
 	}
 	output.Summary = strings.TrimSpace(output.Summary)
-	if err := decodeSubAgentOutputStringList(payload, "findings", &output.Findings); err != nil {
-		return subagent.Output{}, err
+	output.Report = strings.TrimSpace(output.Report)
+	output.Status = strings.TrimSpace(output.Status)
+	if _, ok := payload["findings"]; ok {
+		if err := decodeSubAgentOutputStringList(payload, "findings", &output.Findings); err != nil {
+			return subagent.Output{}, err
+		}
 	}
-	if err := decodeSubAgentOutputStringList(payload, "patches", &output.Patches); err != nil {
-		return subagent.Output{}, err
+	if _, ok := payload["logs"]; ok {
+		if err := decodeSubAgentOutputStringList(payload, "logs", &output.Logs); err != nil {
+			return subagent.Output{}, err
+		}
 	}
-	if err := decodeSubAgentOutputStringList(payload, "risks", &output.Risks); err != nil {
-		return subagent.Output{}, err
+	if _, ok := payload["patches"]; ok {
+		if err := decodeSubAgentOutputStringList(payload, "patches", &output.Patches); err != nil {
+			return subagent.Output{}, err
+		}
 	}
-	if err := decodeSubAgentOutputStringList(payload, "next_actions", &output.NextActions); err != nil {
-		return subagent.Output{}, err
+	if _, ok := payload["risks"]; ok {
+		if err := decodeSubAgentOutputStringList(payload, "risks", &output.Risks); err != nil {
+			return subagent.Output{}, err
+		}
 	}
-	if err := decodeSubAgentOutputStringList(payload, "artifacts", &output.Artifacts); err != nil {
-		return subagent.Output{}, err
+	if _, ok := payload["next_actions"]; ok {
+		if err := decodeSubAgentOutputStringList(payload, "next_actions", &output.NextActions); err != nil {
+			return subagent.Output{}, err
+		}
+	}
+	if _, ok := payload["artifacts"]; ok {
+		if err := decodeSubAgentOutputStringList(payload, "artifacts", &output.Artifacts); err != nil {
+			return subagent.Output{}, err
+		}
 	}
 	return output, nil
 }
@@ -524,20 +573,69 @@ func decodeSubAgentOutputString(payload map[string]json.RawMessage, key string, 
 // decodeSubAgentOutputStringList 按键解析字符串数组字段并保留统一错误前缀。
 func decodeSubAgentOutputStringList(payload map[string]json.RawMessage, key string, target *[]string) error {
 	var values []string
-	if err := json.Unmarshal(payload[key], &values); err != nil {
+	if err := json.Unmarshal(payload[key], &values); err == nil {
+		*target = values
+		return nil
+	}
+
+	var dynamic []any
+	if err := json.Unmarshal(payload[key], &dynamic); err != nil {
 		return fmt.Errorf("runtime: subagent output key %q must be []string: %w", key, err)
 	}
-	*target = values
+	normalized := make([]string, 0, len(dynamic))
+	for _, item := range dynamic {
+		text, ok := stringifySubAgentListItem(item)
+		if !ok {
+			return fmt.Errorf("runtime: subagent output key %q contains unsupported element type %T", key, item)
+		}
+		if strings.TrimSpace(text) == "" {
+			continue
+		}
+		normalized = append(normalized, text)
+	}
+	*target = normalized
 	return nil
 }
 
+// stringifySubAgentListItem 将数组字段中的元素容错规整为字符串，降低模型轻微格式漂移导致的整次失败风险。
+func stringifySubAgentListItem(item any) (string, bool) {
+	switch typed := item.(type) {
+	case string:
+		return strings.TrimSpace(typed), true
+	case float64:
+		return strings.TrimSpace(strconv.FormatFloat(typed, 'f', -1, 64)), true
+	case bool:
+		return strings.TrimSpace(strconv.FormatBool(typed)), true
+	case map[string]any, []any:
+		encoded, err := json.Marshal(typed)
+		if err != nil {
+			return "", false
+		}
+		return strings.TrimSpace(string(encoded)), true
+	default:
+		return "", false
+	}
+}
+
+// subagentTaskTypeJSONExample 返回 task_type 对应的最小 JSON 示例，强化模型输出契约收敛。
+func subagentTaskTypeJSONExample(taskType subagent.TaskType) string {
+	switch taskType {
+	case subagent.TaskTypeReview:
+		return `{"report":"...","findings":["..."]}`
+	case subagent.TaskTypeVerify:
+		return `{"status":"passed|failed","logs":["..."],"findings":["..."]}`
+	default:
+		return `{"summary":"...","findings":["..."],"patches":["..."]}`
+	}
+}
+
 // matchesSubAgentOutputContract 判断 JSON 文本是否包含子代理输出契约必需字段。
-func matchesSubAgentOutputContract(text string) bool {
+func matchesSubAgentOutputContract(text string, requiredSections []string) bool {
 	var payload map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(text), &payload); err != nil {
 		return false
 	}
-	for _, key := range subAgentOutputRequiredKeys {
+	for _, key := range requiredSections {
 		if _, ok := payload[key]; !ok {
 			return false
 		}

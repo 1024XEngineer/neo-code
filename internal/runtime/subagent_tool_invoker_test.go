@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -22,7 +23,10 @@ func newInvokerSuccessSubAgentFactory() subagent.Factory {
 				Done:  true,
 				Delta: "completed",
 				Output: subagent.Output{
+					Report:      "completed report " + input.Task.ID,
 					Summary:     "completed " + input.Task.ID,
+					Status:      "passed",
+					Logs:        []string{"ok"},
 					Findings:    []string{"ok"},
 					Patches:     []string{"none"},
 					Risks:       []string{"low"},
@@ -117,6 +121,7 @@ func TestRuntimeSubAgentInvokerRunInheritsParentCapabilityByDefault(t *testing.T
 	}
 	_, err := invoker.Run(context.Background(), tools.SubAgentRunInput{
 		Role:                  subagent.RoleCoder,
+		TaskType:              subagent.TaskTypeEdit,
 		TaskID:                "task-inline-parent-default",
 		Goal:                  "inherit parent capability",
 		ExpectedOut:           "json summary",
@@ -179,6 +184,7 @@ func TestRuntimeSubAgentInvokerRunIntersectsRequestedCapabilityWithParent(t *tes
 	}
 	_, err := invoker.Run(context.Background(), tools.SubAgentRunInput{
 		Role:                  subagent.RoleCoder,
+		TaskType:              subagent.TaskTypeEdit,
 		TaskID:                "task-inline-parent-intersection",
 		Goal:                  "intersection",
 		ExpectedOut:           "json summary",
@@ -194,8 +200,9 @@ func TestRuntimeSubAgentInvokerRunIntersectsRequestedCapabilityWithParent(t *tes
 	if !slices.Equal(captured.AllowedTools, []string{"bash"}) {
 		t.Fatalf("allowed tools = %v, want [bash]", captured.AllowedTools)
 	}
-	if !slices.Equal(captured.AllowedPaths, []string{"/workspace/project/sub"}) {
-		t.Fatalf("allowed paths = %v, want [/workspace/project/sub]", captured.AllowedPaths)
+	wantPath := filepath.Clean("/workspace/project/sub")
+	if !slices.Equal(captured.AllowedPaths, []string{wantPath}) {
+		t.Fatalf("allowed paths = %v, want [%s]", captured.AllowedPaths, wantPath)
 	}
 }
 
@@ -217,6 +224,7 @@ func TestRuntimeSubAgentInvokerRunRejectsRequestedCapabilityOutsideParent(t *tes
 	}
 	_, err := invoker.Run(context.Background(), tools.SubAgentRunInput{
 		Role:                  subagent.RoleCoder,
+		TaskType:              subagent.TaskTypeEdit,
 		TaskID:                "task-inline-parent-reject",
 		Goal:                  "reject escalation",
 		ExpectedOut:           "json summary",
@@ -235,21 +243,139 @@ func TestRuntimeSubAgentInvokerRunRejectsRequestedCapabilityOutsideParent(t *tes
 	}
 }
 
+func TestRuntimeSubAgentInvokerPropagatesTaskType(t *testing.T) {
+	t.Parallel()
+
+	service := NewWithFactory(
+		newRuntimeConfigManager(t),
+		&stubToolManager{},
+		newMemoryStore(),
+		&scriptedProviderFactory{provider: &scriptedProvider{}},
+		nil,
+	)
+	var capturedTaskType subagent.TaskType
+	service.SetSubAgentFactory(subagent.NewWorkerFactory(func(role subagent.Role, policy subagent.RolePolicy) subagent.Engine {
+		_ = role
+		_ = policy
+		return subagent.EngineFunc(func(ctx context.Context, input subagent.StepInput) (subagent.StepOutput, error) {
+			_ = ctx
+			capturedTaskType = input.Task.TaskType
+			return subagent.StepOutput{
+				Done: true,
+				Output: subagent.Output{
+					Report:   "reviewed",
+					Findings: []string{"ok"},
+				},
+			}, nil
+		})
+	}))
+
+	invoker := newRuntimeSubAgentInvoker(service, "run-inline", "session-inline", "agent-main", t.TempDir())
+	_, err := invoker.Run(context.Background(), tools.SubAgentRunInput{
+		Role:     subagent.RoleReviewer,
+		TaskType: subagent.TaskTypeReview,
+		TaskID:   "task-review",
+		Goal:     "review this",
+		Timeout:  5 * time.Second,
+		MaxSteps: 2,
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if capturedTaskType != subagent.TaskTypeReview {
+		t.Fatalf("task type = %q, want review", capturedTaskType)
+	}
+}
+
+func TestRuntimeSubAgentInvokerDefaultsEmptyTaskTypeToReview(t *testing.T) {
+	t.Parallel()
+
+	service := NewWithFactory(
+		newRuntimeConfigManager(t),
+		&stubToolManager{},
+		newMemoryStore(),
+		&scriptedProviderFactory{provider: &scriptedProvider{}},
+		nil,
+	)
+	var capturedTaskType subagent.TaskType
+	service.SetSubAgentFactory(subagent.NewWorkerFactory(func(role subagent.Role, policy subagent.RolePolicy) subagent.Engine {
+		_ = role
+		_ = policy
+		return subagent.EngineFunc(func(ctx context.Context, input subagent.StepInput) (subagent.StepOutput, error) {
+			_ = ctx
+			capturedTaskType = input.Task.TaskType
+			return subagent.StepOutput{
+				Done: true,
+				Output: subagent.Output{
+					Report:   "reviewed",
+					Findings: []string{"ok"},
+				},
+			}, nil
+		})
+	}))
+
+	invoker := newRuntimeSubAgentInvoker(service, "run-inline", "session-inline", "agent-main", t.TempDir())
+	_, err := invoker.Run(context.Background(), tools.SubAgentRunInput{
+		Role:     subagent.RoleReviewer,
+		TaskID:   "task-review-default",
+		Goal:     "review this",
+		Timeout:  5 * time.Second,
+		MaxSteps: 2,
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if capturedTaskType != subagent.TaskTypeReview {
+		t.Fatalf("task type = %q, want review", capturedTaskType)
+	}
+}
+
 func TestResolveInlineSubAgentCapabilityWithoutParent(t *testing.T) {
 	t.Parallel()
 
-	got, err := resolveInlineSubAgentCapability(nil, []string{" Bash ", "bash", ""}, []string{"/a", "/a", " "})
+	got, err := resolveInlineSubAgentCapability(nil, []string{" Bash ", "bash", ""}, []string{"/a", "/a", " "}, "")
 	if err != nil {
 		t.Fatalf("resolveInlineSubAgentCapability() error = %v", err)
 	}
 	if !slices.Equal(got.AllowedTools, []string{"bash"}) {
 		t.Fatalf("allowed tools = %v, want [bash]", got.AllowedTools)
 	}
-	if !slices.Equal(got.AllowedPaths, []string{"/a"}) {
-		t.Fatalf("allowed paths = %v, want [/a]", got.AllowedPaths)
+	wantPath := filepath.Clean("/a")
+	if !slices.Equal(got.AllowedPaths, []string{wantPath}) {
+		t.Fatalf("allowed paths = %v, want [%s]", got.AllowedPaths, wantPath)
 	}
 	if got.CapabilityToken != nil {
 		t.Fatalf("expected nil capability token without parent, got %+v", got.CapabilityToken)
+	}
+}
+
+func TestResolveInlineSubAgentCapabilityResolvesRelativeRequestedPathByWorkdir(t *testing.T) {
+	t.Parallel()
+
+	workdir := t.TempDir()
+	parent := &security.CapabilityToken{
+		AllowedTools: []string{"filesystem_read_file"},
+		AllowedPaths: []string{workdir},
+	}
+	got, err := resolveInlineSubAgentCapability(
+		parent,
+		[]string{"filesystem_read_file"},
+		[]string{"README.md"},
+		workdir,
+	)
+	if err != nil {
+		t.Fatalf("resolveInlineSubAgentCapability() error = %v", err)
+	}
+	if len(got.AllowedPaths) != 1 {
+		t.Fatalf("allowed paths length = %d, want 1", len(got.AllowedPaths))
+	}
+	wantPath := filepath.Join(workdir, "README.md")
+	wantPath, err = filepath.Abs(filepath.Clean(wantPath))
+	if err != nil {
+		t.Fatalf("filepath.Abs(%q) error = %v", wantPath, err)
+	}
+	if got.AllowedPaths[0] != wantPath {
+		t.Fatalf("allowed paths = %v, want [%s]", got.AllowedPaths, wantPath)
 	}
 }
 

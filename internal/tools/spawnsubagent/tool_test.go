@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -209,8 +210,9 @@ func TestToolExecuteInlineModeDefaultAllowedPaths(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Execute() error = %v", err)
 			}
-			if len(invoker.last.AllowedPaths) != 1 || invoker.last.AllowedPaths[0] != tt.wantPath {
-				t.Fatalf("allowed_paths = %v, want [%s]", invoker.last.AllowedPaths, tt.wantPath)
+			expectedPath := resolveSpawnAllowedPath(tt.wantPath, tt.workdir)
+			if len(invoker.last.AllowedPaths) != 1 || invoker.last.AllowedPaths[0] != expectedPath {
+				t.Fatalf("allowed_paths = %v, want [%s]", invoker.last.AllowedPaths, expectedPath)
 			}
 		})
 	}
@@ -298,8 +300,27 @@ func TestParseSpawnInputContentFallback(t *testing.T) {
 	if input.Prompt != "summarize" {
 		t.Fatalf("prompt = %q, want summarize", input.Prompt)
 	}
-	if input.TaskType != "edit" {
-		t.Fatalf("task_type = %q, want edit", input.TaskType)
+	if input.TaskType != "review" {
+		t.Fatalf("task_type = %q, want review", input.TaskType)
+	}
+}
+
+func TestResolveSpawnAllowedPathsResolvesRelativePathAgainstWorkdir(t *testing.T) {
+	t.Parallel()
+
+	workdir := t.TempDir()
+	got := resolveSpawnAllowedPaths([]string{"README.md"}, workdir)
+	if len(got) != 1 {
+		t.Fatalf("allowed_paths length = %d, want 1", len(got))
+	}
+	want := filepath.Join(workdir, "README.md")
+	want = filepath.Clean(want)
+	absoluteWant, err := filepath.Abs(want)
+	if err != nil {
+		t.Fatalf("filepath.Abs(%q) error = %v", want, err)
+	}
+	if got[0] != absoluteWant {
+		t.Fatalf("allowed_paths[0] = %q, want %q", got[0], absoluteWant)
 	}
 }
 

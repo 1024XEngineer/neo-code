@@ -482,7 +482,7 @@ func TestRuntimeSubAgentEngineAskRejectIsRecoverable(t *testing.T) {
 	}
 }
 
-func TestRuntimeSubAgentEngineLowWorkerBudgetStillAllowsToolClosure(t *testing.T) {
+func TestRuntimeSubAgentEngineHonorsBudgetMaxSteps(t *testing.T) {
 	t.Parallel()
 
 	manager := newRuntimeConfigManager(t)
@@ -523,15 +523,12 @@ func TestRuntimeSubAgentEngineLowWorkerBudgetStillAllowsToolClosure(t *testing.T
 	stepInput.Budget = subagent.Budget{MaxSteps: 1}
 	stepInput.Capability = subagent.Capability{AllowedTools: []string{"filesystem_read_file"}}
 
-	output, err := engine.RunStep(context.Background(), stepInput)
-	if err != nil {
-		t.Fatalf("RunStep() error = %v", err)
+	_, err = engine.RunStep(context.Background(), stepInput)
+	if err == nil || !strings.Contains(err.Error(), "max turns") {
+		t.Fatalf("expected max turns error, got %v", err)
 	}
-	if !output.Done {
-		t.Fatalf("expected step done")
-	}
-	if providerImpl.callCount != 2 {
-		t.Fatalf("provider calls = %d, want 2", providerImpl.callCount)
+	if providerImpl.callCount != 1 {
+		t.Fatalf("provider calls = %d, want 1 when budget max_steps=1", providerImpl.callCount)
 	}
 }
 
@@ -579,7 +576,7 @@ func TestParseSubAgentOutput(t *testing.T) {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got, err := parseSubAgentOutput(tt.input)
+			got, err := parseSubAgentOutput(tt.input, subagent.RequiredSectionsForTaskType(subagent.TaskTypeEdit))
 			if tt.wantErr {
 				if err == nil {
 					t.Fatalf("expected error")
@@ -593,6 +590,32 @@ func TestParseSubAgentOutput(t *testing.T) {
 				t.Fatalf("summary = %q, want %q", got.Summary, "s")
 			}
 		})
+	}
+}
+
+func TestParseSubAgentOutputByTaskTypeContract(t *testing.T) {
+	t.Parallel()
+
+	reviewOut, err := parseSubAgentOutput(
+		`{"report":"review report","findings":["f1"]}`,
+		subagent.RequiredSectionsForTaskType(subagent.TaskTypeReview),
+	)
+	if err != nil {
+		t.Fatalf("review parse error = %v", err)
+	}
+	if reviewOut.Report != "review report" || len(reviewOut.Findings) != 1 {
+		t.Fatalf("unexpected review output: %+v", reviewOut)
+	}
+
+	verifyOut, err := parseSubAgentOutput(
+		`{"status":"passed","logs":["go test ./...: ok"],"findings":["no issue"]}`,
+		subagent.RequiredSectionsForTaskType(subagent.TaskTypeVerify),
+	)
+	if err != nil {
+		t.Fatalf("verify parse error = %v", err)
+	}
+	if verifyOut.Status != "passed" || len(verifyOut.Logs) != 1 {
+		t.Fatalf("unexpected verify output: %+v", verifyOut)
 	}
 }
 
@@ -653,27 +676,38 @@ func TestEmitCapabilityDeniedEventEmitsPayload(t *testing.T) {
 func TestParseSubAgentOutputPayloadAndMaxIntBranches(t *testing.T) {
 	t.Parallel()
 
-	_, err := parseSubAgentOutputPayload(`{"summary":"x"`)
+	_, err := parseSubAgentOutputPayload(`{"summary":"x"`, subagent.RequiredSectionsForTaskType(subagent.TaskTypeEdit))
 	if err == nil || !strings.Contains(err.Error(), "parse subagent output json") {
 		t.Fatalf("expected invalid json error, got %v", err)
 	}
 
-	_, err = parseSubAgentOutputPayload(`{"summary":"s","findings":[],"patches":[],"risks":[],"next_actions":[]}`)
-	if err == nil || !strings.Contains(err.Error(), `missing required key "artifacts"`) {
+	_, err = parseSubAgentOutputPayload(`{"summary":"s","findings":[]}`, subagent.RequiredSectionsForTaskType(subagent.TaskTypeEdit))
+	if err == nil || !strings.Contains(err.Error(), `missing required key "patches"`) {
 		t.Fatalf("expected missing key error, got %v", err)
 	}
 
-	_, err = parseSubAgentOutputPayload(`{"summary":"s","findings":"bad","patches":[],"risks":[],"next_actions":[],"artifacts":[]}`)
+	_, err = parseSubAgentOutputPayload(`{"summary":"s","findings":"bad","patches":[]}`, subagent.RequiredSectionsForTaskType(subagent.TaskTypeEdit))
 	if err == nil || !strings.Contains(err.Error(), `must be []string`) {
 		t.Fatalf("expected []string type error, got %v", err)
 	}
 
-	out, err := parseSubAgentOutputPayload(`{"summary":" ok ","findings":["f"],"patches":[],"risks":[],"next_actions":[],"artifacts":[]}`)
+	out, err := parseSubAgentOutputPayload(`{"summary":" ok ","findings":["f"],"patches":[]}`, subagent.RequiredSectionsForTaskType(subagent.TaskTypeEdit))
 	if err != nil {
 		t.Fatalf("parseSubAgentOutputPayload() unexpected error: %v", err)
 	}
 	if out.Summary != "ok" {
 		t.Fatalf("expected summary to be trimmed, got %q", out.Summary)
+	}
+
+	out, err = parseSubAgentOutputPayload(`{"summary":"s","findings":[{"msg":"f1"},2,true],"patches":[]}`, subagent.RequiredSectionsForTaskType(subagent.TaskTypeEdit))
+	if err != nil {
+		t.Fatalf("parseSubAgentOutputPayload() should coerce findings drift, got error: %v", err)
+	}
+	if len(out.Findings) != 3 {
+		t.Fatalf("coerced findings len = %d, want 3", len(out.Findings))
+	}
+	if !strings.Contains(out.Findings[0], `"msg":"f1"`) {
+		t.Fatalf("coerced findings[0] = %q, want object-json string", out.Findings[0])
 	}
 
 	if got := maxInt(4, 9); got != 9 {
