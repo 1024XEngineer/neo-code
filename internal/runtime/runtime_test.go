@@ -3554,6 +3554,128 @@ func TestServiceRunPlanModePersistsDraftPlan(t *testing.T) {
 	}
 }
 
+func TestServiceRunPlanModeShowsExplanationTextOutsidePlanningJSON(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	store := newMemoryStore()
+	builder := &stubContextBuilder{}
+	scripted := &scriptedProvider{
+		responses: []scriptedResponse{
+			{
+				Message: providertypes.Message{
+					Role: providertypes.RoleAssistant,
+					Parts: []providertypes.ContentPart{providertypes.NewTextPart(`先确认范围，再按下面计划推进。
+
+{
+  "plan_spec": {
+    "goal": "Preserve prose around planning JSON",
+    "steps": ["persist plan", "show explanation"],
+    "verify": ["go test ./internal/runtime"],
+    "todos": [{"id":"todo-plan-prose","content":"persist plan","status":"pending"}]
+  }
+}
+
+我会先完成计划落库，再继续执行。`)},
+				},
+				FinishReason: "stop",
+			},
+		},
+	}
+
+	service := NewWithFactory(manager, tools.NewRegistry(), store, &scriptedProviderFactory{provider: scripted}, builder)
+	if err := service.Run(context.Background(), UserInput{
+		RunID: "run-plan-preserve-prose",
+		Mode:  string(agentsession.AgentModePlan),
+		Parts: []providertypes.ContentPart{providertypes.NewTextPart("请先给出计划并解释")},
+	}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	saved := onlySession(t, store)
+	if saved.CurrentPlan == nil || saved.CurrentPlan.Spec.Goal != "Preserve prose around planning JSON" {
+		t.Fatalf("expected current plan to be updated, got %+v", saved.CurrentPlan)
+	}
+	if len(saved.Messages) != 2 {
+		t.Fatalf("message count = %d, want 2", len(saved.Messages))
+	}
+	got := renderPartsForTest(saved.Messages[1].Parts)
+	if strings.Contains(got, "\"plan_spec\"") {
+		t.Fatalf("expected persisted assistant text to strip planning JSON, got %q", got)
+	}
+	if !strings.Contains(got, "先确认范围") || !strings.Contains(got, "继续执行") {
+		t.Fatalf("expected prose explanation to be preserved, got %q", got)
+	}
+}
+
+func TestServiceRunPlanModeKeepsExistingPlanWhenPlanSpecIsInvalid(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	store := newMemoryStore()
+	builder := &stubContextBuilder{}
+	seed := agentsession.New("invalid plan spec")
+	seed.AgentMode = agentsession.AgentModePlan
+	seed.CurrentPlan = &agentsession.PlanArtifact{
+		ID:       "plan-existing",
+		Revision: 2,
+		Status:   agentsession.PlanStatusApproved,
+		Spec: agentsession.PlanSpec{
+			Goal:   "Keep previous plan",
+			Steps:  []string{"existing step"},
+			Verify: []string{"existing verify"},
+		},
+		Summary: agentsession.SummaryView{
+			Goal:     "Keep previous plan",
+			KeySteps: []string{"existing step"},
+			Verify:   []string{"existing verify"},
+		},
+	}
+	seed.LastFullPlanRevision = 2
+	if _, err := store.CreateSession(context.Background(), createSessionInputFromSession(seed)); err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+
+	scripted := &scriptedProvider{
+		responses: []scriptedResponse{
+			{
+				Message: providertypes.Message{
+					Role: providertypes.RoleAssistant,
+					Parts: []providertypes.ContentPart{providertypes.NewTextPart(`{
+  "plan_spec": {
+    "goal": "",
+    "steps": ["bad update"],
+    "verify": ["should be ignored"]
+  }
+}
+
+这里先解释一下当前风险。`)},
+				},
+				FinishReason: "stop",
+			},
+		},
+	}
+
+	service := NewWithFactory(manager, tools.NewRegistry(), store, &scriptedProviderFactory{provider: scripted}, builder)
+	if err := service.Run(context.Background(), UserInput{
+		SessionID: seed.ID,
+		RunID:     "run-plan-invalid-spec",
+		Mode:      string(agentsession.AgentModePlan),
+		Parts:     []providertypes.ContentPart{providertypes.NewTextPart("继续讨论")},
+	}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	saved := onlySession(t, store)
+	if saved.CurrentPlan == nil || saved.CurrentPlan.Spec.Goal != "Keep previous plan" {
+		t.Fatalf("expected invalid plan_spec not to overwrite current plan, got %+v", saved.CurrentPlan)
+	}
+	got := renderPartsForTest(saved.Messages[len(saved.Messages)-1].Parts)
+	if !strings.Contains(got, "\"plan_spec\"") {
+		t.Fatalf("expected invalid planning payload to fall back to normal assistant text, got %q", got)
+	}
+}
+
 func TestServiceRunBuildModeDoesNotRequireCurrentPlan(t *testing.T) {
 	t.Parallel()
 

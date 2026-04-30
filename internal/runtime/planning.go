@@ -28,6 +28,7 @@ type summaryCandidate struct {
 type planTurnOutput struct {
 	PlanSpec         agentsession.PlanSpec `json:"plan_spec"`
 	SummaryCandidate summaryCandidate      `json:"summary_candidate"`
+	DisplayText      string                `json:"-"`
 }
 
 type taskCompletionSignal struct {
@@ -129,22 +130,15 @@ func maybeParsePlanTurnOutput(message providertypes.Message) (planTurnOutput, bo
 	if text == "" {
 		return planTurnOutput{}, false, nil
 	}
-	jsonText, ok, err := extractPlanningJSONObjectIfPresent(text)
-	if err != nil {
-		return planTurnOutput{}, false, err
-	}
+	candidate, ok := extractPlanningJSONObjectIfPresent(text, "plan_spec")
 	if !ok {
 		return planTurnOutput{}, false, nil
 	}
-	var output planTurnOutput
-	if err := json.Unmarshal([]byte(jsonText), &output); err != nil {
-		return planTurnOutput{}, false, fmt.Errorf("runtime: decode planning json: %w", err)
-	}
-	spec, err := agentsession.NormalizePlanSpec(output.PlanSpec)
+	output, err := decodePlanTurnOutput(candidate.Text)
 	if err != nil {
-		return planTurnOutput{}, false, err
+		return planTurnOutput{}, false, nil
 	}
-	output.PlanSpec = spec
+	output.DisplayText = stripPlanningJSONObjectText(text, candidate)
 	return output, true, nil
 }
 
@@ -154,30 +148,86 @@ func maybeParseCompletionTurnOutput(message providertypes.Message) (bool, error)
 	if text == "" || !strings.Contains(text, `"task_completion"`) {
 		return false, nil
 	}
-	jsonText, ok, err := extractPlanningJSONObjectIfPresent(text)
-	if err != nil {
-		return false, err
-	}
+	candidate, ok := extractPlanningJSONObjectIfPresent(text, "task_completion")
 	if !ok {
 		return false, nil
 	}
 	var output completionTurnOutput
-	if err := json.Unmarshal([]byte(jsonText), &output); err != nil {
-		return false, fmt.Errorf("runtime: decode completion json: %w", err)
+	if err := json.Unmarshal([]byte(candidate.Text), &output); err != nil {
+		return false, nil
 	}
 	return output.TaskCompletion.Completed, nil
 }
 
 // extractPlanningJSONObjectIfPresent 在文本中提取首个配平的 JSON 对象。
-func extractPlanningJSONObjectIfPresent(text string) (string, bool, error) {
+type extractedPlanningJSONObject struct {
+	Text  string
+	Start int
+	End   int
+}
+
+// decodePlanTurnOutput 按 planning 契约解析计划输出，并为摘要回退保留空间。
+func decodePlanTurnOutput(jsonText string) (planTurnOutput, error) {
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(jsonText), &payload); err != nil {
+		return planTurnOutput{}, fmt.Errorf("runtime: decode planning json: %w", err)
+	}
+
+	planSpecRaw, ok := payload["plan_spec"]
+	if !ok {
+		return planTurnOutput{}, fmt.Errorf("runtime: planning json missing plan_spec")
+	}
+
+	var spec agentsession.PlanSpec
+	if err := json.Unmarshal(planSpecRaw, &spec); err != nil {
+		return planTurnOutput{}, fmt.Errorf("runtime: decode planning json plan_spec: %w", err)
+	}
+	spec, err := agentsession.NormalizePlanSpec(spec)
+	if err != nil {
+		return planTurnOutput{}, err
+	}
+
+	output := planTurnOutput{PlanSpec: spec}
+	summaryRaw, ok := payload["summary_candidate"]
+	if !ok || len(summaryRaw) == 0 || string(summaryRaw) == "null" {
+		return output, nil
+	}
+
+	var candidate summaryCandidate
+	if err := json.Unmarshal(summaryRaw, &candidate); err == nil {
+		output.SummaryCandidate = candidate
+	}
+	return output, nil
+}
+
+// stripPlanningJSONObjectText 从原始回复中移除结构化 JSON，并尽量保留自然段落间距。
+func stripPlanningJSONObjectText(text string, candidate extractedPlanningJSONObject) string {
+	before := strings.TrimSpace(text[:candidate.Start])
+	after := strings.TrimSpace(text[candidate.End:])
+	switch {
+	case before == "":
+		return after
+	case after == "":
+		return before
+	default:
+		return strings.TrimSpace(before + "\n\n" + after)
+	}
+}
+
+// extractPlanningJSONObjectIfPresent 在文本中提取首个满足指定顶层键契约的 JSON 对象。
+func extractPlanningJSONObjectIfPresent(text string, requiredKey string) (extractedPlanningJSONObject, bool) {
 	start := strings.IndexByte(text, '{')
 	if start < 0 {
-		return "", false, nil
+		return extractedPlanningJSONObject{}, false
 	}
 	for {
-		candidate, err := extractJSONObjectCandidate(text, start)
-		if err == nil {
-			return candidate, true, nil
+		candidate, end, err := extractJSONObjectCandidateRange(text, start)
+		if err == nil && jsonObjectContainsTopLevelKey(candidate, requiredKey) {
+			return extractedPlanningJSONObject{
+				Text:  candidate,
+				Start: start,
+				End:   end,
+			}, true
 		}
 		next := strings.IndexByte(text[start+1:], '{')
 		if next < 0 {
@@ -185,7 +235,20 @@ func extractPlanningJSONObjectIfPresent(text string) (string, bool, error) {
 		}
 		start += next + 1
 	}
-	return "", false, fmt.Errorf("runtime: planning response does not contain a valid JSON object")
+	return extractedPlanningJSONObject{}, false
+}
+
+// jsonObjectContainsTopLevelKey 判断候选 JSON 对象是否包含指定顶层键。
+func jsonObjectContainsTopLevelKey(text string, key string) bool {
+	if strings.TrimSpace(key) == "" {
+		return false
+	}
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(text), &payload); err != nil {
+		return false
+	}
+	_, ok := payload[key]
+	return ok
 }
 
 func buildPlanArtifact(current *agentsession.PlanArtifact, output planTurnOutput) (*agentsession.PlanArtifact, error) {
@@ -224,6 +287,16 @@ func buildPlanArtifact(current *agentsession.PlanArtifact, output planTurnOutput
 }
 
 // applyCurrentPlanRevision 用新 revision 替换当前计划，并清理旧 revision 遗留的对齐状态。
+// resolvePlanDisplayText 优先保留模型对计划的额外说明文本，缺失时回退为规范计划正文。
+// resolvePlanDisplayText 优先保留模型对计划的额外说明文本，缺失时回退为规范计划正文。
+func resolvePlanDisplayText(output planTurnOutput, spec agentsession.PlanSpec) string {
+	display := strings.TrimSpace(output.DisplayText)
+	if display != "" {
+		return display
+	}
+	return strings.TrimSpace(agentsession.RenderPlanContent(spec))
+}
+
 func applyCurrentPlanRevision(session *agentsession.Session, plan *agentsession.PlanArtifact) bool {
 	if session == nil || plan == nil {
 		return false

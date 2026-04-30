@@ -313,7 +313,7 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 						planMessage := providertypes.Message{
 							Role: providertypes.RoleAssistant,
 							Parts: []providertypes.ContentPart{
-								providertypes.NewTextPart(strings.TrimSpace(agentsession.RenderPlanContent(nextPlan.Spec))),
+								providertypes.NewTextPart(resolvePlanDisplayText(planOutput, nextPlan.Spec)),
 							},
 						}
 						if err := s.appendAssistantMessageOnlyAndSave(ctx, &state, planMessage); err != nil {

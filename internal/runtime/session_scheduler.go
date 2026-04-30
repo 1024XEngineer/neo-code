@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"neo-code/internal/partsrender"
+	providertypes "neo-code/internal/provider/types"
 	agentsession "neo-code/internal/session"
 )
 
@@ -75,13 +76,11 @@ func sessionHasCompactedTranscript(session agentsession.Session) bool {
 	if len(session.Messages) == 0 {
 		return false
 	}
-	for _, message := range session.Messages {
-		if !strings.Contains(partsrender.RenderDisplayParts(message.Parts), "[compact_summary]") {
-			continue
-		}
-		return true
+	message := session.Messages[0]
+	if message.Role != providertypes.RoleAssistant {
+		return false
 	}
-	return false
+	return strings.HasPrefix(strings.TrimSpace(partsrender.RenderDisplayParts(message.Parts)), "[compact_summary]")
 }
 
 // establishSessionVerificationProfile 在创建新会话的边界显式写入验收 profile，避免运行时依赖隐式零值。

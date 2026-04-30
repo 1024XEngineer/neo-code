@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -89,6 +90,9 @@ func TestMaybeParsePlanTurnOutput(t *testing.T) {
 	if len(output.PlanSpec.Todos) != 1 || output.PlanSpec.Todos[0].ID != "todo-1" {
 		t.Fatalf("PlanSpec.Todos = %+v", output.PlanSpec.Todos)
 	}
+	if output.DisplayText != "" {
+		t.Fatalf("DisplayText = %q, want empty", output.DisplayText)
+	}
 }
 
 func TestMaybeParsePlanTurnOutputAllowsNaturalLanguage(t *testing.T) {
@@ -103,6 +107,87 @@ func TestMaybeParsePlanTurnOutputAllowsNaturalLanguage(t *testing.T) {
 	}
 	if ok {
 		t.Fatalf("expected natural-language response not to be treated as a plan: %+v", output)
+	}
+}
+
+func TestMaybeParsePlanTurnOutputIgnoresBraceTextAndKeepsExplanation(t *testing.T) {
+	t.Parallel()
+
+	output, ok, err := maybeParsePlanTurnOutput(providertypes.Message{
+		Role: providertypes.RoleAssistant,
+		Parts: []providertypes.ContentPart{
+			providertypes.NewTextPart("We should avoid `{broken}` examples in docs.\n\n" +
+				"{\"plan_spec\":{\"goal\":\"ship plan\",\"steps\":[\"step\"],\"verify\":[\"test\"]}}\n\n" +
+				"Then execute the plan in small steps."),
+		},
+	})
+	if err != nil {
+		t.Fatalf("maybeParsePlanTurnOutput() error = %v", err)
+	}
+	if !ok {
+		t.Fatal("expected plan JSON to be detected")
+	}
+	want := "We should avoid `{broken}` examples in docs.\n\nThen execute the plan in small steps."
+	if output.DisplayText != want {
+		t.Fatalf("DisplayText = %q, want %q", output.DisplayText, want)
+	}
+}
+
+func TestMaybeParsePlanTurnOutputFallsBackWhenSummaryIsInvalid(t *testing.T) {
+	t.Parallel()
+
+	output, ok, err := maybeParsePlanTurnOutput(providertypes.Message{
+		Role: providertypes.RoleAssistant,
+		Parts: []providertypes.ContentPart{providertypes.NewTextPart(`{
+  "plan_spec": {
+    "goal": "ship plan",
+    "steps": ["step one", "step two"],
+    "verify": ["go test ./internal/runtime"],
+    "todos": [{"id":"todo-1","content":"step one","status":"pending"}]
+  },
+  "summary_candidate": {
+    "goal": ["bad type"],
+    "key_steps": "invalid",
+    "verify": ["broken"],
+    "active_todo_ids": "todo-1"
+  }
+}`)},
+	})
+	if err != nil {
+		t.Fatalf("maybeParsePlanTurnOutput() error = %v", err)
+	}
+	if !ok {
+		t.Fatal("expected plan JSON to be detected")
+	}
+	plan, err := buildPlanArtifact(nil, output)
+	if err != nil {
+		t.Fatalf("buildPlanArtifact() error = %v", err)
+	}
+	want := agentsession.BuildSummaryView(output.PlanSpec)
+	if !reflect.DeepEqual(plan.Summary, want) {
+		t.Fatalf("Summary = %+v, want %+v", plan.Summary, want)
+	}
+}
+
+func TestMaybeParsePlanTurnOutputTreatsInvalidPlanSpecAsPlainText(t *testing.T) {
+	t.Parallel()
+
+	output, ok, err := maybeParsePlanTurnOutput(providertypes.Message{
+		Role: providertypes.RoleAssistant,
+		Parts: []providertypes.ContentPart{providertypes.NewTextPart(`{
+  "plan_spec": {
+    "goal": "",
+    "steps": ["step"],
+    "verify": ["test"]
+  }
+}
+Explanation still continues.`)},
+	})
+	if err != nil {
+		t.Fatalf("maybeParsePlanTurnOutput() error = %v", err)
+	}
+	if ok {
+		t.Fatalf("expected invalid plan_spec to be ignored, got %+v", output)
 	}
 }
 
@@ -134,31 +219,40 @@ func TestMaybeParseCompletionTurnOutput(t *testing.T) {
 	}
 }
 
+func TestMaybeParseCompletionTurnOutputIgnoresInvalidStructuredReply(t *testing.T) {
+	t.Parallel()
+
+	completed, err := maybeParseCompletionTurnOutput(providertypes.Message{
+		Role:  providertypes.RoleAssistant,
+		Parts: []providertypes.ContentPart{providertypes.NewTextPart(`{"task_completion":"done"}`)},
+	})
+	if err != nil {
+		t.Fatalf("maybeParseCompletionTurnOutput() error = %v", err)
+	}
+	if completed {
+		t.Fatal("expected invalid completion payload to be ignored")
+	}
+}
+
 func TestExtractPlanningJSONObjectIfPresent(t *testing.T) {
 	t.Parallel()
 
-	text := "preface\n{\"plan_spec\":{\"goal\":\"x\",\"steps\":[\"s\"],\"verify\":[\"v\"]},\"summary_candidate\":{\"goal\":\"x\",\"key_steps\":[\"s\"],\"constraints\":[],\"verify\":[\"v\"],\"active_todo_ids\":[]}}\ntrailing"
-	got, ok, err := extractPlanningJSONObjectIfPresent(text)
-	if err != nil {
-		t.Fatalf("extractPlanningJSONObjectIfPresent() error = %v", err)
-	}
+	text := "preface\n{\"example\":true}\n{\"plan_spec\":{\"goal\":\"x\",\"steps\":[\"s\"],\"verify\":[\"v\"]},\"summary_candidate\":{\"goal\":\"x\",\"key_steps\":[\"s\"],\"constraints\":[],\"verify\":[\"v\"],\"active_todo_ids\":[]}}\ntrailing"
+	got, ok := extractPlanningJSONObjectIfPresent(text, "plan_spec")
 	if !ok {
 		t.Fatalf("expected JSON object to be detected")
 	}
-	if !strings.HasPrefix(got, "{") || !strings.Contains(got, "\"plan_spec\"") {
-		t.Fatalf("extractPlanningJSONObjectIfPresent() = %q", got)
+	if !strings.HasPrefix(got.Text, "{") || !strings.Contains(got.Text, "\"plan_spec\"") {
+		t.Fatalf("extractPlanningJSONObjectIfPresent() = %q", got.Text)
 	}
 }
 
 func TestExtractPlanningJSONObjectIfPresentWithoutJSON(t *testing.T) {
 	t.Parallel()
 
-	got, ok, err := extractPlanningJSONObjectIfPresent("plain text only")
-	if err != nil {
-		t.Fatalf("extractPlanningJSONObjectIfPresent() error = %v", err)
-	}
-	if ok || got != "" {
-		t.Fatalf("expected no JSON result, got ok=%v text=%q", ok, got)
+	got, ok := extractPlanningJSONObjectIfPresent("plain text only", "plan_spec")
+	if ok || got.Text != "" {
+		t.Fatalf("expected no JSON result, got ok=%v text=%q", ok, got.Text)
 	}
 }
 
