@@ -22,6 +22,7 @@ type TurnBudgetSnapshot struct {
 	CompactCount           int
 	NoProgressStreakLimit  int
 	RepeatCycleStreakLimit int
+	InjectFullPlan         bool
 	Request                providertypes.GenerateRequest
 }
 
@@ -62,6 +63,7 @@ func newTurnBudgetSnapshot(
 	compactCount int,
 	noProgressStreakLimit int,
 	repeatCycleStreakLimit int,
+	injectFullPlan bool,
 	request providertypes.GenerateRequest,
 ) TurnBudgetSnapshot {
 	if attemptSeq <= 0 {
@@ -82,6 +84,7 @@ func newTurnBudgetSnapshot(
 		CompactCount:           compactCount,
 		NoProgressStreakLimit:  noProgressStreakLimit,
 		RepeatCycleStreakLimit: repeatCycleStreakLimit,
+		InjectFullPlan:         injectFullPlan,
 		Request:                request,
 	}
 }

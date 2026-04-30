@@ -105,6 +105,31 @@ func TestDefaultManagerListAvailableSpecs(t *testing.T) {
 	}
 }
 
+func TestDefaultManagerListAvailableSpecsReadOnlyFiltersWriteTools(t *testing.T) {
+	t.Parallel()
+
+	registry := NewRegistry()
+	registry.Register(&managerStubTool{name: ToolNameFilesystemReadFile})
+	registry.Register(&managerStubTool{name: ToolNameFilesystemWriteFile})
+	registry.Register(&managerStubTool{name: ToolNameBash})
+
+	manager, err := NewManager(registry, mustAllowEngine(t), nil)
+	if err != nil {
+		t.Fatalf("new manager: %v", err)
+	}
+
+	specs, err := manager.ListAvailableSpecs(context.Background(), SpecListInput{
+		SessionID: "s-1",
+		ReadOnly:  true,
+	})
+	if err != nil {
+		t.Fatalf("list specs: %v", err)
+	}
+	if len(specs) != 1 || specs[0].Name != ToolNameFilesystemReadFile {
+		t.Fatalf("unexpected read-only specs: %+v", specs)
+	}
+}
+
 func TestDefaultManagerMicroCompactPolicy(t *testing.T) {
 	t.Parallel()
 
@@ -409,6 +434,35 @@ func TestDefaultManagerExecute(t *testing.T) {
 				t.Fatalf("expected sandbox runs %d, got %d", tt.expectSandboxRuns, sandbox.callCount)
 			}
 		})
+	}
+}
+
+func TestDefaultManagerExecuteBlocksWriteToolInReadOnlyMode(t *testing.T) {
+	t.Parallel()
+
+	registry := NewRegistry()
+	writeTool := &managerStubTool{name: ToolNameFilesystemWriteFile, content: "ok"}
+	registry.Register(writeTool)
+
+	manager, err := NewManager(registry, mustAllowEngine(t), nil)
+	if err != nil {
+		t.Fatalf("new manager: %v", err)
+	}
+
+	result, execErr := manager.Execute(context.Background(), ToolCallInput{
+		ID:        "call-readonly-write",
+		Name:      ToolNameFilesystemWriteFile,
+		Arguments: []byte(`{"path":"note.txt","content":"hello"}`),
+		ReadOnly:  true,
+	})
+	if execErr == nil || !strings.Contains(execErr.Error(), "read-only mode") {
+		t.Fatalf("expected read-only mode error, got %v", execErr)
+	}
+	if !strings.Contains(result.Content, "read-only mode") {
+		t.Fatalf("expected tool result to mention read-only mode, got %q", result.Content)
+	}
+	if writeTool.callCount != 0 {
+		t.Fatalf("expected write tool not to execute, got %d", writeTool.callCount)
 	}
 }
 

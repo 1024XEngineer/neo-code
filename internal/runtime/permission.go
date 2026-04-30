@@ -87,6 +87,7 @@ func (s *Service) executeToolCallWithPermission(ctx context.Context, input permi
 		Name:            input.Call.Name,
 		Arguments:       []byte(input.Call.Arguments),
 		Workdir:         input.Workdir,
+		ReadOnly:        input.State != nil && isReadOnlyPlanningStage(resolvePlanningStageForState(input.State)),
 		SessionID:       input.SessionID,
 		TaskID:          input.TaskID,
 		AgentID:         input.AgentID,

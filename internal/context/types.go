@@ -20,6 +20,10 @@ type BuildInput struct {
 	Messages          []providertypes.Message
 	TaskState         agentsession.TaskState
 	Todos             []agentsession.TodoItem
+	AgentMode         agentsession.AgentMode
+	PlanStage         string
+	CurrentPlan       *agentsession.PlanArtifact
+	InjectFullPlan    bool
 	ActiveSkills      []skills.Skill
 	RepositorySummary *RepositorySummarySection
 	Repository        RepositoryContext

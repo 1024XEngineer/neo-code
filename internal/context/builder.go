@@ -21,6 +21,7 @@ func newPromptSources(extra ...SectionSource) []promptSectionSource {
 		corePromptSource{},
 		&projectRulesSource{},
 		taskStateSource{},
+		planModeContextSource{},
 		todosSource{},
 		skillPromptSource{},
 	}

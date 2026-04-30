@@ -225,6 +225,7 @@ func cloneSessionForPersistence(session agentsession.Session) agentsession.Sessi
 	cloned.TaskState = session.TaskState.Clone()
 	cloned.ActivatedSkills = agentsessionCloneSkillActivations(session.ActivatedSkills)
 	cloned.Todos = cloneTodosForPersistence(session.Todos)
+	cloned.CurrentPlan = session.CurrentPlan.Clone()
 	return cloned
 }
 

@@ -14,7 +14,7 @@ import (
 const (
 	sessionDatabaseFileName = "session.db"
 	assetsDirName           = "assets"
-	sqliteSchemaVersion     = 2
+	sqliteSchemaVersion     = 5
 
 	// MaxSessionMessages 定义单个会话允许持久化的最大消息数，超出时自动裁剪最旧消息。
 	MaxSessionMessages = 8192
@@ -33,34 +33,48 @@ var ErrSessionAlreadyExists = errors.New("session: session already exists")
 
 // Session 表示单个会话的运行态与持久化聚合模型。
 type Session struct {
-	ID               string
-	Title            string
-	Provider         string
-	Model            string
-	CreatedAt        time.Time
-	UpdatedAt        time.Time
-	Workdir          string
-	TaskState        TaskState
-	ActivatedSkills  []SkillActivation
-	TodoVersion      int
-	Todos            []TodoItem
-	Messages         []providertypes.Message
-	TokenInputTotal  int
-	TokenOutputTotal int
-	HasUnknownUsage  bool
+	ID                              string
+	Title                           string
+	Provider                        string
+	Model                           string
+	CreatedAt                       time.Time
+	UpdatedAt                       time.Time
+	Workdir                         string
+	TaskState                       TaskState
+	ActivatedSkills                 []SkillActivation
+	TodoVersion                     int
+	Todos                           []TodoItem
+	Messages                        []providertypes.Message
+	TokenInputTotal                 int
+	TokenOutputTotal                int
+	HasUnknownUsage                 bool
+	AgentMode                       AgentMode
+	CurrentPlan                     *PlanArtifact
+	LastFullPlanRevision            int
+	PlanApprovalPendingFullAlign    bool
+	PlanCompletionPendingFullReview bool
+	PlanContextDirty                bool
+	PlanRestorePendingAlign         bool
 }
 
 // SessionHead 表示可独立持久化、可整体替换的会话头状态快照。
 type SessionHead struct {
-	Provider         string
-	Model            string
-	Workdir          string
-	TaskState        TaskState
-	ActivatedSkills  []SkillActivation
-	Todos            []TodoItem
-	TokenInputTotal  int
-	TokenOutputTotal int
-	HasUnknownUsage  bool
+	Provider                        string
+	Model                           string
+	Workdir                         string
+	TaskState                       TaskState
+	ActivatedSkills                 []SkillActivation
+	Todos                           []TodoItem
+	TokenInputTotal                 int
+	TokenOutputTotal                int
+	HasUnknownUsage                 bool
+	AgentMode                       AgentMode
+	CurrentPlan                     *PlanArtifact
+	LastFullPlanRevision            int
+	PlanApprovalPendingFullAlign    bool
+	PlanCompletionPendingFullReview bool
+	PlanContextDirty                bool
+	PlanRestorePendingAlign         bool
 }
 
 // Summary 表示会话列表视图需要的轻量摘要。
@@ -157,36 +171,51 @@ func NewWithWorkdir(title string, workdir string) Session {
 		ActivatedSkills: []SkillActivation{},
 		Todos:           []TodoItem{},
 		Messages:        []providertypes.Message{},
+		AgentMode:       AgentModeBuild,
 	}
 }
 
 // HeadSnapshot 返回当前会话头状态的深拷贝，用于持久化输入与跨层传递。
 func (s Session) HeadSnapshot() SessionHead {
 	return SessionHead{
-		Provider:         strings.TrimSpace(s.Provider),
-		Model:            strings.TrimSpace(s.Model),
-		Workdir:          strings.TrimSpace(s.Workdir),
-		TaskState:        s.TaskState.Clone(),
-		ActivatedSkills:  cloneSkillActivations(s.ActivatedSkills),
-		Todos:            cloneTodoItems(s.Todos),
-		TokenInputTotal:  s.TokenInputTotal,
-		TokenOutputTotal: s.TokenOutputTotal,
-		HasUnknownUsage:  s.HasUnknownUsage,
+		Provider:                        strings.TrimSpace(s.Provider),
+		Model:                           strings.TrimSpace(s.Model),
+		Workdir:                         strings.TrimSpace(s.Workdir),
+		TaskState:                       s.TaskState.Clone(),
+		ActivatedSkills:                 cloneSkillActivations(s.ActivatedSkills),
+		Todos:                           cloneTodoItems(s.Todos),
+		TokenInputTotal:                 s.TokenInputTotal,
+		TokenOutputTotal:                s.TokenOutputTotal,
+		HasUnknownUsage:                 s.HasUnknownUsage,
+		AgentMode:                       NormalizeAgentMode(s.AgentMode),
+		CurrentPlan:                     s.CurrentPlan.Clone(),
+		LastFullPlanRevision:            s.LastFullPlanRevision,
+		PlanApprovalPendingFullAlign:    s.CurrentPlan != nil && s.PlanApprovalPendingFullAlign,
+		PlanCompletionPendingFullReview: s.CurrentPlan != nil && s.PlanCompletionPendingFullReview,
+		PlanContextDirty:                s.CurrentPlan != nil && s.PlanContextDirty,
+		PlanRestorePendingAlign:         s.CurrentPlan != nil && s.PlanRestorePendingAlign,
 	}
 }
 
 // clone 返回会话头状态的深拷贝，避免跨层共享底层切片。
 func (h SessionHead) clone() SessionHead {
 	return SessionHead{
-		Provider:         strings.TrimSpace(h.Provider),
-		Model:            strings.TrimSpace(h.Model),
-		Workdir:          strings.TrimSpace(h.Workdir),
-		TaskState:        h.TaskState.Clone(),
-		ActivatedSkills:  cloneSkillActivations(h.ActivatedSkills),
-		Todos:            cloneTodoItems(h.Todos),
-		TokenInputTotal:  h.TokenInputTotal,
-		TokenOutputTotal: h.TokenOutputTotal,
-		HasUnknownUsage:  h.HasUnknownUsage,
+		Provider:                        strings.TrimSpace(h.Provider),
+		Model:                           strings.TrimSpace(h.Model),
+		Workdir:                         strings.TrimSpace(h.Workdir),
+		TaskState:                       h.TaskState.Clone(),
+		ActivatedSkills:                 cloneSkillActivations(h.ActivatedSkills),
+		Todos:                           cloneTodoItems(h.Todos),
+		TokenInputTotal:                 h.TokenInputTotal,
+		TokenOutputTotal:                h.TokenOutputTotal,
+		HasUnknownUsage:                 h.HasUnknownUsage,
+		AgentMode:                       NormalizeAgentMode(h.AgentMode),
+		CurrentPlan:                     h.CurrentPlan.Clone(),
+		LastFullPlanRevision:            h.LastFullPlanRevision,
+		PlanApprovalPendingFullAlign:    h.CurrentPlan != nil && h.PlanApprovalPendingFullAlign,
+		PlanCompletionPendingFullReview: h.CurrentPlan != nil && h.PlanCompletionPendingFullReview,
+		PlanContextDirty:                h.CurrentPlan != nil && h.PlanContextDirty,
+		PlanRestorePendingAlign:         h.CurrentPlan != nil && h.PlanRestorePendingAlign,
 	}
 }
 
@@ -205,6 +234,13 @@ func (h SessionHead) applyToSession(session *Session) {
 	session.TokenInputTotal = cloned.TokenInputTotal
 	session.TokenOutputTotal = cloned.TokenOutputTotal
 	session.HasUnknownUsage = cloned.HasUnknownUsage
+	session.AgentMode = cloned.AgentMode
+	session.CurrentPlan = cloned.CurrentPlan
+	session.LastFullPlanRevision = cloned.LastFullPlanRevision
+	session.PlanApprovalPendingFullAlign = cloned.PlanApprovalPendingFullAlign
+	session.PlanCompletionPendingFullReview = cloned.PlanCompletionPendingFullReview
+	session.PlanContextDirty = cloned.PlanContextDirty
+	session.PlanRestorePendingAlign = cloned.PlanRestorePendingAlign
 }
 
 // cloneTodoItems 深拷贝 Todo 列表，避免会话头快照共享底层切片。

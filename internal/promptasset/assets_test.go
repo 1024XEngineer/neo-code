@@ -66,6 +66,37 @@ func TestRuntimeReminderTemplates(t *testing.T) {
 	}
 }
 
+func TestPlanModePromptTemplates(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		stage string
+		want  string
+	}{
+		{name: "plan", stage: "plan", want: "planning stage"},
+		{name: "build execute", stage: "build_execute", want: "build execution"},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			prompt := PlanModePrompt(tt.stage)
+			if strings.TrimSpace(prompt) == "" {
+				t.Fatalf("PlanModePrompt(%q) should not be empty", tt.stage)
+			}
+			if !strings.Contains(prompt, tt.want) {
+				t.Fatalf("PlanModePrompt(%q) = %q, want substring %q", tt.stage, prompt, tt.want)
+			}
+		})
+	}
+
+	if got := PlanModePrompt("unknown"); got != "" {
+		t.Fatalf("PlanModePrompt(unknown) = %q, want empty", got)
+	}
+}
+
 func joinCoreSectionContent() string {
 	sections := CoreSections()
 	parts := make([]string, 0, len(sections))

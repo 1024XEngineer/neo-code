@@ -20,6 +20,8 @@ type SpecListInput struct {
 	SessionID string
 	Agent     string
 	Query     string
+	Mode      string
+	ReadOnly  bool
 }
 
 // Manager is the runtime-facing tool execution and schema exposure boundary.
@@ -295,7 +297,20 @@ func (m *DefaultManager) ListAvailableSpecs(ctx context.Context, input SpecListI
 	if m == nil || m.executor == nil {
 		return nil, errors.New("tools: manager executor is nil")
 	}
-	return m.executor.ListAvailableSpecs(ctx, input)
+	specs, err := m.executor.ListAvailableSpecs(ctx, input)
+	if err != nil {
+		return nil, err
+	}
+	if !input.ReadOnly {
+		return specs, nil
+	}
+	filtered := make([]providertypes.ToolSpec, 0, len(specs))
+	for _, spec := range specs {
+		if isReadOnlyVisibleTool(spec.Name) {
+			filtered = append(filtered, spec)
+		}
+	}
+	return filtered, nil
 }
 
 // MicroCompactPolicy 返回工具的 micro compact 策略；无法判断时按默认可压缩处理。
@@ -334,6 +349,12 @@ func (m *DefaultManager) Execute(ctx context.Context, input ToolCallInput) (Tool
 	action, err := buildPermissionAction(input)
 	if err != nil {
 		result := NewErrorResult(input.Name, "invalid permission action", err.Error(), nil)
+		result.ToolCallID = input.ID
+		return result, err
+	}
+	if input.ReadOnly && !isReadOnlyActionAllowed(action) {
+		err := fmt.Errorf("tools: tool %q is not available in read-only mode", strings.TrimSpace(input.Name))
+		result := NewErrorResult(input.Name, "tool blocked in read-only mode", err.Error(), actionMetadata(action))
 		result.ToolCallID = input.ID
 		return result, err
 	}

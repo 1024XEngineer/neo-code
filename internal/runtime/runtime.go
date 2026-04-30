@@ -48,12 +48,18 @@ type Runtime interface {
 	ListAvailableSkills(ctx context.Context, sessionID string) ([]AvailableSkillState, error)
 }
 
+// PlanApprover 定义显式批准当前完整计划 revision 的可选 runtime 能力。
+type PlanApprover interface {
+	ApproveCurrentPlan(ctx context.Context, input ApproveCurrentPlanInput) error
+}
+
 // UserInput 描述一次用户输入请求的最小运行参数。
 type UserInput struct {
 	SessionID       string
 	RunID           string
 	Parts           []providertypes.ContentPart
 	Workdir         string
+	Mode            string
 	TaskID          string
 	AgentID         string
 	CapabilityToken *security.CapabilityToken
@@ -70,6 +76,7 @@ type PrepareInput struct {
 	SessionID string
 	RunID     string
 	Workdir   string
+	Mode      string
 	Text      string
 	Images    []UserImageInput
 }
@@ -87,6 +94,13 @@ type SystemToolInput struct {
 type PreparedInputResult struct {
 	UserInput   UserInput
 	SavedAssets []agentsession.AssetMeta
+}
+
+// ApproveCurrentPlanInput 描述一次显式批准当前完整计划 revision 的最小输入。
+type ApproveCurrentPlanInput struct {
+	SessionID string
+	PlanID    string
+	Revision  int
 }
 
 // UserInputPreparer 定义 runtime 输入归一化能力：会话绑定、附件持久化与 parts 组装。

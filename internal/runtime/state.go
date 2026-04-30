@@ -17,6 +17,7 @@ type runState struct {
 	compactCount            int
 	reactiveCompactAttempts int
 	rememberedThisRun       bool
+	planningEnabled         bool
 	taskID                  string
 	agentID                 string
 	capabilityToken         *security.CapabilityToken

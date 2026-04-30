@@ -20,19 +20,26 @@ import (
 )
 
 type sqliteSessionRow struct {
-	ID               string
-	Title            string
-	Provider         string
-	Model            string
-	CreatedAtMS      int64
-	UpdatedAtMS      int64
-	Workdir          string
-	TaskStateJSON    string
-	ActivatedJSON    string
-	TodosJSON        string
-	TokenInputTotal  int
-	TokenOutputTotal int
-	HasUnknownUsage  bool
+	ID                              string
+	Title                           string
+	Provider                        string
+	Model                           string
+	CreatedAtMS                     int64
+	UpdatedAtMS                     int64
+	Workdir                         string
+	TaskStateJSON                   string
+	ActivatedJSON                   string
+	TodosJSON                       string
+	TokenInputTotal                 int
+	TokenOutputTotal                int
+	HasUnknownUsage                 bool
+	AgentMode                       string
+	CurrentPlanJSON                 string
+	LastFullPlanRevision            int
+	PlanApprovalPendingFullAlign    bool
+	PlanCompletionPendingFullReview bool
+	PlanContextDirty                bool
+	PlanRestorePendingAlign         bool
 }
 
 type sqliteMessageRow struct {
@@ -161,8 +168,10 @@ func (s *SQLiteStore) CreateSession(ctx context.Context, input CreateSessionInpu
 INSERT INTO sessions (
 	id, title, created_at_ms, updated_at_ms, provider, model, workdir,
 	task_state_json, todos_json, activated_skills_json,
-	token_input_total, token_output_total, has_unknown_usage, last_seq, message_count
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0)
+	token_input_total, token_output_total, has_unknown_usage, agent_mode, current_plan_json, last_full_plan_revision,
+	plan_approval_pending_full_align, plan_completion_pending_full_review, plan_context_dirty, plan_restore_pending_align,
+	last_seq, message_count
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0)
 `,
 		session.ID,
 		session.Title,
@@ -177,6 +186,13 @@ INSERT INTO sessions (
 		session.TokenInputTotal,
 		session.TokenOutputTotal,
 		session.HasUnknownUsage,
+		string(NormalizeAgentMode(session.AgentMode)),
+		mustJSONPlanArtifact(session.CurrentPlan),
+		session.LastFullPlanRevision,
+		session.PlanApprovalPendingFullAlign,
+		session.PlanCompletionPendingFullReview,
+		session.PlanContextDirty,
+		session.PlanRestorePendingAlign,
 	)
 	if err != nil {
 		if isSQLiteSessionUniqueConstraintError(err) {
@@ -403,7 +419,14 @@ SET title = ?,
 	activated_skills_json = ?,
 	token_input_total = ?,
 	token_output_total = ?,
-	has_unknown_usage = ?
+	has_unknown_usage = ?,
+	agent_mode = ?,
+	current_plan_json = ?,
+	last_full_plan_revision = ?,
+	plan_approval_pending_full_align = ?,
+	plan_completion_pending_full_review = ?,
+	plan_context_dirty = ?,
+	plan_restore_pending_align = ?
 WHERE id = ?
 `,
 		row.Title,
@@ -417,6 +440,13 @@ WHERE id = ?
 		row.TokenInputTotal,
 		row.TokenOutputTotal,
 		row.HasUnknownUsage,
+		row.AgentMode,
+		row.CurrentPlanJSON,
+		row.LastFullPlanRevision,
+		row.PlanApprovalPendingFullAlign,
+		row.PlanCompletionPendingFullReview,
+		row.PlanContextDirty,
+		row.PlanRestorePendingAlign,
 		row.ID,
 	)
 	if err != nil {
@@ -472,6 +502,13 @@ SET updated_at_ms = ?,
 	token_input_total = ?,
 	token_output_total = ?,
 	has_unknown_usage = ?,
+	agent_mode = ?,
+	current_plan_json = ?,
+	last_full_plan_revision = ?,
+	plan_approval_pending_full_align = ?,
+	plan_completion_pending_full_review = ?,
+	plan_context_dirty = ?,
+	plan_restore_pending_align = ?,
 	last_seq = ?,
 	message_count = ?
 WHERE id = ?
@@ -486,6 +523,13 @@ WHERE id = ?
 		row.TokenInputTotal,
 		row.TokenOutputTotal,
 		row.HasUnknownUsage,
+		row.AgentMode,
+		row.CurrentPlanJSON,
+		row.LastFullPlanRevision,
+		row.PlanApprovalPendingFullAlign,
+		row.PlanCompletionPendingFullReview,
+		row.PlanContextDirty,
+		row.PlanRestorePendingAlign,
 		lastSeq,
 		len(messages),
 		row.ID,
@@ -809,6 +853,36 @@ func initializeSQLiteSchema(ctx context.Context, db *sql.DB) error {
 		if err := migrateSQLiteSchemaV1ToV2(ctx, db); err != nil {
 			return err
 		}
+		if err := migrateSQLiteSchemaV2ToV3(ctx, db); err != nil {
+			return err
+		}
+		if err := migrateSQLiteSchemaV3ToV4(ctx, db); err != nil {
+			return err
+		}
+		if err := migrateSQLiteSchemaV4ToV5(ctx, db); err != nil {
+			return err
+		}
+	case 2:
+		if err := migrateSQLiteSchemaV2ToV3(ctx, db); err != nil {
+			return err
+		}
+		if err := migrateSQLiteSchemaV3ToV4(ctx, db); err != nil {
+			return err
+		}
+		if err := migrateSQLiteSchemaV4ToV5(ctx, db); err != nil {
+			return err
+		}
+	case 3:
+		if err := migrateSQLiteSchemaV3ToV4(ctx, db); err != nil {
+			return err
+		}
+		if err := migrateSQLiteSchemaV4ToV5(ctx, db); err != nil {
+			return err
+		}
+	case 4:
+		if err := migrateSQLiteSchemaV4ToV5(ctx, db); err != nil {
+			return err
+		}
 	default:
 		return fmt.Errorf("session: unsupported sqlite schema version %d", userVersion)
 	}
@@ -834,6 +908,13 @@ func initializeSQLiteSchema(ctx context.Context, db *sql.DB) error {
 			token_input_total INTEGER NOT NULL DEFAULT 0,
 			token_output_total INTEGER NOT NULL DEFAULT 0,
 			has_unknown_usage INTEGER NOT NULL DEFAULT 0,
+			agent_mode TEXT NOT NULL DEFAULT 'build',
+			current_plan_json TEXT NOT NULL DEFAULT '',
+			last_full_plan_revision INTEGER NOT NULL DEFAULT 0,
+			plan_approval_pending_full_align INTEGER NOT NULL DEFAULT 0,
+			plan_completion_pending_full_review INTEGER NOT NULL DEFAULT 0,
+			plan_context_dirty INTEGER NOT NULL DEFAULT 0,
+			plan_restore_pending_align INTEGER NOT NULL DEFAULT 0,
 			last_seq INTEGER NOT NULL DEFAULT 0,
 			message_count INTEGER NOT NULL DEFAULT 0
 		)`,
@@ -905,6 +986,121 @@ func migrateSQLiteSchemaV1ToV2(ctx context.Context, db *sql.DB) error {
 }
 
 // sqliteTableHasColumn 检查指定表是否包含字段，供明确版本迁移保持幂等。
+// migrateSQLiteSchemaV2ToV3 将 v2 会话库升级到 v3 schema，补齐 plan/build 所需字段。
+func migrateSQLiteSchemaV2ToV3(ctx context.Context, db *sql.DB) error {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("session: begin schema migration tx: %w", err)
+	}
+	defer rollbackTx(tx)
+
+	hasModeColumn, err := sqliteTableHasColumn(ctx, tx, "sessions", "agent_mode")
+	if err != nil {
+		return err
+	}
+	if !hasModeColumn {
+		if _, err := tx.ExecContext(ctx, `ALTER TABLE sessions ADD COLUMN agent_mode TEXT NOT NULL DEFAULT 'build'`); err != nil {
+			return fmt.Errorf("session: migrate sqlite schema v2 to v3 add agent_mode: %w", err)
+		}
+	}
+
+	hasPlanColumn, err := sqliteTableHasColumn(ctx, tx, "sessions", "current_plan_json")
+	if err != nil {
+		return err
+	}
+	if !hasPlanColumn {
+		if _, err := tx.ExecContext(ctx, `ALTER TABLE sessions ADD COLUMN current_plan_json TEXT NOT NULL DEFAULT ''`); err != nil {
+			return fmt.Errorf("session: migrate sqlite schema v2 to v3 add current_plan_json: %w", err)
+		}
+	}
+
+	if _, err := tx.ExecContext(ctx, fmt.Sprintf(`PRAGMA user_version=%d`, sqliteSchemaVersion)); err != nil {
+		return fmt.Errorf("session: set migrated sqlite schema version: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("session: commit schema migration tx: %w", err)
+	}
+	return nil
+}
+
+// migrateSQLiteSchemaV3ToV4 将 v3 会话库升级到 v4 schema，补齐完整计划对齐所需字段。
+func migrateSQLiteSchemaV3ToV4(ctx context.Context, db *sql.DB) error {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("session: begin schema migration tx: %w", err)
+	}
+	defer rollbackTx(tx)
+
+	hasRevisionColumn, err := sqliteTableHasColumn(ctx, tx, "sessions", "last_full_plan_revision")
+	if err != nil {
+		return err
+	}
+	if !hasRevisionColumn {
+		if _, err := tx.ExecContext(ctx, `ALTER TABLE sessions ADD COLUMN last_full_plan_revision INTEGER NOT NULL DEFAULT 0`); err != nil {
+			return fmt.Errorf("session: migrate sqlite schema v3 to v4 add last_full_plan_revision: %w", err)
+		}
+	}
+
+	if _, err := tx.ExecContext(ctx, fmt.Sprintf(`PRAGMA user_version=%d`, sqliteSchemaVersion)); err != nil {
+		return fmt.Errorf("session: set migrated sqlite schema version: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("session: commit schema migration tx: %w", err)
+	}
+	return nil
+}
+
+// migrateSQLiteSchemaV4ToV5 将 v4 会话库升级到 v5 schema，补齐计划全文注入对齐状态字段。
+func migrateSQLiteSchemaV4ToV5(ctx context.Context, db *sql.DB) error {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("session: begin schema migration tx: %w", err)
+	}
+	defer rollbackTx(tx)
+
+	columns := []struct {
+		name string
+		sql  string
+	}{
+		{
+			name: "plan_approval_pending_full_align",
+			sql:  `ALTER TABLE sessions ADD COLUMN plan_approval_pending_full_align INTEGER NOT NULL DEFAULT 0`,
+		},
+		{
+			name: "plan_completion_pending_full_review",
+			sql:  `ALTER TABLE sessions ADD COLUMN plan_completion_pending_full_review INTEGER NOT NULL DEFAULT 0`,
+		},
+		{
+			name: "plan_context_dirty",
+			sql:  `ALTER TABLE sessions ADD COLUMN plan_context_dirty INTEGER NOT NULL DEFAULT 0`,
+		},
+		{
+			name: "plan_restore_pending_align",
+			sql:  `ALTER TABLE sessions ADD COLUMN plan_restore_pending_align INTEGER NOT NULL DEFAULT 0`,
+		},
+	}
+	for _, column := range columns {
+		hasColumn, err := sqliteTableHasColumn(ctx, tx, "sessions", column.name)
+		if err != nil {
+			return err
+		}
+		if hasColumn {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, column.sql); err != nil {
+			return fmt.Errorf("session: migrate sqlite schema v4 to v5 add %s: %w", column.name, err)
+		}
+	}
+
+	if _, err := tx.ExecContext(ctx, fmt.Sprintf(`PRAGMA user_version=%d`, sqliteSchemaVersion)); err != nil {
+		return fmt.Errorf("session: set migrated sqlite schema version: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("session: commit schema migration tx: %w", err)
+	}
+	return nil
+}
+
 func sqliteTableHasColumn(ctx context.Context, tx *sql.Tx, table string, column string) (bool, error) {
 	rows, err := tx.QueryContext(ctx, `PRAGMA table_info(`+table+`)`)
 	if err != nil {
@@ -957,6 +1153,12 @@ func normalizeCreateSessionInput(input CreateSessionInput) (Session, error) {
 	}
 	head := input.Head.clone()
 	head.applyToSession(&session)
+	session.AgentMode = NormalizeAgentMode(session.AgentMode)
+	currentPlan, err := NormalizePlanArtifact(session.CurrentPlan)
+	if err != nil {
+		return Session{}, err
+	}
+	session.CurrentPlan = currentPlan
 	todos, err := normalizeAndValidateTodos(head.Todos)
 	if err != nil {
 		return Session{}, err
@@ -979,18 +1181,25 @@ func normalizeUpdateSessionStateInput(input UpdateSessionStateInput) (sqliteSess
 		return sqliteSessionRow{}, err
 	}
 	return sqliteSessionRow{
-		ID:               stringsTrimSpace(input.SessionID),
-		Title:            sanitizeTitle(input.Title),
-		Provider:         stringsTrimSpace(head.Provider),
-		Model:            stringsTrimSpace(head.Model),
-		UpdatedAtMS:      toUnixMillis(resolveUpdatedAt(input.UpdatedAt)),
-		Workdir:          stringsTrimSpace(head.Workdir),
-		TaskStateJSON:    mustJSONString(normalizeAndClampTaskState(head.TaskState)),
-		TodosJSON:        mustJSONString(todos),
-		ActivatedJSON:    mustJSONString(normalizeSkillActivations(head.ActivatedSkills)),
-		TokenInputTotal:  head.TokenInputTotal,
-		TokenOutputTotal: head.TokenOutputTotal,
-		HasUnknownUsage:  head.HasUnknownUsage,
+		ID:                              stringsTrimSpace(input.SessionID),
+		Title:                           sanitizeTitle(input.Title),
+		Provider:                        stringsTrimSpace(head.Provider),
+		Model:                           stringsTrimSpace(head.Model),
+		UpdatedAtMS:                     toUnixMillis(resolveUpdatedAt(input.UpdatedAt)),
+		Workdir:                         stringsTrimSpace(head.Workdir),
+		TaskStateJSON:                   mustJSONString(normalizeAndClampTaskState(head.TaskState)),
+		TodosJSON:                       mustJSONString(todos),
+		ActivatedJSON:                   mustJSONString(normalizeSkillActivations(head.ActivatedSkills)),
+		TokenInputTotal:                 head.TokenInputTotal,
+		TokenOutputTotal:                head.TokenOutputTotal,
+		HasUnknownUsage:                 head.HasUnknownUsage,
+		AgentMode:                       string(NormalizeAgentMode(head.AgentMode)),
+		CurrentPlanJSON:                 mustJSONPlanArtifact(head.CurrentPlan),
+		LastFullPlanRevision:            head.LastFullPlanRevision,
+		PlanApprovalPendingFullAlign:    head.PlanApprovalPendingFullAlign,
+		PlanCompletionPendingFullReview: head.PlanCompletionPendingFullReview,
+		PlanContextDirty:                head.PlanContextDirty,
+		PlanRestorePendingAlign:         head.PlanRestorePendingAlign,
 	}, nil
 }
 
@@ -1032,7 +1241,9 @@ func loadSessionRow(ctx context.Context, tx *sql.Tx, sessionID string) (sqliteSe
 	var row sqliteSessionRow
 	err := tx.QueryRowContext(ctx, `
 SELECT id, title, provider, model, created_at_ms, updated_at_ms, workdir,
-	task_state_json, activated_skills_json, todos_json, token_input_total, token_output_total, has_unknown_usage
+	task_state_json, activated_skills_json, todos_json, token_input_total, token_output_total, has_unknown_usage,
+	agent_mode, current_plan_json, last_full_plan_revision, plan_approval_pending_full_align,
+	plan_completion_pending_full_review, plan_context_dirty, plan_restore_pending_align
 FROM sessions
 WHERE id = ?
 `,
@@ -1051,6 +1262,13 @@ WHERE id = ?
 		&row.TokenInputTotal,
 		&row.TokenOutputTotal,
 		&row.HasUnknownUsage,
+		&row.AgentMode,
+		&row.CurrentPlanJSON,
+		&row.LastFullPlanRevision,
+		&row.PlanApprovalPendingFullAlign,
+		&row.PlanCompletionPendingFullReview,
+		&row.PlanContextDirty,
+		&row.PlanRestorePendingAlign,
 	)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -1115,21 +1333,32 @@ func buildSessionFromRow(row sqliteSessionRow, messages []sqliteMessageRow) (Ses
 	if err != nil {
 		return Session{}, err
 	}
+	currentPlan, err := unmarshalPlanArtifactJSON(row.CurrentPlanJSON)
+	if err != nil {
+		return Session{}, fmt.Errorf("session: decode current_plan for %s: %w", row.ID, err)
+	}
 
 	result := Session{
-		ID:               row.ID,
-		Title:            row.Title,
-		Provider:         row.Provider,
-		Model:            row.Model,
-		CreatedAt:        fromUnixMillis(row.CreatedAtMS),
-		UpdatedAt:        fromUnixMillis(row.UpdatedAtMS),
-		Workdir:          row.Workdir,
-		TaskState:        normalizeAndClampTaskState(taskState),
-		ActivatedSkills:  normalizeSkillActivations(activated),
-		Todos:            normalizedTodos,
-		TokenInputTotal:  row.TokenInputTotal,
-		TokenOutputTotal: row.TokenOutputTotal,
-		HasUnknownUsage:  row.HasUnknownUsage,
+		ID:                              row.ID,
+		Title:                           row.Title,
+		Provider:                        row.Provider,
+		Model:                           row.Model,
+		CreatedAt:                       fromUnixMillis(row.CreatedAtMS),
+		UpdatedAt:                       fromUnixMillis(row.UpdatedAtMS),
+		Workdir:                         row.Workdir,
+		TaskState:                       normalizeAndClampTaskState(taskState),
+		ActivatedSkills:                 normalizeSkillActivations(activated),
+		Todos:                           normalizedTodos,
+		TokenInputTotal:                 row.TokenInputTotal,
+		TokenOutputTotal:                row.TokenOutputTotal,
+		HasUnknownUsage:                 row.HasUnknownUsage,
+		AgentMode:                       NormalizeAgentMode(AgentMode(row.AgentMode)),
+		CurrentPlan:                     currentPlan,
+		LastFullPlanRevision:            row.LastFullPlanRevision,
+		PlanApprovalPendingFullAlign:    currentPlan != nil && row.PlanApprovalPendingFullAlign,
+		PlanCompletionPendingFullReview: currentPlan != nil && row.PlanCompletionPendingFullReview,
+		PlanContextDirty:                currentPlan != nil && row.PlanContextDirty,
+		PlanRestorePendingAlign:         currentPlan != nil && row.PlanRestorePendingAlign,
 	}
 	if len(result.Todos) > 0 {
 		result.TodoVersion = CurrentTodoVersion
@@ -1434,6 +1663,7 @@ func cloneSessionValue(session Session) Session {
 	cloned.TaskState = session.TaskState.Clone()
 	cloned.ActivatedSkills = cloneSkillActivations(session.ActivatedSkills)
 	cloned.Todos = session.ListTodos()
+	cloned.CurrentPlan = session.CurrentPlan.Clone()
 	if len(session.Messages) > 0 {
 		cloned.Messages = make([]providertypes.Message, len(session.Messages))
 		for idx, message := range session.Messages {
@@ -1462,6 +1692,35 @@ func mustJSONString(value any) string {
 		panic(err)
 	}
 	return string(data)
+}
+
+// mustJSONPlanArtifact 将计划对象编码为 JSON 字符串；nil 计划统一编码为空字符串。
+func mustJSONPlanArtifact(plan *PlanArtifact) string {
+	normalized, err := NormalizePlanArtifact(plan)
+	if err != nil {
+		panic(err)
+	}
+	if normalized == nil {
+		return ""
+	}
+	data, err := json.Marshal(normalized)
+	if err != nil {
+		panic(err)
+	}
+	return string(data)
+}
+
+// unmarshalPlanArtifactJSON 将持久化字符串解码回计划对象；空串视为当前无计划。
+func unmarshalPlanArtifactJSON(raw string) (*PlanArtifact, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return nil, nil
+	}
+	var plan PlanArtifact
+	if err := json.Unmarshal([]byte(trimmed), &plan); err != nil {
+		return nil, err
+	}
+	return NormalizePlanArtifact(&plan)
 }
 
 // resolveUpdatedAt 统一为写入选择更新时间，缺省时使用当前时间。
