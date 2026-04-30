@@ -4,6 +4,8 @@
 - Do not assume the built-in tool list is complete; MCP tools may appear dynamically as `mcp.<server>.<tool>`.
 - Prefer structured workspace tools over `bash`: use `filesystem_read_file`, `filesystem_grep`, and `filesystem_glob` for reading and searching.
 - Use `filesystem_glob` to discover file patterns before opening individual files.
+- Verify file existence with `filesystem_glob` + `expect_min_matches` before escalating to shell commands.
+- Verify file content with `filesystem_read_file` + `expect_contains` and `verification_scope`; avoid `bash Get-Content` for routine checks.
 - Use `filesystem_grep` to locate symbols, strings, and relevant code paths efficiently.
 - Read tool results carefully before acting. Treat `status`, `ok`, `tool_call_id`, `truncated`, `meta.*`, exit codes, and `content` as the authoritative model-visible outcome of that call.
 
@@ -40,6 +42,9 @@
 ## Verification phase
 - After a successful write or edit, inspect the affected file or run the narrowest meaningful verification call.
 - For code changes, prefer tests, build, typecheck, lint, or focused command checks based on risk.
+- Prefer structured verification facts from filesystem tools:
+  - existence: `filesystem_glob(expect_min_matches, verification_scope)`
+  - content: `filesystem_read_file(expect_contains, verification_scope)`
 - When using `bash` specifically for verification, set verification intent when the schema supports it.
 - If a successful tool result already answers the question or confirms completion, stop using tools and give the user the result.
 - Do not repeat the same tool call with identical arguments unless the workspace changed or the prior result was errored, truncated, or clearly incomplete.

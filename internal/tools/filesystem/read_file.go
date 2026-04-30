@@ -22,7 +22,9 @@ type ReadFileTool struct {
 }
 
 type readFileInput struct {
-	Path string `json:"path"`
+	Path              string   `json:"path"`
+	ExpectContains    []string `json:"expect_contains,omitempty"`
+	VerificationScope string   `json:"verification_scope,omitempty"`
 }
 
 func New(root string) *ReadFileTool {
@@ -34,7 +36,7 @@ func (t *ReadFileTool) Name() string {
 }
 
 func (t *ReadFileTool) Description() string {
-	return "Read a file from the current workspace and return its contents."
+	return "Read a file from the current workspace and return its contents. Use expect_contains for explicit verification facts."
 }
 
 func (t *ReadFileTool) Schema() map[string]any {
@@ -44,6 +46,17 @@ func (t *ReadFileTool) Schema() map[string]any {
 			"path": map[string]any{
 				"type":        "string",
 				"description": "File path relative to the workspace root, or an absolute path inside the workspace.",
+			},
+			"expect_contains": map[string]any{
+				"type":        "array",
+				"description": "Optional substrings that must all appear in file content to mark verification passed.",
+				"items": map[string]any{
+					"type": "string",
+				},
+			},
+			"verification_scope": map[string]any{
+				"type":        "string",
+				"description": "Optional verification scope label to emit in ToolExecutionFacts when expect_contains is provided.",
 			},
 		},
 		"required": []string{"path"},
@@ -99,6 +112,21 @@ func (t *ReadFileTool) Execute(ctx context.Context, input tools.ToolCallInput) (
 			"path": target,
 		},
 	}
+	if len(args.ExpectContains) > 0 {
+		result.Facts.VerificationPerformed = true
+		result.Facts.VerificationScope = strings.TrimSpace(args.VerificationScope)
+		missing := missingExpectedSubstrings(result.Content, args.ExpectContains)
+		if len(missing) == 0 {
+			result.Facts.VerificationPassed = true
+			result.Metadata["verification_reason"] = "content_match"
+			result.Metadata["verification_expected"] = append([]string(nil), args.ExpectContains...)
+		} else {
+			result.Facts.VerificationPassed = false
+			result.Metadata["verification_reason"] = "content_mismatch"
+			result.Metadata["verification_expected"] = append([]string(nil), args.ExpectContains...)
+			result.Metadata["verification_missing"] = missing
+		}
+	}
 	result = tools.ApplyOutputLimit(result, tools.DefaultOutputLimitBytes)
 
 	if input.EmitChunk != nil {
@@ -126,6 +154,26 @@ func (t *ReadFileTool) Execute(ctx context.Context, input tools.ToolCallInput) (
 	}
 
 	return result, nil
+}
+
+func missingExpectedSubstrings(content string, expected []string) []string {
+	if len(expected) == 0 {
+		return nil
+	}
+	missing := make([]string, 0)
+	for _, token := range expected {
+		trimmed := strings.TrimSpace(token)
+		if trimmed == "" {
+			continue
+		}
+		if !strings.Contains(content, trimmed) {
+			missing = append(missing, trimmed)
+		}
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	return missing
 }
 
 func resolvePath(root string, requested string) (string, error) {
