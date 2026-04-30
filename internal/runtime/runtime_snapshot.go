@@ -51,6 +51,18 @@ type RuntimeSnapshotUpdatedPayload struct {
 	Snapshot RuntimeSnapshot `json:"snapshot"`
 }
 
+// FactsUpdatedPayload 表示事实层快照更新事件。
+type FactsUpdatedPayload struct {
+	Reason string        `json:"reason,omitempty"`
+	Facts  FactsSnapshot `json:"facts"`
+}
+
+// SubAgentSnapshotUpdatedPayload 表示子代理事实快照更新事件。
+type SubAgentSnapshotUpdatedPayload struct {
+	Reason   string           `json:"reason,omitempty"`
+	SubAgent SubAgentSnapshot `json:"subagent"`
+}
+
 // buildRuntimeSnapshot 基于当前 runState 构建统一快照。
 func buildRuntimeSnapshot(state *runState) RuntimeSnapshot {
 	if state == nil {
@@ -105,6 +117,46 @@ func (s *Service) emitRuntimeSnapshotUpdated(ctx context.Context, state *runStat
 	s.emitRunScopedOptional(EventRuntimeSnapshotUpdated, state, RuntimeSnapshotUpdatedPayload{
 		Reason:   strings.TrimSpace(reason),
 		Snapshot: snapshot,
+	})
+}
+
+// emitFactsUpdated 发出 facts_updated 事件，供 UI 实时消费事实增量状态。
+func (s *Service) emitFactsUpdated(state *runState, reason string) {
+	if s == nil || state == nil {
+		return
+	}
+	state.mu.Lock()
+	factsSnapshot := runtimefacts.RuntimeFacts{}
+	if state.factsCollector != nil {
+		factsSnapshot = state.factsCollector.Snapshot()
+	}
+	state.mu.Unlock()
+	s.emitRunScopedOptional(EventFactsUpdated, state, FactsUpdatedPayload{
+		Reason: strings.TrimSpace(reason),
+		Facts: FactsSnapshot{
+			RuntimeFacts: factsSnapshot,
+		},
+	})
+}
+
+// emitSubAgentSnapshotUpdated 发出 subagent_snapshot_updated 事件，供 UI 聚合展示子代理状态。
+func (s *Service) emitSubAgentSnapshotUpdated(state *runState, reason string) {
+	if s == nil || state == nil {
+		return
+	}
+	state.mu.Lock()
+	factsSnapshot := runtimefacts.RuntimeFacts{}
+	if state.factsCollector != nil {
+		factsSnapshot = state.factsCollector.Snapshot()
+	}
+	state.mu.Unlock()
+	s.emitRunScopedOptional(EventSubAgentSnapshotUpdated, state, SubAgentSnapshotUpdatedPayload{
+		Reason: strings.TrimSpace(reason),
+		SubAgent: SubAgentSnapshot{
+			StartedCount:   len(factsSnapshot.SubAgents.Started),
+			CompletedCount: len(factsSnapshot.SubAgents.Completed),
+			FailedCount:    len(factsSnapshot.SubAgents.Failed),
+		},
 	})
 }
 

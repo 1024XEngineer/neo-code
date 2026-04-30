@@ -183,10 +183,18 @@ func (s *Service) executeOneToolCall(
 	s.emitRunScoped(ctx, EventToolResult, state, result)
 	s.emitTodoToolEvent(ctx, state, call, result, execErr)
 	state.mu.Lock()
+	hasFactsUpdate := false
 	if state.factsCollector != nil {
 		state.factsCollector.ApplyToolResult(call.Name, result)
+		hasFactsUpdate = true
 	}
 	state.mu.Unlock()
+	if hasFactsUpdate {
+		s.emitFactsUpdated(state, "tool_result")
+		if strings.EqualFold(strings.TrimSpace(call.Name), tools.ToolNameSpawnSubAgent) {
+			s.emitSubAgentSnapshotUpdated(state, "tool_result")
+		}
+	}
 
 	if isSuccessfulRememberToolCall(call.Name, result, execErr) {
 		state.mu.Lock()
@@ -305,6 +313,7 @@ func (s *Service) emitTodoToolEvent(
 	}
 	payload.Reason = reason
 	state.mu.Lock()
+	hasFactsUpdate := false
 	if state.factsCollector != nil {
 		state.factsCollector.ApplyTodoSnapshot(runtimefacts.TodoSummaryLike{
 			RequiredOpen:      payload.Summary.RequiredOpen,
@@ -313,8 +322,12 @@ func (s *Service) emitTodoToolEvent(
 		})
 		conflictIDs := extractTodoIDsFromPayload(payload.Items)
 		state.factsCollector.ApplyTodoConflict(conflictIDs)
+		hasFactsUpdate = true
 	}
 	state.mu.Unlock()
+	if hasFactsUpdate {
+		s.emitFactsUpdated(state, "todo_conflict")
+	}
 	s.emitRunScoped(ctx, EventTodoConflict, state, payload)
 	s.emitRunScopedOptional(EventTodoSnapshotUpdated, state, payload)
 	s.emitRuntimeSnapshotUpdated(ctx, state, "todo_conflict")
