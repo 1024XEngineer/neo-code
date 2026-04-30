@@ -28,6 +28,7 @@ var allowedRPCMethodMetricLabels = map[string]struct{}{
 	strings.ToLower(protocol.MethodGatewayCancel):                 {},
 	strings.ToLower(protocol.MethodGatewayListSessions):           {},
 	strings.ToLower(protocol.MethodGatewayLoadSession):            {},
+	strings.ToLower(protocol.MethodGatewayListSessionTodos):       {},
 	strings.ToLower(protocol.MethodGatewayResolvePermission):      {},
 	strings.ToLower(protocol.MethodGatewayEvent):                  {},
 	strings.ToLower(protocol.MethodWakeOpenURL):                   {},

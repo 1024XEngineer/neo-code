@@ -1063,6 +1063,10 @@ func (stubRuntimePort) CreateSession(context.Context, gateway.CreateSessionInput
 	return "", nil
 }
 
+func (stubRuntimePort) ListSessionTodos(context.Context, gateway.ListSessionTodosInput) (gateway.TodoSnapshot, error) {
+	return gateway.TodoSnapshot{}, nil
+}
+
 func (s *stubGatewayServer) ListenAddress() string {
 	return s.listenAddress
 }

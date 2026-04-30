@@ -66,6 +66,10 @@ func (s *runtimePortCompileStub) LoadSession(_ context.Context, _ LoadSessionInp
 	return Session{}, nil
 }
 
+func (s *runtimePortCompileStub) ListSessionTodos(_ context.Context, _ ListSessionTodosInput) (TodoSnapshot, error) {
+	return TodoSnapshot{}, nil
+}
+
 func (s *runtimePortCompileStub) CreateSession(_ context.Context, _ CreateSessionInput) (string, error) {
 	return "", nil
 }

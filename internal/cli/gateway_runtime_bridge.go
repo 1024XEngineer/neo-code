@@ -28,6 +28,10 @@ type runtimeSessionCreator interface {
 	CreateSession(ctx context.Context, id string) (agentsession.Session, error)
 }
 
+type runtimeTodoLister interface {
+	ListTodos(ctx context.Context, sessionID string) (agentruntime.TodoSnapshot, error)
+}
+
 // defaultBuildGatewayRuntimePort 构建网关运行时 RuntimePort 适配器，并返回对应资源清理函数。
 func defaultBuildGatewayRuntimePort(ctx context.Context, workdir string) (gateway.RuntimePort, func() error, error) {
 	bundle, err := app.BuildGatewayServerDeps(ctx, app.BootstrapOptions{Workdir: strings.TrimSpace(workdir)})
@@ -287,6 +291,34 @@ func (b *gatewayRuntimePortBridge) LoadSession(ctx context.Context, input gatewa
 	return convertRuntimeSessionToGatewaySession(session), nil
 }
 
+// ListSessionTodos 查询会话 Todo 快照，优先使用 runtime 显式查询接口。
+func (b *gatewayRuntimePortBridge) ListSessionTodos(
+	ctx context.Context,
+	input gateway.ListSessionTodosInput,
+) (gateway.TodoSnapshot, error) {
+	if err := b.ensureRuntimeAccess(input.SubjectID); err != nil {
+		return gateway.TodoSnapshot{}, err
+	}
+	sessionID := strings.TrimSpace(input.SessionID)
+	if sessionID == "" {
+		return gateway.TodoSnapshot{}, gateway.ErrRuntimeResourceNotFound
+	}
+
+	if lister, ok := b.runtime.(runtimeTodoLister); ok {
+		snapshot, err := lister.ListTodos(ctx, sessionID)
+		if err != nil {
+			return gateway.TodoSnapshot{}, err
+		}
+		return convertRuntimeTodoSnapshot(snapshot), nil
+	}
+
+	session, err := b.runtime.LoadSession(ctx, sessionID)
+	if err != nil {
+		return gateway.TodoSnapshot{}, err
+	}
+	return convertRuntimeTodoSnapshot(buildRuntimeTodoSnapshotFromSessionTodos(session.ListTodos())), nil
+}
+
 // CreateSession 创建或加载指定会话，并返回最终可用的会话标识。
 func (b *gatewayRuntimePortBridge) CreateSession(ctx context.Context, input gateway.CreateSessionInput) (string, error) {
 	if err := b.ensureRuntimeAccess(input.SubjectID); err != nil {
@@ -419,6 +451,80 @@ func mapRuntimeEventType(eventType agentruntime.EventType) gateway.RuntimeEventT
 		return gateway.RuntimeEventTypeRunError
 	default:
 		return gateway.RuntimeEventTypeRunProgress
+	}
+}
+
+func convertRuntimeTodoSnapshot(snapshot agentruntime.TodoSnapshot) gateway.TodoSnapshot {
+	converted := gateway.TodoSnapshot{
+		Summary: gateway.TodoSummary{
+			Total:             snapshot.Summary.Total,
+			RequiredTotal:     snapshot.Summary.RequiredTotal,
+			RequiredCompleted: snapshot.Summary.RequiredCompleted,
+			RequiredFailed:    snapshot.Summary.RequiredFailed,
+			RequiredOpen:      snapshot.Summary.RequiredOpen,
+		},
+	}
+	if len(snapshot.Items) == 0 {
+		return converted
+	}
+	converted.Items = make([]gateway.TodoViewItem, 0, len(snapshot.Items))
+	for _, item := range snapshot.Items {
+		converted.Items = append(converted.Items, gateway.TodoViewItem{
+			ID:            strings.TrimSpace(item.ID),
+			Content:       strings.TrimSpace(item.Content),
+			Status:        strings.TrimSpace(item.Status),
+			Required:      item.Required,
+			Artifacts:     append([]string(nil), item.Artifacts...),
+			FailureReason: strings.TrimSpace(item.FailureReason),
+			BlockedReason: strings.TrimSpace(item.BlockedReason),
+			Revision:      item.Revision,
+		})
+	}
+	return converted
+}
+
+func buildRuntimeTodoSnapshotFromSessionTodos(items []agentsession.TodoItem) agentruntime.TodoSnapshot {
+	if len(items) == 0 {
+		return agentruntime.TodoSnapshot{}
+	}
+	converted := make([]agentruntime.TodoViewItem, 0, len(items))
+	summary := agentruntime.TodoSummary{Total: len(items)}
+	requiredTotal := 0
+	requiredCompleted := 0
+	requiredFailed := 0
+	requiredOpen := 0
+	for _, item := range items {
+		required := item.RequiredValue()
+		if required {
+			requiredTotal++
+			switch item.Status {
+			case agentsession.TodoStatusCompleted:
+				requiredCompleted++
+			case agentsession.TodoStatusFailed:
+				requiredFailed++
+			case agentsession.TodoStatusCanceled:
+			default:
+				requiredOpen++
+			}
+		}
+		converted = append(converted, agentruntime.TodoViewItem{
+			ID:            strings.TrimSpace(item.ID),
+			Content:       strings.TrimSpace(item.Content),
+			Status:        strings.TrimSpace(string(item.Status)),
+			Required:      required,
+			Artifacts:     append([]string(nil), item.Artifacts...),
+			FailureReason: strings.TrimSpace(item.FailureReason),
+			BlockedReason: strings.TrimSpace(string(item.BlockedReasonValue())),
+			Revision:      item.Revision,
+		})
+	}
+	summary.RequiredTotal = requiredTotal
+	summary.RequiredCompleted = requiredCompleted
+	summary.RequiredFailed = requiredFailed
+	summary.RequiredOpen = requiredOpen
+	return agentruntime.TodoSnapshot{
+		Items:   converted,
+		Summary: summary,
 	}
 }
 

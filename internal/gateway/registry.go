@@ -54,6 +54,7 @@ func (r *ActionRegistry) initCore() {
 	r.core[FrameActionCancel] = handleCancelFrame
 	r.core[FrameActionListSessions] = handleListSessionsFrame
 	r.core[FrameActionLoadSession] = handleLoadSessionFrame
+	r.core[FrameActionListSessionTodos] = handleListSessionTodosFrame
 	r.core[FrameActionResolvePermission] = handleResolvePermissionFrame
 }
 

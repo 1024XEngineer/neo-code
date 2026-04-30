@@ -44,7 +44,7 @@ func validateRequestFrame(frame MessageFrame) *FrameError {
 		return nil
 	case FrameActionRun:
 		return validateRunFrame(frame)
-	case FrameActionCompact, FrameActionLoadSession, FrameActionListSessionSkills:
+	case FrameActionCompact, FrameActionLoadSession, FrameActionListSessionSkills, FrameActionListSessionTodos:
 		if strings.TrimSpace(frame.SessionID) == "" {
 			return NewMissingRequiredFieldError("session_id")
 		}
@@ -192,6 +192,7 @@ func isValidFrameAction(action FrameAction) bool {
 		FrameActionCancel,
 		FrameActionListSessions,
 		FrameActionLoadSession,
+		FrameActionListSessionTodos,
 		FrameActionResolvePermission:
 		return true
 	default:

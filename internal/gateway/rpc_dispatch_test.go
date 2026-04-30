@@ -113,6 +113,10 @@ func (s *rpcRunCaptureRuntimeStub) CreateSession(ctx context.Context, input Crea
 	return s.createSessionID, nil
 }
 
+func (s *rpcRunCaptureRuntimeStub) ListSessionTodos(_ context.Context, _ ListSessionTodosInput) (TodoSnapshot, error) {
+	return TodoSnapshot{}, nil
+}
+
 func TestDispatchRPCRequestResultEncodeError(t *testing.T) {
 	installHandlerRegistryForTest(t, map[FrameAction]requestFrameHandler{
 		FrameActionPing: func(_ context.Context, frame MessageFrame, _ RuntimePort) MessageFrame {

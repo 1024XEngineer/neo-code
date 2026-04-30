@@ -28,6 +28,7 @@ type bootstrapRuntimeStub struct {
 	events              <-chan RuntimeEvent
 	listSessionsFn      func(ctx context.Context) ([]SessionSummary, error)
 	loadSessionFn       func(ctx context.Context, input LoadSessionInput) (Session, error)
+	listSessionTodosFn  func(ctx context.Context, input ListSessionTodosInput) (TodoSnapshot, error)
 }
 
 func (s *bootstrapRuntimeStub) Run(ctx context.Context, input RunInput) error {
@@ -128,6 +129,13 @@ func (s *bootstrapRuntimeStub) CreateSession(ctx context.Context, input CreateSe
 		return s.createSessionFn(ctx, input)
 	}
 	return strings.TrimSpace(input.SessionID), nil
+}
+
+func (s *bootstrapRuntimeStub) ListSessionTodos(ctx context.Context, input ListSessionTodosInput) (TodoSnapshot, error) {
+	if s != nil && s.listSessionTodosFn != nil {
+		return s.listSessionTodosFn(ctx, input)
+	}
+	return TodoSnapshot{}, nil
 }
 
 func TestDispatchRequestFramePing(t *testing.T) {
@@ -1208,6 +1216,62 @@ func TestHandleCancelListLoadResolveBranches(t *testing.T) {
 		}
 		if response.Error.Message != "list_sessions failed" {
 			t.Fatalf("response message = %q, want %q", response.Error.Message, "list_sessions failed")
+		}
+	})
+
+	t.Run("list session todos success", func(t *testing.T) {
+		stub := &bootstrapRuntimeStub{
+			listSessionTodosFn: func(ctx context.Context, input ListSessionTodosInput) (TodoSnapshot, error) {
+				if _, ok := ctx.Deadline(); !ok {
+					t.Fatal("list session todos should use timeout context")
+				}
+				if input.SessionID != "session-todos" {
+					t.Fatalf("session_id = %q, want %q", input.SessionID, "session-todos")
+				}
+				return TodoSnapshot{
+					Items: []TodoViewItem{
+						{ID: "todo-1", Content: "task", Status: "pending", Required: true, Revision: 1},
+					},
+					Summary: TodoSummary{
+						Total:         1,
+						RequiredTotal: 1,
+						RequiredOpen:  1,
+					},
+				}, nil
+			},
+		}
+		response := handleListSessionTodosFrame(context.Background(), MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionListSessionTodos,
+			RequestID: "list-todos-1",
+			Payload: map[string]any{
+				"session_id": "session-todos",
+			},
+		}, stub)
+		if response.Type != FrameTypeAck {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeAck)
+		}
+		snapshot, ok := response.Payload.(TodoSnapshot)
+		if !ok {
+			t.Fatalf("payload type = %T, want TodoSnapshot", response.Payload)
+		}
+		if len(snapshot.Items) != 1 || snapshot.Summary.RequiredTotal != 1 {
+			t.Fatalf("unexpected snapshot: %+v", snapshot)
+		}
+	})
+
+	t.Run("list session todos missing session id", func(t *testing.T) {
+		response := handleListSessionTodosFrame(context.Background(), MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionListSessionTodos,
+			RequestID: "list-todos-missing",
+			Payload:   map[string]any{},
+		}, &bootstrapRuntimeStub{})
+		if response.Type != FrameTypeError {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+		}
+		if response.Error == nil || response.Error.Code != ErrorCodeMissingRequiredField.String() {
+			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeMissingRequiredField.String())
 		}
 	})
 

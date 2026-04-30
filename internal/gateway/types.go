@@ -44,6 +44,8 @@ const (
 	FrameActionListSessions FrameAction = "list_sessions"
 	// FrameActionLoadSession 表示加载指定会话详情。
 	FrameActionLoadSession FrameAction = "load_session"
+	// FrameActionListSessionTodos 表示查询指定会话 Todo 快照。
+	FrameActionListSessionTodos FrameAction = "session_todos_list"
 	// FrameActionResolvePermission 表示提交一次权限审批决策。
 	FrameActionResolvePermission FrameAction = "resolve_permission"
 	// FrameActionWakeOpenURL 表示处理 URL Scheme 唤醒请求。

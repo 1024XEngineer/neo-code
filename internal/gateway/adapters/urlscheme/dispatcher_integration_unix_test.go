@@ -174,6 +174,13 @@ func (s *urlschemeIntegrationRuntimeStub) CreateSession(
 	return strings.TrimSpace("session-review-integration"), nil
 }
 
+func (s *urlschemeIntegrationRuntimeStub) ListSessionTodos(
+	context.Context,
+	gateway.ListSessionTodosInput,
+) (gateway.TodoSnapshot, error) {
+	return gateway.TodoSnapshot{}, nil
+}
+
 func waitGatewayReady(address string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {

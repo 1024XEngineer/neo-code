@@ -141,6 +141,16 @@ type LoadSessionInput struct {
 	SessionID string
 }
 
+// ListSessionTodosInput 表示查询会话 Todo 快照动作输入。
+type ListSessionTodosInput struct {
+	// SubjectID 是请求方身份主体标识。
+	SubjectID string
+	// RequestID 是客户端请求标识。
+	RequestID string
+	// SessionID 是目标会话标识。
+	SessionID string
+}
+
 // CreateSessionInput 表示 gateway.createSession 动作的下游输入。
 type CreateSessionInput struct {
 	// SubjectID 是请求方身份主体标识。
@@ -231,6 +241,33 @@ type SessionSummary struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
+// TodoViewItem 描述会话 Todo 单项快照。
+type TodoViewItem struct {
+	ID            string   `json:"id"`
+	Content       string   `json:"content"`
+	Status        string   `json:"status"`
+	Required      bool     `json:"required"`
+	Artifacts     []string `json:"artifacts,omitempty"`
+	FailureReason string   `json:"failure_reason,omitempty"`
+	BlockedReason string   `json:"blocked_reason,omitempty"`
+	Revision      int64    `json:"revision"`
+}
+
+// TodoSummary 描述会话 Todo 汇总信息。
+type TodoSummary struct {
+	Total             int `json:"total"`
+	RequiredTotal     int `json:"required_total"`
+	RequiredCompleted int `json:"required_completed"`
+	RequiredFailed    int `json:"required_failed"`
+	RequiredOpen      int `json:"required_open"`
+}
+
+// TodoSnapshot 描述会话 Todo 快照。
+type TodoSnapshot struct {
+	Items   []TodoViewItem `json:"items,omitempty"`
+	Summary TodoSummary    `json:"summary,omitempty"`
+}
+
 // SkillSource 描述技能来源元数据。
 type SkillSource struct {
 	// Kind 表示技能来源类型（local/builtin）。
@@ -305,6 +342,8 @@ type RuntimePort interface {
 	ListSessions(ctx context.Context) ([]SessionSummary, error)
 	// LoadSession 加载指定会话详情。
 	LoadSession(ctx context.Context, input LoadSessionInput) (Session, error)
+	// ListSessionTodos 返回指定会话的 Todo 快照。
+	ListSessionTodos(ctx context.Context, input ListSessionTodosInput) (TodoSnapshot, error)
 	// CreateSession 创建并返回可用会话标识。
 	CreateSession(ctx context.Context, input CreateSessionInput) (string, error)
 }
