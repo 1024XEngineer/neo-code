@@ -187,10 +187,41 @@ func (t *Tool) executeInlineMode(
 			"step_count":   runResult.StepCount,
 			"error":        strings.TrimSpace(runResult.Error),
 			"artifact_cnt": len(runResult.Output.Artifacts),
+			"artifacts":    append([]string(nil), runResult.Output.Artifacts...),
 		},
+	}
+	if isError {
+		result.ErrorClass = classifySpawnInlineErrorClass(runResult, runErr)
 	}
 	result = tools.ApplyOutputLimit(result, tools.DefaultOutputLimitBytes)
 	return result, runErr
+}
+
+// classifySpawnInlineErrorClass 统一归类子代理错误，便于上层事实回灌与终态决策识别。
+func classifySpawnInlineErrorClass(result tools.SubAgentRunResult, runErr error) string {
+	if runErr != nil {
+		errText := strings.ToLower(strings.TrimSpace(runErr.Error()))
+		switch {
+		case strings.Contains(errText, "permission denied") || strings.Contains(errText, "path not allowed"):
+			return "subagent_permission_denied"
+		case strings.Contains(errText, "max turns") || strings.Contains(errText, "max steps"):
+			return "subagent_budget_exceeded"
+		case strings.Contains(errText, "output key") || strings.Contains(errText, "json"):
+			return "subagent_contract_violation"
+		default:
+			return "subagent_failed"
+		}
+	}
+	switch result.StopReason {
+	case subagent.StopReasonTimeout:
+		return "subagent_timeout"
+	case subagent.StopReasonMaxSteps:
+		return "subagent_budget_exceeded"
+	case subagent.StopReasonCanceled:
+		return "subagent_canceled"
+	default:
+		return "subagent_failed"
+	}
 }
 
 // resolveSpawnAllowedPaths 归一化路径白名单；为空时默认收敛到当前 workdir（或 "."）。
