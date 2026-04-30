@@ -32,6 +32,10 @@ type runtimeTodoLister interface {
 	ListTodos(ctx context.Context, sessionID string) (agentruntime.TodoSnapshot, error)
 }
 
+type runtimeSnapshotGetter interface {
+	GetRuntimeSnapshot(ctx context.Context, sessionID string) (agentruntime.RuntimeSnapshot, error)
+}
+
 // defaultBuildGatewayRuntimePort 构建网关运行时 RuntimePort 适配器，并返回对应资源清理函数。
 func defaultBuildGatewayRuntimePort(ctx context.Context, workdir string) (gateway.RuntimePort, func() error, error) {
 	bundle, err := app.BuildGatewayServerDeps(ctx, app.BootstrapOptions{Workdir: strings.TrimSpace(workdir)})
@@ -319,6 +323,29 @@ func (b *gatewayRuntimePortBridge) ListSessionTodos(
 	return convertRuntimeTodoSnapshot(buildRuntimeTodoSnapshotFromSessionTodos(session.ListTodos())), nil
 }
 
+// GetRuntimeSnapshot 查询会话 runtime 快照，供桌面端初始化与重连同步。
+func (b *gatewayRuntimePortBridge) GetRuntimeSnapshot(
+	ctx context.Context,
+	input gateway.GetRuntimeSnapshotInput,
+) (gateway.RuntimeSnapshot, error) {
+	if err := b.ensureRuntimeAccess(input.SubjectID); err != nil {
+		return gateway.RuntimeSnapshot{}, err
+	}
+	sessionID := strings.TrimSpace(input.SessionID)
+	if sessionID == "" {
+		return gateway.RuntimeSnapshot{}, gateway.ErrRuntimeResourceNotFound
+	}
+	getter, ok := b.runtime.(runtimeSnapshotGetter)
+	if !ok {
+		return gateway.RuntimeSnapshot{}, fmt.Errorf("gateway runtime bridge: runtime does not support runtime snapshot")
+	}
+	snapshot, err := getter.GetRuntimeSnapshot(ctx, sessionID)
+	if err != nil {
+		return gateway.RuntimeSnapshot{}, err
+	}
+	return convertRuntimeSnapshot(snapshot), nil
+}
+
 // CreateSession 创建或加载指定会话，并返回最终可用的会话标识。
 func (b *gatewayRuntimePortBridge) CreateSession(ctx context.Context, input gateway.CreateSessionInput) (string, error) {
 	if err := b.ensureRuntimeAccess(input.SubjectID); err != nil {
@@ -479,6 +506,34 @@ func convertRuntimeTodoSnapshot(snapshot agentruntime.TodoSnapshot) gateway.Todo
 			BlockedReason: strings.TrimSpace(item.BlockedReason),
 			Revision:      item.Revision,
 		})
+	}
+	return converted
+}
+
+func convertRuntimeSnapshot(snapshot agentruntime.RuntimeSnapshot) gateway.RuntimeSnapshot {
+	converted := gateway.RuntimeSnapshot{
+		RunID:     strings.TrimSpace(snapshot.RunID),
+		SessionID: strings.TrimSpace(snapshot.SessionID),
+		Phase:     strings.TrimSpace(snapshot.Phase),
+		TaskKind:  strings.TrimSpace(snapshot.TaskKind),
+		UpdatedAt: snapshot.UpdatedAt,
+		Todos:     convertRuntimeTodoSnapshot(snapshot.Todos),
+		Facts: map[string]any{
+			"runtime_facts": snapshot.Facts.RuntimeFacts,
+		},
+		Decision: map[string]any{
+			"status":                strings.TrimSpace(snapshot.Decision.Status),
+			"stop_reason":           strings.TrimSpace(snapshot.Decision.StopReason),
+			"missing_facts":         snapshot.Decision.MissingFacts,
+			"required_next_actions": snapshot.Decision.RequiredNextActions,
+			"user_visible_summary":  strings.TrimSpace(snapshot.Decision.UserVisibleSummary),
+			"internal_summary":      strings.TrimSpace(snapshot.Decision.InternalSummary),
+		},
+		SubAgents: map[string]any{
+			"started_count":   snapshot.SubAgents.StartedCount,
+			"completed_count": snapshot.SubAgents.CompletedCount,
+			"failed_count":    snapshot.SubAgents.FailedCount,
+		},
 	}
 	return converted
 }

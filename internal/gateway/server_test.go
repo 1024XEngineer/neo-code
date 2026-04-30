@@ -432,6 +432,13 @@ func (s *runtimePortEventStub) ListSessionTodos(_ context.Context, _ ListSession
 	return TodoSnapshot{}, nil
 }
 
+func (s *runtimePortEventStub) GetRuntimeSnapshot(
+	_ context.Context,
+	_ GetRuntimeSnapshotInput,
+) (RuntimeSnapshot, error) {
+	return RuntimeSnapshot{}, nil
+}
+
 func decodeJSONRPCResultFrame(response protocol.JSONRPCResponse) (MessageFrame, error) {
 	if response.Result == nil {
 		return MessageFrame{}, errors.New("rpc result is nil")

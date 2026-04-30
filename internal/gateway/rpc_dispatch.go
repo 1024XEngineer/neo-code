@@ -345,6 +345,7 @@ func requiresSession(action FrameAction) bool {
 		FrameActionCompact,
 		FrameActionLoadSession,
 		FrameActionListSessionTodos,
+		FrameActionGetRuntimeSnapshot,
 		FrameActionActivateSessionSkill,
 		FrameActionDeactivateSessionSkill,
 		FrameActionListSessionSkills:

@@ -151,6 +151,16 @@ type ListSessionTodosInput struct {
 	SessionID string
 }
 
+// GetRuntimeSnapshotInput 表示查询运行时统一快照动作输入。
+type GetRuntimeSnapshotInput struct {
+	// SubjectID 是请求方身份主体标识。
+	SubjectID string
+	// RequestID 是客户端请求标识。
+	RequestID string
+	// SessionID 是目标会话标识。
+	SessionID string
+}
+
 // CreateSessionInput 表示 gateway.createSession 动作的下游输入。
 type CreateSessionInput struct {
 	// SubjectID 是请求方身份主体标识。
@@ -268,6 +278,19 @@ type TodoSnapshot struct {
 	Summary TodoSummary    `json:"summary,omitempty"`
 }
 
+// RuntimeSnapshot 描述 runtime 对外暴露的统一运行状态快照。
+type RuntimeSnapshot struct {
+	RunID     string         `json:"run_id,omitempty"`
+	SessionID string         `json:"session_id"`
+	Phase     string         `json:"phase,omitempty"`
+	TaskKind  string         `json:"task_kind,omitempty"`
+	UpdatedAt time.Time      `json:"updated_at"`
+	Todos     TodoSnapshot   `json:"todos"`
+	Facts     map[string]any `json:"facts,omitempty"`
+	Decision  map[string]any `json:"decision,omitempty"`
+	SubAgents map[string]any `json:"subagents,omitempty"`
+}
+
 // SkillSource 描述技能来源元数据。
 type SkillSource struct {
 	// Kind 表示技能来源类型（local/builtin）。
@@ -344,6 +367,8 @@ type RuntimePort interface {
 	LoadSession(ctx context.Context, input LoadSessionInput) (Session, error)
 	// ListSessionTodos 返回指定会话的 Todo 快照。
 	ListSessionTodos(ctx context.Context, input ListSessionTodosInput) (TodoSnapshot, error)
+	// GetRuntimeSnapshot 返回指定会话的统一运行时快照。
+	GetRuntimeSnapshot(ctx context.Context, input GetRuntimeSnapshotInput) (RuntimeSnapshot, error)
 	// CreateSession 创建并返回可用会话标识。
 	CreateSession(ctx context.Context, input CreateSessionInput) (string, error)
 }

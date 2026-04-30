@@ -42,6 +42,8 @@ const (
 	MethodGatewayLoadSession = "gateway.loadSession"
 	// MethodGatewayListSessionTodos 表示查询会话 Todo 快照。
 	MethodGatewayListSessionTodos = "session.todos.list"
+	// MethodGatewayGetRuntimeSnapshot 表示查询会话 runtime 快照。
+	MethodGatewayGetRuntimeSnapshot = "runtime.snapshot.get"
 	// MethodGatewayResolvePermission 表示提交权限审批决策。
 	MethodGatewayResolvePermission = "gateway.resolvePermission"
 	// MethodGatewayEvent 表示网关向客户端推送运行时事件的通知方法。
@@ -221,6 +223,11 @@ type ListSessionTodosParams struct {
 	SessionID string `json:"session_id"`
 }
 
+// GetRuntimeSnapshotParams 表示 runtime.snapshot.get 参数。
+type GetRuntimeSnapshotParams struct {
+	SessionID string `json:"session_id"`
+}
+
 // ResolvePermissionParams 表示 gateway.resolvePermission 参数。
 type ResolvePermissionParams struct {
 	RequestID string `json:"request_id"`
@@ -376,6 +383,15 @@ func NormalizeJSONRPCRequest(request JSONRPCRequest) (NormalizedRequest, *JSONRP
 		normalized.SessionID = strings.TrimSpace(params.SessionID)
 		normalized.Payload = params
 		return normalized, nil
+	case MethodGatewayGetRuntimeSnapshot:
+		params, parseErr := decodeGetRuntimeSnapshotParams(request.Params)
+		if parseErr != nil {
+			return normalized, parseErr
+		}
+		normalized.Action = "runtime_snapshot_get"
+		normalized.SessionID = strings.TrimSpace(params.SessionID)
+		normalized.Payload = params
+		return normalized, nil
 	case MethodGatewayResolvePermission:
 		params, parseErr := decodeResolvePermissionParams(request.Params)
 		if parseErr != nil {
@@ -401,6 +417,35 @@ func NormalizeJSONRPCRequest(request JSONRPCRequest) (NormalizedRequest, *JSONRP
 			GatewayCodeUnsupportedAction,
 		)
 	}
+}
+
+// decodeGetRuntimeSnapshotParams 对 runtime.snapshot.get 的 params 执行反序列化与字段校验。
+func decodeGetRuntimeSnapshotParams(raw json.RawMessage) (GetRuntimeSnapshotParams, *JSONRPCError) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return GetRuntimeSnapshotParams{}, NewJSONRPCError(
+			JSONRPCCodeInvalidParams,
+			"missing required field: params",
+			GatewayCodeMissingRequiredField,
+		)
+	}
+	var params GetRuntimeSnapshotParams
+	if err := decodeStrictJSON(trimmed, &params); err != nil {
+		return GetRuntimeSnapshotParams{}, NewJSONRPCError(
+			JSONRPCCodeInvalidParams,
+			"invalid params for runtime.snapshot.get",
+			GatewayCodeInvalidFrame,
+		)
+	}
+	params.SessionID = strings.TrimSpace(params.SessionID)
+	if params.SessionID == "" {
+		return GetRuntimeSnapshotParams{}, NewJSONRPCError(
+			JSONRPCCodeInvalidParams,
+			"missing required field: params.session_id",
+			GatewayCodeMissingRequiredField,
+		)
+	}
+	return params, nil
 }
 
 // decodeListSessionTodosParams 对 session.todos.list 的 params 执行反序列化与字段校验。

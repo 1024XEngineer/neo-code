@@ -15,20 +15,21 @@ import (
 )
 
 type bootstrapRuntimeStub struct {
-	runFn               func(ctx context.Context, input RunInput) error
-	createSessionFn     func(ctx context.Context, input CreateSessionInput) (string, error)
-	compactFn           func(ctx context.Context, input CompactInput) (CompactResult, error)
-	executeSystemToolFn func(ctx context.Context, input ExecuteSystemToolInput) (tools.ToolResult, error)
-	activateSkillFn     func(ctx context.Context, input SessionSkillMutationInput) error
-	deactivateSkillFn   func(ctx context.Context, input SessionSkillMutationInput) error
-	listSessionSkillsFn func(ctx context.Context, input ListSessionSkillsInput) ([]SessionSkillState, error)
-	listAvailableFn     func(ctx context.Context, input ListAvailableSkillsInput) ([]AvailableSkillState, error)
-	resolvePermissionFn func(ctx context.Context, input PermissionResolutionInput) error
-	cancelRunFn         func(ctx context.Context, input CancelInput) (bool, error)
-	events              <-chan RuntimeEvent
-	listSessionsFn      func(ctx context.Context) ([]SessionSummary, error)
-	loadSessionFn       func(ctx context.Context, input LoadSessionInput) (Session, error)
-	listSessionTodosFn  func(ctx context.Context, input ListSessionTodosInput) (TodoSnapshot, error)
+	runFn                func(ctx context.Context, input RunInput) error
+	createSessionFn      func(ctx context.Context, input CreateSessionInput) (string, error)
+	compactFn            func(ctx context.Context, input CompactInput) (CompactResult, error)
+	executeSystemToolFn  func(ctx context.Context, input ExecuteSystemToolInput) (tools.ToolResult, error)
+	activateSkillFn      func(ctx context.Context, input SessionSkillMutationInput) error
+	deactivateSkillFn    func(ctx context.Context, input SessionSkillMutationInput) error
+	listSessionSkillsFn  func(ctx context.Context, input ListSessionSkillsInput) ([]SessionSkillState, error)
+	listAvailableFn      func(ctx context.Context, input ListAvailableSkillsInput) ([]AvailableSkillState, error)
+	resolvePermissionFn  func(ctx context.Context, input PermissionResolutionInput) error
+	cancelRunFn          func(ctx context.Context, input CancelInput) (bool, error)
+	events               <-chan RuntimeEvent
+	listSessionsFn       func(ctx context.Context) ([]SessionSummary, error)
+	loadSessionFn        func(ctx context.Context, input LoadSessionInput) (Session, error)
+	listSessionTodosFn   func(ctx context.Context, input ListSessionTodosInput) (TodoSnapshot, error)
+	getRuntimeSnapshotFn func(ctx context.Context, input GetRuntimeSnapshotInput) (RuntimeSnapshot, error)
 }
 
 func (s *bootstrapRuntimeStub) Run(ctx context.Context, input RunInput) error {
@@ -136,6 +137,16 @@ func (s *bootstrapRuntimeStub) ListSessionTodos(ctx context.Context, input ListS
 		return s.listSessionTodosFn(ctx, input)
 	}
 	return TodoSnapshot{}, nil
+}
+
+func (s *bootstrapRuntimeStub) GetRuntimeSnapshot(
+	ctx context.Context,
+	input GetRuntimeSnapshotInput,
+) (RuntimeSnapshot, error) {
+	if s != nil && s.getRuntimeSnapshotFn != nil {
+		return s.getRuntimeSnapshotFn(ctx, input)
+	}
+	return RuntimeSnapshot{}, nil
 }
 
 func TestDispatchRequestFramePing(t *testing.T) {
