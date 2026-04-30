@@ -644,7 +644,10 @@ func TestNoToolIncompleteTurnStillEvaluatesProgressAndInjectsReminder(t *testing
 	}
 	foundReminder := false
 	for _, message := range providerImpl.requests[1].Messages {
-		if message.Role == providertypes.RoleSystem && strings.Contains(renderPartsForTest(message.Parts), finalContinueReminder) {
+		content := renderPartsForTest(message.Parts)
+		if message.Role == providertypes.RoleSystem &&
+			strings.Contains(content, "<acceptance_continue>") &&
+			strings.Contains(content, "MUST call todo_write") {
 			foundReminder = true
 			break
 		}
