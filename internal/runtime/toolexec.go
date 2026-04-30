@@ -8,6 +8,7 @@ import (
 
 	providertypes "neo-code/internal/provider/types"
 	runtimehooks "neo-code/internal/runtime/hooks"
+	agentsession "neo-code/internal/session"
 	"neo-code/internal/tools"
 )
 
@@ -269,15 +270,25 @@ func (s *Service) emitTodoToolEvent(
 	}
 
 	action, _ := result.Metadata["action"].(string)
-	if execErr == nil {
-		s.emitRunScoped(ctx, EventTodoUpdated, state, TodoEventPayload{Action: action})
+	payload := buildTodoEventPayload(state, strings.TrimSpace(action), "")
+	if execErr == nil && !result.IsError {
+		s.emitRunScoped(ctx, EventTodoUpdated, state, payload)
 		return
 	}
 
 	reason, _ := result.Metadata["reason_code"].(string)
-	if strings.Contains(strings.ToLower(strings.TrimSpace(reason)), "conflict") {
-		s.emitRunScoped(ctx, EventTodoConflict, state, TodoEventPayload{Action: action, Reason: reason})
+	reason = strings.TrimSpace(reason)
+	if reason == "" && execErr != nil {
+		reason = strings.TrimSpace(execErr.Error())
 	}
+	if reason == "" {
+		reason = strings.TrimSpace(result.ErrorClass)
+	}
+	if reason == "" {
+		reason = "todo_write_failed"
+	}
+	payload.Reason = reason
+	s.emitRunScoped(ctx, EventTodoConflict, state, payload)
 }
 
 // hasSuccessfulWorkspaceWriteFact 判断工具结果是否产出了成功写入事实。
@@ -294,6 +305,52 @@ func summarizeHookResultContent(content string) string {
 		return trimmed
 	}
 	return trimmed[:256]
+}
+
+// buildTodoEventPayload 构建 todo 事件快照，确保 UI 可即时渲染结构化收敛信息。
+func buildTodoEventPayload(state *runState, action string, reason string) TodoEventPayload {
+	payload := TodoEventPayload{
+		Action: strings.TrimSpace(action),
+		Reason: strings.TrimSpace(reason),
+	}
+	if state == nil {
+		return payload
+	}
+
+	state.mu.Lock()
+	todos := cloneTodosForPersistence(state.session.Todos)
+	state.mu.Unlock()
+
+	if len(todos) == 0 {
+		return payload
+	}
+
+	snapshots := make([]TodoSnapshotPayload, 0, len(todos))
+	requiredTotal := 0
+	requiredCompleted := 0
+	for _, item := range todos {
+		required := item.RequiredValue()
+		if required {
+			requiredTotal++
+			if item.Status == agentsession.TodoStatusCompleted {
+				requiredCompleted++
+			}
+		}
+		snapshots = append(snapshots, TodoSnapshotPayload{
+			ID:            strings.TrimSpace(item.ID),
+			Content:       strings.TrimSpace(item.Content),
+			Status:        strings.TrimSpace(string(item.Status)),
+			Required:      required,
+			Artifacts:     append([]string(nil), item.Artifacts...),
+			FailureReason: strings.TrimSpace(item.FailureReason),
+			BlockedReason: strings.TrimSpace(string(item.BlockedReasonValue())),
+		})
+	}
+	payload.Todos = snapshots
+	payload.RequiredTotal = requiredTotal
+	payload.RequiredCompleted = requiredCompleted
+	payload.RequiredOpen = requiredTotal - requiredCompleted
+	return payload
 }
 
 // emitAfterToolResultHook 在工具结果确定后触发 after_tool_result 挂点，仅提供只读摘要元信息。
