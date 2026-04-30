@@ -61,7 +61,8 @@ type StopReasonDecidedPayload struct {
 
 // VerificationStartedPayload 描述 final 验收验证开始事件。
 type VerificationStartedPayload struct {
-	CompletionPassed bool `json:"completion_passed"`
+	CompletionPassed        bool   `json:"completion_passed"`
+	CompletionBlockedReason string `json:"completion_blocked_reason,omitempty"`
 }
 
 // VerificationStageFinishedPayload 描述单个 verifier 阶段完成事件。
@@ -93,12 +94,13 @@ type VerificationFailedPayload struct {
 
 // AcceptanceDecidedPayload 描述 acceptance engine 决议结果。
 type AcceptanceDecidedPayload struct {
-	Status             acceptance.AcceptanceStatus `json:"status"`
-	StopReason         controlplane.StopReason     `json:"stop_reason,omitempty"`
-	ErrorClass         verify.ErrorClass           `json:"error_class,omitempty"`
-	UserVisibleSummary string                      `json:"user_visible_summary,omitempty"`
-	InternalSummary    string                      `json:"internal_summary,omitempty"`
-	ContinueHint       string                      `json:"continue_hint,omitempty"`
+	Status                  acceptance.AcceptanceStatus `json:"status"`
+	StopReason              controlplane.StopReason     `json:"stop_reason,omitempty"`
+	ErrorClass              verify.ErrorClass           `json:"error_class,omitempty"`
+	CompletionBlockedReason string                      `json:"completion_blocked_reason,omitempty"`
+	UserVisibleSummary      string                      `json:"user_visible_summary,omitempty"`
+	InternalSummary         string                      `json:"internal_summary,omitempty"`
+	ContinueHint            string                      `json:"continue_hint,omitempty"`
 }
 
 // LedgerReconciledPayload 为账本对账预留负载。
@@ -192,10 +194,25 @@ type SessionSkillEventPayload struct {
 	SkillID string `json:"skill_id"`
 }
 
+// TodoSnapshotPayload 描述 todo 快照摘要，供 UI 与日志侧快速定位收敛状态。
+type TodoSnapshotPayload struct {
+	ID            string   `json:"id"`
+	Content       string   `json:"content"`
+	Status        string   `json:"status"`
+	Required      bool     `json:"required"`
+	Artifacts     []string `json:"artifacts,omitempty"`
+	FailureReason string   `json:"failure_reason,omitempty"`
+	BlockedReason string   `json:"blocked_reason,omitempty"`
+}
+
 // TodoEventPayload 描述 todo_write 相关事件。
 type TodoEventPayload struct {
-	Action string `json:"action"`
-	Reason string `json:"reason,omitempty"`
+	Action            string                `json:"action"`
+	Reason            string                `json:"reason,omitempty"`
+	Todos             []TodoSnapshotPayload `json:"todos,omitempty"`
+	RequiredTotal     int                   `json:"required_total"`
+	RequiredCompleted int                   `json:"required_completed"`
+	RequiredOpen      int                   `json:"required_open"`
 }
 
 // InputNormalizedPayload 描述输入归一化完成后的摘要信息。

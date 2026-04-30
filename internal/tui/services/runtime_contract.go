@@ -223,7 +223,8 @@ type StopReasonDecidedPayload struct {
 
 // VerificationStartedPayload 描述 final 验证阶段开始。
 type VerificationStartedPayload struct {
-	CompletionPassed bool `json:"completion_passed"`
+	CompletionPassed        bool   `json:"completion_passed"`
+	CompletionBlockedReason string `json:"completion_blocked_reason,omitempty"`
 }
 
 // VerificationStageFinishedPayload 描述单个 verifier 阶段结果。
@@ -255,12 +256,13 @@ type VerificationFailedPayload struct {
 
 // AcceptanceDecidedPayload 描述 acceptance 引擎输出。
 type AcceptanceDecidedPayload struct {
-	Status             string     `json:"status"`
-	StopReason         StopReason `json:"stop_reason,omitempty"`
-	ErrorClass         string     `json:"error_class,omitempty"`
-	UserVisibleSummary string     `json:"user_visible_summary,omitempty"`
-	InternalSummary    string     `json:"internal_summary,omitempty"`
-	ContinueHint       string     `json:"continue_hint,omitempty"`
+	Status                  string     `json:"status"`
+	StopReason              StopReason `json:"stop_reason,omitempty"`
+	ErrorClass              string     `json:"error_class,omitempty"`
+	CompletionBlockedReason string     `json:"completion_blocked_reason,omitempty"`
+	UserVisibleSummary      string     `json:"user_visible_summary,omitempty"`
+	InternalSummary         string     `json:"internal_summary,omitempty"`
+	ContinueHint            string     `json:"continue_hint,omitempty"`
 }
 
 // TokenUsagePayload 描述 runtime 当前 token_usage 事件载荷。
@@ -274,10 +276,25 @@ type TokenUsagePayload struct {
 	SessionOutputTokens int    `json:"session_output_tokens"`
 }
 
+// TodoSnapshotPayload 描述 todo 列表中单项快照。
+type TodoSnapshotPayload struct {
+	ID            string   `json:"id"`
+	Content       string   `json:"content"`
+	Status        string   `json:"status"`
+	Required      bool     `json:"required"`
+	Artifacts     []string `json:"artifacts,omitempty"`
+	FailureReason string   `json:"failure_reason,omitempty"`
+	BlockedReason string   `json:"blocked_reason,omitempty"`
+}
+
 // TodoEventPayload 描述 todo 相关事件载荷。
 type TodoEventPayload struct {
-	Action string `json:"action"`
-	Reason string `json:"reason,omitempty"`
+	Action            string                `json:"action"`
+	Reason            string                `json:"reason,omitempty"`
+	Todos             []TodoSnapshotPayload `json:"todos,omitempty"`
+	RequiredTotal     int                   `json:"required_total"`
+	RequiredCompleted int                   `json:"required_completed"`
+	RequiredOpen      int                   `json:"required_open"`
 }
 
 // SubAgentEventPayload 描述子代理执行生命周期事件载荷。

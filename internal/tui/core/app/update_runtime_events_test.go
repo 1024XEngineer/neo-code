@@ -518,6 +518,16 @@ func TestRuntimeEventVerificationAndAcceptanceHandlers(t *testing.T) {
 	if app.runProgressValue != 0.88 {
 		t.Fatalf("progress value = %v, want 0.88 when completion passed", app.runProgressValue)
 	}
+	runtimeEventVerificationStartedHandler(&app, agentruntime.RuntimeEvent{
+		Payload: agentruntime.VerificationStartedPayload{
+			CompletionPassed:        false,
+			CompletionBlockedReason: "pending_todo",
+		},
+	})
+	verificationStarted := app.activities[len(app.activities)-1]
+	if !strings.Contains(verificationStarted.Detail, "reason=pending_todo") {
+		t.Fatalf("expected verification started detail to include blocked reason, got %+v", verificationStarted)
+	}
 
 	if handled := runtimeEventVerificationStageFinishedHandler(&app, agentruntime.RuntimeEvent{Payload: 1}); handled {
 		t.Fatalf("expected invalid stage payload to return false")
@@ -578,14 +588,15 @@ func TestRuntimeEventVerificationAndAcceptanceHandlers(t *testing.T) {
 	}
 	runtimeEventAcceptanceDecidedHandler(&app, agentruntime.RuntimeEvent{
 		Payload: agentruntime.AcceptanceDecidedPayload{
-			Status:             "failed",
-			UserVisibleSummary: "",
-			InternalSummary:    "",
-			ContinueHint:       "provide missing files",
+			Status:                  "failed",
+			UserVisibleSummary:      "",
+			InternalSummary:         "",
+			ContinueHint:            "provide missing files",
+			CompletionBlockedReason: "unverified_write",
 		},
 	})
 	acceptance := app.activities[len(app.activities)-1]
-	if acceptance.Title != "Acceptance decided (failed)" || acceptance.Detail != "provide missing files" || !acceptance.IsError {
+	if acceptance.Title != "Acceptance decided (failed)" || !strings.Contains(acceptance.Detail, "reason=unverified_write") || !acceptance.IsError {
 		t.Fatalf("unexpected acceptance activity: %+v", acceptance)
 	}
 }

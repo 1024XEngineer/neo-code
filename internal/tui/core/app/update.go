@@ -2297,7 +2297,11 @@ func runtimeEventVerificationStartedHandler(a *App, event tuiservices.RuntimeEve
 		progress = 0.88
 	}
 	a.setRunProgress(progress, "Verifying acceptance")
-	a.appendActivity("verify", "Verification started", fmt.Sprintf("completion_passed=%t", payload.CompletionPassed), false)
+	detail := fmt.Sprintf("completion_passed=%t", payload.CompletionPassed)
+	if reason := strings.TrimSpace(payload.CompletionBlockedReason); reason != "" {
+		detail = detail + " reason=" + reason
+	}
+	a.appendActivity("verify", "Verification started", detail, false)
 	return false
 }
 
@@ -2386,6 +2390,9 @@ func runtimeEventAcceptanceDecidedHandler(a *App, event tuiservices.RuntimeEvent
 	}
 	if detail == "" {
 		detail = "acceptance decision generated"
+	}
+	if reason := strings.TrimSpace(payload.CompletionBlockedReason); reason != "" {
+		detail = detail + " (reason=" + reason + ")"
 	}
 	isError := strings.EqualFold(status, "failed")
 	a.appendActivity("acceptance", "Acceptance decided ("+status+")", detail, isError)
@@ -2502,7 +2509,17 @@ func runtimeEventTodoUpdatedHandler(a *App, event tuiservices.RuntimeEvent) bool
 	if action == "" {
 		action = "update"
 	}
-	a.appendActivity("todo", "Todo updated", action, false)
+	detail := action
+	if payload.RequiredTotal > 0 {
+		detail = fmt.Sprintf(
+			"%s (required %d/%d open=%d)",
+			action,
+			payload.RequiredCompleted,
+			payload.RequiredTotal,
+			payload.RequiredOpen,
+		)
+	}
+	a.appendActivity("todo", "Todo updated", detail, false)
 	return false
 }
 
@@ -2524,6 +2541,15 @@ func runtimeEventTodoConflictHandler(a *App, event tuiservices.RuntimeEvent) boo
 	reason := strings.TrimSpace(payload.Reason)
 	if reason == "" {
 		reason = "todo conflict"
+	}
+	if payload.RequiredTotal > 0 {
+		reason = fmt.Sprintf(
+			"%s (required %d/%d open=%d)",
+			reason,
+			payload.RequiredCompleted,
+			payload.RequiredTotal,
+			payload.RequiredOpen,
+		)
 	}
 	a.appendActivity("todo", "Todo conflict", reason, true)
 	return false
@@ -2597,6 +2623,10 @@ func parseTodoEventPayload(payload any) (tuiservices.TodoEventPayload, bool) {
 	case map[string]any:
 		action := ""
 		reason := ""
+		requiredTotal := 0
+		requiredCompleted := 0
+		requiredOpen := 0
+		todos := make([]tuiservices.TodoSnapshotPayload, 0)
 		if raw, ok := typed["Action"]; ok && raw != nil {
 			action = strings.TrimSpace(fmt.Sprintf("%v", raw))
 		}
@@ -2613,9 +2643,136 @@ func parseTodoEventPayload(payload any) (tuiservices.TodoEventPayload, bool) {
 				reason = strings.TrimSpace(fmt.Sprintf("%v", raw))
 			}
 		}
-		return tuiservices.TodoEventPayload{Action: action, Reason: reason}, true
+		if raw, ok := typed["required_total"]; ok {
+			requiredTotal = coerceInt(raw)
+		}
+		if raw, ok := typed["required_completed"]; ok {
+			requiredCompleted = coerceInt(raw)
+		}
+		if raw, ok := typed["required_open"]; ok {
+			requiredOpen = coerceInt(raw)
+		}
+		if raw, ok := typed["todos"]; ok {
+			todos = coerceTodoSnapshots(raw)
+		}
+		return tuiservices.TodoEventPayload{
+			Action:            action,
+			Reason:            reason,
+			Todos:             todos,
+			RequiredTotal:     requiredTotal,
+			RequiredCompleted: requiredCompleted,
+			RequiredOpen:      requiredOpen,
+		}, true
 	default:
 		return tuiservices.TodoEventPayload{}, false
+	}
+}
+
+// coerceInt 将 map 反序列化后的数字值统一转换为 int，供事件兼容解析使用。
+func coerceInt(value any) int {
+	switch typed := value.(type) {
+	case int:
+		return typed
+	case int8:
+		return int(typed)
+	case int16:
+		return int(typed)
+	case int32:
+		return int(typed)
+	case int64:
+		return int(typed)
+	case float32:
+		return int(typed)
+	case float64:
+		return int(typed)
+	default:
+		return 0
+	}
+}
+
+// coerceTodoSnapshots 将动态 payload 中的 todos 字段转换为强类型快照列表。
+func coerceTodoSnapshots(value any) []tuiservices.TodoSnapshotPayload {
+	rawList, ok := value.([]any)
+	if !ok || len(rawList) == 0 {
+		return nil
+	}
+	snapshots := make([]tuiservices.TodoSnapshotPayload, 0, len(rawList))
+	for _, raw := range rawList {
+		item, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		snapshot := tuiservices.TodoSnapshotPayload{
+			ID:            mapStringValue(item, "id"),
+			Content:       mapStringValue(item, "content"),
+			Status:        mapStringValue(item, "status"),
+			Required:      coerceBool(item["required"]),
+			FailureReason: mapStringValue(item, "failure_reason"),
+			BlockedReason: mapStringValue(item, "blocked_reason"),
+		}
+		if rawArtifacts, exists := item["artifacts"]; exists {
+			snapshot.Artifacts = coerceStringSlice(rawArtifacts)
+		}
+		snapshots = append(snapshots, snapshot)
+	}
+	if len(snapshots) == 0 {
+		return nil
+	}
+	return snapshots
+}
+
+// mapStringValue 从 map 中安全读取字符串字段，避免缺失键被格式化为 "<nil>"。
+func mapStringValue(values map[string]any, key string) string {
+	raw, ok := values[key]
+	if !ok || raw == nil {
+		return ""
+	}
+	return strings.TrimSpace(fmt.Sprintf("%v", raw))
+}
+
+// coerceBool 将动态 payload 中的布尔值做兼容解析。
+func coerceBool(value any) bool {
+	switch typed := value.(type) {
+	case bool:
+		return typed
+	case string:
+		return strings.EqualFold(strings.TrimSpace(typed), "true")
+	default:
+		return false
+	}
+}
+
+// coerceStringSlice 将动态数组字段转换为去空白后的字符串列表。
+func coerceStringSlice(value any) []string {
+	switch typed := value.(type) {
+	case []string:
+		out := make([]string, 0, len(typed))
+		for _, entry := range typed {
+			trimmed := strings.TrimSpace(entry)
+			if trimmed == "" {
+				continue
+			}
+			out = append(out, trimmed)
+		}
+		if len(out) == 0 {
+			return nil
+		}
+		return out
+	case []any:
+		out := make([]string, 0, len(typed))
+		for _, entry := range typed {
+			trimmed := strings.TrimSpace(fmt.Sprintf("%v", entry))
+			if trimmed == "" {
+				continue
+			}
+			out = append(out, trimmed)
+		}
+		if len(out) == 0 {
+			return nil
+		}
+		return out
+	default:
+		return nil
 	}
 }
 
