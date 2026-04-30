@@ -2,11 +2,13 @@ package runtime
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"neo-code/internal/config"
 	providertypes "neo-code/internal/provider/types"
 	"neo-code/internal/runtime/acceptance"
+	"neo-code/internal/runtime/verify"
 	agentsession "neo-code/internal/session"
 )
 
@@ -130,6 +132,56 @@ func TestFinalAcceptanceHelpers(t *testing.T) {
 		applyAcceptanceResultProgress(&state, acceptance.AcceptanceDecision{Status: acceptance.AcceptanceContinue})
 		if state.finalInterceptStreak != 1 {
 			t.Fatalf("streak = %d, want 1", state.finalInterceptStreak)
+		}
+	})
+
+	t.Run("buildAcceptanceContinueHint includes actionable evidence and tool requirement", func(t *testing.T) {
+		t.Parallel()
+		decision := acceptance.AcceptanceDecision{
+			Status: acceptance.AcceptanceContinue,
+			VerifierResults: []verify.VerificationResult{
+				{
+					Name:    "todo_convergence",
+					Status:  verify.VerificationSoftBlock,
+					Summary: "required todos are not converged",
+					Reason:  "required todos are still pending, in progress, or internally blocked",
+					Evidence: map[string]any{
+						"pending_ids":     []string{"todo-2", "todo-1"},
+						"in_progress_ids": []string{"todo-3"},
+						"blocked_ids":     []string{"todo-4"},
+					},
+				},
+			},
+		}
+		hint := buildAcceptanceContinueHint(decision)
+		if !strings.Contains(hint, "<acceptance_continue>") {
+			t.Fatalf("hint should contain acceptance xml envelope, got %q", hint)
+		}
+		if !strings.Contains(hint, "MUST call todo_write") {
+			t.Fatalf("hint should force tool-based facts, got %q", hint)
+		}
+		if !strings.Contains(hint, "<pending_ids>todo-1,todo-2</pending_ids>") {
+			t.Fatalf("hint should include sorted pending ids, got %q", hint)
+		}
+	})
+
+	t.Run("synthesizeTodoConvergenceEvidence projects required todos", func(t *testing.T) {
+		t.Parallel()
+		required := true
+		result := synthesizeTodoConvergenceEvidence([]agentsession.TodoItem{
+			{ID: "todo-1", Content: "a", Status: agentsession.TodoStatusPending, Required: &required},
+			{ID: "todo-2", Content: "b", Status: agentsession.TodoStatusInProgress, Required: &required},
+			{ID: "todo-3", Content: "c", Status: agentsession.TodoStatusCompleted, Required: &required},
+		})
+		if result == nil {
+			t.Fatal("expected synthetic verifier result")
+		}
+		if result.Name != "todo_convergence" || result.Status != verify.VerificationSoftBlock {
+			t.Fatalf("unexpected synthetic result: %+v", *result)
+		}
+		pending, _ := result.Evidence["pending_ids"].([]string)
+		if len(pending) != 1 || pending[0] != "todo-1" {
+			t.Fatalf("pending ids = %+v, want [todo-1]", pending)
 		}
 	})
 }
