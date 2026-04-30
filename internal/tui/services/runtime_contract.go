@@ -213,6 +213,8 @@ const (
 	StopReasonVerificationExecutionDenied StopReason = "verification_execution_denied"
 	// StopReasonVerificationExecutionError 表示 verification 命令执行异常。
 	StopReasonVerificationExecutionError StopReason = "verification_execution_error"
+	// StopReasonRequiredTodoFailed 表示 required todo 已失败终止。
+	StopReasonRequiredTodoFailed StopReason = "required_todo_failed"
 )
 
 // StopReasonDecidedPayload 描述停止原因决策结果。
@@ -276,8 +278,8 @@ type TokenUsagePayload struct {
 	SessionOutputTokens int    `json:"session_output_tokens"`
 }
 
-// TodoSnapshotPayload 描述 todo 列表中单项快照。
-type TodoSnapshotPayload struct {
+// TodoViewItem 描述 todo 列表中单项快照。
+type TodoViewItem struct {
 	ID            string   `json:"id"`
 	Content       string   `json:"content"`
 	Status        string   `json:"status"`
@@ -285,16 +287,24 @@ type TodoSnapshotPayload struct {
 	Artifacts     []string `json:"artifacts,omitempty"`
 	FailureReason string   `json:"failure_reason,omitempty"`
 	BlockedReason string   `json:"blocked_reason,omitempty"`
+	Revision      int64    `json:"revision"`
+}
+
+// TodoSummary 描述 todo 收敛摘要。
+type TodoSummary struct {
+	Total             int `json:"total"`
+	RequiredTotal     int `json:"required_total"`
+	RequiredCompleted int `json:"required_completed"`
+	RequiredFailed    int `json:"required_failed"`
+	RequiredOpen      int `json:"required_open"`
 }
 
 // TodoEventPayload 描述 todo 相关事件载荷。
 type TodoEventPayload struct {
-	Action            string                `json:"action"`
-	Reason            string                `json:"reason,omitempty"`
-	Todos             []TodoSnapshotPayload `json:"todos,omitempty"`
-	RequiredTotal     int                   `json:"required_total"`
-	RequiredCompleted int                   `json:"required_completed"`
-	RequiredOpen      int                   `json:"required_open"`
+	Action  string       `json:"action"`
+	Reason  string       `json:"reason,omitempty"`
+	Items   []TodoViewItem `json:"items,omitempty"`
+	Summary TodoSummary  `json:"summary,omitempty"`
 }
 
 // SubAgentEventPayload 描述子代理执行生命周期事件载荷。

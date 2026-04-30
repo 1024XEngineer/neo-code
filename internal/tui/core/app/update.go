@@ -2448,6 +2448,7 @@ func runtimeEventStopReasonDecidedHandler(a *App, event tuiservices.RuntimeEvent
 		a.state.StatusText = statusCanceled
 		a.appendActivity("run", "Canceled current run", "", false)
 	case strings.ToLower(string(tuiservices.StopReasonVerificationFailed)),
+		strings.ToLower(string(tuiservices.StopReasonRequiredTodoFailed)),
 		strings.ToLower(string(tuiservices.StopReasonVerificationExecutionDenied)),
 		strings.ToLower(string(tuiservices.StopReasonVerificationExecutionError)):
 		detail := strings.TrimSpace(payload.Detail)
@@ -2499,24 +2500,27 @@ func runtimeEventTodoUpdatedHandler(a *App, event tuiservices.RuntimeEvent) bool
 		return false
 	}
 
-	if err := a.refreshTodosFromSession(sessionID); err != nil {
+	payload, _ := parseTodoEventPayload(event.Payload)
+	if len(payload.Items) > 0 {
+		a.syncTodosFromEventItems(payload.Items)
+	} else if err := a.refreshTodosFromSession(sessionID); err != nil {
 		a.appendActivity("todo", "Failed to refresh todo panel", err.Error(), true)
 		return false
 	}
-
-	payload, _ := parseTodoEventPayload(event.Payload)
+	a.state.StatusText = formatTodoSummaryStatus(payload.Summary)
 	action := strings.TrimSpace(payload.Action)
 	if action == "" {
 		action = "update"
 	}
 	detail := action
-	if payload.RequiredTotal > 0 {
+	if payload.Summary.RequiredTotal > 0 {
 		detail = fmt.Sprintf(
-			"%s (required %d/%d open=%d)",
+			"%s (required %d/%d open=%d failed=%d)",
 			action,
-			payload.RequiredCompleted,
-			payload.RequiredTotal,
-			payload.RequiredOpen,
+			payload.Summary.RequiredCompleted,
+			payload.Summary.RequiredTotal,
+			payload.Summary.RequiredOpen,
+			payload.Summary.RequiredFailed,
 		)
 	}
 	a.appendActivity("todo", "Todo updated", detail, false)
@@ -2532,23 +2536,26 @@ func runtimeEventTodoConflictHandler(a *App, event tuiservices.RuntimeEvent) boo
 		return false
 	}
 
-	if err := a.refreshTodosFromSession(sessionID); err != nil {
+	payload, _ := parseTodoEventPayload(event.Payload)
+	if len(payload.Items) > 0 {
+		a.syncTodosFromEventItems(payload.Items)
+	} else if err := a.refreshTodosFromSession(sessionID); err != nil {
 		a.appendActivity("todo", "Failed to refresh todo panel", err.Error(), true)
 		return false
 	}
-
-	payload, _ := parseTodoEventPayload(event.Payload)
+	a.state.StatusText = formatTodoSummaryStatus(payload.Summary)
 	reason := strings.TrimSpace(payload.Reason)
 	if reason == "" {
 		reason = "todo conflict"
 	}
-	if payload.RequiredTotal > 0 {
+	if payload.Summary.RequiredTotal > 0 {
 		reason = fmt.Sprintf(
-			"%s (required %d/%d open=%d)",
+			"%s (required %d/%d open=%d failed=%d)",
 			reason,
-			payload.RequiredCompleted,
-			payload.RequiredTotal,
-			payload.RequiredOpen,
+			payload.Summary.RequiredCompleted,
+			payload.Summary.RequiredTotal,
+			payload.Summary.RequiredOpen,
+			payload.Summary.RequiredFailed,
 		)
 	}
 	a.appendActivity("todo", "Todo conflict", reason, true)
@@ -2623,10 +2630,8 @@ func parseTodoEventPayload(payload any) (tuiservices.TodoEventPayload, bool) {
 	case map[string]any:
 		action := ""
 		reason := ""
-		requiredTotal := 0
-		requiredCompleted := 0
-		requiredOpen := 0
-		todos := make([]tuiservices.TodoSnapshotPayload, 0)
+		summary := tuiservices.TodoSummary{}
+		items := make([]tuiservices.TodoViewItem, 0)
 		if raw, ok := typed["Action"]; ok && raw != nil {
 			action = strings.TrimSpace(fmt.Sprintf("%v", raw))
 		}
@@ -2643,25 +2648,34 @@ func parseTodoEventPayload(payload any) (tuiservices.TodoEventPayload, bool) {
 				reason = strings.TrimSpace(fmt.Sprintf("%v", raw))
 			}
 		}
-		if raw, ok := typed["required_total"]; ok {
-			requiredTotal = coerceInt(raw)
+		if raw, ok := typed["summary"]; ok {
+			summary = coerceTodoSummary(raw)
 		}
-		if raw, ok := typed["required_completed"]; ok {
-			requiredCompleted = coerceInt(raw)
+		if raw, ok := typed["required_total"]; ok && summary.RequiredTotal == 0 {
+			summary.RequiredTotal = coerceInt(raw)
 		}
-		if raw, ok := typed["required_open"]; ok {
-			requiredOpen = coerceInt(raw)
+		if raw, ok := typed["required_completed"]; ok && summary.RequiredCompleted == 0 {
+			summary.RequiredCompleted = coerceInt(raw)
 		}
-		if raw, ok := typed["todos"]; ok {
-			todos = coerceTodoSnapshots(raw)
+		if raw, ok := typed["required_open"]; ok && summary.RequiredOpen == 0 {
+			summary.RequiredOpen = coerceInt(raw)
+		}
+		if raw, ok := typed["required_failed"]; ok && summary.RequiredFailed == 0 {
+			summary.RequiredFailed = coerceInt(raw)
+		}
+		if raw, ok := typed["total"]; ok && summary.Total == 0 {
+			summary.Total = coerceInt(raw)
+		}
+		if raw, ok := typed["items"]; ok {
+			items = coerceTodoItems(raw)
+		} else if raw, ok := typed["todos"]; ok {
+			items = coerceTodoItems(raw)
 		}
 		return tuiservices.TodoEventPayload{
-			Action:            action,
-			Reason:            reason,
-			Todos:             todos,
-			RequiredTotal:     requiredTotal,
-			RequiredCompleted: requiredCompleted,
-			RequiredOpen:      requiredOpen,
+			Action:  action,
+			Reason:  reason,
+			Items:   items,
+			Summary: summary,
 		}, true
 	default:
 		return tuiservices.TodoEventPayload{}, false
@@ -2691,24 +2705,25 @@ func coerceInt(value any) int {
 }
 
 // coerceTodoSnapshots 将动态 payload 中的 todos 字段转换为强类型快照列表。
-func coerceTodoSnapshots(value any) []tuiservices.TodoSnapshotPayload {
+func coerceTodoItems(value any) []tuiservices.TodoViewItem {
 	rawList, ok := value.([]any)
 	if !ok || len(rawList) == 0 {
 		return nil
 	}
-	snapshots := make([]tuiservices.TodoSnapshotPayload, 0, len(rawList))
+	snapshots := make([]tuiservices.TodoViewItem, 0, len(rawList))
 	for _, raw := range rawList {
 		item, ok := raw.(map[string]any)
 		if !ok {
 			continue
 		}
-		snapshot := tuiservices.TodoSnapshotPayload{
+		snapshot := tuiservices.TodoViewItem{
 			ID:            mapStringValue(item, "id"),
 			Content:       mapStringValue(item, "content"),
 			Status:        mapStringValue(item, "status"),
 			Required:      coerceBool(item["required"]),
 			FailureReason: mapStringValue(item, "failure_reason"),
 			BlockedReason: mapStringValue(item, "blocked_reason"),
+			Revision:      int64(coerceInt(item["revision"])),
 		}
 		if rawArtifacts, exists := item["artifacts"]; exists {
 			snapshot.Artifacts = coerceStringSlice(rawArtifacts)
@@ -2719,6 +2734,60 @@ func coerceTodoSnapshots(value any) []tuiservices.TodoSnapshotPayload {
 		return nil
 	}
 	return snapshots
+}
+
+func coerceTodoSummary(value any) tuiservices.TodoSummary {
+	item, ok := value.(map[string]any)
+	if !ok {
+		return tuiservices.TodoSummary{}
+	}
+	return tuiservices.TodoSummary{
+		Total:             coerceInt(item["total"]),
+		RequiredTotal:     coerceInt(item["required_total"]),
+		RequiredCompleted: coerceInt(item["required_completed"]),
+		RequiredFailed:    coerceInt(item["required_failed"]),
+		RequiredOpen:      coerceInt(item["required_open"]),
+	}
+}
+
+func (a *App) syncTodosFromEventItems(items []tuiservices.TodoViewItem) {
+	if len(items) == 0 {
+		return
+	}
+	mapped := make([]todoViewItem, 0, len(items))
+	for _, item := range items {
+		mapped = append(mapped, todoViewItem{
+			ID:       strings.TrimSpace(item.ID),
+			Title:    strings.TrimSpace(item.Content),
+			Status:   strings.TrimSpace(item.Status),
+			Priority: 0,
+			Executor: "",
+			Owner:    "-",
+		})
+	}
+	a.todoItems = mapped
+	a.todoPanelVisible = len(mapped) > 0
+	a.todoSelectedIndex = clampTodoSelection(a.todoSelectedIndex, len(a.visibleTodoItems()))
+	a.rebuildTodo()
+	a.applyComponentLayout(false)
+}
+
+func formatTodoSummaryStatus(summary tuiservices.TodoSummary) string {
+	if summary.RequiredTotal > 0 {
+		if summary.RequiredFailed > 0 {
+			return fmt.Sprintf(
+				"Todo: %d/%d completed, %d failed",
+				summary.RequiredCompleted,
+				summary.RequiredTotal,
+				summary.RequiredFailed,
+			)
+		}
+		return fmt.Sprintf("Todo: %d/%d completed", summary.RequiredCompleted, summary.RequiredTotal)
+	}
+	if summary.Total > 0 {
+		return fmt.Sprintf("Todo: %d open", max(0, summary.Total-summary.RequiredCompleted-summary.RequiredFailed))
+	}
+	return "Todo: empty"
 }
 
 // mapStringValue 从 map 中安全读取字符串字段，避免缺失键被格式化为 "<nil>"。

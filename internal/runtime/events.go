@@ -194,8 +194,8 @@ type SessionSkillEventPayload struct {
 	SkillID string `json:"skill_id"`
 }
 
-// TodoSnapshotPayload 描述 todo 快照摘要，供 UI 与日志侧快速定位收敛状态。
-type TodoSnapshotPayload struct {
+// TodoViewItem 描述 Todo 列表单项快照，供 TUI/网关/桌面端统一渲染。
+type TodoViewItem struct {
 	ID            string   `json:"id"`
 	Content       string   `json:"content"`
 	Status        string   `json:"status"`
@@ -203,16 +203,30 @@ type TodoSnapshotPayload struct {
 	Artifacts     []string `json:"artifacts,omitempty"`
 	FailureReason string   `json:"failure_reason,omitempty"`
 	BlockedReason string   `json:"blocked_reason,omitempty"`
+	Revision      int64    `json:"revision"`
+}
+
+// TodoSummary 描述 Todo 收敛摘要，避免客户端重复统计。
+type TodoSummary struct {
+	Total             int `json:"total"`
+	RequiredTotal     int `json:"required_total"`
+	RequiredCompleted int `json:"required_completed"`
+	RequiredFailed    int `json:"required_failed"`
+	RequiredOpen      int `json:"required_open"`
+}
+
+// TodoSnapshot 描述一次 Todo 视图快照。
+type TodoSnapshot struct {
+	Items   []TodoViewItem `json:"items,omitempty"`
+	Summary TodoSummary    `json:"summary,omitempty"`
 }
 
 // TodoEventPayload 描述 todo_write 相关事件。
 type TodoEventPayload struct {
-	Action            string                `json:"action"`
-	Reason            string                `json:"reason,omitempty"`
-	Todos             []TodoSnapshotPayload `json:"todos,omitempty"`
-	RequiredTotal     int                   `json:"required_total"`
-	RequiredCompleted int                   `json:"required_completed"`
-	RequiredOpen      int                   `json:"required_open"`
+	Action  string       `json:"action"`
+	Reason  string       `json:"reason,omitempty"`
+	Items   []TodoViewItem `json:"items,omitempty"`
+	Summary TodoSummary  `json:"summary,omitempty"`
 }
 
 // InputNormalizedPayload 描述输入归一化完成后的摘要信息。

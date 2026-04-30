@@ -8,7 +8,6 @@ import (
 
 	providertypes "neo-code/internal/provider/types"
 	runtimehooks "neo-code/internal/runtime/hooks"
-	agentsession "neo-code/internal/session"
 	"neo-code/internal/tools"
 )
 
@@ -320,36 +319,9 @@ func buildTodoEventPayload(state *runState, action string, reason string) TodoEv
 	state.mu.Lock()
 	todos := cloneTodosForPersistence(state.session.Todos)
 	state.mu.Unlock()
-
-	if len(todos) == 0 {
-		return payload
-	}
-
-	snapshots := make([]TodoSnapshotPayload, 0, len(todos))
-	requiredTotal := 0
-	requiredCompleted := 0
-	for _, item := range todos {
-		required := item.RequiredValue()
-		if required {
-			requiredTotal++
-			if item.Status == agentsession.TodoStatusCompleted {
-				requiredCompleted++
-			}
-		}
-		snapshots = append(snapshots, TodoSnapshotPayload{
-			ID:            strings.TrimSpace(item.ID),
-			Content:       strings.TrimSpace(item.Content),
-			Status:        strings.TrimSpace(string(item.Status)),
-			Required:      required,
-			Artifacts:     append([]string(nil), item.Artifacts...),
-			FailureReason: strings.TrimSpace(item.FailureReason),
-			BlockedReason: strings.TrimSpace(string(item.BlockedReasonValue())),
-		})
-	}
-	payload.Todos = snapshots
-	payload.RequiredTotal = requiredTotal
-	payload.RequiredCompleted = requiredCompleted
-	payload.RequiredOpen = requiredTotal - requiredCompleted
+	snapshot := buildTodoSnapshotFromItems(todos)
+	payload.Items = snapshot.Items
+	payload.Summary = snapshot.Summary
 	return payload
 }
 

@@ -216,7 +216,7 @@ func TestTodoWriteErrorEmitsConflictInsteadOfUpdated(t *testing.T) {
 			if !ok {
 				t.Fatalf("todo conflict payload type = %T, want TodoEventPayload", event.Payload)
 			}
-			if payload.RequiredTotal != 1 || payload.RequiredCompleted != 0 || payload.RequiredOpen != 1 {
+			if payload.Summary.RequiredTotal != 1 || payload.Summary.RequiredCompleted != 0 || payload.Summary.RequiredOpen != 1 {
 				t.Fatalf("unexpected todo conflict summary: %+v", payload)
 			}
 			if !strings.Contains(strings.ToLower(strings.TrimSpace(payload.Reason)), "revision_conflict") {

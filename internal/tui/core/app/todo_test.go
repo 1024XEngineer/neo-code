@@ -588,8 +588,8 @@ func TestParseTodoEventPayload(t *testing.T) {
 	}
 	var nilPayload *agentruntime.TodoEventPayload
 	got, ok = parseTodoEventPayload(nilPayload)
-	if ok || got.Action != "" || got.Reason != "" || len(got.Todos) != 0 ||
-		got.RequiredTotal != 0 || got.RequiredCompleted != 0 || got.RequiredOpen != 0 {
+	if ok || got.Action != "" || got.Reason != "" || len(got.Items) != 0 ||
+		got.Summary.RequiredTotal != 0 || got.Summary.RequiredCompleted != 0 || got.Summary.RequiredOpen != 0 {
 		t.Fatalf("expected nil pointer payload to fail parse, got %#v ok=%v", got, ok)
 	}
 
@@ -616,16 +616,16 @@ func TestParseTodoEventPayload(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected map with summary fields to parse")
 	}
-	if got.RequiredTotal != 3 || got.RequiredCompleted != 1 || got.RequiredOpen != 2 {
+	if got.Summary.RequiredTotal != 3 || got.Summary.RequiredCompleted != 1 || got.Summary.RequiredOpen != 2 {
 		t.Fatalf("unexpected required summary parse result: %#v", got)
 	}
-	if len(got.Todos) != 1 || got.Todos[0].ID != "todo-1" || !got.Todos[0].Required {
+	if len(got.Items) != 1 || got.Items[0].ID != "todo-1" || !got.Items[0].Required {
 		t.Fatalf("unexpected todo snapshot parse result: %#v", got)
 	}
 
 	got, ok = parseTodoEventPayload(fmt.Errorf("invalid"))
-	if ok || got.Action != "" || got.Reason != "" || len(got.Todos) != 0 ||
-		got.RequiredTotal != 0 || got.RequiredCompleted != 0 || got.RequiredOpen != 0 {
+	if ok || got.Action != "" || got.Reason != "" || len(got.Items) != 0 ||
+		got.Summary.RequiredTotal != 0 || got.Summary.RequiredCompleted != 0 || got.Summary.RequiredOpen != 0 {
 		t.Fatalf("expected invalid payload to fail parse, got %#v ok=%v", got, ok)
 	}
 }
