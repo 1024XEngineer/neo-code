@@ -5,6 +5,8 @@ import (
 	"time"
 
 	"neo-code/internal/runtime/controlplane"
+	"neo-code/internal/runtime/decider"
+	runtimefacts "neo-code/internal/runtime/facts"
 	"neo-code/internal/security"
 	agentsession "neo-code/internal/session"
 )
@@ -35,6 +37,10 @@ type runState struct {
 	mustUseToolAfterFinalContinue  bool
 	noToolAfterFinalContinueStreak int
 	lastAcceptanceBlockedReason    string
+	taskKind                       decider.TaskKind
+	userGoal                       string
+	factsCollector                 *runtimefacts.Collector
+	lastDeciderDecision            decider.Decision
 	terminalStatus                 controlplane.TerminalStatus
 	terminalStopReason             controlplane.StopReason
 	terminalStopDetail             string
@@ -54,6 +60,8 @@ func newRunState(runID string, session agentsession.Session) runState {
 		nextAttemptSeq:        1,
 		completion:            controlplane.CompletionState{TodoOnlyTaskCandidate: true},
 		reportedMissingSkills: make(map[string]struct{}),
+		taskKind:              "",
+		factsCollector:        runtimefacts.NewCollector(),
 	}
 }
 

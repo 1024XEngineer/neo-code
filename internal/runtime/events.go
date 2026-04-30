@@ -223,10 +223,10 @@ type TodoSnapshot struct {
 
 // TodoEventPayload 描述 todo_write 相关事件。
 type TodoEventPayload struct {
-	Action  string       `json:"action"`
-	Reason  string       `json:"reason,omitempty"`
+	Action  string         `json:"action"`
+	Reason  string         `json:"reason,omitempty"`
 	Items   []TodoViewItem `json:"items,omitempty"`
-	Summary TodoSummary  `json:"summary,omitempty"`
+	Summary TodoSummary    `json:"summary,omitempty"`
 }
 
 // InputNormalizedPayload 描述输入归一化完成后的摘要信息。
@@ -390,6 +390,16 @@ const (
 	EventRepoHooksSkippedUntrusted EventType = "repo_hooks_skipped_untrusted"
 	// EventRepoHooksTrustStoreInvalid 表示 trust store 缺失或损坏，已降级为 untrusted。
 	EventRepoHooksTrustStoreInvalid EventType = "repo_hooks_trust_store_invalid"
+	// EventRuntimeSnapshotUpdated 表示 runtime 统一状态快照已更新。
+	EventRuntimeSnapshotUpdated EventType = "runtime_snapshot_updated"
+	// EventFactsUpdated 表示运行事实快照已更新。
+	EventFactsUpdated EventType = "facts_updated"
+	// EventDecisionMade 表示 FinalDecider 已输出裁决。
+	EventDecisionMade EventType = "decision_made"
+	// EventSubAgentSnapshotUpdated 表示子代理状态快照已更新。
+	EventSubAgentSnapshotUpdated EventType = "subagent_snapshot_updated"
+	// EventTodoSnapshotUpdated 表示 todo 快照已更新。
+	EventTodoSnapshotUpdated EventType = "todo_snapshot_updated"
 )
 
 // TokenUsagePayload 承载单轮 token 用量统计。
