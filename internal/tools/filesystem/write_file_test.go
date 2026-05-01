@@ -206,6 +206,9 @@ func TestWriteFileToolVerifyAfterWriteFacts(t *testing.T) {
 		if !result.Facts.VerificationPerformed || !result.Facts.VerificationPassed {
 			t.Fatalf("verification facts = %+v, want performed=true passed=true", result.Facts)
 		}
+		if token, _ := result.Metadata["written_content"].(string); token != "verified-content" {
+			t.Fatalf("written_content = %#v, want verified-content", result.Metadata["written_content"])
+		}
 		if !strings.HasPrefix(result.Facts.VerificationScope, "artifact:") {
 			t.Fatalf("verification scope = %q, want artifact:*", result.Facts.VerificationScope)
 		}
@@ -241,6 +244,9 @@ func TestWriteFileToolVerifyAfterWriteFacts(t *testing.T) {
 		}
 		if result.Facts.VerificationScope != "artifact:same-verified.txt" {
 			t.Fatalf("verification scope = %q", result.Facts.VerificationScope)
+		}
+		if token, _ := result.Metadata["written_content"].(string); token != "same" {
+			t.Fatalf("written_content = %#v, want same", result.Metadata["written_content"])
 		}
 		if reason, _ := result.Metadata["verification_reason"].(string); reason != "write_content_match_noop" {
 			t.Fatalf("verification_reason = %#v, want write_content_match_noop", result.Metadata["verification_reason"])

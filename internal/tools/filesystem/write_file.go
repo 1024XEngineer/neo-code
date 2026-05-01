@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode/utf8"
 
 	"neo-code/internal/security"
 	"neo-code/internal/tools"
@@ -105,6 +106,9 @@ func (t *WriteFileTool) Execute(ctx context.Context, input tools.ToolCallInput) 
 				"content_unchanged": true,
 			},
 		}
+		if token, ok := compactWriteVerificationToken(args.Content); ok {
+			result.Metadata["written_content"] = token
+		}
 		if args.VerifyAfterWrite {
 			scope := resolveWriteVerificationScope(args.VerificationScope, target)
 			result.Facts.VerificationPerformed = true
@@ -112,6 +116,9 @@ func (t *WriteFileTool) Execute(ctx context.Context, input tools.ToolCallInput) 
 			result.Facts.VerificationScope = scope
 			result.Metadata["verification_reason"] = "write_content_match_noop"
 			result.Metadata["verification_scope"] = scope
+			if token, ok := compactWriteVerificationToken(args.Content); ok {
+				result.Metadata["verification_expected"] = []string{token}
+			}
 		}
 		return result, nil
 	}
@@ -132,6 +139,9 @@ func (t *WriteFileTool) Execute(ctx context.Context, input tools.ToolCallInput) 
 			"content_unchanged": false,
 		},
 	}
+	if token, ok := compactWriteVerificationToken(args.Content); ok {
+		result.Metadata["written_content"] = token
+	}
 	if args.VerifyAfterWrite {
 		scope := resolveWriteVerificationScope(args.VerificationScope, target)
 		result.Facts.VerificationPerformed = true
@@ -145,6 +155,9 @@ func (t *WriteFileTool) Execute(ctx context.Context, input tools.ToolCallInput) 
 		} else if string(readBack) == args.Content {
 			result.Facts.VerificationPassed = true
 			result.Metadata["verification_reason"] = "write_readback_match"
+			if token, ok := compactWriteVerificationToken(args.Content); ok {
+				result.Metadata["verification_expected"] = []string{token}
+			}
 		} else {
 			result.Facts.VerificationPassed = false
 			result.Metadata["verification_reason"] = "write_readback_mismatch"
@@ -160,4 +173,16 @@ func resolveWriteVerificationScope(raw string, path string) string {
 		return scope
 	}
 	return "artifact:" + strings.TrimSpace(path)
+}
+
+// compactWriteVerificationToken 生成可执行的内容校验 token，避免将超长文本塞进决策动作建议。
+func compactWriteVerificationToken(content string) (string, bool) {
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" {
+		return "", false
+	}
+	if utf8.RuneCountInString(trimmed) > 256 {
+		return "", false
+	}
+	return trimmed, true
 }
