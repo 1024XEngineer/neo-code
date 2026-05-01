@@ -393,6 +393,35 @@ WHERE id = ?
 	return expectRowsAffected(result, input.SessionID)
 }
 
+// UpdateSessionTitle 仅更新会话 title 与更新时间，避免 Prepare 阶段覆盖其他会话头字段。
+func (s *SQLiteStore) UpdateSessionTitle(ctx context.Context, input UpdateSessionTitleInput) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := validateStorageID("session id", input.SessionID); err != nil {
+		return fmt.Errorf("session: %w", err)
+	}
+	db, err := s.ensureDB(ctx)
+	if err != nil {
+		return err
+	}
+
+	result, err := db.ExecContext(ctx, `
+UPDATE sessions
+SET updated_at_ms = ?,
+	title = ?
+WHERE id = ?
+`,
+		toUnixMillis(resolveUpdatedAt(input.UpdatedAt)),
+		sanitizeTitle(input.Title),
+		input.SessionID,
+	)
+	if err != nil {
+		return fmt.Errorf("session: update session title %s: %w", input.SessionID, err)
+	}
+	return expectRowsAffected(result, input.SessionID)
+}
+
 // UpdateSessionState 仅更新会话头字段，不写入消息。
 func (s *SQLiteStore) UpdateSessionState(ctx context.Context, input UpdateSessionStateInput) error {
 	if err := ctx.Err(); err != nil {

@@ -87,7 +87,7 @@ type sessionItem struct {
 }
 
 func (s sessionItem) Title() string {
-	return s.Summary.Title
+	return normalizeSessionTitleSingleLine(s.Summary.Title)
 }
 
 func (s sessionItem) Description() string {
@@ -95,7 +95,7 @@ func (s sessionItem) Description() string {
 }
 
 func (s sessionItem) FilterValue() string {
-	return strings.ToLower(s.Summary.Title)
+	return strings.ToLower(normalizeSessionTitleSingleLine(s.Summary.Title))
 }
 
 type selectionItem struct {
@@ -205,7 +205,7 @@ func pickerItemText(item list.Item) (string, string) {
 	case selectionItem:
 		return strings.TrimSpace(entry.name), strings.TrimSpace(entry.description)
 	case sessionItem:
-		return strings.TrimSpace(entry.Summary.Title), strings.TrimSpace(entry.Summary.UpdatedAt.Format("01-02 15:04"))
+		return normalizeSessionTitleSingleLine(entry.Summary.Title), strings.TrimSpace(entry.Summary.UpdatedAt.Format("01-02 15:04"))
 	default:
 		var title, subtitle string
 		if titled, ok := item.(interface{ Title() string }); ok {
@@ -216,6 +216,10 @@ func pickerItemText(item list.Item) (string, string) {
 		}
 		return title, subtitle
 	}
+}
+
+func normalizeSessionTitleSingleLine(title string) string {
+	return strings.Join(strings.Fields(strings.TrimSpace(title)), " ")
 }
 
 type sessionDelegate struct {
@@ -240,7 +244,7 @@ func (d sessionDelegate) Render(w io.Writer, m list.Model, index int, item list.
 		return
 	}
 	fmt.Fprint(w, tuicomponents.RenderSessionRow(tuicomponents.SessionRowData{
-		Title:           session.Summary.Title,
+		Title:           normalizeSessionTitleSingleLine(session.Summary.Title),
 		UpdatedAtLabel:  session.Summary.UpdatedAt.Format("01-02 15:04"),
 		Active:          session.Active,
 		Selected:        index == m.Index(),

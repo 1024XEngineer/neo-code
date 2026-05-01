@@ -41,10 +41,53 @@ type failingStore struct {
 	ignoreContextErr bool
 }
 
+type listSessionsStubStore struct {
+	summaries []agentsession.Summary
+	loadErr   error
+	session   agentsession.Session
+}
+
 type budgetResolverFunc func(ctx context.Context, cfg config.Config) (int, string, error)
 
 func (f budgetResolverFunc) ResolvePromptBudget(ctx context.Context, cfg config.Config) (int, string, error) {
 	return f(ctx, cfg)
+}
+
+func (s *listSessionsStubStore) CreateSession(ctx context.Context, input agentsession.CreateSessionInput) (agentsession.Session, error) {
+	return agentsession.Session{}, errors.New("not implemented")
+}
+
+func (s *listSessionsStubStore) LoadSession(ctx context.Context, id string) (agentsession.Session, error) {
+	if s.loadErr != nil {
+		return agentsession.Session{}, s.loadErr
+	}
+	return cloneSession(s.session), nil
+}
+
+func (s *listSessionsStubStore) ListSummaries(ctx context.Context) ([]agentsession.Summary, error) {
+	out := make([]agentsession.Summary, len(s.summaries))
+	copy(out, s.summaries)
+	return out, nil
+}
+
+func (s *listSessionsStubStore) AppendMessages(ctx context.Context, input agentsession.AppendMessagesInput) error {
+	return errors.New("not implemented")
+}
+
+func (s *listSessionsStubStore) UpdateSessionState(ctx context.Context, input agentsession.UpdateSessionStateInput) error {
+	return errors.New("not implemented")
+}
+
+func (s *listSessionsStubStore) UpdateSessionWorkdir(ctx context.Context, input agentsession.UpdateSessionWorkdirInput) error {
+	return errors.New("not implemented")
+}
+
+func (s *listSessionsStubStore) ReplaceTranscript(ctx context.Context, input agentsession.ReplaceTranscriptInput) error {
+	return errors.New("not implemented")
+}
+
+func (s *listSessionsStubStore) CleanupExpiredSessions(ctx context.Context, maxAge time.Duration) (int, error) {
+	return 0, nil
 }
 
 func newMemoryStore() *memoryStore {
@@ -191,6 +234,26 @@ func (s *memoryStore) UpdateSessionWorkdir(ctx context.Context, input agentsessi
 		session.UpdatedAt = input.UpdatedAt
 	}
 	session.Workdir = input.Workdir
+	s.saves++
+	s.sessions[input.SessionID] = cloneSession(session)
+	return nil
+}
+
+func (s *memoryStore) UpdateSessionTitle(ctx context.Context, input agentsession.UpdateSessionTitleInput) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	session, ok := s.sessions[input.SessionID]
+	if !ok {
+		return errors.New("not found")
+	}
+	session.Title = strings.TrimSpace(input.Title)
+	if !input.UpdatedAt.IsZero() {
+		session.UpdatedAt = input.UpdatedAt
+	}
 	s.saves++
 	s.sessions[input.SessionID] = cloneSession(session)
 	return nil
@@ -3390,6 +3453,110 @@ func TestServiceConstructorsAndDelegates(t *testing.T) {
 	sessionStore := agentsession.NewSQLiteStore(t.TempDir(), t.TempDir())
 	if sessionStore == nil {
 		t.Fatalf("expected JSON session store")
+	}
+}
+
+func TestServiceListSessionsPromotesDefaultTitlesFromUserMessages(t *testing.T) {
+	manager := newRuntimeConfigManager(t)
+	store := newMemoryStore()
+	service := NewWithFactory(manager, tools.NewRegistry(), store, nil, nil)
+
+	session := agentsession.New("New Session")
+	session.Messages = []providertypes.Message{
+		{
+			Role: providertypes.RoleUser,
+			Parts: []providertypes.ContentPart{
+				providertypes.NewTextPart("Investigate /session title issue"),
+			},
+		},
+	}
+	store.sessions[session.ID] = cloneSession(session)
+
+	summaries, err := service.ListSessions(context.Background())
+	if err != nil {
+		t.Fatalf("ListSessions() error = %v", err)
+	}
+	if len(summaries) != 1 {
+		t.Fatalf("expected 1 summary, got %d", len(summaries))
+	}
+	if summaries[0].Title != "Investigate /session title issue" {
+		t.Fatalf("summary title = %q, want promoted title", summaries[0].Title)
+	}
+
+	loaded, err := store.LoadSession(context.Background(), session.ID)
+	if err != nil {
+		t.Fatalf("LoadSession() error = %v", err)
+	}
+	if loaded.Title != "Investigate /session title issue" {
+		t.Fatalf("stored title = %q, want promoted title", loaded.Title)
+	}
+}
+
+func TestServiceListSessionsSkipsPromotionWhenDerivedTitleInvalid(t *testing.T) {
+	manager := newRuntimeConfigManager(t)
+	store := newMemoryStore()
+	service := NewWithFactory(manager, tools.NewRegistry(), store, nil, nil)
+
+	imageOnly := agentsession.New("New Session")
+	imageOnly.Messages = []providertypes.Message{
+		{
+			Role: providertypes.RoleUser,
+			Parts: []providertypes.ContentPart{
+				providertypes.NewRemoteImagePart("https://example.com/image.png"),
+			},
+		},
+	}
+	store.sessions[imageOnly.ID] = cloneSession(imageOnly)
+
+	summaries, err := service.ListSessions(context.Background())
+	if err != nil {
+		t.Fatalf("ListSessions() error = %v", err)
+	}
+	if len(summaries) != 1 {
+		t.Fatalf("expected 1 summary, got %d", len(summaries))
+	}
+	if summaries[0].Title != "New Session" {
+		t.Fatalf("expected default title to stay unchanged, got %q", summaries[0].Title)
+	}
+}
+
+func TestRuntimeSessionTitlePromotionHelpers(t *testing.T) {
+	t.Parallel()
+
+	if got := sessionTitleFromMessages([]providertypes.Message{
+		{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("a")}},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewRemoteImagePart("https://example.com/image.png")}},
+	}); got != "" {
+		t.Fatalf("expected empty title for image-only user message, got %q", got)
+	}
+
+	if !isDefaultSessionTitle("  new session  ") {
+		t.Fatalf("expected default title to match ignoring case and spaces")
+	}
+	if !isImageOnlySessionTitle(" image message ") {
+		t.Fatalf("expected image-only title to match ignoring case and spaces")
+	}
+	if shouldPromoteSessionTitle("Already Named", "new title") {
+		t.Fatalf("expected non-default current title not to be promoted")
+	}
+	if shouldPromoteSessionTitle("New Session", "Image Message") {
+		t.Fatalf("expected image-only derived title not to be promoted")
+	}
+}
+
+func TestServiceListSessionsKeepsDefaultOnLoadError(t *testing.T) {
+	manager := newRuntimeConfigManager(t)
+	store := &listSessionsStubStore{
+		summaries: []agentsession.Summary{{ID: "s1", Title: "New Session"}},
+		loadErr:   errors.New("load failed"),
+	}
+	service := NewWithFactory(manager, tools.NewRegistry(), store, nil, nil)
+	summaries, err := service.ListSessions(context.Background())
+	if err != nil {
+		t.Fatalf("ListSessions() error = %v", err)
+	}
+	if got := summaries[0].Title; got != "New Session" {
+		t.Fatalf("expected default title unchanged on load error, got %q", got)
 	}
 }
 

@@ -15,6 +15,7 @@ import (
 )
 
 const imageOnlySessionTitle = "Image Message"
+const defaultSessionTitle = "New Session"
 
 // PrepareImageInput 表示一次用户输入中附带的本地图片引用。
 type PrepareImageInput struct {
@@ -76,6 +77,10 @@ type assetCleanupStore interface {
 
 type sessionCleanupStore interface {
 	DeleteSession(ctx context.Context, sessionID string) error
+}
+
+type sessionTitleUpdateStore interface {
+	UpdateSessionTitle(ctx context.Context, input UpdateSessionTitleInput) error
 }
 
 // NewInputPreparer 创建会话输入归一化组件。
@@ -155,7 +160,7 @@ func (p *InputPreparer) Prepare(ctx context.Context, input PrepareInput) (Prepar
 		p.cleanupSavedAssets(ctx, session.ID, savedAssets)
 		return PreparedInput{}, fmt.Errorf("session: normalize parts: %w", err)
 	}
-	if err := p.persistSessionWorkdirUpdate(ctx, pendingUpdate); err != nil {
+	if err := p.persistSessionMetadataUpdate(ctx, pendingUpdate); err != nil {
 		p.rollbackCreatedSession(ctx, session.ID, sessionCreated)
 		p.cleanupSavedAssets(ctx, session.ID, savedAssets)
 		return PreparedInput{}, err
@@ -318,10 +323,11 @@ func resolveImagePath(workdir string, path string) (string, error) {
 	return resolved, nil
 }
 
-// sessionWorkdirUpdate 描述已有会话 workdir 的待提交变更，确保 Prepare 成功后再落盘。
-type sessionWorkdirUpdate struct {
-	session Session
-	dirty   bool
+// sessionMetadataUpdate 描述已有会话头部字段的待提交变更，确保 Prepare 成功后再落盘。
+type sessionMetadataUpdate struct {
+	session      Session
+	dirtyWorkdir bool
+	dirtyTitle   bool
 }
 
 func (p *InputPreparer) loadOrCreateSession(
@@ -330,11 +336,11 @@ func (p *InputPreparer) loadOrCreateSession(
 	title string,
 	defaultWorkdir string,
 	requestedWorkdir string,
-) (Session, bool, sessionWorkdirUpdate, error) {
+) (Session, bool, sessionMetadataUpdate, error) {
 	if strings.TrimSpace(sessionID) == "" {
 		sessionWorkdir, err := resolveWorkdirForInput(defaultWorkdir, "", requestedWorkdir)
 		if err != nil {
-			return Session{}, false, sessionWorkdirUpdate{}, err
+			return Session{}, false, sessionMetadataUpdate{}, err
 		}
 		session := NewWithWorkdir(title, sessionWorkdir)
 		establishPreparedSessionVerificationProfile(&session)
@@ -346,33 +352,41 @@ func (p *InputPreparer) loadOrCreateSession(
 			Head:      session.HeadSnapshot(),
 		})
 		if err != nil {
-			return Session{}, false, sessionWorkdirUpdate{}, err
+			return Session{}, false, sessionMetadataUpdate{}, err
 		}
-		return created, true, sessionWorkdirUpdate{}, nil
+		return created, true, sessionMetadataUpdate{}, nil
 	}
 
 	session, err := p.store.LoadSession(ctx, sessionID)
 	if err != nil {
-		return Session{}, false, sessionWorkdirUpdate{}, err
+		return Session{}, false, sessionMetadataUpdate{}, err
+	}
+	pending := sessionMetadataUpdate{}
+	if shouldPromoteSessionTitle(session.Title, title) {
+		session.Title = strings.TrimSpace(title)
+		pending.dirtyTitle = true
 	}
 	if strings.TrimSpace(requestedWorkdir) == "" && strings.TrimSpace(session.Workdir) != "" {
-		return session, false, sessionWorkdirUpdate{}, nil
+		if pending.dirtyTitle {
+			session.UpdatedAt = time.Now()
+			pending.session = session
+		}
+		return session, false, pending, nil
 	}
 
 	resolved, err := resolveWorkdirForInput(defaultWorkdir, session.Workdir, requestedWorkdir)
 	if err != nil {
-		return Session{}, false, sessionWorkdirUpdate{}, err
+		return Session{}, false, sessionMetadataUpdate{}, err
 	}
-	if session.Workdir == resolved {
-		return session, false, sessionWorkdirUpdate{}, nil
+	if session.Workdir != resolved {
+		session.Workdir = resolved
+		pending.dirtyWorkdir = true
 	}
-
-	session.Workdir = resolved
-	session.UpdatedAt = time.Now()
-	return session, false, sessionWorkdirUpdate{
-		session: session,
-		dirty:   true,
-	}, nil
+	if pending.dirtyWorkdir || pending.dirtyTitle {
+		session.UpdatedAt = time.Now()
+		pending.session = session
+	}
+	return session, false, pending, nil
 }
 
 // rollbackCreatedSession 在本次 Prepare 新建会话后发生错误时回滚会话目录，避免残留孤儿会话。
@@ -390,17 +404,43 @@ func (p *InputPreparer) rollbackCreatedSession(ctx context.Context, sessionID st
 	_ = cleanupStore.DeleteSession(ctx, sessionID)
 }
 
-// persistSessionWorkdirUpdate 在 Prepare 其余步骤完成后统一提交会话 workdir 更新，避免失败时出现部分提交。
-func (p *InputPreparer) persistSessionWorkdirUpdate(ctx context.Context, pending sessionWorkdirUpdate) error {
-	if !pending.dirty {
+// persistSessionMetadataUpdate 在 Prepare 其余步骤完成后统一提交会话头最小更新，避免失败时出现部分提交。
+func (p *InputPreparer) persistSessionMetadataUpdate(ctx context.Context, pending sessionMetadataUpdate) error {
+	if !pending.dirtyWorkdir && !pending.dirtyTitle {
 		return nil
 	}
-	if err := p.store.UpdateSessionWorkdir(ctx, UpdateSessionWorkdirInput{
-		SessionID: pending.session.ID,
-		UpdatedAt: pending.session.UpdatedAt,
-		Workdir:   pending.session.Workdir,
-	}); err != nil {
-		return err
+
+	updatedByState := false
+	if pending.dirtyTitle {
+		if titleUpdater, ok := p.store.(sessionTitleUpdateStore); ok {
+			if err := titleUpdater.UpdateSessionTitle(ctx, UpdateSessionTitleInput{
+				SessionID: pending.session.ID,
+				UpdatedAt: pending.session.UpdatedAt,
+				Title:     pending.session.Title,
+			}); err != nil {
+				return err
+			}
+		} else {
+			updatedByState = true
+			if err := p.store.UpdateSessionState(ctx, UpdateSessionStateInput{
+				SessionID: pending.session.ID,
+				Title:     pending.session.Title,
+				UpdatedAt: pending.session.UpdatedAt,
+				Head:      pending.session.HeadSnapshot(),
+			}); err != nil {
+				return err
+			}
+		}
+	}
+
+	if pending.dirtyWorkdir && !updatedByState {
+		if err := p.store.UpdateSessionWorkdir(ctx, UpdateSessionWorkdirInput{
+			SessionID: pending.session.ID,
+			UpdatedAt: pending.session.UpdatedAt,
+			Workdir:   pending.session.Workdir,
+		}); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -453,5 +493,17 @@ func buildSessionTitle(text string, hasImages bool) string {
 	if hasImages {
 		return imageOnlySessionTitle
 	}
-	return "New Session"
+	return defaultSessionTitle
+}
+
+func shouldPromoteSessionTitle(current string, next string) bool {
+	trimmedCurrent := strings.TrimSpace(current)
+	trimmedNext := strings.TrimSpace(next)
+	if trimmedNext == "" {
+		return false
+	}
+	if strings.EqualFold(trimmedNext, defaultSessionTitle) {
+		return false
+	}
+	return strings.EqualFold(trimmedCurrent, defaultSessionTitle)
 }
