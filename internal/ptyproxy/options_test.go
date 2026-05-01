@@ -25,3 +25,81 @@ func TestMergeEnvVarOverridesExistingValue(t *testing.T) {
 		t.Fatalf("socket entry = %q", socketEntries[0])
 	}
 }
+
+func TestMergeEnvVarEmptyKeyReturnsCopy(t *testing.T) {
+	original := []string{"PATH=/bin", "HOME=/home/tester"}
+	merged := MergeEnvVar(original, "", "/tmp/new.sock")
+	if len(merged) != len(original) {
+		t.Fatalf("merged len = %d, want %d", len(merged), len(original))
+	}
+	for i, item := range original {
+		if merged[i] != item {
+			t.Fatalf("merged[%d] = %q, want %q", i, merged[i], item)
+		}
+	}
+}
+
+func TestNormalizeShellOptionsDefaultsStdio(t *testing.T) {
+	opts, err := NormalizeShellOptions(ManualShellOptions{
+		Workdir: "/tmp",
+		Shell:   "/bin/bash",
+	})
+	if err != nil {
+		t.Fatalf("NormalizeShellOptions() error = %v", err)
+	}
+	if opts.Stdin == nil {
+		t.Fatal("Stdin should not be nil after normalization")
+	}
+	if opts.Stdout == nil {
+		t.Fatal("Stdout should not be nil after normalization")
+	}
+	if opts.Stderr == nil {
+		t.Fatal("Stderr should not be nil after normalization")
+	}
+}
+
+func TestNormalizeShellOptionsTrimsWhitespace(t *testing.T) {
+	opts, err := NormalizeShellOptions(ManualShellOptions{
+		Workdir:              "/tmp",
+		Shell:                "  /bin/zsh  ",
+		SocketPath:           "  /tmp/diag.sock  ",
+		GatewayListenAddress: "  /tmp/gw.sock  ",
+		GatewayTokenFile:     "  /tmp/token  ",
+	})
+	if err != nil {
+		t.Fatalf("NormalizeShellOptions() error = %v", err)
+	}
+	if opts.Shell != "/bin/zsh" {
+		t.Fatalf("Shell = %q, want %q", opts.Shell, "/bin/zsh")
+	}
+	if opts.SocketPath != "/tmp/diag.sock" {
+		t.Fatalf("SocketPath = %q, want %q", opts.SocketPath, "/tmp/diag.sock")
+	}
+	if opts.GatewayListenAddress != "/tmp/gw.sock" {
+		t.Fatalf("GatewayListenAddress = %q, want %q", opts.GatewayListenAddress, "/tmp/gw.sock")
+	}
+	if opts.GatewayTokenFile != "/tmp/token" {
+		t.Fatalf("GatewayTokenFile = %q, want %q", opts.GatewayTokenFile, "/tmp/token")
+	}
+}
+
+func TestNormalizeShellOptionsResolvesEmptyWorkdir(t *testing.T) {
+	opts, err := NormalizeShellOptions(ManualShellOptions{})
+	if err != nil {
+		t.Fatalf("NormalizeShellOptions() error = %v", err)
+	}
+	if opts.Workdir == "" {
+		t.Fatal("Workdir should not be empty after normalization")
+	}
+}
+
+func TestNormalizeShellOptionsFailsOnBadGetwd(t *testing.T) {
+	// Remove read permission on a parent dir to cause Getwd failure.
+	// We simulate by providing a non-empty but unresolvable path.
+	_, err := NormalizeShellOptions(ManualShellOptions{
+		Workdir: string([]byte{0}),
+	})
+	if err == nil {
+		t.Fatal("expected error for invalid workdir path")
+	}
+}

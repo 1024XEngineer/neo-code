@@ -1847,3 +1847,251 @@ func TestModelDisplayName(t *testing.T) {
 		}
 	})
 }
+
+// ---- marshalManualModelsForGateway ----
+
+func TestMarshalManualModelsForGatewayEmptyReturnsEmpty(t *testing.T) {
+	if got := marshalManualModelsForGateway(nil); got != "" {
+		t.Fatalf("expected empty for nil, got %q", got)
+	}
+	if got := marshalManualModelsForGateway([]providertypes.ModelDescriptor{}); got != "" {
+		t.Fatalf("expected empty for empty slice, got %q", got)
+	}
+}
+
+func TestMarshalManualModelsForGatewaySkipsEmptyID(t *testing.T) {
+	got := marshalManualModelsForGateway([]providertypes.ModelDescriptor{
+		{ID: "", Name: "empty ID"},
+		{ID: "valid", Name: "Valid Model"},
+	})
+	if !strings.Contains(got, "valid") {
+		t.Fatalf("result = %q, want contains valid model", got)
+	}
+	if strings.Contains(got, "empty ID") {
+		t.Fatalf("result = %q, should not contain empty ID model", got)
+	}
+}
+
+func TestMarshalManualModelsForGatewayUsesIDAsName(t *testing.T) {
+	got := marshalManualModelsForGateway([]providertypes.ModelDescriptor{
+		{ID: "gpt-4", Name: ""},
+	})
+	if !strings.Contains(got, `"name":"gpt-4"`) {
+		t.Fatalf("result = %q, want name to fall back to id", got)
+	}
+}
+
+func TestMarshalManualModelsForGatewayWithContextAndOutputTokens(t *testing.T) {
+	got := marshalManualModelsForGateway([]providertypes.ModelDescriptor{
+		{ID: "gpt-4", Name: "GPT-4", ContextWindow: 8192, MaxOutputTokens: 4096},
+	})
+	if !strings.Contains(got, `"context_window":8192`) {
+		t.Fatalf("result = %q, want context_window", got)
+	}
+	if !strings.Contains(got, `"max_output_tokens":4096`) {
+		t.Fatalf("result = %q, want max_output_tokens", got)
+	}
+}
+
+func TestMarshalManualModelsForGatewayAllSkippedReturnsEmpty(t *testing.T) {
+	got := marshalManualModelsForGateway([]providertypes.ModelDescriptor{
+		{ID: "", Name: "skip1"},
+		{ID: "  ", Name: "skip2"},
+	})
+	if got != "" {
+		t.Fatalf("expected empty when all models skipped, got %q", got)
+	}
+}
+
+// ---- ListMCPServers ----
+
+func TestGatewayRuntimePortBridgeListMCPServers(t *testing.T) {
+	cfgMgr := &configManagerStub{
+		cfg: config.Config{
+			Tools: config.ToolsConfig{
+				MCP: config.MCPConfig{
+					Servers: []config.MCPServerConfig{
+						{ID: "srv-1", Enabled: true},
+					},
+				},
+			},
+		},
+	}
+	stub := &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)}
+	bridge, _ := newGatewayRuntimePortBridge(context.Background(), stub, testSessionStore, cfgMgr, nil)
+	defer bridge.Close()
+
+	entries, err := bridge.ListMCPServers(context.Background(), gateway.ListMCPServersInput{SubjectID: testBridgeSubjectID})
+	if err != nil {
+		t.Fatalf("ListMCPServers() error = %v", err)
+	}
+	if len(entries) != 1 || entries[0].ID != "srv-1" {
+		t.Fatalf("entries = %+v, want [srv-1]", entries)
+	}
+}
+
+// ---- UpsertMCPServer ----
+
+func TestGatewayRuntimePortBridgeUpsertMCPServerReplacesExisting(t *testing.T) {
+	cfgMgr := &configManagerStub{
+		cfg: config.Config{
+			Tools: config.ToolsConfig{
+				MCP: config.MCPConfig{
+					Servers: []config.MCPServerConfig{
+						{ID: "srv-1", Enabled: false},
+					},
+				},
+			},
+		},
+	}
+	stub := &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)}
+	bridge, _ := newGatewayRuntimePortBridge(context.Background(), stub, testSessionStore, cfgMgr, nil)
+	defer bridge.Close()
+
+	err := bridge.UpsertMCPServer(context.Background(), gateway.UpsertMCPServerInput{
+		SubjectID: testBridgeSubjectID,
+		Server:    config.MCPServerConfig{ID: "srv-1", Enabled: true},
+	})
+	if err != nil {
+		t.Fatalf("UpsertMCPServer() error = %v", err)
+	}
+	cfg := cfgMgr.cfg
+	if len(cfg.Tools.MCP.Servers) != 1 {
+		t.Fatalf("servers count = %d, want 1", len(cfg.Tools.MCP.Servers))
+	}
+	if !cfg.Tools.MCP.Servers[0].Enabled {
+		t.Fatal("server should be enabled after upsert")
+	}
+}
+
+func TestGatewayRuntimePortBridgeUpsertMCPServerAppendsNew(t *testing.T) {
+	cfgMgr := &configManagerStub{
+		cfg: config.Config{
+			Tools: config.ToolsConfig{
+				MCP: config.MCPConfig{
+					Servers: []config.MCPServerConfig{
+						{ID: "srv-1", Enabled: true},
+					},
+				},
+			},
+		},
+	}
+	stub := &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)}
+	bridge, _ := newGatewayRuntimePortBridge(context.Background(), stub, testSessionStore, cfgMgr, nil)
+	defer bridge.Close()
+
+	err := bridge.UpsertMCPServer(context.Background(), gateway.UpsertMCPServerInput{
+		SubjectID: testBridgeSubjectID,
+		Server:    config.MCPServerConfig{ID: "srv-2", Enabled: true},
+	})
+	if err != nil {
+		t.Fatalf("UpsertMCPServer() error = %v", err)
+	}
+	cfg := cfgMgr.cfg
+	if len(cfg.Tools.MCP.Servers) != 2 {
+		t.Fatalf("servers count = %d, want 2", len(cfg.Tools.MCP.Servers))
+	}
+}
+
+// ---- ListProviders (full path) ----
+
+func TestGatewayRuntimePortBridgeListProvidersWithSelection(t *testing.T) {
+	ps := &providerSelectionStub{
+		listOptions: []configstate.ProviderOption{
+			{ID: " openai ", Name: "OpenAI", Models: []providertypes.ModelDescriptor{{ID: "gpt-4"}}},
+		},
+	}
+	cfgMgr := &configManagerStub{
+		cfg: config.Config{
+			SelectedProvider: "openai",
+			Providers: []config.ProviderConfig{
+				{Name: "openai", Driver: "openai", BaseURL: "https://api.openai.com", APIKeyEnv: "OPENAI_API_KEY", Source: config.ProviderSourceBuiltin},
+			},
+		},
+	}
+	stub := &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)}
+	bridge, _ := newGatewayRuntimePortBridge(context.Background(), stub, testSessionStore, cfgMgr, ps)
+	defer bridge.Close()
+
+	options, err := bridge.ListProviders(context.Background(), gateway.ListProvidersInput{SubjectID: testBridgeSubjectID})
+	if err != nil {
+		t.Fatalf("ListProviders() error = %v", err)
+	}
+	if len(options) != 1 {
+		t.Fatalf("options len = %d, want 1", len(options))
+	}
+	if options[0].ID != "openai" {
+		t.Fatalf("options[0].ID = %q, want openai", options[0].ID)
+	}
+	if options[0].Driver != "openai" {
+		t.Fatalf("options[0].Driver = %q, want openai", options[0].Driver)
+	}
+	if !options[0].Selected {
+		t.Fatal("openai should be selected")
+	}
+	if len(options[0].Models) != 1 || options[0].Models[0].ID != "gpt-4" {
+		t.Fatalf("Models = %+v, want [gpt-4]", options[0].Models)
+	}
+}
+
+// ---- SetMCPServerEnabled (full path) ----
+
+func TestGatewayRuntimePortBridgeSetMCPServerEnabledSuccess(t *testing.T) {
+	cfgMgr := &configManagerStub{
+		cfg: config.Config{
+			Tools: config.ToolsConfig{
+				MCP: config.MCPConfig{
+					Servers: []config.MCPServerConfig{
+						{ID: "srv-1", Enabled: false},
+					},
+				},
+			},
+		},
+	}
+	stub := &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)}
+	bridge, _ := newGatewayRuntimePortBridge(context.Background(), stub, testSessionStore, cfgMgr, nil)
+	defer bridge.Close()
+
+	err := bridge.SetMCPServerEnabled(context.Background(), gateway.SetMCPServerEnabledInput{
+		SubjectID: testBridgeSubjectID,
+		ID:        "srv-1",
+		Enabled:   true,
+	})
+	if err != nil {
+		t.Fatalf("SetMCPServerEnabled() error = %v", err)
+	}
+	if !cfgMgr.cfg.Tools.MCP.Servers[0].Enabled {
+		t.Fatal("server should be enabled after SetMCPServerEnabled")
+	}
+}
+
+// ---- DeleteMCPServer (full path) ----
+
+func TestGatewayRuntimePortBridgeDeleteMCPServerSuccess(t *testing.T) {
+	cfgMgr := &configManagerStub{
+		cfg: config.Config{
+			Tools: config.ToolsConfig{
+				MCP: config.MCPConfig{
+					Servers: []config.MCPServerConfig{
+						{ID: "srv-1", Enabled: true},
+						{ID: "srv-2", Enabled: true},
+					},
+				},
+			},
+		},
+	}
+	stub := &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)}
+	bridge, _ := newGatewayRuntimePortBridge(context.Background(), stub, testSessionStore, cfgMgr, nil)
+	defer bridge.Close()
+
+	err := bridge.DeleteMCPServer(context.Background(), gateway.DeleteMCPServerInput{
+		SubjectID: testBridgeSubjectID,
+		ID:        "srv-1",
+	})
+	if err != nil {
+		t.Fatalf("DeleteMCPServer() error = %v", err)
+	}
+	if len(cfgMgr.cfg.Tools.MCP.Servers) != 1 || cfgMgr.cfg.Tools.MCP.Servers[0].ID != "srv-2" {
+		t.Fatalf("servers = %+v, want [srv-2]", cfgMgr.cfg.Tools.MCP.Servers)
+	}
+}

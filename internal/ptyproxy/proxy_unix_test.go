@@ -370,3 +370,262 @@ func TestEnableHostTerminalRawModeMakeRawError(t *testing.T) {
 		t.Fatalf("error = %v, want contains %q", err, "set host terminal raw mode")
 	}
 }
+
+func TestResolveShellPathDefaultsToBinBash(t *testing.T) {
+	t.Setenv("SHELL", "")
+	path := resolveShellPath("")
+	if path != "/bin/bash" {
+		t.Fatalf("resolveShellPath() = %q, want %q", path, "/bin/bash")
+	}
+}
+
+func TestResolveShellPathUsesShellEnv(t *testing.T) {
+	t.Setenv("SHELL", "/bin/zsh")
+	path := resolveShellPath("")
+	if path != "/bin/zsh" {
+		t.Fatalf("resolveShellPath() = %q, want %q", path, "/bin/zsh")
+	}
+}
+
+func TestResolveShellPathPrefersExplicit(t *testing.T) {
+	t.Setenv("SHELL", "/bin/zsh")
+	path := resolveShellPath("/bin/fish")
+	if path != "/bin/fish" {
+		t.Fatalf("resolveShellPath() = %q, want %q", path, "/bin/fish")
+	}
+}
+
+func TestIsClosedNetworkErrorNil(t *testing.T) {
+	if isClosedNetworkError(nil) {
+		t.Fatal("isClosedNetworkError(nil) should be false")
+	}
+}
+
+func TestIsClosedNetworkErrorDetectsNetErrClosed(t *testing.T) {
+	if !isClosedNetworkError(net.ErrClosed) {
+		t.Fatal("isClosedNetworkError(net.ErrClosed) should be true")
+	}
+}
+
+func TestIsClosedNetworkErrorDetectsStringMatch(t *testing.T) {
+	err := errors.New("use of closed network connection")
+	if !isClosedNetworkError(err) {
+		t.Fatal("isClosedNetworkError() should be true for closed connection string")
+	}
+}
+
+func TestIsClosedNetworkErrorNonMatch(t *testing.T) {
+	err := errors.New("some other error")
+	if isClosedNetworkError(err) {
+		t.Fatal("isClosedNetworkError() should be false for unrelated error")
+	}
+}
+
+func TestSerializedWriterNilWriter(t *testing.T) {
+	var w *serializedWriter
+	n, err := w.Write([]byte("hello"))
+	if err != nil {
+		t.Fatalf("Write() on nil receiver error = %v", err)
+	}
+	if n != len("hello") {
+		t.Fatalf("Write() n = %d, want %d", n, len("hello"))
+	}
+}
+
+func TestSerializedWriterNilLock(t *testing.T) {
+	var buffer bytes.Buffer
+	w := &serializedWriter{writer: &buffer, lock: nil}
+	n, err := w.Write([]byte("data"))
+	if err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+	if n != 4 {
+		t.Fatalf("Write() n = %d, want 4", n)
+	}
+	if buffer.String() != "data" {
+		t.Fatalf("buffer = %q, want %q", buffer.String(), "data")
+	}
+}
+
+func TestSerializedWriterWithLock(t *testing.T) {
+	var buffer bytes.Buffer
+	var mu sync.Mutex
+	w := &serializedWriter{writer: &buffer, lock: &mu}
+	n, err := w.Write([]byte("locked-write"))
+	if err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+	if n != len("locked-write") {
+		t.Fatalf("Write() n = %d, want %d", n, len("locked-write"))
+	}
+	if buffer.String() != "locked-write" {
+		t.Fatalf("buffer = %q, want %q", buffer.String(), "locked-write")
+	}
+}
+
+func TestWriteProxyTextNilWriter(t *testing.T) {
+	writeProxyText(nil, "text")
+	writeProxyLine(nil, "text")
+}
+
+func TestWriteProxyTextEmptyText(t *testing.T) {
+	var buffer bytes.Buffer
+	writeProxyText(&buffer, "")
+	if buffer.Len() != 0 {
+		t.Fatalf("expected empty output, got %q", buffer.String())
+	}
+}
+
+func TestWriteProxyTextNormalizesLineEndings(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"hello\nworld", "hello\r\nworld"},
+		{"hello\r\nworld", "hello\r\nworld"},
+		{"hello\rworld", "hello\r\nworld"},
+		{"line1\nline2\nline3", "line1\r\nline2\r\nline3"},
+	}
+	for _, tt := range tests {
+		var buffer bytes.Buffer
+		writeProxyText(&buffer, tt.input)
+		if buffer.String() != tt.expected {
+			t.Fatalf("writeProxyText(%q) = %q, want %q", tt.input, buffer.String(), tt.expected)
+		}
+	}
+}
+
+func TestWriteProxyLine(t *testing.T) {
+	var buffer bytes.Buffer
+	writeProxyLine(&buffer, "header")
+	// writeProxyText with "\n" appended → normalized to "\r\n"
+	if buffer.String() != "header\r\n" {
+		t.Fatalf("writeProxyLine output = %q, want %q", buffer.String(), "header\\r\\n")
+	}
+}
+
+func TestWriteProxyf(t *testing.T) {
+	var buffer bytes.Buffer
+	writeProxyf(&buffer, "count=%d, name=%s", 42, "test")
+	expected := "count=42, name=test"
+	// writeProxyf → writeProxyText which normalizes
+	got := buffer.String()
+	if got != expected {
+		t.Fatalf("writeProxyf output = %q, want %q", got, expected)
+	}
+}
+
+func TestSyncPTYWindowSizeNilPTY(t *testing.T) {
+	syncPTYWindowSize(nil, nil)
+}
+
+func TestWatchPTYWindowResizeNilPTY(t *testing.T) {
+	stop := watchPTYWindowResize(nil, nil)
+	stop()
+}
+
+func TestDecodeToolResult(t *testing.T) {
+	result, err := decodeToolResult([]byte(`{"content":"ok","isError":false}`))
+	if err != nil {
+		t.Fatalf("decodeToolResult() error = %v", err)
+	}
+	if result.Content != "ok" {
+		t.Fatalf("Content = %q, want %q", result.Content, "ok")
+	}
+	if result.IsError {
+		t.Fatal("IsError should be false")
+	}
+}
+
+func TestDecodeToolResultInvalidPayload(t *testing.T) {
+	_, err := decodeToolResult([]byte(`not-json`))
+	if err == nil {
+		t.Fatal("expected decode error")
+	}
+}
+
+func TestDecodeToolResultFromStruct(t *testing.T) {
+	result, err := decodeToolResult(map[string]any{"content": "from-map", "isError": true})
+	if err != nil {
+		t.Fatalf("decodeToolResult() error = %v", err)
+	}
+	if result.Content != "from-map" {
+		t.Fatalf("Content = %q, want %q", result.Content, "from-map")
+	}
+	if !result.IsError {
+		t.Fatal("IsError should be true")
+	}
+}
+
+func TestRenderDiagnosisNilOutput(t *testing.T) {
+	renderDiagnosis(nil, "some content", false)
+}
+
+func TestRenderDiagnosisEmptyContent(t *testing.T) {
+	var buffer bytes.Buffer
+	renderDiagnosis(&buffer, "", false)
+	output := buffer.String()
+	if !strings.Contains(output, "无可用诊断内容") {
+		t.Fatalf("output = %q, want contains %q", output, "无可用诊断内容")
+	}
+	assertNoBareLineFeed(t, output)
+}
+
+func TestRenderDiagnosisErrorHeader(t *testing.T) {
+	var buffer bytes.Buffer
+	renderDiagnosis(&buffer, `{"confidence":0.9,"rootCause":"OOM","fixCommands":["free -h"]}`, true)
+	output := buffer.String()
+	assertNoBareLineFeed(t, output)
+	if !strings.Contains(output, "\033[31m") {
+		t.Fatalf("error output should use red color, got %q", output)
+	}
+}
+
+func TestRenderDiagnosisFullContent(t *testing.T) {
+	var buffer bytes.Buffer
+	renderDiagnosis(&buffer, `{"confidence":0.95,"rootCause":"disk full","investigationCommands":["df -h"],"fixCommands":["rm -rf /tmp/*"]}`, false)
+	output := buffer.String()
+	assertNoBareLineFeed(t, output)
+	if !strings.Contains(output, "置信度: 0.95") {
+		t.Fatalf("output = %q, want contains %q", output, "置信度: 0.95")
+	}
+	if !strings.Contains(output, "建议排查命令") {
+		t.Fatalf("output = %q, want contains %q", output, "建议排查命令")
+	}
+	if !strings.Contains(output, "建议修复命令") {
+		t.Fatalf("output = %q, want contains %q", output, "建议修复命令")
+	}
+}
+
+func TestCleanupStaleSocketNotExist(t *testing.T) {
+	socketPath := filepath.Join(t.TempDir(), "nonexistent.sock")
+	err := cleanupStaleSocket(socketPath)
+	if err != nil {
+		t.Fatalf("cleanupStaleSocket() error = %v, want nil", err)
+	}
+}
+
+func TestHandleDiagSocketConnectionNil(t *testing.T) {
+	handleDiagSocketConnection(context.Background(), nil, make(chan diagSignalRequest, 1))
+}
+
+func TestConsumeDiagSignalsContextCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	consumeDiagSignals(ctx, nil, nil, nil, ManualShellOptions{}, "")
+}
+
+func TestConsumeDiagSignalsChannelClosed(t *testing.T) {
+	ch := make(chan diagSignalRequest)
+	close(ch)
+	consumeDiagSignals(context.Background(), ch, nil, nil, ManualShellOptions{}, "")
+}
+
+func TestPrintProxyFunctionsNilWriter(t *testing.T) {
+	printProxyInitializedBanner(nil)
+	printProxyExitedBanner(nil)
+}
+
+func TestRunSingleDiagnosisNilOutput(t *testing.T) {
+	runSingleDiagnosis(nil, nil, ManualShellOptions{}, "")
+}
