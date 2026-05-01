@@ -717,6 +717,135 @@ func TestDecisionContinueSuppressesAssistantFinalMessage(t *testing.T) {
 	}
 }
 
+func TestRuntimeEventDecisionMadeHandlerAcceptedDoesNotRenderDecisionBlock(t *testing.T) {
+	app, _ := newTestApp(t)
+	initialMessages := len(app.activeMessages)
+
+	runtimeEventDecisionMadeHandler(&app, agentruntime.RuntimeEvent{
+		Payload: agentruntime.DecisionMadePayload{
+			Status: "accepted",
+		},
+	})
+
+	if len(app.activeMessages) == 0 {
+		t.Fatalf("expected at least one message after accepted decision activity")
+	}
+	lastText := renderMessagePartsForDisplay(app.activeMessages[len(app.activeMessages)-1].Parts)
+	if strings.Contains(lastText, "[Runtime Decision]") {
+		t.Fatalf("accepted decision should not render runtime decision block, got %q", lastText)
+	}
+	if len(app.activeMessages) < initialMessages {
+		t.Fatalf("message count should not shrink for accepted decision")
+	}
+	if len(app.activities) == 0 {
+		t.Fatalf("expected decision activity to be appended")
+	}
+	last := app.activities[len(app.activities)-1]
+	if last.Title != "Final decision (accepted)" {
+		t.Fatalf("unexpected decision activity title: %+v", last)
+	}
+}
+
+func TestRuntimeEventDecisionMadeHandlerFallsBackForEmptyStatusAndSummary(t *testing.T) {
+	app, _ := newTestApp(t)
+
+	runtimeEventDecisionMadeHandler(&app, agentruntime.RuntimeEvent{
+		Payload: agentruntime.DecisionMadePayload{},
+	})
+
+	if len(app.activities) == 0 {
+		t.Fatalf("expected fallback decision activity")
+	}
+	last := app.activities[len(app.activities)-1]
+	if last.Title != "Final decision (unknown)" {
+		t.Fatalf("unexpected fallback title: %+v", last)
+	}
+	if !strings.Contains(last.Detail, "decision generated") {
+		t.Fatalf("expected fallback detail, got %+v", last)
+	}
+}
+
+func TestRuntimeEventDecisionMadeHandlerUsesInternalSummaryFallback(t *testing.T) {
+	app, _ := newTestApp(t)
+
+	runtimeEventDecisionMadeHandler(&app, agentruntime.RuntimeEvent{
+		Payload: agentruntime.DecisionMadePayload{
+			Status:          "blocked",
+			InternalSummary: "blocked by policy",
+		},
+	})
+
+	last := app.activities[len(app.activities)-1]
+	if last.Title != "Final decision (blocked)" {
+		t.Fatalf("unexpected decision title: %+v", last)
+	}
+	if !strings.Contains(last.Detail, "blocked by policy") {
+		t.Fatalf("expected internal summary fallback, got %+v", last)
+	}
+}
+
+func TestDecisionHelperBranches(t *testing.T) {
+	if shouldSuppressAssistantFinalMessage(nil, "run-1") {
+		t.Fatalf("nil app should never suppress assistant final message")
+	}
+
+	app, _ := newTestApp(t)
+	if shouldSuppressAssistantFinalMessage(&app, "run-1") {
+		t.Fatalf("empty suppression run id should return false")
+	}
+
+	app.suppressAssistantForRun = "run-2"
+	if shouldSuppressAssistantFinalMessage(&app, "run-1") {
+		t.Fatalf("mismatched run id should not suppress")
+	}
+
+	app.suppressAssistantForRun = "RUN-3"
+	if !shouldSuppressAssistantFinalMessage(&app, "run-3") {
+		t.Fatalf("case-insensitive run id match should suppress")
+	}
+	if app.suppressAssistantForRun != "" {
+		t.Fatalf("suppression marker should be cleared after suppress")
+	}
+
+	discardTrailingAssistantMessage(nil)
+
+	discardTrailingAssistantMessage(&app)
+	if len(app.activeMessages) != 0 {
+		t.Fatalf("empty messages should remain unchanged")
+	}
+
+	app.activeMessages = append(app.activeMessages, providertypes.Message{Role: roleSystem})
+	discardTrailingAssistantMessage(&app)
+	if len(app.activeMessages) != 1 {
+		t.Fatalf("non-assistant tail should not be removed")
+	}
+
+	app.activeMessages = append(app.activeMessages, providertypes.Message{
+		Role:  roleAssistant,
+		Parts: []providertypes.ContentPart{providertypes.NewTextPart("done")},
+	})
+	discardTrailingAssistantMessage(&app)
+	if len(app.activeMessages) != 1 {
+		t.Fatalf("assistant tail should be removed")
+	}
+}
+
+func TestFormattingHelperBranches(t *testing.T) {
+	if firstNonBlank(" ", "\t", "") != "" {
+		t.Fatalf("all blank values should produce empty result")
+	}
+	if got := firstNonBlank(" ", "ok", "fallback"); got != "ok" {
+		t.Fatalf("first non-blank value mismatch: %q", got)
+	}
+
+	if got := jsonCompactOrFallback(map[string]any{"k": "v"}); !strings.Contains(got, "\"k\":\"v\"") {
+		t.Fatalf("json compact output mismatch: %q", got)
+	}
+	if got := jsonCompactOrFallback(map[string]any{"bad": func() {}}); !strings.Contains(got, "map[bad:") {
+		t.Fatalf("fallback output mismatch for marshal error: %q", got)
+	}
+}
+
 func TestHandleRuntimeEventRoutesByRegistryWithoutBindingTransientSession(t *testing.T) {
 	app, _ := newTestApp(t)
 	handled := app.handleRuntimeEvent(agentruntime.RuntimeEvent{
