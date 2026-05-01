@@ -131,6 +131,12 @@ func (s *runtimeStub) ListAvailableSkills(_ context.Context, sessionID string) (
 	s.listAvailableSkillsID = sessionID
 	return s.availableSkills, s.availableSkillsErr
 }
+func (s *runtimeStub) DeleteSession(_ context.Context, _ string) error {
+	return nil
+}
+func (s *runtimeStub) UpdateSessionState(_ context.Context, _ agentsession.UpdateSessionStateInput) error {
+	return nil
+}
 
 type runtimeWithoutCreator struct {
 	base *runtimeStub
@@ -761,7 +767,7 @@ func TestGatewayRuntimePortBridgeCreateSession(t *testing.T) {
 			UpdatedAt: now,
 		},
 	}
-	bridge, err := newGatewayRuntimePortBridge(context.Background(), stub)
+	bridge, err := newGatewayRuntimePortBridge(context.Background(), stub, stub)
 	if err != nil {
 		t.Fatalf("new bridge: %v", err)
 	}
@@ -785,7 +791,7 @@ func TestGatewayRuntimePortBridgeCreateSession(t *testing.T) {
 func TestGatewayRuntimePortBridgeCreateSessionBranches(t *testing.T) {
 	t.Run("subject denied", func(t *testing.T) {
 		stub := &runtimeStub{}
-		bridge, err := newGatewayRuntimePortBridge(context.Background(), stub)
+		bridge, err := newGatewayRuntimePortBridge(context.Background(), stub, stub)
 		if err != nil {
 			t.Fatalf("new bridge: %v", err)
 		}
@@ -800,7 +806,7 @@ func TestGatewayRuntimePortBridgeCreateSessionBranches(t *testing.T) {
 
 	t.Run("runtime no creator", func(t *testing.T) {
 		base := &runtimeStub{}
-		bridge, err := newGatewayRuntimePortBridge(context.Background(), &runtimeWithoutCreator{base: base})
+		bridge, err := newGatewayRuntimePortBridge(context.Background(), &runtimeWithoutCreator{base: base}, base)
 		if err != nil {
 			t.Fatalf("new bridge: %v", err)
 		}

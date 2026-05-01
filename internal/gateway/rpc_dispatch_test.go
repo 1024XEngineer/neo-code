@@ -918,6 +918,9 @@ func (s *runtimePortOnlyStub) ListSessions(_ context.Context) ([]SessionSummary,
 func (s *runtimePortOnlyStub) LoadSession(_ context.Context, _ LoadSessionInput) (Session, error) {
 	return Session{}, nil
 }
+func (s *runtimePortOnlyStub) CreateSession(_ context.Context, _ CreateSessionInput) (string, error) {
+	return "", nil
+}
 func (s *runtimePortOnlyStub) DeleteSession(_ context.Context, _ DeleteSessionInput) (bool, error) {
 	return false, nil
 }
