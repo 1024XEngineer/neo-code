@@ -18,7 +18,7 @@ const (
 	// DefaultStreamCleanupInterval 定义路由表过期清理扫描间隔。
 	DefaultStreamCleanupInterval = 30 * time.Second
 	// DefaultStreamQueueSize 定义每个连接的默认发送队列容量。
-	DefaultStreamQueueSize = 64
+	DefaultStreamQueueSize = 256
 	// DefaultStreamMaxBindingsPerConnection 定义单连接可维护的最大绑定数，防止路由表被无限放大。
 	DefaultStreamMaxBindingsPerConnection = 128
 )
@@ -942,6 +942,13 @@ func extractSessionIDFromPayload(payload any) string {
 	case protocol.ListSessionSkillsParams:
 		return strings.TrimSpace(typed.SessionID)
 	case *protocol.ListSessionSkillsParams:
+		if typed == nil {
+			return ""
+		}
+		return strings.TrimSpace(typed.SessionID)
+	case protocol.ListSessionTodosParams:
+		return strings.TrimSpace(typed.SessionID)
+	case *protocol.ListSessionTodosParams:
 		if typed == nil {
 			return ""
 		}

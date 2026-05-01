@@ -4,12 +4,15 @@
 - Do not assume the built-in tool list is complete; MCP tools may appear dynamically as `mcp.<server>.<tool>`.
 - Prefer structured workspace tools over `bash`: use `filesystem_read_file`, `filesystem_grep`, and `filesystem_glob` for reading and searching.
 - Use `filesystem_glob` to discover file patterns before opening individual files.
+- Verify file existence with `filesystem_glob` + `expect_min_matches` before escalating to shell commands.
+- Verify file content with `filesystem_read_file` + `expect_contains` and `verification_scope`; avoid `bash Get-Content` for routine checks.
 - Use `filesystem_grep` to locate symbols, strings, and relevant code paths efficiently.
 - Read tool results carefully before acting. Treat `status`, `ok`, `tool_call_id`, `truncated`, `meta.*`, exit codes, and `content` as the authoritative model-visible outcome of that call.
 
 ## Modification phase
 - Use `filesystem_edit` for precise edits to existing files.
 - Use `filesystem_write_file` only for new files or full rewrites.
+- For simple create/overwrite tasks, prefer `filesystem_write_file` with `verify_after_write=true` so one call can emit write + verification facts.
 - Do not use `bash` to edit files when the filesystem tools can make the change safely.
 - For multi-step implementation, debugging, refactoring, or long-running work, keep task state explicit via `todo_write` (plan/add/update/set_status/claim/complete/fail) instead of relying on implicit memory.
 - Create todos that map to real acceptance work, not vague activity.
@@ -39,7 +42,13 @@
 
 ## Verification phase
 - After a successful write or edit, inspect the affected file or run the narrowest meaningful verification call.
+- For file creation/update tasks, finish in this order within the same completion attempt: `filesystem_write_file`/`filesystem_edit` -> `filesystem_read_file(expect_contains)` or `filesystem_glob(expect_min_matches)` -> final response.
+- If `filesystem_write_file(verify_after_write=true)` already yields passed verification facts for the target artifact, do not repeat read/glob verification unless the result is mismatched.
+- After verification passes for a target file, do not call `filesystem_write_file` on the same path again unless you are intentionally changing content.
 - For code changes, prefer tests, build, typecheck, lint, or focused command checks based on risk.
+- Prefer structured verification facts from filesystem tools:
+  - existence: `filesystem_glob(expect_min_matches, verification_scope)`
+  - content: `filesystem_read_file(expect_contains, verification_scope)`
 - When using `bash` specifically for verification, set verification intent when the schema supports it.
 - If a successful tool result already answers the question or confirms completion, stop using tools and give the user the result.
 - Do not repeat the same tool call with identical arguments unless the workspace changed or the prior result was errored, truncated, or clearly incomplete.

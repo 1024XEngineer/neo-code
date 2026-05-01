@@ -448,14 +448,6 @@ func (a *App) addImageFromClipboard() error {
 		return nil
 	}
 
-	if path, ok := clipboardImagePathFromText(a.state.CurrentWorkdir); ok {
-		if err := a.queueImageAttachmentForPrepare(path); err != nil {
-			return err
-		}
-		a.state.StatusText = "[System] Added image from clipboard path"
-		return nil
-	}
-
 	if imageErr != nil {
 		return fmt.Errorf("failed to read clipboard image: %w", imageErr)
 	}

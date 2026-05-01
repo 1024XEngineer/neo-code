@@ -421,6 +421,183 @@ type ResolvePermissionParams struct {
 
 ---
 
+## Method: gateway.listProviders
+
+- Stability: Stable
+- Auth Required: Yes
+- Request Schema: 空对象 `{}` 或省略 `params`
+- Response Schema: `ack` + `payload.providers`（ProviderOption 数组）
+- Observation:
+  - `gateway_requests_total{method="gateway.listProviders",...}`
+
+---
+
+## Method: gateway.createCustomProvider
+
+- Stability: Stable
+- Auth Required: Yes
+- Request Schema:
+
+```go
+type CreateCustomProviderParams struct {
+	Name                  string                    `json:"name"`     // MUST
+	Driver                string                    `json:"driver"`   // MUST
+	BaseURL               string                    `json:"base_url,omitempty"`
+	ChatAPIMode           string                    `json:"chat_api_mode,omitempty"`
+	ChatEndpointPath      string                    `json:"chat_endpoint_path,omitempty"`
+	APIKeyEnv             string                    `json:"api_key_env"` // MUST
+	APIKey                string                    `json:"api_key,omitempty"`
+	ModelSource           string                    `json:"model_source,omitempty"`
+	DiscoveryEndpointPath string                    `json:"discovery_endpoint_path,omitempty"`
+	Models                []ProviderModelDescriptor `json:"models,omitempty"`
+}
+```
+
+- Response Schema:
+  - Success: `ack` + `payload` 包含 `provider_id`、`model_id`
+  - Failure: 标准 `error`
+- Observation:
+  - `gateway_requests_total{method="gateway.createCustomProvider",...}`
+
+---
+
+## Method: gateway.deleteCustomProvider
+
+- Stability: Stable
+- Auth Required: Yes
+- Request Schema:
+
+```go
+type DeleteCustomProviderParams struct {
+	ProviderID string `json:"provider_id"` // MUST
+}
+```
+
+- Response Schema:
+  - Success: `ack` + `payload` 包含 `deleted`、`provider_id`
+  - Failure: 标准 `error`
+- Observation:
+  - `gateway_requests_total{method="gateway.deleteCustomProvider",...}`
+
+---
+
+## Method: gateway.selectProviderModel
+
+- Stability: Stable
+- Auth Required: Yes
+- Request Schema:
+
+```go
+type SelectProviderModelParams struct {
+	ProviderID string `json:"provider_id"`        // MUST
+	ModelID    string `json:"model_id,omitempty"` // 省略表示仅切换 provider
+}
+```
+
+- Response Schema:
+  - Success: `ack` + `payload` 包含 `provider_id`、`model_id`
+  - Failure: 标准 `error`
+- Observation:
+  - `gateway_requests_total{method="gateway.selectProviderModel",...}`
+
+---
+
+## Method: gateway.listMCPServers
+
+- Stability: Stable
+- Auth Required: Yes
+- Request Schema: 空对象 `{}` 或省略 `params`
+- Response Schema: `ack` + `payload.servers`（MCPServerEntry 数组）
+- Observation:
+  - `gateway_requests_total{method="gateway.listMCPServers",...}`
+
+---
+
+## Method: gateway.upsertMCPServer
+
+- Stability: Stable
+- Auth Required: Yes
+- Request Schema:
+
+```go
+type UpsertMCPServerParams struct {
+	Server MCPServerParams `json:"server"` // MUST
+}
+
+type MCPServerParams struct {
+	ID      string            `json:"id"`
+	Enabled bool              `json:"enabled,omitempty"`
+	Source  string            `json:"source,omitempty"`
+	Version string            `json:"version,omitempty"`
+	Stdio   MCPStdioParams    `json:"stdio,omitempty"`
+	Env     []MCPEnvVarParams `json:"env,omitempty"`
+}
+
+type MCPStdioParams struct {
+	Command           string   `json:"command,omitempty"`
+	Args              []string `json:"args,omitempty"`
+	Workdir           string   `json:"workdir,omitempty"`
+	StartTimeoutSec   int      `json:"start_timeout_sec,omitempty"`
+	CallTimeoutSec    int      `json:"call_timeout_sec,omitempty"`
+	RestartBackoffSec int      `json:"restart_backoff_sec,omitempty"`
+}
+
+type MCPEnvVarParams struct {
+	Name     string `json:"name"`
+	Value    string `json:"value,omitempty"`
+	ValueEnv string `json:"value_env,omitempty"`
+}
+```
+
+- Response Schema:
+  - Success: `ack` + `payload.server`
+  - Failure: 标准 `error`
+- Observation:
+  - `gateway_requests_total{method="gateway.upsertMCPServer",...}`
+
+---
+
+## Method: gateway.setMCPServerEnabled
+
+- Stability: Stable
+- Auth Required: Yes
+- Request Schema:
+
+```go
+type SetMCPServerEnabledParams struct {
+	ID      string `json:"id"`      // MUST
+	Enabled bool   `json:"enabled"` // MUST
+}
+```
+
+- Response Schema:
+  - Success: `ack` + `payload` 包含 `id`、`enabled`
+  - Failure: 标准 `error`
+- Observation:
+  - `gateway_requests_total{method="gateway.setMCPServerEnabled",...}`
+
+---
+
+## Method: gateway.deleteMCPServer
+
+- Stability: Stable
+- Auth Required: Yes
+- Request Schema:
+
+```go
+type DeleteMCPServerParams struct {
+	ID string `json:"id"` // MUST
+}
+```
+
+- Response Schema:
+  - Success: `ack` + `payload` 包含 `deleted`、`id`
+  - Failure: 标准 `error`
+- Observation:
+  - `gateway_requests_total{method="gateway.deleteMCPServer",...}`
+
+---
+
 ## Method: gateway.event
 
 - Stability: Stable

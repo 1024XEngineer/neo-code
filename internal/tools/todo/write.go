@@ -282,65 +282,147 @@ func (t *Tool) Execute(ctx context.Context, call tools.ToolCallInput) (tools.Too
 		return errorResult(reasonInvalidArguments, err.Error(), nil), err
 	}
 
-	resultErr := t.dispatch(call, input)
+	dispatchMeta, resultErr := t.dispatch(call, input)
 	if resultErr != nil {
 		reason := mapReason(resultErr)
 		return errorResult(reason, resultErr.Error(), map[string]any{"action": input.Action}), resultErr
 	}
 
-	return successResult(input.Action, call.SessionMutator.ListTodos()), nil
+	return successResultWithMetadata(input.Action, call.SessionMutator.ListTodos(), dispatchMeta), nil
 }
 
 // dispatch 按 action 执行对应 Todo 变更。
-func (t *Tool) dispatch(call tools.ToolCallInput, input writeInput) error {
+func (t *Tool) dispatch(call tools.ToolCallInput, input writeInput) (map[string]any, error) {
 	switch input.Action {
 	case actionPlan:
 		if input.Items == nil {
-			return fmt.Errorf("%w: action %q requires items", errTodoInvalidArguments, actionPlan)
+			return nil, fmt.Errorf("%w: action %q requires items", errTodoInvalidArguments, actionPlan)
 		}
-		return call.SessionMutator.ReplaceTodos(input.Items)
+		if err := call.SessionMutator.ReplaceTodos(input.Items); err != nil {
+			return nil, err
+		}
+		return map[string]any{"state_fact": "todo_updated"}, nil
 	case actionAdd:
 		if input.Item == nil {
-			return fmt.Errorf("%w: action %q requires item", errTodoInvalidArguments, actionAdd)
+			return nil, fmt.Errorf("%w: action %q requires item", errTodoInvalidArguments, actionAdd)
 		}
-		return call.SessionMutator.AddTodo(*input.Item)
+		if err := call.SessionMutator.AddTodo(*input.Item); err != nil {
+			return nil, err
+		}
+		return map[string]any{"state_fact": "todo_created"}, nil
 	case actionUpdate:
 		if input.ID == "" || input.Patch == nil {
-			return fmt.Errorf("%w: action %q requires id and patch", errTodoInvalidArguments, actionUpdate)
+			return nil, fmt.Errorf("%w: action %q requires id and patch", errTodoInvalidArguments, actionUpdate)
 		}
-		return call.SessionMutator.UpdateTodo(input.ID, input.Patch.toSessionPatch(), input.ExpectedRevision)
+		if err := call.SessionMutator.UpdateTodo(input.ID, input.Patch.toSessionPatch(), input.ExpectedRevision); err != nil {
+			return nil, err
+		}
+		return map[string]any{"state_fact": "todo_updated"}, nil
 	case actionSetStatus:
 		if input.ID == "" {
-			return fmt.Errorf("%w: action %q requires id", errTodoInvalidArguments, actionSetStatus)
+			return nil, fmt.Errorf("%w: action %q requires id", errTodoInvalidArguments, actionSetStatus)
 		}
 		if !input.Status.Valid() {
-			return fmt.Errorf("%w: action %q requires valid status", errTodoInvalidArguments, actionSetStatus)
+			return nil, fmt.Errorf("%w: action %q requires valid status", errTodoInvalidArguments, actionSetStatus)
 		}
-		return call.SessionMutator.SetTodoStatus(input.ID, input.Status, input.ExpectedRevision)
+		if err := call.SessionMutator.SetTodoStatus(input.ID, input.Status, input.ExpectedRevision); err != nil {
+			return nil, err
+		}
+		stateFact := "todo_updated"
+		if input.Status == agentsession.TodoStatusCompleted {
+			stateFact = "todo_completed"
+		} else if input.Status == agentsession.TodoStatusFailed {
+			stateFact = "todo_failed"
+		}
+		return map[string]any{"state_fact": stateFact}, nil
 	case actionRemove:
 		if input.ID == "" {
-			return fmt.Errorf("%w: action %q requires id", errTodoInvalidArguments, actionRemove)
+			return nil, fmt.Errorf("%w: action %q requires id", errTodoInvalidArguments, actionRemove)
 		}
-		return call.SessionMutator.DeleteTodo(input.ID, input.ExpectedRevision)
+		if err := call.SessionMutator.DeleteTodo(input.ID, input.ExpectedRevision); err != nil {
+			return nil, err
+		}
+		return map[string]any{"state_fact": "todo_updated"}, nil
 	case actionClaim:
 		if input.ID == "" {
-			return fmt.Errorf("%w: action %q requires id", errTodoInvalidArguments, actionClaim)
+			return nil, fmt.Errorf("%w: action %q requires id", errTodoInvalidArguments, actionClaim)
 		}
 		if strings.TrimSpace(input.OwnerType) == "" || strings.TrimSpace(input.OwnerID) == "" {
-			return fmt.Errorf("%w: action %q requires owner_type and owner_id", errTodoInvalidArguments, actionClaim)
+			return nil, fmt.Errorf("%w: action %q requires owner_type and owner_id", errTodoInvalidArguments, actionClaim)
 		}
-		return call.SessionMutator.ClaimTodo(input.ID, input.OwnerType, input.OwnerID, input.ExpectedRevision)
+		if err := call.SessionMutator.ClaimTodo(input.ID, input.OwnerType, input.OwnerID, input.ExpectedRevision); err != nil {
+			return nil, err
+		}
+		return map[string]any{"state_fact": "todo_updated"}, nil
 	case actionComplete:
 		if input.ID == "" {
-			return fmt.Errorf("%w: action %q requires id", errTodoInvalidArguments, actionComplete)
+			return nil, fmt.Errorf("%w: action %q requires id", errTodoInvalidArguments, actionComplete)
 		}
-		return call.SessionMutator.CompleteTodo(input.ID, input.Artifacts, input.ExpectedRevision)
+		meta, err := completeTodoWithErgonomics(call, input)
+		if err != nil {
+			return nil, err
+		}
+		return meta, nil
 	case actionFail:
 		if input.ID == "" {
-			return fmt.Errorf("%w: action %q requires id", errTodoInvalidArguments, actionFail)
+			return nil, fmt.Errorf("%w: action %q requires id", errTodoInvalidArguments, actionFail)
 		}
-		return call.SessionMutator.FailTodo(input.ID, input.Reason, input.ExpectedRevision)
+		if err := call.SessionMutator.FailTodo(input.ID, input.Reason, input.ExpectedRevision); err != nil {
+			return nil, err
+		}
+		return map[string]any{
+			"state_fact":        "todo_failed",
+			"terminal_failure":  true,
+			"do_not_retry":      true,
+			"transition_path":   []string{"failed"},
+			"auto_claimed":      false,
+			"failure_reason_set": strings.TrimSpace(input.Reason) != "",
+		}, nil
 	default:
-		return fmt.Errorf("todo_write: unsupported action %q", input.Action)
+		return nil, fmt.Errorf("todo_write: unsupported action %q", input.Action)
+	}
+}
+
+// completeTodoWithErgonomics 为 complete 动作提供 pending->in_progress->completed 便捷迁移。
+func completeTodoWithErgonomics(call tools.ToolCallInput, input writeInput) (map[string]any, error) {
+	current, ok := call.SessionMutator.FindTodo(input.ID)
+	if !ok {
+		return nil, fmt.Errorf("%w: todo %q", agentsession.ErrTodoNotFound, input.ID)
+	}
+
+	switch current.Status {
+	case agentsession.TodoStatusCompleted:
+		return map[string]any{
+			"state_fact":      "todo_completed",
+			"no_op":           true,
+			"reason_code":     reasonTerminalNoop,
+			"auto_claimed":    false,
+			"transition_path": []string{"completed"},
+		}, nil
+	case agentsession.TodoStatusPending:
+		if err := call.SessionMutator.SetTodoStatus(input.ID, agentsession.TodoStatusInProgress, input.ExpectedRevision); err != nil {
+			return nil, err
+		}
+		updated, exists := call.SessionMutator.FindTodo(input.ID)
+		if !exists {
+			return nil, fmt.Errorf("%w: todo %q", agentsession.ErrTodoNotFound, input.ID)
+		}
+		if err := call.SessionMutator.CompleteTodo(input.ID, input.Artifacts, updated.Revision); err != nil {
+			return nil, err
+		}
+		return map[string]any{
+			"state_fact":      "todo_completed",
+			"auto_claimed":    true,
+			"transition_path": []string{"pending", "in_progress", "completed"},
+		}, nil
+	default:
+		if err := call.SessionMutator.CompleteTodo(input.ID, input.Artifacts, input.ExpectedRevision); err != nil {
+			return nil, err
+		}
+		return map[string]any{
+			"state_fact":      "todo_completed",
+			"auto_claimed":    false,
+			"transition_path": []string{"in_progress", "completed"},
+		}, nil
 	}
 }

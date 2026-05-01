@@ -264,6 +264,9 @@ func defaultGatewayCommandRunner(ctx context.Context, options gatewayCommandOpti
 		ACL:                  acl,
 		Metrics:              metrics,
 		AllowedOrigins:       gatewayConfig.Security.AllowOrigins,
+		ConnectionCountChanged: func(active int) {
+			idleCloser.observe(active)
+		},
 	})
 	if err != nil {
 		_ = ipcServer.Close(context.Background())
@@ -287,7 +290,6 @@ func defaultGatewayCommandRunner(ctx context.Context, options gatewayCommandOpti
 	for _, entry := range transportAdapters {
 		logger.Printf("gateway %s listen address: %s", entry.name, entry.adapter.ListenAddress())
 	}
-	idleCloser.observe(0)
 
 	for index, entry := range transportAdapters {
 		if index == 0 {

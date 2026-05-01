@@ -41,60 +41,53 @@ type ControlPlaneACL struct {
 	enabled bool
 }
 
+// fullControlPlaneMethods 返回本地控制面（IPC/HTTP/WS）完整方法白名单。
+func fullControlPlaneMethods() map[string]struct{} {
+	methods := []string{
+		"gateway.authenticate",
+		"gateway.ping",
+		"gateway.bindStream",
+		"gateway.run",
+		"gateway.compact",
+		"gateway.executeSystemTool",
+		"gateway.activateSessionSkill",
+		"gateway.deactivateSessionSkill",
+		"gateway.listSessionSkills",
+		"gateway.listAvailableSkills",
+		"gateway.cancel",
+		"gateway.listSessions",
+		"gateway.loadSession",
+		"gateway.resolvePermission",
+		"gateway.deleteSession",
+		"gateway.renameSession",
+		"gateway.listFiles",
+		"gateway.listModels",
+		"gateway.setSessionModel",
+		"gateway.getSessionModel",
+		"gateway.listProviders",
+		"gateway.createCustomProvider",
+		"gateway.deleteCustomProvider",
+		"gateway.selectProviderModel",
+		"gateway.listMCPServers",
+		"gateway.upsertMCPServer",
+		"gateway.setMCPServerEnabled",
+		"gateway.deleteMCPServer",
+		"wake.openUrl",
+	}
+	set := make(map[string]struct{}, len(methods))
+	for _, m := range methods {
+		set[strings.ToLower(strings.TrimSpace(m))] = struct{}{}
+	}
+	return set
+}
+
 // NewStrictControlPlaneACL 创建默认拒绝的严格 ACL。
 func NewStrictControlPlaneACL() *ControlPlaneACL {
+	localMethods := fullControlPlaneMethods()
 	allow := map[RequestSource]map[string]struct{}{
-		RequestSourceIPC: {
-			strings.ToLower(strings.TrimSpace("gateway.authenticate")):           {},
-			strings.ToLower(strings.TrimSpace("gateway.ping")):                   {},
-			strings.ToLower(strings.TrimSpace("gateway.bindStream")):             {},
-			strings.ToLower(strings.TrimSpace("gateway.run")):                    {},
-			strings.ToLower(strings.TrimSpace("gateway.compact")):                {},
-			strings.ToLower(strings.TrimSpace("gateway.executeSystemTool")):      {},
-			strings.ToLower(strings.TrimSpace("gateway.activateSessionSkill")):   {},
-			strings.ToLower(strings.TrimSpace("gateway.deactivateSessionSkill")): {},
-			strings.ToLower(strings.TrimSpace("gateway.listSessionSkills")):      {},
-			strings.ToLower(strings.TrimSpace("gateway.listAvailableSkills")):    {},
-			strings.ToLower(strings.TrimSpace("gateway.cancel")):                 {},
-			strings.ToLower(strings.TrimSpace("gateway.listSessions")):           {},
-			strings.ToLower(strings.TrimSpace("gateway.loadSession")):            {},
-			strings.ToLower(strings.TrimSpace("gateway.resolvePermission")):      {},
-			strings.ToLower(strings.TrimSpace("wake.openUrl")):                   {},
-		},
-		RequestSourceHTTP: {
-			strings.ToLower(strings.TrimSpace("gateway.authenticate")):           {},
-			strings.ToLower(strings.TrimSpace("gateway.ping")):                   {},
-			strings.ToLower(strings.TrimSpace("gateway.bindStream")):             {},
-			strings.ToLower(strings.TrimSpace("gateway.run")):                    {},
-			strings.ToLower(strings.TrimSpace("gateway.compact")):                {},
-			strings.ToLower(strings.TrimSpace("gateway.executeSystemTool")):      {},
-			strings.ToLower(strings.TrimSpace("gateway.activateSessionSkill")):   {},
-			strings.ToLower(strings.TrimSpace("gateway.deactivateSessionSkill")): {},
-			strings.ToLower(strings.TrimSpace("gateway.listSessionSkills")):      {},
-			strings.ToLower(strings.TrimSpace("gateway.listAvailableSkills")):    {},
-			strings.ToLower(strings.TrimSpace("gateway.cancel")):                 {},
-			strings.ToLower(strings.TrimSpace("gateway.listSessions")):           {},
-			strings.ToLower(strings.TrimSpace("gateway.loadSession")):            {},
-			strings.ToLower(strings.TrimSpace("gateway.resolvePermission")):      {},
-			strings.ToLower(strings.TrimSpace("wake.openUrl")):                   {},
-		},
-		RequestSourceWS: {
-			strings.ToLower(strings.TrimSpace("gateway.authenticate")):           {},
-			strings.ToLower(strings.TrimSpace("gateway.ping")):                   {},
-			strings.ToLower(strings.TrimSpace("gateway.bindStream")):             {},
-			strings.ToLower(strings.TrimSpace("gateway.run")):                    {},
-			strings.ToLower(strings.TrimSpace("gateway.compact")):                {},
-			strings.ToLower(strings.TrimSpace("gateway.executeSystemTool")):      {},
-			strings.ToLower(strings.TrimSpace("gateway.activateSessionSkill")):   {},
-			strings.ToLower(strings.TrimSpace("gateway.deactivateSessionSkill")): {},
-			strings.ToLower(strings.TrimSpace("gateway.listSessionSkills")):      {},
-			strings.ToLower(strings.TrimSpace("gateway.listAvailableSkills")):    {},
-			strings.ToLower(strings.TrimSpace("gateway.cancel")):                 {},
-			strings.ToLower(strings.TrimSpace("gateway.listSessions")):           {},
-			strings.ToLower(strings.TrimSpace("gateway.loadSession")):            {},
-			strings.ToLower(strings.TrimSpace("gateway.resolvePermission")):      {},
-			strings.ToLower(strings.TrimSpace("wake.openUrl")):                   {},
-		},
+		RequestSourceIPC:  localMethods,
+		RequestSourceHTTP: localMethods,
+		RequestSourceWS:   localMethods,
 		RequestSourceSSE: {
 			strings.ToLower(strings.TrimSpace("gateway.ping")): {},
 		},

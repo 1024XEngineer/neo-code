@@ -28,6 +28,10 @@ var repeatCycleReminder = mustReadTemplate("templates/runtime/self_healing_repea
 
 var compactSystemPromptTemplate = mustReadTemplate("templates/context/compact_system_prompt.md")
 
+var planModePlanPrompt = mustReadTemplate("templates/context/plan_mode_plan.md")
+
+var planModeBuildExecutePrompt = mustReadTemplate("templates/context/plan_mode_build_execute.md")
+
 var researcherRolePrompt = mustReadTemplate("templates/subagent/researcher.md")
 
 var coderRolePrompt = mustReadTemplate("templates/subagent/coder.md")
@@ -56,6 +60,18 @@ func CompactSystemPrompt(taskStateContract string, summaryFormat string) string 
 		compactSummaryFormatTemplatePlaceholder, strings.TrimSpace(summaryFormat),
 	)
 	return strings.TrimSpace(replacer.Replace(compactSystemPromptTemplate))
+}
+
+// PlanModePrompt 返回 plan/build 不同阶段对应的静态提示模板，供 context source 注入动态字段前复用。
+func PlanModePrompt(stage string) string {
+	switch strings.TrimSpace(stage) {
+	case "plan":
+		return planModePlanPrompt
+	case "build_execute":
+		return planModeBuildExecutePrompt
+	default:
+		return ""
+	}
 }
 
 // ResearcherRolePrompt 返回 researcher 子代理基础 prompt。

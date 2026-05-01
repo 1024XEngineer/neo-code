@@ -246,10 +246,8 @@ func normalizeCreateCustomProviderInput(input CreateCustomProviderInput) (create
 }
 
 type manualModelJSON struct {
-	ID              string `json:"id"`
-	Name            string `json:"name"`
-	ContextWindow   *int   `json:"context_window,omitempty"`
-	MaxOutputTokens *int   `json:"max_output_tokens,omitempty"`
+	ID   string `json:"id"`
+	Name string `json:"name"`
 }
 
 // parseManualModelsJSON 解析并校验手工模型 JSON，确保至少包含一个合法模型且 id/name 必填。
@@ -291,22 +289,8 @@ func parseManualModelsJSON(raw string) ([]providertypes.ModelDescriptor, error) 
 		seen[key] = struct{}{}
 
 		descriptor := providertypes.ModelDescriptor{
-			ID:              id,
-			Name:            name,
-			ContextWindow:   config.ManualModelOptionalIntUnset,
-			MaxOutputTokens: config.ManualModelOptionalIntUnset,
-		}
-		if model.ContextWindow != nil {
-			if *model.ContextWindow <= 0 {
-				return nil, fmt.Errorf("selection: models[%d].context_window must be greater than 0", index)
-			}
-			descriptor.ContextWindow = *model.ContextWindow
-		}
-		if model.MaxOutputTokens != nil {
-			if *model.MaxOutputTokens <= 0 {
-				return nil, fmt.Errorf("selection: models[%d].max_output_tokens must be greater than 0", index)
-			}
-			descriptor.MaxOutputTokens = *model.MaxOutputTokens
+			ID:   id,
+			Name: name,
 		}
 		descriptors = append(descriptors, descriptor)
 	}

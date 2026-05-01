@@ -57,6 +57,81 @@ func (s *Service) emitWithEnvelope(ctx context.Context, evt RuntimeEvent) error 
 	return nil
 }
 
+// emitRunScopedOptional 发送可观测增强事件；当事件通道拥堵时直接丢弃，避免阻塞主执行链路。
+func (s *Service) emitRunScopedOptional(kind EventType, state *runState, payload any) {
+	if s == nil || s.events == nil {
+		return
+	}
+	runID := ""
+	sessionID := ""
+	turn := turnUnspecified
+	phase := ""
+	if state != nil {
+		runID = state.runID
+		sessionID = state.session.ID
+		turn = state.turn
+		if state.lifecycle != "" {
+			phase = string(state.lifecycle)
+		}
+	}
+	evt := RuntimeEvent{
+		Type:           kind,
+		RunID:          runID,
+		SessionID:      sessionID,
+		Turn:           turn,
+		Phase:          phase,
+		Timestamp:      time.Now(),
+		PayloadVersion: controlplane.PayloadVersion,
+		Payload:        payload,
+	}
+	select {
+	case s.events <- evt:
+	default:
+	}
+}
+
+// emitRunScopedPriority 发送关键状态事件；当队列满时淘汰一条旧事件后重试，尽量保证终态事件可见。
+func (s *Service) emitRunScopedPriority(kind EventType, state *runState, payload any) {
+	if s == nil || s.events == nil {
+		return
+	}
+	runID := ""
+	sessionID := ""
+	turn := turnUnspecified
+	phase := ""
+	if state != nil {
+		runID = state.runID
+		sessionID = state.session.ID
+		turn = state.turn
+		if state.lifecycle != "" {
+			phase = string(state.lifecycle)
+		}
+	}
+	evt := RuntimeEvent{
+		Type:           kind,
+		RunID:          runID,
+		SessionID:      sessionID,
+		Turn:           turn,
+		Phase:          phase,
+		Timestamp:      time.Now(),
+		PayloadVersion: controlplane.PayloadVersion,
+		Payload:        payload,
+	}
+	select {
+	case s.events <- evt:
+		return
+	default:
+	}
+	select {
+	case <-s.events:
+	default:
+	}
+	select {
+	case s.events <- evt:
+	default:
+	}
+}
+
 func (s *Service) deliverEvent(ctx context.Context, evt RuntimeEvent) error {
 	select {
 	case s.events <- evt:

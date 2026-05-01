@@ -4,6 +4,9 @@ import "strings"
 
 var supportedOutputSections = map[string]struct{}{
 	"summary":      {},
+	"report":       {},
+	"status":       {},
+	"logs":         {},
 	"findings":     {},
 	"patches":      {},
 	"risks":        {},
@@ -45,6 +48,12 @@ func hasOutputSectionContent(output Output, section string) bool {
 	switch section {
 	case "summary":
 		return strings.TrimSpace(output.Summary) != ""
+	case "report":
+		return strings.TrimSpace(output.Report) != ""
+	case "status":
+		return strings.TrimSpace(output.Status) != ""
+	case "logs":
+		return len(output.Logs) > 0
 	case "findings":
 		return len(output.Findings) > 0
 	case "patches":

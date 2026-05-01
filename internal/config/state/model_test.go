@@ -9,7 +9,7 @@ import (
 	providertypes "neo-code/internal/provider/types"
 )
 
-func TestCatalogInputFromProviderBuiltinIncludesDefaultsAndLazyDiscovery(t *testing.T) {
+func TestCatalogInputFromProviderBuiltinUsesStaticModelsAndDisablesDiscovery(t *testing.T) {
 	t.Setenv("CATALOG_PROVIDER_API_KEY", "secret-key")
 
 	cfg := configpkg.ProviderConfig{
@@ -41,11 +41,14 @@ func TestCatalogInputFromProviderBuiltinIncludesDefaultsAndLazyDiscovery(t *test
 	if input.Identity.DiscoveryEndpointPath != providerpkg.DiscoveryEndpointPathModels {
 		t.Fatalf("expected default discovery endpoint, got %+v", input.Identity)
 	}
-	if len(input.DefaultModels) != 1 || input.DefaultModels[0].ID != "server-default" {
-		t.Fatalf("expected builtin default model, got %+v", input.DefaultModels)
+	if len(input.DefaultModels) != 1 || input.DefaultModels[0].ID != "model-a" {
+		t.Fatalf("expected builtin static models as defaults, got %+v", input.DefaultModels)
 	}
 	if len(input.ConfiguredModels) != 1 || input.ConfiguredModels[0].ID != "model-a" {
 		t.Fatalf("expected configured models to be normalized, got %+v", input.ConfiguredModels)
+	}
+	if !input.DisableDiscovery {
+		t.Fatal("expected builtin provider to disable discovery")
 	}
 
 	cfg.Models[0].ID = "mutated"

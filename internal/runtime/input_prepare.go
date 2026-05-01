@@ -169,6 +169,7 @@ func (p sessionInputPreparer) Prepare(
 			RunID:     strings.TrimSpace(input.RunID),
 			Parts:     prepared.Parts,
 			Workdir:   strings.TrimSpace(prepared.Workdir),
+			Mode:      strings.TrimSpace(input.Mode),
 		},
 		SavedAssets: append([]agentsession.AssetMeta(nil), prepared.SavedAssets...),
 	}, nil

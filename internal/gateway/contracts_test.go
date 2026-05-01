@@ -65,6 +65,62 @@ func (s *runtimePortCompileStub) ListSessions(_ context.Context) ([]SessionSumma
 func (s *runtimePortCompileStub) LoadSession(_ context.Context, _ LoadSessionInput) (Session, error) {
 	return Session{}, nil
 }
+func (s *runtimePortCompileStub) DeleteSession(_ context.Context, _ DeleteSessionInput) (bool, error) {
+	return false, nil
+}
+func (s *runtimePortCompileStub) RenameSession(_ context.Context, _ RenameSessionInput) error {
+	return nil
+}
+func (s *runtimePortCompileStub) ListFiles(_ context.Context, _ ListFilesInput) ([]FileEntry, error) {
+	return nil, nil
+}
+func (s *runtimePortCompileStub) ListModels(_ context.Context, _ ListModelsInput) ([]ModelEntry, error) {
+	return nil, nil
+}
+func (s *runtimePortCompileStub) SetSessionModel(_ context.Context, _ SetSessionModelInput) error {
+	return nil
+}
+func (s *runtimePortCompileStub) GetSessionModel(_ context.Context, _ GetSessionModelInput) (SessionModelResult, error) {
+	return SessionModelResult{}, nil
+}
+func (s *runtimePortCompileStub) ListProviders(_ context.Context, _ ListProvidersInput) ([]ProviderOption, error) {
+	return nil, nil
+}
+func (s *runtimePortCompileStub) CreateProvider(_ context.Context, _ CreateProviderInput) (ProviderSelectionResult, error) {
+	return ProviderSelectionResult{}, nil
+}
+func (s *runtimePortCompileStub) DeleteProvider(_ context.Context, _ DeleteProviderInput) error {
+	return nil
+}
+func (s *runtimePortCompileStub) SelectProviderModel(
+	_ context.Context,
+	_ SelectProviderModelInput,
+) (ProviderSelectionResult, error) {
+	return ProviderSelectionResult{}, nil
+}
+func (s *runtimePortCompileStub) ListMCPServers(_ context.Context, _ ListMCPServersInput) ([]MCPServerEntry, error) {
+	return nil, nil
+}
+func (s *runtimePortCompileStub) UpsertMCPServer(_ context.Context, _ UpsertMCPServerInput) error {
+	return nil
+}
+func (s *runtimePortCompileStub) SetMCPServerEnabled(_ context.Context, _ SetMCPServerEnabledInput) error {
+	return nil
+}
+func (s *runtimePortCompileStub) DeleteMCPServer(_ context.Context, _ DeleteMCPServerInput) error {
+	return nil
+}
+
+func (s *runtimePortCompileStub) ListSessionTodos(_ context.Context, _ ListSessionTodosInput) (TodoSnapshot, error) {
+	return TodoSnapshot{}, nil
+}
+
+func (s *runtimePortCompileStub) GetRuntimeSnapshot(
+	_ context.Context,
+	_ GetRuntimeSnapshotInput,
+) (RuntimeSnapshot, error) {
+	return RuntimeSnapshot{}, nil
+}
 
 func (s *runtimePortCompileStub) CreateSession(_ context.Context, _ CreateSessionInput) (string, error) {
 	return "", nil

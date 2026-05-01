@@ -2,6 +2,7 @@ package verify
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"neo-code/internal/runtime/controlplane"
@@ -65,6 +66,12 @@ func (o Orchestrator) RunFinalVerification(ctx context.Context, input FinalVerif
 
 // stopReasonForVerificationFailure 将 verifier 失败映射到稳定 stop reason。
 func stopReasonForVerificationFailure(result VerificationResult) controlplane.StopReason {
+	if strings.EqualFold(strings.TrimSpace(result.Name), todoConvergenceVerifierName) {
+		if len(evidenceStringIDs(result.Evidence["failed_ids"])) > 0 ||
+			strings.Contains(strings.ToLower(strings.TrimSpace(result.Reason)), "required todos failed") {
+			return controlplane.StopReasonRequiredTodoFailed
+		}
+	}
 	switch result.ErrorClass {
 	case ErrorClassEnvMissing:
 		return controlplane.StopReasonVerificationConfigMissing
@@ -74,5 +81,20 @@ func stopReasonForVerificationFailure(result VerificationResult) controlplane.St
 		return controlplane.StopReasonVerificationExecutionError
 	default:
 		return controlplane.StopReasonVerificationFailed
+	}
+}
+
+func evidenceStringIDs(raw any) []string {
+	switch typed := raw.(type) {
+	case []string:
+		return typed
+	case []any:
+		values := make([]string, 0, len(typed))
+		for _, entry := range typed {
+			values = append(values, strings.TrimSpace(fmt.Sprintf("%v", entry)))
+		}
+		return values
+	default:
+		return nil
 	}
 }

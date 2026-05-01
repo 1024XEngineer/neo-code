@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	providertypes "neo-code/internal/provider/types"
+	runtimefacts "neo-code/internal/runtime/facts"
 	runtimehooks "neo-code/internal/runtime/hooks"
 	"neo-code/internal/tools"
 )
@@ -181,6 +182,19 @@ func (s *Service) executeOneToolCall(
 
 	s.emitRunScoped(ctx, EventToolResult, state, result)
 	s.emitTodoToolEvent(ctx, state, call, result, execErr)
+	state.mu.Lock()
+	hasFactsUpdate := false
+	if state.factsCollector != nil {
+		state.factsCollector.ApplyToolResult(call.Name, result)
+		hasFactsUpdate = true
+	}
+	state.mu.Unlock()
+	if hasFactsUpdate {
+		s.emitFactsUpdated(state, "tool_result")
+		if strings.EqualFold(strings.TrimSpace(call.Name), tools.ToolNameSpawnSubAgent) {
+			s.emitSubAgentSnapshotUpdated(state, "tool_result")
+		}
+	}
 
 	if isSuccessfulRememberToolCall(call.Name, result, execErr) {
 		state.mu.Lock()
@@ -269,15 +283,54 @@ func (s *Service) emitTodoToolEvent(
 	}
 
 	action, _ := result.Metadata["action"].(string)
-	if execErr == nil {
-		s.emitRunScoped(ctx, EventTodoUpdated, state, TodoEventPayload{Action: action})
+	payload := buildTodoEventPayload(state, strings.TrimSpace(action), "")
+	if execErr == nil && !result.IsError {
+		state.mu.Lock()
+		if state.factsCollector != nil {
+			state.factsCollector.ApplyTodoSnapshot(runtimefacts.TodoSummaryLike{
+				RequiredOpen:      payload.Summary.RequiredOpen,
+				RequiredCompleted: payload.Summary.RequiredCompleted,
+				RequiredFailed:    payload.Summary.RequiredFailed,
+			})
+		}
+		state.mu.Unlock()
+		s.emitRunScoped(ctx, EventTodoUpdated, state, payload)
+		s.emitRunScopedOptional(EventTodoSnapshotUpdated, state, payload)
+		s.emitRuntimeSnapshotUpdated(ctx, state, "todo_updated")
 		return
 	}
 
 	reason, _ := result.Metadata["reason_code"].(string)
-	if strings.Contains(strings.ToLower(strings.TrimSpace(reason)), "conflict") {
-		s.emitRunScoped(ctx, EventTodoConflict, state, TodoEventPayload{Action: action, Reason: reason})
+	reason = strings.TrimSpace(reason)
+	if reason == "" && execErr != nil {
+		reason = strings.TrimSpace(execErr.Error())
 	}
+	if reason == "" {
+		reason = strings.TrimSpace(result.ErrorClass)
+	}
+	if reason == "" {
+		reason = "todo_write_failed"
+	}
+	payload.Reason = reason
+	state.mu.Lock()
+	hasFactsUpdate := false
+	if state.factsCollector != nil {
+		state.factsCollector.ApplyTodoSnapshot(runtimefacts.TodoSummaryLike{
+			RequiredOpen:      payload.Summary.RequiredOpen,
+			RequiredCompleted: payload.Summary.RequiredCompleted,
+			RequiredFailed:    payload.Summary.RequiredFailed,
+		})
+		conflictIDs := extractTodoIDsFromPayload(payload.Items)
+		state.factsCollector.ApplyTodoConflict(conflictIDs)
+		hasFactsUpdate = true
+	}
+	state.mu.Unlock()
+	if hasFactsUpdate {
+		s.emitFactsUpdated(state, "todo_conflict")
+	}
+	s.emitRunScoped(ctx, EventTodoConflict, state, payload)
+	s.emitRunScopedOptional(EventTodoSnapshotUpdated, state, payload)
+	s.emitRuntimeSnapshotUpdated(ctx, state, "todo_conflict")
 }
 
 // hasSuccessfulWorkspaceWriteFact 判断工具结果是否产出了成功写入事实。
@@ -285,7 +338,29 @@ func hasSuccessfulWorkspaceWriteFact(result tools.ToolResult, execErr error) boo
 	if execErr != nil || result.IsError {
 		return false
 	}
+	if toolResultNoopWrite(result.Metadata) {
+		return false
+	}
 	return result.Facts.WorkspaceWrite
+}
+
+// toolResultNoopWrite 判断工具结果是否声明了 no-op 写入（内容未变化）。
+func toolResultNoopWrite(metadata map[string]any) bool {
+	if metadata == nil {
+		return false
+	}
+	raw, ok := metadata["noop_write"]
+	if !ok || raw == nil {
+		return false
+	}
+	switch typed := raw.(type) {
+	case bool:
+		return typed
+	case string:
+		return strings.EqualFold(strings.TrimSpace(typed), "true")
+	default:
+		return false
+	}
 }
 
 func summarizeHookResultContent(content string) string {
@@ -294,6 +369,46 @@ func summarizeHookResultContent(content string) string {
 		return trimmed
 	}
 	return trimmed[:256]
+}
+
+// extractTodoIDsFromPayload 提取 todo 事件快照中的条目 ID，用于冲突事实去重统计。
+func extractTodoIDsFromPayload(items []TodoViewItem) []string {
+	if len(items) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(items))
+	ids := make([]string, 0, len(items))
+	for _, item := range items {
+		id := strings.TrimSpace(item.ID)
+		if id == "" {
+			continue
+		}
+		if _, exists := seen[id]; exists {
+			continue
+		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
+	}
+	return ids
+}
+
+// buildTodoEventPayload 构建 todo 事件快照，确保 UI 可即时渲染结构化收敛信息。
+func buildTodoEventPayload(state *runState, action string, reason string) TodoEventPayload {
+	payload := TodoEventPayload{
+		Action: strings.TrimSpace(action),
+		Reason: strings.TrimSpace(reason),
+	}
+	if state == nil {
+		return payload
+	}
+
+	state.mu.Lock()
+	todos := cloneTodosForPersistence(state.session.Todos)
+	state.mu.Unlock()
+	snapshot := buildTodoSnapshotFromItems(todos)
+	payload.Items = snapshot.Items
+	payload.Summary = snapshot.Summary
+	return payload
 }
 
 // emitAfterToolResultHook 在工具结果确定后触发 after_tool_result 挂点，仅提供只读摘要元信息。

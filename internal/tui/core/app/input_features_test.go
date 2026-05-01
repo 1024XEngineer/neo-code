@@ -427,7 +427,7 @@ func TestAddImageFromClipboardBranches(t *testing.T) {
 	}
 }
 
-func TestAddImageFromClipboardFallsBackToClipboardPath(t *testing.T) {
+func TestAddImageFromClipboardDoesNotFallbackToClipboardPathText(t *testing.T) {
 	app, _ := newTestApp(t)
 	root := t.TempDir()
 	imagePath := filepath.Join(root, "clip.png")
@@ -447,21 +447,15 @@ func TestAddImageFromClipboardFallsBackToClipboardPath(t *testing.T) {
 	readClipboardImage = func() ([]byte, error) { return nil, errors.New("image clipboard unavailable") }
 	readClipboardText = func() (string, error) { return imagePath, nil }
 	saveClipboardImageToTempFile = func(data []byte, prefix string) (string, error) {
-		t.Fatalf("expected clipboard path fallback not to save raw image bytes")
+		t.Fatalf("expected text clipboard path not to trigger raw image save")
 		return "", nil
 	}
 
-	if err := app.addImageFromClipboard(); err != nil {
-		t.Fatalf("addImageFromClipboard() fallback error = %v", err)
+	if err := app.addImageFromClipboard(); err == nil {
+		t.Fatalf("expected addImageFromClipboard to reject text-path fallback")
 	}
-	if app.getImageAttachmentCount() != 1 {
-		t.Fatalf("expected one fallback image attachment")
-	}
-	if got := app.getImageAttachments()[0].Path; got == "" {
-		t.Fatalf("expected attachment path to be populated")
-	}
-	if app.state.StatusText != "[System] Added image from clipboard path" {
-		t.Fatalf("unexpected fallback status: %q", app.state.StatusText)
+	if app.getImageAttachmentCount() != 0 {
+		t.Fatalf("expected no image attachment when clipboard has path text only")
 	}
 }
 

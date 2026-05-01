@@ -249,6 +249,12 @@ func extractJSONObject(text string) (string, error) {
 
 // extractJSONObjectCandidate 从给定起点抽取平衡的 JSON 对象片段。
 func extractJSONObjectCandidate(text string, start int) (string, error) {
+	candidate, _, err := extractJSONObjectCandidateRange(text, start)
+	return candidate, err
+}
+
+// extractJSONObjectCandidateRange 从给定起点抽取平衡 JSON 对象，并返回原始结束位置。
+func extractJSONObjectCandidateRange(text string, start int) (string, int, error) {
 	depth := 0
 	inString := false
 	escaped := false
@@ -276,10 +282,10 @@ func extractJSONObjectCandidate(text string, start int) (string, error) {
 		case '}':
 			depth--
 			if depth == 0 {
-				return strings.TrimSpace(text[start : index+1]), nil
+				return strings.TrimSpace(text[start : index+1]), index + 1, nil
 			}
 		}
 	}
 
-	return "", errors.New("runtime: compact summary response contains an incomplete JSON object")
+	return "", 0, errors.New("runtime: compact summary response contains an incomplete JSON object")
 }

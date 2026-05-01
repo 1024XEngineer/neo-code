@@ -136,6 +136,10 @@ func TestToolExecuteInlineMode(t *testing.T) {
 	if invoker.last.ParentCapabilityToken == nil || len(invoker.last.ParentCapabilityToken.AllowedTools) == 0 {
 		t.Fatalf("parent capability token should be forwarded: %+v", invoker.last.ParentCapabilityToken)
 	}
+	artifacts, ok := result.Metadata["artifacts"].([]string)
+	if !ok || len(artifacts) != 1 || artifacts[0] != "a.txt" {
+		t.Fatalf("metadata artifacts = %#v", result.Metadata["artifacts"])
+	}
 }
 
 func TestToolExecuteInlineModeErrors(t *testing.T) {
@@ -161,6 +165,9 @@ func TestToolExecuteInlineModeErrors(t *testing.T) {
 	}
 	if !result.IsError {
 		t.Fatalf("expected result.IsError=true")
+	}
+	if result.ErrorClass != "subagent_failed" {
+		t.Fatalf("error class = %q, want subagent_failed", result.ErrorClass)
 	}
 }
 

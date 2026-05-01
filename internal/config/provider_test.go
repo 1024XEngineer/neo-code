@@ -280,8 +280,11 @@ func TestQiniuProviderConfig(t *testing.T) {
 	if provider.Source != ProviderSourceBuiltin {
 		t.Fatalf("expected builtin source, got %q", provider.Source)
 	}
-	if provider.DiscoveryEndpointPath != providerpkg.DiscoveryEndpointPathModels {
-		t.Fatalf("expected discovery endpoint %q, got %q", providerpkg.DiscoveryEndpointPathModels, provider.DiscoveryEndpointPath)
+	if provider.DiscoveryEndpointPath != "" {
+		t.Fatalf("expected builtin discovery endpoint to stay empty, got %q", provider.DiscoveryEndpointPath)
+	}
+	if !containsModelDescriptorID(provider.Models, provider.Model) {
+		t.Fatalf("expected builtin static models to include default model, got %+v", provider.Models)
 	}
 }
 
@@ -455,17 +458,13 @@ func TestCloneProviderConfigModelDescriptorsIndependence(t *testing.T) {
 	}
 }
 
-func TestCustomProviderModelsParsesSupportedMetadata(t *testing.T) {
+func TestCustomProviderModelsParsesIDAndNameOnly(t *testing.T) {
 	t.Parallel()
 
-	contextWindow := 131072
-	maxOutputTokens := 8192
 	models, err := customProviderModels([]customProviderModelFile{
 		{
-			ID:              "deepseek-coder",
-			Name:            "DeepSeek Coder",
-			ContextWindow:   &contextWindow,
-			MaxOutputTokens: &maxOutputTokens,
+			ID:   "deepseek-coder",
+			Name: "DeepSeek Coder",
 		},
 	})
 	if err != nil {
@@ -475,7 +474,7 @@ func TestCustomProviderModelsParsesSupportedMetadata(t *testing.T) {
 	if len(models) != 1 {
 		t.Fatalf("expected one parsed model, got %+v", models)
 	}
-	if models[0].ID != "deepseek-coder" || models[0].ContextWindow != 131072 || models[0].MaxOutputTokens != 8192 {
+	if models[0].ID != "deepseek-coder" || models[0].ContextWindow != 0 || models[0].MaxOutputTokens != 0 {
 		t.Fatalf("unexpected parsed model descriptor: %+v", models[0])
 	}
 }
@@ -498,58 +497,57 @@ func TestCustomProviderModelsRejectsEmptyName(t *testing.T) {
 	}
 }
 
-func TestCustomProviderModelsRejectsNonPositiveContextWindow(t *testing.T) {
+func TestNormalizeCustomProviderModelsRejectsContextWindow(t *testing.T) {
 	t.Parallel()
 
-	contextWindow := 0
-	_, err := customProviderModels([]customProviderModelFile{{
+	_, err := NormalizeCustomProviderModels([]providertypes.ModelDescriptor{{
 		ID:            "deepseek-coder",
 		Name:          "DeepSeek Coder",
-		ContextWindow: &contextWindow,
+		ContextWindow: 131072,
 	}})
 	if err == nil || !strings.Contains(err.Error(), "context_window") {
 		t.Fatalf("expected context_window validation error, got %v", err)
 	}
 }
 
-func TestCustomProviderModelsRejectsNonPositiveMaxOutputTokens(t *testing.T) {
+func TestNormalizeCustomProviderModelsRejectsMaxOutputTokens(t *testing.T) {
 	t.Parallel()
 
-	maxOutputTokens := 0
-	_, err := customProviderModels([]customProviderModelFile{{
+	_, err := NormalizeCustomProviderModels([]providertypes.ModelDescriptor{{
 		ID:              "deepseek-coder",
 		Name:            "DeepSeek Coder",
-		MaxOutputTokens: &maxOutputTokens,
+		MaxOutputTokens: 8192,
 	}})
 	if err == nil || !strings.Contains(err.Error(), "max_output_tokens") {
 		t.Fatalf("expected max_output_tokens validation error, got %v", err)
 	}
 }
 
-func TestNormalizeCustomProviderModelsRejectsZeroLimits(t *testing.T) {
+func TestNormalizeCustomProviderModelsRejectsMetadataFields(t *testing.T) {
 	t.Parallel()
 
 	_, err := NormalizeCustomProviderModels([]providertypes.ModelDescriptor{
 		{
-			ID:            "deepseek-coder",
-			Name:          "DeepSeek Coder",
-			ContextWindow: 0,
+			ID:          "deepseek-coder",
+			Name:        "DeepSeek Coder",
+			Description: "desc",
 		},
 	})
-	if err == nil || !strings.Contains(err.Error(), "context_window") {
-		t.Fatalf("expected context_window validation error, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "description") {
+		t.Fatalf("expected description validation error, got %v", err)
 	}
 
 	_, err = NormalizeCustomProviderModels([]providertypes.ModelDescriptor{
 		{
-			ID:              "deepseek-coder",
-			Name:            "DeepSeek Coder",
-			ContextWindow:   ManualModelOptionalIntUnset,
-			MaxOutputTokens: 0,
+			ID:   "deepseek-coder",
+			Name: "DeepSeek Coder",
+			CapabilityHints: providertypes.ModelCapabilityHints{
+				ToolCalling: providertypes.ModelCapabilityStateSupported,
+			},
 		},
 	})
-	if err == nil || !strings.Contains(err.Error(), "max_output_tokens") {
-		t.Fatalf("expected max_output_tokens validation error, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "capability_hints") {
+		t.Fatalf("expected capability_hints validation error, got %v", err)
 	}
 }
 
@@ -656,6 +654,9 @@ func TestOpenAIProviderConfig(t *testing.T) {
 	if provider.APIKeyEnv != OpenAIDefaultAPIKeyEnv {
 		t.Fatalf("expected API key env %q, got %q", OpenAIDefaultAPIKeyEnv, provider.APIKeyEnv)
 	}
+	if !containsModelDescriptorID(provider.Models, provider.Model) {
+		t.Fatalf("expected builtin static models to include default model, got %+v", provider.Models)
+	}
 }
 
 func TestGeminiProviderConfig(t *testing.T) {
@@ -677,6 +678,9 @@ func TestGeminiProviderConfig(t *testing.T) {
 	}
 	if provider.APIKeyEnv != GeminiDefaultAPIKeyEnv {
 		t.Fatalf("expected API key env %q, got %q", GeminiDefaultAPIKeyEnv, provider.APIKeyEnv)
+	}
+	if !containsModelDescriptorID(provider.Models, provider.Model) {
+		t.Fatalf("expected builtin static models to include default model, got %+v", provider.Models)
 	}
 }
 
@@ -703,8 +707,91 @@ func TestModelScopeProviderConfig(t *testing.T) {
 	if provider.Source != ProviderSourceBuiltin {
 		t.Fatalf("expected builtin source, got %q", provider.Source)
 	}
-	if provider.DiscoveryEndpointPath != providerpkg.DiscoveryEndpointPathModels {
-		t.Fatalf("expected discovery endpoint %q, got %q", providerpkg.DiscoveryEndpointPathModels, provider.DiscoveryEndpointPath)
+	if provider.DiscoveryEndpointPath != "" {
+		t.Fatalf("expected builtin discovery endpoint to stay empty, got %q", provider.DiscoveryEndpointPath)
+	}
+	if !containsModelDescriptorID(provider.Models, provider.Model) {
+		t.Fatalf("expected builtin static models to include default model, got %+v", provider.Models)
+	}
+}
+
+func TestBuiltinProvidersExposeStaticModelMetadata(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		provider  ProviderConfig
+		wantTool  providertypes.ModelCapabilityState
+		wantImage providertypes.ModelCapabilityState
+	}{
+		{
+			name:      "openai",
+			provider:  OpenAIProvider(),
+			wantTool:  providertypes.ModelCapabilityStateSupported,
+			wantImage: providertypes.ModelCapabilityStateSupported,
+		},
+		{
+			name:      "gemini",
+			provider:  GeminiProvider(),
+			wantTool:  providertypes.ModelCapabilityStateSupported,
+			wantImage: providertypes.ModelCapabilityStateSupported,
+		},
+		{
+			name:      "qiniu",
+			provider:  QiniuProvider(),
+			wantTool:  providertypes.ModelCapabilityStateSupported,
+			wantImage: providertypes.ModelCapabilityStateUnsupported,
+		},
+		{
+			name:      "modelscope",
+			provider:  ModelScopeProvider(),
+			wantTool:  providertypes.ModelCapabilityStateSupported,
+			wantImage: providertypes.ModelCapabilityStateUnsupported,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var target providertypes.ModelDescriptor
+			var found bool
+			for _, model := range tt.provider.Models {
+				if model.ID == tt.provider.Model {
+					target = model
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Fatalf("expected default model %q in provider models: %+v", tt.provider.Model, tt.provider.Models)
+			}
+			if target.Description == "" {
+				t.Fatalf("expected default model %q to include description", target.ID)
+			}
+			if target.ContextWindow <= 0 {
+				t.Fatalf("expected default model %q to include context window, got %d", target.ID, target.ContextWindow)
+			}
+			if target.MaxOutputTokens <= 0 {
+				t.Fatalf("expected default model %q to include max output tokens, got %d", target.ID, target.MaxOutputTokens)
+			}
+			if target.CapabilityHints.ToolCalling != tt.wantTool {
+				t.Fatalf("expected default model %q tool calling=%q, got %+v", target.ID, tt.wantTool, target.CapabilityHints)
+			}
+			if target.CapabilityHints.ImageInput != tt.wantImage {
+				t.Fatalf("expected default model %q image input=%q, got %+v", target.ID, tt.wantImage, target.CapabilityHints)
+			}
+		})
+	}
+}
+
+func TestModelScopeProviderIncludesMiniMaxFallbackModel(t *testing.T) {
+	t.Parallel()
+
+	provider := ModelScopeProvider()
+	if !containsModelDescriptorID(provider.Models, "MiniMax/MiniMax-M2.5") {
+		t.Fatalf("expected modelscope static models to include MiniMax/MiniMax-M2.5, got %+v", provider.Models)
 	}
 }
 

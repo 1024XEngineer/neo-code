@@ -138,11 +138,12 @@ custom provider 来自：
 
 ## custom provider `models` 校验约束
 
-`~/.neocode/providers/<provider-name>/provider.yaml` 中允许通过 `models` 补齐模型元数据，用于 catalog/discovery 无法提供完整 `ContextWindow` 或 `MaxOutputTokens` 的场景。
+`~/.neocode/providers/<provider-name>/provider.yaml` 中的 `models` 现在只表达“用户声明需要出现的模型 ID / 展示名”，不再承担元数据补齐职责。
 
-该能力的约束是：
+当前约束是：
 
 - `models[].id` 必须非空。
-- `models[].context_window` 和 `models[].max_output_tokens` 如果显式提供，必须大于 `0`。
-- 重复的模型 `id` 会在加载 custom provider 时直接失败，不保留 silently drop 的宽松行为。
-- 这些元数据不会写回 `config.yaml`，只在 custom provider 文件中声明，并通过现有 catalog 合并链路参与运行时解析。
+- `models[].name` 必须非空。
+- `models` 中不允许出现 `context_window`、`max_output_tokens`、`description`、`capability_hints`。
+- discovery 缓存只保存规范化后的白名单字段：`id/name/description/context_window/max_output_tokens/capability_hints`。
+- builtin provider 不再走 `/models` discovery，模型清单改为仓库内静态维护。

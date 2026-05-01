@@ -537,6 +537,101 @@ func TestSQLiteStoreMigratesSchemaV1ToV2WhenColumnAlreadyExists(t *testing.T) {
 	assertSQLiteColumnExists(t, db, "sessions", "has_unknown_usage")
 }
 
+func TestSQLiteStorePersistsPlanStateRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+
+	session, err := store.CreateSession(ctx, CreateSessionInput{
+		ID:    "session_plan_roundtrip",
+		Title: "Plan Roundtrip",
+		Head: SessionHead{
+			Provider:                        "openai",
+			Model:                           "gpt-5",
+			Workdir:                         "/repo",
+			AgentMode:                       AgentModePlan,
+			LastFullPlanRevision:            2,
+			PlanApprovalPendingFullAlign:    true,
+			PlanCompletionPendingFullReview: true,
+			PlanContextDirty:                true,
+			PlanRestorePendingAlign:         true,
+			CurrentPlan: &PlanArtifact{
+				ID:       "plan-1",
+				Revision: 2,
+				Status:   PlanStatusDraft,
+				Spec: PlanSpec{
+					Goal:        "落地 plan/build 模式",
+					Steps:       []string{"扩展 session", "扩展 runtime"},
+					Constraints: []string{"保持 tools 边界"},
+					Verify:      []string{"go test ./internal/..."},
+					Todos: []TodoItem{
+						{ID: "todo-plan-1", Content: "补 plan 模型"},
+					},
+				},
+				Summary: SummaryView{
+					Goal:          "落地 plan/build 模式",
+					KeySteps:      []string{"扩展 session", "扩展 runtime"},
+					Constraints:   []string{"保持 tools 边界"},
+					Verify:        []string{"go test ./internal/..."},
+					ActiveTodoIDs: []string{"todo-plan-1"},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+
+	loaded, err := store.LoadSession(ctx, session.ID)
+	if err != nil {
+		t.Fatalf("LoadSession() error = %v", err)
+	}
+	if loaded.AgentMode != AgentModePlan {
+		t.Fatalf("expected agent mode plan, got %q", loaded.AgentMode)
+	}
+	if loaded.CurrentPlan == nil {
+		t.Fatal("expected current plan to be persisted")
+	}
+	if loaded.CurrentPlan.ID != "plan-1" || loaded.CurrentPlan.Revision != 2 {
+		t.Fatalf("unexpected loaded current plan: %+v", loaded.CurrentPlan)
+	}
+	if loaded.CurrentPlan.Summary.Goal != "落地 plan/build 模式" {
+		t.Fatalf("unexpected loaded summary: %+v", loaded.CurrentPlan.Summary)
+	}
+	if !loaded.PlanApprovalPendingFullAlign || !loaded.PlanCompletionPendingFullReview ||
+		!loaded.PlanContextDirty || !loaded.PlanRestorePendingAlign {
+		t.Fatalf("expected plan alignment flags to round-trip, got %+v", loaded)
+	}
+}
+
+func TestSQLiteStoreMigratesSchemaV2ToV3(t *testing.T) {
+	ctx := context.Background()
+	baseDir, workspaceRoot, store := newMigrationTestStore(t)
+
+	createLegacyV2SessionDB(t, ctx, baseDir, workspaceRoot)
+	loaded, err := store.LoadSession(ctx, "session_v2")
+	if err != nil {
+		t.Fatalf("LoadSession() after migration error = %v", err)
+	}
+	if loaded.AgentMode != AgentModeBuild {
+		t.Fatalf("expected migrated AgentMode to default build, got %q", loaded.AgentMode)
+	}
+	if loaded.CurrentPlan != nil {
+		t.Fatalf("expected migrated CurrentPlan to default nil, got %+v", loaded.CurrentPlan)
+	}
+
+	db, err := store.ensureDB(ctx)
+	if err != nil {
+		t.Fatalf("ensureDB() error = %v", err)
+	}
+	assertPragmaInt(t, db, "user_version", sqliteSchemaVersion)
+	assertSQLiteColumnExists(t, db, "sessions", "agent_mode")
+	assertSQLiteColumnExists(t, db, "sessions", "current_plan_json")
+	assertSQLiteColumnExists(t, db, "sessions", "plan_approval_pending_full_align")
+	assertSQLiteColumnExists(t, db, "sessions", "plan_completion_pending_full_review")
+	assertSQLiteColumnExists(t, db, "sessions", "plan_context_dirty")
+	assertSQLiteColumnExists(t, db, "sessions", "plan_restore_pending_align")
+}
+
 func assertPragmaString(t *testing.T, db *sql.DB, name string, want string) {
 	t.Helper()
 	var got string
@@ -683,6 +778,76 @@ func createLegacyV1SessionDB(
 			'{}', '[]', '[]', 11, 7` + unknownUsageInsertValue + `, 0, 0
 		)`,
 		`PRAGMA user_version=1`,
+	}
+	for _, statement := range statements {
+		if _, err := db.ExecContext(ctx, statement); err != nil {
+			t.Fatalf("exec legacy schema statement: %v\n%s", err, statement)
+		}
+	}
+}
+
+func createLegacyV2SessionDB(t *testing.T, ctx context.Context, baseDir string, workspaceRoot string) {
+	t.Helper()
+	projectDir := projectDirectory(baseDir, workspaceRoot)
+	if err := os.MkdirAll(projectDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(projectDir) error = %v", err)
+	}
+	db, err := sql.Open("sqlite", databasePath(baseDir, workspaceRoot))
+	if err != nil {
+		t.Fatalf("sql.Open() error = %v", err)
+	}
+	defer db.Close()
+
+	statements := []string{
+		`CREATE TABLE sessions (
+			id TEXT PRIMARY KEY,
+			title TEXT NOT NULL,
+			created_at_ms INTEGER NOT NULL,
+			updated_at_ms INTEGER NOT NULL,
+			provider TEXT NOT NULL DEFAULT '',
+			model TEXT NOT NULL DEFAULT '',
+			workdir TEXT NOT NULL DEFAULT '',
+			task_state_json TEXT NOT NULL,
+			todos_json TEXT NOT NULL,
+			activated_skills_json TEXT NOT NULL,
+			token_input_total INTEGER NOT NULL DEFAULT 0,
+			token_output_total INTEGER NOT NULL DEFAULT 0,
+			has_unknown_usage INTEGER NOT NULL DEFAULT 0,
+			last_seq INTEGER NOT NULL DEFAULT 0,
+			message_count INTEGER NOT NULL DEFAULT 0
+		)`,
+		`CREATE TABLE messages (
+			session_id TEXT NOT NULL,
+			seq INTEGER NOT NULL,
+			role TEXT NOT NULL,
+			parts_json TEXT NOT NULL,
+			tool_calls_json TEXT NOT NULL DEFAULT '',
+			tool_call_id TEXT NOT NULL DEFAULT '',
+			is_error INTEGER NOT NULL DEFAULT 0,
+			tool_metadata_json TEXT NOT NULL DEFAULT '',
+			created_at_ms INTEGER NOT NULL,
+			PRIMARY KEY(session_id, seq),
+			FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE
+		)`,
+		`CREATE TABLE session_assets (
+			id TEXT PRIMARY KEY,
+			session_id TEXT NOT NULL,
+			mime_type TEXT NOT NULL,
+			size_bytes INTEGER NOT NULL,
+			relative_path TEXT NOT NULL,
+			created_at_ms INTEGER NOT NULL,
+			FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE
+		)`,
+		`INSERT INTO sessions (
+			id, title, created_at_ms, updated_at_ms, provider, model, workdir,
+			task_state_json, todos_json, activated_skills_json,
+			token_input_total, token_output_total, has_unknown_usage,
+			last_seq, message_count
+		) VALUES (
+			'session_v2', 'Legacy V2', 1000, 1000, 'openai', 'gpt-5', '/repo',
+			'{}', '[]', '[]', 11, 7, 0, 0, 0
+		)`,
+		`PRAGMA user_version=2`,
 	}
 	for _, statement := range statements {
 		if _, err := db.ExecContext(ctx, statement); err != nil {

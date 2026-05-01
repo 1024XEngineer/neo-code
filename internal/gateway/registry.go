@@ -54,7 +54,23 @@ func (r *ActionRegistry) initCore() {
 	r.core[FrameActionCancel] = handleCancelFrame
 	r.core[FrameActionListSessions] = handleListSessionsFrame
 	r.core[FrameActionLoadSession] = handleLoadSessionFrame
+	r.core[FrameActionListSessionTodos] = handleListSessionTodosFrame
+	r.core[FrameActionGetRuntimeSnapshot] = handleGetRuntimeSnapshotFrame
 	r.core[FrameActionResolvePermission] = handleResolvePermissionFrame
+	r.core[FrameActionDeleteSession] = handleDeleteSessionFrame
+	r.core[FrameActionRenameSession] = handleRenameSessionFrame
+	r.core[FrameActionListFiles] = handleListFilesFrame
+	r.core[FrameActionListModels] = handleListModelsFrame
+	r.core[FrameActionSetSessionModel] = handleSetSessionModelFrame
+	r.core[FrameActionGetSessionModel] = handleGetSessionModelFrame
+	r.core[FrameActionListProviders] = handleListProvidersFrame
+	r.core[FrameActionCreateCustomProvider] = handleCreateCustomProviderFrame
+	r.core[FrameActionDeleteCustomProvider] = handleDeleteCustomProviderFrame
+	r.core[FrameActionSelectProviderModel] = handleSelectProviderModelFrame
+	r.core[FrameActionListMCPServers] = handleListMCPServersFrame
+	r.core[FrameActionUpsertMCPServer] = handleUpsertMCPServerFrame
+	r.core[FrameActionSetMCPServerEnabled] = handleSetMCPServerEnabledFrame
+	r.core[FrameActionDeleteMCPServer] = handleDeleteMCPServerFrame
 }
 
 // Lookup returns the handler for an action.

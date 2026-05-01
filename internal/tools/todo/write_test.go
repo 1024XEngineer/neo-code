@@ -357,7 +357,7 @@ func TestToolExecuteReasonMapping(t *testing.T) {
 			name:  "invalid transition",
 			input: newMutator(`{"action":"complete","id":"a","expected_revision":1}`),
 			prepare: func(m *stubMutator) error {
-				return m.AddTodo(agentsession.TodoItem{ID: "a", Content: "a"})
+				return m.AddTodo(agentsession.TodoItem{ID: "a", Content: "a", Status: agentsession.TodoStatusBlocked})
 			},
 			wantReason: reasonInvalidTransition,
 		},
@@ -537,7 +537,7 @@ func TestDispatchValidationErrors(t *testing.T) {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			err := tool.dispatch(call, tt.in)
+			_, err := tool.dispatch(call, tt.in)
 			if err == nil || !strings.Contains(err.Error(), tt.want) {
 				t.Fatalf("dispatch() error = %v, want contains %q", err, tt.want)
 			}
@@ -603,5 +603,98 @@ func TestCommonHelpersCoverage(t *testing.T) {
 	errResult := errorResult("x_reason", "x_details", map[string]any{"k": "v"})
 	if errResult.Metadata["reason_code"] != "x_reason" || errResult.Metadata["k"] != "v" {
 		t.Fatalf("errorResult metadata unexpected: %+v", errResult.Metadata)
+	}
+}
+
+func TestTodoWriteCompleteErgonomicsAndMetadata(t *testing.T) {
+	t.Parallel()
+
+	tool := New()
+	session := agentsession.New("todo-complete-ergonomics")
+	mutator := &stubMutator{session: &session}
+	required := true
+	if err := mutator.AddTodo(agentsession.TodoItem{
+		ID:       "todo-1",
+		Content:  "finish feature",
+		Required: &required,
+		Status:   agentsession.TodoStatusPending,
+	}); err != nil {
+		t.Fatalf("AddTodo(todo-1) error = %v", err)
+	}
+
+	result, err := tool.Execute(context.Background(), tools.ToolCallInput{
+		Name:           tools.ToolNameTodoWrite,
+		SessionMutator: mutator,
+		Arguments:      []byte(`{"action":"complete","id":"todo-1","expected_revision":1}`),
+	})
+	if err != nil {
+		t.Fatalf("complete pending error = %v", err)
+	}
+	if autoClaimed, _ := result.Metadata["auto_claimed"].(bool); !autoClaimed {
+		t.Fatalf("auto_claimed = %#v, want true", result.Metadata["auto_claimed"])
+	}
+	path, ok := result.Metadata["transition_path"].([]string)
+	if !ok || len(path) != 3 || path[0] != "pending" || path[1] != "in_progress" || path[2] != "completed" {
+		t.Fatalf("transition_path = %#v, want [pending in_progress completed]", result.Metadata["transition_path"])
+	}
+	if stateFact, _ := result.Metadata["state_fact"].(string); stateFact != "todo_completed" {
+		t.Fatalf("state_fact = %q, want %q", stateFact, "todo_completed")
+	}
+	snapshot, ok := result.Metadata["todo_snapshot"].([]map[string]any)
+	if !ok || len(snapshot) == 0 {
+		t.Fatalf("todo_snapshot metadata unexpected: %#v", result.Metadata["todo_snapshot"])
+	}
+	if _, ok := result.Metadata["todo_summary"].(map[string]any); !ok {
+		t.Fatalf("todo_summary metadata missing: %#v", result.Metadata["todo_summary"])
+	}
+
+	result, err = tool.Execute(context.Background(), tools.ToolCallInput{
+		Name:           tools.ToolNameTodoWrite,
+		SessionMutator: mutator,
+		Arguments:      []byte(`{"action":"complete","id":"todo-1","expected_revision":3}`),
+	})
+	if err != nil {
+		t.Fatalf("complete completed error = %v", err)
+	}
+	if noOp, _ := result.Metadata["no_op"].(bool); !noOp {
+		t.Fatalf("no_op = %#v, want true", result.Metadata["no_op"])
+	}
+	if reasonCode, _ := result.Metadata["reason_code"].(string); reasonCode != reasonTerminalNoop {
+		t.Fatalf("reason_code = %q, want %q", reasonCode, reasonTerminalNoop)
+	}
+}
+
+func TestTodoWriteFailSetsTerminalFailureMetadata(t *testing.T) {
+	t.Parallel()
+
+	tool := New()
+	session := agentsession.New("todo-fail-metadata")
+	mutator := &stubMutator{session: &session}
+	required := true
+	if err := mutator.AddTodo(agentsession.TodoItem{
+		ID:       "todo-fail",
+		Content:  "unreachable target",
+		Required: &required,
+		Status:   agentsession.TodoStatusInProgress,
+	}); err != nil {
+		t.Fatalf("AddTodo(todo-fail) error = %v", err)
+	}
+
+	result, err := tool.Execute(context.Background(), tools.ToolCallInput{
+		Name:           tools.ToolNameTodoWrite,
+		SessionMutator: mutator,
+		Arguments:      []byte(`{"action":"fail","id":"todo-fail","reason":"dependency missing","expected_revision":1}`),
+	})
+	if err != nil {
+		t.Fatalf("fail todo error = %v", err)
+	}
+	if terminalFailure, _ := result.Metadata["terminal_failure"].(bool); !terminalFailure {
+		t.Fatalf("terminal_failure = %#v, want true", result.Metadata["terminal_failure"])
+	}
+	if doNotRetry, _ := result.Metadata["do_not_retry"].(bool); !doNotRetry {
+		t.Fatalf("do_not_retry = %#v, want true", result.Metadata["do_not_retry"])
+	}
+	if stateFact, _ := result.Metadata["state_fact"].(string); stateFact != "todo_failed" {
+		t.Fatalf("state_fact = %q, want %q", stateFact, "todo_failed")
 	}
 }

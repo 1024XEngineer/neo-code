@@ -64,7 +64,9 @@ type NetworkServerOptions struct {
 	ACL                          *ControlPlaneACL
 	Metrics                      *GatewayMetrics
 	AllowedOrigins               []string
-	listenFn                     func(network, address string) (net.Listener, error)
+	// ConnectionCountChanged 在活跃长连接数变化时回调当前总数，用于空闲退出治理。
+	ConnectionCountChanged func(active int)
+	listenFn               func(network, address string) (net.Listener, error)
 }
 
 // NetworkServer 提供 HTTP/WebSocket/SSE 网络访问面的统一入口服务。
@@ -84,6 +86,7 @@ type NetworkServer struct {
 	acl                  *ControlPlaneACL
 	metrics              *GatewayMetrics
 	allowedOrigins       []string
+	connectionCountChanged func(active int)
 	startedAt            time.Time
 
 	mu         sync.Mutex
@@ -181,6 +184,7 @@ func NewNetworkServer(options NetworkServerOptions) (*NetworkServer, error) {
 		acl:                  acl,
 		metrics:              metrics,
 		allowedOrigins:       allowedOrigins,
+		connectionCountChanged: options.ConnectionCountChanged,
 		startedAt:            time.Now().UTC(),
 		wsConns:              make(map[*websocket.Conn]context.CancelFunc),
 		sseCancels:           make(map[int]context.CancelFunc),
@@ -602,6 +606,11 @@ func (s *NetworkServer) handleWebSocket(conn *websocket.Conn, runtimePort Runtim
 		default:
 		}
 
+		// Set a generous read deadline to detect dead connections.
+		// Clients send pings every 5 minutes, so 7 minutes allows for jitter.
+		// This prevents zombie connections from blocking read goroutines indefinitely.
+		_ = conn.SetReadDeadline(time.Now().Add(7 * time.Minute))
+
 		var rawMessage string
 		if err := websocket.Message.Receive(conn, &rawMessage); err != nil {
 			if isConnectionClosedError(err) {
@@ -610,6 +619,9 @@ func (s *NetworkServer) handleWebSocket(conn *websocket.Conn, runtimePort Runtim
 			s.logger.Printf("websocket read failed: %v", err)
 			return
 		}
+
+		// Reset read deadline after successful read
+		_ = conn.SetReadDeadline(time.Time{})
 
 		rpcRequest, rpcErr := decodeJSONRPCRequestFromBytes([]byte(rawMessage))
 		var rpcResponse protocol.JSONRPCResponse
@@ -702,6 +714,7 @@ func (s *NetworkServer) handleSSERequest(writer http.ResponseWriter, request *ht
 		requestToken = strings.TrimSpace(request.URL.Query().Get("token"))
 	}
 	if s.authenticator != nil && !s.authenticator.ValidateToken(requestToken) {
+		// authenticator 存在且 token 无效时拒绝；本地模式（authenticator == nil）允许空 token
 		http.Error(writer, "unauthorized", http.StatusUnauthorized)
 		return
 	}
@@ -948,6 +961,7 @@ func (s *NetworkServer) registerWSConnection(conn *websocket.Conn, cancel contex
 	}
 	s.wsConns[conn] = cancel
 	s.updateActiveConnectionMetricsLocked()
+	s.notifyConnectionCountChanged()
 	return true
 }
 
@@ -957,6 +971,7 @@ func (s *NetworkServer) unregisterWSConnection(conn *websocket.Conn) {
 	defer s.mu.Unlock()
 	delete(s.wsConns, conn)
 	s.updateActiveConnectionMetricsLocked()
+	s.notifyConnectionCountChanged()
 }
 
 // registerSSEConnection 登记一个 SSE 长连接并返回连接标识，用于后续主动中断。
@@ -973,6 +988,7 @@ func (s *NetworkServer) registerSSEConnection(cancel context.CancelFunc) (int, b
 	s.nextSSEID++
 	s.sseCancels[connectionID] = cancel
 	s.updateActiveConnectionMetricsLocked()
+	s.notifyConnectionCountChanged()
 	return connectionID, true
 }
 
@@ -982,6 +998,7 @@ func (s *NetworkServer) unregisterSSEConnection(connectionID int) {
 	defer s.mu.Unlock()
 	delete(s.sseCancels, connectionID)
 	s.updateActiveConnectionMetricsLocked()
+	s.notifyConnectionCountChanged()
 }
 
 // updateActiveConnectionMetricsLocked 在持锁状态下刷新活跃连接指标。
@@ -991,6 +1008,14 @@ func (s *NetworkServer) updateActiveConnectionMetricsLocked() {
 	}
 	s.metrics.SetConnectionsActive(string(StreamChannelWS), len(s.wsConns))
 	s.metrics.SetConnectionsActive(string(StreamChannelSSE), len(s.sseCancels))
+}
+
+// notifyConnectionCountChanged 向外层报告当前活跃长连接总数。
+func (s *NetworkServer) notifyConnectionCountChanged() {
+	if s.connectionCountChanged == nil {
+		return
+	}
+	s.connectionCountChanged(len(s.wsConns) + len(s.sseCancels))
 }
 
 // forceCloseStreamConnections 在关停流程中主动切断 WS/SSE 长连接，避免退出被阻塞。

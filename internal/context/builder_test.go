@@ -143,6 +143,51 @@ func TestDefaultBuilderBuildIncludesTaskStateBeforeSystemState(t *testing.T) {
 	}
 }
 
+func TestDefaultBuilderBuildIncludesPlanSections(t *testing.T) {
+	t.Parallel()
+
+	builder := NewBuilder()
+	got, err := builder.Build(stdcontext.Background(), BuildInput{
+		AgentMode: agentsession.AgentModePlan,
+		PlanStage: "plan",
+		CurrentPlan: &agentsession.PlanArtifact{
+			ID:       "plan-1",
+			Revision: 3,
+			Status:   agentsession.PlanStatusDraft,
+			Spec: agentsession.PlanSpec{
+				Goal:        "引入 plan/build 模式",
+				Steps:       []string{"扩展 session", "扩展 runtime"},
+				Constraints: []string{"保持 tools 边界"},
+				Verify:      []string{"go test ./internal/..."},
+			},
+			Summary: agentsession.SummaryView{
+				Goal:          "引入 plan/build 模式",
+				KeySteps:      []string{"扩展 session", "扩展 runtime"},
+				Constraints:   []string{"保持 tools 边界"},
+				Verify:        []string{"go test ./internal/..."},
+				ActiveTodoIDs: []string{"todo-1"},
+			},
+		},
+		Metadata:       testMetadata(t.TempDir()),
+		InjectFullPlan: true,
+	})
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if !strings.Contains(got.SystemPrompt, "## Plan Mode") {
+		t.Fatalf("expected plan mode section, got %q", got.SystemPrompt)
+	}
+	if !strings.Contains(got.SystemPrompt, "You are currently in the planning stage.") {
+		t.Fatalf("expected plan mode prompt asset content, got %q", got.SystemPrompt)
+	}
+	if !strings.Contains(got.SystemPrompt, "## Current Plan") {
+		t.Fatalf("expected current plan section, got %q", got.SystemPrompt)
+	}
+	if !strings.Contains(got.SystemPrompt, "full_plan_view:") {
+		t.Fatalf("expected full plan view in prompt, got %q", got.SystemPrompt)
+	}
+}
+
 func TestDefaultBuilderBuildIncludesTodosBeforeSystemState(t *testing.T) {
 	t.Parallel()
 
@@ -172,6 +217,29 @@ func TestDefaultBuilderBuildIncludesTodosBeforeSystemState(t *testing.T) {
 	}
 	if todoIndex > systemStateIndex {
 		t.Fatalf("expected todo section before system section, got %q", got.SystemPrompt)
+	}
+}
+
+func TestNewBuilderWithMemoAndSummarizersIncludesMemoSection(t *testing.T) {
+	t.Parallel()
+
+	builder := NewBuilderWithMemoAndSummarizers(nil, nil, stubPromptSectionSource{
+		sections: []promptSection{
+			NewPromptSection("memo", "remember this"),
+		},
+	})
+
+	got, err := builder.Build(stdcontext.Background(), BuildInput{
+		Messages: []providertypes.Message{
+			{Role: "user", Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")}},
+		},
+		Metadata: testMetadata(t.TempDir()),
+	})
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if !strings.Contains(got.SystemPrompt, "## memo") {
+		t.Fatalf("expected memo section in prompt, got %q", got.SystemPrompt)
 	}
 }
 

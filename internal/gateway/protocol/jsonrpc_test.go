@@ -125,6 +125,82 @@ func TestNormalizeJSONRPCRequestBindStream(t *testing.T) {
 	}
 }
 
+func TestNormalizeJSONRPCRequestListSessionTodosAndRuntimeSnapshot(t *testing.T) {
+	t.Run("list session todos success", func(t *testing.T) {
+		normalized, rpcErr := NormalizeJSONRPCRequest(JSONRPCRequest{
+			JSONRPC: JSONRPCVersion,
+			ID:      json.RawMessage(`"todo-1"`),
+			Method:  MethodGatewayListSessionTodos,
+			Params:  json.RawMessage(`{"session_id":" s-1 "}`),
+		})
+		if rpcErr != nil {
+			t.Fatalf("normalize list session todos request: %v", rpcErr)
+		}
+		if normalized.Action != "session_todos_list" {
+			t.Fatalf("action = %q, want %q", normalized.Action, "session_todos_list")
+		}
+		if normalized.SessionID != "s-1" {
+			t.Fatalf("session_id = %q, want %q", normalized.SessionID, "s-1")
+		}
+		params, ok := normalized.Payload.(ListSessionTodosParams)
+		if !ok {
+			t.Fatalf("payload type = %T, want ListSessionTodosParams", normalized.Payload)
+		}
+		if params.SessionID != "s-1" {
+			t.Fatalf("params.session_id = %q, want %q", params.SessionID, "s-1")
+		}
+	})
+
+	t.Run("runtime snapshot success", func(t *testing.T) {
+		normalized, rpcErr := NormalizeJSONRPCRequest(JSONRPCRequest{
+			JSONRPC: JSONRPCVersion,
+			ID:      json.RawMessage(`"snapshot-1"`),
+			Method:  MethodGatewayGetRuntimeSnapshot,
+			Params:  json.RawMessage(`{"session_id":" s-2 "}`),
+		})
+		if rpcErr != nil {
+			t.Fatalf("normalize runtime snapshot request: %v", rpcErr)
+		}
+		if normalized.Action != "runtime_snapshot_get" {
+			t.Fatalf("action = %q, want %q", normalized.Action, "runtime_snapshot_get")
+		}
+		if normalized.SessionID != "s-2" {
+			t.Fatalf("session_id = %q, want %q", normalized.SessionID, "s-2")
+		}
+		params, ok := normalized.Payload.(GetRuntimeSnapshotParams)
+		if !ok {
+			t.Fatalf("payload type = %T, want GetRuntimeSnapshotParams", normalized.Payload)
+		}
+		if params.SessionID != "s-2" {
+			t.Fatalf("params.session_id = %q, want %q", params.SessionID, "s-2")
+		}
+	})
+
+	t.Run("list session todos missing params", func(t *testing.T) {
+		_, rpcErr := NormalizeJSONRPCRequest(JSONRPCRequest{
+			JSONRPC: JSONRPCVersion,
+			ID:      json.RawMessage(`"todo-missing-1"`),
+			Method:  MethodGatewayListSessionTodos,
+			Params:  json.RawMessage(`null`),
+		})
+		if rpcErr == nil || rpcErr.Code != JSONRPCCodeInvalidParams {
+			t.Fatalf("expected invalid params error, got %#v", rpcErr)
+		}
+	})
+
+	t.Run("runtime snapshot missing session id", func(t *testing.T) {
+		_, rpcErr := NormalizeJSONRPCRequest(JSONRPCRequest{
+			JSONRPC: JSONRPCVersion,
+			ID:      json.RawMessage(`"snapshot-missing-1"`),
+			Method:  MethodGatewayGetRuntimeSnapshot,
+			Params:  json.RawMessage(`{"session_id":"   "}`),
+		})
+		if rpcErr == nil || rpcErr.Code != JSONRPCCodeInvalidParams {
+			t.Fatalf("expected invalid params error, got %#v", rpcErr)
+		}
+	})
+}
+
 func TestNormalizeJSONRPCRequestRuntimeMethods(t *testing.T) {
 	runRequest := JSONRPCRequest{
 		JSONRPC: JSONRPCVersion,
@@ -455,17 +531,6 @@ func TestNormalizeJSONRPCRequestErrors(t *testing.T) {
 				JSONRPC: JSONRPCVersion,
 				ID:      json.RawMessage(`"x"`),
 				Method:  MethodGatewayAuthenticate,
-			},
-			wantCode:        JSONRPCCodeInvalidParams,
-			wantGatewayCode: GatewayCodeMissingRequiredField,
-		},
-		{
-			name: "authenticate missing token",
-			request: JSONRPCRequest{
-				JSONRPC: JSONRPCVersion,
-				ID:      json.RawMessage(`"x"`),
-				Method:  MethodGatewayAuthenticate,
-				Params:  json.RawMessage(`{"token":"   "}`),
 			},
 			wantCode:        JSONRPCCodeInvalidParams,
 			wantGatewayCode: GatewayCodeMissingRequiredField,
@@ -1035,4 +1100,596 @@ func TestNewJSONRPCErrorResponseWithNilIDEncodesNull(t *testing.T) {
 	if payload["id"] != nil {
 		t.Fatalf("encoded response id = %#v, want nil", payload["id"])
 	}
+}
+
+func TestNormalizeJSONRPCRequestNewMethodErrors(t *testing.T) {
+	testCases := []struct {
+		name            string
+		request         JSONRPCRequest
+		wantCode        int
+		wantGatewayCode string
+	}{
+		{
+			name: "deleteSession missing params",
+			request: JSONRPCRequest{
+				JSONRPC: JSONRPCVersion,
+				ID:      json.RawMessage(`"x"`),
+				Method:  MethodGatewayDeleteSession,
+			},
+			wantCode:        JSONRPCCodeInvalidParams,
+			wantGatewayCode: GatewayCodeMissingRequiredField,
+		},
+		{
+			name: "deleteSession invalid params",
+			request: JSONRPCRequest{
+				JSONRPC: JSONRPCVersion,
+				ID:      json.RawMessage(`"x"`),
+				Method:  MethodGatewayDeleteSession,
+				Params:  json.RawMessage(`{invalid}`),
+			},
+			wantCode:        JSONRPCCodeInvalidParams,
+			wantGatewayCode: GatewayCodeInvalidFrame,
+		},
+		{
+			name: "deleteSession missing session_id",
+			request: JSONRPCRequest{
+				JSONRPC: JSONRPCVersion,
+				ID:      json.RawMessage(`"x"`),
+				Method:  MethodGatewayDeleteSession,
+				Params:  json.RawMessage(`{"session_id":"  "}`),
+			},
+			wantCode:        JSONRPCCodeInvalidParams,
+			wantGatewayCode: GatewayCodeMissingRequiredField,
+		},
+		{
+			name: "renameSession missing params",
+			request: JSONRPCRequest{
+				JSONRPC: JSONRPCVersion,
+				ID:      json.RawMessage(`"x"`),
+				Method:  MethodGatewayRenameSession,
+			},
+			wantCode:        JSONRPCCodeInvalidParams,
+			wantGatewayCode: GatewayCodeMissingRequiredField,
+		},
+		{
+			name: "renameSession invalid params",
+			request: JSONRPCRequest{
+				JSONRPC: JSONRPCVersion,
+				ID:      json.RawMessage(`"x"`),
+				Method:  MethodGatewayRenameSession,
+				Params:  json.RawMessage(`{invalid}`),
+			},
+			wantCode:        JSONRPCCodeInvalidParams,
+			wantGatewayCode: GatewayCodeInvalidFrame,
+		},
+		{
+			name: "renameSession missing session_id",
+			request: JSONRPCRequest{
+				JSONRPC: JSONRPCVersion,
+				ID:      json.RawMessage(`"x"`),
+				Method:  MethodGatewayRenameSession,
+				Params:  json.RawMessage(`{"title":"New Title"}`),
+			},
+			wantCode:        JSONRPCCodeInvalidParams,
+			wantGatewayCode: GatewayCodeMissingRequiredField,
+		},
+		{
+			name: "renameSession missing title",
+			request: JSONRPCRequest{
+				JSONRPC: JSONRPCVersion,
+				ID:      json.RawMessage(`"x"`),
+				Method:  MethodGatewayRenameSession,
+				Params:  json.RawMessage(`{"session_id":"s-1"}`),
+			},
+			wantCode:        JSONRPCCodeInvalidParams,
+			wantGatewayCode: GatewayCodeMissingRequiredField,
+		},
+		{
+			name: "listFiles invalid params",
+			request: JSONRPCRequest{
+				JSONRPC: JSONRPCVersion,
+				ID:      json.RawMessage(`"x"`),
+				Method:  MethodGatewayListFiles,
+				Params:  json.RawMessage(`{invalid}`),
+			},
+			wantCode:        JSONRPCCodeInvalidParams,
+			wantGatewayCode: GatewayCodeInvalidFrame,
+		},
+		{
+			name: "listModels invalid params",
+			request: JSONRPCRequest{
+				JSONRPC: JSONRPCVersion,
+				ID:      json.RawMessage(`"x"`),
+				Method:  MethodGatewayListModels,
+				Params:  json.RawMessage(`{invalid}`),
+			},
+			wantCode:        JSONRPCCodeInvalidParams,
+			wantGatewayCode: GatewayCodeInvalidFrame,
+		},
+		{
+			name: "setSessionModel missing params",
+			request: JSONRPCRequest{
+				JSONRPC: JSONRPCVersion,
+				ID:      json.RawMessage(`"x"`),
+				Method:  MethodGatewaySetSessionModel,
+			},
+			wantCode:        JSONRPCCodeInvalidParams,
+			wantGatewayCode: GatewayCodeMissingRequiredField,
+		},
+		{
+			name: "setSessionModel invalid params",
+			request: JSONRPCRequest{
+				JSONRPC: JSONRPCVersion,
+				ID:      json.RawMessage(`"x"`),
+				Method:  MethodGatewaySetSessionModel,
+				Params:  json.RawMessage(`{invalid}`),
+			},
+			wantCode:        JSONRPCCodeInvalidParams,
+			wantGatewayCode: GatewayCodeInvalidFrame,
+		},
+		{
+			name: "setSessionModel missing session_id",
+			request: JSONRPCRequest{
+				JSONRPC: JSONRPCVersion,
+				ID:      json.RawMessage(`"x"`),
+				Method:  MethodGatewaySetSessionModel,
+				Params:  json.RawMessage(`{"model_id":"gpt-4"}`),
+			},
+			wantCode:        JSONRPCCodeInvalidParams,
+			wantGatewayCode: GatewayCodeMissingRequiredField,
+		},
+		{
+			name: "setSessionModel missing model_id",
+			request: JSONRPCRequest{
+				JSONRPC: JSONRPCVersion,
+				ID:      json.RawMessage(`"x"`),
+				Method:  MethodGatewaySetSessionModel,
+				Params:  json.RawMessage(`{"session_id":"s-1"}`),
+			},
+			wantCode:        JSONRPCCodeInvalidParams,
+			wantGatewayCode: GatewayCodeMissingRequiredField,
+		},
+		{
+			name: "getSessionModel missing params",
+			request: JSONRPCRequest{
+				JSONRPC: JSONRPCVersion,
+				ID:      json.RawMessage(`"x"`),
+				Method:  MethodGatewayGetSessionModel,
+			},
+			wantCode:        JSONRPCCodeInvalidParams,
+			wantGatewayCode: GatewayCodeMissingRequiredField,
+		},
+		{
+			name: "getSessionModel invalid params",
+			request: JSONRPCRequest{
+				JSONRPC: JSONRPCVersion,
+				ID:      json.RawMessage(`"x"`),
+				Method:  MethodGatewayGetSessionModel,
+				Params:  json.RawMessage(`{invalid}`),
+			},
+			wantCode:        JSONRPCCodeInvalidParams,
+			wantGatewayCode: GatewayCodeInvalidFrame,
+		},
+		{
+			name: "getSessionModel missing session_id",
+			request: JSONRPCRequest{
+				JSONRPC: JSONRPCVersion,
+				ID:      json.RawMessage(`"x"`),
+				Method:  MethodGatewayGetSessionModel,
+				Params:  json.RawMessage(`{"session_id":"  "}`),
+			},
+			wantCode:        JSONRPCCodeInvalidParams,
+			wantGatewayCode: GatewayCodeMissingRequiredField,
+		},
+		{
+			name: "createCustomProvider missing params",
+			request: JSONRPCRequest{
+				JSONRPC: JSONRPCVersion,
+				ID:      json.RawMessage(`"x"`),
+				Method:  MethodGatewayCreateCustomProvider,
+			},
+			wantCode:        JSONRPCCodeInvalidParams,
+			wantGatewayCode: GatewayCodeMissingRequiredField,
+		},
+		{
+			name: "createCustomProvider invalid params",
+			request: JSONRPCRequest{
+				JSONRPC: JSONRPCVersion,
+				ID:      json.RawMessage(`"x"`),
+				Method:  MethodGatewayCreateCustomProvider,
+				Params:  json.RawMessage(`{invalid}`),
+			},
+			wantCode:        JSONRPCCodeInvalidParams,
+			wantGatewayCode: GatewayCodeInvalidFrame,
+		},
+		{
+			name: "createCustomProvider missing name",
+			request: JSONRPCRequest{
+				JSONRPC: JSONRPCVersion,
+				ID:      json.RawMessage(`"x"`),
+				Method:  MethodGatewayCreateCustomProvider,
+				Params:  json.RawMessage(`{"driver":"openai","api_key_env":"KEY"}`),
+			},
+			wantCode:        JSONRPCCodeInvalidParams,
+			wantGatewayCode: GatewayCodeMissingRequiredField,
+		},
+		{
+			name: "createCustomProvider missing driver",
+			request: JSONRPCRequest{
+				JSONRPC: JSONRPCVersion,
+				ID:      json.RawMessage(`"x"`),
+				Method:  MethodGatewayCreateCustomProvider,
+				Params:  json.RawMessage(`{"name":"custom","api_key_env":"KEY"}`),
+			},
+			wantCode:        JSONRPCCodeInvalidParams,
+			wantGatewayCode: GatewayCodeMissingRequiredField,
+		},
+		{
+			name: "createCustomProvider missing api_key_env",
+			request: JSONRPCRequest{
+				JSONRPC: JSONRPCVersion,
+				ID:      json.RawMessage(`"x"`),
+				Method:  MethodGatewayCreateCustomProvider,
+				Params:  json.RawMessage(`{"name":"custom","driver":"openai"}`),
+			},
+			wantCode:        JSONRPCCodeInvalidParams,
+			wantGatewayCode: GatewayCodeMissingRequiredField,
+		},
+		{
+			name: "deleteCustomProvider missing params",
+			request: JSONRPCRequest{
+				JSONRPC: JSONRPCVersion,
+				ID:      json.RawMessage(`"x"`),
+				Method:  MethodGatewayDeleteCustomProvider,
+			},
+			wantCode:        JSONRPCCodeInvalidParams,
+			wantGatewayCode: GatewayCodeMissingRequiredField,
+		},
+		{
+			name: "deleteCustomProvider invalid params",
+			request: JSONRPCRequest{
+				JSONRPC: JSONRPCVersion,
+				ID:      json.RawMessage(`"x"`),
+				Method:  MethodGatewayDeleteCustomProvider,
+				Params:  json.RawMessage(`{invalid}`),
+			},
+			wantCode:        JSONRPCCodeInvalidParams,
+			wantGatewayCode: GatewayCodeInvalidFrame,
+		},
+		{
+			name: "deleteCustomProvider missing provider_id",
+			request: JSONRPCRequest{
+				JSONRPC: JSONRPCVersion,
+				ID:      json.RawMessage(`"x"`),
+				Method:  MethodGatewayDeleteCustomProvider,
+				Params:  json.RawMessage(`{"provider_id":"  "}`),
+			},
+			wantCode:        JSONRPCCodeInvalidParams,
+			wantGatewayCode: GatewayCodeMissingRequiredField,
+		},
+		{
+			name: "selectProviderModel missing params",
+			request: JSONRPCRequest{
+				JSONRPC: JSONRPCVersion,
+				ID:      json.RawMessage(`"x"`),
+				Method:  MethodGatewaySelectProviderModel,
+			},
+			wantCode:        JSONRPCCodeInvalidParams,
+			wantGatewayCode: GatewayCodeMissingRequiredField,
+		},
+		{
+			name: "selectProviderModel invalid params",
+			request: JSONRPCRequest{
+				JSONRPC: JSONRPCVersion,
+				ID:      json.RawMessage(`"x"`),
+				Method:  MethodGatewaySelectProviderModel,
+				Params:  json.RawMessage(`{invalid}`),
+			},
+			wantCode:        JSONRPCCodeInvalidParams,
+			wantGatewayCode: GatewayCodeInvalidFrame,
+		},
+		{
+			name: "selectProviderModel missing provider_id",
+			request: JSONRPCRequest{
+				JSONRPC: JSONRPCVersion,
+				ID:      json.RawMessage(`"x"`),
+				Method:  MethodGatewaySelectProviderModel,
+				Params:  json.RawMessage(`{"provider_id":"  "}`),
+			},
+			wantCode:        JSONRPCCodeInvalidParams,
+			wantGatewayCode: GatewayCodeMissingRequiredField,
+		},
+		{
+			name: "upsertMCPServer missing params",
+			request: JSONRPCRequest{
+				JSONRPC: JSONRPCVersion,
+				ID:      json.RawMessage(`"x"`),
+				Method:  MethodGatewayUpsertMCPServer,
+			},
+			wantCode:        JSONRPCCodeInvalidParams,
+			wantGatewayCode: GatewayCodeMissingRequiredField,
+		},
+		{
+			name: "upsertMCPServer invalid params",
+			request: JSONRPCRequest{
+				JSONRPC: JSONRPCVersion,
+				ID:      json.RawMessage(`"x"`),
+				Method:  MethodGatewayUpsertMCPServer,
+				Params:  json.RawMessage(`{invalid}`),
+			},
+			wantCode:        JSONRPCCodeInvalidParams,
+			wantGatewayCode: GatewayCodeInvalidFrame,
+		},
+		{
+			name: "upsertMCPServer missing server.id",
+			request: JSONRPCRequest{
+				JSONRPC: JSONRPCVersion,
+				ID:      json.RawMessage(`"x"`),
+				Method:  MethodGatewayUpsertMCPServer,
+				Params:  json.RawMessage(`{"server":{"id":"  "}}`),
+			},
+			wantCode:        JSONRPCCodeInvalidParams,
+			wantGatewayCode: GatewayCodeMissingRequiredField,
+		},
+		{
+			name: "setMCPServerEnabled missing params",
+			request: JSONRPCRequest{
+				JSONRPC: JSONRPCVersion,
+				ID:      json.RawMessage(`"x"`),
+				Method:  MethodGatewaySetMCPServerEnabled,
+			},
+			wantCode:        JSONRPCCodeInvalidParams,
+			wantGatewayCode: GatewayCodeMissingRequiredField,
+		},
+		{
+			name: "setMCPServerEnabled invalid params",
+			request: JSONRPCRequest{
+				JSONRPC: JSONRPCVersion,
+				ID:      json.RawMessage(`"x"`),
+				Method:  MethodGatewaySetMCPServerEnabled,
+				Params:  json.RawMessage(`{invalid}`),
+			},
+			wantCode:        JSONRPCCodeInvalidParams,
+			wantGatewayCode: GatewayCodeInvalidFrame,
+		},
+		{
+			name: "setMCPServerEnabled missing id",
+			request: JSONRPCRequest{
+				JSONRPC: JSONRPCVersion,
+				ID:      json.RawMessage(`"x"`),
+				Method:  MethodGatewaySetMCPServerEnabled,
+				Params:  json.RawMessage(`{"enabled":true}`),
+			},
+			wantCode:        JSONRPCCodeInvalidParams,
+			wantGatewayCode: GatewayCodeMissingRequiredField,
+		},
+		{
+			name: "deleteMCPServer missing params",
+			request: JSONRPCRequest{
+				JSONRPC: JSONRPCVersion,
+				ID:      json.RawMessage(`"x"`),
+				Method:  MethodGatewayDeleteMCPServer,
+			},
+			wantCode:        JSONRPCCodeInvalidParams,
+			wantGatewayCode: GatewayCodeMissingRequiredField,
+		},
+		{
+			name: "deleteMCPServer invalid params",
+			request: JSONRPCRequest{
+				JSONRPC: JSONRPCVersion,
+				ID:      json.RawMessage(`"x"`),
+				Method:  MethodGatewayDeleteMCPServer,
+				Params:  json.RawMessage(`{invalid}`),
+			},
+			wantCode:        JSONRPCCodeInvalidParams,
+			wantGatewayCode: GatewayCodeInvalidFrame,
+		},
+		{
+			name: "deleteMCPServer missing id",
+			request: JSONRPCRequest{
+				JSONRPC: JSONRPCVersion,
+				ID:      json.RawMessage(`"x"`),
+				Method:  MethodGatewayDeleteMCPServer,
+				Params:  json.RawMessage(`{"id":"  "}`),
+			},
+			wantCode:        JSONRPCCodeInvalidParams,
+			wantGatewayCode: GatewayCodeMissingRequiredField,
+		},
+	}
+
+	for _, tc := range testCases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			_, rpcErr := NormalizeJSONRPCRequest(tc.request)
+			if rpcErr == nil {
+				t.Fatal("expected rpc error")
+			}
+			if rpcErr.Code != tc.wantCode {
+				t.Fatalf("rpc code = %d, want %d", rpcErr.Code, tc.wantCode)
+			}
+			if gatewayCode := GatewayCodeFromJSONRPCError(rpcErr); gatewayCode != tc.wantGatewayCode {
+				t.Fatalf("gateway_code = %q, want %q", gatewayCode, tc.wantGatewayCode)
+			}
+		})
+	}
+}
+
+func TestDecodeParamsOptionalMethods(t *testing.T) {
+	t.Run("listFiles no params", func(t *testing.T) {
+		frame, rpcErr := NormalizeJSONRPCRequest(JSONRPCRequest{
+			JSONRPC: JSONRPCVersion,
+			ID:      json.RawMessage(`"1"`),
+			Method:  MethodGatewayListFiles,
+		})
+		if rpcErr != nil {
+			t.Fatalf("unexpected error: %+v", rpcErr)
+		}
+		if frame.Action != "list_files" {
+			t.Fatalf("action = %q, want %q", frame.Action, "list_files")
+		}
+	})
+
+	t.Run("listFiles empty object params", func(t *testing.T) {
+		frame, rpcErr := NormalizeJSONRPCRequest(JSONRPCRequest{
+			JSONRPC: JSONRPCVersion,
+			ID:      json.RawMessage(`"2"`),
+			Method:  MethodGatewayListFiles,
+			Params:  json.RawMessage(`{}`),
+		})
+		if rpcErr != nil {
+			t.Fatalf("unexpected error: %+v", rpcErr)
+		}
+		if frame.Action != "list_files" {
+			t.Fatalf("action = %q, want %q", frame.Action, "list_files")
+		}
+	})
+
+	t.Run("listModels no params", func(t *testing.T) {
+		frame, rpcErr := NormalizeJSONRPCRequest(JSONRPCRequest{
+			JSONRPC: JSONRPCVersion,
+			ID:      json.RawMessage(`"3"`),
+			Method:  MethodGatewayListModels,
+		})
+		if rpcErr != nil {
+			t.Fatalf("unexpected error: %+v", rpcErr)
+		}
+		if frame.Action != "list_models" {
+			t.Fatalf("action = %q, want %q", frame.Action, "list_models")
+		}
+	})
+
+	t.Run("listModels empty object params", func(t *testing.T) {
+		frame, rpcErr := NormalizeJSONRPCRequest(JSONRPCRequest{
+			JSONRPC: JSONRPCVersion,
+			ID:      json.RawMessage(`"4"`),
+			Method:  MethodGatewayListModels,
+			Params:  json.RawMessage(`{}`),
+		})
+		if rpcErr != nil {
+			t.Fatalf("unexpected error: %+v", rpcErr)
+		}
+		if frame.Action != "list_models" {
+			t.Fatalf("action = %q, want %q", frame.Action, "list_models")
+		}
+	})
+}
+
+func TestNormalizeJSONRPCRequestNewRPCMethods(t *testing.T) {
+	t.Run("deleteSession valid params", func(t *testing.T) {
+		frame, rpcErr := NormalizeJSONRPCRequest(JSONRPCRequest{
+			JSONRPC: JSONRPCVersion,
+			ID:      json.RawMessage(`"1"`),
+			Method:  MethodGatewayDeleteSession,
+			Params:  json.RawMessage(`{"session_id":"s-1"}`),
+		})
+		if rpcErr != nil {
+			t.Fatalf("unexpected error: %+v", rpcErr)
+		}
+		if frame.Action != "delete_session" {
+			t.Fatalf("action = %q, want %q", frame.Action, "delete_session")
+		}
+	})
+
+	t.Run("renameSession valid params", func(t *testing.T) {
+		frame, rpcErr := NormalizeJSONRPCRequest(JSONRPCRequest{
+			JSONRPC: JSONRPCVersion,
+			ID:      json.RawMessage(`"2"`),
+			Method:  MethodGatewayRenameSession,
+			Params:  json.RawMessage(`{"session_id":"s-1","title":"New Title"}`),
+		})
+		if rpcErr != nil {
+			t.Fatalf("unexpected error: %+v", rpcErr)
+		}
+		if frame.Action != "rename_session" {
+			t.Fatalf("action = %q, want %q", frame.Action, "rename_session")
+		}
+	})
+
+	t.Run("renameSession missing params", func(t *testing.T) {
+		_, rpcErr := NormalizeJSONRPCRequest(JSONRPCRequest{
+			JSONRPC: JSONRPCVersion,
+			ID:      json.RawMessage(`"3"`),
+			Method:  MethodGatewayRenameSession,
+		})
+		if rpcErr == nil {
+			t.Fatal("expected error for missing params")
+		}
+		if rpcErr.Code != JSONRPCCodeInvalidParams {
+			t.Fatalf("code = %d, want %d", rpcErr.Code, JSONRPCCodeInvalidParams)
+		}
+	})
+
+	t.Run("listFiles valid params", func(t *testing.T) {
+		frame, rpcErr := NormalizeJSONRPCRequest(JSONRPCRequest{
+			JSONRPC: JSONRPCVersion,
+			ID:      json.RawMessage(`"4"`),
+			Method:  MethodGatewayListFiles,
+			Params:  json.RawMessage(`{"workdir":"/tmp","path":"."}`),
+		})
+		if rpcErr != nil {
+			t.Fatalf("unexpected error: %+v", rpcErr)
+		}
+		if frame.Action != "list_files" {
+			t.Fatalf("action = %q, want %q", frame.Action, "list_files")
+		}
+	})
+
+	t.Run("listModels no params required", func(t *testing.T) {
+		frame, rpcErr := NormalizeJSONRPCRequest(JSONRPCRequest{
+			JSONRPC: JSONRPCVersion,
+			ID:      json.RawMessage(`"5"`),
+			Method:  MethodGatewayListModels,
+			Params:  json.RawMessage(`{}`),
+		})
+		if rpcErr != nil {
+			t.Fatalf("unexpected error: %+v", rpcErr)
+		}
+		if frame.Action != "list_models" {
+			t.Fatalf("action = %q, want %q", frame.Action, "list_models")
+		}
+	})
+
+	t.Run("setSessionModel valid params", func(t *testing.T) {
+		frame, rpcErr := NormalizeJSONRPCRequest(JSONRPCRequest{
+			JSONRPC: JSONRPCVersion,
+			ID:      json.RawMessage(`"6"`),
+			Method:  MethodGatewaySetSessionModel,
+			Params:  json.RawMessage(`{"session_id":"s-1","model_id":"gpt-4"}`),
+		})
+		if rpcErr != nil {
+			t.Fatalf("unexpected error: %+v", rpcErr)
+		}
+		if frame.Action != "set_session_model" {
+			t.Fatalf("action = %q, want %q", frame.Action, "set_session_model")
+		}
+	})
+
+	t.Run("setSessionModel missing params", func(t *testing.T) {
+		_, rpcErr := NormalizeJSONRPCRequest(JSONRPCRequest{
+			JSONRPC: JSONRPCVersion,
+			ID:      json.RawMessage(`"7"`),
+			Method:  MethodGatewaySetSessionModel,
+		})
+		if rpcErr == nil {
+			t.Fatal("expected error for missing params")
+		}
+		if rpcErr.Code != JSONRPCCodeInvalidParams {
+			t.Fatalf("code = %d, want %d", rpcErr.Code, JSONRPCCodeInvalidParams)
+		}
+	})
+
+	t.Run("getSessionModel valid params", func(t *testing.T) {
+		frame, rpcErr := NormalizeJSONRPCRequest(JSONRPCRequest{
+			JSONRPC: JSONRPCVersion,
+			ID:      json.RawMessage(`"8"`),
+			Method:  MethodGatewayGetSessionModel,
+			Params:  json.RawMessage(`{"session_id":"s-1"}`),
+		})
+		if rpcErr != nil {
+			t.Fatalf("unexpected error: %+v", rpcErr)
+		}
+		if frame.Action != "get_session_model" {
+			t.Fatalf("action = %q, want %q", frame.Action, "get_session_model")
+		}
+	})
 }

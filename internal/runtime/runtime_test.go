@@ -93,6 +93,13 @@ func (s *memoryStore) CreateSession(ctx context.Context, input agentsession.Crea
 	session.TokenInputTotal = head.TokenInputTotal
 	session.TokenOutputTotal = head.TokenOutputTotal
 	session.HasUnknownUsage = head.HasUnknownUsage
+	session.AgentMode = agentsession.NormalizeAgentMode(head.AgentMode)
+	session.CurrentPlan = head.CurrentPlan.Clone()
+	session.LastFullPlanRevision = head.LastFullPlanRevision
+	session.PlanApprovalPendingFullAlign = head.PlanApprovalPendingFullAlign
+	session.PlanCompletionPendingFullReview = head.PlanCompletionPendingFullReview
+	session.PlanContextDirty = head.PlanContextDirty
+	session.PlanRestorePendingAlign = head.PlanRestorePendingAlign
 	session.Messages = []providertypes.Message{}
 
 	s.mu.Lock()
@@ -214,6 +221,13 @@ func (s *memoryStore) UpdateSessionState(ctx context.Context, input agentsession
 	session.TokenInputTotal = head.TokenInputTotal
 	session.TokenOutputTotal = head.TokenOutputTotal
 	session.HasUnknownUsage = head.HasUnknownUsage
+	session.AgentMode = agentsession.NormalizeAgentMode(head.AgentMode)
+	session.CurrentPlan = head.CurrentPlan.Clone()
+	session.LastFullPlanRevision = head.LastFullPlanRevision
+	session.PlanApprovalPendingFullAlign = head.PlanApprovalPendingFullAlign
+	session.PlanCompletionPendingFullReview = head.PlanCompletionPendingFullReview
+	session.PlanContextDirty = head.PlanContextDirty
+	session.PlanRestorePendingAlign = head.PlanRestorePendingAlign
 	s.saves++
 	s.sessions[input.SessionID] = cloneSession(session)
 	return nil
@@ -245,6 +259,13 @@ func (s *memoryStore) ReplaceTranscript(ctx context.Context, input agentsession.
 	session.TokenInputTotal = head.TokenInputTotal
 	session.TokenOutputTotal = head.TokenOutputTotal
 	session.HasUnknownUsage = head.HasUnknownUsage
+	session.AgentMode = agentsession.NormalizeAgentMode(head.AgentMode)
+	session.CurrentPlan = head.CurrentPlan.Clone()
+	session.LastFullPlanRevision = head.LastFullPlanRevision
+	session.PlanApprovalPendingFullAlign = head.PlanApprovalPendingFullAlign
+	session.PlanCompletionPendingFullReview = head.PlanCompletionPendingFullReview
+	session.PlanContextDirty = head.PlanContextDirty
+	session.PlanRestorePendingAlign = head.PlanRestorePendingAlign
 	s.saves++
 	s.sessions[input.SessionID] = cloneSession(session)
 	return nil
@@ -367,6 +388,9 @@ func (s *blockingLoadStore) CreateSession(ctx context.Context, input agentsessio
 	session.TokenInputTotal = head.TokenInputTotal
 	session.TokenOutputTotal = head.TokenOutputTotal
 	session.HasUnknownUsage = head.HasUnknownUsage
+	session.AgentMode = agentsession.NormalizeAgentMode(head.AgentMode)
+	session.CurrentPlan = head.CurrentPlan.Clone()
+	session.LastFullPlanRevision = head.LastFullPlanRevision
 	s.mu.Lock()
 	s.sessions[session.ID] = cloneSession(session)
 	s.mu.Unlock()
@@ -469,6 +493,9 @@ func (s *blockingLoadStore) UpdateSessionState(ctx context.Context, input agents
 	session.TokenInputTotal = head.TokenInputTotal
 	session.TokenOutputTotal = head.TokenOutputTotal
 	session.HasUnknownUsage = head.HasUnknownUsage
+	session.AgentMode = agentsession.NormalizeAgentMode(head.AgentMode)
+	session.CurrentPlan = head.CurrentPlan.Clone()
+	session.LastFullPlanRevision = head.LastFullPlanRevision
 	s.sessions[input.SessionID] = cloneSession(session)
 	return nil
 }
@@ -498,6 +525,9 @@ func (s *blockingLoadStore) ReplaceTranscript(ctx context.Context, input agentse
 	session.TokenInputTotal = head.TokenInputTotal
 	session.TokenOutputTotal = head.TokenOutputTotal
 	session.HasUnknownUsage = head.HasUnknownUsage
+	session.AgentMode = agentsession.NormalizeAgentMode(head.AgentMode)
+	session.CurrentPlan = head.CurrentPlan.Clone()
+	session.LastFullPlanRevision = head.LastFullPlanRevision
 	s.sessions[input.SessionID] = cloneSession(session)
 	return nil
 }
@@ -3449,6 +3479,1041 @@ func TestServiceRunUsesInputWorkdirForNewSession(t *testing.T) {
 	}
 }
 
+func TestServiceRunPlanModePersistsDraftPlan(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	store := newMemoryStore()
+	builder := &stubContextBuilder{}
+	scripted := &scriptedProvider{
+		responses: []scriptedResponse{
+			{
+				Message: providertypes.Message{
+					Role: providertypes.RoleAssistant,
+					Parts: []providertypes.ContentPart{providertypes.NewTextPart(`{
+  "plan_spec": {
+    "goal": "为 runtime 引入 plan/build 模式",
+    "steps": ["扩展 session", "扩展 runtime"],
+    "constraints": ["保持 tools 边界"],
+    "verify": ["go test ./internal/runtime"],
+    "todos": [{"id":"todo-plan-1","content":"扩展 session","status":"pending"}]
+  },
+  "summary_candidate": {
+    "goal": "为 runtime 引入 plan/build 模式",
+    "key_steps": ["扩展 session", "扩展 runtime"],
+    "constraints": ["保持 tools 边界"],
+    "verify": ["go test ./internal/runtime"],
+    "active_todo_ids": ["todo-plan-1"]
+  }
+}`)},
+				},
+				FinishReason: "stop",
+			},
+		},
+	}
+
+	service := NewWithFactory(manager, tools.NewRegistry(), store, &scriptedProviderFactory{provider: scripted}, builder)
+	if err := service.Run(context.Background(), UserInput{
+		RunID: "run-plan-persists-draft",
+		Mode:  string(agentsession.AgentModePlan),
+		Parts: []providertypes.ContentPart{providertypes.NewTextPart("请先给出计划")},
+	}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	saved := onlySession(t, store)
+	if saved.AgentMode != agentsession.AgentModePlan {
+		t.Fatalf("AgentMode = %q, want %q", saved.AgentMode, agentsession.AgentModePlan)
+	}
+	if saved.CurrentPlan == nil {
+		t.Fatalf("expected CurrentPlan to be persisted")
+	}
+	if saved.CurrentPlan.Status != agentsession.PlanStatusDraft {
+		t.Fatalf("Status = %q, want %q", saved.CurrentPlan.Status, agentsession.PlanStatusDraft)
+	}
+	if saved.CurrentPlan.Spec.Goal != "为 runtime 引入 plan/build 模式" {
+		t.Fatalf("Goal = %q", saved.CurrentPlan.Spec.Goal)
+	}
+	if saved.LastFullPlanRevision != 0 {
+		t.Fatalf("LastFullPlanRevision = %d, want 0 before first full-plan alignment", saved.LastFullPlanRevision)
+	}
+	if builder.callCount != 1 {
+		t.Fatalf("builder call count = %d, want 1", builder.callCount)
+	}
+	if builder.lastInput.PlanStage != planStagePlan {
+		t.Fatalf("PlanStage = %q, want %q", builder.lastInput.PlanStage, planStagePlan)
+	}
+	if builder.lastInput.CurrentPlan != nil {
+		t.Fatalf("expected initial plan-mode build input to have nil CurrentPlan")
+	}
+	if len(saved.Messages) != 2 {
+		t.Fatalf("message count = %d, want 2", len(saved.Messages))
+	}
+	if got := renderPartsForTest(saved.Messages[1].Parts); !strings.Contains(got, "目标") {
+		t.Fatalf("expected rendered plan content, got %q", got)
+	}
+}
+
+func TestServiceRunPlanModeShowsExplanationTextOutsidePlanningJSON(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	store := newMemoryStore()
+	builder := &stubContextBuilder{}
+	scripted := &scriptedProvider{
+		responses: []scriptedResponse{
+			{
+				Message: providertypes.Message{
+					Role: providertypes.RoleAssistant,
+					Parts: []providertypes.ContentPart{providertypes.NewTextPart(`先确认范围，再按下面计划推进。
+
+{
+  "plan_spec": {
+    "goal": "Preserve prose around planning JSON",
+    "steps": ["persist plan", "show explanation"],
+    "verify": ["go test ./internal/runtime"],
+    "todos": [{"id":"todo-plan-prose","content":"persist plan","status":"pending"}]
+  }
+}
+
+我会先完成计划落库，再继续执行。`)},
+				},
+				FinishReason: "stop",
+			},
+		},
+	}
+
+	service := NewWithFactory(manager, tools.NewRegistry(), store, &scriptedProviderFactory{provider: scripted}, builder)
+	if err := service.Run(context.Background(), UserInput{
+		RunID: "run-plan-preserve-prose",
+		Mode:  string(agentsession.AgentModePlan),
+		Parts: []providertypes.ContentPart{providertypes.NewTextPart("请先给出计划并解释")},
+	}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	saved := onlySession(t, store)
+	if saved.CurrentPlan == nil || saved.CurrentPlan.Spec.Goal != "Preserve prose around planning JSON" {
+		t.Fatalf("expected current plan to be updated, got %+v", saved.CurrentPlan)
+	}
+	if len(saved.Messages) != 2 {
+		t.Fatalf("message count = %d, want 2", len(saved.Messages))
+	}
+	got := renderPartsForTest(saved.Messages[1].Parts)
+	if strings.Contains(got, "\"plan_spec\"") {
+		t.Fatalf("expected persisted assistant text to strip planning JSON, got %q", got)
+	}
+	if !strings.Contains(got, "先确认范围") || !strings.Contains(got, "继续执行") {
+		t.Fatalf("expected prose explanation to be preserved, got %q", got)
+	}
+}
+
+func TestServiceRunPlanModeKeepsExistingPlanWhenPlanSpecIsInvalid(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	store := newMemoryStore()
+	builder := &stubContextBuilder{}
+	seed := agentsession.New("invalid plan spec")
+	seed.AgentMode = agentsession.AgentModePlan
+	seed.CurrentPlan = &agentsession.PlanArtifact{
+		ID:       "plan-existing",
+		Revision: 2,
+		Status:   agentsession.PlanStatusApproved,
+		Spec: agentsession.PlanSpec{
+			Goal:   "Keep previous plan",
+			Steps:  []string{"existing step"},
+			Verify: []string{"existing verify"},
+		},
+		Summary: agentsession.SummaryView{
+			Goal:     "Keep previous plan",
+			KeySteps: []string{"existing step"},
+			Verify:   []string{"existing verify"},
+		},
+	}
+	seed.LastFullPlanRevision = 2
+	if _, err := store.CreateSession(context.Background(), createSessionInputFromSession(seed)); err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+
+	scripted := &scriptedProvider{
+		responses: []scriptedResponse{
+			{
+				Message: providertypes.Message{
+					Role: providertypes.RoleAssistant,
+					Parts: []providertypes.ContentPart{providertypes.NewTextPart(`{
+  "plan_spec": {
+    "goal": "",
+    "steps": ["bad update"],
+    "verify": ["should be ignored"]
+  }
+}
+
+这里先解释一下当前风险。`)},
+				},
+				FinishReason: "stop",
+			},
+		},
+	}
+
+	service := NewWithFactory(manager, tools.NewRegistry(), store, &scriptedProviderFactory{provider: scripted}, builder)
+	if err := service.Run(context.Background(), UserInput{
+		SessionID: seed.ID,
+		RunID:     "run-plan-invalid-spec",
+		Mode:      string(agentsession.AgentModePlan),
+		Parts:     []providertypes.ContentPart{providertypes.NewTextPart("继续讨论")},
+	}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	saved := onlySession(t, store)
+	if saved.CurrentPlan == nil || saved.CurrentPlan.Spec.Goal != "Keep previous plan" {
+		t.Fatalf("expected invalid plan_spec not to overwrite current plan, got %+v", saved.CurrentPlan)
+	}
+	got := renderPartsForTest(saved.Messages[len(saved.Messages)-1].Parts)
+	if !strings.Contains(got, "\"plan_spec\"") {
+		t.Fatalf("expected invalid planning payload to fall back to normal assistant text, got %q", got)
+	}
+}
+
+func TestServiceRunBuildModeDoesNotRequireCurrentPlan(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	store := newMemoryStore()
+	builder := &stubContextBuilder{}
+	scripted := &scriptedProvider{
+		responses: []scriptedResponse{
+			{
+				Message: providertypes.Message{
+					Role: providertypes.RoleAssistant,
+					Parts: []providertypes.ContentPart{providertypes.NewTextPart(`{
+  "plan_spec": {
+    "goal": "落地 build bootstrap",
+    "steps": ["补齐最小计划", "进入执行"],
+    "constraints": ["bootstrap 阶段只读"],
+    "verify": ["执行完成后进入 verify"],
+    "todos": [{"id":"todo-build-1","content":"补齐最小计划","status":"pending"}]
+  },
+  "summary_candidate": {
+    "goal": "落地 build bootstrap",
+    "key_steps": ["补齐最小计划", "进入执行"],
+    "constraints": ["bootstrap 阶段只读"],
+    "verify": ["执行完成后进入 verify"],
+    "active_todo_ids": ["todo-build-1"]
+  }
+}`)},
+				},
+				FinishReason: "stop",
+			},
+			{
+				Message: providertypes.Message{
+					Role:  providertypes.RoleAssistant,
+					Parts: []providertypes.ContentPart{providertypes.NewTextPart("implementation complete")},
+				},
+				FinishReason: "stop",
+			},
+		},
+	}
+
+	service := NewWithFactory(manager, tools.NewRegistry(), store, &scriptedProviderFactory{provider: scripted}, builder)
+	if err := service.Run(context.Background(), UserInput{
+		RunID: "run-build-bootstrap-complete",
+		Mode:  string(agentsession.AgentModeBuild),
+		Parts: []providertypes.ContentPart{providertypes.NewTextPart("直接进入 build")},
+	}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	saved := onlySession(t, store)
+	if saved.AgentMode != agentsession.AgentModeBuild {
+		t.Fatalf("AgentMode = %q, want %q", saved.AgentMode, agentsession.AgentModeBuild)
+	}
+	if saved.CurrentPlan != nil {
+		t.Fatalf("expected build mode to complete without CurrentPlan, got %+v", saved.CurrentPlan)
+	}
+	if builder.callCount != 1 {
+		t.Fatalf("builder call count = %d, want 1", builder.callCount)
+	}
+	if builder.builds[0].PlanStage != planStageBuildExecute {
+		t.Fatalf("PlanStage = %q, want %q", builder.builds[0].PlanStage, planStageBuildExecute)
+	}
+	if builder.builds[0].CurrentPlan != nil {
+		t.Fatalf("expected build mode without plan to keep CurrentPlan nil")
+	}
+	if builder.builds[0].InjectFullPlan {
+		t.Fatalf("expected build mode without plan not to inject full plan")
+	}
+}
+
+func TestServiceRunPlanModeInjectsFullPlanOnNextTurnAfterDraftCreation(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	store := newMemoryStore()
+	builder := &stubContextBuilder{}
+	scripted := &scriptedProvider{
+		responses: []scriptedResponse{
+			{
+				Message: providertypes.Message{
+					Role: providertypes.RoleAssistant,
+					Parts: []providertypes.ContentPart{providertypes.NewTextPart(`{
+  "plan_spec": {
+    "goal": "Introduce plan mode",
+    "steps": ["persist plan state"],
+    "verify": ["go test ./internal/runtime"],
+    "todos": [{"id":"todo-plan-1","content":"persist plan state","status":"pending"}]
+  },
+  "summary_candidate": {
+    "goal": "Introduce plan mode",
+    "key_steps": ["persist plan state"],
+    "constraints": [],
+    "verify": ["go test ./internal/runtime"],
+    "active_todo_ids": ["todo-plan-1"]
+  }
+}`)},
+				},
+				FinishReason: "stop",
+			},
+			{
+				Message: providertypes.Message{
+					Role: providertypes.RoleAssistant,
+					Parts: []providertypes.ContentPart{providertypes.NewTextPart(`{
+  "plan_spec": {
+    "goal": "Introduce plan mode v2",
+    "steps": ["persist plan state", "align next run"],
+    "verify": ["go test ./internal/runtime"],
+    "todos": [{"id":"todo-plan-2","content":"align next run","status":"pending"}]
+  },
+  "summary_candidate": {
+    "goal": "Introduce plan mode v2",
+    "key_steps": ["persist plan state", "align next run"],
+    "constraints": [],
+    "verify": ["go test ./internal/runtime"],
+    "active_todo_ids": ["todo-plan-2"]
+  }
+}`)},
+				},
+				FinishReason: "stop",
+			},
+		},
+	}
+
+	service := NewWithFactory(manager, tools.NewRegistry(), store, &scriptedProviderFactory{provider: scripted}, builder)
+	if err := service.Run(context.Background(), UserInput{
+		RunID: "run-plan-first-draft",
+		Mode:  string(agentsession.AgentModePlan),
+		Parts: []providertypes.ContentPart{providertypes.NewTextPart("draft plan")},
+	}); err != nil {
+		t.Fatalf("first Run() error = %v", err)
+	}
+	firstSession := onlySession(t, store)
+	_ = collectRuntimeEvents(service.Events())
+
+	if err := service.Run(context.Background(), UserInput{
+		SessionID: firstSession.ID,
+		RunID:     "run-plan-second-align",
+		Mode:      string(agentsession.AgentModePlan),
+		Parts:     []providertypes.ContentPart{providertypes.NewTextPart("continue planning")},
+	}); err != nil {
+		t.Fatalf("second Run() error = %v", err)
+	}
+
+	if len(builder.builds) != 2 {
+		t.Fatalf("expected 2 builder calls, got %d", len(builder.builds))
+	}
+	if builder.builds[0].InjectFullPlan {
+		t.Fatalf("expected initial draft turn not to inject full plan")
+	}
+	if !builder.builds[1].InjectFullPlan {
+		t.Fatalf("expected next turn after draft creation to inject full plan")
+	}
+	if builder.builds[1].CurrentPlan == nil || builder.builds[1].CurrentPlan.Revision != 1 {
+		t.Fatalf("expected second turn to see revision 1 current plan, got %+v", builder.builds[1].CurrentPlan)
+	}
+}
+
+func TestServiceRunPlanModeUsesSummaryViewForAlignedPlanTurn(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	store := newMemoryStore()
+	builder := &stubContextBuilder{}
+	seed := agentsession.New("aligned plan")
+	seed.AgentMode = agentsession.AgentModePlan
+	seed.CurrentPlan = &agentsession.PlanArtifact{
+		ID:       "plan-aligned",
+		Revision: 2,
+		Status:   agentsession.PlanStatusDraft,
+		Spec: agentsession.PlanSpec{
+			Goal:   "Keep planning aligned",
+			Steps:  []string{"summarize current plan"},
+			Verify: []string{"go test ./internal/runtime"},
+			Todos: []agentsession.TodoItem{
+				{ID: "todo-aligned", Content: "summarize current plan", Status: agentsession.TodoStatusPending},
+			},
+		},
+		Summary: agentsession.SummaryView{
+			Goal:          "Keep planning aligned",
+			KeySteps:      []string{"summarize current plan"},
+			Verify:        []string{"go test ./internal/runtime"},
+			ActiveTodoIDs: []string{"todo-aligned"},
+		},
+	}
+	seed.LastFullPlanRevision = 2
+	if _, err := store.CreateSession(context.Background(), createSessionInputFromSession(seed)); err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+
+	scripted := &scriptedProvider{
+		responses: []scriptedResponse{
+			{
+				Message: providertypes.Message{
+					Role: providertypes.RoleAssistant,
+					Parts: []providertypes.ContentPart{providertypes.NewTextPart(`{
+  "plan_spec": {
+    "goal": "Keep planning aligned v2",
+    "steps": ["summarize current plan", "collect open questions"],
+    "verify": ["go test ./internal/runtime"],
+    "todos": [{"id":"todo-aligned-2","content":"collect open questions","status":"pending"}]
+  },
+  "summary_candidate": {
+    "goal": "Keep planning aligned v2",
+    "key_steps": ["summarize current plan", "collect open questions"],
+    "constraints": [],
+    "verify": ["go test ./internal/runtime"],
+    "active_todo_ids": ["todo-aligned-2"]
+  }
+}`)},
+				},
+				FinishReason: "stop",
+			},
+		},
+	}
+
+	service := NewWithFactory(manager, tools.NewRegistry(), store, &scriptedProviderFactory{provider: scripted}, builder)
+	if err := service.Run(context.Background(), UserInput{
+		SessionID: seed.ID,
+		RunID:     "run-plan-aligned-summary",
+		Mode:      string(agentsession.AgentModePlan),
+		Parts:     []providertypes.ContentPart{providertypes.NewTextPart("continue planning")},
+	}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	if len(builder.builds) != 1 {
+		t.Fatalf("expected 1 builder call, got %d", len(builder.builds))
+	}
+	if builder.builds[0].InjectFullPlan {
+		t.Fatalf("expected aligned plan turn to use SummaryView only")
+	}
+}
+
+func TestServiceRunBuildModeInjectsFullPlanForUnalignedExistingPlan(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	store := newMemoryStore()
+	builder := &stubContextBuilder{}
+	seed := agentsession.New("restored build")
+	seed.AgentMode = agentsession.AgentModeBuild
+	seed.CurrentPlan = &agentsession.PlanArtifact{
+		ID:       "plan-restored",
+		Revision: 2,
+		Status:   agentsession.PlanStatusApproved,
+		Spec: agentsession.PlanSpec{
+			Goal:   "Resume build execution",
+			Steps:  []string{"resume implementation"},
+			Verify: []string{"go test ./internal/runtime"},
+			Todos: []agentsession.TodoItem{
+				{ID: "todo-restored", Content: "resume implementation", Status: agentsession.TodoStatusPending},
+			},
+		},
+		Summary: agentsession.SummaryView{
+			Goal:          "Resume build execution",
+			KeySteps:      []string{"resume implementation"},
+			Verify:        []string{"go test ./internal/runtime"},
+			ActiveTodoIDs: []string{"todo-restored"},
+		},
+	}
+	seed.LastFullPlanRevision = 0
+	if _, err := store.CreateSession(context.Background(), createSessionInputFromSession(seed)); err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+
+	scripted := &scriptedProvider{
+		responses: []scriptedResponse{
+			{
+				Message: providertypes.Message{
+					Role:  providertypes.RoleAssistant,
+					Parts: []providertypes.ContentPart{providertypes.NewTextPart("build done")},
+				},
+				FinishReason: "stop",
+			},
+		},
+	}
+
+	service := NewWithFactory(manager, tools.NewRegistry(), store, &scriptedProviderFactory{provider: scripted}, builder)
+	if err := service.Run(context.Background(), UserInput{
+		SessionID: seed.ID,
+		RunID:     "run-build-restored-align",
+		Mode:      string(agentsession.AgentModeBuild),
+		Parts:     []providertypes.ContentPart{providertypes.NewTextPart("resume build")},
+	}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	if len(builder.builds) != 1 {
+		t.Fatalf("expected 1 builder call, got %d", len(builder.builds))
+	}
+	if !builder.builds[0].InjectFullPlan {
+		t.Fatalf("expected unaligned existing plan to inject full plan")
+	}
+	saved := onlySession(t, store)
+	if saved.LastFullPlanRevision != 2 {
+		t.Fatalf("expected last full plan revision 2, got %d", saved.LastFullPlanRevision)
+	}
+}
+
+func TestServiceRunBuildModeUsesSummaryViewForAlignedExecuteTurn(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	store := newMemoryStore()
+	builder := &stubContextBuilder{}
+	seed := agentsession.New("aligned build")
+	seed.AgentMode = agentsession.AgentModeBuild
+	seed.CurrentPlan = &agentsession.PlanArtifact{
+		ID:       "plan-build-aligned",
+		Revision: 3,
+		Status:   agentsession.PlanStatusApproved,
+		Spec: agentsession.PlanSpec{
+			Goal:   "Execute aligned build",
+			Steps:  []string{"continue implementation"},
+			Verify: []string{"go test ./internal/runtime"},
+			Todos: []agentsession.TodoItem{
+				{ID: "todo-build-aligned", Content: "continue implementation", Status: agentsession.TodoStatusPending},
+			},
+		},
+		Summary: agentsession.SummaryView{
+			Goal:          "Execute aligned build",
+			KeySteps:      []string{"continue implementation"},
+			Verify:        []string{"go test ./internal/runtime"},
+			ActiveTodoIDs: []string{"todo-build-aligned"},
+		},
+	}
+	seed.LastFullPlanRevision = 3
+	if _, err := store.CreateSession(context.Background(), createSessionInputFromSession(seed)); err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+
+	scripted := &scriptedProvider{
+		responses: []scriptedResponse{
+			{
+				Message: providertypes.Message{
+					Role:  providertypes.RoleAssistant,
+					Parts: []providertypes.ContentPart{providertypes.NewTextPart("build done")},
+				},
+				FinishReason: "stop",
+			},
+		},
+	}
+
+	service := NewWithFactory(manager, tools.NewRegistry(), store, &scriptedProviderFactory{provider: scripted}, builder)
+	if err := service.Run(context.Background(), UserInput{
+		SessionID: seed.ID,
+		RunID:     "run-build-aligned-summary",
+		Mode:      string(agentsession.AgentModeBuild),
+		Parts:     []providertypes.ContentPart{providertypes.NewTextPart("continue build")},
+	}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	if len(builder.builds) != 1 {
+		t.Fatalf("expected 1 builder call, got %d", len(builder.builds))
+	}
+	if builder.builds[0].InjectFullPlan {
+		t.Fatalf("expected aligned build execute turn to use SummaryView only")
+	}
+}
+
+func TestServiceRunBuildModeInjectsFullPlanWhenSummaryIsUnusable(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	store := newMemoryStore()
+	builder := &stubContextBuilder{}
+	seed := agentsession.New("full-plan fallback")
+	seed.AgentMode = agentsession.AgentModeBuild
+	seed.CurrentPlan = &agentsession.PlanArtifact{
+		ID:       "plan-full-fallback",
+		Revision: 1,
+		Status:   agentsession.PlanStatusApproved,
+		Spec: agentsession.PlanSpec{
+			Goal:   "Follow full plan when summary is missing",
+			Steps:  []string{"review whole plan"},
+			Verify: []string{"go test ./internal/runtime"},
+			Todos: []agentsession.TodoItem{
+				{ID: "todo-full-fallback", Content: "review whole plan", Status: agentsession.TodoStatusPending},
+			},
+		},
+		Summary: agentsession.SummaryView{},
+	}
+	seed.LastFullPlanRevision = 1
+	if _, err := store.CreateSession(context.Background(), createSessionInputFromSession(seed)); err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+
+	scripted := &scriptedProvider{
+		responses: []scriptedResponse{
+			{
+				Message: providertypes.Message{
+					Role:  providertypes.RoleAssistant,
+					Parts: []providertypes.ContentPart{providertypes.NewTextPart("build done")},
+				},
+				FinishReason: "stop",
+			},
+		},
+	}
+
+	service := NewWithFactory(manager, tools.NewRegistry(), store, &scriptedProviderFactory{provider: scripted}, builder)
+	if err := service.Run(context.Background(), UserInput{
+		SessionID: seed.ID,
+		RunID:     "run-full-plan-fallback",
+		Mode:      string(agentsession.AgentModeBuild),
+		Parts:     []providertypes.ContentPart{providertypes.NewTextPart("continue build")},
+	}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	if len(builder.builds) != 1 {
+		t.Fatalf("expected 1 builder call, got %d", len(builder.builds))
+	}
+	if !builder.builds[0].InjectFullPlan {
+		t.Fatalf("expected unusable summary to force full plan injection")
+	}
+}
+
+func TestServiceApproveCurrentPlanTriggersOneFullPlanAlignment(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	store := newMemoryStore()
+	builder := &stubContextBuilder{}
+	seed := agentsession.New("approve current plan")
+	seed.AgentMode = agentsession.AgentModeBuild
+	seed.CurrentPlan = &agentsession.PlanArtifact{
+		ID:       "plan-approve-runtime",
+		Revision: 4,
+		Status:   agentsession.PlanStatusDraft,
+		Spec: agentsession.PlanSpec{
+			Goal:   "批准并执行当前计划",
+			Steps:  []string{"继续实现"},
+			Verify: []string{"go test ./internal/runtime"},
+		},
+		Summary: agentsession.SummaryView{
+			Goal:     "批准并执行当前计划",
+			KeySteps: []string{"继续实现"},
+			Verify:   []string{"go test ./internal/runtime"},
+		},
+	}
+	seed.LastFullPlanRevision = 4
+	if _, err := store.CreateSession(context.Background(), createSessionInputFromSession(seed)); err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+
+	service := NewWithFactory(manager, tools.NewRegistry(), store, &scriptedProviderFactory{provider: &scriptedProvider{
+		responses: []scriptedResponse{
+			{
+				Message: providertypes.Message{
+					Role:  providertypes.RoleAssistant,
+					Parts: []providertypes.ContentPart{providertypes.NewTextPart("build done")},
+				},
+				FinishReason: "stop",
+			},
+		},
+	}}, builder)
+
+	if err := service.ApproveCurrentPlan(context.Background(), ApproveCurrentPlanInput{
+		SessionID: seed.ID,
+		PlanID:    "plan-approve-runtime",
+		Revision:  4,
+	}); err != nil {
+		t.Fatalf("ApproveCurrentPlan() error = %v", err)
+	}
+
+	saved := onlySession(t, store)
+	if saved.CurrentPlan == nil || saved.CurrentPlan.Status != agentsession.PlanStatusApproved {
+		t.Fatalf("expected approved current plan, got %+v", saved.CurrentPlan)
+	}
+	if !saved.PlanApprovalPendingFullAlign {
+		t.Fatal("expected approval to schedule one full-plan alignment")
+	}
+
+	if err := service.Run(context.Background(), UserInput{
+		SessionID: seed.ID,
+		RunID:     "run-approved-align",
+		Mode:      string(agentsession.AgentModeBuild),
+		Parts:     []providertypes.ContentPart{providertypes.NewTextPart("continue build")},
+	}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	if len(builder.builds) != 1 {
+		t.Fatalf("expected 1 builder call, got %d", len(builder.builds))
+	}
+	if !builder.builds[0].InjectFullPlan {
+		t.Fatalf("expected approved plan to inject full plan once")
+	}
+
+	saved = onlySession(t, store)
+	if saved.PlanApprovalPendingFullAlign {
+		t.Fatal("expected approval alignment flag to clear after full-plan injection")
+	}
+}
+
+func TestServiceApproveCurrentPlanNilService(t *testing.T) {
+	t.Parallel()
+
+	var service *Service
+	err := service.ApproveCurrentPlan(context.Background(), ApproveCurrentPlanInput{
+		SessionID: "session-1",
+		PlanID:    "plan-1",
+		Revision:  1,
+	})
+	if err == nil || !strings.Contains(err.Error(), "service is nil") {
+		t.Fatalf("expected service is nil error, got %v", err)
+	}
+}
+
+func TestServiceApproveCurrentPlanCanceledContext(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	store := newMemoryStore()
+	service := NewWithFactory(manager, tools.NewRegistry(), store, &scriptedProviderFactory{provider: &scriptedProvider{}}, &stubContextBuilder{})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := service.ApproveCurrentPlan(ctx, ApproveCurrentPlanInput{
+		SessionID: "session-1",
+		PlanID:    "plan-1",
+		Revision:  1,
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context canceled, got %v", err)
+	}
+}
+
+func TestServiceApproveCurrentPlanTrimsSessionID(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	store := newMemoryStore()
+	seed := agentsession.New("approve current plan with trimmed session id")
+	seed.CurrentPlan = &agentsession.PlanArtifact{
+		ID:       "plan-trim",
+		Revision: 1,
+		Status:   agentsession.PlanStatusDraft,
+		Spec: agentsession.PlanSpec{
+			Goal:   "trim session id before load",
+			Steps:  []string{"step one"},
+			Verify: []string{"verify one"},
+		},
+	}
+	if _, err := store.CreateSession(context.Background(), createSessionInputFromSession(seed)); err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+
+	service := NewWithFactory(manager, tools.NewRegistry(), store, &scriptedProviderFactory{provider: &scriptedProvider{}}, &stubContextBuilder{})
+	if err := service.ApproveCurrentPlan(context.Background(), ApproveCurrentPlanInput{
+		SessionID: "  " + seed.ID + "  ",
+		PlanID:    "plan-trim",
+		Revision:  1,
+	}); err != nil {
+		t.Fatalf("ApproveCurrentPlan() error = %v", err)
+	}
+
+	saved, err := store.LoadSession(context.Background(), seed.ID)
+	if err != nil {
+		t.Fatalf("LoadSession() error = %v", err)
+	}
+	if saved.CurrentPlan == nil || saved.CurrentPlan.Status != agentsession.PlanStatusApproved {
+		t.Fatalf("expected approved plan after trimming session id, got %+v", saved.CurrentPlan)
+	}
+}
+
+func TestServiceRunBuildModeIgnoresPlanningJSON(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	store := newMemoryStore()
+	builder := &stubContextBuilder{}
+	seed := agentsession.New("build ignores plan json")
+	seed.AgentMode = agentsession.AgentModeBuild
+	seed.CurrentPlan = &agentsession.PlanArtifact{
+		ID:       "plan-stable",
+		Revision: 1,
+		Status:   agentsession.PlanStatusDraft,
+		Spec: agentsession.PlanSpec{
+			Goal:   "保持旧计划不被覆盖",
+			Steps:  []string{"旧步骤"},
+			Verify: []string{"旧验证"},
+		},
+		Summary: agentsession.SummaryView{
+			Goal:     "保持旧计划不被覆盖",
+			KeySteps: []string{"旧步骤"},
+			Verify:   []string{"旧验证"},
+		},
+	}
+	seed.LastFullPlanRevision = 1
+	if _, err := store.CreateSession(context.Background(), createSessionInputFromSession(seed)); err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+
+	scripted := &scriptedProvider{
+		responses: []scriptedResponse{
+			{
+				Message: providertypes.Message{
+					Role: providertypes.RoleAssistant,
+					Parts: []providertypes.ContentPart{providertypes.NewTextPart(`{
+  "plan_spec": {
+    "goal": "不应在 build 中落库",
+    "steps": ["错误改写计划"],
+    "verify": ["不应落库"],
+    "todos": [{"id":"todo-build-plan-json","content":"bad","status":"pending"}]
+  },
+  "summary_candidate": {
+    "goal": "不应在 build 中落库",
+    "key_steps": ["错误改写计划"],
+    "constraints": [],
+    "verify": ["不应落库"],
+    "active_todo_ids": ["todo-build-plan-json"]
+  }
+}`)},
+				},
+				FinishReason: "stop",
+			},
+		},
+	}
+
+	service := NewWithFactory(manager, tools.NewRegistry(), store, &scriptedProviderFactory{provider: scripted}, builder)
+	if err := service.Run(context.Background(), UserInput{
+		SessionID: seed.ID,
+		RunID:     "run-build-ignore-plan-json",
+		Mode:      string(agentsession.AgentModeBuild),
+		Parts:     []providertypes.ContentPart{providertypes.NewTextPart("continue build")},
+	}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	saved := onlySession(t, store)
+	if saved.CurrentPlan == nil || saved.CurrentPlan.Spec.Goal != "保持旧计划不被覆盖" {
+		t.Fatalf("expected build mode to keep existing plan unchanged, got %+v", saved.CurrentPlan)
+	}
+}
+
+func TestServiceRunCompletedPlanRequestsOneFinalFullReview(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	store := newMemoryStore()
+	builder := &stubContextBuilder{}
+	seed := agentsession.New("completed plan review")
+	seed.AgentMode = agentsession.AgentModeBuild
+	seed.CurrentPlan = &agentsession.PlanArtifact{
+		ID:       "plan-complete-review",
+		Revision: 2,
+		Status:   agentsession.PlanStatusDraft,
+		Spec: agentsession.PlanSpec{
+			Goal:   "完成计划后仍需一次全文确认",
+			Steps:  []string{"收尾"},
+			Verify: []string{"go test ./internal/runtime"},
+		},
+		Summary: agentsession.SummaryView{
+			Goal:     "完成计划后仍需一次全文确认",
+			KeySteps: []string{"收尾"},
+			Verify:   []string{"go test ./internal/runtime"},
+		},
+	}
+	seed.LastFullPlanRevision = 2
+	if _, err := store.CreateSession(context.Background(), createSessionInputFromSession(seed)); err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+
+	scripted := &scriptedProvider{
+		responses: []scriptedResponse{
+			{
+				Message: providertypes.Message{
+					Role: providertypes.RoleAssistant,
+					Parts: []providertypes.ContentPart{
+						providertypes.NewTextPart("{\"task_completion\":{\"completed\":true}}\n执行已完成。"),
+					},
+				},
+				FinishReason: "stop",
+			},
+			{
+				Message: providertypes.Message{
+					Role:  providertypes.RoleAssistant,
+					Parts: []providertypes.ContentPart{providertypes.NewTextPart("确认完成情况。")},
+				},
+				FinishReason: "stop",
+			},
+		},
+	}
+
+	service := NewWithFactory(manager, tools.NewRegistry(), store, &scriptedProviderFactory{provider: scripted}, builder)
+	if err := service.Run(context.Background(), UserInput{
+		SessionID: seed.ID,
+		RunID:     "run-complete-first",
+		Mode:      string(agentsession.AgentModeBuild),
+		Parts:     []providertypes.ContentPart{providertypes.NewTextPart("finish task")},
+	}); err != nil {
+		t.Fatalf("first Run() error = %v", err)
+	}
+	saved := onlySession(t, store)
+	if saved.CurrentPlan == nil || saved.CurrentPlan.Status != agentsession.PlanStatusCompleted {
+		t.Fatalf("expected current plan to become completed, got %+v", saved.CurrentPlan)
+	}
+	if !saved.PlanCompletionPendingFullReview {
+		t.Fatal("expected completed plan to request one final full-plan review")
+	}
+	_ = collectRuntimeEvents(service.Events())
+
+	if err := service.Run(context.Background(), UserInput{
+		SessionID: seed.ID,
+		RunID:     "run-complete-review",
+		Mode:      string(agentsession.AgentModeBuild),
+		Parts:     []providertypes.ContentPart{providertypes.NewTextPart("confirm completion")},
+	}); err != nil {
+		t.Fatalf("second Run() error = %v", err)
+	}
+
+	if len(builder.builds) != 2 {
+		t.Fatalf("expected 2 builder calls, got %d", len(builder.builds))
+	}
+	if !builder.builds[1].InjectFullPlan {
+		t.Fatalf("expected the post-completion review turn to inject full plan")
+	}
+
+	saved = onlySession(t, store)
+	if saved.PlanCompletionPendingFullReview {
+		t.Fatal("expected completion review flag to clear after final full-plan review")
+	}
+}
+
+func TestServiceCompactMarksPlanContextDirty(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	store := newMemoryStore()
+	session := agentsession.New("compact marks plan dirty")
+	session.ID = "session-compact-plan-dirty"
+	session.CurrentPlan = &agentsession.PlanArtifact{
+		ID:       "plan-compact",
+		Revision: 1,
+		Status:   agentsession.PlanStatusApproved,
+		Spec: agentsession.PlanSpec{
+			Goal:   "compact 后重对齐计划",
+			Steps:  []string{"压缩历史"},
+			Verify: []string{"go test ./internal/runtime"},
+		},
+		Summary: agentsession.SummaryView{
+			Goal:     "compact 后重对齐计划",
+			KeySteps: []string{"压缩历史"},
+			Verify:   []string{"go test ./internal/runtime"},
+		},
+	}
+	if _, err := store.CreateSession(context.Background(), createSessionInputFromSession(session)); err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+
+	service := NewWithFactory(manager, tools.NewRegistry(), store, &scriptedProviderFactory{provider: &scriptedProvider{}}, nil)
+	service.compactRunner = &stubCompactRunner{
+		result: contextcompact.Result{
+			Messages: []providertypes.Message{
+				{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("[compact_summary]\ndone:\n- ok")}},
+			},
+			Applied: true,
+			Metrics: contextcompact.Metrics{TriggerMode: string(contextcompact.ModeManual)},
+		},
+	}
+
+	if _, err := service.Compact(context.Background(), CompactInput{
+		SessionID: session.ID,
+		RunID:     "run-manual-plan-dirty",
+	}); err != nil {
+		t.Fatalf("Compact() error = %v", err)
+	}
+
+	saved := onlySession(t, store)
+	if !saved.PlanContextDirty {
+		t.Fatal("expected compact to mark current plan context dirty")
+	}
+}
+
+func TestServiceRunCompactedSessionRequestsRestoreAlignment(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	store := newMemoryStore()
+	builder := &stubContextBuilder{}
+	seed := agentsession.New("restored after compact")
+	seed.AgentMode = agentsession.AgentModeBuild
+	seed.CurrentPlan = &agentsession.PlanArtifact{
+		ID:       "plan-restore-align",
+		Revision: 1,
+		Status:   agentsession.PlanStatusApproved,
+		Spec: agentsession.PlanSpec{
+			Goal:   "compact 恢复后重新对齐计划",
+			Steps:  []string{"继续执行"},
+			Verify: []string{"go test ./internal/runtime"},
+		},
+		Summary: agentsession.SummaryView{
+			Goal:     "compact 恢复后重新对齐计划",
+			KeySteps: []string{"继续执行"},
+			Verify:   []string{"go test ./internal/runtime"},
+		},
+	}
+	seed.LastFullPlanRevision = 1
+	seed.Messages = []providertypes.Message{
+		{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("[compact_summary]\ndone:\n- archived\n\nin_progress:\n- continue")}},
+	}
+	if _, err := store.CreateSession(context.Background(), createSessionInputFromSession(seed)); err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+	store.sessions[seed.ID] = cloneSession(seed)
+
+	scripted := &scriptedProvider{
+		responses: []scriptedResponse{
+			{
+				Message: providertypes.Message{
+					Role:  providertypes.RoleAssistant,
+					Parts: []providertypes.ContentPart{providertypes.NewTextPart("resume after compact")},
+				},
+				FinishReason: "stop",
+			},
+		},
+	}
+
+	service := NewWithFactory(manager, tools.NewRegistry(), store, &scriptedProviderFactory{provider: scripted}, builder)
+	if err := service.Run(context.Background(), UserInput{
+		SessionID: seed.ID,
+		RunID:     "run-restored-align",
+		Mode:      string(agentsession.AgentModeBuild),
+		Parts:     []providertypes.ContentPart{providertypes.NewTextPart("continue")},
+	}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	if len(builder.builds) != 1 {
+		t.Fatalf("expected 1 builder call, got %d", len(builder.builds))
+	}
+	if !builder.builds[0].InjectFullPlan {
+		t.Fatalf("expected compact-restored session to inject full plan once")
+	}
+}
+
 func newRuntimeConfigManager(t *testing.T) *config.Manager {
 	return newRuntimeConfigManagerWithProviderEnvs(t, nil)
 }
@@ -3681,6 +4746,8 @@ func cloneSession(session agentsession.Session) agentsession.Session {
 	cloned.Messages = append([]providertypes.Message(nil), session.Messages...)
 	cloned.TaskState = session.TaskState.Clone()
 	cloned.ActivatedSkills = append([]agentsession.SkillActivation(nil), session.ActivatedSkills...)
+	cloned.Todos = cloneTodosForPersistence(session.Todos)
+	cloned.CurrentPlan = session.CurrentPlan.Clone()
 	return cloned
 }
 
@@ -3695,6 +4762,8 @@ func cloneBuildInput(input agentcontext.BuildInput) agentcontext.BuildInput {
 	cloned := input
 	cloned.Messages = append([]providertypes.Message(nil), input.Messages...)
 	cloned.TaskState = input.TaskState.Clone()
+	cloned.Todos = cloneTodosForPersistence(input.Todos)
+	cloned.CurrentPlan = input.CurrentPlan.Clone()
 	cloned.ActiveSkills = append([]skills.Skill(nil), input.ActiveSkills...)
 	if input.RepositorySummary != nil {
 		summary := *input.RepositorySummary

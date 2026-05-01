@@ -23,6 +23,14 @@ type rpcRunCaptureRuntimeStub struct {
 	listSessionSkillsFn func(ctx context.Context, input ListSessionSkillsInput) ([]SessionSkillState, error)
 	listAvailableFn     func(ctx context.Context, input ListAvailableSkillsInput) ([]AvailableSkillState, error)
 	loadSessionFn       func(ctx context.Context, input LoadSessionInput) (Session, error)
+	listProvidersFn     func(ctx context.Context, input ListProvidersInput) ([]ProviderOption, error)
+	createProviderFn    func(ctx context.Context, input CreateProviderInput) (ProviderSelectionResult, error)
+	deleteProviderFn    func(ctx context.Context, input DeleteProviderInput) error
+	selectProviderFn    func(ctx context.Context, input SelectProviderModelInput) (ProviderSelectionResult, error)
+	listMCPServersFn    func(ctx context.Context, input ListMCPServersInput) ([]MCPServerEntry, error)
+	upsertMCPServerFn   func(ctx context.Context, input UpsertMCPServerInput) error
+	setMCPEnabledFn     func(ctx context.Context, input SetMCPServerEnabledInput) error
+	deleteMCPServerFn   func(ctx context.Context, input DeleteMCPServerInput) error
 }
 
 func (s *rpcRunCaptureRuntimeStub) Run(_ context.Context, input RunInput) error {
@@ -104,6 +112,72 @@ func (s *rpcRunCaptureRuntimeStub) LoadSession(ctx context.Context, input LoadSe
 	}
 	return Session{}, nil
 }
+func (s *rpcRunCaptureRuntimeStub) DeleteSession(_ context.Context, _ DeleteSessionInput) (bool, error) {
+	return false, nil
+}
+func (s *rpcRunCaptureRuntimeStub) RenameSession(_ context.Context, _ RenameSessionInput) error {
+	return nil
+}
+func (s *rpcRunCaptureRuntimeStub) ListFiles(_ context.Context, _ ListFilesInput) ([]FileEntry, error) {
+	return nil, nil
+}
+func (s *rpcRunCaptureRuntimeStub) ListModels(_ context.Context, _ ListModelsInput) ([]ModelEntry, error) {
+	return nil, nil
+}
+func (s *rpcRunCaptureRuntimeStub) SetSessionModel(_ context.Context, _ SetSessionModelInput) error {
+	return nil
+}
+func (s *rpcRunCaptureRuntimeStub) GetSessionModel(_ context.Context, _ GetSessionModelInput) (SessionModelResult, error) {
+	return SessionModelResult{}, nil
+}
+func (s *rpcRunCaptureRuntimeStub) ListProviders(ctx context.Context, input ListProvidersInput) ([]ProviderOption, error) {
+	if s.listProvidersFn != nil {
+		return s.listProvidersFn(ctx, input)
+	}
+	return nil, nil
+}
+func (s *rpcRunCaptureRuntimeStub) CreateProvider(ctx context.Context, input CreateProviderInput) (ProviderSelectionResult, error) {
+	if s.createProviderFn != nil {
+		return s.createProviderFn(ctx, input)
+	}
+	return ProviderSelectionResult{}, nil
+}
+func (s *rpcRunCaptureRuntimeStub) DeleteProvider(ctx context.Context, input DeleteProviderInput) error {
+	if s.deleteProviderFn != nil {
+		return s.deleteProviderFn(ctx, input)
+	}
+	return nil
+}
+func (s *rpcRunCaptureRuntimeStub) SelectProviderModel(ctx context.Context, input SelectProviderModelInput) (ProviderSelectionResult, error) {
+	if s.selectProviderFn != nil {
+		return s.selectProviderFn(ctx, input)
+	}
+	return ProviderSelectionResult{}, nil
+}
+func (s *rpcRunCaptureRuntimeStub) ListMCPServers(ctx context.Context, input ListMCPServersInput) ([]MCPServerEntry, error) {
+	if s.listMCPServersFn != nil {
+		return s.listMCPServersFn(ctx, input)
+	}
+	return nil, nil
+}
+func (s *rpcRunCaptureRuntimeStub) UpsertMCPServer(ctx context.Context, input UpsertMCPServerInput) error {
+	if s.upsertMCPServerFn != nil {
+		return s.upsertMCPServerFn(ctx, input)
+	}
+	return nil
+}
+func (s *rpcRunCaptureRuntimeStub) SetMCPServerEnabled(ctx context.Context, input SetMCPServerEnabledInput) error {
+	if s.setMCPEnabledFn != nil {
+		return s.setMCPEnabledFn(ctx, input)
+	}
+	return nil
+}
+func (s *rpcRunCaptureRuntimeStub) DeleteMCPServer(ctx context.Context, input DeleteMCPServerInput) error {
+	if s.deleteMCPServerFn != nil {
+		return s.deleteMCPServerFn(ctx, input)
+	}
+	return nil
+}
 
 func (s *rpcRunCaptureRuntimeStub) CreateSession(ctx context.Context, input CreateSessionInput) (string, error) {
 	s.createSessionID = strings.TrimSpace(input.SessionID)
@@ -111,6 +185,17 @@ func (s *rpcRunCaptureRuntimeStub) CreateSession(ctx context.Context, input Crea
 		return s.createSessionFn(ctx, input)
 	}
 	return s.createSessionID, nil
+}
+
+func (s *rpcRunCaptureRuntimeStub) ListSessionTodos(_ context.Context, _ ListSessionTodosInput) (TodoSnapshot, error) {
+	return TodoSnapshot{}, nil
+}
+
+func (s *rpcRunCaptureRuntimeStub) GetRuntimeSnapshot(
+	_ context.Context,
+	_ GetRuntimeSnapshotInput,
+) (RuntimeSnapshot, error) {
+	return RuntimeSnapshot{}, nil
 }
 
 func TestDispatchRPCRequestResultEncodeError(t *testing.T) {
@@ -620,6 +705,276 @@ func TestDispatchRPCRequestListAvailableSkillsDoesNotRequireSession(t *testing.T
 	}
 	if frame.Action != FrameActionListAvailableSkills {
 		t.Fatalf("response action = %q, want %q", frame.Action, FrameActionListAvailableSkills)
+	}
+}
+
+func TestDispatchRPCRequestProviderAndMCPMethods(t *testing.T) {
+	ctx := WithRequestSource(context.Background(), RequestSourceIPC)
+	ctx = WithRequestACL(ctx, NewStrictControlPlaneACL())
+
+	runtimeStub := &rpcRunCaptureRuntimeStub{
+		listProvidersFn: func(_ context.Context, input ListProvidersInput) ([]ProviderOption, error) {
+			return []ProviderOption{{ID: "openai", Name: "OpenAI"}}, nil
+		},
+		createProviderFn: func(_ context.Context, input CreateProviderInput) (ProviderSelectionResult, error) {
+			if input.Name != "custom" {
+				t.Fatalf("create provider name = %q, want %q", input.Name, "custom")
+			}
+			return ProviderSelectionResult{ProviderID: "custom"}, nil
+		},
+		deleteProviderFn: func(_ context.Context, input DeleteProviderInput) error {
+			if input.ProviderID != "custom" {
+				t.Fatalf("delete provider id = %q, want %q", input.ProviderID, "custom")
+			}
+			return nil
+		},
+		selectProviderFn: func(_ context.Context, input SelectProviderModelInput) (ProviderSelectionResult, error) {
+			if input.ProviderID != "openai" || input.ModelID != "gpt-4" {
+				t.Fatalf("select provider/model = %q/%q, want openai/gpt-4", input.ProviderID, input.ModelID)
+			}
+			return ProviderSelectionResult{ProviderID: "openai", ModelID: "gpt-4"}, nil
+		},
+		listMCPServersFn: func(_ context.Context, input ListMCPServersInput) ([]MCPServerEntry, error) {
+			return []MCPServerEntry{{ID: "stdio-server", Enabled: true}}, nil
+		},
+		upsertMCPServerFn: func(_ context.Context, input UpsertMCPServerInput) error {
+			if input.Server.ID != "stdio-server" {
+				t.Fatalf("upsert server id = %q, want %q", input.Server.ID, "stdio-server")
+			}
+			return nil
+		},
+		setMCPEnabledFn: func(_ context.Context, input SetMCPServerEnabledInput) error {
+			if input.ID != "stdio-server" || !input.Enabled {
+				t.Fatalf("set enabled id=%q enabled=%v, want stdio-server/true", input.ID, input.Enabled)
+			}
+			return nil
+		},
+		deleteMCPServerFn: func(_ context.Context, input DeleteMCPServerInput) error {
+			if input.ID != "stdio-server" {
+				t.Fatalf("delete server id = %q, want %q", input.ID, "stdio-server")
+			}
+			return nil
+		},
+	}
+
+	listProviders := dispatchRPCRequest(ctx, protocol.JSONRPCRequest{
+		JSONRPC: protocol.JSONRPCVersion,
+		ID:      json.RawMessage(`"req-list-providers"`),
+		Method:  protocol.MethodGatewayListProviders,
+		Params:  json.RawMessage(`{}`),
+	}, runtimeStub)
+	if listProviders.Error != nil {
+		t.Fatalf("listProviders response error: %+v", listProviders.Error)
+	}
+	listProvidersFrame, err := decodeJSONRPCResultFrame(listProviders)
+	if err != nil {
+		t.Fatalf("decode listProviders frame: %v", err)
+	}
+	if listProvidersFrame.Action != FrameActionListProviders {
+		t.Fatalf("listProviders action = %q, want %q", listProvidersFrame.Action, FrameActionListProviders)
+	}
+
+	createProvider := dispatchRPCRequest(ctx, protocol.JSONRPCRequest{
+		JSONRPC: protocol.JSONRPCVersion,
+		ID:      json.RawMessage(`"req-create-provider"`),
+		Method:  protocol.MethodGatewayCreateCustomProvider,
+		Params:  json.RawMessage(`{"name":"custom","driver":"openai","api_key_env":"OPENAI_API_KEY"}`),
+	}, runtimeStub)
+	if createProvider.Error != nil {
+		t.Fatalf("createProvider response error: %+v", createProvider.Error)
+	}
+	createProviderFrame, err := decodeJSONRPCResultFrame(createProvider)
+	if err != nil {
+		t.Fatalf("decode createProvider frame: %v", err)
+	}
+	if createProviderFrame.Action != FrameActionCreateCustomProvider {
+		t.Fatalf("createProvider action = %q, want %q", createProviderFrame.Action, FrameActionCreateCustomProvider)
+	}
+
+	deleteProvider := dispatchRPCRequest(ctx, protocol.JSONRPCRequest{
+		JSONRPC: protocol.JSONRPCVersion,
+		ID:      json.RawMessage(`"req-delete-provider"`),
+		Method:  protocol.MethodGatewayDeleteCustomProvider,
+		Params:  json.RawMessage(`{"provider_id":"custom"}`),
+	}, runtimeStub)
+	if deleteProvider.Error != nil {
+		t.Fatalf("deleteProvider response error: %+v", deleteProvider.Error)
+	}
+	deleteProviderFrame, err := decodeJSONRPCResultFrame(deleteProvider)
+	if err != nil {
+		t.Fatalf("decode deleteProvider frame: %v", err)
+	}
+	if deleteProviderFrame.Action != FrameActionDeleteCustomProvider {
+		t.Fatalf("deleteProvider action = %q, want %q", deleteProviderFrame.Action, FrameActionDeleteCustomProvider)
+	}
+
+	selectProvider := dispatchRPCRequest(ctx, protocol.JSONRPCRequest{
+		JSONRPC: protocol.JSONRPCVersion,
+		ID:      json.RawMessage(`"req-select-provider"`),
+		Method:  protocol.MethodGatewaySelectProviderModel,
+		Params:  json.RawMessage(`{"provider_id":"openai","model_id":"gpt-4"}`),
+	}, runtimeStub)
+	if selectProvider.Error != nil {
+		t.Fatalf("selectProvider response error: %+v", selectProvider.Error)
+	}
+	selectProviderFrame, err := decodeJSONRPCResultFrame(selectProvider)
+	if err != nil {
+		t.Fatalf("decode selectProvider frame: %v", err)
+	}
+	if selectProviderFrame.Action != FrameActionSelectProviderModel {
+		t.Fatalf("selectProvider action = %q, want %q", selectProviderFrame.Action, FrameActionSelectProviderModel)
+	}
+
+	listMCP := dispatchRPCRequest(ctx, protocol.JSONRPCRequest{
+		JSONRPC: protocol.JSONRPCVersion,
+		ID:      json.RawMessage(`"req-list-mcp"`),
+		Method:  protocol.MethodGatewayListMCPServers,
+		Params:  json.RawMessage(`{}`),
+	}, runtimeStub)
+	if listMCP.Error != nil {
+		t.Fatalf("listMCPServers response error: %+v", listMCP.Error)
+	}
+	listMCPFrame, err := decodeJSONRPCResultFrame(listMCP)
+	if err != nil {
+		t.Fatalf("decode listMCPServers frame: %v", err)
+	}
+	if listMCPFrame.Action != FrameActionListMCPServers {
+		t.Fatalf("listMCPServers action = %q, want %q", listMCPFrame.Action, FrameActionListMCPServers)
+	}
+
+	upsertMCP := dispatchRPCRequest(ctx, protocol.JSONRPCRequest{
+		JSONRPC: protocol.JSONRPCVersion,
+		ID:      json.RawMessage(`"req-upsert-mcp"`),
+		Method:  protocol.MethodGatewayUpsertMCPServer,
+		Params:  json.RawMessage(`{"server":{"id":"stdio-server","stdio":{"command":"echo","args":["hello"]}}}`),
+	}, runtimeStub)
+	if upsertMCP.Error != nil {
+		t.Fatalf("upsertMCPServer response error: %+v", upsertMCP.Error)
+	}
+	upsertMCPFrame, err := decodeJSONRPCResultFrame(upsertMCP)
+	if err != nil {
+		t.Fatalf("decode upsertMCPServer frame: %v", err)
+	}
+	if upsertMCPFrame.Action != FrameActionUpsertMCPServer {
+		t.Fatalf("upsertMCPServer action = %q, want %q", upsertMCPFrame.Action, FrameActionUpsertMCPServer)
+	}
+
+	setMCP := dispatchRPCRequest(ctx, protocol.JSONRPCRequest{
+		JSONRPC: protocol.JSONRPCVersion,
+		ID:      json.RawMessage(`"req-set-mcp"`),
+		Method:  protocol.MethodGatewaySetMCPServerEnabled,
+		Params:  json.RawMessage(`{"id":"stdio-server","enabled":true}`),
+	}, runtimeStub)
+	if setMCP.Error != nil {
+		t.Fatalf("setMCPServerEnabled response error: %+v", setMCP.Error)
+	}
+	setMCPFrame, err := decodeJSONRPCResultFrame(setMCP)
+	if err != nil {
+		t.Fatalf("decode setMCPServerEnabled frame: %v", err)
+	}
+	if setMCPFrame.Action != FrameActionSetMCPServerEnabled {
+		t.Fatalf("setMCPServerEnabled action = %q, want %q", setMCPFrame.Action, FrameActionSetMCPServerEnabled)
+	}
+
+	deleteMCP := dispatchRPCRequest(ctx, protocol.JSONRPCRequest{
+		JSONRPC: protocol.JSONRPCVersion,
+		ID:      json.RawMessage(`"req-delete-mcp"`),
+		Method:  protocol.MethodGatewayDeleteMCPServer,
+		Params:  json.RawMessage(`{"id":"stdio-server"}`),
+	}, runtimeStub)
+	if deleteMCP.Error != nil {
+		t.Fatalf("deleteMCPServer response error: %+v", deleteMCP.Error)
+	}
+	deleteMCPFrame, err := decodeJSONRPCResultFrame(deleteMCP)
+	if err != nil {
+		t.Fatalf("decode deleteMCPServer frame: %v", err)
+	}
+	if deleteMCPFrame.Action != FrameActionDeleteMCPServer {
+		t.Fatalf("deleteMCPServer action = %q, want %q", deleteMCPFrame.Action, FrameActionDeleteMCPServer)
+	}
+}
+
+// runtimePortOnlyStub 仅实现 RuntimePort，不实现 ManagementRuntimePort。
+type runtimePortOnlyStub struct{}
+
+func (s *runtimePortOnlyStub) Run(_ context.Context, _ RunInput) error { return nil }
+func (s *runtimePortOnlyStub) Compact(_ context.Context, _ CompactInput) (CompactResult, error) {
+	return CompactResult{}, nil
+}
+func (s *runtimePortOnlyStub) ExecuteSystemTool(_ context.Context, _ ExecuteSystemToolInput) (tools.ToolResult, error) {
+	return tools.ToolResult{}, nil
+}
+func (s *runtimePortOnlyStub) ActivateSessionSkill(_ context.Context, _ SessionSkillMutationInput) error {
+	return nil
+}
+func (s *runtimePortOnlyStub) DeactivateSessionSkill(_ context.Context, _ SessionSkillMutationInput) error {
+	return nil
+}
+func (s *runtimePortOnlyStub) ListSessionSkills(_ context.Context, _ ListSessionSkillsInput) ([]SessionSkillState, error) {
+	return nil, nil
+}
+func (s *runtimePortOnlyStub) ListAvailableSkills(_ context.Context, _ ListAvailableSkillsInput) ([]AvailableSkillState, error) {
+	return nil, nil
+}
+func (s *runtimePortOnlyStub) ResolvePermission(_ context.Context, _ PermissionResolutionInput) error {
+	return nil
+}
+func (s *runtimePortOnlyStub) CancelRun(_ context.Context, _ CancelInput) (bool, error) {
+	return false, nil
+}
+func (s *runtimePortOnlyStub) Events() <-chan RuntimeEvent { return nil }
+func (s *runtimePortOnlyStub) ListSessions(_ context.Context) ([]SessionSummary, error) {
+	return nil, nil
+}
+func (s *runtimePortOnlyStub) LoadSession(_ context.Context, _ LoadSessionInput) (Session, error) {
+	return Session{}, nil
+}
+func (s *runtimePortOnlyStub) ListSessionTodos(_ context.Context, _ ListSessionTodosInput) (TodoSnapshot, error) {
+	return TodoSnapshot{}, nil
+}
+func (s *runtimePortOnlyStub) GetRuntimeSnapshot(_ context.Context, _ GetRuntimeSnapshotInput) (RuntimeSnapshot, error) {
+	return RuntimeSnapshot{}, nil
+}
+func (s *runtimePortOnlyStub) CreateSession(_ context.Context, _ CreateSessionInput) (string, error) {
+	return "", nil
+}
+func (s *runtimePortOnlyStub) DeleteSession(_ context.Context, _ DeleteSessionInput) (bool, error) {
+	return false, nil
+}
+func (s *runtimePortOnlyStub) RenameSession(_ context.Context, _ RenameSessionInput) error {
+	return nil
+}
+func (s *runtimePortOnlyStub) ListFiles(_ context.Context, _ ListFilesInput) ([]FileEntry, error) {
+	return nil, nil
+}
+func (s *runtimePortOnlyStub) ListModels(_ context.Context, _ ListModelsInput) ([]ModelEntry, error) {
+	return nil, nil
+}
+func (s *runtimePortOnlyStub) SetSessionModel(_ context.Context, _ SetSessionModelInput) error {
+	return nil
+}
+func (s *runtimePortOnlyStub) GetSessionModel(_ context.Context, _ GetSessionModelInput) (SessionModelResult, error) {
+	return SessionModelResult{}, nil
+}
+
+func TestDispatchRPCRequestProviderMethodsManagementPortUnavailable(t *testing.T) {
+	ctx := WithRequestSource(context.Background(), RequestSourceIPC)
+	ctx = WithRequestACL(ctx, NewStrictControlPlaneACL())
+
+	response := dispatchRPCRequest(ctx, protocol.JSONRPCRequest{
+		JSONRPC: protocol.JSONRPCVersion,
+		ID:      json.RawMessage(`"req-list-providers-no-mgmt"`),
+		Method:  protocol.MethodGatewayListProviders,
+		Params:  json.RawMessage(`{}`),
+	}, &runtimePortOnlyStub{})
+	if response.Error == nil {
+		t.Fatal("expected error when management port is unavailable")
+	}
+	if response.Error.Code != protocol.JSONRPCCodeInternalError {
+		t.Fatalf("error code = %d, want %d", response.Error.Code, protocol.JSONRPCCodeInternalError)
+	}
+	if gatewayCode := protocol.GatewayCodeFromJSONRPCError(response.Error); gatewayCode != ErrorCodeInternalError.String() {
+		t.Fatalf("gateway_code = %q, want %q", gatewayCode, ErrorCodeInternalError.String())
 	}
 }
 

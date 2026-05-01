@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -34,16 +35,14 @@ import (
 )
 
 const (
-	composerMinHeight        = tuistate.ComposerMinHeight
-	composerMaxHeight        = tuistate.ComposerMaxHeight
-	composerPromptWidth      = tuistate.ComposerPromptWidth
-	mouseWheelStepLines      = tuistate.MouseWheelStepLines
-	pasteBurstWindow         = tuistate.PasteBurstWindow
-	pasteEnterGuard          = tuistate.PasteEnterGuard
-	pasteSessionGuard        = tuistate.PasteSessionGuard
-	pasteBurstThreshold      = tuistate.PasteBurstThreshold
-	pastePlaceholderMinLines = tuistate.PastePlaceholderMinLines
-	pastePlaceholderMinChars = tuistate.PastePlaceholderMinChars
+	composerMinHeight   = tuistate.ComposerMinHeight
+	composerMaxHeight   = tuistate.ComposerMaxHeight
+	composerPromptWidth = tuistate.ComposerPromptWidth
+	mouseWheelStepLines = tuistate.MouseWheelStepLines
+	pasteBurstWindow    = tuistate.PasteBurstWindow
+	pasteEnterGuard     = tuistate.PasteEnterGuard
+	pasteSessionGuard   = tuistate.PasteSessionGuard
+	pasteBurstThreshold = tuistate.PasteBurstThreshold
 )
 
 const providerAddSelectTimeout = 10 * time.Second
@@ -59,6 +58,10 @@ const sessionSwitchBusyMessage = "cannot switch sessions while run or compact is
 const logViewerEntryLimit = 500
 const logViewerPersistDebounce = 300 * time.Millisecond
 const footerErrorFlashDuration = 8 * time.Second
+const pasteTxnFlushDebounce = 140 * time.Millisecond
+const pastedTextLoadDebounce = 180 * time.Millisecond
+const duplicatePasteSuppressWindow = 1200 * time.Millisecond
+const inlineLogMarker = "[[neo-log]] "
 const sessionWorkdirMissingWarning = "Session workspace not found, keeping current workspace."
 
 type sessionLogPersistenceRuntime interface {
@@ -72,12 +75,13 @@ var persistProviderUserEnvVar = config.PersistUserEnvVar
 var deleteProviderUserEnvVar = config.DeleteUserEnvVar
 var lookupProviderUserEnvVar = config.LookupUserEnvVar
 var openExternalResource = tuiinfra.OpenExternalResource
+var savePastedTextToTempFile = tuiinfra.SaveTextToTempFile
 
 type startupWakeSubmitMsg struct {
 	Input startupWakeSubmitInput
 }
 
-// emitStartupWakeSubmitCmd 在启动阶段投递一次性自动提交消息，用于复用普通输入提交流程。
+// emitStartupWakeSubmitCmd dispatches one startup wake submission message.
 func emitStartupWakeSubmitCmd(input startupWakeSubmitInput) tea.Cmd {
 	return func() tea.Msg {
 		return startupWakeSubmitMsg{Input: input}
@@ -91,6 +95,10 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if a.deferredFooterTick != nil {
 			cmds = append(cmds, a.deferredFooterTick)
 			a.deferredFooterTick = nil
+		}
+		if a.deferredPastedTextLoadCmd != nil {
+			cmds = append(cmds, a.deferredPastedTextLoadCmd)
+			a.deferredPastedTextLoadCmd = nil
 		}
 		return tea.Batch(cmds...)
 	}
@@ -126,6 +134,31 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, appTickCmd())
 		}
 		return a, batchUpdateCmds()
+	case pasteTxnFlushMsg:
+		if typed.Version != a.pasteTxnVersion || !a.pasteTxnActive {
+			return a, batchUpdateCmds()
+		}
+		a.flushPasteTransaction()
+		return a, batchUpdateCmds()
+	case pastedTextLoadReadyMsg:
+		if !a.loadingPastedText {
+			return a, batchUpdateCmds()
+		}
+		a.loadingPastedText = false
+		if a.state.StatusText == statusLoadingPastedText {
+			a.state.StatusText = statusReady
+		}
+		if !a.pendingSendAfterPasteLoad {
+			return a, batchUpdateCmds()
+		}
+		a.pendingSendAfterPasteLoad = false
+		a.skipNextSendPasteLoadWait = true
+		if strings.TrimSpace(a.input.Value()) == "" && !a.hasImageAttachments() {
+			a.skipNextSendPasteLoadWait = false
+			return a, batchUpdateCmds()
+		}
+		enter := tea.KeyMsg{Type: tea.KeyEnter}
+		return a.updateInputPanel(enter, enter, cmds)
 	case startupWakeSubmitMsg:
 		if cmd := a.handleStartupWakeSubmitMsg(typed); cmd != nil {
 			cmds = append(cmds, cmd)
@@ -325,7 +358,15 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, batchUpdateCmds()
 		}
 	case tea.KeyMsg:
+		if typed.Type == tea.KeyCtrlC && a.hasTextSelection() {
+			a.copySelectionToClipboard()
+			return a, batchUpdateCmds()
+		}
 		if key.Matches(typed, a.keys.Quit) {
+			if a.hasTextSelection() {
+				a.copySelectionToClipboard()
+				return a, batchUpdateCmds()
+			}
 			return a, tea.Quit
 		}
 		if key.Matches(typed, a.keys.ToggleHelp) {
@@ -471,6 +512,10 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 			cmds = append(cmds, a.deferredFooterTick)
 			a.deferredFooterTick = nil
 		}
+		if a.deferredPastedTextLoadCmd != nil {
+			cmds = append(cmds, a.deferredPastedTextLoadCmd)
+			a.deferredPastedTextLoadCmd = nil
+		}
 		return tea.Batch(cmds...)
 	}
 
@@ -482,42 +527,140 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 			return a, batchUpdateCmds()
 		}
 	}
-
-	if key.Matches(typed, a.keys.PasteImage) {
-		pastedText, handled, err := a.handleClipboardPasteShortcut()
-		if handled {
-			if err != nil {
-				a.state.StatusText = err.Error()
-				a.appendActivity("multimodal", "Failed to paste from clipboard", err.Error(), true)
-				return a, batchUpdateCmds()
-			}
-			if pastedText == "" {
-				return a, batchUpdateCmds()
-			}
-			msg = tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(pastedText), Paste: true}
-			typed = msg.(tea.KeyMsg)
-			effectiveTyped = typed
+	if a.consumePendingCtrlVPasteEcho(typed, now) {
+		return a, batchUpdateCmds()
+	}
+	if typed.Type == tea.KeyRunes && len(typed.Runes) > 0 && a.hasPendingCtrlVPasteEcho(now) {
+		if strings.TrimSpace(a.pendingCtrlVPasteEcho) != "" || isPotentialCtrlVPasteEchoChunk(typed) {
+			return a, batchUpdateCmds()
 		}
 	}
+	if !typed.Paste && !a.pasteTxnActive && typed.Type == tea.KeyRunes && len(typed.Runes) > 0 && a.tryPrimePasteFromClipboard(typed, now) {
+		return a, batchUpdateCmds()
+	}
+	if a.pasteTxnActive && !a.shouldCapturePasteTxnChunk(typed) {
+		a.flushPasteTransaction()
+	}
+	if a.shouldCapturePasteTxnChunk(typed) {
+		a.appendPasteTxnChunk(string(typed.Runes))
+		cmds = append(cmds, schedulePasteTxnFlush(a.pasteTxnVersion))
+		return a, batchUpdateCmds()
+	}
+	if key.Matches(typed, a.keys.Send) && a.pasteTxnActive {
+		a.flushPasteTransaction()
+	}
+
+	if key.Matches(typed, a.keys.PasteImage) {
+		if err := a.addImageFromClipboard(); err == nil {
+			a.applyComponentLayout(false)
+			a.refreshCommandMenu()
+			return a, batchUpdateCmds()
+		}
+		// No image payload: proactively process clipboard text to avoid raw echo rendering.
+		text, err := readClipboardText()
+		if err != nil || strings.TrimSpace(text) == "" {
+			return a, batchUpdateCmds()
+		}
+		pastedText := normalizeClipboardText(text)
+		trimmed := strings.TrimSpace(pastedText)
+		if handled, applyErr := a.applyPastedFileReferences(trimmed); handled {
+			if applyErr != nil {
+				a.state.StatusText = applyErr.Error()
+				a.appendActivity("multimodal", "Failed to parse pasted file references", applyErr.Error(), true)
+			}
+			a.pendingCtrlVPasteEcho = pastedText
+			a.pendingCtrlVEchoUntil = now.Add(2 * time.Second)
+			return a, batchUpdateCmds()
+		}
+		msg = tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(pastedText), Paste: true}
+		typed = msg.(tea.KeyMsg)
+		effectiveTyped = typed
+		a.pendingCtrlVPasteEcho = pastedText
+		a.pendingCtrlVEchoUntil = now.Add(2 * time.Second)
+	}
+
+	if typed.Paste {
+		pastedText := normalizeClipboardText(string(typed.Runes))
+		clipboardText := ""
+		if clipText, err := readClipboardText(); err == nil {
+			clipboardText = normalizeClipboardText(clipText)
+		}
+		if strings.TrimSpace(clipboardText) != "" &&
+			(strings.TrimSpace(pastedText) == "" || strings.Contains(clipboardText, pastedText) || strings.Contains(pastedText, clipboardText)) {
+			pastedText = clipboardText
+			a.pendingCtrlVPasteEcho = clipboardText
+			a.pendingCtrlVEchoUntil = now.Add(2 * time.Second)
+		}
+		trimmed := strings.TrimSpace(pastedText)
+		if trimmed == "" {
+			// Some terminals emit an empty paste event for image-only clipboard payloads.
+			if err := a.addImageFromClipboard(); err == nil {
+				a.applyComponentLayout(false)
+				a.refreshCommandMenu()
+				return a, batchUpdateCmds()
+			}
+			// Empty paste with no resolvable clipboard payload: ignore silently.
+			return a, batchUpdateCmds()
+		}
+		if handled, err := a.applyPastedFileReferences(trimmed); handled {
+			if err != nil {
+				a.state.StatusText = err.Error()
+				a.appendActivity("multimodal", "Failed to parse pasted file references", err.Error(), true)
+			}
+			return a, batchUpdateCmds()
+		}
+		msg = tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(pastedText), Paste: true}
+		typed = msg.(tea.KeyMsg)
+		effectiveTyped = typed
+	}
 	if key.Matches(typed, a.keys.Send) {
+		currentInput := a.input.Value()
+		needsPasteLoad := a.shouldDeferSendForPastedTextLoad(currentInput)
+		if a.pendingSendAfterPasteLoad && !a.loadingPastedText {
+			a.pendingSendAfterPasteLoad = false
+		}
+		if a.pendingSendAfterPasteLoad {
+			return a, batchUpdateCmds()
+		}
+		if !a.skipNextSendPasteLoadWait && a.loadingPastedText && needsPasteLoad {
+			a.pendingSendAfterPasteLoad = true
+			a.state.StatusText = statusLoadingPastedText
+			return a, batchUpdateCmds()
+		}
+		if a.loadingPastedText && !needsPasteLoad {
+			a.loadingPastedText = false
+			if a.state.StatusText == statusLoadingPastedText {
+				a.state.StatusText = statusReady
+			}
+		}
+		a.skipNextSendPasteLoadWait = false
 		if a.shouldTreatEnterAsNewline(typed, now) {
 			a.growComposerForNewline()
 			msg = tea.KeyMsg{Type: tea.KeyEnter}
 			effectiveTyped = tea.KeyMsg{Type: tea.KeyEnter, Paste: true}
 		} else {
-			rawInput := a.input.Value()
+			rawInput := currentInput
+			resolvedInput, resolveErr := a.resolvePendingTextPastes(rawInput)
+			if resolveErr != nil {
+				a.state.ExecutionError = resolveErr.Error()
+				a.state.StatusText = resolveErr.Error()
+				a.appendActivity("multimodal", "Failed to resolve pasted content", resolveErr.Error(), true)
+				return a, batchUpdateCmds()
+			}
+			rawInput = resolvedInput
 			hasImages := a.hasImageAttachments()
 			if strings.TrimSpace(rawInput) == "" && !hasImages {
 				return a, batchUpdateCmds()
 			}
-			input := strings.TrimSpace(a.expandPendingPastePlaceholders(rawInput))
+			input := strings.TrimSpace(rawInput)
 			images := a.collectPendingImageInputs()
 
 			if a.isBusy() {
 				a.queueInterventionInput(input, images)
+				a.rebuildTranscript()
 				a.input.Reset()
 				a.state.InputText = ""
-				a.clearImageAttachments()
+				a.clearComposerAttachments()
 				a.applyComponentLayout(true)
 				a.refreshCommandMenu()
 				a.resetPasteHeuristics()
@@ -535,6 +678,7 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 			if handled, cmd := a.handleImmediateSlashCommand(input); handled {
 				a.input.Reset()
 				a.state.InputText = ""
+				a.clearPendingTextPastes()
 				a.applyComponentLayout(true)
 				a.refreshCommandMenu()
 				a.resetPasteHeuristics()
@@ -552,6 +696,7 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 				}
 				a.input.Reset()
 				a.state.InputText = ""
+				a.clearPendingTextPastes()
 				a.applyComponentLayout(true)
 				a.refreshCommandMenu()
 				a.resetPasteHeuristics()
@@ -560,6 +705,7 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 
 			a.input.Reset()
 			a.state.InputText = ""
+			a.clearPendingTextPastes()
 			a.applyComponentLayout(true)
 			a.refreshCommandMenu()
 			a.resetPasteHeuristics()
@@ -631,7 +777,7 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 			if cmd := a.beginAgentRun(input, images); cmd != nil {
 				cmds = append(cmds, cmd)
 			}
-			a.clearImageAttachments()
+			a.clearComposerAttachments()
 			return a, batchUpdateCmds()
 		}
 	}
@@ -641,8 +787,11 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 		msg = tea.KeyMsg{Type: tea.KeyEnter}
 		effectiveTyped = tea.KeyMsg{Type: tea.KeyEnter}
 	}
-	msg, effectiveTyped = a.maybeCollapseLongPaste(msg, effectiveTyped)
-
+	var skipInputUpdate bool
+	msg, effectiveTyped, skipInputUpdate = a.maybeCollapseLongPaste(msg, effectiveTyped, now)
+	if skipInputUpdate {
+		return a, batchUpdateCmds()
+	}
 	before := a.input.Value()
 	var cmd tea.Cmd
 	a.input, cmd = a.input.Update(msg)
@@ -704,7 +853,7 @@ func (a *App) submitPermissionDecision(decision tuiservices.PermissionResolution
 	return runResolvePermission(a.runtime, requestID, decision)
 }
 
-// toggleFullAccessMode 处理 Full Access 模式的启停切换；启用前必须经过风险确认。
+// toggleFullAccessMode 处理 Full Access 模式的启停切换；启用前必须经过风险确认?
 func (a *App) toggleFullAccessMode() {
 	if a.fullAccessModeEnabled {
 		a.disableFullAccessMode()
@@ -714,7 +863,7 @@ func (a *App) toggleFullAccessMode() {
 	a.openFullAccessPrompt()
 }
 
-// updatePendingFullAccessPromptInput 处理 Full Access 风险确认弹窗的键盘交互。
+// updatePendingFullAccessPromptInput 处理 Full Access 风险确认弹窗的键盘交互?
 func (a *App) updatePendingFullAccessPromptInput(typed tea.KeyMsg) (tea.Cmd, bool) {
 	if a.pendingFullAccessPrompt == nil {
 		return nil, false
@@ -744,7 +893,7 @@ func (a *App) updatePendingFullAccessPromptInput(typed tea.KeyMsg) (tea.Cmd, boo
 	return nil, true
 }
 
-// applyFullAccessPromptSelection 根据风险确认结果更新 Full Access 模式，并按需自动处理待审批请求。
+// applyFullAccessPromptSelection 根据风险确认结果更新 Full Access 模式，并按需自动处理待审批请求?
 func (a *App) applyFullAccessPromptSelection(enable bool) tea.Cmd {
 	a.pendingFullAccessPrompt = nil
 	if !enable {
@@ -767,7 +916,7 @@ func (a *App) applyFullAccessPromptSelection(enable bool) tea.Cmd {
 	return nil
 }
 
-// openFullAccessPrompt 打开 Full Access 风险确认弹窗，并将输入焦点收敛回输入区。
+// openFullAccessPrompt 打开 Full Access 风险确认弹窗，并将输入焦点收回输入区。
 func (a *App) openFullAccessPrompt() {
 	a.pendingFullAccessPrompt = &fullAccessPromptState{Selected: 0}
 	a.focus = panelInput
@@ -778,7 +927,7 @@ func (a *App) openFullAccessPrompt() {
 	a.refreshPermissionPromptLayout()
 }
 
-// disableFullAccessMode 关闭 Full Access 模式并刷新提示区布局。
+// disableFullAccessMode 关闭 Full Access 模式并刷新提示区布局?
 func (a *App) disableFullAccessMode() {
 	a.fullAccessModeEnabled = false
 	a.pendingFullAccessPrompt = nil
@@ -788,7 +937,7 @@ func (a *App) disableFullAccessMode() {
 	a.refreshPermissionPromptLayout()
 }
 
-// handleAutoPermissionResolutionFinished 处理 Full Access 自动审批回执，并在失败时回退到手动审批。
+// handleAutoPermissionResolutionFinished 处理 Full Access 自动审批回执，并在失败时回退到手动审批?
 func (a *App) handleAutoPermissionResolutionFinished(msg permissionResolutionFinishedMsg) bool {
 	if a.pendingAutoPermission == nil || a.pendingAutoPermission.Request.RequestID != msg.RequestID {
 		return false
@@ -816,7 +965,7 @@ func (a *App) handleAutoPermissionResolutionFinished(msg permissionResolutionFin
 	return true
 }
 
-// handlePermissionResolutionFinished 更新手动审批提交流程的成功或失败状态。
+// handlePermissionResolutionFinished 更新手动审批提交流程的成功或失败状态?
 func (a *App) handlePermissionResolutionFinished(msg permissionResolutionFinishedMsg) {
 	if a.pendingPermission == nil || a.pendingPermission.Request.RequestID != msg.RequestID {
 		return
@@ -848,15 +997,43 @@ type logPersistFlushMsg struct {
 	Version int
 }
 
-// scheduleLogPersistFlush 在短暂静默后触发日志落盘，避免每条活动都同步刷盘。
+type pasteTxnFlushMsg struct {
+	Version int
+}
+
+type pastedTextLoadReadyMsg struct{}
+
+// scheduleLogPersistFlush triggers log persistence with debounce.
 func scheduleLogPersistFlush(version int) tea.Cmd {
 	return tea.Tick(logViewerPersistDebounce, func(time.Time) tea.Msg {
 		return logPersistFlushMsg{Version: version}
 	})
 }
 
+func schedulePasteTxnFlush(version int) tea.Cmd {
+	return tea.Tick(pasteTxnFlushDebounce, func(time.Time) tea.Msg {
+		return pasteTxnFlushMsg{Version: version}
+	})
+}
+
+func schedulePastedTextLoadReady() tea.Cmd {
+	return tea.Tick(pastedTextLoadDebounce, func(time.Time) tea.Msg {
+		return pastedTextLoadReadyMsg{}
+	})
+}
+
+func (a *App) beginPastedTextLoading() {
+	if !a.loadingPastedText {
+		a.deferredPastedTextLoadCmd = schedulePastedTextLoadReady()
+	}
+	a.loadingPastedText = true
+	a.state.StatusText = statusLoadingPastedText
+	a.pendingSendAfterPasteLoad = false
+	a.skipNextSendPasteLoadWait = false
+}
+
 func (a *App) shouldTreatEnterAsNewline(typed tea.KeyMsg, now time.Time) bool {
-	if !key.Matches(typed, a.keys.Send) || a.state.IsAgentRunning {
+	if !key.Matches(typed, a.keys.Send) {
 		return false
 	}
 	if typed.Paste {
@@ -939,30 +1116,30 @@ func (a *App) noteInputEdit(before string, after string, typed tea.KeyMsg, now t
 	}
 }
 
-func (a *App) maybeCollapseLongPaste(msg tea.Msg, typed tea.KeyMsg) (tea.Msg, tea.KeyMsg) {
-	if typed.Type != tea.KeyRunes || len(typed.Runes) == 0 {
-		return msg, typed
+func (a *App) maybeCollapseLongPaste(msg tea.Msg, typed tea.KeyMsg, now time.Time) (tea.Msg, tea.KeyMsg, bool) {
+	if typed.Type != tea.KeyRunes || !typed.Paste || len(typed.Runes) == 0 {
+		return msg, typed, false
 	}
 
-	raw := string(typed.Runes)
-	if !shouldCollapsePastedText(raw) {
-		return msg, typed
+	content := normalizeClipboardText(string(typed.Runes))
+	if token, ok := parsePasteSummaryToken(content); ok && strings.HasSuffix(a.input.Value(), token) {
+		return msg, typed, true
 	}
-	lineCount := pastedLineCount(raw)
-
-	placeholder := formatPastePlaceholder(lineCount)
-	a.pendingPasteBuffers = append(a.pendingPasteBuffers, pendingPasteBuffer{
-		Placeholder: placeholder,
-		Content:     raw,
-	})
-	a.state.StatusText = fmt.Sprintf("[System] Pasted %d lines as placeholder.", lineCount)
-
-	collapsed := tea.KeyMsg{
-		Type:  tea.KeyRunes,
-		Runes: []rune(placeholder),
-		Paste: true,
+	if a.shouldSuppressDuplicatePasteContent(content, now) {
+		return msg, typed, true
 	}
-	return collapsed, collapsed
+	summarized, _, err := a.summarizePastedText(content)
+	if err != nil {
+		a.state.StatusText = err.Error()
+		a.appendActivity("multimodal", "Failed to summarize pasted content", err.Error(), true)
+		return msg, typed, false
+	}
+	if summarized == content {
+		a.recordRecentPastedContent(content, now)
+		return msg, typed, false
+	}
+	next := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(summarized), Paste: true}
+	return next, next, false
 }
 
 func (a *App) maybeCollapseLongPasteAfterInput(before string, typed tea.KeyMsg) {
@@ -985,55 +1162,217 @@ func (a *App) maybeCollapseLongPasteAfterInput(before string, typed tea.KeyMsg) 
 
 func (a *App) tryCollapseInsertedSegment(before string, after string) bool {
 	prefix, inserted, suffix, ok := extractInsertedSegment(before, after)
-	if !ok || !shouldCollapsePastedText(inserted) {
+	if !ok {
 		return false
 	}
 
-	lineCount := pastedLineCount(inserted)
-	placeholder := formatPastePlaceholder(lineCount)
-	a.pendingPasteBuffers = append(a.pendingPasteBuffers, pendingPasteBuffer{
-		Placeholder: placeholder,
-		Content:     inserted,
-	})
+	summarized, summarizedOK, err := a.summarizePastedText(inserted)
+	if err != nil {
+		a.state.StatusText = err.Error()
+		a.appendActivity("multimodal", "Failed to summarize pasted content", err.Error(), true)
+		return false
+	}
+	if !summarizedOK {
+		return false
+	}
 
-	collapsed := prefix + placeholder + suffix
+	collapsed := prefix + summarized + suffix
 	a.input.SetValue(collapsed)
 	a.state.InputText = collapsed
-	a.state.StatusText = fmt.Sprintf("[System] Pasted %d lines as placeholder.", lineCount)
 	a.pasteSessionBase = collapsed
 	return true
 }
 
-func (a App) expandPendingPastePlaceholders(input string) string {
-	if len(a.pendingPasteBuffers) == 0 || strings.TrimSpace(input) == "" {
-		return input
+func (a *App) summarizePastedText(content string) (text string, summarized bool, err error) {
+	normalized := normalizeClipboardText(content)
+	if !shouldSummarizePastedText(normalized) {
+		return normalized, false, nil
+	}
+	lineCount := countPasteLines(normalized)
+	token := formatPasteSummaryToken(lineCount)
+	now := a.now()
+	if a.shouldReusePasteSummaryToken(token, normalized, now) {
+		a.beginPastedTextLoading()
+		a.recordRecentPastedContent(normalized, now)
+		a.lastSummarizedPasteText = normalized
+		a.lastSummarizedPasteAt = now
+		a.lastSummarizedPasteToken = token
+		return token, true, nil
+	}
+	path, saveErr := savePastedTextToTempFile(normalized, "paste")
+	if saveErr != nil {
+		return "", false, fmt.Errorf("failed to persist pasted text: %w", saveErr)
+	}
+	a.pendingTextPastes = append(a.pendingTextPastes, pendingTextPaste{
+		Token:     token,
+		FilePath:  path,
+		LineCount: lineCount,
+	})
+	a.beginPastedTextLoading()
+	a.recordRecentPastedContent(normalized, now)
+	a.lastSummarizedPasteText = normalized
+	a.lastSummarizedPasteAt = now
+	a.lastSummarizedPasteToken = token
+	return token, true, nil
+}
+
+func (a App) shouldSuppressDuplicatePasteContent(content string, now time.Time) bool {
+	normalized := normalizeClipboardText(content)
+	if strings.TrimSpace(normalized) == "" {
+		return false
+	}
+	if !shouldSummarizePastedText(normalized) {
+		if a.lastPastedContentAt.IsZero() || now.Sub(a.lastPastedContentAt) > duplicatePasteSuppressWindow {
+			return false
+		}
+		if normalized != a.lastPastedContent {
+			return false
+		}
+		return strings.HasSuffix(a.input.Value(), normalized)
+	}
+	token := formatPasteSummaryToken(countPasteLines(normalized))
+	if token == "" {
+		return false
+	}
+	if strings.HasSuffix(a.input.Value(), token) {
+		// In one paste transaction, terminals may emit multiple chunks with slightly different
+		// payload boundaries (e.g. trailing newline differences). Once the token is already
+		// visible at the cursor, suppress additional injections in the same paste session.
+		if a.pasteTxnActive || a.hasPendingCtrlVPasteEcho(now) {
+			return true
+		}
+		if !a.lastPasteLikeAt.IsZero() && now.Sub(a.lastPasteLikeAt) <= pasteSessionGuard {
+			return true
+		}
+		if token == a.lastSummarizedPasteToken &&
+			!a.lastSummarizedPasteAt.IsZero() &&
+			now.Sub(a.lastSummarizedPasteAt) <= duplicatePasteSuppressWindow {
+			return true
+		}
+	}
+	if a.lastSummarizedPasteAt.IsZero() || now.Sub(a.lastSummarizedPasteAt) > duplicatePasteSuppressWindow {
+		return false
+	}
+	if normalized != a.lastSummarizedPasteText {
+		return false
+	}
+	return token == a.lastSummarizedPasteToken && strings.HasSuffix(a.input.Value(), token)
+}
+
+func formatPasteSummaryToken(lineCount int) string {
+	return fmt.Sprintf("[paste %d LINE]", lineCount)
+}
+
+func parsePasteSummaryToken(content string) (string, bool) {
+	trimmed := strings.TrimSpace(content)
+	if !strings.HasPrefix(trimmed, "[paste ") || !strings.HasSuffix(trimmed, " LINE]") {
+		return "", false
+	}
+	body := strings.TrimSuffix(strings.TrimPrefix(trimmed, "[paste "), " LINE]")
+	if body == "" {
+		return "", false
+	}
+	for _, r := range body {
+		if r < '0' || r > '9' {
+			return "", false
+		}
+	}
+	return trimmed, true
+}
+
+func (a App) shouldReusePasteSummaryToken(token string, normalized string, now time.Time) bool {
+	if token == "" || !strings.HasSuffix(a.input.Value(), token) || !a.hasPendingTextPasteToken(token) {
+		return false
+	}
+	if normalized == a.lastSummarizedPasteText &&
+		token == a.lastSummarizedPasteToken &&
+		!a.lastSummarizedPasteAt.IsZero() &&
+		now.Sub(a.lastSummarizedPasteAt) <= pasteSessionGuard {
+		return true
+	}
+	if a.pasteTxnActive || a.hasPendingCtrlVPasteEcho(now) {
+		return true
+	}
+	return !a.lastPasteLikeAt.IsZero() && now.Sub(a.lastPasteLikeAt) <= pasteSessionGuard
+}
+
+func (a App) hasPendingTextPasteToken(token string) bool {
+	for _, pending := range a.pendingTextPastes {
+		if pending.Token == token {
+			return true
+		}
+	}
+	return false
+}
+
+func shouldSummarizePastedText(content string) bool {
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" {
+		return false
+	}
+	return countPasteLines(trimmed) > 1
+}
+
+func countPasteLines(content string) int {
+	if content == "" {
+		return 0
+	}
+	return strings.Count(content, "\n") + 1
+}
+
+func (a *App) resolvePendingTextPastes(input string) (string, error) {
+	if strings.TrimSpace(input) == "" || len(a.pendingTextPastes) == 0 {
+		return input, nil
 	}
 
 	expanded := input
-	for _, buffer := range a.pendingPasteBuffers {
-		if strings.TrimSpace(buffer.Placeholder) == "" {
+	for _, pending := range a.pendingTextPastes {
+		if pending.Token == "" || pending.FilePath == "" {
 			continue
 		}
-		expanded = strings.Replace(expanded, buffer.Placeholder, buffer.Content, 1)
+		if !strings.Contains(expanded, pending.Token) {
+			continue
+		}
+		data, err := os.ReadFile(pending.FilePath)
+		if err != nil {
+			return "", fmt.Errorf("failed to read pasted content: %w", err)
+		}
+		expanded = strings.Replace(expanded, pending.Token, string(data), 1)
 	}
-	return expanded
+	return expanded, nil
 }
 
-func pastedLineCount(content string) int {
-	normalized := strings.ReplaceAll(content, "\r\n", "\n")
-	normalized = strings.ReplaceAll(normalized, "\r", "\n")
-	if normalized == "" {
-		return 0
+func (a *App) clearPendingTextPastes() {
+	if len(a.pendingTextPastes) == 0 {
+		return
 	}
-	return strings.Count(normalized, "\n") + 1
+	for _, pending := range a.pendingTextPastes {
+		if strings.TrimSpace(pending.FilePath) == "" {
+			continue
+		}
+		_ = os.Remove(pending.FilePath)
+	}
+	a.pendingTextPastes = nil
 }
 
-func shouldCollapsePastedText(content string) bool {
-	lineCount := pastedLineCount(content)
-	if lineCount >= pastePlaceholderMinLines {
-		return true
+func (a *App) clearComposerAttachments() {
+	a.clearImageAttachments()
+	a.clearPendingTextPastes()
+}
+
+func (a App) shouldDeferSendForPastedTextLoad(input string) bool {
+	if strings.TrimSpace(input) == "" || len(a.pendingTextPastes) == 0 {
+		return false
 	}
-	return lineCount > 1 && utf8.RuneCountInString(content) >= pastePlaceholderMinChars
+	for _, pending := range a.pendingTextPastes {
+		if pending.Token == "" {
+			continue
+		}
+		if strings.Contains(input, pending.Token) {
+			return true
+		}
+	}
+	return false
 }
 
 func shouldTreatInputDeltaAsPaste(typed tea.KeyMsg, pasteMode bool) bool {
@@ -1071,21 +1410,318 @@ func extractInsertedSegment(before string, after string) (prefix string, inserte
 		true
 }
 
-func formatPastePlaceholder(lineCount int) string {
-	if lineCount < 0 {
-		lineCount = 0
-	}
-	return fmt.Sprintf("[paste %d line]", lineCount)
+func normalizeClipboardText(content string) string {
+	normalized := strings.ReplaceAll(content, "\r\n", "\n")
+	return strings.ReplaceAll(normalized, "\r", "\n")
 }
 
 func (a *App) resetPasteHeuristics() {
 	a.lastInputEditAt = time.Time{}
 	a.lastPasteLikeAt = time.Time{}
+	a.pendingCtrlVPasteEcho = ""
+	a.pendingCtrlVEchoUntil = time.Time{}
+	a.deferredPastedTextLoadCmd = nil
+	a.loadingPastedText = false
+	a.pendingSendAfterPasteLoad = false
+	a.skipNextSendPasteLoadWait = false
+	a.lastPastedContent = ""
+	a.lastPastedContentAt = time.Time{}
+	a.pasteTxnActive = false
+	a.pasteTxnBuffer = ""
+	a.pasteTxnVersion = 0
 	a.inputBurstStart = time.Time{}
 	a.inputBurstCount = 0
 	a.pasteMode = false
 	a.pasteSessionBase = ""
-	a.pendingPasteBuffers = nil
+}
+
+func (a *App) consumePendingCtrlVPasteEcho(typed tea.KeyMsg, now time.Time) bool {
+	if a.pendingCtrlVPasteEcho == "" && (a.pendingCtrlVEchoUntil.IsZero() || now.After(a.pendingCtrlVEchoUntil)) {
+		return false
+	}
+	if !a.pendingCtrlVEchoUntil.IsZero() && now.After(a.pendingCtrlVEchoUntil) {
+		a.pendingCtrlVPasteEcho = ""
+		a.pendingCtrlVEchoUntil = time.Time{}
+		return false
+	}
+	if typed.Type == tea.KeyEnter {
+		if strings.TrimSpace(a.pendingCtrlVPasteEcho) == "" {
+			return false
+		}
+		return true
+	}
+	if typed.Type != tea.KeyRunes || len(typed.Runes) == 0 {
+		return false
+	}
+	chunk := normalizeClipboardText(string(typed.Runes))
+	if chunk == "" {
+		return false
+	}
+
+	// During the immediate post-Ctrl+V window, aggressively swallow multi-rune echoes.
+	likelyEchoChunk := len(typed.Runes) > 1 || strings.ContainsRune(chunk, '\n') || strings.ContainsRune(chunk, '\t')
+	if a.pendingCtrlVPasteEcho == "" {
+		if likelyEchoChunk {
+			return true
+		}
+		return false
+	}
+
+	remaining := a.pendingCtrlVPasteEcho
+	if strings.HasPrefix(remaining, chunk) {
+		a.pendingCtrlVPasteEcho = strings.TrimPrefix(remaining, chunk)
+		if a.pendingCtrlVPasteEcho == "" {
+			a.pendingCtrlVEchoUntil = now.Add(300 * time.Millisecond)
+		}
+		return true
+	}
+	if matchPasteEchoLoosely(remaining, chunk) {
+		a.pendingCtrlVPasteEcho = trimPrefixByRuneCount(remaining, len([]rune(chunk)))
+		if a.pendingCtrlVPasteEcho == "" {
+			a.pendingCtrlVEchoUntil = now.Add(300 * time.Millisecond)
+		}
+		return true
+	}
+	if likelyEchoChunk {
+		a.pendingCtrlVPasteEcho = trimPrefixByRuneCount(remaining, len([]rune(chunk)))
+		if a.pendingCtrlVPasteEcho == "" {
+			a.pendingCtrlVEchoUntil = now.Add(300 * time.Millisecond)
+		}
+		return true
+	}
+	return false
+}
+
+func (a App) hasPendingCtrlVPasteEcho(now time.Time) bool {
+	if strings.TrimSpace(a.pendingCtrlVPasteEcho) != "" {
+		return true
+	}
+	return !a.pendingCtrlVEchoUntil.IsZero() && now.Before(a.pendingCtrlVEchoUntil)
+}
+
+func (a *App) recordRecentPastedContent(content string, now time.Time) {
+	normalized := normalizeClipboardText(content)
+	if strings.TrimSpace(normalized) == "" {
+		return
+	}
+	a.lastPastedContent = normalized
+	a.lastPastedContentAt = now
+}
+
+func trimPrefixByRuneCount(content string, runes int) string {
+	if runes <= 0 || content == "" {
+		return content
+	}
+	rs := []rune(content)
+	if runes >= len(rs) {
+		return ""
+	}
+	return string(rs[runes:])
+}
+
+func normalizeEchoWhitespace(content string) string {
+	normalized := normalizeClipboardText(content)
+	normalized = strings.ReplaceAll(normalized, "\t", " ")
+	return strings.Join(strings.Fields(normalized), " ")
+}
+
+func matchPasteEchoLoosely(expected string, chunk string) bool {
+	if strings.HasPrefix(chunk, expected) {
+		return true
+	}
+	expectedNorm := normalizeEchoWhitespace(expected)
+	chunkNorm := normalizeEchoWhitespace(chunk)
+	if expectedNorm == "" || chunkNorm == "" {
+		return false
+	}
+	return strings.HasPrefix(expectedNorm, chunkNorm) || strings.HasPrefix(chunkNorm, expectedNorm)
+}
+
+func isPotentialCtrlVPasteEchoChunk(typed tea.KeyMsg) bool {
+	if typed.Type != tea.KeyRunes || len(typed.Runes) == 0 {
+		return false
+	}
+	chunk := normalizeClipboardText(string(typed.Runes))
+	if chunk == "" {
+		return false
+	}
+	return len(typed.Runes) > 1 ||
+		strings.ContainsRune(chunk, '\n') ||
+		strings.ContainsRune(chunk, '\r') ||
+		strings.ContainsRune(chunk, '\t')
+}
+
+func (a *App) tryPrimePasteFromClipboard(typed tea.KeyMsg, now time.Time) bool {
+	if typed.Type != tea.KeyRunes || len(typed.Runes) == 0 {
+		return false
+	}
+	if !isPotentialCtrlVPasteEchoChunk(typed) {
+		return false
+	}
+	chunk := normalizeClipboardText(string(typed.Runes))
+	if chunk == "" {
+		return false
+	}
+	clip, err := readClipboardText()
+	if err != nil {
+		return false
+	}
+	clip = normalizeClipboardText(clip)
+	if strings.TrimSpace(clip) == "" {
+		return false
+	}
+	if !(strings.HasPrefix(clip, chunk) || matchPasteEchoLoosely(clip, chunk)) {
+		return false
+	}
+
+	trimmed := strings.TrimSpace(clip)
+	if handled, err := a.applyPastedFileReferences(trimmed); handled {
+		if err != nil {
+			a.state.StatusText = err.Error()
+			a.appendActivity("multimodal", "Failed to parse pasted file references", err.Error(), true)
+		}
+		a.pendingCtrlVPasteEcho = clip
+		a.pendingCtrlVEchoUntil = now.Add(2 * time.Second)
+		return true
+	}
+	if a.shouldSuppressDuplicatePasteContent(clip, now) {
+		a.pendingCtrlVPasteEcho = clip
+		a.pendingCtrlVEchoUntil = now.Add(2 * time.Second)
+		return true
+	}
+
+	insert := clip
+	if summarized, ok, summarizeErr := a.summarizePastedText(insert); summarizeErr == nil {
+		if ok {
+			insert = summarized
+		}
+	} else {
+		a.state.StatusText = summarizeErr.Error()
+		a.appendActivity("multimodal", "Failed to summarize pasted content", summarizeErr.Error(), true)
+	}
+	before := a.input.Value()
+	var cmd tea.Cmd
+	a.input, cmd = a.input.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(insert), Paste: true})
+	_ = cmd
+	a.state.InputText = a.input.Value()
+	a.noteInputEdit(before, a.state.InputText, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(insert), Paste: true}, now)
+	a.normalizeComposerHeight()
+	a.applyComponentLayout(false)
+	a.refreshCommandMenu()
+	a.recordRecentPastedContent(insert, now)
+
+	a.pendingCtrlVPasteEcho = clip
+	a.pendingCtrlVEchoUntil = now.Add(2 * time.Second)
+	return true
+}
+
+func (a App) shouldCapturePasteTxnChunk(typed tea.KeyMsg) bool {
+	if typed.Type != tea.KeyRunes || len(typed.Runes) == 0 {
+		return false
+	}
+	if typed.Paste {
+		return false
+	}
+	if a.pasteTxnActive {
+		return true
+	}
+	chunk := string(typed.Runes)
+	if len(typed.Runes) > 1 {
+		return true
+	}
+	if a.shouldCaptureSingleRunePasteChunk(typed) {
+		return true
+	}
+	return strings.ContainsRune(chunk, '\n') || strings.ContainsRune(chunk, '\r') || strings.ContainsRune(chunk, '\t')
+}
+
+func (a App) shouldCaptureSingleRunePasteChunk(typed tea.KeyMsg) bool {
+	if typed.Type != tea.KeyRunes || len(typed.Runes) != 1 || typed.Paste {
+		return false
+	}
+	if strings.TrimSpace(a.input.Value()) != "" {
+		return false
+	}
+	clip, err := readClipboardText()
+	if err != nil {
+		return false
+	}
+	clip = normalizeClipboardText(clip)
+	if strings.TrimSpace(clip) == "" {
+		return false
+	}
+	chunk := normalizeClipboardText(string(typed.Runes))
+	return strings.HasPrefix(clip, chunk) || matchPasteEchoLoosely(clip, chunk)
+}
+
+func (a *App) appendPasteTxnChunk(chunk string) {
+	if chunk == "" {
+		return
+	}
+	chunk = normalizeClipboardText(chunk)
+	if !a.pasteTxnActive {
+		a.pasteTxnActive = true
+		a.pasteTxnBuffer = chunk
+		a.pasteTxnVersion++
+		return
+	}
+	a.pasteTxnBuffer += chunk
+	a.pasteTxnVersion++
+}
+
+func (a *App) flushPasteTransaction() {
+	if !a.pasteTxnActive {
+		return
+	}
+	content := normalizeClipboardText(a.pasteTxnBuffer)
+	a.pasteTxnActive = false
+	a.pasteTxnBuffer = ""
+	a.pasteTxnVersion = 0
+
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" {
+		return
+	}
+	if clip, err := readClipboardText(); err == nil {
+		clip = normalizeClipboardText(clip)
+		clipTrimmed := strings.TrimSpace(clip)
+		if clipTrimmed != "" && (strings.HasPrefix(clip, content) || strings.Contains(clip, content) || strings.Contains(content, clip)) {
+			content = clip
+			trimmed = clipTrimmed
+			a.pendingCtrlVPasteEcho = clip
+			a.pendingCtrlVEchoUntil = a.now().Add(2 * time.Second)
+		}
+	}
+	if handled, err := a.applyPastedFileReferences(trimmed); handled {
+		if err != nil {
+			a.state.StatusText = err.Error()
+			a.appendActivity("multimodal", "Failed to parse pasted file references", err.Error(), true)
+		}
+		return
+	}
+	if a.shouldSuppressDuplicatePasteContent(content, a.now()) {
+		return
+	}
+
+	insert := content
+	if summarized, ok, summarizeErr := a.summarizePastedText(insert); summarizeErr == nil {
+		if ok {
+			insert = summarized
+		}
+	} else {
+		a.state.StatusText = summarizeErr.Error()
+		a.appendActivity("multimodal", "Failed to summarize pasted content", summarizeErr.Error(), true)
+	}
+	before := a.input.Value()
+	var cmd tea.Cmd
+	a.input, cmd = a.input.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(insert), Paste: true})
+	_ = cmd
+	a.state.InputText = a.input.Value()
+	a.noteInputEdit(before, a.state.InputText, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(insert), Paste: true}, a.now())
+	a.normalizeComposerHeight()
+	a.applyComponentLayout(false)
+	a.refreshCommandMenu()
+	a.recordRecentPastedContent(insert, a.now())
 }
 
 func (a *App) handleClipboardPasteShortcut() (string, bool, error) {
@@ -1139,6 +1775,45 @@ func (a *App) handleClipboardPasteShortcut() (string, bool, error) {
 	return text, true, nil
 }
 
+func (a *App) applyPastedFileReferences(text string) (bool, error) {
+	paths, ok := clipboardFileReferencePathsFromText(text, a.state.CurrentWorkdir)
+	if !ok {
+		return false, nil
+	}
+
+	references := make([]string, 0, len(paths))
+	for _, path := range paths {
+		if tuiinfra.IsSupportedImageFormat(path) || looksLikeImagePath(path) {
+			if err := a.addImageAttachment(path); err != nil {
+				return true, err
+			}
+			continue
+		}
+		reference, err := a.fileReferenceForPath(path)
+		if err != nil {
+			return true, err
+		}
+		references = append(references, reference)
+	}
+
+	if len(references) > 0 {
+		combined := strings.Join(references, " ")
+		current := strings.TrimSpace(a.input.Value())
+		if current == "" {
+			current = combined
+		} else {
+			current = current + " " + combined
+		}
+		a.input.SetValue(current)
+		a.state.InputText = current
+		a.normalizeComposerHeight()
+		a.applyComponentLayout(false)
+		a.refreshCommandMenu()
+		a.state.StatusText = fmt.Sprintf("[System] Added %d file reference(s) from paste.", len(references))
+	}
+	return true, nil
+}
+
 func (a App) collectPendingImageInputs() []tuiservices.UserImageInput {
 	images := make([]tuiservices.UserImageInput, 0, len(a.pendingImageAttachments))
 	for _, attachment := range a.pendingImageAttachments {
@@ -1170,6 +1845,7 @@ func (a *App) dispatchQueuedInterventionIfIdle() tea.Cmd {
 
 	queued := a.queuedIntervention
 	a.queuedIntervention = nil
+	a.rebuildTranscript()
 	if queued == nil {
 		return nil
 	}
@@ -1345,7 +2021,7 @@ func isPickerFilterEditKey(msg tea.KeyMsg) bool {
 	}
 }
 
-// maybeStartModelScopeGuideFromProvider 在选择 modelscope 且未配置 token 时进入半引导流程。
+// maybeStartModelScopeGuideFromProvider 在选择 modelscope 且未配置 token 时进入半引导流程?
 func (a *App) maybeStartModelScopeGuideFromProvider(providerID string) (tea.Cmd, bool) {
 	if !strings.EqualFold(strings.TrimSpace(providerID), config.ModelScopeName) {
 		return nil, false
@@ -1387,7 +2063,7 @@ func (a *App) maybeStartModelScopeGuideFromProvider(providerID string) (tea.Cmd,
 	return a.runModelScopeGuideOpen(guidePath), true
 }
 
-// resolveModelScopeGuidePath 解析 ModelScope 指导页的本地路径；文件不存在时返回空字符串。
+// resolveModelScopeGuidePath 解析 ModelScope 指导页的本地路径；文件不存在时返回空字符串?
 func (a *App) resolveModelScopeGuidePath() string {
 	baseDir := strings.TrimSpace(a.configManager.BaseDir())
 	if baseDir == "" {
@@ -1401,7 +2077,7 @@ func (a *App) resolveModelScopeGuidePath() string {
 	return candidate
 }
 
-// handleModelScopeGuideInput 澶勭悊 ModelScope 鍗婂紩瀵兼祦绋嬩腑鐨勯敭鐩樹氦浜掋€?
+// handleModelScopeGuideInput 处理 ModelScope 半引导流程中的键盘交互。
 func (a *App) handleModelScopeGuideInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if a.modelScopeGuide == nil {
 		return a, nil
@@ -1440,7 +2116,7 @@ func (a *App) handleModelScopeGuideInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return a, nil
 }
 
-// modelScopeGuideOpenTarget 杩斿洖褰撳墠寮曞姝ラ瀵瑰簲鐨勫閮ㄨ祫婧愮洰鏍囥€?
+// modelScopeGuideOpenTarget 返回当前引导步骤对应的外部资源目标。
 func modelScopeGuideOpenTarget(step modelScopeGuideStep, guidePath string) (string, bool) {
 	switch step {
 	case modelScopeGuideStepGuide:
@@ -1458,7 +2134,7 @@ func modelScopeGuideOpenTarget(step modelScopeGuideStep, guidePath string) (stri
 	}
 }
 
-// submitModelScopeGuideToken 鏍￠獙骞舵彁浜ょ敤鎴风矘璐寸殑 token銆?
+// submitModelScopeGuideToken 校验并提交用户粘贴的 token。
 func (a *App) submitModelScopeGuideToken(guide *modelScopeGuideState) tea.Cmd {
 	token := strings.TrimSpace(guide.Token)
 	if token == "" {
@@ -1471,7 +2147,7 @@ func (a *App) submitModelScopeGuideToken(guide *modelScopeGuideState) tea.Cmd {
 	return a.runModelScopeGuideSubmit(guide.ProviderID, guide.APIKeyEnv, token)
 }
 
-// runModelScopeGuideOpen 寮傛鎵撳紑 ModelScope 寮曞璧勬簮锛堟湰鍦?HTML 鎴栫綉椤?URL锛夈€?
+// runModelScopeGuideOpen 异步打开 ModelScope 引导资源，本地 HTML 和网页 URL 共用这一入口。
 func (a *App) runModelScopeGuideOpen(target string) tea.Cmd {
 	openTarget := strings.TrimSpace(target)
 	if openTarget == "" {
@@ -1488,7 +2164,7 @@ func (a *App) runModelScopeGuideOpen(target string) tea.Cmd {
 	}
 }
 
-// handleModelScopeGuideOpenResultMsg 澶勭悊椤甸潰鎵撳紑缁撴灉锛屽苟鎺ㄨ繘寮曞鐘舵€佹満銆?
+// handleModelScopeGuideOpenResultMsg 处理引导资源打开结果，并推进引导步骤。
 func (a *App) handleModelScopeGuideOpenResultMsg(msg modelScopeGuideOpenResultMsg) {
 	if a.modelScopeGuide == nil {
 		return
@@ -1513,7 +2189,7 @@ func (a *App) handleModelScopeGuideOpenResultMsg(msg modelScopeGuideOpenResultMs
 	}
 }
 
-// advanceModelScopeGuideStep 鏍规嵁鎵撳紑缁撴灉鎺ㄨ繘寮曞姝ラ銆?
+// advanceModelScopeGuideStep 根据资源打开结果推进 ModelScope 引导步骤。
 func advanceModelScopeGuideStep(current modelScopeGuideStep, target string) (modelScopeGuideStep, bool) {
 	switch current {
 	case modelScopeGuideStepGuide:
@@ -1528,7 +2204,7 @@ func advanceModelScopeGuideStep(current modelScopeGuideStep, target string) (mod
 	return current, false
 }
 
-// clearModelScopeGuideFeedback 娓呯┖寮曞闈㈡澘涓婄殑閿欒鍜屾彁绀轰俊鎭€?
+// clearModelScopeGuideFeedback 清空引导面板上的错误与提示信息。
 func clearModelScopeGuideFeedback(guide *modelScopeGuideState) {
 	if guide == nil {
 		return
@@ -1537,7 +2213,7 @@ func clearModelScopeGuideFeedback(guide *modelScopeGuideState) {
 	guide.Notice = ""
 }
 
-// runModelScopeGuideSubmit 鍦ㄨ缃?token 鍚庡畬鎴?provider 閫夋嫨涓庢渶灏忓彲鐢ㄦ牎楠屻€?
+// runModelScopeGuideSubmit 设置 token 后完成 provider 选择与最小可用校验。
 func (a *App) runModelScopeGuideSubmit(providerID string, apiKeyEnv string, token string) tea.Cmd {
 	providerSvc := a.providerSvc
 	baseDir := a.configManager.BaseDir()
@@ -1604,7 +2280,7 @@ func (a *App) runModelScopeGuideSubmit(providerID string, apiKeyEnv string, toke
 	}
 }
 
-// rollbackModelScopeGuideSelection 鍦ㄥ紩瀵兼祦绋嬪け璐ユ椂鍥炴粴 provider/model 閫夋嫨锛岄伩鍏嶉厤缃姸鎬佹紓绉汇€?
+// rollbackModelScopeGuideSelection 在引导流程失败时回滚 provider 和 model 选择，避免状态漂移。
 func rollbackModelScopeGuideSelection(providerSvc ProviderController, providerID string, modelID string) error {
 	normalizedProviderID := strings.TrimSpace(providerID)
 	normalizedModelID := strings.TrimSpace(modelID)
@@ -1627,7 +2303,7 @@ func rollbackModelScopeGuideSelection(providerSvc ProviderController, providerID
 	return nil
 }
 
-// handleModelScopeGuideSubmitResultMsg 澶勭悊 token 鏍￠獙缁撴灉锛屾垚鍔熷悗鍏抽棴鍚戝锛屽け璐ユ椂鍥為€€骞舵彁绀轰笅涓€姝ャ€?
+// handleModelScopeGuideSubmitResultMsg 处理 token 校验结果；成功后关闭引导，失败时回退并提示下一步。
 func (a *App) handleModelScopeGuideSubmitResultMsg(msg modelScopeGuideSubmitResultMsg) tea.Cmd {
 	if a.modelScopeGuide == nil {
 		return nil
@@ -1678,7 +2354,7 @@ func (a *App) handleModelScopeGuideSubmitResultMsg(msg modelScopeGuideSubmitResu
 	return a.requestModelCatalogRefresh(a.state.CurrentProvider)
 }
 
-// isModelScopeAuthOrPermissionError 鍒ゆ柇閿欒鏄惁鎸囧悜璁よ瘉鎴栨潈闄愭湭瀹屾垚鍦烘櫙銆?
+// isModelScopeAuthOrPermissionError 判断错误是否指向认证或权限未完成场景。
 func isModelScopeAuthOrPermissionError(raw string) bool {
 	lowered := strings.ToLower(strings.TrimSpace(raw))
 	if lowered == "" {
@@ -1753,7 +2429,7 @@ func (a *App) refreshMessages() error {
 	return nil
 }
 
-// HydrateSession 在 TUI 启动阶段加载并接管既有会话状态，用于 URL 唤醒后的无感接续。
+// HydrateSession 在 TUI 启动阶段加载并接管既有会话状态，用于 URL 唤醒后的无感续接。
 func (a *App) HydrateSession(ctx context.Context, sessionID string) error {
 	sessionID = strings.TrimSpace(sessionID)
 	if sessionID == "" {
@@ -1782,7 +2458,7 @@ func (a *App) HydrateSession(ctx context.Context, sessionID string) error {
 	return nil
 }
 
-// ConfigureStartupWakeInput 配置启动阶段的一次性自动提交输入，不会直接触发 runtime 调用。
+// ConfigureStartupWakeInput 配置启动阶段的一次性自动提交输入，不会直接触发 runtime 调用?
 func (a *App) ConfigureStartupWakeInput(text string, workdir string) error {
 	normalizedText := strings.TrimSpace(text)
 	if normalizedText == "" {
@@ -1795,7 +2471,7 @@ func (a *App) ConfigureStartupWakeInput(text string, workdir string) error {
 	return nil
 }
 
-// applySessionSnapshot 将会话快照同步到前端状态，统一复用于普通刷新与启动水化路径。
+// applySessionSnapshot 将会话快照同步到前端状态，统一复用于普通刷新与启动接管路径。
 func (a *App) applySessionSnapshot(session agentsession.Session, warnOnMissingWorkdir bool) {
 	a.activeMessages = session.Messages
 	a.clearActivities()
@@ -1969,7 +2645,7 @@ func (a *App) refreshRuntimeSourceSnapshot() {
 	}
 }
 
-// runtimeSessionContextSource 瀹氫箟璇诲彇浼氳瘽涓婁笅鏂囧揩鐓х殑鏈€灏忔帴鍙ｏ紝渚夸簬鍦?UI 渚ф寜闇€鍒锋柊杩愯鎬佷俊鎭€?
+// runtimeSessionContextSource 定义读取会话上下文快照的最小接口，便于 UI 侧按需刷新运行态信息。
 type runtimeSessionContextSource interface {
 	GetSessionContext(ctx context.Context, sessionID string) (any, error)
 }
@@ -2013,6 +2689,7 @@ var runtimeEventHandlerRegistry = map[tuiservices.EventType]func(*App, tuiservic
 	tuiservices.EventStopReasonDecided:                        runtimeEventStopReasonDecidedHandler,
 	tuiservices.EventTodoUpdated:                              runtimeEventTodoUpdatedHandler,
 	tuiservices.EventTodoConflict:                             runtimeEventTodoConflictHandler,
+	tuiservices.EventTodoSnapshotUpdated:                      runtimeEventTodoSnapshotUpdatedHandler,
 	tuiservices.EventSkillActivated:                           runtimeEventSkillActivatedHandler,
 	tuiservices.EventSkillDeactivated:                         runtimeEventSkillDeactivatedHandler,
 	tuiservices.EventSkillMissing:                             runtimeEventSkillMissingHandler,
@@ -2035,6 +2712,10 @@ var runtimeEventHandlerRegistry = map[tuiservices.EventType]func(*App, tuiservic
 	tuiservices.EventSubAgentToolCallStarted:                  runtimeEventSubAgentToolCallHandler,
 	tuiservices.EventSubAgentToolCallResult:                   runtimeEventSubAgentToolCallHandler,
 	tuiservices.EventSubAgentToolCallDenied:                   runtimeEventSubAgentToolCallHandler,
+	tuiservices.EventRuntimeSnapshotUpdated:                   runtimeEventRuntimeSnapshotUpdatedHandler,
+	tuiservices.EventFactsUpdated:                             runtimeEventFactsUpdatedHandler,
+	tuiservices.EventDecisionMade:                             runtimeEventDecisionMadeHandler,
+	tuiservices.EventSubAgentSnapshotUpdated:                  runtimeEventSubAgentSnapshotUpdatedHandler,
 }
 
 func hookActivityLabel(source string, hookID string) string {
@@ -2286,7 +2967,7 @@ func runtimeEventPhaseChangedHandler(a *App, event tuiservices.RuntimeEvent) boo
 	return false
 }
 
-// runtimeEventVerificationStartedHandler 澶勭悊楠岃瘉娴佺▼寮€濮嬩簨浠跺苟鏇存柊杩愯杩涘害鎻愮ず銆?
+// runtimeEventVerificationStartedHandler 处理验证流程开始事件，并更新运行进度提示。
 func runtimeEventVerificationStartedHandler(a *App, event tuiservices.RuntimeEvent) bool {
 	payload, ok := event.Payload.(tuiservices.VerificationStartedPayload)
 	if !ok {
@@ -2297,11 +2978,15 @@ func runtimeEventVerificationStartedHandler(a *App, event tuiservices.RuntimeEve
 		progress = 0.88
 	}
 	a.setRunProgress(progress, "Verifying acceptance")
-	a.appendActivity("verify", "Verification started", fmt.Sprintf("completion_passed=%t", payload.CompletionPassed), false)
+	detail := fmt.Sprintf("completion_passed=%t", payload.CompletionPassed)
+	if reason := strings.TrimSpace(payload.CompletionBlockedReason); reason != "" {
+		detail = detail + " reason=" + reason
+	}
+	a.appendActivity("verify", "Verification started", detail, false)
 	return false
 }
 
-// runtimeEventVerificationStageFinishedHandler 澶勭悊鍗曚釜 verifier 闃舵瀹屾垚浜嬩欢銆?
+// runtimeEventVerificationStageFinishedHandler 处理单个 verifier 阶段完成事件。
 func runtimeEventVerificationStageFinishedHandler(a *App, event tuiservices.RuntimeEvent) bool {
 	payload, ok := event.Payload.(tuiservices.VerificationStageFinishedPayload)
 	if !ok {
@@ -2324,7 +3009,7 @@ func runtimeEventVerificationStageFinishedHandler(a *App, event tuiservices.Runt
 	return false
 }
 
-// runtimeEventVerificationFinishedHandler 澶勭悊楠岃瘉鎬绘祦绋嬬粨鏉熶簨浠躲€?
+// runtimeEventVerificationFinishedHandler 处理验证总流程结束事件。
 func runtimeEventVerificationFinishedHandler(a *App, event tuiservices.RuntimeEvent) bool {
 	payload, ok := event.Payload.(tuiservices.VerificationFinishedPayload)
 	if !ok {
@@ -2336,7 +3021,7 @@ func runtimeEventVerificationFinishedHandler(a *App, event tuiservices.RuntimeEv
 	return false
 }
 
-// runtimeEventVerificationCompletedHandler 澶勭悊楠岃瘉閫氳繃浜嬩欢銆?
+// runtimeEventVerificationCompletedHandler 处理验证通过事件。
 func runtimeEventVerificationCompletedHandler(a *App, event tuiservices.RuntimeEvent) bool {
 	payload, ok := event.Payload.(tuiservices.VerificationCompletedPayload)
 	if !ok {
@@ -2350,7 +3035,7 @@ func runtimeEventVerificationCompletedHandler(a *App, event tuiservices.RuntimeE
 	return false
 }
 
-// runtimeEventVerificationFailedHandler 澶勭悊楠岃瘉澶辫触浜嬩欢銆?
+// runtimeEventVerificationFailedHandler 处理验证失败事件。
 func runtimeEventVerificationFailedHandler(a *App, event tuiservices.RuntimeEvent) bool {
 	payload, ok := event.Payload.(tuiservices.VerificationFailedPayload)
 	if !ok {
@@ -2367,7 +3052,7 @@ func runtimeEventVerificationFailedHandler(a *App, event tuiservices.RuntimeEven
 	return false
 }
 
-// runtimeEventAcceptanceDecidedHandler 澶勭悊 acceptance 鍐崇瓥浜嬩欢骞惰褰曞彲瑙傛祴鏃ュ織銆?
+// runtimeEventAcceptanceDecidedHandler 处理 acceptance 决策事件，并记录可观测活动日志。
 func runtimeEventAcceptanceDecidedHandler(a *App, event tuiservices.RuntimeEvent) bool {
 	payload, ok := event.Payload.(tuiservices.AcceptanceDecidedPayload)
 	if !ok {
@@ -2387,12 +3072,15 @@ func runtimeEventAcceptanceDecidedHandler(a *App, event tuiservices.RuntimeEvent
 	if detail == "" {
 		detail = "acceptance decision generated"
 	}
+	if reason := strings.TrimSpace(payload.CompletionBlockedReason); reason != "" {
+		detail = detail + " (reason=" + reason + ")"
+	}
 	isError := strings.EqualFold(status, "failed")
 	a.appendActivity("acceptance", "Acceptance decided ("+status+")", detail, isError)
 	return false
 }
 
-// runtimeEventStopReasonDecidedHandler 澶勭悊杩愯缁撴潫鍘熷洜骞剁粺涓€鏇存柊鐘舵€佷笌娲诲姩鏃ュ織銆?
+// runtimeEventStopReasonDecidedHandler 处理运行终止原因事件，统一收尾状态与活动日志。
 func runtimeEventStopReasonDecidedHandler(a *App, event tuiservices.RuntimeEvent) bool {
 	payload, ok := event.Payload.(tuiservices.StopReasonDecidedPayload)
 	if !ok {
@@ -2441,6 +3129,7 @@ func runtimeEventStopReasonDecidedHandler(a *App, event tuiservices.RuntimeEvent
 		a.state.StatusText = statusCanceled
 		a.appendActivity("run", "Canceled current run", "", false)
 	case strings.ToLower(string(tuiservices.StopReasonVerificationFailed)),
+		strings.ToLower(string(tuiservices.StopReasonRequiredTodoFailed)),
 		strings.ToLower(string(tuiservices.StopReasonVerificationExecutionDenied)),
 		strings.ToLower(string(tuiservices.StopReasonVerificationExecutionError)):
 		detail := strings.TrimSpace(payload.Detail)
@@ -2492,17 +3181,30 @@ func runtimeEventTodoUpdatedHandler(a *App, event tuiservices.RuntimeEvent) bool
 		return false
 	}
 
-	if err := a.refreshTodosFromSession(sessionID); err != nil {
+	payload, _ := parseTodoEventPayload(event.Payload)
+	if len(payload.Items) > 0 {
+		a.syncTodosFromEventItems(payload.Items)
+	} else if err := a.refreshTodosFromSession(sessionID); err != nil {
 		a.appendActivity("todo", "Failed to refresh todo panel", err.Error(), true)
 		return false
 	}
-
-	payload, _ := parseTodoEventPayload(event.Payload)
+	a.state.StatusText = formatTodoSummaryStatus(payload.Summary)
 	action := strings.TrimSpace(payload.Action)
 	if action == "" {
 		action = "update"
 	}
-	a.appendActivity("todo", "Todo updated", action, false)
+	detail := action
+	if payload.Summary.RequiredTotal > 0 {
+		detail = fmt.Sprintf(
+			"%s (required %d/%d open=%d failed=%d)",
+			action,
+			payload.Summary.RequiredCompleted,
+			payload.Summary.RequiredTotal,
+			payload.Summary.RequiredOpen,
+			payload.Summary.RequiredFailed,
+		)
+	}
+	a.appendActivity("todo", "Todo updated", detail, false)
 	return false
 }
 
@@ -2515,21 +3217,124 @@ func runtimeEventTodoConflictHandler(a *App, event tuiservices.RuntimeEvent) boo
 		return false
 	}
 
-	if err := a.refreshTodosFromSession(sessionID); err != nil {
+	payload, _ := parseTodoEventPayload(event.Payload)
+	if len(payload.Items) > 0 {
+		a.syncTodosFromEventItems(payload.Items)
+	} else if err := a.refreshTodosFromSession(sessionID); err != nil {
 		a.appendActivity("todo", "Failed to refresh todo panel", err.Error(), true)
 		return false
 	}
-
-	payload, _ := parseTodoEventPayload(event.Payload)
+	a.state.StatusText = formatTodoSummaryStatus(payload.Summary)
 	reason := strings.TrimSpace(payload.Reason)
 	if reason == "" {
 		reason = "todo conflict"
+	}
+	if payload.Summary.RequiredTotal > 0 {
+		reason = fmt.Sprintf(
+			"%s (required %d/%d open=%d failed=%d)",
+			reason,
+			payload.Summary.RequiredCompleted,
+			payload.Summary.RequiredTotal,
+			payload.Summary.RequiredOpen,
+			payload.Summary.RequiredFailed,
+		)
 	}
 	a.appendActivity("todo", "Todo conflict", reason, true)
 	return false
 }
 
-// runtimeEventSkillActivatedHandler 鍦?runtime 婵€娲?skill 鍚庡悓姝ユ椿鍔ㄦ棩蹇椼€?
+// runtimeEventTodoSnapshotUpdatedHandler 处理 todo_snapshot_updated 事件并实时同步 Todo 面板。
+func runtimeEventTodoSnapshotUpdatedHandler(a *App, event tuiservices.RuntimeEvent) bool {
+	return runtimeEventTodoUpdatedHandler(a, event)
+}
+
+// runtimeEventRuntimeSnapshotUpdatedHandler 处理 runtime_snapshot_updated 事件并同步 Todo 摘要。
+func runtimeEventRuntimeSnapshotUpdatedHandler(a *App, event tuiservices.RuntimeEvent) bool {
+	payload, ok := event.Payload.(tuiservices.RuntimeSnapshotUpdatedPayload)
+	if !ok {
+		return false
+	}
+	snapshot := payload.Snapshot
+	if len(snapshot.Todos.Items) > 0 {
+		a.syncTodosFromEventItems(snapshot.Todos.Items)
+	}
+	a.state.StatusText = formatTodoSummaryStatus(snapshot.Todos.Summary)
+	reason := strings.TrimSpace(payload.Reason)
+	if reason == "" {
+		reason = "snapshot updated"
+	}
+	a.appendActivity("runtime", "Runtime snapshot updated", reason, false)
+	return false
+}
+
+// runtimeEventFactsUpdatedHandler 处理 facts_updated 事件，输出简洁事实更新日志。
+func runtimeEventFactsUpdatedHandler(a *App, event tuiservices.RuntimeEvent) bool {
+	payload, ok := event.Payload.(tuiservices.FactsUpdatedPayload)
+	if !ok {
+		return false
+	}
+	reason := strings.TrimSpace(payload.Reason)
+	if reason == "" {
+		reason = "facts updated"
+	}
+	detail := reason
+	if runtimeFacts, ok := payload.Facts.RuntimeFacts["progress"].(map[string]any); ok {
+		if observed := coerceInt(runtimeFacts["observed_fact_count"]); observed > 0 {
+			detail = fmt.Sprintf("%s (observed_facts=%d)", reason, observed)
+		}
+	}
+	a.appendActivity("facts", "Runtime facts updated", detail, false)
+	return false
+}
+
+// runtimeEventDecisionMadeHandler 处理 decision_made 事件，输出最终裁决摘要。
+func runtimeEventDecisionMadeHandler(a *App, event tuiservices.RuntimeEvent) bool {
+	payload, ok := event.Payload.(tuiservices.DecisionMadePayload)
+	if !ok {
+		return false
+	}
+	status := strings.TrimSpace(payload.Status)
+	if status == "" {
+		status = "unknown"
+	}
+	statusLower := strings.ToLower(status)
+	shouldRenderDecisionBlock := statusLower == "continue" || statusLower == "incomplete"
+	if statusLower == "continue" || statusLower == "incomplete" {
+		discardTrailingAssistantMessage(a)
+		a.state.StreamingReply = false
+		a.suppressAssistantForRun = strings.TrimSpace(event.RunID)
+	}
+	detail := strings.TrimSpace(payload.UserVisibleSummary)
+	if detail == "" {
+		detail = strings.TrimSpace(payload.InternalSummary)
+	}
+	if detail == "" {
+		detail = "decision generated"
+	}
+	a.appendActivity("decision", "Final decision ("+status+")", detail, false)
+	if shouldRenderDecisionBlock {
+		a.appendInlineMessage(roleSystem, formatDecisionBlockMessage(payload))
+	}
+	return false
+}
+
+// runtimeEventSubAgentSnapshotUpdatedHandler 处理 subagent_snapshot_updated 事件，输出聚合计数。
+func runtimeEventSubAgentSnapshotUpdatedHandler(a *App, event tuiservices.RuntimeEvent) bool {
+	payload, ok := event.Payload.(tuiservices.SubAgentSnapshotUpdatedPayload)
+	if !ok {
+		return false
+	}
+	detail := fmt.Sprintf(
+		"started=%d completed=%d failed=%d",
+		payload.SubAgent.StartedCount,
+		payload.SubAgent.CompletedCount,
+		payload.SubAgent.FailedCount,
+	)
+	a.appendActivity("subagent", "SubAgent snapshot updated", detail, false)
+	return false
+}
+
+// runtimeEventSkillActivatedHandler 在 runtime 激活 skill 后同步活动日志。
 func runtimeEventSkillActivatedHandler(a *App, event tuiservices.RuntimeEvent) bool {
 	payload, ok := parseSessionSkillEventPayload(event.Payload)
 	if !ok {
@@ -2540,7 +3345,7 @@ func runtimeEventSkillActivatedHandler(a *App, event tuiservices.RuntimeEvent) b
 	return false
 }
 
-// runtimeEventSkillDeactivatedHandler 鍦?runtime 鍋滅敤 skill 鍚庡悓姝ユ椿鍔ㄦ棩蹇椼€?
+// runtimeEventSkillDeactivatedHandler 在 runtime 停用 skill 后同步活动日志。
 func runtimeEventSkillDeactivatedHandler(a *App, event tuiservices.RuntimeEvent) bool {
 	payload, ok := parseSessionSkillEventPayload(event.Payload)
 	if !ok {
@@ -2551,7 +3356,7 @@ func runtimeEventSkillDeactivatedHandler(a *App, event tuiservices.RuntimeEvent)
 	return false
 }
 
-// runtimeEventSkillMissingHandler 鍦ㄤ細璇?skill 涓㈠け鏃惰緭鍑烘樉寮忛敊璇弽棣堬紝渚夸簬鎺掓煡鎭㈠闂銆?
+// runtimeEventSkillMissingHandler 在会话 skill 缺失时输出显式错误反馈，便于排查恢复问题。
 func runtimeEventSkillMissingHandler(a *App, event tuiservices.RuntimeEvent) bool {
 	payload, ok := parseSessionSkillEventPayload(event.Payload)
 	if !ok {
@@ -2562,7 +3367,7 @@ func runtimeEventSkillMissingHandler(a *App, event tuiservices.RuntimeEvent) boo
 	return false
 }
 
-// parseSessionSkillEventPayload 瑙ｆ瀽 runtime skill 浜嬩欢璐熻浇骞跺吋瀹?map 缁撴瀯銆?
+// parseSessionSkillEventPayload 解析 runtime skill 事件负载，并兼容 map 结构。
 func parseSessionSkillEventPayload(payload any) (tuiservices.SessionSkillEventPayload, bool) {
 	switch typed := payload.(type) {
 	case tuiservices.SessionSkillEventPayload:
@@ -2597,6 +3402,8 @@ func parseTodoEventPayload(payload any) (tuiservices.TodoEventPayload, bool) {
 	case map[string]any:
 		action := ""
 		reason := ""
+		summary := tuiservices.TodoSummary{}
+		items := make([]tuiservices.TodoViewItem, 0)
 		if raw, ok := typed["Action"]; ok && raw != nil {
 			action = strings.TrimSpace(fmt.Sprintf("%v", raw))
 		}
@@ -2613,9 +3420,200 @@ func parseTodoEventPayload(payload any) (tuiservices.TodoEventPayload, bool) {
 				reason = strings.TrimSpace(fmt.Sprintf("%v", raw))
 			}
 		}
-		return tuiservices.TodoEventPayload{Action: action, Reason: reason}, true
+		if raw, ok := typed["summary"]; ok {
+			summary = coerceTodoSummary(raw)
+		}
+		if raw, ok := typed["required_total"]; ok && summary.RequiredTotal == 0 {
+			summary.RequiredTotal = coerceInt(raw)
+		}
+		if raw, ok := typed["required_completed"]; ok && summary.RequiredCompleted == 0 {
+			summary.RequiredCompleted = coerceInt(raw)
+		}
+		if raw, ok := typed["required_open"]; ok && summary.RequiredOpen == 0 {
+			summary.RequiredOpen = coerceInt(raw)
+		}
+		if raw, ok := typed["required_failed"]; ok && summary.RequiredFailed == 0 {
+			summary.RequiredFailed = coerceInt(raw)
+		}
+		if raw, ok := typed["total"]; ok && summary.Total == 0 {
+			summary.Total = coerceInt(raw)
+		}
+		if raw, ok := typed["items"]; ok {
+			items = coerceTodoItems(raw)
+		} else if raw, ok := typed["todos"]; ok {
+			items = coerceTodoItems(raw)
+		}
+		return tuiservices.TodoEventPayload{
+			Action:  action,
+			Reason:  reason,
+			Items:   items,
+			Summary: summary,
+		}, true
 	default:
 		return tuiservices.TodoEventPayload{}, false
+	}
+}
+
+// coerceInt 将 map 反序列化后的数字值统一转换为 int，供事件兼容解析使用。
+func coerceInt(value any) int {
+	switch typed := value.(type) {
+	case int:
+		return typed
+	case int8:
+		return int(typed)
+	case int16:
+		return int(typed)
+	case int32:
+		return int(typed)
+	case int64:
+		return int(typed)
+	case float32:
+		return int(typed)
+	case float64:
+		return int(typed)
+	default:
+		return 0
+	}
+}
+
+// coerceTodoSnapshots 将动态 payload 中的 todos 字段转换为强类型快照列表。
+func coerceTodoItems(value any) []tuiservices.TodoViewItem {
+	rawList, ok := value.([]any)
+	if !ok || len(rawList) == 0 {
+		return nil
+	}
+	snapshots := make([]tuiservices.TodoViewItem, 0, len(rawList))
+	for _, raw := range rawList {
+		item, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		snapshot := tuiservices.TodoViewItem{
+			ID:            mapStringValue(item, "id"),
+			Content:       mapStringValue(item, "content"),
+			Status:        mapStringValue(item, "status"),
+			Required:      coerceBool(item["required"]),
+			FailureReason: mapStringValue(item, "failure_reason"),
+			BlockedReason: mapStringValue(item, "blocked_reason"),
+			Revision:      int64(coerceInt(item["revision"])),
+		}
+		if rawArtifacts, exists := item["artifacts"]; exists {
+			snapshot.Artifacts = coerceStringSlice(rawArtifacts)
+		}
+		snapshots = append(snapshots, snapshot)
+	}
+	if len(snapshots) == 0 {
+		return nil
+	}
+	return snapshots
+}
+
+func coerceTodoSummary(value any) tuiservices.TodoSummary {
+	item, ok := value.(map[string]any)
+	if !ok {
+		return tuiservices.TodoSummary{}
+	}
+	return tuiservices.TodoSummary{
+		Total:             coerceInt(item["total"]),
+		RequiredTotal:     coerceInt(item["required_total"]),
+		RequiredCompleted: coerceInt(item["required_completed"]),
+		RequiredFailed:    coerceInt(item["required_failed"]),
+		RequiredOpen:      coerceInt(item["required_open"]),
+	}
+}
+
+func (a *App) syncTodosFromEventItems(items []tuiservices.TodoViewItem) {
+	if len(items) == 0 {
+		return
+	}
+	mapped := make([]todoViewItem, 0, len(items))
+	for _, item := range items {
+		mapped = append(mapped, todoViewItem{
+			ID:       strings.TrimSpace(item.ID),
+			Title:    strings.TrimSpace(item.Content),
+			Status:   strings.TrimSpace(item.Status),
+			Priority: 0,
+			Executor: "",
+			Owner:    "-",
+		})
+	}
+	a.todoItems = mapped
+	a.todoPanelVisible = len(mapped) > 0
+	a.todoSelectedIndex = clampTodoSelection(a.todoSelectedIndex, len(a.visibleTodoItems()))
+	a.rebuildTodo()
+	a.applyComponentLayout(false)
+}
+
+func formatTodoSummaryStatus(summary tuiservices.TodoSummary) string {
+	if summary.RequiredTotal > 0 {
+		if summary.RequiredFailed > 0 {
+			return fmt.Sprintf(
+				"Todo: %d/%d completed, %d failed",
+				summary.RequiredCompleted,
+				summary.RequiredTotal,
+				summary.RequiredFailed,
+			)
+		}
+		return fmt.Sprintf("Todo: %d/%d completed", summary.RequiredCompleted, summary.RequiredTotal)
+	}
+	if summary.Total > 0 {
+		return fmt.Sprintf("Todo: %d open", max(0, summary.Total-summary.RequiredCompleted-summary.RequiredFailed))
+	}
+	return "Todo: empty"
+}
+
+// mapStringValue 从 map 中安全读取字符串字段，避免缺失键被格式化为 "<nil>"。
+func mapStringValue(values map[string]any, key string) string {
+	raw, ok := values[key]
+	if !ok || raw == nil {
+		return ""
+	}
+	return strings.TrimSpace(fmt.Sprintf("%v", raw))
+}
+
+// coerceBool 将动态 payload 中的布尔值做兼容解析。
+func coerceBool(value any) bool {
+	switch typed := value.(type) {
+	case bool:
+		return typed
+	case string:
+		return strings.EqualFold(strings.TrimSpace(typed), "true")
+	default:
+		return false
+	}
+}
+
+// coerceStringSlice 将动态数组字段转换为去空白后的字符串列表。
+func coerceStringSlice(value any) []string {
+	switch typed := value.(type) {
+	case []string:
+		out := make([]string, 0, len(typed))
+		for _, entry := range typed {
+			trimmed := strings.TrimSpace(entry)
+			if trimmed == "" {
+				continue
+			}
+			out = append(out, trimmed)
+		}
+		if len(out) == 0 {
+			return nil
+		}
+		return out
+	case []any:
+		out := make([]string, 0, len(typed))
+		for _, entry := range typed {
+			trimmed := strings.TrimSpace(fmt.Sprintf("%v", entry))
+			if trimmed == "" {
+				continue
+			}
+			out = append(out, trimmed)
+		}
+		if len(out) == 0 {
+			return nil
+		}
+		return out
+	default:
+		return nil
 	}
 }
 
@@ -2700,6 +3698,7 @@ func runtimeEventUserMessageHandler(a *App, event tuiservices.RuntimeEvent) bool
 	if runID != "" {
 		a.state.ActiveRunID = runID
 	}
+	a.suppressAssistantForRun = ""
 	if sessionID := strings.TrimSpace(event.SessionID); sessionID != "" {
 		a.setActiveSessionID(sessionID)
 	}
@@ -2790,7 +3789,7 @@ func runtimeEventTokenUsageHandler(a *App, event tuiservices.RuntimeEvent) bool 
 	return false
 }
 
-// runtimeEventToolCallThinkingHandler 鍦ㄥ伐鍏疯皟鐢ㄨ繘鍏ユ€濊€冮樁娈垫椂鍚屾褰撳墠宸ュ叿涓庤繘搴︽彁绀恒€?
+// runtimeEventToolCallThinkingHandler 在工具调用进入规划阶段时同步当前工具和进度提示。
 func runtimeEventToolCallThinkingHandler(a *App, event tuiservices.RuntimeEvent) bool {
 	if payload, ok := event.Payload.(string); ok && strings.TrimSpace(payload) != "" {
 		a.state.CurrentTool = payload
@@ -2800,7 +3799,7 @@ func runtimeEventToolCallThinkingHandler(a *App, event tuiservices.RuntimeEvent)
 	return false
 }
 
-// runtimeEventToolStartHandler 鍦ㄥ伐鍏峰疄闄呮墽琛屾椂鏇存柊鐘舵€佹潯鍜屾椿鍔ㄨ褰曘€?
+// runtimeEventToolStartHandler 在工具开始执行时更新状态栏和活动记录。
 func runtimeEventToolStartHandler(a *App, event tuiservices.RuntimeEvent) bool {
 	a.state.StatusText = statusRunningTool
 	a.state.StreamingReply = false
@@ -2836,7 +3835,7 @@ func runtimeEventToolResultHandler(a *App, event tuiservices.RuntimeEvent) bool 
 	return true
 }
 
-// runtimeEventAgentChunkHandler 灏嗘祦寮忓洖澶嶅垎鐗囨寔缁拷鍔犲埌杞綍鍖猴紝骞舵帹杩涜繍琛岃繘搴︺€?
+// runtimeEventAgentChunkHandler 将流式回复分片持续追加到转录区，并推进运行进度。
 func runtimeEventAgentChunkHandler(a *App, event tuiservices.RuntimeEvent) bool {
 	payload, ok := event.Payload.(string)
 	if !ok {
@@ -2857,7 +3856,7 @@ func runtimeEventToolChunkHandler(a *App, event tuiservices.RuntimeEvent) bool {
 	return false
 }
 
-// runtimeEventAgentDoneHandler 鍦ㄤ唬鐞嗗洖澶嶇粨鏉熸椂鏀跺熬鐘舵€佸苟琛ラ綈鏈€缁?assistant 娑堟伅銆?
+// runtimeEventAgentDoneHandler 在代理回复结束时收尾状态，并补齐最终 assistant 消息。
 func runtimeEventAgentDoneHandler(a *App, event tuiservices.RuntimeEvent) bool {
 	a.state.IsAgentRunning = false
 	a.state.StreamingReply = false
@@ -2870,6 +3869,9 @@ func runtimeEventAgentDoneHandler(a *App, event tuiservices.RuntimeEvent) bool {
 		a.state.StatusText = statusReady
 	}
 	if payload, ok := event.Payload.(providertypes.Message); ok {
+		if shouldSuppressAssistantFinalMessage(a, strings.TrimSpace(event.RunID)) {
+			return false
+		}
 		content := renderMessagePartsForDisplay(payload.Parts)
 		if strings.TrimSpace(content) != "" && !a.lastAssistantMatches(content) {
 			a.activeMessages = append(a.activeMessages, providertypes.Message{Role: roleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart(content)}})
@@ -2893,7 +3895,7 @@ func runtimeEventRunCanceledHandler(a *App, event tuiservices.RuntimeEvent) bool
 	return false
 }
 
-// runtimeEventErrorHandler 鍦ㄨ繍琛屾姤閿欐椂缁熶竴娓呯悊鐜板満骞跺睍绀洪敊璇俊鎭€?
+// runtimeEventErrorHandler 在运行报错时统一清理现场，并展示错误信息。
 func runtimeEventErrorHandler(a *App, event tuiservices.RuntimeEvent) bool {
 	a.state.StatusText = statusError
 	a.state.IsAgentRunning = false
@@ -2953,7 +3955,7 @@ func runtimeEventPermissionRequestHandler(a *App, event tuiservices.RuntimeEvent
 	return false
 }
 
-// beginAutoPermissionApproval 在 Full Access 模式下直接提交 session 级审批，并记录回执所需状态。
+// beginAutoPermissionApproval Full Access 模式下直接提session 级审批，并记录回执所需状态
 func (a *App) beginAutoPermissionApproval(payload tuiservices.PermissionRequestPayload) bool {
 	if !a.fullAccessModeEnabled {
 		return false
@@ -2974,7 +3976,7 @@ func (a *App) beginAutoPermissionApproval(payload tuiservices.PermissionRequestP
 	return true
 }
 
-// permissionRequestActivityDetail 统一格式化权限请求相关活动明细，避免各分支重复拼接。
+// permissionRequestActivityDetail 统一格式化权限请求活动详情，避免各分支重复拼接。
 func permissionRequestActivityDetail(payload tuiservices.PermissionRequestPayload) string {
 	return fmt.Sprintf("%s -> %s", fallbackText(payload.ToolName, "tool"), fallbackText(payload.Target, "(empty target)"))
 }
@@ -3002,7 +4004,7 @@ func runtimeEventPermissionResolvedHandler(a *App, event tuiservices.RuntimeEven
 	return false
 }
 
-// refreshPermissionPromptLayout 鍦ㄦ潈闄愭彁绀哄嚭鐜版垨娑堝け鍚庡埛鏂板竷灞€锛岄伩鍏嶉伄鎸¤緭鍏ュ尯銆?
+// refreshPermissionPromptLayout 在权限提示出现或消失后刷新布局，避免遮挡输入区。
 func (a *App) refreshPermissionPromptLayout() {
 	if a.width <= 0 || a.height <= 0 {
 		return
@@ -3067,7 +4069,91 @@ func (a *App) appendInlineMessage(role string, message string) {
 	a.activeMessages = append(a.activeMessages, providertypes.Message{Role: role, Parts: []providertypes.ContentPart{providertypes.NewTextPart(content)}})
 }
 
-// applyInlineCommandError 缁熶竴鍐欏叆鍛戒护閿欒骞跺埛鏂拌浆褰曞尯锛岀‘淇濋敊璇彁绀虹珛鍗冲彲瑙併€?
+// shouldSuppressAssistantFinalMessage 判断是否应抑制当前 run 的 assistant 最终消息，防止 continue/incomplete 误展示“已完成”。
+func shouldSuppressAssistantFinalMessage(a *App, runID string) bool {
+	if a == nil {
+		return false
+	}
+	targetRunID := strings.TrimSpace(a.suppressAssistantForRun)
+	if targetRunID == "" {
+		return false
+	}
+	if runID != "" && !strings.EqualFold(runID, targetRunID) {
+		return false
+	}
+	a.suppressAssistantForRun = ""
+	return true
+}
+
+// discardTrailingAssistantMessage 在继续/未完成裁决时移除尾部 assistant 文本，避免用户看到伪最终回复。
+func discardTrailingAssistantMessage(a *App) {
+	if a == nil || len(a.activeMessages) == 0 {
+		return
+	}
+	last := a.activeMessages[len(a.activeMessages)-1]
+	if last.Role != roleAssistant {
+		return
+	}
+	a.activeMessages = a.activeMessages[:len(a.activeMessages)-1]
+}
+
+// formatDecisionBlockMessage 把 continue/incomplete 裁决渲染为用户友好的验收提示。
+func formatDecisionBlockMessage(payload tuiservices.DecisionMadePayload) string {
+	status := firstNonBlank(strings.TrimSpace(payload.Status), "unknown")
+	reason := firstNonBlank(strings.TrimSpace(payload.StopReason), "n/a")
+
+	lines := []string{
+		"正在验收中...",
+		"状态: " + status,
+		"原因: " + reason,
+	}
+	if summary := strings.TrimSpace(payload.UserVisibleSummary); summary != "" {
+		lines = append(lines, "说明: "+summary)
+	}
+	if len(payload.MissingFacts) == 0 {
+		lines = append(lines, "缺少事实: 无")
+	} else {
+		lines = append(lines, "缺少事实:")
+		for _, fact := range payload.MissingFacts {
+			lines = append(lines, "- "+jsonCompactOrFallback(fact))
+		}
+	}
+	if len(payload.RequiredNextActions) == 0 {
+		lines = append(lines, "建议下一步: 无")
+	} else {
+		lines = append(lines, "建议下一步:")
+		for _, action := range payload.RequiredNextActions {
+			lines = append(lines, "- "+jsonCompactOrFallback(action))
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+// firstNonBlank 返回第一个非空候选值，保证展示字段稳定可读。
+func firstNonBlank(values ...string) string {
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
+}
+
+// jsonCompactOrFallback 将结构压缩成单行 JSON，序列化失败时回退为字符串表示。
+func jsonCompactOrFallback(value any) string {
+	var buf bytes.Buffer
+	encoder := json.NewEncoder(&buf)
+	encoder.SetEscapeHTML(false)
+	encoder.SetIndent("", "")
+	err := encoder.Encode(value)
+	if err != nil {
+		return fmt.Sprintf("%v", value)
+	}
+	return strings.TrimSpace(buf.String())
+}
+
+// applyInlineCommandError 统一写入内联命令错误，并立即刷新转录区显示。
 func (a *App) applyInlineCommandError(message string) {
 	message = strings.TrimSpace(message)
 	if message == "" {
@@ -3079,7 +4165,7 @@ func (a *App) applyInlineCommandError(message string) {
 	a.rebuildTranscript()
 }
 
-// recordStaleSkillCommandResult 璁板綍鏉ヨ嚜鏃т細璇濈殑鎶€鑳藉懡浠ょ粨鏋滐紝閬垮厤鍦ㄤ細璇濆垏鎹㈠悗閿欒琚潤榛樹涪寮冦€?
+// recordStaleSkillCommandResult 记录来自旧会话的 skill 命令结果，避免切会话后被静默丢弃。
 func (a *App) recordStaleSkillCommandResult(requestSessionID, activeSessionID string, runErr error) {
 	detail := fmt.Sprintf("result from session %q ignored after switching to %q", requestSessionID, activeSessionID)
 	if runErr != nil {
@@ -3116,6 +4202,33 @@ func (a *App) appendActivity(kind string, title string, detail string, isError b
 	a.syncActivityViewport(previousCount)
 	a.viewDirty = true
 	a.addLogEntry(kind, title, detail)
+	a.appendInlineMessage(roleSystem, formatActivityInlineLog(kind, title, detail))
+	a.rebuildTranscript()
+}
+
+func formatActivityInlineLog(kind string, title string, detail string) string {
+	category := strings.TrimSpace(kind)
+	if category == "" {
+		category = "log"
+	}
+	content := strings.TrimSpace(title)
+	detail = strings.TrimSpace(detail)
+	if content == "" {
+		content = detail
+		detail = ""
+	}
+	if detail != "" {
+		content = content + " | " + detail
+	}
+	return inlineLogMarker + category + ": " + strings.TrimSpace(content)
+}
+
+func isInlineLogMessage(message providertypes.Message) bool {
+	if message.Role != roleSystem {
+		return false
+	}
+	content := strings.TrimSpace(renderMessagePartsForDisplay(message.Parts))
+	return strings.HasPrefix(content, inlineLogMarker)
 }
 
 func (a *App) syncFooterErrorToast() {
@@ -3708,7 +4821,8 @@ func (a *App) applyComponentLayout(rebuildTranscript bool) {
 	a.help.ShowAll = a.state.ShowHelp
 	a.transcript.Width = max(1, lay.contentWidth-a.transcriptScrollbarWidth(lay.contentWidth))
 	a.resizeCommandMenu()
-	a.input.SetWidth(a.composerInnerWidth(lay.contentWidth))
+	promptWidth := a.startupPanelWidth(lay.contentWidth)
+	a.input.SetWidth(a.composerInnerWidth(promptWidth))
 	a.input.SetHeight(a.composerHeight())
 	transcriptHeight, activityHeight, _, todoHeight := a.waterfallMetrics(lay.contentWidth, lay.contentHeight)
 	a.transcript.Height = transcriptHeight
@@ -3764,6 +4878,9 @@ func (a App) composerInnerWidth(totalWidth int) int {
 }
 
 func (a App) composerHeight() int {
+	if a.input.Value() == "" {
+		return composerMinHeight
+	}
 	return tuiutils.Clamp(a.input.LineCount(), composerMinHeight, composerMaxHeight)
 }
 
@@ -3784,7 +4901,13 @@ func (a *App) normalizeComposerHeight() {
 func (a *App) rebuildTranscript() {
 	width := max(24, a.transcript.Width)
 	if len(a.activeMessages) == 0 {
-		a.setTranscriptContent(a.styles.empty.Width(width).Render(emptyConversationText))
+		queued := a.renderQueuedInterventionBlock(width)
+		if strings.TrimSpace(queued) == "" {
+			a.setTranscriptContent(a.styles.empty.Width(width).Render(emptyConversationText))
+			a.transcript.GotoTop()
+			return
+		}
+		a.setTranscriptContent(queued)
 		a.transcript.GotoTop()
 		return
 	}
@@ -3794,7 +4917,11 @@ func (a *App) rebuildTranscript() {
 	hasBlock := false
 	lastRenderedRole := ""
 	for _, message := range a.activeMessages {
+		inlineLog := isInlineLogMessage(message)
 		continuation := message.Role == roleAssistant && lastRenderedRole == roleAssistant
+		if inlineLog && lastRenderedRole == roleAssistant {
+			continuation = true
+		}
 		rendered, _ := a.renderMessageBlockWithCopy(message, width, 0, !continuation)
 		if rendered == "" {
 			continue
@@ -3809,7 +4936,17 @@ func (a *App) rebuildTranscript() {
 		}
 		builder.WriteString(rendered)
 		hasBlock = true
-		lastRenderedRole = message.Role
+		if !inlineLog {
+			lastRenderedRole = message.Role
+		}
+	}
+
+	if queued := a.renderQueuedInterventionBlock(width); strings.TrimSpace(queued) != "" {
+		if hasBlock {
+			builder.WriteString("\n\n")
+		}
+		builder.WriteString(queued)
+		hasBlock = true
 	}
 
 	if !hasBlock {
@@ -4075,7 +5212,7 @@ func (a *App) requestModelCatalogRefresh(providerID string) tea.Cmd {
 	return runModelCatalogRefresh(a.providerSvc, providerID)
 }
 
-// handleStartupWakeSubmitMsg 处理启动期的一次性唤醒输入，并沿用普通发送链路触发 Submit。
+// handleStartupWakeSubmitMsg 处理启动期的一次性唤醒输入，并沿用普通发送链路触Submit
 func (a *App) handleStartupWakeSubmitMsg(msg startupWakeSubmitMsg) tea.Cmd {
 	a.startupWakeSubmitInput = nil
 	text := strings.TrimSpace(msg.Input.Text)
@@ -4228,7 +5365,7 @@ func (a *App) persistLogEntriesForActiveSession() {
 	a.logPersistDirty = false
 }
 
-// sessionLogRuntime 杩斿洖鏀寔浼氳瘽鏃ュ織璇诲啓鐨?runtime 閫傞厤鑳藉姏銆?
+// sessionLogRuntime 返回支持会话日志读写的 runtime 适配能力。
 func (a *App) sessionLogRuntime() sessionLogPersistenceRuntime {
 	runtimeWithPersistence, ok := a.runtime.(sessionLogPersistenceRuntime)
 	if !ok {
@@ -4237,7 +5374,7 @@ func (a *App) sessionLogRuntime() sessionLogPersistenceRuntime {
 	return runtimeWithPersistence
 }
 
-// reportLogPersistenceError 缁熶竴澶勭悊鏃ュ織鎸佷箙鍖栧け璐ユ彁绀猴紝閬垮厤閿欒闈欓粯鍚炴帀銆?
+// reportLogPersistenceError 统一处理日志持久化失败提示，避免错误被静默吞掉。
 func (a *App) reportLogPersistenceError(action string, err error) {
 	if err == nil {
 		return
@@ -4247,7 +5384,7 @@ func (a *App) reportLogPersistenceError(action string, err error) {
 	a.showFooterError(message)
 }
 
-// restoreStatusAfterLogViewer 鍦ㄥ叧闂棩蹇楄鍥炬椂鎭㈠鍙鐘舵€侊紝閬垮厤瑕嗙洊鐪熷疄杩愯鎬併€?
+// restoreStatusAfterLogViewer 关闭日志视图后恢复可读状态，避免覆盖真实运行态。
 func (a *App) restoreStatusAfterLogViewer() {
 	defer func() { a.logViewerPrevStatus = "" }()
 	if executionError := strings.TrimSpace(a.state.ExecutionError); executionError != "" {
@@ -4273,7 +5410,7 @@ func (a *App) restoreStatusAfterLogViewer() {
 	a.state.StatusText = statusReady
 }
 
-// toRuntimeSessionLogEntries 杞崲鏃ュ織鏉＄洰鍒?runtime 鎸佷箙鍖栨ā鍨嬨€?
+// toRuntimeSessionLogEntries 将日志条目转换为 runtime 持久化模型。
 func toRuntimeSessionLogEntries(entries []logEntry) []tuiservices.SessionLogEntry {
 	converted := make([]tuiservices.SessionLogEntry, 0, len(entries))
 	for _, entry := range entries {
@@ -4287,7 +5424,7 @@ func toRuntimeSessionLogEntries(entries []logEntry) []tuiservices.SessionLogEntr
 	return converted
 }
 
-// fromRuntimeSessionLogEntries 灏?runtime 鎸佷箙鍖栨ā鍨嬫仮澶嶄负 TUI 灞曠ず妯″瀷銆?
+// fromRuntimeSessionLogEntries 将 runtime 持久化模型还原为 TUI 展示模型。
 func fromRuntimeSessionLogEntries(entries []tuiservices.SessionLogEntry) []logEntry {
 	converted := make([]logEntry, 0, len(entries))
 	for _, entry := range entries {
@@ -4346,7 +5483,8 @@ func (a *App) setTranscriptOffsetFromScrollbarY(mouseY int) {
 	}
 }
 
-// isBusy reports whether an agent run or compact operation is in progress.
+// isBusy reports whether a runtime operation is in progress.
+// Pasted-text loading is intentionally excluded so typing and navigation remain available.
 func (a App) isBusy() bool {
 	return tuiutils.IsBusy(a.state.IsAgentRunning, a.state.IsCompacting)
 }
@@ -4415,7 +5553,7 @@ func (a *App) runMemoSystemTool(toolName string, arguments map[string]any) tea.C
 	)
 }
 
-// normalizeMemoCommandErrorMessage 将 memo 命令的底层错误映射为用户可读提示，避免暴露内部 sentinel 文本。
+// normalizeMemoCommandErrorMessage memo 命令的底层错误映射为用户可读提示，避免暴露内sentinel 文本
 func normalizeMemoCommandErrorMessage(err error) string {
 	if err == nil {
 		return "memo command failed"
@@ -4430,7 +5568,7 @@ func normalizeMemoCommandErrorMessage(err error) string {
 	return message
 }
 
-// syncSessionWorkdir 依据会话快照更新当前工作区；若路径失效可选择展示告警并保留现有目录。
+// syncSessionWorkdir 依据会话快照更新当前工作区；若路径失效可选择展示告警并保留现有目录
 func (a *App) syncSessionWorkdir(sessionWorkdir string, warnOnMissing bool) {
 	resolved := strings.TrimSpace(agentsession.EffectiveWorkdir(sessionWorkdir, a.configManager.Get().Workdir))
 	if resolved == "" || !filepath.IsAbs(resolved) {
@@ -4525,7 +5663,7 @@ func currentProviderAddField(form *providerAddFormState) providerAddFieldID {
 	return fields[form.Step]
 }
 
-// isProviderAddEnumField 鍒ゆ柇褰撳墠鏂板 Provider 琛ㄥ崟鐒︾偣鏄惁鍦ㄦ灇涓惧瓧娈碉紙Driver/Model Source锛夈€?
+// isProviderAddEnumField 判断当前新增 Provider 表单焦点是否位于枚举字段（Driver/Model Source）。
 func isProviderAddEnumField(form *providerAddFormState) bool {
 	switch currentProviderAddField(form) {
 	case providerAddFieldDriver, providerAddFieldModelSource, providerAddFieldChatAPIMode:
@@ -4812,7 +5950,7 @@ type modelScopeGuideSubmitResultMsg struct {
 	Warning   string
 }
 
-// providerAddDefaultChatEndpointPath 杩斿洖 provider add 琛ㄥ崟鐨勯┍鍔ㄩ粯璁よ亰澶╃鐐硅矾寰勩€?
+// providerAddDefaultChatEndpointPath 返回 provider add 表单按 driver 推导的默认 chat endpoint。
 func providerAddDefaultChatEndpointPath(driver string) string {
 	switch provider.NormalizeProviderDriver(driver) {
 	case provider.DriverGemini:
@@ -4824,7 +5962,7 @@ func providerAddDefaultChatEndpointPath(driver string) string {
 	}
 }
 
-// providerAddDefaultOpenAICompatChatEndpointPath 鏍规嵁 chat_api_mode 杩斿洖 openaicompat 鐨勯粯璁よ亰澶╃鐐硅矾寰勩€?
+// providerAddDefaultOpenAICompatChatEndpointPath 根据 chat_api_mode 返回 openaicompat 的默认 chat endpoint。
 func providerAddDefaultOpenAICompatChatEndpointPath(chatAPIMode string) string {
 	mode, err := provider.NormalizeProviderChatAPIMode(chatAPIMode)
 	if err != nil || mode == "" {
@@ -4836,7 +5974,7 @@ func providerAddDefaultOpenAICompatChatEndpointPath(chatAPIMode string) string {
 	return "/chat/completions"
 }
 
-// syncProviderAddOpenAICompatModeDefaults 鍦ㄥ垏鎹?chat_api_mode 鏃跺悓姝ラ粯璁?chat endpoint锛岄伩鍏嶉粯璁ゅ€奸敊閰嶃€?
+// syncProviderAddOpenAICompatModeDefaults 在切换 chat_api_mode 时同步默认 chat endpoint，避免默认值错配。
 func syncProviderAddOpenAICompatModeDefaults(form *providerAddFormState, previousMode string) {
 	if form == nil || provider.NormalizeProviderDriver(form.Driver) != provider.DriverOpenAICompat {
 		return
@@ -4850,7 +5988,7 @@ func syncProviderAddOpenAICompatModeDefaults(form *providerAddFormState, previou
 	form.ChatEndpointPath = providerAddDefaultOpenAICompatChatEndpointPath(form.ChatAPIMode)
 }
 
-// providerAddDefaultBaseURL 杩斿洖 provider add 琛ㄥ崟鐨勯┍鍔ㄩ粯璁?base URL銆?
+// providerAddDefaultBaseURL 返回 provider add 表单按 driver 推导的默认 base URL。
 func providerAddDefaultBaseURL(driver string) string {
 	switch provider.NormalizeProviderDriver(driver) {
 	case provider.DriverOpenAICompat:
@@ -4864,7 +6002,7 @@ func providerAddDefaultBaseURL(driver string) string {
 	}
 }
 
-// syncProviderAddDriverDefaults 鍦ㄥ垏鎹?driver 鏃舵寜闇€鏇存柊榛樿 base URL 涓?chat endpoint銆?
+// syncProviderAddDriverDefaults 在切换 driver 时按需同步默认 base URL 与 chat endpoint。
 func syncProviderAddDriverDefaults(form *providerAddFormState, previousDriver string) {
 	if form == nil {
 		return
@@ -5009,13 +6147,11 @@ func buildProviderAddRequest(form providerAddFormState) (providerAddRequest, str
 }
 
 type providerAddManualModelJSON struct {
-	ID              string `json:"id"`
-	Name            string `json:"name"`
-	ContextWindow   *int   `json:"context_window,omitempty"`
-	MaxOutputTokens *int   `json:"max_output_tokens,omitempty"`
+	ID   string `json:"id"`
+	Name string `json:"name"`
 }
 
-// parseProviderAddManualModelsJSON 瑙ｆ瀽 provider add 琛ㄥ崟涓殑鎵嬪伐妯″瀷 JSON锛屽苟澶嶇敤 config 褰掍竴鍖栨牎楠岃鍒欍€?
+// parseProviderAddManualModelsJSON 解析 provider add 表单中的手工模型 JSON，并复用 config 归一化校验规则。
 func parseProviderAddManualModelsJSON(raw string) ([]providertypes.ModelDescriptor, error) {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {
@@ -5041,34 +6177,20 @@ func parseProviderAddManualModelsJSON(raw string) ([]providertypes.ModelDescript
 	seen := make(map[string]struct{}, len(models))
 	for _, model := range models {
 		descriptor := providertypes.ModelDescriptor{
-			ID:              strings.TrimSpace(model.ID),
-			Name:            strings.TrimSpace(model.Name),
-			ContextWindow:   config.ManualModelOptionalIntUnset,
-			MaxOutputTokens: config.ManualModelOptionalIntUnset,
+			ID:   strings.TrimSpace(model.ID),
+			Name: strings.TrimSpace(model.Name),
 		}
 		key := provider.NormalizeKey(descriptor.ID)
 		if _, exists := seen[key]; exists {
 			return nil, fmt.Errorf("parse manual model json: models.id %q is duplicated", descriptor.ID)
 		}
 		seen[key] = struct{}{}
-		if model.ContextWindow != nil {
-			if *model.ContextWindow <= 0 {
-				return nil, fmt.Errorf("parse manual model json: models.context_window must be greater than 0")
-			}
-			descriptor.ContextWindow = *model.ContextWindow
-		}
-		if model.MaxOutputTokens != nil {
-			if *model.MaxOutputTokens <= 0 {
-				return nil, fmt.Errorf("parse manual model json: models.max_output_tokens must be greater than 0")
-			}
-			descriptor.MaxOutputTokens = *model.MaxOutputTokens
-		}
 		descriptors = append(descriptors, descriptor)
 	}
 	return descriptors, nil
 }
 
-// sanitizeProviderAddInputRunes 杩囨护 provider 琛ㄥ崟杈撳叆涓殑鎺у埗瀛楃锛岄伩鍏嶄笉鍙瀛楃姹℃煋閰嶇疆瀛楁銆?
+// sanitizeProviderAddInputRunes 过滤 provider 表单输入中的控制字符，避免不可见字符污染字段。
 func sanitizeProviderAddInputRunes(runes []rune) string {
 	if len(runes) == 0 {
 		return ""
@@ -5085,7 +6207,7 @@ func sanitizeProviderAddInputRunes(runes []rune) string {
 	return builder.String()
 }
 
-// sanitizeProviderAddJSONInputRunes 杩囨护涓嶅彲瑙佹牸寮忔帶鍒跺瓧绗︼紝鍚屾椂淇濈暀 JSON 缂栬緫鎵€闇€鐨勬崲琛屼笌鍒惰〃绗︺€?
+// sanitizeProviderAddJSONInputRunes 过滤 JSON 输入中的不可见格式控制字符，同时保留换行与制表符。
 func sanitizeProviderAddJSONInputRunes(runes []rune) string {
 	if len(runes) == 0 {
 		return ""
@@ -5108,7 +6230,7 @@ func sanitizeProviderAddJSONInputRunes(runes []rune) string {
 	return builder.String()
 }
 
-// normalizeProviderAddFieldValue 瀵?provider 琛ㄥ崟瀛楁鍋氱粺涓€娓呯悊锛屽幓闄ゆ帶鍒跺瓧绗﹀苟瑁佸壀棣栧熬绌虹櫧銆?
+// normalizeProviderAddFieldValue 统一清洗 provider 表单字段，去掉控制字符并裁剪首尾空白。
 func normalizeProviderAddFieldValue(value string) string {
 	return strings.TrimSpace(sanitizeProviderAddInputRunes([]rune(value)))
 }

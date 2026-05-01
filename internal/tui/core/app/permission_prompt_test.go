@@ -69,8 +69,11 @@ func TestFormatPermissionPromptLines(t *testing.T) {
 	if !strings.Contains(joined, "Permission request") {
 		t.Fatalf("expected prompt header, got %q", joined)
 	}
-	if !strings.Contains(joined, "> Allow session") {
+	if !strings.Contains(joined, "> [a] Allow session") {
 		t.Fatalf("expected selected option marker, got %q", joined)
+	}
+	if !strings.Contains(joined, "Keys: Up/Down Enter") {
+		t.Fatalf("expected concise key hint, got %q", joined)
 	}
 	if !strings.Contains(joined, "Submitting permission decision") {
 		t.Fatalf("expected submitting hint, got %q", joined)

@@ -27,11 +27,24 @@ func collectCompletionState(
 ) controlplane.CompletionState {
 	current := state.completion
 	current.HasPendingAgentTodos = hasPendingAgentTodos(state.session.Todos)
+	if current.TodoOnlyTaskCandidate && current.TodoStateSatisfied {
+		current.HasPendingAgentTodos = false
+	}
 	return current
 }
 
 // applyToolExecutionCompletion 更新一轮工具执行后的 completion 事实。
 func applyToolExecutionCompletion(current controlplane.CompletionState, summary toolExecutionSummary) controlplane.CompletionState {
+	if !current.TodoOnlyTaskCandidate {
+		// keep false
+	} else {
+		for _, call := range summary.Calls {
+			if !strings.EqualFold(strings.TrimSpace(call.Name), tools.ToolNameTodoWrite) {
+				current.TodoOnlyTaskCandidate = false
+				break
+			}
+		}
+	}
 	if len(summary.Results) == 0 {
 		if summary.HasSuccessfulWorkspaceWrite {
 			current.HasUnverifiedWrites = true
@@ -45,7 +58,19 @@ func applyToolExecutionCompletion(current controlplane.CompletionState, summary 
 		if result.IsError {
 			continue
 		}
-		if result.Facts.WorkspaceWrite {
+		if strings.EqualFold(strings.TrimSpace(result.Name), tools.ToolNameTodoWrite) {
+			if stateFact, ok := result.Metadata["state_fact"].(string); ok {
+				normalized := strings.TrimSpace(stateFact)
+				if normalized != "" {
+					current.TodoStateChanged = true
+					switch normalized {
+					case "todo_created", "todo_updated", "todo_completed", "todo_failed":
+						current.TodoStateSatisfied = true
+					}
+				}
+			}
+		}
+		if result.Facts.WorkspaceWrite && !toolResultNoopWrite(result.Metadata) {
 			current.HasUnverifiedWrites = true
 		}
 		if result.Facts.VerificationPerformed && result.Facts.VerificationPassed {
@@ -210,6 +235,48 @@ func hasSuccessfulInformationalResult(results []tools.ToolResult) bool {
 		case tools.ToolNameFilesystemWriteFile, tools.ToolNameFilesystemEdit:
 			continue
 		default:
+			return true
+		}
+	}
+	return false
+}
+
+// shouldPromotePendingFinalProgress 判断本轮执行结果是否可以作为 final 拦截后的有效推进信号。
+func shouldPromotePendingFinalProgress(
+	score controlplane.ProgressScore,
+	summary toolExecutionSummary,
+	completion controlplane.CompletionState,
+	lastBlockedReason string,
+) bool {
+	if score.HasBusinessProgress {
+		return true
+	}
+	if !score.HasExplorationProgress {
+		return false
+	}
+
+	// 只读 read/glob 首次探索可算推进；同签名/同结果/同子目标且阻塞原因未变化时，不再重置 final 拦截计数。
+	if hasSuccessfulReadOrGlobResult(summary.Results) &&
+		score.SameToolSignature &&
+		score.SameResultFingerprint &&
+		score.SameSubgoal == controlplane.SubgoalRelationSame &&
+		strings.EqualFold(
+			strings.TrimSpace(lastBlockedReason),
+			strings.TrimSpace(string(completion.CompletionBlockedReason)),
+		) {
+		return false
+	}
+	return true
+}
+
+// hasSuccessfulReadOrGlobResult 判断本轮是否存在成功的 filesystem_read_file / filesystem_glob 结果。
+func hasSuccessfulReadOrGlobResult(results []tools.ToolResult) bool {
+	for _, result := range results {
+		if result.IsError {
+			continue
+		}
+		switch strings.TrimSpace(result.Name) {
+		case tools.ToolNameFilesystemReadFile, tools.ToolNameFilesystemGlob:
 			return true
 		}
 	}

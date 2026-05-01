@@ -89,6 +89,12 @@ func (s *Service) Compact(ctx context.Context, input CompactInput) (CompactResul
 	if err != nil {
 		return CompactResult{}, err
 	}
+	if result.Applied && markCurrentPlanContextDirty(&session) {
+		session.UpdatedAt = time.Now()
+		if err := s.sessionStore.UpdateSessionState(ctx, sessionStateInputFromSession(session)); err != nil {
+			return CompactResult{}, err
+		}
+	}
 
 	return fromCompactResult(result), nil
 }

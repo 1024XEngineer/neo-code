@@ -18,6 +18,9 @@ const (
 type CompletionState struct {
 	HasPendingAgentTodos    bool                    `json:"has_pending_agent_todos"`
 	HasUnverifiedWrites     bool                    `json:"has_unverified_writes"`
+	TodoOnlyTaskCandidate   bool                    `json:"todo_only_task_candidate,omitempty"`
+	TodoStateChanged        bool                    `json:"todo_state_changed,omitempty"`
+	TodoStateSatisfied      bool                    `json:"todo_state_satisfied,omitempty"`
 	CompletionBlockedReason CompletionBlockedReason `json:"completion_blocked_reason,omitempty"`
 }
 

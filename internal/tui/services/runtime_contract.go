@@ -213,6 +213,8 @@ const (
 	StopReasonVerificationExecutionDenied StopReason = "verification_execution_denied"
 	// StopReasonVerificationExecutionError 表示 verification 命令执行异常。
 	StopReasonVerificationExecutionError StopReason = "verification_execution_error"
+	// StopReasonRequiredTodoFailed 表示 required todo 已失败终止。
+	StopReasonRequiredTodoFailed StopReason = "required_todo_failed"
 )
 
 // StopReasonDecidedPayload 描述停止原因决策结果。
@@ -223,7 +225,8 @@ type StopReasonDecidedPayload struct {
 
 // VerificationStartedPayload 描述 final 验证阶段开始。
 type VerificationStartedPayload struct {
-	CompletionPassed bool `json:"completion_passed"`
+	CompletionPassed        bool   `json:"completion_passed"`
+	CompletionBlockedReason string `json:"completion_blocked_reason,omitempty"`
 }
 
 // VerificationStageFinishedPayload 描述单个 verifier 阶段结果。
@@ -255,12 +258,13 @@ type VerificationFailedPayload struct {
 
 // AcceptanceDecidedPayload 描述 acceptance 引擎输出。
 type AcceptanceDecidedPayload struct {
-	Status             string     `json:"status"`
-	StopReason         StopReason `json:"stop_reason,omitempty"`
-	ErrorClass         string     `json:"error_class,omitempty"`
-	UserVisibleSummary string     `json:"user_visible_summary,omitempty"`
-	InternalSummary    string     `json:"internal_summary,omitempty"`
-	ContinueHint       string     `json:"continue_hint,omitempty"`
+	Status                  string     `json:"status"`
+	StopReason              StopReason `json:"stop_reason,omitempty"`
+	ErrorClass              string     `json:"error_class,omitempty"`
+	CompletionBlockedReason string     `json:"completion_blocked_reason,omitempty"`
+	UserVisibleSummary      string     `json:"user_visible_summary,omitempty"`
+	InternalSummary         string     `json:"internal_summary,omitempty"`
+	ContinueHint            string     `json:"continue_hint,omitempty"`
 }
 
 // TokenUsagePayload 描述 runtime 当前 token_usage 事件载荷。
@@ -274,10 +278,102 @@ type TokenUsagePayload struct {
 	SessionOutputTokens int    `json:"session_output_tokens"`
 }
 
+// TodoViewItem 描述 todo 列表中单项快照。
+type TodoViewItem struct {
+	ID            string   `json:"id"`
+	Content       string   `json:"content"`
+	Status        string   `json:"status"`
+	Required      bool     `json:"required"`
+	Artifacts     []string `json:"artifacts,omitempty"`
+	FailureReason string   `json:"failure_reason,omitempty"`
+	BlockedReason string   `json:"blocked_reason,omitempty"`
+	Revision      int64    `json:"revision"`
+}
+
+// TodoSummary 描述 todo 收敛摘要。
+type TodoSummary struct {
+	Total             int `json:"total"`
+	RequiredTotal     int `json:"required_total"`
+	RequiredCompleted int `json:"required_completed"`
+	RequiredFailed    int `json:"required_failed"`
+	RequiredOpen      int `json:"required_open"`
+}
+
 // TodoEventPayload 描述 todo 相关事件载荷。
 type TodoEventPayload struct {
-	Action string `json:"action"`
-	Reason string `json:"reason,omitempty"`
+	Action  string         `json:"action"`
+	Reason  string         `json:"reason,omitempty"`
+	Items   []TodoViewItem `json:"items,omitempty"`
+	Summary TodoSummary    `json:"summary,omitempty"`
+}
+
+// RuntimeSnapshot 描述 runtime 统一状态快照。
+type RuntimeSnapshot struct {
+	RunID     string           `json:"run_id"`
+	SessionID string           `json:"session_id"`
+	Phase     string           `json:"phase,omitempty"`
+	TaskKind  string           `json:"task_kind,omitempty"`
+	UpdatedAt time.Time        `json:"updated_at"`
+	Todos     TodoSnapshot     `json:"todos"`
+	Facts     FactsSnapshot    `json:"facts"`
+	Decision  DecisionSnapshot `json:"decision,omitempty"`
+	SubAgents SubAgentSnapshot `json:"subagents,omitempty"`
+}
+
+// TodoSnapshot 描述统一 Todo 快照。
+type TodoSnapshot struct {
+	Items   []TodoViewItem `json:"items,omitempty"`
+	Summary TodoSummary    `json:"summary,omitempty"`
+}
+
+// FactsSnapshot 描述统一事实快照。
+type FactsSnapshot struct {
+	RuntimeFacts map[string]any `json:"runtime_facts"`
+}
+
+// DecisionSnapshot 描述最终裁决快照。
+type DecisionSnapshot struct {
+	Status              string           `json:"status,omitempty"`
+	StopReason          string           `json:"stop_reason,omitempty"`
+	MissingFacts        []map[string]any `json:"missing_facts,omitempty"`
+	RequiredNextActions []map[string]any `json:"required_next_actions,omitempty"`
+	UserVisibleSummary  string           `json:"user_visible_summary,omitempty"`
+	InternalSummary     string           `json:"internal_summary,omitempty"`
+}
+
+// SubAgentSnapshot 描述子代理事实聚合快照。
+type SubAgentSnapshot struct {
+	StartedCount   int `json:"started_count"`
+	CompletedCount int `json:"completed_count"`
+	FailedCount    int `json:"failed_count"`
+}
+
+// RuntimeSnapshotUpdatedPayload 描述 runtime_snapshot_updated 事件。
+type RuntimeSnapshotUpdatedPayload struct {
+	Reason   string          `json:"reason,omitempty"`
+	Snapshot RuntimeSnapshot `json:"snapshot"`
+}
+
+// FactsUpdatedPayload 描述 facts_updated 事件。
+type FactsUpdatedPayload struct {
+	Reason string        `json:"reason,omitempty"`
+	Facts  FactsSnapshot `json:"facts"`
+}
+
+// DecisionMadePayload 描述 decision_made 事件。
+type DecisionMadePayload struct {
+	Status              string           `json:"status"`
+	StopReason          string           `json:"stop_reason,omitempty"`
+	MissingFacts        []map[string]any `json:"missing_facts,omitempty"`
+	RequiredNextActions []map[string]any `json:"required_next_actions,omitempty"`
+	UserVisibleSummary  string           `json:"user_visible_summary,omitempty"`
+	InternalSummary     string           `json:"internal_summary,omitempty"`
+}
+
+// SubAgentSnapshotUpdatedPayload 描述 subagent_snapshot_updated 事件。
+type SubAgentSnapshotUpdatedPayload struct {
+	Reason   string           `json:"reason,omitempty"`
+	SubAgent SubAgentSnapshot `json:"subagent"`
 }
 
 // SubAgentEventPayload 描述子代理执行生命周期事件载荷。
@@ -421,4 +517,9 @@ const (
 	EventSubAgentToolCallStarted    EventType = "subagent_tool_call_started"
 	EventSubAgentToolCallResult     EventType = "subagent_tool_call_result"
 	EventSubAgentToolCallDenied     EventType = "subagent_tool_call_denied"
+	EventRuntimeSnapshotUpdated     EventType = "runtime_snapshot_updated"
+	EventFactsUpdated               EventType = "facts_updated"
+	EventDecisionMade               EventType = "decision_made"
+	EventSubAgentSnapshotUpdated    EventType = "subagent_snapshot_updated"
+	EventTodoSnapshotUpdated        EventType = "todo_snapshot_updated"
 )

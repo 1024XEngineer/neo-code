@@ -7,6 +7,8 @@ import (
 	"sync"
 	"time"
 
+	"neo-code/internal/partsrender"
+	providertypes "neo-code/internal/provider/types"
 	agentsession "neo-code/internal/session"
 )
 
@@ -37,8 +39,12 @@ func (s *Service) loadOrCreateSession(
 		return agentsession.Session{}, err
 	}
 	profileChanged := establishSessionVerificationProfile(&session)
+	restoreAlignChanged := false
+	if sessionHasCompactedTranscript(session) {
+		restoreAlignChanged = markCurrentPlanRestorePending(&session)
+	}
 	if strings.TrimSpace(requestedWorkdir) == "" && strings.TrimSpace(session.Workdir) != "" {
-		if profileChanged {
+		if profileChanged || restoreAlignChanged {
 			session.UpdatedAt = time.Now()
 			if err := s.sessionStore.UpdateSessionState(ctx, sessionStateInputFromSession(session)); err != nil {
 				return agentsession.Session{}, err
@@ -52,7 +58,7 @@ func (s *Service) loadOrCreateSession(
 		return agentsession.Session{}, err
 	}
 	workdirChanged := session.Workdir != resolved
-	if !workdirChanged && !profileChanged {
+	if !workdirChanged && !profileChanged && !restoreAlignChanged {
 		return session, nil
 	}
 	if workdirChanged {
@@ -63,6 +69,18 @@ func (s *Service) loadOrCreateSession(
 		return agentsession.Session{}, err
 	}
 	return session, nil
+}
+
+// sessionHasCompactedTranscript 判断会话是否已进入 compact 后的恢复上下文。
+func sessionHasCompactedTranscript(session agentsession.Session) bool {
+	if len(session.Messages) == 0 {
+		return false
+	}
+	message := session.Messages[0]
+	if message.Role != providertypes.RoleAssistant {
+		return false
+	}
+	return strings.HasPrefix(strings.TrimSpace(partsrender.RenderDisplayParts(message.Parts)), "[compact_summary]")
 }
 
 // establishSessionVerificationProfile 在创建新会话的边界显式写入验收 profile，避免运行时依赖隐式零值。

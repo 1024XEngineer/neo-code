@@ -43,6 +43,7 @@ type SubAgentRunInput struct {
 	CallerAgent           string
 	ParentCapabilityToken *security.CapabilityToken
 	Role                  subagent.Role
+	TaskType              subagent.TaskType
 	TaskID                string
 	Goal                  string
 	ExpectedOut           string
@@ -78,6 +79,7 @@ type ToolCallInput struct {
 	TaskID          string
 	AgentID         string
 	Workdir         string
+	ReadOnly        bool
 	CapabilityToken *security.CapabilityToken
 	WorkspacePlan   *security.WorkspaceExecutionPlan
 	// SessionMutator 仅对需要会话级写入的工具开放（例如 todo_write）。

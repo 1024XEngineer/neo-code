@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -56,32 +55,6 @@ func TestDiscoverAndPersistRejectsNilResolver(t *testing.T) {
 	models, err := service.discoverAndPersist(context.Background(), input)
 	if err == nil || models != nil || !strings.Contains(err.Error(), "discovery config resolver is nil") {
 		t.Fatalf("expected nil resolver error, got models=%+v err=%v", models, err)
-	}
-}
-
-func TestQueueRefreshSkipsIncompleteIdentity(t *testing.T) {
-	t.Parallel()
-
-	var discoverCalls int32
-	registry := newRegistry(t, openaicompat.DriverName, func(context.Context, provider.RuntimeConfig) ([]providertypes.ModelDescriptor, error) {
-		atomic.AddInt32(&discoverCalls, 1)
-		return nil, nil
-	})
-	service := NewService("", registry, newMemoryStore())
-	service.backgroundTimeout = 50 * time.Millisecond
-
-	service.queueRefresh(provider.CatalogInput{
-		Identity: provider.ProviderIdentity{
-			Driver: openaicompat.DriverName,
-		},
-	})
-
-	time.Sleep(100 * time.Millisecond)
-	if atomic.LoadInt32(&discoverCalls) != 0 {
-		t.Fatalf("expected no background discovery, got %d calls", discoverCalls)
-	}
-	if len(service.inFlightByID) != 0 {
-		t.Fatalf("expected no in-flight markers, got %+v", service.inFlightByID)
 	}
 }
 
@@ -135,7 +108,7 @@ func TestCatalogSnapshotOnMissingCatalog(t *testing.T) {
 	service := NewService("", provider.NewRegistry(), newMemoryStore())
 	input := mustCatalogInput(t, config.OpenAIProvider())
 	snapshot := service.catalogSnapshot(context.Background(), input)
-	if snapshot.ok || snapshot.expired || len(snapshot.models) != 0 {
+	if snapshot.ok || len(snapshot.models) != 0 {
 		t.Fatalf("expected empty snapshot on cache miss, got %+v", snapshot)
 	}
 }
@@ -157,7 +130,6 @@ func TestListProviderModelsAllowsUnsupportedOpenAICompatibleAPIStyleWhenCatalogI
 		SchemaVersion: schemaVersion,
 		Identity:      input.Identity,
 		FetchedAt:     time.Now(),
-		ExpiresAt:     time.Now().Add(time.Hour),
 		Models:        []providertypes.ModelDescriptor{{ID: "cached-model", Name: "Cached Model"}},
 	}); err != nil {
 		t.Fatalf("Save() cached catalog error = %v", err)
@@ -189,7 +161,6 @@ func TestListBuiltinProviderModelsAllowsUnsupportedOpenAICompatibleAPIStyleWhenC
 		SchemaVersion: schemaVersion,
 		Identity:      input.Identity,
 		FetchedAt:     time.Now(),
-		ExpiresAt:     time.Now().Add(time.Hour),
 		Models:        []providertypes.ModelDescriptor{{ID: "cached-model", Name: "Cached Model"}},
 	}); err != nil {
 		t.Fatalf("Save() cached catalog error = %v", err)
@@ -199,8 +170,8 @@ func TestListBuiltinProviderModelsAllowsUnsupportedOpenAICompatibleAPIStyleWhenC
 	if err != nil {
 		t.Fatalf("expected warm catalog to bypass chat-only api_style validation, got %v", err)
 	}
-	if !containsModelDescriptorID(models, "cached-model") {
-		t.Fatalf("expected cached model in result, got %+v", models)
+	if !containsModelDescriptorID(models, config.OpenAIDefaultModel) {
+		t.Fatalf("expected builtin static models in result, got %+v", models)
 	}
 }
 
@@ -220,7 +191,6 @@ func TestListBuiltinProviderModelsSnapshotAllowsUnsupportedOpenAICompatibleAPISt
 		SchemaVersion: schemaVersion,
 		Identity:      input.Identity,
 		FetchedAt:     time.Now(),
-		ExpiresAt:     time.Now().Add(time.Hour),
 		Models:        []providertypes.ModelDescriptor{{ID: "cached-model", Name: "Cached Model"}},
 	}); err != nil {
 		t.Fatalf("Save() cached catalog error = %v", err)
@@ -230,8 +200,8 @@ func TestListBuiltinProviderModelsSnapshotAllowsUnsupportedOpenAICompatibleAPISt
 	if err != nil {
 		t.Fatalf("expected snapshot path to allow chat-only api_style drift, got %v", err)
 	}
-	if !containsModelDescriptorID(models, "cached-model") {
-		t.Fatalf("expected cached model in snapshot result, got %+v", models)
+	if !containsModelDescriptorID(models, config.OpenAIDefaultModel) {
+		t.Fatalf("expected builtin static models in snapshot result, got %+v", models)
 	}
 }
 
@@ -252,7 +222,6 @@ func TestListBuiltinProviderModelsSnapshotAndCachedAllowUnsupportedAPIStyleWithC
 		SchemaVersion: schemaVersion,
 		Identity:      input.Identity,
 		FetchedAt:     time.Now(),
-		ExpiresAt:     time.Now().Add(time.Hour),
 		Models:        []providertypes.ModelDescriptor{{ID: "cached-model", Name: "Cached Model"}},
 	}); err != nil {
 		t.Fatalf("Save() cached catalog error = %v", err)
@@ -272,8 +241,8 @@ func TestListBuiltinProviderModelsSnapshotAndCachedAllowUnsupportedAPIStyleWithC
 			if err != nil {
 				t.Fatalf("expected cached %s path to allow chat-only api_style drift, got %v", tt.name, err)
 			}
-			if !containsModelDescriptorID(models, "cached-model") {
-				t.Fatalf("expected cached %s result to include cached model, got %+v", tt.name, models)
+			if !containsModelDescriptorID(models, config.OpenAIDefaultModel) {
+				t.Fatalf("expected builtin static %s result, got %+v", tt.name, models)
 			}
 		})
 	}

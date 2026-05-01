@@ -31,6 +31,7 @@ const (
 	reasonInvalidTransition   = "invalid_transition"
 	reasonDependencyViolation = "dependency_violation"
 	reasonRevisionConflict    = "revision_conflict"
+	reasonTerminalNoop        = "terminal_noop"
 )
 
 const (
@@ -514,16 +515,78 @@ func errorResult(reason string, details string, extra map[string]any) tools.Tool
 }
 
 func successResult(action string, items []agentsession.TodoItem) tools.ToolResult {
+	return successResultWithMetadata(action, items, nil)
+}
+
+func successResultWithMetadata(action string, items []agentsession.TodoItem, extra map[string]any) tools.ToolResult {
 	content := renderTodos(action, items)
+	snapshotItems, summary := buildTodoSnapshotMetadata(items)
 	result := tools.ToolResult{
 		Name:    tools.ToolNameTodoWrite,
 		Content: content,
 		Metadata: map[string]any{
-			"action":     strings.TrimSpace(action),
-			"todo_count": len(items),
+			"action":        strings.TrimSpace(action),
+			"todo_count":    len(items),
+			"todo_snapshot": snapshotItems,
+			"todo_summary":  summary,
 		},
 	}
+	for key, value := range extra {
+		result.Metadata[key] = value
+	}
 	return tools.ApplyOutputLimit(result, tools.DefaultOutputLimitBytes)
+}
+
+func buildTodoSnapshotMetadata(items []agentsession.TodoItem) ([]map[string]any, map[string]any) {
+	if len(items) == 0 {
+		return nil, map[string]any{
+			"total":              0,
+			"required_total":     0,
+			"required_completed": 0,
+			"required_failed":    0,
+			"required_open":      0,
+		}
+	}
+
+	viewItems := make([]map[string]any, 0, len(items))
+	requiredTotal := 0
+	requiredCompleted := 0
+	requiredFailed := 0
+	requiredOpen := 0
+	for _, item := range items {
+		required := item.RequiredValue()
+		if required {
+			requiredTotal++
+			switch item.Status {
+			case agentsession.TodoStatusCompleted:
+				requiredCompleted++
+			case agentsession.TodoStatusFailed:
+				requiredFailed++
+			case agentsession.TodoStatusCanceled:
+				// canceled 不计入 open。
+			default:
+				requiredOpen++
+			}
+		}
+		viewItems = append(viewItems, map[string]any{
+			"id":             strings.TrimSpace(item.ID),
+			"content":        strings.TrimSpace(item.Content),
+			"status":         strings.TrimSpace(string(item.Status)),
+			"required":       required,
+			"artifacts":      append([]string(nil), item.Artifacts...),
+			"failure_reason": strings.TrimSpace(item.FailureReason),
+			"blocked_reason": strings.TrimSpace(string(item.BlockedReasonValue())),
+			"revision":       item.Revision,
+		})
+	}
+
+	return viewItems, map[string]any{
+		"total":              len(items),
+		"required_total":     requiredTotal,
+		"required_completed": requiredCompleted,
+		"required_failed":    requiredFailed,
+		"required_open":      requiredOpen,
+	}
 }
 
 func renderTodos(action string, items []agentsession.TodoItem) string {

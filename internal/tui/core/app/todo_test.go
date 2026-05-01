@@ -588,7 +588,8 @@ func TestParseTodoEventPayload(t *testing.T) {
 	}
 	var nilPayload *agentruntime.TodoEventPayload
 	got, ok = parseTodoEventPayload(nilPayload)
-	if ok || got != (agentruntime.TodoEventPayload{}) {
+	if ok || got.Action != "" || got.Reason != "" || len(got.Items) != 0 ||
+		got.Summary.RequiredTotal != 0 || got.Summary.RequiredCompleted != 0 || got.Summary.RequiredOpen != 0 {
 		t.Fatalf("expected nil pointer payload to fail parse, got %#v ok=%v", got, ok)
 	}
 
@@ -597,8 +598,34 @@ func TestParseTodoEventPayload(t *testing.T) {
 		t.Fatalf("unexpected map parse result: %#v ok=%v", got, ok)
 	}
 
+	got, ok = parseTodoEventPayload(map[string]any{
+		"action":             "set_status",
+		"required_total":     3.0,
+		"required_completed": 1,
+		"required_open":      2,
+		"todos": []any{
+			map[string]any{
+				"id":             "todo-1",
+				"content":        "fix bug",
+				"status":         "pending",
+				"required":       true,
+				"blocked_reason": "internal_dependency",
+			},
+		},
+	})
+	if !ok {
+		t.Fatalf("expected map with summary fields to parse")
+	}
+	if got.Summary.RequiredTotal != 3 || got.Summary.RequiredCompleted != 1 || got.Summary.RequiredOpen != 2 {
+		t.Fatalf("unexpected required summary parse result: %#v", got)
+	}
+	if len(got.Items) != 1 || got.Items[0].ID != "todo-1" || !got.Items[0].Required {
+		t.Fatalf("unexpected todo snapshot parse result: %#v", got)
+	}
+
 	got, ok = parseTodoEventPayload(fmt.Errorf("invalid"))
-	if ok || got != (agentruntime.TodoEventPayload{}) {
+	if ok || got.Action != "" || got.Reason != "" || len(got.Items) != 0 ||
+		got.Summary.RequiredTotal != 0 || got.Summary.RequiredCompleted != 0 || got.Summary.RequiredOpen != 0 {
 		t.Fatalf("expected invalid payload to fail parse, got %#v ok=%v", got, ok)
 	}
 }
@@ -628,5 +655,80 @@ func TestTodoRuntimeEventsRegistered(t *testing.T) {
 	}
 	if _, ok := runtimeEventHandlerRegistry[agentruntime.EventTodoConflict]; !ok {
 		t.Fatalf("expected todo_conflict handler to be registered")
+	}
+}
+
+func TestRuntimeEventTodoSnapshotUpdatedHandler(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.state.ActiveSessionID = "session-1"
+
+	handled := runtimeEventTodoSnapshotUpdatedHandler(&app, agentruntime.RuntimeEvent{
+		SessionID: "session-1",
+		Payload: map[string]any{
+			"action": "snapshot",
+			"summary": map[string]any{
+				"required_total":     2.0,
+				"required_completed": 1.0,
+				"required_open":      1.0,
+			},
+			"items": []any{
+				map[string]any{
+					"id":       "todo-1",
+					"content":  "sync todo",
+					"status":   "pending",
+					"required": true,
+				},
+			},
+		},
+	})
+	if handled {
+		t.Fatalf("expected todo snapshot handler to return false")
+	}
+	if len(app.todoItems) != 1 || app.todoItems[0].ID != "todo-1" {
+		t.Fatalf("todo items = %+v", app.todoItems)
+	}
+	if app.state.StatusText != "Todo: 1/2 completed" {
+		t.Fatalf("status text = %q", app.state.StatusText)
+	}
+}
+
+func TestParseTodoEventPayloadCoversCoerceHelpers(t *testing.T) {
+	got, ok := parseTodoEventPayload(map[string]any{
+		"Action": "update",
+		"Reason": "sync",
+		"summary": map[string]any{
+			"total":              4.0,
+			"required_total":     2.0,
+			"required_completed": 1.0,
+			"required_failed":    1.0,
+			"required_open":      0.0,
+		},
+		"items": []any{
+			map[string]any{
+				"id":         "todo-1",
+				"content":    "A",
+				"status":     "completed",
+				"required":   "true",
+				"revision":   float64(3),
+				"artifacts":  []any{" a.md ", "", "b.md"},
+				"owner":      "x",
+				"not_parsed": 1,
+			},
+		},
+	})
+	if !ok {
+		t.Fatalf("expected payload to parse")
+	}
+	if got.Action != "update" || got.Reason != "sync" {
+		t.Fatalf("action/reason = %q/%q", got.Action, got.Reason)
+	}
+	if len(got.Items) != 1 || !got.Items[0].Required || got.Items[0].Revision != 3 {
+		t.Fatalf("items = %+v", got.Items)
+	}
+	if len(got.Items[0].Artifacts) != 2 || got.Items[0].Artifacts[0] != "a.md" {
+		t.Fatalf("artifacts = %#v", got.Items[0].Artifacts)
+	}
+	if got.Summary.RequiredFailed != 1 || got.Summary.Total != 4 {
+		t.Fatalf("summary = %+v", got.Summary)
 	}
 }
