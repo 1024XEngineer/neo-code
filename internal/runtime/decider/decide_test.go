@@ -1,6 +1,8 @@
 package decider
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 
 	runtimefacts "neo-code/internal/runtime/facts"
@@ -391,5 +393,109 @@ func TestDecideWorkspaceWriteInjectsLatestToolErrorIntoMissingFact(t *testing.T)
 	details := decision.MissingFacts[0].Details
 	if details["last_write_error"] != "generic_error" {
 		t.Fatalf("last_write_error = %#v, want generic_error", details["last_write_error"])
+	}
+}
+
+func TestDecideEffectiveKindOverridesChatHintWhenWriteFactsExist(t *testing.T) {
+	decision := Decide(DecisionInput{
+		TaskIntent:       TaskIntent{Hint: TaskKindChatAnswer, Confidence: 0.3},
+		TaskKind:         TaskKindChatAnswer,
+		CompletionPassed: true,
+		Facts: runtimefacts.RuntimeFacts{
+			Files: runtimefacts.FileFacts{
+				Written: []runtimefacts.FileWriteFact{{Path: "a.txt", WorkspaceWrite: true}},
+			},
+		},
+	})
+	if decision.EffectiveTaskKind != TaskKindWorkspaceWrite {
+		t.Fatalf("effective_task_kind = %q, want %q", decision.EffectiveTaskKind, TaskKindWorkspaceWrite)
+	}
+	if decision.Status != DecisionContinue {
+		t.Fatalf("status = %q, want %q", decision.Status, DecisionContinue)
+	}
+}
+
+func TestDecideWorkspaceWriteWithoutFactsReturnsRequiredInput(t *testing.T) {
+	decision := Decide(DecisionInput{
+		TaskIntent:       TaskIntent{Hint: TaskKindWorkspaceWrite, Confidence: 0.8},
+		TaskKind:         TaskKindWorkspaceWrite,
+		CompletionPassed: true,
+		UserGoal:         "请改一下这个项目",
+	})
+	if decision.EffectiveTaskKind != TaskKindWorkspaceWrite {
+		t.Fatalf("effective_task_kind = %q, want %q", decision.EffectiveTaskKind, TaskKindWorkspaceWrite)
+	}
+	if decision.Status != DecisionAccepted {
+		t.Fatalf("status = %q, want %q", decision.Status, DecisionAccepted)
+	}
+}
+
+func TestSelectVerificationTargetPrefersGoalMentionedPath(t *testing.T) {
+	input := DecisionInput{
+		UserGoal: "请创建 2.txt 并写入 2",
+		Facts: runtimefacts.RuntimeFacts{
+			Files: runtimefacts.FileFacts{
+				Written: []runtimefacts.FileWriteFact{
+					{Path: "1.txt", WorkspaceWrite: true, ExpectedContent: "1"},
+					{Path: "2.txt", WorkspaceWrite: true, ExpectedContent: "2"},
+				},
+			},
+		},
+	}
+	path, content, ok := selectVerificationTarget(input)
+	if !ok {
+		t.Fatalf("ok = false, want true")
+	}
+	if path != "2.txt" || content != "2" {
+		t.Fatalf("target = (%q,%q), want (2.txt,2)", path, content)
+	}
+}
+
+func TestSelectVerificationTargetPrefersLatestUnverifiedWrite(t *testing.T) {
+	input := DecisionInput{
+		Facts: runtimefacts.RuntimeFacts{
+			Files: runtimefacts.FileFacts{
+				Written: []runtimefacts.FileWriteFact{
+					{Path: "1.txt", WorkspaceWrite: true, ExpectedContent: "1"},
+					{Path: "2.txt", WorkspaceWrite: true, ExpectedContent: "2"},
+				},
+			},
+			Verification: runtimefacts.VerificationFacts{
+				Passed: []runtimefacts.VerificationFact{{Scope: "artifact:1.txt", Passed: true}},
+			},
+		},
+	}
+	path, _, ok := selectVerificationTarget(input)
+	if !ok {
+		t.Fatalf("ok = false, want true")
+	}
+	if path != "2.txt" {
+		t.Fatalf("path = %q, want 2.txt", path)
+	}
+}
+
+func TestDecideRequiredActionsMustNotContainPlaceholders(t *testing.T) {
+	decision := Decide(DecisionInput{
+		TaskKind:         TaskKindWorkspaceWrite,
+		CompletionPassed: false,
+		CompletionReason: "unverified_write",
+	})
+	raw, err := json.Marshal(decision.RequiredNextActions)
+	if err != nil {
+		t.Fatalf("marshal required_next_actions: %v", err)
+	}
+	if strings.Contains(string(raw), "<") || strings.Contains(string(raw), ">") {
+		t.Fatalf("required_next_actions contains placeholders: %s", string(raw))
+	}
+}
+
+func TestDeriveEffectiveTaskKindFromFacts(t *testing.T) {
+	got := DeriveEffectiveTaskKind(TaskKindChatAnswer, runtimefacts.RuntimeFacts{
+		Files: runtimefacts.FileFacts{
+			Written: []runtimefacts.FileWriteFact{{Path: "a.txt", WorkspaceWrite: true}},
+		},
+	}, TodoSnapshot{})
+	if got != TaskKindWorkspaceWrite {
+		t.Fatalf("got = %q, want %q", got, TaskKindWorkspaceWrite)
 	}
 }

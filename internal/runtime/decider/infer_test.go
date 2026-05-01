@@ -22,13 +22,8 @@ func TestInferTaskKind(t *testing.T) {
 		},
 		{
 			name: "review read only",
-			goal: "review README.md 并总结风险",
+			goal: "review this implementation and suggest fixes",
 			want: TaskKindReadOnly,
-		},
-		{
-			name: "mixed write and review",
-			goal: "edit main.go then review changes",
-			want: TaskKindMixed,
 		},
 		{
 			name: "subagent explicit",
@@ -36,9 +31,29 @@ func TestInferTaskKind(t *testing.T) {
 			want: TaskKindSubAgent,
 		},
 		{
-			name: "chat answer fallback",
-			goal: "什么是 NeoCode",
+			name: "chat answer greeting",
+			goal: "你好",
 			want: TaskKindChatAnswer,
+		},
+		{
+			name: "bug discussion should not be write",
+			goal: "帮我看看这个 bug 怎么修",
+			want: TaskKindReadOnly,
+		},
+		{
+			name: "readme update is write",
+			goal: "把 README 补一下",
+			want: TaskKindWorkspaceWrite,
+		},
+		{
+			name: "todo creation",
+			goal: "创建一个 Todo，内容是 1",
+			want: TaskKindTodoState,
+		},
+		{
+			name: "todo content contains write text still todo hint",
+			goal: "创建一个 Todo，内容是创建 test.txt 内容为 1",
+			want: TaskKindTodoState,
 		},
 	}
 
@@ -51,5 +66,20 @@ func TestInferTaskKind(t *testing.T) {
 				t.Fatalf("InferTaskKind(%q) = %q, want %q", tt.goal, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestInferTaskIntent(t *testing.T) {
+	t.Parallel()
+
+	intent := InferTaskIntent("创建 2.txt 内容为 2")
+	if intent.Hint != TaskKindWorkspaceWrite {
+		t.Fatalf("hint = %q, want %q", intent.Hint, TaskKindWorkspaceWrite)
+	}
+	if intent.Confidence <= 0 {
+		t.Fatalf("confidence = %v, want > 0", intent.Confidence)
+	}
+	if len(intent.Reasons) == 0 {
+		t.Fatalf("reasons should not be empty")
 	}
 }

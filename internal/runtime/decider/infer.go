@@ -4,9 +4,14 @@ import "strings"
 
 // InferTaskKind 通过规则推断任务类型，避免依赖模型分类。
 func InferTaskKind(goal string) TaskKind {
+	return InferTaskIntent(goal).Hint
+}
+
+// InferTaskIntent 基于文本推导弱意图，仅作为后续事实修正前的初始提示。
+func InferTaskIntent(goal string) TaskIntent {
 	text := strings.ToLower(strings.TrimSpace(goal))
 	if text == "" {
-		return TaskKindChatAnswer
+		return TaskIntent{Hint: TaskKindChatAnswer, Confidence: 0.2, Reasons: []string{"empty_goal"}}
 	}
 
 	hasTodo := containsAny(text, "todo", "待办")
@@ -14,37 +19,56 @@ func InferTaskKind(goal string) TaskKind {
 	hasWriteVerb := containsAny(
 		text,
 		"创建文件", "写入", "修改文件", "编辑文件", "新增文件", "补丁", "修复代码",
-		"create file", "write file", "edit file", "update file", "apply patch", "implement", "fix",
+		"create file", "write file", "edit file", "update file", "apply patch",
 	)
-	hasFileTarget := containsAny(text, ".txt", ".go", ".md", ".json", ".yaml", ".yml", ".ts", ".tsx")
-	hasWriteIntentToken := containsAny(text, "创建", "写", "改", "edit", "write", "update", "create", "modify")
+	hasFileTarget := containsAny(text, ".txt", ".go", ".md", ".json", ".yaml", ".yml", ".ts", ".tsx", "readme")
+	hasWriteIntentToken := containsAny(text, "创建", "写", "改", "补", "edit", "write", "update", "create", "modify")
 	hasWrite := hasWriteVerb || (hasFileTarget && hasWriteIntentToken)
+	readSignalText := strings.ReplaceAll(text, "readme", "")
 	hasRead := containsAny(
-		text,
+		readSignalText,
 		"读取", "查看", "总结", "分析", "检索", "搜索", "审查", "review", "verify", "验证", "校验",
-		"read", "grep", "glob", "list", "inspect", "analyze", "summarize",
+		"read", "grep", "glob", "list", "inspect", "analyze", "summarize", "看看", "bug",
 	)
 	hasPlan := containsAny(text, "计划", "规划", "plan", "todo 列表", "todo list")
 	hasTodoAction := containsAny(text, "创建 todo", "更新 todo", "完成 todo", "标记 todo", "todo")
 
+	intent := TaskIntent{Hint: TaskKindChatAnswer, Confidence: 0.4, Reasons: []string{"default_chat_fallback"}}
 	switch {
+	case hasTodo && hasTodoAction && !hasSubAgent:
+		intent.Hint = TaskKindTodoState
+		intent.Confidence = 0.75
+		intent.Reasons = []string{"todo_action_priority"}
 	case hasSubAgent && hasWrite:
-		return TaskKindSubAgent
+		intent.Hint = TaskKindSubAgent
+		intent.Confidence = 0.8
+		intent.Reasons = []string{"explicit_subagent", "write_signal"}
 	case hasSubAgent:
-		return TaskKindSubAgent
+		intent.Hint = TaskKindSubAgent
+		intent.Confidence = 0.85
+		intent.Reasons = []string{"explicit_subagent"}
 	case hasPlan && hasTodo && !hasWrite:
-		return TaskKindTodoState
-	case hasTodo && hasTodoAction && !hasWrite:
-		return TaskKindTodoState
+		intent.Hint = TaskKindTodoState
+		intent.Confidence = 0.8
+		intent.Reasons = []string{"todo_plan_without_write"}
 	case hasWrite && hasRead:
-		return TaskKindMixed
+		intent.Hint = TaskKindMixed
+		intent.Confidence = 0.75
+		intent.Reasons = []string{"write_and_read_signals"}
 	case hasWrite:
-		return TaskKindWorkspaceWrite
+		intent.Hint = TaskKindWorkspaceWrite
+		intent.Confidence = 0.75
+		intent.Reasons = []string{"write_signal"}
 	case hasRead:
-		return TaskKindReadOnly
+		intent.Hint = TaskKindReadOnly
+		intent.Confidence = 0.7
+		intent.Reasons = []string{"read_signal"}
 	default:
-		return TaskKindChatAnswer
+		intent.Hint = TaskKindChatAnswer
+		intent.Confidence = 0.45
+		intent.Reasons = []string{"no_strong_signal"}
 	}
+	return intent
 }
 
 // containsAny 判断文本是否包含任一关键词。

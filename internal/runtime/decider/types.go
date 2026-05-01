@@ -50,12 +50,30 @@ type RequiredAction struct {
 	ArgsHint map[string]any `json:"args_hint,omitempty"`
 }
 
+// RequiredInput 描述继续执行前缺失的用户输入。
+type RequiredInput struct {
+	Kind    string         `json:"kind"`
+	Message string         `json:"message"`
+	Details map[string]any `json:"details,omitempty"`
+}
+
+// TaskIntent 描述基于用户文本推断的弱意图提示。
+type TaskIntent struct {
+	Hint       TaskKind `json:"hint"`
+	Confidence float64  `json:"confidence"`
+	Reasons    []string `json:"reasons,omitempty"`
+	Effective  TaskKind `json:"effective_task_kind,omitempty"`
+}
+
 // Decision 描述最终裁决结果。
 type Decision struct {
 	Status              DecisionStatus   `json:"status"`
 	StopReason          string           `json:"stop_reason,omitempty"`
 	MissingFacts        []MissingFact    `json:"missing_facts,omitempty"`
 	RequiredNextActions []RequiredAction `json:"required_next_actions,omitempty"`
+	RequiredInput       *RequiredInput   `json:"required_input,omitempty"`
+	IntentHint          TaskIntent       `json:"intent_hint,omitempty"`
+	EffectiveTaskKind   TaskKind         `json:"effective_task_kind,omitempty"`
 	UserVisibleSummary  string           `json:"user_visible_summary,omitempty"`
 	InternalSummary     string           `json:"internal_summary,omitempty"`
 }
@@ -97,6 +115,7 @@ type DecisionInput struct {
 	RunID              string
 	SessionID          string
 	TaskKind           TaskKind
+	TaskIntent         TaskIntent
 	UserGoal           string
 	Facts              facts.RuntimeFacts
 	Todos              TodoSnapshot

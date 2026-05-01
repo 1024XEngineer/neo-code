@@ -100,8 +100,9 @@ func (s *Service) evaluateFinalDecision(
 	if strings.TrimSpace(userGoal) == "" {
 		userGoal = renderPartsForVerification(assistant.Parts)
 	}
+	taskIntent := decider.InferTaskIntent(userGoal)
 	if strings.TrimSpace(string(taskKind)) == "" {
-		taskKind = decider.InferTaskKind(userGoal)
+		taskKind = taskIntent.Hint
 	}
 	if todoSnapshot.Summary.RequiredOpen > 0 {
 		completionPassed = false
@@ -114,6 +115,7 @@ func (s *Service) evaluateFinalDecision(
 		RunID:              strings.TrimSpace(state.runID),
 		SessionID:          strings.TrimSpace(state.session.ID),
 		TaskKind:           taskKind,
+		TaskIntent:         taskIntent,
 		UserGoal:           userGoal,
 		Facts:              factsSnapshot,
 		Todos:              toDeciderTodoSnapshot(todoSnapshot),

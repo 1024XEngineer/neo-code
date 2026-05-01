@@ -1,6 +1,7 @@
 package decider
 
 import (
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -10,10 +11,35 @@ import (
 
 // Decide 执行最终终态裁决，作为 runtime 的唯一决策入口。
 func Decide(input DecisionInput) Decision {
+	intent := input.TaskIntent
+	if strings.TrimSpace(string(intent.Hint)) == "" {
+		if strings.TrimSpace(string(input.TaskKind)) != "" {
+			intent = TaskIntent{
+				Hint:       input.TaskKind,
+				Confidence: 0.6,
+				Reasons:    []string{"provided_task_kind"},
+			}
+		} else {
+			intent = InferTaskIntent(input.UserGoal)
+		}
+	}
+	hint := intent.Hint
+	if strings.TrimSpace(string(hint)) == "" {
+		hint = input.TaskKind
+	}
+	if strings.TrimSpace(string(hint)) == "" {
+		hint = TaskKindChatAnswer
+	}
+	effectiveKind := DeriveEffectiveTaskKind(hint, input.Facts, input.Todos)
+	intent.Effective = effectiveKind
+	input.TaskKind = effectiveKind
+
 	if input.Todos.Summary.RequiredFailed > 0 {
 		return Decision{
 			Status:             DecisionFailed,
 			StopReason:         "required_todo_failed",
+			IntentHint:         intent,
+			EffectiveTaskKind:  effectiveKind,
 			UserVisibleSummary: "存在 required todo 失败，任务已终止。",
 			InternalSummary:    "required todo entered failed terminal state",
 		}
@@ -22,35 +48,39 @@ func Decide(input DecisionInput) Decision {
 		return Decision{
 			Status:             DecisionIncomplete,
 			StopReason:         "no_progress_after_final_intercept",
+			IntentHint:         intent,
+			EffectiveTaskKind:  effectiveKind,
 			UserVisibleSummary: "连续多轮缺少新事实，任务以未完成结束。",
 			InternalSummary:    "no progress exceeded while final intercepted",
 		}
 	}
 	if !input.CompletionPassed {
-		return continueWithCompletionReason(input)
+		return withDecisionContext(continueWithCompletionReason(input), intent, effectiveKind)
 	}
 
+	var out Decision
 	switch input.TaskKind {
 	case TaskKindTodoState:
-		return decideTodoState(input)
+		out = decideTodoState(input)
 	case TaskKindWorkspaceWrite:
-		return decideWorkspaceWrite(input)
+		out = decideWorkspaceWrite(input)
 	case TaskKindSubAgent:
-		return decideSubAgent(input)
+		out = decideSubAgent(input)
 	case TaskKindReadOnly:
-		return decideReadOnly(input)
+		out = decideReadOnly(input)
 	case TaskKindMixed:
-		return decideMixed(input)
+		out = decideMixed(input)
 	case TaskKindChatAnswer:
 		fallthrough
 	default:
-		return Decision{
+		out = Decision{
 			Status:             DecisionAccepted,
 			StopReason:         "accepted",
 			UserVisibleSummary: "任务完成。",
 			InternalSummary:    "chat answer accepted by completion gate",
 		}
 	}
+	return withDecisionContext(out, intent, effectiveKind)
 }
 
 // continueWithCompletionReason 把 completion gate 阻塞转成可执行缺失事实提示。
@@ -79,9 +109,24 @@ func continueWithCompletionReason(input DecisionInput) Decision {
 			InternalSummary:    "completion blocked by pending_todo",
 		}
 	case "unverified_write":
-		target, expectedContent := latestWriteVerificationHint(input.Facts, "")
-		if target == "" {
-			target = "workspace_write"
+		target, expectedContent, ok := selectVerificationTarget(input)
+		if !ok {
+			return Decision{
+				Status:     DecisionContinue,
+				StopReason: "todo_not_converged",
+				MissingFacts: []MissingFact{{
+					Kind: "verification_target_missing",
+					Details: map[string]any{
+						"reason": "cannot infer target path/content from user goal",
+					},
+				}},
+				RequiredInput: &RequiredInput{
+					Kind:    "missing_file_target_or_content",
+					Message: "无法从当前任务中确定要验证的文件路径或内容，需要用户补充。",
+				},
+				UserVisibleSummary: "写入事实尚未完成验证，但当前缺少可执行的验证目标。",
+				InternalSummary:    "completion blocked by unverified_write without executable verification target",
+			}
 		}
 		scope := "artifact:" + target
 		if expectedContent != "" {
@@ -135,13 +180,10 @@ func continueWithCompletionReason(input DecisionInput) Decision {
 				Kind:   "post_execute_closure",
 				Target: "latest_tool_results",
 			}},
-			RequiredNextActions: []RequiredAction{{
-				Tool: "todo_write",
-				ArgsHint: map[string]any{
-					"action": "update",
-					"id":     "<todo-id>",
-				},
-			}},
+			RequiredInput: &RequiredInput{
+				Kind:    "missing_post_execute_closure_context",
+				Message: "需要基于最新工具结果补充对应的收尾动作（例如 todo 更新或验证动作）。",
+			},
 			UserVisibleSummary: "请先基于最新工具结果完成闭环，再尝试最终收尾。",
 			InternalSummary:    "completion blocked by post_execute_closure_required",
 		}
@@ -164,16 +206,10 @@ func decideTodoState(input DecisionInput) Decision {
 			MissingFacts: []MissingFact{{
 				Kind: "todo_created",
 			}},
-			RequiredNextActions: []RequiredAction{{
-				Tool: "todo_write",
-				ArgsHint: map[string]any{
-					"action": "add",
-					"item": map[string]any{
-						"id":      "todo-1",
-						"content": "<todo content>",
-					},
-				},
-			}},
+			RequiredInput: &RequiredInput{
+				Kind:    "missing_todo_content",
+				Message: "尚未创建 Todo，且无法从当前任务确定 Todo 内容，请补充。",
+			},
 			UserVisibleSummary: "尚未创建目标 Todo，请先调用 todo_write。",
 			InternalSummary:    "todo_state task missing created todo facts",
 		}
@@ -231,20 +267,32 @@ func decideWorkspaceWrite(input DecisionInput) Decision {
 				Kind:    "file_written",
 				Details: details,
 			}},
-			RequiredNextActions: []RequiredAction{{
-				Tool: "filesystem_write_file",
-				ArgsHint: map[string]any{
-					"path":    "target.txt",
-					"content": "<expected content>",
-				},
-			}},
+			RequiredInput: &RequiredInput{
+				Kind:    "missing_file_target_or_content",
+				Message: "还没有写入事实，且缺少可直接执行的文件路径或内容，请补充明确目标。",
+			},
 			UserVisibleSummary: "还没有写入事实，请先执行文件写入。",
 			InternalSummary:    "workspace_write task missing file_written fact",
 		}
 	}
-	target := strings.TrimSpace(input.Facts.Files.Written[0].Path)
-	if target == "" {
-		target = "target.txt"
+	target, _, ok := selectVerificationTarget(input)
+	if !ok {
+		return Decision{
+			Status:     DecisionContinue,
+			StopReason: "todo_not_converged",
+			MissingFacts: []MissingFact{{
+				Kind: "verification_target_missing",
+				Details: map[string]any{
+					"reason": "no writable artifact found for verification target selection",
+				},
+			}},
+			RequiredInput: &RequiredInput{
+				Kind:    "missing_file_target",
+				Message: "无法确定待验证文件，请补充路径或重新执行写入。",
+			},
+			UserVisibleSummary: "已存在写入事实，但无法确定当前轮次的验证目标。",
+			InternalSummary:    "workspace_write has writes but no selectable verification target",
+		}
 	}
 	if hasWorkspaceWriteHardFailure(input.Facts.Errors.ToolErrors, target) {
 		return Decision{
@@ -255,7 +303,7 @@ func decideWorkspaceWrite(input DecisionInput) Decision {
 		}
 	}
 	if !hasVerificationForTarget(input.Facts, target) {
-		verificationTarget, expectedContent := latestWriteVerificationHint(input.Facts, target)
+		verificationTarget, expectedContent, _ := selectVerificationTarget(input)
 		scope := fmt.Sprintf("artifact:%s", verificationTarget)
 		if expectedContent != "" {
 			return Decision{
@@ -314,15 +362,10 @@ func decideSubAgent(input DecisionInput) Decision {
 			MissingFacts: []MissingFact{{
 				Kind: "subagent_started",
 			}},
-			RequiredNextActions: []RequiredAction{{
-				Tool: "spawn_subagent",
-				ArgsHint: map[string]any{
-					"task_type":     "review",
-					"role":          "reviewer",
-					"content":       "<task instruction>",
-					"allowed_paths": []string{"."},
-				},
-			}},
+			RequiredInput: &RequiredInput{
+				Kind:    "missing_subagent_instruction",
+				Message: "尚未产生子代理启动事实，且缺少可直接执行的子代理任务指令。",
+			},
 			UserVisibleSummary: "尚未产生子代理启动事实，请显式调用 spawn_subagent。",
 			InternalSummary:    "subagent task missing start fact",
 		}
@@ -351,14 +394,10 @@ func decideSubAgent(input DecisionInput) Decision {
 				Kind:   "subagent_artifact_or_file_fact",
 				Target: "workspace_artifact",
 			}},
-			RequiredNextActions: []RequiredAction{{
-				Tool: "filesystem_glob",
-				ArgsHint: map[string]any{
-					"pattern":            "<artifact-pattern>",
-					"expect_min_matches": 1,
-					"verification_scope": "artifact:<artifact-pattern>",
-				},
-			}},
+			RequiredInput: &RequiredInput{
+				Kind:    "missing_subagent_artifact_pattern",
+				Message: "子代理已完成，但缺少可验证的产物路径或模式，需要补充。",
+			},
 			UserVisibleSummary: "子代理已完成，但缺少可验证的产物事实。",
 			InternalSummary:    "subagent completed without artifact/file evidence for write-intent goal",
 		}
@@ -373,7 +412,10 @@ func decideSubAgent(input DecisionInput) Decision {
 
 // decideReadOnly 判定只读任务是否可结束。
 func decideReadOnly(input DecisionInput) Decision {
-	if len(input.Facts.Files.Exists) == 0 && len(input.Facts.Commands.Executed) == 0 && len(input.LastAssistantText) == 0 {
+	if len(input.Facts.Files.Exists) == 0 &&
+		len(input.Facts.Commands.Executed) == 0 &&
+		len(input.Facts.Verification.Passed) == 0 &&
+		len(input.LastAssistantText) == 0 {
 		return Decision{
 			Status:             DecisionContinue,
 			StopReason:         "todo_not_converged",
@@ -567,4 +609,130 @@ func latestWriteVerificationHint(allFacts facts.RuntimeFacts, preferredPath stri
 		return normalizedPreferred, ""
 	}
 	return "", ""
+}
+
+// DeriveEffectiveTaskKind 基于运行事实与 todo 快照修正任务类型，文本仅作为弱提示。
+func DeriveEffectiveTaskKind(hint TaskKind, allFacts facts.RuntimeFacts, todos TodoSnapshot) TaskKind {
+	hasWrite := len(allFacts.Files.Written) > 0 || len(allFacts.Files.ContentMatch) > 0
+	hasVerification := len(allFacts.Verification.Passed) > 0
+	hasSubAgent := len(allFacts.SubAgents.Started) > 0 || len(allFacts.SubAgents.Completed) > 0 || len(allFacts.SubAgents.Failed) > 0
+	hasTodo := todos.Summary.Total > 0 || todos.Summary.RequiredTotal > 0 || todos.Summary.RequiredOpen > 0 ||
+		len(allFacts.Todos.CreatedIDs) > 0 || len(allFacts.Todos.CompletedIDs) > 0 || len(allFacts.Todos.FailedIDs) > 0
+	hasRead := len(allFacts.Files.Exists) > 0 || len(allFacts.Commands.Executed) > 0
+
+	switch {
+	case hasSubAgent && (hasWrite || hasTodo || hasVerification):
+		return TaskKindMixed
+	case hasSubAgent:
+		return TaskKindSubAgent
+	case hasWrite && (hasTodo || hasVerification || hasRead):
+		return TaskKindWorkspaceWrite
+	case hasWrite:
+		return TaskKindWorkspaceWrite
+	case hasTodo && !hasWrite:
+		return TaskKindTodoState
+	case hasRead || hasVerification:
+		return TaskKindReadOnly
+	default:
+		if strings.TrimSpace(string(hint)) == "" {
+			return TaskKindChatAnswer
+		}
+		return hint
+	}
+}
+
+// selectVerificationTarget 选择当前任务应验证的目标文件与期望内容。
+func selectVerificationTarget(input DecisionInput) (path string, expectedContent string, ok bool) {
+	writes := input.Facts.Files.Written
+	if len(writes) == 0 {
+		return "", "", false
+	}
+
+	if goalPath := detectGoalFilePath(input.UserGoal); goalPath != "" {
+		for i := len(writes) - 1; i >= 0; i-- {
+			writePath := strings.TrimSpace(writes[i].Path)
+			if strings.EqualFold(writePath, goalPath) {
+				return writePath, strings.TrimSpace(writes[i].ExpectedContent), true
+			}
+		}
+	}
+
+	for i := len(writes) - 1; i >= 0; i-- {
+		writePath := strings.TrimSpace(writes[i].Path)
+		if writePath == "" {
+			continue
+		}
+		if !hasVerificationForTarget(input.Facts, writePath) {
+			return writePath, strings.TrimSpace(writes[i].ExpectedContent), true
+		}
+	}
+
+	for i := len(writes) - 1; i >= 0; i-- {
+		writePath := strings.TrimSpace(writes[i].Path)
+		if writePath != "" {
+			return writePath, strings.TrimSpace(writes[i].ExpectedContent), true
+		}
+	}
+	return "", "", false
+}
+
+// detectGoalFilePath 尝试从用户目标中抽取显式文件路径。
+func detectGoalFilePath(goal string) string {
+	text := strings.TrimSpace(goal)
+	if text == "" {
+		return ""
+	}
+	separators := strings.NewReplacer("，", " ", ",", " ", "。", " ", "\n", " ", "\t", " ", "\"", " ", "'", " ", "(", " ", ")", " ")
+	tokens := strings.Fields(separators.Replace(text))
+	for _, token := range tokens {
+		candidate := strings.TrimSpace(token)
+		if candidate == "" {
+			continue
+		}
+		candidate = strings.Trim(candidate, "[]{}:;")
+		lower := strings.ToLower(candidate)
+		if strings.Contains(lower, "/") || strings.Contains(lower, ".") {
+			if hasFileSuffix(lower) {
+				return candidate
+			}
+		}
+	}
+	return ""
+}
+
+func hasFileSuffix(path string) bool {
+	return containsAny(path, ".txt", ".go", ".md", ".json", ".yaml", ".yml", ".ts", ".tsx", ".py")
+}
+
+func withDecisionContext(decision Decision, intent TaskIntent, effective TaskKind) Decision {
+	decision.IntentHint = intent
+	decision.EffectiveTaskKind = effective
+	decision.RequiredNextActions = filterExecutableActions(decision.RequiredNextActions)
+	return decision
+}
+
+func filterExecutableActions(actions []RequiredAction) []RequiredAction {
+	if len(actions) == 0 {
+		return nil
+	}
+	out := make([]RequiredAction, 0, len(actions))
+	for _, action := range actions {
+		if strings.TrimSpace(action.Tool) == "" {
+			continue
+		}
+		if hasPlaceholderAction(action) {
+			continue
+		}
+		out = append(out, action)
+	}
+	return out
+}
+
+func hasPlaceholderAction(action RequiredAction) bool {
+	raw, err := json.Marshal(action)
+	if err != nil {
+		return false
+	}
+	text := string(raw)
+	return strings.Contains(text, "<") || strings.Contains(text, ">")
 }
