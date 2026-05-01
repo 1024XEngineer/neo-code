@@ -32,9 +32,10 @@ type FileFacts struct {
 
 // FileWriteFact 描述一次写入事实。
 type FileWriteFact struct {
-	Path           string `json:"path"`
-	Bytes          int    `json:"bytes"`
-	WorkspaceWrite bool   `json:"workspace_write"`
+	Path            string `json:"path"`
+	Bytes           int    `json:"bytes"`
+	WorkspaceWrite  bool   `json:"workspace_write"`
+	ExpectedContent string `json:"expected_content,omitempty"`
 }
 
 // FileExistFact 描述一次文件存在性事实。

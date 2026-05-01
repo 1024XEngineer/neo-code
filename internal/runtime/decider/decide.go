@@ -79,33 +79,53 @@ func continueWithCompletionReason(input DecisionInput) Decision {
 			InternalSummary:    "completion blocked by pending_todo",
 		}
 	case "unverified_write":
+		target, expectedContent := latestWriteVerificationHint(input.Facts, "")
+		if target == "" {
+			target = "workspace_write"
+		}
+		scope := "artifact:" + target
+		if expectedContent != "" {
+			return Decision{
+				Status:     DecisionContinue,
+				StopReason: "todo_not_converged",
+				MissingFacts: []MissingFact{{
+					Kind:     "verification_passed",
+					Target:   target,
+					Expected: expectedContent,
+				}},
+				RequiredNextActions: []RequiredAction{
+					{
+						Tool: "filesystem_read_file",
+						ArgsHint: map[string]any{
+							"path":               target,
+							"expect_contains":    []string{expectedContent},
+							"verification_scope": scope,
+						},
+					},
+				},
+				UserVisibleSummary: "写入事实尚未完成验证，需要补充 verification facts。",
+				InternalSummary:    "completion blocked by unverified_write with content-aware verification action",
+			}
+		}
 		return Decision{
 			Status:     DecisionContinue,
 			StopReason: "todo_not_converged",
 			MissingFacts: []MissingFact{{
-				Kind:   "verification_passed",
-				Target: "workspace_write",
+				Kind:   "file_exists",
+				Target: target,
 			}},
 			RequiredNextActions: []RequiredAction{
 				{
-					Tool: "filesystem_read_file",
-					ArgsHint: map[string]any{
-						"path":               "<artifact-path>",
-						"expect_contains":    []string{"<expected-token>"},
-						"verification_scope": "artifact:<path>",
-					},
-				},
-				{
 					Tool: "filesystem_glob",
 					ArgsHint: map[string]any{
-						"pattern":            "<artifact-pattern>",
+						"pattern":            target,
 						"expect_min_matches": 1,
-						"verification_scope": "artifact:<pattern>",
+						"verification_scope": scope,
 					},
 				},
 			},
 			UserVisibleSummary: "写入事实尚未完成验证，需要补充 verification facts。",
-			InternalSummary:    "completion blocked by unverified_write",
+			InternalSummary:    "completion blocked by unverified_write with existence fallback action",
 		}
 	case "post_execute_closure_required":
 		return Decision{
@@ -235,23 +255,46 @@ func decideWorkspaceWrite(input DecisionInput) Decision {
 		}
 	}
 	if !hasVerificationForTarget(input.Facts, target) {
+		verificationTarget, expectedContent := latestWriteVerificationHint(input.Facts, target)
+		scope := fmt.Sprintf("artifact:%s", verificationTarget)
+		if expectedContent != "" {
+			return Decision{
+				Status:     DecisionContinue,
+				StopReason: "todo_not_converged",
+				MissingFacts: []MissingFact{{
+					Kind:     "verification_passed",
+					Target:   verificationTarget,
+					Expected: expectedContent,
+				}},
+				RequiredNextActions: []RequiredAction{{
+					Tool: "filesystem_read_file",
+					ArgsHint: map[string]any{
+						"path":               verificationTarget,
+						"expect_contains":    []string{expectedContent},
+						"verification_scope": scope,
+					},
+				}},
+				UserVisibleSummary: "已写入文件但尚未形成通过的验证事实。",
+				InternalSummary:    "workspace_write task missing content verification facts bound to target artifact",
+			}
+		}
 		return Decision{
 			Status:     DecisionContinue,
 			StopReason: "todo_not_converged",
 			MissingFacts: []MissingFact{{
-				Kind:   "verification_passed",
-				Target: target,
+				Kind:   "file_exists",
+				Target: verificationTarget,
 			}},
 			RequiredNextActions: []RequiredAction{{
-				Tool: "filesystem_read_file",
+				Tool: "filesystem_glob",
 				ArgsHint: map[string]any{
-					"path":               target,
-					"expect_contains":    []string{"<expected-token>"},
-					"verification_scope": fmt.Sprintf("artifact:%s", target),
+					"pattern":            verificationTarget,
+					"expect_min_matches": 1,
+					"verification_scope": scope,
 				},
 			}},
 			UserVisibleSummary: "已写入文件但尚未形成通过的验证事实。",
-			InternalSummary:    "workspace_write task missing verification passed facts bound to target artifact",
+			InternalSummary:    "workspace_write task missing existence verification facts bound to target artifact",
 		}
 	}
 	return Decision{
@@ -503,4 +546,25 @@ func hasSubAgentArtifactEvidence(allFacts facts.RuntimeFacts) bool {
 		return true
 	}
 	return false
+}
+
+// latestWriteVerificationHint 返回最适合下一步验证动作的写入目标与期望内容（若可用）。
+func latestWriteVerificationHint(allFacts facts.RuntimeFacts, preferredPath string) (string, string) {
+	normalizedPreferred := strings.TrimSpace(preferredPath)
+	writes := allFacts.Files.Written
+	for i := len(writes) - 1; i >= 0; i-- {
+		fact := writes[i]
+		path := strings.TrimSpace(fact.Path)
+		if path == "" {
+			continue
+		}
+		if normalizedPreferred != "" && !strings.EqualFold(path, normalizedPreferred) {
+			continue
+		}
+		return path, strings.TrimSpace(fact.ExpectedContent)
+	}
+	if normalizedPreferred != "" {
+		return normalizedPreferred, ""
+	}
+	return "", ""
 }

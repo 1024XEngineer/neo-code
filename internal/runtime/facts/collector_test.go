@@ -22,8 +22,9 @@ func TestCollectorApplyToolResultTodoAndVerificationFacts(t *testing.T) {
 		Name:    tools.ToolNameFilesystemWriteFile,
 		IsError: false,
 		Metadata: map[string]any{
-			"path":  "test.txt",
-			"bytes": 1,
+			"path":            "test.txt",
+			"bytes":           1,
+			"written_content": "1",
 		},
 		Facts: tools.ToolExecutionFacts{
 			WorkspaceWrite: true,
@@ -69,6 +70,12 @@ func TestCollectorApplyToolResultTodoAndVerificationFacts(t *testing.T) {
 	}
 	if len(snapshot.Files.Written) != 2 || snapshot.Files.Written[0].Path != "test.txt" || snapshot.Files.Written[1].Path != "edit.go" {
 		t.Fatalf("file written facts = %+v", snapshot.Files.Written)
+	}
+	if snapshot.Files.Written[0].ExpectedContent != "1" {
+		t.Fatalf("expected content = %q, want 1", snapshot.Files.Written[0].ExpectedContent)
+	}
+	if len(snapshot.Files.Exists) == 0 || snapshot.Files.Exists[0].Path != "test.txt" {
+		t.Fatalf("file exists facts = %+v", snapshot.Files.Exists)
 	}
 	if len(snapshot.Verification.Passed) != 1 {
 		t.Fatalf("verification passed facts = %+v", snapshot.Verification.Passed)
@@ -171,6 +178,9 @@ func TestCollectorApplyWriteFileVerificationFacts(t *testing.T) {
 	snapshot := collector.Snapshot()
 	if len(snapshot.Files.Written) != 1 || snapshot.Files.Written[0].Path != "verified.txt" {
 		t.Fatalf("written facts = %+v", snapshot.Files.Written)
+	}
+	if len(snapshot.Files.Exists) != 1 || snapshot.Files.Exists[0].Path != "verified.txt" {
+		t.Fatalf("exists facts = %+v", snapshot.Files.Exists)
 	}
 	if len(snapshot.Files.ContentMatch) != 1 {
 		t.Fatalf("content_match facts = %+v", snapshot.Files.ContentMatch)

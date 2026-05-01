@@ -223,17 +223,24 @@ func (c *Collector) applyWriteFileFacts(result tools.ToolResult) {
 		return
 	}
 	c.facts.Files.Written = append(c.facts.Files.Written, FileWriteFact{
-		Path:           path,
-		Bytes:          bytes,
-		WorkspaceWrite: true,
+		Path:            path,
+		Bytes:           bytes,
+		WorkspaceWrite:  true,
+		ExpectedContent: readStringDefault(result.Metadata, "written_content"),
 	})
 	c.facts.Progress.ObservedFactCount++
+	existsKey := fmt.Sprintf("file_exists:write:%s", path)
+	if c.markSeen(existsKey) {
+		c.facts.Files.Exists = append(c.facts.Files.Exists, FileExistFact{Path: path, Source: "filesystem_write_file"})
+		c.facts.Progress.ObservedFactCount++
+	}
 	if !result.Facts.VerificationPerformed {
 		return
 	}
 	contentFact := FileContentMatchFact{
 		Path:               path,
 		Scope:              strings.TrimSpace(result.Facts.VerificationScope),
+		ExpectedContains:   normalizeStringList(readStringSlice(result.Metadata, "verification_expected")),
 		VerificationPassed: result.Facts.VerificationPassed,
 	}
 	status := "failed"

@@ -72,6 +72,12 @@ func TestDecideWorkspaceWriteNeedsVerificationThenAccepts(t *testing.T) {
 	if continueDecision.Status != DecisionContinue {
 		t.Fatalf("status = %q, want %q", continueDecision.Status, DecisionContinue)
 	}
+	if len(continueDecision.MissingFacts) == 0 || continueDecision.MissingFacts[0].Kind != "file_exists" {
+		t.Fatalf("missing facts = %+v, want file_exists", continueDecision.MissingFacts)
+	}
+	if len(continueDecision.RequiredNextActions) == 0 || continueDecision.RequiredNextActions[0].Tool != "filesystem_glob" {
+		t.Fatalf("required actions = %+v, want filesystem_glob", continueDecision.RequiredNextActions)
+	}
 
 	acceptedDecision := Decide(DecisionInput{
 		TaskKind:         TaskKindWorkspaceWrite,
@@ -108,6 +114,55 @@ func TestDecideWorkspaceWriteVerificationMustBindTarget(t *testing.T) {
 	}
 	if len(decision.MissingFacts) == 0 || decision.MissingFacts[0].Target != "test.txt" {
 		t.Fatalf("missing facts = %+v, want target test.txt", decision.MissingFacts)
+	}
+}
+
+func TestDecideCompletionBlockedUnverifiedWriteUsesExpectedContentWhenAvailable(t *testing.T) {
+	decision := Decide(DecisionInput{
+		TaskKind:         TaskKindWorkspaceWrite,
+		CompletionPassed: false,
+		CompletionReason: "unverified_write",
+		Facts: runtimefacts.RuntimeFacts{
+			Files: runtimefacts.FileFacts{
+				Written: []runtimefacts.FileWriteFact{
+					{Path: "2.txt", Bytes: 1, WorkspaceWrite: true, ExpectedContent: "2"},
+				},
+			},
+		},
+	})
+	if decision.Status != DecisionContinue {
+		t.Fatalf("status = %q, want %q", decision.Status, DecisionContinue)
+	}
+	if len(decision.RequiredNextActions) == 0 || decision.RequiredNextActions[0].Tool != "filesystem_read_file" {
+		t.Fatalf("required actions = %+v, want filesystem_read_file", decision.RequiredNextActions)
+	}
+	expectContains, _ := decision.RequiredNextActions[0].ArgsHint["expect_contains"].([]string)
+	if len(expectContains) != 1 || expectContains[0] != "2" {
+		t.Fatalf("expect_contains = %#v, want [\"2\"]", decision.RequiredNextActions[0].ArgsHint["expect_contains"])
+	}
+}
+
+func TestDecideCompletionBlockedUnverifiedWriteFallsBackToExistsWhenContentUnknown(t *testing.T) {
+	decision := Decide(DecisionInput{
+		TaskKind:         TaskKindWorkspaceWrite,
+		CompletionPassed: false,
+		CompletionReason: "unverified_write",
+		Facts: runtimefacts.RuntimeFacts{
+			Files: runtimefacts.FileFacts{
+				Written: []runtimefacts.FileWriteFact{
+					{Path: "2.txt", Bytes: 1, WorkspaceWrite: true},
+				},
+			},
+		},
+	})
+	if decision.Status != DecisionContinue {
+		t.Fatalf("status = %q, want %q", decision.Status, DecisionContinue)
+	}
+	if len(decision.MissingFacts) == 0 || decision.MissingFacts[0].Kind != "file_exists" {
+		t.Fatalf("missing facts = %+v, want file_exists", decision.MissingFacts)
+	}
+	if len(decision.RequiredNextActions) == 0 || decision.RequiredNextActions[0].Tool != "filesystem_glob" {
+		t.Fatalf("required actions = %+v, want filesystem_glob", decision.RequiredNextActions)
 	}
 }
 
