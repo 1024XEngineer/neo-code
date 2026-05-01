@@ -1058,6 +1058,24 @@ func (stubRuntimePort) ListSessions(context.Context) ([]gateway.SessionSummary, 
 func (stubRuntimePort) LoadSession(context.Context, gateway.LoadSessionInput) (gateway.Session, error) {
 	return gateway.Session{}, nil
 }
+func (stubRuntimePort) DeleteSession(context.Context, gateway.DeleteSessionInput) (bool, error) {
+	return false, nil
+}
+func (stubRuntimePort) RenameSession(context.Context, gateway.RenameSessionInput) error {
+	return nil
+}
+func (stubRuntimePort) ListFiles(context.Context, gateway.ListFilesInput) ([]gateway.FileEntry, error) {
+	return nil, nil
+}
+func (stubRuntimePort) ListModels(context.Context, gateway.ListModelsInput) ([]gateway.ModelEntry, error) {
+	return nil, nil
+}
+func (stubRuntimePort) SetSessionModel(context.Context, gateway.SetSessionModelInput) error {
+	return nil
+}
+func (stubRuntimePort) GetSessionModel(context.Context, gateway.GetSessionModelInput) (gateway.SessionModelResult, error) {
+	return gateway.SessionModelResult{}, nil
+}
 
 func (stubRuntimePort) CreateSession(context.Context, gateway.CreateSessionInput) (string, error) {
 	return "", nil

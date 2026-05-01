@@ -183,8 +183,28 @@ func (r *runtimeWithoutCreator) ListAvailableSkills(
 	return r.base.ListAvailableSkills(ctx, sessionID)
 }
 
+type bridgeSessionStoreStub struct {
+	deleteFn func(ctx context.Context, id string) error
+	updateFn func(ctx context.Context, input agentsession.UpdateSessionStateInput) error
+}
+
+func (s *bridgeSessionStoreStub) DeleteSession(ctx context.Context, id string) error {
+	if s.deleteFn != nil {
+		return s.deleteFn(ctx, id)
+	}
+	return nil
+}
+func (s *bridgeSessionStoreStub) UpdateSessionState(ctx context.Context, input agentsession.UpdateSessionStateInput) error {
+	if s.updateFn != nil {
+		return s.updateFn(ctx, input)
+	}
+	return nil
+}
+
+var testSessionStore bridgeSessionStore = &bridgeSessionStoreStub{}
+
 func TestNewGatewayRuntimePortBridgeRuntimeUnavailable(t *testing.T) {
-	bridge, err := newGatewayRuntimePortBridge(context.Background(), nil)
+	bridge, err := newGatewayRuntimePortBridge(context.Background(), nil, nil)
 	if err == nil {
 		t.Fatal("expected error when runtime is nil")
 	}
@@ -341,7 +361,7 @@ func TestGatewayRuntimePortBridgeRuntimeMethods(t *testing.T) {
 		},
 	}
 
-	bridge, err := newGatewayRuntimePortBridge(context.Background(), stub)
+	bridge, err := newGatewayRuntimePortBridge(context.Background(), stub, testSessionStore)
 	if err != nil {
 		t.Fatalf("new bridge: %v", err)
 	}
@@ -546,7 +566,7 @@ func TestGatewayRuntimePortBridgeLoadSessionNotFoundBranches(t *testing.T) {
 	base := &runtimeStub{
 		loadErr: agentsession.ErrSessionNotFound,
 	}
-	bridgeWithoutCreator, err := newGatewayRuntimePortBridge(context.Background(), &runtimeWithoutCreator{base: base})
+	bridgeWithoutCreator, err := newGatewayRuntimePortBridge(context.Background(), &runtimeWithoutCreator{base: base}, testSessionStore)
 	if err != nil {
 		t.Fatalf("new bridge without creator: %v", err)
 	}
@@ -563,7 +583,7 @@ func TestGatewayRuntimePortBridgeLoadSessionNotFoundBranches(t *testing.T) {
 		loadErr:   os.ErrNotExist,
 		createErr: errors.New("create failed"),
 	}
-	bridgeWithCreator, err := newGatewayRuntimePortBridge(context.Background(), stub)
+	bridgeWithCreator, err := newGatewayRuntimePortBridge(context.Background(), stub, testSessionStore)
 	if err != nil {
 		t.Fatalf("new bridge with creator: %v", err)
 	}
@@ -604,7 +624,7 @@ func TestGatewayRuntimePortBridgeRuntimeMethodErrors(t *testing.T) {
 		listErr:              errors.New("list failed"),
 		loadErr:              errors.New("load failed"),
 	}
-	bridge, err := newGatewayRuntimePortBridge(context.Background(), stub)
+	bridge, err := newGatewayRuntimePortBridge(context.Background(), stub, testSessionStore)
 	if err != nil {
 		t.Fatalf("new bridge: %v", err)
 	}
@@ -676,7 +696,7 @@ func TestGatewayRuntimePortBridgeLoadSessionUpsertWhenMissing(t *testing.T) {
 			UpdatedAt: now,
 		},
 	}
-	bridge, err := newGatewayRuntimePortBridge(context.Background(), stub)
+	bridge, err := newGatewayRuntimePortBridge(context.Background(), stub, testSessionStore)
 	if err != nil {
 		t.Fatalf("new bridge: %v", err)
 	}
@@ -712,7 +732,7 @@ func TestGatewayRuntimePortBridgeLoadSessionNoUpsertOnPlainStringNotFoundError(t
 			UpdatedAt: now,
 		},
 	}
-	bridge, err := newGatewayRuntimePortBridge(context.Background(), stub)
+	bridge, err := newGatewayRuntimePortBridge(context.Background(), stub, testSessionStore)
 	if err != nil {
 		t.Fatalf("new bridge: %v", err)
 	}
@@ -800,7 +820,7 @@ func TestGatewayRuntimePortBridgeRunEventBridge(t *testing.T) {
 
 	source := make(chan agentruntime.RuntimeEvent, 3)
 	stub := &runtimeStub{eventsCh: source}
-	bridge, err := newGatewayRuntimePortBridge(ctx, stub)
+	bridge, err := newGatewayRuntimePortBridge(ctx, stub, testSessionStore)
 	if err != nil {
 		t.Fatalf("new bridge: %v", err)
 	}
@@ -850,7 +870,7 @@ func TestGatewayRuntimePortBridgeRunEventBridge(t *testing.T) {
 func TestGatewayRuntimePortBridgeStopsOnCloseAndContextCancel(t *testing.T) {
 	source := make(chan agentruntime.RuntimeEvent)
 	stub := &runtimeStub{eventsCh: source}
-	bridge, err := newGatewayRuntimePortBridge(context.Background(), stub)
+	bridge, err := newGatewayRuntimePortBridge(context.Background(), stub, testSessionStore)
 	if err != nil {
 		t.Fatalf("new bridge: %v", err)
 	}
@@ -868,7 +888,7 @@ func TestGatewayRuntimePortBridgeStopsOnCloseAndContextCancel(t *testing.T) {
 
 	cancelCtx, cancel := context.WithCancel(context.Background())
 	cancel()
-	cancelBridge, err := newGatewayRuntimePortBridge(cancelCtx, &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent)})
+	cancelBridge, err := newGatewayRuntimePortBridge(cancelCtx, &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent)}, testSessionStore)
 	if err != nil {
 		t.Fatalf("new cancel bridge: %v", err)
 	}
@@ -881,7 +901,7 @@ func TestGatewayRuntimePortBridgeStopsOnCloseAndContextCancel(t *testing.T) {
 		t.Fatal("timed out waiting for closed events after context cancel")
 	}
 
-	nilCtxBridge, err := newGatewayRuntimePortBridge(nil, &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent)})
+	nilCtxBridge, err := newGatewayRuntimePortBridge(nil, &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent)}, testSessionStore)
 	if err != nil {
 		t.Fatalf("new nil-ctx bridge: %v", err)
 	}
@@ -928,4 +948,137 @@ func TestConvertGatewayRunInputAndSessionHelpers(t *testing.T) {
 	if messages := convertSessionMessages(nil); messages != nil {
 		t.Fatalf("convert nil messages = %#v, want nil", messages)
 	}
+}
+
+func TestGatewayRuntimePortBridgeDeleteSession(t *testing.T) {
+	t.Run("success", func(t *testing.T) {
+		store := &bridgeSessionStoreStub{
+			deleteFn: func(_ context.Context, id string) error {
+				if id != "session-1" {
+					t.Fatalf("id = %q, want %q", id, "session-1")
+				}
+				return nil
+			},
+		}
+
+		stub := &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)}
+		bridge, err := newGatewayRuntimePortBridge(context.Background(), stub, store)
+		if err != nil {
+			t.Fatalf("new bridge: %v", err)
+		}
+		defer bridge.Close()
+
+		result, err := bridge.DeleteSession(context.Background(), gateway.DeleteSessionInput{
+			SubjectID: testBridgeSubjectID,
+			SessionID: "session-1",
+		})
+		if err != nil {
+			t.Fatalf("delete session: %v", err)
+		}
+		if !result {
+			t.Fatal("expected deleted=true")
+		}
+	})
+
+	t.Run("empty session id returns error", func(t *testing.T) {
+		stub := &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)}
+		bridge, err := newGatewayRuntimePortBridge(context.Background(), stub, testSessionStore)
+		if err != nil {
+			t.Fatalf("new bridge: %v", err)
+		}
+		defer bridge.Close()
+
+		_, err = bridge.DeleteSession(context.Background(), gateway.DeleteSessionInput{
+			SubjectID: testBridgeSubjectID,
+			SessionID: "  ",
+		})
+		if err == nil {
+			t.Fatal("expected error for empty session_id")
+		}
+	})
+
+	t.Run("nil session store returns error", func(t *testing.T) {
+		stub := &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)}
+		bridge, err := newGatewayRuntimePortBridge(context.Background(), stub, nil)
+		if err != nil {
+			t.Fatalf("new bridge: %v", err)
+		}
+		defer bridge.Close()
+
+		_, err = bridge.DeleteSession(context.Background(), gateway.DeleteSessionInput{
+			SubjectID: testBridgeSubjectID,
+			SessionID: "session-1",
+		})
+		if err == nil {
+			t.Fatal("expected error for nil session store")
+		}
+	})
+}
+
+func TestGatewayRuntimePortBridgeRenameSession(t *testing.T) {
+	t.Run("success", func(t *testing.T) {
+		store := &bridgeSessionStoreStub{
+			updateFn: func(_ context.Context, input agentsession.UpdateSessionStateInput) error {
+				if input.SessionID != "session-1" {
+					t.Fatalf("id = %q, want %q", input.SessionID, "session-1")
+				}
+				if input.Title != "New Title" {
+					t.Fatalf("title = %q, want %q", input.Title, "New Title")
+				}
+				return nil
+			},
+		}
+
+		stub := &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)}
+		bridge, err := newGatewayRuntimePortBridge(context.Background(), stub, store)
+		if err != nil {
+			t.Fatalf("new bridge: %v", err)
+		}
+		defer bridge.Close()
+
+		err = bridge.RenameSession(context.Background(), gateway.RenameSessionInput{
+			SubjectID: testBridgeSubjectID,
+			SessionID: "session-1",
+			Title:     "New Title",
+		})
+		if err != nil {
+			t.Fatalf("rename session: %v", err)
+		}
+	})
+
+	t.Run("empty title returns error", func(t *testing.T) {
+		stub := &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)}
+		bridge, err := newGatewayRuntimePortBridge(context.Background(), stub, testSessionStore)
+		if err != nil {
+			t.Fatalf("new bridge: %v", err)
+		}
+		defer bridge.Close()
+
+		err = bridge.RenameSession(context.Background(), gateway.RenameSessionInput{
+			SubjectID: testBridgeSubjectID,
+			SessionID: "session-1",
+			Title:     "  ",
+		})
+		if err == nil {
+			t.Fatal("expected error for empty title")
+		}
+	})
+
+	t.Run("empty session id returns error", func(t *testing.T) {
+		stub := &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)}
+		bridge, err := newGatewayRuntimePortBridge(context.Background(), stub, testSessionStore)
+		if err != nil {
+			t.Fatalf("new bridge: %v", err)
+		}
+		defer bridge.Close()
+
+		err = bridge.RenameSession(context.Background(), gateway.RenameSessionInput{
+			SubjectID: testBridgeSubjectID,
+			SessionID: "  ",
+			Title:     "New Title",
+		})
+		if err == nil {
+			t.Fatal("expected error for empty session_id")
+		}
+	})
 }
