@@ -370,14 +370,14 @@ func (c *Collector) applyVerificationFacts(toolName string, result tools.ToolRes
 	if !result.Facts.VerificationPerformed {
 		return
 	}
+	passed := result.Facts.VerificationPassed
 	fact := VerificationFact{
 		Tool:   strings.TrimSpace(toolName),
 		Scope:  strings.TrimSpace(result.Facts.VerificationScope),
 		Reason: strings.TrimSpace(readStringDefault(result.Metadata, "verification_reason")),
-		Passed: result.Facts.VerificationPassed,
 	}
 	status := "failed"
-	if fact.Passed {
+	if passed {
 		status = "passed"
 	}
 	key := fmt.Sprintf("verification:%s:%s:%s", fact.Tool, fact.Scope, status)
@@ -385,7 +385,7 @@ func (c *Collector) applyVerificationFacts(toolName string, result tools.ToolRes
 		return
 	}
 	c.facts.Verification.Performed = append(c.facts.Verification.Performed, fact)
-	if fact.Passed {
+	if passed {
 		c.facts.Verification.Passed = append(c.facts.Verification.Passed, fact)
 	} else {
 		c.facts.Verification.Failed = append(c.facts.Verification.Failed, fact)

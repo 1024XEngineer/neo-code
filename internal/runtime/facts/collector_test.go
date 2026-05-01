@@ -292,3 +292,59 @@ func TestSubAgentFactJSONDoesNotContainStateField(t *testing.T) {
 		t.Fatalf("subagent fact payload should not contain state field, got %s", string(payload))
 	}
 }
+
+func TestVerificationFactJSONDoesNotContainPassedField(t *testing.T) {
+	payload, err := json.Marshal(VerificationFact{
+		Tool:   "filesystem_read_file",
+		Scope:  "artifact:test.txt",
+		Reason: "content_match",
+	})
+	if err != nil {
+		t.Fatalf("marshal verification fact failed: %v", err)
+	}
+	if strings.Contains(string(payload), "\"passed\"") {
+		t.Fatalf("verification fact payload should not contain passed field, got %s", string(payload))
+	}
+}
+
+func TestCollectorVerificationFactsGroupedByCollections(t *testing.T) {
+	collector := NewCollector()
+
+	collector.ApplyToolResult(tools.ToolNameFilesystemReadFile, tools.ToolResult{
+		Name:    tools.ToolNameFilesystemReadFile,
+		IsError: false,
+		Metadata: map[string]any{
+			"path":                "pass.txt",
+			"verification_reason": "content_match",
+		},
+		Facts: tools.ToolExecutionFacts{
+			VerificationPerformed: true,
+			VerificationPassed:    true,
+			VerificationScope:     "artifact:pass.txt",
+		},
+	})
+	collector.ApplyToolResult(tools.ToolNameFilesystemReadFile, tools.ToolResult{
+		Name:    tools.ToolNameFilesystemReadFile,
+		IsError: false,
+		Metadata: map[string]any{
+			"path":                "fail.txt",
+			"verification_reason": "content_mismatch",
+		},
+		Facts: tools.ToolExecutionFacts{
+			VerificationPerformed: true,
+			VerificationPassed:    false,
+			VerificationScope:     "artifact:fail.txt",
+		},
+	})
+
+	snapshot := collector.Snapshot()
+	if len(snapshot.Verification.Performed) != 2 {
+		t.Fatalf("verification performed facts = %+v, want 2 entries", snapshot.Verification.Performed)
+	}
+	if len(snapshot.Verification.Passed) != 1 || snapshot.Verification.Passed[0].Scope != "artifact:pass.txt" {
+		t.Fatalf("verification passed facts = %+v", snapshot.Verification.Passed)
+	}
+	if len(snapshot.Verification.Failed) != 1 || snapshot.Verification.Failed[0].Scope != "artifact:fail.txt" {
+		t.Fatalf("verification failed facts = %+v", snapshot.Verification.Failed)
+	}
+}

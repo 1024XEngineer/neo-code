@@ -115,7 +115,7 @@ func TestDecideWorkspaceWriteNeedsVerificationThenAccepts(t *testing.T) {
 				Written: []runtimefacts.FileWriteFact{{Path: "test.txt", Bytes: 1, WorkspaceWrite: true}},
 			},
 			Verification: runtimefacts.VerificationFacts{
-				Passed: []runtimefacts.VerificationFact{{Tool: "filesystem_read_file", Scope: "artifact:test.txt", Passed: true}},
+				Passed: []runtimefacts.VerificationFact{{Tool: "filesystem_read_file", Scope: "artifact:test.txt"}},
 			},
 		},
 	})
@@ -133,7 +133,7 @@ func TestDecideWorkspaceWriteVerificationMustBindTarget(t *testing.T) {
 				Written: []runtimefacts.FileWriteFact{{Path: "test.txt", Bytes: 1, WorkspaceWrite: true}},
 			},
 			Verification: runtimefacts.VerificationFacts{
-				Passed: []runtimefacts.VerificationFact{{Tool: "filesystem_read_file", Scope: "artifact:other.txt", Passed: true}},
+				Passed: []runtimefacts.VerificationFact{{Tool: "filesystem_read_file", Scope: "artifact:other.txt"}},
 			},
 		},
 	})
@@ -154,7 +154,7 @@ func TestDecideWorkspaceWriteVerificationShouldNotMatchByBasenameOnly(t *testing
 				Written: []runtimefacts.FileWriteFact{{Path: "src/readme.md", Bytes: 1, WorkspaceWrite: true}},
 			},
 			Verification: runtimefacts.VerificationFacts{
-				Passed: []runtimefacts.VerificationFact{{Tool: "filesystem_read_file", Scope: "artifact:docs/readme.md", Passed: true}},
+				Passed: []runtimefacts.VerificationFact{{Tool: "filesystem_read_file", Scope: "artifact:docs/readme.md"}},
 			},
 		},
 	})
@@ -517,7 +517,7 @@ func TestDecideMixedBranches(t *testing.T) {
 		},
 		Facts: runtimefacts.RuntimeFacts{
 			Verification: runtimefacts.VerificationFacts{
-				Passed: []runtimefacts.VerificationFact{{Tool: "filesystem_glob", Scope: "artifact:test.txt", Passed: true}},
+				Passed: []runtimefacts.VerificationFact{{Tool: "filesystem_glob", Scope: "artifact:test.txt"}},
 			},
 		},
 	})
@@ -531,7 +531,7 @@ func TestDecideMixedBranches(t *testing.T) {
 		LastAssistantText: "analysis done",
 		Facts: runtimefacts.RuntimeFacts{
 			Verification: runtimefacts.VerificationFacts{
-				Passed: []runtimefacts.VerificationFact{{Tool: "filesystem_glob", Scope: "artifact:test.txt", Passed: true}},
+				Passed: []runtimefacts.VerificationFact{{Tool: "filesystem_glob", Scope: "artifact:test.txt"}},
 			},
 		},
 	})

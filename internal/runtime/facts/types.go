@@ -83,7 +83,10 @@ type SubAgentFact struct {
 	Artifacts  []string `json:"artifacts,omitempty"`
 }
 
-// VerificationFacts 描述验证事实。
+// VerificationFacts 按验证状态/结果分组保存验证事实。
+// Performed 表示已经执行过验证。
+// Passed / Failed 表示验证结果。
+// VerificationFact 本身不再携带 Passed 字段，避免出现双重状态来源。
 type VerificationFacts struct {
 	Performed []VerificationFact `json:"performed,omitempty"`
 	Passed    []VerificationFact `json:"passed,omitempty"`
@@ -107,7 +110,6 @@ type VerificationFact struct {
 	Tool   string `json:"tool,omitempty"`
 	Scope  string `json:"scope,omitempty"`
 	Reason string `json:"reason,omitempty"`
-	Passed bool   `json:"passed"`
 }
 
 // ProgressFacts 描述事实层的推进度。

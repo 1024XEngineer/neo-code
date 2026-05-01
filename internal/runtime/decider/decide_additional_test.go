@@ -59,7 +59,7 @@ func TestDecideTaskSpecificBranches(t *testing.T) {
 		decision := decideMixed(DecisionInput{
 			Facts: runtimefacts.RuntimeFacts{
 				Verification: runtimefacts.VerificationFacts{
-					Passed: []runtimefacts.VerificationFact{{Tool: "filesystem_read_file", Scope: "artifact:a.txt", Passed: true}},
+					Passed: []runtimefacts.VerificationFact{{Tool: "filesystem_read_file", Scope: "artifact:a.txt"}},
 				},
 			},
 			Todos: TodoSnapshot{Summary: TodoSummary{RequiredOpen: 0}},
@@ -94,7 +94,7 @@ func TestHelperFunctionsBranches(t *testing.T) {
 
 	if !hasVerificationForTarget(runtimefacts.RuntimeFacts{
 		Verification: runtimefacts.VerificationFacts{
-			Passed: []runtimefacts.VerificationFact{{Scope: "artifact:./docs/../docs/readme.md", Passed: true}},
+			Passed: []runtimefacts.VerificationFact{{Scope: "artifact:./docs/../docs/readme.md"}},
 		},
 	}, "docs/readme.md") {
 		t.Fatal("expected normalized artifact scope match")
