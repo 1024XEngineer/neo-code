@@ -174,6 +174,30 @@ func (s *urlschemeIntegrationRuntimeStub) CreateSession(
 	return strings.TrimSpace("session-review-integration"), nil
 }
 
+func (s *urlschemeIntegrationRuntimeStub) DeleteSession(context.Context, gateway.DeleteSessionInput) (bool, error) {
+	return false, nil
+}
+
+func (s *urlschemeIntegrationRuntimeStub) RenameSession(context.Context, gateway.RenameSessionInput) error {
+	return nil
+}
+
+func (s *urlschemeIntegrationRuntimeStub) ListFiles(context.Context, gateway.ListFilesInput) ([]gateway.FileEntry, error) {
+	return nil, nil
+}
+
+func (s *urlschemeIntegrationRuntimeStub) ListModels(context.Context, gateway.ListModelsInput) ([]gateway.ModelEntry, error) {
+	return nil, nil
+}
+
+func (s *urlschemeIntegrationRuntimeStub) SetSessionModel(context.Context, gateway.SetSessionModelInput) error {
+	return nil
+}
+
+func (s *urlschemeIntegrationRuntimeStub) GetSessionModel(context.Context, gateway.GetSessionModelInput) (gateway.SessionModelResult, error) {
+	return gateway.SessionModelResult{}, nil
+}
+
 func waitGatewayReady(address string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
