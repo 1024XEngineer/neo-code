@@ -1,20 +1,23 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useGatewayAPI } from '@/context/RuntimeProvider'
 import { useSessionStore } from '@/stores/useSessionStore'
+import { useGatewayStore } from '@/stores/useGatewayStore'
 import { type ModelEntry } from '@/api/protocol'
 import { ChevronDown, Loader2 } from 'lucide-react'
 
 export default function ModelSelector() {
   const gatewayAPI = useGatewayAPI()
   const currentSessionId = useSessionStore((s) => s.currentSessionId)
+  const providerChangeTick = useGatewayStore((s) => s.providerChangeTick)
   const [open, setOpen] = useState(false)
   const [models, setModels] = useState<ModelEntry[]>([])
   const [selected, setSelected] = useState<ModelEntry | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
 
-  // Note: `selected` is intentionally NOT in the dependency array.
-  // Model list does not change when user selects a model.
+  // 追踪 provider 切换，避免闭包陷阱
+  const providerTickRef = useRef(providerChangeTick)
+
   const loadModels = useCallback(async () => {
     if (!gatewayAPI) return
     setLoading(true)
@@ -23,8 +26,26 @@ export default function ModelSelector() {
       const result = await gatewayAPI.listModels(currentSessionId || undefined)
       const fetched = result.payload.models
       setModels(fetched)
-      if (fetched.length > 0 && !selected) {
-        setSelected(fetched[0])
+
+      // 检测 provider 是否切换
+      const isProviderChanged = providerChangeTick !== providerTickRef.current
+      if (isProviderChanged) {
+        providerTickRef.current = providerChangeTick
+      }
+
+      if (fetched.length > 0) {
+        setSelected((prev) => {
+          if (!prev) {
+            return fetched[0]
+          }
+          if (isProviderChanged) {
+            const retained = fetched.find((f) => f.id === prev.id)
+            return retained ?? fetched[0]
+          }
+          return prev
+        })
+      } else {
+        setSelected(null)
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : '加载模型列表失败'
@@ -33,18 +54,18 @@ export default function ModelSelector() {
     } finally {
       setLoading(false)
     }
-  }, [gatewayAPI, currentSessionId])
+  }, [gatewayAPI, currentSessionId, providerChangeTick])
 
   useEffect(() => {
     loadModels()
-  }, [loadModels])
+  }, [loadModels, providerChangeTick])
 
   async function handleSelect(m: ModelEntry) {
     setSelected(m)
     setOpen(false)
     if (currentSessionId && gatewayAPI) {
       try {
-        await gatewayAPI.setSessionModel(currentSessionId, m.id)
+        await gatewayAPI.setSessionModel(currentSessionId, m.id, m.provider)
       } catch (err) {
         console.error('setSessionModel failed:', err)
       }
@@ -64,7 +85,7 @@ export default function ModelSelector() {
           <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} />
         ) : (
           <>
-            <span style={styles.modelName}>{selected?.name || error || '无可用模型'}</span>
+            <span style={styles.modelName}>{selected ? `${selected.provider} / ${selected.name}` : (error || '无可用模型')}</span>
             <ChevronDown size={14} style={{ color: 'var(--text-tertiary)', transition: 'transform 0.15s', transform: open ? 'rotate(180deg)' : 'none' }} />
           </>
         )}
@@ -126,6 +147,8 @@ const styles: Record<string, React.CSSProperties> = {
     padding: 4,
     boxShadow: 'var(--shadow-3)',
     zIndex: 60,
+    maxHeight: 320,
+    overflowY: 'auto',
   },
   dropdownItem: {
     display: 'flex',

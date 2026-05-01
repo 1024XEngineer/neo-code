@@ -132,8 +132,10 @@ export class GatewayAPI {
   }
 
   /** 设置会话模型 */
-  async setSessionModel(sessionId: string, modelId: string) {
-    return this.ws.call<SetSessionModelResult>(Method.SetSessionModel, { session_id: sessionId, model_id: modelId } satisfies SetSessionModelParams)
+  async setSessionModel(sessionId: string, modelId: string, providerId?: string) {
+    const params: SetSessionModelParams = { session_id: sessionId, model_id: modelId }
+    if (providerId) params.provider_id = providerId
+    return this.ws.call<SetSessionModelResult>(Method.SetSessionModel, params)
   }
 
   /** 获取当前会话模型 */

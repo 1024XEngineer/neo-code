@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useSessionStore } from '@/stores/useSessionStore'
 import { useUIStore } from '@/stores/useUIStore'
+import { useGatewayStore } from '@/stores/useGatewayStore'
 import { useGatewayAPI } from '@/context/RuntimeProvider'
 import {
   Plus,
@@ -15,7 +16,7 @@ import {
   Cpu,
   Blocks,
 } from 'lucide-react'
-import { type ProviderOption, type MCPServerParams, type AvailableSkillState, type SessionSkillState } from '@/api/protocol'
+import { type ProviderOption, type MCPServerParams, type AvailableSkillState, type SessionSkillState, type CreateProviderParams, type ProviderModelDescriptor } from '@/api/protocol'
 
 interface SidebarProps {
   collapsed?: boolean
@@ -623,59 +624,227 @@ function SkillModal({ onClose }: { onClose: () => void }) {
   )
 }
 
+function emptyProviderForm(): CreateProviderParams & { modelsJSON?: string } {
+  return {
+    name: '',
+    driver: 'openaicompat',
+    model_source: 'discover',
+    chat_api_mode: 'chat_completions',
+    base_url: '',
+    chat_endpoint_path: '/chat/completions',
+    discovery_endpoint_path: '/models',
+    api_key_env: '',
+    api_key: '',
+    modelsJSON: '',
+  }
+}
+
 function ProviderModal({ onClose }: { onClose: () => void }) {
   const gatewayAPI = useGatewayAPI()
   const [providers, setProviders] = useState<ProviderOption[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  const [showForm, setShowForm] = useState(false)
+  const [formData, setFormData] = useState<CreateProviderParams & { modelsJSON?: string }>(emptyProviderForm)
+  const [formError, setFormError] = useState('')
+  const [saving, setSaving] = useState(false)
 
-  useEffect(() => {
+  const load = useCallback(async () => {
     if (!gatewayAPI) return
-    let cancelled = false
     setLoading(true)
     setError('')
-    gatewayAPI.listProviders()
-      .then((result) => {
-        if (!cancelled) {
-          setProviders(result.payload.providers)
-        }
-      })
-      .catch((err) => {
-        if (!cancelled) {
-          const msg = err instanceof Error ? err.message : '加载供应商列表失败'
-          setError(msg)
-          console.error('listProviders failed:', err)
-        }
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false)
-      })
-    return () => { cancelled = true }
+    try {
+      const result = await gatewayAPI.listProviders()
+      setProviders(result?.payload?.providers ?? [])
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : '加载供应商列表失败'
+      setError(msg)
+      console.error('listProviders failed:', err)
+    } finally {
+      setLoading(false)
+    }
   }, [gatewayAPI])
 
-  if (!gatewayAPI) return (<div style={modalStyles.overlay} onClick={onClose}><div style={modalStyles.modal} onClick={(e) => e.stopPropagation()}><div style={modalStyles.header}><h3 style={modalStyles.title}>供应商设置</h3><button style={modalStyles.closeBtn} onClick={onClose}><X size={16} /></button></div><div style={modalStyles.body}><div style={modalStyles.emptyState}>Gateway 未连接，请检查连接状态</div></div></div></div>)
+  useEffect(() => {
+    load()
+  }, [load])
+
+  async function handleSelect(providerId: string) {
+    if (!gatewayAPI) return
+    try {
+      await gatewayAPI.selectProviderModel({ provider_id: providerId })
+      useGatewayStore.getState().notifyProviderChanged()
+      await load()
+    } catch (err) {
+      console.error('selectProviderModel failed:', err)
+      setError(err instanceof Error ? err.message : '切换供应商失败')
+    }
+  }
+
+  async function handleDelete(providerId: string, source: string) {
+    if (!gatewayAPI) return
+    if (source !== 'custom') return
+    if (!window.confirm(`确定要删除供应商 "${providerId}" 吗？`)) return
+    try {
+      await gatewayAPI.deleteCustomProvider(providerId)
+      await load()
+    } catch (err) {
+      console.error('deleteCustomProvider failed:', err)
+      setError(err instanceof Error ? err.message : '删除失败')
+    }
+  }
+
+  function handleAdd() {
+    setFormData(emptyProviderForm())
+    setFormError('')
+    setShowForm(true)
+  }
+
+  function handleDriverChange(driver: string) {
+    setFormData(prev => {
+      const next = { ...prev, driver }
+      if (driver === 'openaicompat') {
+        next.chat_endpoint_path = '/chat/completions'
+        next.base_url = ''
+        next.chat_api_mode = 'chat_completions'
+      } else if (driver === 'gemini') {
+        next.base_url = 'https://generativelanguage.googleapis.com/v1beta'
+        next.chat_endpoint_path = '/models'
+        next.chat_api_mode = ''
+      } else if (driver === 'anthropic') {
+        next.base_url = 'https://api.anthropic.com/v1'
+        next.chat_endpoint_path = '/messages'
+        next.chat_api_mode = ''
+      }
+      return next
+    })
+  }
+
+  function handleChatModeChange(mode: string) {
+    setFormData(prev => {
+      const next = { ...prev, chat_api_mode: mode }
+      if (mode === 'responses') {
+        next.chat_endpoint_path = '/responses'
+      } else {
+        next.chat_endpoint_path = '/chat/completions'
+      }
+      return next
+    })
+  }
+
+  function validateForm(): string {
+    const name = formData.name.trim()
+    const driver = formData.driver.trim()
+    const modelSource = (formData.model_source || 'discover').trim()
+    const apiKey = (formData.api_key || '').trim()
+    const apiKeyEnv = formData.api_key_env.trim()
+
+    if (!name) return '名称不能为空'
+    if (!driver) return 'Driver 不能为空'
+    if (!modelSource) return '模型来源不能为空'
+    if (!apiKey) return 'API Key 不能为空'
+    if (!apiKeyEnv) return 'API Key 环境变量不能为空'
+    if (!/^[A-Z][A-Z0-9_]*$/.test(apiKeyEnv)) {
+      return 'API Key 环境变量名不合法（需大写字母、数字、下划线，且以大写字母开头）'
+    }
+
+    if (modelSource === 'manual') {
+      const json = (formData.modelsJSON || '').trim()
+      if (!json) return '手动模式下模型 JSON 不能为空'
+      try {
+        const parsed = JSON.parse(json)
+        if (!Array.isArray(parsed)) return '模型 JSON 必须是数组'
+        for (const m of parsed) {
+          if (!m.id || !m.name) return '每个模型必须包含 id 和 name 字段'
+        }
+      } catch {
+        return '模型 JSON 格式错误'
+      }
+    }
+
+    if (modelSource === 'discover' && driver === 'openaicompat') {
+      const discoveryPath = (formData.discovery_endpoint_path || '').trim()
+      if (!discoveryPath) return '自动发现模式下发现端点路径不能为空'
+    }
+
+    return ''
+  }
+
+  async function handleSave() {
+    if (!gatewayAPI) return
+    const err = validateForm()
+    if (err) {
+      setFormError(err)
+      return
+    }
+
+    const { modelsJSON: _, ...payload }: CreateProviderParams & { modelsJSON?: string } = { ...formData }
+    // 填充默认值
+    if (!payload.base_url?.trim()) {
+      if (payload.driver === 'openaicompat') payload.base_url = 'https://api.openai.com/v1'
+      else if (payload.driver === 'gemini') payload.base_url = 'https://generativelanguage.googleapis.com/v1beta'
+      else if (payload.driver === 'anthropic') payload.base_url = 'https://api.anthropic.com/v1'
+    }
+    if (!payload.chat_endpoint_path?.trim()) {
+      payload.chat_endpoint_path = formData.driver === 'gemini' ? '/models' : formData.driver === 'anthropic' ? '/messages' : '/chat/completions'
+    }
+    if (!payload.discovery_endpoint_path?.trim() && payload.model_source !== 'manual') {
+      payload.discovery_endpoint_path = '/models'
+    }
+
+    if (payload.model_source === 'manual' && formData.modelsJSON) {
+      try {
+        payload.models = JSON.parse(formData.modelsJSON) as ProviderModelDescriptor[]
+      } catch {
+        setFormError('模型 JSON 解析失败')
+        return
+      }
+    }
+
+    setSaving(true)
+    setFormError('')
+    try {
+      await gatewayAPI.createCustomProvider(payload)
+      setShowForm(false)
+      await load()
+    } catch (err) {
+      console.error('createCustomProvider failed:', err)
+      setFormError(err instanceof Error ? err.message : '创建失败')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  if (!gatewayAPI) return (
+    <div style={modalStyles.overlay} onClick={onClose}>
+      <div style={modalStyles.modal} onClick={(e) => e.stopPropagation()}>
+        <div style={modalStyles.header}>
+          <h3 style={modalStyles.title}>供应商设置</h3>
+          <button style={modalStyles.closeBtn} onClick={onClose}><X size={16} /></button>
+        </div>
+        <div style={modalStyles.body}>
+          <div style={modalStyles.emptyState}>Gateway 未连接，请检查连接状态</div>
+        </div>
+      </div>
+    </div>
+  )
 
   return (
     <div style={modalStyles.overlay} onClick={onClose}>
       <div style={modalStyles.modal} onClick={(e) => e.stopPropagation()}>
         <div style={modalStyles.header}>
           <h3 style={modalStyles.title}>供应商设置</h3>
-          <button style={modalStyles.closeBtn} onClick={onClose}>
-            <X size={16} />
-          </button>
+          <button style={modalStyles.closeBtn} onClick={onClose}><X size={16} /></button>
         </div>
         <div style={modalStyles.body}>
-          {loading && (
-            <div style={modalStyles.emptyState}>加载中...</div>
-          )}
-          {!loading && error && (
-            <div style={{ ...modalStyles.emptyState, color: 'var(--error)' }}>加载失败: {error}</div>
-          )}
-          {!loading && !error && providers.length === 0 && (
-            <div style={modalStyles.emptyState}>暂无已配置的供应商</div>
-          )}
-          {!loading && providers.map((p) => (
-            <div key={p.id} style={modalStyles.providerCard}>
+          {loading && <div style={modalStyles.emptyState}>加载中...</div>}
+          {!loading && error && !showForm && <div style={{ ...modalStyles.emptyState, color: 'var(--error)' }}>{error}</div>}
+          {!loading && !showForm && providers.length === 0 && <div style={modalStyles.emptyState}>暂无已配置的供应商</div>}
+          {!showForm && providers.map((p) => (
+            <div key={p.id} style={{
+              ...modalStyles.providerCard,
+              ...(p.selected ? { border: '1px solid var(--success)' } : {}),
+            }}>
               <div style={modalStyles.providerHeader}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                   <Server size={16} />
@@ -691,11 +860,98 @@ function ProviderModal({ onClose }: { onClose: () => void }) {
                 ))}
               </div>
               <div style={modalStyles.providerActions}>
-                <input type="text" placeholder="API Key 环境变量" value={p.api_key_env} style={modalStyles.input} readOnly />
-                <button style={modalStyles.actionBtn}>配置</button>
+                <button
+                  style={{ ...modalStyles.actionBtn, background: p.selected ? 'var(--bg-active)' : 'rgba(22,163,74,0.15)', color: p.selected ? 'var(--text-tertiary)' : 'var(--success)' }}
+                  onClick={() => handleSelect(p.id)}
+                  disabled={p.selected}
+                >
+                  {p.selected ? '当前使用' : '选择'}
+                </button>
+                {p.source === 'custom' && (
+                  <button style={{ ...modalStyles.actionBtn, color: 'var(--error)' }} onClick={() => handleDelete(p.id, p.source)}>删除</button>
+                )}
               </div>
             </div>
           ))}
+          {!showForm && (
+            <div style={{ marginTop: 8 }}>
+              <button style={{ ...modalStyles.actionBtn, width: '100%' }} onClick={handleAdd}>+ 新增 Provider</button>
+            </div>
+          )}
+          {showForm && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 4 }}>
+              {formError && <div style={{ color: 'var(--error)', fontSize: 12 }}>{formError}</div>}
+              <label style={formLabelStyle}>
+                名称 *
+                <input style={modalStyles.input} value={formData.name} onChange={(e) => setFormData({ ...formData, name: e.target.value })} placeholder="例如：my-openai" />
+              </label>
+              <label style={formLabelStyle}>
+                Driver *
+                <select style={modalStyles.select} value={formData.driver} onChange={(e) => handleDriverChange(e.target.value)}>
+                  <option value="openaicompat">OpenAI Compatible</option>
+                  <option value="gemini">Gemini</option>
+                  <option value="anthropic">Anthropic</option>
+                </select>
+              </label>
+              <label style={formLabelStyle}>
+                模型来源 *
+                <select style={modalStyles.select} value={formData.model_source || 'discover'} onChange={(e) => setFormData({ ...formData, model_source: e.target.value })}>
+                  <option value="discover">自动发现</option>
+                  <option value="manual">手动配置</option>
+                </select>
+              </label>
+              {formData.driver === 'openaicompat' && (
+                <label style={formLabelStyle}>
+                  Chat API 模式 *
+                  <select style={modalStyles.select} value={formData.chat_api_mode || 'chat_completions'} onChange={(e) => handleChatModeChange(e.target.value)}>
+                    <option value="chat_completions">Chat Completions</option>
+                    <option value="responses">Responses</option>
+                  </select>
+                </label>
+              )}
+              <label style={formLabelStyle}>
+                Base URL
+                <input style={modalStyles.input} value={formData.base_url || ''} onChange={(e) => setFormData({ ...formData, base_url: e.target.value })} placeholder="例如：https://api.openai.com/v1" />
+              </label>
+              <label style={formLabelStyle}>
+                Chat Endpoint Path
+                <input style={modalStyles.input} value={formData.chat_endpoint_path || ''} onChange={(e) => setFormData({ ...formData, chat_endpoint_path: e.target.value })} placeholder="/chat/completions" />
+              </label>
+              {(formData.model_source || 'discover') !== 'manual' && (
+                <label style={formLabelStyle}>
+                  发现端点路径
+                  <input style={modalStyles.input} value={formData.discovery_endpoint_path || ''} onChange={(e) => setFormData({ ...formData, discovery_endpoint_path: e.target.value })} placeholder="/models" />
+                </label>
+              )}
+              <label style={formLabelStyle}>
+                API Key 环境变量 *
+                <input style={modalStyles.input} value={formData.api_key_env} onChange={(e) => setFormData({ ...formData, api_key_env: e.target.value })} placeholder="例如：OPENAI_API_KEY" />
+              </label>
+              <label style={formLabelStyle}>
+                API Key *
+                <input type="password" style={modalStyles.input} value={formData.api_key || ''} onChange={(e) => setFormData({ ...formData, api_key: e.target.value })} placeholder="sk-..." />
+              </label>
+              {(formData.model_source || 'discover') === 'manual' && (
+                <label style={formLabelStyle}>
+                  手动模型 JSON
+                  <textarea
+                    style={{ ...modalStyles.input, minHeight: 80, resize: 'vertical' }}
+                    value={formData.modelsJSON || ''}
+                    onChange={(e) => setFormData({ ...formData, modelsJSON: e.target.value })}
+                    placeholder='[{"id":"gpt-4","name":"GPT-4"}]'
+                  />
+                </label>
+              )}
+              <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
+                <button style={{ ...modalStyles.actionBtn, flex: 1 }} onClick={handleSave} disabled={saving}>
+                  {saving ? '保存中...' : '保存'}
+                </button>
+                <button style={{ ...modalStyles.actionBtn, flex: 1 }} onClick={() => { setShowForm(false); setFormError('') }}>
+                  取消
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -1096,6 +1352,18 @@ const modalStyles: Record<string, React.CSSProperties> = {
     cursor: 'pointer',
     fontFamily: 'var(--font-ui)',
     transition: 'all 0.15s',
+  },
+  select: {
+    flex: 1,
+    padding: '6px 10px',
+    borderRadius: 'var(--radius-sm)',
+    border: '1px solid var(--border-primary)',
+    background: 'var(--bg-primary)',
+    color: 'var(--text-primary)',
+    fontSize: 12,
+    fontFamily: 'var(--font-ui)',
+    outline: 'none',
+    cursor: 'pointer',
   },
   emptyState: {
     padding: '20px 0',

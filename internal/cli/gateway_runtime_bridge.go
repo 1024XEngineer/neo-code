@@ -512,21 +512,24 @@ func (b *gatewayRuntimePortBridge) ListFiles(ctx context.Context, input gateway.
 	return result, nil
 }
 
-// ListModels 列出可用模型。
+// ListModels 列出可用模型（仅返回当前选中 provider 的模型）。
 func (b *gatewayRuntimePortBridge) ListModels(ctx context.Context, input gateway.ListModelsInput) ([]gateway.ModelEntry, error) {
 	if err := b.ensureRuntimeAccess(input.SubjectID); err != nil {
 		return nil, err
 	}
-	if b.providerSelection == nil {
-		return nil, fmt.Errorf("gateway runtime bridge: provider selection is unavailable")
-	}
-	options, err := b.providerSelection.ListProviderOptions(ctx)
+
+	// 复用 ListProviders 的 Selected 标记逻辑，避免与 cfg.SelectedProvider 单独比较产生不一致
+	providers, err := b.ListProviders(ctx, gateway.ListProvidersInput{SubjectID: input.SubjectID})
 	if err != nil {
 		return nil, err
 	}
+
 	models := make([]gateway.ModelEntry, 0)
-	for _, option := range options {
-		for _, model := range option.Models {
+	for _, p := range providers {
+		if !p.Selected {
+			continue
+		}
+		for _, model := range p.Models {
 			id := strings.TrimSpace(model.ID)
 			if id == "" {
 				continue
@@ -538,7 +541,7 @@ func (b *gatewayRuntimePortBridge) ListModels(ctx context.Context, input gateway
 			models = append(models, gateway.ModelEntry{
 				ID:       id,
 				Name:     name,
-				Provider: strings.TrimSpace(option.ID),
+				Provider: strings.TrimSpace(p.ID),
 			})
 		}
 	}

@@ -1783,8 +1783,9 @@ func TestGatewayRuntimePortBridgeListModelsNameFallback(t *testing.T) {
 			},
 		},
 	}
+	cm := &configManagerStub{cfg: config.Config{SelectedProvider: "openai"}}
 	stub := &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)}
-	bridge, _ := newGatewayRuntimePortBridge(context.Background(), stub, testSessionStore, nil, ps)
+	bridge, _ := newGatewayRuntimePortBridge(context.Background(), stub, testSessionStore, cm, ps)
 	defer bridge.Close()
 
 	models, err := bridge.ListModels(context.Background(), gateway.ListModelsInput{SubjectID: testBridgeSubjectID})
