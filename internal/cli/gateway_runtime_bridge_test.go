@@ -4,9 +4,13 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
+	"neo-code/internal/config"
+	configstate "neo-code/internal/config/state"
 	"neo-code/internal/gateway"
 	providertypes "neo-code/internal/provider/types"
 	agentruntime "neo-code/internal/runtime"
@@ -131,6 +135,12 @@ func (s *runtimeStub) ListAvailableSkills(_ context.Context, sessionID string) (
 	s.listAvailableSkillsID = sessionID
 	return s.availableSkills, s.availableSkillsErr
 }
+func (s *runtimeStub) DeleteSession(_ context.Context, _ string) error {
+	return nil
+}
+func (s *runtimeStub) UpdateSessionState(_ context.Context, _ agentsession.UpdateSessionStateInput) error {
+	return nil
+}
 
 type runtimeWithoutCreator struct {
 	base *runtimeStub
@@ -183,8 +193,28 @@ func (r *runtimeWithoutCreator) ListAvailableSkills(
 	return r.base.ListAvailableSkills(ctx, sessionID)
 }
 
+type bridgeSessionStoreStub struct {
+	deleteFn func(ctx context.Context, id string) error
+	updateFn func(ctx context.Context, input agentsession.UpdateSessionStateInput) error
+}
+
+func (s *bridgeSessionStoreStub) DeleteSession(ctx context.Context, id string) error {
+	if s.deleteFn != nil {
+		return s.deleteFn(ctx, id)
+	}
+	return nil
+}
+func (s *bridgeSessionStoreStub) UpdateSessionState(ctx context.Context, input agentsession.UpdateSessionStateInput) error {
+	if s.updateFn != nil {
+		return s.updateFn(ctx, input)
+	}
+	return nil
+}
+
+var testSessionStore bridgeSessionStore = &bridgeSessionStoreStub{}
+
 func TestNewGatewayRuntimePortBridgeRuntimeUnavailable(t *testing.T) {
-	bridge, err := newGatewayRuntimePortBridge(context.Background(), nil)
+	bridge, err := newGatewayRuntimePortBridge(context.Background(), nil, nil)
 	if err == nil {
 		t.Fatal("expected error when runtime is nil")
 	}
@@ -341,7 +371,7 @@ func TestGatewayRuntimePortBridgeRuntimeMethods(t *testing.T) {
 		},
 	}
 
-	bridge, err := newGatewayRuntimePortBridge(context.Background(), stub)
+	bridge, err := newGatewayRuntimePortBridge(context.Background(), stub, testSessionStore)
 	if err != nil {
 		t.Fatalf("new bridge: %v", err)
 	}
@@ -546,7 +576,7 @@ func TestGatewayRuntimePortBridgeLoadSessionNotFoundBranches(t *testing.T) {
 	base := &runtimeStub{
 		loadErr: agentsession.ErrSessionNotFound,
 	}
-	bridgeWithoutCreator, err := newGatewayRuntimePortBridge(context.Background(), &runtimeWithoutCreator{base: base})
+	bridgeWithoutCreator, err := newGatewayRuntimePortBridge(context.Background(), &runtimeWithoutCreator{base: base}, testSessionStore)
 	if err != nil {
 		t.Fatalf("new bridge without creator: %v", err)
 	}
@@ -563,7 +593,7 @@ func TestGatewayRuntimePortBridgeLoadSessionNotFoundBranches(t *testing.T) {
 		loadErr:   os.ErrNotExist,
 		createErr: errors.New("create failed"),
 	}
-	bridgeWithCreator, err := newGatewayRuntimePortBridge(context.Background(), stub)
+	bridgeWithCreator, err := newGatewayRuntimePortBridge(context.Background(), stub, testSessionStore)
 	if err != nil {
 		t.Fatalf("new bridge with creator: %v", err)
 	}
@@ -604,7 +634,7 @@ func TestGatewayRuntimePortBridgeRuntimeMethodErrors(t *testing.T) {
 		listErr:              errors.New("list failed"),
 		loadErr:              errors.New("load failed"),
 	}
-	bridge, err := newGatewayRuntimePortBridge(context.Background(), stub)
+	bridge, err := newGatewayRuntimePortBridge(context.Background(), stub, testSessionStore)
 	if err != nil {
 		t.Fatalf("new bridge: %v", err)
 	}
@@ -676,7 +706,7 @@ func TestGatewayRuntimePortBridgeLoadSessionUpsertWhenMissing(t *testing.T) {
 			UpdatedAt: now,
 		},
 	}
-	bridge, err := newGatewayRuntimePortBridge(context.Background(), stub)
+	bridge, err := newGatewayRuntimePortBridge(context.Background(), stub, testSessionStore)
 	if err != nil {
 		t.Fatalf("new bridge: %v", err)
 	}
@@ -712,7 +742,7 @@ func TestGatewayRuntimePortBridgeLoadSessionNoUpsertOnPlainStringNotFoundError(t
 			UpdatedAt: now,
 		},
 	}
-	bridge, err := newGatewayRuntimePortBridge(context.Background(), stub)
+	bridge, err := newGatewayRuntimePortBridge(context.Background(), stub, testSessionStore)
 	if err != nil {
 		t.Fatalf("new bridge: %v", err)
 	}
@@ -741,7 +771,7 @@ func TestGatewayRuntimePortBridgeCreateSession(t *testing.T) {
 			UpdatedAt: now,
 		},
 	}
-	bridge, err := newGatewayRuntimePortBridge(context.Background(), stub)
+	bridge, err := newGatewayRuntimePortBridge(context.Background(), stub, stub)
 	if err != nil {
 		t.Fatalf("new bridge: %v", err)
 	}
@@ -765,7 +795,7 @@ func TestGatewayRuntimePortBridgeCreateSession(t *testing.T) {
 func TestGatewayRuntimePortBridgeCreateSessionBranches(t *testing.T) {
 	t.Run("subject denied", func(t *testing.T) {
 		stub := &runtimeStub{}
-		bridge, err := newGatewayRuntimePortBridge(context.Background(), stub)
+		bridge, err := newGatewayRuntimePortBridge(context.Background(), stub, stub)
 		if err != nil {
 			t.Fatalf("new bridge: %v", err)
 		}
@@ -780,7 +810,7 @@ func TestGatewayRuntimePortBridgeCreateSessionBranches(t *testing.T) {
 
 	t.Run("runtime no creator", func(t *testing.T) {
 		base := &runtimeStub{}
-		bridge, err := newGatewayRuntimePortBridge(context.Background(), &runtimeWithoutCreator{base: base})
+		bridge, err := newGatewayRuntimePortBridge(context.Background(), &runtimeWithoutCreator{base: base}, base)
 		if err != nil {
 			t.Fatalf("new bridge: %v", err)
 		}
@@ -800,7 +830,7 @@ func TestGatewayRuntimePortBridgeRunEventBridge(t *testing.T) {
 
 	source := make(chan agentruntime.RuntimeEvent, 3)
 	stub := &runtimeStub{eventsCh: source}
-	bridge, err := newGatewayRuntimePortBridge(ctx, stub)
+	bridge, err := newGatewayRuntimePortBridge(ctx, stub, testSessionStore)
 	if err != nil {
 		t.Fatalf("new bridge: %v", err)
 	}
@@ -850,7 +880,7 @@ func TestGatewayRuntimePortBridgeRunEventBridge(t *testing.T) {
 func TestGatewayRuntimePortBridgeStopsOnCloseAndContextCancel(t *testing.T) {
 	source := make(chan agentruntime.RuntimeEvent)
 	stub := &runtimeStub{eventsCh: source}
-	bridge, err := newGatewayRuntimePortBridge(context.Background(), stub)
+	bridge, err := newGatewayRuntimePortBridge(context.Background(), stub, testSessionStore)
 	if err != nil {
 		t.Fatalf("new bridge: %v", err)
 	}
@@ -868,7 +898,7 @@ func TestGatewayRuntimePortBridgeStopsOnCloseAndContextCancel(t *testing.T) {
 
 	cancelCtx, cancel := context.WithCancel(context.Background())
 	cancel()
-	cancelBridge, err := newGatewayRuntimePortBridge(cancelCtx, &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent)})
+	cancelBridge, err := newGatewayRuntimePortBridge(cancelCtx, &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent)}, testSessionStore)
 	if err != nil {
 		t.Fatalf("new cancel bridge: %v", err)
 	}
@@ -881,7 +911,7 @@ func TestGatewayRuntimePortBridgeStopsOnCloseAndContextCancel(t *testing.T) {
 		t.Fatal("timed out waiting for closed events after context cancel")
 	}
 
-	nilCtxBridge, err := newGatewayRuntimePortBridge(nil, &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent)})
+	nilCtxBridge, err := newGatewayRuntimePortBridge(nil, &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent)}, testSessionStore)
 	if err != nil {
 		t.Fatalf("new nil-ctx bridge: %v", err)
 	}
@@ -928,4 +958,892 @@ func TestConvertGatewayRunInputAndSessionHelpers(t *testing.T) {
 	if messages := convertSessionMessages(nil); messages != nil {
 		t.Fatalf("convert nil messages = %#v, want nil", messages)
 	}
+}
+
+func TestGatewayRuntimePortBridgeDeleteSession(t *testing.T) {
+	t.Run("success", func(t *testing.T) {
+		store := &bridgeSessionStoreStub{
+			deleteFn: func(_ context.Context, id string) error {
+				if id != "session-1" {
+					t.Fatalf("id = %q, want %q", id, "session-1")
+				}
+				return nil
+			},
+		}
+
+		stub := &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)}
+		bridge, err := newGatewayRuntimePortBridge(context.Background(), stub, store)
+		if err != nil {
+			t.Fatalf("new bridge: %v", err)
+		}
+		defer bridge.Close()
+
+		result, err := bridge.DeleteSession(context.Background(), gateway.DeleteSessionInput{
+			SubjectID: testBridgeSubjectID,
+			SessionID: "session-1",
+		})
+		if err != nil {
+			t.Fatalf("delete session: %v", err)
+		}
+		if !result {
+			t.Fatal("expected deleted=true")
+		}
+	})
+
+	t.Run("empty session id returns error", func(t *testing.T) {
+		stub := &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)}
+		bridge, err := newGatewayRuntimePortBridge(context.Background(), stub, testSessionStore)
+		if err != nil {
+			t.Fatalf("new bridge: %v", err)
+		}
+		defer bridge.Close()
+
+		_, err = bridge.DeleteSession(context.Background(), gateway.DeleteSessionInput{
+			SubjectID: testBridgeSubjectID,
+			SessionID: "  ",
+		})
+		if err == nil {
+			t.Fatal("expected error for empty session_id")
+		}
+	})
+
+	t.Run("nil session store returns error", func(t *testing.T) {
+		stub := &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)}
+		bridge, err := newGatewayRuntimePortBridge(context.Background(), stub, nil)
+		if err != nil {
+			t.Fatalf("new bridge: %v", err)
+		}
+		defer bridge.Close()
+
+		_, err = bridge.DeleteSession(context.Background(), gateway.DeleteSessionInput{
+			SubjectID: testBridgeSubjectID,
+			SessionID: "session-1",
+		})
+		if err == nil {
+			t.Fatal("expected error for nil session store")
+		}
+	})
+}
+
+func TestGatewayRuntimePortBridgeRenameSession(t *testing.T) {
+	t.Run("success", func(t *testing.T) {
+		store := &bridgeSessionStoreStub{
+			updateFn: func(_ context.Context, input agentsession.UpdateSessionStateInput) error {
+				if input.SessionID != "session-1" {
+					t.Fatalf("id = %q, want %q", input.SessionID, "session-1")
+				}
+				if input.Title != "New Title" {
+					t.Fatalf("title = %q, want %q", input.Title, "New Title")
+				}
+				return nil
+			},
+		}
+
+		stub := &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)}
+		bridge, err := newGatewayRuntimePortBridge(context.Background(), stub, store)
+		if err != nil {
+			t.Fatalf("new bridge: %v", err)
+		}
+		defer bridge.Close()
+
+		err = bridge.RenameSession(context.Background(), gateway.RenameSessionInput{
+			SubjectID: testBridgeSubjectID,
+			SessionID: "session-1",
+			Title:     "New Title",
+		})
+		if err != nil {
+			t.Fatalf("rename session: %v", err)
+		}
+	})
+
+	t.Run("empty title returns error", func(t *testing.T) {
+		stub := &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)}
+		bridge, err := newGatewayRuntimePortBridge(context.Background(), stub, testSessionStore)
+		if err != nil {
+			t.Fatalf("new bridge: %v", err)
+		}
+		defer bridge.Close()
+
+		err = bridge.RenameSession(context.Background(), gateway.RenameSessionInput{
+			SubjectID: testBridgeSubjectID,
+			SessionID: "session-1",
+			Title:     "  ",
+		})
+		if err == nil {
+			t.Fatal("expected error for empty title")
+		}
+	})
+
+	t.Run("empty session id returns error", func(t *testing.T) {
+		stub := &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)}
+		bridge, err := newGatewayRuntimePortBridge(context.Background(), stub, testSessionStore)
+		if err != nil {
+			t.Fatalf("new bridge: %v", err)
+		}
+		defer bridge.Close()
+
+		err = bridge.RenameSession(context.Background(), gateway.RenameSessionInput{
+			SubjectID: testBridgeSubjectID,
+			SessionID: "  ",
+			Title:     "New Title",
+		})
+		if err == nil {
+			t.Fatal("expected error for empty session_id")
+		}
+	})
+}
+
+// ---- providerSelection stub ----
+
+type providerSelectionStub struct {
+	listOptions []configstate.ProviderOption
+	listErr     error
+	createRes   configstate.Selection
+	createErr   error
+	selectRes   configstate.Selection
+	selectErr   error
+	setModelRes configstate.Selection
+	setModelErr error
+}
+
+func (s *providerSelectionStub) ListProviderOptions(_ context.Context) ([]configstate.ProviderOption, error) {
+	return s.listOptions, s.listErr
+}
+func (s *providerSelectionStub) CreateCustomProvider(_ context.Context, _ configstate.CreateCustomProviderInput) (configstate.Selection, error) {
+	return s.createRes, s.createErr
+}
+func (s *providerSelectionStub) SelectProvider(_ context.Context, _ string) (configstate.Selection, error) {
+	return s.selectRes, s.selectErr
+}
+func (s *providerSelectionStub) SetCurrentModel(_ context.Context, _ string) (configstate.Selection, error) {
+	return s.setModelRes, s.setModelErr
+}
+
+var _ providerSelectionInterface = (*providerSelectionStub)(nil)
+
+type providerSelectionInterface interface {
+	ListProviderOptions(ctx context.Context) ([]configstate.ProviderOption, error)
+	CreateCustomProvider(ctx context.Context, input configstate.CreateCustomProviderInput) (configstate.Selection, error)
+	SelectProvider(ctx context.Context, providerName string) (configstate.Selection, error)
+	SetCurrentModel(ctx context.Context, modelID string) (configstate.Selection, error)
+}
+
+// ---- configManager stub ----
+
+type configManagerStub struct {
+	cfg      config.Config
+	loadRes  config.Config
+	loadErr  error
+	updateFn func(func(*config.Config) error) error
+}
+
+func (s *configManagerStub) Get() config.Config {
+	return s.cfg.Clone()
+}
+func (s *configManagerStub) Load(_ context.Context) (config.Config, error) {
+	return s.loadRes, s.loadErr
+}
+func (s *configManagerStub) Update(_ context.Context, mutate func(*config.Config) error) error {
+	if s.updateFn != nil {
+		return s.updateFn(mutate)
+	}
+	return mutate(&s.cfg)
+}
+func (s *configManagerStub) BaseDir() string {
+	return ""
+}
+
+// ---- DeleteSession ----
+
+func TestGatewayRuntimePortBridgeDeleteSessionStoreError(t *testing.T) {
+	store := &bridgeSessionStoreStub{
+		deleteFn: func(_ context.Context, _ string) error {
+			return errors.New("delete failed")
+		},
+	}
+	stub := &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)}
+	bridge, err := newGatewayRuntimePortBridge(context.Background(), stub, store)
+	if err != nil {
+		t.Fatalf("new bridge: %v", err)
+	}
+	defer bridge.Close()
+
+	_, err = bridge.DeleteSession(context.Background(), gateway.DeleteSessionInput{
+		SubjectID: testBridgeSubjectID,
+		SessionID: "session-1",
+	})
+	if err == nil || err.Error() != "delete failed" {
+		t.Fatalf("expected delete failed error, got %v", err)
+	}
+}
+
+// ---- RenameSession ----
+
+func TestGatewayRuntimePortBridgeRenameSessionStoreNil(t *testing.T) {
+	stub := &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)}
+	bridge, err := newGatewayRuntimePortBridge(context.Background(), stub, nil)
+	if err != nil {
+		t.Fatalf("new bridge: %v", err)
+	}
+	defer bridge.Close()
+
+	err = bridge.RenameSession(context.Background(), gateway.RenameSessionInput{
+		SubjectID: testBridgeSubjectID,
+		SessionID: "session-1",
+		Title:     "New Title",
+	})
+	if err == nil || !strings.Contains(err.Error(), "session store is unavailable") {
+		t.Fatalf("expected session store unavailable error, got %v", err)
+	}
+}
+
+func TestGatewayRuntimePortBridgeRenameSessionUpdateError(t *testing.T) {
+	store := &bridgeSessionStoreStub{
+		updateFn: func(_ context.Context, _ agentsession.UpdateSessionStateInput) error {
+			return errors.New("update failed")
+		},
+	}
+	stub := &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)}
+	bridge, err := newGatewayRuntimePortBridge(context.Background(), stub, store)
+	if err != nil {
+		t.Fatalf("new bridge: %v", err)
+	}
+	defer bridge.Close()
+
+	err = bridge.RenameSession(context.Background(), gateway.RenameSessionInput{
+		SubjectID: testBridgeSubjectID,
+		SessionID: "session-1",
+		Title:     "New Title",
+	})
+	if err == nil || err.Error() != "update failed" {
+		t.Fatalf("expected update failed error, got %v", err)
+	}
+}
+
+// ---- ListFiles ----
+
+func TestResolveListFilesRootPriorities(t *testing.T) {
+	tmpDir := t.TempDir()
+	subDir := filepath.Join(tmpDir, "subdir")
+	if err := os.MkdirAll(subDir, 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	// priority 1: input.Workdir
+	bridge1, _ := newGatewayRuntimePortBridge(context.Background(), &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)}, testSessionStore)
+	defer bridge1.Close()
+	root, err := bridge1.resolveListFilesRoot(context.Background(), gateway.ListFilesInput{Workdir: subDir})
+	if err != nil {
+		t.Fatalf("resolve with workdir: %v", err)
+	}
+	if root != subDir {
+		t.Fatalf("root = %q, want %q", root, subDir)
+	}
+
+	// priority 2: session workdir (store implements bridgeSessionLoader)
+	loaderStore := &bridgeSessionStoreWithLoader{
+		bridgeSessionStoreStub: bridgeSessionStoreStub{},
+		session: agentsession.Session{Workdir: subDir},
+	}
+	bridge2, _ := newGatewayRuntimePortBridge(context.Background(), &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)}, loaderStore)
+	defer bridge2.Close()
+	root, err = bridge2.resolveListFilesRoot(context.Background(), gateway.ListFilesInput{SessionID: "s-1"})
+	if err != nil {
+		t.Fatalf("resolve with session: %v", err)
+	}
+	if root != subDir {
+		t.Fatalf("root = %q, want %q", root, subDir)
+	}
+
+	// priority 3: config workdir
+	cfgMgr := &configManagerStub{cfg: config.Config{Workdir: subDir}}
+	bridge3, _ := newGatewayRuntimePortBridge(context.Background(), &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)}, testSessionStore, cfgMgr, nil)
+	defer bridge3.Close()
+	root, err = bridge3.resolveListFilesRoot(context.Background(), gateway.ListFilesInput{})
+	if err != nil {
+		t.Fatalf("resolve with config: %v", err)
+	}
+	if root != subDir {
+		t.Fatalf("root = %q, want %q", root, subDir)
+	}
+
+	// priority 4: os.Getwd
+	bridge4, _ := newGatewayRuntimePortBridge(context.Background(), &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)}, testSessionStore)
+	defer bridge4.Close()
+	root, err = bridge4.resolveListFilesRoot(context.Background(), gateway.ListFilesInput{})
+	if err != nil {
+		t.Fatalf("resolve with getwd: %v", err)
+	}
+	wd, _ := os.Getwd()
+	absWd, _ := filepath.Abs(wd)
+	if root != filepath.Clean(absWd) {
+		t.Fatalf("root = %q, want %q", root, filepath.Clean(absWd))
+	}
+}
+
+type bridgeSessionStoreWithLoader struct {
+	bridgeSessionStoreStub
+	session agentsession.Session
+	loadErr error
+}
+
+func (s *bridgeSessionStoreWithLoader) LoadSession(_ context.Context, _ string) (agentsession.Session, error) {
+	return s.session, s.loadErr
+}
+
+func TestResolveListFilesRootSessionNotFound(t *testing.T) {
+	loaderStore := &bridgeSessionStoreWithLoader{
+		bridgeSessionStoreStub: bridgeSessionStoreStub{},
+		loadErr:                agentsession.ErrSessionNotFound,
+	}
+	bridge, _ := newGatewayRuntimePortBridge(context.Background(), &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)}, loaderStore)
+	defer bridge.Close()
+
+	root, err := bridge.resolveListFilesRoot(context.Background(), gateway.ListFilesInput{SessionID: "s-1"})
+	if err != nil {
+		t.Fatalf("resolve with not-found session should not error: %v", err)
+	}
+	wd, _ := os.Getwd()
+	absWd, _ := filepath.Abs(wd)
+	if root != filepath.Clean(absWd) {
+		t.Fatalf("root = %q, want %q", root, filepath.Clean(absWd))
+	}
+}
+
+func TestGatewayRuntimePortBridgeListFilesReadDirFail(t *testing.T) {
+	bridge, _ := newGatewayRuntimePortBridge(context.Background(), &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)}, testSessionStore)
+	defer bridge.Close()
+
+	_, err := bridge.ListFiles(context.Background(), gateway.ListFilesInput{
+		SubjectID: testBridgeSubjectID,
+		Workdir:   t.TempDir(),
+		Path:      "nonexistent-dir",
+	})
+	if err == nil {
+		t.Fatal("expected error for nonexistent path")
+	}
+}
+
+func TestGatewayRuntimePortBridgeListFilesFiltersAndSorts(t *testing.T) {
+	tmpDir := t.TempDir()
+	_ = os.MkdirAll(filepath.Join(tmpDir, ".git"), 0755)
+	_ = os.WriteFile(filepath.Join(tmpDir, "b.txt"), []byte("b"), 0644)
+	_ = os.WriteFile(filepath.Join(tmpDir, "A.txt"), []byte("a"), 0644)
+	_ = os.MkdirAll(filepath.Join(tmpDir, "Zdir"), 0755)
+	_ = os.MkdirAll(filepath.Join(tmpDir, "adir"), 0755)
+
+	bridge, _ := newGatewayRuntimePortBridge(context.Background(), &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)}, testSessionStore)
+	defer bridge.Close()
+
+	entries, err := bridge.ListFiles(context.Background(), gateway.ListFilesInput{
+		SubjectID: testBridgeSubjectID,
+		Workdir:   tmpDir,
+	})
+	if err != nil {
+		t.Fatalf("list files: %v", err)
+	}
+	if len(entries) != 4 {
+		t.Fatalf("entries count = %d, want 4", len(entries))
+	}
+	// dirs first, then case-insensitive sort
+	if !entries[0].IsDir || entries[0].Name != "adir" {
+		t.Fatalf("entries[0] = %+v, want adir dir", entries[0])
+	}
+	if !entries[1].IsDir || entries[1].Name != "Zdir" {
+		t.Fatalf("entries[1] = %+v, want Zdir dir", entries[1])
+	}
+	if entries[2].Name != "A.txt" {
+		t.Fatalf("entries[2] = %+v, want A.txt", entries[2])
+	}
+	if entries[3].Name != "b.txt" {
+		t.Fatalf("entries[3] = %+v, want b.txt", entries[3])
+	}
+}
+
+// ---- ListModels ----
+
+func TestGatewayRuntimePortBridgeListModelsNilSelection(t *testing.T) {
+	stub := &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)}
+	bridge, _ := newGatewayRuntimePortBridge(context.Background(), stub, testSessionStore)
+	defer bridge.Close()
+
+	_, err := bridge.ListModels(context.Background(), gateway.ListModelsInput{SubjectID: testBridgeSubjectID})
+	if err == nil || !strings.Contains(err.Error(), "provider selection is unavailable") {
+		t.Fatalf("expected provider selection unavailable, got %v", err)
+	}
+}
+
+func TestGatewayRuntimePortBridgeListModelsListError(t *testing.T) {
+	ps := &providerSelectionStub{listErr: errors.New("list options failed")}
+	stub := &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)}
+	bridge, _ := newGatewayRuntimePortBridge(context.Background(), stub, testSessionStore, nil, ps)
+	defer bridge.Close()
+
+	_, err := bridge.ListModels(context.Background(), gateway.ListModelsInput{SubjectID: testBridgeSubjectID})
+	if err == nil || err.Error() != "list options failed" {
+		t.Fatalf("expected list options failed, got %v", err)
+	}
+}
+
+func TestGatewayRuntimePortBridgeListModelsNameFallback(t *testing.T) {
+	ps := &providerSelectionStub{
+		listOptions: []configstate.ProviderOption{
+			{
+				ID:   "openai",
+				Name: "OpenAI",
+				Models: []providertypes.ModelDescriptor{
+					{ID: "gpt-4", Name: ""},
+					{ID: "  ", Name: "ignored"},
+				},
+			},
+		},
+	}
+	stub := &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)}
+	bridge, _ := newGatewayRuntimePortBridge(context.Background(), stub, testSessionStore, nil, ps)
+	defer bridge.Close()
+
+	models, err := bridge.ListModels(context.Background(), gateway.ListModelsInput{SubjectID: testBridgeSubjectID})
+	if err != nil {
+		t.Fatalf("list models: %v", err)
+	}
+	if len(models) != 1 {
+		t.Fatalf("models count = %d, want 1", len(models))
+	}
+	if models[0].ID != "gpt-4" || models[0].Name != "gpt-4" {
+		t.Fatalf("model = %+v, want id=gpt-4 name=gpt-4", models[0])
+	}
+}
+
+// ---- SetSessionModel ----
+
+func TestGatewayRuntimePortBridgeSetSessionModelStoreNil(t *testing.T) {
+	stub := &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)}
+	bridge, _ := newGatewayRuntimePortBridge(context.Background(), stub, nil)
+	defer bridge.Close()
+
+	err := bridge.SetSessionModel(context.Background(), gateway.SetSessionModelInput{
+		SubjectID: testBridgeSubjectID,
+		SessionID: "s-1",
+		ModelID:   "gpt-4",
+	})
+	if err == nil || !strings.Contains(err.Error(), "session store is unavailable") {
+		t.Fatalf("expected session store unavailable, got %v", err)
+	}
+}
+
+func TestGatewayRuntimePortBridgeSetSessionModelLoadFail(t *testing.T) {
+	store := &bridgeSessionStoreWithLoader{loadErr: errors.New("load failed")}
+	stub := &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)}
+	bridge, _ := newGatewayRuntimePortBridge(context.Background(), stub, store)
+	defer bridge.Close()
+
+	err := bridge.SetSessionModel(context.Background(), gateway.SetSessionModelInput{
+		SubjectID: testBridgeSubjectID,
+		SessionID: "s-1",
+		ModelID:   "gpt-4",
+	})
+	if err == nil || err.Error() != "load failed" {
+		t.Fatalf("expected load failed, got %v", err)
+	}
+}
+
+func TestGatewayRuntimePortBridgeSetSessionModelProviderInference(t *testing.T) {
+	store := &bridgeSessionStoreWithLoader{
+		session: agentsession.Session{ID: "s-1", Provider: "", Model: ""},
+	}
+	ps := &providerSelectionStub{
+		listOptions: []configstate.ProviderOption{
+			{ID: "openai", Models: []providertypes.ModelDescriptor{{ID: "gpt-4", Name: "GPT-4"}}},
+		},
+	}
+	stub := &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)}
+	bridge, _ := newGatewayRuntimePortBridge(context.Background(), stub, store, nil, ps)
+	defer bridge.Close()
+
+	err := bridge.SetSessionModel(context.Background(), gateway.SetSessionModelInput{
+		SubjectID: testBridgeSubjectID,
+		SessionID: "s-1",
+		ModelID:   "gpt-4",
+	})
+	if err != nil {
+		t.Fatalf("set session model: %v", err)
+	}
+}
+
+func TestGatewayRuntimePortBridgeSetSessionModelNotFound(t *testing.T) {
+	store := &bridgeSessionStoreWithLoader{
+		session: agentsession.Session{ID: "s-1", Provider: "openai", Model: ""},
+	}
+	ps := &providerSelectionStub{
+		listOptions: []configstate.ProviderOption{
+			{ID: "openai", Models: []providertypes.ModelDescriptor{{ID: "gpt-3", Name: "GPT-3"}}},
+		},
+	}
+	stub := &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)}
+	bridge, _ := newGatewayRuntimePortBridge(context.Background(), stub, store, nil, ps)
+	defer bridge.Close()
+
+	err := bridge.SetSessionModel(context.Background(), gateway.SetSessionModelInput{
+		SubjectID: testBridgeSubjectID,
+		SessionID: "s-1",
+		ModelID:   "gpt-4",
+	})
+	if err == nil || !strings.Contains(err.Error(), "not found") {
+		t.Fatalf("expected model not found, got %v", err)
+	}
+}
+
+// ---- GetSessionModel ----
+
+func TestGatewayRuntimePortBridgeGetSessionModelStoreNil(t *testing.T) {
+	stub := &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)}
+	bridge, _ := newGatewayRuntimePortBridge(context.Background(), stub, nil)
+	defer bridge.Close()
+
+	_, err := bridge.GetSessionModel(context.Background(), gateway.GetSessionModelInput{
+		SubjectID: testBridgeSubjectID,
+		SessionID: "s-1",
+	})
+	if err == nil || !strings.Contains(err.Error(), "session store is unavailable") {
+		t.Fatalf("expected session store unavailable, got %v", err)
+	}
+}
+
+func TestGatewayRuntimePortBridgeGetSessionModelLoadFail(t *testing.T) {
+	store := &bridgeSessionStoreWithLoader{loadErr: errors.New("load failed")}
+	stub := &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)}
+	bridge, _ := newGatewayRuntimePortBridge(context.Background(), stub, store)
+	defer bridge.Close()
+
+	_, err := bridge.GetSessionModel(context.Background(), gateway.GetSessionModelInput{
+		SubjectID: testBridgeSubjectID,
+		SessionID: "s-1",
+	})
+	if err == nil || err.Error() != "load failed" {
+		t.Fatalf("expected load failed, got %v", err)
+	}
+}
+
+func TestGatewayRuntimePortBridgeGetSessionModelConfigFallback(t *testing.T) {
+	store := &bridgeSessionStoreWithLoader{
+		session: agentsession.Session{ID: "s-1", Provider: "", Model: ""},
+	}
+	cfgMgr := &configManagerStub{
+		cfg: config.Config{SelectedProvider: "openai", CurrentModel: "gpt-4"},
+	}
+	ps := &providerSelectionStub{
+		listOptions: []configstate.ProviderOption{
+			{ID: "openai", Models: []providertypes.ModelDescriptor{{ID: "gpt-4", Name: "GPT-4"}}},
+		},
+	}
+	stub := &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)}
+	bridge, _ := newGatewayRuntimePortBridge(context.Background(), stub, store, cfgMgr, ps)
+	defer bridge.Close()
+
+	res, err := bridge.GetSessionModel(context.Background(), gateway.GetSessionModelInput{
+		SubjectID: testBridgeSubjectID,
+		SessionID: "s-1",
+	})
+	if err != nil {
+		t.Fatalf("get session model: %v", err)
+	}
+	if res.ProviderID != "openai" || res.ModelID != "gpt-4" || res.ModelName != "GPT-4" {
+		t.Fatalf("result = %+v, want openai/gpt-4/GPT-4", res)
+	}
+}
+
+func TestGatewayRuntimePortBridgeGetSessionModelDisplayNameNotFound(t *testing.T) {
+	store := &bridgeSessionStoreWithLoader{
+		session: agentsession.Session{ID: "s-1", Provider: "openai", Model: "gpt-4"},
+	}
+	ps := &providerSelectionStub{listOptions: []configstate.ProviderOption{}}
+	stub := &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)}
+	bridge, _ := newGatewayRuntimePortBridge(context.Background(), stub, store, nil, ps)
+	defer bridge.Close()
+
+	res, err := bridge.GetSessionModel(context.Background(), gateway.GetSessionModelInput{
+		SubjectID: testBridgeSubjectID,
+		SessionID: "s-1",
+	})
+	if err != nil {
+		t.Fatalf("get session model: %v", err)
+	}
+	if res.ModelName != "gpt-4" {
+		t.Fatalf("model name = %q, want %q", res.ModelName, "gpt-4")
+	}
+}
+
+// ---- ListProviders ----
+
+func TestGatewayRuntimePortBridgeListProvidersNilSelection(t *testing.T) {
+	stub := &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)}
+	bridge, _ := newGatewayRuntimePortBridge(context.Background(), stub, testSessionStore)
+	defer bridge.Close()
+
+	_, err := bridge.ListProviders(context.Background(), gateway.ListProvidersInput{SubjectID: testBridgeSubjectID})
+	if err == nil || !strings.Contains(err.Error(), "provider selection is unavailable") {
+		t.Fatalf("expected provider selection unavailable, got %v", err)
+	}
+}
+
+// ---- CreateProvider ----
+
+func TestGatewayRuntimePortBridgeCreateProviderNilSelection(t *testing.T) {
+	stub := &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)}
+	bridge, _ := newGatewayRuntimePortBridge(context.Background(), stub, testSessionStore)
+	defer bridge.Close()
+
+	_, err := bridge.CreateProvider(context.Background(), gateway.CreateProviderInput{SubjectID: testBridgeSubjectID})
+	if err == nil || !strings.Contains(err.Error(), "provider selection is unavailable") {
+		t.Fatalf("expected provider selection unavailable, got %v", err)
+	}
+}
+
+func TestGatewayRuntimePortBridgeCreateProviderError(t *testing.T) {
+	ps := &providerSelectionStub{createErr: errors.New("create failed")}
+	stub := &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)}
+	bridge, _ := newGatewayRuntimePortBridge(context.Background(), stub, testSessionStore, nil, ps)
+	defer bridge.Close()
+
+	_, err := bridge.CreateProvider(context.Background(), gateway.CreateProviderInput{SubjectID: testBridgeSubjectID})
+	if err == nil || err.Error() != "create failed" {
+		t.Fatalf("expected create failed, got %v", err)
+	}
+}
+
+// ---- DeleteProvider ----
+
+func TestGatewayRuntimePortBridgeDeleteProviderNilConfigManager(t *testing.T) {
+	stub := &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)}
+	bridge, _ := newGatewayRuntimePortBridge(context.Background(), stub, testSessionStore)
+	defer bridge.Close()
+
+	err := bridge.DeleteProvider(context.Background(), gateway.DeleteProviderInput{SubjectID: testBridgeSubjectID, ProviderID: "custom"})
+	if err == nil || !strings.Contains(err.Error(), "config manager is unavailable") {
+		t.Fatalf("expected config manager unavailable, got %v", err)
+	}
+}
+
+func TestGatewayRuntimePortBridgeDeleteProviderBuiltinRejection(t *testing.T) {
+	cfgMgr := &configManagerStub{
+		cfg: config.Config{Providers: []config.ProviderConfig{config.OpenAIProvider()}},
+	}
+	stub := &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)}
+	bridge, _ := newGatewayRuntimePortBridge(context.Background(), stub, testSessionStore, cfgMgr, nil)
+	defer bridge.Close()
+
+	err := bridge.DeleteProvider(context.Background(), gateway.DeleteProviderInput{SubjectID: testBridgeSubjectID, ProviderID: "openai"})
+	if err == nil || !strings.Contains(err.Error(), "builtin provider") {
+		t.Fatalf("expected builtin provider rejection, got %v", err)
+	}
+}
+
+// ---- SelectProviderModel ----
+
+func TestGatewayRuntimePortBridgeSelectProviderModelNilSelection(t *testing.T) {
+	stub := &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)}
+	bridge, _ := newGatewayRuntimePortBridge(context.Background(), stub, testSessionStore)
+	defer bridge.Close()
+
+	_, err := bridge.SelectProviderModel(context.Background(), gateway.SelectProviderModelInput{SubjectID: testBridgeSubjectID})
+	if err == nil || !strings.Contains(err.Error(), "provider selection is unavailable") {
+		t.Fatalf("expected provider selection unavailable, got %v", err)
+	}
+}
+
+func TestGatewayRuntimePortBridgeSelectProviderModelSelectError(t *testing.T) {
+	ps := &providerSelectionStub{selectErr: errors.New("select failed")}
+	stub := &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)}
+	bridge, _ := newGatewayRuntimePortBridge(context.Background(), stub, testSessionStore, nil, ps)
+	defer bridge.Close()
+
+	_, err := bridge.SelectProviderModel(context.Background(), gateway.SelectProviderModelInput{SubjectID: testBridgeSubjectID, ProviderID: "openai"})
+	if err == nil || err.Error() != "select failed" {
+		t.Fatalf("expected select failed, got %v", err)
+	}
+}
+
+// ---- UpsertMCPServer ----
+
+func TestGatewayRuntimePortBridgeUpsertMCPServerNilConfigManager(t *testing.T) {
+	stub := &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)}
+	bridge, _ := newGatewayRuntimePortBridge(context.Background(), stub, testSessionStore)
+	defer bridge.Close()
+
+	err := bridge.UpsertMCPServer(context.Background(), gateway.UpsertMCPServerInput{
+		SubjectID: testBridgeSubjectID,
+		Server:    config.MCPServerConfig{ID: "srv-1"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "config manager is unavailable") {
+		t.Fatalf("expected config manager unavailable, got %v", err)
+	}
+}
+
+// ---- SetMCPServerEnabled ----
+
+func TestGatewayRuntimePortBridgeSetMCPServerEnabledNilConfigManager(t *testing.T) {
+	stub := &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)}
+	bridge, _ := newGatewayRuntimePortBridge(context.Background(), stub, testSessionStore)
+	defer bridge.Close()
+
+	err := bridge.SetMCPServerEnabled(context.Background(), gateway.SetMCPServerEnabledInput{
+		SubjectID: testBridgeSubjectID,
+		ID:        "srv-1",
+		Enabled:   true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "config manager is unavailable") {
+		t.Fatalf("expected config manager unavailable, got %v", err)
+	}
+}
+
+func TestGatewayRuntimePortBridgeSetMCPServerEnabledNotFound(t *testing.T) {
+	cfgMgr := &configManagerStub{
+		cfg: config.Config{Tools: config.ToolsConfig{MCP: config.MCPConfig{Servers: []config.MCPServerConfig{}}}},
+	}
+	stub := &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)}
+	bridge, _ := newGatewayRuntimePortBridge(context.Background(), stub, testSessionStore, cfgMgr, nil)
+	defer bridge.Close()
+
+	err := bridge.SetMCPServerEnabled(context.Background(), gateway.SetMCPServerEnabledInput{
+		SubjectID: testBridgeSubjectID,
+		ID:        "srv-1",
+		Enabled:   true,
+	})
+	if err == nil || !errors.Is(err, gateway.ErrRuntimeResourceNotFound) {
+		t.Fatalf("expected ErrRuntimeResourceNotFound, got %v", err)
+	}
+}
+
+// ---- DeleteMCPServer ----
+
+func TestGatewayRuntimePortBridgeDeleteMCPServerNilConfigManager(t *testing.T) {
+	stub := &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)}
+	bridge, _ := newGatewayRuntimePortBridge(context.Background(), stub, testSessionStore)
+	defer bridge.Close()
+
+	err := bridge.DeleteMCPServer(context.Background(), gateway.DeleteMCPServerInput{
+		SubjectID: testBridgeSubjectID,
+		ID:        "srv-1",
+	})
+	if err == nil || !strings.Contains(err.Error(), "config manager is unavailable") {
+		t.Fatalf("expected config manager unavailable, got %v", err)
+	}
+}
+
+func TestGatewayRuntimePortBridgeDeleteMCPServerNotFound(t *testing.T) {
+	cfgMgr := &configManagerStub{
+		cfg: config.Config{Tools: config.ToolsConfig{MCP: config.MCPConfig{Servers: []config.MCPServerConfig{}}}},
+	}
+	stub := &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)}
+	bridge, _ := newGatewayRuntimePortBridge(context.Background(), stub, testSessionStore, cfgMgr, nil)
+	defer bridge.Close()
+
+	err := bridge.DeleteMCPServer(context.Background(), gateway.DeleteMCPServerInput{
+		SubjectID: testBridgeSubjectID,
+		ID:        "srv-1",
+	})
+	if err == nil || !errors.Is(err, gateway.ErrRuntimeResourceNotFound) {
+		t.Fatalf("expected ErrRuntimeResourceNotFound, got %v", err)
+	}
+}
+
+// ---- internal helpers ----
+
+func TestResolveProviderModelForSession(t *testing.T) {
+	t.Run("exact match", func(t *testing.T) {
+		ps := &providerSelectionStub{
+			listOptions: []configstate.ProviderOption{
+				{ID: "openai", Models: []providertypes.ModelDescriptor{{ID: "gpt-4", Name: "GPT-4"}}},
+			},
+		}
+		stub := &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)}
+		bridge, _ := newGatewayRuntimePortBridge(context.Background(), stub, testSessionStore, nil, ps)
+		defer bridge.Close()
+
+		pid, mid, err := bridge.resolveProviderModelForSession(context.Background(), agentsession.Session{Provider: "openai"}, "openai", "gpt-4")
+		if err != nil {
+			t.Fatalf("exact match: %v", err)
+		}
+		if pid != "openai" || mid != "gpt-4" {
+			t.Fatalf("pid=%q mid=%q, want openai/gpt-4", pid, mid)
+		}
+	})
+
+	t.Run("inferred provider", func(t *testing.T) {
+		ps := &providerSelectionStub{
+			listOptions: []configstate.ProviderOption{
+				{ID: "openai", Models: []providertypes.ModelDescriptor{{ID: "gpt-4", Name: "GPT-4"}}},
+			},
+		}
+		stub := &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)}
+		bridge, _ := newGatewayRuntimePortBridge(context.Background(), stub, testSessionStore, nil, ps)
+		defer bridge.Close()
+
+		pid, mid, err := bridge.resolveProviderModelForSession(context.Background(), agentsession.Session{}, "", "gpt-4")
+		if err != nil {
+			t.Fatalf("inferred provider: %v", err)
+		}
+		if pid != "openai" || mid != "gpt-4" {
+			t.Fatalf("pid=%q mid=%q, want openai/gpt-4", pid, mid)
+		}
+	})
+
+	t.Run("model not found", func(t *testing.T) {
+		ps := &providerSelectionStub{listOptions: []configstate.ProviderOption{}}
+		stub := &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)}
+		bridge, _ := newGatewayRuntimePortBridge(context.Background(), stub, testSessionStore, nil, ps)
+		defer bridge.Close()
+
+		_, _, err := bridge.resolveProviderModelForSession(context.Background(), agentsession.Session{Provider: "openai"}, "openai", "gpt-4")
+		if err == nil || !strings.Contains(err.Error(), "not found") {
+			t.Fatalf("expected model not found, got %v", err)
+		}
+	})
+}
+
+func TestModelDisplayName(t *testing.T) {
+	t.Run("provider filter", func(t *testing.T) {
+		ps := &providerSelectionStub{
+			listOptions: []configstate.ProviderOption{
+				{ID: "openai", Models: []providertypes.ModelDescriptor{{ID: "gpt-4", Name: "GPT-4"}}},
+				{ID: "gemini", Models: []providertypes.ModelDescriptor{{ID: "gpt-4", Name: "Gemini-GPT-4"}}},
+			},
+		}
+		stub := &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)}
+		bridge, _ := newGatewayRuntimePortBridge(context.Background(), stub, testSessionStore, nil, ps)
+		defer bridge.Close()
+
+		name := bridge.modelDisplayName(context.Background(), "openai", "gpt-4")
+		if name != "GPT-4" {
+			t.Fatalf("name = %q, want %q", name, "GPT-4")
+		}
+	})
+
+	t.Run("name empty fallback", func(t *testing.T) {
+		ps := &providerSelectionStub{
+			listOptions: []configstate.ProviderOption{
+				{ID: "openai", Models: []providertypes.ModelDescriptor{{ID: "gpt-4", Name: ""}}},
+			},
+		}
+		stub := &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)}
+		bridge, _ := newGatewayRuntimePortBridge(context.Background(), stub, testSessionStore, nil, ps)
+		defer bridge.Close()
+
+		name := bridge.modelDisplayName(context.Background(), "openai", "gpt-4")
+		if name != "gpt-4" {
+			t.Fatalf("name = %q, want %q", name, "gpt-4")
+		}
+	})
+
+	t.Run("not found fallback to modelID", func(t *testing.T) {
+		ps := &providerSelectionStub{listOptions: []configstate.ProviderOption{}}
+		stub := &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)}
+		bridge, _ := newGatewayRuntimePortBridge(context.Background(), stub, testSessionStore, nil, ps)
+		defer bridge.Close()
+
+		name := bridge.modelDisplayName(context.Background(), "openai", "gpt-4")
+		if name != "gpt-4" {
+			t.Fatalf("name = %q, want %q", name, "gpt-4")
+		}
+	})
 }

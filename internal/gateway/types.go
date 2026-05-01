@@ -46,6 +46,34 @@ const (
 	FrameActionLoadSession FrameAction = "load_session"
 	// FrameActionResolvePermission 表示提交一次权限审批决策。
 	FrameActionResolvePermission FrameAction = "resolve_permission"
+	// FrameActionDeleteSession 表示删除/归档会话。
+	FrameActionDeleteSession FrameAction = "delete_session"
+	// FrameActionRenameSession 表示重命名会话。
+	FrameActionRenameSession FrameAction = "rename_session"
+	// FrameActionListFiles 表示列出工作目录文件树。
+	FrameActionListFiles FrameAction = "list_files"
+	// FrameActionListModels 表示列出可用模型。
+	FrameActionListModels FrameAction = "list_models"
+	// FrameActionSetSessionModel 表示设置会话模型。
+	FrameActionSetSessionModel FrameAction = "set_session_model"
+	// FrameActionGetSessionModel 表示获取当前会话模型。
+	FrameActionGetSessionModel FrameAction = "get_session_model"
+	// FrameActionListProviders 表示列出可管理 provider。
+	FrameActionListProviders FrameAction = "list_providers"
+	// FrameActionCreateCustomProvider 表示创建自定义 provider。
+	FrameActionCreateCustomProvider FrameAction = "create_custom_provider"
+	// FrameActionDeleteCustomProvider 表示删除自定义 provider。
+	FrameActionDeleteCustomProvider FrameAction = "delete_custom_provider"
+	// FrameActionSelectProviderModel 表示设置全局 provider/model。
+	FrameActionSelectProviderModel FrameAction = "select_provider_model"
+	// FrameActionListMCPServers 表示列出 MCP server 配置。
+	FrameActionListMCPServers FrameAction = "list_mcp_servers"
+	// FrameActionUpsertMCPServer 表示新增或更新 MCP server 配置。
+	FrameActionUpsertMCPServer FrameAction = "upsert_mcp_server"
+	// FrameActionSetMCPServerEnabled 表示启停 MCP server。
+	FrameActionSetMCPServerEnabled FrameAction = "set_mcp_server_enabled"
+	// FrameActionDeleteMCPServer 表示删除 MCP server。
+	FrameActionDeleteMCPServer FrameAction = "delete_mcp_server"
 	// FrameActionWakeOpenURL 表示处理 URL Scheme 唤醒请求。
 	FrameActionWakeOpenURL FrameAction = "wake.openUrl"
 )

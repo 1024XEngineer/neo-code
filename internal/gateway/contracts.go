@@ -4,6 +4,8 @@ import (
 	"context"
 	"time"
 
+	"neo-code/internal/config"
+	providertypes "neo-code/internal/provider/types"
 	"neo-code/internal/tools"
 )
 
@@ -149,6 +151,213 @@ type CreateSessionInput struct {
 	SessionID string
 }
 
+// DeleteSessionInput 表示 gateway.deleteSession 动作的下游输入。
+type DeleteSessionInput struct {
+	// SubjectID 是请求方身份主体标识。
+	SubjectID string
+	// SessionID 是目标会话标识。
+	SessionID string
+}
+
+// RenameSessionInput 表示 gateway.renameSession 动作的下游输入。
+type RenameSessionInput struct {
+	// SubjectID 是请求方身份主体标识。
+	SubjectID string
+	// SessionID 是目标会话标识。
+	SessionID string
+	// Title 是新标题。
+	Title string
+}
+
+// FileEntry 表示文件树中的单个条目。
+type FileEntry struct {
+	// Name 是文件/目录名。
+	Name string `json:"name"`
+	// Path 是相对路径。
+	Path string `json:"path"`
+	// IsDir 表示是否为目录。
+	IsDir bool `json:"is_dir"`
+	// Size 是文件大小（字节）。
+	Size int64 `json:"size,omitempty"`
+	// ModTime 是修改时间。
+	ModTime string `json:"mod_time,omitempty"`
+}
+
+// ListFilesInput 表示 gateway.listFiles 动作的下游输入。
+type ListFilesInput struct {
+	// SubjectID 是请求方身份主体标识。
+	SubjectID string
+	// SessionID 是可选会话标识。
+	SessionID string
+	// Workdir 是工作目录。
+	Workdir string
+	// Path 是相对子路径。
+	Path string
+}
+
+// ModelEntry 表示可用模型条目。
+type ModelEntry struct {
+	// ID 是模型标识。
+	ID string `json:"id"`
+	// Name 是模型展示名称。
+	Name string `json:"name"`
+	// Provider 是模型供应商。
+	Provider string `json:"provider"`
+}
+
+// ListModelsInput 表示 gateway.listModels 动作的下游输入。
+type ListModelsInput struct {
+	// SubjectID 是请求方身份主体标识。
+	SubjectID string
+	// SessionID 是可选会话标识。
+	SessionID string
+}
+
+// SetSessionModelInput 表示 gateway.setSessionModel 动作的下游输入。
+type SetSessionModelInput struct {
+	// SubjectID 是请求方身份主体标识。
+	SubjectID string
+	// SessionID 是目标会话标识。
+	SessionID string
+	// ProviderID 是可选 provider 标识，为空时沿用会话或全局当前 provider。
+	ProviderID string
+	// ModelID 是目标模型标识。
+	ModelID string
+}
+
+// GetSessionModelInput 表示 gateway.getSessionModel 动作的下游输入。
+type GetSessionModelInput struct {
+	// SubjectID 是请求方身份主体标识。
+	SubjectID string
+	// SessionID 是目标会话标识。
+	SessionID string
+}
+
+// SessionModelResult 表示 getSessionModel 返回的模型信息。
+type SessionModelResult struct {
+	// ProviderID 是 provider 标识。
+	ProviderID string `json:"provider_id,omitempty"`
+	// ModelID 是模型标识。
+	ModelID string `json:"model_id"`
+	// ModelName 是模型展示名称。
+	ModelName string `json:"model_name,omitempty"`
+	// Provider 是模型供应商。
+	Provider string `json:"provider,omitempty"`
+}
+
+// ProviderOption 表示前端管理面可见的 provider 及模型候选。
+type ProviderOption struct {
+	// ID 是 provider 标识。
+	ID string `json:"id"`
+	// Name 是展示名称。
+	Name string `json:"name"`
+	// Driver 是 provider 驱动类型。
+	Driver string `json:"driver"`
+	// BaseURL 是 provider 基础地址。
+	BaseURL string `json:"base_url,omitempty"`
+	// APIKeyEnv 是用于读取 API Key 的环境变量名。
+	APIKeyEnv string `json:"api_key_env"`
+	// Source 表示 provider 来源（builtin/custom）。
+	Source string `json:"source"`
+	// Selected 表示当前是否为全局选中 provider。
+	Selected bool `json:"selected"`
+	// Models 是该 provider 当前可用模型候选。
+	Models []providertypes.ModelDescriptor `json:"models,omitempty"`
+}
+
+// ListProvidersInput 表示 provider 列表查询输入。
+type ListProvidersInput struct {
+	// SubjectID 是请求方身份主体标识。
+	SubjectID string
+}
+
+// CreateProviderInput 表示新增自定义 provider 的输入。
+type CreateProviderInput struct {
+	// SubjectID 是请求方身份主体标识。
+	SubjectID string
+	// Name 是 provider 名称。
+	Name string `json:"name"`
+	// Driver 是 provider 驱动。
+	Driver string `json:"driver"`
+	// BaseURL 是 provider 基础地址。
+	BaseURL string `json:"base_url,omitempty"`
+	// ChatAPIMode 是 OpenAI 兼容 provider 的 chat API 模式。
+	ChatAPIMode string `json:"chat_api_mode,omitempty"`
+	// ChatEndpointPath 是 OpenAI 兼容 provider 的 chat 端点。
+	ChatEndpointPath string `json:"chat_endpoint_path,omitempty"`
+	// APIKeyEnv 是 API Key 环境变量名。
+	APIKeyEnv string `json:"api_key_env"`
+	// APIKey 是待写入用户环境变量的密钥值。
+	APIKey string `json:"api_key,omitempty"`
+	// ModelSource 表示模型来源（discover/manual）。
+	ModelSource string `json:"model_source,omitempty"`
+	// DiscoveryEndpointPath 是模型发现端点。
+	DiscoveryEndpointPath string `json:"discovery_endpoint_path,omitempty"`
+	// Models 是手工模型列表。
+	Models []providertypes.ModelDescriptor `json:"models,omitempty"`
+}
+
+// DeleteProviderInput 表示删除自定义 provider 的输入。
+type DeleteProviderInput struct {
+	// SubjectID 是请求方身份主体标识。
+	SubjectID string
+	// ProviderID 是 provider 标识。
+	ProviderID string `json:"provider_id"`
+}
+
+// SelectProviderModelInput 表示全局选择 provider/model 的输入。
+type SelectProviderModelInput struct {
+	// SubjectID 是请求方身份主体标识。
+	SubjectID string
+	// ProviderID 是 provider 标识。
+	ProviderID string `json:"provider_id"`
+	// ModelID 是模型标识。
+	ModelID string `json:"model_id,omitempty"`
+}
+
+// ProviderSelectionResult 表示 provider/model 选择结果。
+type ProviderSelectionResult struct {
+	// ProviderID 是 provider 标识。
+	ProviderID string `json:"provider_id"`
+	// ModelID 是模型标识。
+	ModelID string `json:"model_id"`
+}
+
+// MCPServerEntry 表示前端管理面可见的 MCP server 配置。
+type MCPServerEntry = config.MCPServerConfig
+
+// ListMCPServersInput 表示 MCP server 列表查询输入。
+type ListMCPServersInput struct {
+	// SubjectID 是请求方身份主体标识。
+	SubjectID string
+}
+
+// UpsertMCPServerInput 表示新增或更新 MCP server 的输入。
+type UpsertMCPServerInput struct {
+	// SubjectID 是请求方身份主体标识。
+	SubjectID string
+	// Server 是完整 MCP server 配置。
+	Server MCPServerEntry `json:"server"`
+}
+
+// SetMCPServerEnabledInput 表示启停 MCP server 的输入。
+type SetMCPServerEnabledInput struct {
+	// SubjectID 是请求方身份主体标识。
+	SubjectID string
+	// ID 是 MCP server 标识。
+	ID string `json:"id"`
+	// Enabled 表示是否启用。
+	Enabled bool `json:"enabled"`
+}
+
+// DeleteMCPServerInput 表示删除 MCP server 的输入。
+type DeleteMCPServerInput struct {
+	// SubjectID 是请求方身份主体标识。
+	SubjectID string
+	// ID 是 MCP server 标识。
+	ID string `json:"id"`
+}
+
 // CompactResult 表示 compact 动作完成后返回的结果。
 type CompactResult struct {
 	// Applied 表示是否实际应用压缩结果。
@@ -215,6 +424,10 @@ type Session struct {
 	UpdatedAt time.Time `json:"updated_at"`
 	// Workdir 是会话工作目录。
 	Workdir string `json:"workdir,omitempty"`
+	// Provider 是会话当前 provider。
+	Provider string `json:"provider,omitempty"`
+	// Model 是会话当前模型。
+	Model string `json:"model,omitempty"`
 	// Messages 是会话消息快照。
 	Messages []SessionMessage `json:"messages,omitempty"`
 }
@@ -307,6 +520,38 @@ type RuntimePort interface {
 	LoadSession(ctx context.Context, input LoadSessionInput) (Session, error)
 	// CreateSession 创建并返回可用会话标识。
 	CreateSession(ctx context.Context, input CreateSessionInput) (string, error)
+	// DeleteSession 删除/归档指定会话。
+	DeleteSession(ctx context.Context, input DeleteSessionInput) (bool, error)
+	// RenameSession 重命名指定会话。
+	RenameSession(ctx context.Context, input RenameSessionInput) error
+	// ListFiles 列出工作目录文件树。
+	ListFiles(ctx context.Context, input ListFilesInput) ([]FileEntry, error)
+	// ListModels 列出可用模型。
+	ListModels(ctx context.Context, input ListModelsInput) ([]ModelEntry, error)
+	// SetSessionModel 设置会话模型。
+	SetSessionModel(ctx context.Context, input SetSessionModelInput) error
+	// GetSessionModel 获取当前会话模型。
+	GetSessionModel(ctx context.Context, input GetSessionModelInput) (SessionModelResult, error)
+}
+
+// ManagementRuntimePort 定义前端管理面访问配置能力的可选下游端口。
+type ManagementRuntimePort interface {
+	// ListProviders 列出可管理 provider。
+	ListProviders(ctx context.Context, input ListProvidersInput) ([]ProviderOption, error)
+	// CreateProvider 创建自定义 provider。
+	CreateProvider(ctx context.Context, input CreateProviderInput) (ProviderSelectionResult, error)
+	// DeleteProvider 删除自定义 provider。
+	DeleteProvider(ctx context.Context, input DeleteProviderInput) error
+	// SelectProviderModel 设置全局 provider/model。
+	SelectProviderModel(ctx context.Context, input SelectProviderModelInput) (ProviderSelectionResult, error)
+	// ListMCPServers 列出 MCP server 配置。
+	ListMCPServers(ctx context.Context, input ListMCPServersInput) ([]MCPServerEntry, error)
+	// UpsertMCPServer 新增或更新 MCP server 配置。
+	UpsertMCPServer(ctx context.Context, input UpsertMCPServerInput) error
+	// SetMCPServerEnabled 启停 MCP server。
+	SetMCPServerEnabled(ctx context.Context, input SetMCPServerEnabledInput) error
+	// DeleteMCPServer 删除 MCP server。
+	DeleteMCPServer(ctx context.Context, input DeleteMCPServerInput) error
 }
 
 // Gateway 定义网关主契约。

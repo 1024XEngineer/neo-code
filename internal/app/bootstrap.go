@@ -119,6 +119,7 @@ type RuntimeBundle struct {
 	Config            config.Config
 	ConfigManager     *config.Manager
 	Runtime           agentruntime.Runtime
+	SessionStore      *agentsession.SQLiteStore
 	ProviderSelection *configstate.Service
 	MemoService       *memo.Service
 	Close             func() error // 用于清理 bundle 运行期间拉起的系统资源
@@ -239,6 +240,7 @@ func BuildGatewayServerDeps(ctx context.Context, opts BootstrapOptions) (Runtime
 		Config:            cfg,
 		ConfigManager:     sharedDeps.ConfigManager,
 		Runtime:           runtimeImpl,
+		SessionStore:      sessionStore,
 		ProviderSelection: sharedDeps.ProviderSelection,
 		MemoService:       memoSvc,
 		Close:             closeBundle,

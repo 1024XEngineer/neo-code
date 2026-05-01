@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"neo-code/internal/gateway/auth"
 	"neo-code/internal/gateway/handlers"
 	"neo-code/internal/gateway/protocol"
 	"neo-code/internal/tools"
@@ -28,6 +29,20 @@ type bootstrapRuntimeStub struct {
 	events              <-chan RuntimeEvent
 	listSessionsFn      func(ctx context.Context) ([]SessionSummary, error)
 	loadSessionFn       func(ctx context.Context, input LoadSessionInput) (Session, error)
+	deleteSessionFn     func(ctx context.Context, input DeleteSessionInput) (bool, error)
+	renameSessionFn     func(ctx context.Context, input RenameSessionInput) error
+	listFilesFn         func(ctx context.Context, input ListFilesInput) ([]FileEntry, error)
+	listModelsFn        func(ctx context.Context, input ListModelsInput) ([]ModelEntry, error)
+	setSessionModelFn   func(ctx context.Context, input SetSessionModelInput) error
+	getSessionModelFn   func(ctx context.Context, input GetSessionModelInput) (SessionModelResult, error)
+	listProvidersFn     func(ctx context.Context, input ListProvidersInput) ([]ProviderOption, error)
+	createProviderFn    func(ctx context.Context, input CreateProviderInput) (ProviderSelectionResult, error)
+	deleteProviderFn    func(ctx context.Context, input DeleteProviderInput) error
+	selectProviderFn    func(ctx context.Context, input SelectProviderModelInput) (ProviderSelectionResult, error)
+	listMCPServersFn    func(ctx context.Context, input ListMCPServersInput) ([]MCPServerEntry, error)
+	upsertMCPServerFn   func(ctx context.Context, input UpsertMCPServerInput) error
+	setMCPEnabledFn     func(ctx context.Context, input SetMCPServerEnabledInput) error
+	deleteMCPServerFn   func(ctx context.Context, input DeleteMCPServerInput) error
 }
 
 func (s *bootstrapRuntimeStub) Run(ctx context.Context, input RunInput) error {
@@ -121,6 +136,93 @@ func (s *bootstrapRuntimeStub) LoadSession(ctx context.Context, input LoadSessio
 		return s.loadSessionFn(ctx, input)
 	}
 	return Session{}, nil
+}
+func (s *bootstrapRuntimeStub) DeleteSession(ctx context.Context, input DeleteSessionInput) (bool, error) {
+	if s != nil && s.deleteSessionFn != nil {
+		return s.deleteSessionFn(ctx, input)
+	}
+	return false, nil
+}
+func (s *bootstrapRuntimeStub) RenameSession(ctx context.Context, input RenameSessionInput) error {
+	if s != nil && s.renameSessionFn != nil {
+		return s.renameSessionFn(ctx, input)
+	}
+	return nil
+}
+func (s *bootstrapRuntimeStub) ListFiles(ctx context.Context, input ListFilesInput) ([]FileEntry, error) {
+	if s != nil && s.listFilesFn != nil {
+		return s.listFilesFn(ctx, input)
+	}
+	return nil, nil
+}
+func (s *bootstrapRuntimeStub) ListModels(ctx context.Context, input ListModelsInput) ([]ModelEntry, error) {
+	if s != nil && s.listModelsFn != nil {
+		return s.listModelsFn(ctx, input)
+	}
+	return nil, nil
+}
+func (s *bootstrapRuntimeStub) SetSessionModel(ctx context.Context, input SetSessionModelInput) error {
+	if s != nil && s.setSessionModelFn != nil {
+		return s.setSessionModelFn(ctx, input)
+	}
+	return nil
+}
+func (s *bootstrapRuntimeStub) GetSessionModel(ctx context.Context, input GetSessionModelInput) (SessionModelResult, error) {
+	if s != nil && s.getSessionModelFn != nil {
+		return s.getSessionModelFn(ctx, input)
+	}
+	return SessionModelResult{}, nil
+}
+func (s *bootstrapRuntimeStub) ListProviders(ctx context.Context, input ListProvidersInput) ([]ProviderOption, error) {
+	if s != nil && s.listProvidersFn != nil {
+		return s.listProvidersFn(ctx, input)
+	}
+	return nil, nil
+}
+func (s *bootstrapRuntimeStub) CreateProvider(ctx context.Context, input CreateProviderInput) (ProviderSelectionResult, error) {
+	if s != nil && s.createProviderFn != nil {
+		return s.createProviderFn(ctx, input)
+	}
+	return ProviderSelectionResult{}, nil
+}
+func (s *bootstrapRuntimeStub) DeleteProvider(ctx context.Context, input DeleteProviderInput) error {
+	if s != nil && s.deleteProviderFn != nil {
+		return s.deleteProviderFn(ctx, input)
+	}
+	return nil
+}
+func (s *bootstrapRuntimeStub) SelectProviderModel(
+	ctx context.Context,
+	input SelectProviderModelInput,
+) (ProviderSelectionResult, error) {
+	if s != nil && s.selectProviderFn != nil {
+		return s.selectProviderFn(ctx, input)
+	}
+	return ProviderSelectionResult{}, nil
+}
+func (s *bootstrapRuntimeStub) ListMCPServers(ctx context.Context, input ListMCPServersInput) ([]MCPServerEntry, error) {
+	if s != nil && s.listMCPServersFn != nil {
+		return s.listMCPServersFn(ctx, input)
+	}
+	return nil, nil
+}
+func (s *bootstrapRuntimeStub) UpsertMCPServer(ctx context.Context, input UpsertMCPServerInput) error {
+	if s != nil && s.upsertMCPServerFn != nil {
+		return s.upsertMCPServerFn(ctx, input)
+	}
+	return nil
+}
+func (s *bootstrapRuntimeStub) SetMCPServerEnabled(ctx context.Context, input SetMCPServerEnabledInput) error {
+	if s != nil && s.setMCPEnabledFn != nil {
+		return s.setMCPEnabledFn(ctx, input)
+	}
+	return nil
+}
+func (s *bootstrapRuntimeStub) DeleteMCPServer(ctx context.Context, input DeleteMCPServerInput) error {
+	if s != nil && s.deleteMCPServerFn != nil {
+		return s.deleteMCPServerFn(ctx, input)
+	}
+	return nil
 }
 
 func (s *bootstrapRuntimeStub) CreateSession(ctx context.Context, input CreateSessionInput) (string, error) {
@@ -693,16 +795,22 @@ func TestDecodeAuthenticatePayloadBranches(t *testing.T) {
 	})
 
 	t.Run("pointer with empty token", func(t *testing.T) {
-		_, err := decodeAuthenticatePayload(&protocol.AuthenticateParams{Token: " "})
-		if err == nil || err.Code != ErrorCodeMissingRequiredField.String() {
-			t.Fatalf("expected missing token error, got %#v", err)
+		params, err := decodeAuthenticatePayload(&protocol.AuthenticateParams{Token: " "})
+		if err != nil {
+			t.Fatalf("empty token should be allowed, got error: %v", err)
+		}
+		if params.Token != "" {
+			t.Fatalf("token = %q, want empty after trim", params.Token)
 		}
 	})
 
 	t.Run("map missing token", func(t *testing.T) {
-		_, err := decodeAuthenticatePayload(map[string]any{"id": "x"})
-		if err == nil || err.Code != ErrorCodeMissingRequiredField.String() {
-			t.Fatalf("expected missing token error, got %#v", err)
+		params, err := decodeAuthenticatePayload(map[string]any{"id": "x"})
+		if err != nil {
+			t.Fatalf("missing token should be allowed, got error: %v", err)
+		}
+		if params.Token != "" {
+			t.Fatalf("token = %q, want empty", params.Token)
 		}
 	})
 
@@ -726,19 +834,40 @@ func TestHandleAuthenticateFrameBranches(t *testing.T) {
 		},
 	}
 
-	t.Run("missing authenticator", func(t *testing.T) {
+	t.Run("missing authenticator uses default local subject", func(t *testing.T) {
 		response := handleAuthenticateFrame(context.Background(), frame)
-		if response.Type != FrameTypeError {
-			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+		if response.Type != FrameTypeAck {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeAck)
 		}
-		if response.Error == nil || response.Error.Code != ErrorCodeInternalError.String() {
-			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeInternalError.String())
+		payload, ok := response.Payload.(map[string]string)
+		if !ok {
+			t.Fatalf("expected map[string]string payload, got %T", response.Payload)
+		}
+		if payload["subject_id"] != auth.DefaultLocalSubjectID {
+			t.Fatalf("subject_id = %q, want %q", payload["subject_id"], auth.DefaultLocalSubjectID)
 		}
 	})
 
 	t.Run("invalid token", func(t *testing.T) {
 		ctx := WithTokenAuthenticator(context.Background(), stubTokenAuthenticator{token: "other"})
 		response := handleAuthenticateFrame(ctx, frame)
+		if response.Type != FrameTypeError {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+		}
+		if response.Error == nil || response.Error.Code != ErrorCodeUnauthorized.String() {
+			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeUnauthorized.String())
+		}
+	})
+
+	t.Run("empty token with authenticator rejects early", func(t *testing.T) {
+		emptyFrame := MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionAuthenticate,
+			RequestID: "req-empty-token",
+			Payload:   protocol.AuthenticateParams{Token: ""},
+		}
+		ctx := WithTokenAuthenticator(context.Background(), stubTokenAuthenticator{token: "valid"})
+		response := handleAuthenticateFrame(ctx, emptyFrame)
 		if response.Type != FrameTypeError {
 			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
 		}
@@ -1727,8 +1856,8 @@ func TestRequireAuthenticatedSubjectIDBranches(t *testing.T) {
 		if frameErr != nil {
 			t.Fatalf("unexpected frame error: %#v", frameErr)
 		}
-		if subjectID != defaultLocalSubjectID {
-			t.Fatalf("subject_id = %q, want %q", subjectID, defaultLocalSubjectID)
+		if subjectID != auth.DefaultLocalSubjectID {
+			t.Fatalf("subject_id = %q, want %q", subjectID, auth.DefaultLocalSubjectID)
 		}
 	})
 
@@ -1891,10 +2020,13 @@ func TestDecodeCancelInputBranches(t *testing.T) {
 }
 
 func TestDecodeAuthenticatePayloadAdditionalBranches(t *testing.T) {
-	t.Run("struct missing token", func(t *testing.T) {
-		_, frameErr := decodeAuthenticatePayload(protocol.AuthenticateParams{Token: " "})
-		if frameErr == nil || frameErr.Code != ErrorCodeMissingRequiredField.String() {
-			t.Fatalf("frameErr = %#v, want %q", frameErr, ErrorCodeMissingRequiredField.String())
+	t.Run("struct with whitespace-only token", func(t *testing.T) {
+		params, frameErr := decodeAuthenticatePayload(protocol.AuthenticateParams{Token: " "})
+		if frameErr != nil {
+			t.Fatalf("whitespace-only token should be allowed, got error: %v", frameErr)
+		}
+		if params.Token != "" {
+			t.Fatalf("token = %q, want empty after trim", params.Token)
 		}
 	})
 
@@ -2019,4 +2151,1646 @@ func TestToFrameErrorNilBranch(t *testing.T) {
 	if frameErr.Code != ErrorCodeInternalError.String() {
 		t.Fatalf("frame error code = %q, want %q", frameErr.Code, ErrorCodeInternalError.String())
 	}
+}
+
+func TestHandleDeleteSessionFrameSuccess(t *testing.T) {
+	runtime := &bootstrapRuntimeStub{
+		deleteSessionFn: func(_ context.Context, input DeleteSessionInput) (bool, error) {
+			if input.SessionID != "session-1" {
+				t.Fatalf("session_id = %q, want %q", input.SessionID, "session-1")
+			}
+			return true, nil
+		},
+	}
+	authState := NewConnectionAuthState()
+	authState.MarkAuthenticated("subject-1")
+	ctx := WithRequestSource(context.Background(), RequestSourceIPC)
+	ctx = WithConnectionAuthState(ctx, authState)
+
+	frame := MessageFrame{
+		Type:      FrameTypeRequest,
+		Action:    FrameActionDeleteSession,
+		RequestID: "req-del-1",
+		SessionID: "session-1",
+	}
+	response := dispatchRequestFrame(ctx, frame, runtime)
+	if response.Type != FrameTypeAck {
+		t.Fatalf("response type = %q, want %q", response.Type, FrameTypeAck)
+	}
+	if response.Action != FrameActionDeleteSession {
+		t.Fatalf("response action = %q, want %q", response.Action, FrameActionDeleteSession)
+	}
+}
+
+func TestHandleDeleteSessionFrameEmptySessionID(t *testing.T) {
+	runtime := &bootstrapRuntimeStub{}
+	authState := NewConnectionAuthState()
+	authState.MarkAuthenticated("subject-1")
+	ctx := WithRequestSource(context.Background(), RequestSourceIPC)
+	ctx = WithConnectionAuthState(ctx, authState)
+
+	frame := MessageFrame{
+		Type:      FrameTypeRequest,
+		Action:    FrameActionDeleteSession,
+		RequestID: "req-del-2",
+	}
+	response := dispatchRequestFrame(ctx, frame, runtime)
+	// handler 层不做 session_id 校验（由 validateRequestFrame 在 RPC 分发层做），空 session_id 走默认 stub 返回 deleted=false
+	if response.Type != FrameTypeAck {
+		t.Fatalf("response type = %q, want %q", response.Type, FrameTypeAck)
+	}
+	payload, ok := response.Payload.(map[string]any)
+	if !ok {
+		t.Fatalf("expected map payload, got %T", response.Payload)
+	}
+	if payload["deleted"] != false {
+		t.Fatalf("deleted = %v, want false", payload["deleted"])
+	}
+}
+
+func TestHandleRenameSessionFrameSuccess(t *testing.T) {
+	runtime := &bootstrapRuntimeStub{
+		renameSessionFn: func(_ context.Context, input RenameSessionInput) (err error) {
+			if input.SessionID != "session-1" {
+				t.Fatalf("session_id = %q, want %q", input.SessionID, "session-1")
+			}
+			if input.Title != "New Title" {
+				t.Fatalf("title = %q, want %q", input.Title, "New Title")
+			}
+			return nil
+		},
+	}
+	authState := NewConnectionAuthState()
+	authState.MarkAuthenticated("subject-1")
+	ctx := WithRequestSource(context.Background(), RequestSourceIPC)
+	ctx = WithConnectionAuthState(ctx, authState)
+
+	frame := MessageFrame{
+		Type:      FrameTypeRequest,
+		Action:    FrameActionRenameSession,
+		RequestID: "req-rename-1",
+		SessionID: "session-1",
+		Payload:   protocol.RenameSessionParams{SessionID: "session-1", Title: "New Title"},
+	}
+	response := dispatchRequestFrame(ctx, frame, runtime)
+	if response.Type != FrameTypeAck {
+		t.Fatalf("response type = %q, want %q", response.Type, FrameTypeAck)
+	}
+}
+
+func TestHandleRenameSessionFrameNilPayload(t *testing.T) {
+	runtime := &bootstrapRuntimeStub{}
+	authState := NewConnectionAuthState()
+	authState.MarkAuthenticated("subject-1")
+	ctx := WithRequestSource(context.Background(), RequestSourceIPC)
+	ctx = WithConnectionAuthState(ctx, authState)
+
+	frame := MessageFrame{
+		Type:      FrameTypeRequest,
+		Action:    FrameActionRenameSession,
+		RequestID: "req-rename-2",
+		SessionID: "session-1",
+	}
+	response := dispatchRequestFrame(ctx, frame, runtime)
+	// handler 层不做 payload 校验（由 validateRequestFrame 在 RPC 分发层做），nil payload 走默认 stub 返回成功
+	if response.Type != FrameTypeAck {
+		t.Fatalf("response type = %q, want %q", response.Type, FrameTypeAck)
+	}
+}
+
+func TestHandleListFilesFrameSuccess(t *testing.T) {
+	runtime := &bootstrapRuntimeStub{
+		listFilesFn: func(_ context.Context, input ListFilesInput) ([]FileEntry, error) {
+			return []FileEntry{{Name: "main.go", Path: "main.go", IsDir: false, Size: 100}}, nil
+		},
+	}
+	authState := NewConnectionAuthState()
+	authState.MarkAuthenticated("subject-1")
+	ctx := WithRequestSource(context.Background(), RequestSourceIPC)
+	ctx = WithConnectionAuthState(ctx, authState)
+
+	frame := MessageFrame{
+		Type:      FrameTypeRequest,
+		Action:    FrameActionListFiles,
+		RequestID: "req-ls-1",
+	}
+	response := dispatchRequestFrame(ctx, frame, runtime)
+	if response.Type != FrameTypeAck {
+		t.Fatalf("response type = %q, want %q", response.Type, FrameTypeAck)
+	}
+}
+
+func TestHandleListModelsFrameSuccess(t *testing.T) {
+	runtime := &bootstrapRuntimeStub{
+		listModelsFn: func(_ context.Context, input ListModelsInput) ([]ModelEntry, error) {
+			return []ModelEntry{{ID: "gpt-4", Name: "GPT-4", Provider: "openai"}}, nil
+		},
+	}
+	authState := NewConnectionAuthState()
+	authState.MarkAuthenticated("subject-1")
+	ctx := WithRequestSource(context.Background(), RequestSourceIPC)
+	ctx = WithConnectionAuthState(ctx, authState)
+
+	frame := MessageFrame{
+		Type:      FrameTypeRequest,
+		Action:    FrameActionListModels,
+		RequestID: "req-models-1",
+	}
+	response := dispatchRequestFrame(ctx, frame, runtime)
+	if response.Type != FrameTypeAck {
+		t.Fatalf("response type = %q, want %q", response.Type, FrameTypeAck)
+	}
+}
+
+func TestHandleSetSessionModelFrameSuccess(t *testing.T) {
+	runtime := &bootstrapRuntimeStub{
+		setSessionModelFn: func(_ context.Context, input SetSessionModelInput) error {
+			if input.SessionID != "session-1" || input.ModelID != "gpt-4" {
+				t.Fatalf("input = %#v", input)
+			}
+			return nil
+		},
+	}
+	authState := NewConnectionAuthState()
+	authState.MarkAuthenticated("subject-1")
+	ctx := WithRequestSource(context.Background(), RequestSourceIPC)
+	ctx = WithConnectionAuthState(ctx, authState)
+
+	frame := MessageFrame{
+		Type:      FrameTypeRequest,
+		Action:    FrameActionSetSessionModel,
+		RequestID: "req-setmodel-1",
+		SessionID: "session-1",
+		Payload:   protocol.SetSessionModelParams{SessionID: "session-1", ModelID: "gpt-4"},
+	}
+	response := dispatchRequestFrame(ctx, frame, runtime)
+	if response.Type != FrameTypeAck {
+		t.Fatalf("response type = %q, want %q", response.Type, FrameTypeAck)
+	}
+}
+
+func TestHandleGetSessionModelFrameSuccess(t *testing.T) {
+	runtime := &bootstrapRuntimeStub{
+		getSessionModelFn: func(_ context.Context, input GetSessionModelInput) (SessionModelResult, error) {
+			return SessionModelResult{ModelID: "gpt-4", ModelName: "GPT-4", Provider: "openai"}, nil
+		},
+	}
+	authState := NewConnectionAuthState()
+	authState.MarkAuthenticated("subject-1")
+	ctx := WithRequestSource(context.Background(), RequestSourceIPC)
+	ctx = WithConnectionAuthState(ctx, authState)
+
+	frame := MessageFrame{
+		Type:      FrameTypeRequest,
+		Action:    FrameActionGetSessionModel,
+		RequestID: "req-getmodel-1",
+		SessionID: "session-1",
+	}
+	response := dispatchRequestFrame(ctx, frame, runtime)
+	if response.Type != FrameTypeAck {
+		t.Fatalf("response type = %q, want %q", response.Type, FrameTypeAck)
+	}
+}
+
+func TestHandleGetSessionModelFrameEmptySessionID(t *testing.T) {
+	runtime := &bootstrapRuntimeStub{}
+	authState := NewConnectionAuthState()
+	authState.MarkAuthenticated("subject-1")
+	ctx := WithRequestSource(context.Background(), RequestSourceIPC)
+	ctx = WithConnectionAuthState(ctx, authState)
+
+	frame := MessageFrame{
+		Type:      FrameTypeRequest,
+		Action:    FrameActionGetSessionModel,
+		RequestID: "req-getmodel-2",
+	}
+	response := dispatchRequestFrame(ctx, frame, runtime)
+	// handler 层不做 session_id 校验（由 validateRequestFrame 在 RPC 分发层做），空 session_id 走默认 stub
+	if response.Type != FrameTypeAck {
+		t.Fatalf("response type = %q, want %q", response.Type, FrameTypeAck)
+	}
+}
+
+func TestHandleDeleteSessionFrameErrors(t *testing.T) {
+	t.Run("runtime unavailable", func(t *testing.T) {
+		response := handleDeleteSessionFrame(context.Background(), MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionDeleteSession,
+			RequestID: "req-del-err-1",
+			SessionID: "session-1",
+		}, nil)
+		if response.Type != FrameTypeError {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+		}
+		if response.Error == nil || response.Error.Code != ErrorCodeInternalError.String() {
+			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeInternalError.String())
+		}
+	})
+
+	t.Run("unauthenticated", func(t *testing.T) {
+		ctx := WithTokenAuthenticator(context.Background(), stubTokenAuthenticator{token: "token-1"})
+		response := handleDeleteSessionFrame(ctx, MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionDeleteSession,
+			RequestID: "req-del-err-2",
+			SessionID: "session-1",
+		}, &bootstrapRuntimeStub{})
+		if response.Type != FrameTypeError {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+		}
+		if response.Error == nil || response.Error.Code != ErrorCodeUnauthorized.String() {
+			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeUnauthorized.String())
+		}
+	})
+
+	t.Run("runtime access denied", func(t *testing.T) {
+		stub := &bootstrapRuntimeStub{
+			deleteSessionFn: func(_ context.Context, _ DeleteSessionInput) (bool, error) {
+				return false, ErrRuntimeAccessDenied
+			},
+		}
+		authState := NewConnectionAuthState()
+		authState.MarkAuthenticated("subject-1")
+		ctx := WithConnectionAuthState(context.Background(), authState)
+		response := handleDeleteSessionFrame(ctx, MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionDeleteSession,
+			RequestID: "req-del-err-3",
+			SessionID: "session-1",
+		}, stub)
+		if response.Type != FrameTypeError {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+		}
+		if response.Error == nil || response.Error.Code != ErrorCodeAccessDenied.String() {
+			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeAccessDenied.String())
+		}
+	})
+
+	t.Run("runtime resource not found", func(t *testing.T) {
+		stub := &bootstrapRuntimeStub{
+			deleteSessionFn: func(_ context.Context, _ DeleteSessionInput) (bool, error) {
+				return false, ErrRuntimeResourceNotFound
+			},
+		}
+		authState := NewConnectionAuthState()
+		authState.MarkAuthenticated("subject-1")
+		ctx := WithConnectionAuthState(context.Background(), authState)
+		response := handleDeleteSessionFrame(ctx, MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionDeleteSession,
+			RequestID: "req-del-err-4",
+			SessionID: "session-1",
+		}, stub)
+		if response.Type != FrameTypeError {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+		}
+		if response.Error == nil || response.Error.Code != ErrorCodeResourceNotFound.String() {
+			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeResourceNotFound.String())
+		}
+	})
+}
+
+func TestHandleRenameSessionFrameErrors(t *testing.T) {
+	t.Run("runtime unavailable", func(t *testing.T) {
+		response := handleRenameSessionFrame(context.Background(), MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionRenameSession,
+			RequestID: "req-rename-err-1",
+			Payload:   protocol.RenameSessionParams{SessionID: "s-1", Title: "T"},
+		}, nil)
+		if response.Type != FrameTypeError {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+		}
+		if response.Error == nil || response.Error.Code != ErrorCodeInternalError.String() {
+			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeInternalError.String())
+		}
+	})
+
+	t.Run("unauthenticated", func(t *testing.T) {
+		ctx := WithTokenAuthenticator(context.Background(), stubTokenAuthenticator{token: "token-1"})
+		response := handleRenameSessionFrame(ctx, MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionRenameSession,
+			RequestID: "req-rename-err-2",
+			Payload:   protocol.RenameSessionParams{SessionID: "s-1", Title: "T"},
+		}, &bootstrapRuntimeStub{})
+		if response.Type != FrameTypeError {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+		}
+		if response.Error == nil || response.Error.Code != ErrorCodeUnauthorized.String() {
+			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeUnauthorized.String())
+		}
+	})
+
+	t.Run("invalid payload", func(t *testing.T) {
+		authState := NewConnectionAuthState()
+		authState.MarkAuthenticated("subject-1")
+		ctx := WithConnectionAuthState(context.Background(), authState)
+		response := handleRenameSessionFrame(ctx, MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionRenameSession,
+			RequestID: "req-rename-err-3",
+			Payload:   "bad",
+		}, &bootstrapRuntimeStub{})
+		if response.Type != FrameTypeError {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+		}
+		if response.Error == nil || response.Error.Code != ErrorCodeInvalidFrame.String() {
+			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeInvalidFrame.String())
+		}
+	})
+
+	t.Run("runtime error", func(t *testing.T) {
+		stub := &bootstrapRuntimeStub{
+			renameSessionFn: func(_ context.Context, _ RenameSessionInput) error {
+				return errors.New("rename failed")
+			},
+		}
+		authState := NewConnectionAuthState()
+		authState.MarkAuthenticated("subject-1")
+		ctx := WithConnectionAuthState(context.Background(), authState)
+		response := handleRenameSessionFrame(ctx, MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionRenameSession,
+			RequestID: "req-rename-err-4",
+			Payload:   protocol.RenameSessionParams{SessionID: "s-1", Title: "T"},
+		}, stub)
+		if response.Type != FrameTypeError {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+		}
+		if response.Error == nil || response.Error.Code != ErrorCodeInternalError.String() {
+			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeInternalError.String())
+		}
+	})
+}
+
+func TestHandleListFilesFrameErrors(t *testing.T) {
+	t.Run("runtime unavailable", func(t *testing.T) {
+		response := handleListFilesFrame(context.Background(), MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionListFiles,
+			RequestID: "req-ls-err-1",
+		}, nil)
+		if response.Type != FrameTypeError {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+		}
+		if response.Error == nil || response.Error.Code != ErrorCodeInternalError.String() {
+			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeInternalError.String())
+		}
+	})
+
+	t.Run("unauthenticated", func(t *testing.T) {
+		ctx := WithTokenAuthenticator(context.Background(), stubTokenAuthenticator{token: "token-1"})
+		response := handleListFilesFrame(ctx, MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionListFiles,
+			RequestID: "req-ls-err-2",
+		}, &bootstrapRuntimeStub{})
+		if response.Type != FrameTypeError {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+		}
+		if response.Error == nil || response.Error.Code != ErrorCodeUnauthorized.String() {
+			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeUnauthorized.String())
+		}
+	})
+
+	t.Run("invalid payload", func(t *testing.T) {
+		authState := NewConnectionAuthState()
+		authState.MarkAuthenticated("subject-1")
+		ctx := WithConnectionAuthState(context.Background(), authState)
+		response := handleListFilesFrame(ctx, MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionListFiles,
+			RequestID: "req-ls-err-3",
+			Payload:   "bad",
+		}, &bootstrapRuntimeStub{})
+		if response.Type != FrameTypeError {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+		}
+		if response.Error == nil || response.Error.Code != ErrorCodeInvalidFrame.String() {
+			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeInvalidFrame.String())
+		}
+	})
+
+	t.Run("runtime error", func(t *testing.T) {
+		stub := &bootstrapRuntimeStub{
+			listFilesFn: func(_ context.Context, _ ListFilesInput) ([]FileEntry, error) {
+				return nil, errors.New("list failed")
+			},
+		}
+		authState := NewConnectionAuthState()
+		authState.MarkAuthenticated("subject-1")
+		ctx := WithConnectionAuthState(context.Background(), authState)
+		response := handleListFilesFrame(ctx, MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionListFiles,
+			RequestID: "req-ls-err-4",
+		}, stub)
+		if response.Type != FrameTypeError {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+		}
+		if response.Error == nil || response.Error.Code != ErrorCodeInternalError.String() {
+			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeInternalError.String())
+		}
+	})
+}
+
+func TestHandleListModelsFrameErrors(t *testing.T) {
+	t.Run("runtime unavailable", func(t *testing.T) {
+		response := handleListModelsFrame(context.Background(), MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionListModels,
+			RequestID: "req-models-err-1",
+		}, nil)
+		if response.Type != FrameTypeError {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+		}
+		if response.Error == nil || response.Error.Code != ErrorCodeInternalError.String() {
+			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeInternalError.String())
+		}
+	})
+
+	t.Run("unauthenticated", func(t *testing.T) {
+		ctx := WithTokenAuthenticator(context.Background(), stubTokenAuthenticator{token: "token-1"})
+		response := handleListModelsFrame(ctx, MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionListModels,
+			RequestID: "req-models-err-2",
+		}, &bootstrapRuntimeStub{})
+		if response.Type != FrameTypeError {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+		}
+		if response.Error == nil || response.Error.Code != ErrorCodeUnauthorized.String() {
+			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeUnauthorized.String())
+		}
+	})
+
+	t.Run("runtime error", func(t *testing.T) {
+		stub := &bootstrapRuntimeStub{
+			listModelsFn: func(_ context.Context, _ ListModelsInput) ([]ModelEntry, error) {
+				return nil, errors.New("list failed")
+			},
+		}
+		authState := NewConnectionAuthState()
+		authState.MarkAuthenticated("subject-1")
+		ctx := WithConnectionAuthState(context.Background(), authState)
+		response := handleListModelsFrame(ctx, MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionListModels,
+			RequestID: "req-models-err-3",
+		}, stub)
+		if response.Type != FrameTypeError {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+		}
+		if response.Error == nil || response.Error.Code != ErrorCodeInternalError.String() {
+			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeInternalError.String())
+		}
+	})
+}
+
+func TestHandleSetSessionModelFrameErrors(t *testing.T) {
+	t.Run("runtime unavailable", func(t *testing.T) {
+		response := handleSetSessionModelFrame(context.Background(), MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionSetSessionModel,
+			RequestID: "req-setmodel-err-1",
+			Payload:   protocol.SetSessionModelParams{SessionID: "s-1", ModelID: "m-1"},
+		}, nil)
+		if response.Type != FrameTypeError {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+		}
+		if response.Error == nil || response.Error.Code != ErrorCodeInternalError.String() {
+			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeInternalError.String())
+		}
+	})
+
+	t.Run("unauthenticated", func(t *testing.T) {
+		ctx := WithTokenAuthenticator(context.Background(), stubTokenAuthenticator{token: "token-1"})
+		response := handleSetSessionModelFrame(ctx, MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionSetSessionModel,
+			RequestID: "req-setmodel-err-2",
+			Payload:   protocol.SetSessionModelParams{SessionID: "s-1", ModelID: "m-1"},
+		}, &bootstrapRuntimeStub{})
+		if response.Type != FrameTypeError {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+		}
+		if response.Error == nil || response.Error.Code != ErrorCodeUnauthorized.String() {
+			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeUnauthorized.String())
+		}
+	})
+
+	t.Run("invalid payload", func(t *testing.T) {
+		authState := NewConnectionAuthState()
+		authState.MarkAuthenticated("subject-1")
+		ctx := WithConnectionAuthState(context.Background(), authState)
+		response := handleSetSessionModelFrame(ctx, MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionSetSessionModel,
+			RequestID: "req-setmodel-err-3",
+			Payload:   "bad",
+		}, &bootstrapRuntimeStub{})
+		if response.Type != FrameTypeError {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+		}
+		if response.Error == nil || response.Error.Code != ErrorCodeInvalidFrame.String() {
+			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeInvalidFrame.String())
+		}
+	})
+
+	t.Run("runtime error", func(t *testing.T) {
+		stub := &bootstrapRuntimeStub{
+			setSessionModelFn: func(_ context.Context, _ SetSessionModelInput) error {
+				return errors.New("set failed")
+			},
+		}
+		authState := NewConnectionAuthState()
+		authState.MarkAuthenticated("subject-1")
+		ctx := WithConnectionAuthState(context.Background(), authState)
+		response := handleSetSessionModelFrame(ctx, MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionSetSessionModel,
+			RequestID: "req-setmodel-err-4",
+			Payload:   protocol.SetSessionModelParams{SessionID: "s-1", ModelID: "m-1"},
+		}, stub)
+		if response.Type != FrameTypeError {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+		}
+		if response.Error == nil || response.Error.Code != ErrorCodeInternalError.String() {
+			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeInternalError.String())
+		}
+	})
+}
+
+func TestHandleGetSessionModelFrameErrors(t *testing.T) {
+	t.Run("runtime unavailable", func(t *testing.T) {
+		response := handleGetSessionModelFrame(context.Background(), MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionGetSessionModel,
+			RequestID: "req-getmodel-err-1",
+			SessionID: "session-1",
+		}, nil)
+		if response.Type != FrameTypeError {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+		}
+		if response.Error == nil || response.Error.Code != ErrorCodeInternalError.String() {
+			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeInternalError.String())
+		}
+	})
+
+	t.Run("unauthenticated", func(t *testing.T) {
+		ctx := WithTokenAuthenticator(context.Background(), stubTokenAuthenticator{token: "token-1"})
+		response := handleGetSessionModelFrame(ctx, MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionGetSessionModel,
+			RequestID: "req-getmodel-err-2",
+			SessionID: "session-1",
+		}, &bootstrapRuntimeStub{})
+		if response.Type != FrameTypeError {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+		}
+		if response.Error == nil || response.Error.Code != ErrorCodeUnauthorized.String() {
+			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeUnauthorized.String())
+		}
+	})
+
+	t.Run("runtime error", func(t *testing.T) {
+		stub := &bootstrapRuntimeStub{
+			getSessionModelFn: func(_ context.Context, _ GetSessionModelInput) (SessionModelResult, error) {
+				return SessionModelResult{}, errors.New("get failed")
+			},
+		}
+		authState := NewConnectionAuthState()
+		authState.MarkAuthenticated("subject-1")
+		ctx := WithConnectionAuthState(context.Background(), authState)
+		response := handleGetSessionModelFrame(ctx, MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionGetSessionModel,
+			RequestID: "req-getmodel-err-3",
+			SessionID: "session-1",
+		}, stub)
+		if response.Type != FrameTypeError {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+		}
+		if response.Error == nil || response.Error.Code != ErrorCodeInternalError.String() {
+			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeInternalError.String())
+		}
+	})
+}
+
+func TestHandleListProvidersFrameErrors(t *testing.T) {
+	t.Run("runtime unavailable", func(t *testing.T) {
+		response := handleListProvidersFrame(context.Background(), MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionListProviders,
+			RequestID: "req-providers-err-1",
+		}, nil)
+		if response.Type != FrameTypeError {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+		}
+		if response.Error == nil || response.Error.Code != ErrorCodeInternalError.String() {
+			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeInternalError.String())
+		}
+	})
+
+	t.Run("management port unavailable", func(t *testing.T) {
+		authState := NewConnectionAuthState()
+		authState.MarkAuthenticated("subject-1")
+		ctx := WithConnectionAuthState(context.Background(), authState)
+		response := handleListProvidersFrame(ctx, MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionListProviders,
+			RequestID: "req-providers-err-2",
+		}, runtimeOnlyStub{})
+		if response.Type != FrameTypeError {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+		}
+		if response.Error == nil || response.Error.Code != ErrorCodeInternalError.String() {
+			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeInternalError.String())
+		}
+		if response.Error.Message != "management runtime port is unavailable" {
+			t.Fatalf("error message = %q, want %q", response.Error.Message, "management runtime port is unavailable")
+		}
+	})
+
+	t.Run("unauthenticated", func(t *testing.T) {
+		ctx := WithTokenAuthenticator(context.Background(), stubTokenAuthenticator{token: "token-1"})
+		response := handleListProvidersFrame(ctx, MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionListProviders,
+			RequestID: "req-providers-err-3",
+		}, &managementRuntimeStub{})
+		if response.Type != FrameTypeError {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+		}
+		if response.Error == nil || response.Error.Code != ErrorCodeUnauthorized.String() {
+			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeUnauthorized.String())
+		}
+	})
+
+	t.Run("runtime error", func(t *testing.T) {
+		stub := &managementRuntimeStub{
+			listProvidersFn: func(_ context.Context, _ ListProvidersInput) ([]ProviderOption, error) {
+				return nil, errors.New("list failed")
+			},
+		}
+		authState := NewConnectionAuthState()
+		authState.MarkAuthenticated("subject-1")
+		ctx := WithConnectionAuthState(context.Background(), authState)
+		response := handleListProvidersFrame(ctx, MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionListProviders,
+			RequestID: "req-providers-err-4",
+		}, stub)
+		if response.Type != FrameTypeError {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+		}
+		if response.Error == nil || response.Error.Code != ErrorCodeInternalError.String() {
+			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeInternalError.String())
+		}
+	})
+}
+
+func TestHandleCreateCustomProviderFrameErrors(t *testing.T) {
+	t.Run("runtime unavailable", func(t *testing.T) {
+		response := handleCreateCustomProviderFrame(context.Background(), MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionCreateCustomProvider,
+			RequestID: "req-create-prov-err-1",
+			Payload:   protocol.CreateCustomProviderParams{Name: "p", Driver: "d", APIKeyEnv: "e"},
+		}, nil)
+		if response.Type != FrameTypeError {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+		}
+		if response.Error == nil || response.Error.Code != ErrorCodeInternalError.String() {
+			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeInternalError.String())
+		}
+	})
+
+	t.Run("management port unavailable", func(t *testing.T) {
+		authState := NewConnectionAuthState()
+		authState.MarkAuthenticated("subject-1")
+		ctx := WithConnectionAuthState(context.Background(), authState)
+		response := handleCreateCustomProviderFrame(ctx, MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionCreateCustomProvider,
+			RequestID: "req-create-prov-err-2",
+			Payload:   protocol.CreateCustomProviderParams{Name: "p", Driver: "d", APIKeyEnv: "e"},
+		}, runtimeOnlyStub{})
+		if response.Type != FrameTypeError {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+		}
+		if response.Error == nil || response.Error.Code != ErrorCodeInternalError.String() {
+			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeInternalError.String())
+		}
+	})
+
+	t.Run("unauthenticated", func(t *testing.T) {
+		ctx := WithTokenAuthenticator(context.Background(), stubTokenAuthenticator{token: "token-1"})
+		response := handleCreateCustomProviderFrame(ctx, MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionCreateCustomProvider,
+			RequestID: "req-create-prov-err-3",
+			Payload:   protocol.CreateCustomProviderParams{Name: "p", Driver: "d", APIKeyEnv: "e"},
+		}, &managementRuntimeStub{})
+		if response.Type != FrameTypeError {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+		}
+		if response.Error == nil || response.Error.Code != ErrorCodeUnauthorized.String() {
+			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeUnauthorized.String())
+		}
+	})
+
+	t.Run("invalid payload", func(t *testing.T) {
+		authState := NewConnectionAuthState()
+		authState.MarkAuthenticated("subject-1")
+		ctx := WithConnectionAuthState(context.Background(), authState)
+		response := handleCreateCustomProviderFrame(ctx, MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionCreateCustomProvider,
+			RequestID: "req-create-prov-err-4",
+			Payload:   "bad",
+		}, &managementRuntimeStub{})
+		if response.Type != FrameTypeError {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+		}
+		if response.Error == nil || response.Error.Code != ErrorCodeInvalidFrame.String() {
+			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeInvalidFrame.String())
+		}
+	})
+
+	t.Run("runtime error", func(t *testing.T) {
+		stub := &managementRuntimeStub{
+			createProviderFn: func(_ context.Context, _ CreateProviderInput) (ProviderSelectionResult, error) {
+				return ProviderSelectionResult{}, errors.New("create failed")
+			},
+		}
+		authState := NewConnectionAuthState()
+		authState.MarkAuthenticated("subject-1")
+		ctx := WithConnectionAuthState(context.Background(), authState)
+		response := handleCreateCustomProviderFrame(ctx, MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionCreateCustomProvider,
+			RequestID: "req-create-prov-err-5",
+			Payload:   protocol.CreateCustomProviderParams{Name: "p", Driver: "d", APIKeyEnv: "e"},
+		}, stub)
+		if response.Type != FrameTypeError {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+		}
+		if response.Error == nil || response.Error.Code != ErrorCodeInternalError.String() {
+			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeInternalError.String())
+		}
+	})
+}
+
+func TestHandleDeleteCustomProviderFrameErrors(t *testing.T) {
+	t.Run("runtime unavailable", func(t *testing.T) {
+		response := handleDeleteCustomProviderFrame(context.Background(), MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionDeleteCustomProvider,
+			RequestID: "req-del-prov-err-1",
+			Payload:   protocol.DeleteCustomProviderParams{ProviderID: "p-1"},
+		}, nil)
+		if response.Type != FrameTypeError {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+		}
+		if response.Error == nil || response.Error.Code != ErrorCodeInternalError.String() {
+			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeInternalError.String())
+		}
+	})
+
+	t.Run("management port unavailable", func(t *testing.T) {
+		authState := NewConnectionAuthState()
+		authState.MarkAuthenticated("subject-1")
+		ctx := WithConnectionAuthState(context.Background(), authState)
+		response := handleDeleteCustomProviderFrame(ctx, MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionDeleteCustomProvider,
+			RequestID: "req-del-prov-err-2",
+			Payload:   protocol.DeleteCustomProviderParams{ProviderID: "p-1"},
+		}, runtimeOnlyStub{})
+		if response.Type != FrameTypeError {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+		}
+		if response.Error == nil || response.Error.Code != ErrorCodeInternalError.String() {
+			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeInternalError.String())
+		}
+	})
+
+	t.Run("unauthenticated", func(t *testing.T) {
+		ctx := WithTokenAuthenticator(context.Background(), stubTokenAuthenticator{token: "token-1"})
+		response := handleDeleteCustomProviderFrame(ctx, MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionDeleteCustomProvider,
+			RequestID: "req-del-prov-err-3",
+			Payload:   protocol.DeleteCustomProviderParams{ProviderID: "p-1"},
+		}, &managementRuntimeStub{})
+		if response.Type != FrameTypeError {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+		}
+		if response.Error == nil || response.Error.Code != ErrorCodeUnauthorized.String() {
+			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeUnauthorized.String())
+		}
+	})
+
+	t.Run("invalid payload", func(t *testing.T) {
+		authState := NewConnectionAuthState()
+		authState.MarkAuthenticated("subject-1")
+		ctx := WithConnectionAuthState(context.Background(), authState)
+		response := handleDeleteCustomProviderFrame(ctx, MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionDeleteCustomProvider,
+			RequestID: "req-del-prov-err-4",
+			Payload:   "bad",
+		}, &managementRuntimeStub{})
+		if response.Type != FrameTypeError {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+		}
+		if response.Error == nil || response.Error.Code != ErrorCodeInvalidFrame.String() {
+			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeInvalidFrame.String())
+		}
+	})
+
+	t.Run("runtime error", func(t *testing.T) {
+		stub := &managementRuntimeStub{
+			deleteProviderFn: func(_ context.Context, _ DeleteProviderInput) error {
+				return errors.New("delete failed")
+			},
+		}
+		authState := NewConnectionAuthState()
+		authState.MarkAuthenticated("subject-1")
+		ctx := WithConnectionAuthState(context.Background(), authState)
+		response := handleDeleteCustomProviderFrame(ctx, MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionDeleteCustomProvider,
+			RequestID: "req-del-prov-err-5",
+			Payload:   protocol.DeleteCustomProviderParams{ProviderID: "p-1"},
+		}, stub)
+		if response.Type != FrameTypeError {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+		}
+		if response.Error == nil || response.Error.Code != ErrorCodeInternalError.String() {
+			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeInternalError.String())
+		}
+	})
+}
+
+func TestHandleSelectProviderModelFrameErrors(t *testing.T) {
+	t.Run("runtime unavailable", func(t *testing.T) {
+		response := handleSelectProviderModelFrame(context.Background(), MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionSelectProviderModel,
+			RequestID: "req-select-err-1",
+			Payload:   protocol.SelectProviderModelParams{ProviderID: "p-1"},
+		}, nil)
+		if response.Type != FrameTypeError {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+		}
+		if response.Error == nil || response.Error.Code != ErrorCodeInternalError.String() {
+			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeInternalError.String())
+		}
+	})
+
+	t.Run("management port unavailable", func(t *testing.T) {
+		authState := NewConnectionAuthState()
+		authState.MarkAuthenticated("subject-1")
+		ctx := WithConnectionAuthState(context.Background(), authState)
+		response := handleSelectProviderModelFrame(ctx, MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionSelectProviderModel,
+			RequestID: "req-select-err-2",
+			Payload:   protocol.SelectProviderModelParams{ProviderID: "p-1"},
+		}, runtimeOnlyStub{})
+		if response.Type != FrameTypeError {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+		}
+		if response.Error == nil || response.Error.Code != ErrorCodeInternalError.String() {
+			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeInternalError.String())
+		}
+	})
+
+	t.Run("unauthenticated", func(t *testing.T) {
+		ctx := WithTokenAuthenticator(context.Background(), stubTokenAuthenticator{token: "token-1"})
+		response := handleSelectProviderModelFrame(ctx, MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionSelectProviderModel,
+			RequestID: "req-select-err-3",
+			Payload:   protocol.SelectProviderModelParams{ProviderID: "p-1"},
+		}, &managementRuntimeStub{})
+		if response.Type != FrameTypeError {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+		}
+		if response.Error == nil || response.Error.Code != ErrorCodeUnauthorized.String() {
+			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeUnauthorized.String())
+		}
+	})
+
+	t.Run("invalid payload", func(t *testing.T) {
+		authState := NewConnectionAuthState()
+		authState.MarkAuthenticated("subject-1")
+		ctx := WithConnectionAuthState(context.Background(), authState)
+		response := handleSelectProviderModelFrame(ctx, MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionSelectProviderModel,
+			RequestID: "req-select-err-4",
+			Payload:   "bad",
+		}, &managementRuntimeStub{})
+		if response.Type != FrameTypeError {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+		}
+		if response.Error == nil || response.Error.Code != ErrorCodeInvalidFrame.String() {
+			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeInvalidFrame.String())
+		}
+	})
+
+	t.Run("runtime error", func(t *testing.T) {
+		stub := &managementRuntimeStub{
+			selectProviderFn: func(_ context.Context, _ SelectProviderModelInput) (ProviderSelectionResult, error) {
+				return ProviderSelectionResult{}, errors.New("select failed")
+			},
+		}
+		authState := NewConnectionAuthState()
+		authState.MarkAuthenticated("subject-1")
+		ctx := WithConnectionAuthState(context.Background(), authState)
+		response := handleSelectProviderModelFrame(ctx, MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionSelectProviderModel,
+			RequestID: "req-select-err-5",
+			Payload:   protocol.SelectProviderModelParams{ProviderID: "p-1"},
+		}, stub)
+		if response.Type != FrameTypeError {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+		}
+		if response.Error == nil || response.Error.Code != ErrorCodeInternalError.String() {
+			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeInternalError.String())
+		}
+	})
+}
+
+func TestHandleListMCPServersFrameErrors(t *testing.T) {
+	t.Run("runtime unavailable", func(t *testing.T) {
+		response := handleListMCPServersFrame(context.Background(), MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionListMCPServers,
+			RequestID: "req-mcp-list-err-1",
+		}, nil)
+		if response.Type != FrameTypeError {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+		}
+		if response.Error == nil || response.Error.Code != ErrorCodeInternalError.String() {
+			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeInternalError.String())
+		}
+	})
+
+	t.Run("management port unavailable", func(t *testing.T) {
+		authState := NewConnectionAuthState()
+		authState.MarkAuthenticated("subject-1")
+		ctx := WithConnectionAuthState(context.Background(), authState)
+		response := handleListMCPServersFrame(ctx, MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionListMCPServers,
+			RequestID: "req-mcp-list-err-2",
+		}, runtimeOnlyStub{})
+		if response.Type != FrameTypeError {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+		}
+		if response.Error == nil || response.Error.Code != ErrorCodeInternalError.String() {
+			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeInternalError.String())
+		}
+	})
+
+	t.Run("unauthenticated", func(t *testing.T) {
+		ctx := WithTokenAuthenticator(context.Background(), stubTokenAuthenticator{token: "token-1"})
+		response := handleListMCPServersFrame(ctx, MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionListMCPServers,
+			RequestID: "req-mcp-list-err-3",
+		}, &managementRuntimeStub{})
+		if response.Type != FrameTypeError {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+		}
+		if response.Error == nil || response.Error.Code != ErrorCodeUnauthorized.String() {
+			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeUnauthorized.String())
+		}
+	})
+
+	t.Run("runtime error", func(t *testing.T) {
+		stub := &managementRuntimeStub{
+			listMCPServersFn: func(_ context.Context, _ ListMCPServersInput) ([]MCPServerEntry, error) {
+				return nil, errors.New("list failed")
+			},
+		}
+		authState := NewConnectionAuthState()
+		authState.MarkAuthenticated("subject-1")
+		ctx := WithConnectionAuthState(context.Background(), authState)
+		response := handleListMCPServersFrame(ctx, MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionListMCPServers,
+			RequestID: "req-mcp-list-err-4",
+		}, stub)
+		if response.Type != FrameTypeError {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+		}
+		if response.Error == nil || response.Error.Code != ErrorCodeInternalError.String() {
+			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeInternalError.String())
+		}
+	})
+}
+
+func TestHandleUpsertMCPServerFrameErrors(t *testing.T) {
+	t.Run("runtime unavailable", func(t *testing.T) {
+		response := handleUpsertMCPServerFrame(context.Background(), MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionUpsertMCPServer,
+			RequestID: "req-mcp-upsert-err-1",
+			Payload:   protocol.UpsertMCPServerParams{Server: protocol.MCPServerParams{ID: "mcp-1"}},
+		}, nil)
+		if response.Type != FrameTypeError {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+		}
+		if response.Error == nil || response.Error.Code != ErrorCodeInternalError.String() {
+			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeInternalError.String())
+		}
+	})
+
+	t.Run("management port unavailable", func(t *testing.T) {
+		authState := NewConnectionAuthState()
+		authState.MarkAuthenticated("subject-1")
+		ctx := WithConnectionAuthState(context.Background(), authState)
+		response := handleUpsertMCPServerFrame(ctx, MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionUpsertMCPServer,
+			RequestID: "req-mcp-upsert-err-2",
+			Payload:   protocol.UpsertMCPServerParams{Server: protocol.MCPServerParams{ID: "mcp-1"}},
+		}, runtimeOnlyStub{})
+		if response.Type != FrameTypeError {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+		}
+		if response.Error == nil || response.Error.Code != ErrorCodeInternalError.String() {
+			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeInternalError.String())
+		}
+	})
+
+	t.Run("unauthenticated", func(t *testing.T) {
+		ctx := WithTokenAuthenticator(context.Background(), stubTokenAuthenticator{token: "token-1"})
+		response := handleUpsertMCPServerFrame(ctx, MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionUpsertMCPServer,
+			RequestID: "req-mcp-upsert-err-3",
+			Payload:   protocol.UpsertMCPServerParams{Server: protocol.MCPServerParams{ID: "mcp-1"}},
+		}, &managementRuntimeStub{})
+		if response.Type != FrameTypeError {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+		}
+		if response.Error == nil || response.Error.Code != ErrorCodeUnauthorized.String() {
+			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeUnauthorized.String())
+		}
+	})
+
+	t.Run("invalid payload", func(t *testing.T) {
+		authState := NewConnectionAuthState()
+		authState.MarkAuthenticated("subject-1")
+		ctx := WithConnectionAuthState(context.Background(), authState)
+		response := handleUpsertMCPServerFrame(ctx, MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionUpsertMCPServer,
+			RequestID: "req-mcp-upsert-err-4",
+			Payload:   "bad",
+		}, &managementRuntimeStub{})
+		if response.Type != FrameTypeError {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+		}
+		if response.Error == nil || response.Error.Code != ErrorCodeInvalidFrame.String() {
+			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeInvalidFrame.String())
+		}
+	})
+
+	t.Run("runtime error", func(t *testing.T) {
+		stub := &managementRuntimeStub{
+			upsertMCPServerFn: func(_ context.Context, _ UpsertMCPServerInput) error {
+				return errors.New("upsert failed")
+			},
+		}
+		authState := NewConnectionAuthState()
+		authState.MarkAuthenticated("subject-1")
+		ctx := WithConnectionAuthState(context.Background(), authState)
+		response := handleUpsertMCPServerFrame(ctx, MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionUpsertMCPServer,
+			RequestID: "req-mcp-upsert-err-5",
+			Payload:   protocol.UpsertMCPServerParams{Server: protocol.MCPServerParams{ID: "mcp-1"}},
+		}, stub)
+		if response.Type != FrameTypeError {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+		}
+		if response.Error == nil || response.Error.Code != ErrorCodeInternalError.String() {
+			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeInternalError.String())
+		}
+	})
+}
+
+func TestHandleSetMCPServerEnabledFrameErrors(t *testing.T) {
+	t.Run("runtime unavailable", func(t *testing.T) {
+		response := handleSetMCPServerEnabledFrame(context.Background(), MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionSetMCPServerEnabled,
+			RequestID: "req-mcp-set-err-1",
+			Payload:   protocol.SetMCPServerEnabledParams{ID: "mcp-1", Enabled: true},
+		}, nil)
+		if response.Type != FrameTypeError {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+		}
+		if response.Error == nil || response.Error.Code != ErrorCodeInternalError.String() {
+			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeInternalError.String())
+		}
+	})
+
+	t.Run("management port unavailable", func(t *testing.T) {
+		authState := NewConnectionAuthState()
+		authState.MarkAuthenticated("subject-1")
+		ctx := WithConnectionAuthState(context.Background(), authState)
+		response := handleSetMCPServerEnabledFrame(ctx, MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionSetMCPServerEnabled,
+			RequestID: "req-mcp-set-err-2",
+			Payload:   protocol.SetMCPServerEnabledParams{ID: "mcp-1", Enabled: true},
+		}, runtimeOnlyStub{})
+		if response.Type != FrameTypeError {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+		}
+		if response.Error == nil || response.Error.Code != ErrorCodeInternalError.String() {
+			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeInternalError.String())
+		}
+	})
+
+	t.Run("unauthenticated", func(t *testing.T) {
+		ctx := WithTokenAuthenticator(context.Background(), stubTokenAuthenticator{token: "token-1"})
+		response := handleSetMCPServerEnabledFrame(ctx, MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionSetMCPServerEnabled,
+			RequestID: "req-mcp-set-err-3",
+			Payload:   protocol.SetMCPServerEnabledParams{ID: "mcp-1", Enabled: true},
+		}, &managementRuntimeStub{})
+		if response.Type != FrameTypeError {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+		}
+		if response.Error == nil || response.Error.Code != ErrorCodeUnauthorized.String() {
+			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeUnauthorized.String())
+		}
+	})
+
+	t.Run("invalid payload", func(t *testing.T) {
+		authState := NewConnectionAuthState()
+		authState.MarkAuthenticated("subject-1")
+		ctx := WithConnectionAuthState(context.Background(), authState)
+		response := handleSetMCPServerEnabledFrame(ctx, MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionSetMCPServerEnabled,
+			RequestID: "req-mcp-set-err-4",
+			Payload:   "bad",
+		}, &managementRuntimeStub{})
+		if response.Type != FrameTypeError {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+		}
+		if response.Error == nil || response.Error.Code != ErrorCodeInvalidFrame.String() {
+			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeInvalidFrame.String())
+		}
+	})
+
+	t.Run("runtime error", func(t *testing.T) {
+		stub := &managementRuntimeStub{
+			setMCPEnabledFn: func(_ context.Context, _ SetMCPServerEnabledInput) error {
+				return errors.New("set failed")
+			},
+		}
+		authState := NewConnectionAuthState()
+		authState.MarkAuthenticated("subject-1")
+		ctx := WithConnectionAuthState(context.Background(), authState)
+		response := handleSetMCPServerEnabledFrame(ctx, MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionSetMCPServerEnabled,
+			RequestID: "req-mcp-set-err-5",
+			Payload:   protocol.SetMCPServerEnabledParams{ID: "mcp-1", Enabled: true},
+		}, stub)
+		if response.Type != FrameTypeError {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+		}
+		if response.Error == nil || response.Error.Code != ErrorCodeInternalError.String() {
+			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeInternalError.String())
+		}
+	})
+}
+
+func TestHandleDeleteMCPServerFrameErrors(t *testing.T) {
+	t.Run("runtime unavailable", func(t *testing.T) {
+		response := handleDeleteMCPServerFrame(context.Background(), MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionDeleteMCPServer,
+			RequestID: "req-mcp-del-err-1",
+			Payload:   protocol.DeleteMCPServerParams{ID: "mcp-1"},
+		}, nil)
+		if response.Type != FrameTypeError {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+		}
+		if response.Error == nil || response.Error.Code != ErrorCodeInternalError.String() {
+			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeInternalError.String())
+		}
+	})
+
+	t.Run("management port unavailable", func(t *testing.T) {
+		authState := NewConnectionAuthState()
+		authState.MarkAuthenticated("subject-1")
+		ctx := WithConnectionAuthState(context.Background(), authState)
+		response := handleDeleteMCPServerFrame(ctx, MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionDeleteMCPServer,
+			RequestID: "req-mcp-del-err-2",
+			Payload:   protocol.DeleteMCPServerParams{ID: "mcp-1"},
+		}, runtimeOnlyStub{})
+		if response.Type != FrameTypeError {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+		}
+		if response.Error == nil || response.Error.Code != ErrorCodeInternalError.String() {
+			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeInternalError.String())
+		}
+	})
+
+	t.Run("unauthenticated", func(t *testing.T) {
+		ctx := WithTokenAuthenticator(context.Background(), stubTokenAuthenticator{token: "token-1"})
+		response := handleDeleteMCPServerFrame(ctx, MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionDeleteMCPServer,
+			RequestID: "req-mcp-del-err-3",
+			Payload:   protocol.DeleteMCPServerParams{ID: "mcp-1"},
+		}, &managementRuntimeStub{})
+		if response.Type != FrameTypeError {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+		}
+		if response.Error == nil || response.Error.Code != ErrorCodeUnauthorized.String() {
+			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeUnauthorized.String())
+		}
+	})
+
+	t.Run("invalid payload", func(t *testing.T) {
+		authState := NewConnectionAuthState()
+		authState.MarkAuthenticated("subject-1")
+		ctx := WithConnectionAuthState(context.Background(), authState)
+		response := handleDeleteMCPServerFrame(ctx, MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionDeleteMCPServer,
+			RequestID: "req-mcp-del-err-4",
+			Payload:   "bad",
+		}, &managementRuntimeStub{})
+		if response.Type != FrameTypeError {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+		}
+		if response.Error == nil || response.Error.Code != ErrorCodeInvalidFrame.String() {
+			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeInvalidFrame.String())
+		}
+	})
+
+	t.Run("runtime error", func(t *testing.T) {
+		stub := &managementRuntimeStub{
+			deleteMCPServerFn: func(_ context.Context, _ DeleteMCPServerInput) error {
+				return errors.New("delete failed")
+			},
+		}
+		authState := NewConnectionAuthState()
+		authState.MarkAuthenticated("subject-1")
+		ctx := WithConnectionAuthState(context.Background(), authState)
+		response := handleDeleteMCPServerFrame(ctx, MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionDeleteMCPServer,
+			RequestID: "req-mcp-del-err-5",
+			Payload:   protocol.DeleteMCPServerParams{ID: "mcp-1"},
+		}, stub)
+		if response.Type != FrameTypeError {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+		}
+		if response.Error == nil || response.Error.Code != ErrorCodeInternalError.String() {
+			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeInternalError.String())
+		}
+	})
+}
+
+func TestDecodeRenameSessionPayloadBranches(t *testing.T) {
+	t.Run("struct success", func(t *testing.T) {
+		params, err := decodeRenameSessionPayload(protocol.RenameSessionParams{SessionID: " s-1 ", Title: " T "})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if params.SessionID != "s-1" || params.Title != "T" {
+			t.Fatalf("params = %#v", params)
+		}
+	})
+
+	t.Run("nil pointer", func(t *testing.T) {
+		_, err := decodeRenameSessionPayload((*protocol.RenameSessionParams)(nil))
+		if err == nil || err.Code != ErrorCodeMissingRequiredField.String() {
+			t.Fatalf("expected missing required field error, got %#v", err)
+		}
+	})
+
+	t.Run("map success", func(t *testing.T) {
+		params, err := decodeRenameSessionPayload(map[string]any{"session_id": " s-1 ", "title": " T "})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if params.SessionID != "s-1" || params.Title != "T" {
+			t.Fatalf("params = %#v", params)
+		}
+	})
+
+	t.Run("marshal error", func(t *testing.T) {
+		_, err := decodeRenameSessionPayload(struct{ Bad chan int `json:"bad"` }{Bad: make(chan int)})
+		if err == nil || err.Code != ErrorCodeInvalidFrame.String() {
+			t.Fatalf("expected invalid frame error, got %#v", err)
+		}
+	})
+
+	t.Run("unmarshal error", func(t *testing.T) {
+		_, err := decodeRenameSessionPayload(invalidJSONMarshaler{})
+		if err == nil || err.Code != ErrorCodeInvalidFrame.String() {
+			t.Fatalf("expected invalid frame error, got %#v", err)
+		}
+	})
+}
+
+func TestDecodeListFilesPayloadBranches(t *testing.T) {
+	t.Run("struct success", func(t *testing.T) {
+		params, err := decodeListFilesPayload(protocol.ListFilesParams{SessionID: " s-1 ", Workdir: " /w ", Path: " /p "})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if params.SessionID != "s-1" || params.Workdir != "/w" || params.Path != "/p" {
+			t.Fatalf("params = %#v", params)
+		}
+	})
+
+	t.Run("nil pointer returns empty", func(t *testing.T) {
+		params, err := decodeListFilesPayload((*protocol.ListFilesParams)(nil))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if params.SessionID != "" || params.Workdir != "" || params.Path != "" {
+			t.Fatalf("expected empty params, got %#v", params)
+		}
+	})
+
+	t.Run("map success", func(t *testing.T) {
+		params, err := decodeListFilesPayload(map[string]any{"session_id": " s-1 ", "workdir": " /w ", "path": " /p "})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if params.SessionID != "s-1" || params.Workdir != "/w" || params.Path != "/p" {
+			t.Fatalf("params = %#v", params)
+		}
+	})
+
+	t.Run("marshal error", func(t *testing.T) {
+		_, err := decodeListFilesPayload(struct{ Bad chan int `json:"bad"` }{Bad: make(chan int)})
+		if err == nil || err.Code != ErrorCodeInvalidFrame.String() {
+			t.Fatalf("expected invalid frame error, got %#v", err)
+		}
+	})
+
+	t.Run("unmarshal error", func(t *testing.T) {
+		_, err := decodeListFilesPayload(invalidJSONMarshaler{})
+		if err == nil || err.Code != ErrorCodeInvalidFrame.String() {
+			t.Fatalf("expected invalid frame error, got %#v", err)
+		}
+	})
+}
+
+func TestDecodeSetSessionModelPayloadBranches(t *testing.T) {
+	t.Run("struct success", func(t *testing.T) {
+		params, err := decodeSetSessionModelPayload(protocol.SetSessionModelParams{SessionID: " s-1 ", ProviderID: " p-1 ", ModelID: " m-1 "})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if params.SessionID != "s-1" || params.ProviderID != "p-1" || params.ModelID != "m-1" {
+			t.Fatalf("params = %#v", params)
+		}
+	})
+
+	t.Run("nil pointer", func(t *testing.T) {
+		_, err := decodeSetSessionModelPayload((*protocol.SetSessionModelParams)(nil))
+		if err == nil || err.Code != ErrorCodeMissingRequiredField.String() {
+			t.Fatalf("expected missing required field error, got %#v", err)
+		}
+	})
+
+	t.Run("map success", func(t *testing.T) {
+		params, err := decodeSetSessionModelPayload(map[string]any{"session_id": " s-1 ", "provider_id": " p-1 ", "model_id": " m-1 "})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if params.SessionID != "s-1" || params.ProviderID != "p-1" || params.ModelID != "m-1" {
+			t.Fatalf("params = %#v", params)
+		}
+	})
+
+	t.Run("marshal error", func(t *testing.T) {
+		_, err := decodeSetSessionModelPayload(struct{ Bad chan int `json:"bad"` }{Bad: make(chan int)})
+		if err == nil || err.Code != ErrorCodeInvalidFrame.String() {
+			t.Fatalf("expected invalid frame error, got %#v", err)
+		}
+	})
+
+	t.Run("unmarshal error", func(t *testing.T) {
+		_, err := decodeSetSessionModelPayload(invalidJSONMarshaler{})
+		if err == nil || err.Code != ErrorCodeInvalidFrame.String() {
+			t.Fatalf("expected invalid frame error, got %#v", err)
+		}
+	})
+}
+
+func TestHandleAuthenticateFrameAdditionalBranches(t *testing.T) {
+	t.Run("empty token rejects when authenticator exists", func(t *testing.T) {
+		frame := MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionAuthenticate,
+			RequestID: "auth-empty-1",
+			Payload:   protocol.AuthenticateParams{Token: "   "},
+		}
+		ctx := WithTokenAuthenticator(context.Background(), stubTokenAuthenticator{token: "valid"})
+		response := handleAuthenticateFrame(ctx, frame)
+		if response.Type != FrameTypeError {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+		}
+		if response.Error == nil || response.Error.Code != ErrorCodeUnauthorized.String() {
+			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeUnauthorized.String())
+		}
+	})
+
+	t.Run("valid token but empty subjectID rejects", func(t *testing.T) {
+		frame := MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionAuthenticate,
+			RequestID: "auth-empty-subject-1",
+			Payload:   protocol.AuthenticateParams{Token: "token-1"},
+		}
+		ctx := WithTokenAuthenticator(context.Background(), emptySubjectAuthenticator{})
+		response := handleAuthenticateFrame(ctx, frame)
+		if response.Type != FrameTypeError {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+		}
+		if response.Error == nil || response.Error.Code != ErrorCodeUnauthorized.String() {
+			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeUnauthorized.String())
+		}
+	})
+
+	t.Run("decode error", func(t *testing.T) {
+		frame := MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionAuthenticate,
+			RequestID: "auth-decode-err-1",
+			Payload:   "bad",
+		}
+		response := handleAuthenticateFrame(context.Background(), frame)
+		if response.Type != FrameTypeError {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+		}
+		if response.Error == nil || response.Error.Code != ErrorCodeInvalidFrame.String() {
+			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeInvalidFrame.String())
+		}
+	})
+}
+
+type emptySubjectAuthenticator struct{}
+
+func (emptySubjectAuthenticator) ValidateToken(token string) bool  { return true }
+func (emptySubjectAuthenticator) ResolveSubjectID(token string) (string, bool) { return "", true }
+
+func TestRuntimeCallFailedFrameErrorCodes(t *testing.T) {
+	t.Run("access denied", func(t *testing.T) {
+		response := runtimeCallFailedFrame(context.Background(), MessageFrame{
+			Type:   FrameTypeRequest,
+			Action: FrameActionDeleteSession,
+		}, ErrRuntimeAccessDenied, "delete_session")
+		if response.Type != FrameTypeError {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+		}
+		if response.Error == nil || response.Error.Code != ErrorCodeAccessDenied.String() {
+			t.Fatalf("error code = %q, want %q", response.Error.Code, ErrorCodeAccessDenied.String())
+		}
+		if response.Error.Message != "delete_session access denied" {
+			t.Fatalf("error message = %q, want %q", response.Error.Message, "delete_session access denied")
+		}
+	})
+
+	t.Run("resource not found", func(t *testing.T) {
+		response := runtimeCallFailedFrame(context.Background(), MessageFrame{
+			Type:   FrameTypeRequest,
+			Action: FrameActionLoadSession,
+		}, ErrRuntimeResourceNotFound, "load_session")
+		if response.Type != FrameTypeError {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+		}
+		if response.Error == nil || response.Error.Code != ErrorCodeResourceNotFound.String() {
+			t.Fatalf("error code = %q, want %q", response.Error.Code, ErrorCodeResourceNotFound.String())
+		}
+		if response.Error.Message != "load_session target not found" {
+			t.Fatalf("error message = %q, want %q", response.Error.Message, "load_session target not found")
+		}
+	})
+}
+
+// runtimeOnlyStub implements RuntimePort but NOT ManagementRuntimePort.
+type runtimeOnlyStub struct{}
+
+func (runtimeOnlyStub) Run(ctx context.Context, input RunInput) error                         { return nil }
+func (runtimeOnlyStub) Compact(ctx context.Context, input CompactInput) (CompactResult, error) { return CompactResult{}, nil }
+func (runtimeOnlyStub) ExecuteSystemTool(ctx context.Context, input ExecuteSystemToolInput) (tools.ToolResult, error) {
+	return tools.ToolResult{}, nil
+}
+func (runtimeOnlyStub) ActivateSessionSkill(ctx context.Context, input SessionSkillMutationInput) error   { return nil }
+func (runtimeOnlyStub) DeactivateSessionSkill(ctx context.Context, input SessionSkillMutationInput) error { return nil }
+func (runtimeOnlyStub) ListSessionSkills(ctx context.Context, input ListSessionSkillsInput) ([]SessionSkillState, error) {
+	return nil, nil
+}
+func (runtimeOnlyStub) ListAvailableSkills(ctx context.Context, input ListAvailableSkillsInput) ([]AvailableSkillState, error) {
+	return nil, nil
+}
+func (runtimeOnlyStub) ResolvePermission(ctx context.Context, input PermissionResolutionInput) error { return nil }
+func (runtimeOnlyStub) CancelRun(ctx context.Context, input CancelInput) (bool, error)               { return false, nil }
+func (runtimeOnlyStub) Events() <-chan RuntimeEvent                                                  { return nil }
+func (runtimeOnlyStub) ListSessions(ctx context.Context) ([]SessionSummary, error)                   { return nil, nil }
+func (runtimeOnlyStub) LoadSession(ctx context.Context, input LoadSessionInput) (Session, error)     { return Session{}, nil }
+func (runtimeOnlyStub) CreateSession(ctx context.Context, input CreateSessionInput) (string, error)  { return "", nil }
+func (runtimeOnlyStub) DeleteSession(ctx context.Context, input DeleteSessionInput) (bool, error)    { return false, nil }
+func (runtimeOnlyStub) RenameSession(ctx context.Context, input RenameSessionInput) error            { return nil }
+func (runtimeOnlyStub) ListFiles(ctx context.Context, input ListFilesInput) ([]FileEntry, error)     { return nil, nil }
+func (runtimeOnlyStub) ListModels(ctx context.Context, input ListModelsInput) ([]ModelEntry, error)  { return nil, nil }
+func (runtimeOnlyStub) SetSessionModel(ctx context.Context, input SetSessionModelInput) error        { return nil }
+func (runtimeOnlyStub) GetSessionModel(ctx context.Context, input GetSessionModelInput) (SessionModelResult, error) {
+	return SessionModelResult{}, nil
+}
+
+type managementRuntimeStub struct {
+	bootstrapRuntimeStub
+	listProvidersFn   func(ctx context.Context, input ListProvidersInput) ([]ProviderOption, error)
+	createProviderFn  func(ctx context.Context, input CreateProviderInput) (ProviderSelectionResult, error)
+	deleteProviderFn  func(ctx context.Context, input DeleteProviderInput) error
+	selectProviderFn  func(ctx context.Context, input SelectProviderModelInput) (ProviderSelectionResult, error)
+	listMCPServersFn  func(ctx context.Context, input ListMCPServersInput) ([]MCPServerEntry, error)
+	upsertMCPServerFn func(ctx context.Context, input UpsertMCPServerInput) error
+	setMCPEnabledFn   func(ctx context.Context, input SetMCPServerEnabledInput) error
+	deleteMCPServerFn func(ctx context.Context, input DeleteMCPServerInput) error
+}
+
+func (s *managementRuntimeStub) ListProviders(ctx context.Context, input ListProvidersInput) ([]ProviderOption, error) {
+	if s != nil && s.listProvidersFn != nil {
+		return s.listProvidersFn(ctx, input)
+	}
+	return nil, nil
+}
+
+func (s *managementRuntimeStub) CreateProvider(ctx context.Context, input CreateProviderInput) (ProviderSelectionResult, error) {
+	if s != nil && s.createProviderFn != nil {
+		return s.createProviderFn(ctx, input)
+	}
+	return ProviderSelectionResult{}, nil
+}
+
+func (s *managementRuntimeStub) DeleteProvider(ctx context.Context, input DeleteProviderInput) error {
+	if s != nil && s.deleteProviderFn != nil {
+		return s.deleteProviderFn(ctx, input)
+	}
+	return nil
+}
+
+func (s *managementRuntimeStub) SelectProviderModel(ctx context.Context, input SelectProviderModelInput) (ProviderSelectionResult, error) {
+	if s != nil && s.selectProviderFn != nil {
+		return s.selectProviderFn(ctx, input)
+	}
+	return ProviderSelectionResult{}, nil
+}
+
+func (s *managementRuntimeStub) ListMCPServers(ctx context.Context, input ListMCPServersInput) ([]MCPServerEntry, error) {
+	if s != nil && s.listMCPServersFn != nil {
+		return s.listMCPServersFn(ctx, input)
+	}
+	return nil, nil
+}
+
+func (s *managementRuntimeStub) UpsertMCPServer(ctx context.Context, input UpsertMCPServerInput) error {
+	if s != nil && s.upsertMCPServerFn != nil {
+		return s.upsertMCPServerFn(ctx, input)
+	}
+	return nil
+}
+
+func (s *managementRuntimeStub) SetMCPServerEnabled(ctx context.Context, input SetMCPServerEnabledInput) error {
+	if s != nil && s.setMCPEnabledFn != nil {
+		return s.setMCPEnabledFn(ctx, input)
+	}
+	return nil
+}
+
+func (s *managementRuntimeStub) DeleteMCPServer(ctx context.Context, input DeleteMCPServerInput) error {
+	if s != nil && s.deleteMCPServerFn != nil {
+		return s.deleteMCPServerFn(ctx, input)
+	}
+	return nil
 }

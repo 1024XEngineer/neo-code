@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"neo-code/internal/gateway/auth"
 	"neo-code/internal/gateway/handlers"
 	"neo-code/internal/gateway/protocol"
 	toolkits "neo-code/internal/tools"
@@ -55,6 +56,7 @@ func handlePingFrame(_ context.Context, frame MessageFrame) MessageFrame {
 }
 
 // handleAuthenticateFrame 处理 gateway.authenticate，并写入连接级认证状态。
+// 本地模式下（无 authenticator）允许空 token，直接以 auth.DefaultLocalSubjectID 认证通过。
 func handleAuthenticateFrame(ctx context.Context, frame MessageFrame) MessageFrame {
 	params, err := decodeAuthenticatePayload(frame.Payload)
 	if err != nil {
@@ -63,7 +65,24 @@ func handleAuthenticateFrame(ctx context.Context, frame MessageFrame) MessageFra
 
 	authenticator, hasAuthenticator := TokenAuthenticatorFromContext(ctx)
 	if !hasAuthenticator {
-		return errorFrame(frame, NewFrameError(ErrorCodeInternalError, "token authenticator is unavailable"))
+		// 本地模式：无 authenticator，允许空 token 以 auth.DefaultLocalSubjectID 认证
+		subjectID := auth.DefaultLocalSubjectID
+		if authState, ok := ConnectionAuthStateFromContext(ctx); ok {
+			authState.MarkAuthenticated(subjectID)
+		}
+		return MessageFrame{
+			Type:      FrameTypeAck,
+			Action:    FrameActionAuthenticate,
+			RequestID: frame.RequestID,
+			Payload: map[string]string{
+				"message":    "authenticated",
+				"subject_id": subjectID,
+			},
+		}
+	}
+	// authenticator 存在但 token 为空时，提前拒绝，不依赖 authenticator 对空串的实现
+	if strings.TrimSpace(params.Token) == "" {
+		return errorFrame(frame, NewFrameError(ErrorCodeUnauthorized, "invalid auth token"))
 	}
 	subjectID, valid := authenticator.ResolveSubjectID(params.Token)
 	if !valid || strings.TrimSpace(subjectID) == "" {
@@ -610,6 +629,428 @@ func handleLoadSessionFrame(ctx context.Context, frame MessageFrame, runtimePort
 	}
 }
 
+// handleDeleteSessionFrame 处理 gateway.deleteSession 请求。
+func handleDeleteSessionFrame(ctx context.Context, frame MessageFrame, runtimePort RuntimePort) MessageFrame {
+	if runtimePort == nil {
+		return runtimePortUnavailableFrame(frame)
+	}
+	subjectID, subjectErr := requireAuthenticatedSubjectID(ctx)
+	if subjectErr != nil {
+		return errorFrame(frame, subjectErr)
+	}
+
+	callCtx, cancel := withRuntimeOperationTimeout(ctx)
+	defer cancel()
+	deleted, err := runtimePort.DeleteSession(callCtx, DeleteSessionInput{
+		SubjectID: subjectID,
+		SessionID: strings.TrimSpace(frame.SessionID),
+	})
+	if err != nil {
+		return runtimeCallFailedFrame(callCtx, frame, err, "delete_session")
+	}
+
+	return MessageFrame{
+		Type:      FrameTypeAck,
+		Action:    FrameActionDeleteSession,
+		RequestID: frame.RequestID,
+		SessionID: strings.TrimSpace(frame.SessionID),
+		Payload: map[string]any{
+			"deleted":    deleted,
+			"session_id": strings.TrimSpace(frame.SessionID),
+		},
+	}
+}
+
+// handleRenameSessionFrame 处理 gateway.renameSession 请求。
+func handleRenameSessionFrame(ctx context.Context, frame MessageFrame, runtimePort RuntimePort) MessageFrame {
+	if runtimePort == nil {
+		return runtimePortUnavailableFrame(frame)
+	}
+	subjectID, subjectErr := requireAuthenticatedSubjectID(ctx)
+	if subjectErr != nil {
+		return errorFrame(frame, subjectErr)
+	}
+
+	input, err := decodeRenameSessionPayload(frame.Payload)
+	if err != nil {
+		return errorFrame(frame, err)
+	}
+
+	callCtx, cancel := withRuntimeOperationTimeout(ctx)
+	defer cancel()
+	if renameErr := runtimePort.RenameSession(callCtx, RenameSessionInput{
+		SubjectID: subjectID,
+		SessionID: input.SessionID,
+		Title:     input.Title,
+	}); renameErr != nil {
+		return runtimeCallFailedFrame(callCtx, frame, renameErr, "rename_session")
+	}
+
+	return MessageFrame{
+		Type:      FrameTypeAck,
+		Action:    FrameActionRenameSession,
+		RequestID: frame.RequestID,
+		SessionID: input.SessionID,
+		Payload: map[string]string{
+			"session_id": input.SessionID,
+			"title":      input.Title,
+		},
+	}
+}
+
+// handleListFilesFrame 处理 gateway.listFiles 请求。
+func handleListFilesFrame(ctx context.Context, frame MessageFrame, runtimePort RuntimePort) MessageFrame {
+	if runtimePort == nil {
+		return runtimePortUnavailableFrame(frame)
+	}
+	subjectID, subjectErr := requireAuthenticatedSubjectID(ctx)
+	if subjectErr != nil {
+		return errorFrame(frame, subjectErr)
+	}
+
+	input, err := decodeListFilesPayload(frame.Payload)
+	if err != nil {
+		return errorFrame(frame, err)
+	}
+
+	callCtx, cancel := withRuntimeOperationTimeout(ctx)
+	defer cancel()
+	files, listErr := runtimePort.ListFiles(callCtx, ListFilesInput{
+		SubjectID: subjectID,
+		SessionID: strings.TrimSpace(frame.SessionID),
+		Workdir:   strings.TrimSpace(frame.Workdir),
+		Path:      input.Path,
+	})
+	if listErr != nil {
+		return runtimeCallFailedFrame(callCtx, frame, listErr, "list_files")
+	}
+
+	return MessageFrame{
+		Type:      FrameTypeAck,
+		Action:    FrameActionListFiles,
+		RequestID: frame.RequestID,
+		SessionID: strings.TrimSpace(frame.SessionID),
+		Payload: map[string]any{
+			"files": files,
+		},
+	}
+}
+
+// handleListModelsFrame 处理 gateway.listModels 请求。
+func handleListModelsFrame(ctx context.Context, frame MessageFrame, runtimePort RuntimePort) MessageFrame {
+	if runtimePort == nil {
+		return runtimePortUnavailableFrame(frame)
+	}
+	subjectID, subjectErr := requireAuthenticatedSubjectID(ctx)
+	if subjectErr != nil {
+		return errorFrame(frame, subjectErr)
+	}
+
+	callCtx, cancel := withRuntimeOperationTimeout(ctx)
+	defer cancel()
+	models, err := runtimePort.ListModels(callCtx, ListModelsInput{
+		SubjectID: subjectID,
+		SessionID: strings.TrimSpace(frame.SessionID),
+	})
+	if err != nil {
+		return runtimeCallFailedFrame(callCtx, frame, err, "list_models")
+	}
+
+	return MessageFrame{
+		Type:      FrameTypeAck,
+		Action:    FrameActionListModels,
+		RequestID: frame.RequestID,
+		SessionID: strings.TrimSpace(frame.SessionID),
+		Payload: map[string]any{
+			"models": models,
+		},
+	}
+}
+
+// handleSetSessionModelFrame 处理 gateway.setSessionModel 请求。
+func handleSetSessionModelFrame(ctx context.Context, frame MessageFrame, runtimePort RuntimePort) MessageFrame {
+	if runtimePort == nil {
+		return runtimePortUnavailableFrame(frame)
+	}
+	subjectID, subjectErr := requireAuthenticatedSubjectID(ctx)
+	if subjectErr != nil {
+		return errorFrame(frame, subjectErr)
+	}
+
+	input, err := decodeSetSessionModelPayload(frame.Payload)
+	if err != nil {
+		return errorFrame(frame, err)
+	}
+
+	callCtx, cancel := withRuntimeOperationTimeout(ctx)
+	defer cancel()
+	if setErr := runtimePort.SetSessionModel(callCtx, SetSessionModelInput{
+		SubjectID:  subjectID,
+		SessionID:  input.SessionID,
+		ProviderID: input.ProviderID,
+		ModelID:    input.ModelID,
+	}); setErr != nil {
+		return runtimeCallFailedFrame(callCtx, frame, setErr, "set_session_model")
+	}
+
+	return MessageFrame{
+		Type:      FrameTypeAck,
+		Action:    FrameActionSetSessionModel,
+		RequestID: frame.RequestID,
+		SessionID: input.SessionID,
+		Payload: map[string]string{
+			"session_id":  input.SessionID,
+			"provider_id": input.ProviderID,
+			"model_id":    input.ModelID,
+		},
+	}
+}
+
+// handleGetSessionModelFrame 处理 gateway.getSessionModel 请求。
+func handleGetSessionModelFrame(ctx context.Context, frame MessageFrame, runtimePort RuntimePort) MessageFrame {
+	if runtimePort == nil {
+		return runtimePortUnavailableFrame(frame)
+	}
+	subjectID, subjectErr := requireAuthenticatedSubjectID(ctx)
+	if subjectErr != nil {
+		return errorFrame(frame, subjectErr)
+	}
+
+	callCtx, cancel := withRuntimeOperationTimeout(ctx)
+	defer cancel()
+	result, err := runtimePort.GetSessionModel(callCtx, GetSessionModelInput{
+		SubjectID: subjectID,
+		SessionID: strings.TrimSpace(frame.SessionID),
+	})
+	if err != nil {
+		return runtimeCallFailedFrame(callCtx, frame, err, "get_session_model")
+	}
+
+	return MessageFrame{
+		Type:      FrameTypeAck,
+		Action:    FrameActionGetSessionModel,
+		RequestID: frame.RequestID,
+		SessionID: strings.TrimSpace(frame.SessionID),
+		Payload:   result,
+	}
+}
+
+// handleListProvidersFrame 处理 gateway.listProviders 请求。
+func handleListProvidersFrame(ctx context.Context, frame MessageFrame, runtimePort RuntimePort) MessageFrame {
+	if runtimePort == nil {
+		return runtimePortUnavailableFrame(frame)
+	}
+	managementPort, managementErr := requireManagementRuntimePort(runtimePort)
+	if managementErr != nil {
+		return errorFrame(frame, managementErr)
+	}
+
+	subjectID, subjectErr := requireAuthenticatedSubjectID(ctx)
+	if subjectErr != nil {
+		return errorFrame(frame, subjectErr)
+	}
+
+	callCtx, cancel := withRuntimeOperationTimeout(ctx)
+	defer cancel()
+	providers, err := managementPort.ListProviders(callCtx, ListProvidersInput{
+		SubjectID: subjectID,
+	})
+	if err != nil {
+		return runtimeCallFailedFrame(callCtx, frame, err, "list_providers")
+	}
+	return MessageFrame{
+		Type:      FrameTypeAck,
+		Action:    FrameActionListProviders,
+		RequestID: frame.RequestID,
+		Payload: map[string]any{
+			"providers": providers,
+		},
+	}
+}
+
+// handleCreateCustomProviderFrame 处理 gateway.createCustomProvider 请求。
+func handleCreateCustomProviderFrame(ctx context.Context, frame MessageFrame, runtimePort RuntimePort) MessageFrame {
+	if runtimePort == nil {
+		return runtimePortUnavailableFrame(frame)
+	}
+	managementPort, managementErr := requireManagementRuntimePort(runtimePort)
+	if managementErr != nil {
+		return errorFrame(frame, managementErr)
+	}
+	subjectID, subjectErr := requireAuthenticatedSubjectID(ctx)
+	if subjectErr != nil {
+		return errorFrame(frame, subjectErr)
+	}
+	input, err := decodeCreateProviderPayload(frame.Payload)
+	if err != nil {
+		return errorFrame(frame, err)
+	}
+	input.SubjectID = subjectID
+
+	callCtx, cancel := withRuntimeOperationTimeout(ctx)
+	defer cancel()
+	result, createErr := managementPort.CreateProvider(callCtx, input)
+	if createErr != nil {
+		return runtimeCallFailedFrame(callCtx, frame, createErr, "create_custom_provider")
+	}
+	return MessageFrame{Type: FrameTypeAck, Action: FrameActionCreateCustomProvider, RequestID: frame.RequestID, Payload: result}
+}
+
+// handleDeleteCustomProviderFrame 处理 gateway.deleteCustomProvider 请求。
+func handleDeleteCustomProviderFrame(ctx context.Context, frame MessageFrame, runtimePort RuntimePort) MessageFrame {
+	if runtimePort == nil {
+		return runtimePortUnavailableFrame(frame)
+	}
+	managementPort, managementErr := requireManagementRuntimePort(runtimePort)
+	if managementErr != nil {
+		return errorFrame(frame, managementErr)
+	}
+	subjectID, subjectErr := requireAuthenticatedSubjectID(ctx)
+	if subjectErr != nil {
+		return errorFrame(frame, subjectErr)
+	}
+	input, err := decodeDeleteProviderPayload(frame.Payload)
+	if err != nil {
+		return errorFrame(frame, err)
+	}
+	input.SubjectID = subjectID
+
+	callCtx, cancel := withRuntimeOperationTimeout(ctx)
+	defer cancel()
+	if deleteErr := managementPort.DeleteProvider(callCtx, input); deleteErr != nil {
+		return runtimeCallFailedFrame(callCtx, frame, deleteErr, "delete_custom_provider")
+	}
+	return MessageFrame{Type: FrameTypeAck, Action: FrameActionDeleteCustomProvider, RequestID: frame.RequestID, Payload: map[string]any{"deleted": true, "provider_id": input.ProviderID}}
+}
+
+// handleSelectProviderModelFrame 处理 gateway.selectProviderModel 请求。
+func handleSelectProviderModelFrame(ctx context.Context, frame MessageFrame, runtimePort RuntimePort) MessageFrame {
+	if runtimePort == nil {
+		return runtimePortUnavailableFrame(frame)
+	}
+	managementPort, managementErr := requireManagementRuntimePort(runtimePort)
+	if managementErr != nil {
+		return errorFrame(frame, managementErr)
+	}
+	subjectID, subjectErr := requireAuthenticatedSubjectID(ctx)
+	if subjectErr != nil {
+		return errorFrame(frame, subjectErr)
+	}
+	input, err := decodeSelectProviderModelPayload(frame.Payload)
+	if err != nil {
+		return errorFrame(frame, err)
+	}
+	input.SubjectID = subjectID
+
+	callCtx, cancel := withRuntimeOperationTimeout(ctx)
+	defer cancel()
+	result, selectErr := managementPort.SelectProviderModel(callCtx, input)
+	if selectErr != nil {
+		return runtimeCallFailedFrame(callCtx, frame, selectErr, "select_provider_model")
+	}
+	return MessageFrame{Type: FrameTypeAck, Action: FrameActionSelectProviderModel, RequestID: frame.RequestID, Payload: result}
+}
+
+// handleListMCPServersFrame 处理 gateway.listMCPServers 请求。
+func handleListMCPServersFrame(ctx context.Context, frame MessageFrame, runtimePort RuntimePort) MessageFrame {
+	if runtimePort == nil {
+		return runtimePortUnavailableFrame(frame)
+	}
+	managementPort, managementErr := requireManagementRuntimePort(runtimePort)
+	if managementErr != nil {
+		return errorFrame(frame, managementErr)
+	}
+	subjectID, subjectErr := requireAuthenticatedSubjectID(ctx)
+	if subjectErr != nil {
+		return errorFrame(frame, subjectErr)
+	}
+	callCtx, cancel := withRuntimeOperationTimeout(ctx)
+	defer cancel()
+	servers, err := managementPort.ListMCPServers(callCtx, ListMCPServersInput{SubjectID: subjectID})
+	if err != nil {
+		return runtimeCallFailedFrame(callCtx, frame, err, "list_mcp_servers")
+	}
+	return MessageFrame{Type: FrameTypeAck, Action: FrameActionListMCPServers, RequestID: frame.RequestID, Payload: map[string]any{"servers": servers}}
+}
+
+// handleUpsertMCPServerFrame 处理 gateway.upsertMCPServer 请求。
+func handleUpsertMCPServerFrame(ctx context.Context, frame MessageFrame, runtimePort RuntimePort) MessageFrame {
+	if runtimePort == nil {
+		return runtimePortUnavailableFrame(frame)
+	}
+	managementPort, managementErr := requireManagementRuntimePort(runtimePort)
+	if managementErr != nil {
+		return errorFrame(frame, managementErr)
+	}
+	subjectID, subjectErr := requireAuthenticatedSubjectID(ctx)
+	if subjectErr != nil {
+		return errorFrame(frame, subjectErr)
+	}
+	input, err := decodeUpsertMCPServerPayload(frame.Payload)
+	if err != nil {
+		return errorFrame(frame, err)
+	}
+	input.SubjectID = subjectID
+	callCtx, cancel := withRuntimeOperationTimeout(ctx)
+	defer cancel()
+	if upsertErr := managementPort.UpsertMCPServer(callCtx, input); upsertErr != nil {
+		return runtimeCallFailedFrame(callCtx, frame, upsertErr, "upsert_mcp_server")
+	}
+	return MessageFrame{Type: FrameTypeAck, Action: FrameActionUpsertMCPServer, RequestID: frame.RequestID, Payload: map[string]any{"server": input.Server}}
+}
+
+// handleSetMCPServerEnabledFrame 处理 gateway.setMCPServerEnabled 请求。
+func handleSetMCPServerEnabledFrame(ctx context.Context, frame MessageFrame, runtimePort RuntimePort) MessageFrame {
+	if runtimePort == nil {
+		return runtimePortUnavailableFrame(frame)
+	}
+	managementPort, managementErr := requireManagementRuntimePort(runtimePort)
+	if managementErr != nil {
+		return errorFrame(frame, managementErr)
+	}
+	subjectID, subjectErr := requireAuthenticatedSubjectID(ctx)
+	if subjectErr != nil {
+		return errorFrame(frame, subjectErr)
+	}
+	input, err := decodeSetMCPServerEnabledPayload(frame.Payload)
+	if err != nil {
+		return errorFrame(frame, err)
+	}
+	input.SubjectID = subjectID
+	callCtx, cancel := withRuntimeOperationTimeout(ctx)
+	defer cancel()
+	if setErr := managementPort.SetMCPServerEnabled(callCtx, input); setErr != nil {
+		return runtimeCallFailedFrame(callCtx, frame, setErr, "set_mcp_server_enabled")
+	}
+	return MessageFrame{Type: FrameTypeAck, Action: FrameActionSetMCPServerEnabled, RequestID: frame.RequestID, Payload: map[string]any{"id": input.ID, "enabled": input.Enabled}}
+}
+
+// handleDeleteMCPServerFrame 处理 gateway.deleteMCPServer 请求。
+func handleDeleteMCPServerFrame(ctx context.Context, frame MessageFrame, runtimePort RuntimePort) MessageFrame {
+	if runtimePort == nil {
+		return runtimePortUnavailableFrame(frame)
+	}
+	managementPort, managementErr := requireManagementRuntimePort(runtimePort)
+	if managementErr != nil {
+		return errorFrame(frame, managementErr)
+	}
+	subjectID, subjectErr := requireAuthenticatedSubjectID(ctx)
+	if subjectErr != nil {
+		return errorFrame(frame, subjectErr)
+	}
+	input, err := decodeDeleteMCPServerPayload(frame.Payload)
+	if err != nil {
+		return errorFrame(frame, err)
+	}
+	input.SubjectID = subjectID
+	callCtx, cancel := withRuntimeOperationTimeout(ctx)
+	defer cancel()
+	if deleteErr := managementPort.DeleteMCPServer(callCtx, input); deleteErr != nil {
+		return runtimeCallFailedFrame(callCtx, frame, deleteErr, "delete_mcp_server")
+	}
+	return MessageFrame{Type: FrameTypeAck, Action: FrameActionDeleteMCPServer, RequestID: frame.RequestID, Payload: map[string]any{"deleted": true, "id": input.ID}}
+}
+
 // handleResolvePermissionFrame 处理 gateway.resolvePermission 请求。
 func handleResolvePermissionFrame(ctx context.Context, frame MessageFrame, runtimePort RuntimePort) MessageFrame {
 	if runtimePort == nil {
@@ -656,6 +1097,15 @@ func runtimePortUnavailableFrame(frame MessageFrame) MessageFrame {
 	return errorFrame(frame, NewFrameError(ErrorCodeInternalError, "runtime port is unavailable"))
 }
 
+// requireManagementRuntimePort 校验当前 runtime 端口是否支持管理面扩展能力。
+func requireManagementRuntimePort(runtimePort RuntimePort) (ManagementRuntimePort, *FrameError) {
+	managementPort, ok := runtimePort.(ManagementRuntimePort)
+	if !ok {
+		return nil, NewFrameError(ErrorCodeInternalError, "management runtime port is unavailable")
+	}
+	return managementPort, nil
+}
+
 // withRuntimeOperationTimeout 为 runtime 调用附加硬超时。
 func withRuntimeOperationTimeout(ctx context.Context) (context.Context, context.CancelFunc) {
 	if ctx == nil {
@@ -698,7 +1148,7 @@ func requireAuthenticatedSubjectID(ctx context.Context) (string, *FrameError) {
 
 	authenticator, hasAuthenticator := TokenAuthenticatorFromContext(ctx)
 	if !hasAuthenticator {
-		return defaultLocalSubjectID, nil
+		return auth.DefaultLocalSubjectID, nil
 	}
 
 	requestToken := RequestTokenFromContext(ctx)
@@ -781,6 +1231,23 @@ type cancelParams struct {
 	RunID     string
 }
 
+type renameSessionParams struct {
+	SessionID string
+	Title     string
+}
+
+type listFilesParams struct {
+	SessionID string
+	Workdir   string
+	Path      string
+}
+
+type setSessionModelParams struct {
+	SessionID  string
+	ProviderID string
+	ModelID    string
+}
+
 type executeSystemToolParams struct {
 	SessionID string
 	RunID     string
@@ -836,24 +1303,15 @@ func decodeAuthenticatePayload(payload any) (authenticateParams, *FrameError) {
 	switch typed := payload.(type) {
 	case protocol.AuthenticateParams:
 		token := strings.TrimSpace(typed.Token)
-		if token == "" {
-			return authenticateParams{}, NewMissingRequiredFieldError("payload.token")
-		}
 		return authenticateParams{Token: token}, nil
 	case *protocol.AuthenticateParams:
 		if typed == nil {
 			return authenticateParams{}, NewMissingRequiredFieldError("payload.token")
 		}
 		token := strings.TrimSpace(typed.Token)
-		if token == "" {
-			return authenticateParams{}, NewMissingRequiredFieldError("payload.token")
-		}
 		return authenticateParams{Token: token}, nil
 	case map[string]any:
 		token := readStringValue(typed, "token")
-		if token == "" {
-			return authenticateParams{}, NewMissingRequiredFieldError("payload.token")
-		}
 		return authenticateParams{Token: token}, nil
 	default:
 		raw, marshalErr := json.Marshal(payload)
@@ -865,9 +1323,6 @@ func decodeAuthenticatePayload(payload any) (authenticateParams, *FrameError) {
 			return authenticateParams{}, NewFrameError(ErrorCodeInvalidFrame, "invalid authenticate payload")
 		}
 		token := strings.TrimSpace(decoded.Token)
-		if token == "" {
-			return authenticateParams{}, NewMissingRequiredFieldError("payload.token")
-		}
 		return authenticateParams{Token: token}, nil
 	}
 }

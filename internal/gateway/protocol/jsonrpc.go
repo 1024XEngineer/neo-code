@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 )
@@ -42,6 +43,34 @@ const (
 	MethodGatewayLoadSession = "gateway.loadSession"
 	// MethodGatewayResolvePermission 表示提交权限审批决策。
 	MethodGatewayResolvePermission = "gateway.resolvePermission"
+	// MethodGatewayDeleteSession 表示删除/归档会话。
+	MethodGatewayDeleteSession = "gateway.deleteSession"
+	// MethodGatewayRenameSession 表示重命名会话。
+	MethodGatewayRenameSession = "gateway.renameSession"
+	// MethodGatewayListFiles 表示列出工作目录文件树。
+	MethodGatewayListFiles = "gateway.listFiles"
+	// MethodGatewayListModels 表示列出可用模型。
+	MethodGatewayListModels = "gateway.listModels"
+	// MethodGatewaySetSessionModel 表示设置会话模型。
+	MethodGatewaySetSessionModel = "gateway.setSessionModel"
+	// MethodGatewayGetSessionModel 表示获取当前会话模型。
+	MethodGatewayGetSessionModel = "gateway.getSessionModel"
+	// MethodGatewayListProviders 表示列出可管理 provider。
+	MethodGatewayListProviders = "gateway.listProviders"
+	// MethodGatewayCreateCustomProvider 表示创建自定义 provider。
+	MethodGatewayCreateCustomProvider = "gateway.createCustomProvider"
+	// MethodGatewayDeleteCustomProvider 表示删除自定义 provider。
+	MethodGatewayDeleteCustomProvider = "gateway.deleteCustomProvider"
+	// MethodGatewaySelectProviderModel 表示设置全局 provider/model。
+	MethodGatewaySelectProviderModel = "gateway.selectProviderModel"
+	// MethodGatewayListMCPServers 表示列出 MCP server 配置。
+	MethodGatewayListMCPServers = "gateway.listMCPServers"
+	// MethodGatewayUpsertMCPServer 表示新增或更新 MCP server 配置。
+	MethodGatewayUpsertMCPServer = "gateway.upsertMCPServer"
+	// MethodGatewaySetMCPServerEnabled 表示启停 MCP server。
+	MethodGatewaySetMCPServerEnabled = "gateway.setMCPServerEnabled"
+	// MethodGatewayDeleteMCPServer 表示删除 MCP server。
+	MethodGatewayDeleteMCPServer = "gateway.deleteMCPServer"
 	// MethodGatewayEvent 表示网关向客户端推送运行时事件的通知方法。
 	MethodGatewayEvent = "gateway.event"
 	// MethodWakeOpenURL 表示 URL Scheme 唤醒方法。
@@ -220,6 +249,125 @@ type ResolvePermissionParams struct {
 	Decision  string `json:"decision"`
 }
 
+// DeleteSessionParams 表示 gateway.deleteSession 参数。
+type DeleteSessionParams struct {
+	SessionID string `json:"session_id"`
+}
+
+// RenameSessionParams 表示 gateway.renameSession 参数。
+type RenameSessionParams struct {
+	SessionID string `json:"session_id"`
+	Title     string `json:"title"`
+}
+
+// ListFilesParams 表示 gateway.listFiles 参数。
+type ListFilesParams struct {
+	SessionID string `json:"session_id,omitempty"`
+	Workdir   string `json:"workdir,omitempty"`
+	Path      string `json:"path,omitempty"`
+}
+
+// ListModelsParams 表示 gateway.listModels 参数。
+type ListModelsParams struct {
+	SessionID string `json:"session_id,omitempty"`
+}
+
+// SetSessionModelParams 表示 gateway.setSessionModel 参数。
+type SetSessionModelParams struct {
+	SessionID  string `json:"session_id"`
+	ProviderID string `json:"provider_id,omitempty"`
+	ModelID    string `json:"model_id"`
+}
+
+// GetSessionModelParams 表示 gateway.getSessionModel 参数。
+type GetSessionModelParams struct {
+	SessionID string `json:"session_id"`
+}
+
+// CreateCustomProviderParams 表示 gateway.createCustomProvider 参数。
+type CreateCustomProviderParams struct {
+	Name                  string                    `json:"name"`
+	Driver                string                    `json:"driver"`
+	BaseURL               string                    `json:"base_url,omitempty"`
+	ChatAPIMode           string                    `json:"chat_api_mode,omitempty"`
+	ChatEndpointPath      string                    `json:"chat_endpoint_path,omitempty"`
+	APIKeyEnv             string                    `json:"api_key_env"`
+	APIKey                string                    `json:"api_key,omitempty"`
+	ModelSource           string                    `json:"model_source,omitempty"`
+	DiscoveryEndpointPath string                    `json:"discovery_endpoint_path,omitempty"`
+	Models                []ProviderModelDescriptor `json:"models,omitempty"`
+}
+
+// ProviderModelDescriptor 表示 provider 管理接口中的模型描述。
+type ProviderModelDescriptor struct {
+	ID              string                       `json:"id"`
+	Name            string                       `json:"name"`
+	Description     string                       `json:"description,omitempty"`
+	ContextWindow   int                          `json:"context_window,omitempty"`
+	MaxOutputTokens int                          `json:"max_output_tokens,omitempty"`
+	CapabilityHints ProviderModelCapabilityHints `json:"capability_hints,omitempty"`
+}
+
+// ProviderModelCapabilityHints 表示 provider 管理接口中的模型能力提示。
+type ProviderModelCapabilityHints struct {
+	ToolCalling string `json:"tool_calling,omitempty"`
+	ImageInput  string `json:"image_input,omitempty"`
+}
+
+// DeleteCustomProviderParams 表示 gateway.deleteCustomProvider 参数。
+type DeleteCustomProviderParams struct {
+	ProviderID string `json:"provider_id"`
+}
+
+// SelectProviderModelParams 表示 gateway.selectProviderModel 参数。
+type SelectProviderModelParams struct {
+	ProviderID string `json:"provider_id"`
+	ModelID    string `json:"model_id,omitempty"`
+}
+
+// MCPStdioParams 表示 MCP server stdio 参数。
+type MCPStdioParams struct {
+	Command           string   `json:"command,omitempty"`
+	Args              []string `json:"args,omitempty"`
+	Workdir           string   `json:"workdir,omitempty"`
+	StartTimeoutSec   int      `json:"start_timeout_sec,omitempty"`
+	CallTimeoutSec    int      `json:"call_timeout_sec,omitempty"`
+	RestartBackoffSec int      `json:"restart_backoff_sec,omitempty"`
+}
+
+// MCPEnvVarParams 表示 MCP server 环境变量参数。
+type MCPEnvVarParams struct {
+	Name     string `json:"name"`
+	Value    string `json:"value,omitempty"`
+	ValueEnv string `json:"value_env,omitempty"`
+}
+
+// MCPServerParams 表示 MCP server 配置参数。
+type MCPServerParams struct {
+	ID      string            `json:"id"`
+	Enabled bool              `json:"enabled,omitempty"`
+	Source  string            `json:"source,omitempty"`
+	Version string            `json:"version,omitempty"`
+	Stdio   MCPStdioParams    `json:"stdio,omitempty"`
+	Env     []MCPEnvVarParams `json:"env,omitempty"`
+}
+
+// UpsertMCPServerParams 表示 gateway.upsertMCPServer 参数。
+type UpsertMCPServerParams struct {
+	Server MCPServerParams `json:"server"`
+}
+
+// SetMCPServerEnabledParams 表示 gateway.setMCPServerEnabled 参数。
+type SetMCPServerEnabledParams struct {
+	ID      string `json:"id"`
+	Enabled bool   `json:"enabled"`
+}
+
+// DeleteMCPServerParams 表示 gateway.deleteMCPServer 参数。
+type DeleteMCPServerParams struct {
+	ID string `json:"id"`
+}
+
 // NormalizeJSONRPCRequest 将 JSON-RPC 请求归一化为内部请求模型，并做方法级参数解析。
 func NormalizeJSONRPCRequest(request JSONRPCRequest) (NormalizedRequest, *JSONRPCError) {
 	normalized := NormalizedRequest{}
@@ -366,6 +514,115 @@ func NormalizeJSONRPCRequest(request JSONRPCRequest) (NormalizedRequest, *JSONRP
 			return normalized, parseErr
 		}
 		normalized.Action = "resolve_permission"
+		normalized.Payload = params
+		return normalized, nil
+	case MethodGatewayDeleteSession:
+		params, parseErr := decodeDeleteSessionParams(request.Params)
+		if parseErr != nil {
+			return normalized, parseErr
+		}
+		normalized.Action = "delete_session"
+		normalized.SessionID = strings.TrimSpace(params.SessionID)
+		normalized.Payload = params
+		return normalized, nil
+	case MethodGatewayRenameSession:
+		params, parseErr := decodeRenameSessionParams(request.Params)
+		if parseErr != nil {
+			return normalized, parseErr
+		}
+		normalized.Action = "rename_session"
+		normalized.SessionID = strings.TrimSpace(params.SessionID)
+		normalized.Payload = params
+		return normalized, nil
+	case MethodGatewayListFiles:
+		params, parseErr := decodeListFilesParams(request.Params)
+		if parseErr != nil {
+			return normalized, parseErr
+		}
+		normalized.Action = "list_files"
+		normalized.SessionID = strings.TrimSpace(params.SessionID)
+		normalized.Workdir = strings.TrimSpace(params.Workdir)
+		normalized.Payload = params
+		return normalized, nil
+	case MethodGatewayListModels:
+		params, parseErr := decodeListModelsParams(request.Params)
+		if parseErr != nil {
+			return normalized, parseErr
+		}
+		normalized.Action = "list_models"
+		normalized.SessionID = strings.TrimSpace(params.SessionID)
+		normalized.Payload = params
+		return normalized, nil
+	case MethodGatewaySetSessionModel:
+		params, parseErr := decodeSetSessionModelParams(request.Params)
+		if parseErr != nil {
+			return normalized, parseErr
+		}
+		normalized.Action = "set_session_model"
+		normalized.SessionID = strings.TrimSpace(params.SessionID)
+		normalized.Payload = params
+		return normalized, nil
+	case MethodGatewayGetSessionModel:
+		params, parseErr := decodeGetSessionModelParams(request.Params)
+		if parseErr != nil {
+			return normalized, parseErr
+		}
+		normalized.Action = "get_session_model"
+		normalized.SessionID = strings.TrimSpace(params.SessionID)
+		normalized.Payload = params
+		return normalized, nil
+	case MethodGatewayListProviders:
+		normalized.Action = "list_providers"
+		return normalized, nil
+	case MethodGatewayCreateCustomProvider:
+		params, parseErr := decodeCreateCustomProviderParams(request.Params)
+		if parseErr != nil {
+			return normalized, parseErr
+		}
+		normalized.Action = "create_custom_provider"
+		normalized.Payload = params
+		return normalized, nil
+	case MethodGatewayDeleteCustomProvider:
+		params, parseErr := decodeDeleteCustomProviderParams(request.Params)
+		if parseErr != nil {
+			return normalized, parseErr
+		}
+		normalized.Action = "delete_custom_provider"
+		normalized.Payload = params
+		return normalized, nil
+	case MethodGatewaySelectProviderModel:
+		params, parseErr := decodeSelectProviderModelParams(request.Params)
+		if parseErr != nil {
+			return normalized, parseErr
+		}
+		normalized.Action = "select_provider_model"
+		normalized.Payload = params
+		return normalized, nil
+	case MethodGatewayListMCPServers:
+		normalized.Action = "list_mcp_servers"
+		return normalized, nil
+	case MethodGatewayUpsertMCPServer:
+		params, parseErr := decodeUpsertMCPServerParams(request.Params)
+		if parseErr != nil {
+			return normalized, parseErr
+		}
+		normalized.Action = "upsert_mcp_server"
+		normalized.Payload = params
+		return normalized, nil
+	case MethodGatewaySetMCPServerEnabled:
+		params, parseErr := decodeSetMCPServerEnabledParams(request.Params)
+		if parseErr != nil {
+			return normalized, parseErr
+		}
+		normalized.Action = "set_mcp_server_enabled"
+		normalized.Payload = params
+		return normalized, nil
+	case MethodGatewayDeleteMCPServer:
+		params, parseErr := decodeDeleteMCPServerParams(request.Params)
+		if parseErr != nil {
+			return normalized, parseErr
+		}
+		normalized.Action = "delete_mcp_server"
 		normalized.Payload = params
 		return normalized, nil
 	case MethodWakeOpenURL:
@@ -532,440 +789,377 @@ func decodeStrictJSON(raw json.RawMessage, target any) error {
 
 // decodeAuthenticateParams 对 gateway.authenticate 的 params 执行反序列化与最小校验。
 func decodeAuthenticateParams(raw json.RawMessage) (AuthenticateParams, *JSONRPCError) {
-	trimmed := bytes.TrimSpace(raw)
-	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
-		return AuthenticateParams{}, NewJSONRPCError(
-			JSONRPCCodeInvalidParams,
-			"missing required field: params",
-			GatewayCodeMissingRequiredField,
-		)
-	}
-
-	var params AuthenticateParams
-	if err := decodeStrictJSON(trimmed, &params); err != nil {
-		return AuthenticateParams{}, NewJSONRPCError(
-			JSONRPCCodeInvalidParams,
-			"invalid params for gateway.authenticate",
-			GatewayCodeInvalidFrame,
-		)
-	}
-	params.Token = strings.TrimSpace(params.Token)
-	if params.Token == "" {
-		return AuthenticateParams{}, NewJSONRPCError(
-			JSONRPCCodeInvalidParams,
-			"missing required field: params.token",
-			GatewayCodeMissingRequiredField,
-		)
-	}
-	return params, nil
+	return decodeParams(raw, "gateway.authenticate", func(p *AuthenticateParams) *JSONRPCError {
+		p.Token = strings.TrimSpace(p.Token)
+		return nil
+	})
 }
 
 // decodeWakeIntentParams 对 wake.openUrl 的 params 执行延迟反序列化与最小校验。
 func decodeWakeIntentParams(raw json.RawMessage) (WakeIntent, *JSONRPCError) {
-	trimmed := bytes.TrimSpace(raw)
-	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
-		return WakeIntent{}, NewJSONRPCError(
-			JSONRPCCodeInvalidParams,
-			"missing required field: params",
-			GatewayCodeMissingRequiredField,
-		)
-	}
-
-	var intent WakeIntent
-	if err := decodeStrictJSON(trimmed, &intent); err != nil {
-		return WakeIntent{}, NewJSONRPCError(
-			JSONRPCCodeInvalidParams,
-			"invalid params for wake.openUrl",
-			GatewayCodeInvalidFrame,
-		)
-	}
-	intent.Action = strings.ToLower(strings.TrimSpace(intent.Action))
-	intent.SessionID = strings.TrimSpace(intent.SessionID)
-	intent.Workdir = strings.TrimSpace(intent.Workdir)
-	if len(intent.Params) == 0 {
-		intent.Params = nil
-	}
-	return intent, nil
+	return decodeParams(raw, "wake.openUrl", func(p *WakeIntent) *JSONRPCError {
+		p.Action = strings.ToLower(strings.TrimSpace(p.Action))
+		p.SessionID = strings.TrimSpace(p.SessionID)
+		p.Workdir = strings.TrimSpace(p.Workdir)
+		if len(p.Params) == 0 {
+			p.Params = nil
+		}
+		return nil
+	})
 }
 
 // decodeBindStreamParams 对 gateway.bindStream 的 params 执行反序列化与最小参数校验。
 func decodeBindStreamParams(raw json.RawMessage) (BindStreamParams, *JSONRPCError) {
-	trimmed := bytes.TrimSpace(raw)
-	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
-		return BindStreamParams{}, NewJSONRPCError(
-			JSONRPCCodeInvalidParams,
-			"missing required field: params",
-			GatewayCodeMissingRequiredField,
-		)
-	}
-
-	var params BindStreamParams
-	if err := decodeStrictJSON(trimmed, &params); err != nil {
-		return BindStreamParams{}, NewJSONRPCError(
-			JSONRPCCodeInvalidParams,
-			"invalid params for gateway.bindStream",
-			GatewayCodeInvalidFrame,
-		)
-	}
-
-	params.SessionID = strings.TrimSpace(params.SessionID)
-	params.RunID = strings.TrimSpace(params.RunID)
-	params.Channel = strings.ToLower(strings.TrimSpace(params.Channel))
-	if params.Channel == "" {
-		params.Channel = "all"
-	}
-
-	if params.SessionID == "" {
-		return BindStreamParams{}, NewJSONRPCError(
-			JSONRPCCodeInvalidParams,
-			"missing required field: params.session_id",
-			GatewayCodeMissingRequiredField,
-		)
-	}
-
-	switch params.Channel {
-	case "all", "ipc", "ws", "sse":
-	default:
-		return BindStreamParams{}, NewJSONRPCError(
-			JSONRPCCodeInvalidParams,
-			"invalid field: params.channel",
-			GatewayCodeInvalidAction,
-		)
-	}
-
-	return params, nil
+	return decodeParams(raw, "gateway.bindStream", func(p *BindStreamParams) *JSONRPCError {
+		p.SessionID = strings.TrimSpace(p.SessionID)
+		p.RunID = strings.TrimSpace(p.RunID)
+		p.Channel = strings.ToLower(strings.TrimSpace(p.Channel))
+		if p.Channel == "" {
+			p.Channel = "all"
+		}
+		if p.SessionID == "" {
+			return NewJSONRPCError(JSONRPCCodeInvalidParams, "missing required field: params.session_id", GatewayCodeMissingRequiredField)
+		}
+		switch p.Channel {
+		case "all", "ipc", "ws", "sse":
+		default:
+			return NewJSONRPCError(JSONRPCCodeInvalidParams, "invalid field: params.channel", GatewayCodeInvalidAction)
+		}
+		return nil
+	})
 }
 
 // decodeRunParams 对 gateway.run 的 params 执行反序列化与字段清理。
 func decodeRunParams(raw json.RawMessage) (RunParams, *JSONRPCError) {
-	trimmed := bytes.TrimSpace(raw)
-	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
-		return RunParams{}, NewJSONRPCError(
-			JSONRPCCodeInvalidParams,
-			"missing required field: params",
-			GatewayCodeMissingRequiredField,
-		)
-	}
-
-	var params RunParams
-	if err := decodeStrictJSON(trimmed, &params); err != nil {
-		return RunParams{}, NewJSONRPCError(
-			JSONRPCCodeInvalidParams,
-			"invalid params for gateway.run",
-			GatewayCodeInvalidFrame,
-		)
-	}
-
-	params.SessionID = strings.TrimSpace(params.SessionID)
-	params.RunID = strings.TrimSpace(params.RunID)
-	params.InputText = strings.TrimSpace(params.InputText)
-	params.Workdir = strings.TrimSpace(params.Workdir)
-	if len(params.InputParts) == 0 {
-		params.InputParts = nil
-	} else {
-		for index := range params.InputParts {
-			params.InputParts[index].Type = strings.ToLower(strings.TrimSpace(params.InputParts[index].Type))
-			params.InputParts[index].Text = strings.TrimSpace(params.InputParts[index].Text)
-			if params.InputParts[index].Media != nil {
-				params.InputParts[index].Media.URI = strings.TrimSpace(params.InputParts[index].Media.URI)
-				params.InputParts[index].Media.MimeType = strings.TrimSpace(params.InputParts[index].Media.MimeType)
-				params.InputParts[index].Media.FileName = strings.TrimSpace(params.InputParts[index].Media.FileName)
+	return decodeParams(raw, "gateway.run", func(p *RunParams) *JSONRPCError {
+		p.SessionID = strings.TrimSpace(p.SessionID)
+		p.RunID = strings.TrimSpace(p.RunID)
+		p.InputText = strings.TrimSpace(p.InputText)
+		p.Workdir = strings.TrimSpace(p.Workdir)
+		if len(p.InputParts) == 0 {
+			p.InputParts = nil
+		} else {
+			for i := range p.InputParts {
+				p.InputParts[i].Type = strings.ToLower(strings.TrimSpace(p.InputParts[i].Type))
+				p.InputParts[i].Text = strings.TrimSpace(p.InputParts[i].Text)
+				if m := p.InputParts[i].Media; m != nil {
+					m.URI = strings.TrimSpace(m.URI)
+					m.MimeType = strings.TrimSpace(m.MimeType)
+					m.FileName = strings.TrimSpace(m.FileName)
+				}
 			}
 		}
-	}
-	return params, nil
+		return nil
+	})
 }
 
 // decodeCancelParams 对 gateway.cancel 的 params 执行反序列化，缺省或 null 视为空参数。
 func decodeCancelParams(raw json.RawMessage) (CancelParams, *JSONRPCError) {
-	trimmed := bytes.TrimSpace(raw)
-	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
-		return CancelParams{}, NewJSONRPCError(
-			JSONRPCCodeInvalidParams,
-			"missing required field: params",
-			GatewayCodeMissingRequiredField,
-		)
-	}
-
-	var params CancelParams
-	if err := decodeStrictJSON(trimmed, &params); err != nil {
-		return CancelParams{}, NewJSONRPCError(
-			JSONRPCCodeInvalidParams,
-			"invalid params for gateway.cancel",
-			GatewayCodeInvalidFrame,
-		)
-	}
-	params.SessionID = strings.TrimSpace(params.SessionID)
-	params.RunID = strings.TrimSpace(params.RunID)
-	if params.RunID == "" {
-		return CancelParams{}, NewJSONRPCError(
-			JSONRPCCodeInvalidParams,
-			"missing required field: params.run_id",
-			GatewayCodeMissingRequiredField,
-		)
-	}
-	return params, nil
+	return decodeParams(raw, "gateway.cancel", func(p *CancelParams) *JSONRPCError {
+		p.SessionID = strings.TrimSpace(p.SessionID)
+		p.RunID = strings.TrimSpace(p.RunID)
+		if p.RunID == "" {
+			return NewJSONRPCError(JSONRPCCodeInvalidParams, "missing required field: params.run_id", GatewayCodeMissingRequiredField)
+		}
+		return nil
+	})
 }
 
 // decodeCompactParams 对 gateway.compact 的 params 执行反序列化与必填字段校验。
 func decodeCompactParams(raw json.RawMessage) (CompactParams, *JSONRPCError) {
-	trimmed := bytes.TrimSpace(raw)
-	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
-		return CompactParams{}, NewJSONRPCError(
-			JSONRPCCodeInvalidParams,
-			"missing required field: params",
-			GatewayCodeMissingRequiredField,
-		)
-	}
-
-	var params CompactParams
-	if err := decodeStrictJSON(trimmed, &params); err != nil {
-		return CompactParams{}, NewJSONRPCError(
-			JSONRPCCodeInvalidParams,
-			"invalid params for gateway.compact",
-			GatewayCodeInvalidFrame,
-		)
-	}
-	params.SessionID = strings.TrimSpace(params.SessionID)
-	params.RunID = strings.TrimSpace(params.RunID)
-	if params.SessionID == "" {
-		return CompactParams{}, NewJSONRPCError(
-			JSONRPCCodeInvalidParams,
-			"missing required field: params.session_id",
-			GatewayCodeMissingRequiredField,
-		)
-	}
-	return params, nil
+	return decodeParams(raw, "gateway.compact", func(p *CompactParams) *JSONRPCError {
+		p.SessionID = strings.TrimSpace(p.SessionID)
+		p.RunID = strings.TrimSpace(p.RunID)
+		if p.SessionID == "" {
+			return NewJSONRPCError(JSONRPCCodeInvalidParams, "missing required field: params.session_id", GatewayCodeMissingRequiredField)
+		}
+		return nil
+	})
 }
 
 // decodeExecuteSystemToolParams 对 gateway.executeSystemTool 的 params 执行反序列化与字段校验。
 func decodeExecuteSystemToolParams(raw json.RawMessage) (ExecuteSystemToolParams, *JSONRPCError) {
-	trimmed := bytes.TrimSpace(raw)
-	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
-		return ExecuteSystemToolParams{}, NewJSONRPCError(
-			JSONRPCCodeInvalidParams,
-			"missing required field: params",
-			GatewayCodeMissingRequiredField,
-		)
-	}
-
-	var params ExecuteSystemToolParams
-	if err := decodeStrictJSON(trimmed, &params); err != nil {
-		return ExecuteSystemToolParams{}, NewJSONRPCError(
-			JSONRPCCodeInvalidParams,
-			"invalid params for gateway.executeSystemTool",
-			GatewayCodeInvalidFrame,
-		)
-	}
-
-	params.SessionID = strings.TrimSpace(params.SessionID)
-	params.RunID = strings.TrimSpace(params.RunID)
-	params.Workdir = strings.TrimSpace(params.Workdir)
-	params.ToolName = strings.TrimSpace(params.ToolName)
-	params.Arguments = cloneJSONRawMessage(bytes.TrimSpace(params.Arguments))
-
-	if params.ToolName == "" {
-		return ExecuteSystemToolParams{}, NewJSONRPCError(
-			JSONRPCCodeInvalidParams,
-			"missing required field: params.tool_name",
-			GatewayCodeMissingRequiredField,
-		)
-	}
-
-	return params, nil
+	return decodeParams(raw, "gateway.executeSystemTool", func(p *ExecuteSystemToolParams) *JSONRPCError {
+		p.SessionID = strings.TrimSpace(p.SessionID)
+		p.RunID = strings.TrimSpace(p.RunID)
+		p.Workdir = strings.TrimSpace(p.Workdir)
+		p.ToolName = strings.TrimSpace(p.ToolName)
+		p.Arguments = cloneJSONRawMessage(bytes.TrimSpace(p.Arguments))
+		if p.ToolName == "" {
+			return NewJSONRPCError(JSONRPCCodeInvalidParams, "missing required field: params.tool_name", GatewayCodeMissingRequiredField)
+		}
+		return nil
+	})
 }
 
 // decodeActivateSessionSkillParams 对 gateway.activateSessionSkill 的 params 执行反序列化与字段校验。
 func decodeActivateSessionSkillParams(raw json.RawMessage) (ActivateSessionSkillParams, *JSONRPCError) {
-	trimmed := bytes.TrimSpace(raw)
-	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
-		return ActivateSessionSkillParams{}, NewJSONRPCError(
-			JSONRPCCodeInvalidParams,
-			"missing required field: params",
-			GatewayCodeMissingRequiredField,
-		)
-	}
-
-	var params ActivateSessionSkillParams
-	if err := decodeStrictJSON(trimmed, &params); err != nil {
-		return ActivateSessionSkillParams{}, NewJSONRPCError(
-			JSONRPCCodeInvalidParams,
-			"invalid params for gateway.activateSessionSkill",
-			GatewayCodeInvalidFrame,
-		)
-	}
-	params.SessionID = strings.TrimSpace(params.SessionID)
-	params.SkillID = strings.TrimSpace(params.SkillID)
-	if params.SessionID == "" {
-		return ActivateSessionSkillParams{}, NewJSONRPCError(
-			JSONRPCCodeInvalidParams,
-			"missing required field: params.session_id",
-			GatewayCodeMissingRequiredField,
-		)
-	}
-	if params.SkillID == "" {
-		return ActivateSessionSkillParams{}, NewJSONRPCError(
-			JSONRPCCodeInvalidParams,
-			"missing required field: params.skill_id",
-			GatewayCodeMissingRequiredField,
-		)
-	}
-	return params, nil
+	return decodeParams(raw, "gateway.activateSessionSkill", func(p *ActivateSessionSkillParams) *JSONRPCError {
+		p.SessionID = strings.TrimSpace(p.SessionID)
+		p.SkillID = strings.TrimSpace(p.SkillID)
+		if p.SessionID == "" {
+			return NewJSONRPCError(JSONRPCCodeInvalidParams, "missing required field: params.session_id", GatewayCodeMissingRequiredField)
+		}
+		if p.SkillID == "" {
+			return NewJSONRPCError(JSONRPCCodeInvalidParams, "missing required field: params.skill_id", GatewayCodeMissingRequiredField)
+		}
+		return nil
+	})
 }
 
 // decodeDeactivateSessionSkillParams 对 gateway.deactivateSessionSkill 的 params 执行反序列化与字段校验。
 func decodeDeactivateSessionSkillParams(raw json.RawMessage) (DeactivateSessionSkillParams, *JSONRPCError) {
-	trimmed := bytes.TrimSpace(raw)
-	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
-		return DeactivateSessionSkillParams{}, NewJSONRPCError(
-			JSONRPCCodeInvalidParams,
-			"missing required field: params",
-			GatewayCodeMissingRequiredField,
-		)
-	}
-
-	var params DeactivateSessionSkillParams
-	if err := decodeStrictJSON(trimmed, &params); err != nil {
-		return DeactivateSessionSkillParams{}, NewJSONRPCError(
-			JSONRPCCodeInvalidParams,
-			"invalid params for gateway.deactivateSessionSkill",
-			GatewayCodeInvalidFrame,
-		)
-	}
-	params.SessionID = strings.TrimSpace(params.SessionID)
-	params.SkillID = strings.TrimSpace(params.SkillID)
-	if params.SessionID == "" {
-		return DeactivateSessionSkillParams{}, NewJSONRPCError(
-			JSONRPCCodeInvalidParams,
-			"missing required field: params.session_id",
-			GatewayCodeMissingRequiredField,
-		)
-	}
-	if params.SkillID == "" {
-		return DeactivateSessionSkillParams{}, NewJSONRPCError(
-			JSONRPCCodeInvalidParams,
-			"missing required field: params.skill_id",
-			GatewayCodeMissingRequiredField,
-		)
-	}
-	return params, nil
+	return decodeParams(raw, "gateway.deactivateSessionSkill", func(p *DeactivateSessionSkillParams) *JSONRPCError {
+		p.SessionID = strings.TrimSpace(p.SessionID)
+		p.SkillID = strings.TrimSpace(p.SkillID)
+		if p.SessionID == "" {
+			return NewJSONRPCError(JSONRPCCodeInvalidParams, "missing required field: params.session_id", GatewayCodeMissingRequiredField)
+		}
+		if p.SkillID == "" {
+			return NewJSONRPCError(JSONRPCCodeInvalidParams, "missing required field: params.skill_id", GatewayCodeMissingRequiredField)
+		}
+		return nil
+	})
 }
 
 // decodeListSessionSkillsParams 对 gateway.listSessionSkills 的 params 执行反序列化与字段校验。
 func decodeListSessionSkillsParams(raw json.RawMessage) (ListSessionSkillsParams, *JSONRPCError) {
-	trimmed := bytes.TrimSpace(raw)
-	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
-		return ListSessionSkillsParams{}, NewJSONRPCError(
-			JSONRPCCodeInvalidParams,
-			"missing required field: params",
-			GatewayCodeMissingRequiredField,
-		)
-	}
-
-	var params ListSessionSkillsParams
-	if err := decodeStrictJSON(trimmed, &params); err != nil {
-		return ListSessionSkillsParams{}, NewJSONRPCError(
-			JSONRPCCodeInvalidParams,
-			"invalid params for gateway.listSessionSkills",
-			GatewayCodeInvalidFrame,
-		)
-	}
-	params.SessionID = strings.TrimSpace(params.SessionID)
-	if params.SessionID == "" {
-		return ListSessionSkillsParams{}, NewJSONRPCError(
-			JSONRPCCodeInvalidParams,
-			"missing required field: params.session_id",
-			GatewayCodeMissingRequiredField,
-		)
-	}
-	return params, nil
+	return decodeParams(raw, "gateway.listSessionSkills", func(p *ListSessionSkillsParams) *JSONRPCError {
+		p.SessionID = strings.TrimSpace(p.SessionID)
+		if p.SessionID == "" {
+			return NewJSONRPCError(JSONRPCCodeInvalidParams, "missing required field: params.session_id", GatewayCodeMissingRequiredField)
+		}
+		return nil
+	})
 }
 
 // decodeListAvailableSkillsParams 对 gateway.listAvailableSkills 的 params 执行反序列化与字段清理。
 func decodeListAvailableSkillsParams(raw json.RawMessage) (ListAvailableSkillsParams, *JSONRPCError) {
-	trimmed := bytes.TrimSpace(raw)
-	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
-		return ListAvailableSkillsParams{}, nil
-	}
-
-	var params ListAvailableSkillsParams
-	if err := decodeStrictJSON(trimmed, &params); err != nil {
-		return ListAvailableSkillsParams{}, NewJSONRPCError(
-			JSONRPCCodeInvalidParams,
-			"invalid params for gateway.listAvailableSkills",
-			GatewayCodeInvalidFrame,
-		)
-	}
-	params.SessionID = strings.TrimSpace(params.SessionID)
-	return params, nil
+	return decodeParamsOptional(raw, "gateway.listAvailableSkills", func(p *ListAvailableSkillsParams) *JSONRPCError {
+		p.SessionID = strings.TrimSpace(p.SessionID)
+		return nil
+	})
 }
 
 // decodeLoadSessionParams 对 gateway.loadSession 的 params 执行反序列化与必填字段校验。
 func decodeLoadSessionParams(raw json.RawMessage) (LoadSessionParams, *JSONRPCError) {
-	trimmed := bytes.TrimSpace(raw)
-	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
-		return LoadSessionParams{}, NewJSONRPCError(
-			JSONRPCCodeInvalidParams,
-			"missing required field: params",
-			GatewayCodeMissingRequiredField,
-		)
-	}
-
-	var params LoadSessionParams
-	if err := decodeStrictJSON(trimmed, &params); err != nil {
-		return LoadSessionParams{}, NewJSONRPCError(
-			JSONRPCCodeInvalidParams,
-			"invalid params for gateway.loadSession",
-			GatewayCodeInvalidFrame,
-		)
-	}
-	params.SessionID = strings.TrimSpace(params.SessionID)
-	if params.SessionID == "" {
-		return LoadSessionParams{}, NewJSONRPCError(
-			JSONRPCCodeInvalidParams,
-			"missing required field: params.session_id",
-			GatewayCodeMissingRequiredField,
-		)
-	}
-	return params, nil
+	return decodeParams(raw, "gateway.loadSession", func(p *LoadSessionParams) *JSONRPCError {
+		p.SessionID = strings.TrimSpace(p.SessionID)
+		if p.SessionID == "" {
+			return NewJSONRPCError(JSONRPCCodeInvalidParams, "missing required field: params.session_id", GatewayCodeMissingRequiredField)
+		}
+		return nil
+	})
 }
 
 // decodeResolvePermissionParams 对 gateway.resolvePermission 的 params 执行反序列化与决策校验。
 func decodeResolvePermissionParams(raw json.RawMessage) (ResolvePermissionParams, *JSONRPCError) {
+	return decodeParams(raw, "gateway.resolvePermission", func(p *ResolvePermissionParams) *JSONRPCError {
+		p.RequestID = strings.TrimSpace(p.RequestID)
+		p.Decision = strings.ToLower(strings.TrimSpace(p.Decision))
+		if p.RequestID == "" {
+			return NewJSONRPCError(JSONRPCCodeInvalidParams, "missing required field: params.request_id", GatewayCodeMissingRequiredField)
+		}
+		switch p.Decision {
+		case "allow_once", "allow_session", "reject":
+		default:
+			return NewJSONRPCError(JSONRPCCodeInvalidParams, "invalid field: params.decision", GatewayCodeInvalidAction)
+		}
+		return nil
+	})
+}
+
+// decodeDeleteSessionParams 对 gateway.deleteSession 的 params 执行反序列化与校验。
+func decodeDeleteSessionParams(raw json.RawMessage) (DeleteSessionParams, *JSONRPCError) {
+	return decodeParams(raw, "gateway.deleteSession", func(p *DeleteSessionParams) *JSONRPCError {
+		p.SessionID = strings.TrimSpace(p.SessionID)
+		if p.SessionID == "" {
+			return NewJSONRPCError(JSONRPCCodeInvalidParams, "missing required field: params.session_id", GatewayCodeMissingRequiredField)
+		}
+		return nil
+	})
+}
+
+// decodeRenameSessionParams 对 gateway.renameSession 的 params 执行反序列化与校验。
+func decodeRenameSessionParams(raw json.RawMessage) (RenameSessionParams, *JSONRPCError) {
+	return decodeParams(raw, "gateway.renameSession", func(p *RenameSessionParams) *JSONRPCError {
+		p.SessionID = strings.TrimSpace(p.SessionID)
+		p.Title = strings.TrimSpace(p.Title)
+		if p.SessionID == "" {
+			return NewJSONRPCError(JSONRPCCodeInvalidParams, "missing required field: params.session_id", GatewayCodeMissingRequiredField)
+		}
+		if p.Title == "" {
+			return NewJSONRPCError(JSONRPCCodeInvalidParams, "missing required field: params.title", GatewayCodeMissingRequiredField)
+		}
+		return nil
+	})
+}
+
+// decodeListFilesParams 对 gateway.listFiles 的 params 执行反序列化与校验。
+func decodeListFilesParams(raw json.RawMessage) (ListFilesParams, *JSONRPCError) {
+	return decodeParamsOptional(raw, "gateway.listFiles", func(p *ListFilesParams) *JSONRPCError {
+		p.SessionID = strings.TrimSpace(p.SessionID)
+		p.Workdir = strings.TrimSpace(p.Workdir)
+		p.Path = strings.TrimSpace(p.Path)
+		return nil
+	})
+}
+
+// decodeListModelsParams 对 gateway.listModels 的 params 执行反序列化与校验。
+func decodeListModelsParams(raw json.RawMessage) (ListModelsParams, *JSONRPCError) {
+	return decodeParamsOptional(raw, "gateway.listModels", func(p *ListModelsParams) *JSONRPCError {
+		p.SessionID = strings.TrimSpace(p.SessionID)
+		return nil
+	})
+}
+
+// decodeSetSessionModelParams 对 gateway.setSessionModel 的 params 执行反序列化与校验。
+func decodeSetSessionModelParams(raw json.RawMessage) (SetSessionModelParams, *JSONRPCError) {
+	return decodeParams(raw, "gateway.setSessionModel", func(p *SetSessionModelParams) *JSONRPCError {
+		p.SessionID = strings.TrimSpace(p.SessionID)
+		p.ProviderID = strings.TrimSpace(p.ProviderID)
+		p.ModelID = strings.TrimSpace(p.ModelID)
+		if p.SessionID == "" {
+			return NewJSONRPCError(JSONRPCCodeInvalidParams, "missing required field: params.session_id", GatewayCodeMissingRequiredField)
+		}
+		if p.ModelID == "" {
+			return NewJSONRPCError(JSONRPCCodeInvalidParams, "missing required field: params.model_id", GatewayCodeMissingRequiredField)
+		}
+		return nil
+	})
+}
+
+// decodeGetSessionModelParams 对 gateway.getSessionModel 的 params 执行反序列化与校验。
+func decodeGetSessionModelParams(raw json.RawMessage) (GetSessionModelParams, *JSONRPCError) {
+	return decodeParams(raw, "gateway.getSessionModel", func(p *GetSessionModelParams) *JSONRPCError {
+		p.SessionID = strings.TrimSpace(p.SessionID)
+		if p.SessionID == "" {
+			return NewJSONRPCError(JSONRPCCodeInvalidParams, "missing required field: params.session_id", GatewayCodeMissingRequiredField)
+		}
+		return nil
+	})
+}
+
+// decodeCreateCustomProviderParams 对 gateway.createCustomProvider 的 params 执行反序列化与字段清理。
+func decodeCreateCustomProviderParams(raw json.RawMessage) (CreateCustomProviderParams, *JSONRPCError) {
+	return decodeParams(raw, "gateway.createCustomProvider", func(p *CreateCustomProviderParams) *JSONRPCError {
+		p.Name = strings.TrimSpace(p.Name)
+		p.Driver = strings.TrimSpace(p.Driver)
+		p.BaseURL = strings.TrimSpace(p.BaseURL)
+		p.ChatAPIMode = strings.TrimSpace(p.ChatAPIMode)
+		p.ChatEndpointPath = strings.TrimSpace(p.ChatEndpointPath)
+		p.APIKeyEnv = strings.TrimSpace(p.APIKeyEnv)
+		p.APIKey = strings.TrimSpace(p.APIKey)
+		p.ModelSource = strings.TrimSpace(p.ModelSource)
+		p.DiscoveryEndpointPath = strings.TrimSpace(p.DiscoveryEndpointPath)
+		if p.Name == "" {
+			return NewJSONRPCError(JSONRPCCodeInvalidParams, "missing required field: params.name", GatewayCodeMissingRequiredField)
+		}
+		if p.Driver == "" {
+			return NewJSONRPCError(JSONRPCCodeInvalidParams, "missing required field: params.driver", GatewayCodeMissingRequiredField)
+		}
+		if p.APIKeyEnv == "" {
+			return NewJSONRPCError(JSONRPCCodeInvalidParams, "missing required field: params.api_key_env", GatewayCodeMissingRequiredField)
+		}
+		return nil
+	})
+}
+
+// decodeDeleteCustomProviderParams 对 gateway.deleteCustomProvider 的 params 执行反序列化与字段校验。
+func decodeDeleteCustomProviderParams(raw json.RawMessage) (DeleteCustomProviderParams, *JSONRPCError) {
+	return decodeParams(raw, "gateway.deleteCustomProvider", func(p *DeleteCustomProviderParams) *JSONRPCError {
+		p.ProviderID = strings.TrimSpace(p.ProviderID)
+		if p.ProviderID == "" {
+			return NewJSONRPCError(JSONRPCCodeInvalidParams, "missing required field: params.provider_id", GatewayCodeMissingRequiredField)
+		}
+		return nil
+	})
+}
+
+// decodeSelectProviderModelParams 对 gateway.selectProviderModel 的 params 执行反序列化与字段校验。
+func decodeSelectProviderModelParams(raw json.RawMessage) (SelectProviderModelParams, *JSONRPCError) {
+	return decodeParams(raw, "gateway.selectProviderModel", func(p *SelectProviderModelParams) *JSONRPCError {
+		p.ProviderID = strings.TrimSpace(p.ProviderID)
+		p.ModelID = strings.TrimSpace(p.ModelID)
+		if p.ProviderID == "" {
+			return NewJSONRPCError(JSONRPCCodeInvalidParams, "missing required field: params.provider_id", GatewayCodeMissingRequiredField)
+		}
+		return nil
+	})
+}
+
+// decodeUpsertMCPServerParams 对 gateway.upsertMCPServer 的 params 执行反序列化与字段校验。
+func decodeUpsertMCPServerParams(raw json.RawMessage) (UpsertMCPServerParams, *JSONRPCError) {
+	return decodeParams(raw, "gateway.upsertMCPServer", func(p *UpsertMCPServerParams) *JSONRPCError {
+		p.Server.ID = strings.TrimSpace(p.Server.ID)
+		p.Server.Source = strings.TrimSpace(p.Server.Source)
+		p.Server.Version = strings.TrimSpace(p.Server.Version)
+		p.Server.Stdio.Command = strings.TrimSpace(p.Server.Stdio.Command)
+		p.Server.Stdio.Workdir = strings.TrimSpace(p.Server.Stdio.Workdir)
+		if p.Server.ID == "" {
+			return NewJSONRPCError(JSONRPCCodeInvalidParams, "missing required field: params.server.id", GatewayCodeMissingRequiredField)
+		}
+		return nil
+	})
+}
+
+// decodeSetMCPServerEnabledParams 对 gateway.setMCPServerEnabled 的 params 执行反序列化与字段校验。
+func decodeSetMCPServerEnabledParams(raw json.RawMessage) (SetMCPServerEnabledParams, *JSONRPCError) {
+	return decodeParams(raw, "gateway.setMCPServerEnabled", func(p *SetMCPServerEnabledParams) *JSONRPCError {
+		p.ID = strings.TrimSpace(p.ID)
+		if p.ID == "" {
+			return NewJSONRPCError(JSONRPCCodeInvalidParams, "missing required field: params.id", GatewayCodeMissingRequiredField)
+		}
+		return nil
+	})
+}
+
+// decodeDeleteMCPServerParams 对 gateway.deleteMCPServer 的 params 执行反序列化与字段校验。
+func decodeDeleteMCPServerParams(raw json.RawMessage) (DeleteMCPServerParams, *JSONRPCError) {
+	return decodeParams(raw, "gateway.deleteMCPServer", func(p *DeleteMCPServerParams) *JSONRPCError {
+		p.ID = strings.TrimSpace(p.ID)
+		if p.ID == "" {
+			return NewJSONRPCError(JSONRPCCodeInvalidParams, "missing required field: params.id", GatewayCodeMissingRequiredField)
+		}
+		return nil
+	})
+}
+
+// decodeParams 是各 decodeXxxParams 的泛型骨架：检查空值、严格反序列化、执行校验。
+func decodeParams[T any](raw json.RawMessage, name string, validate func(*T) *JSONRPCError) (T, *JSONRPCError) {
+	return decodeParamsInternal(raw, name, validate, false)
+}
+
+// decodeParamsOptional 与 decodeParams 相同，但允许 params 为空或 null（适用于可选参数方法）。
+func decodeParamsOptional[T any](raw json.RawMessage, name string, validate func(*T) *JSONRPCError) (T, *JSONRPCError) {
+	return decodeParamsInternal(raw, name, validate, true)
+}
+
+func decodeParamsInternal[T any](raw json.RawMessage, name string, validate func(*T) *JSONRPCError, allowEmpty bool) (T, *JSONRPCError) {
+	var zero T
 	trimmed := bytes.TrimSpace(raw)
 	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
-		return ResolvePermissionParams{}, NewJSONRPCError(
+		if allowEmpty {
+			return zero, nil
+		}
+		return zero, NewJSONRPCError(
 			JSONRPCCodeInvalidParams,
 			"missing required field: params",
 			GatewayCodeMissingRequiredField,
 		)
 	}
-
-	var params ResolvePermissionParams
+	var params T
 	if err := decodeStrictJSON(trimmed, &params); err != nil {
-		return ResolvePermissionParams{}, NewJSONRPCError(
+		return zero, NewJSONRPCError(
 			JSONRPCCodeInvalidParams,
-			"invalid params for gateway.resolvePermission",
+			fmt.Sprintf("invalid params for %s", name),
 			GatewayCodeInvalidFrame,
 		)
 	}
-	params.RequestID = strings.TrimSpace(params.RequestID)
-	params.Decision = strings.ToLower(strings.TrimSpace(params.Decision))
-	if params.RequestID == "" {
-		return ResolvePermissionParams{}, NewJSONRPCError(
-			JSONRPCCodeInvalidParams,
-			"missing required field: params.request_id",
-			GatewayCodeMissingRequiredField,
-		)
-	}
-	switch params.Decision {
-	case "allow_once", "allow_session", "reject":
-	default:
-		return ResolvePermissionParams{}, NewJSONRPCError(
-			JSONRPCCodeInvalidParams,
-			"invalid field: params.decision",
-			GatewayCodeInvalidAction,
-		)
+	if validate != nil {
+		if err := validate(&params); err != nil {
+			return zero, err
+		}
 	}
 	return params, nil
 }
