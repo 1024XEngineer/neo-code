@@ -104,6 +104,8 @@ type appRuntimeState struct {
 	nowFn                     func() time.Time
 	lastInputEditAt           time.Time
 	lastPasteLikeAt           time.Time
+	pasteSessionStartedAt     time.Time
+	pasteSessionUntil         time.Time
 	pendingCtrlVPasteEcho     string
 	pendingCtrlVEchoUntil     time.Time
 	deferredPastedTextLoadCmd tea.Cmd
@@ -113,6 +115,8 @@ type appRuntimeState struct {
 	pasteTxnActive            bool
 	pasteTxnBuffer            string
 	pasteTxnVersion           int
+	pasteTxnTokenInjected     bool
+	pasteTxnInjectedToken     string
 	inputBurstStart           time.Time
 	inputBurstCount           int
 	pasteMode                 bool
@@ -187,6 +191,7 @@ type pendingTextPaste struct {
 	Token     string
 	FilePath  string
 	LineCount int
+	Loaded    bool
 }
 
 type queuedInterventionInput struct {

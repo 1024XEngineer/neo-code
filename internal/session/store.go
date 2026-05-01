@@ -122,6 +122,13 @@ type UpdateSessionWorkdirInput struct {
 	Workdir   string
 }
 
+// UpdateSessionTitleInput 描述一次仅更新会话 title 的最小粒度写入。
+type UpdateSessionTitleInput struct {
+	SessionID string
+	UpdatedAt time.Time
+	Title     string
+}
+
 // ReplaceTranscriptInput 描述 compact 后整段 transcript 的原子替换。
 type ReplaceTranscriptInput struct {
 	SessionID string
@@ -257,7 +264,7 @@ func cloneTodoItems(items []TodoItem) []TodoItem {
 
 // sanitizeTitle 规范化会话标题，保证空标题和超长标题都有稳定表现。
 func sanitizeTitle(title string) string {
-	title = strings.TrimSpace(title)
+	title = strings.Join(strings.Fields(strings.TrimSpace(title)), " ")
 	if title == "" {
 		return "New Session"
 	}

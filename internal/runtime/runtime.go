@@ -131,6 +131,10 @@ type repositoryFactService interface {
 	Retrieve(ctx context.Context, workdir string, query repository.RetrievalQuery) (repository.RetrievalResult, error)
 }
 
+type runtimeSessionTitleUpdater interface {
+	UpdateSessionTitle(ctx context.Context, input agentsession.UpdateSessionTitleInput) error
+}
+
 type Service struct {
 	configManager     *config.Manager
 	sessionStore      agentsession.Store
@@ -299,7 +303,44 @@ func (s *Service) loadConfigSnapshot(ctx context.Context) (config.Config, error)
 
 // ListSessions 返回当前会话存储中的所有摘要。
 func (s *Service) ListSessions(ctx context.Context) ([]agentsession.Summary, error) {
-	return s.sessionStore.ListSummaries(ctx)
+	summaries, err := s.sessionStore.ListSummaries(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if len(summaries) == 0 {
+		return summaries, nil
+	}
+
+	rewritten := make([]agentsession.Summary, 0, len(summaries))
+	for _, summary := range summaries {
+		current := summary
+		if !isDefaultSessionTitle(current.Title) {
+			rewritten = append(rewritten, current)
+			continue
+		}
+
+		session, loadErr := s.sessionStore.LoadSession(ctx, current.ID)
+		if loadErr != nil {
+			rewritten = append(rewritten, current)
+			continue
+		}
+		derived := sessionTitleFromMessages(session.Messages)
+		if !shouldPromoteSessionTitle(current.Title, derived) {
+			rewritten = append(rewritten, current)
+			continue
+		}
+
+		current.Title = derived
+		if titleUpdater, ok := s.sessionStore.(runtimeSessionTitleUpdater); ok {
+			_ = titleUpdater.UpdateSessionTitle(ctx, agentsession.UpdateSessionTitleInput{
+				SessionID: current.ID,
+				UpdatedAt: current.UpdatedAt,
+				Title:     derived,
+			})
+		}
+		rewritten = append(rewritten, current)
+	}
+	return rewritten, nil
 }
 
 // LoadSession 按 id 加载完整会话内容。
@@ -364,6 +405,35 @@ func isRuntimeSessionAlreadyExistsError(err error) bool {
 		return false
 	}
 	return errors.Is(err, agentsession.ErrSessionAlreadyExists) || errors.Is(err, os.ErrExist)
+}
+
+func sessionTitleFromMessages(messages []providertypes.Message) string {
+	for _, message := range messages {
+		if strings.TrimSpace(message.Role) != providertypes.RoleUser {
+			continue
+		}
+		if title := sessionTitleFromParts(message.Parts); strings.TrimSpace(title) != "" && !isImageOnlySessionTitle(title) {
+			return strings.TrimSpace(title)
+		}
+	}
+	return ""
+}
+
+func isDefaultSessionTitle(title string) bool {
+	return strings.EqualFold(strings.TrimSpace(title), "New Session")
+}
+
+func isImageOnlySessionTitle(title string) bool {
+	return strings.EqualFold(strings.TrimSpace(title), "Image Message")
+}
+
+func shouldPromoteSessionTitle(current string, next string) bool {
+	trimmedCurrent := strings.TrimSpace(current)
+	trimmedNext := strings.TrimSpace(next)
+	if trimmedNext == "" || isDefaultSessionTitle(trimmedNext) || isImageOnlySessionTitle(trimmedNext) {
+		return false
+	}
+	return isDefaultSessionTitle(trimmedCurrent)
 }
 
 // SetBudgetResolver 注入 prompt budget 解析能力，避免 runtime 直接感知模型目录细节。

@@ -224,6 +224,17 @@ func TestSessionItemAccessors(t *testing.T) {
 	}
 }
 
+func TestSessionItemAccessorsNormalizeMultilineTitle(t *testing.T) {
+	updatedAt := time.Date(2026, 4, 22, 8, 30, 0, 0, time.UTC)
+	item := sessionItem{Summary: agentsession.Summary{Title: "Line1\n\tLine2  Line3", UpdatedAt: updatedAt}}
+	if item.Title() != "Line1 Line2 Line3" {
+		t.Fatalf("Title() = %q, want single-line title", item.Title())
+	}
+	if item.FilterValue() != "line1 line2 line3" {
+		t.Fatalf("FilterValue() = %q, want normalized lowercase single line", item.FilterValue())
+	}
+}
+
 type titledOnlyItem struct{ title string }
 
 func (i titledOnlyItem) Title() string { return i.title }
@@ -250,6 +261,17 @@ func TestPickerItemTextFallbackBranches(t *testing.T) {
 	title, subtitle = pickerItemText(describedOnlyItem{description: "  only-desc  "})
 	if title != "" || subtitle != "only-desc" {
 		t.Fatalf("unexpected desc-only result: title=%q subtitle=%q", title, subtitle)
+	}
+
+	title, subtitle = pickerItemText(sessionItem{Summary: agentsession.Summary{
+		Title:     "A\nB",
+		UpdatedAt: time.Date(2026, 4, 30, 5, 14, 0, 0, time.UTC),
+	}})
+	if title != "A B" {
+		t.Fatalf("unexpected session title normalization: %q", title)
+	}
+	if subtitle != "04-30 05:14" {
+		t.Fatalf("unexpected session subtitle: %q", subtitle)
 	}
 }
 

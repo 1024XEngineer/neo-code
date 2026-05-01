@@ -1734,6 +1734,61 @@ func TestUpdatePasteEventSuppressesDuplicateSummaryTokenAcrossContentVariants(t 
 	}
 }
 
+func TestUpdatePasteEventSingleSessionPinsSingleTokenAcrossChunks(t *testing.T) {
+	app, _ := newTestApp(t)
+	now := time.Unix(1_720_000_000, 0)
+	app.nowFn = func() time.Time { return now }
+
+	makeLines := func(prefix string, n int) string {
+		lines := make([]string, 0, n)
+		for i := 0; i < n; i++ {
+			lines = append(lines, fmt.Sprintf("%s-%d", prefix, i+1))
+		}
+		return strings.Join(lines, "\n")
+	}
+
+	first := makeLines("big", 386)
+	second := makeLines("small", 3)
+	third := makeLines("tiny", 2)
+
+	model, cmd := app.Update(tea.KeyMsg{
+		Type:  tea.KeyRunes,
+		Runes: []rune(first),
+		Paste: true,
+	})
+	if cmd != nil {
+		_ = cmd()
+	}
+	app = model.(App)
+
+	model, cmd = app.Update(tea.KeyMsg{
+		Type:  tea.KeyRunes,
+		Runes: []rune(second),
+		Paste: true,
+	})
+	if cmd != nil {
+		_ = cmd()
+	}
+	app = model.(App)
+
+	model, cmd = app.Update(tea.KeyMsg{
+		Type:  tea.KeyRunes,
+		Runes: []rune(third),
+		Paste: true,
+	})
+	if cmd != nil {
+		_ = cmd()
+	}
+	app = model.(App)
+
+	if got := app.input.Value(); got != "[paste 386 LINE]" {
+		t.Fatalf("expected one pinned token in single paste session, got %q", got)
+	}
+	if len(app.pendingTextPastes) != 1 {
+		t.Fatalf("expected one pending paste record for pinned session token, got %d", len(app.pendingTextPastes))
+	}
+}
+
 func TestUpdatePasteEventSuppressesDuplicateSingleLineContent(t *testing.T) {
 	app, _ := newTestApp(t)
 	now := time.Unix(1_720_000_000, 0)
@@ -2046,6 +2101,82 @@ func TestUpdatePasteLoadingClearsAfterLoadReadyWithoutSend(t *testing.T) {
 	}
 	if app.state.StatusText != statusReady {
 		t.Fatalf("expected status to return to ready after load completion, got %q", app.state.StatusText)
+	}
+}
+
+func TestUpdatePastedTextLoadReadyReschedulesWhenPasteTxnActive(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.loadingPastedText = true
+	app.pasteTxnActive = true
+
+	model, cmd := app.Update(pastedTextLoadReadyMsg{})
+	app = model.(App)
+	if !app.loadingPastedText {
+		t.Fatalf("expected loading state to remain when paste txn is active")
+	}
+	if cmd == nil {
+		t.Fatalf("expected re-schedule command when pasted text is not ready")
+	}
+}
+
+func TestUpdatePastedTextLoadReadyAppendsSeparatorBeforeDeferredSend(t *testing.T) {
+	app, runtime := newTestApp(t)
+	app.loadingPastedText = true
+	app.pendingSendAfterPasteLoad = true
+	app.input.SetValue("hello")
+	app.state.InputText = app.input.Value()
+
+	model, cmd := app.Update(pastedTextLoadReadyMsg{})
+	if cmd != nil {
+		_ = cmd()
+	}
+	app = model.(App)
+
+	if len(runtime.prepareInputs) != 1 {
+		t.Fatalf("expected deferred send to run once, got %d", len(runtime.prepareInputs))
+	}
+	if runtime.prepareInputs[0].Text != "hello" {
+		t.Fatalf("unexpected deferred send payload: %q", runtime.prepareInputs[0].Text)
+	}
+	if app.loadingPastedText || app.pendingSendAfterPasteLoad {
+		t.Fatalf("expected loading flags cleared after deferred send")
+	}
+}
+
+func TestPasteSessionHelpers(t *testing.T) {
+	app, _ := newTestApp(t)
+	now := time.Now()
+
+	app.extendPasteSession(now, 0)
+	if app.pasteSessionStartedAt.IsZero() || app.pasteSessionUntil.IsZero() {
+		t.Fatalf("expected paste session window to be initialized")
+	}
+	if !app.inPasteSessionWindow(now.Add(200 * time.Millisecond)) {
+		t.Fatalf("expected to stay within paste session window")
+	}
+
+	app.markPasteSessionToken(" token ")
+	if !app.pasteTxnTokenInjected || app.pasteTxnInjectedToken != "token" {
+		t.Fatalf("expected token to be normalized and recorded")
+	}
+
+	app.pendingTextPastes = []pendingTextPaste{{Token: "token", Loaded: false}}
+	if token, ok := app.reuseSinglePasteSessionToken(now.Add(100 * time.Millisecond)); !ok || token != "token" {
+		t.Fatalf("expected to reuse pinned paste token within session window")
+	}
+
+	app.pasteSessionUntil = now.Add(100 * time.Millisecond)
+	if _, ok := app.reuseSinglePasteSessionToken(now.Add(2 * time.Second)); ok {
+		t.Fatalf("expected token reuse to stop outside paste session window")
+	}
+
+	app.pendingCtrlVPasteEcho = "echo"
+	if app.shouldCompletePastedTextLoading(now.Add(100 * time.Millisecond)) {
+		t.Fatalf("expected pending ctrl+v echo to block completion")
+	}
+	app.pendingCtrlVPasteEcho = ""
+	if !app.shouldCompletePastedTextLoading(now.Add(200 * time.Millisecond)) {
+		t.Fatalf("expected completion after ctrl+v echo settles")
 	}
 }
 

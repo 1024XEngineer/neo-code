@@ -61,6 +61,8 @@ const footerErrorFlashDuration = 8 * time.Second
 const pasteTxnFlushDebounce = 140 * time.Millisecond
 const pastedTextLoadDebounce = 180 * time.Millisecond
 const duplicatePasteSuppressWindow = 1200 * time.Millisecond
+const pasteSessionMinGuard = 2 * time.Second
+const pasteSessionPerLineGuard = 8 * time.Millisecond
 const inlineLogMarker = "[[neo-log]] "
 const sessionWorkdirMissingWarning = "Session workspace not found, keeping current workspace."
 
@@ -144,9 +146,21 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !a.loadingPastedText {
 			return a, batchUpdateCmds()
 		}
+		now := a.now()
+		if !a.shouldCompletePastedTextLoading(now) {
+			a.deferredPastedTextLoadCmd = schedulePastedTextLoadReady()
+			return a, batchUpdateCmds()
+		}
 		a.loadingPastedText = false
 		if a.state.StatusText == statusLoadingPastedText {
 			a.state.StatusText = statusReady
+		}
+		if current := a.input.Value(); strings.TrimSpace(current) != "" && !strings.HasSuffix(current, " ") {
+			a.input.SetValue(current + " ")
+			a.state.InputText = a.input.Value()
+			a.normalizeComposerHeight()
+			a.applyComponentLayout(false)
+			a.refreshCommandMenu()
 		}
 		if !a.pendingSendAfterPasteLoad {
 			return a, batchUpdateCmds()
@@ -1032,23 +1046,69 @@ func (a *App) beginPastedTextLoading() {
 	a.skipNextSendPasteLoadWait = false
 }
 
+func (a *App) shouldCompletePastedTextLoading(now time.Time) bool {
+	if a.pasteTxnActive {
+		return false
+	}
+	if a.hasPendingCtrlVPasteEcho(now) {
+		return false
+	}
+	// Once paste stream and echo settle, pending tokens become resolvable.
+	a.markPendingTextPastesLoaded()
+	// Keep loading if there are still unresolved tokens in the current input.
+	if a.shouldDeferSendForPastedTextLoad(a.input.Value()) {
+		return false
+	}
+	return true
+}
+
+func (a *App) markPendingTextPastesLoaded() {
+	if len(a.pendingTextPastes) == 0 {
+		return
+	}
+	for i := range a.pendingTextPastes {
+		a.pendingTextPastes[i].Loaded = true
+	}
+}
+
+func (a *App) extendPasteSession(now time.Time, lineCount int) {
+	if lineCount < 1 {
+		lineCount = 1
+	}
+	window := pasteSessionMinGuard + time.Duration(lineCount)*pasteSessionPerLineGuard
+	if a.pasteSessionStartedAt.IsZero() || now.After(a.pasteSessionUntil) {
+		a.pasteSessionStartedAt = now
+	}
+	until := a.pasteSessionStartedAt.Add(window)
+	if until.After(a.pasteSessionUntil) {
+		a.pasteSessionUntil = until
+	}
+	a.lastPasteLikeAt = now
+}
+
+func (a App) inPasteSessionWindow(now time.Time) bool {
+	if a.pasteTxnActive || a.hasPendingCtrlVPasteEcho(now) {
+		return true
+	}
+	return !a.pasteSessionUntil.IsZero() && now.Before(a.pasteSessionUntil)
+}
+
 func (a *App) shouldTreatEnterAsNewline(typed tea.KeyMsg, now time.Time) bool {
 	if !key.Matches(typed, a.keys.Send) {
 		return false
 	}
 	if typed.Paste {
 		a.pasteMode = true
-		a.lastPasteLikeAt = now
+		a.extendPasteSession(now, countPasteLines(normalizeClipboardText(string(typed.Runes))))
 		return true
 	}
 	if a.pasteMode &&
-		!a.lastPasteLikeAt.IsZero() &&
+		a.inPasteSessionWindow(now) &&
 		!a.lastInputEditAt.IsZero() &&
-		now.Sub(a.lastPasteLikeAt) <= pasteSessionGuard &&
 		now.Sub(a.lastInputEditAt) <= pasteEnterGuard {
 		return true
 	}
-	if a.pasteMode && !a.lastPasteLikeAt.IsZero() && now.Sub(a.lastPasteLikeAt) > pasteSessionGuard {
+	if a.pasteMode && !a.inPasteSessionWindow(now) {
 		a.pasteMode = false
 		a.pasteSessionBase = ""
 	}
@@ -1109,7 +1169,11 @@ func (a *App) noteInputEdit(before string, after string, typed tea.KeyMsg, now t
 		if a.pasteSessionBase == "" {
 			a.pasteSessionBase = before
 		}
-		a.lastPasteLikeAt = now
+		lineHint := countPasteLines(normalizeClipboardText(string(typed.Runes)))
+		if lineHint < 1 {
+			lineHint = countPasteLines(normalizeClipboardText(after))
+		}
+		a.extendPasteSession(now, lineHint)
 		a.pasteMode = true
 	} else if !a.pasteMode {
 		a.pasteSessionBase = ""
@@ -1137,6 +1201,9 @@ func (a *App) maybeCollapseLongPaste(msg tea.Msg, typed tea.KeyMsg, now time.Tim
 	if summarized == content {
 		a.recordRecentPastedContent(content, now)
 		return msg, typed, false
+	}
+	if token, ok := parsePasteSummaryToken(summarized); ok && strings.HasSuffix(a.input.Value(), token) {
+		return msg, typed, true
 	}
 	next := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(summarized), Paste: true}
 	return next, next, false
@@ -1191,12 +1258,23 @@ func (a *App) summarizePastedText(content string) (text string, summarized bool,
 	lineCount := countPasteLines(normalized)
 	token := formatPasteSummaryToken(lineCount)
 	now := a.now()
+	if pinned, ok := a.reuseSinglePasteSessionToken(now); ok {
+		a.beginPastedTextLoading()
+		a.extendPasteSession(now, lineCount)
+		a.recordRecentPastedContent(normalized, now)
+		a.lastSummarizedPasteText = normalized
+		a.lastSummarizedPasteAt = now
+		a.lastSummarizedPasteToken = pinned
+		return pinned, true, nil
+	}
 	if a.shouldReusePasteSummaryToken(token, normalized, now) {
 		a.beginPastedTextLoading()
+		a.extendPasteSession(now, lineCount)
 		a.recordRecentPastedContent(normalized, now)
 		a.lastSummarizedPasteText = normalized
 		a.lastSummarizedPasteAt = now
 		a.lastSummarizedPasteToken = token
+		a.markPasteSessionToken(token)
 		return token, true, nil
 	}
 	path, saveErr := savePastedTextToTempFile(normalized, "paste")
@@ -1209,11 +1287,40 @@ func (a *App) summarizePastedText(content string) (text string, summarized bool,
 		LineCount: lineCount,
 	})
 	a.beginPastedTextLoading()
+	a.extendPasteSession(now, lineCount)
 	a.recordRecentPastedContent(normalized, now)
 	a.lastSummarizedPasteText = normalized
 	a.lastSummarizedPasteAt = now
 	a.lastSummarizedPasteToken = token
+	a.markPasteSessionToken(token)
 	return token, true, nil
+}
+
+func (a *App) reuseSinglePasteSessionToken(now time.Time) (string, bool) {
+	token := strings.TrimSpace(a.pasteTxnInjectedToken)
+	if !a.pasteTxnTokenInjected || token == "" {
+		return "", false
+	}
+	if !a.isInPinnedPasteSession(now) {
+		return "", false
+	}
+	if !a.hasPendingTextPasteToken(token) {
+		return "", false
+	}
+	return token, true
+}
+
+func (a *App) markPasteSessionToken(token string) {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return
+	}
+	a.pasteTxnTokenInjected = true
+	a.pasteTxnInjectedToken = token
+}
+
+func (a App) isInPinnedPasteSession(now time.Time) bool {
+	return a.inPasteSessionWindow(now)
 }
 
 func (a App) shouldSuppressDuplicatePasteContent(content string, now time.Time) bool {
@@ -1241,7 +1348,7 @@ func (a App) shouldSuppressDuplicatePasteContent(content string, now time.Time) 
 		if a.pasteTxnActive || a.hasPendingCtrlVPasteEcho(now) {
 			return true
 		}
-		if !a.lastPasteLikeAt.IsZero() && now.Sub(a.lastPasteLikeAt) <= pasteSessionGuard {
+		if a.inPasteSessionWindow(now) {
 			return true
 		}
 		if token == a.lastSummarizedPasteToken &&
@@ -1293,7 +1400,7 @@ func (a App) shouldReusePasteSummaryToken(token string, normalized string, now t
 	if a.pasteTxnActive || a.hasPendingCtrlVPasteEcho(now) {
 		return true
 	}
-	return !a.lastPasteLikeAt.IsZero() && now.Sub(a.lastPasteLikeAt) <= pasteSessionGuard
+	return a.inPasteSessionWindow(now)
 }
 
 func (a App) hasPendingTextPasteToken(token string) bool {
@@ -1365,7 +1472,7 @@ func (a App) shouldDeferSendForPastedTextLoad(input string) bool {
 		return false
 	}
 	for _, pending := range a.pendingTextPastes {
-		if pending.Token == "" {
+		if pending.Token == "" || pending.Loaded {
 			continue
 		}
 		if strings.Contains(input, pending.Token) {
@@ -1418,6 +1525,8 @@ func normalizeClipboardText(content string) string {
 func (a *App) resetPasteHeuristics() {
 	a.lastInputEditAt = time.Time{}
 	a.lastPasteLikeAt = time.Time{}
+	a.pasteSessionStartedAt = time.Time{}
+	a.pasteSessionUntil = time.Time{}
 	a.pendingCtrlVPasteEcho = ""
 	a.pendingCtrlVEchoUntil = time.Time{}
 	a.deferredPastedTextLoadCmd = nil
@@ -1429,6 +1538,8 @@ func (a *App) resetPasteHeuristics() {
 	a.pasteTxnActive = false
 	a.pasteTxnBuffer = ""
 	a.pasteTxnVersion = 0
+	a.pasteTxnTokenInjected = false
+	a.pasteTxnInjectedToken = ""
 	a.inputBurstStart = time.Time{}
 	a.inputBurstCount = 0
 	a.pasteMode = false
@@ -1622,10 +1733,15 @@ func (a App) shouldCapturePasteTxnChunk(typed tea.KeyMsg) bool {
 	if typed.Paste {
 		return false
 	}
-	if a.pasteTxnActive {
-		return true
-	}
 	chunk := string(typed.Runes)
+	if a.pasteTxnActive {
+		// Do not lock the input while a paste transaction is open:
+		// only keep capturing obviously paste-like chunks.
+		if len(typed.Runes) > 1 {
+			return true
+		}
+		return strings.ContainsRune(chunk, '\n') || strings.ContainsRune(chunk, '\r') || strings.ContainsRune(chunk, '\t')
+	}
 	if len(typed.Runes) > 1 {
 		return true
 	}
@@ -1659,14 +1775,19 @@ func (a *App) appendPasteTxnChunk(chunk string) {
 		return
 	}
 	chunk = normalizeClipboardText(chunk)
+	lineHint := countPasteLines(chunk)
 	if !a.pasteTxnActive {
 		a.pasteTxnActive = true
 		a.pasteTxnBuffer = chunk
 		a.pasteTxnVersion++
+		a.pasteTxnTokenInjected = false
+		a.pasteTxnInjectedToken = ""
+		a.extendPasteSession(a.now(), lineHint)
 		return
 	}
 	a.pasteTxnBuffer += chunk
 	a.pasteTxnVersion++
+	a.extendPasteSession(a.now(), lineHint)
 }
 
 func (a *App) flushPasteTransaction() {
