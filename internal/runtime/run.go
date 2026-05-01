@@ -514,6 +514,7 @@ func (s *Service) prepareTurnBudgetSnapshot(ctx context.Context, state *runState
 		RepositorySummary: repositorySummary,
 		Repository:        repositoryContext,
 		Metadata: agentcontext.Metadata{
+			ProjectRoot:         cfg.Workdir,
 			Workdir:             activeWorkdir,
 			Shell:               cfg.Shell,
 			Provider:            cfg.SelectedProvider,

@@ -12,9 +12,10 @@ func testMetadata(workdir string) Metadata {
 		modelID = providers[0].Model
 	}
 	return Metadata{
-		Workdir:  workdir,
-		Shell:    cfg.Shell,
-		Provider: providerName,
-		Model:    modelID,
+		ProjectRoot: workdir,
+		Workdir:     workdir,
+		Shell:       cfg.Shell,
+		Provider:    providerName,
+		Model:       modelID,
 	}
 }

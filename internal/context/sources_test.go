@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"neo-code/internal/promptasset"
@@ -33,39 +34,40 @@ func TestCorePromptSourceSectionsReturnsClone(t *testing.T) {
 	}
 }
 
-func TestProjectRulesSourceSectionsSkipsWhenNoRulesExist(t *testing.T) {
+func TestRulesPromptSourceSectionsSkipsWhenNoRulesExist(t *testing.T) {
 	t.Parallel()
 
-	sections, err := (&projectRulesSource{}).Sections(context.Background(), BuildInput{
+	sections, err := newRulesPromptSource(nil).Sections(context.Background(), BuildInput{
 		Metadata: Metadata{Workdir: t.TempDir()},
 	})
 	if err != nil {
 		t.Fatalf("Sections() error = %v", err)
 	}
 	if len(sections) != 0 {
-		t.Fatalf("expected no project rule sections, got %+v", sections)
+		t.Fatalf("expected no rules sections, got %+v", sections)
 	}
 }
 
-func TestProjectRulesSourceSectionsRendersRules(t *testing.T) {
-	t.Parallel()
-
+func TestRulesPromptSourceSectionsRendersRules(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, projectRuleFileName), []byte("rule-body"), 0o644); err != nil {
 		t.Fatalf("write AGENTS.md: %v", err)
 	}
 
-	sections, err := (&projectRulesSource{}).Sections(context.Background(), BuildInput{
-		Metadata: Metadata{Workdir: root},
+	sections, err := newRulesPromptSource(nil).Sections(context.Background(), BuildInput{
+		Metadata: Metadata{ProjectRoot: root, Workdir: root},
 	})
 	if err != nil {
 		t.Fatalf("Sections() error = %v", err)
 	}
 	if len(sections) != 1 {
-		t.Fatalf("expected one project rule section, got %+v", sections)
+		t.Fatalf("expected one rules section, got %+v", sections)
 	}
 	if got := renderPromptSection(sections[0]); got == "" {
-		t.Fatalf("expected rendered project rule section")
+		t.Fatalf("expected rendered rules section")
+	}
+	if got := renderPromptSection(sections[0]); !strings.Contains(got, "### Project Rules") {
+		t.Fatalf("expected project rules block, got %q", got)
 	}
 }
 

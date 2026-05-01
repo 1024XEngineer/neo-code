@@ -2,9 +2,8 @@ package context
 
 import (
 	"context"
-	"os"
-	"sync"
-	"time"
+
+	"neo-code/internal/rules"
 )
 
 // promptSectionSource 约束单个 prompt section 来源的最小能力，避免 Builder 持有具体细节。
@@ -26,26 +25,17 @@ func (corePromptSource) Sections(ctx context.Context, input BuildInput) ([]promp
 	return append([]promptSection(nil), defaultSystemPromptSections()...), nil
 }
 
-type projectRulesLoader func(ctx context.Context, workdir string) ([]ruleDocument, error)
-type ruleFileStat func(path string) (os.FileInfo, error)
-
-type ruleFileSnapshot struct {
-	Path    string
-	ModTime time.Time
-	Size    int64
+// rulesPromptSource 负责加载并渲染项目与全局规则。
+type rulesPromptSource struct {
+	loader rules.Loader
 }
 
-type cachedRuleDocuments struct {
-	documents []ruleDocument
-	snapshots []ruleFileSnapshot
-}
-
-// projectRulesSource 负责发现、缓存并渲染项目规则文件。
-type projectRulesSource struct {
-	mu        sync.Mutex
-	cache     map[string]cachedRuleDocuments
-	loadRules projectRulesLoader
-	statFile  ruleFileStat
+// newRulesPromptSource 创建默认规则 section source。
+func newRulesPromptSource(loader rules.Loader) *rulesPromptSource {
+	if loader == nil {
+		loader = rules.NewLoader("")
+	}
+	return &rulesPromptSource{loader: loader}
 }
 
 // systemStateSource 只负责收集并渲染运行时系统摘要。

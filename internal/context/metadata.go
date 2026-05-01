@@ -2,6 +2,7 @@ package context
 
 // Metadata contains the non-message runtime state needed by context sources.
 type Metadata struct {
+	ProjectRoot         string
 	Workdir             string
 	Shell               string
 	Provider            string

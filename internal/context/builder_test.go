@@ -13,6 +13,7 @@ import (
 	"neo-code/internal/config"
 	"neo-code/internal/context/internalcompact"
 	providertypes "neo-code/internal/provider/types"
+	"neo-code/internal/rules"
 	agentsession "neo-code/internal/session"
 	"neo-code/internal/tools"
 )
@@ -55,8 +56,8 @@ func TestDefaultBuilderBuild(t *testing.T) {
 	if !strings.Contains(got.SystemPrompt, "## System State") {
 		t.Fatalf("expected system state section in composed prompt")
 	}
-	if strings.Contains(got.SystemPrompt, "## Project Rules") {
-		t.Fatalf("did not expect project rules section without AGENTS.md")
+	if strings.Contains(got.SystemPrompt, "## Rules") {
+		t.Fatalf("did not expect rules section without AGENTS.md")
 	}
 	if strings.Contains(got.SystemPrompt, "\n\n\n") {
 		t.Fatalf("did not expect repeated blank lines in composed prompt")
@@ -103,13 +104,13 @@ func TestDefaultBuilderBuildComposesPromptSectionsInOrder(t *testing.T) {
 	}
 
 	identityIndex := strings.Index(got.SystemPrompt, "## Agent Identity")
-	rulesIndex := strings.Index(got.SystemPrompt, "## Project Rules")
+	rulesIndex := strings.Index(got.SystemPrompt, "## Rules")
 	stateIndex := strings.Index(got.SystemPrompt, "## System State")
 	if identityIndex < 0 || rulesIndex < 0 || stateIndex < 0 {
 		t.Fatalf("expected all prompt sections, got %q", got.SystemPrompt)
 	}
 	if !(identityIndex < rulesIndex && rulesIndex < stateIndex) {
-		t.Fatalf("expected section order core -> project rules -> system state, got %q", got.SystemPrompt)
+		t.Fatalf("expected section order core -> rules -> system state, got %q", got.SystemPrompt)
 	}
 }
 
@@ -240,6 +241,60 @@ func TestNewBuilderWithMemoAndSummarizersIncludesMemoSection(t *testing.T) {
 	}
 	if !strings.Contains(got.SystemPrompt, "## memo") {
 		t.Fatalf("expected memo section in prompt, got %q", got.SystemPrompt)
+	}
+}
+
+func TestDefaultBuilderBuildPlacesRulesBeforeMemo(t *testing.T) {
+	t.Parallel()
+
+	baseDir := filepath.Join(t.TempDir(), ".neocode")
+	projectRoot := t.TempDir()
+	if err := os.MkdirAll(baseDir, 0o755); err != nil {
+		t.Fatalf("mkdir baseDir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(projectRoot, projectRuleFileName), []byte("project-rules"), 0o644); err != nil {
+		t.Fatalf("write project AGENTS.md: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(baseDir, projectRuleFileName), []byte("global-rules"), 0o644); err != nil {
+		t.Fatalf("write global AGENTS.md: %v", err)
+	}
+
+	builder := &DefaultBuilder{
+		promptSources: []promptSectionSource{
+			corePromptSource{},
+			newRulesPromptSource(rules.NewLoader(baseDir)),
+			stubPromptSectionSource{sections: []promptSection{{Title: "Memo", Content: "remember this"}}},
+			&systemStateSource{},
+		},
+		microCompactCfg: MicroCompactConfig{PinChecker: NewDefaultPinChecker()},
+	}
+
+	got, err := builder.Build(stdcontext.Background(), BuildInput{
+		Messages: []providertypes.Message{
+			{Role: "user", Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")}},
+		},
+		Metadata: Metadata{
+			ProjectRoot: projectRoot,
+			Workdir:     filepath.Join(projectRoot, "subdir"),
+			Shell:       "powershell",
+			Provider:    "openai",
+			Model:       "gpt-test",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+
+	rulesIndex := strings.Index(got.SystemPrompt, "## Rules")
+	memoIndex := strings.Index(got.SystemPrompt, "## Memo")
+	if rulesIndex < 0 || memoIndex < 0 {
+		t.Fatalf("expected rules and memo sections, got %q", got.SystemPrompt)
+	}
+	if rulesIndex > memoIndex {
+		t.Fatalf("expected rules before memo, got %q", got.SystemPrompt)
+	}
+	if !strings.Contains(got.SystemPrompt, "project-rules") || !strings.Contains(got.SystemPrompt, "global-rules") {
+		t.Fatalf("expected both project and global rules, got %q", got.SystemPrompt)
 	}
 }
 
