@@ -15,8 +15,8 @@ import (
 var newMCPStdioClient = mcp.NewStdIOClient
 var registerMCPStdioServer = defaultRegisterMCPStdioServer
 
-// buildMCPRegistry 按配置构建并初始化 MCP registry；若无启用 server 则返回 nil。
-func buildMCPRegistry(cfg config.Config) (*mcp.Registry, error) {
+// BuildMCPRegistry 按配置构建并初始化 MCP registry；若无启用 server 则返回 nil。
+func BuildMCPRegistry(cfg config.Config) (*mcp.Registry, error) {
 	if len(cfg.Tools.MCP.Servers) == 0 {
 		return nil, nil
 	}

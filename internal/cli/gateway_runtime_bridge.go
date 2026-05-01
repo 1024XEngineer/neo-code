@@ -67,7 +67,7 @@ func defaultBuildGatewayRuntimePort(ctx context.Context, workdir string) (gatewa
 		return nil, nil, err
 	}
 
-	bridge, err := newGatewayRuntimePortBridge(ctx, bundle.Runtime, bundle.SessionStore, bundle.ConfigManager, bundle.ProviderSelection)
+	bridge, err := newGatewayRuntimePortBridge(ctx, bundle.Runtime, bundle.SessionStore, bundle.ConfigManager, bundle.ProviderSelection, bundle.ToolRegistry)
 	if err != nil {
 		if bundle.Close != nil {
 			_ = bundle.Close()
@@ -111,6 +111,7 @@ type gatewayRuntimePortBridge struct {
 	sessionStore      bridgeSessionStore
 	configManager     configManagerPort
 	providerSelection providerSelectorPort
+	toolRegistry      *tools.Registry
 	events            chan gateway.RuntimeEvent
 
 	stopOnce sync.Once
@@ -132,12 +133,15 @@ func newGatewayRuntimePortBridge(
 	}
 	var cm configManagerPort
 	var ps providerSelectorPort
+	var tr *tools.Registry
 	for _, extra := range extras {
 		switch typed := extra.(type) {
 		case configManagerPort:
 			cm = typed
 		case providerSelectorPort:
 			ps = typed
+		case *tools.Registry:
+			tr = typed
 		}
 	}
 
@@ -146,6 +150,7 @@ func newGatewayRuntimePortBridge(
 		sessionStore:      store,
 		configManager:     cm,
 		providerSelection: ps,
+		toolRegistry:      tr,
 		events:            make(chan gateway.RuntimeEvent, 128),
 		stopCh:            make(chan struct{}),
 	}
@@ -729,7 +734,7 @@ func (b *gatewayRuntimePortBridge) UpsertMCPServer(ctx context.Context, input ga
 	}
 	server := input.Server.Clone()
 	server.ID = strings.TrimSpace(server.ID)
-	return b.configManager.Update(ctx, func(cfg *config.Config) error {
+	if err := b.configManager.Update(ctx, func(cfg *config.Config) error {
 		servers := cfg.Tools.MCP.Clone().Servers
 		replaced := false
 		for index := range servers {
@@ -744,7 +749,13 @@ func (b *gatewayRuntimePortBridge) UpsertMCPServer(ctx context.Context, input ga
 		}
 		cfg.Tools.MCP.Servers = servers
 		return nil
-	})
+	}); err != nil {
+		return err
+	}
+	if err := app.RebuildMCPServersForRegistry(b.toolRegistry, b.configManager.Get()); err != nil {
+		return fmt.Errorf("gateway runtime bridge: rebuild mcp servers after upsert: %w", err)
+	}
+	return nil
 }
 
 // SetMCPServerEnabled 修改 MCP server 启用状态。
@@ -756,7 +767,7 @@ func (b *gatewayRuntimePortBridge) SetMCPServerEnabled(ctx context.Context, inpu
 		return fmt.Errorf("gateway runtime bridge: config manager is unavailable")
 	}
 	id := strings.TrimSpace(input.ID)
-	return b.configManager.Update(ctx, func(cfg *config.Config) error {
+	if err := b.configManager.Update(ctx, func(cfg *config.Config) error {
 		servers := cfg.Tools.MCP.Clone().Servers
 		for index := range servers {
 			if strings.EqualFold(strings.TrimSpace(servers[index].ID), id) {
@@ -766,7 +777,13 @@ func (b *gatewayRuntimePortBridge) SetMCPServerEnabled(ctx context.Context, inpu
 			}
 		}
 		return fmt.Errorf("%w: mcp server %q not found", gateway.ErrRuntimeResourceNotFound, id)
-	})
+	}); err != nil {
+		return err
+	}
+	if err := app.RebuildMCPServersForRegistry(b.toolRegistry, b.configManager.Get()); err != nil {
+		return fmt.Errorf("gateway runtime bridge: rebuild mcp servers after set enabled: %w", err)
+	}
+	return nil
 }
 
 // DeleteMCPServer 删除 MCP server 配置。
@@ -778,7 +795,7 @@ func (b *gatewayRuntimePortBridge) DeleteMCPServer(ctx context.Context, input ga
 		return fmt.Errorf("gateway runtime bridge: config manager is unavailable")
 	}
 	id := strings.TrimSpace(input.ID)
-	return b.configManager.Update(ctx, func(cfg *config.Config) error {
+	if err := b.configManager.Update(ctx, func(cfg *config.Config) error {
 		servers := cfg.Tools.MCP.Clone().Servers
 		next := servers[:0]
 		removed := false
@@ -794,7 +811,13 @@ func (b *gatewayRuntimePortBridge) DeleteMCPServer(ctx context.Context, input ga
 		}
 		cfg.Tools.MCP.Servers = next
 		return nil
-	})
+	}); err != nil {
+		return err
+	}
+	if err := app.RebuildMCPServersForRegistry(b.toolRegistry, b.configManager.Get()); err != nil {
+		return fmt.Errorf("gateway runtime bridge: rebuild mcp servers after delete: %w", err)
+	}
+	return nil
 }
 
 // Close 主动停止桥接事件泵，避免网关关闭后后台协程悬挂。

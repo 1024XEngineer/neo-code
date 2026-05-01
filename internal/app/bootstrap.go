@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -123,6 +124,7 @@ type RuntimeBundle struct {
 	Runtime           agentruntime.Runtime
 	SessionStore      *agentsession.SQLiteStore
 	ProviderSelection *configstate.Service
+	ToolRegistry      *tools.Registry
 	MemoService       *memo.Service
 	Close             func() error // 用于清理 bundle 运行期间拉起的系统资源
 }
@@ -270,6 +272,7 @@ func BuildGatewayServerDeps(ctx context.Context, opts BootstrapOptions) (Runtime
 		Runtime:           runtimeImpl,
 		SessionStore:      sessionStore,
 		ProviderSelection: sharedDeps.ProviderSelection,
+		ToolRegistry:      toolRegistry,
 		MemoService:       memoSvc,
 		Close:             closeBundle,
 	}, nil
@@ -405,6 +408,7 @@ func BuildTUIClientDeps(ctx context.Context, opts BootstrapOptions) (RuntimeBund
 		Config:            sharedDeps.Config,
 		ConfigManager:     sharedDeps.ConfigManager,
 		ProviderSelection: sharedDeps.ProviderSelection,
+		ToolRegistry:      nil,
 		MemoService:       nil,
 		Close:             nil,
 	}, nil
@@ -452,7 +456,7 @@ func buildToolRegistry(cfg config.Config) (*tools.Registry, func() error, error)
 	}))
 	toolRegistry.Register(todo.New())
 	toolRegistry.Register(spawnsubagent.New())
-	mcpRegistry, err := buildMCPRegistry(cfg)
+	mcpRegistry, err := BuildMCPRegistry(cfg)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -471,6 +475,27 @@ func buildToolRegistry(cfg config.Config) (*tools.Registry, func() error, error)
 }
 
 // buildSkillsRegistry 负责按“项目优先全局”顺序构建本地 skills registry。
+// RebuildMCPServersForRegistry 根据最新配置重建指定 registry 中的 MCP server；失败时保留旧 registry 不替换。
+func RebuildMCPServersForRegistry(registry *tools.Registry, cfg config.Config) error {
+	if registry == nil {
+		return nil
+	}
+	newMcpRegistry, err := BuildMCPRegistry(cfg)
+	if err != nil {
+		return fmt.Errorf("app: build mcp registry: %w", err)
+	}
+	var filter mcp.ExposureFilter
+	if newMcpRegistry != nil {
+		filter = mcp.NewExposureFilter(mcp.ExposureFilterConfig{
+			Allowlist: cfg.Tools.MCP.Exposure.Allowlist,
+			Denylist:  cfg.Tools.MCP.Exposure.Denylist,
+			Agents:    buildMCPAgentExposureRules(cfg.Tools.MCP.Exposure.Agents),
+		})
+	}
+	registry.ReplaceMCPRegistry(newMcpRegistry, filter)
+	return nil
+}
+
 func buildSkillsRegistry(ctx context.Context, baseDir string, workdir string) skills.Registry {
 	loaders := make([]skills.Loader, 0, 2)
 	projectRoot := resolveWorkspaceSkillsRoot(workdir)

@@ -17,6 +17,7 @@ type Registry struct {
 	microCompactPolicies    map[string]MicroCompactPolicy
 	microCompactSummarizers map[string]ContentSummarizer
 	microCompactSummaryMu   sync.RWMutex
+	mcpMu                   sync.RWMutex
 	mcpRegistry             *mcp.Registry
 	mcpFactory              *mcp.AdapterFactory
 	mcpExposureFilter       mcp.ExposureFilter
@@ -36,10 +37,35 @@ func (r *Registry) SetMCPRegistry(registry *mcp.Registry) {
 	if r == nil || registry == nil {
 		return
 	}
+	r.mcpMu.Lock()
+	defer r.mcpMu.Unlock()
 	r.mcpRegistry = registry
 	r.mcpFactory = mcp.NewAdapterFactory(registry)
 	if r.mcpExposureFilter == nil {
 		r.mcpExposureFilter = mcp.NewExposureFilter(mcp.ExposureFilterConfig{})
+	}
+}
+
+// ReplaceMCPRegistry 安全替换当前 MCP registry，先绑定新实例再在锁外关闭旧实例，避免并发读路径命中已关闭的 client；filter 非 nil 时同步更新暴露过滤器。
+func (r *Registry) ReplaceMCPRegistry(registry *mcp.Registry, filter mcp.ExposureFilter) {
+	if r == nil {
+		return
+	}
+	r.mcpMu.Lock()
+	oldRegistry := r.mcpRegistry
+	r.mcpRegistry = registry
+	if registry != nil {
+		r.mcpFactory = mcp.NewAdapterFactory(registry)
+	} else {
+		r.mcpFactory = nil
+	}
+	if filter != nil {
+		r.mcpExposureFilter = filter
+	}
+	r.mcpMu.Unlock()
+
+	if oldRegistry != nil {
+		_ = oldRegistry.Close()
 	}
 }
 
@@ -48,6 +74,8 @@ func (r *Registry) SetMCPExposureFilter(filter mcp.ExposureFilter) {
 	if r == nil {
 		return
 	}
+	r.mcpMu.Lock()
+	defer r.mcpMu.Unlock()
 	r.mcpExposureFilter = filter
 }
 
@@ -252,14 +280,19 @@ func (r *Registry) RememberSessionDecision(sessionID string, action security.Act
 
 // supportsMCPTool 判断指定工具名是否可由当前 MCP 快照解析。
 func (r *Registry) supportsMCPTool(name string) bool {
-	if r == nil || r.mcpFactory == nil {
+	if r == nil {
+		return false
+	}
+	r.mcpMu.RLock()
+	defer r.mcpMu.RUnlock()
+	if r.mcpFactory == nil {
 		return false
 	}
 	lowerName := strings.ToLower(strings.TrimSpace(name))
 	if !strings.HasPrefix(lowerName, "mcp.") {
 		return false
 	}
-	for _, snapshot := range r.mcpFactoryBuildSnapshot() {
+	for _, snapshot := range r.mcpRegistry.Snapshot() {
 		for _, tool := range snapshot.Tools {
 			if strings.EqualFold(mcpToolFullName(snapshot.ServerID, tool.Name), lowerName) {
 				return true
@@ -271,7 +304,15 @@ func (r *Registry) supportsMCPTool(name string) bool {
 
 // listMCPAdapters 返回 MCP 快照对应的 adapter 列表。
 func (r *Registry) listMCPAdapters(ctx context.Context, input SpecListInput) ([]*mcp.Adapter, error) {
-	if r == nil || r.mcpFactory == nil || r.mcpRegistry == nil {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if r == nil {
+		return nil, nil
+	}
+	r.mcpMu.RLock()
+	defer r.mcpMu.RUnlock()
+	if r.mcpFactory == nil || r.mcpRegistry == nil {
 		return nil, nil
 	}
 	snapshots := r.mcpRegistry.Snapshot()
@@ -292,7 +333,12 @@ func (r *Registry) resolveMCPAdapter(ctx context.Context, fullName string) (*mcp
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if r == nil || r.mcpRegistry == nil {
+	if r == nil {
+		return nil, errors.New("tool: not found")
+	}
+	r.mcpMu.RLock()
+	defer r.mcpMu.RUnlock()
+	if r.mcpRegistry == nil {
 		return nil, errors.New("tool: not found")
 	}
 
@@ -394,7 +440,12 @@ func buildMCPFilterErrorAudit(snapshots []mcp.ServerSnapshot) []mcp.ExposureDeci
 
 // mcpFactoryBuildSnapshot 读取 MCP registry 快照，用于无上下文快速检查。
 func (r *Registry) mcpFactoryBuildSnapshot() []mcp.ServerSnapshot {
-	if r == nil || r.mcpRegistry == nil {
+	if r == nil {
+		return nil
+	}
+	r.mcpMu.RLock()
+	defer r.mcpMu.RUnlock()
+	if r.mcpRegistry == nil {
 		return nil
 	}
 	return r.mcpRegistry.Snapshot()

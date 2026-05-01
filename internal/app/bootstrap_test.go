@@ -386,9 +386,9 @@ func TestBuildMCPRegistryFromConfig(t *testing.T) {
 		return registry.RefreshServerTools(context.Background(), server.ID)
 	}
 
-	registry, err := buildMCPRegistry(cfg)
+	registry, err := BuildMCPRegistry(cfg)
 	if err != nil {
-		t.Fatalf("buildMCPRegistry() error = %v", err)
+		t.Fatalf("BuildMCPRegistry() error = %v", err)
 	}
 	if registry == nil {
 		t.Fatalf("expected non-nil mcp registry")
@@ -415,7 +415,7 @@ func TestBuildMCPRegistryUnsupportedSource(t *testing.T) {
 		},
 	}
 
-	registry, err := buildMCPRegistry(cfg)
+	registry, err := BuildMCPRegistry(cfg)
 	if err == nil {
 		t.Fatalf("expected unsupported source error")
 	}
@@ -735,9 +735,9 @@ func TestBuildMCPRegistryNoEnabledServerReturnsNil(t *testing.T) {
 		{ID: "docs", Enabled: false, Source: "stdio"},
 	}
 
-	registry, err := buildMCPRegistry(cfg)
+	registry, err := BuildMCPRegistry(cfg)
 	if err != nil {
-		t.Fatalf("buildMCPRegistry() error = %v", err)
+		t.Fatalf("BuildMCPRegistry() error = %v", err)
 	}
 	if registry != nil {
 		t.Fatalf("expected nil registry when no enabled server")
@@ -757,7 +757,7 @@ func TestBuildMCPRegistryRegisterError(t *testing.T) {
 		return errors.New("register failed")
 	}
 
-	_, err := buildMCPRegistry(cfg)
+	_, err := BuildMCPRegistry(cfg)
 	if err == nil || !strings.Contains(err.Error(), "register failed") {
 		t.Fatalf("expected wrapped register error, got %v", err)
 	}
@@ -789,7 +789,7 @@ func TestBuildMCPRegistryRollbackRegisteredServersOnFailure(t *testing.T) {
 		return nil
 	}
 
-	registry, err := buildMCPRegistry(cfg)
+	registry, err := BuildMCPRegistry(cfg)
 	if err == nil || !strings.Contains(err.Error(), "search register failed") {
 		t.Fatalf("expected wrapped register error, got %v", err)
 	}
