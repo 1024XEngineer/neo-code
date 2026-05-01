@@ -1,4 +1,4 @@
-package services
+package client
 
 import (
 	"context"
@@ -34,6 +34,9 @@ const (
 	defaultGatewayNotificationQueue          = 256
 	defaultGatewayNotificationEnqueueTimeout = 3 * time.Second
 )
+
+// DefaultGatewayRPCRetryCount 暴露网关 RPC 客户端默认重试次数，供上层适配器复用一致策略。
+const DefaultGatewayRPCRetryCount = defaultGatewayRPCRetryCount
 
 const (
 	gatewayAutoSpawnLogDirPerm  = 0o700
@@ -106,7 +109,7 @@ func (e *gatewayRPCTransportError) Unwrap() error {
 	return e.Err
 }
 
-type gatewayRPCNotification struct {
+type Notification struct {
 	Method string
 	Params json.RawMessage
 }
@@ -145,8 +148,8 @@ type GatewayRPCClient struct {
 	heartbeatCancel context.CancelFunc
 	heartbeatWG     sync.WaitGroup
 
-	notifications              chan gatewayRPCNotification
-	notificationQueue          chan gatewayRPCNotification
+	notifications              chan Notification
+	notificationQueue          chan Notification
 	notificationEnqueueTimeout time.Duration
 	notificationWG             sync.WaitGroup
 	notificationStart          sync.Once
@@ -209,14 +212,14 @@ func NewGatewayRPCClient(options GatewayRPCClientOptions) (*GatewayRPCClient, er
 		dialFn:                     dialFn,
 		closed:                     make(chan struct{}),
 		pending:                    make(map[string]chan gatewayRPCResponse),
-		notifications:              make(chan gatewayRPCNotification, defaultGatewayNotificationBuffer),
-		notificationQueue:          make(chan gatewayRPCNotification, defaultGatewayNotificationQueue),
+		notifications:              make(chan Notification, defaultGatewayNotificationBuffer),
+		notificationQueue:          make(chan Notification, defaultGatewayNotificationQueue),
 		notificationEnqueueTimeout: defaultGatewayNotificationEnqueueTimeout,
 	}, nil
 }
 
 // Notifications 返回网关 JSON-RPC 通知流。
-func (c *GatewayRPCClient) Notifications() <-chan gatewayRPCNotification {
+func (c *GatewayRPCClient) Notifications() <-chan Notification {
 	return c.notifications
 }
 
@@ -514,7 +517,7 @@ func (c *GatewayRPCClient) readLoop(conn net.Conn) {
 			if strings.TrimSpace(method) == "" {
 				continue
 			}
-			notification := gatewayRPCNotification{
+			notification := Notification{
 				Method: method,
 			}
 			if paramsRaw, hasParams := envelope["params"]; hasParams {
@@ -563,7 +566,7 @@ func (c *GatewayRPCClient) startNotificationDispatcher() {
 }
 
 // enqueueNotification 投递通知到内部队列；若背压持续超时则主动断开连接，避免 readLoop 无限阻塞。
-func (c *GatewayRPCClient) enqueueNotification(notification gatewayRPCNotification) bool {
+func (c *GatewayRPCClient) enqueueNotification(notification Notification) bool {
 	enqueueTimeout := c.notificationEnqueueTimeout
 	if enqueueTimeout <= 0 {
 		enqueueTimeout = defaultGatewayNotificationEnqueueTimeout

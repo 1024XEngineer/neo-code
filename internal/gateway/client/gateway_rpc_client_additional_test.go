@@ -1,4 +1,4 @@
-package services
+package client
 
 import (
 	"bytes"
@@ -160,8 +160,8 @@ func TestGatewayRPCClientPendingAndForceCloseBranches(t *testing.T) {
 	client := &GatewayRPCClient{
 		closed:            make(chan struct{}),
 		pending:           map[string]chan gatewayRPCResponse{},
-		notifications:     make(chan gatewayRPCNotification, 1),
-		notificationQueue: make(chan gatewayRPCNotification, 1),
+		notifications:     make(chan Notification, 1),
+		notificationQueue: make(chan Notification, 1),
 	}
 
 	ch := make(chan gatewayRPCResponse, 1)
@@ -197,7 +197,7 @@ func TestGatewayRPCClientPendingAndForceCloseBranches(t *testing.T) {
 	if ok := client.registerPending("req-3", make(chan gatewayRPCResponse, 1)); ok {
 		t.Fatalf("registerPending should fail after client closed")
 	}
-	client.enqueueNotification(gatewayRPCNotification{Method: protocol.MethodGatewayEvent})
+	client.enqueueNotification(Notification{Method: protocol.MethodGatewayEvent})
 
 	resetConn := &stubConn{}
 	client.conn = resetConn
@@ -306,8 +306,8 @@ func TestGatewayRPCClientCallOnceBranches(t *testing.T) {
 		retryCount:        1,
 		closed:            make(chan struct{}),
 		pending:           make(map[string]chan gatewayRPCResponse),
-		notifications:     make(chan gatewayRPCNotification, 4),
-		notificationQueue: make(chan gatewayRPCNotification, 4),
+		notifications:     make(chan Notification, 4),
+		notificationQueue: make(chan Notification, 4),
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -343,8 +343,8 @@ func TestGatewayRPCClientCallOnceResponseBranches(t *testing.T) {
 			retryCount:        1,
 			closed:            make(chan struct{}),
 			pending:           make(map[string]chan gatewayRPCResponse),
-			notifications:     make(chan gatewayRPCNotification, 4),
-			notificationQueue: make(chan gatewayRPCNotification, 4),
+			notifications:     make(chan Notification, 4),
+			notificationQueue: make(chan Notification, 4),
 			conn:              &stubConn{},
 		}
 	}
@@ -416,8 +416,8 @@ func TestGatewayRPCClientReadLoopAdditionalBranches(t *testing.T) {
 	client := &GatewayRPCClient{
 		closed:            make(chan struct{}),
 		pending:           make(map[string]chan gatewayRPCResponse),
-		notifications:     make(chan gatewayRPCNotification, 4),
-		notificationQueue: make(chan gatewayRPCNotification, 4),
+		notifications:     make(chan Notification, 4),
+		notificationQueue: make(chan Notification, 4),
 	}
 	client.startNotificationDispatcher()
 	go client.readLoop(clientConn)
@@ -443,8 +443,8 @@ func TestGatewayRPCClientNotificationDispatcherStopsOnCloseSignal(t *testing.T) 
 	client := &GatewayRPCClient{
 		closed:            make(chan struct{}),
 		pending:           make(map[string]chan gatewayRPCResponse),
-		notifications:     make(chan gatewayRPCNotification, 1),
-		notificationQueue: make(chan gatewayRPCNotification, 1),
+		notifications:     make(chan Notification, 1),
+		notificationQueue: make(chan Notification, 1),
 	}
 	client.startNotificationDispatcher()
 	close(client.closed)
@@ -458,8 +458,8 @@ func TestGatewayRPCClientEnqueueNotificationDoesNotDropUnderQueuePressure(t *tes
 	client := &GatewayRPCClient{
 		closed:            make(chan struct{}),
 		pending:           make(map[string]chan gatewayRPCResponse),
-		notifications:     make(chan gatewayRPCNotification, 1),
-		notificationQueue: make(chan gatewayRPCNotification, 1),
+		notifications:     make(chan Notification, 1),
+		notificationQueue: make(chan Notification, 1),
 	}
 	client.startNotificationDispatcher()
 	t.Cleanup(func() { _ = client.Close() })
@@ -476,7 +476,7 @@ func TestGatewayRPCClientEnqueueNotificationDoesNotDropUnderQueuePressure(t *tes
 		enqueueWG.Add(1)
 		go func(index int) {
 			defer enqueueWG.Done()
-			client.enqueueNotification(gatewayRPCNotification{
+			client.enqueueNotification(Notification{
 				Method: protocol.MethodGatewayEvent,
 				Params: json.RawMessage(`{"index":` + strconv.Itoa(index) + `}`),
 			})
@@ -516,8 +516,8 @@ func TestGatewayRPCClientReadLoopFailsFastOnNotificationBackpressure(t *testing.
 	client := &GatewayRPCClient{
 		closed:                     make(chan struct{}),
 		pending:                    make(map[string]chan gatewayRPCResponse),
-		notifications:              make(chan gatewayRPCNotification),
-		notificationQueue:          make(chan gatewayRPCNotification, 1),
+		notifications:              make(chan Notification),
+		notificationQueue:          make(chan Notification, 1),
 		notificationEnqueueTimeout: 50 * time.Millisecond,
 	}
 	client.startNotificationDispatcher()
@@ -552,19 +552,19 @@ func TestGatewayRPCClientEnqueueNotificationUnblocksOnClose(t *testing.T) {
 	client := &GatewayRPCClient{
 		closed:                     make(chan struct{}),
 		pending:                    make(map[string]chan gatewayRPCResponse),
-		notifications:              make(chan gatewayRPCNotification),
-		notificationQueue:          make(chan gatewayRPCNotification, 1),
+		notifications:              make(chan Notification),
+		notificationQueue:          make(chan Notification, 1),
 		notificationEnqueueTimeout: time.Second,
 	}
 	client.startNotificationDispatcher()
 
 	// 首条通知占满队列，第二条通知会阻塞在 enqueue，关闭客户端后应立即退出。
-	client.notificationQueue <- gatewayRPCNotification{Method: protocol.MethodGatewayEvent}
+	client.notificationQueue <- Notification{Method: protocol.MethodGatewayEvent}
 
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		client.enqueueNotification(gatewayRPCNotification{Method: protocol.MethodGatewayEvent})
+		client.enqueueNotification(Notification{Method: protocol.MethodGatewayEvent})
 	}()
 
 	time.Sleep(20 * time.Millisecond)
@@ -583,8 +583,8 @@ func TestGatewayRPCClientWriteRequestFailure(t *testing.T) {
 	client := &GatewayRPCClient{
 		closed:            make(chan struct{}),
 		pending:           make(map[string]chan gatewayRPCResponse),
-		notifications:     make(chan gatewayRPCNotification, 1),
-		notificationQueue: make(chan gatewayRPCNotification, 1),
+		notifications:     make(chan Notification, 1),
+		notificationQueue: make(chan Notification, 1),
 	}
 	conn := &stubConn{writeErr: errors.New("write failed")}
 	err := client.writeRequest(conn, protocol.JSONRPCRequest{JSONRPC: protocol.JSONRPCVersion, ID: json.RawMessage(`\"id\"`), Method: "m"})
@@ -777,8 +777,8 @@ func TestGatewayRPCClientCloseStopsSpawnedGatewayProcess(t *testing.T) {
 	client := &GatewayRPCClient{
 		closed:            make(chan struct{}),
 		pending:           make(map[string]chan gatewayRPCResponse),
-		notifications:     make(chan gatewayRPCNotification, 1),
-		notificationQueue: make(chan gatewayRPCNotification, 1),
+		notifications:     make(chan Notification, 1),
+		notificationQueue: make(chan Notification, 1),
 		spawnedCmd:        spawnedCmd,
 	}
 
@@ -797,8 +797,8 @@ func TestGatewayRPCClientWatchSpawnedGatewayProcessResetsAutoSpawnAttempt(t *tes
 	client := &GatewayRPCClient{
 		closed:            make(chan struct{}),
 		pending:           make(map[string]chan gatewayRPCResponse),
-		notifications:     make(chan gatewayRPCNotification, 1),
-		notificationQueue: make(chan gatewayRPCNotification, 1),
+		notifications:     make(chan Notification, 1),
+		notificationQueue: make(chan Notification, 1),
 		autoSpawnAttempt:  true,
 		spawnedCmd:        spawnedCmd,
 		spawnedCmdDone:    done,
@@ -832,8 +832,8 @@ func TestGatewayRPCClientResetConnectionClearsAutoSpawnAttempt(t *testing.T) {
 	client := &GatewayRPCClient{
 		closed:            make(chan struct{}),
 		pending:           make(map[string]chan gatewayRPCResponse),
-		notifications:     make(chan gatewayRPCNotification, 1),
-		notificationQueue: make(chan gatewayRPCNotification, 1),
+		notifications:     make(chan Notification, 1),
+		notificationQueue: make(chan Notification, 1),
 		autoSpawnAttempt:  true,
 	}
 

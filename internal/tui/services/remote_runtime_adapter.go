@@ -24,7 +24,9 @@ const (
 )
 
 var (
-	newGatewayRPCClientFactory    = NewGatewayRPCClient
+	newGatewayRPCClientFactory = func(options GatewayRPCClientOptions) (remoteGatewayRPCClient, error) {
+		return NewGatewayRPCClient(options)
+	}
 	newGatewayStreamClientFactory = NewGatewayStreamClient
 	// ErrUnsupportedActionInGatewayMode 标记 gateway runtime 当前不支持的本地动作。
 	ErrUnsupportedActionInGatewayMode = errors.New(unsupportedActionInGatewayMode)

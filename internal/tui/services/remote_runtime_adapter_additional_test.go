@@ -2,9 +2,7 @@ package services
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"net"
 	"strings"
 	"testing"
 	"time"
@@ -25,36 +23,15 @@ func TestNewRemoteRuntimeAdapterBranches(t *testing.T) {
 		newGatewayStreamClientFactory = originalStreamFactory
 	})
 
-	newGatewayRPCClientFactory = func(options GatewayRPCClientOptions) (*GatewayRPCClient, error) {
+	newGatewayRPCClientFactory = func(options GatewayRPCClientOptions) (remoteGatewayRPCClient, error) {
 		if strings.TrimSpace(options.ListenAddress) == "error" {
 			return nil, errors.New("build rpc failed")
 		}
-		client := &GatewayRPCClient{
-			listenAddress:     options.ListenAddress,
-			token:             "token",
-			requestTimeout:    time.Second,
-			retryCount:        1,
-			closed:            make(chan struct{}),
-			pending:           make(map[string]chan gatewayRPCResponse),
-			notifications:     make(chan gatewayRPCNotification, 4),
-			notificationQueue: make(chan gatewayRPCNotification, 4),
+		client := &stubRemoteRPCClient{
+			notifications: make(chan gatewayRPCNotification, 4),
 		}
-		client.dialFn = func(_ string) (net.Conn, error) {
-			if options.ListenAddress == "dial-failed" {
-				return nil, errors.New("dial failed")
-			}
-			clientConn, serverConn := net.Pipe()
-			go func() {
-				defer serverConn.Close()
-				decoder := json.NewDecoder(serverConn)
-				encoder := json.NewEncoder(serverConn)
-				request := readRPCRequestOrFail(decoder)
-				writeRPCResultOrFail(encoder, request.ID, gateway.MessageFrame{
-					Type:   gateway.FrameTypeAck,
-					Action: gateway.FrameActionAuthenticate,
-				})
-			}()
-			return clientConn, nil
+		if options.ListenAddress == "dial-failed" {
+			client.authErr = errors.New("dial failed")
 		}
 		return client, nil
 	}
