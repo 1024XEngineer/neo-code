@@ -334,6 +334,29 @@ func TestBuildToolRegistryRegistersSpawnSubAgent(t *testing.T) {
 	}
 }
 
+func TestBuildToolRegistryRegistersDiagnose(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.StaticDefaults().Clone()
+	cfg.Workdir = t.TempDir()
+
+	registry, cleanup, err := buildToolRegistry(cfg)
+	if err != nil {
+		t.Fatalf("buildToolRegistry() error = %v", err)
+	}
+	if cleanup != nil {
+		defer cleanup()
+	}
+
+	tool, err := registry.Get(tools.ToolNameDiagnose)
+	if err != nil {
+		t.Fatalf("registry.Get(diagnose) error = %v", err)
+	}
+	if tool.Name() != tools.ToolNameDiagnose {
+		t.Fatalf("tool.Name() = %q, want %q", tool.Name(), tools.ToolNameDiagnose)
+	}
+}
+
 func TestBuildMCPRegistryFromConfig(t *testing.T) {
 	stubClient := &stubMCPServerClient{
 		tools: []mcp.ToolDescriptor{

@@ -25,6 +25,7 @@ import (
 	"neo-code/internal/skills"
 	"neo-code/internal/tools"
 	"neo-code/internal/tools/bash"
+	diagnosetool "neo-code/internal/tools/diagnose"
 	"neo-code/internal/tools/filesystem"
 	"neo-code/internal/tools/mcp"
 	memotool "neo-code/internal/tools/memo"
@@ -411,6 +412,7 @@ func buildToolRegistry(cfg config.Config) (*tools.Registry, func() error, error)
 	toolRegistry.Register(filesystem.NewGlob(cfg.Workdir))
 	toolRegistry.Register(filesystem.NewEdit(cfg.Workdir))
 	toolRegistry.Register(bash.New(cfg.Workdir, cfg.Shell, time.Duration(cfg.ToolTimeoutSec)*time.Second))
+	toolRegistry.Register(diagnosetool.New())
 	toolRegistry.Register(webfetch.New(webfetch.Config{
 		Timeout:               time.Duration(cfg.ToolTimeoutSec) * time.Second,
 		MaxResponseBytes:      cfg.Tools.WebFetch.MaxResponseBytes,

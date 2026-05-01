@@ -15,4 +15,5 @@ const (
 	ToolNameMemoRecall          = "memo_recall"
 	ToolNameMemoList            = "memo_list"
 	ToolNameMemoRemove          = "memo_remove"
+	ToolNameDiagnose            = "diagnose"
 )

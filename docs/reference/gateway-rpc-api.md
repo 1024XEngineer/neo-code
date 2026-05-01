@@ -474,7 +474,7 @@ type ExecuteSystemToolParams struct {
 Request 约束：
 1. `tool_name` `MUST` 非空。  
 2. 网关层 `MUST` 对 `tool_name` 做白名单校验。  
-3. 当前白名单仅包含 memo 系统工具：`memo_list`、`memo_remember`、`memo_recall`、`memo_remove`。
+3. 当前白名单包含 `memo_list`、`memo_remember`、`memo_recall`、`memo_remove`、`diagnose`。
 
 Response Schema：
 1. Success：返回 `ack`，`payload` 为系统工具执行结果。  
@@ -1233,7 +1233,7 @@ Failure Response：
 
 Notes：
 
-1. `tool_name` 在网关层按白名单校验，当前仅允许 memo 系统工具。
+1. `tool_name` 在网关层按白名单校验，当前允许 `memo_list`、`memo_remember`、`memo_recall`、`memo_remove`、`diagnose`。
 
 ### gateway.activateSessionSkill
 

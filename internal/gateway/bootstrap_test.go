@@ -1217,6 +1217,35 @@ func TestHandleExecuteSystemToolFrameBranches(t *testing.T) {
 		}
 	})
 
+	t.Run("success diagnose", func(t *testing.T) {
+		stub := &bootstrapRuntimeStub{
+			executeSystemToolFn: func(_ context.Context, input ExecuteSystemToolInput) (tools.ToolResult, error) {
+				if input.ToolName != tools.ToolNameDiagnose {
+					t.Fatalf("tool name = %q, want %q", input.ToolName, tools.ToolNameDiagnose)
+				}
+				if string(input.Arguments) != `{"error_log":"fatal","os_env":{"os":"linux"}}` {
+					t.Fatalf("arguments = %s", string(input.Arguments))
+				}
+				return tools.ToolResult{
+					Name:    tools.ToolNameDiagnose,
+					Content: "ok",
+				}, nil
+			},
+		}
+		response := handleExecuteSystemToolFrame(context.Background(), MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionExecuteSystemTool,
+			RequestID: "exec-diagnose-ok-1",
+			Payload: protocol.ExecuteSystemToolParams{
+				ToolName:  tools.ToolNameDiagnose,
+				Arguments: []byte(`{"error_log":"fatal","os_env":{"os":"linux"}}`),
+			},
+		}, stub)
+		if response.Type != FrameTypeAck {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeAck)
+		}
+	})
+
 	t.Run("runtime error", func(t *testing.T) {
 		stub := &bootstrapRuntimeStub{
 			executeSystemToolFn: func(_ context.Context, _ ExecuteSystemToolInput) (tools.ToolResult, error) {

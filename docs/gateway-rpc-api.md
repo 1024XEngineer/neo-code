@@ -265,7 +265,7 @@ type ExecuteSystemToolParams struct {
   - Failure: 标准 `error`（`missing_required_field` / `invalid_action` 等）
 - Runtime Restriction:
   - 网关层对 `tool_name` 实施白名单校验。
-  - 当前仅允许 memo 系统工具：`memo_list`、`memo_remember`、`memo_recall`、`memo_remove`。
+  - 当前允许 `memo_list`、`memo_remember`、`memo_recall`、`memo_remove`、`diagnose`。
 
 ---
 

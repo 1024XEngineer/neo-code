@@ -31,6 +31,7 @@ var allowedSystemToolNames = map[string]struct{}{
 	toolkits.ToolNameMemoRemember: {},
 	toolkits.ToolNameMemoRecall:   {},
 	toolkits.ToolNameMemoRemove:   {},
+	toolkits.ToolNameDiagnose:     {},
 }
 
 // dispatchRequestFrame 统一分发 request 帧到对应处理器。

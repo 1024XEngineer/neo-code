@@ -566,7 +566,7 @@ func buildMethodExamples() ([]methodExample, error) {
 			Success: executeSystemToolSuccess,
 			Failure: executeSystemToolFailure,
 			Notes: []string{
-				"`tool_name` 在网关层按白名单校验，当前仅允许 memo 系统工具。",
+				"`tool_name` 在网关层按白名单校验，当前允许 memo 系列工具与 diagnose。",
 			},
 		},
 		{

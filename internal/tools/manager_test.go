@@ -1731,6 +1731,17 @@ func TestBuildPermissionAction(t *testing.T) {
 			wantTarget:   "todo-1",
 		},
 		{
+			name: "diagnose maps to read action",
+			input: ToolCallInput{
+				Name:      ToolNameDiagnose,
+				Arguments: []byte(`{"error_log":"fatal","os_env":{"os":"linux"}}`),
+			},
+			wantType:     security.ActionTypeRead,
+			wantResource: ToolNameDiagnose,
+			wantOp:       "diagnose",
+			wantTarget:   "diagnose",
+		},
+		{
 			name: "spawn subagent maps to write action",
 			input: ToolCallInput{
 				Name:      ToolNameSpawnSubAgent,

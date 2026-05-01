@@ -117,6 +117,11 @@ func buildPermissionAction(input ToolCallInput) (security.Action, error) {
 	case ToolNameMemoRemove:
 		action.Type = security.ActionTypeWrite
 		action.Payload.Operation = "memo_remove"
+	case ToolNameDiagnose:
+		action.Type = security.ActionTypeRead
+		action.Payload.Operation = "diagnose"
+		action.Payload.TargetType = security.TargetTypeCommand
+		action.Payload.Target = "diagnose"
 	default:
 		if strings.HasPrefix(strings.ToLower(toolName), "mcp.") {
 			toolIdentity := normalizeMCPToolIdentity(toolName)
