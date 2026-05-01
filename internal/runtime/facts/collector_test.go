@@ -151,3 +151,34 @@ func TestCollectorCapturesErrorFactsForToolErrors(t *testing.T) {
 		t.Fatalf("subagent failed facts = %+v", snapshot.SubAgents.Failed)
 	}
 }
+
+func TestCollectorApplyWriteFileVerificationFacts(t *testing.T) {
+	collector := NewCollector()
+	collector.ApplyToolResult(tools.ToolNameFilesystemWriteFile, tools.ToolResult{
+		Name:    tools.ToolNameFilesystemWriteFile,
+		IsError: false,
+		Metadata: map[string]any{
+			"path": "verified.txt",
+		},
+		Facts: tools.ToolExecutionFacts{
+			WorkspaceWrite:        true,
+			VerificationPerformed: true,
+			VerificationPassed:    true,
+			VerificationScope:     "artifact:verified.txt",
+		},
+	})
+
+	snapshot := collector.Snapshot()
+	if len(snapshot.Files.Written) != 1 || snapshot.Files.Written[0].Path != "verified.txt" {
+		t.Fatalf("written facts = %+v", snapshot.Files.Written)
+	}
+	if len(snapshot.Files.ContentMatch) != 1 {
+		t.Fatalf("content_match facts = %+v", snapshot.Files.ContentMatch)
+	}
+	if !snapshot.Files.ContentMatch[0].VerificationPassed || snapshot.Files.ContentMatch[0].Scope != "artifact:verified.txt" {
+		t.Fatalf("content_match[0] = %+v", snapshot.Files.ContentMatch[0])
+	}
+	if len(snapshot.Verification.Passed) != 1 {
+		t.Fatalf("verification passed facts = %+v", snapshot.Verification.Passed)
+	}
+}

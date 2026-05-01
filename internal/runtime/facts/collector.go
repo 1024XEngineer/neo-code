@@ -228,6 +228,24 @@ func (c *Collector) applyWriteFileFacts(result tools.ToolResult) {
 		WorkspaceWrite: true,
 	})
 	c.facts.Progress.ObservedFactCount++
+	if !result.Facts.VerificationPerformed {
+		return
+	}
+	contentFact := FileContentMatchFact{
+		Path:               path,
+		Scope:              strings.TrimSpace(result.Facts.VerificationScope),
+		VerificationPassed: result.Facts.VerificationPassed,
+	}
+	status := "failed"
+	if contentFact.VerificationPassed {
+		status = "passed"
+	}
+	matchKey := fmt.Sprintf("file_content_match:write:%s:%s:%s", path, contentFact.Scope, status)
+	if !c.markSeen(matchKey) {
+		return
+	}
+	c.facts.Files.ContentMatch = append(c.facts.Files.ContentMatch, contentFact)
+	c.facts.Progress.ObservedFactCount++
 }
 
 // applyEditFileFacts 从编辑工具结果提取 workspace write 事实，保证 edit 任务可进入统一验收链路。
