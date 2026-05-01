@@ -393,9 +393,6 @@ export default function ChatInput() {
             </div>
           </div>
         </div>
-        <div style={styles.hint}>
-          NeoCode 可能会生成不准确的信息，请验证重要代码。
-        </div>
       </div>
     </>
   )
@@ -403,7 +400,7 @@ export default function ChatInput() {
 
 const styles: Record<string, React.CSSProperties> = {
   container: {
-    padding: '12px 16px 8px',
+    padding: '12px 16px 20px',
     flexShrink: 0,
     background: 'var(--bg-primary)',
   },
@@ -464,12 +461,5 @@ const styles: Record<string, React.CSSProperties> = {
     color: '#fff',
     cursor: 'pointer',
     transition: 'all 0.15s',
-  },
-  hint: {
-    fontSize: 11,
-    color: 'var(--text-tertiary)',
-    textAlign: 'center',
-    marginTop: 6,
-    paddingBottom: 4,
   },
 }

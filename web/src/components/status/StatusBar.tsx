@@ -58,6 +58,9 @@ export default function StatusBar() {
           </>
         )}
       </div>
+      <div style={styles.center}>
+        <span style={styles.hint}>NeoCode 可能会生成不准确的信息，请验证重要代码。</span>
+      </div>
       <div style={styles.right}>
         {tokenUsage && (
           <>
@@ -100,6 +103,16 @@ const styles: Record<string, React.CSSProperties> = {
   connLabel: {
     fontSize: 11,
     fontFamily: 'var(--font-ui)',
+  },
+  center: {
+    flex: 1,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  hint: {
+    fontSize: 11,
+    color: 'var(--text-tertiary)',
   },
   right: {
     display: 'flex',
