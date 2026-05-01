@@ -85,6 +85,9 @@ func (p ProviderConfig) Validate() error {
 	if p.Source != ProviderSourceCustom && strings.TrimSpace(p.Model) == "" {
 		return fmt.Errorf("provider %q model is empty", p.Name)
 	}
+	if p.Source == ProviderSourceBuiltin && len(p.Models) > 0 && !containsModelDescriptorID(p.Models, p.Model) {
+		return fmt.Errorf("provider %q model %q must exist in builtin models", p.Name, p.Model)
+	}
 	if strings.TrimSpace(p.APIKeyEnv) == "" {
 		return fmt.Errorf("provider %q api_key_env is empty", p.Name)
 	}
@@ -204,6 +207,20 @@ func containsProviderName(providers []ProviderConfig, name string) bool {
 	}
 	for _, p := range providers {
 		if normalizeProviderName(p.Name) == target {
+			return true
+		}
+	}
+	return false
+}
+
+// containsModelDescriptorID 判断模型列表中是否包含指定 ID。
+func containsModelDescriptorID(models []providertypes.ModelDescriptor, modelID string) bool {
+	target := provider.NormalizeKey(modelID)
+	if target == "" {
+		return false
+	}
+	for _, model := range models {
+		if provider.NormalizeKey(model.ID) == target {
 			return true
 		}
 	}
@@ -415,53 +432,191 @@ const (
 
 	ModelScopeName             = "modelscope"
 	ModelScopeDefaultBaseURL   = "https://api-inference.modelscope.cn/v1"
-	ModelScopeDefaultModel     = "Qwen/Qwen2.5-7B-Instruct"
+	ModelScopeDefaultModel     = "deepseek-ai/DeepSeek-V3.2"
 	ModelScopeDefaultAPIKeyEnv = "MODELSCOPE_API_KEY"
 )
 
+var openAIStaticModels = []providertypes.ModelDescriptor{
+	builtinModel(
+		"gpt-5.4",
+		"GPT-5.4",
+		"Flagship GPT-5 model for reasoning, coding, and multimodal agent workflows.",
+		400000,
+		128000,
+		builtinCapabilities(providertypes.ModelCapabilityStateSupported, providertypes.ModelCapabilityStateSupported),
+	),
+	builtinModel(
+		"gpt-5.4-mini",
+		"GPT-5.4 Mini",
+		"Lower-latency GPT-5 variant for everyday coding, chat, and multimodal tasks.",
+		400000,
+		128000,
+		builtinCapabilities(providertypes.ModelCapabilityStateSupported, providertypes.ModelCapabilityStateSupported),
+	),
+	builtinModel(
+		"gpt-5.3-codex",
+		"GPT-5.3 Codex",
+		"GPT-5 Codex family model tuned for code generation, editing, and agentic development loops.",
+		400000,
+		128000,
+		builtinCapabilities(providertypes.ModelCapabilityStateSupported, providertypes.ModelCapabilityStateSupported),
+	),
+	builtinModel(
+		"gpt-4.1",
+		"GPT-4.1",
+		"High-capability GPT-4.1 model for complex coding and long-context multimodal work.",
+		1047576,
+		32768,
+		builtinCapabilities(providertypes.ModelCapabilityStateSupported, providertypes.ModelCapabilityStateSupported),
+	),
+	builtinModel(
+		"gpt-4o",
+		"GPT-4o",
+		"General-purpose GPT-4o omni model for realtime, text, and image workflows.",
+		128000,
+		16384,
+		builtinCapabilities(providertypes.ModelCapabilityStateSupported, providertypes.ModelCapabilityStateSupported),
+	),
+	builtinModel(
+		"gpt-4o-mini",
+		"GPT-4o Mini",
+		"Cost-efficient GPT-4o variant for fast multimodal and tool-using tasks.",
+		128000,
+		16384,
+		builtinCapabilities(providertypes.ModelCapabilityStateSupported, providertypes.ModelCapabilityStateSupported),
+	),
+}
+
+var geminiStaticModels = []providertypes.ModelDescriptor{
+	builtinModel(
+		"gemini-2.5-flash",
+		"Gemini 2.5 Flash",
+		"Fast Gemini 2.5 model with long-context multimodal input and tool support.",
+		1048576,
+		65536,
+		builtinCapabilities(providertypes.ModelCapabilityStateSupported, providertypes.ModelCapabilityStateSupported),
+	),
+	builtinModel(
+		"gemini-2.5-pro",
+		"Gemini 2.5 Pro",
+		"High-reasoning Gemini 2.5 model with long-context multimodal input and tool support.",
+		1048576,
+		65536,
+		builtinCapabilities(providertypes.ModelCapabilityStateSupported, providertypes.ModelCapabilityStateSupported),
+	),
+}
+
+var qiniuStaticModels = []providertypes.ModelDescriptor{
+	builtinModel(
+		"z-ai/glm-5.1",
+		"GLM 5.1",
+		"GLM-5.1 model exposed by the Qiniu gateway for long-context reasoning and tool-using tasks.",
+		200000,
+		128000,
+		builtinCapabilities(providertypes.ModelCapabilityStateSupported, providertypes.ModelCapabilityStateUnsupported),
+	),
+}
+
+var modelScopeStaticModels = []providertypes.ModelDescriptor{
+	builtinModel(
+		"deepseek-ai/DeepSeek-V3.2",
+		"DeepSeek V3.2",
+		"Reasoning-first DeepSeek model available from ModelScope API inference with tool use support.",
+		128000,
+		8192,
+		builtinCapabilities(providertypes.ModelCapabilityStateSupported, providertypes.ModelCapabilityStateUnsupported),
+	),
+	builtinModel(
+		"MiniMax/MiniMax-M2.5",
+		"MiniMax M2.5",
+		"General-purpose MiniMax model available from ModelScope API inference for coding and agent workflows.",
+		204800,
+		0,
+		builtinCapabilities(providertypes.ModelCapabilityStateSupported, providertypes.ModelCapabilityStateUnsupported),
+	),
+}
+
+// builtinCapabilities 构造内建静态模型的能力提示，显式表达支持、未知或不支持状态。
+func builtinCapabilities(
+	toolCalling providertypes.ModelCapabilityState,
+	imageInput providertypes.ModelCapabilityState,
+) providertypes.ModelCapabilityHints {
+	return providertypes.ModelCapabilityHints{
+		ToolCalling: toolCalling,
+		ImageInput:  imageInput,
+	}
+}
+
+// builtinModel 构造内建 provider 使用的静态模型条目。
+func builtinModel(
+	id string,
+	name string,
+	description string,
+	contextWindow int,
+	maxOutputTokens int,
+	capabilityHints providertypes.ModelCapabilityHints,
+) providertypes.ModelDescriptor {
+	return providertypes.ModelDescriptor{
+		ID:              strings.TrimSpace(id),
+		Name:            strings.TrimSpace(name),
+		Description:     strings.TrimSpace(description),
+		ContextWindow:   contextWindow,
+		MaxOutputTokens: maxOutputTokens,
+		CapabilityHints: capabilityHints,
+	}
+}
+
+// cloneBuiltinModels 返回静态模型清单的独立副本，避免不同配置快照共享底层切片。
+func cloneBuiltinModels(models []providertypes.ModelDescriptor) []providertypes.ModelDescriptor {
+	return providertypes.CloneModelDescriptors(models)
+}
+
 func newBuiltinOpenAICompatProvider(name, baseURL, model, apiKeyEnv string) ProviderConfig {
 	return ProviderConfig{
-		Name:                  name,
-		Driver:                provider.DriverOpenAICompat,
-		BaseURL:               baseURL,
-		Model:                 model,
-		APIKeyEnv:             apiKeyEnv,
-		ModelSource:           ModelSourceDiscover,
-		ChatAPIMode:           provider.ChatAPIModeChatCompletions,
-		ChatEndpointPath:      "/chat/completions",
-		DiscoveryEndpointPath: provider.DiscoveryEndpointPathModels,
-		Source:                ProviderSourceBuiltin,
+		Name:             name,
+		Driver:           provider.DriverOpenAICompat,
+		BaseURL:          baseURL,
+		Model:            model,
+		APIKeyEnv:        apiKeyEnv,
+		ChatAPIMode:      provider.ChatAPIModeChatCompletions,
+		ChatEndpointPath: "/chat/completions",
+		Source:           ProviderSourceBuiltin,
 	}
 }
 
 // OpenAIProvider returns the builtin OpenAI provider definition.
 func OpenAIProvider() ProviderConfig {
-	return newBuiltinOpenAICompatProvider(OpenAIName, OpenAIDefaultBaseURL, OpenAIDefaultModel, OpenAIDefaultAPIKeyEnv)
+	cfg := newBuiltinOpenAICompatProvider(OpenAIName, OpenAIDefaultBaseURL, OpenAIDefaultModel, OpenAIDefaultAPIKeyEnv)
+	cfg.Models = cloneBuiltinModels(openAIStaticModels)
+	return cfg
 }
 
 // GeminiProvider returns the builtin Gemini provider definition.
 func GeminiProvider() ProviderConfig {
 	return ProviderConfig{
-		Name:                  GeminiName,
-		Driver:                provider.DriverGemini,
-		BaseURL:               GeminiDefaultBaseURL,
-		Model:                 GeminiDefaultModel,
-		APIKeyEnv:             GeminiDefaultAPIKeyEnv,
-		ModelSource:           ModelSourceDiscover,
-		ChatEndpointPath:      "",
-		DiscoveryEndpointPath: provider.DiscoveryEndpointPathModels,
-		Source:                ProviderSourceBuiltin,
+		Name:             GeminiName,
+		Driver:           provider.DriverGemini,
+		BaseURL:          GeminiDefaultBaseURL,
+		Model:            GeminiDefaultModel,
+		APIKeyEnv:        GeminiDefaultAPIKeyEnv,
+		ChatEndpointPath: "",
+		Models:           cloneBuiltinModels(geminiStaticModels),
+		Source:           ProviderSourceBuiltin,
 	}
 }
 
 // QiniuProvider returns the builtin Qiniu provider definition.
 func QiniuProvider() ProviderConfig {
-	return newBuiltinOpenAICompatProvider(QiniuName, QiniuDefaultBaseURL, QiniuDefaultModel, QiniuDefaultAPIKeyEnv)
+	cfg := newBuiltinOpenAICompatProvider(QiniuName, QiniuDefaultBaseURL, QiniuDefaultModel, QiniuDefaultAPIKeyEnv)
+	cfg.Models = cloneBuiltinModels(qiniuStaticModels)
+	return cfg
 }
 
 // ModelScopeProvider 返回内置的 ModelScope provider 配置。
 func ModelScopeProvider() ProviderConfig {
-	return newBuiltinOpenAICompatProvider(ModelScopeName, ModelScopeDefaultBaseURL, ModelScopeDefaultModel, ModelScopeDefaultAPIKeyEnv)
+	cfg := newBuiltinOpenAICompatProvider(ModelScopeName, ModelScopeDefaultBaseURL, ModelScopeDefaultModel, ModelScopeDefaultAPIKeyEnv)
+	cfg.Models = cloneBuiltinModels(modelScopeStaticModels)
+	return cfg
 }
 
 // DefaultProviders returns all builtin provider definitions.

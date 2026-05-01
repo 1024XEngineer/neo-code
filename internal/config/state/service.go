@@ -139,6 +139,55 @@ func (s *Service) ListModels(ctx context.Context) ([]providertypes.ModelDescript
 	return s.catalogs.ListProviderModels(ctx, input)
 }
 
+// RefreshModels 强制刷新当前选中 provider 的模型目录，并在必要时修正 current_model。
+func (s *Service) RefreshModels(ctx context.Context) ([]providertypes.ModelDescriptor, error) {
+	if err := s.validate(); err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	selected, err := selectedProviderConfig(s.manager.Get())
+	if err != nil {
+		return nil, err
+	}
+	if err := ensureSupportedProvider(s.supporters, selected); err != nil {
+		return nil, err
+	}
+	input, err := catalogInputFromProvider(selected)
+	if err != nil {
+		return nil, err
+	}
+	models, err := s.catalogs.RefreshProviderModels(ctx, input)
+	if err != nil {
+		return nil, err
+	}
+	if len(models) == 0 {
+		return nil, ErrNoModelsAvailable
+	}
+
+	if err := s.manager.Update(ctx, func(cfg *config.Config) error {
+		currentSelected, err := selectedProviderConfig(*cfg)
+		if err != nil {
+			return err
+		}
+		sameIdentity, err := sameProviderIdentity(currentSelected, selected)
+		if err != nil {
+			return err
+		}
+		if !sameIdentity {
+			return errSelectionDrifted
+		}
+		cfg.CurrentModel, _ = resolveCurrentModel(cfg.CurrentModel, models, currentSelected.Model)
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+
+	return models, nil
+}
+
 // ListModelsSnapshot 获取当前选中 provider 的快照模型列表，不阻塞等待同步发现。
 func (s *Service) ListModelsSnapshot(ctx context.Context) ([]providertypes.ModelDescriptor, error) {
 	if err := s.validate(); err != nil {

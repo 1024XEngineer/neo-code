@@ -211,14 +211,6 @@ func (a App) renderWaterfall(width int, height int) string {
 			Italic(true)
 		thinking = thinkingStyle.Render("Thinking...")
 	}
-	selectionNotice := ""
-	if a.hasTextSelection() {
-		selectionNotice = lipgloss.NewStyle().
-			Foreground(lipgloss.Color(selectionFg)).
-			UnsetBackground().
-			Padding(0, 1).
-			Render("已选择内容，右键复制")
-	}
 	todo := a.renderTodoPreview(width)
 	menu := a.renderCommandMenu(width)
 	prompt := a.renderPrompt(width)
@@ -226,9 +218,6 @@ func (a App) renderWaterfall(width int, height int) string {
 	reservedHeight := lipgloss.Height(prompt)
 	if strings.TrimSpace(thinking) != "" {
 		reservedHeight += lipgloss.Height(thinking)
-	}
-	if strings.TrimSpace(selectionNotice) != "" {
-		reservedHeight += lipgloss.Height(selectionNotice)
 	}
 	if strings.TrimSpace(todo) != "" {
 		reservedHeight += lipgloss.Height(todo)
@@ -246,9 +235,6 @@ func (a App) renderWaterfall(width int, height int) string {
 	parts := []string{transcript}
 	if strings.TrimSpace(thinking) != "" {
 		parts = append(parts, thinking)
-	}
-	if strings.TrimSpace(selectionNotice) != "" {
-		parts = append(parts, selectionNotice)
 	}
 	if strings.TrimSpace(todo) != "" {
 		parts = append(parts, todo)
@@ -401,13 +387,13 @@ func (a App) renderModelScopeGuide() string {
 	stepText := ""
 	switch guide.Step {
 	case modelScopeGuideStepGuide:
-		stepText = "Step 1/4 打开指导页（HTML）"
+		stepText = "Step 1/4 Open guide page (HTML)"
 	case modelScopeGuideStepLogin:
-		stepText = "Step 2/4 打开 ModelScope 登录页"
+		stepText = "Step 2/4 Open ModelScope login page"
 	case modelScopeGuideStepToken:
 		stepText = "Step 3/4 打开 Token 页面获取 API Key"
 	default:
-		stepText = "Step 4/4 粘贴 Token 并完成校验"
+		stepText = "Step 4/4 Paste token and finish validation"
 	}
 
 	var sb strings.Builder
@@ -630,6 +616,7 @@ func (a App) renderMessageBlockWithCopy(message providertypes.Message, width int
 	if len(showTag) > 0 {
 		includeTag = showTag[0]
 	}
+	maxMessageWidth := tuiutils.Clamp(int(float64(width)*0.84), 24, width)
 
 	switch message.Role {
 	case roleEvent:
@@ -637,10 +624,17 @@ func (a App) renderMessageBlockWithCopy(message providertypes.Message, width int
 	case roleError:
 		return a.styles.inlineError.Width(width).Render("  ! " + wrapPlain(renderMessagePartsForDisplay(message.Parts), max(16, width-6))), nil
 	case roleSystem:
-		return a.styles.inlineSystem.Width(width).Render("  - " + wrapPlain(renderMessagePartsForDisplay(message.Parts), max(16, width-6))), nil
+		content := strings.TrimSpace(renderMessagePartsForDisplay(message.Parts))
+		if strings.HasPrefix(content, inlineLogMarker) {
+			content = strings.TrimSpace(strings.TrimPrefix(content, inlineLogMarker))
+			logStyle := a.styles.messageBody.Copy().
+				Foreground(lipgloss.Color(oliveGray)).
+				Faint(true).
+				PaddingLeft(4)
+			return logStyle.Width(maxMessageWidth).Render(wrapPlain(content, max(16, maxMessageWidth-2))), nil
+		}
+		return a.styles.inlineSystem.Width(width).Render("  - " + wrapPlain(content, max(16, width-6))), nil
 	}
-
-	maxMessageWidth := tuiutils.Clamp(int(float64(width)*0.84), 24, width)
 	tag := messageTagAgent
 	tagStyle := a.styles.messageAgentTag
 	bodyStyle := a.styles.messageBody
@@ -669,6 +663,24 @@ func (a App) renderMessageBlockWithCopy(message providertypes.Message, width int
 
 	tagLine := tagStyle.Render(tag)
 	return lipgloss.JoinVertical(lipgloss.Left, tagLine, contentBlock), copyButtons
+}
+
+func (a App) renderQueuedInterventionBlock(width int) string {
+	if a.queuedIntervention == nil {
+		return ""
+	}
+	content := strings.TrimSpace(a.queuedIntervention.Text)
+	if content == "" {
+		if len(a.queuedIntervention.Images) == 0 {
+			return ""
+		}
+		content = "(queued input)"
+	}
+
+	maxMessageWidth := tuiutils.Clamp(int(float64(width)*0.84), 24, width)
+	contentBlock, _ := a.renderMessageContentWithCopy(content, maxMessageWidth-2, a.styles.messageUserBody, 0)
+	tagLine := a.styles.messageUserTag.Render(messageTagUser + " queue")
+	return lipgloss.JoinVertical(lipgloss.Left, tagLine, contentBlock)
 }
 
 func (a App) renderCommandMenu(width int) string {
@@ -764,7 +776,7 @@ func (a App) footerErrorLine(width int) string {
 		Render(compactStatusText(message, max(8, width)))
 }
 
-func (a App) renderMessageContentWithCopy(content string, width int, bodyStyle lipgloss.Style, startCopyID int) (string, []copyCodeButtonBinding) {
+func (a App) renderMessageContentWithCopy(content string, width int, bodyStyle lipgloss.Style, _ int) (string, []copyCodeButtonBinding) {
 	if a.markdownRenderer == nil {
 		return bodyStyle.Render(emptyMessageText), nil
 	}

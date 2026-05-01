@@ -283,7 +283,7 @@ func tagStyle(fg string) lipgloss.Style {
 		Padding(0, 0)
 }
 
-func badge(bg string, fg string) lipgloss.Style {
+func badge(_ string, fg string) lipgloss.Style {
 	return lipgloss.NewStyle().
 		Bold(true).
 		Foreground(lipgloss.Color(fg)).

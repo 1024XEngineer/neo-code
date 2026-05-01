@@ -8,10 +8,7 @@ import (
 	providertypes "neo-code/internal/provider/types"
 )
 
-// ManualModelOptionalIntUnset 用于区分“未填写可选数值字段”和“显式输入 0”。
-const ManualModelOptionalIntUnset = -1
-
-// NormalizeCustomProviderInput 统一归一化 custom provider 的输入字段，并执行协议/模型来源的组合校验。
+// NormalizeCustomProviderInput 统一归一化 custom provider 输入，并执行模型来源与 discovery 配置的组合校验。
 func NormalizeCustomProviderInput(input SaveCustomProviderInput) (SaveCustomProviderInput, error) {
 	normalized := SaveCustomProviderInput{
 		Name:                   strings.TrimSpace(input.Name),
@@ -46,7 +43,7 @@ func NormalizeCustomProviderInput(input SaveCustomProviderInput) (SaveCustomProv
 		normalized.ModelSource = ModelSourceDiscover
 	}
 
-	models, err := normalizeCustomProviderModels(input.Models, true)
+	models, err := normalizeCustomProviderModels(input.Models)
 	if err != nil {
 		return SaveCustomProviderInput{}, err
 	}
@@ -74,7 +71,6 @@ func NormalizeCustomProviderInput(input SaveCustomProviderInput) (SaveCustomProv
 	}
 	discoveryEndpointPath := ""
 	if normalized.ModelSource != ModelSourceManual && strings.TrimSpace(normalizedDiscoveryEndpointPath) != "" {
-		var err error
 		discoveryEndpointPath, err = provider.NormalizeProviderDiscoverySettings(
 			normalized.Driver,
 			normalizedDiscoveryEndpointPath,
@@ -106,12 +102,12 @@ func NormalizeCustomProviderInput(input SaveCustomProviderInput) (SaveCustomProv
 	return normalized, validateNormalizedCustomProviderInput(normalized)
 }
 
-// normalizeOptionalGenerateInt 归一化可选的生成控制字段，仅保留调用方原始输入，避免在保存前静默吞掉非法值。
+// normalizeOptionalGenerateInt 归一化可选生成控制字段，仅保留调用方原始输入，避免在保存前静默吞掉非法值。
 func normalizeOptionalGenerateInt(value int) int {
 	return value
 }
 
-// validateNormalizedCustomProviderInput 复用统一的 provider 配置校验，避免 custom provider 保存路径和加载路径出现两套规则。
+// validateNormalizedCustomProviderInput 复用统一的 provider 配置校验，避免 custom provider 保存与加载路径出现两套规则。
 func validateNormalizedCustomProviderInput(input SaveCustomProviderInput) error {
 	cfg := ProviderConfig{
 		Name:                   input.Name,
@@ -131,16 +127,13 @@ func validateNormalizedCustomProviderInput(input SaveCustomProviderInput) error 
 	return cfg.Validate()
 }
 
-// NormalizeCustomProviderModels 统一归一化 custom provider 的模型描述并校验必填字段和边界条件。
+// NormalizeCustomProviderModels 统一归一化 custom provider 用户可写模型，并校验必填字段与不允许的 metadata。
 func NormalizeCustomProviderModels(models []providertypes.ModelDescriptor) ([]providertypes.ModelDescriptor, error) {
-	return normalizeCustomProviderModels(models, false)
+	return normalizeCustomProviderModels(models)
 }
 
-// normalizeCustomProviderModels 统一归一化 custom provider 模型列表，并在需要时兼容历史的零值省略语义。
-func normalizeCustomProviderModels(
-	models []providertypes.ModelDescriptor,
-	allowZeroAsUnset bool,
-) ([]providertypes.ModelDescriptor, error) {
+// normalizeCustomProviderModels 统一清洗 custom provider 用户可写模型，并拒绝任何 metadata 字段输入。
+func normalizeCustomProviderModels(models []providertypes.ModelDescriptor) ([]providertypes.ModelDescriptor, error) {
 	if len(models) == 0 {
 		return nil, nil
 	}
@@ -156,17 +149,17 @@ func normalizeCustomProviderModels(
 		if name == "" {
 			return nil, fmt.Errorf("config: models[%d].name is empty", index)
 		}
-		contextWindow := model.ContextWindow
-		if contextWindow == ManualModelOptionalIntUnset || (allowZeroAsUnset && contextWindow == 0) {
-			contextWindow = 0
-		} else if contextWindow <= 0 {
-			return nil, fmt.Errorf("config: models[%d].context_window must be greater than 0", index)
+		if strings.TrimSpace(model.Description) != "" {
+			return nil, fmt.Errorf("config: models[%d].description is not supported", index)
 		}
-		maxOutputTokens := model.MaxOutputTokens
-		if maxOutputTokens == ManualModelOptionalIntUnset || (allowZeroAsUnset && maxOutputTokens == 0) {
-			maxOutputTokens = 0
-		} else if maxOutputTokens <= 0 {
-			return nil, fmt.Errorf("config: models[%d].max_output_tokens must be greater than 0", index)
+		if model.ContextWindow != 0 {
+			return nil, fmt.Errorf("config: models[%d].context_window is not supported", index)
+		}
+		if model.MaxOutputTokens != 0 {
+			return nil, fmt.Errorf("config: models[%d].max_output_tokens is not supported", index)
+		}
+		if model.CapabilityHints != (providertypes.ModelCapabilityHints{}) {
+			return nil, fmt.Errorf("config: models[%d].capability_hints is not supported", index)
 		}
 
 		key := provider.NormalizeKey(id)
@@ -176,12 +169,8 @@ func normalizeCustomProviderModels(
 		seen[key] = struct{}{}
 
 		normalized = append(normalized, providertypes.ModelDescriptor{
-			ID:              id,
-			Name:            name,
-			Description:     strings.TrimSpace(model.Description),
-			ContextWindow:   contextWindow,
-			MaxOutputTokens: maxOutputTokens,
-			CapabilityHints: model.CapabilityHints,
+			ID:   id,
+			Name: name,
 		})
 	}
 	return normalized, nil

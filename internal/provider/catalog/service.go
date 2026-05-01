@@ -5,29 +5,18 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"sync"
 	"time"
 
 	"neo-code/internal/provider"
 	providertypes "neo-code/internal/provider/types"
 )
 
-const (
-	defaultTTL               = 24 * time.Hour
-	defaultBackgroundTimeout = 30 * time.Second
-)
-
 var errCatalogPersist = errors.New("provider catalog: persist discovered models")
 
 type Service struct {
-	registry          *provider.Registry
-	store             Store
-	catalogTTL        time.Duration
-	backgroundTimeout time.Duration
-	now               func() time.Time
-
-	refreshMu    sync.Mutex
-	inFlightByID map[string]struct{}
+	registry *provider.Registry
+	store    Store
+	now      func() time.Time
 }
 
 func NewService(baseDir string, registry *provider.Registry, store Store) *Service {
@@ -36,30 +25,47 @@ func NewService(baseDir string, registry *provider.Registry, store Store) *Servi
 	}
 
 	return &Service{
-		registry:          registry,
-		store:             store,
-		catalogTTL:        defaultTTL,
-		backgroundTimeout: defaultBackgroundTimeout,
-		now:               time.Now,
-		inFlightByID:      map[string]struct{}{},
+		registry: registry,
+		store:    store,
+		now:      time.Now,
 	}
 }
 
 func (s *Service) ListProviderModels(ctx context.Context, input provider.CatalogInput) ([]providertypes.ModelDescriptor, error) {
 	return s.listProviderModels(ctx, input, queryOptions{
 		allowSyncRefresh: true,
-		queueRefresh:     true,
 	})
 }
 
 func (s *Service) ListProviderModelsSnapshot(ctx context.Context, input provider.CatalogInput) ([]providertypes.ModelDescriptor, error) {
-	return s.listProviderModels(ctx, input, queryOptions{
-		queueRefresh: true,
-	})
+	return s.listProviderModels(ctx, input, queryOptions{})
 }
 
 func (s *Service) ListProviderModelsCached(ctx context.Context, input provider.CatalogInput) ([]providertypes.ModelDescriptor, error) {
 	return s.listProviderModels(ctx, input, queryOptions{})
+}
+
+// RefreshProviderModels 强制重新执行一次远端 discovery，并在成功后覆盖本地缓存。
+func (s *Service) RefreshProviderModels(ctx context.Context, input provider.CatalogInput) ([]providertypes.ModelDescriptor, error) {
+	if err := s.validate(); err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if input.DisableDiscovery {
+		configuredModels := providertypes.MergeModelDescriptors(input.ConfiguredModels)
+		defaultModels := providertypes.MergeModelDescriptors(input.DefaultModels)
+		return providertypes.MergeModelDescriptors(configuredModels, defaultModels), nil
+	}
+
+	discovered, err := s.discoverAndPersist(ctx, input)
+	if err != nil {
+		return nil, err
+	}
+	configuredModels := providertypes.MergeModelDescriptors(input.ConfiguredModels)
+	defaultModels := providertypes.MergeModelDescriptors(input.DefaultModels)
+	return mergeResolvedModels(true, configuredModels, discovered, defaultModels), nil
 }
 
 func (s *Service) listProviderModels(
@@ -89,13 +95,11 @@ func (s *Service) validate() error {
 
 type queryOptions struct {
 	allowSyncRefresh bool
-	queueRefresh     bool
 }
 
 type catalogSnapshot struct {
-	models  []providertypes.ModelDescriptor
-	ok      bool
-	expired bool
+	models []providertypes.ModelDescriptor
+	ok     bool
 }
 
 func (s *Service) modelsForProvider(ctx context.Context, input provider.CatalogInput, options queryOptions) ([]providertypes.ModelDescriptor, error) {
@@ -117,7 +121,6 @@ func (s *Service) modelsForProvider(ctx context.Context, input provider.CatalogI
 		// 空 catalog 等价于未命中，避免历史空缓存长期阻断后续 discovery。
 		catalogOK = false
 	}
-	performedSyncRefresh := false
 	if !catalogOK && options.allowSyncRefresh {
 		discovered, err := s.discoverAndPersist(ctx, input)
 		if err != nil {
@@ -127,12 +130,7 @@ func (s *Service) modelsForProvider(ctx context.Context, input provider.CatalogI
 		} else {
 			models = discovered
 			catalogOK = true
-			performedSyncRefresh = true
 		}
-	}
-
-	if shouldQueueRefresh(options, snapshot, performedSyncRefresh) {
-		s.queueRefresh(input)
 	}
 
 	return mergeResolvedModels(catalogOK, configuredModels, models, defaultModels), nil
@@ -144,9 +142,8 @@ func (s *Service) catalogSnapshot(ctx context.Context, input provider.CatalogInp
 		return catalogSnapshot{}
 	}
 	return catalogSnapshot{
-		models:  modelCatalog.Models,
-		ok:      true,
-		expired: modelCatalog.Expired(s.now()),
+		models: modelCatalog.Models,
+		ok:     true,
 	}
 }
 
@@ -184,62 +181,15 @@ func (s *Service) discoverAndPersist(ctx context.Context, input provider.Catalog
 		return discovered, nil
 	}
 
-	now := s.now()
 	if err := s.store.Save(ctx, ModelCatalog{
 		SchemaVersion: schemaVersion,
 		Identity:      input.Identity,
-		FetchedAt:     now,
-		ExpiresAt:     now.Add(s.catalogTTL),
+		FetchedAt:     s.now(),
 		Models:        discovered,
 	}); err != nil {
 		return nil, fmt.Errorf("%w: %v", errCatalogPersist, err)
 	}
 	return discovered, nil
-}
-
-func (s *Service) queueRefresh(input provider.CatalogInput) {
-	if s.store == nil {
-		return
-	}
-
-	if !s.registry.Supports(input.Identity.Driver) {
-		return
-	}
-	identity := input.Identity
-	if identity.Driver == "" || identity.BaseURL == "" {
-		return
-	}
-
-	key := identity.Key()
-	s.refreshMu.Lock()
-	if _, exists := s.inFlightByID[key]; exists {
-		s.refreshMu.Unlock()
-		return
-	}
-	s.inFlightByID[key] = struct{}{}
-	s.refreshMu.Unlock()
-
-	go func() {
-		defer func() {
-			s.refreshMu.Lock()
-			delete(s.inFlightByID, key)
-			s.refreshMu.Unlock()
-		}()
-
-		ctx, cancel := context.WithTimeout(context.Background(), s.backgroundTimeout)
-		defer cancel()
-		_, _ = s.discoverAndPersist(ctx, input)
-	}()
-}
-
-func shouldQueueRefresh(options queryOptions, snapshot catalogSnapshot, performedSyncRefresh bool) bool {
-	if !options.queueRefresh {
-		return false
-	}
-	if snapshot.expired {
-		return true
-	}
-	return !snapshot.ok && !performedSyncRefresh
 }
 
 func mergeResolvedModels(

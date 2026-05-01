@@ -161,8 +161,7 @@ func TestCreateCustomProviderManualSourcePersistsModels(t *testing.T) {
 			},
 			{
 				"id": "manual-model-2",
-				"name": "Manual Model 2",
-				"context_window": 131072
+				"name": "Manual Model 2"
 			}
 		]`,
 	}

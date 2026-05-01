@@ -35,10 +35,8 @@ type customProviderFile struct {
 }
 
 type customProviderModelFile struct {
-	ID              string `yaml:"id"`
-	Name            string `yaml:"name"`
-	ContextWindow   *int   `yaml:"context_window,omitempty"`
-	MaxOutputTokens *int   `yaml:"max_output_tokens,omitempty"`
+	ID   string `yaml:"id"`
+	Name string `yaml:"name"`
 }
 
 // loadCustomProviders 扫描 baseDir/providers 下的一层子目录，并将其中的 provider.yaml 解析为运行时配置。
@@ -170,28 +168,14 @@ func customProviderModels(models []customProviderModelFile) ([]providertypes.Mod
 		}
 
 		descriptor := providertypes.ModelDescriptor{
-			ID:              id,
-			Name:            name,
-			ContextWindow:   ManualModelOptionalIntUnset,
-			MaxOutputTokens: ManualModelOptionalIntUnset,
+			ID:   id,
+			Name: name,
 		}
 		key := provider.NormalizeKey(id)
 		if _, exists := seen[key]; exists {
 			return nil, fmt.Errorf("models[%d].id %q is duplicated", index, id)
 		}
 		seen[key] = struct{}{}
-		if model.ContextWindow != nil {
-			if *model.ContextWindow <= 0 {
-				return nil, fmt.Errorf("models[%d].context_window must be greater than 0", index)
-			}
-			descriptor.ContextWindow = *model.ContextWindow
-		}
-		if model.MaxOutputTokens != nil {
-			if *model.MaxOutputTokens <= 0 {
-				return nil, fmt.Errorf("models[%d].max_output_tokens must be greater than 0", index)
-			}
-			descriptor.MaxOutputTokens = *model.MaxOutputTokens
-		}
 		descriptors = append(descriptors, descriptor)
 	}
 	return descriptors, nil
@@ -238,7 +222,7 @@ func SaveCustomProviderWithModels(baseDir string, input SaveCustomProviderInput)
 	cfg.BaseURL = normalizedInput.BaseURL
 	cfg.ChatEndpointPath = normalizedInput.ChatEndpointPath
 	cfg.DiscoveryEndpointPath = normalizedInput.DiscoveryEndpointPath
-	if normalizedInput.ModelSource == ModelSourceManual {
+	if len(normalizedInput.Models) > 0 {
 		cfg.Models = toCustomProviderModelFiles(normalizedInput.Models)
 	}
 
@@ -262,19 +246,10 @@ func toCustomProviderModelFiles(models []providertypes.ModelDescriptor) []custom
 	}
 	items := make([]customProviderModelFile, 0, len(models))
 	for _, model := range providertypes.MergeModelDescriptors(models) {
-		item := customProviderModelFile{
+		items = append(items, customProviderModelFile{
 			ID:   strings.TrimSpace(model.ID),
 			Name: strings.TrimSpace(model.Name),
-		}
-		if model.ContextWindow > 0 {
-			value := model.ContextWindow
-			item.ContextWindow = &value
-		}
-		if model.MaxOutputTokens > 0 {
-			value := model.MaxOutputTokens
-			item.MaxOutputTokens = &value
-		}
-		items = append(items, item)
+		})
 	}
 	return items
 }

@@ -255,6 +255,20 @@ func TestRenderWaterfallThinkingState(t *testing.T) {
 	}
 }
 
+func TestRenderWaterfallDoesNotShowSelectionCopyHint(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.state.ActivePicker = pickerNone
+	app.input.SetValue("hello")
+	app.textSelection.active = true
+	app.textSelection.startLine = 0
+	app.textSelection.endLine = 0
+
+	view := app.renderWaterfall(80, 24)
+	if strings.Contains(view, "宸查€夋嫨鍐呭") {
+		t.Fatalf("expected selection copy hint to be hidden")
+	}
+}
+
 func TestRenderWaterfallShowsStartupScreenForEmptyDraft(t *testing.T) {
 	app, _ := newTestApp(t)
 	app.startupScreenLocked = true
@@ -356,8 +370,8 @@ func TestRenderWaterfallStartupWithCommandSuggestionsFitsViewport(t *testing.T) 
 	if !strings.Contains(view, commandMenuTitle) {
 		t.Fatalf("expected command suggestion menu to be rendered on startup")
 	}
-	if !strings.Contains(view, "┌") || !strings.Contains(view, "└") {
-		t.Fatalf("expected prompt box to stay visible with startup command suggestions, got %q", view)
+	if !strings.Contains(view, "/he") {
+		t.Fatalf("expected prompt input to stay visible with startup command suggestions, got %q", view)
 	}
 	if got := lipgloss.Height(view); got != 32 {
 		t.Fatalf("expected startup waterfall height to match viewport, got %d", got)
@@ -637,10 +651,10 @@ func TestRenderProviderAddFormMasksAPIKeyAndShowsHints(t *testing.T) {
 	if !strings.Contains(form, "Model Source: discover") {
 		t.Fatalf("expected model source field, got %q", form)
 	}
-	if !strings.Contains(form, "留空会自动填充默认地址") {
+	if !strings.Contains(form, "Base URL:   (") {
 		t.Fatalf("expected base url hint, got %q", form)
 	}
-	if !strings.Contains(form, "Chat Endpoint:   (") || !strings.Contains(form, "Chat API Mode") || !strings.Contains(form, "自动回填默认端点") {
+	if !strings.Contains(form, "Chat Endpoint:   (") || !strings.Contains(form, "Chat API Mode") {
 		t.Fatalf("expected chat endpoint auto-fill hint, got %q", form)
 	}
 	if !strings.Contains(form, "[Error] input invalid") {

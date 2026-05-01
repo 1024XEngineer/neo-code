@@ -17,7 +17,7 @@ import (
 	providertypes "neo-code/internal/provider/types"
 )
 
-const schemaVersion = 3
+const schemaVersion = 4
 
 var ErrCatalogNotFound = errors.New("provider: model catalog not found")
 
@@ -26,12 +26,7 @@ type ModelCatalog struct {
 	SchemaVersion int                             `json:"schema_version"`
 	Identity      provider.ProviderIdentity       `json:"identity"`
 	FetchedAt     time.Time                       `json:"fetched_at"`
-	ExpiresAt     time.Time                       `json:"expires_at"`
 	Models        []providertypes.ModelDescriptor `json:"models"`
-}
-
-func (c ModelCatalog) Expired(now time.Time) bool {
-	return !c.ExpiresAt.IsZero() && !now.Before(c.ExpiresAt)
 }
 
 // Store persists model catalogs keyed by normalized provider identity.

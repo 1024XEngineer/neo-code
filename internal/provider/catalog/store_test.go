@@ -30,7 +30,6 @@ func TestJSONStoreRoundTrip(t *testing.T) {
 		SchemaVersion: schemaVersion,
 		Identity:      normalizedIdentity,
 		FetchedAt:     time.Date(2026, 4, 2, 10, 0, 0, 0, time.UTC),
-		ExpiresAt:     time.Date(2026, 4, 3, 10, 0, 0, 0, time.UTC),
 		Models: []providertypes.ModelDescriptor{
 			{
 				ID:              "gpt-4.1",
@@ -59,7 +58,7 @@ func TestJSONStoreRoundTrip(t *testing.T) {
 	if got.Identity != expected.Identity {
 		t.Fatalf("expected identity %+v, got %+v", expected.Identity, got.Identity)
 	}
-	if !got.FetchedAt.Equal(expected.FetchedAt) || !got.ExpiresAt.Equal(expected.ExpiresAt) {
+	if !got.FetchedAt.Equal(expected.FetchedAt) {
 		t.Fatalf("expected timestamps %+v, got %+v", expected, got)
 	}
 	if len(got.Models) != 1 {
@@ -154,7 +153,6 @@ func TestJSONStoreSaveReplacesExistingCatalogWithoutTempLeak(t *testing.T) {
 		SchemaVersion: schemaVersion,
 		Identity:      identity,
 		FetchedAt:     time.Date(2026, 4, 2, 10, 0, 0, 0, time.UTC),
-		ExpiresAt:     time.Date(2026, 4, 3, 10, 0, 0, 0, time.UTC),
 		Models: []providertypes.ModelDescriptor{
 			{ID: "gpt-old", Name: "GPT Old"},
 		},
@@ -163,7 +161,6 @@ func TestJSONStoreSaveReplacesExistingCatalogWithoutTempLeak(t *testing.T) {
 		SchemaVersion: schemaVersion,
 		Identity:      identity,
 		FetchedAt:     time.Date(2026, 4, 4, 10, 0, 0, 0, time.UTC),
-		ExpiresAt:     time.Date(2026, 4, 5, 10, 0, 0, 0, time.UTC),
 		Models: []providertypes.ModelDescriptor{
 			{ID: "gpt-new", Name: "GPT New"},
 		},
@@ -198,21 +195,6 @@ func TestJSONStoreSaveReplacesExistingCatalogWithoutTempLeak(t *testing.T) {
 	}
 	if len(data) == 0 || data[len(data)-1] != '\n' {
 		t.Fatalf("expected persisted catalog to end with newline, got %q", string(data))
-	}
-}
-
-func TestModelCatalogExpired(t *testing.T) {
-	t.Parallel()
-
-	now := time.Date(2026, 4, 8, 12, 0, 0, 0, time.UTC)
-	if (ModelCatalog{}).Expired(now) {
-		t.Fatal("expected zero-value catalog to be treated as not expired")
-	}
-	if !(ModelCatalog{ExpiresAt: now}).Expired(now) {
-		t.Fatal("expected catalog expiring at now to be expired")
-	}
-	if (ModelCatalog{ExpiresAt: now.Add(time.Minute)}).Expired(now) {
-		t.Fatal("expected future expiry to be treated as fresh")
 	}
 }
 

@@ -30,16 +30,19 @@ func TestNewService(t *testing.T) {
 	}
 }
 
-func TestListProviderModelsFallsBackToDefaultModelWithoutDiscovery(t *testing.T) {
+func TestListProviderModelsReturnsConfiguredModelsWhenDiscoveryDisabled(t *testing.T) {
 	t.Parallel()
 
 	service := NewService("", newRegistry(t, openaicompat.DriverName, nil), newMemoryStore())
-	models, err := service.ListProviderModels(context.Background(), openAIProviderSource())
+	providerCfg := customGatewayProvider()
+	providerCfg.ModelSource = config.ModelSourceManual
+	providerCfg.Models = []providertypes.ModelDescriptor{{ID: "manual-model", Name: "Manual Model"}}
+	models, err := service.ListProviderModels(context.Background(), mustCatalogInput(t, providerCfg))
 	if err != nil {
 		t.Fatalf("ListProviderModels() error = %v", err)
 	}
-	if len(models) != 1 || models[0].ID != config.OpenAIDefaultModel {
-		t.Fatalf("expected default model fallback, got %+v", models)
+	if len(models) != 1 || models[0].ID != "manual-model" {
+		t.Fatalf("expected configured models without discovery, got %+v", models)
 	}
 }
 
@@ -69,7 +72,7 @@ func TestListProviderModelsMergesConfiguredMetadataAfterDiscovery(t *testing.T) 
 	})
 
 	service := NewService("", registry, newMemoryStore())
-	providerCfg := config.OpenAIProvider()
+	providerCfg := customGatewayProvider()
 	providerCfg.Models = []providertypes.ModelDescriptor{{
 		ID:              "deepseek-coder",
 		Name:            "DeepSeek Coder",
@@ -131,7 +134,7 @@ func TestListProviderModelsUsesConfiguredContextWindowWhenDiscoveryMissesIt(t *t
 	}
 }
 
-func TestListProviderModelsSnapshotReturnsDefaultAndRefreshesInBackgroundOnMiss(t *testing.T) {
+func TestListProviderModelsSnapshotReturnsBuiltinStaticModelsWithoutRefresh(t *testing.T) {
 	t.Setenv(testAPIKeyEnv, "test-key")
 
 	refreshed := make(chan struct{}, 1)
@@ -145,41 +148,29 @@ func TestListProviderModelsSnapshotReturnsDefaultAndRefreshesInBackgroundOnMiss(
 
 	store := newMemoryStore()
 	service := NewService("", registry, store)
-	service.backgroundTimeout = time.Second
 
 	models, err := service.ListProviderModelsSnapshot(context.Background(), openAIProviderSource())
 	if err != nil {
 		t.Fatalf("ListProviderModelsSnapshot() error = %v", err)
 	}
-	if len(models) != 1 || models[0].ID != config.OpenAIDefaultModel {
-		t.Fatalf("expected immediate default model fallback, got %+v", models)
+	if !containsModelDescriptorID(models, config.OpenAIDefaultModel) {
+		t.Fatalf("expected builtin static models on snapshot path, got %+v", models)
 	}
 
 	select {
 	case <-refreshed:
-	case <-time.After(2 * time.Second):
-		t.Fatal("expected background refresh to run")
+		t.Fatal("expected snapshot path to avoid refresh")
+	case <-time.After(150 * time.Millisecond):
 	}
 
-	identity, err := config.OpenAIProvider().Identity()
+	identity, err := customGatewayProvider().Identity()
 	if err != nil {
 		t.Fatalf("Identity() error = %v", err)
 	}
 
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		modelCatalog, err := store.Load(context.Background(), identity)
-		if err == nil && containsModelDescriptorID(modelCatalog.Models, "gpt-4o") {
-			return
-		}
-		time.Sleep(20 * time.Millisecond)
+	if _, err := store.Load(context.Background(), identity); !errors.Is(err, ErrCatalogNotFound) {
+		t.Fatalf("expected snapshot path to avoid cache writes, got %v", err)
 	}
-
-	modelCatalog, err := store.Load(context.Background(), identity)
-	if err != nil {
-		t.Fatalf("Load() refreshed catalog error = %v", err)
-	}
-	t.Fatalf("expected refreshed catalog to contain gpt-4o, got %+v", modelCatalog.Models)
 }
 
 func TestListProviderModelsReturnsDiscoveryErrorOnCacheMiss(t *testing.T) {
@@ -213,7 +204,7 @@ func TestListProviderModelsDiscoversAndCachesOnMiss(t *testing.T) {
 	store := newMemoryStore()
 	service := NewService("", registry, store)
 
-	models, err := service.ListProviderModels(context.Background(), openAIProviderSource())
+	models, err := service.ListProviderModels(context.Background(), customGatewayProviderSource())
 	if err != nil {
 		t.Fatalf("ListProviderModels() error = %v", err)
 	}
@@ -221,7 +212,7 @@ func TestListProviderModelsDiscoversAndCachesOnMiss(t *testing.T) {
 		t.Fatalf("expected discovered model in result, got %+v", models)
 	}
 
-	identity, err := config.OpenAIProvider().Identity()
+	identity, err := customGatewayProvider().Identity()
 	if err != nil {
 		t.Fatalf("Identity() error = %v", err)
 	}
@@ -234,10 +225,10 @@ func TestListProviderModelsDiscoversAndCachesOnMiss(t *testing.T) {
 	}
 }
 
-func TestListProviderModelsReturnsStaleCacheAndRefreshesInBackground(t *testing.T) {
+func TestListProviderModelsReturnsCachedCatalogWithoutAutomaticRefresh(t *testing.T) {
 	t.Setenv(testAPIKeyEnv, "test-key")
 
-	identity, err := config.OpenAIProvider().Identity()
+	identity, err := customGatewayProvider().Identity()
 	if err != nil {
 		t.Fatalf("Identity() error = %v", err)
 	}
@@ -248,7 +239,6 @@ func TestListProviderModelsReturnsStaleCacheAndRefreshesInBackground(t *testing.
 		SchemaVersion: schemaVersion,
 		Identity:      identity,
 		FetchedAt:     now.Add(-48 * time.Hour),
-		ExpiresAt:     now.Add(-24 * time.Hour),
 		Models: []providertypes.ModelDescriptor{
 			{ID: "stale-model", Name: "Stale Model"},
 		},
@@ -267,9 +257,8 @@ func TestListProviderModelsReturnsStaleCacheAndRefreshesInBackground(t *testing.
 
 	service := NewService("", registry, store)
 	service.now = func() time.Time { return now }
-	service.backgroundTimeout = time.Second
 
-	models, err := service.ListProviderModels(context.Background(), openAIProviderSource())
+	models, err := service.ListProviderModels(context.Background(), customGatewayProviderSource())
 	if err != nil {
 		t.Fatalf("ListProviderModels() error = %v", err)
 	}
@@ -279,24 +268,9 @@ func TestListProviderModelsReturnsStaleCacheAndRefreshesInBackground(t *testing.
 
 	select {
 	case <-refreshed:
-	case <-time.After(2 * time.Second):
-		t.Fatal("expected background refresh to run")
+		t.Fatal("expected cached catalog path to avoid automatic refresh")
+	case <-time.After(150 * time.Millisecond):
 	}
-
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		modelCatalog, err := store.Load(context.Background(), identity)
-		if err == nil && containsModelDescriptorID(modelCatalog.Models, "fresh-model") {
-			return
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-
-	modelCatalog, err := store.Load(context.Background(), identity)
-	if err != nil {
-		t.Fatalf("Load() refreshed catalog error = %v", err)
-	}
-	t.Fatalf("expected refreshed catalog to contain fresh-model, got %+v", modelCatalog.Models)
 }
 
 func TestDescriptorsFromIDsHelper(t *testing.T) {
@@ -351,7 +325,7 @@ func TestListProviderModelsHonorsContextError(t *testing.T) {
 func TestListProviderModelsCachedUsesFreshCatalogWithoutDiscovery(t *testing.T) {
 	t.Setenv(testAPIKeyEnv, "test-key")
 
-	identity, err := config.OpenAIProvider().Identity()
+	identity, err := customGatewayProvider().Identity()
 	if err != nil {
 		t.Fatalf("Identity() error = %v", err)
 	}
@@ -362,7 +336,6 @@ func TestListProviderModelsCachedUsesFreshCatalogWithoutDiscovery(t *testing.T) 
 		SchemaVersion: schemaVersion,
 		Identity:      identity,
 		FetchedAt:     now.Add(-time.Hour),
-		ExpiresAt:     now.Add(time.Hour),
 		Models: []providertypes.ModelDescriptor{
 			{ID: "cached-model", Name: "Cached Model"},
 		},
@@ -379,7 +352,7 @@ func TestListProviderModelsCachedUsesFreshCatalogWithoutDiscovery(t *testing.T) 
 	service := NewService("", registry, store)
 	service.now = func() time.Time { return now }
 
-	models, err := service.ListProviderModelsCached(context.Background(), openAIProviderSource())
+	models, err := service.ListProviderModelsCached(context.Background(), customGatewayProviderSource())
 	if err != nil {
 		t.Fatalf("ListProviderModelsCached() error = %v", err)
 	}
@@ -400,7 +373,6 @@ func TestListProviderModelsRefreshesWhenCatalogSnapshotIsEmpty(t *testing.T) {
 		SchemaVersion: schemaVersion,
 		Identity:      input.Identity,
 		FetchedAt:     time.Now().Add(-time.Minute),
-		ExpiresAt:     time.Now().Add(time.Hour),
 		Models:        nil,
 	}); err != nil {
 		t.Fatalf("seed empty catalog: %v", err)
@@ -425,10 +397,54 @@ func TestListProviderModelsRefreshesWhenCatalogSnapshotIsEmpty(t *testing.T) {
 	}
 }
 
+func TestRefreshProviderModelsReturnsConfiguredModelsWhenDiscoveryDisabled(t *testing.T) {
+	t.Parallel()
+
+	service := NewService("", newRegistry(t, openaicompat.DriverName, nil), newMemoryStore())
+	providerCfg := customGatewayProvider()
+	providerCfg.ModelSource = config.ModelSourceManual
+	providerCfg.Models = []providertypes.ModelDescriptor{{ID: "manual-model", Name: "Manual Model"}}
+
+	models, err := service.RefreshProviderModels(context.Background(), mustCatalogInput(t, providerCfg))
+	if err != nil {
+		t.Fatalf("RefreshProviderModels() error = %v", err)
+	}
+	if len(models) != 1 || models[0].ID != "manual-model" {
+		t.Fatalf("expected configured models without discovery, got %+v", models)
+	}
+}
+
+func TestRefreshProviderModelsDiscoversAndPersists(t *testing.T) {
+	t.Setenv(testAPIKeyEnv, "test-key")
+
+	registry := newRegistry(t, openaicompat.DriverName, func(ctx context.Context, cfg provider.RuntimeConfig) ([]providertypes.ModelDescriptor, error) {
+		return []providertypes.ModelDescriptor{{ID: "fresh-model", Name: "Fresh Model"}}, nil
+	})
+	store := newMemoryStore()
+	service := NewService("", registry, store)
+
+	input := customGatewayProviderSource()
+	models, err := service.RefreshProviderModels(context.Background(), input)
+	if err != nil {
+		t.Fatalf("RefreshProviderModels() error = %v", err)
+	}
+	if len(models) != 1 || models[0].ID != "fresh-model" {
+		t.Fatalf("expected discovered models, got %+v", models)
+	}
+
+	cached, err := store.Load(context.Background(), input.Identity)
+	if err != nil {
+		t.Fatalf("load cached catalog: %v", err)
+	}
+	if len(cached.Models) != 1 || cached.Models[0].ID != "fresh-model" {
+		t.Fatalf("expected refreshed models to be persisted, got %+v", cached.Models)
+	}
+}
+
 func TestDiscoverAndPersistFailurePaths(t *testing.T) {
 	t.Run("unsupported driver", func(t *testing.T) {
 		service := NewService("", provider.NewRegistry(), newMemoryStore())
-		discovered, err := service.discoverAndPersist(context.Background(), openAIProviderSource())
+		discovered, err := service.discoverAndPersist(context.Background(), customGatewayProviderSource())
 		if err != nil || discovered != nil {
 			t.Fatalf("expected unsupported driver to skip discovery, got err=%v models=%+v", err, discovered)
 		}
@@ -463,7 +479,7 @@ func TestDiscoverAndPersistFailurePaths(t *testing.T) {
 			return nil, errors.New("discover failed")
 		}), newMemoryStore())
 
-		discovered, err := service.discoverAndPersist(context.Background(), openAIProviderSource())
+		discovered, err := service.discoverAndPersist(context.Background(), customGatewayProviderSource())
 		if err == nil || discovered != nil {
 			t.Fatalf("expected discovery error to skip persistence, got err=%v models=%+v", err, discovered)
 		}
@@ -475,7 +491,7 @@ func TestDiscoverAndPersistFailurePaths(t *testing.T) {
 			return []providertypes.ModelDescriptor{{ID: "gpt-4.1", Name: "GPT-4.1"}}, nil
 		}), nil)
 
-		discovered, err := service.discoverAndPersist(context.Background(), openAIProviderSource())
+		discovered, err := service.discoverAndPersist(context.Background(), customGatewayProviderSource())
 		if err != nil {
 			t.Fatalf("expected discovery without store to succeed, got %v", err)
 		}
@@ -519,7 +535,7 @@ func TestDiscoverAndPersistFailurePaths(t *testing.T) {
 		}
 		service := NewService("", registry, store)
 
-		models, err := service.ListProviderModels(context.Background(), openAIProviderSource())
+		models, err := service.ListProviderModels(context.Background(), customGatewayProviderSource())
 		if err == nil {
 			t.Fatal("expected persist failure to be returned")
 		}
@@ -528,93 +544,6 @@ func TestDiscoverAndPersistFailurePaths(t *testing.T) {
 		}
 		if !errors.Is(err, errCatalogPersist) {
 			t.Fatalf("expected persist sentinel error, got %v", err)
-		}
-	})
-}
-
-func TestQueueRefreshDeduplicatesInFlightRequests(t *testing.T) {
-	t.Setenv(testAPIKeyEnv, "test-key")
-
-	identity, err := config.OpenAIProvider().Identity()
-	if err != nil {
-		t.Fatalf("Identity() error = %v", err)
-	}
-
-	started := make(chan struct{}, 1)
-	release := make(chan struct{})
-	var discoverCalls int32
-	registry := newRegistry(t, openaicompat.DriverName, func(ctx context.Context, cfg provider.RuntimeConfig) ([]providertypes.ModelDescriptor, error) {
-		atomic.AddInt32(&discoverCalls, 1)
-		select {
-		case started <- struct{}{}:
-		default:
-		}
-		select {
-		case <-release:
-		case <-ctx.Done():
-		}
-		return []providertypes.ModelDescriptor{{ID: "gpt-4o", Name: "GPT-4o"}}, nil
-	})
-
-	service := NewService("", registry, newMemoryStore())
-	service.backgroundTimeout = time.Second
-
-	service.queueRefresh(openAIProviderSource())
-	<-started
-	service.queueRefresh(openAIProviderSource())
-
-	time.Sleep(50 * time.Millisecond)
-	if calls := atomic.LoadInt32(&discoverCalls); calls != 1 {
-		t.Fatalf("expected exactly one in-flight refresh, got %d", calls)
-	}
-
-	close(release)
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		service.refreshMu.Lock()
-		_, exists := service.inFlightByID[identity.Key()]
-		service.refreshMu.Unlock()
-		if !exists {
-			return
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-
-	t.Fatal("expected in-flight refresh marker to be cleared")
-}
-
-func TestQueueRefreshSkipsWhenDriverUnsupportedOrIdentityIncomplete(t *testing.T) {
-	t.Parallel()
-
-	t.Run("unsupported driver", func(t *testing.T) {
-		t.Parallel()
-
-		service := NewService("", provider.NewRegistry(), newMemoryStore())
-		input := openAIProviderSource()
-		input.Identity.Driver = "missing"
-
-		service.queueRefresh(input)
-
-		service.refreshMu.Lock()
-		defer service.refreshMu.Unlock()
-		if len(service.inFlightByID) != 0 {
-			t.Fatalf("expected no refresh to be queued, got %+v", service.inFlightByID)
-		}
-	})
-
-	t.Run("incomplete identity", func(t *testing.T) {
-		t.Parallel()
-
-		service := NewService("", newRegistry(t, openaicompat.DriverName, nil), newMemoryStore())
-		input := openAIProviderSource()
-		input.Identity.BaseURL = ""
-
-		service.queueRefresh(input)
-
-		service.refreshMu.Lock()
-		defer service.refreshMu.Unlock()
-		if len(service.inFlightByID) != 0 {
-			t.Fatalf("expected no refresh to be queued, got %+v", service.inFlightByID)
 		}
 	})
 }
@@ -644,7 +573,22 @@ func newRegistry(t *testing.T, name string, discover provider.DiscoveryFunc) *pr
 func openAIProviderSource() provider.CatalogInput {
 	providerCfg := config.OpenAIProvider()
 	providerCfg.APIKeyEnv = testAPIKeyEnv
-	return mustCatalogInput(nil, providerCfg)
+	input := mustCatalogInput(nil, providerCfg)
+	if len(input.ConfiguredModels) == 0 {
+		input.ConfiguredModels = providertypes.DescriptorsFromIDs([]string{
+			config.OpenAIDefaultModel,
+			"gpt-5.4-mini",
+			"gpt-5.3-codex",
+			"gpt-4.1",
+			"gpt-4o",
+			"gpt-4o-mini",
+		})
+	}
+	if len(input.DefaultModels) == 0 {
+		input.DefaultModels = providertypes.CloneModelDescriptors(input.ConfiguredModels)
+	}
+	input.DisableDiscovery = true
+	return input
 }
 
 func customGatewayProviderSource() provider.CatalogInput {
@@ -667,6 +611,8 @@ func mustCatalogInput(t *testing.T, cfg config.ProviderConfig) provider.CatalogI
 	input := provider.CatalogInput{
 		Identity:         identity,
 		ConfiguredModels: providertypes.CloneModelDescriptors(cloned.Models),
+		DisableDiscovery: cloned.Source == config.ProviderSourceBuiltin ||
+			(cloned.Source == config.ProviderSourceCustom && config.NormalizeModelSource(cloned.ModelSource) == config.ModelSourceManual),
 		ResolveDiscoveryConfig: func() (provider.RuntimeConfig, error) {
 			resolved, err := cloned.Resolve()
 			if err != nil {
@@ -676,7 +622,10 @@ func mustCatalogInput(t *testing.T, cfg config.ProviderConfig) provider.CatalogI
 		},
 	}
 	if cloned.Source != config.ProviderSourceCustom {
-		input.DefaultModels = providertypes.DescriptorsFromIDs([]string{cloned.Model})
+		input.DefaultModels = providertypes.CloneModelDescriptors(cloned.Models)
+		if len(input.DefaultModels) == 0 {
+			input.DefaultModels = providertypes.DescriptorsFromIDs([]string{cloned.Model})
+		}
 	}
 	return input
 }

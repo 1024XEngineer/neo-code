@@ -301,7 +301,7 @@ func (a *App) resizeCommandMenu() {
 	a.commandMenu.SetSize(max(16, width-4), max(1, rows))
 }
 
-func (a App) buildCommandMenuItems(input string, width int) ([]commandMenuItem, tuistate.CommandMenuMeta) {
+func (a App) buildCommandMenuItems(input string, _ int) ([]commandMenuItem, tuistate.CommandMenuMeta) {
 	trimmed := strings.TrimSpace(input)
 
 	// 1. 优先检查 Slash 命令

@@ -493,8 +493,6 @@ api_key_env: COMPANY_GATEWAY_API_KEY
 models:
   - id: deepseek-coder
     name: DeepSeek Coder
-    context_window: 131072
-    max_output_tokens: 8192
 `
 	customDir := filepath.Join(loader.BaseDir(), providersDirName, "company-gateway")
 	if err := os.WriteFile(filepath.Join(customDir, customProviderConfigName), []byte(strings.TrimSpace(providerYAML)+"\n"), 0o644); err != nil {
@@ -532,10 +530,10 @@ models:
 		t.Fatalf("expected custom provider default model to be empty, got %q", customProvider.Model)
 	}
 	if len(customProvider.Models) != 1 {
-		t.Fatalf("expected custom provider model metadata from provider.yaml, got %+v", customProvider.Models)
+		t.Fatalf("expected custom provider models from provider.yaml, got %+v", customProvider.Models)
 	}
-	if customProvider.Models[0].ID != "deepseek-coder" || customProvider.Models[0].ContextWindow != 131072 {
-		t.Fatalf("expected parsed model metadata, got %+v", customProvider.Models[0])
+	if customProvider.Models[0].ID != "deepseek-coder" || customProvider.Models[0].ContextWindow != 0 {
+		t.Fatalf("expected parsed id/name only model, got %+v", customProvider.Models[0])
 	}
 }
 
@@ -815,7 +813,7 @@ models:
 	}
 }
 
-func TestLoaderRejectsCustomProviderModelWithInvalidContextWindow(t *testing.T) {
+func TestLoaderRejectsCustomProviderModelWithUnsupportedContextWindow(t *testing.T) {
 	t.Parallel()
 
 	loader := NewLoader(t.TempDir(), testDefaultConfig())
@@ -832,19 +830,19 @@ api_key_env: COMPANY_GATEWAY_API_KEY
 models:
   - id: deepseek-coder
     name: DeepSeek Coder
-    context_window: 0
+    context_window: 131072
 `
 	if err := os.WriteFile(filepath.Join(customDir, customProviderConfigName), []byte(strings.TrimSpace(providerYAML)+"\n"), 0o644); err != nil {
 		t.Fatalf("write provider.yaml: %v", err)
 	}
 
 	_, err := loader.Load(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "context_window") {
-		t.Fatalf("expected invalid context_window rejection, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "field context_window not found") {
+		t.Fatalf("expected unknown context_window rejection, got %v", err)
 	}
 }
 
-func TestLoaderRejectsCustomProviderModelWithInvalidMaxOutputTokens(t *testing.T) {
+func TestLoaderRejectsCustomProviderModelWithUnsupportedMaxOutputTokens(t *testing.T) {
 	t.Parallel()
 
 	loader := NewLoader(t.TempDir(), testDefaultConfig())
@@ -861,15 +859,15 @@ api_key_env: COMPANY_GATEWAY_API_KEY
 models:
   - id: deepseek-coder
     name: DeepSeek Coder
-    max_output_tokens: 0
+    max_output_tokens: 8192
 `
 	if err := os.WriteFile(filepath.Join(customDir, customProviderConfigName), []byte(strings.TrimSpace(providerYAML)+"\n"), 0o644); err != nil {
 		t.Fatalf("write provider.yaml: %v", err)
 	}
 
 	_, err := loader.Load(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "max_output_tokens") {
-		t.Fatalf("expected invalid max_output_tokens rejection, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "field max_output_tokens not found") {
+		t.Fatalf("expected unknown max_output_tokens rejection, got %v", err)
 	}
 }
 
@@ -1327,10 +1325,8 @@ func TestSaveCustomProviderAndLoadCustomProviderStayConsistent(t *testing.T) {
 				DiscoveryEndpointPath: "/should-be-cleared",
 				Models: []providertypes.ModelDescriptor{
 					{
-						ID:              "manual-model-1",
-						Name:            "Manual Model 1",
-						ContextWindow:   131072,
-						MaxOutputTokens: 8192,
+						ID:   "manual-model-1",
+						Name: "Manual Model 1",
 					},
 				},
 			},
@@ -1387,7 +1383,7 @@ func TestSaveCustomProviderAndLoadCustomProviderStayConsistent(t *testing.T) {
 	}
 }
 
-func TestSaveCustomProviderManualModelsPersistOptionalFields(t *testing.T) {
+func TestSaveCustomProviderManualModelsPersistIDAndNameOnly(t *testing.T) {
 	t.Parallel()
 
 	baseDir := t.TempDir()
@@ -1404,10 +1400,8 @@ func TestSaveCustomProviderManualModelsPersistOptionalFields(t *testing.T) {
 				Name: "Manual Model 1",
 			},
 			{
-				ID:              "manual-model-2",
-				Name:            "Manual Model 2",
-				ContextWindow:   131072,
-				MaxOutputTokens: 8192,
+				ID:   "manual-model-2",
+				Name: "Manual Model 2",
 			},
 		},
 	})
@@ -1428,11 +1422,8 @@ func TestSaveCustomProviderManualModelsPersistOptionalFields(t *testing.T) {
 	if len(cfg.Models) != 2 {
 		t.Fatalf("expected model list with 2 entries, got %+v", cfg.Models)
 	}
-	if cfg.Models[0].ContextWindow != 0 || cfg.Models[0].MaxOutputTokens != 0 {
-		t.Fatalf("expected optional fields omitted for model-1, got %+v", cfg.Models[0])
-	}
-	if cfg.Models[1].ContextWindow != 131072 || cfg.Models[1].MaxOutputTokens != 8192 {
-		t.Fatalf("expected optional fields persisted for model-2, got %+v", cfg.Models[1])
+	if cfg.Models[0].ContextWindow != 0 || cfg.Models[0].MaxOutputTokens != 0 || cfg.Models[1].ContextWindow != 0 || cfg.Models[1].MaxOutputTokens != 0 {
+		t.Fatalf("expected persisted manual models to omit metadata, got %+v", cfg.Models)
 	}
 }
 
@@ -1641,10 +1632,8 @@ func TestToCustomProviderModelFiles(t *testing.T) {
 			Name: "Model A",
 		},
 		{
-			ID:              "model-b",
-			Name:            "Model B",
-			ContextWindow:   32768,
-			MaxOutputTokens: 2048,
+			ID:   "model-b",
+			Name: "Model B",
 		},
 		{
 			ID:   "Model-A",
@@ -1657,14 +1646,8 @@ func TestToCustomProviderModelFiles(t *testing.T) {
 	if converted[0].ID != "model-a" || converted[0].Name != "Model A" {
 		t.Fatalf("expected normalized merge result for model-a, got %+v", converted[0])
 	}
-	if converted[0].ContextWindow != nil || converted[0].MaxOutputTokens != nil {
-		t.Fatalf("expected model-a optional pointers nil, got %+v", converted[0])
-	}
-	if converted[1].ContextWindow == nil || *converted[1].ContextWindow != 32768 {
-		t.Fatalf("expected model-b context window pointer, got %+v", converted[1])
-	}
-	if converted[1].MaxOutputTokens == nil || *converted[1].MaxOutputTokens != 2048 {
-		t.Fatalf("expected model-b max output tokens pointer, got %+v", converted[1])
+	if converted[1].ID != "model-b" || converted[1].Name != "Model B" {
+		t.Fatalf("expected id/name only persistence for model-b, got %+v", converted[1])
 	}
 }
 

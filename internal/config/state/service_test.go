@@ -184,6 +184,52 @@ func TestSelectionServiceListModelsSnapshotRejectsUnsupportedDriver(t *testing.T
 	}
 }
 
+func TestSelectionServiceRefreshModelsUsesRefreshPathAndRepairsCurrentModel(t *testing.T) {
+	t.Parallel()
+
+	manager := newSelectionTestManager(t, testDefaultConfig())
+	if err := manager.Update(context.Background(), func(cfg *configpkg.Config) error {
+		cfg.CurrentModel = "removed-model"
+		return nil
+	}); err != nil {
+		t.Fatalf("seed current model: %v", err)
+	}
+
+	service := NewService(manager, newDriverSupporterStub(), catalogMethodsStub{
+		listModels: []providertypes.ModelDescriptor{
+			{ID: OpenAIDefaultModel, Name: "GPT Default"},
+			{ID: "gpt-5.4-mini", Name: "GPT Mini"},
+		},
+	})
+
+	models, err := service.RefreshModels(context.Background())
+	if err != nil {
+		t.Fatalf("RefreshModels() error = %v", err)
+	}
+	if len(models) != 2 {
+		t.Fatalf("expected refreshed models, got %+v", models)
+	}
+
+	cfg := manager.Get()
+	if cfg.CurrentModel != OpenAIDefaultModel {
+		t.Fatalf("expected current model repaired to provider default, got %q", cfg.CurrentModel)
+	}
+}
+
+func TestSelectionServiceRefreshModelsReturnsNoModelsAvailable(t *testing.T) {
+	t.Parallel()
+
+	manager := newSelectionTestManager(t, testDefaultConfig())
+	service := NewService(manager, newDriverSupporterStub(), catalogMethodsStub{
+		listModels: nil,
+	})
+
+	_, err := service.RefreshModels(context.Background())
+	if !errors.Is(err, ErrNoModelsAvailable) {
+		t.Fatalf("expected ErrNoModelsAvailable, got %v", err)
+	}
+}
+
 func TestSelectionServiceSelectProviderAndSetCurrentModel(t *testing.T) {
 	manager := newSelectionTestManager(t, testDefaultConfig())
 
@@ -1156,6 +1202,10 @@ func (catalogStub) ListProviderModelsCached(_ context.Context, input provider.Ca
 	return defaultModelsForInput(input), nil
 }
 
+func (catalogStub) RefreshProviderModels(_ context.Context, input provider.CatalogInput) ([]providertypes.ModelDescriptor, error) {
+	return defaultModelsForInput(input), nil
+}
+
 type catalogMethodsStub struct {
 	listModels     []providertypes.ModelDescriptor
 	snapshotModels []providertypes.ModelDescriptor
@@ -1196,6 +1246,13 @@ func (s catalogMethodsStub) ListProviderModelsCached(_ context.Context, _ provid
 	return providertypes.MergeModelDescriptors(s.cachedModels), nil
 }
 
+func (s catalogMethodsStub) RefreshProviderModels(_ context.Context, _ provider.CatalogInput) ([]providertypes.ModelDescriptor, error) {
+	if s.listErr != nil {
+		return nil, s.listErr
+	}
+	return providertypes.MergeModelDescriptors(s.listModels), nil
+}
+
 type catalogMethodCalls struct {
 	listCalls     int
 	snapshotCalls int
@@ -1220,6 +1277,10 @@ func (c *cancelAfterFirstCachedCatalog) ListProviderModelsCached(_ context.Conte
 	if c.calls == 1 && c.cancel != nil {
 		c.cancel()
 	}
+	return defaultModelsForInput(input), nil
+}
+
+func (c *cancelAfterFirstCachedCatalog) RefreshProviderModels(_ context.Context, input provider.CatalogInput) ([]providertypes.ModelDescriptor, error) {
 	return defaultModelsForInput(input), nil
 }
 
@@ -1254,6 +1315,10 @@ func (m *mutatingCatalog) ListProviderModelsCached(_ context.Context, _ provider
 	return nil, nil
 }
 
+func (m *mutatingCatalog) RefreshProviderModels(_ context.Context, _ provider.CatalogInput) ([]providertypes.ModelDescriptor, error) {
+	return providertypes.MergeModelDescriptors(m.listModels), nil
+}
+
 type errorCatalogStub struct {
 	err error
 }
@@ -1267,6 +1332,10 @@ func (s errorCatalogStub) ListProviderModelsSnapshot(_ context.Context, _ provid
 }
 
 func (s errorCatalogStub) ListProviderModelsCached(_ context.Context, _ provider.CatalogInput) ([]providertypes.ModelDescriptor, error) {
+	return nil, s.err
+}
+
+func (s errorCatalogStub) RefreshProviderModels(_ context.Context, _ provider.CatalogInput) ([]providertypes.ModelDescriptor, error) {
 	return nil, s.err
 }
 
@@ -1295,6 +1364,10 @@ func (c *driftingSnapshotCatalog) ListProviderModelsSnapshot(ctx context.Context
 }
 
 func (c *driftingSnapshotCatalog) ListProviderModelsCached(_ context.Context, input provider.CatalogInput) ([]providertypes.ModelDescriptor, error) {
+	return c.modelsFor(input), nil
+}
+
+func (c *driftingSnapshotCatalog) RefreshProviderModels(_ context.Context, input provider.CatalogInput) ([]providertypes.ModelDescriptor, error) {
 	return c.modelsFor(input), nil
 }
 
