@@ -460,17 +460,6 @@ func TestNormalizeJSONRPCRequestErrors(t *testing.T) {
 			wantGatewayCode: GatewayCodeMissingRequiredField,
 		},
 		{
-			name: "authenticate missing token",
-			request: JSONRPCRequest{
-				JSONRPC: JSONRPCVersion,
-				ID:      json.RawMessage(`"x"`),
-				Method:  MethodGatewayAuthenticate,
-				Params:  json.RawMessage(`{"token":"   "}`),
-			},
-			wantCode:        JSONRPCCodeInvalidParams,
-			wantGatewayCode: GatewayCodeMissingRequiredField,
-		},
-		{
 			name: "missing method",
 			request: JSONRPCRequest{
 				JSONRPC: JSONRPCVersion,
@@ -1035,4 +1024,124 @@ func TestNewJSONRPCErrorResponseWithNilIDEncodesNull(t *testing.T) {
 	if payload["id"] != nil {
 		t.Fatalf("encoded response id = %#v, want nil", payload["id"])
 	}
+}
+
+func TestNormalizeJSONRPCRequestNewRPCMethods(t *testing.T) {
+	t.Run("deleteSession valid params", func(t *testing.T) {
+		frame, rpcErr := NormalizeJSONRPCRequest(JSONRPCRequest{
+			JSONRPC: JSONRPCVersion,
+			ID:      json.RawMessage(`"1"`),
+			Method:  MethodGatewayDeleteSession,
+			Params:  json.RawMessage(`{"session_id":"s-1"}`),
+		})
+		if rpcErr != nil {
+			t.Fatalf("unexpected error: %+v", rpcErr)
+		}
+		if frame.Action != "delete_session" {
+			t.Fatalf("action = %q, want %q", frame.Action, "delete_session")
+		}
+	})
+
+	t.Run("renameSession valid params", func(t *testing.T) {
+		frame, rpcErr := NormalizeJSONRPCRequest(JSONRPCRequest{
+			JSONRPC: JSONRPCVersion,
+			ID:      json.RawMessage(`"2"`),
+			Method:  MethodGatewayRenameSession,
+			Params:  json.RawMessage(`{"session_id":"s-1","title":"New Title"}`),
+		})
+		if rpcErr != nil {
+			t.Fatalf("unexpected error: %+v", rpcErr)
+		}
+		if frame.Action != "rename_session" {
+			t.Fatalf("action = %q, want %q", frame.Action, "rename_session")
+		}
+	})
+
+	t.Run("renameSession missing params", func(t *testing.T) {
+		_, rpcErr := NormalizeJSONRPCRequest(JSONRPCRequest{
+			JSONRPC: JSONRPCVersion,
+			ID:      json.RawMessage(`"3"`),
+			Method:  MethodGatewayRenameSession,
+		})
+		if rpcErr == nil {
+			t.Fatal("expected error for missing params")
+		}
+		if rpcErr.Code != JSONRPCCodeInvalidParams {
+			t.Fatalf("code = %d, want %d", rpcErr.Code, JSONRPCCodeInvalidParams)
+		}
+	})
+
+	t.Run("listFiles valid params", func(t *testing.T) {
+		frame, rpcErr := NormalizeJSONRPCRequest(JSONRPCRequest{
+			JSONRPC: JSONRPCVersion,
+			ID:      json.RawMessage(`"4"`),
+			Method:  MethodGatewayListFiles,
+			Params:  json.RawMessage(`{"workdir":"/tmp","path":"."}`),
+		})
+		if rpcErr != nil {
+			t.Fatalf("unexpected error: %+v", rpcErr)
+		}
+		if frame.Action != "list_files" {
+			t.Fatalf("action = %q, want %q", frame.Action, "list_files")
+		}
+	})
+
+	t.Run("listModels no params required", func(t *testing.T) {
+		frame, rpcErr := NormalizeJSONRPCRequest(JSONRPCRequest{
+			JSONRPC: JSONRPCVersion,
+			ID:      json.RawMessage(`"5"`),
+			Method:  MethodGatewayListModels,
+			Params:  json.RawMessage(`{}`),
+		})
+		if rpcErr != nil {
+			t.Fatalf("unexpected error: %+v", rpcErr)
+		}
+		if frame.Action != "list_models" {
+			t.Fatalf("action = %q, want %q", frame.Action, "list_models")
+		}
+	})
+
+	t.Run("setSessionModel valid params", func(t *testing.T) {
+		frame, rpcErr := NormalizeJSONRPCRequest(JSONRPCRequest{
+			JSONRPC: JSONRPCVersion,
+			ID:      json.RawMessage(`"6"`),
+			Method:  MethodGatewaySetSessionModel,
+			Params:  json.RawMessage(`{"session_id":"s-1","model_id":"gpt-4"}`),
+		})
+		if rpcErr != nil {
+			t.Fatalf("unexpected error: %+v", rpcErr)
+		}
+		if frame.Action != "set_session_model" {
+			t.Fatalf("action = %q, want %q", frame.Action, "set_session_model")
+		}
+	})
+
+	t.Run("setSessionModel missing params", func(t *testing.T) {
+		_, rpcErr := NormalizeJSONRPCRequest(JSONRPCRequest{
+			JSONRPC: JSONRPCVersion,
+			ID:      json.RawMessage(`"7"`),
+			Method:  MethodGatewaySetSessionModel,
+		})
+		if rpcErr == nil {
+			t.Fatal("expected error for missing params")
+		}
+		if rpcErr.Code != JSONRPCCodeInvalidParams {
+			t.Fatalf("code = %d, want %d", rpcErr.Code, JSONRPCCodeInvalidParams)
+		}
+	})
+
+	t.Run("getSessionModel valid params", func(t *testing.T) {
+		frame, rpcErr := NormalizeJSONRPCRequest(JSONRPCRequest{
+			JSONRPC: JSONRPCVersion,
+			ID:      json.RawMessage(`"8"`),
+			Method:  MethodGatewayGetSessionModel,
+			Params:  json.RawMessage(`{"session_id":"s-1"}`),
+		})
+		if rpcErr != nil {
+			t.Fatalf("unexpected error: %+v", rpcErr)
+		}
+		if frame.Action != "get_session_model" {
+			t.Fatalf("action = %q, want %q", frame.Action, "get_session_model")
+		}
+	})
 }

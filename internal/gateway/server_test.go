@@ -423,6 +423,24 @@ func (s *runtimePortEventStub) ListSessions(_ context.Context) ([]SessionSummary
 func (s *runtimePortEventStub) LoadSession(_ context.Context, _ LoadSessionInput) (Session, error) {
 	return Session{}, nil
 }
+func (s *runtimePortEventStub) DeleteSession(_ context.Context, _ DeleteSessionInput) (bool, error) {
+	return false, nil
+}
+func (s *runtimePortEventStub) RenameSession(_ context.Context, _ RenameSessionInput) error {
+	return nil
+}
+func (s *runtimePortEventStub) ListFiles(_ context.Context, _ ListFilesInput) ([]FileEntry, error) {
+	return nil, nil
+}
+func (s *runtimePortEventStub) ListModels(_ context.Context, _ ListModelsInput) ([]ModelEntry, error) {
+	return nil, nil
+}
+func (s *runtimePortEventStub) SetSessionModel(_ context.Context, _ SetSessionModelInput) error {
+	return nil
+}
+func (s *runtimePortEventStub) GetSessionModel(_ context.Context, _ GetSessionModelInput) (SessionModelResult, error) {
+	return SessionModelResult{}, nil
+}
 
 func (s *runtimePortEventStub) CreateSession(_ context.Context, _ CreateSessionInput) (string, error) {
 	return "", nil
