@@ -657,3 +657,78 @@ func TestTodoRuntimeEventsRegistered(t *testing.T) {
 		t.Fatalf("expected todo_conflict handler to be registered")
 	}
 }
+
+func TestRuntimeEventTodoSnapshotUpdatedHandler(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.state.ActiveSessionID = "session-1"
+
+	handled := runtimeEventTodoSnapshotUpdatedHandler(&app, agentruntime.RuntimeEvent{
+		SessionID: "session-1",
+		Payload: map[string]any{
+			"action": "snapshot",
+			"summary": map[string]any{
+				"required_total":     2.0,
+				"required_completed": 1.0,
+				"required_open":      1.0,
+			},
+			"items": []any{
+				map[string]any{
+					"id":       "todo-1",
+					"content":  "sync todo",
+					"status":   "pending",
+					"required": true,
+				},
+			},
+		},
+	})
+	if handled {
+		t.Fatalf("expected todo snapshot handler to return false")
+	}
+	if len(app.todoItems) != 1 || app.todoItems[0].ID != "todo-1" {
+		t.Fatalf("todo items = %+v", app.todoItems)
+	}
+	if app.state.StatusText != "Todo: 1/2 completed" {
+		t.Fatalf("status text = %q", app.state.StatusText)
+	}
+}
+
+func TestParseTodoEventPayloadCoversCoerceHelpers(t *testing.T) {
+	got, ok := parseTodoEventPayload(map[string]any{
+		"Action": "update",
+		"Reason": "sync",
+		"summary": map[string]any{
+			"total":              4.0,
+			"required_total":     2.0,
+			"required_completed": 1.0,
+			"required_failed":    1.0,
+			"required_open":      0.0,
+		},
+		"items": []any{
+			map[string]any{
+				"id":         "todo-1",
+				"content":    "A",
+				"status":     "completed",
+				"required":   "true",
+				"revision":   float64(3),
+				"artifacts":  []any{" a.md ", "", "b.md"},
+				"owner":      "x",
+				"not_parsed": 1,
+			},
+		},
+	})
+	if !ok {
+		t.Fatalf("expected payload to parse")
+	}
+	if got.Action != "update" || got.Reason != "sync" {
+		t.Fatalf("action/reason = %q/%q", got.Action, got.Reason)
+	}
+	if len(got.Items) != 1 || !got.Items[0].Required || got.Items[0].Revision != 3 {
+		t.Fatalf("items = %+v", got.Items)
+	}
+	if len(got.Items[0].Artifacts) != 2 || got.Items[0].Artifacts[0] != "a.md" {
+		t.Fatalf("artifacts = %#v", got.Items[0].Artifacts)
+	}
+	if got.Summary.RequiredFailed != 1 || got.Summary.Total != 4 {
+		t.Fatalf("summary = %+v", got.Summary)
+	}
+}

@@ -192,3 +192,79 @@ func TestCollectorApplyWriteFileVerificationFacts(t *testing.T) {
 		t.Fatalf("verification passed facts = %+v", snapshot.Verification.Passed)
 	}
 }
+
+func TestCollectorApplyGlobAndStringMetadataFacts(t *testing.T) {
+	collector := NewCollector()
+	collector.ApplyToolResult(tools.ToolNameFilesystemGlob, tools.ToolResult{
+		Name:    tools.ToolNameFilesystemGlob,
+		IsError: false,
+		Content: " a.txt \n\nb.txt\na.txt",
+	})
+	collector.ApplyToolResult(tools.ToolNameFilesystemWriteFile, tools.ToolResult{
+		Name:    tools.ToolNameFilesystemWriteFile,
+		IsError: false,
+		Metadata: map[string]any{
+			"path":  "s.txt",
+			"bytes": "7",
+		},
+	})
+	collector.ApplyToolResult(tools.ToolNameSpawnSubAgent, tools.ToolResult{
+		Name:    tools.ToolNameSpawnSubAgent,
+		IsError: false,
+		Content: "Summary: done",
+		Metadata: map[string]any{
+			"task_id":   "sa-1",
+			"role":      "reviewer",
+			"state":     "succeeded",
+			"artifacts": []any{" x.md ", "x.md", " y.md "},
+		},
+	})
+	snapshot := collector.Snapshot()
+	if len(snapshot.Files.Exists) < 2 {
+		t.Fatalf("glob exists facts = %+v", snapshot.Files.Exists)
+	}
+	if snapshot.Files.Written[0].Bytes != 7 {
+		t.Fatalf("bytes = %d, want 7", snapshot.Files.Written[0].Bytes)
+	}
+	if len(snapshot.SubAgents.Completed) == 0 || len(snapshot.SubAgents.Completed[0].Artifacts) != 2 {
+		t.Fatalf("subagent artifacts = %+v", snapshot.SubAgents.Completed)
+	}
+}
+
+func TestCollectorTodoStateFallbackAndErrorDedup(t *testing.T) {
+	collector := NewCollector()
+	collector.ApplyToolResult(tools.ToolNameTodoWrite, tools.ToolResult{
+		Name:    tools.ToolNameTodoWrite,
+		IsError: false,
+		Metadata: map[string]any{
+			"state_fact": "todo_updated",
+			"id":         "todo-single",
+		},
+	})
+	longErr := ""
+	for i := 0; i < 300; i++ {
+		longErr += "x"
+	}
+	collector.ApplyToolResult(tools.ToolNameBash, tools.ToolResult{
+		Name:       tools.ToolNameBash,
+		IsError:    true,
+		ErrorClass: "timeout",
+		Content:    longErr,
+	})
+	collector.ApplyToolResult(tools.ToolNameBash, tools.ToolResult{
+		Name:       tools.ToolNameBash,
+		IsError:    true,
+		ErrorClass: "timeout",
+		Content:    "duplicate should dedupe by class",
+	})
+	snapshot := collector.Snapshot()
+	if len(snapshot.Todos.UpdatedIDs) != 1 || snapshot.Todos.UpdatedIDs[0] != "todo-single" {
+		t.Fatalf("todo updated ids = %+v", snapshot.Todos.UpdatedIDs)
+	}
+	if len(snapshot.Errors.ToolErrors) != 1 {
+		t.Fatalf("tool errors = %+v", snapshot.Errors.ToolErrors)
+	}
+	if len(snapshot.Errors.ToolErrors[0].Content) != 256 {
+		t.Fatalf("error content length = %d, want 256", len(snapshot.Errors.ToolErrors[0].Content))
+	}
+}

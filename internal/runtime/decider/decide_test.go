@@ -296,3 +296,100 @@ func TestDecideTodoStateAcceptsWithoutFileVerification(t *testing.T) {
 		t.Fatalf("status = %q, want %q", decision.Status, DecisionAccepted)
 	}
 }
+
+func TestDecideReadOnlyBranches(t *testing.T) {
+	decision := Decide(DecisionInput{
+		TaskKind:         TaskKindReadOnly,
+		CompletionPassed: true,
+	})
+	if decision.Status != DecisionContinue {
+		t.Fatalf("status = %q, want %q", decision.Status, DecisionContinue)
+	}
+
+	decision = Decide(DecisionInput{
+		TaskKind:          TaskKindReadOnly,
+		CompletionPassed:  true,
+		LastAssistantText: "analysis done",
+	})
+	if decision.Status != DecisionAccepted {
+		t.Fatalf("status = %q, want %q", decision.Status, DecisionAccepted)
+	}
+
+	decision = Decide(DecisionInput{
+		TaskKind:         TaskKindReadOnly,
+		CompletionPassed: true,
+		Facts: runtimefacts.RuntimeFacts{
+			Commands: runtimefacts.CommandFacts{
+				Executed: []runtimefacts.CommandFact{{Tool: "bash", Command: "ls", ExitCode: 0, Succeeded: true}},
+			},
+		},
+	})
+	if decision.Status != DecisionAccepted {
+		t.Fatalf("status = %q, want %q", decision.Status, DecisionAccepted)
+	}
+}
+
+func TestDecideMixedBranches(t *testing.T) {
+	decision := Decide(DecisionInput{
+		TaskKind:         TaskKindMixed,
+		CompletionPassed: true,
+	})
+	if decision.Status != DecisionContinue {
+		t.Fatalf("status = %q, want %q", decision.Status, DecisionContinue)
+	}
+
+	decision = Decide(DecisionInput{
+		TaskKind:         TaskKindMixed,
+		CompletionPassed: true,
+		Todos: TodoSnapshot{
+			Summary: TodoSummary{RequiredOpen: 1},
+		},
+		Facts: runtimefacts.RuntimeFacts{
+			Verification: runtimefacts.VerificationFacts{
+				Passed: []runtimefacts.VerificationFact{{Tool: "filesystem_glob", Scope: "artifact:test.txt", Passed: true}},
+			},
+		},
+	})
+	if decision.Status != DecisionContinue {
+		t.Fatalf("status = %q, want %q", decision.Status, DecisionContinue)
+	}
+
+	decision = Decide(DecisionInput{
+		TaskKind:         TaskKindMixed,
+		CompletionPassed: true,
+		Facts: runtimefacts.RuntimeFacts{
+			Verification: runtimefacts.VerificationFacts{
+				Passed: []runtimefacts.VerificationFact{{Tool: "filesystem_glob", Scope: "artifact:test.txt", Passed: true}},
+			},
+		},
+	})
+	if decision.Status != DecisionAccepted {
+		t.Fatalf("status = %q, want %q", decision.Status, DecisionAccepted)
+	}
+}
+
+func TestDecideWorkspaceWriteInjectsLatestToolErrorIntoMissingFact(t *testing.T) {
+	decision := Decide(DecisionInput{
+		TaskKind:         TaskKindWorkspaceWrite,
+		CompletionPassed: true,
+		UserGoal:         "please update README.md",
+		Facts: runtimefacts.RuntimeFacts{
+			Errors: runtimefacts.ErrorFacts{
+				ToolErrors: []runtimefacts.ToolErrorFact{
+					{Tool: "filesystem_write_file", ErrorClass: "permission_denied", Content: "first error"},
+					{Tool: "filesystem_write_file", ErrorClass: "generic_error", Content: ""},
+				},
+			},
+		},
+	})
+	if decision.Status != DecisionContinue {
+		t.Fatalf("status = %q, want %q", decision.Status, DecisionContinue)
+	}
+	if len(decision.MissingFacts) == 0 {
+		t.Fatalf("missing facts = %+v", decision.MissingFacts)
+	}
+	details := decision.MissingFacts[0].Details
+	if details["last_write_error"] != "generic_error" {
+		t.Fatalf("last_write_error = %#v, want generic_error", details["last_write_error"])
+	}
+}
