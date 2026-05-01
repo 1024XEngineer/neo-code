@@ -1,6 +1,8 @@
 package decider
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 
 	runtimefacts "neo-code/internal/runtime/facts"
@@ -19,6 +21,25 @@ func TestDecideRequiredTodoFailedStopsImmediately(t *testing.T) {
 	}
 	if decision.StopReason != "required_todo_failed" {
 		t.Fatalf("stop_reason = %q, want required_todo_failed", decision.StopReason)
+	}
+}
+
+func TestDecideUsesEffectiveTaskKindFromFacts(t *testing.T) {
+	decision := Decide(DecisionInput{
+		TaskKind:         TaskKindChatAnswer,
+		CompletionPassed: true,
+		UserGoal:         "你好",
+		Facts: runtimefacts.RuntimeFacts{
+			Files: runtimefacts.FileFacts{
+				Written: []runtimefacts.FileWriteFact{{Path: "test.txt", WorkspaceWrite: true}},
+			},
+		},
+	})
+	if decision.EffectiveTaskKind != TaskKindWorkspaceWrite {
+		t.Fatalf("effective kind = %q, want %q", decision.EffectiveTaskKind, TaskKindWorkspaceWrite)
+	}
+	if decision.Status != DecisionContinue {
+		t.Fatalf("status = %q, want %q", decision.Status, DecisionContinue)
 	}
 }
 
@@ -198,6 +219,86 @@ func TestDecideWorkspaceWriteWithoutExplicitTargetFallsBackToAccepted(t *testing
 	}
 }
 
+func TestDecideWorkspaceWriteMissingFactsShouldRequestInputNotPlaceholderAction(t *testing.T) {
+	decision := Decide(DecisionInput{
+		TaskKind:         TaskKindWorkspaceWrite,
+		CompletionPassed: true,
+		UserGoal:         "请帮我修一下",
+	})
+	if decision.Status != DecisionAccepted {
+		t.Fatalf("status = %q, want %q", decision.Status, DecisionAccepted)
+	}
+
+	decision = Decide(DecisionInput{
+		TaskKind:         TaskKindWorkspaceWrite,
+		CompletionPassed: false,
+		CompletionReason: "unverified_write",
+		UserGoal:         "请帮我修一下",
+	})
+	if decision.Status != DecisionContinue {
+		t.Fatalf("status = %q, want %q", decision.Status, DecisionContinue)
+	}
+	if decision.RequiredInput == nil {
+		t.Fatalf("required_input is nil")
+	}
+	if len(decision.RequiredNextActions) != 0 {
+		t.Fatalf("required actions = %+v, want empty", decision.RequiredNextActions)
+	}
+}
+
+func TestDecideWorkspaceWriteSelectsLatestMentionedTarget(t *testing.T) {
+	decision := Decide(DecisionInput{
+		TaskKind:         TaskKindWorkspaceWrite,
+		CompletionPassed: true,
+		UserGoal:         "创建 2.txt 内容为 2",
+		Facts: runtimefacts.RuntimeFacts{
+			Files: runtimefacts.FileFacts{
+				Written: []runtimefacts.FileWriteFact{
+					{Path: "1.txt", WorkspaceWrite: true, ExpectedContent: "1"},
+					{Path: "2.txt", WorkspaceWrite: true, ExpectedContent: "2"},
+				},
+			},
+		},
+	})
+	if decision.Status != DecisionContinue {
+		t.Fatalf("status = %q, want %q", decision.Status, DecisionContinue)
+	}
+	if len(decision.MissingFacts) == 0 || decision.MissingFacts[0].Target != "2.txt" {
+		t.Fatalf("missing facts = %+v, want target 2.txt", decision.MissingFacts)
+	}
+}
+
+func TestDecideRequiredNextActionsShouldNotContainPlaceholders(t *testing.T) {
+	decisions := []Decision{
+		Decide(DecisionInput{
+			TaskKind:         TaskKindSubAgent,
+			CompletionPassed: true,
+			UserGoal:         "用 subagent 创建 test1.txt 内容为 1",
+		}),
+		Decide(DecisionInput{
+			TaskKind:         TaskKindWorkspaceWrite,
+			CompletionPassed: false,
+			CompletionReason: "unverified_write",
+			UserGoal:         "请继续",
+		}),
+		Decide(DecisionInput{
+			TaskKind:         TaskKindTodoState,
+			CompletionPassed: true,
+			UserGoal:         "创建 todo",
+		}),
+	}
+	for i, decision := range decisions {
+		payload, err := json.Marshal(decision.RequiredNextActions)
+		if err != nil {
+			t.Fatalf("marshal required_next_actions[%d] failed: %v", i, err)
+		}
+		serialized := string(payload)
+		if strings.Contains(serialized, "<") || strings.Contains(serialized, ">") {
+			t.Fatalf("required_next_actions[%d] contains placeholder: %s", i, serialized)
+		}
+	}
+}
+
 func TestDecideSubAgentRequiresCompletedFact(t *testing.T) {
 	continueDecision := Decide(DecisionInput{
 		TaskKind:         TaskKindSubAgent,
@@ -355,8 +456,9 @@ func TestDecideMixedBranches(t *testing.T) {
 	}
 
 	decision = Decide(DecisionInput{
-		TaskKind:         TaskKindMixed,
-		CompletionPassed: true,
+		TaskKind:          TaskKindMixed,
+		CompletionPassed:  true,
+		LastAssistantText: "analysis done",
 		Facts: runtimefacts.RuntimeFacts{
 			Verification: runtimefacts.VerificationFacts{
 				Passed: []runtimefacts.VerificationFact{{Tool: "filesystem_glob", Scope: "artifact:test.txt", Passed: true}},

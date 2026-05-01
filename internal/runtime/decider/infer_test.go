@@ -1,6 +1,10 @@
 package decider
 
-import "testing"
+import (
+	"testing"
+
+	runtimefacts "neo-code/internal/runtime/facts"
+)
 
 func TestInferTaskKind(t *testing.T) {
 	t.Parallel()
@@ -40,6 +44,36 @@ func TestInferTaskKind(t *testing.T) {
 			goal: "什么是 NeoCode",
 			want: TaskKindChatAnswer,
 		},
+		{
+			name: "greeting chat answer",
+			goal: "你好",
+			want: TaskKindChatAnswer,
+		},
+		{
+			name: "bug fix discussion should not be workspace write",
+			goal: "帮我看看这个 bug 怎么修",
+			want: TaskKindReadOnly,
+		},
+		{
+			name: "review implementation should be read only",
+			goal: "review this implementation and suggest fixes",
+			want: TaskKindReadOnly,
+		},
+		{
+			name: "update readme should be workspace write",
+			goal: "把 README 补一下",
+			want: TaskKindWorkspaceWrite,
+		},
+		{
+			name: "todo creation should be todo state",
+			goal: "创建一个 Todo，内容是 1",
+			want: TaskKindTodoState,
+		},
+		{
+			name: "todo content contains write target should still be todo state hint",
+			goal: "创建一个 Todo，内容是创建 test.txt 内容为 1",
+			want: TaskKindTodoState,
+		},
 	}
 
 	for _, tt := range tests {
@@ -51,5 +85,25 @@ func TestInferTaskKind(t *testing.T) {
 				t.Fatalf("InferTaskKind(%q) = %q, want %q", tt.goal, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestDeriveEffectiveTaskKindFactsOverrideHint(t *testing.T) {
+	t.Parallel()
+
+	if got := DeriveEffectiveTaskKind(TaskKindChatAnswer, runtimefacts.RuntimeFacts{
+		Files: runtimefacts.FileFacts{
+			Written: []runtimefacts.FileWriteFact{{Path: "a.txt", WorkspaceWrite: true}},
+		},
+	}, TodoSnapshot{}); got != TaskKindWorkspaceWrite {
+		t.Fatalf("effective kind = %q, want %q", got, TaskKindWorkspaceWrite)
+	}
+
+	if got := DeriveEffectiveTaskKind(TaskKindWorkspaceWrite, runtimefacts.RuntimeFacts{
+		Commands: runtimefacts.CommandFacts{
+			Executed: []runtimefacts.CommandFact{{Tool: "bash", Command: "ls", Succeeded: true}},
+		},
+	}, TodoSnapshot{}); got != TaskKindReadOnly {
+		t.Fatalf("effective kind = %q, want %q", got, TaskKindReadOnly)
 	}
 }

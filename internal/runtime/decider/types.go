@@ -50,12 +50,29 @@ type RequiredAction struct {
 	ArgsHint map[string]any `json:"args_hint,omitempty"`
 }
 
+// RequiredInput 描述继续执行前必须补充的人类输入。
+type RequiredInput struct {
+	Kind    string         `json:"kind"`
+	Message string         `json:"message"`
+	Details map[string]any `json:"details,omitempty"`
+}
+
+// TaskIntent 描述由用户文本推断出的弱意图线索。
+type TaskIntent struct {
+	Hint       TaskKind `json:"hint,omitempty"`
+	Confidence float64  `json:"confidence,omitempty"`
+	Reasons    []string `json:"reasons,omitempty"`
+}
+
 // Decision 描述最终裁决结果。
 type Decision struct {
 	Status              DecisionStatus   `json:"status"`
 	StopReason          string           `json:"stop_reason,omitempty"`
 	MissingFacts        []MissingFact    `json:"missing_facts,omitempty"`
 	RequiredNextActions []RequiredAction `json:"required_next_actions,omitempty"`
+	RequiredInput       *RequiredInput   `json:"required_input,omitempty"`
+	IntentHint          TaskKind         `json:"intent_hint,omitempty"`
+	EffectiveTaskKind   TaskKind         `json:"effective_task_kind,omitempty"`
 	UserVisibleSummary  string           `json:"user_visible_summary,omitempty"`
 	InternalSummary     string           `json:"internal_summary,omitempty"`
 }

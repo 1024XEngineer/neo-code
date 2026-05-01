@@ -34,6 +34,9 @@ type DecisionSnapshot struct {
 	StopReason          string                   `json:"stop_reason,omitempty"`
 	MissingFacts        []decider.MissingFact    `json:"missing_facts,omitempty"`
 	RequiredNextActions []decider.RequiredAction `json:"required_next_actions,omitempty"`
+	RequiredInput       *decider.RequiredInput   `json:"required_input,omitempty"`
+	IntentHint          string                   `json:"intent_hint,omitempty"`
+	EffectiveTaskKind   string                   `json:"effective_task_kind,omitempty"`
 	UserVisibleSummary  string                   `json:"user_visible_summary,omitempty"`
 	InternalSummary     string                   `json:"internal_summary,omitempty"`
 }
@@ -84,6 +87,9 @@ func buildRuntimeSnapshot(state *runState) RuntimeSnapshot {
 		StopReason:          strings.TrimSpace(state.lastDeciderDecision.StopReason),
 		MissingFacts:        append([]decider.MissingFact(nil), state.lastDeciderDecision.MissingFacts...),
 		RequiredNextActions: append([]decider.RequiredAction(nil), state.lastDeciderDecision.RequiredNextActions...),
+		RequiredInput:       state.lastDeciderDecision.RequiredInput,
+		IntentHint:          strings.TrimSpace(string(state.lastDeciderDecision.IntentHint)),
+		EffectiveTaskKind:   strings.TrimSpace(string(state.lastDeciderDecision.EffectiveTaskKind)),
 		UserVisibleSummary:  strings.TrimSpace(state.lastDeciderDecision.UserVisibleSummary),
 		InternalSummary:     strings.TrimSpace(state.lastDeciderDecision.InternalSummary),
 	}
