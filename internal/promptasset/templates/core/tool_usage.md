@@ -41,6 +41,8 @@
 
 ## Verification phase
 - After a successful write or edit, inspect the affected file or run the narrowest meaningful verification call.
+- For file creation/update tasks, finish in this order within the same completion attempt: `filesystem_write_file`/`filesystem_edit` -> `filesystem_read_file(expect_contains)` or `filesystem_glob(expect_min_matches)` -> final response.
+- After verification passes for a target file, do not call `filesystem_write_file` on the same path again unless you are intentionally changing content.
 - For code changes, prefer tests, build, typecheck, lint, or focused command checks based on risk.
 - Prefer structured verification facts from filesystem tools:
   - existence: `filesystem_glob(expect_min_matches, verification_scope)`
