@@ -39,6 +39,9 @@ func TestSQLiteStoreMethodsRespectCanceledContext(t *testing.T) {
 	if err := store.UpdateSessionState(ctx, UpdateSessionStateInput{SessionID: "cancel_ctx", Title: "x"}); err == nil {
 		t.Fatalf("expected UpdateSessionState canceled error")
 	}
+	if err := store.UpdateSessionTitle(ctx, UpdateSessionTitleInput{SessionID: "cancel_ctx", Title: "x"}); err == nil {
+		t.Fatalf("expected UpdateSessionTitle canceled error")
+	}
 	if err := store.ReplaceTranscript(ctx, ReplaceTranscriptInput{SessionID: "cancel_ctx"}); err == nil {
 		t.Fatalf("expected ReplaceTranscript canceled error")
 	}
@@ -62,8 +65,40 @@ func TestSQLiteStoreMethodsRejectInvalidSessionID(t *testing.T) {
 	if err := store.UpdateSessionState(ctx, UpdateSessionStateInput{SessionID: "bad/id", Title: "x"}); err == nil {
 		t.Fatalf("expected UpdateSessionState invalid id error")
 	}
+	if err := store.UpdateSessionTitle(ctx, UpdateSessionTitleInput{SessionID: "bad/id", Title: "x"}); err == nil {
+		t.Fatalf("expected UpdateSessionTitle invalid id error")
+	}
 	if err := store.ReplaceTranscript(ctx, ReplaceTranscriptInput{SessionID: "bad/id"}); err == nil {
 		t.Fatalf("expected ReplaceTranscript invalid id error")
+	}
+}
+
+func TestSQLiteStoreUpdateSessionTitlePersistsSanitizedTitle(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	created, err := store.CreateSession(context.Background(), CreateSessionInput{
+		ID:    "title_update_case",
+		Title: "New Session",
+	})
+	if err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+	updatedAt := created.UpdatedAt.Add(time.Minute)
+	if err := store.UpdateSessionTitle(context.Background(), UpdateSessionTitleInput{
+		SessionID: created.ID,
+		UpdatedAt: updatedAt,
+		Title:     " line1 \n\t line2 ",
+	}); err != nil {
+		t.Fatalf("UpdateSessionTitle() error = %v", err)
+	}
+
+	loaded, err := store.LoadSession(context.Background(), created.ID)
+	if err != nil {
+		t.Fatalf("LoadSession() error = %v", err)
+	}
+	if loaded.Title != "line1 line2" {
+		t.Fatalf("expected sanitized single-line title, got %q", loaded.Title)
 	}
 }
 

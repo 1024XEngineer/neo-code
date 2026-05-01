@@ -571,6 +571,31 @@ func TestInputPreparerPrepareKeepsExistingNonDefaultTitle(t *testing.T) {
 	}
 }
 
+func TestInputPreparerShouldPromoteSessionTitle(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		current string
+		next    string
+		want    bool
+	}{
+		{name: "promote default", current: "New Session", next: "real title", want: true},
+		{name: "reject empty", current: "New Session", next: "   ", want: false},
+		{name: "reject default next", current: "New Session", next: "new session", want: false},
+		{name: "reject non-default current", current: "Named", next: "other", want: false},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := shouldPromoteSessionTitle(tc.current, tc.next); got != tc.want {
+				t.Fatalf("shouldPromoteSessionTitle(%q,%q)=%v, want %v", tc.current, tc.next, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestInputPreparerPrepareWorkdirUpdatePreservesConcurrentSessionHeadChanges(t *testing.T) {
 	t.Parallel()
 
