@@ -195,6 +195,9 @@ func TestRuntimeEventHandlerRegistryContainsRenamedEvents(t *testing.T) {
 	if _, ok := runtimeEventHandlerRegistry[agentruntime.EventHookBlocked]; !ok {
 		t.Fatalf("expected hook_blocked handler to be registered")
 	}
+	if _, ok := runtimeEventHandlerRegistry[agentruntime.EventHookNotification]; !ok {
+		t.Fatalf("expected hook_notification handler to be registered")
+	}
 	if _, ok := runtimeEventHandlerRegistry[agentruntime.EventRepoHooksDiscovered]; !ok {
 		t.Fatalf("expected repo_hooks_discovered handler to be registered")
 	}
@@ -312,6 +315,9 @@ func TestRuntimeEventHookHandlers(t *testing.T) {
 	if runtimeEventHookBlockedHandler(&app, agentruntime.RuntimeEvent{Payload: 1.23}) {
 		t.Fatalf("expected invalid hook_blocked payload to return false")
 	}
+	if runtimeEventHookNotificationHandler(&app, agentruntime.RuntimeEvent{Payload: struct{}{}}) {
+		t.Fatalf("expected invalid hook_notification payload to return false")
+	}
 
 	runtimeEventHookStartedHandler(&app, agentruntime.RuntimeEvent{
 		Payload: agentruntime.HookEventPayload{HookID: "  ", Point: " "},
@@ -376,6 +382,20 @@ func TestRuntimeEventHookHandlers(t *testing.T) {
 	last = app.activities[len(app.activities)-1]
 	if last.Title != "Hook block observed: unknown_hook @ unknown_point" || last.Detail != "hook returned block" || last.IsError {
 		t.Fatalf("unexpected hook blocked default activity: %+v", last)
+	}
+
+	runtimeEventHookNotificationHandler(&app, agentruntime.RuntimeEvent{
+		Payload: agentruntime.HookNotificationPayload{
+			HookID:  "h-notify",
+			Source:  "internal",
+			Point:   "before_tool_call",
+			Status:  "failed",
+			Summary: "need retry",
+		},
+	})
+	last = app.activities[len(app.activities)-1]
+	if last.Title != "Hook notification: internal:h-notify @ before_tool_call" || !strings.Contains(last.Detail, "failed · need retry") {
+		t.Fatalf("unexpected hook notification activity: %+v", last)
 	}
 }
 
