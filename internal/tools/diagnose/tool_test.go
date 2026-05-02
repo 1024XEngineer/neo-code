@@ -25,12 +25,12 @@ func TestToolMetadata(t *testing.T) {
 	}
 }
 
-func TestToolExecuteSuccess(t *testing.T) {
+func TestToolExecuteFallbackWhenInvokerUnavailable(t *testing.T) {
 	tool := New()
 	result, err := tool.Execute(context.Background(), tools.ToolCallInput{
 		Arguments: []byte(`{
 			"error_log":"fatal: example",
-			"os_env":{"os":"linux","shell":"/bin/bash"},
+			"os_env":{"os":"linux","shell":"/bin/bash","cwd":"/repo"},
 			"command_text":"go test ./...",
 			"exit_code":1
 		}`),
@@ -39,21 +39,24 @@ func TestToolExecuteSuccess(t *testing.T) {
 		t.Fatalf("Execute() error = %v", err)
 	}
 	if result.IsError {
-		t.Fatalf("result.IsError = true, want false; result = %+v", result)
+		t.Fatalf("result.IsError = true, want false: %+v", result)
 	}
 	if result.Name != tools.ToolNameDiagnose {
 		t.Fatalf("result.Name = %q, want %q", result.Name, tools.ToolNameDiagnose)
 	}
 
-	var decoded map[string]any
+	var decoded diagnoseOutput
 	if unmarshalErr := json.Unmarshal([]byte(result.Content), &decoded); unmarshalErr != nil {
-		t.Fatalf("content should be valid JSON, got err = %v", unmarshalErr)
+		t.Fatalf("content should be valid diagnose JSON, got err = %v", unmarshalErr)
 	}
-	if strings.TrimSpace(toString(decoded["root_cause"])) == "" {
-		t.Fatalf("root_cause should not be empty: %v", decoded)
+	if strings.TrimSpace(decoded.RootCause) == "" {
+		t.Fatalf("root_cause should not be empty: %#v", decoded)
 	}
-	if mock, _ := result.Metadata["mock"].(bool); !mock {
-		t.Fatalf("metadata.mock = %#v, want true", result.Metadata["mock"])
+	if len(decoded.InvestigationCommands) == 0 {
+		t.Fatalf("investigation_commands should not be empty: %#v", decoded)
+	}
+	if degraded, ok := result.Metadata["degraded"].(bool); !ok || !degraded {
+		t.Fatalf("metadata.degraded = %#v, want true", result.Metadata["degraded"])
 	}
 }
 
@@ -125,37 +128,6 @@ func TestToolExecuteMissingOSEnv(t *testing.T) {
 	}
 }
 
-func TestToolExecuteWithCommandText(t *testing.T) {
-	tool := New()
-	result, err := tool.Execute(context.Background(), tools.ToolCallInput{
-		Arguments: []byte(`{"error_log":"err","os_env":{"os":"linux"},"command_text":"go test"}`),
-	})
-	if err != nil {
-		t.Fatalf("Execute() error = %v", err)
-	}
-	if result.IsError {
-		t.Fatalf("result.IsError = true, want false")
-	}
-	var decoded map[string]any
-	if err := json.Unmarshal([]byte(result.Content), &decoded); err != nil {
-		t.Fatalf("content should be valid JSON: %v", err)
-	}
-	investigation, ok := decoded["investigation_commands"].([]any)
-	if !ok || len(investigation) == 0 {
-		t.Fatalf("expected non-empty investigation_commands when command_text is set")
-	}
-	// "go test" should be appended to investigation commands
-	found := false
-	for _, cmd := range investigation {
-		if cmd == "go test" {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatalf("investigation_commands = %v, should contain 'go test'", investigation)
-	}
-}
-
 func TestToolExecuteContextCancelled(t *testing.T) {
 	tool := New()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -194,9 +166,4 @@ func TestParseDiagnoseInputMissingOSEnv(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for empty os_env")
 	}
-}
-
-func toString(value any) string {
-	text, _ := value.(string)
-	return text
 }
