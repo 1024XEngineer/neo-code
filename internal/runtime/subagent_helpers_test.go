@@ -120,6 +120,8 @@ func TestBuildSubAgentInitialMessagesAndOutputParserEdges(t *testing.T) {
 			ToolUseMode:         subagent.ToolUseModeAuto,
 			MaxToolCallsPerStep: 2,
 		},
+		subagent.TaskTypeEdit,
+		subagent.RequiredSectionsForTaskType(subagent.TaskTypeEdit),
 		[]string{"filesystem_read_file"},
 		[]string{"/tmp/workdir"},
 	)
@@ -142,6 +144,8 @@ func TestBuildSubAgentInitialMessagesAndOutputParserEdges(t *testing.T) {
 			ToolUseMode:         subagent.ToolUseModeAuto,
 			MaxToolCallsPerStep: 1,
 		},
+		subagent.TaskTypeEdit,
+		subagent.RequiredSectionsForTaskType(subagent.TaskTypeEdit),
 		nil,
 		nil,
 	)
@@ -152,13 +156,14 @@ func TestBuildSubAgentInitialMessagesAndOutputParserEdges(t *testing.T) {
 		t.Fatalf("expected explicit empty allowed_paths marker, got %q", emptyPrompt)
 	}
 
-	if _, err := extractSubAgentJSONObject("{\"summary\":"); err == nil {
+	editSections := subagent.RequiredSectionsForTaskType(subagent.TaskTypeEdit)
+	if _, err := extractSubAgentJSONObject("{\"summary\":", editSections); err == nil {
 		t.Fatalf("expected incomplete json error")
 	}
-	if _, err := extractSubAgentJSONObject("no json"); err == nil {
+	if _, err := extractSubAgentJSONObject("no json", editSections); err == nil {
 		t.Fatalf("expected missing json error")
 	}
-	if _, err := extractSubAgentJSONObject(`{"example":true}`); err == nil {
+	if _, err := extractSubAgentJSONObject(`{"example":true}`, editSections); err == nil {
 		t.Fatalf("expected required contract keys error")
 	}
 }

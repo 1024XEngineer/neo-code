@@ -619,3 +619,43 @@ type DeleteMCPServerParams struct {
 - Observation:
   - 统计进入 `gateway_requests_total{method="wake.openUrl",...}`
   - 与 daemon dispatcher 自动拉起链路联动
+
+---
+
+## Method: session.todos.list
+
+- Stability: Beta
+- Auth Required: Yes
+- Request Schema:
+
+```go
+type ListSessionTodosParams struct {
+	SessionID string `json:"session_id"` // MUST
+}
+```
+
+- Response Schema:
+  - Success: `ack` + `payload.todos`（todo 列表）和 `payload.summary`（聚合统计）
+  - Failure: 标准 `error`
+- Observation:
+  - `gateway_requests_total{method="session.todos.list",...}`
+
+---
+
+## Method: runtime.snapshot.get
+
+- Stability: Beta
+- Auth Required: Yes
+- Request Schema:
+
+```go
+type GetRuntimeSnapshotParams struct {
+	SessionID string `json:"session_id"` // MUST
+}
+```
+
+- Response Schema:
+  - Success: `ack` + `payload.snapshot`（runtime facts、decision、todo snapshot）
+  - Failure: 标准 `error`
+- Observation:
+  - `gateway_requests_total{method="runtime.snapshot.get",...}`

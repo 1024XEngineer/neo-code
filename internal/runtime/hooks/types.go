@@ -47,7 +47,7 @@ type HookPointCapability struct {
 var hookPointCapabilities = map[HookPoint]HookPointCapability{
 	HookPointBeforeToolCall:           {CanBlock: true, CanAnnotate: true, CanUpdateInput: false, UserAllowed: true},
 	HookPointAfterToolResult:          {CanBlock: false, CanAnnotate: true, CanUpdateInput: false, UserAllowed: true},
-	HookPointBeforeCompletionDecision: {CanBlock: true, CanAnnotate: true, CanUpdateInput: false, UserAllowed: true},
+	HookPointBeforeCompletionDecision: {CanBlock: false, CanAnnotate: true, CanUpdateInput: false, UserAllowed: true},
 	HookPointBeforePermissionDecision: {CanBlock: true, CanAnnotate: true, CanUpdateInput: false, UserAllowed: false},
 	HookPointAfterToolFailure:         {CanBlock: false, CanAnnotate: true, CanUpdateInput: false, UserAllowed: true},
 	HookPointSessionStart:             {CanBlock: false, CanAnnotate: true, CanUpdateInput: false, UserAllowed: true},

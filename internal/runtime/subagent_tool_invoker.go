@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"neo-code/internal/security"
@@ -46,6 +47,10 @@ func (i runtimeSubAgentInvoker) Run(ctx context.Context, input tools.SubAgentRun
 	if !role.Valid() {
 		role = subagent.RoleCoder
 	}
+	taskType := input.TaskType
+	if strings.TrimSpace(string(taskType)) == "" {
+		taskType = subagent.TaskTypeReview
+	}
 
 	taskID := strings.TrimSpace(input.TaskID)
 	if taskID == "" {
@@ -72,6 +77,7 @@ func (i runtimeSubAgentInvoker) Run(ctx context.Context, input tools.SubAgentRun
 		input.ParentCapabilityToken,
 		input.AllowedTools,
 		input.AllowedPaths,
+		workdir,
 	)
 	if err != nil {
 		return tools.SubAgentRunResult{}, err
@@ -84,6 +90,7 @@ func (i runtimeSubAgentInvoker) Run(ctx context.Context, input tools.SubAgentRun
 		Role:      role,
 		Task: subagent.Task{
 			ID:             taskID,
+			TaskType:       taskType,
 			Goal:           strings.TrimSpace(input.Goal),
 			ExpectedOutput: strings.TrimSpace(input.ExpectedOut),
 			Workspace:      workdir,
@@ -111,9 +118,10 @@ func resolveInlineSubAgentCapability(
 	parent *security.CapabilityToken,
 	requestedTools []string,
 	requestedPaths []string,
+	workdir string,
 ) (subagent.Capability, error) {
 	requestedTools = normalizeAllowlistToList(requestedTools)
-	requestedPaths = normalizePathAllowlist(requestedPaths)
+	requestedPaths = normalizeRequestedPathsWithWorkdir(requestedPaths, workdir)
 	if parent == nil {
 		return subagent.Capability{
 			AllowedTools: requestedTools,
@@ -137,6 +145,41 @@ func resolveInlineSubAgentCapability(
 		AllowedPaths:    pathsAllowed,
 		CapabilityToken: &parentToken,
 	}, nil
+}
+
+// normalizeRequestedPathsWithWorkdir 在运行时 workdir 上下文中规整路径，避免相对路径与父 capability 的绝对路径比较失配。
+func normalizeRequestedPathsWithWorkdir(paths []string, workdir string) []string {
+	base := strings.TrimSpace(workdir)
+	normalized := make([]string, 0, len(paths))
+	for _, item := range paths {
+		path := strings.TrimSpace(item)
+		if path == "" {
+			continue
+		}
+		if !isAbsolutePathLike(path) && base != "" {
+			path = filepath.Join(base, path)
+		}
+		path = filepath.Clean(path)
+		if filepath.IsAbs(path) {
+			if absolute, err := filepath.Abs(path); err == nil {
+				path = absolute
+			}
+		}
+		normalized = append(normalized, path)
+	}
+	return normalizePathAllowlist(normalized)
+}
+
+// isAbsolutePathLike 判断路径是否已经具备绝对语义（含类 Unix 根路径），避免误把 /x 当相对路径拼接到 workdir。
+func isAbsolutePathLike(path string) bool {
+	trimmed := strings.TrimSpace(path)
+	if trimmed == "" {
+		return false
+	}
+	if filepath.IsAbs(trimmed) {
+		return true
+	}
+	return strings.HasPrefix(trimmed, "/") || strings.HasPrefix(trimmed, `\`)
 }
 
 // intersectAllowedTools 在父能力范围内收敛 requested 工具；未显式请求时默认继承父能力。
@@ -190,27 +233,34 @@ func intersectAllowedPaths(parent []string, requested []string) ([]string, error
 
 // pathCoveredByAllowlist 判断路径是否落在 allowlist 任一根路径范围内。
 func pathCoveredByAllowlist(target string, allowlist []string) bool {
-	targetClean := filepath.Clean(strings.TrimSpace(target))
-	if targetClean == "" || targetClean == "." {
+	targetKey := normalizeAllowPathKey(target)
+	if targetKey == "" || targetKey == "." {
 		return false
 	}
 	for _, root := range allowlist {
-		rootClean := filepath.Clean(strings.TrimSpace(root))
-		if rootClean == "" || rootClean == "." {
+		rootKey := normalizeAllowPathKey(root)
+		if rootKey == "" || rootKey == "." {
 			continue
 		}
-		if targetClean == rootClean {
+		if targetKey == rootKey {
 			return true
 		}
-		prefix := rootClean + string(filepath.Separator)
-		if strings.HasPrefix(targetClean, prefix) {
-			return true
-		}
-		// Windows 场景下 separator 可能混用，补充统一前缀判定。
-		altPrefix := rootClean + "/"
-		if strings.HasPrefix(targetClean, altPrefix) {
+		if strings.HasPrefix(targetKey, rootKey+"/") {
 			return true
 		}
 	}
 	return false
+}
+
+// normalizeAllowPathKey 统一路径比较键，屏蔽分隔符差异并在 Windows 下忽略大小写。
+func normalizeAllowPathKey(path string) string {
+	trimmed := strings.TrimSpace(path)
+	if trimmed == "" {
+		return ""
+	}
+	normalized := filepath.ToSlash(filepath.Clean(trimmed))
+	if runtime.GOOS == "windows" {
+		return strings.ToLower(normalized)
+	}
+	return normalized
 }

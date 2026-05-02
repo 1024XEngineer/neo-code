@@ -630,6 +630,88 @@ func handleLoadSessionFrame(ctx context.Context, frame MessageFrame, runtimePort
 	}
 }
 
+// handleListSessionTodosFrame 处理 session_todos_list 请求，返回会话 Todo 快照。
+func handleListSessionTodosFrame(ctx context.Context, frame MessageFrame, runtimePort RuntimePort) MessageFrame {
+	if runtimePort == nil {
+		return runtimePortUnavailableFrame(frame)
+	}
+	subjectID, subjectErr := requireAuthenticatedSubjectID(ctx)
+	if subjectErr != nil {
+		return errorFrame(frame, subjectErr)
+	}
+
+	params, parseErr := decodeListSessionTodosPayload(frame.Payload)
+	if parseErr != nil {
+		return errorFrame(frame, parseErr)
+	}
+	if params.SessionID == "" {
+		params.SessionID = strings.TrimSpace(frame.SessionID)
+	}
+	if params.SessionID == "" {
+		return errorFrame(frame, NewMissingRequiredFieldError("payload.session_id"))
+	}
+
+	callCtx, cancel := withRuntimeOperationTimeout(ctx)
+	defer cancel()
+	snapshot, err := runtimePort.ListSessionTodos(callCtx, ListSessionTodosInput{
+		SubjectID: subjectID,
+		RequestID: strings.TrimSpace(frame.RequestID),
+		SessionID: params.SessionID,
+	})
+	if err != nil {
+		return runtimeCallFailedFrame(callCtx, frame, err, "session_todos_list")
+	}
+
+	return MessageFrame{
+		Type:      FrameTypeAck,
+		Action:    FrameActionListSessionTodos,
+		RequestID: frame.RequestID,
+		SessionID: params.SessionID,
+		Payload:   snapshot,
+	}
+}
+
+// handleGetRuntimeSnapshotFrame 处理 runtime_snapshot_get 请求，返回会话运行时统一快照。
+func handleGetRuntimeSnapshotFrame(ctx context.Context, frame MessageFrame, runtimePort RuntimePort) MessageFrame {
+	if runtimePort == nil {
+		return runtimePortUnavailableFrame(frame)
+	}
+	subjectID, subjectErr := requireAuthenticatedSubjectID(ctx)
+	if subjectErr != nil {
+		return errorFrame(frame, subjectErr)
+	}
+
+	params, parseErr := decodeGetRuntimeSnapshotPayload(frame.Payload)
+	if parseErr != nil {
+		return errorFrame(frame, parseErr)
+	}
+	if params.SessionID == "" {
+		params.SessionID = strings.TrimSpace(frame.SessionID)
+	}
+	if params.SessionID == "" {
+		return errorFrame(frame, NewMissingRequiredFieldError("payload.session_id"))
+	}
+
+	callCtx, cancel := withRuntimeOperationTimeout(ctx)
+	defer cancel()
+	snapshot, err := runtimePort.GetRuntimeSnapshot(callCtx, GetRuntimeSnapshotInput{
+		SubjectID: subjectID,
+		RequestID: strings.TrimSpace(frame.RequestID),
+		SessionID: params.SessionID,
+	})
+	if err != nil {
+		return runtimeCallFailedFrame(callCtx, frame, err, "runtime_snapshot_get")
+	}
+
+	return MessageFrame{
+		Type:      FrameTypeAck,
+		Action:    FrameActionGetRuntimeSnapshot,
+		RequestID: frame.RequestID,
+		SessionID: params.SessionID,
+		Payload:   snapshot,
+	}
+}
+
 // handleDeleteSessionFrame 处理 gateway.deleteSession 请求。
 func handleDeleteSessionFrame(ctx context.Context, frame MessageFrame, runtimePort RuntimePort) MessageFrame {
 	if runtimePort == nil {
@@ -1266,6 +1348,14 @@ type listSessionSkillsParams struct {
 	SessionID string
 }
 
+type listSessionTodosParams struct {
+	SessionID string
+}
+
+type getRuntimeSnapshotParams struct {
+	SessionID string
+}
+
 type listAvailableSkillsParams struct {
 	SessionID string
 }
@@ -1561,6 +1651,60 @@ func decodeListAvailableSkillsPayload(payload any) (listAvailableSkillsParams, *
 	}
 }
 
+// decodeListSessionTodosPayload 解析 session_todos_list 负载并收敛为统一输入结构。
+func decodeListSessionTodosPayload(payload any) (listSessionTodosParams, *FrameError) {
+	switch typed := payload.(type) {
+	case protocol.ListSessionTodosParams:
+		return normalizeListSessionTodosParams(typed.SessionID), nil
+	case *protocol.ListSessionTodosParams:
+		if typed == nil {
+			return listSessionTodosParams{}, NewFrameError(ErrorCodeInvalidAction, "invalid session_todos_list payload")
+		}
+		return normalizeListSessionTodosParams(typed.SessionID), nil
+	case map[string]any:
+		return normalizeListSessionTodosParams(readStringValue(typed, "session_id")), nil
+	case nil:
+		return listSessionTodosParams{}, nil
+	default:
+		raw, marshalErr := json.Marshal(payload)
+		if marshalErr != nil {
+			return listSessionTodosParams{}, NewFrameError(ErrorCodeInvalidAction, "invalid session_todos_list payload")
+		}
+		var decoded protocol.ListSessionTodosParams
+		if unmarshalErr := json.Unmarshal(raw, &decoded); unmarshalErr != nil {
+			return listSessionTodosParams{}, NewFrameError(ErrorCodeInvalidAction, "invalid session_todos_list payload")
+		}
+		return normalizeListSessionTodosParams(decoded.SessionID), nil
+	}
+}
+
+// decodeGetRuntimeSnapshotPayload 解析 runtime_snapshot_get 负载并收敛为统一输入结构。
+func decodeGetRuntimeSnapshotPayload(payload any) (getRuntimeSnapshotParams, *FrameError) {
+	switch typed := payload.(type) {
+	case protocol.GetRuntimeSnapshotParams:
+		return normalizeGetRuntimeSnapshotParams(typed.SessionID), nil
+	case *protocol.GetRuntimeSnapshotParams:
+		if typed == nil {
+			return getRuntimeSnapshotParams{}, NewFrameError(ErrorCodeInvalidAction, "invalid runtime_snapshot_get payload")
+		}
+		return normalizeGetRuntimeSnapshotParams(typed.SessionID), nil
+	case map[string]any:
+		return normalizeGetRuntimeSnapshotParams(readStringValue(typed, "session_id")), nil
+	case nil:
+		return getRuntimeSnapshotParams{}, nil
+	default:
+		raw, marshalErr := json.Marshal(payload)
+		if marshalErr != nil {
+			return getRuntimeSnapshotParams{}, NewFrameError(ErrorCodeInvalidAction, "invalid runtime_snapshot_get payload")
+		}
+		var decoded protocol.GetRuntimeSnapshotParams
+		if unmarshalErr := json.Unmarshal(raw, &decoded); unmarshalErr != nil {
+			return getRuntimeSnapshotParams{}, NewFrameError(ErrorCodeInvalidAction, "invalid runtime_snapshot_get payload")
+		}
+		return normalizeGetRuntimeSnapshotParams(decoded.SessionID), nil
+	}
+}
+
 // normalizeSessionSkillMutationParams 校验并归一化会话技能启停请求参数。
 func normalizeSessionSkillMutationParams(
 	sessionID string,
@@ -1586,6 +1730,20 @@ func normalizeSessionSkillMutationParams(
 // normalizeListSessionSkillsParams 归一化 list_session_skills 请求参数。
 func normalizeListSessionSkillsParams(sessionID string) listSessionSkillsParams {
 	return listSessionSkillsParams{
+		SessionID: strings.TrimSpace(sessionID),
+	}
+}
+
+// normalizeListSessionTodosParams 归一化 session_todos_list 请求参数。
+func normalizeListSessionTodosParams(sessionID string) listSessionTodosParams {
+	return listSessionTodosParams{
+		SessionID: strings.TrimSpace(sessionID),
+	}
+}
+
+// normalizeGetRuntimeSnapshotParams 归一化 runtime_snapshot_get 请求参数。
+func normalizeGetRuntimeSnapshotParams(sessionID string) getRuntimeSnapshotParams {
+	return getRuntimeSnapshotParams{
 		SessionID: strings.TrimSpace(sessionID),
 	}
 }

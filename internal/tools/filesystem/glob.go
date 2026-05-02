@@ -18,8 +18,10 @@ type GlobTool struct {
 }
 
 type globInput struct {
-	Pattern string `json:"pattern"`
-	Dir     string `json:"dir"`
+	Pattern           string `json:"pattern"`
+	Dir               string `json:"dir"`
+	ExpectMinMatches  int    `json:"expect_min_matches,omitempty"`
+	VerificationScope string `json:"verification_scope,omitempty"`
 }
 
 func NewGlob(root string) *GlobTool {
@@ -31,7 +33,7 @@ func (t *GlobTool) Name() string {
 }
 
 func (t *GlobTool) Description() string {
-	return "List workspace file paths that match a glob pattern such as **/*.go."
+	return "List workspace file paths that match a glob pattern. Use expect_min_matches for explicit verification facts."
 }
 
 func (t *GlobTool) Schema() map[string]any {
@@ -45,6 +47,14 @@ func (t *GlobTool) Schema() map[string]any {
 			"dir": map[string]any{
 				"type":        "string",
 				"description": "Optional directory relative to the workspace root to scope the search.",
+			},
+			"expect_min_matches": map[string]any{
+				"type":        "integer",
+				"description": "Optional minimum matched files threshold for verification.",
+			},
+			"verification_scope": map[string]any{
+				"type":        "string",
+				"description": "Optional verification scope label emitted when expect_min_matches is set.",
 			},
 		},
 		"required": []string{"pattern"},
@@ -127,7 +137,7 @@ func (t *GlobTool) Execute(ctx context.Context, input tools.ToolCallInput) (tool
 
 	sort.Strings(matches)
 	if len(matches) == 0 {
-		return tools.ToolResult{
+		result := tools.ToolResult{
 			Name:    t.Name(),
 			Content: "no matches",
 			Metadata: map[string]any{
@@ -138,7 +148,16 @@ func (t *GlobTool) Execute(ctx context.Context, input tools.ToolCallInput) (tool
 				"returned_count":   0,
 				"filtered_reasons": filteredReasons,
 			},
-		}, nil
+		}
+		if args.ExpectMinMatches > 0 {
+			result.Facts.VerificationPerformed = true
+			result.Facts.VerificationScope = strings.TrimSpace(args.VerificationScope)
+			result.Facts.VerificationPassed = false
+			result.Metadata["verification_reason"] = "glob_match_count_mismatch"
+			result.Metadata["verification_expected_min_matches"] = args.ExpectMinMatches
+			result.Metadata["verification_actual_matches"] = 0
+		}
+		return result, nil
 	}
 
 	result := tools.ToolResult{
@@ -152,6 +171,19 @@ func (t *GlobTool) Execute(ctx context.Context, input tools.ToolCallInput) (tool
 			"returned_count":   len(matches),
 			"filtered_reasons": filteredReasons,
 		},
+	}
+	if args.ExpectMinMatches > 0 {
+		result.Facts.VerificationPerformed = true
+		result.Facts.VerificationScope = strings.TrimSpace(args.VerificationScope)
+		result.Metadata["verification_expected_min_matches"] = args.ExpectMinMatches
+		result.Metadata["verification_actual_matches"] = len(matches)
+		if len(matches) >= args.ExpectMinMatches {
+			result.Facts.VerificationPassed = true
+			result.Metadata["verification_reason"] = "glob_match_count_satisfied"
+		} else {
+			result.Facts.VerificationPassed = false
+			result.Metadata["verification_reason"] = "glob_match_count_mismatch"
+		}
 	}
 	result = tools.ApplyOutputLimit(result, tools.DefaultOutputLimitBytes)
 	return result, nil

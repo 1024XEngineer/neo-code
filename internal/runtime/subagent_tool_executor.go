@@ -150,7 +150,7 @@ type capabilitySignerProvider interface {
 // 让工具调用继续走既有权限策略与审批链路，避免 inline 自签名导致绕过。
 func (e *subAgentRuntimeToolExecutor) resolveCapabilityToken(input subagent.ToolExecutionInput) *security.CapabilityToken {
 	if input.CapabilityToken == nil {
-		return nil
+		return e.mintStandaloneCapabilityToken(input)
 	}
 	parent := input.CapabilityToken.Normalize()
 	if e == nil || e.service == nil {
@@ -193,6 +193,67 @@ func (e *subAgentRuntimeToolExecutor) resolveCapabilityToken(input subagent.Tool
 	signed, err := signer.Sign(child)
 	if err != nil {
 		return &parent
+	}
+	return &signed
+}
+
+// mintStandaloneCapabilityToken 在无父 capability token 时签发受限子 token，确保 allowed_paths/allowed_tools 可被硬约束执行。
+func (e *subAgentRuntimeToolExecutor) mintStandaloneCapabilityToken(
+	input subagent.ToolExecutionInput,
+) *security.CapabilityToken {
+	if e == nil || e.service == nil {
+		return nil
+	}
+	signerProvider, ok := e.service.toolManager.(capabilitySignerProvider)
+	if !ok {
+		return nil
+	}
+	signer := signerProvider.CapabilitySigner()
+	if signer == nil {
+		return nil
+	}
+
+	taskID := strings.TrimSpace(input.TaskID)
+	agentID := strings.TrimSpace(input.AgentID)
+	if taskID == "" || agentID == "" {
+		return nil
+	}
+
+	allowedTools := normalizeAllowlistToList(input.Capability.AllowedTools)
+	if len(allowedTools) == 0 {
+		callName := strings.ToLower(strings.TrimSpace(input.Call.Name))
+		if callName != "" {
+			allowedTools = []string{callName}
+		}
+	}
+	if len(allowedTools) == 0 {
+		return nil
+	}
+
+	allowedPaths := normalizePathAllowlist(input.Capability.AllowedPaths)
+	if len(allowedPaths) == 0 {
+		defaultPath := strings.TrimSpace(input.Workdir)
+		if defaultPath == "" {
+			defaultPath = "."
+		}
+		allowedPaths = []string{defaultPath}
+	}
+
+	now := time.Now().UTC()
+	token := security.CapabilityToken{
+		ID:              fmt.Sprintf("subagent-inline-%d-%s", now.UnixNano(), taskID),
+		TaskID:          taskID,
+		AgentID:         agentID,
+		IssuedAt:        now.Add(-time.Second),
+		ExpiresAt:       now.Add(10 * time.Minute),
+		AllowedTools:    allowedTools,
+		AllowedPaths:    allowedPaths,
+		NetworkPolicy:   security.NetworkPolicy{Mode: security.NetworkPermissionAllowAll},
+		WritePermission: security.WritePermissionWorkspace,
+	}
+	signed, err := signer.Sign(token)
+	if err != nil {
+		return nil
 	}
 	return &signed
 }

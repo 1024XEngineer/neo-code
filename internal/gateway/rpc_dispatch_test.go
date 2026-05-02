@@ -187,6 +187,17 @@ func (s *rpcRunCaptureRuntimeStub) CreateSession(ctx context.Context, input Crea
 	return s.createSessionID, nil
 }
 
+func (s *rpcRunCaptureRuntimeStub) ListSessionTodos(_ context.Context, _ ListSessionTodosInput) (TodoSnapshot, error) {
+	return TodoSnapshot{}, nil
+}
+
+func (s *rpcRunCaptureRuntimeStub) GetRuntimeSnapshot(
+	_ context.Context,
+	_ GetRuntimeSnapshotInput,
+) (RuntimeSnapshot, error) {
+	return RuntimeSnapshot{}, nil
+}
+
 func TestDispatchRPCRequestResultEncodeError(t *testing.T) {
 	installHandlerRegistryForTest(t, map[FrameAction]requestFrameHandler{
 		FrameActionPing: func(_ context.Context, frame MessageFrame, _ RuntimePort) MessageFrame {
@@ -917,6 +928,12 @@ func (s *runtimePortOnlyStub) ListSessions(_ context.Context) ([]SessionSummary,
 }
 func (s *runtimePortOnlyStub) LoadSession(_ context.Context, _ LoadSessionInput) (Session, error) {
 	return Session{}, nil
+}
+func (s *runtimePortOnlyStub) ListSessionTodos(_ context.Context, _ ListSessionTodosInput) (TodoSnapshot, error) {
+	return TodoSnapshot{}, nil
+}
+func (s *runtimePortOnlyStub) GetRuntimeSnapshot(_ context.Context, _ GetRuntimeSnapshotInput) (RuntimeSnapshot, error) {
+	return RuntimeSnapshot{}, nil
 }
 func (s *runtimePortOnlyStub) CreateSession(_ context.Context, _ CreateSessionInput) (string, error) {
 	return "", nil

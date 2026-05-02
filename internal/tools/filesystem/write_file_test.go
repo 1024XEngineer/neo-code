@@ -27,6 +27,13 @@ func TestWriteFileToolMetadataAndExecute(t *testing.T) {
 	if schema["type"] != "object" {
 		t.Fatalf("expected schema object, got %+v", schema)
 	}
+	properties, _ := schema["properties"].(map[string]any)
+	if _, ok := properties["verify_after_write"]; !ok {
+		t.Fatalf("expected verify_after_write in schema properties")
+	}
+	if _, ok := properties["verification_scope"]; !ok {
+		t.Fatalf("expected verification_scope in schema properties")
+	}
 
 	tests := []struct {
 		name       string
@@ -133,4 +140,116 @@ func TestWriteFileToolInvalidArgumentsFormatting(t *testing.T) {
 	if !result.IsError {
 		t.Fatalf("expected error result, got %#v", result)
 	}
+}
+
+func TestWriteFileToolNoopWriteMetadata(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	tool := NewWrite(workspace)
+	target := filepath.Join(workspace, "same.txt")
+	if err := os.WriteFile(target, []byte("same"), 0o644); err != nil {
+		t.Fatalf("seed file: %v", err)
+	}
+
+	args, err := json.Marshal(map[string]string{
+		"path":    "same.txt",
+		"content": "same",
+	})
+	if err != nil {
+		t.Fatalf("marshal args: %v", err)
+	}
+	result, execErr := tool.Execute(context.Background(), tools.ToolCallInput{
+		Name:      tool.Name(),
+		Arguments: args,
+		Workdir:   workspace,
+	})
+	if execErr != nil {
+		t.Fatalf("Execute() error = %v", execErr)
+	}
+	if result.Content != "ok" {
+		t.Fatalf("result content = %q, want ok", result.Content)
+	}
+	noop, ok := result.Metadata["noop_write"].(bool)
+	if !ok || !noop {
+		t.Fatalf("noop_write metadata = %#v, want true", result.Metadata["noop_write"])
+	}
+	unchanged, ok := result.Metadata["content_unchanged"].(bool)
+	if !ok || !unchanged {
+		t.Fatalf("content_unchanged metadata = %#v, want true", result.Metadata["content_unchanged"])
+	}
+}
+
+func TestWriteFileToolVerifyAfterWriteFacts(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	tool := NewWrite(workspace)
+
+	t.Run("fresh write emits verification passed facts", func(t *testing.T) {
+		args, err := json.Marshal(map[string]any{
+			"path":               "verified.txt",
+			"content":            "verified-content",
+			"verify_after_write": true,
+		})
+		if err != nil {
+			t.Fatalf("marshal args: %v", err)
+		}
+		result, execErr := tool.Execute(context.Background(), tools.ToolCallInput{
+			Name:      tool.Name(),
+			Arguments: args,
+			Workdir:   workspace,
+		})
+		if execErr != nil {
+			t.Fatalf("Execute() error = %v", execErr)
+		}
+		if !result.Facts.VerificationPerformed || !result.Facts.VerificationPassed {
+			t.Fatalf("verification facts = %+v, want performed=true passed=true", result.Facts)
+		}
+		if token, _ := result.Metadata["written_content"].(string); token != "verified-content" {
+			t.Fatalf("written_content = %#v, want verified-content", result.Metadata["written_content"])
+		}
+		if !strings.HasPrefix(result.Facts.VerificationScope, "artifact:") {
+			t.Fatalf("verification scope = %q, want artifact:*", result.Facts.VerificationScope)
+		}
+		if reason, _ := result.Metadata["verification_reason"].(string); reason != "write_readback_match" {
+			t.Fatalf("verification_reason = %#v, want write_readback_match", result.Metadata["verification_reason"])
+		}
+	})
+
+	t.Run("noop write emits verification passed facts", func(t *testing.T) {
+		target := filepath.Join(workspace, "same-verified.txt")
+		if err := os.WriteFile(target, []byte("same"), 0o644); err != nil {
+			t.Fatalf("seed file: %v", err)
+		}
+		args, err := json.Marshal(map[string]any{
+			"path":               "same-verified.txt",
+			"content":            "same",
+			"verify_after_write": true,
+			"verification_scope": "artifact:same-verified.txt",
+		})
+		if err != nil {
+			t.Fatalf("marshal args: %v", err)
+		}
+		result, execErr := tool.Execute(context.Background(), tools.ToolCallInput{
+			Name:      tool.Name(),
+			Arguments: args,
+			Workdir:   workspace,
+		})
+		if execErr != nil {
+			t.Fatalf("Execute() error = %v", execErr)
+		}
+		if !result.Facts.VerificationPerformed || !result.Facts.VerificationPassed {
+			t.Fatalf("verification facts = %+v, want performed=true passed=true", result.Facts)
+		}
+		if result.Facts.VerificationScope != "artifact:same-verified.txt" {
+			t.Fatalf("verification scope = %q", result.Facts.VerificationScope)
+		}
+		if token, _ := result.Metadata["written_content"].(string); token != "same" {
+			t.Fatalf("written_content = %#v, want same", result.Metadata["written_content"])
+		}
+		if reason, _ := result.Metadata["verification_reason"].(string); reason != "write_content_match_noop" {
+			t.Fatalf("verification_reason = %#v, want write_content_match_noop", result.Metadata["verification_reason"])
+		}
+	})
 }

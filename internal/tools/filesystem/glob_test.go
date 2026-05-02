@@ -241,3 +241,57 @@ func TestGlobToolFiltersSensitiveAndSymlinkEscapes(t *testing.T) {
 		t.Fatalf("expected symlink_escape reason count, got %#v", reasons)
 	}
 }
+
+func TestGlobToolVerificationFacts(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	mustWriteFile(t, filepath.Join(workspace, "README.md"), "# readme\n")
+	mustWriteFile(t, filepath.Join(workspace, "docs", "guide.md"), "# guide\n")
+
+	tool := NewGlob(workspace)
+	t.Run("match count satisfied", func(t *testing.T) {
+		result, err := tool.Execute(context.Background(), tools.ToolCallInput{
+			Name: tool.Name(),
+			Arguments: mustMarshalFSArgs(t, map[string]any{
+				"pattern":            "**/*.md",
+				"expect_min_matches": 2,
+				"verification_scope": "docs-presence",
+			}),
+			Workdir: workspace,
+		})
+		if err != nil {
+			t.Fatalf("Execute() error = %v", err)
+		}
+		if !result.Facts.VerificationPerformed || !result.Facts.VerificationPassed {
+			t.Fatalf("expected verification passed facts, got %+v", result.Facts)
+		}
+		if result.Facts.VerificationScope != "docs-presence" {
+			t.Fatalf("verification scope = %q, want %q", result.Facts.VerificationScope, "docs-presence")
+		}
+	})
+
+	t.Run("match count not satisfied", func(t *testing.T) {
+		result, err := tool.Execute(context.Background(), tools.ToolCallInput{
+			Name: tool.Name(),
+			Arguments: mustMarshalFSArgs(t, map[string]any{
+				"pattern":            "**/*.md",
+				"expect_min_matches": 3,
+				"verification_scope": "docs-presence",
+			}),
+			Workdir: workspace,
+		})
+		if err != nil {
+			t.Fatalf("Execute() error = %v", err)
+		}
+		if !result.Facts.VerificationPerformed || result.Facts.VerificationPassed {
+			t.Fatalf("expected verification failed facts, got %+v", result.Facts)
+		}
+		if got, _ := result.Metadata["verification_expected_min_matches"].(int); got != 3 {
+			t.Fatalf(
+				"verification_expected_min_matches = %v, want 3",
+				result.Metadata["verification_expected_min_matches"],
+			)
+		}
+	})
+}

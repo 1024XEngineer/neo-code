@@ -125,6 +125,82 @@ func TestNormalizeJSONRPCRequestBindStream(t *testing.T) {
 	}
 }
 
+func TestNormalizeJSONRPCRequestListSessionTodosAndRuntimeSnapshot(t *testing.T) {
+	t.Run("list session todos success", func(t *testing.T) {
+		normalized, rpcErr := NormalizeJSONRPCRequest(JSONRPCRequest{
+			JSONRPC: JSONRPCVersion,
+			ID:      json.RawMessage(`"todo-1"`),
+			Method:  MethodGatewayListSessionTodos,
+			Params:  json.RawMessage(`{"session_id":" s-1 "}`),
+		})
+		if rpcErr != nil {
+			t.Fatalf("normalize list session todos request: %v", rpcErr)
+		}
+		if normalized.Action != "session_todos_list" {
+			t.Fatalf("action = %q, want %q", normalized.Action, "session_todos_list")
+		}
+		if normalized.SessionID != "s-1" {
+			t.Fatalf("session_id = %q, want %q", normalized.SessionID, "s-1")
+		}
+		params, ok := normalized.Payload.(ListSessionTodosParams)
+		if !ok {
+			t.Fatalf("payload type = %T, want ListSessionTodosParams", normalized.Payload)
+		}
+		if params.SessionID != "s-1" {
+			t.Fatalf("params.session_id = %q, want %q", params.SessionID, "s-1")
+		}
+	})
+
+	t.Run("runtime snapshot success", func(t *testing.T) {
+		normalized, rpcErr := NormalizeJSONRPCRequest(JSONRPCRequest{
+			JSONRPC: JSONRPCVersion,
+			ID:      json.RawMessage(`"snapshot-1"`),
+			Method:  MethodGatewayGetRuntimeSnapshot,
+			Params:  json.RawMessage(`{"session_id":" s-2 "}`),
+		})
+		if rpcErr != nil {
+			t.Fatalf("normalize runtime snapshot request: %v", rpcErr)
+		}
+		if normalized.Action != "runtime_snapshot_get" {
+			t.Fatalf("action = %q, want %q", normalized.Action, "runtime_snapshot_get")
+		}
+		if normalized.SessionID != "s-2" {
+			t.Fatalf("session_id = %q, want %q", normalized.SessionID, "s-2")
+		}
+		params, ok := normalized.Payload.(GetRuntimeSnapshotParams)
+		if !ok {
+			t.Fatalf("payload type = %T, want GetRuntimeSnapshotParams", normalized.Payload)
+		}
+		if params.SessionID != "s-2" {
+			t.Fatalf("params.session_id = %q, want %q", params.SessionID, "s-2")
+		}
+	})
+
+	t.Run("list session todos missing params", func(t *testing.T) {
+		_, rpcErr := NormalizeJSONRPCRequest(JSONRPCRequest{
+			JSONRPC: JSONRPCVersion,
+			ID:      json.RawMessage(`"todo-missing-1"`),
+			Method:  MethodGatewayListSessionTodos,
+			Params:  json.RawMessage(`null`),
+		})
+		if rpcErr == nil || rpcErr.Code != JSONRPCCodeInvalidParams {
+			t.Fatalf("expected invalid params error, got %#v", rpcErr)
+		}
+	})
+
+	t.Run("runtime snapshot missing session id", func(t *testing.T) {
+		_, rpcErr := NormalizeJSONRPCRequest(JSONRPCRequest{
+			JSONRPC: JSONRPCVersion,
+			ID:      json.RawMessage(`"snapshot-missing-1"`),
+			Method:  MethodGatewayGetRuntimeSnapshot,
+			Params:  json.RawMessage(`{"session_id":"   "}`),
+		})
+		if rpcErr == nil || rpcErr.Code != JSONRPCCodeInvalidParams {
+			t.Fatalf("expected invalid params error, got %#v", rpcErr)
+		}
+	})
+}
+
 func TestNormalizeJSONRPCRequestRuntimeMethods(t *testing.T) {
 	runRequest := JSONRPCRequest{
 		JSONRPC: JSONRPCVersion,

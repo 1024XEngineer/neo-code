@@ -24,21 +24,23 @@ func NewEngine(policy AcceptancePolicy) *Engine {
 // EvaluateFinal 执行 final acceptance 主链，输出结构化终态决策。
 func (e *Engine) EvaluateFinal(ctx context.Context, input FinalAcceptanceInput) (AcceptanceDecision, error) {
 	decision := AcceptanceDecision{
-		Status:             AcceptanceContinue,
-		StopReason:         controlplane.StopReasonTodoNotConverged,
-		UserVisibleSummary: "当前回合尚未达到可收尾条件，继续执行。",
-		InternalSummary:    "completion gate did not pass",
-		ContinueHint:       "There are unfinished required todos or unmet acceptance checks. Continue execution. Do not finalize yet.",
+		Status:                  AcceptanceContinue,
+		StopReason:              controlplane.StopReasonTodoNotConverged,
+		CompletionBlockedReason: input.CompletionGate.Reason,
+		UserVisibleSummary:      "当前回合尚未达到可收尾条件，继续执行。",
+		InternalSummary:         "completion gate did not pass",
+		ContinueHint:            "There are unfinished required todos or unmet acceptance checks. Continue execution. Do not finalize yet.",
 	}
 	if input.CompletionGate.Passed {
 		verifiers, err := e.policy.ResolveVerifiers(input.VerificationInput)
 		if err != nil {
 			return AcceptanceDecision{
-				Status:             AcceptanceFailed,
-				StopReason:         controlplane.StopReasonVerificationConfigMissing,
-				ErrorClass:         verify.ErrorClassEnvMissing,
-				UserVisibleSummary: "验收配置无效，任务失败。",
-				InternalSummary:    fmt.Sprintf("verification profile resolution failed: %v", err),
+				Status:                  AcceptanceFailed,
+				StopReason:              controlplane.StopReasonVerificationConfigMissing,
+				ErrorClass:              verify.ErrorClassEnvMissing,
+				CompletionBlockedReason: input.CompletionGate.Reason,
+				UserVisibleSummary:      "验收配置无效，任务失败。",
+				InternalSummary:         fmt.Sprintf("verification profile resolution failed: %v", err),
 			}, nil
 		}
 		orch := verify.Orchestrator{Verifiers: verifiers}
@@ -48,6 +50,7 @@ func (e *Engine) EvaluateFinal(ctx context.Context, input FinalAcceptanceInput) 
 		}
 		decision = aggregateVerificationDecision(gateDecision)
 	}
+	decision.CompletionBlockedReason = input.CompletionGate.Reason
 
 	if input.NoProgressExceeded && decision.Status == AcceptanceContinue {
 		decision.Status = AcceptanceIncomplete

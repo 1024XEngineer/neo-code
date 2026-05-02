@@ -43,6 +43,7 @@ type SubAgentRunInput struct {
 	CallerAgent           string
 	ParentCapabilityToken *security.CapabilityToken
 	Role                  subagent.Role
+	TaskType              subagent.TaskType
 	TaskID                string
 	Goal                  string
 	ExpectedOut           string

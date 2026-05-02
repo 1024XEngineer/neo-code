@@ -262,27 +262,13 @@ func TestRunBeforeCompletionDecisionHookBlockIsObservedOnly(t *testing.T) {
 	}
 
 	events := collectRuntimeEvents(service.Events())
-	assertEventContains(t, events, EventHookBlocked)
-	assertEventContains(t, events, EventAgentDone)
-	if eventIndex(events, EventHookBlocked) > eventIndex(events, EventVerificationStarted) {
-		t.Fatalf("before_completion_decision hook_blocked should be emitted before verification_started")
+	if eventIndex(events, EventHookBlocked) >= 0 {
+		t.Fatalf("before_completion_decision should not emit hook_blocked when point is observe-only")
 	}
-
-	blockedIndex := eventIndex(events, EventHookBlocked)
-	if blockedIndex >= 0 {
-		payload, ok := events[blockedIndex].Payload.(HookBlockedPayload)
-		if !ok {
-			t.Fatalf("hook_blocked payload type = %T, want HookBlockedPayload", events[blockedIndex].Payload)
-		}
-		if payload.Enforced {
-			t.Fatalf("before_completion_decision block should be observed only, got enforced=true")
-		}
-		if payload.Point != string(runtimehooks.HookPointBeforeCompletionDecision) {
-			t.Fatalf("payload.Point = %q, want %q", payload.Point, runtimehooks.HookPointBeforeCompletionDecision)
-		}
-		if payload.Source != string(runtimehooks.HookSourceInternal) {
-			t.Fatalf("payload.Source = %q, want %q", payload.Source, runtimehooks.HookSourceInternal)
-		}
+	assertEventContains(t, events, EventHookFinished)
+	assertEventContains(t, events, EventAgentDone)
+	if eventIndex(events, EventHookFinished) > eventIndex(events, EventVerificationStarted) {
+		t.Fatalf("before_completion_decision hook should finish before verification_started")
 	}
 	if capturedWorkdir == "" {
 		t.Fatalf("expected before_completion_decision hook metadata to include workdir")

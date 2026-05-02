@@ -372,7 +372,7 @@ func TestExecutorEventEmitterFailureIgnored(t *testing.T) {
 	}
 }
 
-func TestExecutorRunSaturationProtection(t *testing.T) {
+func TestExecutorRunTimeoutReleasesSlot(t *testing.T) {
 	t.Parallel()
 
 	registry := NewRegistry()
@@ -405,8 +405,8 @@ func TestExecutorRunSaturationProtection(t *testing.T) {
 	if second.Results[0].Status != HookResultFailed {
 		t.Fatalf("second status = %q, want failed", second.Results[0].Status)
 	}
-	if !strings.Contains(second.Results[0].Error, "saturated") {
-		t.Fatalf("second error = %q, want saturation message", second.Results[0].Error)
+	if strings.Contains(second.Results[0].Error, "saturated") {
+		t.Fatalf("second error = %q, want timeout/canceled without saturation", second.Results[0].Error)
 	}
 
 	close(releaseCh)

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -25,6 +26,7 @@ const (
 type spawnInput struct {
 	Mode           string   `json:"mode"`
 	Role           string   `json:"role"`
+	TaskType       string   `json:"task_type"`
 	ID             string   `json:"id"`
 	Prompt         string   `json:"prompt"`
 	Content        string   `json:"content"`
@@ -50,7 +52,7 @@ func (t *Tool) Name() string {
 
 // Description 返回工具描述。
 func (t *Tool) Description() string {
-	return "Run subagent immediately in inline mode."
+	return "Explicitly run a constrained subagent in inline mode (not auto-dispatched by todo metadata)."
 }
 
 // Schema 返回 spawn_subagent 的参数定义，仅保留 inline 模式参数。
@@ -66,11 +68,20 @@ func (t *Tool) Schema() map[string]any {
 				"type": "string",
 				"enum": []string{"researcher", "coder", "reviewer"},
 			},
+			"task_type": map[string]any{
+				"type": "string",
+				"enum": []string{string(subagent.TaskTypeReview), string(subagent.TaskTypeEdit), string(subagent.TaskTypeVerify)},
+			},
 			"id": map[string]any{
 				"type": "string",
 			},
 			"prompt": map[string]any{
-				"type": "string",
+				"type":        "string",
+				"description": "Task instruction text for the subagent, not a filesystem path.",
+			},
+			"content": map[string]any{
+				"type":        "string",
+				"description": "Alias of prompt as task instruction text, not a filesystem path.",
 			},
 			"expected_output": map[string]any{
 				"type": "string",
@@ -92,7 +103,12 @@ func (t *Tool) Schema() map[string]any {
 				"items": map[string]any{
 					"type": "string",
 				},
+				"description": "Workspace-relative filesystem paths for capability sandbox.",
 			},
+		},
+		"oneOf": []any{
+			map[string]any{"required": []string{"prompt"}},
+			map[string]any{"required": []string{"content"}},
 		},
 	}
 }
@@ -139,11 +155,13 @@ func (t *Tool) executeInlineMode(
 	if taskID == "" {
 		taskID = defaultInlineTaskID(input.Prompt)
 	}
+	allowedPaths := resolveSpawnAllowedPaths(input.AllowedPaths, call.Workdir)
 
 	runResult, runErr := call.SubAgentInvoker.Run(ctx, tools.SubAgentRunInput{
 		CallerAgent:           strings.TrimSpace(call.AgentID),
 		ParentCapabilityToken: call.CapabilityToken,
 		Role:                  role,
+		TaskType:              subagent.TaskType(input.TaskType),
 		TaskID:                taskID,
 		Goal:                  strings.TrimSpace(input.Prompt),
 		ExpectedOut:           strings.TrimSpace(input.ExpectedOutput),
@@ -151,7 +169,7 @@ func (t *Tool) executeInlineMode(
 		MaxSteps:              input.MaxSteps,
 		Timeout:               time.Duration(input.TimeoutSec) * time.Second,
 		AllowedTools:          append([]string(nil), input.AllowedTools...),
-		AllowedPaths:          append([]string(nil), input.AllowedPaths...),
+		AllowedPaths:          append([]string(nil), allowedPaths...),
 	})
 
 	isError := runErr != nil || runResult.State == subagent.StateFailed || runResult.State == subagent.StateCanceled
@@ -163,15 +181,97 @@ func (t *Tool) executeInlineMode(
 			"mode":         spawnModeInline,
 			"task_id":      runResult.TaskID,
 			"role":         string(runResult.Role),
+			"task_type":    strings.TrimSpace(string(subagent.TaskType(input.TaskType))),
 			"state":        string(runResult.State),
 			"stop_reason":  string(runResult.StopReason),
 			"step_count":   runResult.StepCount,
 			"error":        strings.TrimSpace(runResult.Error),
 			"artifact_cnt": len(runResult.Output.Artifacts),
+			"artifacts":    append([]string(nil), runResult.Output.Artifacts...),
 		},
+	}
+	if isError {
+		result.ErrorClass = classifySpawnInlineErrorClass(runResult, runErr)
 	}
 	result = tools.ApplyOutputLimit(result, tools.DefaultOutputLimitBytes)
 	return result, runErr
+}
+
+// classifySpawnInlineErrorClass 统一归类子代理错误，便于上层事实回灌与终态决策识别。
+func classifySpawnInlineErrorClass(result tools.SubAgentRunResult, runErr error) string {
+	if runErr != nil {
+		errText := strings.ToLower(strings.TrimSpace(runErr.Error()))
+		switch {
+		case strings.Contains(errText, "permission denied") || strings.Contains(errText, "path not allowed"):
+			return "subagent_permission_denied"
+		case strings.Contains(errText, "max turns") || strings.Contains(errText, "max steps"):
+			return "subagent_budget_exceeded"
+		case strings.Contains(errText, "output key") || strings.Contains(errText, "json"):
+			return "subagent_contract_violation"
+		default:
+			return "subagent_failed"
+		}
+	}
+	switch result.StopReason {
+	case subagent.StopReasonTimeout:
+		return "subagent_timeout"
+	case subagent.StopReasonMaxSteps:
+		return "subagent_budget_exceeded"
+	case subagent.StopReasonCanceled:
+		return "subagent_canceled"
+	default:
+		return "subagent_failed"
+	}
+}
+
+// resolveSpawnAllowedPaths 归一化路径白名单；为空时默认收敛到当前 workdir（或 "."）。
+// 当存在 workdir 时，会把相对路径解析为 workdir 下的绝对路径，避免 capability 路径比较失配。
+func resolveSpawnAllowedPaths(paths []string, workdir string) []string {
+	normalized := normalizeStringList(paths)
+	if len(normalized) > 0 {
+		resolved := make([]string, 0, len(normalized))
+		for _, item := range normalized {
+			resolved = append(resolved, resolveSpawnAllowedPath(item, workdir))
+		}
+		return normalizeStringList(resolved)
+	}
+	defaultPath := strings.TrimSpace(workdir)
+	if defaultPath == "" {
+		defaultPath = "."
+	} else {
+		defaultPath = resolveSpawnAllowedPath(defaultPath, workdir)
+	}
+	return []string{defaultPath}
+}
+
+// resolveSpawnAllowedPath 在保持语义稳定的前提下解析单个 allowed_path。
+func resolveSpawnAllowedPath(path string, workdir string) string {
+	candidate := strings.TrimSpace(path)
+	if candidate == "" {
+		return ""
+	}
+	if !isAbsolutePathLike(candidate) && strings.TrimSpace(workdir) != "" {
+		candidate = filepath.Join(strings.TrimSpace(workdir), candidate)
+	}
+	candidate = filepath.Clean(candidate)
+	if filepath.IsAbs(candidate) {
+		if absolute, err := filepath.Abs(candidate); err == nil {
+			candidate = absolute
+		}
+	}
+	return candidate
+}
+
+// isAbsolutePathLike 判断路径是否已经具备绝对路径语义（含类 Unix 根路径）。
+func isAbsolutePathLike(path string) bool {
+	trimmed := strings.TrimSpace(path)
+	if trimmed == "" {
+		return false
+	}
+	if filepath.IsAbs(trimmed) {
+		return true
+	}
+	return strings.HasPrefix(trimmed, "/") || strings.HasPrefix(trimmed, `\`)
 }
 
 // parseSpawnInput 负责解析并校验 spawn_subagent 输入。
@@ -216,11 +316,18 @@ func parseSpawnInput(raw []byte) (spawnInput, error) {
 	input.AllowedTools = normalizeStringList(input.AllowedTools)
 	input.AllowedPaths = normalizeStringList(input.AllowedPaths)
 	input.Role = strings.ToLower(strings.TrimSpace(input.Role))
+	input.TaskType = strings.ToLower(strings.TrimSpace(input.TaskType))
+	if input.TaskType == "" {
+		input.TaskType = string(subagent.TaskTypeReview)
+	}
 	if input.Role != "" {
 		role := subagent.Role(input.Role)
 		if !role.Valid() {
 			return spawnInput{}, fmt.Errorf("spawn_subagent: unsupported role %q", input.Role)
 		}
+	}
+	if !subagent.TaskType(input.TaskType).Valid() {
+		return spawnInput{}, fmt.Errorf("spawn_subagent: unsupported task_type %q", input.TaskType)
 	}
 
 	return validateInlineInput(input)
@@ -302,6 +409,18 @@ func renderInlineSpawnResult(result tools.SubAgentRunResult, runErr error) strin
 	}
 	if text := strings.TrimSpace(result.Output.Summary); text != "" {
 		lines = append(lines, "summary: "+text)
+	}
+	if text := strings.TrimSpace(result.Output.Report); text != "" {
+		lines = append(lines, "report: "+text)
+	}
+	if text := strings.TrimSpace(result.Output.Status); text != "" {
+		lines = append(lines, "status: "+text)
+	}
+	if len(result.Output.Logs) > 0 {
+		lines = append(lines, "logs:")
+		for _, item := range result.Output.Logs {
+			lines = append(lines, "- "+item)
+		}
 	}
 	if len(result.Output.Findings) > 0 {
 		lines = append(lines, "findings:")

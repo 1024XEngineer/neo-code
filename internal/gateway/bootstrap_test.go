@@ -29,6 +29,8 @@ type bootstrapRuntimeStub struct {
 	events              <-chan RuntimeEvent
 	listSessionsFn      func(ctx context.Context) ([]SessionSummary, error)
 	loadSessionFn       func(ctx context.Context, input LoadSessionInput) (Session, error)
+	listSessionTodosFn  func(ctx context.Context, input ListSessionTodosInput) (TodoSnapshot, error)
+	getRuntimeSnapshotFn func(ctx context.Context, input GetRuntimeSnapshotInput) (RuntimeSnapshot, error)
 	deleteSessionFn     func(ctx context.Context, input DeleteSessionInput) (bool, error)
 	renameSessionFn     func(ctx context.Context, input RenameSessionInput) error
 	listFilesFn         func(ctx context.Context, input ListFilesInput) ([]FileEntry, error)
@@ -137,6 +139,21 @@ func (s *bootstrapRuntimeStub) LoadSession(ctx context.Context, input LoadSessio
 	}
 	return Session{}, nil
 }
+
+func (s *bootstrapRuntimeStub) ListSessionTodos(ctx context.Context, input ListSessionTodosInput) (TodoSnapshot, error) {
+	if s != nil && s.listSessionTodosFn != nil {
+		return s.listSessionTodosFn(ctx, input)
+	}
+	return TodoSnapshot{}, nil
+}
+
+func (s *bootstrapRuntimeStub) GetRuntimeSnapshot(ctx context.Context, input GetRuntimeSnapshotInput) (RuntimeSnapshot, error) {
+	if s != nil && s.getRuntimeSnapshotFn != nil {
+		return s.getRuntimeSnapshotFn(ctx, input)
+	}
+	return RuntimeSnapshot{}, nil
+}
+
 func (s *bootstrapRuntimeStub) DeleteSession(ctx context.Context, input DeleteSessionInput) (bool, error) {
 	if s != nil && s.deleteSessionFn != nil {
 		return s.deleteSessionFn(ctx, input)
@@ -244,6 +261,161 @@ func TestDispatchRequestFramePing(t *testing.T) {
 	}
 	if response.Action != FrameActionPing {
 		t.Fatalf("response action = %q, want %q", response.Action, FrameActionPing)
+	}
+}
+
+func TestDecodeExecuteSystemToolPayloadBranches(t *testing.T) {
+	t.Parallel()
+
+	params, frameErr := decodeExecuteSystemToolPayload(map[string]any{
+		"tool_name": "memo_list",
+		"arguments": map[string]any{"title": "a"},
+	})
+	if frameErr != nil {
+		t.Fatalf("decodeExecuteSystemToolPayload(map) err = %v", frameErr)
+	}
+	if string(params.Arguments) == "" || !bytes.Contains(params.Arguments, []byte(`"title"`)) {
+		t.Fatalf("arguments = %s, want marshaled json", string(params.Arguments))
+	}
+
+	_, frameErr = decodeExecuteSystemToolPayload((*protocol.ExecuteSystemToolParams)(nil))
+	if frameErr == nil || frameErr.Code != string(ErrorCodeInvalidAction) {
+		t.Fatalf("nil pointer payload should be invalid_action, got %v", frameErr)
+	}
+
+	_, frameErr = decodeExecuteSystemToolPayload(invalidJSONMarshaler{})
+	if frameErr == nil || frameErr.Code != string(ErrorCodeInvalidAction) {
+		t.Fatalf("marshal failure should be invalid_action, got %v", frameErr)
+	}
+}
+
+func TestNormalizeExecuteSystemToolParamsBranches(t *testing.T) {
+	t.Parallel()
+
+	normalized, frameErr := normalizeExecuteSystemToolParams(protocol.ExecuteSystemToolParams{
+		ToolName:  "memo_list",
+		Arguments: []byte("null"),
+	})
+	if frameErr != nil {
+		t.Fatalf("normalize null arguments err = %v", frameErr)
+	}
+	if string(normalized.Arguments) != "{}" {
+		t.Fatalf("normalized args = %s, want {}", string(normalized.Arguments))
+	}
+
+	_, frameErr = normalizeExecuteSystemToolParams(protocol.ExecuteSystemToolParams{
+		ToolName:  "memo_list",
+		Arguments: []byte("{"),
+	})
+	if frameErr == nil || frameErr.Code != string(ErrorCodeInvalidAction) {
+		t.Fatalf("invalid json arguments should be invalid_action, got %v", frameErr)
+	}
+}
+
+func TestDecodeSessionSkillAndSnapshotPayloadBranches(t *testing.T) {
+	t.Parallel()
+
+	params, frameErr := decodeActivateSessionSkillPayload(protocol.ActivateSessionSkillParams{
+		SessionID: " s-1 ",
+		SkillID:   " skill-1 ",
+	})
+	if frameErr != nil || params.SessionID != "s-1" || params.SkillID != "skill-1" {
+		t.Fatalf("decodeActivateSessionSkillPayload(struct) = %#v, err=%v", params, frameErr)
+	}
+	params, frameErr = decodeActivateSessionSkillPayload(&protocol.ActivateSessionSkillParams{
+		SessionID: "s-2",
+		SkillID:   "skill-2",
+	})
+	if frameErr != nil || params.SessionID != "s-2" || params.SkillID != "skill-2" {
+		t.Fatalf("decodeActivateSessionSkillPayload(ptr) = %#v, err=%v", params, frameErr)
+	}
+	params, frameErr = decodeActivateSessionSkillPayload(map[string]any{"session_id": "s-3", "skill_id": "skill-3"})
+	if frameErr != nil || params.SessionID != "s-3" || params.SkillID != "skill-3" {
+		t.Fatalf("decodeActivateSessionSkillPayload(map) = %#v, err=%v", params, frameErr)
+	}
+	_, frameErr = decodeActivateSessionSkillPayload((*protocol.ActivateSessionSkillParams)(nil))
+	if frameErr == nil || frameErr.Code != string(ErrorCodeInvalidAction) {
+		t.Fatalf("nil activate payload should be invalid_action, got %v", frameErr)
+	}
+	_, frameErr = decodeActivateSessionSkillPayload(invalidJSONMarshaler{})
+	if frameErr == nil || frameErr.Code != string(ErrorCodeInvalidAction) {
+		t.Fatalf("marshal error activate payload should be invalid_action, got %v", frameErr)
+	}
+
+	_, frameErr = decodeDeactivateSessionSkillPayload(protocol.DeactivateSessionSkillParams{
+		SessionID: "",
+		SkillID:   "skill",
+	})
+	if frameErr == nil || frameErr.Code != ErrorCodeMissingRequiredField.String() {
+		t.Fatalf("missing session_id should be missing_required_field, got %v", frameErr)
+	}
+	_, frameErr = decodeDeactivateSessionSkillPayload((*protocol.DeactivateSessionSkillParams)(nil))
+	if frameErr == nil || frameErr.Code != string(ErrorCodeInvalidAction) {
+		t.Fatalf("nil deactivate payload should be invalid_action, got %v", frameErr)
+	}
+	_, frameErr = decodeDeactivateSessionSkillPayload(invalidJSONMarshaler{})
+	if frameErr == nil || frameErr.Code != string(ErrorCodeInvalidAction) {
+		t.Fatalf("marshal error deactivate payload should be invalid_action, got %v", frameErr)
+	}
+
+	_, frameErr = decodeListSessionSkillsPayload((*protocol.ListSessionSkillsParams)(nil))
+	if frameErr == nil || frameErr.Code != string(ErrorCodeInvalidAction) {
+		t.Fatalf("nil list_session_skills payload should be invalid_action, got %v", frameErr)
+	}
+	listSkills, frameErr := decodeListSessionSkillsPayload(protocol.ListSessionSkillsParams{SessionID: " s-1 "})
+	if frameErr != nil || listSkills.SessionID != "s-1" {
+		t.Fatalf("decodeListSessionSkillsPayload(struct) = %#v, err=%v", listSkills, frameErr)
+	}
+	listSkills, frameErr = decodeListSessionSkillsPayload(map[string]any{"session_id": " s-2 "})
+	if frameErr != nil || listSkills.SessionID != "s-2" {
+		t.Fatalf("decodeListSessionSkillsPayload(map) = %#v, err=%v", listSkills, frameErr)
+	}
+	_, frameErr = decodeListSessionSkillsPayload(invalidJSONMarshaler{})
+	if frameErr == nil || frameErr.Code != string(ErrorCodeInvalidAction) {
+		t.Fatalf("marshal error list_session_skills payload should be invalid_action, got %v", frameErr)
+	}
+
+	_, frameErr = decodeListAvailableSkillsPayload((*protocol.ListAvailableSkillsParams)(nil))
+	if frameErr == nil || frameErr.Code != string(ErrorCodeInvalidAction) {
+		t.Fatalf("nil list_available_skills payload should be invalid_action, got %v", frameErr)
+	}
+	listAvailable, frameErr := decodeListAvailableSkillsPayload(protocol.ListAvailableSkillsParams{SessionID: " s-3 "})
+	if frameErr != nil || listAvailable.SessionID != "s-3" {
+		t.Fatalf("decodeListAvailableSkillsPayload(struct) = %#v, err=%v", listAvailable, frameErr)
+	}
+	listAvailable, frameErr = decodeListAvailableSkillsPayload(map[string]any{"session_id": " s-4 "})
+	if frameErr != nil || listAvailable.SessionID != "s-4" {
+		t.Fatalf("decodeListAvailableSkillsPayload(map) = %#v, err=%v", listAvailable, frameErr)
+	}
+	_, frameErr = decodeListAvailableSkillsPayload(invalidJSONMarshaler{})
+	if frameErr == nil || frameErr.Code != string(ErrorCodeInvalidAction) {
+		t.Fatalf("marshal error list_available_skills payload should be invalid_action, got %v", frameErr)
+	}
+
+	listTodos, frameErr := decodeListSessionTodosPayload(protocol.ListSessionTodosParams{SessionID: " s-5 "})
+	if frameErr != nil || listTodos.SessionID != "s-5" {
+		t.Fatalf("decodeListSessionTodosPayload(struct) = %#v, err=%v", listTodos, frameErr)
+	}
+	listTodos, frameErr = decodeListSessionTodosPayload(map[string]any{"session_id": " s-6 "})
+	if frameErr != nil || listTodos.SessionID != "s-6" {
+		t.Fatalf("decodeListSessionTodosPayload(map) = %#v, err=%v", listTodos, frameErr)
+	}
+	_, frameErr = decodeListSessionTodosPayload((*protocol.ListSessionTodosParams)(nil))
+	if frameErr == nil || frameErr.Code != string(ErrorCodeInvalidAction) {
+		t.Fatalf("nil session_todos_list payload should be invalid_action, got %v", frameErr)
+	}
+
+	getSnapshot, frameErr := decodeGetRuntimeSnapshotPayload(protocol.GetRuntimeSnapshotParams{SessionID: " s-7 "})
+	if frameErr != nil || getSnapshot.SessionID != "s-7" {
+		t.Fatalf("decodeGetRuntimeSnapshotPayload(struct) = %#v, err=%v", getSnapshot, frameErr)
+	}
+	getSnapshot, frameErr = decodeGetRuntimeSnapshotPayload(map[string]any{"session_id": " s-8 "})
+	if frameErr != nil || getSnapshot.SessionID != "s-8" {
+		t.Fatalf("decodeGetRuntimeSnapshotPayload(map) = %#v, err=%v", getSnapshot, frameErr)
+	}
+	_, frameErr = decodeGetRuntimeSnapshotPayload((*protocol.GetRuntimeSnapshotParams)(nil))
+	if frameErr == nil || frameErr.Code != string(ErrorCodeInvalidAction) {
+		t.Fatalf("nil runtime_snapshot_get payload should be invalid_action, got %v", frameErr)
 	}
 }
 
@@ -2331,6 +2503,102 @@ func TestHandleListModelsFrameSuccess(t *testing.T) {
 	}
 }
 
+func TestHandleListSessionTodosFrameSuccess(t *testing.T) {
+	runtime := &bootstrapRuntimeStub{
+		listSessionTodosFn: func(_ context.Context, input ListSessionTodosInput) (TodoSnapshot, error) {
+			if input.SubjectID != "subject-1" || input.SessionID != "session-1" {
+				t.Fatalf("input = %#v", input)
+			}
+			return TodoSnapshot{
+				Summary: TodoSummary{Total: 1, RequiredTotal: 1, RequiredCompleted: 1},
+				Items: []TodoViewItem{
+					{ID: "t-1", Content: "done", Status: "completed", Required: true, Revision: 3},
+				},
+			}, nil
+		},
+	}
+	authState := NewConnectionAuthState()
+	authState.MarkAuthenticated("subject-1")
+	ctx := WithRequestSource(context.Background(), RequestSourceIPC)
+	ctx = WithConnectionAuthState(ctx, authState)
+	frame := MessageFrame{
+		Type:      FrameTypeRequest,
+		Action:    FrameActionListSessionTodos,
+		RequestID: "req-todo-1",
+		Payload:   protocol.ListSessionTodosParams{SessionID: " session-1 "},
+	}
+	response := dispatchRequestFrame(ctx, frame, runtime)
+	if response.Type != FrameTypeAck || response.Action != FrameActionListSessionTodos {
+		t.Fatalf("response = %#v", response)
+	}
+	if response.SessionID != "session-1" {
+		t.Fatalf("session_id = %q, want %q", response.SessionID, "session-1")
+	}
+}
+
+func TestHandleGetRuntimeSnapshotFrameSuccess(t *testing.T) {
+	runtime := &bootstrapRuntimeStub{
+		getRuntimeSnapshotFn: func(_ context.Context, input GetRuntimeSnapshotInput) (RuntimeSnapshot, error) {
+			if input.SubjectID != "subject-1" || input.SessionID != "session-2" {
+				t.Fatalf("input = %#v", input)
+			}
+			return RuntimeSnapshot{
+				RunID:     "run-1",
+				SessionID: "session-2",
+				Phase:     "acceptance",
+				TaskKind:  "workspace_write",
+			}, nil
+		},
+	}
+	authState := NewConnectionAuthState()
+	authState.MarkAuthenticated("subject-1")
+	ctx := WithRequestSource(context.Background(), RequestSourceIPC)
+	ctx = WithConnectionAuthState(ctx, authState)
+	frame := MessageFrame{
+		Type:      FrameTypeRequest,
+		Action:    FrameActionGetRuntimeSnapshot,
+		RequestID: "req-snapshot-1",
+		Payload:   protocol.GetRuntimeSnapshotParams{SessionID: " session-2 "},
+	}
+	response := dispatchRequestFrame(ctx, frame, runtime)
+	if response.Type != FrameTypeAck || response.Action != FrameActionGetRuntimeSnapshot {
+		t.Fatalf("response = %#v", response)
+	}
+	if response.SessionID != "session-2" {
+		t.Fatalf("session_id = %q, want %q", response.SessionID, "session-2")
+	}
+}
+
+func TestDecodeRuntimeSnapshotAndTodoPayloadBranches(t *testing.T) {
+	if got := buildWakeReviewPrompt("  README.md "); got != "请审查文件 README.md" {
+		t.Fatalf("buildWakeReviewPrompt() = %q", got)
+	}
+	if params := normalizeListSessionTodosParams(" s-1 "); params.SessionID != "s-1" {
+		t.Fatalf("normalizeListSessionTodosParams() = %#v", params)
+	}
+	if params := normalizeGetRuntimeSnapshotParams(" s-2 "); params.SessionID != "s-2" {
+		t.Fatalf("normalizeGetRuntimeSnapshotParams() = %#v", params)
+	}
+
+	todoParams, todoErr := decodeListSessionTodosPayload(map[string]any{"session_id": " s-3 "})
+	if todoErr != nil || todoParams.SessionID != "s-3" {
+		t.Fatalf("decodeListSessionTodosPayload map = %#v, err=%v", todoParams, todoErr)
+	}
+	snapshotParams, snapshotErr := decodeGetRuntimeSnapshotPayload(map[string]any{"session_id": " s-4 "})
+	if snapshotErr != nil || snapshotParams.SessionID != "s-4" {
+		t.Fatalf("decodeGetRuntimeSnapshotPayload map = %#v, err=%v", snapshotParams, snapshotErr)
+	}
+
+	_, todoErr = decodeListSessionTodosPayload(invalidJSONMarshaler{})
+	if todoErr == nil || todoErr.Code != ErrorCodeInvalidAction.String() {
+		t.Fatalf("expected invalid action for todo payload, got %#v", todoErr)
+	}
+	_, snapshotErr = decodeGetRuntimeSnapshotPayload(invalidJSONMarshaler{})
+	if snapshotErr == nil || snapshotErr.Code != ErrorCodeInvalidAction.String() {
+		t.Fatalf("expected invalid action for runtime snapshot payload, got %#v", snapshotErr)
+	}
+}
+
 func TestHandleSetSessionModelFrameSuccess(t *testing.T) {
 	runtime := &bootstrapRuntimeStub{
 		setSessionModelFn: func(_ context.Context, input SetSessionModelInput) error {
@@ -3746,6 +4014,12 @@ func (runtimeOnlyStub) CancelRun(ctx context.Context, input CancelInput) (bool, 
 func (runtimeOnlyStub) Events() <-chan RuntimeEvent                                                  { return nil }
 func (runtimeOnlyStub) ListSessions(ctx context.Context) ([]SessionSummary, error)                   { return nil, nil }
 func (runtimeOnlyStub) LoadSession(ctx context.Context, input LoadSessionInput) (Session, error)     { return Session{}, nil }
+func (runtimeOnlyStub) ListSessionTodos(ctx context.Context, input ListSessionTodosInput) (TodoSnapshot, error) {
+	return TodoSnapshot{}, nil
+}
+func (runtimeOnlyStub) GetRuntimeSnapshot(ctx context.Context, input GetRuntimeSnapshotInput) (RuntimeSnapshot, error) {
+	return RuntimeSnapshot{}, nil
+}
 func (runtimeOnlyStub) CreateSession(ctx context.Context, input CreateSessionInput) (string, error)  { return "", nil }
 func (runtimeOnlyStub) DeleteSession(ctx context.Context, input DeleteSessionInput) (bool, error)    { return false, nil }
 func (runtimeOnlyStub) RenameSession(ctx context.Context, input RenameSessionInput) error            { return nil }

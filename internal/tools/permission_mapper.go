@@ -100,11 +100,10 @@ func buildPermissionAction(input ToolCallInput) (security.Action, error) {
 	case ToolNameSpawnSubAgent:
 		action.Type = security.ActionTypeWrite
 		action.Payload.Operation = ToolNameSpawnSubAgent
-		action.Payload.TargetType = security.TargetTypePath
-		action.Payload.Target = extractSpawnSubAgentTarget(input.Arguments)
-		if action.Payload.Target == "" {
-			return security.Action{}, fmt.Errorf("tools: spawn_subagent permission target is empty")
-		}
+		action.Payload.TargetType = security.TargetTypeCommand
+		action.Payload.Target = extractSpawnSubAgentPermissionLabel(input.Arguments)
+		action.Payload.SandboxTargetType = security.TargetTypePath
+		action.Payload.SandboxTarget = extractSpawnSubAgentSandboxPath(input.Arguments, input.Workdir)
 	case ToolNameMemoRemember:
 		action.Type = security.ActionTypeWrite
 		action.Payload.Operation = "memo_remember"
@@ -189,25 +188,23 @@ func extractStringArgumentFallback(raw string, key string) string {
 	return strings.TrimSpace(rest[:end])
 }
 
-// extractSpawnSubAgentTarget 提取 spawn_subagent 的稳定权限目标，优先 items[].id，再回退 id/prompt。
-func extractSpawnSubAgentTarget(raw []byte) string {
+// extractSpawnSubAgentPermissionLabel 提取 spawn_subagent 的稳定展示目标，仅用于权限展示与审计。
+func extractSpawnSubAgentPermissionLabel(raw []byte) string {
 	if len(raw) == 0 {
-		return ""
+		return ToolNameSpawnSubAgent
 	}
 
 	type spawnItem struct {
 		ID string `json:"id"`
 	}
 	type spawnPayload struct {
-		ID      string      `json:"id"`
-		Prompt  string      `json:"prompt"`
-		Content string      `json:"content"`
-		Items   []spawnItem `json:"items"`
+		ID    string      `json:"id"`
+		Items []spawnItem `json:"items"`
 	}
 
 	var payload spawnPayload
 	if err := json.Unmarshal(raw, &payload); err != nil {
-		return ""
+		return ToolNameSpawnSubAgent
 	}
 
 	ids := make([]string, 0, len(payload.Items))
@@ -224,17 +221,36 @@ func extractSpawnSubAgentTarget(raw []byte) string {
 	if id := strings.TrimSpace(payload.ID); id != "" {
 		return id
 	}
-	prompt := strings.TrimSpace(payload.Prompt)
-	if prompt == "" {
-		prompt = strings.TrimSpace(payload.Content)
+	return ToolNameSpawnSubAgent
+}
+
+// extractSpawnSubAgentSandboxPath 只从 allowed_paths 派生路径校验目标，避免把 prompt/content 当作路径。
+func extractSpawnSubAgentSandboxPath(raw []byte, workdir string) string {
+	defaultTarget := strings.TrimSpace(workdir)
+	if defaultTarget == "" {
+		defaultTarget = "."
 	}
-	if prompt == "" {
-		return ""
+	if len(raw) == 0 {
+		return defaultTarget
 	}
-	const maxTargetChars = 80
-	runes := []rune(prompt)
-	if len(runes) <= maxTargetChars {
-		return prompt
+
+	type spawnPayload struct {
+		AllowedPaths []string `json:"allowed_paths"`
 	}
-	return string(runes[:maxTargetChars]) + "..."
+	var payload spawnPayload
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return defaultTarget
+	}
+	paths := make([]string, 0, len(payload.AllowedPaths))
+	for _, item := range payload.AllowedPaths {
+		trimmed := strings.TrimSpace(item)
+		if trimmed == "" {
+			continue
+		}
+		paths = append(paths, trimmed)
+	}
+	if len(paths) == 1 {
+		return paths[0]
+	}
+	return defaultTarget
 }

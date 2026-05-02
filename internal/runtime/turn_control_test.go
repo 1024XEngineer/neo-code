@@ -74,6 +74,41 @@ func TestApplyToolExecutionCompletionClearsWhenVerifyAfterWrite(t *testing.T) {
 	}
 }
 
+func TestApplyToolExecutionCompletionIgnoresNoopWrite(t *testing.T) {
+	t.Parallel()
+
+	got := applyToolExecutionCompletion(controlplane.CompletionState{}, toolExecutionSummary{
+		Results: []tools.ToolResult{
+			{
+				Facts: tools.ToolExecutionFacts{WorkspaceWrite: true},
+				Metadata: map[string]any{
+					"noop_write": true,
+				},
+			},
+		},
+	})
+	if got.HasUnverifiedWrites {
+		t.Fatalf("expected noop write not to require verification, got %+v", got)
+	}
+}
+
+func TestToolResultNoopWrite(t *testing.T) {
+	t.Parallel()
+
+	if !toolResultNoopWrite(map[string]any{"noop_write": true}) {
+		t.Fatal("expected bool noop_write=true to be recognized")
+	}
+	if !toolResultNoopWrite(map[string]any{"noop_write": "true"}) {
+		t.Fatal("expected string noop_write=true to be recognized")
+	}
+	if toolResultNoopWrite(map[string]any{"noop_write": false}) {
+		t.Fatal("expected noop_write=false to be ignored")
+	}
+	if toolResultNoopWrite(nil) {
+		t.Fatal("expected nil metadata to be ignored")
+	}
+}
+
 func TestHasPendingAgentTodosBlocksOnAnyNonTerminalTodo(t *testing.T) {
 	t.Parallel()
 
@@ -148,5 +183,112 @@ func TestClassifyToolErrorPrefersExplicitErrorClass(t *testing.T) {
 	})
 	if got != "hook_blocked" {
 		t.Fatalf("classifyToolError() = %q, want hook_blocked", got)
+	}
+}
+
+func TestShouldPromotePendingFinalProgress(t *testing.T) {
+	t.Parallel()
+
+	t.Run("business progress always promotes", func(t *testing.T) {
+		t.Parallel()
+		score := controlplane.ProgressScore{HasBusinessProgress: true}
+		if !shouldPromotePendingFinalProgress(score, toolExecutionSummary{}, controlplane.CompletionState{}, "") {
+			t.Fatal("expected business progress to promote pending final progress")
+		}
+	})
+
+	t.Run("duplicate read result with same blocked reason does not promote", func(t *testing.T) {
+		t.Parallel()
+		score := controlplane.ProgressScore{
+			HasExplorationProgress: true,
+			SameToolSignature:      true,
+			SameResultFingerprint:  true,
+			SameSubgoal:            controlplane.SubgoalRelationSame,
+		}
+		summary := toolExecutionSummary{
+			Results: []tools.ToolResult{
+				{Name: tools.ToolNameFilesystemReadFile, Content: "same result"},
+			},
+		}
+		completion := controlplane.CompletionState{
+			CompletionBlockedReason: controlplane.CompletionBlockedReasonPendingTodo,
+		}
+		if shouldPromotePendingFinalProgress(
+			score,
+			summary,
+			completion,
+			string(controlplane.CompletionBlockedReasonPendingTodo),
+		) {
+			t.Fatal("expected duplicate informational read to not promote progress")
+		}
+	})
+
+	t.Run("read result still promotes when blocked reason changed", func(t *testing.T) {
+		t.Parallel()
+		score := controlplane.ProgressScore{
+			HasExplorationProgress: true,
+			SameToolSignature:      true,
+			SameResultFingerprint:  true,
+			SameSubgoal:            controlplane.SubgoalRelationSame,
+		}
+		summary := toolExecutionSummary{
+			Results: []tools.ToolResult{
+				{Name: tools.ToolNameFilesystemGlob, Content: "same result"},
+			},
+		}
+		completion := controlplane.CompletionState{
+			CompletionBlockedReason: controlplane.CompletionBlockedReasonPendingTodo,
+		}
+		if !shouldPromotePendingFinalProgress(
+			score,
+			summary,
+			completion,
+			string(controlplane.CompletionBlockedReasonUnverifiedWrite),
+		) {
+			t.Fatal("expected changed blocked reason to allow one more exploration promotion")
+		}
+	})
+}
+
+func TestApplyToolExecutionCompletionTracksTodoStateFacts(t *testing.T) {
+	t.Parallel()
+
+	initial := controlplane.CompletionState{
+		TodoOnlyTaskCandidate: true,
+	}
+	next := applyToolExecutionCompletion(initial, toolExecutionSummary{
+		Results: []tools.ToolResult{
+			{
+				Name: tools.ToolNameTodoWrite,
+				Metadata: map[string]any{
+					"state_fact": "todo_created",
+				},
+			},
+		},
+	})
+	if !next.TodoStateChanged || !next.TodoStateSatisfied {
+		t.Fatalf("todo state facts not tracked: %+v", next)
+	}
+	if !next.TodoOnlyTaskCandidate {
+		t.Fatalf("todo-only candidate should remain true after todo_write: %+v", next)
+	}
+}
+
+func TestCollectCompletionStateAllowsTodoOnlySatisfiedState(t *testing.T) {
+	t.Parallel()
+
+	state := newRunState("run-todo-only", newRuntimeSession("session-todo-only"))
+	state.completion = controlplane.CompletionState{
+		TodoOnlyTaskCandidate: true,
+		TodoStateSatisfied:    true,
+	}
+	required := true
+	state.session.Todos = []agentsession.TodoItem{
+		{ID: "todo-1", Content: "create todo", Required: &required, Status: agentsession.TodoStatusPending},
+	}
+
+	got := collectCompletionState(&state, providertypes.Message{Role: providertypes.RoleAssistant}, false)
+	if got.CompletionBlockedReason == controlplane.CompletionBlockedReasonPendingTodo {
+		t.Fatalf("todo-only satisfied state should not remain blocked by pending_todo: %+v", got)
 	}
 }

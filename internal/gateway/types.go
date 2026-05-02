@@ -44,6 +44,10 @@ const (
 	FrameActionListSessions FrameAction = "list_sessions"
 	// FrameActionLoadSession 表示加载指定会话详情。
 	FrameActionLoadSession FrameAction = "load_session"
+	// FrameActionListSessionTodos 表示查询指定会话 Todo 快照。
+	FrameActionListSessionTodos FrameAction = "session_todos_list"
+	// FrameActionGetRuntimeSnapshot 表示查询指定会话 runtime 快照。
+	FrameActionGetRuntimeSnapshot FrameAction = "runtime_snapshot_get"
 	// FrameActionResolvePermission 表示提交一次权限审批决策。
 	FrameActionResolvePermission FrameAction = "resolve_permission"
 	// FrameActionDeleteSession 表示删除/归档会话。

@@ -23,16 +23,17 @@ const (
 
 // AcceptanceDecision 表示 runtime beforeAcceptFinal 的结构化输出。
 type AcceptanceDecision struct {
-	Status             AcceptanceStatus            `json:"status"`
-	StopReason         controlplane.StopReason     `json:"stop_reason,omitempty"`
-	ErrorClass         verify.ErrorClass           `json:"error_class,omitempty"`
-	UserVisibleSummary string                      `json:"user_visible_summary,omitempty"`
-	InternalSummary    string                      `json:"internal_summary,omitempty"`
-	ContinueHint       string                      `json:"continue_hint,omitempty"`
-	VerifierResults    []verify.VerificationResult `json:"verifier_results,omitempty"`
-	HasProgress        bool                        `json:"has_progress,omitempty"`
-	Retryable          bool                        `json:"retryable,omitempty"`
-	WaitingExternal    bool                        `json:"waiting_external,omitempty"`
+	Status                  AcceptanceStatus            `json:"status"`
+	StopReason              controlplane.StopReason     `json:"stop_reason,omitempty"`
+	ErrorClass              verify.ErrorClass           `json:"error_class,omitempty"`
+	CompletionBlockedReason string                      `json:"completion_blocked_reason,omitempty"`
+	UserVisibleSummary      string                      `json:"user_visible_summary,omitempty"`
+	InternalSummary         string                      `json:"internal_summary,omitempty"`
+	ContinueHint            string                      `json:"continue_hint,omitempty"`
+	VerifierResults         []verify.VerificationResult `json:"verifier_results,omitempty"`
+	HasProgress             bool                        `json:"has_progress,omitempty"`
+	Retryable               bool                        `json:"retryable,omitempty"`
+	WaitingExternal         bool                        `json:"waiting_external,omitempty"`
 }
 
 // FinalAcceptanceInput 表示 beforeAcceptFinal 需要的输入快照。

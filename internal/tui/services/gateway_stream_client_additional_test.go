@@ -412,6 +412,11 @@ func TestRestoreRuntimePayloadAdditionalBranches(t *testing.T) {
 		{eventType: EventAssetSaveFailed, payload: map[string]any{"message": "x"}},
 		{eventType: EventTodoUpdated, payload: map[string]any{"action": "replace"}},
 		{eventType: EventTodoConflict, payload: map[string]any{"action": "conflict"}},
+		{eventType: EventTodoSnapshotUpdated, payload: map[string]any{"action": "snapshot"}},
+		{eventType: EventRuntimeSnapshotUpdated, payload: map[string]any{"reason": "tool_result", "snapshot": map[string]any{"run_id": "run-1"}}},
+		{eventType: EventFactsUpdated, payload: map[string]any{"reason": "tool_result", "facts": map[string]any{"runtime_facts": map[string]any{}}}},
+		{eventType: EventDecisionMade, payload: map[string]any{"status": "continue", "stop_reason": "todo_not_converged"}},
+		{eventType: EventSubAgentSnapshotUpdated, payload: map[string]any{"reason": "tool_result", "subagent": map[string]any{"started_count": 1}}},
 		{eventType: EventType(RuntimeEventRunContext), payload: map[string]any{"provider": "openai"}},
 		{eventType: EventType(RuntimeEventToolStatus), payload: map[string]any{"status": "running"}},
 	}

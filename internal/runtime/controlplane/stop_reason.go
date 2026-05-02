@@ -32,4 +32,6 @@ const (
 	StopReasonVerificationExecutionDenied StopReason = "verification_execution_denied"
 	// StopReasonVerificationExecutionError 表示 verifier 命令执行异常。
 	StopReasonVerificationExecutionError StopReason = "verification_execution_error"
+	// StopReasonRequiredTodoFailed 表示 required todo 已进入失败终态。
+	StopReasonRequiredTodoFailed StopReason = "required_todo_failed"
 )
