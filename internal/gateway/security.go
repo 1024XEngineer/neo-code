@@ -4,6 +4,8 @@ import (
 	"strings"
 )
 
+const pingMethod = "gateway.ping"
+
 // RequestSource 表示控制面请求来源，用于 ACL 与日志分类。
 type RequestSource string
 
@@ -45,7 +47,7 @@ type ControlPlaneACL struct {
 func fullControlPlaneMethods() map[string]struct{} {
 	methods := []string{
 		"gateway.authenticate",
-		"gateway.ping",
+		pingMethod,
 		"gateway.bindStream",
 		"gateway.run",
 		"gateway.compact",
@@ -57,6 +59,8 @@ func fullControlPlaneMethods() map[string]struct{} {
 		"gateway.cancel",
 		"gateway.listSessions",
 		"gateway.loadSession",
+		"session.todos.list",
+		"runtime.snapshot.get",
 		"gateway.resolvePermission",
 		"gateway.deleteSession",
 		"gateway.renameSession",
@@ -74,11 +78,7 @@ func fullControlPlaneMethods() map[string]struct{} {
 		"gateway.deleteMCPServer",
 		"wake.openUrl",
 	}
-	set := make(map[string]struct{}, len(methods))
-	for _, m := range methods {
-		set[strings.ToLower(strings.TrimSpace(m))] = struct{}{}
-	}
-	return set
+	return normalizedMethodSet(methods...)
 }
 
 // NewStrictControlPlaneACL 创建默认拒绝的严格 ACL。
@@ -88,9 +88,7 @@ func NewStrictControlPlaneACL() *ControlPlaneACL {
 		RequestSourceIPC:  localMethods,
 		RequestSourceHTTP: localMethods,
 		RequestSourceWS:   localMethods,
-		RequestSourceSSE: {
-			strings.ToLower(strings.TrimSpace("gateway.ping")): {},
-		},
+		RequestSourceSSE:  normalizedMethodSet(pingMethod),
 	}
 	return &ControlPlaneACL{
 		mode:    ACLModeStrict,
@@ -123,6 +121,19 @@ func (a *ControlPlaneACL) Mode() ACLMode {
 		return ACLModeStrict
 	}
 	return a.mode
+}
+
+// normalizedMethodSet 将方法名白名单统一转成归一化集合并去除空值。
+func normalizedMethodSet(methods ...string) map[string]struct{} {
+	set := make(map[string]struct{}, len(methods))
+	for _, method := range methods {
+		normalizedMethod := strings.ToLower(strings.TrimSpace(method))
+		if normalizedMethod == "" {
+			continue
+		}
+		set[normalizedMethod] = struct{}{}
+	}
+	return set
 }
 
 // NormalizeRequestSource 归一化请求来源值。

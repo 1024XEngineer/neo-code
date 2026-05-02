@@ -111,6 +111,17 @@ func (s *runtimePortCompileStub) DeleteMCPServer(_ context.Context, _ DeleteMCPS
 	return nil
 }
 
+func (s *runtimePortCompileStub) ListSessionTodos(_ context.Context, _ ListSessionTodosInput) (TodoSnapshot, error) {
+	return TodoSnapshot{}, nil
+}
+
+func (s *runtimePortCompileStub) GetRuntimeSnapshot(
+	_ context.Context,
+	_ GetRuntimeSnapshotInput,
+) (RuntimeSnapshot, error) {
+	return RuntimeSnapshot{}, nil
+}
+
 func (s *runtimePortCompileStub) CreateSession(_ context.Context, _ CreateSessionInput) (string, error) {
 	return "", nil
 }

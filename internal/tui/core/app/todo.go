@@ -51,6 +51,7 @@ type todoViewItem struct {
 	ID        string
 	Title     string
 	Status    string
+	Executor  string
 	Priority  int
 	Owner     string
 	UpdatedAt time.Time
@@ -98,6 +99,7 @@ func mapTodoViewItems(items []agentsession.TodoItem) []todoViewItem {
 			ID:        strings.TrimSpace(item.ID),
 			Title:     strings.TrimSpace(item.Content),
 			Status:    strings.TrimSpace(string(item.Status)),
+			Executor:  strings.TrimSpace(item.Executor),
 			Priority:  item.Priority,
 			Owner:     formatTodoOwner(item.OwnerType, item.OwnerID),
 			UpdatedAt: item.UpdatedAt,
@@ -289,7 +291,7 @@ func (a *App) rebuildTodo() {
 	a.todoSelectedIndex = clampTodoSelection(a.todoSelectedIndex, len(visible))
 
 	lines := []string{
-		"ID  Title  Status  Priority  Owner  Updated At",
+		"ID  Title  Status  Executor  Priority  Owner  Updated At",
 	}
 	if len(visible) == 0 {
 		lines = append(lines, fmt.Sprintf("No todos for filter %q.", a.todoFilter))
@@ -304,11 +306,12 @@ func (a *App) rebuildTodo() {
 				title = "(empty)"
 			}
 			lines = append(lines, fmt.Sprintf(
-				"%s %s | %s | %s | P%d | %s | %s",
+				"%s %s | %s | %s | %s | P%d | %s | %s",
 				prefix,
 				item.ID,
 				title,
 				item.Status,
+				fallbackText(item.Executor, "-"),
 				item.Priority,
 				item.Owner,
 				formatTodoUpdatedAt(item.UpdatedAt),
@@ -375,6 +378,7 @@ func (a *App) openSelectedTodoDetail() {
 		fmt.Sprintf("[Todo] %s", current.ID),
 		fmt.Sprintf("title: %s", current.Title),
 		fmt.Sprintf("status: %s", current.Status),
+		fmt.Sprintf("executor: %s", fallbackText(current.Executor, "-")),
 		fmt.Sprintf("priority: %d", current.Priority),
 		fmt.Sprintf("owner: %s", current.Owner),
 		fmt.Sprintf("updated_at: %s", formatTodoUpdatedAt(current.UpdatedAt)),

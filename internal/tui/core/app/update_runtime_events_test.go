@@ -207,6 +207,95 @@ func TestRuntimeEventHandlerRegistryContainsRenamedEvents(t *testing.T) {
 	if _, ok := runtimeEventHandlerRegistry[agentruntime.EventRepoHooksTrustStoreInvalid]; !ok {
 		t.Fatalf("expected repo_hooks_trust_store_invalid handler to be registered")
 	}
+	if _, ok := runtimeEventHandlerRegistry[agentruntime.EventSubAgentStarted]; !ok {
+		t.Fatalf("expected subagent_started handler to be registered")
+	}
+	if _, ok := runtimeEventHandlerRegistry[agentruntime.EventSubAgentFailed]; !ok {
+		t.Fatalf("expected subagent_failed handler to be registered")
+	}
+	if _, ok := runtimeEventHandlerRegistry[agentruntime.EventSubAgentToolCallResult]; !ok {
+		t.Fatalf("expected subagent_tool_call_result handler to be registered")
+	}
+	if _, ok := runtimeEventHandlerRegistry[agentruntime.EventRuntimeSnapshotUpdated]; !ok {
+		t.Fatalf("expected runtime_snapshot_updated handler to be registered")
+	}
+	if _, ok := runtimeEventHandlerRegistry[agentruntime.EventFactsUpdated]; !ok {
+		t.Fatalf("expected facts_updated handler to be registered")
+	}
+	if _, ok := runtimeEventHandlerRegistry[agentruntime.EventDecisionMade]; !ok {
+		t.Fatalf("expected decision_made handler to be registered")
+	}
+	if _, ok := runtimeEventHandlerRegistry[agentruntime.EventSubAgentSnapshotUpdated]; !ok {
+		t.Fatalf("expected subagent_snapshot_updated handler to be registered")
+	}
+	if _, ok := runtimeEventHandlerRegistry[agentruntime.EventTodoSnapshotUpdated]; !ok {
+		t.Fatalf("expected todo_snapshot_updated handler to be registered")
+	}
+}
+
+func TestRuntimeSnapshotAndFactsHandlers(t *testing.T) {
+	app, _ := newTestApp(t)
+
+	if runtimeEventRuntimeSnapshotUpdatedHandler(&app, agentruntime.RuntimeEvent{Payload: "bad"}) {
+		t.Fatalf("expected invalid runtime snapshot payload to return false")
+	}
+	if runtimeEventFactsUpdatedHandler(&app, agentruntime.RuntimeEvent{Payload: 1}) {
+		t.Fatalf("expected invalid facts payload to return false")
+	}
+	if runtimeEventDecisionMadeHandler(&app, agentruntime.RuntimeEvent{Payload: true}) {
+		t.Fatalf("expected invalid decision payload to return false")
+	}
+	if runtimeEventSubAgentSnapshotUpdatedHandler(&app, agentruntime.RuntimeEvent{Payload: []string{"bad"}}) {
+		t.Fatalf("expected invalid subagent snapshot payload to return false")
+	}
+
+	runtimeEventRuntimeSnapshotUpdatedHandler(&app, agentruntime.RuntimeEvent{
+		Payload: agentruntime.RuntimeSnapshotUpdatedPayload{
+			Reason: "tool_result",
+			Snapshot: agentruntime.RuntimeSnapshot{
+				Todos: agentruntime.TodoSnapshot{
+					Items: []agentruntime.TodoViewItem{
+						{ID: "t1", Content: "demo", Status: "pending"},
+					},
+					Summary: agentruntime.TodoSummary{Total: 1, RequiredTotal: 1, RequiredOpen: 1},
+				},
+			},
+		},
+	})
+	if len(app.todoItems) != 1 || app.todoItems[0].ID != "t1" {
+		t.Fatalf("expected todo panel synced from runtime snapshot, got %+v", app.todoItems)
+	}
+
+	runtimeEventDecisionMadeHandler(&app, agentruntime.RuntimeEvent{
+		Payload: agentruntime.DecisionMadePayload{
+			Status:             "continue",
+			StopReason:         "todo_not_converged",
+			UserVisibleSummary: "need verification facts",
+			MissingFacts: []map[string]any{
+				{"kind": "verification_passed", "target": "test.txt"},
+			},
+			RequiredNextActions: []map[string]any{
+				{"tool": "filesystem_read_file"},
+			},
+		},
+	})
+	last := app.activities[len(app.activities)-1]
+	if last.Title != "Final decision (continue)" {
+		t.Fatalf("unexpected decision activity: %+v", last)
+	}
+	if len(app.activeMessages) == 0 {
+		t.Fatalf("expected decision block inline message")
+	}
+	decisionText := renderMessagePartsForDisplay(app.activeMessages[len(app.activeMessages)-1].Parts)
+	if !strings.Contains(decisionText, "正在验收中") || !strings.Contains(decisionText, "建议:") {
+		t.Fatalf("expected friendly runtime decision hint, got %q", decisionText)
+	}
+	if strings.Contains(decisionText, "required_next_actions") || strings.Contains(decisionText, "filesystem_read_file") {
+		t.Fatalf("decision message should hide machine next-action JSON, got %q", decisionText)
+	}
+	if !strings.Contains(last.Detail, "required_next_actions=") || !strings.Contains(last.Detail, "missing_facts=") {
+		t.Fatalf("expected activity detail to keep debug machine details, got %+v", last)
+	}
 }
 
 func TestRuntimeEventHookHandlers(t *testing.T) {
@@ -338,6 +427,64 @@ func TestRuntimeEventRepoHookLifecycleHandlers(t *testing.T) {
 	}
 }
 
+func TestRuntimeEventSubAgentHandlers(t *testing.T) {
+	app, _ := newTestApp(t)
+	if runtimeEventSubAgentLifecycleHandler(&app, agentruntime.RuntimeEvent{
+		Type:    agentruntime.EventSubAgentStarted,
+		Payload: "bad",
+	}) {
+		t.Fatalf("expected invalid subagent lifecycle payload to return false")
+	}
+	runtimeEventSubAgentLifecycleHandler(&app, agentruntime.RuntimeEvent{
+		Type: agentruntime.EventSubAgentProgress,
+		Payload: agentruntime.SubAgentEventPayload{
+			Role:   "coder",
+			TaskID: "task-1",
+			State:  "running",
+			Step:   2,
+			Delta:  "working",
+		},
+	})
+	last := app.activities[len(app.activities)-1]
+	if last.Title != "SubAgent progress" || !strings.Contains(last.Detail, "task=task-1") || last.IsError {
+		t.Fatalf("unexpected subagent progress activity: %+v", last)
+	}
+
+	runtimeEventSubAgentLifecycleHandler(&app, agentruntime.RuntimeEvent{
+		Type: agentruntime.EventSubAgentFailed,
+		Payload: agentruntime.SubAgentEventPayload{
+			Role:  "reviewer",
+			State: "failed",
+			Error: "boom",
+		},
+	})
+	last = app.activities[len(app.activities)-1]
+	if last.Title != "SubAgent failed" || !strings.Contains(last.Detail, "error=boom") || !last.IsError {
+		t.Fatalf("unexpected subagent failed activity: %+v", last)
+	}
+
+	if runtimeEventSubAgentToolCallHandler(&app, agentruntime.RuntimeEvent{
+		Type:    agentruntime.EventSubAgentToolCallStarted,
+		Payload: 1,
+	}) {
+		t.Fatalf("expected invalid subagent tool call payload to return false")
+	}
+	runtimeEventSubAgentToolCallHandler(&app, agentruntime.RuntimeEvent{
+		Type: agentruntime.EventSubAgentToolCallResult,
+		Payload: agentruntime.SubAgentToolCallEventPayload{
+			Role:      "coder",
+			TaskID:    "task-2",
+			ToolName:  "bash",
+			Decision:  "allow",
+			ElapsedMS: 88,
+		},
+	})
+	last = app.activities[len(app.activities)-1]
+	if last.Title != "SubAgent tool call result" || !strings.Contains(last.Detail, "tool=bash") || last.IsError {
+		t.Fatalf("unexpected subagent tool call result activity: %+v", last)
+	}
+}
+
 func TestShouldHandleRuntimeEventFiltersBySessionAndRun(t *testing.T) {
 	app, _ := newTestApp(t)
 	app.state.ActiveSessionID = "session-active"
@@ -451,6 +598,16 @@ func TestRuntimeEventVerificationAndAcceptanceHandlers(t *testing.T) {
 	if app.runProgressValue != 0.88 {
 		t.Fatalf("progress value = %v, want 0.88 when completion passed", app.runProgressValue)
 	}
+	runtimeEventVerificationStartedHandler(&app, agentruntime.RuntimeEvent{
+		Payload: agentruntime.VerificationStartedPayload{
+			CompletionPassed:        false,
+			CompletionBlockedReason: "pending_todo",
+		},
+	})
+	verificationStarted := app.activities[len(app.activities)-1]
+	if !strings.Contains(verificationStarted.Detail, "reason=pending_todo") {
+		t.Fatalf("expected verification started detail to include blocked reason, got %+v", verificationStarted)
+	}
 
 	if handled := runtimeEventVerificationStageFinishedHandler(&app, agentruntime.RuntimeEvent{Payload: 1}); handled {
 		t.Fatalf("expected invalid stage payload to return false")
@@ -511,15 +668,191 @@ func TestRuntimeEventVerificationAndAcceptanceHandlers(t *testing.T) {
 	}
 	runtimeEventAcceptanceDecidedHandler(&app, agentruntime.RuntimeEvent{
 		Payload: agentruntime.AcceptanceDecidedPayload{
-			Status:             "failed",
-			UserVisibleSummary: "",
-			InternalSummary:    "",
-			ContinueHint:       "provide missing files",
+			Status:                  "failed",
+			UserVisibleSummary:      "",
+			InternalSummary:         "",
+			ContinueHint:            "provide missing files",
+			CompletionBlockedReason: "unverified_write",
 		},
 	})
 	acceptance := app.activities[len(app.activities)-1]
-	if acceptance.Title != "Acceptance decided (failed)" || acceptance.Detail != "provide missing files" || !acceptance.IsError {
+	if acceptance.Title != "Acceptance decided (failed)" || !strings.Contains(acceptance.Detail, "reason=unverified_write") || !acceptance.IsError {
 		t.Fatalf("unexpected acceptance activity: %+v", acceptance)
+	}
+}
+
+func TestDecisionContinueSuppressesAssistantFinalMessage(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.activeMessages = append(app.activeMessages, providertypes.Message{
+		Role:  roleAssistant,
+		Parts: []providertypes.ContentPart{providertypes.NewTextPart("任务已完成")},
+	})
+
+	runtimeEventDecisionMadeHandler(&app, agentruntime.RuntimeEvent{
+		RunID: "run-1",
+		Payload: agentruntime.DecisionMadePayload{
+			Status:             "continue",
+			StopReason:         "todo_not_converged",
+			UserVisibleSummary: "need verification",
+		},
+	})
+
+	if len(app.activeMessages) == 0 {
+		t.Fatalf("expected runtime decision block message")
+	}
+	last := app.activeMessages[len(app.activeMessages)-1]
+	if last.Role != roleSystem || !strings.Contains(renderMessagePartsForDisplay(last.Parts), "正在验收中") {
+		t.Fatalf("expected runtime decision block as last message, got %+v", last)
+	}
+	lastText := renderMessagePartsForDisplay(last.Parts)
+	if strings.Contains(lastText, "required_next_actions") || strings.Contains(lastText, "filesystem_read_file") {
+		t.Fatalf("runtime decision block should not expose machine JSON, got %q", lastText)
+	}
+
+	runtimeEventAgentDoneHandler(&app, agentruntime.RuntimeEvent{
+		RunID: "run-1",
+		Payload: providertypes.Message{
+			Role:  roleAssistant,
+			Parts: []providertypes.ContentPart{providertypes.NewTextPart("任务已完成")},
+		},
+	})
+
+	for _, message := range app.activeMessages {
+		if message.Role != roleAssistant {
+			continue
+		}
+		if strings.Contains(renderMessagePartsForDisplay(message.Parts), "任务已完成") {
+			t.Fatalf("unexpected assistant final message kept after continue decision")
+		}
+	}
+}
+
+func TestRuntimeEventDecisionMadeHandlerAcceptedDoesNotRenderDecisionBlock(t *testing.T) {
+	app, _ := newTestApp(t)
+	initialMessages := len(app.activeMessages)
+
+	runtimeEventDecisionMadeHandler(&app, agentruntime.RuntimeEvent{
+		Payload: agentruntime.DecisionMadePayload{
+			Status: "accepted",
+		},
+	})
+
+	if len(app.activeMessages) == 0 {
+		t.Fatalf("expected at least one message after accepted decision activity")
+	}
+	lastText := renderMessagePartsForDisplay(app.activeMessages[len(app.activeMessages)-1].Parts)
+	if strings.Contains(lastText, "正在验收中") {
+		t.Fatalf("accepted decision should not render runtime decision block, got %q", lastText)
+	}
+	if len(app.activeMessages) < initialMessages {
+		t.Fatalf("message count should not shrink for accepted decision")
+	}
+	if len(app.activities) == 0 {
+		t.Fatalf("expected decision activity to be appended")
+	}
+	last := app.activities[len(app.activities)-1]
+	if last.Title != "Final decision (accepted)" {
+		t.Fatalf("unexpected decision activity title: %+v", last)
+	}
+}
+
+func TestRuntimeEventDecisionMadeHandlerFallsBackForEmptyStatusAndSummary(t *testing.T) {
+	app, _ := newTestApp(t)
+
+	runtimeEventDecisionMadeHandler(&app, agentruntime.RuntimeEvent{
+		Payload: agentruntime.DecisionMadePayload{},
+	})
+
+	if len(app.activities) == 0 {
+		t.Fatalf("expected fallback decision activity")
+	}
+	last := app.activities[len(app.activities)-1]
+	if last.Title != "Final decision (unknown)" {
+		t.Fatalf("unexpected fallback title: %+v", last)
+	}
+	if !strings.Contains(last.Detail, "decision generated") {
+		t.Fatalf("expected fallback detail, got %+v", last)
+	}
+}
+
+func TestRuntimeEventDecisionMadeHandlerUsesInternalSummaryFallback(t *testing.T) {
+	app, _ := newTestApp(t)
+
+	runtimeEventDecisionMadeHandler(&app, agentruntime.RuntimeEvent{
+		Payload: agentruntime.DecisionMadePayload{
+			Status:          "blocked",
+			InternalSummary: "blocked by policy",
+		},
+	})
+
+	last := app.activities[len(app.activities)-1]
+	if last.Title != "Final decision (blocked)" {
+		t.Fatalf("unexpected decision title: %+v", last)
+	}
+	if !strings.Contains(last.Detail, "blocked by policy") {
+		t.Fatalf("expected internal summary fallback, got %+v", last)
+	}
+}
+
+func TestDecisionHelperBranches(t *testing.T) {
+	if shouldSuppressAssistantFinalMessage(nil, "run-1") {
+		t.Fatalf("nil app should never suppress assistant final message")
+	}
+
+	app, _ := newTestApp(t)
+	if shouldSuppressAssistantFinalMessage(&app, "run-1") {
+		t.Fatalf("empty suppression run id should return false")
+	}
+
+	app.suppressAssistantForRun = "run-2"
+	if shouldSuppressAssistantFinalMessage(&app, "run-1") {
+		t.Fatalf("mismatched run id should not suppress")
+	}
+
+	app.suppressAssistantForRun = "RUN-3"
+	if !shouldSuppressAssistantFinalMessage(&app, "run-3") {
+		t.Fatalf("case-insensitive run id match should suppress")
+	}
+	if app.suppressAssistantForRun != "" {
+		t.Fatalf("suppression marker should be cleared after suppress")
+	}
+
+	discardTrailingAssistantMessage(nil)
+
+	discardTrailingAssistantMessage(&app)
+	if len(app.activeMessages) != 0 {
+		t.Fatalf("empty messages should remain unchanged")
+	}
+
+	app.activeMessages = append(app.activeMessages, providertypes.Message{Role: roleSystem})
+	discardTrailingAssistantMessage(&app)
+	if len(app.activeMessages) != 1 {
+		t.Fatalf("non-assistant tail should not be removed")
+	}
+
+	app.activeMessages = append(app.activeMessages, providertypes.Message{
+		Role:  roleAssistant,
+		Parts: []providertypes.ContentPart{providertypes.NewTextPart("done")},
+	})
+	discardTrailingAssistantMessage(&app)
+	if len(app.activeMessages) != 1 {
+		t.Fatalf("assistant tail should be removed")
+	}
+}
+
+func TestFormattingHelperBranches(t *testing.T) {
+	if firstNonBlank(" ", "\t", "") != "" {
+		t.Fatalf("all blank values should produce empty result")
+	}
+	if got := firstNonBlank(" ", "ok", "fallback"); got != "ok" {
+		t.Fatalf("first non-blank value mismatch: %q", got)
+	}
+
+	if got := jsonCompactOrFallback(map[string]any{"k": "v"}); !strings.Contains(got, "\"k\":\"v\"") {
+		t.Fatalf("json compact output mismatch: %q", got)
+	}
+	if got := jsonCompactOrFallback(map[string]any{"bad": func() {}}); !strings.Contains(got, "map[bad:") {
+		t.Fatalf("fallback output mismatch for marshal error: %q", got)
 	}
 }
 

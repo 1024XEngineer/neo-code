@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -56,6 +57,28 @@ func TestToolMetadata(t *testing.T) {
 	if !ok || len(enums) != 1 || enums[0] != spawnModeInline {
 		t.Fatalf("mode enum = %#v, want [inline]", modeProp["enum"])
 	}
+	taskTypeProp, ok := properties["task_type"].(map[string]any)
+	if !ok {
+		t.Fatalf("Schema().task_type type = %T", properties["task_type"])
+	}
+	taskTypeEnums, ok := taskTypeProp["enum"].([]string)
+	if !ok || len(taskTypeEnums) != 3 {
+		t.Fatalf("task_type enum = %#v", taskTypeProp["enum"])
+	}
+	promptProp, ok := properties["prompt"].(map[string]any)
+	if !ok {
+		t.Fatalf("Schema().prompt type = %T", properties["prompt"])
+	}
+	if desc := strings.TrimSpace(fmt.Sprintf("%v", promptProp["description"])); !strings.Contains(desc, "not a filesystem path") {
+		t.Fatalf("prompt description = %q, want path clarification", desc)
+	}
+	allowedPathsProp, ok := properties["allowed_paths"].(map[string]any)
+	if !ok {
+		t.Fatalf("Schema().allowed_paths type = %T", properties["allowed_paths"])
+	}
+	if desc := strings.TrimSpace(fmt.Sprintf("%v", allowedPathsProp["description"])); !strings.Contains(desc, "filesystem paths") {
+		t.Fatalf("allowed_paths description = %q, want filesystem path clarification", desc)
+	}
 }
 
 func TestToolExecuteInlineMode(t *testing.T) {
@@ -88,6 +111,7 @@ func TestToolExecuteInlineMode(t *testing.T) {
 			"prompt":"review code quality",
 			"id":"inline-1",
 			"role":"coder",
+			"task_type":"edit",
 			"max_steps":3,
 			"timeout_sec":90,
 			"allowed_tools":["bash"],
@@ -106,8 +130,15 @@ func TestToolExecuteInlineMode(t *testing.T) {
 	if invoker.last.Timeout != 90*time.Second {
 		t.Fatalf("timeout = %v, want 90s", invoker.last.Timeout)
 	}
+	if invoker.last.TaskType != subagent.TaskTypeEdit {
+		t.Fatalf("task type = %q, want edit", invoker.last.TaskType)
+	}
 	if invoker.last.ParentCapabilityToken == nil || len(invoker.last.ParentCapabilityToken.AllowedTools) == 0 {
 		t.Fatalf("parent capability token should be forwarded: %+v", invoker.last.ParentCapabilityToken)
+	}
+	artifacts, ok := result.Metadata["artifacts"].([]string)
+	if !ok || len(artifacts) != 1 || artifacts[0] != "a.txt" {
+		t.Fatalf("metadata artifacts = %#v", result.Metadata["artifacts"])
 	}
 }
 
@@ -134,6 +165,63 @@ func TestToolExecuteInlineModeErrors(t *testing.T) {
 	}
 	if !result.IsError {
 		t.Fatalf("expected result.IsError=true")
+	}
+	if result.ErrorClass != "subagent_failed" {
+		t.Fatalf("error class = %q, want subagent_failed", result.ErrorClass)
+	}
+}
+
+func TestToolExecuteInlineModeDefaultAllowedPaths(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		workdir      string
+		wantPath     string
+		rawArguments string
+	}{
+		{
+			name:         "empty allowed_paths uses workdir",
+			workdir:      "/tmp/workdir",
+			wantPath:     "/tmp/workdir",
+			rawArguments: `{"content":"创建 1.txt，内容为 1"}`,
+		},
+		{
+			name:         "empty allowed_paths uses dot when workdir is empty",
+			workdir:      "",
+			wantPath:     ".",
+			rawArguments: `{"content":"读取 README 并总结","task_type":"review"}`,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			tool := New()
+			invoker := &stubSubAgentInvoker{
+				result: tools.SubAgentRunResult{
+					Role:       subagent.RoleCoder,
+					TaskID:     "inline-default-paths",
+					State:      subagent.StateSucceeded,
+					StopReason: subagent.StopReasonCompleted,
+				},
+			}
+			_, err := tool.Execute(context.Background(), tools.ToolCallInput{
+				Name:            tools.ToolNameSpawnSubAgent,
+				Workdir:         tt.workdir,
+				SubAgentInvoker: invoker,
+				Arguments:       []byte(tt.rawArguments),
+			})
+			if err != nil {
+				t.Fatalf("Execute() error = %v", err)
+			}
+			expectedPath := resolveSpawnAllowedPath(tt.wantPath, tt.workdir)
+			if len(invoker.last.AllowedPaths) != 1 || invoker.last.AllowedPaths[0] != expectedPath {
+				t.Fatalf("allowed_paths = %v, want [%s]", invoker.last.AllowedPaths, expectedPath)
+			}
+		})
 	}
 }
 
@@ -186,6 +274,7 @@ func TestParseSpawnInputValidationBranches(t *testing.T) {
 		{name: "invalid json", raw: []byte(`{`), wantErr: "parse arguments"},
 		{name: "mode unsupported", raw: []byte(`{"mode":"dag","prompt":"x"}`), wantErr: "unsupported mode"},
 		{name: "role invalid", raw: []byte(`{"prompt":"do it","role":"manager"}`), wantErr: `unsupported role "manager"`},
+		{name: "task_type invalid", raw: []byte(`{"prompt":"do it","task_type":"audit"}`), wantErr: `unsupported task_type "audit"`},
 		{name: "prompt missing", raw: []byte(`{"id":"x"}`), wantErr: "prompt is empty"},
 		{name: "prompt too long", raw: []byte(`{"prompt":"` + tooLong + `"}`), wantErr: "prompt exceeds max length"},
 		{name: "id too long", raw: []byte(`{"prompt":"ok","id":"` + tooLong + `"}`), wantErr: "id exceeds max length"},
@@ -217,6 +306,28 @@ func TestParseSpawnInputContentFallback(t *testing.T) {
 	}
 	if input.Prompt != "summarize" {
 		t.Fatalf("prompt = %q, want summarize", input.Prompt)
+	}
+	if input.TaskType != "review" {
+		t.Fatalf("task_type = %q, want review", input.TaskType)
+	}
+}
+
+func TestResolveSpawnAllowedPathsResolvesRelativePathAgainstWorkdir(t *testing.T) {
+	t.Parallel()
+
+	workdir := t.TempDir()
+	got := resolveSpawnAllowedPaths([]string{"README.md"}, workdir)
+	if len(got) != 1 {
+		t.Fatalf("allowed_paths length = %d, want 1", len(got))
+	}
+	want := filepath.Join(workdir, "README.md")
+	want = filepath.Clean(want)
+	absoluteWant, err := filepath.Abs(want)
+	if err != nil {
+		t.Fatalf("filepath.Abs(%q) error = %v", want, err)
+	}
+	if got[0] != absoluteWant {
+		t.Fatalf("allowed_paths[0] = %q, want %q", got[0], absoluteWant)
 	}
 }
 

@@ -130,6 +130,8 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 		agentsession.NormalizeAgentMode(session.AgentMode) == agentsession.AgentModePlan
 	state.taskID = strings.TrimSpace(input.TaskID)
 	state.agentID = strings.TrimSpace(input.AgentID)
+	state.taskKind = inferTaskKindFromInput(input.Parts)
+	state.userGoal = strings.TrimSpace(renderPartsForVerification(input.Parts))
 	if input.CapabilityToken != nil {
 		token := input.CapabilityToken.Normalize()
 		state.capabilityToken = &token
@@ -165,6 +167,7 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 	if err := s.appendUserMessageAndSave(ctx, &state, input.Parts); err != nil {
 		return s.handleRunError(err)
 	}
+	s.emitRuntimeSnapshotUpdated(ctx, &state, "session_start")
 
 	maxTurns := resolveRuntimeMaxTurns(initialCfg.Runtime)
 	for turn := 0; ; turn++ {
@@ -249,6 +252,15 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 				return s.handleRunError(err)
 			}
 			hasToolCalls := len(turnOutput.assistant.ToolCalls) > 0
+			state.mu.Lock()
+			if hasToolCalls {
+				state.mustUseToolAfterFinalContinue = false
+				state.noToolAfterFinalContinueStreak = 0
+			} else if state.mustUseToolAfterFinalContinue {
+				state.pendingFinalProgress = false
+				state.noToolAfterFinalContinueStreak++
+			}
+			state.mu.Unlock()
 			if hasToolCalls {
 				if err := s.appendAssistantMessageAndSave(
 					ctx,
@@ -353,15 +365,16 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 					})
 				}
 
-				s.emitRunScoped(ctx, EventVerificationStarted, &state, VerificationStartedPayload{
-					CompletionPassed: completed,
+				s.emitRunScopedOptional(EventVerificationStarted, &state, VerificationStartedPayload{
+					CompletionPassed:        completed,
+					CompletionBlockedReason: strings.TrimSpace(string(state.completion.CompletionBlockedReason)),
 				})
 				acceptanceDecision, err := s.beforeAcceptFinal(ctx, &state, snapshot, turnOutput.assistant, completed)
 				if err != nil {
 					return s.handleRunError(err)
 				}
 				for _, result := range acceptanceDecision.VerifierResults {
-					s.emitRunScoped(ctx, EventVerificationStageFinished, &state, VerificationStageFinishedPayload{
+					s.emitRunScopedOptional(EventVerificationStageFinished, &state, VerificationStageFinishedPayload{
 						Name:       result.Name,
 						Status:     result.Status,
 						Summary:    result.Summary,
@@ -369,23 +382,27 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 						ErrorClass: result.ErrorClass,
 					})
 				}
-				s.emitRunScoped(ctx, EventVerificationFinished, &state, VerificationFinishedPayload{
+				s.emitRunScopedOptional(EventVerificationFinished, &state, VerificationFinishedPayload{
 					AcceptanceStatus: acceptanceDecision.Status,
 					StopReason:       acceptanceDecision.StopReason,
 					ErrorClass:       acceptanceDecision.ErrorClass,
 				})
-				s.emitRunScoped(ctx, EventAcceptanceDecided, &state, AcceptanceDecidedPayload{
-					Status:             acceptanceDecision.Status,
-					StopReason:         acceptanceDecision.StopReason,
-					ErrorClass:         acceptanceDecision.ErrorClass,
-					UserVisibleSummary: acceptanceDecision.UserVisibleSummary,
-					InternalSummary:    acceptanceDecision.InternalSummary,
-					ContinueHint:       acceptanceDecision.ContinueHint,
+				s.emitRunScopedOptional(EventAcceptanceDecided, &state, AcceptanceDecidedPayload{
+					Status:                  acceptanceDecision.Status,
+					StopReason:              acceptanceDecision.StopReason,
+					ErrorClass:              acceptanceDecision.ErrorClass,
+					CompletionBlockedReason: strings.TrimSpace(acceptanceDecision.CompletionBlockedReason),
+					UserVisibleSummary:      acceptanceDecision.UserVisibleSummary,
+					InternalSummary:         acceptanceDecision.InternalSummary,
+					ContinueHint:            acceptanceDecision.ContinueHint,
 				})
 				applyAcceptanceResultProgress(&state, acceptanceDecision)
 
 				switch acceptanceDecision.Status {
 				case acceptance.AcceptanceAccepted:
+					state.lastAcceptanceBlockedReason = ""
+					state.mustUseToolAfterFinalContinue = false
+					state.noToolAfterFinalContinueStreak = 0
 					if markCurrentPlanCompleted(&state.session, completionSignaled) {
 						state.touchSession()
 						if err := s.sessionStore.UpdateSessionState(ctx, sessionStateInputFromSession(state.session)); err != nil {
@@ -395,7 +412,7 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 					if err := s.appendAssistantMessageOnlyAndSave(ctx, &state, turnOutput.assistant); err != nil {
 						return s.handleRunError(err)
 					}
-					s.emitRunScoped(ctx, EventVerificationCompleted, &state, VerificationCompletedPayload{
+					s.emitRunScopedOptional(EventVerificationCompleted, &state, VerificationCompletedPayload{
 						StopReason: acceptanceDecision.StopReason,
 					})
 					recordAcceptanceTerminal(&state, acceptanceDecision)
@@ -403,7 +420,12 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 					s.triggerMemoExtraction(state.session.ID, state.session.Messages, state.rememberedThisRun)
 					return nil
 				case acceptance.AcceptanceContinue:
-					reminder := strings.TrimSpace(acceptanceDecision.ContinueHint)
+					state.lastAcceptanceBlockedReason = strings.TrimSpace(acceptanceDecision.CompletionBlockedReason)
+					state.mustUseToolAfterFinalContinue = true
+					if state.noToolAfterFinalContinueStreak == 0 {
+						state.noToolAfterFinalContinueStreak = 1
+					}
+					reminder := strings.TrimSpace(buildAcceptanceContinueHint(acceptanceDecision))
 					if reminder == "" {
 						reminder = finalContinueReminder
 					}
@@ -412,6 +434,9 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 					}
 					break turnAttempt
 				case acceptance.AcceptanceIncomplete:
+					state.lastAcceptanceBlockedReason = ""
+					state.mustUseToolAfterFinalContinue = false
+					state.noToolAfterFinalContinueStreak = 0
 					if err := s.appendAssistantMessageOnlyAndSave(ctx, &state, turnOutput.assistant); err != nil {
 						return s.handleRunError(err)
 					}
@@ -419,10 +444,13 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 					s.emitRunScoped(ctx, EventAgentDone, &state, turnOutput.assistant)
 					return nil
 				case acceptance.AcceptanceFailed:
+					state.lastAcceptanceBlockedReason = ""
+					state.mustUseToolAfterFinalContinue = false
+					state.noToolAfterFinalContinueStreak = 0
 					if err := s.appendAssistantMessageOnlyAndSave(ctx, &state, turnOutput.assistant); err != nil {
 						return s.handleRunError(err)
 					}
-					s.emitRunScoped(ctx, EventVerificationFailed, &state, VerificationFailedPayload{
+					s.emitRunScopedOptional(EventVerificationFailed, &state, VerificationFailedPayload{
 						StopReason: acceptanceDecision.StopReason,
 						ErrorClass: acceptanceDecision.ErrorClass,
 					})
@@ -430,6 +458,9 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 					s.emitRunScoped(ctx, EventAgentDone, &state, turnOutput.assistant)
 					return nil
 				default:
+					state.lastAcceptanceBlockedReason = ""
+					state.mustUseToolAfterFinalContinue = false
+					state.noToolAfterFinalContinueStreak = 0
 					if err := s.appendAssistantMessageOnlyAndSave(ctx, &state, turnOutput.assistant); err != nil {
 						return s.handleRunError(err)
 					}
@@ -469,7 +500,12 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 			)
 			state.progress = controlplane.EvaluateProgress(state.progress, progressInput)
 			currentScore := state.progress.LastScore
-			if currentScore.HasBusinessProgress || currentScore.HasExplorationProgress {
+			if shouldPromotePendingFinalProgress(
+				currentScore,
+				summary,
+				state.completion,
+				state.lastAcceptanceBlockedReason,
+			) {
 				state.pendingFinalProgress = true
 			}
 			state.mu.Unlock()

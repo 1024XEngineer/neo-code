@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -56,6 +57,12 @@ type runtimeStub struct {
 	createID              string
 	createSession         agentsession.Session
 	createErr             error
+	listTodosSessionID    string
+	listTodosSnapshot     agentruntime.TodoSnapshot
+	listTodosErr          error
+	getSnapshotSessionID  string
+	getSnapshotResult     agentruntime.RuntimeSnapshot
+	getSnapshotErr        error
 }
 
 const testBridgeSubjectID = bridgeLocalSubjectID
@@ -134,6 +141,14 @@ func (s *runtimeStub) ListSessionSkills(_ context.Context, sessionID string) ([]
 func (s *runtimeStub) ListAvailableSkills(_ context.Context, sessionID string) ([]agentruntime.AvailableSkillState, error) {
 	s.listAvailableSkillsID = sessionID
 	return s.availableSkills, s.availableSkillsErr
+}
+func (s *runtimeStub) ListTodos(_ context.Context, sessionID string) (agentruntime.TodoSnapshot, error) {
+	s.listTodosSessionID = sessionID
+	return s.listTodosSnapshot, s.listTodosErr
+}
+func (s *runtimeStub) GetRuntimeSnapshot(_ context.Context, sessionID string) (agentruntime.RuntimeSnapshot, error) {
+	s.getSnapshotSessionID = sessionID
+	return s.getSnapshotResult, s.getSnapshotErr
 }
 func (s *runtimeStub) DeleteSession(_ context.Context, _ string) error {
 	return nil
@@ -568,6 +583,99 @@ func TestGatewayRuntimePortBridgeRuntimeMethods(t *testing.T) {
 	if len(session.Messages[0].ToolCalls) != 1 || session.Messages[0].ToolCalls[0].Name != "bash" {
 		t.Fatalf("message tool calls = %#v, want trimmed tool call", session.Messages[0].ToolCalls)
 	}
+}
+
+func TestGatewayRuntimePortBridgeListSessionTodosAndSnapshot(t *testing.T) {
+	t.Run("list todos via runtime todo lister", func(t *testing.T) {
+		stub := &runtimeStub{
+			listTodosSnapshot: agentruntime.TodoSnapshot{
+				Summary: agentruntime.TodoSummary{Total: 1, RequiredTotal: 1, RequiredCompleted: 1},
+				Items: []agentruntime.TodoViewItem{
+					{ID: "todo-1", Content: "done", Status: "completed", Required: true, Revision: 2},
+				},
+			},
+		}
+		bridge, err := newGatewayRuntimePortBridge(context.Background(), stub, testSessionStore)
+		if err != nil {
+			t.Fatalf("newGatewayRuntimePortBridge() error = %v", err)
+		}
+		t.Cleanup(func() { _ = bridge.Close() })
+
+		snapshot, err := bridge.ListSessionTodos(context.Background(), gateway.ListSessionTodosInput{
+			SubjectID: testBridgeSubjectID,
+			SessionID: " session-1 ",
+		})
+		if err != nil {
+			t.Fatalf("ListSessionTodos() error = %v", err)
+		}
+		if stub.listTodosSessionID != "session-1" {
+			t.Fatalf("listTodos session = %q, want %q", stub.listTodosSessionID, "session-1")
+		}
+		if snapshot.Summary.RequiredCompleted != 1 || len(snapshot.Items) != 1 || snapshot.Items[0].ID != "todo-1" {
+			t.Fatalf("snapshot = %#v", snapshot)
+		}
+	})
+
+	t.Run("list todos fallback from session todos", func(t *testing.T) {
+		required := true
+		stub := &runtimeWithoutCreator{
+			base: &runtimeStub{
+				loadSession: agentsession.Session{
+					Todos: []agentsession.TodoItem{
+						{ID: "todo-2", Content: "x", Status: agentsession.TodoStatusPending, Required: &required, Revision: 9},
+					},
+				},
+			},
+		}
+		bridge, err := newGatewayRuntimePortBridge(context.Background(), stub, testSessionStore)
+		if err != nil {
+			t.Fatalf("newGatewayRuntimePortBridge() error = %v", err)
+		}
+		t.Cleanup(func() { _ = bridge.Close() })
+
+		snapshot, err := bridge.ListSessionTodos(context.Background(), gateway.ListSessionTodosInput{
+			SubjectID: testBridgeSubjectID,
+			SessionID: "session-fallback",
+		})
+		if err != nil {
+			t.Fatalf("ListSessionTodos() fallback error = %v", err)
+		}
+		if len(snapshot.Items) != 1 || snapshot.Summary.RequiredOpen != 1 {
+			t.Fatalf("fallback snapshot = %#v", snapshot)
+		}
+	})
+
+	t.Run("get runtime snapshot", func(t *testing.T) {
+		stub := &runtimeStub{
+			getSnapshotResult: agentruntime.RuntimeSnapshot{
+				RunID:     "run-1",
+				SessionID: "session-2",
+				Phase:     "acceptance",
+				TaskKind:  "workspace_write",
+				Decision:  agentruntime.DecisionSnapshot{Status: "continue", StopReason: "unverified_write"},
+				SubAgents: agentruntime.SubAgentSnapshot{StartedCount: 1, CompletedCount: 1, FailedCount: 0},
+			},
+		}
+		bridge, err := newGatewayRuntimePortBridge(context.Background(), stub, testSessionStore)
+		if err != nil {
+			t.Fatalf("newGatewayRuntimePortBridge() error = %v", err)
+		}
+		t.Cleanup(func() { _ = bridge.Close() })
+
+		snapshot, err := bridge.GetRuntimeSnapshot(context.Background(), gateway.GetRuntimeSnapshotInput{
+			SubjectID: testBridgeSubjectID,
+			SessionID: " session-2 ",
+		})
+		if err != nil {
+			t.Fatalf("GetRuntimeSnapshot() error = %v", err)
+		}
+		if stub.getSnapshotSessionID != "session-2" {
+			t.Fatalf("snapshot session = %q, want %q", stub.getSnapshotSessionID, "session-2")
+		}
+		if snapshot.RunID != "run-1" || snapshot.Decision["status"] != "continue" {
+			t.Fatalf("snapshot = %#v", snapshot)
+		}
+	})
 }
 
 func TestGatewayRuntimePortBridgeLoadSessionNotFoundBranches(t *testing.T) {
@@ -1848,6 +1956,45 @@ func TestModelDisplayName(t *testing.T) {
 	})
 }
 
+func TestGatewayRuntimePortBridgeCancelRunAndSnapshots(t *testing.T) {
+	stub := &runtimeStub{
+		eventsCh:      make(chan agentruntime.RuntimeEvent, 1),
+		cancelReturn:  true,
+		listTodosErr:  errors.New("todo failed"),
+		getSnapshotErr: errors.New("snapshot failed"),
+	}
+	bridge, err := newGatewayRuntimePortBridge(context.Background(), stub, testSessionStore)
+	if err != nil {
+		t.Fatalf("new bridge: %v", err)
+	}
+	defer bridge.Close()
+
+	ok, err := bridge.CancelRun(context.Background(), gateway.CancelInput{SubjectID: testBridgeSubjectID, RunID: "run-1"})
+	if err != nil || !ok {
+		t.Fatalf("cancel run = (%v,%v), want (true,nil)", ok, err)
+	}
+	stub.cancelReturn = false
+	ok, err = bridge.CancelRun(context.Background(), gateway.CancelInput{SubjectID: testBridgeSubjectID, RunID: "run-2"})
+	if !errors.Is(err, gateway.ErrRuntimeResourceNotFound) || ok {
+		t.Fatalf("cancel run = (%v,%v), want (false,ErrRuntimeResourceNotFound)", ok, err)
+	}
+
+	_, err = bridge.ListSessionTodos(context.Background(), gateway.ListSessionTodosInput{
+		SubjectID: testBridgeSubjectID,
+		SessionID: "s-1",
+	})
+	if err == nil || err.Error() != "todo failed" {
+		t.Fatalf("expected todo failed, got %v", err)
+	}
+	_, err = bridge.GetRuntimeSnapshot(context.Background(), gateway.GetRuntimeSnapshotInput{
+		SubjectID: testBridgeSubjectID,
+		SessionID: "s-1",
+	})
+	if err == nil || err.Error() != "snapshot failed" {
+		t.Fatalf("expected snapshot failed, got %v", err)
+	}
+}
+
 // ---- marshalManualModelsForGateway ----
 
 func TestMarshalManualModelsForGatewayEmptyReturnsEmpty(t *testing.T) {
@@ -2031,6 +2178,113 @@ func TestGatewayRuntimePortBridgeListProvidersWithSelection(t *testing.T) {
 	}
 	if len(options[0].Models) != 1 || options[0].Models[0].ID != "gpt-4" {
 		t.Fatalf("Models = %+v, want [gpt-4]", options[0].Models)
+	}
+}
+
+func TestGatewayRuntimePortBridgeProviderAndMCPHappyPaths(t *testing.T) {
+	cfgMgr := &configManagerStub{
+		cfg: config.Config{
+			SelectedProvider: "openai",
+			Providers: []config.ProviderConfig{
+				{Name: "openai", Driver: "openai", BaseURL: "https://api.openai.com", APIKeyEnv: "OPENAI_API_KEY", Source: config.ProviderSourceBuiltin},
+			},
+			Tools: config.ToolsConfig{MCP: config.MCPConfig{
+				Servers: []config.MCPServerConfig{{ID: "srv-1", Enabled: false}},
+			}},
+		},
+	}
+	ps := &providerSelectionStub{
+		listOptions: []configstate.ProviderOption{{
+			ID:   "openai",
+			Name: "OpenAI",
+			Models: []providertypes.ModelDescriptor{
+				{ID: "gpt-4.1", Name: "GPT-4.1"},
+			},
+		}},
+		createRes:   configstate.Selection{ProviderID: "custom-a", ModelID: "m1"},
+		selectRes:   configstate.Selection{ProviderID: "openai", ModelID: "gpt-4.1"},
+		setModelRes: configstate.Selection{ProviderID: "openai", ModelID: "gpt-4o"},
+	}
+	stub := &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)}
+	bridge, err := newGatewayRuntimePortBridge(context.Background(), stub, testSessionStore, cfgMgr, ps)
+	if err != nil {
+		t.Fatalf("new bridge: %v", err)
+	}
+	defer bridge.Close()
+
+	providers, err := bridge.ListProviders(context.Background(), gateway.ListProvidersInput{SubjectID: testBridgeSubjectID})
+	if err != nil {
+		t.Fatalf("list providers: %v", err)
+	}
+	if len(providers) != 1 || !providers[0].Selected || providers[0].Driver != "openai" {
+		t.Fatalf("providers = %+v, want selected openai provider", providers)
+	}
+
+	createRes, err := bridge.CreateProvider(context.Background(), gateway.CreateProviderInput{
+		SubjectID: testBridgeSubjectID,
+		Name:      " custom-a ",
+		Models: []providertypes.ModelDescriptor{
+			{ID: " m1 ", Name: " ", ContextWindow: 1000, MaxOutputTokens: 200},
+		},
+	})
+	if err != nil || createRes.ProviderID != "custom-a" || createRes.ModelID != "m1" {
+		t.Fatalf("create provider = (%+v,%v), want custom-a/m1,nil", createRes, err)
+	}
+
+	selectRes, err := bridge.SelectProviderModel(context.Background(), gateway.SelectProviderModelInput{
+		SubjectID:  testBridgeSubjectID,
+		ProviderID: "openai",
+		ModelID:    "gpt-4o",
+	})
+	if err != nil || selectRes.ModelID != "gpt-4o" {
+		t.Fatalf("select provider model = (%+v,%v), want model gpt-4o", selectRes, err)
+	}
+
+	servers, err := bridge.ListMCPServers(context.Background(), gateway.ListMCPServersInput{SubjectID: testBridgeSubjectID})
+	if err != nil || len(servers) != 1 || servers[0].ID != "srv-1" {
+		t.Fatalf("list mcp servers = (%+v,%v), want srv-1", servers, err)
+	}
+	if err := bridge.UpsertMCPServer(context.Background(), gateway.UpsertMCPServerInput{
+		SubjectID: testBridgeSubjectID,
+		Server:    config.MCPServerConfig{ID: " srv-2 ", Enabled: true},
+	}); err != nil {
+		t.Fatalf("upsert mcp server: %v", err)
+	}
+	if err := bridge.SetMCPServerEnabled(context.Background(), gateway.SetMCPServerEnabledInput{
+		SubjectID: testBridgeSubjectID,
+		ID:        "srv-1",
+		Enabled:   true,
+	}); err != nil {
+		t.Fatalf("set mcp enabled: %v", err)
+	}
+	if err := bridge.DeleteMCPServer(context.Background(), gateway.DeleteMCPServerInput{
+		SubjectID: testBridgeSubjectID,
+		ID:        "srv-2",
+	}); err != nil {
+		t.Fatalf("delete mcp server: %v", err)
+	}
+}
+
+func TestMarshalManualModelsForGateway(t *testing.T) {
+	if got := marshalManualModelsForGateway(nil); got != "" {
+		t.Fatalf("expected empty string for nil models, got %q", got)
+	}
+	raw := marshalManualModelsForGateway([]providertypes.ModelDescriptor{
+		{ID: " ", Name: "invalid"},
+		{ID: " m1 ", Name: " ", ContextWindow: 1000, MaxOutputTokens: 200},
+	})
+	if raw == "" {
+		t.Fatal("expected non-empty json payload")
+	}
+	var payload []map[string]any
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		t.Fatalf("unmarshal payload: %v", err)
+	}
+	if len(payload) != 1 {
+		t.Fatalf("payload len = %d, want 1", len(payload))
+	}
+	if payload[0]["id"] != "m1" || payload[0]["name"] != "m1" {
+		t.Fatalf("payload[0] = %+v, want id/name m1", payload[0])
 	}
 }
 

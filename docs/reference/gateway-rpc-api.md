@@ -1761,4 +1761,78 @@ Notification：
   }
 }
 ```
+
+### session.todos.list
+
+Request：
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "req-todos-1",
+  "method": "session.todos.list",
+  "params": {
+    "session_id": "session-demo-1"
+  }
+}
+```
+
+Success Response（示例）：
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "req-todos-1",
+  "result": {
+    "type": "ack",
+    "action": "list_session_todos",
+    "request_id": "req-todos-1",
+    "session_id": "session-demo-1",
+    "payload": {
+      "todos": [],
+      "summary": {
+        "total": 0,
+        "open": 0
+      }
+    }
+  }
+}
+```
+
+说明：`payload.summary` 为聚合统计，`payload.todos` 为会话当前 todo 列表。
+
+### runtime.snapshot.get
+
+Request：
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "req-snapshot-1",
+  "method": "runtime.snapshot.get",
+  "params": {
+    "session_id": "session-demo-1"
+  }
+}
+```
+
+Success Response（示例）：
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "req-snapshot-1",
+  "result": {
+    "type": "ack",
+    "action": "get_runtime_snapshot",
+    "request_id": "req-snapshot-1",
+    "session_id": "session-demo-1",
+    "payload": {
+      "snapshot": {}
+    }
+  }
+}
+```
+
+说明：`payload.snapshot` 为 runtime 快照对象，包含事实、决策与 todo 视图等可观测状态。
 <!-- AUTO-GENERATED:END -->

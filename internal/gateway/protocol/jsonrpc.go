@@ -41,6 +41,10 @@ const (
 	MethodGatewayListSessions = "gateway.listSessions"
 	// MethodGatewayLoadSession 表示加载单个会话详情。
 	MethodGatewayLoadSession = "gateway.loadSession"
+	// MethodGatewayListSessionTodos 表示查询会话 Todo 快照。
+	MethodGatewayListSessionTodos = "session.todos.list"
+	// MethodGatewayGetRuntimeSnapshot 表示查询会话 runtime 快照。
+	MethodGatewayGetRuntimeSnapshot = "runtime.snapshot.get"
 	// MethodGatewayResolvePermission 表示提交权限审批决策。
 	MethodGatewayResolvePermission = "gateway.resolvePermission"
 	// MethodGatewayDeleteSession 表示删除/归档会话。
@@ -240,6 +244,16 @@ type ListAvailableSkillsParams struct {
 
 // LoadSessionParams 表示 gateway.loadSession 参数。
 type LoadSessionParams struct {
+	SessionID string `json:"session_id"`
+}
+
+// ListSessionTodosParams 表示 session.todos.list 参数。
+type ListSessionTodosParams struct {
+	SessionID string `json:"session_id"`
+}
+
+// GetRuntimeSnapshotParams 表示 runtime.snapshot.get 参数。
+type GetRuntimeSnapshotParams struct {
 	SessionID string `json:"session_id"`
 }
 
@@ -508,6 +522,24 @@ func NormalizeJSONRPCRequest(request JSONRPCRequest) (NormalizedRequest, *JSONRP
 		normalized.SessionID = strings.TrimSpace(params.SessionID)
 		normalized.Payload = params
 		return normalized, nil
+	case MethodGatewayListSessionTodos:
+		params, parseErr := decodeListSessionTodosParams(request.Params)
+		if parseErr != nil {
+			return normalized, parseErr
+		}
+		normalized.Action = "session_todos_list"
+		normalized.SessionID = strings.TrimSpace(params.SessionID)
+		normalized.Payload = params
+		return normalized, nil
+	case MethodGatewayGetRuntimeSnapshot:
+		params, parseErr := decodeGetRuntimeSnapshotParams(request.Params)
+		if parseErr != nil {
+			return normalized, parseErr
+		}
+		normalized.Action = "runtime_snapshot_get"
+		normalized.SessionID = strings.TrimSpace(params.SessionID)
+		normalized.Payload = params
+		return normalized, nil
 	case MethodGatewayResolvePermission:
 		params, parseErr := decodeResolvePermissionParams(request.Params)
 		if parseErr != nil {
@@ -642,6 +674,64 @@ func NormalizeJSONRPCRequest(request JSONRPCRequest) (NormalizedRequest, *JSONRP
 			GatewayCodeUnsupportedAction,
 		)
 	}
+}
+
+// decodeGetRuntimeSnapshotParams 对 runtime.snapshot.get 的 params 执行反序列化与字段校验。
+func decodeGetRuntimeSnapshotParams(raw json.RawMessage) (GetRuntimeSnapshotParams, *JSONRPCError) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return GetRuntimeSnapshotParams{}, NewJSONRPCError(
+			JSONRPCCodeInvalidParams,
+			"missing required field: params",
+			GatewayCodeMissingRequiredField,
+		)
+	}
+	var params GetRuntimeSnapshotParams
+	if err := decodeStrictJSON(trimmed, &params); err != nil {
+		return GetRuntimeSnapshotParams{}, NewJSONRPCError(
+			JSONRPCCodeInvalidParams,
+			"invalid params for runtime.snapshot.get",
+			GatewayCodeInvalidFrame,
+		)
+	}
+	params.SessionID = strings.TrimSpace(params.SessionID)
+	if params.SessionID == "" {
+		return GetRuntimeSnapshotParams{}, NewJSONRPCError(
+			JSONRPCCodeInvalidParams,
+			"missing required field: params.session_id",
+			GatewayCodeMissingRequiredField,
+		)
+	}
+	return params, nil
+}
+
+// decodeListSessionTodosParams 对 session.todos.list 的 params 执行反序列化与字段校验。
+func decodeListSessionTodosParams(raw json.RawMessage) (ListSessionTodosParams, *JSONRPCError) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return ListSessionTodosParams{}, NewJSONRPCError(
+			JSONRPCCodeInvalidParams,
+			"missing required field: params",
+			GatewayCodeMissingRequiredField,
+		)
+	}
+	var params ListSessionTodosParams
+	if err := decodeStrictJSON(trimmed, &params); err != nil {
+		return ListSessionTodosParams{}, NewJSONRPCError(
+			JSONRPCCodeInvalidParams,
+			"invalid params for session.todos.list",
+			GatewayCodeInvalidFrame,
+		)
+	}
+	params.SessionID = strings.TrimSpace(params.SessionID)
+	if params.SessionID == "" {
+		return ListSessionTodosParams{}, NewJSONRPCError(
+			JSONRPCCodeInvalidParams,
+			"missing required field: params.session_id",
+			GatewayCodeMissingRequiredField,
+		)
+	}
+	return params, nil
 }
 
 // NewJSONRPCResultResponse 创建 JSON-RPC 成功响应，并将 result 编码为 RawMessage。

@@ -152,6 +152,8 @@ type Service struct {
 	hookExecutor      HookExecutor
 
 	events             chan RuntimeEvent
+	runtimeSnapshotMu  sync.Mutex
+	runtimeSnapshots   map[string]RuntimeSnapshot
 	sessionMu          sync.Mutex
 	sessionLocks       map[string]*sessionLockEntry
 	runMu              sync.Mutex
@@ -210,6 +212,7 @@ func NewWithFactory(
 		repositoryService:  repository.NewService(),
 		approvalBroker:     approval.NewBroker(),
 		events:             make(chan RuntimeEvent, 128),
+		runtimeSnapshots:   make(map[string]RuntimeSnapshot),
 		sessionLocks:       make(map[string]*sessionLockEntry),
 		permissionAskLocks: make(map[string]*permissionAskLockEntry),
 		activeRunCancels:   make(map[uint64]context.CancelFunc),

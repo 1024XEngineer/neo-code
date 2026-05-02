@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -206,9 +207,15 @@ func (e *Executor) callHandler(
 		panicV any
 	}
 	resultCh := make(chan invokeResult, 1)
+	var releaseOnce sync.Once
+	release := func() {
+		releaseOnce.Do(func() {
+			e.releaseSlot()
+		})
+	}
 
 	go func() {
-		defer e.releaseSlot()
+		defer release()
 		out := invokeResult{}
 		defer func() {
 			if recovered := recover(); recovered != nil {
@@ -221,6 +228,7 @@ func (e *Executor) callHandler(
 
 	select {
 	case <-ctx.Done():
+		release()
 		err := "hook execution canceled"
 		if ctx.Err() == context.DeadlineExceeded {
 			err = "hook execution timed out"

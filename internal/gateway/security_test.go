@@ -2,6 +2,13 @@ package gateway
 
 import "testing"
 
+func assertACLAllowed(t *testing.T, acl *ControlPlaneACL, source RequestSource, method string, want bool) {
+	t.Helper()
+	if got := acl.IsAllowed(source, method); got != want {
+		t.Fatalf("acl allowed(%s,%s) = %v, want %v", source, method, got, want)
+	}
+}
+
 func TestStrictACLAllowlist(t *testing.T) {
 	acl := NewStrictControlPlaneACL()
 	cases := []struct {
@@ -22,13 +29,12 @@ func TestStrictACLAllowlist(t *testing.T) {
 		{source: RequestSourceHTTP, method: "gateway.deactivateSessionSkill", want: true},
 		{source: RequestSourceHTTP, method: "gateway.listSessionSkills", want: true},
 		{source: RequestSourceHTTP, method: "gateway.listAvailableSkills", want: true},
+		{source: RequestSourceHTTP, method: "session.todos.list", want: true},
+		{source: RequestSourceHTTP, method: "runtime.snapshot.get", want: true},
 		{source: RequestSourceUnknown, method: "gateway.ping", want: false},
 	}
 	for _, tc := range cases {
-		got := acl.IsAllowed(tc.source, tc.method)
-		if got != tc.want {
-			t.Fatalf("acl allowed(%s,%s) = %v, want %v", tc.source, tc.method, got, tc.want)
-		}
+		assertACLAllowed(t, acl, tc.source, tc.method, tc.want)
 	}
 }
 

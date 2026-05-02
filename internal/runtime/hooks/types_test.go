@@ -156,6 +156,14 @@ func TestHookPointCapabilities(t *testing.T) {
 		t.Fatal("after_tool_failure should be observe-only")
 	}
 
+	capability, ok = HookPointCapabilities(HookPointBeforeCompletionDecision)
+	if !ok {
+		t.Fatal("expected before_completion_decision capability to exist")
+	}
+	if capability.CanBlock {
+		t.Fatal("before_completion_decision should be observe-only in current runtime flow")
+	}
+
 	if _, exists := HookPointCapabilities(HookPoint("unknown")); exists {
 		t.Fatal("unknown hook point should not have capability")
 	}

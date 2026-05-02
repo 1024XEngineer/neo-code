@@ -337,11 +337,22 @@ func newDefaultAppConfig() *config.Config {
 	return cfg
 }
 
+// newStableTempDirForTUI 在 Windows 下规避 t.TempDir 高频清理的偶发 RemoveAll 竞争问题。
+// 目录不会在单测结束时立即删除，仅用于测试过程中的隔离工作目录。
+func newStableTempDirForTUI(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "neocode-tui-app-*")
+	if err != nil {
+		t.Fatalf("MkdirTemp() error = %v", err)
+	}
+	return dir
+}
+
 func newTestAppWithProviderService(t *testing.T, providerSvc ProviderController) (App, *stubRuntime) {
 	t.Helper()
 
 	cfg := newDefaultAppConfig()
-	cfg.Workdir = t.TempDir()
+	cfg.Workdir = newStableTempDirForTUI(t)
 
 	manager := config.NewManager(config.NewLoader(cfg.Workdir, cfg))
 	if _, err := manager.Load(context.Background()); err != nil {

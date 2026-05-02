@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -2809,6 +2810,7 @@ var runtimeEventHandlerRegistry = map[tuiservices.EventType]func(*App, tuiservic
 	tuiservices.EventStopReasonDecided:                        runtimeEventStopReasonDecidedHandler,
 	tuiservices.EventTodoUpdated:                              runtimeEventTodoUpdatedHandler,
 	tuiservices.EventTodoConflict:                             runtimeEventTodoConflictHandler,
+	tuiservices.EventTodoSnapshotUpdated:                      runtimeEventTodoSnapshotUpdatedHandler,
 	tuiservices.EventSkillActivated:                           runtimeEventSkillActivatedHandler,
 	tuiservices.EventSkillDeactivated:                         runtimeEventSkillDeactivatedHandler,
 	tuiservices.EventSkillMissing:                             runtimeEventSkillMissingHandler,
@@ -2820,6 +2822,21 @@ var runtimeEventHandlerRegistry = map[tuiservices.EventType]func(*App, tuiservic
 	tuiservices.EventRepoHooksLoaded:                          runtimeEventRepoHooksLoadedHandler,
 	tuiservices.EventRepoHooksSkippedUntrusted:                runtimeEventRepoHooksSkippedUntrustedHandler,
 	tuiservices.EventRepoHooksTrustStoreInvalid:               runtimeEventRepoHooksTrustStoreInvalidHandler,
+	tuiservices.EventSubAgentStarted:                          runtimeEventSubAgentLifecycleHandler,
+	tuiservices.EventSubAgentProgress:                         runtimeEventSubAgentLifecycleHandler,
+	tuiservices.EventSubAgentRetried:                          runtimeEventSubAgentLifecycleHandler,
+	tuiservices.EventSubAgentBlocked:                          runtimeEventSubAgentLifecycleHandler,
+	tuiservices.EventSubAgentCompleted:                        runtimeEventSubAgentLifecycleHandler,
+	tuiservices.EventSubAgentFailed:                           runtimeEventSubAgentLifecycleHandler,
+	tuiservices.EventSubAgentCanceled:                         runtimeEventSubAgentLifecycleHandler,
+	tuiservices.EventSubAgentFinished:                         runtimeEventSubAgentLifecycleHandler,
+	tuiservices.EventSubAgentToolCallStarted:                  runtimeEventSubAgentToolCallHandler,
+	tuiservices.EventSubAgentToolCallResult:                   runtimeEventSubAgentToolCallHandler,
+	tuiservices.EventSubAgentToolCallDenied:                   runtimeEventSubAgentToolCallHandler,
+	tuiservices.EventRuntimeSnapshotUpdated:                   runtimeEventRuntimeSnapshotUpdatedHandler,
+	tuiservices.EventFactsUpdated:                             runtimeEventFactsUpdatedHandler,
+	tuiservices.EventDecisionMade:                             runtimeEventDecisionMadeHandler,
+	tuiservices.EventSubAgentSnapshotUpdated:                  runtimeEventSubAgentSnapshotUpdatedHandler,
 }
 
 func hookActivityLabel(source string, hookID string) string {
@@ -2954,6 +2971,107 @@ func runtimeEventRepoHooksTrustStoreInvalidHandler(a *App, event tuiservices.Run
 	return false
 }
 
+// runtimeEventSubAgentLifecycleHandler 统一处理 subagent 生命周期事件并写入活动区/日志。
+func runtimeEventSubAgentLifecycleHandler(a *App, event tuiservices.RuntimeEvent) bool {
+	payload, ok := event.Payload.(tuiservices.SubAgentEventPayload)
+	if !ok {
+		return false
+	}
+	eventType := strings.TrimSpace(string(event.Type))
+	title := "SubAgent event"
+	switch event.Type {
+	case tuiservices.EventSubAgentStarted:
+		title = "SubAgent started"
+	case tuiservices.EventSubAgentProgress:
+		title = "SubAgent progress"
+	case tuiservices.EventSubAgentRetried:
+		title = "SubAgent retried"
+	case tuiservices.EventSubAgentBlocked:
+		title = "SubAgent blocked"
+	case tuiservices.EventSubAgentCompleted:
+		title = "SubAgent completed"
+	case tuiservices.EventSubAgentFailed:
+		title = "SubAgent failed"
+	case tuiservices.EventSubAgentCanceled:
+		title = "SubAgent canceled"
+	case tuiservices.EventSubAgentFinished:
+		title = "SubAgent finished"
+	default:
+		title = "SubAgent event: " + fallbackText(eventType, "unknown")
+	}
+
+	details := make([]string, 0, 6)
+	if role := strings.TrimSpace(payload.Role); role != "" {
+		details = append(details, "role="+role)
+	}
+	if taskID := strings.TrimSpace(payload.TaskID); taskID != "" {
+		details = append(details, "task="+taskID)
+	}
+	if state := strings.TrimSpace(payload.State); state != "" {
+		details = append(details, "state="+state)
+	}
+	if reason := strings.TrimSpace(payload.StopReason); reason != "" {
+		details = append(details, "stop="+reason)
+	}
+	if payload.Step > 0 {
+		details = append(details, fmt.Sprintf("step=%d", payload.Step))
+	}
+	if message := strings.TrimSpace(payload.Reason); message != "" {
+		details = append(details, message)
+	} else if message := strings.TrimSpace(payload.Delta); message != "" {
+		details = append(details, message)
+	}
+	if errText := strings.TrimSpace(payload.Error); errText != "" {
+		details = append(details, "error="+errText)
+	}
+
+	isError := event.Type == tuiservices.EventSubAgentFailed
+	a.appendActivity("subagent", title, strings.Join(details, " | "), isError)
+	return false
+}
+
+// runtimeEventSubAgentToolCallHandler 处理 subagent 工具调用相关事件并写入活动区/日志。
+func runtimeEventSubAgentToolCallHandler(a *App, event tuiservices.RuntimeEvent) bool {
+	payload, ok := event.Payload.(tuiservices.SubAgentToolCallEventPayload)
+	if !ok {
+		return false
+	}
+	title := "SubAgent tool call"
+	switch event.Type {
+	case tuiservices.EventSubAgentToolCallStarted:
+		title = "SubAgent tool call started"
+	case tuiservices.EventSubAgentToolCallResult:
+		title = "SubAgent tool call result"
+	case tuiservices.EventSubAgentToolCallDenied:
+		title = "SubAgent tool call denied"
+	}
+
+	details := make([]string, 0, 6)
+	if role := strings.TrimSpace(payload.Role); role != "" {
+		details = append(details, "role="+role)
+	}
+	if taskID := strings.TrimSpace(payload.TaskID); taskID != "" {
+		details = append(details, "task="+taskID)
+	}
+	details = append(details, "tool="+fallbackText(strings.TrimSpace(payload.ToolName), "unknown"))
+	if decision := strings.TrimSpace(payload.Decision); decision != "" {
+		details = append(details, "decision="+decision)
+	}
+	if payload.ElapsedMS > 0 {
+		details = append(details, fmt.Sprintf("elapsed=%dms", payload.ElapsedMS))
+	}
+	if payload.Truncated {
+		details = append(details, "truncated=true")
+	}
+	if errText := strings.TrimSpace(payload.Error); errText != "" {
+		details = append(details, "error="+errText)
+	}
+
+	isError := event.Type == tuiservices.EventSubAgentToolCallDenied || strings.TrimSpace(payload.Error) != ""
+	a.appendActivity("subagent", title, strings.Join(details, " | "), isError)
+	return false
+}
+
 func runtimeEventPhaseChangedHandler(a *App, event tuiservices.RuntimeEvent) bool {
 	payload, ok := event.Payload.(tuiservices.PhaseChangedPayload)
 	if !ok {
@@ -2981,7 +3099,11 @@ func runtimeEventVerificationStartedHandler(a *App, event tuiservices.RuntimeEve
 		progress = 0.88
 	}
 	a.setRunProgress(progress, "Verifying acceptance")
-	a.appendActivity("verify", "Verification started", fmt.Sprintf("completion_passed=%t", payload.CompletionPassed), false)
+	detail := fmt.Sprintf("completion_passed=%t", payload.CompletionPassed)
+	if reason := strings.TrimSpace(payload.CompletionBlockedReason); reason != "" {
+		detail = detail + " reason=" + reason
+	}
+	a.appendActivity("verify", "Verification started", detail, false)
 	return false
 }
 
@@ -3071,6 +3193,9 @@ func runtimeEventAcceptanceDecidedHandler(a *App, event tuiservices.RuntimeEvent
 	if detail == "" {
 		detail = "acceptance decision generated"
 	}
+	if reason := strings.TrimSpace(payload.CompletionBlockedReason); reason != "" {
+		detail = detail + " (reason=" + reason + ")"
+	}
 	isError := strings.EqualFold(status, "failed")
 	a.appendActivity("acceptance", "Acceptance decided ("+status+")", detail, isError)
 	return false
@@ -3125,6 +3250,7 @@ func runtimeEventStopReasonDecidedHandler(a *App, event tuiservices.RuntimeEvent
 		a.state.StatusText = statusCanceled
 		a.appendActivity("run", "Canceled current run", "", false)
 	case strings.ToLower(string(tuiservices.StopReasonVerificationFailed)),
+		strings.ToLower(string(tuiservices.StopReasonRequiredTodoFailed)),
 		strings.ToLower(string(tuiservices.StopReasonVerificationExecutionDenied)),
 		strings.ToLower(string(tuiservices.StopReasonVerificationExecutionError)):
 		detail := strings.TrimSpace(payload.Detail)
@@ -3176,17 +3302,30 @@ func runtimeEventTodoUpdatedHandler(a *App, event tuiservices.RuntimeEvent) bool
 		return false
 	}
 
-	if err := a.refreshTodosFromSession(sessionID); err != nil {
+	payload, _ := parseTodoEventPayload(event.Payload)
+	if len(payload.Items) > 0 {
+		a.syncTodosFromEventItems(payload.Items)
+	} else if err := a.refreshTodosFromSession(sessionID); err != nil {
 		a.appendActivity("todo", "Failed to refresh todo panel", err.Error(), true)
 		return false
 	}
-
-	payload, _ := parseTodoEventPayload(event.Payload)
+	a.state.StatusText = formatTodoSummaryStatus(payload.Summary)
 	action := strings.TrimSpace(payload.Action)
 	if action == "" {
 		action = "update"
 	}
-	a.appendActivity("todo", "Todo updated", action, false)
+	detail := action
+	if payload.Summary.RequiredTotal > 0 {
+		detail = fmt.Sprintf(
+			"%s (required %d/%d open=%d failed=%d)",
+			action,
+			payload.Summary.RequiredCompleted,
+			payload.Summary.RequiredTotal,
+			payload.Summary.RequiredOpen,
+			payload.Summary.RequiredFailed,
+		)
+	}
+	a.appendActivity("todo", "Todo updated", detail, false)
 	return false
 }
 
@@ -3199,17 +3338,125 @@ func runtimeEventTodoConflictHandler(a *App, event tuiservices.RuntimeEvent) boo
 		return false
 	}
 
-	if err := a.refreshTodosFromSession(sessionID); err != nil {
+	payload, _ := parseTodoEventPayload(event.Payload)
+	if len(payload.Items) > 0 {
+		a.syncTodosFromEventItems(payload.Items)
+	} else if err := a.refreshTodosFromSession(sessionID); err != nil {
 		a.appendActivity("todo", "Failed to refresh todo panel", err.Error(), true)
 		return false
 	}
-
-	payload, _ := parseTodoEventPayload(event.Payload)
+	a.state.StatusText = formatTodoSummaryStatus(payload.Summary)
 	reason := strings.TrimSpace(payload.Reason)
 	if reason == "" {
 		reason = "todo conflict"
 	}
+	if payload.Summary.RequiredTotal > 0 {
+		reason = fmt.Sprintf(
+			"%s (required %d/%d open=%d failed=%d)",
+			reason,
+			payload.Summary.RequiredCompleted,
+			payload.Summary.RequiredTotal,
+			payload.Summary.RequiredOpen,
+			payload.Summary.RequiredFailed,
+		)
+	}
 	a.appendActivity("todo", "Todo conflict", reason, true)
+	return false
+}
+
+// runtimeEventTodoSnapshotUpdatedHandler 处理 todo_snapshot_updated 事件并实时同步 Todo 面板。
+func runtimeEventTodoSnapshotUpdatedHandler(a *App, event tuiservices.RuntimeEvent) bool {
+	return runtimeEventTodoUpdatedHandler(a, event)
+}
+
+// runtimeEventRuntimeSnapshotUpdatedHandler 处理 runtime_snapshot_updated 事件并同步 Todo 摘要。
+func runtimeEventRuntimeSnapshotUpdatedHandler(a *App, event tuiservices.RuntimeEvent) bool {
+	payload, ok := event.Payload.(tuiservices.RuntimeSnapshotUpdatedPayload)
+	if !ok {
+		return false
+	}
+	snapshot := payload.Snapshot
+	if len(snapshot.Todos.Items) > 0 {
+		a.syncTodosFromEventItems(snapshot.Todos.Items)
+	}
+	a.state.StatusText = formatTodoSummaryStatus(snapshot.Todos.Summary)
+	reason := strings.TrimSpace(payload.Reason)
+	if reason == "" {
+		reason = "snapshot updated"
+	}
+	a.appendActivity("runtime", "Runtime snapshot updated", reason, false)
+	return false
+}
+
+// runtimeEventFactsUpdatedHandler 处理 facts_updated 事件，输出简洁事实更新日志。
+func runtimeEventFactsUpdatedHandler(a *App, event tuiservices.RuntimeEvent) bool {
+	payload, ok := event.Payload.(tuiservices.FactsUpdatedPayload)
+	if !ok {
+		return false
+	}
+	reason := strings.TrimSpace(payload.Reason)
+	if reason == "" {
+		reason = "facts updated"
+	}
+	detail := reason
+	if runtimeFacts, ok := payload.Facts.RuntimeFacts["progress"].(map[string]any); ok {
+		if observed := coerceInt(runtimeFacts["observed_fact_count"]); observed > 0 {
+			detail = fmt.Sprintf("%s (observed_facts=%d)", reason, observed)
+		}
+	}
+	a.appendActivity("facts", "Runtime facts updated", detail, false)
+	return false
+}
+
+// runtimeEventDecisionMadeHandler 处理 decision_made 事件，输出最终裁决摘要。
+func runtimeEventDecisionMadeHandler(a *App, event tuiservices.RuntimeEvent) bool {
+	payload, ok := event.Payload.(tuiservices.DecisionMadePayload)
+	if !ok {
+		return false
+	}
+	status := strings.TrimSpace(payload.Status)
+	if status == "" {
+		status = "unknown"
+	}
+	statusLower := strings.ToLower(status)
+	shouldRenderDecisionBlock := statusLower == "continue" || statusLower == "incomplete"
+	if statusLower == "continue" || statusLower == "incomplete" {
+		discardTrailingAssistantMessage(a)
+		a.state.StreamingReply = false
+		a.suppressAssistantForRun = strings.TrimSpace(event.RunID)
+	}
+	detail := strings.TrimSpace(payload.UserVisibleSummary)
+	if detail == "" {
+		detail = strings.TrimSpace(payload.InternalSummary)
+	}
+	if detail == "" {
+		detail = "decision generated"
+	}
+	if statusLower == "continue" || statusLower == "incomplete" {
+		if debugDetail := formatDecisionDebugDetail(payload); debugDetail != "" {
+			detail = detail + " | " + debugDetail
+		}
+	}
+	a.appendActivity("decision", "Final decision ("+status+")", detail, false)
+	if shouldRenderDecisionBlock {
+		a.appendInlineMessage(roleSystem, formatDecisionBlockMessage(payload))
+	}
+	return false
+}
+
+// runtimeEventSubAgentSnapshotUpdatedHandler 处理 subagent_snapshot_updated 事件，输出聚合计数。
+func runtimeEventSubAgentSnapshotUpdatedHandler(a *App, event tuiservices.RuntimeEvent) bool {
+	payload, ok := event.Payload.(tuiservices.SubAgentSnapshotUpdatedPayload)
+	if !ok {
+		return false
+	}
+	detail := fmt.Sprintf(
+		"started=%d completed=%d failed=%d",
+		payload.SubAgent.StartedCount,
+		payload.SubAgent.CompletedCount,
+		payload.SubAgent.FailedCount,
+	)
+	a.appendActivity("subagent", "SubAgent snapshot updated", detail, false)
 	return false
 }
 
@@ -3281,6 +3528,8 @@ func parseTodoEventPayload(payload any) (tuiservices.TodoEventPayload, bool) {
 	case map[string]any:
 		action := ""
 		reason := ""
+		summary := tuiservices.TodoSummary{}
+		items := make([]tuiservices.TodoViewItem, 0)
 		if raw, ok := typed["Action"]; ok && raw != nil {
 			action = strings.TrimSpace(fmt.Sprintf("%v", raw))
 		}
@@ -3297,9 +3546,200 @@ func parseTodoEventPayload(payload any) (tuiservices.TodoEventPayload, bool) {
 				reason = strings.TrimSpace(fmt.Sprintf("%v", raw))
 			}
 		}
-		return tuiservices.TodoEventPayload{Action: action, Reason: reason}, true
+		if raw, ok := typed["summary"]; ok {
+			summary = coerceTodoSummary(raw)
+		}
+		if raw, ok := typed["required_total"]; ok && summary.RequiredTotal == 0 {
+			summary.RequiredTotal = coerceInt(raw)
+		}
+		if raw, ok := typed["required_completed"]; ok && summary.RequiredCompleted == 0 {
+			summary.RequiredCompleted = coerceInt(raw)
+		}
+		if raw, ok := typed["required_open"]; ok && summary.RequiredOpen == 0 {
+			summary.RequiredOpen = coerceInt(raw)
+		}
+		if raw, ok := typed["required_failed"]; ok && summary.RequiredFailed == 0 {
+			summary.RequiredFailed = coerceInt(raw)
+		}
+		if raw, ok := typed["total"]; ok && summary.Total == 0 {
+			summary.Total = coerceInt(raw)
+		}
+		if raw, ok := typed["items"]; ok {
+			items = coerceTodoItems(raw)
+		} else if raw, ok := typed["todos"]; ok {
+			items = coerceTodoItems(raw)
+		}
+		return tuiservices.TodoEventPayload{
+			Action:  action,
+			Reason:  reason,
+			Items:   items,
+			Summary: summary,
+		}, true
 	default:
 		return tuiservices.TodoEventPayload{}, false
+	}
+}
+
+// coerceInt 将 map 反序列化后的数字值统一转换为 int，供事件兼容解析使用。
+func coerceInt(value any) int {
+	switch typed := value.(type) {
+	case int:
+		return typed
+	case int8:
+		return int(typed)
+	case int16:
+		return int(typed)
+	case int32:
+		return int(typed)
+	case int64:
+		return int(typed)
+	case float32:
+		return int(typed)
+	case float64:
+		return int(typed)
+	default:
+		return 0
+	}
+}
+
+// coerceTodoSnapshots 将动态 payload 中的 todos 字段转换为强类型快照列表。
+func coerceTodoItems(value any) []tuiservices.TodoViewItem {
+	rawList, ok := value.([]any)
+	if !ok || len(rawList) == 0 {
+		return nil
+	}
+	snapshots := make([]tuiservices.TodoViewItem, 0, len(rawList))
+	for _, raw := range rawList {
+		item, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		snapshot := tuiservices.TodoViewItem{
+			ID:            mapStringValue(item, "id"),
+			Content:       mapStringValue(item, "content"),
+			Status:        mapStringValue(item, "status"),
+			Required:      coerceBool(item["required"]),
+			FailureReason: mapStringValue(item, "failure_reason"),
+			BlockedReason: mapStringValue(item, "blocked_reason"),
+			Revision:      int64(coerceInt(item["revision"])),
+		}
+		if rawArtifacts, exists := item["artifacts"]; exists {
+			snapshot.Artifacts = coerceStringSlice(rawArtifacts)
+		}
+		snapshots = append(snapshots, snapshot)
+	}
+	if len(snapshots) == 0 {
+		return nil
+	}
+	return snapshots
+}
+
+func coerceTodoSummary(value any) tuiservices.TodoSummary {
+	item, ok := value.(map[string]any)
+	if !ok {
+		return tuiservices.TodoSummary{}
+	}
+	return tuiservices.TodoSummary{
+		Total:             coerceInt(item["total"]),
+		RequiredTotal:     coerceInt(item["required_total"]),
+		RequiredCompleted: coerceInt(item["required_completed"]),
+		RequiredFailed:    coerceInt(item["required_failed"]),
+		RequiredOpen:      coerceInt(item["required_open"]),
+	}
+}
+
+func (a *App) syncTodosFromEventItems(items []tuiservices.TodoViewItem) {
+	if len(items) == 0 {
+		return
+	}
+	mapped := make([]todoViewItem, 0, len(items))
+	for _, item := range items {
+		mapped = append(mapped, todoViewItem{
+			ID:       strings.TrimSpace(item.ID),
+			Title:    strings.TrimSpace(item.Content),
+			Status:   strings.TrimSpace(item.Status),
+			Priority: 0,
+			Executor: "",
+			Owner:    "-",
+		})
+	}
+	a.todoItems = mapped
+	a.todoPanelVisible = len(mapped) > 0
+	a.todoSelectedIndex = clampTodoSelection(a.todoSelectedIndex, len(a.visibleTodoItems()))
+	a.rebuildTodo()
+	a.applyComponentLayout(false)
+}
+
+func formatTodoSummaryStatus(summary tuiservices.TodoSummary) string {
+	if summary.RequiredTotal > 0 {
+		if summary.RequiredFailed > 0 {
+			return fmt.Sprintf(
+				"Todo: %d/%d completed, %d failed",
+				summary.RequiredCompleted,
+				summary.RequiredTotal,
+				summary.RequiredFailed,
+			)
+		}
+		return fmt.Sprintf("Todo: %d/%d completed", summary.RequiredCompleted, summary.RequiredTotal)
+	}
+	if summary.Total > 0 {
+		return fmt.Sprintf("Todo: %d open", max(0, summary.Total-summary.RequiredCompleted-summary.RequiredFailed))
+	}
+	return "Todo: empty"
+}
+
+// mapStringValue 从 map 中安全读取字符串字段，避免缺失键被格式化为 "<nil>"。
+func mapStringValue(values map[string]any, key string) string {
+	raw, ok := values[key]
+	if !ok || raw == nil {
+		return ""
+	}
+	return strings.TrimSpace(fmt.Sprintf("%v", raw))
+}
+
+// coerceBool 将动态 payload 中的布尔值做兼容解析。
+func coerceBool(value any) bool {
+	switch typed := value.(type) {
+	case bool:
+		return typed
+	case string:
+		return strings.EqualFold(strings.TrimSpace(typed), "true")
+	default:
+		return false
+	}
+}
+
+// coerceStringSlice 将动态数组字段转换为去空白后的字符串列表。
+func coerceStringSlice(value any) []string {
+	switch typed := value.(type) {
+	case []string:
+		out := make([]string, 0, len(typed))
+		for _, entry := range typed {
+			trimmed := strings.TrimSpace(entry)
+			if trimmed == "" {
+				continue
+			}
+			out = append(out, trimmed)
+		}
+		if len(out) == 0 {
+			return nil
+		}
+		return out
+	case []any:
+		out := make([]string, 0, len(typed))
+		for _, entry := range typed {
+			trimmed := strings.TrimSpace(fmt.Sprintf("%v", entry))
+			if trimmed == "" {
+				continue
+			}
+			out = append(out, trimmed)
+		}
+		if len(out) == 0 {
+			return nil
+		}
+		return out
+	default:
+		return nil
 	}
 }
 
@@ -3384,6 +3824,7 @@ func runtimeEventUserMessageHandler(a *App, event tuiservices.RuntimeEvent) bool
 	if runID != "" {
 		a.state.ActiveRunID = runID
 	}
+	a.suppressAssistantForRun = ""
 	if sessionID := strings.TrimSpace(event.SessionID); sessionID != "" {
 		a.setActiveSessionID(sessionID)
 	}
@@ -3554,6 +3995,9 @@ func runtimeEventAgentDoneHandler(a *App, event tuiservices.RuntimeEvent) bool {
 		a.state.StatusText = statusReady
 	}
 	if payload, ok := event.Payload.(providertypes.Message); ok {
+		if shouldSuppressAssistantFinalMessage(a, strings.TrimSpace(event.RunID)) {
+			return false
+		}
 		content := renderMessagePartsForDisplay(payload.Parts)
 		if strings.TrimSpace(content) != "" && !a.lastAssistantMatches(content) {
 			a.activeMessages = append(a.activeMessages, providertypes.Message{Role: roleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart(content)}})
@@ -3749,6 +4193,155 @@ func (a *App) appendInlineMessage(role string, message string) {
 	}
 
 	a.activeMessages = append(a.activeMessages, providertypes.Message{Role: role, Parts: []providertypes.ContentPart{providertypes.NewTextPart(content)}})
+}
+
+// shouldSuppressAssistantFinalMessage 判断是否应抑制当前 run 的 assistant 最终消息，防止 continue/incomplete 误展示“已完成”。
+func shouldSuppressAssistantFinalMessage(a *App, runID string) bool {
+	if a == nil {
+		return false
+	}
+	targetRunID := strings.TrimSpace(a.suppressAssistantForRun)
+	if targetRunID == "" {
+		return false
+	}
+	if runID != "" && !strings.EqualFold(runID, targetRunID) {
+		return false
+	}
+	a.suppressAssistantForRun = ""
+	return true
+}
+
+// discardTrailingAssistantMessage 在继续/未完成裁决时移除尾部 assistant 文本，避免用户看到伪最终回复。
+func discardTrailingAssistantMessage(a *App) {
+	if a == nil || len(a.activeMessages) == 0 {
+		return
+	}
+	last := a.activeMessages[len(a.activeMessages)-1]
+	if last.Role != roleAssistant {
+		return
+	}
+	a.activeMessages = a.activeMessages[:len(a.activeMessages)-1]
+}
+
+// formatDecisionBlockMessage 把 continue/incomplete 裁决渲染为用户友好的验收提示。
+func formatDecisionBlockMessage(payload tuiservices.DecisionMadePayload) string {
+	status := firstNonBlank(strings.TrimSpace(payload.Status), "unknown")
+	reason := firstNonBlank(strings.TrimSpace(payload.StopReason), "n/a")
+
+	lines := []string{
+		"正在验收中...",
+		"状态: " + status,
+		"原因: " + humanizeDecisionReason(reason, payload.MissingFacts),
+	}
+	if summary := strings.TrimSpace(payload.UserVisibleSummary); summary != "" {
+		lines = append(lines, "说明: "+summary)
+	}
+	lines = append(lines, "建议: "+humanizeDecisionSuggestion(payload))
+	return strings.Join(lines, "\n")
+}
+
+// humanizeDecisionReason 将机器 stop reason 映射为用户可读原因，避免主界面暴露内部字段。
+func humanizeDecisionReason(reason string, missingFacts []map[string]any) string {
+	normalized := strings.ToLower(strings.TrimSpace(reason))
+	switch normalized {
+	case "todo_not_converged":
+		for _, fact := range missingFacts {
+			kind := strings.ToLower(strings.TrimSpace(readStringFromMap(fact, "kind")))
+			switch kind {
+			case "verification_passed":
+				return "文件写入尚未完成验证。"
+			case "file_exists":
+				return "尚未确认目标文件存在。"
+			case "required_todo_terminal":
+				return "仍有 required todo 未收敛。"
+			case "post_execute_closure":
+				return "需要先基于工具结果完成闭环。"
+			}
+		}
+		return "任务仍缺少关键事实。"
+	case "no_progress_after_final_intercept":
+		return "连续多轮未产生新事实。"
+	case "required_todo_failed":
+		return "存在 required todo 失败。"
+	default:
+		if normalized == "" || normalized == "n/a" {
+			return "系统正在校验任务事实。"
+		}
+		return reason
+	}
+}
+
+// humanizeDecisionSuggestion 生成用户可执行的自然语言建议，不直接泄露工具参数 JSON。
+func humanizeDecisionSuggestion(payload tuiservices.DecisionMadePayload) string {
+	for _, fact := range payload.MissingFacts {
+		kind := strings.ToLower(strings.TrimSpace(readStringFromMap(fact, "kind")))
+		switch kind {
+		case "verification_passed":
+			return "请读取目标文件并确认内容符合预期。"
+		case "file_exists":
+			return "请确认目标文件已创建并可访问。"
+		case "required_todo_terminal":
+			return "请继续推进待办状态直至 required 项收敛。"
+		case "post_execute_closure":
+			return "请先基于最近工具结果补充闭环，再尝试完成。"
+		}
+	}
+	if len(payload.RequiredNextActions) > 0 {
+		return "请继续调用合适工具补充可验证事实。"
+	}
+	return "请继续推进任务并补充可验证事实。"
+}
+
+// readStringFromMap 读取 map 中的字符串字段，字段缺失或类型不匹配时返回空串。
+func readStringFromMap(values map[string]any, key string) string {
+	if values == nil {
+		return ""
+	}
+	raw, ok := values[key]
+	if !ok {
+		return ""
+	}
+	text, ok := raw.(string)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(text)
+}
+
+// formatDecisionDebugDetail 生成供活动日志/调试视图使用的结构化详情。
+func formatDecisionDebugDetail(payload tuiservices.DecisionMadePayload) string {
+	parts := make([]string, 0, 2)
+	if len(payload.MissingFacts) > 0 {
+		parts = append(parts, "missing_facts="+jsonCompactOrFallback(payload.MissingFacts))
+	}
+	if len(payload.RequiredNextActions) > 0 {
+		parts = append(parts, "required_next_actions="+jsonCompactOrFallback(payload.RequiredNextActions))
+	}
+	return strings.Join(parts, " ")
+}
+
+// firstNonBlank 返回第一个非空候选值，保证展示字段稳定可读。
+func firstNonBlank(values ...string) string {
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
+}
+
+// jsonCompactOrFallback 将结构压缩成单行 JSON，序列化失败时回退为字符串表示。
+func jsonCompactOrFallback(value any) string {
+	var buf bytes.Buffer
+	encoder := json.NewEncoder(&buf)
+	encoder.SetEscapeHTML(false)
+	encoder.SetIndent("", "")
+	err := encoder.Encode(value)
+	if err != nil {
+		return fmt.Sprintf("%v", value)
+	}
+	return strings.TrimSpace(buf.String())
 }
 
 // applyInlineCommandError 统一写入内联命令错误，并立即刷新转录区显示。

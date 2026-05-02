@@ -77,7 +77,7 @@ type VerificationExecutionPolicyConfig struct {
 // defaultVerificationConfig 返回验证引擎默认策略。
 func defaultVerificationConfig() VerificationConfig {
 	return VerificationConfig{
-		MaxNoProgress: 3,
+		MaxNoProgress: 2,
 		Verifiers: map[string]VerifierConfig{
 			verifierTodoConvergence: {
 				TimeoutSec:     5,

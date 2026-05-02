@@ -92,6 +92,9 @@ func (w *worker) Start(task Task, budget Budget, capability Capability) error {
 	}
 
 	w.task = task
+	if task.TaskType.Valid() {
+		w.policy.RequiredSections = RequiredSectionsForTaskType(task.TaskType)
+	}
 	w.budget = budget.normalize(w.policy.DefaultBudget)
 	capabilityInput := capability.normalize()
 	if len(capabilityInput.AllowedPaths) == 0 && strings.TrimSpace(task.Workspace) != "" {

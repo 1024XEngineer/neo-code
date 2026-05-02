@@ -263,6 +263,64 @@ func TestReadFileToolExecuteEmitsProgressBeforeChunkFailure(t *testing.T) {
 	}
 }
 
+func TestReadFileToolVerificationFacts(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "README.md"), []byte("hello\nverification-marker\n"), 0o644); err != nil {
+		t.Fatalf("write README: %v", err)
+	}
+
+	tool := New(workspace)
+	t.Run("content match produces verification passed", func(t *testing.T) {
+		args := mustMarshalFSArgs(t, map[string]any{
+			"path":               "README.md",
+			"expect_contains":    []string{"verification-marker"},
+			"verification_scope": "readme-content",
+		})
+		result, err := tool.Execute(context.Background(), tools.ToolCallInput{
+			Name:      tool.Name(),
+			Arguments: args,
+			Workdir:   workspace,
+		})
+		if err != nil {
+			t.Fatalf("Execute() error = %v", err)
+		}
+		if !result.Facts.VerificationPerformed || !result.Facts.VerificationPassed {
+			t.Fatalf("expected verification passed facts, got %+v", result.Facts)
+		}
+		if result.Facts.VerificationScope != "readme-content" {
+			t.Fatalf("verification_scope = %q, want %q", result.Facts.VerificationScope, "readme-content")
+		}
+		if reason, _ := result.Metadata["verification_reason"].(string); reason != "content_match" {
+			t.Fatalf("verification_reason = %q, want %q", reason, "content_match")
+		}
+	})
+
+	t.Run("content mismatch produces verification failed", func(t *testing.T) {
+		args := mustMarshalFSArgs(t, map[string]any{
+			"path":               "README.md",
+			"expect_contains":    []string{"missing-token"},
+			"verification_scope": "readme-content",
+		})
+		result, err := tool.Execute(context.Background(), tools.ToolCallInput{
+			Name:      tool.Name(),
+			Arguments: args,
+			Workdir:   workspace,
+		})
+		if err != nil {
+			t.Fatalf("Execute() error = %v", err)
+		}
+		if !result.Facts.VerificationPerformed || result.Facts.VerificationPassed {
+			t.Fatalf("expected verification failed facts, got %+v", result.Facts)
+		}
+		missing, ok := result.Metadata["verification_missing"].([]string)
+		if !ok || len(missing) != 1 || missing[0] != "missing-token" {
+			t.Fatalf("verification_missing = %#v, want [missing-token]", result.Metadata["verification_missing"])
+		}
+	})
+}
+
 func TestReadFileToolExecuteWithoutChunkEmitter(t *testing.T) {
 	t.Parallel()
 

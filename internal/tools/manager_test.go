@@ -1745,20 +1745,38 @@ func TestBuildPermissionAction(t *testing.T) {
 			name: "spawn subagent maps to write action",
 			input: ToolCallInput{
 				Name:      ToolNameSpawnSubAgent,
-				Arguments: []byte(`{"items":[{"id":"task-a"},{"id":"task-b"}]}`),
+				Arguments: []byte(`{"items":[{"id":"task-a"},{"id":"task-b"}],"allowed_paths":["README.md"]}`),
 			},
 			wantType:     security.ActionTypeWrite,
 			wantResource: ToolNameSpawnSubAgent,
 			wantOp:       ToolNameSpawnSubAgent,
 			wantTarget:   "task-a,task-b",
+			wantSandbox:  "README.md",
 		},
 		{
-			name: "spawn subagent empty target returns error",
+			name: "spawn subagent content does not become sandbox path",
 			input: ToolCallInput{
 				Name:      ToolNameSpawnSubAgent,
-				Arguments: []byte(`{"prompt":"   ","id":"  ","items":[{"id":" "}]}`),
+				Arguments: []byte(`{"content":"创建 1.txt，内容为 1","allowed_paths":["."]}`),
 			},
-			wantErr: "spawn_subagent permission target is empty",
+			wantType:     security.ActionTypeWrite,
+			wantResource: ToolNameSpawnSubAgent,
+			wantOp:       ToolNameSpawnSubAgent,
+			wantTarget:   ToolNameSpawnSubAgent,
+			wantSandbox:  ".",
+		},
+		{
+			name: "spawn subagent without allowed paths falls back to workspace target",
+			input: ToolCallInput{
+				Name:      ToolNameSpawnSubAgent,
+				Workdir:   "/workspace/project",
+				Arguments: []byte(`{"prompt":"read docs and summarize"}`),
+			},
+			wantType:     security.ActionTypeWrite,
+			wantResource: ToolNameSpawnSubAgent,
+			wantOp:       ToolNameSpawnSubAgent,
+			wantTarget:   ToolNameSpawnSubAgent,
+			wantSandbox:  "/workspace/project",
 		},
 		{
 			name: "mcp tool maps to mcp action",
@@ -1836,7 +1854,9 @@ func TestPermissionMapperHelpers(t *testing.T) {
 		input      []byte
 		key        string
 		want       string
-		spawn      bool
+		spawnLabel bool
+		spawnPath  bool
+		workdir    string
 		serverTool string
 		serverWant string
 	}{
@@ -1865,46 +1885,54 @@ func TestPermissionMapperHelpers(t *testing.T) {
 			want:  "",
 		},
 		{
-			name:  "extract spawn target from items",
-			input: []byte(`{"items":[{"id":"task-a"},{"id":" task-b "}],"id":"fallback"}`),
-			want:  "task-a,task-b",
-			spawn: true,
+			name:       "extract spawn target from items",
+			input:      []byte(`{"items":[{"id":"task-a"},{"id":" task-b "}],"id":"fallback"}`),
+			want:       "task-a,task-b",
+			spawnLabel: true,
 		},
 		{
-			name:  "extract spawn target falls back to top level id",
-			input: []byte(`{"id":"legacy-task"}`),
-			want:  "legacy-task",
-			spawn: true,
+			name:       "extract spawn label falls back to top level id",
+			input:      []byte(`{"id":"legacy-task"}`),
+			want:       "legacy-task",
+			spawnLabel: true,
 		},
 		{
-			name:  "extract spawn target falls back to prompt",
-			input: []byte(`{"prompt":"analyze auth module for vulnerabilities"}`),
-			want:  "analyze auth module for vulnerabilities",
-			spawn: true,
+			name:       "extract spawn label defaults to tool name when missing id",
+			input:      []byte(`{"prompt":"analyze auth module for vulnerabilities"}`),
+			want:       ToolNameSpawnSubAgent,
+			spawnLabel: true,
 		},
 		{
-			name:  "extract spawn target falls back to content",
-			input: []byte(`{"content":"write regression tests first"}`),
-			want:  "write regression tests first",
-			spawn: true,
+			name:       "extract spawn label invalid json defaults to tool name",
+			input:      []byte(`{invalid`),
+			want:       ToolNameSpawnSubAgent,
+			spawnLabel: true,
 		},
 		{
-			name:  "extract spawn target trims prompt to max length",
-			input: []byte(`{"prompt":"abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz"}`),
-			want:  "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzab...",
-			spawn: true,
+			name:      "extract spawn sandbox path falls back when multiple allowed_paths are present",
+			input:     []byte(`{"allowed_paths":[" ","README.md","docs"]}`),
+			want:      ".",
+			spawnPath: true,
 		},
 		{
-			name:  "extract spawn target empty when no fallback",
-			input: []byte(`{"items":[{"id":" "}]}`),
-			want:  "",
-			spawn: true,
+			name:      "extract spawn sandbox path falls back to workdir when missing",
+			input:     []byte(`{"prompt":"summarize docs"}`),
+			workdir:   "/workspace/project",
+			want:      "/workspace/project",
+			spawnPath: true,
 		},
 		{
-			name:  "extract spawn target invalid json returns empty",
-			input: []byte(`{invalid`),
-			want:  "",
-			spawn: true,
+			name:      "extract spawn sandbox path falls back to dot when workdir empty",
+			input:     []byte(`{"prompt":"summarize docs"}`),
+			want:      ".",
+			spawnPath: true,
+		},
+		{
+			name:      "extract spawn sandbox path ignores invalid json and uses fallback",
+			input:     []byte(`{invalid`),
+			workdir:   "/workspace/project",
+			want:      "/workspace/project",
+			spawnPath: true,
 		},
 		{
 			name:       "mcp server target with server and tool",
@@ -1933,9 +1961,14 @@ func TestPermissionMapperHelpers(t *testing.T) {
 					t.Fatalf("expected %q, got %q", tt.want, got)
 				}
 			}
-			if tt.spawn {
-				if got := extractSpawnSubAgentTarget(tt.input); got != tt.want {
-					t.Fatalf("expected spawn target %q, got %q", tt.want, got)
+			if tt.spawnLabel {
+				if got := extractSpawnSubAgentPermissionLabel(tt.input); got != tt.want {
+					t.Fatalf("expected spawn label %q, got %q", tt.want, got)
+				}
+			}
+			if tt.spawnPath {
+				if got := extractSpawnSubAgentSandboxPath(tt.input, tt.workdir); got != tt.want {
+					t.Fatalf("expected spawn sandbox path %q, got %q", tt.want, got)
 				}
 			}
 			if tt.serverTool != "" {

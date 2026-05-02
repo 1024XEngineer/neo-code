@@ -230,6 +230,69 @@ func TestDecodeRuntimeEventFromGatewayNotificationRestoresRepoHookLifecyclePaylo
 	}
 }
 
+func TestDecodeRuntimeEventFromGatewayNotificationRestoresSubAgentPayloads(t *testing.T) {
+	lifecycleNotification := buildGatewayEventNotification(t, gateway.MessageFrame{
+		Type:      gateway.FrameTypeEvent,
+		Action:    gateway.FrameActionRun,
+		SessionID: "session-subagent",
+		RunID:     "run-subagent",
+		Payload: map[string]any{
+			"runtime_event_type": string(EventSubAgentProgress),
+			"payload_version":    runtimeEventPayloadVersion,
+			"payload": map[string]any{
+				"role":    "coder",
+				"task_id": "task-1",
+				"state":   "running",
+				"step":    3,
+				"delta":   "working",
+			},
+		},
+	})
+
+	event, err := decodeRuntimeEventFromGatewayNotification(lifecycleNotification)
+	if err != nil {
+		t.Fatalf("decodeRuntimeEventFromGatewayNotification() lifecycle error = %v", err)
+	}
+	lifecyclePayload, ok := event.Payload.(SubAgentEventPayload)
+	if !ok {
+		t.Fatalf("lifecycle payload type = %T, want SubAgentEventPayload", event.Payload)
+	}
+	if lifecyclePayload.Role != "coder" || lifecyclePayload.TaskID != "task-1" || lifecyclePayload.Step != 3 {
+		t.Fatalf("unexpected lifecycle payload: %#v", lifecyclePayload)
+	}
+
+	toolCallNotification := buildGatewayEventNotification(t, gateway.MessageFrame{
+		Type:      gateway.FrameTypeEvent,
+		Action:    gateway.FrameActionRun,
+		SessionID: "session-subagent",
+		RunID:     "run-subagent",
+		Payload: map[string]any{
+			"runtime_event_type": string(EventSubAgentToolCallResult),
+			"payload_version":    runtimeEventPayloadVersion,
+			"payload": map[string]any{
+				"role":       "coder",
+				"task_id":    "task-2",
+				"tool_name":  "bash",
+				"decision":   "allow",
+				"elapsed_ms": 42,
+				"truncated":  false,
+			},
+		},
+	})
+
+	event, err = decodeRuntimeEventFromGatewayNotification(toolCallNotification)
+	if err != nil {
+		t.Fatalf("decodeRuntimeEventFromGatewayNotification() tool call error = %v", err)
+	}
+	toolCallPayload, ok := event.Payload.(SubAgentToolCallEventPayload)
+	if !ok {
+		t.Fatalf("tool call payload type = %T, want SubAgentToolCallEventPayload", event.Payload)
+	}
+	if toolCallPayload.ToolName != "bash" || toolCallPayload.Decision != "allow" || toolCallPayload.ElapsedMS != 42 {
+		t.Fatalf("unexpected tool call payload: %#v", toolCallPayload)
+	}
+}
+
 func TestDecodeRuntimeEventFromGatewayNotificationSupportsNestedEnvelope(t *testing.T) {
 	notification := buildGatewayEventNotification(t, gateway.MessageFrame{
 		Type:      gateway.FrameTypeEvent,

@@ -61,7 +61,8 @@ type StopReasonDecidedPayload struct {
 
 // VerificationStartedPayload 描述 final 验收验证开始事件。
 type VerificationStartedPayload struct {
-	CompletionPassed bool `json:"completion_passed"`
+	CompletionPassed        bool   `json:"completion_passed"`
+	CompletionBlockedReason string `json:"completion_blocked_reason,omitempty"`
 }
 
 // VerificationStageFinishedPayload 描述单个 verifier 阶段完成事件。
@@ -93,12 +94,13 @@ type VerificationFailedPayload struct {
 
 // AcceptanceDecidedPayload 描述 acceptance engine 决议结果。
 type AcceptanceDecidedPayload struct {
-	Status             acceptance.AcceptanceStatus `json:"status"`
-	StopReason         controlplane.StopReason     `json:"stop_reason,omitempty"`
-	ErrorClass         verify.ErrorClass           `json:"error_class,omitempty"`
-	UserVisibleSummary string                      `json:"user_visible_summary,omitempty"`
-	InternalSummary    string                      `json:"internal_summary,omitempty"`
-	ContinueHint       string                      `json:"continue_hint,omitempty"`
+	Status                  acceptance.AcceptanceStatus `json:"status"`
+	StopReason              controlplane.StopReason     `json:"stop_reason,omitempty"`
+	ErrorClass              verify.ErrorClass           `json:"error_class,omitempty"`
+	CompletionBlockedReason string                      `json:"completion_blocked_reason,omitempty"`
+	UserVisibleSummary      string                      `json:"user_visible_summary,omitempty"`
+	InternalSummary         string                      `json:"internal_summary,omitempty"`
+	ContinueHint            string                      `json:"continue_hint,omitempty"`
 }
 
 // LedgerReconciledPayload 为账本对账预留负载。
@@ -192,10 +194,39 @@ type SessionSkillEventPayload struct {
 	SkillID string `json:"skill_id"`
 }
 
+// TodoViewItem 描述 Todo 列表单项快照，供 TUI/网关/桌面端统一渲染。
+type TodoViewItem struct {
+	ID            string   `json:"id"`
+	Content       string   `json:"content"`
+	Status        string   `json:"status"`
+	Required      bool     `json:"required"`
+	Artifacts     []string `json:"artifacts,omitempty"`
+	FailureReason string   `json:"failure_reason,omitempty"`
+	BlockedReason string   `json:"blocked_reason,omitempty"`
+	Revision      int64    `json:"revision"`
+}
+
+// TodoSummary 描述 Todo 收敛摘要，避免客户端重复统计。
+type TodoSummary struct {
+	Total             int `json:"total"`
+	RequiredTotal     int `json:"required_total"`
+	RequiredCompleted int `json:"required_completed"`
+	RequiredFailed    int `json:"required_failed"`
+	RequiredOpen      int `json:"required_open"`
+}
+
+// TodoSnapshot 描述一次 Todo 视图快照。
+type TodoSnapshot struct {
+	Items   []TodoViewItem `json:"items,omitempty"`
+	Summary TodoSummary    `json:"summary,omitempty"`
+}
+
 // TodoEventPayload 描述 todo_write 相关事件。
 type TodoEventPayload struct {
-	Action string `json:"action"`
-	Reason string `json:"reason,omitempty"`
+	Action  string         `json:"action"`
+	Reason  string         `json:"reason,omitempty"`
+	Items   []TodoViewItem `json:"items,omitempty"`
+	Summary TodoSummary    `json:"summary,omitempty"`
 }
 
 // InputNormalizedPayload 描述输入归一化完成后的摘要信息。
@@ -359,6 +390,16 @@ const (
 	EventRepoHooksSkippedUntrusted EventType = "repo_hooks_skipped_untrusted"
 	// EventRepoHooksTrustStoreInvalid 表示 trust store 缺失或损坏，已降级为 untrusted。
 	EventRepoHooksTrustStoreInvalid EventType = "repo_hooks_trust_store_invalid"
+	// EventRuntimeSnapshotUpdated 表示 runtime 统一状态快照已更新。
+	EventRuntimeSnapshotUpdated EventType = "runtime_snapshot_updated"
+	// EventFactsUpdated 表示运行事实快照已更新。
+	EventFactsUpdated EventType = "facts_updated"
+	// EventDecisionMade 表示 FinalDecider 已输出裁决。
+	EventDecisionMade EventType = "decision_made"
+	// EventSubAgentSnapshotUpdated 表示子代理状态快照已更新。
+	EventSubAgentSnapshotUpdated EventType = "subagent_snapshot_updated"
+	// EventTodoSnapshotUpdated 表示 todo 快照已更新。
+	EventTodoSnapshotUpdated EventType = "todo_snapshot_updated"
 )
 
 // TokenUsagePayload 承载单轮 token 用量统计。

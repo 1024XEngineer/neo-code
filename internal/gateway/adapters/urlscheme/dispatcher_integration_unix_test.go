@@ -174,6 +174,20 @@ func (s *urlschemeIntegrationRuntimeStub) CreateSession(
 	return strings.TrimSpace("session-review-integration"), nil
 }
 
+func (s *urlschemeIntegrationRuntimeStub) ListSessionTodos(
+	context.Context,
+	gateway.ListSessionTodosInput,
+) (gateway.TodoSnapshot, error) {
+	return gateway.TodoSnapshot{}, nil
+}
+
+func (s *urlschemeIntegrationRuntimeStub) GetRuntimeSnapshot(
+	context.Context,
+	gateway.GetRuntimeSnapshotInput,
+) (gateway.RuntimeSnapshot, error) {
+	return gateway.RuntimeSnapshot{}, nil
+}
+
 func (s *urlschemeIntegrationRuntimeStub) DeleteSession(context.Context, gateway.DeleteSessionInput) (bool, error) {
 	return false, nil
 }
