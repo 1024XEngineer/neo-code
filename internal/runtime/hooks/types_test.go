@@ -112,6 +112,26 @@ func TestHookSpecNormalizeAndValidateErrors(t *testing.T) {
 			},
 		},
 		{
+			name: "user async not allowed",
+			spec: HookSpec{
+				ID:      "hook-1",
+				Point:   HookPointBeforeToolCall,
+				Scope:   HookScopeUser,
+				Mode:    HookModeAsync,
+				Handler: handler,
+			},
+		},
+		{
+			name: "repo async_rewake not allowed",
+			spec: HookSpec{
+				ID:      "hook-1",
+				Point:   HookPointBeforeToolCall,
+				Scope:   HookScopeRepo,
+				Mode:    HookModeAsyncRewake,
+				Handler: handler,
+			},
+		},
+		{
 			name: "invalid failure policy",
 			spec: HookSpec{
 				ID:            "hook-1",
