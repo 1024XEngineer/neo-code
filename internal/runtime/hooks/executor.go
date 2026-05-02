@@ -24,6 +24,12 @@ type Executor struct {
 	maxInFlight    int32
 	inFlight       atomic.Int32
 	now            func() time.Time
+	asyncSink      AsyncResultSink
+}
+
+// AsyncResultSink 用于接收异步 hook 执行完成后的结果，供 runtime 内部回灌队列使用。
+type AsyncResultSink interface {
+	HandleAsyncHookResult(ctx context.Context, spec HookSpec, input HookContext, result HookResult)
 }
 
 // NewExecutor 创建一个同步 hook 执行器。
@@ -41,6 +47,14 @@ func NewExecutor(registry *Registry, emitter EventEmitter, defaultTimeout time.D
 		maxInFlight:    DefaultMaxInFlightHooks,
 		now:            time.Now,
 	}
+}
+
+// SetAsyncResultSink 设置异步 hook 结果回灌接收器。
+func (e *Executor) SetAsyncResultSink(sink AsyncResultSink) {
+	if e == nil {
+		return
+	}
+	e.asyncSink = sink
 }
 
 // Run 在指定挂载点执行 hook 快照并返回聚合结果。
@@ -64,6 +78,10 @@ func (e *Executor) Run(ctx context.Context, point HookPoint, input HookContext) 
 		hookInput := input.Clone()
 		if spec.Scope == HookScopeUser || spec.Scope == HookScopeRepo {
 			hookInput = sanitizeUserHookContext(hookInput)
+		}
+		if spec.Mode == HookModeAsync || spec.Mode == HookModeAsyncRewake {
+			e.runAsync(ctx, spec, hookInput)
+			continue
 		}
 		result := e.runOne(ctx, spec, hookInput)
 		result = normalizeHookResultByCapability(spec.Point, result)
@@ -169,6 +187,38 @@ func (e *Executor) runOne(ctx context.Context, spec HookSpec, input HookContext)
 		})
 	}
 	return result
+}
+
+func (e *Executor) runAsync(ctx context.Context, spec HookSpec, input HookContext) {
+	if e == nil {
+		return
+	}
+	go func() {
+		result := e.runOne(ctx, spec, input)
+		result = normalizeHookResultByCapability(spec.Point, result)
+		if spec.Mode == HookModeAsyncRewake && shouldEmitAsyncRewakeNotification(result) {
+			e.emitBestEffort(ctx, HookEvent{
+				Type:          HookEventNotification,
+				HookID:        spec.ID,
+				Point:         spec.Point,
+				Scope:         spec.Scope,
+				Source:        spec.Source,
+				Kind:          spec.Kind,
+				Mode:          spec.Mode,
+				Status:        result.Status,
+				StartedAt:     result.StartedAt,
+				DurationMS:    result.DurationMS,
+				Message:       strings.TrimSpace(result.Message),
+				Error:         strings.TrimSpace(result.Error),
+				RewakeReason:  strings.TrimSpace(result.Metadata.RewakeReason),
+				RewakeSummary: strings.TrimSpace(result.Metadata.RewakeSummary),
+				DedupeKey:     buildAsyncNotificationDedupeKey(spec, result),
+			})
+		}
+		if e.asyncSink != nil {
+			e.asyncSink.HandleAsyncHookResult(ctx, spec, input, result)
+		}
+	}()
 }
 
 func (e *Executor) withHookTimeout(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
@@ -370,4 +420,30 @@ func (e *Executor) emitBestEffort(ctx context.Context, event HookEvent) {
 		return
 	}
 	_ = e.emitter.EmitHookEvent(ctx, event)
+}
+
+func shouldEmitAsyncRewakeNotification(result HookResult) bool {
+	if result.Status == HookResultFailed || result.Status == HookResultBlock {
+		return true
+	}
+	return result.Metadata.Rewake
+}
+
+func buildAsyncNotificationDedupeKey(spec HookSpec, result HookResult) string {
+	status := strings.TrimSpace(string(result.Status))
+	reason := strings.TrimSpace(result.Metadata.RewakeReason)
+	summary := strings.TrimSpace(result.Metadata.RewakeSummary)
+	message := strings.TrimSpace(result.Message)
+	if len(message) > 256 {
+		message = message[:256]
+	}
+	return strings.ToLower(strings.Join([]string{
+		strings.TrimSpace(string(spec.Source)),
+		strings.TrimSpace(spec.ID),
+		strings.TrimSpace(string(spec.Point)),
+		status,
+		reason,
+		summary,
+		message,
+	}, "|"))
 }

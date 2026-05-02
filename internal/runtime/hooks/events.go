@@ -15,22 +15,27 @@ const (
 	HookEventFinished HookEventType = "hook_finished"
 	// HookEventFailed 表示 hook 执行失败事件。
 	HookEventFailed HookEventType = "hook_failed"
+	// HookEventNotification 表示异步回灌通知事件。
+	HookEventNotification HookEventType = "hook_notification"
 )
 
 // HookEvent 描述 hook 执行过程中的结构化事件。
 type HookEvent struct {
-	Type       HookEventType
-	HookID     string
-	Point      HookPoint
-	Scope      HookScope
-	Source     HookSource
-	Kind       HookKind
-	Mode       HookMode
-	Status     HookResultStatus
-	StartedAt  time.Time
-	DurationMS int64
-	Message    string
-	Error      string
+	Type          HookEventType
+	HookID        string
+	Point         HookPoint
+	Scope         HookScope
+	Source        HookSource
+	Kind          HookKind
+	Mode          HookMode
+	Status        HookResultStatus
+	StartedAt     time.Time
+	DurationMS    int64
+	Message       string
+	Error         string
+	RewakeReason  string
+	RewakeSummary string
+	DedupeKey     string
 }
 
 // EventEmitter 抽象 hook 事件发射器，避免依赖 runtime.Service。

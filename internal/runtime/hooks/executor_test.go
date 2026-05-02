@@ -32,6 +32,38 @@ func (r *recordingEmitter) snapshot() []HookEvent {
 	return out
 }
 
+type recordingAsyncSink struct {
+	mu      sync.Mutex
+	calls   int
+	specs   []HookSpec
+	results []HookResult
+}
+
+func (s *recordingAsyncSink) HandleAsyncHookResult(
+	ctx context.Context,
+	spec HookSpec,
+	input HookContext,
+	result HookResult,
+) {
+	_ = ctx
+	_ = input
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.calls++
+	s.specs = append(s.specs, spec)
+	s.results = append(s.results, result)
+}
+
+func (s *recordingAsyncSink) snapshot() (int, []HookSpec, []HookResult) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	specs := make([]HookSpec, len(s.specs))
+	copy(specs, s.specs)
+	results := make([]HookResult, len(s.results))
+	copy(results, s.results)
+	return s.calls, specs, results
+}
+
 func TestExecutorRunPass(t *testing.T) {
 	t.Parallel()
 
@@ -66,6 +98,176 @@ func TestExecutorRunPass(t *testing.T) {
 	}
 	if events[0].Type != HookEventStarted || events[1].Type != HookEventFinished {
 		t.Fatalf("event types = [%s, %s], want [hook_started, hook_finished]", events[0].Type, events[1].Type)
+	}
+}
+
+func TestExecutorRunAsyncDoesNotBlockCurrentPath(t *testing.T) {
+	t.Parallel()
+
+	registry := NewRegistry()
+	executor := NewExecutor(registry, nil, 200*time.Millisecond)
+	done := make(chan struct{}, 1)
+	if err := registry.Register(HookSpec{
+		ID:    "hook-async",
+		Point: HookPointBeforeToolCall,
+		Mode:  HookModeAsync,
+		Handler: func(context.Context, HookContext) HookResult {
+			done <- struct{}{}
+			return HookResult{Status: HookResultPass}
+		},
+	}); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+
+	output := executor.Run(context.Background(), HookPointBeforeToolCall, HookContext{})
+	if output.Blocked {
+		t.Fatalf("Blocked = true, want false for async hook")
+	}
+	if len(output.Results) != 0 {
+		t.Fatalf("len(output.Results) = %d, want 0 for async hook", len(output.Results))
+	}
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("async hook not executed within timeout")
+	}
+}
+
+func TestExecutorRunAsyncFailedDoesNotAffectMainPath(t *testing.T) {
+	t.Parallel()
+
+	registry := NewRegistry()
+	executor := NewExecutor(registry, nil, 200*time.Millisecond)
+	done := make(chan struct{}, 1)
+	if err := registry.Register(HookSpec{
+		ID:    "hook-async-failed",
+		Point: HookPointBeforeToolCall,
+		Mode:  HookModeAsync,
+		Handler: func(context.Context, HookContext) HookResult {
+			defer func() { done <- struct{}{} }()
+			return HookResult{Status: HookResultFailed, Error: "async failed"}
+		},
+	}); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+
+	output := executor.Run(context.Background(), HookPointBeforeToolCall, HookContext{})
+	if output.Blocked {
+		t.Fatalf("Blocked = true, want false for async failed hook")
+	}
+	if len(output.Results) != 0 {
+		t.Fatalf("len(output.Results) = %d, want 0 for async failed hook", len(output.Results))
+	}
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("async failed hook not executed")
+	}
+}
+
+func TestExecutorRunAsyncRewakeEmitsNotificationAndSink(t *testing.T) {
+	t.Parallel()
+
+	registry := NewRegistry()
+	emitter := &recordingEmitter{}
+	sink := &recordingAsyncSink{}
+	executor := NewExecutor(registry, emitter, 200*time.Millisecond)
+	executor.SetAsyncResultSink(sink)
+	done := make(chan struct{}, 1)
+
+	if err := registry.Register(HookSpec{
+		ID:    "hook-async-rewake",
+		Point: HookPointBeforeToolCall,
+		Mode:  HookModeAsyncRewake,
+		Handler: func(context.Context, HookContext) HookResult {
+			defer func() { done <- struct{}{} }()
+			return HookResult{
+				Status:  HookResultPass,
+				Message: "notify",
+				Metadata: HookResultMetadata{
+					Rewake:        true,
+					RewakeReason:  "need_follow_up",
+					RewakeSummary: "follow up",
+				},
+			}
+		},
+	}); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+
+	output := executor.Run(context.Background(), HookPointBeforeToolCall, HookContext{})
+	if output.Blocked {
+		t.Fatalf("Blocked = true, want false")
+	}
+	if len(output.Results) != 0 {
+		t.Fatalf("len(output.Results) = %d, want 0 for async_rewake", len(output.Results))
+	}
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("async_rewake hook not executed within timeout")
+	}
+
+	// 给 emitter/sink 回调一点时间，避免并发可见性抖动。
+	time.Sleep(20 * time.Millisecond)
+
+	events := emitter.snapshot()
+	var hasNotification bool
+	for _, event := range events {
+		if event.Type == HookEventNotification {
+			hasNotification = true
+			if strings.TrimSpace(event.RewakeReason) != "need_follow_up" {
+				t.Fatalf("RewakeReason = %q, want need_follow_up", event.RewakeReason)
+			}
+		}
+	}
+	if !hasNotification {
+		t.Fatalf("expected hook_notification event, got %+v", events)
+	}
+
+	calls, specs, results := sink.snapshot()
+	if calls != 1 {
+		t.Fatalf("sink calls = %d, want 1", calls)
+	}
+	if len(specs) != 1 || specs[0].ID != "hook-async-rewake" {
+		t.Fatalf("sink specs = %+v, want hook-async-rewake", specs)
+	}
+	if len(results) != 1 || !results[0].Metadata.Rewake {
+		t.Fatalf("sink results = %+v, want rewake result", results)
+	}
+}
+
+func TestExecutorRunAsyncRewakeBlockDoesNotBlockCurrentOutput(t *testing.T) {
+	t.Parallel()
+
+	registry := NewRegistry()
+	executor := NewExecutor(registry, nil, 200*time.Millisecond)
+	done := make(chan struct{}, 1)
+	if err := registry.Register(HookSpec{
+		ID:    "hook-async-rewake-block",
+		Point: HookPointBeforeToolCall,
+		Mode:  HookModeAsyncRewake,
+		Handler: func(context.Context, HookContext) HookResult {
+			defer func() { done <- struct{}{} }()
+			return HookResult{Status: HookResultBlock, Message: "block async"}
+		},
+	}); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+
+	output := executor.Run(context.Background(), HookPointBeforeToolCall, HookContext{})
+	if output.Blocked {
+		t.Fatalf("Blocked = true, want false for async_rewake")
+	}
+	if len(output.Results) != 0 {
+		t.Fatalf("len(output.Results) = %d, want 0 for async_rewake", len(output.Results))
+	}
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("async_rewake block hook not executed")
 	}
 }
 

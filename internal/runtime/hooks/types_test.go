@@ -107,7 +107,7 @@ func TestHookSpecNormalizeAndValidateErrors(t *testing.T) {
 			spec: HookSpec{
 				ID:      "hook-1",
 				Point:   HookPointBeforeToolCall,
-				Mode:    HookModeAsync,
+				Mode:    HookMode("async_invalid"),
 				Handler: handler,
 			},
 		},

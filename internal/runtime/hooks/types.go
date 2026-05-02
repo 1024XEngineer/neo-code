@@ -179,7 +179,9 @@ func (s HookSpec) normalizeAndValidate() (HookSpec, error) {
 	if s.Mode == "" {
 		s.Mode = HookModeSync
 	}
-	if s.Mode != HookModeSync {
+	switch s.Mode {
+	case HookModeSync, HookModeAsync, HookModeAsyncRewake:
+	default:
 		return HookSpec{}, wrapInvalidSpec("mode %q is not supported in current stage", s.Mode)
 	}
 	if s.FailurePolicy == "" {
