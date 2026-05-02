@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"neo-code/internal/promptasset"
+	"neo-code/internal/rules"
 )
 
 func TestCorePromptSourceSectionsReturnsClone(t *testing.T) {
@@ -37,8 +38,9 @@ func TestCorePromptSourceSectionsReturnsClone(t *testing.T) {
 func TestRulesPromptSourceSectionsSkipsWhenNoRulesExist(t *testing.T) {
 	t.Parallel()
 
-	sections, err := newRulesPromptSource(nil).Sections(context.Background(), BuildInput{
-		Metadata: Metadata{Workdir: t.TempDir()},
+	baseDir := filepath.Join(t.TempDir(), ".neocode")
+	sections, err := newRulesPromptSource(rules.NewLoader(baseDir)).Sections(context.Background(), BuildInput{
+		Metadata: Metadata{ProjectRoot: t.TempDir(), Workdir: t.TempDir()},
 	})
 	if err != nil {
 		t.Fatalf("Sections() error = %v", err)
@@ -50,11 +52,15 @@ func TestRulesPromptSourceSectionsSkipsWhenNoRulesExist(t *testing.T) {
 
 func TestRulesPromptSourceSectionsRendersRules(t *testing.T) {
 	root := t.TempDir()
+	baseDir := filepath.Join(t.TempDir(), ".neocode")
+	if err := os.MkdirAll(baseDir, 0o755); err != nil {
+		t.Fatalf("mkdir baseDir: %v", err)
+	}
 	if err := os.WriteFile(filepath.Join(root, projectRuleFileName), []byte("rule-body"), 0o644); err != nil {
 		t.Fatalf("write AGENTS.md: %v", err)
 	}
 
-	sections, err := newRulesPromptSource(nil).Sections(context.Background(), BuildInput{
+	sections, err := newRulesPromptSource(rules.NewLoader(baseDir)).Sections(context.Background(), BuildInput{
 		Metadata: Metadata{ProjectRoot: root, Workdir: root},
 	})
 	if err != nil {

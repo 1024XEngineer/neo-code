@@ -115,3 +115,50 @@ func TestLoaderLoadKeepsGlobalRulesWhenProjectRulesMissing(t *testing.T) {
 		t.Fatalf("expected global-only rules, got %+v", snapshot.GlobalAGENTS)
 	}
 }
+
+func TestLoaderLoadHonorsCanceledContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := NewLoader(filepath.Join(t.TempDir(), ".neocode")).Load(ctx, t.TempDir())
+	if err == nil || !strings.Contains(err.Error(), context.Canceled.Error()) {
+		t.Fatalf("expected canceled error, got %v", err)
+	}
+}
+
+func TestLoaderLoadUsesHomeFallbackWhenBaseDirEmpty(t *testing.T) {
+	homeDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+	baseDir := filepath.Join(homeDir, defaultRulesDir)
+	if err := os.MkdirAll(baseDir, 0o755); err != nil {
+		t.Fatalf("mkdir baseDir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(baseDir, agentsFileName), []byte("global-home"), 0o644); err != nil {
+		t.Fatalf("write global AGENTS.md: %v", err)
+	}
+
+	snapshot, err := NewLoader("").Load(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if snapshot.GlobalAGENTS.Content != "global-home" {
+		t.Fatalf("expected home fallback rules, got %+v", snapshot.GlobalAGENTS)
+	}
+}
+
+func TestResolveBaseDirCleansExplicitBaseDir(t *testing.T) {
+	got := resolveBaseDir(filepath.Join(t.TempDir(), "nested", "..", ".neocode"))
+	if !filepath.IsAbs(got) {
+		t.Fatalf("expected absolute cleaned baseDir, got %q", got)
+	}
+	if filepath.Base(got) != defaultRulesDir {
+		t.Fatalf("expected %q suffix, got %q", defaultRulesDir, got)
+	}
+}
+
+func TestTruncateRunesWithZeroBudget(t *testing.T) {
+	got, truncated := truncateRunes("规则", 0)
+	if got != "" || !truncated {
+		t.Fatalf("truncateRunes() = (%q, %v), want empty truncated result", got, truncated)
+	}
+}

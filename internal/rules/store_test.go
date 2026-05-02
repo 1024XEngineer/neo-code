@@ -43,6 +43,24 @@ func TestProjectRulePathUsesFileParentDirectory(t *testing.T) {
 	}
 }
 
+func TestProjectRulePathNormalizesRelativeRootToAbsolute(t *testing.T) {
+	tempRoot := t.TempDir()
+	workdir, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("os.Getwd() error = %v", err)
+	}
+	relativeRoot, err := filepath.Rel(workdir, tempRoot)
+	if err != nil {
+		t.Fatalf("filepath.Rel() error = %v", err)
+	}
+
+	got := ProjectRulePath(relativeRoot)
+	want := filepath.Join(tempRoot, agentsFileName)
+	if got != want {
+		t.Fatalf("ProjectRulePath(relative) = %q, want %q", got, want)
+	}
+}
+
 func TestWriteGlobalRuleCreatesFileAndCanBeReadBack(t *testing.T) {
 	baseDir := filepath.Join(t.TempDir(), ".neocode")
 	path, err := WriteGlobalRule(context.Background(), baseDir, "默认使用中文输出")
@@ -85,6 +103,46 @@ func TestWriteProjectRuleCreatesFileAndCanBeReadBack(t *testing.T) {
 	}
 }
 
+func TestReadGlobalRuleHonorsCanceledContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := ReadGlobalRule(ctx, filepath.Join(t.TempDir(), ".neocode"))
+	if err == nil || !strings.Contains(err.Error(), context.Canceled.Error()) {
+		t.Fatalf("expected canceled error, got %v", err)
+	}
+}
+
+func TestReadProjectRuleHonorsCanceledContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := ReadProjectRule(ctx, t.TempDir())
+	if err == nil || !strings.Contains(err.Error(), context.Canceled.Error()) {
+		t.Fatalf("expected canceled error, got %v", err)
+	}
+}
+
+func TestWriteGlobalRuleHonorsCanceledContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := WriteGlobalRule(ctx, filepath.Join(t.TempDir(), ".neocode"), "ignored")
+	if err == nil || !strings.Contains(err.Error(), context.Canceled.Error()) {
+		t.Fatalf("expected canceled error, got %v", err)
+	}
+}
+
+func TestWriteProjectRuleHonorsCanceledContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := WriteProjectRule(ctx, t.TempDir(), "ignored")
+	if err == nil || !strings.Contains(err.Error(), context.Canceled.Error()) {
+		t.Fatalf("expected canceled error, got %v", err)
+	}
+}
+
 func TestWriteGlobalRuleRejectsInvalidUTF8(t *testing.T) {
 	baseDir := filepath.Join(t.TempDir(), ".neocode")
 	_, err := WriteGlobalRule(context.Background(), baseDir, string([]byte{0xff, 0xfe}))
@@ -101,5 +159,28 @@ func TestReadGlobalRuleReturnsEmptyWhenMissing(t *testing.T) {
 	}
 	if document != (Document{}) {
 		t.Fatalf("expected empty document, got %+v", document)
+	}
+}
+
+func TestReadProjectRuleReturnsEmptyWhenMissing(t *testing.T) {
+	document, err := ReadProjectRule(context.Background(), t.TempDir())
+	if err != nil {
+		t.Fatalf("ReadProjectRule() error = %v", err)
+	}
+	if document != (Document{}) {
+		t.Fatalf("expected empty document, got %+v", document)
+	}
+}
+
+func TestReadProjectRuleReturnsReadError(t *testing.T) {
+	projectRoot := t.TempDir()
+	rulePath := filepath.Join(projectRoot, agentsFileName)
+	if err := os.MkdirAll(rulePath, 0o755); err != nil {
+		t.Fatalf("mkdir rule path: %v", err)
+	}
+
+	_, err := ReadProjectRule(context.Background(), projectRoot)
+	if err == nil || !strings.Contains(err.Error(), "rules: read") {
+		t.Fatalf("expected read error, got %v", err)
 	}
 }

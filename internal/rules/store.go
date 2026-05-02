@@ -26,6 +26,13 @@ func ProjectRulePath(projectRoot string) string {
 	if root == "" {
 		return ""
 	}
+	if !filepath.IsAbs(root) {
+		absRoot, err := filepath.Abs(root)
+		if err != nil {
+			return ""
+		}
+		root = absRoot
+	}
 
 	info, err := os.Stat(root)
 	if err == nil && !info.IsDir() {
