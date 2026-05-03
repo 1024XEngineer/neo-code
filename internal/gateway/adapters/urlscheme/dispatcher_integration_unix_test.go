@@ -212,6 +212,27 @@ func (s *urlschemeIntegrationRuntimeStub) GetSessionModel(context.Context, gatew
 	return gateway.SessionModelResult{}, nil
 }
 
+func (s *urlschemeIntegrationRuntimeStub) ListCheckpoints(
+	context.Context,
+	gateway.ListCheckpointsInput,
+) ([]gateway.CheckpointEntry, error) {
+	return nil, nil
+}
+
+func (s *urlschemeIntegrationRuntimeStub) RestoreCheckpoint(
+	context.Context,
+	gateway.CheckpointRestoreInput,
+) (gateway.CheckpointRestoreResult, error) {
+	return gateway.CheckpointRestoreResult{}, nil
+}
+
+func (s *urlschemeIntegrationRuntimeStub) UndoRestore(
+	context.Context,
+	gateway.UndoRestoreInput,
+) (gateway.CheckpointRestoreResult, error) {
+	return gateway.CheckpointRestoreResult{}, nil
+}
+
 func waitGatewayReady(address string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
