@@ -10,6 +10,8 @@ import (
 	providertypes "neo-code/internal/provider/types"
 	"neo-code/internal/runtime/acceptance"
 	"neo-code/internal/runtime/controlplane"
+	"neo-code/internal/runtime/decider"
+	runtimefacts "neo-code/internal/runtime/facts"
 	runtimehooks "neo-code/internal/runtime/hooks"
 	"neo-code/internal/runtime/verify"
 	agentsession "neo-code/internal/session"
@@ -79,6 +81,36 @@ func TestBeforeCompletionDecisionAcceptanceHooksOnOffParity(t *testing.T) {
 
 	if offDecision.Status != onDecision.Status || offDecision.StopReason != onDecision.StopReason {
 		t.Fatalf("hooks parity mismatch: off=%+v on=%+v", offDecision, onDecision)
+	}
+
+	offContinue, err := offService.runBeforeCompletionDecisionAcceptance(
+		context.Background(),
+		&offState,
+		snapshot,
+		assistant,
+		snapshot.Workdir,
+		false,
+		false,
+		providertypes.RoleAssistant,
+	)
+	if err != nil {
+		t.Fatalf("hooks-off continue decision error = %v", err)
+	}
+	onContinue, err := onService.runBeforeCompletionDecisionAcceptance(
+		context.Background(),
+		&onState,
+		snapshot,
+		assistant,
+		snapshot.Workdir,
+		false,
+		false,
+		providertypes.RoleAssistant,
+	)
+	if err != nil {
+		t.Fatalf("hooks-on continue decision error = %v", err)
+	}
+	if offContinue.Status != onContinue.Status || offContinue.StopReason != onContinue.StopReason {
+		t.Fatalf("hooks continue parity mismatch: off=%+v on=%+v", offContinue, onContinue)
 	}
 }
 
@@ -244,5 +276,118 @@ func TestVerificationFailureProducesStopReasonAndErrorClass(t *testing.T) {
 	}
 	if decision.ErrorClass == "" {
 		t.Fatalf("verification failure must keep non-empty error_class: %+v", decision)
+	}
+}
+
+func TestChatAnswerAcceptancePassesWithoutHeavyVerification(t *testing.T) {
+	t.Parallel()
+
+	service := &Service{events: make(chan RuntimeEvent, 16)}
+	state := newRunState("run-chat-answer", agentsession.New("chat-answer"))
+	state.taskKind = decider.TaskKindChatAnswer
+	state.userGoal = "你好"
+	state.session.TaskState.VerificationProfile = agentsession.VerificationProfileTaskOnly
+
+	snapshot := TurnBudgetSnapshot{Config: config.StaticDefaults().Clone(), Workdir: t.TempDir()}
+	decision, err := service.beforeAcceptFinal(
+		context.Background(),
+		&state,
+		snapshot,
+		providertypes.Message{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("你好")}},
+		true,
+		beforeCompletionHookSignals{},
+	)
+	if err != nil {
+		t.Fatalf("beforeAcceptFinal error = %v", err)
+	}
+	if !decision.CompletionPassed || !decision.VerificationPassed {
+		t.Fatalf("chat answer should pass completion+verification gate, got %+v", decision)
+	}
+	if decision.Status != acceptance.AcceptanceAccepted {
+		t.Fatalf("status=%q want accepted", decision.Status)
+	}
+	if decision.StopReason != controlplane.StopReasonAccepted {
+		t.Fatalf("stop reason=%q want accepted", decision.StopReason)
+	}
+}
+
+func TestNormalizeAcceptanceErrorClassCoverage(t *testing.T) {
+	t.Parallel()
+
+	testInput := acceptanceServiceInput{
+		TaskKind: decider.TaskKindWorkspaceWrite,
+		Facts: runtimefacts.RuntimeFacts{
+			Errors: runtimefacts.ErrorFacts{
+				ToolErrors: []runtimefacts.ToolErrorFact{{
+					Tool:       "filesystem_write_file",
+					ErrorClass: "permission_denied",
+				}},
+			},
+		},
+	}
+	cases := []struct {
+		name     string
+		input    acceptanceServiceInput
+		decision acceptance.AcceptanceDecision
+		want     verify.ErrorClass
+	}{
+		{
+			name:     "verification_config_missing",
+			input:    acceptanceServiceInput{},
+			decision: acceptance.AcceptanceDecision{StopReason: controlplane.StopReasonVerificationConfigMissing, Status: acceptance.AcceptanceFailed},
+			want:     verify.ErrorClassEnvMissing,
+		},
+		{
+			name:     "verification_execution_denied",
+			input:    acceptanceServiceInput{},
+			decision: acceptance.AcceptanceDecision{StopReason: controlplane.StopReasonVerificationExecutionDenied, Status: acceptance.AcceptanceFailed},
+			want:     verify.ErrorClassPermissionDenied,
+		},
+		{
+			name:     "verification_execution_error",
+			input:    acceptanceServiceInput{},
+			decision: acceptance.AcceptanceDecision{StopReason: controlplane.StopReasonVerificationExecutionError, Status: acceptance.AcceptanceFailed},
+			want:     verify.ErrorClassUnknown,
+		},
+		{
+			name:     "required_todo_failed",
+			input:    acceptanceServiceInput{},
+			decision: acceptance.AcceptanceDecision{StopReason: controlplane.StopReasonRequiredTodoFailed, Status: acceptance.AcceptanceFailed},
+			want:     verify.ErrorClassUnknown,
+		},
+		{
+			name:     "no_progress_after_final_intercept",
+			input:    acceptanceServiceInput{},
+			decision: acceptance.AcceptanceDecision{StopReason: controlplane.StopReasonNoProgressAfterFinalIntercept, Status: acceptance.AcceptanceIncomplete},
+			want:     verify.ErrorClassUnknown,
+		},
+		{
+			name: "subagent failed",
+			input: acceptanceServiceInput{
+				TaskKind: decider.TaskKindSubAgent,
+				Facts: runtimefacts.RuntimeFacts{
+					SubAgents: runtimefacts.SubAgentFacts{
+						Failed: []runtimefacts.SubAgentFact{{TaskID: "sa-1"}},
+					},
+				},
+			},
+			decision: acceptance.AcceptanceDecision{StopReason: controlplane.StopReasonVerificationFailed, Status: acceptance.AcceptanceFailed},
+			want:     verify.ErrorClass("subagent_failed"),
+		},
+		{
+			name:     "workspace_write_hard_failure",
+			input:    testInput,
+			decision: acceptance.AcceptanceDecision{StopReason: controlplane.StopReasonVerificationFailed, Status: acceptance.AcceptanceFailed},
+			want:     verify.ErrorClass("permission_denied"),
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := normalizeAcceptanceErrorClass("", tc.input, tc.decision)
+			if got != tc.want {
+				t.Fatalf("normalizeAcceptanceErrorClass() = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
