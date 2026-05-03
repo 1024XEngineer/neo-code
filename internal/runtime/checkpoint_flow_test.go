@@ -13,15 +13,21 @@ import (
 )
 
 type checkpointStoreSpy struct {
-	lastResume agentsession.ResumeCheckpoint
+	lastResume    agentsession.ResumeCheckpoint
+	listRecords   []agentsession.CheckpointRecord
+	listSessionID string
+	listOpts      checkpoint.ListCheckpointOpts
+	listErr       error
 }
 
 func (s *checkpointStoreSpy) CreateCheckpoint(context.Context, checkpoint.CreateCheckpointInput) (agentsession.CheckpointRecord, error) {
 	return agentsession.CheckpointRecord{}, nil
 }
 
-func (s *checkpointStoreSpy) ListCheckpoints(context.Context, string, checkpoint.ListCheckpointOpts) ([]agentsession.CheckpointRecord, error) {
-	return nil, nil
+func (s *checkpointStoreSpy) ListCheckpoints(_ context.Context, sessionID string, opts checkpoint.ListCheckpointOpts) ([]agentsession.CheckpointRecord, error) {
+	s.listSessionID = sessionID
+	s.listOpts = opts
+	return s.listRecords, s.listErr
 }
 
 func (s *checkpointStoreSpy) GetCheckpoint(context.Context, string) (agentsession.CheckpointRecord, *agentsession.SessionCheckpoint, error) {
@@ -288,6 +294,52 @@ func TestCreateCompactCheckpointAndResumeCheckpoint(t *testing.T) {
 	if spy.lastResume.SessionID != fixture.session.ID || spy.lastResume.RunID != "run-resume" || spy.lastResume.Turn != 3 || spy.lastResume.Phase != "verify" {
 		t.Fatalf("SetResumeCheckpoint() captured %#v", spy.lastResume)
 	}
+}
+
+func TestRuntimeCheckpointFacadeMethods(t *testing.T) {
+	t.Run("list checkpoints delegates to store", func(t *testing.T) {
+		spy := &checkpointStoreSpy{
+			listRecords: []agentsession.CheckpointRecord{{CheckpointID: "cp-1"}},
+		}
+		service := &Service{checkpointStore: spy}
+
+		records, err := service.ListCheckpoints(context.Background(), "session-1", checkpoint.ListCheckpointOpts{
+			Limit:          5,
+			RestorableOnly: true,
+		})
+		if err != nil {
+			t.Fatalf("ListCheckpoints() error = %v", err)
+		}
+		if spy.listSessionID != "session-1" || spy.listOpts.Limit != 5 || !spy.listOpts.RestorableOnly {
+			t.Fatalf("spy captured session=%q opts=%#v", spy.listSessionID, spy.listOpts)
+		}
+		if len(records) != 1 || records[0].CheckpointID != "cp-1" {
+			t.Fatalf("records = %#v", records)
+		}
+	})
+
+	t.Run("list checkpoints reports unavailable store", func(t *testing.T) {
+		service := &Service{}
+		if _, err := service.ListCheckpoints(context.Background(), "session-1", checkpoint.ListCheckpointOpts{}); err == nil {
+			t.Fatal("expected error when checkpoint store is unavailable")
+		}
+	})
+
+	t.Run("set checkpoint dependencies stores references", func(t *testing.T) {
+		service := &Service{}
+		store := &checkpointStoreSpy{}
+		repo := checkpoint.NewShadowRepo(t.TempDir(), t.TempDir())
+
+		service.SetCheckpointDependencies(store, repo)
+		if service.checkpointStore != store || service.shadowRepo != repo {
+			t.Fatalf("service checkpoint dependencies not set correctly")
+		}
+	})
+
+	t.Run("update runtime session after restore is no-op", func(t *testing.T) {
+		service := &Service{}
+		service.updateRuntimeSessionAfterRestore("session-1", agentsession.SessionHead{}, nil)
+	})
 }
 
 func TestRestoreCheckpointAndUndoRestore(t *testing.T) {

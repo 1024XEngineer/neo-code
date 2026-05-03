@@ -45,6 +45,9 @@ type bootstrapRuntimeStub struct {
 	upsertMCPServerFn    func(ctx context.Context, input UpsertMCPServerInput) error
 	setMCPEnabledFn      func(ctx context.Context, input SetMCPServerEnabledInput) error
 	deleteMCPServerFn    func(ctx context.Context, input DeleteMCPServerInput) error
+	listCheckpointsFn    func(ctx context.Context, input ListCheckpointsInput) ([]CheckpointEntry, error)
+	restoreCheckpointFn  func(ctx context.Context, input CheckpointRestoreInput) (CheckpointRestoreResult, error)
+	undoRestoreFn        func(ctx context.Context, input UndoRestoreInput) (CheckpointRestoreResult, error)
 }
 
 func (s *bootstrapRuntimeStub) Run(ctx context.Context, input RunInput) error {
@@ -249,15 +252,24 @@ func (s *bootstrapRuntimeStub) CreateSession(ctx context.Context, input CreateSe
 	return strings.TrimSpace(input.SessionID), nil
 }
 
-func (s *bootstrapRuntimeStub) ListCheckpoints(_ context.Context, _ ListCheckpointsInput) ([]CheckpointEntry, error) {
+func (s *bootstrapRuntimeStub) ListCheckpoints(ctx context.Context, input ListCheckpointsInput) ([]CheckpointEntry, error) {
+	if s != nil && s.listCheckpointsFn != nil {
+		return s.listCheckpointsFn(ctx, input)
+	}
 	return nil, nil
 }
 
-func (s *bootstrapRuntimeStub) RestoreCheckpoint(_ context.Context, _ CheckpointRestoreInput) (CheckpointRestoreResult, error) {
+func (s *bootstrapRuntimeStub) RestoreCheckpoint(ctx context.Context, input CheckpointRestoreInput) (CheckpointRestoreResult, error) {
+	if s != nil && s.restoreCheckpointFn != nil {
+		return s.restoreCheckpointFn(ctx, input)
+	}
 	return CheckpointRestoreResult{}, nil
 }
 
-func (s *bootstrapRuntimeStub) UndoRestore(_ context.Context, _ UndoRestoreInput) (CheckpointRestoreResult, error) {
+func (s *bootstrapRuntimeStub) UndoRestore(ctx context.Context, input UndoRestoreInput) (CheckpointRestoreResult, error) {
+	if s != nil && s.undoRestoreFn != nil {
+		return s.undoRestoreFn(ctx, input)
+	}
 	return CheckpointRestoreResult{}, nil
 }
 
@@ -428,6 +440,126 @@ func TestDecodeSessionSkillAndSnapshotPayloadBranches(t *testing.T) {
 	_, frameErr = decodeGetRuntimeSnapshotPayload((*protocol.GetRuntimeSnapshotParams)(nil))
 	if frameErr == nil || frameErr.Code != string(ErrorCodeInvalidAction) {
 		t.Fatalf("nil runtime_snapshot_get payload should be invalid_action, got %v", frameErr)
+	}
+}
+
+func TestCheckpointFrameHandlers(t *testing.T) {
+	t.Run("list checkpoints success", func(t *testing.T) {
+		runtime := &bootstrapRuntimeStub{
+			listCheckpointsFn: func(_ context.Context, input ListCheckpointsInput) ([]CheckpointEntry, error) {
+				if input.SubjectID != "subject-1" || input.SessionID != "session-1" {
+					t.Fatalf("input = %#v", input)
+				}
+				return []CheckpointEntry{{CheckpointID: "cp-1", SessionID: "session-1"}}, nil
+			},
+		}
+		authState := NewConnectionAuthState()
+		authState.MarkAuthenticated("subject-1")
+		ctx := WithConnectionAuthState(context.Background(), authState)
+
+		response := handleListCheckpointsFrame(ctx, MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionListCheckpoints,
+			RequestID: "req-checkpoint-list",
+			SessionID: " session-1 ",
+		}, runtime)
+
+		if response.Type != FrameTypeAck || response.Action != FrameActionListCheckpoints {
+			t.Fatalf("response = %#v", response)
+		}
+		entries, ok := response.Payload.([]CheckpointEntry)
+		if !ok || len(entries) != 1 || entries[0].CheckpointID != "cp-1" {
+			t.Fatalf("payload = %#v", response.Payload)
+		}
+	})
+
+	t.Run("restore checkpoint success", func(t *testing.T) {
+		runtime := &bootstrapRuntimeStub{
+			restoreCheckpointFn: func(_ context.Context, input CheckpointRestoreInput) (CheckpointRestoreResult, error) {
+				if input.SubjectID != "subject-1" || input.SessionID != "session-1" || input.CheckpointID != "cp-1" || !input.Force {
+					t.Fatalf("input = %#v", input)
+				}
+				return CheckpointRestoreResult{CheckpointID: input.CheckpointID, SessionID: input.SessionID}, nil
+			},
+		}
+		authState := NewConnectionAuthState()
+		authState.MarkAuthenticated("subject-1")
+		ctx := WithConnectionAuthState(context.Background(), authState)
+
+		response := handleRestoreCheckpointFrame(ctx, MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionRestoreCheckpoint,
+			RequestID: "req-checkpoint-restore",
+			SessionID: " session-1 ",
+			Payload: map[string]any{
+				"checkpoint_id": " cp-1 ",
+				"force":         true,
+			},
+		}, runtime)
+
+		if response.Type != FrameTypeAck || response.Action != FrameActionRestoreCheckpoint || response.SessionID != "session-1" {
+			t.Fatalf("response = %#v", response)
+		}
+		result, ok := response.Payload.(CheckpointRestoreResult)
+		if !ok || result.CheckpointID != "cp-1" {
+			t.Fatalf("payload = %#v", response.Payload)
+		}
+	})
+
+	t.Run("undo restore success", func(t *testing.T) {
+		runtime := &bootstrapRuntimeStub{
+			undoRestoreFn: func(_ context.Context, input UndoRestoreInput) (CheckpointRestoreResult, error) {
+				if input.SubjectID != "subject-1" || input.SessionID != "session-1" {
+					t.Fatalf("input = %#v", input)
+				}
+				return CheckpointRestoreResult{CheckpointID: "cp-guard", SessionID: input.SessionID}, nil
+			},
+		}
+		authState := NewConnectionAuthState()
+		authState.MarkAuthenticated("subject-1")
+		ctx := WithConnectionAuthState(context.Background(), authState)
+
+		response := handleUndoRestoreFrame(ctx, MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionUndoRestore,
+			RequestID: "req-checkpoint-undo",
+			SessionID: " session-1 ",
+		}, runtime)
+
+		if response.Type != FrameTypeAck || response.Action != FrameActionUndoRestore || response.SessionID != "session-1" {
+			t.Fatalf("response = %#v", response)
+		}
+		result, ok := response.Payload.(CheckpointRestoreResult)
+		if !ok || result.CheckpointID != "cp-guard" {
+			t.Fatalf("payload = %#v", response.Payload)
+		}
+	})
+}
+
+func TestDecodeCheckpointRestorePayloadBranches(t *testing.T) {
+	t.Parallel()
+
+	params := decodeCheckpointRestorePayload(map[string]any{
+		"session_id":    " session-1 ",
+		"checkpoint_id": " cp-1 ",
+		"force":         true,
+	})
+	if params.SessionID != "session-1" || params.CheckpointID != "cp-1" || !params.Force {
+		t.Fatalf("decode map payload = %#v", params)
+	}
+
+	params = decodeCheckpointRestorePayload(CheckpointRestoreInput{
+		SessionID:    "session-2",
+		CheckpointID: "cp-2",
+		Force:        true,
+	})
+	if params.SessionID != "session-2" || params.CheckpointID != "cp-2" || !params.Force {
+		t.Fatalf("decode struct payload = %#v", params)
+	}
+
+	params = decodeCheckpointRestorePayload(invalidJSONMarshaler{})
+	if params != (CheckpointRestoreInput{}) {
+		t.Fatalf("marshal failure should return zero input, got %#v", params)
 	}
 }
 
