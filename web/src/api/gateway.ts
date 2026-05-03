@@ -45,6 +45,15 @@ import {
   type ListSessionSkillsResult,
   type ListAvailableSkillsParams,
   type ListAvailableSkillsResult,
+  type ListWorkspacesResult,
+  type CreateWorkspaceParams,
+  type CreateWorkspaceResult,
+  type SwitchWorkspaceParams,
+  type SwitchWorkspaceResult,
+  type RenameWorkspaceParams,
+  type RenameWorkspaceResult,
+  type DeleteWorkspaceParams,
+  type DeleteWorkspaceResult,
 } from './protocol'
 
 /** Gateway 业务 API 客户端，基于 WebSocket 全双工通道 */
@@ -201,5 +210,30 @@ export class GatewayAPI {
   /** 在指定会话中停用一个技能 */
   async deactivateSessionSkill(sessionId: string, skillId: string) {
     return this.ws.call<DeactivateSessionSkillResult>(Method.DeactivateSessionSkill, { session_id: sessionId, skill_id: skillId } satisfies DeactivateSessionSkillParams)
+  }
+
+  /** 列出所有工作区 */
+  async listWorkspaces() {
+    return this.ws.call<ListWorkspacesResult>(Method.ListWorkspaces)
+  }
+
+  /** 创建工作区 */
+  async createWorkspace(path: string, name?: string) {
+    return this.ws.call<CreateWorkspaceResult>(Method.CreateWorkspace, { path, name } satisfies CreateWorkspaceParams)
+  }
+
+  /** 切换工作区 */
+  async switchWorkspace(workspaceHash: string) {
+    return this.ws.call<SwitchWorkspaceResult>(Method.SwitchWorkspace, { workspace_hash: workspaceHash } satisfies SwitchWorkspaceParams)
+  }
+
+  /** 重命名工作区 */
+  async renameWorkspace(workspaceHash: string, name: string) {
+    return this.ws.call<RenameWorkspaceResult>(Method.RenameWorkspace, { workspace_hash: workspaceHash, name } satisfies RenameWorkspaceParams)
+  }
+
+  /** 删除工作区 */
+  async deleteWorkspace(workspaceHash: string, removeData?: boolean) {
+    return this.ws.call<DeleteWorkspaceResult>(Method.DeleteWorkspace, { workspace_hash: workspaceHash, remove_data: removeData } satisfies DeleteWorkspaceParams)
   }
 }

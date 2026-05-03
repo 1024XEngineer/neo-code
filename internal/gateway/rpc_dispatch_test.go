@@ -486,7 +486,7 @@ func TestDispatchRPCRequestMissingSessionAndAuthHelpers(t *testing.T) {
 	}
 }
 
-func TestDispatchRPCRequestRunMissingSessionAtDispatchLayer(t *testing.T) {
+func TestDispatchRPCRequestRunDoesNotRequireSessionAtDispatchLayer(t *testing.T) {
 	metrics := NewGatewayMetrics()
 	ctx := WithRequestSource(context.Background(), RequestSourceHTTP)
 	ctx = WithGatewayMetrics(ctx, metrics)
@@ -494,15 +494,13 @@ func TestDispatchRPCRequestRunMissingSessionAtDispatchLayer(t *testing.T) {
 
 	response := dispatchRPCRequest(ctx, protocol.JSONRPCRequest{
 		JSONRPC: protocol.JSONRPCVersion,
-		ID:      json.RawMessage(`"req-run-missing-session"`),
+		ID:      json.RawMessage(`"req-run-no-session"`),
 		Method:  protocol.MethodGatewayRun,
 		Params:  json.RawMessage(`{"input_text":"hello"}`),
 	}, &runtimePortCompileStub{})
-	if response.Error == nil {
-		t.Fatal("expected missing session error at dispatch layer")
-	}
-	if gatewayCode := protocol.GatewayCodeFromJSONRPCError(response.Error); gatewayCode != protocol.GatewayCodeMissingRequiredField {
-		t.Fatalf("gateway_code = %q, want %q", gatewayCode, protocol.GatewayCodeMissingRequiredField)
+	// run 不再在 dispatch 层要求 session_id；runtime 的 loadOrCreateSession 处理空值
+	if response.Error != nil {
+		t.Fatalf("run should not require session_id at dispatch layer, got error: %v", response.Error)
 	}
 }
 

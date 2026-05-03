@@ -73,6 +73,16 @@ func validateRequestFrame(frame MessageFrame) *FrameError {
 		}
 	case FrameActionListFiles:
 		// listFiles 不强制 session_id，workdir 可独立使用
+	case FrameActionWorkspaceList:
+		return nil
+	case FrameActionWorkspaceCreate,
+		FrameActionWorkspaceSwitch,
+		FrameActionWorkspaceRename,
+		FrameActionWorkspaceDelete:
+		if frame.Payload == nil {
+			return NewMissingRequiredFieldError("payload")
+		}
+		return nil
 	case FrameActionResolvePermission:
 		return validateResolvePermissionFrame(frame)
 	default:
@@ -442,7 +452,12 @@ func isValidFrameAction(action FrameAction) bool {
 		FrameActionListMCPServers,
 		FrameActionUpsertMCPServer,
 		FrameActionSetMCPServerEnabled,
-		FrameActionDeleteMCPServer:
+		FrameActionDeleteMCPServer,
+		FrameActionWorkspaceList,
+		FrameActionWorkspaceCreate,
+		FrameActionWorkspaceSwitch,
+		FrameActionWorkspaceRename,
+		FrameActionWorkspaceDelete:
 		return true
 	default:
 		return false

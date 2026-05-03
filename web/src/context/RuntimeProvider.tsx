@@ -5,6 +5,7 @@ import { useChatStore } from '@/stores/useChatStore'
 import { useGatewayStore } from '@/stores/useGatewayStore'
 import { useSessionStore, isValidSessionId } from '@/stores/useSessionStore'
 import { useUIStore } from '@/stores/useUIStore'
+import { useWorkspaceStore } from '@/stores/useWorkspaceStore'
 import { handleGatewayEvent } from '@/utils/eventBridge'
 
 const browserRuntimeStorageKey = 'neocode.browserRuntimeConfig'
@@ -135,7 +136,12 @@ export function RuntimeProvider({ children }: { children: ReactNode }) {
           await api.bindStream({ session_id: sessionId, channel: 'all' })
         }
 
-        // Refresh session list and reload current session data
+        // Refresh workspace list (best-effort) and session list
+        try {
+          await useWorkspaceStore.getState().fetchWorkspaces(api)
+        } catch (workspaceErr) {
+          console.warn('[RuntimeProvider] reconnect fetchWorkspaces failed:', workspaceErr)
+        }
         await useSessionStore.getState().fetchSessions(api)
 
         // Restore connected status after successful reconnect
@@ -163,6 +169,13 @@ export function RuntimeProvider({ children }: { children: ReactNode }) {
       // Authenticate over WS
       await api.authenticate(nextConfig.token)
       useGatewayStore.getState().setAuthenticated(true)
+
+      // Fetch workspaces (best-effort; gracefully degrades if backend not upgraded)
+      try {
+        await useWorkspaceStore.getState().fetchWorkspaces(api)
+      } catch (workspaceErr) {
+        console.warn('[RuntimeProvider] fetchWorkspaces failed, falling back to single workspace:', workspaceErr)
+      }
 
       // Fetch sessions and initialize
       await useSessionStore.getState().fetchSessions(api)
@@ -256,6 +269,8 @@ export function RuntimeProvider({ children }: { children: ReactNode }) {
     useSessionStore.getState().setProjects([])
     useSessionStore.getState().setCurrentSessionId('')
     useSessionStore.getState().setCurrentProjectId('')
+    useWorkspaceStore.getState().setWorkspaces([])
+    useWorkspaceStore.getState().setCurrentWorkspaceHash('')
     setConfig(null)
     setError('')
     setStatus('needs_config')

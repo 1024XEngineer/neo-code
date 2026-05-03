@@ -324,6 +324,7 @@ func (s *Server) handleConnection(ctx context.Context, conn net.Conn, runtimePor
 	connectionContext = WithStreamRelay(connectionContext, relay)
 	connectionContext = WithRequestSource(connectionContext, RequestSourceIPC)
 	connectionContext = WithConnectionAuthState(connectionContext, NewConnectionAuthState())
+	connectionContext = WithConnectionWorkspaceState(connectionContext, NewConnectionWorkspaceState())
 	if s.authenticator != nil {
 		connectionContext = WithTokenAuthenticator(connectionContext, s.authenticator)
 	}

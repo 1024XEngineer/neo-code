@@ -3,7 +3,8 @@ import { useSessionStore } from '@/stores/useSessionStore'
 import { useChatStore } from '@/stores/useChatStore'
 import { useUIStore } from '@/stores/useUIStore'
 import { useGatewayStore } from '@/stores/useGatewayStore'
-import { useGatewayAPI } from '@/context/RuntimeProvider'
+import { useWorkspaceStore, type Workspace } from '@/stores/useWorkspaceStore'
+import { useGatewayAPI, useRuntime } from '@/context/RuntimeProvider'
 import {
   Plus,
   Search,
@@ -11,7 +12,10 @@ import {
   Filter,
   MessageSquare,
   Folder,
+  FolderPlus,
   ChevronRight,
+  Pencil,
+  Trash2,
   X,
   Server,
   Cpu,
@@ -26,6 +30,7 @@ interface SidebarProps {
 /** 左侧栏：会话列表 */
 export default function Sidebar({ collapsed }: SidebarProps) {
   const gatewayAPI = useGatewayAPI()
+  const runtime = useRuntime()
   // All hooks must be called before any early return (React Rules of Hooks)
   const projects = useSessionStore((s) => s.projects)
   const currentSessionId = useSessionStore((s) => s.currentSessionId)
@@ -35,45 +40,110 @@ export default function Sidebar({ collapsed }: SidebarProps) {
   const setSearchQuery = useUIStore((s) => s.setSearchQuery)
   const setCurrentProjectId = useSessionStore((s) => s.setCurrentProjectId)
 
-  const [expandedProjects, setExpandedProjects] = useState<Set<string>>(new Set())
+  const workspaces = useWorkspaceStore((s) => s.workspaces)
+  const currentWorkspaceHash = useWorkspaceStore((s) => s.currentWorkspaceHash)
+  const switchWorkspace = useWorkspaceStore((s) => s.switchWorkspace)
+  const renameWorkspace = useWorkspaceStore((s) => s.renameWorkspace)
+  const deleteWorkspace = useWorkspaceStore((s) => s.deleteWorkspace)
+  const createWorkspace = useWorkspaceStore((s) => s.createWorkspace)
+
+  const [expandedWorkspaces, setExpandedWorkspaces] = useState<Set<string>>(new Set())
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; sessionId: string } | null>(null)
   const [renamingSessionId, setRenamingSessionId] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState('')
+  const [renamingWorkspaceHash, setRenamingWorkspaceHash] = useState<string | null>(null)
+  const [workspaceRenameValue, setWorkspaceRenameValue] = useState('')
+  const [workspaceContextMenu, setWorkspaceContextMenu] = useState<{ x: number; y: number; hash: string } | null>(null)
+  const [createWorkspaceOpen, setCreateWorkspaceOpen] = useState(false)
   const [mcpModalOpen, setMcpModalOpen] = useState(false)
   const [skillModalOpen, setSkillModalOpen] = useState(false)
   const [providerModalOpen, setProviderModalOpen] = useState(false)
 
+  // 当前工作区默认展开
+  useEffect(() => {
+    if (currentWorkspaceHash) {
+      setExpandedWorkspaces((prev) => {
+        if (prev.has(currentWorkspaceHash)) return prev
+        const next = new Set(prev)
+        next.add(currentWorkspaceHash)
+        return next
+      })
+    }
+  }, [currentWorkspaceHash])
+
   if (!gatewayAPI) return null
 
-  const toggleProject = (projectId: string) => {
-    setExpandedProjects((prev) => {
+  const toggleWorkspace = (hash: string) => {
+    setExpandedWorkspaces((prev) => {
       const next = new Set(prev)
-      if (next.has(projectId)) next.delete(projectId)
-      else next.add(projectId)
+      if (next.has(hash)) next.delete(hash)
+      else next.add(hash)
       return next
     })
   }
 
-  const filteredProjects = searchQuery.trim()
-    ? projects.map((p) => {
-        const projectMatches = p.name.toLowerCase().includes(searchQuery.trim().toLowerCase())
-        return {
-          ...p,
-          sessions: projectMatches
-            ? p.sessions
-            : p.sessions.filter((s) => s.title.toLowerCase().includes(searchQuery.trim().toLowerCase())),
-        }
-      }).filter((p) => p.sessions.length > 0)
-    : projects
+  // 当前工作区下所有会话（来自时间分组的扁平合并）
+  const currentSessions = projects.flatMap((p) => p.sessions)
 
-  async function handleSelectSession(sessionId: string, projectId: string) {
-    setCurrentProjectId(projectId)
+  const trimmedQuery = searchQuery.trim().toLowerCase()
+  const filteredWorkspaces = trimmedQuery
+    ? workspaces.filter((w) => {
+        const nameMatch = (w.name || w.path).toLowerCase().includes(trimmedQuery)
+        if (nameMatch) return true
+        if (w.hash === currentWorkspaceHash) {
+          return currentSessions.some((s) => s.title.toLowerCase().includes(trimmedQuery))
+        }
+        return false
+      })
+    : workspaces
+
+  const filteredCurrentSessions = trimmedQuery
+    ? currentSessions.filter((s) => s.title.toLowerCase().includes(trimmedQuery))
+    : currentSessions
+
+  async function handleSelectSession(sessionId: string) {
+    setCurrentProjectId('')
     if (!gatewayAPI) return
     try {
       await switchSession(sessionId, gatewayAPI)
     } catch (err) {
       console.error('Switch session failed:', err)
     }
+  }
+
+  async function handleSelectWorkspace(hash: string) {
+    if (!gatewayAPI) return
+    if (hash !== currentWorkspaceHash) {
+      await switchWorkspace(hash, gatewayAPI)
+    }
+    setExpandedWorkspaces((prev) => {
+      const next = new Set(prev)
+      next.add(hash)
+      return next
+    })
+  }
+
+  async function handleCommitWorkspaceRename(hash: string) {
+    const trimmed = workspaceRenameValue.trim()
+    setRenamingWorkspaceHash(null)
+    if (!gatewayAPI || !trimmed) return
+    const target = workspaces.find((w) => w.hash === hash)
+    if (target && trimmed === (target.name || target.path)) return
+    await renameWorkspace(hash, trimmed, gatewayAPI)
+  }
+
+  async function handleDeleteWorkspace(hash: string) {
+    const target = workspaces.find((w) => w.hash === hash)
+    const label = target?.name || target?.path || hash
+    if (!window.confirm(`确定要删除工作区「${label}」吗？该工作区下的会话将无法访问。`)) return
+    if (!gatewayAPI) return
+    await deleteWorkspace(hash, gatewayAPI)
+  }
+
+  async function handleCreateWorkspace(path: string, name?: string) {
+    if (!gatewayAPI || !path.trim()) return
+    await createWorkspace(path.trim(), gatewayAPI, name?.trim() || undefined)
+    setCreateWorkspaceOpen(false)
   }
 
   function handleNewSession() {
@@ -118,52 +188,88 @@ export default function Sidebar({ collapsed }: SidebarProps) {
 
       {/* Session List Header */}
       <div style={styles.listHeader}>
-        <span style={styles.listTitle}>项目</span>
+        <span style={styles.listTitle}>工作区</span>
         <div style={styles.searchBox}>
           <Search size={12} />
           <input
             style={styles.searchInput}
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="搜索项目或会话"
+            placeholder="搜索工作区或会话"
           />
         </div>
         <div style={styles.listActions}>
+          <button style={styles.iconBtn} title="新建工作区" onClick={() => setCreateWorkspaceOpen(true)}>
+            <FolderPlus size={14} />
+          </button>
           <button style={styles.iconBtn} title="筛选">
             <Filter size={14} />
           </button>
         </div>
       </div>
 
-      {/* Session List */}
+      {/* Workspace List */}
       <div style={styles.scrollArea}>
-        {filteredProjects.map((project) => (
-          <div key={project.id} style={styles.projectGroup}>
-            <button style={styles.projectHeader} onClick={() => toggleProject(project.id)}>
-              <span style={{ ...styles.chevron, transform: expandedProjects.has(project.id) ? 'rotate(90deg)' : 'rotate(0deg)' }}>
-                <ChevronRight size={14} />
-              </span>
-              <Folder size={14} />
-              <span style={styles.projectName}>{project.name}</span>
-            </button>
-            {expandedProjects.has(project.id) && (
-              <div style={styles.sessionsList}>
-                {project.sessions.map((session) => (
-                  <SessionItem
-                    key={session.id}
-                    session={session}
-                    isActive={currentSessionId === session.id}
-                    onClick={() => handleSelectSession(session.id, project.id)}
-                    onContextMenu={(e) => {
-                      e.preventDefault()
-                      setContextMenu({ x: e.clientX, y: e.clientY, sessionId: session.id })
-                    }}
-                  />
-                ))}
-              </div>
-            )}
+        {filteredWorkspaces.length === 0 && (
+          <div style={styles.emptyHint}>
+            {trimmedQuery ? '无匹配的工作区' : '暂无工作区，点击右上角 + 创建'}
           </div>
-        ))}
+        )}
+        {filteredWorkspaces.map((ws) => {
+          const expanded = expandedWorkspaces.has(ws.hash)
+          const isCurrent = ws.hash === currentWorkspaceHash
+          const sessionsForThisWorkspace = isCurrent ? filteredCurrentSessions : []
+          const isRenaming = renamingWorkspaceHash === ws.hash
+          return (
+            <div key={ws.hash} style={styles.projectGroup}>
+              <WorkspaceRow
+                workspace={ws}
+                expanded={expanded}
+                isCurrent={isCurrent}
+                isRenaming={isRenaming}
+                renameValue={workspaceRenameValue}
+                onRenameValueChange={setWorkspaceRenameValue}
+                onCommitRename={() => handleCommitWorkspaceRename(ws.hash)}
+                onCancelRename={() => setRenamingWorkspaceHash(null)}
+                onClick={() => {
+                  if (isCurrent) {
+                    toggleWorkspace(ws.hash)
+                  } else {
+                    handleSelectWorkspace(ws.hash)
+                  }
+                }}
+                onContextMenu={(e) => {
+                  e.preventDefault()
+                  setWorkspaceContextMenu({ x: e.clientX, y: e.clientY, hash: ws.hash })
+                }}
+                onStartRename={() => {
+                  setRenamingWorkspaceHash(ws.hash)
+                  setWorkspaceRenameValue(ws.name || ws.path)
+                }}
+                onDelete={() => handleDeleteWorkspace(ws.hash)}
+              />
+              {expanded && isCurrent && (
+                <div style={styles.sessionsList}>
+                  {sessionsForThisWorkspace.length === 0 && (
+                    <div style={styles.emptySessions}>暂无会话</div>
+                  )}
+                  {sessionsForThisWorkspace.map((session) => (
+                    <SessionItem
+                      key={session.id}
+                      session={session}
+                      isActive={currentSessionId === session.id}
+                      onClick={() => handleSelectSession(session.id)}
+                      onContextMenu={(e) => {
+                        e.preventDefault()
+                        setContextMenu({ x: e.clientX, y: e.clientY, sessionId: session.id })
+                      }}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
+          )
+        })}
       </div>
 
       {/* Context Menu */}
@@ -173,8 +279,7 @@ export default function Sidebar({ collapsed }: SidebarProps) {
           <div style={{ ...styles.contextMenu, left: contextMenu.x, top: contextMenu.y }}>
             <button style={styles.contextItem} onClick={() => {
               setRenamingSessionId(contextMenu.sessionId)
-              const proj = projects.find((p) => p.sessions.some((s) => s.id === contextMenu.sessionId))
-              const sess = proj?.sessions.find((s) => s.id === contextMenu.sessionId)
+              const sess = currentSessions.find((s) => s.id === contextMenu.sessionId)
               setRenameValue(sess?.title ?? '')
               setContextMenu(null)
             }}>重命名</button>
@@ -187,6 +292,28 @@ export default function Sidebar({ collapsed }: SidebarProps) {
                 console.error('Delete session failed:', err)
               }
               setContextMenu(null)
+            }}>删除</button>
+          </div>
+        </>
+      )}
+
+      {/* Workspace Context Menu */}
+      {workspaceContextMenu && (
+        <>
+          <div style={styles.overlay} onClick={() => setWorkspaceContextMenu(null)} />
+          <div style={{ ...styles.contextMenu, left: workspaceContextMenu.x, top: workspaceContextMenu.y }}>
+            <button style={styles.contextItem} onClick={() => {
+              const ws = workspaces.find((w) => w.hash === workspaceContextMenu.hash)
+              if (ws) {
+                setRenamingWorkspaceHash(ws.hash)
+                setWorkspaceRenameValue(ws.name || ws.path)
+              }
+              setWorkspaceContextMenu(null)
+            }}>重命名</button>
+            <button style={{ ...styles.contextItem, color: 'var(--error)' }} onClick={() => {
+              const hash = workspaceContextMenu.hash
+              setWorkspaceContextMenu(null)
+              handleDeleteWorkspace(hash)
             }}>删除</button>
           </div>
         </>
@@ -236,6 +363,14 @@ export default function Sidebar({ collapsed }: SidebarProps) {
       {mcpModalOpen && <McpModal onClose={() => setMcpModalOpen(false)} />}
       {skillModalOpen && <SkillModal onClose={() => setSkillModalOpen(false)} />}
       {providerModalOpen && <ProviderModal onClose={() => setProviderModalOpen(false)} />}
+      {createWorkspaceOpen && (
+        <CreateWorkspaceDialog
+          electronMode={runtime.mode === 'electron'}
+          onPickDirectory={runtime.mode === 'electron' ? runtime.selectWorkdir : undefined}
+          onSubmit={handleCreateWorkspace}
+          onClose={() => setCreateWorkspaceOpen(false)}
+        />
+      )}
     </div>
   )
 }
@@ -274,6 +409,196 @@ function SessionItem({
         <span style={styles.sessionTime}>{session.time}</span>
       </div>
     </button>
+  )
+}
+
+function WorkspaceRow({
+  workspace,
+  expanded,
+  isCurrent,
+  isRenaming,
+  renameValue,
+  onRenameValueChange,
+  onCommitRename,
+  onCancelRename,
+  onClick,
+  onContextMenu,
+  onStartRename,
+  onDelete,
+}: {
+  workspace: Workspace
+  expanded: boolean
+  isCurrent: boolean
+  isRenaming: boolean
+  renameValue: string
+  onRenameValueChange: (v: string) => void
+  onCommitRename: () => void
+  onCancelRename: () => void
+  onClick: () => void
+  onContextMenu: (e: React.MouseEvent) => void
+  onStartRename: () => void
+  onDelete: () => void
+}) {
+  const [hover, setHover] = useState(false)
+  const display = workspace.name || workspace.path
+  return (
+    <div
+      style={{
+        ...styles.workspaceHeader,
+        background: isCurrent ? 'var(--bg-active)' : hover ? 'var(--bg-tertiary)' : 'transparent',
+      }}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      onContextMenu={onContextMenu}
+    >
+      <button style={styles.workspaceMain} onClick={onClick} title={workspace.path}>
+        <span style={{ ...styles.chevron, transform: expanded ? 'rotate(90deg)' : 'rotate(0deg)' }}>
+          <ChevronRight size={14} />
+        </span>
+        <Folder size={14} />
+        {isRenaming ? (
+          <input
+            style={styles.workspaceRenameInput}
+            value={renameValue}
+            onChange={(e) => onRenameValueChange(e.target.value)}
+            onClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault()
+                onCommitRename()
+              } else if (e.key === 'Escape') {
+                e.preventDefault()
+                onCancelRename()
+              }
+            }}
+            onBlur={onCommitRename}
+            autoFocus
+          />
+        ) : (
+          <span style={styles.projectName}>{display}</span>
+        )}
+      </button>
+      {!isRenaming && hover && (
+        <div style={styles.workspaceActions}>
+          <button
+            style={styles.workspaceActionBtn}
+            title="重命名工作区"
+            onClick={(e) => {
+              e.stopPropagation()
+              onStartRename()
+            }}
+          >
+            <Pencil size={12} />
+          </button>
+          <button
+            style={{ ...styles.workspaceActionBtn, color: 'var(--error)' }}
+            title="删除工作区"
+            onClick={(e) => {
+              e.stopPropagation()
+              onDelete()
+            }}
+          >
+            <Trash2 size={12} />
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function CreateWorkspaceDialog({
+  electronMode,
+  onPickDirectory,
+  onSubmit,
+  onClose,
+}: {
+  electronMode: boolean
+  onPickDirectory?: () => Promise<string>
+  onSubmit: (path: string, name?: string) => Promise<void>
+  onClose: () => void
+}) {
+  const [path, setPath] = useState('')
+  const [name, setName] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+
+  async function handlePick() {
+    if (!onPickDirectory) return
+    try {
+      const picked = await onPickDirectory()
+      if (picked) setPath(picked)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '选择目录失败')
+    }
+  }
+
+  async function handleSubmit() {
+    if (!path.trim()) {
+      setError('请填写工作区路径')
+      return
+    }
+    setLoading(true)
+    setError('')
+    try {
+      await onSubmit(path.trim(), name.trim() || undefined)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '创建工作区失败')
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div style={modalStyles.overlay} onClick={onClose}>
+      <div style={{ ...modalStyles.modal, width: 420 }} onClick={(e) => e.stopPropagation()}>
+        <div style={modalStyles.header}>
+          <h3 style={modalStyles.title}>新建工作区</h3>
+          <button style={modalStyles.closeBtn} onClick={onClose}>
+            <X size={16} />
+          </button>
+        </div>
+        <div style={{ ...modalStyles.body, gap: 12, display: 'flex', flexDirection: 'column' }}>
+          {error && <div style={{ color: 'var(--error)', fontSize: 12 }}>{error}</div>}
+          <label style={formLabelStyle}>
+            工作目录路径
+            <div style={{ display: 'flex', gap: 6 }}>
+              <input
+                style={{ ...modalStyles.input, flex: 1 }}
+                value={path}
+                onChange={(e) => setPath(e.target.value)}
+                placeholder="例如：/Users/me/projects/foo"
+                autoFocus
+              />
+              {electronMode && onPickDirectory && (
+                <button style={{ ...modalStyles.actionBtn, padding: '0 10px' }} onClick={handlePick}>
+                  浏览
+                </button>
+              )}
+            </div>
+          </label>
+          <label style={formLabelStyle}>
+            显示名称（可选）
+            <input
+              style={modalStyles.input}
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="留空则使用路径"
+            />
+          </label>
+          <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
+            <button
+              style={{ ...modalStyles.actionBtn, flex: 1, opacity: loading ? 0.6 : 1 }}
+              onClick={handleSubmit}
+              disabled={loading}
+            >
+              {loading ? '创建中...' : '创建'}
+            </button>
+            <button style={{ ...modalStyles.actionBtn, flex: 1 }} onClick={onClose} disabled={loading}>
+              取消
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
   )
 }
 
@@ -699,6 +1024,7 @@ function ProviderModal({ onClose }: { onClose: () => void }) {
     if (!window.confirm(`确定要删除供应商 "${providerId}" 吗？`)) return
     try {
       await gatewayAPI.deleteCustomProvider(providerId)
+      useGatewayStore.getState().notifyProviderChanged()
       await load()
     } catch (err) {
       console.error('deleteCustomProvider failed:', err)
@@ -819,6 +1145,7 @@ function ProviderModal({ onClose }: { onClose: () => void }) {
       await gatewayAPI.createCustomProvider(payload)
       setShowForm(false)
       await load()
+      useGatewayStore.getState().notifyProviderChanged()
     } catch (err) {
       console.error('createCustomProvider failed:', err)
       setFormError(err instanceof Error ? err.message : '创建失败')
@@ -1156,6 +1483,76 @@ const styles: Record<string, React.CSSProperties> = {
     overflow: 'hidden',
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap',
+    flex: 1,
+  },
+  workspaceHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 4,
+    width: '100%',
+    padding: '0 4px 0 0',
+    borderRadius: 'var(--radius-sm)',
+    transition: 'all 0.15s',
+    marginBottom: 1,
+  },
+  workspaceMain: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 6,
+    flex: 1,
+    minWidth: 0,
+    padding: '6px 8px',
+    border: 'none',
+    background: 'transparent',
+    color: 'var(--text-secondary)',
+    fontSize: 12,
+    fontWeight: 600,
+    cursor: 'pointer',
+    fontFamily: 'var(--font-ui)',
+    textAlign: 'left',
+  },
+  workspaceActions: {
+    display: 'flex',
+    gap: 2,
+    flexShrink: 0,
+  },
+  workspaceActionBtn: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 22,
+    height: 22,
+    borderRadius: 'var(--radius-sm)',
+    border: 'none',
+    background: 'transparent',
+    color: 'var(--text-tertiary)',
+    cursor: 'pointer',
+    transition: 'all 0.15s',
+  },
+  workspaceRenameInput: {
+    flex: 1,
+    minWidth: 0,
+    padding: '2px 6px',
+    border: '1px solid var(--border-primary)',
+    borderRadius: 'var(--radius-sm)',
+    background: 'var(--bg-primary)',
+    color: 'var(--text-primary)',
+    fontSize: 12,
+    fontFamily: 'var(--font-ui)',
+    outline: 'none',
+  },
+  emptyHint: {
+    padding: '20px 12px',
+    fontSize: 12,
+    color: 'var(--text-tertiary)',
+    textAlign: 'center',
+    lineHeight: 1.5,
+  },
+  emptySessions: {
+    padding: '6px 12px',
+    fontSize: 11,
+    color: 'var(--text-tertiary)',
+    fontStyle: 'italic',
   },
   sessionsList: {
     paddingLeft: 8,

@@ -26,10 +26,7 @@ function normalizePermissionPayload(raw: unknown): PermissionRequestPayload | nu
 }
 
 const CRITICAL_EVENTS = new Set<string>([
-  EventType.PermissionRequested,
-  EventType.PermissionResolved,
   EventType.Error,
-  EventType.RunCanceled,
 ])
 
 function strField(payload: unknown, key: string): string {
@@ -49,7 +46,8 @@ export function handleGatewayEvent(frame: MessageFrame, gatewayAPI: GatewayAPI) 
     ?? (payload.event_type as string | undefined)
   if (!eventType) return
 
-  // Discard non-critical events during session transition to avoid stale data
+  // Discard non-critical events during workspace transition to avoid stale data
+  // Only Error events are allowed through during transition
   if (useChatStore.getState().isTransitioning && !CRITICAL_EVENTS.has(eventType)) {
     return
   }
@@ -124,7 +122,6 @@ export function handleGatewayEvent(frame: MessageFrame, gatewayAPI: GatewayAPI) 
       const runId = strField(eventPayload, 'run_id') || frameRunId || ''
       if (runId) gwStore.setCurrentRunId(runId)
       if (sessionId && sessionId !== useSessionStore.getState().currentSessionId) {
-        // Update session ID directly — this is the authoritative source from backend
         useSessionStore.getState().setCurrentSessionId(sessionId)
       }
       break

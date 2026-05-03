@@ -76,6 +76,11 @@ func fullControlPlaneMethods() map[string]struct{} {
 		"gateway.upsertMCPServer",
 		"gateway.setMCPServerEnabled",
 		"gateway.deleteMCPServer",
+		"gateway.listWorkspaces",
+		"gateway.createWorkspace",
+		"gateway.switchWorkspace",
+		"gateway.renameWorkspace",
+		"gateway.deleteWorkspace",
 		"wake.openUrl",
 	}
 	return normalizedMethodSet(methods...)

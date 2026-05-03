@@ -61,9 +61,30 @@ type bridgeSessionLoader interface {
 }
 
 // defaultBuildGatewayRuntimePort 构建网关运行时 RuntimePort 适配器，并返回对应资源清理函数。
+// 当启用多工作区时，返回 MultiWorkspaceRuntime 路由代理，每个工作区拥有独立的 RuntimeBundle。
 func defaultBuildGatewayRuntimePort(ctx context.Context, workdir string) (gateway.RuntimePort, func() error, error) {
-	bundle, err := app.BuildGatewayServerDeps(ctx, app.BootstrapOptions{Workdir: strings.TrimSpace(workdir)})
+	trimmedWorkdir := strings.TrimSpace(workdir)
+
+	// 先构建默认工作区的 bundle，用于获取 baseDir 和共享组件。
+	bundle, err := app.BuildGatewayServerDeps(ctx, app.BootstrapOptions{Workdir: trimmedWorkdir})
 	if err != nil {
+		return nil, nil, err
+	}
+
+	baseDir := bundle.ConfigManager.BaseDir()
+	index := agentsession.NewWorkspaceIndex(baseDir)
+	if err := index.Load(); err != nil {
+		_ = bundle.Close()
+		return nil, nil, err
+	}
+
+	defaultHash := agentsession.HashWorkspaceRoot(trimmedWorkdir)
+	if _, err := index.Register(trimmedWorkdir, ""); err != nil {
+		_ = bundle.Close()
+		return nil, nil, err
+	}
+	if err := index.Save(); err != nil {
+		_ = bundle.Close()
 		return nil, nil, err
 	}
 
@@ -75,7 +96,37 @@ func defaultBuildGatewayRuntimePort(ctx context.Context, workdir string) (gatewa
 		return nil, nil, err
 	}
 
-	cleanup := func() error {
+	buildPort := func(ctx context.Context, wd string) (gateway.RuntimePort, func() error, error) {
+		trimmedWd := strings.TrimSpace(wd)
+		if trimmedWd != "" {
+			_ = os.MkdirAll(trimmedWd, 0o755)
+		}
+		b, err := app.BuildGatewayServerDeps(ctx, app.BootstrapOptions{Workdir: trimmedWd})
+		if err != nil {
+			return nil, nil, err
+		}
+		br, err := newGatewayRuntimePortBridge(ctx, b.Runtime, b.SessionStore, b.ConfigManager, b.ProviderSelection, b.ToolRegistry)
+		if err != nil {
+			if b.Close != nil {
+				_ = b.Close()
+			}
+			return nil, nil, err
+		}
+		cleanup := func() error {
+			var closeErr error
+			if br != nil {
+				closeErr = errors.Join(closeErr, br.Close())
+			}
+			if b.Close != nil {
+				closeErr = errors.Join(closeErr, b.Close())
+			}
+			return closeErr
+		}
+		return br, cleanup, nil
+	}
+
+	mw := gateway.NewMultiWorkspaceRuntime(index, defaultHash, buildPort)
+	mw.PreloadWorkspaceBundle(defaultHash, bridge, func() error {
 		var closeErr error
 		if bridge != nil {
 			closeErr = errors.Join(closeErr, bridge.Close())
@@ -84,9 +135,10 @@ func defaultBuildGatewayRuntimePort(ctx context.Context, workdir string) (gatewa
 			closeErr = errors.Join(closeErr, bundle.Close())
 		}
 		return closeErr
-	}
+	})
+	mw.SetManagementPort(bridge)
 
-	return bridge, cleanup, nil
+	return mw, mw.Close, nil
 }
 
 // configManagerPort 定义桥接层对配置管理器的最小需求。
@@ -163,7 +215,22 @@ func (b *gatewayRuntimePortBridge) Run(ctx context.Context, input gateway.RunInp
 	if err := b.ensureRuntimeAccess(input.SubjectID); err != nil {
 		return err
 	}
-	return b.runtime.Submit(ctx, convertGatewayRunInput(input))
+	err := b.runtime.Submit(ctx, convertGatewayRunInput(input))
+	if err != nil && isRuntimeNotFoundError(err) {
+		sessionID := strings.TrimSpace(input.SessionID)
+		if sessionID == "" {
+			return err
+		}
+		creator, ok := b.runtime.(runtimeSessionCreator)
+		if !ok {
+			return err
+		}
+		if _, createErr := creator.CreateSession(ctx, sessionID); createErr != nil {
+			return err
+		}
+		return b.runtime.Submit(ctx, convertGatewayRunInput(input))
+	}
+	return err
 }
 
 // Compact 将 gateway.compact 请求映射到 runtime 紧凑化能力并回填统一结果。

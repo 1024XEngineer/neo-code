@@ -926,6 +926,7 @@ func (s *NetworkServer) decorateRequestContext(base context.Context, source Requ
 	ctx := WithRequestSource(base, source)
 	authState := NewConnectionAuthState()
 	ctx = WithConnectionAuthState(ctx, authState)
+	ctx = WithConnectionWorkspaceState(ctx, NewConnectionWorkspaceState())
 
 	trimmedToken := strings.TrimSpace(token)
 	if trimmedToken != "" {

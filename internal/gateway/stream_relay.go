@@ -489,6 +489,31 @@ func (r *StreamRelay) RefreshConnectionBindings(connectionID ConnectionID) bool 
 	return refreshed
 }
 
+// ClearConnectionBindings 清除指定连接的所有 session 绑定，用于工作区切换等场景。
+func (r *StreamRelay) ClearConnectionBindings(connectionID ConnectionID) {
+	if r == nil {
+		return
+	}
+
+	normalizedConnectionID := NormalizeConnectionID(connectionID)
+	if normalizedConnectionID == "" {
+		return
+	}
+
+	r.mu.Lock()
+	connectionBindingMap := r.connectionBindings[normalizedConnectionID]
+	for key, state := range connectionBindingMap {
+		if state != nil {
+			r.removeConnectionFromIndexesLocked(normalizedConnectionID, state.sessionID, state.runID)
+		}
+		delete(connectionBindingMap, key)
+	}
+	if len(connectionBindingMap) == 0 {
+		delete(r.connectionBindings, normalizedConnectionID)
+	}
+	r.mu.Unlock()
+}
+
 // AutoBindFromFrame 根据请求帧中的 session/run 信息执行自动续绑。
 func (r *StreamRelay) AutoBindFromFrame(connectionID ConnectionID, frame MessageFrame) {
 	if r == nil {

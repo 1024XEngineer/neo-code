@@ -260,6 +260,10 @@ func hydrateFrameSessionFromConnection(ctx context.Context, frame MessageFrame) 
 	if strings.TrimSpace(frame.SessionID) != "" {
 		return frame
 	}
+	// new_session 请求跳过绑定回填，由下游创建全新会话
+	if frame.SkipSessionHydration {
+		return frame
+	}
 
 	payloadSessionID := strings.TrimSpace(extractSessionIDFromPayload(frame.Payload))
 	if payloadSessionID != "" {
@@ -294,6 +298,11 @@ func hydrateFrameRunPayload(frame MessageFrame) MessageFrame {
 		params = *typed
 	default:
 		return frame
+	}
+
+	// new_session=true 时跳过连接绑定的 session_id 回填，让后端创建全新会话
+	if params.NewSession {
+		frame.SkipSessionHydration = true
 	}
 
 	if strings.TrimSpace(frame.SessionID) == "" {
@@ -345,7 +354,6 @@ func convertProtocolRunInputParts(parts []protocol.RunInputPart) []InputPart {
 func requiresSession(action FrameAction) bool {
 	switch action {
 	case FrameActionBindStream,
-		FrameActionRun,
 		FrameActionCompact,
 		FrameActionLoadSession,
 		FrameActionListSessionTodos,

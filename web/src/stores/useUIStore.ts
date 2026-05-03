@@ -52,6 +52,7 @@ interface UIState {
   addFileChange: (change: FileChange) => void
   acceptFileChange: (id: string) => void
   rejectFileChange: (id: string) => void
+  clearFileChanges: () => void
   showToast: (message: string, type?: Toast['type']) => void
   dismissToast: (id: string) => void
 }
@@ -91,6 +92,7 @@ export const useUIStore = create<UIState>((set) => ({
     set((s) => ({
       fileChanges: s.fileChanges.map((c) => (c.id === id ? { ...c, status: 'rejected' as const } : c)),
     })),
+  clearFileChanges: () => set({ fileChanges: [] }),
   showToast: (message, type = 'info') => {
     const id = `toast_${++toastIdCounter}`
     set((s) => ({

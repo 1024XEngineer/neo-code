@@ -440,8 +440,8 @@ func TestStreamRelayMatchingAndLifecycleBranches(t *testing.T) {
 }
 
 func TestRPCDispatchAdditionalBranches(t *testing.T) {
-	if !requiresSession(FrameActionRun) {
-		t.Fatal("run should require session")
+	if requiresSession(FrameActionRun) {
+		t.Fatal("run should not require session at dispatch layer (runtime handles empty session_id)")
 	}
 	if requiresSession(FrameActionPing) {
 		t.Fatal("ping should not require session")

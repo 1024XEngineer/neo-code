@@ -88,6 +88,16 @@ const (
 	FrameActionUndoRestore FrameAction = "checkpoint_undo_restore"
 	// FrameActionCheckpointDiff 表示查询两个相邻代码检查点之间的差异。
 	FrameActionCheckpointDiff FrameAction = "checkpoint_diff"
+	// FrameActionWorkspaceList 表示列出所有工作区。
+	FrameActionWorkspaceList FrameAction = "workspace.list"
+	// FrameActionWorkspaceCreate 表示创建/注册一个新工作区。
+	FrameActionWorkspaceCreate FrameAction = "workspace.create"
+	// FrameActionWorkspaceSwitch 表示切换当前连接的工作区。
+	FrameActionWorkspaceSwitch FrameAction = "workspace.switch"
+	// FrameActionWorkspaceRename 表示重命名工作区。
+	FrameActionWorkspaceRename FrameAction = "workspace.rename"
+	// FrameActionWorkspaceDelete 表示删除工作区。
+	FrameActionWorkspaceDelete FrameAction = "workspace.delete"
 )
 
 // InputPartType 表示多模态输入分片类型。
@@ -152,4 +162,6 @@ type MessageFrame struct {
 	Payload any `json:"payload,omitempty"`
 	// Error 是错误帧负载。
 	Error *FrameError `json:"error,omitempty"`
+	// SkipSessionHydration 为 true 时跳过基于连接绑定的 session_id 回填，用于新建会话场景。
+	SkipSessionHydration bool `json:"-"`
 }

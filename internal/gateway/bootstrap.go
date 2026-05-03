@@ -3,6 +3,8 @@ package gateway
 import (
 	"bytes"
 	"context"
+	crypto_rand "crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -252,6 +254,18 @@ func dispatchRunFrameWithSubjectID(
 		Mode:       strings.TrimSpace(frame.Mode),
 	}
 	frame.RunID = input.RunID
+
+	// new_session 模式：预生成 session ID，确保 ACK 和事件路由正确
+	if frame.SkipSessionHydration && strings.TrimSpace(frame.SessionID) == "" {
+		newID := generateNewSessionID()
+		frame.SessionID = newID
+		input.SessionID = newID
+		if relay, ok := StreamRelayFromContext(ctx); ok {
+			if connID, connOK := ConnectionIDFromContext(ctx); connOK {
+				relay.AutoBindFromFrame(connID, frame)
+			}
+		}
+	}
 
 	runExecutionContext := deriveRuntimeExecutionContext(ctx)
 	callCtx, cancel := withRuntimeOperationTimeout(runExecutionContext)
@@ -1298,6 +1312,13 @@ func runtimeCallFailedFrame(ctx context.Context, frame MessageFrame, err error, 
 	}
 
 	return errorFrame(frame, NewFrameError(errorCode, message))
+}
+
+// generateNewSessionID 生成格式为 "session_<16hex>" 的随机会话 ID。
+func generateNewSessionID() string {
+	buf := make([]byte, 8)
+	_, _ = crypto_rand.Read(buf)
+	return "session_" + hex.EncodeToString(buf)
 }
 
 type bindStreamParams struct {

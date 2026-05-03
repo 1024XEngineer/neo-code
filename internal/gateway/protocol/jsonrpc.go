@@ -79,7 +79,12 @@ const (
 	MethodGatewayEvent = "gateway.event"
 	// MethodWakeOpenURL 表示 URL Scheme 唤醒方法。
 	MethodWakeOpenURL = "wake.openUrl"
-)
+		MethodGatewayListWorkspaces  = "gateway.listWorkspaces"
+		MethodGatewayCreateWorkspace = "gateway.createWorkspace"
+		MethodGatewaySwitchWorkspace = "gateway.switchWorkspace"
+		MethodGatewayRenameWorkspace = "gateway.renameWorkspace"
+		MethodGatewayDeleteWorkspace = "gateway.deleteWorkspace"
+	)
 
 const (
 	// JSONRPCCodeParseError 表示请求体不是合法 JSON。
@@ -194,6 +199,7 @@ type RunInputPart struct {
 // RunParams 表示 gateway.run 的参数载荷。
 type RunParams struct {
 	SessionID  string         `json:"session_id,omitempty"`
+	NewSession bool           `json:"new_session,omitempty"`
 	RunID      string         `json:"run_id,omitempty"`
 	InputText  string         `json:"input_text,omitempty"`
 	InputParts []RunInputPart `json:"input_parts,omitempty"`
@@ -382,6 +388,32 @@ type SetMCPServerEnabledParams struct {
 // DeleteMCPServerParams 表示 gateway.deleteMCPServer 参数。
 type DeleteMCPServerParams struct {
 	ID string `json:"id"`
+}
+
+// ListWorkspacesParams 表示 gateway.listWorkspaces 参数。
+type ListWorkspacesParams struct{}
+
+// CreateWorkspaceParams 表示 gateway.createWorkspace 参数。
+type CreateWorkspaceParams struct {
+	Path string `json:"path"`
+	Name string `json:"name,omitempty"`
+}
+
+// SwitchWorkspaceParams 表示 gateway.switchWorkspace 参数。
+type SwitchWorkspaceParams struct {
+	WorkspaceHash string `json:"workspace_hash"`
+}
+
+// RenameWorkspaceParams 表示 gateway.renameWorkspace 参数。
+type RenameWorkspaceParams struct {
+	WorkspaceHash string `json:"workspace_hash"`
+	Name          string `json:"name"`
+}
+
+// DeleteWorkspaceParams 表示 gateway.deleteWorkspace 参数。
+type DeleteWorkspaceParams struct {
+	WorkspaceHash string `json:"workspace_hash"`
+	RemoveData    bool   `json:"remove_data,omitempty"`
 }
 
 // NormalizeJSONRPCRequest 将 JSON-RPC 请求归一化为内部请求模型，并做方法级参数解析。
@@ -669,6 +701,41 @@ func NormalizeJSONRPCRequest(request JSONRPCRequest) (NormalizedRequest, *JSONRP
 		normalized.SessionID = strings.TrimSpace(intent.SessionID)
 		normalized.Workdir = strings.TrimSpace(intent.Workdir)
 		normalized.Payload = intent
+		return normalized, nil
+	case MethodGatewayListWorkspaces:
+		normalized.Action = "workspace.list"
+		return normalized, nil
+	case MethodGatewayCreateWorkspace:
+		params, parseErr := decodeCreateWorkspaceParams(request.Params)
+		if parseErr != nil {
+			return normalized, parseErr
+		}
+		normalized.Action = "workspace.create"
+		normalized.Payload = params
+		return normalized, nil
+	case MethodGatewaySwitchWorkspace:
+		params, parseErr := decodeSwitchWorkspaceParams(request.Params)
+		if parseErr != nil {
+			return normalized, parseErr
+		}
+		normalized.Action = "workspace.switch"
+		normalized.Payload = params
+		return normalized, nil
+	case MethodGatewayRenameWorkspace:
+		params, parseErr := decodeRenameWorkspaceParams(request.Params)
+		if parseErr != nil {
+			return normalized, parseErr
+		}
+		normalized.Action = "workspace.rename"
+		normalized.Payload = params
+		return normalized, nil
+	case MethodGatewayDeleteWorkspace:
+		params, parseErr := decodeDeleteWorkspaceParams(request.Params)
+		if parseErr != nil {
+			return normalized, parseErr
+		}
+		normalized.Action = "workspace.delete"
+		normalized.Payload = params
 		return normalized, nil
 	default:
 		return normalized, NewJSONRPCError(
@@ -1219,6 +1286,58 @@ func decodeDeleteMCPServerParams(raw json.RawMessage) (DeleteMCPServerParams, *J
 }
 
 // decodeParams 是各 decodeXxxParams 的泛型骨架：检查空值、严格反序列化、执行校验。
+
+func decodeListWorkspacesParams(raw json.RawMessage) (ListWorkspacesParams, *JSONRPCError) {
+	return decodeParamsOptional(raw, "gateway.listWorkspaces", func(p *ListWorkspacesParams) *JSONRPCError {
+		return nil
+	})
+}
+
+func decodeCreateWorkspaceParams(raw json.RawMessage) (CreateWorkspaceParams, *JSONRPCError) {
+	return decodeParams(raw, "gateway.createWorkspace", func(p *CreateWorkspaceParams) *JSONRPCError {
+		p.Path = strings.TrimSpace(p.Path)
+		p.Name = strings.TrimSpace(p.Name)
+		if p.Path == "" {
+			return NewJSONRPCError(JSONRPCCodeInvalidParams, "missing required field: params.path", GatewayCodeMissingRequiredField)
+		}
+		return nil
+	})
+}
+
+func decodeSwitchWorkspaceParams(raw json.RawMessage) (SwitchWorkspaceParams, *JSONRPCError) {
+	return decodeParams(raw, "gateway.switchWorkspace", func(p *SwitchWorkspaceParams) *JSONRPCError {
+		p.WorkspaceHash = strings.TrimSpace(p.WorkspaceHash)
+		if p.WorkspaceHash == "" {
+			return NewJSONRPCError(JSONRPCCodeInvalidParams, "missing required field: params.workspace_hash", GatewayCodeMissingRequiredField)
+		}
+		return nil
+	})
+}
+
+func decodeRenameWorkspaceParams(raw json.RawMessage) (RenameWorkspaceParams, *JSONRPCError) {
+	return decodeParams(raw, "gateway.renameWorkspace", func(p *RenameWorkspaceParams) *JSONRPCError {
+		p.WorkspaceHash = strings.TrimSpace(p.WorkspaceHash)
+		p.Name = strings.TrimSpace(p.Name)
+		if p.WorkspaceHash == "" {
+			return NewJSONRPCError(JSONRPCCodeInvalidParams, "missing required field: params.workspace_hash", GatewayCodeMissingRequiredField)
+		}
+		if p.Name == "" {
+			return NewJSONRPCError(JSONRPCCodeInvalidParams, "missing required field: params.name", GatewayCodeMissingRequiredField)
+		}
+		return nil
+	})
+}
+
+func decodeDeleteWorkspaceParams(raw json.RawMessage) (DeleteWorkspaceParams, *JSONRPCError) {
+	return decodeParams(raw, "gateway.deleteWorkspace", func(p *DeleteWorkspaceParams) *JSONRPCError {
+		p.WorkspaceHash = strings.TrimSpace(p.WorkspaceHash)
+		if p.WorkspaceHash == "" {
+			return NewJSONRPCError(JSONRPCCodeInvalidParams, "missing required field: params.workspace_hash", GatewayCodeMissingRequiredField)
+		}
+		return nil
+	})
+}
+
 func decodeParams[T any](raw json.RawMessage, name string, validate func(*T) *JSONRPCError) (T, *JSONRPCError) {
 	return decodeParamsInternal(raw, name, validate, false)
 }

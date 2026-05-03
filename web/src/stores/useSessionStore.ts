@@ -53,6 +53,8 @@ interface SessionState {
   initializeActiveSession: (gatewayAPI: GatewayAPI) => Promise<void>
   /** 准备新的聊天输入状态 */
   prepareNewChat: () => void
+  /** 重置内部状态（工作区切换时调用，确保 fetchSessions 不使用过期数据） */
+  resetForWorkspaceSwitch: () => void
 }
 
 /** 将后端扁平会话列表映射为项目分组结构 */
@@ -274,6 +276,11 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     }
     useChatStore.getState().clearMessages()
     set({ currentSessionId: '', currentProjectId: '' })
+  },
+
+  resetForWorkspaceSwitch: () => {
+    _fetchSessionsPromise = null
+    set({ _initialBindDone: false, loading: false })
   },
 
   fetchSessions: async (gatewayAPI) => {

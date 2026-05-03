@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect } from 'react'
 import { useGatewayAPI } from '@/context/RuntimeProvider'
 import { useSessionStore } from '@/stores/useSessionStore'
 import { useChatStore } from '@/stores/useChatStore'
@@ -19,56 +19,39 @@ export default function ModelSelector() {
   const [error, setError] = useState('')
   const [pendingModelChange, setPendingModelChange] = useState<ModelEntry | null>(null)
 
-  // 追踪 provider 切换，避免闭包陷阱
-  const providerTickRef = useRef(providerChangeTick)
-  const fetchGenerationRef = useRef(0)
-
-  const loadModels = useCallback(async () => {
+  // 模型列表加载：直接在 effect 中 fetch，用 cancelled flag 防止陈旧更新
+  useEffect(() => {
     if (!gatewayAPI) return
-    const generation = ++fetchGenerationRef.current
+    let cancelled = false
     setLoading(true)
     setError('')
-    try {
-      const result = await gatewayAPI.listModels(currentSessionId || undefined)
-      if (generation !== fetchGenerationRef.current) return
-      const fetched = result.payload.models
-      setModels(fetched)
-
-      // 检测 provider 是否切换
-      const isProviderChanged = providerChangeTick !== providerTickRef.current
-      if (isProviderChanged) {
-        providerTickRef.current = providerChangeTick
-      }
-
-      if (fetched.length > 0) {
-        setSelected((prev) => {
-          if (!prev) {
-            return fetched[0]
+    gatewayAPI.listModels(currentSessionId || undefined)
+      .then((result) => {
+        if (cancelled) return
+        const fetched = result.payload.models
+        setModels(fetched)
+        if (fetched.length > 0) {
+          const retained = selected ? fetched.find((f) => f.id === selected.id) : null
+          const effective = retained ?? fetched[0]
+          setSelected(effective)
+          if (currentSessionId && !isGenerating) {
+            gatewayAPI.setSessionModel(currentSessionId, effective.id, effective.provider)
+              .catch((err) => console.error('Auto setSessionModel failed:', err))
           }
-          if (isProviderChanged) {
-            const retained = fetched.find((f) => f.id === prev.id)
-            return retained ?? fetched[0]
-          }
-          return prev
-        })
-      } else {
-        setSelected(null)
-      }
-    } catch (err) {
-      if (generation !== fetchGenerationRef.current) return
-      const msg = err instanceof Error ? err.message : '加载模型列表失败'
-      setError(msg)
-      console.error('listModels failed:', err)
-    } finally {
-      if (generation === fetchGenerationRef.current) {
-        setLoading(false)
-      }
-    }
+        } else {
+          setSelected(null)
+        }
+      })
+      .catch((err) => {
+        if (cancelled) return
+        setError(err instanceof Error ? err.message : '加载模型列表失败')
+        console.error('listModels failed:', err)
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+    return () => { cancelled = true }
   }, [gatewayAPI, currentSessionId, providerChangeTick])
-
-  useEffect(() => {
-    loadModels()
-  }, [loadModels, providerChangeTick])
 
   async function handleSelect(m: ModelEntry) {
     setSelected(m)

@@ -256,8 +256,10 @@ export default function ChatInput() {
 
     try {
       if (!gatewayAPI) return
+      const isNewSession = !isValidSessionId(sessionId)
       const ack = await gatewayAPI.run({
-        session_id: isValidSessionId(sessionId) ? sessionId : undefined,
+        session_id: isNewSession ? undefined : sessionId,
+        new_session: isNewSession ? true : undefined,
         input_text: input,
         mode: agentMode,
       })
@@ -271,6 +273,10 @@ export default function ChatInput() {
         }
         if (ack.session_id) {
           sessStore.setCurrentSessionId(ack.session_id)
+          // 将 stream 绑定到新会话，确保后续事件的 frameSessionId 正确
+          if (gatewayAPI) {
+            gatewayAPI.bindStream({ session_id: ack.session_id, channel: 'all' }).catch(() => {})
+          }
         }
       }
     } catch (err) {

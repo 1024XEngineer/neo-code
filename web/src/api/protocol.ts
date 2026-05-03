@@ -36,6 +36,11 @@ export const Method = {
   SetMCPServerEnabled: 'gateway.setMCPServerEnabled',
   DeleteMCPServer: 'gateway.deleteMCPServer',
   Event: 'gateway.event',
+  ListWorkspaces: 'gateway.listWorkspaces',
+  CreateWorkspace: 'gateway.createWorkspace',
+  SwitchWorkspace: 'gateway.switchWorkspace',
+  RenameWorkspace: 'gateway.renameWorkspace',
+  DeleteWorkspace: 'gateway.deleteWorkspace',
 } as const
 
 // 帧类型
@@ -179,6 +184,7 @@ export interface BindStreamParams {
 /** gateway.run 参数 */
 export interface RunParams {
   session_id?: string
+  new_session?: boolean
   run_id?: string
   input_text?: string
   input_parts?: RunInputPart[]
@@ -531,3 +537,50 @@ export interface PermissionRequestPayload {
   reason: string
   rule_id?: string
 }
+
+/** 工作区记录 */
+export interface Workspace {
+  hash: string
+  path: string
+  name: string
+  created_at: string
+  updated_at: string
+}
+
+/** gateway.listWorkspaces 响应 */
+export type ListWorkspacesResult = RPCResult<{ workspaces: Workspace[] }>
+
+/** gateway.createWorkspace 参数 */
+export interface CreateWorkspaceParams {
+  path: string
+  name?: string
+}
+
+/** gateway.createWorkspace 响应 */
+export type CreateWorkspaceResult = RPCResult<{ workspace: Workspace }>
+
+/** gateway.switchWorkspace 参数 */
+export interface SwitchWorkspaceParams {
+  workspace_hash: string
+}
+
+/** gateway.switchWorkspace 响应 */
+export type SwitchWorkspaceResult = RPCResult<{ workspace_hash: string }>
+
+/** gateway.renameWorkspace 参数 */
+export interface RenameWorkspaceParams {
+  workspace_hash: string
+  name: string
+}
+
+/** gateway.renameWorkspace 响应 */
+export type RenameWorkspaceResult = RPCResult<{ hash: string; name: string }>
+
+/** gateway.deleteWorkspace 参数 */
+export interface DeleteWorkspaceParams {
+  workspace_hash: string
+  remove_data?: boolean
+}
+
+/** gateway.deleteWorkspace 响应 */
+export type DeleteWorkspaceResult = RPCResult<{ hash: string }>
