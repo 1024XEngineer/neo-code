@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"neo-code/internal/checkpoint"
 	"neo-code/internal/config"
 	configstate "neo-code/internal/config/state"
 	"neo-code/internal/gateway"
@@ -63,6 +64,16 @@ type runtimeStub struct {
 	getSnapshotSessionID  string
 	getSnapshotResult     agentruntime.RuntimeSnapshot
 	getSnapshotErr        error
+	listCheckpointsID     string
+	listCheckpointsOpts   checkpoint.ListCheckpointOpts
+	listCheckpointsResult []agentsession.CheckpointRecord
+	listCheckpointsErr    error
+	restoreCheckpointIn   agentruntime.GatewayRestoreInput
+	restoreCheckpointOut  agentruntime.RestoreResult
+	restoreCheckpointErr  error
+	undoRestoreSessionID  string
+	undoRestoreOut        agentruntime.RestoreResult
+	undoRestoreErr        error
 }
 
 const testBridgeSubjectID = bridgeLocalSubjectID
@@ -150,6 +161,19 @@ func (s *runtimeStub) GetRuntimeSnapshot(_ context.Context, sessionID string) (a
 	s.getSnapshotSessionID = sessionID
 	return s.getSnapshotResult, s.getSnapshotErr
 }
+func (s *runtimeStub) ListCheckpoints(_ context.Context, sessionID string, opts checkpoint.ListCheckpointOpts) ([]agentsession.CheckpointRecord, error) {
+	s.listCheckpointsID = sessionID
+	s.listCheckpointsOpts = opts
+	return s.listCheckpointsResult, s.listCheckpointsErr
+}
+func (s *runtimeStub) RestoreCheckpoint(_ context.Context, input agentruntime.GatewayRestoreInput) (agentruntime.RestoreResult, error) {
+	s.restoreCheckpointIn = input
+	return s.restoreCheckpointOut, s.restoreCheckpointErr
+}
+func (s *runtimeStub) UndoRestoreCheckpoint(_ context.Context, sessionID string) (agentruntime.RestoreResult, error) {
+	s.undoRestoreSessionID = sessionID
+	return s.undoRestoreOut, s.undoRestoreErr
+}
 func (s *runtimeStub) DeleteSession(_ context.Context, _ string) error {
 	return nil
 }
@@ -207,6 +231,15 @@ func (r *runtimeWithoutCreator) ListAvailableSkills(
 ) ([]agentruntime.AvailableSkillState, error) {
 	return r.base.ListAvailableSkills(ctx, sessionID)
 }
+func (r *runtimeWithoutCreator) ListCheckpoints(ctx context.Context, sessionID string, opts checkpoint.ListCheckpointOpts) ([]agentsession.CheckpointRecord, error) {
+	return r.base.ListCheckpoints(ctx, sessionID, opts)
+}
+func (r *runtimeWithoutCreator) RestoreCheckpoint(ctx context.Context, input agentruntime.GatewayRestoreInput) (agentruntime.RestoreResult, error) {
+	return r.base.RestoreCheckpoint(ctx, input)
+}
+func (r *runtimeWithoutCreator) UndoRestoreCheckpoint(ctx context.Context, sessionID string) (agentruntime.RestoreResult, error) {
+	return r.base.UndoRestoreCheckpoint(ctx, sessionID)
+}
 
 type bridgeSessionStoreStub struct {
 	deleteFn func(ctx context.Context, id string) error
@@ -224,6 +257,72 @@ func (s *bridgeSessionStoreStub) UpdateSessionState(ctx context.Context, input a
 		return s.updateFn(ctx, input)
 	}
 	return nil
+}
+
+func TestGatewayRuntimePortBridgeCheckpointOperations(t *testing.T) {
+	stub := &runtimeStub{
+		listCheckpointsResult: []agentsession.CheckpointRecord{
+			{
+				CheckpointID: "cp-1",
+				SessionID:    "session-1",
+				Reason:       agentsession.CheckpointReasonCompact,
+				Status:       agentsession.CheckpointStatusAvailable,
+				Restorable:   true,
+				CreatedAt:    time.UnixMilli(1234),
+			},
+		},
+		restoreCheckpointOut: agentruntime.RestoreResult{
+			CheckpointID: "cp-1",
+			SessionID:    "session-1",
+		},
+		undoRestoreOut: agentruntime.RestoreResult{
+			CheckpointID: "guard-1",
+			SessionID:    "session-1",
+		},
+	}
+
+	bridge := &gatewayRuntimePortBridge{runtime: stub}
+
+	entries, err := bridge.ListCheckpoints(context.Background(), gateway.ListCheckpointsInput{
+		SessionID:      " session-1 ",
+		Limit:          5,
+		RestorableOnly: true,
+	})
+	if err != nil {
+		t.Fatalf("ListCheckpoints() error = %v", err)
+	}
+	if stub.listCheckpointsID != "session-1" || stub.listCheckpointsOpts.Limit != 5 || !stub.listCheckpointsOpts.RestorableOnly {
+		t.Fatalf("ListCheckpoints() forwarded (%q, %#v)", stub.listCheckpointsID, stub.listCheckpointsOpts)
+	}
+	if len(entries) != 1 || entries[0].CheckpointID != "cp-1" || entries[0].Reason != string(agentsession.CheckpointReasonCompact) {
+		t.Fatalf("ListCheckpoints() = %#v", entries)
+	}
+
+	restoreResult, err := bridge.RestoreCheckpoint(context.Background(), gateway.CheckpointRestoreInput{
+		SessionID:    " session-1 ",
+		CheckpointID: " cp-1 ",
+		Force:        true,
+	})
+	if err != nil {
+		t.Fatalf("RestoreCheckpoint() error = %v", err)
+	}
+	if stub.restoreCheckpointIn.SessionID != "session-1" || stub.restoreCheckpointIn.CheckpointID != "cp-1" || !stub.restoreCheckpointIn.Force {
+		t.Fatalf("RestoreCheckpoint() forwarded %#v", stub.restoreCheckpointIn)
+	}
+	if restoreResult.CheckpointID != "cp-1" || restoreResult.SessionID != "session-1" || restoreResult.HasConflict {
+		t.Fatalf("RestoreCheckpoint() = %#v", restoreResult)
+	}
+
+	undoResult, err := bridge.UndoRestore(context.Background(), gateway.UndoRestoreInput{SessionID: " session-1 "})
+	if err != nil {
+		t.Fatalf("UndoRestore() error = %v", err)
+	}
+	if stub.undoRestoreSessionID != "session-1" {
+		t.Fatalf("UndoRestore() forwarded session %q", stub.undoRestoreSessionID)
+	}
+	if undoResult.CheckpointID != "guard-1" || undoResult.SessionID != "session-1" {
+		t.Fatalf("UndoRestore() = %#v", undoResult)
+	}
 }
 
 var testSessionStore bridgeSessionStore = &bridgeSessionStoreStub{}
@@ -1351,7 +1450,7 @@ func TestResolveListFilesRootPriorities(t *testing.T) {
 	// priority 2: session workdir (store implements bridgeSessionLoader)
 	loaderStore := &bridgeSessionStoreWithLoader{
 		bridgeSessionStoreStub: bridgeSessionStoreStub{},
-		session: agentsession.Session{Workdir: subDir},
+		session:                agentsession.Session{Workdir: subDir},
 	}
 	bridge2, _ := newGatewayRuntimePortBridge(context.Background(), &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)}, loaderStore)
 	defer bridge2.Close()
@@ -1958,9 +2057,9 @@ func TestModelDisplayName(t *testing.T) {
 
 func TestGatewayRuntimePortBridgeCancelRunAndSnapshots(t *testing.T) {
 	stub := &runtimeStub{
-		eventsCh:      make(chan agentruntime.RuntimeEvent, 1),
-		cancelReturn:  true,
-		listTodosErr:  errors.New("todo failed"),
+		eventsCh:       make(chan agentruntime.RuntimeEvent, 1),
+		cancelReturn:   true,
+		listTodosErr:   errors.New("todo failed"),
 		getSnapshotErr: errors.New("snapshot failed"),
 	}
 	bridge, err := newGatewayRuntimePortBridge(context.Background(), stub, testSessionStore)

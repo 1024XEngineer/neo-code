@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"sync"
 	"time"
 
@@ -423,7 +424,7 @@ func (s *SQLiteCheckpointStore) RestoreCheckpoint(ctx context.Context, input Res
 		toUnixMillis(input.UpdatedAt), h.Provider, h.Model, h.Workdir,
 		marshalHeadField(h.TaskState), marshalHeadField(h.Todos), marshalHeadField(h.ActivatedSkills),
 		h.TokenInputTotal, h.TokenOutputTotal, boolToInt(h.HasUnknownUsage), h.AgentMode,
-		marshalHeadField(h.CurrentPlan), h.LastFullPlanRevision,
+		marshalPlanField(h.CurrentPlan), h.LastFullPlanRevision,
 		boolToInt(h.PlanApprovalPendingFullAlign), boolToInt(h.PlanCompletionPendingFullReview),
 		boolToInt(h.PlanContextDirty), boolToInt(h.PlanRestorePendingAlign),
 		len(input.Messages), len(input.Messages), input.SessionID,
@@ -456,12 +457,25 @@ func (s *SQLiteCheckpointStore) RestoreCheckpoint(ctx context.Context, input Res
 }
 
 func marshalHeadField(value any) string {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return "null"
+	}
+	return string(data)
+}
+
+// marshalPlanField 将可选计划字段编码为 session 兼容的持久化格式，nil 计划统一写为空串。
+func marshalPlanField(value any) string {
 	if value == nil {
-		return "{}"
+		return ""
+	}
+	rv := reflect.ValueOf(value)
+	if rv.Kind() == reflect.Pointer && rv.IsNil() {
+		return ""
 	}
 	data, err := json.Marshal(value)
 	if err != nil {
-		return "{}"
+		return ""
 	}
 	return string(data)
 }
