@@ -94,6 +94,15 @@ func (s *SQLiteStore) Close() error {
 	return s.db.Close()
 }
 
+// DB 返回底层 *sql.DB 连接，供需要共享同一数据库连接的组件使用。
+// 调用前必须已触发过 ensureDB（如通过任何读写操作）。
+func (s *SQLiteStore) DB() *sql.DB {
+	if s == nil {
+		return nil
+	}
+	return s.db
+}
+
 // CleanupExpiredSessions 删除超过指定时长未更新的会话及其附件，返回删除数量。
 func (s *SQLiteStore) CleanupExpiredSessions(ctx context.Context, maxAge time.Duration) (int, error) {
 	if err := ctx.Err(); err != nil {
