@@ -1,6 +1,8 @@
 package runtime
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	providertypes "neo-code/internal/provider/types"
@@ -60,4 +62,37 @@ func TestSessionHasCompactedTranscript(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestResolveWorkdirForSessionAndVerificationProfileBranches(t *testing.T) {
+	t.Parallel()
+
+	base := t.TempDir()
+	child := filepath.Join(base, "child")
+	if err := ensureDir(child); err != nil {
+		t.Fatalf("mkdir child: %v", err)
+	}
+
+	resolved, err := resolveWorkdirForSession(base, "", "child")
+	if err != nil {
+		t.Fatalf("resolveWorkdirForSession(relative) error = %v", err)
+	}
+	if resolved != child {
+		t.Fatalf("resolved workdir = %q, want %q", resolved, child)
+	}
+
+	session := agentsession.New("verification-profile")
+	if !establishSessionVerificationProfile(&session) {
+		t.Fatal("expected first profile establishment to report changed=true")
+	}
+	if establishSessionVerificationProfile(&session) {
+		t.Fatal("expected second profile establishment to report changed=false")
+	}
+	if establishSessionVerificationProfile(nil) {
+		t.Fatal("nil session should report changed=false")
+	}
+}
+
+func ensureDir(path string) error {
+	return os.MkdirAll(path, 0o755)
 }

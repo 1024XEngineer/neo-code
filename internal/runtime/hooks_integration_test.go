@@ -563,6 +563,96 @@ func TestHookRuntimeEventEmitterBranches(t *testing.T) {
 	}
 }
 
+func TestHookRuntimeEventEmitterNotificationPayloadBranch(t *testing.T) {
+	t.Parallel()
+
+	service := &Service{events: make(chan RuntimeEvent, 8)}
+	emitter := newHookRuntimeEventEmitter(service)
+	ctx := withRuntimeHookEnvelope(context.Background(), hookRuntimeEnvelope{
+		RunID:     "run-hook-notification",
+		SessionID: "session-hook-notification",
+		Turn:      1,
+		Phase:     "execute",
+	})
+	err := emitter.EmitHookEvent(ctx, runtimehooks.HookEvent{
+		Type:          runtimehooks.HookEventNotification,
+		HookID:        "async-rewake-hook",
+		Point:         runtimehooks.HookPointBeforeToolCall,
+		Source:        runtimehooks.HookSourceInternal,
+		Status:        runtimehooks.HookResultFailed,
+		RewakeReason:  "tool_follow_up",
+		RewakeSummary: "verify side effect",
+		Message:       "rewake message",
+		DedupeKey:     "dedupe-key",
+	})
+	if err != nil {
+		t.Fatalf("EmitHookEvent(notification) error = %v", err)
+	}
+
+	events := collectRuntimeEvents(service.Events())
+	index := eventIndex(events, EventHookNotification)
+	if index < 0 {
+		t.Fatal("expected hook_notification event")
+	}
+	payload, ok := events[index].Payload.(HookNotificationPayload)
+	if !ok {
+		t.Fatalf("payload type = %T, want HookNotificationPayload", events[index].Payload)
+	}
+	if payload.HookID != "async-rewake-hook" ||
+		payload.Reason != "tool_follow_up" ||
+		payload.Summary != "verify side effect" ||
+		payload.Message != "rewake message" ||
+		payload.DedupeKey != "dedupe-key" {
+		t.Fatalf("unexpected hook notification payload: %#v", payload)
+	}
+}
+
+func TestRunHookPointInjectsRuntimeTokenAndEnvelopeMetadata(t *testing.T) {
+	t.Parallel()
+
+	store := newMemoryStore()
+	session := newRuntimeSession("session-run-hook-point")
+	store.sessions[session.ID] = cloneSession(session)
+
+	service := &Service{
+		sessionStore: store,
+		events:       make(chan RuntimeEvent, 8),
+	}
+	state := newRunState("run-hook-point", session)
+	state.runToken = 55
+
+	var gotMetadata map[string]any
+	registry := runtimehooks.NewRegistry()
+	if err := registry.Register(runtimehooks.HookSpec{
+		ID:    "capture-input",
+		Point: runtimehooks.HookPointBeforeToolCall,
+		Handler: func(_ context.Context, input runtimehooks.HookContext) runtimehooks.HookResult {
+			gotMetadata = input.Metadata
+			return runtimehooks.HookResult{Status: runtimehooks.HookResultPass}
+		},
+	}); err != nil {
+		t.Fatalf("register hook: %v", err)
+	}
+	service.SetHookExecutor(runtimehooks.NewExecutor(registry, newHookRuntimeEventEmitter(service), time.Second))
+
+	output := service.runHookPoint(context.Background(), &state, runtimehooks.HookPointBeforeToolCall, runtimehooks.HookContext{})
+	if output.Blocked || len(output.Results) == 0 {
+		t.Fatalf("runHookPoint output = %+v, want non-blocked result", output)
+	}
+	if gotMetadata == nil {
+		t.Fatal("expected metadata to be injected")
+	}
+	if got := strings.TrimSpace(fmt.Sprintf("%v", gotMetadata["runtime_run_token"])); got != "55" {
+		t.Fatalf("runtime_run_token = %q, want 55", got)
+	}
+	if got := strings.TrimSpace(fmt.Sprintf("%v", gotMetadata["run_id"])); got != "run-hook-point" {
+		t.Fatalf("run_id metadata = %q, want run-hook-point", got)
+	}
+	if got := strings.TrimSpace(fmt.Sprintf("%v", gotMetadata["session_id"])); got != session.ID {
+		t.Fatalf("session_id metadata = %q, want %q", got, session.ID)
+	}
+}
+
 func TestRunHookPointUsesInputEnvelopeWhenStateMissing(t *testing.T) {
 	t.Parallel()
 

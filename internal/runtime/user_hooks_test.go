@@ -623,6 +623,72 @@ func TestBuildUserBuiltinHookHandlerEdgeCases(t *testing.T) {
 
 }
 
+func TestConfigureRuntimeHooksInjectsAsyncResultSinkIntoBaseExecutor(t *testing.T) {
+	t.Parallel()
+
+	registry := runtimehooks.NewRegistry()
+	if err := registry.Register(runtimehooks.HookSpec{
+		ID:    "async-rewake-base",
+		Point: runtimehooks.HookPointBeforeToolCall,
+		Mode:  runtimehooks.HookModeAsyncRewake,
+		Handler: func(context.Context, runtimehooks.HookContext) runtimehooks.HookResult {
+			return runtimehooks.HookResult{
+				Status: runtimehooks.HookResultPass,
+				Metadata: runtimehooks.HookResultMetadata{
+					Rewake:        true,
+					RewakeReason:  "base_async",
+					RewakeSummary: "base async summary",
+				},
+			}
+		},
+	}); err != nil {
+		t.Fatalf("register base async hook: %v", err)
+	}
+
+	service := &Service{
+		hookExecutor:      runtimehooks.NewExecutor(registry, nil, time.Second),
+		events:            make(chan RuntimeEvent, 8),
+		activeRunCancels:  map[uint64]context.CancelFunc{},
+		activeRunByID:     map[string]uint64{},
+		activeRunTokenIDs: map[uint64]string{},
+		activeRunStates:   map[uint64]*runState{},
+	}
+	runID := "run-config-async-sink"
+	token := uint64(88)
+	state := newRunState(runID, newRuntimeSession("session-config-async-sink"))
+	state.runToken = token
+	service.activeRunCancels[token] = func() {}
+	service.activeRunByID[runID] = token
+	service.activeRunTokenIDs[token] = runID
+	service.activeRunStates[token] = &state
+
+	cfg := *config.StaticDefaults()
+	cfg.Workdir = t.TempDir()
+	cfg.Runtime.Hooks.ApplyDefaults(config.StaticDefaults().Runtime.Hooks)
+	if err := configureRuntimeHooksFromConfig(service, cfg); err != nil {
+		t.Fatalf("configureRuntimeHooksFromConfig() error = %v", err)
+	}
+
+	service.hookExecutor.Run(context.Background(), runtimehooks.HookPointBeforeToolCall, runtimehooks.HookContext{
+		RunID: runID,
+		Metadata: map[string]any{
+			"runtime_run_token": token,
+		},
+	})
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		state.mu.Lock()
+		count := len(state.hookNotifications)
+		state.mu.Unlock()
+		if count > 0 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("expected async rewake notification to be enqueued via configured async sink")
+}
+
 type countingHookExecutor struct {
 	calls  atomic.Int32
 	output runtimehooks.RunOutput

@@ -24,6 +24,12 @@ type Executor struct {
 	maxInFlight    int32
 	inFlight       atomic.Int32
 	now            func() time.Time
+	asyncSink      AsyncResultSink
+}
+
+// AsyncResultSink 用于接收异步 hook 执行完成后的结果，供 runtime 内部回灌队列使用。
+type AsyncResultSink interface {
+	HandleAsyncHookResult(ctx context.Context, spec HookSpec, input HookContext, result HookResult)
 }
 
 // NewExecutor 创建一个同步 hook 执行器。
@@ -41,6 +47,14 @@ func NewExecutor(registry *Registry, emitter EventEmitter, defaultTimeout time.D
 		maxInFlight:    DefaultMaxInFlightHooks,
 		now:            time.Now,
 	}
+}
+
+// SetAsyncResultSink 设置异步 hook 结果回灌接收器。
+func (e *Executor) SetAsyncResultSink(sink AsyncResultSink) {
+	if e == nil {
+		return
+	}
+	e.asyncSink = sink
 }
 
 // Run 在指定挂载点执行 hook 快照并返回聚合结果。
@@ -64,6 +78,10 @@ func (e *Executor) Run(ctx context.Context, point HookPoint, input HookContext) 
 		hookInput := input.Clone()
 		if spec.Scope == HookScopeUser || spec.Scope == HookScopeRepo {
 			hookInput = sanitizeUserHookContext(hookInput)
+		}
+		if spec.Mode == HookModeAsync || spec.Mode == HookModeAsyncRewake {
+			e.runAsync(ctx, spec, hookInput)
+			continue
 		}
 		result := e.runOne(ctx, spec, hookInput)
 		result = normalizeHookResultByCapability(spec.Point, result)
@@ -169,6 +187,22 @@ func (e *Executor) runOne(ctx context.Context, spec HookSpec, input HookContext)
 		})
 	}
 	return result
+}
+
+func (e *Executor) runAsync(ctx context.Context, spec HookSpec, input HookContext) {
+	if e == nil {
+		return
+	}
+	go func() {
+		// rawResult 保留 handler 原始意图（例如 async_rewake 的 block），
+		// normalizedResult 仅用于能力矩阵约束下的可观测一致性，不参与主链阻断。
+		rawResult := e.runOne(ctx, spec, input)
+		normalizedResult := normalizeHookResultByCapability(spec.Point, rawResult)
+		if e.asyncSink != nil {
+			e.asyncSink.HandleAsyncHookResult(ctx, spec, input, rawResult)
+		}
+		_ = normalizedResult
+	}()
 }
 
 func (e *Executor) withHookTimeout(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {

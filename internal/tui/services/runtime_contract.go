@@ -449,6 +449,19 @@ type HookBlockedPayload struct {
 	Enforced   bool   `json:"enforced"`
 }
 
+// HookNotificationPayload 描述异步 hook 回灌通知事件。
+type HookNotificationPayload struct {
+	HookID       string `json:"hook_id"`
+	Source       string `json:"source,omitempty"`
+	Point        string `json:"point"`
+	Status       string `json:"status,omitempty"`
+	Reason       string `json:"reason,omitempty"`
+	Summary      string `json:"summary,omitempty"`
+	Message      string `json:"message,omitempty"`
+	DedupeKey    string `json:"dedupe_key,omitempty"`
+	Notification string `json:"notification,omitempty"`
+}
+
 // RepoHooksTrustStoreInvalidPayload 描述 trust store 不可用时的降级信息。
 type RepoHooksTrustStoreInvalidPayload struct {
 	TrustStorePath string `json:"trust_store_path"`
@@ -502,6 +515,7 @@ const (
 	EventHookFinished               EventType = "hook_finished"
 	EventHookFailed                 EventType = "hook_failed"
 	EventHookBlocked                EventType = "hook_blocked"
+	EventHookNotification           EventType = "hook_notification"
 	EventRepoHooksDiscovered        EventType = "repo_hooks_discovered"
 	EventRepoHooksLoaded            EventType = "repo_hooks_loaded"
 	EventRepoHooksSkippedUntrusted  EventType = "repo_hooks_skipped_untrusted"

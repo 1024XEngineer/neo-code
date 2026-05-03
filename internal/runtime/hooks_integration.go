@@ -46,6 +46,32 @@ func (e *hookRuntimeEventEmitter) EmitHookEvent(ctx context.Context, event runti
 	if kind == "" {
 		return nil
 	}
+	payload := any(HookEventPayload{
+		HookID:     event.HookID,
+		Point:      string(event.Point),
+		Scope:      string(event.Scope),
+		Source:     string(event.Source),
+		Kind:       string(event.Kind),
+		Mode:       string(event.Mode),
+		Status:     string(event.Status),
+		Message:    strings.TrimSpace(event.Message),
+		StartedAt:  event.StartedAt,
+		DurationMS: event.DurationMS,
+		Error:      event.Error,
+	})
+	if event.Type == runtimehooks.HookEventNotification {
+		payload = HookNotificationPayload{
+			HookID:       event.HookID,
+			Source:       string(event.Source),
+			Point:        string(event.Point),
+			Status:       string(event.Status),
+			Reason:       strings.TrimSpace(event.RewakeReason),
+			Summary:      strings.TrimSpace(event.RewakeSummary),
+			Message:      strings.TrimSpace(event.Message),
+			DedupeKey:    strings.TrimSpace(event.DedupeKey),
+			Notification: strings.TrimSpace(event.RewakeSummary),
+		}
+	}
 	return e.service.emitWithEnvelope(ctx, RuntimeEvent{
 		Type:           kind,
 		RunID:          envelope.RunID,
@@ -53,19 +79,7 @@ func (e *hookRuntimeEventEmitter) EmitHookEvent(ctx context.Context, event runti
 		Turn:           envelope.Turn,
 		Phase:          envelope.Phase,
 		PayloadVersion: 0,
-		Payload: HookEventPayload{
-			HookID:     event.HookID,
-			Point:      string(event.Point),
-			Scope:      string(event.Scope),
-			Source:     string(event.Source),
-			Kind:       string(event.Kind),
-			Mode:       string(event.Mode),
-			Status:     string(event.Status),
-			Message:    strings.TrimSpace(event.Message),
-			StartedAt:  event.StartedAt,
-			DurationMS: event.DurationMS,
-			Error:      event.Error,
-		},
+		Payload:        payload,
 	})
 }
 
@@ -83,6 +97,18 @@ func (s *Service) runHookPoint(
 	sessionID := firstNonBlank(hookSessionIDFromState(state), input.SessionID)
 	input.RunID = firstNonBlank(input.RunID, runID)
 	input.SessionID = firstNonBlank(input.SessionID, sessionID)
+	if input.Metadata == nil {
+		input.Metadata = make(map[string]any, 8)
+	}
+	input.Metadata["run_id"] = input.RunID
+	input.Metadata["session_id"] = input.SessionID
+	if state != nil {
+		input.Metadata["runtime_run_token"] = state.runToken
+		if _, exists := input.Metadata["phase"]; !exists {
+			input.Metadata["phase"] = hookPhaseFromState(state)
+		}
+		input.Metadata["turn"] = hookTurnFromState(state)
+	}
 	scopedCtx := withRuntimeHookEnvelope(ctx, hookRuntimeEnvelope{
 		RunID:     runID,
 		SessionID: sessionID,

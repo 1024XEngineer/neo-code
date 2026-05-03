@@ -556,3 +556,49 @@ func TestGatewayStreamDecodeAndEnvelopeExtraBranches(t *testing.T) {
 		t.Fatalf("streamReadMapTime unsupported type should return zero, got %v", got)
 	}
 }
+
+func TestDecodeRuntimeEventFromGatewayNotificationRestoresHookNotificationPayload(t *testing.T) {
+	t.Parallel()
+
+	notification := buildGatewayEventNotification(t, gateway.MessageFrame{
+		Type:      gateway.FrameTypeEvent,
+		Action:    gateway.FrameActionRun,
+		SessionID: "session-hook-notification",
+		RunID:     "run-hook-notification",
+		Payload: map[string]any{
+			"runtime_event_type": string(EventHookNotification),
+			"payload_version":    runtimeEventPayloadVersion,
+			"payload": map[string]any{
+				"hook_id":    "async-rewake",
+				"source":     "internal",
+				"point":      "before_tool_call",
+				"status":     "failed",
+				"reason":     "tool_follow_up",
+				"summary":    "verify side effects",
+				"message":    "rewake message",
+				"dedupe_key": "hook|before_tool_call|failed",
+			},
+		},
+	})
+
+	event, err := decodeRuntimeEventFromGatewayNotification(notification)
+	if err != nil {
+		t.Fatalf("decodeRuntimeEventFromGatewayNotification() error = %v", err)
+	}
+	if event.Type != EventHookNotification {
+		t.Fatalf("event.Type = %q, want %q", event.Type, EventHookNotification)
+	}
+	payload, ok := event.Payload.(HookNotificationPayload)
+	if !ok {
+		t.Fatalf("event.Payload type = %T, want HookNotificationPayload", event.Payload)
+	}
+	if payload.HookID != "async-rewake" ||
+		payload.Source != "internal" ||
+		payload.Point != "before_tool_call" ||
+		payload.Status != "failed" ||
+		payload.Reason != "tool_follow_up" ||
+		payload.Summary != "verify side effects" ||
+		payload.DedupeKey != "hook|before_tool_call|failed" {
+		t.Fatalf("unexpected payload: %#v", payload)
+	}
+}

@@ -108,6 +108,9 @@ func (s *Service) startRun(cancel context.CancelFunc, runID ...string) uint64 {
 	if s.activeRunTokenIDs == nil {
 		s.activeRunTokenIDs = make(map[uint64]string)
 	}
+	if s.activeRunStates == nil {
+		s.activeRunStates = make(map[uint64]*runState)
+	}
 
 	s.nextRunToken++
 	token := s.nextRunToken
@@ -129,6 +132,7 @@ func (s *Service) finishRun(token uint64) {
 	defer s.runMu.Unlock()
 
 	delete(s.activeRunCancels, token)
+	delete(s.activeRunStates, token)
 	if runID, exists := s.activeRunTokenIDs[token]; exists {
 		delete(s.activeRunTokenIDs, token)
 		if mappedToken, ok := s.activeRunByID[runID]; ok && mappedToken == token {
@@ -145,6 +149,19 @@ func (s *Service) finishRun(token uint64) {
 			s.activeRunToken = activeToken
 		}
 	}
+}
+
+// bindRunState 绑定运行令牌与内存态 state，供异步 hook 回灌使用。
+func (s *Service) bindRunState(token uint64, state *runState) {
+	if s == nil || token == 0 || state == nil {
+		return
+	}
+	s.runMu.Lock()
+	defer s.runMu.Unlock()
+	if s.activeRunStates == nil {
+		s.activeRunStates = make(map[uint64]*runState)
+	}
+	s.activeRunStates[token] = state
 }
 
 // acquireSessionLock 获取指定会话写锁并返回释放引用的函数。

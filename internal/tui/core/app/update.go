@@ -2818,6 +2818,7 @@ var runtimeEventHandlerRegistry = map[tuiservices.EventType]func(*App, tuiservic
 	tuiservices.EventHookFinished:                             runtimeEventHookFinishedHandler,
 	tuiservices.EventHookFailed:                               runtimeEventHookFailedHandler,
 	tuiservices.EventHookBlocked:                              runtimeEventHookBlockedHandler,
+	tuiservices.EventHookNotification:                         runtimeEventHookNotificationHandler,
 	tuiservices.EventRepoHooksDiscovered:                      runtimeEventRepoHooksDiscoveredHandler,
 	tuiservices.EventRepoHooksLoaded:                          runtimeEventRepoHooksLoadedHandler,
 	tuiservices.EventRepoHooksSkippedUntrusted:                runtimeEventRepoHooksSkippedUntrustedHandler,
@@ -2919,6 +2920,31 @@ func runtimeEventHookBlockedHandler(a *App, event tuiservices.RuntimeEvent) bool
 		title = "Hook block observed: " + hookLabel + " @ " + point
 	}
 	a.appendActivity("hook", title, reason, payload.Enforced)
+	return false
+}
+
+// runtimeEventHookNotificationHandler 处理异步 hook 通知事件（仅可观测，不写入对话 transcript）。
+func runtimeEventHookNotificationHandler(a *App, event tuiservices.RuntimeEvent) bool {
+	payload, ok := event.Payload.(tuiservices.HookNotificationPayload)
+	if !ok {
+		return false
+	}
+	hookLabel := hookActivityLabel(payload.Source, payload.HookID)
+	point := strings.TrimSpace(payload.Point)
+	if point == "" {
+		point = "unknown_point"
+	}
+	detail := firstNonBlank(
+		strings.TrimSpace(payload.Summary),
+		strings.TrimSpace(payload.Message),
+		strings.TrimSpace(payload.Reason),
+		"async hook notification",
+	)
+	status := strings.TrimSpace(payload.Status)
+	if status != "" {
+		detail = status + " · " + detail
+	}
+	a.appendActivity("hook", "Hook notification: "+hookLabel+" @ "+point, detail, false)
 	return false
 }
 

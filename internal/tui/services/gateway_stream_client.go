@@ -237,6 +237,8 @@ func restoreRuntimePayload(eventType EventType, payload any) (any, error) {
 		return decodeRuntimePayload[HookEventPayload](payload)
 	case EventHookBlocked:
 		return decodeRuntimePayload[HookBlockedPayload](payload)
+	case EventHookNotification:
+		return decodeRuntimePayload[HookNotificationPayload](payload)
 	case EventRepoHooksDiscovered, EventRepoHooksLoaded, EventRepoHooksSkippedUntrusted:
 		return decodeRuntimePayload[RepoHooksLifecyclePayload](payload)
 	case EventRepoHooksTrustStoreInvalid:

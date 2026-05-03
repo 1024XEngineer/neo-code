@@ -25,6 +25,9 @@ func configureRuntimeHooksFromConfig(service *Service, cfg config.Config) error 
 		return nil
 	}
 	baseExecutor := unwrapBaseHookExecutor(service.hookExecutor)
+	if base, ok := baseExecutor.(*runtimehooks.Executor); ok {
+		base.SetAsyncResultSink(newHookAsyncResultSink(service))
+	}
 	hooksCfg := cfg.Runtime.Hooks.Clone()
 	hooksCfg.ApplyDefaults(config.StaticDefaults().Runtime.Hooks)
 	if !hooksCfg.IsEnabled() {

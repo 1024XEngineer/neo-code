@@ -179,8 +179,13 @@ func (s HookSpec) normalizeAndValidate() (HookSpec, error) {
 	if s.Mode == "" {
 		s.Mode = HookModeSync
 	}
-	if s.Mode != HookModeSync {
+	switch s.Mode {
+	case HookModeSync, HookModeAsync, HookModeAsyncRewake:
+	default:
 		return HookSpec{}, wrapInvalidSpec("mode %q is not supported in current stage", s.Mode)
+	}
+	if (s.Scope == HookScopeUser || s.Scope == HookScopeRepo) && s.Mode != HookModeSync {
+		return HookSpec{}, wrapInvalidSpec("scope %q only supports sync mode", s.Scope)
 	}
 	if s.FailurePolicy == "" {
 		s.FailurePolicy = FailurePolicyFailOpen

@@ -23,8 +23,16 @@ type HookResult struct {
 	Status     HookResultStatus
 	Message    string
 	Error      string
+	Metadata   HookResultMetadata
 	StartedAt  time.Time
 	DurationMS int64
+}
+
+// HookResultMetadata 描述 hook 执行结果的结构化附加信息。
+type HookResultMetadata struct {
+	Rewake        bool
+	RewakeReason  string
+	RewakeSummary string
 }
 
 // RunOutput 是一次点位执行的聚合结果。

@@ -15,6 +15,7 @@ import (
 type runState struct {
 	mu                             sync.Mutex
 	runID                          string
+	runToken                       uint64
 	session                        agentsession.Session
 	compactCount                   int
 	reactiveCompactAttempts        int
@@ -50,6 +51,9 @@ type runState struct {
 	completion                     controlplane.CompletionState
 	progress                       controlplane.ProgressState
 	hookAnnotations                []string
+	hookNotifications              []queuedHookNotification
+	hookNotificationSeen           map[string]time.Time
+	hookNotificationOmitted        int
 	reportedMissingSkills          map[string]struct{}
 }
 
@@ -63,6 +67,7 @@ func newRunState(runID string, session agentsession.Session) runState {
 		reportedMissingSkills: make(map[string]struct{}),
 		taskKind:              "",
 		factsCollector:        runtimefacts.NewCollector(),
+		hookNotificationSeen:  make(map[string]time.Time),
 	}
 }
 
