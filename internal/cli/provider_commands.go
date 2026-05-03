@@ -2,10 +2,13 @@ package cli
 
 import (
 	"fmt"
+	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 
 	"neo-code/internal/config"
+	configstate "neo-code/internal/config/state"
 )
 
 type providerAddOptions struct {
@@ -23,6 +26,15 @@ var (
 
 // newProviderCommand 创建 provider 命令组，管理自定义供应商配置。
 func newProviderCommand() *cobra.Command {
+	return newProviderCommandWithResolver(newRuntimeSelectionServiceResolver())
+}
+
+// newProviderCommandWithResolver 基于注入的选择服务解析器构建 provider 命令组。
+func newProviderCommandWithResolver(resolver selectionServiceResolver) *cobra.Command {
+	if resolver == nil {
+		resolver = newRuntimeSelectionServiceResolver()
+	}
+
 	cmd := &cobra.Command{
 		Use:          "provider",
 		Short:        "Manage custom providers",
@@ -30,7 +42,7 @@ func newProviderCommand() *cobra.Command {
 	}
 
 	cmd.AddCommand(
-		newProviderAddCommand(),
+		newProviderAddCommandWithResolver(resolver),
 		newProviderLsCommand(),
 		newProviderRmCommand(),
 	)
@@ -38,14 +50,28 @@ func newProviderCommand() *cobra.Command {
 	return cmd
 }
 
+// newProviderAddCommand 创建 provider add 子命令。
 func newProviderAddCommand() *cobra.Command {
+	return newProviderAddCommandWithResolver(newRuntimeSelectionServiceResolver())
+}
+
+// newProviderAddCommandWithResolver 创建支持依赖注入的 provider add 子命令。
+func newProviderAddCommandWithResolver(resolver selectionServiceResolver) *cobra.Command {
+	if resolver == nil {
+		resolver = newRuntimeSelectionServiceResolver()
+	}
+
 	var opts providerAddOptions
 	cmd := &cobra.Command{
 		Use:   "add <name>",
 		Short: "Add a custom provider",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runProviderAddCommand(cmd, args[0], opts)
+			svc, err := resolver.Resolve(cmd)
+			if err != nil {
+				return err
+			}
+			return runProviderAddCommand(cmd, svc, args[0], opts)
 		},
 	}
 
@@ -61,37 +87,59 @@ func newProviderAddCommand() *cobra.Command {
 	return cmd
 }
 
-func defaultProviderAddCommandRunner(cmd *cobra.Command, name string, opts providerAddOptions) error {
-	var workdir string
-	if f := cmd.Flag("workdir"); f != nil {
-		workdir = f.Value.String()
+// defaultProviderAddCommandRunner 通过选择服务创建自定义 provider，确保冲突检测与回滚链路生效。
+func defaultProviderAddCommandRunner(
+	cmd *cobra.Command,
+	svc SelectionService,
+	name string,
+	opts providerAddOptions,
+) error {
+	if svc == nil {
+		return fmt.Errorf("selection service is unavailable")
 	}
-	loader := config.NewLoader(workdir, config.StaticDefaults())
-	baseDir := loader.BaseDir()
 
-	discoveryPath := opts.DiscoveryEndpointPath
-	if discoveryPath == "" && opts.Driver == "openaicompat" {
+	apiKeyEnv := strings.TrimSpace(opts.APIKeyEnv)
+	if apiKeyEnv == "" {
+		return fmt.Errorf("api-key-env 不能为空")
+	}
+	apiKey := strings.TrimSpace(os.Getenv(apiKeyEnv))
+	if apiKey == "" {
+		return fmt.Errorf("请先设置 $%s 环境变量", apiKeyEnv)
+	}
+
+	driver := strings.TrimSpace(opts.Driver)
+	discoveryPath := strings.TrimSpace(opts.DiscoveryEndpointPath)
+	if discoveryPath == "" && strings.EqualFold(driver, "openaicompat") {
 		discoveryPath = "/v1/models"
 	}
 
-	input := config.SaveCustomProviderInput{
-		Name:                  name,
-		Driver:                opts.Driver,
-		BaseURL:               opts.URL,
-		APIKeyEnv:             opts.APIKeyEnv,
-		ModelSource:           "discover",
+	input := configstate.CreateCustomProviderInput{
+		Name:                  strings.TrimSpace(name),
+		Driver:                driver,
+		BaseURL:               strings.TrimSpace(opts.URL),
+		APIKeyEnv:             apiKeyEnv,
+		APIKey:                apiKey,
+		ModelSource:           config.ModelSourceDiscover,
 		DiscoveryEndpointPath: discoveryPath,
 	}
 
-	if err := config.SaveCustomProviderWithModels(baseDir, input); err != nil {
+	selection, err := svc.CreateCustomProvider(cmd.Context(), input)
+	if err != nil {
 		return err
 	}
 
-	fmt.Fprintf(cmd.OutOrStdout(), "✅ 供应商 %s 添加成功！请记得在终端配置: export %s=\"sk-...\"\n", name, opts.APIKeyEnv)
+	providerName := strings.TrimSpace(selection.ProviderID)
+	if providerName == "" {
+		providerName = strings.TrimSpace(name)
+	}
+	modelName := strings.TrimSpace(selection.ModelID)
+	if modelName == "" {
+		fmt.Fprintf(cmd.OutOrStdout(), "✅ 供应商 %s 添加成功\n", providerName)
+		return nil
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "✅ 供应商 %s 添加成功，当前模型: %s\n", providerName, modelName)
 	return nil
 }
-
-
 
 func newProviderLsCommand() *cobra.Command {
 	return &cobra.Command{

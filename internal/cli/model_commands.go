@@ -1,12 +1,14 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/spf13/cobra"
 
 	"neo-code/internal/config"
+	configstate "neo-code/internal/config/state"
 )
 
 var (
@@ -16,6 +18,14 @@ var (
 
 // newModelCommand 创建 model 命令组，管理当前 provider 下的模型选择。
 func newModelCommand() *cobra.Command {
+	return newModelCommandWithResolver(newRuntimeSelectionServiceResolver())
+}
+
+// newModelCommandWithResolver 基于注入的选择服务解析器构建 model 命令组。
+func newModelCommandWithResolver(resolver selectionServiceResolver) *cobra.Command {
+	if resolver == nil {
+		resolver = newRuntimeSelectionServiceResolver()
+	}
 	cmd := &cobra.Command{
 		Use:          "model",
 		Short:        "Manage model selection for the current provider",
@@ -23,8 +33,8 @@ func newModelCommand() *cobra.Command {
 	}
 
 	cmd.AddCommand(
-		newModelLsCommand(),
-		newModelSetCommand(),
+		newModelLsCommandWithResolver(resolver),
+		newModelSetCommandWithResolver(resolver),
 	)
 
 	return cmd
@@ -32,30 +42,58 @@ func newModelCommand() *cobra.Command {
 
 // newModelLsCommand 创建 model ls 子命令，列出当前选中 provider 可用的模型。
 func newModelLsCommand() *cobra.Command {
+	return newModelLsCommandWithResolver(newRuntimeSelectionServiceResolver())
+}
+
+// newModelLsCommandWithResolver 创建支持依赖注入的 model ls 子命令。
+func newModelLsCommandWithResolver(resolver selectionServiceResolver) *cobra.Command {
+	if resolver == nil {
+		resolver = newRuntimeSelectionServiceResolver()
+	}
 	return &cobra.Command{
 		Use:   "ls",
 		Short: "List available models for the current provider",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runModelLsCommand(cmd)
+			svc, err := resolver.Resolve(cmd)
+			if err != nil {
+				return err
+			}
+			return runModelLsCommand(cmd, svc)
 		},
 	}
 }
 
 // newModelSetCommand 创建 model set 子命令，切换当前使用的模型。
 func newModelSetCommand() *cobra.Command {
+	return newModelSetCommandWithResolver(newRuntimeSelectionServiceResolver())
+}
+
+// newModelSetCommandWithResolver 创建支持依赖注入的 model set 子命令。
+func newModelSetCommandWithResolver(resolver selectionServiceResolver) *cobra.Command {
+	if resolver == nil {
+		resolver = newRuntimeSelectionServiceResolver()
+	}
 	return &cobra.Command{
 		Use:   "set <model-id>",
 		Short: "Switch to a specific model",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runModelSetCommand(cmd, args[0])
+			svc, err := resolver.Resolve(cmd)
+			if err != nil {
+				return err
+			}
+			return runModelSetCommand(cmd, svc, args[0])
 		},
 	}
 }
 
 // defaultModelLsCommandRunner 列出当前选中 provider 的所有可用模型。
-func defaultModelLsCommandRunner(cmd *cobra.Command) error {
+func defaultModelLsCommandRunner(cmd *cobra.Command, svc SelectionService) error {
+	if svc == nil {
+		return fmt.Errorf("selection service is unavailable")
+	}
+
 	var workdir string
 	if f := cmd.Flag("workdir"); f != nil {
 		workdir = f.Value.String()
@@ -83,18 +121,32 @@ func defaultModelLsCommandRunner(cmd *cobra.Command) error {
 	fmt.Fprintf(out, "当前模型: %s\n", displayCurrentModel(currentModel))
 	fmt.Fprintln(out, "可用模型:")
 
-	if len(providerCfg.Models) == 0 {
-		fmt.Fprintln(out, "  (无静态模型列表，该供应商使用动态发现)")
+	models, err := svc.ListModelsSnapshot(cmd.Context())
+	if err != nil {
+		return err
+	}
+	if len(models) == 0 {
+		models, err = svc.ListModels(cmd.Context())
+		if err != nil {
+			return err
+		}
+	}
+	if len(models) == 0 {
+		fmt.Fprintln(out, "  (无可用模型，该供应商使用动态发现)")
 		return nil
 	}
 
-	for _, model := range providerCfg.Models {
+	for _, model := range models {
+		modelID := strings.TrimSpace(model.ID)
+		if modelID == "" {
+			continue
+		}
 		marker := "  "
-		if strings.EqualFold(strings.TrimSpace(model.ID), currentModel) {
+		if strings.EqualFold(modelID, currentModel) {
 			marker = "* "
 		}
-		line := fmt.Sprintf("%s%s", marker, strings.TrimSpace(model.ID))
-		if name := strings.TrimSpace(model.Name); name != "" && name != model.ID {
+		line := fmt.Sprintf("%s%s", marker, modelID)
+		if name := strings.TrimSpace(model.Name); name != "" && name != modelID {
 			line += fmt.Sprintf(" (%s)", name)
 		}
 		fmt.Fprintln(out, line)
@@ -103,17 +155,10 @@ func defaultModelLsCommandRunner(cmd *cobra.Command) error {
 	return nil
 }
 
-// defaultModelSetCommandRunner 切换当前模型，将 current_model 写入配置。
-func defaultModelSetCommandRunner(cmd *cobra.Command, modelID string) error {
-	var workdir string
-	if f := cmd.Flag("workdir"); f != nil {
-		workdir = f.Value.String()
-	}
-	loader := config.NewLoader(workdir, config.StaticDefaults())
-	manager := config.NewManager(loader)
-
-	if _, err := manager.Load(cmd.Context()); err != nil {
-		return err
+// defaultModelSetCommandRunner 切换当前模型，并通过选择服务完成模型归属校验与持久化。
+func defaultModelSetCommandRunner(cmd *cobra.Command, svc SelectionService, modelID string) error {
+	if svc == nil {
+		return fmt.Errorf("selection service is unavailable")
 	}
 
 	modelID = strings.TrimSpace(modelID)
@@ -121,15 +166,32 @@ func defaultModelSetCommandRunner(cmd *cobra.Command, modelID string) error {
 		return fmt.Errorf("模型 ID 不能为空")
 	}
 
-	err := manager.Update(cmd.Context(), func(cfg *config.Config) error {
-		cfg.CurrentModel = modelID
-		return nil
-	})
+	selection, err := svc.SetCurrentModel(cmd.Context(), modelID)
 	if err != nil {
+		if errors.Is(err, configstate.ErrModelNotFound) {
+			var workdir string
+			if f := cmd.Flag("workdir"); f != nil {
+				workdir = f.Value.String()
+			}
+			loader := config.NewLoader(workdir, config.StaticDefaults())
+			cfg, loadErr := loader.Load(cmd.Context())
+			if loadErr != nil {
+				return fmt.Errorf("provider has no model %q: %w", modelID, err)
+			}
+			providerName := strings.TrimSpace(cfg.SelectedProvider)
+			if providerName == "" {
+				return fmt.Errorf("provider has no model %q: %w", modelID, err)
+			}
+			return fmt.Errorf("provider %q has no model %q: %w", providerName, modelID, err)
+		}
 		return err
 	}
 
-	fmt.Fprintf(cmd.OutOrStdout(), "✅ 已切换模型: %s\n", modelID)
+	activeModel := strings.TrimSpace(selection.ModelID)
+	if activeModel == "" {
+		activeModel = modelID
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "✅ 已切换模型: %s\n", activeModel)
 	return nil
 }
 
