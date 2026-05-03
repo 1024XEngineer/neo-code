@@ -29,6 +29,28 @@ func TestFinalAcceptanceMappingAndLegacyPaths(t *testing.T) {
 		}
 	})
 
+	t.Run("projection keeps required input and task kinds", func(t *testing.T) {
+		t.Parallel()
+		required := &decider.RequiredInput{
+			Kind:    "missing_file_target_or_content",
+			Message: "need target path",
+			Details: map[string]any{"path": "test.txt"},
+		}
+		projected := toDeciderDecisionFromAcceptance(acceptance.AcceptanceDecision{
+			Status:            acceptance.AcceptanceContinue,
+			StopReason:        controlplane.StopReasonTodoNotConverged,
+			RequiredInput:     required,
+			IntentHint:        decider.TaskKindWorkspaceWrite,
+			EffectiveTaskKind: decider.TaskKindWorkspaceWrite,
+		})
+		if projected.RequiredInput == nil || projected.RequiredInput.Kind != "missing_file_target_or_content" {
+			t.Fatalf("required input lost in projection: %+v", projected)
+		}
+		if projected.IntentHint != decider.TaskKindWorkspaceWrite || projected.EffectiveTaskKind != decider.TaskKindWorkspaceWrite {
+			t.Fatalf("task kind hints lost in projection: %+v", projected)
+		}
+	})
+
 	t.Run("legacy path adds continue hint", func(t *testing.T) {
 		t.Parallel()
 		service := &Service{}
@@ -55,8 +77,8 @@ func TestFinalAcceptanceHelperBranches(t *testing.T) {
 	t.Parallel()
 
 	if got := buildAcceptanceContinueHint(acceptance.AcceptanceDecision{
-		Status:        acceptance.AcceptanceContinue,
-		ContinueHint:  "base",
+		Status:          acceptance.AcceptanceContinue,
+		ContinueHint:    "base",
 		VerifierResults: nil,
 	}); !strings.Contains(got, "base") {
 		t.Fatalf("continue hint fallback = %q", got)

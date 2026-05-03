@@ -94,6 +94,7 @@ func (s *Service) buildAcceptanceServiceInput(
 	runID := strings.TrimSpace(state.runID)
 	sessionID := strings.TrimSpace(state.session.ID)
 	turn := state.turn
+	maxTurnsReached := state.maxTurnsReached
 	maxTurns := resolveRuntimeMaxTurns(snapshot.Config.Runtime)
 	state.mu.Unlock()
 
@@ -109,6 +110,9 @@ func (s *Service) buildAcceptanceServiceInput(
 			completionReason = string(controlplane.CompletionBlockedReasonPendingTodo)
 		}
 	}
+	if !maxTurnsReached && maxTurns > 0 && turn+1 >= maxTurns {
+		maxTurnsReached = true
+	}
 	verifyInput := verify.FinalVerifyInput{
 		SessionID:          sessionID,
 		RunID:              runID,
@@ -121,7 +125,7 @@ func (s *Service) buildAcceptanceServiceInput(
 		RuntimeState: verify.RuntimeStateSnapshot{
 			Turn:                 turn,
 			MaxTurns:             maxTurns,
-			MaxTurnsReached:      false,
+			MaxTurnsReached:      maxTurnsReached,
 			FinalInterceptStreak: noProgressStreak,
 		},
 		VerificationConfig: snapshot.Config.Runtime.Verification.Clone(),
@@ -162,9 +166,27 @@ func toDeciderDecisionFromAcceptance(decision acceptance.AcceptanceDecision) dec
 		StopReason:          strings.TrimSpace(string(decision.StopReason)),
 		MissingFacts:        append([]decider.MissingFact(nil), decision.MissingFacts...),
 		RequiredNextActions: append([]decider.RequiredAction(nil), decision.RequiredNextActions...),
+		RequiredInput:       cloneRequiredInput(decision.RequiredInput),
+		IntentHint:          decision.IntentHint,
+		EffectiveTaskKind:   decision.EffectiveTaskKind,
 		UserVisibleSummary:  strings.TrimSpace(decision.UserVisibleSummary),
 		InternalSummary:     strings.TrimSpace(decision.InternalSummary),
 	}
+}
+
+func cloneRequiredInput(in *decider.RequiredInput) *decider.RequiredInput {
+	if in == nil {
+		return nil
+	}
+	cloned := *in
+	if len(in.Details) == 0 {
+		return &cloned
+	}
+	cloned.Details = make(map[string]any, len(in.Details))
+	for k, v := range in.Details {
+		cloned.Details[k] = v
+	}
+	return &cloned
 }
 
 // mapDeciderDecisionToAcceptance 把 FinalDecider 裁决映射到 acceptance 协议。
@@ -172,6 +194,9 @@ func toDeciderDecisionFromAcceptance(decision acceptance.AcceptanceDecision) dec
 func mapDeciderDecisionToAcceptance(decision decider.Decision) acceptance.AcceptanceDecision {
 	out := acceptance.AcceptanceDecision{
 		StopReason:         toControlplaneStopReason(decision.StopReason),
+		RequiredInput:      cloneRequiredInput(decision.RequiredInput),
+		IntentHint:         decision.IntentHint,
+		EffectiveTaskKind:  decision.EffectiveTaskKind,
 		UserVisibleSummary: strings.TrimSpace(decision.UserVisibleSummary),
 		InternalSummary:    strings.TrimSpace(decision.InternalSummary),
 		ContinueHint:       buildDeciderContinueHint(decision),

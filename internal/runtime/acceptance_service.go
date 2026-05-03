@@ -72,6 +72,19 @@ func (s *acceptanceService) Decide(ctx context.Context, input acceptanceServiceI
 
 	output.MissingFacts = append([]decider.MissingFact(nil), decision.MissingFacts...)
 	output.RequiredNextActions = append([]decider.RequiredAction(nil), decision.RequiredNextActions...)
+	if decision.RequiredInput != nil {
+		cloned := *decision.RequiredInput
+		if len(cloned.Details) > 0 {
+			details := make(map[string]any, len(cloned.Details))
+			for k, v := range cloned.Details {
+				details[k] = v
+			}
+			cloned.Details = details
+		}
+		output.RequiredInput = &cloned
+	}
+	output.IntentHint = decision.IntentHint
+	output.EffectiveTaskKind = decision.EffectiveTaskKind
 	output.UserVisibleSummary = strings.TrimSpace(decision.UserVisibleSummary)
 	output.InternalSummary = strings.TrimSpace(decision.InternalSummary)
 	output.ContinueHint = strings.TrimSpace(buildDeciderContinueHint(decision))
@@ -119,25 +132,20 @@ func (s *acceptanceService) Decide(ctx context.Context, input acceptanceServiceI
 	if output.Status == acceptance.AcceptanceContinue && output.ContinueHint == "" {
 		output.ContinueHint = finalContinueReminder
 	}
+	if input.VerificationInput.RuntimeState.MaxTurnsReached && output.Status == acceptance.AcceptanceContinue {
+		output.Status = acceptance.AcceptanceIncomplete
+		if output.StopReason == controlplane.StopReasonVerificationFailed {
+			output.StopReason = controlplane.StopReasonMaxTurnExceededWithFailedVerification
+		} else {
+			output.StopReason = controlplane.StopReasonMaxTurnExceededWithUnconvergedTodos
+		}
+	}
 	output.ErrorClass = normalizeAcceptanceErrorClass(output.ErrorClass, input, output)
 	return output, nil
 }
 
 // runVerificationGate 执行 verifier gate；completion 未通过时仅回填必要证据，不执行重 verifier。
 func runVerificationGate(ctx context.Context, input acceptanceServiceInput) (verify.VerificationGateDecision, error) {
-	if !input.VerificationProfile.Valid() {
-		return verify.VerificationGateDecision{
-			Passed: false,
-			Reason: controlplane.StopReasonVerificationConfigMissing,
-			Results: []verify.VerificationResult{{
-				Name:       "verification_profile",
-				Status:     verify.VerificationFail,
-				Summary:    "verification profile invalid",
-				Reason:     fmt.Sprintf("invalid verification profile %q", input.VerificationProfile),
-				ErrorClass: verify.ErrorClassEnvMissing,
-			}},
-		}, nil
-	}
 	if !input.CompletionPassed {
 		results := make([]verify.VerificationResult, 0, 1)
 		if strings.EqualFold(strings.TrimSpace(input.CompletionBlockedReason), string(controlplane.CompletionBlockedReasonPendingTodo)) {
@@ -149,6 +157,19 @@ func runVerificationGate(ctx context.Context, input acceptanceServiceInput) (ver
 			Passed:  false,
 			Reason:  controlplane.StopReasonTodoNotConverged,
 			Results: results,
+		}, nil
+	}
+	if !input.VerificationProfile.Valid() {
+		return verify.VerificationGateDecision{
+			Passed: false,
+			Reason: controlplane.StopReasonVerificationConfigMissing,
+			Results: []verify.VerificationResult{{
+				Name:       "verification_profile",
+				Status:     verify.VerificationFail,
+				Summary:    "verification profile invalid",
+				Reason:     fmt.Sprintf("invalid verification profile %q", input.VerificationProfile),
+				ErrorClass: verify.ErrorClassEnvMissing,
+			}},
 		}, nil
 	}
 

@@ -421,3 +421,71 @@ func TestNoProgressThresholdProducesIncomplete(t *testing.T) {
 		t.Fatalf("stop_reason=%q want no_progress_after_final_intercept", decision.StopReason)
 	}
 }
+
+func TestRunVerificationGateSkipsProfileValidationWhenCompletionBlocked(t *testing.T) {
+	t.Parallel()
+
+	gate, err := runVerificationGate(context.Background(), acceptanceServiceInput{
+		CompletionPassed:        false,
+		CompletionBlockedReason: string(controlplane.CompletionBlockedReasonPendingTodo),
+		VerificationProfile:     "invalid_profile",
+		Todos: decider.TodoSnapshot{
+			Items: []decider.TodoViewItem{{
+				ID:       "todo-1",
+				Content:  "x",
+				Status:   "pending",
+				Required: true,
+			}},
+			Summary: decider.TodoSummary{
+				RequiredTotal: 1,
+				RequiredOpen:  1,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("runVerificationGate error = %v", err)
+	}
+	if gate.Reason != controlplane.StopReasonTodoNotConverged {
+		t.Fatalf("reason=%q want todo_not_converged", gate.Reason)
+	}
+	if len(gate.Results) == 0 {
+		t.Fatal("expected synthetic todo convergence evidence when completion is blocked")
+	}
+}
+
+func TestBeforeAcceptFinalMarksIncompleteWhenFinalInterceptHitsMaxTurns(t *testing.T) {
+	t.Parallel()
+
+	service := &Service{events: make(chan RuntimeEvent, 16)}
+	cfg := config.StaticDefaults().Clone()
+	cfg.Runtime.MaxTurns = 1
+	snapshot := TurnBudgetSnapshot{Config: cfg, Workdir: t.TempDir()}
+
+	state := newRunState("run-max-turn-final-intercept", agentsession.New("max-turn-final-intercept"))
+	state.session.TaskState.VerificationProfile = agentsession.VerificationProfileTaskOnly
+	required := true
+	state.session.Todos = []agentsession.TodoItem{{
+		ID:       "todo-1",
+		Content:  "pending",
+		Status:   agentsession.TodoStatusPending,
+		Required: &required,
+	}}
+
+	decision, err := service.beforeAcceptFinal(
+		context.Background(),
+		&state,
+		snapshot,
+		providertypes.Message{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("done")}},
+		true,
+		beforeCompletionHookSignals{},
+	)
+	if err != nil {
+		t.Fatalf("beforeAcceptFinal error = %v", err)
+	}
+	if decision.Status != acceptance.AcceptanceIncomplete {
+		t.Fatalf("status=%q want incomplete", decision.Status)
+	}
+	if decision.StopReason != controlplane.StopReasonMaxTurnExceededWithUnconvergedTodos {
+		t.Fatalf("stop_reason=%q want max_turn_exceeded_with_unconverged_todos", decision.StopReason)
+	}
+}

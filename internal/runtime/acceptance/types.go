@@ -32,6 +32,9 @@ type AcceptanceDecision struct {
 	CompletionBlockedReason string                      `json:"completion_blocked_reason,omitempty"`
 	MissingFacts            []decider.MissingFact       `json:"missing_facts,omitempty"`
 	RequiredNextActions     []decider.RequiredAction    `json:"required_next_actions,omitempty"`
+	RequiredInput           *decider.RequiredInput      `json:"required_input,omitempty"`
+	IntentHint              decider.TaskKind            `json:"intent_hint,omitempty"`
+	EffectiveTaskKind       decider.TaskKind            `json:"effective_task_kind,omitempty"`
 	UserVisibleSummary      string                      `json:"user_visible_summary,omitempty"`
 	InternalSummary         string                      `json:"internal_summary,omitempty"`
 	ContinueHint            string                      `json:"continue_hint,omitempty"`
