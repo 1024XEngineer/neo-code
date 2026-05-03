@@ -236,7 +236,11 @@ func (s *Service) SetCurrentModel(ctx context.Context, modelID string) (Selectio
 	}
 	models, err := s.catalogs.ListProviderModels(ctx, input)
 	if err != nil {
-		return Selection{}, err
+		snapshotModels, snapshotErr := s.catalogs.ListProviderModelsSnapshot(ctx, input)
+		if snapshotErr != nil {
+			return Selection{}, err
+		}
+		models = snapshotModels
 	}
 	if len(models) == 0 {
 		return Selection{}, ErrNoModelsAvailable
