@@ -884,14 +884,14 @@ func renderDiagnosis(output io.Writer, content string, isError bool) {
 
 // streamPTYOutput 解析 PTY 输出并分离 OSC133 事件，按规则触发 Auto 诊断任务。
 func streamPTYOutput(
-	ptyFile *os.File,
+	ptyReader io.Reader,
 	outputSink io.Writer,
 	commandLogBuffer *UTF8RingBuffer,
 	tracker *commandTracker,
 	autoTriggerCh chan<- diagnoseTrigger,
 	autoState *autoRuntimeState,
 ) {
-	if ptyFile == nil || outputSink == nil || commandLogBuffer == nil {
+	if ptyReader == nil || outputSink == nil || commandLogBuffer == nil {
 		return
 	}
 	parser := &OSC133Parser{}
@@ -900,7 +900,7 @@ func streamPTYOutput(
 
 	buffer := make([]byte, 4096)
 	for {
-		readBytes, err := ptyFile.Read(buffer)
+		readBytes, err := ptyReader.Read(buffer)
 		if readBytes > 0 {
 			cleanOutput, events := parser.Feed(buffer[:readBytes])
 			if len(cleanOutput) > 0 {
