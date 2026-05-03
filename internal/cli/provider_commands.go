@@ -1,9 +1,12 @@
 package cli
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -18,13 +21,15 @@ type providerAddOptions struct {
 	DiscoveryEndpointPath string
 }
 
+const providerAddSelectionTimeout = 15 * time.Second
+
 var (
 	runProviderAddCommand = defaultProviderAddCommandRunner
 	runProviderLsCommand  = defaultProviderLsCommandRunner
 	runProviderRmCommand  = defaultProviderRmCommandRunner
 )
 
-// newProviderCommand 创建 provider 命令组，管理自定义供应商配置。
+// newProviderCommand 创建 provider 命令组，管理自定义提供商配置。
 func newProviderCommand() *cobra.Command {
 	return newProviderCommandWithResolver(newRuntimeSelectionServiceResolver())
 }
@@ -44,7 +49,7 @@ func newProviderCommandWithResolver(resolver selectionServiceResolver) *cobra.Co
 	cmd.AddCommand(
 		newProviderAddCommandWithResolver(resolver),
 		newProviderLsCommand(),
-		newProviderRmCommand(),
+		newProviderRmCommandWithResolver(resolver),
 	)
 
 	return cmd
@@ -123,8 +128,13 @@ func defaultProviderAddCommandRunner(
 		DiscoveryEndpointPath: discoveryPath,
 	}
 
-	selection, err := svc.CreateCustomProvider(cmd.Context(), input)
+	opCtx, cancel := context.WithTimeout(cmd.Context(), providerAddSelectionTimeout)
+	defer cancel()
+	selection, err := svc.CreateCustomProvider(opCtx, input)
 	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			return fmt.Errorf("provider add 超时（%s），请稍后重试: %w", providerAddSelectionTimeout, err)
+		}
 		return err
 	}
 
@@ -134,10 +144,10 @@ func defaultProviderAddCommandRunner(
 	}
 	modelName := strings.TrimSpace(selection.ModelID)
 	if modelName == "" {
-		fmt.Fprintf(cmd.OutOrStdout(), "✅ 供应商 %s 添加成功\n", providerName)
+		fmt.Fprintf(cmd.OutOrStdout(), "✅ 提供商 %s 添加成功\n", providerName)
 		return nil
 	}
-	fmt.Fprintf(cmd.OutOrStdout(), "✅ 供应商 %s 添加成功，当前模型: %s\n", providerName, modelName)
+	fmt.Fprintf(cmd.OutOrStdout(), "✅ 提供商 %s 添加成功，当前模型: %s\n", providerName, modelName)
 	return nil
 }
 
@@ -169,28 +179,35 @@ func defaultProviderLsCommandRunner(cmd *cobra.Command) error {
 }
 
 func newProviderRmCommand() *cobra.Command {
+	return newProviderRmCommandWithResolver(newRuntimeSelectionServiceResolver())
+}
+
+func newProviderRmCommandWithResolver(resolver selectionServiceResolver) *cobra.Command {
+	if resolver == nil {
+		resolver = newRuntimeSelectionServiceResolver()
+	}
 	return &cobra.Command{
 		Use:   "rm <name>",
 		Short: "Remove a custom provider",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runProviderRmCommand(cmd, args[0])
+			svc, err := resolver.Resolve(cmd)
+			if err != nil {
+				return err
+			}
+			return runProviderRmCommand(cmd, svc, args[0])
 		},
 	}
 }
 
-func defaultProviderRmCommandRunner(cmd *cobra.Command, name string) error {
-	var workdir string
-	if f := cmd.Flag("workdir"); f != nil {
-		workdir = f.Value.String()
+func defaultProviderRmCommandRunner(cmd *cobra.Command, svc SelectionService, name string) error {
+	if svc == nil {
+		return fmt.Errorf("selection service is unavailable")
 	}
-	loader := config.NewLoader(workdir, config.StaticDefaults())
-	baseDir := loader.BaseDir()
-
-	if err := config.DeleteCustomProvider(baseDir, name); err != nil {
+	if err := svc.RemoveCustomProvider(cmd.Context(), name); err != nil {
 		return err
 	}
 
-	fmt.Fprintf(cmd.OutOrStdout(), "✅ 供应商 %s 已删除\n", name)
+	fmt.Fprintf(cmd.OutOrStdout(), "✅ 提供商 %s 已删除\n", name)
 	return nil
 }

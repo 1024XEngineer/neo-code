@@ -52,17 +52,21 @@ func defaultUseCommandRunner(cmd *cobra.Command, svc SelectionService, name stri
 	providerName := strings.TrimSpace(name)
 	model := strings.TrimSpace(opts.Model)
 
-	selection, err := svc.SelectProvider(cmd.Context(), providerName)
-	if err != nil {
-		return err
-	}
-
+	var (
+		selection configstate.Selection
+		err       error
+	)
 	if model != "" {
-		selection, err = svc.SetCurrentModel(cmd.Context(), model)
+		selection, err = svc.SelectProviderWithModel(cmd.Context(), providerName, model)
 		if err != nil {
 			if errors.Is(err, configstate.ErrModelNotFound) {
 				return fmt.Errorf("provider %q has no model %q: %w", providerName, model, err)
 			}
+			return err
+		}
+	} else {
+		selection, err = svc.SelectProvider(cmd.Context(), providerName)
+		if err != nil {
 			return err
 		}
 	}

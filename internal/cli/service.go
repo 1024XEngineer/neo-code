@@ -19,7 +19,9 @@ type SelectionService interface {
 	ListModelsSnapshot(ctx context.Context) ([]providertypes.ModelDescriptor, error)
 	SetCurrentModel(ctx context.Context, modelID string) (configstate.Selection, error)
 	SelectProvider(ctx context.Context, providerName string) (configstate.Selection, error)
+	SelectProviderWithModel(ctx context.Context, providerName string, modelID string) (configstate.Selection, error)
 	CreateCustomProvider(ctx context.Context, input configstate.CreateCustomProviderInput) (configstate.Selection, error)
+	RemoveCustomProvider(ctx context.Context, name string) error
 }
 
 // selectionServiceResolver 负责在命令执行时解析并返回可复用的选择服务实例。
