@@ -4,116 +4,141 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/spf13/cobra"
-	"neo-code/internal/config"
+
+	configstate "neo-code/internal/config/state"
 )
 
 func TestUseCommand(t *testing.T) {
-	cmd := newUseCommand()
+	svc := &mockSelectionService{}
+	cmd := newUseCommandWithResolver(staticSelectionResolver(svc))
 	if cmd.Use != "use <provider>" {
-		t.Errorf("expected use 'use <provider>', got %s", cmd.Use)
+		t.Fatalf("cmd.Use = %q, want %q", cmd.Use, "use <provider>")
 	}
 
+	originalRunner := runUseCommand
+	t.Cleanup(func() { runUseCommand = originalRunner })
+
 	called := false
-	runUseCommand = func(c *cobra.Command, name string, opts useCommandOptions) error {
+	runUseCommand = func(c *cobra.Command, gotSvc SelectionService, name string, opts useCommandOptions) error {
 		called = true
+		if gotSvc != svc {
+			t.Fatalf("injected service mismatch")
+		}
 		if name != "my-provider" {
-			t.Errorf("expected 'my-provider', got %s", name)
+			t.Fatalf("name = %q, want %q", name, "my-provider")
+		}
+		if opts.Model != "gpt-5.4" {
+			t.Fatalf("opts.Model = %q, want %q", opts.Model, "gpt-5.4")
 		}
 		return errors.New("mock error")
 	}
-	defer func() { runUseCommand = defaultUseCommandRunner }()
 
-	cmd.SetArgs([]string{"my-provider"})
-	if err := cmd.ExecuteContext(context.Background()); err == nil {
+	cmd.SetArgs([]string{"my-provider", "--model", "gpt-5.4"})
+	err := cmd.ExecuteContext(context.Background())
+	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
 	if !called {
-		t.Fatal("runner not called")
-	}
-}
-
-func TestUseCommandWithModelFlag(t *testing.T) {
-	called := false
-	runUseCommand = func(c *cobra.Command, name string, opts useCommandOptions) error {
-		called = true
-		if name != "my-provider" {
-			t.Errorf("expected 'my-provider', got %s", name)
-		}
-		if opts.Model != "gpt-5.4" {
-			t.Errorf("expected model 'gpt-5.4', got %s", opts.Model)
-		}
-		return nil
-	}
-	defer func() { runUseCommand = defaultUseCommandRunner }()
-
-	cmd := newUseCommand()
-	cmd.SetArgs([]string{"my-provider", "--model", "gpt-5.4"})
-	if err := cmd.ExecuteContext(context.Background()); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !called {
-		t.Fatal("runner not called")
+		t.Fatal("expected runUseCommand called")
 	}
 }
 
 func TestDefaultUseCommandRunner(t *testing.T) {
-	workdir := t.TempDir()
+	tests := []struct {
+		name           string
+		provider       string
+		model          string
+		selectProvider func(context.Context, string) (configstate.Selection, error)
+		setCurrent     func(context.Context, string) (configstate.Selection, error)
+		wantErr        string
+		wantOutput     []string
+		wantSetCalled  bool
+	}{
+		{
+			name:     "switch provider only",
+			provider: "openai",
+			selectProvider: func(_ context.Context, provider string) (configstate.Selection, error) {
+				return configstate.Selection{ProviderID: provider, ModelID: "gpt-5.4"}, nil
+			},
+			wantOutput: []string{"已全局切换到供应商: openai"},
+		},
+		{
+			name:     "switch provider and model",
+			provider: "openai",
+			model:    "gpt-4o",
+			selectProvider: func(_ context.Context, provider string) (configstate.Selection, error) {
+				return configstate.Selection{ProviderID: provider, ModelID: "gpt-5.4"}, nil
+			},
+			setCurrent: func(_ context.Context, model string) (configstate.Selection, error) {
+				return configstate.Selection{ProviderID: "openai", ModelID: model}, nil
+			},
+			wantSetCalled: true,
+			wantOutput:    []string{"已全局切换到供应商: openai", "已设置模型: gpt-4o"},
+		},
+		{
+			name:     "select provider error",
+			provider: "missing",
+			selectProvider: func(_ context.Context, provider string) (configstate.Selection, error) {
+				return configstate.Selection{}, errors.New("provider not found")
+			},
+			wantErr: "provider not found",
+		},
+		{
+			name:     "model not found",
+			provider: "openai",
+			model:    "missing-model",
+			selectProvider: func(_ context.Context, provider string) (configstate.Selection, error) {
+				return configstate.Selection{ProviderID: provider, ModelID: "gpt-5.4"}, nil
+			},
+			setCurrent: func(_ context.Context, model string) (configstate.Selection, error) {
+				return configstate.Selection{}, configstate.ErrModelNotFound
+			},
+			wantSetCalled: true,
+			wantErr:       `provider "openai" has no model "missing-model"`,
+		},
+	}
 
-	// 预先创建一个 custom provider 用于测试
-	input := config.SaveCustomProviderInput{
-		Name:                  "my-provider",
-		Driver:                "openaicompat",
-		BaseURL:               "http://mock",
-		APIKeyEnv:             "MOCK_KEY",
-		ModelSource:           "discover",
-		DiscoveryEndpointPath: "/v1/models",
-	}
-	if err := config.SaveCustomProviderWithModels(workdir, input); err != nil {
-		t.Fatal(err)
-	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			output := &bytes.Buffer{}
+			cmd := &cobra.Command{}
+			cmd.SetOut(output)
+			cmd.SetContext(context.Background())
 
-	cmd := &cobra.Command{}
-	cmd.Flags().String("workdir", workdir, "")
-	out := new(bytes.Buffer)
-	cmd.SetOut(out)
-	cmd.SetContext(context.Background())
+			setCalled := false
+			svc := &mockSelectionService{
+				selectProviderFn: tc.selectProvider,
+				setCurrentModelFn: func(ctx context.Context, modelID string) (configstate.Selection, error) {
+					setCalled = true
+					if tc.setCurrent != nil {
+						return tc.setCurrent(ctx, modelID)
+					}
+					return configstate.Selection{}, nil
+				},
+			}
 
-	// 仅切换 provider
-	err := defaultUseCommandRunner(cmd, "my-provider", useCommandOptions{})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	loader := config.NewLoader(workdir, config.StaticDefaults())
-	cfg, err := loader.Load(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cfg.SelectedProvider != "my-provider" {
-		t.Errorf("expected selected provider 'my-provider', got %s", cfg.SelectedProvider)
-	}
-
-	// 切换 provider + model
-	out.Reset()
-	err = defaultUseCommandRunner(cmd, "my-provider", useCommandOptions{Model: "deepseek-chat"})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	cfg, err = loader.Load(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cfg.CurrentModel != "deepseek-chat" {
-		t.Errorf("expected current model 'deepseek-chat', got %s", cfg.CurrentModel)
-	}
-
-	// 不存在的 provider 应报错
-	err = defaultUseCommandRunner(cmd, "not-found", useCommandOptions{})
-	if err == nil {
-		t.Fatal("expected error for non-existent provider, got nil")
+			err := defaultUseCommandRunner(cmd, svc, tc.provider, useCommandOptions{Model: tc.model})
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("err = %v, want contains %q", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("defaultUseCommandRunner() error = %v", err)
+			}
+			if setCalled != tc.wantSetCalled {
+				t.Fatalf("setCalled = %v, want %v", setCalled, tc.wantSetCalled)
+			}
+			for _, fragment := range tc.wantOutput {
+				if !strings.Contains(output.String(), fragment) {
+					t.Fatalf("output = %q, want contains %q", output.String(), fragment)
+				}
+			}
+		})
 	}
 }
