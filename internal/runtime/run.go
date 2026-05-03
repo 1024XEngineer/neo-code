@@ -344,53 +344,20 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 				if err := s.setBaseRunState(ctx, &state, controlplane.RunStateVerify); err != nil {
 					return s.handleRunError(err)
 				}
-				completionHookSignals := s.runBeforeCompletionDecisionOrchestrator(
+				acceptanceDecision, err := s.runBeforeCompletionDecisionAcceptance(
 					ctx,
 					&state,
+					snapshot,
+					turnOutput.assistant,
 					snapshot.Workdir,
 					completed,
 					hasToolCalls,
 					turnOutput.assistant.Role,
 				)
-
-				s.emitRunScopedOptional(EventVerificationStarted, &state, VerificationStartedPayload{
-					CompletionPassed:        completed,
-					CompletionBlockedReason: strings.TrimSpace(string(state.completion.CompletionBlockedReason)),
-				})
-				acceptanceDecision, err := s.beforeAcceptFinal(
-					ctx,
-					&state,
-					snapshot,
-					turnOutput.assistant,
-					completed,
-					completionHookSignals,
-				)
 				if err != nil {
 					return s.handleRunError(err)
 				}
-				for _, result := range acceptanceDecision.VerifierResults {
-					s.emitRunScopedOptional(EventVerificationStageFinished, &state, VerificationStageFinishedPayload{
-						Name:       result.Name,
-						Status:     result.Status,
-						Summary:    result.Summary,
-						Reason:     result.Reason,
-						ErrorClass: result.ErrorClass,
-					})
-				}
-				s.emitRunScopedOptional(EventVerificationFinished, &state, VerificationFinishedPayload{
-					AcceptanceStatus: acceptanceDecision.Status,
-					StopReason:       acceptanceDecision.StopReason,
-					ErrorClass:       acceptanceDecision.ErrorClass,
-				})
-				s.emitRunScopedOptional(EventAcceptanceDecided, &state, AcceptanceDecidedPayload{
-					Status:                  acceptanceDecision.Status,
-					StopReason:              acceptanceDecision.StopReason,
-					ErrorClass:              acceptanceDecision.ErrorClass,
-					CompletionBlockedReason: strings.TrimSpace(acceptanceDecision.CompletionBlockedReason),
-					UserVisibleSummary:      acceptanceDecision.UserVisibleSummary,
-					InternalSummary:         acceptanceDecision.InternalSummary,
-					ContinueHint:            acceptanceDecision.ContinueHint,
-				})
+				s.emitAcceptanceDecisionEvents(&state, acceptanceDecision)
 				applyAcceptanceResultProgress(&state, acceptanceDecision)
 
 				switch acceptanceDecision.Status {

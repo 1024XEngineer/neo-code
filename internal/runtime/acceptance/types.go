@@ -2,6 +2,7 @@ package acceptance
 
 import (
 	"neo-code/internal/runtime/controlplane"
+	"neo-code/internal/runtime/decider"
 	"neo-code/internal/runtime/verify"
 )
 
@@ -26,7 +27,11 @@ type AcceptanceDecision struct {
 	Status                  AcceptanceStatus            `json:"status"`
 	StopReason              controlplane.StopReason     `json:"stop_reason,omitempty"`
 	ErrorClass              verify.ErrorClass           `json:"error_class,omitempty"`
+	CompletionPassed        bool                        `json:"completion_passed,omitempty"`
+	VerificationPassed      bool                        `json:"verification_passed,omitempty"`
 	CompletionBlockedReason string                      `json:"completion_blocked_reason,omitempty"`
+	MissingFacts            []decider.MissingFact       `json:"missing_facts,omitempty"`
+	RequiredNextActions     []decider.RequiredAction    `json:"required_next_actions,omitempty"`
 	UserVisibleSummary      string                      `json:"user_visible_summary,omitempty"`
 	InternalSummary         string                      `json:"internal_summary,omitempty"`
 	ContinueHint            string                      `json:"continue_hint,omitempty"`
