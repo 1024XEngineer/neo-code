@@ -8,15 +8,13 @@ import (
 	"time"
 
 	"neo-code/internal/checkpoint"
-	providertypes "neo-code/internal/provider/types"
 	agentsession "neo-code/internal/session"
-	"neo-code/internal/tools"
 )
 
-// createPreWriteCheckpoint 在工具执行前创建 checkpoint，采用两阶段提交。
-// shadowRepo 可用时做完整快照，不可用时降级为 session-only checkpoint。
-// 失败时不阻塞工具执行，仅返回 error 由调用方发 warning event。
-func (s *Service) createPreWriteCheckpoint(ctx context.Context, state *runState) error {
+// createPerTurnCheckpoint 在每轮 turn 开始时创建 checkpoint。
+// shadowRepo 可用且有代码变更时做完整快照，否则仅做 session-only 快照。
+// 失败时不阻塞执行，仅返回 error 由调用方发 warning event。
+func (s *Service) createPerTurnCheckpoint(ctx context.Context, state *runState) error {
 	if s.checkpointStore == nil {
 		return nil
 	}
@@ -31,9 +29,19 @@ func (s *Service) createPreWriteCheckpoint(ctx context.Context, state *runState)
 		return s.createDegradedCheckpoint(ctx, session, runID)
 	}
 
+	// 无代码变更时跳过代码快照，仅做 session-only checkpoint
+	if !s.shadowRepo.HasCodeChanges(ctx) {
+		return s.createDegradedCheckpoint(ctx, session, runID)
+	}
+
+	return s.createFullCheckpoint(ctx, session, runID, state)
+}
+
+// createFullCheckpoint 创建完整 checkpoint（代码快照 + 会话快照）。
+func (s *Service) createFullCheckpoint(ctx context.Context, session agentsession.Session, runID string, state *runState) error {
 	checkpointID := agentsession.NewID("checkpoint")
 	ref := checkpoint.RefForCheckpoint(session.ID, checkpointID)
-	commitMsg := fmt.Sprintf("pre_write checkpoint for session %s", session.ID)
+	commitMsg := fmt.Sprintf("per-turn checkpoint for session %s", session.ID)
 
 	// Phase 1: shadow snapshot
 	commitHash, err := s.shadowRepo.Snapshot(ctx, ref, commitMsg)
@@ -97,42 +105,6 @@ func (s *Service) createPreWriteCheckpoint(ctx context.Context, state *runState)
 		Reason:               string(saved.Reason),
 	})
 	return nil
-}
-
-// toolCallsContainWorkspaceWrite 检查工具调用列表中是否包含会修改工作区的调用。
-func toolCallsContainWorkspaceWrite(calls []providertypes.ToolCall) bool {
-	for _, call := range calls {
-		if isWorkspaceWriteToolCall(call) {
-			return true
-		}
-	}
-	return false
-}
-
-func isWorkspaceWriteToolCall(call providertypes.ToolCall) bool {
-	switch call.Name {
-	case tools.ToolNameFilesystemWriteFile, tools.ToolNameFilesystemEdit:
-		return true
-	case tools.ToolNameBash:
-		return isBashWriteCommand(call.Arguments)
-	}
-	return false
-}
-
-func isBashWriteCommand(argumentsJSON string) bool {
-	trimmed := strings.TrimSpace(argumentsJSON)
-	if trimmed == "" {
-		return false
-	}
-	var args struct {
-		Command string `json:"command"`
-	}
-	if err := json.Unmarshal([]byte(trimmed), &args); err != nil {
-		return false
-	}
-	intent := tools.AnalyzeBashCommand(args.Command)
-	return intent.Classification == tools.BashIntentClassificationLocalMutation ||
-		intent.Classification == tools.BashIntentClassificationDestructive
 }
 
 // createDegradedCheckpoint 创建 session-only checkpoint（无代码快照），用于 shadowRepo 不可用时。

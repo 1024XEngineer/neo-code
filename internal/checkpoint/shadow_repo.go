@@ -84,6 +84,18 @@ func (r *ShadowRepo) Init(ctx context.Context) error {
 		return fmt.Errorf("checkpoint: set core.worktree: %w", err)
 	}
 
+	// 设置提交者身份，避免机器上无全局 git 配置时 commit 失败
+	ctx3, cancel3 := context.WithTimeout(context.Background(), gitCommandTimeout)
+	defer cancel3()
+	if err := r.gitExec(ctx3, "config", "user.name", "neocode-checkpoint"); err != nil {
+		return fmt.Errorf("checkpoint: set user.name: %w", err)
+	}
+	ctx4, cancel4 := context.WithTimeout(context.Background(), gitCommandTimeout)
+	defer cancel4()
+	if err := r.gitExec(ctx4, "config", "user.email", "checkpoint@neocode.local"); err != nil {
+		return fmt.Errorf("checkpoint: set user.email: %w", err)
+	}
+
 	r.gitAvailable = true
 	return nil
 }
@@ -188,6 +200,30 @@ func (r *ShadowRepo) DeleteRef(ctx context.Context, ref string) error {
 		return fmt.Errorf("checkpoint: git update-ref -d %s: %w", ref, err)
 	}
 	return nil
+}
+
+// HasCodeChanges 检查工作区是否有未提交的代码变更。
+// 使用 git diff --quiet HEAD -- . 检测，退出码 1 表示有变更。
+// git 不可用时返回 true（保守策略）。
+func (r *ShadowRepo) HasCodeChanges(ctx context.Context) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if !r.gitAvailable {
+		return true
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, gitCommandTimeout)
+	defer cancel()
+
+	cmd := r.buildGitCommand(ctx, "diff", "--quiet", "HEAD", "--", ".")
+	if err := cmd.Run(); err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			return exitErr.ExitCode() == 1
+		}
+		return true
+	}
+	return false
 }
 
 // HealthCheck 验证 bare 仓库存在且可执行 git 操作。

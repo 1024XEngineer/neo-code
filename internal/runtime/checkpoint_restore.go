@@ -111,7 +111,7 @@ func (s *Service) RestoreCheckpoint(ctx context.Context, input GatewayRestoreInp
 	allRecords, listErr := s.checkpointStore.ListCheckpoints(ctx, sessionID, checkpoint.ListCheckpointOpts{})
 	if listErr == nil {
 		for _, r := range allRecords {
-			if r.CreatedAt.After(record.CreatedAt) && r.Status == agentsession.CheckpointStatusAvailable {
+			if r.CreatedAt.After(record.CreatedAt) && r.Status == agentsession.CheckpointStatusAvailable && r.Reason != agentsession.CheckpointReasonGuard {
 				markRestoredIDs = append(markRestoredIDs, r.CheckpointID)
 			}
 		}
@@ -157,7 +157,7 @@ func (s *Service) UndoRestoreCheckpoint(ctx context.Context, sessionID string) (
 
 	// Find latest guard checkpoint
 	records, err := s.checkpointStore.ListCheckpoints(ctx, sessionID, checkpoint.ListCheckpointOpts{
-		Limit:          1,
+		Limit:          20,
 		RestorableOnly: true,
 	})
 	if err != nil {
@@ -257,6 +257,14 @@ func (s *Service) resolveCommitHashForRef(ctx context.Context, ref string) (stri
 	}
 	// Use the shadow repo's existing git infrastructure
 	return s.shadowRepo.ResolveRef(ctx, ref)
+}
+
+// ListCheckpoints 查询指定会话的 checkpoint 列表。
+func (s *Service) ListCheckpoints(ctx context.Context, sessionID string, opts checkpoint.ListCheckpointOpts) ([]agentsession.CheckpointRecord, error) {
+	if s.checkpointStore == nil {
+		return nil, fmt.Errorf("checkpoint: store not available")
+	}
+	return s.checkpointStore.ListCheckpoints(ctx, sessionID, opts)
 }
 
 // updateRuntimeSessionAfterRestore 在 restore 后更新运行时会话状态。

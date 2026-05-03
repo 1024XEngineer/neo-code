@@ -189,6 +189,14 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 		if err := s.setBaseRunState(ctx, &state, baseRunStateForPlanningStage(stage)); err != nil {
 			return s.handleRunError(err)
 		}
+		if s.checkpointStore != nil {
+			if cpErr := s.createPerTurnCheckpoint(ctx, &state); cpErr != nil {
+				s.emitRunScoped(ctx, EventCheckpointWarning, &state, CheckpointWarningPayload{
+					Error: cpErr.Error(),
+					Phase: "per_turn",
+				})
+			}
+		}
 
 	turnAttempt:
 		for {
@@ -479,14 +487,7 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 
 			beforeTask := state.session.TaskState.Clone()
 			beforeTodos := cloneTodosForPersistence(state.session.Todos)
-			if s.checkpointStore != nil && toolCallsContainWorkspaceWrite(turnOutput.assistant.ToolCalls) {
-				if cpErr := s.createPreWriteCheckpoint(ctx, &state); cpErr != nil {
-					s.emitRunScoped(ctx, EventCheckpointWarning, &state, CheckpointWarningPayload{
-						Error: cpErr.Error(),
-						Phase: "pre_write",
-					})
-				}
-			}
+
 			if err := s.setBaseRunState(ctx, &state, controlplane.RunStateExecute); err != nil {
 				return s.handleRunError(err)
 			}
