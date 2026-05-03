@@ -57,6 +57,13 @@ type RequiredInput struct {
 	Details map[string]any `json:"details,omitempty"`
 }
 
+// HookGuardSignal 描述 before_completion_decision user/repo hook 产生的守卫信号。
+type HookGuardSignal struct {
+	HookID  string `json:"hook_id,omitempty"`
+	Source  string `json:"source,omitempty"`
+	Message string `json:"message,omitempty"`
+}
+
 // TaskIntent 描述由用户文本推断出的弱意图线索。
 type TaskIntent struct {
 	Hint       TaskKind `json:"hint,omitempty"`
@@ -122,4 +129,6 @@ type DecisionInput struct {
 	CompletionPassed   bool
 	CompletionReason   string
 	NoProgressExceeded bool
+	HookAnnotations    []string
+	HookGuards         []HookGuardSignal
 }

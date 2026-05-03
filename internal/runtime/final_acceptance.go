@@ -25,6 +25,7 @@ func (s *Service) beforeAcceptFinal(
 	snapshot TurnBudgetSnapshot,
 	assistant providertypes.Message,
 	completionPassed bool,
+	signals beforeCompletionHookSignals,
 ) (acceptance.AcceptanceDecision, error) {
 	if state == nil {
 		return acceptance.AcceptanceDecision{}, nil
@@ -42,7 +43,14 @@ func (s *Service) beforeAcceptFinal(
 		noProgressStreak = state.noToolAfterFinalContinueStreak
 	}
 
-	deciderDecision := s.evaluateFinalDecision(state, assistant, completionPassed, noProgressStreak, maxNoProgress)
+	deciderDecision := s.evaluateFinalDecision(
+		state,
+		assistant,
+		completionPassed,
+		noProgressStreak,
+		maxNoProgress,
+		signals,
+	)
 	state.mu.Lock()
 	state.lastDeciderDecision = deciderDecision
 	pendingFinalProgress := state.pendingFinalProgress
@@ -67,6 +75,7 @@ func (s *Service) evaluateFinalDecision(
 	completionPassed bool,
 	noProgressStreak int,
 	maxNoProgress int,
+	signals beforeCompletionHookSignals,
 ) decider.Decision {
 	if state == nil {
 		return decider.Decision{
@@ -122,6 +131,8 @@ func (s *Service) evaluateFinalDecision(
 		CompletionPassed:   completionPassed,
 		CompletionReason:   completionReason,
 		NoProgressExceeded: noProgressStreak >= maxNoProgress,
+		HookAnnotations:    append([]string(nil), signals.Annotations...),
+		HookGuards:         append([]decider.HookGuardSignal(nil), signals.Guards...),
 	})
 }
 
