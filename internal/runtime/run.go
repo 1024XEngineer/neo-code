@@ -354,7 +354,31 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 							return s.handleRunError(err)
 						}
 						s.emitRunScoped(ctx, EventAgentDone, &state, planMessage)
-						return nil
+
+						// 等待用户审批计划
+						approved, requestID, err := s.awaitPlanApproval(ctx, state.runID, state.session.ID, nextPlan)
+						if err != nil || !approved {
+							s.emitRunScoped(ctx, EventPlanApprovalResolved, &state, PlanApprovalResolvedPayload{
+								RequestID: requestID,
+								PlanID:    nextPlan.ID,
+								Approved:  false,
+							})
+							return nil
+						}
+
+						// 用户批准：确认计划、切换到 build 模式，继续运行循环
+						s.emitRunScoped(ctx, EventPlanApprovalResolved, &state, PlanApprovalResolvedPayload{
+							RequestID: requestID,
+							PlanID:    nextPlan.ID,
+							Approved:  true,
+						})
+						approveCurrentPlan(&state.session, nextPlan.ID, nextPlan.Revision)
+						state.session.AgentMode = agentsession.AgentModeBuild
+						state.planningEnabled = true
+						if err := s.sessionStore.UpdateSessionState(ctx, sessionStateInputFromSession(state.session)); err != nil {
+							return s.handleRunError(err)
+						}
+						continue
 					}
 				}
 				completionSignaled, err := maybeParseCompletionTurnOutput(turnOutput.assistant)

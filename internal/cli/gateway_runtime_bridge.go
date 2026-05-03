@@ -347,6 +347,17 @@ func (b *gatewayRuntimePortBridge) ResolvePermission(ctx context.Context, input 
 	})
 }
 
+// ResolvePlanApproval 将网关计划审批决策转换为 runtime 审批输入并提交。
+func (b *gatewayRuntimePortBridge) ResolvePlanApproval(ctx context.Context, input gateway.PlanApprovalResolutionInput) error {
+	if err := b.ensureRuntimeAccess(input.SubjectID); err != nil {
+		return err
+	}
+	return b.runtime.ResolvePlanApproval(ctx, agentruntime.ResolvePlanApprovalInput{
+		RequestID: strings.TrimSpace(input.RequestID),
+		Approved:  strings.EqualFold(strings.TrimSpace(input.Decision), "approve"),
+	})
+}
+
 // CancelRun 转发 gateway.cancel 请求到 runtime 的 run_id 精确取消能力。
 func (b *gatewayRuntimePortBridge) CancelRun(_ context.Context, input gateway.CancelInput) (bool, error) {
 	if err := b.ensureRuntimeAccess(input.SubjectID); err != nil {

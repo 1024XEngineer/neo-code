@@ -41,6 +41,7 @@ export const Method = {
   SwitchWorkspace: 'gateway.switchWorkspace',
   RenameWorkspace: 'gateway.renameWorkspace',
   DeleteWorkspace: 'gateway.deleteWorkspace',
+  ResolvePlanApproval: 'gateway.resolvePlanApproval',
 } as const
 
 // 帧类型
@@ -98,12 +99,20 @@ export const EventType = {
   VerificationCompleted: 'verification_completed',
   VerificationFailed: 'verification_failed',
   AcceptanceDecided: 'acceptance_decided',
+  PlanApprovalRequested: 'plan_approval_requested',
+  PlanApprovalResolved: 'plan_approval_resolved',
 } as const
 
 // 权限审批决策
 export const PermissionDecision = {
   AllowOnce: 'allow_once',
   AllowSession: 'allow_session',
+  Reject: 'reject',
+} as const
+
+// 计划审批决策
+export const PlanApprovalDecision = {
+  Approve: 'approve',
   Reject: 'reject',
 } as const
 
@@ -212,6 +221,12 @@ export interface LoadSessionParams {
 
 /** gateway.resolvePermission 参数 */
 export interface ResolvePermissionParams {
+  request_id: string
+  decision: string
+}
+
+/** gateway.resolvePlanApproval 参数 */
+export interface ResolvePlanApprovalParams {
   request_id: string
   decision: string
 }
@@ -536,6 +551,14 @@ export interface PermissionRequestPayload {
   decision: string
   reason: string
   rule_id?: string
+}
+
+/** 计划审批请求载荷 */
+export interface PlanApprovalRequestPayload {
+  request_id: string
+  plan_id: string
+  revision: number
+  summary: string
 }
 
 /** 工作区记录 */

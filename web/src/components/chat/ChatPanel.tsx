@@ -3,7 +3,7 @@ import { useUIStore } from '@/stores/useUIStore'
 import { useSessionStore } from '@/stores/useSessionStore'
 import { useChatStore } from '@/stores/useChatStore'
 import { useGatewayAPI } from '@/context/RuntimeProvider'
-import { PermissionDecision } from '@/api/protocol'
+import { PermissionDecision, PlanApprovalDecision } from '@/api/protocol'
 import MessageList from './MessageList'
 import ChatInput from './ChatInput'
 import ModelSelector from './ModelSelector'
@@ -33,10 +33,12 @@ export default function ChatPanel() {
 
   const permissionRequests = useChatStore((s) => s.permissionRequests)
   const currentPermission = permissionRequests[0]
+  const planApprovalRequest = useChatStore((s) => s.planApprovalRequest)
 
   const [editingTitle, setEditingTitle] = useState(false)
   const [moreMenuOpen, setMoreMenuOpen] = useState(false)
   const [isResolvingPermission, setIsResolvingPermission] = useState(false)
+  const [isResolvingPlanApproval, setIsResolvingPlanApproval] = useState(false)
   const titleRef = useRef<HTMLDivElement>(null)
   const moreMenuRef = useRef<HTMLDivElement>(null)
 
@@ -59,6 +61,27 @@ export default function ChatPanel() {
       console.error('Resolve permission failed:', err)
     } finally {
       setIsResolvingPermission(false)
+    }
+  }
+
+  async function handlePlanApprovalDecision(decision: string) {
+    if (!gatewayAPI || !planApprovalRequest || isResolvingPlanApproval) return
+    setIsResolvingPlanApproval(true)
+    try {
+      await gatewayAPI.resolvePlanApproval({
+        request_id: planApprovalRequest.request_id,
+        decision,
+      })
+      if (decision === PlanApprovalDecision.Approve) {
+        useChatStore.getState().setAgentMode('build')
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : '处理计划审批失败'
+      useUIStore.getState().showToast(message, 'error')
+      console.error('Resolve plan approval failed:', err)
+    } finally {
+      setIsResolvingPlanApproval(false)
+      useChatStore.getState().clearPlanApprovalRequest()
     }
   }
 
@@ -184,8 +207,37 @@ export default function ChatPanel() {
         <MessageList />
       </div>
 
-      {/* Input or Permission Request */}
-      {currentPermission ? (
+      {/* Input, Plan Approval, or Permission Request */}
+      {planApprovalRequest ? (
+        <div style={planApprovalStyles.container}>
+          <div style={planApprovalStyles.card}>
+            <div style={planApprovalStyles.header}>
+              <Check size={16} style={{ color: 'var(--color-accent)' }} />
+              <span style={planApprovalStyles.headerTitle}>计划已生成</span>
+            </div>
+            <div style={planApprovalStyles.summary}>
+              {planApprovalRequest.summary || '（暂无摘要）'}
+            </div>
+            <div style={planApprovalStyles.prompt}>是否执行此计划？</div>
+            <div style={planApprovalStyles.buttons}>
+              <button
+                onClick={() => handlePlanApprovalDecision(PlanApprovalDecision.Reject)}
+                disabled={isResolvingPlanApproval}
+                style={{ ...planApprovalStyles.btn, ...planApprovalStyles.btnReject, opacity: isResolvingPlanApproval ? 0.6 : 1, cursor: isResolvingPlanApproval ? 'not-allowed' : 'pointer' }}
+              >
+                <X size={13} /> 暂不执行
+              </button>
+              <button
+                onClick={() => handlePlanApprovalDecision(PlanApprovalDecision.Approve)}
+                disabled={isResolvingPlanApproval}
+                style={{ ...planApprovalStyles.btn, ...planApprovalStyles.btnPrimary, opacity: isResolvingPlanApproval ? 0.6 : 1, cursor: isResolvingPlanApproval ? 'not-allowed' : 'pointer' }}
+              >
+                <Check size={13} /> 执行计划
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : currentPermission ? (
         <div style={permissionStyles.container}>
           <div style={permissionStyles.card}>
             <div style={permissionStyles.header}>
@@ -457,5 +509,71 @@ const permissionStyles: Record<string, React.CSSProperties> = {
   btnSecondary: {
     background: 'var(--bg-active)',
     color: 'var(--text-primary)',
+  },
+}
+
+const planApprovalStyles: Record<string, React.CSSProperties> = {
+  container: {
+    padding: '8px 12px 12px',
+    borderTop: '1px solid var(--border-primary)',
+    background: 'var(--bg-primary)',
+  },
+  card: {
+    border: '1px solid var(--color-accent)',
+    borderRadius: 'var(--radius-md)',
+    padding: 12,
+    background: 'var(--bg-tertiary)',
+  },
+  header: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 8,
+  },
+  headerTitle: {
+    fontSize: 13,
+    fontWeight: 600,
+    fontFamily: 'var(--font-ui)',
+    color: 'var(--text-primary)',
+  },
+  summary: {
+    fontSize: 12,
+    fontFamily: 'var(--font-ui)',
+    color: 'var(--text-secondary)',
+    marginBottom: 8,
+    lineHeight: 1.5,
+  },
+  prompt: {
+    fontSize: 12,
+    fontFamily: 'var(--font-ui)',
+    color: 'var(--text-primary)',
+    marginBottom: 10,
+  },
+  buttons: {
+    display: 'flex',
+    justifyContent: 'flex-end',
+    gap: 8,
+  },
+  btn: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    padding: '7px 14px',
+    borderRadius: 'var(--radius-md)',
+    fontSize: 12,
+    fontFamily: 'var(--font-ui)',
+    cursor: 'pointer',
+    transition: 'all 0.15s',
+    border: '1px solid var(--border-primary)',
+  },
+  btnReject: {
+    background: 'var(--bg-tertiary)',
+    color: 'var(--text-primary)',
+  },
+  btnPrimary: {
+    background: 'var(--accent)',
+    color: '#fff',
+    border: 'none',
   },
 }

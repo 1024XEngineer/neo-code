@@ -43,6 +43,18 @@ type PermissionResolutionInput struct {
 	Decision PermissionResolutionDecision `json:"decision"`
 }
 
+// PlanApprovalResolutionInput 表示一次计划审批决策输入。
+type PlanApprovalResolutionInput struct {
+	// SubjectID 是请求方身份主体标识。
+	SubjectID string `json:"subject_id,omitempty"`
+	// RequestID 是待审批请求标识。
+	RequestID string `json:"request_id"`
+	// Decision 是审批决策值（approve / reject）。
+	Decision string `json:"decision"`
+	// SessionID 是会话标识。
+	SessionID string `json:"session_id,omitempty"`
+}
+
 // RunInput 表示网关向下游运行端口发起 run 动作时的输入。
 type RunInput struct {
 	// SubjectID 是请求方身份主体标识。
@@ -652,6 +664,8 @@ type RuntimePort interface {
 	ListAvailableSkills(ctx context.Context, input ListAvailableSkillsInput) ([]AvailableSkillState, error)
 	// ResolvePermission 向运行时提交一次权限审批决策。
 	ResolvePermission(ctx context.Context, input PermissionResolutionInput) error
+	// ResolvePlanApproval 向运行时提交一次计划审批决策。
+	ResolvePlanApproval(ctx context.Context, input PlanApprovalResolutionInput) error
 	// CancelRun 按 run_id 精确取消运行态任务。
 	CancelRun(ctx context.Context, input CancelInput) (bool, error)
 	// Events 返回统一运行事件流。

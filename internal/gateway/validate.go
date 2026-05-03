@@ -155,6 +155,30 @@ func decodePermissionResolutionInput(payload any) (PermissionResolutionInput, er
 	return input, nil
 }
 
+// decodePlanApprovalResolutionInput 从原始 payload 解析计划审批决策输入。
+func decodePlanApprovalResolutionInput(payload any) (PlanApprovalResolutionInput, error) {
+	if direct, ok := payload.(PlanApprovalResolutionInput); ok {
+		return direct, nil
+	}
+	if ptr, ok := payload.(*PlanApprovalResolutionInput); ok {
+		if ptr == nil {
+			return PlanApprovalResolutionInput{}, errors.New("plan approval payload is nil")
+		}
+		return *ptr, nil
+	}
+
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return PlanApprovalResolutionInput{}, err
+	}
+
+	var input PlanApprovalResolutionInput
+	if err := json.Unmarshal(raw, &input); err != nil {
+		return PlanApprovalResolutionInput{}, err
+	}
+	return input, nil
+}
+
 // decodeRenameSessionPayload 解析 renameSession 的负载参数。
 func decodeRenameSessionPayload(payload any) (renameSessionParams, *FrameError) {
 	switch typed := payload.(type) {

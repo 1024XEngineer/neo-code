@@ -57,6 +57,7 @@ func (r *ActionRegistry) initCore() {
 	r.core[FrameActionListSessionTodos] = handleListSessionTodosFrame
 	r.core[FrameActionGetRuntimeSnapshot] = handleGetRuntimeSnapshotFrame
 	r.core[FrameActionResolvePermission] = handleResolvePermissionFrame
+	r.core[FrameActionResolvePlanApproval] = handleResolvePlanApprovalFrame
 	r.core[FrameActionDeleteSession] = handleDeleteSessionFrame
 	r.core[FrameActionRenameSession] = handleRenameSessionFrame
 	r.core[FrameActionListFiles] = handleListFilesFrame

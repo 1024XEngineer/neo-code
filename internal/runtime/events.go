@@ -428,6 +428,10 @@ const (
 	EventCheckpointUndoRestore EventType = "checkpoint_undo_restore"
 	// EventBashSideEffect 表示 bash 命令在 workdir 内产生了文件变更。
 	EventBashSideEffect EventType = "bash_side_effect"
+	// EventPlanApprovalRequested 表示计划审核请求已发出，等待用户决定是否执行。
+	EventPlanApprovalRequested EventType = "plan_approval_requested"
+	// EventPlanApprovalResolved 表示计划审核已决议。
+	EventPlanApprovalResolved EventType = "plan_approval_resolved"
 )
 
 // TokenUsagePayload 承载单轮 token 用量统计。
@@ -501,4 +505,19 @@ type BashSideEffectPayload struct {
 	Changes                   []FileChange `json:"changes"`
 	PreemptivelyCapturedPaths []string     `json:"preemptively_captured_paths,omitempty"`
 	UncoveredPaths            []string     `json:"uncovered_paths,omitempty"`
+}
+
+// PlanApprovalRequestPayload 描述计划审批请求内容。
+type PlanApprovalRequestPayload struct {
+	RequestID string `json:"request_id"`
+	PlanID    string `json:"plan_id"`
+	Revision  int    `json:"revision"`
+	Summary   string `json:"summary"`
+}
+
+// PlanApprovalResolvedPayload 描述计划审批决议结果。
+type PlanApprovalResolvedPayload struct {
+	RequestID string `json:"request_id"`
+	PlanID    string `json:"plan_id"`
+	Approved  bool   `json:"approved"`
 }

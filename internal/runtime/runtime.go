@@ -39,6 +39,7 @@ type Runtime interface {
 	Compact(ctx context.Context, input CompactInput) (CompactResult, error)
 	ExecuteSystemTool(ctx context.Context, input SystemToolInput) (tools.ToolResult, error)
 	ResolvePermission(ctx context.Context, input PermissionResolutionInput) error
+	ResolvePlanApproval(ctx context.Context, input ResolvePlanApprovalInput) error
 	CancelActiveRun() bool
 	Events() <-chan RuntimeEvent
 	ListSessions(ctx context.Context) ([]agentsession.Summary, error)
@@ -52,6 +53,11 @@ type Runtime interface {
 // PlanApprover 定义显式批准当前完整计划 revision 的可选 runtime 能力。
 type PlanApprover interface {
 	ApproveCurrentPlan(ctx context.Context, input ApproveCurrentPlanInput) error
+}
+
+// PlanApprovalResolver 定义处理计划审批决策（批准/拒绝）的 runtime 能力。
+type PlanApprovalResolver interface {
+	ResolvePlanApproval(ctx context.Context, input ResolvePlanApprovalInput) error
 }
 
 // UserInput 描述一次用户输入请求的最小运行参数。
@@ -102,6 +108,15 @@ type ApproveCurrentPlanInput struct {
 	SessionID string
 	PlanID    string
 	Revision  int
+}
+
+// ResolvePlanApprovalInput 描述一次计划审批决策（批准/拒绝）的输入。
+type ResolvePlanApprovalInput struct {
+	SessionID string
+	RequestID string
+	PlanID    string
+	Revision  int
+	Approved  bool
 }
 
 // UserInputPreparer 定义 runtime 输入归一化能力：会话绑定、附件持久化与 parts 组装。

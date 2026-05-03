@@ -1,4 +1,4 @@
-import { EventType, type MessageFrame, type TokenUsage, type PermissionRequestPayload } from '@/api/protocol'
+import { EventType, type MessageFrame, type TokenUsage, type PermissionRequestPayload, type PlanApprovalRequestPayload } from '@/api/protocol'
 import { type GatewayAPI } from '@/api/gateway'
 import { useChatStore } from '@/stores/useChatStore'
 import { useUIStore } from '@/stores/useUIStore'
@@ -137,6 +137,17 @@ export function handleGatewayEvent(frame: MessageFrame, gatewayAPI: GatewayAPI) 
       const r = eventPayload as Record<string, unknown> | undefined
       const requestId = strField(r, 'request_id') || strField(r, 'RequestID')
       if (requestId) useChatStore.getState().removePermissionRequest(requestId)
+      break
+    }
+
+    case EventType.PlanApprovalRequested: {
+      const payload = eventPayload as PlanApprovalRequestPayload
+      if (payload?.request_id) useChatStore.getState().setPlanApprovalRequest(payload)
+      break
+    }
+
+    case EventType.PlanApprovalResolved: {
+      useChatStore.getState().clearPlanApprovalRequest()
       break
     }
 

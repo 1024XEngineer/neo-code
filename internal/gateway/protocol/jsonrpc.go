@@ -77,6 +77,8 @@ const (
 	MethodGatewayDeleteMCPServer = "gateway.deleteMCPServer"
 	// MethodGatewayEvent 表示网关向客户端推送运行时事件的通知方法。
 	MethodGatewayEvent = "gateway.event"
+	// MethodGatewayResolvePlanApproval 表示提交计划审批决策。
+	MethodGatewayResolvePlanApproval = "gateway.resolvePlanApproval"
 	// MethodWakeOpenURL 表示 URL Scheme 唤醒方法。
 	MethodWakeOpenURL = "wake.openUrl"
 		MethodGatewayListWorkspaces  = "gateway.listWorkspaces"
@@ -269,6 +271,12 @@ type GetRuntimeSnapshotParams struct {
 type ResolvePermissionParams struct {
 	RequestID string `json:"request_id"`
 	Decision  string `json:"decision"`
+}
+
+// ResolvePlanApprovalParams 表示 gateway.resolvePlanApproval 参数。
+type ResolvePlanApprovalParams struct {
+	RequestID string `json:"request_id"`
+	Decision  string `json:"decision"` // "approve" | "reject"
 }
 
 // DeleteSessionParams 表示 gateway.deleteSession 参数。
@@ -581,6 +589,14 @@ func NormalizeJSONRPCRequest(request JSONRPCRequest) (NormalizedRequest, *JSONRP
 			return normalized, parseErr
 		}
 		normalized.Action = "resolve_permission"
+		normalized.Payload = params
+		return normalized, nil
+	case MethodGatewayResolvePlanApproval:
+		params, parseErr := decodeResolvePlanApprovalParams(request.Params)
+		if parseErr != nil {
+			return normalized, parseErr
+		}
+		normalized.Action = "resolve_plan_approval"
 		normalized.Payload = params
 		return normalized, nil
 	case MethodGatewayDeleteSession:
@@ -1122,6 +1138,23 @@ func decodeResolvePermissionParams(raw json.RawMessage) (ResolvePermissionParams
 		}
 		switch p.Decision {
 		case "allow_once", "allow_session", "reject":
+		default:
+			return NewJSONRPCError(JSONRPCCodeInvalidParams, "invalid field: params.decision", GatewayCodeInvalidAction)
+		}
+		return nil
+	})
+}
+
+// decodeResolvePlanApprovalParams 对 gateway.resolvePlanApproval 的 params 执行反序列化与决策校验。
+func decodeResolvePlanApprovalParams(raw json.RawMessage) (ResolvePlanApprovalParams, *JSONRPCError) {
+	return decodeParams(raw, "gateway.resolvePlanApproval", func(p *ResolvePlanApprovalParams) *JSONRPCError {
+		p.RequestID = strings.TrimSpace(p.RequestID)
+		p.Decision = strings.ToLower(strings.TrimSpace(p.Decision))
+		if p.RequestID == "" {
+			return NewJSONRPCError(JSONRPCCodeInvalidParams, "missing required field: params.request_id", GatewayCodeMissingRequiredField)
+		}
+		switch p.Decision {
+		case "approve", "reject":
 		default:
 			return NewJSONRPCError(JSONRPCCodeInvalidParams, "invalid field: params.decision", GatewayCodeInvalidAction)
 		}

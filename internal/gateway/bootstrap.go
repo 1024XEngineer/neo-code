@@ -1190,6 +1190,49 @@ func handleResolvePermissionFrame(ctx context.Context, frame MessageFrame, runti
 	}
 }
 
+// handleResolvePlanApprovalFrame 处理 gateway.resolvePlanApproval 请求。
+func handleResolvePlanApprovalFrame(ctx context.Context, frame MessageFrame, runtimePort RuntimePort) MessageFrame {
+	if runtimePort == nil {
+		return runtimePortUnavailableFrame(frame)
+	}
+	subjectID, subjectErr := requireAuthenticatedSubjectID(ctx)
+	if subjectErr != nil {
+		return errorFrame(frame, subjectErr)
+	}
+
+	input, err := decodePlanApprovalResolutionInput(frame.Payload)
+	if err != nil {
+		return errorFrame(frame, NewFrameError(ErrorCodeInvalidAction, "invalid resolve_plan_approval payload"))
+	}
+	input.SubjectID = subjectID
+	input.RequestID = strings.TrimSpace(input.RequestID)
+	if input.RequestID == "" {
+		return errorFrame(frame, NewMissingRequiredFieldError("payload.request_id"))
+	}
+	decision := strings.ToLower(strings.TrimSpace(input.Decision))
+	if decision != "approve" && decision != "reject" {
+		return errorFrame(frame, NewFrameError(ErrorCodeInvalidAction, "invalid resolve_plan_approval decision"))
+	}
+	input.Decision = decision
+
+	callCtx, cancel := withRuntimeOperationTimeout(ctx)
+	defer cancel()
+	if err := runtimePort.ResolvePlanApproval(callCtx, input); err != nil {
+		return runtimeCallFailedFrame(callCtx, frame, err, "resolve_plan_approval")
+	}
+
+	return MessageFrame{
+		Type:      FrameTypeAck,
+		Action:    FrameActionResolvePlanApproval,
+		RequestID: frame.RequestID,
+		Payload: map[string]any{
+			"request_id": input.RequestID,
+			"decision":   input.Decision,
+			"message":    "plan approval resolved",
+		},
+	}
+}
+
 // runtimePortUnavailableFrame 在 runtime 未注入时返回统一错误。
 func runtimePortUnavailableFrame(frame MessageFrame) MessageFrame {
 	return errorFrame(frame, NewFrameError(ErrorCodeInternalError, "runtime port is unavailable"))
