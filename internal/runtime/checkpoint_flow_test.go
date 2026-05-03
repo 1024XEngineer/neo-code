@@ -336,9 +336,16 @@ func TestRuntimeCheckpointFacadeMethods(t *testing.T) {
 		}
 	})
 
-	t.Run("update runtime session after restore is no-op", func(t *testing.T) {
-		service := &Service{}
+	t.Run("update runtime session after restore invalidates cache", func(t *testing.T) {
+		service := &Service{
+			runtimeSnapshots: map[string]RuntimeSnapshot{
+				"session-1": {SessionID: "session-1", Phase: "execute"},
+			},
+		}
 		service.updateRuntimeSessionAfterRestore("session-1", agentsession.SessionHead{}, nil)
+		if _, ok := service.runtimeSnapshots["session-1"]; ok {
+			t.Fatal("expected cached snapshot to be deleted after restore")
+		}
 	})
 }
 

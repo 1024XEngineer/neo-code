@@ -91,7 +91,15 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 	}()
 	defer func() {
 		if statePtr != nil {
-			s.updateResumeCheckpoint(runCtx, statePtr, "stopped", "completed")
+			completion := "completed"
+			if err != nil {
+				if errors.Is(err, context.Canceled) {
+					completion = "cancelled"
+				} else {
+					completion = "error"
+				}
+			}
+			s.updateResumeCheckpoint(runCtx, statePtr, "stopped", completion)
 		}
 		s.emitRunTermination(runCtx, input, statePtr, err)
 	}()

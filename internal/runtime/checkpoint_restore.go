@@ -267,7 +267,14 @@ func (s *Service) ListCheckpoints(ctx context.Context, sessionID string, opts ch
 	return s.checkpointStore.ListCheckpoints(ctx, sessionID, opts)
 }
 
-// updateRuntimeSessionAfterRestore 在 restore 后更新运行时会话状态。
-// 当前实现不做运行时状态直接修改，依赖下次 session 加载时从 DB 读取恢复后的状态。
+// updateRuntimeSessionAfterRestore 使运行时快照缓存失效。
+// GetRuntimeSnapshot 会从 DB 重新加载恢复后的状态，而非返回旧缓存。
 func (s *Service) updateRuntimeSessionAfterRestore(sessionID string, head agentsession.SessionHead, messages []providertypes.Message) {
+	normalized := strings.TrimSpace(sessionID)
+	if normalized == "" {
+		return
+	}
+	s.runtimeSnapshotMu.Lock()
+	delete(s.runtimeSnapshots, normalized)
+	s.runtimeSnapshotMu.Unlock()
 }

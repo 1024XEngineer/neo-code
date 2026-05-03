@@ -202,8 +202,8 @@ func (r *ShadowRepo) DeleteRef(ctx context.Context, ref string) error {
 	return nil
 }
 
-// HasCodeChanges 检查工作区是否有未提交的代码变更。
-// 使用 git diff --quiet HEAD -- . 检测，退出码 1 表示有变更。
+// HasCodeChanges 检查工作区是否有未提交的代码变更，包括未跟踪文件。
+// 先用 git diff --quiet HEAD -- . 检测已跟踪文件变更，再用 ls-files 检测未跟踪文件。
 // git 不可用时返回 true（保守策略）。
 func (r *ShadowRepo) HasCodeChanges(ctx context.Context) bool {
 	r.mu.Lock()
@@ -213,17 +213,27 @@ func (r *ShadowRepo) HasCodeChanges(ctx context.Context) bool {
 		return true
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, gitCommandTimeout)
-	defer cancel()
-
-	cmd := r.buildGitCommand(ctx, "diff", "--quiet", "HEAD", "--", ".")
+	// 检测已跟踪文件变更
+	diffCtx, diffCancel := context.WithTimeout(ctx, gitCommandTimeout)
+	defer diffCancel()
+	cmd := r.buildGitCommand(diffCtx, "diff", "--quiet", "HEAD", "--", ".")
 	if err := cmd.Run(); err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
-			return exitErr.ExitCode() == 1
+			if exitErr.ExitCode() == 1 {
+				return true
+			}
 		}
 		return true
 	}
-	return false
+
+	// 检测未跟踪文件（排除 .gitignore 忽略的文件）
+	lsCtx, lsCancel := context.WithTimeout(ctx, gitCommandTimeout)
+	defer lsCancel()
+	out, err := r.gitOutput(lsCtx, "ls-files", "--others", "--exclude-standard")
+	if err != nil {
+		return true
+	}
+	return strings.TrimSpace(out) != ""
 }
 
 // HealthCheck 验证 bare 仓库存在且可执行 git 操作。
