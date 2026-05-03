@@ -124,17 +124,80 @@ neocode --workdir /path/to/your/project
 /skill off <id>       停用 skill
 ```
 
-### 5. 终端诊断（Manual）
+### 5. CLI 路由速查
+
+#### Provider 管理
+
+用于新增、查看、删除自定义 provider，变更会落在 `~/.neocode/providers/`。
 
 ```bash
-# 进入代理 shell（Phase1 仅支持 Unix）
-neocode shell
+# 新增自定义 provider（要求先设置好 --api-key-env 指向的环境变量）
+neocode provider add <name> --driver <driver> --url <url> --api-key-env <env> [--discovery-endpoint <path>]
 
-# 在代理 shell 内触发诊断（默认读取 NEOCODE_DIAG_SOCKET）
-neocode diag
+# 示例
+export MOCK_KEY="sk-xxx"
+neocode provider add my-openai --driver openaicompat --url https://api.openai.com/v1 --api-key-env MOCK_KEY --discovery-endpoint /v1/models
+
+# 列出所有 provider
+neocode provider ls
+
+# 删除自定义 provider
+neocode provider rm my-openai
 ```
 
-### 6. url scheme使用
+#### Model 选择
+
+用于查看当前 provider 的模型候选，并切换到指定模型。
+
+```bash
+# 列出当前 provider 可用模型（优先本地快照，必要时触发一次同步发现）
+neocode model ls
+
+# 切换当前模型（会校验模型是否属于当前 provider）
+neocode model set <model-id>
+
+# 示例
+neocode model set gpt-4.1
+```
+
+#### Provider + Model 一步切换
+
+用于切换 provider，并可通过 `--model` 覆盖自动选择的模型。
+
+```bash
+# 仅切换 provider（自动修正到可用模型）
+neocode use <provider>
+
+# 切换 provider 并指定模型（会做模型归属校验）
+neocode use <provider> --model <model-id>
+
+# 示例
+neocode use openai --model gpt-4.1
+```
+
+### 6. Shell 诊断代理
+
+用于进入代理 shell、初始化 shell integration、手动触发诊断和控制自动诊断模式。
+
+```bash
+# 进入代理 shell（当前仅支持 Unix-like）
+neocode shell
+
+# 输出 shell integration 脚本（支持写法：--init <shell>）
+neocode shell --init bash
+neocode shell --init zsh
+
+# 触发一次手动诊断（两种写法等价）
+neocode diag
+neocode diag diagnose
+
+# 自动诊断开关与状态查询
+neocode diag auto on
+neocode diag auto off
+neocode diag auto status
+```
+
+### 7. url scheme使用
 详细指南链接： [HTTP URL 唤醒使用指南（用户故事版）](https://neocode-docs.pages.dev/guide/http-daemon-wake-user-guide)
 
 ```bash
