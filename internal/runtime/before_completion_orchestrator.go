@@ -4,6 +4,8 @@ import (
 	"context"
 	"strings"
 
+	providertypes "neo-code/internal/provider/types"
+	"neo-code/internal/runtime/acceptance"
 	"neo-code/internal/runtime/decider"
 	runtimehooks "neo-code/internal/runtime/hooks"
 )
@@ -14,18 +16,20 @@ type beforeCompletionHookSignals struct {
 	Guards      []decider.HookGuardSignal
 }
 
-// runBeforeCompletionDecisionOrchestrator 执行 before_completion_decision 专用编排：
-// 1) 先执行 user/repo hooks 收集 signal；2) 再执行 internal hooks；3) 仅返回信号，不直接裁决终态。
-func (s *Service) runBeforeCompletionDecisionOrchestrator(
+// runBeforeCompletionDecisionAcceptance 执行 before_completion_decision 专用编排：
+// 1) 先执行 user/repo hooks 收集 signal；2) 再执行 internal hooks；3) 由 internal acceptance hook 产出唯一裁决。
+func (s *Service) runBeforeCompletionDecisionAcceptance(
 	ctx context.Context,
 	state *runState,
+	snapshot TurnBudgetSnapshot,
+	assistant providertypes.Message,
 	workdir string,
 	completionPassed bool,
 	hasToolCalls bool,
 	assistantRole string,
-) beforeCompletionHookSignals {
-	if s == nil || s.hookExecutor == nil {
-		return beforeCompletionHookSignals{}
+) (acceptance.AcceptanceDecision, error) {
+	if s == nil {
+		return acceptance.AcceptanceDecision{}, nil
 	}
 
 	point := runtimehooks.HookPointBeforeCompletionDecision
@@ -47,32 +51,39 @@ func (s *Service) runBeforeCompletionDecisionOrchestrator(
 		Phase:     hookPhaseFromState(state),
 	})
 
-	baseExecutor, userExecutor, repoExecutor := splitHookExecutors(s.hookExecutor)
 	signals := beforeCompletionHookSignals{}
+	if s.hookExecutor != nil {
+		baseExecutor, userExecutor, repoExecutor := splitHookExecutors(s.hookExecutor)
 
-	for _, item := range []struct {
-		executor HookExecutor
-		source   runtimehooks.HookSource
-	}{
-		{executor: userExecutor, source: runtimehooks.HookSourceUser},
-		{executor: repoExecutor, source: runtimehooks.HookSourceRepo},
-	} {
-		if item.executor == nil {
-			continue
+		for _, item := range []struct {
+			executor HookExecutor
+			source   runtimehooks.HookSource
+		}{
+			{executor: userExecutor, source: runtimehooks.HookSourceUser},
+			{executor: repoExecutor, source: runtimehooks.HookSourceRepo},
+		} {
+			if item.executor == nil {
+				continue
+			}
+			output := item.executor.Run(scopedCtx, point, hookInput.Clone())
+			annotations, guards := collectBeforeCompletionSignals(output, item.source)
+			signals.Annotations = append(signals.Annotations, annotations...)
+			signals.Guards = append(signals.Guards, guards...)
+			s.recordUserHookAnnotations(state, output)
 		}
-		output := item.executor.Run(scopedCtx, point, hookInput.Clone())
-		annotations, guards := collectBeforeCompletionSignals(output, item.source)
-		signals.Annotations = append(signals.Annotations, annotations...)
-		signals.Guards = append(signals.Guards, guards...)
-		s.recordUserHookAnnotations(state, output)
-	}
 
-	// internal hooks 在该点位最后执行；其结果仅用于观测，不参与 user/repo signal 收集。
-	if baseExecutor != nil {
-		output := baseExecutor.Run(scopedCtx, point, hookInput.Clone())
-		s.recordUserHookAnnotations(state, output)
+		// internal hooks 在该点位最后执行；其结果仅用于观测，不参与 user/repo signal 收集。
+		if baseExecutor != nil {
+			output := baseExecutor.Run(scopedCtx, point, hookInput.Clone())
+			s.recordUserHookAnnotations(state, output)
+		}
 	}
-	return signals
+	s.emitRunScopedOptional(EventVerificationStarted, state, VerificationStartedPayload{
+		CompletionPassed:        completionPassed,
+		CompletionBlockedReason: strings.TrimSpace(string(state.completion.CompletionBlockedReason)),
+	})
+	// internal acceptance hook：消费 completion/facts/todo/verification/user-repo signals，生成唯一终态裁决。
+	return s.beforeAcceptFinal(ctx, state, snapshot, assistant, completionPassed, signals)
 }
 
 // buildRunHookContext 构造带 run/session 元数据的 hook 输入。
@@ -131,13 +142,7 @@ func collectBeforeCompletionSignals(
 			annotations = append(annotations, message)
 		}
 
-		isGuard := result.Status == runtimehooks.HookResultFailed
-		if !isGuard && strings.Contains(strings.ToLower(errText), "block downgraded") {
-			isGuard = true
-		}
-		if !isGuard && strings.Contains(strings.ToLower(message), "block downgraded") {
-			isGuard = true
-		}
+		isGuard := result.Status == runtimehooks.HookResultFailed || result.Metadata.GuardSignal
 		if !isGuard {
 			continue
 		}

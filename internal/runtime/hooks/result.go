@@ -30,9 +30,12 @@ type HookResult struct {
 
 // HookResultMetadata 描述 hook 执行结果的结构化附加信息。
 type HookResultMetadata struct {
-	Rewake        bool
-	RewakeReason  string
-	RewakeSummary string
+	Rewake          bool
+	RewakeReason    string
+	RewakeSummary   string
+	OriginalStatus  string
+	BlockDowngraded bool
+	GuardSignal     bool
 }
 
 // RunOutput 是一次点位执行的聚合结果。
