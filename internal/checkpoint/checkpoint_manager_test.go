@@ -2,8 +2,10 @@ package checkpoint
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -413,5 +415,83 @@ func TestSQLiteCheckpointStoreUsesSessionDatabasePath(t *testing.T) {
 	expected := filepath.Clean(session.DatabasePath(fixture.baseDir, fixture.workspaceRoot))
 	if filepath.Clean(fixture.checkpointStore.dbPath) != expected {
 		t.Fatalf("dbPath = %q, want %q", fixture.checkpointStore.dbPath, expected)
+	}
+}
+
+func TestSQLiteCheckpointStoreSharedDBAndHelpers(t *testing.T) {
+	t.Parallel()
+
+	fixture := newCheckpointStoreFixture(t)
+	loaded := createCheckpointTestSession(t, fixture.sessionStore, "session_shared_db", fixture.workspaceRoot)
+	db, err := fixture.checkpointStore.ensureDB(context.Background())
+	if err != nil {
+		t.Fatalf("ensureDB() error = %v", err)
+	}
+
+	shared := NewSQLiteCheckpointStoreWithDB(db)
+	if shared.ownsDB {
+		t.Fatal("shared checkpoint store should not own injected db")
+	}
+	if err := shared.Close(); err != nil {
+		t.Fatalf("Close(shared) error = %v", err)
+	}
+	if err := db.PingContext(context.Background()); err != nil {
+		t.Fatalf("db should remain open after shared Close(), got %v", err)
+	}
+	if _, err := shared.ListCheckpoints(context.Background(), loaded.ID, ListCheckpointOpts{}); err != nil {
+		t.Fatalf("shared ListCheckpoints() error = %v", err)
+	}
+
+	if got := marshalPlanField(nil); got != "" {
+		t.Fatalf("marshalPlanField(nil) = %q, want empty", got)
+	}
+	var nilPlan *session.PlanArtifact
+	if got := marshalPlanField(nilPlan); got != "" {
+		t.Fatalf("marshalPlanField(nil pointer) = %q, want empty", got)
+	}
+	if got := marshalPlanField(map[string]any{"step": "verify"}); !strings.Contains(got, `"step":"verify"`) {
+		t.Fatalf("marshalPlanField(map) = %q", got)
+	}
+	if got := marshalPlanField(func() {}); got != "" {
+		t.Fatalf("marshalPlanField(unmarshalable) = %q, want empty", got)
+	}
+	if got := marshalHeadField(func() {}); got != "null" {
+		t.Fatalf("marshalHeadField(unmarshalable) = %q, want null", got)
+	}
+}
+
+func TestSQLiteCheckpointStoreErrorsAndEmptyResults(t *testing.T) {
+	t.Parallel()
+
+	fixture := newCheckpointStoreFixture(t)
+	loaded := createCheckpointTestSession(t, fixture.sessionStore, "session_empty_resume", fixture.workspaceRoot)
+	if err := fixture.checkpointStore.UpdateCheckpointStatus(context.Background(), "missing", session.CheckpointStatusAvailable); err == nil {
+		t.Fatal("expected UpdateCheckpointStatus() to fail for missing checkpoint")
+	}
+
+	rc, err := fixture.checkpointStore.GetLatestResumeCheckpoint(context.Background(), loaded.ID)
+	if err != nil {
+		t.Fatalf("GetLatestResumeCheckpoint(missing) error = %v", err)
+	}
+	if rc != nil {
+		t.Fatalf("GetLatestResumeCheckpoint(missing) = %#v, want nil", rc)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := fixture.checkpointStore.ensureDB(context.Background()); err != nil {
+		t.Fatalf("ensureDB() error = %v", err)
+	}
+	if _, err := fixture.checkpointStore.CreateCheckpoint(ctx, CreateCheckpointInput{}); err == nil {
+		t.Fatal("expected CreateCheckpoint() to honor canceled context")
+	}
+}
+
+func TestNewSQLiteCheckpointStoreWithNilDBClose(t *testing.T) {
+	t.Parallel()
+
+	store := NewSQLiteCheckpointStoreWithDB((*sql.DB)(nil))
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close(nil db) error = %v", err)
 	}
 }
