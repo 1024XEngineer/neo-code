@@ -56,7 +56,8 @@ func TestProviderAddCommand(t *testing.T) {
 }
 
 func TestProviderLsCommand(t *testing.T) {
-	cmd := newProviderLsCommand()
+	svc := &mockSelectionService{}
+	cmd := newProviderLsCommandWithResolver(staticSelectionResolver(svc))
 	if cmd.Use != "ls" {
 		t.Fatalf("cmd.Use = %q, want %q", cmd.Use, "ls")
 	}
@@ -65,8 +66,11 @@ func TestProviderLsCommand(t *testing.T) {
 	t.Cleanup(func() { runProviderLsCommand = originalRunner })
 
 	called := false
-	runProviderLsCommand = func(c *cobra.Command) error {
+	runProviderLsCommand = func(c *cobra.Command, gotSvc SelectionService) error {
 		called = true
+		if gotSvc != svc {
+			t.Fatalf("injected service mismatch")
+		}
 		return errors.New("mock error")
 	}
 
@@ -244,26 +248,28 @@ func TestDefaultProviderLsAndRmCommandRunner(t *testing.T) {
 	cmd.SetOut(output)
 	cmd.SetContext(context.Background())
 
-	if err := config.SaveCustomProviderWithModels(workdir, config.SaveCustomProviderInput{
-		Name:                  "my-provider",
-		Driver:                "openaicompat",
-		BaseURL:               "http://mock",
-		APIKeyEnv:             "MY_PROVIDER_KEY",
-		ModelSource:           config.ModelSourceDiscover,
-		DiscoveryEndpointPath: "/v1/models",
-	}); err != nil {
-		t.Fatalf("SaveCustomProviderWithModels() error = %v", err)
+	svc := &mockSelectionService{
+		listProviderOptionsFn: func(ctx context.Context) ([]configstate.ProviderOption, error) {
+			return []configstate.ProviderOption{
+				{
+					ID:     "my-provider",
+					Name:   "my-provider",
+					Driver: "openaicompat",
+					Source: string(config.ProviderSourceCustom),
+				},
+			}, nil
+		},
 	}
 
-	if err := defaultProviderLsCommandRunner(cmd); err != nil {
+	if err := defaultProviderLsCommandRunner(cmd, svc); err != nil {
 		t.Fatalf("defaultProviderLsCommandRunner() error = %v", err)
 	}
 	if !strings.Contains(output.String(), "my-provider") {
 		t.Fatalf("output = %q, want contains my-provider", output.String())
 	}
 
-	removed := ""
-	svc := &mockSelectionService{
+	var removed string
+	svc = &mockSelectionService{
 		removeCustomProviderFn: func(ctx context.Context, name string) error {
 			removed = name
 			return nil

@@ -22,6 +22,7 @@ type SelectionService interface {
 	SelectProviderWithModel(ctx context.Context, providerName string, modelID string) (configstate.Selection, error)
 	CreateCustomProvider(ctx context.Context, input configstate.CreateCustomProviderInput) (configstate.Selection, error)
 	RemoveCustomProvider(ctx context.Context, name string) error
+	ListProviderOptions(ctx context.Context) ([]configstate.ProviderOption, error)
 }
 
 // selectionServiceResolver 负责在命令执行时解析并返回可复用的选择服务实例。

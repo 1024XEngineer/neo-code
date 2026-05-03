@@ -48,7 +48,7 @@ func newProviderCommandWithResolver(resolver selectionServiceResolver) *cobra.Co
 
 	cmd.AddCommand(
 		newProviderAddCommandWithResolver(resolver),
-		newProviderLsCommand(),
+		newProviderLsCommandWithResolver(resolver),
 		newProviderRmCommandWithResolver(resolver),
 	)
 
@@ -152,28 +152,40 @@ func defaultProviderAddCommandRunner(
 }
 
 func newProviderLsCommand() *cobra.Command {
+	return newProviderLsCommandWithResolver(newRuntimeSelectionServiceResolver())
+}
+
+func newProviderLsCommandWithResolver(resolver selectionServiceResolver) *cobra.Command {
+	if resolver == nil {
+		resolver = newRuntimeSelectionServiceResolver()
+	}
 	return &cobra.Command{
 		Use:   "ls",
 		Short: "List all providers",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runProviderLsCommand(cmd)
+			svc, err := resolver.Resolve(cmd)
+			if err != nil {
+				return err
+			}
+			return runProviderLsCommand(cmd, svc)
 		},
 	}
 }
 
-func defaultProviderLsCommandRunner(cmd *cobra.Command) error {
-	var workdir string
-	if f := cmd.Flag("workdir"); f != nil {
-		workdir = f.Value.String()
+func defaultProviderLsCommandRunner(cmd *cobra.Command, svc SelectionService) error {
+	if svc == nil {
+		return fmt.Errorf("selection service is unavailable")
 	}
-	loader := config.NewLoader(workdir, config.StaticDefaults())
-	cfg, err := loader.Load(cmd.Context())
+
+	options, err := svc.ListProviderOptions(cmd.Context())
 	if err != nil {
 		return err
 	}
 
-	for _, p := range cfg.Providers {
-		fmt.Fprintf(cmd.OutOrStdout(), "- %s (Driver: %s, Source: %s)\n", p.Name, p.Driver, p.Source)
+	for _, opt := range options {
+		modelCount := len(opt.Models)
+		fmt.Fprintf(cmd.OutOrStdout(), "- %s (Driver: %s, Source: %s, Models: %d)\n",
+			opt.Name, opt.Driver, opt.Source, modelCount)
 	}
 	return nil
 }

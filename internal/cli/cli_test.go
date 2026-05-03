@@ -18,6 +18,7 @@ type mockSelectionService struct {
 	selectProviderModelFn  func(ctx context.Context, providerName string, modelID string) (configstate.Selection, error)
 	createCustomProviderFn func(ctx context.Context, input configstate.CreateCustomProviderInput) (configstate.Selection, error)
 	removeCustomProviderFn func(ctx context.Context, name string) error
+	listProviderOptionsFn  func(ctx context.Context) ([]configstate.ProviderOption, error)
 }
 
 func (m *mockSelectionService) ListModels(ctx context.Context) ([]providertypes.ModelDescriptor, error) {
@@ -74,6 +75,13 @@ func (m *mockSelectionService) RemoveCustomProvider(ctx context.Context, name st
 		return m.removeCustomProviderFn(ctx, name)
 	}
 	return nil
+}
+
+func (m *mockSelectionService) ListProviderOptions(ctx context.Context) ([]configstate.ProviderOption, error) {
+	if m != nil && m.listProviderOptionsFn != nil {
+		return m.listProviderOptionsFn(ctx)
+	}
+	return nil, nil
 }
 
 func staticSelectionResolver(svc SelectionService) selectionServiceResolver {
