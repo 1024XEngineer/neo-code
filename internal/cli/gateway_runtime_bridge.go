@@ -1427,6 +1427,23 @@ func (b *gatewayRuntimePortBridge) modelDisplayName(ctx context.Context, provide
 	return modelID
 }
 
+// ReloadConfig 从磁盘重新加载内存配置快照，使管理端口的写入对其他工作区可见。
+func (b *gatewayRuntimePortBridge) ReloadConfig(ctx context.Context) error {
+	if b == nil || b.configManager == nil {
+		return nil
+	}
+	_, err := b.configManager.Load(ctx)
+	return err
+}
+
+// RebuildMCPServers 根据当前配置重建 MCP Server 工具注册表。
+func (b *gatewayRuntimePortBridge) RebuildMCPServers() error {
+	if b == nil || b.toolRegistry == nil || b.configManager == nil {
+		return nil
+	}
+	return app.RebuildMCPServersForRegistry(b.toolRegistry, b.configManager.Get())
+}
+
 // currentConfig 返回当前配置快照；桥接器未绑定配置管理器时退回静态默认值。
 func (b *gatewayRuntimePortBridge) currentConfig() config.Config {
 	if b == nil || b.configManager == nil {

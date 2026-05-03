@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useGatewayAPI } from '@/context/RuntimeProvider'
 import { useSessionStore } from '@/stores/useSessionStore'
 import { useChatStore } from '@/stores/useChatStore'
@@ -18,6 +18,8 @@ export default function ModelSelector() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [pendingModelChange, setPendingModelChange] = useState<ModelEntry | null>(null)
+  const selectedRef = useRef(selected)
+  selectedRef.current = selected
 
   // 模型列表加载：直接在 effect 中 fetch，用 cancelled flag 防止陈旧更新
   useEffect(() => {
@@ -31,7 +33,8 @@ export default function ModelSelector() {
         const fetched = result.payload.models
         setModels(fetched)
         if (fetched.length > 0) {
-          const retained = selected ? fetched.find((f) => f.id === selected.id) : null
+          const prev = selectedRef.current
+          const retained = prev ? fetched.find((f) => f.id === prev.id) : null
           const effective = retained ?? fetched[0]
           setSelected(effective)
           if (currentSessionId && !isGenerating) {

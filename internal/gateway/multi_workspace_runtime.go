@@ -440,6 +440,45 @@ func (m *MultiWorkspaceRuntime) getManagementPort() (ManagementRuntimePort, erro
 	return mp, nil
 }
 
+// syncAllWorkspaceConfigs 让所有已加载工作区从磁盘重新加载配置快照。
+// 在管理操作写入配置后调用，确保运行时端口能看到最新状态。
+func (m *MultiWorkspaceRuntime) syncAllWorkspaceConfigs(ctx context.Context) {
+	m.mu.RLock()
+	bundles := make([]*workspaceBundle, 0, len(m.bundles))
+	for _, b := range m.bundles {
+		bundles = append(bundles, b)
+	}
+	m.mu.RUnlock()
+
+	for _, b := range bundles {
+		type configReloader interface {
+			ReloadConfig(ctx context.Context) error
+		}
+		if reloader, ok := b.port.(configReloader); ok {
+			_ = reloader.ReloadConfig(ctx)
+		}
+	}
+}
+
+// syncAllWorkspaceMCP 让所有已加载工作区根据当前配置重建 MCP Server 注册表。
+func (m *MultiWorkspaceRuntime) syncAllWorkspaceMCP() {
+	m.mu.RLock()
+	bundles := make([]*workspaceBundle, 0, len(m.bundles))
+	for _, b := range m.bundles {
+		bundles = append(bundles, b)
+	}
+	m.mu.RUnlock()
+
+	for _, b := range bundles {
+		type mcpRebuilder interface {
+			RebuildMCPServers() error
+		}
+		if rebuilder, ok := b.port.(mcpRebuilder); ok {
+			_ = rebuilder.RebuildMCPServers()
+		}
+	}
+}
+
 // ---- ManagementRuntimePort implementation ----
 
 func (m *MultiWorkspaceRuntime) ListProviders(ctx context.Context, input ListProvidersInput) ([]ProviderOption, error) {
@@ -455,7 +494,12 @@ func (m *MultiWorkspaceRuntime) CreateProvider(ctx context.Context, input Create
 	if err != nil {
 		return ProviderSelectionResult{}, err
 	}
-	return mp.CreateProvider(ctx, input)
+	result, err := mp.CreateProvider(ctx, input)
+	if err != nil {
+		return ProviderSelectionResult{}, err
+	}
+	m.syncAllWorkspaceConfigs(ctx)
+	return result, nil
 }
 
 func (m *MultiWorkspaceRuntime) DeleteProvider(ctx context.Context, input DeleteProviderInput) error {
@@ -463,7 +507,11 @@ func (m *MultiWorkspaceRuntime) DeleteProvider(ctx context.Context, input Delete
 	if err != nil {
 		return err
 	}
-	return mp.DeleteProvider(ctx, input)
+	if err := mp.DeleteProvider(ctx, input); err != nil {
+		return err
+	}
+	m.syncAllWorkspaceConfigs(ctx)
+	return nil
 }
 
 func (m *MultiWorkspaceRuntime) SelectProviderModel(ctx context.Context, input SelectProviderModelInput) (ProviderSelectionResult, error) {
@@ -471,7 +519,12 @@ func (m *MultiWorkspaceRuntime) SelectProviderModel(ctx context.Context, input S
 	if err != nil {
 		return ProviderSelectionResult{}, err
 	}
-	return mp.SelectProviderModel(ctx, input)
+	result, err := mp.SelectProviderModel(ctx, input)
+	if err != nil {
+		return ProviderSelectionResult{}, err
+	}
+	m.syncAllWorkspaceConfigs(ctx)
+	return result, nil
 }
 
 func (m *MultiWorkspaceRuntime) ListMCPServers(ctx context.Context, input ListMCPServersInput) ([]MCPServerEntry, error) {
@@ -487,7 +540,12 @@ func (m *MultiWorkspaceRuntime) UpsertMCPServer(ctx context.Context, input Upser
 	if err != nil {
 		return err
 	}
-	return mp.UpsertMCPServer(ctx, input)
+	if err := mp.UpsertMCPServer(ctx, input); err != nil {
+		return err
+	}
+	m.syncAllWorkspaceConfigs(ctx)
+	m.syncAllWorkspaceMCP()
+	return nil
 }
 
 func (m *MultiWorkspaceRuntime) SetMCPServerEnabled(ctx context.Context, input SetMCPServerEnabledInput) error {
@@ -495,7 +553,12 @@ func (m *MultiWorkspaceRuntime) SetMCPServerEnabled(ctx context.Context, input S
 	if err != nil {
 		return err
 	}
-	return mp.SetMCPServerEnabled(ctx, input)
+	if err := mp.SetMCPServerEnabled(ctx, input); err != nil {
+		return err
+	}
+	m.syncAllWorkspaceConfigs(ctx)
+	m.syncAllWorkspaceMCP()
+	return nil
 }
 
 func (m *MultiWorkspaceRuntime) DeleteMCPServer(ctx context.Context, input DeleteMCPServerInput) error {
@@ -503,5 +566,10 @@ func (m *MultiWorkspaceRuntime) DeleteMCPServer(ctx context.Context, input Delet
 	if err != nil {
 		return err
 	}
-	return mp.DeleteMCPServer(ctx, input)
+	if err := mp.DeleteMCPServer(ctx, input); err != nil {
+		return err
+	}
+	m.syncAllWorkspaceConfigs(ctx)
+	m.syncAllWorkspaceMCP()
+	return nil
 }
