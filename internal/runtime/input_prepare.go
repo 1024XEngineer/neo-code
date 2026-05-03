@@ -101,6 +101,10 @@ func (s *Service) emitPrepareFailure(ctx context.Context, input PrepareInput, er
 			Message: strings.TrimSpace(saveErr.Error()),
 		})
 	}
+	// 会话不存在的错误由 gateway bridge 的 retry 透明处理，不需要暴露给用户
+	if errors.Is(err, agentsession.ErrSessionNotFound) {
+		return nil
+	}
 	return s.emitPrepareEvent(ctx, EventError, runID, sessionID, strings.TrimSpace(err.Error()))
 }
 
