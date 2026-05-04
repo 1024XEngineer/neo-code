@@ -25,15 +25,13 @@ func (s *Service) beforeAcceptFinal(
 	snapshot TurnBudgetSnapshot,
 	assistant providertypes.Message,
 	completionPassed bool,
+	signals beforeCompletionHookSignals,
 ) (acceptance.AcceptanceDecision, error) {
 	if state == nil {
 		return acceptance.AcceptanceDecision{}, nil
 	}
 
-	maxNoProgress := snapshot.Config.Runtime.Verification.MaxNoProgress
-	if maxNoProgress <= 0 {
-		maxNoProgress = 3
-	}
+	maxNoProgress := resolveAcceptanceMaxNoProgress(snapshot.Config.Runtime.Verification)
 	noProgressStreak := state.finalInterceptStreak
 	if noProgressStreak < 0 {
 		noProgressStreak = 0
@@ -42,60 +40,63 @@ func (s *Service) beforeAcceptFinal(
 		noProgressStreak = state.noToolAfterFinalContinueStreak
 	}
 
-	deciderDecision := s.evaluateFinalDecision(state, assistant, completionPassed, noProgressStreak, maxNoProgress)
+	input := s.buildAcceptanceServiceInput(
+		state,
+		snapshot,
+		assistant,
+		completionPassed,
+		signals,
+		noProgressStreak,
+		maxNoProgress,
+	)
+	service := &acceptanceService{}
+	acceptanceDecision, err := service.Decide(ctx, input)
+	if err != nil {
+		return acceptance.AcceptanceDecision{}, err
+	}
+	deciderDecision := toDeciderDecisionFromAcceptance(acceptanceDecision)
 	state.mu.Lock()
 	state.lastDeciderDecision = deciderDecision
 	pendingFinalProgress := state.pendingFinalProgress
-	completionBlockedReason := strings.TrimSpace(string(state.completion.CompletionBlockedReason))
 	state.mu.Unlock()
 	s.emitRunScopedOptional(EventDecisionMade, state, deciderDecision)
 	s.emitRuntimeSnapshotUpdated(ctx, state, "decision_made")
-	acceptanceDecision := mapDeciderDecisionToAcceptance(deciderDecision)
 	if acceptanceDecision.Status == acceptance.AcceptanceContinue && pendingFinalProgress {
 		acceptanceDecision.HasProgress = true
-	}
-	if !completionPassed && completionBlockedReason != "" {
-		acceptanceDecision.CompletionBlockedReason = completionBlockedReason
 	}
 	return acceptanceDecision, nil
 }
 
-// evaluateFinalDecision 把当前 run facts + todo 快照输入 FinalDecider，生成唯一终态裁决。
-func (s *Service) evaluateFinalDecision(
+// buildAcceptanceServiceInput 从当前运行态抽取 AcceptanceService 所需输入。
+func (s *Service) buildAcceptanceServiceInput(
 	state *runState,
+	snapshot TurnBudgetSnapshot,
 	assistant providertypes.Message,
 	completionPassed bool,
+	signals beforeCompletionHookSignals,
 	noProgressStreak int,
 	maxNoProgress int,
-) decider.Decision {
-	if state == nil {
-		return decider.Decision{
-			Status:             decider.DecisionContinue,
-			StopReason:         string(controlplane.StopReasonTodoNotConverged),
-			UserVisibleSummary: "runtime state is unavailable",
-			InternalSummary:    "run state is nil",
-		}
-	}
+) acceptanceServiceInput {
 	state.mu.Lock()
 	taskKind := state.taskKind
 	userGoal := state.userGoal
 	completionReason := strings.TrimSpace(string(state.completion.CompletionBlockedReason))
 	verificationProfile := state.session.TaskState.VerificationProfile
-	todoSnapshot := buildTodoSnapshotFromItems(cloneTodosForPersistence(state.session.Todos))
+	sessionMessages := append([]providertypes.Message(nil), state.session.Messages...)
+	sessionTodos := cloneTodosForPersistence(state.session.Todos)
+	sessionTaskState := state.session.TaskState
+	todoSnapshot := buildTodoSnapshotFromItems(sessionTodos)
 	factsSnapshot := runtimefacts.RuntimeFacts{}
 	if state.factsCollector != nil {
 		factsSnapshot = state.factsCollector.Snapshot()
 	}
+	taskID := strings.TrimSpace(state.taskID)
+	runID := strings.TrimSpace(state.runID)
+	sessionID := strings.TrimSpace(state.session.ID)
+	turn := state.turn
+	maxTurnsReached := state.maxTurnsReached
+	maxTurns := resolveRuntimeMaxTurns(snapshot.Config.Runtime)
 	state.mu.Unlock()
-
-	if !verificationProfile.Valid() {
-		return decider.Decision{
-			Status:             decider.DecisionFailed,
-			StopReason:         string(controlplane.StopReasonVerificationFailed),
-			UserVisibleSummary: "verification profile 非法，任务终止。",
-			InternalSummary:    fmt.Sprintf("invalid verification profile: %q", verificationProfile),
-		}
-	}
 
 	if strings.TrimSpace(userGoal) == "" {
 		userGoal = renderPartsForVerification(assistant.Parts)
@@ -109,26 +110,93 @@ func (s *Service) evaluateFinalDecision(
 			completionReason = string(controlplane.CompletionBlockedReasonPendingTodo)
 		}
 	}
-
-	return decider.Decide(decider.DecisionInput{
-		RunID:              strings.TrimSpace(state.runID),
-		SessionID:          strings.TrimSpace(state.session.ID),
-		TaskKind:           taskKind,
-		UserGoal:           userGoal,
-		Facts:              factsSnapshot,
-		Todos:              toDeciderTodoSnapshot(todoSnapshot),
-		Progress:           toDeciderProgress(factsSnapshot),
-		LastAssistantText:  renderPartsForVerification(assistant.Parts),
-		CompletionPassed:   completionPassed,
-		CompletionReason:   completionReason,
-		NoProgressExceeded: noProgressStreak >= maxNoProgress,
-	})
+	if !maxTurnsReached && maxTurns > 0 && turn+1 >= maxTurns {
+		maxTurnsReached = true
+	}
+	verifyInput := verify.FinalVerifyInput{
+		SessionID:          sessionID,
+		RunID:              runID,
+		TaskID:             taskID,
+		Workdir:            snapshot.Workdir,
+		Messages:           buildVerifyMessages(sessionMessages),
+		Todos:              buildVerifyTodos(sessionTodos),
+		LastAssistantFinal: renderPartsForVerification(assistant.Parts),
+		TaskState:          buildVerifyTaskState(sessionTaskState),
+		RuntimeState: verify.RuntimeStateSnapshot{
+			Turn:                 turn,
+			MaxTurns:             maxTurns,
+			MaxTurnsReached:      maxTurnsReached,
+			FinalInterceptStreak: noProgressStreak,
+		},
+		VerificationConfig: snapshot.Config.Runtime.Verification.Clone(),
+	}
+	return acceptanceServiceInput{
+		RunID:                   runID,
+		SessionID:               sessionID,
+		TaskKind:                taskKind,
+		UserGoal:                userGoal,
+		CompletionPassed:        completionPassed,
+		CompletionBlockedReason: completionReason,
+		Facts:                   factsSnapshot,
+		Todos:                   toDeciderTodoSnapshot(todoSnapshot),
+		Progress:                toDeciderProgress(factsSnapshot),
+		LastAssistantText:       renderPartsForVerification(assistant.Parts),
+		HookAnnotations:         append([]string(nil), signals.Annotations...),
+		HookGuards:              append([]decider.HookGuardSignal(nil), signals.Guards...),
+		NoProgressStreak:        noProgressStreak,
+		MaxNoProgress:           maxNoProgress,
+		VerificationProfile:     verificationProfile,
+		VerificationInput:       verifyInput,
+	}
 }
 
-// mapDeciderDecisionToAcceptance 把 FinalDecider 裁决映射到现有 acceptance 协议，保证主链兼容。
+// toDeciderDecisionFromAcceptance 将统一 acceptance 决策投影为 runtime snapshot 兼容的 decider 视图。
+func toDeciderDecisionFromAcceptance(decision acceptance.AcceptanceDecision) decider.Decision {
+	status := decider.DecisionContinue
+	switch decision.Status {
+	case acceptance.AcceptanceAccepted:
+		status = decider.DecisionAccepted
+	case acceptance.AcceptanceFailed:
+		status = decider.DecisionFailed
+	case acceptance.AcceptanceIncomplete:
+		status = decider.DecisionIncomplete
+	}
+	return decider.Decision{
+		Status:              status,
+		StopReason:          strings.TrimSpace(string(decision.StopReason)),
+		MissingFacts:        append([]decider.MissingFact(nil), decision.MissingFacts...),
+		RequiredNextActions: append([]decider.RequiredAction(nil), decision.RequiredNextActions...),
+		RequiredInput:       cloneRequiredInput(decision.RequiredInput),
+		IntentHint:          decision.IntentHint,
+		EffectiveTaskKind:   decision.EffectiveTaskKind,
+		UserVisibleSummary:  strings.TrimSpace(decision.UserVisibleSummary),
+		InternalSummary:     strings.TrimSpace(decision.InternalSummary),
+	}
+}
+
+func cloneRequiredInput(in *decider.RequiredInput) *decider.RequiredInput {
+	if in == nil {
+		return nil
+	}
+	cloned := *in
+	if len(in.Details) == 0 {
+		return &cloned
+	}
+	cloned.Details = make(map[string]any, len(in.Details))
+	for k, v := range in.Details {
+		cloned.Details[k] = v
+	}
+	return &cloned
+}
+
+// mapDeciderDecisionToAcceptance 把 FinalDecider 裁决映射到 acceptance 协议。
+// Deprecated: 仅保留给 legacy 回滚对照与测试使用；P7 主链直接消费 AcceptanceService.Decide 产物。
 func mapDeciderDecisionToAcceptance(decision decider.Decision) acceptance.AcceptanceDecision {
 	out := acceptance.AcceptanceDecision{
 		StopReason:         toControlplaneStopReason(decision.StopReason),
+		RequiredInput:      cloneRequiredInput(decision.RequiredInput),
+		IntentHint:         decision.IntentHint,
+		EffectiveTaskKind:  decision.EffectiveTaskKind,
 		UserVisibleSummary: strings.TrimSpace(decision.UserVisibleSummary),
 		InternalSummary:    strings.TrimSpace(decision.InternalSummary),
 		ContinueHint:       buildDeciderContinueHint(decision),
@@ -209,6 +277,14 @@ func toControlplaneStopReason(reason string) controlplane.StopReason {
 		return controlplane.StopReasonRequiredTodoFailed
 	case string(controlplane.StopReasonVerificationFailed):
 		return controlplane.StopReasonVerificationFailed
+	case string(controlplane.StopReasonTodoWaitingExternal):
+		return controlplane.StopReasonTodoWaitingExternal
+	case string(controlplane.StopReasonVerificationConfigMissing):
+		return controlplane.StopReasonVerificationConfigMissing
+	case string(controlplane.StopReasonVerificationExecutionDenied):
+		return controlplane.StopReasonVerificationExecutionDenied
+	case string(controlplane.StopReasonVerificationExecutionError):
+		return controlplane.StopReasonVerificationExecutionError
 	default:
 		return ""
 	}
@@ -254,7 +330,8 @@ func buildDeciderContinueHint(decision decider.Decision) string {
 	return strings.TrimSpace(builder.String())
 }
 
-// beforeAcceptFinalLegacy 保留历史 acceptance/verify 执行逻辑，作为兼容后备路径。
+// beforeAcceptFinalLegacy 是历史 acceptance/verify 实现，仅用于回滚对照与测试覆盖。
+// Deprecated: P7 主链不再调用该路径，最终裁决统一走 beforeAcceptFinal -> AcceptanceService。
 func (s *Service) beforeAcceptFinalLegacy(
 	ctx context.Context,
 	state *runState,

@@ -15,6 +15,7 @@ import (
 	approvalflow "neo-code/internal/runtime/approval"
 	"neo-code/internal/runtime/controlplane"
 	runtimehooks "neo-code/internal/runtime/hooks"
+	agentsession "neo-code/internal/session"
 	"neo-code/internal/subagent"
 	"neo-code/internal/tools"
 )
@@ -272,6 +273,96 @@ func TestRunBeforeCompletionDecisionHookBlockIsObservedOnly(t *testing.T) {
 	}
 	if capturedWorkdir == "" {
 		t.Fatalf("expected before_completion_decision hook metadata to include workdir")
+	}
+}
+
+func TestBeforeCompletionDecisionOrchestratorRunsUserRepoBeforeInternalAndFeedsDecision(t *testing.T) {
+	t.Parallel()
+
+	service := &Service{events: make(chan RuntimeEvent, 16)}
+
+	var (
+		mu       sync.Mutex
+		callFlow []string
+	)
+	appendCall := func(value string) {
+		mu.Lock()
+		callFlow = append(callFlow, value)
+		mu.Unlock()
+	}
+
+	baseRegistry := runtimehooks.NewRegistry()
+	if err := baseRegistry.Register(runtimehooks.HookSpec{
+		ID:     "internal-before-completion",
+		Point:  runtimehooks.HookPointBeforeCompletionDecision,
+		Scope:  runtimehooks.HookScopeInternal,
+		Source: runtimehooks.HookSourceInternal,
+		Handler: func(_ context.Context, _ runtimehooks.HookContext) runtimehooks.HookResult {
+			appendCall("internal")
+			return runtimehooks.HookResult{Status: runtimehooks.HookResultPass}
+		},
+	}); err != nil {
+		t.Fatalf("register internal hook: %v", err)
+	}
+
+	userRegistry := runtimehooks.NewRegistry()
+	if err := userRegistry.Register(runtimehooks.HookSpec{
+		ID:     "user-before-completion",
+		Point:  runtimehooks.HookPointBeforeCompletionDecision,
+		Scope:  runtimehooks.HookScopeUser,
+		Source: runtimehooks.HookSourceUser,
+		Handler: func(_ context.Context, _ runtimehooks.HookContext) runtimehooks.HookResult {
+			appendCall("user")
+			return runtimehooks.HookResult{Status: runtimehooks.HookResultFailed, Message: "user guard signal"}
+		},
+	}); err != nil {
+		t.Fatalf("register user hook: %v", err)
+	}
+
+	repoRegistry := runtimehooks.NewRegistry()
+	if err := repoRegistry.Register(runtimehooks.HookSpec{
+		ID:     "repo-before-completion",
+		Point:  runtimehooks.HookPointBeforeCompletionDecision,
+		Scope:  runtimehooks.HookScopeRepo,
+		Source: runtimehooks.HookSourceRepo,
+		Handler: func(_ context.Context, _ runtimehooks.HookContext) runtimehooks.HookResult {
+			appendCall("repo")
+			return runtimehooks.HookResult{Status: runtimehooks.HookResultPass, Message: "repo annotation"}
+		},
+	}); err != nil {
+		t.Fatalf("register repo hook: %v", err)
+	}
+
+	baseExecutor := runtimehooks.NewExecutor(baseRegistry, newHookRuntimeEventEmitter(service), time.Second)
+	userExecutor := runtimehooks.NewExecutor(userRegistry, newHookRuntimeEventEmitter(service), time.Second)
+	repoExecutor := runtimehooks.NewExecutor(repoRegistry, newHookRuntimeEventEmitter(service), time.Second)
+	service.SetHookExecutor(composeRuntimeHookExecutors(baseExecutor, userExecutor, repoExecutor))
+
+	session := newRuntimeSession("session-before-completion-orchestrator")
+	state := newRunState("run-before-completion-orchestrator", session)
+	snapshotCfg := TurnBudgetSnapshot{
+		Config:  config.StaticDefaults().Clone(),
+		Workdir: t.TempDir(),
+	}
+	state.session.TaskState.VerificationProfile = agentsession.VerificationProfileTaskOnly
+	decision, err := service.runBeforeCompletionDecisionAcceptance(
+		context.Background(),
+		&state,
+		snapshotCfg,
+		providertypes.Message{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("done")}},
+		t.TempDir(),
+		true,
+		false,
+		providertypes.RoleAssistant,
+	)
+	if err != nil {
+		t.Fatalf("runBeforeCompletionDecisionAcceptance() error = %v", err)
+	}
+	if got := strings.Join(callFlow, ","); got != "user,repo,internal" {
+		t.Fatalf("before_completion_decision hook order = %q, want %q", got, "user,repo,internal")
+	}
+	if !strings.Contains(decision.InternalSummary, "hook signals consumed") {
+		t.Fatalf("decision internal summary should include hook signal context, got %q", decision.InternalSummary)
 	}
 }
 

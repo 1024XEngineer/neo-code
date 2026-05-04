@@ -30,7 +30,7 @@ func Decide(input DecisionInput) Decision {
 			UserVisibleSummary: "存在 required todo 失败，任务已终止。",
 			InternalSummary:    "required todo entered failed terminal state",
 		}
-		return finalizeDecision(decision, hint, effectiveTaskKind)
+		return finalizeDecision(decision, hint, effectiveTaskKind, input)
 	}
 	if input.NoProgressExceeded {
 		decision = Decision{
@@ -39,11 +39,11 @@ func Decide(input DecisionInput) Decision {
 			UserVisibleSummary: "连续多轮缺少新事实，任务以未完成结束。",
 			InternalSummary:    "no progress exceeded while final intercepted",
 		}
-		return finalizeDecision(decision, hint, effectiveTaskKind)
+		return finalizeDecision(decision, hint, effectiveTaskKind, input)
 	}
 	if !input.CompletionPassed {
 		decision = continueWithCompletionReason(input)
-		return finalizeDecision(decision, hint, effectiveTaskKind)
+		return finalizeDecision(decision, hint, effectiveTaskKind, input)
 	}
 
 	switch effectiveTaskKind {
@@ -67,7 +67,7 @@ func Decide(input DecisionInput) Decision {
 			InternalSummary:    "chat answer accepted by completion gate",
 		}
 	}
-	return finalizeDecision(decision, hint, effectiveTaskKind)
+	return finalizeDecision(decision, hint, effectiveTaskKind, input)
 }
 
 // continueWithCompletionReason 把 completion gate 阻塞转成可执行缺失事实提示。
@@ -613,7 +613,19 @@ func latestWriteVerificationHint(allFacts facts.RuntimeFacts, preferredPath stri
 }
 
 // finalizeDecision 统一补全决策元信息，确保快照可观测 hint 与 effective kind。
-func finalizeDecision(decision Decision, intentHint TaskKind, effective TaskKind) Decision {
+func finalizeDecision(decision Decision, intentHint TaskKind, effective TaskKind, input DecisionInput) Decision {
+	if len(input.HookAnnotations) > 0 || len(input.HookGuards) > 0 {
+		detail := fmt.Sprintf(
+			"hook signals consumed (annotations=%d guards=%d)",
+			len(input.HookAnnotations),
+			len(input.HookGuards),
+		)
+		if strings.TrimSpace(decision.InternalSummary) == "" {
+			decision.InternalSummary = detail
+		} else {
+			decision.InternalSummary = strings.TrimSpace(decision.InternalSummary) + "; " + detail
+		}
+	}
 	decision.IntentHint = intentHint
 	decision.EffectiveTaskKind = effective
 	return decision

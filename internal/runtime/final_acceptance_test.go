@@ -34,7 +34,7 @@ func TestBeforeAcceptFinalDecisionPaths(t *testing.T) {
 		decision, err := service.beforeAcceptFinal(context.Background(), &state, snapshot, providertypes.Message{
 			Role:  providertypes.RoleAssistant,
 			Parts: []providertypes.ContentPart{providertypes.NewTextPart("done")},
-		}, true)
+		}, true, beforeCompletionHookSignals{})
 		if err != nil {
 			t.Fatalf("beforeAcceptFinal() error = %v", err)
 		}
@@ -47,7 +47,7 @@ func TestBeforeAcceptFinalDecisionPaths(t *testing.T) {
 		t.Parallel()
 		state := newRunState("run-invalid-profile", agentsession.New("invalid-profile"))
 		state.session.TaskState.VerificationProfile = "bad"
-		decision, err := service.beforeAcceptFinal(context.Background(), &state, snapshot, providertypes.Message{}, true)
+		decision, err := service.beforeAcceptFinal(context.Background(), &state, snapshot, providertypes.Message{}, true, beforeCompletionHookSignals{})
 		if err != nil {
 			t.Fatalf("beforeAcceptFinal() error = %v", err)
 		}
@@ -65,7 +65,7 @@ func TestBeforeAcceptFinalDecisionPaths(t *testing.T) {
 		state.session.Todos = []agentsession.TodoItem{
 			{ID: "todo-1", Content: "do work", Status: agentsession.TodoStatusPending, Required: &required},
 		}
-		decision, err := service.beforeAcceptFinal(context.Background(), &state, snapshot, providertypes.Message{}, true)
+		decision, err := service.beforeAcceptFinal(context.Background(), &state, snapshot, providertypes.Message{}, true, beforeCompletionHookSignals{})
 		if err != nil {
 			t.Fatalf("beforeAcceptFinal() error = %v", err)
 		}
@@ -78,7 +78,7 @@ func TestBeforeAcceptFinalDecisionPaths(t *testing.T) {
 		t.Parallel()
 		state := newRunState("run-accepted", agentsession.New("accepted"))
 		state.session.TaskState.VerificationProfile = agentsession.VerificationProfileTaskOnly
-		decision, err := service.beforeAcceptFinal(context.Background(), &state, snapshot, providertypes.Message{}, true)
+		decision, err := service.beforeAcceptFinal(context.Background(), &state, snapshot, providertypes.Message{}, true, beforeCompletionHookSignals{})
 		if err != nil {
 			t.Fatalf("beforeAcceptFinal() error = %v", err)
 		}
@@ -96,7 +96,7 @@ func TestBeforeAcceptFinalDecisionPaths(t *testing.T) {
 		state.session.Todos = []agentsession.TodoItem{
 			{ID: "todo-1", Content: "do work", Status: agentsession.TodoStatusPending, Required: &required},
 		}
-		decision, err := service.beforeAcceptFinal(context.Background(), &state, snapshot, providertypes.Message{}, true)
+		decision, err := service.beforeAcceptFinal(context.Background(), &state, snapshot, providertypes.Message{}, true, beforeCompletionHookSignals{})
 		if err != nil {
 			t.Fatalf("beforeAcceptFinal() error = %v", err)
 		}

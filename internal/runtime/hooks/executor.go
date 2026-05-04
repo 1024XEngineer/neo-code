@@ -110,6 +110,9 @@ func normalizeHookResultByCapability(point HookPoint, result HookResult) HookRes
 		return result
 	}
 	if result.Status == HookResultBlock && !capability.CanBlock {
+		result.Metadata.OriginalStatus = string(HookResultBlock)
+		result.Metadata.BlockDowngraded = true
+		result.Metadata.GuardSignal = true
 		result.Status = HookResultPass
 		if strings.TrimSpace(result.Message) == "" {
 			result.Message = "hook block downgraded: point does not allow blocking"
