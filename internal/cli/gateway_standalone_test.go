@@ -167,6 +167,8 @@ func TestGatewaySubcommandAndStandaloneCommandPropagateSameRunnerError(t *testin
 	}
 
 	standaloneCommand := NewGatewayStandaloneCommand()
+	// 覆盖率模式下 go test 会注入 -test.* 参数，这里显式清空 argv 避免命令误解析。
+	standaloneCommand.SetArgs([]string{})
 	standaloneErr := standaloneCommand.ExecuteContext(context.Background())
 	if !errors.Is(standaloneErr, expectedErr) {
 		t.Fatalf("standalone command error = %v, want %v", standaloneErr, expectedErr)

@@ -279,6 +279,41 @@ func TestSelectionServiceSelectProviderAndSetCurrentModel(t *testing.T) {
 	}
 }
 
+func TestSelectionServiceSelectProviderWithModel(t *testing.T) {
+	t.Parallel()
+
+	manager := newSelectionTestManager(t, testDefaultConfig())
+	service := NewService(manager, newDriverSupporterStub(), newCatalogStub())
+
+	selection, err := service.SelectProviderWithModel(context.Background(), QiniuName, QiniuDefaultModel+"-alt")
+	if err != nil {
+		t.Fatalf("SelectProviderWithModel() error = %v", err)
+	}
+	if selection.ProviderID != QiniuName || selection.ModelID != QiniuDefaultModel+"-alt" {
+		t.Fatalf("unexpected selection after atomic switch: %+v", selection)
+	}
+
+	cfg := manager.Get()
+	if cfg.SelectedProvider != QiniuName {
+		t.Fatalf("expected selected provider %q, got %q", QiniuName, cfg.SelectedProvider)
+	}
+	if cfg.CurrentModel != QiniuDefaultModel+"-alt" {
+		t.Fatalf("expected selected model %q, got %q", QiniuDefaultModel+"-alt", cfg.CurrentModel)
+	}
+}
+
+func TestSelectionServiceSelectProviderWithModelEmptyModel(t *testing.T) {
+	t.Parallel()
+
+	manager := newSelectionTestManager(t, testDefaultConfig())
+	service := NewService(manager, newDriverSupporterStub(), newCatalogStub())
+
+	_, err := service.SelectProviderWithModel(context.Background(), QiniuName, "   ")
+	if !errors.Is(err, ErrModelNotFound) {
+		t.Fatalf("expected ErrModelNotFound, got %v", err)
+	}
+}
+
 func TestSelectionServiceSetCurrentModelRejectsUnsupportedDriver(t *testing.T) {
 	t.Parallel()
 
@@ -1166,6 +1201,117 @@ func TestResolveCurrentModelHelper(t *testing.T) {
 }
 
 // ---- 婵炴潙顑堥惁顖涙綇閸涱厼袠 ----
+
+func TestSelectionServiceSelectProviderWithModelWrapsProviderRemovedError(t *testing.T) {
+	t.Parallel()
+
+	manager := newSelectionTestManager(t, testDefaultConfig())
+	service := NewService(manager, newDriverSupporterStub(), &mutatingCatalog{
+		listModels: []providertypes.ModelDescriptor{
+			{ID: OpenAIDefaultModel, Name: OpenAIDefaultModel},
+		},
+		onList: func(ctx context.Context) error {
+			return manager.Update(ctx, func(cfg *configpkg.Config) error {
+				cfg.SelectedProvider = ""
+				cfg.CurrentModel = ""
+				return nil
+			})
+		},
+	})
+
+	_, err := service.SelectProviderWithModel(context.Background(), OpenAIName, OpenAIDefaultModel)
+	if err == nil || !strings.Contains(err.Error(), "was removed during selection") {
+		t.Fatalf("err = %v, want wrapped provider removed error", err)
+	}
+	if !errors.Is(err, ErrProviderNotFound) {
+		t.Fatalf("err = %v, want ErrProviderNotFound", err)
+	}
+}
+
+func TestSelectionServiceSelectProviderUnlockedBuiltinSnapshotFallback(t *testing.T) {
+	t.Parallel()
+
+	manager := newSelectionTestManager(t, testDefaultConfig())
+	service := NewService(manager, newDriverSupporterStub(), catalogMethodsStub{
+		snapshotModels: nil,
+	})
+
+	selection, err := service.selectProviderUnlocked(context.Background(), QiniuName)
+	if err != nil {
+		t.Fatalf("selectProviderUnlocked() error = %v", err)
+	}
+	if selection.ProviderID != QiniuName {
+		t.Fatalf("selection.ProviderID = %q, want %q", selection.ProviderID, QiniuName)
+	}
+	if selection.ModelID != QiniuDefaultModel {
+		t.Fatalf("selection.ModelID = %q, want %q", selection.ModelID, QiniuDefaultModel)
+	}
+}
+
+func TestSelectionServiceSetCurrentModelUnlockedTrimmedEmpty(t *testing.T) {
+	t.Parallel()
+
+	manager := newSelectionTestManager(t, testDefaultConfig())
+	service := NewService(manager, newDriverSupporterStub(), newCatalogStub())
+
+	_, err := service.setCurrentModelUnlocked(context.Background(), "   ")
+	if !errors.Is(err, ErrModelNotFound) {
+		t.Fatalf("expected ErrModelNotFound, got %v", err)
+	}
+}
+
+func TestSelectionServiceSelectProviderAndModelContextBranches(t *testing.T) {
+	t.Parallel()
+
+	manager := newSelectionTestManager(t, testDefaultConfig())
+	service := NewService(manager, newDriverSupporterStub(), newCatalogStub())
+
+	t.Run("SelectProviderWithModel context canceled", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		_, err := service.SelectProviderWithModel(ctx, OpenAIName, OpenAIDefaultModel)
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("err = %v, want context.Canceled", err)
+		}
+	})
+
+	t.Run("SelectProvider success path", func(t *testing.T) {
+		selection, err := service.SelectProvider(context.Background(), OpenAIName)
+		if err != nil {
+			t.Fatalf("SelectProvider() error = %v", err)
+		}
+		if selection.ProviderID != OpenAIName {
+			t.Fatalf("selection.ProviderID = %q, want %q", selection.ProviderID, OpenAIName)
+		}
+	})
+
+	t.Run("SelectProviderWithModel empty model", func(t *testing.T) {
+		_, err := service.SelectProviderWithModel(context.Background(), OpenAIName, " ")
+		if !errors.Is(err, ErrModelNotFound) {
+			t.Fatalf("err = %v, want ErrModelNotFound", err)
+		}
+	})
+
+	t.Run("setCurrentModelUnlocked update validation drift", func(t *testing.T) {
+		driftManager := newSelectionTestManager(t, testDefaultConfig())
+		driftService := NewService(driftManager, newDriverSupporterStub(), &mutatingCatalog{
+			listModels: []providertypes.ModelDescriptor{
+				{ID: OpenAIDefaultModel, Name: OpenAIDefaultModel},
+			},
+			onList: func(ctx context.Context) error {
+				return driftManager.Update(ctx, func(cfg *configpkg.Config) error {
+					cfg.SelectedProvider = ""
+					cfg.CurrentModel = ""
+					return nil
+				})
+			},
+		})
+		_, err := driftService.setCurrentModelUnlocked(context.Background(), OpenAIDefaultModel)
+		if !errors.Is(err, ErrProviderNotFound) {
+			t.Fatalf("err = %v, want ErrProviderNotFound", err)
+		}
+	})
+}
 
 type driverSupporterAll struct{}
 

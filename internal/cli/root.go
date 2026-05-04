@@ -59,6 +59,7 @@ func Execute(ctx context.Context) error {
 func NewRootCommand() *cobra.Command {
 	settings := viper.New()
 	flags := &GlobalFlags{}
+	selectionResolver := newRuntimeSelectionServiceResolver()
 
 	cmd := &cobra.Command{
 		Use:          "neocode",
@@ -103,6 +104,9 @@ func NewRootCommand() *cobra.Command {
 		newMigrateCommand(),
 		newVersionCommand(),
 		newUpdateCommand(),
+		newProviderCommandWithResolver(selectionResolver),
+		newModelCommandWithResolver(selectionResolver),
+		newUseCommandWithResolver(selectionResolver),
 	)
 
 	return cmd

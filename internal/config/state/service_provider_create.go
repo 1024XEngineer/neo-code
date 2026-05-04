@@ -26,7 +26,7 @@ const providerCreateRollbackReloadTimeout = 3 * time.Second
 const providerCreateCrossProcessLockName = ".provider-create.lock"
 const providerCreateCrossProcessLockLeaseName = ".lease"
 const providerCreateCrossProcessLockRetryInterval = 50 * time.Millisecond
-const providerCreateCrossProcessLockStaleThreshold = 30 * time.Second
+const providerCreateCrossProcessLockStaleThreshold = 60 * time.Second
 const providerCreateCrossProcessLockHeartbeatInterval = 2 * time.Second
 
 // CreateCustomProviderInput 定义新增自定义 Provider 所需的输入参数。
@@ -160,12 +160,93 @@ func (s *Service) CreateCustomProvider(ctx context.Context, input CreateCustomPr
 		return Selection{}, rollback(fmt.Errorf("selection: reload config snapshot: %w", err))
 	}
 
-	selection, err := s.SelectProvider(ctx, normalized.Name)
+	selection, err := s.selectProviderUnlocked(ctx, normalized.Name)
 	if err != nil {
 		return Selection{}, rollback(fmt.Errorf("selection: select provider: %w", err))
 	}
 
 	return selection, nil
+}
+
+// RemoveCustomProvider 删除指定的自定义 provider，并在必要时修复当前选中项。
+//
+//go:noinline
+func (s *Service) RemoveCustomProvider(ctx context.Context, name string) error {
+	if err := s.validate(); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	providerName := strings.TrimSpace(name)
+	if providerName == "" {
+		return ErrProviderNotFound
+	}
+	if err := config.ValidateCustomProviderName(providerName); err != nil {
+		return err
+	}
+
+	releaseProviderLock := s.manager.AcquireProviderCreateLock()
+	defer releaseProviderLock()
+
+	releaseCrossProcessLock, err := lockProviderCreateCrossProcess(ctx, s.manager.BaseDir())
+	if err != nil {
+		return err
+	}
+	defer releaseCrossProcessLock()
+
+	cfgSnapshot := s.manager.Get()
+	wasSelected := strings.EqualFold(strings.TrimSpace(cfgSnapshot.SelectedProvider), providerName)
+	providerCfg, err := cfgSnapshot.ProviderByName(providerName)
+	if err != nil {
+		return nil
+	}
+	if providerCfg.Source != config.ProviderSourceCustom {
+		return fmt.Errorf("selection: provider %q is builtin and cannot be removed", providerName)
+	}
+
+	apiKeyEnv := strings.TrimSpace(providerCfg.APIKeyEnv)
+
+	if err := config.DeleteCustomProvider(s.manager.BaseDir(), providerName); err != nil {
+		return err
+	}
+
+	var envCleanupErr error
+	if apiKeyEnv != "" {
+		if envErr := deleteUserEnvVarForCreate(apiKeyEnv); envErr != nil {
+			envCleanupErr = fmt.Errorf("selection: remove provider env: %w", envErr)
+		}
+	}
+
+	if wasSelected {
+		if err := s.manager.Update(ctx, func(cfg *config.Config) error {
+			if strings.EqualFold(strings.TrimSpace(cfg.SelectedProvider), providerName) {
+				cfg.SelectedProvider = ""
+				cfg.CurrentModel = ""
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
+	}
+
+	if _, err := s.manager.Load(ctx); err != nil {
+		if envCleanupErr != nil {
+			return errors.Join(envCleanupErr, err)
+		}
+		return err
+	}
+
+	if wasSelected {
+		if _, err := s.EnsureSelection(ctx); err != nil {
+			if envCleanupErr != nil {
+				return errors.Join(envCleanupErr, err)
+			}
+			return err
+		}
+	}
+	return envCleanupErr
 }
 
 // normalizeCreateCustomProviderInput 统一裁剪新增 Provider 输入并执行基础字段校验。

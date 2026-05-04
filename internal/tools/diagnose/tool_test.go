@@ -25,12 +25,12 @@ func TestToolMetadata(t *testing.T) {
 	}
 }
 
-func TestToolExecuteSuccess(t *testing.T) {
+func TestToolExecuteFallbackWhenInvokerUnavailable(t *testing.T) {
 	tool := New()
 	result, err := tool.Execute(context.Background(), tools.ToolCallInput{
 		Arguments: []byte(`{
 			"error_log":"fatal: example",
-			"os_env":{"os":"linux","shell":"/bin/bash"},
+			"os_env":{"os":"linux","shell":"/bin/bash","cwd":"/repo"},
 			"command_text":"go test ./...",
 			"exit_code":1
 		}`),
@@ -39,21 +39,24 @@ func TestToolExecuteSuccess(t *testing.T) {
 		t.Fatalf("Execute() error = %v", err)
 	}
 	if result.IsError {
-		t.Fatalf("result.IsError = true, want false; result = %+v", result)
+		t.Fatalf("result.IsError = true, want false: %+v", result)
 	}
 	if result.Name != tools.ToolNameDiagnose {
 		t.Fatalf("result.Name = %q, want %q", result.Name, tools.ToolNameDiagnose)
 	}
 
-	var decoded map[string]any
+	var decoded diagnoseOutput
 	if unmarshalErr := json.Unmarshal([]byte(result.Content), &decoded); unmarshalErr != nil {
-		t.Fatalf("content should be valid JSON, got err = %v", unmarshalErr)
+		t.Fatalf("content should be valid diagnose JSON, got err = %v", unmarshalErr)
 	}
-	if strings.TrimSpace(toString(decoded["root_cause"])) == "" {
-		t.Fatalf("root_cause should not be empty: %v", decoded)
+	if strings.TrimSpace(decoded.RootCause) == "" {
+		t.Fatalf("root_cause should not be empty: %#v", decoded)
 	}
-	if mock, _ := result.Metadata["mock"].(bool); !mock {
-		t.Fatalf("metadata.mock = %#v, want true", result.Metadata["mock"])
+	if len(decoded.InvestigationCommands) == 0 {
+		t.Fatalf("investigation_commands should not be empty: %#v", decoded)
+	}
+	if degraded, ok := result.Metadata["degraded"].(bool); !ok || !degraded {
+		t.Fatalf("metadata.degraded = %#v, want true", result.Metadata["degraded"])
 	}
 }
 
@@ -125,37 +128,6 @@ func TestToolExecuteMissingOSEnv(t *testing.T) {
 	}
 }
 
-func TestToolExecuteWithCommandText(t *testing.T) {
-	tool := New()
-	result, err := tool.Execute(context.Background(), tools.ToolCallInput{
-		Arguments: []byte(`{"error_log":"err","os_env":{"os":"linux"},"command_text":"go test"}`),
-	})
-	if err != nil {
-		t.Fatalf("Execute() error = %v", err)
-	}
-	if result.IsError {
-		t.Fatalf("result.IsError = true, want false")
-	}
-	var decoded map[string]any
-	if err := json.Unmarshal([]byte(result.Content), &decoded); err != nil {
-		t.Fatalf("content should be valid JSON: %v", err)
-	}
-	investigation, ok := decoded["investigation_commands"].([]any)
-	if !ok || len(investigation) == 0 {
-		t.Fatalf("expected non-empty investigation_commands when command_text is set")
-	}
-	// "go test" should be appended to investigation commands
-	found := false
-	for _, cmd := range investigation {
-		if cmd == "go test" {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatalf("investigation_commands = %v, should contain 'go test'", investigation)
-	}
-}
-
 func TestToolExecuteContextCancelled(t *testing.T) {
 	tool := New()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -196,7 +168,89 @@ func TestParseDiagnoseInputMissingOSEnv(t *testing.T) {
 	}
 }
 
-func toString(value any) string {
-	text, _ := value.(string)
-	return text
+func TestDecodeDiagnosisJSON(t *testing.T) {
+	if _, ok := decodeDiagnosisJSON(`{"confidence":0.9}`); ok {
+		t.Fatal("expected decodeDiagnosisJSON() to reject missing root_cause")
+	}
+	if _, ok := decodeDiagnosisJSON(`not-json`); ok {
+		t.Fatal("expected decodeDiagnosisJSON() to reject invalid json")
+	}
+
+	decoded, ok := decodeDiagnosisJSON(`{"confidence":1.2,"root_cause":"proxy mismatch","fix_commands":["  export HTTPS_PROXY=http://127.0.0.1:7890  "],"investigation_commands":["curl -v https://example.com"]}`)
+	if !ok {
+		t.Fatal("expected decodeDiagnosisJSON() success")
+	}
+	if decoded.Confidence != 1 {
+		t.Fatalf("decoded.Confidence = %v, want 1", decoded.Confidence)
+	}
+	if decoded.RootCause != "proxy mismatch" {
+		t.Fatalf("decoded.RootCause = %q, want proxy mismatch", decoded.RootCause)
+	}
+	if len(decoded.FixCommands) != 1 || decoded.FixCommands[0] != "export HTTPS_PROXY=http://127.0.0.1:7890" {
+		t.Fatalf("decoded.FixCommands = %#v", decoded.FixCommands)
+	}
+}
+
+func TestConfidenceAndNormalizationHelpers(t *testing.T) {
+	if got := parseConfidence([]string{"confidence=0.72"}); got != 0.72 {
+		t.Fatalf("parseConfidence() = %v, want 0.72", got)
+	}
+	if got := parseConfidence([]string{"confidence=3.14"}); got != 1 {
+		t.Fatalf("parseConfidence(clamp high) = %v, want 1", got)
+	}
+	if got := parseConfidence([]string{"confidence=bad"}); got != 0 {
+		t.Fatalf("parseConfidence(invalid) = %v, want 0", got)
+	}
+
+	if got := clampConfidence(-2); got != 0 {
+		t.Fatalf("clampConfidence(-2) = %v, want 0", got)
+	}
+	if got := clampConfidence(2); got != 1 {
+		t.Fatalf("clampConfidence(2) = %v, want 1", got)
+	}
+
+	normalized := normalizeDiagnosisOutput(diagnoseOutput{
+		Confidence:            -1,
+		RootCause:             "   ",
+		FixCommands:           []string{" go mod tidy ", "go mod tidy", " "},
+		InvestigationCommands: nil,
+	})
+	if normalized.Confidence != 0 {
+		t.Fatalf("normalized.Confidence = %v, want 0", normalized.Confidence)
+	}
+	if !strings.Contains(normalized.RootCause, "未获得有效根因") {
+		t.Fatalf("normalized.RootCause = %q", normalized.RootCause)
+	}
+	if len(normalized.FixCommands) != 1 || normalized.FixCommands[0] != "go mod tidy" {
+		t.Fatalf("normalized.FixCommands = %#v", normalized.FixCommands)
+	}
+	if normalized.InvestigationCommands == nil {
+		t.Fatal("normalized.InvestigationCommands should be an empty list, not nil")
+	}
+}
+
+func TestWorkdirAndTruncateHelpers(t *testing.T) {
+	if got := resolveDiagnoseWorkdir("/repo", map[string]string{"cwd": "/tmp"}); got != "/repo" {
+		t.Fatalf("resolveDiagnoseWorkdir(callWorkdir) = %q, want /repo", got)
+	}
+	if got := resolveDiagnoseWorkdir(" ", map[string]string{"cwd": " /tmp/work "}); got != "/tmp/work" {
+		t.Fatalf("resolveDiagnoseWorkdir(os env) = %q, want /tmp/work", got)
+	}
+	if got := resolveDiagnoseWorkdir("", nil); got != "" {
+		t.Fatalf("resolveDiagnoseWorkdir(empty) = %q, want empty", got)
+	}
+
+	if got := normalizePathList(" "); got != nil {
+		t.Fatalf("normalizePathList(empty) = %#v, want nil", got)
+	}
+	if got := normalizePathList(" /repo "); len(got) != 1 || got[0] != "/repo" {
+		t.Fatalf("normalizePathList() = %#v, want [/repo]", got)
+	}
+
+	if got := truncateRunes("abc", 0); got != "" {
+		t.Fatalf("truncateRunes(max=0) = %q, want empty", got)
+	}
+	if got := truncateRunes("  你好世界  ", 2); !strings.HasPrefix(got, "你好") || !strings.Contains(got, "[truncated]") {
+		t.Fatalf("truncateRunes() = %q, want truncated prefix", got)
+	}
 }

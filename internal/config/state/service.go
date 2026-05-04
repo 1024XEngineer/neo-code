@@ -3,6 +3,7 @@ package state
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 
 	"neo-code/internal/config"
@@ -63,7 +64,48 @@ func (s *Service) SelectProvider(ctx context.Context, providerName string) (Sele
 	if err := s.validate(); err != nil {
 		return Selection{}, err
 	}
+	if err := ctx.Err(); err != nil {
+		return Selection{}, err
+	}
 
+	release := s.manager.AcquireProviderCreateLock()
+	defer release()
+
+	return s.selectProviderUnlocked(ctx, providerName)
+}
+
+// SelectProviderWithModel 在同一临界区内完成 provider 切换与模型覆盖，避免两次写入之间被并发插入。
+func (s *Service) SelectProviderWithModel(ctx context.Context, providerName string, modelID string) (Selection, error) {
+	if err := s.validate(); err != nil {
+		return Selection{}, err
+	}
+	if err := ctx.Err(); err != nil {
+		return Selection{}, err
+	}
+
+	modelID = strings.TrimSpace(modelID)
+	if modelID == "" {
+		return Selection{}, ErrModelNotFound
+	}
+
+	release := s.manager.AcquireProviderCreateLock()
+	defer release()
+
+	if _, err := s.selectProviderUnlocked(ctx, providerName); err != nil {
+		return Selection{}, err
+	}
+	selection, err := s.setCurrentModelUnlocked(ctx, modelID)
+	if err != nil {
+		if errors.Is(err, ErrProviderNotFound) {
+			return Selection{}, fmt.Errorf("selection: provider %q was removed during selection: %w", providerName, err)
+		}
+		return Selection{}, err
+	}
+	return selection, nil
+}
+
+// selectProviderUnlocked 在调用方已完成锁控制时执行 provider 切换核心逻辑。
+func (s *Service) selectProviderUnlocked(ctx context.Context, providerName string) (Selection, error) {
 	cfgSnapshot := s.manager.Get()
 	providerCfg, err := cfgSnapshot.ProviderByName(providerName)
 	if err != nil {
@@ -80,6 +122,13 @@ func (s *Service) SelectProvider(ctx context.Context, providerName string) (Sele
 	var models []providertypes.ModelDescriptor
 	if providerCfg.Source == config.ProviderSourceCustom {
 		models, err = s.catalogs.ListProviderModels(ctx, input)
+		if err != nil {
+			snapshotModels, snapshotErr := s.catalogs.ListProviderModelsSnapshot(ctx, input)
+			if snapshotErr != nil {
+				return Selection{}, err
+			}
+			models = snapshotModels
+		}
 	} else {
 		models, err = s.catalogs.ListProviderModelsSnapshot(ctx, input)
 		if len(models) == 0 {
@@ -216,7 +265,18 @@ func (s *Service) SetCurrentModel(ctx context.Context, modelID string) (Selectio
 	if err := s.validate(); err != nil {
 		return Selection{}, err
 	}
+	if err := ctx.Err(); err != nil {
+		return Selection{}, err
+	}
 
+	release := s.manager.AcquireProviderCreateLock()
+	defer release()
+
+	return s.setCurrentModelUnlocked(ctx, modelID)
+}
+
+// setCurrentModelUnlocked 在调用方已完成锁控制时执行模型校验与持久化。
+func (s *Service) setCurrentModelUnlocked(ctx context.Context, modelID string) (Selection, error) {
 	modelID = strings.TrimSpace(modelID)
 	if modelID == "" {
 		return Selection{}, ErrModelNotFound
@@ -236,7 +296,11 @@ func (s *Service) SetCurrentModel(ctx context.Context, modelID string) (Selectio
 	}
 	models, err := s.catalogs.ListProviderModels(ctx, input)
 	if err != nil {
-		return Selection{}, err
+		snapshotModels, snapshotErr := s.catalogs.ListProviderModelsSnapshot(ctx, input)
+		if snapshotErr != nil {
+			return Selection{}, err
+		}
+		models = snapshotModels
 	}
 	if len(models) == 0 {
 		return Selection{}, ErrNoModelsAvailable

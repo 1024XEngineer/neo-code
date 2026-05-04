@@ -21,6 +21,8 @@ type Selection struct {
 type ProviderOption struct {
 	ID     string                          `json:"id"`
 	Name   string                          `json:"name"`
+	Driver string                          `json:"driver,omitempty"`
+	Source string                          `json:"source,omitempty"`
 	Models []providertypes.ModelDescriptor `json:"models,omitempty"`
 }
 
@@ -81,6 +83,8 @@ func providerOption(cfg config.ProviderConfig, models []providertypes.ModelDescr
 	return ProviderOption{
 		ID:     strings.TrimSpace(cfg.Name),
 		Name:   strings.TrimSpace(cfg.Name),
+		Driver: strings.TrimSpace(cfg.Driver),
+		Source: strings.TrimSpace(string(cfg.Source)),
 		Models: providertypes.MergeModelDescriptors(models),
 	}
 }
