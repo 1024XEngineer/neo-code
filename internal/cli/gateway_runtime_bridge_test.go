@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"neo-code/internal/checkpoint"
 	"neo-code/internal/config"
 	configstate "neo-code/internal/config/state"
 	"neo-code/internal/gateway"
@@ -63,6 +64,19 @@ type runtimeStub struct {
 	getSnapshotSessionID  string
 	getSnapshotResult     agentruntime.RuntimeSnapshot
 	getSnapshotErr        error
+	listCheckpointsID     string
+	listCheckpointsOpts   checkpoint.ListCheckpointOpts
+	listCheckpointsResult []agentsession.CheckpointRecord
+	listCheckpointsErr    error
+	restoreCheckpointIn   agentruntime.GatewayRestoreInput
+	restoreCheckpointOut  agentruntime.RestoreResult
+	restoreCheckpointErr  error
+	undoRestoreSessionID  string
+	undoRestoreOut        agentruntime.RestoreResult
+	undoRestoreErr        error
+	checkpointDiffIn      agentruntime.CheckpointDiffInput
+	checkpointDiffOut     agentruntime.CheckpointDiffResult
+	checkpointDiffErr     error
 }
 
 const testBridgeSubjectID = bridgeLocalSubjectID
@@ -150,6 +164,23 @@ func (s *runtimeStub) GetRuntimeSnapshot(_ context.Context, sessionID string) (a
 	s.getSnapshotSessionID = sessionID
 	return s.getSnapshotResult, s.getSnapshotErr
 }
+func (s *runtimeStub) ListCheckpoints(_ context.Context, sessionID string, opts checkpoint.ListCheckpointOpts) ([]agentsession.CheckpointRecord, error) {
+	s.listCheckpointsID = sessionID
+	s.listCheckpointsOpts = opts
+	return s.listCheckpointsResult, s.listCheckpointsErr
+}
+func (s *runtimeStub) RestoreCheckpoint(_ context.Context, input agentruntime.GatewayRestoreInput) (agentruntime.RestoreResult, error) {
+	s.restoreCheckpointIn = input
+	return s.restoreCheckpointOut, s.restoreCheckpointErr
+}
+func (s *runtimeStub) UndoRestoreCheckpoint(_ context.Context, sessionID string) (agentruntime.RestoreResult, error) {
+	s.undoRestoreSessionID = sessionID
+	return s.undoRestoreOut, s.undoRestoreErr
+}
+func (s *runtimeStub) CheckpointDiff(_ context.Context, input agentruntime.CheckpointDiffInput) (agentruntime.CheckpointDiffResult, error) {
+	s.checkpointDiffIn = input
+	return s.checkpointDiffOut, s.checkpointDiffErr
+}
 func (s *runtimeStub) DeleteSession(_ context.Context, _ string) error {
 	return nil
 }
@@ -207,6 +238,65 @@ func (r *runtimeWithoutCreator) ListAvailableSkills(
 ) ([]agentruntime.AvailableSkillState, error) {
 	return r.base.ListAvailableSkills(ctx, sessionID)
 }
+func (r *runtimeWithoutCreator) ListCheckpoints(ctx context.Context, sessionID string, opts checkpoint.ListCheckpointOpts) ([]agentsession.CheckpointRecord, error) {
+	return r.base.ListCheckpoints(ctx, sessionID, opts)
+}
+func (r *runtimeWithoutCreator) RestoreCheckpoint(ctx context.Context, input agentruntime.GatewayRestoreInput) (agentruntime.RestoreResult, error) {
+	return r.base.RestoreCheckpoint(ctx, input)
+}
+func (r *runtimeWithoutCreator) UndoRestoreCheckpoint(ctx context.Context, sessionID string) (agentruntime.RestoreResult, error) {
+	return r.base.UndoRestoreCheckpoint(ctx, sessionID)
+}
+func (r *runtimeWithoutCreator) CheckpointDiff(ctx context.Context, input agentruntime.CheckpointDiffInput) (agentruntime.CheckpointDiffResult, error) {
+	return r.base.CheckpointDiff(ctx, input)
+}
+
+type runtimeWithoutCheckpointer struct {
+	base *runtimeStub
+}
+
+func (r *runtimeWithoutCheckpointer) Submit(ctx context.Context, input agentruntime.PrepareInput) error {
+	return r.base.Submit(ctx, input)
+}
+func (r *runtimeWithoutCheckpointer) PrepareUserInput(ctx context.Context, input agentruntime.PrepareInput) (agentruntime.UserInput, error) {
+	return r.base.PrepareUserInput(ctx, input)
+}
+func (r *runtimeWithoutCheckpointer) Run(ctx context.Context, input agentruntime.UserInput) error {
+	return r.base.Run(ctx, input)
+}
+func (r *runtimeWithoutCheckpointer) Compact(ctx context.Context, input agentruntime.CompactInput) (agentruntime.CompactResult, error) {
+	return r.base.Compact(ctx, input)
+}
+func (r *runtimeWithoutCheckpointer) ExecuteSystemTool(ctx context.Context, input agentruntime.SystemToolInput) (tools.ToolResult, error) {
+	return r.base.ExecuteSystemTool(ctx, input)
+}
+func (r *runtimeWithoutCheckpointer) ResolvePermission(ctx context.Context, input agentruntime.PermissionResolutionInput) error {
+	return r.base.ResolvePermission(ctx, input)
+}
+func (r *runtimeWithoutCheckpointer) CancelActiveRun() bool {
+	return r.base.CancelActiveRun()
+}
+func (r *runtimeWithoutCheckpointer) Events() <-chan agentruntime.RuntimeEvent {
+	return r.base.Events()
+}
+func (r *runtimeWithoutCheckpointer) ListSessions(ctx context.Context) ([]agentsession.Summary, error) {
+	return r.base.ListSessions(ctx)
+}
+func (r *runtimeWithoutCheckpointer) LoadSession(ctx context.Context, id string) (agentsession.Session, error) {
+	return r.base.LoadSession(ctx, id)
+}
+func (r *runtimeWithoutCheckpointer) ActivateSessionSkill(ctx context.Context, sessionID string, skillID string) error {
+	return r.base.ActivateSessionSkill(ctx, sessionID, skillID)
+}
+func (r *runtimeWithoutCheckpointer) DeactivateSessionSkill(ctx context.Context, sessionID string, skillID string) error {
+	return r.base.DeactivateSessionSkill(ctx, sessionID, skillID)
+}
+func (r *runtimeWithoutCheckpointer) ListSessionSkills(ctx context.Context, sessionID string) ([]agentruntime.SessionSkillState, error) {
+	return r.base.ListSessionSkills(ctx, sessionID)
+}
+func (r *runtimeWithoutCheckpointer) ListAvailableSkills(ctx context.Context, sessionID string) ([]agentruntime.AvailableSkillState, error) {
+	return r.base.ListAvailableSkills(ctx, sessionID)
+}
 
 type bridgeSessionStoreStub struct {
 	deleteFn func(ctx context.Context, id string) error
@@ -224,6 +314,193 @@ func (s *bridgeSessionStoreStub) UpdateSessionState(ctx context.Context, input a
 		return s.updateFn(ctx, input)
 	}
 	return nil
+}
+
+func TestGatewayRuntimePortBridgeCheckpointOperations(t *testing.T) {
+	stub := &runtimeStub{
+		listCheckpointsResult: []agentsession.CheckpointRecord{
+			{
+				CheckpointID: "cp-1",
+				SessionID:    "session-1",
+				Reason:       agentsession.CheckpointReasonCompact,
+				Status:       agentsession.CheckpointStatusAvailable,
+				Restorable:   true,
+				CreatedAt:    time.UnixMilli(1234),
+			},
+		},
+		restoreCheckpointOut: agentruntime.RestoreResult{
+			CheckpointID: "cp-1",
+			SessionID:    "session-1",
+		},
+		undoRestoreOut: agentruntime.RestoreResult{
+			CheckpointID: "guard-1",
+			SessionID:    "session-1",
+		},
+		checkpointDiffOut: agentruntime.CheckpointDiffResult{
+			CheckpointID:     "cp-2",
+			PrevCheckpointID: "cp-1",
+			CommitHash:       "commit-2",
+			PrevCommitHash:   "commit-1",
+			Files: agentruntime.FileDiffs{
+				Added:    []string{"new.txt"},
+				Deleted:  []string{"old.txt"},
+				Modified: []string{"keep.txt"},
+			},
+			Patch: "diff --git a/keep.txt b/keep.txt",
+		},
+	}
+
+	bridge := &gatewayRuntimePortBridge{runtime: stub}
+
+	entries, err := bridge.ListCheckpoints(context.Background(), gateway.ListCheckpointsInput{
+		SessionID:      " session-1 ",
+		Limit:          5,
+		RestorableOnly: true,
+	})
+	if err != nil {
+		t.Fatalf("ListCheckpoints() error = %v", err)
+	}
+	if stub.listCheckpointsID != "session-1" || stub.listCheckpointsOpts.Limit != 5 || !stub.listCheckpointsOpts.RestorableOnly {
+		t.Fatalf("ListCheckpoints() forwarded (%q, %#v)", stub.listCheckpointsID, stub.listCheckpointsOpts)
+	}
+	if len(entries) != 1 || entries[0].CheckpointID != "cp-1" || entries[0].Reason != string(agentsession.CheckpointReasonCompact) {
+		t.Fatalf("ListCheckpoints() = %#v", entries)
+	}
+
+	restoreResult, err := bridge.RestoreCheckpoint(context.Background(), gateway.CheckpointRestoreInput{
+		SessionID:    " session-1 ",
+		CheckpointID: " cp-1 ",
+		Force:        true,
+	})
+	if err != nil {
+		t.Fatalf("RestoreCheckpoint() error = %v", err)
+	}
+	if stub.restoreCheckpointIn.SessionID != "session-1" || stub.restoreCheckpointIn.CheckpointID != "cp-1" || !stub.restoreCheckpointIn.Force {
+		t.Fatalf("RestoreCheckpoint() forwarded %#v", stub.restoreCheckpointIn)
+	}
+	if restoreResult.CheckpointID != "cp-1" || restoreResult.SessionID != "session-1" || restoreResult.HasConflict {
+		t.Fatalf("RestoreCheckpoint() = %#v", restoreResult)
+	}
+
+	undoResult, err := bridge.UndoRestore(context.Background(), gateway.UndoRestoreInput{SessionID: " session-1 "})
+	if err != nil {
+		t.Fatalf("UndoRestore() error = %v", err)
+	}
+	if stub.undoRestoreSessionID != "session-1" {
+		t.Fatalf("UndoRestore() forwarded session %q", stub.undoRestoreSessionID)
+	}
+	if undoResult.CheckpointID != "guard-1" || undoResult.SessionID != "session-1" {
+		t.Fatalf("UndoRestore() = %#v", undoResult)
+	}
+
+	diffResult, err := bridge.CheckpointDiff(context.Background(), gateway.CheckpointDiffInput{
+		SessionID:    " session-1 ",
+		CheckpointID: " cp-2 ",
+	})
+	if err != nil {
+		t.Fatalf("CheckpointDiff() error = %v", err)
+	}
+	if stub.checkpointDiffIn.SessionID != "session-1" || stub.checkpointDiffIn.CheckpointID != "cp-2" {
+		t.Fatalf("CheckpointDiff() forwarded %#v", stub.checkpointDiffIn)
+	}
+	if diffResult.CheckpointID != "cp-2" || diffResult.PrevCheckpointID != "cp-1" ||
+		diffResult.CommitHash != "commit-2" || diffResult.PrevCommitHash != "commit-1" ||
+		len(diffResult.Files.Added) != 1 || diffResult.Files.Added[0] != "new.txt" ||
+		len(diffResult.Files.Deleted) != 1 || diffResult.Files.Deleted[0] != "old.txt" ||
+		len(diffResult.Files.Modified) != 1 || diffResult.Files.Modified[0] != "keep.txt" ||
+		diffResult.Patch != "diff --git a/keep.txt b/keep.txt" {
+		t.Fatalf("CheckpointDiff() = %#v", diffResult)
+	}
+}
+
+func TestGatewayRuntimePortBridgeCheckpointOperations_ReportConflictAndUnsupportedRuntime(t *testing.T) {
+	t.Run("conflict forwarded", func(t *testing.T) {
+		stub := &runtimeStub{
+			restoreCheckpointOut: agentruntime.RestoreResult{
+				CheckpointID: "cp-1",
+				SessionID:    "session-1",
+				Conflict:     &checkpoint.ConflictResult{HasConflict: true},
+			},
+			undoRestoreOut: agentruntime.RestoreResult{
+				CheckpointID: "guard-1",
+				SessionID:    "session-1",
+				Conflict:     &checkpoint.ConflictResult{HasConflict: true},
+			},
+		}
+		bridge := &gatewayRuntimePortBridge{runtime: stub}
+
+		restoreResult, err := bridge.RestoreCheckpoint(context.Background(), gateway.CheckpointRestoreInput{
+			SessionID:    "session-1",
+			CheckpointID: "cp-1",
+		})
+		if err != nil {
+			t.Fatalf("RestoreCheckpoint() error = %v", err)
+		}
+		if !restoreResult.HasConflict {
+			t.Fatalf("RestoreCheckpoint() conflict flag = false, want true")
+		}
+
+		undoResult, err := bridge.UndoRestore(context.Background(), gateway.UndoRestoreInput{SessionID: "session-1"})
+		if err != nil {
+			t.Fatalf("UndoRestore() error = %v", err)
+		}
+		if !undoResult.HasConflict {
+			t.Fatalf("UndoRestore() conflict flag = false, want true")
+		}
+	})
+
+	t.Run("unsupported runtime", func(t *testing.T) {
+		bridge := &gatewayRuntimePortBridge{runtime: &runtimeWithoutCheckpointer{base: &runtimeStub{}}}
+		cases := []struct {
+			name string
+			call func() error
+		}{
+			{
+				name: "list",
+				call: func() error {
+					_, err := bridge.ListCheckpoints(context.Background(), gateway.ListCheckpointsInput{SessionID: "session-1"})
+					return err
+				},
+			},
+			{
+				name: "restore",
+				call: func() error {
+					_, err := bridge.RestoreCheckpoint(context.Background(), gateway.CheckpointRestoreInput{
+						SessionID:    "session-1",
+						CheckpointID: "cp-1",
+					})
+					return err
+				},
+			},
+			{
+				name: "undo",
+				call: func() error {
+					_, err := bridge.UndoRestore(context.Background(), gateway.UndoRestoreInput{SessionID: "session-1"})
+					return err
+				},
+			},
+			{
+				name: "diff",
+				call: func() error {
+					_, err := bridge.CheckpointDiff(context.Background(), gateway.CheckpointDiffInput{
+						SessionID:    "session-1",
+						CheckpointID: "cp-1",
+					})
+					return err
+				},
+			},
+		}
+
+		for _, tc := range cases {
+			tc := tc
+			t.Run(tc.name, func(t *testing.T) {
+				err := tc.call()
+				if err == nil || !strings.Contains(err.Error(), "does not support checkpoint operations") {
+					t.Fatalf("error = %v, want unsupported checkpoint operations", err)
+				}
+			})
+		}
+	})
 }
 
 var testSessionStore bridgeSessionStore = &bridgeSessionStoreStub{}
@@ -1351,7 +1628,7 @@ func TestResolveListFilesRootPriorities(t *testing.T) {
 	// priority 2: session workdir (store implements bridgeSessionLoader)
 	loaderStore := &bridgeSessionStoreWithLoader{
 		bridgeSessionStoreStub: bridgeSessionStoreStub{},
-		session: agentsession.Session{Workdir: subDir},
+		session:                agentsession.Session{Workdir: subDir},
 	}
 	bridge2, _ := newGatewayRuntimePortBridge(context.Background(), &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)}, loaderStore)
 	defer bridge2.Close()
@@ -1958,9 +2235,9 @@ func TestModelDisplayName(t *testing.T) {
 
 func TestGatewayRuntimePortBridgeCancelRunAndSnapshots(t *testing.T) {
 	stub := &runtimeStub{
-		eventsCh:      make(chan agentruntime.RuntimeEvent, 1),
-		cancelReturn:  true,
-		listTodosErr:  errors.New("todo failed"),
+		eventsCh:       make(chan agentruntime.RuntimeEvent, 1),
+		cancelReturn:   true,
+		listTodosErr:   errors.New("todo failed"),
 		getSnapshotErr: errors.New("snapshot failed"),
 	}
 	bridge, err := newGatewayRuntimePortBridge(context.Background(), stub, testSessionStore)

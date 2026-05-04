@@ -9,11 +9,16 @@ import (
 )
 
 const (
-	readFileToolName  = tools.ToolNameFilesystemReadFile
-	writeFileToolName = tools.ToolNameFilesystemWriteFile
-	grepToolName      = tools.ToolNameFilesystemGrep
-	globToolName      = tools.ToolNameFilesystemGlob
-	editToolName      = tools.ToolNameFilesystemEdit
+	readFileToolName   = tools.ToolNameFilesystemReadFile
+	writeFileToolName  = tools.ToolNameFilesystemWriteFile
+	grepToolName       = tools.ToolNameFilesystemGrep
+	globToolName       = tools.ToolNameFilesystemGlob
+	editToolName       = tools.ToolNameFilesystemEdit
+	moveFileToolName   = tools.ToolNameFilesystemMoveFile
+	copyFileToolName   = tools.ToolNameFilesystemCopyFile
+	deleteFileToolName = tools.ToolNameFilesystemDeleteFile
+	createDirToolName  = tools.ToolNameFilesystemCreateDir
+	removeDirToolName  = tools.ToolNameFilesystemRemoveDir
 )
 
 func effectiveRoot(defaultRoot string, workdir string) string {

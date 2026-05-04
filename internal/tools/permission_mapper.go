@@ -92,6 +92,41 @@ func buildPermissionAction(input ToolCallInput) (security.Action, error) {
 		action.Payload.Target = extractStringArgument(input.Arguments, "path")
 		action.Payload.SandboxTargetType = security.TargetTypePath
 		action.Payload.SandboxTarget = action.Payload.Target
+	case ToolNameFilesystemMoveFile:
+		action.Type = security.ActionTypeWrite
+		action.Payload.Operation = "move_file"
+		action.Payload.TargetType = security.TargetTypePath
+		action.Payload.Target = extractStringArgument(input.Arguments, "destination_path")
+		action.Payload.SandboxTargetType = security.TargetTypePath
+		action.Payload.SandboxTarget = action.Payload.Target
+	case ToolNameFilesystemCopyFile:
+		action.Type = security.ActionTypeWrite
+		action.Payload.Operation = "copy_file"
+		action.Payload.TargetType = security.TargetTypePath
+		action.Payload.Target = extractStringArgument(input.Arguments, "destination_path")
+		action.Payload.SandboxTargetType = security.TargetTypePath
+		action.Payload.SandboxTarget = action.Payload.Target
+	case ToolNameFilesystemDeleteFile:
+		action.Type = security.ActionTypeWrite
+		action.Payload.Operation = "delete_file"
+		action.Payload.TargetType = security.TargetTypePath
+		action.Payload.Target = extractStringArgument(input.Arguments, "path")
+		action.Payload.SandboxTargetType = security.TargetTypePath
+		action.Payload.SandboxTarget = action.Payload.Target
+	case ToolNameFilesystemCreateDir:
+		action.Type = security.ActionTypeWrite
+		action.Payload.Operation = "create_dir"
+		action.Payload.TargetType = security.TargetTypePath
+		action.Payload.Target = extractStringArgument(input.Arguments, "path")
+		action.Payload.SandboxTargetType = security.TargetTypePath
+		action.Payload.SandboxTarget = action.Payload.Target
+	case ToolNameFilesystemRemoveDir:
+		action.Type = security.ActionTypeWrite
+		action.Payload.Operation = "remove_dir"
+		action.Payload.TargetType = security.TargetTypePath
+		action.Payload.Target = extractStringArgument(input.Arguments, "path")
+		action.Payload.SandboxTargetType = security.TargetTypePath
+		action.Payload.SandboxTarget = action.Payload.Target
 	case ToolNameTodoWrite:
 		action.Type = security.ActionTypeWrite
 		action.Payload.Operation = "todo_write"

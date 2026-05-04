@@ -14,7 +14,7 @@ import (
 const (
 	sessionDatabaseFileName = "session.db"
 	assetsDirName           = "assets"
-	sqliteSchemaVersion     = 5
+	sqliteSchemaVersion     = 6
 
 	// MaxSessionMessages 定义单个会话允许持久化的最大消息数，超出时自动裁剪最旧消息。
 	MaxSessionMessages = 8192
@@ -155,7 +155,7 @@ func NewSQLiteStore(baseDir string, workspaceRoot string) *SQLiteStore {
 	return &SQLiteStore{
 		projectDir:  projectDirectory(baseDir, workspaceRoot),
 		assetsDir:   assetsDirectory(baseDir, workspaceRoot),
-		dbPath:      databasePath(baseDir, workspaceRoot),
+		dbPath:      DatabasePath(baseDir, workspaceRoot),
 		assetPolicy: DefaultAssetPolicy(),
 	}
 }

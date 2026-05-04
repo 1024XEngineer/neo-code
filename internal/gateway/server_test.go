@@ -457,6 +457,22 @@ func (s *runtimePortEventStub) GetRuntimeSnapshot(
 	return RuntimeSnapshot{}, nil
 }
 
+func (s *runtimePortEventStub) ListCheckpoints(_ context.Context, _ ListCheckpointsInput) ([]CheckpointEntry, error) {
+	return nil, nil
+}
+
+func (s *runtimePortEventStub) RestoreCheckpoint(_ context.Context, _ CheckpointRestoreInput) (CheckpointRestoreResult, error) {
+	return CheckpointRestoreResult{}, nil
+}
+
+func (s *runtimePortEventStub) UndoRestore(_ context.Context, _ UndoRestoreInput) (CheckpointRestoreResult, error) {
+	return CheckpointRestoreResult{}, nil
+}
+
+func (s *runtimePortEventStub) CheckpointDiff(_ context.Context, _ CheckpointDiffInput) (CheckpointDiffResult, error) {
+	return CheckpointDiffResult{}, nil
+}
+
 func decodeJSONRPCResultFrame(response protocol.JSONRPCResponse) (MessageFrame, error) {
 	if response.Result == nil {
 		return MessageFrame{}, errors.New("rpc result is nil")

@@ -16,35 +16,39 @@ import (
 )
 
 type bootstrapRuntimeStub struct {
-	runFn               func(ctx context.Context, input RunInput) error
-	createSessionFn     func(ctx context.Context, input CreateSessionInput) (string, error)
-	compactFn           func(ctx context.Context, input CompactInput) (CompactResult, error)
-	executeSystemToolFn func(ctx context.Context, input ExecuteSystemToolInput) (tools.ToolResult, error)
-	activateSkillFn     func(ctx context.Context, input SessionSkillMutationInput) error
-	deactivateSkillFn   func(ctx context.Context, input SessionSkillMutationInput) error
-	listSessionSkillsFn func(ctx context.Context, input ListSessionSkillsInput) ([]SessionSkillState, error)
-	listAvailableFn     func(ctx context.Context, input ListAvailableSkillsInput) ([]AvailableSkillState, error)
-	resolvePermissionFn func(ctx context.Context, input PermissionResolutionInput) error
-	cancelRunFn         func(ctx context.Context, input CancelInput) (bool, error)
-	events              <-chan RuntimeEvent
-	listSessionsFn      func(ctx context.Context) ([]SessionSummary, error)
-	loadSessionFn       func(ctx context.Context, input LoadSessionInput) (Session, error)
-	listSessionTodosFn  func(ctx context.Context, input ListSessionTodosInput) (TodoSnapshot, error)
+	runFn                func(ctx context.Context, input RunInput) error
+	createSessionFn      func(ctx context.Context, input CreateSessionInput) (string, error)
+	compactFn            func(ctx context.Context, input CompactInput) (CompactResult, error)
+	executeSystemToolFn  func(ctx context.Context, input ExecuteSystemToolInput) (tools.ToolResult, error)
+	activateSkillFn      func(ctx context.Context, input SessionSkillMutationInput) error
+	deactivateSkillFn    func(ctx context.Context, input SessionSkillMutationInput) error
+	listSessionSkillsFn  func(ctx context.Context, input ListSessionSkillsInput) ([]SessionSkillState, error)
+	listAvailableFn      func(ctx context.Context, input ListAvailableSkillsInput) ([]AvailableSkillState, error)
+	resolvePermissionFn  func(ctx context.Context, input PermissionResolutionInput) error
+	cancelRunFn          func(ctx context.Context, input CancelInput) (bool, error)
+	events               <-chan RuntimeEvent
+	listSessionsFn       func(ctx context.Context) ([]SessionSummary, error)
+	loadSessionFn        func(ctx context.Context, input LoadSessionInput) (Session, error)
+	listSessionTodosFn   func(ctx context.Context, input ListSessionTodosInput) (TodoSnapshot, error)
 	getRuntimeSnapshotFn func(ctx context.Context, input GetRuntimeSnapshotInput) (RuntimeSnapshot, error)
-	deleteSessionFn     func(ctx context.Context, input DeleteSessionInput) (bool, error)
-	renameSessionFn     func(ctx context.Context, input RenameSessionInput) error
-	listFilesFn         func(ctx context.Context, input ListFilesInput) ([]FileEntry, error)
-	listModelsFn        func(ctx context.Context, input ListModelsInput) ([]ModelEntry, error)
-	setSessionModelFn   func(ctx context.Context, input SetSessionModelInput) error
-	getSessionModelFn   func(ctx context.Context, input GetSessionModelInput) (SessionModelResult, error)
-	listProvidersFn     func(ctx context.Context, input ListProvidersInput) ([]ProviderOption, error)
-	createProviderFn    func(ctx context.Context, input CreateProviderInput) (ProviderSelectionResult, error)
-	deleteProviderFn    func(ctx context.Context, input DeleteProviderInput) error
-	selectProviderFn    func(ctx context.Context, input SelectProviderModelInput) (ProviderSelectionResult, error)
-	listMCPServersFn    func(ctx context.Context, input ListMCPServersInput) ([]MCPServerEntry, error)
-	upsertMCPServerFn   func(ctx context.Context, input UpsertMCPServerInput) error
-	setMCPEnabledFn     func(ctx context.Context, input SetMCPServerEnabledInput) error
-	deleteMCPServerFn   func(ctx context.Context, input DeleteMCPServerInput) error
+	deleteSessionFn      func(ctx context.Context, input DeleteSessionInput) (bool, error)
+	renameSessionFn      func(ctx context.Context, input RenameSessionInput) error
+	listFilesFn          func(ctx context.Context, input ListFilesInput) ([]FileEntry, error)
+	listModelsFn         func(ctx context.Context, input ListModelsInput) ([]ModelEntry, error)
+	setSessionModelFn    func(ctx context.Context, input SetSessionModelInput) error
+	getSessionModelFn    func(ctx context.Context, input GetSessionModelInput) (SessionModelResult, error)
+	listProvidersFn      func(ctx context.Context, input ListProvidersInput) ([]ProviderOption, error)
+	createProviderFn     func(ctx context.Context, input CreateProviderInput) (ProviderSelectionResult, error)
+	deleteProviderFn     func(ctx context.Context, input DeleteProviderInput) error
+	selectProviderFn     func(ctx context.Context, input SelectProviderModelInput) (ProviderSelectionResult, error)
+	listMCPServersFn     func(ctx context.Context, input ListMCPServersInput) ([]MCPServerEntry, error)
+	upsertMCPServerFn    func(ctx context.Context, input UpsertMCPServerInput) error
+	setMCPEnabledFn      func(ctx context.Context, input SetMCPServerEnabledInput) error
+	deleteMCPServerFn    func(ctx context.Context, input DeleteMCPServerInput) error
+	listCheckpointsFn    func(ctx context.Context, input ListCheckpointsInput) ([]CheckpointEntry, error)
+	restoreCheckpointFn  func(ctx context.Context, input CheckpointRestoreInput) (CheckpointRestoreResult, error)
+	undoRestoreFn        func(ctx context.Context, input UndoRestoreInput) (CheckpointRestoreResult, error)
+	checkpointDiffFn     func(ctx context.Context, input CheckpointDiffInput) (CheckpointDiffResult, error)
 }
 
 func (s *bootstrapRuntimeStub) Run(ctx context.Context, input RunInput) error {
@@ -249,6 +253,34 @@ func (s *bootstrapRuntimeStub) CreateSession(ctx context.Context, input CreateSe
 	return strings.TrimSpace(input.SessionID), nil
 }
 
+func (s *bootstrapRuntimeStub) ListCheckpoints(ctx context.Context, input ListCheckpointsInput) ([]CheckpointEntry, error) {
+	if s != nil && s.listCheckpointsFn != nil {
+		return s.listCheckpointsFn(ctx, input)
+	}
+	return nil, nil
+}
+
+func (s *bootstrapRuntimeStub) RestoreCheckpoint(ctx context.Context, input CheckpointRestoreInput) (CheckpointRestoreResult, error) {
+	if s != nil && s.restoreCheckpointFn != nil {
+		return s.restoreCheckpointFn(ctx, input)
+	}
+	return CheckpointRestoreResult{}, nil
+}
+
+func (s *bootstrapRuntimeStub) UndoRestore(ctx context.Context, input UndoRestoreInput) (CheckpointRestoreResult, error) {
+	if s != nil && s.undoRestoreFn != nil {
+		return s.undoRestoreFn(ctx, input)
+	}
+	return CheckpointRestoreResult{}, nil
+}
+
+func (s *bootstrapRuntimeStub) CheckpointDiff(ctx context.Context, input CheckpointDiffInput) (CheckpointDiffResult, error) {
+	if s != nil && s.checkpointDiffFn != nil {
+		return s.checkpointDiffFn(ctx, input)
+	}
+	return CheckpointDiffResult{}, nil
+}
+
 func TestDispatchRequestFramePing(t *testing.T) {
 	response := dispatchRequestFrame(context.Background(), MessageFrame{
 		Type:      FrameTypeRequest,
@@ -416,6 +448,192 @@ func TestDecodeSessionSkillAndSnapshotPayloadBranches(t *testing.T) {
 	_, frameErr = decodeGetRuntimeSnapshotPayload((*protocol.GetRuntimeSnapshotParams)(nil))
 	if frameErr == nil || frameErr.Code != string(ErrorCodeInvalidAction) {
 		t.Fatalf("nil runtime_snapshot_get payload should be invalid_action, got %v", frameErr)
+	}
+}
+
+func TestCheckpointFrameHandlers(t *testing.T) {
+	t.Run("list checkpoints success", func(t *testing.T) {
+		runtime := &bootstrapRuntimeStub{
+			listCheckpointsFn: func(_ context.Context, input ListCheckpointsInput) ([]CheckpointEntry, error) {
+				if input.SubjectID != "subject-1" || input.SessionID != "session-1" {
+					t.Fatalf("input = %#v", input)
+				}
+				return []CheckpointEntry{{CheckpointID: "cp-1", SessionID: "session-1"}}, nil
+			},
+		}
+		authState := NewConnectionAuthState()
+		authState.MarkAuthenticated("subject-1")
+		ctx := WithConnectionAuthState(context.Background(), authState)
+
+		response := handleListCheckpointsFrame(ctx, MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionListCheckpoints,
+			RequestID: "req-checkpoint-list",
+			SessionID: " session-1 ",
+		}, runtime)
+
+		if response.Type != FrameTypeAck || response.Action != FrameActionListCheckpoints {
+			t.Fatalf("response = %#v", response)
+		}
+		entries, ok := response.Payload.([]CheckpointEntry)
+		if !ok || len(entries) != 1 || entries[0].CheckpointID != "cp-1" {
+			t.Fatalf("payload = %#v", response.Payload)
+		}
+	})
+
+	t.Run("restore checkpoint success", func(t *testing.T) {
+		runtime := &bootstrapRuntimeStub{
+			restoreCheckpointFn: func(_ context.Context, input CheckpointRestoreInput) (CheckpointRestoreResult, error) {
+				if input.SubjectID != "subject-1" || input.SessionID != "session-1" || input.CheckpointID != "cp-1" || !input.Force {
+					t.Fatalf("input = %#v", input)
+				}
+				return CheckpointRestoreResult{CheckpointID: input.CheckpointID, SessionID: input.SessionID}, nil
+			},
+		}
+		authState := NewConnectionAuthState()
+		authState.MarkAuthenticated("subject-1")
+		ctx := WithConnectionAuthState(context.Background(), authState)
+
+		response := handleRestoreCheckpointFrame(ctx, MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionRestoreCheckpoint,
+			RequestID: "req-checkpoint-restore",
+			SessionID: " session-1 ",
+			Payload: map[string]any{
+				"checkpoint_id": " cp-1 ",
+				"force":         true,
+			},
+		}, runtime)
+
+		if response.Type != FrameTypeAck || response.Action != FrameActionRestoreCheckpoint || response.SessionID != "session-1" {
+			t.Fatalf("response = %#v", response)
+		}
+		result, ok := response.Payload.(CheckpointRestoreResult)
+		if !ok || result.CheckpointID != "cp-1" {
+			t.Fatalf("payload = %#v", response.Payload)
+		}
+	})
+
+	t.Run("undo restore success", func(t *testing.T) {
+		runtime := &bootstrapRuntimeStub{
+			undoRestoreFn: func(_ context.Context, input UndoRestoreInput) (CheckpointRestoreResult, error) {
+				if input.SubjectID != "subject-1" || input.SessionID != "session-1" {
+					t.Fatalf("input = %#v", input)
+				}
+				return CheckpointRestoreResult{CheckpointID: "cp-guard", SessionID: input.SessionID}, nil
+			},
+		}
+		authState := NewConnectionAuthState()
+		authState.MarkAuthenticated("subject-1")
+		ctx := WithConnectionAuthState(context.Background(), authState)
+
+		response := handleUndoRestoreFrame(ctx, MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionUndoRestore,
+			RequestID: "req-checkpoint-undo",
+			SessionID: " session-1 ",
+		}, runtime)
+
+		if response.Type != FrameTypeAck || response.Action != FrameActionUndoRestore || response.SessionID != "session-1" {
+			t.Fatalf("response = %#v", response)
+		}
+		result, ok := response.Payload.(CheckpointRestoreResult)
+		if !ok || result.CheckpointID != "cp-guard" {
+			t.Fatalf("payload = %#v", response.Payload)
+		}
+	})
+
+	t.Run("checkpoint diff success", func(t *testing.T) {
+		runtime := &bootstrapRuntimeStub{
+			checkpointDiffFn: func(_ context.Context, input CheckpointDiffInput) (CheckpointDiffResult, error) {
+				if input.SubjectID != "subject-1" || input.SessionID != "session-1" || input.CheckpointID != "cp-1" {
+					t.Fatalf("input = %#v", input)
+				}
+				return CheckpointDiffResult{
+					CheckpointID:     input.CheckpointID,
+					PrevCheckpointID: "cp-0",
+					Files: FileDiffs{
+						Modified: []string{"README.md"},
+					},
+					Patch: "diff --git a/README.md b/README.md",
+				}, nil
+			},
+		}
+		authState := NewConnectionAuthState()
+		authState.MarkAuthenticated("subject-1")
+		ctx := WithConnectionAuthState(context.Background(), authState)
+
+		response := handleCheckpointDiffFrame(ctx, MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionCheckpointDiff,
+			RequestID: "req-checkpoint-diff",
+			SessionID: " session-1 ",
+			Payload: map[string]any{
+				"checkpoint_id": " cp-1 ",
+			},
+		}, runtime)
+
+		if response.Type != FrameTypeAck || response.Action != FrameActionCheckpointDiff || response.SessionID != "session-1" {
+			t.Fatalf("response = %#v", response)
+		}
+		result, ok := response.Payload.(CheckpointDiffResult)
+		if !ok || result.CheckpointID != "cp-1" || result.PrevCheckpointID != "cp-0" ||
+			len(result.Files.Modified) != 1 || result.Files.Modified[0] != "README.md" ||
+			result.Patch != "diff --git a/README.md b/README.md" {
+			t.Fatalf("payload = %#v", response.Payload)
+		}
+	})
+}
+
+func TestDecodeCheckpointRestorePayloadBranches(t *testing.T) {
+	t.Parallel()
+
+	params := decodeCheckpointRestorePayload(map[string]any{
+		"session_id":    " session-1 ",
+		"checkpoint_id": " cp-1 ",
+		"force":         true,
+	})
+	if params.SessionID != "session-1" || params.CheckpointID != "cp-1" || !params.Force {
+		t.Fatalf("decode map payload = %#v", params)
+	}
+
+	params = decodeCheckpointRestorePayload(CheckpointRestoreInput{
+		SessionID:    "session-2",
+		CheckpointID: "cp-2",
+		Force:        true,
+	})
+	if params.SessionID != "session-2" || params.CheckpointID != "cp-2" || !params.Force {
+		t.Fatalf("decode struct payload = %#v", params)
+	}
+
+	params = decodeCheckpointRestorePayload(invalidJSONMarshaler{})
+	if params != (CheckpointRestoreInput{}) {
+		t.Fatalf("marshal failure should return zero input, got %#v", params)
+	}
+}
+
+func TestDecodeCheckpointDiffPayloadBranches(t *testing.T) {
+	t.Parallel()
+
+	params := decodeCheckpointDiffPayload(map[string]any{
+		"session_id":    " session-1 ",
+		"checkpoint_id": " cp-1 ",
+	})
+	if params.SessionID != "session-1" || params.CheckpointID != "cp-1" {
+		t.Fatalf("decode map payload = %#v", params)
+	}
+
+	params = decodeCheckpointDiffPayload(CheckpointDiffInput{
+		SessionID:    "session-2",
+		CheckpointID: "cp-2",
+	})
+	if params.SessionID != "session-2" || params.CheckpointID != "cp-2" {
+		t.Fatalf("decode struct payload = %#v", params)
+	}
+
+	params = decodeCheckpointDiffPayload(invalidJSONMarshaler{})
+	if params != (CheckpointDiffInput{}) {
+		t.Fatalf("marshal failure should return zero input, got %#v", params)
 	}
 }
 
@@ -3799,7 +4017,9 @@ func TestDecodeRenameSessionPayloadBranches(t *testing.T) {
 	})
 
 	t.Run("marshal error", func(t *testing.T) {
-		_, err := decodeRenameSessionPayload(struct{ Bad chan int `json:"bad"` }{Bad: make(chan int)})
+		_, err := decodeRenameSessionPayload(struct {
+			Bad chan int `json:"bad"`
+		}{Bad: make(chan int)})
 		if err == nil || err.Code != ErrorCodeInvalidFrame.String() {
 			t.Fatalf("expected invalid frame error, got %#v", err)
 		}
@@ -3845,7 +4065,9 @@ func TestDecodeListFilesPayloadBranches(t *testing.T) {
 	})
 
 	t.Run("marshal error", func(t *testing.T) {
-		_, err := decodeListFilesPayload(struct{ Bad chan int `json:"bad"` }{Bad: make(chan int)})
+		_, err := decodeListFilesPayload(struct {
+			Bad chan int `json:"bad"`
+		}{Bad: make(chan int)})
 		if err == nil || err.Code != ErrorCodeInvalidFrame.String() {
 			t.Fatalf("expected invalid frame error, got %#v", err)
 		}
@@ -3888,7 +4110,9 @@ func TestDecodeSetSessionModelPayloadBranches(t *testing.T) {
 	})
 
 	t.Run("marshal error", func(t *testing.T) {
-		_, err := decodeSetSessionModelPayload(struct{ Bad chan int `json:"bad"` }{Bad: make(chan int)})
+		_, err := decodeSetSessionModelPayload(struct {
+			Bad chan int `json:"bad"`
+		}{Bad: make(chan int)})
 		if err == nil || err.Code != ErrorCodeInvalidFrame.String() {
 			t.Fatalf("expected invalid frame error, got %#v", err)
 		}
@@ -3956,7 +4180,7 @@ func TestHandleAuthenticateFrameAdditionalBranches(t *testing.T) {
 
 type emptySubjectAuthenticator struct{}
 
-func (emptySubjectAuthenticator) ValidateToken(token string) bool  { return true }
+func (emptySubjectAuthenticator) ValidateToken(token string) bool              { return true }
 func (emptySubjectAuthenticator) ResolveSubjectID(token string) (string, bool) { return "", true }
 
 func TestRuntimeCallFailedFrameErrorCodes(t *testing.T) {
@@ -3996,38 +4220,72 @@ func TestRuntimeCallFailedFrameErrorCodes(t *testing.T) {
 // runtimeOnlyStub implements RuntimePort but NOT ManagementRuntimePort.
 type runtimeOnlyStub struct{}
 
-func (runtimeOnlyStub) Run(ctx context.Context, input RunInput) error                         { return nil }
-func (runtimeOnlyStub) Compact(ctx context.Context, input CompactInput) (CompactResult, error) { return CompactResult{}, nil }
+func (runtimeOnlyStub) Run(ctx context.Context, input RunInput) error { return nil }
+func (runtimeOnlyStub) Compact(ctx context.Context, input CompactInput) (CompactResult, error) {
+	return CompactResult{}, nil
+}
 func (runtimeOnlyStub) ExecuteSystemTool(ctx context.Context, input ExecuteSystemToolInput) (tools.ToolResult, error) {
 	return tools.ToolResult{}, nil
 }
-func (runtimeOnlyStub) ActivateSessionSkill(ctx context.Context, input SessionSkillMutationInput) error   { return nil }
-func (runtimeOnlyStub) DeactivateSessionSkill(ctx context.Context, input SessionSkillMutationInput) error { return nil }
+func (runtimeOnlyStub) ActivateSessionSkill(ctx context.Context, input SessionSkillMutationInput) error {
+	return nil
+}
+func (runtimeOnlyStub) DeactivateSessionSkill(ctx context.Context, input SessionSkillMutationInput) error {
+	return nil
+}
 func (runtimeOnlyStub) ListSessionSkills(ctx context.Context, input ListSessionSkillsInput) ([]SessionSkillState, error) {
 	return nil, nil
 }
 func (runtimeOnlyStub) ListAvailableSkills(ctx context.Context, input ListAvailableSkillsInput) ([]AvailableSkillState, error) {
 	return nil, nil
 }
-func (runtimeOnlyStub) ResolvePermission(ctx context.Context, input PermissionResolutionInput) error { return nil }
-func (runtimeOnlyStub) CancelRun(ctx context.Context, input CancelInput) (bool, error)               { return false, nil }
-func (runtimeOnlyStub) Events() <-chan RuntimeEvent                                                  { return nil }
-func (runtimeOnlyStub) ListSessions(ctx context.Context) ([]SessionSummary, error)                   { return nil, nil }
-func (runtimeOnlyStub) LoadSession(ctx context.Context, input LoadSessionInput) (Session, error)     { return Session{}, nil }
+func (runtimeOnlyStub) ResolvePermission(ctx context.Context, input PermissionResolutionInput) error {
+	return nil
+}
+func (runtimeOnlyStub) CancelRun(ctx context.Context, input CancelInput) (bool, error) {
+	return false, nil
+}
+func (runtimeOnlyStub) Events() <-chan RuntimeEvent                                { return nil }
+func (runtimeOnlyStub) ListSessions(ctx context.Context) ([]SessionSummary, error) { return nil, nil }
+func (runtimeOnlyStub) LoadSession(ctx context.Context, input LoadSessionInput) (Session, error) {
+	return Session{}, nil
+}
 func (runtimeOnlyStub) ListSessionTodos(ctx context.Context, input ListSessionTodosInput) (TodoSnapshot, error) {
 	return TodoSnapshot{}, nil
 }
 func (runtimeOnlyStub) GetRuntimeSnapshot(ctx context.Context, input GetRuntimeSnapshotInput) (RuntimeSnapshot, error) {
 	return RuntimeSnapshot{}, nil
 }
-func (runtimeOnlyStub) CreateSession(ctx context.Context, input CreateSessionInput) (string, error)  { return "", nil }
-func (runtimeOnlyStub) DeleteSession(ctx context.Context, input DeleteSessionInput) (bool, error)    { return false, nil }
-func (runtimeOnlyStub) RenameSession(ctx context.Context, input RenameSessionInput) error            { return nil }
-func (runtimeOnlyStub) ListFiles(ctx context.Context, input ListFilesInput) ([]FileEntry, error)     { return nil, nil }
-func (runtimeOnlyStub) ListModels(ctx context.Context, input ListModelsInput) ([]ModelEntry, error)  { return nil, nil }
-func (runtimeOnlyStub) SetSessionModel(ctx context.Context, input SetSessionModelInput) error        { return nil }
+func (runtimeOnlyStub) CreateSession(ctx context.Context, input CreateSessionInput) (string, error) {
+	return "", nil
+}
+func (runtimeOnlyStub) DeleteSession(ctx context.Context, input DeleteSessionInput) (bool, error) {
+	return false, nil
+}
+func (runtimeOnlyStub) RenameSession(ctx context.Context, input RenameSessionInput) error { return nil }
+func (runtimeOnlyStub) ListFiles(ctx context.Context, input ListFilesInput) ([]FileEntry, error) {
+	return nil, nil
+}
+func (runtimeOnlyStub) ListModels(ctx context.Context, input ListModelsInput) ([]ModelEntry, error) {
+	return nil, nil
+}
+func (runtimeOnlyStub) SetSessionModel(ctx context.Context, input SetSessionModelInput) error {
+	return nil
+}
 func (runtimeOnlyStub) GetSessionModel(ctx context.Context, input GetSessionModelInput) (SessionModelResult, error) {
 	return SessionModelResult{}, nil
+}
+func (runtimeOnlyStub) ListCheckpoints(_ context.Context, _ ListCheckpointsInput) ([]CheckpointEntry, error) {
+	return nil, nil
+}
+func (runtimeOnlyStub) RestoreCheckpoint(_ context.Context, _ CheckpointRestoreInput) (CheckpointRestoreResult, error) {
+	return CheckpointRestoreResult{}, nil
+}
+func (runtimeOnlyStub) UndoRestore(_ context.Context, _ UndoRestoreInput) (CheckpointRestoreResult, error) {
+	return CheckpointRestoreResult{}, nil
+}
+func (runtimeOnlyStub) CheckpointDiff(_ context.Context, _ CheckpointDiffInput) (CheckpointDiffResult, error) {
+	return CheckpointDiffResult{}, nil
 }
 
 type managementRuntimeStub struct {

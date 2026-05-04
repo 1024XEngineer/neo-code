@@ -265,6 +265,82 @@ type SessionModelResult struct {
 	Provider string `json:"provider,omitempty"`
 }
 
+// ListCheckpointsInput 描述查询 checkpoint 列表的输入。
+type ListCheckpointsInput struct {
+	// SubjectID 是请求方身份主体标识。
+	SubjectID string
+	// SessionID 是目标会话标识。
+	SessionID string
+	// Limit 限制返回数量，0 表示不限制。
+	Limit int
+	// RestorableOnly 仅返回可恢复的 checkpoint。
+	RestorableOnly bool
+}
+
+// CheckpointEntry 描述单个 checkpoint 的列表视图。
+type CheckpointEntry struct {
+	CheckpointID string `json:"checkpoint_id"`
+	SessionID    string `json:"session_id"`
+	Reason       string `json:"reason"`
+	Status       string `json:"status"`
+	Restorable   bool   `json:"restorable"`
+	CreatedAt    int64  `json:"created_at_ms"`
+}
+
+// CheckpointRestoreInput 描述恢复 checkpoint 的输入。
+type CheckpointRestoreInput struct {
+	// SubjectID 是请求方身份主体标识。
+	SubjectID string
+	// SessionID 是目标会话标识。
+	SessionID string
+	// CheckpointID 是要恢复的 checkpoint 标识。
+	CheckpointID string
+	// Force 强制恢复，忽略冲突检测。
+	Force bool
+}
+
+// UndoRestoreInput 描述撤销 restore 的输入。
+type UndoRestoreInput struct {
+	// SubjectID 是请求方身份主体标识。
+	SubjectID string
+	// SessionID 是目标会话标识。
+	SessionID string
+}
+
+// CheckpointRestoreResult 描述 checkpoint 恢复操作的结果。
+type CheckpointRestoreResult struct {
+	CheckpointID string `json:"checkpoint_id"`
+	SessionID    string `json:"session_id"`
+	HasConflict  bool   `json:"has_conflict,omitempty"`
+}
+
+// CheckpointDiffInput 描述 checkpoint diff 查询输入。
+type CheckpointDiffInput struct {
+	// SubjectID 是请求方身份主体标识。
+	SubjectID string
+	// SessionID 是目标会话标识。
+	SessionID string `json:"session_id"`
+	// CheckpointID 是可选的 checkpoint 标识，为空则查最新代码检查点。
+	CheckpointID string `json:"checkpoint_id,omitempty"`
+}
+
+// CheckpointDiffResult 描述两个相邻代码检查点之间的差异。
+type CheckpointDiffResult struct {
+	CheckpointID     string    `json:"checkpoint_id"`
+	PrevCheckpointID string    `json:"prev_checkpoint_id,omitempty"`
+	CommitHash       string    `json:"commit_hash,omitempty"`
+	PrevCommitHash   string    `json:"prev_commit_hash,omitempty"`
+	Files            FileDiffs `json:"files"`
+	Patch            string    `json:"patch,omitempty"`
+}
+
+// FileDiffs 描述 diff 中的文件变更列表。
+type FileDiffs struct {
+	Added    []string `json:"added,omitempty"`
+	Deleted  []string `json:"deleted,omitempty"`
+	Modified []string `json:"modified,omitempty"`
+}
+
 // ProviderOption 表示前端管理面可见的 provider 及模型候选。
 type ProviderOption struct {
 	// ID 是 provider 标识。
@@ -596,6 +672,14 @@ type RuntimePort interface {
 	SetSessionModel(ctx context.Context, input SetSessionModelInput) error
 	// GetSessionModel 获取当前会话模型。
 	GetSessionModel(ctx context.Context, input GetSessionModelInput) (SessionModelResult, error)
+	// ListCheckpoints 查询指定会话的 checkpoint 列表。
+	ListCheckpoints(ctx context.Context, input ListCheckpointsInput) ([]CheckpointEntry, error)
+	// RestoreCheckpoint 恢复到指定 checkpoint。
+	RestoreCheckpoint(ctx context.Context, input CheckpointRestoreInput) (CheckpointRestoreResult, error)
+	// UndoRestore 撤销最近一次 checkpoint 恢复。
+	UndoRestore(ctx context.Context, input UndoRestoreInput) (CheckpointRestoreResult, error)
+	// CheckpointDiff 查询两个相邻代码检查点之间的差异。
+	CheckpointDiff(ctx context.Context, input CheckpointDiffInput) (CheckpointDiffResult, error)
 }
 
 // ManagementRuntimePort 定义前端管理面访问配置能力的可选下游端口。

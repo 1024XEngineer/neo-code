@@ -126,6 +126,22 @@ func (s *runtimePortCompileStub) CreateSession(_ context.Context, _ CreateSessio
 	return "", nil
 }
 
+func (s *runtimePortCompileStub) ListCheckpoints(_ context.Context, _ ListCheckpointsInput) ([]CheckpointEntry, error) {
+	return nil, nil
+}
+
+func (s *runtimePortCompileStub) RestoreCheckpoint(_ context.Context, _ CheckpointRestoreInput) (CheckpointRestoreResult, error) {
+	return CheckpointRestoreResult{}, nil
+}
+
+func (s *runtimePortCompileStub) UndoRestore(_ context.Context, _ UndoRestoreInput) (CheckpointRestoreResult, error) {
+	return CheckpointRestoreResult{}, nil
+}
+
+func (s *runtimePortCompileStub) CheckpointDiff(_ context.Context, _ CheckpointDiffInput) (CheckpointDiffResult, error) {
+	return CheckpointDiffResult{}, nil
+}
+
 var _ RuntimePort = (*runtimePortCompileStub)(nil)
 var _ TransportAdapter = (*Server)(nil)
 var _ TransportAdapter = (*NetworkServer)(nil)

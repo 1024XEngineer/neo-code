@@ -198,6 +198,22 @@ func (s *rpcRunCaptureRuntimeStub) GetRuntimeSnapshot(
 	return RuntimeSnapshot{}, nil
 }
 
+func (s *rpcRunCaptureRuntimeStub) ListCheckpoints(_ context.Context, _ ListCheckpointsInput) ([]CheckpointEntry, error) {
+	return nil, nil
+}
+
+func (s *rpcRunCaptureRuntimeStub) RestoreCheckpoint(_ context.Context, _ CheckpointRestoreInput) (CheckpointRestoreResult, error) {
+	return CheckpointRestoreResult{}, nil
+}
+
+func (s *rpcRunCaptureRuntimeStub) UndoRestore(_ context.Context, _ UndoRestoreInput) (CheckpointRestoreResult, error) {
+	return CheckpointRestoreResult{}, nil
+}
+
+func (s *rpcRunCaptureRuntimeStub) CheckpointDiff(_ context.Context, _ CheckpointDiffInput) (CheckpointDiffResult, error) {
+	return CheckpointDiffResult{}, nil
+}
+
 func TestDispatchRPCRequestResultEncodeError(t *testing.T) {
 	installHandlerRegistryForTest(t, map[FrameAction]requestFrameHandler{
 		FrameActionPing: func(_ context.Context, frame MessageFrame, _ RuntimePort) MessageFrame {
@@ -955,6 +971,22 @@ func (s *runtimePortOnlyStub) SetSessionModel(_ context.Context, _ SetSessionMod
 }
 func (s *runtimePortOnlyStub) GetSessionModel(_ context.Context, _ GetSessionModelInput) (SessionModelResult, error) {
 	return SessionModelResult{}, nil
+}
+
+func (s *runtimePortOnlyStub) ListCheckpoints(_ context.Context, _ ListCheckpointsInput) ([]CheckpointEntry, error) {
+	return nil, nil
+}
+
+func (s *runtimePortOnlyStub) RestoreCheckpoint(_ context.Context, _ CheckpointRestoreInput) (CheckpointRestoreResult, error) {
+	return CheckpointRestoreResult{}, nil
+}
+
+func (s *runtimePortOnlyStub) UndoRestore(_ context.Context, _ UndoRestoreInput) (CheckpointRestoreResult, error) {
+	return CheckpointRestoreResult{}, nil
+}
+
+func (s *runtimePortOnlyStub) CheckpointDiff(_ context.Context, _ CheckpointDiffInput) (CheckpointDiffResult, error) {
+	return CheckpointDiffResult{}, nil
 }
 
 func TestDispatchRPCRequestProviderMethodsManagementPortUnavailable(t *testing.T) {

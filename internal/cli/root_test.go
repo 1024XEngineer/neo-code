@@ -1092,6 +1092,22 @@ func (stubRuntimePort) GetRuntimeSnapshot(
 	return gateway.RuntimeSnapshot{}, nil
 }
 
+func (stubRuntimePort) ListCheckpoints(context.Context, gateway.ListCheckpointsInput) ([]gateway.CheckpointEntry, error) {
+	return nil, nil
+}
+
+func (stubRuntimePort) RestoreCheckpoint(context.Context, gateway.CheckpointRestoreInput) (gateway.CheckpointRestoreResult, error) {
+	return gateway.CheckpointRestoreResult{}, nil
+}
+
+func (stubRuntimePort) UndoRestore(context.Context, gateway.UndoRestoreInput) (gateway.CheckpointRestoreResult, error) {
+	return gateway.CheckpointRestoreResult{}, nil
+}
+
+func (stubRuntimePort) CheckpointDiff(context.Context, gateway.CheckpointDiffInput) (gateway.CheckpointDiffResult, error) {
+	return gateway.CheckpointDiffResult{}, nil
+}
+
 func (s *stubGatewayServer) ListenAddress() string {
 	return s.listenAddress
 }

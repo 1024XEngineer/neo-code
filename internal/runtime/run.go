@@ -90,6 +90,17 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 		s.finishRun(runToken)
 	}()
 	defer func() {
+		if statePtr != nil {
+			completion := "completed"
+			if err != nil {
+				if errors.Is(err, context.Canceled) {
+					completion = "cancelled"
+				} else {
+					completion = "error"
+				}
+			}
+			s.updateResumeCheckpoint(runCtx, statePtr, "stopped", completion)
+		}
 		s.emitRunTermination(runCtx, input, statePtr, err)
 	}()
 	ctx = runCtx
@@ -170,6 +181,7 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 		return s.handleRunError(err)
 	}
 	s.emitRuntimeSnapshotUpdated(ctx, &state, "session_start")
+	s.updateResumeCheckpoint(ctx, &state, "plan", "")
 
 	maxTurns := resolveRuntimeMaxTurns(initialCfg.Runtime)
 	for turn := 0; ; turn++ {
@@ -184,6 +196,14 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 		stage := resolvePlanningStageForState(&state)
 		if err := s.setBaseRunState(ctx, &state, baseRunStateForPlanningStage(stage)); err != nil {
 			return s.handleRunError(err)
+		}
+		if s.checkpointStore != nil {
+			if cpErr := s.createStartOfTurnCheckpoint(ctx, &state); cpErr != nil {
+				s.emitRunScoped(ctx, EventCheckpointWarning, &state, CheckpointWarningPayload{
+					Error: cpErr.Error(),
+					Phase: "start_of_turn",
+				})
+			}
 		}
 
 	turnAttempt:
@@ -344,6 +364,7 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 				if err := s.setBaseRunState(ctx, &state, controlplane.RunStateVerify); err != nil {
 					return s.handleRunError(err)
 				}
+	      s.updateResumeCheckpoint(ctx, &state, "verify", "completed")
 				acceptanceDecision, err := s.runBeforeCompletionDecisionAcceptance(
 					ctx,
 					&state,
@@ -434,13 +455,21 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 
 			beforeTask := state.session.TaskState.Clone()
 			beforeTodos := cloneTodosForPersistence(state.session.Todos)
+
 			if err := s.setBaseRunState(ctx, &state, controlplane.RunStateExecute); err != nil {
 				return s.handleRunError(err)
 			}
+			s.updateResumeCheckpoint(ctx, &state, "execute", "")
 			summary, err := s.executeAssistantToolCalls(ctx, &state, snapshot, turnOutput.assistant)
 			if err != nil {
 				return s.handleRunError(err)
 			}
+
+			// 通知 TUI 本轮修改了哪些文件
+			s.emitToolDiffs(ctx, &state, summary)
+
+			// 工具执行完成后创建代码检查点，传入 hasWorkspaceWrite 区分 agent 写操作与外界修改
+			s.createEndOfTurnCheckpoint(ctx, &state, summary.HasSuccessfulWorkspaceWrite)
 
 			state.mu.Lock()
 			state.completion = applyToolExecutionCompletion(state.completion, summary)
@@ -476,6 +505,7 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 			if err := s.setBaseRunState(ctx, &state, controlplane.RunStateVerify); err != nil {
 				return s.handleRunError(err)
 			}
+			s.updateResumeCheckpoint(ctx, &state, "verify", "completed")
 			break
 		}
 	}
@@ -662,6 +692,90 @@ func (s *Service) emitTokenUsage(ctx context.Context, state *runState, result le
 		SessionInputTokens:  state.session.TokenInputTotal,
 		SessionOutputTokens: state.session.TokenOutputTotal,
 	})
+}
+
+// emitToolDiffs 遍历本轮写操作结果，逐个 emit EventToolDiff 通知 TUI。
+func (s *Service) emitToolDiffs(ctx context.Context, state *runState, summary toolExecutionSummary) {
+	for _, result := range summary.Results {
+		if !result.Facts.WorkspaceWrite || toolResultNoopWrite(result.Metadata) {
+			continue
+		}
+		payload, ok := buildToolDiffPayload(result)
+		if !ok {
+			continue
+		}
+		s.emitRunScopedOptional(EventToolDiff, state, payload)
+	}
+}
+
+// buildToolDiffPayload 将工具结果 metadata 中的 diff 信息组装成 ToolDiffPayload。
+// 多文件工具(filesystem_move_file 等)使用 Files+Diffs 多路径字段；
+// 其他写工具继续填充兼容字段 FilePath/Diff/WasNew，保持现有消费者不破。
+func buildToolDiffPayload(result tools.ToolResult) (ToolDiffPayload, bool) {
+	payload := ToolDiffPayload{
+		ToolCallID: result.ToolCallID,
+		ToolName:   result.Name,
+	}
+	if multi, ok := toolResultMultiDiffs(result.Metadata); ok && len(multi) > 0 {
+		payload.Diffs = multi
+		payload.Files = make([]FileChange, 0, len(multi))
+		for _, entry := range multi {
+			kind := "modified"
+			if entry.WasNew {
+				kind = "added"
+			}
+			payload.Files = append(payload.Files, FileChange{Path: entry.Path, Kind: kind})
+		}
+		first := multi[0]
+		payload.FilePath = first.Path
+		payload.Diff = first.Diff
+		payload.WasNew = first.WasNew
+		return payload, true
+	}
+	filePath := toolResultFilePath(result.Metadata)
+	if filePath == "" {
+		return payload, false
+	}
+	diff, _ := result.Metadata["tool_diff"].(string)
+	wasNew, _ := result.Metadata["tool_diff_new"].(bool)
+	payload.FilePath = filePath
+	payload.Diff = diff
+	payload.WasNew = wasNew
+	return payload, true
+}
+
+// toolResultMultiDiffs 从工具结果 metadata 解析多文件 diff 列表。
+func toolResultMultiDiffs(metadata map[string]any) ([]FileDiffEntry, bool) {
+	if metadata == nil {
+		return nil, false
+	}
+	raw, ok := metadata["tool_diffs"]
+	if !ok || raw == nil {
+		return nil, false
+	}
+	entries, ok := raw.([]map[string]any)
+	if !ok {
+		return nil, false
+	}
+	out := make([]FileDiffEntry, 0, len(entries))
+	for _, entry := range entries {
+		path, _ := entry["path"].(string)
+		path = strings.TrimSpace(path)
+		if path == "" {
+			continue
+		}
+		diff, _ := entry["diff"].(string)
+		wasNew, _ := entry["was_new"].(bool)
+		out = append(out, FileDiffEntry{
+			Path:   path,
+			Diff:   diff,
+			WasNew: wasNew,
+		})
+	}
+	if len(out) == 0 {
+		return nil, false
+	}
+	return out, true
 }
 
 // applyCompactForState 在运行中执行 compact，并把结果同步回 runState。

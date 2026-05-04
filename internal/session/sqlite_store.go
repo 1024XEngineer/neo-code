@@ -94,6 +94,20 @@ func (s *SQLiteStore) Close() error {
 	return s.db.Close()
 }
 
+// DB 返回底层 *sql.DB 连接，供需要共享同一数据库连接的组件使用。
+// 调用前必须已触发过 ensureDB（如通过任何读写操作），否则返回 nil。
+func (s *SQLiteStore) DB() *sql.DB {
+	if s == nil {
+		return nil
+	}
+	return s.db
+}
+
+// InitDB 显式触发数据库连接初始化。冷启动时确保 DB 可用，供需要共享连接的组件使用。
+func (s *SQLiteStore) InitDB(ctx context.Context) (*sql.DB, error) {
+	return s.ensureDB(ctx)
+}
+
 // CleanupExpiredSessions 删除超过指定时长未更新的会话及其附件，返回删除数量。
 func (s *SQLiteStore) CleanupExpiredSessions(ctx context.Context, maxAge time.Duration) (int, error) {
 	if err := ctx.Err(); err != nil {
@@ -891,6 +905,9 @@ func initializeSQLiteSchema(ctx context.Context, db *sql.DB) error {
 		if err := migrateSQLiteSchemaV4ToV5(ctx, db); err != nil {
 			return err
 		}
+		if err := migrateSQLiteSchemaV5ToV6(ctx, db); err != nil {
+			return err
+		}
 	case 2:
 		if err := migrateSQLiteSchemaV2ToV3(ctx, db); err != nil {
 			return err
@@ -901,6 +918,9 @@ func initializeSQLiteSchema(ctx context.Context, db *sql.DB) error {
 		if err := migrateSQLiteSchemaV4ToV5(ctx, db); err != nil {
 			return err
 		}
+		if err := migrateSQLiteSchemaV5ToV6(ctx, db); err != nil {
+			return err
+		}
 	case 3:
 		if err := migrateSQLiteSchemaV3ToV4(ctx, db); err != nil {
 			return err
@@ -908,8 +928,18 @@ func initializeSQLiteSchema(ctx context.Context, db *sql.DB) error {
 		if err := migrateSQLiteSchemaV4ToV5(ctx, db); err != nil {
 			return err
 		}
+		if err := migrateSQLiteSchemaV5ToV6(ctx, db); err != nil {
+			return err
+		}
 	case 4:
 		if err := migrateSQLiteSchemaV4ToV5(ctx, db); err != nil {
+			return err
+		}
+		if err := migrateSQLiteSchemaV5ToV6(ctx, db); err != nil {
+			return err
+		}
+	case 5:
+		if err := migrateSQLiteSchemaV5ToV6(ctx, db); err != nil {
 			return err
 		}
 	default:
@@ -972,6 +1002,45 @@ func initializeSQLiteSchema(ctx context.Context, db *sql.DB) error {
 		`CREATE INDEX IF NOT EXISTS idx_sessions_updated_at ON sessions(updated_at_ms DESC)`,
 		`CREATE INDEX IF NOT EXISTS idx_messages_session_seq_desc ON messages(session_id, seq DESC)`,
 		`CREATE INDEX IF NOT EXISTS idx_assets_session_id ON session_assets(session_id)`,
+		`CREATE TABLE IF NOT EXISTS checkpoint_records (
+			id TEXT PRIMARY KEY,
+			workspace_key TEXT NOT NULL,
+			session_id TEXT NOT NULL,
+			run_id TEXT NOT NULL DEFAULT '',
+			workdir TEXT NOT NULL DEFAULT '',
+			created_at_ms INTEGER NOT NULL,
+			reason TEXT NOT NULL DEFAULT 'pre_write',
+			code_checkpoint_ref TEXT NOT NULL DEFAULT '',
+			session_checkpoint_ref TEXT NOT NULL DEFAULT '',
+			resume_checkpoint_ref TEXT NOT NULL DEFAULT '',
+			transcript_revision INTEGER NOT NULL DEFAULT 0,
+			restorable INTEGER NOT NULL DEFAULT 1,
+			status TEXT NOT NULL DEFAULT 'creating',
+			FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE
+		)`,
+		`CREATE TABLE IF NOT EXISTS session_checkpoints (
+			id TEXT PRIMARY KEY,
+			session_id TEXT NOT NULL,
+			head_json TEXT NOT NULL DEFAULT '',
+			messages_json TEXT NOT NULL DEFAULT '',
+			created_at_ms INTEGER NOT NULL,
+			FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE
+		)`,
+		`CREATE TABLE IF NOT EXISTS resume_checkpoints (
+			id TEXT PRIMARY KEY,
+			workspace_key TEXT NOT NULL,
+			run_id TEXT NOT NULL DEFAULT '',
+			session_id TEXT NOT NULL,
+			turn INTEGER NOT NULL DEFAULT 0,
+			phase TEXT NOT NULL DEFAULT '',
+			completion_state TEXT NOT NULL DEFAULT '',
+			transcript_revision INTEGER NOT NULL DEFAULT 0,
+			updated_at_ms INTEGER NOT NULL,
+			FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_checkpoint_session_created ON checkpoint_records(session_id, created_at_ms DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_session_checkpoints_session ON session_checkpoints(session_id, created_at_ms DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_resume_checkpoints_session ON resume_checkpoints(session_id, updated_at_ms DESC)`,
 		fmt.Sprintf(`PRAGMA user_version=%d`, sqliteSchemaVersion),
 	}
 	for _, statement := range statements {
@@ -1005,6 +1074,70 @@ func migrateSQLiteSchemaV1ToV2(ctx context.Context, db *sql.DB) error {
 			return fmt.Errorf("session: migrate sqlite schema v1 to v2: %w", err)
 		}
 	}
+	if _, err := tx.ExecContext(ctx, fmt.Sprintf(`PRAGMA user_version=%d`, sqliteSchemaVersion)); err != nil {
+		return fmt.Errorf("session: set migrated sqlite schema version: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("session: commit schema migration tx: %w", err)
+	}
+	return nil
+}
+
+// migrateSQLiteSchemaV5ToV6 将 v5 会话库升级到 v6 schema，新增 checkpoint 相关表。
+func migrateSQLiteSchemaV5ToV6(ctx context.Context, db *sql.DB) error {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("session: begin schema migration tx: %w", err)
+	}
+	defer rollbackTx(tx)
+
+	stmts := []string{
+		`CREATE TABLE IF NOT EXISTS checkpoint_records (
+			id TEXT PRIMARY KEY,
+			workspace_key TEXT NOT NULL,
+			session_id TEXT NOT NULL,
+			run_id TEXT NOT NULL DEFAULT '',
+			workdir TEXT NOT NULL DEFAULT '',
+			created_at_ms INTEGER NOT NULL,
+			reason TEXT NOT NULL DEFAULT 'pre_write',
+			code_checkpoint_ref TEXT NOT NULL DEFAULT '',
+			session_checkpoint_ref TEXT NOT NULL DEFAULT '',
+			resume_checkpoint_ref TEXT NOT NULL DEFAULT '',
+			transcript_revision INTEGER NOT NULL DEFAULT 0,
+			restorable INTEGER NOT NULL DEFAULT 1,
+			status TEXT NOT NULL DEFAULT 'creating',
+			FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE
+		)`,
+		`CREATE TABLE IF NOT EXISTS session_checkpoints (
+			id TEXT PRIMARY KEY,
+			session_id TEXT NOT NULL,
+			head_json TEXT NOT NULL DEFAULT '',
+			messages_json TEXT NOT NULL DEFAULT '',
+			created_at_ms INTEGER NOT NULL,
+			FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE
+		)`,
+		`CREATE TABLE IF NOT EXISTS resume_checkpoints (
+			id TEXT PRIMARY KEY,
+			workspace_key TEXT NOT NULL,
+			run_id TEXT NOT NULL DEFAULT '',
+			session_id TEXT NOT NULL,
+			turn INTEGER NOT NULL DEFAULT 0,
+			phase TEXT NOT NULL DEFAULT '',
+			completion_state TEXT NOT NULL DEFAULT '',
+			transcript_revision INTEGER NOT NULL DEFAULT 0,
+			updated_at_ms INTEGER NOT NULL,
+			FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_checkpoint_session_created ON checkpoint_records(session_id, created_at_ms DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_session_checkpoints_session ON session_checkpoints(session_id, created_at_ms DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_resume_checkpoints_session ON resume_checkpoints(session_id, updated_at_ms DESC)`,
+	}
+	for _, stmt := range stmts {
+		if _, err := tx.ExecContext(ctx, stmt); err != nil {
+			return fmt.Errorf("session: migrate sqlite schema v5 to v6: %w", err)
+		}
+	}
+
 	if _, err := tx.ExecContext(ctx, fmt.Sprintf(`PRAGMA user_version=%d`, sqliteSchemaVersion)); err != nil {
 		return fmt.Errorf("session: set migrated sqlite schema version: %w", err)
 	}

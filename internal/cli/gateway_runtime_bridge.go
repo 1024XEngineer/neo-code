@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"neo-code/internal/app"
+	"neo-code/internal/checkpoint"
 	"neo-code/internal/config"
 	configstate "neo-code/internal/config/state"
 	"neo-code/internal/gateway"
@@ -40,6 +41,13 @@ type runtimeTodoLister interface {
 
 type runtimeSnapshotGetter interface {
 	GetRuntimeSnapshot(ctx context.Context, sessionID string) (agentruntime.RuntimeSnapshot, error)
+}
+
+type runtimeCheckpointer interface {
+	ListCheckpoints(ctx context.Context, sessionID string, opts checkpoint.ListCheckpointOpts) ([]agentsession.CheckpointRecord, error)
+	RestoreCheckpoint(ctx context.Context, input agentruntime.GatewayRestoreInput) (agentruntime.RestoreResult, error)
+	UndoRestoreCheckpoint(ctx context.Context, sessionID string) (agentruntime.RestoreResult, error)
+	CheckpointDiff(ctx context.Context, input agentruntime.CheckpointDiffInput) (agentruntime.CheckpointDiffResult, error)
 }
 
 // bridgeSessionStore 定义桥接层对会话存储的最低需求。
@@ -1363,3 +1371,91 @@ type manualModelPayload struct {
 }
 
 var _ gateway.RuntimePort = (*gatewayRuntimePortBridge)(nil)
+
+func (b *gatewayRuntimePortBridge) ListCheckpoints(ctx context.Context, input gateway.ListCheckpointsInput) ([]gateway.CheckpointEntry, error) {
+	cp, ok := b.runtime.(runtimeCheckpointer)
+	if !ok {
+		return nil, fmt.Errorf("gateway runtime bridge: runtime does not support checkpoint operations")
+	}
+	records, err := cp.ListCheckpoints(ctx, strings.TrimSpace(input.SessionID), checkpoint.ListCheckpointOpts{
+		Limit:          input.Limit,
+		RestorableOnly: input.RestorableOnly,
+	})
+	if err != nil {
+		return nil, err
+	}
+	entries := make([]gateway.CheckpointEntry, 0, len(records))
+	for _, r := range records {
+		entries = append(entries, gateway.CheckpointEntry{
+			CheckpointID: r.CheckpointID,
+			SessionID:    r.SessionID,
+			Reason:       string(r.Reason),
+			Status:       string(r.Status),
+			Restorable:   r.Restorable,
+			CreatedAt:    r.CreatedAt.UnixMilli(),
+		})
+	}
+	return entries, nil
+}
+
+func (b *gatewayRuntimePortBridge) RestoreCheckpoint(ctx context.Context, input gateway.CheckpointRestoreInput) (gateway.CheckpointRestoreResult, error) {
+	cp, ok := b.runtime.(runtimeCheckpointer)
+	if !ok {
+		return gateway.CheckpointRestoreResult{}, fmt.Errorf("gateway runtime bridge: runtime does not support checkpoint operations")
+	}
+	result, err := cp.RestoreCheckpoint(ctx, agentruntime.GatewayRestoreInput{
+		SessionID:    strings.TrimSpace(input.SessionID),
+		CheckpointID: strings.TrimSpace(input.CheckpointID),
+		Force:        input.Force,
+	})
+	if err != nil {
+		return gateway.CheckpointRestoreResult{}, err
+	}
+	return gateway.CheckpointRestoreResult{
+		CheckpointID: result.CheckpointID,
+		SessionID:    result.SessionID,
+		HasConflict:  result.Conflict != nil && result.Conflict.HasConflict,
+	}, nil
+}
+
+func (b *gatewayRuntimePortBridge) UndoRestore(ctx context.Context, input gateway.UndoRestoreInput) (gateway.CheckpointRestoreResult, error) {
+	cp, ok := b.runtime.(runtimeCheckpointer)
+	if !ok {
+		return gateway.CheckpointRestoreResult{}, fmt.Errorf("gateway runtime bridge: runtime does not support checkpoint operations")
+	}
+	result, err := cp.UndoRestoreCheckpoint(ctx, strings.TrimSpace(input.SessionID))
+	if err != nil {
+		return gateway.CheckpointRestoreResult{}, err
+	}
+	return gateway.CheckpointRestoreResult{
+		CheckpointID: result.CheckpointID,
+		SessionID:    result.SessionID,
+		HasConflict:  result.Conflict != nil && result.Conflict.HasConflict,
+	}, nil
+}
+
+func (b *gatewayRuntimePortBridge) CheckpointDiff(ctx context.Context, input gateway.CheckpointDiffInput) (gateway.CheckpointDiffResult, error) {
+	cp, ok := b.runtime.(runtimeCheckpointer)
+	if !ok {
+		return gateway.CheckpointDiffResult{}, fmt.Errorf("gateway runtime bridge: runtime does not support checkpoint operations")
+	}
+	result, err := cp.CheckpointDiff(ctx, agentruntime.CheckpointDiffInput{
+		SessionID:    strings.TrimSpace(input.SessionID),
+		CheckpointID: strings.TrimSpace(input.CheckpointID),
+	})
+	if err != nil {
+		return gateway.CheckpointDiffResult{}, err
+	}
+	return gateway.CheckpointDiffResult{
+		CheckpointID:     result.CheckpointID,
+		PrevCheckpointID: result.PrevCheckpointID,
+		CommitHash:       result.CommitHash,
+		PrevCommitHash:   result.PrevCommitHash,
+		Files: gateway.FileDiffs{
+			Added:    result.Files.Added,
+			Deleted:  result.Files.Deleted,
+			Modified: result.Files.Modified,
+		},
+		Patch: result.Patch,
+	}, nil
+}

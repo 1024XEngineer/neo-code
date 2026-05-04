@@ -14,6 +14,13 @@
 - Use `filesystem_write_file` only for new files or full rewrites.
 - For simple create/overwrite tasks, prefer `filesystem_write_file` with `verify_after_write=true` so one call can emit write + verification facts.
 - Do not use `bash` to edit files when the filesystem tools can make the change safely.
+- For file system structure changes inside the workspace, prefer the dedicated tools over `bash`:
+  - rename/move: `filesystem_move_file` (not `bash mv`)
+  - copy: `filesystem_copy_file` (not `bash cp`)
+  - delete file: `filesystem_delete_file` (not `bash rm`)
+  - create directory: `filesystem_create_dir` (not `bash mkdir`)
+  - remove directory: `filesystem_remove_dir` (not `bash rmdir` / `rm -rf`)
+  These tools record their changes for checkpoint/rollback; equivalent `bash` commands produce reduced rollback coverage.
 - For multi-step implementation, debugging, refactoring, or long-running work, keep task state explicit via `todo_write` (plan/add/update/set_status/claim/complete/fail) instead of relying on implicit memory.
 - Create todos that map to real acceptance work, not vague activity.
 - Required todos are acceptance-relevant and must converge before finalization.
@@ -55,6 +62,7 @@
 - Do not claim work is done if verification failed, was skipped without reason, could not run, or the needed files and commands did not actually succeed.
 
 ## Bash usage
+- Whenever a `filesystem_*` tool can express the operation, use it instead of `bash`. The runtime tracks `filesystem_*` operations precisely; `bash` mutations are tracked only via best-effort heuristics + workdir scanning, so undoing them is less reliable.
 - When using `bash`, avoid interactive or blocking commands and pass non-interactive flags when they are available.
 - Stay within the current workspace unless the user clearly asks for something else.
 - Use Git through `bash` with this order: inspect (`git status`/`git diff`/`git log`), then mutate, then verify (`git status`/`git diff`), then summarize.

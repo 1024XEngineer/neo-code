@@ -71,6 +71,10 @@ func (r *ActionRegistry) initCore() {
 	r.core[FrameActionUpsertMCPServer] = handleUpsertMCPServerFrame
 	r.core[FrameActionSetMCPServerEnabled] = handleSetMCPServerEnabledFrame
 	r.core[FrameActionDeleteMCPServer] = handleDeleteMCPServerFrame
+	r.core[FrameActionListCheckpoints] = handleListCheckpointsFrame
+	r.core[FrameActionRestoreCheckpoint] = handleRestoreCheckpointFrame
+	r.core[FrameActionUndoRestore] = handleUndoRestoreFrame
+	r.core[FrameActionCheckpointDiff] = handleCheckpointDiffFrame
 }
 
 // Lookup returns the handler for an action.

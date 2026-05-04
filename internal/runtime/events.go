@@ -325,6 +325,8 @@ const (
 	EventToolResult EventType = "tool_result"
 	// EventToolChunk 表示工具流式输出分片。
 	EventToolChunk EventType = "tool_chunk"
+	// EventToolDiff 表示写工具修改了某个文件。
+	EventToolDiff EventType = "tool_diff"
 	// EventRunCanceled 表示运行被取消。
 	EventRunCanceled EventType = "run_canceled"
 	// EventError 表示运行出现终止错误。
@@ -415,6 +417,17 @@ const (
 	EventSubAgentSnapshotUpdated EventType = "subagent_snapshot_updated"
 	// EventTodoSnapshotUpdated 表示 todo 快照已更新。
 	EventTodoSnapshotUpdated EventType = "todo_snapshot_updated"
+
+	// EventCheckpointCreated 表示 pre-write checkpoint 已创建。
+	EventCheckpointCreated EventType = "checkpoint_created"
+	// EventCheckpointWarning 表示 checkpoint 创建过程中出现非致命告警。
+	EventCheckpointWarning EventType = "checkpoint_warning"
+	// EventCheckpointRestored 表示 checkpoint 已成功恢复。
+	EventCheckpointRestored EventType = "checkpoint_restored"
+	// EventCheckpointUndoRestore 表示 restore 已撤销。
+	EventCheckpointUndoRestore EventType = "checkpoint_undo_restore"
+	// EventBashSideEffect 表示 bash 命令在 workdir 内产生了文件变更。
+	EventBashSideEffect EventType = "bash_side_effect"
 )
 
 // TokenUsagePayload 承载单轮 token 用量统计。
@@ -426,4 +439,66 @@ type TokenUsagePayload struct {
 	HasUnknownUsage     bool   `json:"has_unknown_usage,omitempty"`
 	SessionInputTokens  int    `json:"session_input_tokens"`
 	SessionOutputTokens int    `json:"session_output_tokens"`
+}
+
+// CheckpointCreatedPayload 描述 checkpoint 创建成功事件。
+type CheckpointCreatedPayload struct {
+	CheckpointID         string `json:"checkpoint_id"`
+	CodeCheckpointRef    string `json:"code_checkpoint_ref"`
+	SessionCheckpointRef string `json:"session_checkpoint_ref"`
+	CommitHash           string `json:"commit_hash"`
+	Reason               string `json:"reason"`
+}
+
+// CheckpointWarningPayload 描述 checkpoint 创建过程中非致命告警。
+type CheckpointWarningPayload struct {
+	Error string `json:"error"`
+	Phase string `json:"phase"`
+}
+
+// CheckpointRestoredPayload 描述 checkpoint 恢复成功事件。
+type CheckpointRestoredPayload struct {
+	CheckpointID      string `json:"checkpoint_id"`
+	SessionID         string `json:"session_id"`
+	GuardCheckpointID string `json:"guard_checkpoint_id"`
+}
+
+// CheckpointUndoRestorePayload 描述 restore 撤销事件。
+type CheckpointUndoRestorePayload struct {
+	GuardCheckpointID string `json:"guard_checkpoint_id"`
+	SessionID         string `json:"session_id"`
+}
+
+// FileChange 描述一次文件变更的最小信息。
+type FileChange struct {
+	Path string `json:"path"`
+	Kind string `json:"kind"` // "added" | "modified" | "deleted"
+}
+
+// FileDiffEntry 描述单个文件的精确 diff（多文件工具下使用）。
+type FileDiffEntry struct {
+	Path   string `json:"path"`
+	Diff   string `json:"diff,omitempty"`
+	WasNew bool   `json:"was_new,omitempty"`
+}
+
+// ToolDiffPayload 描述写工具修改了哪些文件。
+// 单文件兼容字段（FilePath/Diff/WasNew）保留以支持现有消费方；多文件工具填充 Files+Diffs。
+type ToolDiffPayload struct {
+	ToolCallID string          `json:"tool_call_id"`
+	ToolName   string          `json:"tool_name"`
+	FilePath   string          `json:"file_path"`
+	Diff       string          `json:"diff,omitempty"`
+	WasNew     bool            `json:"was_new,omitempty"`
+	Files      []FileChange    `json:"files,omitempty"`
+	Diffs      []FileDiffEntry `json:"diffs,omitempty"`
+}
+
+// BashSideEffectPayload 描述 bash 命令在 workdir 内的文件变更。
+type BashSideEffectPayload struct {
+	ToolCallID                string       `json:"tool_call_id"`
+	Command                   string       `json:"command,omitempty"`
+	Changes                   []FileChange `json:"changes"`
+	PreemptivelyCapturedPaths []string     `json:"preemptively_captured_paths,omitempty"`
+	UncoveredPaths            []string     `json:"uncovered_paths,omitempty"`
 }

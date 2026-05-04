@@ -476,7 +476,7 @@ func TestSQLiteStoreInitializationRejectsUnsupportedSchemaVersion(t *testing.T) 
 	if err := os.MkdirAll(projectDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll(projectDir) error = %v", err)
 	}
-	db, err := sql.Open("sqlite", databasePath(baseDir, workspaceRoot))
+	db, err := sql.Open("sqlite", DatabasePath(baseDir, workspaceRoot))
 	if err != nil {
 		t.Fatalf("sql.Open() error = %v", err)
 	}
@@ -715,7 +715,7 @@ func createLegacyV1SessionDB(
 	if err := os.MkdirAll(projectDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll(projectDir) error = %v", err)
 	}
-	db, err := sql.Open("sqlite", databasePath(baseDir, workspaceRoot))
+	db, err := sql.Open("sqlite", DatabasePath(baseDir, workspaceRoot))
 	if err != nil {
 		t.Fatalf("sql.Open() error = %v", err)
 	}
@@ -792,7 +792,7 @@ func createLegacyV2SessionDB(t *testing.T, ctx context.Context, baseDir string, 
 	if err := os.MkdirAll(projectDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll(projectDir) error = %v", err)
 	}
-	db, err := sql.Open("sqlite", databasePath(baseDir, workspaceRoot))
+	db, err := sql.Open("sqlite", DatabasePath(baseDir, workspaceRoot))
 	if err != nil {
 		t.Fatalf("sql.Open() error = %v", err)
 	}

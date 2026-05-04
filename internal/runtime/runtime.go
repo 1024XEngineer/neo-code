@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"neo-code/internal/checkpoint"
 	"neo-code/internal/config"
 	agentcontext "neo-code/internal/context"
 	contextcompact "neo-code/internal/context/compact"
@@ -150,6 +151,8 @@ type Service struct {
 	skillsRegistry    skills.Registry
 	budgetResolver    BudgetResolver
 	hookExecutor      HookExecutor
+	checkpointStore   checkpoint.CheckpointStore
+	perEditStore      *checkpoint.PerEditSnapshotStore
 
 	events             chan RuntimeEvent
 	runtimeSnapshotMu  sync.Mutex
@@ -452,4 +455,10 @@ func (s *Service) SetHookExecutor(executor HookExecutor) {
 		base.SetAsyncResultSink(newHookAsyncResultSink(s))
 	}
 	s.hookExecutor = executor
+}
+
+// SetCheckpointDependencies 注入 checkpoint 存储与版本化文件历史快照后端，用于 pre-write checkpoint gate。
+func (s *Service) SetCheckpointDependencies(store checkpoint.CheckpointStore, perEdit *checkpoint.PerEditSnapshotStore) {
+	s.checkpointStore = store
+	s.perEditStore = perEdit
 }

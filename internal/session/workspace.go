@@ -17,8 +17,8 @@ func projectDirectory(baseDir string, workspaceRoot string) string {
 	return filepath.Join(baseDir, projectsDirName, HashWorkspaceRoot(workspaceRoot))
 }
 
-// databasePath 返回当前工作区级 SQLite 数据库文件路径。
-func databasePath(baseDir string, workspaceRoot string) string {
+// DatabasePath 返回当前工作区级 SQLite 数据库文件路径。
+func DatabasePath(baseDir string, workspaceRoot string) string {
 	return filepath.Join(projectDirectory(baseDir, workspaceRoot), sessionDatabaseFileName)
 }
 

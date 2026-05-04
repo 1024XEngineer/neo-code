@@ -2,10 +2,14 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 
+	"neo-code/internal/checkpoint"
 	providertypes "neo-code/internal/provider/types"
 	runtimefacts "neo-code/internal/runtime/facts"
 	runtimehooks "neo-code/internal/runtime/hooks"
@@ -148,6 +152,55 @@ func (s *Service) executeOneToolCall(
 
 	s.emitRunScoped(ctx, EventToolStart, state, call)
 
+	isWrite := isFileWriteTool(call.Name)
+	isBash := strings.EqualFold(strings.TrimSpace(call.Name), tools.ToolNameBash)
+
+	var preSnaps map[string]fileSnapshot
+	var preFingerprint checkpoint.WorkdirFingerprint
+	var bashCapturedPaths []string
+	var bashCommand string
+	var touchedPaths []string
+	var removeDirNestedPaths []string
+
+	if isWrite {
+		touchedPaths = toolCallTouchedPaths(call, snapshot.Workdir)
+		if len(touchedPaths) > 0 {
+			preSnaps = make(map[string]fileSnapshot, len(touchedPaths))
+			for _, p := range touchedPaths {
+				preSnaps[p] = captureFileSnapshot(p)
+				if s.perEditStore != nil {
+					_, _ = s.perEditStore.CapturePreWrite(p)
+				}
+				// remove_dir: recursively pre-capture all nested files/dirs.
+				if strings.EqualFold(strings.TrimSpace(call.Name), tools.ToolNameFilesystemRemoveDir) {
+					if info, err := os.Stat(p); err == nil && info.IsDir() {
+						_ = filepath.WalkDir(p, func(path string, d os.DirEntry, err error) error {
+							if err != nil || path == p {
+								return nil
+							}
+							removeDirNestedPaths = append(removeDirNestedPaths, path)
+							if s.perEditStore != nil {
+								_, _ = s.perEditStore.CapturePreWrite(path)
+							}
+							return nil
+						})
+					}
+				}
+			}
+		}
+	} else if isBash && s.perEditStore != nil {
+		bashCommand = bashCommandFromCall(call)
+		if checkpoint.BashLikelyWritesFiles(bashCommand) {
+			bashCapturedPaths = checkpoint.SourceFilesInWorkdir(bashCommand, snapshot.Workdir)
+			if len(bashCapturedPaths) > 0 {
+				_, _ = s.perEditStore.CaptureBatch(bashCapturedPaths)
+			}
+			if fp, _, err := checkpoint.ScanWorkdir(ctx, snapshot.Workdir, checkpoint.DefaultFingerprintOptions()); err == nil {
+				preFingerprint = fp
+			}
+		}
+	}
+
 	result, execErr := s.executeToolCallWithPermission(ctx, permissionExecutionInput{
 		RunID:       state.runID,
 		SessionID:   state.session.ID,
@@ -159,6 +212,61 @@ func (s *Service) executeOneToolCall(
 		Workdir:     snapshot.Workdir,
 		ToolTimeout: snapshot.ToolTimeout,
 	})
+
+	if isWrite && len(preSnaps) > 0 && execErr == nil && !result.IsError {
+		if result.Metadata == nil {
+			result.Metadata = map[string]any{}
+		}
+		diffs := make([]map[string]any, 0, len(preSnaps))
+		for path, snap := range preSnaps {
+			diff, err := snap.Diff()
+			if err != nil {
+				continue
+			}
+			diffs = append(diffs, map[string]any{
+				"path":    path,
+				"diff":    diff,
+				"was_new": snap.WasNew(),
+			})
+		}
+		if len(diffs) > 0 {
+			result.Metadata["tool_diffs"] = diffs
+			if len(diffs) == 1 {
+				result.Metadata["tool_diff"] = diffs[0]["diff"]
+				result.Metadata["tool_diff_new"] = diffs[0]["was_new"]
+			}
+		}
+	}
+
+	if isWrite && execErr == nil && !result.IsError && s.perEditStore != nil {
+		switch strings.TrimSpace(call.Name) {
+		case tools.ToolNameFilesystemRemoveDir:
+			if len(removeDirNestedPaths) > 0 && len(touchedPaths) > 0 {
+				allPaths := append([]string{touchedPaths[0]}, removeDirNestedPaths...)
+				_ = s.perEditStore.CapturePostDelete(allPaths)
+			} else if len(touchedPaths) > 0 {
+				_ = s.perEditStore.CapturePostDelete(touchedPaths)
+			}
+		case tools.ToolNameFilesystemDeleteFile:
+			if len(touchedPaths) > 0 {
+				_ = s.perEditStore.CapturePostDelete(touchedPaths)
+			}
+		}
+	}
+
+	if isBash && preFingerprint != nil && execErr == nil && !result.IsError {
+		if afterFP, _, err := checkpoint.ScanWorkdir(ctx, snapshot.Workdir, checkpoint.DefaultFingerprintOptions()); err == nil {
+			fpDiff := checkpoint.DiffFingerprints(preFingerprint, afterFP)
+			if len(fpDiff.Added) > 0 || len(fpDiff.Modified) > 0 || len(fpDiff.Deleted) > 0 {
+				covered := make(map[string]struct{}, len(bashCapturedPaths))
+				for _, p := range bashCapturedPaths {
+					covered[filepath.Clean(p)] = struct{}{}
+				}
+				uncovered := collectUncoveredBashPaths(snapshot.Workdir, fpDiff, covered)
+				s.emitBashSideEffectEvent(ctx, state, call, bashCommand, fpDiff, bashCapturedPaths, uncovered)
+			}
+		}
+	}
 
 	if errors.Is(execErr, context.Canceled) {
 		s.emitAfterToolResultHook(ctx, state, call, result, execErr, snapshot.Workdir)
@@ -200,6 +308,10 @@ func (s *Service) executeOneToolCall(
 		state.mu.Lock()
 		state.rememberedThisRun = true
 		state.mu.Unlock()
+	}
+
+	if isBash && execErr == nil && !result.IsError && len(bashCapturedPaths) > 0 {
+		result.Facts.WorkspaceWrite = true
 	}
 
 	if checkContext() {
@@ -361,6 +473,178 @@ func toolResultNoopWrite(metadata map[string]any) bool {
 	default:
 		return false
 	}
+}
+
+// toolResultFilePath 从工具结果 metadata 中取文件路径。
+func toolResultFilePath(metadata map[string]any) string {
+	if metadata == nil {
+		return ""
+	}
+	p, _ := metadata["path"].(string)
+	return strings.TrimSpace(p)
+}
+
+// isFileWriteTool 判断工具调用是否为文件写入类工具，需在执行前后做 diff。
+func isFileWriteTool(name string) bool {
+	switch strings.TrimSpace(name) {
+	case tools.ToolNameFilesystemWriteFile,
+		tools.ToolNameFilesystemEdit,
+		tools.ToolNameFilesystemMoveFile,
+		tools.ToolNameFilesystemCopyFile,
+		tools.ToolNameFilesystemDeleteFile,
+		tools.ToolNameFilesystemCreateDir,
+		tools.ToolNameFilesystemRemoveDir:
+		return true
+	}
+	return false
+}
+
+// toolCallTouchedPaths 从工具调用参数中提取所有可能被修改的工作区绝对路径。
+// move/copy 同时返回 source 与 destination；其他写工具返回单个 path。
+func toolCallTouchedPaths(call providertypes.ToolCall, workdir string) []string {
+	args := strings.TrimSpace(call.Arguments)
+	if args == "" {
+		return nil
+	}
+	switch strings.TrimSpace(call.Name) {
+	case tools.ToolNameFilesystemMoveFile, tools.ToolNameFilesystemCopyFile:
+		var parsed struct {
+			SourcePath      string `json:"source_path"`
+			DestinationPath string `json:"destination_path"`
+		}
+		if err := json.Unmarshal([]byte(args), &parsed); err != nil {
+			return nil
+		}
+		return resolveWorkdirPaths(workdir, parsed.SourcePath, parsed.DestinationPath)
+	default:
+		var parsed struct {
+			Path string `json:"path"`
+		}
+		if err := json.Unmarshal([]byte(args), &parsed); err != nil {
+			return nil
+		}
+		return resolveWorkdirPaths(workdir, parsed.Path)
+	}
+}
+
+// resolveWorkdirPaths 将多个相对/绝对路径解析为工作区绝对路径，丢弃空字符串。
+func resolveWorkdirPaths(workdir string, raw ...string) []string {
+	out := make([]string, 0, len(raw))
+	for _, p := range raw {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		if filepath.IsAbs(p) {
+			out = append(out, filepath.Clean(p))
+			continue
+		}
+		wd := strings.TrimSpace(workdir)
+		if wd == "" {
+			out = append(out, filepath.Clean(p))
+			continue
+		}
+		out = append(out, filepath.Clean(filepath.Join(wd, p)))
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// bashCommandFromCall 从 bash 工具调用参数解析 command 字段，兼容 cmd 别名。
+func bashCommandFromCall(call providertypes.ToolCall) string {
+	args := strings.TrimSpace(call.Arguments)
+	if args == "" {
+		return ""
+	}
+	var parsed struct {
+		Command string `json:"command"`
+		Cmd     string `json:"cmd"`
+	}
+	if err := json.Unmarshal([]byte(args), &parsed); err != nil {
+		return ""
+	}
+	if c := strings.TrimSpace(parsed.Command); c != "" {
+		return c
+	}
+	return strings.TrimSpace(parsed.Cmd)
+}
+
+// collectUncoveredBashPaths 把 fingerprint 检测到的变更路径与启发式预捕获集合做差，
+// 输出 EventBashSideEffect.UncoveredPaths 用于可观测性提醒。
+func collectUncoveredBashPaths(workdir string, fpDiff checkpoint.FingerprintDiff, covered map[string]struct{}) []string {
+	if len(fpDiff.Added) == 0 && len(fpDiff.Modified) == 0 {
+		return nil
+	}
+	wd := strings.TrimSpace(workdir)
+	seen := make(map[string]struct{})
+	out := make([]string, 0)
+	check := func(rel string) {
+		rel = strings.TrimSpace(rel)
+		if rel == "" {
+			return
+		}
+		var abs string
+		if filepath.IsAbs(rel) {
+			abs = filepath.Clean(rel)
+		} else if wd != "" {
+			abs = filepath.Clean(filepath.Join(wd, rel))
+		} else {
+			abs = filepath.Clean(rel)
+		}
+		if _, ok := covered[abs]; ok {
+			return
+		}
+		if _, dup := seen[rel]; dup {
+			return
+		}
+		seen[rel] = struct{}{}
+		out = append(out, rel)
+	}
+	for _, p := range fpDiff.Modified {
+		check(p)
+	}
+	for _, p := range fpDiff.Added {
+		check(p)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// emitBashSideEffectEvent 派发 EventBashSideEffect，将 fingerprint 变化分类成 added/modified/deleted。
+func (s *Service) emitBashSideEffectEvent(
+	ctx context.Context,
+	state *runState,
+	call providertypes.ToolCall,
+	command string,
+	fpDiff checkpoint.FingerprintDiff,
+	preCaptured []string,
+	uncovered []string,
+) {
+	changes := make([]FileChange, 0, len(fpDiff.Added)+len(fpDiff.Modified)+len(fpDiff.Deleted))
+	for _, p := range fpDiff.Added {
+		changes = append(changes, FileChange{Path: p, Kind: "added"})
+	}
+	for _, p := range fpDiff.Modified {
+		changes = append(changes, FileChange{Path: p, Kind: "modified"})
+	}
+	for _, p := range fpDiff.Deleted {
+		changes = append(changes, FileChange{Path: p, Kind: "deleted"})
+	}
+	if len(changes) == 0 {
+		return
+	}
+	payload := BashSideEffectPayload{
+		ToolCallID:                strings.TrimSpace(call.ID),
+		Command:                   strings.TrimSpace(command),
+		Changes:                   changes,
+		PreemptivelyCapturedPaths: preCaptured,
+		UncoveredPaths:            uncovered,
+	}
+	s.emitRunScoped(ctx, EventBashSideEffect, state, payload)
 }
 
 func summarizeHookResultContent(content string) string {

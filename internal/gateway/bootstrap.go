@@ -1792,6 +1792,18 @@ func readStringValue(payload map[string]any, key string) string {
 	return strings.TrimSpace(stringValue)
 }
 
+func readBoolValue(payload map[string]any, key string) bool {
+	rawValue, exists := payload[key]
+	if !exists {
+		return false
+	}
+	boolValue, ok := rawValue.(bool)
+	if !ok {
+		return false
+	}
+	return boolValue
+}
+
 // decodeWakeIntent 将任意 payload 解码为 WakeIntent。
 func decodeWakeIntent(payload any) (protocol.WakeIntent, error) {
 	if payload == nil {
@@ -1843,4 +1855,163 @@ func toFrameError(err *handlers.WakeError) *FrameError {
 		}
 	}
 	return NewFrameError(ErrorCodeInternalError, err.Message)
+}
+
+func handleListCheckpointsFrame(ctx context.Context, frame MessageFrame, runtimePort RuntimePort) MessageFrame {
+	if runtimePort == nil {
+		return runtimePortUnavailableFrame(frame)
+	}
+	subjectID, subjectErr := requireAuthenticatedSubjectID(ctx)
+	if subjectErr != nil {
+		return errorFrame(frame, subjectErr)
+	}
+
+	callCtx, cancel := withRuntimeOperationTimeout(ctx)
+	defer cancel()
+
+	entries, err := runtimePort.ListCheckpoints(callCtx, ListCheckpointsInput{
+		SubjectID: subjectID,
+		SessionID: strings.TrimSpace(frame.SessionID),
+	})
+	if err != nil {
+		return runtimeCallFailedFrame(callCtx, frame, err, "checkpoint_list")
+	}
+
+	return MessageFrame{
+		Type:      FrameTypeAck,
+		Action:    FrameActionListCheckpoints,
+		RequestID: frame.RequestID,
+		SessionID: strings.TrimSpace(frame.SessionID),
+		Payload:   entries,
+	}
+}
+
+func handleRestoreCheckpointFrame(ctx context.Context, frame MessageFrame, runtimePort RuntimePort) MessageFrame {
+	if runtimePort == nil {
+		return runtimePortUnavailableFrame(frame)
+	}
+	subjectID, subjectErr := requireAuthenticatedSubjectID(ctx)
+	if subjectErr != nil {
+		return errorFrame(frame, subjectErr)
+	}
+
+	input := decodeCheckpointRestorePayload(frame.Payload)
+	input.SubjectID = subjectID
+	if input.SessionID == "" {
+		input.SessionID = strings.TrimSpace(frame.SessionID)
+	}
+
+	callCtx, cancel := withRuntimeOperationTimeout(ctx)
+	defer cancel()
+
+	result, err := runtimePort.RestoreCheckpoint(callCtx, input)
+	if err != nil {
+		return runtimeCallFailedFrame(callCtx, frame, err, "checkpoint_restore")
+	}
+
+	return MessageFrame{
+		Type:      FrameTypeAck,
+		Action:    FrameActionRestoreCheckpoint,
+		RequestID: frame.RequestID,
+		SessionID: input.SessionID,
+		Payload:   result,
+	}
+}
+
+func handleUndoRestoreFrame(ctx context.Context, frame MessageFrame, runtimePort RuntimePort) MessageFrame {
+	if runtimePort == nil {
+		return runtimePortUnavailableFrame(frame)
+	}
+	subjectID, subjectErr := requireAuthenticatedSubjectID(ctx)
+	if subjectErr != nil {
+		return errorFrame(frame, subjectErr)
+	}
+
+	callCtx, cancel := withRuntimeOperationTimeout(ctx)
+	defer cancel()
+
+	result, err := runtimePort.UndoRestore(callCtx, UndoRestoreInput{
+		SubjectID: subjectID,
+		SessionID: strings.TrimSpace(frame.SessionID),
+	})
+	if err != nil {
+		return runtimeCallFailedFrame(callCtx, frame, err, "checkpoint_undo_restore")
+	}
+
+	return MessageFrame{
+		Type:      FrameTypeAck,
+		Action:    FrameActionUndoRestore,
+		RequestID: frame.RequestID,
+		SessionID: strings.TrimSpace(frame.SessionID),
+		Payload:   result,
+	}
+}
+
+func handleCheckpointDiffFrame(ctx context.Context, frame MessageFrame, runtimePort RuntimePort) MessageFrame {
+	if runtimePort == nil {
+		return runtimePortUnavailableFrame(frame)
+	}
+	subjectID, subjectErr := requireAuthenticatedSubjectID(ctx)
+	if subjectErr != nil {
+		return errorFrame(frame, subjectErr)
+	}
+
+	input := decodeCheckpointDiffPayload(frame.Payload)
+	input.SubjectID = subjectID
+	if input.SessionID == "" {
+		input.SessionID = strings.TrimSpace(frame.SessionID)
+	}
+
+	callCtx, cancel := withRuntimeOperationTimeout(ctx)
+	defer cancel()
+
+	result, err := runtimePort.CheckpointDiff(callCtx, input)
+	if err != nil {
+		return runtimeCallFailedFrame(callCtx, frame, err, "checkpoint_diff")
+	}
+
+	return MessageFrame{
+		Type:      FrameTypeAck,
+		Action:    FrameActionCheckpointDiff,
+		RequestID: frame.RequestID,
+		SessionID: input.SessionID,
+		Payload:   result,
+	}
+}
+
+func decodeCheckpointDiffPayload(payload any) CheckpointDiffInput {
+	switch typed := payload.(type) {
+	case map[string]any:
+		return CheckpointDiffInput{
+			SessionID:    readStringValue(typed, "session_id"),
+			CheckpointID: readStringValue(typed, "checkpoint_id"),
+		}
+	default:
+		raw, marshalErr := json.Marshal(payload)
+		if marshalErr != nil {
+			return CheckpointDiffInput{}
+		}
+		var input CheckpointDiffInput
+		_ = json.Unmarshal(raw, &input)
+		return input
+	}
+}
+
+func decodeCheckpointRestorePayload(payload any) CheckpointRestoreInput {
+	switch typed := payload.(type) {
+	case map[string]any:
+		return CheckpointRestoreInput{
+			SessionID:    readStringValue(typed, "session_id"),
+			CheckpointID: readStringValue(typed, "checkpoint_id"),
+			Force:        readBoolValue(typed, "force"),
+		}
+	default:
+		raw, marshalErr := json.Marshal(payload)
+		if marshalErr != nil {
+			return CheckpointRestoreInput{}
+		}
+		var decoded CheckpointRestoreInput
+		_ = json.Unmarshal(raw, &decoded)
+		return decoded
+	}
 }
