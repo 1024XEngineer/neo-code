@@ -251,6 +251,53 @@ func (r *runtimeWithoutCreator) CheckpointDiff(ctx context.Context, input agentr
 	return r.base.CheckpointDiff(ctx, input)
 }
 
+type runtimeWithoutCheckpointer struct {
+	base *runtimeStub
+}
+
+func (r *runtimeWithoutCheckpointer) Submit(ctx context.Context, input agentruntime.PrepareInput) error {
+	return r.base.Submit(ctx, input)
+}
+func (r *runtimeWithoutCheckpointer) PrepareUserInput(ctx context.Context, input agentruntime.PrepareInput) (agentruntime.UserInput, error) {
+	return r.base.PrepareUserInput(ctx, input)
+}
+func (r *runtimeWithoutCheckpointer) Run(ctx context.Context, input agentruntime.UserInput) error {
+	return r.base.Run(ctx, input)
+}
+func (r *runtimeWithoutCheckpointer) Compact(ctx context.Context, input agentruntime.CompactInput) (agentruntime.CompactResult, error) {
+	return r.base.Compact(ctx, input)
+}
+func (r *runtimeWithoutCheckpointer) ExecuteSystemTool(ctx context.Context, input agentruntime.SystemToolInput) (tools.ToolResult, error) {
+	return r.base.ExecuteSystemTool(ctx, input)
+}
+func (r *runtimeWithoutCheckpointer) ResolvePermission(ctx context.Context, input agentruntime.PermissionResolutionInput) error {
+	return r.base.ResolvePermission(ctx, input)
+}
+func (r *runtimeWithoutCheckpointer) CancelActiveRun() bool {
+	return r.base.CancelActiveRun()
+}
+func (r *runtimeWithoutCheckpointer) Events() <-chan agentruntime.RuntimeEvent {
+	return r.base.Events()
+}
+func (r *runtimeWithoutCheckpointer) ListSessions(ctx context.Context) ([]agentsession.Summary, error) {
+	return r.base.ListSessions(ctx)
+}
+func (r *runtimeWithoutCheckpointer) LoadSession(ctx context.Context, id string) (agentsession.Session, error) {
+	return r.base.LoadSession(ctx, id)
+}
+func (r *runtimeWithoutCheckpointer) ActivateSessionSkill(ctx context.Context, sessionID string, skillID string) error {
+	return r.base.ActivateSessionSkill(ctx, sessionID, skillID)
+}
+func (r *runtimeWithoutCheckpointer) DeactivateSessionSkill(ctx context.Context, sessionID string, skillID string) error {
+	return r.base.DeactivateSessionSkill(ctx, sessionID, skillID)
+}
+func (r *runtimeWithoutCheckpointer) ListSessionSkills(ctx context.Context, sessionID string) ([]agentruntime.SessionSkillState, error) {
+	return r.base.ListSessionSkills(ctx, sessionID)
+}
+func (r *runtimeWithoutCheckpointer) ListAvailableSkills(ctx context.Context, sessionID string) ([]agentruntime.AvailableSkillState, error) {
+	return r.base.ListAvailableSkills(ctx, sessionID)
+}
+
 type bridgeSessionStoreStub struct {
 	deleteFn func(ctx context.Context, id string) error
 	updateFn func(ctx context.Context, input agentsession.UpdateSessionStateInput) error
@@ -364,6 +411,96 @@ func TestGatewayRuntimePortBridgeCheckpointOperations(t *testing.T) {
 		diffResult.Patch != "diff --git a/keep.txt b/keep.txt" {
 		t.Fatalf("CheckpointDiff() = %#v", diffResult)
 	}
+}
+
+func TestGatewayRuntimePortBridgeCheckpointOperations_ReportConflictAndUnsupportedRuntime(t *testing.T) {
+	t.Run("conflict forwarded", func(t *testing.T) {
+		stub := &runtimeStub{
+			restoreCheckpointOut: agentruntime.RestoreResult{
+				CheckpointID: "cp-1",
+				SessionID:    "session-1",
+				Conflict:     &checkpoint.ConflictResult{HasConflict: true},
+			},
+			undoRestoreOut: agentruntime.RestoreResult{
+				CheckpointID: "guard-1",
+				SessionID:    "session-1",
+				Conflict:     &checkpoint.ConflictResult{HasConflict: true},
+			},
+		}
+		bridge := &gatewayRuntimePortBridge{runtime: stub}
+
+		restoreResult, err := bridge.RestoreCheckpoint(context.Background(), gateway.CheckpointRestoreInput{
+			SessionID:    "session-1",
+			CheckpointID: "cp-1",
+		})
+		if err != nil {
+			t.Fatalf("RestoreCheckpoint() error = %v", err)
+		}
+		if !restoreResult.HasConflict {
+			t.Fatalf("RestoreCheckpoint() conflict flag = false, want true")
+		}
+
+		undoResult, err := bridge.UndoRestore(context.Background(), gateway.UndoRestoreInput{SessionID: "session-1"})
+		if err != nil {
+			t.Fatalf("UndoRestore() error = %v", err)
+		}
+		if !undoResult.HasConflict {
+			t.Fatalf("UndoRestore() conflict flag = false, want true")
+		}
+	})
+
+	t.Run("unsupported runtime", func(t *testing.T) {
+		bridge := &gatewayRuntimePortBridge{runtime: &runtimeWithoutCheckpointer{base: &runtimeStub{}}}
+		cases := []struct {
+			name string
+			call func() error
+		}{
+			{
+				name: "list",
+				call: func() error {
+					_, err := bridge.ListCheckpoints(context.Background(), gateway.ListCheckpointsInput{SessionID: "session-1"})
+					return err
+				},
+			},
+			{
+				name: "restore",
+				call: func() error {
+					_, err := bridge.RestoreCheckpoint(context.Background(), gateway.CheckpointRestoreInput{
+						SessionID:    "session-1",
+						CheckpointID: "cp-1",
+					})
+					return err
+				},
+			},
+			{
+				name: "undo",
+				call: func() error {
+					_, err := bridge.UndoRestore(context.Background(), gateway.UndoRestoreInput{SessionID: "session-1"})
+					return err
+				},
+			},
+			{
+				name: "diff",
+				call: func() error {
+					_, err := bridge.CheckpointDiff(context.Background(), gateway.CheckpointDiffInput{
+						SessionID:    "session-1",
+						CheckpointID: "cp-1",
+					})
+					return err
+				},
+			},
+		}
+
+		for _, tc := range cases {
+			tc := tc
+			t.Run(tc.name, func(t *testing.T) {
+				err := tc.call()
+				if err == nil || !strings.Contains(err.Error(), "does not support checkpoint operations") {
+					t.Fatalf("error = %v, want unsupported checkpoint operations", err)
+				}
+			})
+		}
+	})
 }
 
 var testSessionStore bridgeSessionStore = &bridgeSessionStoreStub{}

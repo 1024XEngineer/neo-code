@@ -154,3 +154,46 @@ func TestCopyFileTool_InvalidJSON(t *testing.T) {
 		t.Fatalf("expected error result")
 	}
 }
+
+func TestCopyFileTool_RejectsDirectorySource(t *testing.T) {
+	t.Parallel()
+	workspace := t.TempDir()
+	sourceDir := filepath.Join(workspace, "srcdir")
+	if err := os.MkdirAll(sourceDir, 0o755); err != nil {
+		t.Fatalf("seed dir: %v", err)
+	}
+	tool := NewCopy(workspace)
+	args, _ := json.Marshal(map[string]any{
+		"source_path":      "srcdir",
+		"destination_path": "copy.txt",
+	})
+	_, err := tool.Execute(context.Background(), tools.ToolCallInput{
+		Name:      tool.Name(),
+		Arguments: args,
+		Workdir:   workspace,
+	})
+	if err == nil || !strings.Contains(err.Error(), "must be a file") {
+		t.Fatalf("expected directory source error, got %v", err)
+	}
+}
+
+func TestCopyFileTool_RejectsCanceledContext(t *testing.T) {
+	t.Parallel()
+	workspace := t.TempDir()
+	tool := NewCopy(workspace)
+	args, _ := json.Marshal(map[string]any{
+		"source_path":      "src.txt",
+		"destination_path": "dst.txt",
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := tool.Execute(ctx, tools.ToolCallInput{
+		Name:      tool.Name(),
+		Arguments: args,
+		Workdir:   workspace,
+	})
+	if err == nil || !strings.Contains(err.Error(), context.Canceled.Error()) {
+		t.Fatalf("expected canceled error, got %v", err)
+	}
+}
