@@ -35,3 +35,22 @@ func TestTruncateUTF8HeadTailTinyBudget(t *testing.T) {
 		t.Fatalf("len(result) = %d, want <= 6", len(got))
 	}
 }
+
+func TestUTF8SafePrefixSuffixBranchCoverage(t *testing.T) {
+	text := "hello"
+	if got := utf8SafePrefix(text, 0); got != "" {
+		t.Fatalf("utf8SafePrefix(bytes=0) = %q, want empty", got)
+	}
+	if got := utf8SafePrefix(text, len(text)+1); got != text {
+		t.Fatalf("utf8SafePrefix(full) = %q, want %q", got, text)
+	}
+	if got := utf8SafeSuffix(text, 0); got != "" {
+		t.Fatalf("utf8SafeSuffix(bytes=0) = %q, want empty", got)
+	}
+	if got := utf8SafeSuffix(text, len(text)+1); got != text {
+		t.Fatalf("utf8SafeSuffix(full) = %q, want %q", got, text)
+	}
+	if got := TruncateUTF8HeadTail(text, 0); got != text {
+		t.Fatalf("TruncateUTF8HeadTail(max=0) = %q, want %q", got, text)
+	}
+}

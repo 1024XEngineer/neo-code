@@ -81,3 +81,15 @@ func TestIsCommandExempted(t *testing.T) {
 		t.Fatal("go should not be exempted")
 	}
 }
+
+func TestFilterHelperBranches(t *testing.T) {
+	if isCommandExempted("   ") {
+		t.Fatal("empty command should not be exempted")
+	}
+	if hasMeaningfulOutput("tiny") {
+		t.Fatal("short output should not be meaningful")
+	}
+	if !hasMeaningfulOutput("permission denied while opening file") {
+		t.Fatal("keyword-based output should be meaningful")
+	}
+}

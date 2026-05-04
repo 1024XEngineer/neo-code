@@ -56,3 +56,22 @@ func TestSanitizeDiagnosisTextTruncatesBeforeRedactionStage(t *testing.T) {
 		t.Fatalf("secret should be redacted even after truncation: %q", got)
 	}
 }
+
+func TestSanitizerHelperBranches(t *testing.T) {
+	if got := SanitizeDiagnosisText("", 0); got != "" {
+		t.Fatalf("SanitizeDiagnosisText(empty) = %q, want empty", got)
+	}
+	if got := stripANSI(" "); got != "" {
+		t.Fatalf("stripANSI(whitespace) = %q, want empty", got)
+	}
+	if got := foldCarriageReturns(""); got != "" {
+		t.Fatalf("foldCarriageReturns(empty) = %q, want empty", got)
+	}
+	normalized := normalizeWhitespace("a \t\tb\u0001\u0002\n c")
+	if normalized != "a b\n c" {
+		t.Fatalf("normalizeWhitespace() = %q, want %q", normalized, "a b\n c")
+	}
+	if got := redactSensitive(""); got != "" {
+		t.Fatalf("redactSensitive(empty) = %q, want empty", got)
+	}
+}

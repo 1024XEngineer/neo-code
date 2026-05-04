@@ -77,3 +77,79 @@ func TestOSC133ParserLeftoverBounded(t *testing.T) {
 		t.Fatalf("leftover len = %d, want <= %d", len(parser.leftover), maxOSCLeftover)
 	}
 }
+
+func TestOSC133ParserAndHelpersAdditionalBranches(t *testing.T) {
+	t.Run("feed empty chunk", func(t *testing.T) {
+		parser := &OSC133Parser{}
+		clean, events := parser.Feed(nil)
+		if clean != nil || events != nil {
+			t.Fatalf("Feed(nil) = (%v, %v), want (nil, nil)", clean, events)
+		}
+	})
+
+	t.Run("tmux passthrough unknown event", func(t *testing.T) {
+		parser := &OSC133Parser{}
+		raw := []byte("x\x1bPtmux;\x1b\x1b]133;X\a\x1b\\y")
+		clean, events := parser.Feed(raw)
+		if string(clean) != "xy" {
+			t.Fatalf("clean = %q, want xy", clean)
+		}
+		if len(events) != 0 {
+			t.Fatalf("events = %#v, want empty", events)
+		}
+	})
+
+	t.Run("command done with invalid exit code", func(t *testing.T) {
+		event, ok := parseOSC133Event("D;not-a-number")
+		if !ok {
+			t.Fatal("expected parseOSC133Event to match D payload")
+		}
+		if event.Type != ShellEventCommandDone || event.ExitCode != 0 {
+			t.Fatalf("event = %#v, want command_done with exit 0", event)
+		}
+	})
+
+	t.Run("hasPrefixAt bounds and keep leftover short", func(t *testing.T) {
+		if hasPrefixAt([]byte("abc"), -1, "a") {
+			t.Fatal("hasPrefixAt should return false for negative index")
+		}
+		if hasPrefixAt([]byte("abc"), 3, "a") {
+			t.Fatal("hasPrefixAt should return false for out of range index")
+		}
+		if !hasPrefixAt([]byte("abc"), 0, "ab") {
+			t.Fatal("hasPrefixAt should return true for matching prefix")
+		}
+
+		raw := []byte("short")
+		kept := keepOSCLeftover(raw)
+		if string(kept) != "short" {
+			t.Fatalf("keepOSCLeftover(short) = %q, want short", kept)
+		}
+	})
+}
+
+func TestOSC133ParseHelpers(t *testing.T) {
+	t.Run("parse osc payload and esc terminator", func(t *testing.T) {
+		payload, next, ok := parseOSCFromBuffer([]byte("\x1b]133;D;7\x1b\\tail"), 0)
+		if !ok {
+			t.Fatal("parseOSCFromBuffer should parse ESC terminator payload")
+		}
+		if payload != "D;7" {
+			t.Fatalf("payload = %q, want D;7", payload)
+		}
+		if next <= 0 {
+			t.Fatalf("next = %d, want >0", next)
+		}
+
+		parsed, ok := parseOSCPayload([]byte("\x1b]133;C\a"))
+		if !ok || parsed != "C" {
+			t.Fatalf("parseOSCPayload() = (%q, %v), want (C, true)", parsed, ok)
+		}
+	})
+
+	t.Run("parse osc event empty payload", func(t *testing.T) {
+		if _, ok := parseOSC133Event("   "); ok {
+			t.Fatal("parseOSC133Event should reject empty payload")
+		}
+	})
+}

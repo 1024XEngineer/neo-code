@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"neo-code/internal/gateway"
+	gatewayclient "neo-code/internal/gateway/client"
 	"neo-code/internal/gateway/protocol"
 	"neo-code/internal/tools"
 
@@ -295,6 +296,267 @@ func TestSendDiagIPCCommandToPathRejectsResponse(t *testing.T) {
 	}
 }
 
+func TestSendDiagIPCCommandWithoutRunDirFallback(t *testing.T) {
+	_, err := sendDiagIPCCommand(context.Background(), "/tmp/not-in-run-dir.sock", diagIPCRequest{Cmd: diagCommandDiagnose})
+	if err == nil {
+		t.Fatal("expected sendDiagIPCCommand() to fail")
+	}
+	if strings.Contains(err.Error(), "legacy tmp path") {
+		t.Fatalf("unexpected legacy fallback for non-run path: %v", err)
+	}
+}
+
+func TestSendDiagIPCCommandRunDirFallbackMissingLegacy(t *testing.T) {
+	home := t.TempDir()
+	legacyTmpDir := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("TMPDIR", legacyTmpDir)
+
+	primarySocket := filepath.Join(home, ".neocode", "run", "missing.sock")
+	_, err := sendDiagIPCCommand(context.Background(), primarySocket, diagIPCRequest{Cmd: diagCommandDiagnose})
+	if err == nil {
+		t.Fatal("expected sendDiagIPCCommand() to fail")
+	}
+}
+
+func TestSendDiagIPCCommandToPathResponseReadAndDecodeErrors(t *testing.T) {
+	t.Run("read response failed", func(t *testing.T) {
+		socketPath := filepath.Join(t.TempDir(), "read-failed.sock")
+		listener, resolvedPath, err := listenDiagSocket(socketPath)
+		if err != nil {
+			t.Fatalf("listenDiagSocket() error = %v", err)
+		}
+		defer func() {
+			_ = listener.Close()
+			_ = os.Remove(resolvedPath)
+		}()
+
+		serverDone := make(chan error, 1)
+		go func() {
+			conn, acceptErr := listener.Accept()
+			if acceptErr != nil {
+				serverDone <- acceptErr
+				return
+			}
+			_ = conn.Close()
+			serverDone <- nil
+		}()
+
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_, err = sendDiagIPCCommandToPath(ctx, resolvedPath, diagIPCRequest{Cmd: diagCommandDiagnose})
+		if err == nil || !strings.Contains(err.Error(), "wait diagnose completion") {
+			t.Fatalf("err = %v, want wait diagnose completion", err)
+		}
+		if serverErr := <-serverDone; serverErr != nil {
+			t.Fatalf("server error = %v", serverErr)
+		}
+	})
+
+	t.Run("decode response failed", func(t *testing.T) {
+		socketPath := filepath.Join(t.TempDir(), "decode-failed.sock")
+		listener, resolvedPath, err := listenDiagSocket(socketPath)
+		if err != nil {
+			t.Fatalf("listenDiagSocket() error = %v", err)
+		}
+		defer func() {
+			_ = listener.Close()
+			_ = os.Remove(resolvedPath)
+		}()
+
+		serverDone := make(chan error, 1)
+		go func() {
+			conn, acceptErr := listener.Accept()
+			if acceptErr != nil {
+				serverDone <- acceptErr
+				return
+			}
+			defer conn.Close()
+			_, _ = bufio.NewReader(conn).ReadBytes('\n')
+			_, writeErr := conn.Write([]byte("not-json\n"))
+			serverDone <- writeErr
+		}()
+
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_, err = sendDiagIPCCommandToPath(ctx, resolvedPath, diagIPCRequest{Cmd: diagCommandDiagnose})
+		if err == nil || !strings.Contains(err.Error(), "decode diag response") {
+			t.Fatalf("err = %v, want decode diag response", err)
+		}
+		if serverErr := <-serverDone; serverErr != nil {
+			t.Fatalf("server error = %v", serverErr)
+		}
+	})
+
+	t.Run("empty rejection message", func(t *testing.T) {
+		socketPath := filepath.Join(t.TempDir(), "empty-reject.sock")
+		listener, resolvedPath, err := listenDiagSocket(socketPath)
+		if err != nil {
+			t.Fatalf("listenDiagSocket() error = %v", err)
+		}
+		defer func() {
+			_ = listener.Close()
+			_ = os.Remove(resolvedPath)
+		}()
+
+		serverDone := make(chan error, 1)
+		go func() {
+			conn, acceptErr := listener.Accept()
+			if acceptErr != nil {
+				serverDone <- acceptErr
+				return
+			}
+			defer conn.Close()
+			_, _ = bufio.NewReader(conn).ReadBytes('\n')
+			resp, _ := json.Marshal(diagIPCResponse{OK: false, Message: ""})
+			_, writeErr := conn.Write(append(resp, '\n'))
+			serverDone <- writeErr
+		}()
+
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_, err = sendDiagIPCCommandToPath(ctx, resolvedPath, diagIPCRequest{Cmd: diagCommandDiagnose})
+		if err == nil || !strings.Contains(err.Error(), "diagnose command rejected") {
+			t.Fatalf("err = %v, want default rejection message", err)
+		}
+		if serverErr := <-serverDone; serverErr != nil {
+			t.Fatalf("server error = %v", serverErr)
+		}
+	})
+}
+
+func TestSendDiagIPCCommandToPathContextDone(t *testing.T) {
+	socketPath := filepath.Join(t.TempDir(), "context-done.sock")
+	listener, resolvedPath, err := listenDiagSocket(socketPath)
+	if err != nil {
+		t.Fatalf("listenDiagSocket() error = %v", err)
+	}
+	defer func() {
+		_ = listener.Close()
+		_ = os.Remove(resolvedPath)
+	}()
+
+	serverDone := make(chan error, 1)
+	go func() {
+		conn, acceptErr := listener.Accept()
+		if acceptErr != nil {
+			serverDone <- acceptErr
+			return
+		}
+		defer conn.Close()
+		_, _ = bufio.NewReader(conn).ReadBytes('\n')
+		time.Sleep(120 * time.Millisecond)
+		resp, _ := json.Marshal(diagIPCResponse{OK: true, Message: "ok"})
+		_, writeErr := conn.Write(append(resp, '\n'))
+		if writeErr != nil && !strings.Contains(strings.ToLower(writeErr.Error()), "broken pipe") {
+			serverDone <- writeErr
+			return
+		}
+		serverDone <- nil
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Millisecond)
+	defer cancel()
+	_, err = sendDiagIPCCommandToPath(ctx, resolvedPath, diagIPCRequest{Cmd: diagCommandDiagnose})
+	if err == nil || !strings.Contains(err.Error(), "wait diagnose completion") {
+		t.Fatalf("err = %v, want context wait diagnose completion", err)
+	}
+	if serverErr := <-serverDone; serverErr != nil {
+		t.Fatalf("server error = %v", serverErr)
+	}
+}
+
+func TestSignalHelpersViaIPC(t *testing.T) {
+	socketPath := filepath.Join(t.TempDir(), "ipc.sock")
+	listener, resolvedPath, err := listenDiagSocket(socketPath)
+	if err != nil {
+		t.Fatalf("listenDiagSocket() error = %v", err)
+	}
+	defer func() {
+		_ = listener.Close()
+		_ = os.Remove(resolvedPath)
+	}()
+
+	receivedCommands := make(chan string, 4)
+	serverDone := make(chan error, 1)
+	go func() {
+		defer close(serverDone)
+		for i := 0; i < 4; i++ {
+			conn, acceptErr := listener.Accept()
+			if acceptErr != nil {
+				serverDone <- acceptErr
+				return
+			}
+			reader := bufio.NewReader(conn)
+			line, readErr := reader.ReadBytes('\n')
+			if readErr != nil {
+				_ = conn.Close()
+				serverDone <- readErr
+				return
+			}
+			var request diagIPCRequest
+			if err := json.Unmarshal(line, &request); err != nil {
+				_ = conn.Close()
+				serverDone <- err
+				return
+			}
+			receivedCommands <- request.Cmd
+
+			response := diagIPCResponse{OK: true, Message: "ok"}
+			if request.Cmd == diagCommandAutoStatus {
+				response.AutoEnabled = true
+			}
+			encoded, _ := json.Marshal(response)
+			if _, writeErr := conn.Write(append(encoded, '\n')); writeErr != nil {
+				_ = conn.Close()
+				serverDone <- writeErr
+				return
+			}
+			_ = conn.Close()
+		}
+		serverDone <- nil
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	if err := SendDiagnoseSignal(ctx, resolvedPath); err != nil {
+		t.Fatalf("SendDiagnoseSignal() error = %v", err)
+	}
+	if err := SendAutoModeSignal(ctx, resolvedPath, true); err != nil {
+		t.Fatalf("SendAutoModeSignal(on) error = %v", err)
+	}
+	if err := SendAutoModeSignal(ctx, resolvedPath, false); err != nil {
+		t.Fatalf("SendAutoModeSignal(off) error = %v", err)
+	}
+	enabled, err := QueryAutoMode(ctx, resolvedPath)
+	if err != nil {
+		t.Fatalf("QueryAutoMode() error = %v", err)
+	}
+	if !enabled {
+		t.Fatal("QueryAutoMode() = false, want true")
+	}
+
+	var commands []string
+	for i := 0; i < 4; i++ {
+		commands = append(commands, <-receivedCommands)
+	}
+	want := []string{
+		diagCommandDiagnose,
+		diagCommandAutoOn,
+		diagCommandAutoOff,
+		diagCommandAutoStatus,
+	}
+	for i := range want {
+		if commands[i] != want[i] {
+			t.Fatalf("command[%d] = %q, want %q", i, commands[i], want[i])
+		}
+	}
+	if serverErr := <-serverDone; serverErr != nil {
+		t.Fatalf("server error = %v", serverErr)
+	}
+}
+
 func TestSendDiagIPCCommandEmptyPath(t *testing.T) {
 	_, err := sendDiagIPCCommand(context.Background(), "   ", diagIPCRequest{Cmd: diagCommandDiagnose})
 	if err == nil {
@@ -560,6 +822,24 @@ func TestInstallHostTerminalRestoreGuardNoop(t *testing.T) {
 	restore()
 }
 
+func TestInstallHostTerminalRestoreGuardNonTerminalNoop(t *testing.T) {
+	originalInput := hostTerminalInput
+	originalIsTerminal := isTerminalFD
+	t.Cleanup(func() { hostTerminalInput = originalInput })
+	t.Cleanup(func() { isTerminalFD = originalIsTerminal })
+
+	file, err := os.CreateTemp(t.TempDir(), "terminal-*")
+	if err != nil {
+		t.Fatalf("CreateTemp() error = %v", err)
+	}
+	defer file.Close()
+
+	hostTerminalInput = file
+	isTerminalFD = func(int) bool { return false }
+	restore := installHostTerminalRestoreGuard()
+	restore()
+}
+
 func TestCopyInputWithTracker(t *testing.T) {
 	tracker := &commandTracker{}
 	input := []byte("go tes\x08st\rnext\r")
@@ -670,12 +950,8 @@ func TestStreamPTYOutputSkipsTriggerWhenAutoDisabled(t *testing.T) {
 }
 
 func TestStreamPTYOutputReenablesAutoOnPromptReady(t *testing.T) {
-	payload := strings.NewReader(
-		"\x1b]133;C\x07" +
-			"fatal: build failed\n" +
-			"\x1b]133;D;1\x07" +
-			"\x1b]133;A\x07",
-	)
+	payloadReader, payloadWriter := io.Pipe()
+	defer payloadReader.Close()
 	output := &bytes.Buffer{}
 	commandLog := NewUTF8RingBuffer(1024)
 	tracker := &commandTracker{}
@@ -685,21 +961,39 @@ func TestStreamPTYOutputReenablesAutoOnPromptReady(t *testing.T) {
 	autoState.Enabled.Store(false)
 	autoState.OSCReady.Store(false)
 
-	streamPTYOutput(payload, output, commandLog, tracker, autoTriggers, autoState)
+	streamDone := make(chan struct{})
+	go func() {
+		defer close(streamDone)
+		streamPTYOutput(payloadReader, output, commandLog, tracker, autoTriggers, autoState)
+	}()
+	go func() {
+		_, _ = payloadWriter.Write([]byte("\x1b]133;C\x07"))
+		_, _ = payloadWriter.Write([]byte("fatal: build failed\n"))
+		_, _ = payloadWriter.Write([]byte("\x1b]133;D;1\x07"))
+		_, _ = payloadWriter.Write([]byte("\x1b]133;A\x07"))
+		_ = payloadWriter.Close()
+	}()
 
+	var gotTrigger diagnoseTrigger
+	select {
+	case trigger := <-autoTriggers:
+		gotTrigger = trigger
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected one auto diagnose trigger after re-enable")
+	}
+	select {
+	case <-streamDone:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("streamPTYOutput did not finish")
+	}
 	if !autoState.Enabled.Load() {
 		t.Fatal("expected auto to be re-enabled after OSC133 PromptReady")
 	}
 	if !autoState.OSCReady.Load() {
 		t.Fatal("expected OSCReady to be set after PromptReady")
 	}
-	select {
-	case trigger := <-autoTriggers:
-		if trigger.CommandText != "go test ./..." {
-			t.Fatalf("trigger.CommandText = %q, want %q", trigger.CommandText, "go test ./...")
-		}
-	default:
-		t.Fatal("expected one auto diagnose trigger after re-enable")
+	if gotTrigger.CommandText != "go test ./..." {
+		t.Fatalf("trigger.CommandText = %q, want %q", gotTrigger.CommandText, "go test ./...")
 	}
 	if !strings.Contains(output.String(), "fatal: build failed") {
 		t.Fatalf("output = %q, want contains fatal text", output.String())
@@ -798,10 +1092,25 @@ func TestCallDiagnoseToolSuccess(t *testing.T) {
 	})
 	defer cleanupServer()
 
+	rpcClient, err := gatewayclient.NewGatewayRPCClient(gatewayclient.GatewayRPCClientOptions{
+		ListenAddress: gatewaySocket,
+		TokenFile:     authTokenFile,
+	})
+	if err != nil {
+		t.Fatalf("NewGatewayRPCClient() error = %v", err)
+	}
+	defer rpcClient.Close()
+	authCtx, authCancel := context.WithTimeout(context.Background(), time.Second)
+	if err := rpcClient.Authenticate(authCtx); err != nil {
+		authCancel()
+		t.Fatalf("Authenticate() error = %v", err)
+	}
+	authCancel()
+
 	buffer := NewUTF8RingBuffer(2048)
 	_, _ = buffer.Write([]byte("fallback log"))
 	result, err := callDiagnoseTool(
-		nil,
+		rpcClient,
 		buffer,
 		ManualShellOptions{
 			Workdir:              baseDir,
@@ -862,10 +1171,25 @@ func TestCallDiagnoseToolGatewayFrameError(t *testing.T) {
 	})
 	defer cleanupServer()
 
+	rpcClient, err := gatewayclient.NewGatewayRPCClient(gatewayclient.GatewayRPCClientOptions{
+		ListenAddress: gatewaySocket,
+		TokenFile:     authTokenFile,
+	})
+	if err != nil {
+		t.Fatalf("NewGatewayRPCClient() error = %v", err)
+	}
+	defer rpcClient.Close()
+	authCtx, authCancel := context.WithTimeout(context.Background(), time.Second)
+	if err := rpcClient.Authenticate(authCtx); err != nil {
+		authCancel()
+		t.Fatalf("Authenticate() error = %v", err)
+	}
+	authCancel()
+
 	buffer := NewUTF8RingBuffer(1024)
 	_, _ = buffer.Write([]byte("fallback log"))
-	_, err := callDiagnoseTool(
-		nil,
+	_, err = callDiagnoseTool(
+		rpcClient,
 		buffer,
 		ManualShellOptions{
 			Workdir:              baseDir,
@@ -1024,6 +1348,375 @@ func TestRunSingleDiagnosisGatewayUnavailableDoesNotPanic(t *testing.T) {
 	assertNoBareLineFeed(t, output.String())
 }
 
+func TestRunSingleDiagnosisAutoDisabledSkipsRender(t *testing.T) {
+	baseDir := t.TempDir()
+	gatewaySocket := filepath.Join(baseDir, "gateway.sock")
+	authTokenFile := filepath.Join(baseDir, "auth.json")
+	writeGatewayAuthTokenFile(t, authTokenFile, "test-token")
+
+	cleanupServer, serverDone := startGatewayRPCMockServer(t, gatewaySocket, func(decoder *json.Decoder, encoder *json.Encoder) error {
+		authenticateRequest, err := readRPCRequest(decoder)
+		if err != nil {
+			return err
+		}
+		if err := writeRPCResult(encoder, authenticateRequest.ID, gateway.MessageFrame{
+			Type:   gateway.FrameTypeAck,
+			Action: gateway.FrameActionAuthenticate,
+		}); err != nil {
+			return err
+		}
+		executeRequest, err := readRPCRequest(decoder)
+		if err != nil {
+			return err
+		}
+		return writeRPCResult(encoder, executeRequest.ID, gateway.MessageFrame{
+			Type:   gateway.FrameTypeAck,
+			Action: gateway.FrameActionExecuteSystemTool,
+			Payload: map[string]any{
+				"Content": `{"confidence":0.8,"root_cause":"ok","fix_commands":["echo fix"],"investigation_commands":["echo inv"]}`,
+				"IsError": false,
+			},
+		})
+	})
+	defer cleanupServer()
+
+	rpcClient, err := gatewayclient.NewGatewayRPCClient(gatewayclient.GatewayRPCClientOptions{
+		ListenAddress: gatewaySocket,
+		TokenFile:     authTokenFile,
+	})
+	if err != nil {
+		t.Fatalf("NewGatewayRPCClient() error = %v", err)
+	}
+	defer rpcClient.Close()
+	authCtx, authCancel := context.WithTimeout(context.Background(), time.Second)
+	if err := rpcClient.Authenticate(authCtx); err != nil {
+		authCancel()
+		t.Fatalf("Authenticate() error = %v", err)
+	}
+	authCancel()
+
+	buffer := NewUTF8RingBuffer(1024)
+	_, _ = buffer.Write([]byte("fallback log"))
+	output := &bytes.Buffer{}
+	autoState := &autoRuntimeState{}
+	autoState.Enabled.Store(false)
+
+	runSingleDiagnosis(
+		rpcClient,
+		output,
+		buffer,
+		ManualShellOptions{Workdir: baseDir, Shell: "/bin/bash"},
+		filepath.Join(baseDir, "diag.sock"),
+		diagnoseTrigger{CommandText: "go test ./...", ExitCode: 1, OutputText: "fatal"},
+		true,
+		autoState,
+	)
+	if strings.Contains(output.String(), "NeoCode Diagnosis") {
+		t.Fatalf("output should be empty when auto mode is disabled, got %q", output.String())
+	}
+	if serverErr := <-serverDone; serverErr != nil {
+		t.Fatalf("server error = %v", serverErr)
+	}
+}
+
+func TestConsumeDiagSignalsAndBannerPaths(t *testing.T) {
+	t.Run("consume job and notify done", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		jobCh := make(chan diagnoseJob, 1)
+		doneCh := make(chan diagIPCResponse, 1)
+		jobCh <- diagnoseJob{
+			Trigger: diagnoseTrigger{CommandText: "go test ./...", ExitCode: 1, OutputText: "fatal"},
+			Done:    doneCh,
+			IsAuto:  false,
+		}
+		close(jobCh)
+
+		output := &bytes.Buffer{}
+		autoState := &autoRuntimeState{}
+		autoState.Enabled.Store(true)
+
+		consumeDiagSignals(ctx, nil, jobCh, output, NewUTF8RingBuffer(1024), ManualShellOptions{}, "/tmp/diag.sock", autoState)
+		select {
+		case response := <-doneCh:
+			if !response.OK {
+				t.Fatalf("response = %#v, want OK", response)
+			}
+		default:
+			t.Fatal("expected consumeDiagSignals to notify job done")
+		}
+	})
+
+	t.Run("banner helpers", func(t *testing.T) {
+		printProxyInitializedBanner(nil)
+		printWelcomeBanner(nil)
+		printAutoModeBanner(nil, nil)
+		printProxyExitedBanner(nil)
+
+		buffer := &bytes.Buffer{}
+		printProxyInitializedBanner(buffer)
+		printWelcomeBanner(buffer)
+		autoOn := &autoRuntimeState{}
+		autoOn.Enabled.Store(true)
+		printAutoModeBanner(buffer, autoOn)
+		autoOff := &autoRuntimeState{}
+		autoOff.Enabled.Store(false)
+		printAutoModeBanner(buffer, autoOff)
+		printProxyExitedBanner(buffer)
+
+		text := buffer.String()
+		if !strings.Contains(text, proxyInitializedBanner) || !strings.Contains(text, proxyExitedBanner) {
+			t.Fatalf("banner output = %q", text)
+		}
+	})
+}
+
+func TestHandleDiagSocketConnectionAutoModeBranches(t *testing.T) {
+	execRequest := func(t *testing.T, cmd string, initialEnabled bool) (diagIPCResponse, bool) {
+		t.Helper()
+		serverConn, clientConn := net.Pipe()
+		defer clientConn.Close()
+
+		autoState := &autoRuntimeState{}
+		autoState.Enabled.Store(initialEnabled)
+		jobCh := make(chan diagnoseJob, 1)
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			handleDiagSocketConnection(ctx, serverConn, jobCh, autoState)
+		}()
+
+		raw, err := json.Marshal(diagIPCRequest{Cmd: cmd})
+		if err != nil {
+			t.Fatalf("marshal request: %v", err)
+		}
+		if _, err := clientConn.Write(append(raw, '\n')); err != nil {
+			t.Fatalf("write request: %v", err)
+		}
+
+		line, err := bufio.NewReader(clientConn).ReadBytes('\n')
+		if err != nil {
+			t.Fatalf("read response: %v", err)
+		}
+		var response diagIPCResponse
+		if err := json.Unmarshal(line, &response); err != nil {
+			t.Fatalf("unmarshal response: %v", err)
+		}
+		<-done
+		return response, autoState.Enabled.Load()
+	}
+
+	t.Run("auto off", func(t *testing.T) {
+		response, enabled := execRequest(t, diagCommandAutoOff, true)
+		if !response.OK || enabled {
+			t.Fatalf("response=%#v enabled=%v, want ok=true enabled=false", response, enabled)
+		}
+	})
+
+	t.Run("auto status", func(t *testing.T) {
+		response, enabled := execRequest(t, diagCommandAutoStatus, false)
+		if !response.OK || response.Message == "" || response.AutoEnabled != enabled {
+			t.Fatalf("response=%#v enabled=%v", response, enabled)
+		}
+	})
+}
+
+func TestConsumeDiagSignalsClosedChannelReturns(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	jobCh := make(chan diagnoseJob)
+	close(jobCh)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		consumeDiagSignals(ctx, nil, jobCh, &bytes.Buffer{}, NewUTF8RingBuffer(1024), ManualShellOptions{}, "/tmp/diag.sock", &autoRuntimeState{})
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("consumeDiagSignals did not return after channel closed")
+	}
+}
+
+func TestCallDiagnoseToolDecodePayloadFailure(t *testing.T) {
+	baseDir := t.TempDir()
+	gatewaySocket := filepath.Join(baseDir, "gateway.sock")
+	authTokenFile := filepath.Join(baseDir, "auth.json")
+	writeGatewayAuthTokenFile(t, authTokenFile, "test-token")
+
+	cleanupServer, serverDone := startGatewayRPCMockServer(t, gatewaySocket, func(decoder *json.Decoder, encoder *json.Encoder) error {
+		authenticateRequest, err := readRPCRequest(decoder)
+		if err != nil {
+			return err
+		}
+		if err := writeRPCResult(encoder, authenticateRequest.ID, gateway.MessageFrame{
+			Type:   gateway.FrameTypeAck,
+			Action: gateway.FrameActionAuthenticate,
+		}); err != nil {
+			return err
+		}
+		executeRequest, err := readRPCRequest(decoder)
+		if err != nil {
+			return err
+		}
+		return writeRPCResult(encoder, executeRequest.ID, gateway.MessageFrame{
+			Type:    gateway.FrameTypeAck,
+			Action:  gateway.FrameActionExecuteSystemTool,
+			Payload: "plain-text-payload",
+		})
+	})
+	defer cleanupServer()
+
+	rpcClient, err := gatewayclient.NewGatewayRPCClient(gatewayclient.GatewayRPCClientOptions{
+		ListenAddress: gatewaySocket,
+		TokenFile:     authTokenFile,
+	})
+	if err != nil {
+		t.Fatalf("NewGatewayRPCClient() error = %v", err)
+	}
+	defer rpcClient.Close()
+
+	authCtx, authCancel := context.WithTimeout(context.Background(), time.Second)
+	if err := rpcClient.Authenticate(authCtx); err != nil {
+		authCancel()
+		t.Fatalf("Authenticate() error = %v", err)
+	}
+	authCancel()
+
+	buffer := NewUTF8RingBuffer(1024)
+	_, _ = buffer.Write([]byte("decode-failure log"))
+	_, err = callDiagnoseTool(
+		rpcClient,
+		buffer,
+		ManualShellOptions{
+			Workdir:              baseDir,
+			Shell:                "/bin/bash",
+			GatewayListenAddress: gatewaySocket,
+			GatewayTokenFile:     authTokenFile,
+		},
+		filepath.Join(baseDir, "diag.sock"),
+		diagnoseTrigger{CommandText: "go test ./...", ExitCode: 1, OutputText: "fatal"},
+	)
+	if err == nil || !strings.Contains(err.Error(), "decode tool payload") {
+		t.Fatalf("expected decode failure error, got %v", err)
+	}
+	if serverErr := <-serverDone; serverErr != nil {
+		t.Fatalf("server error = %v", serverErr)
+	}
+}
+
+func TestSyncPTYWindowSize(t *testing.T) {
+	syncPTYWindowSize(nil, nil)
+
+	file, err := os.CreateTemp(t.TempDir(), "not-pty-*")
+	if err != nil {
+		t.Fatalf("CreateTemp() error = %v", err)
+	}
+	defer file.Close()
+
+	errWriter := &bytes.Buffer{}
+	syncPTYWindowSize(errWriter, file)
+	if !strings.Contains(errWriter.String(), "inherit terminal size failed") {
+		t.Fatalf("errWriter = %q, want contains inherit terminal size failed", errWriter.String())
+	}
+}
+
+func TestPrepareBashInitRCAndBuildShellCommand(t *testing.T) {
+	t.Run("prepareBashInitRC", func(t *testing.T) {
+		originalCreate := createBashInitRCFile
+		t.Cleanup(func() { createBashInitRCFile = originalCreate })
+
+		createBashInitRCFile = func() (string, error) { return "/tmp/mock.rc", nil }
+		if got := prepareBashInitRC("/bin/bash"); got != "/tmp/mock.rc" {
+			t.Fatalf("prepareBashInitRC() = %q, want /tmp/mock.rc", got)
+		}
+		if got := prepareBashInitRC("/bin/zsh"); got != "" {
+			t.Fatalf("prepareBashInitRC(non-bash) = %q, want empty", got)
+		}
+
+		createBashInitRCFile = func() (string, error) { return "", errors.New("mock create error") }
+		if got := prepareBashInitRC("/bin/bash"); got != "" {
+			t.Fatalf("prepareBashInitRC(create error) = %q, want empty", got)
+		}
+	})
+
+	t.Run("buildShellCommand", func(t *testing.T) {
+		originalCreate := createBashInitRCFile
+		originalDelete := deleteBashInitRCFile
+		t.Cleanup(func() { createBashInitRCFile = originalCreate })
+		t.Cleanup(func() { deleteBashInitRCFile = originalDelete })
+
+		rcPath := filepath.Join(t.TempDir(), "mock.rc")
+		if err := os.WriteFile(rcPath, []byte("mock"), 0o600); err != nil {
+			t.Fatalf("WriteFile() error = %v", err)
+		}
+
+		deletedPath := ""
+		createBashInitRCFile = func() (string, error) { return rcPath, nil }
+		deleteBashInitRCFile = func(path string) { deletedPath = path }
+
+		cmd, cleanup := buildShellCommand("/bin/bash", ManualShellOptions{Workdir: t.TempDir()}, "/tmp/diag.sock")
+		if cmd.Path != "/bin/bash" {
+			t.Fatalf("cmd.Path = %q, want /bin/bash", cmd.Path)
+		}
+		if !strings.Contains(strings.Join(cmd.Args, " "), "--rcfile") {
+			t.Fatalf("cmd.Args = %#v, want contains --rcfile", cmd.Args)
+		}
+		foundDiagEnv := false
+		for _, env := range cmd.Env {
+			if strings.HasPrefix(env, DiagSocketEnv+"=") && strings.HasSuffix(env, "/tmp/diag.sock") {
+				foundDiagEnv = true
+				break
+			}
+		}
+		if !foundDiagEnv {
+			t.Fatalf("cmd.Env = %#v, want %s", cmd.Env, DiagSocketEnv)
+		}
+		cleanup()
+		if deletedPath != rcPath {
+			t.Fatalf("deletedPath = %q, want %q", deletedPath, rcPath)
+		}
+
+		cmd, cleanup = buildShellCommand("/bin/zsh", ManualShellOptions{Workdir: t.TempDir()}, "/tmp/diag.sock")
+		if strings.Contains(strings.Join(cmd.Args, " "), "--rcfile") {
+			t.Fatalf("zsh cmd.Args = %#v, should not contain --rcfile", cmd.Args)
+		}
+		cleanup()
+	})
+}
+
+func TestDefaultBashInitRCFileLifecycle(t *testing.T) {
+	path, err := defaultCreateBashInitRCFile()
+	if err != nil {
+		t.Fatalf("defaultCreateBashInitRCFile() error = %v", err)
+	}
+	data, readErr := os.ReadFile(path)
+	if readErr != nil {
+		t.Fatalf("ReadFile() error = %v", readErr)
+	}
+	text := string(data)
+	if !strings.Contains(text, "neocode shell integration") {
+		t.Fatalf("rc file content missing integration marker: %q", text)
+	}
+	if !strings.Contains(text, ". ~/.bashrc") {
+		t.Fatalf("rc file content missing ~/.bashrc include: %q", text)
+	}
+
+	defaultDeleteBashInitRCFile(path)
+	if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
+		t.Fatalf("expected rc file removed, stat err = %v", statErr)
+	}
+
+	defaultDeleteBashInitRCFile("")
+}
+
 func TestResolveShellPathDefaultsToBinBash(t *testing.T) {
 	t.Setenv("SHELL", "")
 	path := resolveShellPath("")
@@ -1049,9 +1742,6 @@ func TestResolveShellPathPrefersExplicit(t *testing.T) {
 }
 
 func TestRunManualShellBasicIntegration(t *testing.T) {
-	if os.Getenv("PTY_INTEGRATION_TEST") != "1" {
-		t.Skip("set PTY_INTEGRATION_TEST=1 to run integration test")
-	}
 	if _, err := os.Stat("/bin/echo"); err != nil {
 		t.Skip("/bin/echo not available")
 	}
