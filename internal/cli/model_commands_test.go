@@ -21,6 +21,26 @@ func TestModelCommand(t *testing.T) {
 	}
 }
 
+func TestModelCommandBuildersUseDefaultResolverWhenNil(t *testing.T) {
+	cmd := newModelCommandWithResolver(nil)
+	if cmd.Use != "model" {
+		t.Fatalf("cmd.Use = %q, want %q", cmd.Use, "model")
+	}
+	if len(cmd.Commands()) != 2 {
+		t.Fatalf("len(model subcommands) = %d, want 2", len(cmd.Commands()))
+	}
+
+	ls := newModelLsCommand()
+	if ls.Use != "ls" {
+		t.Fatalf("ls.Use = %q, want %q", ls.Use, "ls")
+	}
+
+	set := newModelSetCommand()
+	if set.Use != "set <model-id>" {
+		t.Fatalf("set.Use = %q, want %q", set.Use, "set <model-id>")
+	}
+}
+
 func TestModelLsCommand(t *testing.T) {
 	svc := &mockSelectionService{}
 	cmd := newModelLsCommandWithResolver(staticSelectionResolver(svc))
@@ -80,6 +100,42 @@ func TestModelSetCommand(t *testing.T) {
 	if !called {
 		t.Fatal("expected runModelSetCommand called")
 	}
+}
+
+func TestModelCommandResolverFallbackAndResolveError(t *testing.T) {
+	t.Run("fallback to default resolver when nil", func(t *testing.T) {
+		ls := newModelLsCommandWithResolver(nil)
+		if ls.Use != "ls" {
+			t.Fatalf("ls.Use = %q, want ls", ls.Use)
+		}
+
+		set := newModelSetCommandWithResolver(nil)
+		if set.Use != "set <model-id>" {
+			t.Fatalf("set.Use = %q, want set <model-id>", set.Use)
+		}
+	})
+
+	t.Run("ls resolve error", func(t *testing.T) {
+		cmd := newModelLsCommandWithResolver(selectionServiceResolverFunc(func(*cobra.Command) (SelectionService, error) {
+			return nil, errors.New("resolve failed")
+		}))
+		cmd.SetArgs([]string{})
+		err := cmd.ExecuteContext(context.Background())
+		if err == nil || !strings.Contains(err.Error(), "resolve failed") {
+			t.Fatalf("err = %v, want contains resolve failed", err)
+		}
+	})
+
+	t.Run("set resolve error", func(t *testing.T) {
+		cmd := newModelSetCommandWithResolver(selectionServiceResolverFunc(func(*cobra.Command) (SelectionService, error) {
+			return nil, errors.New("resolve failed")
+		}))
+		cmd.SetArgs([]string{"gpt-4o"})
+		err := cmd.ExecuteContext(context.Background())
+		if err == nil || !strings.Contains(err.Error(), "resolve failed") {
+			t.Fatalf("err = %v, want contains resolve failed", err)
+		}
+	})
 }
 
 func TestDefaultModelLsCommandRunner(t *testing.T) {
@@ -267,6 +323,118 @@ func TestDisplayCurrentModel(t *testing.T) {
 	if got := displayCurrentModel("gpt-5.4"); got != "gpt-5.4" {
 		t.Fatalf("displayCurrentModel() = %q, want %q", got, "gpt-5.4")
 	}
+}
+
+func TestModelCommandRunnerErrorBranches(t *testing.T) {
+	cmd := &cobra.Command{}
+	cmd.SetContext(context.Background())
+
+	if err := defaultModelLsCommandRunner(cmd, nil); err == nil || !strings.Contains(err.Error(), "selection service") {
+		t.Fatalf("defaultModelLsCommandRunner(nil) err = %v", err)
+	}
+	if err := defaultModelSetCommandRunner(cmd, nil, "gpt-4o"); err == nil || !strings.Contains(err.Error(), "selection service") {
+		t.Fatalf("defaultModelSetCommandRunner(nil) err = %v", err)
+	}
+}
+
+func TestDefaultModelLsCommandRunnerSelectionConfigErrors(t *testing.T) {
+	t.Run("no selected provider", func(t *testing.T) {
+		workdir := prepareModelSelectionConfig(t, "gpt-5.4")
+		loader := config.NewLoader(workdir, config.StaticDefaults())
+		manager := config.NewManager(loader)
+		if _, err := manager.Load(context.Background()); err != nil {
+			t.Fatalf("manager.Load() error = %v", err)
+		}
+		if err := manager.Update(context.Background(), func(cfg *config.Config) error {
+			cfg.SelectedProvider = ""
+			cfg.CurrentModel = ""
+			return nil
+		}); err != nil {
+			t.Fatalf("manager.Update() error = %v", err)
+		}
+
+		cmd := &cobra.Command{}
+		cmd.Flags().String("workdir", workdir, "")
+		cmd.SetContext(context.Background())
+		err := defaultModelLsCommandRunner(cmd, &mockSelectionService{})
+		if err == nil || !strings.Contains(err.Error(), "neocode use") {
+			t.Fatalf("err = %v, want contains neocode use", err)
+		}
+	})
+
+	t.Run("selected provider missing in config", func(t *testing.T) {
+		workdir := prepareModelSelectionConfig(t, "gpt-5.4")
+		loader := config.NewLoader(workdir, config.StaticDefaults())
+		manager := config.NewManager(loader)
+		if _, err := manager.Load(context.Background()); err != nil {
+			t.Fatalf("manager.Load() error = %v", err)
+		}
+		if err := manager.Update(context.Background(), func(cfg *config.Config) error {
+			cfg.SelectedProvider = "missing-provider"
+			return nil
+		}); err != nil {
+			t.Fatalf("manager.Update() error = %v", err)
+		}
+
+		cmd := &cobra.Command{}
+		cmd.Flags().String("workdir", workdir, "")
+		cmd.SetContext(context.Background())
+		err := defaultModelLsCommandRunner(cmd, &mockSelectionService{})
+		if err == nil || !strings.Contains(err.Error(), "missing-provider") {
+			t.Fatalf("err = %v, want contains missing-provider", err)
+		}
+	})
+}
+
+func TestDefaultModelSetCommandRunnerAdditionalBranches(t *testing.T) {
+	t.Run("model not found and selected provider empty", func(t *testing.T) {
+		workdir := prepareModelSelectionConfig(t, "gpt-5.4")
+		loader := config.NewLoader(workdir, config.StaticDefaults())
+		manager := config.NewManager(loader)
+		if _, err := manager.Load(context.Background()); err != nil {
+			t.Fatalf("manager.Load() error = %v", err)
+		}
+		if err := manager.Update(context.Background(), func(cfg *config.Config) error {
+			cfg.SelectedProvider = ""
+			return nil
+		}); err != nil {
+			t.Fatalf("manager.Update() error = %v", err)
+		}
+
+		cmd := &cobra.Command{}
+		cmd.Flags().String("workdir", workdir, "")
+		cmd.SetContext(context.Background())
+		svc := &mockSelectionService{
+			setCurrentModelFn: func(context.Context, string) (configstate.Selection, error) {
+				return configstate.Selection{}, configstate.ErrModelNotFound
+			},
+		}
+		err := defaultModelSetCommandRunner(cmd, svc, "missing-model")
+		if err == nil || !strings.Contains(err.Error(), `provider has no model "missing-model"`) {
+			t.Fatalf("err = %v", err)
+		}
+	})
+
+	t.Run("set current model success with empty selection model", func(t *testing.T) {
+		workdir := prepareModelSelectionConfig(t, "gpt-5.4")
+		cmd := &cobra.Command{}
+		cmd.Flags().String("workdir", workdir, "")
+		out := &bytes.Buffer{}
+		cmd.SetOut(out)
+		cmd.SetContext(context.Background())
+
+		svc := &mockSelectionService{
+			setCurrentModelFn: func(_ context.Context, _ string) (configstate.Selection, error) {
+				return configstate.Selection{ProviderID: "openai", ModelID: ""}, nil
+			},
+		}
+		if err := defaultModelSetCommandRunner(cmd, svc, "gpt-4o"); err != nil {
+			t.Fatalf("defaultModelSetCommandRunner() error = %v", err)
+		}
+		if !strings.Contains(out.String(), "gpt-4o") {
+			t.Fatalf("output = %q, want contains gpt-4o", out.String())
+		}
+	})
 }
 
 func prepareModelSelectionConfig(t *testing.T, currentModel string) string {

@@ -47,6 +47,18 @@ func TestUseCommand(t *testing.T) {
 	}
 }
 
+func TestUseCommandBuilderUsesDefaultResolverWhenNil(t *testing.T) {
+	cmd := newUseCommand()
+	if cmd.Use != "use <provider>" {
+		t.Fatalf("cmd.Use = %q, want %q", cmd.Use, "use <provider>")
+	}
+
+	injected := newUseCommandWithResolver(nil)
+	if injected.Use != "use <provider>" {
+		t.Fatalf("injected.Use = %q, want %q", injected.Use, "use <provider>")
+	}
+}
+
 func TestDefaultUseCommandRunner(t *testing.T) {
 	tests := []struct {
 		name                    string
@@ -135,4 +147,106 @@ func TestDefaultUseCommandRunner(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestDefaultUseCommandRunnerExtraBranches(t *testing.T) {
+	cmd := &cobra.Command{}
+	cmd.SetContext(context.Background())
+
+	if err := defaultUseCommandRunner(cmd, nil, "openai", useCommandOptions{}); err == nil || !strings.Contains(err.Error(), "selection service") {
+		t.Fatalf("defaultUseCommandRunner(nil) err = %v", err)
+	}
+
+	output := &bytes.Buffer{}
+	cmd.SetOut(output)
+	svc := &mockSelectionService{
+		selectProviderFn: func(context.Context, string) (configstate.Selection, error) {
+			return configstate.Selection{ProviderID: "", ModelID: ""}, nil
+		},
+	}
+	if err := defaultUseCommandRunner(cmd, svc, "custom-provider", useCommandOptions{}); err != nil {
+		t.Fatalf("defaultUseCommandRunner() error = %v", err)
+	}
+	if !strings.Contains(output.String(), "custom-provider") {
+		t.Fatalf("output = %q, want fallback provider name", output.String())
+	}
+
+	output.Reset()
+	svc = &mockSelectionService{
+		selectProviderModelFn: func(context.Context, string, string) (configstate.Selection, error) {
+			return configstate.Selection{ProviderID: "openai", ModelID: ""}, nil
+		},
+	}
+	if err := defaultUseCommandRunner(cmd, svc, "openai", useCommandOptions{Model: "gpt-4o"}); err != nil {
+		t.Fatalf("defaultUseCommandRunner(with model) error = %v", err)
+	}
+	if !strings.Contains(output.String(), "gpt-4o") {
+		t.Fatalf("output = %q, want fallback model id", output.String())
+	}
+}
+
+func TestUseCommandExecuteWithoutModelInvokesRunner(t *testing.T) {
+	svc := &mockSelectionService{}
+	cmd := newUseCommandWithResolver(staticSelectionResolver(svc))
+
+	originalRunner := runUseCommand
+	t.Cleanup(func() { runUseCommand = originalRunner })
+
+	called := false
+	runUseCommand = func(c *cobra.Command, gotSvc SelectionService, name string, opts useCommandOptions) error {
+		called = true
+		if gotSvc != svc {
+			t.Fatalf("injected service mismatch")
+		}
+		if name != "only-provider" {
+			t.Fatalf("name = %q, want only-provider", name)
+		}
+		if opts.Model != "" {
+			t.Fatalf("opts.Model = %q, want empty", opts.Model)
+		}
+		return errors.New("mock error")
+	}
+
+	cmd.SetArgs([]string{"only-provider"})
+	err := cmd.ExecuteContext(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "mock error") {
+		t.Fatalf("err = %v, want mock error", err)
+	}
+	if !called {
+		t.Fatal("expected runUseCommand called")
+	}
+}
+
+func TestUseCommandResolverErrorAndWhitespaceModel(t *testing.T) {
+	t.Run("resolver returns error", func(t *testing.T) {
+		cmd := newUseCommandWithResolver(selectionServiceResolverFunc(func(*cobra.Command) (SelectionService, error) {
+			return nil, errors.New("resolve failed")
+		}))
+		cmd.SetArgs([]string{"openai"})
+		err := cmd.ExecuteContext(context.Background())
+		if err == nil || !strings.Contains(err.Error(), "resolve failed") {
+			t.Fatalf("err = %v, want resolve failed", err)
+		}
+	})
+
+	t.Run("whitespace model falls back to SelectProvider", func(t *testing.T) {
+		cmd := &cobra.Command{}
+		cmd.SetOut(&bytes.Buffer{})
+		cmd.SetContext(context.Background())
+
+		selectProviderCalled := false
+		svc := &mockSelectionService{
+			selectProviderFn: func(_ context.Context, providerName string) (configstate.Selection, error) {
+				selectProviderCalled = true
+				return configstate.Selection{ProviderID: providerName}, nil
+			},
+		}
+		err := defaultUseCommandRunner(cmd, svc, "openai", useCommandOptions{Model: "   "})
+		if err != nil {
+			t.Fatalf("defaultUseCommandRunner() error = %v", err)
+		}
+		if !selectProviderCalled {
+			t.Fatal("expected SelectProvider path to be called")
+		}
+	})
 }

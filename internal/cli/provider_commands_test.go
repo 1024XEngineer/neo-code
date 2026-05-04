@@ -20,6 +20,29 @@ func TestProviderCommand(t *testing.T) {
 	}
 }
 
+func TestProviderCommandBuildersUseDefaultResolverWhenNil(t *testing.T) {
+	cmd := newProviderCommandWithResolver(nil)
+	if cmd.Use != "provider" {
+		t.Fatalf("cmd.Use = %q, want %q", cmd.Use, "provider")
+	}
+	if len(cmd.Commands()) != 3 {
+		t.Fatalf("len(provider subcommands) = %d, want 3", len(cmd.Commands()))
+	}
+
+	add := newProviderAddCommand()
+	if add.Use != "add <name>" {
+		t.Fatalf("add.Use = %q, want %q", add.Use, "add <name>")
+	}
+	ls := newProviderLsCommand()
+	if ls.Use != "ls" {
+		t.Fatalf("ls.Use = %q, want %q", ls.Use, "ls")
+	}
+	rm := newProviderRmCommand()
+	if rm.Use != "rm <name>" {
+		t.Fatalf("rm.Use = %q, want %q", rm.Use, "rm <name>")
+	}
+}
+
 func TestProviderAddCommand(t *testing.T) {
 	svc := &mockSelectionService{}
 	cmd := newProviderAddCommandWithResolver(staticSelectionResolver(svc))
@@ -283,5 +306,52 @@ func TestDefaultProviderLsAndRmCommandRunner(t *testing.T) {
 	}
 	if !strings.Contains(output.String(), "提供商 my-provider 已删除") {
 		t.Fatalf("output = %q, want contains remove message", output.String())
+	}
+}
+
+func TestDefaultProviderCommandRunnersErrorBranches(t *testing.T) {
+	cmd := &cobra.Command{}
+	cmd.SetContext(context.Background())
+
+	if err := defaultProviderAddCommandRunner(cmd, nil, "provider", providerAddOptions{}); err == nil || !strings.Contains(err.Error(), "selection service") {
+		t.Fatalf("defaultProviderAddCommandRunner(nil) err = %v", err)
+	}
+	if err := defaultProviderLsCommandRunner(cmd, nil); err == nil || !strings.Contains(err.Error(), "selection service") {
+		t.Fatalf("defaultProviderLsCommandRunner(nil) err = %v", err)
+	}
+	if err := defaultProviderRmCommandRunner(cmd, nil, "provider"); err == nil || !strings.Contains(err.Error(), "selection service") {
+		t.Fatalf("defaultProviderRmCommandRunner(nil) err = %v", err)
+	}
+
+	t.Setenv("PROVIDER_KEY_FOR_TEST", "sk-test")
+	if err := defaultProviderAddCommandRunner(cmd, &mockSelectionService{}, "provider", providerAddOptions{
+		Driver: "openaicompat", URL: "http://mock", APIKeyEnv: " ",
+	}); err == nil || !strings.Contains(err.Error(), "api-key-env") {
+		t.Fatalf("defaultProviderAddCommandRunner(empty env) err = %v", err)
+	}
+}
+
+func TestDefaultProviderAddCommandRunnerWithoutModelOutput(t *testing.T) {
+	t.Setenv("PROVIDER_KEY_NO_MODEL", "sk-test")
+	cmd := &cobra.Command{}
+	out := &bytes.Buffer{}
+	cmd.SetOut(out)
+	cmd.SetContext(context.Background())
+
+	svc := &mockSelectionService{
+		createCustomProviderFn: func(ctx context.Context, input configstate.CreateCustomProviderInput) (configstate.Selection, error) {
+			return configstate.Selection{ProviderID: "provider-no-model", ModelID: ""}, nil
+		},
+	}
+	err := defaultProviderAddCommandRunner(cmd, svc, "provider-no-model", providerAddOptions{
+		Driver:    "openaicompat",
+		URL:       "http://mock",
+		APIKeyEnv: "PROVIDER_KEY_NO_MODEL",
+	})
+	if err != nil {
+		t.Fatalf("defaultProviderAddCommandRunner() error = %v", err)
+	}
+	if strings.Contains(out.String(), "当前模型") {
+		t.Fatalf("output = %q, should not include model message when model id is empty", out.String())
 	}
 }

@@ -11,6 +11,26 @@ import (
 	"neo-code/internal/ptyproxy"
 )
 
+func TestShellCommandInitAcceptsPositionalShellArgument(t *testing.T) {
+	originalInitRunner := runShellInitCommand
+	t.Cleanup(func() { runShellInitCommand = originalInitRunner })
+
+	var captured shellCommandOptions
+	runShellInitCommand = func(_ context.Context, options shellCommandOptions, _ io.Writer) error {
+		captured = options
+		return nil
+	}
+
+	command := NewRootCommand()
+	command.SetArgs([]string{"shell", "--init", "/bin/zsh"})
+	if err := command.ExecuteContext(context.Background()); err != nil {
+		t.Fatalf("ExecuteContext() error = %v", err)
+	}
+	if captured.Shell != "/bin/zsh" {
+		t.Fatalf("shell = %q, want /bin/zsh", captured.Shell)
+	}
+}
+
 func TestShellCommandUsesFlags(t *testing.T) {
 	originalRunner := runShellCommand
 	t.Cleanup(func() { runShellCommand = originalRunner })
@@ -246,6 +266,103 @@ func TestDefaultDiagAutoCommandRunnerPrintsResult(t *testing.T) {
 	}
 }
 
+func TestDefaultRunners(t *testing.T) {
+	t.Run("defaultShellCommandRunner", func(t *testing.T) {
+		originalRun := runManualShellProxy
+		t.Cleanup(func() { runManualShellProxy = originalRun })
+
+		var captured ptyproxy.ManualShellOptions
+		runManualShellProxy = func(_ context.Context, options ptyproxy.ManualShellOptions) error {
+			captured = options
+			return nil
+		}
+
+		stdin := strings.NewReader("input")
+		stdout := &bytes.Buffer{}
+		stderr := &bytes.Buffer{}
+		err := defaultShellCommandRunner(context.Background(), shellCommandOptions{
+			Workdir:              " /repo ",
+			Shell:                " /bin/bash ",
+			SocketPath:           " /tmp/diag.sock ",
+			GatewayListenAddress: " /tmp/gateway.sock ",
+			GatewayTokenFile:     " /tmp/token.json ",
+		}, stdin, stdout, stderr)
+		if err != nil {
+			t.Fatalf("defaultShellCommandRunner() error = %v", err)
+		}
+		if captured.Workdir != "/repo" || captured.Shell != "/bin/bash" {
+			t.Fatalf("captured options = %+v", captured)
+		}
+		if captured.SocketPath != "/tmp/diag.sock" {
+			t.Fatalf("captured.SocketPath = %q, want /tmp/diag.sock", captured.SocketPath)
+		}
+	})
+
+	t.Run("defaultShellInitCommandRunner", func(t *testing.T) {
+		originalScriptBuilder := buildShellInitScript
+		t.Cleanup(func() { buildShellInitScript = originalScriptBuilder })
+		buildShellInitScript = func(shell string) string {
+			if shell != "/bin/bash" {
+				t.Fatalf("shell = %q, want /bin/bash", shell)
+			}
+			return "mock-init-script"
+		}
+
+		if err := defaultShellInitCommandRunner(context.Background(), shellCommandOptions{Shell: "/bin/bash"}, nil); err != nil {
+			t.Fatalf("defaultShellInitCommandRunner(nil stdout) error = %v", err)
+		}
+
+		stdout := &bytes.Buffer{}
+		if err := defaultShellInitCommandRunner(context.Background(), shellCommandOptions{Shell: "/bin/bash"}, stdout); err != nil {
+			t.Fatalf("defaultShellInitCommandRunner() error = %v", err)
+		}
+		if stdout.String() != "mock-init-script\n" {
+			t.Fatalf("stdout = %q, want mock-init-script", stdout.String())
+		}
+	})
+
+	t.Run("defaultDiagCommandRunner", func(t *testing.T) {
+		originalSend := sendDiagnoseSignalFn
+		t.Cleanup(func() { sendDiagnoseSignalFn = originalSend })
+
+		var socket string
+		sendDiagnoseSignalFn = func(_ context.Context, socketPath string) error {
+			socket = socketPath
+			return nil
+		}
+		err := defaultDiagCommandRunner(context.Background(), diagCommandOptions{SocketPath: " /tmp/diag.sock "})
+		if err != nil {
+			t.Fatalf("defaultDiagCommandRunner() error = %v", err)
+		}
+		if socket != "/tmp/diag.sock" {
+			t.Fatalf("socket = %q, want /tmp/diag.sock", socket)
+		}
+	})
+
+	t.Run("defaultDiagAutoCommandRunnerQuery", func(t *testing.T) {
+		originalQuery := queryAutoModeFn
+		t.Cleanup(func() { queryAutoModeFn = originalQuery })
+		queryAutoModeFn = func(_ context.Context, socketPath string) (bool, error) {
+			if socketPath != "/tmp/diag.sock" {
+				t.Fatalf("socketPath = %q", socketPath)
+			}
+			return false, nil
+		}
+
+		stdout := &bytes.Buffer{}
+		err := defaultDiagAutoCommandRunner(context.Background(), diagAutoCommandOptions{
+			SocketPath: "/tmp/diag.sock",
+			QueryOnly:  true,
+		}, stdout)
+		if err != nil {
+			t.Fatalf("defaultDiagAutoCommandRunner(query) error = %v", err)
+		}
+		if !strings.Contains(stdout.String(), "disabled") {
+			t.Fatalf("stdout = %q, want disabled", stdout.String())
+		}
+	})
+}
+
 func TestShellAndDiagCommandsSkipGlobalPreload(t *testing.T) {
 	originalPreload := runGlobalPreload
 	originalShellRunner := runShellCommand
@@ -279,5 +396,161 @@ func TestShellAndDiagCommandsSkipGlobalPreload(t *testing.T) {
 
 	if preloadCalled != 0 {
 		t.Fatalf("expected preload skipped, called %d", preloadCalled)
+	}
+}
+
+func TestDiagSubcommandsAdditionalPaths(t *testing.T) {
+	t.Run("diag diagnose subcommand", func(t *testing.T) {
+		originalRunner := runDiagDiagnoseCommand
+		originalReadEnv := readDiagEnvValue
+		t.Cleanup(func() { runDiagDiagnoseCommand = originalRunner })
+		t.Cleanup(func() { readDiagEnvValue = originalReadEnv })
+
+		readDiagEnvValue = func(string) string { return "/tmp/diag.sock" }
+		called := false
+		runDiagDiagnoseCommand = func(_ context.Context, options diagCommandOptions) error {
+			called = true
+			if options.SocketPath != "/tmp/diag.sock" {
+				t.Fatalf("socket = %q, want /tmp/diag.sock", options.SocketPath)
+			}
+			return nil
+		}
+
+		command := NewRootCommand()
+		command.SetArgs([]string{"diag", "diagnose"})
+		if err := command.ExecuteContext(context.Background()); err != nil {
+			t.Fatalf("ExecuteContext() error = %v", err)
+		}
+		if !called {
+			t.Fatal("expected runDiagDiagnoseCommand called")
+		}
+	})
+
+	t.Run("diag auto status", func(t *testing.T) {
+		originalRunner := runDiagAutoCommand
+		originalReadEnv := readDiagEnvValue
+		t.Cleanup(func() { runDiagAutoCommand = originalRunner })
+		t.Cleanup(func() { readDiagEnvValue = originalReadEnv })
+
+		readDiagEnvValue = func(string) string { return "/tmp/diag.sock" }
+		var captured diagAutoCommandOptions
+		runDiagAutoCommand = func(_ context.Context, options diagAutoCommandOptions, _ io.Writer) error {
+			captured = options
+			return nil
+		}
+
+		command := NewRootCommand()
+		command.SetArgs([]string{"diag", "auto", "status"})
+		if err := command.ExecuteContext(context.Background()); err != nil {
+			t.Fatalf("ExecuteContext() error = %v", err)
+		}
+		if !captured.QueryOnly {
+			t.Fatal("expected QueryOnly=true for status")
+		}
+	})
+
+	t.Run("defaultDiagAutoCommandRunner errors", func(t *testing.T) {
+		originalQuery := queryAutoModeFn
+		originalSend := sendAutoModeSignalFn
+		t.Cleanup(func() { queryAutoModeFn = originalQuery })
+		t.Cleanup(func() { sendAutoModeSignalFn = originalSend })
+
+		queryAutoModeFn = func(context.Context, string) (bool, error) { return false, errors.New("query failed") }
+		if err := defaultDiagAutoCommandRunner(context.Background(), diagAutoCommandOptions{
+			SocketPath: "/tmp/diag.sock",
+			QueryOnly:  true,
+		}, &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "query failed") {
+			t.Fatalf("defaultDiagAutoCommandRunner(query error) err = %v", err)
+		}
+
+		sendAutoModeSignalFn = func(context.Context, string, bool) error { return errors.New("send failed") }
+		if err := defaultDiagAutoCommandRunner(context.Background(), diagAutoCommandOptions{
+			SocketPath: "/tmp/diag.sock",
+			Enabled:    false,
+		}, &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "send failed") {
+			t.Fatalf("defaultDiagAutoCommandRunner(send error) err = %v", err)
+		}
+	})
+}
+
+func TestShellAndDiagCommandAdditionalBranches(t *testing.T) {
+	t.Run("shell args validation without init", func(t *testing.T) {
+		command := newShellCommand()
+		command.SetArgs([]string{"extra"})
+		err := command.ExecuteContext(context.Background())
+		if err == nil {
+			t.Fatal("expected no-args validation error")
+		}
+	})
+
+	t.Run("diag diagnose with explicit socket flag", func(t *testing.T) {
+		originalRunner := runDiagDiagnoseCommand
+		t.Cleanup(func() { runDiagDiagnoseCommand = originalRunner })
+
+		called := false
+		runDiagDiagnoseCommand = func(_ context.Context, options diagCommandOptions) error {
+			called = true
+			if options.SocketPath != "/tmp/diag-explicit.sock" {
+				t.Fatalf("socket = %q, want /tmp/diag-explicit.sock", options.SocketPath)
+			}
+			return nil
+		}
+
+		command := NewRootCommand()
+		command.SetArgs([]string{"diag", "diagnose", "--socket", "/tmp/diag-explicit.sock"})
+		if err := command.ExecuteContext(context.Background()); err != nil {
+			t.Fatalf("ExecuteContext() error = %v", err)
+		}
+		if !called {
+			t.Fatal("expected runDiagDiagnoseCommand called")
+		}
+	})
+
+	t.Run("resolveDiagSocketPath prefers socket flag", func(t *testing.T) {
+		path, err := resolveDiagSocketPath(" /tmp/from-flag.sock ")
+		if err != nil {
+			t.Fatalf("resolveDiagSocketPath() error = %v", err)
+		}
+		if path != "/tmp/from-flag.sock" {
+			t.Fatalf("path = %q, want /tmp/from-flag.sock", path)
+		}
+	})
+
+	t.Run("defaultDiagAutoCommandRunner disabled output", func(t *testing.T) {
+		originalSend := sendAutoModeSignalFn
+		t.Cleanup(func() { sendAutoModeSignalFn = originalSend })
+		sendAutoModeSignalFn = func(_ context.Context, socketPath string, enabled bool) error {
+			if socketPath != "/tmp/diag.sock" {
+				t.Fatalf("socketPath = %q", socketPath)
+			}
+			if enabled {
+				t.Fatal("expected enabled=false")
+			}
+			return nil
+		}
+
+		stdout := &bytes.Buffer{}
+		err := defaultDiagAutoCommandRunner(context.Background(), diagAutoCommandOptions{
+			SocketPath: "/tmp/diag.sock",
+			Enabled:    false,
+		}, stdout)
+		if err != nil {
+			t.Fatalf("defaultDiagAutoCommandRunner() error = %v", err)
+		}
+		if !strings.Contains(stdout.String(), "disabled") {
+			t.Fatalf("stdout = %q, want disabled", stdout.String())
+		}
+	})
+}
+
+func TestDiagCommandBuildersExposeSocketFlags(t *testing.T) {
+	diag := newDiagDiagnoseCommand()
+	if diag.Flags().Lookup("socket") == nil {
+		t.Fatal("diag diagnose command should expose --socket flag")
+	}
+
+	auto := newDiagAutoCommand()
+	if auto.Flags().Lookup("socket") == nil {
+		t.Fatal("diag auto command should expose --socket flag")
 	}
 }
