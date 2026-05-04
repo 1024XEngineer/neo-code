@@ -338,6 +338,8 @@ func TestSendDiagIPCCommandToPathResponseReadAndDecodeErrors(t *testing.T) {
 				serverDone <- acceptErr
 				return
 			}
+			// Drain the client request so the write phase succeeds before we close.
+			_, _ = bufio.NewReader(conn).ReadBytes('\n')
 			_ = conn.Close()
 			serverDone <- nil
 		}()
