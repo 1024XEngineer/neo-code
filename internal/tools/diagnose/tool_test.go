@@ -167,3 +167,90 @@ func TestParseDiagnoseInputMissingOSEnv(t *testing.T) {
 		t.Fatal("expected error for empty os_env")
 	}
 }
+
+func TestDecodeDiagnosisJSON(t *testing.T) {
+	if _, ok := decodeDiagnosisJSON(`{"confidence":0.9}`); ok {
+		t.Fatal("expected decodeDiagnosisJSON() to reject missing root_cause")
+	}
+	if _, ok := decodeDiagnosisJSON(`not-json`); ok {
+		t.Fatal("expected decodeDiagnosisJSON() to reject invalid json")
+	}
+
+	decoded, ok := decodeDiagnosisJSON(`{"confidence":1.2,"root_cause":"proxy mismatch","fix_commands":["  export HTTPS_PROXY=http://127.0.0.1:7890  "],"investigation_commands":["curl -v https://example.com"]}`)
+	if !ok {
+		t.Fatal("expected decodeDiagnosisJSON() success")
+	}
+	if decoded.Confidence != 1 {
+		t.Fatalf("decoded.Confidence = %v, want 1", decoded.Confidence)
+	}
+	if decoded.RootCause != "proxy mismatch" {
+		t.Fatalf("decoded.RootCause = %q, want proxy mismatch", decoded.RootCause)
+	}
+	if len(decoded.FixCommands) != 1 || decoded.FixCommands[0] != "export HTTPS_PROXY=http://127.0.0.1:7890" {
+		t.Fatalf("decoded.FixCommands = %#v", decoded.FixCommands)
+	}
+}
+
+func TestConfidenceAndNormalizationHelpers(t *testing.T) {
+	if got := parseConfidence([]string{"confidence=0.72"}); got != 0.72 {
+		t.Fatalf("parseConfidence() = %v, want 0.72", got)
+	}
+	if got := parseConfidence([]string{"confidence=3.14"}); got != 1 {
+		t.Fatalf("parseConfidence(clamp high) = %v, want 1", got)
+	}
+	if got := parseConfidence([]string{"confidence=bad"}); got != 0 {
+		t.Fatalf("parseConfidence(invalid) = %v, want 0", got)
+	}
+
+	if got := clampConfidence(-2); got != 0 {
+		t.Fatalf("clampConfidence(-2) = %v, want 0", got)
+	}
+	if got := clampConfidence(2); got != 1 {
+		t.Fatalf("clampConfidence(2) = %v, want 1", got)
+	}
+
+	normalized := normalizeDiagnosisOutput(diagnoseOutput{
+		Confidence:            -1,
+		RootCause:             "   ",
+		FixCommands:           []string{" go mod tidy ", "go mod tidy", " "},
+		InvestigationCommands: nil,
+	})
+	if normalized.Confidence != 0 {
+		t.Fatalf("normalized.Confidence = %v, want 0", normalized.Confidence)
+	}
+	if !strings.Contains(normalized.RootCause, "未获得有效根因") {
+		t.Fatalf("normalized.RootCause = %q", normalized.RootCause)
+	}
+	if len(normalized.FixCommands) != 1 || normalized.FixCommands[0] != "go mod tidy" {
+		t.Fatalf("normalized.FixCommands = %#v", normalized.FixCommands)
+	}
+	if normalized.InvestigationCommands == nil {
+		t.Fatal("normalized.InvestigationCommands should be an empty list, not nil")
+	}
+}
+
+func TestWorkdirAndTruncateHelpers(t *testing.T) {
+	if got := resolveDiagnoseWorkdir("/repo", map[string]string{"cwd": "/tmp"}); got != "/repo" {
+		t.Fatalf("resolveDiagnoseWorkdir(callWorkdir) = %q, want /repo", got)
+	}
+	if got := resolveDiagnoseWorkdir(" ", map[string]string{"cwd": " /tmp/work "}); got != "/tmp/work" {
+		t.Fatalf("resolveDiagnoseWorkdir(os env) = %q, want /tmp/work", got)
+	}
+	if got := resolveDiagnoseWorkdir("", nil); got != "" {
+		t.Fatalf("resolveDiagnoseWorkdir(empty) = %q, want empty", got)
+	}
+
+	if got := normalizePathList(" "); got != nil {
+		t.Fatalf("normalizePathList(empty) = %#v, want nil", got)
+	}
+	if got := normalizePathList(" /repo "); len(got) != 1 || got[0] != "/repo" {
+		t.Fatalf("normalizePathList() = %#v, want [/repo]", got)
+	}
+
+	if got := truncateRunes("abc", 0); got != "" {
+		t.Fatalf("truncateRunes(max=0) = %q, want empty", got)
+	}
+	if got := truncateRunes("  你好世界  ", 2); !strings.HasPrefix(got, "你好") || !strings.Contains(got, "[truncated]") {
+		t.Fatalf("truncateRunes() = %q, want truncated prefix", got)
+	}
+}

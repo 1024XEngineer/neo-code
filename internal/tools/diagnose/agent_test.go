@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	"neo-code/internal/subagent"
@@ -184,5 +185,46 @@ func TestParseSubAgentDiagnosisRejectsEmptySummary(t *testing.T) {
 	}
 	if !errors.Is(err, errors.New("empty summary")) && err.Error() != "empty summary" {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestParseSubAgentDiagnosisFromSummaryJSON(t *testing.T) {
+	parsed, err := parseSubAgentDiagnosis(subagent.Output{
+		Summary: `{"confidence":1.4,"root_cause":"disk full","fix_commands":["  rm -rf /tmp/cache  "],"investigation_commands":[]}`,
+	})
+	if err != nil {
+		t.Fatalf("parseSubAgentDiagnosis() error = %v", err)
+	}
+	if parsed.RootCause != "disk full" {
+		t.Fatalf("RootCause = %q, want disk full", parsed.RootCause)
+	}
+	if parsed.Confidence != 1 {
+		t.Fatalf("Confidence = %v, want 1", parsed.Confidence)
+	}
+	if len(parsed.FixCommands) != 1 || parsed.FixCommands[0] != "rm -rf /tmp/cache" {
+		t.Fatalf("FixCommands = %#v", parsed.FixCommands)
+	}
+}
+
+func TestParseSubAgentDiagnosisFallbacks(t *testing.T) {
+	parsed, err := parseSubAgentDiagnosis(subagent.Output{
+		Summary:  "network timeout",
+		Findings: []string{"  run: ping 1.1.1.1  ", "run: ping 1.1.1.1"},
+		Patches:  []string{"  export HTTPS_PROXY=http://127.0.0.1:7890  "},
+	})
+	if err != nil {
+		t.Fatalf("parseSubAgentDiagnosis() error = %v", err)
+	}
+	if !strings.Contains(parsed.RootCause, "network timeout") {
+		t.Fatalf("RootCause = %q", parsed.RootCause)
+	}
+	if parsed.Confidence != 0.56 {
+		t.Fatalf("Confidence = %v, want 0.56 fallback", parsed.Confidence)
+	}
+	if len(parsed.InvestigationCommands) != 1 || parsed.InvestigationCommands[0] != "run: ping 1.1.1.1" {
+		t.Fatalf("InvestigationCommands = %#v", parsed.InvestigationCommands)
+	}
+	if len(parsed.FixCommands) != 1 || parsed.FixCommands[0] != "export HTTPS_PROXY=http://127.0.0.1:7890" {
+		t.Fatalf("FixCommands = %#v", parsed.FixCommands)
 	}
 }
