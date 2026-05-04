@@ -368,6 +368,11 @@ func TestLoadImageAttachmentDataInvalidIndex(t *testing.T) {
 
 func TestAddImageFromClipboardUnsupported(t *testing.T) {
 	app, _ := newTestApp(t)
+	originalRead := readClipboardImage
+	defer func() { readClipboardImage = originalRead }()
+	readClipboardImage = func() ([]byte, error) {
+		return nil, errors.New("clipboard image unavailable")
+	}
 	if err := app.addImageFromClipboard(); err == nil {
 		t.Fatalf("expected unsupported clipboard image error")
 	}

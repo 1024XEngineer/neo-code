@@ -98,6 +98,14 @@ func (p *recordingPort) LoadSession(_ context.Context, _ LoadSessionInput) (Sess
 	return Session{ID: p.id}, nil
 }
 
+func (p *recordingPort) ListSessionTodos(_ context.Context, _ ListSessionTodosInput) (TodoSnapshot, error) {
+	return TodoSnapshot{}, nil
+}
+
+func (p *recordingPort) GetRuntimeSnapshot(_ context.Context, _ GetRuntimeSnapshotInput) (RuntimeSnapshot, error) {
+	return RuntimeSnapshot{SessionID: p.id}, nil
+}
+
 func (p *recordingPort) CreateSession(_ context.Context, _ CreateSessionInput) (string, error) {
 	return p.id, nil
 }
@@ -277,7 +285,7 @@ func TestMultiWorkspaceRuntime_DefaultHashRouting(t *testing.T) {
 }
 
 func TestMultiWorkspaceRuntime_NoHashConfigured(t *testing.T) {
-	idx, _, _ := setupIndex(t)
+	idx := agentsession.NewWorkspaceIndex(t.TempDir())
 	builder := newTestBuilder()
 
 	// No defaultHash, no context hash → must error.

@@ -158,6 +158,7 @@ func TestLoaderLoadHonorsCanceledContext(t *testing.T) {
 func TestLoaderLoadUsesHomeFallbackWhenBaseDirEmpty(t *testing.T) {
 	homeDir := t.TempDir()
 	t.Setenv("HOME", homeDir)
+	t.Setenv("USERPROFILE", homeDir)
 	baseDir := filepath.Join(homeDir, defaultRulesDir)
 	if err := os.MkdirAll(baseDir, 0o755); err != nil {
 		t.Fatalf("mkdir baseDir: %v", err)

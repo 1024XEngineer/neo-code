@@ -136,7 +136,7 @@ func TestRestoreRuntimePayloadCoversSpecializedTypes(t *testing.T) {
 		{
 			name:      "permission request",
 			eventType: EventPermissionRequested,
-			payload:   map[string]any{"RequestID": "req-1"},
+			payload:   map[string]any{"request_id": "req-1"},
 			assertFn: func(t *testing.T, got any) {
 				t.Helper()
 				if v, ok := got.(PermissionRequestPayload); !ok || v.RequestID != "req-1" {

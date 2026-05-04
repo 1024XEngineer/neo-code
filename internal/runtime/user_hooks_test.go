@@ -396,6 +396,10 @@ func TestResolveHookPathWithinWorkdirAndSymlinkBranches(t *testing.T) {
 	}
 	link := filepath.Join(workdir, "link.txt")
 	if err := os.Symlink(target, link); err != nil {
+		if gruntime.GOOS == "windows" &&
+			(errors.Is(err, os.ErrPermission) || strings.Contains(strings.ToLower(err.Error()), "privilege")) {
+			t.Skipf("skip symlink branch without Windows symlink privilege: %v", err)
+		}
 		t.Fatalf("create symlink: %v", err)
 	}
 	got, err := resolveHookPathWithinWorkdir(workdir, "link.txt")
@@ -936,7 +940,9 @@ func TestUserHookHandlersAndPathChecks(t *testing.T) {
 		if !contains {
 			t.Fatalf("expected symlink path detection to be true")
 		}
-	} else if !errors.Is(err, os.ErrPermission) && !strings.Contains(strings.ToLower(err.Error()), "operation not permitted") {
+	} else if !errors.Is(err, os.ErrPermission) &&
+		!strings.Contains(strings.ToLower(err.Error()), "operation not permitted") &&
+		!strings.Contains(strings.ToLower(err.Error()), "privilege") {
 		t.Fatalf("symlink creation error: %v", err)
 	}
 

@@ -58,6 +58,8 @@ func TestOriginAllowlist(t *testing.T) {
 		"http://[::1]:3000",
 		"http://[::1]",
 		"app://desktop-client",
+		"file://local",
+		"null",
 	}
 	for _, origin := range allowed {
 		if !isAllowedControlPlaneOrigin(origin) {
@@ -69,7 +71,6 @@ func TestOriginAllowlist(t *testing.T) {
 		"",
 		"https://localhost:3000",
 		"http://evil.example.com",
-		"file://local",
 	}
 	for _, origin := range disallowed {
 		if isAllowedControlPlaneOrigin(origin) {

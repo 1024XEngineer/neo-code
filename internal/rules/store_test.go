@@ -46,15 +46,12 @@ func TestProjectRulePathUsesFileParentDirectory(t *testing.T) {
 }
 
 func TestProjectRulePathNormalizesRelativeRootToAbsolute(t *testing.T) {
-	tempRoot := t.TempDir()
 	workdir, err := os.Getwd()
 	if err != nil {
 		t.Fatalf("os.Getwd() error = %v", err)
 	}
-	relativeRoot, err := filepath.Rel(workdir, tempRoot)
-	if err != nil {
-		t.Fatalf("filepath.Rel() error = %v", err)
-	}
+	relativeRoot := filepath.Join("relative-root-for-test", "nested")
+	tempRoot := filepath.Join(workdir, relativeRoot)
 
 	got := ProjectRulePath(relativeRoot)
 	want := filepath.Join(tempRoot, agentsFileName)
