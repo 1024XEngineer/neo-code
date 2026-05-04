@@ -948,3 +948,75 @@ func TestRestore_RemoveDirWithNestedFiles(t *testing.T) {
 		t.Fatalf("child want hello got %q", got)
 	}
 }
+
+func TestPerEditStoreHelperMethods(t *testing.T) {
+	t.Run("availability and pending lifecycle", func(t *testing.T) {
+		var nilStore *PerEditSnapshotStore
+		if nilStore.IsAvailable() {
+			t.Fatal("nil store should report unavailable")
+		}
+
+		store, workdir := newTestStore(t)
+		if !store.IsAvailable() {
+			t.Fatal("store should report available")
+		}
+		if store.HasPending() {
+			t.Fatal("new store should not have pending captures")
+		}
+
+		abs := writeWorkdirFile(t, workdir, "pending.txt", "hello")
+		if _, err := store.CapturePreWrite(abs); err != nil {
+			t.Fatalf("CapturePreWrite() error = %v", err)
+		}
+		if !store.HasPending() {
+			t.Fatal("capture should mark store pending")
+		}
+
+		store.Reset()
+		if store.HasPending() {
+			t.Fatal("Reset() should clear pending captures")
+		}
+	})
+
+	t.Run("delete checkpoint and ref helpers", func(t *testing.T) {
+		store, workdir := newTestStore(t)
+		abs := writeWorkdirFile(t, workdir, "tracked.txt", "v1")
+		if _, err := store.CapturePreWrite(abs); err != nil {
+			t.Fatalf("CapturePreWrite() error = %v", err)
+		}
+		if written, err := store.Finalize("cp-delete"); err != nil || !written {
+			t.Fatalf("Finalize() written=%v err=%v", written, err)
+		}
+
+		cpPath := store.checkpointMetaPath("cp-delete")
+		if _, err := os.Stat(cpPath); err != nil {
+			t.Fatalf("checkpoint meta missing before delete: %v", err)
+		}
+		if err := store.DeleteCheckpoint("cp-delete"); err != nil {
+			t.Fatalf("DeleteCheckpoint() error = %v", err)
+		}
+		if _, err := os.Stat(cpPath); !os.IsNotExist(err) {
+			t.Fatalf("checkpoint meta should be removed, err=%v", err)
+		}
+		if err := store.DeleteCheckpoint("cp-delete"); err != nil {
+			t.Fatalf("DeleteCheckpoint() missing should be noop, got %v", err)
+		}
+		if err := store.DeleteCheckpoint(""); err != nil {
+			t.Fatalf("DeleteCheckpoint(\"\") should be noop, got %v", err)
+		}
+
+		ref := RefForPerEditCheckpoint("cp-delete")
+		if !IsPerEditRef(ref) {
+			t.Fatalf("expected per-edit ref: %q", ref)
+		}
+		if got := PerEditCheckpointIDFromRef(ref); got != "cp-delete" {
+			t.Fatalf("PerEditCheckpointIDFromRef() = %q, want cp-delete", got)
+		}
+		if IsPerEditRef("git:deadbeef") {
+			t.Fatal("non per-edit ref should not match")
+		}
+		if got := PerEditCheckpointIDFromRef("git:deadbeef"); got != "" {
+			t.Fatalf("non per-edit ref should return empty id, got %q", got)
+		}
+	})
+}

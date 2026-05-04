@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -388,4 +389,165 @@ func TestRestoreCheckpoint_RecoversCapturedFile(t *testing.T) {
 	if string(got) != "version one" {
 		t.Fatalf("restored content = %q, want %q", string(got), "version one")
 	}
+}
+
+func TestUndoRestoreCheckpoint_RestoresGuardState(t *testing.T) {
+	fixture := newRuntimeCheckpointFixture(t)
+	target := filepath.Join(fixture.workdir, "undo.txt")
+	if err := os.WriteFile(target, []byte("before"), 0o644); err != nil {
+		t.Fatalf("WriteFile(before) error = %v", err)
+	}
+	if _, err := fixture.perEditStore.CapturePreWrite(target); err != nil {
+		t.Fatalf("CapturePreWrite(before) error = %v", err)
+	}
+
+	state := newRunState("run-undo", fixture.session)
+	if err := fixture.service.createStartOfTurnCheckpoint(context.Background(), &state); err != nil {
+		t.Fatalf("createStartOfTurnCheckpoint() error = %v", err)
+	}
+	records, err := fixture.checkpointStore.ListCheckpoints(context.Background(), fixture.session.ID, checkpoint.ListCheckpointOpts{})
+	if err != nil {
+		t.Fatalf("ListCheckpoints() error = %v", err)
+	}
+	cpRecord := records[0]
+	if err := fixture.checkpointStore.UpdateCheckpointStatus(context.Background(), cpRecord.CheckpointID, agentsession.CheckpointStatusAvailable); err != nil {
+		t.Fatalf("UpdateCheckpointStatus() error = %v", err)
+	}
+
+	if _, err := fixture.perEditStore.CapturePreWrite(target); err != nil {
+		t.Fatalf("CapturePreWrite(guard) error = %v", err)
+	}
+	if err := os.WriteFile(target, []byte("after"), 0o644); err != nil {
+		t.Fatalf("WriteFile(after) error = %v", err)
+	}
+
+	if _, err := fixture.service.RestoreCheckpoint(context.Background(), GatewayRestoreInput{
+		SessionID:    fixture.session.ID,
+		CheckpointID: cpRecord.CheckpointID,
+	}); err != nil {
+		t.Fatalf("RestoreCheckpoint() error = %v", err)
+	}
+	if got := string(mustReadRuntimeFile(t, target)); got != "before" {
+		t.Fatalf("restored content = %q, want before", got)
+	}
+
+	if _, err := fixture.service.UndoRestoreCheckpoint(context.Background(), fixture.session.ID); err != nil {
+		t.Fatalf("UndoRestoreCheckpoint() error = %v", err)
+	}
+	if got := string(mustReadRuntimeFile(t, target)); got != "before" {
+		t.Fatalf("undo content = %q, want before", got)
+	}
+
+	seenUndo := false
+	for {
+		select {
+		case evt := <-fixture.service.events:
+			if evt.Type == EventCheckpointUndoRestore {
+				payload, ok := evt.Payload.(CheckpointUndoRestorePayload)
+				if !ok {
+					t.Fatalf("undo payload type = %T", evt.Payload)
+				}
+				if payload.SessionID != fixture.session.ID {
+					t.Fatalf("undo payload session = %q, want %q", payload.SessionID, fixture.session.ID)
+				}
+				seenUndo = true
+			}
+		default:
+			if !seenUndo {
+				t.Fatal("expected checkpoint undo event")
+			}
+			return
+		}
+	}
+}
+
+func TestCheckpointDiff_ReturnsPatchAndClassifiedFiles(t *testing.T) {
+	fixture := newRuntimeCheckpointFixture(t)
+	ctx := context.Background()
+
+	alpha := filepath.Join(fixture.workdir, "alpha.txt")
+	if err := os.WriteFile(alpha, []byte("zero\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(alpha) error = %v", err)
+	}
+
+	if _, err := fixture.perEditStore.CapturePreWrite(alpha); err != nil {
+		t.Fatalf("CapturePreWrite(alpha cp1) error = %v", err)
+	}
+	if err := os.WriteFile(alpha, []byte("one\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(alpha one) error = %v", err)
+	}
+	if _, err := fixture.perEditStore.Finalize("cp1"); err != nil {
+		t.Fatalf("Finalize(cp1) error = %v", err)
+	}
+	fixture.perEditStore.Reset()
+
+	if _, err := fixture.perEditStore.CapturePreWrite(alpha); err != nil {
+		t.Fatalf("CapturePreWrite(alpha cp2) error = %v", err)
+	}
+	if err := os.WriteFile(alpha, []byte("two\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(alpha two) error = %v", err)
+	}
+	if _, err := fixture.perEditStore.Finalize("cp2"); err != nil {
+		t.Fatalf("Finalize(cp2) error = %v", err)
+	}
+	fixture.perEditStore.Reset()
+
+	for _, cpID := range []string{"cp1", "cp2"} {
+		if _, err := fixture.checkpointStore.CreateCheckpoint(ctx, checkpoint.CreateCheckpointInput{
+			Record: agentsession.CheckpointRecord{
+				CheckpointID:      cpID,
+				WorkspaceKey:      agentsession.WorkspacePathKey(fixture.workdir),
+				SessionID:         fixture.session.ID,
+				RunID:             "run-diff",
+				Workdir:           fixture.workdir,
+				CreatedAt:         time.Now().UTC(),
+				Reason:            agentsession.CheckpointReasonEndOfTurn,
+				CodeCheckpointRef: checkpoint.RefForPerEditCheckpoint(cpID),
+				Restorable:        true,
+				Status:            agentsession.CheckpointStatusAvailable,
+			},
+			SessionCP: agentsession.SessionCheckpoint{
+				ID:           agentsession.NewID("sc"),
+				SessionID:    fixture.session.ID,
+				HeadJSON:     `{}`,
+				MessagesJSON: `[]`,
+				CreatedAt:    time.Now().UTC(),
+			},
+		}); err != nil {
+			t.Fatalf("CreateCheckpoint(%s) error = %v", cpID, err)
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	result, err := fixture.service.CheckpointDiff(ctx, CheckpointDiffInput{
+		SessionID:    fixture.session.ID,
+		CheckpointID: "cp2",
+	})
+	if err != nil {
+		t.Fatalf("CheckpointDiff() error = %v", err)
+	}
+	if result.CheckpointID != "cp2" || result.PrevCheckpointID != "cp1" {
+		t.Fatalf("unexpected checkpoint ids: %#v", result)
+	}
+	if !strings.Contains(result.Patch, "alpha.txt") {
+		t.Fatalf("patch should mention changed files, got:\n%s", result.Patch)
+	}
+	if len(result.Files.Modified) != 1 || result.Files.Modified[0] != "alpha.txt" {
+		t.Fatalf("modified files = %#v, want alpha.txt", result.Files.Modified)
+	}
+	if len(result.Files.Added) != 0 {
+		t.Fatalf("added files = %#v, want empty", result.Files.Added)
+	}
+	if len(result.Files.Deleted) != 0 {
+		t.Fatalf("deleted files = %#v, want empty", result.Files.Deleted)
+	}
+}
+
+func mustReadRuntimeFile(t *testing.T, path string) []byte {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(%s) error = %v", path, err)
+	}
+	return data
 }
