@@ -3,6 +3,7 @@ import { type GatewayAPI } from '@/api/gateway'
 import { type SessionSummary as APISessionSummary } from '@/api/protocol'
 import { useChatStore } from '@/stores/useChatStore'
 import { useUIStore } from '@/stores/useUIStore'
+import { useRuntimeInsightStore } from '@/stores/useRuntimeInsightStore'
 
 /** 判断 sessionId 是否有效（非空且不是临时草稿前缀） */
 export function isValidSessionId(id: string): boolean {
@@ -206,6 +207,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       const chatStore = useChatStore.getState()
       chatStore.setTransitioning(true)
       chatStore.clearMessages()
+      useRuntimeInsightStore.getState().reset()
 
       // 2. Update session ID
       set({ currentSessionId: sessionId })
@@ -253,6 +255,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       return
     }
     useChatStore.getState().clearMessages()
+    useRuntimeInsightStore.getState().reset()
     set({ currentSessionId: '', currentProjectId: '' })
   },
 
@@ -277,6 +280,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       return
     }
     useChatStore.getState().clearMessages()
+    useRuntimeInsightStore.getState().reset()
     set({ currentSessionId: '', currentProjectId: '' })
   },
 

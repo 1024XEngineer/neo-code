@@ -455,7 +455,8 @@ func TestCheckpointFrameHandlers(t *testing.T) {
 	t.Run("list checkpoints success", func(t *testing.T) {
 		runtime := &bootstrapRuntimeStub{
 			listCheckpointsFn: func(_ context.Context, input ListCheckpointsInput) ([]CheckpointEntry, error) {
-				if input.SubjectID != "subject-1" || input.SessionID != "session-1" {
+				if input.SubjectID != "subject-1" || input.SessionID != "session-1" ||
+					input.Limit != 3 || !input.RestorableOnly {
 					t.Fatalf("input = %#v", input)
 				}
 				return []CheckpointEntry{{CheckpointID: "cp-1", SessionID: "session-1"}}, nil
@@ -470,6 +471,10 @@ func TestCheckpointFrameHandlers(t *testing.T) {
 			Action:    FrameActionListCheckpoints,
 			RequestID: "req-checkpoint-list",
 			SessionID: " session-1 ",
+			Payload: ListCheckpointsInput{
+				Limit:          3,
+				RestorableOnly: true,
+			},
 		}, runtime)
 
 		if response.Type != FrameTypeAck || response.Action != FrameActionListCheckpoints {

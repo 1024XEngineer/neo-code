@@ -1,9 +1,29 @@
-import { EventType, type MessageFrame, type TokenUsage, type PermissionRequestPayload } from '@/api/protocol'
+import {
+  EventType,
+  type AcceptanceDecidedPayload,
+  type BudgetCheckedPayload,
+  type BudgetEstimateFailedPayload,
+  type CheckpointCreatedPayload,
+  type CheckpointRestoredPayload,
+  type CheckpointUndoRestorePayload,
+  type CheckpointWarningPayload,
+  type LedgerReconciledPayload,
+  type MessageFrame,
+  type PermissionRequestPayload,
+  type TodoEventPayload,
+  type TokenUsage,
+  type VerificationCompletedPayload,
+  type VerificationFailedPayload,
+  type VerificationFinishedPayload,
+  type VerificationStageFinishedPayload,
+  type VerificationStartedPayload,
+} from '@/api/protocol'
 import { type GatewayAPI } from '@/api/gateway'
 import { useChatStore } from '@/stores/useChatStore'
 import { useUIStore } from '@/stores/useUIStore'
 import { useGatewayStore } from '@/stores/useGatewayStore'
 import { useSessionStore } from '@/stores/useSessionStore'
+import { useRuntimeInsightStore } from '@/stores/useRuntimeInsightStore'
 
 type PayloadRecord = Record<string, unknown> | undefined
 
@@ -57,6 +77,7 @@ export function handleGatewayEvent(frame: MessageFrame, gatewayAPI: GatewayAPI) 
   const chatStore = useChatStore.getState()
   const uiStore = useUIStore.getState()
   const gwStore = useGatewayStore.getState()
+  const insightStore = useRuntimeInsightStore.getState()
 
   const frameSessionId = frame.session_id
   const frameRunId = frame.run_id
@@ -147,6 +168,24 @@ export function handleGatewayEvent(frame: MessageFrame, gatewayAPI: GatewayAPI) 
       break
     }
 
+    case EventType.BudgetChecked: {
+      const payload = eventPayload as BudgetCheckedPayload | undefined
+      if (payload) insightStore.setBudgetChecked(payload)
+      break
+    }
+
+    case EventType.BudgetEstimateFailed: {
+      const payload = eventPayload as BudgetEstimateFailedPayload | undefined
+      if (payload) insightStore.setBudgetEstimateFailed(payload)
+      break
+    }
+
+    case EventType.LedgerReconciled: {
+      const payload = eventPayload as LedgerReconciledPayload | undefined
+      if (payload) insightStore.setLedgerReconciled(payload)
+      break
+    }
+
     case EventType.Error: {
       const errorMsg = (eventPayload as string) ?? '未知错误'
       uiStore.showToast(errorMsg, 'error')
@@ -228,27 +267,99 @@ export function handleGatewayEvent(frame: MessageFrame, gatewayAPI: GatewayAPI) 
     }
 
     case EventType.TodoUpdated:
-    case EventType.TodoSummaryInjected:
+    case EventType.TodoSummaryInjected: {
+      const payload = eventPayload as TodoEventPayload | undefined
+      if (payload) {
+        insightStore.addTodoEvent(payload)
+        if (payload.items || payload.summary) {
+          insightStore.setTodoSnapshot({ items: payload.items, summary: payload.summary })
+        }
+      }
+      break
+    }
+
+    case EventType.TodoSnapshotUpdated: {
+      const payload = eventPayload as TodoEventPayload | undefined
+      if (payload) {
+        insightStore.addTodoEvent(payload)
+        insightStore.setTodoSnapshot({ items: payload.items, summary: payload.summary })
+      }
+      break
+    }
+
     case EventType.ProgressEvaluated:
-    case EventType.VerificationStageFinished:
-    case EventType.VerificationFinished:
-    case EventType.VerificationCompleted:
-    case EventType.AcceptanceDecided:
       break
 
     case EventType.TodoConflict: {
+      const payload = eventPayload as TodoEventPayload | undefined
+      if (payload) insightStore.setTodoConflict(payload)
       uiStore.showToast(`Todo 冲突: ${strField(eventPayload, 'reason')}`, 'error')
       break
     }
 
     case EventType.VerificationStarted: {
+      const payload = eventPayload as VerificationStartedPayload | undefined
+      if (payload) insightStore.startVerification(payload)
       useChatStore.getState().setPhase('verification')
       uiStore.showToast('验证开始', 'info')
       break
     }
 
+    case EventType.VerificationStageFinished: {
+      const payload = eventPayload as VerificationStageFinishedPayload | undefined
+      if (payload) insightStore.upsertVerificationStage(payload)
+      break
+    }
+
+    case EventType.VerificationFinished: {
+      const payload = eventPayload as VerificationFinishedPayload | undefined
+      if (payload) insightStore.finishVerification(payload)
+      break
+    }
+
+    case EventType.VerificationCompleted: {
+      const payload = eventPayload as VerificationCompletedPayload | undefined
+      if (payload) insightStore.completeVerification(payload)
+      break
+    }
+
     case EventType.VerificationFailed: {
-      uiStore.showToast((eventPayload as string) ?? '验证失败', 'error')
+      const payload = eventPayload as VerificationFailedPayload | undefined
+      if (payload) insightStore.failVerification(payload)
+      uiStore.showToast(strField(eventPayload, 'error_class') || '验证失败', 'error')
+      break
+    }
+
+    case EventType.AcceptanceDecided: {
+      const payload = eventPayload as AcceptanceDecidedPayload | undefined
+      if (payload) insightStore.setAcceptanceDecision(payload)
+      break
+    }
+
+    case EventType.CheckpointCreated: {
+      const payload = eventPayload as CheckpointCreatedPayload | undefined
+      if (payload) insightStore.addCheckpointEvent(payload)
+      break
+    }
+
+    case EventType.CheckpointWarning: {
+      const payload = eventPayload as CheckpointWarningPayload | undefined
+      if (payload) insightStore.setCheckpointWarning(payload)
+      uiStore.showToast(`Checkpoint 告警: ${strField(eventPayload, 'phase')}`, 'info')
+      break
+    }
+
+    case EventType.CheckpointRestored: {
+      const payload = eventPayload as CheckpointRestoredPayload | undefined
+      if (payload) insightStore.addCheckpointEvent(payload)
+      uiStore.showToast('Checkpoint 已恢复', 'success')
+      break
+    }
+
+    case EventType.CheckpointUndoRestore: {
+      const payload = eventPayload as CheckpointUndoRestorePayload | undefined
+      if (payload) insightStore.addCheckpointEvent(payload)
+      uiStore.showToast('Checkpoint 恢复已撤销', 'success')
       break
     }
 

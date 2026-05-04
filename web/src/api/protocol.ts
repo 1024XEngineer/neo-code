@@ -15,6 +15,11 @@ export const Method = {
   Compact: 'gateway.compact',
   ListSessions: 'gateway.listSessions',
   LoadSession: 'gateway.loadSession',
+  ListSessionTodos: 'session.todos.list',
+  ListCheckpoints: 'checkpoint.list',
+  RestoreCheckpoint: 'checkpoint.restore',
+  UndoRestore: 'checkpoint.undoRestore',
+  CheckpointDiff: 'checkpoint.diff',
   ResolvePermission: 'gateway.resolvePermission',
   ExecuteSystemTool: 'gateway.executeSystemTool',
   ActivateSessionSkill: 'gateway.activateSessionSkill',
@@ -81,6 +86,9 @@ export const EventType = {
   CompactError: 'compact_error',
   TokenUsage: 'token_usage',
   PhaseChanged: 'phase_changed',
+  BudgetChecked: 'budget_checked',
+  BudgetEstimateFailed: 'budget_estimate_failed',
+  LedgerReconciled: 'ledger_reconciled',
   StopReasonDecided: 'stop_reason_decided',
   InputNormalized: 'input_normalized',
   SkillActivated: 'skill_activated',
@@ -89,6 +97,7 @@ export const EventType = {
   TodoUpdated: 'todo_updated',
   TodoConflict: 'todo_conflict',
   TodoSummaryInjected: 'todo_summary_injected',
+  TodoSnapshotUpdated: 'todo_snapshot_updated',
   AssetSaved: 'asset_saved',
   AssetSaveFailed: 'asset_save_failed',
   ProgressEvaluated: 'progress_evaluated',
@@ -98,6 +107,10 @@ export const EventType = {
   VerificationCompleted: 'verification_completed',
   VerificationFailed: 'verification_failed',
   AcceptanceDecided: 'acceptance_decided',
+  CheckpointCreated: 'checkpoint_created',
+  CheckpointWarning: 'checkpoint_warning',
+  CheckpointRestored: 'checkpoint_restored',
+  CheckpointUndoRestore: 'checkpoint_undo_restore',
 } as const
 
 // 权限审批决策
@@ -210,6 +223,31 @@ export interface LoadSessionParams {
   session_id: string
 }
 
+export interface ListSessionTodosParams {
+  session_id: string
+}
+
+export interface ListCheckpointsParams {
+  session_id: string
+  limit?: number
+  restorable_only?: boolean
+}
+
+export interface RestoreCheckpointParams {
+  session_id: string
+  checkpoint_id: string
+  force?: boolean
+}
+
+export interface UndoRestoreParams {
+  session_id: string
+}
+
+export interface CheckpointDiffParams {
+  session_id: string
+  checkpoint_id?: string
+}
+
 /** gateway.resolvePermission 参数 */
 export interface ResolvePermissionParams {
   request_id: string
@@ -264,6 +302,33 @@ export interface TokenUsage {
   session_output_tokens: number
 }
 
+export interface BudgetCheckedPayload {
+  attempt_seq: number
+  request_hash: string
+  action: string
+  reason?: string
+  estimated_input_tokens: number
+  prompt_budget: number
+  estimate_source?: string
+  estimate_gate_policy?: string
+}
+
+export interface BudgetEstimateFailedPayload {
+  attempt_seq: number
+  request_hash: string
+  message: string
+}
+
+export interface LedgerReconciledPayload {
+  attempt_seq: number
+  request_hash: string
+  input_tokens: number
+  input_source: string
+  output_tokens: number
+  output_source: string
+  has_unknown_usage: boolean
+}
+
 /** gateway.run ack 响应 */
 export type RunAckResult = RPCResult<{ message: string }>
 
@@ -272,6 +337,136 @@ export type ListSessionsResult = RPCResult<{ sessions: SessionSummary[] }>
 
 /** gateway.cancel 响应 */
 export type CancelResult = RPCResult<{ canceled: boolean; run_id: string }>
+
+export interface TodoViewItem {
+  id: string
+  content: string
+  status: string
+  required: boolean
+  artifacts?: string[]
+  failure_reason?: string
+  blocked_reason?: string
+  revision: number
+}
+
+export interface TodoSummary {
+  total: number
+  required_total: number
+  required_completed: number
+  required_failed: number
+  required_open: number
+}
+
+export interface TodoSnapshot {
+  items?: TodoViewItem[]
+  summary?: TodoSummary
+}
+
+export interface TodoEventPayload {
+  action: string
+  reason?: string
+  items?: TodoViewItem[]
+  summary?: TodoSummary
+}
+
+export type ListSessionTodosResult = RPCResult<TodoSnapshot>
+
+export interface VerificationStartedPayload {
+  completion_passed: boolean
+  completion_blocked_reason?: string
+}
+
+export interface VerificationStageFinishedPayload {
+  name: string
+  status: string
+  summary?: string
+  reason?: string
+  error_class?: string
+}
+
+export interface VerificationFinishedPayload {
+  acceptance_status: string
+  stop_reason?: string
+  error_class?: string
+}
+
+export interface VerificationCompletedPayload {
+  stop_reason?: string
+}
+
+export interface VerificationFailedPayload {
+  stop_reason?: string
+  error_class?: string
+}
+
+export interface AcceptanceDecidedPayload {
+  status: string
+  stop_reason?: string
+  error_class?: string
+  completion_blocked_reason?: string
+  user_visible_summary?: string
+  internal_summary?: string
+  continue_hint?: string
+}
+
+export interface CheckpointEntry {
+  checkpoint_id: string
+  session_id: string
+  reason: string
+  status: string
+  restorable: boolean
+  created_at_ms: number
+}
+
+export interface FileDiffs {
+  added?: string[]
+  deleted?: string[]
+  modified?: string[]
+}
+
+export interface CheckpointDiffResultPayload {
+  checkpoint_id: string
+  prev_checkpoint_id?: string
+  commit_hash?: string
+  prev_commit_hash?: string
+  files: FileDiffs
+  patch?: string
+}
+
+export interface CheckpointRestoreResultPayload {
+  checkpoint_id: string
+  session_id: string
+  has_conflict?: boolean
+}
+
+export interface CheckpointCreatedPayload {
+  checkpoint_id: string
+  code_checkpoint_ref: string
+  session_checkpoint_ref: string
+  commit_hash: string
+  reason: string
+}
+
+export interface CheckpointWarningPayload {
+  error: string
+  phase: string
+}
+
+export interface CheckpointRestoredPayload {
+  checkpoint_id: string
+  session_id: string
+  guard_checkpoint_id: string
+}
+
+export interface CheckpointUndoRestorePayload {
+  guard_checkpoint_id: string
+  session_id: string
+}
+
+export type ListCheckpointsResult = RPCResult<CheckpointEntry[]>
+export type RestoreCheckpointResult = RPCResult<CheckpointRestoreResultPayload>
+export type UndoRestoreResult = RPCResult<CheckpointRestoreResultPayload>
+export type CheckpointDiffResult = RPCResult<CheckpointDiffResultPayload>
 
 /** gateway.deleteSession 参数 */
 export interface DeleteSessionParams {

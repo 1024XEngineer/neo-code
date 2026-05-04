@@ -7,6 +7,16 @@ import {
   type RunParams,
   type CancelParams,
   type LoadSessionParams,
+  type ListSessionTodosParams,
+  type ListSessionTodosResult,
+  type ListCheckpointsParams,
+  type ListCheckpointsResult,
+  type RestoreCheckpointParams,
+  type RestoreCheckpointResult,
+  type UndoRestoreParams,
+  type UndoRestoreResult,
+  type CheckpointDiffParams,
+  type CheckpointDiffResult,
   type ResolvePermissionParams,
   type Session,
   type RunAckResult,
@@ -97,6 +107,26 @@ export class GatewayAPI {
   /** 加载会话详情 */
   async loadSession(sessionId: string) {
     return this.ws.call<RPCResult<Session>>(Method.LoadSession, { session_id: sessionId } satisfies LoadSessionParams)
+  }
+
+  async listSessionTodos(sessionId: string) {
+    return this.ws.call<ListSessionTodosResult>(Method.ListSessionTodos, { session_id: sessionId } satisfies ListSessionTodosParams)
+  }
+
+  async listCheckpoints(params: ListCheckpointsParams) {
+    return this.ws.call<ListCheckpointsResult>(Method.ListCheckpoints, params)
+  }
+
+  async restoreCheckpoint(params: RestoreCheckpointParams) {
+    return this.ws.call<RestoreCheckpointResult>(Method.RestoreCheckpoint, params)
+  }
+
+  async undoRestore(sessionId: string) {
+    return this.ws.call<UndoRestoreResult>(Method.UndoRestore, { session_id: sessionId } satisfies UndoRestoreParams)
+  }
+
+  async checkpointDiff(params: CheckpointDiffParams) {
+    return this.ws.call<CheckpointDiffResult>(Method.CheckpointDiff, params)
   }
 
   /** 解析权限请求 */

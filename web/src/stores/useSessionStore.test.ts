@@ -74,7 +74,8 @@ describe('useSessionStore', () => {
       payload: { sessions: [{ id: 'sess-a', title: 'Alpha' }] },
     })
     const mockBindStream = vi.fn().mockResolvedValue({})
-    const mockAPI = { listSessions: mockListSessions, bindStream: mockBindStream } as any
+    const mockLoadSession = vi.fn().mockResolvedValue({ payload: { messages: [] } })
+    const mockAPI = { listSessions: mockListSessions, bindStream: mockBindStream, loadSession: mockLoadSession } as any
 
     await useSessionStore.getState().fetchSessions(mockAPI)
 

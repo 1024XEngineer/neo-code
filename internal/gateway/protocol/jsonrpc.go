@@ -45,6 +45,14 @@ const (
 	MethodGatewayListSessionTodos = "session.todos.list"
 	// MethodGatewayGetRuntimeSnapshot 表示查询会话 runtime 快照。
 	MethodGatewayGetRuntimeSnapshot = "runtime.snapshot.get"
+	// MethodGatewayListCheckpoints 表示查询会话 checkpoint 列表。
+	MethodGatewayListCheckpoints = "checkpoint.list"
+	// MethodGatewayRestoreCheckpoint 表示恢复到指定 checkpoint。
+	MethodGatewayRestoreCheckpoint = "checkpoint.restore"
+	// MethodGatewayUndoRestore 表示撤销最近一次 checkpoint 恢复。
+	MethodGatewayUndoRestore = "checkpoint.undoRestore"
+	// MethodGatewayCheckpointDiff 表示查询 checkpoint diff。
+	MethodGatewayCheckpointDiff = "checkpoint.diff"
 	// MethodGatewayResolvePermission 表示提交权限审批决策。
 	MethodGatewayResolvePermission = "gateway.resolvePermission"
 	// MethodGatewayDeleteSession 表示删除/归档会话。
@@ -78,13 +86,13 @@ const (
 	// MethodGatewayEvent 表示网关向客户端推送运行时事件的通知方法。
 	MethodGatewayEvent = "gateway.event"
 	// MethodWakeOpenURL 表示 URL Scheme 唤醒方法。
-	MethodWakeOpenURL = "wake.openUrl"
-		MethodGatewayListWorkspaces  = "gateway.listWorkspaces"
-		MethodGatewayCreateWorkspace = "gateway.createWorkspace"
-		MethodGatewaySwitchWorkspace = "gateway.switchWorkspace"
-		MethodGatewayRenameWorkspace = "gateway.renameWorkspace"
-		MethodGatewayDeleteWorkspace = "gateway.deleteWorkspace"
-	)
+	MethodWakeOpenURL            = "wake.openUrl"
+	MethodGatewayListWorkspaces  = "gateway.listWorkspaces"
+	MethodGatewayCreateWorkspace = "gateway.createWorkspace"
+	MethodGatewaySwitchWorkspace = "gateway.switchWorkspace"
+	MethodGatewayRenameWorkspace = "gateway.renameWorkspace"
+	MethodGatewayDeleteWorkspace = "gateway.deleteWorkspace"
+)
 
 const (
 	// JSONRPCCodeParseError 表示请求体不是合法 JSON。
@@ -263,6 +271,31 @@ type ListSessionTodosParams struct {
 // GetRuntimeSnapshotParams 表示 runtime.snapshot.get 参数。
 type GetRuntimeSnapshotParams struct {
 	SessionID string `json:"session_id"`
+}
+
+// ListCheckpointsParams 表示 checkpoint.list 参数。
+type ListCheckpointsParams struct {
+	SessionID      string `json:"session_id"`
+	Limit          int    `json:"limit,omitempty"`
+	RestorableOnly bool   `json:"restorable_only,omitempty"`
+}
+
+// RestoreCheckpointParams 表示 checkpoint.restore 参数。
+type RestoreCheckpointParams struct {
+	SessionID    string `json:"session_id"`
+	CheckpointID string `json:"checkpoint_id"`
+	Force        bool   `json:"force,omitempty"`
+}
+
+// UndoRestoreParams 表示 checkpoint.undoRestore 参数。
+type UndoRestoreParams struct {
+	SessionID string `json:"session_id"`
+}
+
+// CheckpointDiffParams 表示 checkpoint.diff 参数。
+type CheckpointDiffParams struct {
+	SessionID    string `json:"session_id"`
+	CheckpointID string `json:"checkpoint_id,omitempty"`
 }
 
 // ResolvePermissionParams 表示 gateway.resolvePermission 参数。
@@ -575,6 +608,42 @@ func NormalizeJSONRPCRequest(request JSONRPCRequest) (NormalizedRequest, *JSONRP
 		normalized.SessionID = strings.TrimSpace(params.SessionID)
 		normalized.Payload = params
 		return normalized, nil
+	case MethodGatewayListCheckpoints:
+		params, parseErr := decodeListCheckpointsParams(request.Params)
+		if parseErr != nil {
+			return normalized, parseErr
+		}
+		normalized.Action = "checkpoint_list"
+		normalized.SessionID = strings.TrimSpace(params.SessionID)
+		normalized.Payload = params
+		return normalized, nil
+	case MethodGatewayRestoreCheckpoint:
+		params, parseErr := decodeRestoreCheckpointParams(request.Params)
+		if parseErr != nil {
+			return normalized, parseErr
+		}
+		normalized.Action = "checkpoint_restore"
+		normalized.SessionID = strings.TrimSpace(params.SessionID)
+		normalized.Payload = params
+		return normalized, nil
+	case MethodGatewayUndoRestore:
+		params, parseErr := decodeUndoRestoreParams(request.Params)
+		if parseErr != nil {
+			return normalized, parseErr
+		}
+		normalized.Action = "checkpoint_undo_restore"
+		normalized.SessionID = strings.TrimSpace(params.SessionID)
+		normalized.Payload = params
+		return normalized, nil
+	case MethodGatewayCheckpointDiff:
+		params, parseErr := decodeCheckpointDiffParams(request.Params)
+		if parseErr != nil {
+			return normalized, parseErr
+		}
+		normalized.Action = "checkpoint_diff"
+		normalized.SessionID = strings.TrimSpace(params.SessionID)
+		normalized.Payload = params
+		return normalized, nil
 	case MethodGatewayResolvePermission:
 		params, parseErr := decodeResolvePermissionParams(request.Params)
 		if parseErr != nil {
@@ -802,6 +871,58 @@ func decodeListSessionTodosParams(raw json.RawMessage) (ListSessionTodosParams, 
 		)
 	}
 	return params, nil
+}
+
+// decodeListCheckpointsParams 对 checkpoint.list 的 params 执行反序列化与字段校验。
+func decodeListCheckpointsParams(raw json.RawMessage) (ListCheckpointsParams, *JSONRPCError) {
+	return decodeParams(raw, "checkpoint.list", func(p *ListCheckpointsParams) *JSONRPCError {
+		p.SessionID = strings.TrimSpace(p.SessionID)
+		if p.SessionID == "" {
+			return NewJSONRPCError(JSONRPCCodeInvalidParams, "missing required field: params.session_id", GatewayCodeMissingRequiredField)
+		}
+		if p.Limit < 0 {
+			return NewJSONRPCError(JSONRPCCodeInvalidParams, "invalid field: params.limit", GatewayCodeInvalidAction)
+		}
+		return nil
+	})
+}
+
+// decodeRestoreCheckpointParams 对 checkpoint.restore 的 params 执行反序列化与字段校验。
+func decodeRestoreCheckpointParams(raw json.RawMessage) (RestoreCheckpointParams, *JSONRPCError) {
+	return decodeParams(raw, "checkpoint.restore", func(p *RestoreCheckpointParams) *JSONRPCError {
+		p.SessionID = strings.TrimSpace(p.SessionID)
+		p.CheckpointID = strings.TrimSpace(p.CheckpointID)
+		if p.SessionID == "" {
+			return NewJSONRPCError(JSONRPCCodeInvalidParams, "missing required field: params.session_id", GatewayCodeMissingRequiredField)
+		}
+		if p.CheckpointID == "" {
+			return NewJSONRPCError(JSONRPCCodeInvalidParams, "missing required field: params.checkpoint_id", GatewayCodeMissingRequiredField)
+		}
+		return nil
+	})
+}
+
+// decodeUndoRestoreParams 对 checkpoint.undoRestore 的 params 执行反序列化与字段校验。
+func decodeUndoRestoreParams(raw json.RawMessage) (UndoRestoreParams, *JSONRPCError) {
+	return decodeParams(raw, "checkpoint.undoRestore", func(p *UndoRestoreParams) *JSONRPCError {
+		p.SessionID = strings.TrimSpace(p.SessionID)
+		if p.SessionID == "" {
+			return NewJSONRPCError(JSONRPCCodeInvalidParams, "missing required field: params.session_id", GatewayCodeMissingRequiredField)
+		}
+		return nil
+	})
+}
+
+// decodeCheckpointDiffParams 对 checkpoint.diff 的 params 执行反序列化与字段校验。
+func decodeCheckpointDiffParams(raw json.RawMessage) (CheckpointDiffParams, *JSONRPCError) {
+	return decodeParams(raw, "checkpoint.diff", func(p *CheckpointDiffParams) *JSONRPCError {
+		p.SessionID = strings.TrimSpace(p.SessionID)
+		p.CheckpointID = strings.TrimSpace(p.CheckpointID)
+		if p.SessionID == "" {
+			return NewJSONRPCError(JSONRPCCodeInvalidParams, "missing required field: params.session_id", GatewayCodeMissingRequiredField)
+		}
+		return nil
+	})
 }
 
 // NewJSONRPCResultResponse 创建 JSON-RPC 成功响应，并将 result 编码为 RawMessage。
