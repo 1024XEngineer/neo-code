@@ -535,21 +535,31 @@ func resolveWorkdirPaths(workdir string, raw ...string) []string {
 		if p == "" {
 			continue
 		}
-		if filepath.IsAbs(p) {
-			out = append(out, filepath.Clean(p))
+		if isAbsolutePath(p) {
+			out = append(out, toSlash(filepath.Clean(p)))
 			continue
 		}
 		wd := strings.TrimSpace(workdir)
 		if wd == "" {
-			out = append(out, filepath.Clean(p))
+			out = append(out, toSlash(filepath.Clean(p)))
 			continue
 		}
-		out = append(out, filepath.Clean(filepath.Join(wd, p)))
+		out = append(out, toSlash(filepath.Clean(filepath.Join(wd, p))))
 	}
 	if len(out) == 0 {
 		return nil
 	}
 	return out
+}
+
+// isAbsolutePath 判断路径是否为绝对路径，兼容 POSIX 风格（以 / 开头）和 Windows 风格。
+func isAbsolutePath(p string) bool {
+	return filepath.IsAbs(p) || strings.HasPrefix(p, "/")
+}
+
+// toSlash 统一路径分隔符为正斜杠，确保跨平台比较一致性。
+func toSlash(p string) string {
+	return strings.ReplaceAll(p, `\`, "/")
 }
 
 // bashCommandFromCall 从 bash 工具调用参数解析 command 字段，兼容 cmd 别名。
@@ -586,13 +596,13 @@ func collectUncoveredBashPaths(workdir string, fpDiff checkpoint.FingerprintDiff
 			return
 		}
 		var abs string
-		if filepath.IsAbs(rel) {
-			abs = filepath.Clean(rel)
-		} else if wd != "" {
-			abs = filepath.Clean(filepath.Join(wd, rel))
-		} else {
-			abs = filepath.Clean(rel)
-		}
+if isAbsolutePath(rel) {
+abs = toSlash(filepath.Clean(rel))
+} else if wd != "" {
+abs = toSlash(filepath.Clean(filepath.Join(wd, rel)))
+} else {
+abs = toSlash(filepath.Clean(rel))
+}
 		if _, ok := covered[abs]; ok {
 			return
 		}

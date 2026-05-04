@@ -134,14 +134,6 @@ func (p *recordingPort) GetSessionModel(_ context.Context, _ GetSessionModelInpu
 	return SessionModelResult{}, nil
 }
 
-func (p *recordingPort) ListSessionTodos(_ context.Context, _ ListSessionTodosInput) (TodoSnapshot, error) {
-	return TodoSnapshot{}, nil
-}
-
-func (p *recordingPort) GetRuntimeSnapshot(_ context.Context, _ GetRuntimeSnapshotInput) (RuntimeSnapshot, error) {
-	return RuntimeSnapshot{}, nil
-}
-
 func (p *recordingPort) ListCheckpoints(_ context.Context, _ ListCheckpointsInput) ([]CheckpointEntry, error) {
 	return nil, nil
 }
