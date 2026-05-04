@@ -17,6 +17,14 @@ let gatewayReady = false
 let gatewayAddress = ''
 let gatewayToken = ''
 let currentWorkdir = process.env['NEOCODE_WORKDIR'] ?? ''
+let isQuitting = false
+
+/** 安全发送 Gateway 状态，避免窗口销毁后访问 webContents 触发主进程异常 */
+function sendGatewayStatus(data: { ready: boolean; error?: string }): void {
+	if (isQuitting) return
+	if (!mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed()) return
+	mainWindow.webContents.send('gateway:status', data)
+}
 
 /** 创建主窗口 */
 function createWindow(): void {
@@ -38,6 +46,10 @@ function createWindow(): void {
 
 	mainWindow.on('ready-to-show', () => {
 		mainWindow?.show()
+	})
+
+	mainWindow.on('closed', () => {
+		mainWindow = null
 	})
 
 	mainWindow.webContents.setWindowOpenHandler((details) => {
@@ -183,7 +195,7 @@ async function tryStartGateway(binary: string, httpAddress: string): Promise<boo
 		if (gatewayProcess !== proc) return
 		gatewayProcess = null
 		gatewayReady = false
-		mainWindow?.webContents.send('gateway:status', {
+		sendGatewayStatus({
 			ready: false,
 			error: code === 0 ? 'Gateway process exited' : `Gateway process crashed (exit code ${code})`,
 		})
@@ -208,7 +220,7 @@ async function startGateway(): Promise<void> {
 		gatewayToken = process.env['NEOCODE_TOKEN'] ?? ''
 		gatewayReady = await checkHealthz(gatewayAddress)
 		if (!gatewayReady) {
-			mainWindow?.webContents.send('gateway:status', { ready: false, error: 'Gateway binary not found and no external gateway detected' })
+			sendGatewayStatus({ ready: false, error: 'Gateway binary not found and no external gateway detected' })
 		}
 		return
 	}
@@ -225,7 +237,7 @@ async function startGateway(): Promise<void> {
 			return
 		}
 		if (await tryStartGateway(binary, addr)) return
-		mainWindow?.webContents.send('gateway:status', { ready: false, error: `Gateway failed to start on port ${explicitPort}` })
+		sendGatewayStatus({ ready: false, error: `Gateway failed to start on port ${explicitPort}` })
 		return
 	}
 
@@ -248,7 +260,7 @@ async function startGateway(): Promise<void> {
 
 	console.error(`[Electron] All ports ${DEFAULT_BASE_PORT}-${DEFAULT_BASE_PORT + MAX_PORT_ATTEMPTS - 1} are unavailable`)
 	gatewayReady = false
-	mainWindow?.webContents.send('gateway:status', { ready: false, error: `All ports ${DEFAULT_BASE_PORT}-${DEFAULT_BASE_PORT + MAX_PORT_ATTEMPTS - 1} are unavailable` })
+	sendGatewayStatus({ ready: false, error: `All ports ${DEFAULT_BASE_PORT}-${DEFAULT_BASE_PORT + MAX_PORT_ATTEMPTS - 1} are unavailable` })
 }
 
 /** 停止 Gateway 子进程 */
@@ -341,10 +353,12 @@ app.whenReady().then(async () => {
 
 app.on('before-quit', (event) => {
 	if (gatewayProcess) {
+		isQuitting = true
 		event.preventDefault()
 		gatewayProcess.on('exit', () => app.quit())
 		gatewayProcess.kill()
 	} else {
+		isQuitting = true
 		stopGateway()
 	}
 })

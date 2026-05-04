@@ -390,9 +390,10 @@ export function useGatewayAPI(): GatewayAPI | null {
   return runtime.gatewayAPI
 }
 
-/** detectRuntimeMode 根据 preload 暴露能力判断当前运行环境。 */
-function detectRuntimeMode(): RuntimeMode {
-  return window.electronAPI ? 'electron' : 'browser'
+/** detectRuntimeMode 根据 preload 暴露能力和 Electron UA 判断当前运行环境。 */
+export function detectRuntimeMode(): RuntimeMode {
+  if (window.electronAPI) return 'electron'
+  return /\bElectron\//i.test(navigator.userAgent) ? 'electron' : 'browser'
 }
 
 /** loadElectronRuntimeConfig 从 Electron preload 读取 Gateway 地址与 token。 */

@@ -6,13 +6,14 @@
   "main": "dist-electron/main.js",
   "scripts": {
     "dev": "vite",
-    "dev:electron": "node scripts/build-gateway.js && vite --mode electron",
+    "dev:electron": "node scripts/clean-electron.js && node scripts/build-gateway.js && vite --mode electron",
     "build": "tsc -b && vite build",
-    "build:electron": "node scripts/build-gateway.js && vite build --mode electron && electron-builder",
+    "build:electron": "node scripts/clean-electron.js && node scripts/build-gateway.js && vite build --mode electron && node scripts/verify-electron-preload.js && electron-builder",
     "preview": "vite preview",
     "test": "vitest run",
     "test:ui": "vitest --ui",
-    "coverage": "vitest run --coverage"
+    "coverage": "vitest run --coverage",
+    "verify:electron-preload": "node scripts/verify-electron-preload.js"
   },
   "dependencies": {
     "lucide-react": "^0.468.0",
