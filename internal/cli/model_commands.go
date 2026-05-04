@@ -121,11 +121,20 @@ func defaultModelLsCommandRunner(cmd *cobra.Command, svc SelectionService) error
 	fmt.Fprintf(out, "当前模型: %s\n", displayCurrentModel(currentModel))
 	fmt.Fprintln(out, "可用模型:")
 
+	snapshotErr := error(nil)
 	models, err := svc.ListModelsSnapshot(cmd.Context())
 	if err != nil {
-		return err
+		snapshotErr = err
+		models = nil
 	}
 	if len(models) == 0 {
+		if snapshotErr != nil {
+			_, _ = fmt.Fprintf(
+				cmd.ErrOrStderr(),
+				"warning: model snapshot unavailable, fallback to live discovery: %v\n",
+				snapshotErr,
+			)
+		}
 		models, err = svc.ListModels(cmd.Context())
 		if err != nil {
 			return err

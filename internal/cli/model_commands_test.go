@@ -147,6 +147,7 @@ func TestDefaultModelLsCommandRunner(t *testing.T) {
 		listModels     []providertypes.ModelDescriptor
 		listErr        error
 		wantOutput     []string
+		wantErrOutput  []string
 		wantErr        string
 		wantListCalled bool
 	}{
@@ -185,7 +186,12 @@ func TestDefaultModelLsCommandRunner(t *testing.T) {
 			name:         "snapshot error",
 			currentModel: "gpt-4o",
 			snapshotErr:  errors.New("snapshot unavailable"),
-			wantErr:      "snapshot unavailable",
+			listModels: []providertypes.ModelDescriptor{
+				{ID: "gpt-4o", Name: "GPT-4o"},
+			},
+			wantOutput:     []string{"* gpt-4o (GPT-4o)"},
+			wantErrOutput:  []string{"snapshot unavailable", "fallback to live discovery"},
+			wantListCalled: true,
 		},
 		{
 			name:           "list error after snapshot miss",
@@ -203,7 +209,9 @@ func TestDefaultModelLsCommandRunner(t *testing.T) {
 			cmd := &cobra.Command{}
 			cmd.Flags().String("workdir", workdir, "")
 			output := &bytes.Buffer{}
+			errOutput := &bytes.Buffer{}
 			cmd.SetOut(output)
+			cmd.SetErr(errOutput)
 			cmd.SetContext(context.Background())
 
 			listCalled := false
@@ -233,6 +241,11 @@ func TestDefaultModelLsCommandRunner(t *testing.T) {
 			for _, fragment := range tc.wantOutput {
 				if !strings.Contains(output.String(), fragment) {
 					t.Fatalf("output = %q, want contains %q", output.String(), fragment)
+				}
+			}
+			for _, fragment := range tc.wantErrOutput {
+				if !strings.Contains(errOutput.String(), fragment) {
+					t.Fatalf("stderr = %q, want contains %q", errOutput.String(), fragment)
 				}
 			}
 		})
