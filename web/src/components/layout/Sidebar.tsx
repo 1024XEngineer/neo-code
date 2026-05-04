@@ -19,6 +19,7 @@ import {
   Server,
   Cpu,
   Blocks,
+  Activity,
 } from 'lucide-react'
 import { type ProviderOption, type MCPServerParams, type AvailableSkillState, type SessionSkillState, type CreateProviderParams, type ProviderModelDescriptor } from '@/api/protocol'
 
@@ -35,6 +36,7 @@ export default function Sidebar({ collapsed }: SidebarProps) {
   const currentSessionId = useSessionStore((s) => s.currentSessionId)
   const switchSession = useSessionStore((s) => s.switchSession)
   const toggleSidebar = useUIStore((s) => s.toggleSidebar)
+  const toggleInsightPanel = useUIStore((s) => s.toggleInsightPanel)
   const searchQuery = useUIStore((s) => s.searchQuery)
   const setSearchQuery = useUIStore((s) => s.setSearchQuery)
   const setCurrentProjectId = useSessionStore((s) => s.setCurrentProjectId)
@@ -160,6 +162,9 @@ export default function Sidebar({ collapsed }: SidebarProps) {
         <button style={styles.stripBtn} onClick={handleNewSession} title="新对话">
           <Plus size={16} />
         </button>
+        <button style={styles.stripBtn} onClick={toggleInsightPanel} title="运行时洞察">
+          <Activity size={16} />
+        </button>
       </>
     )
   }
@@ -179,6 +184,7 @@ export default function Sidebar({ collapsed }: SidebarProps) {
           <kbd style={styles.shortcut}>Ctrl+N</kbd>
         </button>
         <div style={styles.actionGrid}>
+          <ActionButton icon={<Activity size={16} />} label="Insight" onClick={toggleInsightPanel} />
           <ActionButton icon={<Blocks size={16} />} label="MCP" onClick={() => setMcpModalOpen(true)} />
           <ActionButton icon={<Cpu size={16} />} label="Skill" onClick={() => setSkillModalOpen(true)} />
           <ActionButton icon={<Server size={16} />} label="供应商" onClick={() => setProviderModalOpen(true)} />
@@ -1372,7 +1378,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   actionGrid: {
     display: 'grid',
-    gridTemplateColumns: '1fr 1fr 1fr',
+    gridTemplateColumns: '1fr 1fr',
     gap: 4,
   },
   actionBtn: {

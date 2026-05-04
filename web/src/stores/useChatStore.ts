@@ -1,13 +1,14 @@
 import { create } from 'zustand'
-import { type TokenUsage, type PermissionRequestPayload } from '@/api/protocol'
+import { type TokenUsage, type PermissionRequestPayload, type AcceptanceDecidedPayload } from '@/api/protocol'
+import { type VerificationRunRecord } from '@/stores/useRuntimeInsightStore'
 
 /** 聊天消息 */
 export interface ChatMessage {
   id: string
   /** 消息角色：user / assistant / tool */
   role: 'user' | 'assistant' | 'tool'
-  /** 消息类型：text / thinking / tool_call / code / welcome / system */
-  type: 'text' | 'thinking' | 'tool_call' | 'code' | 'welcome' | 'system'
+  /** 消息类型：text / thinking / tool_call / code / welcome / system / verification / acceptance */
+  type: 'text' | 'thinking' | 'tool_call' | 'code' | 'welcome' | 'system' | 'verification' | 'acceptance'
   /** 文本内容 */
   content: string
   /** 工具调用信息 */
@@ -16,6 +17,14 @@ export interface ChatMessage {
   toolArgs?: string
   toolResult?: string
   toolStatus?: 'running' | 'done' | 'error'
+  /** 与该 tool_call 关联的 checkpoint ID(由 CheckpointCreated 事件时序关联) */
+  checkpointId?: string
+  /** Checkpoint 撤回状态:available 可撤回 / restoring 正在撤回 / restored 已撤回 */
+  checkpointStatus?: 'available' | 'restoring' | 'restored'
+  /** Verification 摘要数据(仅 type === 'verification' 使用) */
+  verificationData?: VerificationRunRecord
+  /** Acceptance 决策数据(仅 type === 'acceptance' 使用) */
+  acceptanceData?: AcceptanceDecidedPayload
   /** 代码语言 */
   language?: string
   /** 代码文件名 */
@@ -56,6 +65,12 @@ interface ChatState {
   finalizeMessage: (id: string, content: string) => void
   updateToolCall: (toolCallId: string, result: string, status: ChatMessage['toolStatus']) => void
   appendToolOutput: (toolCallId: string, chunk: string) => void
+  /** 把 checkpointId 关联到一条 tool_call 消息(由 CheckpointCreated 时序关联触发) */
+  attachCheckpointToToolCall: (toolCallId: string, checkpointId: string) => void
+  /** 更新某条已挂 checkpoint 的 tool_call 消息的撤回状态 */
+  setCheckpointStatus: (toolCallId: string, status: NonNullable<ChatMessage['checkpointStatus']>) => void
+  /** 更新一条 verification 消息的 data(verification 进行中持续更新同一条消息) */
+  updateVerificationMessage: (messageId: string, data: VerificationRunRecord) => void
   setGenerating: (v: boolean) => void
   setStreamingMessageId: (id: string) => void
   /** 重置生成状态：终结当前流式消息 + 清除 isGenerating */
@@ -180,6 +195,33 @@ export const useChatStore = create<ChatState>((set) => ({
       messages: s.messages.map((m) =>
         m.toolCallId === toolCallId
           ? { ...m, toolResult: (m.toolResult ?? '') + chunk }
+          : m
+      ),
+    })),
+
+  attachCheckpointToToolCall: (toolCallId, checkpointId) =>
+    set((s) => ({
+      messages: s.messages.map((m) =>
+        m.toolCallId === toolCallId && m.type === 'tool_call'
+          ? { ...m, checkpointId, checkpointStatus: 'available' as const }
+          : m
+      ),
+    })),
+
+  setCheckpointStatus: (toolCallId, status) =>
+    set((s) => ({
+      messages: s.messages.map((m) =>
+        m.toolCallId === toolCallId && m.type === 'tool_call'
+          ? { ...m, checkpointStatus: status }
+          : m
+      ),
+    })),
+
+  updateVerificationMessage: (messageId, data) =>
+    set((s) => ({
+      messages: s.messages.map((m) =>
+        m.id === messageId && m.type === 'verification'
+          ? { ...m, verificationData: data }
           : m
       ),
     })),

@@ -1,6 +1,8 @@
 import { memo, useState } from 'react'
 import { type ChatMessage } from '@/stores/useChatStore'
 import ToolCallCard from './ToolCallCard'
+import VerificationMessage from './VerificationMessage'
+import AcceptanceMessage from './AcceptanceMessage'
 import CodeBlock from './CodeBlock'
 import MarkdownContent from './MarkdownContent'
 import { Bot, ChevronRight, Info } from 'lucide-react'
@@ -28,6 +30,14 @@ const MessageItem = memo(function MessageItem({ message, isLast = false, grouped
 
   if (message.type === 'tool_call') {
     return <ToolCallCard message={message} groupedWithPrev={groupedWithPrev} />
+  }
+
+  if (message.type === 'verification') {
+    return <VerificationMessage message={message} groupedWithPrev={groupedWithPrev} />
+  }
+
+  if (message.type === 'acceptance') {
+    return <AcceptanceMessage message={message} groupedWithPrev={groupedWithPrev} />
   }
 
   if (message.type === 'code') {

@@ -82,6 +82,24 @@ export function handleGatewayEvent(frame: MessageFrame, gatewayAPI: GatewayAPI) 
   const frameSessionId = frame.session_id
   const frameRunId = frame.run_id
 
+  /** 在 messages 中从后往前找到最新一条 verification 消息,返回其 id */
+  function findLatestVerificationMessageId(): string | undefined {
+    const messages = useChatStore.getState().messages
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].type === 'verification') return messages[i].id
+    }
+    return undefined
+  }
+
+  /** 更新最新 verification 消息的 data 为 insightStore 当前最后一条 record */
+  function syncLatestVerificationToChat() {
+    const msgId = findLatestVerificationMessageId()
+    const history = useRuntimeInsightStore.getState().verificationHistory
+    if (msgId && history.length > 0) {
+      useChatStore.getState().updateVerificationMessage(msgId, history[history.length - 1])
+    }
+  }
+
   switch (eventType) {
     case EventType.AgentChunk: {
       const text = eventPayload as string | undefined
@@ -299,7 +317,22 @@ export function handleGatewayEvent(frame: MessageFrame, gatewayAPI: GatewayAPI) 
 
     case EventType.VerificationStarted: {
       const payload = eventPayload as VerificationStartedPayload | undefined
-      if (payload) insightStore.startVerification(payload)
+      if (payload) {
+        const recordId = insightStore.startVerification(payload)
+        // 在聊天流中创建一条 verification 内联消息,后续 stage/finished 持续更新它
+        const history = useRuntimeInsightStore.getState().verificationHistory
+        const record = history.length > 0 ? history[history.length - 1] : undefined
+        if (record) {
+          useChatStore.getState().addMessage({
+            id: `msg_${Date.now()}_verify_${recordId.slice(0, 8)}`,
+            role: 'assistant',
+            type: 'verification',
+            content: '',
+            verificationData: record,
+            timestamp: Date.now(),
+          })
+        }
+      }
       useChatStore.getState().setPhase('verification')
       uiStore.showToast('验证开始', 'info')
       break
@@ -307,38 +340,72 @@ export function handleGatewayEvent(frame: MessageFrame, gatewayAPI: GatewayAPI) 
 
     case EventType.VerificationStageFinished: {
       const payload = eventPayload as VerificationStageFinishedPayload | undefined
-      if (payload) insightStore.upsertVerificationStage(payload)
+      if (payload) {
+        insightStore.upsertVerificationStage(payload)
+        syncLatestVerificationToChat()
+      }
       break
     }
 
     case EventType.VerificationFinished: {
       const payload = eventPayload as VerificationFinishedPayload | undefined
-      if (payload) insightStore.finishVerification(payload)
+      if (payload) {
+        insightStore.finishVerification(payload)
+        syncLatestVerificationToChat()
+      }
       break
     }
 
     case EventType.VerificationCompleted: {
       const payload = eventPayload as VerificationCompletedPayload | undefined
-      if (payload) insightStore.completeVerification(payload)
+      if (payload) {
+        insightStore.completeVerification(payload)
+        syncLatestVerificationToChat()
+      }
       break
     }
 
     case EventType.VerificationFailed: {
       const payload = eventPayload as VerificationFailedPayload | undefined
-      if (payload) insightStore.failVerification(payload)
+      if (payload) {
+        insightStore.failVerification(payload)
+        syncLatestVerificationToChat()
+      }
       uiStore.showToast(strField(eventPayload, 'error_class') || '验证失败', 'error')
       break
     }
 
     case EventType.AcceptanceDecided: {
       const payload = eventPayload as AcceptanceDecidedPayload | undefined
-      if (payload) insightStore.setAcceptanceDecision(payload)
+      if (payload) {
+        insightStore.setAcceptanceDecision(payload)
+        // 在聊天流中创建 acceptance 决策内联卡
+        useChatStore.getState().addMessage({
+          id: `msg_${Date.now()}_accept`,
+          role: 'assistant',
+          type: 'acceptance',
+          content: payload.user_visible_summary || '',
+          acceptanceData: payload,
+          timestamp: Date.now(),
+        })
+      }
       break
     }
 
     case EventType.CheckpointCreated: {
       const payload = eventPayload as CheckpointCreatedPayload | undefined
-      if (payload) insightStore.addCheckpointEvent(payload)
+      if (payload) {
+        insightStore.addCheckpointEvent(payload)
+        // 反向查找最后一条已完成(done)的 tool_call,把 checkpointId 挂上去
+        const messages = useChatStore.getState().messages
+        for (let i = messages.length - 1; i >= 0; i--) {
+          const m = messages[i]
+          if (m.type === 'tool_call' && m.toolStatus === 'done' && !m.checkpointId) {
+            useChatStore.getState().attachCheckpointToToolCall(m.toolCallId!, payload.checkpoint_id)
+            break
+          }
+        }
+      }
       break
     }
 
