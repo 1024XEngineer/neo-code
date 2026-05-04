@@ -21,6 +21,15 @@ export default defineConfig(({ mode }) => {
 					onstart(args) {
 						args.reload()
 					},
+					vite: {
+						build: {
+							lib: {
+								entry: 'electron/preload.ts',
+								formats: ['cjs'],
+								fileName: () => 'preload.cjs',
+							},
+						},
+					},
 				},
 			]),
 			isElectron && renderer(),

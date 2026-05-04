@@ -395,6 +395,7 @@ async function loadElectronRuntimeConfig(): Promise<RuntimeConfig> {
     window.electronAPI.getAddress(),
     window.electronAPI.getToken(),
   ])
+  console.log(`[RuntimeProvider] Electron config: address=${address}, token=${token ? '***' : '(empty)'}`)
   return {
     mode: 'electron',
     gatewayBaseURL: normalizeGatewayBaseURL(address),

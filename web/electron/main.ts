@@ -1,9 +1,15 @@
 import { app, BrowserWindow, ipcMain, shell, dialog } from 'electron'
 import { spawn, type ChildProcess } from 'child_process'
-import { join } from 'path'
+import { join, dirname } from 'path'
+import { fileURLToPath } from 'url'
 import { existsSync, readFileSync } from 'fs'
 import { homedir } from 'os'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
+
+const __dirname = dirname(fileURLToPath(import.meta.url))
+
+const DEFAULT_BASE_PORT = 8080
+const MAX_PORT_ATTEMPTS = 10
 
 let mainWindow: BrowserWindow | null = null
 let gatewayProcess: ChildProcess | null = null
@@ -23,7 +29,7 @@ function createWindow(): void {
 		title: 'NeoCode',
 		titleBarStyle: 'hiddenInset',
 		webPreferences: {
-			preload: join(__dirname, 'preload.js'),
+			preload: join(__dirname, 'preload.cjs'),
 			sandbox: false,
 			contextIsolation: true,
 			nodeIntegration: false,
@@ -99,47 +105,78 @@ function loadGatewayToken(): string {
 		const authPath = join(homedir(), '.neocode', 'auth.json')
 		const raw = readFileSync(authPath, 'utf-8')
 		const auth = JSON.parse(raw) as { token?: string }
-		return auth.token ?? ''
-	} catch {
+		const token = auth.token ?? ''
+		console.log(`[Electron] Loaded gateway token from ${authPath}: ${token ? `${token.slice(0, 8)}...` : '(empty)'}`)
+		return token
+	} catch (err) {
+		console.warn(`[Electron] Failed to load gateway token:`, err)
 		return ''
 	}
 }
 
-/** 启动 Gateway 子进程并等待就绪 */
-async function startGateway(): Promise<void> {
-	const binary = findGatewayBinary()
-	if (!binary) {
-		console.warn('[Electron] Gateway binary not found, checking for external gateway')
-		gatewayAddress = process.env['NEOCODE_GATEWAY'] ?? '127.0.0.1:8080'
-		gatewayToken = process.env['NEOCODE_TOKEN'] ?? ''
-		try {
-			const res = await fetch(`http://${gatewayAddress}/healthz`, { signal: AbortSignal.timeout(3000) })
-			gatewayReady = res.ok
-		} catch {
-			gatewayReady = false
-		}
-		if (!gatewayReady) {
-			mainWindow?.webContents.send('gateway:status', { ready: false, error: 'Gateway binary not found and no external gateway detected' })
-		}
-		return
+/** 检测 Gateway 是否健康 */
+async function checkHealthz(address: string): Promise<boolean> {
+	const url = /^https?:\/\//i.test(address) ? address : `http://${address}`
+	try {
+		const res = await fetch(`${url}/healthz`, { signal: AbortSignal.timeout(2000) })
+		return res.ok
+	} catch {
+		return false
 	}
+}
 
-	const httpAddress = process.env['NEOCODE_GATEWAY'] ?? '127.0.0.1:8080'
+/** 等待 Gateway 健康检查通过 */
+async function waitForHealthz(address: string, timeoutMs: number, intervalMs: number): Promise<boolean> {
+	const url = /^https?:\/\//i.test(address) ? address : `http://${address}`
+	const deadline = Date.now() + timeoutMs
+	while (Date.now() < deadline) {
+		try {
+			const res = await fetch(`${url}/healthz`, { signal: AbortSignal.timeout(2000) })
+			if (res.ok) return true
+		} catch {
+			// continue polling
+		}
+		await new Promise((r) => setTimeout(r, intervalMs))
+	}
+	return false
+}
 
-	console.log(`[Electron] Starting Gateway: ${binary}`)
-	gatewayProcess = spawn(binary, ['--http-listen', httpAddress, '--workdir', currentWorkdir], {
+/** 从环境变量解析显式指定的端口 */
+function findExplicitPort(): number | null {
+	const envPort = process.env['NEOCODE_GATEWAY_PORT']
+	if (envPort) {
+		const p = parseInt(envPort, 10)
+		if (p > 0 && p < 65536) return p
+	}
+	const envAddr = process.env['NEOCODE_GATEWAY']
+	if (envAddr) {
+		const m = envAddr.match(/:(\d+)$/)
+		if (m) {
+			const p = parseInt(m[1], 10)
+			if (p > 0 && p < 65536) return p
+		}
+	}
+	return null
+}
+
+/** 尝试在指定地址启动 Gateway */
+async function tryStartGateway(binary: string, httpAddress: string): Promise<boolean> {
+	console.log(`[Electron] Starting Gateway: ${binary} on ${httpAddress}`)
+	const proc = spawn(binary, ['--http-listen', httpAddress, '--workdir', currentWorkdir], {
 		detached: false,
 		stdio: 'pipe',
 	})
+	gatewayProcess = proc
 
-	gatewayProcess.stdout?.on('data', (data: Buffer) => {
+	proc.stdout?.on('data', (data: Buffer) => {
 		console.log(`[Gateway stdout] ${data.toString().trim()}`)
 	})
-	gatewayProcess.stderr?.on('data', (data: Buffer) => {
+	proc.stderr?.on('data', (data: Buffer) => {
 		console.error(`[Gateway stderr] ${data.toString().trim()}`)
 	})
-	gatewayProcess.on('exit', (code) => {
+	proc.on('exit', (code) => {
 		console.warn(`[Electron] Gateway exited with code ${code}`)
+		if (gatewayProcess !== proc) return
 		gatewayProcess = null
 		gatewayReady = false
 		mainWindow?.webContents.send('gateway:status', {
@@ -148,29 +185,66 @@ async function startGateway(): Promise<void> {
 		})
 	})
 
-	// 轮询等待 Gateway HTTP 端口就绪
-	const maxRetries = 30
-	for (let i = 0; i < maxRetries; i++) {
-		await new Promise((r) => setTimeout(r, 1000))
-		try {
-			const res = await fetch(`http://${httpAddress}/healthz`, { signal: AbortSignal.timeout(2000) })
-			if (res.ok) {
-				gatewayAddress = httpAddress
-				gatewayToken = loadGatewayToken()
-				gatewayReady = true
-				console.log('[Electron] Gateway is ready')
-				return
-			}
-		} catch {
-			// continue polling
+	const ready = await waitForHealthz(httpAddress, 15000, 500)
+	if (ready) {
+		gatewayAddress = httpAddress
+		gatewayToken = loadGatewayToken()
+		gatewayReady = true
+		console.log(`[Electron] Gateway is ready at ${httpAddress}`)
+	}
+	return ready
+}
+
+/** 启动 Gateway 子进程并等待就绪（自动端口轮询） */
+async function startGateway(): Promise<void> {
+	const binary = findGatewayBinary()
+	if (!binary) {
+		console.warn('[Electron] Gateway binary not found, checking for external gateway')
+		gatewayAddress = process.env['NEOCODE_GATEWAY'] ?? '127.0.0.1:8080'
+		gatewayToken = process.env['NEOCODE_TOKEN'] ?? ''
+		gatewayReady = await checkHealthz(gatewayAddress)
+		if (!gatewayReady) {
+			mainWindow?.webContents.send('gateway:status', { ready: false, error: 'Gateway binary not found and no external gateway detected' })
+		}
+		return
+	}
+
+	const explicitPort = findExplicitPort()
+	if (explicitPort !== null) {
+		console.log(`[Electron] Using specified port ${explicitPort}`)
+		const addr = `127.0.0.1:${explicitPort}`
+		if (await checkHealthz(addr)) {
+			console.log(`[Electron] Gateway already running at ${addr}`)
+			gatewayAddress = addr
+			gatewayToken = loadGatewayToken()
+			gatewayReady = true
+			return
+		}
+		if (await tryStartGateway(binary, addr)) return
+		mainWindow?.webContents.send('gateway:status', { ready: false, error: `Gateway failed to start on port ${explicitPort}` })
+		return
+	}
+
+	for (let port = DEFAULT_BASE_PORT; port < DEFAULT_BASE_PORT + MAX_PORT_ATTEMPTS; port++) {
+		const addr = `127.0.0.1:${port}`
+		if (await checkHealthz(addr)) {
+			console.log(`[Electron] Gateway already running at ${addr}`)
+			gatewayAddress = addr
+			gatewayToken = loadGatewayToken()
+			gatewayReady = true
+			return
+		}
+		console.log(`[Electron] Trying port ${port}...`)
+		if (await tryStartGateway(binary, addr)) return
+		if (gatewayProcess) {
+			gatewayProcess.kill()
+			gatewayProcess = null
 		}
 	}
 
-	console.error('[Electron] Gateway health check timed out')
-	gatewayAddress = httpAddress
-	gatewayToken = loadGatewayToken()
+	console.error(`[Electron] All ports ${DEFAULT_BASE_PORT}-${DEFAULT_BASE_PORT + MAX_PORT_ATTEMPTS - 1} are unavailable`)
 	gatewayReady = false
-	mainWindow?.webContents.send('gateway:status', { ready: false, error: 'Gateway health check timed out' })
+	mainWindow?.webContents.send('gateway:status', { ready: false, error: `All ports ${DEFAULT_BASE_PORT}-${DEFAULT_BASE_PORT + MAX_PORT_ATTEMPTS - 1} are unavailable` })
 }
 
 /** 停止 Gateway 子进程 */
@@ -186,12 +260,16 @@ function stopGateway(): void {
 
 /** 获取认证 Token */
 ipcMain.handle('gateway:getToken', () => {
-	return gatewayToken || process.env['NEOCODE_TOKEN'] || ''
+	const token = gatewayToken || process.env['NEOCODE_TOKEN'] || ''
+	console.log(`[Electron] IPC getToken → ${token ? `${token.slice(0, 8)}...` : '(empty)'}`)
+	return token
 })
 
 /** 获取 Gateway 地址 */
 ipcMain.handle('gateway:getAddress', () => {
-	return gatewayAddress || process.env['NEOCODE_GATEWAY'] || '127.0.0.1:8080'
+	const addr = gatewayAddress || process.env['NEOCODE_GATEWAY'] || '127.0.0.1:8080'
+	console.log(`[Electron] IPC getAddress → ${addr} (gatewayAddress=${gatewayAddress}, ready=${gatewayReady})`)
+	return addr
 })
 
 /** 获取当前工作区目录 */

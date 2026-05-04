@@ -372,8 +372,13 @@ func (s *NetworkServer) buildHandler(runtimePort RuntimePort) http.Handler {
 }
 
 // withCORS 为网络入口注入 CORS 头，仅对白名单 Origin 回显允许值。
+// WebSocket 升级请求不受 CORS 约束，直接放行交予 WS 握手阶段的 Origin 校验。
 func (s *NetworkServer) withCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if strings.EqualFold(request.Header.Get("Upgrade"), "websocket") {
+			next.ServeHTTP(writer, request)
+			return
+		}
 		origin := strings.TrimSpace(request.Header.Get("Origin"))
 		if origin != "" {
 			if !s.isAllowedOrigin(origin) {
@@ -1107,6 +1112,7 @@ func (s *NetworkServer) isAllowedOrigin(origin string) bool {
 }
 
 // validateWebSocketOrigin 在握手阶段基于实例 allowlist 校验 WebSocket 来源。
+// Electron 的 file:// 协议产生 opaque origin (null)，此类来源不受 CORS allowlist 约束。
 func (s *NetworkServer) validateWebSocketOrigin(request *http.Request) error {
 	if request == nil {
 		return errors.New("invalid websocket request")
@@ -1115,14 +1121,24 @@ func (s *NetworkServer) validateWebSocketOrigin(request *http.Request) error {
 	if origin == "" {
 		return nil
 	}
+	if isElectronCompatibleOrigin(origin) {
+		return nil
+	}
 	if !s.isAllowedOrigin(origin) {
 		return fmt.Errorf("websocket origin %q is not allowed", origin)
 	}
 	return nil
 }
 
+// isElectronCompatibleOrigin 放行 Electron/Chromium 的 file:// 协议来源，
+// 包括 "null"（opaque origin 的序列化值）和任何以 file:// 开头的 Origin。
+func isElectronCompatibleOrigin(origin string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(origin))
+	return normalized == "null" || strings.HasPrefix(normalized, "file://")
+}
+
 func defaultControlPlaneOrigins() []string {
-	return []string{"http://localhost", "http://127.0.0.1", "http://[::1]", "app://"}
+	return []string{"http://localhost", "http://127.0.0.1", "http://[::1]", "app://", "file://", "null"}
 }
 
 func normalizeControlPlaneOrigins(origins []string) []string {

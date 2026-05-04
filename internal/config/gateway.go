@@ -304,7 +304,7 @@ func (c GatewayObservabilityConfig) Enabled() bool {
 
 // defaultGatewayAllowOrigins 返回网关默认允许的本地来源。
 func defaultGatewayAllowOrigins() []string {
-	return []string{"http://localhost", "http://127.0.0.1", "http://[::1]", "app://"}
+	return []string{"http://localhost", "http://127.0.0.1", "http://[::1]", "app://", "file://", "null"}
 }
 
 // normalizeGatewayAllowOrigins 归一化 allow_origins，去除空项与空白。
