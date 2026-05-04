@@ -50,4 +50,41 @@ describe('useRuntimeInsightStore', () => {
     expect(useRuntimeInsightStore.getState().acceptanceDecision).toBeNull()
     expect(useRuntimeInsightStore.getState().todoSnapshot).toBeNull()
   })
+
+  it('startVerification appends a history record', () => {
+    const store = useRuntimeInsightStore.getState()
+    store.startVerification({ completion_passed: true })
+    expect(useRuntimeInsightStore.getState().verificationHistory).toHaveLength(1)
+    expect(useRuntimeInsightStore.getState().verificationHistory[0].status).toBe('running')
+  })
+
+  it('upsertVerificationStage updates the latest history record', () => {
+    const store = useRuntimeInsightStore.getState()
+    store.startVerification({ completion_passed: true })
+    store.upsertVerificationStage({ name: 'lint', status: 'passed', summary: 'all good' })
+    const latest = useRuntimeInsightStore.getState().verificationHistory[0]
+    expect(latest.stages.lint.status).toBe('passed')
+    expect(latest.stages.lint.summary).toBe('all good')
+  })
+
+  it('finishVerification updates history status', () => {
+    const store = useRuntimeInsightStore.getState()
+    store.startVerification({ completion_passed: true })
+    store.finishVerification({ acceptance_status: 'accepted' })
+    expect(useRuntimeInsightStore.getState().verificationHistory[0].status).toBe('finished')
+  })
+
+  it('failVerification updates history status', () => {
+    const store = useRuntimeInsightStore.getState()
+    store.startVerification({ completion_passed: true })
+    store.failVerification({ stop_reason: 'error', error_class: 'TestError' })
+    expect(useRuntimeInsightStore.getState().verificationHistory[0].status).toBe('failed')
+  })
+
+  it('reset clears verificationHistory', () => {
+    const store = useRuntimeInsightStore.getState()
+    store.startVerification({ completion_passed: true })
+    store.reset()
+    expect(useRuntimeInsightStore.getState().verificationHistory).toHaveLength(0)
+  })
 })

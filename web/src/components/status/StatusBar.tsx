@@ -4,6 +4,7 @@ import { useGatewayStore } from '@/stores/useGatewayStore'
 import { useRuntime } from '@/context/RuntimeProvider'
 import { formatTokenCount } from '@/utils/format'
 import { Sun, Moon, Wifi, WifiOff, Loader, FolderOpen } from 'lucide-react'
+import BudgetIndicator from './BudgetIndicator'
 
 /** 连接状态图标 */
 function ConnectionIcon({ state }: { state: string }) {
@@ -62,14 +63,16 @@ export default function StatusBar() {
         <span style={styles.hint}>NeoCode 可能会生成不准确的信息，请验证重要代码。</span>
       </div>
       <div style={styles.right}>
+        <BudgetIndicator />
         {tokenUsage && (
           <>
+            <span style={styles.divider} />
             <span style={styles.tokenInfo}>
               Tokens: {formatTokenCount(totalTokens)}
             </span>
-            <span style={styles.divider} />
           </>
         )}
+        <span style={styles.divider} />
         <button
           style={styles.themeBtn}
           onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}

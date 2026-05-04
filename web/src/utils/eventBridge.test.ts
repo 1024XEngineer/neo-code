@@ -214,4 +214,103 @@ describe('eventBridge', () => {
 
     expect(useRuntimeInsightStore.getState().checkpointEvents[0]).toMatchObject({ checkpoint_id: 'cp1' })
   })
+
+  it('VerificationStarted creates a verification ChatMessage', () => {
+    const api = createMockGatewayAPI()
+    handleGatewayEvent({
+      type: EventType.VerificationStarted,
+      payload: { payload: { runtime_event_type: EventType.VerificationStarted, payload: { completion_passed: true } } },
+      session_id: 'sess-1',
+      run_id: 'run-1',
+    }, api)
+
+    const verifyMsg = useChatStore.getState().messages.find((m) => m.type === 'verification')
+    expect(verifyMsg).toBeDefined()
+    expect(verifyMsg?.verificationData?.status).toBe('running')
+    expect(useRuntimeInsightStore.getState().verificationHistory).toHaveLength(1)
+  })
+
+  it('VerificationStageFinished updates the verification message', () => {
+    const api = createMockGatewayAPI()
+    handleGatewayEvent({
+      type: EventType.VerificationStarted,
+      payload: { payload: { runtime_event_type: EventType.VerificationStarted, payload: { completion_passed: true } } },
+      session_id: 'sess-1',
+      run_id: 'run-1',
+    }, api)
+    handleGatewayEvent({
+      type: EventType.VerificationStageFinished,
+      payload: { payload: { runtime_event_type: EventType.VerificationStageFinished, payload: { name: 'lint', status: 'passed', summary: 'all good' } } },
+      session_id: 'sess-1',
+      run_id: 'run-1',
+    }, api)
+
+    const verifyMsg = useChatStore.getState().messages.find((m) => m.type === 'verification')
+    expect(verifyMsg?.verificationData?.stages.lint.status).toBe('passed')
+    expect(verifyMsg?.verificationData?.stages.lint.summary).toBe('all good')
+  })
+
+  it('VerificationFinished updates history and chat message', () => {
+    const api = createMockGatewayAPI()
+    handleGatewayEvent({
+      type: EventType.VerificationStarted,
+      payload: { payload: { runtime_event_type: EventType.VerificationStarted, payload: { completion_passed: true } } },
+      session_id: 'sess-1',
+      run_id: 'run-1',
+    }, api)
+    handleGatewayEvent({
+      type: EventType.VerificationFinished,
+      payload: { payload: { runtime_event_type: EventType.VerificationFinished, payload: { acceptance_status: 'accepted' } } },
+      session_id: 'sess-1',
+      run_id: 'run-1',
+    }, api)
+
+    const verifyMsg = useChatStore.getState().messages.find((m) => m.type === 'verification')
+    expect(verifyMsg?.verificationData?.status).toBe('finished')
+    expect(useRuntimeInsightStore.getState().verificationHistory[0].status).toBe('finished')
+  })
+
+  it('AcceptanceDecided creates an acceptance ChatMessage', () => {
+    const api = createMockGatewayAPI()
+    handleGatewayEvent({
+      type: EventType.AcceptanceDecided,
+      payload: { payload: { runtime_event_type: EventType.AcceptanceDecided, payload: { status: 'accepted', user_visible_summary: 'looks good' } } },
+      session_id: 'sess-1',
+      run_id: 'run-1',
+    }, api)
+
+    const msg = useChatStore.getState().messages.find((m) => m.type === 'acceptance')
+    expect(msg).toBeDefined()
+    expect(msg?.acceptanceData?.status).toBe('accepted')
+    expect(msg?.acceptanceData?.user_visible_summary).toBe('looks good')
+    expect(useRuntimeInsightStore.getState().acceptanceDecision?.status).toBe('accepted')
+  })
+
+  it('CheckpointCreated attaches checkpointId to the latest done tool_call', () => {
+    const api = createMockGatewayAPI()
+    // 先创建并完成一个 tool call
+    handleGatewayEvent({
+      type: EventType.ToolStart,
+      payload: { payload: { runtime_event_type: EventType.ToolStart, payload: { name: 'write_file', id: 'tc1', arguments: '{}' } } },
+      session_id: 'sess-1',
+      run_id: 'run-1',
+    }, api)
+    handleGatewayEvent({
+      type: EventType.ToolResult,
+      payload: { payload: { runtime_event_type: EventType.ToolResult, payload: { tool_call_id: 'tc1', content: 'ok' } } },
+      session_id: 'sess-1',
+      run_id: 'run-1',
+    }, api)
+    // 然后创建 checkpoint
+    handleGatewayEvent({
+      type: EventType.CheckpointCreated,
+      payload: { payload: { runtime_event_type: EventType.CheckpointCreated, payload: { checkpoint_id: 'cp1', code_checkpoint_ref: 'c', session_checkpoint_ref: 's', commit_hash: 'abc', reason: 'pre_write' } } },
+      session_id: 'sess-1',
+      run_id: 'run-1',
+    }, api)
+
+    const toolMsg = useChatStore.getState().messages.find((m) => m.type === 'tool_call')
+    expect(toolMsg?.checkpointId).toBe('cp1')
+    expect(toolMsg?.checkpointStatus).toBe('available')
+  })
 })

@@ -33,6 +33,12 @@ interface UIState {
   fileTreePanelOpen: boolean
   /** 文件树面板宽度 */
   fileTreePanelWidth: number
+  /** Insight 面板是否展开 */
+  insightPanelOpen: boolean
+  /** Insight 面板宽度 */
+  insightPanelWidth: number
+  /** Insight 当前活跃 tab */
+  insightActiveTab: 'todo' | 'verification' | 'checkpoint'
   /** 当前主题：light / dark */
   theme: 'light' | 'dark'
   /** 搜索查询 */
@@ -47,6 +53,8 @@ interface UIState {
   setSidebarOpen: (open: boolean) => void
   toggleChangesPanel: () => void
   toggleFileTreePanel: () => void
+  toggleInsightPanel: () => void
+  setInsightActiveTab: (tab: 'todo' | 'verification' | 'checkpoint') => void
   setTheme: (theme: 'light' | 'dark') => void
   setSearchQuery: (q: string) => void
   addFileChange: (change: FileChange) => void
@@ -66,6 +74,9 @@ export const useUIStore = create<UIState>((set) => ({
   changesPanelWidth: 320,
   fileTreePanelOpen: false,
   fileTreePanelWidth: 280,
+  insightPanelOpen: false,
+  insightPanelWidth: 360,
+  insightActiveTab: 'todo',
   theme: 'dark',
   searchQuery: '',
   fileChanges: [],
@@ -75,6 +86,8 @@ export const useUIStore = create<UIState>((set) => ({
   setSidebarOpen: (sidebarOpen) => set({ sidebarOpen }),
   toggleChangesPanel: () => set((s) => ({ changesPanelOpen: !s.changesPanelOpen })),
   toggleFileTreePanel: () => set((s) => ({ fileTreePanelOpen: !s.fileTreePanelOpen })),
+  toggleInsightPanel: () => set((s) => ({ insightPanelOpen: !s.insightPanelOpen })),
+  setInsightActiveTab: (insightActiveTab) => set({ insightActiveTab }),
   setTheme: (theme) => {
     document.documentElement.setAttribute('data-theme', theme)
     set({ theme })

@@ -3,6 +3,7 @@ import Sidebar from './Sidebar'
 import ChatPanel from '@/components/chat/ChatPanel'
 import FileChangePanel from '@/components/panels/FileChangePanel'
 import FileTreePanel from '@/components/panels/FileTreePanel'
+import InsightPanel from '@/components/panels/InsightPanel'
 import StatusBar from '@/components/status/StatusBar'
 import ToastContainer from '@/components/ui/ToastContainer'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
@@ -21,6 +22,8 @@ export default function AppLayout({ shellMode = 'electron' }: AppLayoutProps) {
   const changesPanelWidth = useUIStore((s) => s.changesPanelWidth)
   const fileTreePanelOpen = useUIStore((s) => s.fileTreePanelOpen)
   const fileTreePanelWidth = useUIStore((s) => s.fileTreePanelWidth)
+  const insightPanelOpen = useUIStore((s) => s.insightPanelOpen)
+  const insightPanelWidth = useUIStore((s) => s.insightPanelWidth)
 
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
@@ -71,6 +74,11 @@ export default function AppLayout({ shellMode = 'electron' }: AppLayoutProps) {
         {fileTreePanelOpen && (
           <div style={{ ...layoutStyles.rightPanel, width: `min(${fileTreePanelWidth}px, 22vw)` }}>
             <FileTreePanel />
+          </div>
+        )}
+        {insightPanelOpen && (
+          <div style={{ ...layoutStyles.rightPanel, width: `min(${insightPanelWidth}px, 26vw)` }}>
+            <InsightPanel />
           </div>
         )}
       </div>
