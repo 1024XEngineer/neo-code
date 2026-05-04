@@ -439,3 +439,185 @@ func TestCaptureBatch_DedupesAndCaptures(t *testing.T) {
 		t.Fatalf("pending count = %d, want 2", count)
 	}
 }
+
+// TestCapturePreWrite_DirectoryMarksExistedTrue: capturing an existing directory stores Existed=true, IsDir=true.
+func TestCapturePreWrite_DirectoryMarksExistedTrue(t *testing.T) {
+	store, workdir := newTestStore(t)
+	abs := filepath.Join(workdir, "subdir")
+	if err := os.MkdirAll(abs, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	v, err := store.CapturePreWrite(abs)
+	if err != nil {
+		t.Fatalf("capture dir: %v", err)
+	}
+
+	hash := perEditPathHash(abs)
+	meta, err := store.readVersionMeta(hash, v)
+	if err != nil {
+		t.Fatalf("read meta: %v", err)
+	}
+	if !meta.Existed {
+		t.Fatalf("Existed should be true for directory")
+	}
+	if !meta.IsDir {
+		t.Fatalf("IsDir should be true for directory")
+	}
+	bin, err := store.readVersionBin(hash, v)
+	if err != nil {
+		t.Fatalf("read bin: %v", err)
+	}
+	if len(bin) != 0 {
+		t.Fatalf("bin should be empty, got %d bytes", len(bin))
+	}
+}
+
+// TestRestore_DirectoryRecreateAndDelete: per-edit restore uses v_next to determine directory state.
+func TestRestore_DirectoryRecreateAndDelete(t *testing.T) {
+	store, workdir := newTestStore(t)
+	dir := filepath.Join(workdir, "foo")
+
+	// Turn 1: create_dir — capture pre-create (does not exist), then create.
+	if _, err := store.CapturePreWrite(dir); err != nil {
+		t.Fatalf("capture pre-create: %v", err)
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if _, err := store.Finalize("cp1"); err != nil {
+		t.Fatalf("finalize cp1: %v", err)
+	}
+	store.Reset()
+
+	// Turn 2: remove_dir — capture pre-remove (exists, IsDir=true), then remove.
+	if _, err := store.CapturePreWrite(dir); err != nil {
+		t.Fatalf("capture pre-remove: %v", err)
+	}
+	if err := os.RemoveAll(dir); err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+	if _, err := store.Finalize("cp2"); err != nil {
+		t.Fatalf("finalize cp2: %v", err)
+	}
+	store.Reset()
+
+	// Turn 3: recreate_dir — capture pre-recreate (does not exist), then create.
+	// This gives cp2 a v_next with Existed=false so restore can delete the directory.
+	if _, err := store.CapturePreWrite(dir); err != nil {
+		t.Fatalf("capture pre-recreate: %v", err)
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir recreate: %v", err)
+	}
+	if _, err := store.Finalize("cp3"); err != nil {
+		t.Fatalf("finalize cp3: %v", err)
+	}
+	store.Reset()
+
+	// Restore cp1: v_next=v2(Existed=true,IsDir=true) → MkdirAll. Dir should exist.
+	if err := os.RemoveAll(dir); err != nil {
+		t.Fatalf("manual remove before restore: %v", err)
+	}
+	if err := store.Restore(context.Background(), "cp1"); err != nil {
+		t.Fatalf("restore cp1: %v", err)
+	}
+	info, err := os.Stat(dir)
+	if err != nil {
+		t.Fatalf("dir should exist after restore cp1, got %v", err)
+	}
+	if !info.IsDir() {
+		t.Fatalf("restored path should be a directory")
+	}
+
+	// Restore cp2: v_next=v3(Existed=false) → RemoveAll. Dir should be deleted.
+	if err := store.Restore(context.Background(), "cp2"); err != nil {
+		t.Fatalf("restore cp2: %v", err)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("expected dir absent after restore cp2, stat err=%v", err)
+	}
+}
+
+// TestRestore_DirectoryWithNestedFile: RemoveAll can delete a directory that later got nested files.
+func TestRestore_DirectoryWithNestedFile(t *testing.T) {
+	store, workdir := newTestStore(t)
+	dir := filepath.Join(workdir, "foo")
+	child := filepath.Join(dir, "bar.txt")
+
+	// Turn 1: create_dir.
+	if _, err := store.CapturePreWrite(dir); err != nil {
+		t.Fatalf("capture pre-create dir: %v", err)
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if _, err := store.Finalize("cp-dir"); err != nil {
+		t.Fatalf("finalize cp-dir: %v", err)
+	}
+	store.Reset()
+
+	// Turn 2: write file inside dir AND re-capture dir (so dir gets a v2 with Existed=true,IsDir=true).
+	if _, err := store.CapturePreWrite(dir); err != nil {
+		t.Fatalf("capture pre-touch dir: %v", err)
+	}
+	if _, err := store.CapturePreWrite(child); err != nil {
+		t.Fatalf("capture pre-write child: %v", err)
+	}
+	if err := os.WriteFile(child, []byte("hello"), 0o644); err != nil {
+		t.Fatalf("write child: %v", err)
+	}
+	if _, err := store.Finalize("cp-child"); err != nil {
+		t.Fatalf("finalize cp-child: %v", err)
+	}
+	store.Reset()
+
+	// Turn 3: remove_dir — capture pre-remove (dir+child exist), then delete.
+	if _, err := store.CapturePreWrite(dir); err != nil {
+		t.Fatalf("capture pre-remove dir: %v", err)
+	}
+	if err := os.RemoveAll(dir); err != nil {
+		t.Fatalf("remove dir: %v", err)
+	}
+	if _, err := store.Finalize("cp-remove"); err != nil {
+		t.Fatalf("finalize cp-remove: %v", err)
+	}
+	store.Reset()
+
+	// Turn 4: recreate empty dir — gives cp-remove a v_next with Existed=false.
+	if _, err := store.CapturePreWrite(dir); err != nil {
+		t.Fatalf("capture pre-recreate dir: %v", err)
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir recreate: %v", err)
+	}
+	if _, err := store.Finalize("cp-recreate"); err != nil {
+		t.Fatalf("finalize cp-recreate: %v", err)
+	}
+	store.Reset()
+
+	// Restore cp-dir: v_next=v2(Existed=true,IsDir=true) → MkdirAll. Dir should exist (child won't be restored because child has its own chain).
+	if err := os.RemoveAll(dir); err != nil {
+		t.Fatalf("manual remove before restore: %v", err)
+	}
+	if err := store.Restore(context.Background(), "cp-dir"); err != nil {
+		t.Fatalf("restore cp-dir: %v", err)
+	}
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		t.Fatalf("dir should be recreated after restore cp-dir")
+	}
+
+	// Restore cp-remove: v_next=v4(Existed=false) → RemoveAll. Should delete even if non-empty.
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir before restore: %v", err)
+	}
+	if err := os.WriteFile(child, []byte("new"), 0o644); err != nil {
+		t.Fatalf("write child before restore: %v", err)
+	}
+	if err := store.Restore(context.Background(), "cp-remove"); err != nil {
+		t.Fatalf("restore cp-remove: %v", err)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("expected dir absent after restore cp-remove, stat err=%v", err)
+	}
+}

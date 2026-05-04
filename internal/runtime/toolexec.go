@@ -276,6 +276,10 @@ func (s *Service) executeOneToolCall(
 		state.mu.Unlock()
 	}
 
+	if isBash && execErr == nil && !result.IsError && len(bashCapturedPaths) > 0 {
+		result.Facts.WorkspaceWrite = true
+	}
+
 	if checkContext() {
 		return result, hasSuccessfulWorkspaceWriteFact(result, execErr), ctx.Err()
 	}

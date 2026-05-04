@@ -37,6 +37,7 @@ type FileVersionMeta struct {
 	DisplayPath string      `json:"display_path"`
 	Version     int         `json:"version"`
 	Existed     bool        `json:"existed"`
+	IsDir       bool        `json:"is_dir,omitempty"`
 	Mode        os.FileMode `json:"mode,omitempty"`
 	CreatedAt   time.Time   `json:"created_at"`
 }
@@ -117,7 +118,7 @@ func (s *PerEditSnapshotStore) CapturePreWrite(absPath string) (int, error) {
 		nextVersion = versions[len(versions)-1] + 1
 	}
 
-	content, existed, mode, err := readFileForCapture(cleanPath)
+	content, existed, isDir, mode, err := readFileForCapture(cleanPath)
 	if err != nil {
 		return 0, fmt.Errorf("per-edit: read %s: %w", cleanPath, err)
 	}
@@ -127,6 +128,7 @@ func (s *PerEditSnapshotStore) CapturePreWrite(absPath string) (int, error) {
 		DisplayPath: cleanPath,
 		Version:     nextVersion,
 		Existed:     existed,
+		IsDir:       isDir,
 		Mode:        mode,
 		CreatedAt:   time.Now().UTC(),
 	}
@@ -236,8 +238,14 @@ func (s *PerEditSnapshotStore) Restore(ctx context.Context, checkpointID string)
 			return fmt.Errorf("per-edit: missing display path for hash %s", hash)
 		}
 		if !nextMeta.Existed {
-			if err := os.Remove(target); err != nil && !errors.Is(err, os.ErrNotExist) {
+			if err := os.RemoveAll(target); err != nil && !errors.Is(err, os.ErrNotExist) {
 				return fmt.Errorf("per-edit: restore remove %s: %w", target, err)
+			}
+			continue
+		}
+		if nextMeta.IsDir {
+			if err := os.MkdirAll(target, nextMeta.Mode); err != nil {
+				return fmt.Errorf("per-edit: restore mkdir %s: %w", target, err)
 			}
 			continue
 		}
@@ -285,15 +293,18 @@ func (s *PerEditSnapshotStore) Diff(ctx context.Context, fromID, toID string) (s
 		if err := ctx.Err(); err != nil {
 			return "", err
 		}
-		fromContent, fromDisplay, err := s.contentAtCheckpointLocked(hash, fromMeta.FileVersions)
+		fromContent, fromIsDir, fromExists, fromDisplay, err := s.contentAtCheckpointLocked(hash, fromMeta.FileVersions)
 		if err != nil {
 			return "", err
 		}
-		toContent, toDisplay, err := s.contentAtCheckpointLocked(hash, toMeta.FileVersions)
+		toContent, toIsDir, toExists, toDisplay, err := s.contentAtCheckpointLocked(hash, toMeta.FileVersions)
 		if err != nil {
 			return "", err
 		}
-		if bytes.Equal(fromContent, toContent) {
+		if fromIsDir && toIsDir {
+			continue
+		}
+		if bytes.Equal(fromContent, toContent) && fromExists == toExists && fromIsDir == toIsDir {
 			continue
 		}
 		display := toDisplay
@@ -385,11 +396,11 @@ func (s *PerEditSnapshotStore) ChangedFiles(ctx context.Context, fromID, toID st
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		fromContent, fromDisplay, err := s.contentAtCheckpointLocked(hash, fromMeta.FileVersions)
+		fromContent, fromIsDir, fromExists, fromDisplay, err := s.contentAtCheckpointLocked(hash, fromMeta.FileVersions)
 		if err != nil {
 			return nil, err
 		}
-		toContent, toDisplay, err := s.contentAtCheckpointLocked(hash, toMeta.FileVersions)
+		toContent, toIsDir, toExists, toDisplay, err := s.contentAtCheckpointLocked(hash, toMeta.FileVersions)
 		if err != nil {
 			return nil, err
 		}
@@ -398,14 +409,12 @@ func (s *PerEditSnapshotStore) ChangedFiles(ctx context.Context, fromID, toID st
 			display = fromDisplay
 		}
 		rel := filepath.ToSlash(s.relativeDisplay(display))
-		fromExisted := fromContent != nil
-		toExisted := toContent != nil
 		switch {
-		case !fromExisted && toExisted:
+		case !fromExists && toExists:
 			out = append(out, FileChangeEntry{Path: rel, Kind: FileChangeAdded})
-		case fromExisted && !toExisted:
+		case fromExists && !toExists:
 			out = append(out, FileChangeEntry{Path: rel, Kind: FileChangeDeleted})
-		case fromExisted && toExisted && !bytes.Equal(fromContent, toContent):
+		case fromExists && toExists && (fromIsDir != toIsDir || !bytes.Equal(fromContent, toContent)):
 			out = append(out, FileChangeEntry{Path: rel, Kind: FileChangeModified})
 		}
 	}
@@ -438,25 +447,25 @@ func perEditPathHash(absPath string) string {
 	return hex.EncodeToString(sum[:])[:perEditPathHashLen]
 }
 
-func readFileForCapture(absPath string) ([]byte, bool, os.FileMode, error) {
+func readFileForCapture(absPath string) ([]byte, bool, bool, os.FileMode, error) {
 	info, err := os.Stat(absPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return nil, false, 0, nil
+			return nil, false, false, 0, nil
 		}
-		return nil, false, 0, err
+		return nil, false, false, 0, err
 	}
 	if info.IsDir() {
-		return nil, false, info.Mode(), nil
+		return nil, true, true, info.Mode(), nil
 	}
 	if info.Size() > perEditMaxCaptureBytes {
-		return nil, true, info.Mode(), fmt.Errorf("file %d bytes exceeds per-edit capture limit", info.Size())
+		return nil, true, false, info.Mode(), fmt.Errorf("file %d bytes exceeds per-edit capture limit", info.Size())
 	}
 	content, err := os.ReadFile(absPath)
 	if err != nil {
-		return nil, true, info.Mode(), err
+		return nil, true, false, info.Mode(), err
 	}
-	return content, true, info.Mode(), nil
+	return content, true, false, info.Mode(), nil
 }
 
 func (s *PerEditSnapshotStore) writeVersionFiles(meta FileVersionMeta, content []byte) error {
@@ -620,39 +629,51 @@ func (s *PerEditSnapshotStore) resolveDisplayPathLocked(hash, fallback string) s
 // 在 cp.FileVersions 中：找下一版本读 .bin（或 Existed=false 时返回 nil）；
 // 不在 cp.FileVersions 或没有下一版本：以当前 workdir 实际内容为准（per-edit 不还原非快照文件）。
 // indexMu 必须被持有。
-func (s *PerEditSnapshotStore) contentAtCheckpointLocked(hash string, cpVersions map[string]int) ([]byte, string, error) {
+func (s *PerEditSnapshotStore) contentAtCheckpointLocked(hash string, cpVersions map[string]int) ([]byte, bool, bool, string, error) {
 	display := s.displayPaths[hash]
 	vAt, ok := cpVersions[hash]
 	if !ok {
-		return readWorkdirContent(display), display, nil
+		c, isDir, exists := readWorkdirContent(display)
+		return c, isDir, exists, display, nil
 	}
 	nextVersion := s.findNextVersionLocked(hash, vAt)
 	if nextVersion == 0 {
-		return readWorkdirContent(display), display, nil
+		c, isDir, exists := readWorkdirContent(display)
+		return c, isDir, exists, display, nil
 	}
 	nextMeta, err := s.readVersionMeta(hash, nextVersion)
 	if err != nil {
-		return nil, display, fmt.Errorf("per-edit: read meta v%d for %s: %w", nextVersion, hash, err)
+		return nil, false, false, display, fmt.Errorf("per-edit: read meta v%d for %s: %w", nextVersion, hash, err)
 	}
 	if !nextMeta.Existed {
-		return nil, display, nil
+		return nil, false, false, display, nil
+	}
+	if nextMeta.IsDir {
+		return nil, true, true, display, nil
 	}
 	content, err := s.readVersionBin(hash, nextVersion)
 	if err != nil {
-		return nil, display, fmt.Errorf("per-edit: read bin v%d for %s: %w", nextVersion, hash, err)
+		return nil, false, false, display, fmt.Errorf("per-edit: read bin v%d for %s: %w", nextVersion, hash, err)
 	}
-	return content, display, nil
+	return content, false, true, display, nil
 }
 
-func readWorkdirContent(absPath string) []byte {
+func readWorkdirContent(absPath string) ([]byte, bool, bool) {
 	if absPath == "" {
-		return nil
+		return nil, false, false
+	}
+	info, err := os.Stat(absPath)
+	if err != nil {
+		return nil, false, false
+	}
+	if info.IsDir() {
+		return nil, true, true
 	}
 	data, err := os.ReadFile(absPath)
 	if err != nil {
-		return nil
+		return nil, false, false
 	}
-	return data
+	return data, false, true
 }
 
 func (s *PerEditSnapshotStore) relativeDisplay(absPath string) string {

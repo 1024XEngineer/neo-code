@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"neo-code/internal/security"
 	"neo-code/internal/tools"
 )
 
@@ -79,7 +78,7 @@ func (t *MoveFileTool) Execute(ctx context.Context, input tools.ToolCallInput) (
 
 	base := effectiveRoot(t.root, input.Workdir)
 
-	_, src, err := tools.ResolveWorkspaceTarget(input, security.TargetTypePath, base, args.SourcePath, resolvePath)
+	src, err := resolvePath(base, args.SourcePath)
 	if err != nil {
 		return tools.NewErrorResult(t.Name(), tools.NormalizeErrorReason(t.Name(), err), "", nil), err
 	}
