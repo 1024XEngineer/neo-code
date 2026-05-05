@@ -19,8 +19,9 @@ const defaultSignatureMaxSkew = 5 * time.Minute
 const defaultProgressNotifyInterval = 5 * time.Second
 
 type sessionBinding struct {
-	ChatID string
-	RunID  string
+	SessionID string
+	ChatID    string
+	RunID     string
 }
 
 // Adapter 负责桥接飞书回调与 Gateway JSON-RPC 长连接。
@@ -34,7 +35,8 @@ type Adapter struct {
 	nowFn func() time.Time
 
 	mu             sync.RWMutex
-	activeSessions map[string]sessionBinding
+	activeRuns     map[string]sessionBinding
+	sessionChats   map[string]string
 	lastProgressAt map[string]time.Time
 }
 
@@ -59,7 +61,8 @@ func New(cfg Config, gateway GatewayClient, messenger Messenger, logger *log.Log
 		logger:         logger,
 		idem:           newIdempotencyStore(cfg.IdempotencyTTL),
 		nowFn:          func() time.Time { return time.Now().UTC() },
-		activeSessions: make(map[string]sessionBinding),
+		activeRuns:     make(map[string]sessionBinding),
+		sessionChats:   make(map[string]string),
 		lastProgressAt: make(map[string]time.Time),
 	}, nil
 }
@@ -144,7 +147,7 @@ func (a *Adapter) handleFeishuEvent(writer http.ResponseWriter, request *http.Re
 		return
 	}
 
-	if !shouldHandleChatMessage(event) {
+	if !shouldHandleChatMessage(event, a.cfg.AppID, envelope.Header.AppID) {
 		writeJSON(writer, http.StatusOK, map[string]string{"message": "ignored_not_mentioned"})
 		return
 	}
@@ -259,21 +262,36 @@ func (a *Adapter) bindThenRun(ctx context.Context, sessionID string, runID strin
 func (a *Adapter) trackSession(sessionID string, runID string, chatID string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.activeSessions[sessionID] = sessionBinding{
-		ChatID: chatID,
-		RunID:  runID,
+	a.activeRuns[runBindingKey(sessionID, runID)] = sessionBinding{
+		SessionID: sessionID,
+		ChatID:    chatID,
+		RunID:     runID,
+	}
+	if sessionID != "" && chatID != "" {
+		a.sessionChats[sessionID] = chatID
 	}
 }
 
+// untrackRun 在 run 终态事件到达后移除活跃 run 绑定，避免重连重绑与内存累积。
+func (a *Adapter) untrackRun(sessionID string, runID string) {
+	if strings.TrimSpace(sessionID) == "" || strings.TrimSpace(runID) == "" {
+		return
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	delete(a.activeRuns, runBindingKey(sessionID, runID))
+}
+
 // lookupChatID 根据 session_id 查找需要回推的飞书 chat_id。
-func (a *Adapter) lookupChatID(sessionID string) string {
+func (a *Adapter) lookupChatID(sessionID string, runID string) string {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
-	binding, ok := a.activeSessions[sessionID]
-	if !ok {
-		return ""
+	if sessionID != "" && runID != "" {
+		if binding, ok := a.activeRuns[runBindingKey(sessionID, runID)]; ok {
+			return binding.ChatID
+		}
 	}
-	return binding.ChatID
+	return a.sessionChats[sessionID]
 }
 
 // consumeGatewayEvents 持续消费网关通知流并转发到飞书侧展示。
@@ -297,12 +315,12 @@ func (a *Adapter) consumeGatewayEvents(ctx context.Context) {
 
 // handleGatewayEvent 将 gateway.event 映射成飞书文本或审批卡片。
 func (a *Adapter) handleGatewayEvent(ctx context.Context, raw json.RawMessage) {
-	eventType, sessionID, _, envelope, err := parseGatewayRuntimeEvent(raw)
+	eventType, sessionID, runID, envelope, err := parseGatewayRuntimeEvent(raw)
 	if err != nil {
 		a.safeLog("decode gateway event failed: %v", err)
 		return
 	}
-	chatID := a.lookupChatID(sessionID)
+	chatID := a.lookupChatID(sessionID, runID)
 	if chatID == "" {
 		return
 	}
@@ -330,12 +348,14 @@ func (a *Adapter) handleGatewayEvent(ctx context.Context, raw json.RawMessage) {
 			doneText = "任务完成。"
 		}
 		_ = a.messenger.SendText(ctx, chatID, doneText)
+		a.untrackRun(sessionID, runID)
 	case "run_error":
 		errText := extractUserVisibleErrorText(envelope)
 		if errText == "" {
 			errText = "任务失败，请稍后重试。"
 		}
 		_ = a.messenger.SendText(ctx, chatID, errText)
+		a.untrackRun(sessionID, runID)
 	}
 }
 
@@ -388,18 +408,18 @@ func (a *Adapter) retryAuthenticateAndRebind(ctx context.Context, delay time.Dur
 // rebindActiveSessions 对当前活跃会话重新执行 bindStream，恢复事件订阅关系。
 func (a *Adapter) rebindActiveSessions(ctx context.Context) {
 	a.mu.RLock()
-	snapshot := make(map[string]sessionBinding, len(a.activeSessions))
-	for sessionID, binding := range a.activeSessions {
-		snapshot[sessionID] = binding
+	snapshot := make([]sessionBinding, 0, len(a.activeRuns))
+	for _, binding := range a.activeRuns {
+		snapshot = append(snapshot, binding)
 	}
 	a.mu.RUnlock()
 
-	for sessionID, binding := range snapshot {
+	for _, binding := range snapshot {
 		callCtx, cancel := context.WithTimeout(ctx, a.cfg.RequestTimeout)
-		err := a.gateway.BindStream(callCtx, sessionID, binding.RunID)
+		err := a.gateway.BindStream(callCtx, binding.SessionID, binding.RunID)
 		cancel()
 		if err != nil {
-			a.safeLog("rebind session failed session_id=%s err=%v", sessionID, err)
+			a.safeLog("rebind session failed session_id=%s run_id=%s err=%v", binding.SessionID, binding.RunID, err)
 		}
 	}
 }
@@ -456,7 +476,7 @@ func (a *Adapter) shouldEmitProgress(sessionID string, runID string, runtimeEven
 }
 
 // shouldHandleChatMessage 约束群聊场景仅在 @ 机器人时触发 run；私聊保持默认受理。
-func shouldHandleChatMessage(event inboundMessageEvent) bool {
+func shouldHandleChatMessage(event inboundMessageEvent, configuredAppID string, headerAppID string) bool {
 	chatType := strings.TrimSpace(strings.ToLower(event.Message.ChatType))
 	if chatType == "" {
 		chatType = strings.TrimSpace(strings.ToLower(event.ChatType))
@@ -464,11 +484,62 @@ func shouldHandleChatMessage(event inboundMessageEvent) bool {
 	if chatType != "group" {
 		return true
 	}
-	if len(event.Message.Mentions) > 0 {
-		return true
+	if len(event.Message.Mentions) == 0 {
+		return false
 	}
-	normalized := strings.ToLower(strings.TrimSpace(event.Message.Content))
-	return strings.Contains(normalized, "<at ")
+	messageText, err := decodeMessageText(event.Message.Content)
+	if err != nil {
+		messageText = strings.TrimSpace(event.Message.Content)
+	}
+	expected := buildExpectedBotIDs(configuredAppID, headerAppID)
+	if len(expected) == 0 {
+		return false
+	}
+	normalizedText := strings.TrimSpace(strings.ToLower(messageText))
+	for _, mention := range event.Message.Mentions {
+		candidates := []string{
+			mention.ID.AppID,
+			mention.ID.UserID,
+			mention.ID.OpenID,
+			mention.ID.UnionID,
+		}
+		for _, candidate := range candidates {
+			normalized := strings.TrimSpace(strings.ToLower(candidate))
+			if normalized == "" {
+				continue
+			}
+			if _, ok := expected[normalized]; ok {
+				return true
+			}
+		}
+	}
+	for botID := range expected {
+		if strings.Contains(normalizedText, `<at user_id="`+botID+`"`) ||
+			strings.Contains(normalizedText, `<at user_id='`+botID+`'`) ||
+			strings.Contains(normalizedText, `<at id="`+botID+`"`) ||
+			strings.Contains(normalizedText, `<at id='`+botID+`'`) {
+			return true
+		}
+	}
+	return false
+}
+
+// runBindingKey 生成稳定的 session/run 复合键，避免同会话多 run 相互覆盖。
+func runBindingKey(sessionID string, runID string) string {
+	return strings.TrimSpace(sessionID) + "|" + strings.TrimSpace(runID)
+}
+
+// buildExpectedBotIDs 构建可匹配的机器人标识集合，用于群聊 @ 目标校验。
+func buildExpectedBotIDs(configuredAppID string, headerAppID string) map[string]struct{} {
+	expected := make(map[string]struct{})
+	for _, raw := range []string{configuredAppID, headerAppID} {
+		normalized := strings.TrimSpace(strings.ToLower(raw))
+		if normalized == "" {
+			continue
+		}
+		expected[normalized] = struct{}{}
+	}
+	return expected
 }
 
 // decodeMessageText 从飞书消息 content JSON 中提取文本内容。

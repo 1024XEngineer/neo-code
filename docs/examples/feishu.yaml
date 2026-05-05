@@ -5,7 +5,6 @@ feishu:
   verify_token: "verify_token_xxx"
   signing_secret: "signing_secret_xxx"
   insecure_skip_signature_verify: false
-  callback_base_url: "https://example.com"
   adapter:
     listen: "127.0.0.1:18080"
     event_path: "/feishu/events"

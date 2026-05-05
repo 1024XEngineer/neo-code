@@ -212,12 +212,13 @@ func TestGroupMessageWithoutMentionIgnored(t *testing.T) {
 
 func TestGroupMessageWithMentionAccepted(t *testing.T) {
 	adapter := newTestAdapter(t)
-	content, _ := json.Marshal(map[string]string{"text": "<at user_id=\"ou_xxx\">neo</at> hi"})
+	content, _ := json.Marshal(map[string]string{"text": "<at user_id=\"app\">neo</at> hi"})
 	payload := map[string]any{
 		"header": map[string]any{
 			"event_id":   "evt-group-mention",
 			"event_type": "im.message.receive_v1",
 			"token":      "verify",
+			"app_id":     "app",
 		},
 		"event": map[string]any{
 			"message": map[string]any{
@@ -226,7 +227,12 @@ func TestGroupMessageWithMentionAccepted(t *testing.T) {
 				"chat_type":  "group",
 				"content":    string(content),
 				"mentions": []map[string]any{
-					{"name": "neo", "key": "@_user_1"},
+					{
+						"name": "neo",
+						"id": map[string]any{
+							"user_id": "app",
+						},
+					},
 				},
 			},
 		},
@@ -240,6 +246,45 @@ func TestGroupMessageWithMentionAccepted(t *testing.T) {
 	}
 	if adapterTestGateway(adapter).runCount != 1 {
 		t.Fatalf("run count = %d, want 1", adapterTestGateway(adapter).runCount)
+	}
+}
+
+func TestGroupMessageWithNonBotMentionIgnored(t *testing.T) {
+	adapter := newTestAdapter(t)
+	content, _ := json.Marshal(map[string]string{"text": "<at user_id=\"ou_other\">alice</at> hi"})
+	payload := map[string]any{
+		"header": map[string]any{
+			"event_id":   "evt-group-non-bot-mention",
+			"event_type": "im.message.receive_v1",
+			"token":      "verify",
+			"app_id":     "app",
+		},
+		"event": map[string]any{
+			"message": map[string]any{
+				"message_id": "msg-group-non-bot-mention",
+				"chat_id":    "chat-group-non-bot-mention",
+				"chat_type":  "group",
+				"content":    string(content),
+				"mentions": []map[string]any{
+					{
+						"name": "alice",
+						"id": map[string]any{
+							"user_id": "ou_other",
+						},
+					},
+				},
+			},
+		},
+	}
+	raw, _ := json.Marshal(payload)
+	request := signedRequest(t, adapter.cfg.SigningSecret, string(raw))
+	recorder := httptest.NewRecorder()
+	adapter.handleFeishuEvent(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", recorder.Code)
+	}
+	if adapterTestGateway(adapter).runCount != 0 {
+		t.Fatalf("run count = %d, want 0", adapterTestGateway(adapter).runCount)
 	}
 }
 
@@ -293,6 +338,32 @@ func TestGatewayEventsMappedToMessagesAndPermissionCard(t *testing.T) {
 	}
 	if !foundCard {
 		t.Fatalf("expected permission card message, got %#v", msgs)
+	}
+}
+
+func TestRunTerminalEventUntracksActiveRun(t *testing.T) {
+	adapter := newTestAdapter(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go adapter.consumeGatewayEvents(ctx)
+
+	sessionID := BuildSessionID("chat-cleanup")
+	runID := BuildRunID("msg-cleanup")
+	adapter.trackSession(sessionID, runID, "chat-cleanup")
+
+	pushGatewayEvent(t, adapterTestGateway(adapter), sessionID, runID, "run_done", map[string]any{
+		"runtime_event_type": "agent_done",
+		"payload": map[string]any{
+			"content": "done",
+		},
+	})
+	time.Sleep(30 * time.Millisecond)
+
+	adapter.mu.RLock()
+	_, exists := adapter.activeRuns[runBindingKey(sessionID, runID)]
+	adapter.mu.RUnlock()
+	if exists {
+		t.Fatalf("expected run binding cleaned after terminal event")
 	}
 }
 
@@ -418,6 +489,32 @@ func TestReconnectRebindActiveSessions(t *testing.T) {
 	calls := strings.Join(gw.snapshotCalls(), "|")
 	if !strings.Contains(calls, "bind:session-a:run-a") {
 		t.Fatalf("expected rebind call in %v", calls)
+	}
+}
+
+func TestReconnectRebindTracksMultipleRunsPerSession(t *testing.T) {
+	adapter := newTestAdapter(t)
+	gw := adapterTestGateway(adapter)
+	gw.pingErr = assertErr("dial failed")
+	adapter.trackSession("session-x", "run-a", "chat-x")
+	adapter.trackSession("session-x", "run-b", "chat-x")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go adapter.reconnectAndRebindLoop(ctx)
+	time.Sleep(30 * time.Millisecond)
+	gw.mu.Lock()
+	gw.pingErr = nil
+	gw.mu.Unlock()
+	time.Sleep(80 * time.Millisecond)
+	cancel()
+	time.Sleep(20 * time.Millisecond)
+
+	calls := strings.Join(gw.snapshotCalls(), "|")
+	if !strings.Contains(calls, "bind:session-x:run-a") {
+		t.Fatalf("expected run-a rebind call in %v", calls)
+	}
+	if !strings.Contains(calls, "bind:session-x:run-b") {
+		t.Fatalf("expected run-b rebind call in %v", calls)
 	}
 }
 

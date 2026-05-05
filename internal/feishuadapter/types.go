@@ -18,7 +18,6 @@ type Config struct {
 	VerifyToken            string
 	SigningSecret          string
 	InsecureSkipSignVerify bool
-	CallbackBaseURL        string
 	RequestTimeout         time.Duration
 	IdempotencyTTL         time.Duration
 	ReconnectBackoffMin    time.Duration
@@ -110,6 +109,7 @@ type inboundHeader struct {
 	EventID   string `json:"event_id,omitempty"`
 	EventType string `json:"event_type,omitempty"`
 	Token     string `json:"token,omitempty"`
+	AppID     string `json:"app_id,omitempty"`
 }
 
 // inboundMessageEvent 表示消息回调事件最小结构。
@@ -129,8 +129,17 @@ type inboundMessage struct {
 
 // inboundMention 表示群聊消息中的 @ 信息。
 type inboundMention struct {
-	Name string `json:"name,omitempty"`
-	Key  string `json:"key,omitempty"`
+	Name string           `json:"name,omitempty"`
+	Key  string           `json:"key,omitempty"`
+	ID   inboundMentionID `json:"id,omitempty"`
+}
+
+// inboundMentionID 表示消息 @ 目标身份信息，用于判断是否 @ 到当前机器人应用。
+type inboundMentionID struct {
+	OpenID  string `json:"open_id,omitempty"`
+	UserID  string `json:"user_id,omitempty"`
+	UnionID string `json:"union_id,omitempty"`
+	AppID   string `json:"app_id,omitempty"`
 }
 
 // inboundMessageContent 表示消息 JSON 内容中的文本字段。

@@ -60,9 +60,6 @@ feishu:
   signing_secret: "xxx"
   insecure_skip_signature_verify: false
 
-  # 对外可访问的 HTTPS 前缀（ngrok/cloudflared 分配的地址）
-  callback_base_url: "https://xxxx.ngrok-free.app"
-
   adapter:
     listen: "127.0.0.1:19080"
     event_path: "/feishu/events"

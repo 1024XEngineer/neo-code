@@ -173,6 +173,9 @@ func buildConfiguredHookSpec(
 	scope runtimehooks.HookScope,
 	source runtimehooks.HookSource,
 ) (runtimehooks.HookSpec, error) {
+	if err := validateConfiguredHookItemForP6Lite(item, scope); err != nil {
+		return runtimehooks.HookSpec{}, err
+	}
 	handler, err := buildUserBuiltinHookHandler(strings.TrimSpace(item.Handler), item.Params, defaultWorkdir)
 	if err != nil {
 		return runtimehooks.HookSpec{}, err
@@ -189,6 +192,41 @@ func buildConfiguredHookSpec(
 		FailurePolicy: mapRuntimeHookFailurePolicy(item.FailurePolicy),
 		Handler:       handler,
 	}, nil
+}
+
+// validateConfiguredHookItemForP6Lite 在 runtime 装配阶段执行兜底校验，防止绕过配置层校验后出现半生效。
+func validateConfiguredHookItemForP6Lite(item config.RuntimeHookItemConfig, scope runtimehooks.HookScope) error {
+	expectedScope := strings.TrimSpace(string(scope))
+	actualScope := strings.ToLower(strings.TrimSpace(item.Scope))
+	if actualScope != expectedScope {
+		return fmt.Errorf("scope %q is not supported", item.Scope)
+	}
+
+	kind := strings.ToLower(strings.TrimSpace(item.Kind))
+	if kind != "builtin" {
+		if isExternalHookKind(kind) {
+			return fmt.Errorf(
+				"external hook kind %q is not supported in P6-lite; only builtin hooks are enabled",
+				item.Kind,
+			)
+		}
+		return fmt.Errorf("kind %q is not supported", item.Kind)
+	}
+
+	mode := strings.ToLower(strings.TrimSpace(item.Mode))
+	if mode != "sync" {
+		return fmt.Errorf("mode %q is not supported", item.Mode)
+	}
+	return nil
+}
+
+func isExternalHookKind(kind string) bool {
+	switch strings.ToLower(strings.TrimSpace(kind)) {
+	case "command", "http", "prompt", "agent":
+		return true
+	default:
+		return false
+	}
 }
 
 func mapRuntimeHookFailurePolicy(policy string) runtimehooks.FailurePolicy {

@@ -32,7 +32,6 @@ type FeishuConfig struct {
 	VerifyToken            string                    `yaml:"verify_token,omitempty"`
 	SigningSecret          string                    `yaml:"signing_secret,omitempty"`
 	InsecureSkipSignVerify bool                      `yaml:"insecure_skip_signature_verify,omitempty"`
-	CallbackBaseURL        string                    `yaml:"callback_base_url,omitempty"`
 	Adapter                FeishuAdapterConfig       `yaml:"adapter,omitempty"`
 	GatewayClient          FeishuGatewayClientConfig `yaml:"gateway,omitempty"`
 	RequestTimeoutSec      int                       `yaml:"request_timeout_sec,omitempty"`

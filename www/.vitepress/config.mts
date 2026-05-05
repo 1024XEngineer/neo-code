@@ -106,6 +106,7 @@ export default defineConfig({
                 { text: "MCP 工具接入", link: "/guide/mcp" },
                 { text: "Skills 使用", link: "/guide/skills" },
                 { text: "飞书远程接入配置", link: "/guide/feishu-remote-setup" },
+                { text: "Hooks 使用", link: "/guide/hooks" },
               ],
             },
             {

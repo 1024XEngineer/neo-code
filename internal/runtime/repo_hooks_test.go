@@ -261,6 +261,72 @@ hooks:
 	}
 }
 
+func TestRepoHookExecutionEventCarriesRepoSource(t *testing.T) {
+	homeDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+	workspace := t.TempDir()
+	hooksPath := filepath.Join(workspace, ".neocode", "hooks.yaml")
+	if err := os.MkdirAll(filepath.Dir(hooksPath), 0o755); err != nil {
+		t.Fatalf("mkdir hooks dir: %v", err)
+	}
+	content := `
+hooks:
+  items:
+    - id: repo-note
+      point: before_tool_call
+      scope: repo
+      kind: builtin
+      mode: sync
+      handler: add_context_note
+      params:
+        note: repo-note
+`
+	if err := os.WriteFile(hooksPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write hooks: %v", err)
+	}
+	storePath := resolveTrustedWorkspacesPath()
+	if err := os.MkdirAll(filepath.Dir(storePath), 0o755); err != nil {
+		t.Fatalf("mkdir trust store dir: %v", err)
+	}
+	rawStore, err := json.Marshal(trustedWorkspaceStore{
+		Version:    repoHooksTrustStoreVersion,
+		Workspaces: []string{workspace},
+	})
+	if err != nil {
+		t.Fatalf("marshal trust store: %v", err)
+	}
+	if err := os.WriteFile(storePath, rawStore, 0o644); err != nil {
+		t.Fatalf("write trust store: %v", err)
+	}
+
+	service := &Service{events: make(chan RuntimeEvent, 64)}
+	exec, err := buildRepoHookExecutorForWorkspace(service, workspace, config.StaticDefaults().Runtime.Hooks)
+	if err != nil {
+		t.Fatalf("buildRepoHookExecutorForWorkspace() error = %v", err)
+	}
+	if exec == nil {
+		t.Fatal("expected repo executor for trusted workspace")
+	}
+	_ = exec.Run(
+		context.Background(),
+		runtimehooks.HookPointBeforeToolCall,
+		runtimehooks.HookContext{Metadata: map[string]any{"tool_name": "bash", "workdir": workspace}},
+	)
+
+	events := collectRuntimeEvents(service.Events())
+	finishedIndex := eventIndex(events, EventHookFinished)
+	if finishedIndex < 0 {
+		t.Fatal("expected hook_finished event from repo hook execution")
+	}
+	payload, ok := events[finishedIndex].Payload.(HookEventPayload)
+	if !ok {
+		t.Fatalf("payload type = %T, want HookEventPayload", events[finishedIndex].Payload)
+	}
+	if payload.Source != string(runtimehooks.HookSourceRepo) {
+		t.Fatalf("payload.Source = %q, want %q", payload.Source, runtimehooks.HookSourceRepo)
+	}
+}
+
 func TestBuildRepoHookExecutorMissingTrustStoreEmitsInvalidEvent(t *testing.T) {
 	homeDir := t.TempDir()
 	t.Setenv("HOME", homeDir)
@@ -300,6 +366,57 @@ hooks:
 	}
 	if !containsRuntimeEventType(events, EventRepoHooksSkippedUntrusted) {
 		t.Fatalf("expected %s event", EventRepoHooksSkippedUntrusted)
+	}
+}
+
+func TestBuildRepoHookExecutorRejectsExternalKindAndDoesNotRegister(t *testing.T) {
+	homeDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+	workspace := t.TempDir()
+	hooksPath := filepath.Join(workspace, ".neocode", "hooks.yaml")
+	if err := os.MkdirAll(filepath.Dir(hooksPath), 0o755); err != nil {
+		t.Fatalf("mkdir hooks dir: %v", err)
+	}
+	content := `
+hooks:
+  items:
+    - id: repo-external-command
+      point: before_tool_call
+      scope: repo
+      kind: command
+      mode: sync
+      handler: warn_on_tool_call
+      params:
+        tool_name: bash
+`
+	if err := os.WriteFile(hooksPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write hooks: %v", err)
+	}
+	storePath := resolveTrustedWorkspacesPath()
+	if err := os.MkdirAll(filepath.Dir(storePath), 0o755); err != nil {
+		t.Fatalf("mkdir trust store dir: %v", err)
+	}
+	rawStore, err := json.Marshal(trustedWorkspaceStore{
+		Version:    repoHooksTrustStoreVersion,
+		Workspaces: []string{workspace},
+	})
+	if err != nil {
+		t.Fatalf("marshal trust store: %v", err)
+	}
+	if err := os.WriteFile(storePath, rawStore, 0o644); err != nil {
+		t.Fatalf("write trust store: %v", err)
+	}
+
+	service := &Service{events: make(chan RuntimeEvent, 16)}
+	exec, err := buildRepoHookExecutorForWorkspace(service, workspace, config.StaticDefaults().Runtime.Hooks)
+	if err == nil {
+		t.Fatal("expected external kind in repo hook config to be rejected")
+	}
+	if !strings.Contains(err.Error(), "not supported in P6-lite") {
+		t.Fatalf("error=%q, want contains not supported in P6-lite", err.Error())
+	}
+	if exec != nil {
+		t.Fatalf("unexpected repo executor after rejection: %T", exec)
 	}
 }
 
@@ -443,6 +560,37 @@ func TestValidateRepoHookItemBranches(t *testing.T) {
 			tc.edit(&item)
 			if err := validateRepoHookItem(item); err == nil {
 				t.Fatalf("validateRepoHookItem(%s) expected error", tc.name)
+			}
+		})
+	}
+}
+
+func TestValidateRepoHookItemRejectsExternalKindsWithP6LiteMessage(t *testing.T) {
+	t.Parallel()
+
+	base := config.RuntimeHookItemConfig{
+		ID:            "repo-hook",
+		Point:         "before_tool_call",
+		Scope:         "repo",
+		Kind:          "builtin",
+		Mode:          "sync",
+		Handler:       "add_context_note",
+		TimeoutSec:    2,
+		FailurePolicy: "warn_only",
+		Params:        map[string]any{"note": "x"},
+	}
+	externalKinds := []string{"command", "http", "prompt", "agent"}
+	for _, kind := range externalKinds {
+		kind := kind
+		t.Run(kind, func(t *testing.T) {
+			item := base.Clone()
+			item.Kind = kind
+			err := validateRepoHookItem(item)
+			if err == nil {
+				t.Fatalf("expected external kind %q to be rejected", kind)
+			}
+			if !strings.Contains(err.Error(), "not supported in P6-lite") {
+				t.Fatalf("error=%q, want contains not supported in P6-lite", err.Error())
 			}
 		})
 	}

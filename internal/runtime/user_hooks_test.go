@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"neo-code/internal/config"
+	providertypes "neo-code/internal/provider/types"
 	runtimehooks "neo-code/internal/runtime/hooks"
 )
 
@@ -562,6 +563,31 @@ func TestConfigureRuntimeHooksFromConfigNoEnabledUserItemsKeepsRepoCapableExecut
 	}
 }
 
+func TestConfigureRuntimeHooksWithoutItemsKeepsBehaviorUnchanged(t *testing.T) {
+	t.Parallel()
+
+	cfg := *config.StaticDefaults()
+	cfg.Workdir = t.TempDir()
+	cfg.Runtime.Hooks.Items = nil
+	cfg.Runtime.Hooks.ApplyDefaults(config.StaticDefaults().Runtime.Hooks)
+
+	service := &Service{events: make(chan RuntimeEvent, 8)}
+	if err := configureRuntimeHooksFromConfig(service, cfg); err != nil {
+		t.Fatalf("configureRuntimeHooksFromConfig() error = %v", err)
+	}
+	if service.hookExecutor == nil {
+		t.Fatal("expected runtime hooks chain to remain available for repo discovery")
+	}
+	out := service.hookExecutor.Run(
+		context.Background(),
+		runtimehooks.HookPointBeforeToolCall,
+		runtimehooks.HookContext{Metadata: map[string]any{"tool_name": "bash", "workdir": cfg.Workdir}},
+	)
+	if out.Blocked || len(out.Results) != 0 {
+		t.Fatalf("unexpected hook output without user/repo config: %+v", out)
+	}
+}
+
 func TestBuildUserBuiltinHookHandlerEdgeCases(t *testing.T) {
 	t.Parallel()
 
@@ -625,6 +651,113 @@ func TestBuildUserBuiltinHookHandlerEdgeCases(t *testing.T) {
 	}
 	_ = defaultWorkdirHandler(context.Background(), runtimehooks.HookContext{Metadata: map[string]any{"workdir": ""}})
 
+}
+
+func TestConfigureRuntimeHooksRejectsExternalKindAndDoesNotRegister(t *testing.T) {
+	t.Parallel()
+
+	cfg := *config.StaticDefaults()
+	cfg.Workdir = t.TempDir()
+	cfg.Runtime.Hooks.Items = []config.RuntimeHookItemConfig{
+		{
+			ID:      "external-command",
+			Enabled: runtimeBoolPtr(true),
+			Point:   "before_tool_call",
+			Scope:   "user",
+			Kind:    "command",
+			Mode:    "sync",
+			Handler: "warn_on_tool_call",
+			Params:  map[string]any{"tool_name": "bash"},
+		},
+	}
+	cfg.Runtime.Hooks.ApplyDefaults(config.StaticDefaults().Runtime.Hooks)
+
+	service := &Service{events: make(chan RuntimeEvent, 8)}
+	err := configureRuntimeHooksFromConfig(service, cfg)
+	if err == nil {
+		t.Fatal("expected external kind to be rejected")
+	}
+	if !strings.Contains(err.Error(), "not supported in P6-lite") {
+		t.Fatalf("error=%q, want contains not supported in P6-lite", err.Error())
+	}
+	if service.hookExecutor != nil {
+		t.Fatalf("unexpected hook executor after external kind rejection: %T", service.hookExecutor)
+	}
+}
+
+func TestUserBuiltinHookConfiguredEndToEndOnUserPromptSubmit(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	if err := manager.Update(context.Background(), func(cfg *config.Config) error {
+		cfg.Runtime.Hooks.Items = []config.RuntimeHookItemConfig{
+			{
+				ID:      "user-context-note",
+				Enabled: runtimeBoolPtr(true),
+				Point:   "user_prompt_submit",
+				Scope:   "user",
+				Kind:    "builtin",
+				Mode:    "sync",
+				Handler: "add_context_note",
+				Params:  map[string]any{"note": "user note from config"},
+			},
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("update runtime hook config: %v", err)
+	}
+
+	store := newMemoryStore()
+	scripted := &scriptedProvider{
+		streams: [][]providertypes.StreamEvent{
+			{
+				providertypes.NewTextDeltaStreamEvent("ok"),
+				providertypes.NewMessageDoneStreamEvent("", nil),
+			},
+		},
+	}
+	service := NewWithFactory(
+		manager,
+		&stubToolManager{},
+		store,
+		&scriptedProviderFactory{provider: scripted},
+		&stubContextBuilder{},
+	)
+	if err := configureRuntimeHooksFromConfig(service, manager.Get()); err != nil {
+		t.Fatalf("configureRuntimeHooksFromConfig() error = %v", err)
+	}
+	if err := service.Run(context.Background(), UserInput{
+		RunID: "run-user-hook-user-prompt-submit",
+		Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")},
+	}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	events := collectRuntimeEvents(service.Events())
+	found := false
+	for _, evt := range events {
+		if evt.Type != EventHookFinished {
+			continue
+		}
+		payload, ok := evt.Payload.(HookEventPayload)
+		if !ok {
+			continue
+		}
+		if payload.Point != string(runtimehooks.HookPointUserPromptSubmit) {
+			continue
+		}
+		if payload.Source != string(runtimehooks.HookSourceUser) {
+			t.Fatalf("payload.Source = %q, want %q", payload.Source, runtimehooks.HookSourceUser)
+		}
+		if payload.Message != "user note from config" {
+			t.Fatalf("payload.Message = %q, want %q", payload.Message, "user note from config")
+		}
+		found = true
+		break
+	}
+	if !found {
+		t.Fatal("expected user_prompt_submit hook_finished event from user config hook")
+	}
 }
 
 func TestConfigureRuntimeHooksInjectsAsyncResultSinkIntoBaseExecutor(t *testing.T) {

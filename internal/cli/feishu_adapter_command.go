@@ -29,7 +29,6 @@ type feishuAdapterCommandOptions struct {
 	VerifyToken            string
 	SigningSecret          string
 	InsecureSkipSignVerify bool
-	CallbackBaseURL        string
 	IdempotencyTTLSec      int
 	RequestTimeoutSec      int
 	ReconnectBackoffMinM   int
@@ -64,7 +63,6 @@ func newFeishuAdapterCommand() *cobra.Command {
 	cmd.Flags().StringVar(&options.VerifyToken, "verify-token", "", "feishu verify token")
 	cmd.Flags().StringVar(&options.SigningSecret, "signing-secret", "", "feishu signing secret")
 	cmd.Flags().BoolVar(&options.InsecureSkipSignVerify, "insecure-skip-signature-verify", false, "skip feishu callback signature verification (unsafe)")
-	cmd.Flags().StringVar(&options.CallbackBaseURL, "callback-base-url", "", "feishu callback base url")
 	cmd.Flags().IntVar(&options.IdempotencyTTLSec, "idempotency-ttl-sec", 0, "idempotency ttl in seconds")
 	cmd.Flags().IntVar(&options.RequestTimeoutSec, "request-timeout-sec", 0, "gateway request timeout in seconds")
 	cmd.Flags().IntVar(&options.ReconnectBackoffMinM, "reconnect-backoff-min-ms", 0, "gateway reconnect min backoff in ms")
@@ -116,7 +114,6 @@ type mergedFeishuOptions struct {
 	VerifyToken            string
 	SigningSecret          string
 	InsecureSkipSignVerify bool
-	CallbackBaseURL        string
 	IdempotencyTTLSec      int
 	RequestTimeoutSec      int
 	ReconnectBackoffMinMs  int
@@ -143,7 +140,6 @@ func (o mergedFeishuOptions) ToAdapterConfig() feishuadapter.Config {
 		VerifyToken:            o.VerifyToken,
 		SigningSecret:          o.SigningSecret,
 		InsecureSkipSignVerify: o.InsecureSkipSignVerify,
-		CallbackBaseURL:        o.CallbackBaseURL,
 		RequestTimeout:         time.Duration(o.RequestTimeoutSec) * time.Second,
 		IdempotencyTTL:         time.Duration(o.IdempotencyTTLSec) * time.Second,
 		ReconnectBackoffMin:    time.Duration(o.ReconnectBackoffMinMs) * time.Millisecond,
@@ -176,7 +172,6 @@ func mergeFeishuOptions(feishuCfg config.FeishuConfig, cliOptions feishuAdapterC
 		VerifyToken:            strings.TrimSpace(feishuCfg.VerifyToken),
 		SigningSecret:          strings.TrimSpace(feishuCfg.SigningSecret),
 		InsecureSkipSignVerify: feishuCfg.InsecureSkipSignVerify,
-		CallbackBaseURL:        strings.TrimSpace(feishuCfg.CallbackBaseURL),
 		IdempotencyTTLSec:      feishuCfg.IdempotencyTTLSec,
 		RequestTimeoutSec:      feishuCfg.RequestTimeoutSec,
 		ReconnectBackoffMinMs:  feishuCfg.ReconnectBackoffMinM,
@@ -217,9 +212,6 @@ func mergeFeishuOptions(feishuCfg config.FeishuConfig, cliOptions feishuAdapterC
 	}
 	if cliOptions.InsecureSkipSignVerify {
 		merged.InsecureSkipSignVerify = true
-	}
-	if value := strings.TrimSpace(cliOptions.CallbackBaseURL); value != "" {
-		merged.CallbackBaseURL = value
 	}
 	if cliOptions.IdempotencyTTLSec > 0 {
 		merged.IdempotencyTTLSec = cliOptions.IdempotencyTTLSec

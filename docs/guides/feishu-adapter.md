@@ -17,8 +17,8 @@
 
 ## 2. 会话与运行 ID 规则
 
-- `session_id = "feishu:" + stableHash(chat_id)`
-- `run_id = "feishu:" + stableHash(message_id)`
+- `session_id = "feishu_" + stableHash(chat_id)`
+- `run_id = "feishu_" + stableHash(message_id)`
 
 这两个 ID 都是确定性生成，便于幂等和追踪。
 

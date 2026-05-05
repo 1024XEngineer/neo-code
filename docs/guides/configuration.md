@@ -179,10 +179,23 @@ trust store 示例：
 
 - `runtime.hooks.enabled=false` 会关闭全部 hooks（internal/user/repo）。
 - repo hooks 仅支持 builtin 子集（上述 points + 3 个 handlers）。
+- P6-lite 阶段会显式拒绝 external kinds（`command/http/prompt/agent`），报错并且不会注册执行。
 - 执行顺序固定：`internal -> user -> repo`。
 - 跨来源同 ID 允许并存；同来源内重复 ID 会报错。
 - trust store 缺失/空文件/损坏 JSON/结构错误时，按 untrusted 处理并发出 `repo_hooks_trust_store_invalid` 事件，不阻断启动。
 - `before_permission_decision` / `pre_compact` / `subagent_start` 不允许 user/repo 挂载，配置会 fail-fast。
+
+完整仓库级示例见：
+
+```text
+docs/examples/hooks.yaml
+```
+
+全局 user hooks 示例见：
+
+```text
+docs/examples/user-hooks-config.yaml
+```
 
 ## Budget 解析规则
 
@@ -341,7 +354,6 @@ feishu:
   verify_token: "verify_token_xxx"
   signing_secret: "signing_secret_xxx"
   insecure_skip_signature_verify: false
-  callback_base_url: "https://example.com"
   adapter:
     listen: "127.0.0.1:18080"
     event_path: "/feishu/events"
