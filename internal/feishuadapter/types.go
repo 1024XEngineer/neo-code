@@ -112,12 +112,24 @@ type GatewayClient interface {
 type Messenger interface {
 	SendText(ctx context.Context, chatID string, text string) error
 	SendPermissionCard(ctx context.Context, chatID string, payload PermissionCardPayload) error
+	SendStatusCard(ctx context.Context, chatID string, payload StatusCardPayload) (string, error)
+	UpdateCard(ctx context.Context, cardID string, payload StatusCardPayload) error
 }
 
 // PermissionCardPayload 表示最小审批卡片的关键字段。
 type PermissionCardPayload struct {
 	RequestID string
 	Message   string
+}
+
+// StatusCardPayload 表示 run 状态卡片的展示字段。
+type StatusCardPayload struct {
+	TaskName        string
+	Status          string
+	ApprovalStatus  string
+	Result          string
+	Summary         string
+	AsyncRewakeHint string
 }
 
 // inboundEnvelope 表示飞书回调统一信封。

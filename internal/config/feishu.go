@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"os"
 	"strings"
 )
 
@@ -26,6 +27,10 @@ const (
 	DefaultFeishuReconnectBackoffMaxMs = 10000
 	// DefaultFeishuRebindIntervalSec 定义飞书适配器重绑会话默认间隔秒数。
 	DefaultFeishuRebindIntervalSec = 15
+	// FeishuAppSecretEnvVar 定义飞书应用密钥固定环境变量名。
+	FeishuAppSecretEnvVar = "FEISHU_APP_SECRET"
+	// FeishuSigningSecretEnvVar 定义飞书签名密钥固定环境变量名。
+	FeishuSigningSecretEnvVar = "FEISHU_SIGNING_SECRET"
 )
 
 // FeishuConfig 表示飞书适配器配置。
@@ -33,11 +38,11 @@ type FeishuConfig struct {
 	Enabled                bool                      `yaml:"enabled,omitempty"`
 	Ingress                string                    `yaml:"ingress,omitempty"`
 	AppID                  string                    `yaml:"app_id,omitempty"`
-	AppSecret              string                    `yaml:"app_secret,omitempty"`
+	AppSecret              string                    `yaml:"-"`
 	BotUserID              string                    `yaml:"bot_user_id,omitempty"`
 	BotOpenID              string                    `yaml:"bot_open_id,omitempty"`
 	VerifyToken            string                    `yaml:"verify_token,omitempty"`
-	SigningSecret          string                    `yaml:"signing_secret,omitempty"`
+	SigningSecret          string                    `yaml:"-"`
 	InsecureSkipSignVerify bool                      `yaml:"insecure_skip_signature_verify,omitempty"`
 	Adapter                FeishuAdapterConfig       `yaml:"adapter,omitempty"`
 	GatewayClient          FeishuGatewayClientConfig `yaml:"gateway,omitempty"`
@@ -132,15 +137,15 @@ func (c FeishuConfig) Validate() error {
 	if strings.TrimSpace(c.AppID) == "" {
 		return fmt.Errorf("app_id is required when feishu.enabled=true")
 	}
-	if strings.TrimSpace(c.AppSecret) == "" {
-		return fmt.Errorf("app_secret is required when feishu.enabled=true")
+	if strings.TrimSpace(resolveFeishuSecret(c.AppSecret, FeishuAppSecretEnvVar)) == "" {
+		return fmt.Errorf("%s is required when feishu.enabled=true", FeishuAppSecretEnvVar)
 	}
 	if ingress == FeishuIngressWebhook {
 		if strings.TrimSpace(c.VerifyToken) == "" {
 			return fmt.Errorf("verify_token is required when feishu.enabled=true and ingress=webhook")
 		}
-		if !c.InsecureSkipSignVerify && strings.TrimSpace(c.SigningSecret) == "" {
-			return fmt.Errorf("signing_secret is required when feishu.enabled=true and ingress=webhook unless insecure_skip_signature_verify=true")
+		if !c.InsecureSkipSignVerify && strings.TrimSpace(resolveFeishuSecret(c.SigningSecret, FeishuSigningSecretEnvVar)) == "" {
+			return fmt.Errorf("%s is required when feishu.enabled=true and ingress=webhook unless insecure_skip_signature_verify=true", FeishuSigningSecretEnvVar)
 		}
 		if strings.TrimSpace(c.Adapter.Listen) == "" {
 			return fmt.Errorf("adapter.listen is required when feishu.enabled=true and ingress=webhook")
@@ -168,4 +173,12 @@ func (c FeishuConfig) Validate() error {
 		return fmt.Errorf("rebind_interval_sec must be greater than 0")
 	}
 	return nil
+}
+
+// resolveFeishuSecret 按运行时优先级解析飞书密钥，允许启动流程先注入内存值，再回退到固定环境变量。
+func resolveFeishuSecret(current string, envName string) string {
+	if strings.TrimSpace(current) != "" {
+		return strings.TrimSpace(current)
+	}
+	return strings.TrimSpace(os.Getenv(envName))
 }

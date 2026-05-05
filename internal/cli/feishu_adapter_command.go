@@ -26,11 +26,9 @@ type feishuAdapterCommandOptions struct {
 	EventPath              string
 	CardPath               string
 	AppID                  string
-	AppSecret              string
 	BotUserID              string
 	BotOpenID              string
 	VerifyToken            string
-	SigningSecret          string
 	InsecureSkipSignVerify bool
 	IdempotencyTTLSec      int
 	RequestTimeoutSec      int
@@ -63,11 +61,9 @@ func newFeishuAdapterCommand() *cobra.Command {
 	cmd.Flags().StringVar(&options.EventPath, "event-path", "", "feishu event callback path")
 	cmd.Flags().StringVar(&options.CardPath, "card-path", "", "feishu card callback path")
 	cmd.Flags().StringVar(&options.AppID, "app-id", "", "feishu app id")
-	cmd.Flags().StringVar(&options.AppSecret, "app-secret", "", "feishu app secret")
 	cmd.Flags().StringVar(&options.BotUserID, "bot-user-id", "", "feishu bot user id for group mention matching")
 	cmd.Flags().StringVar(&options.BotOpenID, "bot-open-id", "", "feishu bot open id for group mention matching")
 	cmd.Flags().StringVar(&options.VerifyToken, "verify-token", "", "feishu verify token")
-	cmd.Flags().StringVar(&options.SigningSecret, "signing-secret", "", "feishu signing secret")
 	cmd.Flags().BoolVar(&options.InsecureSkipSignVerify, "insecure-skip-signature-verify", false, "skip feishu callback signature verification (unsafe)")
 	cmd.Flags().IntVar(&options.IdempotencyTTLSec, "idempotency-ttl-sec", 0, "idempotency ttl in seconds")
 	cmd.Flags().IntVar(&options.RequestTimeoutSec, "request-timeout-sec", 0, "gateway request timeout in seconds")
@@ -88,6 +84,9 @@ func defaultFeishuAdapterCommandRunner(ctx context.Context, options feishuAdapte
 		return err
 	}
 	merged := mergeFeishuOptions(cfg.Feishu, options, cfg.Gateway)
+	if err := injectFeishuSecretsFromEnv(&merged); err != nil {
+		return err
+	}
 	if err := merged.Validate(); err != nil {
 		return err
 	}
@@ -182,11 +181,9 @@ func mergeFeishuOptions(feishuCfg config.FeishuConfig, cliOptions feishuAdapterC
 		EventPath:              strings.TrimSpace(feishuCfg.Adapter.EventURI),
 		CardPath:               strings.TrimSpace(feishuCfg.Adapter.CardURI),
 		AppID:                  strings.TrimSpace(feishuCfg.AppID),
-		AppSecret:              strings.TrimSpace(feishuCfg.AppSecret),
 		BotUserID:              strings.TrimSpace(feishuCfg.BotUserID),
 		BotOpenID:              strings.TrimSpace(feishuCfg.BotOpenID),
 		VerifyToken:            strings.TrimSpace(feishuCfg.VerifyToken),
-		SigningSecret:          strings.TrimSpace(feishuCfg.SigningSecret),
 		InsecureSkipSignVerify: feishuCfg.InsecureSkipSignVerify,
 		IdempotencyTTLSec:      feishuCfg.IdempotencyTTLSec,
 		RequestTimeoutSec:      feishuCfg.RequestTimeoutSec,
@@ -220,9 +217,6 @@ func mergeFeishuOptions(feishuCfg config.FeishuConfig, cliOptions feishuAdapterC
 	if value := strings.TrimSpace(cliOptions.AppID); value != "" {
 		merged.AppID = value
 	}
-	if value := strings.TrimSpace(cliOptions.AppSecret); value != "" {
-		merged.AppSecret = value
-	}
 	if value := strings.TrimSpace(cliOptions.BotUserID); value != "" {
 		merged.BotUserID = value
 	}
@@ -231,9 +225,6 @@ func mergeFeishuOptions(feishuCfg config.FeishuConfig, cliOptions feishuAdapterC
 	}
 	if value := strings.TrimSpace(cliOptions.VerifyToken); value != "" {
 		merged.VerifyToken = value
-	}
-	if value := strings.TrimSpace(cliOptions.SigningSecret); value != "" {
-		merged.SigningSecret = value
 	}
 	if cliOptions.InsecureSkipSignVerify {
 		merged.InsecureSkipSignVerify = true
@@ -260,4 +251,24 @@ func mergeFeishuOptions(feishuCfg config.FeishuConfig, cliOptions feishuAdapterC
 		merged.GatewayTokenFile = value
 	}
 	return merged
+}
+
+// injectFeishuSecretsFromEnv 从固定环境变量读取飞书密钥，避免用户把明文 secret 持久化进配置文件。
+func injectFeishuSecretsFromEnv(options *mergedFeishuOptions) error {
+	if options == nil {
+		return fmt.Errorf("feishu options are required")
+	}
+	appSecret, ok := os.LookupEnv(config.FeishuAppSecretEnvVar)
+	if !ok || strings.TrimSpace(appSecret) == "" {
+		return fmt.Errorf("请先设置环境变量 %s", config.FeishuAppSecretEnvVar)
+	}
+	options.AppSecret = strings.TrimSpace(appSecret)
+	if strings.TrimSpace(strings.ToLower(options.Ingress)) == config.FeishuIngressWebhook && !options.InsecureSkipSignVerify {
+		signingSecret, ok := os.LookupEnv(config.FeishuSigningSecretEnvVar)
+		if !ok || strings.TrimSpace(signingSecret) == "" {
+			return fmt.Errorf("请先设置环境变量 %s", config.FeishuSigningSecretEnvVar)
+		}
+		options.SigningSecret = strings.TrimSpace(signingSecret)
+	}
+	return nil
 }

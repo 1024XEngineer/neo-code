@@ -34,9 +34,11 @@
 关键字段：
 
 - `feishu.ingress`：`webhook` 或 `sdk`，默认 `webhook`
-- `feishu.app_id` / `feishu.app_secret`
+- `feishu.app_id`
+- `FEISHU_APP_SECRET`（固定环境变量，启动时必检）
 - `feishu.bot_user_id` / `feishu.bot_open_id`（群聊 @ 命中建议至少配置一个）
-- `feishu.verify_token` / `feishu.signing_secret`（仅 `webhook` 强制）
+- `feishu.verify_token`
+- `FEISHU_SIGNING_SECRET`（仅 `webhook` 强制，固定环境变量）
 
 ## 4. 启动方式
 
@@ -59,10 +61,12 @@ neocode feishu-adapter \
 ### 4.2 SDK 模式（#557，本地无公网）
 
 ```bash
+export FEISHU_APP_SECRET="cli_secret_xxx"
 neocode feishu-adapter --ingress sdk
 ```
 
 SDK 模式下不要求公网回调地址，不要求 `adapter.listen/event_path/card_path`。
+如果缺少 `FEISHU_APP_SECRET`，启动会直接失败，避免把明文 secret 落到 `config.yaml`。
 
 ## 5. 群聊触发规则
 
@@ -75,7 +79,17 @@ SDK 模式下不要求公网回调地址，不要求 `adapter.listen/event_path/
 - 消息去重键：`event_id + message_id`
 - 卡片去重键：`request_id + decision`
 - 仅当 `gateway.run` 成功受理后才标记成功；
-- 若 `run` 失败会释放去重状态，允许飞书重试恢复。
+- 若 `run` 失败会释放去重状态，Webhook 返回 `HTTP 500`，SDK 长连接回调返回失败 ACK，允许飞书重试恢复。
+
+## 6.1 轻量级状态卡片
+
+- 每个 run 会创建一个独立状态卡片，并复用同一个 `card_id` 更新：
+  - `任务`
+  - `状态`：`thinking / planning / running`
+  - `审批`：`none / pending / approved / rejected`
+  - `结果`：`pending / success / failure`
+- `permission_requested`、`hook_notification(async_rewake)`、`run_done`、`run_error` 都会更新同一张卡片，不额外刷多条进度文本。
+- 最终完成/失败仍会回传一条用户可读文本，卡片则保留结构化状态摘要，便于下一轮继续追踪。
 
 ## 7. 审批能力边界
 

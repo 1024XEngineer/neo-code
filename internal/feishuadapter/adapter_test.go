@@ -85,15 +85,18 @@ func (f *fakeGatewayClient) snapshotCalls() []string {
 }
 
 type sentMessage struct {
-	chatID string
-	kind   string
-	text   string
-	card   PermissionCardPayload
+	chatID  string
+	kind    string
+	text    string
+	card    PermissionCardPayload
+	runCard StatusCardPayload
+	cardID  string
 }
 
 type fakeMessenger struct {
 	mu       sync.Mutex
 	messages []sentMessage
+	nextID   int
 }
 
 func (m *fakeMessenger) SendText(_ context.Context, chatID string, text string) error {
@@ -107,6 +110,22 @@ func (m *fakeMessenger) SendPermissionCard(_ context.Context, chatID string, pay
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.messages = append(m.messages, sentMessage{chatID: chatID, kind: "card", card: payload})
+	return nil
+}
+
+func (m *fakeMessenger) SendStatusCard(_ context.Context, chatID string, payload StatusCardPayload) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.nextID++
+	cardID := fmt.Sprintf("card-%d", m.nextID)
+	m.messages = append(m.messages, sentMessage{chatID: chatID, kind: "status_card", runCard: payload, cardID: cardID})
+	return cardID, nil
+}
+
+func (m *fakeMessenger) UpdateCard(_ context.Context, cardID string, payload StatusCardPayload) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.messages = append(m.messages, sentMessage{kind: "update_card", runCard: payload, cardID: cardID})
 	return nil
 }
 
@@ -183,13 +202,17 @@ func TestMessageEventRetryAfterRunFailure(t *testing.T) {
 	gateway.mu.Unlock()
 
 	body := messageEventBody("evt-retry", "msg-retry", "chat-retry", "hello")
-	for i := 0; i < 2; i++ {
-		request := signedRequest(t, adapter.cfg.SigningSecret, body)
-		recorder := httptest.NewRecorder()
-		adapter.handleFeishuEvent(recorder, request)
-		if recorder.Code != http.StatusOK {
-			t.Fatalf("status = %d, want 200", recorder.Code)
-		}
+	request := signedRequest(t, adapter.cfg.SigningSecret, body)
+	recorder := httptest.NewRecorder()
+	adapter.handleFeishuEvent(recorder, request)
+	if recorder.Code != http.StatusInternalServerError {
+		t.Fatalf("first status = %d, want 500", recorder.Code)
+	}
+	request = signedRequest(t, adapter.cfg.SigningSecret, body)
+	recorder = httptest.NewRecorder()
+	adapter.handleFeishuEvent(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("second status = %d, want 200", recorder.Code)
 	}
 	if adapterTestGateway(adapter).runCount != 2 {
 		t.Fatalf("run count = %d, want 2", adapterTestGateway(adapter).runCount)
@@ -330,7 +353,7 @@ func TestGatewayEventsMappedToMessagesAndPermissionCard(t *testing.T) {
 	defer cancel()
 	go adapter.consumeGatewayEvents(ctx)
 
-	adapter.trackSession(BuildSessionID("chat-x"), BuildRunID("msg-x"), "chat-x")
+	adapter.trackSession(BuildSessionID("chat-x"), BuildRunID("msg-x"), "chat-x", "chat-x task")
 	pushGatewayEvent(t, adapterTestGateway(adapter), BuildSessionID("chat-x"), BuildRunID("msg-x"), "run_done", map[string]any{
 		"runtime_event_type": "agent_done",
 	})
@@ -360,6 +383,91 @@ func TestGatewayEventsMappedToMessagesAndPermissionCard(t *testing.T) {
 	}
 }
 
+func TestBindThenRunCreatesStatusCard(t *testing.T) {
+	adapter := newTestAdapter(t)
+	if err := adapter.bindThenRun(context.Background(), "session-card", "run-card", "chat-card", "编写发布说明"); err != nil {
+		t.Fatalf("bindThenRun: %v", err)
+	}
+	msgs := adapterTestMessenger(adapter).snapshot()
+	found := false
+	for _, message := range msgs {
+		if message.kind == "status_card" && message.runCard.TaskName == "编写发布说明" && message.runCard.Status == "thinking" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected status card message, got %#v", msgs)
+	}
+}
+
+func TestGatewayEventsUpdateStatusCard(t *testing.T) {
+	adapter := newTestAdapter(t)
+	if err := adapter.bindThenRun(context.Background(), "session-progress", "run-progress", "chat-progress", "整理计划"); err != nil {
+		t.Fatalf("bindThenRun: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go adapter.consumeGatewayEvents(ctx)
+
+	pushGatewayEvent(t, adapterTestGateway(adapter), "session-progress", "run-progress", "run_progress", map[string]any{
+		"runtime_event_type": "phase_changed",
+		"payload": map[string]any{
+			"to": "plan",
+		},
+	})
+	pushGatewayEvent(t, adapterTestGateway(adapter), "session-progress", "run-progress", "run_progress", map[string]any{
+		"runtime_event_type": "hook_notification",
+		"payload": map[string]any{
+			"summary": "已收到异步回灌摘要",
+			"reason":  "async_rewake",
+		},
+	})
+	pushGatewayEvent(t, adapterTestGateway(adapter), "session-progress", "run-progress", "run_progress", map[string]any{
+		"runtime_event_type": "permission_requested",
+		"payload": map[string]any{
+			"request_id": "perm-status",
+			"reason":     "需要确认是否执行命令",
+		},
+	})
+	time.Sleep(30 * time.Millisecond)
+	if err := adapter.HandleCardAction(context.Background(), FeishuCardActionEvent{
+		RequestID: "perm-status",
+		Decision:  "allow_once",
+	}); err != nil {
+		t.Fatalf("handle card action: %v", err)
+	}
+	pushGatewayEvent(t, adapterTestGateway(adapter), "session-progress", "run-progress", "run_done", map[string]any{
+		"runtime_event_type": "agent_done",
+		"payload": map[string]any{
+			"content": "任务完成",
+		},
+	})
+	time.Sleep(30 * time.Millisecond)
+
+	msgs := adapterTestMessenger(adapter).snapshot()
+	foundPlanning := false
+	foundApproved := false
+	foundSuccess := false
+	for _, message := range msgs {
+		if message.kind != "update_card" {
+			continue
+		}
+		if message.runCard.Status == "planning" {
+			foundPlanning = true
+		}
+		if message.runCard.ApprovalStatus == "approved" {
+			foundApproved = true
+		}
+		if message.runCard.Result == "success" && strings.Contains(message.runCard.Summary, "任务完成") {
+			foundSuccess = true
+		}
+	}
+	if !foundPlanning || !foundApproved || !foundSuccess {
+		t.Fatalf("unexpected card updates: %#v", msgs)
+	}
+}
+
 func TestRunTerminalEventUntracksActiveRun(t *testing.T) {
 	adapter := newTestAdapter(t)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -368,7 +476,7 @@ func TestRunTerminalEventUntracksActiveRun(t *testing.T) {
 
 	sessionID := BuildSessionID("chat-cleanup")
 	runID := BuildRunID("msg-cleanup")
-	adapter.trackSession(sessionID, runID, "chat-cleanup")
+	adapter.trackSession(sessionID, runID, "chat-cleanup", "chat-cleanup task")
 
 	pushGatewayEvent(t, adapterTestGateway(adapter), sessionID, runID, "run_done", map[string]any{
 		"runtime_event_type": "agent_done",
@@ -394,7 +502,7 @@ func TestRunDonePrefersAssistantTextForUserFacingReply(t *testing.T) {
 
 	sessionID := BuildSessionID("chat-done-text")
 	runID := BuildRunID("msg-done-text")
-	adapter.trackSession(sessionID, runID, "chat-done-text")
+	adapter.trackSession(sessionID, runID, "chat-done-text", "chat-done-text task")
 
 	pushGatewayEvent(t, adapterTestGateway(adapter), sessionID, runID, "run_done", map[string]any{
 		"runtime_event_type": "agent_done",
@@ -424,7 +532,7 @@ func TestRunProgressInternalEventsAreNotUserFacing(t *testing.T) {
 
 	sessionID := BuildSessionID("chat-throttle")
 	runID := BuildRunID("msg-throttle")
-	adapter.trackSession(sessionID, runID, "chat-throttle")
+	adapter.trackSession(sessionID, runID, "chat-throttle", "chat-throttle task")
 
 	pushGatewayEvent(t, adapterTestGateway(adapter), sessionID, runID, "run_progress", map[string]any{
 		"runtime_event_type": "agent_chunk",
@@ -493,7 +601,7 @@ func TestReconnectRebindActiveSessions(t *testing.T) {
 	adapter := newTestAdapter(t)
 	gw := adapterTestGateway(adapter)
 	gw.pingErr = assertErr("dial failed")
-	adapter.trackSession("session-a", "run-a", "chat-a")
+	adapter.trackSession("session-a", "run-a", "chat-a", "task-a")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go adapter.reconnectAndRebindLoop(ctx)
@@ -515,8 +623,8 @@ func TestReconnectRebindTracksMultipleRunsPerSession(t *testing.T) {
 	adapter := newTestAdapter(t)
 	gw := adapterTestGateway(adapter)
 	gw.pingErr = assertErr("dial failed")
-	adapter.trackSession("session-x", "run-a", "chat-x")
-	adapter.trackSession("session-x", "run-b", "chat-x")
+	adapter.trackSession("session-x", "run-a", "chat-x", "task-a")
+	adapter.trackSession("session-x", "run-b", "chat-x", "task-b")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go adapter.reconnectAndRebindLoop(ctx)
@@ -540,7 +648,7 @@ func TestReconnectRebindTracksMultipleRunsPerSession(t *testing.T) {
 func TestReconnectHealthyPathDoesNotRebind(t *testing.T) {
 	adapter := newTestAdapter(t)
 	gw := adapterTestGateway(adapter)
-	adapter.trackSession("session-steady", "run-steady", "chat-steady")
+	adapter.trackSession("session-steady", "run-steady", "chat-steady", "steady")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go adapter.reconnectAndRebindLoop(ctx)

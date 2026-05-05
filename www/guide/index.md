@@ -39,6 +39,7 @@ NeoCode 是一个在终端里运行的本地 AI 编码助手。它不是云端 S
 - [Skills 使用](./skills) — 用 `SKILL.md` 固化当前任务的工作方式
 - [MCP 工具接入](./mcp) — 把外部工具接入 NeoCode
 - [飞书远程接入配置指南](./feishu-remote-setup) — 飞书消息到本地执行的回调与长连接配置
+- [飞书 SDK 模式](../feishu-sdk) — 本地长连接、环境变量和状态卡片用法
 - [Hooks 使用](./hooks) — 在 runtime 生命周期点配置安全 builtin 规则
 
 ## 遇到问题

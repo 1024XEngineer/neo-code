@@ -2,8 +2,11 @@ package feishuadapter
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
+
+	larkevent "github.com/larksuite/oapi-sdk-go/v3/event"
 )
 
 type fakeSDKEventClient struct {
@@ -70,6 +73,45 @@ func TestSDKIngressRunDispatchesMessageToHandler(t *testing.T) {
 	}
 	if handler.messages[0].MessageID != "msg-1" {
 		t.Fatalf("message id = %q, want msg-1", handler.messages[0].MessageID)
+	}
+}
+
+func TestMapSDKMessageEventSupportsGroupMessage(t *testing.T) {
+	body, err := json.Marshal(map[string]any{
+		"header": map[string]any{
+			"event_id":   "evt-group",
+			"event_type": "im.message.receive_v1",
+			"app_id":     "cli_app",
+		},
+		"event": map[string]any{
+			"chat_type": "group",
+			"message": map[string]any{
+				"message_id": "msg-group",
+				"chat_id":    "chat-group",
+				"chat_type":  "group",
+				"content":    `{"text":"<at user_id=\"ou_bot\">neo</at> hi"}`,
+				"mentions": []map[string]any{
+					{
+						"id": map[string]any{
+							"user_id": "ou_bot",
+						},
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal body: %v", err)
+	}
+	event, ok := mapSDKMessageEvent(&larkevent.EventReq{Body: body})
+	if !ok {
+		t.Fatal("expected sdk event to parse")
+	}
+	if event.ChatType != "group" || event.ChatID != "chat-group" || event.MessageID != "msg-group" {
+		t.Fatalf("unexpected sdk event: %#v", event)
+	}
+	if len(event.Mentions) != 1 || event.Mentions[0].UserID != "ou_bot" {
+		t.Fatalf("unexpected mentions: %#v", event.Mentions)
 	}
 }
 
@@ -177,5 +219,28 @@ func TestHandleMessageSDKRunFailureCanRetry(t *testing.T) {
 	}
 	if adapterTestGateway(adapter).runCount != 2 {
 		t.Fatalf("run count = %d, want 2", adapterTestGateway(adapter).runCount)
+	}
+}
+
+func TestHandleMessageSDKRunFailureReturnsErrorForRetry(t *testing.T) {
+	adapter := newTestAdapter(t)
+	adapter.cfg.IngressMode = IngressModeSDK
+	gateway := adapterTestGateway(adapter)
+	gateway.mu.Lock()
+	gateway.runErr = assertErr("transient")
+	gateway.mu.Unlock()
+
+	err := adapter.HandleMessage(context.Background(), FeishuMessageEvent{
+		EventID:     "evt-sdk-error",
+		MessageID:   "msg-sdk-error",
+		ChatID:      "chat-sdk-error",
+		ChatType:    "group",
+		ContentText: "hello sdk",
+		Mentions: []FeishuMention{
+			{UserID: "ou_bot"},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected sdk handler error for retry")
 	}
 }

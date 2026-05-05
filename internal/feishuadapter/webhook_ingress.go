@@ -111,7 +111,7 @@ func (w *WebhookIngress) handleFeishuEvent(handler IngressHandler) http.HandlerF
 			Mentions:    convertMentions(event.Message.Mentions),
 		}
 		if err := handler.HandleMessage(request.Context(), messageEvent); err != nil {
-			writeJSON(writer, http.StatusOK, map[string]string{"message": "accepted_with_error"})
+			writeJSON(writer, http.StatusInternalServerError, map[string]string{"message": "retryable_error"})
 			return
 		}
 		writeJSON(writer, http.StatusOK, map[string]string{"message": "accepted"})

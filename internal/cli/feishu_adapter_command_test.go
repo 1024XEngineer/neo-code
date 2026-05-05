@@ -25,7 +25,6 @@ func TestNewFeishuAdapterCommandForwardsFlags(t *testing.T) {
 		"--event-path", "/event",
 		"--card-path", "/card",
 		"--app-id", "app",
-		"--app-secret", "secret",
 		"--bot-user-id", "ou_bot",
 		"--bot-open-id", "ou_open_bot",
 		"--insecure-skip-signature-verify",
@@ -40,7 +39,7 @@ func TestNewFeishuAdapterCommandForwardsFlags(t *testing.T) {
 	if captured.Ingress != "sdk" {
 		t.Fatalf("ingress = %q, want sdk", captured.Ingress)
 	}
-	if captured.AppID != "app" || captured.AppSecret != "secret" || captured.GatewayListen != "tcp://gateway" {
+	if captured.AppID != "app" || captured.GatewayListen != "tcp://gateway" {
 		t.Fatalf("unexpected credential/gateway options: %#v", captured)
 	}
 	if captured.BotUserID != "ou_bot" || captured.BotOpenID != "ou_open_bot" {
@@ -56,7 +55,6 @@ func TestMergeFeishuOptionsAppliesDefaultsAndOverrides(t *testing.T) {
 		Listen:            "127.0.0.1:20000",
 		Ingress:           "sdk",
 		AppID:             "app-x",
-		AppSecret:         "secret-x",
 		RequestTimeoutSec: 20,
 	}, config.GatewayConfig{})
 
@@ -66,8 +64,8 @@ func TestMergeFeishuOptionsAppliesDefaultsAndOverrides(t *testing.T) {
 	if merged.Ingress != "sdk" {
 		t.Fatalf("ingress = %q, want sdk", merged.Ingress)
 	}
-	if merged.AppID != "app-x" || merged.AppSecret != "secret-x" {
-		t.Fatalf("app credentials not applied: %#v", merged)
+	if merged.AppID != "app-x" {
+		t.Fatalf("app id not applied: %#v", merged)
 	}
 	if merged.RequestTimeoutSec != 20 {
 		t.Fatalf("request timeout = %d, want 20", merged.RequestTimeoutSec)
@@ -108,5 +106,35 @@ func TestNewFeishuAdapterCommandPropagatesRunnerError(t *testing.T) {
 	cmd := newFeishuAdapterCommand()
 	if err := cmd.ExecuteContext(context.Background()); !errors.Is(err, expected) {
 		t.Fatalf("error = %v, want %v", err, expected)
+	}
+}
+
+func TestInjectFeishuSecretsFromEnvRequiresAppSecret(t *testing.T) {
+	t.Setenv(config.FeishuAppSecretEnvVar, "")
+	options := mergedFeishuOptions{Ingress: config.FeishuIngressSDK}
+	err := injectFeishuSecretsFromEnv(&options)
+	if err == nil || err.Error() != "请先设置环境变量 "+config.FeishuAppSecretEnvVar {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestInjectFeishuSecretsFromEnvRequiresSigningSecretForWebhook(t *testing.T) {
+	t.Setenv(config.FeishuAppSecretEnvVar, "app-secret")
+	t.Setenv(config.FeishuSigningSecretEnvVar, "")
+	options := mergedFeishuOptions{Ingress: config.FeishuIngressWebhook}
+	err := injectFeishuSecretsFromEnv(&options)
+	if err == nil || err.Error() != "请先设置环境变量 "+config.FeishuSigningSecretEnvVar {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestInjectFeishuSecretsFromEnvLoadsSDKSecret(t *testing.T) {
+	t.Setenv(config.FeishuAppSecretEnvVar, "app-secret")
+	options := mergedFeishuOptions{Ingress: config.FeishuIngressSDK}
+	if err := injectFeishuSecretsFromEnv(&options); err != nil {
+		t.Fatalf("inject sdk secret: %v", err)
+	}
+	if options.AppSecret != "app-secret" {
+		t.Fatalf("app secret = %q, want app-secret", options.AppSecret)
 	}
 }

@@ -19,9 +19,16 @@ const defaultSignatureMaxSkew = 5 * time.Minute
 const defaultProgressNotifyInterval = 5 * time.Second
 
 type sessionBinding struct {
-	SessionID string
-	ChatID    string
-	RunID     string
+	SessionID       string
+	ChatID          string
+	RunID           string
+	CardID          string
+	TaskName        string
+	Status          string
+	ApprovalStatus  string
+	Result          string
+	LastSummary     string
+	AsyncRewakeHint string
 }
 
 // Adapter 负责桥接飞书回调与 Gateway JSON-RPC 长连接。
@@ -37,6 +44,7 @@ type Adapter struct {
 	mu             sync.RWMutex
 	activeRuns     map[string]sessionBinding
 	sessionChats   map[string]string
+	requestRuns    map[string]string
 	lastProgressAt map[string]time.Time
 }
 
@@ -63,6 +71,7 @@ func New(cfg Config, gateway GatewayClient, messenger Messenger, logger *log.Log
 		nowFn:          func() time.Time { return time.Now().UTC() },
 		activeRuns:     make(map[string]sessionBinding),
 		sessionChats:   make(map[string]string),
+		requestRuns:    make(map[string]string),
 		lastProgressAt: make(map[string]time.Time),
 	}, nil
 }
@@ -189,6 +198,7 @@ func (a *Adapter) HandleCardAction(ctx context.Context, event FeishuCardActionEv
 		a.safeLog("resolve permission failed: %v", err)
 		return err
 	}
+	a.updateApprovalStatus(requestID, decision)
 	succeeded = true
 	return nil
 }
@@ -203,24 +213,32 @@ func (a *Adapter) bindThenRun(ctx context.Context, sessionID string, runID strin
 	if err := a.gateway.BindStream(callCtx, sessionID, runID); err != nil {
 		return err
 	}
-	a.trackSession(sessionID, runID, chatID)
+	a.trackSession(sessionID, runID, chatID, text)
 	if err := a.gateway.Run(callCtx, sessionID, runID, text); err != nil {
 		// run 受理失败时及时回收活跃绑定，避免重连阶段反复重绑无效 run。
 		a.untrackRun(sessionID, runID)
 		return err
 	}
-	_ = a.messenger.SendText(context.Background(), chatID, "任务已受理，正在执行。")
+	if err := a.ensureRunCard(context.Background(), sessionID, runID); err != nil {
+		a.safeLog("send status card failed: %v", err)
+		_ = a.messenger.SendText(context.Background(), chatID, "任务已受理，正在执行。")
+	}
 	return nil
 }
 
 // trackSession 记录 session 到飞书 chat 的映射，用于事件回推。
-func (a *Adapter) trackSession(sessionID string, runID string, chatID string) {
+func (a *Adapter) trackSession(sessionID string, runID string, chatID string, taskName string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.activeRuns[runBindingKey(sessionID, runID)] = sessionBinding{
-		SessionID: sessionID,
-		ChatID:    chatID,
-		RunID:     runID,
+	key := runBindingKey(sessionID, runID)
+	a.activeRuns[key] = sessionBinding{
+		SessionID:      sessionID,
+		ChatID:         chatID,
+		RunID:          runID,
+		TaskName:       buildTaskName(taskName),
+		Status:         "thinking",
+		ApprovalStatus: "none",
+		Result:         "pending",
 	}
 	if sessionID != "" && chatID != "" {
 		a.sessionChats[sessionID] = chatID
@@ -234,7 +252,17 @@ func (a *Adapter) untrackRun(sessionID string, runID string) {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	delete(a.activeRuns, runBindingKey(sessionID, runID))
+	key := runBindingKey(sessionID, runID)
+	if binding, ok := a.activeRuns[key]; ok {
+		for requestID, requestRunKey := range a.requestRuns {
+			if requestRunKey == key {
+				delete(a.requestRuns, requestID)
+			}
+		}
+		delete(a.lastProgressAt, key)
+		_ = binding
+	}
+	delete(a.activeRuns, key)
 }
 
 // lookupChatID 根据 session_id 查找需要回推的飞书 chat_id。
@@ -286,6 +314,7 @@ func (a *Adapter) handleGatewayEvent(ctx context.Context, raw json.RawMessage) {
 				if strings.EqualFold(runtimeType, "permission_requested") {
 					requestID, reason := extractPermissionRequest(envelope)
 					if requestID != "" {
+						a.markPermissionPending(sessionID, runID, requestID, reason)
 						_ = a.messenger.SendPermissionCard(ctx, chatID, PermissionCardPayload{
 							RequestID: requestID,
 							Message:   reason,
@@ -293,11 +322,13 @@ func (a *Adapter) handleGatewayEvent(ctx context.Context, raw json.RawMessage) {
 						return
 					}
 				}
+				a.handleRunProgressCard(ctx, sessionID, runID, runtimeType, envelope)
 			}
 		}
 		// 除审批请求外，内部 runtime_event_type 不直接透出到飞书用户视图，避免暴露控制面细节。
 		return
 	case "run_done":
+		a.markRunTerminal(sessionID, runID, "success", extractSummaryText(envelope), "")
 		doneText := extractUserVisibleDoneText(envelope)
 		if doneText == "" {
 			doneText = "任务完成。"
@@ -305,6 +336,7 @@ func (a *Adapter) handleGatewayEvent(ctx context.Context, raw json.RawMessage) {
 		_ = a.messenger.SendText(ctx, chatID, doneText)
 		a.untrackRun(sessionID, runID)
 	case "run_error":
+		a.markRunTerminal(sessionID, runID, "failure", "", extractUserVisibleErrorText(envelope))
 		errText := extractUserVisibleErrorText(envelope)
 		if errText == "" {
 			errText = "任务失败，请稍后重试。"
@@ -374,6 +406,149 @@ func (a *Adapter) rebindActiveSessions(ctx context.Context) {
 		cancel()
 		if err != nil {
 			a.safeLog("rebind session failed session_id=%s run_id=%s err=%v", binding.SessionID, binding.RunID, err)
+		}
+	}
+}
+
+// ensureRunCard 为新受理的 run 发送单独状态卡片，集中展示执行状态与审批结果。
+func (a *Adapter) ensureRunCard(ctx context.Context, sessionID string, runID string) error {
+	a.mu.RLock()
+	binding, ok := a.activeRuns[runBindingKey(sessionID, runID)]
+	a.mu.RUnlock()
+	if !ok || strings.TrimSpace(binding.ChatID) == "" {
+		return nil
+	}
+	if strings.TrimSpace(binding.CardID) != "" {
+		return a.messenger.UpdateCard(ctx, binding.CardID, binding.statusCardPayload())
+	}
+	cardID, err := a.messenger.SendStatusCard(ctx, binding.ChatID, binding.statusCardPayload())
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(cardID) == "" {
+		return nil
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	current := a.activeRuns[runBindingKey(sessionID, runID)]
+	current.CardID = cardID
+	a.activeRuns[runBindingKey(sessionID, runID)] = current
+	return nil
+}
+
+// handleRunProgressCard 将 runtime 进度事件压缩为卡片状态更新，避免连续文本刷屏。
+func (a *Adapter) handleRunProgressCard(ctx context.Context, sessionID string, runID string, runtimeType string, envelope map[string]any) {
+	key := runBindingKey(sessionID, runID)
+	a.mu.Lock()
+	binding, ok := a.activeRuns[key]
+	if !ok {
+		a.mu.Unlock()
+		return
+	}
+	updated := binding
+	updated.Status = deriveRunStatus(runtimeType, envelope, binding.Status)
+	if strings.EqualFold(runtimeType, "hook_notification") {
+		updated.LastSummary = extractHookNotificationSummary(envelope)
+		updated.AsyncRewakeHint = extractHookNotificationHint(envelope)
+	}
+	changed := updated.Status != binding.Status ||
+		updated.LastSummary != binding.LastSummary ||
+		updated.AsyncRewakeHint != binding.AsyncRewakeHint
+	cardID := strings.TrimSpace(binding.CardID)
+	a.activeRuns[key] = updated
+	a.mu.Unlock()
+	if !changed || cardID == "" {
+		return
+	}
+	if err := a.messenger.UpdateCard(ctx, cardID, updated.statusCardPayload()); err != nil {
+		a.safeLog("update status card failed: %v", err)
+	}
+}
+
+// markPermissionPending 将权限请求映射到 run 卡片，便于用户在同一卡片观察审批状态。
+func (a *Adapter) markPermissionPending(sessionID string, runID string, requestID string, reason string) {
+	key := runBindingKey(sessionID, runID)
+	a.mu.Lock()
+	binding, ok := a.activeRuns[key]
+	if ok {
+		binding.ApprovalStatus = "pending"
+		if strings.TrimSpace(reason) != "" {
+			binding.LastSummary = strings.TrimSpace(reason)
+		}
+		a.activeRuns[key] = binding
+	}
+	if strings.TrimSpace(requestID) != "" {
+		a.requestRuns[requestID] = key
+	}
+	cardID := ""
+	payload := StatusCardPayload{}
+	if ok {
+		cardID = strings.TrimSpace(binding.CardID)
+		payload = binding.statusCardPayload()
+	}
+	a.mu.Unlock()
+	if cardID != "" {
+		if err := a.messenger.UpdateCard(context.Background(), cardID, payload); err != nil {
+			a.safeLog("update pending approval card failed: %v", err)
+		}
+	}
+}
+
+// updateApprovalStatus 在审批动作被网关受理后更新 run 卡片中的审批结论。
+func (a *Adapter) updateApprovalStatus(requestID string, decision string) {
+	normalizedDecision := strings.TrimSpace(strings.ToLower(decision))
+	if normalizedDecision == "" {
+		return
+	}
+	a.mu.Lock()
+	key := a.requestRuns[strings.TrimSpace(requestID)]
+	binding, ok := a.activeRuns[key]
+	if ok {
+		switch normalizedDecision {
+		case "allow_once", "allow_session":
+			binding.ApprovalStatus = "approved"
+		case "reject":
+			binding.ApprovalStatus = "rejected"
+		}
+		a.activeRuns[key] = binding
+	}
+	cardID := ""
+	payload := StatusCardPayload{}
+	if ok {
+		cardID = strings.TrimSpace(binding.CardID)
+		payload = binding.statusCardPayload()
+	}
+	a.mu.Unlock()
+	if cardID != "" {
+		if err := a.messenger.UpdateCard(context.Background(), cardID, payload); err != nil {
+			a.safeLog("update approval status card failed: %v", err)
+		}
+	}
+}
+
+// markRunTerminal 在 run 结束时合并结果摘要并刷新状态卡片。
+func (a *Adapter) markRunTerminal(sessionID string, runID string, result string, summary string, fallback string) {
+	key := runBindingKey(sessionID, runID)
+	a.mu.Lock()
+	binding, ok := a.activeRuns[key]
+	if !ok {
+		a.mu.Unlock()
+		return
+	}
+	if strings.TrimSpace(summary) != "" {
+		binding.LastSummary = strings.TrimSpace(summary)
+	} else if strings.TrimSpace(fallback) != "" {
+		binding.LastSummary = strings.TrimSpace(fallback)
+	}
+	binding.Result = strings.TrimSpace(result)
+	binding.Status = "running"
+	cardID := strings.TrimSpace(binding.CardID)
+	payload := binding.statusCardPayload()
+	a.activeRuns[key] = binding
+	a.mu.Unlock()
+	if cardID != "" {
+		if err := a.messenger.UpdateCard(context.Background(), cardID, payload); err != nil {
+			a.safeLog("update terminal card failed: %v", err)
 		}
 	}
 }
@@ -505,6 +680,41 @@ func extractPermissionRequest(envelope map[string]any) (string, string) {
 	return requestID, reason
 }
 
+// extractHookNotificationSummary 提取 async_rewake 等通知摘要并写入卡片，便于下轮继续追踪。
+func extractHookNotificationSummary(envelope map[string]any) string {
+	payload, _ := envelope["payload"].(map[string]any)
+	if payload == nil {
+		return ""
+	}
+	if summary := strings.TrimSpace(readString(payload, "summary")); summary != "" {
+		return summary
+	}
+	if summary := strings.TrimSpace(readString(payload, "notification")); summary != "" {
+		return summary
+	}
+	return strings.TrimSpace(readString(payload, "message"))
+}
+
+// extractHookNotificationHint 提取 async_rewake 原因，用于提示用户本轮外部异步事件来源。
+func extractHookNotificationHint(envelope map[string]any) string {
+	payload, _ := envelope["payload"].(map[string]any)
+	if payload == nil {
+		return ""
+	}
+	if reason := strings.TrimSpace(readString(payload, "reason")); reason != "" {
+		return reason
+	}
+	return strings.TrimSpace(readString(payload, "status"))
+}
+
+// extractSummaryText 从 run_done / run_error 载荷中提取卡片摘要，优先复用用户可见文本。
+func extractSummaryText(envelope map[string]any) string {
+	if text := extractUserVisibleDoneText(envelope); strings.TrimSpace(text) != "" {
+		return strings.TrimSpace(text)
+	}
+	return strings.TrimSpace(extractUserVisibleErrorText(envelope))
+}
+
 // extractUserVisibleDoneText 从 run_done 事件中提取可展示给飞书用户的最终文本。
 func extractUserVisibleDoneText(envelope map[string]any) string {
 	if envelope == nil {
@@ -584,6 +794,56 @@ func delayWithJitter(delay time.Duration) time.Duration {
 	}
 	jitter := rand.Int63n(span)
 	return delay - time.Duration(span/2) + time.Duration(jitter)
+}
+
+// deriveRunStatus 将 runtime 过程事件压缩为用户可读的轻量级状态标签。
+func deriveRunStatus(runtimeType string, envelope map[string]any, current string) string {
+	switch strings.TrimSpace(strings.ToLower(runtimeType)) {
+	case "phase_changed":
+		payload, _ := envelope["payload"].(map[string]any)
+		if to := strings.TrimSpace(strings.ToLower(readString(payload, "to"))); strings.Contains(to, "plan") {
+			return "planning"
+		}
+		if to := strings.TrimSpace(strings.ToLower(readString(payload, "to"))); to != "" {
+			return "running"
+		}
+	case "tool_call_thinking", "agent_chunk":
+		return "thinking"
+	case "permission_requested", "permission_resolved", "tool_start", "tool_result", "tool_chunk", "tool_diff",
+		"verification_started", "verification_finished", "verification_completed", "verification_failed",
+		"acceptance_decided", "hook_notification":
+		return "running"
+	}
+	if strings.TrimSpace(current) == "" {
+		return "thinking"
+	}
+	return current
+}
+
+// buildTaskName 生成卡片标题中使用的任务摘要，保留原始输入首行信息且控制长度。
+func buildTaskName(text string) string {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
+		return "未命名任务"
+	}
+	line := strings.Split(trimmed, "\n")[0]
+	runes := []rune(strings.TrimSpace(line))
+	if len(runes) > 40 {
+		return string(runes[:40]) + "..."
+	}
+	return string(runes)
+}
+
+// statusCardPayload 将 run 绑定状态映射为卡片更新载荷。
+func (b sessionBinding) statusCardPayload() StatusCardPayload {
+	return StatusCardPayload{
+		TaskName:        b.TaskName,
+		Status:          b.Status,
+		ApprovalStatus:  b.ApprovalStatus,
+		Result:          b.Result,
+		Summary:         b.LastSummary,
+		AsyncRewakeHint: b.AsyncRewakeHint,
+	}
 }
 
 // writeJSON 向回调响应写入 JSON 内容。

@@ -8,7 +8,6 @@ import (
 
 	larkevent "github.com/larksuite/oapi-sdk-go/v3/event"
 	"github.com/larksuite/oapi-sdk-go/v3/event/dispatcher"
-	larkim "github.com/larksuite/oapi-sdk-go/v3/service/im/v1"
 	larkws "github.com/larksuite/oapi-sdk-go/v3/ws"
 )
 
@@ -18,7 +17,7 @@ type sdkEventClient interface {
 
 var newSDKEventClient = func(cfg Config, handler IngressHandler) sdkEventClient {
 	eventHandler := dispatcher.NewEventDispatcher("", "").
-		OnP2MessageReceiveV1(func(ctx context.Context, event *larkim.P2MessageReceiveV1) error {
+		OnCustomizedEvent("im.message.receive_v1", func(ctx context.Context, event *larkevent.EventReq) error {
 			msg, ok := mapSDKMessageEvent(event)
 			if !ok {
 				return nil
@@ -68,27 +67,35 @@ func (s *SDKIngress) Run(ctx context.Context, handler IngressHandler) error {
 }
 
 // mapSDKMessageEvent 将 SDK 消息事件转换为标准化消息事件。
-func mapSDKMessageEvent(event *larkim.P2MessageReceiveV1) (FeishuMessageEvent, bool) {
-	if event == nil || event.Event == nil || event.Event.Message == nil {
+func mapSDKMessageEvent(event *larkevent.EventReq) (FeishuMessageEvent, bool) {
+	if event == nil || len(event.Body) == 0 {
 		return FeishuMessageEvent{}, false
 	}
-	message := event.Event.Message
-	messageID := stringOrEmpty(message.MessageId)
-	chatID := stringOrEmpty(message.ChatId)
-	if strings.TrimSpace(messageID) == "" || strings.TrimSpace(chatID) == "" {
+	var envelope inboundEnvelope
+	if err := json.Unmarshal(event.Body, &envelope); err != nil {
 		return FeishuMessageEvent{}, false
 	}
-
-	messageEvent := FeishuMessageEvent{
-		EventID:     headerEventID(event),
+	if strings.TrimSpace(envelope.Header.EventType) != "im.message.receive_v1" {
+		return FeishuMessageEvent{}, false
+	}
+	var payload inboundMessageEvent
+	if err := json.Unmarshal(envelope.Event, &payload); err != nil {
+		return FeishuMessageEvent{}, false
+	}
+	messageID := strings.TrimSpace(payload.Message.MessageID)
+	chatID := strings.TrimSpace(payload.Message.ChatID)
+	if messageID == "" || chatID == "" {
+		return FeishuMessageEvent{}, false
+	}
+	return FeishuMessageEvent{
+		EventID:     strings.TrimSpace(envelope.Header.EventID),
 		MessageID:   messageID,
 		ChatID:      chatID,
-		ChatType:    stringOrEmpty(message.ChatType),
-		ContentText: extractSDKMessageText(stringOrEmpty(message.Content)),
-		HeaderAppID: headerAppID(event),
-		Mentions:    mapSDKMentions(message.Mentions),
-	}
-	return messageEvent, true
+		ChatType:    firstNonEmpty(strings.TrimSpace(payload.Message.ChatType), strings.TrimSpace(payload.ChatType)),
+		ContentText: extractSDKMessageText(strings.TrimSpace(payload.Message.Content)),
+		HeaderAppID: strings.TrimSpace(envelope.Header.AppID),
+		Mentions:    convertMentions(payload.Message.Mentions),
+	}, true
 }
 
 // mapSDKCardActionEvent 尝试从 SDK 自定义事件中提取审批动作。
@@ -121,44 +128,6 @@ func mapSDKCardActionEvent(event *larkevent.EventReq) (FeishuCardActionEvent, bo
 	}, true
 }
 
-// mapSDKMentions 将 SDK mentions 映射为统一提及身份列表。
-func mapSDKMentions(mentions []*larkim.MentionEvent) []FeishuMention {
-	if len(mentions) == 0 {
-		return nil
-	}
-	out := make([]FeishuMention, 0, len(mentions))
-	for _, mention := range mentions {
-		if mention == nil {
-			continue
-		}
-		identity := mention.Id
-		item := FeishuMention{}
-		if identity != nil {
-			item.UserID = stringOrEmpty(identity.UserId)
-			item.OpenID = stringOrEmpty(identity.OpenId)
-			item.UnionID = stringOrEmpty(identity.UnionId)
-		}
-		out = append(out, item)
-	}
-	return out
-}
-
-// headerEventID 提取 SDK 事件头中的 event_id。
-func headerEventID(event *larkim.P2MessageReceiveV1) string {
-	if event == nil || event.EventV2Base == nil || event.EventV2Base.Header == nil {
-		return ""
-	}
-	return strings.TrimSpace(event.EventV2Base.Header.EventID)
-}
-
-// headerAppID 提取 SDK 事件头中的 app_id。
-func headerAppID(event *larkim.P2MessageReceiveV1) string {
-	if event == nil || event.EventV2Base == nil || event.EventV2Base.Header == nil {
-		return ""
-	}
-	return strings.TrimSpace(event.EventV2Base.Header.AppID)
-}
-
 // extractSDKMessageText 从 SDK 消息 content JSON 里提取 text。
 func extractSDKMessageText(content string) string {
 	text, err := decodeMessageText(content)
@@ -166,12 +135,4 @@ func extractSDKMessageText(content string) string {
 		return text
 	}
 	return strings.TrimSpace(content)
-}
-
-// stringOrEmpty 安全解引用 SDK 字符串指针。
-func stringOrEmpty(raw *string) string {
-	if raw == nil {
-		return ""
-	}
-	return strings.TrimSpace(*raw)
 }
