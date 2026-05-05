@@ -121,9 +121,16 @@ type MemoExtractor interface {
 	Schedule(sessionID string, messages []providertypes.Message)
 }
 
+// BudgetResolution 描述 budget 解析的结构化结果。
+type BudgetResolution struct {
+	PromptBudget  int
+	Source        string
+	ContextWindow int
+}
+
 // BudgetResolver 定义 prompt budget 解析能力，避免 runtime 直接处理模型目录细节。
 type BudgetResolver interface {
-	ResolvePromptBudget(ctx context.Context, cfg config.Config) (int, string, error)
+	ResolvePromptBudget(ctx context.Context, cfg config.Config) (BudgetResolution, error)
 }
 
 // repositoryFactService 约束 runtime 条件化获取仓库事实所需的最小能力。

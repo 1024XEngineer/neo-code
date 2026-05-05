@@ -133,6 +133,9 @@ export default function BudgetIndicator() {
           ) : budgetChecked ? (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
               <Row label="Budget" value={formatTokenCount(budgetChecked.prompt_budget)} />
+              {budgetChecked.context_window ? (
+                <Row label="Context Window" value={formatTokenCount(budgetChecked.context_window)} />
+              ) : null}
               <Row label="Estimated" value={`${formatTokenCount(budgetChecked.estimated_input_tokens)} (${(ratio * 100).toFixed(1)}%)`} />
               <Row label="Action" value={budgetChecked.action} />
               {budgetChecked.reason && (

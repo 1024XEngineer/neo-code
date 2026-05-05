@@ -52,6 +52,7 @@ type TurnBudgetDecision struct {
 	PromptBudget         int              `json:"prompt_budget"`
 	EstimateSource       string           `json:"estimate_source,omitempty"`
 	EstimateGatePolicy   string           `json:"estimate_gate_policy,omitempty"`
+	ContextWindow        int              `json:"context_window,omitempty"`
 }
 
 // DecideTurnBudget 根据输入预算事实输出 allow、compact 或 stop 三种动作。

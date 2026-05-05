@@ -311,6 +311,7 @@ export interface BudgetCheckedPayload {
   prompt_budget: number
   estimate_source?: string
   estimate_gate_policy?: string
+  context_window?: number
 }
 
 export interface BudgetEstimateFailedPayload {

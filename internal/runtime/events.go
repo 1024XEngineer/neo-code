@@ -39,6 +39,7 @@ type BudgetCheckedPayload struct {
 	PromptBudget         int    `json:"prompt_budget"`
 	EstimateSource       string `json:"estimate_source,omitempty"`
 	EstimateGatePolicy   string `json:"estimate_gate_policy,omitempty"`
+	ContextWindow        int    `json:"context_window,omitempty"`
 }
 
 // BudgetEstimateFailedPayload 描述预算估算失败时的降级诊断信息。
@@ -125,6 +126,7 @@ func newBudgetCheckedPayload(decision controlplane.TurnBudgetDecision) BudgetChe
 		PromptBudget:         decision.PromptBudget,
 		EstimateSource:       decision.EstimateSource,
 		EstimateGatePolicy:   decision.EstimateGatePolicy,
+		ContextWindow:        decision.ContextWindow,
 	}
 }
 

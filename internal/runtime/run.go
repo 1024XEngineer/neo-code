@@ -592,7 +592,7 @@ func (s *Service) prepareTurnBudgetSnapshot(ctx context.Context, state *runState
 	if notificationHint := strings.TrimSpace(s.drainHookNotificationsForTurn(state)); notificationHint != "" {
 		systemPrompt = mergeEphemeralHookNotificationIntoSystemPrompt(systemPrompt, notificationHint)
 	}
-	promptBudget, budgetSource := s.resolvePromptBudget(ctx, cfg)
+	promptBudget, budgetSource, contextWindow := s.resolvePromptBudget(ctx, cfg)
 	model := strings.TrimSpace(cfg.CurrentModel)
 	requestMessages := append([]providertypes.Message(nil), builtContext.Messages...)
 	request := providertypes.GenerateRequest{
@@ -619,6 +619,7 @@ func (s *Service) prepareTurnBudgetSnapshot(ctx context.Context, state *runState
 		limit,
 		repeatLimit,
 		injectFullPlan,
+		contextWindow,
 		request,
 	), false, nil
 }
@@ -823,22 +824,24 @@ func (s *Service) applyCompactForState(
 }
 
 // resolvePromptBudget 解析当前请求链路使用的 prompt budget 与来源标签。
-func (s *Service) resolvePromptBudget(ctx context.Context, cfg config.Config) (int, string) {
+func (s *Service) resolvePromptBudget(ctx context.Context, cfg config.Config) (int, string, int) {
 	if cfg.Context.Budget.PromptBudget > 0 {
-		return cfg.Context.Budget.PromptBudget, "explicit"
+		return cfg.Context.Budget.PromptBudget, "explicit", 0
 	}
 	promptBudget := cfg.Context.Budget.FallbackPromptBudget
 	source := "fallback"
+	var contextWindow int
 	if s != nil && s.budgetResolver != nil {
-		resolvedBudget, resolvedSource, err := s.budgetResolver.ResolvePromptBudget(ctx, cfg)
-		if err == nil && resolvedBudget > 0 {
-			promptBudget = resolvedBudget
-			if strings.TrimSpace(resolvedSource) != "" {
-				source = resolvedSource
+		resolution, err := s.budgetResolver.ResolvePromptBudget(ctx, cfg)
+		if err == nil && resolution.PromptBudget > 0 {
+			promptBudget = resolution.PromptBudget
+			if strings.TrimSpace(resolution.Source) != "" {
+				source = resolution.Source
 			}
+			contextWindow = resolution.ContextWindow
 		}
 	}
-	return promptBudget, source
+	return promptBudget, source, contextWindow
 }
 
 // evaluateTurnBudget 对冻结请求执行发送前输入 token 估算，并产出唯一预算动作。
@@ -863,6 +866,7 @@ func (s *Service) evaluateTurnBudget(
 			Reason:             controlplane.BudgetDecisionReasonEstimateFailedBypass,
 			PromptBudget:       snapshot.PromptBudget,
 			EstimateGatePolicy: provider.EstimateGateAdvisory,
+			ContextWindow:      snapshot.ContextWindow,
 		}
 		s.emitRunScoped(ctx, EventBudgetChecked, state, newBudgetCheckedPayload(decision))
 		return decision, nil
@@ -873,6 +877,7 @@ func (s *Service) evaluateTurnBudget(
 		snapshot.PromptBudget,
 		snapshot.CompactCount,
 	)
+	decision.ContextWindow = snapshot.ContextWindow
 	s.emitRunScoped(ctx, EventBudgetChecked, state, newBudgetCheckedPayload(decision))
 	return decision, nil
 }
