@@ -156,3 +156,39 @@ func TestUTF8RingBufferCapacityBoundary(t *testing.T) {
 		t.Fatalf("snapshot length = %d, want <= 5", len(snapshot))
 	}
 }
+
+func TestUTF8RingBufferResizeAndReset(t *testing.T) {
+	buffer := NewUTF8RingBuffer(8)
+	_, _ = buffer.Write([]byte("中文abc"))
+	if got := buffer.Capacity(); got != 8 {
+		t.Fatalf("Capacity() = %d, want 8", got)
+	}
+
+	buffer.Resize(4)
+	if got := buffer.Capacity(); got != 4 {
+		t.Fatalf("Capacity() after resize = %d, want 4", got)
+	}
+	if snapshot := buffer.SnapshotString(); !utf8.ValidString(snapshot) {
+		t.Fatalf("snapshot is not utf8 valid after resize: %q", snapshot)
+	}
+
+	buffer.Reset()
+	if snapshot := buffer.SnapshotString(); snapshot != "" {
+		t.Fatalf("snapshot after reset = %q, want empty", snapshot)
+	}
+}
+
+func TestUTF8RingBufferResizeNonPositive(t *testing.T) {
+	buffer := NewUTF8RingBuffer(8)
+	buffer.Resize(0)
+	if got := buffer.Capacity(); got != 1 {
+		t.Fatalf("Capacity() = %d, want 1", got)
+	}
+
+	var nilBuffer *UTF8RingBuffer
+	nilBuffer.Resize(16)
+	nilBuffer.Reset()
+	if got := nilBuffer.Capacity(); got != 0 {
+		t.Fatalf("nil Capacity() = %d, want 0", got)
+	}
+}

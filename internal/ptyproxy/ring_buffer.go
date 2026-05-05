@@ -67,6 +67,44 @@ func (b *UTF8RingBuffer) SnapshotString() string {
 	return strings.TrimSpace(string(b.SnapshotBytes()))
 }
 
+// Reset 清空缓冲区内容但保留当前容量配置，便于会话边界快速复位。
+func (b *UTF8RingBuffer) Reset() {
+	if b == nil {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.data = b.data[:0]
+}
+
+// Capacity 返回当前缓冲区容量配置（字节数）。
+func (b *UTF8RingBuffer) Capacity() int {
+	if b == nil {
+		return 0
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.capacity
+}
+
+// Resize 调整缓冲区容量并保持 UTF-8 边界安全，必要时裁剪历史窗口。
+func (b *UTF8RingBuffer) Resize(capacity int) {
+	if b == nil {
+		return
+	}
+	if capacity <= 0 {
+		capacity = 1
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	b.capacity = capacity
+	if len(b.data) > b.capacity {
+		b.data = b.data[len(b.data)-b.capacity:]
+	}
+	b.data = normalizeUTF8Window(b.data)
+}
+
 // normalizeUTF8Window 将窗口裁剪为合法 UTF-8 字节序列，避免多字节字符被截断产生乱码。
 func normalizeUTF8Window(raw []byte) []byte {
 	if len(raw) == 0 {

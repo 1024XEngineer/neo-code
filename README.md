@@ -191,6 +191,9 @@ neocode shell --init zsh
 neocode diag
 neocode diag diagnose
 
+# 进入 IDM 交互式诊断沙盒（退出：输入 exit 或空闲态 Ctrl+C）
+neocode diag -i
+
 # 自动诊断开关与状态查询
 neocode diag auto on
 neocode diag auto off

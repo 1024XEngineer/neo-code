@@ -19,6 +19,11 @@ func SendDiagnoseSignal(context.Context, string) error {
 	return errUnsupportedPlatform
 }
 
+// SendIDMEnterSignal 在 Windows 平台返回明确不支持错误。
+func SendIDMEnterSignal(context.Context, string) error {
+	return errUnsupportedPlatform
+}
+
 // SendAutoModeSignal 在 Windows 平台返回明确不支持错误。
 func SendAutoModeSignal(context.Context, string, bool) error {
 	return errUnsupportedPlatform

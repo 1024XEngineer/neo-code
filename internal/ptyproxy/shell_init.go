@@ -36,6 +36,9 @@ elif [ -n "${BASH_VERSION:-}" ]; then
 	__neocode_last_cmd=""
 	__neocode_preexec() {
 		local _current="$BASH_COMMAND"
+		if [ "${_current}" = "__neocode_precmd" ]; then
+			return
+		fi
 		if [ "${_current}" = "${__neocode_last_cmd}" ]; then
 			return
 		fi
