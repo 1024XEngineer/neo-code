@@ -75,6 +75,7 @@ export const EventType = {
   AgentDone: 'agent_done',
   ToolStart: 'tool_start',
   ToolResult: 'tool_result',
+  ToolDiff: 'tool_diff',
   ToolChunk: 'tool_chunk',
   ToolCallThinking: 'tool_call_thinking',
   RunCanceled: 'run_canceled',
@@ -780,3 +781,27 @@ export interface DeleteWorkspaceParams {
 
 /** gateway.deleteWorkspace 响应 */
 export type DeleteWorkspaceResult = RPCResult<{ hash: string }>
+
+/** tool_diff 多文件变更条目 */
+export interface ToolDiffFileChange {
+  path: string
+  kind: string // "added" | "modified" | "deleted"
+}
+
+/** tool_diff 单文件 diff 条目 */
+export interface ToolDiffFileEntry {
+  path: string
+  diff?: string
+  was_new?: boolean
+}
+
+/** tool_diff 事件载荷：写工具修改了哪些文件 */
+export interface ToolDiffPayload {
+  tool_call_id: string
+  tool_name: string
+  file_path: string
+  diff?: string
+  was_new?: boolean
+  files?: ToolDiffFileChange[]
+  diffs?: ToolDiffFileEntry[]
+}

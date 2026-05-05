@@ -15,6 +15,7 @@ export interface FileChange {
   additions: number
   deletions: number
   diff?: { type: 'add' | 'del' | 'header'; content: string }[]
+  checkpoint_id?: string
 }
 
 const TOAST_AUTO_DISMISS_MS = 5000

@@ -17,6 +17,7 @@ import {
   type VerificationFinishedPayload,
   type VerificationStageFinishedPayload,
   type VerificationStartedPayload,
+  type ToolDiffPayload,
 } from '@/api/protocol'
 import { type GatewayAPI } from '@/api/gateway'
 import { useChatStore } from '@/stores/useChatStore'
@@ -24,6 +25,7 @@ import { useUIStore } from '@/stores/useUIStore'
 import { useGatewayStore } from '@/stores/useGatewayStore'
 import { useSessionStore } from '@/stores/useSessionStore'
 import { useRuntimeInsightStore } from '@/stores/useRuntimeInsightStore'
+import { parseSingleFileDiff, type ParsedFileDiff } from '@/utils/patchParser'
 
 type PayloadRecord = Record<string, unknown> | undefined
 
@@ -32,10 +34,109 @@ type PayloadRecord = Record<string, unknown> | undefined
 let _latestVerificationMsgId: string | undefined
 let _latestDoneToolCallId: string | undefined
 
+// 模块级缓存最新的 checkpoint_id，供 reject 回退使用
+let _latestCheckpointId: string | undefined
+
 /** 重置模块级游标 —— 在截断聊天历史 / 切换会话等场景调用，避免后续事件挂到已被移除的消息上 */
 export function resetEventBridgeCursors() {
   _latestVerificationMsgId = undefined
   _latestDoneToolCallId = undefined
+  _latestCheckpointId = undefined
+}
+
+function _upsertFileChange(
+  path: string,
+  status: 'added' | 'modified' | 'deleted',
+  parsed?: ParsedFileDiff,
+) {
+  const existing = useUIStore.getState().fileChanges.find((c) => c.path === path)
+  if (existing) {
+    useUIStore.setState((s) => ({
+      fileChanges: s.fileChanges.map((c) =>
+        c.path === path
+          ? {
+              ...c,
+              status,
+              additions: parsed?.additions ?? c.additions,
+              deletions: parsed?.deletions ?? c.deletions,
+              diff: parsed?.lines ?? c.diff,
+              checkpoint_id: _latestCheckpointId ?? c.checkpoint_id,
+            }
+          : c,
+      ),
+    }))
+  } else {
+    useUIStore.getState().addFileChange({
+      id: `fc_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      path,
+      status,
+      additions: parsed?.additions ?? 0,
+      deletions: parsed?.deletions ?? 0,
+      diff: parsed?.lines,
+      checkpoint_id: _latestCheckpointId,
+    })
+  }
+}
+
+/** 写文件工具名集合 */
+const FILE_WRITE_TOOLS = new Set([
+  'filesystem_write_file',
+  'filesystem_edit',
+  'filesystem_delete_file',
+  'filesystem_move_file',
+  'filesystem_copy_file',
+])
+
+/** 从 ToolStart 事件提取文件路径并立即填充面板（+0/-0 占位，等 tool_diff 覆盖真实数据） */
+function _trackFileChangeFromTool(toolName: string, argsRaw: string) {
+  if (!FILE_WRITE_TOOLS.has(toolName)) return
+
+  let args: Record<string, unknown>
+  try {
+    args = JSON.parse(argsRaw)
+  } catch {
+    return
+  }
+
+  // 统一用 modified 占位，真实状态由 tool_diff 事件覆盖
+  if (toolName === 'filesystem_move_file' || toolName === 'filesystem_copy_file') {
+    const src = typeof args.source_path === 'string' ? args.source_path : ''
+    const dst = typeof args.destination_path === 'string' ? args.destination_path : ''
+    if (src) _upsertFileChange(src, 'modified')
+    if (dst) _upsertFileChange(dst, 'modified')
+  } else {
+    const path = typeof args.path === 'string' ? args.path : ''
+    if (path) _upsertFileChange(path, 'modified')
+  }
+
+  if (!useUIStore.getState().changesPanelOpen) {
+    useUIStore.getState().toggleChangesPanel()
+  }
+}
+
+/** 处理 tool_diff 事件：用后端提供的精确 diff 数据更新 FileChange 条目 */
+function _applyToolDiff(payload: ToolDiffPayload) {
+  // 多文件工具（move/copy）
+  if (payload.diffs && payload.diffs.length > 0) {
+    for (const entry of payload.diffs) {
+      const status: 'added' | 'modified' | 'deleted' = entry.was_new ? 'added' : 'modified'
+      const parsed = entry.diff ? parseSingleFileDiff(entry.diff) : undefined
+      _upsertFileChange(entry.path, status, parsed)
+    }
+  } else {
+    // 单文件工具（write/edit/delete）
+    const path = payload.file_path
+    if (!path) return
+    const status: 'added' | 'modified' | 'deleted' =
+      payload.was_new ? 'added' :
+      payload.tool_name === 'filesystem_delete_file' ? 'deleted' : 'modified'
+    const parsed = payload.diff ? parseSingleFileDiff(payload.diff) : undefined
+    _upsertFileChange(path, status, parsed)
+  }
+
+  if (!useUIStore.getState().changesPanelOpen) {
+    useUIStore.getState().toggleChangesPanel()
+  }
 }
 
 function normalizePermissionPayload(raw: unknown): PermissionRequestPayload | null {
@@ -128,18 +229,23 @@ export function handleGatewayEvent(frame: MessageFrame, gatewayAPI: GatewayAPI) 
     }
 
     case EventType.ToolStart: {
+      const toolName = strField(eventPayload, 'name')
+      const toolArgs = strField(eventPayload, 'arguments')
       const msg = {
         id: `tool_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
         role: 'tool' as const,
         type: 'tool_call' as const,
         content: '',
-        toolName: strField(eventPayload, 'name'),
+        toolName,
         toolCallId: strField(eventPayload, 'id'),
-        toolArgs: strField(eventPayload, 'arguments'),
+        toolArgs,
         toolStatus: 'running' as const,
         timestamp: Date.now(),
       }
       useChatStore.getState().addMessage(msg)
+
+      // 从写文件工具的参数中提取文件路径，立即填充 FileChangePanel
+      _trackFileChangeFromTool(toolName, toolArgs)
       break
     }
 
@@ -147,6 +253,12 @@ export function handleGatewayEvent(frame: MessageFrame, gatewayAPI: GatewayAPI) 
       const tcId = strField(eventPayload, 'tool_call_id')
       useChatStore.getState().updateToolCall(tcId, strField(eventPayload, 'content'), 'done')
       _latestDoneToolCallId = tcId
+      break
+    }
+
+    case EventType.ToolDiff: {
+      const diffPayload = eventPayload as ToolDiffPayload | undefined
+      if (diffPayload) _applyToolDiff(diffPayload)
       break
     }
 
@@ -268,16 +380,6 @@ export function handleGatewayEvent(frame: MessageFrame, gatewayAPI: GatewayAPI) 
       const assetPath = strField(eventPayload, 'path')
       if (assetPath) {
         uiStore.showToast(`文件已保存: ${assetPath}`, 'success')
-        const currentChanges = useUIStore.getState().fileChanges
-        if (!currentChanges.find((c) => c.path === assetPath)) {
-          uiStore.addFileChange({
-            id: `fc_${Date.now()}`,
-            path: assetPath,
-            status: 'modified' as const,
-            additions: 0,
-            deletions: 0,
-          })
-        }
       }
       break
     }
@@ -410,6 +512,7 @@ export function handleGatewayEvent(frame: MessageFrame, gatewayAPI: GatewayAPI) 
         if (_latestDoneToolCallId) {
           chatStore.attachCheckpointToToolCall(_latestDoneToolCallId, payload.checkpoint_id)
         }
+        _latestCheckpointId = payload.checkpoint_id
       }
       break
     }

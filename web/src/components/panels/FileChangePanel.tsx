@@ -1,5 +1,7 @@
 import { useState, useMemo } from 'react'
-import { useUIStore } from '@/stores/useUIStore'
+import { useUIStore, type FileChange } from '@/stores/useUIStore'
+import { useSessionStore } from '@/stores/useSessionStore'
+import { useGatewayAPI } from '@/context/RuntimeProvider'
 import {
   ChevronRight,
   FileDiff,
@@ -62,14 +64,41 @@ function FileChangeItem({
   expanded,
   onToggle,
 }: {
-  change: { id: string; path: string; status: string; additions: number; deletions: number; diff?: { type: 'add' | 'del' | 'header'; content: string }[] }
+  change: FileChange
   expanded: boolean
   onToggle: () => void
 }) {
   const acceptFileChange = useUIStore((s) => s.acceptFileChange)
   const rejectFileChange = useUIStore((s) => s.rejectFileChange)
+  const gatewayAPI = useGatewayAPI()
+  const sessionId = useSessionStore((s) => s.currentSessionId)
   const meta = getStatusMeta(change.status)
   const reviewed = change.status === 'accepted' || change.status === 'rejected'
+
+  const handleReject = async () => {
+    if (!change.checkpoint_id || !gatewayAPI || !sessionId) {
+      rejectFileChange(change.id)
+      return
+    }
+    const confirmed = window.confirm(
+      `将恢复到更改前的状态，该操作会回退该轮所有文件变更，是否继续？\n\n文件：${change.path}`
+    )
+    if (!confirmed) return
+
+    try {
+      const result = await gatewayAPI.restoreCheckpoint({
+        session_id: sessionId,
+        checkpoint_id: change.checkpoint_id,
+      })
+      if (result?.payload) {
+        useUIStore.getState().clearFileChanges()
+        useUIStore.getState().showToast('已恢复到更改前的状态', 'success')
+      }
+    } catch (e) {
+      console.warn('[FileChangePanel] restoreCheckpoint failed:', e)
+      useUIStore.getState().showToast('恢复失败', 'error')
+    }
+  }
 
   return (
     <div style={styles.changeCard}>
@@ -97,16 +126,16 @@ function FileChangeItem({
               style={{ ...styles.actionBtn, color: reviewed ? 'var(--text-tertiary)' : 'var(--success)' }}
               onClick={() => acceptFileChange(change.id)}
               disabled={reviewed}
-              title="接受更改"
+              title="标记为已审阅"
             >
               <Check size={13} />
               接受
             </button>
             <button
               style={{ ...styles.actionBtn, color: reviewed ? 'var(--text-tertiary)' : 'var(--error)' }}
-              onClick={() => rejectFileChange(change.id)}
+              onClick={handleReject}
               disabled={reviewed}
-              title="拒绝更改"
+              title="拒绝并回退更改"
             >
               <X size={13} />
               拒绝
