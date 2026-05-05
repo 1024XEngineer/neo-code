@@ -91,3 +91,53 @@ func TestResetTodosForUserRunKeepsTodosForContinuePrompt(t *testing.T) {
 		t.Fatalf("continue prompt should not emit reset events, got %+v", events)
 	}
 }
+
+func TestShouldResetTodosForUserRunContinueVariants(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name      string
+		goal      string
+		wantReset bool
+	}{
+		// 续做语义 → 应保留旧 todo
+		{"empty", "", false},
+		{"chinese exact", "继续", false},
+		{"chinese with content", "继续修这个", false},
+		{"chinese with punctuation", "继续。", false},
+		{"chinese alt prefix 接着", "接着做", false},
+		{"chinese alt prefix 续做", "续做完未做的", false},
+		{"chinese alt prefix 再继续", "再继续完善", false},
+		{"chinese alt prefix 再来", "再来一次", false},
+		{"english exact lowercase", "continue", false},
+		{"english with content", "continue with the failing test", false},
+		{"english punctuation", "Continue!", false},
+		{"english keep going", "keep going", false},
+		{"english keep going with content", "keep going on the bug fix", false},
+		{"english keep doing", "keep doing it", false},
+		{"english go on", "go on please", false},
+		{"english resume", "resume task", false},
+		{"english carry on", "carry on with the migration", false},
+		{"trailing chinese punctuation", "继续，", false},
+		{"trailing question mark", "go on?", false},
+
+		// 新指令 → 应清空旧 todo
+		{"new task chinese", "修复登录 bug", true},
+		{"start over", "重新开始项目", true},
+		{"keep without going", "keep it simple please", true},
+		{"continueworking no boundary", "continueworking", true},
+		{"new task english", "implement search api", true},
+		{"explore", "开始下一个任务", true},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := shouldResetTodosForUserRun(tc.goal)
+			if got != tc.wantReset {
+				t.Fatalf("shouldResetTodosForUserRun(%q) = %v, want %v", tc.goal, got, tc.wantReset)
+			}
+		})
+	}
+}
