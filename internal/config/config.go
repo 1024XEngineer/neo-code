@@ -28,6 +28,7 @@ type Config struct {
 	Tools                   ToolsConfig      `yaml:"tools,omitempty"`
 	Memo                    MemoConfig       `yaml:"memo,omitempty"`
 	Gateway                 GatewayConfig    `yaml:"gateway,omitempty"`
+	Feishu                  FeishuConfig     `yaml:"feishu,omitempty"`
 }
 
 // StaticDefaults 返回 config 层负责的静态默认值骨架，不包含 provider 装配和选择状态修复。
@@ -45,6 +46,7 @@ func StaticDefaults() *Config {
 		},
 		Memo:    defaultMemoConfig(),
 		Gateway: defaultGatewayConfig(),
+		Feishu:  defaultFeishuConfig(),
 	}
 }
 
@@ -60,6 +62,7 @@ func (c *Config) Clone() Config {
 	clone.Tools = c.Tools.Clone()
 	clone.Memo = c.Memo.Clone()
 	clone.Gateway = c.Gateway.Clone()
+	clone.Feishu = c.Feishu.Clone()
 	return clone
 }
 
@@ -86,6 +89,7 @@ func (c *Config) applyStaticDefaults(defaults Config) {
 	c.Tools.ApplyDefaults(defaults.Tools)
 	c.Memo.ApplyDefaults(defaults.Memo)
 	c.Gateway.ApplyDefaults(defaults.Gateway)
+	c.Feishu.ApplyDefaults(defaults.Feishu)
 
 	c.Workdir = normalizeWorkdir(c.Workdir)
 }
@@ -150,6 +154,9 @@ func (c *Config) ValidateSnapshot() error {
 	}
 	if err := c.Gateway.Validate(); err != nil {
 		return fmt.Errorf("config: gateway: %w", err)
+	}
+	if err := c.Feishu.Validate(); err != nil {
+		return fmt.Errorf("config: feishu: %w", err)
 	}
 
 	return nil

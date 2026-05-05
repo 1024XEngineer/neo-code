@@ -98,6 +98,7 @@ func NewRootCommand() *cobra.Command {
 	_ = settings.BindPFlag("wake-input-b64", cmd.PersistentFlags().Lookup("wake-input-b64"))
 	cmd.AddCommand(
 		newGatewayCommand(),
+		newFeishuAdapterCommand(),
 		newWebCommand(),
 		newDaemonCommand(),
 		newShellCommand(),

@@ -342,6 +342,44 @@ go run ./cmd/neocode --workdir /path/to/workspace
 - 不会回写到 `config.yaml`
 - 工具根目录与 session 隔离都会使用该工作区
 
+## Feishu Adapter 配置（Phase 1）
+
+如需启用飞书桥接器，可在 `config.yaml` 增加 `feishu` 段：
+
+```yaml
+feishu:
+  enabled: true
+  app_id: "cli_xxx"
+  app_secret: "cli_secret_xxx"
+  verify_token: "verify_token_xxx"
+  signing_secret: "signing_secret_xxx"
+  insecure_skip_signature_verify: false
+  adapter:
+    listen: "127.0.0.1:18080"
+    event_path: "/feishu/events"
+    card_path: "/feishu/cards"
+  idempotency_ttl_sec: 600
+  request_timeout_sec: 8
+  reconnect_backoff_min_ms: 500
+  reconnect_backoff_max_ms: 10000
+  rebind_interval_sec: 15
+  gateway:
+    listen: "127.0.0.1:8080"
+    token_file: "~/.neocode/auth.json"
+```
+
+启动命令：
+
+```bash
+neocode feishu-adapter
+```
+
+说明：
+
+- 本阶段不会新增 Gateway action，适配器只复用既有 `authenticate / bindStream / run / resolvePermission / gateway.event`。
+- `session_id` 与 `run_id` 由飞书 chat/message 标识稳定映射生成，用于去重与追踪。
+- 默认强制启用签名校验；仅在联调场景可显式设置 `insecure_skip_signature_verify=true` 跳过（不建议生产）。
+
 ## 常见错误
 
 ### 旧字段被拒绝

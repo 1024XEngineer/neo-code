@@ -1,0 +1,19 @@
+feishu:
+  enabled: true
+  app_id: "cli_xxx"
+  app_secret: "cli_secret_xxx"
+  verify_token: "verify_token_xxx"
+  signing_secret: "signing_secret_xxx"
+  insecure_skip_signature_verify: false
+  adapter:
+    listen: "127.0.0.1:18080"
+    event_path: "/feishu/events"
+    card_path: "/feishu/cards"
+  idempotency_ttl_sec: 600
+  request_timeout_sec: 8
+  reconnect_backoff_min_ms: 500
+  reconnect_backoff_max_ms: 10000
+  rebind_interval_sec: 15
+  gateway:
+    listen: "127.0.0.1:8080"
+    token_file: "~/.neocode/auth.json"

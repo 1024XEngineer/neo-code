@@ -1753,6 +1753,18 @@ func TestValidateSnapshotPropagatesCompactError(t *testing.T) {
 	}
 }
 
+func TestValidateSnapshotPropagatesFeishuError(t *testing.T) {
+	t.Parallel()
+
+	cfg := testDefaultConfig().Clone()
+	cfg.Workdir = filepath.Clean(t.TempDir())
+	cfg.Feishu = FeishuConfig{Enabled: true}
+	err := cfg.ValidateSnapshot()
+	if err == nil || !strings.Contains(err.Error(), "config: feishu:") {
+		t.Fatalf("expected feishu validation error, got %v", err)
+	}
+}
+
 func TestManagerUpdateNilMutateFunc(t *testing.T) {
 	tempDir := t.TempDir()
 	manager := NewManager(NewLoader(tempDir, testDefaultConfig()))

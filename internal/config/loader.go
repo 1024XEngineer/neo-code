@@ -32,6 +32,7 @@ type persistedConfig struct {
 	Tools                   ToolsConfig            `yaml:"tools,omitempty"`
 	Memo                    persistedMemoConfig    `yaml:"memo,omitempty"`
 	Gateway                 GatewayConfig          `yaml:"gateway,omitempty"`
+	Feishu                  FeishuConfig           `yaml:"feishu,omitempty"`
 }
 
 type persistedContextConfig struct {
@@ -236,6 +237,7 @@ func parseCurrentConfig(data []byte, contextDefaults ContextConfig, memoDefaults
 		Tools:                   file.Tools,
 		Memo:                    fromPersistedMemoConfig(file.Memo, memoDefaults),
 		Gateway:                 file.Gateway,
+		Feishu:                  file.Feishu,
 	}
 
 	return cfg, nil
@@ -253,6 +255,7 @@ func marshalPersistedConfig(snapshot Config) ([]byte, error) {
 		Tools:                   snapshot.Tools,
 		Memo:                    newPersistedMemoConfig(snapshot.Memo),
 		Gateway:                 snapshot.Gateway,
+		Feishu:                  snapshot.Feishu,
 	}
 
 	data, err := yaml.Marshal(&file)

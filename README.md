@@ -247,9 +247,10 @@ go run ./cmd/neocode --session <session_id>
 
 详细说明在文档内：
 
-- [Gateway 集成与协议（Guide）](https://neocode-docs.pages.dev/guide/gateway)
+- [Gateway 集成与协议（Reference）](https://neocode-docs.pages.dev/reference/gateway)
 - [MCP 工具接入（Guide）](https://neocode-docs.pages.dev/guide/mcp)
 - [Skills 使用（Guide）](https://neocode-docs.pages.dev/guide/skills)
+- [飞书远程接入配置（Guide）](https://neocode-docs.pages.dev/guide/feishu-remote-setup)
 - [Hooks 使用（Guide）](https://neocode-docs.pages.dev/guide/hooks)
 - [工具与权限（Guide）](https://neocode-docs.pages.dev/guide/tools-permissions)
 - [Runtime / Provider 事件流（Repo Doc）](docs/runtime-provider-event-flow.md)
@@ -261,6 +262,10 @@ go run ./cmd/neocode --session <session_id>
 - 官方文档站：[https://neocode-docs.pages.dev/](https://neocode-docs.pages.dev/)
 - 快速引导（中文）：[www/guide/index.md](www/guide/index.md)
 - [配置指南](https://neocode-docs.pages.dev/guide/configuration)
+- [飞书远程接入配置](https://neocode-docs.pages.dev/guide/feishu-remote-setup)
+- [工具与权限](https://neocode-docs.pages.dev/guide/tools-permissions)
+- [Skills 使用](https://neocode-docs.pages.dev/guide/skills)
+- [MCP 工具接入](https://neocode-docs.pages.dev/guide/mcp)
 - [升级与版本检查](https://neocode-docs.pages.dev/guide/update)
 - [排障与常见问题](https://neocode-docs.pages.dev/guide/troubleshooting)
 
