@@ -9,7 +9,7 @@ import (
 )
 
 // CurrentTodoVersion 表示当前 Todo 结构版本。
-const CurrentTodoVersion = 6
+const CurrentTodoVersion = 7
 
 // TodoStatus 表示 Todo 项的状态枚举。
 type TodoStatus string
@@ -131,15 +131,6 @@ func (i TodoItem) RequiredValue() bool {
 	return *i.Required
 }
 
-// BlockedReasonValue 返回 todo 阻塞原因，兼容旧数据缺省值 unknown。
-func (i TodoItem) BlockedReasonValue() TodoBlockedReason {
-	normalized := normalizeTodoBlockedReason(i.BlockedReason)
-	if normalized == "" {
-		return TodoBlockedReasonUnknown
-	}
-	return normalized
-}
-
 // Valid 判断当前状态值是否为受支持状态。
 func (s TodoStatus) Valid() bool {
 	switch s {
@@ -216,10 +207,13 @@ func (s Session) GetTodoByID(id string) (*TodoItem, error) {
 	return &item, nil
 }
 
-// ReplaceTodos 用于整批替换当前 Todos（plan 场景）。
+// ReplaceTodos 用于整批替换当前 Todos（plan 场景）。空集合会被拒绝;清空意图请走 DeleteTodo / SetTodoStatus。
 func (s *Session) ReplaceTodos(items []TodoItem) error {
 	if s == nil {
 		return errors.New("session: session is nil")
+	}
+	if len(items) == 0 {
+		return errors.New("session: ReplaceTodos requires non-empty items; use DeleteTodo to remove individual entries or transition status instead")
 	}
 	normalized, err := normalizeAndValidateTodos(append([]TodoItem(nil), items...))
 	if err != nil {
@@ -314,7 +308,7 @@ func (s *Session) UpdateTodo(id string, patch TodoPatch, expectedRevision int64)
 func (s *Session) ClaimTodo(id string, ownerType string, ownerID string, expectedRevision int64) error {
 	status := TodoStatusInProgress
 	failureReason := ""
-	blockedReason := TodoBlockedReasonUnknown
+	blockedReason := TodoBlockedReason("")
 	nextRetryAt := time.Time{}
 	patch := TodoPatch{
 		Status:        &status,
@@ -331,7 +325,7 @@ func (s *Session) ClaimTodo(id string, ownerType string, ownerID string, expecte
 func (s *Session) CompleteTodo(id string, artifacts []string, expectedRevision int64) error {
 	status := TodoStatusCompleted
 	failureReason := ""
-	blockedReason := TodoBlockedReasonUnknown
+	blockedReason := TodoBlockedReason("")
 	retryCount := 0
 	nextRetryAt := time.Time{}
 	patch := TodoPatch{
@@ -348,7 +342,7 @@ func (s *Session) CompleteTodo(id string, artifacts []string, expectedRevision i
 // FailTodo 将 Todo 标记为失败并记录失败原因。
 func (s *Session) FailTodo(id string, reason string, expectedRevision int64) error {
 	status := TodoStatusFailed
-	blockedReason := TodoBlockedReasonUnknown
+	blockedReason := TodoBlockedReason("")
 	nextRetryAt := time.Time{}
 	patch := TodoPatch{
 		Status:        &status,
@@ -523,7 +517,7 @@ func normalizeTodoItem(item TodoItem) (TodoItem, error) {
 		item.FailureReason = ""
 	}
 	if item.Status != TodoStatusBlocked {
-		item.BlockedReason = TodoBlockedReasonUnknown
+		item.BlockedReason = ""
 	}
 	if item.Required == nil {
 		defaultRequired := true
@@ -685,13 +679,10 @@ func applyTodoPatch(item TodoItem, patch TodoPatch) (TodoItem, error) {
 	return normalized, nil
 }
 
-// normalizeTodoBlockedReason 规整 blocked_reason 字段并提供 unknown 缺省语义。
+// normalizeTodoBlockedReason 规整 blocked_reason 字段为小写、去空白;空字符串保持空(语义="未阻塞")。
+// status 与字段不一致时由 normalizeTodoItem 强制清空。
 func normalizeTodoBlockedReason(reason TodoBlockedReason) TodoBlockedReason {
-	normalized := strings.ToLower(strings.TrimSpace(string(reason)))
-	if normalized == "" {
-		return TodoBlockedReasonUnknown
-	}
-	return TodoBlockedReason(normalized)
+	return TodoBlockedReason(strings.ToLower(strings.TrimSpace(string(reason))))
 }
 
 // cloneTodoContentChecks 深拷贝内容校验规则，避免切片共享底层内存。
@@ -759,9 +750,11 @@ func ensureCanceledRequiredTodosHaveReplacement(items []TodoItem) error {
 }
 
 // isValidTodoBlockedReason 判断 blocked_reason 是否受支持。
+// 空字符串合法(代表"未阻塞");其余必须是 5 个 enum 值之一。
 func isValidTodoBlockedReason(reason TodoBlockedReason) bool {
 	switch normalizeTodoBlockedReason(reason) {
-	case TodoBlockedReasonInternalDependency,
+	case "",
+		TodoBlockedReasonInternalDependency,
 		TodoBlockedReasonPermissionWait,
 		TodoBlockedReasonUserInputWait,
 		TodoBlockedReasonExternalResourceWait,

@@ -1096,7 +1096,7 @@ func buildRuntimeTodoSnapshotFromSessionTodos(items []agentsession.TodoItem) age
 			Required:      required,
 			Artifacts:     append([]string(nil), item.Artifacts...),
 			FailureReason: strings.TrimSpace(item.FailureReason),
-			BlockedReason: strings.TrimSpace(string(item.BlockedReasonValue())),
+			BlockedReason: strings.TrimSpace(string(item.BlockedReason)),
 			Revision:      item.Revision,
 		})
 	}
