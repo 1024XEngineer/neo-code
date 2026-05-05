@@ -614,9 +614,10 @@ func (b *gatewayRuntimePortBridge) ListModels(ctx context.Context, input gateway
 				name = id
 			}
 			models = append(models, gateway.ModelEntry{
-				ID:       id,
-				Name:     name,
-				Provider: strings.TrimSpace(p.ID),
+				ID:              id,
+				Name:            name,
+				Provider:        strings.TrimSpace(p.ID),
+				CapabilityHints: model.CapabilityHints,
 			})
 		}
 	}

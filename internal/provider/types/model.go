@@ -16,8 +16,12 @@ const (
 
 // ModelCapabilityHints 描述 discovery/catalog 链路共享的模型能力提示。
 type ModelCapabilityHints struct {
-	ToolCalling ModelCapabilityState `json:"tool_calling,omitempty"`
-	ImageInput  ModelCapabilityState `json:"image_input,omitempty"`
+	ToolCalling           ModelCapabilityState `json:"tool_calling,omitempty"`
+	ImageInput            ModelCapabilityState `json:"image_input,omitempty"`
+	Thinking              ModelCapabilityState `json:"thinking,omitempty"`
+	ThinkingEfforts       []string             `json:"thinking_efforts,omitempty"`
+	ThinkingDefaultEffort string               `json:"thinking_default_effort,omitempty"`
+	ThinkingForceEnabled  bool                 `json:"thinking_force_enabled,omitempty"`
 }
 
 // ModelDescriptor 表示 discovery/catalog 链路共享的模型元数据描述符。
@@ -170,6 +174,18 @@ func mergeModelCapabilityHints(primary ModelCapabilityHints, secondary ModelCapa
 	if primary.ImageInput == "" {
 		primary.ImageInput = secondary.ImageInput
 	}
+	if primary.Thinking == "" {
+		primary.Thinking = secondary.Thinking
+	}
+	if len(primary.ThinkingEfforts) == 0 {
+		primary.ThinkingEfforts = secondary.ThinkingEfforts
+	}
+	if primary.ThinkingDefaultEffort == "" {
+		primary.ThinkingDefaultEffort = secondary.ThinkingDefaultEffort
+	}
+	if !primary.ThinkingForceEnabled {
+		primary.ThinkingForceEnabled = secondary.ThinkingForceEnabled
+	}
 	return normalizeModelCapabilityHints(primary)
 }
 
@@ -177,6 +193,7 @@ func mergeModelCapabilityHints(primary ModelCapabilityHints, secondary ModelCapa
 func normalizeModelCapabilityHints(hints ModelCapabilityHints) ModelCapabilityHints {
 	hints.ToolCalling = normalizeModelCapabilityState(string(hints.ToolCalling))
 	hints.ImageInput = normalizeModelCapabilityState(string(hints.ImageInput))
+	hints.Thinking = normalizeModelCapabilityState(string(hints.Thinking))
 	return hints
 }
 
@@ -189,16 +206,19 @@ func modelCapabilityHintsFromValue(value any) ModelCapabilityHints {
 
 	hints := ModelCapabilityHints{}
 	for key, item := range raw {
-		boolValue, ok := item.(bool)
-		if !ok {
-			continue
-		}
-
 		switch normalizeKey(key) {
 		case "tool_calling", "tool_call":
-			hints.ToolCalling = modelCapabilityStateFromBool(boolValue)
+			if boolValue, ok := item.(bool); ok {
+				hints.ToolCalling = modelCapabilityStateFromBool(boolValue)
+			}
 		case "image_input":
-			hints.ImageInput = modelCapabilityStateFromBool(boolValue)
+			if boolValue, ok := item.(bool); ok {
+				hints.ImageInput = modelCapabilityStateFromBool(boolValue)
+			}
+		case "thinking":
+			if boolValue, ok := item.(bool); ok {
+				hints.Thinking = modelCapabilityStateFromBool(boolValue)
+			}
 		}
 	}
 	return normalizeModelCapabilityHints(hints)

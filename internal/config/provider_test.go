@@ -622,11 +622,11 @@ func TestDefaultProvidersReturnsAllBuiltins(t *testing.T) {
 	t.Parallel()
 
 	providers := DefaultProviders()
-	if len(providers) != 4 {
-		t.Fatalf("expected 4 builtin providers, got %d", len(providers))
+	if len(providers) != 10 {
+		t.Fatalf("expected 10 builtin providers, got %d", len(providers))
 	}
 
-	expectedNames := []string{OpenAIName, GeminiName, QiniuName, ModelScopeName}
+	expectedNames := []string{OpenAIName, GeminiName, DeepSeekName, KimiName, QwenName, GLMName, MiMoName, MiniMaxName, QiniuName, ModelScopeName}
 	for i, provider := range providers {
 		if provider.Name != expectedNames[i] {
 			t.Fatalf("expected provider[%d] name %q, got %q", i, expectedNames[i], provider.Name)

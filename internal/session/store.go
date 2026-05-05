@@ -14,7 +14,7 @@ import (
 const (
 	sessionDatabaseFileName = "session.db"
 	assetsDirName           = "assets"
-	sqliteSchemaVersion     = 6
+	sqliteSchemaVersion     = 7
 
 	// MaxSessionMessages 定义单个会话允许持久化的最大消息数，超出时自动裁剪最旧消息。
 	MaxSessionMessages = 8192

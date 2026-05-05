@@ -856,3 +856,17 @@ type TodoContentCheck struct {
 	Artifact string   `json:"artifact,omitempty"`
 	Contains []string `json:"contains,omitempty"`
 }
+
+// CancelNonTerminalTodos 将列表中所有非终态（pending/in_progress/blocked）的 todo 标记为 canceled。
+// 终态（completed/failed/canceled）的 todo 不受影响。
+// 用于 plan revision 切换时清理上一版计划遗留的活跃 todo。
+func CancelNonTerminalTodos(todos []TodoItem) {
+	now := time.Now().UTC()
+	for i := range todos {
+		switch todos[i].Status {
+		case TodoStatusPending, TodoStatusInProgress, TodoStatusBlocked:
+			todos[i].Status = TodoStatusCanceled
+			todos[i].UpdatedAt = now
+		}
+	}
+}

@@ -14,9 +14,10 @@ var (
 	ErrDiscoveryConfig         = errors.New("provider: discovery config invalid")
 
 	// 流级哨兵错误，用于区分可恢复/不可恢复的流中断原因。
-	ErrStreamInterrupted = errors.New("provider: stream interrupted")
-	ErrLineTooLong       = errors.New("provider: SSE line exceeds max length")
-	ErrStreamTooLarge    = errors.New("provider: stream total size exceeds limit")
+	ErrStreamInterrupted    = errors.New("provider: stream interrupted")
+	ErrLineTooLong          = errors.New("provider: SSE line exceeds max length")
+	ErrStreamTooLarge       = errors.New("provider: stream total size exceeds limit")
+	ErrThinkingNotSupported = errors.New("provider: thinking not supported for this model")
 )
 
 type ProviderErrorCode string
@@ -152,6 +153,14 @@ func NewTimeoutProviderError(message string) *ProviderError {
 		Message:    message,
 		Retryable:  true, // 超时默认可重试
 	}
+}
+
+// IsThinkingNotSupportedError 判断错误是否为 thinking 不支持错误。
+func IsThinkingNotSupportedError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return errors.Is(err, ErrThinkingNotSupported)
 }
 
 // IsContextTooLong 判断 provider 错误是否表示请求上下文超出模型窗口。

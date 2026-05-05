@@ -53,10 +53,16 @@ func TestSelectionServiceListProviderOptionsUsesCatalogModels(t *testing.T) {
 		t.Fatalf("ListProviderOptions() error = %v", err)
 	}
 	expected := map[string]int{
-		OpenAIName:     2,
-		GeminiName:     2,
-		QiniuName:      2,
-		ModelScopeName: 2,
+		configpkg.OpenAIName:     2,
+		configpkg.GeminiName:     2,
+		configpkg.DeepSeekName:   2,
+		configpkg.KimiName:       2,
+		configpkg.QwenName:       2,
+		configpkg.GLMName:        2,
+		configpkg.MiMoName:       2,
+		configpkg.MiniMaxName:    2,
+		configpkg.QiniuName:      2,
+		configpkg.ModelScopeName: 2,
 	}
 	if len(items) != len(expected) {
 		t.Fatalf("expected only builtin providers, got %d", len(items))

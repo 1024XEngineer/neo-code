@@ -75,8 +75,8 @@ func TestListProviderModelsBuiltinDiscoversAndMergesWithStaticModels(t *testing.
 	if err != nil {
 		t.Fatalf("ListProviderModels() error = %v", err)
 	}
-	if len(models) != 7 {
-		t.Fatalf("expected 7 models (6 static + 1 new discovered), got %d: %+v", len(models), models)
+	if len(models) != 8 {
+		t.Fatalf("expected 8 models (7 static + 1 new discovered), got %d: %+v", len(models), models)
 	}
 
 	// Discovered model not in static list should appear
@@ -102,8 +102,8 @@ func TestListProviderModelsBuiltinFallbackWhenDiscoveryFails(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListProviderModels() error = %v", err)
 	}
-	if len(models) != 6 {
-		t.Fatalf("expected 6 fallback static models when discovery fails, got %d: %+v", len(models), models)
+	if len(models) != 7 {
+		t.Fatalf("expected 7 fallback static models when discovery fails, got %d: %+v", len(models), models)
 	}
 	if !containsModelDescriptorID(models, config.OpenAIDefaultModel) {
 		t.Fatalf("expected fallback default model to be present, got %+v", models)

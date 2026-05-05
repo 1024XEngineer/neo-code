@@ -73,8 +73,8 @@ func (p ProviderConfig) Validate() error {
 	if normalizedDriver == "" {
 		return fmt.Errorf("provider %q driver is empty", p.Name)
 	}
-	if normalizedDriver != provider.DriverOpenAICompat && strings.TrimSpace(p.ChatAPIMode) != "" {
-		return fmt.Errorf("provider %q chat_api_mode is only supported for openaicompat driver", p.Name)
+	if !supportsChatAPIMode(normalizedDriver) && strings.TrimSpace(p.ChatAPIMode) != "" {
+		return fmt.Errorf("provider %q chat_api_mode is only supported for openaicompat-compatible drivers", p.Name)
 	}
 	if strings.TrimSpace(p.BaseURL) == "" && !allowsEmptyBaseURL(normalizedDriver) {
 		return fmt.Errorf("provider %q base_url is empty", p.Name)
@@ -367,7 +367,7 @@ func normalizeProviderRuntimePathsFromConfig(cfg ProviderConfig) (string, string
 
 // requiresDiscoveryEndpointPath 标记哪些 driver 的 discover 仍依赖 HTTP endpoint 配置。
 func requiresDiscoveryEndpointPath(driver string) bool {
-	return normalizeProviderDriver(driver) == provider.DriverOpenAICompat
+	return isOpenAICompatLike(driver)
 }
 
 // sanitizeRuntimeBaseURL 对运行时 base_url 做最小安全规整，确保不会透传 userinfo 等敏感片段。
@@ -397,6 +397,22 @@ func allowsEmptyBaseURL(driver string) bool {
 	}
 }
 
+// supportsChatAPIMode 判断指定 driver 是否允许配置 chat_api_mode 字段。
+func supportsChatAPIMode(driver string) bool {
+	return isOpenAICompatLike(driver)
+}
+
+// isOpenAICompatLike 判断指定 driver 是否使用 OpenAI-compatible HTTP discovery。
+func isOpenAICompatLike(driver string) bool {
+	switch normalizeProviderDriver(driver) {
+	case provider.DriverOpenAICompat, provider.DriverDeepSeek, provider.DriverQwen,
+		provider.DriverGLM, provider.DriverMiMo, provider.DriverMiniMax:
+		return true
+	default:
+		return false
+	}
+}
+
 // identityBaseURL 返回用于身份归一化的 base_url，确保空值场景也有稳定键。
 func identityBaseURL(cfg ProviderConfig) string {
 	if strings.TrimSpace(cfg.BaseURL) != "" {
@@ -407,6 +423,16 @@ func identityBaseURL(cfg ProviderConfig) string {
 		return GeminiDefaultBaseURL
 	case provider.DriverAnthropic:
 		return AnthropicDefaultBaseURL
+	case provider.DriverDeepSeek:
+		return DeepSeekDefaultBaseURL
+	case provider.DriverQwen:
+		return QwenDefaultBaseURL
+	case provider.DriverGLM:
+		return GLMDefaultBaseURL
+	case provider.DriverMiMo:
+		return MiMoDefaultBaseURL
+	case provider.DriverMiniMax:
+		return MiniMaxDefaultBaseURL
 	default:
 		return cfg.BaseURL
 	}
@@ -415,12 +441,12 @@ func identityBaseURL(cfg ProviderConfig) string {
 const (
 	OpenAIName             = "openai"
 	OpenAIDefaultBaseURL   = "https://api.openai.com/v1"
-	OpenAIDefaultModel     = "gpt-5.4"
+	OpenAIDefaultModel     = "gpt-5.5"
 	OpenAIDefaultAPIKeyEnv = "OPENAI_API_KEY"
 
 	GeminiName             = "gemini"
 	GeminiDefaultBaseURL   = "https://generativelanguage.googleapis.com/v1beta"
-	GeminiDefaultModel     = "gemini-2.5-flash"
+	GeminiDefaultModel     = "gemini-3.1-pro-preview"
 	GeminiDefaultAPIKeyEnv = "GEMINI_API_KEY"
 
 	AnthropicDefaultBaseURL = "https://api.anthropic.com/v1"
@@ -437,6 +463,21 @@ const (
 )
 
 var openAIStaticModels = []providertypes.ModelDescriptor{
+	builtinModel(
+		"gpt-5.5",
+		"GPT-5.5",
+		"OpenAI flagship GPT-5.5 model with 1M context, enhanced reasoning and agentic coding.",
+		1000000,
+		128000,
+		builtinCapabilitiesV2(
+			providertypes.ModelCapabilityStateSupported,
+			providertypes.ModelCapabilityStateSupported,
+			providertypes.ModelCapabilityStateSupported,
+			[]string{"low", "medium", "high", "xhigh"},
+			"high",
+			false,
+		),
+	),
 	builtinModel(
 		"gpt-5.4",
 		"GPT-5.4",
@@ -488,6 +529,36 @@ var openAIStaticModels = []providertypes.ModelDescriptor{
 }
 
 var geminiStaticModels = []providertypes.ModelDescriptor{
+	builtinModel(
+		"gemini-3.1-pro-preview",
+		"Gemini 3.1 Pro",
+		"Latest Gemini 3.1 flagship with 2M context, advanced reasoning and agentic coding.",
+		2097152,
+		65536,
+		builtinCapabilitiesV2(
+			providertypes.ModelCapabilityStateSupported,
+			providertypes.ModelCapabilityStateSupported,
+			providertypes.ModelCapabilityStateSupported,
+			[]string{"low", "high"},
+			"high",
+			true, // ThinkingForceEnabled: only downgrade to LOW, cannot disable
+		),
+	),
+	builtinModel(
+		"gemini-3.1-flash",
+		"Gemini 3.1 Flash",
+		"Fast Gemini 3.1 model for cost-efficient multimodal tasks.",
+		1048576,
+		65536,
+		builtinCapabilitiesV2(
+			providertypes.ModelCapabilityStateSupported,
+			providertypes.ModelCapabilityStateSupported,
+			providertypes.ModelCapabilityStateSupported,
+			[]string{"low", "high"},
+			"high",
+			true, // ThinkingForceEnabled
+		),
+	),
 	builtinModel(
 		"gemini-2.5-flash",
 		"Gemini 2.5 Flash",
@@ -544,6 +615,23 @@ func builtinCapabilities(
 	return providertypes.ModelCapabilityHints{
 		ToolCalling: toolCalling,
 		ImageInput:  imageInput,
+	}
+}
+
+// builtinCapabilitiesV2 构造包含 thinking 能力的静态模型能力提示。
+func builtinCapabilitiesV2(
+	toolCalling, imageInput, thinking providertypes.ModelCapabilityState,
+	thinkingEfforts []string,
+	thinkingDefaultEffort string,
+	thinkingForceEnabled bool,
+) providertypes.ModelCapabilityHints {
+	return providertypes.ModelCapabilityHints{
+		ToolCalling:           toolCalling,
+		ImageInput:            imageInput,
+		Thinking:              thinking,
+		ThinkingEfforts:       thinkingEfforts,
+		ThinkingDefaultEffort: thinkingDefaultEffort,
+		ThinkingForceEnabled:  thinkingForceEnabled,
 	}
 }
 
@@ -621,11 +709,341 @@ func ModelScopeProvider() ProviderConfig {
 	return cfg
 }
 
+const (
+	// New provider constants
+	DeepSeekName             = "deepseek"
+	DeepSeekDefaultBaseURL   = "https://api.deepseek.com"
+	DeepSeekDefaultModel     = "deepseek-v4-pro"
+	DeepSeekDefaultAPIKeyEnv = "DEEPSEEK_API_KEY"
+
+	KimiName             = "kimi"
+	KimiDefaultBaseURL   = "https://api.moonshot.cn/v1"
+	KimiDefaultModel     = "kimi-k2.6"
+	KimiDefaultAPIKeyEnv = "KIMI_API_KEY"
+
+	QwenName             = "qwen"
+	QwenDefaultBaseURL   = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+	QwenDefaultModel     = "qwen3.6-plus"
+	QwenDefaultAPIKeyEnv = "QWEN_API_KEY"
+
+	GLMName             = "glm"
+	GLMDefaultBaseURL   = "https://api.z.ai/api/paas/v4"
+	GLMDefaultModel     = "glm-5.1"
+	GLMDefaultAPIKeyEnv = "GLM_API_KEY"
+
+	MiMoName             = "mimo"
+	MiMoDefaultBaseURL   = "https://api.xiaomimimo.com/v1"
+	MiMoDefaultModel     = "mimo-v2.5-pro"
+	MiMoDefaultAPIKeyEnv = "MIMO_API_KEY"
+
+	MiniMaxName             = "minimax"
+	MiniMaxDefaultBaseURL   = "https://api.minimax.chat/v1/text/chatcompletion_v2"
+	MiniMaxDefaultModel     = "MiniMax-M2.7"
+	MiniMaxDefaultAPIKeyEnv = "MINIMAX_API_KEY"
+)
+
+// New static model lists.
+var deepSeekStaticModels = []providertypes.ModelDescriptor{
+	builtinModel(
+		"deepseek-v4-pro",
+		"DeepSeek V4 Pro",
+		"Flagship DeepSeek MoE model with 1M context and thinking/non-thinking dual modes.",
+		1048576,
+		384000,
+		builtinCapabilitiesV2(
+			providertypes.ModelCapabilityStateSupported,
+			providertypes.ModelCapabilityStateUnsupported,
+			providertypes.ModelCapabilityStateSupported,
+			[]string{"high", "max"},
+			"high",
+			false,
+		),
+	),
+	builtinModel(
+		"deepseek-v4-flash",
+		"DeepSeek V4 Flash",
+		"Fast, economical DeepSeek MoE model with 1M context and dual modes.",
+		1048576,
+		384000,
+		builtinCapabilitiesV2(
+			providertypes.ModelCapabilityStateSupported,
+			providertypes.ModelCapabilityStateUnsupported,
+			providertypes.ModelCapabilityStateSupported,
+			[]string{"high", "max"},
+			"high",
+			false,
+		),
+	),
+}
+
+var kimiStaticModels = []providertypes.ModelDescriptor{
+	builtinModel(
+		"kimi-k2.6",
+		"Kimi K2.6",
+		"Moonshot flagship 1T MoE model with 256K context and agent swarm support.",
+		262144,
+		4096,
+		builtinCapabilitiesV2(
+			providertypes.ModelCapabilityStateSupported,
+			providertypes.ModelCapabilityStateUnsupported,
+			providertypes.ModelCapabilityStateSupported,
+			nil,
+			"",
+			false,
+		),
+	),
+	builtinModel(
+		"kimi-k2.5",
+		"Kimi K2.5",
+		"Previous generation Moonshot model, flexible thinking default-on.",
+		131072,
+		4096,
+		builtinCapabilitiesV2(
+			providertypes.ModelCapabilityStateSupported,
+			providertypes.ModelCapabilityStateUnsupported,
+			providertypes.ModelCapabilityStateSupported,
+			nil,
+			"",
+			false,
+		),
+	),
+}
+
+var qwenStaticModels = []providertypes.ModelDescriptor{
+	builtinModel(
+		"qwen3.6-plus",
+		"Qwen 3.6 Plus",
+		"Alibaba flagship agentic coding model with 1M context and hybrid thinking.",
+		1048576,
+		128000,
+		builtinCapabilitiesV2(
+			providertypes.ModelCapabilityStateSupported,
+			providertypes.ModelCapabilityStateSupported,
+			providertypes.ModelCapabilityStateSupported,
+			nil,
+			"",
+			false,
+		),
+	),
+	builtinModel(
+		"qwen3.6-flash",
+		"Qwen 3.6 Flash",
+		"Fast Qwen MoE model (35B total / 3B active) for cost-efficient agent tasks.",
+		1048576,
+		32768,
+		builtinCapabilitiesV2(
+			providertypes.ModelCapabilityStateSupported,
+			providertypes.ModelCapabilityStateSupported,
+			providertypes.ModelCapabilityStateSupported,
+			nil,
+			"",
+			false,
+		),
+	),
+	builtinModel(
+		"qwen3.6-max-preview",
+		"Qwen 3.6 Max Preview",
+		"Latest Qwen flagship preview with preserve_thinking for sustained chain-of-thought.",
+		1048576,
+		128000,
+		builtinCapabilitiesV2(
+			providertypes.ModelCapabilityStateSupported,
+			providertypes.ModelCapabilityStateSupported,
+			providertypes.ModelCapabilityStateSupported,
+			nil,
+			"",
+			false,
+		),
+	),
+}
+
+var glmStaticModels = []providertypes.ModelDescriptor{
+	builtinModel(
+		"glm-5.1",
+		"GLM-5.1",
+		"Zhipu flagship model, first Chinese model matching Claude Opus 4.6 across the board.",
+		200000,
+		128000,
+		builtinCapabilitiesV2(
+			providertypes.ModelCapabilityStateSupported,
+			providertypes.ModelCapabilityStateUnsupported,
+			providertypes.ModelCapabilityStateSupported,
+			nil,
+			"",
+			false,
+		),
+	),
+	builtinModel(
+		"glm-5",
+		"GLM-5",
+		"Zhipu 744B MoE model with DeepSeek Sparse Attention, MIT licensed.",
+		200000,
+		128000,
+		builtinCapabilitiesV2(
+			providertypes.ModelCapabilityStateSupported,
+			providertypes.ModelCapabilityStateUnsupported,
+			providertypes.ModelCapabilityStateSupported,
+			nil,
+			"",
+			false,
+		),
+	),
+}
+
+var miMoStaticModels = []providertypes.ModelDescriptor{
+	builtinModel(
+		"mimo-v2.5-pro",
+		"MiMo V2.5 Pro",
+		"Xiaomi flagship 1.02T MoE model with 1M context, #1 open-source on Artificial Analysis.",
+		1048576,
+		128000,
+		builtinCapabilitiesV2(
+			providertypes.ModelCapabilityStateSupported,
+			providertypes.ModelCapabilityStateSupported,
+			providertypes.ModelCapabilityStateSupported,
+			nil,
+			"",
+			false,
+		),
+	),
+	builtinModel(
+		"mimo-v2-flash",
+		"MiMo V2 Flash",
+		"Xiaomi fast MoE model (309B/15B active), #1 open-source coding at 150 tok/s.",
+		262144,
+		32768,
+		builtinCapabilitiesV2(
+			providertypes.ModelCapabilityStateSupported,
+			providertypes.ModelCapabilityStateSupported,
+			providertypes.ModelCapabilityStateSupported,
+			nil,
+			"",
+			false,
+		),
+	),
+}
+
+var miniMaxStaticModels = []providertypes.ModelDescriptor{
+	builtinModel(
+		"MiniMax-M2.7",
+		"MiniMax M2.7",
+		"Latest MiniMax interleaved-thinking model with cost-aggressive pricing.",
+		205000,
+		8192,
+		builtinCapabilitiesV2(
+			providertypes.ModelCapabilityStateSupported,
+			providertypes.ModelCapabilityStateUnsupported,
+			providertypes.ModelCapabilityStateSupported,
+			nil,
+			"",
+			true, // ThinkingForceEnabled: enable_thinking=false is unreliable
+		),
+	),
+}
+
+// New provider factory functions.
+func DeepSeekProvider() ProviderConfig {
+	return ProviderConfig{
+		Name:             DeepSeekName,
+		Driver:           provider.DriverDeepSeek,
+		BaseURL:          DeepSeekDefaultBaseURL,
+		Model:            DeepSeekDefaultModel,
+		APIKeyEnv:        DeepSeekDefaultAPIKeyEnv,
+		ChatAPIMode:      provider.ChatAPIModeChatCompletions,
+		ChatEndpointPath: "/chat/completions",
+		ModelSource:      ModelSourceDiscover,
+		Models:           cloneBuiltinModels(deepSeekStaticModels),
+		Source:           ProviderSourceBuiltin,
+	}
+}
+
+func KimiProvider() ProviderConfig {
+	return ProviderConfig{
+		Name:                  KimiName,
+		Driver:                provider.DriverOpenAICompat,
+		BaseURL:               KimiDefaultBaseURL,
+		Model:                 KimiDefaultModel,
+		APIKeyEnv:             KimiDefaultAPIKeyEnv,
+		ChatAPIMode:           provider.ChatAPIModeChatCompletions,
+		ChatEndpointPath:      "/chat/completions",
+		DiscoveryEndpointPath: provider.DiscoveryEndpointPathModels,
+		ModelSource:           ModelSourceDiscover,
+		Models:                cloneBuiltinModels(kimiStaticModels),
+		Source:                ProviderSourceBuiltin,
+	}
+}
+
+func QwenProvider() ProviderConfig {
+	return ProviderConfig{
+		Name:             QwenName,
+		Driver:           provider.DriverQwen,
+		BaseURL:          QwenDefaultBaseURL,
+		Model:            QwenDefaultModel,
+		APIKeyEnv:        QwenDefaultAPIKeyEnv,
+		ChatAPIMode:      provider.ChatAPIModeChatCompletions,
+		ChatEndpointPath: "/chat/completions",
+		ModelSource:      ModelSourceDiscover,
+		Models:           cloneBuiltinModels(qwenStaticModels),
+		Source:           ProviderSourceBuiltin,
+	}
+}
+
+func GLMProvider() ProviderConfig {
+	return ProviderConfig{
+		Name:             GLMName,
+		Driver:           provider.DriverGLM,
+		BaseURL:          GLMDefaultBaseURL,
+		Model:            GLMDefaultModel,
+		APIKeyEnv:        GLMDefaultAPIKeyEnv,
+		ChatAPIMode:      provider.ChatAPIModeChatCompletions,
+		ChatEndpointPath: "/chat/completions",
+		ModelSource:      ModelSourceDiscover,
+		Models:           cloneBuiltinModels(glmStaticModels),
+		Source:           ProviderSourceBuiltin,
+	}
+}
+
+func MiMoProvider() ProviderConfig {
+	return ProviderConfig{
+		Name:             MiMoName,
+		Driver:           provider.DriverMiMo,
+		BaseURL:          MiMoDefaultBaseURL,
+		Model:            MiMoDefaultModel,
+		APIKeyEnv:        MiMoDefaultAPIKeyEnv,
+		ChatAPIMode:      provider.ChatAPIModeChatCompletions,
+		ChatEndpointPath: "/chat/completions",
+		ModelSource:      ModelSourceDiscover,
+		Models:           cloneBuiltinModels(miMoStaticModels),
+		Source:           ProviderSourceBuiltin,
+	}
+}
+
+func MiniMaxProvider() ProviderConfig {
+	return ProviderConfig{
+		Name:             MiniMaxName,
+		Driver:           provider.DriverMiniMax,
+		BaseURL:          MiniMaxDefaultBaseURL,
+		Model:            MiniMaxDefaultModel,
+		APIKeyEnv:        MiniMaxDefaultAPIKeyEnv,
+		ChatAPIMode:      provider.ChatAPIModeChatCompletions,
+		ChatEndpointPath: "/",
+		ModelSource:      ModelSourceDiscover,
+		Models:           cloneBuiltinModels(miniMaxStaticModels),
+		Source:           ProviderSourceBuiltin,
+	}
+}
+
 // DefaultProviders returns all builtin provider definitions.
 func DefaultProviders() []ProviderConfig {
 	return []ProviderConfig{
 		OpenAIProvider(),
 		GeminiProvider(),
+		DeepSeekProvider(),
+		KimiProvider(),
+		QwenProvider(),
+		GLMProvider(),
+		MiMoProvider(),
+		MiniMaxProvider(),
 		QiniuProvider(),
 		ModelScopeProvider(),
 	}
