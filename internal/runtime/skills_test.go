@@ -19,6 +19,9 @@ type stubSkillsRegistry struct {
 	getErr         error
 	lastListInput  skills.ListInput
 	listFilterByWS bool
+	refreshErr     error
+	refreshFn      func(ctx context.Context) error
+	refreshCount   int
 }
 
 func (r *stubSkillsRegistry) List(ctx context.Context, input skills.ListInput) ([]skills.Descriptor, error) {
@@ -52,6 +55,13 @@ func (r *stubSkillsRegistry) Get(ctx context.Context, id string) (skills.Descrip
 }
 
 func (r *stubSkillsRegistry) Refresh(ctx context.Context) error {
+	r.refreshCount++
+	if r.refreshFn != nil {
+		return r.refreshFn(ctx)
+	}
+	if r.refreshErr != nil {
+		return r.refreshErr
+	}
 	return ctx.Err()
 }
 
@@ -108,6 +118,65 @@ func TestActivateSessionSkillRejectsMissingSkill(t *testing.T) {
 	}
 	if got := store.sessions[session.ID].ActiveSkillIDs(); len(got) != 0 {
 		t.Fatalf("expected session to remain clean, got %+v", got)
+	}
+}
+
+func TestActivateSessionSkillRefreshesRegistryOnMissingSkill(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	store := newMemoryStore()
+	session := newRuntimeSession("session-activate-refresh")
+	store.sessions[session.ID] = cloneSession(session)
+
+	service := NewWithFactory(manager, &stubToolManager{}, store, &scriptedProviderFactory{provider: &scriptedProvider{}}, &stubContextBuilder{})
+	registry := &stubSkillsRegistry{
+		skills: map[string]skills.Skill{},
+	}
+	registry.refreshFn = func(ctx context.Context) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		registry.skills["terminal-diagnosis"] = skills.Skill{
+			Descriptor: skills.Descriptor{ID: "terminal-diagnosis", Name: "Terminal Diagnosis"},
+			Content:    skills.Content{Instruction: "diagnose"},
+		}
+		return nil
+	}
+	service.SetSkillsRegistry(registry)
+
+	if err := service.ActivateSessionSkill(context.Background(), session.ID, "terminal-diagnosis"); err != nil {
+		t.Fatalf("ActivateSessionSkill() after refresh error = %v", err)
+	}
+	if registry.refreshCount != 1 {
+		t.Fatalf("Refresh() count = %d, want 1", registry.refreshCount)
+	}
+	if got := store.sessions[session.ID].ActiveSkillIDs(); len(got) != 1 || got[0] != "terminal-diagnosis" {
+		t.Fatalf("expected refreshed skill activated, got %+v", got)
+	}
+}
+
+func TestActivateSessionSkillReturnsRefreshError(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	store := newMemoryStore()
+	session := newRuntimeSession("session-activate-refresh-error")
+	store.sessions[session.ID] = cloneSession(session)
+
+	service := NewWithFactory(manager, &stubToolManager{}, store, &scriptedProviderFactory{provider: &scriptedProvider{}}, &stubContextBuilder{})
+	registry := &stubSkillsRegistry{
+		skills:     map[string]skills.Skill{},
+		refreshErr: os.ErrPermission,
+	}
+	service.SetSkillsRegistry(registry)
+
+	err := service.ActivateSessionSkill(context.Background(), session.ID, "terminal-diagnosis")
+	if !errors.Is(err, os.ErrPermission) {
+		t.Fatalf("ActivateSessionSkill() error = %v, want %v", err, os.ErrPermission)
+	}
+	if registry.refreshCount != 1 {
+		t.Fatalf("Refresh() count = %d, want 1", registry.refreshCount)
 	}
 }
 

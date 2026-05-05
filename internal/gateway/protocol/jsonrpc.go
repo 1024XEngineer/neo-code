@@ -39,6 +39,8 @@ const (
 	MethodGatewayCancel = "gateway.cancel"
 	// MethodGatewayListSessions 表示查询会话摘要列表。
 	MethodGatewayListSessions = "gateway.listSessions"
+	// MethodGatewayCreateSession 表示通过网关创建会话。
+	MethodGatewayCreateSession = "gateway.createSession"
 	// MethodGatewayLoadSession 表示加载单个会话详情。
 	MethodGatewayLoadSession = "gateway.loadSession"
 	// MethodGatewayListSessionTodos 表示查询会话 Todo 快照。
@@ -78,13 +80,13 @@ const (
 	// MethodGatewayEvent 表示网关向客户端推送运行时事件的通知方法。
 	MethodGatewayEvent = "gateway.event"
 	// MethodWakeOpenURL 表示 URL Scheme 唤醒方法。
-	MethodWakeOpenURL = "wake.openUrl"
-		MethodGatewayListWorkspaces  = "gateway.listWorkspaces"
-		MethodGatewayCreateWorkspace = "gateway.createWorkspace"
-		MethodGatewaySwitchWorkspace = "gateway.switchWorkspace"
-		MethodGatewayRenameWorkspace = "gateway.renameWorkspace"
-		MethodGatewayDeleteWorkspace = "gateway.deleteWorkspace"
-	)
+	MethodWakeOpenURL            = "wake.openUrl"
+	MethodGatewayListWorkspaces  = "gateway.listWorkspaces"
+	MethodGatewayCreateWorkspace = "gateway.createWorkspace"
+	MethodGatewaySwitchWorkspace = "gateway.switchWorkspace"
+	MethodGatewayRenameWorkspace = "gateway.renameWorkspace"
+	MethodGatewayDeleteWorkspace = "gateway.deleteWorkspace"
+)
 
 const (
 	// JSONRPCCodeParseError 表示请求体不是合法 JSON。
@@ -253,6 +255,11 @@ type ListAvailableSkillsParams struct {
 // LoadSessionParams 表示 gateway.loadSession 参数。
 type LoadSessionParams struct {
 	SessionID string `json:"session_id"`
+}
+
+// CreateSessionParams 表示 gateway.createSession 参数。
+type CreateSessionParams struct {
+	SessionID string `json:"session_id,omitempty"`
 }
 
 // ListSessionTodosParams 表示 session.todos.list 参数。
@@ -547,6 +554,15 @@ func NormalizeJSONRPCRequest(request JSONRPCRequest) (NormalizedRequest, *JSONRP
 		return normalized, nil
 	case MethodGatewayListSessions:
 		normalized.Action = "list_sessions"
+		return normalized, nil
+	case MethodGatewayCreateSession:
+		params, parseErr := decodeCreateSessionParams(request.Params)
+		if parseErr != nil {
+			return normalized, parseErr
+		}
+		normalized.Action = "create_session"
+		normalized.SessionID = strings.TrimSpace(params.SessionID)
+		normalized.Payload = params
 		return normalized, nil
 	case MethodGatewayLoadSession:
 		params, parseErr := decodeLoadSessionParams(request.Params)
@@ -1108,6 +1124,14 @@ func decodeLoadSessionParams(raw json.RawMessage) (LoadSessionParams, *JSONRPCEr
 		if p.SessionID == "" {
 			return NewJSONRPCError(JSONRPCCodeInvalidParams, "missing required field: params.session_id", GatewayCodeMissingRequiredField)
 		}
+		return nil
+	})
+}
+
+// decodeCreateSessionParams 对 gateway.createSession 的 params 执行反序列化与字段清理。
+func decodeCreateSessionParams(raw json.RawMessage) (CreateSessionParams, *JSONRPCError) {
+	return decodeParamsOptional(raw, "gateway.createSession", func(p *CreateSessionParams) *JSONRPCError {
+		p.SessionID = strings.TrimSpace(p.SessionID)
 		return nil
 	})
 }
