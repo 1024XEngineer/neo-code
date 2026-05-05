@@ -196,6 +196,25 @@ func TestMessageEventRetryAfterRunFailure(t *testing.T) {
 	}
 }
 
+func TestRunFailureCleansTrackedRunBinding(t *testing.T) {
+	adapter := newTestAdapter(t)
+	gateway := adapterTestGateway(adapter)
+	gateway.mu.Lock()
+	gateway.runErr = assertErr("reject")
+	gateway.mu.Unlock()
+
+	err := adapter.bindThenRun(context.Background(), "session-fail", "run-fail", "chat-fail", "hello")
+	if err == nil {
+		t.Fatal("expected bindThenRun error")
+	}
+	adapter.mu.RLock()
+	_, exists := adapter.activeRuns[runBindingKey("session-fail", "run-fail")]
+	adapter.mu.RUnlock()
+	if exists {
+		t.Fatal("expected failed run binding to be cleaned")
+	}
+}
+
 func TestGroupMessageWithoutMentionIgnored(t *testing.T) {
 	adapter := newTestAdapter(t)
 	body := messageEventBodyWithChatType("evt-group", "msg-group", "chat-group", "hello group", "group")

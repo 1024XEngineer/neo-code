@@ -49,9 +49,10 @@ func verifyFeishuSignature(
 	sum := mac.Sum(nil)
 	base64Sign := base64.StdEncoding.EncodeToString(sum)
 	hexSign := hex.EncodeToString(sum)
-	normalizedSig := normalizeSignature(signature)
-	return hmac.Equal([]byte(normalizeSignature(base64Sign)), []byte(normalizedSig)) ||
-		hmac.Equal([]byte(normalizeSignature(hexSign)), []byte(normalizedSig))
+	normalizedBase64Sig := normalizeBase64Signature(signature)
+	normalizedHexSig := normalizeHexSignature(signature)
+	return hmac.Equal([]byte(base64Sign), []byte(normalizedBase64Sig)) ||
+		hmac.Equal([]byte(normalizeHexSignature(hexSign)), []byte(normalizedHexSig))
 }
 
 // withinSkew 判断请求时间戳是否在允许偏差窗口内。
@@ -80,9 +81,17 @@ func parseUnixSeconds(raw string) (time.Time, error) {
 	return time.Unix(seconds, 0).UTC(), nil
 }
 
-// normalizeSignature 统一签名格式，兼容常见前缀。
-func normalizeSignature(signature string) string {
+// normalizeHexSignature 统一 hex 签名格式，兼容常见前缀并做大小写归一。
+func normalizeHexSignature(signature string) string {
 	trimmed := strings.TrimSpace(strings.ToLower(signature))
+	trimmed = strings.TrimPrefix(trimmed, "v0=")
+	trimmed = strings.TrimPrefix(trimmed, "sha256=")
+	return trimmed
+}
+
+// normalizeBase64Signature 统一 base64 签名格式，仅裁剪空白与前缀，不改变大小写。
+func normalizeBase64Signature(signature string) string {
+	trimmed := strings.TrimSpace(signature)
 	trimmed = strings.TrimPrefix(trimmed, "v0=")
 	trimmed = strings.TrimPrefix(trimmed, "sha256=")
 	return trimmed

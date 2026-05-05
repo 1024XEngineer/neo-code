@@ -252,6 +252,8 @@ func (a *Adapter) bindThenRun(ctx context.Context, sessionID string, runID strin
 	}
 	a.trackSession(sessionID, runID, chatID)
 	if err := a.gateway.Run(callCtx, sessionID, runID, text); err != nil {
+		// run 受理失败时及时回收活跃绑定，避免重连阶段反复重绑无效 run。
+		a.untrackRun(sessionID, runID)
 		return err
 	}
 	_ = a.messenger.SendText(context.Background(), chatID, "任务已受理，正在执行。")

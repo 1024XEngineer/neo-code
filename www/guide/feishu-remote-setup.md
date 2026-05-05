@@ -48,10 +48,6 @@ flowchart LR
 把下面配置写入 `~/.neocode/config.yaml`（Windows 一般是 `C:\Users\<你>\.neocode\config.yaml`）：
 
 ```yaml
-gateway:
-  listen: "\\\\.\\pipe\\neocode-gateway-feishu"
-  http_listen: "127.0.0.1:18181"
-
 feishu:
   enabled: true
   app_id: "cli_xxx"
@@ -79,6 +75,9 @@ feishu:
 ```
 
 如果你用纯 TCP（不用命名管道），把 `gateway.listen` 和 `feishu.gateway.listen` 改成 `127.0.0.1:<port>`。
+
+> 注意：`config.yaml` 顶层 `gateway` 段不支持 `listen/http_listen` 这类监听地址字段。  
+> Gateway 的监听地址请通过 `neocode-gateway` 启动参数传入（见下一节命令）。
 
 ## 4. 本地启动顺序
 
