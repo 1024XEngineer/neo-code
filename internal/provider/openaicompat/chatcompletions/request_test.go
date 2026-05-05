@@ -76,6 +76,46 @@ func TestBuildRequestUsesDefaultModelAndNormalizesTools(t *testing.T) {
 	}
 }
 
+func TestBuildRequestThinkingConfigAndContinuity(t *testing.T) {
+	t.Parallel()
+
+	payload, err := BuildRequest(context.Background(), provider.RuntimeConfig{DefaultModel: "gpt-default"}, providertypes.GenerateRequest{
+		Messages: []providertypes.Message{
+			{
+				Role:             providertypes.RoleAssistant,
+				Parts:            []providertypes.ContentPart{providertypes.NewTextPart("hello")},
+				ThinkingMetadata: []byte(`{"reasoning":"step by step"}`),
+			},
+		},
+		ThinkingConfig: &providertypes.ThinkingConfig{
+			Enabled: true,
+			Effort:  "high",
+		},
+	})
+	if err != nil {
+		t.Fatalf("BuildRequest() error = %v", err)
+	}
+	if payload.ReasoningEffort != "high" {
+		t.Fatalf("expected reasoning effort to be preserved, got %q", payload.ReasoningEffort)
+	}
+	if len(payload.Messages) != 1 || payload.Messages[0].ReasoningContent != "step by step" {
+		t.Fatalf("expected reasoning continuity content, got %+v", payload.Messages)
+	}
+
+	disabled, err := BuildRequest(context.Background(), provider.RuntimeConfig{DefaultModel: "gpt-default"}, providertypes.GenerateRequest{
+		Messages: []providertypes.Message{
+			{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")}},
+		},
+		ThinkingConfig: &providertypes.ThinkingConfig{Enabled: false},
+	})
+	if err != nil {
+		t.Fatalf("BuildRequest() disabled error = %v", err)
+	}
+	if disabled.ReasoningEffort != "none" {
+		t.Fatalf("expected disabled reasoning effort marker, got %q", disabled.ReasoningEffort)
+	}
+}
+
 func TestBuildRequestAndToOpenAIMessageErrors(t *testing.T) {
 	t.Parallel()
 

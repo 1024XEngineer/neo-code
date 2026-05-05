@@ -1,8 +1,12 @@
 package minimax
 
 import (
+	"context"
 	"encoding/json"
+	"strings"
 	"testing"
+
+	providertypes "neo-code/internal/provider/types"
 )
 
 func TestInjectMiniMaxParams(t *testing.T) {
@@ -53,5 +57,80 @@ func TestExtractThinkContent_NoTags(t *testing.T) {
 	result := ExtractThinkContent("plain text without tags")
 	if result != "" {
 		t.Fatalf("expected empty, got %q", result)
+	}
+}
+
+func TestConsumeMiniMaxStream(t *testing.T) {
+	t.Parallel()
+
+	body := strings.Join([]string{
+		`data: {"choices":[{"delta":{"reasoning_details":"internal plan","content":"visible answer"}}],"usage":{"total_tokens":9}}`,
+		`data: [DONE]`,
+		"",
+	}, "\n")
+
+	events := make(chan providertypes.StreamEvent, 4)
+	if err := ConsumeMiniMaxStream(context.Background(), strings.NewReader(body), events); err != nil {
+		t.Fatalf("ConsumeMiniMaxStream() error = %v", err)
+	}
+
+	drained := drainMiniMaxEvents(events)
+	if len(drained) != 3 {
+		t.Fatalf("expected 3 events, got %d (%+v)", len(drained), drained)
+	}
+	thinking, err := drained[0].ThinkingDeltaValue()
+	if err != nil || thinking.Text != "internal plan" {
+		t.Fatalf("expected thinking delta, got err=%v event=%+v", err, drained[0])
+	}
+	text, err := drained[1].TextDeltaValue()
+	if err != nil || text.Text != "visible answer" {
+		t.Fatalf("expected text delta, got err=%v event=%+v", err, drained[1])
+	}
+	done, err := drained[2].MessageDoneValue()
+	if err != nil {
+		t.Fatalf("expected message done, got err=%v", err)
+	}
+	if done.Usage == nil || done.Usage.TotalTokens != 9 {
+		t.Fatalf("unexpected usage payload: %+v", done.Usage)
+	}
+}
+
+func TestConsumeMiniMaxStreamExtractsThinkTagsFromContent(t *testing.T) {
+	t.Parallel()
+
+	body := strings.Join([]string{
+		`data: {"choices":[{"delta":{"content":"<think>internal plan</think>visible answer"},"finish_reason":"stop"}],"usage":{"total_tokens":5}}`,
+		`data: [DONE]`,
+		"",
+	}, "\n")
+
+	events := make(chan providertypes.StreamEvent, 4)
+	if err := ConsumeMiniMaxStream(context.Background(), strings.NewReader(body), events); err != nil {
+		t.Fatalf("ConsumeMiniMaxStream() error = %v", err)
+	}
+
+	drained := drainMiniMaxEvents(events)
+	if len(drained) != 3 {
+		t.Fatalf("expected 3 events, got %d (%+v)", len(drained), drained)
+	}
+	thinking, err := drained[0].ThinkingDeltaValue()
+	if err != nil || thinking.Text != "internal plan" {
+		t.Fatalf("expected extracted think tag, got err=%v event=%+v", err, drained[0])
+	}
+	text, err := drained[1].TextDeltaValue()
+	if err != nil || text.Text != "visible answer" {
+		t.Fatalf("expected think tags removed from text, got err=%v event=%+v", err, drained[1])
+	}
+}
+
+func drainMiniMaxEvents(events <-chan providertypes.StreamEvent) []providertypes.StreamEvent {
+	drained := make([]providertypes.StreamEvent, 0, len(events))
+	for {
+		select {
+		case event := <-events:
+			drained = append(drained, event)
+		default:
+			return drained
+		}
 	}
 }
