@@ -4,6 +4,7 @@ import { useGatewayStore } from '@/stores/useGatewayStore'
 import { useSessionStore, isValidSessionId } from '@/stores/useSessionStore'
 import { useUIStore } from '@/stores/useUIStore'
 import { useComposerStore } from '@/stores/useComposerStore'
+import { useRuntimeInsightStore } from '@/stores/useRuntimeInsightStore'
 import { useGatewayAPI } from '@/context/RuntimeProvider'
 import {
   builtinSlashCommands,
@@ -253,6 +254,10 @@ export default function ChatInput() {
     setText('')
     const userMsg = createUserMessage(input)
     addMessage(userMsg)
+    useRuntimeInsightStore.getState().setTodoSnapshot({
+      items: [],
+      summary: { total: 0, required_total: 0, required_completed: 0, required_failed: 0, required_open: 0 },
+    })
     setGenerating(true)
     runCancelledRef.current = false
 

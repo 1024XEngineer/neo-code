@@ -116,7 +116,7 @@ describe('useRuntimeInsightStore', () => {
     expect(useRuntimeInsightStore.getState().todoSnapshot?.items?.[0].id).toBe('a')
   })
 
-  it('setTodoSnapshot with empty items preserves snapshot/history, only clears conflict', () => {
+  it('setTodoSnapshot with empty items clears current snapshot items and conflict while preserving history', () => {
     const store = useRuntimeInsightStore.getState()
     store.setTodoSnapshot({
       items: [{ id: 'a', content: 'task a', status: 'in_progress', required: true, revision: 1 }],
@@ -130,8 +130,7 @@ describe('useRuntimeInsightStore', () => {
     })
 
     const state = useRuntimeInsightStore.getState()
-    // snapshot and history preserved, only conflict cleared
-    expect(state.todoSnapshot?.items?.[0].id).toBe('a')
+    expect(state.todoSnapshot?.items).toEqual([])
     expect(state.todoHistory.a).toBeDefined()
     expect(state.todoConflict).toBeNull()
   })
@@ -152,7 +151,7 @@ describe('useRuntimeInsightStore', () => {
     expect(state.todoConflict?.reason).toBe('revision_conflict')
   })
 
-  it('applyTodoSnapshot with empty items does nothing', () => {
+  it('applyTodoSnapshot with empty items clears current snapshot items but preserves conflict and history', () => {
     const store = useRuntimeInsightStore.getState()
     store.setTodoSnapshot({
       items: [{ id: 'a', content: 'task a', status: 'in_progress', required: true, revision: 1 }],
@@ -162,8 +161,7 @@ describe('useRuntimeInsightStore', () => {
     store.applyTodoSnapshot({ items: [] })
 
     const state = useRuntimeInsightStore.getState()
-    // everything preserved — snapshot, history, conflict all untouched
-    expect(state.todoSnapshot?.items?.[0].id).toBe('a')
+    expect(state.todoSnapshot?.items).toEqual([])
     expect(state.todoConflict?.reason).toBe('todo_not_found')
     expect(state.todoHistory.a).toBeDefined()
   })
