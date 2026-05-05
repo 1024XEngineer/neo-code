@@ -3021,20 +3021,6 @@ func TestAppendAssistantAndInlineMessage(t *testing.T) {
 	}
 }
 
-func TestShouldHandleTabAsInput(t *testing.T) {
-	app, _ := newTestApp(t)
-	app.focus = panelInput
-	app.state.ActivePicker = pickerNone
-	app.input.SetValue("/he")
-	if !app.shouldHandleTabAsInput(tea.KeyMsg{Type: tea.KeyTab}) {
-		t.Fatalf("expected tab to be handled as input")
-	}
-	app.input.SetValue("")
-	if app.shouldHandleTabAsInput(tea.KeyMsg{Type: tea.KeyTab}) {
-		t.Fatalf("expected tab to be ignored for empty input")
-	}
-}
-
 func TestTabSwitchesAgentModeWhenInputEmpty(t *testing.T) {
 	app, _ := newTestApp(t)
 	app.focus = panelInput
@@ -3059,7 +3045,7 @@ func TestTabSwitchesAgentModeWhenInputEmpty(t *testing.T) {
 	}
 }
 
-func TestTabWithNonEmptyInputDoesNotSwitchAgentMode(t *testing.T) {
+func TestTabWithNonEmptyInputSwitchesAgentMode(t *testing.T) {
 	app, _ := newTestApp(t)
 	app.focus = panelInput
 	app.state.ActivePicker = pickerNone
@@ -3069,8 +3055,8 @@ func TestTabWithNonEmptyInputDoesNotSwitchAgentMode(t *testing.T) {
 
 	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyTab})
 	app = model.(App)
-	if app.currentAgentMode() != agentsession.AgentModeBuild {
-		t.Fatalf("expected mode to stay build, got %q", app.currentAgentMode())
+	if app.currentAgentMode() != agentsession.AgentModePlan {
+		t.Fatalf("expected mode to switch to plan, got %q", app.currentAgentMode())
 	}
 }
 
@@ -3080,6 +3066,7 @@ func TestSlashTabCompletionDoesNotMoveInput(t *testing.T) {
 	app.height = 28
 	app.focus = panelInput
 	app.state.ActivePicker = pickerNone
+	app.setCurrentAgentMode(string(agentsession.AgentModeBuild))
 	app.input.SetValue("/he")
 	app.state.InputText = "/he"
 	app.applyComponentLayout(true)
@@ -3100,6 +3087,9 @@ func TestSlashTabCompletionDoesNotMoveInput(t *testing.T) {
 	}
 	if app.commandMenuHasSuggestions() {
 		t.Fatalf("expected command menu to clear for complete slash command")
+	}
+	if app.currentAgentMode() != agentsession.AgentModeBuild {
+		t.Fatalf("expected slash completion to keep mode unchanged, got %q", app.currentAgentMode())
 	}
 }
 

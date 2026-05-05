@@ -426,10 +426,6 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if a.applySelectedCommandSuggestion() {
 				return a, batchUpdateCmds()
 			}
-			if a.shouldHandleTabAsInput(typed) {
-				tabMsg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'	'}, Paste: typed.Paste}
-				return a.updateInputPanel(tabMsg, tabMsg, cmds)
-			}
 			if a.shouldToggleAgentModeOnTab(typed) {
 				mode := a.toggleAgentMode()
 				a.state.StatusText = fmt.Sprintf("Mode switched to %s", strings.ToUpper(string(mode)))
@@ -4950,16 +4946,6 @@ func (a *App) scrollInputPage(direction int) {
 	a.state.InputText = a.input.Value()
 }
 
-func (a App) shouldHandleTabAsInput(typed tea.KeyMsg) bool {
-	if a.focus != panelInput || a.state.ActivePicker != pickerNone || typed.Type != tea.KeyTab {
-		return false
-	}
-	if typed.Paste || a.pasteMode {
-		return true
-	}
-	return strings.TrimSpace(a.input.Value()) != ""
-}
-
 func (a *App) applyFocus() {
 	a.state.Focus = a.focus
 	if a.focus == panelInput && a.state.ActivePicker == pickerNone {
@@ -5475,9 +5461,6 @@ func (a *App) setActiveSessionID(sessionID string) {
 
 func (a App) shouldToggleAgentModeOnTab(typed tea.KeyMsg) bool {
 	if a.focus != panelInput || a.state.ActivePicker != pickerNone || typed.Type != tea.KeyTab {
-		return false
-	}
-	if a.input.Value() != "" {
 		return false
 	}
 	return !typed.Paste && !a.pasteMode
