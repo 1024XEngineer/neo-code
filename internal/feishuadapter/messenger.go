@@ -122,9 +122,22 @@ func (m *feishuMessenger) sendMessage(ctx context.Context, chatID string, msgTyp
 		return err
 	}
 	defer resp.Body.Close()
+	var payload struct {
+		Code    int    `json:"code"`
+		Message string `json:"msg"`
+	}
+	decodeErr := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&payload)
 	if resp.StatusCode/100 != 2 {
-		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		return fmt.Errorf("send feishu message failed: status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(raw)))
+		if decodeErr == nil {
+			return fmt.Errorf("send feishu message failed: status=%d code=%d message=%s", resp.StatusCode, payload.Code, payload.Message)
+		}
+		return fmt.Errorf("send feishu message failed: status=%d body=invalid_json", resp.StatusCode)
+	}
+	if decodeErr != nil {
+		return fmt.Errorf("send feishu message failed: invalid response body: %w", decodeErr)
+	}
+	if payload.Code != 0 {
+		return fmt.Errorf("send feishu message failed: status=%d code=%d message=%s", resp.StatusCode, payload.Code, payload.Message)
 	}
 	return nil
 }

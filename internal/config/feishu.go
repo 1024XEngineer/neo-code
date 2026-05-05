@@ -56,7 +56,18 @@ type FeishuGatewayClientConfig struct {
 
 // defaultFeishuConfig 返回飞书配置默认值。
 func defaultFeishuConfig() FeishuConfig {
-	return FeishuConfig{}
+	return FeishuConfig{
+		Adapter: FeishuAdapterConfig{
+			Listen:   DefaultFeishuAdapterListen,
+			EventURI: DefaultFeishuAdapterEventPath,
+			CardURI:  DefaultFeishuAdapterCardPath,
+		},
+		RequestTimeoutSec:    DefaultFeishuGatewayRequestTimeoutSec,
+		IdempotencyTTLSec:    DefaultFeishuIdempotencyTTLSec,
+		ReconnectBackoffMinM: DefaultFeishuReconnectBackoffMinMs,
+		ReconnectBackoffMaxM: DefaultFeishuReconnectBackoffMaxMs,
+		RebindIntervalSec:    DefaultFeishuRebindIntervalSec,
+	}
 }
 
 // ApplyDefaults 为飞书配置补齐默认值。

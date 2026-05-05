@@ -81,3 +81,31 @@ func TestFeishuConfigApplyDefaults(t *testing.T) {
 		t.Fatalf("scalar defaults not applied: %#v", cfg)
 	}
 }
+
+func TestDefaultFeishuConfigProvidesRuntimeDefaults(t *testing.T) {
+	defaults := defaultFeishuConfig()
+	if defaults.Adapter.Listen != DefaultFeishuAdapterListen {
+		t.Fatalf("default adapter listen = %q, want %q", defaults.Adapter.Listen, DefaultFeishuAdapterListen)
+	}
+	if defaults.Adapter.EventURI != DefaultFeishuAdapterEventPath {
+		t.Fatalf("default adapter event path = %q, want %q", defaults.Adapter.EventURI, DefaultFeishuAdapterEventPath)
+	}
+	if defaults.Adapter.CardURI != DefaultFeishuAdapterCardPath {
+		t.Fatalf("default adapter card path = %q, want %q", defaults.Adapter.CardURI, DefaultFeishuAdapterCardPath)
+	}
+	if defaults.RequestTimeoutSec != DefaultFeishuGatewayRequestTimeoutSec {
+		t.Fatalf("default request timeout = %d, want %d", defaults.RequestTimeoutSec, DefaultFeishuGatewayRequestTimeoutSec)
+	}
+	if defaults.IdempotencyTTLSec != DefaultFeishuIdempotencyTTLSec {
+		t.Fatalf("default idempotency ttl = %d, want %d", defaults.IdempotencyTTLSec, DefaultFeishuIdempotencyTTLSec)
+	}
+	if defaults.ReconnectBackoffMinM != DefaultFeishuReconnectBackoffMinMs {
+		t.Fatalf("default reconnect min = %d, want %d", defaults.ReconnectBackoffMinM, DefaultFeishuReconnectBackoffMinMs)
+	}
+	if defaults.ReconnectBackoffMaxM != DefaultFeishuReconnectBackoffMaxMs {
+		t.Fatalf("default reconnect max = %d, want %d", defaults.ReconnectBackoffMaxM, DefaultFeishuReconnectBackoffMaxMs)
+	}
+	if defaults.RebindIntervalSec != DefaultFeishuRebindIntervalSec {
+		t.Fatalf("default rebind interval = %d, want %d", defaults.RebindIntervalSec, DefaultFeishuRebindIntervalSec)
+	}
+}

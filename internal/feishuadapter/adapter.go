@@ -376,7 +376,6 @@ func (a *Adapter) reconnectAndRebindLoop(ctx context.Context) {
 			cancel()
 			if err == nil {
 				delay = a.cfg.ReconnectBackoffMin
-				a.rebindActiveSessions(ctx)
 				continue
 			}
 			a.safeLog("gateway ping failed, will reconnect: %v", err)

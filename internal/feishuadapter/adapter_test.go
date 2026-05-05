@@ -537,6 +537,23 @@ func TestReconnectRebindTracksMultipleRunsPerSession(t *testing.T) {
 	}
 }
 
+func TestReconnectHealthyPathDoesNotRebind(t *testing.T) {
+	adapter := newTestAdapter(t)
+	gw := adapterTestGateway(adapter)
+	adapter.trackSession("session-steady", "run-steady", "chat-steady")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go adapter.reconnectAndRebindLoop(ctx)
+	time.Sleep(80 * time.Millisecond)
+	cancel()
+	time.Sleep(20 * time.Millisecond)
+
+	calls := strings.Join(gw.snapshotCalls(), "|")
+	if strings.Contains(calls, "bind:session-steady:run-steady") {
+		t.Fatalf("did not expect steady-state rebind call in %v", calls)
+	}
+}
+
 func newTestAdapter(t *testing.T) *Adapter {
 	t.Helper()
 	gateway := newFakeGatewayClient()
