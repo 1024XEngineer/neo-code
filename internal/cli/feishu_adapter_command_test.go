@@ -25,6 +25,7 @@ func TestNewFeishuAdapterCommandForwardsFlags(t *testing.T) {
 		"--card-path", "/card",
 		"--app-id", "app",
 		"--app-secret", "secret",
+		"--insecure-skip-signature-verify",
 		"--gateway-listen", "tcp://gateway",
 	})
 	if err := cmd.ExecuteContext(context.Background()); err != nil {
@@ -35,6 +36,9 @@ func TestNewFeishuAdapterCommandForwardsFlags(t *testing.T) {
 	}
 	if captured.AppID != "app" || captured.AppSecret != "secret" || captured.GatewayListen != "tcp://gateway" {
 		t.Fatalf("unexpected credential/gateway options: %#v", captured)
+	}
+	if !captured.InsecureSkipSignVerify {
+		t.Fatalf("expected insecure skip flag to be forwarded, got %#v", captured)
 	}
 }
 

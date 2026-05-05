@@ -21,21 +21,22 @@ var newFeishuMessenger = feishuadapter.NewFeishuMessenger
 var newFeishuAdapter = feishuadapter.New
 
 type feishuAdapterCommandOptions struct {
-	Listen               string
-	EventPath            string
-	CardPath             string
-	AppID                string
-	AppSecret            string
-	VerifyToken          string
-	SigningSecret        string
-	CallbackBaseURL      string
-	IdempotencyTTLSec    int
-	RequestTimeoutSec    int
-	ReconnectBackoffMinM int
-	ReconnectBackoffMaxM int
-	RebindIntervalSec    int
-	GatewayListen        string
-	GatewayTokenFile     string
+	Listen                 string
+	EventPath              string
+	CardPath               string
+	AppID                  string
+	AppSecret              string
+	VerifyToken            string
+	SigningSecret          string
+	InsecureSkipSignVerify bool
+	CallbackBaseURL        string
+	IdempotencyTTLSec      int
+	RequestTimeoutSec      int
+	ReconnectBackoffMinM   int
+	ReconnectBackoffMaxM   int
+	RebindIntervalSec      int
+	GatewayListen          string
+	GatewayTokenFile       string
 }
 
 // newFeishuAdapterCommand 创建飞书适配器子命令，用于桥接飞书事件与网关运行链路。
@@ -62,6 +63,7 @@ func newFeishuAdapterCommand() *cobra.Command {
 	cmd.Flags().StringVar(&options.AppSecret, "app-secret", "", "feishu app secret")
 	cmd.Flags().StringVar(&options.VerifyToken, "verify-token", "", "feishu verify token")
 	cmd.Flags().StringVar(&options.SigningSecret, "signing-secret", "", "feishu signing secret")
+	cmd.Flags().BoolVar(&options.InsecureSkipSignVerify, "insecure-skip-signature-verify", false, "skip feishu callback signature verification (unsafe)")
 	cmd.Flags().StringVar(&options.CallbackBaseURL, "callback-base-url", "", "feishu callback base url")
 	cmd.Flags().IntVar(&options.IdempotencyTTLSec, "idempotency-ttl-sec", 0, "idempotency ttl in seconds")
 	cmd.Flags().IntVar(&options.RequestTimeoutSec, "request-timeout-sec", 0, "gateway request timeout in seconds")
@@ -105,22 +107,23 @@ func defaultFeishuAdapterCommandRunner(ctx context.Context, options feishuAdapte
 }
 
 type mergedFeishuOptions struct {
-	Enabled               bool
-	Listen                string
-	EventPath             string
-	CardPath              string
-	AppID                 string
-	AppSecret             string
-	VerifyToken           string
-	SigningSecret         string
-	CallbackBaseURL       string
-	IdempotencyTTLSec     int
-	RequestTimeoutSec     int
-	ReconnectBackoffMinMs int
-	ReconnectBackoffMaxMs int
-	RebindIntervalSec     int
-	GatewayListenAddress  string
-	GatewayTokenFile      string
+	Enabled                bool
+	Listen                 string
+	EventPath              string
+	CardPath               string
+	AppID                  string
+	AppSecret              string
+	VerifyToken            string
+	SigningSecret          string
+	InsecureSkipSignVerify bool
+	CallbackBaseURL        string
+	IdempotencyTTLSec      int
+	RequestTimeoutSec      int
+	ReconnectBackoffMinMs  int
+	ReconnectBackoffMaxMs  int
+	RebindIntervalSec      int
+	GatewayListenAddress   string
+	GatewayTokenFile       string
 }
 
 // Validate 校验合并后的飞书参数，确保适配器启动前失败前置。
@@ -132,19 +135,20 @@ func (o mergedFeishuOptions) Validate() error {
 // ToAdapterConfig 将 CLI/配置合并结果转换为适配器运行配置。
 func (o mergedFeishuOptions) ToAdapterConfig() feishuadapter.Config {
 	return feishuadapter.Config{
-		ListenAddress:       o.Listen,
-		EventPath:           o.EventPath,
-		CardPath:            o.CardPath,
-		AppID:               o.AppID,
-		AppSecret:           o.AppSecret,
-		VerifyToken:         o.VerifyToken,
-		SigningSecret:       o.SigningSecret,
-		CallbackBaseURL:     o.CallbackBaseURL,
-		RequestTimeout:      time.Duration(o.RequestTimeoutSec) * time.Second,
-		IdempotencyTTL:      time.Duration(o.IdempotencyTTLSec) * time.Second,
-		ReconnectBackoffMin: time.Duration(o.ReconnectBackoffMinMs) * time.Millisecond,
-		ReconnectBackoffMax: time.Duration(o.ReconnectBackoffMaxMs) * time.Millisecond,
-		RebindInterval:      time.Duration(o.RebindIntervalSec) * time.Second,
+		ListenAddress:          o.Listen,
+		EventPath:              o.EventPath,
+		CardPath:               o.CardPath,
+		AppID:                  o.AppID,
+		AppSecret:              o.AppSecret,
+		VerifyToken:            o.VerifyToken,
+		SigningSecret:          o.SigningSecret,
+		InsecureSkipSignVerify: o.InsecureSkipSignVerify,
+		CallbackBaseURL:        o.CallbackBaseURL,
+		RequestTimeout:         time.Duration(o.RequestTimeoutSec) * time.Second,
+		IdempotencyTTL:         time.Duration(o.IdempotencyTTLSec) * time.Second,
+		ReconnectBackoffMin:    time.Duration(o.ReconnectBackoffMinMs) * time.Millisecond,
+		ReconnectBackoffMax:    time.Duration(o.ReconnectBackoffMaxMs) * time.Millisecond,
+		RebindInterval:         time.Duration(o.RebindIntervalSec) * time.Second,
 	}
 }
 
@@ -163,22 +167,23 @@ func mergeFeishuOptions(feishuCfg config.FeishuConfig, cliOptions feishuAdapterC
 		RebindIntervalSec:    config.DefaultFeishuRebindIntervalSec,
 	})
 	merged := mergedFeishuOptions{
-		Enabled:               feishuCfg.Enabled,
-		Listen:                strings.TrimSpace(feishuCfg.Adapter.Listen),
-		EventPath:             strings.TrimSpace(feishuCfg.Adapter.EventURI),
-		CardPath:              strings.TrimSpace(feishuCfg.Adapter.CardURI),
-		AppID:                 strings.TrimSpace(feishuCfg.AppID),
-		AppSecret:             strings.TrimSpace(feishuCfg.AppSecret),
-		VerifyToken:           strings.TrimSpace(feishuCfg.VerifyToken),
-		SigningSecret:         strings.TrimSpace(feishuCfg.SigningSecret),
-		CallbackBaseURL:       strings.TrimSpace(feishuCfg.CallbackBaseURL),
-		IdempotencyTTLSec:     feishuCfg.IdempotencyTTLSec,
-		RequestTimeoutSec:     feishuCfg.RequestTimeoutSec,
-		ReconnectBackoffMinMs: feishuCfg.ReconnectBackoffMinM,
-		ReconnectBackoffMaxMs: feishuCfg.ReconnectBackoffMaxM,
-		RebindIntervalSec:     feishuCfg.RebindIntervalSec,
-		GatewayListenAddress:  strings.TrimSpace(feishuCfg.GatewayClient.ListenAddress),
-		GatewayTokenFile:      strings.TrimSpace(feishuCfg.GatewayClient.TokenFile),
+		Enabled:                feishuCfg.Enabled,
+		Listen:                 strings.TrimSpace(feishuCfg.Adapter.Listen),
+		EventPath:              strings.TrimSpace(feishuCfg.Adapter.EventURI),
+		CardPath:               strings.TrimSpace(feishuCfg.Adapter.CardURI),
+		AppID:                  strings.TrimSpace(feishuCfg.AppID),
+		AppSecret:              strings.TrimSpace(feishuCfg.AppSecret),
+		VerifyToken:            strings.TrimSpace(feishuCfg.VerifyToken),
+		SigningSecret:          strings.TrimSpace(feishuCfg.SigningSecret),
+		InsecureSkipSignVerify: feishuCfg.InsecureSkipSignVerify,
+		CallbackBaseURL:        strings.TrimSpace(feishuCfg.CallbackBaseURL),
+		IdempotencyTTLSec:      feishuCfg.IdempotencyTTLSec,
+		RequestTimeoutSec:      feishuCfg.RequestTimeoutSec,
+		ReconnectBackoffMinMs:  feishuCfg.ReconnectBackoffMinM,
+		ReconnectBackoffMaxMs:  feishuCfg.ReconnectBackoffMaxM,
+		RebindIntervalSec:      feishuCfg.RebindIntervalSec,
+		GatewayListenAddress:   strings.TrimSpace(feishuCfg.GatewayClient.ListenAddress),
+		GatewayTokenFile:       strings.TrimSpace(feishuCfg.GatewayClient.TokenFile),
 	}
 	if merged.GatewayListenAddress == "" {
 		if address, err := transport.DefaultListenAddress(); err == nil {
@@ -209,6 +214,9 @@ func mergeFeishuOptions(feishuCfg config.FeishuConfig, cliOptions feishuAdapterC
 	}
 	if value := strings.TrimSpace(cliOptions.SigningSecret); value != "" {
 		merged.SigningSecret = value
+	}
+	if cliOptions.InsecureSkipSignVerify {
+		merged.InsecureSkipSignVerify = true
 	}
 	if value := strings.TrimSpace(cliOptions.CallbackBaseURL); value != "" {
 		merged.CallbackBaseURL = value

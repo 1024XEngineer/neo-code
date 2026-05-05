@@ -10,19 +10,20 @@ import (
 
 // Config 描述 Feishu Adapter 的运行配置。
 type Config struct {
-	ListenAddress       string
-	EventPath           string
-	CardPath            string
-	AppID               string
-	AppSecret           string
-	VerifyToken         string
-	SigningSecret       string
-	CallbackBaseURL     string
-	RequestTimeout      time.Duration
-	IdempotencyTTL      time.Duration
-	ReconnectBackoffMin time.Duration
-	ReconnectBackoffMax time.Duration
-	RebindInterval      time.Duration
+	ListenAddress          string
+	EventPath              string
+	CardPath               string
+	AppID                  string
+	AppSecret              string
+	VerifyToken            string
+	SigningSecret          string
+	InsecureSkipSignVerify bool
+	CallbackBaseURL        string
+	RequestTimeout         time.Duration
+	IdempotencyTTL         time.Duration
+	ReconnectBackoffMin    time.Duration
+	ReconnectBackoffMax    time.Duration
+	RebindInterval         time.Duration
 }
 
 // Validate 校验 Feishu Adapter 配置最小可用性。
@@ -41,6 +42,12 @@ func (c Config) Validate() error {
 	}
 	if strings.TrimSpace(c.AppSecret) == "" {
 		return fmt.Errorf("app secret is required")
+	}
+	if strings.TrimSpace(c.VerifyToken) == "" {
+		return fmt.Errorf("verify token is required")
+	}
+	if !c.InsecureSkipSignVerify && strings.TrimSpace(c.SigningSecret) == "" {
+		return fmt.Errorf("signing secret is required unless insecure skip signature verify is enabled")
 	}
 	if c.RequestTimeout <= 0 {
 		return fmt.Errorf("request timeout must be greater than zero")
@@ -107,14 +114,23 @@ type inboundHeader struct {
 
 // inboundMessageEvent 表示消息回调事件最小结构。
 type inboundMessageEvent struct {
-	Message inboundMessage `json:"message,omitempty"`
+	ChatType string         `json:"chat_type,omitempty"`
+	Message  inboundMessage `json:"message,omitempty"`
 }
 
 // inboundMessage 表示消息体结构。
 type inboundMessage struct {
-	MessageID string `json:"message_id,omitempty"`
-	ChatID    string `json:"chat_id,omitempty"`
-	Content   string `json:"content,omitempty"`
+	MessageID string           `json:"message_id,omitempty"`
+	ChatID    string           `json:"chat_id,omitempty"`
+	ChatType  string           `json:"chat_type,omitempty"`
+	Content   string           `json:"content,omitempty"`
+	Mentions  []inboundMention `json:"mentions,omitempty"`
+}
+
+// inboundMention 表示群聊消息中的 @ 信息。
+type inboundMention struct {
+	Name string `json:"name,omitempty"`
+	Key  string `json:"key,omitempty"`
 }
 
 // inboundMessageContent 表示消息 JSON 内容中的文本字段。

@@ -26,19 +26,20 @@ const (
 
 // FeishuConfig 表示飞书适配器配置。
 type FeishuConfig struct {
-	Enabled              bool                      `yaml:"enabled,omitempty"`
-	AppID                string                    `yaml:"app_id,omitempty"`
-	AppSecret            string                    `yaml:"app_secret,omitempty"`
-	VerifyToken          string                    `yaml:"verify_token,omitempty"`
-	SigningSecret        string                    `yaml:"signing_secret,omitempty"`
-	CallbackBaseURL      string                    `yaml:"callback_base_url,omitempty"`
-	Adapter              FeishuAdapterConfig       `yaml:"adapter,omitempty"`
-	GatewayClient        FeishuGatewayClientConfig `yaml:"gateway,omitempty"`
-	RequestTimeoutSec    int                       `yaml:"request_timeout_sec,omitempty"`
-	IdempotencyTTLSec    int                       `yaml:"idempotency_ttl_sec,omitempty"`
-	ReconnectBackoffMinM int                       `yaml:"reconnect_backoff_min_ms,omitempty"`
-	ReconnectBackoffMaxM int                       `yaml:"reconnect_backoff_max_ms,omitempty"`
-	RebindIntervalSec    int                       `yaml:"rebind_interval_sec,omitempty"`
+	Enabled                bool                      `yaml:"enabled,omitempty"`
+	AppID                  string                    `yaml:"app_id,omitempty"`
+	AppSecret              string                    `yaml:"app_secret,omitempty"`
+	VerifyToken            string                    `yaml:"verify_token,omitempty"`
+	SigningSecret          string                    `yaml:"signing_secret,omitempty"`
+	InsecureSkipSignVerify bool                      `yaml:"insecure_skip_signature_verify,omitempty"`
+	CallbackBaseURL        string                    `yaml:"callback_base_url,omitempty"`
+	Adapter                FeishuAdapterConfig       `yaml:"adapter,omitempty"`
+	GatewayClient          FeishuGatewayClientConfig `yaml:"gateway,omitempty"`
+	RequestTimeoutSec      int                       `yaml:"request_timeout_sec,omitempty"`
+	IdempotencyTTLSec      int                       `yaml:"idempotency_ttl_sec,omitempty"`
+	ReconnectBackoffMinM   int                       `yaml:"reconnect_backoff_min_ms,omitempty"`
+	ReconnectBackoffMaxM   int                       `yaml:"reconnect_backoff_max_ms,omitempty"`
+	RebindIntervalSec      int                       `yaml:"rebind_interval_sec,omitempty"`
 }
 
 // FeishuAdapterConfig 表示飞书适配器 HTTP 服务配置。
@@ -105,6 +106,12 @@ func (c FeishuConfig) Validate() error {
 	}
 	if strings.TrimSpace(c.AppSecret) == "" {
 		return fmt.Errorf("app_secret is required when feishu.enabled=true")
+	}
+	if strings.TrimSpace(c.VerifyToken) == "" {
+		return fmt.Errorf("verify_token is required when feishu.enabled=true")
+	}
+	if !c.InsecureSkipSignVerify && strings.TrimSpace(c.SigningSecret) == "" {
+		return fmt.Errorf("signing_secret is required when feishu.enabled=true unless insecure_skip_signature_verify=true")
 	}
 	if strings.TrimSpace(c.Adapter.Listen) == "" {
 		return fmt.Errorf("adapter.listen is required when feishu.enabled=true")

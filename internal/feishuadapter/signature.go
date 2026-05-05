@@ -18,9 +18,19 @@ const (
 )
 
 // verifyFeishuSignature 校验飞书回调签名与时间窗口，防止伪造请求与重放。
-func verifyFeishuSignature(secret string, maxSkew time.Duration, header http.Header, body []byte, now time.Time) bool {
-	if strings.TrimSpace(secret) == "" {
+func verifyFeishuSignature(
+	secret string,
+	maxSkew time.Duration,
+	header http.Header,
+	body []byte,
+	now time.Time,
+	insecureSkip bool,
+) bool {
+	if insecureSkip {
 		return true
+	}
+	if strings.TrimSpace(secret) == "" {
+		return false
 	}
 	timestamp := strings.TrimSpace(header.Get(headerLarkTimestamp))
 	nonce := strings.TrimSpace(header.Get(headerLarkNonce))
