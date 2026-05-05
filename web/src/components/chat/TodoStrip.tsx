@@ -62,7 +62,11 @@ export default function TodoStrip() {
   let headIcon: React.ReactNode
   let headText: string
   let headColor: string
-  if (conflict) {
+  if (allDone) {
+    headIcon = <CheckCircle2 size={14} />
+    headText = `全部完成 (${total})`
+    headColor = 'var(--success)'
+  } else if (conflict) {
     headIcon = <AlertTriangle size={14} />
     headText = `Todo 冲突: ${conflict.reason || '需要确认'}`
     headColor = 'var(--error)'

@@ -22,14 +22,14 @@ const VerificationMessage = memo(function VerificationMessage({
   const isRunning = status === 'running'
   const isFailed = status === 'failed'
 
-  const passedCount = stages.filter((s) => s.status === 'passed').length
+  const passedCount = stages.filter((s) => s.status === 'pass').length
   const totalCount = stages.length
 
   let headText = ''
   if (isRunning) {
     headText = `Verify running… (${passedCount}/${totalCount})`
   } else if (isFailed) {
-    const firstFailed = stages.find((s) => s.status === 'failed')
+    const firstFailed = stages.find((s) => s.status === 'fail')
     headText = firstFailed
       ? `Verify failed at ${firstFailed.name}`
       : `Verify failed (${passedCount}/${totalCount} passed)`
@@ -86,8 +86,10 @@ const VerificationMessage = memo(function VerificationMessage({
 })
 
 function StageIcon({ status }: { status: string }) {
-  if (status === 'passed') return <CheckCircle2 size={12} style={{ color: 'var(--success)', flexShrink: 0 }} />
-  if (status === 'failed') return <XCircle size={12} style={{ color: 'var(--error)', flexShrink: 0 }} />
+  if (status === 'pass') return <CheckCircle2 size={12} style={{ color: 'var(--success)', flexShrink: 0 }} />
+  if (status === 'fail') return <XCircle size={12} style={{ color: 'var(--error)', flexShrink: 0 }} />
+  if (status === 'soft_block') return <MinusCircle size={12} style={{ color: 'var(--warning)', flexShrink: 0 }} />
+  if (status === 'hard_block') return <XCircle size={12} style={{ color: 'var(--error)', flexShrink: 0 }} />
   return <MinusCircle size={12} style={{ color: 'var(--text-tertiary)', flexShrink: 0 }} />
 }
 
