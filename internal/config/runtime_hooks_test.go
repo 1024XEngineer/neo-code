@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestRuntimeHooksConfigApplyDefaultsAndValidate(t *testing.T) {
 	t.Parallel()
@@ -90,6 +93,43 @@ func TestRuntimeHooksConfigValidateUnsupportedFields(t *testing.T) {
 		if err := cfg.Validate(); err == nil {
 			t.Fatalf("expected validate error for item=%+v", item)
 		}
+	}
+}
+
+func TestRuntimeHooksConfigValidateRejectsExternalKindsWithP6LiteMessage(t *testing.T) {
+	t.Parallel()
+
+	base := RuntimeHooksConfig{
+		Enabled:              boolPtr(true),
+		UserHooksEnabled:     boolPtr(true),
+		DefaultTimeoutSec:    2,
+		DefaultFailurePolicy: runtimeHookFailurePolicyWarnOnly,
+	}
+	externalKinds := []string{"command", "http", "prompt", "agent"}
+	for _, kind := range externalKinds {
+		kind := kind
+		t.Run(kind, func(t *testing.T) {
+			cfg := base.Clone()
+			cfg.Items = []RuntimeHookItemConfig{
+				{
+					ID:      "external-kind",
+					Point:   runtimeHookPointBeforeToolCall,
+					Scope:   runtimeHookScopeUser,
+					Kind:    kind,
+					Mode:    runtimeHookModeSync,
+					Handler: runtimeHookHandlerWarnOnToolCall,
+					Params:  map[string]any{"tool_name": "bash"},
+				},
+			}
+			cfg.ApplyDefaults(defaultRuntimeHooksConfig())
+			err := cfg.Validate()
+			if err == nil {
+				t.Fatalf("expected external kind %q to be rejected", kind)
+			}
+			if !strings.Contains(err.Error(), "not supported in P6-lite") {
+				t.Fatalf("error=%q, want contains not supported in P6-lite", err.Error())
+			}
+		})
 	}
 }
 

@@ -11,10 +11,10 @@
 - P2：全局 user builtin hooks（`runtime.hooks`）
 - P3：repo hooks（`<workspace>/.neocode/hooks.yaml`）+ workspace trust gate（`~/.neocode/trusted-workspaces.json`）
 - P4：生命周期点位扩展（permission/session/compact/subagent）+ 点位能力矩阵
+- P5：internal hooks 支持 `async/async_rewake` + run 内存通知队列（ephemeral 注入）
 
 当前未实现能力：
 
-- async / async_rewake（P5）
 - command/http/prompt/agent hooks（P6）
 
 ## P2 user hooks 边界
@@ -24,10 +24,13 @@ P2 仅支持：
 - `scope=user`
 - `kind=builtin`
 - `mode=sync`
-- 挂载点：`before_tool_call`、`after_tool_result`、`before_completion_decision`
+- 挂载点：与 `HookPointCapability` 中 `UserAllowed=true` 的点位一致，当前包括：
+  `before_tool_call`、`after_tool_result`、`before_completion_decision`、`after_tool_failure`、
+  `session_start`、`session_end`、`user_prompt_submit`、`post_compact`、`subagent_stop`
 - handler：`require_file_exists`、`warn_on_tool_call`、`add_context_note`
+- external kinds（`command/http/prompt/agent`）在 P6-lite 阶段显式拒绝，不会半生效
 
-当前（P3）明确定义：
+当前（P3）明确不支持：
 
 - user hook 修改 tool 输入或 tool result
 - user hook 直接写入 provider-facing prompt
@@ -42,7 +45,8 @@ repo hooks 文件路径固定为：
 <workspace>/.neocode/hooks.yaml
 ```
 
-仅支持与 P2 相同的 builtin 子集（`kind=builtin`、`mode=sync`、3 个 points、3 个 handlers）。
+仅支持与 P2 相同的 builtin 子集（`kind=builtin`、`mode=sync`、`UserAllowed=true` points、3 个 handlers）。
+external kinds（`command/http/prompt/agent`）在 P6-lite 阶段显式拒绝，不会加载执行。
 
 执行顺序固定为：
 
@@ -142,6 +146,12 @@ runtime 会透传 hooks 生命周期事件：
 `hook_finished/hook_failed` 包含 `message` 字段，用于承载 warning/note 文本。  
 hook 事件额外携带 `source` 字段；展示层建议使用 `<source>:<id>`。  
 user/repo hook 的 `message` 会进入 runtime 的 annotation buffer（运行态内存缓冲），用于后续观测与诊断。
+
+## 示例配置
+
+- 全局 user builtin hooks：`~/.neocode/config.yaml` -> `runtime.hooks.items`
+- 仓库级 repo builtin hooks：`<workspace>/.neocode/hooks.yaml`
+- 示例文件：`docs/examples/hooks.yaml`
 
 ## 失败策略
 

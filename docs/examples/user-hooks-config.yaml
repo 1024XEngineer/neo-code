@@ -1,0 +1,30 @@
+selected_provider: openai
+current_model: gpt-5.4
+
+runtime:
+  hooks:
+    enabled: true
+    user_hooks_enabled: true
+    default_timeout_sec: 2
+    default_failure_policy: warn_only
+    items:
+      - id: user-context-note
+        enabled: true
+        point: user_prompt_submit
+        scope: user
+        kind: builtin
+        mode: sync
+        handler: add_context_note
+        params:
+          note: "优先最小改动，避免无说明的大范围重构。"
+
+      - id: user-warn-bash
+        enabled: true
+        point: before_tool_call
+        scope: user
+        kind: builtin
+        mode: sync
+        handler: warn_on_tool_call
+        params:
+          tool_names: ["bash"]
+          message: "执行 bash 前请确认命令不会破坏工作区。"

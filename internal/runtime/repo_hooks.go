@@ -29,6 +29,13 @@ const (
 	repoHookFailurePolicyFailClose = "fail_closed"
 )
 
+var repoHookExternalKinds = map[string]struct{}{
+	"command": {},
+	"http":    {},
+	"prompt":  {},
+	"agent":   {},
+}
+
 // repoHooksConfigFile 描述仓库 hooks 配置文件结构。
 type repoHooksConfigFile struct {
 	Hooks repoHooksSection `yaml:"hooks"`
@@ -335,7 +342,13 @@ func validateRepoHookItem(item config.RuntimeHookItemConfig) error {
 	if strings.ToLower(strings.TrimSpace(item.Scope)) != repoHookScopeValue {
 		return fmt.Errorf("scope %q is not supported", item.Scope)
 	}
-	if strings.ToLower(strings.TrimSpace(item.Kind)) != repoHookKindBuiltIn {
+	if normalizedKind := strings.ToLower(strings.TrimSpace(item.Kind)); normalizedKind != repoHookKindBuiltIn {
+		if _, external := repoHookExternalKinds[normalizedKind]; external {
+			return fmt.Errorf(
+				"external hook kind %q is not supported in P6-lite; only builtin hooks are enabled",
+				item.Kind,
+			)
+		}
 		return fmt.Errorf("kind %q is not supported", item.Kind)
 	}
 	if strings.ToLower(strings.TrimSpace(item.Mode)) != repoHookModeSync {

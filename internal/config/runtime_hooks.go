@@ -26,6 +26,13 @@ const (
 	runtimeHookModeSync    = "sync"
 )
 
+var runtimeHookExternalKinds = map[string]struct{}{
+	"command": {},
+	"http":    {},
+	"prompt":  {},
+	"agent":   {},
+}
+
 const (
 	runtimeHookPointBeforeToolCall           = "before_tool_call"
 	runtimeHookPointAfterToolResult          = "after_tool_result"
@@ -254,6 +261,12 @@ func (c RuntimeHookItemConfig) Validate(defaultFailurePolicy string) error {
 		return fmt.Errorf("scope %q is not supported", c.Scope)
 	}
 	if normalizedKind := strings.ToLower(strings.TrimSpace(c.Kind)); normalizedKind != runtimeHookKindBuiltIn {
+		if _, external := runtimeHookExternalKinds[normalizedKind]; external {
+			return fmt.Errorf(
+				"external hook kind %q is not supported in P6-lite; only builtin hooks are enabled",
+				c.Kind,
+			)
+		}
 		return fmt.Errorf("kind %q is not supported", c.Kind)
 	}
 	if normalizedMode := strings.ToLower(strings.TrimSpace(c.Mode)); normalizedMode != runtimeHookModeSync {

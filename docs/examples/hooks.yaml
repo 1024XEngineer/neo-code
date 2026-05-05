@@ -1,0 +1,33 @@
+hooks:
+  items:
+    - id: project-context
+      enabled: true
+      point: user_prompt_submit
+      scope: repo
+      kind: builtin
+      mode: sync
+      handler: add_context_note
+      params:
+        note: "本项目要求优先小改，不允许无说明的大范围重构。"
+
+    - id: warn-bash
+      enabled: true
+      point: before_tool_call
+      scope: repo
+      kind: builtin
+      mode: sync
+      handler: warn_on_tool_call
+      params:
+        tool_names: ["bash"]
+        message: "执行 bash 前请确认命令不会破坏工作区。"
+
+    - id: require-readme-before-final
+      enabled: true
+      point: before_completion_decision
+      scope: repo
+      kind: builtin
+      mode: sync
+      handler: require_file_exists
+      params:
+        path: "README.md"
+        message: "请先补齐 README.md。"

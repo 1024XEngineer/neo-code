@@ -38,6 +38,7 @@ NeoCode 是一个在终端里运行的本地 AI 编码助手。它不是云端 S
 
 - [Skills 使用](./skills) — 用 `SKILL.md` 固化当前任务的工作方式
 - [MCP 工具接入](./mcp) — 把外部工具接入 NeoCode
+- [Hooks 使用](./hooks) — 在 runtime 生命周期点配置安全 builtin 规则
 
 ## 遇到问题
 
