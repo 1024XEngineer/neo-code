@@ -236,6 +236,33 @@ func TestCollectorApplyNoopWriteKeepsVerificationFacts(t *testing.T) {
 	}
 }
 
+func TestCollectorApplyBashWorkspaceWritePathFacts(t *testing.T) {
+	collector := NewCollector()
+	collector.ApplyToolResult(tools.ToolNameBash, tools.ToolResult{
+		Name:    tools.ToolNameBash,
+		IsError: false,
+		Metadata: map[string]any{
+			"workspace_write_paths": []any{" a.txt ", "a.txt", " b.txt "},
+			"exit_code":             0,
+			"ok":                    true,
+		},
+		Facts: tools.ToolExecutionFacts{
+			WorkspaceWrite: true,
+		},
+	})
+
+	snapshot := collector.Snapshot()
+	if len(snapshot.Files.Written) != 2 {
+		t.Fatalf("bash written facts = %+v, want 2", snapshot.Files.Written)
+	}
+	if snapshot.Files.Written[0].Path != "a.txt" || snapshot.Files.Written[1].Path != "b.txt" {
+		t.Fatalf("bash written paths = %+v, want [a.txt b.txt]", snapshot.Files.Written)
+	}
+	if len(snapshot.Files.Exists) != 2 || snapshot.Files.Exists[0].Source != "bash" {
+		t.Fatalf("bash exists facts = %+v", snapshot.Files.Exists)
+	}
+}
+
 func TestCollectorApplyGlobAndStringMetadataFacts(t *testing.T) {
 	collector := NewCollector()
 	collector.ApplyToolResult(tools.ToolNameFilesystemGlob, tools.ToolResult{

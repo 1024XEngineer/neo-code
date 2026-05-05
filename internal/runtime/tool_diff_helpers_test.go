@@ -148,6 +148,23 @@ func TestToolExecutionHelperFunctions(t *testing.T) {
 			t.Fatalf("collectUncoveredBashPaths() = %#v", got)
 		}
 	})
+
+	t.Run("collectBashWriteFactPaths includes only added and modified paths", func(t *testing.T) {
+		got := collectBashWriteFactPaths(checkpoint.FingerprintDiff{
+			Added:    []string{"b.txt", "a.txt"},
+			Modified: []string{"a.txt", "c.txt"},
+			Deleted:  []string{"old.txt"},
+		})
+		want := []string{"a.txt", "c.txt", "b.txt"}
+		if len(got) != len(want) {
+			t.Fatalf("collectBashWriteFactPaths() = %v, want %v", got, want)
+		}
+		for idx := range want {
+			if got[idx] != want[idx] {
+				t.Fatalf("collectBashWriteFactPaths() = %v, want %v", got, want)
+			}
+		}
+	})
 }
 
 func TestEmitHelpersPublishExpectedEvents(t *testing.T) {

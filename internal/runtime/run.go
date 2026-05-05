@@ -150,6 +150,9 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 	}
 	s.bindRunState(runToken, &state)
 	statePtr = &state
+	if err := s.resetTodosForUserRun(ctx, &state); err != nil {
+		return s.handleRunError(err)
+	}
 
 	effectiveWorkdir := agentsession.EffectiveWorkdir(state.session.Workdir, initialCfg.Workdir)
 	_ = s.runHookPoint(ctx, &state, runtimehooks.HookPointSessionStart, runtimehooks.HookContext{
@@ -364,7 +367,7 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 				if err := s.setBaseRunState(ctx, &state, controlplane.RunStateVerify); err != nil {
 					return s.handleRunError(err)
 				}
-	      s.updateResumeCheckpoint(ctx, &state, "verify", "completed")
+				s.updateResumeCheckpoint(ctx, &state, "verify", "completed")
 				acceptanceDecision, err := s.runBeforeCompletionDecisionAcceptance(
 					ctx,
 					&state,

@@ -31,7 +31,7 @@ describe('deriveTodoView', () => {
     expect(rows.every((r) => r.isStale === false)).toBe(true)
   })
 
-  it('fills remaining slots with stale entries by lastSeenAt desc when activeCount < 5', () => {
+  it('does not mix stale history into current todo rows', () => {
     const snapshot = { items: [active('a'), active('b'), active('c')] }
     const history: Record<string, TodoHistoryEntry> = {
       a: { ...historyEntry('a', 100), id: 'a' },
@@ -40,10 +40,8 @@ describe('deriveTodoView', () => {
       old3: historyEntry('old3', 30),
     }
     const rows = deriveTodoView(snapshot, history)
-    expect(rows.length).toBe(5)
-    expect(rows.slice(0, 3).map((r) => r.id)).toEqual(['a', 'b', 'c'])
-    expect(rows.slice(3).map((r) => r.id)).toEqual(['old2', 'old1'])
-    expect(rows.slice(3).every((r) => r.isStale)).toBe(true)
+    expect(rows.map((r) => r.id)).toEqual(['a', 'b', 'c'])
+    expect(rows.every((r) => r.isStale === false)).toBe(true)
   })
 
   it('hides all stale entries when activeCount >= cap', () => {
@@ -59,16 +57,14 @@ describe('deriveTodoView', () => {
     expect(rows.every((r) => !r.isStale)).toBe(true)
   })
 
-  it('returns fewer than cap when total items insufficient', () => {
+  it('ignores history when active items are fewer than cap', () => {
     const snapshot = { items: [active('a')] }
     const history: Record<string, TodoHistoryEntry> = {
       old1: historyEntry('old1', 100),
     }
     const rows = deriveTodoView(snapshot, history)
-    expect(rows.length).toBe(2)
+    expect(rows.length).toBe(1)
     expect(rows[0].id).toBe('a')
-    expect(rows[1].id).toBe('old1')
-    expect(rows[1].isStale).toBe(true)
   })
 
   it('does not duplicate ids that exist both in snapshot and history', () => {
@@ -78,14 +74,13 @@ describe('deriveTodoView', () => {
       old1: historyEntry('old1', 100),
     }
     const rows = deriveTodoView(snapshot, history)
-    expect(rows.length).toBe(2)
+    expect(rows.length).toBe(1)
     expect(rows.filter((r) => r.id === 'a').length).toBe(1)
     expect(rows.find((r) => r.id === 'a')!.isStale).toBe(false)
     expect(rows.find((r) => r.id === 'a')!.status).toBe('in_progress')
-    expect(rows.find((r) => r.id === 'old1')!.isStale).toBe(true)
   })
 
-  it('shows up to cap stale rows when active is empty', () => {
+  it('returns empty rows when active is empty even if history exists', () => {
     const snapshot = { items: [] }
     const history: Record<string, TodoHistoryEntry> = {
       h1: historyEntry('h1', 10),
@@ -97,8 +92,6 @@ describe('deriveTodoView', () => {
       h7: historyEntry('h7', 70),
     }
     const rows = deriveTodoView(snapshot, history)
-    expect(rows.length).toBe(5)
-    expect(rows.map((r) => r.id)).toEqual(['h7', 'h6', 'h5', 'h4', 'h3'])
-    expect(rows.every((r) => r.isStale)).toBe(true)
+    expect(rows).toEqual([])
   })
 })

@@ -194,9 +194,11 @@ export const useRuntimeInsightStore = create<RuntimeInsightState>((set) => ({
   setAcceptanceDecision: (acceptanceDecision) => set({ acceptanceDecision }),
   setTodoSnapshot: (todoSnapshot) => set((s) => {
     const items = todoSnapshot?.items ?? []
+    if (!todoSnapshot) {
+      return { todoSnapshot: null, todoConflict: null }
+    }
     if (items.length === 0) {
-      // 空 snapshot = 无效更新，保留当前 snapshot/history，仅清 conflict
-      return { todoConflict: null }
+      return { todoSnapshot, todoConflict: null }
     }
     const now = Date.now()
     const todoHistory = { ...s.todoHistory }
@@ -212,8 +214,11 @@ export const useRuntimeInsightStore = create<RuntimeInsightState>((set) => ({
   }),
   applyTodoSnapshot: (todoSnapshot) => set((s) => {
     const items = todoSnapshot?.items ?? []
+    if (!todoSnapshot) {
+      return { todoSnapshot: null }
+    }
     if (items.length === 0) {
-      return {}
+      return { todoSnapshot }
     }
     const now = Date.now()
     const todoHistory = { ...s.todoHistory }

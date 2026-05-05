@@ -98,6 +98,9 @@ func (c *Collector) ApplyToolResult(toolName string, result tools.ToolResult) {
 		c.applyGlobFacts(result)
 	case strings.ToLower(tools.ToolNameBash):
 		c.applyCommandFacts(name, result)
+		if !result.IsError {
+			c.applyWorkspaceWritePathFacts(result, "bash")
+		}
 	case strings.ToLower(tools.ToolNameSpawnSubAgent):
 		c.applySpawnSubAgentFacts(result)
 	default:
@@ -105,6 +108,36 @@ func (c *Collector) ApplyToolResult(toolName string, result tools.ToolResult) {
 	}
 
 	c.applyVerificationFacts(name, result)
+}
+
+// applyWorkspaceWritePathFacts 将工具 metadata 中声明的写入路径转成可被 decider 验收的文件事实。
+func (c *Collector) applyWorkspaceWritePathFacts(result tools.ToolResult, source string) {
+	if !result.Facts.WorkspaceWrite {
+		return
+	}
+	paths := readStringSlice(result.Metadata, "workspace_write_paths")
+	if len(paths) == 0 {
+		return
+	}
+	source = strings.TrimSpace(source)
+	if source == "" {
+		source = "workspace_write"
+	}
+	for _, path := range paths {
+		key := fmt.Sprintf("file_written:%s:%s", source, path)
+		if c.markSeen(key) {
+			c.facts.Files.Written = append(c.facts.Files.Written, FileWriteFact{
+				Path:           path,
+				WorkspaceWrite: true,
+			})
+			c.facts.Progress.ObservedFactCount++
+		}
+		existsKey := fmt.Sprintf("file_exists:%s:%s", source, path)
+		if c.markSeen(existsKey) {
+			c.facts.Files.Exists = append(c.facts.Files.Exists, FileExistFact{Path: path, Source: source})
+			c.facts.Progress.ObservedFactCount++
+		}
+	}
 }
 
 // applyToolErrorFact 记录工具错误事实，供终态决策识别持续失败模式。
