@@ -169,7 +169,9 @@ function SummaryBadge({ icon, label, color }: { icon: React.ReactNode; label: st
 function TodoItem({ item }: { item: TodoViewRow }) {
   const [open, setOpen] = useState(false)
   const meta = getStatusMeta(item.status)
-  const hasReason = !!item.failure_reason || !!item.blocked_reason
+  // 双保险:阻塞原因仅在 status=blocked 时纳入"展开详情"判断,与后端 invariant 对齐。
+  const showBlockedReason = !!item.blocked_reason && item.status === 'blocked'
+  const hasReason = !!item.failure_reason || showBlockedReason
   const isStale = item.isStale
   const iconColor = isStale ? 'var(--text-tertiary)' : meta.color
   const contentStyle: React.CSSProperties = isStale
@@ -191,7 +193,7 @@ function TodoItem({ item }: { item: TodoViewRow }) {
       {open && hasReason && (
         <div style={styles.itemDetail}>
           {item.failure_reason && <div style={{ color: 'var(--error)', fontSize: 11 }}>失败原因: {item.failure_reason}</div>}
-          {item.blocked_reason && <div style={{ color: 'var(--warning)', fontSize: 11 }}>阻塞原因: {item.blocked_reason}</div>}
+          {showBlockedReason && <div style={{ color: 'var(--warning)', fontSize: 11 }}>阻塞原因: {item.blocked_reason}</div>}
         </div>
       )}
     </div>

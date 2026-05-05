@@ -26,8 +26,12 @@ func TestTodoCompatibilityDefaultsForLegacyFields(t *testing.T) {
 	if !normalized[0].RequiredValue() || !normalized[1].RequiredValue() {
 		t.Fatalf("legacy missing required should default to true, got %+v", normalized)
 	}
-	if normalized[0].BlockedReasonValue() != TodoBlockedReasonUnknown {
-		t.Fatalf("legacy missing blocked_reason should default unknown, got %q", normalized[0].BlockedReasonValue())
+	// 旧数据缺失 blocked_reason 时,blocked 状态下应保持空(由 LLM/工具后续填写),非 blocked 状态下也应为空。
+	if normalized[0].BlockedReason != "" {
+		t.Fatalf("legacy blocked todo without reason should keep empty, got %q", normalized[0].BlockedReason)
+	}
+	if normalized[1].BlockedReason != "" {
+		t.Fatalf("legacy pending todo should not carry blocked_reason, got %q", normalized[1].BlockedReason)
 	}
 }
 
@@ -61,7 +65,7 @@ func TestTodoOptionalAndBlockedReasonPatch(t *testing.T) {
 	if updated.RequiredValue() {
 		t.Fatalf("expected optional todo (required=false), got %+v", updated)
 	}
-	if updated.BlockedReasonValue() != TodoBlockedReasonUserInputWait {
-		t.Fatalf("blocked_reason = %q, want %q", updated.BlockedReasonValue(), TodoBlockedReasonUserInputWait)
+	if updated.BlockedReason != TodoBlockedReasonUserInputWait {
+		t.Fatalf("blocked_reason = %q, want %q", updated.BlockedReason, TodoBlockedReasonUserInputWait)
 	}
 }

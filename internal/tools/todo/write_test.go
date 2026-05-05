@@ -149,6 +149,13 @@ func TestToolExecute(t *testing.T) {
 			withMutator: true,
 			want:        "action: plan",
 		},
+		{
+			name:        "plan rejects empty items",
+			raw:         []byte(`{"action":"plan","items":[]}`),
+			withMutator: true,
+			wantErr:     true,
+			want:        reasonInvalidArguments,
+		},
 	}
 
 	tool := New()

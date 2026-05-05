@@ -192,7 +192,9 @@ export const useRuntimeInsightStore = create<RuntimeInsightState>((set) => ({
   setTodoSnapshot: (todoSnapshot) => set((s) => {
     const items = todoSnapshot?.items ?? []
     if (items.length === 0) {
-      return { todoSnapshot, todoConflict: null }
+      // 空 snapshot = 无效更新,保留当前 todoSnapshot/todoHistory,仅清 conflict。
+      // 后端 v7 起已禁止空 plan;此处作前端兜底,防止回归把活 todo 抹成 stale。
+      return { todoConflict: null }
     }
     const now = Date.now()
     const todoHistory = { ...s.todoHistory }

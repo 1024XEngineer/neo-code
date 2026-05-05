@@ -575,7 +575,7 @@ func buildTodoSnapshotMetadata(items []agentsession.TodoItem) ([]map[string]any,
 			"required":       required,
 			"artifacts":      append([]string(nil), item.Artifacts...),
 			"failure_reason": strings.TrimSpace(item.FailureReason),
-			"blocked_reason": strings.TrimSpace(string(item.BlockedReasonValue())),
+			"blocked_reason": strings.TrimSpace(string(item.BlockedReason)),
 			"revision":       item.Revision,
 		})
 	}

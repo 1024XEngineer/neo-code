@@ -63,8 +63,9 @@ func (t *Tool) Schema() map[string]any {
 				"type": "boolean",
 			},
 			"blocked_reason": map[string]any{
-				"type": "string",
-				"enum": blockedReasonEnum,
+				"type":        "string",
+				"enum":        blockedReasonEnum,
+				"description": "仅当 status == \"blocked\" 时填写;其他状态请省略本字段。unknown 仅用于\"已经阻塞但无法给出具体原因\"的场景。",
 			},
 			"dependencies": map[string]any{
 				"type": "array",
@@ -297,6 +298,9 @@ func (t *Tool) dispatch(call tools.ToolCallInput, input writeInput) (map[string]
 	case actionPlan:
 		if input.Items == nil {
 			return nil, fmt.Errorf("%w: action %q requires items", errTodoInvalidArguments, actionPlan)
+		}
+		if len(input.Items) == 0 {
+			return nil, fmt.Errorf("%w: action %q rejects empty items; mark finished todos via set_status (completed) or remove individual entries via remove — do not clear the plan with an empty array", errTodoInvalidArguments, actionPlan)
 		}
 		if err := call.SessionMutator.ReplaceTodos(input.Items); err != nil {
 			return nil, err
