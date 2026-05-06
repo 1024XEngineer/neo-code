@@ -294,13 +294,16 @@ func resolveDiagSocketPath(socketFlag string) (string, error) {
 	)
 }
 
-// resolveIDMDiagSocketPath 按“--socket > NEOCODE_IDM_SOCKET > 最近运行目录 IDM socket”解析目标路径。
+// resolveIDMDiagSocketPath 按“--socket(普通诊断socket会自动推导IDM) > NEOCODE_IDM_SOCKET > NEOCODE_DIAG_SOCKET(自动推导) > 最近运行目录 IDM socket”解析目标路径。
 func resolveIDMDiagSocketPath(socketFlag string) (string, error) {
 	if socketPath := strings.TrimSpace(socketFlag); socketPath != "" {
-		return socketPath, nil
+		return ptyproxy.DeriveIDMSocketPathFromDiagSocketPath(socketPath)
 	}
 	if envValue := strings.TrimSpace(readDiagEnvValue(ptyproxy.IDMDiagSocketEnv)); envValue != "" {
 		return envValue, nil
+	}
+	if envValue := strings.TrimSpace(readDiagEnvValue(ptyproxy.DiagSocketEnv)); envValue != "" {
+		return ptyproxy.DeriveIDMSocketPathFromDiagSocketPath(envValue)
 	}
 	if discoveredPath, err := resolveLatestIDMPath(); err == nil && strings.TrimSpace(discoveredPath) != "" {
 		return strings.TrimSpace(discoveredPath), nil

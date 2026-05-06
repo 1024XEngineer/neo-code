@@ -111,7 +111,7 @@ func RunManualShell(ctx context.Context, options ManualShellOptions) error {
 		_ = listener.Close()
 		_ = os.Remove(socketPath)
 	}()
-	idmListener, idmSocketPath, err := listenIDMSocket()
+	idmListener, idmSocketPath, err := listenIDMSocket(socketPath)
 	if err != nil {
 		return err
 	}
@@ -857,7 +857,15 @@ func listenDiagSocket(socketOption string) (net.Listener, string, error) {
 }
 
 // listenIDMSocket 负责 listenIDMSocket 相关逻辑。
-func listenIDMSocket() (net.Listener, string, error) {
+func listenIDMSocket(diagSocketPath string) (net.Listener, string, error) {
+	if trimmedDiagPath := strings.TrimSpace(diagSocketPath); trimmedDiagPath != "" {
+		derivedPath, err := DeriveIDMSocketPathFromDiagSocketPath(trimmedDiagPath)
+		if err != nil {
+			return nil, "", err
+		}
+		return listenSocketByPath(derivedPath)
+	}
+
 	socketPath, err := ResolveDefaultIDMDiagSocketPath()
 	if err != nil {
 		return nil, "", err

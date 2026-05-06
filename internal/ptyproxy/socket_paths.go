@@ -17,6 +17,35 @@ const (
 	idmSocketFileMidfix      = "-idm"
 )
 
+// DeriveIDMSocketPathFromDiagSocketPath 基于普通诊断 socket 路径推导 IDM socket 路径。
+// 规则：
+// 1. 已是 `*-idm.sock` 时直接返回原路径；
+// 2. 以 `.sock` 结尾时插入 `-idm`；
+// 3. 其他情况在末尾追加 `-idm.sock`。
+func DeriveIDMSocketPathFromDiagSocketPath(diagSocketPath string) (string, error) {
+	trimmed := strings.TrimSpace(diagSocketPath)
+	if trimmed == "" {
+		return "", fmt.Errorf("ptyproxy: derive idm socket path from empty diagnose socket")
+	}
+	cleaned := filepath.Clean(trimmed)
+	if cleaned == "." {
+		return "", fmt.Errorf("ptyproxy: derive idm socket path from empty diagnose socket")
+	}
+
+	baseName := filepath.Base(cleaned)
+	if strings.HasSuffix(baseName, idmSocketFileMidfix+diagSocketFileSuffix) {
+		return cleaned, nil
+	}
+
+	if strings.HasSuffix(baseName, diagSocketFileSuffix) {
+		stem := strings.TrimSuffix(baseName, diagSocketFileSuffix)
+		derivedName := stem + idmSocketFileMidfix + diagSocketFileSuffix
+		return filepath.Join(filepath.Dir(cleaned), derivedName), nil
+	}
+
+	return cleaned + idmSocketFileMidfix + diagSocketFileSuffix, nil
+}
+
 // ResolveDefaultDiagSocketPath 解析当前进程默认诊断 socket 路径。
 func ResolveDefaultDiagSocketPath() (string, error) {
 	return resolveDiagSocketPathForPID(os.Getpid())

@@ -87,7 +87,10 @@ func (i runtimeSubAgentInvoker) Run(ctx context.Context, input tools.SubAgentRun
 	runCtx := ctx
 	cancel := func() {}
 	if input.Timeout > 0 {
-		runCtx, cancel = context.WithTimeout(ctx, input.Timeout)
+		// 若上层已设置 deadline（例如诊断链路额外 grace window），避免在这里再次收窄上下文超时。
+		if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+			runCtx, cancel = context.WithTimeout(ctx, input.Timeout)
+		}
 	}
 	defer cancel()
 
