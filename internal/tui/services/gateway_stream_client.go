@@ -154,42 +154,14 @@ func decodeRuntimeEventFromGatewayNotification(notification gatewayRPCNotificati
 
 // extractRuntimeEnvelope 从网关 payload 中提取事件包裹层。
 func extractRuntimeEnvelope(payload any) (map[string]any, bool) {
-	switch typed := payload.(type) {
-	case map[string]any:
-		if _, exists := streamReadMapValue(typed, "runtime_event_type"); exists {
-			return typed, true
-		}
-		if nested, exists := streamReadMapValue(typed, "payload"); exists {
-			if nestedMap, ok := nested.(map[string]any); ok {
-				if _, hasEventType := streamReadMapValue(nestedMap, "runtime_event_type"); hasEventType {
-					return nestedMap, true
-				}
-			}
-		}
-	case nil:
+	typed, ok := payload.(map[string]any)
+	if !ok {
 		return nil, false
 	}
-
-	raw, err := json.Marshal(payload)
-	if err != nil {
+	if _, exists := streamReadMapValue(typed, "runtime_event_type"); !exists {
 		return nil, false
 	}
-
-	var asMap map[string]any
-	if err := json.Unmarshal(raw, &asMap); err != nil {
-		return nil, false
-	}
-	if _, exists := streamReadMapValue(asMap, "runtime_event_type"); exists {
-		return asMap, true
-	}
-	if nested, exists := streamReadMapValue(asMap, "payload"); exists {
-		if nestedMap, ok := nested.(map[string]any); ok {
-			if _, hasEventType := streamReadMapValue(nestedMap, "runtime_event_type"); hasEventType {
-				return nestedMap, true
-			}
-		}
-	}
-	return nil, false
+	return typed, true
 }
 
 // restoreRuntimePayload 按事件类型将 payload 恢复为 TUI 可消费的强类型结构。

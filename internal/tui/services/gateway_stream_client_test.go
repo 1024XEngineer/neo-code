@@ -293,7 +293,7 @@ func TestDecodeRuntimeEventFromGatewayNotificationRestoresSubAgentPayloads(t *te
 	}
 }
 
-func TestDecodeRuntimeEventFromGatewayNotificationSupportsNestedEnvelope(t *testing.T) {
+func TestDecodeRuntimeEventFromGatewayNotificationRejectsNestedEnvelope(t *testing.T) {
 	notification := buildGatewayEventNotification(t, gateway.MessageFrame{
 		Type:      gateway.FrameTypeEvent,
 		Action:    gateway.FrameActionRun,
@@ -309,15 +309,8 @@ func TestDecodeRuntimeEventFromGatewayNotificationSupportsNestedEnvelope(t *test
 		},
 	})
 
-	event, err := decodeRuntimeEventFromGatewayNotification(notification)
-	if err != nil {
-		t.Fatalf("decodeRuntimeEventFromGatewayNotification() error = %v", err)
-	}
-	if event.Type != EventError {
-		t.Fatalf("event.Type = %q, want %q", event.Type, EventError)
-	}
-	if payload, ok := event.Payload.(string); !ok || payload != "boom" {
-		t.Fatalf("event.Payload = %#v, want %q", event.Payload, "boom")
+	if _, err := decodeRuntimeEventFromGatewayNotification(notification); err == nil {
+		t.Fatalf("expected nested envelope decode error")
 	}
 }
 
