@@ -157,55 +157,6 @@ func (r *RemoteRuntimeAdapter) Submit(ctx context.Context, input PrepareInput) e
 	return nil
 }
 
-// PrepareUserInput 在 gateway 模式下提供最小可用输入归一化结果，保持接口兼容。
-func (r *RemoteRuntimeAdapter) PrepareUserInput(ctx context.Context, input PrepareInput) (UserInput, error) {
-	if err := ctx.Err(); err != nil {
-		return UserInput{}, err
-	}
-
-	sessionID := strings.TrimSpace(input.SessionID)
-	if sessionID == "" {
-		sessionID = agentsession.NewID("session")
-	}
-	runID := strings.TrimSpace(input.RunID)
-	if runID == "" {
-		runID = fmt.Sprintf("run-%d", time.Now().UnixNano())
-	}
-
-	parts := make([]providertypes.ContentPart, 0, 1+len(input.Images))
-	if strings.TrimSpace(input.Text) != "" {
-		parts = append(parts, providertypes.NewTextPart(input.Text))
-	}
-	for _, image := range input.Images {
-		path := strings.TrimSpace(image.Path)
-		if path == "" {
-			continue
-		}
-		parts = append(parts, providertypes.NewRemoteImagePart(path))
-	}
-
-	return UserInput{
-		SessionID: sessionID,
-		RunID:     runID,
-		Parts:     parts,
-		Workdir:   strings.TrimSpace(input.Workdir),
-		Mode:      strings.TrimSpace(input.Mode),
-	}, nil
-}
-
-// Run 保持 runtime 接口兼容，在 gateway 模式下回落到 Submit 通道。
-func (r *RemoteRuntimeAdapter) Run(ctx context.Context, input UserInput) error {
-	prepareInput := PrepareInput{
-		SessionID: strings.TrimSpace(input.SessionID),
-		RunID:     strings.TrimSpace(input.RunID),
-		Workdir:   strings.TrimSpace(input.Workdir),
-		Mode:      strings.TrimSpace(input.Mode),
-		Text:      renderInputTextFromParts(input.Parts),
-		Images:    renderInputImagesFromParts(input.Parts),
-	}
-	return r.Submit(ctx, prepareInput)
-}
-
 // Compact 转发 gateway.compact 请求并映射回 runtime CompactResult。
 func (r *RemoteRuntimeAdapter) Compact(ctx context.Context, input CompactInput) (CompactResult, error) {
 	sessionID := strings.TrimSpace(input.SessionID)
@@ -643,43 +594,6 @@ func buildGatewayRunParams(sessionID string, runID string, input PrepareInput) p
 		Workdir:    strings.TrimSpace(input.Workdir),
 		Mode:       strings.TrimSpace(input.Mode),
 	}
-}
-
-func renderInputTextFromParts(parts []providertypes.ContentPart) string {
-	textParts := make([]string, 0, len(parts))
-	for _, part := range parts {
-		if part.Kind != providertypes.ContentPartText {
-			continue
-		}
-		text := strings.TrimSpace(part.Text)
-		if text == "" {
-			continue
-		}
-		textParts = append(textParts, text)
-	}
-	return strings.Join(textParts, "\n")
-}
-
-func renderInputImagesFromParts(parts []providertypes.ContentPart) []UserImageInput {
-	images := make([]UserImageInput, 0, len(parts))
-	for _, part := range parts {
-		if part.Kind != providertypes.ContentPartImage || part.Image == nil {
-			continue
-		}
-		path := strings.TrimSpace(part.Image.URL)
-		if path == "" {
-			continue
-		}
-		mimeType := ""
-		if part.Image.Asset != nil {
-			mimeType = strings.TrimSpace(part.Image.Asset.MimeType)
-		}
-		images = append(images, UserImageInput{
-			Path:     path,
-			MimeType: mimeType,
-		})
-	}
-	return images
 }
 
 func mapGatewaySessionToRuntimeSession(source gateway.Session) agentsession.Session {

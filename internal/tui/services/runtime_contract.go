@@ -13,8 +13,6 @@ import (
 // Runtime 定义 TUI 与运行时交互所需的最小契约。
 type Runtime interface {
 	Submit(ctx context.Context, input PrepareInput) error
-	PrepareUserInput(ctx context.Context, input PrepareInput) (UserInput, error)
-	Run(ctx context.Context, input UserInput) error
 	Compact(ctx context.Context, input CompactInput) (CompactResult, error)
 	ExecuteSystemTool(ctx context.Context, input SystemToolInput) (tools.ToolResult, error)
 	ResolvePermission(ctx context.Context, input PermissionResolutionInput) error

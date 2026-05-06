@@ -9,7 +9,6 @@ import (
 
 	"neo-code/internal/gateway"
 	"neo-code/internal/gateway/protocol"
-	providertypes "neo-code/internal/provider/types"
 	"neo-code/internal/skills"
 )
 
@@ -63,7 +62,7 @@ func TestNewRemoteRuntimeAdapterBranches(t *testing.T) {
 	_ = adapter.Close()
 }
 
-func TestRemoteRuntimeAdapterPrepareUserInputAndRun(t *testing.T) {
+func TestRemoteRuntimeAdapterSubmitGeneratesIDsAndNormalizesInput(t *testing.T) {
 	t.Parallel()
 
 	rpcClient := &stubRemoteRPCClient{
@@ -78,13 +77,7 @@ func TestRemoteRuntimeAdapterPrepareUserInputAndRun(t *testing.T) {
 	adapter := newRemoteRuntimeAdapterWithClients(rpcClient, streamClient, time.Second, 1)
 	t.Cleanup(func() { _ = adapter.Close() })
 
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	if _, err := adapter.PrepareUserInput(ctx, PrepareInput{}); err == nil {
-		t.Fatalf("expected context cancellation error")
-	}
-
-	input, err := adapter.PrepareUserInput(context.Background(), PrepareInput{
+	if err := adapter.Submit(context.Background(), PrepareInput{
 		SessionID: "  ",
 		RunID:     "",
 		Text:      "  hello  ",
@@ -93,23 +86,25 @@ func TestRemoteRuntimeAdapterPrepareUserInputAndRun(t *testing.T) {
 			{Path: " /tmp/a.png ", MimeType: " image/png "},
 		},
 		Workdir: " /repo ",
-	})
-	if err != nil {
-		t.Fatalf("PrepareUserInput() error = %v", err)
-	}
-	if strings.TrimSpace(input.SessionID) == "" || strings.TrimSpace(input.RunID) == "" {
-		t.Fatalf("session/run id should be generated")
-	}
-	if len(input.Parts) != 2 {
-		t.Fatalf("parts len = %d, want 2", len(input.Parts))
-	}
-
-	if err := adapter.Run(context.Background(), input); err != nil {
-		t.Fatalf("Run() error = %v", err)
+	}); err != nil {
+		t.Fatalf("Submit() error = %v", err)
 	}
 	methods := rpcClient.snapshotMethods()
 	if len(methods) != 3 || methods[2] != protocol.MethodGatewayRun {
 		t.Fatalf("unexpected method chain: %#v", methods)
+	}
+	params, ok := rpcClient.snapshotParams()[protocol.MethodGatewayRun].(protocol.RunParams)
+	if !ok {
+		t.Fatalf("run params type = %T, want protocol.RunParams", rpcClient.snapshotParams()[protocol.MethodGatewayRun])
+	}
+	if strings.TrimSpace(params.SessionID) == "" || strings.TrimSpace(params.RunID) == "" {
+		t.Fatalf("session/run id should be generated: %#v", params)
+	}
+	if params.InputText != "hello" || params.Workdir != "/repo" {
+		t.Fatalf("unexpected normalized run payload: %#v", params)
+	}
+	if len(params.InputParts) != 1 || params.InputParts[0].Media == nil || params.InputParts[0].Media.URI != "/tmp/a.png" {
+		t.Fatalf("unexpected run input parts: %#v", params.InputParts)
 	}
 }
 
@@ -611,33 +606,8 @@ func TestRemoteRuntimeAdapterListAndLoadSessionErrorPaths(t *testing.T) {
 	}
 }
 
-func TestRemoteRuntimeAdapterRenderInputHelpers(t *testing.T) {
+func TestRemoteRuntimeAdapterBuildGatewayRunParams(t *testing.T) {
 	t.Parallel()
-
-	text := renderInputTextFromParts([]providertypes.ContentPart{
-		providertypes.NewTextPart("  first  "),
-		providertypes.NewRemoteImagePart("/tmp/a.png"),
-		providertypes.NewTextPart("second"),
-		providertypes.NewTextPart("   "),
-	})
-	if text != "first\nsecond" {
-		t.Fatalf("renderInputTextFromParts() = %q", text)
-	}
-
-	images := renderInputImagesFromParts([]providertypes.ContentPart{
-		providertypes.NewTextPart("x"),
-		providertypes.NewRemoteImagePart("  "),
-		providertypes.ContentPart{
-			Kind: providertypes.ContentPartImage,
-			Image: &providertypes.ImagePart{
-				URL:   " /tmp/b.png ",
-				Asset: &providertypes.AssetRef{MimeType: " image/png "},
-			},
-		},
-	})
-	if len(images) != 1 || images[0].Path != "/tmp/b.png" || images[0].MimeType != "image/png" {
-		t.Fatalf("renderInputImagesFromParts() = %#v", images)
-	}
 
 	params := buildGatewayRunParams(" s ", " r ", PrepareInput{Text: " hi ", Workdir: " /w ", Mode: " plan ", Images: []UserImageInput{{Path: " /img.png ", MimeType: " image/png "}, {Path: " "}}})
 	if params.SessionID != "s" || params.RunID != "r" || params.Workdir != "/w" || params.Mode != "plan" || params.InputText != "hi" || len(params.InputParts) != 1 {

@@ -15,16 +15,6 @@ import (
 	"neo-code/internal/tools"
 )
 
-type stubRunner struct {
-	lastInput UserInput
-	err       error
-}
-
-func (s *stubRunner) Run(ctx context.Context, input UserInput) error {
-	s.lastInput = input
-	return s.err
-}
-
 type stubSubmitter struct {
 	lastInput PrepareInput
 	err       error
@@ -110,18 +100,6 @@ func TestListenForRuntimeEventCmd(t *testing.T) {
 	)()
 	if gotClosed, ok := msg.(string); !ok || gotClosed != "closed" {
 		t.Fatalf("expected closed msg, got %T %#v", msg, msg)
-	}
-}
-
-func TestRunAgentCmd(t *testing.T) {
-	runner := &stubRunner{err: errors.New("boom")}
-	input := UserInput{SessionID: "s1", Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")}, Workdir: "D:/"}
-	msg := RunAgentCmd(runner, input, func(err error) tea.Msg { return err })()
-	if runner.lastInput.SessionID != "s1" || renderPartsForTest(runner.lastInput.Parts) != "hello" {
-		t.Fatalf("unexpected runner input: %+v", runner.lastInput)
-	}
-	if err, ok := msg.(error); !ok || err == nil || err.Error() != "boom" {
-		t.Fatalf("expected forwarded error message, got %T %#v", msg, msg)
 	}
 }
 
