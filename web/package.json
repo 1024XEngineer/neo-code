@@ -10,7 +10,7 @@
     "dev": "vite",
     "dev:electron": "node scripts/clean-electron.js && node scripts/build-gateway.js && vite --mode electron",
     "build": "tsc -b && vite build",
-    "build:electron": "node scripts/clean-electron.js && vite build --mode electron && node scripts/build-gateway.js && node scripts/verify-electron-preload.js && electron-builder --config electron-builder.config.cjs",
+    "build:electron": "node scripts/clean-electron.js && node scripts/build-gateway.js && vite build --mode electron && node scripts/verify-electron-preload.js && electron-builder --config electron-builder.config.cjs",
     "preview": "vite preview",
     "test": "vitest run",
     "test:ui": "vitest --ui",
