@@ -22,6 +22,7 @@ func TestBuiltinSlashCommands(t *testing.T) {
 	foundTodo := false
 	foundSkills := false
 	foundSkillUse := false
+	foundCheckpoint := false
 	foundStatus := false
 	for _, cmd := range builtinSlashCommands {
 		if cmd.Usage == slashUsageHelp {
@@ -35,6 +36,9 @@ func TestBuiltinSlashCommands(t *testing.T) {
 		}
 		if cmd.Usage == slashUsageSkillUse {
 			foundSkillUse = true
+		}
+		if cmd.Usage == slashUsageCheckpoint {
+			foundCheckpoint = true
 		}
 		if strings.EqualFold(cmd.Usage, "/status") {
 			foundStatus = true
@@ -51,6 +55,9 @@ func TestBuiltinSlashCommands(t *testing.T) {
 	}
 	if !foundSkillUse {
 		t.Error("expected to find /skill use command")
+	}
+	if !foundCheckpoint {
+		t.Error("expected to find /checkpoint command")
 	}
 	if foundStatus {
 		t.Error("did not expect /status command in builtin slash commands")
@@ -420,10 +427,10 @@ func TestOpenHelpPicker(t *testing.T) {
 
 type runtimeModelCatalogSourceStub struct {
 	tuiservices.Runtime
-	models           []providertypes.ModelDescriptor
-	selectedModelID  string
-	err              error
-	lastSessionID    string
+	models          []providertypes.ModelDescriptor
+	selectedModelID string
+	err             error
+	lastSessionID   string
 }
 
 func (s *runtimeModelCatalogSourceStub) ListModels(

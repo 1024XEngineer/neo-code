@@ -5411,6 +5411,8 @@ func (a *App) handleImmediateSlashCommand(input string) (bool, tea.Cmd) {
 		return true, a.handleSkillsCommand()
 	case slashCommandSkill:
 		return true, a.handleSkillCommand(rest)
+	case slashCommandCheckpoint:
+		return true, a.handleCheckpointCommand(rest)
 	case slashCommandSession:
 		if err := a.ensureSessionSwitchAllowed(""); err != nil {
 			a.state.ExecutionError = err.Error()

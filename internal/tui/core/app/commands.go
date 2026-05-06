@@ -35,22 +35,27 @@ const (
 	slashCommandForget      = "/forget"
 	slashCommandSkills      = "/skills"
 	slashCommandSkill       = "/skill"
+	slashCommandCheckpoint  = "/checkpoint"
 
-	slashUsageHelp        = "/help"
-	slashUsageExit        = "/exit"
-	slashUsageClear       = "/clear"
-	slashUsageCompact     = "/compact"
-	slashUsageProvider    = "/provider"
-	slashUsageProviderAdd = "/provider add"
-	slashUsageModel       = "/model"
-	slashUsageSession     = "/session"
-	slashUsageMemo        = "/memo"
-	slashUsageRemember    = "/remember <text>"
-	slashUsageForget      = "/forget <keyword>"
-	slashUsageSkills      = "/skills"
-	slashUsageSkillUse    = "/skill use <id>"
-	slashUsageSkillOff    = "/skill off <id>"
-	slashUsageSkillActive = "/skill active"
+	slashUsageHelp              = "/help"
+	slashUsageExit              = "/exit"
+	slashUsageClear             = "/clear"
+	slashUsageCompact           = "/compact"
+	slashUsageProvider          = "/provider"
+	slashUsageProviderAdd       = "/provider add"
+	slashUsageModel             = "/model"
+	slashUsageSession           = "/session"
+	slashUsageMemo              = "/memo"
+	slashUsageRemember          = "/remember <text>"
+	slashUsageForget            = "/forget <keyword>"
+	slashUsageSkills            = "/skills"
+	slashUsageSkillUse          = "/skill use <id>"
+	slashUsageSkillOff          = "/skill off <id>"
+	slashUsageSkillActive       = "/skill active"
+	slashUsageCheckpoint        = "/checkpoint"
+	slashUsageCheckpointRestore = "/checkpoint restore <id>"
+	slashUsageCheckpointUndo    = "/checkpoint undo"
+	slashUsageCheckpointDiff    = "/checkpoint diff <id>"
 
 	commandMenuTitle        = "Suggestions"
 	providerPickerTitle     = "Select Provider"
@@ -142,6 +147,10 @@ var builtinSlashCommands = []slashCommand{
 	{Usage: slashUsageSkillUse, Description: "Activate one skill in current session"},
 	{Usage: slashUsageSkillOff, Description: "Deactivate one skill in current session"},
 	{Usage: slashUsageSkillActive, Description: "Show active skills in current session"},
+	{Usage: slashUsageCheckpoint, Description: "List checkpoints of current session"},
+	{Usage: slashUsageCheckpointRestore, Description: "Restore session to one checkpoint"},
+	{Usage: slashUsageCheckpointUndo, Description: "Undo the latest checkpoint restore"},
+	{Usage: slashUsageCheckpointDiff, Description: "Show diff for one checkpoint"},
 	{Usage: slashUsageProvider, Description: "Open the interactive provider picker"},
 	{Usage: slashUsageProviderAdd, Description: "Add a new custom provider"},
 	{Usage: slashUsageModel, Description: "Open the interactive model picker"},
