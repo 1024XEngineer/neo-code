@@ -14,8 +14,7 @@ func isReadOnlyVisibleTool(name string) bool {
 		ToolNameFilesystemGlob,
 		ToolNameWebFetch,
 		ToolNameMemoRecall,
-		ToolNameMemoList,
-		ToolNameTodoWrite:
+		ToolNameMemoList:
 		return true
 	default:
 		return false

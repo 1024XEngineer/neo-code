@@ -112,6 +112,7 @@ func TestDefaultManagerListAvailableSpecsReadOnlyFiltersWriteTools(t *testing.T)
 	registry.Register(&managerStubTool{name: ToolNameFilesystemReadFile})
 	registry.Register(&managerStubTool{name: ToolNameFilesystemWriteFile})
 	registry.Register(&managerStubTool{name: ToolNameBash})
+	registry.Register(&managerStubTool{name: ToolNameTodoWrite})
 
 	manager, err := NewManager(registry, mustAllowEngine(t), nil)
 	if err != nil {
