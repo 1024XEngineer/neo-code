@@ -21,4 +21,11 @@ const (
 	ToolNameMemoList             = "memo_list"
 	ToolNameMemoRemove           = "memo_remove"
 	ToolNameDiagnose             = "diagnose"
+
+	ToolNameGitSummary          = "git_summary"
+	ToolNameGitChangedFiles     = "git_changed_files"
+	ToolNameGitChangedSnippets  = "git_changed_snippets"
+	ToolNameCodebaseRead        = "codebase_read"
+	ToolNameCodebaseSearchText  = "codebase_search_text"
+	ToolNameCodebaseSearchSymbol = "codebase_search_symbol"
 )

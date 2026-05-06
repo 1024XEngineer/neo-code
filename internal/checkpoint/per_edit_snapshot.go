@@ -17,6 +17,8 @@ import (
 	"time"
 
 	"github.com/pmezard/go-difflib/difflib"
+
+	"neo-code/internal/repository"
 )
 
 const (
@@ -446,20 +448,17 @@ func (s *PerEditSnapshotStore) HasPending() bool {
 	return len(s.pending) > 0
 }
 
-// FileChangeKind 表示两个 checkpoint 之间单个 path 的变更类别。
-type FileChangeKind string
+// FileChangeKind 是 repository.FileChangeKind 的别名，保留以维持向后兼容。
+type FileChangeKind = repository.FileChangeKind
 
 const (
-	FileChangeAdded    FileChangeKind = "added"
-	FileChangeDeleted  FileChangeKind = "deleted"
-	FileChangeModified FileChangeKind = "modified"
+	FileChangeAdded    = repository.FileChangeAdded
+	FileChangeDeleted  = repository.FileChangeDeleted
+	FileChangeModified = repository.FileChangeModified
 )
 
-// FileChangeEntry 描述端到端 diff 中单个 path 的变更。
-type FileChangeEntry struct {
-	Path string
-	Kind FileChangeKind
-}
+// FileChangeEntry 是 repository.FileChangeEntry 的别名，保留以维持向后兼容。
+type FileChangeEntry = repository.FileChangeEntry
 
 // ChangedFiles 端到端比较两个 checkpoint，返回 path → 变更类别的列表（按 path 字典序）。
 // 不返回内容差异，仅用于 UI 分组（添加/删除/修改）。完整 patch 仍由 Diff 生成。

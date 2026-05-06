@@ -27,8 +27,10 @@ import (
 	"neo-code/internal/skills"
 	"neo-code/internal/tools"
 	"neo-code/internal/tools/bash"
+	"neo-code/internal/tools/codebase"
 	diagnosetool "neo-code/internal/tools/diagnose"
 	"neo-code/internal/tools/filesystem"
+	"neo-code/internal/tools/git"
 	"neo-code/internal/tools/mcp"
 	memotool "neo-code/internal/tools/memo"
 	"neo-code/internal/tools/spawnsubagent"
@@ -460,6 +462,12 @@ func buildToolRegistry(cfg config.Config) (*tools.Registry, func() error, error)
 	}))
 	toolRegistry.Register(todo.New())
 	toolRegistry.Register(spawnsubagent.New())
+	toolRegistry.Register(git.NewSummary(cfg.Workdir))
+	toolRegistry.Register(git.NewChangedFiles(cfg.Workdir))
+	toolRegistry.Register(git.NewChangedSnippets(cfg.Workdir))
+	toolRegistry.Register(codebase.NewRead(cfg.Workdir))
+	toolRegistry.Register(codebase.NewSearchText(cfg.Workdir))
+	toolRegistry.Register(codebase.NewSearchSymbol(cfg.Workdir))
 	mcpRegistry, err := BuildMCPRegistry(cfg)
 	if err != nil {
 		return nil, nil, err
