@@ -38,6 +38,10 @@ var coderRolePrompt = mustReadTemplate("templates/subagent/coder.md")
 
 var reviewerRolePrompt = mustReadTemplate("templates/subagent/reviewer.md")
 
+var defaultCapabilities = mustReadTemplate("templates/core/capabilities.md")
+
+var planCapabilities = mustReadTemplate("templates/core/capabilities_plan.md")
+
 // CoreSections 返回主会话固定核心 prompt sections 的有序副本。
 func CoreSections() []Section {
 	return append([]Section(nil), coreSections...)
@@ -87,6 +91,14 @@ func CoderRolePrompt() string {
 // ReviewerRolePrompt 返回 reviewer 子代理基础 prompt。
 func ReviewerRolePrompt() string {
 	return reviewerRolePrompt
+}
+
+// CapabilitiesPrompt 根据当前 stage 返回对应的能力声明模板。
+func CapabilitiesPrompt(stage string) string {
+	if stage == "plan" {
+		return planCapabilities
+	}
+	return defaultCapabilities
 }
 
 // loadCoreSections 按固定顺序加载主会话核心 section 模板。

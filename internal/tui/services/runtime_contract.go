@@ -49,6 +49,7 @@ type UserInput struct {
 	RunID     string
 	Parts     []providertypes.ContentPart
 	Workdir   string
+	Mode      string
 	TaskID    string
 	AgentID   string
 }
@@ -64,6 +65,7 @@ type PrepareInput struct {
 	SessionID string
 	RunID     string
 	Workdir   string
+	Mode      string
 	Text      string
 	Images    []UserImageInput
 }

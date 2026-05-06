@@ -9,6 +9,7 @@ import (
 // Hooks 描述 runtime 在消费 provider 流时可选的回调挂点。
 type Hooks struct {
 	OnTextDelta     func(string)
+	OnThinkingDelta func(string)
 	OnToolCallStart func(providertypes.ToolCallStartPayload)
 	OnMessageDone   func(providertypes.MessageDonePayload)
 }
@@ -46,6 +47,15 @@ func HandleEvent(event providertypes.StreamEvent, acc *Accumulator, hooks Hooks)
 		if acc != nil {
 			acc.AccumulateToolCallDelta(payload.Index, payload.ID, payload.ArgumentsDelta)
 		}
+	case providertypes.StreamEventThinkingDelta:
+		payload, err := event.ThinkingDeltaValue()
+		if err != nil {
+			return err
+		}
+		if hooks.OnThinkingDelta != nil {
+			hooks.OnThinkingDelta(payload.Text)
+		}
+		// thinking 不进入 accumulator（不混入 assistant 正文）
 	case providertypes.StreamEventMessageDone:
 		payload, err := event.MessageDoneValue()
 		if err != nil {

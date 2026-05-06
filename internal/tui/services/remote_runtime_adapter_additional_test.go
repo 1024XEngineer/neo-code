@@ -639,8 +639,8 @@ func TestRemoteRuntimeAdapterRenderInputHelpers(t *testing.T) {
 		t.Fatalf("renderInputImagesFromParts() = %#v", images)
 	}
 
-	params := buildGatewayRunParams(" s ", " r ", PrepareInput{Text: " hi ", Workdir: " /w ", Images: []UserImageInput{{Path: " /img.png ", MimeType: " image/png "}, {Path: " "}}})
-	if params.SessionID != "s" || params.RunID != "r" || params.Workdir != "/w" || params.InputText != "hi" || len(params.InputParts) != 1 {
+	params := buildGatewayRunParams(" s ", " r ", PrepareInput{Text: " hi ", Workdir: " /w ", Mode: " plan ", Images: []UserImageInput{{Path: " /img.png ", MimeType: " image/png "}, {Path: " "}}})
+	if params.SessionID != "s" || params.RunID != "r" || params.Workdir != "/w" || params.Mode != "plan" || params.InputText != "hi" || len(params.InputParts) != 1 {
 		t.Fatalf("buildGatewayRunParams() = %#v", params)
 	}
 }

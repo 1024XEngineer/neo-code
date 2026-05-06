@@ -24,7 +24,7 @@ export default function ConnectPage() {
     setLocalError('')
     const port = parseInt(localPort, 10)
     if (isNaN(port) || port < 1 || port > 65535) {
-      setLocalError('请输入有效端口号 (1-65535)')
+      setLocalError('Please enter a valid port (1-65535)')
       return
     }
     setLocalStarting(true)
@@ -71,7 +71,7 @@ export default function ConnectPage() {
                   {localStarting ? (
                     <>
                       <Loader size={14} style={{ animation: 'spin 1s linear infinite' }} />
-                      启动中...
+                      Starting...
                     </>
                   ) : (
                     <>
@@ -143,7 +143,7 @@ export default function ConnectPage() {
             {isConnecting ? (
               <>
                 <Loader size={16} style={{ animation: 'spin 1s linear infinite' }} />
-                连接中...
+                Connecting...
               </>
             ) : (
               '连接'

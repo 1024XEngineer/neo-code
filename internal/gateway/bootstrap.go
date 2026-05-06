@@ -615,6 +615,46 @@ func handleListSessionsFrame(ctx context.Context, frame MessageFrame, runtimePor
 	}
 }
 
+// handleCreateSessionFrame 处理 gateway.createSession 请求并返回创建后的会话 ID。
+func handleCreateSessionFrame(ctx context.Context, frame MessageFrame, runtimePort RuntimePort) MessageFrame {
+	if runtimePort == nil {
+		return runtimePortUnavailableFrame(frame)
+	}
+	subjectID, subjectErr := requireAuthenticatedSubjectID(ctx)
+	if subjectErr != nil {
+		return errorFrame(frame, subjectErr)
+	}
+
+	params, parseErr := decodeCreateSessionPayload(frame.Payload)
+	if parseErr != nil {
+		return errorFrame(frame, parseErr)
+	}
+	if params.SessionID == "" {
+		params.SessionID = strings.TrimSpace(frame.SessionID)
+	}
+
+	callCtx, cancel := withRuntimeOperationTimeout(ctx)
+	defer cancel()
+	createdSessionID, err := runtimePort.CreateSession(callCtx, CreateSessionInput{
+		SubjectID: subjectID,
+		SessionID: params.SessionID,
+	})
+	if err != nil {
+		return runtimeCallFailedFrame(callCtx, frame, err, "create_session")
+	}
+	createdSessionID = strings.TrimSpace(createdSessionID)
+
+	return MessageFrame{
+		Type:      FrameTypeAck,
+		Action:    FrameActionCreateSession,
+		RequestID: frame.RequestID,
+		SessionID: createdSessionID,
+		Payload: map[string]any{
+			"session_id": createdSessionID,
+		},
+	}
+}
+
 // handleLoadSessionFrame 处理 gateway.loadSession 请求。
 func handleLoadSessionFrame(ctx context.Context, frame MessageFrame, runtimePort RuntimePort) MessageFrame {
 	if runtimePort == nil {
@@ -854,13 +894,19 @@ func handleListModelsFrame(ctx context.Context, frame MessageFrame, runtimePort 
 		return runtimeCallFailedFrame(callCtx, frame, err, "list_models")
 	}
 
+	sessionModel, _ := runtimePort.GetSessionModel(callCtx, GetSessionModelInput{
+		SubjectID: subjectID,
+		SessionID: strings.TrimSpace(frame.SessionID),
+	})
+
 	return MessageFrame{
 		Type:      FrameTypeAck,
 		Action:    FrameActionListModels,
 		RequestID: frame.RequestID,
 		SessionID: strings.TrimSpace(frame.SessionID),
 		Payload: map[string]any{
-			"models": models,
+			"models":            models,
+			"selected_model_id": sessionModel.ModelID,
 		},
 	}
 }
@@ -1336,6 +1382,10 @@ type cancelParams struct {
 	RunID     string
 }
 
+type createSessionParams struct {
+	SessionID string
+}
+
 type renameSessionParams struct {
 	SessionID string
 	Title     string
@@ -1559,6 +1609,33 @@ func normalizeExecuteSystemToolParams(params protocol.ExecuteSystemToolParams) (
 		normalized.Arguments = append([]byte(nil), arguments...)
 	}
 	return normalized, nil
+}
+
+// decodeCreateSessionPayload 解析 create_session 负载并收敛为统一输入结构。
+func decodeCreateSessionPayload(payload any) (createSessionParams, *FrameError) {
+	switch typed := payload.(type) {
+	case nil:
+		return createSessionParams{}, nil
+	case protocol.CreateSessionParams:
+		return createSessionParams{SessionID: strings.TrimSpace(typed.SessionID)}, nil
+	case *protocol.CreateSessionParams:
+		if typed == nil {
+			return createSessionParams{}, nil
+		}
+		return createSessionParams{SessionID: strings.TrimSpace(typed.SessionID)}, nil
+	case map[string]any:
+		return createSessionParams{SessionID: readStringValue(typed, "session_id")}, nil
+	default:
+		raw, marshalErr := json.Marshal(payload)
+		if marshalErr != nil {
+			return createSessionParams{}, NewFrameError(ErrorCodeInvalidFrame, "invalid create_session payload")
+		}
+		var decoded protocol.CreateSessionParams
+		if unmarshalErr := json.Unmarshal(raw, &decoded); unmarshalErr != nil {
+			return createSessionParams{}, NewFrameError(ErrorCodeInvalidFrame, "invalid create_session payload")
+		}
+		return createSessionParams{SessionID: strings.TrimSpace(decoded.SessionID)}, nil
+	}
 }
 
 // decodeActivateSessionSkillPayload 解析 activate_session_skill 负载并收敛为统一输入结构。
@@ -1826,6 +1903,22 @@ func readBoolValue(payload map[string]any, key string) bool {
 	return boolValue
 }
 
+// readIntValue 读取 map 负载中的整数数字字段，非整数或缺失时按零值处理。
+func readIntValue(payload map[string]any, key string) int {
+	rawValue, exists := payload[key]
+	if !exists {
+		return 0
+	}
+	switch typed := rawValue.(type) {
+	case int:
+		return typed
+	case float64:
+		return int(typed)
+	default:
+		return 0
+	}
+}
+
 // decodeWakeIntent 将任意 payload 解码为 WakeIntent。
 func decodeWakeIntent(payload any) (protocol.WakeIntent, error) {
 	if payload == nil {
@@ -1891,10 +1984,13 @@ func handleListCheckpointsFrame(ctx context.Context, frame MessageFrame, runtime
 	callCtx, cancel := withRuntimeOperationTimeout(ctx)
 	defer cancel()
 
-	entries, err := runtimePort.ListCheckpoints(callCtx, ListCheckpointsInput{
-		SubjectID: subjectID,
-		SessionID: strings.TrimSpace(frame.SessionID),
-	})
+	input := decodeListCheckpointsPayload(frame.Payload)
+	input.SubjectID = subjectID
+	if input.SessionID == "" {
+		input.SessionID = strings.TrimSpace(frame.SessionID)
+	}
+
+	entries, err := runtimePort.ListCheckpoints(callCtx, input)
 	if err != nil {
 		return runtimeCallFailedFrame(callCtx, frame, err, "checkpoint_list")
 	}
@@ -1903,7 +1999,7 @@ func handleListCheckpointsFrame(ctx context.Context, frame MessageFrame, runtime
 		Type:      FrameTypeAck,
 		Action:    FrameActionListCheckpoints,
 		RequestID: frame.RequestID,
-		SessionID: strings.TrimSpace(frame.SessionID),
+		SessionID: input.SessionID,
 		Payload:   entries,
 	}
 }
@@ -2003,6 +2099,12 @@ func handleCheckpointDiffFrame(ctx context.Context, frame MessageFrame, runtimeP
 
 func decodeCheckpointDiffPayload(payload any) CheckpointDiffInput {
 	switch typed := payload.(type) {
+	case CheckpointDiffInput:
+		return CheckpointDiffInput{
+			SubjectID:    strings.TrimSpace(typed.SubjectID),
+			SessionID:    strings.TrimSpace(typed.SessionID),
+			CheckpointID: strings.TrimSpace(typed.CheckpointID),
+		}
 	case map[string]any:
 		return CheckpointDiffInput{
 			SessionID:    readStringValue(typed, "session_id"),
@@ -2013,14 +2115,27 @@ func decodeCheckpointDiffPayload(payload any) CheckpointDiffInput {
 		if marshalErr != nil {
 			return CheckpointDiffInput{}
 		}
-		var input CheckpointDiffInput
-		_ = json.Unmarshal(raw, &input)
-		return input
+		var decoded struct {
+			SessionID    string `json:"session_id"`
+			CheckpointID string `json:"checkpoint_id"`
+		}
+		_ = json.Unmarshal(raw, &decoded)
+		return CheckpointDiffInput{
+			SessionID:    strings.TrimSpace(decoded.SessionID),
+			CheckpointID: strings.TrimSpace(decoded.CheckpointID),
+		}
 	}
 }
 
 func decodeCheckpointRestorePayload(payload any) CheckpointRestoreInput {
 	switch typed := payload.(type) {
+	case CheckpointRestoreInput:
+		return CheckpointRestoreInput{
+			SubjectID:    strings.TrimSpace(typed.SubjectID),
+			SessionID:    strings.TrimSpace(typed.SessionID),
+			CheckpointID: strings.TrimSpace(typed.CheckpointID),
+			Force:        typed.Force,
+		}
 	case map[string]any:
 		return CheckpointRestoreInput{
 			SessionID:    readStringValue(typed, "session_id"),
@@ -2032,8 +2147,51 @@ func decodeCheckpointRestorePayload(payload any) CheckpointRestoreInput {
 		if marshalErr != nil {
 			return CheckpointRestoreInput{}
 		}
-		var decoded CheckpointRestoreInput
+		var decoded struct {
+			SessionID    string `json:"session_id"`
+			CheckpointID string `json:"checkpoint_id"`
+			Force        bool   `json:"force"`
+		}
 		_ = json.Unmarshal(raw, &decoded)
-		return decoded
+		return CheckpointRestoreInput{
+			SessionID:    strings.TrimSpace(decoded.SessionID),
+			CheckpointID: strings.TrimSpace(decoded.CheckpointID),
+			Force:        decoded.Force,
+		}
+	}
+}
+
+// decodeListCheckpointsPayload 将 JSON-RPC 层 payload 转换为运行时 checkpoint 列表查询输入。
+func decodeListCheckpointsPayload(payload any) ListCheckpointsInput {
+	switch typed := payload.(type) {
+	case ListCheckpointsInput:
+		return ListCheckpointsInput{
+			SubjectID:      strings.TrimSpace(typed.SubjectID),
+			SessionID:      strings.TrimSpace(typed.SessionID),
+			Limit:          typed.Limit,
+			RestorableOnly: typed.RestorableOnly,
+		}
+	case map[string]any:
+		return ListCheckpointsInput{
+			SessionID:      readStringValue(typed, "session_id"),
+			Limit:          readIntValue(typed, "limit"),
+			RestorableOnly: readBoolValue(typed, "restorable_only"),
+		}
+	default:
+		raw, marshalErr := json.Marshal(payload)
+		if marshalErr != nil {
+			return ListCheckpointsInput{}
+		}
+		var decoded struct {
+			SessionID      string `json:"session_id"`
+			Limit          int    `json:"limit"`
+			RestorableOnly bool   `json:"restorable_only"`
+		}
+		_ = json.Unmarshal(raw, &decoded)
+		return ListCheckpointsInput{
+			SessionID:      strings.TrimSpace(decoded.SessionID),
+			Limit:          decoded.Limit,
+			RestorableOnly: decoded.RestorableOnly,
+		}
 	}
 }

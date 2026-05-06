@@ -2,11 +2,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { useSessionStore } from './useSessionStore'
 import { useChatStore } from './useChatStore'
 import { useGatewayStore } from './useGatewayStore'
+import { useRuntimeInsightStore } from './useRuntimeInsightStore'
 
 beforeEach(() => {
   useSessionStore.setState((useSessionStore.getInitialState?.() ?? { projects: [], currentSessionId: '', currentProjectId: '', loading: false }) as any)
   useChatStore.setState({ messages: [], isGenerating: false, streamingMessageId: '', permissionRequests: [], tokenUsage: null, phase: '', stopReason: '' } as any)
   useGatewayStore.setState({ connectionState: 'disconnected', currentRunId: '', token: '', authenticated: false } as any)
+  useRuntimeInsightStore.getState().reset()
 })
 
 describe('useSessionStore', () => {
@@ -74,7 +76,8 @@ describe('useSessionStore', () => {
       payload: { sessions: [{ id: 'sess-a', title: 'Alpha' }] },
     })
     const mockBindStream = vi.fn().mockResolvedValue({})
-    const mockAPI = { listSessions: mockListSessions, bindStream: mockBindStream } as any
+    const mockLoadSession = vi.fn().mockResolvedValue({ payload: { messages: [] } })
+    const mockAPI = { listSessions: mockListSessions, bindStream: mockBindStream, loadSession: mockLoadSession } as any
 
     await useSessionStore.getState().fetchSessions(mockAPI)
 
@@ -94,5 +97,37 @@ describe('useSessionStore', () => {
 
     expect(useSessionStore.getState().currentSessionId).toBe('sess-b')
     expect(mockBindStream).not.toHaveBeenCalled()
+  })
+
+  it('switchSession concurrently fetches todos and checkpoints', async () => {
+    const mockBindStream = vi.fn().mockResolvedValue({})
+    const mockLoadSession = vi.fn().mockResolvedValue({
+      payload: { messages: [{ role: 'user', content: 'hello', tool_calls: [] }] },
+    })
+    const mockListSessionTodos = vi.fn().mockResolvedValue({
+      payload: {
+        items: [{ id: 't1', content: 'x', status: 'open', required: true, revision: 1 }],
+        summary: { total: 1, required_total: 1, required_completed: 0, required_failed: 0, required_open: 1 },
+      },
+    })
+    const mockListCheckpoints = vi.fn().mockResolvedValue({
+      payload: [{ checkpoint_id: 'cp1', session_id: 'sess-2', reason: 'test', status: 'active', restorable: true, created_at_ms: Date.now() }],
+    })
+    const mockAPI = {
+      bindStream: mockBindStream,
+      loadSession: mockLoadSession,
+      listSessionTodos: mockListSessionTodos,
+      listCheckpoints: mockListCheckpoints,
+    } as any
+
+    await useSessionStore.getState().switchSession('sess-2', mockAPI)
+
+    expect(mockLoadSession).toHaveBeenCalledWith('sess-2')
+    expect(mockListSessionTodos).toHaveBeenCalledWith('sess-2')
+    expect(mockListCheckpoints).toHaveBeenCalledWith({ session_id: 'sess-2', limit: 50 })
+
+    const insightStore = useRuntimeInsightStore.getState()
+    expect(insightStore.todoSnapshot?.items?.[0].id).toBe('t1')
+    expect(insightStore.checkpoints[0].checkpoint_id).toBe('cp1')
   })
 })

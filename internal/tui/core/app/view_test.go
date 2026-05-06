@@ -130,7 +130,7 @@ func TestRenderPickerSessionMode(t *testing.T) {
 	}
 }
 
-func TestRenderPickerProviderAndFileMode(t *testing.T) {
+func TestRenderPickerProviderAndProviderAddMode(t *testing.T) {
 	app, _ := newTestApp(t)
 
 	app.state.ActivePicker = pickerProvider
@@ -138,12 +138,6 @@ func TestRenderPickerProviderAndFileMode(t *testing.T) {
 	providerView := app.renderPicker(48, 14)
 	if !strings.Contains(providerView, providerPickerTitle) {
 		t.Fatalf("expected provider picker title")
-	}
-
-	app.state.ActivePicker = pickerFile
-	fileView := app.renderPicker(48, 14)
-	if !strings.Contains(fileView, filePickerTitle) {
-		t.Fatalf("expected file picker title")
 	}
 
 	app.startProviderAddForm()

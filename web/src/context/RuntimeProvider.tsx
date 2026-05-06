@@ -63,7 +63,7 @@ export function RuntimeProvider({ children }: { children: ReactNode }) {
   const [wsClient, setWsClient] = useState<WSClient | null>(null)
   const [connectionState, setLocalConnectionState] = useState<WSConnectionState>('disconnected')
   const [error, setError] = useState('')
-  const [loadingMessage, setLoadingMessage] = useState('正在连接 Gateway...')
+  const [loadingMessage, setLoadingMessage] = useState('Connecting to Gateway...')
   const [vitePluginAvailable, setVitePluginAvailable] = useState(false)
   const [workdir, setWorkdir] = useState('')
   const cleanupRef = useRef<(() => void) | null>(null)
@@ -112,7 +112,7 @@ export function RuntimeProvider({ children }: { children: ReactNode }) {
         useGatewayStore.getState().setAuthenticated(false)
         setStatus('error')
         if (wsState === 'permanent_error') {
-          setError('Gateway 连接失败，已超过最大重连次数')
+          setError('Gateway connection failed; maximum reconnect attempts exceeded')
         }
       } else if (wsState === 'connected' && statusRef.current !== 'connected') {
         // Reconnection recovery: if we were in error state, mark as connected
@@ -249,10 +249,10 @@ export function RuntimeProvider({ children }: { children: ReactNode }) {
       })
       if (!res.ok) {
         const data = await res.json().catch(() => ({})) as { error?: string }
-        throw new Error(data.error || `启动失败 (HTTP ${res.status})`)
+        throw new Error(data.error || `Startup failed (HTTP ${res.status})`)
       }
       const data = await res.json() as { gatewayBaseURL?: string; token?: string }
-      if (!data.gatewayBaseURL) throw new Error('未获取到 Gateway 地址')
+      if (!data.gatewayBaseURL) throw new Error('Gateway address not received')
       await connectWithConfig({
         mode: 'browser',
         gatewayBaseURL: data.gatewayBaseURL,
@@ -308,7 +308,7 @@ export function RuntimeProvider({ children }: { children: ReactNode }) {
     if (browserConfig?.gatewayBaseURL) {
       connectWithConfig(browserConfig, false).catch(() => {})
     } else {
-      setLoadingMessage('正在启动本地 Gateway...')
+      setLoadingMessage('Starting local Gateway...')
       tryAutoDetectLocalGateway()
         .then(({ config: autoConfig, pluginAvailable }) => {
           setVitePluginAvailable(pluginAvailable)
@@ -448,7 +448,7 @@ function formatRuntimeError(err: unknown) {
   if (err instanceof Error && err.message) {
     return err.message
   }
-  return 'Gateway 连接失败'
+  return 'Gateway connection failed'
 }
 
 /** tryAutoDetectLocalGateway 尝试自动检测本地 Gateway 连接配置。 */

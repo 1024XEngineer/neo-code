@@ -5,19 +5,21 @@ package chatcompletions
 
 // Request 表示 /chat/completions 端点的请求体。
 type Request struct {
-	Model      string           `json:"model"`
-	Messages   []Message        `json:"messages"`
-	Tools      []ToolDefinition `json:"tools,omitempty"`
-	ToolChoice string           `json:"tool_choice,omitempty"`
-	Stream     bool             `json:"stream"`
+	Model           string           `json:"model"`
+	Messages        []Message        `json:"messages"`
+	Tools           []ToolDefinition `json:"tools,omitempty"`
+	ToolChoice      string           `json:"tool_choice,omitempty"`
+	Stream          bool             `json:"stream"`
+	ReasoningEffort string           `json:"reasoning_effort,omitempty"`
 }
 
 // Message 表示 OpenAI 协议中的消息格式。
 type Message struct {
-	Role       string     `json:"role"`
-	Content    any        `json:"content,omitempty"`
-	ToolCallID string     `json:"tool_call_id,omitempty"`
-	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
+	Role             string     `json:"role"`
+	Content          any        `json:"content,omitempty"`
+	ToolCallID       string     `json:"tool_call_id,omitempty"`
+	ToolCalls        []ToolCall `json:"tool_calls,omitempty"`
+	ReasoningContent string     `json:"reasoning_content,omitempty"`
 }
 
 // MessageContentPart 表示多模态消息的单个部分。

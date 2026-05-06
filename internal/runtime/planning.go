@@ -301,6 +301,10 @@ func applyCurrentPlanRevision(session *agentsession.Session, plan *agentsession.
 	if session == nil || plan == nil {
 		return false
 	}
+	// 新 revision 覆盖时，仅取消旧 plan 明确引用的非终态 todo
+	if oldPlan := session.CurrentPlan; oldPlan != nil && oldPlan.Revision < plan.Revision {
+		agentsession.CancelTodosByIDs(session.Todos, oldPlan.Summary.ActiveTodoIDs)
+	}
 	session.CurrentPlan = plan
 	session.PlanApprovalPendingFullAlign = false
 	session.PlanCompletionPendingFullReview = false

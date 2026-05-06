@@ -4,7 +4,6 @@ import (
 	"context"
 	"time"
 
-	"github.com/charmbracelet/bubbles/filepicker"
 	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/progress"
@@ -18,6 +17,7 @@ import (
 	configstate "neo-code/internal/config/state"
 	"neo-code/internal/memo"
 	providertypes "neo-code/internal/provider/types"
+	agentsession "neo-code/internal/session"
 	tuibootstrap "neo-code/internal/tui/bootstrap"
 	tuiservices "neo-code/internal/tui/services"
 	tuistate "neo-code/internal/tui/state"
@@ -88,7 +88,6 @@ type appComponents struct {
 	modelPicker      list.Model
 	sessionPicker    list.Model
 	helpPicker       list.Model
-	fileBrowser      filepicker.Model
 	progress         progress.Model
 	transcript       viewport.Model
 	activity         viewport.Model
@@ -353,23 +352,15 @@ func newApp(container tuibootstrap.Container) (App, error) {
 
 	commandMenu := newCommandMenuModel(uiStyles)
 
-	fileBrowser := filepicker.New()
-	fileBrowser.SetHeight(10)
-	fileBrowser.AutoHeight = false
-	fileBrowser.ShowPermissions = false
-	fileBrowser.ShowSize = false
-	fileBrowser.FileAllowed = true
-	fileBrowser.DirAllowed = true
-	fileBrowser.CurrentDirectory = cfg.Workdir
-
 	progressBar := progress.New(progress.WithDefaultGradient(), progress.WithoutPercentage())
 	progressBar.Width = 22
 
 	app := App{
 		state: tuistate.UIState{
-			StatusText:      statusReady,
-			CurrentProvider: cfg.SelectedProvider,
-			CurrentModel:    cfg.CurrentModel,
+			StatusText:       statusReady,
+			CurrentProvider:  cfg.SelectedProvider,
+			CurrentModel:     cfg.CurrentModel,
+			CurrentAgentMode: string(agentsession.AgentModeBuild),
 			// CurrentWorkdir 初始化为启动配置中的工作目录，避免启动阶段丢失目录上下文。
 			CurrentWorkdir:     cfg.Workdir,
 			ActiveSessionTitle: draftSessionTitle,
@@ -390,7 +381,6 @@ func newApp(container tuibootstrap.Container) (App, error) {
 			modelPicker:      newSelectionPickerItems(nil),
 			sessionPicker:    newSelectionPickerItems(nil),
 			helpPicker:       newHelpPickerItems(nil),
-			fileBrowser:      fileBrowser,
 			progress:         progressBar,
 			transcript:       viewport.New(0, 0),
 			activity:         viewport.New(0, 0),
@@ -413,6 +403,7 @@ func newApp(container tuibootstrap.Container) (App, error) {
 		styles: uiStyles,
 	}
 
+	app.setCurrentAgentMode(app.state.CurrentAgentMode)
 	app.syncActiveSessionTitle()
 	app.syncConfigState(configManager.Get())
 	if err := app.refreshProviderPicker(); err != nil {

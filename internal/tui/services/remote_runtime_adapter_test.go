@@ -60,6 +60,7 @@ func TestRemoteRuntimeAdapterSubmitAuthenticatesBindsPreloadsAndRuns(t *testing.
 		SessionID: "session-1",
 		RunID:     "run-1",
 		Workdir:   "/repo",
+		Mode:      "plan",
 		Text:      " hello ",
 		Images: []UserImageInput{
 			{Path: " /tmp/a.png ", MimeType: " image/png "},
@@ -96,6 +97,9 @@ func TestRemoteRuntimeAdapterSubmitAuthenticatesBindsPreloadsAndRuns(t *testing.
 	}
 	if params.SessionID != "session-1" || params.RunID != "run-1" || params.Workdir != "/repo" {
 		t.Fatalf("unexpected run params ids/workdir: %#v", params)
+	}
+	if params.Mode != "plan" {
+		t.Fatalf("run mode = %q, want %q", params.Mode, "plan")
 	}
 	if params.InputText != "hello" {
 		t.Fatalf("run input_text = %q, want %q", params.InputText, "hello")

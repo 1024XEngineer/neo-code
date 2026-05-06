@@ -7,6 +7,11 @@ const (
 	DriverOpenAICompat = "openaicompat"
 	DriverGemini       = "gemini"
 	DriverAnthropic    = "anthropic"
+	DriverDeepSeek     = "deepseek"
+	DriverQwen         = "qwen"
+	DriverGLM          = "glm"
+	DriverMiMo         = "mimo"
+	DriverMiniMax      = "minimax"
 
 	DiscoveryEndpointPathModels = "/models"
 )

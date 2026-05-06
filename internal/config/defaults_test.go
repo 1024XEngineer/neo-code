@@ -6,20 +6,14 @@ func TestDefaultProvidersIncludesBuiltinProviders(t *testing.T) {
 	t.Parallel()
 
 	providers := DefaultProviders()
-	if len(providers) != 4 {
-		t.Fatalf("expected 4 builtin providers, got %d", len(providers))
+	if len(providers) != 10 {
+		t.Fatalf("expected 10 builtin providers, got %d", len(providers))
 	}
 	if providers[0].Name != OpenAIName {
 		t.Fatalf("expected first provider %q, got %q", OpenAIName, providers[0].Name)
 	}
 	if providers[1].Name != GeminiName {
 		t.Fatalf("expected second provider %q, got %q", GeminiName, providers[1].Name)
-	}
-	if providers[2].Name != QiniuName {
-		t.Fatalf("expected third provider %q, got %q", QiniuName, providers[2].Name)
-	}
-	if providers[3].Name != ModelScopeName {
-		t.Fatalf("expected fourth provider %q, got %q", ModelScopeName, providers[3].Name)
 	}
 }
 

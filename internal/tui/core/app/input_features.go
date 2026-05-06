@@ -38,9 +38,6 @@ func (a *App) refreshFileCandidates() error {
 		return err
 	}
 	a.fileCandidates = candidates
-	if absolute := tuiservices.ResolveWorkspaceDirectory(a.state.CurrentWorkdir); absolute != "" {
-		a.fileBrowser.CurrentDirectory = absolute
-	}
 	a.refreshCommandMenu()
 	return nil
 }

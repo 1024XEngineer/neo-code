@@ -206,7 +206,7 @@ export default function FileTreePanel() {
       setRootNodes(buildFileTree(result.payload.files))
       setCurrentPath('')
     } catch (err) {
-      const msg = err instanceof Error ? err.message : '加载文件列表失败'
+      const msg = err instanceof Error ? err.message : 'Failed to load file list'
       setError(msg)
       console.error('listFiles failed:', err)
     } finally {

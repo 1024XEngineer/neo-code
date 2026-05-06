@@ -3,7 +3,6 @@ package tui
 import (
 	"fmt"
 	"io"
-	"path/filepath"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/list"
@@ -29,7 +28,6 @@ type commandMenuItem struct {
 	useReplaceRange bool
 	replaceStart    int
 	replaceEnd      int
-	openFileBrowser bool
 }
 
 func (c commandMenuItem) Title() string {
@@ -306,13 +304,13 @@ func (a *App) resizeCommandMenu() {
 }
 
 func (a App) buildCommandMenuItems(input string, _ int) ([]commandMenuItem, tuistate.CommandMenuMeta) {
-	trimmed := strings.TrimSpace(input)
+	leadingTrimmed := strings.TrimLeft(input, " \t\r\n")
 
 	// 1. 优先检查 Slash 命令
-	if strings.HasPrefix(trimmed, slashPrefix) {
-		suggestions := a.matchingSlashCommands(trimmed)
+	if strings.HasPrefix(leadingTrimmed, slashPrefix) {
+		suggestions := a.matchingSlashCommands(leadingTrimmed)
 		if len(suggestions) > 0 {
-			start, end, _, _ := tokenRange(input, tokenSelectorFirst)
+			start, end := slashInputReplaceRange(input)
 			items := make([]commandMenuItem, 0, len(suggestions))
 			for _, suggestion := range suggestions {
 				items = append(items, commandMenuItem{
@@ -336,6 +334,19 @@ func (a App) buildCommandMenuItems(input string, _ int) ([]commandMenuItem, tuis
 	}
 
 	return nil, tuistate.CommandMenuMeta{}
+}
+
+func slashInputReplaceRange(input string) (start int, end int) {
+	start = 0
+	for start < len(input) {
+		switch input[start] {
+		case ' ', '\t', '\r', '\n':
+			start++
+		default:
+			return start, len(input)
+		}
+	}
+	return 0, len(input)
 }
 
 func (a App) fileMenuSuggestions(input string) []commandMenuItem {
@@ -376,10 +387,6 @@ func (a *App) applySelectedCommandSuggestion() bool {
 	if !ok {
 		return false
 	}
-	if item.openFileBrowser {
-		a.openFileBrowser()
-		return true
-	}
 
 	current := a.input.Value()
 	next := current
@@ -417,20 +424,4 @@ func (a *App) updateCommandMenuSelection(msg tea.KeyMsg) (tea.Cmd, bool) {
 	default:
 		return nil, false // 非导航键，让它们继续传递
 	}
-}
-
-func (a *App) openFileBrowser() {
-	workdir := strings.TrimSpace(a.state.CurrentWorkdir)
-	if workdir == "" {
-		return
-	}
-
-	absolute, err := filepath.Abs(workdir)
-	if err == nil {
-		a.fileBrowser.CurrentDirectory = absolute
-	}
-	a.state.ActivePicker = pickerFile
-	a.state.StatusText = statusBrowseFile
-	a.input.Blur()
-	a.applyComponentLayout(true)
 }

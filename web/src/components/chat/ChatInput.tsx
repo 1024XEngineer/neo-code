@@ -3,6 +3,8 @@ import { useChatStore, createUserMessage } from '@/stores/useChatStore'
 import { useGatewayStore } from '@/stores/useGatewayStore'
 import { useSessionStore, isValidSessionId } from '@/stores/useSessionStore'
 import { useUIStore } from '@/stores/useUIStore'
+import { useComposerStore } from '@/stores/useComposerStore'
+import { useRuntimeInsightStore } from '@/stores/useRuntimeInsightStore'
 import { useGatewayAPI } from '@/context/RuntimeProvider'
 import {
   builtinSlashCommands,
@@ -20,7 +22,8 @@ import { Send, Square, Paperclip, AtSign } from 'lucide-react'
 /** 聊天输入框 */
 export default function ChatInput() {
   const gatewayAPI = useGatewayAPI()
-  const [text, setText] = useState('')
+  const text = useComposerStore((s) => s.composerText)
+  const setText = useComposerStore((s) => s.setComposerText)
   const [rows, setRows] = useState(1)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -96,7 +99,7 @@ export default function ChatInput() {
     const api = gatewayAPI
 
     if (!api) {
-      useUIStore.getState().showToast('Gateway 未连接', 'error')
+      useUIStore.getState().showToast('Gateway not connected', 'error')
       return true
     }
 
@@ -118,41 +121,41 @@ export default function ChatInput() {
 
       case '/compact': {
         if (!isValidSessionId(currentSessionId)) {
-          useUIStore.getState().showToast('请先发送消息建立会话', 'error')
+          useUIStore.getState().showToast('Send a message first to start a session', 'error')
           return true
         }
         try {
           await api.compact(currentSessionId, '')
         } catch (err) {
           console.error('Compact failed:', err)
-          useUIStore.getState().showToast('压缩失败', 'error')
+          useUIStore.getState().showToast('Compaction failed', 'error')
         }
         return true
       }
 
       case '/memo': {
         if (!isValidSessionId(currentSessionId)) {
-          useUIStore.getState().showToast('请先发送消息建立会话', 'error')
+          useUIStore.getState().showToast('Send a message first to start a session', 'error')
           return true
         }
         try {
           const result = await api.executeSystemTool(currentSessionId, '', 'memo_list', {})
-          const content = (result as any)?.payload?.content || '备忘录查询完成'
+          const content = (result as any)?.payload?.content || 'Memo query complete'
           addSystemMessage(content)
         } catch (err) {
           console.error('Memo list failed:', err)
-          useUIStore.getState().showToast('查询备忘录失败', 'error')
+          useUIStore.getState().showToast('Failed to query memo', 'error')
         }
         return true
       }
 
       case '/remember': {
         if (!argument) {
-          useUIStore.getState().showToast('用法: /remember <内容>', 'error')
+          useUIStore.getState().showToast('Usage: /remember <content>', 'error')
           return true
         }
         if (!isValidSessionId(currentSessionId)) {
-          useUIStore.getState().showToast('请先发送消息建立会话', 'error')
+          useUIStore.getState().showToast('Send a message first to start a session', 'error')
           return true
         }
         try {
@@ -161,22 +164,22 @@ export default function ChatInput() {
             title: argument,
             content: argument,
           })
-          const content = (result as any)?.payload?.content || '备忘录已保存'
+          const content = (result as any)?.payload?.content || 'Memo saved'
           addSystemMessage(content)
         } catch (err) {
           console.error('Remember failed:', err)
-          useUIStore.getState().showToast('保存备忘录失败', 'error')
+          useUIStore.getState().showToast('Failed to save memo', 'error')
         }
         return true
       }
 
       case '/forget': {
         if (!argument) {
-          useUIStore.getState().showToast('用法: /forget <关键词>', 'error')
+          useUIStore.getState().showToast('Usage: /forget <keyword>', 'error')
           return true
         }
         if (!isValidSessionId(currentSessionId)) {
-          useUIStore.getState().showToast('请先发送消息建立会话', 'error')
+          useUIStore.getState().showToast('Send a message first to start a session', 'error')
           return true
         }
         try {
@@ -184,11 +187,11 @@ export default function ChatInput() {
             keyword: argument,
             scope: 'all',
           })
-          const content = (result as any)?.payload?.content || '备忘录已删除'
+          const content = (result as any)?.payload?.content || 'Memo deleted'
           addSystemMessage(content)
         } catch (err) {
           console.error('Forget failed:', err)
-          useUIStore.getState().showToast('删除备忘录失败', 'error')
+          useUIStore.getState().showToast('Failed to delete memo', 'error')
         }
         return true
       }
@@ -200,7 +203,7 @@ export default function ChatInput() {
 
       default: {
         if (isGenerating) {
-          useUIStore.getState().showToast('生成中无法切换技能，请等待当前对话完成', 'info')
+          useUIStore.getState().showToast('Cannot toggle skill while generating; wait for the current run to finish.', 'info')
           return true
         }
         // 检查是否是技能快捷命令
@@ -220,7 +223,7 @@ export default function ChatInput() {
             )
           } catch (err) {
             console.error('Skill toggle failed:', err)
-            useUIStore.getState().showToast('技能操作失败', 'error')
+            useUIStore.getState().showToast('Skill operation failed', 'error')
           }
           return true
         }
@@ -234,7 +237,7 @@ export default function ChatInput() {
     if (!input) return
     if (isGenerating) {
       if (isSlashCommand(input)) {
-        useUIStore.getState().showToast('生成中无法执行命令，请等待当前对话完成', 'info')
+        useUIStore.getState().showToast('Cannot run commands while generating; wait for the current run to finish.', 'info')
       }
       return
     }
@@ -251,6 +254,10 @@ export default function ChatInput() {
     setText('')
     const userMsg = createUserMessage(input)
     addMessage(userMsg)
+    useRuntimeInsightStore.getState().setTodoSnapshot({
+      items: [],
+      summary: { total: 0, required_total: 0, required_completed: 0, required_failed: 0, required_open: 0 },
+    })
     setGenerating(true)
     runCancelledRef.current = false
 
@@ -284,7 +291,7 @@ export default function ChatInput() {
         setGenerating(false)
         useChatStore.getState().removeMessage(userMsg.id)
         console.error('Run failed:', err)
-        useUIStore.getState().showToast('消息发送失败，请重试', 'error')
+        useUIStore.getState().showToast('Failed to send message; please try again.', 'error')
       }
     }
   }

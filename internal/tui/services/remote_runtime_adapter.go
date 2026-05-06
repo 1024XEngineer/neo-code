@@ -189,6 +189,7 @@ func (r *RemoteRuntimeAdapter) PrepareUserInput(ctx context.Context, input Prepa
 		RunID:     runID,
 		Parts:     parts,
 		Workdir:   strings.TrimSpace(input.Workdir),
+		Mode:      strings.TrimSpace(input.Mode),
 	}, nil
 }
 
@@ -198,6 +199,7 @@ func (r *RemoteRuntimeAdapter) Run(ctx context.Context, input UserInput) error {
 		SessionID: strings.TrimSpace(input.SessionID),
 		RunID:     strings.TrimSpace(input.RunID),
 		Workdir:   strings.TrimSpace(input.Workdir),
+		Mode:      strings.TrimSpace(input.Mode),
 		Text:      renderInputTextFromParts(input.Parts),
 		Images:    renderInputImagesFromParts(input.Parts),
 	}
@@ -639,6 +641,7 @@ func buildGatewayRunParams(sessionID string, runID string, input PrepareInput) p
 		InputText:  strings.TrimSpace(input.Text),
 		InputParts: parts,
 		Workdir:    strings.TrimSpace(input.Workdir),
+		Mode:       strings.TrimSpace(input.Mode),
 	}
 }
 

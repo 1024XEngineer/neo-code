@@ -159,6 +159,7 @@ func (s *Service) executeOneToolCall(
 	var preFingerprint checkpoint.WorkdirFingerprint
 	var bashCapturedPaths []string
 	var bashCommand string
+	var bashChangedPaths []string
 	var touchedPaths []string
 	var removeDirNestedPaths []string
 
@@ -223,10 +224,20 @@ func (s *Service) executeOneToolCall(
 			if err != nil {
 				continue
 			}
+			kind, err := snap.Kind()
+			if err != nil {
+				continue
+			}
+			// 跳过完全无变化的快照(典型场景: copy 的 source 文件)
+			// 删除时 diff 非空且 kind=deleted，不会被这里过滤
+			if kind == FileChangeKindUnchanged {
+				continue
+			}
 			diffs = append(diffs, map[string]any{
 				"path":    path,
 				"diff":    diff,
 				"was_new": snap.WasNew(),
+				"kind":    kind,
 			})
 		}
 		if len(diffs) > 0 {
@@ -258,6 +269,7 @@ func (s *Service) executeOneToolCall(
 		if afterFP, _, err := checkpoint.ScanWorkdir(ctx, snapshot.Workdir, checkpoint.DefaultFingerprintOptions()); err == nil {
 			fpDiff := checkpoint.DiffFingerprints(preFingerprint, afterFP)
 			if len(fpDiff.Added) > 0 || len(fpDiff.Modified) > 0 || len(fpDiff.Deleted) > 0 {
+				bashChangedPaths = collectBashWriteFactPaths(fpDiff)
 				covered := make(map[string]struct{}, len(bashCapturedPaths))
 				for _, p := range bashCapturedPaths {
 					covered[filepath.Clean(p)] = struct{}{}
@@ -266,6 +278,14 @@ func (s *Service) executeOneToolCall(
 				s.emitBashSideEffectEvent(ctx, state, call, bashCommand, fpDiff, bashCapturedPaths, uncovered)
 			}
 		}
+	}
+
+	if isBash && execErr == nil && !result.IsError && len(bashChangedPaths) > 0 {
+		result.Facts.WorkspaceWrite = true
+		if result.Metadata == nil {
+			result.Metadata = make(map[string]any)
+		}
+		result.Metadata["workspace_write_paths"] = append([]string(nil), bashChangedPaths...)
 	}
 
 	if errors.Is(execErr, context.Canceled) {
@@ -308,10 +328,6 @@ func (s *Service) executeOneToolCall(
 		state.mu.Lock()
 		state.rememberedThisRun = true
 		state.mu.Unlock()
-	}
-
-	if isBash && execErr == nil && !result.IsError && len(bashCapturedPaths) > 0 {
-		result.Facts.WorkspaceWrite = true
 	}
 
 	if checkContext() {
@@ -407,7 +423,7 @@ func (s *Service) emitTodoToolEvent(
 		}
 		state.mu.Unlock()
 		s.emitRunScoped(ctx, EventTodoUpdated, state, payload)
-		s.emitRunScopedOptional(EventTodoSnapshotUpdated, state, payload)
+		s.emitRunScoped(ctx, EventTodoSnapshotUpdated, state, payload)
 		s.emitRuntimeSnapshotUpdated(ctx, state, "todo_updated")
 		return
 	}
@@ -441,7 +457,7 @@ func (s *Service) emitTodoToolEvent(
 		s.emitFactsUpdated(state, "todo_conflict")
 	}
 	s.emitRunScoped(ctx, EventTodoConflict, state, payload)
-	s.emitRunScopedOptional(EventTodoSnapshotUpdated, state, payload)
+	s.emitRunScoped(ctx, EventTodoSnapshotUpdated, state, payload)
 	s.emitRuntimeSnapshotUpdated(ctx, state, "todo_conflict")
 }
 
@@ -581,6 +597,33 @@ func bashCommandFromCall(call providertypes.ToolCall) string {
 	return strings.TrimSpace(parsed.Cmd)
 }
 
+// collectBashWriteFactPaths 从 bash fingerprint diff 中提取可验证的新增/修改路径，删除路径不作为写后验收目标。
+func collectBashWriteFactPaths(fpDiff checkpoint.FingerprintDiff) []string {
+	seen := make(map[string]struct{})
+	out := make([]string, 0, len(fpDiff.Modified)+len(fpDiff.Added))
+	add := func(path string) {
+		path = strings.TrimSpace(path)
+		if path == "" {
+			return
+		}
+		if _, ok := seen[path]; ok {
+			return
+		}
+		seen[path] = struct{}{}
+		out = append(out, path)
+	}
+	for _, path := range fpDiff.Modified {
+		add(path)
+	}
+	for _, path := range fpDiff.Added {
+		add(path)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
 // collectUncoveredBashPaths 把 fingerprint 检测到的变更路径与启发式预捕获集合做差，
 // 输出 EventBashSideEffect.UncoveredPaths 用于可观测性提醒。
 func collectUncoveredBashPaths(workdir string, fpDiff checkpoint.FingerprintDiff, covered map[string]struct{}) []string {
@@ -596,13 +639,13 @@ func collectUncoveredBashPaths(workdir string, fpDiff checkpoint.FingerprintDiff
 			return
 		}
 		var abs string
-if isAbsolutePath(rel) {
-abs = toSlash(filepath.Clean(rel))
-} else if wd != "" {
-abs = toSlash(filepath.Clean(filepath.Join(wd, rel)))
-} else {
-abs = toSlash(filepath.Clean(rel))
-}
+		if isAbsolutePath(rel) {
+			abs = toSlash(filepath.Clean(rel))
+		} else if wd != "" {
+			abs = toSlash(filepath.Clean(filepath.Join(wd, rel)))
+		} else {
+			abs = toSlash(filepath.Clean(rel))
+		}
 		if _, ok := covered[abs]; ok {
 			return
 		}

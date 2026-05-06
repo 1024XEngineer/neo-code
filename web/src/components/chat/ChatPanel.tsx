@@ -7,6 +7,7 @@ import { PermissionDecision } from '@/api/protocol'
 import MessageList from './MessageList'
 import ChatInput from './ChatInput'
 import ModelSelector from './ModelSelector'
+import TodoStrip from './TodoStrip'
 import {
   PanelRightOpen,
   FileDiff,
@@ -52,9 +53,9 @@ export default function ChatPanel() {
         request_id: currentPermission.request_id,
         decision,
       })
-      useUIStore.getState().showToast('已处理权限请求', 'success')
+      useUIStore.getState().showToast('Permission request resolved', 'success')
     } catch (err) {
-      const message = err instanceof Error ? err.message : '处理权限请求失败'
+      const message = err instanceof Error ? err.message : 'Failed to resolve permission request'
       useUIStore.getState().showToast(message, 'error')
       console.error('Resolve permission failed:', err)
     } finally {
@@ -186,6 +187,9 @@ export default function ChatPanel() {
       <div style={styles.messagesArea} data-scroll-root="1">
         <MessageList />
       </div>
+
+      {/* Todo strip (renders nothing when no todos) */}
+      <TodoStrip />
 
       {/* Input or Permission Request */}
       {currentPermission ? (

@@ -39,7 +39,7 @@ func buildTodoSnapshotFromItems(items []agentsession.TodoItem) TodoSnapshot {
 			Required:      required,
 			Artifacts:     append([]string(nil), item.Artifacts...),
 			FailureReason: strings.TrimSpace(item.FailureReason),
-			BlockedReason: strings.TrimSpace(string(item.BlockedReasonValue())),
+			BlockedReason: strings.TrimSpace(string(item.BlockedReason)),
 			Revision:      item.Revision,
 		})
 	}

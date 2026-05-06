@@ -63,8 +63,9 @@ func (t *Tool) Schema() map[string]any {
 				"type": "boolean",
 			},
 			"blocked_reason": map[string]any{
-				"type": "string",
-				"enum": blockedReasonEnum,
+				"type":        "string",
+				"enum":        blockedReasonEnum,
+				"description": "仅当 status == \"blocked\" 时填写;其他状态请省略本字段。unknown 仅用于\"已经阻塞但无法给出具体原因\"的场景。",
 			},
 			"dependencies": map[string]any{
 				"type": "array",
@@ -285,7 +286,14 @@ func (t *Tool) Execute(ctx context.Context, call tools.ToolCallInput) (tools.Too
 	dispatchMeta, resultErr := t.dispatch(call, input)
 	if resultErr != nil {
 		reason := mapReason(resultErr)
-		return errorResult(reason, resultErr.Error(), map[string]any{"action": input.Action}), resultErr
+		extra := map[string]any{"action": input.Action}
+		if reason == reasonRevisionConflict && input.ID != "" {
+			if current, ok := call.SessionMutator.FindTodo(input.ID); ok {
+				extra["current_revision"] = current.Revision
+				extra["current_status"] = string(current.Status)
+			}
+		}
+		return errorResult(reason, resultErr.Error(), extra), resultErr
 	}
 
 	return successResultWithMetadata(input.Action, call.SessionMutator.ListTodos(), dispatchMeta), nil
@@ -297,6 +305,9 @@ func (t *Tool) dispatch(call tools.ToolCallInput, input writeInput) (map[string]
 	case actionPlan:
 		if input.Items == nil {
 			return nil, fmt.Errorf("%w: action %q requires items", errTodoInvalidArguments, actionPlan)
+		}
+		if len(input.Items) == 0 {
+			return nil, fmt.Errorf("%w: action %q rejects empty items; mark finished todos via set_status (completed) or remove individual entries via remove — do not clear the plan with an empty array", errTodoInvalidArguments, actionPlan)
 		}
 		if err := call.SessionMutator.ReplaceTodos(input.Items); err != nil {
 			return nil, err
@@ -371,11 +382,11 @@ func (t *Tool) dispatch(call tools.ToolCallInput, input writeInput) (map[string]
 			return nil, err
 		}
 		return map[string]any{
-			"state_fact":        "todo_failed",
-			"terminal_failure":  true,
-			"do_not_retry":      true,
-			"transition_path":   []string{"failed"},
-			"auto_claimed":      false,
+			"state_fact":         "todo_failed",
+			"terminal_failure":   true,
+			"do_not_retry":       true,
+			"transition_path":    []string{"failed"},
+			"auto_claimed":       false,
 			"failure_reason_set": strings.TrimSpace(input.Reason) != "",
 		}, nil
 	default:

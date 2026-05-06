@@ -201,6 +201,120 @@ func TestNormalizeJSONRPCRequestListSessionTodosAndRuntimeSnapshot(t *testing.T)
 	})
 }
 
+func TestNormalizeJSONRPCRequestCheckpointMethods(t *testing.T) {
+	t.Run("list checkpoints success", func(t *testing.T) {
+		normalized, rpcErr := NormalizeJSONRPCRequest(JSONRPCRequest{
+			JSONRPC: JSONRPCVersion,
+			ID:      json.RawMessage(`"checkpoint-list-1"`),
+			Method:  MethodGatewayListCheckpoints,
+			Params:  json.RawMessage(`{"session_id":" s-1 ","limit":5,"restorable_only":true}`),
+		})
+		if rpcErr != nil {
+			t.Fatalf("normalize checkpoint.list request: %v", rpcErr)
+		}
+		if normalized.Action != "checkpoint_list" || normalized.SessionID != "s-1" {
+			t.Fatalf("normalized checkpoint.list = %#v", normalized)
+		}
+		params, ok := normalized.Payload.(ListCheckpointsParams)
+		if !ok {
+			t.Fatalf("payload type = %T, want ListCheckpointsParams", normalized.Payload)
+		}
+		if params.SessionID != "s-1" || params.Limit != 5 || !params.RestorableOnly {
+			t.Fatalf("checkpoint.list params = %#v, want trimmed params with limit/restorable_only", params)
+		}
+	})
+
+	t.Run("restore checkpoint success", func(t *testing.T) {
+		normalized, rpcErr := NormalizeJSONRPCRequest(JSONRPCRequest{
+			JSONRPC: JSONRPCVersion,
+			ID:      json.RawMessage(`"checkpoint-restore-1"`),
+			Method:  MethodGatewayRestoreCheckpoint,
+			Params:  json.RawMessage(`{"session_id":" s-1 ","checkpoint_id":" cp-1 ","force":true}`),
+		})
+		if rpcErr != nil {
+			t.Fatalf("normalize checkpoint.restore request: %v", rpcErr)
+		}
+		if normalized.Action != "checkpoint_restore" || normalized.SessionID != "s-1" {
+			t.Fatalf("normalized checkpoint.restore = %#v", normalized)
+		}
+		params, ok := normalized.Payload.(RestoreCheckpointParams)
+		if !ok {
+			t.Fatalf("payload type = %T, want RestoreCheckpointParams", normalized.Payload)
+		}
+		if params.SessionID != "s-1" || params.CheckpointID != "cp-1" || !params.Force {
+			t.Fatalf("checkpoint.restore params = %#v, want trimmed params with force", params)
+		}
+	})
+
+	t.Run("undo restore success", func(t *testing.T) {
+		normalized, rpcErr := NormalizeJSONRPCRequest(JSONRPCRequest{
+			JSONRPC: JSONRPCVersion,
+			ID:      json.RawMessage(`"checkpoint-undo-1"`),
+			Method:  MethodGatewayUndoRestore,
+			Params:  json.RawMessage(`{"session_id":" s-1 "}`),
+		})
+		if rpcErr != nil {
+			t.Fatalf("normalize checkpoint.undoRestore request: %v", rpcErr)
+		}
+		if normalized.Action != "checkpoint_undo_restore" || normalized.SessionID != "s-1" {
+			t.Fatalf("normalized checkpoint.undoRestore = %#v", normalized)
+		}
+		params, ok := normalized.Payload.(UndoRestoreParams)
+		if !ok {
+			t.Fatalf("payload type = %T, want UndoRestoreParams", normalized.Payload)
+		}
+		if params.SessionID != "s-1" {
+			t.Fatalf("checkpoint.undoRestore params = %#v, want trimmed session_id", params)
+		}
+	})
+
+	t.Run("diff success", func(t *testing.T) {
+		normalized, rpcErr := NormalizeJSONRPCRequest(JSONRPCRequest{
+			JSONRPC: JSONRPCVersion,
+			ID:      json.RawMessage(`"checkpoint-diff-1"`),
+			Method:  MethodGatewayCheckpointDiff,
+			Params:  json.RawMessage(`{"session_id":" s-1 ","checkpoint_id":" cp-1 "}`),
+		})
+		if rpcErr != nil {
+			t.Fatalf("normalize checkpoint.diff request: %v", rpcErr)
+		}
+		if normalized.Action != "checkpoint_diff" || normalized.SessionID != "s-1" {
+			t.Fatalf("normalized checkpoint.diff = %#v", normalized)
+		}
+		params, ok := normalized.Payload.(CheckpointDiffParams)
+		if !ok {
+			t.Fatalf("payload type = %T, want CheckpointDiffParams", normalized.Payload)
+		}
+		if params.SessionID != "s-1" || params.CheckpointID != "cp-1" {
+			t.Fatalf("checkpoint.diff params = %#v, want trimmed params", params)
+		}
+	})
+
+	t.Run("restore checkpoint missing checkpoint id", func(t *testing.T) {
+		_, rpcErr := NormalizeJSONRPCRequest(JSONRPCRequest{
+			JSONRPC: JSONRPCVersion,
+			ID:      json.RawMessage(`"checkpoint-restore-missing-1"`),
+			Method:  MethodGatewayRestoreCheckpoint,
+			Params:  json.RawMessage(`{"session_id":"s-1","checkpoint_id":" "}`),
+		})
+		if rpcErr == nil || rpcErr.Code != JSONRPCCodeInvalidParams {
+			t.Fatalf("expected invalid params error, got %#v", rpcErr)
+		}
+	})
+
+	t.Run("list checkpoints rejects negative limit", func(t *testing.T) {
+		_, rpcErr := NormalizeJSONRPCRequest(JSONRPCRequest{
+			JSONRPC: JSONRPCVersion,
+			ID:      json.RawMessage(`"checkpoint-list-invalid-1"`),
+			Method:  MethodGatewayListCheckpoints,
+			Params:  json.RawMessage(`{"session_id":"s-1","limit":-1}`),
+		})
+		if rpcErr == nil || rpcErr.Code != JSONRPCCodeInvalidParams {
+			t.Fatalf("expected invalid params error, got %#v", rpcErr)
+		}
+	})
+}
+
 func TestNormalizeJSONRPCRequestRuntimeMethods(t *testing.T) {
 	runRequest := JSONRPCRequest{
 		JSONRPC: JSONRPCVersion,

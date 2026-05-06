@@ -59,6 +59,83 @@ func TestBuildToolDiffPayload(t *testing.T) {
 		}
 	})
 
+	t.Run("multi file kind from metadata wins over WasNew fallback", func(t *testing.T) {
+		result := tools.ToolResult{
+			Name:       tools.ToolNameFilesystemMoveFile,
+			ToolCallID: "call-move",
+			Metadata: map[string]any{
+				"tool_diffs": []map[string]any{
+					{"path": "src/a.txt", "diff": "@@ -1 +0 @@", "was_new": false, "kind": FileChangeKindDeleted},
+					{"path": "dst/a.txt", "diff": "@@ -0 +1 @@", "was_new": true, "kind": FileChangeKindAdded},
+				},
+			},
+		}
+
+		payload, ok := buildToolDiffPayload(result)
+		if !ok {
+			t.Fatal("expected payload")
+		}
+		if len(payload.Files) != 2 {
+			t.Fatalf("unexpected length: %#v", payload.Files)
+		}
+		if payload.Files[0].Kind != FileChangeKindDeleted {
+			t.Fatalf("Files[0].Kind = %q, want deleted", payload.Files[0].Kind)
+		}
+		if payload.Files[1].Kind != FileChangeKindAdded {
+			t.Fatalf("Files[1].Kind = %q, want added", payload.Files[1].Kind)
+		}
+	})
+
+	t.Run("multi file filters unchanged copy source", func(t *testing.T) {
+		result := tools.ToolResult{
+			Name:       tools.ToolNameFilesystemCopyFile,
+			ToolCallID: "call-copy",
+			Metadata: map[string]any{
+				"tool_diffs": []map[string]any{
+					{"path": "src/a.txt", "diff": "", "was_new": false, "kind": FileChangeKindUnchanged},
+					{"path": "dst/a.txt", "diff": "@@ -0 +1 @@", "was_new": true, "kind": FileChangeKindAdded},
+				},
+			},
+		}
+
+		payload, ok := buildToolDiffPayload(result)
+		if !ok {
+			t.Fatal("expected payload")
+		}
+		if len(payload.Files) != 1 {
+			t.Fatalf("expected unchanged source filtered, got %#v", payload.Files)
+		}
+		if payload.Files[0].Path != "dst/a.txt" || payload.Files[0].Kind != FileChangeKindAdded {
+			t.Fatalf("unexpected surviving file: %#v", payload.Files[0])
+		}
+	})
+
+	t.Run("multi file delete metadata preserves deleted kind", func(t *testing.T) {
+		result := tools.ToolResult{
+			Name:       tools.ToolNameFilesystemRemoveDir,
+			ToolCallID: "call-rm",
+			Metadata: map[string]any{
+				"tool_diffs": []map[string]any{
+					{"path": "old/a.txt", "diff": "@@ -1 +0 @@", "was_new": false, "kind": FileChangeKindDeleted},
+					{"path": "old/b.txt", "diff": "@@ -1 +0 @@", "was_new": false, "kind": FileChangeKindDeleted},
+				},
+			},
+		}
+
+		payload, ok := buildToolDiffPayload(result)
+		if !ok {
+			t.Fatal("expected payload")
+		}
+		if len(payload.Files) != 2 {
+			t.Fatalf("unexpected length: %#v", payload.Files)
+		}
+		for idx, f := range payload.Files {
+			if f.Kind != FileChangeKindDeleted {
+				t.Fatalf("Files[%d].Kind = %q, want deleted", idx, f.Kind)
+			}
+		}
+	})
+
 	t.Run("missing file path returns false", func(t *testing.T) {
 		if _, ok := buildToolDiffPayload(tools.ToolResult{Name: tools.ToolNameFilesystemWriteFile}); ok {
 			t.Fatal("expected no payload when metadata has no path")
@@ -107,6 +184,25 @@ func TestToolExecutionHelperFunctions(t *testing.T) {
 		}
 	})
 
+	t.Run("toolResultMultiDiffs filters unchanged kind and surfaces explicit kind", func(t *testing.T) {
+		entries, ok := toolResultMultiDiffs(map[string]any{
+			"tool_diffs": []map[string]any{
+				{"path": "src/a.txt", "diff": "", "was_new": false, "kind": FileChangeKindUnchanged},
+				{"path": "dst/a.txt", "diff": "@@", "was_new": true, "kind": FileChangeKindAdded},
+				{"path": "old.txt", "diff": "@@", "was_new": false, "kind": FileChangeKindDeleted},
+			},
+		})
+		if !ok || len(entries) != 2 {
+			t.Fatalf("entries=%#v ok=%v", entries, ok)
+		}
+		if entries[0].Path != "dst/a.txt" || entries[0].Kind != FileChangeKindAdded {
+			t.Fatalf("unexpected entries[0]: %#v", entries[0])
+		}
+		if entries[1].Path != "old.txt" || entries[1].Kind != FileChangeKindDeleted {
+			t.Fatalf("unexpected entries[1]: %#v", entries[1])
+		}
+	})
+
 	t.Run("toolResultFilePath trims metadata", func(t *testing.T) {
 		if got := toolResultFilePath(map[string]any{"path": "  demo.txt  "}); got != "demo.txt" {
 			t.Fatalf("toolResultFilePath() = %q, want demo.txt", got)
@@ -146,6 +242,23 @@ func TestToolExecutionHelperFunctions(t *testing.T) {
 		got := collectUncoveredBashPaths("/repo", diff, covered)
 		if len(got) != 2 || got[0] != "tracked.txt" || got[1] != "new.txt" {
 			t.Fatalf("collectUncoveredBashPaths() = %#v", got)
+		}
+	})
+
+	t.Run("collectBashWriteFactPaths includes only added and modified paths", func(t *testing.T) {
+		got := collectBashWriteFactPaths(checkpoint.FingerprintDiff{
+			Added:    []string{"b.txt", "a.txt"},
+			Modified: []string{"a.txt", "c.txt"},
+			Deleted:  []string{"old.txt"},
+		})
+		want := []string{"a.txt", "c.txt", "b.txt"}
+		if len(got) != len(want) {
+			t.Fatalf("collectBashWriteFactPaths() = %v, want %v", got, want)
+		}
+		for idx := range want {
+			if got[idx] != want[idx] {
+				t.Fatalf("collectBashWriteFactPaths() = %v, want %v", got, want)
+			}
 		}
 	})
 }

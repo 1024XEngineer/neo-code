@@ -169,6 +169,28 @@ func TestAcceptanceDecisionRequiresCompletionAndVerification(t *testing.T) {
 			t.Fatalf("accepted must satisfy completion+verification, got %+v", decision)
 		}
 	})
+
+	t.Run("completed_required_todo_list_does_not_block_acceptance", func(t *testing.T) {
+		state := newRunState("run-completed-todo", agentsession.New("completed-todo"))
+		state.session.TaskState.VerificationProfile = agentsession.VerificationProfileTaskOnly
+		required := true
+		state.session.Todos = []agentsession.TodoItem{{
+			ID:       "todo-done",
+			Content:  "done",
+			Status:   agentsession.TodoStatusCompleted,
+			Required: &required,
+		}}
+		decision, err := service.beforeAcceptFinal(context.Background(), &state, snapshot, assistant, true, beforeCompletionHookSignals{})
+		if err != nil {
+			t.Fatalf("beforeAcceptFinal error = %v", err)
+		}
+		if decision.Status != acceptance.AcceptanceAccepted {
+			t.Fatalf("status=%q want accepted, decision=%+v", decision.Status, decision)
+		}
+		if !decision.CompletionPassed || !decision.VerificationPassed {
+			t.Fatalf("completed todo list should pass completion+verification, got %+v", decision)
+		}
+	})
 }
 
 func TestBeforeCompletionDecisionUserRepoCannotDirectlyTerminal(t *testing.T) {

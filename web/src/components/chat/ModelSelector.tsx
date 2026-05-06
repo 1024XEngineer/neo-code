@@ -34,8 +34,11 @@ export default function ModelSelector() {
         setModels(fetched)
         if (fetched.length > 0) {
           const prev = selectedRef.current
+          const byGlobal = result.payload.selected_model_id
+            ? fetched.find((f) => f.id === result.payload.selected_model_id)
+            : null
           const retained = prev ? fetched.find((f) => f.id === prev.id) : null
-          const effective = retained ?? fetched[0]
+          const effective = byGlobal ?? retained ?? fetched[0]
           setSelected(effective)
           if (currentSessionId && !isGenerating) {
             gatewayAPI.setSessionModel(currentSessionId, effective.id, effective.provider)
@@ -47,7 +50,7 @@ export default function ModelSelector() {
       })
       .catch((err) => {
         if (cancelled) return
-        setError(err instanceof Error ? err.message : '加载模型列表失败')
+        setError(err instanceof Error ? err.message : 'Failed to load model list')
         console.error('listModels failed:', err)
       })
       .finally(() => {
@@ -61,7 +64,7 @@ export default function ModelSelector() {
     setOpen(false)
     if (isGenerating) {
       setPendingModelChange(m)
-      useUIStore.getState().showToast('模型切换将在下一轮对话生效', 'info')
+      useUIStore.getState().showToast('Model change will apply on the next turn', 'info')
       return
     }
     if (currentSessionId && gatewayAPI) {
@@ -69,6 +72,11 @@ export default function ModelSelector() {
         await gatewayAPI.setSessionModel(currentSessionId, m.id, m.provider)
       } catch (err) {
         console.error('setSessionModel failed:', err)
+      }
+      try {
+        await gatewayAPI.selectProviderModel({ provider_id: m.provider, model_id: m.id })
+      } catch (err) {
+        console.error('selectProviderModel failed:', err)
       }
     }
   }

@@ -7,10 +7,7 @@ type keyMap struct {
 	Newline          key.Binding
 	CancelAgent      key.Binding
 	NewSession       key.Binding
-	OpenWorkspace    key.Binding
 	ToggleFullAccess key.Binding
-	NextPanel        key.Binding
-	PrevPanel        key.Binding
 	FocusInput       key.Binding
 	ToggleHelp       key.Binding
 	Quit             key.Binding
@@ -42,21 +39,9 @@ func newKeyMap() keyMap {
 			key.WithKeys("ctrl+n"),
 			key.WithHelp("Ctrl+N", "New chat"),
 		),
-		OpenWorkspace: key.NewBinding(
-			key.WithKeys("ctrl+o"),
-			key.WithHelp("Ctrl+O", "Workspace"),
-		),
 		ToggleFullAccess: key.NewBinding(
 			key.WithKeys("ctrl+f"),
 			key.WithHelp("Ctrl+F", "Full access"),
-		),
-		NextPanel: key.NewBinding(
-			key.WithKeys("tab"),
-			key.WithHelp("Tab", "Next panel"),
-		),
-		PrevPanel: key.NewBinding(
-			key.WithKeys("shift+tab"),
-			key.WithHelp("Shift+Tab", "Prev panel"),
 		),
 		FocusInput: key.NewBinding(
 			key.WithKeys("esc"),
@@ -112,8 +97,7 @@ func (k keyMap) ShortHelp() []key.Binding {
 func (k keyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.Send, k.Newline, k.CancelAgent, k.NewSession},
-		{k.OpenWorkspace, k.ToggleFullAccess},
-		{k.FocusInput, k.NextPanel, k.PrevPanel},
+		{k.ToggleFullAccess, k.FocusInput},
 		{k.ToggleHelp, k.Quit, k.PasteImage, k.ScrollUp},
 		{k.PageUp, k.PageDown, k.Top, k.Bottom},
 		{k.LogViewer},

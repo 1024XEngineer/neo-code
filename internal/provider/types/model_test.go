@@ -1,6 +1,9 @@
 package types
 
-import "testing"
+import (
+	"reflect"
+	"testing"
+)
 
 func TestDescriptorFromRawModel(t *testing.T) {
 	t.Parallel()
@@ -151,7 +154,7 @@ func TestDescriptorFromRawModel(t *testing.T) {
 			if !tt.wantOK {
 				return
 			}
-			if got != tt.want {
+			if !reflect.DeepEqual(got, tt.want) {
 				t.Fatalf("expected descriptor %+v, got %+v", tt.want, got)
 			}
 		})
@@ -247,7 +250,7 @@ func TestModelCapabilityHintsFromValue(t *testing.T) {
 	if result.ImageInput != ModelCapabilityStateUnsupported {
 		t.Fatalf("expected image input unsupported, got %+v", result)
 	}
-	if result := modelCapabilityHintsFromValue("not a map"); result != (ModelCapabilityHints{}) {
+	if result := modelCapabilityHintsFromValue("not a map"); !reflect.DeepEqual(result, ModelCapabilityHints{}) {
 		t.Fatalf("expected empty hints for non-map, got %+v", result)
 	}
 }

@@ -644,6 +644,131 @@ func TestTodoSupersedesAndContentChecksValidation(t *testing.T) {
 	}
 }
 
+func TestReplaceTodosRejectsEmpty(t *testing.T) {
+	t.Parallel()
+
+	session := New("empty-replace")
+	if err := session.AddTodo(TodoItem{ID: "a", Content: "task a"}); err != nil {
+		t.Fatalf("AddTodo: %v", err)
+	}
+
+	if err := session.ReplaceTodos([]TodoItem{}); err == nil {
+		t.Fatalf("ReplaceTodos([]) should fail")
+	}
+	if err := session.ReplaceTodos(nil); err == nil {
+		t.Fatalf("ReplaceTodos(nil) should fail")
+	}
+
+	// 原有 todo 不应被清掉。
+	got := session.ListTodos()
+	if len(got) != 1 || got[0].ID != "a" {
+		t.Fatalf("ReplaceTodos rejection should not mutate session, got %+v", got)
+	}
+}
+
 func boolPtr(b bool) *bool {
 	return &b
+}
+
+func TestBlockedReasonInvariantOnLifecycle(t *testing.T) {
+	t.Parallel()
+
+	session := New("blocked-reason-lifecycle")
+	if err := session.AddTodo(TodoItem{
+		ID:            "t1",
+		Content:       "task",
+		Status:        TodoStatusBlocked,
+		BlockedReason: TodoBlockedReasonExternalResourceWait,
+	}); err != nil {
+		t.Fatalf("AddTodo: %v", err)
+	}
+
+	got, _ := session.FindTodo("t1")
+	if got.BlockedReason != TodoBlockedReasonExternalResourceWait {
+		t.Fatalf("blocked todo should keep reason, got %q", got.BlockedReason)
+	}
+
+	if err := session.ClaimTodo("t1", TodoOwnerTypeAgent, "agent-1", got.Revision); err != nil {
+		t.Fatalf("ClaimTodo: %v", err)
+	}
+	got, _ = session.FindTodo("t1")
+	if got.Status != TodoStatusInProgress {
+		t.Fatalf("ClaimTodo status = %q, want in_progress", got.Status)
+	}
+	if got.BlockedReason != "" {
+		t.Fatalf("ClaimTodo should clear blocked_reason, got %q", got.BlockedReason)
+	}
+
+	if err := session.CompleteTodo("t1", []string{"output.txt"}, got.Revision); err != nil {
+		t.Fatalf("CompleteTodo: %v", err)
+	}
+	got, _ = session.FindTodo("t1")
+	if got.Status != TodoStatusCompleted || got.BlockedReason != "" {
+		t.Fatalf("CompleteTodo state = %+v", got)
+	}
+
+	// FailTodo also clears blocked_reason
+	if err := session.AddTodo(TodoItem{
+		ID:            "t2",
+		Content:       "task2",
+		Status:        TodoStatusBlocked,
+		BlockedReason: TodoBlockedReasonPermissionWait,
+	}); err != nil {
+		t.Fatalf("AddTodo t2: %v", err)
+	}
+	got2, _ := session.FindTodo("t2")
+	if err := session.FailTodo("t2", "boom", got2.Revision); err != nil {
+		t.Fatalf("FailTodo: %v", err)
+	}
+	got2, _ = session.FindTodo("t2")
+	if got2.Status != TodoStatusFailed || got2.BlockedReason != "" || got2.FailureReason != "boom" {
+		t.Fatalf("FailTodo state = %+v", got2)
+	}
+}
+
+func TestNormalizeTodoItemBlockedReasonInvariant(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name       string
+		status     TodoStatus
+		input      TodoBlockedReason
+		wantReason TodoBlockedReason
+		wantErr    bool
+	}{
+		{name: "blocked keeps real reason", status: TodoStatusBlocked, input: TodoBlockedReasonInternalDependency, wantReason: TodoBlockedReasonInternalDependency},
+		{name: "blocked keeps unknown enum value", status: TodoStatusBlocked, input: TodoBlockedReasonUnknown, wantReason: TodoBlockedReasonUnknown},
+		{name: "blocked allows empty", status: TodoStatusBlocked, input: "", wantReason: ""},
+		{name: "pending clears any value", status: TodoStatusPending, input: TodoBlockedReasonUnknown, wantReason: ""},
+		{name: "in_progress clears any value", status: TodoStatusInProgress, input: TodoBlockedReasonExternalResourceWait, wantReason: ""},
+		{name: "completed clears any value", status: TodoStatusCompleted, input: TodoBlockedReasonInternalDependency, wantReason: ""},
+		{name: "failed clears any value", status: TodoStatusFailed, input: TodoBlockedReasonUnknown, wantReason: ""},
+		{name: "canceled clears any value", status: TodoStatusCanceled, input: TodoBlockedReasonUnknown, wantReason: ""},
+		{name: "invalid enum returns error", status: TodoStatusBlocked, input: TodoBlockedReason("garbage"), wantErr: true},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			normalized, err := normalizeTodoItem(TodoItem{
+				ID:            "x",
+				Content:       "x",
+				Status:        tc.status,
+				BlockedReason: tc.input,
+			})
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("expected error, got nil; normalized=%+v", normalized)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if normalized.BlockedReason != tc.wantReason {
+				t.Fatalf("blocked_reason = %q, want %q", normalized.BlockedReason, tc.wantReason)
+			}
+		})
+	}
 }

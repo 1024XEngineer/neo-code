@@ -726,7 +726,7 @@ func buildVerifyTodos(items []agentsession.TodoItem) []verify.TodoSnapshot {
 			Content:       strings.TrimSpace(item.Content),
 			Status:        strings.TrimSpace(string(item.Status)),
 			Required:      item.RequiredValue(),
-			BlockedReason: string(item.BlockedReasonValue()),
+			BlockedReason: strings.TrimSpace(string(item.BlockedReason)),
 			Acceptance:    append([]string(nil), item.Acceptance...),
 			Artifacts:     append([]string(nil), item.Artifacts...),
 			Supersedes:    append([]string(nil), item.Supersedes...),

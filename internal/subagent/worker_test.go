@@ -805,4 +805,26 @@ func TestWorkerAdditionalUncoveredBranches(t *testing.T) {
 			t.Fatalf("state=%q, want %q", impl.State(), StateSucceeded)
 		}
 	})
+
+	t.Run("capability tool_use_mode can override policy", func(t *testing.T) {
+		t.Parallel()
+		policy, err := DefaultRolePolicy(RoleReviewer)
+		if err != nil {
+			t.Fatalf("DefaultRolePolicy() error = %v", err)
+		}
+		wr, err := NewWorker(RoleReviewer, policy, nil)
+		if err != nil {
+			t.Fatalf("NewWorker() error = %v", err)
+		}
+		if err := wr.Start(
+			Task{ID: "t-mode-override", Goal: "goal"},
+			Budget{MaxSteps: 1},
+			Capability{ToolUseMode: ToolUseModeDisabled},
+		); err != nil {
+			t.Fatalf("Start() error = %v", err)
+		}
+		if got := wr.Policy().ToolUseMode; got != ToolUseModeDisabled {
+			t.Fatalf("ToolUseMode = %q, want %q", got, ToolUseModeDisabled)
+		}
+	})
 }

@@ -1273,6 +1273,28 @@ func TestResolveToolExecutionTimeoutForSpawnSubagent(t *testing.T) {
 	}
 }
 
+func TestResolveToolExecutionTimeoutForDiagnose(t *testing.T) {
+	t.Parallel()
+
+	base := 20 * time.Second
+	got := resolveToolExecutionTimeout(providertypes.ToolCall{
+		Name:      tools.ToolNameDiagnose,
+		Arguments: `{"error_log":"fatal","os_env":{"os":"linux"}}`,
+	}, base)
+	if got < defaultDiagnoseToolTimeout {
+		t.Fatalf("expected diagnose timeout >= %v, got %v", defaultDiagnoseToolTimeout, got)
+	}
+
+	base = 90 * time.Second
+	got = resolveToolExecutionTimeout(providertypes.ToolCall{
+		Name:      tools.ToolNameDiagnose,
+		Arguments: `{"error_log":"fatal","os_env":{"os":"linux"}}`,
+	}, base)
+	if got != base {
+		t.Fatalf("expected diagnose timeout keep base %v when already larger, got %v", base, got)
+	}
+}
+
 func TestResolveToolExecutionTimeoutFallbackAndHelpers(t *testing.T) {
 	t.Parallel()
 

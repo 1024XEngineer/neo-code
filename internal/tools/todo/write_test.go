@@ -149,6 +149,13 @@ func TestToolExecute(t *testing.T) {
 			withMutator: true,
 			want:        "action: plan",
 		},
+		{
+			name:        "plan rejects empty items",
+			raw:         []byte(`{"action":"plan","items":[]}`),
+			withMutator: true,
+			wantErr:     true,
+			want:        reasonInvalidArguments,
+		},
 	}
 
 	tool := New()
@@ -176,6 +183,38 @@ func TestToolExecute(t *testing.T) {
 				t.Fatalf("Execute() content = %q, want contains %q", result.Content, tt.want)
 			}
 		})
+	}
+}
+
+func TestToolExecuteRevisionConflictMetadata(t *testing.T) {
+	t.Parallel()
+
+	session := agentsession.New("revision-meta")
+	if err := session.AddTodo(agentsession.TodoItem{ID: "task", Content: "task"}); err != nil {
+		t.Fatalf("AddTodo error = %v", err)
+	}
+	mutator := &stubMutator{session: &session}
+
+	tool := New()
+	result, err := tool.Execute(context.Background(), tools.ToolCallInput{
+		Name:           tools.ToolNameTodoWrite,
+		Arguments:      []byte(`{"action":"set_status","id":"task","status":"in_progress","expected_revision":9}`),
+		SessionMutator: mutator,
+	})
+	if err == nil {
+		t.Fatalf("expected error, got nil")
+	}
+	if result.Metadata["reason_code"] != reasonRevisionConflict {
+		t.Fatalf("reason_code = %q, want %q", result.Metadata["reason_code"], reasonRevisionConflict)
+	}
+	if result.Metadata["current_revision"] == nil {
+		t.Fatalf("expected current_revision in metadata, got nil")
+	}
+	if result.Metadata["current_revision"].(int64) != 1 {
+		t.Fatalf("current_revision = %v, want 1", result.Metadata["current_revision"])
+	}
+	if result.Metadata["current_status"] != string(agentsession.TodoStatusPending) {
+		t.Fatalf("current_status = %q, want %q", result.Metadata["current_status"], agentsession.TodoStatusPending)
 	}
 }
 

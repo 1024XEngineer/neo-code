@@ -55,7 +55,7 @@ func (todosSource) Sections(ctx context.Context, input BuildInput) ([]promptSect
 		active = active[:maxPromptTodos]
 	}
 
-	lines := make([]string, 0, len(active)+1)
+	lines := make([]string, 0, len(active)+2)
 	for _, item := range active {
 		id := sanitizePromptValue(item.ID, maxPromptTodoIDLength)
 		content := sanitizePromptValue(item.Content, maxPromptTodoTextLen)
@@ -79,6 +79,12 @@ func (todosSource) Sections(ctx context.Context, input BuildInput) ([]promptSect
 			lines = append(lines, fmt.Sprintf("  owner: type=%q id=%q", ownerType, ownerID))
 		}
 	}
+
+	lines = append(lines, "",
+		"stale_todo_reminder: If any todo above is no longer relevant to the current task,",
+		"or the user clearly switches to a different task, use todo_write to mark it completed",
+		"only if the work is actually done; otherwise set_status=canceled before moving on.",
+	)
 
 	return []promptSection{
 		{

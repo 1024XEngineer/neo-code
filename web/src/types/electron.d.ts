@@ -9,6 +9,9 @@ export interface ElectronAPI {
   maximize: () => Promise<void>
   close: () => Promise<void>
   onGatewayStatus: (callback: (data: { ready: boolean; error?: string }) => void) => () => void
+  onUpdateAvailable: (callback: (info: { version: string; releaseNotes?: string }) => void) => () => void
+  onUpdateDownloaded: (callback: (info: { version: string }) => void) => () => void
+  quitAndInstall: () => Promise<void>
 }
 
 declare global {

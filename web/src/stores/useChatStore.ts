@@ -1,13 +1,15 @@
 import { create } from 'zustand'
-import { type TokenUsage, type PermissionRequestPayload } from '@/api/protocol'
+import { type TokenUsage, type PermissionRequestPayload, type AcceptanceDecidedPayload } from '@/api/protocol'
+import { type VerificationRunRecord } from '@/stores/useRuntimeInsightStore'
+import { resetEventBridgeCursors } from '@/utils/eventBridge'
 
 /** 聊天消息 */
 export interface ChatMessage {
   id: string
   /** 消息角色：user / assistant / tool */
   role: 'user' | 'assistant' | 'tool'
-  /** 消息类型：text / thinking / tool_call / code / welcome / system */
-  type: 'text' | 'thinking' | 'tool_call' | 'code' | 'welcome' | 'system'
+  /** 消息类型：text / thinking / tool_call / code / welcome / system / verification / acceptance */
+  type: 'text' | 'thinking' | 'tool_call' | 'code' | 'welcome' | 'system' | 'verification' | 'acceptance'
   /** 文本内容 */
   content: string
   /** 工具调用信息 */
@@ -16,6 +18,14 @@ export interface ChatMessage {
   toolArgs?: string
   toolResult?: string
   toolStatus?: 'running' | 'done' | 'error'
+  /** 与该 tool_call 关联的 checkpoint ID(由 CheckpointCreated 事件时序关联) */
+  checkpointId?: string
+  /** Checkpoint 撤回状态:available 可撤回 / restoring 正在撤回 / restored 已撤回 */
+  checkpointStatus?: 'available' | 'restoring' | 'restored'
+  /** Verification 摘要数据(仅 type === 'verification' 使用) */
+  verificationData?: VerificationRunRecord
+  /** Acceptance 决策数据(仅 type === 'acceptance' 使用) */
+  acceptanceData?: AcceptanceDecidedPayload
   /** 代码语言 */
   language?: string
   /** 代码文件名 */
@@ -50,12 +60,20 @@ interface ChatState {
   // Actions
   addMessage: (msg: ChatMessage) => void
   removeMessage: (id: string) => void
+  /** 从指定消息（含）开始截断 messages 数组并清理生成相关状态 */
+  truncateFromMessage: (messageId: string) => void
   appendChunk: (text: string) => void
   /** 原子操作：创建流式 assistant 消息 + 加入列表 + 设置 streamingMessageId */
   startStreamingMessage: () => string
   finalizeMessage: (id: string, content: string) => void
   updateToolCall: (toolCallId: string, result: string, status: ChatMessage['toolStatus']) => void
   appendToolOutput: (toolCallId: string, chunk: string) => void
+  /** 把 checkpointId 关联到一条 tool_call 消息(由 CheckpointCreated 时序关联触发) */
+  attachCheckpointToToolCall: (toolCallId: string, checkpointId: string) => void
+  /** 更新某条已挂 checkpoint 的 tool_call 消息的撤回状态 */
+  setCheckpointStatus: (toolCallId: string, status: NonNullable<ChatMessage['checkpointStatus']>) => void
+  /** 更新一条 verification 消息的 data(verification 进行中持续更新同一条消息) */
+  updateVerificationMessage: (messageId: string, data: VerificationRunRecord) => void
   setGenerating: (v: boolean) => void
   setStreamingMessageId: (id: string) => void
   /** 重置生成状态：终结当前流式消息 + 清除 isGenerating */
@@ -139,6 +157,20 @@ export const useChatStore = create<ChatState>((set) => ({
   addMessage: (msg) => set((s) => ({ messages: [...s.messages, msg] })),
   removeMessage: (id) => set((s) => ({ messages: s.messages.filter((m) => m.id !== id) })),
 
+  truncateFromMessage: (messageId) =>
+    set((s) => {
+      const idx = s.messages.findIndex((m) => m.id === messageId)
+      if (idx === -1) return s
+      return {
+        messages: s.messages.slice(0, idx),
+        streamingMessageId: '',
+        isGenerating: false,
+        permissionRequests: [],
+        phase: '',
+        stopReason: '',
+      }
+    }),
+
   appendChunk: (text) =>
     set((s) => {
       if (!s.streamingMessageId) return s
@@ -184,6 +216,33 @@ export const useChatStore = create<ChatState>((set) => ({
       ),
     })),
 
+  attachCheckpointToToolCall: (toolCallId, checkpointId) =>
+    set((s) => ({
+      messages: s.messages.map((m) =>
+        m.toolCallId === toolCallId && m.type === 'tool_call'
+          ? { ...m, checkpointId, checkpointStatus: 'available' as const }
+          : m
+      ),
+    })),
+
+  setCheckpointStatus: (toolCallId, status) =>
+    set((s) => ({
+      messages: s.messages.map((m) =>
+        m.toolCallId === toolCallId && m.type === 'tool_call'
+          ? { ...m, checkpointStatus: status }
+          : m
+      ),
+    })),
+
+  updateVerificationMessage: (messageId, data) =>
+    set((s) => ({
+      messages: s.messages.map((m) =>
+        m.id === messageId && m.type === 'verification'
+          ? { ...m, verificationData: data }
+          : m
+      ),
+    })),
+
   setGenerating: (isGenerating) => set({ isGenerating }),
   setStreamingMessageId: (streamingMessageId) => set({ streamingMessageId }),
 
@@ -221,16 +280,19 @@ export const useChatStore = create<ChatState>((set) => ({
 
   setAgentMode: (agentMode) => set({ agentMode }),
 
-  /** 清理全部聊天状态，包括权限请求、token用量等 */
-  clearMessages: () => set({
-    messages: [],
-    streamingMessageId: '',
-    isGenerating: false,
-    permissionRequests: [],
-    tokenUsage: null,
-    phase: '',
-    stopReason: '',
-    isTransitioning: false,
-    agentMode: 'build',
-  }),
+  /** 清理全部聊天状态，包括权限请求、token用量等。同时重置 eventBridge 模块级游标，避免跨会话泄漏。 */
+  clearMessages: () => {
+    resetEventBridgeCursors()
+    set({
+      messages: [],
+      streamingMessageId: '',
+      isGenerating: false,
+      permissionRequests: [],
+      tokenUsage: null,
+      phase: '',
+      stopReason: '',
+      isTransitioning: false,
+      agentMode: 'build',
+    })
+  },
 }))

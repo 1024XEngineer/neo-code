@@ -71,7 +71,6 @@ type sessionLogPersistenceRuntime interface {
 	SaveSessionLogEntries(ctx context.Context, sessionID string, entries []tuiservices.SessionLogEntry) error
 }
 
-var panelOrder = []panel{panelTranscript, panelInput}
 var supportsUserEnvPersistence = config.SupportsUserEnvPersistence
 var persistProviderUserEnvVar = config.PersistUserEnvVar
 var deleteProviderUserEnvVar = config.DeleteUserEnvVar
@@ -423,22 +422,15 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return a, batchUpdateCmds()
 			}
 		}
-		if a.focus == panelInput && key.Matches(typed, a.keys.NextPanel) {
+		if a.focus == panelInput && typed.Type == tea.KeyTab {
 			if a.applySelectedCommandSuggestion() {
 				return a, batchUpdateCmds()
 			}
-			if a.shouldHandleTabAsInput(typed) {
-				tabMsg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'	'}, Paste: typed.Paste}
-				return a.updateInputPanel(tabMsg, tabMsg, cmds)
+			if a.shouldToggleAgentModeOnTab(typed) {
+				mode := a.toggleAgentMode()
+				a.state.StatusText = fmt.Sprintf("Mode switched to %s", strings.ToUpper(string(mode)))
+				return a, batchUpdateCmds()
 			}
-		}
-		if key.Matches(typed, a.keys.NextPanel) {
-			a.focusNext()
-			return a, batchUpdateCmds()
-		}
-		if key.Matches(typed, a.keys.PrevPanel) {
-			a.focusPrev()
-			return a, batchUpdateCmds()
 		}
 		if key.Matches(typed, a.keys.FocusInput) {
 			a.clearTextSelection()
@@ -451,11 +443,6 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.startupScreenLocked = true
 			return a, batchUpdateCmds()
 		}
-		if key.Matches(typed, a.keys.OpenWorkspace) {
-			a.openFileBrowser()
-			return a, batchUpdateCmds()
-		}
-
 		if key.Matches(typed, a.keys.LogViewer) {
 			a.logViewerVisible = true
 			a.logViewerOffset = 0
@@ -1733,15 +1720,12 @@ func (a App) shouldCapturePasteTxnChunk(typed tea.KeyMsg) bool {
 	if typed.Paste {
 		return false
 	}
-	chunk := string(typed.Runes)
 	if a.pasteTxnActive {
-		// Do not lock the input while a paste transaction is open:
-		// only keep capturing obviously paste-like chunks.
-		if len(typed.Runes) > 1 {
-			return true
-		}
-		return strings.ContainsRune(chunk, '\n') || strings.ContainsRune(chunk, '\r') || strings.ContainsRune(chunk, '\t')
+		// Once a paste transaction starts, keep absorbing rune chunks until debounce flush.
+		// This avoids fragmenting one long paste into repeated summary tokens.
+		return true
 	}
+	chunk := string(typed.Runes)
 	if len(typed.Runes) > 1 {
 		return true
 	}
@@ -1763,7 +1747,7 @@ func (a App) shouldCaptureSingleRunePasteChunk(typed tea.KeyMsg) bool {
 		return false
 	}
 	clip = normalizeClipboardText(clip)
-	if strings.TrimSpace(clip) == "" {
+	if !shouldSummarizePastedText(clip) {
 		return false
 	}
 	chunk := normalizeClipboardText(string(typed.Runes))
@@ -2006,6 +1990,7 @@ func (a *App) beginAgentRun(input string, images []tuiservices.UserImageInput) t
 		SessionID: a.state.ActiveSessionID,
 		RunID:     runID,
 		Workdir:   requestedWorkdir,
+		Mode:      string(a.currentAgentMode()),
 		Text:      normalizedInput,
 		Images:    clonedImages,
 	})
@@ -2066,30 +2051,6 @@ func (a App) updatePicker(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		a.sessionPicker, cmd = updateListPickerModel(a.sessionPicker, msg)
 	case pickerHelp:
 		a.helpPicker, cmd = updateListPickerModel(a.helpPicker, msg)
-	case pickerFile:
-		a.fileBrowser, cmd = a.fileBrowser.Update(msg)
-		if didSelect, path := a.fileBrowser.DidSelectFile(msg); didSelect {
-			a.closePicker()
-			if tuiinfra.IsSupportedImageFormat(path) {
-				if err := a.addImageAttachment(path); err != nil {
-					a.state.ExecutionError = err.Error()
-					a.state.StatusText = err.Error()
-					a.appendActivity("multimodal", "Failed to add image", err.Error(), true)
-					return a, cmd
-				}
-				return a, cmd
-			}
-			if err := a.applyFileReference(path); err != nil {
-				a.state.ExecutionError = err.Error()
-				a.state.StatusText = err.Error()
-				a.appendActivity("workspace", "Failed to apply file reference", err.Error(), true)
-				return a, cmd
-			}
-			return a, cmd
-		}
-		if disabled, path := a.fileBrowser.DidSelectDisabledFile(msg); disabled {
-			a.state.StatusText = fmt.Sprintf("[System] %s is not selectable.", filepath.Base(path))
-		}
 	case pickerProviderAdd:
 		return a.handleProviderAddFormInput(msg)
 	case pickerModelScope:
@@ -2598,6 +2559,7 @@ func (a *App) applySessionSnapshot(session agentsession.Session, warnOnMissingWo
 	a.clearActivities()
 	a.syncTodos(session.Todos)
 	a.state.ActiveSessionTitle = session.Title
+	a.setCurrentAgentMode(string(session.AgentMode))
 	a.syncSessionWorkdir(session.Workdir, warnOnMissingWorkdir)
 	a.loadLogEntriesForSession(session.ID)
 	a.refreshRuntimeSourceSnapshot()
@@ -2611,6 +2573,7 @@ func (a *App) resetSessionRuntimeState() {
 	a.lastUserMessageRunID = ""
 	a.state.ToolStates = nil
 	a.state.RunContext = tuistate.ContextWindowState{}
+	a.setCurrentAgentMode(string(agentsession.AgentModeBuild))
 	a.state.TokenUsage = tuistate.TokenUsageState{}
 	a.pendingPermission = nil
 	a.queuedIntervention = nil
@@ -2728,7 +2691,9 @@ func (a *App) refreshRuntimeSourceSnapshot() {
 					a.state.RunContext.Provider = mapped.Provider
 					a.state.RunContext.Model = mapped.Model
 					a.state.RunContext.Workdir = mapped.Workdir
-					a.state.RunContext.Mode = mapped.Mode
+					if strings.TrimSpace(mapped.Mode) != "" {
+						a.setCurrentAgentMode(mapped.Mode)
+					}
 					a.state.RunContext.SessionID = mapped.SessionID
 				}
 			}
@@ -2754,8 +2719,11 @@ func (a *App) refreshRuntimeSourceSnapshot() {
 			runSnapshot, parsed := tuiservices.ParseRunSnapshot(raw)
 			if parsed {
 				contextVM, toolVM, usageVM := tuiservices.MapRunSnapshot(runSnapshot)
-				if strings.TrimSpace(contextVM.Provider) != "" {
+				if strings.TrimSpace(contextVM.Provider) != "" || strings.TrimSpace(contextVM.Mode) != "" {
 					a.state.RunContext = contextVM
+					if strings.TrimSpace(contextVM.Mode) != "" {
+						a.setCurrentAgentMode(contextVM.Mode)
+					}
 				}
 				if len(toolVM) > 0 {
 					a.state.ToolStates = append([]tuistate.ToolState(nil), toolVM...)
@@ -3902,6 +3870,9 @@ func runtimeEventRunContextHandler(a *App, event tuiservices.RuntimeEvent) bool 
 	if strings.TrimSpace(mapped.Workdir) != "" {
 		a.setCurrentWorkdir(mapped.Workdir)
 	}
+	if strings.TrimSpace(mapped.Mode) != "" {
+		a.setCurrentAgentMode(mapped.Mode)
+	}
 	return false
 }
 
@@ -4972,49 +4943,6 @@ func (a *App) scrollInputPage(direction int) {
 	a.state.InputText = a.input.Value()
 }
 
-func (a App) shouldHandleTabAsInput(typed tea.KeyMsg) bool {
-	if a.focus != panelInput || a.state.ActivePicker != pickerNone || typed.Type != tea.KeyTab {
-		return false
-	}
-	if typed.Paste || a.pasteMode {
-		return true
-	}
-	return strings.TrimSpace(a.input.Value()) != ""
-}
-
-func (a *App) focusNext() {
-	order := panelOrder
-	current := 0
-	for i, item := range order {
-		if item == a.focus {
-			current = i
-			break
-		}
-	}
-
-	a.focus = order[(current+1)%len(order)]
-	a.applyFocus()
-}
-
-func (a *App) focusPrev() {
-	order := panelOrder
-	current := 0
-	for i, item := range order {
-		if item == a.focus {
-			current = i
-			break
-		}
-	}
-
-	if current == 0 {
-		a.focus = order[len(order)-1]
-	} else {
-		a.focus = order[current-1]
-	}
-
-	a.applyFocus()
-}
-
 func (a *App) applyFocus() {
 	a.state.Focus = a.focus
 	if a.focus == panelInput && a.state.ActivePicker == pickerNone {
@@ -5072,7 +5000,6 @@ func (a *App) applyComponentLayout(rebuildTranscript bool) {
 		pickerLayout.listWidth,
 		tuiutils.Clamp(helpPickerDesiredHeight, pickerListMinHeight, pickerLayout.listHeight),
 	)
-	a.fileBrowser.SetHeight(max(pickerListMinHeight, pickerLayout.listHeight))
 	if rebuildTranscript || prevTranscriptWidth != a.transcript.Width {
 		a.rebuildTranscript()
 	} else if a.transcript.AtBottom() {
@@ -5401,6 +5328,7 @@ func (a *App) startDraftSession() {
 	a.lastUserMessageRunID = ""
 	a.state.ToolStates = nil
 	a.state.RunContext = tuistate.ContextWindowState{}
+	a.setCurrentAgentMode(string(agentsession.AgentModeBuild))
 	a.state.TokenUsage = tuistate.TokenUsageState{}
 	a.pendingPermission = nil
 	a.queuedIntervention = nil
@@ -5526,6 +5454,13 @@ func (a *App) setActiveSessionID(sessionID string) {
 	if current == "" && len(previousEntries) > 0 {
 		a.persistLogEntriesForActiveSession()
 	}
+}
+
+func (a App) shouldToggleAgentModeOnTab(typed tea.KeyMsg) bool {
+	if a.focus != panelInput || a.state.ActivePicker != pickerNone || typed.Type != tea.KeyTab {
+		return false
+	}
+	return !typed.Paste && !a.pasteMode
 }
 
 func (a *App) loadLogEntriesForSession(sessionID string) {
@@ -5930,7 +5865,7 @@ func (a *App) handleProviderAddFormInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			a.state.ActivePicker = pickerNone
 			a.state.StatusText = statusReady
 			return a, nil
-		case key.Matches(typed, a.keys.PrevPanel):
+		case typed.Type == tea.KeyShiftTab:
 			a.providerAddForm.Stage = providerAddFormStageFields
 			a.providerAddForm.Error = ""
 			a.providerAddForm.ErrorIsHard = false
@@ -5957,9 +5892,9 @@ func (a *App) handleProviderAddFormInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	switch {
-	case key.Matches(typed, a.keys.PrevPanel):
+	case typed.Type == tea.KeyShiftTab:
 		a.providerAddForm.Step = (a.providerAddForm.Step + fieldCount - 1) % fieldCount
-	case key.Matches(typed, a.keys.NextPanel):
+	case typed.Type == tea.KeyTab:
 		a.providerAddForm.Step = (a.providerAddForm.Step + 1) % fieldCount
 	case key.Matches(typed, a.keys.Send):
 		return a, a.submitProviderAddForm()

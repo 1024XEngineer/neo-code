@@ -53,6 +53,36 @@ func (s fileSnapshot) WasNew() bool {
 	return !s.existed
 }
 
+// FileChangeKind 文件变更类型常量，对齐 events.FileChange.Kind / FileDiffEntry.Kind。
+const (
+	FileChangeKindAdded     = "added"
+	FileChangeKindModified  = "modified"
+	FileChangeKindDeleted   = "deleted"
+	FileChangeKindUnchanged = "unchanged"
+)
+
+// Kind 根据 pre/post 文件状态推断变更类型。
+// 返回值与 FileChangeKind* 常量对齐；上层可据此过滤 unchanged 条目。
+func (s fileSnapshot) Kind() (string, error) {
+	current, err := os.ReadFile(s.path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			if !s.existed {
+				return FileChangeKindUnchanged, nil
+			}
+			return FileChangeKindDeleted, nil
+		}
+		return "", err
+	}
+	if !s.existed {
+		return FileChangeKindAdded, nil
+	}
+	if string(current) == string(s.content) {
+		return FileChangeKindUnchanged, nil
+	}
+	return FileChangeKindModified, nil
+}
+
 // computeUnifiedDiff 计算两段文本的 unified diff，使用 go-difflib 生成标准格式。
 func computeUnifiedDiff(oldContent, newContent, label string) (string, error) {
 	diff := difflib.UnifiedDiff{

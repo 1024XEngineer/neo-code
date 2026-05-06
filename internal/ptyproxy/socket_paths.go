@@ -14,11 +14,46 @@ const (
 	diagSocketRunRelativeDir = ".neocode/run"
 	diagSocketFilePrefix     = "neocode-diag-"
 	diagSocketFileSuffix     = ".sock"
+	idmSocketFileMidfix      = "-idm"
 )
+
+// DeriveIDMSocketPathFromDiagSocketPath 基于普通诊断 socket 路径推导 IDM socket 路径。
+// 规则：
+// 1. 已是 `*-idm.sock` 时直接返回原路径；
+// 2. 以 `.sock` 结尾时插入 `-idm`；
+// 3. 其他情况在末尾追加 `-idm.sock`。
+func DeriveIDMSocketPathFromDiagSocketPath(diagSocketPath string) (string, error) {
+	trimmed := strings.TrimSpace(diagSocketPath)
+	if trimmed == "" {
+		return "", fmt.Errorf("ptyproxy: derive idm socket path from empty diagnose socket")
+	}
+	cleaned := filepath.Clean(trimmed)
+	if cleaned == "." {
+		return "", fmt.Errorf("ptyproxy: derive idm socket path from empty diagnose socket")
+	}
+
+	baseName := filepath.Base(cleaned)
+	if strings.HasSuffix(baseName, idmSocketFileMidfix+diagSocketFileSuffix) {
+		return cleaned, nil
+	}
+
+	if strings.HasSuffix(baseName, diagSocketFileSuffix) {
+		stem := strings.TrimSuffix(baseName, diagSocketFileSuffix)
+		derivedName := stem + idmSocketFileMidfix + diagSocketFileSuffix
+		return filepath.Join(filepath.Dir(cleaned), derivedName), nil
+	}
+
+	return cleaned + idmSocketFileMidfix + diagSocketFileSuffix, nil
+}
 
 // ResolveDefaultDiagSocketPath 解析当前进程默认诊断 socket 路径。
 func ResolveDefaultDiagSocketPath() (string, error) {
 	return resolveDiagSocketPathForPID(os.Getpid())
+}
+
+// ResolveDefaultIDMDiagSocketPath 解析当前进程默认 IDM 诊断 socket 路径。
+func ResolveDefaultIDMDiagSocketPath() (string, error) {
+	return resolveIDMDiagSocketPathForPID(os.Getpid())
 }
 
 // ResolveLatestRunDiagSocketPath 返回 ~/.neocode/run 下最近修改的诊断 socket 路径。
@@ -28,6 +63,15 @@ func ResolveLatestRunDiagSocketPath() (string, error) {
 		return "", err
 	}
 	return findLatestSocketByPattern(runDir, diagSocketFilePrefix+"*"+diagSocketFileSuffix)
+}
+
+// ResolveLatestIDMDiagSocketPath 返回 ~/.neocode/run 下最近修改的 IDM 诊断 socket 路径。
+func ResolveLatestIDMDiagSocketPath() (string, error) {
+	runDir, err := resolveDiagSocketRunDir()
+	if err != nil {
+		return "", err
+	}
+	return findLatestSocketByPattern(runDir, diagSocketFilePrefix+"*"+idmSocketFileMidfix+diagSocketFileSuffix)
 }
 
 // ResolveLegacyTmpDiagSocketPath 返回临时目录下最近修改的遗留诊断 socket 路径。
@@ -54,6 +98,18 @@ func resolveDiagSocketPathForPID(pid int) (string, error) {
 		pid = os.Getpid()
 	}
 	return filepath.Join(runDir, diagSocketFilePrefix+strconv.Itoa(pid)+diagSocketFileSuffix), nil
+}
+
+// resolveIDMDiagSocketPathForPID 按约定生成带 PID 的 IDM 诊断 socket 路径。
+func resolveIDMDiagSocketPathForPID(pid int) (string, error) {
+	runDir, err := resolveDiagSocketRunDir()
+	if err != nil {
+		return "", err
+	}
+	if pid <= 0 {
+		pid = os.Getpid()
+	}
+	return filepath.Join(runDir, diagSocketFilePrefix+strconv.Itoa(pid)+idmSocketFileMidfix+diagSocketFileSuffix), nil
 }
 
 // parseDiagSocketPIDFromPath 从诊断 socket 文件名中解析 PID。

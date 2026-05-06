@@ -45,6 +45,7 @@ type UIState struct {
 	StatusText         string
 	CurrentProvider    string
 	CurrentModel       string
+	CurrentAgentMode   string
 	CurrentWorkdir     string
 	ShowHelp           bool
 	ActivePicker       PickerMode

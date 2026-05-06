@@ -3,6 +3,7 @@ import { type GatewayAPI } from '@/api/gateway'
 import { type SessionSummary as APISessionSummary } from '@/api/protocol'
 import { useChatStore } from '@/stores/useChatStore'
 import { useUIStore } from '@/stores/useUIStore'
+import { useRuntimeInsightStore } from '@/stores/useRuntimeInsightStore'
 
 /** 判断 sessionId 是否有效（非空且不是临时草稿前缀） */
 export function isValidSessionId(id: string): boolean {
@@ -111,8 +112,27 @@ type BackendMessage = {
   is_error?: boolean
 }
 
+/** 并发拉取 session 详情 + todos + checkpoints,把后两者写入 RuntimeInsightStore。
+ *  todos / checkpoints 失败用 .catch 兜底,不阻断主流程的 loadSession。 */
+async function loadSessionWithInsights(gatewayAPI: GatewayAPI, sessionId: string) {
+  const [sessionFrame, todosResult, checkpointsResult] = await Promise.all([
+    gatewayAPI.loadSession(sessionId),
+    (gatewayAPI.listSessionTodos?.(sessionId) ?? Promise.resolve(null)).catch(() => null),
+    (gatewayAPI.listCheckpoints?.({ session_id: sessionId, limit: 50 }) ?? Promise.resolve(null)).catch(() => null),
+  ])
+  const insightStore = useRuntimeInsightStore.getState()
+  if (todosResult?.payload) {
+    insightStore.setTodoSnapshot(todosResult.payload)
+  }
+  if (checkpointsResult?.payload) {
+    insightStore.setCheckpoints(checkpointsResult.payload)
+  }
+  return sessionFrame
+}
+
 /** 将后端历史消息映射为前端 ChatMessage 列表，正确合并 tool_result 回 tool_call */
 function mapHistoryMessages(backendMessages: BackendMessage[]): Array<ReturnType<typeof useChatStore.getState>['messages'][0]> {
+  let _idCounter = 0
   // Phase 1: Collect tool results by tool_call_id
   const toolResults = new Map<string, { content: string; isError: boolean }>()
   for (const msg of backendMessages) {
@@ -131,7 +151,7 @@ function mapHistoryMessages(backendMessages: BackendMessage[]): Array<ReturnType
       // If assistant message also has text content, emit that first
       if (msg.content && msg.role === 'assistant') {
         result.push({
-          id: `hist_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+          id: `hist_${Date.now()}_${_idCounter++}`,
           role: 'assistant',
           type: 'text',
           content: msg.content,
@@ -142,7 +162,7 @@ function mapHistoryMessages(backendMessages: BackendMessage[]): Array<ReturnType
       for (const tc of msg.tool_calls) {
         const tr = toolResults.get(tc.id)
         result.push({
-          id: `hist_tc_${tc.id}_${Date.now()}`,
+          id: `hist_tc_${tc.id}_${_idCounter++}`,
           role: 'tool',
           type: 'tool_call',
           content: '',
@@ -156,7 +176,7 @@ function mapHistoryMessages(backendMessages: BackendMessage[]): Array<ReturnType
       }
     } else {
       result.push({
-        id: `hist_${msg.role}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+        id: `hist_${msg.role}_${Date.now()}_${_idCounter++}`,
         role: (msg.role as 'user' | 'assistant' | 'tool') || 'assistant',
         type: 'text',
         content: msg.content,
@@ -187,7 +207,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
     // 生成中拒绝切换会话
     if (useChatStore.getState().isGenerating) {
-      useUIStore.getState().showToast('生成中无法切换会话，请先停止当前对话', 'info')
+      useUIStore.getState().showToast('Cannot switch session while generating; stop the current run first.', 'info')
       return
     }
 
@@ -206,6 +226,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       const chatStore = useChatStore.getState()
       chatStore.setTransitioning(true)
       chatStore.clearMessages()
+      useRuntimeInsightStore.getState().reset()
 
       // 2. Update session ID
       set({ currentSessionId: sessionId })
@@ -213,8 +234,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       // 3. Bind stream (events will be discarded due to isTransitioning)
       await gatewayAPI.bindStream({ session_id: sessionId, channel: 'all' })
 
-      // 4. Load historical messages
-      const sessionFrame = await gatewayAPI.loadSession(sessionId)
+      // 4. Load historical messages (concurrently fetch todos + checkpoints)
+      const sessionFrame = await loadSessionWithInsights(gatewayAPI, sessionId)
       const sessionData = sessionFrame.payload as { messages?: BackendMessage[]; agent_mode?: string }
 
       // Check if this request was superseded
@@ -249,10 +270,11 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   createSession: () => {
     if (useChatStore.getState().isGenerating) {
-      useUIStore.getState().showToast('生成中无法新建会话，请先停止当前对话', 'info')
+      useUIStore.getState().showToast('Cannot start a new session while generating; stop the current run first.', 'info')
       return
     }
     useChatStore.getState().clearMessages()
+    useRuntimeInsightStore.getState().reset()
     set({ currentSessionId: '', currentProjectId: '' })
   },
 
@@ -266,17 +288,18 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         set({ _initialBindDone: true })
       } catch (err) {
         console.error('initializeActiveSession bindStream failed:', err)
-        useUIStore.getState().showToast('事件流绑定失败，可能无法接收实时消息', 'error')
+        useUIStore.getState().showToast('Failed to bind event stream; real-time messages may not arrive.', 'error')
       }
     }
   },
 
   prepareNewChat: () => {
     if (useChatStore.getState().isGenerating) {
-      useUIStore.getState().showToast('生成中无法新建会话，请先停止当前对话', 'info')
+      useUIStore.getState().showToast('Cannot start a new session while generating; stop the current run first.', 'info')
       return
     }
     useChatStore.getState().clearMessages()
+    useRuntimeInsightStore.getState().reset()
     set({ currentSessionId: '', currentProjectId: '' })
   },
 
@@ -312,8 +335,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
             await gatewayAPI.bindStream({ session_id: firstSession.id, channel: 'all' })
             set({ _initialBindDone: true })
 
-            // Load historical messages for the auto-selected session
-            const sessionFrame = await gatewayAPI.loadSession(firstSession.id)
+            // Load historical messages for the auto-selected session (concurrently fetch todos + checkpoints)
+            const sessionFrame = await loadSessionWithInsights(gatewayAPI, firstSession.id)
             const sessionData = sessionFrame.payload as { messages?: BackendMessage[]; agent_mode?: string }
             if (sessionData.messages && sessionData.messages.length > 0) {
               const mapped = mapHistoryMessages(sessionData.messages)
@@ -325,7 +348,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
             useChatStore.getState().setAgentMode(restoredMode)
           } catch (err) {
             console.error('Auto bindStream or loadSession failed:', err)
-            useUIStore.getState().showToast('会话加载失败', 'error')
+            useUIStore.getState().showToast('Failed to load session', 'error')
           }
         }
       } catch (err) {

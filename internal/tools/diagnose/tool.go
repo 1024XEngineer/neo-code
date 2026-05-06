@@ -19,6 +19,7 @@ const (
 
 	diagnoseSubAgentTaskID  = "terminal-diagnose"
 	diagnoseSubAgentTimeout = 25 * time.Second
+	diagnoseSubAgentGrace   = 5 * time.Second
 	diagnoseSubAgentSteps   = 4
 
 	diagnoseGoalLogMaxRunes     = 6000
@@ -136,17 +137,19 @@ func runDiagnoseWithSpawnSubAgent(
 
 	workdir := resolveDiagnoseWorkdir(call.Workdir, input.OSEnv)
 	allowedPaths := normalizePathList(workdir)
-	runResult, runErr := call.SubAgentInvoker.Run(ctx, tools.SubAgentRunInput{
+	runResult, runErr := runDiagnoseSubAgent(ctx, call.SubAgentInvoker, tools.SubAgentRunInput{
 		CallerAgent:           strings.TrimSpace(call.AgentID),
 		ParentCapabilityToken: call.CapabilityToken,
 		Role:                  subagent.RoleReviewer,
+		TaskType:              subagent.TaskTypeReview,
+		ToolUseMode:           subagent.ToolUseModeDisabled,
 		TaskID:                diagnoseSubAgentTaskID,
 		Goal:                  buildDiagnoseGoal(input, workdir),
 		ExpectedOut:           buildDiagnoseExpectedOutput(),
 		Workdir:               workdir,
 		MaxSteps:              diagnoseSubAgentSteps,
 		Timeout:               diagnoseSubAgentTimeout,
-		AllowedTools:          []string{tools.ToolNameFilesystemReadFile, tools.ToolNameFilesystemGlob},
+		AllowedTools:          []string{},
 		AllowedPaths:          allowedPaths,
 	})
 	if runErr != nil {
@@ -176,6 +179,39 @@ func runDiagnoseWithSpawnSubAgent(
 	metadata["subagent_stop_reason"] = string(runResult.StopReason)
 	metadata["subagent_step_count"] = runResult.StepCount
 	return parsed, metadata
+}
+
+// runDiagnoseSubAgent 以预算超时为上限执行子代理，超时时回退为降级结果而不是阻塞外层调用。
+func runDiagnoseSubAgent(
+	parent context.Context,
+	invoker tools.SubAgentInvoker,
+	input tools.SubAgentRunInput,
+) (tools.SubAgentRunResult, error) {
+	timeout := input.Timeout
+	if timeout <= 0 {
+		timeout = diagnoseSubAgentTimeout
+	}
+	runCtx, cancel := context.WithTimeout(parent, timeout+diagnoseSubAgentGrace)
+	defer cancel()
+
+	done := make(chan struct {
+		result tools.SubAgentRunResult
+		err    error
+	}, 1)
+	go func() {
+		result, err := invoker.Run(runCtx, input)
+		done <- struct {
+			result tools.SubAgentRunResult
+			err    error
+		}{result: result, err: err}
+	}()
+
+	select {
+	case <-runCtx.Done():
+		return tools.SubAgentRunResult{}, runCtx.Err()
+	case out := <-done:
+		return out.result, out.err
+	}
 }
 
 // buildDiagnoseGoal 构造发送给子代理的任务文本，限制上下文规模并强调输出约束。
@@ -208,9 +244,9 @@ func buildDiagnoseGoal(input diagnoseInput, workdir string) string {
 // buildDiagnoseExpectedOutput 声明子代理 contract 字段如何映射到 diagnose JSON 契约。
 func buildDiagnoseExpectedOutput() string {
 	return strings.Join([]string{
-		"请返回 subagent 标准 JSON 对象（summary/findings/patches/risks/next_actions/artifacts）。",
+		"请返回 subagent 标准 JSON 对象（report/findings/patches/risks/next_actions/artifacts）。",
 		"字段映射要求：",
-		"1) summary: 仅一条根因结论（root_cause）。",
+		"1) report: 必填，写一条根因结论（root_cause）。",
 		"2) findings: 第一条必须写成 confidence=<0~1>，其余写证据。",
 		"3) patches: 仅放修复命令（fix_commands）。",
 		"4) next_actions: 仅放进一步排查命令（investigation_commands）。",
@@ -222,7 +258,10 @@ func buildDiagnoseExpectedOutput() string {
 func parseSubAgentDiagnosis(output subagent.Output) (diagnoseOutput, error) {
 	summary := strings.TrimSpace(output.Summary)
 	if summary == "" {
-		return diagnoseOutput{}, errors.New("empty summary")
+		summary = strings.TrimSpace(output.Report)
+	}
+	if summary == "" {
+		return diagnoseOutput{}, errors.New("empty summary/report")
 	}
 
 	// 优先兼容“summary 内直接输出 diagnose JSON”的情况。
@@ -276,8 +315,8 @@ func parseConfidence(findings []string) float64 {
 // buildFallbackDiagnosis 构造静默降级结果，保证输出契约完整且无 panic。
 func buildFallbackDiagnosis(input diagnoseInput, reason string) diagnoseOutput {
 	rootCause := "当前诊断服务不可用，已降级为保守建议。"
-	if strings.TrimSpace(reason) != "" {
-		rootCause = rootCause + " (" + strings.TrimSpace(reason) + ")"
+	if normalizedReason := normalizeDiagnoseFallbackReason(reason); normalizedReason != "" {
+		rootCause = rootCause + " (" + normalizedReason + ")"
 	}
 	investigation := []string{
 		"pwd",
@@ -292,6 +331,22 @@ func buildFallbackDiagnosis(input diagnoseInput, reason string) diagnoseOutput {
 		FixCommands:           []string{},
 		InvestigationCommands: investigation,
 	})
+}
+
+// normalizeDiagnoseFallbackReason 规整降级原因文案，避免直接暴露难以理解的底层细节。
+func normalizeDiagnoseFallbackReason(reason string) string {
+	trimmed := strings.TrimSpace(reason)
+	if trimmed == "" {
+		return ""
+	}
+	lowered := strings.ToLower(trimmed)
+	if strings.Contains(lowered, "subagent output json object missing required contract keys") ||
+		strings.Contains(lowered, "subagent output missing required key") ||
+		strings.Contains(lowered, "subagent output does not contain json object") ||
+		strings.Contains(lowered, "subagent output contains incomplete json object") {
+		return "诊断模型返回格式不符合契约"
+	}
+	return trimmed
 }
 
 // normalizeDiagnosisOutput 统一收敛字段内容，确保 JSON 契约稳定可解析。

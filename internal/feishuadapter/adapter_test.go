@@ -8,7 +8,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -822,11 +821,17 @@ func TestRetryAuthenticateAndRebindStopsWhenContextCanceled(t *testing.T) {
 }
 
 func TestReadAndVerifyRequestRejectsNonPost(t *testing.T) {
-	adapter := newTestAdapter(t)
-	webhook := NewWebhookIngress(adapter.cfg, adapter.nowFn).(*WebhookIngress)
+	ingress := &WebhookIngress{
+		cfg: Config{
+			SigningSecret:   "sign-secret",
+			IngressMode:     IngressModeWebhook,
+			RequestTimeout:  200 * time.Millisecond,
+			IdempotencyTTL:  2 * time.Minute,
+		},
+	}
 	request := httptest.NewRequest(http.MethodGet, "/feishu/events", nil)
 	recorder := httptest.NewRecorder()
-	if body, ok := webhook.readAndVerifyRequest(recorder, request); ok || body != nil {
+	if body, ok := ingress.readAndVerifyRequest(recorder, request); ok || body != nil {
 		t.Fatalf("expected non-post request rejection, body=%q ok=%v", string(body), ok)
 	}
 	if recorder.Code != http.StatusMethodNotAllowed {
@@ -835,14 +840,20 @@ func TestReadAndVerifyRequestRejectsNonPost(t *testing.T) {
 }
 
 func TestReadAndVerifyRequestRejectsUnreadableBody(t *testing.T) {
-	adapter := newTestAdapter(t)
-	webhook := NewWebhookIngress(adapter.cfg, adapter.nowFn).(*WebhookIngress)
-	request := httptest.NewRequest(http.MethodPost, "/feishu/events", io.NopCloser(errReader{}))
+	ingress := &WebhookIngress{
+		cfg: Config{
+			SigningSecret:   "sign-secret",
+			IngressMode:     IngressModeWebhook,
+			RequestTimeout:  200 * time.Millisecond,
+			IdempotencyTTL:  2 * time.Minute,
+		},
+	}
+	request := httptest.NewRequest(http.MethodPost, "/feishu/events", errReader{})
 	request.Header.Set(headerLarkTimestamp, strconvTimestamp(time.Now().UTC()))
 	request.Header.Set(headerLarkNonce, "nonce")
 	request.Header.Set(headerLarkSignature, "sig")
 	recorder := httptest.NewRecorder()
-	if _, ok := webhook.readAndVerifyRequest(recorder, request); ok {
+	if _, ok := ingress.readAndVerifyRequest(recorder, request); ok {
 		t.Fatal("expected unreadable body to fail")
 	}
 	if recorder.Code != http.StatusBadRequest {

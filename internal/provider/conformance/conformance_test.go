@@ -12,8 +12,13 @@ import (
 
 	"neo-code/internal/provider"
 	"neo-code/internal/provider/anthropic"
+	"neo-code/internal/provider/deepseek"
 	"neo-code/internal/provider/gemini"
+	"neo-code/internal/provider/mimo"
+	"neo-code/internal/provider/minimax"
 	"neo-code/internal/provider/openaicompat"
+	"neo-code/internal/provider/openaicompat/glm"
+	"neo-code/internal/provider/openaicompat/qwen"
 	providertypes "neo-code/internal/provider/types"
 )
 
@@ -27,6 +32,7 @@ func TestGenerateContractAcrossDrivers(t *testing.T) {
 		streamBody     string
 		expectReason   string
 		expectTokens   int
+		expectedOrder  []providertypes.StreamEventType
 	}{
 		{
 			name:   "openaicompat_chat_completions",
@@ -50,6 +56,12 @@ func TestGenerateContractAcrossDrivers(t *testing.T) {
 				"data: [DONE]\n\n",
 			expectReason: "stop",
 			expectTokens: 7,
+			expectedOrder: []providertypes.StreamEventType{
+				providertypes.StreamEventTextDelta,
+				providertypes.StreamEventToolCallStart,
+				providertypes.StreamEventToolCallDelta,
+				providertypes.StreamEventMessageDone,
+			},
 		},
 		{
 			name:   "gemini_native",
@@ -71,6 +83,12 @@ func TestGenerateContractAcrossDrivers(t *testing.T) {
 				"data: {\"candidates\":[{\"index\":0,\"finishReason\":\"STOP\",\"content\":{\"parts\":[{\"functionCall\":{\"name\":\"filesystem_read_file\",\"args\":{\"path\":\"README.md\"}}}]}}]}\n\n",
 			expectReason: "stop",
 			expectTokens: 7,
+			expectedOrder: []providertypes.StreamEventType{
+				providertypes.StreamEventTextDelta,
+				providertypes.StreamEventToolCallStart,
+				providertypes.StreamEventToolCallDelta,
+				providertypes.StreamEventMessageDone,
+			},
 		},
 		{
 			name:   "anthropic_messages",
@@ -100,6 +118,128 @@ func TestGenerateContractAcrossDrivers(t *testing.T) {
 				"data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"output_tokens\":6}}\n\n",
 			expectReason: "tool_use",
 			expectTokens: 10,
+			expectedOrder: []providertypes.StreamEventType{
+				providertypes.StreamEventTextDelta,
+				providertypes.StreamEventToolCallStart,
+				providertypes.StreamEventToolCallDelta,
+				providertypes.StreamEventMessageDone,
+			},
+		},
+		{
+			name:   "deepseek_chat_completions_with_reasoning",
+			driver: deepseek.Driver(),
+			buildConfig: func(baseURL string) provider.RuntimeConfig {
+				return provider.RuntimeConfig{
+					Name:           deepseek.DriverName,
+					Driver:         provider.DriverDeepSeek,
+					BaseURL:        baseURL,
+					DefaultModel:   "deepseek-v4",
+					APIKeyEnv:      "DEEPSEEK_TEST_KEY",
+					APIKeyResolver: provider.StaticAPIKeyResolver("test-key"),
+				}
+			},
+			expectedPath:   "/v1/chat/completions",
+			expectedHeader: "Authorization",
+			streamBody: "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"plan\",\"content\":\"Hello \"}}],\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":2,\"total_tokens\":7}}\n" +
+				"data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"function\":{\"name\":\"filesystem_read_file\"}}]}}]}\n" +
+				"data: {\"choices\":[{\"finish_reason\":\"stop\",\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"function\":{\"arguments\":\"{\\\"path\\\":\\\"README.md\\\"}\"}}]}}]}\n" +
+				"data: [DONE]\n\n",
+			expectReason: "stop",
+			expectTokens: 7,
+			expectedOrder: []providertypes.StreamEventType{
+				providertypes.StreamEventThinkingDelta,
+				providertypes.StreamEventTextDelta,
+				providertypes.StreamEventToolCallStart,
+				providertypes.StreamEventToolCallDelta,
+				providertypes.StreamEventMessageDone,
+			},
+		},
+		{
+			name:   "mimo_chat_completions_with_reasoning",
+			driver: mimo.Driver(),
+			buildConfig: func(baseURL string) provider.RuntimeConfig {
+				return provider.RuntimeConfig{
+					Name:           mimo.DriverName,
+					Driver:         provider.DriverMiMo,
+					BaseURL:        baseURL,
+					DefaultModel:   "mimo-v2.5",
+					APIKeyEnv:      "MIMO_TEST_KEY",
+					APIKeyResolver: provider.StaticAPIKeyResolver("test-key"),
+				}
+			},
+			expectedPath:   "/chat/completions",
+			expectedHeader: "Authorization",
+			streamBody: "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"plan\",\"content\":\"Hello \"}}],\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":2,\"total_tokens\":7}}\n" +
+				"data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"function\":{\"name\":\"filesystem_read_file\"}}]}}]}\n" +
+				"data: {\"choices\":[{\"finish_reason\":\"stop\",\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"function\":{\"arguments\":\"{\\\"path\\\":\\\"README.md\\\"}\"}}]}}]}\n" +
+				"data: [DONE]\n\n",
+			expectReason: "stop",
+			expectTokens: 7,
+			expectedOrder: []providertypes.StreamEventType{
+				providertypes.StreamEventThinkingDelta,
+				providertypes.StreamEventTextDelta,
+				providertypes.StreamEventToolCallStart,
+				providertypes.StreamEventToolCallDelta,
+				providertypes.StreamEventMessageDone,
+			},
+		},
+		{
+			name:   "qwen_chat_completions_with_reasoning",
+			driver: qwen.Driver(),
+			buildConfig: func(baseURL string) provider.RuntimeConfig {
+				return provider.RuntimeConfig{
+					Name:           qwen.DriverName,
+					Driver:         provider.DriverQwen,
+					BaseURL:        baseURL,
+					DefaultModel:   "qwen3",
+					APIKeyEnv:      "QWEN_TEST_KEY",
+					APIKeyResolver: provider.StaticAPIKeyResolver("test-key"),
+				}
+			},
+			expectedPath:   "/chat/completions",
+			expectedHeader: "Authorization",
+			streamBody: "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"plan\",\"content\":\"Hello \"}}],\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":2,\"total_tokens\":7}}\n" +
+				"data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"function\":{\"name\":\"filesystem_read_file\"}}]}}]}\n" +
+				"data: {\"choices\":[{\"finish_reason\":\"stop\",\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"function\":{\"arguments\":\"{\\\"path\\\":\\\"README.md\\\"}\"}}]}}]}\n" +
+				"data: [DONE]\n\n",
+			expectReason: "stop",
+			expectTokens: 7,
+			expectedOrder: []providertypes.StreamEventType{
+				providertypes.StreamEventThinkingDelta,
+				providertypes.StreamEventTextDelta,
+				providertypes.StreamEventToolCallStart,
+				providertypes.StreamEventToolCallDelta,
+				providertypes.StreamEventMessageDone,
+			},
+		},
+		{
+			name:   "glm_chat_completions_with_reasoning",
+			driver: glm.Driver(),
+			buildConfig: func(baseURL string) provider.RuntimeConfig {
+				return provider.RuntimeConfig{
+					Name:           glm.DriverName,
+					Driver:         provider.DriverGLM,
+					BaseURL:        baseURL,
+					DefaultModel:   "glm-5.1",
+					APIKeyEnv:      "GLM_TEST_KEY",
+					APIKeyResolver: provider.StaticAPIKeyResolver("test-key"),
+				}
+			},
+			expectedPath:   "/chat/completions",
+			expectedHeader: "Authorization",
+			streamBody: "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"plan\",\"content\":\"Hello \"}}],\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":2,\"total_tokens\":7}}\n" +
+				"data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"function\":{\"name\":\"filesystem_read_file\"}}]}}]}\n" +
+				"data: {\"choices\":[{\"finish_reason\":\"stop\",\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"function\":{\"arguments\":\"{\\\"path\\\":\\\"README.md\\\"}\"}}]}}]}\n" +
+				"data: [DONE]\n\n",
+			expectReason: "stop",
+			expectTokens: 7,
+			expectedOrder: []providertypes.StreamEventType{
+				providertypes.StreamEventThinkingDelta,
+				providertypes.StreamEventTextDelta,
+				providertypes.StreamEventToolCallStart,
+				providertypes.StreamEventToolCallDelta,
+				providertypes.StreamEventMessageDone,
+			},
 		},
 	}
 
@@ -131,22 +271,16 @@ func TestGenerateContractAcrossDrivers(t *testing.T) {
 			}
 
 			drained := drainEvents(events)
-			if len(drained) != 4 {
-				t.Fatalf("expected 4 events, got %d (%+v)", len(drained), drained)
+			if len(drained) != len(tt.expectedOrder) {
+				t.Fatalf("expected %d events, got %d (%+v)", len(tt.expectedOrder), len(drained), drained)
 			}
-			expectedOrder := []providertypes.StreamEventType{
-				providertypes.StreamEventTextDelta,
-				providertypes.StreamEventToolCallStart,
-				providertypes.StreamEventToolCallDelta,
-				providertypes.StreamEventMessageDone,
-			}
-			for i := range expectedOrder {
-				if drained[i].Type != expectedOrder[i] {
-					t.Fatalf("unexpected event order at index %d, expected %q got %q", i, expectedOrder[i], drained[i].Type)
+			for i := range tt.expectedOrder {
+				if drained[i].Type != tt.expectedOrder[i] {
+					t.Fatalf("unexpected event order at index %d, expected %q got %q", i, tt.expectedOrder[i], drained[i].Type)
 				}
 			}
 
-			done, doneErr := drained[3].MessageDoneValue()
+			done, doneErr := drained[len(drained)-1].MessageDoneValue()
 			if doneErr != nil {
 				t.Fatalf("MessageDoneValue() error = %v", doneErr)
 			}
@@ -187,6 +321,23 @@ func TestDiscoverContractAcrossDrivers(t *testing.T) {
 			responseBody:   `{"data":[{"id":"gpt-4.1","name":"GPT 4.1"}]}`,
 		},
 		{
+			name:   "deepseek_discover",
+			driver: deepseek.Driver(),
+			buildConfig: func(baseURL string) provider.RuntimeConfig {
+				return provider.RuntimeConfig{
+					Name:                  deepseek.DriverName,
+					Driver:                provider.DriverDeepSeek,
+					BaseURL:               baseURL,
+					APIKeyEnv:             "DEEPSEEK_TEST_KEY",
+					APIKeyResolver:        provider.StaticAPIKeyResolver("test-key"),
+					DiscoveryEndpointPath: "/models",
+				}
+			},
+			expectedPath:   "/models",
+			expectedHeader: "Authorization",
+			responseBody:   `{"data":[{"id":"deepseek-v4","name":"DeepSeek V4"}]}`,
+		},
+		{
 			name:   "gemini_discover",
 			driver: gemini.Driver(),
 			buildConfig: func(baseURL string) provider.RuntimeConfig {
@@ -219,6 +370,74 @@ func TestDiscoverContractAcrossDrivers(t *testing.T) {
 			expectedPath:   "/v1/models",
 			expectedHeader: "x-api-key",
 			responseBody:   `{"data":[{"id":"claude-3-7-sonnet","display_name":"Claude 3.7 Sonnet"}],"has_more":false}`,
+		},
+		{
+			name:   "mimo_discover",
+			driver: mimo.Driver(),
+			buildConfig: func(baseURL string) provider.RuntimeConfig {
+				return provider.RuntimeConfig{
+					Name:                  mimo.DriverName,
+					Driver:                provider.DriverMiMo,
+					BaseURL:               baseURL,
+					APIKeyEnv:             "MIMO_TEST_KEY",
+					APIKeyResolver:        provider.StaticAPIKeyResolver("test-key"),
+					DiscoveryEndpointPath: "/models",
+				}
+			},
+			expectedPath:   "/models",
+			expectedHeader: "Authorization",
+			responseBody:   `{"data":[{"id":"mimo-v2.5","name":"MiMo V2.5"}]}`,
+		},
+		{
+			name:   "minimax_discover",
+			driver: minimax.Driver(),
+			buildConfig: func(baseURL string) provider.RuntimeConfig {
+				return provider.RuntimeConfig{
+					Name:                  minimax.DriverName,
+					Driver:                provider.DriverMiniMax,
+					BaseURL:               baseURL,
+					APIKeyEnv:             "MINIMAX_TEST_KEY",
+					APIKeyResolver:        provider.StaticAPIKeyResolver("test-key"),
+					DiscoveryEndpointPath: "/models",
+				}
+			},
+			expectedPath:   "/models",
+			expectedHeader: "Authorization",
+			responseBody:   `{"data":[{"id":"minimax-m2.7","name":"MiniMax M2.7"}]}`,
+		},
+		{
+			name:   "qwen_discover",
+			driver: qwen.Driver(),
+			buildConfig: func(baseURL string) provider.RuntimeConfig {
+				return provider.RuntimeConfig{
+					Name:                  qwen.DriverName,
+					Driver:                provider.DriverQwen,
+					BaseURL:               baseURL,
+					APIKeyEnv:             "QWEN_TEST_KEY",
+					APIKeyResolver:        provider.StaticAPIKeyResolver("test-key"),
+					DiscoveryEndpointPath: "/models",
+				}
+			},
+			expectedPath:   "/models",
+			expectedHeader: "Authorization",
+			responseBody:   `{"data":[{"id":"qwen3","name":"Qwen 3"}]}`,
+		},
+		{
+			name:   "glm_discover",
+			driver: glm.Driver(),
+			buildConfig: func(baseURL string) provider.RuntimeConfig {
+				return provider.RuntimeConfig{
+					Name:                  glm.DriverName,
+					Driver:                provider.DriverGLM,
+					BaseURL:               baseURL,
+					APIKeyEnv:             "GLM_TEST_KEY",
+					APIKeyResolver:        provider.StaticAPIKeyResolver("test-key"),
+					DiscoveryEndpointPath: "/models",
+				}
+			},
+			expectedPath:   "/models",
+			expectedHeader: "Authorization",
+			responseBody:   `{"data":[{"id":"glm-5.1","name":"GLM 5.1"}]}`,
 		},
 	}
 
@@ -273,6 +492,21 @@ func TestGenerateErrorClassificationAcrossDrivers(t *testing.T) {
 			body: `{"error":{"message":"invalid api key"}}`,
 		},
 		{
+			name:   "deepseek_auth_error",
+			driver: deepseek.Driver(),
+			buildConfig: func(baseURL string) provider.RuntimeConfig {
+				return provider.RuntimeConfig{
+					Driver:         provider.DriverDeepSeek,
+					BaseURL:        baseURL,
+					DefaultModel:   "deepseek-v4",
+					APIKeyEnv:      "DEEPSEEK_TEST_KEY",
+					APIKeyResolver: provider.StaticAPIKeyResolver("test-key"),
+				}
+			},
+			path: "/v1/chat/completions",
+			body: `{"error":{"message":"invalid api key"}}`,
+		},
+		{
 			name:   "gemini_auth_error",
 			driver: gemini.Driver(),
 			buildConfig: func(baseURL string) provider.RuntimeConfig {
@@ -303,6 +537,66 @@ func TestGenerateErrorClassificationAcrossDrivers(t *testing.T) {
 			},
 			path: "/v1/messages",
 			body: `{"error":{"message":"invalid x-api-key"}}`,
+		},
+		{
+			name:   "mimo_auth_error",
+			driver: mimo.Driver(),
+			buildConfig: func(baseURL string) provider.RuntimeConfig {
+				return provider.RuntimeConfig{
+					Driver:         provider.DriverMiMo,
+					BaseURL:        baseURL,
+					DefaultModel:   "mimo-v2.5",
+					APIKeyEnv:      "MIMO_TEST_KEY",
+					APIKeyResolver: provider.StaticAPIKeyResolver("test-key"),
+				}
+			},
+			path: "/chat/completions",
+			body: `{"error":{"message":"invalid api key"}}`,
+		},
+		{
+			name:   "minimax_auth_error",
+			driver: minimax.Driver(),
+			buildConfig: func(baseURL string) provider.RuntimeConfig {
+				return provider.RuntimeConfig{
+					Driver:         provider.DriverMiniMax,
+					BaseURL:        baseURL + "/chat/completions",
+					DefaultModel:   "minimax-m2.7",
+					APIKeyEnv:      "MINIMAX_TEST_KEY",
+					APIKeyResolver: provider.StaticAPIKeyResolver("test-key"),
+				}
+			},
+			path: "/chat/completions",
+			body: `{"error":{"message":"invalid api key"}}`,
+		},
+		{
+			name:   "qwen_auth_error",
+			driver: qwen.Driver(),
+			buildConfig: func(baseURL string) provider.RuntimeConfig {
+				return provider.RuntimeConfig{
+					Driver:         provider.DriverQwen,
+					BaseURL:        baseURL,
+					DefaultModel:   "qwen3",
+					APIKeyEnv:      "QWEN_TEST_KEY",
+					APIKeyResolver: provider.StaticAPIKeyResolver("test-key"),
+				}
+			},
+			path: "/chat/completions",
+			body: `{"error":{"message":"invalid api key"}}`,
+		},
+		{
+			name:   "glm_auth_error",
+			driver: glm.Driver(),
+			buildConfig: func(baseURL string) provider.RuntimeConfig {
+				return provider.RuntimeConfig{
+					Driver:         provider.DriverGLM,
+					BaseURL:        baseURL,
+					DefaultModel:   "glm-5.1",
+					APIKeyEnv:      "GLM_TEST_KEY",
+					APIKeyResolver: provider.StaticAPIKeyResolver("test-key"),
+				}
+			},
+			path: "/chat/completions",
+			body: `{"error":{"message":"invalid api key"}}`,
 		},
 	}
 
@@ -341,6 +635,106 @@ func TestGenerateErrorClassificationAcrossDrivers(t *testing.T) {
 			}
 			if pErr.Code != provider.ErrorCodeAuthFailed {
 				t.Fatalf("expected auth_failed code, got %+v", pErr)
+			}
+		})
+	}
+}
+
+func TestEstimateInputTokensContractAcrossDrivers(t *testing.T) {
+	testCases := []struct {
+		name        string
+		driver      provider.DriverDefinition
+		buildConfig func() provider.RuntimeConfig
+	}{
+		{
+			name:   "deepseek_estimate",
+			driver: deepseek.Driver(),
+			buildConfig: func() provider.RuntimeConfig {
+				return provider.RuntimeConfig{
+					Name:           deepseek.DriverName,
+					Driver:         provider.DriverDeepSeek,
+					BaseURL:        "https://api.deepseek.example",
+					DefaultModel:   "deepseek-v4",
+					APIKeyEnv:      "DEEPSEEK_TEST_KEY",
+					APIKeyResolver: provider.StaticAPIKeyResolver("test-key"),
+				}
+			},
+		},
+		{
+			name:   "mimo_estimate",
+			driver: mimo.Driver(),
+			buildConfig: func() provider.RuntimeConfig {
+				return provider.RuntimeConfig{
+					Name:           mimo.DriverName,
+					Driver:         provider.DriverMiMo,
+					BaseURL:        "https://api.mimo.example",
+					DefaultModel:   "mimo-v2.5",
+					APIKeyEnv:      "MIMO_TEST_KEY",
+					APIKeyResolver: provider.StaticAPIKeyResolver("test-key"),
+				}
+			},
+		},
+		{
+			name:   "minimax_estimate",
+			driver: minimax.Driver(),
+			buildConfig: func() provider.RuntimeConfig {
+				return provider.RuntimeConfig{
+					Name:           minimax.DriverName,
+					Driver:         provider.DriverMiniMax,
+					BaseURL:        "https://api.minimax.example/chat/completions",
+					DefaultModel:   "minimax-m2.7",
+					APIKeyEnv:      "MINIMAX_TEST_KEY",
+					APIKeyResolver: provider.StaticAPIKeyResolver("test-key"),
+				}
+			},
+		},
+		{
+			name:   "qwen_estimate",
+			driver: qwen.Driver(),
+			buildConfig: func() provider.RuntimeConfig {
+				return provider.RuntimeConfig{
+					Name:           qwen.DriverName,
+					Driver:         provider.DriverQwen,
+					BaseURL:        "https://api.qwen.example",
+					DefaultModel:   "qwen3",
+					APIKeyEnv:      "QWEN_TEST_KEY",
+					APIKeyResolver: provider.StaticAPIKeyResolver("test-key"),
+				}
+			},
+		},
+		{
+			name:   "glm_estimate",
+			driver: glm.Driver(),
+			buildConfig: func() provider.RuntimeConfig {
+				return provider.RuntimeConfig{
+					Name:           glm.DriverName,
+					Driver:         provider.DriverGLM,
+					BaseURL:        "https://api.glm.example",
+					DefaultModel:   "glm-5.1",
+					APIKeyEnv:      "GLM_TEST_KEY",
+					APIKeyResolver: provider.StaticAPIKeyResolver("test-key"),
+				}
+			},
+		},
+	}
+
+	for _, tt := range testCases {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			p, err := tt.driver.Build(context.Background(), tt.buildConfig())
+			if err != nil {
+				t.Fatalf("Build() error = %v", err)
+			}
+
+			estimate, err := p.EstimateInputTokens(context.Background(), generateRequestWithAssets())
+			if err != nil {
+				t.Fatalf("EstimateInputTokens() error = %v", err)
+			}
+			if estimate.EstimatedInputTokens <= 0 {
+				t.Fatalf("expected positive token estimate, got %+v", estimate)
+			}
+			if estimate.EstimateSource != provider.EstimateSourceLocal {
+				t.Fatalf("expected local estimate source, got %+v", estimate)
 			}
 		})
 	}

@@ -134,7 +134,7 @@ export default function Sidebar({ collapsed }: SidebarProps) {
   async function handleDeleteWorkspace(hash: string) {
     const target = workspaces.find((w) => w.hash === hash)
     const label = target?.name || target?.path || hash
-    if (!window.confirm(`确定要删除工作区「${label}」吗？该工作区下的会话将无法访问。`)) return
+    if (!window.confirm(`Delete workspace "${label}"? Sessions in this workspace will become inaccessible.`)) return
     if (!gatewayAPI) return
     await deleteWorkspace(hash, gatewayAPI)
   }
@@ -529,13 +529,13 @@ function CreateWorkspaceDialog({
       const picked = await onPickDirectory()
       if (picked) setPath(picked)
     } catch (err) {
-      setError(err instanceof Error ? err.message : '选择目录失败')
+      setError(err instanceof Error ? err.message : 'Failed to pick directory')
     }
   }
 
   async function handleSubmit() {
     if (!path.trim()) {
-      setError('请填写工作区路径')
+      setError('Workspace path is required')
       return
     }
     setLoading(true)
@@ -543,7 +543,7 @@ function CreateWorkspaceDialog({
     try {
       await onSubmit(path.trim(), name.trim() || undefined)
     } catch (err) {
-      setError(err instanceof Error ? err.message : '创建工作区失败')
+      setError(err instanceof Error ? err.message : 'Failed to create workspace')
       setLoading(false)
     }
   }
@@ -626,7 +626,7 @@ function McpModal({ onClose }: { onClose: () => void }) {
       const result = await gatewayAPI.listMCPServers()
       setServers(result?.payload?.servers ?? [])
     } catch (err) {
-      const msg = err instanceof Error ? err.message : '加载 MCP 配置失败'
+      const msg = err instanceof Error ? err.message : 'Failed to load MCP configuration'
       setError(msg)
       console.error('listMCPServers failed:', err)
     } finally {
@@ -647,7 +647,7 @@ function McpModal({ onClose }: { onClose: () => void }) {
       await load()
     } catch (err) {
       console.error('setMCPServerEnabled failed:', err)
-      setError(err instanceof Error ? err.message : '操作失败')
+      setError(err instanceof Error ? err.message : 'Operation failed')
     }
   }
 
@@ -663,24 +663,24 @@ function McpModal({ onClose }: { onClose: () => void }) {
 
   async function handleDelete(serverId: string) {
     if (!gatewayAPI) return
-    if (!window.confirm(`确定要删除 MCP Server "${serverId}" 吗？`)) return
+    if (!window.confirm(`Delete MCP Server "${serverId}"?`)) return
     try {
       await gatewayAPI.deleteMCPServer(serverId)
       await load()
     } catch (err) {
       console.error('deleteMCPServer failed:', err)
-      setError(err instanceof Error ? err.message : '删除失败')
+      setError(err instanceof Error ? err.message : 'Delete failed')
     }
   }
 
   async function handleSave() {
     if (!editing || !gatewayAPI) return
     if (!editing.id.trim()) {
-      setError('Server ID 不能为空')
+      setError('Server ID is required')
       return
     }
     if (editing.enabled && !editing.stdio?.command?.trim()) {
-      setError('启用的 MCP Server 必须填写 Command')
+      setError('An enabled MCP Server must specify a Command')
       return
     }
     try {
@@ -689,7 +689,7 @@ function McpModal({ onClose }: { onClose: () => void }) {
       await load()
     } catch (err) {
       console.error('upsertMCPServer failed:', err)
-      setError(err instanceof Error ? err.message : '保存失败')
+      setError(err instanceof Error ? err.message : 'Save failed')
     }
   }
 
@@ -859,7 +859,7 @@ function SkillModal({ onClose }: { onClose: () => void }) {
       })
       .catch((err) => {
         if (!cancelled) {
-          const msg = err instanceof Error ? err.message : '加载 Skill 列表失败'
+          const msg = err instanceof Error ? err.message : 'Failed to load skills'
           setError(msg)
           console.error('listSkills failed:', err)
         }
@@ -874,15 +874,15 @@ function SkillModal({ onClose }: { onClose: () => void }) {
 
   async function handleToggleSkill(skillId: string, enabled: boolean) {
     if (isGenerating) {
-      setError('生成中无法切换技能，请等待当前对话完成')
+      setError('Cannot toggle skill while generating; wait for the current run to finish.')
       return
     }
     if (!currentSessionId) {
-      setError('请先选择一个会话再操作 Skill')
+      setError('Select a session before managing skills')
       return
     }
     if (!gatewayAPI) {
-      setError('Gateway 未连接')
+      setError('Gateway not connected')
       return
     }
     try {
@@ -900,7 +900,7 @@ function SkillModal({ onClose }: { onClose: () => void }) {
       setSessionSkills((sessResult.payload.skills as SessionSkillState[]) || [])
     } catch (err) {
       console.error('toggleSkill failed:', err)
-      setError(err instanceof Error ? err.message : '操作失败')
+      setError(err instanceof Error ? err.message : 'Operation failed')
     }
   }
 
@@ -991,7 +991,7 @@ function ProviderModal({ onClose }: { onClose: () => void }) {
       const result = await gatewayAPI.listProviders()
       setProviders(result?.payload?.providers ?? [])
     } catch (err) {
-      const msg = err instanceof Error ? err.message : '加载供应商列表失败'
+      const msg = err instanceof Error ? err.message : 'Failed to load providers'
       setError(msg)
       console.error('listProviders failed:', err)
     } finally {
@@ -1006,7 +1006,7 @@ function ProviderModal({ onClose }: { onClose: () => void }) {
   async function handleSelect(providerId: string) {
     if (!gatewayAPI) return
     if (isGenerating) {
-      useUIStore.getState().showToast('生成中无法切换供应商，请先停止当前对话', 'info')
+      useUIStore.getState().showToast('Cannot switch provider while generating; stop the current run first.', 'info')
       return
     }
     try {
@@ -1015,21 +1015,21 @@ function ProviderModal({ onClose }: { onClose: () => void }) {
       await load()
     } catch (err) {
       console.error('selectProviderModel failed:', err)
-      setError(err instanceof Error ? err.message : '切换供应商失败')
+      setError(err instanceof Error ? err.message : 'Failed to switch provider')
     }
   }
 
   async function handleDelete(providerId: string, source: string) {
     if (!gatewayAPI) return
     if (source !== 'custom') return
-    if (!window.confirm(`确定要删除供应商 "${providerId}" 吗？`)) return
+    if (!window.confirm(`Delete provider "${providerId}"?`)) return
     try {
       await gatewayAPI.deleteCustomProvider(providerId)
       useGatewayStore.getState().notifyProviderChanged()
       await load()
     } catch (err) {
       console.error('deleteCustomProvider failed:', err)
-      setError(err instanceof Error ? err.message : '删除失败')
+      setError(err instanceof Error ? err.message : 'Delete failed')
     }
   }
 
@@ -1078,32 +1078,32 @@ function ProviderModal({ onClose }: { onClose: () => void }) {
     const apiKey = (formData.api_key || '').trim()
     const apiKeyEnv = formData.api_key_env.trim()
 
-    if (!name) return '名称不能为空'
-    if (!driver) return 'Driver 不能为空'
-    if (!modelSource) return '模型来源不能为空'
-    if (!apiKey) return 'API Key 不能为空'
-    if (!apiKeyEnv) return 'API Key 环境变量不能为空'
+    if (!name) return 'Name is required'
+    if (!driver) return 'Driver is required'
+    if (!modelSource) return 'Model source is required'
+    if (!apiKey) return 'API Key is required'
+    if (!apiKeyEnv) return 'API Key environment variable is required'
     if (!/^[A-Z][A-Z0-9_]*$/.test(apiKeyEnv)) {
-      return 'API Key 环境变量名不合法（需大写字母、数字、下划线，且以大写字母开头）'
+      return 'Invalid API Key environment variable name (must use uppercase letters, digits, underscores, and start with an uppercase letter)'
     }
 
     if (modelSource === 'manual') {
       const json = (formData.modelsJSON || '').trim()
-      if (!json) return '手动模式下模型 JSON 不能为空'
+      if (!json) return 'Model JSON is required in manual mode'
       try {
         const parsed = JSON.parse(json)
-        if (!Array.isArray(parsed)) return '模型 JSON 必须是数组'
+        if (!Array.isArray(parsed)) return 'Model JSON must be an array'
         for (const m of parsed) {
-          if (!m.id || !m.name) return '每个模型必须包含 id 和 name 字段'
+          if (!m.id || !m.name) return 'Each model must include id and name fields'
         }
       } catch {
-        return '模型 JSON 格式错误'
+        return 'Invalid Model JSON format'
       }
     }
 
     if (modelSource === 'discover' && driver === 'openaicompat') {
       const discoveryPath = (formData.discovery_endpoint_path || '').trim()
-      if (!discoveryPath) return '自动发现模式下发现端点路径不能为空'
+      if (!discoveryPath) return 'Discovery endpoint path is required in discover mode'
     }
 
     return ''
@@ -1135,7 +1135,7 @@ function ProviderModal({ onClose }: { onClose: () => void }) {
       try {
         payload.models = JSON.parse(formData.modelsJSON) as ProviderModelDescriptor[]
       } catch {
-        setFormError('模型 JSON 解析失败')
+        setFormError('Failed to parse Model JSON')
         return
       }
     }
@@ -1149,7 +1149,7 @@ function ProviderModal({ onClose }: { onClose: () => void }) {
       useGatewayStore.getState().notifyProviderChanged()
     } catch (err) {
       console.error('createCustomProvider failed:', err)
-      setFormError(err instanceof Error ? err.message : '创建失败')
+      setFormError(err instanceof Error ? err.message : 'Create failed')
     } finally {
       setSaving(false)
     }

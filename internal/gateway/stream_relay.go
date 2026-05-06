@@ -950,6 +950,13 @@ func extractSessionIDFromPayload(payload any) string {
 			return ""
 		}
 		return strings.TrimSpace(typed.SessionID)
+	case protocol.CreateSessionParams:
+		return strings.TrimSpace(typed.SessionID)
+	case *protocol.CreateSessionParams:
+		if typed == nil {
+			return ""
+		}
+		return strings.TrimSpace(typed.SessionID)
 	case protocol.ActivateSessionSkillParams:
 		return strings.TrimSpace(typed.SessionID)
 	case *protocol.ActivateSessionSkillParams:

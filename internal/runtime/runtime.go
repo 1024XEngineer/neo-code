@@ -74,12 +74,19 @@ type UserImageInput struct {
 
 // PrepareInput 表示进入 runtime 归一化前的领域输入（仅包含文本/图片/会话上下文）。
 type PrepareInput struct {
-	SessionID string
-	RunID     string
-	Workdir   string
-	Mode      string
-	Text      string
-	Images    []UserImageInput
+	SessionID        string
+	RunID            string
+	Workdir          string
+	Mode             string
+	Text             string
+	Images           []UserImageInput
+	ThinkingOverride *ThinkingOverride `json:"thinking_override,omitempty"`
+}
+
+// ThinkingOverride 表示用户对 thinking 能力的运行时偏好。
+type ThinkingOverride struct {
+	Enabled *bool  `json:"enabled,omitempty"`
+	Effort  string `json:"effort,omitempty"`
 }
 
 // SystemToolInput 描述一次由系统入口触发的确定性工具执行请求。
@@ -121,9 +128,16 @@ type MemoExtractor interface {
 	Schedule(sessionID string, messages []providertypes.Message)
 }
 
+// BudgetResolution 描述 budget 解析的结构化结果。
+type BudgetResolution struct {
+	PromptBudget  int
+	Source        string
+	ContextWindow int
+}
+
 // BudgetResolver 定义 prompt budget 解析能力，避免 runtime 直接处理模型目录细节。
 type BudgetResolver interface {
-	ResolvePromptBudget(ctx context.Context, cfg config.Config) (int, string, error)
+	ResolvePromptBudget(ctx context.Context, cfg config.Config) (BudgetResolution, error)
 }
 
 // repositoryFactService 约束 runtime 条件化获取仓库事实所需的最小能力。
@@ -168,6 +182,8 @@ type Service struct {
 	activeRunStates    map[uint64]*runState
 	permissionAskMapMu sync.Mutex
 	permissionAskLocks map[string]*permissionAskLockEntry
+
+	thinkingEnabled bool
 }
 
 // sessionLockEntry 维护单个会话读写锁及其当前引用计数，用于在无引用时回收 map 项。
@@ -223,6 +239,7 @@ func NewWithFactory(
 		activeRunByID:      make(map[string]uint64),
 		activeRunTokenIDs:  make(map[uint64]string),
 		activeRunStates:    make(map[uint64]*runState),
+		thinkingEnabled:    true,
 	}
 	baseHookExecutor := runtimehooks.NewExecutor(runtimehooks.NewRegistry(), newHookRuntimeEventEmitter(service), runtimehooks.DefaultHookTimeout)
 	baseHookExecutor.SetAsyncResultSink(newHookAsyncResultSink(service))
@@ -248,6 +265,20 @@ func (s *Service) SetUserInputPreparer(preparer UserInputPreparer) {
 // SetSkillsRegistry 设置运行时可选的 skills registry，用于激活校验与上下文注入。
 func (s *Service) SetSkillsRegistry(registry skills.Registry) {
 	s.skillsRegistry = registry
+}
+
+// SetThinkingEnabled 设置进程级 thinking 全局开关。
+func (s *Service) SetThinkingEnabled(enabled bool) {
+	s.runMu.Lock()
+	s.thinkingEnabled = enabled
+	s.runMu.Unlock()
+}
+
+// IsThinkingEnabled 返回当前 thinking 全局开关状态。
+func (s *Service) IsThinkingEnabled() bool {
+	s.runMu.Lock()
+	defer s.runMu.Unlock()
+	return s.thinkingEnabled
 }
 
 // CancelActiveRun 尝试取消最近一次仍在执行的 Run。

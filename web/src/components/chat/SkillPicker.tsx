@@ -26,7 +26,7 @@ export default function SkillPicker({ gatewayAPI, sessionId, onClose }: SkillPic
       setSkills(result.payload?.skills || [])
     } catch (err) {
       console.error('Failed to list skills:', err)
-      useUIStore.getState().showToast('获取技能列表失败', 'error')
+      useUIStore.getState().showToast('Failed to load skills', 'error')
     } finally {
       setLoading(false)
     }
@@ -38,7 +38,7 @@ export default function SkillPicker({ gatewayAPI, sessionId, onClose }: SkillPic
 
   const handleToggle = async (skillId: string, currentlyActive: boolean) => {
     if (!gatewayAPI || !sessionId) {
-      useUIStore.getState().showToast('请先发送消息建立会话', 'error')
+      useUIStore.getState().showToast('Send a message first to start a session', 'error')
       return
     }
     setTogglingId(skillId)
@@ -52,7 +52,7 @@ export default function SkillPicker({ gatewayAPI, sessionId, onClose }: SkillPic
       await fetchSkills()
     } catch (err) {
       console.error('Failed to toggle skill:', err)
-      useUIStore.getState().showToast('技能操作失败', 'error')
+      useUIStore.getState().showToast('Skill operation failed', 'error')
     } finally {
       setTogglingId(null)
     }

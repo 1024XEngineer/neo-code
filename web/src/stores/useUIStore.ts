@@ -15,6 +15,7 @@ export interface FileChange {
   additions: number
   deletions: number
   diff?: { type: 'add' | 'del' | 'header'; content: string }[]
+  checkpoint_id?: string
 }
 
 const TOAST_AUTO_DISMISS_MS = 5000
@@ -33,6 +34,8 @@ interface UIState {
   fileTreePanelOpen: boolean
   /** 文件树面板宽度 */
   fileTreePanelWidth: number
+  /** 输入框上方 Todo 折叠条是否展开 */
+  todoStripExpanded: boolean
   /** 当前主题：light / dark */
   theme: 'light' | 'dark'
   /** 搜索查询 */
@@ -47,6 +50,7 @@ interface UIState {
   setSidebarOpen: (open: boolean) => void
   toggleChangesPanel: () => void
   toggleFileTreePanel: () => void
+  setTodoStripExpanded: (expanded: boolean) => void
   setTheme: (theme: 'light' | 'dark') => void
   setSearchQuery: (q: string) => void
   addFileChange: (change: FileChange) => void
@@ -66,6 +70,7 @@ export const useUIStore = create<UIState>((set) => ({
   changesPanelWidth: 320,
   fileTreePanelOpen: false,
   fileTreePanelWidth: 280,
+  todoStripExpanded: false,
   theme: 'dark',
   searchQuery: '',
   fileChanges: [],
@@ -75,6 +80,7 @@ export const useUIStore = create<UIState>((set) => ({
   setSidebarOpen: (sidebarOpen) => set({ sidebarOpen }),
   toggleChangesPanel: () => set((s) => ({ changesPanelOpen: !s.changesPanelOpen })),
   toggleFileTreePanel: () => set((s) => ({ fileTreePanelOpen: !s.fileTreePanelOpen })),
+  setTodoStripExpanded: (todoStripExpanded) => set({ todoStripExpanded }),
   setTheme: (theme) => {
     document.documentElement.setAttribute('data-theme', theme)
     set({ theme })

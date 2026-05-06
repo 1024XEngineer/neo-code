@@ -119,6 +119,11 @@ func TestFeishuConfigApplyDefaults(t *testing.T) {
 	}
 }
 
+func TestFeishuConfigApplyDefaultsAllowsNilReceiver(t *testing.T) {
+	var cfg *FeishuConfig
+	cfg.ApplyDefaults(defaultFeishuConfig())
+}
+
 func TestDefaultFeishuConfigProvidesRuntimeDefaults(t *testing.T) {
 	defaults := defaultFeishuConfig()
 	if defaults.Ingress != FeishuIngressWebhook {
@@ -147,5 +152,102 @@ func TestDefaultFeishuConfigProvidesRuntimeDefaults(t *testing.T) {
 	}
 	if defaults.RebindIntervalSec != DefaultFeishuRebindIntervalSec {
 		t.Fatalf("default rebind interval = %d, want %d", defaults.RebindIntervalSec, DefaultFeishuRebindIntervalSec)
+	}
+}
+
+func TestFeishuConfigClonePreservesValues(t *testing.T) {
+	original := FeishuConfig{
+		Enabled:       true,
+		AppID:         "app",
+		AppSecret:     "secret",
+		VerifyToken:   "verify",
+		SigningSecret: "sign",
+		Adapter: FeishuAdapterConfig{
+			Listen:   "127.0.0.1:18080",
+			EventURI: "/events",
+			CardURI:  "/cards",
+		},
+		RequestTimeoutSec:    8,
+		IdempotencyTTLSec:    600,
+		ReconnectBackoffMinM: 500,
+		ReconnectBackoffMaxM: 1000,
+		RebindIntervalSec:    15,
+	}
+	cloned := original.Clone()
+	if cloned != original {
+		t.Fatalf("clone = %#v, want %#v", cloned, original)
+	}
+}
+
+func TestFeishuConfigValidateRejectsInvalidNumericRanges(t *testing.T) {
+	base := FeishuConfig{
+		Enabled:       true,
+		AppID:         "app",
+		AppSecret:     "secret",
+		VerifyToken:   "verify",
+		SigningSecret: "sign",
+		Adapter: FeishuAdapterConfig{
+			Listen:   "127.0.0.1:18080",
+			EventURI: "/events",
+			CardURI:  "/cards",
+		},
+		RequestTimeoutSec:    8,
+		IdempotencyTTLSec:    600,
+		ReconnectBackoffMinM: 500,
+		ReconnectBackoffMaxM: 1000,
+		RebindIntervalSec:    15,
+	}
+	testCases := []struct {
+		name   string
+		mutate func(*FeishuConfig)
+	}{
+		{name: "request timeout", mutate: func(cfg *FeishuConfig) { cfg.RequestTimeoutSec = 0 }},
+		{name: "idempotency ttl", mutate: func(cfg *FeishuConfig) { cfg.IdempotencyTTLSec = 0 }},
+		{name: "reconnect min", mutate: func(cfg *FeishuConfig) { cfg.ReconnectBackoffMinM = 0 }},
+		{name: "reconnect order", mutate: func(cfg *FeishuConfig) { cfg.ReconnectBackoffMinM = 2000 }},
+		{name: "rebind interval", mutate: func(cfg *FeishuConfig) { cfg.RebindIntervalSec = 0 }},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			cfg := base.Clone()
+			testCase.mutate(&cfg)
+			if err := cfg.Validate(); err == nil {
+				t.Fatal("expected validation error")
+			}
+		})
+	}
+}
+
+func TestFeishuConfigValidateRejectsMissingRequiredFieldsIndividually(t *testing.T) {
+	base := FeishuConfig{
+		Enabled:       true,
+		AppID:         "app",
+		AppSecret:     "secret",
+		VerifyToken:   "verify",
+		SigningSecret: "sign",
+		Adapter: FeishuAdapterConfig{
+			Listen:   "127.0.0.1:18080",
+			EventURI: "/events",
+			CardURI:  "/cards",
+		},
+		RequestTimeoutSec:    8,
+		IdempotencyTTLSec:    600,
+		ReconnectBackoffMinM: 500,
+		ReconnectBackoffMaxM: 1000,
+		RebindIntervalSec:    15,
+	}
+	testCases := []func(*FeishuConfig){
+		func(cfg *FeishuConfig) { cfg.AppSecret = "" },
+		func(cfg *FeishuConfig) { cfg.SigningSecret = "" },
+		func(cfg *FeishuConfig) { cfg.Adapter.Listen = "" },
+		func(cfg *FeishuConfig) { cfg.Adapter.EventURI = "" },
+		func(cfg *FeishuConfig) { cfg.Adapter.CardURI = "" },
+	}
+	for index, mutate := range testCases {
+		cfg := base.Clone()
+		mutate(&cfg)
+		if err := cfg.Validate(); err == nil {
+			t.Fatalf("case %d: expected validation error", index)
+		}
 	}
 }

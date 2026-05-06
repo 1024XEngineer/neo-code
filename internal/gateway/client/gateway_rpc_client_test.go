@@ -319,6 +319,100 @@ func TestGatewayRPCClientHeartbeatDoesNotRedialAfterConnectionDrops(t *testing.T
 	)
 }
 
+func TestGatewayRPCClientHeartbeatDoesNotInterruptInFlightCall(t *testing.T) {
+	tokenFile, _ := createTestAuthTokenFile(t)
+
+	var pingCount int32
+	requestStarted := make(chan struct{})
+	releaseSlowRequest := make(chan struct{})
+	client, err := NewGatewayRPCClient(GatewayRPCClientOptions{
+		ListenAddress:     "test://gateway",
+		TokenFile:         tokenFile,
+		RequestTimeout:    600 * time.Millisecond,
+		HeartbeatInterval: 20 * time.Millisecond,
+		HeartbeatTimeout:  40 * time.Millisecond,
+		Dial: func(_ string) (net.Conn, error) {
+			clientConn, serverConn := net.Pipe()
+			go func() {
+				defer serverConn.Close()
+				decoder := json.NewDecoder(serverConn)
+				encoder := json.NewEncoder(serverConn)
+				for {
+					var request protocol.JSONRPCRequest
+					if err := decoder.Decode(&request); err != nil {
+						if errors.Is(err, io.EOF) {
+							return
+						}
+						return
+					}
+					switch request.Method {
+					case "test.slow":
+						select {
+						case <-requestStarted:
+						default:
+							close(requestStarted)
+						}
+						<-releaseSlowRequest
+						writeRPCResultOrFail(encoder, request.ID, gateway.MessageFrame{
+							Type:   gateway.FrameTypeAck,
+							Action: gateway.FrameActionRun,
+						})
+					case protocol.MethodGatewayPing:
+						atomic.AddInt32(&pingCount, 1)
+						writeRPCResultOrFail(encoder, request.ID, gateway.MessageFrame{
+							Type:   gateway.FrameTypeAck,
+							Action: gateway.FrameActionPing,
+						})
+					default:
+						panicf("unexpected method = %q", request.Method)
+					}
+				}
+			}()
+			return clientConn, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewGatewayRPCClient() error = %v", err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	var frame gateway.MessageFrame
+	callDone := make(chan error, 1)
+	go func() {
+		callDone <- client.CallWithOptions(
+			ctx,
+			"test.slow",
+			map[string]any{},
+			&frame,
+			GatewayRPCCallOptions{Timeout: 500 * time.Millisecond, Retries: 0},
+		)
+	}()
+
+	select {
+	case <-requestStarted:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("timed out waiting for slow request to start")
+	}
+
+	assertConditionStaysTrue(
+		t,
+		120*time.Millisecond,
+		func() bool { return atomic.LoadInt32(&pingCount) == 0 },
+		"heartbeat ping should be skipped while in-flight request is pending",
+	)
+
+	close(releaseSlowRequest)
+	if err := <-callDone; err != nil {
+		t.Fatalf("CallWithOptions(test.slow) error = %v", err)
+	}
+	if frame.Type != gateway.FrameTypeAck {
+		t.Fatalf("frame type = %q, want %q", frame.Type, gateway.FrameTypeAck)
+	}
+}
+
 func TestGatewayRPCClientCallWithEmptyMethodReturnsError(t *testing.T) {
 	tokenFile, _ := createTestAuthTokenFile(t)
 	client, err := NewGatewayRPCClient(GatewayRPCClientOptions{
@@ -391,6 +485,90 @@ func TestGatewayRPCClientReadLoopSustainsBackpressureWhenNotificationsAreConsume
 	)
 	if callErr != nil {
 		t.Fatalf("CallWithOptions() should succeed when notifications are back-pressured, got %v", callErr)
+	}
+}
+
+func TestGatewayRPCClientCallReauthOnUnauthorized(t *testing.T) {
+	tokenFile, _ := createTestAuthTokenFile(t)
+
+	var pingAttempt int32
+	var authAttempt int32
+	client, err := NewGatewayRPCClient(GatewayRPCClientOptions{
+		ListenAddress: "test://gateway",
+		TokenFile:     tokenFile,
+		Dial: func(_ string) (net.Conn, error) {
+			clientConn, serverConn := net.Pipe()
+			go func() {
+				defer serverConn.Close()
+				decoder := json.NewDecoder(serverConn)
+				encoder := json.NewEncoder(serverConn)
+				for {
+					var request protocol.JSONRPCRequest
+					if err := decoder.Decode(&request); err != nil {
+						if errors.Is(err, io.EOF) {
+							return
+						}
+						panicf("decode rpc request: %v", err)
+					}
+					switch request.Method {
+					case protocol.MethodGatewayPing:
+						current := atomic.AddInt32(&pingAttempt, 1)
+						if current == 1 {
+							rpcErr := protocol.NewJSONRPCError(
+								protocol.JSONRPCCodeInvalidParams,
+								"unauthorized",
+								protocol.GatewayCodeUnauthorized,
+							)
+							if err := encoder.Encode(protocol.NewJSONRPCErrorResponse(request.ID, rpcErr)); err != nil {
+								panicf("encode unauthorized response: %v", err)
+							}
+							continue
+						}
+						writeRPCResultOrFail(encoder, request.ID, gateway.MessageFrame{
+							Type:   gateway.FrameTypeAck,
+							Action: gateway.FrameActionPing,
+						})
+					case protocol.MethodGatewayAuthenticate:
+						atomic.AddInt32(&authAttempt, 1)
+						writeRPCResultOrFail(encoder, request.ID, gateway.MessageFrame{
+							Type:   gateway.FrameTypeAck,
+							Action: gateway.FrameActionAuthenticate,
+						})
+					default:
+						panicf("unexpected method = %q", request.Method)
+					}
+				}
+			}()
+			return clientConn, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewGatewayRPCClient() error = %v", err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+
+	var frame gateway.MessageFrame
+	err = client.CallWithOptions(
+		context.Background(),
+		protocol.MethodGatewayPing,
+		map[string]any{},
+		&frame,
+		GatewayRPCCallOptions{
+			Timeout: 2 * time.Second,
+			Retries: 0,
+		},
+	)
+	if err != nil {
+		t.Fatalf("CallWithOptions() error = %v", err)
+	}
+	if frame.Action != gateway.FrameActionPing {
+		t.Fatalf("frame action = %v, want %v", frame.Action, gateway.FrameActionPing)
+	}
+	if atomic.LoadInt32(&authAttempt) == 0 {
+		t.Fatal("expected re-authenticate attempt after unauthorized")
+	}
+	if atomic.LoadInt32(&pingAttempt) < 2 {
+		t.Fatalf("ping attempt = %d, want >= 2", atomic.LoadInt32(&pingAttempt))
 	}
 }
 

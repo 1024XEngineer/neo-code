@@ -3,7 +3,6 @@ package tui
 import (
 	"bytes"
 	"io"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -24,7 +23,6 @@ func TestCommandMenuItem(t *testing.T) {
 		useReplaceRange: false,
 		replaceStart:    0,
 		replaceEnd:      0,
-		openFileBrowser: false,
 	}
 
 	if item.Title() != "Test Command" {
@@ -119,9 +117,6 @@ func TestFileMenuSuggestionsEmptyQueryReturnsFileReferences(t *testing.T) {
 	if len(items) == 0 {
 		t.Fatalf("expected file suggestions")
 	}
-	if items[0].openFileBrowser {
-		t.Fatalf("expected browse file entry to be removed")
-	}
 	if !strings.HasPrefix(items[0].replacement, "@") {
 		t.Fatalf("expected replacement to start with @, got %q", items[0].replacement)
 	}
@@ -158,6 +153,24 @@ func TestApplySelectedCommandSuggestionReplacesInput(t *testing.T) {
 	}
 }
 
+func TestApplySelectedCommandSuggestionReplacesFullSlashInput(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.input.SetValue("/provider a")
+	app.state.InputText = "/provider a"
+	app.transcript.Width = 80
+	app.refreshCommandMenu()
+
+	if !app.commandMenuHasSuggestions() {
+		t.Fatalf("expected suggestions")
+	}
+	if !app.applySelectedCommandSuggestion() {
+		t.Fatalf("expected suggestion to apply")
+	}
+	if got := strings.TrimSpace(app.input.Value()); got != slashUsageProviderAdd {
+		t.Fatalf("expected input to become %q, got %q", slashUsageProviderAdd, got)
+	}
+}
+
 func TestApplySelectedCommandSuggestionAppliesFileReference(t *testing.T) {
 	app, _ := newTestApp(t)
 	app.fileCandidates = []string{"README.md"}
@@ -191,22 +204,6 @@ func TestUpdateCommandMenuSelectionHandlesNavigationKeys(t *testing.T) {
 	_, handled = app.updateCommandMenuSelection(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
 	if handled {
 		t.Fatalf("expected non-navigation key to be ignored")
-	}
-}
-
-func TestOpenFileBrowserUsesAbsoluteWorkdir(t *testing.T) {
-	app, _ := newTestApp(t)
-	root := t.TempDir()
-	app.state.CurrentWorkdir = root
-
-	app.openFileBrowser()
-
-	expected, _ := filepath.Abs(root)
-	if app.fileBrowser.CurrentDirectory != expected {
-		t.Fatalf("expected absolute directory, got %q", app.fileBrowser.CurrentDirectory)
-	}
-	if app.state.ActivePicker != pickerFile {
-		t.Fatalf("expected file picker to be active")
 	}
 }
 

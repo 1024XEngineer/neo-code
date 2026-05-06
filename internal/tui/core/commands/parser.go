@@ -24,7 +24,7 @@ func MatchSlashCommands(input string, slashPrefix string, commands []SlashComman
 		return nil
 	}
 
-	query := strings.ToLower(strings.TrimSpace(input))
+	query := strings.ToLower(strings.TrimLeft(input, " \t\r\n"))
 	if IsCompleteSlashCommand(query, commands) {
 		return nil
 	}
@@ -75,8 +75,12 @@ func MatchSlashCommands(input string, slashPrefix string, commands []SlashComman
 
 // IsCompleteSlashCommand 判断输入是否已完整匹配某个命令。
 func IsCompleteSlashCommand(input string, commands []SlashCommand) bool {
+	normalizedInput := strings.ToLower(strings.TrimLeft(input, " \t\r\n"))
+	if strings.TrimRight(normalizedInput, " \t\r\n") != normalizedInput {
+		return false
+	}
 	for _, command := range commands {
-		if strings.EqualFold(strings.TrimSpace(command.Usage), strings.TrimSpace(input)) {
+		if strings.EqualFold(strings.TrimSpace(command.Usage), normalizedInput) {
 			return true
 		}
 	}

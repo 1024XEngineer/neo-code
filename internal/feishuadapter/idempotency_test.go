@@ -31,3 +31,21 @@ func TestIdempotencyMarkFailedAllowsRetry(t *testing.T) {
 		t.Fatal("expected retry after MarkFailed to pass")
 	}
 }
+
+func TestIdempotencyDefaultsAndCleanupBranches(t *testing.T) {
+	store := newIdempotencyStore(0)
+	if store.ttl != 10*time.Minute {
+		t.Fatalf("ttl = %s, want default 10m", store.ttl)
+	}
+	if !store.TryStart("", time.Time{}) {
+		t.Fatal("expected empty key to bypass dedupe")
+	}
+	store.MarkDone("", time.Time{})
+	store.MarkFailed("")
+
+	now := time.Now().UTC()
+	store.items["expired"] = idempotencyItem{ExpireAt: now.Add(-time.Second), State: idempotencyStateDone}
+	if !store.TryStart("expired", now) {
+		t.Fatal("expected expired key to be cleaned and accepted")
+	}
+}

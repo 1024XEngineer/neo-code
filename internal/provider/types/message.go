@@ -1,6 +1,9 @@
 package types
 
-import "strings"
+import (
+	"encoding/json"
+	"strings"
+)
 
 // RoleSystem 标识系统消息。
 const RoleSystem = "system"
@@ -16,12 +19,13 @@ const RoleTool = "tool"
 
 // Message 表示对话中的单条消息。
 type Message struct {
-	Role         string            `json:"role"`
-	Parts        []ContentPart     `json:"parts,omitempty"`
-	ToolCalls    []ToolCall        `json:"tool_calls,omitempty"`
-	ToolCallID   string            `json:"tool_call_id,omitempty"`
-	IsError      bool              `json:"is_error,omitempty"`
-	ToolMetadata map[string]string `json:"tool_metadata,omitempty"`
+	Role             string            `json:"role"`
+	Parts            []ContentPart     `json:"parts,omitempty"`
+	ToolCalls        []ToolCall        `json:"tool_calls,omitempty"`
+	ToolCallID       string            `json:"tool_call_id,omitempty"`
+	IsError          bool              `json:"is_error,omitempty"`
+	ToolMetadata     map[string]string `json:"tool_metadata,omitempty"`
+	ThinkingMetadata json.RawMessage   `json:"thinking_metadata,omitempty"`
 }
 
 // IsEmpty checks if the message has no content parts and no tool calls.

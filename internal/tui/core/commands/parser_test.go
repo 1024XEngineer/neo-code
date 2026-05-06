@@ -6,12 +6,13 @@ func TestMatchSlashCommands(t *testing.T) {
 	commands := []SlashCommand{
 		{Usage: "/help", Description: "show help"},
 		{Usage: "/provider", Description: "pick provider"},
+		{Usage: "/provider add", Description: "add provider"},
 		{Usage: "/model", Description: "pick model"},
 	}
 
 	got := MatchSlashCommands("/pro", "/", commands)
-	if len(got) != 1 {
-		t.Fatalf("expected one suggestion for /pro, got %d", len(got))
+	if len(got) == 0 {
+		t.Fatalf("expected suggestions for /pro, got %d", len(got))
 	}
 	if got[0].Command.Usage != "/provider" || !got[0].Match {
 		t.Fatalf("unexpected suggestion: %+v", got[0])
@@ -28,6 +29,14 @@ func TestMatchSlashCommands(t *testing.T) {
 	if fuzzy[0].Command.Usage != "/model" {
 		t.Fatalf("expected /model for fuzzy query /mdl, got %+v", fuzzy[0])
 	}
+
+	multiWord := MatchSlashCommands("/provider ", "/", commands)
+	if len(multiWord) == 0 {
+		t.Fatalf("expected multi-word slash suggestions after trailing space")
+	}
+	if multiWord[0].Command.Usage != "/provider add" {
+		t.Fatalf("expected /provider add suggestion, got %+v", multiWord[0])
+	}
 }
 
 func TestIsCompleteSlashCommand(t *testing.T) {
@@ -37,6 +46,9 @@ func TestIsCompleteSlashCommand(t *testing.T) {
 	}
 	if IsCompleteSlashCommand("/hel", commands) {
 		t.Fatalf("expected /hel to be incomplete")
+	}
+	if IsCompleteSlashCommand("/provider ", commands) {
+		t.Fatalf("expected trailing-space input to remain incomplete")
 	}
 }
 

@@ -206,6 +206,7 @@ func TestTodoWriteErrorEmitsConflictInsteadOfUpdated(t *testing.T) {
 	events := collectRuntimeEvents(service.Events())
 	updatedCount := 0
 	conflictCount := 0
+	snapshotUpdatedCount := 0
 	for _, event := range events {
 		switch event.Type {
 		case EventTodoUpdated:
@@ -222,6 +223,8 @@ func TestTodoWriteErrorEmitsConflictInsteadOfUpdated(t *testing.T) {
 			if !strings.Contains(strings.ToLower(strings.TrimSpace(payload.Reason)), "revision_conflict") {
 				t.Fatalf("unexpected todo conflict reason: %+v", payload)
 			}
+		case EventTodoSnapshotUpdated:
+			snapshotUpdatedCount++
 		}
 	}
 	if updatedCount != 3 {
@@ -229,5 +232,9 @@ func TestTodoWriteErrorEmitsConflictInsteadOfUpdated(t *testing.T) {
 	}
 	if conflictCount != 1 {
 		t.Fatalf("todo_conflict count = %d, want 1", conflictCount)
+	}
+	// conflict 也会触发 snapshot_updated（当前快照回传）
+	if snapshotUpdatedCount != 4 {
+		t.Fatalf("todo_snapshot_updated count = %d, want 4 (add + set_status + conflict + complete)", snapshotUpdatedCount)
 	}
 }

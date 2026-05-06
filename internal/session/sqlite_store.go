@@ -43,12 +43,13 @@ type sqliteSessionRow struct {
 }
 
 type sqliteMessageRow struct {
-	Role             string
-	PartsJSON        string
-	ToolCallsJSON    string
-	ToolCallID       string
-	IsError          bool
-	ToolMetadataJSON string
+	Role                 string
+	PartsJSON            string
+	ToolCallsJSON        string
+	ToolCallID           string
+	IsError              bool
+	ToolMetadataJSON     string
+	ThinkingMetadataJSON string
 }
 
 const maxSessionDeleteBatchSize = 900
@@ -908,6 +909,9 @@ func initializeSQLiteSchema(ctx context.Context, db *sql.DB) error {
 		if err := migrateSQLiteSchemaV5ToV6(ctx, db); err != nil {
 			return err
 		}
+		if err := migrateSQLiteSchemaV6ToV7(ctx, db); err != nil {
+			return err
+		}
 	case 2:
 		if err := migrateSQLiteSchemaV2ToV3(ctx, db); err != nil {
 			return err
@@ -921,6 +925,9 @@ func initializeSQLiteSchema(ctx context.Context, db *sql.DB) error {
 		if err := migrateSQLiteSchemaV5ToV6(ctx, db); err != nil {
 			return err
 		}
+		if err := migrateSQLiteSchemaV6ToV7(ctx, db); err != nil {
+			return err
+		}
 	case 3:
 		if err := migrateSQLiteSchemaV3ToV4(ctx, db); err != nil {
 			return err
@@ -931,6 +938,9 @@ func initializeSQLiteSchema(ctx context.Context, db *sql.DB) error {
 		if err := migrateSQLiteSchemaV5ToV6(ctx, db); err != nil {
 			return err
 		}
+		if err := migrateSQLiteSchemaV6ToV7(ctx, db); err != nil {
+			return err
+		}
 	case 4:
 		if err := migrateSQLiteSchemaV4ToV5(ctx, db); err != nil {
 			return err
@@ -938,8 +948,14 @@ func initializeSQLiteSchema(ctx context.Context, db *sql.DB) error {
 		if err := migrateSQLiteSchemaV5ToV6(ctx, db); err != nil {
 			return err
 		}
+		if err := migrateSQLiteSchemaV6ToV7(ctx, db); err != nil {
+			return err
+		}
 	case 5:
 		if err := migrateSQLiteSchemaV5ToV6(ctx, db); err != nil {
+			return err
+		}
+		if err := migrateSQLiteSchemaV6ToV7(ctx, db); err != nil {
 			return err
 		}
 	default:
@@ -986,6 +1002,7 @@ func initializeSQLiteSchema(ctx context.Context, db *sql.DB) error {
 			tool_call_id TEXT NOT NULL DEFAULT '',
 			is_error INTEGER NOT NULL DEFAULT 0,
 			tool_metadata_json TEXT NOT NULL DEFAULT '',
+			thinking_metadata_json TEXT NOT NULL DEFAULT '',
 			created_at_ms INTEGER NOT NULL,
 			PRIMARY KEY(session_id, seq),
 			FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE
@@ -1263,6 +1280,24 @@ func migrateSQLiteSchemaV4ToV5(ctx context.Context, db *sql.DB) error {
 	return nil
 }
 
+// migrateSQLiteSchemaV6ToV7 将 v6 会话库升级到 v7 schema，新增 thinking_metadata_json 列。
+func migrateSQLiteSchemaV6ToV7(ctx context.Context, db *sql.DB) error {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("session: begin v6->v7 migration tx: %w", err)
+	}
+	defer rollbackTx(tx)
+
+	if _, err := tx.ExecContext(ctx, `ALTER TABLE messages ADD COLUMN thinking_metadata_json TEXT NOT NULL DEFAULT ''`); err != nil {
+		return fmt.Errorf("session: add thinking_metadata_json column: %w", err)
+	}
+
+	if _, err := tx.ExecContext(ctx, fmt.Sprintf(`PRAGMA user_version=%d`, sqliteSchemaVersion)); err != nil {
+		return fmt.Errorf("session: set v7 schema version: %w", err)
+	}
+	return tx.Commit()
+}
+
 func sqliteTableHasColumn(ctx context.Context, tx *sql.Tx, table string, column string) (bool, error) {
 	rows, err := tx.QueryContext(ctx, `PRAGMA table_info(`+table+`)`)
 	if err != nil {
@@ -1444,7 +1479,7 @@ WHERE id = ?
 // loadMessages 查询指定会话的全部消息并按顺序返回。
 func loadMessages(ctx context.Context, tx *sql.Tx, sessionID string) ([]sqliteMessageRow, error) {
 	rows, err := tx.QueryContext(ctx, `
-SELECT role, parts_json, tool_calls_json, tool_call_id, is_error, tool_metadata_json
+SELECT role, parts_json, tool_calls_json, tool_call_id, is_error, tool_metadata_json, thinking_metadata_json
 FROM messages
 WHERE session_id = ?
 ORDER BY seq ASC
@@ -1466,6 +1501,7 @@ ORDER BY seq ASC
 			&row.ToolCallID,
 			&row.IsError,
 			&row.ToolMetadataJSON,
+			&row.ThinkingMetadataJSON,
 		); err != nil {
 			return nil, fmt.Errorf("session: scan message row: %w", err)
 		}
@@ -1558,14 +1594,18 @@ func buildMessageFromRow(row sqliteMessageRow) (providertypes.Message, error) {
 			return providertypes.Message{}, fmt.Errorf("session: decode tool metadata: %w", err)
 		}
 	}
-	return providertypes.Message{
+	msg := providertypes.Message{
 		Role:         row.Role,
 		Parts:        parts,
 		ToolCalls:    toolCalls,
 		ToolCallID:   row.ToolCallID,
 		IsError:      row.IsError,
 		ToolMetadata: metadata,
-	}, nil
+	}
+	if row.ThinkingMetadataJSON != "" {
+		msg.ThinkingMetadata = json.RawMessage(row.ThinkingMetadataJSON)
+	}
+	return msg, nil
 }
 
 // currentLastSeq 读取当前会话的最后消息序号。
@@ -1727,8 +1767,8 @@ func insertMessage(
 ) error {
 	result, err := tx.ExecContext(ctx, `
 INSERT INTO messages (
-	session_id, seq, role, parts_json, tool_calls_json, tool_call_id, is_error, tool_metadata_json, created_at_ms
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+	session_id, seq, role, parts_json, tool_calls_json, tool_call_id, is_error, tool_metadata_json, thinking_metadata_json, created_at_ms
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `,
 		sessionID,
 		seq,
@@ -1738,6 +1778,7 @@ INSERT INTO messages (
 		message.ToolCallID,
 		boolToInt(message.IsError),
 		mustJSONString(message.ToolMetadata),
+		string(message.ThinkingMetadata),
 		toUnixMillis(createdAt),
 	)
 	if err != nil {

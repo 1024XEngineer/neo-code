@@ -41,13 +41,13 @@ export default function AppLayout({ shellMode = 'electron' }: AppLayoutProps) {
       <div style={layoutStyles.workspace}>
         {sidebarOpen ? (
           <div style={{ ...layoutStyles.sidebar, width: sidebarWidth }}>
-            <ErrorBoundary fallback={(_err, retry) => <div style={{ padding: 12, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}><div style={{ color: 'var(--text-tertiary)', fontSize: 12 }}>侧边栏加载失败</div><button onClick={retry} style={{ padding: '4px 12px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-primary)', background: 'var(--bg-secondary)', color: 'var(--text-primary)', fontSize: 11, cursor: 'pointer' }}>重试</button></div>}>
+            <ErrorBoundary fallback={(_err, retry) => <div style={{ padding: 12, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}><div style={{ color: 'var(--text-tertiary)', fontSize: 12 }}>Failed to load sidebar</div><button onClick={retry} style={{ padding: '4px 12px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-primary)', background: 'var(--bg-secondary)', color: 'var(--text-primary)', fontSize: 11, cursor: 'pointer' }}>Retry</button></div>}>
               <Sidebar />
             </ErrorBoundary>
           </div>
         ) : (
           <div style={layoutStyles.sidebarCollapsed}>
-            <ErrorBoundary fallback={(_err, retry) => <div style={{ padding: 8, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}><div style={{ color: 'var(--text-tertiary)', fontSize: 11 }}>侧边栏错误</div><button onClick={retry} style={{ padding: '2px 8px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-primary)', background: 'var(--bg-secondary)', color: 'var(--text-primary)', fontSize: 10, cursor: 'pointer' }}>重试</button></div>}>
+            <ErrorBoundary fallback={(_err, retry) => <div style={{ padding: 8, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}><div style={{ color: 'var(--text-tertiary)', fontSize: 11 }}>Sidebar error</div><button onClick={retry} style={{ padding: '2px 8px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-primary)', background: 'var(--bg-secondary)', color: 'var(--text-primary)', fontSize: 10, cursor: 'pointer' }}>Retry</button></div>}>
               <Sidebar collapsed />
             </ErrorBoundary>
           </div>
@@ -55,9 +55,9 @@ export default function AppLayout({ shellMode = 'electron' }: AppLayoutProps) {
         <div style={layoutStyles.main}>
           <ErrorBoundary fallback={(err, retry) => (
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: 12, padding: 32, color: 'var(--text-tertiary)' }}>
-              <div>聊天面板加载失败</div>
+              <div>Failed to load chat panel</div>
               <div style={{ fontSize: 12 }}>{err.message}</div>
-              <button onClick={retry} style={{ padding: '6px 16px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-primary)', background: 'var(--bg-secondary)', color: 'var(--text-primary)', fontSize: 12, cursor: 'pointer' }}>重试</button>
+              <button onClick={retry} style={{ padding: '6px 16px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-primary)', background: 'var(--bg-secondary)', color: 'var(--text-primary)', fontSize: 12, cursor: 'pointer' }}>Retry</button>
             </div>
           )}>
             <ChatPanel />

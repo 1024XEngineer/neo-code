@@ -47,9 +47,9 @@ type listSessionsStubStore struct {
 	session   agentsession.Session
 }
 
-type budgetResolverFunc func(ctx context.Context, cfg config.Config) (int, string, error)
+type budgetResolverFunc func(ctx context.Context, cfg config.Config) (BudgetResolution, error)
 
-func (f budgetResolverFunc) ResolvePromptBudget(ctx context.Context, cfg config.Config) (int, string, error) {
+func (f budgetResolverFunc) ResolvePromptBudget(ctx context.Context, cfg config.Config) (BudgetResolution, error) {
 	return f(ctx, cfg)
 }
 
@@ -5802,7 +5802,7 @@ func TestResolvePromptBudgetUsesExplicitConfig(t *testing.T) {
 		},
 	}
 
-	promptBudget, source := service.resolvePromptBudget(context.Background(), cfg)
+	promptBudget, source, _ := service.resolvePromptBudget(context.Background(), cfg)
 	if promptBudget != 50000 || source != "explicit" {
 		t.Fatalf("expected prompt budget 50000/explicit, got %d/%s", promptBudget, source)
 	}
@@ -5813,8 +5813,8 @@ func TestResolvePromptBudgetUsesResolver(t *testing.T) {
 
 	service := &Service{}
 	service.SetBudgetResolver(budgetResolverFunc(
-		func(ctx context.Context, cfg config.Config) (int, string, error) {
-			return 88000, "derived", nil
+		func(ctx context.Context, cfg config.Config) (BudgetResolution, error) {
+			return BudgetResolution{PromptBudget: 88000, Source: "derived", ContextWindow: 128000}, nil
 		},
 	))
 
@@ -5829,9 +5829,12 @@ func TestResolvePromptBudgetUsesResolver(t *testing.T) {
 		},
 	}
 
-	promptBudget, source := service.resolvePromptBudget(context.Background(), cfg)
+	promptBudget, source, contextWindow := service.resolvePromptBudget(context.Background(), cfg)
 	if promptBudget != 88000 || source != "derived" {
 		t.Fatalf("expected prompt budget 88000/derived, got %d/%s", promptBudget, source)
+	}
+	if contextWindow != 128000 {
+		t.Fatalf("expected context window 128000, got %d", contextWindow)
 	}
 }
 
@@ -5840,8 +5843,8 @@ func TestResolvePromptBudgetFallsBackWhenResolverErrors(t *testing.T) {
 
 	service := &Service{}
 	service.SetBudgetResolver(budgetResolverFunc(
-		func(ctx context.Context, cfg config.Config) (int, string, error) {
-			return 0, "", errors.New("resolver failed")
+		func(ctx context.Context, cfg config.Config) (BudgetResolution, error) {
+			return BudgetResolution{}, errors.New("resolver failed")
 		},
 	))
 
@@ -5856,7 +5859,7 @@ func TestResolvePromptBudgetFallsBackWhenResolverErrors(t *testing.T) {
 		},
 	}
 
-	promptBudget, source := service.resolvePromptBudget(context.Background(), cfg)
+	promptBudget, source, _ := service.resolvePromptBudget(context.Background(), cfg)
 	if promptBudget != 88000 || source != "fallback" {
 		t.Fatalf("expected prompt budget 88000/fallback, got %d/%s", promptBudget, source)
 	}

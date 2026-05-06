@@ -41,7 +41,15 @@ func (s *Service) ActivateSessionSkill(ctx context.Context, sessionID string, sk
 
 	descriptor, _, err := s.skillsRegistry.Get(ctx, skillID)
 	if err != nil {
-		return err
+		if errors.Is(err, skills.ErrSkillNotFound) {
+			if refreshErr := s.skillsRegistry.Refresh(ctx); refreshErr != nil {
+				return refreshErr
+			}
+			descriptor, _, err = s.skillsRegistry.Get(ctx, skillID)
+		}
+		if err != nil {
+			return err
+		}
 	}
 
 	session, changed, err := s.mutateSessionSkills(ctx, sessionID, func(current *agentsession.Session) bool {

@@ -497,20 +497,6 @@ func TestStartupRegularInputDismissesStartup(t *testing.T) {
 	}
 }
 
-func TestStartupCtrlONavigatesToWorkspaceBrowser(t *testing.T) {
-	app, _ := newTestApp(t)
-	app.startupScreenLocked = true
-
-	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyCtrlO})
-	next := model.(App)
-	if !next.startupScreenLocked {
-		t.Fatalf("expected opening workspace picker not to unlock startup")
-	}
-	if next.state.ActivePicker != pickerFile {
-		t.Fatalf("expected file picker active, got %v", next.state.ActivePicker)
-	}
-}
-
 func TestStartupCtrlNStartsDraftSession(t *testing.T) {
 	app, _ := newTestApp(t)
 	app.startupScreenLocked = true
@@ -1580,6 +1566,63 @@ func TestUpdateSingleRuneInputDoesNotPrimeFromClipboard(t *testing.T) {
 	}
 }
 
+func TestUpdateSingleRuneInputDoesNotCaptureClipboardPrefix(t *testing.T) {
+	app, _ := newTestApp(t)
+	clipboardText := "你好，你是谁？"
+
+	originalReadText := readClipboardText
+	defer func() { readClipboardText = originalReadText }()
+	readClipboardText = func() (string, error) { return clipboardText, nil }
+
+	model, cmd := app.Update(tea.KeyMsg{
+		Type:  tea.KeyRunes,
+		Runes: []rune("你"),
+		Paste: false,
+	})
+	if cmd != nil {
+		_ = cmd()
+	}
+	app = model.(App)
+
+	if app.input.Value() != "你" {
+		t.Fatalf("expected single-rune input to stay as regular typing, got %q", app.input.Value())
+	}
+}
+
+func TestUpdateSingleRuneChunksForMultilinePasteStaySingleToken(t *testing.T) {
+	app, _ := newTestApp(t)
+	clipboardText := "可以，已经解决并落地了\n改文件：\nupdate.go"
+
+	originalReadText := readClipboardText
+	defer func() { readClipboardText = originalReadText }()
+	readClipboardText = func() (string, error) { return clipboardText, nil }
+
+	for _, chunk := range []string{"可", "以", "，"} {
+		model, cmd := app.Update(tea.KeyMsg{
+			Type:  tea.KeyRunes,
+			Runes: []rune(chunk),
+			Paste: false,
+		})
+		if cmd != nil {
+			_ = cmd()
+		}
+		app = model.(App)
+	}
+
+	model, cmd := app.Update(pasteTxnFlushMsg{Version: app.pasteTxnVersion})
+	if cmd != nil {
+		_ = cmd()
+	}
+	app = model.(App)
+
+	if got := app.input.Value(); got != "[paste 3 LINE]" {
+		t.Fatalf("expected one summarized token after chunked multiline paste, got %q", got)
+	}
+	if len(app.pendingTextPastes) != 1 {
+		t.Fatalf("expected one pending text paste entry, got %d", len(app.pendingTextPastes))
+	}
+}
+
 func TestUpdateEnterDoesNotSendWhilePasteEchoPending(t *testing.T) {
 	app, runtime := newTestApp(t)
 	now := time.Now()
@@ -2140,6 +2183,24 @@ func TestUpdatePastedTextLoadReadyAppendsSeparatorBeforeDeferredSend(t *testing.
 	}
 	if app.loadingPastedText || app.pendingSendAfterPasteLoad {
 		t.Fatalf("expected loading flags cleared after deferred send")
+	}
+}
+
+func TestBeginAgentRunPropagatesCurrentMode(t *testing.T) {
+	app, runtime := newTestApp(t)
+	app.setCurrentAgentMode(string(agentsession.AgentModePlan))
+
+	cmd := app.beginAgentRun("hello", nil)
+	if cmd == nil {
+		t.Fatalf("expected beginAgentRun to return submit command")
+	}
+	_ = cmd()
+
+	if len(runtime.prepareInputs) != 1 {
+		t.Fatalf("expected one prepare input, got %d", len(runtime.prepareInputs))
+	}
+	if runtime.prepareInputs[0].Mode != string(agentsession.AgentModePlan) {
+		t.Fatalf("prepare input mode = %q, want %q", runtime.prepareInputs[0].Mode, agentsession.AgentModePlan)
 	}
 }
 
@@ -3017,17 +3078,42 @@ func TestAppendAssistantAndInlineMessage(t *testing.T) {
 	}
 }
 
-func TestShouldHandleTabAsInput(t *testing.T) {
+func TestTabSwitchesAgentModeWhenInputEmpty(t *testing.T) {
 	app, _ := newTestApp(t)
 	app.focus = panelInput
 	app.state.ActivePicker = pickerNone
-	app.input.SetValue("/he")
-	if !app.shouldHandleTabAsInput(tea.KeyMsg{Type: tea.KeyTab}) {
-		t.Fatalf("expected tab to be handled as input")
-	}
 	app.input.SetValue("")
-	if app.shouldHandleTabAsInput(tea.KeyMsg{Type: tea.KeyTab}) {
-		t.Fatalf("expected tab to be ignored for empty input")
+	app.state.InputText = ""
+	app.setCurrentAgentMode(string(agentsession.AgentModeBuild))
+
+	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyTab})
+	app = model.(App)
+	if app.currentAgentMode() != agentsession.AgentModePlan {
+		t.Fatalf("expected mode to switch to plan, got %q", app.currentAgentMode())
+	}
+	if !strings.Contains(strings.ToLower(app.state.StatusText), "plan") {
+		t.Fatalf("expected status to mention plan mode, got %q", app.state.StatusText)
+	}
+
+	model, _ = app.Update(tea.KeyMsg{Type: tea.KeyTab})
+	app = model.(App)
+	if app.currentAgentMode() != agentsession.AgentModeBuild {
+		t.Fatalf("expected mode to switch back to build, got %q", app.currentAgentMode())
+	}
+}
+
+func TestTabWithNonEmptyInputSwitchesAgentMode(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.focus = panelInput
+	app.state.ActivePicker = pickerNone
+	app.input.SetValue("x")
+	app.state.InputText = "x"
+	app.setCurrentAgentMode(string(agentsession.AgentModeBuild))
+
+	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyTab})
+	app = model.(App)
+	if app.currentAgentMode() != agentsession.AgentModePlan {
+		t.Fatalf("expected mode to switch to plan, got %q", app.currentAgentMode())
 	}
 }
 
@@ -3037,6 +3123,7 @@ func TestSlashTabCompletionDoesNotMoveInput(t *testing.T) {
 	app.height = 28
 	app.focus = panelInput
 	app.state.ActivePicker = pickerNone
+	app.setCurrentAgentMode(string(agentsession.AgentModeBuild))
 	app.input.SetValue("/he")
 	app.state.InputText = "/he"
 	app.applyComponentLayout(true)
@@ -3057,6 +3144,9 @@ func TestSlashTabCompletionDoesNotMoveInput(t *testing.T) {
 	}
 	if app.commandMenuHasSuggestions() {
 		t.Fatalf("expected command menu to clear for complete slash command")
+	}
+	if app.currentAgentMode() != agentsession.AgentModeBuild {
+		t.Fatalf("expected slash completion to keep mode unchanged, got %q", app.currentAgentMode())
 	}
 }
 
@@ -3087,16 +3177,6 @@ func TestManualSlashCompletionDoesNotMoveInput(t *testing.T) {
 	if app.commandMenuHasSuggestions() {
 		t.Fatalf("expected command menu to clear for complete slash command")
 	}
-}
-
-func TestFocusNextPrev(t *testing.T) {
-	app, _ := newTestApp(t)
-	app.focus = panelTranscript
-	app.focusNext()
-	if app.focus == panelTranscript {
-		t.Fatalf("expected focus to move")
-	}
-	app.focusPrev()
 }
 
 func TestHandleViewportKeys(t *testing.T) {

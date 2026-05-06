@@ -43,6 +43,27 @@ func TestShouldTriggerAutoDiagnosis(t *testing.T) {
 			want:        false,
 		},
 		{
+			name:        "command exemption neocode",
+			exitCode:    1,
+			commandText: "./neocode diag",
+			outputText:  "network timeout",
+			want:        false,
+		},
+		{
+			name:        "command exemption wrapped neocode diag",
+			exitCode:    1,
+			commandText: "timeout 10s ./neocode diag",
+			outputText:  "network timeout",
+			want:        false,
+		},
+		{
+			name:        "skip on neocode diagnosis output",
+			exitCode:    1,
+			commandText: "echo failed",
+			outputText:  "[NeoCode Diagnosis] timeout",
+			want:        false,
+		},
+		{
 			name:        "output too short skipped",
 			exitCode:    1,
 			commandText: "go test ./...",

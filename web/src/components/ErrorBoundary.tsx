@@ -54,7 +54,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
           gap: 16,
           padding: 32,
         }}>
-          <div style={{ fontSize: 18, fontWeight: 600 }}>应用遇到了一个错误</div>
+          <div style={{ fontSize: 18, fontWeight: 600 }}>The application encountered an error</div>
           <div style={{
             fontSize: 13,
             color: 'var(--text-tertiary)',
@@ -62,7 +62,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
             textAlign: 'center',
             wordBreak: 'break-word',
           }}>
-            {this.state.error?.message || '未知错误'}
+            {this.state.error?.message || 'Unknown error'}
           </div>
           <div style={{ display: 'flex', gap: 12, marginTop: 8 }}>
             <button
@@ -77,7 +77,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
                 cursor: 'pointer',
               }}
             >
-              重试
+              Retry
             </button>
             <button
               onClick={this.handleReload}
@@ -91,7 +91,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
                 cursor: 'pointer',
               }}
             >
-              重新加载
+              Reload
             </button>
           </div>
         </div>

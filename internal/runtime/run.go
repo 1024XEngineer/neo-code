@@ -150,6 +150,9 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 	}
 	s.bindRunState(runToken, &state)
 	statePtr = &state
+	if err := s.resetTodosForUserRun(ctx, &state); err != nil {
+		return s.handleRunError(err)
+	}
 
 	effectiveWorkdir := agentsession.EffectiveWorkdir(state.session.Workdir, initialCfg.Workdir)
 	_ = s.runHookPoint(ctx, &state, runtimehooks.HookPointSessionStart, runtimehooks.HookContext{
@@ -364,7 +367,7 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 				if err := s.setBaseRunState(ctx, &state, controlplane.RunStateVerify); err != nil {
 					return s.handleRunError(err)
 				}
-	      s.updateResumeCheckpoint(ctx, &state, "verify", "completed")
+				s.updateResumeCheckpoint(ctx, &state, "verify", "completed")
 				acceptanceDecision, err := s.runBeforeCompletionDecisionAcceptance(
 					ctx,
 					&state,
@@ -592,14 +595,24 @@ func (s *Service) prepareTurnBudgetSnapshot(ctx context.Context, state *runState
 	if notificationHint := strings.TrimSpace(s.drainHookNotificationsForTurn(state)); notificationHint != "" {
 		systemPrompt = mergeEphemeralHookNotificationIntoSystemPrompt(systemPrompt, notificationHint)
 	}
-	promptBudget, budgetSource := s.resolvePromptBudget(ctx, cfg)
+	promptBudget, budgetSource, contextWindow := s.resolvePromptBudget(ctx, cfg)
 	model := strings.TrimSpace(cfg.CurrentModel)
 	requestMessages := append([]providertypes.Message(nil), builtContext.Messages...)
+	thinkingCfg, thinkingErr := resolveThinkingConfig(
+		modelCapabilityHintsForRequest(model, resolvedProvider.Models),
+		nil, // ThinkingOverride 暂未从 TUI 透传
+		s.IsThinkingEnabled(),
+	)
+	if thinkingErr != nil {
+		return TurnBudgetSnapshot{}, false, thinkingErr
+	}
+
 	request := providertypes.GenerateRequest{
 		Model:              model,
 		SystemPrompt:       systemPrompt,
 		Messages:           requestMessages,
 		Tools:              toolSpecs,
+		ThinkingConfig:     thinkingCfg,
 		SessionAssetReader: s.buildSessionAssetReader(ctx, state.session.ID),
 	}
 	attemptSeq := state.nextAttemptSeq
@@ -619,6 +632,7 @@ func (s *Service) prepareTurnBudgetSnapshot(ctx context.Context, state *runState
 		limit,
 		repeatLimit,
 		injectFullPlan,
+		contextWindow,
 		request,
 	), false, nil
 }
@@ -658,12 +672,33 @@ func (s *Service) callProvider(
 		OnTextDelta: func(text string) {
 			s.emitRunScoped(ctx, EventAgentChunk, state, text)
 		},
+		OnThinkingDelta: func(text string) {
+			s.emitRunScoped(ctx, EventThinkingDelta, state, text)
+		},
 		OnToolCallStart: func(payload providertypes.ToolCallStartPayload) {
 			s.emitRunScoped(ctx, EventToolCallThinking, state, payload.Name)
 		},
 	})
 	if streamOutcome.err != nil {
-		return turnProviderOutput{}, streamOutcome.err
+		// unknown 模型 + ErrThinkingNotSupported → 重试不带 ThinkingConfig
+		if provider.IsThinkingNotSupportedError(streamOutcome.err) && snapshot.Request.ThinkingConfig != nil {
+			retryRequest := snapshot.Request
+			retryRequest.ThinkingConfig = nil
+			retryOutcome := generateStreamingMessage(ctx, modelProvider, retryRequest, streaming.Hooks{
+				OnTextDelta: func(text string) {
+					s.emitRunScoped(ctx, EventAgentChunk, state, text)
+				},
+				OnToolCallStart: func(payload providertypes.ToolCallStartPayload) {
+					s.emitRunScoped(ctx, EventToolCallThinking, state, payload.Name)
+				},
+			})
+			if retryOutcome.err != nil {
+				return turnProviderOutput{}, retryOutcome.err
+			}
+			streamOutcome = retryOutcome
+		} else {
+			return turnProviderOutput{}, streamOutcome.err
+		}
 	}
 
 	return turnProviderOutput{
@@ -711,6 +746,7 @@ func (s *Service) emitToolDiffs(ctx context.Context, state *runState, summary to
 // buildToolDiffPayload 将工具结果 metadata 中的 diff 信息组装成 ToolDiffPayload。
 // 多文件工具(filesystem_move_file 等)使用 Files+Diffs 多路径字段；
 // 其他写工具继续填充兼容字段 FilePath/Diff/WasNew，保持现有消费者不破。
+// FileChange.Kind 优先取 entry.Kind（toolexec 收集层填充），缺失时回退到 WasNew 二分以兼容旧 metadata。
 func buildToolDiffPayload(result tools.ToolResult) (ToolDiffPayload, bool) {
 	payload := ToolDiffPayload{
 		ToolCallID: result.ToolCallID,
@@ -720,9 +756,12 @@ func buildToolDiffPayload(result tools.ToolResult) (ToolDiffPayload, bool) {
 		payload.Diffs = multi
 		payload.Files = make([]FileChange, 0, len(multi))
 		for _, entry := range multi {
-			kind := "modified"
-			if entry.WasNew {
-				kind = "added"
+			kind := entry.Kind
+			if kind == "" {
+				kind = FileChangeKindModified
+				if entry.WasNew {
+					kind = FileChangeKindAdded
+				}
 			}
 			payload.Files = append(payload.Files, FileChange{Path: entry.Path, Kind: kind})
 		}
@@ -745,6 +784,7 @@ func buildToolDiffPayload(result tools.ToolResult) (ToolDiffPayload, bool) {
 }
 
 // toolResultMultiDiffs 从工具结果 metadata 解析多文件 diff 列表。
+// kind=="unchanged" 的条目（典型场景: copy 的 source 文件）会被过滤，不进入 UI。
 func toolResultMultiDiffs(metadata map[string]any) ([]FileDiffEntry, bool) {
 	if metadata == nil {
 		return nil, false
@@ -766,10 +806,15 @@ func toolResultMultiDiffs(metadata map[string]any) ([]FileDiffEntry, bool) {
 		}
 		diff, _ := entry["diff"].(string)
 		wasNew, _ := entry["was_new"].(bool)
+		kind, _ := entry["kind"].(string)
+		if kind == FileChangeKindUnchanged {
+			continue
+		}
 		out = append(out, FileDiffEntry{
 			Path:   path,
 			Diff:   diff,
 			WasNew: wasNew,
+			Kind:   kind,
 		})
 	}
 	if len(out) == 0 {
@@ -823,22 +868,24 @@ func (s *Service) applyCompactForState(
 }
 
 // resolvePromptBudget 解析当前请求链路使用的 prompt budget 与来源标签。
-func (s *Service) resolvePromptBudget(ctx context.Context, cfg config.Config) (int, string) {
+func (s *Service) resolvePromptBudget(ctx context.Context, cfg config.Config) (int, string, int) {
 	if cfg.Context.Budget.PromptBudget > 0 {
-		return cfg.Context.Budget.PromptBudget, "explicit"
+		return cfg.Context.Budget.PromptBudget, "explicit", 0
 	}
 	promptBudget := cfg.Context.Budget.FallbackPromptBudget
 	source := "fallback"
+	var contextWindow int
 	if s != nil && s.budgetResolver != nil {
-		resolvedBudget, resolvedSource, err := s.budgetResolver.ResolvePromptBudget(ctx, cfg)
-		if err == nil && resolvedBudget > 0 {
-			promptBudget = resolvedBudget
-			if strings.TrimSpace(resolvedSource) != "" {
-				source = resolvedSource
+		resolution, err := s.budgetResolver.ResolvePromptBudget(ctx, cfg)
+		if err == nil && resolution.PromptBudget > 0 {
+			promptBudget = resolution.PromptBudget
+			if strings.TrimSpace(resolution.Source) != "" {
+				source = resolution.Source
 			}
+			contextWindow = resolution.ContextWindow
 		}
 	}
-	return promptBudget, source
+	return promptBudget, source, contextWindow
 }
 
 // evaluateTurnBudget 对冻结请求执行发送前输入 token 估算，并产出唯一预算动作。
@@ -863,6 +910,7 @@ func (s *Service) evaluateTurnBudget(
 			Reason:             controlplane.BudgetDecisionReasonEstimateFailedBypass,
 			PromptBudget:       snapshot.PromptBudget,
 			EstimateGatePolicy: provider.EstimateGateAdvisory,
+			ContextWindow:      snapshot.ContextWindow,
 		}
 		s.emitRunScoped(ctx, EventBudgetChecked, state, newBudgetCheckedPayload(decision))
 		return decision, nil
@@ -873,6 +921,7 @@ func (s *Service) evaluateTurnBudget(
 		snapshot.PromptBudget,
 		snapshot.CompactCount,
 	)
+	decision.ContextWindow = snapshot.ContextWindow
 	s.emitRunScoped(ctx, EventBudgetChecked, state, newBudgetCheckedPayload(decision))
 	return decision, nil
 }

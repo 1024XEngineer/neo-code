@@ -212,12 +212,16 @@ func BuildGatewayServerDeps(ctx context.Context, opts BootstrapOptions) (Runtime
 	runtimeSvc.SetUserInputPreparer(agentruntime.NewSessionInputPreparer(sessionStore, sessionStore))
 	runtimeSvc.SetSkillsRegistry(buildSkillsRegistry(ctx, sharedDeps.ConfigManager.BaseDir(), cfg.Workdir))
 	runtimeSvc.SetBudgetResolver(runtimeBudgetResolverFunc(
-		func(ctx context.Context, cfg config.Config) (int, string, error) {
+		func(ctx context.Context, cfg config.Config) (agentruntime.BudgetResolution, error) {
 			resolution, err := configstate.ResolvePromptBudget(ctx, cfg, modelCatalogs)
 			if err != nil {
-				return 0, "", err
+				return agentruntime.BudgetResolution{}, err
 			}
-			return resolution.PromptBudget, string(resolution.Source), nil
+			return agentruntime.BudgetResolution{
+				PromptBudget:  resolution.PromptBudget,
+				Source:        string(resolution.Source),
+				ContextWindow: resolution.ContextWindow,
+			}, nil
 		},
 	))
 	if err := agentruntime.ConfigureRuntimeHooks(runtimeSvc, cfg); err != nil {
@@ -614,9 +618,9 @@ func (f textGenAdapter) Generate(ctx context.Context, prompt string, msgs []prov
 	return f(ctx, prompt, msgs)
 }
 
-type runtimeBudgetResolverFunc func(ctx context.Context, cfg config.Config) (int, string, error)
+type runtimeBudgetResolverFunc func(ctx context.Context, cfg config.Config) (agentruntime.BudgetResolution, error)
 
-func (f runtimeBudgetResolverFunc) ResolvePromptBudget(ctx context.Context, cfg config.Config) (int, string, error) {
+func (f runtimeBudgetResolverFunc) ResolvePromptBudget(ctx context.Context, cfg config.Config) (agentruntime.BudgetResolution, error) {
 	return f(ctx, cfg)
 }
 

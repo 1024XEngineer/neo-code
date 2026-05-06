@@ -70,7 +70,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       } catch (err) {
         console.error('fetchWorkspaces failed:', err)
         set({ loading: false })
-        useUIStore.getState().showToast('工作区列表加载失败', 'error')
+        useUIStore.getState().showToast('Failed to load workspaces', 'error')
       } finally {
         _fetchWorkspacesPromise = null
       }
@@ -83,7 +83,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     if (!hash || hash === get().currentWorkspaceHash) return
 
     if (useChatStore.getState().isGenerating) {
-      useUIStore.getState().showToast('生成中无法切换工作区，请先停止当前对话', 'info')
+      useUIStore.getState().showToast('Cannot switch workspace while generating; stop the current run first.', 'info')
       return
     }
 
@@ -110,7 +110,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       await useSessionStore.getState().fetchSessions(gatewayAPI, true)
     } catch (err) {
       console.error('switchWorkspace failed:', err)
-      useUIStore.getState().showToast('切换工作区失败', 'error')
+      useUIStore.getState().showToast('Failed to switch workspace', 'error')
     } finally {
       useChatStore.getState().setTransitioning(false)
       set({ loading: false })
@@ -119,7 +119,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
 
   createWorkspace: async (path, gatewayAPI, name) => {
     if (useChatStore.getState().isGenerating) {
-      useUIStore.getState().showToast('生成中无法切换工作区，请先停止当前对话', 'info')
+      useUIStore.getState().showToast('Cannot switch workspace while generating; stop the current run first.', 'info')
       return
     }
 
@@ -151,11 +151,11 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
 
       // 加载新工作区的会话列表
       await useSessionStore.getState().fetchSessions(gatewayAPI, true)
-      useUIStore.getState().showToast('工作区创建成功', 'success')
+      useUIStore.getState().showToast('Workspace created', 'success')
     } catch (err) {
       console.error('createWorkspace failed:', err)
       set({ loading: false })
-      useUIStore.getState().showToast('创建工作区失败', 'error')
+      useUIStore.getState().showToast('Failed to create workspace', 'error')
     } finally {
       useChatStore.getState().setTransitioning(false)
       set({ loading: false })
@@ -172,7 +172,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       }))
     } catch (err) {
       console.error('renameWorkspace failed:', err)
-      useUIStore.getState().showToast('重命名工作区失败', 'error')
+      useUIStore.getState().showToast('Failed to rename workspace', 'error')
     }
   },
 
@@ -188,7 +188,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       }
     } catch (err) {
       console.error('deleteWorkspace failed:', err)
-      useUIStore.getState().showToast('删除工作区失败', 'error')
+      useUIStore.getState().showToast('Failed to delete workspace', 'error')
     }
   },
 }))

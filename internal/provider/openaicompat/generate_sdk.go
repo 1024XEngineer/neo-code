@@ -319,7 +319,7 @@ func (p *Provider) generateChatCompletionsWithCompatibleStream(
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= http.StatusBadRequest {
-		return ParseError(resp)
+		return provider.WrapIfThinkingNotSupported(ParseError(resp))
 	}
 
 	return chatcompletions.ConsumeStream(ctx, resp.Body, events)
@@ -373,7 +373,7 @@ func (p *Provider) generateSDKResponses(
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= http.StatusBadRequest {
-		return ParseError(resp)
+		return provider.WrapIfThinkingNotSupported(ParseError(resp))
 	}
 
 	return responses.EmitFromStream(ctx, resp.Body, events)

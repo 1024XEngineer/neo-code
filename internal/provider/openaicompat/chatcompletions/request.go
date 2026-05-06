@@ -17,7 +17,6 @@ import (
 
 const errorPrefix = "openaicompat provider: "
 
-const maxSessionAssetReadBytes = session.MaxSessionAssetBytes
 const maxSessionAssetsTotalBytes = provider.MaxSessionAssetsTotalBytes
 
 const htmlErrorSnippetMaxRunes = 320
@@ -79,6 +78,14 @@ func BuildRequest(ctx context.Context, cfg provider.RuntimeConfig, req providert
 				},
 			}
 			payload.Tools = append(payload.Tools, def)
+		}
+	}
+
+	if tc := req.ThinkingConfig; tc != nil {
+		if tc.Enabled && tc.Effort != "" {
+			payload.ReasoningEffort = tc.Effort
+		} else if !tc.Enabled {
+			payload.ReasoningEffort = "none"
 		}
 	}
 
@@ -219,6 +226,20 @@ func toOpenAIMessageWithBudget(
 					Arguments: call.Arguments,
 				},
 			})
+		}
+	}
+
+	if len(message.ThinkingMetadata) > 0 {
+		var meta struct {
+			ReasoningContent string `json:"reasoning_content"`
+			Reasoning        string `json:"reasoning"`
+		}
+		if err := json.Unmarshal(message.ThinkingMetadata, &meta); err == nil {
+			if meta.ReasoningContent != "" {
+				out.ReasoningContent = meta.ReasoningContent
+			} else if meta.Reasoning != "" {
+				out.ReasoningContent = meta.Reasoning
+			}
 		}
 	}
 

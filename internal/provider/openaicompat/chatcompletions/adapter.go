@@ -86,8 +86,10 @@ const (
 type streamChunk struct {
 	Choices []struct {
 		Delta struct {
-			Content   string                                          `json:"content,omitempty"`
-			ToolCalls []openai.ChatCompletionChunkChoiceDeltaToolCall `json:"tool_calls,omitempty"`
+			Content          string                                          `json:"content,omitempty"`
+			ReasoningContent string                                          `json:"reasoning_content,omitempty"`
+			Reasoning        string                                          `json:"reasoning,omitempty"`
+			ToolCalls        []openai.ChatCompletionChunkChoiceDeltaToolCall `json:"tool_calls,omitempty"`
 		} `json:"delta"`
 		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`
@@ -138,6 +140,13 @@ func ConsumeStream(
 		for _, choice := range chunk.Choices {
 			if strings.TrimSpace(choice.FinishReason) != "" {
 				finishReason = strings.TrimSpace(choice.FinishReason)
+			}
+			reasoningText := choice.Delta.ReasoningContent
+			if reasoningText == "" {
+				reasoningText = choice.Delta.Reasoning
+			}
+			if err := provider.EmitThinkingDelta(ctx, events, reasoningText); err != nil {
+				return err
 			}
 			if err := provider.EmitTextDelta(ctx, events, choice.Delta.Content); err != nil {
 				return err
