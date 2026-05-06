@@ -28,4 +28,21 @@ contextBridge.exposeInMainWorld('electronAPI', {
 		ipcRenderer.on('gateway:status', handler)
 		return () => { ipcRenderer.removeListener('gateway:status', handler) }
 	},
+
+	/** 监听更新可用事件 */
+	onUpdateAvailable: (callback: (info: { version: string; releaseNotes?: string }) => void) => {
+		const handler = (_event: Electron.IpcRendererEvent, data: unknown) => callback(data as { version: string; releaseNotes?: string })
+		ipcRenderer.on('updater:available', handler)
+		return () => { ipcRenderer.removeListener('updater:available', handler) }
+	},
+
+	/** 监听更新下载完成事件 */
+	onUpdateDownloaded: (callback: (info: { version: string }) => void) => {
+		const handler = (_event: Electron.IpcRendererEvent, data: unknown) => callback(data as { version: string })
+		ipcRenderer.on('updater:downloaded', handler)
+		return () => { ipcRenderer.removeListener('updater:downloaded', handler) }
+	},
+
+	/** 退出并安装更新 */
+	quitAndInstall: () => ipcRenderer.invoke('updater:quitAndInstall'),
 })

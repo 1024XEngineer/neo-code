@@ -1,14 +1,16 @@
 package ptyproxy
 
 import (
+	"path/filepath"
 	"strings"
 )
 
 var autoTriggerCommandExemptions = map[string]struct{}{
-	"grep":  {},
-	"find":  {},
-	"test":  {},
-	"false": {},
+	"grep":    {},
+	"find":    {},
+	"test":    {},
+	"false":   {},
+	"neocode": {},
 }
 
 // ShouldTriggerAutoDiagnosis 根据退出码、命令词和输出质量判断是否应进入自动诊断。
@@ -20,6 +22,9 @@ func ShouldTriggerAutoDiagnosis(exitCode int, commandText string, outputText str
 		return false
 	}
 	if isCommandExempted(commandText) {
+		return false
+	}
+	if strings.Contains(strings.ToLower(outputText), "[neocode diagnosis]") {
 		return false
 	}
 	return hasMeaningfulOutput(outputText)
@@ -36,8 +41,19 @@ func isCommandExempted(commandText string) bool {
 		return false
 	}
 	verb := strings.ToLower(strings.TrimSpace(fields[0]))
+	verb = strings.ToLower(strings.TrimSpace(filepath.Base(verb)))
 	_, exempted := autoTriggerCommandExemptions[verb]
-	return exempted
+	if exempted {
+		return true
+	}
+	for idx := 0; idx < len(fields)-1; idx++ {
+		current := strings.ToLower(strings.TrimSpace(filepath.Base(fields[idx])))
+		next := strings.ToLower(strings.TrimSpace(fields[idx+1]))
+		if current == "neocode" && next == "diag" {
+			return true
+		}
+	}
+	return false
 }
 
 // hasMeaningfulOutput 判断输出是否包含足够有效的报错信息，避免空输出误触发。

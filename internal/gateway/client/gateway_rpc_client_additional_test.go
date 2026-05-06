@@ -145,6 +145,30 @@ func TestGatewayRPCClientHelperFunctions(t *testing.T) {
 	if isRetryableGatewayCallError(nil) {
 		t.Fatalf("nil error should not be retryable")
 	}
+	if !shouldResetConnectionOnHeartbeatError(context.DeadlineExceeded) {
+		t.Fatalf("deadline exceeded should trigger heartbeat connection reset")
+	}
+	if shouldResetConnectionOnHeartbeatError(context.Canceled) {
+		t.Fatalf("context canceled should not trigger heartbeat connection reset")
+	}
+	if !shouldResetConnectionOnHeartbeatError(&gatewayRPCTransportError{Err: errors.New("broken pipe")}) {
+		t.Fatalf("transport error should trigger heartbeat connection reset")
+	}
+	if shouldResetConnectionOnHeartbeatError(errors.New("plain")) {
+		t.Fatalf("plain error should not trigger heartbeat connection reset")
+	}
+	if !isUnauthorizedGatewayCallError(&GatewayRPCError{GatewayCode: protocol.GatewayCodeUnauthorized}) {
+		t.Fatalf("unauthorized gateway code should be recognized")
+	}
+	if isUnauthorizedGatewayCallError(errors.New("plain")) {
+		t.Fatalf("plain error should not be treated as unauthorized")
+	}
+	if !isAuthenticateGatewayMethod(protocol.MethodGatewayAuthenticate) {
+		t.Fatalf("authenticate method should be recognized")
+	}
+	if isAuthenticateGatewayMethod(protocol.MethodGatewayPing) {
+		t.Fatalf("non-auth method should not be treated as authenticate")
+	}
 
 	if _, err := decodeGatewayRPCResponse(map[string]json.RawMessage{"id": json.RawMessage(`bad`)}); err == nil {
 		t.Fatalf("expected decodeGatewayRPCResponse marshal error")

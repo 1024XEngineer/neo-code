@@ -6,6 +6,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"neo-code/internal/subagent"
 	"neo-code/internal/tools"
@@ -28,6 +29,12 @@ func TestDiagnoseToolSubAgentSuccess(t *testing.T) {
 		runFunc: func(_ context.Context, input tools.SubAgentRunInput) (tools.SubAgentRunResult, error) {
 			if input.TaskID != diagnoseSubAgentTaskID {
 				t.Fatalf("TaskID = %q, want %q", input.TaskID, diagnoseSubAgentTaskID)
+			}
+			if input.TaskType != subagent.TaskTypeReview {
+				t.Fatalf("TaskType = %q, want %q", input.TaskType, subagent.TaskTypeReview)
+			}
+			if input.ToolUseMode != subagent.ToolUseModeDisabled {
+				t.Fatalf("ToolUseMode = %q, want %q", input.ToolUseMode, subagent.ToolUseModeDisabled)
 			}
 			return tools.SubAgentRunResult{
 				State:      subagent.StateSucceeded,
@@ -110,6 +117,39 @@ func TestDiagnoseToolSubAgentTimeoutFallback(t *testing.T) {
 	}
 }
 
+func TestDiagnoseToolSubAgentParentContextTimeoutFallback(t *testing.T) {
+	tool := New()
+	invoker := stubDiagnoseSubAgentInvoker{
+		runFunc: func(ctx context.Context, _ tools.SubAgentRunInput) (tools.SubAgentRunResult, error) {
+			<-ctx.Done()
+			return tools.SubAgentRunResult{}, ctx.Err()
+		},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	result, err := tool.Execute(ctx, tools.ToolCallInput{
+		Arguments: []byte(`{
+			"error_log":"provider may stall",
+			"os_env":{"os":"linux","shell":"/bin/bash","cwd":"/repo"},
+			"command_text":"curl https://example.com",
+			"exit_code":28
+		}`),
+		SubAgentInvoker: invoker,
+		Workdir:         "/repo",
+	})
+	if err != nil {
+		t.Fatalf("Execute() error = %v, want nil for graceful degrade", err)
+	}
+	if result.IsError {
+		t.Fatalf("result.IsError = true, want graceful fallback")
+	}
+	if elapsed := time.Since(started); elapsed > 400*time.Millisecond {
+		t.Fatalf("fallback took too long: %v", elapsed)
+	}
+}
+
 func TestDiagnoseToolSubAgentDirtyOutputFallback(t *testing.T) {
 	tool := New()
 	invoker := stubDiagnoseSubAgentInvoker{
@@ -178,13 +218,30 @@ func TestDiagnoseToolSubAgentFailedStateFallback(t *testing.T) {
 	}
 }
 
-func TestParseSubAgentDiagnosisRejectsEmptySummary(t *testing.T) {
+func TestParseSubAgentDiagnosisRejectsEmptySummaryAndReport(t *testing.T) {
 	_, err := parseSubAgentDiagnosis(subagent.Output{Summary: ""})
 	if err == nil {
 		t.Fatal("expected parse error")
 	}
-	if !errors.Is(err, errors.New("empty summary")) && err.Error() != "empty summary" {
+	if !errors.Is(err, errors.New("empty summary/report")) && err.Error() != "empty summary/report" {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestParseSubAgentDiagnosisUsesReportWhenSummaryMissing(t *testing.T) {
+	parsed, err := parseSubAgentDiagnosis(subagent.Output{
+		Report:      "PATH 配置错误导致命令不可达",
+		Findings:    []string{"confidence=0.7", "shell 环境变量缺失"},
+		NextActions: []string{"echo $PATH"},
+	})
+	if err != nil {
+		t.Fatalf("parseSubAgentDiagnosis() error = %v", err)
+	}
+	if parsed.RootCause != "PATH 配置错误导致命令不可达" {
+		t.Fatalf("RootCause = %q, want %q", parsed.RootCause, "PATH 配置错误导致命令不可达")
+	}
+	if parsed.Confidence != 0.7 {
+		t.Fatalf("Confidence = %v, want 0.7", parsed.Confidence)
 	}
 }
 
@@ -226,5 +283,19 @@ func TestParseSubAgentDiagnosisFallbacks(t *testing.T) {
 	}
 	if len(parsed.FixCommands) != 1 || parsed.FixCommands[0] != "export HTTPS_PROXY=http://127.0.0.1:7890" {
 		t.Fatalf("FixCommands = %#v", parsed.FixCommands)
+	}
+}
+
+func TestNormalizeDiagnoseFallbackReason(t *testing.T) {
+	if got := normalizeDiagnoseFallbackReason(""); got != "" {
+		t.Fatalf("normalize empty = %q, want empty", got)
+	}
+	got := normalizeDiagnoseFallbackReason("runtime: subagent output json object missing required contract keys")
+	if got != "诊断模型返回格式不符合契约" {
+		t.Fatalf("normalize contract error = %q", got)
+	}
+	custom := "provider timeout"
+	if got := normalizeDiagnoseFallbackReason(custom); got != custom {
+		t.Fatalf("normalize passthrough = %q, want %q", got, custom)
 	}
 }

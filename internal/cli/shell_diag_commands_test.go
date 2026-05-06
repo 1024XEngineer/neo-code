@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -553,4 +554,194 @@ func TestDiagCommandBuildersExposeSocketFlags(t *testing.T) {
 	if auto.Flags().Lookup("socket") == nil {
 		t.Fatal("diag auto command should expose --socket flag")
 	}
+}
+
+func TestDiagInteractiveCommandUsesIDMSocket(t *testing.T) {
+	originalInteractive := runDiagInteractive
+	originalDiagRunner := runDiagCommand
+	originalResolveIDM := resolveLatestIDMPath
+	t.Cleanup(func() { runDiagInteractive = originalInteractive })
+	t.Cleanup(func() { runDiagCommand = originalDiagRunner })
+	t.Cleanup(func() { resolveLatestIDMPath = originalResolveIDM })
+
+	resolveLatestIDMPath = func() (string, error) { return "/tmp/idm.sock", nil }
+	runDiagCommand = func(context.Context, diagCommandOptions) error {
+		t.Fatal("runDiagCommand should not be called in interactive mode")
+		return nil
+	}
+
+	var captured diagCommandOptions
+	var called bool
+	runDiagInteractive = func(_ context.Context, options diagCommandOptions) error {
+		called = true
+		captured = options
+		return nil
+	}
+
+	command := NewRootCommand()
+	command.SetArgs([]string{"diag", "-i"})
+	if err := command.ExecuteContext(context.Background()); err != nil {
+		t.Fatalf("ExecuteContext() error = %v", err)
+	}
+	if !called {
+		t.Fatal("expected runDiagInteractive to be called")
+	}
+	if !captured.Interactive {
+		t.Fatal("captured.Interactive = false, want true")
+	}
+	if captured.SocketPath != "/tmp/idm.sock" {
+		t.Fatalf("captured.SocketPath = %q, want /tmp/idm.sock", captured.SocketPath)
+	}
+}
+
+func TestDiagInteractiveCommandDerivesIDMSocketFromSocketFlag(t *testing.T) {
+	originalInteractive := runDiagInteractive
+	originalDiagRunner := runDiagCommand
+	t.Cleanup(func() { runDiagInteractive = originalInteractive })
+	t.Cleanup(func() { runDiagCommand = originalDiagRunner })
+
+	runDiagCommand = func(context.Context, diagCommandOptions) error {
+		t.Fatal("runDiagCommand should not be called in interactive mode")
+		return nil
+	}
+
+	var captured diagCommandOptions
+	runDiagInteractive = func(_ context.Context, options diagCommandOptions) error {
+		captured = options
+		return nil
+	}
+
+	command := NewRootCommand()
+	command.SetArgs([]string{"diag", "-i", "--socket", "/tmp/custom.sock"})
+	if err := command.ExecuteContext(context.Background()); err != nil {
+		t.Fatalf("ExecuteContext() error = %v", err)
+	}
+	if filepath.Clean(captured.SocketPath) != filepath.Clean("/tmp/custom-idm.sock") {
+		t.Fatalf("captured.SocketPath = %q, want %q", captured.SocketPath, "/tmp/custom-idm.sock")
+	}
+}
+
+func TestDefaultDiagInteractiveCommandRunner(t *testing.T) {
+	originalSend := sendIDMEnterSignalFn
+	t.Cleanup(func() { sendIDMEnterSignalFn = originalSend })
+
+	var captured string
+	sendIDMEnterSignalFn = func(_ context.Context, socketPath string) error {
+		captured = socketPath
+		return nil
+	}
+
+	if err := defaultDiagInteractiveCommandRunner(context.Background(), diagCommandOptions{
+		SocketPath: "/tmp/idm.sock",
+	}); err != nil {
+		t.Fatalf("defaultDiagInteractiveCommandRunner() error = %v", err)
+	}
+	if captured != "/tmp/idm.sock" {
+		t.Fatalf("captured socket = %q, want /tmp/idm.sock", captured)
+	}
+}
+
+func TestResolveIDMDiagSocketPath(t *testing.T) {
+	t.Run("socket flag derives idm path", func(t *testing.T) {
+		path, err := resolveIDMDiagSocketPath(" /tmp/flag.sock ")
+		if err != nil {
+			t.Fatalf("resolveIDMDiagSocketPath() error = %v", err)
+		}
+		if filepath.Clean(path) != filepath.Clean("/tmp/flag-idm.sock") {
+			t.Fatalf("path = %q, want %q", path, "/tmp/flag-idm.sock")
+		}
+	})
+
+	t.Run("socket flag keeps explicit idm path", func(t *testing.T) {
+		path, err := resolveIDMDiagSocketPath(" /tmp/flag-idm.sock ")
+		if err != nil {
+			t.Fatalf("resolveIDMDiagSocketPath() error = %v", err)
+		}
+		if filepath.Clean(path) != filepath.Clean("/tmp/flag-idm.sock") {
+			t.Fatalf("path = %q, want %q", path, "/tmp/flag-idm.sock")
+		}
+	})
+
+	t.Run("idm env has priority over diag env and discovered path", func(t *testing.T) {
+		originalReadEnv := readDiagEnvValue
+		originalResolve := resolveLatestIDMPath
+		t.Cleanup(func() { readDiagEnvValue = originalReadEnv })
+		t.Cleanup(func() { resolveLatestIDMPath = originalResolve })
+
+		readDiagEnvValue = func(key string) string {
+			if key == ptyproxy.IDMDiagSocketEnv {
+				return "/tmp/from-idm-env.sock"
+			}
+			if key == ptyproxy.DiagSocketEnv {
+				return "/tmp/from-diag-env.sock"
+			}
+			return ""
+		}
+		resolveLatestIDMPath = func() (string, error) { return "/tmp/discovered-idm.sock", nil }
+		path, err := resolveIDMDiagSocketPath("")
+		if err != nil {
+			t.Fatalf("resolveIDMDiagSocketPath() error = %v", err)
+		}
+		if path != "/tmp/from-idm-env.sock" {
+			t.Fatalf("path = %q, want /tmp/from-idm-env.sock", path)
+		}
+	})
+
+	t.Run("diag env derives idm path when idm env is absent", func(t *testing.T) {
+		originalReadEnv := readDiagEnvValue
+		originalResolve := resolveLatestIDMPath
+		t.Cleanup(func() { readDiagEnvValue = originalReadEnv })
+		t.Cleanup(func() { resolveLatestIDMPath = originalResolve })
+
+		readDiagEnvValue = func(key string) string {
+			if key == ptyproxy.DiagSocketEnv {
+				return "/tmp/from-diag-env.sock"
+			}
+			return ""
+		}
+		resolveLatestIDMPath = func() (string, error) { return "/tmp/discovered-idm.sock", nil }
+		path, err := resolveIDMDiagSocketPath("")
+		if err != nil {
+			t.Fatalf("resolveIDMDiagSocketPath() error = %v", err)
+		}
+		if filepath.Clean(path) != filepath.Clean("/tmp/from-diag-env-idm.sock") {
+			t.Fatalf("path = %q, want %q", path, "/tmp/from-diag-env-idm.sock")
+		}
+	})
+
+	t.Run("fallback to latest discovered path", func(t *testing.T) {
+		originalReadEnv := readDiagEnvValue
+		originalResolve := resolveLatestIDMPath
+		t.Cleanup(func() { readDiagEnvValue = originalReadEnv })
+		t.Cleanup(func() { resolveLatestIDMPath = originalResolve })
+		readDiagEnvValue = func(string) string { return "" }
+		resolveLatestIDMPath = func() (string, error) { return "/tmp/discovered-idm.sock", nil }
+		path, err := resolveIDMDiagSocketPath("")
+		if err != nil {
+			t.Fatalf("resolveIDMDiagSocketPath() error = %v", err)
+		}
+		if path != "/tmp/discovered-idm.sock" {
+			t.Fatalf("path = %q, want /tmp/discovered-idm.sock", path)
+		}
+	})
+
+	t.Run("missing path returns actionable error", func(t *testing.T) {
+		originalReadEnv := readDiagEnvValue
+		originalResolve := resolveLatestIDMPath
+		t.Cleanup(func() { readDiagEnvValue = originalReadEnv })
+		t.Cleanup(func() { resolveLatestIDMPath = originalResolve })
+		readDiagEnvValue = func(string) string { return "" }
+		resolveLatestIDMPath = func() (string, error) { return "", errors.New("not found") }
+
+		_, err := resolveIDMDiagSocketPath("")
+		if err == nil {
+			t.Fatal("expected missing idm socket error")
+		}
+		if !strings.Contains(err.Error(), "idm socket is empty") {
+			t.Fatalf("err = %v, want contains idm socket is empty", err)
+		}
+		if !strings.Contains(err.Error(), ptyproxy.IDMDiagSocketEnv) {
+			t.Fatalf("err = %v, want contains %s", err, ptyproxy.IDMDiagSocketEnv)
+		}
+	})
 }

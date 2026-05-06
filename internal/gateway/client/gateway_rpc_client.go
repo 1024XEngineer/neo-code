@@ -57,6 +57,7 @@ type GatewayRPCClientOptions struct {
 	RetryCount           int
 	HeartbeatInterval    time.Duration
 	HeartbeatTimeout     time.Duration
+	DisableHeartbeatLog  bool
 	DisableAutoSpawn     bool
 	AutoSpawnGateway     gatewayAutoSpawnFunc
 	Dial                 func(address string) (net.Conn, error)
@@ -123,19 +124,20 @@ type gatewayRPCResponse struct {
 
 // GatewayRPCClient 维护与 Gateway 的长连接、请求关联与通知分发。
 type GatewayRPCClient struct {
-	listenAddress     string
-	tokenFile         string
-	token             string
-	requestTimeout    time.Duration
-	retryCount        int
-	heartbeatInterval time.Duration
-	heartbeatTimeout  time.Duration
-	dialFn            func(address string) (net.Conn, error)
-	disableAutoSpawn  bool
-	autoSpawnFn       gatewayAutoSpawnFunc
-	autoSpawnAttempt  bool
-	spawnedCmd        *exec.Cmd
-	spawnedCmdDone    chan struct{}
+	listenAddress       string
+	tokenFile           string
+	token               string
+	requestTimeout      time.Duration
+	retryCount          int
+	heartbeatInterval   time.Duration
+	heartbeatTimeout    time.Duration
+	disableHeartbeatLog bool
+	dialFn              func(address string) (net.Conn, error)
+	disableAutoSpawn    bool
+	autoSpawnFn         gatewayAutoSpawnFunc
+	autoSpawnAttempt    bool
+	spawnedCmd          *exec.Cmd
+	spawnedCmdDone      chan struct{}
 
 	closeOnce sync.Once
 	closed    chan struct{}
@@ -207,6 +209,7 @@ func NewGatewayRPCClient(options GatewayRPCClientOptions) (*GatewayRPCClient, er
 		retryCount:                 retryCount,
 		heartbeatInterval:          heartbeatInterval,
 		heartbeatTimeout:           heartbeatTimeout,
+		disableHeartbeatLog:        options.DisableHeartbeatLog,
 		disableAutoSpawn:           options.DisableAutoSpawn,
 		autoSpawnFn:                autoSpawnFn,
 		dialFn:                     dialFn,
@@ -285,6 +288,15 @@ func (c *GatewayRPCClient) CallWithOptions(
 		lastErr = c.callOnce(ctx, method, params, result, timeout)
 		if lastErr == nil {
 			return nil
+		}
+		// 当连接级鉴权状态丢失时，先尝试透明重鉴权再重放本次调用。
+		if isUnauthorizedGatewayCallError(lastErr) && !isAuthenticateGatewayMethod(method) {
+			if reauthErr := c.reauthenticate(ctx, timeout); reauthErr == nil {
+				lastErr = c.callOnce(ctx, method, params, result, timeout)
+				if lastErr == nil {
+					return nil
+				}
+			}
 		}
 		if !isRetryableGatewayCallError(lastErr) || attempt == retries {
 			return lastErr
@@ -692,6 +704,10 @@ func (c *GatewayRPCClient) startHeartbeat(ctx context.Context, conn net.Conn) {
 			if !c.isConnectionCurrent(conn) {
 				return
 			}
+			// 网关 IPC 连接是串行处理模型：当已有在途 RPC 时，跳过本轮心跳以避免排队超时误判。
+			if c.hasPendingRequests(conn) {
+				continue
+			}
 
 			pingCtx, cancel := context.WithTimeout(ctx, timeout)
 			err := c.CallWithOptions(
@@ -712,9 +728,33 @@ func (c *GatewayRPCClient) startHeartbeat(ctx context.Context, conn net.Conn) {
 			if !c.isConnectionCurrent(conn) {
 				return
 			}
-			log.Printf("warning: gateway rpc heartbeat ping failed: %v", err)
+			if isUnauthorizedGatewayCallError(err) {
+				reauthCtx, reauthCancel := context.WithTimeout(ctx, timeout)
+				reauthErr := c.reauthenticate(reauthCtx, timeout)
+				reauthCancel()
+				if reauthErr == nil {
+					continue
+				}
+				c.logHeartbeatWarningf("warning: gateway rpc heartbeat authorization lost, reset connection: %v", reauthErr)
+				c.resetConnection()
+				return
+			}
+			if shouldResetConnectionOnHeartbeatError(err) {
+				c.logHeartbeatWarningf("warning: gateway rpc heartbeat ping failed, reset connection: %v", err)
+				c.resetConnection()
+				return
+			}
+			c.logHeartbeatWarningf("warning: gateway rpc heartbeat ping failed: %v", err)
 		}
 	}()
+}
+
+// logHeartbeatWarningf 在未禁用时输出心跳告警，避免污染交互终端。
+func (c *GatewayRPCClient) logHeartbeatWarningf(format string, args ...any) {
+	if c == nil || c.disableHeartbeatLog {
+		return
+	}
+	log.Printf(format, args...)
 }
 
 // isConnectionCurrent 判断给定连接是否仍是当前活动连接，用于约束心跳协程不跨连接存活。
@@ -722,6 +762,16 @@ func (c *GatewayRPCClient) isConnectionCurrent(conn net.Conn) bool {
 	c.stateMu.Lock()
 	defer c.stateMu.Unlock()
 	return c.conn == conn
+}
+
+// hasPendingRequests 判断当前连接是否存在在途 RPC 请求。
+func (c *GatewayRPCClient) hasPendingRequests(conn net.Conn) bool {
+	c.stateMu.Lock()
+	defer c.stateMu.Unlock()
+	if c.conn != conn {
+		return false
+	}
+	return len(c.pending) > 0
 }
 
 func mapGatewayRPCError(method string, rpcError *protocol.JSONRPCError) error {
@@ -1032,6 +1082,61 @@ func isRetryableGatewayCallError(err error) bool {
 		return strings.EqualFold(strings.TrimSpace(rpcErr.GatewayCode), protocol.GatewayCodeTimeout)
 	}
 	return false
+}
+
+// shouldResetConnectionOnHeartbeatError 判断心跳失败是否应立即摘除连接并等待下次请求重建。
+func shouldResetConnectionOnHeartbeatError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.Canceled) {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var transportErr *gatewayRPCTransportError
+	if errors.As(err, &transportErr) {
+		return true
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		return true
+	}
+	return false
+}
+
+// isAuthenticateGatewayMethod 判断当前 RPC 方法是否为 gateway.authenticate。
+func isAuthenticateGatewayMethod(method string) bool {
+	return strings.EqualFold(strings.TrimSpace(method), protocol.MethodGatewayAuthenticate)
+}
+
+// isUnauthorizedGatewayCallError 判断错误是否为网关 unauthorized。
+func isUnauthorizedGatewayCallError(err error) bool {
+	var rpcErr *GatewayRPCError
+	if !errors.As(err, &rpcErr) {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(rpcErr.GatewayCode), protocol.GatewayCodeUnauthorized)
+}
+
+// reauthenticate 在现有连接上执行一次 gateway.authenticate，用于恢复连接级鉴权态。
+func (c *GatewayRPCClient) reauthenticate(ctx context.Context, timeout time.Duration) error {
+	if c == nil {
+		return errors.New("gateway rpc client is nil")
+	}
+	token, err := c.ensureGatewayAuthToken(ctx)
+	if err != nil {
+		return err
+	}
+	var ack map[string]any
+	return c.callOnce(
+		ctx,
+		protocol.MethodGatewayAuthenticate,
+		protocol.AuthenticateParams{Token: token},
+		&ack,
+		timeout,
+	)
 }
 
 // loadGatewayAuthToken 读取 Gateway 静默认证 Token。

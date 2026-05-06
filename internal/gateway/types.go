@@ -42,6 +42,8 @@ const (
 	FrameActionCancel FrameAction = "cancel"
 	// FrameActionListSessions 表示获取会话摘要列表。
 	FrameActionListSessions FrameAction = "list_sessions"
+	// FrameActionCreateSession 表示显式创建会话。
+	FrameActionCreateSession FrameAction = "create_session"
 	// FrameActionLoadSession 表示加载指定会话详情。
 	FrameActionLoadSession FrameAction = "load_session"
 	// FrameActionListSessionTodos 表示查询指定会话 Todo 快照。

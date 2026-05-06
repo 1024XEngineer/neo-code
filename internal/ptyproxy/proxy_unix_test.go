@@ -51,6 +51,44 @@ func TestListenDiagSocketRecoversStaleSocket(t *testing.T) {
 	_ = os.Remove(resolvedPath)
 }
 
+func TestListenIDMSocketDerivesFromDiagSocketOverride(t *testing.T) {
+	diagSocketPath := filepath.Join(t.TempDir(), "custom-diag.sock")
+	listener, idmPath, err := listenIDMSocket(diagSocketPath)
+	if err != nil {
+		t.Fatalf("listenIDMSocket() error = %v", err)
+	}
+	defer listener.Close()
+	defer os.Remove(idmPath)
+
+	expected := filepath.Join(filepath.Dir(diagSocketPath), "custom-diag-idm.sock")
+	if filepath.Clean(idmPath) != filepath.Clean(expected) {
+		t.Fatalf("idm path = %q, want %q", idmPath, expected)
+	}
+}
+
+func TestListenIDMSocketFallsBackToDefaultPath(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	listener, idmPath, err := listenIDMSocket("")
+	if err != nil {
+		t.Fatalf("listenIDMSocket() error = %v", err)
+	}
+	defer listener.Close()
+	defer os.Remove(idmPath)
+
+	if !strings.HasSuffix(filepath.ToSlash(idmPath), "-idm.sock") {
+		t.Fatalf("idm path = %q, want suffix -idm.sock", idmPath)
+	}
+}
+
+func TestListenIDMSocketRejectsInvalidDiagPath(t *testing.T) {
+	_, _, err := listenIDMSocket(" . ")
+	if err == nil || !strings.Contains(err.Error(), "empty diagnose socket") {
+		t.Fatalf("err = %v, want empty diagnose socket", err)
+	}
+}
+
 func TestCleanupStaleSocketRejectsRegularFile(t *testing.T) {
 	socketPath := filepath.Join(t.TempDir(), "not-socket.sock")
 	if err := os.WriteFile(socketPath, []byte("x"), 0o600); err != nil {
@@ -83,6 +121,7 @@ func TestHandleDiagSocketConnectionAutoMode(t *testing.T) {
 			jobCh := make(chan diagnoseJob, 1)
 			autoState := &autoRuntimeState{}
 			autoState.Enabled.Store(!tc.wantEnabled)
+			autoState.OSCReady.Store(true)
 			done := make(chan struct{})
 			go func() {
 				handleDiagSocketConnection(context.Background(), serverConn, jobCh, autoState)
@@ -601,6 +640,16 @@ func TestCommandTrackerObserve(t *testing.T) {
 			inputs: [][]byte{[]byte("echo 1\n"), []byte("echo 2\r")},
 			want:   "echo 2",
 		},
+		{
+			name: "ignore terminal escape keys",
+			inputs: [][]byte{
+				[]byte("cat a/b/csssssss"),
+				[]byte("\x1b[A"),
+				[]byte("\x1b[B"),
+				[]byte("\r"),
+			},
+			want: "cat a/b/csssssss",
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -924,6 +973,52 @@ func TestStreamPTYOutputEmitsAutoTrigger(t *testing.T) {
 	}
 }
 
+func TestStreamPTYOutputEmitsAutoTriggerWithoutCommandStartEvent(t *testing.T) {
+	payloadReader, payloadWriter := io.Pipe()
+	defer payloadReader.Close()
+	output := &bytes.Buffer{}
+	commandLog := NewUTF8RingBuffer(1024)
+	tracker := &commandTracker{}
+	tracker.Observe([]byte("cat missing-file\r"))
+	autoTriggers := make(chan diagnoseTrigger, 1)
+	autoState := &autoRuntimeState{}
+	autoState.Enabled.Store(true)
+
+	streamDone := make(chan struct{})
+	go func() {
+		defer close(streamDone)
+		streamPTYOutput(payloadReader, output, commandLog, tracker, autoTriggers, autoState)
+	}()
+	go func() {
+		// 模拟仅有 D/A 事件、缺失 C 事件的 shell 集成场景。
+		_, _ = payloadWriter.Write([]byte("cat: missing-file: No such file or directory\n"))
+		_, _ = payloadWriter.Write([]byte("\x1b]133;D;1\x07"))
+		_, _ = payloadWriter.Write([]byte("\x1b]133;A\x07"))
+		_ = payloadWriter.Close()
+	}()
+
+	select {
+	case trigger := <-autoTriggers:
+		if trigger.CommandText != "cat missing-file" {
+			t.Fatalf("trigger.CommandText = %q, want %q", trigger.CommandText, "cat missing-file")
+		}
+		if trigger.ExitCode != 1 {
+			t.Fatalf("trigger.ExitCode = %d, want 1", trigger.ExitCode)
+		}
+		if !strings.Contains(trigger.OutputText, "No such file or directory") {
+			t.Fatalf("trigger.OutputText = %q, want contains missing-file error", trigger.OutputText)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected one auto diagnose trigger when command_start is missing")
+	}
+
+	select {
+	case <-streamDone:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("streamPTYOutput did not finish")
+	}
+}
+
 func TestStreamPTYOutputSkipsTriggerWhenAutoDisabled(t *testing.T) {
 	// Without OSC133 A (PromptReady): auto stays disabled, pendingTrigger is never sent.
 	payload := strings.NewReader(
@@ -1200,7 +1295,7 @@ func TestCallDiagnoseToolGatewayFrameError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected gateway frame error")
 	}
-	if !strings.Contains(err.Error(), "mock_failed") || !strings.Contains(err.Error(), "boom") {
+	if !strings.Contains(err.Error(), "诊断服务暂不可用") {
 		t.Fatalf("unexpected error = %v", err)
 	}
 	if serverErr := <-serverDone; serverErr != nil {
@@ -1360,7 +1455,7 @@ func TestRunSingleDiagnosisGatewayUnavailableDoesNotPanic(t *testing.T) {
 	_, _ = buffer.Write([]byte("diagnose log + \u001b[31merror\u001b[0m"))
 
 	output := &bytes.Buffer{}
-	runSingleDiagnosis(
+	_ = runSingleDiagnosis(
 		nil,
 		output,
 		buffer,
@@ -1439,7 +1534,7 @@ func TestRunSingleDiagnosisAutoDisabledSkipsRender(t *testing.T) {
 	autoState := &autoRuntimeState{}
 	autoState.Enabled.Store(false)
 
-	runSingleDiagnosis(
+	_ = runSingleDiagnosis(
 		rpcClient,
 		output,
 		buffer,
@@ -1475,7 +1570,7 @@ func TestConsumeDiagSignalsAndBannerPaths(t *testing.T) {
 		autoState := &autoRuntimeState{}
 		autoState.Enabled.Store(true)
 
-		consumeDiagSignals(ctx, nil, jobCh, output, NewUTF8RingBuffer(1024), ManualShellOptions{}, "/tmp/diag.sock", autoState)
+		consumeDiagSignals(ctx, nil, jobCh, output, NewUTF8RingBuffer(1024), ManualShellOptions{}, "/tmp/diag.sock", autoState, nil)
 		select {
 		case response := <-doneCh:
 			if !response.OK {
@@ -1508,16 +1603,75 @@ func TestConsumeDiagSignalsAndBannerPaths(t *testing.T) {
 			t.Fatalf("banner output = %q", text)
 		}
 	})
+
+	t.Run("auto diagnosis soft failure does not callback", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		jobCh := make(chan diagnoseJob, 1)
+		jobCh <- diagnoseJob{
+			Trigger: diagnoseTrigger{CommandText: "cat missing", ExitCode: 1, OutputText: "No such file"},
+			IsAuto:  true,
+		}
+		close(jobCh)
+
+		output := &bytes.Buffer{}
+		autoState := &autoRuntimeState{}
+		autoState.Enabled.Store(true)
+		autoState.OSCReady.Store(true)
+		callbackTriggered := make(chan error, 1)
+
+		consumeDiagSignals(
+			ctx,
+			nil,
+			jobCh,
+			output,
+			NewUTF8RingBuffer(1024),
+			ManualShellOptions{},
+			"/tmp/diag.sock",
+			autoState,
+			func(err error) { callbackTriggered <- err },
+		)
+
+		select {
+		case <-callbackTriggered:
+			t.Fatal("soft failure should not trigger auto diagnosis fatal callback")
+		default:
+		}
+	})
+}
+
+func TestShouldTerminateShellOnAutoDiagnoseError(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "nil", err: nil, want: false},
+		{name: "timeout", err: errors.New("context deadline exceeded"), want: false},
+		{name: "rate limit", err: errors.New("provider error: rate_limited"), want: false},
+		{name: "provider stream eof", err: errors.New("runtime: subagent provider generate: SDK stream error: EOF"), want: false},
+		{name: "unauthorized", err: errors.New("gateway rpc gateway.executeSystemTool failed (unauthorized): unauthorized"), want: true},
+		{name: "transport closed", err: errors.New("gateway rpc gateway.executeSystemTool transport error: use of closed network connection"), want: true},
+	}
+
+	for _, tc := range tests {
+		got := shouldTerminateShellOnAutoDiagnoseError(tc.err)
+		if got != tc.want {
+			t.Fatalf("%s: got %v, want %v", tc.name, got, tc.want)
+		}
+	}
 }
 
 func TestHandleDiagSocketConnectionAutoModeBranches(t *testing.T) {
-	execRequest := func(t *testing.T, cmd string, initialEnabled bool) (diagIPCResponse, bool) {
+	execRequest := func(t *testing.T, cmd string, initialEnabled bool, oscReady bool) (diagIPCResponse, bool) {
 		t.Helper()
 		serverConn, clientConn := net.Pipe()
 		defer clientConn.Close()
 
 		autoState := &autoRuntimeState{}
 		autoState.Enabled.Store(initialEnabled)
+		autoState.OSCReady.Store(oscReady)
 		jobCh := make(chan diagnoseJob, 1)
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
@@ -1549,16 +1703,33 @@ func TestHandleDiagSocketConnectionAutoModeBranches(t *testing.T) {
 	}
 
 	t.Run("auto off", func(t *testing.T) {
-		response, enabled := execRequest(t, diagCommandAutoOff, true)
+		response, enabled := execRequest(t, diagCommandAutoOff, true, true)
 		if !response.OK || enabled {
 			t.Fatalf("response=%#v enabled=%v, want ok=true enabled=false", response, enabled)
 		}
 	})
 
 	t.Run("auto status", func(t *testing.T) {
-		response, enabled := execRequest(t, diagCommandAutoStatus, false)
+		response, enabled := execRequest(t, diagCommandAutoStatus, false, false)
 		if !response.OK || response.Message == "" || response.AutoEnabled != enabled {
 			t.Fatalf("response=%#v enabled=%v", response, enabled)
+		}
+	})
+
+	t.Run("auto on unavailable without osc", func(t *testing.T) {
+		response, enabled := execRequest(t, diagCommandAutoOn, false, false)
+		if !response.OK || enabled {
+			t.Fatalf("response=%#v enabled=%v, want ok=true enabled=false", response, enabled)
+		}
+		if !strings.Contains(response.Message, "unavailable") {
+			t.Fatalf("response message = %q, want contains unavailable", response.Message)
+		}
+	})
+
+	t.Run("auto on with osc ready", func(t *testing.T) {
+		response, enabled := execRequest(t, diagCommandAutoOn, false, true)
+		if !response.OK || !enabled {
+			t.Fatalf("response=%#v enabled=%v, want ok=true enabled=true", response, enabled)
 		}
 	})
 }
@@ -1573,7 +1744,7 @@ func TestConsumeDiagSignalsClosedChannelReturns(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		consumeDiagSignals(ctx, nil, jobCh, &bytes.Buffer{}, NewUTF8RingBuffer(1024), ManualShellOptions{}, "/tmp/diag.sock", &autoRuntimeState{})
+		consumeDiagSignals(ctx, nil, jobCh, &bytes.Buffer{}, NewUTF8RingBuffer(1024), ManualShellOptions{}, "/tmp/diag.sock", &autoRuntimeState{}, nil)
 	}()
 
 	select {
@@ -1642,7 +1813,7 @@ func TestCallDiagnoseToolDecodePayloadFailure(t *testing.T) {
 		filepath.Join(baseDir, "diag.sock"),
 		diagnoseTrigger{CommandText: "go test ./...", ExitCode: 1, OutputText: "fatal"},
 	)
-	if err == nil || !strings.Contains(err.Error(), "decode tool payload") {
+	if err == nil || !strings.Contains(err.Error(), "诊断结果解析失败") {
 		t.Fatalf("expected decode failure error, got %v", err)
 	}
 	if serverErr := <-serverDone; serverErr != nil {
@@ -1726,7 +1897,7 @@ func TestPrepareBashInitRCAndBuildShellCommand(t *testing.T) {
 		createZshInitDir = func() (string, error) { return zdotDirPath, nil }
 		deleteZshInitDir = func(path string) { deletedZdotDir = path }
 
-		cmd, cleanup := buildShellCommand("/bin/bash", ManualShellOptions{Workdir: t.TempDir()}, "/tmp/diag.sock")
+		cmd, cleanup := buildShellCommand("/bin/bash", ManualShellOptions{Workdir: t.TempDir()}, "/tmp/diag.sock", "/tmp/idm.sock")
 		if cmd.Path != "/bin/bash" {
 			t.Fatalf("cmd.Path = %q, want /bin/bash", cmd.Path)
 		}
@@ -1734,21 +1905,27 @@ func TestPrepareBashInitRCAndBuildShellCommand(t *testing.T) {
 			t.Fatalf("cmd.Args = %#v, want contains --rcfile", cmd.Args)
 		}
 		foundDiagEnv := false
+		foundIDMEnv := false
 		for _, env := range cmd.Env {
 			if strings.HasPrefix(env, DiagSocketEnv+"=") && strings.HasSuffix(env, "/tmp/diag.sock") {
 				foundDiagEnv = true
-				break
+			}
+			if strings.HasPrefix(env, IDMDiagSocketEnv+"=") && strings.HasSuffix(env, "/tmp/idm.sock") {
+				foundIDMEnv = true
 			}
 		}
 		if !foundDiagEnv {
 			t.Fatalf("cmd.Env = %#v, want %s", cmd.Env, DiagSocketEnv)
+		}
+		if !foundIDMEnv {
+			t.Fatalf("cmd.Env = %#v, want %s", cmd.Env, IDMDiagSocketEnv)
 		}
 		cleanup()
 		if deletedPath != rcPath {
 			t.Fatalf("deletedPath = %q, want %q", deletedPath, rcPath)
 		}
 
-		cmd, cleanup = buildShellCommand("/bin/zsh", ManualShellOptions{Workdir: t.TempDir()}, "/tmp/diag.sock")
+		cmd, cleanup = buildShellCommand("/bin/zsh", ManualShellOptions{Workdir: t.TempDir()}, "/tmp/diag.sock", "/tmp/idm.sock")
 		if strings.Contains(strings.Join(cmd.Args, " "), "--rcfile") {
 			t.Fatalf("zsh cmd.Args = %#v, should not contain --rcfile", cmd.Args)
 		}
@@ -1785,6 +1962,9 @@ func TestDefaultBashInitRCFileLifecycle(t *testing.T) {
 	if !strings.Contains(text, ". ~/.bashrc") {
 		t.Fatalf("rc file content missing ~/.bashrc include: %q", text)
 	}
+	if strings.Index(text, ". ~/.bashrc") > strings.Index(text, "neocode shell integration") {
+		t.Fatalf("expected ~/.bashrc include before integration hook, got: %q", text)
+	}
 
 	defaultDeleteBashInitRCFile(path)
 	if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
@@ -1810,6 +1990,9 @@ func TestDefaultZshInitDirLifecycle(t *testing.T) {
 	}
 	if !strings.Contains(text, ". \"${HOME}/.zshrc\"") {
 		t.Fatalf("zsh rc content missing ${HOME}/.zshrc include: %q", text)
+	}
+	if strings.Index(text, ". \"${HOME}/.zshrc\"") > strings.Index(text, "neocode shell integration") {
+		t.Fatalf("expected ${HOME}/.zshrc include before integration hook, got: %q", text)
 	}
 
 	defaultDeleteZshInitDir(path)

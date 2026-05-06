@@ -46,6 +46,7 @@ const (
 	defaultInlineSubAgentToolTimeout = 3 * time.Minute
 	maxInlineSubAgentToolTimeout     = 10 * time.Minute
 	minInlineSubAgentToolTimeout     = 30 * time.Second
+	defaultDiagnoseToolTimeout       = 60 * time.Second
 	defaultPermissionToolTimeout     = 20 * time.Second
 )
 
@@ -233,7 +234,14 @@ func resolveToolExecutionTimeout(call providertypes.ToolCall, fallback time.Dura
 	if base <= 0 {
 		base = defaultPermissionToolTimeout
 	}
-	if !strings.EqualFold(strings.TrimSpace(call.Name), tools.ToolNameSpawnSubAgent) {
+	name := strings.TrimSpace(call.Name)
+	if strings.EqualFold(name, tools.ToolNameDiagnose) {
+		if base < defaultDiagnoseToolTimeout {
+			return defaultDiagnoseToolTimeout
+		}
+		return base
+	}
+	if !strings.EqualFold(name, tools.ToolNameSpawnSubAgent) {
 		return base
 	}
 

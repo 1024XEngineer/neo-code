@@ -44,6 +44,39 @@ func TestResolveLatestRunDiagSocketPath(t *testing.T) {
 	}
 }
 
+func TestResolveLatestIDMDiagSocketPath(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	runDir := filepath.Join(home, ".neocode", "run")
+	if err := os.MkdirAll(runDir, 0o700); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+
+	firstPath := filepath.Join(runDir, diagSocketFilePrefix+"111"+idmSocketFileMidfix+diagSocketFileSuffix)
+	firstListener, err := net.Listen("unix", firstPath)
+	if err != nil {
+		t.Fatalf("net.Listen(first) error = %v", err)
+	}
+	defer firstListener.Close()
+
+	time.Sleep(20 * time.Millisecond)
+
+	secondPath := filepath.Join(runDir, diagSocketFilePrefix+"222"+idmSocketFileMidfix+diagSocketFileSuffix)
+	secondListener, err := net.Listen("unix", secondPath)
+	if err != nil {
+		t.Fatalf("net.Listen(second) error = %v", err)
+	}
+	defer secondListener.Close()
+
+	latest, err := ResolveLatestIDMDiagSocketPath()
+	if err != nil {
+		t.Fatalf("ResolveLatestIDMDiagSocketPath() error = %v", err)
+	}
+	if filepath.Clean(latest) != filepath.Clean(secondPath) {
+		t.Fatalf("latest = %q, want %q", latest, secondPath)
+	}
+}
+
 func TestResolveLatestRunDiagSocketPathNoSocketCandidate(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -82,6 +115,57 @@ func TestResolveDiagSocketPathForPIDExplicit(t *testing.T) {
 	if !strings.Contains(path, diagSocketFilePrefix+"12345"+diagSocketFileSuffix) {
 		t.Fatalf("path = %q, want contains explicit pid suffix", path)
 	}
+}
+
+func TestResolveIDMDiagSocketPathForPIDExplicit(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	path, err := resolveIDMDiagSocketPathForPID(12345)
+	if err != nil {
+		t.Fatalf("resolveIDMDiagSocketPathForPID() error = %v", err)
+	}
+	if !strings.Contains(path, diagSocketFilePrefix+"12345"+idmSocketFileMidfix+diagSocketFileSuffix) {
+		t.Fatalf("path = %q, want contains explicit idm pid suffix", path)
+	}
+}
+
+func TestDeriveIDMSocketPathFromDiagSocketPath(t *testing.T) {
+	t.Run("derive from regular diag socket", func(t *testing.T) {
+		path, err := DeriveIDMSocketPathFromDiagSocketPath("/tmp/neocode-diag-123.sock")
+		if err != nil {
+			t.Fatalf("DeriveIDMSocketPathFromDiagSocketPath() error = %v", err)
+		}
+		if path != "/tmp/neocode-diag-123-idm.sock" {
+			t.Fatalf("path = %q, want /tmp/neocode-diag-123-idm.sock", path)
+		}
+	})
+
+	t.Run("already idm path keeps unchanged", func(t *testing.T) {
+		path, err := DeriveIDMSocketPathFromDiagSocketPath("/tmp/neocode-diag-123-idm.sock")
+		if err != nil {
+			t.Fatalf("DeriveIDMSocketPathFromDiagSocketPath() error = %v", err)
+		}
+		if path != "/tmp/neocode-diag-123-idm.sock" {
+			t.Fatalf("path = %q, want /tmp/neocode-diag-123-idm.sock", path)
+		}
+	})
+
+	t.Run("non sock suffix appends idm sock suffix", func(t *testing.T) {
+		path, err := DeriveIDMSocketPathFromDiagSocketPath("/tmp/custom-socket")
+		if err != nil {
+			t.Fatalf("DeriveIDMSocketPathFromDiagSocketPath() error = %v", err)
+		}
+		if path != "/tmp/custom-socket-idm.sock" {
+			t.Fatalf("path = %q, want /tmp/custom-socket-idm.sock", path)
+		}
+	})
+
+	t.Run("empty path returns error", func(t *testing.T) {
+		_, err := DeriveIDMSocketPathFromDiagSocketPath("   ")
+		if err == nil || !strings.Contains(err.Error(), "empty diagnose socket") {
+			t.Fatalf("err = %v, want empty diagnose socket", err)
+		}
+	})
 }
 
 func TestFindLatestSocketByPatternGlobError(t *testing.T) {

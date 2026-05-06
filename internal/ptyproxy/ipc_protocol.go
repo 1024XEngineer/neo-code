@@ -10,6 +10,7 @@ const (
 	diagCommandAutoOn     = "auto_on"
 	diagCommandAutoOff    = "auto_off"
 	diagCommandAutoStatus = "auto_status"
+	diagCommandIDMEnter   = "idm_enter"
 )
 
 type diagIPCRequest struct {

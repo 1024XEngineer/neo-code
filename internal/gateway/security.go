@@ -58,6 +58,7 @@ func fullControlPlaneMethods() map[string]struct{} {
 		"gateway.listAvailableSkills",
 		"gateway.cancel",
 		"gateway.listSessions",
+		"gateway.createSession",
 		"gateway.loadSession",
 		"session.todos.list",
 		"runtime.snapshot.get",

@@ -9,7 +9,6 @@ const config = {
 		buildResources: 'build',
 	},
 	files: [
-		'dist/**/*',
 		'dist-electron/**/*',
 	],
 	extraResources: [
@@ -25,14 +24,22 @@ const config = {
 				target: 'nsis',
 				arch: ['x64'],
 			},
+			{
+				target: 'portable',
+				arch: ['x64'],
+			},
 		],
-		artifactName: '${productName}-${version}-Setup.${ext}',
 	},
 	nsis: {
 		oneClick: false,
 		perMachine: false,
 		allowToChangeInstallationDirectory: true,
 		deleteAppDataOnUninstall: false,
+		artifactName: '${productName}-${version}-Setup.${ext}',
+		language: '2052',
+	},
+	portable: {
+		artifactName: '${productName}-${version}-Portable.${ext}',
 	},
 	mac: {
 		target: [
@@ -51,6 +58,12 @@ const config = {
 			},
 		],
 		artifactName: '${productName}-${version}.${ext}',
+	},
+	publish: {
+		provider: 'github',
+		owner: '1024XEngineer',
+		repo: 'neo-code',
+		releaseType: 'release',
 	},
 }
 

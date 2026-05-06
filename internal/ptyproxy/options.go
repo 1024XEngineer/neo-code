@@ -9,8 +9,10 @@ import (
 )
 
 const (
-	// DiagSocketEnv 是 shell 子进程内用于定位诊断 socket 的环境变量名。
+	// DiagSocketEnv 是 shell 子进程内用于定位普通诊断 socket 的环境变量名。
 	DiagSocketEnv = "NEOCODE_DIAG_SOCKET"
+	// IDMDiagSocketEnv 是 shell 子进程内用于定位 IDM 诊断 socket 的环境变量名。
+	IDMDiagSocketEnv = "NEOCODE_IDM_SOCKET"
 	// DefaultRingBufferCapacity 定义诊断日志缓存窗口的默认字节上限（64KB）。
 	DefaultRingBufferCapacity = 64 * 1024
 )

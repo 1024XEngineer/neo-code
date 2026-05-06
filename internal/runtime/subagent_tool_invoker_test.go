@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -79,6 +80,95 @@ func TestRuntimeSubAgentInvokerRun(t *testing.T) {
 	}
 	if result.State != subagent.StateSucceeded {
 		t.Fatalf("state = %q, want %q", result.State, subagent.StateSucceeded)
+	}
+}
+
+func TestRuntimeSubAgentInvokerRunAppliesInputTimeoutToContext(t *testing.T) {
+	t.Parallel()
+
+	service := NewWithFactory(
+		newRuntimeConfigManager(t),
+		&stubToolManager{},
+		newMemoryStore(),
+		&scriptedProviderFactory{provider: &scriptedProvider{}},
+		nil,
+	)
+	service.SetSubAgentFactory(subagent.NewWorkerFactory(func(role subagent.Role, policy subagent.RolePolicy) subagent.Engine {
+		_ = role
+		_ = policy
+		return subagent.EngineFunc(func(ctx context.Context, _ subagent.StepInput) (subagent.StepOutput, error) {
+			<-ctx.Done()
+			return subagent.StepOutput{}, ctx.Err()
+		})
+	}))
+
+	invoker := newRuntimeSubAgentInvoker(service, "run-timeout", "session-timeout", "agent-main", t.TempDir())
+	if invoker == nil {
+		t.Fatalf("expected non-nil invoker")
+	}
+
+	startedAt := time.Now()
+	_, err := invoker.Run(context.Background(), tools.SubAgentRunInput{
+		Role:        subagent.RoleCoder,
+		TaskID:      "task-timeout",
+		Goal:        "force timeout",
+		ExpectedOut: "json summary",
+		Timeout:     80 * time.Millisecond,
+		MaxSteps:    2,
+	})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Run() error = %v, want context deadline exceeded", err)
+	}
+	if elapsed := time.Since(startedAt); elapsed > 400*time.Millisecond {
+		t.Fatalf("timeout propagation is too slow, elapsed = %v", elapsed)
+	}
+}
+
+func TestRuntimeSubAgentInvokerRunKeepsParentDeadlineWhenPresent(t *testing.T) {
+	t.Parallel()
+
+	service := NewWithFactory(
+		newRuntimeConfigManager(t),
+		&stubToolManager{},
+		newMemoryStore(),
+		&scriptedProviderFactory{provider: &scriptedProvider{}},
+		nil,
+	)
+	service.SetSubAgentFactory(subagent.NewWorkerFactory(func(role subagent.Role, policy subagent.RolePolicy) subagent.Engine {
+		_ = role
+		_ = policy
+		return subagent.EngineFunc(func(ctx context.Context, _ subagent.StepInput) (subagent.StepOutput, error) {
+			<-ctx.Done()
+			return subagent.StepOutput{}, ctx.Err()
+		})
+	}))
+
+	invoker := newRuntimeSubAgentInvoker(service, "run-parent-deadline", "session-parent-deadline", "agent-main", t.TempDir())
+	if invoker == nil {
+		t.Fatalf("expected non-nil invoker")
+	}
+
+	parentCtx, cancel := context.WithTimeout(context.Background(), 180*time.Millisecond)
+	defer cancel()
+
+	startedAt := time.Now()
+	_, err := invoker.Run(parentCtx, tools.SubAgentRunInput{
+		Role:        subagent.RoleCoder,
+		TaskID:      "task-parent-deadline",
+		Goal:        "respect parent deadline",
+		ExpectedOut: "json summary",
+		Timeout:     50 * time.Millisecond,
+		MaxSteps:    2,
+	})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Run() error = %v, want context deadline exceeded", err)
+	}
+	elapsed := time.Since(startedAt)
+	if elapsed < 120*time.Millisecond {
+		t.Fatalf("elapsed = %v, want keep parent deadline (not narrowed by input timeout)", elapsed)
+	}
+	if elapsed > 500*time.Millisecond {
+		t.Fatalf("elapsed = %v, want bounded by parent deadline", elapsed)
 	}
 }
 
@@ -333,7 +423,7 @@ func TestRuntimeSubAgentInvokerDefaultsEmptyTaskTypeToReview(t *testing.T) {
 func TestResolveInlineSubAgentCapabilityWithoutParent(t *testing.T) {
 	t.Parallel()
 
-	got, err := resolveInlineSubAgentCapability(nil, []string{" Bash ", "bash", ""}, []string{"/a", "/a", " "}, "")
+	got, err := resolveInlineSubAgentCapability(nil, []string{" Bash ", "bash", ""}, []string{"/a", "/a", " "}, "", "")
 	if err != nil {
 		t.Fatalf("resolveInlineSubAgentCapability() error = %v", err)
 	}
@@ -361,6 +451,7 @@ func TestResolveInlineSubAgentCapabilityResolvesRelativeRequestedPathByWorkdir(t
 		parent,
 		[]string{"filesystem_read_file"},
 		[]string{"README.md"},
+		"",
 		workdir,
 	)
 	if err != nil {
@@ -376,6 +467,28 @@ func TestResolveInlineSubAgentCapabilityResolvesRelativeRequestedPathByWorkdir(t
 	}
 	if got.AllowedPaths[0] != wantPath {
 		t.Fatalf("allowed paths = %v, want [%s]", got.AllowedPaths, wantPath)
+	}
+}
+
+func TestResolveInlineSubAgentCapabilityCarriesToolUseMode(t *testing.T) {
+	t.Parallel()
+
+	got, err := resolveInlineSubAgentCapability(
+		nil,
+		[]string{"filesystem_read_file"},
+		nil,
+		subagent.ToolUseModeDisabled,
+		"",
+	)
+	if err != nil {
+		t.Fatalf("resolveInlineSubAgentCapability() error = %v", err)
+	}
+	if got.ToolUseMode != subagent.ToolUseModeDisabled {
+		t.Fatalf("tool use mode = %q, want %q", got.ToolUseMode, subagent.ToolUseModeDisabled)
+	}
+
+	if _, err := resolveInlineSubAgentCapability(nil, nil, nil, subagent.ToolUseMode("invalid"), ""); err == nil {
+		t.Fatal("expected invalid tool use mode error")
 	}
 }
 

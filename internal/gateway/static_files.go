@@ -1,12 +1,14 @@
 package gateway
 
 import (
+	"io"
+	"io/fs"
 	"log"
 	"net/http"
 	"os"
 	"path"
-	"path/filepath"
 	"strings"
+	"time"
 )
 
 // knownAPIPrefixes 定义属于 Gateway API 的路径前缀，静态文件中间件不会拦截这些路径。
@@ -23,6 +25,18 @@ var knownAPIPrefixes = map[string]bool{
 // WithStaticFileHandler 返回一个 http.Handler，将 API 请求转发给 apiHandler，
 // 其余请求从 staticDir 提供静态文件。对于 SPA 路由，不存在的路径会回退到 index.html。
 func WithStaticFileHandler(apiHandler http.Handler, staticDir string, logger *log.Logger) http.Handler {
+	if staticDir == "" {
+		return apiHandler
+	}
+	return WithFSStaticFileHandler(apiHandler, os.DirFS(staticDir), logger)
+}
+
+// WithFSStaticFileHandler 返回一个 http.Handler，将 API 请求转发给 apiHandler，
+// 其余请求从 fsys 提供静态文件。对于 SPA 路由，不存在的路径会回退到 index.html。
+func WithFSStaticFileHandler(apiHandler http.Handler, fsys fs.FS, logger *log.Logger) http.Handler {
+	if fsys == nil {
+		return apiHandler
+	}
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		cleanPath := path.Clean("/" + request.URL.Path)
 
@@ -38,28 +52,47 @@ func WithStaticFileHandler(apiHandler http.Handler, staticDir string, logger *lo
 			relPath = "index.html"
 		}
 
-		// 检查文件是否存在
-		fullPath := filepath.Join(staticDir, filepath.FromSlash(relPath))
-		info, err := os.Stat(fullPath)
-		if err == nil && !info.IsDir() {
-			setCacheHeaders(writer, relPath)
-			http.ServeFile(writer, request, fullPath)
-			return
+		// 尝试从 fs.FS 中打开文件
+		file, err := fsys.Open(relPath)
+		if err == nil {
+			stat, statErr := file.Stat()
+			if statErr == nil && !stat.IsDir() {
+				setCacheHeaders(writer, relPath)
+				serveFileContent(writer, request, relPath, stat.ModTime(), file)
+				_ = file.Close()
+				return
+			}
+			_ = file.Close()
 		}
 
 		// SPA fallback：文件不存在时返回 index.html
-		indexPath := filepath.Join(staticDir, "index.html")
-		if _, statErr := os.Stat(indexPath); statErr == nil {
-			writer.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
-			http.ServeFile(writer, request, indexPath)
-			return
+		indexFile, err := fsys.Open("index.html")
+		if err == nil {
+			stat, statErr := indexFile.Stat()
+			if statErr == nil {
+				writer.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+				serveFileContent(writer, request, "index.html", stat.ModTime(), indexFile)
+				_ = indexFile.Close()
+				return
+			}
+			_ = indexFile.Close()
 		}
 
 		if logger != nil {
-			logger.Printf("static files: index.html not found in %s", staticDir)
+			logger.Printf("static files: index.html not found")
 		}
 		http.NotFound(writer, request)
 	})
+}
+
+// serveFileContent 将 fs.File 内容写入 HTTP 响应。如果文件支持 io.ReadSeeker，
+// 使用 http.ServeContent 以支持 Range 请求和 If-Modified-Since；否则回退到 io.Copy。
+func serveFileContent(writer http.ResponseWriter, request *http.Request, name string, modTime time.Time, file fs.File) {
+	if rs, ok := file.(io.ReadSeeker); ok {
+		http.ServeContent(writer, request, name, modTime, rs)
+		return
+	}
+	_, _ = io.Copy(writer, file)
 }
 
 // isAPIPath 判断请求路径是否属于 Gateway API。

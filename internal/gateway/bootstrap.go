@@ -615,6 +615,46 @@ func handleListSessionsFrame(ctx context.Context, frame MessageFrame, runtimePor
 	}
 }
 
+// handleCreateSessionFrame 处理 gateway.createSession 请求并返回创建后的会话 ID。
+func handleCreateSessionFrame(ctx context.Context, frame MessageFrame, runtimePort RuntimePort) MessageFrame {
+	if runtimePort == nil {
+		return runtimePortUnavailableFrame(frame)
+	}
+	subjectID, subjectErr := requireAuthenticatedSubjectID(ctx)
+	if subjectErr != nil {
+		return errorFrame(frame, subjectErr)
+	}
+
+	params, parseErr := decodeCreateSessionPayload(frame.Payload)
+	if parseErr != nil {
+		return errorFrame(frame, parseErr)
+	}
+	if params.SessionID == "" {
+		params.SessionID = strings.TrimSpace(frame.SessionID)
+	}
+
+	callCtx, cancel := withRuntimeOperationTimeout(ctx)
+	defer cancel()
+	createdSessionID, err := runtimePort.CreateSession(callCtx, CreateSessionInput{
+		SubjectID: subjectID,
+		SessionID: params.SessionID,
+	})
+	if err != nil {
+		return runtimeCallFailedFrame(callCtx, frame, err, "create_session")
+	}
+	createdSessionID = strings.TrimSpace(createdSessionID)
+
+	return MessageFrame{
+		Type:      FrameTypeAck,
+		Action:    FrameActionCreateSession,
+		RequestID: frame.RequestID,
+		SessionID: createdSessionID,
+		Payload: map[string]any{
+			"session_id": createdSessionID,
+		},
+	}
+}
+
 // handleLoadSessionFrame 处理 gateway.loadSession 请求。
 func handleLoadSessionFrame(ctx context.Context, frame MessageFrame, runtimePort RuntimePort) MessageFrame {
 	if runtimePort == nil {
@@ -1342,6 +1382,10 @@ type cancelParams struct {
 	RunID     string
 }
 
+type createSessionParams struct {
+	SessionID string
+}
+
 type renameSessionParams struct {
 	SessionID string
 	Title     string
@@ -1565,6 +1609,33 @@ func normalizeExecuteSystemToolParams(params protocol.ExecuteSystemToolParams) (
 		normalized.Arguments = append([]byte(nil), arguments...)
 	}
 	return normalized, nil
+}
+
+// decodeCreateSessionPayload 解析 create_session 负载并收敛为统一输入结构。
+func decodeCreateSessionPayload(payload any) (createSessionParams, *FrameError) {
+	switch typed := payload.(type) {
+	case nil:
+		return createSessionParams{}, nil
+	case protocol.CreateSessionParams:
+		return createSessionParams{SessionID: strings.TrimSpace(typed.SessionID)}, nil
+	case *protocol.CreateSessionParams:
+		if typed == nil {
+			return createSessionParams{}, nil
+		}
+		return createSessionParams{SessionID: strings.TrimSpace(typed.SessionID)}, nil
+	case map[string]any:
+		return createSessionParams{SessionID: readStringValue(typed, "session_id")}, nil
+	default:
+		raw, marshalErr := json.Marshal(payload)
+		if marshalErr != nil {
+			return createSessionParams{}, NewFrameError(ErrorCodeInvalidFrame, "invalid create_session payload")
+		}
+		var decoded protocol.CreateSessionParams
+		if unmarshalErr := json.Unmarshal(raw, &decoded); unmarshalErr != nil {
+			return createSessionParams{}, NewFrameError(ErrorCodeInvalidFrame, "invalid create_session payload")
+		}
+		return createSessionParams{SessionID: strings.TrimSpace(decoded.SessionID)}, nil
+	}
 }
 
 // decodeActivateSessionSkillPayload 解析 activate_session_skill 负载并收敛为统一输入结构。

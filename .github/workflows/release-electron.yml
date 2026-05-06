@@ -1,0 +1,71 @@
+name: Release Electron
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  build-electron:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            artifact_name: windows
+          - os: macos-latest
+            artifact_name: macos
+          - os: ubuntu-latest
+            artifact_name: linux
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Inject version from tag
+        shell: bash
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          node -e "const fs=require('fs'); const p=JSON.parse(fs.readFileSync('web/package.json')); p.version='${VERSION}'; fs.writeFileSync('web/package.json', JSON.stringify(p,null,2)+'\n')"
+          echo "version=${VERSION}" >> "$GITHUB_ENV"
+
+      - name: Install dependencies
+        run: |
+          cd web
+          npm install
+
+      - name: Build Electron
+        run: |
+          cd web
+          npm run build:electron -- --publish never
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload artifacts
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            web/release/*
+          name: NeoCode Desktop ${{ env.version }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

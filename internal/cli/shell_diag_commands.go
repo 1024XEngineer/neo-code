@@ -17,15 +17,18 @@ var (
 	runShellCommand        = defaultShellCommandRunner
 	runShellInitCommand    = defaultShellInitCommandRunner
 	runDiagCommand         = defaultDiagCommandRunner
+	runDiagInteractive     = defaultDiagInteractiveCommandRunner
 	runDiagAutoCommand     = defaultDiagAutoCommandRunner
 	runDiagDiagnoseCommand = defaultDiagCommandRunner
 	runManualShellProxy    = ptyproxy.RunManualShell
 	sendDiagnoseSignalFn   = ptyproxy.SendDiagnoseSignal
+	sendIDMEnterSignalFn   = ptyproxy.SendIDMEnterSignal
 	sendAutoModeSignalFn   = ptyproxy.SendAutoModeSignal
 	queryAutoModeFn        = ptyproxy.QueryAutoMode
 	buildShellInitScript   = ptyproxy.BuildShellInitScript
 	readDiagEnvValue       = os.Getenv
 	resolveLatestDiagPath  = ptyproxy.ResolveLatestRunDiagSocketPath
+	resolveLatestIDMPath   = ptyproxy.ResolveLatestIDMDiagSocketPath
 )
 
 type shellCommandOptions struct {
@@ -38,7 +41,8 @@ type shellCommandOptions struct {
 }
 
 type diagCommandOptions struct {
-	SocketPath string
+	SocketPath  string
+	Interactive bool
 }
 
 type diagAutoCommandOptions struct {
@@ -101,7 +105,7 @@ func newShellCommand() *cobra.Command {
 	return command
 }
 
-// newDiagCommand 创建诊断命令组：默认触发手动诊断，支持 auto on/off 开关控制。
+// newDiagCommand 创建诊断命令组：默认触发手动诊断，支持 auto on/off 与交互模式。
 func newDiagCommand() *cobra.Command {
 	options := &diagCommandOptions{}
 	command := &cobra.Command{
@@ -113,15 +117,32 @@ func newDiagCommand() *cobra.Command {
 			commandAnnotationSkipGlobalPreload:     "true",
 			commandAnnotationSkipSilentUpdateCheck: "true",
 		},
-		RunE: func(cmd *cobra.Command, args []string) error {
-			socketPath, err := resolveDiagSocketPath(options.SocketPath)
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			var (
+				socketPath string
+				err        error
+			)
+			if options.Interactive {
+				socketPath, err = resolveIDMDiagSocketPath(options.SocketPath)
+			} else {
+				socketPath, err = resolveDiagSocketPath(options.SocketPath)
+			}
 			if err != nil {
 				return err
 			}
-			return runDiagCommand(cmd.Context(), diagCommandOptions{SocketPath: socketPath})
+
+			normalized := diagCommandOptions{
+				SocketPath:  socketPath,
+				Interactive: options.Interactive,
+			}
+			if normalized.Interactive {
+				return runDiagInteractive(cmd.Context(), normalized)
+			}
+			return runDiagCommand(cmd.Context(), normalized)
 		},
 	}
 	command.Flags().StringVar(&options.SocketPath, "socket", "", "diagnose unix socket path override")
+	command.Flags().BoolVarP(&options.Interactive, "interactive", "i", false, "enter interactive diagnosis mode (IDM)")
 	command.AddCommand(
 		newDiagAutoCommand(),
 		newDiagDiagnoseCommand(),
@@ -129,7 +150,7 @@ func newDiagCommand() *cobra.Command {
 	return command
 }
 
-// newDiagAutoCommand 创建 auto on/off 子命令。
+// newDiagAutoCommand 创建 auto on/off/status 子命令。
 func newDiagAutoCommand() *cobra.Command {
 	options := &diagAutoCommandOptions{}
 	command := &cobra.Command{
@@ -165,7 +186,7 @@ func newDiagAutoCommand() *cobra.Command {
 	return command
 }
 
-// newDiagDiagnoseCommand 创建 diagnose 子命令，便于显式表达一次手动诊断请求。
+// newDiagDiagnoseCommand 创建 diagnose 子命令，用于显式触发一次手动诊断。
 func newDiagDiagnoseCommand() *cobra.Command {
 	options := &diagCommandOptions{}
 	command := &cobra.Command{
@@ -173,7 +194,7 @@ func newDiagDiagnoseCommand() *cobra.Command {
 		Short:        "Trigger one manual diagnosis in current neocode shell",
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			socketPath, err := resolveDiagSocketPath(options.SocketPath)
 			if err != nil {
 				return err
@@ -219,7 +240,12 @@ func defaultDiagCommandRunner(ctx context.Context, options diagCommandOptions) e
 	return sendDiagnoseSignalFn(ctx, strings.TrimSpace(options.SocketPath))
 }
 
-// defaultDiagAutoCommandRunner 向 shell 代理发送 auto 模式切换信令。
+// defaultDiagInteractiveCommandRunner 向 shell 代理发送进入 IDM 的一次性信令。
+func defaultDiagInteractiveCommandRunner(ctx context.Context, options diagCommandOptions) error {
+	return sendIDMEnterSignalFn(ctx, strings.TrimSpace(options.SocketPath))
+}
+
+// defaultDiagAutoCommandRunner 向 shell 代理发送 auto 模式切换/查询信令。
 func defaultDiagAutoCommandRunner(ctx context.Context, options diagAutoCommandOptions, stdout io.Writer) error {
 	if options.QueryOnly {
 		enabled, err := queryAutoModeFn(ctx, strings.TrimSpace(options.SocketPath))
@@ -249,7 +275,7 @@ func defaultDiagAutoCommandRunner(ctx context.Context, options diagAutoCommandOp
 	return nil
 }
 
-// resolveDiagSocketPath 按“--socket > NEOCODE_DIAG_SOCKET > 最新运行目录 socket”解析目标路径。
+// resolveDiagSocketPath 按“--socket > NEOCODE_DIAG_SOCKET > 最近运行目录 socket”解析目标路径。
 func resolveDiagSocketPath(socketFlag string) (string, error) {
 	if socketPath := strings.TrimSpace(socketFlag); socketPath != "" {
 		return socketPath, nil
@@ -264,6 +290,28 @@ func resolveDiagSocketPath(socketFlag string) (string, error) {
 		fmt.Sprintf(
 			"diagnose socket is empty: use --socket or set %s in your shell environment",
 			ptyproxy.DiagSocketEnv,
+		),
+	)
+}
+
+// resolveIDMDiagSocketPath 按“--socket(普通诊断socket会自动推导IDM) > NEOCODE_IDM_SOCKET > NEOCODE_DIAG_SOCKET(自动推导) > 最近运行目录 IDM socket”解析目标路径。
+func resolveIDMDiagSocketPath(socketFlag string) (string, error) {
+	if socketPath := strings.TrimSpace(socketFlag); socketPath != "" {
+		return ptyproxy.DeriveIDMSocketPathFromDiagSocketPath(socketPath)
+	}
+	if envValue := strings.TrimSpace(readDiagEnvValue(ptyproxy.IDMDiagSocketEnv)); envValue != "" {
+		return envValue, nil
+	}
+	if envValue := strings.TrimSpace(readDiagEnvValue(ptyproxy.DiagSocketEnv)); envValue != "" {
+		return ptyproxy.DeriveIDMSocketPathFromDiagSocketPath(envValue)
+	}
+	if discoveredPath, err := resolveLatestIDMPath(); err == nil && strings.TrimSpace(discoveredPath) != "" {
+		return strings.TrimSpace(discoveredPath), nil
+	}
+	return "", errors.New(
+		fmt.Sprintf(
+			"idm socket is empty: use --socket, set %s, or start `neocode shell` first",
+			ptyproxy.IDMDiagSocketEnv,
 		),
 	)
 }

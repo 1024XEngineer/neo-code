@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"net"
 	"net/http"
@@ -68,7 +69,9 @@ type NetworkServerOptions struct {
 	ConnectionCountChanged func(active int)
 	// StaticFileDir 可选：如果非空，从该目录提供 SPA 静态文件服务。
 	StaticFileDir string
-	listenFn      func(network, address string) (net.Listener, error)
+	// StaticFileFS 可选：如果非 nil，从该 fs.FS 提供 SPA 静态文件服务（优先于 StaticFileDir）。
+	StaticFileFS fs.FS
+	listenFn     func(network, address string) (net.Listener, error)
 }
 
 // NetworkServer 提供 HTTP/WebSocket/SSE 网络访问面的统一入口服务。
@@ -89,8 +92,9 @@ type NetworkServer struct {
 	metrics              *GatewayMetrics
 	allowedOrigins       []string
 	connectionCountChanged func(active int)
-	staticFileDir         string
-	startedAt             time.Time
+	staticFileDir          string
+	staticFileFS           fs.FS
+	startedAt              time.Time
 
 	mu         sync.Mutex
 	server     *http.Server
@@ -188,10 +192,11 @@ func NewNetworkServer(options NetworkServerOptions) (*NetworkServer, error) {
 		metrics:              metrics,
 		allowedOrigins:       allowedOrigins,
 		connectionCountChanged: options.ConnectionCountChanged,
-		staticFileDir:         options.StaticFileDir,
+		staticFileDir:          options.StaticFileDir,
+		staticFileFS:           options.StaticFileFS,
 		startedAt:              time.Now().UTC(),
-		wsConns:              make(map[*websocket.Conn]context.CancelFunc),
-		sseCancels:           make(map[int]context.CancelFunc),
+		wsConns:                make(map[*websocket.Conn]context.CancelFunc),
+		sseCancels:             make(map[int]context.CancelFunc),
 	}, nil
 }
 
@@ -365,6 +370,9 @@ func (s *NetworkServer) buildHandler(runtimePort RuntimePort) http.Handler {
 	mux.HandleFunc("/sse", func(writer http.ResponseWriter, request *http.Request) {
 		s.handleSSERequest(writer, request, runtimePort)
 	})
+	if s.staticFileFS != nil {
+		return WithFSStaticFileHandler(mux, s.staticFileFS, s.logger)
+	}
 	if s.staticFileDir != "" {
 		return WithStaticFileHandler(mux, s.staticFileDir, s.logger)
 	}

@@ -32,7 +32,7 @@ if (!existsSync(outputDir)) {
 
 console.log(`Building neocode-gateway for ${goos}/${goarch}...`)
 
-const result = spawnSync('go', ['build', '-a', '-o', outputPath, './cmd/neocode-gateway'], {
+const result = spawnSync('go', ['build', '-tags', 'webembed', '-a', '-o', outputPath, './cmd/neocode-gateway'], {
   cwd: projectRoot,
   env: { ...process.env, GOOS: goos, GOARCH: goarch, CGO_ENABLED: '0' },
   stdio: 'inherit',

@@ -60,6 +60,7 @@ func (b Budget) normalize(defaults Budget) Budget {
 type Capability struct {
 	AllowedTools    []string
 	AllowedPaths    []string
+	ToolUseMode     ToolUseMode
 	CapabilityToken *security.CapabilityToken
 }
 
@@ -73,6 +74,7 @@ func (c Capability) normalize() Capability {
 	return Capability{
 		AllowedTools:    dedupeAndTrim(c.AllowedTools),
 		AllowedPaths:    dedupeAndTrim(c.AllowedPaths),
+		ToolUseMode:     ToolUseMode(strings.ToLower(strings.TrimSpace(string(c.ToolUseMode)))),
 		CapabilityToken: token,
 	}
 }

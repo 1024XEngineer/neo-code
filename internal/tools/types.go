@@ -44,6 +44,7 @@ type SubAgentRunInput struct {
 	ParentCapabilityToken *security.CapabilityToken
 	Role                  subagent.Role
 	TaskType              subagent.TaskType
+	ToolUseMode           subagent.ToolUseMode
 	TaskID                string
 	Goal                  string
 	ExpectedOut           string

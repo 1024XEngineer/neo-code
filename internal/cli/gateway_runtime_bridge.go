@@ -78,17 +78,19 @@ func defaultBuildGatewayRuntimePort(ctx context.Context, workdir string) (gatewa
 		return nil, nil, err
 	}
 
-	defaultHash := ""
-	if trimmedWorkdir != "" {
-		defaultHash = agentsession.HashWorkspaceRoot(trimmedWorkdir)
-		if _, err := index.Register(trimmedWorkdir, ""); err != nil {
-			_ = bundle.Close()
-			return nil, nil, err
-		}
-		if err := index.Save(); err != nil {
-			_ = bundle.Close()
-			return nil, nil, err
-		}
+	defaultWorkspaceRoot, err := resolveGatewayDefaultWorkspaceRoot(trimmedWorkdir, bundle.Config.Workdir)
+	if err != nil {
+		_ = bundle.Close()
+		return nil, nil, err
+	}
+	defaultHash := agentsession.HashWorkspaceRoot(defaultWorkspaceRoot)
+	if _, err := index.Register(defaultWorkspaceRoot, ""); err != nil {
+		_ = bundle.Close()
+		return nil, nil, err
+	}
+	if err := index.Save(); err != nil {
+		_ = bundle.Close()
+		return nil, nil, err
 	}
 
 	bridge, err := newGatewayRuntimePortBridge(ctx, bundle.Runtime, bundle.SessionStore, bundle.ConfigManager, bundle.ProviderSelection, bundle.ToolRegistry)
@@ -142,6 +144,22 @@ func defaultBuildGatewayRuntimePort(ctx context.Context, workdir string) (gatewa
 	mw.SetManagementPort(bridge)
 
 	return mw, mw.Close, nil
+}
+
+// resolveGatewayDefaultWorkspaceRoot 解析网关默认工作区，优先使用显式参数，缺失时回退到配置快照。
+func resolveGatewayDefaultWorkspaceRoot(requestedWorkdir string, configWorkdir string) (string, error) {
+	candidate := strings.TrimSpace(requestedWorkdir)
+	if candidate == "" {
+		candidate = strings.TrimSpace(configWorkdir)
+	}
+	if candidate == "" {
+		return "", fmt.Errorf("gateway runtime bridge: default workspace is empty")
+	}
+	resolved, err := agentsession.ResolveExistingDir(candidate)
+	if err != nil {
+		return "", fmt.Errorf("gateway runtime bridge: resolve default workspace: %w", err)
+	}
+	return resolved, nil
 }
 
 // configManagerPort 定义桥接层对配置管理器的最小需求。

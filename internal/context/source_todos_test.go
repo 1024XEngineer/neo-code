@@ -54,12 +54,18 @@ func TestTodosSourceSections(t *testing.T) {
 	if sections[0].Title != "Todo State" {
 		t.Fatalf("title = %q, want %q", sections[0].Title, "Todo State")
 	}
-	if strings.Contains(sections[0].Content, "done") {
+	if strings.Contains(sections[0].Content, `id="done"`) {
 		t.Fatalf("expected terminal todo filtered, got %q", sections[0].Content)
 	}
 	lines := strings.Split(sections[0].Content, "\n")
 	if len(lines) < 2 || !strings.Contains(lines[0], "in-progress") {
 		t.Fatalf("expected in_progress todo first, got %q", sections[0].Content)
+	}
+	if !strings.Contains(sections[0].Content, "user clearly switches to a different task") {
+		t.Fatalf("expected stale todo reminder to mention task switching, got %q", sections[0].Content)
+	}
+	if !strings.Contains(sections[0].Content, "only if the work is actually done") {
+		t.Fatalf("expected stale todo reminder to distinguish completed from canceled, got %q", sections[0].Content)
 	}
 }
 

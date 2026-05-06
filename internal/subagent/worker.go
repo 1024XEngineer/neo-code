@@ -97,6 +97,12 @@ func (w *worker) Start(task Task, budget Budget, capability Capability) error {
 	}
 	w.budget = budget.normalize(w.policy.DefaultBudget)
 	capabilityInput := capability.normalize()
+	if capabilityInput.ToolUseMode != "" {
+		if !capabilityInput.ToolUseMode.Valid() {
+			return errorsf("capability tool use mode %q is invalid", capabilityInput.ToolUseMode)
+		}
+		w.policy.ToolUseMode = capabilityInput.ToolUseMode
+	}
 	if len(capabilityInput.AllowedPaths) == 0 && strings.TrimSpace(task.Workspace) != "" {
 		workspace := strings.TrimSpace(task.Workspace)
 		if err := validateDefaultWorkspacePath(workspace); err != nil {
