@@ -252,18 +252,47 @@ func (m *feishuMessenger) tenantAccessToken(ctx context.Context) (string, error)
 
 // buildStatusCard 构造轻量级 run 状态卡片，避免聊天窗口被多条进度消息刷屏。
 func buildStatusCard(payload StatusCardPayload) map[string]any {
-	lines := []string{
-		"任务：" + fallbackStatusField(payload.TaskName, "未命名任务"),
-		"状态：" + fallbackStatusField(payload.Status, "thinking"),
-		"审批：" + fallbackStatusField(payload.ApprovalStatus, "none"),
-		"结果：" + fallbackStatusField(payload.Result, "pending"),
+	taskName := fallbackStatusField(payload.TaskName, "未命名任务")
+	status := fallbackStatusField(payload.Status, "thinking")
+	approval := fallbackStatusField(payload.ApprovalStatus, "none")
+	result := fallbackStatusField(payload.Result, "pending")
+
+	statusIcon, statusColor := statusIconAndColor(status)
+	approvalIcon, _ := statusIconAndColor(approval)
+	resultIcon, _ := statusIconAndColor(result)
+
+	elements := []map[string]any{
+		statusNoteElement(taskName),
+		statusBarElement(statusIcon, "状态", status),
+		statusBarElement(approvalIcon, "审批", approval),
+		statusBarElement(resultIcon, "结果", result),
 	}
+
+	if elapsed := strings.TrimSpace(payload.Elapsed); elapsed != "" {
+		elements = append(elements, map[string]any{
+			"tag": "note",
+			"elements": []map[string]any{
+				{"tag": "plain_text", "content": "⏱ " + elapsed},
+			},
+		})
+	}
+
 	if summary := strings.TrimSpace(payload.Summary); summary != "" {
-		lines = append(lines, "摘要："+summary)
+		elements = append(elements, map[string]any{
+			"tag":  "div",
+			"text": map[string]any{"tag": "lark_md", "content": "---\n**摘要**\n" + summary},
+		})
 	}
+
 	if hint := strings.TrimSpace(payload.AsyncRewakeHint); hint != "" {
-		lines = append(lines, "回灌："+hint)
+		elements = append(elements, map[string]any{
+			"tag": "note",
+			"elements": []map[string]any{
+				{"tag": "plain_text", "content": "↩ " + hint},
+			},
+		})
 	}
+
 	return map[string]any{
 		"config": map[string]any{
 			"wide_screen_mode": true,
@@ -274,13 +303,73 @@ func buildStatusCard(payload StatusCardPayload) map[string]any {
 				"tag":     "plain_text",
 				"content": "NeoCode 任务状态",
 			},
+			"template": statusColor,
 		},
+		"elements": elements,
+	}
+}
+
+func statusNoteElement(taskName string) map[string]any {
+	return map[string]any{
+		"tag": "note",
 		"elements": []map[string]any{
+			{"tag": "plain_text", "content": "📋 " + taskName},
+		},
+	}
+}
+
+func statusBarElement(icon string, label string, value string) map[string]any {
+	return map[string]any{
+		"tag": "column_set",
+		"flex_mode": "bisect",
+		"background_style": "default",
+		"columns": []map[string]any{
 			{
-				"tag":     "markdown",
-				"content": strings.Join(lines, "\n"),
+				"tag":    "column",
+				"width":  "weighted",
+				"weight": 1,
+				"elements": []map[string]any{
+					{
+						"tag":  "div",
+						"text": map[string]any{"tag": "plain_text", "content": icon + " " + label},
+					},
+				},
+			},
+			{
+				"tag":    "column",
+				"width":  "weighted",
+				"weight": 1,
+				"elements": []map[string]any{
+					{
+						"tag":  "div",
+						"text": map[string]any{"tag": "lark_md", "content": "**" + value + "**"},
+					},
+				},
 			},
 		},
+	}
+}
+
+func statusIconAndColor(status string) (string, string) {
+	switch strings.TrimSpace(strings.ToLower(status)) {
+	case "thinking":
+		return "💭", "blue"
+	case "planning":
+		return "📝", "wathet"
+	case "running":
+		return "⚙️", "indigo"
+	case "pending":
+		return "⏳", "yellow"
+	case "approved":
+		return "✅", "green"
+	case "rejected":
+		return "❌", "red"
+	case "success":
+		return "🎉", "green"
+	case "failure":
+		return "💥", "red"
+	default:
+		return "🔵", "blue"
 	}
 }
 

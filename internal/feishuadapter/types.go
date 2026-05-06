@@ -130,6 +130,7 @@ type StatusCardPayload struct {
 	Result          string
 	Summary         string
 	AsyncRewakeHint string
+	Elapsed         string
 }
 
 // inboundEnvelope 表示飞书回调统一信封。

@@ -16,7 +16,8 @@ import (
 )
 
 const defaultSignatureMaxSkew = 5 * time.Minute
-const defaultProgressNotifyInterval = 5 * time.Second
+const defaultProgressNotifyInterval = 2 * time.Second
+const defaultCardRefreshInterval = 1500 * time.Millisecond
 
 type sessionBinding struct {
 	SessionID       string
@@ -29,6 +30,7 @@ type sessionBinding struct {
 	Result          string
 	LastSummary     string
 	AsyncRewakeHint string
+	RunStartTime    time.Time
 }
 
 // Adapter 负责桥接飞书回调与 Gateway JSON-RPC 长连接。
@@ -84,6 +86,7 @@ func (a *Adapter) Run(ctx context.Context) error {
 
 	go a.consumeGatewayEvents(ctx)
 	go a.reconnectAndRebindLoop(ctx)
+	go a.refreshActiveCardsLoop(ctx)
 	ingress := a.buildIngress()
 	err := ingress.Run(ctx, a)
 	_ = a.gateway.Close()
@@ -239,6 +242,7 @@ func (a *Adapter) trackSession(sessionID string, runID string, chatID string, ta
 		Status:         "thinking",
 		ApprovalStatus: "none",
 		Result:         "pending",
+		RunStartTime:   a.nowFn(),
 	}
 	if sessionID != "" && chatID != "" {
 		a.sessionChats[sessionID] = chatID
@@ -407,6 +411,40 @@ func (a *Adapter) rebindActiveSessions(ctx context.Context) {
 		if err != nil {
 			a.safeLog("rebind session failed session_id=%s run_id=%s err=%v", binding.SessionID, binding.RunID, err)
 		}
+	}
+}
+
+// refreshActiveCardsLoop 定时刷新活跃 run 的状态卡片，保持 1.5s 刷新频率以展示实时耗时。
+func (a *Adapter) refreshActiveCardsLoop(ctx context.Context) {
+	ticker := time.NewTicker(defaultCardRefreshInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			a.refreshActiveCards(ctx)
+		}
+	}
+}
+
+// refreshActiveCards 对当前所有活跃 run 更新卡片，仅刷新耗时字段变化。
+func (a *Adapter) refreshActiveCards(ctx context.Context) {
+	a.mu.RLock()
+	snapshot := make([]sessionBinding, 0, len(a.activeRuns))
+	for _, binding := range a.activeRuns {
+		if strings.TrimSpace(binding.CardID) != "" {
+			snapshot = append(snapshot, binding)
+		}
+	}
+	a.mu.RUnlock()
+
+	for _, binding := range snapshot {
+		callCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		if err := a.messenger.UpdateCard(callCtx, binding.CardID, binding.statusCardPayload()); err != nil {
+			a.safeLog("refresh card failed card_id=%s err=%v", binding.CardID, err)
+		}
+		cancel()
 	}
 }
 
@@ -834,6 +872,24 @@ func buildTaskName(text string) string {
 	return string(runes)
 }
 
+// formatElapsed 格式化运行耗时，空 start 返回空字符串。
+func formatElapsed(start time.Time) string {
+	if start.IsZero() {
+		return ""
+	}
+	d := time.Since(start)
+	if d < time.Second {
+		return "刚刚开始"
+	}
+	if d < time.Minute {
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	}
+	if d < time.Hour {
+		return fmt.Sprintf("%dm %ds", int(d.Minutes()), int(d.Seconds())%60)
+	}
+	return fmt.Sprintf("%dh %dm %ds", int(d.Hours()), int(d.Minutes())%60, int(d.Seconds())%60)
+}
+
 // statusCardPayload 将 run 绑定状态映射为卡片更新载荷。
 func (b sessionBinding) statusCardPayload() StatusCardPayload {
 	return StatusCardPayload{
@@ -843,6 +899,7 @@ func (b sessionBinding) statusCardPayload() StatusCardPayload {
 		Result:          b.Result,
 		Summary:         b.LastSummary,
 		AsyncRewakeHint: b.AsyncRewakeHint,
+		Elapsed:         formatElapsed(b.RunStartTime),
 	}
 }
 
