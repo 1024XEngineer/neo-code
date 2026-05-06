@@ -21,6 +21,8 @@ import (
 const (
 	unsupportedActionInGatewayMode = "unsupported_action_in_gateway_mode"
 	defaultRemoteRuntimeTimeout    = 8 * time.Second
+	startupProbeSessionPrefix      = "session-startup-probe"
+	startupProbeRunPrefix          = "run-startup-probe"
 )
 
 var (
@@ -93,6 +95,10 @@ func NewRemoteRuntimeAdapter(options RemoteRuntimeAdapterOptions) (*RemoteRuntim
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	if err := adapter.authenticate(ctx); err != nil {
+		_ = adapter.Close()
+		return nil, err
+	}
+	if err := adapter.startupHandshake(ctx); err != nil {
 		_ = adapter.Close()
 		return nil, err
 	}
@@ -440,6 +446,12 @@ func (r *RemoteRuntimeAdapter) authenticate(ctx context.Context) error {
 		return errors.New("gateway runtime adapter: rpc client is nil")
 	}
 	return r.rpcClient.Authenticate(ctx)
+}
+
+func (r *RemoteRuntimeAdapter) startupHandshake(ctx context.Context) error {
+	sessionID := fmt.Sprintf("%s-%d", startupProbeSessionPrefix, time.Now().UnixNano())
+	runID := fmt.Sprintf("%s-%d", startupProbeRunPrefix, time.Now().UnixNano())
+	return r.bindStream(ctx, sessionID, runID)
 }
 
 func (r *RemoteRuntimeAdapter) bindStream(ctx context.Context, sessionID string, runID string) error {

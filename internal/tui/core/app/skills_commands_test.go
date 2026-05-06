@@ -65,8 +65,8 @@ func TestSkillCommandErrorAndPlaceholderHelpers(t *testing.T) {
 	}
 
 	unsupported := normalizeSkillCommandError(tuiservices.ErrUnsupportedActionInGatewayMode)
-	if unsupported == nil || !strings.Contains(strings.ToLower(unsupported.Error()), "gateway") {
-		t.Fatalf("expected gateway hint, got %v", unsupported)
+	if unsupported != tuiservices.ErrUnsupportedActionInGatewayMode {
+		t.Fatalf("expected legacy sentinel passthrough, got %v", unsupported)
 	}
 	unsupportedRPCByGatewayCode := normalizeSkillCommandError(&tuiservices.GatewayRPCError{
 		Method:      protocol.MethodGatewayListAvailableSkills,
@@ -82,8 +82,8 @@ func TestSkillCommandErrorAndPlaceholderHelpers(t *testing.T) {
 		Code:    protocol.JSONRPCCodeMethodNotFound,
 		Message: "method not found",
 	})
-	if unsupportedRPCByCodeOnly == nil || !strings.Contains(strings.ToLower(unsupportedRPCByCodeOnly.Error()), "gateway") {
-		t.Fatalf("expected gateway hint for method_not_found rpc error, got %v", unsupportedRPCByCodeOnly)
+	if unsupportedRPCByCodeOnly == nil || !strings.Contains(strings.ToLower(unsupportedRPCByCodeOnly.Error()), "method not found") {
+		t.Fatalf("expected method_not_found passthrough, got %v", unsupportedRPCByCodeOnly)
 	}
 	containsButNotSentinel := errors.New("skill id unsupported_action_in_gateway_mode is invalid")
 	if normalizeSkillCommandError(containsButNotSentinel) != containsButNotSentinel {

@@ -3399,13 +3399,10 @@ func TestHandleMemoCommandsRouteToSystemTools(t *testing.T) {
 
 func TestHandleMemoCommandMapsUnsupportedActionErrorToUserFriendlyMessage(t *testing.T) {
 	tests := []struct {
-		name string
-		err  error
+		name            string
+		err             error
+		expectGatewayUI bool
 	}{
-		{
-			name: "legacy sentinel",
-			err:  agentruntime.ErrUnsupportedActionInGatewayMode,
-		},
 		{
 			name: "gateway rpc unsupported_action",
 			err: &agentruntime.GatewayRPCError{
@@ -3414,6 +3411,7 @@ func TestHandleMemoCommandMapsUnsupportedActionErrorToUserFriendlyMessage(t *tes
 				GatewayCode: protocol.GatewayCodeUnsupportedAction,
 				Message:     "method not found",
 			},
+			expectGatewayUI: true,
 		},
 		{
 			name: "gateway rpc method_not_found",
@@ -3422,6 +3420,7 @@ func TestHandleMemoCommandMapsUnsupportedActionErrorToUserFriendlyMessage(t *tes
 				Code:    protocol.JSONRPCCodeMethodNotFound,
 				Message: "method not found",
 			},
+			expectGatewayUI: false,
 		},
 	}
 
@@ -3442,8 +3441,11 @@ func TestHandleMemoCommandMapsUnsupportedActionErrorToUserFriendlyMessage(t *tes
 			if strings.Contains(status, "unsupported_action_in_gateway_mode") {
 				t.Fatalf("expected sentinel to be hidden from UI, got %q", app.state.StatusText)
 			}
-			if !strings.Contains(status, "gateway") {
+			if tt.expectGatewayUI && !strings.Contains(status, "gateway") {
 				t.Fatalf("expected gateway upgrade hint, got %q", app.state.StatusText)
+			}
+			if !tt.expectGatewayUI && strings.Contains(status, "gateway does not support memo commands") {
+				t.Fatalf("did not expect gateway unsupported hint, got %q", app.state.StatusText)
 			}
 		})
 	}

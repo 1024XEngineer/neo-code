@@ -32,6 +32,11 @@ func TestNewRemoteRuntimeAdapterBranches(t *testing.T) {
 		if options.ListenAddress == "dial-failed" {
 			client.authErr = errors.New("dial failed")
 		}
+		if options.ListenAddress == "bind-failed" {
+			client.callErrs = map[string]error{
+				protocol.MethodGatewayBindStream: errors.New("bind failed"),
+			}
+		}
 		return client, nil
 	}
 	newGatewayStreamClientFactory = func(source <-chan gatewayRPCNotification) *GatewayStreamClient {
@@ -43,6 +48,9 @@ func TestNewRemoteRuntimeAdapterBranches(t *testing.T) {
 	}
 	if _, err := NewRemoteRuntimeAdapter(RemoteRuntimeAdapterOptions{ListenAddress: "dial-failed", RequestTimeout: -1}); err == nil {
 		t.Fatalf("expected authenticate fail-fast error")
+	}
+	if _, err := NewRemoteRuntimeAdapter(RemoteRuntimeAdapterOptions{ListenAddress: "bind-failed", RequestTimeout: -1}); err == nil {
+		t.Fatalf("expected bindStream fail-fast error")
 	}
 
 	adapter, err := NewRemoteRuntimeAdapter(RemoteRuntimeAdapterOptions{
