@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"os"
 	"os/signal"
@@ -18,6 +19,7 @@ import (
 	"neo-code/internal/config"
 	"neo-code/internal/gateway"
 	gatewayauth "neo-code/internal/gateway/auth"
+	"neo-code/internal/webassets"
 )
 
 const (
@@ -181,16 +183,21 @@ func mustReadInheritedWorkdir(cmd *cobra.Command) string {
 }
 
 // defaultGatewayCommandRunner 使用网关服务骨架启动本地 IPC 监听并处理中断退出。
+// 如果编译时嵌入了前端资源，自动启用静态文件服务。
 func defaultGatewayCommandRunner(ctx context.Context, options gatewayCommandOptions) error {
-	return startGatewayServer(ctx, options, "", nil)
+	var staticFileFS fs.FS
+	if webassets.IsAvailable() {
+		staticFileFS = webassets.FS
+	}
+	return startGatewayServer(ctx, options, "", staticFileFS, nil)
 }
 
-// startGatewayServer 启动网关服务的共享实现，staticFileDir 非空时同时提供 SPA 静态文件服务。
+// startGatewayServer 启动网关服务的共享实现，staticFileDir 非空或 staticFileFS 非 nil 时同时提供 SPA 静态文件服务。
 // onNetworkReady 在网络服务器开始监听后回调，传出实际监听地址。
-func startGatewayServer(ctx context.Context, options gatewayCommandOptions, staticFileDir string, onNetworkReady func(address string)) error {
+func startGatewayServer(ctx context.Context, options gatewayCommandOptions, staticFileDir string, staticFileFS fs.FS, onNetworkReady func(address string)) error {
 	logger := log.New(os.Stderr, "neocode-gateway: ", log.LstdFlags)
 	logPrefix := "starting gateway"
-	if staticFileDir != "" {
+	if staticFileDir != "" || staticFileFS != nil {
 		logPrefix = "starting gateway with web UI"
 	}
 	logger.Printf("%s (log-level=%s)", logPrefix, options.LogLevel)
@@ -286,6 +293,7 @@ func startGatewayServer(ctx context.Context, options gatewayCommandOptions, stat
 		Metrics:              metrics,
 		AllowedOrigins:       gatewayConfig.Security.AllowOrigins,
 		StaticFileDir:        staticFileDir,
+		StaticFileFS:         staticFileFS,
 		ConnectionCountChanged: func(active int) {
 			idleCloser.observe(active)
 		},

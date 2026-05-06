@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"log"
 	"net"
 	"net/http"
@@ -16,6 +17,8 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+
+	"neo-code/internal/webassets"
 )
 
 type webCommandOptions struct {
@@ -98,15 +101,26 @@ func runWebCommand(ctx context.Context, options webCommandOptions) error {
 			return fmt.Errorf("frontend dist not found after build: %w", err)
 		}
 	}
-	logger.Printf("serving web UI from %s", staticDir)
+	// 2. 确定静态文件来源：外部目录优先，找不到时回退到嵌入资源
+	var staticFileFS fs.FS
+	if staticDir == "" {
+		if webassets.IsAvailable() {
+			staticFileFS = webassets.FS
+			logger.Println("serving web UI from embedded assets")
+		} else {
+			logger.Println("warning: no web UI assets found (external dist missing and embedded assets not compiled)")
+		}
+	} else {
+		logger.Printf("serving web UI from %s", staticDir)
+	}
 
-	// 2. 启动 Gateway（复用共享启动逻辑，Web 模式跳过 IPC）
+	// 3. 启动 Gateway（复用共享启动逻辑，Web 模式跳过 IPC）
 	gatewayOpts := gatewayCommandOptions{
-		HTTPAddress:   resolveWebListenAddress(options.HTTPAddress),
-		LogLevel:      options.LogLevel,
-		Workdir:       options.Workdir,
-		TokenFile:     options.TokenFile,
-		SkipIPC:       true,
+		HTTPAddress: resolveWebListenAddress(options.HTTPAddress),
+		LogLevel:    options.LogLevel,
+		Workdir:     options.Workdir,
+		TokenFile:   options.TokenFile,
+		SkipIPC:     true,
 	}
 
 	// 网络服务器就绪后打开浏览器
@@ -117,7 +131,7 @@ func runWebCommand(ctx context.Context, options webCommandOptions) error {
 		}
 	}
 
-	return startGatewayServer(ctx, gatewayOpts, staticDir, onNetworkReady)
+	return startGatewayServer(ctx, gatewayOpts, staticDir, staticFileFS, onNetworkReady)
 }
 
 // resolveWebStaticDir 按 --static-dir → <cwd>/web/dist → <exe_dir>/web/dist 顺序查找前端静态文件。

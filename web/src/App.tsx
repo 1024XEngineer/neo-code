@@ -3,6 +3,7 @@ import ChatPage from './pages/ChatPage'
 import ConnectPage from './pages/ConnectPage'
 import { useRuntime } from './context/RuntimeProvider'
 import { ErrorBoundary } from './components/ErrorBoundary'
+import { UpdateNotification } from './components/UpdateNotification'
 
 /** 加载/错误状态全屏遮罩 */
 function LoadingScreen({ message }: { message?: string }) {
@@ -103,6 +104,7 @@ function AppRoutes() {
 function App() {
   return (
     <ErrorBoundary>
+      <UpdateNotification />
       <HashRouter>
         <AppRoutes />
       </HashRouter>
