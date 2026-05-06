@@ -135,6 +135,26 @@ func TestRegistryDiscoverModels(t *testing.T) {
 			t.Fatalf("expected ErrDriverNotFound, got %v", err)
 		}
 	})
+
+	t.Run("driver without discovery function", func(t *testing.T) {
+		t.Parallel()
+
+		registry := provider.NewRegistry()
+		err := registry.Register(provider.DriverDefinition{
+			Name: "manual-only",
+			Build: func(ctx context.Context, cfg provider.RuntimeConfig) (provider.Provider, error) {
+				return stubProvider{}, nil
+			},
+		})
+		if err != nil {
+			t.Fatalf("Register() error = %v", err)
+		}
+
+		_, err = registry.DiscoverModels(context.Background(), provider.RuntimeConfig{Driver: "manual-only"})
+		if err == nil || !provider.IsDiscoveryConfigError(err) {
+			t.Fatalf("expected discovery config error, got %v", err)
+		}
+	})
 }
 
 func TestRegistrySupports(t *testing.T) {
@@ -167,6 +187,42 @@ func TestRegistrySupports(t *testing.T) {
 	}
 }
 
+func TestRegistrySupportsDiscovery(t *testing.T) {
+	t.Parallel()
+
+	registry := provider.NewRegistry()
+	if err := registry.Register(stubDriver("discoverable")); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+	if err := registry.Register(provider.DriverDefinition{
+		Name: "manual-only",
+		Build: func(ctx context.Context, cfg provider.RuntimeConfig) (provider.Provider, error) {
+			return stubProvider{}, nil
+		},
+	}); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+
+	tests := []struct {
+		driverType string
+		want       bool
+	}{
+		{"discoverable", true},
+		{"DISCOVERABLE", true},
+		{"manual-only", false},
+		{"MANUAL-ONLY", false},
+		{"missing", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.driverType, func(t *testing.T) {
+			if got := registry.SupportsDiscovery(tt.driverType); got != tt.want {
+				t.Fatalf("SupportsDiscovery(%q) = %v, want %v", tt.driverType, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestRegistryValidateCatalogIdentity(t *testing.T) {
 	t.Parallel()
 
@@ -190,6 +246,26 @@ func TestRegistryValidateCatalogIdentity(t *testing.T) {
 		err := registry.ValidateCatalogIdentity(provider.ProviderIdentity{Driver: "missing"})
 		if !errors.Is(err, provider.ErrDriverNotFound) {
 			t.Fatalf("expected ErrDriverNotFound, got %v", err)
+		}
+	})
+
+	t.Run("driver without validator passes", func(t *testing.T) {
+		t.Parallel()
+
+		registry := provider.NewRegistry()
+		err := registry.Register(provider.DriverDefinition{
+			Name: "manual-only",
+			Build: func(ctx context.Context, cfg provider.RuntimeConfig) (provider.Provider, error) {
+				return stubProvider{}, nil
+			},
+		})
+		if err != nil {
+			t.Fatalf("Register() error = %v", err)
+		}
+
+		err = registry.ValidateCatalogIdentity(provider.ProviderIdentity{Driver: "manual-only"})
+		if err != nil {
+			t.Fatalf("expected nil error, got %v", err)
 		}
 	})
 }

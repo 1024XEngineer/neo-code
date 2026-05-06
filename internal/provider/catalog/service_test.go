@@ -524,6 +524,32 @@ func TestDiscoverAndPersistFailurePaths(t *testing.T) {
 		}
 	})
 
+	t.Run("driver without discovery support", func(t *testing.T) {
+		t.Setenv(testAPIKeyEnv, "test-key")
+
+		registry := provider.NewRegistry()
+		if err := registry.Register(provider.DriverDefinition{
+			Name: "manual-only",
+			Build: func(ctx context.Context, cfg provider.RuntimeConfig) (provider.Provider, error) {
+				return catalogTestProvider{}, nil
+			},
+		}); err != nil {
+			t.Fatalf("register driver: %v", err)
+		}
+
+		service := NewService("", registry, newMemoryStore())
+		providerCfg := customGatewayProvider()
+		providerCfg.Driver = "manual-only"
+
+		discovered, err := service.discoverAndPersist(context.Background(), mustCatalogInput(t, providerCfg))
+		if err == nil || discovered != nil {
+			t.Fatalf("expected discovery config error, got err=%v models=%+v", err, discovered)
+		}
+		if !provider.IsDiscoveryConfigError(err) {
+			t.Fatalf("expected discovery config error type, got %v", err)
+		}
+	})
+
 	t.Run("discovery error", func(t *testing.T) {
 		t.Setenv(testAPIKeyEnv, "test-key")
 		service := NewService("", newRegistry(t, openaicompat.DriverName, func(ctx context.Context, cfg provider.RuntimeConfig) ([]providertypes.ModelDescriptor, error) {
