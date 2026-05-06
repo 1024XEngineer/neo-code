@@ -67,6 +67,12 @@ neocode --workdir /path/to/your/project
 
 启动后会进入终端界面，底部是输入框。直接输入自然语言即可开始对话；输入 `/` 可以打开本地控制命令建议。
 
+除了终端界面，NeoCode 也提供浏览器 Web UI：
+
+```bash
+neocode web
+```
+
 ## 5. 第一次对话
 
 可以先让 NeoCode 读项目结构：
@@ -82,6 +88,8 @@ neocode --workdir /path/to/your/project
 ```
 
 Agent 会自动调用文件读取和搜索工具。当它需要写入文件或执行命令时，界面会先弹出权限确认。
+
+浏览器会自动打开 `http://127.0.0.1:8080`，功能与终端一致。详见 [Web UI 使用指南](./web-ui)。
 
 ## 6. 建议补一个 AGENTS.md
 
@@ -112,6 +120,7 @@ go run ./cmd/neocode
 
 ## 下一步
 
+- 想用浏览器操作：[Web UI 使用指南](./web-ui)
 - 想学会本地控制命令：[Slash 指令](./slash-commands)
 - 想理解工作区和会话：[会话、上下文与工作区](./context-session-workspace)
 - 想看更多任务写法：[使用示例](./examples)
