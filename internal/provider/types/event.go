@@ -14,6 +14,8 @@ const (
 	StreamEventToolCallDelta StreamEventType = "tool_call_delta"
 	// StreamEventMessageDone 表示本轮消息完成，并携带最终统计信息。
 	StreamEventMessageDone StreamEventType = "message_done"
+	// StreamEventThinkingDelta 表示模型思考/推理内容的增量片段。
+	StreamEventThinkingDelta StreamEventType = "thinking_delta"
 )
 
 // StreamEvent 表示 provider 向 runtime 推送的流式事件。
@@ -23,6 +25,12 @@ type StreamEvent struct {
 	ToolCallStart *ToolCallStartPayload `json:"tool_call_start,omitempty"`
 	ToolCallDelta *ToolCallDeltaPayload `json:"tool_call_delta,omitempty"`
 	MessageDone   *MessageDonePayload   `json:"message_done,omitempty"`
+	ThinkingDelta *ThinkingDeltaPayload `json:"thinking_delta,omitempty"`
+}
+
+// ThinkingDeltaPayload 表示思考内容增量事件的载荷。
+type ThinkingDeltaPayload struct {
+	Text string `json:"text"`
 }
 
 // TextDeltaPayload 表示文本增量事件的载荷。
@@ -82,6 +90,14 @@ func NewMessageDoneStreamEvent(finishReason string, usage *Usage) StreamEvent {
 	}
 }
 
+// NewThinkingDeltaStreamEvent 创建思考增量流事件。
+func NewThinkingDeltaStreamEvent(text string) StreamEvent {
+	return StreamEvent{
+		Type:          StreamEventThinkingDelta,
+		ThinkingDelta: &ThinkingDeltaPayload{Text: text},
+	}
+}
+
 // TextDeltaValue 返回 text_delta 事件的载荷，并在结构缺失时显式报错。
 func (e StreamEvent) TextDeltaValue() (TextDeltaPayload, error) {
 	if e.Type != StreamEventTextDelta {
@@ -124,4 +140,15 @@ func (e StreamEvent) MessageDoneValue() (MessageDonePayload, error) {
 		return MessageDonePayload{}, fmt.Errorf("provider: message_done event payload is nil")
 	}
 	return *e.MessageDone, nil
+}
+
+// ThinkingDeltaValue 返回 thinking_delta 事件的载荷，并在结构缺失时显式报错。
+func (e StreamEvent) ThinkingDeltaValue() (ThinkingDeltaPayload, error) {
+	if e.Type != StreamEventThinkingDelta {
+		return ThinkingDeltaPayload{}, fmt.Errorf("provider: stream event type %q is not thinking_delta", e.Type)
+	}
+	if e.ThinkingDelta == nil {
+		return ThinkingDeltaPayload{}, fmt.Errorf("provider: thinking_delta event payload is nil")
+	}
+	return *e.ThinkingDelta, nil
 }

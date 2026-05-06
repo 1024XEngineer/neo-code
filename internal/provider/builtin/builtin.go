@@ -5,8 +5,13 @@ import (
 
 	"neo-code/internal/provider"
 	"neo-code/internal/provider/anthropic"
+	"neo-code/internal/provider/deepseek"
 	"neo-code/internal/provider/gemini"
+	"neo-code/internal/provider/mimo"
+	"neo-code/internal/provider/minimax"
 	"neo-code/internal/provider/openaicompat"
+	"neo-code/internal/provider/openaicompat/glm"
+	"neo-code/internal/provider/openaicompat/qwen"
 )
 
 func NewRegistry() (*provider.Registry, error) {
@@ -21,11 +26,20 @@ func register(registry *provider.Registry) error {
 	if registry == nil {
 		return errors.New("builtin provider registry is nil")
 	}
-	if err := registry.Register(openaicompat.Driver()); err != nil {
-		return err
+	drivers := []provider.DriverDefinition{
+		openaicompat.Driver(),
+		gemini.Driver(),
+		anthropic.Driver(),
+		deepseek.Driver(),
+		qwen.Driver(),
+		glm.Driver(),
+		mimo.Driver(),
+		minimax.Driver(),
 	}
-	if err := registry.Register(gemini.Driver()); err != nil {
-		return err
+	for _, d := range drivers {
+		if err := registry.Register(d); err != nil {
+			return err
+		}
 	}
-	return registry.Register(anthropic.Driver())
+	return nil
 }

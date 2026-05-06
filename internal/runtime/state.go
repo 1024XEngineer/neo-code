@@ -55,6 +55,7 @@ type runState struct {
 	hookNotificationSeen           map[string]time.Time
 	hookNotificationOmitted        int
 	reportedMissingSkills          map[string]struct{}
+	thinkingOverride               *ThinkingOverride
 }
 
 // newRunState 基于持久化会话创建一次运行的内存状态镜像。

@@ -280,7 +280,8 @@ func updateGenerateAttemptPhase(
 // IsEffectiveGeneratePayloadEvent 判断事件是否属于“流已开始”的有效 payload。
 func IsEffectiveGeneratePayloadEvent(event providertypes.StreamEvent) bool {
 	switch event.Type {
-	case providertypes.StreamEventTextDelta, providertypes.StreamEventToolCallStart, providertypes.StreamEventToolCallDelta:
+	case providertypes.StreamEventTextDelta, providertypes.StreamEventToolCallStart, providertypes.StreamEventToolCallDelta,
+		providertypes.StreamEventThinkingDelta:
 		return true
 	default:
 		return false

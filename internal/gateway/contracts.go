@@ -225,6 +225,8 @@ type ModelEntry struct {
 	Name string `json:"name"`
 	// Provider 是模型供应商。
 	Provider string `json:"provider"`
+	// CapabilityHints 描述模型能力提示。
+	CapabilityHints providertypes.ModelCapabilityHints `json:"capability_hints,omitempty"`
 }
 
 // ListModelsInput 表示 gateway.listModels 动作的下游输入。

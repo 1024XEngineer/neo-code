@@ -849,3 +849,38 @@ type TodoContentCheck struct {
 	Artifact string   `json:"artifact,omitempty"`
 	Contains []string `json:"contains,omitempty"`
 }
+
+// CancelNonTerminalTodos 将列表中所有非终态（pending/in_progress/blocked）的 todo 标记为 canceled。
+func CancelNonTerminalTodos(todos []TodoItem) {
+	now := time.Now().UTC()
+	for i := range todos {
+		switch todos[i].Status {
+		case TodoStatusPending, TodoStatusInProgress, TodoStatusBlocked:
+			todos[i].Status = TodoStatusCanceled
+			todos[i].UpdatedAt = now
+		}
+	}
+}
+
+// CancelTodosByIDs 将指定 ID 列表中非终态的 todo 标记为 canceled。
+// 仅取消 plan 明确引用的 todo，不影响用户手动创建或其他来源的 todo。
+func CancelTodosByIDs(todos []TodoItem, ids []string) {
+	if len(ids) == 0 {
+		return
+	}
+	target := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		target[strings.TrimSpace(id)] = struct{}{}
+	}
+	now := time.Now().UTC()
+	for i := range todos {
+		if _, ok := target[todos[i].ID]; !ok {
+			continue
+		}
+		switch todos[i].Status {
+		case TodoStatusPending, TodoStatusInProgress, TodoStatusBlocked:
+			todos[i].Status = TodoStatusCanceled
+			todos[i].UpdatedAt = now
+		}
+	}
+}

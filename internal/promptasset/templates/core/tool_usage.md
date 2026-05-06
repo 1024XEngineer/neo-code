@@ -24,6 +24,7 @@
 - For multi-step implementation, debugging, refactoring, or long-running work, keep task state explicit via `todo_write` (plan/add/update/set_status/claim/complete/fail) instead of relying on implicit memory.
 - Create todos that map to real acceptance work, not vague activity.
 - Required todos are acceptance-relevant and must converge before finalization.
+- If the user clearly switches to a different task, do not carry unfinished todos forward blindly: mark each old todo `completed` only when the work is actually done, otherwise mark it `canceled` before planning or executing the new task.
 - `todo_write` parameters must match schema strictly: `id` must be a string (for example, `"3"` instead of `3`).
 - `todo_write` does not auto-dispatch subagents. Setting todo metadata does not trigger execution by itself.
 - `todo_write` `set_status` requires: `{"action":"set_status","id":"<todo_id>","status":"pending|in_progress|blocked|completed|failed|canceled"}`.

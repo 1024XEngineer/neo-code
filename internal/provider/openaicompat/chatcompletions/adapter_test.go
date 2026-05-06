@@ -104,6 +104,39 @@ func TestConsumeStreamParsesMultilineDataEvent(t *testing.T) {
 	}
 }
 
+func TestConsumeStreamEmitsThinkingDeltaFromReasoningFields(t *testing.T) {
+	t.Parallel()
+
+	body := strings.Join([]string{
+		`data: {"choices":[{"delta":{"reasoning_content":"plan","content":"answer"}}]}`,
+		`data: {"choices":[{"delta":{"reasoning":"fallback reasoning"}}],"usage":{"prompt_tokens":1,"completion_tokens":2,"total_tokens":3}}`,
+		`data: [DONE]`,
+		"",
+	}, "\n")
+
+	events := make(chan providertypes.StreamEvent, 8)
+	if err := ConsumeStream(context.Background(), strings.NewReader(body), events); err != nil {
+		t.Fatalf("ConsumeStream() error = %v", err)
+	}
+
+	drained := drainEvents(events)
+	if len(drained) != 4 {
+		t.Fatalf("expected 4 events, got %d (%+v)", len(drained), drained)
+	}
+	first, err := drained[0].ThinkingDeltaValue()
+	if err != nil || first.Text != "plan" {
+		t.Fatalf("expected reasoning_content thinking delta, got err=%v event=%+v", err, drained[0])
+	}
+	text, err := drained[1].TextDeltaValue()
+	if err != nil || text.Text != "answer" {
+		t.Fatalf("expected text delta, got err=%v event=%+v", err, drained[1])
+	}
+	second, err := drained[2].ThinkingDeltaValue()
+	if err != nil || second.Text != "fallback reasoning" {
+		t.Fatalf("expected reasoning fallback thinking delta, got err=%v event=%+v", err, drained[2])
+	}
+}
+
 func TestConsumeStreamEOFWithoutDoneAndWithoutFinishReason(t *testing.T) {
 	t.Parallel()
 

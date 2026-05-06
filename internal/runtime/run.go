@@ -598,11 +598,21 @@ func (s *Service) prepareTurnBudgetSnapshot(ctx context.Context, state *runState
 	promptBudget, budgetSource, contextWindow := s.resolvePromptBudget(ctx, cfg)
 	model := strings.TrimSpace(cfg.CurrentModel)
 	requestMessages := append([]providertypes.Message(nil), builtContext.Messages...)
+	thinkingCfg, thinkingErr := resolveThinkingConfig(
+		modelCapabilityHintsForRequest(model, resolvedProvider.Models),
+		nil, // ThinkingOverride 暂未从 TUI 透传
+		s.IsThinkingEnabled(),
+	)
+	if thinkingErr != nil {
+		return TurnBudgetSnapshot{}, false, thinkingErr
+	}
+
 	request := providertypes.GenerateRequest{
 		Model:              model,
 		SystemPrompt:       systemPrompt,
 		Messages:           requestMessages,
 		Tools:              toolSpecs,
+		ThinkingConfig:     thinkingCfg,
 		SessionAssetReader: s.buildSessionAssetReader(ctx, state.session.ID),
 	}
 	attemptSeq := state.nextAttemptSeq
@@ -662,12 +672,33 @@ func (s *Service) callProvider(
 		OnTextDelta: func(text string) {
 			s.emitRunScoped(ctx, EventAgentChunk, state, text)
 		},
+		OnThinkingDelta: func(text string) {
+			s.emitRunScoped(ctx, EventThinkingDelta, state, text)
+		},
 		OnToolCallStart: func(payload providertypes.ToolCallStartPayload) {
 			s.emitRunScoped(ctx, EventToolCallThinking, state, payload.Name)
 		},
 	})
 	if streamOutcome.err != nil {
-		return turnProviderOutput{}, streamOutcome.err
+		// unknown 模型 + ErrThinkingNotSupported → 重试不带 ThinkingConfig
+		if provider.IsThinkingNotSupportedError(streamOutcome.err) && snapshot.Request.ThinkingConfig != nil {
+			retryRequest := snapshot.Request
+			retryRequest.ThinkingConfig = nil
+			retryOutcome := generateStreamingMessage(ctx, modelProvider, retryRequest, streaming.Hooks{
+				OnTextDelta: func(text string) {
+					s.emitRunScoped(ctx, EventAgentChunk, state, text)
+				},
+				OnToolCallStart: func(payload providertypes.ToolCallStartPayload) {
+					s.emitRunScoped(ctx, EventToolCallThinking, state, payload.Name)
+				},
+			})
+			if retryOutcome.err != nil {
+				return turnProviderOutput{}, retryOutcome.err
+			}
+			streamOutcome = retryOutcome
+		} else {
+			return turnProviderOutput{}, streamOutcome.err
+		}
 	}
 
 	return turnProviderOutput{

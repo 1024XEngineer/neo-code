@@ -158,7 +158,7 @@ func normalizeCustomProviderModels(models []providertypes.ModelDescriptor) ([]pr
 		if model.MaxOutputTokens != 0 {
 			return nil, fmt.Errorf("config: models[%d].max_output_tokens is not supported", index)
 		}
-		if model.CapabilityHints != (providertypes.ModelCapabilityHints{}) {
+		if !hintsAreZero(model.CapabilityHints) {
 			return nil, fmt.Errorf("config: models[%d].capability_hints is not supported", index)
 		}
 
@@ -174,4 +174,14 @@ func normalizeCustomProviderModels(models []providertypes.ModelDescriptor) ([]pr
 		})
 	}
 	return normalized, nil
+}
+
+// hintsAreZero reports whether capability hints contain only zero values.
+func hintsAreZero(h providertypes.ModelCapabilityHints) bool {
+	return h.ToolCalling == "" &&
+		h.ImageInput == "" &&
+		h.Thinking == "" &&
+		len(h.ThinkingEfforts) == 0 &&
+		h.ThinkingDefaultEffort == "" &&
+		!h.ThinkingForceEnabled
 }

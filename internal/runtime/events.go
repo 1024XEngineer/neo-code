@@ -319,6 +319,8 @@ const (
 	EventUserMessage EventType = "user_message"
 	// EventAgentChunk 表示 assistant 流式文本分片。
 	EventAgentChunk EventType = "agent_chunk"
+	// EventThinkingDelta 表示模型思考/推理内容的流式分片。
+	EventThinkingDelta EventType = "thinking_delta"
 	// EventAgentDone 表示 assistant 正常结束。
 	EventAgentDone EventType = "agent_done"
 	// EventToolStart 表示工具开始执行。

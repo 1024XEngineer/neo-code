@@ -19,6 +19,7 @@ type DefaultBuilder struct {
 func newPromptSources(extra ...SectionSource) []promptSectionSource {
 	sources := []promptSectionSource{
 		corePromptSource{},
+		capabilitiesSource{},
 		newRulesPromptSource(nil),
 		taskStateSource{},
 		planModeContextSource{},
