@@ -699,6 +699,7 @@ func GeminiProvider() ProviderConfig {
 func QiniuProvider() ProviderConfig {
 	cfg := newBuiltinOpenAICompatProvider(QiniuName, QiniuDefaultBaseURL, QiniuDefaultModel, QiniuDefaultAPIKeyEnv)
 	cfg.Models = cloneBuiltinModels(qiniuStaticModels)
+	cfg.ModelSource = ModelSourceManual
 	return cfg
 }
 
@@ -706,6 +707,7 @@ func QiniuProvider() ProviderConfig {
 func ModelScopeProvider() ProviderConfig {
 	cfg := newBuiltinOpenAICompatProvider(ModelScopeName, ModelScopeDefaultBaseURL, ModelScopeDefaultModel, ModelScopeDefaultAPIKeyEnv)
 	cfg.Models = cloneBuiltinModels(modelScopeStaticModels)
+	cfg.ModelSource = ModelSourceManual
 	return cfg
 }
 
@@ -951,7 +953,7 @@ func DeepSeekProvider() ProviderConfig {
 		APIKeyEnv:        DeepSeekDefaultAPIKeyEnv,
 		ChatAPIMode:      provider.ChatAPIModeChatCompletions,
 		ChatEndpointPath: "/chat/completions",
-		ModelSource:      ModelSourceDiscover,
+		ModelSource:      ModelSourceManual,
 		Models:           cloneBuiltinModels(deepSeekStaticModels),
 		Source:           ProviderSourceBuiltin,
 	}
@@ -967,7 +969,7 @@ func KimiProvider() ProviderConfig {
 		ChatAPIMode:           provider.ChatAPIModeChatCompletions,
 		ChatEndpointPath:      "/chat/completions",
 		DiscoveryEndpointPath: provider.DiscoveryEndpointPathModels,
-		ModelSource:           ModelSourceDiscover,
+		ModelSource:           ModelSourceManual,
 		Models:                cloneBuiltinModels(kimiStaticModels),
 		Source:                ProviderSourceBuiltin,
 	}
@@ -982,7 +984,7 @@ func QwenProvider() ProviderConfig {
 		APIKeyEnv:        QwenDefaultAPIKeyEnv,
 		ChatAPIMode:      provider.ChatAPIModeChatCompletions,
 		ChatEndpointPath: "/chat/completions",
-		ModelSource:      ModelSourceDiscover,
+		ModelSource:      ModelSourceManual,
 		Models:           cloneBuiltinModels(qwenStaticModels),
 		Source:           ProviderSourceBuiltin,
 	}
@@ -997,7 +999,7 @@ func GLMProvider() ProviderConfig {
 		APIKeyEnv:        GLMDefaultAPIKeyEnv,
 		ChatAPIMode:      provider.ChatAPIModeChatCompletions,
 		ChatEndpointPath: "/chat/completions",
-		ModelSource:      ModelSourceDiscover,
+		ModelSource:      ModelSourceManual,
 		Models:           cloneBuiltinModels(glmStaticModels),
 		Source:           ProviderSourceBuiltin,
 	}
@@ -1012,7 +1014,7 @@ func MiMoProvider() ProviderConfig {
 		APIKeyEnv:        MiMoDefaultAPIKeyEnv,
 		ChatAPIMode:      provider.ChatAPIModeChatCompletions,
 		ChatEndpointPath: "/chat/completions",
-		ModelSource:      ModelSourceDiscover,
+		ModelSource:      ModelSourceManual,
 		Models:           cloneBuiltinModels(miMoStaticModels),
 		Source:           ProviderSourceBuiltin,
 	}
@@ -1027,7 +1029,7 @@ func MiniMaxProvider() ProviderConfig {
 		APIKeyEnv:        MiniMaxDefaultAPIKeyEnv,
 		ChatAPIMode:      provider.ChatAPIModeChatCompletions,
 		ChatEndpointPath: "/",
-		ModelSource:      ModelSourceDiscover,
+		ModelSource:      ModelSourceManual,
 		Models:           cloneBuiltinModels(miniMaxStaticModels),
 		Source:           ProviderSourceBuiltin,
 	}

@@ -11,7 +11,6 @@ import (
 	"strings"
 
 	"neo-code/internal/provider"
-	"neo-code/internal/provider/openaicompat"
 	"neo-code/internal/provider/openaicompat/chatcompletions"
 	providertypes "neo-code/internal/provider/types"
 )
@@ -21,9 +20,8 @@ const errorPrefix = "minimax provider: "
 var thinkTagRe = regexp.MustCompile(`<think>([\s\S]*?)</think>`)
 
 type Provider struct {
-	cfg             provider.RuntimeConfig
-	generateClient  *http.Client
-	discoveryClient *http.Client
+	cfg            provider.RuntimeConfig
+	generateClient *http.Client
 }
 
 func New(cfg provider.RuntimeConfig) (*Provider, error) {
@@ -36,10 +34,6 @@ func New(cfg provider.RuntimeConfig) (*Provider, error) {
 	return &Provider{
 		cfg: cfg,
 		generateClient: &http.Client{
-			Transport: http.DefaultTransport,
-		},
-		discoveryClient: &http.Client{
-			Timeout:   provider.DefaultSDKRequestTimeout,
 			Transport: http.DefaultTransport,
 		},
 	}, nil
@@ -59,14 +53,6 @@ func (p *Provider) EstimateInputTokens(ctx context.Context, req providertypes.Ge
 		EstimateSource:       provider.EstimateSourceLocal,
 		GatePolicy:           provider.EstimateGateAdvisory,
 	}, nil
-}
-
-func (p *Provider) DiscoverModels(ctx context.Context) ([]providertypes.ModelDescriptor, error) {
-	requestCfg, err := openaicompat.RequestConfigFromRuntime(p.cfg)
-	if err != nil {
-		return nil, err
-	}
-	return openaicompat.DiscoverModelDescriptors(ctx, p.discoveryClient, requestCfg)
 }
 
 func (p *Provider) Generate(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error {
