@@ -697,6 +697,69 @@ func TestIDMControllerPhase4RunModeAndAckFailures(t *testing.T) {
 		}
 	})
 
+	t.Run("chunk renders before done", func(t *testing.T) {
+		client := &gatewayclient.GatewayRPCClient{}
+		notifications := make(chan gatewayclient.Notification, 4)
+		setGatewayClientNotifications(client, notifications)
+		output := &synchronizedBuffer{}
+		controller := newIDMController(idmControllerOptions{Output: output, RPCClient: client})
+
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		waitDone := make(chan error, 1)
+		go func() {
+			waitDone <- controller.waitRunStream(ctx, "session-stream", "run-stream")
+		}()
+
+		notifications <- gatewayclient.Notification{
+			Method: protocol.MethodGatewayEvent,
+			Params: mustMarshalJSON(t, gateway.MessageFrame{
+				Type:      gateway.FrameTypeEvent,
+				SessionID: "session-stream",
+				RunID:     "run-stream",
+				Payload: map[string]any{
+					"runtime_event_type": "agent_chunk",
+					"payload":            "streaming chunk",
+				},
+			}),
+		}
+
+		ticker := time.NewTicker(10 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case err := <-waitDone:
+				t.Fatalf("waitRunStream returned before agent_done: %v", err)
+			case <-ticker.C:
+				if strings.Contains(output.String(), "streaming chunk") {
+					goto chunkRendered
+				}
+			case <-ctx.Done():
+				t.Fatal("chunk was not rendered before agent_done")
+			}
+		}
+
+	chunkRendered:
+		notifications <- gatewayclient.Notification{
+			Method: protocol.MethodGatewayEvent,
+			Params: mustMarshalJSON(t, gateway.MessageFrame{
+				Type:      gateway.FrameTypeEvent,
+				SessionID: "session-stream",
+				RunID:     "run-stream",
+				Payload:   map[string]any{"runtime_event_type": "agent_done"},
+			}),
+		}
+
+		select {
+		case err := <-waitDone:
+			if err != nil {
+				t.Fatalf("waitRunStream() error = %v", err)
+			}
+		case <-ctx.Done():
+			t.Fatal("waitRunStream did not finish after agent_done")
+		}
+	})
+
 	t.Run("run mode follows env and run ack failures reset state", func(t *testing.T) {
 		tests := []struct {
 			name     string
@@ -866,6 +929,23 @@ type failingWriter struct {
 
 func (w failingWriter) Write(_ []byte) (int, error) {
 	return 0, w.err
+}
+
+type synchronizedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *synchronizedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *synchronizedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }
 
 func mustMarshalJSON(t *testing.T, value any) json.RawMessage {

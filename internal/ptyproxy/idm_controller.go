@@ -824,6 +824,7 @@ func (c *idmController) currentSessionID() string {
 // waitRunStream 负责 waitRunStream 相关逻辑。
 func (c *idmController) waitRunStream(ctx context.Context, sessionID string, runID string) error {
 	var markdownBuffer strings.Builder
+	streamedChunks := false
 	for {
 		select {
 		case <-ctx.Done():
@@ -851,16 +852,20 @@ func (c *idmController) waitRunStream(ctx context.Context, sessionID string, run
 			switch eventType {
 			case "agent_chunk":
 				chunk := stringifyRuntimePayload(payload)
-				if strings.TrimSpace(chunk) == "" {
+				if chunk == "" {
 					continue
 				}
 				markdownBuffer.WriteString(chunk)
+				c.renderIDMStreamChunk(chunk)
+				streamedChunks = true
 			case "agent_done":
 				answer := markdownBuffer.String()
 				if strings.TrimSpace(answer) == "" {
 					answer = extractIDMDonePayloadText(payload)
 				}
-				c.renderIDMAnswer(answer)
+				if !streamedChunks {
+					c.renderIDMAnswer(answer)
+				}
 				c.writeRawOutput([]byte("\r\n"))
 				return nil
 			case "run_canceled":
@@ -1185,6 +1190,16 @@ func extractIDMTextFromMap(container map[string]any) string {
 		builder.WriteString(text)
 	}
 	return strings.TrimSpace(builder.String())
+}
+
+// renderIDMStreamChunk 将模型流式片段直接写入终端，避免等待完整 Markdown 渲染完成。
+func (c *idmController) renderIDMStreamChunk(rawText string) {
+	if c == nil || rawText == "" {
+		return
+	}
+	c.writeRawOutput([]byte(idmAIColor))
+	c.writeRawOutput([]byte(proxyOutputLineEndingNormalizer.Replace(rawText)))
+	c.writeRawOutput([]byte(idmColorReset))
 }
 
 // renderIDMAnswer 将模型回复按 Markdown 渲染后输出，渲染失败时回退原始文本。
