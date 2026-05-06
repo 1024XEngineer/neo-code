@@ -124,6 +124,54 @@ func TestRuntimeSubAgentInvokerRunAppliesInputTimeoutToContext(t *testing.T) {
 	}
 }
 
+func TestRuntimeSubAgentInvokerRunKeepsParentDeadlineWhenPresent(t *testing.T) {
+	t.Parallel()
+
+	service := NewWithFactory(
+		newRuntimeConfigManager(t),
+		&stubToolManager{},
+		newMemoryStore(),
+		&scriptedProviderFactory{provider: &scriptedProvider{}},
+		nil,
+	)
+	service.SetSubAgentFactory(subagent.NewWorkerFactory(func(role subagent.Role, policy subagent.RolePolicy) subagent.Engine {
+		_ = role
+		_ = policy
+		return subagent.EngineFunc(func(ctx context.Context, _ subagent.StepInput) (subagent.StepOutput, error) {
+			<-ctx.Done()
+			return subagent.StepOutput{}, ctx.Err()
+		})
+	}))
+
+	invoker := newRuntimeSubAgentInvoker(service, "run-parent-deadline", "session-parent-deadline", "agent-main", t.TempDir())
+	if invoker == nil {
+		t.Fatalf("expected non-nil invoker")
+	}
+
+	parentCtx, cancel := context.WithTimeout(context.Background(), 180*time.Millisecond)
+	defer cancel()
+
+	startedAt := time.Now()
+	_, err := invoker.Run(parentCtx, tools.SubAgentRunInput{
+		Role:        subagent.RoleCoder,
+		TaskID:      "task-parent-deadline",
+		Goal:        "respect parent deadline",
+		ExpectedOut: "json summary",
+		Timeout:     50 * time.Millisecond,
+		MaxSteps:    2,
+	})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Run() error = %v, want context deadline exceeded", err)
+	}
+	elapsed := time.Since(startedAt)
+	if elapsed < 120*time.Millisecond {
+		t.Fatalf("elapsed = %v, want keep parent deadline (not narrowed by input timeout)", elapsed)
+	}
+	if elapsed > 500*time.Millisecond {
+		t.Fatalf("elapsed = %v, want bounded by parent deadline", elapsed)
+	}
+}
+
 func TestRuntimeSubAgentInvokerRunInheritsParentCapabilityByDefault(t *testing.T) {
 	t.Parallel()
 

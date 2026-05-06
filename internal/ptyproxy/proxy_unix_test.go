@@ -51,6 +51,44 @@ func TestListenDiagSocketRecoversStaleSocket(t *testing.T) {
 	_ = os.Remove(resolvedPath)
 }
 
+func TestListenIDMSocketDerivesFromDiagSocketOverride(t *testing.T) {
+	diagSocketPath := filepath.Join(t.TempDir(), "custom-diag.sock")
+	listener, idmPath, err := listenIDMSocket(diagSocketPath)
+	if err != nil {
+		t.Fatalf("listenIDMSocket() error = %v", err)
+	}
+	defer listener.Close()
+	defer os.Remove(idmPath)
+
+	expected := filepath.Join(filepath.Dir(diagSocketPath), "custom-diag-idm.sock")
+	if filepath.Clean(idmPath) != filepath.Clean(expected) {
+		t.Fatalf("idm path = %q, want %q", idmPath, expected)
+	}
+}
+
+func TestListenIDMSocketFallsBackToDefaultPath(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	listener, idmPath, err := listenIDMSocket("")
+	if err != nil {
+		t.Fatalf("listenIDMSocket() error = %v", err)
+	}
+	defer listener.Close()
+	defer os.Remove(idmPath)
+
+	if !strings.HasSuffix(filepath.ToSlash(idmPath), "-idm.sock") {
+		t.Fatalf("idm path = %q, want suffix -idm.sock", idmPath)
+	}
+}
+
+func TestListenIDMSocketRejectsInvalidDiagPath(t *testing.T) {
+	_, _, err := listenIDMSocket(" . ")
+	if err == nil || !strings.Contains(err.Error(), "empty diagnose socket") {
+		t.Fatalf("err = %v, want empty diagnose socket", err)
+	}
+}
+
 func TestCleanupStaleSocketRejectsRegularFile(t *testing.T) {
 	socketPath := filepath.Join(t.TempDir(), "not-socket.sock")
 	if err := os.WriteFile(socketPath, []byte("x"), 0o600); err != nil {

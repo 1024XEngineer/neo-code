@@ -129,6 +129,45 @@ func TestResolveIDMDiagSocketPathForPIDExplicit(t *testing.T) {
 	}
 }
 
+func TestDeriveIDMSocketPathFromDiagSocketPath(t *testing.T) {
+	t.Run("derive from regular diag socket", func(t *testing.T) {
+		path, err := DeriveIDMSocketPathFromDiagSocketPath("/tmp/neocode-diag-123.sock")
+		if err != nil {
+			t.Fatalf("DeriveIDMSocketPathFromDiagSocketPath() error = %v", err)
+		}
+		if path != "/tmp/neocode-diag-123-idm.sock" {
+			t.Fatalf("path = %q, want /tmp/neocode-diag-123-idm.sock", path)
+		}
+	})
+
+	t.Run("already idm path keeps unchanged", func(t *testing.T) {
+		path, err := DeriveIDMSocketPathFromDiagSocketPath("/tmp/neocode-diag-123-idm.sock")
+		if err != nil {
+			t.Fatalf("DeriveIDMSocketPathFromDiagSocketPath() error = %v", err)
+		}
+		if path != "/tmp/neocode-diag-123-idm.sock" {
+			t.Fatalf("path = %q, want /tmp/neocode-diag-123-idm.sock", path)
+		}
+	})
+
+	t.Run("non sock suffix appends idm sock suffix", func(t *testing.T) {
+		path, err := DeriveIDMSocketPathFromDiagSocketPath("/tmp/custom-socket")
+		if err != nil {
+			t.Fatalf("DeriveIDMSocketPathFromDiagSocketPath() error = %v", err)
+		}
+		if path != "/tmp/custom-socket-idm.sock" {
+			t.Fatalf("path = %q, want /tmp/custom-socket-idm.sock", path)
+		}
+	})
+
+	t.Run("empty path returns error", func(t *testing.T) {
+		_, err := DeriveIDMSocketPathFromDiagSocketPath("   ")
+		if err == nil || !strings.Contains(err.Error(), "empty diagnose socket") {
+			t.Fatalf("err = %v, want empty diagnose socket", err)
+		}
+	})
+}
+
 func TestFindLatestSocketByPatternGlobError(t *testing.T) {
 	_, err := findLatestSocketByPattern(t.TempDir(), "[")
 	if err == nil || !strings.Contains(err.Error(), "glob diag socket path") {
