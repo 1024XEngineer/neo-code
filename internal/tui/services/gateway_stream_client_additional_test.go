@@ -83,7 +83,7 @@ func TestDecodeRuntimeEventFromGatewayNotificationRejectsPayloadVersionMismatch(
 	}
 }
 
-func TestExtractRuntimeEnvelopeStrictTopLevelOnly(t *testing.T) {
+func TestExtractRuntimeEnvelopeSupportsGatewayWrappedPayload(t *testing.T) {
 	t.Parallel()
 
 	type payloadEnvelope struct {
@@ -105,6 +105,21 @@ func TestExtractRuntimeEnvelopeStrictTopLevelOnly(t *testing.T) {
 		"payload":         "x",
 	}); ok {
 		t.Fatalf("map without runtime_event_type should not decode")
+	}
+
+	envelope, ok := extractRuntimeEnvelope(map[string]any{
+		"event_type": "run_progress",
+		"payload": map[string]any{
+			"runtime_event_type": string(EventAgentChunk),
+			"payload_version":    runtimeEventPayloadVersion,
+			"payload":            "chunk",
+		},
+	})
+	if !ok {
+		t.Fatalf("expected wrapped runtime envelope to decode")
+	}
+	if streamReadMapString(envelope, "runtime_event_type") != string(EventAgentChunk) {
+		t.Fatalf("runtime_event_type = %q, want %q", streamReadMapString(envelope, "runtime_event_type"), EventAgentChunk)
 	}
 }
 
@@ -405,6 +420,12 @@ func TestRestoreRuntimePayloadAdditionalBranches(t *testing.T) {
 		{eventType: EventInputNormalized, payload: map[string]any{"text_length": 3}},
 		{eventType: EventAssetSaved, payload: map[string]any{"asset_id": "asset-1"}},
 		{eventType: EventAssetSaveFailed, payload: map[string]any{"message": "x"}},
+		{eventType: EventCheckpointCreated, payload: map[string]any{"checkpoint_id": "cp-1"}},
+		{eventType: EventCheckpointWarning, payload: map[string]any{"error": "warn"}},
+		{eventType: EventCheckpointRestored, payload: map[string]any{"checkpoint_id": "cp-1", "session_id": "s-1"}},
+		{eventType: EventCheckpointUndoRestore, payload: map[string]any{"guard_checkpoint_id": "cp-guard", "session_id": "s-1"}},
+		{eventType: EventToolDiff, payload: map[string]any{"tool_call_id": "call-1", "tool_name": "edit", "file_path": "a.txt"}},
+		{eventType: EventBashSideEffect, payload: map[string]any{"tool_call_id": "call-2", "changes": []map[string]any{{"path": "a.txt", "kind": "modified"}}}},
 		{eventType: EventTodoUpdated, payload: map[string]any{"action": "replace"}},
 		{eventType: EventTodoConflict, payload: map[string]any{"action": "conflict"}},
 		{eventType: EventTodoSnapshotUpdated, payload: map[string]any{"action": "snapshot"}},

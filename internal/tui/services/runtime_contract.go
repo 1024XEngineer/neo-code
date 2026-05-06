@@ -167,6 +167,81 @@ type AvailableSkillState struct {
 	Active     bool
 }
 
+// CheckpointEntry 描述 checkpoint 列表项。
+type CheckpointEntry struct {
+	CheckpointID string `json:"checkpoint_id"`
+	SessionID    string `json:"session_id"`
+	Reason       string `json:"reason"`
+	Status       string `json:"status"`
+	Restorable   bool   `json:"restorable"`
+	CreatedAtMS  int64  `json:"created_at_ms"`
+}
+
+// CheckpointListInput 描述 checkpoint.list 查询参数。
+type CheckpointListInput struct {
+	SessionID      string
+	Limit          int
+	RestorableOnly bool
+}
+
+// CheckpointRestoreInput 描述 checkpoint.restore 入参。
+type CheckpointRestoreInput struct {
+	SessionID    string
+	CheckpointID string
+	Force        bool
+}
+
+// CheckpointRestoreResult 描述 checkpoint.restore / checkpoint.undoRestore 结果。
+type CheckpointRestoreResult struct {
+	CheckpointID string `json:"checkpoint_id"`
+	SessionID    string `json:"session_id"`
+	HasConflict  bool   `json:"has_conflict,omitempty"`
+}
+
+// CheckpointDiffFiles 描述 checkpoint diff 的文件分类。
+type CheckpointDiffFiles struct {
+	Added    []string `json:"added,omitempty"`
+	Deleted  []string `json:"deleted,omitempty"`
+	Modified []string `json:"modified,omitempty"`
+}
+
+// CheckpointDiffResult 描述 checkpoint.diff 返回结构。
+type CheckpointDiffResult struct {
+	CheckpointID     string              `json:"checkpoint_id"`
+	PrevCheckpointID string              `json:"prev_checkpoint_id,omitempty"`
+	CommitHash       string              `json:"commit_hash,omitempty"`
+	PrevCommitHash   string              `json:"prev_commit_hash,omitempty"`
+	Files            CheckpointDiffFiles `json:"files"`
+	Patch            string              `json:"patch,omitempty"`
+}
+
+// WorkspaceRecord 描述工作区登记信息。
+type WorkspaceRecord struct {
+	Hash      string    `json:"hash"`
+	Path      string    `json:"path"`
+	Name      string    `json:"name"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// WorkspaceCreateInput 描述 workspace.create 入参。
+type WorkspaceCreateInput struct {
+	Path string
+	Name string
+}
+
+// WorkspaceRenameInput 描述 workspace.rename 入参。
+type WorkspaceRenameInput struct {
+	WorkspaceHash string
+	Name          string
+}
+
+// WorkspaceDeleteInput 描述 workspace.delete 入参。
+type WorkspaceDeleteInput struct {
+	WorkspaceHash string
+	RemoveData    bool
+}
+
 // SessionLogEntry 描述日志查看器持久化条目。
 type SessionLogEntry struct {
 	Timestamp time.Time `json:"timestamp"`
@@ -477,6 +552,68 @@ type RepoHooksLifecyclePayload struct {
 	Reason         string `json:"reason,omitempty"`
 }
 
+// CheckpointCreatedPayload 描述 checkpoint 创建成功事件。
+type CheckpointCreatedPayload struct {
+	CheckpointID         string `json:"checkpoint_id"`
+	CodeCheckpointRef    string `json:"code_checkpoint_ref"`
+	SessionCheckpointRef string `json:"session_checkpoint_ref"`
+	CommitHash           string `json:"commit_hash"`
+	Reason               string `json:"reason"`
+}
+
+// CheckpointWarningPayload 描述 checkpoint 创建中的非致命告警。
+type CheckpointWarningPayload struct {
+	Error string `json:"error"`
+	Phase string `json:"phase"`
+}
+
+// CheckpointRestoredPayload 描述 checkpoint 恢复成功事件。
+type CheckpointRestoredPayload struct {
+	CheckpointID      string `json:"checkpoint_id"`
+	SessionID         string `json:"session_id"`
+	GuardCheckpointID string `json:"guard_checkpoint_id"`
+}
+
+// CheckpointUndoRestorePayload 描述 restore 撤销事件。
+type CheckpointUndoRestorePayload struct {
+	GuardCheckpointID string `json:"guard_checkpoint_id"`
+	SessionID         string `json:"session_id"`
+}
+
+// FileChange 描述一次文件变更。
+type FileChange struct {
+	Path string `json:"path"`
+	Kind string `json:"kind"`
+}
+
+// FileDiffEntry 描述单个文件的 diff。
+type FileDiffEntry struct {
+	Path   string `json:"path"`
+	Diff   string `json:"diff,omitempty"`
+	WasNew bool   `json:"was_new,omitempty"`
+	Kind   string `json:"kind,omitempty"`
+}
+
+// ToolDiffPayload 描述写工具变更。
+type ToolDiffPayload struct {
+	ToolCallID string          `json:"tool_call_id"`
+	ToolName   string          `json:"tool_name"`
+	FilePath   string          `json:"file_path"`
+	Diff       string          `json:"diff,omitempty"`
+	WasNew     bool            `json:"was_new,omitempty"`
+	Files      []FileChange    `json:"files,omitempty"`
+	Diffs      []FileDiffEntry `json:"diffs,omitempty"`
+}
+
+// BashSideEffectPayload 描述 bash 命令文件侧效应。
+type BashSideEffectPayload struct {
+	ToolCallID                string       `json:"tool_call_id"`
+	Command                   string       `json:"command,omitempty"`
+	Changes                   []FileChange `json:"changes"`
+	PreemptivelyCapturedPaths []string     `json:"preemptively_captured_paths,omitempty"`
+	UncoveredPaths            []string     `json:"uncovered_paths,omitempty"`
+}
+
 const (
 	EventUserMessage                EventType = "user_message"
 	EventAgentChunk                 EventType = "agent_chunk"
@@ -520,6 +657,12 @@ const (
 	EventRepoHooksLoaded            EventType = "repo_hooks_loaded"
 	EventRepoHooksSkippedUntrusted  EventType = "repo_hooks_skipped_untrusted"
 	EventRepoHooksTrustStoreInvalid EventType = "repo_hooks_trust_store_invalid"
+	EventCheckpointCreated          EventType = "checkpoint_created"
+	EventCheckpointWarning          EventType = "checkpoint_warning"
+	EventCheckpointRestored         EventType = "checkpoint_restored"
+	EventCheckpointUndoRestore      EventType = "checkpoint_undo_restore"
+	EventToolDiff                   EventType = "tool_diff"
+	EventBashSideEffect             EventType = "bash_side_effect"
 	EventSubAgentStarted            EventType = "subagent_started"
 	EventSubAgentProgress           EventType = "subagent_progress"
 	EventSubAgentRetried            EventType = "subagent_retried"

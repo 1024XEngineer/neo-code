@@ -128,6 +128,7 @@ func newRemoteRuntimeAdapterWithClients(
 // Submit 将用户输入提交到网关：先 authenticate，再 bindStream，随后 loadSession，最后 run。
 func (r *RemoteRuntimeAdapter) Submit(ctx context.Context, input PrepareInput) error {
 	sessionID := strings.TrimSpace(input.SessionID)
+	requestNewSession := sessionID == ""
 	if sessionID == "" {
 		sessionID = agentsession.NewID("session")
 	}
@@ -142,11 +143,13 @@ func (r *RemoteRuntimeAdapter) Submit(ctx context.Context, input PrepareInput) e
 	if err := r.bindStream(ctx, sessionID, runID); err != nil {
 		return err
 	}
-	if err := r.preloadSession(ctx, sessionID); err != nil {
-		return err
+	if !requestNewSession {
+		if err := r.preloadSession(ctx, sessionID); err != nil {
+			return err
+		}
 	}
 
-	params := buildGatewayRunParams(sessionID, runID, input)
+	params := buildGatewayRunParams(sessionID, runID, requestNewSession, input)
 	frame, err := r.callFrame(ctx, protocol.MethodGatewayRun, params, GatewayRPCCallOptions{
 		Timeout: r.timeout,
 		Retries: 0,
@@ -159,7 +162,11 @@ func (r *RemoteRuntimeAdapter) Submit(ctx context.Context, input PrepareInput) e
 	if ackRunID == "" {
 		ackRunID = runID
 	}
-	r.setActiveRun(ackRunID, sessionID)
+	ackSessionID := strings.TrimSpace(frame.SessionID)
+	if ackSessionID == "" {
+		ackSessionID = sessionID
+	}
+	r.setActiveRun(ackRunID, ackSessionID)
 	return nil
 }
 
@@ -425,6 +432,245 @@ func (r *RemoteRuntimeAdapter) ListAvailableSkills(
 	return mapGatewayAvailableSkillStates(payload.Skills), nil
 }
 
+// ListModels 转发 gateway.listModels，并返回会话模型列表与 selected_model_id。
+func (r *RemoteRuntimeAdapter) ListModels(
+	ctx context.Context,
+	sessionID string,
+) ([]providertypes.ModelDescriptor, string, error) {
+	if err := r.authenticate(ctx); err != nil {
+		return nil, "", err
+	}
+	frame, err := r.callFrame(ctx, protocol.MethodGatewayListModels, protocol.ListModelsParams{
+		SessionID: strings.TrimSpace(sessionID),
+	}, GatewayRPCCallOptions{
+		Timeout: r.timeout,
+		Retries: r.retryCount,
+	})
+	if err != nil {
+		return nil, "", err
+	}
+
+	payload := struct {
+		Models          []gateway.ModelEntry `json:"models"`
+		SelectedModelID string               `json:"selected_model_id"`
+	}{}
+	if err := decodeIntoValue(frame.Payload, &payload); err != nil {
+		return nil, "", err
+	}
+
+	models := make([]providertypes.ModelDescriptor, 0, len(payload.Models))
+	for _, item := range payload.Models {
+		modelID := strings.TrimSpace(item.ID)
+		if modelID == "" {
+			continue
+		}
+		modelName := strings.TrimSpace(item.Name)
+		if modelName == "" {
+			modelName = modelID
+		}
+		models = append(models, providertypes.ModelDescriptor{
+			ID:   modelID,
+			Name: modelName,
+		})
+	}
+	return models, strings.TrimSpace(payload.SelectedModelID), nil
+}
+
+// ListCheckpoints 转发 checkpoint.list。
+func (r *RemoteRuntimeAdapter) ListCheckpoints(
+	ctx context.Context,
+	input CheckpointListInput,
+) ([]CheckpointEntry, error) {
+	if err := r.authenticate(ctx); err != nil {
+		return nil, err
+	}
+	params := protocol.ListCheckpointsParams{
+		SessionID:      strings.TrimSpace(input.SessionID),
+		Limit:          input.Limit,
+		RestorableOnly: input.RestorableOnly,
+	}
+	frame, err := r.callFrame(ctx, protocol.MethodGatewayListCheckpoints, params, GatewayRPCCallOptions{
+		Timeout: r.timeout,
+		Retries: r.retryCount,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return decodeFramePayload[[]CheckpointEntry](frame.Payload)
+}
+
+// RestoreCheckpoint 转发 checkpoint.restore。
+func (r *RemoteRuntimeAdapter) RestoreCheckpoint(
+	ctx context.Context,
+	input CheckpointRestoreInput,
+) (CheckpointRestoreResult, error) {
+	if err := r.authenticate(ctx); err != nil {
+		return CheckpointRestoreResult{}, err
+	}
+	frame, err := r.callFrame(ctx, protocol.MethodGatewayRestoreCheckpoint, protocol.RestoreCheckpointParams{
+		SessionID:    strings.TrimSpace(input.SessionID),
+		CheckpointID: strings.TrimSpace(input.CheckpointID),
+		Force:        input.Force,
+	}, GatewayRPCCallOptions{
+		Timeout: r.timeout,
+		Retries: r.retryCount,
+	})
+	if err != nil {
+		return CheckpointRestoreResult{}, err
+	}
+	return decodeFramePayload[CheckpointRestoreResult](frame.Payload)
+}
+
+// UndoRestoreCheckpoint 转发 checkpoint.undoRestore。
+func (r *RemoteRuntimeAdapter) UndoRestoreCheckpoint(
+	ctx context.Context,
+	sessionID string,
+) (CheckpointRestoreResult, error) {
+	if err := r.authenticate(ctx); err != nil {
+		return CheckpointRestoreResult{}, err
+	}
+	frame, err := r.callFrame(ctx, protocol.MethodGatewayUndoRestore, protocol.UndoRestoreParams{
+		SessionID: strings.TrimSpace(sessionID),
+	}, GatewayRPCCallOptions{
+		Timeout: r.timeout,
+		Retries: r.retryCount,
+	})
+	if err != nil {
+		return CheckpointRestoreResult{}, err
+	}
+	return decodeFramePayload[CheckpointRestoreResult](frame.Payload)
+}
+
+// CheckpointDiff 转发 checkpoint.diff。
+func (r *RemoteRuntimeAdapter) CheckpointDiff(
+	ctx context.Context,
+	sessionID string,
+	checkpointID string,
+) (CheckpointDiffResult, error) {
+	if err := r.authenticate(ctx); err != nil {
+		return CheckpointDiffResult{}, err
+	}
+	frame, err := r.callFrame(ctx, protocol.MethodGatewayCheckpointDiff, protocol.CheckpointDiffParams{
+		SessionID:    strings.TrimSpace(sessionID),
+		CheckpointID: strings.TrimSpace(checkpointID),
+	}, GatewayRPCCallOptions{
+		Timeout: r.timeout,
+		Retries: r.retryCount,
+	})
+	if err != nil {
+		return CheckpointDiffResult{}, err
+	}
+	return decodeFramePayload[CheckpointDiffResult](frame.Payload)
+}
+
+// ListWorkspaces 转发 gateway.listWorkspaces。
+func (r *RemoteRuntimeAdapter) ListWorkspaces(ctx context.Context) ([]WorkspaceRecord, error) {
+	if err := r.authenticate(ctx); err != nil {
+		return nil, err
+	}
+	frame, err := r.callFrame(ctx, protocol.MethodGatewayListWorkspaces, protocol.ListWorkspacesParams{}, GatewayRPCCallOptions{
+		Timeout: r.timeout,
+		Retries: r.retryCount,
+	})
+	if err != nil {
+		return nil, err
+	}
+	payload := struct {
+		Workspaces []WorkspaceRecord `json:"workspaces"`
+	}{}
+	if err := decodeIntoValue(frame.Payload, &payload); err != nil {
+		return nil, err
+	}
+	return payload.Workspaces, nil
+}
+
+// CreateWorkspace 转发 gateway.createWorkspace。
+func (r *RemoteRuntimeAdapter) CreateWorkspace(
+	ctx context.Context,
+	input WorkspaceCreateInput,
+) (WorkspaceRecord, error) {
+	if err := r.authenticate(ctx); err != nil {
+		return WorkspaceRecord{}, err
+	}
+	frame, err := r.callFrame(ctx, protocol.MethodGatewayCreateWorkspace, protocol.CreateWorkspaceParams{
+		Path: strings.TrimSpace(input.Path),
+		Name: strings.TrimSpace(input.Name),
+	}, GatewayRPCCallOptions{
+		Timeout: r.timeout,
+		Retries: r.retryCount,
+	})
+	if err != nil {
+		return WorkspaceRecord{}, err
+	}
+	payload := struct {
+		Workspace WorkspaceRecord `json:"workspace"`
+	}{}
+	if err := decodeIntoValue(frame.Payload, &payload); err != nil {
+		return WorkspaceRecord{}, err
+	}
+	return payload.Workspace, nil
+}
+
+// SwitchWorkspace 转发 gateway.switchWorkspace。
+func (r *RemoteRuntimeAdapter) SwitchWorkspace(ctx context.Context, workspaceHash string) error {
+	if err := r.authenticate(ctx); err != nil {
+		return err
+	}
+	_, err := r.callFrame(ctx, protocol.MethodGatewaySwitchWorkspace, protocol.SwitchWorkspaceParams{
+		WorkspaceHash: strings.TrimSpace(workspaceHash),
+	}, GatewayRPCCallOptions{
+		Timeout: r.timeout,
+		Retries: r.retryCount,
+	})
+	return err
+}
+
+// RenameWorkspace 转发 gateway.renameWorkspace。
+func (r *RemoteRuntimeAdapter) RenameWorkspace(
+	ctx context.Context,
+	input WorkspaceRenameInput,
+) (WorkspaceRecord, error) {
+	if err := r.authenticate(ctx); err != nil {
+		return WorkspaceRecord{}, err
+	}
+	frame, err := r.callFrame(ctx, protocol.MethodGatewayRenameWorkspace, protocol.RenameWorkspaceParams{
+		WorkspaceHash: strings.TrimSpace(input.WorkspaceHash),
+		Name:          strings.TrimSpace(input.Name),
+	}, GatewayRPCCallOptions{
+		Timeout: r.timeout,
+		Retries: r.retryCount,
+	})
+	if err != nil {
+		return WorkspaceRecord{}, err
+	}
+	payload := struct {
+		Hash string `json:"hash"`
+		Name string `json:"name"`
+	}{}
+	if err := decodeIntoValue(frame.Payload, &payload); err != nil {
+		return WorkspaceRecord{}, err
+	}
+	return WorkspaceRecord{
+		Hash: strings.TrimSpace(payload.Hash),
+		Name: strings.TrimSpace(payload.Name),
+	}, nil
+}
+
+// DeleteWorkspace 转发 gateway.deleteWorkspace。
+func (r *RemoteRuntimeAdapter) DeleteWorkspace(ctx context.Context, input WorkspaceDeleteInput) error {
+	if err := r.authenticate(ctx); err != nil {
+		return err
+	}
+	_, err := r.callFrame(ctx, protocol.MethodGatewayDeleteWorkspace, protocol.DeleteWorkspaceParams{
+		WorkspaceHash: strings.TrimSpace(input.WorkspaceHash),
+		RemoveData:    input.RemoveData,
+	}, GatewayRPCCallOptions{
+		Timeout: r.timeout,
+		Retries: r.retryCount,
+	})
+	return err
+}
+
 // Close 关闭远程适配器并结束事件桥接。
 func (r *RemoteRuntimeAdapter) Close() error {
 	var closeErr error
@@ -582,7 +828,7 @@ func normalizeSystemToolArguments(arguments []byte) json.RawMessage {
 	return json.RawMessage(cloned)
 }
 
-func buildGatewayRunParams(sessionID string, runID string, input PrepareInput) protocol.RunParams {
+func buildGatewayRunParams(sessionID string, runID string, requestNewSession bool, input PrepareInput) protocol.RunParams {
 	parts := make([]protocol.RunInputPart, 0, len(input.Images))
 	for _, image := range input.Images {
 		path := strings.TrimSpace(image.Path)
@@ -600,6 +846,7 @@ func buildGatewayRunParams(sessionID string, runID string, input PrepareInput) p
 
 	return protocol.RunParams{
 		SessionID:  strings.TrimSpace(sessionID),
+		NewSession: requestNewSession,
 		RunID:      strings.TrimSpace(runID),
 		InputText:  strings.TrimSpace(input.Text),
 		InputParts: parts,

@@ -2791,6 +2791,12 @@ var runtimeEventHandlerRegistry = map[tuiservices.EventType]func(*App, tuiservic
 	tuiservices.EventRepoHooksLoaded:                          runtimeEventRepoHooksLoadedHandler,
 	tuiservices.EventRepoHooksSkippedUntrusted:                runtimeEventRepoHooksSkippedUntrustedHandler,
 	tuiservices.EventRepoHooksTrustStoreInvalid:               runtimeEventRepoHooksTrustStoreInvalidHandler,
+	tuiservices.EventCheckpointCreated:                        runtimeEventCheckpointCreatedHandler,
+	tuiservices.EventCheckpointWarning:                        runtimeEventCheckpointWarningHandler,
+	tuiservices.EventCheckpointRestored:                       runtimeEventCheckpointRestoredHandler,
+	tuiservices.EventCheckpointUndoRestore:                    runtimeEventCheckpointUndoRestoreHandler,
+	tuiservices.EventToolDiff:                                 runtimeEventToolDiffHandler,
+	tuiservices.EventBashSideEffect:                           runtimeEventBashSideEffectHandler,
 	tuiservices.EventSubAgentStarted:                          runtimeEventSubAgentLifecycleHandler,
 	tuiservices.EventSubAgentProgress:                         runtimeEventSubAgentLifecycleHandler,
 	tuiservices.EventSubAgentRetried:                          runtimeEventSubAgentLifecycleHandler,
@@ -2962,6 +2968,170 @@ func runtimeEventRepoHooksTrustStoreInvalidHandler(a *App, event tuiservices.Run
 		reason = "trust store is invalid"
 	}
 	a.appendActivity("hook", "Repo hooks trust store invalid", reason, false)
+	return false
+}
+
+func runtimeEventCheckpointCreatedHandler(a *App, event tuiservices.RuntimeEvent) bool {
+	payload, ok := event.Payload.(tuiservices.CheckpointCreatedPayload)
+	if !ok {
+		return false
+	}
+	checkpointID := strings.TrimSpace(payload.CheckpointID)
+	if checkpointID == "" {
+		checkpointID = "(unknown)"
+	}
+	details := []string{
+		"checkpoint_id=" + checkpointID,
+	}
+	if reason := strings.TrimSpace(payload.Reason); reason != "" {
+		details = append(details, "reason="+reason)
+	}
+	if commit := strings.TrimSpace(payload.CommitHash); commit != "" {
+		details = append(details, "commit="+commit)
+	}
+	if codeRef := strings.TrimSpace(payload.CodeCheckpointRef); codeRef != "" {
+		details = append(details, "code_ref="+codeRef)
+	}
+	a.appendActivity("checkpoint", "Checkpoint created", strings.Join(details, ", "), false)
+	return false
+}
+
+func runtimeEventCheckpointWarningHandler(a *App, event tuiservices.RuntimeEvent) bool {
+	payload, ok := event.Payload.(tuiservices.CheckpointWarningPayload)
+	if !ok {
+		return false
+	}
+	message := strings.TrimSpace(payload.Error)
+	if message == "" {
+		message = "checkpoint warning"
+	}
+	if phase := strings.TrimSpace(payload.Phase); phase != "" {
+		message = phase + ": " + message
+	}
+	a.appendActivity("checkpoint", "Checkpoint warning", message, true)
+	return false
+}
+
+func runtimeEventCheckpointRestoredHandler(a *App, event tuiservices.RuntimeEvent) bool {
+	payload, ok := event.Payload.(tuiservices.CheckpointRestoredPayload)
+	if !ok {
+		return false
+	}
+	if sessionID := strings.TrimSpace(payload.SessionID); sessionID != "" {
+		a.setActiveSessionID(sessionID)
+	}
+	detail := strings.TrimSpace(payload.CheckpointID)
+	if detail == "" {
+		detail = "(unknown)"
+	}
+	if guard := strings.TrimSpace(payload.GuardCheckpointID); guard != "" {
+		detail = fmt.Sprintf("%s (guard=%s)", detail, guard)
+	}
+	a.appendActivity("checkpoint", "Checkpoint restored", detail, false)
+	if err := a.refreshMessages(); err != nil && strings.TrimSpace(a.state.ActiveSessionID) != "" {
+		a.state.ExecutionError = err.Error()
+		a.state.StatusText = err.Error()
+		a.appendInlineMessage(roleError, err.Error())
+		a.appendActivity("checkpoint", "Failed to refresh session after restore", err.Error(), true)
+		return true
+	}
+	a.syncTodosFromRun()
+	a.refreshRuntimeSourceSnapshot()
+	a.state.ExecutionError = ""
+	a.state.StatusText = "Checkpoint restored"
+	return true
+}
+
+func runtimeEventCheckpointUndoRestoreHandler(a *App, event tuiservices.RuntimeEvent) bool {
+	payload, ok := event.Payload.(tuiservices.CheckpointUndoRestorePayload)
+	if !ok {
+		return false
+	}
+	if sessionID := strings.TrimSpace(payload.SessionID); sessionID != "" {
+		a.setActiveSessionID(sessionID)
+	}
+	detail := strings.TrimSpace(payload.GuardCheckpointID)
+	if detail == "" {
+		detail = "restore guard checkpoint"
+	}
+	a.appendActivity("checkpoint", "Checkpoint restore undo", detail, false)
+	if err := a.refreshMessages(); err != nil && strings.TrimSpace(a.state.ActiveSessionID) != "" {
+		a.state.ExecutionError = err.Error()
+		a.state.StatusText = err.Error()
+		a.appendInlineMessage(roleError, err.Error())
+		a.appendActivity("checkpoint", "Failed to refresh session after undo", err.Error(), true)
+		return true
+	}
+	a.syncTodosFromRun()
+	a.refreshRuntimeSourceSnapshot()
+	a.state.ExecutionError = ""
+	a.state.StatusText = "Checkpoint restore undo applied"
+	return true
+}
+
+func runtimeEventToolDiffHandler(a *App, event tuiservices.RuntimeEvent) bool {
+	payload, ok := event.Payload.(tuiservices.ToolDiffPayload)
+	if !ok {
+		return false
+	}
+	files := make([]string, 0, len(payload.Files)+1)
+	if len(payload.Files) > 0 {
+		for _, file := range payload.Files {
+			path := strings.TrimSpace(file.Path)
+			if path == "" {
+				continue
+			}
+			kind := strings.TrimSpace(file.Kind)
+			if kind == "" {
+				files = append(files, path)
+			} else {
+				files = append(files, fmt.Sprintf("%s(%s)", path, kind))
+			}
+		}
+	} else {
+		path := strings.TrimSpace(payload.FilePath)
+		if path != "" {
+			if payload.WasNew {
+				files = append(files, path+"(added)")
+			} else {
+				files = append(files, path)
+			}
+		}
+	}
+	if len(files) == 0 {
+		files = append(files, "(no file paths)")
+	}
+	detail := fmt.Sprintf("tool=%s, files=%s", fallbackText(strings.TrimSpace(payload.ToolName), "unknown"), strings.Join(files, ", "))
+	a.appendActivity("tool", "Tool diff captured", detail, false)
+	return false
+}
+
+func runtimeEventBashSideEffectHandler(a *App, event tuiservices.RuntimeEvent) bool {
+	payload, ok := event.Payload.(tuiservices.BashSideEffectPayload)
+	if !ok {
+		return false
+	}
+	changes := make([]string, 0, len(payload.Changes))
+	for _, file := range payload.Changes {
+		path := strings.TrimSpace(file.Path)
+		if path == "" {
+			continue
+		}
+		kind := strings.TrimSpace(file.Kind)
+		if kind == "" {
+			changes = append(changes, path)
+		} else {
+			changes = append(changes, fmt.Sprintf("%s(%s)", path, kind))
+		}
+	}
+	if len(changes) == 0 {
+		changes = append(changes, "(no tracked changes)")
+	}
+	detail := fmt.Sprintf("changes=%s", strings.Join(changes, ", "))
+	if len(payload.UncoveredPaths) > 0 {
+		detail += fmt.Sprintf("; uncovered=%s", strings.Join(payload.UncoveredPaths, ", "))
+	}
+	a.appendActivity("tool", "Bash side effects detected", detail, false)
 	return false
 }
 

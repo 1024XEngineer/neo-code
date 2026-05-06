@@ -16,6 +16,10 @@ import (
 	tuiservices "neo-code/internal/tui/services"
 )
 
+type runtimeModelCatalogSource interface {
+	ListModels(ctx context.Context, sessionID string) ([]providertypes.ModelDescriptor, string, error)
+}
+
 const (
 	slashPrefix             = "/"
 	slashCommandHelp        = "/help"
@@ -251,6 +255,23 @@ func (a *App) refreshProviderPicker() error {
 }
 
 func (a *App) refreshModelPicker() error {
+	if source, ok := a.runtime.(runtimeModelCatalogSource); ok {
+		models, selectedModelID, err := source.ListModels(context.Background(), strings.TrimSpace(a.state.ActiveSessionID))
+		if err != nil {
+			return err
+		}
+		replacePickerItems(&a.modelPicker, mapModelItems(models))
+		selectedModelID = strings.TrimSpace(selectedModelID)
+		if selectedModelID == "" {
+			selectedModelID = strings.TrimSpace(a.state.CurrentModel)
+		}
+		if selectedModelID != "" {
+			a.state.CurrentModel = selectedModelID
+		}
+		selectPickerItemByID(&a.modelPicker, selectedModelID)
+		return nil
+	}
+
 	models, err := a.providerSvc.ListModelsSnapshot(context.Background())
 	if err != nil {
 		return err
