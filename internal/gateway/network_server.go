@@ -621,6 +621,9 @@ func (s *NetworkServer) handleWebSocket(conn *websocket.Conn, runtimePort Runtim
 
 	defer func() {
 		s.unregisterWSConnection(conn)
+		if s.runnerRegistry != nil {
+			s.runnerRegistry.OnConnectionDropped(connectionID)
+		}
 		relay.dropConnection(connectionID)
 		_ = conn.Close()
 	}()
