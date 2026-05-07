@@ -576,7 +576,7 @@ func (s *Service) prepareTurnBudgetSnapshot(ctx context.Context, state *runState
 	}
 	toolSpecs = prioritizeToolSpecsBySkillHints(toolSpecs, activeSkills)
 
-	resolvedProvider, err := config.ResolveSelectedProvider(cfg)
+	resolvedProvider, model, err := resolveCompactProviderSelection(state.session, cfg)
 	if err != nil {
 		return TurnBudgetSnapshot{}, false, err
 	}
@@ -596,7 +596,6 @@ func (s *Service) prepareTurnBudgetSnapshot(ctx context.Context, state *runState
 		systemPrompt = mergeEphemeralHookNotificationIntoSystemPrompt(systemPrompt, notificationHint)
 	}
 	promptBudget, budgetSource, contextWindow := s.resolvePromptBudget(ctx, cfg)
-	model := strings.TrimSpace(cfg.CurrentModel)
 	requestMessages := append([]providertypes.Message(nil), builtContext.Messages...)
 	thinkingCfg, thinkingErr := resolveThinkingConfig(
 		modelCapabilityHintsForRequest(model, resolvedProvider.Models),
