@@ -66,7 +66,11 @@ func (s *Service) createEndOfTurnCheckpoint(ctx context.Context, state *runState
 	defer s.perEditStore.Reset()
 	if err := s.createCheckpointRecord(ctx, session, runID, state, checkpointID, agentsession.CheckpointReasonEndOfTurn); err != nil {
 		log.Printf("checkpoint: end-of-turn record: %v", err)
+		return
 	}
+	state.mu.Lock()
+	state.lastEndOfTurnCheckpointID = checkpointID
+	state.mu.Unlock()
 }
 
 // createCheckpointRecord 写入 SQLite checkpoint 记录 + session 快照，并发出 EventCheckpointCreated。
@@ -190,4 +194,33 @@ func (s *Service) createSessionOnlyCheckpoint(
 		Reason:               string(saved.Reason),
 	})
 	return nil
+}
+
+// findPreviousEndOfTurnCheckpoint 查询指定 session 中、不属于当前 run 的最新可用 end_of_turn checkpoint。
+// 用于 run-scoped diff 的 baseline 定位；找不到时返回空字符串，不报错。
+func (s *Service) findPreviousEndOfTurnCheckpoint(ctx context.Context, sessionID string, currentRunID string) string {
+	if s.checkpointStore == nil {
+		return ""
+	}
+	records, err := s.checkpointStore.ListCheckpoints(ctx, sessionID, checkpoint.ListCheckpointOpts{
+		Limit:          50,
+		RestorableOnly: true,
+	})
+	if err != nil {
+		log.Printf("checkpoint: find previous end-of-turn list failed: %v", err)
+		return ""
+	}
+	for _, r := range records {
+		if r.Reason != agentsession.CheckpointReasonEndOfTurn {
+			continue
+		}
+		if !checkpoint.IsPerEditRef(r.CodeCheckpointRef) {
+			continue
+		}
+		if r.RunID == currentRunID {
+			continue
+		}
+		return checkpoint.PerEditCheckpointIDFromRef(r.CodeCheckpointRef)
+	}
+	return ""
 }

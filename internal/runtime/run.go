@@ -101,6 +101,23 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 			}
 			s.updateResumeCheckpoint(runCtx, statePtr, "stopped", completion)
 		}
+		if statePtr != nil && s.perEditStore != nil && statePtr.baselineCheckpointID != "" && statePtr.lastEndOfTurnCheckpointID != "" {
+			diffStr, _ := s.perEditStore.Diff(context.Background(), statePtr.baselineCheckpointID, statePtr.lastEndOfTurnCheckpointID)
+			files, _ := s.perEditStore.ChangedFiles(context.Background(), statePtr.baselineCheckpointID, statePtr.lastEndOfTurnCheckpointID)
+			var changedFiles []FileDiffEntry
+			for _, f := range files {
+				changedFiles = append(changedFiles, FileDiffEntry{
+					Path: f.Path,
+					Kind: string(f.Kind),
+				})
+			}
+			s.emitRunScopedOptional(EventRunDiffSummary, statePtr, RunDiffSummaryPayload{
+				FromCheckpointID: statePtr.baselineCheckpointID,
+				ToCheckpointID:   statePtr.lastEndOfTurnCheckpointID,
+				Diff:             diffStr,
+				ChangedFiles:     changedFiles,
+			})
+		}
 		s.emitRunTermination(runCtx, input, statePtr, err)
 	}()
 	ctx = runCtx
@@ -187,6 +204,7 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 	s.updateResumeCheckpoint(ctx, &state, "plan", "")
 
 	maxTurns := resolveRuntimeMaxTurns(initialCfg.Runtime)
+	state.baselineCheckpointID = s.findPreviousEndOfTurnCheckpoint(ctx, sessionID, input.RunID)
 	for turn := 0; ; turn++ {
 		if turn >= maxTurns {
 			state.maxTurnsReached = true

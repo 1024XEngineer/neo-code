@@ -50,6 +50,8 @@ type runState struct {
 	hasUnknownUsage                bool
 	completion                     controlplane.CompletionState
 	progress                       controlplane.ProgressState
+	lastEndOfTurnCheckpointID      string
+	baselineCheckpointID           string
 	hookAnnotations                []string
 	hookNotifications              []queuedHookNotification
 	hookNotificationSeen           map[string]time.Time
