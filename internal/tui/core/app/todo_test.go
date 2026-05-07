@@ -189,6 +189,31 @@ func TestRenderTodoPreviewAndEmptyRebuild(t *testing.T) {
 	}
 }
 
+func TestRebuildTodoSanitizesMarkdownTableLikeTitle(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.todoPanelVisible = true
+	app.todoFilter = todoFilterAll
+	app.todo.Width = 100
+	app.todo.Height = 10
+	app.todoItems = []todoViewItem{
+		{
+			ID:       "todo-md",
+			Status:   "pending",
+			Priority: 2,
+			Title: "| col1 | col2 |\n| --- | --- |\n| value-a | value-b |",
+		},
+	}
+
+	app.rebuildTodo()
+	view := app.todo.View()
+	if strings.Contains(view, "| --- |") {
+		t.Fatalf("expected markdown table separators to be sanitized, got %q", view)
+	}
+	if !strings.Contains(view, "col1 / col2") || !strings.Contains(view, "value-a / value-b") {
+		t.Fatalf("expected markdown table cells to be preserved as readable text, got %q", view)
+	}
+}
+
 func TestSetTodoFilterAndRebuild(t *testing.T) {
 	app, _ := newTestApp(t)
 	app.todo.Width = 100
