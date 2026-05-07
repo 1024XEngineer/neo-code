@@ -99,6 +99,7 @@ func NewRootCommand() *cobra.Command {
 	cmd.AddCommand(
 		newGatewayCommand(),
 		newFeishuAdapterCommand(),
+		newRunnerCommand(),
 		newWebCommand(),
 		newDaemonCommand(),
 		newShellCommand(),

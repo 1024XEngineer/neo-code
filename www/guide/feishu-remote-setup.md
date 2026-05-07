@@ -275,7 +275,79 @@ go run ./cmd/neocode feishu-adapter \
 
 ---
 
-## 8. 常见问题
+## 8. Local Runner（本机工具执行）
+
+如果你的 NeoCode Gateway 部署在云端，但希望工具（文件读写、命令执行等）在你的**本机电脑**上运行，就需要启动 Local Runner。
+
+Runner 会主动通过 WebSocket 连接云端 Gateway，接收工具执行请求并在本机完成，无需开放入站端口。
+
+```
+飞书消息 -> Adapter (云端) -> Gateway (云端) -> WebSocket -> Local Runner (你的电脑)
+                                                        ↑ 主动出站连接
+```
+
+### 8.1 启动 Runner
+
+```bash
+# macOS / Linux
+go run ./cmd/neocode runner \
+  --gateway-address "your-gateway.com:8080" \
+  --token-file ~/.neocode/auth.json \
+  --runner-name "我的 MacBook" \
+  --workdir /path/to/project
+```
+
+```powershell
+# Windows PowerShell
+go run ./cmd/neocode runner `
+  --gateway-address "your-gateway.com:8080" `
+  --token-file "$env:USERPROFILE\.neocode\auth.json" `
+  --runner-name "我的 PC" `
+  --workdir "F:\qiniu\neo-code"
+```
+
+Runner 启动后会打印连接状态：
+
+```
+runner my-macbook connecting to your-gateway.com:8080...
+connected to gateway at ws://your-gateway.com:8080/ws
+runner registered: my-macbook
+```
+
+### 8.2 参数说明
+
+| 参数 | 必填 | 默认值 | 说明 |
+|------|:---:|--------|------|
+| `--gateway-address` | 否 | `127.0.0.1:8080` | Gateway WebSocket 地址 |
+| `--token-file` | 否 | — | Gateway 认证 token 文件，需与 Gateway 共用同一个 |
+| `--runner-id` | 否 | 本机 hostname | Runner 唯一标识，同台机器重复启动会冲突 |
+| `--runner-name` | 否 | — | 人类可读名称，便于在日志中区分多台 Runner |
+| `--workdir` | 否 | 当前目录 | Runner 工作目录，工具在此目录下执行 |
+
+### 8.3 断线重连
+
+Runner 断连后会自动重连，采用指数退避 + 随机抖动策略：
+
+- 初始退避：500ms
+- 最大退避：10s
+- 每次失败后退避时间翻倍，并加入随机抖动避免惊群
+
+### 8.4 安全边界
+
+- Runner 只执行 Gateway 签发并签名的工具请求（CapabilityToken HMAC-SHA256 校验）
+- Token 有过期时间（TTL），过期请求会被拒绝
+- 支持配置工作区路径白名单（`WorkdirAllowlist`），拒绝越界路径访问
+- 所有工具在 Runner 本机执行，结果通过 Gateway 加密回传
+
+### 8.5 错误提示
+
+当 Runner 不可用时，飞书卡片会显示友好的中文提示：
+
+- **Runner 离线**：`本机 Runner 未连接，请在电脑上启动 neocode runner`
+- **权限不足**：`权限不足：当前能力令牌不允许此操作`
+- **执行失败**：`工具执行失败：<具体错误>`
+
+## 9. 常见问题
 
 ### `workspace hash is empty and no default configured`
 

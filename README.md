@@ -56,6 +56,7 @@ NeoCode 是一个运行在本地开发环境中的 AI Coding Agent。
 - MCP 接入：通过 MCP stdio server 扩展外部工具能力。
 - Gateway 模式：通过本地 JSON-RPC / SSE / WebSocket 接口连接桌面端、脚本和第三方客户端。
 - Feishu Adapter：支持 Webhook 与 SDK 长连接接入，并用单张状态卡片持续回传 run 状态。
+- Local Runner：`neocode runner` 在本机执行工具，通过 WebSocket 主动连接云端 Gateway，无需开放入站端口。
 
 ---
 
@@ -174,6 +175,21 @@ neocode use <provider> --model <model-id>
 
 # 示例
 neocode use openai --model gpt-4.1
+```
+
+#### Local Runner
+
+在本机启动执行守护进程，主动连接云端 Gateway 接收工具执行请求。
+
+```bash
+# 启动 runner（默认连接 127.0.0.1:8080）
+neocode runner
+
+# 指定远程 Gateway 地址和 token
+neocode runner --gateway-address "your-gateway.com:8080" --token-file ~/.neocode/auth.json
+
+# 指定 Runner 名称与工作目录
+neocode runner --runner-name "我的本机" --workdir /path/to/project
 ```
 
 ### 6. Shell 诊断代理

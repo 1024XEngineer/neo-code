@@ -55,6 +55,8 @@ Core loop:
 - Skills system for task-specific behaviors.
 - MCP integration via stdio servers.
 - Gateway mode with local JSON-RPC / SSE / WebSocket access.
+- Feishu Adapter: Webhook and SDK long-connection ingress with live status card updates.
+- Local Runner: execute tools on your local machine via WebSocket connection to a cloud Gateway — no inbound ports needed.
 
 ---
 
@@ -126,7 +128,7 @@ neocode --workdir /path/to/your/project
 
 ---
 
-## Gateway / MCP / Skills
+## Gateway / MCP / Skills / Runner
 
 Detailed docs are intentionally split out. README keeps entry links:
 
@@ -134,6 +136,17 @@ Detailed docs are intentionally split out. README keeps entry links:
 - MCP configuration: `docs/guides/mcp-configuration.md`
 - Skills design: `docs/skills-system-design.md`
 - Runtime event flow: `docs/runtime-provider-event-flow.md`
+- Feishu remote setup: `www/guide/feishu-remote-setup.md`
+
+### CLI Quick Reference
+
+```bash
+# Start local runner daemon (connects to cloud Gateway for remote tool execution)
+neocode runner --gateway-address "your-gateway.com:8080" --token-file ~/.neocode/auth.json
+
+# Start feishu adapter (SDK mode, no public network required)
+neocode feishu-adapter --ingress sdk --gateway-listen "127.0.0.1:8080"
+```
 
 ---
 

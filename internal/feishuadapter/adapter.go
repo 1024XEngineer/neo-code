@@ -799,7 +799,29 @@ func extractUserVisibleErrorText(envelope map[string]any) string {
 	if message == "" {
 		return ""
 	}
+
+	// 翻译 runner 相关错误码为用户可读消息
+	if translated := translateRunnerError(message); translated != "" {
+		return translated
+	}
+
 	return "任务失败：" + message
+}
+
+// translateRunnerError 将 runner 相关错误码翻译为中文提示。
+func translateRunnerError(message string) string {
+	switch {
+	case strings.Contains(message, "runner_offline") || strings.Contains(message, "runner not online"):
+		return "本机 Runner 未连接，请在电脑上启动 `neocode runner`"
+	case strings.Contains(message, "capability_denied"):
+		return "权限不足：当前能力令牌不允许此操作"
+	case strings.Contains(message, "tool_execution_failed"):
+		return "工具执行失败：" + message
+	case strings.Contains(message, "timed out waiting for runner"):
+		return "本机 Runner 响应超时，请检查网络连接和 Runner 状态"
+	default:
+		return ""
+	}
 }
 
 // nextBackoff 计算指数退避下一步等待时间。

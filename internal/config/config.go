@@ -29,6 +29,7 @@ type Config struct {
 	Memo                    MemoConfig       `yaml:"memo,omitempty"`
 	Gateway                 GatewayConfig    `yaml:"gateway,omitempty"`
 	Feishu                  FeishuConfig     `yaml:"feishu,omitempty"`
+	Runner                  RunnerConfig     `yaml:"runner,omitempty"`
 }
 
 // StaticDefaults 返回 config 层负责的静态默认值骨架，不包含 provider 装配和选择状态修复。
@@ -47,6 +48,7 @@ func StaticDefaults() *Config {
 		Memo:    defaultMemoConfig(),
 		Gateway: defaultGatewayConfig(),
 		Feishu:  defaultFeishuConfig(),
+		Runner:  defaultRunnerConfig(),
 	}
 }
 
@@ -63,6 +65,7 @@ func (c *Config) Clone() Config {
 	clone.Memo = c.Memo.Clone()
 	clone.Gateway = c.Gateway.Clone()
 	clone.Feishu = c.Feishu.Clone()
+	clone.Runner = c.Runner.Clone()
 	return clone
 }
 
@@ -90,6 +93,7 @@ func (c *Config) applyStaticDefaults(defaults Config) {
 	c.Memo.ApplyDefaults(defaults.Memo)
 	c.Gateway.ApplyDefaults(defaults.Gateway)
 	c.Feishu.ApplyDefaults(defaults.Feishu)
+	c.Runner.ApplyDefaults(defaults.Runner)
 
 	c.Workdir = normalizeWorkdir(c.Workdir)
 }
@@ -157,6 +161,9 @@ func (c *Config) ValidateSnapshot() error {
 	}
 	if err := c.Feishu.Validate(); err != nil {
 		return fmt.Errorf("config: feishu: %w", err)
+	}
+	if err := c.Runner.Validate(); err != nil {
+		return fmt.Errorf("config: runner: %w", err)
 	}
 
 	return nil
