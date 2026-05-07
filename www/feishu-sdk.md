@@ -57,12 +57,19 @@ neocode feishu-adapter --ingress sdk
 
 ## 轻量级卡片示例
 
+状态卡片标题为「NeoCode 任务状态」，包含任务名、状态、审批、结果、耗时和摘要：
+
 ```text
-任务：修复 SDK 群聊消息
-状态：planning
-审批：pending
-结果：pending
-回灌：async_rewake
+📋 <任务摘要>
+💭 状态: thinking / planning / running
+⏳ 审批: none / pending / approved / rejected
+🎉 结果: pending / success / failure
+⏱ <运行耗时>
+---
+摘要
+<回复内容>
 ```
 
-状态变化时 Adapter 会调用 `UpdateCard(cardID, payload)` 更新同一张卡片；完成或失败后，卡片会写入 `success/failure`，同时再回传一条最终文本摘要。
+状态变化时 Adapter 会调用 `UpdateCard(cardID, payload)` 更新同一张卡片；任务完成或失败后，卡片结果区写入 `success`/`failure`，摘要区展示最终回复内容。
+
+更完整的配置说明见 [飞书接入配置指南](/guide/feishu-remote-setup)。
