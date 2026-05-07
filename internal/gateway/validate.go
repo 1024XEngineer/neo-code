@@ -58,7 +58,8 @@ func validateRequestFrame(frame MessageFrame) *FrameError {
 		FrameActionListAvailableSkills,
 		FrameActionListModels,
 		FrameActionListProviders,
-		FrameActionListMCPServers:
+		FrameActionListMCPServers,
+		FrameActionListCheckpoints:
 		return nil
 	case FrameActionRun:
 		return validateRunFrame(frame)
@@ -72,6 +73,13 @@ func validateRequestFrame(frame MessageFrame) *FrameError {
 		if strings.TrimSpace(frame.SessionID) == "" {
 			return NewMissingRequiredFieldError("session_id")
 		}
+	case FrameActionRestoreCheckpoint,
+		FrameActionUndoRestore,
+		FrameActionCheckpointDiff:
+		if frame.Payload == nil {
+			return NewMissingRequiredFieldError("payload")
+		}
+		return nil
 	case FrameActionListFiles:
 		// listFiles 不强制 session_id，workdir 可独立使用
 	case FrameActionWorkspaceList:
@@ -455,6 +463,10 @@ func isValidFrameAction(action FrameAction) bool {
 		FrameActionUpsertMCPServer,
 		FrameActionSetMCPServerEnabled,
 		FrameActionDeleteMCPServer,
+		FrameActionListCheckpoints,
+		FrameActionRestoreCheckpoint,
+		FrameActionUndoRestore,
+		FrameActionCheckpointDiff,
 		FrameActionWorkspaceList,
 		FrameActionWorkspaceCreate,
 		FrameActionWorkspaceSwitch,
