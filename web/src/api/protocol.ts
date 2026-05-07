@@ -78,6 +78,7 @@ export const EventType = {
   ToolDiff: 'tool_diff',
   ToolChunk: 'tool_chunk',
   ToolCallThinking: 'tool_call_thinking',
+  ThinkingDelta: 'thinking_delta',
   RunCanceled: 'run_canceled',
   Error: 'error',
   PermissionRequested: 'permission_requested',

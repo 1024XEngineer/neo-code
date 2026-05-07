@@ -27,40 +27,39 @@ type RestoreResult struct {
 	Conflict     *checkpoint.ConflictResult `json:"conflict,omitempty"`
 }
 
-// RestoreCheckpoint 恢复指定 checkpoint 的会话和工作区状态。
-// per-edit 后端只还原本快照覆盖的文件，不会破坏 agent 未触碰的文件，因此不再做冲突检测。
-// input.Force 字段保留以维持网关 API 契约。
-func (s *Service) RestoreCheckpoint(ctx context.Context, input GatewayRestoreInput) (RestoreResult, error) {
+// restoreCheckpointCore 执行 checkpoint 恢复的核心逻辑，不发出任何事件。
+// 调用方负责在合适的时机发出 checkpoint_restored / checkpoint_undo_restore 事件。
+func (s *Service) restoreCheckpointCore(ctx context.Context, sessionID, checkpointID string) (RestoreResult, agentsession.CheckpointRecord, error) {
 	if s.checkpointStore == nil || s.perEditStore == nil {
-		return RestoreResult{}, fmt.Errorf("checkpoint: store not available")
+		return RestoreResult{}, agentsession.CheckpointRecord{}, fmt.Errorf("checkpoint: store not available")
 	}
 
-	sessionID := strings.TrimSpace(input.SessionID)
-	checkpointID := strings.TrimSpace(input.CheckpointID)
+	sessionID = strings.TrimSpace(sessionID)
+	checkpointID = strings.TrimSpace(checkpointID)
 	if sessionID == "" || checkpointID == "" {
-		return RestoreResult{}, fmt.Errorf("checkpoint: session_id and checkpoint_id required")
+		return RestoreResult{}, agentsession.CheckpointRecord{}, fmt.Errorf("checkpoint: session_id and checkpoint_id required")
 	}
 
 	// 1. Load checkpoint record
 	record, sessionCP, err := s.checkpointStore.GetCheckpoint(ctx, checkpointID)
 	if err != nil {
-		return RestoreResult{}, err
+		return RestoreResult{}, agentsession.CheckpointRecord{}, err
 	}
 	if record.SessionID != sessionID {
-		return RestoreResult{}, fmt.Errorf("checkpoint: session mismatch")
+		return RestoreResult{}, agentsession.CheckpointRecord{}, fmt.Errorf("checkpoint: session mismatch")
 	}
 	if record.Status != agentsession.CheckpointStatusAvailable {
-		return RestoreResult{}, fmt.Errorf("checkpoint: status is %s, expected available", record.Status)
+		return RestoreResult{}, agentsession.CheckpointRecord{}, fmt.Errorf("checkpoint: status is %s, expected available", record.Status)
 	}
 	if !record.Restorable {
-		return RestoreResult{}, fmt.Errorf("checkpoint: not restorable")
+		return RestoreResult{}, agentsession.CheckpointRecord{}, fmt.Errorf("checkpoint: not restorable")
 	}
 
 	// 2. Pre-restore guard checkpoint：把当前 pending 固化为 guard cp，以便 undo 回到 restore 之前。
 	guardID := agentsession.NewID("checkpoint")
 	guardWritten, finalizeErr := s.perEditStore.Finalize(guardID)
 	if finalizeErr != nil {
-		return RestoreResult{}, fmt.Errorf("checkpoint: finalize guard: %w", finalizeErr)
+		return RestoreResult{}, agentsession.CheckpointRecord{}, fmt.Errorf("checkpoint: finalize guard: %w", finalizeErr)
 	}
 	if guardWritten {
 		s.perEditStore.Reset()
@@ -70,7 +69,7 @@ func (s *Service) RestoreCheckpoint(ctx context.Context, input GatewayRestoreInp
 		if guardWritten {
 			_ = s.perEditStore.DeleteCheckpoint(guardID)
 		}
-		return RestoreResult{}, fmt.Errorf("checkpoint: create guard: %w", guardErr)
+		return RestoreResult{}, agentsession.CheckpointRecord{}, fmt.Errorf("checkpoint: create guard: %w", guardErr)
 	}
 
 	// 3. Restore code via per-edit store（不在 cp.FileVersions 中的文件保持不变）。
@@ -82,11 +81,11 @@ func (s *Service) RestoreCheckpoint(ctx context.Context, input GatewayRestoreInp
 		if perEditID != "" {
 			if isGuardRestore {
 				if err := s.perEditStore.RestoreExact(ctx, perEditID); err != nil {
-					return RestoreResult{}, fmt.Errorf("checkpoint: restore code: %w", err)
+					return RestoreResult{}, agentsession.CheckpointRecord{}, fmt.Errorf("checkpoint: restore code: %w", err)
 				}
 			} else {
 				if err := s.perEditStore.Restore(ctx, perEditID); err != nil {
-					return RestoreResult{}, fmt.Errorf("checkpoint: restore code: %w", err)
+					return RestoreResult{}, agentsession.CheckpointRecord{}, fmt.Errorf("checkpoint: restore code: %w", err)
 				}
 			}
 		}
@@ -94,15 +93,15 @@ func (s *Service) RestoreCheckpoint(ctx context.Context, input GatewayRestoreInp
 
 	// 4. Unmarshal session checkpoint
 	if sessionCP == nil {
-		return RestoreResult{}, fmt.Errorf("checkpoint: no session checkpoint data")
+		return RestoreResult{}, agentsession.CheckpointRecord{}, fmt.Errorf("checkpoint: no session checkpoint data")
 	}
 	var head agentsession.SessionHead
 	if err := json.Unmarshal([]byte(sessionCP.HeadJSON), &head); err != nil {
-		return RestoreResult{}, fmt.Errorf("checkpoint: unmarshal head: %w", err)
+		return RestoreResult{}, agentsession.CheckpointRecord{}, fmt.Errorf("checkpoint: unmarshal head: %w", err)
 	}
 	var messages []providertypes.Message
 	if err := json.Unmarshal([]byte(sessionCP.MessagesJSON), &messages); err != nil {
-		return RestoreResult{}, fmt.Errorf("checkpoint: unmarshal messages: %w", err)
+		return RestoreResult{}, agentsession.CheckpointRecord{}, fmt.Errorf("checkpoint: unmarshal messages: %w", err)
 	}
 
 	// 5. Determine checkpoint IDs to mark
@@ -127,21 +126,31 @@ func (s *Service) RestoreCheckpoint(ctx context.Context, input GatewayRestoreInp
 		MarkRestoredIDs:  markRestoredIDs,
 	}
 	if err := s.checkpointStore.RestoreCheckpoint(ctx, restoreInput); err != nil {
-		return RestoreResult{}, fmt.Errorf("checkpoint: restore: %w", err)
+		return RestoreResult{}, agentsession.CheckpointRecord{}, fmt.Errorf("checkpoint: restore: %w", err)
 	}
 
 	// 7. Update runtime session if it's the current session
 	s.updateRuntimeSessionAfterRestore(sessionID, head, messages)
 
-	s.emitRunScoped(ctx, EventCheckpointRestored, nil, CheckpointRestoredPayload{
-		CheckpointID:      checkpointID,
-		SessionID:         sessionID,
-		GuardCheckpointID: guardRecord.CheckpointID,
-	})
 	return RestoreResult{
 		CheckpointID: checkpointID,
 		SessionID:    sessionID,
-	}, nil
+	}, guardRecord, nil
+}
+
+// RestoreCheckpoint 恢复指定 checkpoint 的会话和工作区状态，并发出 checkpoint_restored 事件。
+func (s *Service) RestoreCheckpoint(ctx context.Context, input GatewayRestoreInput) (RestoreResult, error) {
+	result, guardRecord, err := s.restoreCheckpointCore(ctx, input.SessionID, input.CheckpointID)
+	if err != nil {
+		return RestoreResult{}, err
+	}
+
+	_ = s.emit(ctx, EventCheckpointRestored, "", result.SessionID, CheckpointRestoredPayload{
+		CheckpointID:      result.CheckpointID,
+		SessionID:         result.SessionID,
+		GuardCheckpointID: guardRecord.CheckpointID,
+	})
+	return result, nil
 }
 
 // UndoRestoreCheckpoint 撤销最近一次 restore，通过 pre_restore_guard 恢复到 restore 前的状态。
@@ -174,16 +183,12 @@ func (s *Service) UndoRestoreCheckpoint(ctx context.Context, sessionID string) (
 		return RestoreResult{}, fmt.Errorf("checkpoint: no guard checkpoint found for undo")
 	}
 
-	result, err := s.RestoreCheckpoint(ctx, GatewayRestoreInput{
-		SessionID:    sessionID,
-		CheckpointID: guardRecord.CheckpointID,
-		Force:        true,
-	})
+	result, _, err := s.restoreCheckpointCore(ctx, sessionID, guardRecord.CheckpointID)
 	if err != nil {
 		return RestoreResult{}, fmt.Errorf("checkpoint: undo restore: %w", err)
 	}
 
-	s.emitRunScoped(ctx, EventCheckpointUndoRestore, nil, CheckpointUndoRestorePayload{
+	_ = s.emit(ctx, EventCheckpointUndoRestore, "", sessionID, CheckpointUndoRestorePayload{
 		GuardCheckpointID: guardRecord.CheckpointID,
 		SessionID:         sessionID,
 	})
@@ -242,7 +247,7 @@ func (s *Service) createGuardCheckpoint(ctx context.Context, sessionID, runID, g
 		return agentsession.CheckpointRecord{}, err
 	}
 
-	s.emitRunScoped(ctx, EventCheckpointCreated, nil, CheckpointCreatedPayload{
+	_ = s.emit(ctx, EventCheckpointCreated, "", sessionID, CheckpointCreatedPayload{
 		CheckpointID:         saved.CheckpointID,
 		CodeCheckpointRef:    saved.CodeCheckpointRef,
 		SessionCheckpointRef: saved.SessionCheckpointRef,

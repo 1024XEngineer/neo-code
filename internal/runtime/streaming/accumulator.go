@@ -11,6 +11,7 @@ import (
 // Accumulator 负责按 provider 流式事件累积 assistant 文本与工具调用。
 type Accumulator struct {
 	content     strings.Builder
+	thinking    strings.Builder
 	toolCalls   map[int]*providertypes.ToolCall
 	messageDone bool
 }
@@ -65,6 +66,22 @@ func (a *Accumulator) AccumulateText(text string) {
 		return
 	}
 	a.content.WriteString(text)
+}
+
+// AccumulateThinking 负责累积 thinking/reasoning 文本增量（不混入 assistant 正文）。
+func (a *Accumulator) AccumulateThinking(text string) {
+	if a == nil {
+		return
+	}
+	a.thinking.WriteString(text)
+}
+
+// ThinkingContent 返回累积的 thinking 文本。
+func (a *Accumulator) ThinkingContent() string {
+	if a == nil {
+		return ""
+	}
+	return a.thinking.String()
 }
 
 // ensureToolCall 返回指定索引的工具调用占位对象。

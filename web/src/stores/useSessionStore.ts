@@ -104,7 +104,7 @@ function mapSessionsToProjects(apiSessions: APISessionSummary[]): Project[] {
   return projects
 }
 
-type BackendMessage = {
+export type BackendMessage = {
   role: string
   content: string
   tool_calls?: Array<{ id: string; name: string; arguments: string }>
@@ -114,7 +114,7 @@ type BackendMessage = {
 
 /** 并发拉取 session 详情 + todos + checkpoints,把后两者写入 RuntimeInsightStore。
  *  todos / checkpoints 失败用 .catch 兜底,不阻断主流程的 loadSession。 */
-async function loadSessionWithInsights(gatewayAPI: GatewayAPI, sessionId: string) {
+export async function loadSessionWithInsights(gatewayAPI: GatewayAPI, sessionId: string) {
   const [sessionFrame, todosResult, checkpointsResult] = await Promise.all([
     gatewayAPI.loadSession(sessionId),
     (gatewayAPI.listSessionTodos?.(sessionId) ?? Promise.resolve(null)).catch(() => null),
@@ -131,7 +131,7 @@ async function loadSessionWithInsights(gatewayAPI: GatewayAPI, sessionId: string
 }
 
 /** 将后端历史消息映射为前端 ChatMessage 列表，正确合并 tool_result 回 tool_call */
-function mapHistoryMessages(backendMessages: BackendMessage[]): Array<ReturnType<typeof useChatStore.getState>['messages'][0]> {
+export function mapHistoryMessages(backendMessages: BackendMessage[]): Array<ReturnType<typeof useChatStore.getState>['messages'][0]> {
   let _idCounter = 0
   // Phase 1: Collect tool results by tool_call_id
   const toolResults = new Map<string, { content: string; isError: boolean }>()

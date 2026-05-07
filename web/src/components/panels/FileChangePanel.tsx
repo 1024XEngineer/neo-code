@@ -1,6 +1,7 @@
 import { useState, useMemo } from 'react'
 import { useUIStore, type FileChange } from '@/stores/useUIStore'
-import { useSessionStore } from '@/stores/useSessionStore'
+import { useSessionStore, loadSessionWithInsights, mapHistoryMessages, type BackendMessage } from '@/stores/useSessionStore'
+import { useChatStore } from '@/stores/useChatStore'
 import { useGatewayAPI } from '@/context/RuntimeProvider'
 import {
   ChevronRight,
@@ -93,6 +94,16 @@ function FileChangeItem({
       if (result?.payload) {
         useUIStore.getState().clearFileChanges()
         useUIStore.getState().showToast('Restored to pre-change state', 'success')
+        // Reload session messages to stay in sync with backend
+        try {
+          const sessionFrame = await loadSessionWithInsights(gatewayAPI, sessionId)
+          const sessionData = sessionFrame.payload as { messages?: BackendMessage[]; agent_mode?: string }
+          if (sessionData?.messages) {
+            useChatStore.getState().clearMessages()
+            const mapped = mapHistoryMessages(sessionData.messages)
+            for (const msg of mapped) useChatStore.getState().addMessage(msg)
+          }
+        } catch { /* non-critical refresh */ }
       }
     } catch (e) {
       console.warn('[FileChangePanel] restoreCheckpoint failed:', e)

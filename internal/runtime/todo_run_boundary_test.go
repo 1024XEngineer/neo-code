@@ -26,7 +26,7 @@ func TestResetTodosForUserRunClearsSessionAndEmitsEmptySnapshot(t *testing.T) {
 
 	service := &Service{sessionStore: store, events: make(chan RuntimeEvent, 8)}
 	state := newRunState("run-boundary", created)
-	state.userGoal = "改做另一个任务"
+	state.userGoal = "新任务"
 	if err := service.resetTodosForUserRun(context.Background(), &state); err != nil {
 		t.Fatalf("resetTodosForUserRun() error = %v", err)
 	}
@@ -92,7 +92,7 @@ func TestResetTodosForUserRunKeepsTodosForContinuePrompt(t *testing.T) {
 	}
 }
 
-func TestShouldResetTodosForUserRunContinueVariants(t *testing.T) {
+func TestShouldResetTodosForUserRunBoundaryVariants(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
@@ -100,34 +100,36 @@ func TestShouldResetTodosForUserRunContinueVariants(t *testing.T) {
 		goal      string
 		wantReset bool
 	}{
-		// 续做语义 → 应保留旧 todo
+		// 空输入 → 保留
 		{"empty", "", false},
-		{"chinese exact", "继续", false},
-		{"chinese with content", "继续修这个", false},
-		{"chinese with punctuation", "继续。", false},
-		{"chinese alt prefix 接着", "接着做", false},
-		{"chinese alt prefix 续做", "续做完未做的", false},
-		{"chinese alt prefix 再继续", "再继续完善", false},
-		{"chinese alt prefix 再来", "再来一次", false},
-		{"english exact lowercase", "continue", false},
-		{"english with content", "continue with the failing test", false},
-		{"english punctuation", "Continue!", false},
-		{"english keep going", "keep going", false},
-		{"english keep going with content", "keep going on the bug fix", false},
-		{"english keep doing", "keep doing it", false},
-		{"english go on", "go on please", false},
-		{"english resume", "resume task", false},
-		{"english carry on", "carry on with the migration", false},
-		{"trailing chinese punctuation", "继续，", false},
-		{"trailing question mark", "go on?", false},
 
-		// 新指令 → 应清空旧 todo
-		{"new task chinese", "修复登录 bug", true},
-		{"start over", "重新开始项目", true},
-		{"keep without going", "keep it simple please", true},
-		{"continueworking no boundary", "continueworking", true},
-		{"new task english", "implement search api", true},
-		{"explore", "开始下一个任务", true},
+		// 明确新任务 → 清空
+		{"chinese exact 新任务", "新任务", true},
+		{"chinese 帮我做个新任务", "帮我做个新任务", true},
+		{"chinese 换个任务", "换个任务", true},
+		{"chinese 新需求", "新需求", true},
+		{"english exact new task", "new task", true},
+		{"english 新任务", "new task please", true},
+		{"english switch task", "switch task", true},
+		{"english different task", "different task", true},
+
+		// 默认保留：绝大多数输入不再被硬编码清空，交给 prompt 引导模型自行处理
+		{"chinese 继续", "继续", false},
+		{"chinese 继续修这个", "继续修这个", false},
+		{"chinese 接着做", "接着做", false},
+		{"chinese 刚才的代码还有问题", "刚才的代码还有问题", false},
+		{"chinese 再优化一下", "再优化一下", false},
+		{"chinese 补充测试用例", "补充测试用例", false},
+		{"chinese 修复登录bug", "修复登录 bug", false},
+		{"chinese 开始下一个任务", "开始下一个任务", false},
+		{"chinese 重新实现", "重新实现", false},
+		{"english continue", "continue", false},
+		{"english continue with the failing test", "continue with the failing test", false},
+		{"english implement search api", "implement search api", false},
+		{"english keep going", "keep going", false},
+		{"english keep it simple", "keep it simple please", false},
+		{"english resume", "resume task", false},
+		{"english go on", "go on please", false},
 	}
 
 	for _, tc := range cases {
