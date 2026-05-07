@@ -153,6 +153,17 @@ func handleWorkspaceDeleteFrame(ctx context.Context, frame MessageFrame, runtime
 	if deleteErr := mw.DeleteWorkspace(params.Hash, params.RemoveData); deleteErr != nil {
 		return errorFrame(frame, NewFrameError(ErrorCodeInternalError, deleteErr.Error()))
 	}
+	if wsState, ok := ConnectionWorkspaceStateFromContext(ctx); ok {
+		activeHash := strings.TrimSpace(wsState.GetWorkspaceHash())
+		if strings.EqualFold(activeHash, strings.TrimSpace(params.Hash)) {
+			wsState.SetWorkspaceHash("")
+			if relay, relayOK := StreamRelayFromContext(ctx); relayOK {
+				if connID, connOK := ConnectionIDFromContext(ctx); connOK {
+					relay.ClearConnectionBindings(connID)
+				}
+			}
+		}
+	}
 
 	return MessageFrame{
 		Type:      FrameTypeAck,
@@ -270,4 +281,3 @@ func decodeWorkspaceDeletePayload(payload any) (workspaceDeleteParams, *FrameErr
 		return workspaceDeleteParams{}, NewFrameError(ErrorCodeInvalidFrame, "invalid workspace.delete payload")
 	}
 }
-

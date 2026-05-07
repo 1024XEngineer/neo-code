@@ -634,22 +634,23 @@ func TestRenderProviderAddFormMasksAPIKeyAndShowsHints(t *testing.T) {
 	app.providerAddForm.ChatEndpointPath = ""
 	app.providerAddForm.Error = "input invalid"
 	app.providerAddForm.ErrorIsHard = true
+	app.providerAddForm.Step = 4 // Base URL
 
-	form := app.renderProviderAddForm()
+	form := app.renderProviderAddForm(72)
 	if strings.Contains(form, "sk-secret-98765") {
 		t.Fatalf("expected api key to be masked, got %q", form)
 	}
-	if !strings.Contains(form, "API Key: ******") {
+	if !strings.Contains(form, "API Key") || !strings.Contains(form, "******") {
 		t.Fatalf("expected masked api key, got %q", form)
 	}
-	if !strings.Contains(form, "Model Source: discover") {
+	if !strings.Contains(form, "Model Source") || !strings.Contains(form, "discover") {
 		t.Fatalf("expected model source field, got %q", form)
 	}
-	if !strings.Contains(form, "Base URL:   (") {
+	if !strings.Contains(form, "Hint (Base URL):") || !strings.Contains(form, "Server base address.") || !strings.Contains(form, "built-in default") {
 		t.Fatalf("expected base url hint, got %q", form)
 	}
-	if !strings.Contains(form, "Chat Endpoint:   (") || !strings.Contains(form, "Chat API Mode") {
-		t.Fatalf("expected chat endpoint auto-fill hint, got %q", form)
+	if !strings.Contains(form, "Chat API Mode") {
+		t.Fatalf("expected chat api mode field, got %q", form)
 	}
 	if !strings.Contains(form, "[Error] input invalid") {
 		t.Fatalf("expected hard error label, got %q", form)
@@ -663,7 +664,7 @@ func TestRenderProviderAddFormPromptLabel(t *testing.T) {
 	app.providerAddForm.Error = "continue input"
 	app.providerAddForm.ErrorIsHard = false
 
-	form := app.renderProviderAddForm()
+	form := app.renderProviderAddForm(72)
 	if !strings.Contains(form, "[Prompt] continue input") {
 		t.Fatalf("expected prompt label, got %q", form)
 	}
@@ -675,7 +676,7 @@ func TestRenderProviderAddFormManualModelsStage(t *testing.T) {
 	app.providerAddForm.Stage = providerAddFormStageManualModels
 	app.providerAddForm.ManualModelsJSON = ""
 
-	form := app.renderProviderAddForm()
+	form := app.renderProviderAddForm(72)
 	if !strings.Contains(form, "Manual Model JSON") {
 		t.Fatalf("expected manual model json title, got %q", form)
 	}
@@ -969,12 +970,12 @@ func TestRenderMessageBlockWithCopyExtraBranches(t *testing.T) {
 
 func TestRenderProviderAddFormNoFormAndChatEndpointField(t *testing.T) {
 	app, _ := newTestApp(t)
-	if got := app.renderProviderAddForm(); got != "No form active" {
+	if got := app.renderProviderAddForm(72); got != "No form active" {
 		t.Fatalf("unexpected no-form output: %q", got)
 	}
 
 	app.startProviderAddForm()
-	form := app.renderProviderAddForm()
+	form := app.renderProviderAddForm(72)
 	if !strings.Contains(form, "Chat Endpoint") {
 		t.Fatalf("expected chat endpoint field in add form")
 	}

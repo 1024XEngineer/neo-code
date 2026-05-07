@@ -286,9 +286,32 @@ func TestMultiWorkspaceRuntime_NoHashConfigured(t *testing.T) {
 
 	if _, err := mw.ListSessions(context.Background()); err == nil {
 		t.Fatalf("expected error when no hash is configured")
+	} else if !errors.Is(err, ErrRuntimeResourceNotFound) {
+		t.Fatalf("expected ErrRuntimeResourceNotFound, got %v", err)
 	}
 	if got := builder.callCount(); got != 0 {
 		t.Fatalf("buildPort should not be called when no hash, got %d", got)
+	}
+}
+
+func TestMultiWorkspaceRuntime_NoHashUsesPreloadedAnonymousBundle(t *testing.T) {
+	idx := agentsession.NewWorkspaceIndex(t.TempDir())
+	builder := newTestBuilder()
+
+	mw := NewMultiWorkspaceRuntime(idx, "", builder.build)
+	t.Cleanup(func() { _ = mw.Close() })
+
+	preloaded := newRecordingPort("anonymous-default")
+	mw.PreloadWorkspaceBundle("", preloaded, preloaded.cleanup)
+
+	if _, err := mw.ListSessions(context.Background()); err != nil {
+		t.Fatalf("ListSessions with anonymous preloaded bundle: %v", err)
+	}
+	if got := preloaded.listSessionsCalls.Load(); got != 1 {
+		t.Fatalf("anonymous preloaded listSessions calls = %d, want 1", got)
+	}
+	if got := builder.callCount(); got != 0 {
+		t.Fatalf("buildPort should not be called when anonymous preloaded bundle exists; got %d", got)
 	}
 }
 
@@ -356,6 +379,8 @@ func TestMultiWorkspaceRuntime_UnknownHashErrors(t *testing.T) {
 	_, err := mw.ListSessions(ctxWithHash(t, "deadbeef"))
 	if err == nil {
 		t.Fatalf("expected error for unknown hash")
+	} else if !errors.Is(err, ErrRuntimeResourceNotFound) {
+		t.Fatalf("expected ErrRuntimeResourceNotFound, got %v", err)
 	}
 	if got := builder.callCount(); got != 0 {
 		t.Fatalf("buildPort should not be invoked for unknown hash; got %d", got)
@@ -507,6 +532,27 @@ func TestMultiWorkspaceRuntime_RenameAndDeletePersist(t *testing.T) {
 	}
 	if _, ok := persisted.Get(alpha.Hash); !ok {
 		t.Fatalf("alpha should remain in persisted index")
+	}
+}
+
+func TestMultiWorkspaceRuntime_DeleteDefaultHashFallsBackToRemainingWorkspace(t *testing.T) {
+	idx, alpha, beta := setupIndex(t)
+	builder := newTestBuilder()
+	mw := NewMultiWorkspaceRuntime(idx, alpha.Hash, builder.build)
+	t.Cleanup(func() { _ = mw.Close() })
+
+	if err := mw.DeleteWorkspace(alpha.Hash, false); err != nil {
+		t.Fatalf("Delete default workspace: %v", err)
+	}
+
+	if _, err := mw.ListSessions(context.Background()); err != nil {
+		t.Fatalf("ListSessions fallback after deleting default: %v", err)
+	}
+	if builder.portFor(alpha.Path) != nil {
+		t.Fatalf("alpha port should not be rebuilt after delete")
+	}
+	if builder.portFor(beta.Path) == nil {
+		t.Fatalf("expected fallback to remaining workspace beta")
 	}
 }
 

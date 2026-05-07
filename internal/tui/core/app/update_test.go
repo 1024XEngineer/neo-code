@@ -156,6 +156,10 @@ type stubRuntime struct {
 	availableSkillsErr    error
 }
 
+type noLogPersistenceRuntime struct {
+	agentruntime.Runtime
+}
+
 type snapshotRuntime struct {
 	*stubRuntime
 	sessionContext any
@@ -3399,13 +3403,10 @@ func TestHandleMemoCommandsRouteToSystemTools(t *testing.T) {
 
 func TestHandleMemoCommandMapsUnsupportedActionErrorToUserFriendlyMessage(t *testing.T) {
 	tests := []struct {
-		name string
-		err  error
+		name            string
+		err             error
+		expectGatewayUI bool
 	}{
-		{
-			name: "legacy sentinel",
-			err:  agentruntime.ErrUnsupportedActionInGatewayMode,
-		},
 		{
 			name: "gateway rpc unsupported_action",
 			err: &agentruntime.GatewayRPCError{
@@ -3414,6 +3415,7 @@ func TestHandleMemoCommandMapsUnsupportedActionErrorToUserFriendlyMessage(t *tes
 				GatewayCode: protocol.GatewayCodeUnsupportedAction,
 				Message:     "method not found",
 			},
+			expectGatewayUI: true,
 		},
 		{
 			name: "gateway rpc method_not_found",
@@ -3422,6 +3424,7 @@ func TestHandleMemoCommandMapsUnsupportedActionErrorToUserFriendlyMessage(t *tes
 				Code:    protocol.JSONRPCCodeMethodNotFound,
 				Message: "method not found",
 			},
+			expectGatewayUI: false,
 		},
 	}
 
@@ -3442,8 +3445,11 @@ func TestHandleMemoCommandMapsUnsupportedActionErrorToUserFriendlyMessage(t *tes
 			if strings.Contains(status, "unsupported_action_in_gateway_mode") {
 				t.Fatalf("expected sentinel to be hidden from UI, got %q", app.state.StatusText)
 			}
-			if !strings.Contains(status, "gateway") {
+			if tt.expectGatewayUI && !strings.Contains(status, "gateway") {
 				t.Fatalf("expected gateway upgrade hint, got %q", app.state.StatusText)
+			}
+			if !tt.expectGatewayUI && strings.Contains(status, "gateway does not support memo commands") {
+				t.Fatalf("did not expect gateway unsupported hint, got %q", app.state.StatusText)
 			}
 		})
 	}
@@ -5953,8 +5959,294 @@ func TestRebuildTranscriptCollapsesConsecutiveAssistantTags(t *testing.T) {
 	if count := strings.Count(plain, messageTagAgent); count != 1 {
 		t.Fatalf("expected one agent tag for consecutive assistant chunks, got %d in %q", count, plain)
 	}
-	if !strings.Contains(plain, "first chunk") || !strings.Contains(plain, "second chunk") || !strings.Contains(plain, "third chunk") {
-		t.Fatalf("expected all assistant chunks to be present, got %q", plain)
+	if !strings.Contains(plain, "third chunk") {
+		t.Fatalf("expected final assistant chunk to stay visible, got %q", plain)
+	}
+	if strings.Contains(plain, "first chunk") || strings.Contains(plain, "second chunk") {
+		t.Fatalf("expected non-final assistant chunks to be folded, got %q", plain)
+	}
+}
+
+func TestRebuildTranscriptAutoFoldsDuplicateAssistantProcess(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.width = 120
+	app.height = 32
+	app.applyComponentLayout(true)
+	app.activeMessages = []providertypes.Message{
+		{Role: roleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("final answer")}},
+		{Role: roleSystem, Parts: []providertypes.ContentPart{providertypes.NewTextPart(inlineLogMarker + "verify: verification completed")}},
+		{Role: roleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("final answer")}},
+	}
+
+	app.rebuildTranscript()
+	plain := copyCodeANSIPattern.ReplaceAllString(app.transcriptContent, "")
+	if !strings.Contains(plain, "Process output hidden") {
+		t.Fatalf("expected folded process placeholder, got %q", plain)
+	}
+	if strings.Contains(plain, "verification completed") {
+		t.Fatalf("expected process details hidden when folded, got %q", plain)
+	}
+	if count := strings.Count(plain, "final answer"); count != 1 {
+		t.Fatalf("expected exactly one visible final answer when folded, got %d in %q", count, plain)
+	}
+	if !app.transcriptProcessFoldAvailable {
+		t.Fatalf("expected transcript fold availability to be true")
+	}
+	if app.transcriptProcessExpanded {
+		t.Fatalf("expected transcript process to be collapsed by default")
+	}
+}
+
+func TestTranscriptEnterTogglesFoldedProcessVisibility(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.width = 120
+	app.height = 32
+	app.applyComponentLayout(true)
+	app.activeMessages = []providertypes.Message{
+		{Role: roleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello world")}},
+		{Role: roleSystem, Parts: []providertypes.ContentPart{providertypes.NewTextPart(inlineLogMarker + "decision: accepted")}},
+		{Role: roleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello world")}},
+	}
+	app.rebuildTranscript()
+	app.focus = panelTranscript
+	app.applyFocus()
+
+	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	app = model.(App)
+	expandedPlain := copyCodeANSIPattern.ReplaceAllString(app.transcriptContent, "")
+	if !app.transcriptProcessExpanded {
+		t.Fatalf("expected enter on transcript to expand folded process")
+	}
+	if !strings.Contains(expandedPlain, "decision: accepted") {
+		t.Fatalf("expected expanded transcript to show process details, got %q", expandedPlain)
+	}
+	if strings.Contains(expandedPlain, "Process output hidden") {
+		t.Fatalf("expected folded placeholder to disappear after expand, got %q", expandedPlain)
+	}
+
+	model, _ = app.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	app = model.(App)
+	collapsedPlain := copyCodeANSIPattern.ReplaceAllString(app.transcriptContent, "")
+	if app.transcriptProcessExpanded {
+		t.Fatalf("expected second enter to collapse process output")
+	}
+	if !strings.Contains(collapsedPlain, "Process output hidden") {
+		t.Fatalf("expected folded placeholder after collapsing, got %q", collapsedPlain)
+	}
+}
+
+func TestRebuildTranscriptFoldsWhenFinalContainsStreamingDraft(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.width = 120
+	app.height = 32
+	app.applyComponentLayout(true)
+	app.activeMessages = []providertypes.Message{
+		{Role: roleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("你好！我是 NeoCode，一个本地编程助手。")}},
+		{Role: roleSystem, Parts: []providertypes.ContentPart{providertypes.NewTextPart(inlineLogMarker + "verify: verification completed")}},
+		{Role: roleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("你好！我是 NeoCode，一个本地编程助手。\n请问有什么具体任务需要我协助吗？")}},
+	}
+
+	app.rebuildTranscript()
+	plain := copyCodeANSIPattern.ReplaceAllString(app.transcriptContent, "")
+	if !strings.Contains(plain, "Process output hidden") {
+		t.Fatalf("expected folded placeholder for overlapping final answer, got %q", plain)
+	}
+	if strings.Contains(plain, "verification completed") {
+		t.Fatalf("expected process details to be hidden in collapsed mode, got %q", plain)
+	}
+}
+
+func TestRebuildTranscriptFoldsAllNonFinalOutputsInTurn(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.width = 120
+	app.height = 32
+	app.applyComponentLayout(true)
+	app.activeMessages = []providertypes.Message{
+		{Role: roleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("帮我分析代码")}},
+		{Role: roleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("先看一下目录结构")}},
+		{Role: roleSystem, Parts: []providertypes.ContentPart{providertypes.NewTextPart(inlineLogMarker + "tool: list files")}},
+		{Role: roleTool, Parts: []providertypes.ContentPart{providertypes.NewTextPart("main.go\nREADME.md")}},
+		{Role: roleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("这是最终结论")}},
+	}
+
+	app.rebuildTranscript()
+	plain := copyCodeANSIPattern.ReplaceAllString(app.transcriptContent, "")
+	if !strings.Contains(plain, "这是最终结论") {
+		t.Fatalf("expected final answer to remain visible, got %q", plain)
+	}
+	if strings.Contains(plain, "先看一下目录结构") || strings.Contains(plain, "tool: list files") || strings.Contains(plain, "main.go") {
+		t.Fatalf("expected non-final outputs in the turn to be folded, got %q", plain)
+	}
+	if !strings.Contains(plain, "Process output hidden") {
+		t.Fatalf("expected folded process placeholder, got %q", plain)
+	}
+}
+
+func TestTranscriptMouseClickFoldPlaceholderExpandsProcess(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.width = 120
+	app.height = 32
+	app.applyComponentLayout(true)
+	app.activeMessages = []providertypes.Message{
+		{Role: roleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("分析一下")}},
+		{Role: roleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("先检查项目结构")}},
+		{Role: roleSystem, Parts: []providertypes.ContentPart{providertypes.NewTextPart(inlineLogMarker + "tool: list files")}},
+		{Role: roleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("最终回答")}},
+	}
+	app.rebuildTranscript()
+	if !app.transcriptProcessFoldAvailable || app.transcriptProcessExpanded {
+		t.Fatalf("expected collapsed process fold before mouse click")
+	}
+
+	lines := strings.Split(copyCodeANSIPattern.ReplaceAllString(app.transcriptContent, ""), "\n")
+	targetRow := -1
+	for i, line := range lines {
+		if strings.Contains(line, "Process output hidden") {
+			targetRow = i
+			break
+		}
+	}
+	if targetRow < 0 {
+		t.Fatalf("expected fold placeholder line in transcript content, got %q", app.transcriptContent)
+	}
+
+	x, y, w, h := app.transcriptBounds()
+	if w <= 0 || h <= 0 {
+		t.Fatalf("expected transcript bounds to be drawable, got w=%d h=%d", w, h)
+	}
+	clickY := y + targetRow - app.transcript.YOffset
+	if clickY < y || clickY >= y+h {
+		t.Fatalf("expected fold placeholder row to be visible, row=%d y=%d h=%d", targetRow, y, h)
+	}
+	clickBodyRow := clickY - y
+	click := tea.MouseMsg{
+		X:      x + 1,
+		Y:      clickY,
+		Button: tea.MouseButtonLeft,
+		Action: tea.MouseActionPress,
+	}
+	if !app.handleTranscriptMouse(click) {
+		t.Fatalf("expected fold-placeholder click to be handled")
+	}
+	if !app.transcriptProcessExpanded {
+		t.Fatalf("expected fold-placeholder click to expand process")
+	}
+	plain := copyCodeANSIPattern.ReplaceAllString(app.transcriptContent, "")
+	if strings.Contains(plain, "Process output hidden") {
+		t.Fatalf("expected placeholder hidden after expand, got %q", plain)
+	}
+	if !strings.Contains(plain, "tool: list files") {
+		t.Fatalf("expected expanded transcript to reveal process details, got %q", plain)
+	}
+	if !strings.Contains(plain, "Process output expanded") {
+		t.Fatalf("expected expanded control line to be visible, got %q", plain)
+	}
+	if strings.Index(plain, "Process output expanded") < strings.Index(plain, "分析一下") {
+		t.Fatalf("expected expanded control to stay in-place near folded segment, got %q", plain)
+	}
+
+	expandedLines := strings.Split(plain, "\n")
+	expandedRow := -1
+	for i, line := range expandedLines {
+		if strings.Contains(line, "Process output expanded") {
+			expandedRow = i
+			break
+		}
+	}
+	if expandedRow < 0 {
+		t.Fatalf("expected expanded control row in transcript")
+	}
+	expandedBodyRow := expandedRow - app.transcript.YOffset
+	if expandedBodyRow != clickBodyRow {
+		t.Fatalf("expected expanded control anchor row to remain stable, got %d want %d", expandedBodyRow, clickBodyRow)
+	}
+	collapseClick := tea.MouseMsg{
+		X:      x + 1,
+		Y:      y + expandedRow - app.transcript.YOffset,
+		Button: tea.MouseButtonLeft,
+		Action: tea.MouseActionPress,
+	}
+	if !app.handleTranscriptMouse(collapseClick) {
+		t.Fatalf("expected expanded-control click to be handled")
+	}
+	if app.transcriptProcessExpanded {
+		t.Fatalf("expected expanded-control click to collapse process")
+	}
+	collapsed := copyCodeANSIPattern.ReplaceAllString(app.transcriptContent, "")
+	if !strings.Contains(collapsed, "Process output hidden") {
+		t.Fatalf("expected collapsed placeholder after clicking expanded control, got %q", collapsed)
+	}
+}
+
+func TestTranscriptMouseClickKeepsClickedFoldSegmentAnchorWithMultipleSegments(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.width = 120
+	app.height = 32
+	app.applyComponentLayout(true)
+	app.activeMessages = []providertypes.Message{
+		{Role: roleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("任务A")}},
+		{Role: roleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("A-过程")}},
+		{Role: roleSystem, Parts: []providertypes.ContentPart{providertypes.NewTextPart(inlineLogMarker + "A-log")}},
+		{Role: roleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("A-最终")}},
+		{Role: roleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("任务B")}},
+		{Role: roleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("B-过程")}},
+		{Role: roleSystem, Parts: []providertypes.ContentPart{providertypes.NewTextPart(inlineLogMarker + "B-log")}},
+		{Role: roleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("B-最终")}},
+	}
+	app.rebuildTranscript()
+	plain := copyCodeANSIPattern.ReplaceAllString(app.transcriptContent, "")
+	lines := strings.Split(plain, "\n")
+	placeholderRows := make([]int, 0, 2)
+	for i, line := range lines {
+		if strings.Contains(line, "Process output hidden") {
+			placeholderRows = append(placeholderRows, i)
+		}
+	}
+	if len(placeholderRows) < 2 {
+		t.Fatalf("expected at least two folded placeholders, got %q", plain)
+	}
+	targetRow := placeholderRows[1]
+
+	x, y, w, h := app.transcriptBounds()
+	if w <= 0 || h <= 0 {
+		t.Fatalf("expected transcript bounds to be drawable, got w=%d h=%d", w, h)
+	}
+	clickY := y + targetRow - app.transcript.YOffset
+	if clickY < y || clickY >= y+h {
+		t.Fatalf("expected second fold placeholder row to be visible, row=%d y=%d h=%d", targetRow, y, h)
+	}
+	clickBodyRow := clickY - y
+	click := tea.MouseMsg{
+		X:      x + 1,
+		Y:      clickY,
+		Button: tea.MouseButtonLeft,
+		Action: tea.MouseActionPress,
+	}
+	if !app.handleTranscriptMouse(click) {
+		t.Fatalf("expected second fold-placeholder click to be handled")
+	}
+	if !app.transcriptProcessExpanded {
+		t.Fatalf("expected click to expand process output")
+	}
+
+	expanded := copyCodeANSIPattern.ReplaceAllString(app.transcriptContent, "")
+	expandedLines := strings.Split(expanded, "\n")
+	expandedRows := make([]int, 0, 1)
+	for i, line := range expandedLines {
+		if strings.Contains(line, "Process output expanded") {
+			expandedRows = append(expandedRows, i)
+		}
+	}
+	if len(expandedRows) != 1 {
+		t.Fatalf("expected exactly one expanded control line, got %q", expanded)
+	}
+	expandedBodyRow := expandedRows[0] - app.transcript.YOffset
+	diff := expandedBodyRow - clickBodyRow
+	if diff < -1 || diff > 1 {
+		t.Fatalf("expected clicked segment anchor row to remain stable, got %d want %d", expandedBodyRow, clickBodyRow)
+	}
+	if !strings.Contains(expanded, "B-过程") || strings.Contains(expanded, "A-过程") {
+		t.Fatalf("expected only clicked segment process details to expand, got %q", expanded)
 	}
 }
 
@@ -5970,6 +6262,7 @@ func TestTranscriptManualScrollPersistsWhileBusy(t *testing.T) {
 			Parts: []providertypes.ContentPart{providertypes.NewTextPart(fmt.Sprintf("assistant-line-%03d", i))},
 		})
 	}
+	app.transcriptProcessExpanded = true
 	app.rebuildTranscript()
 	if app.transcriptMaxOffset() <= 6 {
 		t.Fatalf("expected transcript to be scrollable, max offset=%d", app.transcriptMaxOffset())
@@ -6061,6 +6354,31 @@ func TestSessionLogViewerPersistenceAndCap(t *testing.T) {
 	}
 	if !strings.Contains(app.logEntries[len(app.logEntries)-1].Message, "entry-519") {
 		t.Fatalf("expected restored newest entry entry-519, got %q", app.logEntries[len(app.logEntries)-1].Message)
+	}
+}
+
+func TestSessionLogFallbackPersistenceWithoutRuntimeLogInterface(t *testing.T) {
+	app, runtime := newTestApp(t)
+	app.runtime = noLogPersistenceRuntime{Runtime: runtime}
+	app.setActiveSessionID("session-fallback")
+
+	app.appendActivity("verify", "Verification started", "completion_passed=true", false)
+	app.persistLogEntriesForActiveSession()
+
+	app.logEntries = nil
+	app.loadLogEntriesForSession("session-fallback")
+	if len(app.logEntries) == 0 {
+		t.Fatalf("expected fallback store to reload persisted log entries")
+	}
+	foundInline := false
+	for _, entry := range app.logEntries {
+		if strings.Contains(entry.Inline, inlineLogMarker+"verify: Verification started | completion_passed=true") {
+			foundInline = true
+			break
+		}
+	}
+	if !foundInline {
+		t.Fatalf("expected persisted inline_message in fallback log store, got %#v", app.logEntries)
 	}
 }
 

@@ -16,6 +16,10 @@ import (
 	tuiservices "neo-code/internal/tui/services"
 )
 
+type runtimeModelCatalogSource interface {
+	ListModels(ctx context.Context, sessionID string) ([]providertypes.ModelDescriptor, string, error)
+}
+
 const (
 	slashPrefix             = "/"
 	slashCommandHelp        = "/help"
@@ -31,22 +35,27 @@ const (
 	slashCommandForget      = "/forget"
 	slashCommandSkills      = "/skills"
 	slashCommandSkill       = "/skill"
+	slashCommandCheckpoint  = "/checkpoint"
 
-	slashUsageHelp        = "/help"
-	slashUsageExit        = "/exit"
-	slashUsageClear       = "/clear"
-	slashUsageCompact     = "/compact"
-	slashUsageProvider    = "/provider"
-	slashUsageProviderAdd = "/provider add"
-	slashUsageModel       = "/model"
-	slashUsageSession     = "/session"
-	slashUsageMemo        = "/memo"
-	slashUsageRemember    = "/remember <text>"
-	slashUsageForget      = "/forget <keyword>"
-	slashUsageSkills      = "/skills"
-	slashUsageSkillUse    = "/skill use <id>"
-	slashUsageSkillOff    = "/skill off <id>"
-	slashUsageSkillActive = "/skill active"
+	slashUsageHelp              = "/help"
+	slashUsageExit              = "/exit"
+	slashUsageClear             = "/clear"
+	slashUsageCompact           = "/compact"
+	slashUsageProvider          = "/provider"
+	slashUsageProviderAdd       = "/provider add"
+	slashUsageModel             = "/model"
+	slashUsageSession           = "/session"
+	slashUsageMemo              = "/memo"
+	slashUsageRemember          = "/remember <text>"
+	slashUsageForget            = "/forget <keyword>"
+	slashUsageSkills            = "/skills"
+	slashUsageSkillUse          = "/skill use <id>"
+	slashUsageSkillOff          = "/skill off <id>"
+	slashUsageSkillActive       = "/skill active"
+	slashUsageCheckpoint        = "/checkpoint"
+	slashUsageCheckpointRestore = "/checkpoint restore <id>"
+	slashUsageCheckpointUndo    = "/checkpoint undo"
+	slashUsageCheckpointDiff    = "/checkpoint diff <id>"
 
 	commandMenuTitle        = "Suggestions"
 	providerPickerTitle     = "Select Provider"
@@ -138,6 +147,10 @@ var builtinSlashCommands = []slashCommand{
 	{Usage: slashUsageSkillUse, Description: "Activate one skill in current session"},
 	{Usage: slashUsageSkillOff, Description: "Deactivate one skill in current session"},
 	{Usage: slashUsageSkillActive, Description: "Show active skills in current session"},
+	{Usage: slashUsageCheckpoint, Description: "List checkpoints of current session"},
+	{Usage: slashUsageCheckpointRestore, Description: "Restore session to one checkpoint"},
+	{Usage: slashUsageCheckpointUndo, Description: "Undo the latest checkpoint restore"},
+	{Usage: slashUsageCheckpointDiff, Description: "Show diff for one checkpoint"},
 	{Usage: slashUsageProvider, Description: "Open the interactive provider picker"},
 	{Usage: slashUsageProviderAdd, Description: "Add a new custom provider"},
 	{Usage: slashUsageModel, Description: "Open the interactive model picker"},
@@ -251,6 +264,23 @@ func (a *App) refreshProviderPicker() error {
 }
 
 func (a *App) refreshModelPicker() error {
+	if source, ok := a.runtime.(runtimeModelCatalogSource); ok {
+		models, selectedModelID, err := source.ListModels(context.Background(), strings.TrimSpace(a.state.ActiveSessionID))
+		if err != nil {
+			return err
+		}
+		replacePickerItems(&a.modelPicker, mapModelItems(models))
+		selectedModelID = strings.TrimSpace(selectedModelID)
+		if selectedModelID == "" {
+			selectedModelID = strings.TrimSpace(a.state.CurrentModel)
+		}
+		if selectedModelID != "" {
+			a.state.CurrentModel = selectedModelID
+		}
+		selectPickerItemByID(&a.modelPicker, selectedModelID)
+		return nil
+	}
+
 	models, err := a.providerSvc.ListModelsSnapshot(context.Background())
 	if err != nil {
 		return err

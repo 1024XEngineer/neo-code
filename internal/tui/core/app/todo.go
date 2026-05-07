@@ -6,6 +6,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/lipgloss"
+
 	agentsession "neo-code/internal/session"
 )
 
@@ -45,6 +47,7 @@ const (
 	todoDefaultExpandedLimit = 14
 	todoMaxExpandedLimit     = 24
 	todoHeaderLines          = 1
+	todoTitleMaxDefault      = 84
 )
 
 type todoViewItem struct {
@@ -152,6 +155,113 @@ func formatTodoUpdatedAt(ts time.Time) string {
 		return "-"
 	}
 	return ts.Format("2006-01-02 15:04:05")
+}
+
+func isMarkdownTableSeparatorLine(line string) bool {
+	trimmed := strings.TrimSpace(line)
+	trimmed = strings.Trim(trimmed, "|")
+	trimmed = strings.ReplaceAll(trimmed, "|", "")
+	if trimmed == "" {
+		return false
+	}
+	hasDash := false
+	for _, r := range trimmed {
+		switch r {
+		case '-', ':':
+			hasDash = true
+		case ' ', '\t':
+		default:
+			return false
+		}
+	}
+	return hasDash
+}
+
+func normalizeTodoTitle(title string, maxLen int) string {
+	raw := strings.TrimSpace(title)
+	if raw == "" {
+		return "(empty)"
+	}
+	if maxLen <= 0 {
+		maxLen = todoTitleMaxDefault
+	}
+	raw = strings.ReplaceAll(raw, "\r\n", "\n")
+	raw = strings.ReplaceAll(raw, "\r", "\n")
+	lines := strings.Split(raw, "\n")
+	parts := make([]string, 0, len(lines))
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" || isMarkdownTableSeparatorLine(line) {
+			continue
+		}
+		if strings.Contains(line, "|") {
+			cells := strings.Split(strings.Trim(line, "|"), "|")
+			cleanCells := make([]string, 0, len(cells))
+			for _, cell := range cells {
+				cell = strings.TrimSpace(cell)
+				if cell == "" || isMarkdownTableSeparatorLine(cell) {
+					continue
+				}
+				cleanCells = append(cleanCells, cell)
+			}
+			if len(cleanCells) > 0 {
+				line = strings.Join(cleanCells, " / ")
+			}
+		}
+		line = strings.Join(strings.Fields(line), " ")
+		if line != "" {
+			parts = append(parts, line)
+		}
+	}
+	if len(parts) == 0 {
+		return "(empty)"
+	}
+	joined := strings.Join(parts, " | ")
+	runes := []rune(joined)
+	if len(runes) <= maxLen {
+		return joined
+	}
+	if maxLen < 4 {
+		return string(runes[:maxLen])
+	}
+	return string(runes[:maxLen-3]) + "..."
+}
+
+func formatTodoStatusLabel(status string) string {
+	normalized := strings.ToUpper(strings.TrimSpace(status))
+	switch normalized {
+	case "PENDING":
+		return "PENDING"
+	case "IN_PROGRESS":
+		return "ACTIVE"
+	case "BLOCKED":
+		return "BLOCKED"
+	case "COMPLETED":
+		return "DONE"
+	case "FAILED":
+		return "FAILED"
+	case "CANCELED":
+		return "CANCELED"
+	default:
+		if normalized == "" {
+			return "UNKNOWN"
+		}
+		return normalized
+	}
+}
+
+func (a App) todoStatusStyle(status string) lipgloss.Style {
+	normalized := strings.ToUpper(strings.TrimSpace(status))
+	switch normalized {
+	case "IN_PROGRESS", "COMPLETED":
+		return a.styles.badgeSuccess
+	case "BLOCKED":
+		return a.styles.badgeWarning
+	case "FAILED", "CANCELED":
+		return a.styles.badgeError
+	default:
+		return a.styles.badgeMuted
+	}
 }
 
 func clampTodoSelection(index int, length int) int {
@@ -290,39 +400,81 @@ func (a *App) rebuildTodo() {
 	visible := a.visibleTodoItems()
 	a.todoSelectedIndex = clampTodoSelection(a.todoSelectedIndex, len(visible))
 
-	lines := []string{
-		"ID  Title  Status  Executor  Priority  Owner  Updated At",
-	}
+	lines := []string{a.styles.panelSubtitle.Render("State       Task")}
 	if len(visible) == 0 {
 		lines = append(lines, fmt.Sprintf("No todos for filter %q.", a.todoFilter))
 	} else {
+		titleMax := todoTitleMaxDefault
+		if a.todo.Width > 0 {
+			titleMax = max(20, a.todo.Width-16)
+		}
 		for i, item := range visible {
 			prefix := " "
 			if i == a.todoSelectedIndex {
 				prefix = ">"
 			}
-			title := item.Title
-			if title == "" {
-				title = "(empty)"
+			title := normalizeTodoTitle(item.Title, titleMax)
+			statusLabel := fmt.Sprintf("%-9s", formatTodoStatusLabel(item.Status))
+			statusStyled := a.todoStatusStyle(item.Status).Render(statusLabel)
+
+			titleStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(lightText))
+			if i == a.todoSelectedIndex {
+				titleStyle = titleStyle.
+					Bold(true).
+					Foreground(lipgloss.Color(selectionFg)).
+					Background(lipgloss.Color(selectionBg))
 			}
+
+			metaParts := make([]string, 0, 2)
+			if id := strings.TrimSpace(item.ID); id != "" {
+				metaParts = append(metaParts, "#"+id)
+			}
+			if item.Priority > 0 {
+				metaParts = append(metaParts, fmt.Sprintf("P%d", item.Priority))
+			}
+			meta := ""
+			if len(metaParts) > 0 {
+				meta = " " + a.styles.panelSubtitle.Render("("+strings.Join(metaParts, " · ")+")")
+			}
+
 			lines = append(lines, fmt.Sprintf(
-				"%s %s | %s | %s | %s | P%d | %s | %s",
+				"%s %s %s%s",
 				prefix,
-				item.ID,
-				title,
-				item.Status,
-				fallbackText(item.Executor, "-"),
-				item.Priority,
-				item.Owner,
-				formatTodoUpdatedAt(item.UpdatedAt),
+				statusStyled,
+				titleStyle.Render(title),
+				meta,
 			))
 		}
+
+		selected := visible[clampTodoSelection(a.todoSelectedIndex, len(visible))]
+		details := make([]string, 0, 5)
+		if id := strings.TrimSpace(selected.ID); id != "" {
+			details = append(details, "id="+id)
+		}
+		if selected.Priority > 0 {
+			details = append(details, fmt.Sprintf("priority=%d", selected.Priority))
+		}
+		if exec := strings.TrimSpace(selected.Executor); exec != "" && exec != "-" {
+			details = append(details, "executor="+exec)
+		}
+		if owner := strings.TrimSpace(selected.Owner); owner != "" && owner != "-" {
+			details = append(details, "owner="+owner)
+		}
+		if updated := formatTodoUpdatedAt(selected.UpdatedAt); updated != "-" {
+			details = append(details, "updated="+updated)
+		}
+		if len(details) > 0 {
+			lines = append(lines, a.styles.panelSubtitle.Render("Selected: "+strings.Join(details, " · ")))
+		}
+
 		lines = append(
 			lines,
-			fmt.Sprintf(
-				"Selected %d/%d | Up/Down move | Enter detail | c collapse",
-				a.todoSelectedIndex+1,
-				len(visible),
+			a.styles.panelSubtitle.Render(
+				fmt.Sprintf(
+					"Selected %d/%d · Up/Down move · Enter detail · c collapse",
+					a.todoSelectedIndex+1,
+					len(visible),
+				),
 			),
 		)
 	}

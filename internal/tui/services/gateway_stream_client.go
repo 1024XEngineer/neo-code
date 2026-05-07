@@ -152,44 +152,30 @@ func decodeRuntimeEventFromGatewayNotification(notification gatewayRPCNotificati
 	return event, nil
 }
 
-// extractRuntimeEnvelope 从网关 payload 中提取事件包裹层。
+// extractRuntimeEnvelope 从网关 payload 中提取 runtime envelope。
+// 支持两种结构：
+// 1) 直接 envelope: {"runtime_event_type": "...", ...}
+// 2) gateway 包裹层: {"event_type": "...", "payload": {"runtime_event_type": "...", ...}}
 func extractRuntimeEnvelope(payload any) (map[string]any, bool) {
-	switch typed := payload.(type) {
-	case map[string]any:
-		if _, exists := streamReadMapValue(typed, "runtime_event_type"); exists {
-			return typed, true
-		}
-		if nested, exists := streamReadMapValue(typed, "payload"); exists {
-			if nestedMap, ok := nested.(map[string]any); ok {
-				if _, hasEventType := streamReadMapValue(nestedMap, "runtime_event_type"); hasEventType {
-					return nestedMap, true
-				}
-			}
-		}
-	case nil:
+	typed, ok := payload.(map[string]any)
+	if !ok {
 		return nil, false
 	}
-
-	raw, err := json.Marshal(payload)
-	if err != nil {
-		return nil, false
-	}
-
-	var asMap map[string]any
-	if err := json.Unmarshal(raw, &asMap); err != nil {
-		return nil, false
-	}
-	if _, exists := streamReadMapValue(asMap, "runtime_event_type"); exists {
-		return asMap, true
-	}
-	if nested, exists := streamReadMapValue(asMap, "payload"); exists {
-		if nestedMap, ok := nested.(map[string]any); ok {
-			if _, hasEventType := streamReadMapValue(nestedMap, "runtime_event_type"); hasEventType {
-				return nestedMap, true
-			}
+	if _, exists := streamReadMapValue(typed, "runtime_event_type"); !exists {
+		nested, nestedExists := streamReadMapValue(typed, "payload")
+		if !nestedExists || nested == nil {
+			return nil, false
 		}
+		nestedMap, nestedOK := nested.(map[string]any)
+		if !nestedOK {
+			return nil, false
+		}
+		if _, nestedEnvelopeExists := streamReadMapValue(nestedMap, "runtime_event_type"); !nestedEnvelopeExists {
+			return nil, false
+		}
+		return nestedMap, true
 	}
-	return nil, false
+	return typed, true
 }
 
 // restoreRuntimePayload 按事件类型将 payload 恢复为 TUI 可消费的强类型结构。
@@ -243,6 +229,18 @@ func restoreRuntimePayload(eventType EventType, payload any) (any, error) {
 		return decodeRuntimePayload[RepoHooksLifecyclePayload](payload)
 	case EventRepoHooksTrustStoreInvalid:
 		return decodeRuntimePayload[RepoHooksTrustStoreInvalidPayload](payload)
+	case EventCheckpointCreated:
+		return decodeRuntimePayload[CheckpointCreatedPayload](payload)
+	case EventCheckpointWarning:
+		return decodeRuntimePayload[CheckpointWarningPayload](payload)
+	case EventCheckpointRestored:
+		return decodeRuntimePayload[CheckpointRestoredPayload](payload)
+	case EventCheckpointUndoRestore:
+		return decodeRuntimePayload[CheckpointUndoRestorePayload](payload)
+	case EventToolDiff:
+		return decodeRuntimePayload[ToolDiffPayload](payload)
+	case EventBashSideEffect:
+		return decodeRuntimePayload[BashSideEffectPayload](payload)
 	case EventTodoUpdated, EventTodoConflict:
 		return decodeRuntimePayload[TodoEventPayload](payload)
 	case EventTodoSnapshotUpdated:

@@ -14,11 +14,11 @@ import (
 // MultiWorkspaceRuntime 将多个工作区的 runtime 聚合为单个 gateway.RuntimePort。
 // 根据连接上下文中的 workspaceHash 路由到对应工作区的 runtime。
 type MultiWorkspaceRuntime struct {
-	index       *agentsession.WorkspaceIndex
-	bundles     map[string]*workspaceBundle
-	mu          sync.RWMutex
-	buildPort   func(ctx context.Context, workdir string) (RuntimePort, func() error, error)
-	defaultHash string
+	index          *agentsession.WorkspaceIndex
+	bundles        map[string]*workspaceBundle
+	mu             sync.RWMutex
+	buildPort      func(ctx context.Context, workdir string) (RuntimePort, func() error, error)
+	defaultHash    string
 	managementPort ManagementRuntimePort
 
 	events    chan RuntimeEvent
@@ -55,16 +55,28 @@ func NewMultiWorkspaceRuntime(
 func (m *MultiWorkspaceRuntime) getPort(ctx context.Context) (RuntimePort, error) {
 	hash := WorkspaceHashFromContext(ctx)
 	if hash == "" {
+		m.mu.RLock()
 		hash = m.defaultHash
+		m.mu.RUnlock()
 	}
 	if hash == "" {
+		// Support startup flows where gateway preloads a default runtime bundle
+		// but no explicit workspace hash has been persisted yet.
+		m.mu.RLock()
+		if preloaded := m.bundles[""]; preloaded != nil {
+			port := preloaded.port
+			m.mu.RUnlock()
+			return port, nil
+		}
+		m.mu.RUnlock()
+
 		records := m.index.List()
 		if len(records) > 0 {
 			hash = records[0].Hash
 		}
 	}
 	if hash == "" {
-		return nil, fmt.Errorf("workspace hash is empty and no default configured")
+		return nil, fmt.Errorf("%w: workspace hash is empty and no default configured", ErrRuntimeResourceNotFound)
 	}
 	return m.getPortForHash(hash)
 }
@@ -86,7 +98,7 @@ func (m *MultiWorkspaceRuntime) getPortForHash(hash string) (RuntimePort, error)
 
 	record, ok := m.index.Get(hash)
 	if !ok {
-		return nil, fmt.Errorf("workspace %s not found", hash)
+		return nil, fmt.Errorf("%w: workspace %s not found", ErrRuntimeResourceNotFound, hash)
 	}
 
 	port, cleanup, err := m.buildPort(context.Background(), record.Path)
@@ -161,7 +173,7 @@ func (m *MultiWorkspaceRuntime) Close() error {
 func (m *MultiWorkspaceRuntime) SwitchWorkspace(ctx context.Context, hash string) error {
 	_, ok := m.index.Get(hash)
 	if !ok {
-		return fmt.Errorf("workspace %s not found", hash)
+		return fmt.Errorf("%w: workspace %s not found", ErrRuntimeResourceNotFound, hash)
 	}
 	// 预加载对应 runtime，确保后续请求可用
 	if _, err := m.getPortForHash(hash); err != nil {
@@ -209,6 +221,13 @@ func (m *MultiWorkspaceRuntime) DeleteWorkspace(hash string, removeData bool) er
 	b, ok := m.bundles[hash]
 	if ok {
 		delete(m.bundles, hash)
+	}
+	if strings.EqualFold(strings.TrimSpace(hash), strings.TrimSpace(m.defaultHash)) {
+		m.defaultHash = ""
+		records := m.index.List()
+		if len(records) > 0 {
+			m.defaultHash = strings.TrimSpace(records[0].Hash)
+		}
 	}
 	m.mu.Unlock()
 

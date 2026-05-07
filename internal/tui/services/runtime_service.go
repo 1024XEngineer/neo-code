@@ -11,11 +11,6 @@ import (
 
 const permissionResolveTimeout = 10 * time.Second
 
-// Runner 定义执行 run 所需的最小能力。
-type Runner interface {
-	Run(ctx context.Context, input UserInput) error
-}
-
 // Submitter 定义单入口提交所需能力。
 type Submitter interface {
 	Submit(ctx context.Context, input PrepareInput) error
@@ -44,14 +39,6 @@ func ListenForRuntimeEventCmd(sub <-chan RuntimeEvent, eventMsg func(RuntimeEven
 			return closedMsg()
 		}
 		return eventMsg(event)
-	}
-}
-
-// RunAgentCmd 执行 run 并回传结果。
-func RunAgentCmd(runtime Runner, input UserInput, doneMsg func(error) tea.Msg) tea.Cmd {
-	return func() tea.Msg {
-		err := runtime.Run(context.Background(), input)
-		return doneMsg(err)
 	}
 }
 

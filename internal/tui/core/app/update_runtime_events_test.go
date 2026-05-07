@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	providertypes "neo-code/internal/provider/types"
+	agentsession "neo-code/internal/session"
 	agentruntime "neo-code/internal/tui/services"
 )
 
@@ -209,6 +210,24 @@ func TestRuntimeEventHandlerRegistryContainsRenamedEvents(t *testing.T) {
 	}
 	if _, ok := runtimeEventHandlerRegistry[agentruntime.EventRepoHooksTrustStoreInvalid]; !ok {
 		t.Fatalf("expected repo_hooks_trust_store_invalid handler to be registered")
+	}
+	if _, ok := runtimeEventHandlerRegistry[agentruntime.EventCheckpointCreated]; !ok {
+		t.Fatalf("expected checkpoint_created handler to be registered")
+	}
+	if _, ok := runtimeEventHandlerRegistry[agentruntime.EventCheckpointWarning]; !ok {
+		t.Fatalf("expected checkpoint_warning handler to be registered")
+	}
+	if _, ok := runtimeEventHandlerRegistry[agentruntime.EventCheckpointRestored]; !ok {
+		t.Fatalf("expected checkpoint_restored handler to be registered")
+	}
+	if _, ok := runtimeEventHandlerRegistry[agentruntime.EventCheckpointUndoRestore]; !ok {
+		t.Fatalf("expected checkpoint_undo_restore handler to be registered")
+	}
+	if _, ok := runtimeEventHandlerRegistry[agentruntime.EventToolDiff]; !ok {
+		t.Fatalf("expected tool_diff handler to be registered")
+	}
+	if _, ok := runtimeEventHandlerRegistry[agentruntime.EventBashSideEffect]; !ok {
+		t.Fatalf("expected bash_side_effect handler to be registered")
 	}
 	if _, ok := runtimeEventHandlerRegistry[agentruntime.EventSubAgentStarted]; !ok {
 		t.Fatalf("expected subagent_started handler to be registered")
@@ -444,6 +463,86 @@ func TestRuntimeEventRepoHookLifecycleHandlers(t *testing.T) {
 	last = app.activities[len(app.activities)-1]
 	if last.Title != "Repo hooks trust store invalid" || last.Detail != "trust store is missing" {
 		t.Fatalf("unexpected trust_store_invalid activity: %+v", last)
+	}
+}
+
+func TestRuntimeEventCheckpointAndToolDiffHandlers(t *testing.T) {
+	app, runtime := newTestApp(t)
+	app.state.ActiveSessionID = "session-1"
+	runtime.loadSessions = map[string]agentsession.Session{
+		"session-1": agentsession.NewWithWorkdir("session-1", ""),
+	}
+
+	if runtimeEventCheckpointCreatedHandler(&app, agentruntime.RuntimeEvent{Payload: "bad"}) {
+		t.Fatalf("expected invalid checkpoint_created payload to return false")
+	}
+	runtimeEventCheckpointCreatedHandler(&app, agentruntime.RuntimeEvent{
+		Payload: agentruntime.CheckpointCreatedPayload{
+			CheckpointID:      "cp-1",
+			Reason:            "pre-write",
+			CommitHash:        "abc123",
+			CodeCheckpointRef: "code-ref-1",
+		},
+	})
+	last := app.activities[len(app.activities)-1]
+	if last.Title != "Checkpoint created" || !strings.Contains(last.Detail, "cp-1") {
+		t.Fatalf("unexpected checkpoint created activity: %+v", last)
+	}
+
+	runtimeEventCheckpointWarningHandler(&app, agentruntime.RuntimeEvent{
+		Payload: agentruntime.CheckpointWarningPayload{Phase: "persist", Error: "disk busy"},
+	})
+	last = app.activities[len(app.activities)-1]
+	if last.Title != "Checkpoint warning" || !last.IsError {
+		t.Fatalf("unexpected checkpoint warning activity: %+v", last)
+	}
+
+	runtimeEventToolDiffHandler(&app, agentruntime.RuntimeEvent{
+		Payload: agentruntime.ToolDiffPayload{
+			ToolName: "edit",
+			Files: []agentruntime.FileChange{
+				{Path: "a.txt", Kind: "modified"},
+				{Path: "b.txt", Kind: "added"},
+			},
+		},
+	})
+	last = app.activities[len(app.activities)-1]
+	if last.Title != "Tool diff captured" || !strings.Contains(last.Detail, "a.txt(modified)") {
+		t.Fatalf("unexpected tool diff activity: %+v", last)
+	}
+
+	runtimeEventBashSideEffectHandler(&app, agentruntime.RuntimeEvent{
+		Payload: agentruntime.BashSideEffectPayload{
+			Changes: []agentruntime.FileChange{{Path: "c.txt", Kind: "deleted"}},
+			UncoveredPaths: []string{
+				"tmp.log",
+			},
+		},
+	})
+	last = app.activities[len(app.activities)-1]
+	if last.Title != "Bash side effects detected" || !strings.Contains(last.Detail, "tmp.log") {
+		t.Fatalf("unexpected bash side effect activity: %+v", last)
+	}
+
+	runtimeEventCheckpointRestoredHandler(&app, agentruntime.RuntimeEvent{
+		Payload: agentruntime.CheckpointRestoredPayload{
+			CheckpointID:      "cp-restore",
+			SessionID:         "session-1",
+			GuardCheckpointID: "cp-guard",
+		},
+	})
+	if app.state.StatusText != "Checkpoint restored" || app.state.ActiveSessionID != "session-1" {
+		t.Fatalf("expected checkpoint restored status/session update, got status=%q session=%q", app.state.StatusText, app.state.ActiveSessionID)
+	}
+
+	runtimeEventCheckpointUndoRestoreHandler(&app, agentruntime.RuntimeEvent{
+		Payload: agentruntime.CheckpointUndoRestorePayload{
+			GuardCheckpointID: "cp-guard",
+			SessionID:         "session-1",
+		},
+	})
+	if app.state.StatusText != "Checkpoint restore undo applied" {
+		t.Fatalf("expected undo restore status, got %q", app.state.StatusText)
 	}
 }
 

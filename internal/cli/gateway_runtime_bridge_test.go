@@ -2627,3 +2627,22 @@ func TestGatewayRuntimePortBridgeDeleteMCPServerSuccess(t *testing.T) {
 		t.Fatalf("servers = %+v, want [srv-2]", cfgMgr.cfg.Tools.MCP.Servers)
 	}
 }
+
+func TestDefaultBuildGatewayRuntimePortListSessionsWithoutExplicitWorkdir(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+
+	port, cleanup, err := defaultBuildGatewayRuntimePort(context.Background(), "")
+	if err != nil {
+		t.Fatalf("defaultBuildGatewayRuntimePort() error = %v", err)
+	}
+	if cleanup != nil {
+		defer func() { _ = cleanup() }()
+	}
+
+	if _, err := port.ListSessions(context.Background()); err != nil {
+		t.Fatalf("ListSessions() with empty cli workdir should succeed, got %v", err)
+	}
+}

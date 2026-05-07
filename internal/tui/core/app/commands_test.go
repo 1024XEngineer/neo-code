@@ -10,6 +10,7 @@ import (
 
 	configstate "neo-code/internal/config/state"
 	providertypes "neo-code/internal/provider/types"
+	tuiservices "neo-code/internal/tui/services"
 )
 
 func TestBuiltinSlashCommands(t *testing.T) {
@@ -21,6 +22,7 @@ func TestBuiltinSlashCommands(t *testing.T) {
 	foundTodo := false
 	foundSkills := false
 	foundSkillUse := false
+	foundCheckpoint := false
 	foundStatus := false
 	for _, cmd := range builtinSlashCommands {
 		if cmd.Usage == slashUsageHelp {
@@ -34,6 +36,9 @@ func TestBuiltinSlashCommands(t *testing.T) {
 		}
 		if cmd.Usage == slashUsageSkillUse {
 			foundSkillUse = true
+		}
+		if cmd.Usage == slashUsageCheckpoint {
+			foundCheckpoint = true
 		}
 		if strings.EqualFold(cmd.Usage, "/status") {
 			foundStatus = true
@@ -50,6 +55,9 @@ func TestBuiltinSlashCommands(t *testing.T) {
 	}
 	if !foundSkillUse {
 		t.Error("expected to find /skill use command")
+	}
+	if !foundCheckpoint {
+		t.Error("expected to find /checkpoint command")
 	}
 	if foundStatus {
 		t.Error("did not expect /status command in builtin slash commands")
@@ -346,6 +354,51 @@ func TestRunModelCatalogRefreshCmd(t *testing.T) {
 	}
 }
 
+func TestRefreshModelPickerPrefersRuntimeModelCatalog(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.state.ActiveSessionID = "session-1"
+	app.state.CurrentModel = "local-model"
+
+	runtimeSource := &runtimeModelCatalogSourceStub{
+		Runtime: app.runtime,
+		models: []providertypes.ModelDescriptor{
+			{ID: "remote-a", Name: "Remote A"},
+			{ID: "remote-b", Name: "Remote B"},
+		},
+		selectedModelID: "remote-b",
+	}
+	app.runtime = runtimeSource
+
+	if err := app.refreshModelPicker(); err != nil {
+		t.Fatalf("refreshModelPicker() error = %v", err)
+	}
+	if runtimeSource.lastSessionID != "session-1" {
+		t.Fatalf("expected runtime model query to use active session id, got %q", runtimeSource.lastSessionID)
+	}
+	if app.state.CurrentModel != "remote-b" {
+		t.Fatalf("expected selected_model_id to update current model, got %q", app.state.CurrentModel)
+	}
+	selected, ok := app.modelPicker.SelectedItem().(selectionItem)
+	if !ok {
+		t.Fatalf("expected selected picker item, got %T", app.modelPicker.SelectedItem())
+	}
+	if selected.id != "remote-b" {
+		t.Fatalf("expected picker selection to follow selected_model_id, got %q", selected.id)
+	}
+}
+
+func TestRefreshModelPickerPropagatesRuntimeCatalogError(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.runtime = &runtimeModelCatalogSourceStub{
+		Runtime: app.runtime,
+		err:     errors.New("list models failed"),
+	}
+
+	if err := app.refreshModelPicker(); err == nil || !strings.Contains(err.Error(), "list models failed") {
+		t.Fatalf("expected runtime model catalog error, got %v", err)
+	}
+}
+
 func TestRefreshHelpPicker(t *testing.T) {
 	app, _ := newTestApp(t)
 	app.refreshHelpPicker()
@@ -370,4 +423,23 @@ func TestOpenHelpPicker(t *testing.T) {
 	if !app.helpPicker.SettingFilter() {
 		t.Fatalf("expected help picker search box to be focused")
 	}
+}
+
+type runtimeModelCatalogSourceStub struct {
+	tuiservices.Runtime
+	models          []providertypes.ModelDescriptor
+	selectedModelID string
+	err             error
+	lastSessionID   string
+}
+
+func (s *runtimeModelCatalogSourceStub) ListModels(
+	_ context.Context,
+	sessionID string,
+) ([]providertypes.ModelDescriptor, string, error) {
+	s.lastSessionID = strings.TrimSpace(sessionID)
+	if s.err != nil {
+		return nil, "", s.err
+	}
+	return append([]providertypes.ModelDescriptor(nil), s.models...), strings.TrimSpace(s.selectedModelID), nil
 }
