@@ -21,14 +21,20 @@ import (
 	"neo-code/internal/webassets"
 )
 
+var (
+	webCommandStartGatewayServer = startGatewayServer
+	webCommandBuildFrontend      = buildFrontend
+	webCommandLookPath           = exec.LookPath
+)
+
 type webCommandOptions struct {
-	HTTPAddress  string
-	LogLevel     string
-	StaticDir    string
-	OpenBrowser  bool
-	SkipBuild    bool
-	Workdir      string
-	TokenFile    string
+	HTTPAddress string
+	LogLevel    string
+	StaticDir   string
+	OpenBrowser bool
+	SkipBuild   bool
+	Workdir     string
+	TokenFile   string
 }
 
 // newWebCommand 创建并返回根命令下的 web 子命令，负责构建前端并启动带 Web UI 的 Gateway。
@@ -36,9 +42,9 @@ func newWebCommand() *cobra.Command {
 	options := &webCommandOptions{}
 
 	cmd := &cobra.Command{
-		Use:   "web",
-		Short: "Start NeoCode with Web UI",
-		Long:  "Build frontend assets (if needed) and start the gateway with an integrated web UI.\nOpen http://127.0.0.1:8080 in your browser to use the interactive coding agent.",
+		Use:          "web",
+		Short:        "Start NeoCode with Web UI",
+		Long:         "Build frontend assets (if needed) and start the gateway with an integrated web UI.\nOpen http://127.0.0.1:8080 in your browser to use the interactive coding agent.",
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -88,12 +94,17 @@ func runWebCommand(ctx context.Context, options webCommandOptions) error {
 		webDir := findWebSourceDir()
 		if webDir == "" {
 			if err != nil {
-				return fmt.Errorf("frontend not found: %w", err)
+				return fmt.Errorf(
+					"frontend assets unavailable: %w; release packages must include the web/ source directory, or source builds must run from the project root or use --static-dir",
+					err,
+				)
 			}
-			return fmt.Errorf("web source directory not found; run from project root or set --static-dir")
+			return fmt.Errorf(
+				"web source directory not found; release packages must include web/, or source builds must run from project root or set --static-dir",
+			)
 		}
-		if buildErr := buildFrontend(webDir, logger); buildErr != nil {
-			return fmt.Errorf("frontend build failed: %w", buildErr)
+		if buildErr := webCommandBuildFrontend(webDir, logger); buildErr != nil {
+			return fmt.Errorf("frontend build failed on this machine after detecting bundled web source: %w", buildErr)
 		}
 		// 构建后重新解析
 		staticDir, err = resolveWebStaticDir(options.StaticDir)
@@ -131,7 +142,7 @@ func runWebCommand(ctx context.Context, options webCommandOptions) error {
 		}
 	}
 
-	return startGatewayServer(ctx, gatewayOpts, staticDir, staticFileFS, onNetworkReady)
+	return webCommandStartGatewayServer(ctx, gatewayOpts, staticDir, staticFileFS, onNetworkReady)
 }
 
 // resolveWebStaticDir 按 --static-dir → <cwd>/web/dist → <exe_dir>/web/dist 顺序查找前端静态文件。
@@ -146,7 +157,7 @@ func resolveWebStaticDir(override string) (string, error) {
 	}
 
 	// 相对于可执行文件（适用于安装的二进制）
-	if exe, err := os.Executable(); err == nil {
+	if exe, err := resolveExecutablePath(); err == nil {
 		exeDir := filepath.Dir(exe)
 		if dir, err := validateStaticDir(filepath.Join(exeDir, "web", "dist")); err == nil {
 			return dir, nil
@@ -180,7 +191,7 @@ func findWebSourceDir() string {
 	candidates := []string{
 		filepath.Join(".", "web"),
 	}
-	if exe, err := os.Executable(); err == nil {
+	if exe, err := resolveExecutablePath(); err == nil {
 		exeDir := filepath.Dir(exe)
 		candidates = append(candidates,
 			filepath.Join(exeDir, "web"),
@@ -270,9 +281,11 @@ func findNPMBinary() (string, error) {
 	if runtime.GOOS == "windows" {
 		name = "npm.cmd"
 	}
-	path, err := exec.LookPath(name)
+	path, err := webCommandLookPath(name)
 	if err != nil {
-		return "", fmt.Errorf("npm not found on PATH; install Node.js to build the frontend, or use --static-dir to specify pre-built assets")
+		return "", fmt.Errorf(
+			"npm not found on PATH; install Node.js and npm on this machine so `neocode web` can build the bundled frontend automatically, or use --static-dir to specify pre-built assets",
+		)
 	}
 	return path, nil
 }
