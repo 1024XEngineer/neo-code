@@ -3,7 +3,9 @@ package tui
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -65,10 +67,15 @@ const pasteSessionMinGuard = 2 * time.Second
 const pasteSessionPerLineGuard = 8 * time.Millisecond
 const inlineLogMarker = "[[neo-log]] "
 const sessionWorkdirMissingWarning = "Session workspace not found, keeping current workspace."
+const localLogViewerPersistDir = "log-viewer"
 
 type sessionLogPersistenceRuntime interface {
 	LoadSessionLogEntries(ctx context.Context, sessionID string) ([]tuiservices.SessionLogEntry, error)
 	SaveSessionLogEntries(ctx context.Context, sessionID string, entries []tuiservices.SessionLogEntry) error
+}
+
+type localSessionLogStore struct {
+	baseDir string
 }
 
 var supportsUserEnvPersistence = config.SupportsUserEnvPersistence
@@ -2565,6 +2572,7 @@ func (a *App) applySessionSnapshot(session agentsession.Session, warnOnMissingWo
 	a.setCurrentAgentMode(string(session.AgentMode))
 	a.syncSessionWorkdir(session.Workdir, warnOnMissingWorkdir)
 	a.loadLogEntriesForSession(session.ID)
+	a.replayFoldRelatedSessionLogsIntoTranscript()
 	a.refreshRuntimeSourceSnapshot()
 }
 
@@ -4562,8 +4570,9 @@ func (a *App) appendActivity(kind string, title string, detail string, isError b
 	}
 	a.syncActivityViewport(previousCount)
 	a.viewDirty = true
-	a.addLogEntry(kind, title, detail)
-	a.appendInlineMessage(roleSystem, formatActivityInlineLog(kind, title, detail))
+	inline := formatActivityInlineLog(kind, title, detail)
+	a.addLogEntryWithInline(kind, title, detail, inline)
+	a.appendInlineMessage(roleSystem, inline)
 	a.rebuildTranscript()
 }
 
@@ -4629,6 +4638,10 @@ func (a *App) clearActivities() {
 }
 
 func (a *App) addLogEntry(kind string, title string, detail string) {
+	a.addLogEntryWithInline(kind, title, detail, "")
+}
+
+func (a *App) addLogEntryWithInline(kind string, title string, detail string, inline string) {
 	level := "info"
 	if strings.Contains(title, "error") || strings.Contains(title, "Error") || strings.Contains(title, "failed") {
 		level = "error"
@@ -4641,6 +4654,7 @@ func (a *App) addLogEntry(kind string, title string, detail string) {
 		Level:     level,
 		Source:    kind,
 		Message:   title + ": " + detail,
+		Inline:    strings.TrimSpace(inline),
 	})
 
 	a.logEntries = clampLogEntries(a.logEntries)
@@ -5954,6 +5968,67 @@ func (a *App) readLogEntriesForSession(sessionID string) []logEntry {
 	return clampLogEntries(fromRuntimeSessionLogEntries(entries))
 }
 
+func (a *App) replayFoldRelatedSessionLogsIntoTranscript() {
+	if len(a.logEntries) == 0 {
+		return
+	}
+	existing := make(map[string]struct{}, len(a.activeMessages))
+	for _, message := range a.activeMessages {
+		if !isInlineLogMessage(message) {
+			continue
+		}
+		content := strings.TrimSpace(renderMessagePartsForDisplay(message.Parts))
+		if content == "" {
+			continue
+		}
+		existing[content] = struct{}{}
+	}
+	for _, entry := range a.logEntries {
+		inline := strings.TrimSpace(entry.Inline)
+		if inline != "" && !strings.HasPrefix(inline, inlineLogMarker) {
+			inline = ""
+		}
+		if inline == "" {
+			if !isFoldRelatedSessionLogSource(entry.Source) {
+				continue
+			}
+			inline = formatSessionLogEntryInlineMessage(entry)
+		}
+		if inline == "" {
+			continue
+		}
+		if _, duplicated := existing[inline]; duplicated {
+			continue
+		}
+		a.activeMessages = append(a.activeMessages, providertypes.Message{
+			Role:  roleSystem,
+			Parts: []providertypes.ContentPart{providertypes.NewTextPart(inline)},
+		})
+		existing[inline] = struct{}{}
+	}
+}
+
+func isFoldRelatedSessionLogSource(source string) bool {
+	switch strings.ToLower(strings.TrimSpace(source)) {
+	case "tool", "verify", "acceptance", "decision", "runtime", "facts", "subagent", "todo", "run", "checkpoint":
+		return true
+	default:
+		return false
+	}
+}
+
+func formatSessionLogEntryInlineMessage(entry logEntry) string {
+	source := strings.TrimSpace(entry.Source)
+	if source == "" {
+		source = "log"
+	}
+	message := strings.TrimSpace(entry.Message)
+	if message == "" {
+		return ""
+	}
+	return inlineLogMarker + source + ": " + message
+}
+
 func (a *App) persistLogEntriesForActiveSession() {
 	sessionID := strings.TrimSpace(a.state.ActiveSessionID)
 	if sessionID == "" {
@@ -5983,9 +6058,101 @@ func (a *App) persistLogEntriesForActiveSession() {
 func (a *App) sessionLogRuntime() sessionLogPersistenceRuntime {
 	runtimeWithPersistence, ok := a.runtime.(sessionLogPersistenceRuntime)
 	if !ok {
-		return nil
+		baseDir := ""
+		if a.configManager != nil {
+			baseDir = strings.TrimSpace(a.configManager.BaseDir())
+		}
+		if baseDir == "" {
+			return nil
+		}
+		return localSessionLogStore{baseDir: baseDir}
 	}
 	return runtimeWithPersistence
+}
+
+func (s localSessionLogStore) LoadSessionLogEntries(ctx context.Context, sessionID string) ([]tuiservices.SessionLogEntry, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	path, err := s.sessionLogEntriesPath(sessionID)
+	if err != nil || path == "" {
+		return nil, err
+	}
+	payload, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("tui: read session log entries: %w", err)
+	}
+	entries := make([]tuiservices.SessionLogEntry, 0)
+	if err := json.Unmarshal(payload, &entries); err != nil {
+		return nil, fmt.Errorf("tui: decode session log entries: %w", err)
+	}
+	return entries, nil
+}
+
+func (s localSessionLogStore) SaveSessionLogEntries(ctx context.Context, sessionID string, entries []tuiservices.SessionLogEntry) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	path, err := s.sessionLogEntriesPath(sessionID)
+	if err != nil || path == "" {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("tui: ensure session log directory: %w", err)
+	}
+	payload, err := json.Marshal(entries)
+	if err != nil {
+		return fmt.Errorf("tui: encode session log entries: %w", err)
+	}
+	if err := os.WriteFile(path, payload, 0o600); err != nil {
+		return fmt.Errorf("tui: write session log entries: %w", err)
+	}
+	return nil
+}
+
+func (s localSessionLogStore) sessionLogEntriesPath(sessionID string) (string, error) {
+	normalizedSessionID := strings.TrimSpace(sessionID)
+	if normalizedSessionID == "" {
+		return "", nil
+	}
+	baseDir := strings.TrimSpace(s.baseDir)
+	if baseDir == "" {
+		return "", errors.New("tui: config base directory is empty")
+	}
+	sum := sha256.Sum256([]byte(normalizedSessionID))
+	fileName := fmt.Sprintf("%s_%s.json", sanitizeLocalSessionLogPrefix(normalizedSessionID), hex.EncodeToString(sum[:8]))
+	return filepath.Join(baseDir, localLogViewerPersistDir, fileName), nil
+}
+
+func sanitizeLocalSessionLogPrefix(sessionID string) string {
+	var b strings.Builder
+	for _, r := range sessionID {
+		switch {
+		case r >= 'a' && r <= 'z':
+			b.WriteRune(r)
+		case r >= 'A' && r <= 'Z':
+			b.WriteRune(r)
+		case r >= '0' && r <= '9':
+			b.WriteRune(r)
+		case r == '_' || r == '-':
+			b.WriteRune(r)
+		default:
+			if b.Len() > 0 {
+				b.WriteByte('_')
+			}
+		}
+		if b.Len() >= 24 {
+			break
+		}
+	}
+	prefix := strings.Trim(b.String(), "_")
+	if prefix == "" {
+		return "session"
+	}
+	return prefix
 }
 
 // reportLogPersistenceError 统一处理日志持久化失败提示，避免错误被静默吞掉。
@@ -6033,6 +6200,7 @@ func toRuntimeSessionLogEntries(entries []logEntry) []tuiservices.SessionLogEntr
 			Level:     entry.Level,
 			Source:    entry.Source,
 			Message:   entry.Message,
+			Inline:    entry.Inline,
 		})
 	}
 	return converted
@@ -6047,6 +6215,7 @@ func fromRuntimeSessionLogEntries(entries []tuiservices.SessionLogEntry) []logEn
 			Level:     entry.Level,
 			Source:    entry.Source,
 			Message:   entry.Message,
+			Inline:    strings.TrimSpace(entry.Inline),
 		})
 	}
 	return converted

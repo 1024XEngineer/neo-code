@@ -28,6 +28,7 @@ type logEntry struct {
 	Level     string
 	Source    string
 	Message   string
+	Inline    string
 }
 
 type panel = tuistate.Panel

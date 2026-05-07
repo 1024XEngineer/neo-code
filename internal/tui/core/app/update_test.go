@@ -156,6 +156,10 @@ type stubRuntime struct {
 	availableSkillsErr    error
 }
 
+type noLogPersistenceRuntime struct {
+	agentruntime.Runtime
+}
+
 type snapshotRuntime struct {
 	*stubRuntime
 	sessionContext any
@@ -6350,6 +6354,31 @@ func TestSessionLogViewerPersistenceAndCap(t *testing.T) {
 	}
 	if !strings.Contains(app.logEntries[len(app.logEntries)-1].Message, "entry-519") {
 		t.Fatalf("expected restored newest entry entry-519, got %q", app.logEntries[len(app.logEntries)-1].Message)
+	}
+}
+
+func TestSessionLogFallbackPersistenceWithoutRuntimeLogInterface(t *testing.T) {
+	app, runtime := newTestApp(t)
+	app.runtime = noLogPersistenceRuntime{Runtime: runtime}
+	app.setActiveSessionID("session-fallback")
+
+	app.appendActivity("verify", "Verification started", "completion_passed=true", false)
+	app.persistLogEntriesForActiveSession()
+
+	app.logEntries = nil
+	app.loadLogEntriesForSession("session-fallback")
+	if len(app.logEntries) == 0 {
+		t.Fatalf("expected fallback store to reload persisted log entries")
+	}
+	foundInline := false
+	for _, entry := range app.logEntries {
+		if strings.Contains(entry.Inline, inlineLogMarker+"verify: Verification started | completion_passed=true") {
+			foundInline = true
+			break
+		}
+	}
+	if !foundInline {
+		t.Fatalf("expected persisted inline_message in fallback log store, got %#v", app.logEntries)
 	}
 }
 

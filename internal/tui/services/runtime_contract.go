@@ -248,6 +248,7 @@ type SessionLogEntry struct {
 	Level     string    `json:"level"`
 	Source    string    `json:"source"`
 	Message   string    `json:"message"`
+	Inline    string    `json:"inline_message,omitempty"`
 }
 
 // PhaseChangedPayload 描述阶段切换信息。
