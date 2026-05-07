@@ -8,19 +8,20 @@
   <a href="https://go.dev/">
     <img src="https://img.shields.io/badge/Go-1.25%2B-00ADD8?logo=go&logoColor=white" alt="Go Version" />
   </a>
-  <a href="https://github.com/1024XEngineer/neo-code/actions/workflows/ci.yml">
-    <img src="https://img.shields.io/github/actions/workflow/status/1024XEngineer/neo-code/ci.yml?branch=main&label=CI" alt="CI Status" />
+  <a href="https://github.com/1024XEngineer/neo-code">
+    <img src="https://codecov.io/gh/1024XEngineer/neo-code/branch/main/graph/badge.svg" alt="Codecov Coverage" />
   </a>
   <a href="https://github.com/1024XEngineer/neo-code/blob/main/LICENSE">
-    <img src="https://img.shields.io/github/license/1024XEngineer/neo-code?color=97CA00" alt="License" />
+    <img src="https://img.shields.io/badge/License-MIT-purple?logo=opensourceinitiative&logoColor=white" alt="License MIT" />
   </a>
   <a href="https://neocode-docs.pages.dev/">
     <img src="https://img.shields.io/badge/Docs-Official-1677FF?logo=readthedocs&logoColor=white" alt="Docs" />
   </a>
-  <a href="https://neocode-docs.pages.dev/guide/install">
+  <a href="https://neocode-docs.pages.dev/en/guide/install">
     <img src="https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-4EAA25" alt="Platform" />
   </a>
 </p>
+
 
 <p align="center">
   <a href="https://neocode-docs.pages.dev/">文档</a>
