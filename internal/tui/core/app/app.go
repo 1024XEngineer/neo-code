@@ -160,6 +160,9 @@ type appRuntimeState struct {
 	logPersistDirty           bool
 	logPersistVersion         int
 	transcriptContent         string
+	transcriptProcessFoldAvailable bool
+	transcriptProcessExpanded      bool
+	transcriptProcessExpandedOrdinal int
 	transcriptScrollbarDrag   bool
 	startupScreenLocked       bool
 	suppressAssistantForRun   string

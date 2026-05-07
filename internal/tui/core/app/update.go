@@ -453,10 +453,13 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, batchUpdateCmds()
 		}
 
-		switch a.focus {
-		case panelTranscript:
-			a.handleViewportKeys(&a.transcript, typed)
-			return a, batchUpdateCmds()
+			switch a.focus {
+			case panelTranscript:
+				if key.Matches(typed, a.keys.Send) && a.toggleTranscriptProcessExpansion() {
+					return a, batchUpdateCmds()
+				}
+				a.handleViewportKeys(&a.transcript, typed)
+				return a, batchUpdateCmds()
 		case panelActivity:
 			a.handleViewportKeys(&a.activity, typed)
 			return a, batchUpdateCmds()
@@ -4797,6 +4800,12 @@ func (a *App) handleTranscriptMouse(msg tea.MouseMsg) bool {
 		return false
 	}
 
+	if msg.Button == tea.MouseButtonLeft && msg.Action == tea.MouseActionPress {
+		if a.toggleTranscriptProcessExpansionOnMouse(msg) {
+			return true
+		}
+	}
+
 	switch {
 	case msg.Button == tea.MouseButtonLeft && msg.Action == tea.MouseActionPress:
 		return a.beginTextSelection(msg)
@@ -4813,6 +4822,52 @@ func (a *App) handleTranscriptMouse(msg tea.MouseMsg) bool {
 	default:
 		return false
 	}
+}
+
+func (a *App) toggleTranscriptProcessExpansionOnMouse(msg tea.MouseMsg) bool {
+	if !a.transcriptProcessFoldAvailable {
+		return false
+	}
+	line, ok := a.transcriptLineAtMouse(msg)
+	if !ok {
+		return false
+	}
+	line = ansi.Strip(strings.TrimSpace(line))
+	lower := strings.ToLower(line)
+	if !strings.Contains(lower, "process output hidden") && !strings.Contains(lower, "process output expanded") {
+		return false
+	}
+	_, y, _, _ := a.transcriptBounds()
+	anchorRow := msg.Y - y
+	if anchorRow < 0 {
+		anchorRow = 0
+	}
+	contentLine := a.transcript.YOffset + anchorRow
+	controlOrdinal := transcriptProcessControlOrdinalAtLine(a.transcriptContent, contentLine)
+	return a.toggleTranscriptProcessExpansionWithAnchor(anchorRow, controlOrdinal)
+}
+
+func (a App) transcriptLineAtMouse(msg tea.MouseMsg) (string, bool) {
+	x, y, width, height := a.transcriptBounds()
+	if width <= 0 || height <= 0 {
+		return "", false
+	}
+	if msg.X < x || msg.X >= x+width || msg.Y < y || msg.Y >= y+height {
+		return "", false
+	}
+	bodyRow := msg.Y - y
+	if bodyRow < 0 {
+		return "", false
+	}
+	contentLine := a.transcript.YOffset + bodyRow
+	if contentLine < 0 {
+		return "", false
+	}
+	lines := strings.Split(a.transcriptContent, "\n")
+	if contentLine >= len(lines) {
+		return "", false
+	}
+	return lines[contentLine], true
 }
 
 func (a App) isMouseWithinTranscript(msg tea.MouseMsg) bool {
@@ -5227,10 +5282,63 @@ func (a *App) rebuildTranscript() {
 	}
 
 	atBottom := a.transcript.AtBottom()
+	foldSegments := findTranscriptProcessFoldSegments(a.activeMessages)
+	foldExists := len(foldSegments) > 0
+	a.transcriptProcessFoldAvailable = foldExists
+	if !foldExists {
+		a.transcriptProcessExpanded = false
+		a.transcriptProcessExpandedOrdinal = -1
+	}
+	if a.transcriptProcessExpanded {
+		if a.transcriptProcessExpandedOrdinal < 0 || a.transcriptProcessExpandedOrdinal >= len(foldSegments) {
+			a.transcriptProcessExpandedOrdinal = 0
+		}
+	}
+	applyProcessFold := foldExists
+	foldControl := make(map[int]int, len(foldSegments))
+	foldExpandedStart := make(map[int]bool, len(foldSegments))
+	foldHidden := make(map[int]struct{})
+	for segIdx, seg := range foldSegments {
+		foldControl[seg.Start] = seg.HiddenCount
+		segmentExpanded := a.transcriptProcessExpanded && segIdx == a.transcriptProcessExpandedOrdinal
+		foldExpandedStart[seg.Start] = segmentExpanded
+		if applyProcessFold && !segmentExpanded {
+			for idx := seg.Start; idx <= seg.End; idx++ {
+				if idx == seg.FinalAssistant {
+					continue
+				}
+				foldHidden[idx] = struct{}{}
+			}
+		}
+	}
 	var builder strings.Builder
 	hasBlock := false
 	lastRenderedRole := ""
-	for _, message := range a.activeMessages {
+	for idx := 0; idx < len(a.activeMessages); idx++ {
+		if hiddenCount, exists := foldControl[idx]; exists {
+			control := ""
+			if foldExpandedStart[idx] {
+				control = a.renderTranscriptProcessExpandedBlock(width)
+			} else if applyProcessFold {
+				control = a.renderTranscriptProcessFoldBlock(width, hiddenCount)
+			} else {
+				control = a.renderTranscriptProcessExpandedBlock(width)
+			}
+			if strings.TrimSpace(control) != "" {
+				if hasBlock {
+					builder.WriteString("\n\n")
+				}
+				builder.WriteString(control)
+				hasBlock = true
+				lastRenderedRole = ""
+			}
+		}
+		if applyProcessFold {
+			if _, hidden := foldHidden[idx]; hidden {
+				continue
+			}
+		}
+		message := a.activeMessages[idx]
 		inlineLog := isInlineLogMessage(message)
 		continuation := message.Role == roleAssistant && lastRenderedRole == roleAssistant
 		if inlineLog && lastRenderedRole == roleAssistant {
@@ -5273,6 +5381,186 @@ func (a *App) rebuildTranscript() {
 	if atBottom {
 		a.transcript.GotoBottom()
 	}
+}
+
+func (a *App) toggleTranscriptProcessExpansion() bool {
+	return a.toggleTranscriptProcessExpansionWithAnchor(-1, -1)
+}
+
+func (a *App) toggleTranscriptProcessExpansionWithAnchor(anchorViewportRow int, controlOrdinal int) bool {
+	if !a.transcriptProcessFoldAvailable {
+		return false
+	}
+	if controlOrdinal >= 0 {
+		if a.transcriptProcessExpanded && a.transcriptProcessExpandedOrdinal == controlOrdinal {
+			a.transcriptProcessExpanded = false
+			a.transcriptProcessExpandedOrdinal = -1
+		} else {
+			a.transcriptProcessExpanded = true
+			a.transcriptProcessExpandedOrdinal = controlOrdinal
+		}
+	} else {
+		if a.transcriptProcessExpanded {
+			a.transcriptProcessExpanded = false
+			a.transcriptProcessExpandedOrdinal = -1
+		} else {
+			a.transcriptProcessExpanded = true
+			a.transcriptProcessExpandedOrdinal = 0
+		}
+	}
+	if a.transcriptProcessExpanded {
+		a.state.StatusText = "Process output expanded"
+	} else {
+		a.state.StatusText = "Process output collapsed"
+	}
+	a.rebuildTranscript()
+	if anchorViewportRow >= 0 {
+		a.pinTranscriptProcessControlRow(anchorViewportRow, controlOrdinal)
+	}
+	return true
+}
+
+func (a *App) pinTranscriptProcessControlRow(anchorViewportRow int, controlOrdinal int) {
+	if anchorViewportRow < 0 {
+		return
+	}
+	target := "process output hidden"
+	if a.transcriptProcessExpanded {
+		target = "process output expanded"
+	}
+	lines := strings.Split(a.transcriptContent, "\n")
+	targetLine := -1
+	seen := 0
+	for idx, line := range lines {
+		plain := strings.ToLower(ansi.Strip(strings.TrimSpace(line)))
+		if strings.Contains(plain, target) {
+			// Expanded mode has only one expanded-control line; collapsed mode may have many.
+			if a.transcriptProcessExpanded || controlOrdinal < 0 || seen == controlOrdinal {
+				targetLine = idx
+				break
+			}
+			seen++
+		}
+	}
+	if targetLine < 0 {
+		return
+	}
+	desired := targetLine - anchorViewportRow
+	if desired < 0 {
+		desired = 0
+	}
+	maxOffset := a.transcriptMaxOffset()
+	if desired > maxOffset {
+		desired = maxOffset
+	}
+	a.transcript.SetYOffset(desired)
+}
+
+func transcriptProcessControlOrdinalAtLine(content string, contentLine int) int {
+	if contentLine < 0 {
+		return -1
+	}
+	lines := strings.Split(content, "\n")
+	if contentLine >= len(lines) {
+		return -1
+	}
+	ordinal := 0
+	for idx := 0; idx <= contentLine; idx++ {
+		plain := strings.ToLower(ansi.Strip(strings.TrimSpace(lines[idx])))
+		if strings.Contains(plain, "process output hidden") || strings.Contains(plain, "process output expanded") {
+			if idx == contentLine {
+				return ordinal
+			}
+			ordinal++
+		}
+	}
+	return -1
+}
+
+func (a App) renderTranscriptProcessFoldBlock(width int, hiddenCount int) string {
+	if hiddenCount < 1 {
+		hiddenCount = 1
+	}
+	detail := fmt.Sprintf("Process output hidden (%d messages).", hiddenCount)
+	if a.focus == panelTranscript {
+		detail += " Press Enter to expand."
+	} else {
+		detail += " Focus transcript and press Enter to expand."
+	}
+	message := providertypes.Message{
+		Role:  roleSystem,
+		Parts: []providertypes.ContentPart{providertypes.NewTextPart(detail)},
+	}
+	rendered, _ := a.renderMessageBlockWithCopy(message, width, 0, true)
+	return rendered
+}
+
+func (a App) renderTranscriptProcessExpandedBlock(width int) string {
+	detail := "Process output expanded. Click this line or press Enter to collapse."
+	message := providertypes.Message{
+		Role:  roleSystem,
+		Parts: []providertypes.ContentPart{providertypes.NewTextPart(detail)},
+	}
+	rendered, _ := a.renderMessageBlockWithCopy(message, width, 0, true)
+	return rendered
+}
+
+type transcriptProcessFoldSegment struct {
+	Start          int
+	End            int
+	FinalAssistant int
+	HiddenCount    int
+}
+
+func findTranscriptProcessFoldSegments(messages []providertypes.Message) []transcriptProcessFoldSegment {
+	segments := make([]transcriptProcessFoldSegment, 0, 4)
+	turnStart := 0
+	buildSegment := func(start int, end int) {
+		if start < 0 || end < start || end >= len(messages) {
+			return
+		}
+		finalAssistant := -1
+		for idx := end; idx >= start; idx-- {
+			msg := messages[idx]
+			if msg.Role != roleAssistant {
+				continue
+			}
+			if strings.TrimSpace(renderMessagePartsForDisplay(msg.Parts)) == "" {
+				continue
+			}
+			finalAssistant = idx
+			break
+		}
+		if finalAssistant < 0 {
+			return
+		}
+		hiddenCount := 0
+		for idx := start; idx <= end; idx++ {
+			if idx == finalAssistant {
+				continue
+			}
+			hiddenCount++
+		}
+		if hiddenCount < 1 {
+			return
+		}
+		segments = append(segments, transcriptProcessFoldSegment{
+			Start:          start,
+			End:            end,
+			FinalAssistant: finalAssistant,
+			HiddenCount:    hiddenCount,
+		})
+	}
+
+	for idx := 0; idx < len(messages); idx++ {
+		if messages[idx].Role != roleUser {
+			continue
+		}
+		buildSegment(turnStart, idx-1)
+		turnStart = idx + 1
+	}
+	buildSegment(turnStart, len(messages)-1)
+	return segments
 }
 
 func (a *App) setTranscriptContent(content string) {
@@ -5490,6 +5778,8 @@ func (a *App) startDraftSession() {
 	a.startupScreenLocked = false
 	a.state.ActiveSessionTitle = draftSessionTitle
 	a.activeMessages = nil
+	a.transcriptProcessFoldAvailable = false
+	a.transcriptProcessExpanded = false
 	a.clearActivities()
 	a.clearTodos()
 	a.state.IsCompacting = false
