@@ -248,6 +248,8 @@ export interface UndoRestoreParams {
 export interface CheckpointDiffParams {
   session_id: string
   checkpoint_id?: string
+  run_id?: string
+  scope?: 'run' | string
 }
 
 /** gateway.resolvePermission 参数 */
@@ -515,7 +517,7 @@ export interface ModelEntry {
 }
 
 /** gateway.listModels 响应 */
-export type ListModelsResult = RPCResult<{ models: ModelEntry[]; selected_model_id?: string }>
+export type ListModelsResult = RPCResult<{ models: ModelEntry[]; selected_provider_id?: string; selected_model_id?: string }>
 
 /** gateway.setSessionModel 参数 */
 export interface SetSessionModelParams {

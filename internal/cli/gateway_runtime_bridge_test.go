@@ -1883,7 +1883,12 @@ func TestGatewayRuntimePortBridgeSetSessionModelNotFound(t *testing.T) {
 
 func TestGatewayRuntimePortBridgeGetSessionModelStoreNil(t *testing.T) {
 	stub := &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)}
-	bridge, _ := newGatewayRuntimePortBridge(context.Background(), stub, nil)
+	ps := &providerSelectionStub{
+		listOptions: []configstate.ProviderOption{
+			{ID: "openai", Models: []providertypes.ModelDescriptor{{ID: "gpt-4"}}},
+		},
+	}
+	bridge, _ := newGatewayRuntimePortBridge(context.Background(), stub, nil, nil, ps)
 	defer bridge.Close()
 
 	_, err := bridge.GetSessionModel(context.Background(), gateway.GetSessionModelInput{
@@ -1898,7 +1903,12 @@ func TestGatewayRuntimePortBridgeGetSessionModelStoreNil(t *testing.T) {
 func TestGatewayRuntimePortBridgeGetSessionModelLoadFail(t *testing.T) {
 	store := &bridgeSessionStoreWithLoader{loadErr: errors.New("load failed")}
 	stub := &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)}
-	bridge, _ := newGatewayRuntimePortBridge(context.Background(), stub, store)
+	ps := &providerSelectionStub{
+		listOptions: []configstate.ProviderOption{
+			{ID: "openai", Models: []providertypes.ModelDescriptor{{ID: "gpt-4"}}},
+		},
+	}
+	bridge, _ := newGatewayRuntimePortBridge(context.Background(), stub, store, nil, ps)
 	defer bridge.Close()
 
 	_, err := bridge.GetSessionModel(context.Background(), gateway.GetSessionModelInput{
@@ -1942,7 +1952,11 @@ func TestGatewayRuntimePortBridgeGetSessionModelDisplayNameNotFound(t *testing.T
 	store := &bridgeSessionStoreWithLoader{
 		session: agentsession.Session{ID: "s-1", Provider: "openai", Model: "gpt-4"},
 	}
-	ps := &providerSelectionStub{listOptions: []configstate.ProviderOption{}}
+	ps := &providerSelectionStub{
+		listOptions: []configstate.ProviderOption{
+			{ID: "openai", Models: []providertypes.ModelDescriptor{{ID: "gpt-4", Name: ""}}},
+		},
+	}
 	stub := &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)}
 	bridge, _ := newGatewayRuntimePortBridge(context.Background(), stub, store, nil, ps)
 	defer bridge.Close()
@@ -2185,6 +2199,124 @@ func TestResolveProviderModelForSession(t *testing.T) {
 			t.Fatalf("expected model not found, got %v", err)
 		}
 	})
+}
+
+func TestResolveEffectiveProviderModelSelection(t *testing.T) {
+	t.Run("session provider wins and falls back within provider", func(t *testing.T) {
+		selection, ok := resolveEffectiveProviderModelSelection(
+			[]configstate.ProviderOption{
+				{ID: "openai", Models: []providertypes.ModelDescriptor{{ID: "gpt-4.1"}, {ID: "gpt-4o"}}},
+				{ID: "gemini", Models: []providertypes.ModelDescriptor{{ID: "gemini-2.5-pro"}}},
+			},
+			"openai",
+			"missing-model",
+			"gemini",
+			"gemini-2.5-pro",
+		)
+		if !ok {
+			t.Fatal("expected effective selection")
+		}
+		if selection.ProviderID != "openai" || selection.ModelID != "gpt-4.1" {
+			t.Fatalf("selection = %+v, want openai/gpt-4.1", selection)
+		}
+	})
+
+	t.Run("invalid session provider falls back to global default", func(t *testing.T) {
+		selection, ok := resolveEffectiveProviderModelSelection(
+			[]configstate.ProviderOption{
+				{ID: "openai", Models: []providertypes.ModelDescriptor{{ID: "gpt-4.1"}}},
+				{ID: "gemini", Models: []providertypes.ModelDescriptor{{ID: "gemini-2.5-pro"}}},
+			},
+			"unknown",
+			"unknown-model",
+			"gemini",
+			"gemini-2.5-pro",
+		)
+		if !ok {
+			t.Fatal("expected effective selection")
+		}
+		if selection.ProviderID != "gemini" || selection.ModelID != "gemini-2.5-pro" {
+			t.Fatalf("selection = %+v, want gemini/gemini-2.5-pro", selection)
+		}
+	})
+}
+
+func TestGatewayRuntimePortBridgeListModelsUsesSessionProvider(t *testing.T) {
+	store := &bridgeSessionStoreWithLoader{
+		bridgeSessionStoreStub: bridgeSessionStoreStub{},
+		session: agentsession.Session{
+			ID:       "session-1",
+			Provider: "openai",
+			Model:    "gpt-4.1",
+		},
+	}
+	cfgMgr := &configManagerStub{
+		cfg: config.Config{
+			SelectedProvider: "gemini",
+			CurrentModel:     "gemini-2.5-pro",
+		},
+	}
+	ps := &providerSelectionStub{
+		listOptions: []configstate.ProviderOption{
+			{ID: "openai", Models: []providertypes.ModelDescriptor{{ID: "gpt-4.1", Name: "GPT-4.1"}}},
+			{ID: "gemini", Models: []providertypes.ModelDescriptor{{ID: "gemini-2.5-pro", Name: "Gemini 2.5 Pro"}}},
+		},
+	}
+	bridge, _ := newGatewayRuntimePortBridge(context.Background(), &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)}, store, cfgMgr, ps)
+	defer bridge.Close()
+
+	models, err := bridge.ListModels(context.Background(), gateway.ListModelsInput{
+		SubjectID: testBridgeSubjectID,
+		SessionID: "session-1",
+	})
+	if err != nil {
+		t.Fatalf("ListModels() error = %v", err)
+	}
+	if len(models) != 1 {
+		t.Fatalf("models len = %d, want 1", len(models))
+	}
+	if models[0].Provider != "openai" || models[0].ID != "gpt-4.1" {
+		t.Fatalf("models = %+v, want openai/gpt-4.1 only", models)
+	}
+}
+
+func TestGatewayRuntimePortBridgeGetSessionModelFallsBackToEffectiveSelection(t *testing.T) {
+	store := &bridgeSessionStoreWithLoader{
+		bridgeSessionStoreStub: bridgeSessionStoreStub{},
+		session: agentsession.Session{
+			ID:       "session-1",
+			Provider: "openai",
+			Model:    "missing-model",
+		},
+	}
+	cfgMgr := &configManagerStub{
+		cfg: config.Config{
+			SelectedProvider: "gemini",
+			CurrentModel:     "gemini-2.5-pro",
+		},
+	}
+	ps := &providerSelectionStub{
+		listOptions: []configstate.ProviderOption{
+			{ID: "openai", Models: []providertypes.ModelDescriptor{{ID: "gpt-4.1", Name: "GPT-4.1"}}},
+			{ID: "gemini", Models: []providertypes.ModelDescriptor{{ID: "gemini-2.5-pro", Name: "Gemini 2.5 Pro"}}},
+		},
+	}
+	bridge, _ := newGatewayRuntimePortBridge(context.Background(), &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)}, store, cfgMgr, ps)
+	defer bridge.Close()
+
+	result, err := bridge.GetSessionModel(context.Background(), gateway.GetSessionModelInput{
+		SubjectID: testBridgeSubjectID,
+		SessionID: "session-1",
+	})
+	if err != nil {
+		t.Fatalf("GetSessionModel() error = %v", err)
+	}
+	if result.ProviderID != "openai" || result.ModelID != "gpt-4.1" {
+		t.Fatalf("result = %+v, want openai/gpt-4.1", result)
+	}
+	if result.ModelName != "GPT-4.1" {
+		t.Fatalf("model name = %q, want %q", result.ModelName, "GPT-4.1")
+	}
 }
 
 func TestModelDisplayName(t *testing.T) {

@@ -1555,6 +1555,80 @@ func TestServiceRunDelegatesToContextBuilder(t *testing.T) {
 	}
 }
 
+func TestServiceRunUsesSessionSelectionForMetadataAndBudget(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	if err := manager.Update(context.Background(), func(cfg *config.Config) error {
+		cfg.SelectedProvider = config.GeminiName
+		cfg.CurrentModel = "gemini-current-model"
+		return nil
+	}); err != nil {
+		t.Fatalf("update config: %v", err)
+	}
+
+	store := newMemoryStore()
+	session := agentsession.New("session selection")
+	session.ID = "session-selection"
+	session.Provider = config.OpenAIName
+	session.Model = "openai-session-model"
+	store.sessions[session.ID] = cloneSession(session)
+
+	registry := tools.NewRegistry()
+	registry.Register(&stubTool{name: "filesystem_read_file", content: "default"})
+
+	builder := &stubContextBuilder{
+		buildFn: func(ctx context.Context, input agentcontext.BuildInput) (agentcontext.BuildResult, error) {
+			return agentcontext.BuildResult{
+				SystemPrompt: "delegated prompt",
+				Messages: []providertypes.Message{
+					{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("delegated message")}},
+				},
+			}, nil
+		},
+	}
+	scripted := &scriptedProvider{
+		streams: [][]providertypes.StreamEvent{
+			{providertypes.NewTextDeltaStreamEvent("done")},
+		},
+	}
+	factory := &scriptedProviderFactory{provider: scripted}
+	service := NewWithFactory(manager, registry, store, factory, builder)
+
+	var resolvedBudgetCfg config.Config
+	service.SetBudgetResolver(budgetResolverFunc(func(ctx context.Context, cfg config.Config) (BudgetResolution, error) {
+		resolvedBudgetCfg = cfg
+		return BudgetResolution{PromptBudget: 12345, Source: "derived", ContextWindow: 200000}, nil
+	}))
+
+	if err := service.Run(context.Background(), UserInput{
+		SessionID: session.ID,
+		RunID:     "run-session-selection",
+		Parts:     []providertypes.ContentPart{providertypes.NewTextPart("hello")},
+	}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	if builder.lastInput.Metadata.Provider != config.OpenAIName {
+		t.Fatalf("builder provider = %q, want %q", builder.lastInput.Metadata.Provider, config.OpenAIName)
+	}
+	if builder.lastInput.Metadata.Model != "openai-session-model" {
+		t.Fatalf("builder model = %q, want %q", builder.lastInput.Metadata.Model, "openai-session-model")
+	}
+	if resolvedBudgetCfg.SelectedProvider != config.OpenAIName {
+		t.Fatalf("budget provider = %q, want %q", resolvedBudgetCfg.SelectedProvider, config.OpenAIName)
+	}
+	if resolvedBudgetCfg.CurrentModel != "openai-session-model" {
+		t.Fatalf("budget model = %q, want %q", resolvedBudgetCfg.CurrentModel, "openai-session-model")
+	}
+	if len(factory.configs) != 1 || factory.configs[0].Name != config.OpenAIName {
+		t.Fatalf("factory configs = %+v, want one openai config", factory.configs)
+	}
+	if len(scripted.requests) != 1 || scripted.requests[0].Model != "openai-session-model" {
+		t.Fatalf("requests = %+v, want one openai-session-model request", scripted.requests)
+	}
+}
+
 func TestServiceRunCanDisableMicroCompactViaConfig(t *testing.T) {
 	t.Parallel()
 

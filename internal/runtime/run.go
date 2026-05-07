@@ -564,6 +564,10 @@ func (s *Service) prepareTurnBudgetSnapshot(ctx context.Context, state *runState
 	stage := resolvePlanningStageForState(state)
 	readOnly := isReadOnlyPlanningStage(stage)
 	injectFullPlan := planningNeedsFullPlan(state)
+	resolvedProvider, model, err := resolveCompactProviderSelection(state.session, cfg)
+	if err != nil {
+		return TurnBudgetSnapshot{}, false, err
+	}
 
 	builtContext, err := s.contextBuilder.Build(ctx, agentcontext.BuildInput{
 		Messages:          state.session.Messages,
@@ -580,8 +584,8 @@ func (s *Service) prepareTurnBudgetSnapshot(ctx context.Context, state *runState
 			ProjectRoot:         cfg.Workdir,
 			Workdir:             activeWorkdir,
 			Shell:               cfg.Shell,
-			Provider:            cfg.SelectedProvider,
-			Model:               cfg.CurrentModel,
+			Provider:            resolvedProvider.Name,
+			Model:               model,
 			SessionInputTokens:  state.session.TokenInputTotal,
 			SessionOutputTokens: state.session.TokenOutputTotal,
 		},
@@ -608,10 +612,6 @@ func (s *Service) prepareTurnBudgetSnapshot(ctx context.Context, state *runState
 	}
 	toolSpecs = prioritizeToolSpecsBySkillHints(toolSpecs, activeSkills)
 
-	resolvedProvider, model, err := resolveCompactProviderSelection(state.session, cfg)
-	if err != nil {
-		return TurnBudgetSnapshot{}, false, err
-	}
 	providerRuntimeCfg, err := resolvedProvider.ToRuntimeConfig()
 	if err != nil {
 		return TurnBudgetSnapshot{}, false, err
@@ -627,7 +627,10 @@ func (s *Service) prepareTurnBudgetSnapshot(ctx context.Context, state *runState
 	if notificationHint := strings.TrimSpace(s.drainHookNotificationsForTurn(state)); notificationHint != "" {
 		systemPrompt = mergeEphemeralHookNotificationIntoSystemPrompt(systemPrompt, notificationHint)
 	}
-	promptBudget, budgetSource, contextWindow := s.resolvePromptBudget(ctx, cfg)
+	budgetCfg := cfg
+	budgetCfg.SelectedProvider = resolvedProvider.Name
+	budgetCfg.CurrentModel = model
+	promptBudget, budgetSource, contextWindow := s.resolvePromptBudget(ctx, budgetCfg)
 	requestMessages := append([]providertypes.Message(nil), builtContext.Messages...)
 	thinkingCfg, thinkingErr := resolveThinkingConfig(
 		modelCapabilityHintsForRequest(model, resolvedProvider.Models),
