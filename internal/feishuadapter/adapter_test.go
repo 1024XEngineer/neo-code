@@ -103,16 +103,19 @@ type sentMessage struct {
 }
 
 type fakeMessenger struct {
-	mu       sync.Mutex
-	messages []sentMessage
-	nextID   int
+	mu            sync.Mutex
+	messages      []sentMessage
+	nextID        int
+	sendTextErr   error
+	sendCardErr   error
+	updateCardErr error
 }
 
 func (m *fakeMessenger) SendText(_ context.Context, chatID string, text string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.messages = append(m.messages, sentMessage{chatID: chatID, kind: "text", text: text})
-	return nil
+	return m.sendTextErr
 }
 
 func (m *fakeMessenger) SendPermissionCard(_ context.Context, chatID string, payload PermissionCardPayload) error {
@@ -128,14 +131,14 @@ func (m *fakeMessenger) SendStatusCard(_ context.Context, chatID string, payload
 	m.nextID++
 	cardID := fmt.Sprintf("card-%d", m.nextID)
 	m.messages = append(m.messages, sentMessage{chatID: chatID, kind: "status_card", runCard: payload, cardID: cardID})
-	return cardID, nil
+	return cardID, m.sendCardErr
 }
 
 func (m *fakeMessenger) UpdateCard(_ context.Context, cardID string, payload StatusCardPayload) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.messages = append(m.messages, sentMessage{kind: "update_card", runCard: payload, cardID: cardID})
-	return nil
+	return m.updateCardErr
 }
 
 func (m *fakeMessenger) snapshot() []sentMessage {
@@ -739,7 +742,9 @@ func TestReconnectRebindActiveSessions(t *testing.T) {
 	gw.mu.Lock()
 	gw.pingErr = nil
 	gw.mu.Unlock()
-	time.Sleep(80 * time.Millisecond)
+	waitForCalls(t, gw, func(calls string) bool {
+		return strings.Contains(calls, "bind:session-a:run-a")
+	})
 	cancel()
 	time.Sleep(20 * time.Millisecond)
 
@@ -762,7 +767,10 @@ func TestReconnectRebindTracksMultipleRunsPerSession(t *testing.T) {
 	gw.mu.Lock()
 	gw.pingErr = nil
 	gw.mu.Unlock()
-	time.Sleep(80 * time.Millisecond)
+	waitForCalls(t, gw, func(calls string) bool {
+		return strings.Contains(calls, "bind:session-x:run-a") &&
+			strings.Contains(calls, "bind:session-x:run-b")
+	})
 	cancel()
 	time.Sleep(20 * time.Millisecond)
 
@@ -818,13 +826,211 @@ func TestRetryAuthenticateAndRebindStopsWhenContextCanceled(t *testing.T) {
 	}
 }
 
+func TestBuildIngressSelectsConfiguredMode(t *testing.T) {
+	adapter := newTestAdapter(t)
+	if _, ok := adapter.buildIngress().(*WebhookIngress); !ok {
+		t.Fatalf("expected webhook ingress by default, got %T", adapter.buildIngress())
+	}
+
+	adapter.cfg.IngressMode = IngressModeSDK
+	if _, ok := adapter.buildIngress().(*SDKIngress); !ok {
+		t.Fatalf("expected sdk ingress, got %T", adapter.buildIngress())
+	}
+}
+
+func TestRefreshActiveCardsUpdatesExistingCard(t *testing.T) {
+	adapter := newTestAdapter(t)
+	sessionID := BuildSessionID("chat-refresh")
+	runID := BuildRunID("msg-refresh")
+	adapter.trackSession(sessionID, runID, "chat-refresh", "refresh task")
+
+	adapter.mu.Lock()
+	binding := adapter.activeRuns[runBindingKey(sessionID, runID)]
+	binding.CardID = "card-refresh"
+	binding.RunStartTime = time.Now().Add(-3 * time.Second)
+	adapter.activeRuns[runBindingKey(sessionID, runID)] = binding
+	adapter.mu.Unlock()
+
+	adapter.refreshActiveCards(context.Background())
+
+	msgs := adapterTestMessenger(adapter).snapshot()
+	if len(msgs) != 1 || msgs[0].kind != "update_card" || msgs[0].cardID != "card-refresh" {
+		t.Fatalf("unexpected refresh updates: %#v", msgs)
+	}
+	if msgs[0].runCard.Elapsed == "" {
+		t.Fatalf("expected elapsed time in payload: %#v", msgs[0].runCard)
+	}
+}
+
+func TestRefreshActiveCardsSkipsBindingsWithoutCardID(t *testing.T) {
+	adapter := newTestAdapter(t)
+	sessionID := BuildSessionID("chat-no-card")
+	runID := BuildRunID("msg-no-card")
+	adapter.trackSession(sessionID, runID, "chat-no-card", "no card task")
+
+	adapter.refreshActiveCards(context.Background())
+
+	if msgs := adapterTestMessenger(adapter).snapshot(); len(msgs) != 0 {
+		t.Fatalf("expected no card refresh messages, got %#v", msgs)
+	}
+}
+
+func TestEnsureRunCardUpdatesExistingCard(t *testing.T) {
+	adapter := newTestAdapter(t)
+	sessionID := BuildSessionID("chat-existing-card")
+	runID := BuildRunID("msg-existing-card")
+	adapter.trackSession(sessionID, runID, "chat-existing-card", "existing task")
+
+	adapter.mu.Lock()
+	binding := adapter.activeRuns[runBindingKey(sessionID, runID)]
+	binding.CardID = "card-existing"
+	adapter.activeRuns[runBindingKey(sessionID, runID)] = binding
+	adapter.mu.Unlock()
+
+	if err := adapter.ensureRunCard(context.Background(), sessionID, runID); err != nil {
+		t.Fatalf("ensure existing run card: %v", err)
+	}
+
+	msgs := adapterTestMessenger(adapter).snapshot()
+	if len(msgs) != 1 || msgs[0].kind != "update_card" || msgs[0].cardID != "card-existing" {
+		t.Fatalf("unexpected card update: %#v", msgs)
+	}
+}
+
+func TestTryHandleTextPermissionHandlesApprovalCommands(t *testing.T) {
+	adapter := newTestAdapter(t)
+	adapter.trackSession("session-approve", "run-approve", "chat-approve", "approve task")
+	adapter.mu.Lock()
+	adapter.requestRuns["perm-approve"] = "session-approve|run-approve"
+	adapter.mu.Unlock()
+
+	handled, err := adapter.tryHandleTextPermission(context.Background(), "chat-approve", "允许 perm-approve")
+	if err != nil || !handled {
+		t.Fatalf("allow command = handled:%v err:%v", handled, err)
+	}
+	msgs := adapterTestMessenger(adapter).snapshot()
+	if len(msgs) == 0 || msgs[len(msgs)-1].text != "审批已提交：允许一次。" {
+		t.Fatalf("unexpected approval reply: %#v", msgs)
+	}
+	if adapterTestGateway(adapter).resolveCount != 1 {
+		t.Fatalf("resolve count = %d, want 1", adapterTestGateway(adapter).resolveCount)
+	}
+}
+
+func TestTryHandleTextPermissionHandlesRejectCommand(t *testing.T) {
+	adapter := newTestAdapter(t)
+	adapter.trackSession("session-reject-ok", "run-reject-ok", "chat-reject-ok", "reject task")
+	adapter.mu.Lock()
+	adapter.requestRuns["perm-reject-ok"] = "session-reject-ok|run-reject-ok"
+	adapter.mu.Unlock()
+
+	handled, err := adapter.tryHandleTextPermission(context.Background(), "chat-reject-ok", "拒绝 perm-reject-ok")
+	if err != nil || !handled {
+		t.Fatalf("reject command = handled:%v err:%v", handled, err)
+	}
+	msgs := adapterTestMessenger(adapter).snapshot()
+	if len(msgs) == 0 || msgs[len(msgs)-1].text != "审批已提交：拒绝。" {
+		t.Fatalf("unexpected reject reply: %#v", msgs)
+	}
+}
+
+func TestTryHandleTextPermissionRejectFailureRepliesRetryable(t *testing.T) {
+	adapter := newTestAdapter(t)
+	adapter.trackSession("session-reject", "run-reject", "chat-reject", "reject task")
+	adapter.mu.Lock()
+	adapter.requestRuns["perm-reject"] = "session-reject|run-reject"
+	adapter.activeRuns["session-reject|run-reject"] = sessionBinding{
+		SessionID:      "session-reject",
+		RunID:          "run-reject",
+		ChatID:         "chat-reject",
+		TaskName:       "reject task",
+		Status:         "running",
+		ApprovalStatus: "pending",
+		Result:         "pending",
+	}
+	adapter.mu.Unlock()
+	gateway := adapterTestGateway(adapter)
+	gateway.mu.Lock()
+	gateway.resolveErr = assertErr("boom")
+	gateway.mu.Unlock()
+
+	handled, err := adapter.tryHandleTextPermission(context.Background(), "chat-reject", "拒绝 perm-reject")
+	if err == nil || !handled {
+		t.Fatalf("reject command = handled:%v err:%v", handled, err)
+	}
+	msgs := adapterTestMessenger(adapter).snapshot()
+	if len(msgs) == 0 || msgs[len(msgs)-1].text != "审批提交失败，请稍后重试。" {
+		t.Fatalf("unexpected failure reply: %#v", msgs)
+	}
+}
+
+func TestTryHandleTextPermissionHandlesEmptyAndUnknownCommands(t *testing.T) {
+	adapter := newTestAdapter(t)
+	for _, testCase := range []struct {
+		text        string
+		wantHandled bool
+	}{
+		{text: "", wantHandled: false},
+		{text: "允许", wantHandled: false},
+		{text: "拒绝", wantHandled: false},
+		{text: "hello", wantHandled: false},
+	} {
+		handled, err := adapter.tryHandleTextPermission(context.Background(), "chat", testCase.text)
+		if err != nil {
+			t.Fatalf("text %q error: %v", testCase.text, err)
+		}
+		if handled != testCase.wantHandled {
+			t.Fatalf("text %q handled=%v, want %v", testCase.text, handled, testCase.wantHandled)
+		}
+	}
+}
+
+func TestBindThenRunCoversFailureAndFallbackPaths(t *testing.T) {
+	t.Run("authenticate failure", func(t *testing.T) {
+		adapter := newTestAdapter(t)
+		gateway := adapterTestGateway(adapter)
+		gateway.mu.Lock()
+		gateway.authErr = assertErr("auth failed")
+		gateway.mu.Unlock()
+		if err := adapter.bindThenRun(context.Background(), "session-auth", "run-auth", "chat-auth", "task"); err == nil {
+			t.Fatal("expected authenticate failure")
+		}
+	})
+
+	t.Run("bind failure", func(t *testing.T) {
+		adapter := newTestAdapter(t)
+		gateway := adapterTestGateway(adapter)
+		gateway.mu.Lock()
+		gateway.bindErr = assertErr("bind failed")
+		gateway.mu.Unlock()
+		if err := adapter.bindThenRun(context.Background(), "session-bind", "run-bind", "chat-bind", "task"); err == nil {
+			t.Fatal("expected bind failure")
+		}
+	})
+
+	t.Run("status card fallback text", func(t *testing.T) {
+		adapter := newTestAdapter(t)
+		messenger := adapterTestMessenger(adapter)
+		messenger.mu.Lock()
+		messenger.sendCardErr = assertErr("card failed")
+		messenger.mu.Unlock()
+		if err := adapter.bindThenRun(context.Background(), "session-card", "run-card", "chat-card", "task"); err != nil {
+			t.Fatalf("bind then run: %v", err)
+		}
+		msgs := messenger.snapshot()
+		if len(msgs) == 0 || msgs[len(msgs)-1].text != "任务已受理，正在执行。" {
+			t.Fatalf("unexpected fallback messages: %#v", msgs)
+		}
+	})
+}
+
 func TestReadAndVerifyRequestRejectsNonPost(t *testing.T) {
 	ingress := &WebhookIngress{
 		cfg: Config{
-			SigningSecret:   "sign-secret",
-			IngressMode:     IngressModeWebhook,
-			RequestTimeout:  200 * time.Millisecond,
-			IdempotencyTTL:  2 * time.Minute,
+			SigningSecret:  "sign-secret",
+			IngressMode:    IngressModeWebhook,
+			RequestTimeout: 200 * time.Millisecond,
+			IdempotencyTTL: 2 * time.Minute,
 		},
 	}
 	request := httptest.NewRequest(http.MethodGet, "/feishu/events", nil)
@@ -837,13 +1043,142 @@ func TestReadAndVerifyRequestRejectsNonPost(t *testing.T) {
 	}
 }
 
+func TestNewWebhookIngressProvidesDefaultClockAndTokenValidation(t *testing.T) {
+	ingress, ok := NewWebhookIngress(Config{VerifyToken: "verify"}, nil).(*WebhookIngress)
+	if !ok {
+		t.Fatalf("expected webhook ingress, got %T", ingress)
+	}
+	if ingress.nowFn == nil {
+		t.Fatal("expected default clock")
+	}
+	if !ingress.verifyCallbackToken("", "verify") {
+		t.Fatal("expected header token to be accepted")
+	}
+	ingress.cfg.VerifyToken = ""
+	if ingress.verifyCallbackToken("verify", "verify") {
+		t.Fatal("expected empty configured token to reject callback")
+	}
+}
+
+func TestFormatElapsedCoversRanges(t *testing.T) {
+	if got := formatElapsed(time.Time{}); got != "" {
+		t.Fatalf("zero elapsed = %q, want empty", got)
+	}
+	if got := formatElapsed(time.Now().Add(-500 * time.Millisecond)); got != "刚刚开始" {
+		t.Fatalf("sub-second elapsed = %q", got)
+	}
+	if got := formatElapsed(time.Now().Add(-5 * time.Second)); got != "5s" {
+		t.Fatalf("seconds elapsed = %q", got)
+	}
+	if got := formatElapsed(time.Now().Add(-65 * time.Second)); got != "1m 5s" {
+		t.Fatalf("minutes elapsed = %q", got)
+	}
+	if got := formatElapsed(time.Now().Add(-(time.Hour + 2*time.Minute + 3*time.Second))); got != "1h 2m 3s" {
+		t.Fatalf("hours elapsed = %q", got)
+	}
+}
+
+func TestBuildTaskNameTruncatesLongFirstLine(t *testing.T) {
+	text := "12345678901234567890123456789012345678901\nsecond line"
+	if got := buildTaskName(text); got != "1234567890123456789012345678901234567890..." {
+		t.Fatalf("task name = %q", got)
+	}
+}
+
+func TestExtractHookNotificationSummaryAndHintFallbacks(t *testing.T) {
+	if summary := extractHookNotificationSummary(map[string]any{
+		"payload": map[string]any{"notification": "notify"},
+	}); summary != "notify" {
+		t.Fatalf("summary = %q, want notify", summary)
+	}
+	if summary := extractHookNotificationSummary(map[string]any{
+		"payload": map[string]any{"message": "message"},
+	}); summary != "message" {
+		t.Fatalf("summary = %q, want message", summary)
+	}
+	if hint := extractHookNotificationHint(map[string]any{
+		"payload": map[string]any{"status": "async"},
+	}); hint != "async" {
+		t.Fatalf("hint = %q, want async", hint)
+	}
+}
+
+func TestDeriveRunStatusAdditionalBranches(t *testing.T) {
+	if status := deriveRunStatus("phase_changed", map[string]any{
+		"payload": map[string]any{"to": "execute"},
+	}, "thinking"); status != "running" {
+		t.Fatalf("status = %q, want running", status)
+	}
+	if status := deriveRunStatus("hook_notification", map[string]any{}, "planning"); status != "running" {
+		t.Fatalf("status = %q, want running", status)
+	}
+	if status := deriveRunStatus("unknown", map[string]any{}, ""); status != "thinking" {
+		t.Fatalf("status = %q, want thinking", status)
+	}
+}
+
+func TestIsMentionCurrentBotMatchesContentMarkupAndOpenID(t *testing.T) {
+	cfg := Config{BotUserID: "ou_bot", BotOpenID: "ou_open_bot"}
+	if !isMentionCurrentBot(FeishuMessageEvent{
+		ChatType:    "group",
+		ContentText: `<at user_id="ou_bot"></at> hi`,
+	}, cfg) {
+		t.Fatal("expected content markup to match bot user id")
+	}
+	if !isMentionCurrentBot(FeishuMessageEvent{
+		ChatType: "group",
+		Mentions: []FeishuMention{{OpenID: "ou_open_bot"}},
+	}, cfg) {
+		t.Fatal("expected mention open id to match bot")
+	}
+}
+
+func TestExtractUserVisibleDoneTextHandlesTextFieldAndTypedParts(t *testing.T) {
+	if text := extractUserVisibleDoneText(map[string]any{
+		"payload": map[string]any{"text": "plain done"},
+	}); text != "plain done" {
+		t.Fatalf("done text = %q, want plain done", text)
+	}
+	if text := extractUserVisibleDoneText(map[string]any{
+		"payload": map[string]any{
+			"parts": []any{
+				map[string]any{"type": "image", "text": "ignore"},
+				map[string]any{"type": "text", "content": "keep"},
+			},
+		},
+	}); text != "keep" {
+		t.Fatalf("parts text = %q, want keep", text)
+	}
+}
+
+func TestConsumeGatewayEventsIgnoresNonGatewayNotifications(t *testing.T) {
+	adapter := newTestAdapter(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		adapter.consumeGatewayEvents(ctx)
+		close(done)
+	}()
+
+	adapterTestGateway(adapter).notifications <- GatewayNotification{Method: "other.method", Params: json.RawMessage(`{}`)}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("consumeGatewayEvents did not stop after cancellation")
+	}
+	if msgs := adapterTestMessenger(adapter).snapshot(); len(msgs) != 0 {
+		t.Fatalf("expected no messages for non-gateway event, got %#v", msgs)
+	}
+}
+
 func TestReadAndVerifyRequestRejectsUnreadableBody(t *testing.T) {
 	ingress := &WebhookIngress{
 		cfg: Config{
-			SigningSecret:   "sign-secret",
-			IngressMode:     IngressModeWebhook,
-			RequestTimeout:  200 * time.Millisecond,
-			IdempotencyTTL:  2 * time.Minute,
+			SigningSecret:  "sign-secret",
+			IngressMode:    IngressModeWebhook,
+			RequestTimeout: 200 * time.Millisecond,
+			IdempotencyTTL: 2 * time.Minute,
 		},
 	}
 	request := httptest.NewRequest(http.MethodPost, "/feishu/events", errReader{})
@@ -1049,6 +1384,19 @@ func pushGatewayEvent(t *testing.T, gw *fakeGatewayClient, sessionID string, run
 		t.Fatalf("marshal event: %v", err)
 	}
 	gw.notifications <- GatewayNotification{Method: protocol.MethodGatewayEvent, Params: data}
+}
+
+func waitForCalls(t *testing.T, gw *fakeGatewayClient, match func(string) bool) {
+	t.Helper()
+	deadline := time.Now().Add(300 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		calls := strings.Join(gw.snapshotCalls(), "|")
+		if match(calls) {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("condition not met within timeout, calls=%v", gw.snapshotCalls())
 }
 
 type assertErr string

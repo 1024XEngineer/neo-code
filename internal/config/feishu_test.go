@@ -97,6 +97,23 @@ func TestFeishuConfigValidateRequiresAppSecretEnv(t *testing.T) {
 	}
 }
 
+func TestFeishuConfigValidateRejectsInvalidIngress(t *testing.T) {
+	t.Setenv(FeishuAppSecretEnvVar, "secret")
+	cfg := FeishuConfig{
+		Enabled:              true,
+		Ingress:              "invalid",
+		AppID:                "app",
+		RequestTimeoutSec:    8,
+		IdempotencyTTLSec:    600,
+		ReconnectBackoffMinM: 500,
+		ReconnectBackoffMaxM: 10000,
+		RebindIntervalSec:    15,
+	}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected invalid ingress error")
+	}
+}
+
 func TestFeishuConfigApplyDefaults(t *testing.T) {
 	var cfg FeishuConfig
 	cfg.ApplyDefaults(FeishuConfig{

@@ -3,6 +3,7 @@ package feishuadapter
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -242,5 +243,91 @@ func TestHandleMessageSDKRunFailureReturnsErrorForRetry(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected sdk handler error for retry")
+	}
+}
+
+func TestSDKIngressRunRejectsNilClient(t *testing.T) {
+	originalFactory := newSDKEventClient
+	t.Cleanup(func() { newSDKEventClient = originalFactory })
+
+	newSDKEventClient = func(cfg Config, ingressHandler IngressHandler) sdkEventClient {
+		return nil
+	}
+
+	ingress := NewSDKIngress(Config{
+		IngressMode:         IngressModeSDK,
+		AppID:               "app",
+		AppSecret:           "secret",
+		RequestTimeout:      time.Second,
+		IdempotencyTTL:      time.Minute,
+		ReconnectBackoffMin: time.Second,
+		ReconnectBackoffMax: 2 * time.Second,
+		RebindInterval:      time.Second,
+	}, nil)
+	if err := ingress.Run(context.Background(), &captureIngressHandler{}); err == nil || err.Error() != "create sdk event client: nil client" {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestSDKIngressRunLogsNonCancelError(t *testing.T) {
+	originalFactory := newSDKEventClient
+	t.Cleanup(func() { newSDKEventClient = originalFactory })
+
+	var logged string
+	newSDKEventClient = func(cfg Config, ingressHandler IngressHandler) sdkEventClient {
+		return &fakeSDKEventClient{
+			startFn: func(ctx context.Context) error { return errors.New("stream closed") },
+		}
+	}
+
+	ingress := NewSDKIngress(Config{
+		IngressMode:         IngressModeSDK,
+		AppID:               "app",
+		AppSecret:           "secret",
+		RequestTimeout:      time.Second,
+		IdempotencyTTL:      time.Minute,
+		ReconnectBackoffMin: time.Second,
+		ReconnectBackoffMax: 2 * time.Second,
+		RebindInterval:      time.Second,
+	}, func(format string, args ...any) {
+		logged = format
+	})
+	err := ingress.Run(context.Background(), &captureIngressHandler{})
+	if err == nil || err.Error() != "stream closed" {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if logged == "" {
+		t.Fatal("expected logger to capture non-cancel error")
+	}
+}
+
+func TestMapSDKMessageEventAndCardActionFailures(t *testing.T) {
+	if _, ok := mapSDKMessageEvent(nil); ok {
+		t.Fatal("expected nil event to fail")
+	}
+	if _, ok := mapSDKMessageEvent(&larkevent.EventReq{Body: []byte(`{"header":{"event_type":"other"}}`)}); ok {
+		t.Fatal("expected unrelated event type to fail")
+	}
+	if _, ok := mapSDKCardActionEvent(nil); ok {
+		t.Fatal("expected nil card event to fail")
+	}
+	if _, ok := mapSDKCardActionEvent(&larkevent.EventReq{Body: []byte(`{"event":{"action":{"value":{"request_id":"","decision":"allow_once"}}}}`)}); ok {
+		t.Fatal("expected invalid card event to fail")
+	}
+}
+
+func TestMapSDKCardActionEventSuccessAndExtractSDKMessageTextFallback(t *testing.T) {
+	event, ok := mapSDKCardActionEvent(&larkevent.EventReq{Body: []byte(`{
+		"header":{"event_id":"evt-card"},
+		"event":{"action":{"value":{"request_id":"perm-1","decision":"ALLOW_ONCE"}}}
+	}`)})
+	if !ok {
+		t.Fatal("expected card action to parse")
+	}
+	if event.EventID != "evt-card" || event.RequestID != "perm-1" || event.Decision != "allow_once" {
+		t.Fatalf("unexpected card action: %#v", event)
+	}
+	if text := extractSDKMessageText("plain text"); text != "plain text" {
+		t.Fatalf("fallback sdk text = %q", text)
 	}
 }

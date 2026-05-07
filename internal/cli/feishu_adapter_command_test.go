@@ -184,6 +184,24 @@ func TestInjectFeishuSecretsFromEnvLoadsSDKSecret(t *testing.T) {
 	}
 }
 
+func TestInjectFeishuSecretsFromEnvHandlesNilAndWebhookSkipVerify(t *testing.T) {
+	if err := injectFeishuSecretsFromEnv(nil); err == nil || err.Error() != "feishu options are required" {
+		t.Fatalf("unexpected nil options error: %v", err)
+	}
+
+	t.Setenv(config.FeishuAppSecretEnvVar, "app-secret")
+	options := mergedFeishuOptions{
+		Ingress:                config.FeishuIngressWebhook,
+		InsecureSkipSignVerify: true,
+	}
+	if err := injectFeishuSecretsFromEnv(&options); err != nil {
+		t.Fatalf("inject webhook secret with skip verify: %v", err)
+	}
+	if options.SigningSecret != "" {
+		t.Fatalf("expected signing secret to stay empty when skip verify is enabled, got %q", options.SigningSecret)
+	}
+}
+
 type stubFeishuGatewayClient struct {
 	closed bool
 }
@@ -373,5 +391,16 @@ func TestDefaultFeishuAdapterCommandRunnerPropagatesLoadAndValidateError(t *test
 	err := defaultFeishuAdapterCommandRunner(context.Background(), feishuAdapterCommandOptions{})
 	if err == nil {
 		t.Fatal("expected validation error from config")
+	}
+}
+
+func TestDefaultFeishuAdapterCommandRunnerPropagatesMissingSecretEnv(t *testing.T) {
+	writeFeishuAdapterConfig(t)
+	t.Setenv(config.FeishuAppSecretEnvVar, "")
+	t.Setenv(config.FeishuSigningSecretEnvVar, "")
+
+	err := defaultFeishuAdapterCommandRunner(context.Background(), feishuAdapterCommandOptions{})
+	if err == nil || err.Error() != "config: feishu: "+config.FeishuAppSecretEnvVar+" is required when feishu.enabled=true" {
+		t.Fatalf("runner error = %v, want config validation error", err)
 	}
 }
