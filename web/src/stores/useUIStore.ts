@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import type { DiffHunk, DiffLine } from '@/utils/patchParser'
 
 /** Toast 通知 */
 export interface Toast {
@@ -14,7 +15,8 @@ export interface FileChange {
   status: 'added' | 'modified' | 'deleted' | 'accepted' | 'rejected'
   additions: number
   deletions: number
-  diff?: { type: 'add' | 'del' | 'header'; content: string }[]
+  diff?: DiffLine[]
+  hunks?: DiffHunk[]
   checkpoint_id?: string
 }
 
@@ -54,6 +56,7 @@ interface UIState {
   setTheme: (theme: 'light' | 'dark') => void
   setSearchQuery: (q: string) => void
   addFileChange: (change: FileChange) => void
+  replaceFileChanges: (changes: FileChange[]) => void
   acceptFileChange: (id: string) => void
   rejectFileChange: (id: string) => void
   clearFileChanges: () => void
@@ -90,6 +93,7 @@ export const useUIStore = create<UIState>((set) => ({
     set((s) => ({
       fileChanges: [...s.fileChanges, change],
     })),
+  replaceFileChanges: (fileChanges) => set({ fileChanges }),
   acceptFileChange: (id) =>
     set((s) => ({
       fileChanges: s.fileChanges.map((c) => (c.id === id ? { ...c, status: 'accepted' as const } : c)),

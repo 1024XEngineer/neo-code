@@ -47,9 +47,10 @@ type FileVersionMeta struct {
 
 // CheckpointMeta 是 cp_<checkpointID>.json 的内容。
 type CheckpointMeta struct {
-	CheckpointID string         `json:"checkpoint_id"`
-	CreatedAt    time.Time      `json:"created_at"`
-	FileVersions map[string]int `json:"file_versions"`
+	CheckpointID      string         `json:"checkpoint_id"`
+	CreatedAt         time.Time      `json:"created_at"`
+	FileVersions      map[string]int `json:"file_versions"`
+	ExactFileVersions map[string]int `json:"exact_file_versions,omitempty"`
 }
 
 // perEditIndexEntry 是 index.jsonl 的单行结构，进程重启时用于重建内存索引。
@@ -227,6 +228,16 @@ func (s *PerEditSnapshotStore) CapturePostDelete(absPaths []string) error {
 // pathToVersions 为空时返回 (false, nil) 表示目前无文件被追踪过，无需写入。
 // 调用方在 Finalize 后应调用 Reset 清空 pending。
 func (s *PerEditSnapshotStore) Finalize(checkpointID string) (bool, error) {
+	return s.finalizeCheckpoint(checkpointID, false)
+}
+
+// FinalizeWithExactState 在写入 pre-write 基线的同时，固化 checkpoint 结束时的精确文件版本。
+func (s *PerEditSnapshotStore) FinalizeWithExactState(checkpointID string) (bool, error) {
+	return s.finalizeCheckpoint(checkpointID, true)
+}
+
+// finalizeCheckpoint 根据需要把 pending 基线与 checkpoint 末状态一并落盘。
+func (s *PerEditSnapshotStore) finalizeCheckpoint(checkpointID string, captureExactState bool) (bool, error) {
 	if checkpointID == "" {
 		return false, fmt.Errorf("per-edit: empty checkpointID")
 	}
@@ -265,10 +276,20 @@ func (s *PerEditSnapshotStore) Finalize(checkpointID string) (bool, error) {
 		}
 	}
 
+	var exactSnapshot map[string]int
+	if captureExactState {
+		var err error
+		exactSnapshot, err = s.captureExactStateSnapshot(snapshot)
+		if err != nil {
+			return false, err
+		}
+	}
+
 	meta := CheckpointMeta{
-		CheckpointID: checkpointID,
-		CreatedAt:    time.Now().UTC(),
-		FileVersions: snapshot,
+		CheckpointID:      checkpointID,
+		CreatedAt:         time.Now().UTC(),
+		FileVersions:      snapshot,
+		ExactFileVersions: exactSnapshot,
 	}
 	if err := s.writeCheckpointMeta(meta); err != nil {
 		return false, err
@@ -303,6 +324,36 @@ func (s *PerEditSnapshotStore) FinalizePending(checkpointID string) (bool, error
 		return false, err
 	}
 	return true, nil
+}
+
+// captureExactStateSnapshot 为当前 pending 里的每个文件追加一个“checkpoint 结束态”精确版本。
+func (s *PerEditSnapshotStore) captureExactStateSnapshot(baseVersions map[string]int) (map[string]int, error) {
+	s.indexMu.Lock()
+	defer s.indexMu.Unlock()
+
+	hashes := make([]string, 0, len(baseVersions))
+	for hash := range baseVersions {
+		hashes = append(hashes, hash)
+	}
+	sort.Strings(hashes)
+
+	exactVersions := make(map[string]int, len(hashes))
+	for _, hash := range hashes {
+		display := s.resolveDisplayPathLocked(hash, "")
+		if display == "" {
+			meta, err := s.readVersionMeta(hash, baseVersions[hash])
+			if err != nil {
+				return nil, fmt.Errorf("per-edit: read baseline meta for %s: %w", hash, err)
+			}
+			display = meta.DisplayPath
+		}
+		version, err := s.captureExactCurrentVersionLocked(hash, display)
+		if err != nil {
+			return nil, err
+		}
+		exactVersions[hash] = version
+	}
+	return exactVersions, nil
 }
 
 // Reset 清空 pending 映射，每轮 turn 开始时调用，避免跨轮残留。
@@ -781,6 +832,149 @@ const (
 // FileChangeEntry 是 repository.FileChangeEntry 的别名，保留以维持向后兼容。
 type FileChangeEntry = repository.FileChangeEntry
 
+// DiffCheckpointsToWorkdir 按多个 checkpoint 的首次触碰版本作为基线，对比当前工作区最终状态。
+func (s *PerEditSnapshotStore) DiffCheckpointsToWorkdir(ctx context.Context, checkpointIDs []string) (string, []FileChangeEntry, error) {
+	if s == nil {
+		return "", nil, fmt.Errorf("per-edit: store not available")
+	}
+	baseVersions := make(map[string]int)
+	for _, checkpointID := range checkpointIDs {
+		cp, err := s.readCheckpointMeta(checkpointID)
+		if err != nil {
+			return "", nil, err
+		}
+		for hash, version := range cp.FileVersions {
+			if _, exists := baseVersions[hash]; !exists {
+				baseVersions[hash] = version
+			}
+		}
+	}
+	if len(baseVersions) == 0 {
+		return "", nil, nil
+	}
+
+	s.indexMu.Lock()
+	defer s.indexMu.Unlock()
+
+	hashes := make([]string, 0, len(baseVersions))
+	for hash := range baseVersions {
+		hashes = append(hashes, hash)
+	}
+	sort.Strings(hashes)
+
+	var patch bytes.Buffer
+	changes := make([]FileChangeEntry, 0, len(hashes))
+	for _, hash := range hashes {
+		if err := ctx.Err(); err != nil {
+			return "", nil, err
+		}
+		fromContent, fromIsDir, fromExists, fromDisplay, err := s.contentAtExactVersionLocked(hash, baseVersions[hash])
+		if err != nil {
+			return "", nil, err
+		}
+		display := s.resolveDisplayPathLocked(hash, fromDisplay)
+		toContent, toIsDir, toExists := readWorkdirContent(display)
+		if fromIsDir && toIsDir {
+			continue
+		}
+		if bytes.Equal(fromContent, toContent) && fromExists == toExists && fromIsDir == toIsDir {
+			continue
+		}
+		rel := filepath.ToSlash(s.relativeDisplay(display))
+		kind := classifyFileChange(fromContent, fromIsDir, fromExists, toContent, toIsDir, toExists)
+		if kind != "" {
+			changes = append(changes, FileChangeEntry{Path: rel, Kind: kind})
+		}
+		out, err := unifiedDiffForContents(rel, fromContent, toContent)
+		if err != nil {
+			return "", nil, err
+		}
+		patch.WriteString(out)
+	}
+	return strings.TrimRight(patch.String(), "\n"), changes, nil
+}
+
+// DiffCheckpointsToCheckpoint 汇总多个 checkpoint 的首触碰基线，并对比目标 checkpoint 的精确结束态。
+func (s *PerEditSnapshotStore) DiffCheckpointsToCheckpoint(
+	ctx context.Context,
+	checkpointIDs []string,
+	targetCheckpointID string,
+) (string, []FileChangeEntry, error) {
+	if s == nil {
+		return "", nil, fmt.Errorf("per-edit: store not available")
+	}
+	if strings.TrimSpace(targetCheckpointID) == "" {
+		return "", nil, fmt.Errorf("per-edit: target checkpoint id required")
+	}
+
+	baseVersions := make(map[string]int)
+	for _, checkpointID := range checkpointIDs {
+		cp, err := s.readCheckpointMeta(checkpointID)
+		if err != nil {
+			return "", nil, err
+		}
+		for hash, version := range cp.FileVersions {
+			if _, exists := baseVersions[hash]; !exists {
+				baseVersions[hash] = version
+			}
+		}
+	}
+	if len(baseVersions) == 0 {
+		return "", nil, nil
+	}
+
+	targetMeta, err := s.readCheckpointMeta(targetCheckpointID)
+	if err != nil {
+		return "", nil, err
+	}
+
+	s.indexMu.Lock()
+	defer s.indexMu.Unlock()
+
+	hashes := make([]string, 0, len(baseVersions))
+	for hash := range baseVersions {
+		hashes = append(hashes, hash)
+	}
+	sort.Strings(hashes)
+
+	var patch bytes.Buffer
+	changes := make([]FileChangeEntry, 0, len(hashes))
+	for _, hash := range hashes {
+		if err := ctx.Err(); err != nil {
+			return "", nil, err
+		}
+		fromContent, fromIsDir, fromExists, fromDisplay, err := s.contentAtExactVersionLocked(hash, baseVersions[hash])
+		if err != nil {
+			return "", nil, err
+		}
+		toContent, toIsDir, toExists, toDisplay, err := s.contentAtCheckpointTargetLocked(hash, targetMeta, fromDisplay)
+		if err != nil {
+			return "", nil, err
+		}
+		if fromIsDir && toIsDir {
+			continue
+		}
+		if bytes.Equal(fromContent, toContent) && fromExists == toExists && fromIsDir == toIsDir {
+			continue
+		}
+		display := toDisplay
+		if display == "" {
+			display = fromDisplay
+		}
+		rel := filepath.ToSlash(s.relativeDisplay(display))
+		kind := classifyFileChange(fromContent, fromIsDir, fromExists, toContent, toIsDir, toExists)
+		if kind != "" {
+			changes = append(changes, FileChangeEntry{Path: rel, Kind: kind})
+		}
+		out, err := unifiedDiffForContents(rel, fromContent, toContent)
+		if err != nil {
+			return "", nil, err
+		}
+		patch.WriteString(out)
+	}
+	return strings.TrimRight(patch.String(), "\n"), changes, nil
+}
+
 // ChangedFiles 端到端比较两个 checkpoint，返回 path → 变更类别的列表（按 path 字典序）。
 // 不返回内容差异，仅用于 UI 分组（添加/删除/修改）。完整 patch 仍由 Diff 生成。
 func (s *PerEditSnapshotStore) ChangedFiles(ctx context.Context, fromID, toID string) ([]FileChangeEntry, error) {
@@ -1023,6 +1217,9 @@ func (s *PerEditSnapshotStore) readCheckpointMeta(checkpointID string) (Checkpoi
 	if meta.FileVersions == nil {
 		meta.FileVersions = map[string]int{}
 	}
+	if meta.ExactFileVersions == nil {
+		meta.ExactFileVersions = map[string]int{}
+	}
 	return meta, nil
 }
 
@@ -1038,6 +1235,49 @@ func (s *PerEditSnapshotStore) readVersionMeta(hash string, version int) (FileVe
 
 func (s *PerEditSnapshotStore) readVersionBin(hash string, version int) ([]byte, error) {
 	return os.ReadFile(s.versionBinPath(hash, version))
+}
+
+// captureExactCurrentVersionLocked 读取当前工作区状态，并为同一路径追加一个精确版本。
+func (s *PerEditSnapshotStore) captureExactCurrentVersionLocked(hash, displayPath string) (int, error) {
+	cleanPath := filepath.Clean(displayPath)
+	if cleanPath == "" || cleanPath == "." {
+		return 0, fmt.Errorf("per-edit: missing display path for exact snapshot")
+	}
+
+	versions := s.pathToVersions[hash]
+	nextVersion := 1
+	if len(versions) > 0 {
+		nextVersion = versions[len(versions)-1] + 1
+	}
+
+	content, existed, isDir, mode, err := readFileForCapture(cleanPath)
+	if err != nil {
+		return 0, fmt.Errorf("per-edit: read exact state %s: %w", cleanPath, err)
+	}
+
+	meta := FileVersionMeta{
+		PathHash:    hash,
+		DisplayPath: cleanPath,
+		Version:     nextVersion,
+		Existed:     existed,
+		IsDir:       isDir,
+		Mode:        mode,
+		CreatedAt:   time.Now().UTC(),
+	}
+	if err := s.writeVersionFiles(meta, content); err != nil {
+		return 0, err
+	}
+	if err := s.appendIndex(perEditIndexEntry{
+		PathHash:    hash,
+		DisplayPath: cleanPath,
+		Version:     nextVersion,
+	}); err != nil {
+		return 0, fmt.Errorf("per-edit: append exact index: %w", err)
+	}
+
+	s.pathToVersions[hash] = append(versions, nextVersion)
+	s.displayPaths[hash] = cleanPath
+	return nextVersion, nil
 }
 
 // findNextVersionLocked 返回 hash 下大于 vA 的最小版本号，没有则返回 0。indexMu 必须被持有。
@@ -1108,6 +1348,77 @@ func (s *PerEditSnapshotStore) contentAtCheckpointLocked(hash string, cpVersions
 		return nil, false, false, 0, display, fmt.Errorf("per-edit: read bin v%d for %s: %w", nextVersion, hash, err)
 	}
 	return content, false, true, nextMeta.Mode, display, nil
+}
+
+// contentAtExactVersionLocked 读取指定 hash/version 保存的精确内容，调用方必须持有 indexMu。
+func (s *PerEditSnapshotStore) contentAtExactVersionLocked(hash string, version int) ([]byte, bool, bool, string, error) {
+	meta, err := s.readVersionMeta(hash, version)
+	if err != nil {
+		return nil, false, false, "", fmt.Errorf("per-edit: read exact meta v%d for %s: %w", version, hash, err)
+	}
+	display := s.resolveDisplayPathLocked(hash, meta.DisplayPath)
+	if !meta.Existed {
+		return nil, false, false, display, nil
+	}
+	if meta.IsDir {
+		return nil, true, true, display, nil
+	}
+	content, err := s.readVersionBin(hash, version)
+	if err != nil {
+		return nil, false, false, display, fmt.Errorf("per-edit: read exact bin v%d for %s: %w", version, hash, err)
+	}
+	return content, false, true, display, nil
+}
+
+// contentAtCheckpointTargetLocked 优先读取 checkpoint 记录的精确结束态，缺失时兼容回退到当前工作区。
+func (s *PerEditSnapshotStore) contentAtCheckpointTargetLocked(
+	hash string,
+	cp CheckpointMeta,
+	fallbackDisplay string,
+) ([]byte, bool, bool, string, error) {
+	if version, ok := cp.ExactFileVersions[hash]; ok {
+		return s.contentAtExactVersionLocked(hash, version)
+	}
+	display := s.resolveDisplayPathLocked(hash, fallbackDisplay)
+	content, isDir, exists := readWorkdirContent(display)
+	return content, isDir, exists, display, nil
+}
+
+// classifyFileChange 将端点状态归类为 UI 可展示的 added/deleted/modified。
+func classifyFileChange(
+	fromContent []byte,
+	fromIsDir bool,
+	fromExists bool,
+	toContent []byte,
+	toIsDir bool,
+	toExists bool,
+) FileChangeKind {
+	switch {
+	case !fromExists && toExists:
+		return FileChangeAdded
+	case fromExists && !toExists:
+		return FileChangeDeleted
+	case fromIsDir != toIsDir || !bytes.Equal(fromContent, toContent):
+		return FileChangeModified
+	default:
+		return ""
+	}
+}
+
+// unifiedDiffForContents 生成单个文件的 unified diff 片段，路径已按工作区相对路径传入。
+func unifiedDiffForContents(rel string, fromContent, toContent []byte) (string, error) {
+	diff := difflib.UnifiedDiff{
+		A:        difflib.SplitLines(string(fromContent)),
+		B:        difflib.SplitLines(string(toContent)),
+		FromFile: "a/" + filepath.ToSlash(rel),
+		ToFile:   "b/" + filepath.ToSlash(rel),
+		Context:  3,
+	}
+	out, err := difflib.GetUnifiedDiffString(diff)
+	if err != nil {
+		return "", fmt.Errorf("per-edit: diff %s: %w", rel, err)
+	}
+	return out, nil
 }
 
 func readWorkdirContent(absPath string) ([]byte, bool, bool) {

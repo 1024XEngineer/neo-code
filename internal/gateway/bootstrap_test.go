@@ -623,16 +623,20 @@ func TestDecodeCheckpointDiffPayloadBranches(t *testing.T) {
 	params := decodeCheckpointDiffPayload(map[string]any{
 		"session_id":    " session-1 ",
 		"checkpoint_id": " cp-1 ",
+		"run_id":        " run-1 ",
+		"scope":         " run ",
 	})
-	if params.SessionID != "session-1" || params.CheckpointID != "cp-1" {
+	if params.SessionID != "session-1" || params.CheckpointID != "cp-1" || params.RunID != "run-1" || params.Scope != "run" {
 		t.Fatalf("decode map payload = %#v", params)
 	}
 
 	params = decodeCheckpointDiffPayload(CheckpointDiffInput{
 		SessionID:    "session-2",
 		CheckpointID: "cp-2",
+		RunID:        "run-2",
+		Scope:        "run",
 	})
-	if params.SessionID != "session-2" || params.CheckpointID != "cp-2" {
+	if params.SessionID != "session-2" || params.CheckpointID != "cp-2" || params.RunID != "run-2" || params.Scope != "run" {
 		t.Fatalf("decode struct payload = %#v", params)
 	}
 

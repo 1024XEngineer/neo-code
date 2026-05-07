@@ -326,10 +326,10 @@ type CheckpointDiffInput struct {
 	SessionID string `json:"session_id"`
 	// CheckpointID 是可选的 checkpoint 标识，为空则查最新代码检查点。
 	CheckpointID string `json:"checkpoint_id,omitempty"`
-	// Scope 可选，为 "run" 时按 run_id 做聚合 diff；为空时沿用相邻 checkpoint 对比行为。
-	Scope string `json:"scope,omitempty"`
-	// RunID 在 scope=run 时指定目标 run。
+	// RunID 是 run 范围 diff 的运行标识。
 	RunID string `json:"run_id,omitempty"`
+	// Scope 控制 diff 范围；为空保持相邻 checkpoint，run 表示本次请求净变更。
+	Scope string `json:"scope,omitempty"`
 }
 
 // CheckpointDiffResult 描述两个相邻代码检查点之间的差异。

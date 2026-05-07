@@ -273,7 +273,7 @@ func TestNormalizeJSONRPCRequestCheckpointMethods(t *testing.T) {
 			JSONRPC: JSONRPCVersion,
 			ID:      json.RawMessage(`"checkpoint-diff-1"`),
 			Method:  MethodGatewayCheckpointDiff,
-			Params:  json.RawMessage(`{"session_id":" s-1 ","checkpoint_id":" cp-1 "}`),
+			Params:  json.RawMessage(`{"session_id":" s-1 ","checkpoint_id":" cp-1 ","run_id":" run-1 ","scope":" run "}`),
 		})
 		if rpcErr != nil {
 			t.Fatalf("normalize checkpoint.diff request: %v", rpcErr)
@@ -285,7 +285,7 @@ func TestNormalizeJSONRPCRequestCheckpointMethods(t *testing.T) {
 		if !ok {
 			t.Fatalf("payload type = %T, want CheckpointDiffParams", normalized.Payload)
 		}
-		if params.SessionID != "s-1" || params.CheckpointID != "cp-1" {
+		if params.SessionID != "s-1" || params.CheckpointID != "cp-1" || params.RunID != "run-1" || params.Scope != "run" {
 			t.Fatalf("checkpoint.diff params = %#v, want trimmed params", params)
 		}
 	})
