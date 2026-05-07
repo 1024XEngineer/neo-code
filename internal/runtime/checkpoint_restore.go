@@ -426,7 +426,9 @@ func (s *Service) runDiff(ctx context.Context, sessionID, runID string) (Checkpo
 		firstPerEditCheckpointID string
 		perEditIDs               []string
 	)
-	for _, r := range records {
+	// ListCheckpoints 返回 DESC 顺序（最新在前），因此倒序遍历以获取最早的 per-edit checkpoint。
+	for i := len(records) - 1; i >= 0; i-- {
+		r := records[i]
 		if r.RunID != runID {
 			continue
 		}

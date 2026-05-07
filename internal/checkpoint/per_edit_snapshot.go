@@ -390,6 +390,14 @@ func (s *PerEditSnapshotStore) Restore(ctx context.Context, targetID, guardID st
 			continue
 		}
 
+		// 类型不一致时，先移除旧节点（文件变目录 或 目录变文件）
+		if toExists && toIsDir != fromIsDir && fromExists {
+			if err := os.RemoveAll(display); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return fmt.Errorf("per-edit: restore remove type-mismatch %s: %w", display, err)
+			}
+			fromExists = false
+		}
+
 		if !toExists {
 			if err := os.RemoveAll(display); err != nil && !errors.Is(err, os.ErrNotExist) {
 				return fmt.Errorf("per-edit: restore remove %s: %w", display, err)
@@ -537,6 +545,75 @@ func (s *PerEditSnapshotStore) Diff(ctx context.Context, fromID, toID string) (s
 		buf.WriteString(out)
 	}
 	return strings.TrimRight(buf.String(), "\n"), nil
+}
+
+// RunEndCapture 在 run 结束时为本次 run 涉及的所有文件创建快照版本。
+// 这些快照版本直接追加到版本链（不进入 pending），确保 RunAggregateDiff 的
+// after-side 不再退化到当前 workdir，彻底隔离 run 结束后外部删除/修改的影响。
+// checkpointIDs 应为 PerEditCheckpointIDFromRef 提取后的值（不含 "peredit:" 前缀）。
+func (s *PerEditSnapshotStore) RunEndCapture(ctx context.Context, checkpointIDs []string) error {
+	hashSet := make(map[string]struct{})
+	for _, cid := range checkpointIDs {
+		meta, err := s.readCheckpointMeta(cid)
+		if err != nil {
+			continue
+		}
+		for hash := range meta.FileVersions {
+			hashSet[hash] = struct{}{}
+		}
+	}
+	if len(hashSet) == 0 {
+		return nil
+	}
+
+	s.indexMu.Lock()
+	defer s.indexMu.Unlock()
+
+	for hash := range hashSet {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+
+		display := s.displayPaths[hash]
+		if display == "" {
+			continue
+		}
+
+		content, existed, isDir, mode, err := readFileForCapture(display)
+		if err != nil {
+			continue
+		}
+
+		versions := s.pathToVersions[hash]
+		nextVersion := 1
+		if len(versions) > 0 {
+			nextVersion = versions[len(versions)-1] + 1
+		}
+
+		vm := FileVersionMeta{
+			PathHash:    hash,
+			DisplayPath: display,
+			Version:     nextVersion,
+			Existed:     existed,
+			IsDir:       isDir,
+			Mode:        mode,
+			CreatedAt:   time.Now().UTC(),
+		}
+
+		if err := s.writeVersionFiles(vm, content); err != nil {
+			continue
+		}
+		if err := s.appendIndex(perEditIndexEntry{
+			PathHash:    hash,
+			DisplayPath: display,
+			Version:     nextVersion,
+		}); err != nil {
+			continue
+		}
+
+		s.pathToVersions[hash] = append(versions, nextVersion)
+	}
+	return nil
 }
 
 // RunAggregateDiff 计算一次 run-scoped 聚合 diff：

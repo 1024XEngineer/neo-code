@@ -890,18 +890,18 @@ func TestCheckpointDiff_ScopeRun_ReturnsAggregateDiff(t *testing.T) {
 	spy := &checkpointStoreSpy{
 		listRecords: []agentsession.CheckpointRecord{
 			{
-				CheckpointID:      "cp-1",
-				SessionID:         "session-1",
-				RunID:             "run-target",
-				CreatedAt:         now,
-				CodeCheckpointRef: checkpoint.RefForPerEditCheckpoint("cp-1"),
-			},
-			{
 				CheckpointID:      "cp-2",
 				SessionID:         "session-1",
 				RunID:             "run-target",
 				CreatedAt:         now.Add(time.Second),
 				CodeCheckpointRef: checkpoint.RefForPerEditCheckpoint("cp-2"),
+			},
+			{
+				CheckpointID:      "cp-1",
+				SessionID:         "session-1",
+				RunID:             "run-target",
+				CreatedAt:         now,
+				CodeCheckpointRef: checkpoint.RefForPerEditCheckpoint("cp-1"),
 			},
 		},
 	}
