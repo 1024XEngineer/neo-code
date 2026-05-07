@@ -333,19 +333,9 @@ func (a *Adapter) handleGatewayEvent(ctx context.Context, raw json.RawMessage) {
 		return
 	case "run_done":
 		a.markRunTerminal(sessionID, runID, "success", extractSummaryText(envelope), "")
-		doneText := extractUserVisibleDoneText(envelope)
-		if doneText == "" {
-			doneText = "任务完成。"
-		}
-		_ = a.messenger.SendText(ctx, chatID, doneText)
 		a.untrackRun(sessionID, runID)
 	case "run_error":
 		a.markRunTerminal(sessionID, runID, "failure", "", extractUserVisibleErrorText(envelope))
-		errText := extractUserVisibleErrorText(envelope)
-		if errText == "" {
-			errText = "任务失败，请稍后重试。"
-		}
-		_ = a.messenger.SendText(ctx, chatID, errText)
 		a.untrackRun(sessionID, runID)
 	}
 }

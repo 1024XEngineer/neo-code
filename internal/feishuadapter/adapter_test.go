@@ -460,8 +460,8 @@ func TestGatewayEventsMappedToMessagesAndPermissionCard(t *testing.T) {
 	})
 	time.Sleep(30 * time.Millisecond)
 	msgs := adapterTestMessenger(adapter).snapshot()
-	if len(msgs) < 3 {
-		t.Fatalf("messages = %#v, want >=3", msgs)
+	if len(msgs) < 1 {
+		t.Fatalf("messages = %#v, want >=1", msgs)
 	}
 	foundCard := false
 	for _, message := range msgs {
@@ -594,6 +594,7 @@ func TestRunDonePrefersAssistantTextForUserFacingReply(t *testing.T) {
 	sessionID := BuildSessionID("chat-done-text")
 	runID := BuildRunID("msg-done-text")
 	adapter.trackSession(sessionID, runID, "chat-done-text", "chat-done-text task")
+	_ = adapter.ensureRunCard(context.Background(), sessionID, runID)
 
 	pushGatewayEvent(t, adapterTestGateway(adapter), sessionID, runID, "run_done", map[string]any{
 		"runtime_event_type": "agent_done",
@@ -610,8 +611,8 @@ func TestRunDonePrefersAssistantTextForUserFacingReply(t *testing.T) {
 		t.Fatalf("expected at least one message")
 	}
 	last := msgs[len(msgs)-1]
-	if last.kind != "text" || !strings.Contains(last.text, "这是最终回复") {
-		t.Fatalf("expected assistant final text, got %#v", last)
+	if last.kind != "update_card" || !strings.Contains(last.runCard.Summary, "这是最终回复") {
+		t.Fatalf("expected card update with summary text, got %#v", last)
 	}
 }
 
