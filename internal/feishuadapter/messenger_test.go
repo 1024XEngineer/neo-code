@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 type queuedHTTPResponse struct {
@@ -203,5 +204,115 @@ func TestMessengerCoversConstructorAndTokenFailures(t *testing.T) {
 	err := messenger.SendText(context.Background(), "chat-id", "hello")
 	if err == nil || !strings.Contains(err.Error(), "fetch feishu tenant token failed") {
 		t.Fatalf("error = %v, want token fetch failure", err)
+	}
+}
+
+func TestSendStatusCardReturnsMessageIDAndUpdateCardUsesPatch(t *testing.T) {
+	client := &queuedHTTPClient{
+		responses: []queuedHTTPResponse{
+			{status: 200, body: `{"code":0,"msg":"ok","tenant_access_token":"token","expire":7200}`},
+			{status: 200, body: `{"code":0,"msg":"ok","data":{"message_id":"card-mid"}}`},
+			{status: 200, body: `{"code":0,"msg":"ok","data":{"message_id":"updated"}}`},
+		},
+	}
+	messenger := NewFeishuMessenger("app", "secret", client)
+	cardID, err := messenger.SendStatusCard(context.Background(), "chat-id", StatusCardPayload{
+		TaskName:        "task",
+		Status:          "planning",
+		ApprovalStatus:  "pending",
+		Result:          "success",
+		Elapsed:         "3s",
+		Summary:         "done",
+		AsyncRewakeHint: "async hint",
+	})
+	if err != nil {
+		t.Fatalf("send status card: %v", err)
+	}
+	if cardID != "card-mid" {
+		t.Fatalf("card id = %q, want card-mid", cardID)
+	}
+	if err := messenger.UpdateCard(context.Background(), "card-mid", StatusCardPayload{TaskName: "task"}); err != nil {
+		t.Fatalf("update card: %v", err)
+	}
+	if len(client.requests) != 3 {
+		t.Fatalf("request count = %d, want 3", len(client.requests))
+	}
+	if client.requests[2].Method != http.MethodPatch {
+		t.Fatalf("update method = %s, want PATCH", client.requests[2].Method)
+	}
+	if got := client.requests[2].URL.Path; !strings.HasSuffix(got, "/open-apis/im/v1/messages/card-mid") {
+		t.Fatalf("unexpected update path: %s", got)
+	}
+}
+
+func TestDoJSONRequestWithMessageIDRejectsInvalidSuccessBody(t *testing.T) {
+	client := &queuedHTTPClient{
+		responses: []queuedHTTPResponse{
+			{status: 200, body: `{"code":0,"msg":"ok","tenant_access_token":"token","expire":7200}`},
+			{status: 200, body: `{`},
+		},
+	}
+	messenger := NewFeishuMessenger("app", "secret", client)
+	err := messenger.SendText(context.Background(), "chat-id", "hello")
+	if err == nil || !strings.Contains(err.Error(), "invalid response body") {
+		t.Fatalf("error = %v, want invalid response body", err)
+	}
+}
+
+func TestTenantAccessTokenFallsBackToDefaultExpiry(t *testing.T) {
+	client := &queuedHTTPClient{
+		responses: []queuedHTTPResponse{
+			{status: 200, body: `{"code":0,"msg":"ok","tenant_access_token":"token","expire":0}`},
+		},
+	}
+	token, err := NewFeishuMessenger("app", "secret", client).(*feishuMessenger).tenantAccessToken(context.Background())
+	if err != nil {
+		t.Fatalf("tenant access token: %v", err)
+	}
+	if token != "token" {
+		t.Fatalf("token = %q, want token", token)
+	}
+	messenger := NewFeishuMessenger("app", "secret", client).(*feishuMessenger)
+	messenger.cachedToken = "cached"
+	messenger.expireAt = time.Now().Add(time.Minute)
+	token, err = messenger.tenantAccessToken(context.Background())
+	if err != nil || token != "cached" {
+		t.Fatalf("cached token = %q err=%v", token, err)
+	}
+}
+
+func TestBuildStatusCardAndHelpers(t *testing.T) {
+	card := buildStatusCard(StatusCardPayload{
+		TaskName:        "task",
+		Status:          "planning",
+		ApprovalStatus:  "approved",
+		Result:          "failure",
+		Elapsed:         "5s",
+		Summary:         "summary",
+		AsyncRewakeHint: "hint",
+	})
+	header, _ := card["header"].(map[string]any)
+	if header["template"] != "wathet" {
+		t.Fatalf("template = %v, want wathet", header["template"])
+	}
+	elements, _ := card["elements"].([]map[string]any)
+	if len(elements) < 7 {
+		t.Fatalf("expected detail elements, got %#v", card["elements"])
+	}
+
+	if note := statusNoteElement("task"); note["tag"] != "note" {
+		t.Fatalf("unexpected note element: %#v", note)
+	}
+	if bar := statusBarElement("💭", "状态", "thinking"); bar["tag"] != "column_set" {
+		t.Fatalf("unexpected bar element: %#v", bar)
+	}
+	if icon, color := statusIconAndColor("success"); icon != "🎉" || color != "green" {
+		t.Fatalf("success icon/color = %q/%q", icon, color)
+	}
+	if icon, color := statusIconAndColor("unknown"); icon != "🔵" || color != "blue" {
+		t.Fatalf("default icon/color = %q/%q", icon, color)
+	}
+	if value := fallbackStatusField("  ", "fallback"); value != "fallback" {
+		t.Fatalf("fallback field = %q", value)
 	}
 }

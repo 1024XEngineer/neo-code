@@ -1,180 +1,312 @@
 ---
-title: 飞书远程接入配置指南
-description: 用 Feishu + NeoCode Gateway + Feishu Adapter 完成远程消息驱动本地执行的完整配置与排障。
+title: 飞书接入配置指南
+description: 通过 Feishu Adapter 将飞书消息接入本地 NeoCode Gateway，支持 SDK 长连接与 Webhook 两种模式。
 ---
 
-# 飞书远程接入配置指南
+# 飞书接入配置指南
 
-本文是 NeoCode 的飞书接入实操文档，目标是让你可以在飞书（含手机端）发消息，驱动 NeoCode 执行任务并回传结果。
+配置完成后，你在飞书中发给机器人的消息会路由到本机 Gateway 执行，并把运行状态和最终结果回传到飞书。核心链路：
 
-当前实现（#554 Phase 1）采用 **飞书 Webhook 回调 + NeoCode Feishu Adapter 长连接 Gateway** 的模式。
-
-## 1. 先理解这条链路
-
-```mermaid
-flowchart LR
-  A["飞书消息（私聊 / 群聊@机器人）"] --> B["飞书开放平台回调（公网 HTTPS）"]
-  B --> C["neocode feishu-adapter"]
-  C --> D["Gateway JSON-RPC 长连接"]
-  D --> E["Runtime / Tools 执行"]
-  E --> D
-  D --> C
-  C --> F["回发飞书文本/审批卡片"]
+```text
+飞书消息 -> Feishu Adapter -> 本机 Gateway -> Runtime/Tools -> 飞书卡片回传
 ```
 
-关键点：
+更推荐在终端 TUI / Web UI 直接使用 NeoCode。如果你很少用到飞书接入，**不需要**按本文操作。
 
-- 飞书到 Adapter 这段必须是公网可访问的 HTTPS 回调地址。
-- Adapter 到 Gateway 是本地/内网长连接，不需要暴露 Runtime 私有接口。
-- 当前不是“飞书官方 SDK 长连接接收事件”模式；那是后续阶段（#555）目标。
+## 两种接入模式
 
-## 2. 你需要准备的四个字段
+| 模式 | 适用场景 | 是否需要公网地址 |
+|------|----------|:---:|
+| **SDK**（推荐） | 本机个人使用 | 否 |
+| Webhook | 云端部署 / 公网联调 | 是 |
 
-在飞书开放平台应用里，你至少要拿到并回填这 4 个值：
+本文优先介绍 SDK 模式。Webhook 模式见[末尾章节](#webhook-模式可选)。
 
-1. `App ID` -> `feishu.app_id`
-2. `App Secret` -> `feishu.app_secret`
-3. `Verification Token` -> `feishu.verify_token`
-4. `Signing Secret` -> `feishu.signing_secret`
+---
 
-说明：
+## 1. 前置准备
 
-- 代码默认要求签名校验开启：`signing_secret` 必填。
-- 仅本地联调可设置 `feishu.insecure_skip_signature_verify: true` 临时跳过签名校验，不建议生产使用。
-- 若飞书后台开启了“加密推送（Encrypt Key）”，请确认你的服务端支持解密。当前建议先用未加密模式完成联调。
+开始前请确认你已有：
 
-## 3. 配置文件示例（完整可用）
+1. **可用的飞书应用** — 在[飞书开放平台](https://open.feishu.cn)创建机器人应用，获取 `app_id`（`cli_xxx`）
+2. **应用已发布** — 在飞书开放平台「版本管理与发布」中创建并发布当前版本
+3. **订阅事件** — 「事件与回调」中**选择「使用长连接接收事件」**，并订阅 `im.message.receive_v1`
+4. **本机能运行 NeoCode** — `go run ./cmd/neocode` 或已安装二进制
+5. **有可用工作区** — 一个项目目录路径（如 `F:\qiniu\neo-code` 或 `/home/user/project`）
 
-把下面配置写入 `~/.neocode/config.yaml`（Windows 一般是 `C:\Users\<你>\.neocode\config.yaml`）：
+环境变量：
+
+```bash
+# macOS / Linux
+export FEISHU_APP_SECRET="应用凭据页的 App Secret"
+
+# Windows PowerShell
+$env:FEISHU_APP_SECRET = "应用凭据页的 App Secret"
+```
+
+SDK 模式下不需要 `FEISHU_SIGNING_SECRET`，也不需要配置公网回调 URL。
+
+---
+
+## 2. 配置文件
+
+将以下配置写入 `~/.neocode/config.yaml`（Windows：`C:\Users\<你的用户名>\.neocode\config.yaml`）：
 
 ```yaml
 feishu:
   enabled: true
-  app_id: "cli_xxx"
-  app_secret: "xxx"
-  verify_token: "xxx"
-  signing_secret: "xxx"
+  ingress: "sdk"                 # SDK 长连接模式
+
+  app_id: "cli_xxx"              # 飞书应用 App ID（必填）
+
+  # 群聊 @ 机器人时需要；至少配一个，私聊可不填
+  bot_user_id: "ou_xxx"          # 飞书开放平台「用户 ID」
+  bot_open_id: "ou_xxx"          # 飞书开放平台「Open ID」
+
+  # 以下仅 webhook 模式需要；SDK 可留空
+  verify_token: ""
   insecure_skip_signature_verify: false
-
   adapter:
-    listen: "127.0.0.1:19080"
-    event_path: "/feishu/events"
-    card_path: "/feishu/cards"
+    listen: ""                   # SDK 模式无需
+    event_path: ""
+    card_path: ""
 
-  idempotency_ttl_sec: 600
-  request_timeout_sec: 8
-  reconnect_backoff_min_ms: 500
-  reconnect_backoff_max_ms: 10000
-  rebind_interval_sec: 15
+  # 超时与重连（均可保持默认）
+  request_timeout_sec: 8         # 网关请求超时（秒）
+  idempotency_ttl_sec: 600       # 事件去重窗口（秒）
+  reconnect_backoff_min_ms: 500  # 网关重连最小退避（毫秒）
+  reconnect_backoff_max_ms: 10000# 网关重连最大退避（毫秒）
+  rebind_interval_sec: 15        # 重绑活跃会话间隔（秒）
 
   gateway:
-    # adapter 连接 gateway 的地址（可用命名管道或 TCP）
-    listen: "\\\\.\\pipe\\neocode-gateway-feishu"
-    # 可选：网关 token 文件路径
-    token_file: ""
+    listen: ""                   # Gateway 的 IPC 地址，见下方说明
+    token_file: ""               # 认证 token 文件路径，留空则用默认
 ```
 
-如果你用纯 TCP（不用命名管道），把 `gateway.listen` 和 `feishu.gateway.listen` 改成 `127.0.0.1:<port>`。
+### `gateway.listen` 填什么？
 
-> 注意：`config.yaml` 顶层 `gateway` 段不支持 `listen/http_listen` 这类监听地址字段。  
-> Gateway 的监听地址请通过 `neocode-gateway` 启动参数传入（见下一节命令）。
+Gateway 和 Adapter 通过**同一个 listen 地址**通信。根据你的系统选择：
 
-## 4. 本地启动顺序
+| 系统 | 推荐值 | 说明 |
+|------|--------|------|
+| Windows | `\\.\pipe\neocode-gateway` | 命名管道 |
+| macOS / Linux | `127.0.0.1:8080` | TCP 回环地址 |
 
-建议两个终端：
+`token_file` 留空时，Gateway 和 Adapter 默认使用 `~/.neocode/auth.json`。
 
-1) 启动 Gateway
+---
+
+## 3. 启动步骤
+
+**必须先启动 Gateway，再启动 Adapter**。建议开两个终端窗口。
+
+### 3.1 启动 Gateway
+
+Gateway 是 NeoCode 的后端服务进程。Adapter 通过它接入 Runtime 和工具。
+
+```bash
+# macOS / Linux
+go run ./cmd/neocode-gateway \
+  --listen "127.0.0.1:8080" \
+  --http-listen "127.0.0.1:18181" \
+  --workdir "/home/you/project"
+```
 
 ```powershell
-go run ./cmd/neocode-gateway --listen "\\.\pipe\neocode-gateway-feishu" --http-listen 127.0.0.1:18181
+# Windows PowerShell
+go run ./cmd/neocode-gateway `
+  --listen "\\.\pipe\neocode-gateway" `
+  --http-listen "127.0.0.1:18181" `
+  --workdir "F:\qiniu\neo-code"
 ```
 
-2) 启动 Feishu Adapter
+**Gateway 启动参数说明：**
+
+| 参数 | 必填 | 默认值 | 说明 |
+|------|:---:|--------|------|
+| `--listen` | 是* | — | IPC 监听地址。Windows 用命名管道 `\\.\pipe\<name>`；Unix 用 TCP `127.0.0.1:8080` |
+| `--workdir` | 是* | — | 工作区路径。没指定时会报 `workspace hash is empty` |
+| `--http-listen` | 否 | `127.0.0.1:8400` | HTTP 网络通道监听地址 |
+| `--token-file` | 否 | `~/.neocode/auth.json` | 认证 token 文件 |
+| `--log-level` | 否 | `info` | 日志级别：`debug` / `info` / `warn` / `error` |
+
+*`--listen` 和 `--workdir` 虽非 cobra 强制，但不提供会导致 Adapter 无法连接或 Agent 无法执行。
+
+### 3.2 启动 Adapter
+
+Adapter 负责桥接飞书长连接与本地 Gateway，把飞书消息翻译为 `gateway.run` 调用。
+
+```bash
+# macOS / Linux
+go run ./cmd/neocode feishu-adapter \
+  --ingress sdk \
+  --gateway-listen "127.0.0.1:8080"
+```
 
 ```powershell
-go run ./cmd/neocode feishu-adapter --gateway-listen "\\.\pipe\neocode-gateway-feishu" --listen 127.0.0.1:19080
+# Windows PowerShell
+go run ./cmd/neocode feishu-adapter `
+  --ingress sdk `
+  --gateway-listen "\\.\pipe\neocode-gateway"
 ```
 
-看到 adapter 无报错并保持阻塞运行是正常状态。
+**Adapter 启动参数说明：**
 
-## 5. 公网回调地址（ngrok 示例）
+| 参数 | 必填 | 默认值 | 说明 |
+|------|:---:|--------|------|
+| `--ingress` | 否 | 从 config 读取 | 入站模式：`sdk`（推荐）/ `webhook` |
+| `--gateway-listen` | 是* | — | Gateway 的 IPC 地址，**必须与 Gateway 的 `--listen` 一致** |
+| `--app-id` | 否 | 从 config 读取 | 飞书应用 App ID，仅当 config 未配时需要 |
+| `--gateway-token-file` | 否 | 从 config 读取 | 认证 token 文件路径，与 Gateway 共用同一个 |
 
-把本地 `19080` 暴露到公网：
+### 3.3 如何判断启动成功？
 
-```powershell
-ngrok http 19080
+**Gateway 日志中**应出现：
+
+```
+starting gateway (log-level=info)
+gateway ipc listen address: \\.\pipe\neocode-gateway
+gateway network listen address: 127.0.0.1:18181
 ```
 
-假设拿到公网前缀：
+**Adapter 日志中**应出现：
 
-```text
-https://xxxx.ngrok-free.app
+```
+connected to wss://msg-frontier.feishu.cn
 ```
 
-那么飞书回调地址应为：
+接着去飞书给机器人发一条私聊消息。预期：
 
-- 事件回调：`https://xxxx.ngrok-free.app/feishu/events`
-- 卡片回调：`https://xxxx.ngrok-free.app/feishu/cards`
+1. 飞书聊天窗口出现一张 **"NeoCode 任务状态"** 卡片，显示初始状态为 `thinking`
+2. 卡片实时更新（1.5 秒刷新）：`thinking` → `planning` → `running`
+3. 任务完成后卡片结果更新为 `success`，摘要区显示最终回复内容
+4. **不会再额外发一条文本消息** — 卡片本身就是完整的任务视图
 
-## 6. 飞书后台怎么填
+---
 
-在飞书开放平台应用里：
+## 4. 群聊 @ 触发
 
-1. 订阅方式选择“将回调发送至开发者服务器”。
-2. 事件配置里添加机器人消息事件（如 `im.message.receive_v1`）。
-3. 回调配置里填写：
-   - 请求地址：`https://xxxx.ngrok-free.app/feishu/events`
-   - 卡片回调请求地址：`https://xxxx.ngrok-free.app/feishu/cards`
-4. 加密策略页确认 `Verification Token` 与你配置一致；`Signing Secret` 与本地配置一致。
+要让机器人在群聊中响应，需要：
 
-如果页面提示“返回数据不是合法 JSON”，优先检查：
+1. 在配置中填写 `bot_user_id` 或 `bot_open_id`
+2. 在群里显式 `@机器人` 后再发消息
+3. @ 其他成员不会触发 NeoCode 运行
 
-- URL 是否填错（events 和 cards 路径不要混）；
-- adapter 是否正在监听对应端口；
-- `verify_token` / `signing_secret` 是否一致；
-- ngrok 是否转发到正确本地端口。
+如何获取机器人的 User ID / Open ID：
 
-## 7. 实际收发行为说明
+- 飞书开放平台 → 应用详情 → 「添加应用能力」→ 确认机器人已添加
+- 在飞书中搜索你的机器人，进入对话后查看「设置 → 机器人信息」
 
-- 私聊：默认受理消息。
-- 群聊：默认需要 `@机器人` 才触发执行。
-- 成功触发后会先返回“任务已受理，正在执行”，随后回传最终结果。
-- 审批事件会发卡片（允许一次 / 拒绝）。
+---
 
-## 8. 常见报错与处理
+## 5. 审批功能
 
-### 8.1 `signing_secret is required ...`
+当 Agent 需要执行敏感操作时，飞书卡片会显示审批按钮：
 
-你开启了 `feishu.enabled: true` 但未配置签名密钥。  
-处理：
+- **允许一次**：放行本次操作
+- **拒绝**：拒绝本次操作
 
-- 推荐：补上 `feishu.signing_secret`。
-- 仅联调：`feishu.insecure_skip_signature_verify: true`。
+如果飞书版本不支持卡片按钮回调，可使用文本降级（在聊天框直接发）：
 
-### 8.2 `workspace hash is empty and no default configured`
+- `允许 <request_id>` — 允许
+- `拒绝 <request_id>` — 拒绝
 
-Gateway 运行时没有默认工作区。  
-处理：
+审批结果会直接更新到任务状态卡片中。
 
-- 用带 `workdir` 的会话启动 NeoCode，或在配置里补默认工作区相关项。
+---
 
-### 8.3 `session id ... contains unsupported characters`
+## 6. 状态卡片说明
 
-旧配置/旧分支仍在使用不兼容的 session_id 格式。  
-处理：更新到当前实现并重启 gateway + adapter。
+每个 run 会生成一张状态卡片（标题固定为「NeoCode 任务状态」），后续只更新不重发：
 
-### 8.4 飞书里只看到“受理中”，看不到有效结果
+```
+📋 <任务摘要>
+💭 状态: thinking / planning / running
+⏳ 审批: none / pending / approved / rejected
+🎉 结果: pending / success / failure
+⏱ <运行耗时>
+---
+摘要
+<最终回复或错误信息>
+```
 
-先看 Gateway 日志是否出现 `run async failed`。常见是工作区、权限、Provider 配置问题，不是飞书回调问题。
+---
 
-## 9. 安全建议
+## 7. Webhook 模式（可选）
 
-- 不要把 `app_secret`、`signing_secret`、`verify_token` 提交到仓库。
-- 生产环境不要开启 `insecure_skip_signature_verify`。
-- 回调地址建议走专用域名与 HTTPS，配合最小权限网络策略。
+如果你要部署到服务器或联调环境，使用 webhook 模式：
 
-## 10. 进一步阅读
+```yaml
+feishu:
+  enabled: true
+  ingress: "webhook"
+  app_id: "cli_xxx"
+  verify_token: "你的 Verification Token"
 
-- [配置指南](./configuration)
-- [排障与常见问题](./troubleshooting)
-- [Gateway 集成参考](/reference/gateway)
+  adapter:
+    listen: "127.0.0.1:18080"
+    event_path: "/feishu/events"
+    card_path: "/feishu/cards"
+```
+
+启动 Gateway（同 SDK）：
+
+```bash
+go run ./cmd/neocode-gateway \
+  --listen "127.0.0.1:8080" \
+  --http-listen "127.0.0.1:18181" \
+  --workdir "/path/to/project"
+```
+
+启动 Adapter：
+
+```bash
+# macOS / Linux
+go run ./cmd/neocode feishu-adapter \
+  --ingress webhook \
+  --gateway-listen "127.0.0.1:8080" \
+  --listen "127.0.0.1:18080"
+```
+
+然后用 ngrok / cloudflared 把 `18080` 暴露公网，在飞书后台配置：
+
+- **事件回调地址**：`https://<your-domain>/feishu/events`
+- **卡片回调地址**：`https://<your-domain>/feishu/cards`
+
+---
+
+## 8. 常见问题
+
+### `workspace hash is empty and no default configured`
+
+Gateway 启动时缺少 `--workdir`。解决：加上 `--workdir <项目路径>`。
+
+### `请先设置环境变量 FEISHU_APP_SECRET`
+
+Adapter 启动前强制检查 `FEISHU_APP_SECRET` 环境变量。解决：在当前终端设置后再启动。
+
+### `请先设置环境变量 FEISHU_SIGNING_SECRET`
+
+当前使用 webhook 模式但未设置签名密钥。解决：设置环境变量，或切换到 `sdk` 模式。
+
+### 飞书收到"任务受理失败，请稍后重试"
+
+Adapter 能收消息但调用 Gateway 失败。检查：
+1. Gateway 是否在运行
+2. Adapter 的 `--gateway-listen` 是否与 Gateway 的 `--listen` **完全一致**（包括管道名前缀 `\\.\pipe\`）
+3. Gateway 日志中是否有 `authenticate` / `bindStream` / `run` 记录
+
+### 飞书只看到一张 thinking 卡片，之后没更新
+
+排查：
+1. Gateway 日志中是否出现了 `run_done` / `run_error` 事件
+2. 机器人是否配了 API Key（在 `config.yaml` 中配置 `selected_provider`）
+3. 飞书应用是否已发布当前版本
+4. 事件订阅是否包含 `im.message.receive_v1`
+
+### Gateway 的 `--listen` 和 `--http-listen` 区别?
+
+| 参数 | 用途 | 连接方 |
+|------|------|--------|
+| `--listen` | IPC 通道（Unix socket / Windows 命名管道） | Adapter 独占用 |
+| `--http-listen` | HTTP + WebSocket 网络通道 | Web UI / 外部 HTTP 客户端 |

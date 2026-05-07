@@ -349,10 +349,12 @@ go run ./cmd/neocode --workdir /path/to/workspace
 ```yaml
 feishu:
   enabled: true
+  ingress: "webhook" # webhook | sdk
   app_id: "cli_xxx"
-  app_secret: "cli_secret_xxx"
+  # 群聊 @ 命中建议至少配置一个
+  bot_user_id: "ou_xxx"
+  bot_open_id: "ou_xxx"
   verify_token: "verify_token_xxx"
-  signing_secret: "signing_secret_xxx"
   insecure_skip_signature_verify: false
   adapter:
     listen: "127.0.0.1:18080"
@@ -371,6 +373,8 @@ feishu:
 启动命令：
 
 ```bash
+export FEISHU_APP_SECRET="cli_secret_xxx"
+export FEISHU_SIGNING_SECRET="signing_secret_xxx" # 仅 webhook 模式需要
 neocode feishu-adapter
 ```
 

@@ -55,6 +55,7 @@ NeoCode 是一个运行在本地开发环境中的 AI Coding Agent。
 - Skills 系统：为不同任务启用专用行为和流程。
 - MCP 接入：通过 MCP stdio server 扩展外部工具能力。
 - Gateway 模式：通过本地 JSON-RPC / SSE / WebSocket 接口连接桌面端、脚本和第三方客户端。
+- Feishu Adapter：支持 Webhook 与 SDK 长连接接入，并用单张状态卡片持续回传 run 状态。
 
 ---
 
@@ -254,6 +255,7 @@ go run ./cmd/neocode --session <session_id>
 - [MCP 工具接入（Guide）](https://neocode-docs.pages.dev/guide/mcp)
 - [Skills 使用（Guide）](https://neocode-docs.pages.dev/guide/skills)
 - [飞书远程接入配置（Guide）](https://neocode-docs.pages.dev/guide/feishu-remote-setup)
+- [飞书本地 SDK 长连接（免公网，个人开发推荐）](https://neocode-docs.pages.dev/guide/feishu-remote-setup)
 - [Hooks 使用（Guide）](https://neocode-docs.pages.dev/guide/hooks)
 - [工具与权限（Guide）](https://neocode-docs.pages.dev/guide/tools-permissions)
 - [Runtime / Provider 事件流（Repo Doc）](docs/runtime-provider-event-flow.md)

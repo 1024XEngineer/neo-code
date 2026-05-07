@@ -10,11 +10,14 @@ import (
 
 // Config 描述 Feishu Adapter 的运行配置。
 type Config struct {
+	IngressMode            string
 	ListenAddress          string
 	EventPath              string
 	CardPath               string
 	AppID                  string
 	AppSecret              string
+	BotUserID              string
+	BotOpenID              string
 	VerifyToken            string
 	SigningSecret          string
 	InsecureSkipSignVerify bool
@@ -27,14 +30,9 @@ type Config struct {
 
 // Validate 校验 Feishu Adapter 配置最小可用性。
 func (c Config) Validate() error {
-	if strings.TrimSpace(c.ListenAddress) == "" {
-		return fmt.Errorf("listen address is required")
-	}
-	if strings.TrimSpace(c.EventPath) == "" {
-		return fmt.Errorf("event path is required")
-	}
-	if strings.TrimSpace(c.CardPath) == "" {
-		return fmt.Errorf("card path is required")
+	mode := normalizeIngressMode(c.IngressMode)
+	if mode != IngressModeWebhook && mode != IngressModeSDK {
+		return fmt.Errorf("ingress mode must be %q or %q", IngressModeWebhook, IngressModeSDK)
 	}
 	if strings.TrimSpace(c.AppID) == "" {
 		return fmt.Errorf("app id is required")
@@ -42,11 +40,22 @@ func (c Config) Validate() error {
 	if strings.TrimSpace(c.AppSecret) == "" {
 		return fmt.Errorf("app secret is required")
 	}
-	if strings.TrimSpace(c.VerifyToken) == "" {
-		return fmt.Errorf("verify token is required")
-	}
-	if !c.InsecureSkipSignVerify && strings.TrimSpace(c.SigningSecret) == "" {
-		return fmt.Errorf("signing secret is required unless insecure skip signature verify is enabled")
+	if mode == IngressModeWebhook {
+		if strings.TrimSpace(c.ListenAddress) == "" {
+			return fmt.Errorf("listen address is required")
+		}
+		if strings.TrimSpace(c.EventPath) == "" {
+			return fmt.Errorf("event path is required")
+		}
+		if strings.TrimSpace(c.CardPath) == "" {
+			return fmt.Errorf("card path is required")
+		}
+		if strings.TrimSpace(c.VerifyToken) == "" {
+			return fmt.Errorf("verify token is required")
+		}
+		if !c.InsecureSkipSignVerify && strings.TrimSpace(c.SigningSecret) == "" {
+			return fmt.Errorf("signing secret is required unless insecure skip signature verify is enabled")
+		}
 	}
 	if c.RequestTimeout <= 0 {
 		return fmt.Errorf("request timeout must be greater than zero")
@@ -64,6 +73,22 @@ func (c Config) Validate() error {
 		return fmt.Errorf("rebind interval must be greater than zero")
 	}
 	return nil
+}
+
+const (
+	// IngressModeWebhook 表示 HTTP 回调入站。
+	IngressModeWebhook = "webhook"
+	// IngressModeSDK 表示飞书 SDK 长连接入站。
+	IngressModeSDK = "sdk"
+)
+
+// normalizeIngressMode 归一化入站模式，空值默认回调模式。
+func normalizeIngressMode(raw string) string {
+	trimmed := strings.TrimSpace(strings.ToLower(raw))
+	if trimmed == "" {
+		return IngressModeWebhook
+	}
+	return trimmed
 }
 
 // GatewayNotification 表示网关推送的原始通知。
@@ -87,12 +112,25 @@ type GatewayClient interface {
 type Messenger interface {
 	SendText(ctx context.Context, chatID string, text string) error
 	SendPermissionCard(ctx context.Context, chatID string, payload PermissionCardPayload) error
+	SendStatusCard(ctx context.Context, chatID string, payload StatusCardPayload) (string, error)
+	UpdateCard(ctx context.Context, cardID string, payload StatusCardPayload) error
 }
 
 // PermissionCardPayload 表示最小审批卡片的关键字段。
 type PermissionCardPayload struct {
 	RequestID string
 	Message   string
+}
+
+// StatusCardPayload 表示 run 状态卡片的展示字段。
+type StatusCardPayload struct {
+	TaskName        string
+	Status          string
+	ApprovalStatus  string
+	Result          string
+	Summary         string
+	AsyncRewakeHint string
+	Elapsed         string
 }
 
 // inboundEnvelope 表示飞书回调统一信封。

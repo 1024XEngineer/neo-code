@@ -17,10 +17,11 @@ func TestFeishuConfigValidateEnabledRequiresFields(t *testing.T) {
 }
 
 func TestFeishuConfigValidateRequiresVerifyAndSigningSecretByDefault(t *testing.T) {
+	t.Setenv(FeishuAppSecretEnvVar, "secret")
 	cfg := FeishuConfig{
-		Enabled:   true,
-		AppID:     "app",
-		AppSecret: "secret",
+		Enabled: true,
+		Ingress: FeishuIngressWebhook,
+		AppID:   "app",
 		Adapter: FeishuAdapterConfig{
 			Listen:   "127.0.0.1:18080",
 			EventURI: "/feishu/events",
@@ -38,10 +39,11 @@ func TestFeishuConfigValidateRequiresVerifyAndSigningSecretByDefault(t *testing.
 }
 
 func TestFeishuConfigValidateAllowsInsecureSkipSignatureVerify(t *testing.T) {
+	t.Setenv(FeishuAppSecretEnvVar, "secret")
 	cfg := FeishuConfig{
 		Enabled:                true,
+		Ingress:                FeishuIngressWebhook,
 		AppID:                  "app",
-		AppSecret:              "secret",
 		VerifyToken:            "verify",
 		InsecureSkipSignVerify: true,
 		Adapter: FeishuAdapterConfig{
@@ -57,6 +59,58 @@ func TestFeishuConfigValidateAllowsInsecureSkipSignatureVerify(t *testing.T) {
 	}
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("expected config to pass with insecure skip, got %v", err)
+	}
+}
+
+func TestFeishuConfigValidateSDKModeDoesNotRequireWebhookFields(t *testing.T) {
+	t.Setenv(FeishuAppSecretEnvVar, "secret")
+	cfg := FeishuConfig{
+		Enabled:              true,
+		Ingress:              FeishuIngressSDK,
+		AppID:                "app",
+		RequestTimeoutSec:    8,
+		IdempotencyTTLSec:    600,
+		ReconnectBackoffMinM: 500,
+		ReconnectBackoffMaxM: 10000,
+		RebindIntervalSec:    15,
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("expected sdk ingress config to pass without webhook fields, got %v", err)
+	}
+}
+
+func TestFeishuConfigValidateRequiresAppSecretEnv(t *testing.T) {
+	t.Setenv(FeishuAppSecretEnvVar, "")
+	cfg := FeishuConfig{
+		Enabled:              true,
+		Ingress:              FeishuIngressSDK,
+		AppID:                "app",
+		RequestTimeoutSec:    8,
+		IdempotencyTTLSec:    600,
+		ReconnectBackoffMinM: 500,
+		ReconnectBackoffMaxM: 10000,
+		RebindIntervalSec:    15,
+	}
+	err := cfg.Validate()
+	if err == nil || err.Error() != FeishuAppSecretEnvVar+" is required when feishu.enabled=true" {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestFeishuConfigValidateRejectsInvalidIngress(t *testing.T) {
+	t.Setenv(FeishuAppSecretEnvVar, "secret")
+	cfg := FeishuConfig{
+		Enabled:              true,
+		Ingress:              "invalid",
+		AppID:                "app",
+		RequestTimeoutSec:    8,
+		IdempotencyTTLSec:    600,
+		ReconnectBackoffMinM: 500,
+		ReconnectBackoffMaxM: 10000,
+		RebindIntervalSec:    15,
+	}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected invalid ingress error")
 	}
 }
 
@@ -89,6 +143,9 @@ func TestFeishuConfigApplyDefaultsAllowsNilReceiver(t *testing.T) {
 
 func TestDefaultFeishuConfigProvidesRuntimeDefaults(t *testing.T) {
 	defaults := defaultFeishuConfig()
+	if defaults.Ingress != FeishuIngressWebhook {
+		t.Fatalf("default ingress = %q, want %q", defaults.Ingress, FeishuIngressWebhook)
+	}
 	if defaults.Adapter.Listen != DefaultFeishuAdapterListen {
 		t.Fatalf("default adapter listen = %q, want %q", defaults.Adapter.Listen, DefaultFeishuAdapterListen)
 	}
