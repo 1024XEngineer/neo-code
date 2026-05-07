@@ -31,7 +31,6 @@ import (
 	"neo-code/internal/tools/codebase"
 	diagnosetool "neo-code/internal/tools/diagnose"
 	"neo-code/internal/tools/filesystem"
-	"neo-code/internal/tools/git"
 	"neo-code/internal/tools/mcp"
 	memotool "neo-code/internal/tools/memo"
 	"neo-code/internal/tools/spawnsubagent"
@@ -464,9 +463,6 @@ func buildToolRegistry(cfg config.Config) (*tools.Registry, func() error, error)
 	toolRegistry.Register(todo.New())
 	toolRegistry.Register(spawnsubagent.New())
 	repoSvc := repository.NewService()
-	toolRegistry.Register(git.NewSummary(repoSvc, cfg.Workdir))
-	toolRegistry.Register(git.NewChangedFiles(repoSvc, cfg.Workdir))
-	toolRegistry.Register(git.NewChangedSnippets(repoSvc, cfg.Workdir))
 	toolRegistry.Register(codebase.NewRead(repoSvc, cfg.Workdir))
 	toolRegistry.Register(codebase.NewSearchText(repoSvc, cfg.Workdir))
 	toolRegistry.Register(codebase.NewSearchSymbol(repoSvc, cfg.Workdir))
