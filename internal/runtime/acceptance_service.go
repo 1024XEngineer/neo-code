@@ -108,6 +108,18 @@ func (s *acceptanceService) Decide(ctx context.Context, input acceptanceServiceI
 		return output, nil
 	}
 
+	// verification gate 全部通过时信任其结果：即使 decider 基于启发式返回 continue，
+	// verification gate 已实际运行所有 profile 指定的 verifier 且全部 pass，应直接 accepted。
+	// 避免 decider 与 verification gate 数据源不一致导致死循环。
+	if input.CompletionPassed && verificationGate.Passed {
+		output.Status = acceptance.AcceptanceAccepted
+		output.StopReason = controlplane.StopReasonAccepted
+		output.ContinueHint = ""
+		output.CompletionPassed = true
+		output.VerificationPassed = true
+		return output, nil
+	}
+
 	if input.CompletionPassed && !verificationGate.Passed {
 		return mergeVerificationFailure(output, verificationGate), nil
 	}
