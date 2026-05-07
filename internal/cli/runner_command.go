@@ -15,6 +15,14 @@ import (
 )
 
 var runRunnerCommandFn = defaultRunRunner
+var newRunnerServiceFn = func(cfg runner.Config) (runnerService, error) {
+	return runner.New(cfg)
+}
+
+type runnerService interface {
+	Run(context.Context) error
+	Stop()
+}
 
 type runnerCommandOptions struct {
 	GatewayAddress string
@@ -80,16 +88,16 @@ func defaultRunRunner(ctx context.Context, options runnerCommandOptions) error {
 		token = strings.TrimSpace(string(data))
 	}
 
-	r, err := runner.New(runner.Config{
-		RunnerID:           runnerID,
-		RunnerName:         strings.TrimSpace(options.RunnerName),
-		GatewayAddress:     gatewayAddress,
-		Token:              token,
-		Workdir:            workdir,
-		HeartbeatInterval:  10 * time.Second,
+	r, err := newRunnerServiceFn(runner.Config{
+		RunnerID:            runnerID,
+		RunnerName:          strings.TrimSpace(options.RunnerName),
+		GatewayAddress:      gatewayAddress,
+		Token:               token,
+		Workdir:             workdir,
+		HeartbeatInterval:   10 * time.Second,
 		ReconnectBackoffMin: 500 * time.Millisecond,
 		ReconnectBackoffMax: 10 * time.Second,
-		RequestTimeout:     30 * time.Second,
+		RequestTimeout:      30 * time.Second,
 	})
 	if err != nil {
 		return fmt.Errorf("create runner: %w", err)

@@ -6,6 +6,9 @@ import (
 )
 
 func TestRunnerConfigApplyDefaultsCloneAndDurations(t *testing.T) {
+	var nilCfg *RunnerConfig
+	nilCfg.ApplyDefaults(defaultRunnerConfig())
+
 	cfg := RunnerConfig{
 		WorkdirAllowlist: []string{"/tmp/work"},
 	}
@@ -26,6 +29,19 @@ func TestRunnerConfigApplyDefaultsCloneAndDurations(t *testing.T) {
 	}
 	if cfg.RequestTimeout() != 30*time.Second {
 		t.Fatalf("RequestTimeout() = %s", cfg.RequestTimeout())
+	}
+
+	if (RunnerConfig{}).HeartbeatInterval() != 10*time.Second {
+		t.Fatalf("zero HeartbeatInterval() = %s", (RunnerConfig{}).HeartbeatInterval())
+	}
+	if (RunnerConfig{}).ReconnectBackoffMin() != 500*time.Millisecond {
+		t.Fatalf("zero ReconnectBackoffMin() = %s", (RunnerConfig{}).ReconnectBackoffMin())
+	}
+	if (RunnerConfig{}).ReconnectBackoffMax() != 10*time.Second {
+		t.Fatalf("zero ReconnectBackoffMax() = %s", (RunnerConfig{}).ReconnectBackoffMax())
+	}
+	if (RunnerConfig{}).RequestTimeout() != 30*time.Second {
+		t.Fatalf("zero RequestTimeout() = %s", (RunnerConfig{}).RequestTimeout())
 	}
 
 	clone := cfg.Clone()
@@ -63,5 +79,23 @@ func TestRunnerConfigValidate(t *testing.T) {
 	}
 	if err := valid.Validate(); err != nil {
 		t.Fatalf("Validate() error = %v", err)
+	}
+}
+
+func TestConfigValidateSnapshotIncludesRunnerValidation(t *testing.T) {
+	cfg := StaticDefaults()
+	cfg.Providers = []ProviderConfig{testDefaultProviderConfig()}
+	cfg.SelectedProvider = testProviderName
+	cfg.Workdir = t.TempDir()
+	cfg.Runner = RunnerConfig{
+		Enabled:              true,
+		GatewayAddress:       "127.0.0.1:8080",
+		HeartbeatIntervalSec: 1,
+		ReconnectBackoffMinM: 2,
+		ReconnectBackoffMaxM: 1,
+		RequestTimeoutSec:    1,
+	}
+	if err := cfg.ValidateSnapshot(); err == nil || err.Error() != "config: runner: reconnect_backoff_min_ms must be less than or equal to reconnect_backoff_max_ms" {
+		t.Fatalf("ValidateSnapshot() error = %v", err)
 	}
 }

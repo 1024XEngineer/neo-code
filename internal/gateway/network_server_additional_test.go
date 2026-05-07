@@ -267,6 +267,42 @@ func TestNetworkServerHandleWebSocketParseAndLimitBranches(t *testing.T) {
 	}
 }
 
+func TestNetworkServerRunnerContextInjectionAndDisconnectCleanup(t *testing.T) {
+	registry := NewRunnerRegistry(log.New(io.Discard, "", 0))
+	manager := NewRunnerToolManager(registry, NewStreamRelay(StreamRelayOptions{}), nil, time.Second, log.New(io.Discard, "", 0))
+	server := newTestNetworkServer(t, NetworkServerOptions{
+		RunnerRegistry:    registry,
+		RunnerToolManager: manager,
+	})
+	testContext, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	serveDone := make(chan error, 1)
+	go func() {
+		serveDone <- server.Serve(testContext, nil)
+	}()
+	t.Cleanup(func() {
+		_ = server.Close(context.Background())
+		<-serveDone
+	})
+
+	listenAddress := waitForNetworkAddress(t, server)
+	wsConn, err := websocket.Dial("ws://"+listenAddress+"/ws", "", "http://localhost:3000")
+	if err != nil {
+		t.Fatalf("dial websocket: %v", err)
+	}
+	if err := websocket.Message.Send(wsConn, `{"jsonrpc":"2.0","id":"runner-ping","method":"gateway.ping","params":{}}`); err != nil {
+		t.Fatalf("send ping: %v", err)
+	}
+	ackFrame := receiveWSAckFrame(t, wsConn)
+	if ackFrame.RequestID != "runner-ping" {
+		t.Fatalf("request id = %q, want %q", ackFrame.RequestID, "runner-ping")
+	}
+
+	_ = wsConn.Close()
+	waitForWebSocketConnectionCount(t, server, 0, 2*time.Second)
+}
+
 func TestNetworkServerSSELimitAndWriteErrorBranches(t *testing.T) {
 	server := newTestNetworkServer(t, NetworkServerOptions{
 		MaxStreamConnections: 1,

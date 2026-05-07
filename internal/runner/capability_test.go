@@ -107,6 +107,12 @@ func TestCapSignerHelpers(t *testing.T) {
 	if got := resolvePath("   ", "/tmp/work"); got != "" {
 		t.Fatalf("resolvePath(empty) = %q, want empty", got)
 	}
+	if got := resolvePath("/tmp/abs.txt", "/tmp/work"); got != "/tmp/abs.txt" {
+		t.Fatalf("resolvePath(abs) = %q", got)
+	}
+	if got := resolvePath("child.txt", ""); got != "child.txt" {
+		t.Fatalf("resolvePath(no workdir) = %q", got)
+	}
 
 	if !isToolAllowed([]string{" Bash "}, "bash") {
 		t.Fatal("isToolAllowed() = false, want true")
@@ -140,6 +146,20 @@ func TestCapSignerVerifyPath(t *testing.T) {
 			t.Fatalf("VerifyPath() error = %v, want %v", err, ErrCapabilityPathNotAllowed)
 		}
 	})
+
+	t.Run("blank allowlist entry is ignored", func(t *testing.T) {
+		signer := NewCapSigner([]string{"   ", "/safe/base"})
+		if err := signer.VerifyPath("/safe/base/file.txt"); err != nil {
+			t.Fatalf("VerifyPath() error = %v", err)
+		}
+	})
+
+	if got := normalizePath("  "); got != "" {
+		t.Fatalf("normalizePath(empty) = %q", got)
+	}
+	if got := normalizePath("/safe/base/../child"); got != "/safe/child" {
+		t.Fatalf("normalizePath(clean) = %q", got)
+	}
 }
 
 func validCapabilityToken(t *testing.T, toolName string) security.CapabilityToken {

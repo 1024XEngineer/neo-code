@@ -96,6 +96,12 @@ func TestNewRunnerDefaultsAndValidation(t *testing.T) {
 		if r.capSigner == nil {
 			t.Fatal("capSigner = nil, want initialized")
 		}
+		if r.cfg.Shell == "" {
+			t.Fatal("Shell = empty, want default shell")
+		}
+		if r.toolMgr == nil {
+			t.Fatal("toolMgr = nil, want initialized registry")
+		}
 	})
 }
 
@@ -177,6 +183,13 @@ func TestRunnerHandleToolRequestInvalidParamsAndSendRequest(t *testing.T) {
 	}
 	if pong["result"] != "pong" {
 		t.Fatalf("pong result = %v, want pong", pong["result"])
+	}
+
+	serverConn.Close()
+	r.handlePing(runnerConn, map[string]any{"id": "ping-2"})
+
+	if err := r.sendRequest(runnerConn, "gateway.executeToolResult", map[string]any{"bad": make(chan int)}); err == nil || !strings.Contains(err.Error(), "marshal request") {
+		t.Fatalf("sendRequest(marshal failure) error = %v", err)
 	}
 }
 
@@ -304,6 +317,171 @@ func TestRunnerRunAlreadyRunningAndStop(t *testing.T) {
 	if !canceled {
 		t.Fatal("Stop() did not call cancel")
 	}
+}
+
+func TestRunnerHandleToolRequestDeniedAndToolError(t *testing.T) {
+	t.Run("capability denied", func(t *testing.T) {
+		r := &Runner{
+			cfg: Config{
+				RunnerID:       "runner-1",
+				Workdir:        "/safe/work",
+				RequestTimeout: 200 * time.Millisecond,
+			},
+			logger:    log.New(io.Discard, "", 0),
+			toolMgr:   &runnerManagerAdapter{},
+			capSigner: NewCapSigner([]string{"/safe/work"}),
+		}
+		runnerConn, serverConn := newRunnerSocketPair(t)
+		defer runnerConn.Close()
+		defer serverConn.Close()
+
+		r.handleToolRequest(context.Background(), runnerConn, map[string]any{
+			"params": map[string]any{
+				"request_id":   "req-1",
+				"session_id":   "session-1",
+				"run_id":       "run-1",
+				"tool_call_id": "tool-1",
+				"tool_name":    "filesystem_read_file",
+				"arguments":    json.RawMessage(`{"path":"../../etc/passwd"}`),
+			},
+		})
+
+		var result map[string]any
+		if err := serverConn.ReadJSON(&result); err != nil {
+			t.Fatalf("ReadJSON() error = %v", err)
+		}
+		params := result["params"].(map[string]any)
+		if params["is_error"] != true {
+			t.Fatalf("is_error = %v, want true", params["is_error"])
+		}
+	})
+
+	t.Run("tool execution failure", func(t *testing.T) {
+		r := &Runner{
+			cfg: Config{
+				RunnerID:       "runner-1",
+				Workdir:        t.TempDir(),
+				RequestTimeout: 200 * time.Millisecond,
+			},
+			logger: log.New(io.Discard, "", 0),
+			toolMgr: &runnerManagerAdapter{
+				executeFn: func(context.Context, tools.ToolCallInput) (tools.ToolResult, error) {
+					return tools.ToolResult{}, errors.New("tool failed")
+				},
+			},
+			capSigner: NewCapSigner(nil),
+		}
+		runnerConn, serverConn := newRunnerSocketPair(t)
+		defer runnerConn.Close()
+		defer serverConn.Close()
+
+		r.handleToolRequest(context.Background(), runnerConn, map[string]any{
+			"params": map[string]any{
+				"request_id":   "req-1",
+				"session_id":   "session-1",
+				"run_id":       "run-1",
+				"tool_call_id": "tool-1",
+				"tool_name":    "bash",
+			},
+		})
+
+		var result map[string]any
+		if err := serverConn.ReadJSON(&result); err != nil {
+			t.Fatalf("ReadJSON() error = %v", err)
+		}
+		params := result["params"].(map[string]any)
+		if params["content"] != "tool failed" || params["is_error"] != true {
+			t.Fatalf("params = %#v", params)
+		}
+	})
+}
+
+func TestRunnerEventLoopAndConnectErrors(t *testing.T) {
+	t.Run("event loop ignores invalid json and unknown methods", func(t *testing.T) {
+		r := &Runner{logger: log.New(io.Discard, "", 0)}
+		runnerConn, serverConn := newRunnerSocketPair(t)
+		defer runnerConn.Close()
+		defer serverConn.Close()
+
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan error, 1)
+		go func() {
+			done <- r.eventLoop(ctx, runnerConn)
+		}()
+
+		if err := serverConn.WriteMessage(websocket.TextMessage, []byte("{")); err != nil {
+			t.Fatalf("WriteMessage(invalid json) error = %v", err)
+		}
+		if err := serverConn.WriteJSON(map[string]any{"jsonrpc": "2.0", "method": "gateway.unknown"}); err != nil {
+			t.Fatalf("WriteJSON(unknown) error = %v", err)
+		}
+		cancel()
+		runnerConn.Close()
+		if err := <-done; err == nil {
+			t.Fatal("eventLoop() error = nil")
+		}
+	})
+
+	t.Run("connectAndServe wraps auth and register failures", func(t *testing.T) {
+		authServer := newRunnerGatewayServer(t, func(conn *websocket.Conn) {
+			_ = conn.Close()
+		})
+		defer authServer.Close()
+
+		r := &Runner{
+			cfg: Config{
+				RunnerID:          "runner-1",
+				GatewayAddress:    runnerGatewayAddress(authServer.URL),
+				Workdir:           t.TempDir(),
+				HeartbeatInterval: 10 * time.Millisecond,
+				RequestTimeout:    200 * time.Millisecond,
+			},
+			logger: log.New(io.Discard, "", 0),
+		}
+		if err := r.connectAndServe(context.Background()); err == nil || !strings.Contains(err.Error(), "authenticate:") {
+			if err == nil || !(strings.Contains(err.Error(), "authenticate:") || strings.Contains(err.Error(), "register runner:")) {
+				t.Fatalf("connectAndServe(auth) error = %v", err)
+			}
+		}
+
+		registerServer := newRunnerGatewayServer(t, func(conn *websocket.Conn) {
+			var authenticate map[string]any
+			_ = conn.ReadJSON(&authenticate)
+			_ = conn.Close()
+		})
+		defer registerServer.Close()
+		r.cfg.GatewayAddress = runnerGatewayAddress(registerServer.URL)
+		if err := r.connectAndServe(context.Background()); err == nil || !(strings.Contains(err.Error(), "register runner:") || strings.Contains(err.Error(), "read message:")) {
+			t.Fatalf("connectAndServe(register) error = %v", err)
+		}
+	})
+}
+
+func TestRunnerHeartbeatLoopSendsPing(t *testing.T) {
+	r := &Runner{
+		cfg:    Config{HeartbeatInterval: 10 * time.Millisecond, RequestTimeout: time.Second},
+		logger: log.New(io.Discard, "", 0),
+	}
+	runnerConn, serverConn := newRunnerSocketPair(t)
+	defer runnerConn.Close()
+	defer serverConn.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		r.heartbeatLoop(ctx, runnerConn)
+		close(done)
+	}()
+
+	var ping map[string]any
+	if err := serverConn.ReadJSON(&ping); err != nil {
+		t.Fatalf("ReadJSON() error = %v", err)
+	}
+	if ping["method"] != "gateway.ping" {
+		t.Fatalf("method = %v, want gateway.ping", ping["method"])
+	}
+	cancel()
+	<-done
 }
 
 func newRunnerSocketPair(t *testing.T) (*websocket.Conn, *websocket.Conn) {

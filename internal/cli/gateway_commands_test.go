@@ -1,9 +1,13 @@
 package cli
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/spf13/cobra"
+
+	"neo-code/internal/gateway"
+	agentruntime "neo-code/internal/runtime"
 )
 
 func TestNormalizeGatewayLogLevel(t *testing.T) {
@@ -66,4 +70,27 @@ func TestMustReadInheritedWorkdir(t *testing.T) {
 			t.Fatalf("mustReadInheritedWorkdir(cmd) = %q, want /tmp/project", got)
 		}
 	})
+}
+
+func TestInjectRunnerDispatcherIntoRuntime(t *testing.T) {
+	injectRunnerDispatcherIntoRuntime(nil, nil)
+	injectRunnerDispatcherIntoRuntime(&gatewayRuntimePortBridge{}, nil)
+	injectRunnerDispatcherIntoRuntime(&gatewayRuntimePortBridge{}, &gateway.RunnerToolManager{})
+
+	nonServiceBridge := &gatewayRuntimePortBridge{runtime: &runtimeStub{}}
+	multiNonService := gateway.NewMultiWorkspaceRuntime(nil, "", nil)
+	multiNonService.PreloadWorkspaceBundle("non-service", nonServiceBridge, func() error { return nil })
+	injectRunnerDispatcherIntoRuntime(multiNonService, &gateway.RunnerToolManager{})
+
+	service := &agentruntime.Service{}
+	bridge := &gatewayRuntimePortBridge{runtime: service}
+	multi := gateway.NewMultiWorkspaceRuntime(nil, "", nil)
+	multi.PreloadWorkspaceBundle("default", bridge, func() error { return nil })
+
+	injectRunnerDispatcherIntoRuntime(multi, &gateway.RunnerToolManager{})
+
+	field := reflect.ValueOf(service).Elem().FieldByName("runnerToolDispatcher")
+	if !field.IsValid() || field.IsNil() {
+		t.Fatal("runnerToolDispatcher was not injected")
+	}
 }

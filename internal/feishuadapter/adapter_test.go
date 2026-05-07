@@ -1231,6 +1231,11 @@ func TestHelperFunctionsCoverFallbackBranches(t *testing.T) {
 	}); text != "任务失败：boom" {
 		t.Fatalf("error text = %q, want fallback error", text)
 	}
+	if text := extractUserVisibleErrorText(map[string]any{
+		"payload": map[string]any{"error": "runner_offline"},
+	}); text != "本机 Runner 未连接，请在电脑上启动 `neocode runner`" {
+		t.Fatalf("runner error text = %q", text)
+	}
 	if text := extractUserVisibleErrorText(nil); text != "" {
 		t.Fatalf("error text = %q, want empty", text)
 	}
