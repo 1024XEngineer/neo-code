@@ -122,11 +122,19 @@ type PermissionCardPayload struct {
 	Message   string
 }
 
+// ApprovalRecord 记录单次工具审批请求及其结论。
+type ApprovalRecord struct {
+	ToolName string
+	Decision string // "pending", "allow_once", "reject"
+}
+
 // StatusCardPayload 表示 run 状态卡片的展示字段。
 type StatusCardPayload struct {
 	TaskName        string
 	Status          string
 	ApprovalStatus  string
+	ApprovalRecords []ApprovalRecord
+	PendingCount    int
 	Result          string
 	Summary         string
 	AsyncRewakeHint string

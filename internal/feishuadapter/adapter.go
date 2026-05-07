@@ -19,6 +19,13 @@ const defaultSignatureMaxSkew = 5 * time.Minute
 const defaultProgressNotifyInterval = 2 * time.Second
 const defaultCardRefreshInterval = 1500 * time.Millisecond
 
+type approvalEntry struct {
+	RequestID string
+	ToolName  string
+	Reason    string
+	Decision  string // "pending", "allow_once", "reject"
+}
+
 type sessionBinding struct {
 	SessionID       string
 	ChatID          string
@@ -27,6 +34,7 @@ type sessionBinding struct {
 	TaskName        string
 	Status          string
 	ApprovalStatus  string
+	ApprovalRecords []approvalEntry
 	Result          string
 	LastSummary     string
 	AsyncRewakeHint string
@@ -316,9 +324,9 @@ func (a *Adapter) handleGatewayEvent(ctx context.Context, raw json.RawMessage) {
 		if envelope != nil {
 			if runtimeType := readString(envelope, "runtime_event_type"); runtimeType != "" {
 				if strings.EqualFold(runtimeType, "permission_requested") {
-					requestID, reason := extractPermissionRequest(envelope)
+					requestID, toolName, reason := extractPermissionRequest(envelope)
 					if requestID != "" {
-						a.markPermissionPending(sessionID, runID, requestID, reason)
+						a.markPermissionPending(sessionID, runID, requestID, toolName, reason)
 						_ = a.messenger.SendPermissionCard(ctx, chatID, PermissionCardPayload{
 							RequestID: requestID,
 							Message:   reason,
@@ -494,12 +502,18 @@ func (a *Adapter) handleRunProgressCard(ctx context.Context, sessionID string, r
 }
 
 // markPermissionPending 将权限请求映射到 run 卡片，便于用户在同一卡片观察审批状态。
-func (a *Adapter) markPermissionPending(sessionID string, runID string, requestID string, reason string) {
+func (a *Adapter) markPermissionPending(sessionID string, runID string, requestID string, toolName string, reason string) {
 	key := runBindingKey(sessionID, runID)
 	a.mu.Lock()
 	binding, ok := a.activeRuns[key]
 	if ok {
 		binding.ApprovalStatus = "pending"
+		binding.ApprovalRecords = append(binding.ApprovalRecords, approvalEntry{
+			RequestID: requestID,
+			ToolName:  toolName,
+			Reason:    reason,
+			Decision:  "pending",
+		})
 		if strings.TrimSpace(reason) != "" {
 			binding.LastSummary = strings.TrimSpace(reason)
 		}
@@ -532,11 +546,16 @@ func (a *Adapter) updateApprovalStatus(requestID string, decision string) {
 	key := a.requestRuns[strings.TrimSpace(requestID)]
 	binding, ok := a.activeRuns[key]
 	if ok {
-		switch normalizedDecision {
-		case "allow_once", "allow_session":
-			binding.ApprovalStatus = "approved"
-		case "reject":
-			binding.ApprovalStatus = "rejected"
+		status := "approved"
+		if normalizedDecision == "reject" {
+			status = "rejected"
+		}
+		binding.ApprovalStatus = status
+		for i := range binding.ApprovalRecords {
+			if binding.ApprovalRecords[i].RequestID == strings.TrimSpace(requestID) {
+				binding.ApprovalRecords[i].Decision = normalizedDecision
+				break
+			}
 		}
 		a.activeRuns[key] = binding
 	}
@@ -695,17 +714,18 @@ func decodeMessageText(rawContent string) (string, error) {
 }
 
 // extractPermissionRequest 从 permission_requested 事件中抽取审批请求关键信息。
-func extractPermissionRequest(envelope map[string]any) (string, string) {
+func extractPermissionRequest(envelope map[string]any) (requestID, toolName, reason string) {
 	payload, _ := envelope["payload"].(map[string]any)
 	if payload == nil {
-		return "", "需要审批"
+		return "", "", "需要审批"
 	}
-	requestID := readString(payload, "request_id")
-	reason := readString(payload, "reason")
+	requestID = readString(payload, "request_id")
+	toolName = readString(payload, "tool_name")
+	reason = readString(payload, "reason")
 	if reason == "" {
 		reason = "工具执行请求审批，请确认是否放行。"
 	}
-	return requestID, reason
+	return
 }
 
 // extractHookNotificationSummary 提取 async_rewake 等通知摘要并写入卡片，便于下轮继续追踪。
@@ -904,10 +924,23 @@ func formatElapsed(start time.Time) string {
 
 // statusCardPayload 将 run 绑定状态映射为卡片更新载荷。
 func (b sessionBinding) statusCardPayload() StatusCardPayload {
+	pendingCount := 0
+	records := make([]ApprovalRecord, 0, len(b.ApprovalRecords))
+	for _, e := range b.ApprovalRecords {
+		if e.Decision == "pending" {
+			pendingCount++
+		}
+		records = append(records, ApprovalRecord{
+			ToolName: e.ToolName,
+			Decision: e.Decision,
+		})
+	}
 	return StatusCardPayload{
 		TaskName:        b.TaskName,
 		Status:          b.Status,
 		ApprovalStatus:  b.ApprovalStatus,
+		ApprovalRecords: records,
+		PendingCount:    pendingCount,
 		Result:          b.Result,
 		Summary:         b.LastSummary,
 		AsyncRewakeHint: b.AsyncRewakeHint,

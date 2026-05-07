@@ -1217,9 +1217,9 @@ func TestHelperFunctionsCoverFallbackBranches(t *testing.T) {
 	if _, err := decodeMessageText("{"); err == nil {
 		t.Fatal("expected invalid message content error")
 	}
-	requestID, reason := extractPermissionRequest(nil)
-	if requestID != "" || reason == "" {
-		t.Fatalf("unexpected permission extraction: request=%q reason=%q", requestID, reason)
+	requestID, toolName, reason := extractPermissionRequest(nil)
+	if requestID != "" || toolName != "" || reason == "" {
+		t.Fatalf("unexpected permission extraction: request=%q tool=%q reason=%q", requestID, toolName, reason)
 	}
 	if text := extractUserVisibleDoneText(map[string]any{
 		"payload": map[string]any{"content": "done"},

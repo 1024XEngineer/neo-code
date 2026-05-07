@@ -254,19 +254,25 @@ func (m *feishuMessenger) tenantAccessToken(ctx context.Context) (string, error)
 func buildStatusCard(payload StatusCardPayload) map[string]any {
 	taskName := fallbackStatusField(payload.TaskName, "未命名任务")
 	status := fallbackStatusField(payload.Status, "thinking")
-	approval := fallbackStatusField(payload.ApprovalStatus, "none")
 	result := fallbackStatusField(payload.Result, "pending")
 
 	statusIcon, statusColor := statusIconAndColor(status)
-	approvalIcon, _ := statusIconAndColor(approval)
 	resultIcon, _ := statusIconAndColor(result)
 
 	elements := []map[string]any{
 		statusNoteElement(taskName),
 		statusBarElement(statusIcon, "状态", status),
-		statusBarElement(approvalIcon, "审批", approval),
-		statusBarElement(resultIcon, "结果", result),
 	}
+
+	if len(payload.ApprovalRecords) > 0 {
+		elements = append(elements, buildApprovalRecordsElement(payload.ApprovalRecords, payload.PendingCount))
+	} else {
+		approval := fallbackStatusField(payload.ApprovalStatus, "none")
+		approvalIcon, _ := statusIconAndColor(approval)
+		elements = append(elements, statusBarElement(approvalIcon, "审批", approval))
+	}
+
+	elements = append(elements, statusBarElement(resultIcon, "结果", result))
 
 	if elapsed := strings.TrimSpace(payload.Elapsed); elapsed != "" {
 		elements = append(elements, map[string]any{
@@ -347,6 +353,44 @@ func statusBarElement(icon string, label string, value string) map[string]any {
 				},
 			},
 		},
+	}
+}
+
+func buildApprovalRecordsElement(records []ApprovalRecord, pendingCount int) map[string]any {
+	approvedCount := 0
+	rejectedCount := 0
+	for _, r := range records {
+		switch r.Decision {
+		case "allow_once":
+			approvedCount++
+		case "reject":
+			rejectedCount++
+		}
+	}
+
+	summaryParts := make([]string, 0, 3)
+	if approvedCount > 0 {
+		summaryParts = append(summaryParts, fmt.Sprintf("%d 通过", approvedCount))
+	}
+	if rejectedCount > 0 {
+		summaryParts = append(summaryParts, fmt.Sprintf("%d 拒绝", rejectedCount))
+	}
+	if pendingCount > 0 {
+		summaryParts = append(summaryParts, fmt.Sprintf("%d 等待", pendingCount))
+	}
+	summaryText := strings.Join(summaryParts, "，")
+
+	detailLines := make([]string, 0, len(records))
+	for _, r := range records {
+		icon, _ := statusIconAndColor(r.Decision)
+		label := fallbackStatusField(r.ToolName, "unknown_tool")
+		detailLines = append(detailLines, fmt.Sprintf("%s %s → *%s*", icon, label, r.Decision))
+	}
+	fullText := fmt.Sprintf("**%s**\n%s", summaryText, strings.Join(detailLines, "\n"))
+
+	return map[string]any{
+		"tag":  "div",
+		"text": map[string]any{"tag": "lark_md", "content": fullText},
 	}
 }
 
