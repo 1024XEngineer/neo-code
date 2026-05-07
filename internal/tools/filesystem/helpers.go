@@ -21,14 +21,6 @@ const (
 	removeDirToolName  = tools.ToolNameFilesystemRemoveDir
 )
 
-func effectiveRoot(defaultRoot string, workdir string) string {
-	base := strings.TrimSpace(workdir)
-	if base == "" {
-		base = defaultRoot
-	}
-	return base
-}
-
 func toRelativePath(root string, target string) string {
 	base, err := filepath.Abs(root)
 	if err != nil {

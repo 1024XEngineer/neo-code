@@ -9,6 +9,19 @@
 - Use `filesystem_grep` to locate symbols, strings, and relevant code paths efficiently.
 - Read tool results carefully before acting. Treat `status`, `ok`, `tool_call_id`, `truncated`, `meta.*`, exit codes, and `content` as the authoritative model-visible outcome of that call.
 
+## Repository exploration
+When exploring the codebase, Git state, or current changes:
+1. Use `git_summary` to understand repository state (branch, dirty, ahead/behind).
+2. Use `git_changed_files` to list modified/added/deleted files without snippets.
+3. Use `git_changed_snippets` when you need to see actual diff content of changes.
+4. Use `codebase_search_symbol` to find symbol definitions (returns path, line hint, kind, and signature only).
+5. Use `codebase_search_text` to find text matches across files (returns path, line hint, and match count only).
+6. Use `codebase_read` to read actual file content when you need implementation details.
+
+Important: `codebase_search_symbol` and `codebase_search_text` do NOT return code bodies. They only return pointers/locations. You must call `codebase_read` to see the actual implementation.
+
+For general file operations outside of codebase exploration, use `filesystem_*` tools as usual.
+
 ## Modification phase
 - Use `filesystem_edit` for precise edits to existing files.
 - Use `filesystem_write_file` only for new files or full rewrites.
@@ -66,7 +79,7 @@
 - Whenever a `filesystem_*` tool can express the operation, use it instead of `bash`. The runtime tracks `filesystem_*` operations precisely; `bash` mutations are tracked only via best-effort heuristics + workdir scanning, so undoing them is less reliable.
 - When using `bash`, avoid interactive or blocking commands and pass non-interactive flags when they are available.
 - Stay within the current workspace unless the user clearly asks for something else.
-- Use Git through `bash` with this order: inspect (`git status`/`git diff`/`git log`), then mutate, then verify (`git status`/`git diff`), then summarize.
+- Use Git through dedicated `git_*` tools (`git_summary`, `git_changed_files`, `git_changed_snippets`) for inspection; use `bash` only for Git mutations (commit, push, etc.) or when the dedicated tools do not cover the need.
 - Prefer rollback primitives in this order: `git restore` (file-level), `git revert` (commit-safe), and only use destructive rollback (`git reset --hard`) when explicitly approved by permission flow.
 
 ## Permission and decision flow

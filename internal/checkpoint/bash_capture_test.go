@@ -220,3 +220,15 @@ func TestSourceFilesInWorkdir_HandlesEmptyWorkdir(t *testing.T) {
 		t.Fatalf("expected nil with empty workdir, got %v", got)
 	}
 }
+
+func equalStringSlice(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}

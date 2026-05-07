@@ -79,7 +79,10 @@ func (t *WriteFileTool) Execute(ctx context.Context, input tools.ToolCallInput) 
 		return tools.NewErrorResult(t.Name(), tools.NormalizeErrorReason(t.Name(), err), "", nil), err
 	}
 
-	base := effectiveRoot(t.root, input.Workdir)
+	base, err := tools.ResolveEffectiveRoot(t.root, input.Workdir)
+	if err != nil {
+		return tools.NewErrorResult(t.Name(), "invalid workdir", err.Error(), nil), err
+	}
 
 	_, target, err := tools.ResolveWorkspaceTarget(
 		input,
@@ -138,6 +141,7 @@ func (t *WriteFileTool) Execute(ctx context.Context, input tools.ToolCallInput) 
 			"noop_write":        false,
 			"content_unchanged": false,
 		},
+		Facts: tools.ToolExecutionFacts{WorkspaceWrite: true},
 	}
 	if token, ok := compactWriteVerificationToken(args.Content); ok {
 		result.Metadata["written_content"] = token

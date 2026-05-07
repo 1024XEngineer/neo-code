@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	"neo-code/internal/provider"
@@ -80,6 +81,18 @@ func generateStreamingMessage(
 		outcome.err = err
 		return outcome
 	}
+
+	// 将累积的 thinking 文本写入 ThinkingMetadata，以备续轮回传给 provider。
+	if thinking := acc.ThinkingContent(); thinking != "" {
+		storeThinkingMetadata(&message, thinking)
+	}
+
 	outcome.message = message
 	return outcome
+}
+
+// storeThinkingMetadata 将 thinking 文本存入消息的 ThinkingMetadata 以备续轮使用。
+func storeThinkingMetadata(msg *providertypes.Message, thinking string) {
+	meta, _ := json.Marshal(map[string]string{"reasoning_content": thinking})
+	msg.ThinkingMetadata = json.RawMessage(meta)
 }

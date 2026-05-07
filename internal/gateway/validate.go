@@ -69,7 +69,9 @@ func validateRequestFrame(frame MessageFrame) *FrameError {
 		FrameActionListSessionTodos,
 		FrameActionGetRuntimeSnapshot,
 		FrameActionDeleteSession,
-		FrameActionGetSessionModel:
+		FrameActionGetSessionModel,
+		FrameActionListCheckpoints,
+		FrameActionUndoRestore:
 		if strings.TrimSpace(frame.SessionID) == "" {
 			return NewMissingRequiredFieldError("session_id")
 		}
@@ -94,6 +96,15 @@ func validateRequestFrame(frame MessageFrame) *FrameError {
 		return nil
 	case FrameActionResolvePermission:
 		return validateResolvePermissionFrame(frame)
+	case FrameActionRestoreCheckpoint,
+		FrameActionCheckpointDiff:
+		if frame.Payload == nil {
+			return NewMissingRequiredFieldError("payload")
+		}
+		if strings.TrimSpace(frame.SessionID) == "" {
+			return NewMissingRequiredFieldError("session_id")
+		}
+		return nil
 	default:
 		return NewFrameError(ErrorCodeInvalidAction, "invalid action")
 	}

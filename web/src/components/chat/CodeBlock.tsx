@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { memo, useState } from 'react'
 import { Copy, Check, Download, FileText } from 'lucide-react'
 
 const langColors: Record<string, string> = {
@@ -26,7 +26,7 @@ interface CodeBlockProps {
  * - inline:无 filename,叙述性代码,极简样式;hover 出现复制按钮。
  * - file:显式文件代码,保留 header(图标 + 文件名 + 语言徽章 + 复制/下载)与行号。footer 已下线。
  */
-export default function CodeBlock({ code, language = 'text', filename }: CodeBlockProps) {
+function CodeBlock({ code, language = 'text', filename }: CodeBlockProps) {
   const [copied, setCopied] = useState(false)
   const [hovered, setHovered] = useState(false)
 
@@ -219,3 +219,5 @@ const fileStyles: Record<string, React.CSSProperties> = {
     tabSize: 2,
   },
 }
+
+export default memo(CodeBlock)

@@ -591,7 +591,7 @@ func TestGatewayRuntimePortBridgeRuntimeMethods(t *testing.T) {
 			SavedRatio:     0.5,
 			TriggerMode:    "manual",
 			TranscriptID:   "tx-1",
-			TranscriptPath: "/tmp/tx-1.md",
+			TranscriptPath: "/tmp/tx-subagent.md",
 		},
 		systemToolRes: tools.ToolResult{
 			ToolCallID: "call-system-1",

@@ -15,14 +15,13 @@ import (
 )
 
 const (
-	defaultRetrievalLimit         = 20
-	maxRetrievalLimit             = 50
-	defaultContextLines           = 3
-	maxContextLines               = 8
-	maxSnippetLines               = 20
 	maxRepositorySnippetFileBytes = 256 * 1024
 	binaryProbePrefixSize         = 1024
+	defaultReadMaxBytes           = 256 * 1024
+	maxSignatureLength            = 512
 )
+
+var errRetrievalLimitReached = errors.New("repository: retrieval limit reached")
 
 var blockedRepositorySnippetExtensions = map[string]struct{}{
 	".p8":  {},
@@ -89,7 +88,301 @@ var blockedRepositorySnippetConfigKeywords = []string{
 	"tokens",
 }
 
-var errRetrievalLimitReached = errors.New("repository: retrieval limit reached")
+// Read 按路径读取目标文件的受限内容（codebase_read）。
+func (s *Service) Read(ctx context.Context, workdir string, path string, opts ReadOptions) (ReadResult, error) {
+	if err := ctx.Err(); err != nil {
+		return ReadResult{}, err
+	}
+	target, info, allowed, err := resolveRepositorySnippetFileFromRoot(workdir, path)
+	if err != nil {
+		return ReadResult{}, err
+	}
+	if !allowed {
+		return ReadResult{}, nil
+	}
+	content, err := s.readFile(target)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return ReadResult{}, nil
+		}
+		return ReadResult{}, err
+	}
+	isBinary := isBinaryContent(content)
+	maxBytes := opts.MaxBytes
+	if maxBytes <= 0 {
+		maxBytes = defaultReadMaxBytes
+	}
+	truncated := false
+	if len(content) > maxBytes {
+		content = content[:maxBytes]
+		truncated = true
+	}
+	rel, _ := filepath.Rel(workdir, target)
+	return ReadResult{
+		Path:      filepath.Clean(rel),
+		Content:   string(content),
+		Truncated: truncated,
+		IsBinary:  isBinary,
+		Size:      info.Size(),
+	}, nil
+}
+
+// SearchText 扫描工作区文本文件并返回稳定排序的关键字命中（硬约束：不返回代码内容）。
+func (s *Service) SearchText(ctx context.Context, workdir string, query string, opts SearchOptions) (TextSearchResult, error) {
+	if err := ctx.Err(); err != nil {
+		return TextSearchResult{}, err
+	}
+	root, scope, err := resolveSearchScope(workdir, opts.ScopeDir)
+	if err != nil {
+		return TextSearchResult{}, err
+	}
+
+	effectiveLimit := opts.Limit + 1
+	if effectiveLimit <= 1 {
+		effectiveLimit = defaultRetrievalLimit + 1
+	}
+
+	var wholeWordRe *regexp.Regexp
+	if opts.WholeWord {
+		wholeWordRe = regexp.MustCompile(`\b` + regexp.QuoteMeta(query) + `\b`)
+	}
+
+	hits := make([]TextSearchHit, 0, effectiveLimit)
+	truncated := false
+
+	err = walkWorkspaceFiles(ctx, root, scope, func(path string) error {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
+		if len(hits) >= effectiveLimit {
+			return errRetrievalLimitReached
+		}
+		content, ok := s.readRetrievalText(root, path)
+		if !ok {
+			return nil
+		}
+		lines := strings.Split(strings.ReplaceAll(content, "\r\n", "\n"), "\n")
+		matchCount := 0
+		firstLine := 0
+		for index, line := range lines {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return ctxErr
+			}
+			matched := strings.Contains(line, query)
+			if wholeWordRe != nil {
+				matched = wholeWordRe.MatchString(line)
+			}
+			if matched {
+				matchCount++
+				if firstLine == 0 {
+					firstLine = index + 1
+				}
+			}
+		}
+		if matchCount == 0 {
+			return nil
+		}
+		rel, _ := filepath.Rel(root, path)
+		hits = append(hits, TextSearchHit{
+			Path:       filepath.Clean(rel),
+			LineHint:   firstLine,
+			MatchCount: matchCount,
+		})
+		if len(hits) >= effectiveLimit {
+			return errRetrievalLimitReached
+		}
+		return nil
+	})
+	if err != nil {
+		if errors.Is(err, errRetrievalLimitReached) {
+			err = nil
+		}
+	}
+	if err != nil {
+		return TextSearchResult{}, err
+	}
+	totalCount := len(hits)
+	if len(hits) > opts.Limit && opts.Limit > 0 {
+		hits = hits[:opts.Limit]
+		truncated = true
+	}
+
+	sort.Slice(hits, func(i, j int) bool {
+		if hits[i].Path == hits[j].Path {
+			return hits[i].LineHint < hits[j].LineHint
+		}
+		return hits[i].Path < hits[j].Path
+	})
+	return TextSearchResult{Hits: hits, Truncated: truncated, TotalCount: totalCount}, nil
+}
+
+// SearchSymbol 先做 Go 定义检索，再在无定义命中时回退到 whole-word 文本检索（硬约束：仅返回签名）。
+func (s *Service) SearchSymbol(ctx context.Context, workdir string, symbol string, opts SearchOptions) (SymbolSearchResult, error) {
+	if err := ctx.Err(); err != nil {
+		return SymbolSearchResult{}, err
+	}
+	root, scope, err := resolveSearchScope(workdir, opts.ScopeDir)
+	if err != nil {
+		return SymbolSearchResult{}, err
+	}
+
+	effectiveLimit := opts.Limit + 1
+	if effectiveLimit <= 1 {
+		effectiveLimit = defaultRetrievalLimit + 1
+	}
+
+	hits := make([]SymbolSearchHit, 0, effectiveLimit)
+	truncated := false
+
+	err = walkWorkspaceFiles(ctx, root, scope, func(path string) error {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
+		if len(hits) >= effectiveLimit {
+			return errRetrievalLimitReached
+		}
+		if filepath.Ext(path) != ".go" {
+			return nil
+		}
+		content, ok := s.readRetrievalText(root, path)
+		if !ok {
+			return nil
+		}
+		lineNumbers := findGoSymbolDefinitions(content, symbol)
+		for _, lineNumber := range lineNumbers {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return ctxErr
+			}
+			if len(hits) >= effectiveLimit {
+				break
+			}
+			sig := extractGoSignature(content, lineNumber)
+			kind := classifyGoSignature(sig)
+			rel, _ := filepath.Rel(root, path)
+			hits = append(hits, SymbolSearchHit{
+				Path:      filepath.Clean(rel),
+				LineHint:  lineNumber,
+				Kind:      kind,
+				Signature: sig,
+			})
+			if len(hits) >= effectiveLimit {
+				return errRetrievalLimitReached
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		if errors.Is(err, errRetrievalLimitReached) {
+			err = nil
+		}
+	}
+	if err != nil {
+		return SymbolSearchResult{}, err
+	}
+	totalCount := len(hits)
+	if len(hits) > opts.Limit && opts.Limit > 0 {
+		hits = hits[:opts.Limit]
+		truncated = true
+	}
+	if len(hits) > 0 {
+		sort.Slice(hits, func(i, j int) bool {
+			if hits[i].Path == hits[j].Path {
+				return hits[i].LineHint < hits[j].LineHint
+			}
+			return hits[i].Path < hits[j].Path
+		})
+		return SymbolSearchResult{Hits: hits, Truncated: truncated, TotalCount: totalCount}, nil
+	}
+
+	// Second pass: Tree-sitter for non-Go files.
+	if err := s.treesitterIndex.EnsureBuilt(ctx, root, scope, s.readFile); err != nil {
+		return SymbolSearchResult{}, err
+	}
+	tsHits := s.treesitterIndex.Search(symbol, effectiveLimit)
+	for _, h := range tsHits {
+		if ctx.Err() != nil {
+			return SymbolSearchResult{}, ctx.Err()
+		}
+		if len(hits) >= effectiveLimit {
+			break
+		}
+		hits = append(hits, h)
+	}
+	totalCount = len(hits)
+	if len(hits) > opts.Limit && opts.Limit > 0 {
+		hits = hits[:opts.Limit]
+		truncated = true
+	}
+	if len(hits) > 0 {
+		sort.Slice(hits, func(i, j int) bool {
+			if hits[i].Path == hits[j].Path {
+				return hits[i].LineHint < hits[j].LineHint
+			}
+			return hits[i].Path < hits[j].Path
+		})
+		return SymbolSearchResult{Hits: hits, Truncated: truncated, TotalCount: totalCount}, nil
+	}
+
+	// Fallback: whole-word text search (all file types).
+	fallbackOpts := opts
+	fallbackOpts.WholeWord = true
+	textResult, err := s.SearchText(ctx, workdir, symbol, fallbackOpts)
+	if err != nil {
+		return SymbolSearchResult{}, err
+	}
+	for _, th := range textResult.Hits {
+		hits = append(hits, SymbolSearchHit{
+			Path:     th.Path,
+			LineHint: th.LineHint,
+			Kind:     "reference",
+		})
+	}
+	return SymbolSearchResult{Hits: hits, Truncated: textResult.Truncated, TotalCount: len(hits)}, nil
+}
+
+// extractGoSignature 从指定行提取声明签名，最长 maxSignatureLength 字符。
+func extractGoSignature(content string, lineNumber int) string {
+	lines := strings.Split(strings.ReplaceAll(content, "\r\n", "\n"), "\n")
+	if lineNumber <= 0 || lineNumber > len(lines) {
+		return ""
+	}
+	idx := lineNumber - 1
+	sig := strings.TrimSpace(lines[idx])
+	// 尝试拼接多行函数签名（以 ( 开头但未以 ) 结尾时）。
+	if strings.HasPrefix(sig, "func") && strings.Contains(sig, "(") && !strings.Contains(sig, ")") {
+		for i := idx + 1; i < len(lines) && len(sig) < maxSignatureLength*2; i++ {
+			sig += " " + strings.TrimSpace(lines[i])
+			if strings.Contains(lines[i], ")") {
+				break
+			}
+		}
+	}
+	if len(sig) > maxSignatureLength {
+		sig = sig[:maxSignatureLength]
+	}
+	return sig
+}
+
+// classifyGoSignature 根据签名前缀推断符号类别。
+func classifyGoSignature(sig string) string {
+	sig = strings.TrimSpace(sig)
+	switch {
+	case strings.HasPrefix(sig, "func "):
+		if strings.Contains(sig, ")") && strings.Contains(sig, ".") {
+			// func (r *Receiver) Method(...)
+			return "method"
+		}
+		return "function"
+	case strings.HasPrefix(sig, "type "):
+		return "type"
+	case strings.HasPrefix(sig, "const "):
+		return "constant"
+	case strings.HasPrefix(sig, "var "):
+		return "variable"
+	default:
+		return "unknown"
+	}
+}
 
 // retrieveByPath 按路径读取目标文件的受限片段。
 func (s *Service) retrieveByPath(ctx context.Context, root string, query RetrievalQuery) (RetrievalResult, error) {
@@ -412,11 +705,7 @@ func buildRetrievalHit(
 	}, nil
 }
 
-func readFile(path string) ([]byte, error) {
-	return os.ReadFile(path)
-}
-
-// allowRepositorySnippetByPath 基于路径检查文件是否允许进入 repository 片段。
+// resolveRepositorySnippetFile 基于路径检查文件是否允许进入 repository 片段。
 func resolveRepositorySnippetFile(workdir string, path string) (string, os.FileInfo, bool, error) {
 	root, _, err := security.ResolveWorkspacePath(workdir, ".")
 	if err != nil {
@@ -545,4 +834,20 @@ func isBinaryContent(content []byte) bool {
 		}
 	}
 	return false
+}
+
+// resolveSearchScope 解析搜索范围，返回 (root, scope, error)。
+func resolveSearchScope(workdir string, scopeDir string) (string, string, error) {
+	root, _, err := security.ResolveWorkspacePath(workdir, ".")
+	if err != nil {
+		return "", "", err
+	}
+	if strings.TrimSpace(scopeDir) == "" {
+		return root, root, nil
+	}
+	scope, err := resolveScopeDir(root, scopeDir)
+	if err != nil {
+		return "", "", err
+	}
+	return root, scope, nil
 }

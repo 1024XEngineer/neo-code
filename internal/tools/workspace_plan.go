@@ -9,6 +9,17 @@ import (
 	"neo-code/internal/security"
 )
 
+// ResolveEffectiveRoot resolves a user-supplied workdir against the configured
+// workspace root and ensures the result stays within the workspace boundary.
+func ResolveEffectiveRoot(defaultRoot string, workdir string) (string, error) {
+	base := strings.TrimSpace(workdir)
+	if base == "" {
+		return defaultRoot, nil
+	}
+	_, resolved, err := security.ResolveWorkspacePath(defaultRoot, base)
+	return resolved, err
+}
+
 type workspaceResolver func(root string, requested string) (string, error)
 
 // ResolveWorkspaceTarget resolves the effective execution target for one tool

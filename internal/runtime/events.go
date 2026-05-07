@@ -432,6 +432,8 @@ const (
 	EventCheckpointUndoRestore EventType = "checkpoint_undo_restore"
 	// EventBashSideEffect 表示 bash 命令在 workdir 内产生了文件变更。
 	EventBashSideEffect EventType = "bash_side_effect"
+	// EventRunDiffSummary 表示一次完整 run 的端到端代码变更摘要已生成。
+	EventRunDiffSummary EventType = "run_diff_summary"
 )
 
 // TokenUsagePayload 承载单轮 token 用量统计。
@@ -498,6 +500,14 @@ type ToolDiffPayload struct {
 	WasNew     bool            `json:"was_new,omitempty"`
 	Files      []FileChange    `json:"files,omitempty"`
 	Diffs      []FileDiffEntry `json:"diffs,omitempty"`
+}
+
+// RunDiffSummaryPayload 描述一次完整 run 结束时的端到端代码变更摘要。
+type RunDiffSummaryPayload struct {
+	FromCheckpointID string          `json:"from_checkpoint_id,omitempty"`
+	ToCheckpointID   string          `json:"to_checkpoint_id,omitempty"`
+	Diff             string          `json:"diff,omitempty"`
+	ChangedFiles     []FileDiffEntry `json:"changed_files,omitempty"`
 }
 
 // BashSideEffectPayload 描述 bash 命令在 workdir 内的文件变更。
