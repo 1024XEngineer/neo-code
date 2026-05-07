@@ -9,6 +9,7 @@ import (
 	"math/rand"
 	"net/http"
 	"os"
+	goruntime "runtime"
 	"strings"
 	"sync"
 	"time"
@@ -16,6 +17,11 @@ import (
 	"github.com/gorilla/websocket"
 
 	"neo-code/internal/tools"
+	"neo-code/internal/tools/bash"
+	diagnosetool "neo-code/internal/tools/diagnose"
+	"neo-code/internal/tools/filesystem"
+	"neo-code/internal/tools/todo"
+	"neo-code/internal/tools/webfetch"
 )
 
 // Runner 是本地执行守护进程，主动连接云端 Gateway，接收工具执行请求。
@@ -26,6 +32,7 @@ type Runner struct {
 	capSigner  *CapSigner
 
 	mu      sync.Mutex
+	writeMu sync.Mutex // 保护 WebSocket 并发写
 	running bool
 	cancel  context.CancelFunc
 }
@@ -38,6 +45,7 @@ type Config struct {
 	Token             string
 	Workdir           string
 	WorkdirAllowlist  []string
+	Shell             string // 用于 bash 工具，空值自动检测
 	HeartbeatInterval time.Duration
 	ReconnectBackoffMin time.Duration
 	ReconnectBackoffMax time.Duration
@@ -71,7 +79,38 @@ func New(cfg Config) (*Runner, error) {
 		logger = log.New(os.Stderr, "runner: ", log.LstdFlags)
 	}
 
+	shell := cfg.Shell
+	if shell == "" {
+		if goruntime.GOOS == "windows" {
+			shell = "cmd"
+		} else {
+			shell = "bash"
+		}
+	}
+	workdir := cfg.Workdir
+	if workdir == "" {
+		var err error
+		workdir, err = os.Getwd()
+		if err != nil {
+			return nil, fmt.Errorf("runner: get workdir: %w", err)
+		}
+	}
+
 	toolMgr := tools.NewRegistry()
+	toolMgr.Register(filesystem.New(workdir))
+	toolMgr.Register(filesystem.NewWrite(workdir))
+	toolMgr.Register(filesystem.NewGrep(workdir))
+	toolMgr.Register(filesystem.NewGlob(workdir))
+	toolMgr.Register(filesystem.NewEdit(workdir))
+	toolMgr.Register(filesystem.NewMove(workdir))
+	toolMgr.Register(filesystem.NewCopy(workdir))
+	toolMgr.Register(filesystem.NewDelete(workdir))
+	toolMgr.Register(filesystem.NewCreateDir(workdir))
+	toolMgr.Register(filesystem.NewRemoveDir(workdir))
+	toolMgr.Register(bash.New(workdir, shell, cfg.RequestTimeout))
+	toolMgr.Register(webfetch.New(webfetch.Config{Timeout: cfg.RequestTimeout}))
+	toolMgr.Register(diagnosetool.New())
+	toolMgr.Register(todo.New())
 
 	capSigner := NewCapSigner(cfg.WorkdirAllowlist)
 
@@ -130,12 +169,12 @@ func (r *Runner) Run(ctx context.Context) error {
 
 func (r *Runner) connectAndServe(ctx context.Context) error {
 	url := fmt.Sprintf("ws://%s/ws", r.cfg.GatewayAddress)
-	if r.cfg.Token != "" {
-		url += "?token=" + r.cfg.Token
-	}
 
 	header := http.Header{}
 	header.Set("X-Runner-ID", r.cfg.RunnerID)
+	if r.cfg.Token != "" {
+		header.Set("Authorization", "Bearer "+r.cfg.Token)
+	}
 
 	dialer := websocket.Dialer{
 		HandshakeTimeout: r.cfg.RequestTimeout,
@@ -149,7 +188,7 @@ func (r *Runner) connectAndServe(ctx context.Context) error {
 	}
 	defer conn.Close()
 
-	r.logger.Printf("connected to gateway at %s", url)
+	r.logger.Printf("connected to gateway at %s (runner=%s)", r.cfg.GatewayAddress, r.cfg.RunnerID)
 
 	// 认证
 	if err := r.sendRequest(conn, "gateway.authenticate", map[string]string{
@@ -224,6 +263,24 @@ func (r *Runner) handleToolRequest(ctx context.Context, conn *websocket.Conn, ms
 
 	r.logger.Printf("executing tool: %s (request_id=%s)", req.ToolName, req.RequestID)
 
+	// 验证 capability token 和路径边界
+	if err := r.capSigner.VerifyToolRequest(req, r.cfg.Workdir); err != nil {
+		r.logger.Printf("tool request denied: %v", err)
+		resultParams := map[string]any{
+			"request_id":   req.RequestID,
+			"session_id":   req.SessionID,
+			"run_id":       req.RunID,
+			"runner_id":    r.cfg.RunnerID,
+			"tool_call_id": req.ToolCallID,
+			"content":      fmt.Sprintf("tool request denied: %v", err),
+			"is_error":     true,
+		}
+		if sendErr := r.sendRequest(conn, "gateway.executeToolResult", resultParams); sendErr != nil {
+			r.logger.Printf("failed to send denied result: %v", sendErr)
+		}
+		return
+	}
+
 	// 执行工具
 	execCtx, cancel := context.WithTimeout(ctx, r.cfg.RequestTimeout)
 	defer cancel()
@@ -268,6 +325,8 @@ func (r *Runner) handlePing(conn *websocket.Conn, msg map[string]any) {
 		"result":  "pong",
 	}
 	data, _ := json.Marshal(response)
+	r.writeMu.Lock()
+	defer r.writeMu.Unlock()
 	if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
 		r.logger.Printf("failed to send pong: %v", err)
 	}
@@ -304,6 +363,8 @@ func (r *Runner) sendRequest(conn *websocket.Conn, method string, params any) er
 		return fmt.Errorf("marshal request: %w", err)
 	}
 
+	r.writeMu.Lock()
+	defer r.writeMu.Unlock()
 	if err := conn.SetWriteDeadline(time.Now().Add(r.cfg.RequestTimeout)); err != nil {
 		return fmt.Errorf("set write deadline: %w", err)
 	}

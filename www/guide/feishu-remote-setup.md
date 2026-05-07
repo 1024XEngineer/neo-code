@@ -334,10 +334,17 @@ Runner 断连后会自动重连，采用指数退避 + 随机抖动策略：
 
 ### 8.4 安全边界
 
-- Runner 只执行 Gateway 签发并签名的工具请求（CapabilityToken HMAC-SHA256 校验）
-- Token 有过期时间（TTL），过期请求会被拒绝
+当前已实现：
+
+- Runner 验证 Gateway 签发的 CapabilityToken（HMAC-SHA256 签名校验、TTL 过期检查、工具白名单）
+- Token 有过期时间（5 分钟 TTL），过期请求会被拒绝
 - 支持配置工作区路径白名单（`WorkdirAllowlist`），拒绝越界路径访问
-- 所有工具在 Runner 本机执行，结果通过 Gateway 加密回传
+- 所有工具在 Runner 本机执行
+
+传输安全注意事项：
+
+- Runner 与 Gateway 之间当前使用明文 WebSocket（`ws://`），建议仅在受信任的本地网络中使用，或通过 SSH 隧道 / VPN 加固传输层
+- TLS 加密传输（`wss://`）计划在后续版本支持
 
 ### 8.5 错误提示
 

@@ -87,18 +87,37 @@ func (m *RunnerToolManager) DispatchToolRequest(ctx context.Context, sessionID s
 	m.pending[requestID] = pending
 	m.mu.Unlock()
 
+	// 签发 capability token（如果 signer 已配置）
+	var capToken *security.CapabilityToken
+	if m.capabilitySigner != nil {
+		workdir := ""
+		if record, ok := m.registry.Record(connectionID); ok {
+			workdir = record.Workdir
+		}
+		signed, err := m.NewCapabilityToken(sessionID, runID, toolName, workdir)
+		if err != nil {
+			m.logger.Printf("failed to sign capability token: %v", err)
+		} else if signed != nil {
+			capToken = signed
+		}
+	}
+
 	// 构建通知并推送到 runner 连接
+	params := map[string]any{
+		"request_id":   requestID,
+		"session_id":   sessionID,
+		"run_id":       runID,
+		"tool_call_id": toolCallID,
+		"tool_name":    toolName,
+		"arguments":    arguments,
+	}
+	if capToken != nil {
+		params["capability_token"] = capToken
+	}
 	notification := map[string]any{
 		"jsonrpc": "2.0",
 		"method":  protocol.MethodGatewayToolRequest,
-		"params": map[string]any{
-			"request_id":   requestID,
-			"session_id":   sessionID,
-			"run_id":       runID,
-			"tool_call_id": toolCallID,
-			"tool_name":    toolName,
-			"arguments":    arguments,
-		},
+		"params":  params,
 	}
 	if !m.relay.SendJSONRPCPayload(connectionID, notification) {
 		m.mu.Lock()
