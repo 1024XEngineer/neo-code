@@ -53,6 +53,18 @@ $env:OPENAI_API_KEY = "your_key_here"
 
 如果想长期保存环境变量，请用你所在系统或 Shell 的标准方式保存，不要把真实 Key 写进 `config.yaml`。
 
+### ModelScope API Key 获取
+
+ModelScope（魔搭）通过 TUI 半引导流程完成 API Key 配置：
+
+1. 在 TUI 中执行 `/provider`，选择 `modelscope`
+2. 按 Enter 依次打开引导页 → 登录页，完成魔搭社区登录
+3. 进入 Token 页（<https://www.modelscope.cn/my/access/token>），创建并复制 API Key
+4. 回到 TUI，在引导面板中粘贴 token，按 Enter 提交校验
+5. **绑定阿里云账号**：访问[账号设置](https://www.modelscope.cn/my/settings/account)完成阿里云账号绑定。此步骤为必须，未绑定时 API 调用将返回认证失败
+
+如果 token 校验时检测到认证或权限错误，TUI 会自动打开账号绑定页引导你完成。
+
 ## 切换 Provider 和模型
 
 推荐在 NeoCode 界面里切换，选择会自动保存：
