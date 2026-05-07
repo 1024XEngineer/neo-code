@@ -26,10 +26,10 @@ import (
 
 // Runner 是本地执行守护进程，主动连接云端 Gateway，接收工具执行请求。
 type Runner struct {
-	cfg        Config
-	logger     *log.Logger
-	toolMgr    tools.Manager
-	capSigner  *CapSigner
+	cfg       Config
+	logger    *log.Logger
+	toolMgr   tools.Manager
+	capSigner *CapSigner
 
 	mu      sync.Mutex
 	writeMu sync.Mutex // 保护 WebSocket 并发写
@@ -39,18 +39,18 @@ type Runner struct {
 
 // Config 表示 runner 运行时配置。
 type Config struct {
-	RunnerID          string
-	RunnerName        string
-	GatewayAddress    string
-	Token             string
-	Workdir           string
-	WorkdirAllowlist  []string
-	Shell             string // 用于 bash 工具，空值自动检测
-	HeartbeatInterval time.Duration
+	RunnerID            string
+	RunnerName          string
+	GatewayAddress      string
+	Token               string
+	Workdir             string
+	WorkdirAllowlist    []string
+	Shell               string // 用于 bash 工具，空值自动检测
+	HeartbeatInterval   time.Duration
 	ReconnectBackoffMin time.Duration
 	ReconnectBackoffMax time.Duration
-	RequestTimeout    time.Duration
-	Logger            *log.Logger
+	RequestTimeout      time.Duration
+	Logger              *log.Logger
 }
 
 // New 创建 runner 实例。
@@ -87,6 +87,7 @@ func New(cfg Config) (*Runner, error) {
 			shell = "bash"
 		}
 	}
+	cfg.Shell = shell
 	workdir := cfg.Workdir
 	if workdir == "" {
 		var err error
@@ -95,6 +96,7 @@ func New(cfg Config) (*Runner, error) {
 			return nil, fmt.Errorf("runner: get workdir: %w", err)
 		}
 	}
+	cfg.Workdir = workdir
 
 	toolMgr := tools.NewRegistry()
 	toolMgr.Register(filesystem.New(workdir))
