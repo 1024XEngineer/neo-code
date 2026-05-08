@@ -119,6 +119,8 @@ func ParseStreamRole(raw string) (StreamRole, bool) {
 	default:
 		return "", false
 	}
+}
+
 // WithRunnerRegistry 将 RunnerRegistry 注入上下文。
 func WithRunnerRegistry(ctx context.Context, registry *RunnerRegistry) context.Context {
 	if ctx == nil {
