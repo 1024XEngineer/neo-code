@@ -29,6 +29,9 @@ export const Method = {
   DeleteSession: 'gateway.deleteSession',
   RenameSession: 'gateway.renameSession',
   ListFiles: 'gateway.listFiles',
+  ReadFile: 'gateway.readFile',
+  ListGitDiffFiles: 'gateway.listGitDiffFiles',
+  ReadGitDiffFile: 'gateway.readGitDiffFile',
   ListModels: 'gateway.listModels',
   SetSessionModel: 'gateway.setSessionModel',
   GetSessionModel: 'gateway.getSessionModel',
@@ -508,6 +511,78 @@ export interface FileEntry {
 
 /** gateway.listFiles 响应 */
 export type ListFilesResult = RPCResult<{ files: FileEntry[] }>
+
+/** gateway.readFile 参数 */
+export interface ReadFileParams {
+  session_id?: string
+  workdir?: string
+  path: string
+}
+
+/** 文件预览内容 */
+export interface ReadFilePayload {
+  path: string
+  content: string
+  encoding?: string
+  size?: number
+  truncated?: boolean
+  is_binary?: boolean
+  mod_time?: string
+}
+
+/** gateway.readFile 响应 */
+export type ReadFileResult = RPCResult<ReadFilePayload>
+
+/** Git Diff 文件条目 */
+export interface GitDiffEntry {
+  path: string
+  old_path?: string
+  status: 'added' | 'modified' | 'deleted' | 'renamed' | 'copied' | 'untracked' | 'conflicted'
+}
+
+/** gateway.listGitDiffFiles 参数 */
+export interface ListGitDiffFilesParams {
+  session_id?: string
+  workdir?: string
+}
+
+/** Git Diff 概览 */
+export interface GitDiffSummaryPayload {
+  in_git_repo: boolean
+  branch?: string
+  ahead?: number
+  behind?: number
+  truncated?: boolean
+  total_count?: number
+  files: GitDiffEntry[]
+}
+
+/** gateway.listGitDiffFiles 响应 */
+export type ListGitDiffFilesResult = RPCResult<GitDiffSummaryPayload>
+
+/** gateway.readGitDiffFile 参数 */
+export interface ReadGitDiffFileParams {
+  session_id?: string
+  workdir?: string
+  path: string
+}
+
+/** Git Diff 单文件预览 */
+export interface ReadGitDiffFilePayload {
+  path: string
+  old_path?: string
+  status: GitDiffEntry['status']
+  original_content: string
+  modified_content: string
+  encoding?: string
+  is_binary?: boolean
+  truncated?: boolean
+  size_original?: number
+  size_modified?: number
+}
+
+/** gateway.readGitDiffFile 响应 */
+export type ReadGitDiffFileResult = RPCResult<ReadGitDiffFilePayload>
 
 /** 模型条目 */
 export interface ModelEntry {

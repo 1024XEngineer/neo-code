@@ -100,6 +100,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     useSessionStore.getState().resetForWorkspaceSwitch()
     useGatewayStore.getState().setCurrentRunId('')
     useUIStore.getState().clearFileChanges()
+    useUIStore.getState().resetPreviewTabs()
     useUIStore.getState().setSearchQuery('')
 
     try {
@@ -136,6 +137,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     useSessionStore.getState().resetForWorkspaceSwitch()
     useGatewayStore.getState().setCurrentRunId('')
     useUIStore.getState().clearFileChanges()
+    useUIStore.getState().resetPreviewTabs()
     useUIStore.getState().setSearchQuery('')
 
     try {

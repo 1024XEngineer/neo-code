@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { useUIStore } from '@/stores/useUIStore'
+import { useUIStore, type FilePreviewTab } from '@/stores/useUIStore'
 import { useWorkspaceStore } from '@/stores/useWorkspaceStore'
 import { useGatewayAPI } from '@/context/RuntimeProvider'
 import { type FileEntry } from '@/api/protocol'
@@ -81,9 +81,11 @@ interface FileTreeItemProps {
   depth?: number
   dirCache: Map<string, FileTreeNode[]>
   onLoadDir: (path: string) => Promise<void>
+  onOpenFile: (path: string) => Promise<void>
 }
 
-function FileTreeItem({ node, depth = 0, dirCache, onLoadDir }: FileTreeItemProps) {
+// FileTreeItem 渲染单个目录树节点，并在文件点击时打开预览标签。
+function FileTreeItem({ node, depth = 0, dirCache, onLoadDir, onOpenFile }: FileTreeItemProps) {
   const [expanded, setExpanded] = useState(false)
   const [localLoading, setLocalLoading] = useState(false)
   const isFolder = node.entry.is_dir
@@ -93,7 +95,10 @@ function FileTreeItem({ node, depth = 0, dirCache, onLoadDir }: FileTreeItemProp
   const isLoaded = cachedChildren !== undefined
 
   const handleClick = async () => {
-    if (!isFolder) return
+    if (!isFolder) {
+      await onOpenFile(node.entry.path)
+      return
+    }
     if (!isLoaded) {
       setLocalLoading(true)
       try {
@@ -148,6 +153,7 @@ function FileTreeItem({ node, depth = 0, dirCache, onLoadDir }: FileTreeItemProp
               depth={depth + 1}
               dirCache={dirCache}
               onLoadDir={onLoadDir}
+              onOpenFile={onOpenFile}
             />
           ))
         ) : isLoaded ? (
@@ -171,6 +177,10 @@ function FileTreeItem({ node, depth = 0, dirCache, onLoadDir }: FileTreeItemProp
 
 export default function FileTreePanel() {
   const toggleFileTreePanel = useUIStore((s) => s.toggleFileTreePanel)
+  const openPreviewTab = useUIStore((s) => s.openPreviewTab)
+  const setPreviewTabLoading = useUIStore((s) => s.setPreviewTabLoading)
+  const setPreviewTabContent = useUIStore((s) => s.setPreviewTabContent)
+  const setPreviewTabError = useUIStore((s) => s.setPreviewTabError)
   const gatewayAPI = useGatewayAPI()
   const currentWorkspaceHash = useWorkspaceStore((s) => s.currentWorkspaceHash)
   const workspaces = useWorkspaceStore((s) => s.workspaces)
@@ -213,6 +223,29 @@ export default function FileTreePanel() {
       setLoading(false)
     }
   }, [gatewayAPI])
+
+  // openFilePreview 负责复用/创建文件标签，并按需拉取只读预览内容。
+  const openFilePreview = useCallback(async (path: string) => {
+    if (!gatewayAPI) return
+
+    const currentTab = useUIStore.getState().previewTabs.find(
+      (tab): tab is FilePreviewTab => tab.kind === 'file' && tab.path === path,
+    )
+    const { id, created } = openPreviewTab(path)
+    if (currentTab && !created) {
+      if (currentTab.loading) return
+      if (currentTab.loaded && !currentTab.error) return
+      setPreviewTabLoading(id)
+    }
+
+    try {
+      const result = await gatewayAPI.readFile({ path })
+      setPreviewTabContent(id, result.payload)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to read file preview'
+      setPreviewTabError(id, message)
+    }
+  }, [gatewayAPI, openPreviewTab, setPreviewTabContent, setPreviewTabError, setPreviewTabLoading])
 
   useEffect(() => {
     loadRoot()
@@ -262,6 +295,7 @@ export default function FileTreePanel() {
               depth={0}
               dirCache={dirCache}
               onLoadDir={loadDir}
+              onOpenFile={openFilePreview}
             />
           ))}
       </div>

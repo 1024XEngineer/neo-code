@@ -1,14 +1,8 @@
-import { useChatStore } from '@/stores/useChatStore'
 import { useRuntime } from '@/context/RuntimeProvider'
-import { formatTokenCount } from '@/utils/format'
 import { FolderOpen } from 'lucide-react'
-import BudgetIndicator from './BudgetIndicator'
 
 export default function StatusBar() {
-  const tokenUsage = useChatStore((s) => s.tokenUsage)
   const { mode, workdir, selectWorkdir } = useRuntime()
-
-  const totalTokens = tokenUsage ? tokenUsage.input_tokens + tokenUsage.output_tokens : 0
 
   async function handleChangeWorkdir() {
     if (mode !== 'electron') return
@@ -44,17 +38,7 @@ export default function StatusBar() {
           </button>
         )}
       </div>
-      <div className="status-bar-right">
-        <BudgetIndicator />
-        {tokenUsage && (
-          <>
-            <span style={{ width: 1, height: 12, background: 'var(--bg-active)' }} />
-            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }}>
-              Tokens: {formatTokenCount(totalTokens)}
-            </span>
-          </>
-        )}
-      </div>
+      <div className="status-bar-right" />
     </div>
   )
 }
