@@ -51,7 +51,7 @@ func TestProgressStreakNoLongerStopsRun(t *testing.T) {
 					promptInjected = true
 				}
 				if call >= 5 {
-					events <- providertypes.NewTextDeltaStreamEvent("done")
+					events <- providertypes.NewTextDeltaStreamEvent("{\"task_completion\":{\"completed\":true}}\ndone")
 					events <- providertypes.NewMessageDoneStreamEvent("stop", nil)
 					return nil
 				}
@@ -84,17 +84,17 @@ func TestProgressStreakNoLongerStopsRun(t *testing.T) {
 	}
 
 	if err := service.Run(context.Background(), input); err != nil {
-		t.Fatalf("expected run success without no-progress hard stop, got %v", err)
+		t.Fatalf("expected run to stop cleanly on no-progress, got %v", err)
 	}
 
 	events := collectRuntimeEvents(service.Events())
-	assertStopReasonDecided(t, events, controlplane.StopReasonAccepted, "")
+	assertStopReasonDecided(t, events, controlplane.StopReasonNoProgress, "")
 
-	if !promptInjected {
-		t.Error("expected self-healing prompt to be injected before repetitive no-progress turns")
+	if promptInjected {
+		t.Error("did not expect self-healing prompt injection after hard no-progress termination")
 	}
-	if providerCalls != 5 {
-		t.Fatalf("expected 5 provider turns (4 tool cycles + done), got %d", providerCalls)
+	if providerCalls != 3 {
+		t.Fatalf("expected 3 provider turns before no-progress termination, got %d", providerCalls)
 	}
 }
 
@@ -138,7 +138,7 @@ func TestProgressEvidenceResetsNoProgressStreak(t *testing.T) {
 					events <- providertypes.NewMessageDoneStreamEvent("tool_calls", nil)
 					return nil
 				}
-				events <- providertypes.NewTextDeltaStreamEvent("done")
+				events <- providertypes.NewTextDeltaStreamEvent("{\"task_completion\":{\"completed\":true}}\ndone")
 				events <- providertypes.NewMessageDoneStreamEvent("stop", nil)
 				return nil
 			},
@@ -207,7 +207,7 @@ func TestRepeatCycleStreakNoLongerStopsRunAndInjectsReminder(t *testing.T) {
 					promptInjected = true
 				}
 				if call >= 5 {
-					events <- providertypes.NewTextDeltaStreamEvent("done")
+					events <- providertypes.NewTextDeltaStreamEvent("{\"task_completion\":{\"completed\":true}}\ndone")
 					events <- providertypes.NewMessageDoneStreamEvent("stop", nil)
 					return nil
 				}
@@ -233,20 +233,20 @@ func TestRepeatCycleStreakNoLongerStopsRunAndInjectsReminder(t *testing.T) {
 		Parts: []providertypes.ContentPart{providertypes.NewTextPart("trigger repeat loop")},
 	})
 	if err != nil {
-		t.Fatalf("expected run success without repeat hard stop, got %v", err)
+		t.Fatalf("expected run to stop cleanly on repeat-cycle, got %v", err)
 	}
 
 	events := collectRuntimeEvents(service.Events())
-	assertStopReasonDecided(t, events, controlplane.StopReasonAccepted, "")
+	assertStopReasonDecided(t, events, controlplane.StopReasonRepeatCycle, "")
 
-	if !promptInjected {
-		t.Fatal("expected repeat self-healing prompt to be injected before repeat limit is reached")
+	if promptInjected {
+		t.Fatal("did not expect repeat self-healing prompt injection after hard repeat-cycle termination")
 	}
 	if executeCalls != 4 {
-		t.Fatalf("expected repeated tool executions to continue until model stops, got %d", executeCalls)
+		t.Fatalf("expected repeated tool executions to stop at repeat limit, got %d", executeCalls)
 	}
-	if providerCalls != 5 {
-		t.Fatalf("expected 5 provider turns (4 tool cycles + done), got %d", providerCalls)
+	if providerCalls != 4 {
+		t.Fatalf("expected 4 provider turns before repeat-cycle termination, got %d", providerCalls)
 	}
 }
 
@@ -280,7 +280,7 @@ func TestRepeatCycleFailedCallsNoLongerHardStop(t *testing.T) {
 			chatFn: func(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error {
 				call := atomic.AddInt32(&providerCalls, 1)
 				if call >= 5 {
-					events <- providertypes.NewTextDeltaStreamEvent("done")
+					events <- providertypes.NewTextDeltaStreamEvent("{\"task_completion\":{\"completed\":true}}\ndone")
 					events <- providertypes.NewMessageDoneStreamEvent("stop", nil)
 					return nil
 				}
@@ -306,13 +306,13 @@ func TestRepeatCycleFailedCallsNoLongerHardStop(t *testing.T) {
 		Parts: []providertypes.ContentPart{providertypes.NewTextPart("trigger repeat fail loop")},
 	})
 	if err != nil {
-		t.Fatalf("expected run success without repeat hard stop, got %v", err)
+		t.Fatalf("expected run to stop cleanly on repeat-cycle, got %v", err)
 	}
 	if executeCalls != 4 {
-		t.Fatalf("expected failed repeated calls to continue until model stops, got %d", executeCalls)
+		t.Fatalf("expected failed repeated calls to stop at repeat limit, got %d", executeCalls)
 	}
-	if providerCalls != 5 {
-		t.Fatalf("expected 5 provider turns (4 tool cycles + done), got %d", providerCalls)
+	if providerCalls != 4 {
+		t.Fatalf("expected 4 provider turns before repeat-cycle termination, got %d", providerCalls)
 	}
 }
 
@@ -556,7 +556,7 @@ func TestNoToolIncompleteTurnStillEvaluatesProgressAndInjectsReminder(t *testing
 
 	manager := newRuntimeConfigManager(t)
 	if err := manager.Update(context.Background(), func(cfg *config.Config) error {
-		cfg.Runtime.MaxNoProgressStreak = 1
+		cfg.Runtime.MaxNoProgressStreak = 5
 		return nil
 	}); err != nil {
 		t.Fatalf("update config: %v", err)
@@ -583,7 +583,7 @@ func TestNoToolIncompleteTurnStillEvaluatesProgressAndInjectsReminder(t *testing
 			{
 				Message: providertypes.Message{
 					Role:  providertypes.RoleAssistant,
-					Parts: []providertypes.ContentPart{providertypes.NewTextPart("done")},
+					Parts: []providertypes.ContentPart{providertypes.NewTextPart("{\"task_completion\":{\"completed\":false}}\ndone")},
 				},
 				FinishReason: "stop",
 			},
@@ -646,14 +646,14 @@ func TestNoToolIncompleteTurnStillEvaluatesProgressAndInjectsReminder(t *testing
 	for _, message := range providerImpl.requests[1].Messages {
 		content := renderPartsForTest(message.Parts)
 		if message.Role == providertypes.RoleSystem &&
-			strings.Contains(content, "<acceptance_continue>") &&
-			strings.Contains(content, "MUST call todo_write") {
+			strings.Contains(content, "[Runtime Control]") &&
+			strings.Contains(content, "task_completion") {
 			foundReminder = true
 			break
 		}
 	}
 	if !foundReminder {
-		t.Fatalf("expected continue reminder in second provider request messages, got %+v", providerImpl.requests[1].Messages)
+		t.Fatalf("expected runtime protocol note in second provider request messages, got %+v", providerImpl.requests[1].Messages)
 	}
 
 	events := collectRuntimeEvents(service.Events())
@@ -666,7 +666,7 @@ func TestAcceptanceContinueWithoutToolCallStopsAsIncomplete(t *testing.T) {
 
 	manager := newRuntimeConfigManager(t)
 	if err := manager.Update(context.Background(), func(cfg *config.Config) error {
-		cfg.Runtime.Verification.MaxNoProgress = 2
+		cfg.Runtime.MaxNoProgressStreak = 2
 		return nil
 	}); err != nil {
 		t.Fatalf("update config: %v", err)
@@ -691,14 +691,14 @@ func TestAcceptanceContinueWithoutToolCallStopsAsIncomplete(t *testing.T) {
 			{
 				Message: providertypes.Message{
 					Role:  providertypes.RoleAssistant,
-					Parts: []providertypes.ContentPart{providertypes.NewTextPart("我已经完成了")},
+					Parts: []providertypes.ContentPart{providertypes.NewTextPart("{\"task_completion\":{\"completed\":false}}\n我没有完成信号")},
 				},
 				FinishReason: "stop",
 			},
 			{
 				Message: providertypes.Message{
 					Role:  providertypes.RoleAssistant,
-					Parts: []providertypes.ContentPart{providertypes.NewTextPart("任务已完成")},
+					Parts: []providertypes.ContentPart{providertypes.NewTextPart("{\"task_completion\":{\"completed\":false}}\n仍然没有完成信号")},
 				},
 				FinishReason: "stop",
 			},
@@ -738,39 +738,17 @@ func TestAcceptanceContinueWithoutToolCallStopsAsIncomplete(t *testing.T) {
 			continue
 		}
 		content := renderPartsForTest(message.Parts)
-		if strings.Contains(content, "<acceptance_continue>") && strings.Contains(content, "MUST call todo_write") {
+		if strings.Contains(content, "[Runtime Control]") && strings.Contains(content, "task_completion") {
 			foundHint = true
 			break
 		}
 	}
 	if !foundHint {
-		t.Fatalf("expected actionable acceptance continue hint, got messages: %+v", secondRequestMessages)
+		t.Fatalf("expected runtime protocol note, got messages: %+v", secondRequestMessages)
 	}
 
 	events := collectRuntimeEvents(service.Events())
-	assertStopReasonDecided(t, events, controlplane.StopReasonNoProgressAfterFinalIntercept, "")
-	foundVerificationReason := false
-	foundAcceptanceReason := false
-	for _, event := range events {
-		switch event.Type {
-		case EventVerificationStarted:
-			payload, ok := event.Payload.(VerificationStartedPayload)
-			if ok && strings.TrimSpace(payload.CompletionBlockedReason) == string(controlplane.CompletionBlockedReasonPendingTodo) {
-				foundVerificationReason = true
-			}
-		case EventAcceptanceDecided:
-			payload, ok := event.Payload.(AcceptanceDecidedPayload)
-			if ok && strings.TrimSpace(payload.CompletionBlockedReason) == string(controlplane.CompletionBlockedReasonPendingTodo) {
-				foundAcceptanceReason = true
-			}
-		}
-	}
-	if !foundVerificationReason {
-		t.Fatal("expected verification_started payload to include completion_blocked_reason=pending_todo")
-	}
-	if !foundAcceptanceReason {
-		t.Fatal("expected acceptance_decided payload to include completion_blocked_reason=pending_todo")
-	}
+	assertStopReasonDecided(t, events, controlplane.StopReasonMissingCompletionSignal, "")
 }
 
 func assertStopReasonDecided(t *testing.T, events []RuntimeEvent, wantReason controlplane.StopReason, wantDetail string) {

@@ -5,7 +5,6 @@ import (
 	"strings"
 	"time"
 
-	"neo-code/internal/runtime/decider"
 	runtimefacts "neo-code/internal/runtime/facts"
 	agentsession "neo-code/internal/session"
 )
@@ -15,7 +14,6 @@ type RuntimeSnapshot struct {
 	RunID     string           `json:"run_id"`
 	SessionID string           `json:"session_id"`
 	Phase     string           `json:"phase,omitempty"`
-	TaskKind  string           `json:"task_kind,omitempty"`
 	UpdatedAt time.Time        `json:"updated_at"`
 	Todos     TodoSnapshot     `json:"todos"`
 	Facts     FactsSnapshot    `json:"facts"`
@@ -30,15 +28,10 @@ type FactsSnapshot struct {
 
 // DecisionSnapshot 是终态裁决快照。
 type DecisionSnapshot struct {
-	Status              string                   `json:"status,omitempty"`
-	StopReason          string                   `json:"stop_reason,omitempty"`
-	MissingFacts        []decider.MissingFact    `json:"missing_facts,omitempty"`
-	RequiredNextActions []decider.RequiredAction `json:"required_next_actions,omitempty"`
-	RequiredInput       *decider.RequiredInput   `json:"required_input,omitempty"`
-	IntentHint          string                   `json:"intent_hint,omitempty"`
-	EffectiveTaskKind   string                   `json:"effective_task_kind,omitempty"`
-	UserVisibleSummary  string                   `json:"user_visible_summary,omitempty"`
-	InternalSummary     string                   `json:"internal_summary,omitempty"`
+	Status     string   `json:"status,omitempty"`
+	StopReason string   `json:"stop_reason,omitempty"`
+	Summary    string   `json:"summary,omitempty"`
+	Details    []string `json:"details,omitempty"`
 }
 
 // SubAgentSnapshot 汇总子代理事实状态，避免客户端自行遍历事实结构。
@@ -82,23 +75,19 @@ func buildRuntimeSnapshot(state *runState) RuntimeSnapshot {
 		factsSnapshot = state.factsCollector.Snapshot()
 	}
 
-	decisionSnapshot := DecisionSnapshot{
-		Status:              strings.TrimSpace(string(state.lastDeciderDecision.Status)),
-		StopReason:          strings.TrimSpace(state.lastDeciderDecision.StopReason),
-		MissingFacts:        append([]decider.MissingFact(nil), state.lastDeciderDecision.MissingFacts...),
-		RequiredNextActions: append([]decider.RequiredAction(nil), state.lastDeciderDecision.RequiredNextActions...),
-		RequiredInput:       state.lastDeciderDecision.RequiredInput,
-		IntentHint:          strings.TrimSpace(string(state.lastDeciderDecision.IntentHint)),
-		EffectiveTaskKind:   strings.TrimSpace(string(state.lastDeciderDecision.EffectiveTaskKind)),
-		UserVisibleSummary:  strings.TrimSpace(state.lastDeciderDecision.UserVisibleSummary),
-		InternalSummary:     strings.TrimSpace(state.lastDeciderDecision.InternalSummary),
+	decisionSnapshot := DecisionSnapshot{}
+	if state.terminalSet || state.terminalStatus != "" || state.terminalStopReason != "" {
+		decisionSnapshot = DecisionSnapshot{
+			Status:     strings.TrimSpace(string(state.terminalStatus)),
+			StopReason: strings.TrimSpace(string(state.terminalStopReason)),
+			Summary:    strings.TrimSpace(state.terminalStopDetail),
+		}
 	}
 
 	return RuntimeSnapshot{
 		RunID:     strings.TrimSpace(state.runID),
 		SessionID: strings.TrimSpace(state.session.ID),
 		Phase:     strings.TrimSpace(string(state.lifecycle)),
-		TaskKind:  strings.TrimSpace(string(state.taskKind)),
 		UpdatedAt: time.Now(),
 		Todos:     todoSnapshot,
 		Facts: FactsSnapshot{
@@ -204,7 +193,6 @@ func (s *Service) GetRuntimeSnapshot(ctx context.Context, sessionID string) (Run
 	snapshot := RuntimeSnapshot{
 		SessionID: normalizedSessionID,
 		Phase:     "",
-		TaskKind:  string(decider.TaskKindMixed),
 		UpdatedAt: session.UpdatedAt,
 		Todos:     buildTodoSnapshotFromItems(session.ListTodos()),
 		Facts: FactsSnapshot{

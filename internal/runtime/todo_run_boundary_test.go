@@ -26,7 +26,6 @@ func TestResetTodosForUserRunClearsSessionAndEmitsEmptySnapshot(t *testing.T) {
 
 	service := &Service{sessionStore: store, events: make(chan RuntimeEvent, 8)}
 	state := newRunState("run-boundary", created)
-	state.userGoal = "新任务"
 	if err := service.resetTodosForUserRun(context.Background(), &state); err != nil {
 		t.Fatalf("resetTodosForUserRun() error = %v", err)
 	}
@@ -61,15 +60,19 @@ func TestResetTodosForUserRunClearsSessionAndEmitsEmptySnapshot(t *testing.T) {
 	}
 }
 
-func TestResetTodosForUserRunKeepsTodosForContinuePrompt(t *testing.T) {
+func TestResetTodosForUserRunKeepsTodosForActivePlan(t *testing.T) {
 	t.Parallel()
 
 	store := newMemoryStore()
 	required := true
-	session := agentsession.New("todo-boundary-continue")
+	session := agentsession.New("todo-boundary-plan")
+	session.CurrentPlan = &agentsession.PlanArtifact{
+		ID:     "plan-1",
+		Status: agentsession.PlanStatusApproved,
+	}
 	session.Todos = []agentsession.TodoItem{{
-		ID:       "old-todo",
-		Content:  "old task",
+		ID:       "plan-todo",
+		Content:  "plan task",
 		Status:   agentsession.TodoStatusPending,
 		Required: &required,
 	}}
@@ -79,8 +82,7 @@ func TestResetTodosForUserRunKeepsTodosForContinuePrompt(t *testing.T) {
 	}
 
 	service := &Service{sessionStore: store, events: make(chan RuntimeEvent, 8)}
-	state := newRunState("run-boundary-continue", created)
-	state.userGoal = "继续"
+	state := newRunState("run-boundary-plan", created)
 	if err := service.resetTodosForUserRun(context.Background(), &state); err != nil {
 		t.Fatalf("resetTodosForUserRun() error = %v", err)
 	}
@@ -88,7 +90,7 @@ func TestResetTodosForUserRunKeepsTodosForContinuePrompt(t *testing.T) {
 		t.Fatalf("state todos = %+v, want preserved", state.session.Todos)
 	}
 	if events := collectRuntimeEvents(service.Events()); len(events) != 0 {
-		t.Fatalf("continue prompt should not emit reset events, got %+v", events)
+		t.Fatalf("active plan should not emit reset events, got %+v", events)
 	}
 }
 
@@ -97,49 +99,32 @@ func TestShouldResetTodosForUserRunBoundaryVariants(t *testing.T) {
 
 	cases := []struct {
 		name      string
-		goal      string
+		session   agentsession.Session
 		wantReset bool
 	}{
-		// 空输入 → 保留
-		{"empty", "", false},
-
-		// 明确新任务 → 清空
-		{"chinese exact 新任务", "新任务", true},
-		{"chinese 帮我做个新任务", "帮我做个新任务", true},
-		{"chinese 换个任务", "换个任务", true},
-		{"chinese 新需求", "新需求", true},
-		{"english exact new task", "new task", true},
-		{"english 新任务", "new task please", true},
-		{"english switch task", "switch task", true},
-		{"english different task", "different task", true},
-
-		// 默认保留：绝大多数输入不再被硬编码清空，交给 prompt 引导模型自行处理
-		{"chinese 继续", "继续", false},
-		{"chinese 继续修这个", "继续修这个", false},
-		{"chinese 接着做", "接着做", false},
-		{"chinese 刚才的代码还有问题", "刚才的代码还有问题", false},
-		{"chinese 再优化一下", "再优化一下", false},
-		{"chinese 补充测试用例", "补充测试用例", false},
-		{"chinese 修复登录bug", "修复登录 bug", false},
-		{"chinese 开始下一个任务", "开始下一个任务", false},
-		{"chinese 重新实现", "重新实现", false},
-		{"english continue", "continue", false},
-		{"english continue with the failing test", "continue with the failing test", false},
-		{"english implement search api", "implement search api", false},
-		{"english keep going", "keep going", false},
-		{"english keep it simple", "keep it simple please", false},
-		{"english resume", "resume task", false},
-		{"english go on", "go on please", false},
+		{name: "no plan resets", session: agentsession.New("no plan"), wantReset: true},
+		{name: "draft plan keeps", session: sessionWithPlanStatus(agentsession.PlanStatusDraft), wantReset: false},
+		{name: "approved plan keeps", session: sessionWithPlanStatus(agentsession.PlanStatusApproved), wantReset: false},
+		{name: "completed plan resets", session: sessionWithPlanStatus(agentsession.PlanStatusCompleted), wantReset: true},
 	}
 
 	for _, tc := range cases {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			got := shouldResetTodosForUserRun(tc.goal)
+			got := shouldResetTodosForUserRun(tc.session)
 			if got != tc.wantReset {
-				t.Fatalf("shouldResetTodosForUserRun(%q) = %v, want %v", tc.goal, got, tc.wantReset)
+				t.Fatalf("shouldResetTodosForUserRun() = %v, want %v", got, tc.wantReset)
 			}
 		})
 	}
+}
+
+func sessionWithPlanStatus(status agentsession.PlanStatus) agentsession.Session {
+	session := agentsession.New("plan-boundary")
+	session.CurrentPlan = &agentsession.PlanArtifact{
+		ID:     "plan-1",
+		Status: status,
+	}
+	return session
 }

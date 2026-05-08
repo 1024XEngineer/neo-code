@@ -91,7 +91,7 @@ func TestBeforeAcceptFinalDecisionPaths(t *testing.T) {
 		t.Parallel()
 		state := newRunState("run-incomplete", agentsession.New("incomplete"))
 		required := true
-		state.finalInterceptStreak = snapshot.Config.Runtime.Verification.MaxNoProgress
+		state.finalInterceptStreak = snapshot.Config.Runtime.MaxNoProgressStreak
 		state.session.TaskState.VerificationProfile = agentsession.VerificationProfileTaskOnly
 		state.session.Todos = []agentsession.TodoItem{
 			{ID: "todo-1", Content: "do work", Status: agentsession.TodoStatusPending, Required: &required},

@@ -266,13 +266,9 @@ func TestRunBeforeCompletionDecisionHookBlockIsObservedOnly(t *testing.T) {
 	if eventIndex(events, EventHookBlocked) >= 0 {
 		t.Fatalf("before_completion_decision should not emit hook_blocked when point is observe-only")
 	}
-	assertEventContains(t, events, EventHookFinished)
 	assertEventContains(t, events, EventAgentDone)
-	if eventIndex(events, EventHookFinished) > eventIndex(events, EventVerificationStarted) {
-		t.Fatalf("before_completion_decision hook should finish before verification_started")
-	}
-	if capturedWorkdir == "" {
-		t.Fatalf("expected before_completion_decision hook metadata to include workdir")
+	if capturedWorkdir != "" {
+		t.Fatalf("before_completion_decision hook should not run as an authoritative terminal gate")
 	}
 }
 

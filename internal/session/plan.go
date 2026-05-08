@@ -1,6 +1,7 @@
 package session
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -30,6 +31,34 @@ const (
 	maxSummaryTodoIDs     = 20
 )
 
+const (
+	// AcceptCheckOutputOnly 表示仅需要最终回复文本作为交付物。
+	AcceptCheckOutputOnly = "output_only"
+	// AcceptCheckWorkspaceChange 表示需要运行期观测到 agent 产生工作区变更。
+	AcceptCheckWorkspaceChange = "workspace_change"
+	// AcceptCheckCommandSuccess 表示需要运行期命令成功事实。
+	AcceptCheckCommandSuccess = "command_success"
+	// AcceptCheckFileExists 表示需要运行期文件存在或写入事实。
+	AcceptCheckFileExists = "file_exists"
+	// AcceptCheckContentContains 表示需要运行期内容匹配事实。
+	AcceptCheckContentContains = "content_contains"
+	// AcceptCheckToolFact 表示需要运行期工具验证事实。
+	AcceptCheckToolFact = "tool_fact"
+)
+
+// AcceptCheck 声明 plan 阶段模型提出的机器可检查验收项。
+type AcceptCheck struct {
+	ID       string            `json:"id,omitempty"`
+	Kind     string            `json:"kind"`
+	Target   string            `json:"target,omitempty"`
+	Match    string            `json:"match,omitempty"`
+	Required bool              `json:"required,omitempty"`
+	Params   map[string]string `json:"params,omitempty"`
+}
+
+// AcceptChecks 保存 plan 级验收项，并兼容读取旧的 []string 格式。
+type AcceptChecks []AcceptCheck
+
 // PlanArtifact stores the current plan persisted in the session.
 type PlanArtifact struct {
 	ID        string      `json:"id"`
@@ -43,21 +72,21 @@ type PlanArtifact struct {
 
 // PlanSpec is the source of truth for the current plan.
 type PlanSpec struct {
-	Goal          string     `json:"goal"`
-	Steps         []string   `json:"steps,omitempty"`
-	Constraints   []string   `json:"constraints,omitempty"`
-	Verify        []string   `json:"verify,omitempty"`
-	Todos         []TodoItem `json:"todos,omitempty"`
-	OpenQuestions []string   `json:"open_questions,omitempty"`
+	Goal          string       `json:"goal"`
+	Steps         []string     `json:"steps,omitempty"`
+	Constraints   []string     `json:"constraints,omitempty"`
+	Verify        AcceptChecks `json:"verify,omitempty"`
+	Todos         []TodoItem   `json:"todos,omitempty"`
+	OpenQuestions []string     `json:"open_questions,omitempty"`
 }
 
 // SummaryView is the compact projection derived from PlanSpec.
 type SummaryView struct {
-	Goal          string   `json:"goal"`
-	KeySteps      []string `json:"key_steps,omitempty"`
-	Constraints   []string `json:"constraints,omitempty"`
-	Verify        []string `json:"verify,omitempty"`
-	ActiveTodoIDs []string `json:"active_todo_ids,omitempty"`
+	Goal          string       `json:"goal"`
+	KeySteps      []string     `json:"key_steps,omitempty"`
+	Constraints   []string     `json:"constraints,omitempty"`
+	Verify        AcceptChecks `json:"verify,omitempty"`
+	ActiveTodoIDs []string     `json:"active_todo_ids,omitempty"`
 }
 
 // Clone returns a deep copy of the plan artifact.
@@ -76,7 +105,7 @@ func (p PlanSpec) Clone() PlanSpec {
 	p.Goal = strings.TrimSpace(p.Goal)
 	p.Steps = append([]string(nil), p.Steps...)
 	p.Constraints = append([]string(nil), p.Constraints...)
-	p.Verify = append([]string(nil), p.Verify...)
+	p.Verify = p.Verify.Clone()
 	p.OpenQuestions = append([]string(nil), p.OpenQuestions...)
 	p.Todos = cloneTodoItems(p.Todos)
 	return p
@@ -87,7 +116,7 @@ func (s SummaryView) Clone() SummaryView {
 	s.Goal = strings.TrimSpace(s.Goal)
 	s.KeySteps = append([]string(nil), s.KeySteps...)
 	s.Constraints = append([]string(nil), s.Constraints...)
-	s.Verify = append([]string(nil), s.Verify...)
+	s.Verify = s.Verify.Clone()
 	s.ActiveTodoIDs = append([]string(nil), s.ActiveTodoIDs...)
 	return s
 }
@@ -159,7 +188,7 @@ func NormalizePlanSpec(spec PlanSpec) (PlanSpec, error) {
 	spec.Goal = strings.TrimSpace(spec.Goal)
 	spec.Steps = normalizeTodoTextList(spec.Steps)
 	spec.Constraints = normalizeTodoTextList(spec.Constraints)
-	spec.Verify = normalizeTodoTextList(spec.Verify)
+	spec.Verify = spec.Verify.Normalize()
 	spec.OpenQuestions = normalizeTodoTextList(spec.OpenQuestions)
 
 	todos, err := normalizeAndValidateTodos(spec.Todos)
@@ -180,7 +209,7 @@ func NormalizeSummaryView(summary SummaryView, spec PlanSpec) SummaryView {
 	normalized.Goal = strings.TrimSpace(normalized.Goal)
 	normalized.KeySteps = normalizeTodoTextList(normalized.KeySteps)
 	normalized.Constraints = normalizeTodoTextList(normalized.Constraints)
-	normalized.Verify = normalizeTodoTextList(normalized.Verify)
+	normalized.Verify = normalized.Verify.Normalize()
 	normalized.ActiveTodoIDs = normalizeTodoTextList(normalized.ActiveTodoIDs)
 	if !summaryViewStructurallyValid(normalized, spec) {
 		return BuildSummaryView(spec)
@@ -198,7 +227,7 @@ func BuildSummaryView(spec PlanSpec) SummaryView {
 		Goal:          spec.Goal,
 		KeySteps:      clampStringList(spec.Steps, maxSummaryKeySteps),
 		Constraints:   clampStringList(spec.Constraints, maxSummaryConstraints),
-		Verify:        clampStringList(spec.Verify, maxSummaryVerify),
+		Verify:        clampAcceptChecks(spec.Verify, maxSummaryVerify),
 		ActiveTodoIDs: collectActiveTodoIDs(spec.Todos, maxSummaryTodoIDs),
 	}
 }
@@ -219,7 +248,7 @@ func RenderPlanContent(spec PlanSpec) string {
 		sections = append(sections, "约束\n"+renderBulletList(spec.Constraints))
 	}
 	if len(spec.Verify) > 0 {
-		sections = append(sections, "验证\n"+renderBulletList(spec.Verify))
+		sections = append(sections, "验证\n"+renderBulletList(spec.Verify.RenderLines()))
 	}
 	activeTodos := collectActiveTodoLines(spec.Todos)
 	if len(activeTodos) > 0 {
@@ -259,6 +288,154 @@ func clampStringList(items []string, maxItems int) []string {
 		return normalized
 	}
 	return append([]string(nil), normalized[:maxItems]...)
+}
+
+// UnmarshalJSON 兼容读取新 AcceptCheck 对象数组与旧字符串数组。
+func (checks *AcceptChecks) UnmarshalJSON(data []byte) error {
+	var structured []AcceptCheck
+	if err := json.Unmarshal(data, &structured); err == nil {
+		*checks = AcceptChecks(structured).Normalize()
+		return nil
+	}
+	var legacy []string
+	if err := json.Unmarshal(data, &legacy); err != nil {
+		return err
+	}
+	migrated := make(AcceptChecks, 0, len(legacy))
+	for _, item := range normalizeTodoTextList(legacy) {
+		migrated = append(migrated, migrateLegacyAcceptCheck(item))
+	}
+	*checks = migrated.Normalize()
+	return nil
+}
+
+// Clone 返回验收项深拷贝，避免调用方共享 Params map。
+func (checks AcceptChecks) Clone() AcceptChecks {
+	if len(checks) == 0 {
+		return nil
+	}
+	out := make(AcceptChecks, 0, len(checks))
+	for _, check := range checks {
+		cloned := check
+		cloned.ID = strings.TrimSpace(cloned.ID)
+		cloned.Kind = strings.TrimSpace(cloned.Kind)
+		cloned.Target = strings.TrimSpace(cloned.Target)
+		cloned.Match = strings.TrimSpace(cloned.Match)
+		if len(check.Params) > 0 {
+			cloned.Params = make(map[string]string, len(check.Params))
+			for key, value := range check.Params {
+				key = strings.TrimSpace(key)
+				value = strings.TrimSpace(value)
+				if key == "" && value == "" {
+					continue
+				}
+				cloned.Params[key] = value
+			}
+		}
+		out = append(out, cloned)
+	}
+	return out
+}
+
+// Normalize 规范化验收项文本字段并迁移旧 kind 名称。
+func (checks AcceptChecks) Normalize() AcceptChecks {
+	if len(checks) == 0 {
+		return nil
+	}
+	out := make(AcceptChecks, 0, len(checks))
+	seen := make(map[string]struct{}, len(checks))
+	for _, check := range checks.Clone() {
+		check.ID = strings.TrimSpace(check.ID)
+		check.Kind = normalizeAcceptCheckKind(check.Kind)
+		check.Target = strings.TrimSpace(check.Target)
+		check.Match = strings.TrimSpace(check.Match)
+		key := check.Kind + "\x00" + check.Target + "\x00" + check.Match
+		if key == "\x00\x00" {
+			continue
+		}
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, check)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// RenderLines 返回面向计划正文的稳定验收项文本。
+func (checks AcceptChecks) RenderLines() []string {
+	normalized := checks.Normalize()
+	if len(normalized) == 0 {
+		return nil
+	}
+	lines := make([]string, 0, len(normalized))
+	for _, check := range normalized {
+		label := check.Kind
+		if check.Target != "" {
+			label += ": " + check.Target
+		}
+		lines = append(lines, label)
+	}
+	return lines
+}
+
+func clampAcceptChecks(items AcceptChecks, maxItems int) AcceptChecks {
+	normalized := items.Normalize()
+	if len(normalized) <= maxItems || maxItems <= 0 {
+		return normalized
+	}
+	return normalized[:maxItems].Clone()
+}
+
+func migrateLegacyAcceptCheck(value string) AcceptCheck {
+	kind := AcceptCheckOutputOnly
+	switch {
+	case looksLikeCommand(value):
+		kind = AcceptCheckCommandSuccess
+	case looksLikePath(value):
+		kind = AcceptCheckFileExists
+	}
+	return AcceptCheck{Kind: kind, Target: strings.TrimSpace(value), Required: true}
+}
+
+func normalizeAcceptCheckKind(kind string) string {
+	normalized := strings.ToLower(strings.TrimSpace(kind))
+	switch normalized {
+	case "command":
+		return AcceptCheckCommandSuccess
+	default:
+		return normalized
+	}
+}
+
+func looksLikeCommand(value string) bool {
+	trimmed := strings.ToLower(strings.TrimSpace(value))
+	if trimmed == "" {
+		return false
+	}
+	prefixes := []string{
+		"go ", "go\t", "npm ", "pnpm ", "yarn ", "make", "cargo ", "python ", "pytest", "ruff ",
+		"eslint", "tsc", "golangci-lint", "git ", "powershell ", "pwsh ",
+	}
+	for _, prefix := range prefixes {
+		if strings.HasPrefix(trimmed, prefix) {
+			return true
+		}
+	}
+	return strings.Contains(trimmed, " test ") || strings.Contains(trimmed, " build ")
+}
+
+func looksLikePath(value string) bool {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" || strings.Contains(trimmed, " ") {
+		return false
+	}
+	return strings.Contains(trimmed, "/") ||
+		strings.Contains(trimmed, "\\") ||
+		strings.Contains(strings.TrimPrefix(trimmed, "."), ".")
 }
 
 func collectActiveTodoIDs(items []TodoItem, limit int) []string {

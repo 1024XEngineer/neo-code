@@ -18,11 +18,11 @@ const (
 )
 
 type summaryCandidate struct {
-	Goal          string   `json:"goal"`
-	KeySteps      []string `json:"key_steps"`
-	Constraints   []string `json:"constraints"`
-	Verify        []string `json:"verify"`
-	ActiveTodoIDs []string `json:"active_todo_ids"`
+	Goal          string                    `json:"goal"`
+	KeySteps      []string                  `json:"key_steps"`
+	Constraints   []string                  `json:"constraints"`
+	Verify        agentsession.AcceptChecks `json:"verify"`
+	ActiveTodoIDs []string                  `json:"active_todo_ids"`
 }
 
 type planTurnOutput struct {
@@ -119,7 +119,7 @@ func normalizeSummaryCandidate(candidate summaryCandidate) agentsession.SummaryV
 		Goal:          strings.TrimSpace(candidate.Goal),
 		KeySteps:      append([]string(nil), candidate.KeySteps...),
 		Constraints:   append([]string(nil), candidate.Constraints...),
-		Verify:        append([]string(nil), candidate.Verify...),
+		Verify:        candidate.Verify.Clone(),
 		ActiveTodoIDs: append([]string(nil), candidate.ActiveTodoIDs...),
 	}
 }

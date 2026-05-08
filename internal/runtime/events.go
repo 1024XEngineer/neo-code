@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"neo-code/internal/runtime/acceptance"
+	"neo-code/internal/runtime/acceptgate"
 	"neo-code/internal/runtime/controlplane"
 	"neo-code/internal/runtime/verify"
 )
@@ -102,6 +103,8 @@ type AcceptanceDecidedPayload struct {
 	UserVisibleSummary      string                      `json:"user_visible_summary,omitempty"`
 	InternalSummary         string                      `json:"internal_summary,omitempty"`
 	ContinueHint            string                      `json:"continue_hint,omitempty"`
+	Summary                 string                      `json:"summary,omitempty"`
+	Results                 []acceptgate.CheckResult    `json:"results,omitempty"`
 }
 
 // LedgerReconciledPayload 为账本对账预留负载。

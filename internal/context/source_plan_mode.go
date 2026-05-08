@@ -80,7 +80,7 @@ func renderCurrentPlanSection(plan *agentsession.PlanArtifact, injectFull bool) 
 	}
 	if len(plan.Summary.Verify) > 0 {
 		lines = append(lines, "verify:")
-		for _, check := range plan.Summary.Verify {
+		for _, check := range plan.Summary.Verify.RenderLines() {
 			lines = append(lines, "- "+check)
 		}
 	}

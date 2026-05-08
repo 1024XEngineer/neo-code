@@ -73,6 +73,8 @@ type ProgressScore struct {
 	SameSubgoal            SubgoalRelation      `json:"same_subgoal"`
 	StalledProgressState   StalledProgressState `json:"stalled_progress_state"`
 	ReminderKind           ReminderKind         `json:"reminder_kind,omitempty"`
+	ShouldTerminate        bool                 `json:"should_terminate"`
+	TerminateReason        StopReason           `json:"terminate_reason,omitempty"`
 }
 
 // ProgressState 保存跨轮 progress 判定所需的历史快照。
@@ -140,6 +142,14 @@ func EvaluateProgress(state ProgressState, input ProgressInput) ProgressState {
 	} else {
 		next.StalledProgressState = StalledProgressHealthy
 		next.ReminderKind = ReminderKindNone
+	}
+	if input.NoProgressLimit > 0 && next.NoProgressStreak >= input.NoProgressLimit {
+		next.ShouldTerminate = true
+		next.TerminateReason = StopReasonNoProgress
+	}
+	if input.RepeatCycleLimit > 0 && next.RepeatCycleStreak >= input.RepeatCycleLimit {
+		next.ShouldTerminate = true
+		next.TerminateReason = StopReasonRepeatCycle
 	}
 
 	return ProgressState{

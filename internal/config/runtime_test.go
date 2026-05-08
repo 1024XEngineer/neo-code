@@ -17,9 +17,6 @@ func TestRuntimeConfigCloneAndDefaults(t *testing.T) {
 	if zero.MaxNoProgressStreak != defaults.MaxNoProgressStreak {
 		t.Fatalf("MaxNoProgressStreak = %d, want %d", zero.MaxNoProgressStreak, defaults.MaxNoProgressStreak)
 	}
-	if zero.Verification.MaxNoProgress != defaults.Verification.MaxNoProgress {
-		t.Fatalf("Verification.MaxNoProgress = %d, want %d", zero.Verification.MaxNoProgress, defaults.Verification.MaxNoProgress)
-	}
 	if len(zero.Verification.Verifiers) == 0 {
 		t.Fatal("expected default verifiers to be populated")
 	}
@@ -46,7 +43,6 @@ func TestRuntimeConfigValidate(t *testing.T) {
 		MaxRepeatCycleStreak: 1,
 		MaxTurns:             1,
 		Verification: VerificationConfig{
-			MaxNoProgress: 1,
 			Verifiers: map[string]VerifierConfig{
 				"": {},
 			},

@@ -31,7 +31,7 @@ func (s *Service) beforeAcceptFinal(
 		return acceptance.AcceptanceDecision{}, nil
 	}
 
-	maxNoProgress := resolveAcceptanceMaxNoProgress(snapshot.Config.Runtime.Verification)
+	maxNoProgress := resolveNoProgressStreakLimit(snapshot.Config.Runtime)
 	noProgressStreak := state.finalInterceptStreak
 	if noProgressStreak < 0 {
 		noProgressStreak = 0
@@ -349,10 +349,7 @@ func (s *Service) beforeAcceptFinalLegacy(
 	}
 	engine := acceptance.NewEngine(policy)
 
-	maxNoProgress := verificationCfg.MaxNoProgress
-	if maxNoProgress <= 0 {
-		maxNoProgress = 3
-	}
+	maxNoProgress := resolveNoProgressStreakLimit(snapshot.Config.Runtime)
 	noProgressStreak := state.finalInterceptStreak
 	if noProgressStreak < 0 {
 		noProgressStreak = 0

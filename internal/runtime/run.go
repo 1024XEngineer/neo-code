@@ -17,7 +17,7 @@ import (
 	"neo-code/internal/promptasset"
 	"neo-code/internal/provider"
 	providertypes "neo-code/internal/provider/types"
-	"neo-code/internal/runtime/acceptance"
+	"neo-code/internal/runtime/acceptgate"
 	"neo-code/internal/runtime/controlplane"
 	runtimehooks "neo-code/internal/runtime/hooks"
 	"neo-code/internal/runtime/streaming"
@@ -314,15 +314,6 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 				return s.handleRunError(err)
 			}
 			hasToolCalls := len(turnOutput.assistant.ToolCalls) > 0
-			state.mu.Lock()
-			if hasToolCalls {
-				state.mustUseToolAfterFinalContinue = false
-				state.noToolAfterFinalContinueStreak = 0
-			} else if state.mustUseToolAfterFinalContinue {
-				state.pendingFinalProgress = false
-				state.noToolAfterFinalContinueStreak++
-			}
-			state.mu.Unlock()
 			if hasToolCalls {
 				if err := s.appendAssistantMessageAndSave(
 					ctx,
@@ -360,7 +351,7 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 				turnOutput.assistant,
 				hasToolCalls,
 			)
-			completionState, completed := controlplane.EvaluateCompletion(
+			completionState, _ := controlplane.EvaluateCompletion(
 				state.completion,
 				hasToolCalls,
 			)
@@ -396,101 +387,83 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 						s.emitRunScoped(ctx, EventAgentDone, &state, planMessage)
 						return nil
 					}
+					if strings.TrimSpace(renderPartsForVerification(turnOutput.assistant.Parts)) != "" {
+						if err := s.appendAssistantMessageOnlyAndSave(ctx, &state, turnOutput.assistant); err != nil {
+							return s.handleRunError(err)
+						}
+						s.emitRunScoped(ctx, EventAgentDone, &state, turnOutput.assistant)
+						return nil
+					}
 				}
 				completionSignaled, err := maybeParseCompletionTurnOutput(turnOutput.assistant)
 				if err != nil {
 					return s.handleRunError(err)
 				}
+				if !completionSignaled {
+					state.mu.Lock()
+					state.missingCompletionSignalStreak++
+					alreadyHinted := state.completionProtocolHinted
+					if !alreadyHinted {
+						state.completionProtocolHinted = true
+					}
+					state.mu.Unlock()
+					if !alreadyHinted {
+						if err := s.appendSystemMessageAndSave(ctx, &state, completionProtocolReminder); err != nil {
+							return s.handleRunError(err)
+						}
+						break turnAttempt
+					}
+					state.markTerminalDecision(
+						controlplane.TerminalStatusIncomplete,
+						controlplane.StopReasonMissingCompletionSignal,
+						"assistant stopped without task_completion",
+					)
+					s.emitRunScoped(ctx, EventAgentDone, &state, turnOutput.assistant)
+					return nil
+				}
+
 				if err := s.setBaseRunState(ctx, &state, controlplane.RunStateVerify); err != nil {
 					return s.handleRunError(err)
 				}
 				s.updateResumeCheckpoint(ctx, &state, "verify", "completed")
-				acceptanceDecision, err := s.runBeforeCompletionDecisionAcceptance(
-					ctx,
-					&state,
-					snapshot,
-					turnOutput.assistant,
-					snapshot.Workdir,
-					completed,
-					hasToolCalls,
-					turnOutput.assistant.Role,
-				)
-				if err != nil {
-					return s.handleRunError(err)
-				}
-				s.emitAcceptanceDecisionEvents(&state, acceptanceDecision)
-				applyAcceptanceResultProgress(&state, acceptanceDecision)
-
-				switch acceptanceDecision.Status {
-				case acceptance.AcceptanceAccepted:
-					state.lastAcceptanceBlockedReason = ""
-					state.mustUseToolAfterFinalContinue = false
-					state.noToolAfterFinalContinueStreak = 0
+				report := s.evaluateAcceptGate(ctx, &state, turnOutput.assistant)
+				s.emitAcceptGateReport(&state, report)
+				assistantForFinal := stripCompletionSignalFromAssistantMessage(turnOutput.assistant)
+				if report.Outcome == acceptgate.OutcomeAccepted {
+					state.mu.Lock()
+					state.missingCompletionSignalStreak = 0
+					state.completionProtocolHinted = false
+					state.mu.Unlock()
 					if markCurrentPlanCompleted(&state.session, completionSignaled) {
 						state.touchSession()
 						if err := s.sessionStore.UpdateSessionState(ctx, sessionStateInputFromSession(state.session)); err != nil {
 							return s.handleRunError(err)
 						}
 					}
-					if err := s.appendAssistantMessageOnlyAndSave(ctx, &state, turnOutput.assistant); err != nil {
+					if err := s.appendAssistantMessageOnlyAndSave(ctx, &state, assistantForFinal); err != nil {
 						return s.handleRunError(err)
 					}
 					s.emitRunScopedOptional(EventVerificationCompleted, &state, VerificationCompletedPayload{
-						StopReason: acceptanceDecision.StopReason,
+						StopReason: report.StopReason,
 					})
-					recordAcceptanceTerminal(&state, acceptanceDecision)
-					s.emitRunScoped(ctx, EventAgentDone, &state, turnOutput.assistant)
+					state.markTerminalDecision(controlplane.TerminalStatusCompleted, report.StopReason, report.Summary)
+					s.emitRunScoped(ctx, EventAgentDone, &state, assistantForFinal)
 					s.triggerMemoExtraction(state.session.ID, state.session.Messages, state.rememberedThisRun)
 					return nil
-				case acceptance.AcceptanceContinue:
-					state.lastAcceptanceBlockedReason = strings.TrimSpace(acceptanceDecision.CompletionBlockedReason)
-					state.mustUseToolAfterFinalContinue = true
-					if state.noToolAfterFinalContinueStreak == 0 {
-						state.noToolAfterFinalContinueStreak = 1
-					}
-					reminder := strings.TrimSpace(buildAcceptanceContinueHint(acceptanceDecision))
-					if reminder == "" {
-						reminder = finalContinueReminder
-					}
-					if err := s.appendSystemMessageAndSave(ctx, &state, reminder); err != nil {
-						return s.handleRunError(err)
-					}
-					break turnAttempt
-				case acceptance.AcceptanceIncomplete:
-					state.lastAcceptanceBlockedReason = ""
-					state.mustUseToolAfterFinalContinue = false
-					state.noToolAfterFinalContinueStreak = 0
-					if err := s.appendAssistantMessageOnlyAndSave(ctx, &state, turnOutput.assistant); err != nil {
-						return s.handleRunError(err)
-					}
-					recordAcceptanceTerminal(&state, acceptanceDecision)
-					s.emitRunScoped(ctx, EventAgentDone, &state, turnOutput.assistant)
-					return nil
-				case acceptance.AcceptanceFailed:
-					state.lastAcceptanceBlockedReason = ""
-					state.mustUseToolAfterFinalContinue = false
-					state.noToolAfterFinalContinueStreak = 0
-					if err := s.appendAssistantMessageOnlyAndSave(ctx, &state, turnOutput.assistant); err != nil {
-						return s.handleRunError(err)
-					}
-					s.emitRunScopedOptional(EventVerificationFailed, &state, VerificationFailedPayload{
-						StopReason: acceptanceDecision.StopReason,
-						ErrorClass: acceptanceDecision.ErrorClass,
-					})
-					recordAcceptanceTerminal(&state, acceptanceDecision)
-					s.emitRunScoped(ctx, EventAgentDone, &state, turnOutput.assistant)
-					return nil
-				default:
-					state.lastAcceptanceBlockedReason = ""
-					state.mustUseToolAfterFinalContinue = false
-					state.noToolAfterFinalContinueStreak = 0
-					if err := s.appendAssistantMessageOnlyAndSave(ctx, &state, turnOutput.assistant); err != nil {
-						return s.handleRunError(err)
-					}
-					recordAcceptanceTerminal(&state, acceptanceDecision)
-					s.emitRunScoped(ctx, EventAgentDone, &state, turnOutput.assistant)
-					return nil
 				}
+				state.mu.Lock()
+				state.missingCompletionSignalStreak = 0
+				state.completionProtocolHinted = false
+				state.mu.Unlock()
+				if err := s.appendAssistantMessageOnlyAndSave(ctx, &state, assistantForFinal); err != nil {
+					return s.handleRunError(err)
+				}
+				s.emitRunScopedOptional(EventVerificationFailed, &state, VerificationFailedPayload{
+					StopReason: report.StopReason,
+				})
+				state.markTerminalDecision(controlplane.TerminalStatusFailed, report.StopReason, report.Summary)
+				s.emitRunScoped(ctx, EventAgentDone, &state, assistantForFinal)
+				return nil
 			}
 
 			beforeTask := state.session.TaskState.Clone()
@@ -531,17 +504,18 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 			)
 			state.progress = controlplane.EvaluateProgress(state.progress, progressInput)
 			currentScore := state.progress.LastScore
-			if shouldPromotePendingFinalProgress(
-				currentScore,
-				summary,
-				state.completion,
-				state.lastAcceptanceBlockedReason,
-			) {
-				state.pendingFinalProgress = true
-			}
 			state.mu.Unlock()
 
 			s.emitRunScoped(ctx, EventProgressEvaluated, &state, ProgressEvaluatedPayload{Score: currentScore})
+			if currentScore.ShouldTerminate {
+				reason := currentScore.TerminateReason
+				if reason == "" {
+					reason = controlplane.StopReasonNoProgress
+				}
+				state.markTerminalDecision(controlplane.TerminalStatusIncomplete, reason, "progress hard stop")
+				s.emitRunScoped(ctx, EventAgentDone, &state, providertypes.Message{Role: providertypes.RoleAssistant})
+				return nil
+			}
 			if err := s.setBaseRunState(ctx, &state, controlplane.RunStateVerify); err != nil {
 				return s.handleRunError(err)
 			}

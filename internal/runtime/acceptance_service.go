@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strings"
 
-	"neo-code/internal/config"
 	"neo-code/internal/runtime/acceptance"
 	"neo-code/internal/runtime/controlplane"
 	"neo-code/internal/runtime/decider"
@@ -355,12 +354,4 @@ func toSessionTodos(snapshot decider.TodoSnapshot) []agentsession.TodoItem {
 		})
 	}
 	return out
-}
-
-func resolveAcceptanceMaxNoProgress(cfg config.VerificationConfig) int {
-	limit := cfg.MaxNoProgress
-	if limit <= 0 {
-		return 3
-	}
-	return limit
 }

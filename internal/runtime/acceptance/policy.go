@@ -48,8 +48,6 @@ func (p DefaultPolicy) buildVerifier(name string) verify.FinalVerifier {
 		return verify.ContentMatchVerifier{}
 	case "command_success":
 		return verify.CommandSuccessVerifier{VerifierName: "command_success", Executor: p.Executor}
-	case "git_diff":
-		return verify.GitDiffVerifier{Executor: p.Executor}
 	case "build":
 		return verify.NewBuildVerifier(p.Executor)
 	case "test":
@@ -73,11 +71,11 @@ func mappedVerifierNames(profile agentsession.VerificationProfile) []string {
 	case agentsession.VerificationProfileConfig:
 		return []string{"todo_convergence", "file_exists", "content_match", "command_success"}
 	case agentsession.VerificationProfileEditCode:
-		return []string{"todo_convergence", "git_diff", "build", "test", "typecheck"}
+		return []string{"todo_convergence", "build", "test", "typecheck"}
 	case agentsession.VerificationProfileFixBug:
-		return []string{"todo_convergence", "git_diff", "test", "build", "typecheck"}
+		return []string{"todo_convergence", "test", "build", "typecheck"}
 	case agentsession.VerificationProfileRefactor:
-		return []string{"todo_convergence", "git_diff", "build", "test", "lint", "typecheck"}
+		return []string{"todo_convergence", "build", "test", "lint", "typecheck"}
 	default:
 		return nil
 	}

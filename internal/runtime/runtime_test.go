@@ -15,9 +15,9 @@ import (
 	"neo-code/internal/config"
 	agentcontext "neo-code/internal/context"
 	contextcompact "neo-code/internal/context/compact"
-	"neo-code/internal/repository"
 	"neo-code/internal/provider"
 	providertypes "neo-code/internal/provider/types"
+	"neo-code/internal/repository"
 	approvalflow "neo-code/internal/runtime/approval"
 	"neo-code/internal/runtime/controlplane"
 	"neo-code/internal/runtime/streaming"
@@ -618,13 +618,14 @@ func (s *blockingLoadStore) CleanupExpiredSessions(ctx context.Context, maxAge t
 }
 
 type scriptedProvider struct {
-	name       string
-	streams    [][]providertypes.StreamEvent
-	responses  []scriptedResponse
-	requests   []providertypes.GenerateRequest
-	callCount  int
-	estimateFn func(ctx context.Context, req providertypes.GenerateRequest) (providertypes.BudgetEstimate, error)
-	chatFn     func(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error
+	name                      string
+	streams                   [][]providertypes.StreamEvent
+	responses                 []scriptedResponse
+	requests                  []providertypes.GenerateRequest
+	callCount                 int
+	requireExplicitCompletion bool
+	estimateFn                func(ctx context.Context, req providertypes.GenerateRequest) (providertypes.BudgetEstimate, error)
+	chatFn                    func(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error
 }
 
 func (p *scriptedProvider) EstimateInputTokens(
@@ -654,10 +655,32 @@ func (p *scriptedProvider) Generate(ctx context.Context, req providertypes.Gener
 	p.callCount++
 
 	if p.chatFn != nil {
-		return p.chatFn(ctx, req, events)
+		stream, err := p.collectChatFnStream(ctx, req)
+		if p.shouldInjectDefaultCompletionForStream(stream) {
+			select {
+			case events <- providertypes.NewTextDeltaStreamEvent("{\"task_completion\":{\"completed\":true}}\n"):
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+		for _, event := range stream {
+			select {
+			case events <- event:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+		return err
 	}
 
 	if callIndex < len(p.streams) {
+		if p.shouldInjectDefaultCompletionForStream(p.streams[callIndex]) {
+			select {
+			case events <- providertypes.NewTextDeltaStreamEvent("{\"task_completion\":{\"completed\":true}}\n"):
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
 		for _, event := range p.streams[callIndex] {
 			select {
 			case events <- event:
@@ -675,6 +698,7 @@ func (p *scriptedProvider) Generate(ctx context.Context, req providertypes.Gener
 	}
 	if callIndex < len(p.responses) {
 		response := p.responses[callIndex]
+		response.Message = p.withDefaultCompletionSignal(response.Message)
 		for index, toolCall := range response.Message.ToolCalls {
 			select {
 			case events <- providertypes.NewToolCallStartStreamEvent(index, toolCall.ID, toolCall.Name):
@@ -702,6 +726,68 @@ func (p *scriptedProvider) Generate(ctx context.Context, req providertypes.Gener
 	}
 
 	return nil
+}
+
+// withDefaultCompletionSignal 让旧测试脚本中的普通最终回复满足新的 task_completion 协议。
+func (p *scriptedProvider) withDefaultCompletionSignal(message providertypes.Message) providertypes.Message {
+	if p.requireExplicitCompletion || len(message.ToolCalls) > 0 {
+		return message
+	}
+	text := renderPartsForTest(message.Parts)
+	if strings.TrimSpace(text) == "" ||
+		strings.Contains(text, `"task_completion"`) ||
+		strings.Contains(text, `"plan_spec"`) {
+		return message
+	}
+	message.Parts = []providertypes.ContentPart{
+		providertypes.NewTextPart("{\"task_completion\":{\"completed\":true}}\n" + text),
+	}
+	return message
+}
+
+// collectChatFnStream 收集自定义测试 provider 的流事件，便于统一补齐完成信号。
+func (p *scriptedProvider) collectChatFnStream(
+	ctx context.Context,
+	req providertypes.GenerateRequest,
+) ([]providertypes.StreamEvent, error) {
+	proxy := make(chan providertypes.StreamEvent, 1024)
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- p.chatFn(ctx, req, proxy)
+		close(proxy)
+	}()
+	stream := make([]providertypes.StreamEvent, 0)
+	for event := range proxy {
+		stream = append(stream, event)
+	}
+	return stream, <-errCh
+}
+
+// shouldInjectDefaultCompletionForStream 为旧测试中的纯文本流补齐完成信号，工具调用流和显式完成流保持原样。
+func (p *scriptedProvider) shouldInjectDefaultCompletionForStream(stream []providertypes.StreamEvent) bool {
+	if p.requireExplicitCompletion {
+		return false
+	}
+	hasText := false
+	for _, event := range stream {
+		switch event.Type {
+		case providertypes.StreamEventToolCallStart, providertypes.StreamEventToolCallDelta:
+			return false
+		case providertypes.StreamEventTextDelta:
+			if event.TextDelta == nil {
+				continue
+			}
+			text := strings.TrimSpace(event.TextDelta.Text)
+			if text == "" {
+				continue
+			}
+			hasText = true
+			if strings.Contains(text, `"task_completion"`) || strings.Contains(text, `"plan_spec"`) {
+				return false
+			}
+		}
+	}
+	return hasText
 }
 
 // streamContainsMessageDone 判断测试流中是否已显式包含结束事件，避免辅助 provider 重复补发 message_done。
@@ -2442,15 +2528,8 @@ func TestServiceRunErrorPaths(t *testing.T) {
 			expectEvents: []EventType{EventUserMessage, EventToolStart, EventToolChunk, EventToolResult, EventAgentDone},
 			assert: func(t *testing.T, store *memoryStore, scripted *scriptedProvider, tool *stubTool) {
 				t.Helper()
-				if scripted.callCount != 10 {
-					t.Fatalf("expected 10 provider calls without loop cap, got %d", scripted.callCount)
-				}
-				session := onlySession(t, store)
-				if got := len(session.Messages); got != 20 {
-					t.Fatalf("expected 20 persisted messages after 9 tool cycles and final answer, got %d", got)
-				}
-				if renderPartsForTest(session.Messages[len(session.Messages)-1].Parts) != "done after many cycles" {
-					t.Fatalf("expected final assistant reply to be persisted, got %+v", session.Messages[len(session.Messages)-1])
+				if scripted.callCount != 7 {
+					t.Fatalf("expected 7 provider calls before no-progress hard stop, got %d", scripted.callCount)
 				}
 			},
 		},
@@ -3864,12 +3943,12 @@ func TestServiceRunPlanModeKeepsExistingPlanWhenPlanSpecIsInvalid(t *testing.T) 
 		Spec: agentsession.PlanSpec{
 			Goal:   "Keep previous plan",
 			Steps:  []string{"existing step"},
-			Verify: []string{"existing verify"},
+			Verify: acceptText("existing verify"),
 		},
 		Summary: agentsession.SummaryView{
 			Goal:     "Keep previous plan",
 			KeySteps: []string{"existing step"},
-			Verify:   []string{"existing verify"},
+			Verify:   acceptText("existing verify"),
 		},
 	}
 	seed.LastFullPlanRevision = 2
@@ -3882,7 +3961,8 @@ func TestServiceRunPlanModeKeepsExistingPlanWhenPlanSpecIsInvalid(t *testing.T) 
 			{
 				Message: providertypes.Message{
 					Role: providertypes.RoleAssistant,
-					Parts: []providertypes.ContentPart{providertypes.NewTextPart(`{
+					Parts: []providertypes.ContentPart{providertypes.NewTextPart(`{"task_completion":{"completed":true}}
+{
   "plan_spec": {
     "goal": "",
     "steps": ["bad update"],
@@ -3973,8 +4053,8 @@ func TestServiceRunBuildModeDoesNotRequireCurrentPlan(t *testing.T) {
 	if saved.CurrentPlan != nil {
 		t.Fatalf("expected build mode to complete without CurrentPlan, got %+v", saved.CurrentPlan)
 	}
-	if builder.callCount != 1 {
-		t.Fatalf("builder call count = %d, want 1", builder.callCount)
+	if builder.callCount != 2 {
+		t.Fatalf("builder call count = %d, want 2", builder.callCount)
 	}
 	if builder.builds[0].PlanStage != planStageBuildExecute {
 		t.Fatalf("PlanStage = %q, want %q", builder.builds[0].PlanStage, planStageBuildExecute)
@@ -3998,7 +4078,8 @@ func TestServiceRunPlanModeInjectsFullPlanOnNextTurnAfterDraftCreation(t *testin
 			{
 				Message: providertypes.Message{
 					Role: providertypes.RoleAssistant,
-					Parts: []providertypes.ContentPart{providertypes.NewTextPart(`{
+					Parts: []providertypes.ContentPart{providertypes.NewTextPart(`{"task_completion":{"completed":true}}
+{
   "plan_spec": {
     "goal": "Introduce plan mode",
     "steps": ["persist plan state"],
@@ -4089,7 +4170,7 @@ func TestServiceRunPlanModeUsesSummaryViewForAlignedPlanTurn(t *testing.T) {
 		Spec: agentsession.PlanSpec{
 			Goal:   "Keep planning aligned",
 			Steps:  []string{"summarize current plan"},
-			Verify: []string{"go test ./internal/runtime"},
+			Verify: acceptText("go test ./internal/runtime"),
 			Todos: []agentsession.TodoItem{
 				{ID: "todo-aligned", Content: "summarize current plan", Status: agentsession.TodoStatusPending},
 			},
@@ -4097,7 +4178,7 @@ func TestServiceRunPlanModeUsesSummaryViewForAlignedPlanTurn(t *testing.T) {
 		Summary: agentsession.SummaryView{
 			Goal:          "Keep planning aligned",
 			KeySteps:      []string{"summarize current plan"},
-			Verify:        []string{"go test ./internal/runtime"},
+			Verify:        acceptText("go test ./internal/runtime"),
 			ActiveTodoIDs: []string{"todo-aligned"},
 		},
 	}
@@ -4165,7 +4246,7 @@ func TestServiceRunBuildModeInjectsFullPlanForUnalignedExistingPlan(t *testing.T
 		Spec: agentsession.PlanSpec{
 			Goal:   "Resume build execution",
 			Steps:  []string{"resume implementation"},
-			Verify: []string{"go test ./internal/runtime"},
+			Verify: acceptText("go test ./internal/runtime"),
 			Todos: []agentsession.TodoItem{
 				{ID: "todo-restored", Content: "resume implementation", Status: agentsession.TodoStatusPending},
 			},
@@ -4173,7 +4254,7 @@ func TestServiceRunBuildModeInjectsFullPlanForUnalignedExistingPlan(t *testing.T
 		Summary: agentsession.SummaryView{
 			Goal:          "Resume build execution",
 			KeySteps:      []string{"resume implementation"},
-			Verify:        []string{"go test ./internal/runtime"},
+			Verify:        acceptText("go test ./internal/runtime"),
 			ActiveTodoIDs: []string{"todo-restored"},
 		},
 	}
@@ -4231,7 +4312,7 @@ func TestServiceRunBuildModeUsesSummaryViewForAlignedExecuteTurn(t *testing.T) {
 		Spec: agentsession.PlanSpec{
 			Goal:   "Execute aligned build",
 			Steps:  []string{"continue implementation"},
-			Verify: []string{"go test ./internal/runtime"},
+			Verify: acceptText("go test ./internal/runtime"),
 			Todos: []agentsession.TodoItem{
 				{ID: "todo-build-aligned", Content: "continue implementation", Status: agentsession.TodoStatusPending},
 			},
@@ -4239,7 +4320,7 @@ func TestServiceRunBuildModeUsesSummaryViewForAlignedExecuteTurn(t *testing.T) {
 		Summary: agentsession.SummaryView{
 			Goal:          "Execute aligned build",
 			KeySteps:      []string{"continue implementation"},
-			Verify:        []string{"go test ./internal/runtime"},
+			Verify:        acceptText("go test ./internal/runtime"),
 			ActiveTodoIDs: []string{"todo-build-aligned"},
 		},
 	}
@@ -4293,7 +4374,7 @@ func TestServiceRunBuildModeInjectsFullPlanWhenSummaryIsUnusable(t *testing.T) {
 		Spec: agentsession.PlanSpec{
 			Goal:   "Follow full plan when summary is missing",
 			Steps:  []string{"review whole plan"},
-			Verify: []string{"go test ./internal/runtime"},
+			Verify: acceptText("go test ./internal/runtime"),
 			Todos: []agentsession.TodoItem{
 				{ID: "todo-full-fallback", Content: "review whole plan", Status: agentsession.TodoStatusPending},
 			},
@@ -4350,12 +4431,12 @@ func TestServiceApproveCurrentPlanTriggersOneFullPlanAlignment(t *testing.T) {
 		Spec: agentsession.PlanSpec{
 			Goal:   "批准并执行当前计划",
 			Steps:  []string{"继续实现"},
-			Verify: []string{"go test ./internal/runtime"},
+			Verify: acceptText("go test ./internal/runtime"),
 		},
 		Summary: agentsession.SummaryView{
 			Goal:     "批准并执行当前计划",
 			KeySteps: []string{"继续实现"},
-			Verify:   []string{"go test ./internal/runtime"},
+			Verify:   acceptText("go test ./internal/runtime"),
 		},
 	}
 	seed.LastFullPlanRevision = 4
@@ -4459,7 +4540,7 @@ func TestServiceApproveCurrentPlanTrimsSessionID(t *testing.T) {
 		Spec: agentsession.PlanSpec{
 			Goal:   "trim session id before load",
 			Steps:  []string{"step one"},
-			Verify: []string{"verify one"},
+			Verify: acceptText("verify one"),
 		},
 	}
 	if _, err := store.CreateSession(context.Background(), createSessionInputFromSession(seed)); err != nil {
@@ -4499,12 +4580,12 @@ func TestServiceRunBuildModeIgnoresPlanningJSON(t *testing.T) {
 		Spec: agentsession.PlanSpec{
 			Goal:   "保持旧计划不被覆盖",
 			Steps:  []string{"旧步骤"},
-			Verify: []string{"旧验证"},
+			Verify: acceptText("旧验证"),
 		},
 		Summary: agentsession.SummaryView{
 			Goal:     "保持旧计划不被覆盖",
 			KeySteps: []string{"旧步骤"},
-			Verify:   []string{"旧验证"},
+			Verify:   acceptText("旧验证"),
 		},
 	}
 	seed.LastFullPlanRevision = 1
@@ -4517,7 +4598,8 @@ func TestServiceRunBuildModeIgnoresPlanningJSON(t *testing.T) {
 			{
 				Message: providertypes.Message{
 					Role: providertypes.RoleAssistant,
-					Parts: []providertypes.ContentPart{providertypes.NewTextPart(`{
+					Parts: []providertypes.ContentPart{providertypes.NewTextPart(`{"task_completion":{"completed":true}}
+{
   "plan_spec": {
     "goal": "不应在 build 中落库",
     "steps": ["错误改写计划"],
@@ -4569,12 +4651,12 @@ func TestServiceRunCompletedPlanRequestsOneFinalFullReview(t *testing.T) {
 		Spec: agentsession.PlanSpec{
 			Goal:   "完成计划后仍需一次全文确认",
 			Steps:  []string{"收尾"},
-			Verify: []string{"go test ./internal/runtime"},
+			Verify: acceptText("go test ./internal/runtime"),
 		},
 		Summary: agentsession.SummaryView{
 			Goal:     "完成计划后仍需一次全文确认",
 			KeySteps: []string{"收尾"},
-			Verify:   []string{"go test ./internal/runtime"},
+			Verify:   acceptText("go test ./internal/runtime"),
 		},
 	}
 	seed.LastFullPlanRevision = 2
@@ -4657,12 +4739,12 @@ func TestServiceCompactMarksPlanContextDirty(t *testing.T) {
 		Spec: agentsession.PlanSpec{
 			Goal:   "compact 后重对齐计划",
 			Steps:  []string{"压缩历史"},
-			Verify: []string{"go test ./internal/runtime"},
+			Verify: acceptText("go test ./internal/runtime"),
 		},
 		Summary: agentsession.SummaryView{
 			Goal:     "compact 后重对齐计划",
 			KeySteps: []string{"压缩历史"},
-			Verify:   []string{"go test ./internal/runtime"},
+			Verify:   acceptText("go test ./internal/runtime"),
 		},
 	}
 	if _, err := store.CreateSession(context.Background(), createSessionInputFromSession(session)); err != nil {
@@ -4708,12 +4790,12 @@ func TestServiceRunCompactedSessionRequestsRestoreAlignment(t *testing.T) {
 		Spec: agentsession.PlanSpec{
 			Goal:   "compact 恢复后重新对齐计划",
 			Steps:  []string{"继续执行"},
-			Verify: []string{"go test ./internal/runtime"},
+			Verify: acceptText("go test ./internal/runtime"),
 		},
 		Summary: agentsession.SummaryView{
 			Goal:     "compact 恢复后重新对齐计划",
 			KeySteps: []string{"继续执行"},
-			Verify:   []string{"go test ./internal/runtime"},
+			Verify:   acceptText("go test ./internal/runtime"),
 		},
 	}
 	seed.LastFullPlanRevision = 1

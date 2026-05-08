@@ -7,6 +7,10 @@ import (
 	"time"
 )
 
+func acceptText(target string) AcceptChecks {
+	return AcceptChecks{{Kind: AcceptCheckOutputOnly, Target: target, Required: true}}
+}
+
 func TestNormalizeSummaryViewFallsBackToBuiltSummaryWhenStructurallyInvalid(t *testing.T) {
 	t.Parallel()
 
@@ -14,7 +18,7 @@ func TestNormalizeSummaryViewFallsBackToBuiltSummaryWhenStructurallyInvalid(t *t
 		Goal:        "为 runtime 引入 plan/build 模式",
 		Steps:       []string{"扩展 session", "过滤工具", "调整 runtime"},
 		Constraints: []string{"plan 模式禁止写工具"},
-		Verify:      []string{"build 结束后进入 verify"},
+		Verify:      acceptText("build 结束后进入 verify"),
 		Todos: []TodoItem{
 			{ID: "todo-1", Content: "扩展 session", Status: TodoStatusPending},
 			{ID: "todo-2", Content: "过滤工具", Status: TodoStatusCompleted},
@@ -27,7 +31,7 @@ func TestNormalizeSummaryViewFallsBackToBuiltSummaryWhenStructurallyInvalid(t *t
 	got := NormalizeSummaryView(SummaryView{
 		Goal:          "  ",
 		KeySteps:      []string{"仅一步"},
-		Verify:        []string{"验收"},
+		Verify:        acceptText("验收"),
 		ActiveTodoIDs: []string{"missing"},
 	}, spec)
 	want := BuildSummaryView(spec)
@@ -49,7 +53,7 @@ func TestBuildSummaryViewUsesActiveNonTerminalTodosOnly(t *testing.T) {
 	spec, err := NormalizePlanSpec(PlanSpec{
 		Goal:   "整理当前执行摘要",
 		Steps:  []string{"步骤一", "步骤二"},
-		Verify: []string{"验证一"},
+		Verify: acceptText("验证一"),
 		Todos: []TodoItem{
 			{ID: "todo-1", Content: "待执行", Status: TodoStatusPending},
 			{ID: "todo-2", Content: "执行中", Status: TodoStatusInProgress},
@@ -82,7 +86,7 @@ func TestNormalizePlanArtifactDefaultsAndStatusNormalization(t *testing.T) {
 		Spec: PlanSpec{
 			Goal:   "规范化计划对象",
 			Steps:  []string{"步骤一"},
-			Verify: []string{"验证一"},
+			Verify: acceptText("验证一"),
 		},
 	})
 	if err != nil {
@@ -116,7 +120,7 @@ func TestNormalizePlanArtifactPreservesCreatedAtAndNormalizesUpdatedAt(t *testin
 		Spec: PlanSpec{
 			Goal:   "保留时间字段",
 			Steps:  []string{"步骤一"},
-			Verify: []string{"验证一"},
+			Verify: acceptText("验证一"),
 		},
 	})
 	if err != nil {
@@ -136,7 +140,7 @@ func TestNormalizeSummaryViewAllowsEmptyTodoRefsWhenPlanHasNoTodos(t *testing.T)
 	spec, err := NormalizePlanSpec(PlanSpec{
 		Goal:   "无 todo 计划",
 		Steps:  []string{"步骤一"},
-		Verify: []string{"验证一"},
+		Verify: acceptText("验证一"),
 	})
 	if err != nil {
 		t.Fatalf("NormalizePlanSpec() error = %v", err)
@@ -145,7 +149,7 @@ func TestNormalizeSummaryViewAllowsEmptyTodoRefsWhenPlanHasNoTodos(t *testing.T)
 	summary := NormalizeSummaryView(SummaryView{
 		Goal:     "无 todo 计划",
 		KeySteps: []string{"步骤一"},
-		Verify:   []string{"验证一"},
+		Verify:   acceptText("验证一"),
 	}, spec)
 	if summary.Goal != "无 todo 计划" {
 		t.Fatalf("Goal = %q", summary.Goal)
@@ -162,7 +166,7 @@ func TestRenderPlanContentIncludesAllSections(t *testing.T) {
 		Goal:          "输出完整计划正文",
 		Steps:         []string{"步骤一", "步骤二"},
 		Constraints:   []string{"约束一"},
-		Verify:        []string{"验证一"},
+		Verify:        acceptText("验证一"),
 		OpenQuestions: []string{"问题一"},
 		Todos: []TodoItem{
 			{ID: "todo-1", Content: "待执行", Status: TodoStatusPending},
@@ -254,7 +258,7 @@ func TestNormalizePlanArtifactEmptyID(t *testing.T) {
 		Spec: PlanSpec{
 			Goal:   "测试",
 			Steps:  []string{"步骤一"},
-			Verify: []string{"验证一"},
+			Verify: acceptText("验证一"),
 		},
 	})
 	if err == nil {
@@ -326,20 +330,20 @@ func TestClampStringListMaxItems(t *testing.T) {
 func TestSummaryViewStructurallyValidDetectsInvalid(t *testing.T) {
 	t.Parallel()
 
-	spec := PlanSpec{Goal: "目标", Steps: []string{"步骤一"}, Verify: []string{"验证一"}}
+	spec := PlanSpec{Goal: "目标", Steps: []string{"步骤一"}, Verify: acceptText("验证一")}
 	// Empty goal
 	if summaryViewStructurallyValid(SummaryView{}, spec) {
 		t.Fatal("expected false for empty summary")
 	}
 	// Missing key steps
-	if summaryViewStructurallyValid(SummaryView{Goal: "目标", Verify: []string{"v"}}, spec) {
+	if summaryViewStructurallyValid(SummaryView{Goal: "目标", Verify: acceptText("v")}, spec) {
 		t.Fatal("expected false for missing key steps")
 	}
 	// Unknown active todo IDs
 	if summaryViewStructurallyValid(SummaryView{
 		Goal:          "目标",
 		KeySteps:      []string{"步骤一"},
-		Verify:        []string{"验证一"},
+		Verify:        acceptText("验证一"),
 		ActiveTodoIDs: []string{"unknown"},
 	}, spec) {
 		t.Fatal("expected false for unknown todo IDs")

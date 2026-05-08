@@ -41,6 +41,8 @@ type runState struct {
 	lastAcceptanceBlockedReason    string
 	taskKind                       decider.TaskKind
 	userGoal                       string
+	missingCompletionSignalStreak  int
+	completionProtocolHinted       bool
 	factsCollector                 *runtimefacts.Collector
 	lastDeciderDecision            decider.Decision
 	terminalStatus                 controlplane.TerminalStatus

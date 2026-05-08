@@ -17,8 +17,8 @@ func TestMappedVerifierNames(t *testing.T) {
 		{profile: agentsession.VerificationProfileTaskOnly, want: []string{"todo_convergence"}},
 		{profile: agentsession.VerificationProfileCreateFile, want: []string{"todo_convergence", "file_exists", "content_match"}},
 		{profile: agentsession.VerificationProfileConfig, want: []string{"todo_convergence", "file_exists", "content_match", "command_success"}},
-		{profile: agentsession.VerificationProfileEditCode, want: []string{"todo_convergence", "git_diff", "build", "test", "typecheck"}},
-		{profile: agentsession.VerificationProfileRefactor, want: []string{"todo_convergence", "git_diff", "build", "test", "lint", "typecheck"}},
+		{profile: agentsession.VerificationProfileEditCode, want: []string{"todo_convergence", "build", "test", "typecheck"}},
+		{profile: agentsession.VerificationProfileRefactor, want: []string{"todo_convergence", "build", "test", "lint", "typecheck"}},
 	}
 
 	for _, tc := range cases {
@@ -43,10 +43,10 @@ func TestDefaultPolicyResolveVerifiers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResolveVerifiers() error = %v", err)
 	}
-	if len(verifiers) != 5 {
-		t.Fatalf("ResolveVerifiers() len = %d, want 5", len(verifiers))
+	if len(verifiers) != 4 {
+		t.Fatalf("ResolveVerifiers() len = %d, want 4", len(verifiers))
 	}
-	if verifiers[0].Name() != "todo_convergence" || verifiers[1].Name() != "git_diff" {
+	if verifiers[0].Name() != "todo_convergence" || verifiers[1].Name() != "build" {
 		t.Fatalf("unexpected verifier order: %s, %s", verifiers[0].Name(), verifiers[1].Name())
 	}
 }
