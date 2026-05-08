@@ -3,7 +3,6 @@ package askuser
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -48,10 +47,16 @@ func TestBrokerOpenResolveCloseFlow(t *testing.T) {
 		_, openResult, openErr = broker.Open(ctx, Request{QuestionID: "q1", TimeoutSec: 10})
 	}()
 
-	// Allow goroutine to enter Open and register the request (first ID = ask-1).
+	// Allow goroutine to enter Open and register the request.
 	time.Sleep(50 * time.Millisecond)
 
-	resolveErr := broker.Resolve("ask-1", Result{
+	ids := broker.PendingIDs()
+	if len(ids) != 1 {
+		t.Fatalf("expected 1 pending request, got %d", len(ids))
+	}
+	requestID := ids[0]
+
+	resolveErr := broker.Resolve(requestID, Result{
 		Status: StatusAnswered,
 		Values: []string{"opt-a", "opt-b"},
 	})
@@ -75,7 +80,7 @@ func TestBrokerOpenResolveCloseFlow(t *testing.T) {
 	}
 
 	// Request should be cleaned up after Open returns
-	err := broker.Resolve("ask-1", Result{Status: StatusSkipped})
+	err := broker.Resolve(requestID, Result{Status: StatusSkipped})
 	if err == nil || !strings.Contains(err.Error(), "not found") {
 		t.Fatalf("expected not found error after close, got %v", err)
 	}
@@ -110,12 +115,18 @@ func TestBrokerResolveDuplicateIsIdempotent(t *testing.T) {
 
 	time.Sleep(50 * time.Millisecond)
 
-	// First resolve with "ask-1" (first generated ID in fresh broker).
-	if err := broker.Resolve("ask-1", Result{Status: StatusAnswered}); err != nil {
+	ids := broker.PendingIDs()
+	if len(ids) != 1 {
+		t.Fatalf("expected 1 pending request, got %d", len(ids))
+	}
+	requestID := ids[0]
+
+	// First resolve.
+	if err := broker.Resolve(requestID, Result{Status: StatusAnswered}); err != nil {
 		t.Fatalf("first Resolve error: %v", err)
 	}
 	// Duplicate resolve — should not block or error
-	if err := broker.Resolve("ask-1", Result{Status: StatusSkipped}); err != nil {
+	if err := broker.Resolve(requestID, Result{Status: StatusSkipped}); err != nil {
 		t.Fatalf("duplicate Resolve error: %v", err)
 	}
 
@@ -275,9 +286,12 @@ func TestBrokerConcurrentOpenResolve(t *testing.T) {
 	// Allow all goroutines to register their requests.
 	time.Sleep(100 * time.Millisecond)
 
-	// Resolve all requests — IDs are ask-1 through ask-N in order.
-	for i := 0; i < numRequests; i++ {
-		rid := fmt.Sprintf("ask-%d", i+1)
+	// Resolve all requests using the current pending IDs.
+	ids := broker.PendingIDs()
+	if len(ids) != numRequests {
+		t.Fatalf("expected %d pending requests, got %d", numRequests, len(ids))
+	}
+	for _, rid := range ids {
 		if err := broker.Resolve(rid, Result{Status: StatusAnswered, Values: []string{"yes"}}); err != nil {
 			t.Errorf("resolve %s error: %v", rid, err)
 		}

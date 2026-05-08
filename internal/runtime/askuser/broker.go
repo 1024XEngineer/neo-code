@@ -2,6 +2,8 @@ package askuser
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"sync"
@@ -13,6 +15,13 @@ const (
 	maxRequestTimeout     = time.Hour
 )
 
+// newRequestID generates an unguessable request ID using crypto/rand.
+func newRequestID() string {
+	buf := make([]byte, 8)
+	_, _ = rand.Read(buf)
+	return "ask-" + hex.EncodeToString(buf)
+}
+
 // pendingRequest 代表一个等待用户响应的 ask_user 请求。
 type pendingRequest struct {
 	resultCh  chan Result
@@ -22,7 +31,6 @@ type pendingRequest struct {
 // Broker 负责管理 ask_user 请求的挂起与恢复生命周期。
 type Broker struct {
 	mu      sync.Mutex
-	nextID  uint64
 	pending map[string]*pendingRequest
 }
 
@@ -41,8 +49,7 @@ func (b *Broker) Open(ctx context.Context, request Request) (string, Result, err
 	}
 
 	b.mu.Lock()
-	b.nextID++
-	requestID := fmt.Sprintf("ask-%d", b.nextID)
+	requestID := newRequestID()
 	pr := &pendingRequest{
 		resultCh: make(chan Result, 1),
 	}
@@ -111,6 +118,20 @@ func (b *Broker) Close(requestID string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	delete(b.pending, requestID)
+}
+
+// PendingIDs returns a copy of currently pending request IDs.
+func (b *Broker) PendingIDs() []string {
+	if b == nil {
+		return nil
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	ids := make([]string, 0, len(b.pending))
+	for id := range b.pending {
+		ids = append(ids, id)
+	}
+	return ids
 }
 
 // TimeoutForRequest 根据请求配置返回有效超时。

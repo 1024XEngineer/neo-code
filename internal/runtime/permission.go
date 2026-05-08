@@ -145,7 +145,12 @@ func (s *Service) executeToolCallWithPermission(ctx context.Context, input permi
 	}
 	if strings.EqualFold(input.Call.Name, tools.ToolNameAskUser) {
 		callInput.AskUserEventEmitter = func(eventName string, payload any) {
-			s.emitRunScopedOptional(eventTypeFromAskUserEvent(eventName), input.State, payload)
+			eventType := eventTypeFromAskUserEvent(eventName)
+			if eventName == "user_question_requested" {
+				s.emitRunScopedPriority(eventType, input.State, payload)
+			} else {
+				s.emitRunScopedOptional(eventType, input.State, payload)
+			}
 		}
 	}
 	if input.State != nil {

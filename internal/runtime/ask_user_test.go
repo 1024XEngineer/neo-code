@@ -89,11 +89,16 @@ func TestResolveUserQuestionSuccess(t *testing.T) {
 		})
 	}()
 
-	// Allow goroutine to enter Open and register the request (first ID = ask-1).
+	// Allow goroutine to enter Open and register the request.
 	time.Sleep(50 * time.Millisecond)
 
+	ids := service.askUserBroker.PendingIDs()
+	if len(ids) != 1 {
+		t.Fatalf("expected 1 pending request, got %d", len(ids))
+	}
+
 	resolveErr := service.ResolveUserQuestion(context.Background(), UserQuestionResolutionInput{
-		RequestID: "ask-1",
+		RequestID: ids[0],
 		Status:    askuser.StatusAnswered,
 		Values:    []string{"hello", "world"},
 	})
@@ -141,11 +146,16 @@ func TestResolveUserQuestionSkip(t *testing.T) {
 		})
 	}()
 
-	// Allow goroutine to enter Open and register the request (first ID = ask-1).
+	// Allow goroutine to enter Open and register the request.
 	time.Sleep(50 * time.Millisecond)
 
+	ids := service.askUserBroker.PendingIDs()
+	if len(ids) != 1 {
+		t.Fatalf("expected 1 pending request, got %d", len(ids))
+	}
+
 	resolveErr := service.ResolveUserQuestion(context.Background(), UserQuestionResolutionInput{
-		RequestID: "ask-1",
+		RequestID: ids[0],
 		Status:    askuser.StatusSkipped,
 	})
 	if resolveErr != nil {
@@ -231,8 +241,11 @@ func TestAskUserBrokerAdapterConversion(t *testing.T) {
 	// Give the goroutine time to register the request.
 	time.Sleep(50 * time.Millisecond)
 
-	// First Open in a fresh broker always gets ask-1.
-	resolveErr := service.askUserBroker.Resolve("ask-1", askuser.Result{
+	ids := service.askUserBroker.PendingIDs()
+	if len(ids) != 1 {
+		t.Fatalf("expected 1 pending request, got %d", len(ids))
+	}
+	resolveErr := service.askUserBroker.Resolve(ids[0], askuser.Result{
 		Status: askuser.StatusAnswered,
 		Values: []string{"Yes"},
 	})
