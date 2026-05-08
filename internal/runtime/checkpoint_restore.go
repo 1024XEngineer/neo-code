@@ -71,8 +71,7 @@ func (s *Service) restoreCheckpointCore(ctx context.Context, sessionID, checkpoi
 		records, listErr := s.checkpointStore.ListCheckpoints(ctx, sessionID, checkpoint.ListCheckpointOpts{Limit: 5})
 		if listErr == nil {
 			for _, r := range records {
-				if r.Reason == agentsession.CheckpointReasonEndOfTurn &&
-					checkpoint.IsPerEditRef(r.CodeCheckpointRef) {
+				if r.Reason == agentsession.CheckpointReasonEndOfTurn && checkpoint.IsPerEditRef(r.CodeCheckpointRef) {
 					fallbackRef = r.CodeCheckpointRef
 					break
 				}
@@ -304,8 +303,8 @@ func (s *Service) updateRuntimeSessionAfterRestore(sessionID string, head agents
 type CheckpointDiffInput struct {
 	SessionID    string `json:"session_id"`
 	CheckpointID string `json:"checkpoint_id,omitempty"` // 可选，为空则查最新代码检查点
-	RunID        string `json:"run_id,omitempty"`
-	Scope        string `json:"scope,omitempty"`
+	Scope        string `json:"scope,omitempty"`         // 可选，"run" 表示 run 级聚合 diff
+	RunID        string `json:"run_id,omitempty"`        // scope=run 时指定目标 run
 }
 
 // CheckpointDiffResult 描述两个相邻代码检查点之间的差异。

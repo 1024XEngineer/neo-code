@@ -1026,7 +1026,7 @@ func TestCheckpointDiff_ScopeRun_ReturnsAggregateDiff(t *testing.T) {
 	if len(modifiedPaths) != 1 || modifiedPaths[0] != "a.txt" {
 		t.Fatalf("expected a.txt modified, got added=%v modified=%v", addedPaths, modifiedPaths)
 	}
-	// CheckpointID should be set to the target (last) checkpoint in the run
+	// 当前 run-scope diff 默认返回目标 checkpoint（未显式指定时为最新 checkpoint）。
 	if result.CheckpointID != "cp-2" {
 		t.Fatalf("CheckpointID = %q, want cp-2", result.CheckpointID)
 	}

@@ -104,10 +104,13 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 		}
 		if statePtr != nil && s.perEditStore != nil && statePtr.baselineCheckpointID != "" && statePtr.lastEndOfTurnCheckpointID != "" {
 			runEndCtx := context.Background()
-			records, listErr := s.checkpointStore.ListCheckpoints(runEndCtx, statePtr.session.ID, checkpoint.ListCheckpointOpts{RunID: statePtr.runID})
+			records, listErr := s.checkpointStore.ListCheckpoints(runEndCtx, statePtr.session.ID, checkpoint.ListCheckpointOpts{})
 			if listErr == nil {
 				var perEditIDs []string
 				for _, r := range records {
+					if strings.TrimSpace(r.RunID) != statePtr.runID {
+						continue
+					}
 					if checkpoint.IsPerEditRef(r.CodeCheckpointRef) {
 						perEditIDs = append(perEditIDs, checkpoint.PerEditCheckpointIDFromRef(r.CodeCheckpointRef))
 					}

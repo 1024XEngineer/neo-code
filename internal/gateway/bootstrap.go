@@ -2105,15 +2105,15 @@ func decodeCheckpointDiffPayload(payload any) CheckpointDiffInput {
 			SubjectID:    strings.TrimSpace(typed.SubjectID),
 			SessionID:    strings.TrimSpace(typed.SessionID),
 			CheckpointID: strings.TrimSpace(typed.CheckpointID),
-			RunID:        strings.TrimSpace(typed.RunID),
 			Scope:        strings.TrimSpace(typed.Scope),
+			RunID:        strings.TrimSpace(typed.RunID),
 		}
 	case map[string]any:
 		return CheckpointDiffInput{
 			SessionID:    readStringValue(typed, "session_id"),
 			CheckpointID: readStringValue(typed, "checkpoint_id"),
-			RunID:        readStringValue(typed, "run_id"),
 			Scope:        readStringValue(typed, "scope"),
+			RunID:        readStringValue(typed, "run_id"),
 		}
 	default:
 		raw, marshalErr := json.Marshal(payload)
@@ -2130,8 +2130,8 @@ func decodeCheckpointDiffPayload(payload any) CheckpointDiffInput {
 		return CheckpointDiffInput{
 			SessionID:    strings.TrimSpace(decoded.SessionID),
 			CheckpointID: strings.TrimSpace(decoded.CheckpointID),
-			RunID:        strings.TrimSpace(decoded.RunID),
 			Scope:        strings.TrimSpace(decoded.Scope),
+			RunID:        strings.TrimSpace(decoded.RunID),
 		}
 	}
 }
