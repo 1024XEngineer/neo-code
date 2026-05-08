@@ -1163,7 +1163,7 @@ func TestRunAggregateDiff_ModifiedFileAcrossCheckpoints(t *testing.T) {
 	}
 	store.Reset()
 
-	patch, changes, err := store.RunAggregateDiff(context.Background(), []string{"cp1", "cp2"})
+	patch, changes, err := store.RunAggregateDiff(context.Background(), []string{"cp1", "cp2"}, nil)
 	if err != nil {
 		t.Fatalf("RunAggregateDiff: %v", err)
 	}
@@ -1206,7 +1206,7 @@ func TestRunAggregateDiff_CreatedFile(t *testing.T) {
 	}
 	store.Reset()
 
-	patch, changes, err := store.RunAggregateDiff(context.Background(), []string{"cp1"})
+	patch, changes, err := store.RunAggregateDiff(context.Background(), []string{"cp1"}, nil)
 	if err != nil {
 		t.Fatalf("RunAggregateDiff: %v", err)
 	}
@@ -1244,7 +1244,7 @@ func TestRunAggregateDiff_DeletedFile(t *testing.T) {
 	}
 	store.Reset()
 
-	patch, changes, err := store.RunAggregateDiff(context.Background(), []string{"cp1"})
+	patch, changes, err := store.RunAggregateDiff(context.Background(), []string{"cp1"}, nil)
 	if err != nil {
 		t.Fatalf("RunAggregateDiff: %v", err)
 	}
@@ -1305,7 +1305,7 @@ func TestRunAggregateDiff_CreatedThenDeleted(t *testing.T) {
 	}
 	store.Reset()
 
-	_, changes, err := store.RunAggregateDiff(context.Background(), []string{"cp1", "cp2"})
+	_, changes, err := store.RunAggregateDiff(context.Background(), []string{"cp1", "cp2"}, nil)
 	if err != nil {
 		t.Fatalf("RunAggregateDiff: %v", err)
 	}
@@ -1349,7 +1349,7 @@ func TestRunAggregateDiff_UnchangedFileOmitted(t *testing.T) {
 	}
 	store.Reset()
 
-	_, changes, err := store.RunAggregateDiff(context.Background(), []string{"cp1", "cp2"})
+	_, changes, err := store.RunAggregateDiff(context.Background(), []string{"cp1", "cp2"}, nil)
 	if err != nil {
 		t.Fatalf("RunAggregateDiff: %v", err)
 	}
@@ -1360,7 +1360,7 @@ func TestRunAggregateDiff_UnchangedFileOmitted(t *testing.T) {
 
 func TestRunAggregateDiff_EmptyCheckpointIDs(t *testing.T) {
 	store, _ := newTestStore(t)
-	patch, changes, err := store.RunAggregateDiff(context.Background(), nil)
+	patch, changes, err := store.RunAggregateDiff(context.Background(), nil, nil)
 	if err != nil {
 		t.Fatalf("RunAggregateDiff with nil: %v", err)
 	}
@@ -1374,7 +1374,7 @@ func TestRunAggregateDiff_EmptyCheckpointIDs(t *testing.T) {
 
 func TestRunAggregateDiff_NonexistentCheckpoint(t *testing.T) {
 	store, _ := newTestStore(t)
-	_, _, err := store.RunAggregateDiff(context.Background(), []string{"nonexistent_cp"})
+	_, _, err := store.RunAggregateDiff(context.Background(), []string{"nonexistent_cp"}, nil)
 	if err == nil {
 		t.Fatal("expected error for nonexistent checkpoint")
 	}
@@ -1407,7 +1407,7 @@ func TestRunAggregateDiff_MultipleFilesAggregated(t *testing.T) {
 	}
 	store.Reset()
 
-	patch, changes, err := store.RunAggregateDiff(context.Background(), []string{"cp1"})
+	patch, changes, err := store.RunAggregateDiff(context.Background(), []string{"cp1"}, nil)
 	if err != nil {
 		t.Fatalf("RunAggregateDiff: %v", err)
 	}
@@ -1426,5 +1426,64 @@ func TestRunAggregateDiff_MultipleFilesAggregated(t *testing.T) {
 	}
 	if !strings.Contains(patch, "a.txt") || !strings.Contains(patch, "b.txt") {
 		t.Fatalf("patch missing file headers:\n%s", patch)
+	}
+}
+
+func TestRunAggregateDiff_HistoricalFileFilteredByVersion(t *testing.T) {
+	store, workdir := newTestStore(t)
+
+	// Simulate "previous run": capture file A, finalize prev_cp.
+	absA := writeWorkdirFile(t, workdir, "a.txt", "from prev run\n")
+	if _, err := store.CapturePreWrite(absA); err != nil {
+		t.Fatalf("capture a: %v", err)
+	}
+	if err := os.WriteFile(absA, []byte("modified in prev run\n"), 0o644); err != nil {
+		t.Fatalf("write a: %v", err)
+	}
+	if _, err := store.Finalize("prev_cp"); err != nil {
+		t.Fatalf("finalize prev_cp: %v", err)
+	}
+	store.Reset()
+
+	// Get prev run's FileVersions.
+	prevFV, err := store.GetCheckpointFileVersions("prev_cp")
+	if err != nil {
+		t.Fatalf("get prev vers: %v", err)
+	}
+
+	// "Current run": capture file B only, a.txt is NOT touched.
+	absB := writeWorkdirFile(t, workdir, "b.txt", "old b\n")
+	if _, err := store.CapturePreWrite(absB); err != nil {
+		t.Fatalf("capture b: %v", err)
+	}
+	if err := os.WriteFile(absB, []byte("new b\n"), 0o644); err != nil {
+		t.Fatalf("write b: %v", err)
+	}
+	if _, err := store.Finalize("cur_cp1"); err != nil {
+		t.Fatalf("finalize cur_cp1: %v", err)
+	}
+	store.Reset()
+
+	// Second checkpoint in current run (still no touch on a.txt).
+	if _, err := store.Finalize("cur_cp2"); err != nil {
+		t.Fatalf("finalize cur_cp2: %v", err)
+	}
+	store.Reset()
+
+	patch, changes, err := store.RunAggregateDiff(context.Background(),
+		[]string{"cur_cp1", "cur_cp2"}, prevFV)
+	if err != nil {
+		t.Fatalf("RunAggregateDiff: %v", err)
+	}
+	// a.txt should be filtered out: version unchanged from prev run.
+	// b.txt should appear.
+	if len(changes) != 1 {
+		t.Fatalf("expected 1 change (b.txt only), got %d: %+v", len(changes), changes)
+	}
+	if changes[0].Path != "b.txt" {
+		t.Fatalf("expected b.txt, got %s", changes[0].Path)
+	}
+	if strings.Contains(patch, "a.txt") {
+		t.Fatalf("patch should NOT contain a.txt (filtered by version):\n%s", patch)
 	}
 }

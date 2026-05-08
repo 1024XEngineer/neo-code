@@ -64,7 +64,21 @@ func (s *Service) restoreCheckpointCore(ctx context.Context, sessionID, checkpoi
 	if guardWritten {
 		s.perEditStore.Reset()
 	}
-	guardRecord, guardErr := s.createGuardCheckpoint(ctx, sessionID, record.RunID, guardID, guardWritten)
+	// 当 pending 为空时回退到最近 end-of-turn checkpoint 作为 undo 基线
+	var fallbackRef string
+	if !guardWritten && s.checkpointStore != nil {
+		records, listErr := s.checkpointStore.ListCheckpoints(ctx, sessionID, checkpoint.ListCheckpointOpts{Limit: 5})
+		if listErr == nil {
+			for _, r := range records {
+				if r.Reason == agentsession.CheckpointReasonEndOfTurn &&
+					checkpoint.IsPerEditRef(r.CodeCheckpointRef) {
+					fallbackRef = r.CodeCheckpointRef
+					break
+				}
+			}
+		}
+	}
+	guardRecord, guardErr := s.createGuardCheckpoint(ctx, sessionID, record.RunID, guardID, guardWritten, fallbackRef)
 	if guardErr != nil {
 		if guardWritten {
 			_ = s.perEditStore.DeleteCheckpoint(guardID)
@@ -200,8 +214,10 @@ func (s *Service) UndoRestoreCheckpoint(ctx context.Context, sessionID string) (
 }
 
 // createGuardCheckpoint 创建 pre_restore_guard 类型的 checkpoint。
-// guardWritten=true 时 guardID 对应的 per-edit cp_<id>.json 已写入，CodeCheckpointRef 指向它；否则仅记 session 状态。
-func (s *Service) createGuardCheckpoint(ctx context.Context, sessionID, runID, guardID string, guardWritten bool) (agentsession.CheckpointRecord, error) {
+// guardWritten=true 时 guardID 对应的 per-edit cp_<id>.json 已写入，CodeCheckpointRef 指向它；
+// guardWritten=false 时若 fallbackRef 非空，则用它作为 CodeCheckpointRef 以保证 undo 可走代码恢复路径。
+// fallbackRef 应为完整的 "peredit:<id>" 格式引用。
+func (s *Service) createGuardCheckpoint(ctx context.Context, sessionID, runID, guardID string, guardWritten bool, fallbackRef string) (agentsession.CheckpointRecord, error) {
 	session, err := s.sessionStore.LoadSession(ctx, sessionID)
 	if err != nil {
 		return agentsession.CheckpointRecord{}, fmt.Errorf("checkpoint: load session for guard: %w", err)
@@ -220,6 +236,8 @@ func (s *Service) createGuardCheckpoint(ctx context.Context, sessionID, runID, g
 	var ref string
 	if guardWritten {
 		ref = checkpoint.RefForPerEditCheckpoint(guardID)
+	} else if fallbackRef != "" {
+		ref = fallbackRef
 	}
 
 	now := time.Now()
@@ -446,7 +464,21 @@ func (s *Service) runDiff(ctx context.Context, sessionID, runID string) (Checkpo
 		return CheckpointDiffResult{}, fmt.Errorf("checkpoint: no code checkpoints found for run_id %s", runID)
 	}
 
-	patch, changes, err := s.perEditStore.RunAggregateDiff(ctx, perEditIDs)
+	// 查找上一个 run 最后一个 checkpoint 的 FileVersions，用于版本号比较过滤历史文件。
+	var prevFileVersions map[string]int
+	if allRecords, listErr := s.checkpointStore.ListCheckpoints(ctx, sessionID, checkpoint.ListCheckpointOpts{}); listErr == nil {
+		for _, r := range allRecords {
+			if r.RunID != runID && checkpoint.IsPerEditRef(r.CodeCheckpointRef) {
+				prevPerEditID := checkpoint.PerEditCheckpointIDFromRef(r.CodeCheckpointRef)
+				if fv, fvErr := s.perEditStore.GetCheckpointFileVersions(prevPerEditID); fvErr == nil {
+					prevFileVersions = fv
+				}
+				break
+			}
+		}
+	}
+
+	patch, changes, err := s.perEditStore.RunAggregateDiff(ctx, perEditIDs, prevFileVersions)
 	if err != nil {
 		return CheckpointDiffResult{}, fmt.Errorf("checkpoint: run aggregate diff: %w", err)
 	}

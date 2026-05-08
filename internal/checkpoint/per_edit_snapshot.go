@@ -627,7 +627,11 @@ func (s *PerEditSnapshotStore) RunEndCapture(ctx context.Context, checkpointIDs 
 // 此时若文件 mtime 晚于 run 最后一个 checkpoint 的创建时间，该文件会被跳过并记录警告。
 //
 // checkpointIDs 应为 PerEditCheckpointIDFromRef 提取后的值（不含 "peredit:" 前缀）。
-func (s *PerEditSnapshotStore) RunAggregateDiff(ctx context.Context, checkpointIDs []string) (string, []FileChangeEntry, error) {
+//
+// prevFileVersions 为上一个 run 最后一个 checkpoint 的 FileVersions 快照。
+// 版本号未变的文件（同一 hash 在相邻 run 中版本号相同）会被跳过，
+// 因为这些文件在本 run 中未产生新 capture，内容没有变化。传 nil 表示不过滤。
+func (s *PerEditSnapshotStore) RunAggregateDiff(ctx context.Context, checkpointIDs []string, prevFileVersions map[string]int) (string, []FileChangeEntry, error) {
 	type versionRange struct {
 		minV int
 		maxV int
@@ -657,6 +661,16 @@ func (s *PerEditSnapshotStore) RunAggregateDiff(ctx context.Context, checkpointI
 		}
 	}
 
+	// 过滤历史文件：版本号与上一个 run 结束时相同 = 本 run 未产生新 capture = 跳过。
+	if prevFileVersions != nil {
+		for hash, vr := range versionByHash {
+			if vr.minV == vr.maxV {
+				if prevV, ok := prevFileVersions[hash]; ok && prevV == vr.minV {
+					delete(versionByHash, hash)
+				}
+			}
+		}
+	}
 	s.indexMu.Lock()
 	defer s.indexMu.Unlock()
 
@@ -702,7 +716,7 @@ func (s *PerEditSnapshotStore) RunAggregateDiff(ctx context.Context, checkpointI
 		if beforeIsDir && beforeExists && afterIsDir && afterExists {
 			continue
 		}
-		if afterIsDir {
+		if beforeIsDir && afterIsDir {
 			continue
 		}
 		if beforeExists == afterExists && bytes.Equal(beforeContent, afterContent) {
@@ -982,6 +996,16 @@ func (s *PerEditSnapshotStore) writeCheckpointMeta(meta CheckpointMeta) error {
 		return fmt.Errorf("per-edit: marshal cp meta: %w", err)
 	}
 	return writeFileAtomic(s.checkpointMetaPath(meta.CheckpointID), data, 0o644)
+}
+
+// GetCheckpointFileVersions 读取指定 checkpoint 的 FileVersions 映射，
+// 供调用方用于版本号比较（如 RunAggregateDiff 的跨 run 过滤）。
+func (s *PerEditSnapshotStore) GetCheckpointFileVersions(checkpointID string) (map[string]int, error) {
+	meta, err := s.readCheckpointMeta(checkpointID)
+	if err != nil {
+		return nil, err
+	}
+	return meta.FileVersions, nil
 }
 
 func (s *PerEditSnapshotStore) readCheckpointMeta(checkpointID string) (CheckpointMeta, error) {
