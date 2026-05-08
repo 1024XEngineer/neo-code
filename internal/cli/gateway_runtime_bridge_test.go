@@ -1782,6 +1782,117 @@ func TestGatewayRuntimePortBridgeListFilesFiltersAndSorts(t *testing.T) {
 	}
 }
 
+func TestGatewayRuntimePortBridgeReadFileSuccess(t *testing.T) {
+	tmpDir := t.TempDir()
+	target := filepath.Join(tmpDir, "main.go")
+	if err := os.WriteFile(target, []byte("package main\n"), 0644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+
+	bridge, _ := newGatewayRuntimePortBridge(context.Background(), &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)}, testSessionStore)
+	defer bridge.Close()
+
+	result, err := bridge.ReadFile(context.Background(), gateway.ReadFileInput{
+		SubjectID: testBridgeSubjectID,
+		Workdir:   tmpDir,
+		Path:      "main.go",
+	})
+	if err != nil {
+		t.Fatalf("read file: %v", err)
+	}
+	if result.Path != "main.go" {
+		t.Fatalf("path = %q, want %q", result.Path, "main.go")
+	}
+	if result.Content != "package main\n" {
+		t.Fatalf("content = %q", result.Content)
+	}
+	if result.Encoding != "utf-8" || result.IsBinary || result.Truncated {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+}
+
+func TestGatewayRuntimePortBridgeReadFileRejectsDirectory(t *testing.T) {
+	tmpDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(tmpDir, "dir"), 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	bridge, _ := newGatewayRuntimePortBridge(context.Background(), &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)}, testSessionStore)
+	defer bridge.Close()
+
+	_, err := bridge.ReadFile(context.Background(), gateway.ReadFileInput{
+		SubjectID: testBridgeSubjectID,
+		Workdir:   tmpDir,
+		Path:      "dir",
+	})
+	if err == nil || !strings.Contains(err.Error(), "is a directory") {
+		t.Fatalf("expected directory error, got %v", err)
+	}
+}
+
+func TestGatewayRuntimePortBridgeReadFileRejectsEscapedPath(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	bridge, _ := newGatewayRuntimePortBridge(context.Background(), &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)}, testSessionStore)
+	defer bridge.Close()
+
+	_, err := bridge.ReadFile(context.Background(), gateway.ReadFileInput{
+		SubjectID: testBridgeSubjectID,
+		Workdir:   tmpDir,
+		Path:      "../secret.txt",
+	})
+	if err == nil || !strings.Contains(err.Error(), "escapes workdir") {
+		t.Fatalf("expected unsafe path error, got %v", err)
+	}
+}
+
+func TestGatewayRuntimePortBridgeReadFileTruncatesLargeFile(t *testing.T) {
+	tmpDir := t.TempDir()
+	target := filepath.Join(tmpDir, "large.txt")
+	payload := strings.Repeat("a", int(readFilePreviewLimitBytes)+1)
+	if err := os.WriteFile(target, []byte(payload), 0644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+
+	bridge, _ := newGatewayRuntimePortBridge(context.Background(), &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)}, testSessionStore)
+	defer bridge.Close()
+
+	result, err := bridge.ReadFile(context.Background(), gateway.ReadFileInput{
+		SubjectID: testBridgeSubjectID,
+		Workdir:   tmpDir,
+		Path:      "large.txt",
+	})
+	if err != nil {
+		t.Fatalf("read file: %v", err)
+	}
+	if !result.Truncated || result.Content != "" {
+		t.Fatalf("expected truncated placeholder, got %+v", result)
+	}
+}
+
+func TestGatewayRuntimePortBridgeReadFileMarksBinaryContent(t *testing.T) {
+	tmpDir := t.TempDir()
+	target := filepath.Join(tmpDir, "bin.dat")
+	if err := os.WriteFile(target, []byte{0x00, 0x01, 0x02}, 0644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+
+	bridge, _ := newGatewayRuntimePortBridge(context.Background(), &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)}, testSessionStore)
+	defer bridge.Close()
+
+	result, err := bridge.ReadFile(context.Background(), gateway.ReadFileInput{
+		SubjectID: testBridgeSubjectID,
+		Workdir:   tmpDir,
+		Path:      "bin.dat",
+	})
+	if err != nil {
+		t.Fatalf("read file: %v", err)
+	}
+	if !result.IsBinary || result.Encoding != "binary" || result.Content != "" {
+		t.Fatalf("expected binary placeholder, got %+v", result)
+	}
+}
+
 // ---- ListModels ----
 
 func TestGatewayRuntimePortBridgeListModelsNilSelection(t *testing.T) {

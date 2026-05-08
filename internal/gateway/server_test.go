@@ -440,6 +440,15 @@ func (s *runtimePortEventStub) RenameSession(_ context.Context, _ RenameSessionI
 func (s *runtimePortEventStub) ListFiles(_ context.Context, _ ListFilesInput) ([]FileEntry, error) {
 	return nil, nil
 }
+func (s *runtimePortEventStub) ReadFile(_ context.Context, _ ReadFileInput) (ReadFileResult, error) {
+	return ReadFileResult{}, nil
+}
+func (s *runtimePortEventStub) ListGitDiffFiles(_ context.Context, _ ListGitDiffFilesInput) (ListGitDiffFilesResult, error) {
+	return ListGitDiffFilesResult{}, nil
+}
+func (s *runtimePortEventStub) ReadGitDiffFile(_ context.Context, _ ReadGitDiffFileInput) (ReadGitDiffFileResult, error) {
+	return ReadGitDiffFileResult{}, nil
+}
 func (s *runtimePortEventStub) ListModels(_ context.Context, _ ListModelsInput) ([]ModelEntry, error) {
 	return nil, nil
 }

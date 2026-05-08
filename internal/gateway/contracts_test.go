@@ -82,6 +82,15 @@ func (s *runtimePortCompileStub) RenameSession(_ context.Context, _ RenameSessio
 func (s *runtimePortCompileStub) ListFiles(_ context.Context, _ ListFilesInput) ([]FileEntry, error) {
 	return nil, nil
 }
+func (s *runtimePortCompileStub) ReadFile(_ context.Context, _ ReadFileInput) (ReadFileResult, error) {
+	return ReadFileResult{}, nil
+}
+func (s *runtimePortCompileStub) ListGitDiffFiles(_ context.Context, _ ListGitDiffFilesInput) (ListGitDiffFilesResult, error) {
+	return ListGitDiffFilesResult{}, nil
+}
+func (s *runtimePortCompileStub) ReadGitDiffFile(_ context.Context, _ ReadGitDiffFileInput) (ReadGitDiffFileResult, error) {
+	return ReadGitDiffFileResult{}, nil
+}
 func (s *runtimePortCompileStub) ListModels(_ context.Context, _ ListModelsInput) ([]ModelEntry, error) {
 	return nil, nil
 }

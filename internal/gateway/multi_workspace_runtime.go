@@ -405,6 +405,33 @@ func (m *MultiWorkspaceRuntime) ListFiles(ctx context.Context, input ListFilesIn
 	return port.ListFiles(ctx, input)
 }
 
+// ReadFile 读取当前工作区内文件的只读预览内容。
+func (m *MultiWorkspaceRuntime) ReadFile(ctx context.Context, input ReadFileInput) (ReadFileResult, error) {
+	port, err := m.getPort(ctx)
+	if err != nil {
+		return ReadFileResult{}, err
+	}
+	return port.ReadFile(ctx, input)
+}
+
+// ListGitDiffFiles 返回当前工作区相对 HEAD 的 Git 变更文件列表。
+func (m *MultiWorkspaceRuntime) ListGitDiffFiles(ctx context.Context, input ListGitDiffFilesInput) (ListGitDiffFilesResult, error) {
+	port, err := m.getPort(ctx)
+	if err != nil {
+		return ListGitDiffFilesResult{}, err
+	}
+	return port.ListGitDiffFiles(ctx, input)
+}
+
+// ReadGitDiffFile 读取单个 Git 变更文件的双文本预览内容。
+func (m *MultiWorkspaceRuntime) ReadGitDiffFile(ctx context.Context, input ReadGitDiffFileInput) (ReadGitDiffFileResult, error) {
+	port, err := m.getPort(ctx)
+	if err != nil {
+		return ReadGitDiffFileResult{}, err
+	}
+	return port.ReadGitDiffFile(ctx, input)
+}
+
 func (m *MultiWorkspaceRuntime) ListModels(ctx context.Context, input ListModelsInput) ([]ModelEntry, error) {
 	port, err := m.getPort(ctx)
 	if err != nil {

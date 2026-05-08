@@ -208,6 +208,16 @@ func (s *urlschemeIntegrationRuntimeStub) ListFiles(context.Context, gateway.Lis
 	return nil, nil
 }
 
+func (s *urlschemeIntegrationRuntimeStub) ReadFile(context.Context, gateway.ReadFileInput) (gateway.ReadFileResult, error) {
+	return gateway.ReadFileResult{}, nil
+}
+func (s *urlschemeIntegrationRuntimeStub) ListGitDiffFiles(context.Context, gateway.ListGitDiffFilesInput) (gateway.ListGitDiffFilesResult, error) {
+	return gateway.ListGitDiffFilesResult{}, nil
+}
+func (s *urlschemeIntegrationRuntimeStub) ReadGitDiffFile(context.Context, gateway.ReadGitDiffFileInput) (gateway.ReadGitDiffFileResult, error) {
+	return gateway.ReadGitDiffFileResult{}, nil
+}
+
 func (s *urlschemeIntegrationRuntimeStub) ListModels(context.Context, gateway.ListModelsInput) ([]gateway.ModelEntry, error) {
 	return nil, nil
 }

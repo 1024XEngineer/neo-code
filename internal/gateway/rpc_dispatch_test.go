@@ -142,6 +142,15 @@ func (s *rpcRunCaptureRuntimeStub) RenameSession(_ context.Context, _ RenameSess
 func (s *rpcRunCaptureRuntimeStub) ListFiles(_ context.Context, _ ListFilesInput) ([]FileEntry, error) {
 	return nil, nil
 }
+func (s *rpcRunCaptureRuntimeStub) ReadFile(_ context.Context, _ ReadFileInput) (ReadFileResult, error) {
+	return ReadFileResult{}, nil
+}
+func (s *rpcRunCaptureRuntimeStub) ListGitDiffFiles(_ context.Context, _ ListGitDiffFilesInput) (ListGitDiffFilesResult, error) {
+	return ListGitDiffFilesResult{}, nil
+}
+func (s *rpcRunCaptureRuntimeStub) ReadGitDiffFile(_ context.Context, _ ReadGitDiffFileInput) (ReadGitDiffFileResult, error) {
+	return ReadGitDiffFileResult{}, nil
+}
 func (s *rpcRunCaptureRuntimeStub) ListModels(_ context.Context, _ ListModelsInput) ([]ModelEntry, error) {
 	return nil, nil
 }
@@ -1032,6 +1041,15 @@ func (s *runtimePortOnlyStub) RenameSession(_ context.Context, _ RenameSessionIn
 }
 func (s *runtimePortOnlyStub) ListFiles(_ context.Context, _ ListFilesInput) ([]FileEntry, error) {
 	return nil, nil
+}
+func (s *runtimePortOnlyStub) ReadFile(_ context.Context, _ ReadFileInput) (ReadFileResult, error) {
+	return ReadFileResult{}, nil
+}
+func (s *runtimePortOnlyStub) ListGitDiffFiles(_ context.Context, _ ListGitDiffFilesInput) (ListGitDiffFilesResult, error) {
+	return ListGitDiffFilesResult{}, nil
+}
+func (s *runtimePortOnlyStub) ReadGitDiffFile(_ context.Context, _ ReadGitDiffFileInput) (ReadGitDiffFileResult, error) {
+	return ReadGitDiffFileResult{}, nil
 }
 func (s *runtimePortOnlyStub) ListModels(_ context.Context, _ ListModelsInput) ([]ModelEntry, error) {
 	return nil, nil
