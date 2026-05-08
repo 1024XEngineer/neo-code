@@ -672,24 +672,27 @@ func (b *gatewayRuntimePortBridge) ListFiles(ctx context.Context, input gateway.
 	return result, nil
 }
 
-// ListModels 列出可用模型（仅返回当前选中 provider 的模型）。
+// ListModels 列出可用模型；有会话时按会话有效 provider 返回，无会话时按全局默认 provider 返回。
 func (b *gatewayRuntimePortBridge) ListModels(ctx context.Context, input gateway.ListModelsInput) ([]gateway.ModelEntry, error) {
 	if err := b.ensureRuntimeAccess(input.SubjectID); err != nil {
 		return nil, err
 	}
-
-	// 复用 ListProviders 的 Selected 标记逻辑，避免与 cfg.SelectedProvider 单独比较产生不一致
-	providers, err := b.ListProviders(ctx, gateway.ListProvidersInput{SubjectID: input.SubjectID})
+	options, err := b.listProviderOptions(ctx)
+	if err != nil {
+		return nil, err
+	}
+	providerID, _, err := b.resolveEffectiveProviderModel(ctx, strings.TrimSpace(input.SessionID), options)
 	if err != nil {
 		return nil, err
 	}
 
 	models := make([]gateway.ModelEntry, 0)
-	for _, p := range providers {
-		if !p.Selected {
+	for _, option := range options {
+		optionID := strings.TrimSpace(option.ID)
+		if providerID != "" && !strings.EqualFold(providerID, optionID) {
 			continue
 		}
-		for _, model := range p.Models {
+		for _, model := range option.Models {
 			id := strings.TrimSpace(model.ID)
 			if id == "" {
 				continue
@@ -701,7 +704,7 @@ func (b *gatewayRuntimePortBridge) ListModels(ctx context.Context, input gateway
 			models = append(models, gateway.ModelEntry{
 				ID:              id,
 				Name:            name,
-				Provider:        strings.TrimSpace(p.ID),
+				Provider:        optionID,
 				CapabilityHints: model.CapabilityHints,
 			})
 		}
@@ -741,27 +744,18 @@ func (b *gatewayRuntimePortBridge) GetSessionModel(ctx context.Context, input ga
 	if err := b.ensureRuntimeAccess(input.SubjectID); err != nil {
 		return gateway.SessionModelResult{}, err
 	}
-	if b.sessionStore == nil {
-		return gateway.SessionModelResult{}, fmt.Errorf("gateway runtime bridge: session store is unavailable")
-	}
-	session, err := b.loadStoredSession(ctx, strings.TrimSpace(input.SessionID))
+	options, err := b.listProviderOptions(ctx)
 	if err != nil {
 		return gateway.SessionModelResult{}, err
 	}
-	providerID, modelID := strings.TrimSpace(session.Provider), strings.TrimSpace(session.Model)
-	if providerID == "" || modelID == "" {
-		cfg := b.currentConfig()
-		if providerID == "" {
-			providerID = strings.TrimSpace(cfg.SelectedProvider)
-		}
-		if modelID == "" {
-			modelID = strings.TrimSpace(cfg.CurrentModel)
-		}
+	providerID, modelID, err := b.resolveEffectiveProviderModel(ctx, strings.TrimSpace(input.SessionID), options)
+	if err != nil {
+		return gateway.SessionModelResult{}, err
 	}
 	return gateway.SessionModelResult{
 		ProviderID: providerID,
 		ModelID:    modelID,
-		ModelName:  b.modelDisplayName(ctx, providerID, modelID),
+		ModelName:  b.modelDisplayNameFromOptions(providerID, modelID, options),
 		Provider:   providerID,
 	}, nil
 }
@@ -1865,6 +1859,132 @@ func (b *gatewayRuntimePortBridge) resolveProviderModelForSession(
 	return "", "", fmt.Errorf("gateway runtime bridge: model %q not found", modelID)
 }
 
+// listProviderOptions 读取当前 provider 选项快照，供模型选择相关逻辑复用。
+func (b *gatewayRuntimePortBridge) listProviderOptions(ctx context.Context) ([]configstate.ProviderOption, error) {
+	if b.providerSelection == nil {
+		return nil, fmt.Errorf("gateway runtime bridge: provider selection is unavailable")
+	}
+	return b.providerSelection.ListProviderOptions(ctx)
+}
+
+// resolveEffectiveProviderModel 解析当前会话或全局默认的有效 provider/model，不会回写会话状态。
+func (b *gatewayRuntimePortBridge) resolveEffectiveProviderModel(
+	ctx context.Context,
+	sessionID string,
+	options []configstate.ProviderOption,
+) (string, string, error) {
+	sessionID = strings.TrimSpace(sessionID)
+	sessionProviderID := ""
+	sessionModelID := ""
+	if sessionID != "" {
+		if b.sessionStore == nil {
+			return "", "", fmt.Errorf("gateway runtime bridge: session store is unavailable")
+		}
+		session, err := b.loadStoredSession(ctx, sessionID)
+		if err != nil {
+			return "", "", err
+		}
+		sessionProviderID = strings.TrimSpace(session.Provider)
+		sessionModelID = strings.TrimSpace(session.Model)
+	}
+
+	cfg := b.currentConfig()
+	defaultProviderID := strings.TrimSpace(cfg.SelectedProvider)
+	defaultModelID := strings.TrimSpace(cfg.CurrentModel)
+
+	selection, ok := resolveEffectiveProviderModelSelection(
+		options,
+		sessionProviderID,
+		sessionModelID,
+		defaultProviderID,
+		defaultModelID,
+	)
+	if !ok {
+		return "", "", fmt.Errorf("gateway runtime bridge: no available provider/model selection")
+	}
+	return selection.ProviderID, selection.ModelID, nil
+}
+
+type effectiveProviderModelSelection struct {
+	ProviderID string
+	ModelID    string
+}
+
+// resolveEffectiveProviderModelSelection 按“会话优先、全局兜底”规则解析有效 provider/model。
+func resolveEffectiveProviderModelSelection(
+	options []configstate.ProviderOption,
+	sessionProviderID string,
+	sessionModelID string,
+	defaultProviderID string,
+	defaultModelID string,
+) (effectiveProviderModelSelection, bool) {
+	findProvider := func(providerID string) *configstate.ProviderOption {
+		providerID = strings.TrimSpace(providerID)
+		if providerID == "" {
+			return nil
+		}
+		for i := range options {
+			if strings.EqualFold(strings.TrimSpace(options[i].ID), providerID) {
+				return &options[i]
+			}
+		}
+		return nil
+	}
+	firstModelID := func(option *configstate.ProviderOption) string {
+		if option == nil {
+			return ""
+		}
+		for _, model := range option.Models {
+			if id := strings.TrimSpace(model.ID); id != "" {
+				return id
+			}
+		}
+		return ""
+	}
+	resolveModelID := func(option *configstate.ProviderOption, preferredModelID string) string {
+		preferredModelID = strings.TrimSpace(preferredModelID)
+		if option == nil {
+			return ""
+		}
+		if preferredModelID != "" {
+			for _, model := range option.Models {
+				if strings.EqualFold(strings.TrimSpace(model.ID), preferredModelID) {
+					return strings.TrimSpace(model.ID)
+				}
+			}
+		}
+		return firstModelID(option)
+	}
+	firstAvailable := func() (effectiveProviderModelSelection, bool) {
+		for _, option := range options {
+			providerID := strings.TrimSpace(option.ID)
+			modelID := firstModelID(&option)
+			if providerID != "" && modelID != "" {
+				return effectiveProviderModelSelection{ProviderID: providerID, ModelID: modelID}, true
+			}
+		}
+		return effectiveProviderModelSelection{}, false
+	}
+
+	if option := findProvider(sessionProviderID); option != nil {
+		if modelID := resolveModelID(option, sessionModelID); modelID != "" {
+			return effectiveProviderModelSelection{
+				ProviderID: strings.TrimSpace(option.ID),
+				ModelID:    modelID,
+			}, true
+		}
+	}
+	if option := findProvider(defaultProviderID); option != nil {
+		if modelID := resolveModelID(option, defaultModelID); modelID != "" {
+			return effectiveProviderModelSelection{
+				ProviderID: strings.TrimSpace(option.ID),
+				ModelID:    modelID,
+			}, true
+		}
+	}
+	return firstAvailable()
+}
+
 // modelDisplayName 从 provider 候选中查找模型展示名，找不到时回退模型 ID。
 func (b *gatewayRuntimePortBridge) modelDisplayName(ctx context.Context, providerID string, modelID string) string {
 	modelID = strings.TrimSpace(modelID)
@@ -1873,6 +1993,32 @@ func (b *gatewayRuntimePortBridge) modelDisplayName(ctx context.Context, provide
 	}
 	options, err := b.providerSelection.ListProviderOptions(ctx)
 	if err != nil {
+		return modelID
+	}
+	for _, option := range options {
+		if providerID != "" && !strings.EqualFold(strings.TrimSpace(option.ID), strings.TrimSpace(providerID)) {
+			continue
+		}
+		for _, model := range option.Models {
+			if strings.EqualFold(strings.TrimSpace(model.ID), modelID) {
+				if name := strings.TrimSpace(model.Name); name != "" {
+					return name
+				}
+				return strings.TrimSpace(model.ID)
+			}
+		}
+	}
+	return modelID
+}
+
+// modelDisplayNameFromOptions 基于 provider 选项快照查找模型展示名，避免重复读取 provider 列表。
+func (b *gatewayRuntimePortBridge) modelDisplayNameFromOptions(
+	providerID string,
+	modelID string,
+	options []configstate.ProviderOption,
+) string {
+	modelID = strings.TrimSpace(modelID)
+	if modelID == "" {
 		return modelID
 	}
 	for _, option := range options {

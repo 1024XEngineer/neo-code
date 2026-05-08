@@ -17,7 +17,7 @@ import {
 } from '@/utils/slashCommands'
 import SlashCommandMenu from './SlashCommandMenu'
 import SkillPicker from './SkillPicker'
-import { Send, Square, Paperclip, AtSign } from 'lucide-react'
+import { Send, Square } from 'lucide-react'
 
 /** 聊天输入框 */
 export default function ChatInput() {
@@ -35,6 +35,8 @@ export default function ChatInput() {
   const sessionId = useSessionStore((s) => s.currentSessionId)
   const agentMode = useChatStore((s) => s.agentMode)
   const setAgentMode = useChatStore((s) => s.setAgentMode)
+  const permissionMode = useChatStore((s) => s.permissionMode)
+  const setPermissionMode = useChatStore((s) => s.setPermissionMode)
 
   // Slash command 菜单状态
   const [showSlashMenu, setShowSlashMenu] = useState(false)
@@ -409,12 +411,6 @@ export default function ChatInput() {
             />
             <div style={styles.toolbar}>
               <div style={styles.leftActions}>
-                <button style={styles.toolBtn} title="附加文件">
-                  <Paperclip size={16} />
-                </button>
-                <button style={styles.toolBtn} title="引用上下文">
-                  <AtSign size={16} />
-                </button>
                 <button
                   style={{
                     ...styles.modeBtn,
@@ -431,6 +427,47 @@ export default function ChatInput() {
                 >
                   {agentMode === 'plan' ? 'Plan' : 'Build'}
                 </button>
+                {agentMode === 'build' && (
+                  <div
+                    aria-label="Build permission mode"
+                    role="group"
+                    style={{
+                      ...styles.permissionModeGroup,
+                      opacity: isGenerating ? 0.5 : 1,
+                    }}
+                  >
+                    <button
+                      type="button"
+                      aria-pressed={permissionMode === 'default'}
+                      style={{
+                        ...styles.permissionModeBtn,
+                        ...(permissionMode === 'default' ? styles.permissionModeBtnActive : null),
+                        cursor: isGenerating ? 'not-allowed' : 'pointer',
+                      }}
+                      onClick={() => {
+                        if (isGenerating) return
+                        setPermissionMode('default')
+                      }}
+                    >
+                      default
+                    </button>
+                    <button
+                      type="button"
+                      aria-pressed={permissionMode === 'bypass'}
+                      style={{
+                        ...styles.permissionModeBtn,
+                        ...(permissionMode === 'bypass' ? styles.permissionModeBtnActive : null),
+                        cursor: isGenerating ? 'not-allowed' : 'pointer',
+                      }}
+                      onClick={() => {
+                        if (isGenerating) return
+                        setPermissionMode('bypass')
+                      }}
+                    >
+                      bypass
+                    </button>
+                  </div>
+                )}
               </div>
               <button
                 style={{
@@ -486,20 +523,37 @@ const styles: Record<string, React.CSSProperties> = {
   },
   leftActions: {
     display: 'flex',
+    alignItems: 'center',
     gap: 2,
   },
-  toolBtn: {
+  permissionModeGroup: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 2,
+    marginLeft: 6,
+    padding: 2,
+    borderRadius: 'var(--radius-sm)',
+    background: 'var(--bg-tertiary)',
+  },
+  permissionModeBtn: {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    width: 28,
+    minWidth: 62,
     height: 28,
     borderRadius: 'var(--radius-sm)',
     border: 'none',
     background: 'transparent',
     color: 'var(--text-tertiary)',
-    cursor: 'pointer',
+    fontSize: 12,
+    fontWeight: 600,
+    fontFamily: 'var(--font-ui)',
     transition: 'all 0.15s',
+  },
+  permissionModeBtnActive: {
+    background: 'var(--bg-primary)',
+    color: 'var(--text-primary)',
+    boxShadow: 'var(--shadow-1)',
   },
   modeBtn: {
     display: 'flex',

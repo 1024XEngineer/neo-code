@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect } from 'react'
 import { useGatewayAPI } from '@/context/RuntimeProvider'
 import { useSessionStore } from '@/stores/useSessionStore'
 import { useChatStore } from '@/stores/useChatStore'
@@ -18,8 +18,16 @@ export default function ModelSelector() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [pendingModelChange, setPendingModelChange] = useState<ModelEntry | null>(null)
-  const selectedRef = useRef(selected)
-  selectedRef.current = selected
+
+  async function applyModelSelection(model: ModelEntry) {
+    if (!gatewayAPI) return
+    if (currentSessionId) {
+      await gatewayAPI.setSessionModel(currentSessionId, model.id, model.provider)
+      return
+    }
+    await gatewayAPI.selectProviderModel({ provider_id: model.provider, model_id: model.id })
+    useGatewayStore.getState().notifyProviderChanged()
+  }
 
   // 模型列表加载：直接在 effect 中 fetch，用 cancelled flag 防止陈旧更新
   useEffect(() => {
@@ -33,17 +41,11 @@ export default function ModelSelector() {
         const fetched = result.payload.models
         setModels(fetched)
         if (fetched.length > 0) {
-          const prev = selectedRef.current
-          const byGlobal = result.payload.selected_model_id
-            ? fetched.find((f) => f.id === result.payload.selected_model_id)
-            : null
-          const retained = prev ? fetched.find((f) => f.id === prev.id) : null
-          const effective = byGlobal ?? retained ?? fetched[0]
+          const effective = fetched.find((entry) => (
+            entry.id === result.payload.selected_model_id
+            && entry.provider === result.payload.selected_provider_id
+          )) ?? null
           setSelected(effective)
-          if (currentSessionId && !isGenerating) {
-            gatewayAPI.setSessionModel(currentSessionId, effective.id, effective.provider)
-              .catch((err) => console.error('Auto setSessionModel failed:', err))
-          }
         } else {
           setSelected(null)
         }
@@ -67,27 +69,18 @@ export default function ModelSelector() {
       useUIStore.getState().showToast('Model change will apply on the next turn', 'info')
       return
     }
-    if (currentSessionId && gatewayAPI) {
-      try {
-        await gatewayAPI.setSessionModel(currentSessionId, m.id, m.provider)
-      } catch (err) {
-        console.error('setSessionModel failed:', err)
-      }
-      try {
-        await gatewayAPI.selectProviderModel({ provider_id: m.provider, model_id: m.id })
-      } catch (err) {
-        console.error('selectProviderModel failed:', err)
-      }
+    try {
+      await applyModelSelection(m)
+    } catch (err) {
+      console.error('applyModelSelection failed:', err)
     }
   }
 
   // 生成完成后补发延迟的模型切换
   useEffect(() => {
-    if (!isGenerating && pendingModelChange && currentSessionId && gatewayAPI) {
-      gatewayAPI.setSessionModel(currentSessionId, pendingModelChange.id, pendingModelChange.provider)
-        .catch((err) => console.error('Deferred setSessionModel failed:', err))
-      gatewayAPI.selectProviderModel({ provider_id: pendingModelChange.provider, model_id: pendingModelChange.id })
-        .catch((err) => console.error('Deferred selectProviderModel failed:', err))
+    if (!isGenerating && pendingModelChange && gatewayAPI) {
+      applyModelSelection(pendingModelChange)
+        .catch((err) => console.error('Deferred applyModelSelection failed:', err))
       setPendingModelChange(null)
     }
   }, [isGenerating, pendingModelChange, currentSessionId, gatewayAPI])

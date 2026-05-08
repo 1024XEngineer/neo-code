@@ -33,6 +33,8 @@ export default function ChatPanel() {
   const projects = useSessionStore((s) => s.projects)
 
   const permissionRequests = useChatStore((s) => s.permissionRequests)
+  const agentMode = useChatStore((s) => s.agentMode)
+  const permissionMode = useChatStore((s) => s.permissionMode)
   const currentPermission = permissionRequests[0]
 
   const [editingTitle, setEditingTitle] = useState(false)
@@ -40,24 +42,29 @@ export default function ChatPanel() {
   const [isResolvingPermission, setIsResolvingPermission] = useState(false)
   const titleRef = useRef<HTMLDivElement>(null)
   const moreMenuRef = useRef<HTMLDivElement>(null)
+  const autoResolvingPermissionIdsRef = useRef<Set<string>>(new Set())
 
   // Find current session title
   const currentSession = projects.flatMap((p) => p.sessions).find((s) => s.id === currentSessionId)
   const title = currentSession?.title || '新对话'
 
-  async function handlePermissionDecision(decision: string) {
+  async function handlePermissionDecision(decision: string, options?: { silent?: boolean }) {
     if (!gatewayAPI || !currentPermission || isResolvingPermission) return
+    const requestId = currentPermission.request_id
     setIsResolvingPermission(true)
     try {
       await gatewayAPI.resolvePermission({
-        request_id: currentPermission.request_id,
+        request_id: requestId,
         decision,
       })
-      useUIStore.getState().showToast('Permission request resolved', 'success')
+      if (!options?.silent) {
+        useUIStore.getState().showToast('Permission request resolved', 'success')
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to resolve permission request'
       useUIStore.getState().showToast(message, 'error')
       console.error('Resolve permission failed:', err)
+      autoResolvingPermissionIdsRef.current.delete(requestId)
     } finally {
       setIsResolvingPermission(false)
     }
@@ -72,6 +79,37 @@ export default function ChatPanel() {
     document.addEventListener('mousedown', handleClick)
     return () => document.removeEventListener('mousedown', handleClick)
   }, [])
+
+  useEffect(() => {
+    const activeRequestIds = new Set(permissionRequests.map((request) => request.request_id))
+    for (const requestId of Array.from(autoResolvingPermissionIdsRef.current)) {
+      if (!activeRequestIds.has(requestId)) {
+        autoResolvingPermissionIdsRef.current.delete(requestId)
+      }
+    }
+  }, [permissionRequests])
+
+  useEffect(() => {
+    if (!gatewayAPI || !currentPermission) return
+    if (agentMode !== 'build' || permissionMode !== 'bypass') return
+    const requestId = currentPermission.request_id
+    if (!requestId || autoResolvingPermissionIdsRef.current.has(requestId)) return
+
+    autoResolvingPermissionIdsRef.current.add(requestId)
+    setIsResolvingPermission(true)
+
+    gatewayAPI.resolvePermission({
+      request_id: requestId,
+      decision: PermissionDecision.AllowOnce,
+    }).catch((err) => {
+      autoResolvingPermissionIdsRef.current.delete(requestId)
+      const message = err instanceof Error ? err.message : 'Failed to resolve permission request'
+      useUIStore.getState().showToast(message, 'error')
+      console.error('Auto-resolve permission failed:', err)
+    }).finally(() => {
+      setIsResolvingPermission(false)
+    })
+  }, [agentMode, currentPermission, gatewayAPI, permissionMode])
 
   useEffect(() => {
     if (editingTitle && titleRef.current) {
@@ -192,7 +230,7 @@ export default function ChatPanel() {
       <TodoStrip />
 
       {/* Input or Permission Request */}
-      {currentPermission ? (
+      {currentPermission && !(agentMode === 'build' && permissionMode === 'bypass') ? (
         <div style={permissionStyles.container}>
           <div style={permissionStyles.card}>
             <div style={permissionStyles.header}>

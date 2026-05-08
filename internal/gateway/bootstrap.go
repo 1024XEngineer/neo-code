@@ -1108,8 +1108,9 @@ func handleListModelsFrame(ctx context.Context, frame MessageFrame, runtimePort 
 		RequestID: frame.RequestID,
 		SessionID: strings.TrimSpace(frame.SessionID),
 		Payload: map[string]any{
-			"models":            models,
-			"selected_model_id": sessionModel.ModelID,
+			"models":               models,
+			"selected_provider_id": sessionModel.ProviderID,
+			"selected_model_id":    sessionModel.ModelID,
 		},
 	}
 }
@@ -2459,8 +2460,8 @@ func decodeCheckpointDiffPayload(payload any) CheckpointDiffInput {
 		var decoded struct {
 			SessionID    string `json:"session_id"`
 			CheckpointID string `json:"checkpoint_id"`
-			Scope        string `json:"scope"`
 			RunID        string `json:"run_id"`
+			Scope        string `json:"scope"`
 		}
 		_ = json.Unmarshal(raw, &decoded)
 		return CheckpointDiffInput{

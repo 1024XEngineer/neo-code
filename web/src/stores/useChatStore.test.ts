@@ -6,10 +6,14 @@ beforeEach(() => {
     messages: [],
     isGenerating: false,
     streamingMessageId: '',
+    streamingThinkingMessageId: '',
     permissionRequests: [],
     tokenUsage: null,
     phase: '',
     stopReason: '',
+    isTransitioning: false,
+    agentMode: 'build',
+    permissionMode: 'default',
   } as any)
 })
 
@@ -117,5 +121,21 @@ describe('useChatStore', () => {
     expect(useChatStore.getState().isGenerating).toBe(true)
     useChatStore.getState().setGenerating(false)
     expect(useChatStore.getState().isGenerating).toBe(false)
+  })
+
+  it('starts with default permission mode', () => {
+    expect(useChatStore.getState().permissionMode).toBe('default')
+  })
+
+  it('setPermissionMode updates the permission mode', () => {
+    useChatStore.getState().setPermissionMode('bypass')
+    expect(useChatStore.getState().permissionMode).toBe('bypass')
+  })
+
+  it('clearMessages resets permission mode to default', () => {
+    const store = useChatStore.getState()
+    store.setPermissionMode('bypass')
+    store.clearMessages()
+    expect(useChatStore.getState().permissionMode).toBe('default')
   })
 })

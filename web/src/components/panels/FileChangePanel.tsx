@@ -1,15 +1,7 @@
-import { useState, useMemo } from 'react'
+import { useMemo, useState, type CSSProperties } from 'react'
+import { ChevronRight, Check, FileDiff, PanelRightClose } from 'lucide-react'
 import { useUIStore, type FileChange } from '@/stores/useUIStore'
-import { useSessionStore, loadSessionWithInsights, mapHistoryMessages, type BackendMessage } from '@/stores/useSessionStore'
-import { useChatStore } from '@/stores/useChatStore'
-import { useGatewayAPI } from '@/context/RuntimeProvider'
-import {
-  ChevronRight,
-  FileDiff,
-  PanelRightClose,
-  Check,
-  X,
-} from 'lucide-react'
+import type { DiffHunk, DiffLine } from '@/utils/patchParser'
 
 const statusMeta: Record<string, { label: string; color: string; bg: string }> = {
   added: { label: '新增', color: 'var(--success)', bg: 'rgba(22, 163, 74, 0.12)' },
@@ -40,17 +32,18 @@ function getChangeCounts(fileChanges: { status: string; additions: number; delet
       if (ct === 'deleted') counts.deleted += 1
       return counts
     },
-    { added: 0, modified: 0, deleted: 0 }
+    { added: 0, modified: 0, deleted: 0 },
   )
 }
 
-function DiffLine({ line }: { line: { type: 'add' | 'del' | 'header'; content: string } }) {
-  const lineStyles: Record<string, React.CSSProperties> = {
+function DiffLineView({ line }: { line: DiffLine }) {
+  const lineStyles: Record<DiffLine['type'], CSSProperties> = {
     add: { color: '#86efac', background: 'rgba(22, 163, 74, 0.08)' },
     del: { color: '#fca5a5', background: 'rgba(220, 38, 38, 0.08)' },
-    header: { color: 'var(--accent-hover)' },
+    header: { color: 'var(--accent-hover)', background: 'rgba(148, 163, 184, 0.08)' },
+    context: { color: 'var(--text-secondary)' },
   }
-  const prefix = line.type === 'add' ? '+' : line.type === 'del' ? '-' : ''
+  const prefix = line.type === 'add' ? '+' : line.type === 'del' ? '-' : line.type === 'context' ? ' ' : ''
 
   return (
     <div style={{ ...styles.diffLine, ...lineStyles[line.type] }}>
@@ -58,6 +51,21 @@ function DiffLine({ line }: { line: { type: 'add' | 'del' | 'header'; content: s
       <span style={styles.diffText}>{line.content}</span>
     </div>
   )
+}
+
+function getDisplayHunks(change: FileChange): DiffHunk[] {
+  if (change.hunks && change.hunks.length > 0) {
+    return change.hunks
+  }
+  if (change.diff && change.diff.length > 0) {
+    return [{
+      header: '',
+      lines: change.diff,
+      additions: change.additions,
+      deletions: change.deletions,
+    }]
+  }
+  return []
 }
 
 function FileChangeItem({
@@ -70,46 +78,9 @@ function FileChangeItem({
   onToggle: () => void
 }) {
   const acceptFileChange = useUIStore((s) => s.acceptFileChange)
-  const rejectFileChange = useUIStore((s) => s.rejectFileChange)
-  const gatewayAPI = useGatewayAPI()
-  const sessionId = useSessionStore((s) => s.currentSessionId)
   const meta = getStatusMeta(change.status)
   const reviewed = change.status === 'accepted' || change.status === 'rejected'
-
-  const handleReject = async () => {
-    if (!change.checkpoint_id || !gatewayAPI || !sessionId) {
-      rejectFileChange(change.id)
-      return
-    }
-    const confirmed = window.confirm(
-      `This will restore files to their pre-change state and revert all file changes from this turn. Continue?\n\nFile: ${change.path}`
-    )
-    if (!confirmed) return
-
-    try {
-      const result = await gatewayAPI.restoreCheckpoint({
-        session_id: sessionId,
-        checkpoint_id: change.checkpoint_id,
-      })
-      if (result?.payload) {
-        useUIStore.getState().clearFileChanges()
-        useUIStore.getState().showToast('Restored to pre-change state', 'success')
-        // Reload session messages to stay in sync with backend
-        try {
-          const sessionFrame = await loadSessionWithInsights(gatewayAPI, sessionId)
-          const sessionData = sessionFrame.payload as { messages?: BackendMessage[]; agent_mode?: string }
-          if (sessionData?.messages) {
-            useChatStore.getState().clearMessages()
-            const mapped = mapHistoryMessages(sessionData.messages)
-            for (const msg of mapped) useChatStore.getState().addMessage(msg)
-          }
-        } catch { /* non-critical refresh */ }
-      }
-    } catch (e) {
-      console.warn('[FileChangePanel] restoreCheckpoint failed:', e)
-      useUIStore.getState().showToast('Restore failed', 'error')
-    }
-  }
+  const displayHunks = getDisplayHunks(change)
 
   return (
     <div style={styles.changeCard}>
@@ -142,20 +113,23 @@ function FileChangeItem({
               <Check size={13} />
               接受
             </button>
-            <button
-              style={{ ...styles.actionBtn, color: reviewed ? 'var(--text-tertiary)' : 'var(--error)' }}
-              onClick={handleReject}
-              disabled={reviewed}
-              title="拒绝并回退更改"
-            >
-              <X size={13} />
-              拒绝
-            </button>
           </div>
-          <div style={styles.diffBlock}>
-            {change.diff?.map((line, index) => (
-              <DiffLine key={`${change.id}-${index}`} line={line} />
-            ))}
+          <div data-testid={`diff-scroller-${change.id}`} style={styles.diffScroller}>
+            {displayHunks.length === 0 ? (
+              <div style={styles.emptyDiff}>当前文件没有可展示的 diff</div>
+            ) : (
+              displayHunks.map((hunk, index) => (
+                <div
+                  key={`${change.id}-hunk-${index}`}
+                  data-testid={`diff-hunk-${change.id}-${index}`}
+                  style={styles.hunkBlock}
+                >
+                  {hunk.lines.map((line, lineIndex) => (
+                    <DiffLineView key={`${change.id}-${index}-${lineIndex}`} line={line} />
+                  ))}
+                </div>
+              ))
+            )}
           </div>
         </div>
       )}
@@ -182,8 +156,8 @@ export default function FileChangePanel() {
     <div style={styles.container}>
       <div style={styles.header}>
         <div style={styles.headerTop}>
-          <span style={styles.headerTitle}>文件更改</span>
-          <button style={styles.closeBtn} onClick={toggleChangesPanel} title="关闭文件更改">
+          <span style={styles.headerTitle}>文件变更</span>
+          <button style={styles.closeBtn} onClick={toggleChangesPanel} title="关闭文件变更">
             <PanelRightClose size={16} />
           </button>
         </div>
@@ -198,7 +172,7 @@ export default function FileChangePanel() {
 
       <div style={styles.scrollArea}>
         {fileChanges.length === 0 ? (
-          <div style={styles.emptyState}>当前会话暂无文件更改</div>
+          <div style={styles.emptyState}>当前会话暂无文件变更</div>
         ) : (
           fileChanges.map((change) => (
             <FileChangeItem
@@ -214,7 +188,7 @@ export default function FileChangePanel() {
   )
 }
 
-const styles: Record<string, React.CSSProperties> = {
+const styles: Record<string, CSSProperties> = {
   container: {
     display: 'flex',
     flexDirection: 'column',
@@ -365,11 +339,18 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: 11,
     fontFamily: 'var(--font-ui)',
   },
-  diffBlock: {
-    maxHeight: 260,
-    overflow: 'auto',
+  diffScroller: {
+    overflowX: 'auto',
+    overflowY: 'visible',
     background: 'var(--code-bg)',
-    padding: '6px 0',
+    padding: 8,
+  },
+  hunkBlock: {
+    border: '1px solid rgba(148, 163, 184, 0.18)',
+    borderRadius: 'var(--radius-sm)',
+    overflow: 'hidden',
+    background: 'rgba(15, 23, 42, 0.22)',
+    marginBottom: 10,
   },
   diffLine: {
     display: 'flex',
@@ -388,5 +369,10 @@ const styles: Record<string, React.CSSProperties> = {
   },
   diffText: {
     whiteSpace: 'pre',
+  },
+  emptyDiff: {
+    padding: '10px 12px',
+    fontSize: 11,
+    color: 'var(--text-tertiary)',
   },
 }

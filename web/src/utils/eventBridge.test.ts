@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { useChatStore } from '@/stores/useChatStore'
 import { useGatewayStore } from '@/stores/useGatewayStore'
 import { useSessionStore } from '@/stores/useSessionStore'
@@ -7,11 +7,13 @@ import { useUIStore } from '@/stores/useUIStore'
 import { handleGatewayEvent, resetEventBridgeCursors } from './eventBridge'
 import { EventType } from '@/api/protocol'
 
-function createMockGatewayAPI() {
+function createMockGatewayAPI(overrides: Record<string, unknown> = {}) {
   return {
     listSessions: async () => ({ payload: { sessions: [] } }),
     loadSession: async () => ({ payload: { messages: [] } }),
     bindStream: async () => ({}),
+    checkpointDiff: async () => ({ payload: { checkpoint_id: 'cp', files: {}, patch: '' } }),
+    ...overrides,
   } as any
 }
 
@@ -439,5 +441,192 @@ describe('eventBridge', () => {
     const newChange = useUIStore.getState().fileChanges.find((c) => c.path === 'b.txt')
     expect(newChange).toBeDefined()
     expect(newChange?.checkpoint_id).toBeUndefined()
+  })
+
+  it('replaces transient tool diffs with run-scoped checkpoint diff on end-of-turn checkpoint', async () => {
+    const checkpointDiff = vi.fn(async () => ({
+      payload: {
+        checkpoint_id: 'cp2',
+        files: { modified: ['a.txt'] },
+        patch: '--- a/a.txt\n+++ b/a.txt\n@@ -1,3 +1,3 @@\n line 1\n-A\n+C\n line 3\n@@ -10,3 +10,3 @@\n line 10\n-B\n+D\n line 12\n',
+      },
+    }))
+    const api = createMockGatewayAPI({ checkpointDiff })
+
+    handleGatewayEvent({
+      type: EventType.InputNormalized,
+      payload: { payload: { runtime_event_type: EventType.InputNormalized, payload: { session_id: 'sess-1', run_id: 'run-1' } } },
+      session_id: 'sess-1',
+      run_id: 'run-1',
+    }, api)
+
+    handleGatewayEvent({
+      type: EventType.ToolStart,
+      payload: { payload: { runtime_event_type: EventType.ToolStart, payload: { name: 'filesystem_write_file', id: 'tc1', arguments: '{"path":"a.txt"}' } } },
+      session_id: 'sess-1',
+      run_id: 'run-1',
+    }, api)
+    handleGatewayEvent({
+      type: EventType.ToolDiff,
+      payload: { payload: { runtime_event_type: EventType.ToolDiff, payload: { tool_call_id: 'tc1', tool_name: 'filesystem_write_file', file_path: 'a.txt', diff: '--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-A\n+B\n' } } },
+      session_id: 'sess-1',
+      run_id: 'run-1',
+    }, api)
+    handleGatewayEvent({
+      type: EventType.ToolDiff,
+      payload: { payload: { runtime_event_type: EventType.ToolDiff, payload: { tool_call_id: 'tc2', tool_name: 'filesystem_write_file', file_path: 'a.txt', diff: '--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-B\n+C\n' } } },
+      session_id: 'sess-1',
+      run_id: 'run-1',
+    }, api)
+
+    expect(useUIStore.getState().fileChanges[0]?.hunks?.[0]?.lines.map((line) => line.content)).toEqual([
+      '@@ -1 +1 @@',
+      'B',
+      'C',
+    ])
+
+    handleGatewayEvent({
+      type: EventType.CheckpointCreated,
+      payload: { payload: { runtime_event_type: EventType.CheckpointCreated, payload: { checkpoint_id: 'cp2', code_checkpoint_ref: 'c', session_checkpoint_ref: 's', commit_hash: '', reason: 'end_of_turn' } } },
+      session_id: 'sess-1',
+      run_id: 'run-1',
+    }, api)
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(checkpointDiff).toHaveBeenCalledWith({
+      session_id: 'sess-1',
+      run_id: 'run-1',
+      checkpoint_id: 'cp2',
+      scope: 'run',
+    })
+    const changes = useUIStore.getState().fileChanges
+    expect(changes).toHaveLength(1)
+    expect(changes[0]).toMatchObject({ path: 'a.txt', status: 'modified', additions: 2, deletions: 2 })
+    expect(changes[0].hunks).toHaveLength(2)
+    expect(changes[0].hunks?.[0]?.lines.map((line) => line.content)).toEqual([
+      '@@ -1,3 +1,3 @@',
+      'line 1',
+      'A',
+      'C',
+      'line 3',
+    ])
+    expect(changes[0].hunks?.[1]?.lines.map((line) => line.content)).toEqual([
+      '@@ -10,3 +10,3 @@',
+      'line 10',
+      'B',
+      'D',
+      'line 12',
+    ])
+  })
+
+  it('stores hunk structure for transient tool diffs before aggregate checkpoint diff arrives', () => {
+    const api = createMockGatewayAPI()
+
+    handleGatewayEvent({
+      type: EventType.ToolStart,
+      payload: { payload: { runtime_event_type: EventType.ToolStart, payload: { name: 'filesystem_write_file', id: 'tc1', arguments: '{"path":"a.txt"}' } } },
+      session_id: 'sess-1',
+      run_id: 'run-1',
+    }, api)
+    handleGatewayEvent({
+      type: EventType.ToolDiff,
+      payload: {
+        payload: {
+          runtime_event_type: EventType.ToolDiff,
+          payload: {
+            tool_call_id: 'tc1',
+            tool_name: 'filesystem_write_file',
+            file_path: 'a.txt',
+            diff: '--- a/a.txt\n+++ b/a.txt\n@@ -1,3 +1,3 @@\n line 1\n-old\n+new\n line 3\n@@ -10,2 +10,3 @@\n line 10\n+line 11\n line 12\n',
+          },
+        },
+      },
+      session_id: 'sess-1',
+      run_id: 'run-1',
+    }, api)
+
+    const change = useUIStore.getState().fileChanges.find((entry) => entry.path === 'a.txt')
+    expect(change?.hunks).toHaveLength(2)
+    expect(change?.hunks?.[0]?.lines.map((line) => line.type)).toEqual(['header', 'context', 'del', 'add', 'context'])
+    expect(change?.hunks?.[1]?.lines.map((line) => line.content)).toEqual([
+      '@@ -10,2 +10,3 @@',
+      'line 10',
+      'line 11',
+      'line 12',
+    ])
+  })
+
+  it('keeps transient tool diffs visible when backend sends simplified diff without @@ header', () => {
+    const api = createMockGatewayAPI()
+
+    handleGatewayEvent({
+      type: EventType.ToolStart,
+      payload: { payload: { runtime_event_type: EventType.ToolStart, payload: { name: 'filesystem_write_file', id: 'tc1', arguments: '{"path":"a.txt"}' } } },
+      session_id: 'sess-1',
+      run_id: 'run-1',
+    }, api)
+    handleGatewayEvent({
+      type: EventType.ToolDiff,
+      payload: {
+        payload: {
+          runtime_event_type: EventType.ToolDiff,
+          payload: {
+            tool_call_id: 'tc1',
+            tool_name: 'filesystem_write_file',
+            file_path: 'a.txt',
+            diff: '--- a/a.txt\n+++ b/a.txt\n-old\n+new\n',
+          },
+        },
+      },
+      session_id: 'sess-1',
+      run_id: 'run-1',
+    }, api)
+
+    const change = useUIStore.getState().fileChanges.find((entry) => entry.path === 'a.txt')
+    expect(change).toMatchObject({ additions: 1, deletions: 1 })
+    expect(change?.hunks).toHaveLength(1)
+    expect(change?.hunks?.[0]?.lines.map((line) => line.content)).toEqual(['old', 'new'])
+  })
+
+  it('filters final run-scoped modified entries that have no renderable patch', async () => {
+    const checkpointDiff = vi.fn(async () => ({
+      payload: {
+        checkpoint_id: 'cp2',
+        files: { modified: ['a.txt', 'b.txt'] },
+        patch: '--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-old\n+new\n',
+      },
+    }))
+    const api = createMockGatewayAPI({ checkpointDiff })
+
+    handleGatewayEvent({
+      type: EventType.InputNormalized,
+      payload: { payload: { runtime_event_type: EventType.InputNormalized, payload: { session_id: 'sess-1', run_id: 'run-1' } } },
+      session_id: 'sess-1',
+      run_id: 'run-1',
+    }, api)
+
+    handleGatewayEvent({
+      type: EventType.ToolStart,
+      payload: { payload: { runtime_event_type: EventType.ToolStart, payload: { name: 'filesystem_write_file', id: 'tc1', arguments: '{"path":"b.txt"}' } } },
+      session_id: 'sess-1',
+      run_id: 'run-1',
+    }, api)
+
+    expect(useUIStore.getState().fileChanges.find((entry) => entry.path === 'b.txt')).toBeDefined()
+
+    handleGatewayEvent({
+      type: EventType.CheckpointCreated,
+      payload: { payload: { runtime_event_type: EventType.CheckpointCreated, payload: { checkpoint_id: 'cp2', code_checkpoint_ref: 'c', session_checkpoint_ref: 's', commit_hash: '', reason: 'end_of_turn' } } },
+      session_id: 'sess-1',
+      run_id: 'run-1',
+    }, api)
+    await Promise.resolve()
+    await Promise.resolve()
+
+    const changes = useUIStore.getState().fileChanges
+    expect(changes).toHaveLength(1)
+    expect(changes[0]).toMatchObject({ path: 'a.txt', additions: 1, deletions: 1 })
+    expect(changes.find((entry) => entry.path === 'b.txt')).toBeUndefined()
   })
 })
