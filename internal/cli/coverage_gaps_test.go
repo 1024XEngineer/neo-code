@@ -139,20 +139,20 @@ func TestCLICoverageGapBranches(t *testing.T) {
 		}
 
 		cmd := newDiagAutoCommand()
-		cmd.SetArgs([]string{"on", "--socket", "/tmp/diag.sock"})
+		cmd.SetArgs([]string{"on", "--session", "shell-session-9"})
 		if err := cmd.ExecuteContext(context.Background()); err != nil {
 			t.Fatalf("ExecuteContext() error = %v", err)
 		}
-		if captured.SocketPath != "/tmp/diag.sock" || !captured.Enabled {
-			t.Fatalf("captured = %+v, want socket=/tmp/diag.sock enabled=true", captured)
+		if captured.SessionID != "shell-session-9" || !captured.Enabled {
+			t.Fatalf("captured = %+v, want session=shell-session-9 enabled=true", captured)
 		}
 	})
 
-	t.Run("diag diagnose command socket flag registration", func(t *testing.T) {
+	t.Run("diag diagnose command socket flag removed", func(t *testing.T) {
 		cmd := newDiagDiagnoseCommand()
 		flag := cmd.Flags().Lookup("socket")
-		if flag == nil {
-			t.Fatal("expected --socket flag on diagnose subcommand")
+		if flag != nil {
+			t.Fatal("expected --socket flag to be removed from diagnose subcommand")
 		}
 	})
 
@@ -164,8 +164,8 @@ func TestCLICoverageGapBranches(t *testing.T) {
 			return errors.New("send auto failed")
 		}
 		err := defaultDiagAutoCommandRunner(context.Background(), diagAutoCommandOptions{
-			SocketPath: "/tmp/diag.sock",
-			Enabled:    true,
+			SessionID: "shell-session-10",
+			Enabled:   true,
 		}, &bytes.Buffer{})
 		if err == nil || !strings.Contains(err.Error(), "send auto failed") {
 			t.Fatalf("err = %v, want contains send auto failed", err)

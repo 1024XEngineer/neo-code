@@ -24,6 +24,11 @@ import (
 type runtimeStub struct {
 	submitInput     agentruntime.PrepareInput
 	submitErr       error
+	askInput        agentruntime.AskInput
+	askErr          error
+	deleteAskInput  agentruntime.DeleteAskSessionInput
+	deleteAskResult bool
+	deleteAskErr    error
 	compactInput    agentruntime.CompactInput
 	compactResult   agentruntime.CompactResult
 	compactErr      error
@@ -84,6 +89,19 @@ const testBridgeSubjectID = bridgeLocalSubjectID
 func (s *runtimeStub) Submit(_ context.Context, input agentruntime.PrepareInput) error {
 	s.submitInput = input
 	return s.submitErr
+}
+
+func (s *runtimeStub) Ask(_ context.Context, input agentruntime.AskInput) error {
+	s.askInput = input
+	return s.askErr
+}
+
+func (s *runtimeStub) DeleteAskSession(
+	_ context.Context,
+	input agentruntime.DeleteAskSessionInput,
+) (bool, error) {
+	s.deleteAskInput = input
+	return s.deleteAskResult, s.deleteAskErr
 }
 
 func (s *runtimeStub) PrepareUserInput(context.Context, agentruntime.PrepareInput) (agentruntime.UserInput, error) {
@@ -195,6 +213,15 @@ type runtimeWithoutCreator struct {
 func (r *runtimeWithoutCreator) Submit(ctx context.Context, input agentruntime.PrepareInput) error {
 	return r.base.Submit(ctx, input)
 }
+func (r *runtimeWithoutCreator) Ask(ctx context.Context, input agentruntime.AskInput) error {
+	return r.base.Ask(ctx, input)
+}
+func (r *runtimeWithoutCreator) DeleteAskSession(
+	ctx context.Context,
+	input agentruntime.DeleteAskSessionInput,
+) (bool, error) {
+	return r.base.DeleteAskSession(ctx, input)
+}
 func (r *runtimeWithoutCreator) PrepareUserInput(ctx context.Context, input agentruntime.PrepareInput) (agentruntime.UserInput, error) {
 	return r.base.PrepareUserInput(ctx, input)
 }
@@ -257,6 +284,15 @@ type runtimeWithoutCheckpointer struct {
 
 func (r *runtimeWithoutCheckpointer) Submit(ctx context.Context, input agentruntime.PrepareInput) error {
 	return r.base.Submit(ctx, input)
+}
+func (r *runtimeWithoutCheckpointer) Ask(ctx context.Context, input agentruntime.AskInput) error {
+	return r.base.Ask(ctx, input)
+}
+func (r *runtimeWithoutCheckpointer) DeleteAskSession(
+	ctx context.Context,
+	input agentruntime.DeleteAskSessionInput,
+) (bool, error) {
+	return r.base.DeleteAskSession(ctx, input)
 }
 func (r *runtimeWithoutCheckpointer) PrepareUserInput(ctx context.Context, input agentruntime.PrepareInput) (agentruntime.UserInput, error) {
 	return r.base.PrepareUserInput(ctx, input)
@@ -2644,5 +2680,107 @@ func TestDefaultBuildGatewayRuntimePortListSessionsWithoutExplicitWorkdir(t *tes
 
 	if _, err := port.ListSessions(context.Background()); err != nil {
 		t.Fatalf("ListSessions() with empty cli workdir should succeed, got %v", err)
+	}
+}
+
+func TestGatewayRuntimePortBridgeAskDelegatesToRuntime(t *testing.T) {
+	stub := &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)}
+	bridge, err := newGatewayRuntimePortBridge(context.Background(), stub, testSessionStore, nil, nil)
+	if err != nil {
+		t.Fatalf("new bridge: %v", err)
+	}
+	defer bridge.Close()
+
+	err = bridge.Ask(context.Background(), gateway.AskInput{
+		SubjectID: testBridgeSubjectID,
+		SessionID: "ask-session-runtime",
+		UserQuery: "help me diagnose this",
+		Skills:    []string{"terminal-diagnosis"},
+		Workdir:   "C:/tmp/workdir",
+	})
+	if err != nil {
+		t.Fatalf("Ask() error = %v", err)
+	}
+
+	if stub.askInput.SessionID != "ask-session-runtime" {
+		t.Fatalf("ask session = %q, want ask-session-runtime", stub.askInput.SessionID)
+	}
+	if strings.TrimSpace(stub.askInput.RunID) == "" {
+		t.Fatal("ask run id should not be empty")
+	}
+	if stub.askInput.UserQuery != "help me diagnose this" {
+		t.Fatalf("ask query = %q, want %q", stub.askInput.UserQuery, "help me diagnose this")
+	}
+	if len(stub.askInput.Skills) != 1 || stub.askInput.Skills[0] != "terminal-diagnosis" {
+		t.Fatalf("ask skills = %#v, want [terminal-diagnosis]", stub.askInput.Skills)
+	}
+	if stub.askInput.Workdir != "C:/tmp/workdir" {
+		t.Fatalf("ask workdir = %q, want %q", stub.askInput.Workdir, "C:/tmp/workdir")
+	}
+
+	runState, ok := bridge.lookupAskRun(stub.askInput.RunID)
+	if !ok {
+		t.Fatalf("run %q should be tracked", stub.askInput.RunID)
+	}
+	if runState.SessionID != "ask-session-runtime" {
+		t.Fatalf("tracked session = %q, want ask-session-runtime", runState.SessionID)
+	}
+}
+
+func TestGatewayRuntimePortBridgeAskGeneratesSessionWhenEmpty(t *testing.T) {
+	stub := &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)}
+	bridge, err := newGatewayRuntimePortBridge(context.Background(), stub, testSessionStore, nil, nil)
+	if err != nil {
+		t.Fatalf("new bridge: %v", err)
+	}
+	defer bridge.Close()
+
+	err = bridge.Ask(context.Background(), gateway.AskInput{
+		SubjectID: testBridgeSubjectID,
+		UserQuery: "hello",
+	})
+	if err != nil {
+		t.Fatalf("Ask() error = %v", err)
+	}
+	if !strings.HasPrefix(stub.askInput.SessionID, bridgeAskSessionPrefix+"-") {
+		t.Fatalf("ask session = %q, want prefix %q", stub.askInput.SessionID, bridgeAskSessionPrefix+"-")
+	}
+	if strings.TrimSpace(stub.askInput.RunID) == "" {
+		t.Fatal("ask run id should not be empty")
+	}
+}
+
+func TestGatewayRuntimePortBridgeDeleteAskSessionClearsRunMapping(t *testing.T) {
+	stub := &runtimeStub{
+		eventsCh:        make(chan agentruntime.RuntimeEvent, 1),
+		deleteAskResult: true,
+		deleteAskErr:    nil,
+	}
+	bridge, err := newGatewayRuntimePortBridge(context.Background(), stub, testSessionStore, nil, nil)
+	if err != nil {
+		t.Fatalf("new bridge: %v", err)
+	}
+	defer bridge.Close()
+
+	bridge.trackAskRun("ask-session-clean", "ask-run-clean")
+	if _, ok := bridge.lookupAskRun("ask-run-clean"); !ok {
+		t.Fatal("run should be tracked before deleting ask session")
+	}
+
+	deleted, err := bridge.DeleteAskSession(context.Background(), gateway.DeleteAskSessionInput{
+		SubjectID: testBridgeSubjectID,
+		SessionID: "ask-session-clean",
+	})
+	if err != nil {
+		t.Fatalf("DeleteAskSession() error = %v", err)
+	}
+	if !deleted {
+		t.Fatal("DeleteAskSession() deleted = false, want true")
+	}
+	if stub.deleteAskInput.SessionID != "ask-session-clean" {
+		t.Fatalf("runtime delete session = %q, want %q", stub.deleteAskInput.SessionID, "ask-session-clean")
+	}
+	if _, ok := bridge.lookupAskRun("ask-run-clean"); ok {
+		t.Fatal("run mapping should be cleared after deleting ask session")
 	}
 }

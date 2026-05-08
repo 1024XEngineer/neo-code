@@ -58,7 +58,7 @@ type gatewayCommandOptions struct {
 
 	MetricsEnabled           bool
 	MetricsEnabledOverridden bool
-	SkipIPC                 bool
+	SkipIPC                  bool
 }
 
 // defaultNewAuthManager 创建默认网关认证器，并把具体持久化实现收敛在 CLI 装配层内部。

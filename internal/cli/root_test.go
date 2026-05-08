@@ -1011,6 +1011,12 @@ func (stubGatewayAuthenticator) ResolveSubjectID(token string) (string, bool) {
 
 func (stubRuntimePort) Run(context.Context, gateway.RunInput) error { return nil }
 
+func (stubRuntimePort) Ask(context.Context, gateway.AskInput) error { return nil }
+
+func (stubRuntimePort) DeleteAskSession(context.Context, gateway.DeleteAskSessionInput) (bool, error) {
+	return false, nil
+}
+
 func (stubRuntimePort) Compact(context.Context, gateway.CompactInput) (gateway.CompactResult, error) {
 	return gateway.CompactResult{}, nil
 }
