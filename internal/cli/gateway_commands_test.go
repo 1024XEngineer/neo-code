@@ -3,6 +3,7 @@ package cli
 import (
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -92,5 +93,12 @@ func TestInjectRunnerDispatcherIntoRuntime(t *testing.T) {
 	field := reflect.ValueOf(service).Elem().FieldByName("runnerToolDispatcher")
 	if !field.IsValid() || field.IsNil() {
 		t.Fatal("runnerToolDispatcher was not injected")
+	}
+}
+
+func TestNewGatewayIdleShutdownControllerUsesExpectedDefaultTimeout(t *testing.T) {
+	controller := newGatewayIdleShutdownController(nil, nil)
+	if controller.idleTimeout != 5*time.Minute {
+		t.Fatalf("idleTimeout = %v, want %v", controller.idleTimeout, 5*time.Minute)
 	}
 }
