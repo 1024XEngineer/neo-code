@@ -106,6 +106,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     try {
       await gatewayAPI.switchWorkspace(hash)
       set({ currentWorkspaceHash: hash })
+      useGatewayStore.getState().notifyProviderChanged()
 
       // 加载新工作区的会话列表
       await useSessionStore.getState().fetchSessions(gatewayAPI, true)
@@ -150,6 +151,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       // 通知后端切换到新工作区
       await gatewayAPI.switchWorkspace(w.hash)
       set({ currentWorkspaceHash: w.hash })
+      useGatewayStore.getState().notifyProviderChanged()
 
       // 加载新工作区的会话列表
       await useSessionStore.getState().fetchSessions(gatewayAPI, true)

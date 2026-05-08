@@ -815,6 +815,8 @@ function emptyProviderForm(): CreateProviderParams & { modelsJSON?: string } {
 function ProviderModal({ onClose }: { onClose: () => void }) {
   const gatewayAPI = useGatewayAPI()
   const isGenerating = useChatStore((s) => s.isGenerating)
+  const currentSessionId = useSessionStore((s) => s.currentSessionId)
+  const providerChangeTick = useGatewayStore((s) => s.providerChangeTick)
   const [providers, setProviders] = useState<ProviderOption[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -826,17 +828,35 @@ function ProviderModal({ onClose }: { onClose: () => void }) {
   const load = useCallback(async () => {
     if (!gatewayAPI) return
     setLoading(true); setError('')
-    try { const result = await gatewayAPI.listProviders(); setProviders(result?.payload?.providers ?? []) }
+    try {
+      const result = await gatewayAPI.listProviders()
+      const listedProviders = result?.payload?.providers ?? []
+      if (!currentSessionId) {
+        setProviders(listedProviders)
+        return
+      }
+      const sessionModel = await gatewayAPI.getSessionModel(currentSessionId)
+      const effectiveProviderID = sessionModel?.payload?.provider || ''
+      setProviders(listedProviders.map((provider) => ({
+        ...provider,
+        selected: provider.id === effectiveProviderID,
+      })))
+    }
     catch (err) { setError(err instanceof Error ? err.message : 'Failed to load providers'); console.error('listProviders failed:', err) }
     finally { setLoading(false) }
-  }, [gatewayAPI])
+  }, [currentSessionId, gatewayAPI])
 
-  useEffect(() => { load() }, [load])
+  useEffect(() => { load() }, [load, providerChangeTick])
 
   async function handleSelect(providerId: string) {
     if (!gatewayAPI) return
     if (isGenerating) { useUIStore.getState().showToast('Cannot switch provider while generating', 'info'); return }
-    try { await gatewayAPI.selectProviderModel({ provider_id: providerId }); useGatewayStore.getState().notifyProviderChanged(); await load() }
+    setError('')
+    try {
+      await gatewayAPI.selectProviderModel({ provider_id: providerId })
+      useGatewayStore.getState().notifyProviderChanged()
+      await load()
+    }
     catch (err) { console.error('selectProviderModel failed:', err); setError(err instanceof Error ? err.message : 'Failed to switch provider') }
   }
 

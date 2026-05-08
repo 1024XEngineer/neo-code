@@ -267,7 +267,7 @@ export default function FileTreePanel() {
         <div style={styles.headerPath}>{currentPath || currentWorkspace?.name || currentWorkspace?.path || '.'}</div>
       </div>
 
-      <div style={styles.scrollArea}>
+      <div data-testid="file-tree-scroll-area" style={styles.scrollArea}>
         {loading && (
           <div style={styles.emptyState}>
             <Loader2 size={16} style={{ animation: 'spin 1s linear infinite' }} />
@@ -308,6 +308,8 @@ const styles: Record<string, React.CSSProperties> = {
     display: 'flex',
     flexDirection: 'column',
     height: '100%',
+    minHeight: 0,
+    overflow: 'hidden',
     background: 'var(--bg-secondary)',
   },
   header: {
@@ -348,6 +350,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   scrollArea: {
     flex: 1,
+    minHeight: 0,
     overflowY: 'auto',
     padding: '6px 4px',
   },

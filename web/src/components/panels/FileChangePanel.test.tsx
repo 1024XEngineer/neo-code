@@ -126,7 +126,7 @@ describe('FileChangePanel', () => {
       ],
       activePreviewTabId: CHANGES_PREVIEW_TAB_ID,
       changesPanelOpen: true,
-      changesPanelWidth: 760,
+      changesPanelWidth: 560,
       theme: 'dark',
     } as never)
   })
@@ -144,6 +144,80 @@ describe('FileChangePanel', () => {
     fireEvent.click(screen.getByText('接受'))
 
     expect(useUIStore.getState().fileChanges[0]?.status).toBe('accepted')
+  })
+
+  it('keeps the panel body clipped and uses the content area as the scroll container', () => {
+    render(<FileChangePanel />)
+
+    const panelBody = screen.getByTestId('file-change-panel-body')
+    const scrollArea = screen.getByTestId('changes-scroll-area')
+
+    expect(panelBody).toHaveStyle({ overflow: 'hidden', minHeight: '0px' })
+    expect(scrollArea).toHaveStyle({ overflow: 'auto', minHeight: '0px', flex: '1 1 0%' })
+  })
+
+  it('caps expanded diff blocks so long hunks do not stretch the whole panel', () => {
+    render(<FileChangePanel />)
+
+    fireEvent.click(screen.getByText('src/a.txt'))
+
+    expect(screen.getByTestId('diff-scroller-fc-1')).toHaveStyle({
+      display: 'flex',
+      flexDirection: 'column',
+    })
+    expect(screen.getByTestId('diff-hunk-scroller-fc-1-0')).toHaveStyle({
+      overflowX: 'auto',
+      overflowY: 'visible',
+    })
+    expect(screen.getByText('line 2 new').parentElement).toHaveStyle({
+      width: 'max-content',
+      minWidth: '100%',
+    })
+    expect(screen.getByText('line 2 new')).not.toHaveStyle({ overflowX: 'auto' })
+  })
+
+  it('renders multiple hunks as separately scrollable change blocks', () => {
+    useUIStore.setState({
+      fileChanges: [
+        {
+          id: 'fc-2',
+          path: 'src/multi.txt',
+          status: 'modified',
+          additions: 2,
+          deletions: 1,
+          hunks: [
+            {
+              header: '@@ -1,2 +1,2 @@',
+              additions: 1,
+              deletions: 1,
+              lines: [
+                { type: 'header', content: '@@ -1,2 +1,2 @@' },
+                { type: 'del', content: 'old line' },
+                { type: 'add', content: 'new line' },
+              ],
+            },
+            {
+              header: '@@ -8,0 +9,1 @@',
+              additions: 1,
+              deletions: 0,
+              lines: [
+                { type: 'header', content: '@@ -8,0 +9,1 @@' },
+                { type: 'context', content: 'ctx' },
+                { type: 'add', content: 'tail line' },
+              ],
+            },
+          ],
+        },
+      ],
+    } as never)
+
+    render(<FileChangePanel />)
+
+    fireEvent.click(screen.getByText('src/multi.txt'))
+
+    expect(screen.getAllByTestId(/diff-hunk-fc-2-/)).toHaveLength(2)
+    expect(screen.getByTestId('diff-hunk-scroller-fc-2-0')).toHaveStyle({ overflowX: 'auto', overflowY: 'visible' })
+    expect(screen.getByTestId('diff-hunk-scroller-fc-2-1')).toHaveStyle({ overflowX: 'auto', overflowY: 'visible' })
   })
 
   it('keeps both fixed tabs visible', () => {
@@ -208,5 +282,26 @@ describe('FileChangePanel', () => {
     expect(preview).toHaveAttribute('data-path', 'cmd/neocode/main.go')
     expect(preview).toHaveAttribute('data-theme', 'light')
     expect(preview.textContent).toContain('package main')
+  })
+
+  it('uses theme variables instead of fixed diff colors in light mode', () => {
+    useUIStore.setState({ theme: 'light' } as never)
+
+    render(<FileChangePanel />)
+
+    fireEvent.click(screen.getByText('src/a.txt'))
+
+    expect(screen.getByText('line 2 new').parentElement).toHaveStyle({
+      color: 'var(--diff-add-text)',
+      background: 'var(--diff-add-bg)',
+    })
+    expect(screen.getByText('line 2 old').parentElement).toHaveStyle({
+      color: 'var(--diff-del-text)',
+      background: 'var(--diff-del-bg)',
+    })
+    expect(screen.getByText('@@ -1,3 +1,3 @@').parentElement).toHaveStyle({
+      color: 'var(--diff-header-text)',
+      background: 'var(--diff-header-bg)',
+    })
   })
 })

@@ -53,10 +53,6 @@ export default function ModelSelector() {
 
   async function applyModelSelection(model: ModelEntry) {
     if (!gatewayAPI) return
-    if (currentSessionId) {
-      await gatewayAPI.setSessionModel(currentSessionId, model.id, model.provider)
-      return
-    }
     await gatewayAPI.selectProviderModel({ provider_id: model.provider, model_id: model.id })
     useGatewayStore.getState().notifyProviderChanged()
   }

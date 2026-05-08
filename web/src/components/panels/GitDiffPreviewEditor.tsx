@@ -58,7 +58,11 @@ export default function GitDiffPreviewEditor({
   )
 
   return (
-    <div data-testid="git-diff-preview-host" style={styles.host}>
+    <div
+      data-testid="git-diff-preview-host"
+      className={renderSideBySide ? 'git-diff-preview-host' : 'git-diff-preview-host git-diff-preview-host-inline'}
+      style={styles.host}
+    >
       <DiffEditor
         height="100%"
         width="100%"

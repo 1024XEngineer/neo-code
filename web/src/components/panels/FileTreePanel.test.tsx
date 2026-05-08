@@ -101,4 +101,24 @@ describe('FileTreePanel', () => {
       expect(useUIStore.getState().previewTabs.filter((tab) => tab.kind === 'file')).toHaveLength(1)
     })
   })
+
+  it('keeps the tree list as the inner scroll container', async () => {
+    mockGatewayAPI = {
+      listFiles: vi.fn().mockResolvedValue({
+        payload: {
+          files: [{ name: 'main.go', path: 'main.go', is_dir: false }],
+        },
+      }),
+      readFile: vi.fn(),
+    }
+
+    render(<FileTreePanel />)
+
+    await waitFor(() => {
+      expect(screen.getByText('main.go')).toBeTruthy()
+    })
+
+    const scrollArea = screen.getByTestId('file-tree-scroll-area')
+    expect(scrollArea).toHaveStyle({ overflowY: 'auto', minHeight: '0px', flex: '1 1 0%' })
+  })
 })

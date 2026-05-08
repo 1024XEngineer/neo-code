@@ -140,10 +140,10 @@ function formatGitDiffMeta(tab: GitDiffFilePreviewTab) {
 
 function DiffLineView({ line }: { line: DiffLine }) {
   const lineStyles: Record<DiffLine['type'], CSSProperties> = {
-    add: { color: '#86efac', background: 'rgba(22, 163, 74, 0.08)' },
-    del: { color: '#fca5a5', background: 'rgba(220, 38, 38, 0.08)' },
-    header: { color: 'var(--accent-hover)', background: 'rgba(148, 163, 184, 0.08)' },
-    context: { color: 'var(--text-secondary)' },
+    add: { color: 'var(--diff-add-text)', background: 'var(--diff-add-bg)' },
+    del: { color: 'var(--diff-del-text)', background: 'var(--diff-del-bg)' },
+    header: { color: 'var(--diff-header-text)', background: 'var(--diff-header-bg)' },
+    context: { color: 'var(--diff-context-text)' },
   }
 
   const prefix = line.type === 'add' ? '+' : line.type === 'del' ? '-' : line.type === 'context' ? ' ' : ''
@@ -212,9 +212,11 @@ function FileChangeItem({
                   data-testid={`diff-hunk-${change.id}-${index}`}
                   style={styles.hunkBlock}
                 >
-                  {hunk.lines.map((line, lineIndex) => (
-                    <DiffLineView key={`${change.id}-${index}-${lineIndex}`} line={line} />
-                  ))}
+                  <div data-testid={`diff-hunk-scroller-${change.id}-${index}`} style={styles.hunkScroller}>
+                    {hunk.lines.map((line, lineIndex) => (
+                      <DiffLineView key={`${change.id}-${index}-${lineIndex}`} line={line} />
+                    ))}
+                  </div>
                 </div>
               ))
             )}
@@ -252,7 +254,7 @@ function ChangesView() {
         </div>
       </div>
 
-      <div style={styles.scrollArea}>
+      <div data-testid="changes-scroll-area" style={styles.scrollArea}>
         {fileChanges.length === 0 ? (
           <div style={styles.emptyState}>当前会话暂无文件变更</div>
         ) : (
@@ -337,7 +339,7 @@ function GitDiffFileView({ tab }: { tab: GitDiffFilePreviewTab }) {
           originalContent={tab.original_content}
           modifiedContent={tab.modified_content}
           theme={theme}
-          renderSideBySide={changesPanelWidth >= 720}
+          renderSideBySide={changesPanelWidth >= 520}
         />
       </Suspense>
     )
@@ -408,7 +410,7 @@ function GitDiffView({
         )}
       </div>
 
-      <div style={styles.scrollArea}>
+      <div data-testid="git-diff-scroll-area" style={styles.scrollArea}>
         {loading && <PreviewFallback message="正在加载 Git Diff 列表..." />}
         {!loading && error && <div style={styles.emptyState}>加载失败: {error}</div>}
         {!loading && !error && !summary.in_git_repo && (
@@ -653,6 +655,7 @@ export default function FileChangePanel() {
         id={`preview-panel-${activeTab?.id || CHANGES_PREVIEW_TAB_ID}`}
         role="tabpanel"
         aria-labelledby={`preview-tab-${activeTab?.id || CHANGES_PREVIEW_TAB_ID}`}
+        data-testid="file-change-panel-body"
         style={styles.panelBody}
       >
         {activeTab?.kind === 'file' && <FilePreviewView tab={activeTab} />}
@@ -677,6 +680,8 @@ const styles: Record<string, CSSProperties> = {
     display: 'flex',
     flexDirection: 'column',
     height: '100%',
+    minHeight: 0,
+    overflow: 'hidden',
     background: 'var(--bg-secondary)',
   },
   dockHeader: {
@@ -772,13 +777,18 @@ const styles: Record<string, CSSProperties> = {
     flexShrink: 0,
   },
   panelBody: {
-    minHeight: 0,
     flex: 1,
+    minHeight: 0,
+    display: 'flex',
+    flexDirection: 'column',
+    overflow: 'hidden',
   },
   viewContainer: {
     display: 'flex',
     flexDirection: 'column',
     height: '100%',
+    minHeight: 0,
+    overflow: 'hidden',
   },
   viewHeader: {
     padding: '12px 14px',
@@ -910,6 +920,8 @@ const styles: Record<string, CSSProperties> = {
     fontFamily: 'var(--font-mono)',
   },
   expandedArea: {
+    display: 'flex',
+    flexDirection: 'column',
     borderTop: '1px solid var(--border-primary)',
     background: 'rgba(148, 163, 184, 0.03)',
   },
@@ -931,14 +943,19 @@ const styles: Record<string, CSSProperties> = {
     fontFamily: 'var(--font-ui)',
   },
   diffScroller: {
-    overflow: 'auto',
     padding: 10,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 10,
   },
   hunkBlock: {
     border: '1px solid rgba(148, 163, 184, 0.15)',
     borderRadius: 8,
     overflow: 'hidden',
-    marginBottom: 10,
+  },
+  hunkScroller: {
+    overflowX: 'auto',
+    overflowY: 'visible',
   },
   diffLine: {
     display: 'grid',
@@ -948,12 +965,14 @@ const styles: Record<string, CSSProperties> = {
     fontFamily: 'var(--font-mono)',
     fontSize: 12,
     whiteSpace: 'pre',
+    width: 'max-content',
+    minWidth: '100%',
   },
   diffPrefix: {
     color: 'inherit',
   },
   diffText: {
-    overflowX: 'auto',
+    display: 'block',
   },
   emptyDiff: {
     padding: 12,

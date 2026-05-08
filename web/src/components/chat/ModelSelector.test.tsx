@@ -52,7 +52,7 @@ describe('ModelSelector', () => {
     expect(mockGatewayAPI.selectProviderModel).not.toHaveBeenCalled()
   })
 
-  it('defers a session model change until generation completes and applies it once', async () => {
+  it('defers a session model change until generation completes and applies it once through the global switch path', async () => {
     mockGatewayAPI = {
       listModels: vi.fn().mockResolvedValue({
         payload: {
@@ -64,8 +64,8 @@ describe('ModelSelector', () => {
           selected_model_id: 'gpt-4.1',
         },
       }),
-      setSessionModel: vi.fn().mockResolvedValue(undefined),
-      selectProviderModel: vi.fn(),
+      setSessionModel: vi.fn(),
+      selectProviderModel: vi.fn().mockResolvedValue(undefined),
     }
     useSessionStore.setState({ currentSessionId: 'session-1' } as any)
     useChatStore.setState({ isGenerating: true } as any)
@@ -77,15 +77,16 @@ describe('ModelSelector', () => {
     fireEvent.click(screen.getByText('GPT-4o'))
 
     expect(mockGatewayAPI.setSessionModel).not.toHaveBeenCalled()
+    expect(mockGatewayAPI.selectProviderModel).not.toHaveBeenCalled()
 
     useChatStore.setState({ isGenerating: false } as any)
     view.rerender(<ModelSelector />)
 
     await waitFor(() => {
-      expect(mockGatewayAPI.setSessionModel).toHaveBeenCalledTimes(1)
+      expect(mockGatewayAPI.selectProviderModel).toHaveBeenCalledTimes(1)
     })
-    expect(mockGatewayAPI.setSessionModel).toHaveBeenCalledWith('session-1', 'gpt-4o', 'openai')
-    expect(mockGatewayAPI.selectProviderModel).not.toHaveBeenCalled()
+    expect(mockGatewayAPI.selectProviderModel).toHaveBeenCalledWith({ provider_id: 'openai', model_id: 'gpt-4o' })
+    expect(useGatewayStore.getState().providerChangeTick).toBe(1)
   })
 
   it('updates the global default selection when there is no current session', async () => {
@@ -131,8 +132,8 @@ describe('ModelSelector', () => {
           selected_model_id: 'gpt-4.1',
         },
       }),
-      setSessionModel: vi.fn().mockRejectedValue(new Error('boom')),
-      selectProviderModel: vi.fn(),
+      setSessionModel: vi.fn(),
+      selectProviderModel: vi.fn().mockRejectedValue(new Error('boom')),
     }
     useSessionStore.setState({ currentSessionId: 'session-1' } as any)
     useUIStore.setState({ showToast } as any)
@@ -144,11 +145,12 @@ describe('ModelSelector', () => {
     fireEvent.click(screen.getByText('GPT-4o'))
 
     await waitFor(() => {
-      expect(mockGatewayAPI.setSessionModel).toHaveBeenCalledWith('session-1', 'gpt-4o', 'openai')
+      expect(mockGatewayAPI.selectProviderModel).toHaveBeenCalledWith({ provider_id: 'openai', model_id: 'gpt-4o' })
     })
     await waitFor(() => {
       expect(screen.getByRole('button', { name: /openai \/ GPT-4\.1/i })).toBeTruthy()
     })
+    expect(mockGatewayAPI.setSessionModel).not.toHaveBeenCalled()
     expect(showToast).toHaveBeenCalledWith('Failed to apply model change', 'error')
   })
 
@@ -186,8 +188,8 @@ describe('ModelSelector', () => {
             selected_model_id: 'gpt-4.1',
           },
         }),
-      setSessionModel: vi.fn().mockRejectedValue(new Error('boom')),
-      selectProviderModel: vi.fn(),
+      setSessionModel: vi.fn(),
+      selectProviderModel: vi.fn().mockRejectedValue(new Error('boom')),
     }
     useSessionStore.setState({ currentSessionId: 'session-1' } as any)
     useChatStore.setState({ isGenerating: true } as any)
@@ -207,7 +209,7 @@ describe('ModelSelector', () => {
     })
 
     await waitFor(() => {
-      expect(mockGatewayAPI.setSessionModel).toHaveBeenCalledWith('session-1', 'gpt-4o', 'openai')
+      expect(mockGatewayAPI.selectProviderModel).toHaveBeenCalledWith({ provider_id: 'openai', model_id: 'gpt-4o' })
     })
     await waitFor(() => {
       expect(mockGatewayAPI.listModels.mock.calls.length).toBeGreaterThanOrEqual(2)
@@ -217,5 +219,39 @@ describe('ModelSelector', () => {
     })
     expect(showToast).toHaveBeenCalledWith('Model change will apply on the next turn', 'info')
     expect(showToast).toHaveBeenCalledWith('Failed to apply model change', 'error')
+  })
+
+  it('refreshes the displayed selection when the active session changes, such as after switching workspace', async () => {
+    mockGatewayAPI = {
+      listModels: vi.fn()
+        .mockResolvedValueOnce({
+          payload: {
+            models: [{ id: 'gpt-4.1', name: 'GPT-4.1', provider: 'openai' }],
+            selected_provider_id: 'openai',
+            selected_model_id: 'gpt-4.1',
+          },
+        })
+        .mockResolvedValueOnce({
+          payload: {
+            models: [{ id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro', provider: 'gemini' }],
+            selected_provider_id: 'gemini',
+            selected_model_id: 'gemini-2.5-pro',
+          },
+        }),
+      setSessionModel: vi.fn(),
+      selectProviderModel: vi.fn(),
+    }
+    useSessionStore.setState({ currentSessionId: 'session-a' } as any)
+
+    const view = render(<ModelSelector />)
+
+    await screen.findByText('openai / GPT-4.1')
+
+    useSessionStore.setState({ currentSessionId: 'session-b' } as any)
+    view.rerender(<ModelSelector />)
+
+    await screen.findByText('gemini / Gemini 2.5 Pro')
+    expect(mockGatewayAPI.listModels).toHaveBeenNthCalledWith(1, 'session-a')
+    expect(mockGatewayAPI.listModels).toHaveBeenNthCalledWith(2, 'session-b')
   })
 })

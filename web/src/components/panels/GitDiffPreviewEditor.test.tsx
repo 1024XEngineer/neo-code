@@ -14,13 +14,14 @@ vi.mock('@monaco-editor/react', () => ({
     modified: string
     language: string
     theme: string
-    options: { renderSideBySide?: boolean }
+    options: { renderSideBySide?: boolean; lineNumbers?: string }
   }) => (
     <div
       data-testid="monaco-diff-editor"
       data-language={language}
       data-theme={theme}
       data-side-by-side={String(Boolean(options.renderSideBySide))}
+      data-line-numbers={options.lineNumbers}
     >
       {original}::{modified}
     </div>
@@ -43,6 +44,24 @@ describe('GitDiffPreviewEditor', () => {
     expect(editor).toHaveAttribute('data-language', 'go')
     expect(editor).toHaveAttribute('data-theme', 'vs-dark')
     expect(editor).toHaveAttribute('data-side-by-side', 'true')
+    expect(editor).toHaveAttribute('data-line-numbers', 'on')
     expect(editor.textContent).toContain('before::after')
+  })
+
+  it('hides line numbers in inline diff mode to avoid duplicated columns', () => {
+    render(
+      <GitDiffPreviewEditor
+        path="src/main.go"
+        originalContent="before"
+        modifiedContent="after"
+        theme="dark"
+        renderSideBySide={false}
+      />,
+    )
+
+    const editor = screen.getByTestId('monaco-diff-editor')
+    expect(editor).toHaveAttribute('data-side-by-side', 'false')
+    expect(editor).toHaveAttribute('data-line-numbers', 'on')
+    expect(screen.getByTestId('git-diff-preview-host')).toHaveClass('git-diff-preview-host-inline')
   })
 })
