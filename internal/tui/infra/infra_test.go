@@ -114,7 +114,7 @@ func TestCachedMarkdownRendererRemovesHeadingHashPrefix(t *testing.T) {
 	}
 }
 
-func TestNormalizeMarkdownForTerminalFencesTables(t *testing.T) {
+func TestNormalizeMarkdownForTerminalPreservesTables(t *testing.T) {
 	input := strings.Join([]string{
 		"| col1 | col2 |",
 		"| ---- | ---- |",
@@ -122,11 +122,8 @@ func TestNormalizeMarkdownForTerminalFencesTables(t *testing.T) {
 	}, "\n")
 
 	normalized := normalizeMarkdownForTerminal(input)
-	if !strings.Contains(normalized, "```text") {
-		t.Fatalf("expected markdown table to be fenced, got %q", normalized)
-	}
-	if !strings.Contains(normalized, "| col1 | col2 |") {
-		t.Fatalf("expected original table rows to remain in fenced block")
+	if normalized != input {
+		t.Fatalf("expected markdown table text to be preserved for native renderer, got %q", normalized)
 	}
 }
 

@@ -1,6 +1,7 @@
 package infra
 
 import (
+	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/glamour"
@@ -8,9 +9,7 @@ import (
 	glamourstyles "github.com/charmbracelet/glamour/styles"
 )
 
-const markdownNeutralCodeBackground = "#3f3f46"
-
-// NewGlamourTermRenderer 创建指定宽度的 Glamour 终端渲染器。
+// NewGlamourTermRenderer creates a terminal renderer with the requested style and width.
 func NewGlamourTermRenderer(style string, width int) (*glamour.TermRenderer, error) {
 	if cfg, ok := resolveStyleWithoutHeadingHashes(style); ok {
 		return glamour.NewTermRenderer(
@@ -88,14 +87,11 @@ func stripNonCodeHighlightBackgrounds(cfg *ansi.StyleConfig) {
 	clearBlockHighlights(&cfg.HTMLBlock)
 	clearBlockHighlights(&cfg.HTMLSpan)
 	clearBlockHighlights(&cfg.Table.StyleBlock)
+	clearBlockHighlights(&cfg.Code)
+	clearBlockHighlights(&cfg.CodeBlock.StyleBlock)
 
-	applyNeutralCodeBackground(&cfg.Code.StylePrimitive)
-	applyNeutralCodeBackground(&cfg.CodeBlock.StylePrimitive)
-
-	// Keep neutral code backgrounds for readability, but drop token-level color blocks.
 	if cfg.CodeBlock.Chroma != nil {
 		clearChromaTokenHighlights(cfg.CodeBlock.Chroma)
-		applyNeutralCodeBackground(&cfg.CodeBlock.Chroma.Background)
 	}
 }
 
@@ -111,35 +107,6 @@ func clearPrimitiveHighlights(primitive *ansi.StylePrimitive) {
 		return
 	}
 	primitive.BackgroundColor = nil
-	primitive.Inverse = nil
-	clearPrimitiveDecorations(primitive)
-}
-
-func clearPrimitiveDecorations(primitive *ansi.StylePrimitive) {
-	if primitive == nil {
-		return
-	}
-	primitive.Color = nil
-	primitive.Underline = nil
-	primitive.Bold = nil
-	primitive.Upper = nil
-	primitive.Lower = nil
-	primitive.Title = nil
-	primitive.Italic = nil
-	primitive.CrossedOut = nil
-	primitive.Faint = nil
-	primitive.Conceal = nil
-	primitive.Overlined = nil
-	primitive.Blink = nil
-	primitive.Format = ""
-}
-
-func applyNeutralCodeBackground(primitive *ansi.StylePrimitive) {
-	if primitive == nil {
-		return
-	}
-	gray := markdownNeutralCodeBackground
-	primitive.BackgroundColor = &gray
 	primitive.Inverse = nil
 }
 
@@ -178,4 +145,81 @@ func clearChromaTokenHighlights(chroma *ansi.Chroma) {
 	clearPrimitiveHighlights(&chroma.GenericInserted)
 	clearPrimitiveHighlights(&chroma.GenericStrong)
 	clearPrimitiveHighlights(&chroma.GenericSubheading)
+	clearPrimitiveHighlights(&chroma.Background)
+}
+
+func normalizeMarkdownANSIStyles(rendered string) string {
+	return markdownANSIPattern.ReplaceAllStringFunc(rendered, normalizeANSIEscapeSequence)
+}
+
+func normalizeANSIEscapeSequence(seq string) string {
+	if !strings.HasPrefix(seq, "\x1b[") || !strings.HasSuffix(seq, "m") {
+		return seq
+	}
+
+	raw := strings.TrimSuffix(strings.TrimPrefix(seq, "\x1b["), "m")
+	if raw == "" {
+		return seq
+	}
+
+	parts := strings.Split(raw, ";")
+	result := make([]string, 0, len(parts))
+	for i := 0; i < len(parts); i++ {
+		part := parts[i]
+		code, err := strconv.Atoi(part)
+		if err != nil {
+			result = append(result, part)
+			continue
+		}
+
+		switch {
+		case code == 31:
+			result = append(result, "33")
+		case code == 91:
+			result = append(result, "93")
+		case code == 48 && i+1 < len(parts):
+			mode := parts[i+1]
+			if mode == "5" && i+2 < len(parts) {
+				i += 2
+				continue
+			}
+			if mode == "2" && i+4 < len(parts) {
+				i += 4
+				continue
+			}
+			result = append(result, part)
+		case code >= 40 && code <= 49:
+			// Drop standard background colors.
+		case code >= 100 && code <= 107:
+			// Drop bright background colors.
+		case code == 38 && i+1 < len(parts):
+			mode := parts[i+1]
+			if mode == "5" && i+2 < len(parts) {
+				paletteCode, paletteErr := strconv.Atoi(parts[i+2])
+				if paletteErr == nil && (paletteCode == 1 || paletteCode == 9) {
+					result = append(result, "38", "5", "11")
+					i += 2
+					continue
+				}
+			}
+			if mode == "2" && i+4 < len(parts) {
+				r, rErr := strconv.Atoi(parts[i+2])
+				g, gErr := strconv.Atoi(parts[i+3])
+				b, bErr := strconv.Atoi(parts[i+4])
+				if rErr == nil && gErr == nil && bErr == nil && r > g && r > b {
+					result = append(result, "38", "2", "255", "255", "0")
+					i += 4
+					continue
+				}
+			}
+			result = append(result, part)
+		default:
+			result = append(result, part)
+		}
+	}
+
+	if len(result) == 0 {
+		return "\x1b[m"
+	}
+	return "\x1b[" + strings.Join(result, ";") + "m"
 }
