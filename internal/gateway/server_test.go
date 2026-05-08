@@ -374,6 +374,14 @@ func (s *runtimePortEventStub) Run(_ context.Context, _ RunInput) error {
 	return nil
 }
 
+func (s *runtimePortEventStub) Ask(_ context.Context, _ AskInput) error {
+	return nil
+}
+
+func (s *runtimePortEventStub) DeleteAskSession(_ context.Context, _ DeleteAskSessionInput) (bool, error) {
+	return false, nil
+}
+
 func (s *runtimePortEventStub) Compact(_ context.Context, _ CompactInput) (CompactResult, error) {
 	return CompactResult{}, nil
 }

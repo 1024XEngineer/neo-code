@@ -169,11 +169,13 @@ func (p sessionInputPreparer) Prepare(
 
 	return PreparedInputResult{
 		UserInput: UserInput{
-			SessionID: strings.TrimSpace(prepared.SessionID),
-			RunID:     strings.TrimSpace(input.RunID),
-			Parts:     prepared.Parts,
-			Workdir:   strings.TrimSpace(prepared.Workdir),
-			Mode:      strings.TrimSpace(input.Mode),
+			SessionID:        strings.TrimSpace(prepared.SessionID),
+			RunID:            strings.TrimSpace(input.RunID),
+			Parts:            prepared.Parts,
+			Workdir:          strings.TrimSpace(prepared.Workdir),
+			Mode:             strings.TrimSpace(input.Mode),
+			DisableTools:     input.DisableTools,
+			ThinkingOverride: cloneThinkingOverride(input.ThinkingOverride),
 		},
 		SavedAssets: append([]agentsession.AssetMeta(nil), prepared.SavedAssets...),
 	}, nil

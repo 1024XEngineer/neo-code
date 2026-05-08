@@ -252,6 +252,24 @@ func (m *MultiWorkspaceRuntime) Run(ctx context.Context, input RunInput) error {
 	return port.Run(ctx, input)
 }
 
+// Ask 将 ask 请求路由到当前工作区 RuntimePort。
+func (m *MultiWorkspaceRuntime) Ask(ctx context.Context, input AskInput) error {
+	port, err := m.getPort(ctx)
+	if err != nil {
+		return err
+	}
+	return port.Ask(ctx, input)
+}
+
+// DeleteAskSession 将 ask 会话删除请求路由到当前工作区 RuntimePort。
+func (m *MultiWorkspaceRuntime) DeleteAskSession(ctx context.Context, input DeleteAskSessionInput) (bool, error) {
+	port, err := m.getPort(ctx)
+	if err != nil {
+		return false, err
+	}
+	return port.DeleteAskSession(ctx, input)
+}
+
 func (m *MultiWorkspaceRuntime) Compact(ctx context.Context, input CompactInput) (CompactResult, error) {
 	port, err := m.getPort(ctx)
 	if err != nil {

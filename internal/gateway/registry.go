@@ -41,6 +41,9 @@ func (r *ActionRegistry) initCore() {
 	r.core[FrameActionBindStream] = func(ctx context.Context, frame MessageFrame, _ RuntimePort) MessageFrame {
 		return handleBindStreamFrame(ctx, frame)
 	}
+	r.core[FrameActionAsk] = handleAskFrame
+	r.core[FrameActionDeleteAskSession] = handleDeleteAskSessionFrame
+	r.core[FrameActionTriggerAction] = handleTriggerActionFrame
 	r.core[FrameActionWakeOpenURL] = func(ctx context.Context, frame MessageFrame, runtimePort RuntimePort) MessageFrame {
 		return handleWakeOpenURLFrame(ctx, frame, runtimePort)
 	}

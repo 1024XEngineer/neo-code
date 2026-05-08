@@ -51,6 +51,14 @@ func (p *recordingPort) Run(_ context.Context, _ RunInput) error {
 	return nil
 }
 
+func (p *recordingPort) Ask(_ context.Context, _ AskInput) error {
+	return nil
+}
+
+func (p *recordingPort) DeleteAskSession(_ context.Context, _ DeleteAskSessionInput) (bool, error) {
+	return true, nil
+}
+
 func (p *recordingPort) Compact(_ context.Context, _ CompactInput) (CompactResult, error) {
 	return CompactResult{}, nil
 }

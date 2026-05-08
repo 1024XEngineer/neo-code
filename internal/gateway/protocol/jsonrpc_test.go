@@ -583,6 +583,67 @@ func TestNormalizeJSONRPCRequestRuntimeMethods(t *testing.T) {
 	}
 }
 
+func TestNormalizeJSONRPCRequestTriggerAction(t *testing.T) {
+	normalized, rpcErr := NormalizeJSONRPCRequest(JSONRPCRequest{
+		JSONRPC: JSONRPCVersion,
+		ID:      json.RawMessage(`"trigger-1"`),
+		Method:  MethodGatewayExperimentalTriggerAction,
+		Params: json.RawMessage(`{
+			"session_id":" shell-session-1 ",
+			"action":" IDM_ENTER ",
+			"payload":{"reason":"manual","attempt":1}
+		}`),
+	})
+	if rpcErr != nil {
+		t.Fatalf("normalize trigger_action request: %v", rpcErr)
+	}
+	if normalized.Action != "trigger_action" {
+		t.Fatalf("action = %q, want %q", normalized.Action, "trigger_action")
+	}
+	if normalized.SessionID != "shell-session-1" {
+		t.Fatalf("session_id = %q, want %q", normalized.SessionID, "shell-session-1")
+	}
+	params, ok := normalized.Payload.(TriggerActionParams)
+	if !ok {
+		t.Fatalf("payload type = %T, want TriggerActionParams", normalized.Payload)
+	}
+	if params.Action != TriggerActionIDMEnter {
+		t.Fatalf("params.action = %q, want %q", params.Action, TriggerActionIDMEnter)
+	}
+	if params.Payload["reason"] != "manual" {
+		t.Fatalf("params.payload[reason] = %#v, want %q", params.Payload["reason"], "manual")
+	}
+	if params.Payload["attempt"] != float64(1) {
+		t.Fatalf("params.payload[attempt] = %#v, want 1", params.Payload["attempt"])
+	}
+
+	_, rpcErr = NormalizeJSONRPCRequest(JSONRPCRequest{
+		JSONRPC: JSONRPCVersion,
+		ID:      json.RawMessage(`"trigger-missing-action"`),
+		Method:  MethodGatewayExperimentalTriggerAction,
+		Params:  json.RawMessage(`{"session_id":"shell-session-1"}`),
+	})
+	if rpcErr == nil || rpcErr.Code != JSONRPCCodeInvalidParams {
+		t.Fatalf("missing action should be invalid params, got %#v", rpcErr)
+	}
+	if GatewayCodeFromJSONRPCError(rpcErr) != GatewayCodeMissingRequiredField {
+		t.Fatalf("gateway code = %q, want %q", GatewayCodeFromJSONRPCError(rpcErr), GatewayCodeMissingRequiredField)
+	}
+
+	_, rpcErr = NormalizeJSONRPCRequest(JSONRPCRequest{
+		JSONRPC: JSONRPCVersion,
+		ID:      json.RawMessage(`"trigger-invalid-action"`),
+		Method:  MethodGatewayExperimentalTriggerAction,
+		Params:  json.RawMessage(`{"session_id":"shell-session-1","action":"unknown_action"}`),
+	})
+	if rpcErr == nil || rpcErr.Code != JSONRPCCodeInvalidParams {
+		t.Fatalf("invalid action should be invalid params, got %#v", rpcErr)
+	}
+	if GatewayCodeFromJSONRPCError(rpcErr) != GatewayCodeInvalidAction {
+		t.Fatalf("gateway code = %q, want %q", GatewayCodeFromJSONRPCError(rpcErr), GatewayCodeInvalidAction)
+	}
+}
+
 func TestNormalizeJSONRPCRequestErrors(t *testing.T) {
 	testCases := []struct {
 		name            string

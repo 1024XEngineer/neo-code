@@ -76,21 +76,21 @@ type NetworkServerOptions struct {
 
 // NetworkServer 提供 HTTP/WebSocket/SSE 网络访问面的统一入口服务。
 type NetworkServer struct {
-	listenAddress        string
-	logger               *log.Logger
-	readTimeout          time.Duration
-	writeTimeout         time.Duration
-	shutdownTimeout      time.Duration
-	heartbeatInterval    time.Duration
-	unauthenticatedWSTTL time.Duration
-	maxRequestBytes      int64
-	maxStreamConnections int
-	listenFn             func(network, address string) (net.Listener, error)
-	relay                *StreamRelay
-	authenticator        TokenAuthenticator
-	acl                  *ControlPlaneACL
-	metrics              *GatewayMetrics
-	allowedOrigins       []string
+	listenAddress          string
+	logger                 *log.Logger
+	readTimeout            time.Duration
+	writeTimeout           time.Duration
+	shutdownTimeout        time.Duration
+	heartbeatInterval      time.Duration
+	unauthenticatedWSTTL   time.Duration
+	maxRequestBytes        int64
+	maxStreamConnections   int
+	listenFn               func(network, address string) (net.Listener, error)
+	relay                  *StreamRelay
+	authenticator          TokenAuthenticator
+	acl                    *ControlPlaneACL
+	metrics                *GatewayMetrics
+	allowedOrigins         []string
 	connectionCountChanged func(active int)
 	staticFileDir          string
 	staticFileFS           fs.FS
@@ -176,21 +176,21 @@ func NewNetworkServer(options NetworkServerOptions) (*NetworkServer, error) {
 	}
 
 	return &NetworkServer{
-		listenAddress:        listenAddress,
-		logger:               logger,
-		readTimeout:          readTimeout,
-		writeTimeout:         writeTimeout,
-		shutdownTimeout:      shutdownTimeout,
-		heartbeatInterval:    heartbeatInterval,
-		unauthenticatedWSTTL: unauthenticatedWSTTL,
-		maxRequestBytes:      maxRequestBytes,
-		maxStreamConnections: maxStreamConnections,
-		listenFn:             listenFn,
-		relay:                relay,
-		authenticator:        authenticator,
-		acl:                  acl,
-		metrics:              metrics,
-		allowedOrigins:       allowedOrigins,
+		listenAddress:          listenAddress,
+		logger:                 logger,
+		readTimeout:            readTimeout,
+		writeTimeout:           writeTimeout,
+		shutdownTimeout:        shutdownTimeout,
+		heartbeatInterval:      heartbeatInterval,
+		unauthenticatedWSTTL:   unauthenticatedWSTTL,
+		maxRequestBytes:        maxRequestBytes,
+		maxStreamConnections:   maxStreamConnections,
+		listenFn:               listenFn,
+		relay:                  relay,
+		authenticator:          authenticator,
+		acl:                    acl,
+		metrics:                metrics,
+		allowedOrigins:         allowedOrigins,
 		connectionCountChanged: options.ConnectionCountChanged,
 		staticFileDir:          options.StaticFileDir,
 		staticFileFS:           options.StaticFileFS,

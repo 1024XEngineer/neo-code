@@ -50,12 +50,12 @@ func TestResolveThinkingConfig(t *testing.T) {
 		if err != nil {
 			t.Fatalf("resolveThinkingConfig() error = %v", err)
 		}
-		if cfg == nil || cfg.Enabled || cfg.Effort != "high" {
-			t.Fatalf("expected disabled high-effort config, got %+v", cfg)
+		if cfg == nil || cfg.Enabled {
+			t.Fatalf("expected disabled config when override disables thinking, got %+v", cfg)
 		}
 	})
 
-	t.Run("force enabled wins over override", func(t *testing.T) {
+	t.Run("explicit override disable wins over force enabled", func(t *testing.T) {
 		t.Parallel()
 
 		enabled := false
@@ -66,8 +66,8 @@ func TestResolveThinkingConfig(t *testing.T) {
 		if err != nil {
 			t.Fatalf("resolveThinkingConfig() error = %v", err)
 		}
-		if cfg == nil || !cfg.Enabled {
-			t.Fatalf("expected forced enabled config, got %+v", cfg)
+		if cfg == nil || cfg.Enabled {
+			t.Fatalf("expected disabled config when override explicitly disables thinking, got %+v", cfg)
 		}
 	})
 

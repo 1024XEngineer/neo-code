@@ -34,6 +34,8 @@ const (
 // Runtime 定义 runtime 对外暴露的运行、压缩与审批接口。
 type Runtime interface {
 	Submit(ctx context.Context, input PrepareInput) error
+	Ask(ctx context.Context, input AskInput) error
+	DeleteAskSession(ctx context.Context, input DeleteAskSessionInput) (bool, error)
 	PrepareUserInput(ctx context.Context, input PrepareInput) (UserInput, error)
 	Run(ctx context.Context, input UserInput) error
 	Compact(ctx context.Context, input CompactInput) (CompactResult, error)
@@ -56,14 +58,16 @@ type PlanApprover interface {
 
 // UserInput 描述一次用户输入请求的最小运行参数。
 type UserInput struct {
-	SessionID       string
-	RunID           string
-	Parts           []providertypes.ContentPart
-	Workdir         string
-	Mode            string
-	TaskID          string
-	AgentID         string
-	CapabilityToken *security.CapabilityToken
+	SessionID        string
+	RunID            string
+	Parts            []providertypes.ContentPart
+	Workdir          string
+	Mode             string
+	TaskID           string
+	AgentID          string
+	DisableTools     bool
+	ThinkingOverride *ThinkingOverride
+	CapabilityToken  *security.CapabilityToken
 }
 
 // UserImageInput 表示用户输入中附带的单个图片引用（路径 + MIME）。
@@ -80,6 +84,7 @@ type PrepareInput struct {
 	Mode             string
 	Text             string
 	Images           []UserImageInput
+	DisableTools     bool              `json:"disable_tools,omitempty"`
 	ThinkingOverride *ThinkingOverride `json:"thinking_override,omitempty"`
 }
 
@@ -96,6 +101,20 @@ type SystemToolInput struct {
 	Workdir   string
 	ToolName  string
 	Arguments []byte
+}
+
+// AskInput 描述一次 Ask 轻量问答请求。
+type AskInput struct {
+	SessionID string
+	RunID     string
+	Workdir   string
+	UserQuery string
+	Skills    []string
+}
+
+// DeleteAskSessionInput 描述一次 Ask 会话删除请求。
+type DeleteAskSessionInput struct {
+	SessionID string
 }
 
 // PreparedInputResult 描述输入归一化完成后的结果快照（标准 UserInput + 本轮保存附件元数据）。
@@ -182,6 +201,8 @@ type Service struct {
 	activeRunStates    map[uint64]*runState
 	permissionAskMapMu sync.Mutex
 	permissionAskLocks map[string]*permissionAskLockEntry
+	askStore           AskSessionStore
+	askSequence        uint64
 
 	thinkingEnabled bool
 }
@@ -239,6 +260,7 @@ func NewWithFactory(
 		activeRunByID:      make(map[string]uint64),
 		activeRunTokenIDs:  make(map[uint64]string),
 		activeRunStates:    make(map[uint64]*runState),
+		askStore:           newInMemoryAskSessionStore(askSessionTTL),
 		thinkingEnabled:    true,
 	}
 	baseHookExecutor := runtimehooks.NewExecutor(runtimehooks.NewRegistry(), newHookRuntimeEventEmitter(service), runtimehooks.DefaultHookTimeout)

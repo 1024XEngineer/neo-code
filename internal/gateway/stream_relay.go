@@ -53,6 +53,8 @@ type StreamBinding struct {
 	SessionID string
 	RunID     string
 	Channel   StreamChannel
+	Role      StreamRole
+	State     map[string]any
 	Explicit  bool
 }
 
@@ -88,6 +90,8 @@ type bindingState struct {
 	sessionID string
 	runID     string
 	channel   StreamChannel
+	role      StreamRole
+	state     map[string]any
 	explicit  bool
 	expireAt  time.Time
 	lastSeen  time.Time
@@ -376,6 +380,17 @@ func (r *StreamRelay) BindConnection(connectionID ConnectionID, binding StreamBi
 	if _, ok := ParseStreamChannel(string(channel)); !ok {
 		return NewFrameError(ErrorCodeInvalidAction, "invalid bind channel")
 	}
+	role := binding.Role
+	if role == "" {
+		role = StreamRoleNone
+	}
+	if _, ok := ParseStreamRole(string(role)); !ok {
+		return NewFrameError(ErrorCodeInvalidAction, "invalid bind role")
+	}
+	var state map[string]any
+	if len(binding.State) > 0 {
+		state = cloneBindingStateMap(binding.State)
+	}
 
 	now := time.Now()
 
@@ -412,6 +427,8 @@ func (r *StreamRelay) BindConnection(connectionID ConnectionID, binding StreamBi
 		sessionID: sessionID,
 		runID:     runID,
 		channel:   channel,
+		role:      role,
+		state:     state,
 		explicit:  binding.Explicit,
 		expireAt:  now.Add(r.bindingTTL),
 		lastSeen:  now,
@@ -454,6 +471,208 @@ func (r *StreamRelay) ResolveFallbackSessionID(connectionID ConnectionID) string
 	}
 	r.mu.RUnlock()
 	return strings.TrimSpace(latestSessionID)
+}
+
+// ResolveConnectionRole 返回连接在指定会话（或最近绑定）下声明的角色。
+func (r *StreamRelay) ResolveConnectionRole(connectionID ConnectionID, sessionID string) (StreamRole, bool) {
+	if r == nil {
+		return StreamRoleNone, false
+	}
+
+	normalizedConnectionID := NormalizeConnectionID(connectionID)
+	if normalizedConnectionID == "" {
+		return StreamRoleNone, false
+	}
+	normalizedSessionID := strings.TrimSpace(sessionID)
+	now := time.Now()
+
+	r.mu.RLock()
+	connectionBindingMap := r.connectionBindings[normalizedConnectionID]
+	var (
+		latestRole StreamRole
+		latestSeen time.Time
+		found      bool
+	)
+	for _, state := range connectionBindingMap {
+		if state == nil || state.expireAt.Before(now) {
+			continue
+		}
+		if normalizedSessionID != "" && !strings.EqualFold(strings.TrimSpace(state.sessionID), normalizedSessionID) {
+			continue
+		}
+		if !state.lastSeen.After(latestSeen) {
+			continue
+		}
+		latestSeen = state.lastSeen
+		latestRole = state.role
+		found = true
+	}
+	r.mu.RUnlock()
+	if !found {
+		return StreamRoleNone, false
+	}
+	if _, ok := ParseStreamRole(string(latestRole)); !ok {
+		return StreamRoleNone, false
+	}
+	return latestRole, true
+}
+
+// ResolveSessionByRole 解析目标角色唯一可用的会话标识。
+func (r *StreamRelay) ResolveSessionByRole(sessionID string, role StreamRole) (string, *FrameError) {
+	if r == nil {
+		return "", NewFrameError(ErrorCodeInternalError, "stream relay is nil")
+	}
+
+	normalizedRole := StreamRole(strings.ToLower(strings.TrimSpace(string(role))))
+	if normalizedRole == StreamRoleNone {
+		return "", NewFrameError(ErrorCodeInvalidAction, "invalid stream role")
+	}
+	if _, ok := ParseStreamRole(string(normalizedRole)); !ok {
+		return "", NewFrameError(ErrorCodeInvalidAction, "invalid stream role")
+	}
+
+	requestedSessionID := strings.TrimSpace(sessionID)
+	now := time.Now()
+
+	r.mu.RLock()
+	sessionSet := make(map[string]struct{})
+	for connectionID, connectionBindingMap := range r.connectionBindings {
+		if _, exists := r.connections[connectionID]; !exists {
+			continue
+		}
+		for _, state := range connectionBindingMap {
+			if state == nil || state.expireAt.Before(now) {
+				continue
+			}
+			if state.role != normalizedRole {
+				continue
+			}
+			normalizedStateSession := strings.TrimSpace(state.sessionID)
+			if normalizedStateSession == "" {
+				continue
+			}
+			if requestedSessionID != "" && !strings.EqualFold(normalizedStateSession, requestedSessionID) {
+				continue
+			}
+			sessionSet[normalizedStateSession] = struct{}{}
+		}
+	}
+	r.mu.RUnlock()
+
+	if requestedSessionID != "" {
+		if len(sessionSet) == 0 {
+			return "", NewFrameError(ErrorCodeResourceNotFound, "target role stream is unavailable")
+		}
+		return requestedSessionID, nil
+	}
+	if len(sessionSet) == 0 {
+		return "", NewFrameError(ErrorCodeResourceNotFound, "target role stream is unavailable")
+	}
+	if len(sessionSet) > 1 {
+		return "", NewFrameError(ErrorCodeInvalidAction, "multiple target role sessions are active, specify session_id")
+	}
+	for resolvedSessionID := range sessionSet {
+		return resolvedSessionID, nil
+	}
+	return "", NewFrameError(ErrorCodeResourceNotFound, "target role stream is unavailable")
+}
+
+// SendRoleNotification 按 session+role 维度向目标连接下发通知。
+func (r *StreamRelay) SendRoleNotification(sessionID string, role StreamRole, notification protocol.JSONRPCNotification) int {
+	if r == nil {
+		return 0
+	}
+	normalizedSessionID := strings.TrimSpace(sessionID)
+	normalizedRole := StreamRole(strings.ToLower(strings.TrimSpace(string(role))))
+	if normalizedSessionID == "" || normalizedRole == StreamRoleNone {
+		return 0
+	}
+	if _, ok := ParseStreamRole(string(normalizedRole)); !ok {
+		return 0
+	}
+
+	now := time.Now()
+	r.mu.RLock()
+	targetConnections := make(map[ConnectionID]struct{})
+	for connectionID, connectionBindingMap := range r.connectionBindings {
+		connection := r.connections[connectionID]
+		if connection == nil {
+			continue
+		}
+		for _, state := range connectionBindingMap {
+			if state == nil || state.expireAt.Before(now) {
+				continue
+			}
+			if !strings.EqualFold(strings.TrimSpace(state.sessionID), normalizedSessionID) {
+				continue
+			}
+			if state.role != normalizedRole {
+				continue
+			}
+			targetConnections[connectionID] = struct{}{}
+			break
+		}
+	}
+	r.mu.RUnlock()
+
+	delivered := 0
+	for connectionID := range targetConnections {
+		if r.sendEventNotification(connectionID, notification) {
+			delivered++
+		}
+	}
+	return delivered
+}
+
+// ReadRoleState 返回 session+role 维度最近一次上报的状态快照。
+func (r *StreamRelay) ReadRoleState(sessionID string, role StreamRole) (map[string]any, bool) {
+	if r == nil {
+		return nil, false
+	}
+	normalizedSessionID := strings.TrimSpace(sessionID)
+	normalizedRole := StreamRole(strings.ToLower(strings.TrimSpace(string(role))))
+	if normalizedSessionID == "" || normalizedRole == StreamRoleNone {
+		return nil, false
+	}
+	if _, ok := ParseStreamRole(string(normalizedRole)); !ok {
+		return nil, false
+	}
+
+	now := time.Now()
+	r.mu.RLock()
+	var (
+		latestState map[string]any
+		latestSeen  time.Time
+	)
+	for connectionID, connectionBindingMap := range r.connectionBindings {
+		if _, exists := r.connections[connectionID]; !exists {
+			continue
+		}
+		for _, state := range connectionBindingMap {
+			if state == nil || state.expireAt.Before(now) {
+				continue
+			}
+			if !strings.EqualFold(strings.TrimSpace(state.sessionID), normalizedSessionID) {
+				continue
+			}
+			if state.role != normalizedRole {
+				continue
+			}
+			if len(state.state) == 0 {
+				continue
+			}
+			if !state.lastSeen.After(latestSeen) {
+				continue
+			}
+			latestSeen = state.lastSeen
+			latestState = cloneBindingStateMap(state.state)
+		}
+	}
+	r.mu.RUnlock()
+	if len(latestState) == 0 {
+		return nil, false
+	}
+	return latestState, true
 }
 
 // RefreshConnectionBindings 刷新连接下全部绑定 TTL，供 ping 保活和活跃续期使用。
@@ -632,17 +851,16 @@ func (r *StreamRelay) enqueueMessage(connectionID ConnectionID, message RelayMes
 }
 
 // sendEventNotification 按连接通道选择合适封装发送 gateway.event 通知。
-func (r *StreamRelay) sendEventNotification(connectionID ConnectionID, notification protocol.JSONRPCNotification) {
+func (r *StreamRelay) sendEventNotification(connectionID ConnectionID, notification protocol.JSONRPCNotification) bool {
 	channel, exists := r.connectionChannel(connectionID)
 	if !exists {
-		return
+		return false
 	}
 
 	if channel == StreamChannelSSE {
-		_ = r.SendSSEEvent(connectionID, protocol.MethodGatewayEvent, notification)
-		return
+		return r.SendSSEEvent(connectionID, notification.Method, notification)
 	}
-	_ = r.SendJSONRPCPayload(connectionID, notification)
+	return r.SendJSONRPCPayload(connectionID, notification)
 }
 
 // connectionChannel 返回连接所属通道类型。
@@ -933,6 +1151,18 @@ func buildSessionRunKey(sessionID, runID string) string {
 	return strings.TrimSpace(sessionID) + "\x00" + strings.TrimSpace(runID)
 }
 
+// cloneBindingStateMap 复制绑定状态中的 map，避免跨协程共享同一引用。
+func cloneBindingStateMap(source map[string]any) map[string]any {
+	if len(source) == 0 {
+		return nil
+	}
+	cloned := make(map[string]any, len(source))
+	for key, value := range source {
+		cloned[strings.TrimSpace(key)] = value
+	}
+	return cloned
+}
+
 // extractSessionIDFromPayload 尝试从不同 payload 结构中提取 session_id 字段。
 func extractSessionIDFromPayload(payload any) string {
 	switch typed := payload.(type) {
@@ -946,6 +1176,20 @@ func extractSessionIDFromPayload(payload any) string {
 	case protocol.BindStreamParams:
 		return strings.TrimSpace(typed.SessionID)
 	case *protocol.BindStreamParams:
+		if typed == nil {
+			return ""
+		}
+		return strings.TrimSpace(typed.SessionID)
+	case protocol.AskParams:
+		return strings.TrimSpace(typed.SessionID)
+	case *protocol.AskParams:
+		if typed == nil {
+			return ""
+		}
+		return strings.TrimSpace(typed.SessionID)
+	case protocol.DeleteAskSessionParams:
+		return strings.TrimSpace(typed.SessionID)
+	case *protocol.DeleteAskSessionParams:
 		if typed == nil {
 			return ""
 		}

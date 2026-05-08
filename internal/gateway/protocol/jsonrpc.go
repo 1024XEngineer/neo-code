@@ -21,6 +21,12 @@ const (
 	MethodGatewayPing = "gateway.ping"
 	// MethodGatewayBindStream 表示客户端向网关声明流式订阅绑定的方法。
 	MethodGatewayBindStream = "gateway.bindStream"
+	// MethodGatewayAsk 表示通过网关发起一次轻量问答会话请求。
+	MethodGatewayAsk = "gateway.ask"
+	// MethodGatewayDeleteAskSession 表示删除 Ask 会话。
+	MethodGatewayDeleteAskSession = "gateway.deleteAskSession"
+	// MethodGatewayExperimentalTriggerAction 表示触发 shell 侧诊断/模式控制动作。
+	MethodGatewayExperimentalTriggerAction = "gateway.experimental.triggerAction"
 	// MethodGatewayRun 表示通过网关触发一次运行时执行。
 	MethodGatewayRun = "gateway.run"
 	// MethodGatewayCompact 表示通过网关触发一次会话压缩。
@@ -87,6 +93,8 @@ const (
 	MethodGatewayDeleteMCPServer = "gateway.deleteMCPServer"
 	// MethodGatewayEvent 表示网关向客户端推送运行时事件的通知方法。
 	MethodGatewayEvent = "gateway.event"
+	// MethodGatewayNotification 表示网关向特定角色连接推送动作通知。
+	MethodGatewayNotification = "gateway.notification"
 	// MethodWakeOpenURL 表示 URL Scheme 唤醒方法。
 	MethodWakeOpenURL            = "wake.openUrl"
 	MethodGatewayListWorkspaces  = "gateway.listWorkspaces"
@@ -187,10 +195,45 @@ type AuthenticateParams struct {
 
 // BindStreamParams 表示 gateway.bindStream 的标准化参数载荷。
 type BindStreamParams struct {
-	SessionID string `json:"session_id"`
-	RunID     string `json:"run_id,omitempty"`
-	Channel   string `json:"channel,omitempty"`
+	SessionID string         `json:"session_id"`
+	RunID     string         `json:"run_id,omitempty"`
+	Channel   string         `json:"channel,omitempty"`
+	Role      string         `json:"role,omitempty"`
+	State     map[string]any `json:"state,omitempty"`
 }
+
+// AskParams 表示 gateway.ask 的参数载荷。
+type AskParams struct {
+	SessionID string   `json:"session_id,omitempty"`
+	UserQuery string   `json:"user_query"`
+	Skills    []string `json:"skills,omitempty"`
+	Workdir   string   `json:"workdir,omitempty"`
+}
+
+// DeleteAskSessionParams 表示 gateway.deleteAskSession 的参数载荷。
+type DeleteAskSessionParams struct {
+	SessionID string `json:"session_id"`
+}
+
+// TriggerActionParams 表示 gateway.experimental.triggerAction 的参数载荷。
+type TriggerActionParams struct {
+	SessionID string `json:"session_id,omitempty"`
+	Action    string `json:"action"`
+	Payload   map[string]any `json:"payload,omitempty"`
+}
+
+const (
+	// TriggerActionDiagnose 表示触发一次 shell 诊断动作。
+	TriggerActionDiagnose = "diagnose"
+	// TriggerActionIDMEnter 表示请求 shell 进入 IDM 模式。
+	TriggerActionIDMEnter = "idm_enter"
+	// TriggerActionAutoOn 表示开启自动诊断模式。
+	TriggerActionAutoOn = "auto_on"
+	// TriggerActionAutoOff 表示关闭自动诊断模式。
+	TriggerActionAutoOff = "auto_off"
+	// TriggerActionAutoStatus 表示查询自动诊断模式状态。
+	TriggerActionAutoStatus = "auto_status"
+)
 
 // RunInputMedia 用于承载 gateway.run 中图片分片的媒体元数据。
 type RunInputMedia struct {
@@ -504,6 +547,34 @@ func NormalizeJSONRPCRequest(request JSONRPCRequest) (NormalizedRequest, *JSONRP
 		normalized.Action = "bind_stream"
 		normalized.SessionID = params.SessionID
 		normalized.RunID = params.RunID
+		normalized.Payload = params
+		return normalized, nil
+	case MethodGatewayAsk:
+		params, parseErr := decodeAskParams(request.Params)
+		if parseErr != nil {
+			return normalized, parseErr
+		}
+		normalized.Action = "ask"
+		normalized.SessionID = strings.TrimSpace(params.SessionID)
+		normalized.Workdir = strings.TrimSpace(params.Workdir)
+		normalized.Payload = params
+		return normalized, nil
+	case MethodGatewayDeleteAskSession:
+		params, parseErr := decodeDeleteAskSessionParams(request.Params)
+		if parseErr != nil {
+			return normalized, parseErr
+		}
+		normalized.Action = "delete_ask_session"
+		normalized.SessionID = strings.TrimSpace(params.SessionID)
+		normalized.Payload = params
+		return normalized, nil
+	case MethodGatewayExperimentalTriggerAction:
+		params, parseErr := decodeTriggerActionParams(request.Params)
+		if parseErr != nil {
+			return normalized, parseErr
+		}
+		normalized.Action = "trigger_action"
+		normalized.SessionID = strings.TrimSpace(params.SessionID)
 		normalized.Payload = params
 		return normalized, nil
 	case MethodGatewayRun:
@@ -1111,6 +1182,7 @@ func decodeBindStreamParams(raw json.RawMessage) (BindStreamParams, *JSONRPCErro
 		p.SessionID = strings.TrimSpace(p.SessionID)
 		p.RunID = strings.TrimSpace(p.RunID)
 		p.Channel = strings.ToLower(strings.TrimSpace(p.Channel))
+		p.Role = strings.ToLower(strings.TrimSpace(p.Role))
 		if p.Channel == "" {
 			p.Channel = "all"
 		}
@@ -1121,6 +1193,71 @@ func decodeBindStreamParams(raw json.RawMessage) (BindStreamParams, *JSONRPCErro
 		case "all", "ipc", "ws", "sse":
 		default:
 			return NewJSONRPCError(JSONRPCCodeInvalidParams, "invalid field: params.channel", GatewayCodeInvalidAction)
+		}
+		switch p.Role {
+		case "", "shell", "cli", "tui":
+		default:
+			return NewJSONRPCError(JSONRPCCodeInvalidParams, "invalid field: params.role", GatewayCodeInvalidAction)
+		}
+		if len(p.State) == 0 {
+			p.State = nil
+		}
+		return nil
+	})
+}
+
+// decodeAskParams 对 gateway.ask 的 params 执行反序列化与字段清理。
+func decodeAskParams(raw json.RawMessage) (AskParams, *JSONRPCError) {
+	return decodeParams(raw, "gateway.ask", func(p *AskParams) *JSONRPCError {
+		p.SessionID = strings.TrimSpace(p.SessionID)
+		p.UserQuery = strings.TrimSpace(p.UserQuery)
+		p.Workdir = strings.TrimSpace(p.Workdir)
+		if p.UserQuery == "" {
+			return NewJSONRPCError(JSONRPCCodeInvalidParams, "missing required field: params.user_query", GatewayCodeMissingRequiredField)
+		}
+		if len(p.Skills) > 0 {
+			normalized := make([]string, 0, len(p.Skills))
+			for _, item := range p.Skills {
+				skillID := strings.TrimSpace(item)
+				if skillID == "" {
+					continue
+				}
+				normalized = append(normalized, skillID)
+			}
+			p.Skills = normalized
+		} else {
+			p.Skills = nil
+		}
+		return nil
+	})
+}
+
+// decodeDeleteAskSessionParams 对 gateway.deleteAskSession 的 params 执行反序列化与校验。
+func decodeDeleteAskSessionParams(raw json.RawMessage) (DeleteAskSessionParams, *JSONRPCError) {
+	return decodeParams(raw, "gateway.deleteAskSession", func(p *DeleteAskSessionParams) *JSONRPCError {
+		p.SessionID = strings.TrimSpace(p.SessionID)
+		if p.SessionID == "" {
+			return NewJSONRPCError(JSONRPCCodeInvalidParams, "missing required field: params.session_id", GatewayCodeMissingRequiredField)
+		}
+		return nil
+	})
+}
+
+// decodeTriggerActionParams 对 gateway.experimental.triggerAction 的 params 执行反序列化与校验。
+func decodeTriggerActionParams(raw json.RawMessage) (TriggerActionParams, *JSONRPCError) {
+	return decodeParams(raw, "gateway.experimental.triggerAction", func(p *TriggerActionParams) *JSONRPCError {
+		p.SessionID = strings.TrimSpace(p.SessionID)
+		p.Action = strings.ToLower(strings.TrimSpace(p.Action))
+		if p.Action == "" {
+			return NewJSONRPCError(JSONRPCCodeInvalidParams, "missing required field: params.action", GatewayCodeMissingRequiredField)
+		}
+		switch p.Action {
+		case TriggerActionDiagnose, TriggerActionIDMEnter, TriggerActionAutoOn, TriggerActionAutoOff, TriggerActionAutoStatus:
+		default:
+			return NewJSONRPCError(JSONRPCCodeInvalidParams, "invalid field: params.action", GatewayCodeInvalidAction)
+		}
+		if len(p.Payload) == 0 {
+			p.Payload = nil
 		}
 		return nil
 	})

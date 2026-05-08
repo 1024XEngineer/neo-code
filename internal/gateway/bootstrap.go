@@ -124,6 +124,8 @@ func handleBindStreamFrame(ctx context.Context, frame MessageFrame) MessageFrame
 		SessionID: params.SessionID,
 		RunID:     params.RunID,
 		Channel:   params.Channel,
+		Role:      params.Role,
+		State:     cloneMapValue(params.State),
 		Explicit:  true,
 	}); bindErr != nil {
 		return errorFrame(frame, bindErr)
@@ -138,6 +140,179 @@ func handleBindStreamFrame(ctx context.Context, frame MessageFrame) MessageFrame
 		Payload: map[string]any{
 			"message": "stream binding updated",
 			"channel": params.Channel,
+			"role":    params.Role,
+			"state":   cloneMapValue(params.State),
+		},
+	}
+}
+
+// handleAskFrame 处理 gateway.ask 请求，并以异步方式转发到底层 Ask 编排能力。
+func handleAskFrame(ctx context.Context, frame MessageFrame, runtimePort RuntimePort) MessageFrame {
+	if runtimePort == nil {
+		return runtimePortUnavailableFrame(frame)
+	}
+	subjectID, subjectErr := requireAuthenticatedSubjectID(ctx)
+	if subjectErr != nil {
+		return errorFrame(frame, subjectErr)
+	}
+
+	params, parseErr := decodeAskPayload(frame.Payload)
+	if parseErr != nil {
+		return errorFrame(frame, parseErr)
+	}
+
+	sessionID := strings.TrimSpace(params.SessionID)
+	if sessionID == "" {
+		sessionID = strings.TrimSpace(frame.SessionID)
+	}
+	input := AskInput{
+		SubjectID: subjectID,
+		RequestID: strings.TrimSpace(frame.RequestID),
+		SessionID: sessionID,
+		Workdir:   strings.TrimSpace(params.Workdir),
+		UserQuery: strings.TrimSpace(params.UserQuery),
+		Skills:    append([]string(nil), params.Skills...),
+	}
+	frame.SessionID = sessionID
+
+	askExecutionContext := deriveRuntimeExecutionContext(ctx)
+	callCtx, cancel := withRuntimeOperationTimeout(askExecutionContext)
+	frameSnapshot := frame
+	inputSnapshot := input
+	go func() {
+		defer cancel()
+		if err := runtimePort.Ask(callCtx, inputSnapshot); err != nil {
+			failedFrame := runtimeCallFailedFrame(callCtx, frameSnapshot, err, "ask")
+			if logger, ok := GatewayLoggerFromContext(callCtx); ok && logger != nil && failedFrame.Error != nil {
+				logger.Printf(
+					"gateway ask async failed: request_id=%s session_id=%s code=%s message=%s",
+					strings.TrimSpace(frameSnapshot.RequestID),
+					strings.TrimSpace(frameSnapshot.SessionID),
+					strings.TrimSpace(failedFrame.Error.Code),
+					strings.TrimSpace(failedFrame.Error.Message),
+				)
+			}
+		}
+	}()
+
+	return MessageFrame{
+		Type:      FrameTypeAck,
+		Action:    FrameActionAsk,
+		RequestID: frame.RequestID,
+		SessionID: input.SessionID,
+		Payload: map[string]string{
+			"message": "ask accepted",
+		},
+	}
+}
+
+// handleDeleteAskSessionFrame 处理 gateway.deleteAskSession 请求。
+func handleDeleteAskSessionFrame(ctx context.Context, frame MessageFrame, runtimePort RuntimePort) MessageFrame {
+	if runtimePort == nil {
+		return runtimePortUnavailableFrame(frame)
+	}
+	subjectID, subjectErr := requireAuthenticatedSubjectID(ctx)
+	if subjectErr != nil {
+		return errorFrame(frame, subjectErr)
+	}
+
+	params, parseErr := decodeDeleteAskSessionPayload(frame.Payload)
+	if parseErr != nil {
+		return errorFrame(frame, parseErr)
+	}
+
+	callCtx, cancel := withRuntimeOperationTimeout(ctx)
+	defer cancel()
+	deleted, err := runtimePort.DeleteAskSession(callCtx, DeleteAskSessionInput{
+		SubjectID: subjectID,
+		RequestID: strings.TrimSpace(frame.RequestID),
+		SessionID: strings.TrimSpace(params.SessionID),
+	})
+	if err != nil {
+		return runtimeCallFailedFrame(callCtx, frame, err, "delete_ask_session")
+	}
+
+	return MessageFrame{
+		Type:      FrameTypeAck,
+		Action:    FrameActionDeleteAskSession,
+		RequestID: frame.RequestID,
+		SessionID: strings.TrimSpace(params.SessionID),
+		Payload: map[string]any{
+			"deleted":    deleted,
+			"session_id": strings.TrimSpace(params.SessionID),
+		},
+	}
+}
+
+// handleTriggerActionFrame 处理 gateway.experimental.triggerAction 请求。
+func handleTriggerActionFrame(ctx context.Context, frame MessageFrame, _ RuntimePort) MessageFrame {
+	params, parseErr := decodeTriggerActionPayload(frame.Payload)
+	if parseErr != nil {
+		return errorFrame(frame, parseErr)
+	}
+
+	relay, relayExists := StreamRelayFromContext(ctx)
+	connectionID, connectionExists := ConnectionIDFromContext(ctx)
+	if !relayExists || !connectionExists {
+		return errorFrame(frame, NewFrameError(ErrorCodeInternalError, "stream relay context is unavailable"))
+	}
+
+	sourceRole, roleExists := relay.ResolveConnectionRole(connectionID, "")
+	if !roleExists || (sourceRole != StreamRoleCLI && sourceRole != StreamRoleTUI) {
+		return errorFrame(frame, NewFrameError(ErrorCodeAccessDenied, "trigger_action requires cli/tui role binding"))
+	}
+
+	targetSessionID, resolveErr := relay.ResolveSessionByRole(strings.TrimSpace(params.SessionID), StreamRoleShell)
+	if resolveErr != nil {
+		return errorFrame(frame, resolveErr)
+	}
+	sourceSessionID := strings.TrimSpace(relay.ResolveFallbackSessionID(connectionID))
+	if sourceSessionID == "" {
+		sourceSessionID = strings.TrimSpace(frame.SessionID)
+	}
+
+	if strings.EqualFold(strings.TrimSpace(params.Action), protocol.TriggerActionAutoStatus) {
+		state, ok := relay.ReadRoleState(targetSessionID, StreamRoleShell)
+		if !ok {
+			return errorFrame(frame, NewFrameError(ErrorCodeResourceNotFound, "shell state is unavailable"))
+		}
+		autoEnabled := readBoolValue(state, "auto_enabled")
+		return MessageFrame{
+			Type:      FrameTypeAck,
+			Action:    FrameActionTriggerAction,
+			RequestID: frame.RequestID,
+			SessionID: targetSessionID,
+			Payload: map[string]any{
+				"action":            protocol.TriggerActionAutoStatus,
+				"session_id":        targetSessionID,
+				"source_session_id": sourceSessionID,
+				"auto_enabled":      autoEnabled,
+			},
+		}
+	}
+
+	notification := protocol.NewJSONRPCNotification(protocol.MethodGatewayNotification, map[string]any{
+		"action":            strings.TrimSpace(params.Action),
+		"payload":           cloneMapValue(params.Payload),
+		"session_id":        targetSessionID,
+		"source_session_id": sourceSessionID,
+	})
+	delivered := relay.SendRoleNotification(targetSessionID, StreamRoleShell, notification)
+	if delivered == 0 {
+		return errorFrame(frame, NewFrameError(ErrorCodeResourceNotFound, "target shell stream is unavailable"))
+	}
+
+	return MessageFrame{
+		Type:      FrameTypeAck,
+		Action:    FrameActionTriggerAction,
+		RequestID: frame.RequestID,
+		SessionID: targetSessionID,
+		Payload: map[string]any{
+			"action":            strings.TrimSpace(params.Action),
+			"payload":           cloneMapValue(params.Payload),
+			"session_id":        targetSessionID,
+			"source_session_id": sourceSessionID,
+			"delivered":         delivered,
 		},
 	}
 }
@@ -1371,6 +1546,25 @@ type bindStreamParams struct {
 	SessionID string
 	RunID     string
 	Channel   StreamChannel
+	Role      StreamRole
+	State     map[string]any
+}
+
+type askParams struct {
+	SessionID string
+	UserQuery string
+	Skills    []string
+	Workdir   string
+}
+
+type deleteAskSessionParams struct {
+	SessionID string
+}
+
+type triggerActionParams struct {
+	SessionID string
+	Action    string
+	Payload   map[string]any
 }
 
 type authenticateParams struct {
@@ -1447,6 +1641,8 @@ func decodeBindStreamParams(payload any) (bindStreamParams, *FrameError) {
 			SessionID: readStringValue(typed, "session_id"),
 			RunID:     readStringValue(typed, "run_id"),
 			Channel:   readStringValue(typed, "channel"),
+			Role:      readStringValue(typed, "role"),
+			State:     readMapValue(typed, "state"),
 		})
 	default:
 		raw, marshalErr := json.Marshal(payload)
@@ -1459,6 +1655,69 @@ func decodeBindStreamParams(payload any) (bindStreamParams, *FrameError) {
 		}
 		return normalizeBindStreamParams(decoded)
 	}
+}
+
+// decodeAskPayload 解析 ask 的负载参数。
+func decodeAskPayload(payload any) (askParams, *FrameError) {
+	var params protocol.AskParams
+	if err := decodePayload(payload, &params); err != nil {
+		return askParams{}, NewFrameError(ErrorCodeInvalidFrame, "invalid ask payload")
+	}
+
+	normalized := askParams{
+		SessionID: strings.TrimSpace(params.SessionID),
+		UserQuery: strings.TrimSpace(params.UserQuery),
+		Workdir:   strings.TrimSpace(params.Workdir),
+	}
+	if normalized.UserQuery == "" {
+		return askParams{}, NewMissingRequiredFieldError("payload.user_query")
+	}
+	if len(params.Skills) > 0 {
+		normalized.Skills = make([]string, 0, len(params.Skills))
+		for _, skillID := range params.Skills {
+			trimmed := strings.TrimSpace(skillID)
+			if trimmed == "" {
+				continue
+			}
+			normalized.Skills = append(normalized.Skills, trimmed)
+		}
+	}
+
+	return normalized, nil
+}
+
+// decodeDeleteAskSessionPayload 解析 delete_ask_session 的负载参数。
+func decodeDeleteAskSessionPayload(payload any) (deleteAskSessionParams, *FrameError) {
+	var params protocol.DeleteAskSessionParams
+	if err := decodePayload(payload, &params); err != nil {
+		return deleteAskSessionParams{}, NewFrameError(ErrorCodeInvalidFrame, "invalid delete_ask_session payload")
+	}
+	normalized := deleteAskSessionParams{SessionID: strings.TrimSpace(params.SessionID)}
+	if normalized.SessionID == "" {
+		return deleteAskSessionParams{}, NewMissingRequiredFieldError("payload.session_id")
+	}
+	return normalized, nil
+}
+
+// decodeTriggerActionPayload 解析 trigger_action 的负载参数。
+func decodeTriggerActionPayload(payload any) (triggerActionParams, *FrameError) {
+	var params protocol.TriggerActionParams
+	if err := decodePayload(payload, &params); err != nil {
+		return triggerActionParams{}, NewFrameError(ErrorCodeInvalidFrame, "invalid trigger_action payload")
+	}
+
+	normalized := triggerActionParams{
+		SessionID: strings.TrimSpace(params.SessionID),
+		Action:    strings.ToLower(strings.TrimSpace(params.Action)),
+		Payload:   cloneMapValue(params.Payload),
+	}
+	if normalized.Action == "" {
+		return triggerActionParams{}, NewMissingRequiredFieldError("payload.action")
+	}
+	if !isSupportedTriggerAction(normalized.Action) {
+		return triggerActionParams{}, NewFrameError(ErrorCodeInvalidAction, "invalid trigger_action action")
+	}
+	return normalized, nil
 }
 
 // decodeAuthenticatePayload 解析 authenticate 的负载参数。
@@ -1870,11 +2129,22 @@ func normalizeBindStreamParams(params protocol.BindStreamParams) (bindStreamPara
 	if !validChannel {
 		return bindStreamParams{}, NewFrameError(ErrorCodeInvalidAction, "invalid bind_stream channel")
 	}
+	role := strings.ToLower(strings.TrimSpace(params.Role))
+	parsedRole, validRole := ParseStreamRole(role)
+	if !validRole {
+		return bindStreamParams{}, NewFrameError(ErrorCodeInvalidAction, "invalid bind_stream role")
+	}
+	var state map[string]any
+	if len(params.State) > 0 {
+		state = cloneMapValue(params.State)
+	}
 
 	return bindStreamParams{
 		SessionID: sessionID,
 		RunID:     runID,
 		Channel:   parsedChannel,
+		Role:      parsedRole,
+		State:     state,
 	}, nil
 }
 
@@ -1889,6 +2159,31 @@ func readStringValue(payload map[string]any, key string) string {
 		return ""
 	}
 	return strings.TrimSpace(stringValue)
+}
+
+// readMapValue 读取 map 负载中的对象字段并复制为独立 map。
+func readMapValue(payload map[string]any, key string) map[string]any {
+	rawValue, exists := payload[key]
+	if !exists || rawValue == nil {
+		return nil
+	}
+	typedValue, ok := rawValue.(map[string]any)
+	if !ok {
+		return nil
+	}
+	return cloneMapValue(typedValue)
+}
+
+// cloneMapValue 复制 map，避免跨协程共享同一底层引用。
+func cloneMapValue(source map[string]any) map[string]any {
+	if len(source) == 0 {
+		return nil
+	}
+	cloned := make(map[string]any, len(source))
+	for key, value := range source {
+		cloned[strings.TrimSpace(key)] = value
+	}
+	return cloned
 }
 
 func readBoolValue(payload map[string]any, key string) bool {
@@ -1916,6 +2211,20 @@ func readIntValue(payload map[string]any, key string) int {
 		return int(typed)
 	default:
 		return 0
+	}
+}
+
+// isSupportedTriggerAction 判断 trigger_action 是否属于受支持动作集合。
+func isSupportedTriggerAction(action string) bool {
+	switch strings.ToLower(strings.TrimSpace(action)) {
+	case protocol.TriggerActionDiagnose,
+		protocol.TriggerActionIDMEnter,
+		protocol.TriggerActionAutoOn,
+		protocol.TriggerActionAutoOff,
+		protocol.TriggerActionAutoStatus:
+		return true
+	default:
+		return false
 	}
 }
 

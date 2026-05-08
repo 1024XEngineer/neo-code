@@ -17,6 +17,8 @@ import (
 
 type bootstrapRuntimeStub struct {
 	runFn                func(ctx context.Context, input RunInput) error
+	askFn                func(ctx context.Context, input AskInput) error
+	deleteAskSessionFn   func(ctx context.Context, input DeleteAskSessionInput) (bool, error)
 	createSessionFn      func(ctx context.Context, input CreateSessionInput) (string, error)
 	compactFn            func(ctx context.Context, input CompactInput) (CompactResult, error)
 	executeSystemToolFn  func(ctx context.Context, input ExecuteSystemToolInput) (tools.ToolResult, error)
@@ -56,6 +58,23 @@ func (s *bootstrapRuntimeStub) Run(ctx context.Context, input RunInput) error {
 		return s.runFn(ctx, input)
 	}
 	return nil
+}
+
+func (s *bootstrapRuntimeStub) Ask(ctx context.Context, input AskInput) error {
+	if s != nil && s.askFn != nil {
+		return s.askFn(ctx, input)
+	}
+	return nil
+}
+
+func (s *bootstrapRuntimeStub) DeleteAskSession(
+	ctx context.Context,
+	input DeleteAskSessionInput,
+) (bool, error) {
+	if s != nil && s.deleteAskSessionFn != nil {
+		return s.deleteAskSessionFn(ctx, input)
+	}
+	return false, nil
 }
 
 func (s *bootstrapRuntimeStub) Compact(ctx context.Context, input CompactInput) (CompactResult, error) {
@@ -1127,6 +1146,308 @@ func TestHandleBindStreamFrameErrors(t *testing.T) {
 		}
 		if response.Error == nil || response.Error.Code != ErrorCodeInvalidAction.String() {
 			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeInvalidAction.String())
+		}
+	})
+}
+
+func TestHandleTriggerActionFrame(t *testing.T) {
+	registerConnection := func(
+		t *testing.T,
+		relay *StreamRelay,
+		ctx context.Context,
+		connectionID ConnectionID,
+		cancel context.CancelFunc,
+		sink chan<- RelayMessage,
+	) {
+		t.Helper()
+		if err := relay.RegisterConnection(ConnectionRegistration{
+			ConnectionID: connectionID,
+			Channel:      StreamChannelIPC,
+			Context:      ctx,
+			Cancel:       cancel,
+			Write: func(message RelayMessage) error {
+				if sink != nil {
+					select {
+					case sink <- message:
+					default:
+					}
+				}
+				return nil
+			},
+			Close: func() {},
+		}); err != nil {
+			t.Fatalf("register connection %s: %v", connectionID, err)
+		}
+	}
+
+	t.Run("delivers shell notification with unified payload", func(t *testing.T) {
+		relay := NewStreamRelay(StreamRelayOptions{})
+		baseCtx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		sourceConnectionID := NewConnectionID()
+		sourceCtx := WithConnectionID(baseCtx, sourceConnectionID)
+		sourceCtx = WithStreamRelay(sourceCtx, relay)
+		registerConnection(t, relay, sourceCtx, sourceConnectionID, cancel, nil)
+		defer relay.dropConnection(sourceConnectionID)
+		if bindErr := relay.BindConnection(sourceConnectionID, StreamBinding{
+			SessionID: "cli-session-1",
+			Role:      StreamRoleCLI,
+			Channel:   StreamChannelAll,
+			Explicit:  true,
+		}); bindErr != nil {
+			t.Fatalf("bind source connection: %v", bindErr)
+		}
+
+		shellMessages := make(chan RelayMessage, 4)
+		shellConnectionID := NewConnectionID()
+		shellCtx := WithConnectionID(baseCtx, shellConnectionID)
+		shellCtx = WithStreamRelay(shellCtx, relay)
+		registerConnection(t, relay, shellCtx, shellConnectionID, cancel, shellMessages)
+		defer relay.dropConnection(shellConnectionID)
+		if bindErr := relay.BindConnection(shellConnectionID, StreamBinding{
+			SessionID: "shell-session-1",
+			Role:      StreamRoleShell,
+			Channel:   StreamChannelAll,
+			Explicit:  true,
+		}); bindErr != nil {
+			t.Fatalf("bind shell connection: %v", bindErr)
+		}
+
+		response := handleTriggerActionFrame(sourceCtx, MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionTriggerAction,
+			RequestID: "trigger-1",
+			SessionID: "cli-session-1",
+			Payload: protocol.TriggerActionParams{
+				SessionID: "shell-session-1",
+				Action:    protocol.TriggerActionIDMEnter,
+				Payload: map[string]any{
+					"origin": "diag-i",
+				},
+			},
+		}, nil)
+
+		if response.Type != FrameTypeAck {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeAck)
+		}
+		if response.Action != FrameActionTriggerAction {
+			t.Fatalf("response action = %q, want %q", response.Action, FrameActionTriggerAction)
+		}
+		payload, ok := response.Payload.(map[string]any)
+		if !ok {
+			t.Fatalf("payload type = %T, want map[string]any", response.Payload)
+		}
+		if payload["action"] != protocol.TriggerActionIDMEnter {
+			t.Fatalf("payload.action = %#v, want %q", payload["action"], protocol.TriggerActionIDMEnter)
+		}
+		if payload["session_id"] != "shell-session-1" {
+			t.Fatalf("payload.session_id = %#v, want %q", payload["session_id"], "shell-session-1")
+		}
+		if payload["source_session_id"] != "cli-session-1" {
+			t.Fatalf("payload.source_session_id = %#v, want %q", payload["source_session_id"], "cli-session-1")
+		}
+		actionPayload, ok := payload["payload"].(map[string]any)
+		if !ok || actionPayload["origin"] != "diag-i" {
+			t.Fatalf("payload.payload = %#v, want origin=diag-i", payload["payload"])
+		}
+
+		select {
+		case notificationMessage := <-shellMessages:
+			notification, ok := notificationMessage.Payload.(protocol.JSONRPCNotification)
+			if !ok {
+				t.Fatalf("notification payload type = %T, want protocol.JSONRPCNotification", notificationMessage.Payload)
+			}
+			if notification.Method != protocol.MethodGatewayNotification {
+				t.Fatalf("notification method = %q, want %q", notification.Method, protocol.MethodGatewayNotification)
+			}
+			params, ok := notification.Params.(map[string]any)
+			if !ok {
+				t.Fatalf("notification params type = %T, want map[string]any", notification.Params)
+			}
+			if params["action"] != protocol.TriggerActionIDMEnter {
+				t.Fatalf("notification action = %#v, want %q", params["action"], protocol.TriggerActionIDMEnter)
+			}
+			if params["session_id"] != "shell-session-1" {
+				t.Fatalf("notification session_id = %#v, want %q", params["session_id"], "shell-session-1")
+			}
+			if params["source_session_id"] != "cli-session-1" {
+				t.Fatalf("notification source_session_id = %#v, want %q", params["source_session_id"], "cli-session-1")
+			}
+			nestedPayload, ok := params["payload"].(map[string]any)
+			if !ok || nestedPayload["origin"] != "diag-i" {
+				t.Fatalf("notification payload = %#v, want origin=diag-i", params["payload"])
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("expected shell notification to be delivered")
+		}
+	})
+
+	t.Run("auto status returns shell state snapshot", func(t *testing.T) {
+		relay := NewStreamRelay(StreamRelayOptions{})
+		baseCtx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		sourceConnectionID := NewConnectionID()
+		sourceCtx := WithConnectionID(baseCtx, sourceConnectionID)
+		sourceCtx = WithStreamRelay(sourceCtx, relay)
+		registerConnection(t, relay, sourceCtx, sourceConnectionID, cancel, nil)
+		defer relay.dropConnection(sourceConnectionID)
+		if bindErr := relay.BindConnection(sourceConnectionID, StreamBinding{
+			SessionID: "cli-session-2",
+			Role:      StreamRoleCLI,
+			Channel:   StreamChannelAll,
+			Explicit:  true,
+		}); bindErr != nil {
+			t.Fatalf("bind source connection: %v", bindErr)
+		}
+
+		shellConnectionID := NewConnectionID()
+		shellCtx := WithConnectionID(baseCtx, shellConnectionID)
+		shellCtx = WithStreamRelay(shellCtx, relay)
+		registerConnection(t, relay, shellCtx, shellConnectionID, cancel, nil)
+		defer relay.dropConnection(shellConnectionID)
+		if bindErr := relay.BindConnection(shellConnectionID, StreamBinding{
+			SessionID: "shell-session-2",
+			Role:      StreamRoleShell,
+			Channel:   StreamChannelAll,
+			State: map[string]any{
+				"auto_enabled": true,
+			},
+			Explicit: true,
+		}); bindErr != nil {
+			t.Fatalf("bind shell connection: %v", bindErr)
+		}
+
+		response := handleTriggerActionFrame(sourceCtx, MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionTriggerAction,
+			RequestID: "trigger-auto-status",
+			SessionID: "cli-session-2",
+			Payload: protocol.TriggerActionParams{
+				SessionID: "shell-session-2",
+				Action:    protocol.TriggerActionAutoStatus,
+			},
+		}, nil)
+
+		if response.Type != FrameTypeAck {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeAck)
+		}
+		payload, ok := response.Payload.(map[string]any)
+		if !ok {
+			t.Fatalf("payload type = %T, want map[string]any", response.Payload)
+		}
+		if payload["action"] != protocol.TriggerActionAutoStatus {
+			t.Fatalf("payload.action = %#v, want %q", payload["action"], protocol.TriggerActionAutoStatus)
+		}
+		if payload["auto_enabled"] != true {
+			t.Fatalf("payload.auto_enabled = %#v, want true", payload["auto_enabled"])
+		}
+		if payload["session_id"] != "shell-session-2" {
+			t.Fatalf("payload.session_id = %#v, want %q", payload["session_id"], "shell-session-2")
+		}
+		if payload["source_session_id"] != "cli-session-2" {
+			t.Fatalf("payload.source_session_id = %#v, want %q", payload["source_session_id"], "cli-session-2")
+		}
+	})
+
+	t.Run("caller role check is connection-scoped instead of target session scoped", func(t *testing.T) {
+		relay := NewStreamRelay(StreamRelayOptions{})
+		baseCtx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		sourceConnectionID := NewConnectionID()
+		sourceCtx := WithConnectionID(baseCtx, sourceConnectionID)
+		sourceCtx = WithStreamRelay(sourceCtx, relay)
+		registerConnection(t, relay, sourceCtx, sourceConnectionID, cancel, nil)
+		defer relay.dropConnection(sourceConnectionID)
+		if bindErr := relay.BindConnection(sourceConnectionID, StreamBinding{
+			SessionID: "diag-ctrl-session",
+			Role:      StreamRoleCLI,
+			Channel:   StreamChannelAll,
+			Explicit:  true,
+		}); bindErr != nil {
+			t.Fatalf("bind source connection: %v", bindErr)
+		}
+
+		shellMessages := make(chan RelayMessage, 2)
+		shellConnectionID := NewConnectionID()
+		shellCtx := WithConnectionID(baseCtx, shellConnectionID)
+		shellCtx = WithStreamRelay(shellCtx, relay)
+		registerConnection(t, relay, shellCtx, shellConnectionID, cancel, shellMessages)
+		defer relay.dropConnection(shellConnectionID)
+		if bindErr := relay.BindConnection(shellConnectionID, StreamBinding{
+			SessionID: "shell-session-role-check",
+			Role:      StreamRoleShell,
+			Channel:   StreamChannelAll,
+			Explicit:  true,
+		}); bindErr != nil {
+			t.Fatalf("bind shell connection: %v", bindErr)
+		}
+
+		response := handleTriggerActionFrame(sourceCtx, MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionTriggerAction,
+			RequestID: "trigger-role-check-1",
+			// 这里故意传目标 shell session，验证角色校验不会错误地按该 session 过滤来源连接。
+			SessionID: "shell-session-role-check",
+			Payload: protocol.TriggerActionParams{
+				SessionID: "shell-session-role-check",
+				Action:    protocol.TriggerActionDiagnose,
+			},
+		}, nil)
+
+		if response.Type != FrameTypeAck {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeAck)
+		}
+		payload, ok := response.Payload.(map[string]any)
+		if !ok {
+			t.Fatalf("payload type = %T, want map[string]any", response.Payload)
+		}
+		if payload["source_session_id"] != "diag-ctrl-session" {
+			t.Fatalf("payload.source_session_id = %#v, want %q", payload["source_session_id"], "diag-ctrl-session")
+		}
+		select {
+		case <-shellMessages:
+		case <-time.After(2 * time.Second):
+			t.Fatal("expected notification delivered to shell connection")
+		}
+	})
+
+	t.Run("rejects caller without cli/tui role", func(t *testing.T) {
+		relay := NewStreamRelay(StreamRelayOptions{})
+		baseCtx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		sourceConnectionID := NewConnectionID()
+		sourceCtx := WithConnectionID(baseCtx, sourceConnectionID)
+		sourceCtx = WithStreamRelay(sourceCtx, relay)
+		registerConnection(t, relay, sourceCtx, sourceConnectionID, cancel, nil)
+		defer relay.dropConnection(sourceConnectionID)
+		if bindErr := relay.BindConnection(sourceConnectionID, StreamBinding{
+			SessionID: "shell-session-3",
+			Role:      StreamRoleShell,
+			Channel:   StreamChannelAll,
+			Explicit:  true,
+		}); bindErr != nil {
+			t.Fatalf("bind source connection: %v", bindErr)
+		}
+
+		response := handleTriggerActionFrame(sourceCtx, MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionTriggerAction,
+			RequestID: "trigger-forbidden",
+			SessionID: "shell-session-3",
+			Payload: protocol.TriggerActionParams{
+				SessionID: "shell-session-3",
+				Action:    protocol.TriggerActionDiagnose,
+			},
+		}, nil)
+		if response.Type != FrameTypeError {
+			t.Fatalf("response type = %q, want %q", response.Type, FrameTypeError)
+		}
+		if response.Error == nil || response.Error.Code != ErrorCodeAccessDenied.String() {
+			t.Fatalf("response error = %#v, want %q", response.Error, ErrorCodeAccessDenied.String())
 		}
 	})
 }
@@ -4226,6 +4547,10 @@ func TestRuntimeCallFailedFrameErrorCodes(t *testing.T) {
 type runtimeOnlyStub struct{}
 
 func (runtimeOnlyStub) Run(ctx context.Context, input RunInput) error { return nil }
+func (runtimeOnlyStub) Ask(ctx context.Context, input AskInput) error { return nil }
+func (runtimeOnlyStub) DeleteAskSession(ctx context.Context, input DeleteAskSessionInput) (bool, error) {
+	return false, nil
+}
 func (runtimeOnlyStub) Compact(ctx context.Context, input CompactInput) (CompactResult, error) {
 	return CompactResult{}, nil
 }
