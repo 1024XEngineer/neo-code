@@ -8,11 +8,11 @@
   <a href="https://go.dev/">
     <img src="https://img.shields.io/badge/Go-1.25%2B-00ADD8?logo=go&logoColor=white" alt="Go Version" />
   </a>
-  <a href="https://github.com/1024XEngineer/neo-code/actions/workflows/ci.yml">
-    <img src="https://img.shields.io/github/actions/workflow/status/1024XEngineer/neo-code/ci.yml?branch=main&label=CI" alt="CI Status" />
+  <a href="https://github.com/1024XEngineer/neo-code">
+    <img src="https://codecov.io/gh/1024XEngineer/neo-code/branch/main/graph/badge.svg" alt="Codecov Coverage" />
   </a>
   <a href="https://github.com/1024XEngineer/neo-code/blob/main/LICENSE">
-    <img src="https://img.shields.io/github/license/1024XEngineer/neo-code?color=97CA00" alt="License" />
+    <img src="https://img.shields.io/badge/License-MIT-purple?logo=opensourceinitiative&logoColor=white" alt="License MIT" />
   </a>
   <a href="https://neocode-docs.pages.dev/">
     <img src="https://img.shields.io/badge/Docs-Official-1677FF?logo=readthedocs&logoColor=white" alt="Docs" />
@@ -21,6 +21,7 @@
     <img src="https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-4EAA25" alt="Platform" />
   </a>
 </p>
+
 
 <p align="center">
   <a href="https://neocode-docs.pages.dev/en/">Docs</a>
@@ -55,6 +56,8 @@ Core loop:
 - Skills system for task-specific behaviors.
 - MCP integration via stdio servers.
 - Gateway mode with local JSON-RPC / SSE / WebSocket access.
+- Feishu Adapter: Webhook and SDK long-connection ingress with live status card updates.
+- Local Runner: execute tools on your local machine via WebSocket connection to a cloud Gateway — no inbound ports needed.
 
 ---
 
@@ -126,7 +129,7 @@ neocode --workdir /path/to/your/project
 
 ---
 
-## Gateway / MCP / Skills
+## Gateway / MCP / Skills / Runner
 
 Detailed docs are intentionally split out. README keeps entry links:
 
@@ -134,6 +137,17 @@ Detailed docs are intentionally split out. README keeps entry links:
 - MCP configuration: `docs/guides/mcp-configuration.md`
 - Skills design: `docs/skills-system-design.md`
 - Runtime event flow: `docs/runtime-provider-event-flow.md`
+- Feishu remote setup: `www/guide/feishu-remote-setup.md`
+
+### CLI Quick Reference
+
+```bash
+# Start local runner daemon (connects to cloud Gateway for remote tool execution)
+neocode runner --gateway-address "your-gateway.com:8080" --token-file ~/.neocode/auth.json
+
+# Start feishu adapter (SDK mode, no public network required)
+neocode feishu-adapter --ingress sdk --gateway-listen "127.0.0.1:8080"
+```
 
 ---
 

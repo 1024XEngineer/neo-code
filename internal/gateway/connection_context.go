@@ -41,6 +41,8 @@ type ConnectionID string
 
 type connectionIDContextKey struct{}
 type streamRelayContextKey struct{}
+type runnerRegistryContextKey struct{}
+type runnerToolManagerContextKey struct{}
 
 var (
 	connectionSequence   uint64
@@ -117,6 +119,38 @@ func ParseStreamRole(raw string) (StreamRole, bool) {
 	default:
 		return "", false
 	}
+// WithRunnerRegistry 将 RunnerRegistry 注入上下文。
+func WithRunnerRegistry(ctx context.Context, registry *RunnerRegistry) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithValue(ctx, runnerRegistryContextKey{}, registry)
+}
+
+// RunnerRegistryFromContext 从上下文读取 RunnerRegistry。
+func RunnerRegistryFromContext(ctx context.Context) *RunnerRegistry {
+	if ctx == nil {
+		return nil
+	}
+	registry, _ := ctx.Value(runnerRegistryContextKey{}).(*RunnerRegistry)
+	return registry
+}
+
+// WithRunnerToolManager 将 RunnerToolManager 注入上下文。
+func WithRunnerToolManager(ctx context.Context, manager *RunnerToolManager) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithValue(ctx, runnerToolManagerContextKey{}, manager)
+}
+
+// RunnerToolManagerFromContext 从上下文读取 RunnerToolManager。
+func RunnerToolManagerFromContext(ctx context.Context) *RunnerToolManager {
+	if ctx == nil {
+		return nil
+	}
+	manager, _ := ctx.Value(runnerToolManagerContextKey{}).(*RunnerToolManager)
+	return manager
 }
 
 // NormalizeConnectionID 将连接标识归一化为空白裁剪后的稳定值。

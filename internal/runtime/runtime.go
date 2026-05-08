@@ -205,6 +205,19 @@ type Service struct {
 	askSequence        uint64
 
 	thinkingEnabled bool
+
+	runnerToolDispatcher RunnerToolDispatcher
+}
+
+// RunnerToolDispatcher 可选：将工具执行分发到远程 runner。
+// 返回 (result, handled, error)。handled=false 表示继续走本地执行。
+type RunnerToolDispatcher interface {
+	TryDispatch(ctx context.Context, sessionID, runID string, input tools.ToolCallInput) (tools.ToolResult, bool, error)
+}
+
+// SetRunnerToolDispatcher 设置远程工具分发器。
+func (s *Service) SetRunnerToolDispatcher(d RunnerToolDispatcher) {
+	s.runnerToolDispatcher = d
 }
 
 // sessionLockEntry 维护单个会话读写锁及其当前引用计数，用于在无引用时回收 map 项。

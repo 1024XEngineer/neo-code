@@ -107,8 +107,16 @@ func (s *Service) executeToolCallWithPermission(ctx context.Context, input permi
 
 	effectiveTimeout := resolveToolExecutionTimeout(input.Call, input.ToolTimeout)
 	runCtx, cancel := context.WithTimeout(ctx, effectiveTimeout)
+	defer cancel()
+
+	if s.runnerToolDispatcher != nil {
+		result, handled, dispatchErr := s.runnerToolDispatcher.TryDispatch(runCtx, input.SessionID, input.RunID, callInput)
+		if handled {
+			return result, dispatchErr
+		}
+	}
+
 	result, execErr := s.toolManager.Execute(runCtx, callInput)
-	cancel()
 	if execErr == nil {
 		return result, nil
 	}

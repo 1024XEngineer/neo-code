@@ -106,6 +106,10 @@ const (
 	FrameActionWorkspaceRename FrameAction = "workspace.rename"
 	// FrameActionWorkspaceDelete 表示删除工作区。
 	FrameActionWorkspaceDelete FrameAction = "workspace.delete"
+	// FrameActionRegisterRunner 表示 runner 向网关注册。
+	FrameActionRegisterRunner FrameAction = "register_runner"
+	// FrameActionExecuteToolResult 表示 runner 回传工具执行结果。
+	FrameActionExecuteToolResult FrameAction = "execute_tool_result"
 )
 
 // InputPartType 表示多模态输入分片类型。

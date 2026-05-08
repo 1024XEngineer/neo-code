@@ -65,6 +65,10 @@ type NetworkServerOptions struct {
 	ACL                          *ControlPlaneACL
 	Metrics                      *GatewayMetrics
 	AllowedOrigins               []string
+	// RunnerRegistry 可选：runner 注册中心。
+	RunnerRegistry *RunnerRegistry
+	// RunnerToolManager 可选：runner 工具管理器。
+	RunnerToolManager *RunnerToolManager
 	// ConnectionCountChanged 在活跃长连接数变化时回调当前总数，用于空闲退出治理。
 	ConnectionCountChanged func(active int)
 	// StaticFileDir 可选：如果非空，从该目录提供 SPA 静态文件服务。
@@ -95,6 +99,8 @@ type NetworkServer struct {
 	staticFileDir          string
 	staticFileFS           fs.FS
 	startedAt              time.Time
+	runnerRegistry         *RunnerRegistry
+	runnerToolManager      *RunnerToolManager
 
 	mu         sync.Mutex
 	server     *http.Server
@@ -195,6 +201,8 @@ func NewNetworkServer(options NetworkServerOptions) (*NetworkServer, error) {
 		staticFileDir:          options.StaticFileDir,
 		staticFileFS:           options.StaticFileFS,
 		startedAt:              time.Now().UTC(),
+		runnerRegistry:         options.RunnerRegistry,
+		runnerToolManager:      options.RunnerToolManager,
 		wsConns:                make(map[*websocket.Conn]context.CancelFunc),
 		sseCancels:             make(map[int]context.CancelFunc),
 	}, nil
@@ -559,6 +567,12 @@ func (s *NetworkServer) handleWebSocket(conn *websocket.Conn, runtimePort Runtim
 	connectionContext = s.decorateRequestContext(connectionContext, RequestSourceWS, requestToken)
 	connectionContext = WithConnectionID(connectionContext, connectionID)
 	connectionContext = WithStreamRelay(connectionContext, relay)
+	if s.runnerRegistry != nil {
+		connectionContext = WithRunnerRegistry(connectionContext, s.runnerRegistry)
+	}
+	if s.runnerToolManager != nil {
+		connectionContext = WithRunnerToolManager(connectionContext, s.runnerToolManager)
+	}
 
 	if !s.registerWSConnection(conn, cancelConnection) {
 		_ = conn.SetWriteDeadline(time.Now().Add(s.writeTimeout))
@@ -607,6 +621,9 @@ func (s *NetworkServer) handleWebSocket(conn *websocket.Conn, runtimePort Runtim
 
 	defer func() {
 		s.unregisterWSConnection(conn)
+		if s.runnerRegistry != nil {
+			s.runnerRegistry.OnConnectionDropped(connectionID)
+		}
 		relay.dropConnection(connectionID)
 		_ = conn.Close()
 	}()

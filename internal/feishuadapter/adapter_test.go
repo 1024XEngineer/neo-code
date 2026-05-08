@@ -94,12 +94,13 @@ func (f *fakeGatewayClient) snapshotCalls() []string {
 }
 
 type sentMessage struct {
-	chatID  string
-	kind    string
-	text    string
-	card    PermissionCardPayload
-	runCard StatusCardPayload
-	cardID  string
+	chatID       string
+	kind         string
+	text         string
+	card         PermissionCardPayload
+	runCard      StatusCardPayload
+	cardID       string
+	resolvedCard *ResolvedPermissionCardPayload
 }
 
 type fakeMessenger struct {
@@ -118,10 +119,19 @@ func (m *fakeMessenger) SendText(_ context.Context, chatID string, text string) 
 	return m.sendTextErr
 }
 
-func (m *fakeMessenger) SendPermissionCard(_ context.Context, chatID string, payload PermissionCardPayload) error {
+func (m *fakeMessenger) SendPermissionCard(_ context.Context, chatID string, payload PermissionCardPayload) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.messages = append(m.messages, sentMessage{chatID: chatID, kind: "card", card: payload})
+	m.nextID++
+	cardID := fmt.Sprintf("perm-card-%d", m.nextID)
+	m.messages = append(m.messages, sentMessage{chatID: chatID, kind: "card", card: payload, cardID: cardID})
+	return cardID, nil
+}
+
+func (m *fakeMessenger) UpdatePermissionCard(_ context.Context, cardID string, payload ResolvedPermissionCardPayload) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.messages = append(m.messages, sentMessage{chatID: cardID, kind: "update_perm_card", resolvedCard: &payload})
 	return nil
 }
 
@@ -1217,9 +1227,9 @@ func TestHelperFunctionsCoverFallbackBranches(t *testing.T) {
 	if _, err := decodeMessageText("{"); err == nil {
 		t.Fatal("expected invalid message content error")
 	}
-	requestID, reason := extractPermissionRequest(nil)
-	if requestID != "" || reason == "" {
-		t.Fatalf("unexpected permission extraction: request=%q reason=%q", requestID, reason)
+	requestID, toolName, operation, target, reason := extractPermissionRequest(nil)
+	if requestID != "" || toolName != "" || operation != "" || target != "" || reason == "" {
+		t.Fatalf("unexpected permission extraction: request=%q tool=%q op=%q target=%q reason=%q", requestID, toolName, operation, target, reason)
 	}
 	if text := extractUserVisibleDoneText(map[string]any{
 		"payload": map[string]any{"content": "done"},
@@ -1230,6 +1240,11 @@ func TestHelperFunctionsCoverFallbackBranches(t *testing.T) {
 		"payload": map[string]any{"error": "boom"},
 	}); text != "任务失败：boom" {
 		t.Fatalf("error text = %q, want fallback error", text)
+	}
+	if text := extractUserVisibleErrorText(map[string]any{
+		"payload": map[string]any{"error": "runner_offline"},
+	}); text != "本机 Runner 未连接，请在电脑上启动 `neocode runner`" {
+		t.Fatalf("runner error text = %q", text)
 	}
 	if text := extractUserVisibleErrorText(nil); text != "" {
 		t.Fatalf("error text = %q, want empty", text)

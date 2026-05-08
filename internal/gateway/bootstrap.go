@@ -2441,11 +2441,15 @@ func decodeCheckpointDiffPayload(payload any) CheckpointDiffInput {
 			SubjectID:    strings.TrimSpace(typed.SubjectID),
 			SessionID:    strings.TrimSpace(typed.SessionID),
 			CheckpointID: strings.TrimSpace(typed.CheckpointID),
+			Scope:        strings.TrimSpace(typed.Scope),
+			RunID:        strings.TrimSpace(typed.RunID),
 		}
 	case map[string]any:
 		return CheckpointDiffInput{
 			SessionID:    readStringValue(typed, "session_id"),
 			CheckpointID: readStringValue(typed, "checkpoint_id"),
+			Scope:        readStringValue(typed, "scope"),
+			RunID:        readStringValue(typed, "run_id"),
 		}
 	default:
 		raw, marshalErr := json.Marshal(payload)
@@ -2455,12 +2459,100 @@ func decodeCheckpointDiffPayload(payload any) CheckpointDiffInput {
 		var decoded struct {
 			SessionID    string `json:"session_id"`
 			CheckpointID string `json:"checkpoint_id"`
+			Scope        string `json:"scope"`
+			RunID        string `json:"run_id"`
 		}
 		_ = json.Unmarshal(raw, &decoded)
 		return CheckpointDiffInput{
 			SessionID:    strings.TrimSpace(decoded.SessionID),
 			CheckpointID: strings.TrimSpace(decoded.CheckpointID),
+			Scope:        strings.TrimSpace(decoded.Scope),
+			RunID:        strings.TrimSpace(decoded.RunID),
 		}
+	}
+}
+
+// handleRegisterRunnerFrame 处理 runner 注册请求。
+func handleRegisterRunnerFrame(ctx context.Context, frame MessageFrame, _ RuntimePort) MessageFrame {
+	registry := RunnerRegistryFromContext(ctx)
+	if registry == nil {
+		return errorFrame(frame, NewFrameError(ErrorCodeInternalError, "runner registry not available"))
+	}
+
+	params, ok := frame.Payload.(protocol.RegisterRunnerParams)
+	if !ok {
+		raw, marshalErr := json.Marshal(frame.Payload)
+		if marshalErr != nil {
+			return errorFrame(frame, NewMissingRequiredFieldError("payload.runner_id"))
+		}
+		var p protocol.RegisterRunnerParams
+		if err := json.Unmarshal(raw, &p); err != nil {
+			return errorFrame(frame, NewFrameError(ErrorCodeInvalidAction, "invalid register_runner params"))
+		}
+		params = p
+	}
+
+	if params.RunnerID == "" {
+		return errorFrame(frame, NewMissingRequiredFieldError("runner_id"))
+	}
+	if params.Workdir == "" {
+		return errorFrame(frame, NewMissingRequiredFieldError("workdir"))
+	}
+
+	connectionID, ok := ConnectionIDFromContext(ctx)
+	if !ok {
+		return errorFrame(frame, NewFrameError(ErrorCodeInternalError, "connection id not found"))
+	}
+
+	registry.Register(connectionID, params.RunnerID, params.RunnerName, params.Workdir, params.Labels)
+
+	return MessageFrame{
+		Type:      FrameTypeAck,
+		Action:    FrameActionRegisterRunner,
+		RequestID: frame.RequestID,
+		Payload: map[string]string{
+			"runner_id": params.RunnerID,
+			"status":    "registered",
+		},
+	}
+}
+
+// handleExecuteToolResultFrame 处理 runner 回传的工具执行结果。
+func handleExecuteToolResultFrame(ctx context.Context, frame MessageFrame, _ RuntimePort) MessageFrame {
+	manager := RunnerToolManagerFromContext(ctx)
+	if manager == nil {
+		return errorFrame(frame, NewFrameError(ErrorCodeInternalError, "runner tool manager not available"))
+	}
+
+	params, ok := frame.Payload.(protocol.ExecuteToolResultParams)
+	if !ok {
+		raw, marshalErr := json.Marshal(frame.Payload)
+		if marshalErr != nil {
+			return errorFrame(frame, NewMissingRequiredFieldError("payload.request_id"))
+		}
+		var p protocol.ExecuteToolResultParams
+		if err := json.Unmarshal(raw, &p); err != nil {
+			return errorFrame(frame, NewFrameError(ErrorCodeInvalidAction, "invalid execute_tool_result params"))
+		}
+		params = p
+	}
+
+	if params.RequestID == "" {
+		return errorFrame(frame, NewMissingRequiredFieldError("request_id"))
+	}
+
+	if err := manager.CompleteToolRequest(params.RequestID, params.Content, params.IsError); err != nil {
+		return errorFrame(frame, NewFrameError(ErrorCodeResourceNotFound, err.Error()))
+	}
+
+	return MessageFrame{
+		Type:      FrameTypeAck,
+		Action:    FrameActionExecuteToolResult,
+		RequestID: frame.RequestID,
+		Payload: map[string]string{
+			"request_id": params.RequestID,
+			"status":     "completed",
+		},
 	}
 }
 

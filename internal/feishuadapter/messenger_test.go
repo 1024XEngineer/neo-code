@@ -109,11 +109,15 @@ func TestSendPermissionCardUsesInteractiveMessage(t *testing.T) {
 		},
 	}
 	messenger := NewFeishuMessenger("app", "secret", client)
-	if err := messenger.SendPermissionCard(context.Background(), "chat-id", PermissionCardPayload{
+	cardID, err := messenger.SendPermissionCard(context.Background(), "chat-id", PermissionCardPayload{
 		RequestID: "perm-1",
 		Message:   "需要审批",
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("send permission card: %v", err)
+	}
+	if cardID != "mid" {
+		t.Fatalf("cardID = %q, want mid", cardID)
 	}
 	if len(client.requests) != 2 {
 		t.Fatalf("request count = %d, want 2", len(client.requests))

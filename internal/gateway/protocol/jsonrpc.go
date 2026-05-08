@@ -346,6 +346,8 @@ type UndoRestoreParams struct {
 type CheckpointDiffParams struct {
 	SessionID    string `json:"session_id"`
 	CheckpointID string `json:"checkpoint_id,omitempty"`
+	Scope        string `json:"scope,omitempty"`  // 可选，"run" 表示 run 级聚合 diff
+	RunID        string `json:"run_id,omitempty"` // scope=run 时必需
 }
 
 // ResolvePermissionParams 表示 gateway.resolvePermission 参数。
@@ -893,6 +895,24 @@ func NormalizeJSONRPCRequest(request JSONRPCRequest) (NormalizedRequest, *JSONRP
 		normalized.Action = "workspace.delete"
 		normalized.Payload = params
 		return normalized, nil
+	case MethodGatewayRegisterRunner:
+		params, parseErr := decodeRegisterRunnerParams(request.Params)
+		if parseErr != nil {
+			return normalized, parseErr
+		}
+		normalized.Action = "register_runner"
+		normalized.Payload = params
+		return normalized, nil
+	case MethodGatewayExecuteToolResult:
+		params, parseErr := decodeExecuteToolResultParams(request.Params)
+		if parseErr != nil {
+			return normalized, parseErr
+		}
+		normalized.Action = "execute_tool_result"
+		normalized.SessionID = strings.TrimSpace(params.SessionID)
+		normalized.RunID = strings.TrimSpace(params.RunID)
+		normalized.Payload = params
+		return normalized, nil
 	default:
 		return normalized, NewJSONRPCError(
 			JSONRPCCodeMethodNotFound,
@@ -1005,8 +1025,13 @@ func decodeCheckpointDiffParams(raw json.RawMessage) (CheckpointDiffParams, *JSO
 	return decodeParams(raw, "checkpoint.diff", func(p *CheckpointDiffParams) *JSONRPCError {
 		p.SessionID = strings.TrimSpace(p.SessionID)
 		p.CheckpointID = strings.TrimSpace(p.CheckpointID)
+		p.Scope = strings.TrimSpace(p.Scope)
+		p.RunID = strings.TrimSpace(p.RunID)
 		if p.SessionID == "" {
 			return NewJSONRPCError(JSONRPCCodeInvalidParams, "missing required field: params.session_id", GatewayCodeMissingRequiredField)
+		}
+		if p.Scope == "run" && p.RunID == "" {
+			return NewJSONRPCError(JSONRPCCodeInvalidParams, "missing required field: params.run_id (required when scope=run)", GatewayCodeMissingRequiredField)
 		}
 		return nil
 	})
@@ -1654,6 +1679,70 @@ func decodeParamsInternal[T any](raw json.RawMessage, name string, validate func
 		if err := validate(&params); err != nil {
 			return zero, err
 		}
+	}
+	return params, nil
+}
+
+// decodeRegisterRunnerParams 对 gateway.registerRunner 的 params 执行反序列化与字段校验。
+func decodeRegisterRunnerParams(raw json.RawMessage) (RegisterRunnerParams, *JSONRPCError) {
+	params, err := decodeParams[RegisterRunnerParams](raw, "gateway.registerRunner", func(p *RegisterRunnerParams) *JSONRPCError {
+		if strings.TrimSpace(p.RunnerID) == "" {
+			return NewJSONRPCError(
+				JSONRPCCodeInvalidParams,
+				"missing required field: params.runner_id",
+				GatewayCodeMissingRequiredField,
+			)
+		}
+		if strings.TrimSpace(p.Workdir) == "" {
+			return NewJSONRPCError(
+				JSONRPCCodeInvalidParams,
+				"missing required field: params.workdir",
+				GatewayCodeMissingRequiredField,
+			)
+		}
+		return nil
+	})
+	if err != nil {
+		return RegisterRunnerParams{}, err
+	}
+	return params, nil
+}
+
+// decodeExecuteToolResultParams 对 gateway.executeToolResult 的 params 执行反序列化与字段校验。
+func decodeExecuteToolResultParams(raw json.RawMessage) (ExecuteToolResultParams, *JSONRPCError) {
+	params, err := decodeParams[ExecuteToolResultParams](raw, "gateway.executeToolResult", func(p *ExecuteToolResultParams) *JSONRPCError {
+		if strings.TrimSpace(p.RequestID) == "" {
+			return NewJSONRPCError(
+				JSONRPCCodeInvalidParams,
+				"missing required field: params.request_id",
+				GatewayCodeMissingRequiredField,
+			)
+		}
+		if strings.TrimSpace(p.SessionID) == "" {
+			return NewJSONRPCError(
+				JSONRPCCodeInvalidParams,
+				"missing required field: params.session_id",
+				GatewayCodeMissingRequiredField,
+			)
+		}
+		if strings.TrimSpace(p.RunID) == "" {
+			return NewJSONRPCError(
+				JSONRPCCodeInvalidParams,
+				"missing required field: params.run_id",
+				GatewayCodeMissingRequiredField,
+			)
+		}
+		if strings.TrimSpace(p.ToolCallID) == "" {
+			return NewJSONRPCError(
+				JSONRPCCodeInvalidParams,
+				"missing required field: params.tool_call_id",
+				GatewayCodeMissingRequiredField,
+			)
+		}
+		return nil
+	})
+	if err != nil {
+		return ExecuteToolResultParams{}, err
 	}
 	return params, nil
 }

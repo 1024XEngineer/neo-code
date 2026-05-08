@@ -2029,6 +2029,8 @@ func (b *gatewayRuntimePortBridge) CheckpointDiff(ctx context.Context, input gat
 	result, err := cp.CheckpointDiff(ctx, agentruntime.CheckpointDiffInput{
 		SessionID:    strings.TrimSpace(input.SessionID),
 		CheckpointID: strings.TrimSpace(input.CheckpointID),
+		Scope:        strings.TrimSpace(input.Scope),
+		RunID:        strings.TrimSpace(input.RunID),
 	})
 	if err != nil {
 		return gateway.CheckpointDiffResult{}, err

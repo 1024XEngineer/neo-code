@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"neo-code/internal/checkpoint"
 	"neo-code/internal/config"
 	agentcontext "neo-code/internal/context"
 	contextcompact "neo-code/internal/context/compact"
@@ -102,8 +103,21 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 			s.updateResumeCheckpoint(runCtx, statePtr, "stopped", completion)
 		}
 		if statePtr != nil && s.perEditStore != nil && statePtr.baselineCheckpointID != "" && statePtr.lastEndOfTurnCheckpointID != "" {
-			diffStr, _ := s.perEditStore.Diff(context.Background(), statePtr.baselineCheckpointID, statePtr.lastEndOfTurnCheckpointID)
-			files, _ := s.perEditStore.ChangedFiles(context.Background(), statePtr.baselineCheckpointID, statePtr.lastEndOfTurnCheckpointID)
+			runEndCtx := context.Background()
+			records, listErr := s.checkpointStore.ListCheckpoints(runEndCtx, statePtr.session.ID, checkpoint.ListCheckpointOpts{RunID: statePtr.runID})
+			if listErr == nil {
+				var perEditIDs []string
+				for _, r := range records {
+					if checkpoint.IsPerEditRef(r.CodeCheckpointRef) {
+						perEditIDs = append(perEditIDs, checkpoint.PerEditCheckpointIDFromRef(r.CodeCheckpointRef))
+					}
+				}
+				if len(perEditIDs) > 0 {
+					_ = s.perEditStore.RunEndCapture(runEndCtx, perEditIDs)
+				}
+			}
+			diffStr, _ := s.perEditStore.Diff(runEndCtx, statePtr.baselineCheckpointID, statePtr.lastEndOfTurnCheckpointID)
+			files, _ := s.perEditStore.ChangedFiles(runEndCtx, statePtr.baselineCheckpointID, statePtr.lastEndOfTurnCheckpointID)
 			var changedFiles []FileDiffEntry
 			for _, f := range files {
 				changedFiles = append(changedFiles, FileDiffEntry{
