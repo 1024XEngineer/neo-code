@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import ModelSelector from './ModelSelector'
 import { useSessionStore } from '@/stores/useSessionStore'
 import { useChatStore } from '@/stores/useChatStore'
@@ -116,5 +116,106 @@ describe('ModelSelector', () => {
     })
     expect(mockGatewayAPI.setSessionModel).not.toHaveBeenCalled()
     expect(useGatewayStore.getState().providerChangeTick).toBe(1)
+  })
+
+  it('rolls back the optimistic selection when applying a session model change fails', async () => {
+    const showToast = vi.fn()
+    mockGatewayAPI = {
+      listModels: vi.fn().mockResolvedValue({
+        payload: {
+          models: [
+            { id: 'gpt-4.1', name: 'GPT-4.1', provider: 'openai' },
+            { id: 'gpt-4o', name: 'GPT-4o', provider: 'openai' },
+          ],
+          selected_provider_id: 'openai',
+          selected_model_id: 'gpt-4.1',
+        },
+      }),
+      setSessionModel: vi.fn().mockRejectedValue(new Error('boom')),
+      selectProviderModel: vi.fn(),
+    }
+    useSessionStore.setState({ currentSessionId: 'session-1' } as any)
+    useUIStore.setState({ showToast } as any)
+
+    render(<ModelSelector />)
+
+    await screen.findByText('openai / GPT-4.1')
+    fireEvent.click(screen.getByRole('button', { name: /openai \/ GPT-4\.1/i }))
+    fireEvent.click(screen.getByText('GPT-4o'))
+
+    await waitFor(() => {
+      expect(mockGatewayAPI.setSessionModel).toHaveBeenCalledWith('session-1', 'gpt-4o', 'openai')
+    })
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /openai \/ GPT-4\.1/i })).toBeTruthy()
+    })
+    expect(showToast).toHaveBeenCalledWith('Failed to apply model change', 'error')
+  })
+
+  it('re-syncs the confirmed selection when a deferred model change fails', async () => {
+    const showToast = vi.fn()
+    mockGatewayAPI = {
+      listModels: vi.fn()
+        .mockResolvedValueOnce({
+          payload: {
+            models: [
+              { id: 'gpt-4.1', name: 'GPT-4.1', provider: 'openai' },
+              { id: 'gpt-4o', name: 'GPT-4o', provider: 'openai' },
+            ],
+            selected_provider_id: 'openai',
+            selected_model_id: 'gpt-4.1',
+          },
+        })
+        .mockResolvedValueOnce({
+          payload: {
+            models: [
+              { id: 'gpt-4.1', name: 'GPT-4.1', provider: 'openai' },
+              { id: 'gpt-4o', name: 'GPT-4o', provider: 'openai' },
+            ],
+            selected_provider_id: 'openai',
+            selected_model_id: 'gpt-4.1',
+          },
+        })
+        .mockResolvedValue({
+          payload: {
+            models: [
+              { id: 'gpt-4.1', name: 'GPT-4.1', provider: 'openai' },
+              { id: 'gpt-4o', name: 'GPT-4o', provider: 'openai' },
+            ],
+            selected_provider_id: 'openai',
+            selected_model_id: 'gpt-4.1',
+          },
+        }),
+      setSessionModel: vi.fn().mockRejectedValue(new Error('boom')),
+      selectProviderModel: vi.fn(),
+    }
+    useSessionStore.setState({ currentSessionId: 'session-1' } as any)
+    useChatStore.setState({ isGenerating: true } as any)
+    useUIStore.setState({ showToast } as any)
+
+    const view = render(<ModelSelector />)
+
+    await screen.findByText('openai / GPT-4.1')
+    fireEvent.click(screen.getByRole('button', { name: /openai \/ GPT-4\.1/i }))
+    fireEvent.click(screen.getByText('GPT-4o'))
+
+    expect(screen.getByRole('button', { name: /openai \/ GPT-4o/i })).toBeTruthy()
+
+    await act(async () => {
+      useChatStore.setState({ isGenerating: false } as any)
+      view.rerender(<ModelSelector />)
+    })
+
+    await waitFor(() => {
+      expect(mockGatewayAPI.setSessionModel).toHaveBeenCalledWith('session-1', 'gpt-4o', 'openai')
+    })
+    await waitFor(() => {
+      expect(mockGatewayAPI.listModels.mock.calls.length).toBeGreaterThanOrEqual(2)
+    })
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /openai \/ GPT-4\.1/i })).toBeTruthy()
+    })
+    expect(showToast).toHaveBeenCalledWith('Model change will apply on the next turn', 'info')
+    expect(showToast).toHaveBeenCalledWith('Failed to apply model change', 'error')
   })
 })

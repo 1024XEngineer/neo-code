@@ -108,4 +108,26 @@ describe('FileChangePanel', () => {
     expect(diffScroller.style.maxHeight).toBe('')
     expect(diffScroller.style.overflowY).toBe('visible')
   })
+
+  it('keeps file entries visible when no diff metadata is available', () => {
+    useUIStore.setState({
+      fileChanges: [
+        {
+          id: 'fc-3',
+          path: 'src/empty.txt',
+          status: 'deleted',
+          additions: 0,
+          deletions: 0,
+        },
+      ],
+      changesPanelOpen: true,
+    } as any)
+
+    render(<FileChangePanel />)
+
+    fireEvent.click(screen.getByText('src/empty.txt'))
+
+    expect(screen.getByText('src/empty.txt')).toBeTruthy()
+    expect(screen.getByText('当前文件没有可展示的 diff')).toBeTruthy()
+  })
 })

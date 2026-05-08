@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useGatewayAPI } from '@/context/RuntimeProvider'
 import { useSessionStore } from '@/stores/useSessionStore'
 import { useChatStore } from '@/stores/useChatStore'
@@ -15,9 +15,41 @@ export default function ModelSelector() {
   const [open, setOpen] = useState(false)
   const [models, setModels] = useState<ModelEntry[]>([])
   const [selected, setSelected] = useState<ModelEntry | null>(null)
+  const [confirmedSelected, setConfirmedSelected] = useState<ModelEntry | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [pendingModelChange, setPendingModelChange] = useState<ModelEntry | null>(null)
+  const latestRefreshRequestId = useRef(0)
+
+  // 统一刷新模型列表，并以服务端返回的当前选择为准同步本地状态。
+  async function refreshModels() {
+    if (!gatewayAPI) return null
+    const requestId = ++latestRefreshRequestId.current
+    setLoading(true)
+    setError('')
+    try {
+      const result = await gatewayAPI.listModels(currentSessionId || undefined)
+      if (requestId !== latestRefreshRequestId.current) return null
+      const fetched = result.payload.models
+      setModels(fetched)
+      const effective = fetched.find((entry) => (
+        entry.id === result.payload.selected_model_id
+        && entry.provider === result.payload.selected_provider_id
+      )) ?? null
+      setSelected(effective)
+      setConfirmedSelected(effective)
+      return effective
+    } catch (err) {
+      if (requestId !== latestRefreshRequestId.current) return null
+      setError(err instanceof Error ? err.message : 'Failed to load model list')
+      console.error('listModels failed:', err)
+      return null
+    } finally {
+      if (requestId === latestRefreshRequestId.current) {
+        setLoading(false)
+      }
+    }
+  }
 
   async function applyModelSelection(model: ModelEntry) {
     if (!gatewayAPI) return
@@ -31,36 +63,14 @@ export default function ModelSelector() {
 
   useEffect(() => {
     if (!gatewayAPI) return
-    let cancelled = false
-    setLoading(true)
-    setError('')
-    gatewayAPI.listModels(currentSessionId || undefined)
-      .then((result) => {
-        if (cancelled) return
-        const fetched = result.payload.models
-        setModels(fetched)
-        if (fetched.length > 0) {
-          const effective = fetched.find((entry) => (
-            entry.id === result.payload.selected_model_id
-            && entry.provider === result.payload.selected_provider_id
-          )) ?? null
-          setSelected(effective)
-        } else {
-          setSelected(null)
-        }
-      })
-      .catch((err) => {
-        if (cancelled) return
-        setError(err instanceof Error ? err.message : 'Failed to load model list')
-        console.error('listModels failed:', err)
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false)
-      })
-    return () => { cancelled = true }
+    void refreshModels()
+    return () => {
+      latestRefreshRequestId.current += 1
+    }
   }, [gatewayAPI, currentSessionId, providerChangeTick])
 
   async function handleSelect(model: ModelEntry) {
+    const previousConfirmed = confirmedSelected
     setSelected(model)
     setOpen(false)
     if (isGenerating) {
@@ -70,18 +80,32 @@ export default function ModelSelector() {
     }
     try {
       await applyModelSelection(model)
+      setConfirmedSelected(model)
     } catch (err) {
+      setSelected(previousConfirmed)
+      useUIStore.getState().showToast('Failed to apply model change', 'error')
       console.error('applyModelSelection failed:', err)
     }
   }
 
   useEffect(() => {
     if (!isGenerating && pendingModelChange && gatewayAPI) {
+      const previousConfirmed = confirmedSelected
       applyModelSelection(pendingModelChange)
-        .catch((err) => console.error('Deferred applyModelSelection failed:', err))
-      setPendingModelChange(null)
+        .then(() => {
+          setConfirmedSelected(pendingModelChange)
+        })
+        .catch(async (err) => {
+          setSelected(previousConfirmed)
+          useUIStore.getState().showToast('Failed to apply model change', 'error')
+          console.error('Deferred applyModelSelection failed:', err)
+          await refreshModels()
+        })
+        .finally(() => {
+          setPendingModelChange(null)
+        })
     }
-  }, [isGenerating, pendingModelChange, currentSessionId, gatewayAPI])
+  }, [isGenerating, pendingModelChange, confirmedSelected, currentSessionId, gatewayAPI])
 
   if (!gatewayAPI) return null
 
