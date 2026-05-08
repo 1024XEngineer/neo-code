@@ -128,9 +128,9 @@ func TestAskUserToolExecuteHappyPath(t *testing.T) {
 	}
 
 	result, err := tool.Execute(context.Background(), ToolCallInput{
-		ID:                 "call-1",
-		Name:               ToolNameAskUser,
-		Arguments:          []byte(`{"question_id":"q1","title":"Pick one?","kind":"single_choice","options":[{"label":"A"},{"label":"B"}]}`),
+		ID:                  "call-1",
+		Name:                ToolNameAskUser,
+		Arguments:           []byte(`{"question_id":"q1","title":"Pick one?","kind":"single_choice","options":[{"label":"A"},{"label":"B"}]}`),
 		AskUserEventEmitter: emitter,
 	})
 	if err != nil {
@@ -149,6 +149,22 @@ func TestAskUserToolExecuteHappyPath(t *testing.T) {
 	}
 	if emittedEvents[1] != "user_question_answered" {
 		t.Fatalf("expected second event user_question_answered, got %q", emittedEvents[1])
+	}
+	requestedPayload, ok := emittedPayloads[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected first payload map, got %T", emittedPayloads[0])
+	}
+	requestID, _ := requestedPayload["request_id"].(string)
+	if strings.TrimSpace(requestID) == "" {
+		t.Fatalf("expected user_question_requested payload to include request_id, got %#v", emittedPayloads[0])
+	}
+	resolvedPayload, ok := emittedPayloads[1].(map[string]any)
+	if !ok {
+		t.Fatalf("expected second payload map, got %T", emittedPayloads[1])
+	}
+	resolvedRequestID, _ := resolvedPayload["request_id"].(string)
+	if strings.TrimSpace(resolvedRequestID) == "" {
+		t.Fatalf("expected resolved payload to include request_id, got %#v", resolvedPayload)
 	}
 
 	// Verify result content
@@ -186,6 +202,9 @@ func TestAskUserToolExecuteTimeoutDefault(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatalf("expected timeout error")
+	}
+	if !result.IsError {
+		t.Fatalf("expected timeout to be marked as tool error")
 	}
 	var parsed AskUserResult
 	if jsonErr := json.Unmarshal([]byte(result.Content), &parsed); jsonErr != nil {

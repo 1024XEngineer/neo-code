@@ -2,6 +2,8 @@ package tools
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -10,15 +12,16 @@ import (
 
 // AskUserRequest 描述一次 ask_user 请求。
 type AskUserRequest struct {
-	QuestionID string          `json:"question_id"`
-	Title      string          `json:"title"`
-	Description string         `json:"description"`
-	Kind       string          `json:"kind"`
-	Options    []AskUserOption `json:"options,omitempty"`
-	Required   bool            `json:"required"`
-	AllowSkip  bool            `json:"allow_skip"`
-	MaxChoices int             `json:"max_choices,omitempty"`
-	TimeoutSec int             `json:"timeout_sec,omitempty"`
+	RequestID   string          `json:"request_id,omitempty"`
+	QuestionID  string          `json:"question_id"`
+	Title       string          `json:"title"`
+	Description string          `json:"description"`
+	Kind        string          `json:"kind"`
+	Options     []AskUserOption `json:"options,omitempty"`
+	Required    bool            `json:"required"`
+	AllowSkip   bool            `json:"allow_skip"`
+	MaxChoices  int             `json:"max_choices,omitempty"`
+	TimeoutSec  int             `json:"timeout_sec,omitempty"`
 }
 
 // AskUserOption 描述 ask_user 选项。
@@ -140,18 +143,37 @@ func (t *askUserTool) Execute(ctx context.Context, call ToolCallInput) (ToolResu
 	if err != nil {
 		return NewErrorResult(ToolNameAskUser, "invalid ask_user arguments", err.Error(), nil), err
 	}
+	requestID, err := newAskUserRequestID()
+	if err != nil {
+		return NewErrorResult(ToolNameAskUser, "failed to generate request id", err.Error(), nil), err
+	}
+	request.RequestID = requestID
 
 	// emit user_question_requested before blocking
 	if call.AskUserEventEmitter != nil {
-		call.AskUserEventEmitter("user_question_requested", request)
+		call.AskUserEventEmitter("user_question_requested", map[string]any{
+			"request_id":  requestID,
+			"question_id": request.QuestionID,
+			"title":       request.Title,
+			"description": request.Description,
+			"kind":        request.Kind,
+			"options":     request.Options,
+			"required":    request.Required,
+			"allow_skip":  request.AllowSkip,
+			"max_choices": request.MaxChoices,
+			"timeout_sec": request.TimeoutSec,
+		})
 	}
 
-	requestID, result, err := t.broker.Open(ctx, request)
+	resolvedRequestID, result, err := t.broker.Open(ctx, request)
+	if strings.TrimSpace(resolvedRequestID) == "" {
+		resolvedRequestID = requestID
+	}
 
 	// emit resolved event
 	if call.AskUserEventEmitter != nil {
 		call.AskUserEventEmitter("user_question_"+result.Status, map[string]any{
-			"request_id":  requestID,
+			"request_id":  resolvedRequestID,
 			"question_id": request.QuestionID,
 			"status":      result.Status,
 			"values":      result.Values,
@@ -169,7 +191,7 @@ func (t *askUserTool) Execute(ctx context.Context, call ToolCallInput) (ToolResu
 			ToolCallID: call.ID,
 			Name:       ToolNameAskUser,
 			Content:    string(resultJSON),
-			IsError:    false,
+			IsError:    true,
 			Facts:      ToolExecutionFacts{WorkspaceWrite: false},
 		}, err
 	}
@@ -218,3 +240,12 @@ func parseAskUserRequest(raw []byte) (AskUserRequest, error) {
 
 // defaultAskUserTimeout 是 ask_user 等待用户响应的默认超时。
 const defaultAskUserTimeout = 5 * time.Minute
+
+// newAskUserRequestID 为 ask_user 事件生成不可预测 request_id，供 UI 回传时关联请求。
+func newAskUserRequestID() (string, error) {
+	buf := make([]byte, 8)
+	if _, err := rand.Read(buf); err != nil {
+		return "", fmt.Errorf("tools: generate ask_user request id: %w", err)
+	}
+	return "ask-" + hex.EncodeToString(buf), nil
+}

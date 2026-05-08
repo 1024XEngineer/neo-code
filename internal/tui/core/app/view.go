@@ -627,6 +627,10 @@ func (a App) renderPrompt(width int) string {
 		box := a.styles.inputBoxFocused
 		return box.Width(width).Margin(1, 0, 0, 0).Render(a.renderPermissionPrompt())
 	}
+	if a.pendingUserQuestion != nil {
+		box := a.styles.inputBoxFocused
+		return box.Width(width).Margin(1, 0, 0, 0).Render(a.renderUserQuestionPrompt())
+	}
 
 	box := a.styles.inputBox
 	if a.focus == panelInput && a.state.ActivePicker == pickerNone {

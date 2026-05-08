@@ -97,6 +97,74 @@ func TestBrokerResolveUnknownRequest(t *testing.T) {
 	}
 }
 
+func TestBrokerOpenUsesProvidedRequestID(t *testing.T) {
+	t.Parallel()
+
+	broker := NewBroker()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+
+	var returnedID string
+	go func() {
+		defer wg.Done()
+		requestID, _, _ := broker.Open(ctx, Request{
+			RequestID:  "ask-provided",
+			QuestionID: "q1",
+			TimeoutSec: 10,
+		})
+		returnedID = requestID
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+	if err := broker.Resolve("ask-provided", Result{Status: StatusAnswered}); err != nil {
+		t.Fatalf("resolve provided id: %v", err)
+	}
+	wg.Wait()
+	if returnedID != "ask-provided" {
+		t.Fatalf("expected returned id ask-provided, got %q", returnedID)
+	}
+}
+
+func TestBrokerOpenRejectsDuplicateProvidedRequestID(t *testing.T) {
+	t.Parallel()
+
+	broker := NewBroker()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	var firstOpen sync.WaitGroup
+	firstOpen.Add(1)
+	go func() {
+		defer firstOpen.Done()
+		_, _, _ = broker.Open(ctx, Request{
+			RequestID:  "ask-dup",
+			QuestionID: "q1",
+			TimeoutSec: 10,
+		})
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+
+	dupCtx, dupCancel := context.WithTimeout(context.Background(), time.Second)
+	defer dupCancel()
+	_, _, err := broker.Open(dupCtx, Request{
+		RequestID:  "ask-dup",
+		QuestionID: "q2",
+		TimeoutSec: 10,
+	})
+	if err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("expected duplicate request id error, got %v", err)
+	}
+
+	if resolveErr := broker.Resolve("ask-dup", Result{Status: StatusAnswered}); resolveErr != nil {
+		t.Fatalf("resolve original request: %v", resolveErr)
+	}
+	firstOpen.Wait()
+}
+
 func TestBrokerResolveDuplicateIsIdempotent(t *testing.T) {
 	t.Parallel()
 
@@ -210,10 +278,10 @@ func TestTimeoutForRequest(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name     string
-		req      Request
-		wantMin  time.Duration
-		wantMax  time.Duration
+		name    string
+		req     Request
+		wantMin time.Duration
+		wantMax time.Duration
 	}{
 		{
 			name:    "default timeout",
@@ -222,20 +290,20 @@ func TestTimeoutForRequest(t *testing.T) {
 			wantMax: defaultRequestTimeout,
 		},
 		{
-			name: "explicit timeout",
-			req:  Request{TimeoutSec: 60},
+			name:    "explicit timeout",
+			req:     Request{TimeoutSec: 60},
 			wantMin: 60 * time.Second,
 			wantMax: 60 * time.Second,
 		},
 		{
-			name: "capped at max",
-			req:  Request{TimeoutSec: 7200},
+			name:    "capped at max",
+			req:     Request{TimeoutSec: 7200},
 			wantMin: maxRequestTimeout,
 			wantMax: maxRequestTimeout,
 		},
 		{
-			name: "negative is treated as 0",
-			req:  Request{TimeoutSec: -1},
+			name:    "negative is treated as 0",
+			req:     Request{TimeoutSec: -1},
 			wantMin: defaultRequestTimeout,
 			wantMax: defaultRequestTimeout,
 		},

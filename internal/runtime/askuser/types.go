@@ -2,6 +2,7 @@ package askuser
 
 // Request 表示一次 ask_user 的完整请求负载。
 type Request struct {
+	RequestID   string   `json:"request_id,omitempty"`
 	QuestionID  string   `json:"question_id"`
 	Title       string   `json:"title"`
 	Description string   `json:"description"`
@@ -29,9 +30,9 @@ type Result struct {
 
 // ResolveInput 表示一次来自网关的 ask_user 回答。
 type ResolveInput struct {
-	SubjectID string `json:"subject_id,omitempty"`
-	RequestID string `json:"request_id"`
-	Status    string `json:"status"`
+	SubjectID string   `json:"subject_id,omitempty"`
+	RequestID string   `json:"request_id"`
+	Status    string   `json:"status"`
 	Values    []string `json:"values,omitempty"`
 	Message   string   `json:"message,omitempty"`
 }

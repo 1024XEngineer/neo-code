@@ -247,6 +247,23 @@ func (r *RemoteRuntimeAdapter) ResolvePermission(ctx context.Context, input Perm
 	return err
 }
 
+// ResolveUserQuestion 转发 gateway.userQuestionAnswer 请求。
+func (r *RemoteRuntimeAdapter) ResolveUserQuestion(ctx context.Context, input UserQuestionResolutionInput) error {
+	if err := r.authenticate(ctx); err != nil {
+		return err
+	}
+	_, err := r.callFrame(ctx, protocol.MethodGatewayUserQuestionAnswer, protocol.UserQuestionAnswerParams{
+		RequestID: strings.TrimSpace(input.RequestID),
+		Status:    strings.ToLower(strings.TrimSpace(input.Status)),
+		Values:    append([]string(nil), input.Values...),
+		Message:   strings.TrimSpace(input.Message),
+	}, GatewayRPCCallOptions{
+		Timeout: r.timeout,
+		Retries: r.retryCount,
+	})
+	return err
+}
+
 // preloadSession 在 run 之前触发一次 gateway.loadSession，用于会话建档/预热。
 func (r *RemoteRuntimeAdapter) preloadSession(ctx context.Context, sessionID string) error {
 	_, err := r.callFrame(ctx, protocol.MethodGatewayLoadSession, protocol.LoadSessionParams{

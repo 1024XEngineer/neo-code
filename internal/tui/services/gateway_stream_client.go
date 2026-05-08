@@ -191,6 +191,10 @@ func restoreRuntimePayload(eventType EventType, payload any) (any, error) {
 		return decodeRuntimePayload[PermissionRequestPayload](payload)
 	case EventPermissionResolved:
 		return decodeRuntimePayload[PermissionResolvedPayload](payload)
+	case EventUserQuestionRequested:
+		return decodeRuntimePayload[UserQuestionRequestedPayload](payload)
+	case EventUserQuestionAnswered, EventUserQuestionSkipped, EventUserQuestionTimeout:
+		return decodeRuntimePayload[UserQuestionResolvedPayload](payload)
 	case EventCompactApplied:
 		return decodeRuntimePayload[CompactResult](payload)
 	case EventCompactError:

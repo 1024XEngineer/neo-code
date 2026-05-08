@@ -18,6 +18,7 @@ func newAskUserBrokerAdapter(broker *askuser.Broker) *askUserBrokerAdapter {
 
 func (a *askUserBrokerAdapter) Open(ctx context.Context, request tools.AskUserRequest) (string, tools.AskUserResult, error) {
 	req := askuser.Request{
+		RequestID:   request.RequestID,
 		QuestionID:  request.QuestionID,
 		Title:       request.Title,
 		Description: request.Description,

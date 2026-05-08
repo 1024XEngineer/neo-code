@@ -48,6 +48,19 @@ func (s *stubPermissionResolver) ResolvePermission(ctx context.Context, input Pe
 	return s.err
 }
 
+type stubUserQuestionResolver struct {
+	lastInput   UserQuestionResolutionInput
+	err         error
+	deadline    time.Time
+	hasDeadline bool
+}
+
+func (s *stubUserQuestionResolver) ResolveUserQuestion(ctx context.Context, input UserQuestionResolutionInput) error {
+	s.lastInput = input
+	s.deadline, s.hasDeadline = ctx.Deadline()
+	return s.err
+}
+
 type stubSystemToolRunner struct {
 	lastInput SystemToolInput
 	result    tools.ToolResult
@@ -168,6 +181,46 @@ func TestRunResolvePermissionCmd(t *testing.T) {
 	}
 	if !resolver.hasDeadline {
 		t.Fatalf("expected permission resolver context to carry a deadline")
+	}
+}
+
+func TestRunResolveUserQuestionCmd(t *testing.T) {
+	resolver := &stubUserQuestionResolver{err: errors.New("question failed")}
+	input := UserQuestionResolutionInput{
+		RequestID: "ask-1",
+		Status:    "answered",
+		Values:    []string{"A"},
+		Message:   "hello",
+	}
+	msg := RunResolveUserQuestionCmd(
+		resolver,
+		input,
+		func(in UserQuestionResolutionInput, err error) tea.Msg {
+			return struct {
+				Input UserQuestionResolutionInput
+				Err   error
+			}{Input: in, Err: err}
+		},
+	)()
+
+	got, ok := msg.(struct {
+		Input UserQuestionResolutionInput
+		Err   error
+	})
+	if !ok {
+		t.Fatalf("expected wrapped user question result message, got %T %#v", msg, msg)
+	}
+	if got.Input.RequestID != "ask-1" || got.Input.Status != "answered" || got.Input.Message != "hello" {
+		t.Fatalf("unexpected user question input forwarded: %+v", got.Input)
+	}
+	if got.Err == nil || got.Err.Error() != "question failed" {
+		t.Fatalf("expected forwarded user question error, got %#v", got.Err)
+	}
+	if resolver.lastInput.RequestID != "ask-1" || resolver.lastInput.Status != "answered" {
+		t.Fatalf("unexpected resolver input: %+v", resolver.lastInput)
+	}
+	if !resolver.hasDeadline {
+		t.Fatalf("expected user question resolver context to carry a deadline")
 	}
 }
 

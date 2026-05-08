@@ -57,6 +57,8 @@ const (
 	MethodGatewayCheckpointDiff = "checkpoint.diff"
 	// MethodGatewayResolvePermission 表示提交权限审批决策。
 	MethodGatewayResolvePermission = "gateway.resolvePermission"
+	// MethodGatewayUserQuestionAnswer 表示提交 ask_user 回答。
+	MethodGatewayUserQuestionAnswer = "gateway.userQuestionAnswer"
 	// MethodGatewayDeleteSession 表示删除/归档会话。
 	MethodGatewayDeleteSession = "gateway.deleteSession"
 	// MethodGatewayRenameSession 表示重命名会话。
@@ -311,6 +313,14 @@ type CheckpointDiffParams struct {
 type ResolvePermissionParams struct {
 	RequestID string `json:"request_id"`
 	Decision  string `json:"decision"`
+}
+
+// UserQuestionAnswerParams 表示 gateway.userQuestionAnswer 参数。
+type UserQuestionAnswerParams struct {
+	RequestID string   `json:"request_id"`
+	Status    string   `json:"status,omitempty"`
+	Values    []string `json:"values,omitempty"`
+	Message   string   `json:"message,omitempty"`
 }
 
 // DeleteSessionParams 表示 gateway.deleteSession 参数。
@@ -668,6 +678,14 @@ func NormalizeJSONRPCRequest(request JSONRPCRequest) (NormalizedRequest, *JSONRP
 			return normalized, parseErr
 		}
 		normalized.Action = "resolve_permission"
+		normalized.Payload = params
+		return normalized, nil
+	case MethodGatewayUserQuestionAnswer:
+		params, parseErr := decodeUserQuestionAnswerParams(request.Params)
+		if parseErr != nil {
+			return normalized, parseErr
+		}
+		normalized.Action = "user_question_answer"
 		normalized.Payload = params
 		return normalized, nil
 	case MethodGatewayDeleteSession:
@@ -1296,6 +1314,24 @@ func decodeResolvePermissionParams(raw json.RawMessage) (ResolvePermissionParams
 			return NewJSONRPCError(JSONRPCCodeInvalidParams, "invalid field: params.decision", GatewayCodeInvalidAction)
 		}
 		return nil
+	})
+}
+
+// decodeUserQuestionAnswerParams 对 gateway.userQuestionAnswer 的 params 执行反序列化与字段校验。
+func decodeUserQuestionAnswerParams(raw json.RawMessage) (UserQuestionAnswerParams, *JSONRPCError) {
+	return decodeParams(raw, "gateway.userQuestionAnswer", func(p *UserQuestionAnswerParams) *JSONRPCError {
+		p.RequestID = strings.TrimSpace(p.RequestID)
+		p.Status = strings.ToLower(strings.TrimSpace(p.Status))
+		p.Message = strings.TrimSpace(p.Message)
+		if p.RequestID == "" {
+			return NewJSONRPCError(JSONRPCCodeInvalidParams, "missing required field: params.request_id", GatewayCodeMissingRequiredField)
+		}
+		switch p.Status {
+		case "", "answered", "skipped":
+			return nil
+		default:
+			return NewJSONRPCError(JSONRPCCodeInvalidParams, "invalid field: params.status", GatewayCodeInvalidAction)
+		}
 	})
 }
 

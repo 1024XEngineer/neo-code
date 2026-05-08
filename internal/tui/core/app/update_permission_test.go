@@ -21,6 +21,7 @@ import (
 type permissionTestRuntime struct {
 	resolveErr   error
 	lastResolved agentruntime.PermissionResolutionInput
+	lastQuestion agentruntime.UserQuestionResolutionInput
 }
 
 func (r *permissionTestRuntime) PrepareUserInput(ctx context.Context, input agentruntime.PrepareInput) (agentruntime.UserInput, error) {
@@ -51,6 +52,11 @@ func (r *permissionTestRuntime) ExecuteSystemTool(ctx context.Context, input age
 
 func (r *permissionTestRuntime) ResolvePermission(ctx context.Context, input agentruntime.PermissionResolutionInput) error {
 	r.lastResolved = input
+	return r.resolveErr
+}
+
+func (r *permissionTestRuntime) ResolveUserQuestion(ctx context.Context, input agentruntime.UserQuestionResolutionInput) error {
+	r.lastQuestion = input
 	return r.resolveErr
 }
 
