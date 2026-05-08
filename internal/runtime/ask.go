@@ -73,6 +73,11 @@ func (s *Service) Ask(ctx context.Context, input AskInput) error {
 			Workdir: strings.TrimSpace(input.Workdir),
 			Skills:  normalizeAskSkillIDs(input.Skills),
 		}
+	} else {
+		// 后续调用允许更新Skills 激活集
+		if len(input.Skills) > 0 {
+			session.Skills = normalizeAskSkillIDs(input.Skills)
+		}
 	}
 
 	buildResult := agentcontext.BuildAskPrompt(
