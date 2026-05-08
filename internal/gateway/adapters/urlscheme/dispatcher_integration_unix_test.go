@@ -105,6 +105,14 @@ func (s *urlschemeIntegrationRuntimeStub) Run(context.Context, gateway.RunInput)
 	return nil
 }
 
+func (s *urlschemeIntegrationRuntimeStub) Ask(context.Context, gateway.AskInput) error {
+	return nil
+}
+
+func (s *urlschemeIntegrationRuntimeStub) DeleteAskSession(context.Context, gateway.DeleteAskSessionInput) (bool, error) {
+	return true, nil
+}
+
 func (s *urlschemeIntegrationRuntimeStub) Compact(context.Context, gateway.CompactInput) (gateway.CompactResult, error) {
 	return gateway.CompactResult{}, nil
 }

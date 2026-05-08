@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"neo-code/internal/gateway"
+	gatewayauth "neo-code/internal/gateway/auth"
 	gatewayclient "neo-code/internal/gateway/client"
 	"neo-code/internal/gateway/protocol"
 )
@@ -20,6 +21,10 @@ import (
 func TestIDMControllerEnterExitRingBufferLifecycle(t *testing.T) {
 	homeDir := t.TempDir()
 	t.Setenv("HOME", homeDir)
+	authManager, err := gatewayauth.NewManager("")
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
 
 	var (
 		mu                  sync.Mutex
@@ -28,6 +33,7 @@ func TestIDMControllerEnterExitRingBufferLifecycle(t *testing.T) {
 
 	client, err := gatewayclient.NewGatewayRPCClient(gatewayclient.GatewayRPCClientOptions{
 		ListenAddress: "test://gateway",
+		TokenFile:     authManager.Path(),
 		ResolveListenAddress: func(_ string) (string, error) {
 			return "test://gateway", nil
 		},
