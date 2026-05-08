@@ -25,7 +25,7 @@ import (
 
 const (
 	defaultGatewayLogLevel          = "info"
-	defaultGatewayIdleShutdownDelay = 30 * time.Second
+	defaultGatewayIdleShutdownDelay = 5 * time.Minute
 )
 
 var (
