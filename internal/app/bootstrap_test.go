@@ -2017,6 +2017,10 @@ func (s *stubRuntimeForBootstrap) ResolvePermission(context.Context, agentruntim
 	return nil
 }
 
+func (s *stubRuntimeForBootstrap) ResolveUserQuestion(context.Context, agentruntime.UserQuestionResolutionInput) error {
+	return nil
+}
+
 func (s *stubRuntimeForBootstrap) CancelActiveRun() bool {
 	return false
 }

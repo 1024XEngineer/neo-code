@@ -69,6 +69,7 @@ func fullControlPlaneMethods() map[string]struct{} {
 		"checkpoint.undoRestore",
 		"checkpoint.diff",
 		"gateway.resolvePermission",
+		"gateway.user_question_answer",
 		"gateway.deleteSession",
 		"gateway.renameSession",
 		"gateway.listFiles",

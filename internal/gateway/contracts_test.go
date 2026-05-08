@@ -50,6 +50,10 @@ func (s *runtimePortCompileStub) ResolvePermission(_ context.Context, _ Permissi
 	return nil
 }
 
+func (s *runtimePortCompileStub) ResolveUserQuestion(_ context.Context, _ UserQuestionAnswerInput) error {
+	return nil
+}
+
 func (s *runtimePortCompileStub) CancelRun(_ context.Context, _ CancelInput) (bool, error) {
 	return false, nil
 }

@@ -80,6 +80,10 @@ func (p *recordingPort) ResolvePermission(_ context.Context, _ PermissionResolut
 	return nil
 }
 
+func (p *recordingPort) ResolveUserQuestion(_ context.Context, _ UserQuestionAnswerInput) error {
+	return nil
+}
+
 func (p *recordingPort) CancelRun(_ context.Context, _ CancelInput) (bool, error) {
 	p.cancelCalls.Add(1)
 	return true, nil

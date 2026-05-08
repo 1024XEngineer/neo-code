@@ -109,6 +109,10 @@ func (s *runtimeStub) ResolvePermission(_ context.Context, input agentruntime.Pe
 	return s.permissionErr
 }
 
+func (s *runtimeStub) ResolveUserQuestion(_ context.Context, input agentruntime.UserQuestionResolutionInput) error {
+	return nil
+}
+
 func (s *runtimeStub) CancelActiveRun() bool {
 	return s.cancelReturn
 }
@@ -210,6 +214,9 @@ func (r *runtimeWithoutCreator) ExecuteSystemTool(ctx context.Context, input age
 func (r *runtimeWithoutCreator) ResolvePermission(ctx context.Context, input agentruntime.PermissionResolutionInput) error {
 	return r.base.ResolvePermission(ctx, input)
 }
+func (r *runtimeWithoutCreator) ResolveUserQuestion(ctx context.Context, input agentruntime.UserQuestionResolutionInput) error {
+	return r.base.ResolveUserQuestion(ctx, input)
+}
 func (r *runtimeWithoutCreator) CancelActiveRun() bool {
 	return r.base.CancelActiveRun()
 }
@@ -272,6 +279,9 @@ func (r *runtimeWithoutCheckpointer) ExecuteSystemTool(ctx context.Context, inpu
 }
 func (r *runtimeWithoutCheckpointer) ResolvePermission(ctx context.Context, input agentruntime.PermissionResolutionInput) error {
 	return r.base.ResolvePermission(ctx, input)
+}
+func (r *runtimeWithoutCheckpointer) ResolveUserQuestion(ctx context.Context, input agentruntime.UserQuestionResolutionInput) error {
+	return r.base.ResolveUserQuestion(ctx, input)
 }
 func (r *runtimeWithoutCheckpointer) CancelActiveRun() bool {
 	return r.base.CancelActiveRun()

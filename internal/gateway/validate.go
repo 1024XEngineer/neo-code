@@ -88,6 +88,8 @@ func validateRequestFrame(frame MessageFrame) *FrameError {
 		return nil
 	case FrameActionResolvePermission:
 		return validateResolvePermissionFrame(frame)
+	case FrameActionUserQuestionAnswer:
+		return validateUserQuestionAnswerFrame(frame)
 	case FrameActionRestoreCheckpoint,
 		FrameActionCheckpointDiff:
 		if frame.Payload == nil {
@@ -376,6 +378,51 @@ func convertProtocolMCPServer(server protocol.MCPServerParams) config.MCPServerC
 	}
 }
 
+// validateUserQuestionAnswerFrame 校验 user_question_answer 动作所需字段。
+func validateUserQuestionAnswerFrame(frame MessageFrame) *FrameError {
+	if frame.Payload == nil {
+		return NewMissingRequiredFieldError("payload")
+	}
+
+	input, err := decodeUserQuestionAnswerPayload(frame.Payload)
+	if err != nil {
+		return NewFrameError(ErrorCodeInvalidAction, "invalid user_question_answer payload")
+	}
+	if strings.TrimSpace(input.RequestID) == "" {
+		return NewMissingRequiredFieldError("payload.request_id")
+	}
+	status := strings.ToLower(strings.TrimSpace(input.Status))
+	if status != "" && status != "answered" && status != "skipped" {
+		return NewFrameError(ErrorCodeInvalidAction, "invalid user_question_answer status")
+	}
+
+	return nil
+}
+
+// decodeUserQuestionAnswerPayload 将 payload 解析为用户提问回答输入。
+func decodeUserQuestionAnswerPayload(payload any) (UserQuestionAnswerInput, error) {
+	if direct, ok := payload.(UserQuestionAnswerInput); ok {
+		return direct, nil
+	}
+	if ptr, ok := payload.(*UserQuestionAnswerInput); ok {
+		if ptr == nil {
+			return UserQuestionAnswerInput{}, nil
+		}
+		return *ptr, nil
+	}
+
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return UserQuestionAnswerInput{}, err
+	}
+
+	var input UserQuestionAnswerInput
+	if err := json.Unmarshal(raw, &input); err != nil {
+		return UserQuestionAnswerInput{}, err
+	}
+	return input, nil
+}
+
 // isValidPermissionResolutionDecision 判断审批决策是否属于受支持集合。
 func isValidPermissionResolutionDecision(decision PermissionResolutionDecision) bool {
 	switch decision {
@@ -474,7 +521,8 @@ func isValidFrameAction(action FrameAction) bool {
 		FrameActionWorkspaceCreate,
 		FrameActionWorkspaceSwitch,
 		FrameActionWorkspaceRename,
-		FrameActionWorkspaceDelete:
+		FrameActionWorkspaceDelete,
+		FrameActionUserQuestionAnswer:
 		return true
 	default:
 		return false

@@ -52,6 +52,8 @@ const (
 	FrameActionGetRuntimeSnapshot FrameAction = "runtime_snapshot_get"
 	// FrameActionResolvePermission 表示提交一次权限审批决策。
 	FrameActionResolvePermission FrameAction = "resolve_permission"
+	// FrameActionUserQuestionAnswer 表示提交一次 ask_user 回答。
+	FrameActionUserQuestionAnswer FrameAction = "user_question_answer"
 	// FrameActionDeleteSession 表示删除/归档会话。
 	FrameActionDeleteSession FrameAction = "delete_session"
 	// FrameActionRenameSession 表示重命名会话。

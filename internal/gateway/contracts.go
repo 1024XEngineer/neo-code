@@ -409,6 +409,20 @@ type DeleteProviderInput struct {
 	ProviderID string `json:"provider_id"`
 }
 
+// UserQuestionAnswerInput 表示一次 ask_user 回答的输入。
+type UserQuestionAnswerInput struct {
+	// SubjectID 是请求方身份主体标识。
+	SubjectID string `json:"subject_id,omitempty"`
+	// RequestID 是待回答的提问标识。
+	RequestID string `json:"request_id"`
+	// Status 是回答状态：answered / skipped。
+	Status string `json:"status"`
+	// Values 是用户选择的答案值。
+	Values []string `json:"values,omitempty"`
+	// Message 是用户的文本答案。
+	Message string `json:"message,omitempty"`
+}
+
 // SelectProviderModelInput 表示全局选择 provider/model 的输入。
 type SelectProviderModelInput struct {
 	// SubjectID 是请求方身份主体标识。
@@ -658,6 +672,8 @@ type RuntimePort interface {
 	ListAvailableSkills(ctx context.Context, input ListAvailableSkillsInput) ([]AvailableSkillState, error)
 	// ResolvePermission 向运行时提交一次权限审批决策。
 	ResolvePermission(ctx context.Context, input PermissionResolutionInput) error
+	// ResolveUserQuestion 向运行时提交一次 ask_user 回答。
+	ResolveUserQuestion(ctx context.Context, input UserQuestionAnswerInput) error
 	// CancelRun 按 run_id 精确取消运行态任务。
 	CancelRun(ctx context.Context, input CancelInput) (bool, error)
 	// Events 返回统一运行事件流。

@@ -301,16 +301,27 @@ func (m *DefaultManager) ListAvailableSpecs(ctx context.Context, input SpecListI
 	if err != nil {
 		return nil, err
 	}
-	if !input.ReadOnly {
-		return specs, nil
-	}
+	isPlanMode := strings.EqualFold(strings.TrimSpace(input.Mode), "plan")
+
+	// 按模式过滤 plan-only 工具。
 	filtered := make([]providertypes.ToolSpec, 0, len(specs))
 	for _, spec := range specs {
+		if isPlanModeOnlyTool(spec.Name) && !isPlanMode {
+			continue
+		}
+		filtered = append(filtered, spec)
+	}
+
+	if !input.ReadOnly {
+		return filtered, nil
+	}
+	readOnlyFiltered := make([]providertypes.ToolSpec, 0, len(filtered))
+	for _, spec := range filtered {
 		if isReadOnlyVisibleTool(spec.Name) {
-			filtered = append(filtered, spec)
+			readOnlyFiltered = append(readOnlyFiltered, spec)
 		}
 	}
-	return filtered, nil
+	return readOnlyFiltered, nil
 }
 
 // MicroCompactPolicy 返回工具的 micro compact 策略；无法判断时按默认可压缩处理。
@@ -355,6 +366,12 @@ func (m *DefaultManager) Execute(ctx context.Context, input ToolCallInput) (Tool
 	if input.ReadOnly && !isReadOnlyActionAllowed(action) {
 		err := fmt.Errorf("tools: tool %q is not available in read-only mode", strings.TrimSpace(input.Name))
 		result := NewErrorResult(input.Name, "tool blocked in read-only mode", err.Error(), actionMetadata(action))
+		result.ToolCallID = input.ID
+		return result, err
+	}
+	if isPlanModeOnlyTool(input.Name) && !strings.EqualFold(strings.TrimSpace(input.Mode), "plan") {
+		err := fmt.Errorf("tools: %s", errAskUserNotAvailableInCurrentMode)
+		result := NewErrorResult(input.Name, "tool blocked in current mode", err.Error(), actionMetadata(action))
 		result.ToolCallID = input.ID
 		return result, err
 	}

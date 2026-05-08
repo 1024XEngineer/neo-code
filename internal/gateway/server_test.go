@@ -408,6 +408,10 @@ func (s *runtimePortEventStub) ResolvePermission(_ context.Context, _ Permission
 	return nil
 }
 
+func (s *runtimePortEventStub) ResolveUserQuestion(_ context.Context, _ UserQuestionAnswerInput) error {
+	return nil
+}
+
 func (s *runtimePortEventStub) CancelRun(_ context.Context, _ CancelInput) (bool, error) {
 	return false, nil
 }
