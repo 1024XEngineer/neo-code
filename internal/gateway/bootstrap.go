@@ -179,6 +179,7 @@ func handleAskFrame(ctx context.Context, frame MessageFrame, runtimePort Runtime
 	callCtx, cancel := withRuntimeOperationTimeout(askExecutionContext)
 	frameSnapshot := frame
 	inputSnapshot := input
+	relay, relayExists := StreamRelayFromContext(ctx)
 	go func() {
 		defer cancel()
 		if err := runtimePort.Ask(callCtx, inputSnapshot); err != nil {
@@ -191,6 +192,33 @@ func handleAskFrame(ctx context.Context, frame MessageFrame, runtimePort Runtime
 					strings.TrimSpace(failedFrame.Error.Code),
 					strings.TrimSpace(failedFrame.Error.Message),
 				)
+			}
+			if relayExists && relay != nil {
+				errorCode := "INTERNAL_ERROR"
+				errorMessage := "ask failed"
+				if failedFrame.Error != nil {
+					if normalizedCode := strings.ToUpper(strings.TrimSpace(failedFrame.Error.Code)); normalizedCode != "" {
+						errorCode = normalizedCode
+					}
+					if normalizedMessage := strings.TrimSpace(failedFrame.Error.Message); normalizedMessage != "" {
+						errorMessage = normalizedMessage
+					}
+				}
+				fallbackSessionID := strings.TrimSpace(frameSnapshot.SessionID)
+				if fallbackSessionID == "" {
+					fallbackSessionID = strings.TrimSpace(inputSnapshot.SessionID)
+				}
+				if fallbackSessionID != "" {
+					relay.PublishRuntimeEvent(RuntimeEvent{
+						Type:      RuntimeEventTypeAskError,
+						SessionID: fallbackSessionID,
+						RunID:     strings.TrimSpace(frameSnapshot.RunID),
+						Payload: map[string]any{
+							"code":    errorCode,
+							"message": errorMessage,
+						},
+					})
+				}
 			}
 		}
 	}()

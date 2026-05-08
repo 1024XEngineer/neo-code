@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1033,49 +1033,22 @@ func (b *gatewayRuntimePortBridge) convertAskRuntimeEvent(event agentruntime.Run
 	if runID == "" {
 		return gateway.RuntimeEvent{}, false
 	}
-	runState, exists := b.lookupAskRun(runID)
-	if !exists {
-		return gateway.RuntimeEvent{}, false
-	}
-	sessionID := strings.TrimSpace(runState.SessionID)
 	payloadMap := normalizeAskPayloadMap(event.Payload)
 
-	switch event.Type {
-	case agentruntime.EventAgentChunk:
-		delta := strings.TrimSpace(readStringValueFromMap(payloadMap, "delta"))
-		if delta == "" {
-			delta = strings.TrimSpace(extractAskPayloadText(event.Payload))
-		}
-		if delta == "" {
+	if event.Type == agentruntime.EventError || event.Type == agentruntime.EventRunCanceled {
+		runState, exists := b.lookupAskRun(runID)
+		if !exists && !strings.HasPrefix(runID, bridgeAskRunPrefix+"-") {
 			return gateway.RuntimeEvent{}, false
 		}
-		return gateway.RuntimeEvent{
-			Type:      gateway.RuntimeEventTypeAskChunk,
-			RunID:     runID,
-			SessionID: sessionID,
-			Payload: map[string]any{
-				"delta": delta,
-			},
-		}, true
-	case agentruntime.EventAgentDone:
-		fullResponse := strings.TrimSpace(readStringValueFromMap(payloadMap, "full_response"))
-		if fullResponse == "" {
-			fullResponse = strings.TrimSpace(extractAskPayloadText(event.Payload))
+		sessionID := strings.TrimSpace(event.SessionID)
+		if sessionID == "" {
+			if exists {
+				sessionID = strings.TrimSpace(runState.SessionID)
+			}
 		}
-		compacted := readBoolValueFromMap(payloadMap, "compacted")
-		usage := readUsagePayload(payloadMap)
-		b.completeAskRun(runID)
-		return gateway.RuntimeEvent{
-			Type:      gateway.RuntimeEventTypeAskDone,
-			RunID:     runID,
-			SessionID: sessionID,
-			Payload: map[string]any{
-				"full_response": fullResponse,
-				"compacted":     compacted,
-				"usage":         usage,
-			},
-		}, true
-	case agentruntime.EventError, agentruntime.EventRunCanceled:
+		if sessionID == "" {
+			return gateway.RuntimeEvent{}, false
+		}
 		code := normalizeAskErrorCode(readStringValueFromMap(payloadMap, "code"), event.Type)
 		message := strings.TrimSpace(readStringValueFromMap(payloadMap, "message"))
 		if message == "" {
@@ -1092,6 +1065,49 @@ func (b *gatewayRuntimePortBridge) convertAskRuntimeEvent(event agentruntime.Run
 			Payload: map[string]any{
 				"code":    code,
 				"message": message,
+			},
+		}, true
+	}
+
+	runState, exists := b.lookupAskRun(runID)
+	if !exists {
+		return gateway.RuntimeEvent{}, false
+	}
+	sessionID := strings.TrimSpace(runState.SessionID)
+
+	switch event.Type {
+	case agentruntime.EventAgentChunk:
+		delta := readRawStringValueFromMap(payloadMap, "delta")
+		if delta == "" {
+			delta = extractAskPayloadText(event.Payload)
+		}
+		if delta == "" {
+			return gateway.RuntimeEvent{}, false
+		}
+		return gateway.RuntimeEvent{
+			Type:      gateway.RuntimeEventTypeAskChunk,
+			RunID:     runID,
+			SessionID: sessionID,
+			Payload: map[string]any{
+				"delta": delta,
+			},
+		}, true
+	case agentruntime.EventAgentDone:
+		fullResponse := readRawStringValueFromMap(payloadMap, "full_response")
+		if fullResponse == "" {
+			fullResponse = extractAskPayloadText(event.Payload)
+		}
+		compacted := readBoolValueFromMap(payloadMap, "compacted")
+		usage := readUsagePayload(payloadMap)
+		b.completeAskRun(runID)
+		return gateway.RuntimeEvent{
+			Type:      gateway.RuntimeEventTypeAskDone,
+			RunID:     runID,
+			SessionID: sessionID,
+			Payload: map[string]any{
+				"full_response": fullResponse,
+				"compacted":     compacted,
+				"usage":         usage,
 			},
 		}, true
 	default:
@@ -1215,19 +1231,19 @@ func extractAskPayloadText(payload any) string {
 	case nil:
 		return ""
 	case string:
-		return strings.TrimSpace(typed)
+		return typed
 	case fmt.Stringer:
-		return strings.TrimSpace(typed.String())
+		return typed.String()
 	case map[string]any:
 		return extractAskPayloadTextFromMap(typed)
 	default:
 		encoded, err := json.Marshal(typed)
 		if err != nil {
-			return strings.TrimSpace(fmt.Sprint(typed))
+			return fmt.Sprint(typed)
 		}
 		decoded := make(map[string]any)
 		if err := json.Unmarshal(encoded, &decoded); err != nil {
-			return strings.TrimSpace(fmt.Sprint(typed))
+			return fmt.Sprint(typed)
 		}
 		return extractAskPayloadTextFromMap(decoded)
 	}
@@ -1243,7 +1259,7 @@ func extractAskPayloadTextFromMap(payload map[string]any) string {
 		if !exists || rawValue == nil {
 			continue
 		}
-		text := strings.TrimSpace(fmt.Sprint(rawValue))
+		text := fmt.Sprint(rawValue)
 		if text != "" {
 			return text
 		}
@@ -1281,6 +1297,21 @@ func readStringValueFromMap(container map[string]any, key string) string {
 		return ""
 	}
 	return strings.TrimSpace(fmt.Sprint(raw))
+}
+
+// readRawStringValueFromMap 读取 map 字符串字段并保留首尾空白，避免 Ask 流式片段丢失换行和空格。
+func readRawStringValueFromMap(container map[string]any, key string) string {
+	if len(container) == 0 {
+		return ""
+	}
+	raw, exists := container[strings.TrimSpace(key)]
+	if !exists || raw == nil {
+		return ""
+	}
+	if typed, ok := raw.(string); ok {
+		return typed
+	}
+	return fmt.Sprint(raw)
 }
 
 // readBoolValueFromMap 安全读取 map 中的布尔字段。

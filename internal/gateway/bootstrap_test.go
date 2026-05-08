@@ -3,7 +3,9 @@ package gateway
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"strings"
 	"testing"
@@ -1045,6 +1047,100 @@ func TestDispatchRequestFrameUnsupportedAction(t *testing.T) {
 	}
 	if response.Error == nil || response.Error.Code != ErrorCodeUnsupportedAction.String() {
 		t.Fatalf("error = %#v, want code %q", response.Error, ErrorCodeUnsupportedAction.String())
+	}
+}
+
+func TestHandleAskFramePublishesFallbackAskErrorEvent(t *testing.T) {
+	relay := NewStreamRelay(StreamRelayOptions{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	connectionID := NewConnectionID()
+	messageCh := make(chan RelayMessage, 2)
+	connectionCtx := WithConnectionID(ctx, connectionID)
+	connectionCtx = WithStreamRelay(connectionCtx, relay)
+	authState := NewConnectionAuthState()
+	authState.MarkAuthenticated("subject-1")
+	connectionCtx = WithConnectionAuthState(connectionCtx, authState)
+	if err := relay.RegisterConnection(ConnectionRegistration{
+		ConnectionID: connectionID,
+		Channel:      StreamChannelWS,
+		Context:      connectionCtx,
+		Cancel:       cancel,
+		Write: func(message RelayMessage) error {
+			messageCh <- message
+			return nil
+		},
+		Close: func() {},
+	}); err != nil {
+		t.Fatalf("register connection: %v", err)
+	}
+	defer relay.dropConnection(connectionID)
+
+	if bindErr := relay.BindConnection(connectionID, StreamBinding{
+		SessionID: "ask-session-1",
+		Channel:   StreamChannelAll,
+		Explicit:  true,
+	}); bindErr != nil {
+		t.Fatalf("bind connection: %v", bindErr)
+	}
+
+	runtime := &bootstrapRuntimeStub{
+		askFn: func(_ context.Context, _ AskInput) error {
+			return errors.New("provider rate limited")
+		},
+	}
+	response := dispatchRequestFrame(connectionCtx, MessageFrame{
+		Type:      FrameTypeRequest,
+		Action:    FrameActionAsk,
+		RequestID: "req-ask-fallback",
+		Payload: protocol.AskParams{
+			SessionID: "ask-session-1",
+			UserQuery: "why failed",
+		},
+	}, runtime)
+	if response.Type != FrameTypeAck {
+		t.Fatalf("response type = %q, want %q", response.Type, FrameTypeAck)
+	}
+
+	var notification protocol.JSONRPCNotification
+	select {
+	case message := <-messageCh:
+		payload, ok := message.Payload.(protocol.JSONRPCNotification)
+		if !ok {
+			t.Fatalf("message payload type = %T, want protocol.JSONRPCNotification", message.Payload)
+		}
+		notification = payload
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected fallback ask_error event")
+	}
+	if notification.Method != protocol.MethodGatewayEvent {
+		t.Fatalf("notification method = %q, want %q", notification.Method, protocol.MethodGatewayEvent)
+	}
+
+	eventFrame, ok := notification.Params.(MessageFrame)
+	if !ok {
+		raw, err := json.Marshal(notification.Params)
+		if err != nil {
+			t.Fatalf("json.Marshal(notification.Params) error = %v", err)
+		}
+		if err := json.Unmarshal(raw, &eventFrame); err != nil {
+			t.Fatalf("json.Unmarshal(notification.Params) error = %v", err)
+		}
+	}
+	if eventFrame.Type != FrameTypeEvent {
+		t.Fatalf("event frame type = %q, want %q", eventFrame.Type, FrameTypeEvent)
+	}
+	if eventFrame.SessionID != "ask-session-1" {
+		t.Fatalf("event session_id = %q, want %q", eventFrame.SessionID, "ask-session-1")
+	}
+
+	payloadMap, ok := eventFrame.Payload.(map[string]any)
+	if !ok {
+		t.Fatalf("event payload type = %T, want map[string]any", eventFrame.Payload)
+	}
+	if strings.TrimSpace(fmt.Sprint(payloadMap["event_type"])) != string(RuntimeEventTypeAskError) {
+		t.Fatalf("event_type = %#v, want %q", payloadMap["event_type"], RuntimeEventTypeAskError)
 	}
 }
 
