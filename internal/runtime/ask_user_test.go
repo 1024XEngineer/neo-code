@@ -172,6 +172,61 @@ func TestResolveUserQuestionSkip(t *testing.T) {
 	}
 }
 
+func TestResolveUserQuestionDefaultsStatusAndTrimsMessage(t *testing.T) {
+	t.Parallel()
+
+	service := NewWithFactory(
+		newRuntimeConfigManager(t),
+		&stubToolManager{},
+		newMemoryStore(),
+		&scriptedProviderFactory{provider: &scriptedProvider{}},
+		nil,
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	var openResult askuser.Result
+	var openErr error
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		_, openResult, openErr = service.askUserBroker.Open(ctx, askuser.Request{
+			QuestionID: "q1",
+			TimeoutSec: 10,
+		})
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+
+	ids := service.askUserBroker.PendingIDs()
+	if len(ids) != 1 {
+		t.Fatalf("expected 1 pending request, got %d", len(ids))
+	}
+
+	resolveErr := service.ResolveUserQuestion(context.Background(), UserQuestionResolutionInput{
+		RequestID: ids[0],
+		Message:   "  keep this trimmed  ",
+	})
+	if resolveErr != nil {
+		t.Fatalf("ResolveUserQuestion default status error: %v", resolveErr)
+	}
+
+	wg.Wait()
+
+	if openErr != nil {
+		t.Fatalf("broker Open error: %v", openErr)
+	}
+	if openResult.Status != askuser.StatusAnswered {
+		t.Fatalf("expected default answered status, got %q", openResult.Status)
+	}
+	if openResult.Message != "keep this trimmed" {
+		t.Fatalf("expected trimmed message, got %q", openResult.Message)
+	}
+}
+
 func TestResolveUserQuestionContextCanceled(t *testing.T) {
 	t.Parallel()
 
@@ -192,6 +247,24 @@ func TestResolveUserQuestionContextCanceled(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "canceled") {
 		t.Fatalf("expected context canceled error, got %v", err)
+	}
+}
+
+func TestEventTypeFromAskUserEvent(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]EventType{
+		"user_question_requested": EventUserQuestionRequested,
+		"user_question_answered":  EventUserQuestionAnswered,
+		"user_question_skipped":   EventUserQuestionSkipped,
+		"user_question_timeout":   EventUserQuestionTimeout,
+		"unknown":                 EventError,
+	}
+
+	for name, want := range tests {
+		if got := eventTypeFromAskUserEvent(name); got != want {
+			t.Fatalf("eventTypeFromAskUserEvent(%q) = %q, want %q", name, got, want)
+		}
 	}
 }
 
@@ -254,4 +327,39 @@ func TestAskUserBrokerAdapterConversion(t *testing.T) {
 	}
 
 	wg.Wait()
+}
+
+func TestAskUserBrokerAdapterErrorAndOptionConversion(t *testing.T) {
+	t.Parallel()
+
+	broker := askuser.NewBroker()
+	adapter := newAskUserBrokerAdapter(broker)
+
+	if got := convertAskUserOptions(nil); got != nil {
+		t.Fatalf("expected nil options conversion, got %#v", got)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	requestID, result, err := adapter.Open(ctx, tools.AskUserRequest{
+		QuestionID: "adapter-q2",
+		Title:      "Choose",
+		Kind:       "single_choice",
+		Options: []tools.AskUserOption{
+			{Label: "A", Description: "first"},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected adapter Open error when context is canceled")
+	}
+	if !strings.Contains(err.Error(), "canceled") {
+		t.Fatalf("expected canceled error, got %v", err)
+	}
+	if requestID == "" {
+		t.Fatal("expected generated request_id on canceled adapter Open")
+	}
+	if result.Status != askuser.StatusTimeout {
+		t.Fatalf("expected timeout status on canceled adapter Open, got %q", result.Status)
+	}
 }

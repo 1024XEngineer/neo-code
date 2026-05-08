@@ -2087,6 +2087,10 @@ func (s *stubRemoteRuntimeForBootstrap) ResolvePermission(context.Context, servi
 	return nil
 }
 
+func (s *stubRemoteRuntimeForBootstrap) ResolveUserQuestion(context.Context, services.UserQuestionResolutionInput) error {
+	return nil
+}
+
 func (s *stubRemoteRuntimeForBootstrap) CancelActiveRun() bool {
 	return false
 }

@@ -6,6 +6,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"neo-code/internal/security"
 )
 
 // stubAskUserBroker implements AskUserBroker for tests.
@@ -479,5 +481,31 @@ func TestAskUserToolVisibleInReadOnlyMode(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("expected ask_user to be visible in read-only plan mode")
+	}
+}
+
+func TestIsReadOnlyActionAllowedIncludesInteractionAndTodoWrite(t *testing.T) {
+	t.Parallel()
+
+	if !isReadOnlyActionAllowed(security.Action{Type: security.ActionTypeInteraction}) {
+		t.Fatal("expected interaction action to be allowed in read-only mode")
+	}
+
+	if !isReadOnlyActionAllowed(security.Action{
+		Type: security.ActionTypeWrite,
+		Payload: security.ActionPayload{
+			Operation: "  " + ToolNameTodoWrite + "  ",
+		},
+	}) {
+		t.Fatal("expected todo_write action to be allowed in read-only mode")
+	}
+
+	if isReadOnlyActionAllowed(security.Action{
+		Type: security.ActionTypeWrite,
+		Payload: security.ActionPayload{
+			Operation: ToolNameBash,
+		},
+	}) {
+		t.Fatal("expected non-todo write action to be blocked in read-only mode")
 	}
 }

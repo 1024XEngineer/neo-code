@@ -137,3 +137,46 @@ func TestValidateResolvePermissionInvalidPayloadType(t *testing.T) {
 		t.Fatalf("error code = %q, want %q", err.Code, ErrorCodeInvalidAction.String())
 	}
 }
+
+func TestDecodeUserQuestionAnswerPayloadAdditionalBranches(t *testing.T) {
+	t.Parallel()
+
+	t.Run("direct struct", func(t *testing.T) {
+		input, err := decodeUserQuestionAnswerPayload(UserQuestionAnswerInput{
+			RequestID: "ask-1",
+			Status:    "answered",
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if input.RequestID != "ask-1" {
+			t.Fatalf("request id = %q, want ask-1", input.RequestID)
+		}
+	})
+
+	t.Run("nil pointer", func(t *testing.T) {
+		var input *UserQuestionAnswerInput
+		decoded, err := decodeUserQuestionAnswerPayload(input)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if decoded.RequestID != "" || decoded.Status != "" {
+			t.Fatalf("expected zero value from nil pointer, got %#v", decoded)
+		}
+	})
+
+	t.Run("marshal error", func(t *testing.T) {
+		payload := map[string]any{"bad": func() {}}
+		_, err := decodeUserQuestionAnswerPayload(payload)
+		if err == nil {
+			t.Fatal("expected marshal error")
+		}
+	})
+
+	t.Run("unmarshal error", func(t *testing.T) {
+		_, err := decodeUserQuestionAnswerPayload([]byte("not-json-object"))
+		if err == nil {
+			t.Fatal("expected unmarshal error")
+		}
+	})
+}
