@@ -2211,6 +2211,161 @@ func TestGatewayRuntimePortBridgeSelectProviderModelSelectError(t *testing.T) {
 	}
 }
 
+func TestGatewayRuntimePortBridgeSelectProviderModelSyncsWorkspaceSessions(t *testing.T) {
+	updated := make([]agentsession.UpdateSessionStateInput, 0)
+	store := &bridgeSessionStoreWithLoader{
+		bridgeSessionStoreStub: bridgeSessionStoreStub{
+			updateFn: func(_ context.Context, input agentsession.UpdateSessionStateInput) error {
+				updated = append(updated, input)
+				return nil
+			},
+		},
+		session: agentsession.Session{
+			ID:       "session-1",
+			Title:    "Session 1",
+			Provider: "openai",
+			Model:    "gpt-4.1",
+		},
+	}
+	ps := &providerSelectionStub{
+		selectRes: configstate.Selection{ProviderID: "gemini", ModelID: "gemini-2.5-pro"},
+	}
+	stub := &runtimeStub{
+		eventsCh: make(chan agentruntime.RuntimeEvent, 1),
+		sessionList: []agentsession.Summary{
+			{ID: "session-1", Title: "Session 1"},
+			{ID: "session-2", Title: "Session 2"},
+		},
+	}
+	bridge, _ := newGatewayRuntimePortBridge(context.Background(), stub, store, nil, ps)
+	defer bridge.Close()
+
+	result, err := bridge.SelectProviderModel(context.Background(), gateway.SelectProviderModelInput{
+		SubjectID:  testBridgeSubjectID,
+		ProviderID: "gemini",
+	})
+	if err != nil {
+		t.Fatalf("SelectProviderModel() error = %v", err)
+	}
+	if result.ProviderID != "gemini" || result.ModelID != "gemini-2.5-pro" {
+		t.Fatalf("result = %+v, want gemini/gemini-2.5-pro", result)
+	}
+	if len(updated) != 2 {
+		t.Fatalf("updated len = %d, want 2", len(updated))
+	}
+	for _, input := range updated {
+		if input.Head.Provider != "gemini" || input.Head.Model != "gemini-2.5-pro" {
+			t.Fatalf("updated head = %+v, want gemini/gemini-2.5-pro", input.Head)
+		}
+	}
+}
+
+func TestGatewayRuntimePortBridgeSelectProviderModelWithExplicitModelSyncsWorkspaceSessions(t *testing.T) {
+	updated := make([]agentsession.UpdateSessionStateInput, 0)
+	store := &bridgeSessionStoreWithLoader{
+		bridgeSessionStoreStub: bridgeSessionStoreStub{
+			updateFn: func(_ context.Context, input agentsession.UpdateSessionStateInput) error {
+				updated = append(updated, input)
+				return nil
+			},
+		},
+		session: agentsession.Session{
+			ID:       "session-1",
+			Title:    "Session 1",
+			Provider: "openai",
+			Model:    "gpt-4.1",
+		},
+	}
+	ps := &providerSelectionStub{
+		selectRes:   configstate.Selection{ProviderID: "openai", ModelID: "gpt-4.1"},
+		setModelRes: configstate.Selection{ProviderID: "openai", ModelID: "gpt-4o"},
+	}
+	stub := &runtimeStub{
+		eventsCh: make(chan agentruntime.RuntimeEvent, 1),
+		sessionList: []agentsession.Summary{
+			{ID: "session-1", Title: "Session 1"},
+		},
+	}
+	bridge, _ := newGatewayRuntimePortBridge(context.Background(), stub, store, nil, ps)
+	defer bridge.Close()
+
+	result, err := bridge.SelectProviderModel(context.Background(), gateway.SelectProviderModelInput{
+		SubjectID:  testBridgeSubjectID,
+		ProviderID: "openai",
+		ModelID:    "gpt-4o",
+	})
+	if err != nil {
+		t.Fatalf("SelectProviderModel() error = %v", err)
+	}
+	if result.ProviderID != "openai" || result.ModelID != "gpt-4o" {
+		t.Fatalf("result = %+v, want openai/gpt-4o", result)
+	}
+	if len(updated) != 1 {
+		t.Fatalf("updated len = %d, want 1", len(updated))
+	}
+	if updated[0].Head.Provider != "openai" || updated[0].Head.Model != "gpt-4o" {
+		t.Fatalf("updated head = %+v, want openai/gpt-4o", updated[0].Head)
+	}
+}
+
+func TestGatewayRuntimePortBridgeSelectProviderModelSyncWorkspaceLoadError(t *testing.T) {
+	store := &bridgeSessionStoreWithLoader{loadErr: errors.New("load failed")}
+	ps := &providerSelectionStub{
+		selectRes: configstate.Selection{ProviderID: "gemini", ModelID: "gemini-2.5-pro"},
+	}
+	stub := &runtimeStub{
+		eventsCh: make(chan agentruntime.RuntimeEvent, 1),
+		sessionList: []agentsession.Summary{
+			{ID: "session-1", Title: "Session 1"},
+		},
+	}
+	bridge, _ := newGatewayRuntimePortBridge(context.Background(), stub, store, nil, ps)
+	defer bridge.Close()
+
+	_, err := bridge.SelectProviderModel(context.Background(), gateway.SelectProviderModelInput{
+		SubjectID:  testBridgeSubjectID,
+		ProviderID: "gemini",
+	})
+	if err == nil || err.Error() != "load failed" {
+		t.Fatalf("expected load failed, got %v", err)
+	}
+}
+
+func TestGatewayRuntimePortBridgeSelectProviderModelSyncWorkspaceUpdateError(t *testing.T) {
+	store := &bridgeSessionStoreWithLoader{
+		bridgeSessionStoreStub: bridgeSessionStoreStub{
+			updateFn: func(_ context.Context, _ agentsession.UpdateSessionStateInput) error {
+				return errors.New("update failed")
+			},
+		},
+		session: agentsession.Session{
+			ID:       "session-1",
+			Title:    "Session 1",
+			Provider: "openai",
+			Model:    "gpt-4.1",
+		},
+	}
+	ps := &providerSelectionStub{
+		selectRes: configstate.Selection{ProviderID: "gemini", ModelID: "gemini-2.5-pro"},
+	}
+	stub := &runtimeStub{
+		eventsCh: make(chan agentruntime.RuntimeEvent, 1),
+		sessionList: []agentsession.Summary{
+			{ID: "session-1", Title: "Session 1"},
+		},
+	}
+	bridge, _ := newGatewayRuntimePortBridge(context.Background(), stub, store, nil, ps)
+	defer bridge.Close()
+
+	_, err := bridge.SelectProviderModel(context.Background(), gateway.SelectProviderModelInput{
+		SubjectID:  testBridgeSubjectID,
+		ProviderID: "gemini",
+	})
+	if err == nil || err.Error() != "update failed" {
+		t.Fatalf("expected update failed, got %v", err)
+	}
+}
+
 // ---- UpsertMCPServer ----
 
 func TestGatewayRuntimePortBridgeUpsertMCPServerNilConfigManager(t *testing.T) {

@@ -1040,6 +1040,9 @@ func (b *gatewayRuntimePortBridge) SelectProviderModel(ctx context.Context, inpu
 			return gateway.ProviderSelectionResult{}, err
 		}
 	}
+	if err := b.SyncSessionsProviderModel(ctx, selection.ProviderID, selection.ModelID); err != nil {
+		return gateway.ProviderSelectionResult{}, err
+	}
 	return gateway.ProviderSelectionResult{ProviderID: selection.ProviderID, ModelID: selection.ModelID}, nil
 }
 
@@ -1948,6 +1951,52 @@ func (b *gatewayRuntimePortBridge) loadStoredSession(ctx context.Context, sessio
 		return agentsession.Session{}, fmt.Errorf("gateway runtime bridge: session store does not support load session")
 	}
 	return loader.LoadSession(ctx, strings.TrimSpace(sessionID))
+}
+
+// SyncSessionsProviderModel 将当前工作区已列出的会话统一切换到新的 provider/model，避免全局切换后会话元数据继续滞留旧值。
+func (b *gatewayRuntimePortBridge) SyncSessionsProviderModel(
+	ctx context.Context,
+	providerID string,
+	modelID string,
+) error {
+	if b == nil || b.sessionStore == nil || b.runtime == nil {
+		return nil
+	}
+	providerID = strings.TrimSpace(providerID)
+	modelID = strings.TrimSpace(modelID)
+	if providerID == "" || modelID == "" {
+		return nil
+	}
+
+	summaries, err := b.runtime.ListSessions(ctx)
+	if err != nil {
+		return err
+	}
+	for _, summary := range summaries {
+		sessionID := strings.TrimSpace(summary.ID)
+		if sessionID == "" {
+			continue
+		}
+		session, loadErr := b.loadStoredSession(ctx, sessionID)
+		if loadErr != nil {
+			if errors.Is(loadErr, agentsession.ErrSessionNotFound) {
+				continue
+			}
+			return loadErr
+		}
+		head := session.HeadSnapshot()
+		head.Provider = providerID
+		head.Model = modelID
+		if updateErr := b.sessionStore.UpdateSessionState(ctx, agentsession.UpdateSessionStateInput{
+			SessionID: session.ID,
+			Title:     session.Title,
+			UpdatedAt: time.Now().UTC(),
+			Head:      head,
+		}); updateErr != nil {
+			return updateErr
+		}
+	}
+	return nil
 }
 
 // resolveSafeListFilesPath 将前端传入的相对路径限制在根目录内。

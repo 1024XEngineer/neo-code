@@ -560,6 +560,26 @@ func (m *MultiWorkspaceRuntime) syncAllWorkspaceMCP() {
 	}
 }
 
+// syncAllWorkspaceSessionsProviderModel 将全局 provider/model 选择同步到所有已加载工作区的会话元数据，
+// 避免非管理端口对应工作区的会话滞留旧值，导致 listModels 解析到过期 provider/model。
+func (m *MultiWorkspaceRuntime) syncAllWorkspaceSessionsProviderModel(ctx context.Context, providerID, modelID string) {
+	m.mu.RLock()
+	bundles := make([]*workspaceBundle, 0, len(m.bundles))
+	for _, b := range m.bundles {
+		bundles = append(bundles, b)
+	}
+	m.mu.RUnlock()
+
+	for _, b := range bundles {
+		type sessionSyncer interface {
+			SyncSessionsProviderModel(ctx context.Context, providerID, modelID string) error
+		}
+		if syncer, ok := b.port.(sessionSyncer); ok {
+			_ = syncer.SyncSessionsProviderModel(ctx, providerID, modelID)
+		}
+	}
+}
+
 // ---- ManagementRuntimePort implementation ----
 
 func (m *MultiWorkspaceRuntime) ListProviders(ctx context.Context, input ListProvidersInput) ([]ProviderOption, error) {
@@ -580,6 +600,7 @@ func (m *MultiWorkspaceRuntime) CreateProvider(ctx context.Context, input Create
 		return ProviderSelectionResult{}, err
 	}
 	m.syncAllWorkspaceConfigs(ctx)
+	m.syncAllWorkspaceSessionsProviderModel(ctx, result.ProviderID, result.ModelID)
 	return result, nil
 }
 
@@ -605,6 +626,7 @@ func (m *MultiWorkspaceRuntime) SelectProviderModel(ctx context.Context, input S
 		return ProviderSelectionResult{}, err
 	}
 	m.syncAllWorkspaceConfigs(ctx)
+	m.syncAllWorkspaceSessionsProviderModel(ctx, result.ProviderID, result.ModelID)
 	return result, nil
 }
 
