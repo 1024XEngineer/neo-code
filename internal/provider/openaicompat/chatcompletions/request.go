@@ -84,8 +84,6 @@ func BuildRequest(ctx context.Context, cfg provider.RuntimeConfig, req providert
 	if tc := req.ThinkingConfig; tc != nil {
 		if tc.Enabled && tc.Effort != "" {
 			payload.ReasoningEffort = tc.Effort
-		} else if !tc.Enabled {
-			payload.ReasoningEffort = "none"
 		}
 	}
 
