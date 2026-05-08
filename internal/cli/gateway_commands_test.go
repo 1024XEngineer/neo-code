@@ -2,6 +2,7 @@ package cli
 
 import (
 	"testing"
+	"time"
 
 	"github.com/spf13/cobra"
 )
@@ -66,4 +67,11 @@ func TestMustReadInheritedWorkdir(t *testing.T) {
 			t.Fatalf("mustReadInheritedWorkdir(cmd) = %q, want /tmp/project", got)
 		}
 	})
+}
+
+func TestNewGatewayIdleShutdownControllerUsesExpectedDefaultTimeout(t *testing.T) {
+	controller := newGatewayIdleShutdownController(nil, nil)
+	if controller.idleTimeout != 5*time.Minute {
+		t.Fatalf("idleTimeout = %v, want %v", controller.idleTimeout, 5*time.Minute)
+	}
 }
