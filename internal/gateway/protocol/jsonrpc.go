@@ -303,6 +303,8 @@ type UndoRestoreParams struct {
 type CheckpointDiffParams struct {
 	SessionID    string `json:"session_id"`
 	CheckpointID string `json:"checkpoint_id,omitempty"`
+	Scope        string `json:"scope,omitempty"`  // 可选，"run" 表示 run 级聚合 diff
+	RunID        string `json:"run_id,omitempty"` // scope=run 时必需
 }
 
 // ResolvePermissionParams 表示 gateway.resolvePermission 参数。
@@ -952,8 +954,13 @@ func decodeCheckpointDiffParams(raw json.RawMessage) (CheckpointDiffParams, *JSO
 	return decodeParams(raw, "checkpoint.diff", func(p *CheckpointDiffParams) *JSONRPCError {
 		p.SessionID = strings.TrimSpace(p.SessionID)
 		p.CheckpointID = strings.TrimSpace(p.CheckpointID)
+		p.Scope = strings.TrimSpace(p.Scope)
+		p.RunID = strings.TrimSpace(p.RunID)
 		if p.SessionID == "" {
 			return NewJSONRPCError(JSONRPCCodeInvalidParams, "missing required field: params.session_id", GatewayCodeMissingRequiredField)
+		}
+		if p.Scope == "run" && p.RunID == "" {
+			return NewJSONRPCError(JSONRPCCodeInvalidParams, "missing required field: params.run_id (required when scope=run)", GatewayCodeMissingRequiredField)
 		}
 		return nil
 	})
