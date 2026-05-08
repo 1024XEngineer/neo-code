@@ -111,15 +111,35 @@ type GatewayClient interface {
 // Messenger 定义飞书消息发送器接口，便于测试替换。
 type Messenger interface {
 	SendText(ctx context.Context, chatID string, text string) error
-	SendPermissionCard(ctx context.Context, chatID string, payload PermissionCardPayload) error
+	SendPermissionCard(ctx context.Context, chatID string, payload PermissionCardPayload) (string, error)
+	UpdatePermissionCard(ctx context.Context, cardID string, payload ResolvedPermissionCardPayload) error
 	SendStatusCard(ctx context.Context, chatID string, payload StatusCardPayload) (string, error)
 	UpdateCard(ctx context.Context, cardID string, payload StatusCardPayload) error
 }
 
-// PermissionCardPayload 表示最小审批卡片的关键字段。
+// PermissionCardPayload 表示审批卡片的关键字段。
 type PermissionCardPayload struct {
 	RequestID string
+	ToolName  string
+	Operation string
+	Target    string
 	Message   string
+}
+
+// ResolvedPermissionCardPayload 表示已处理的审批卡片字段。
+type ResolvedPermissionCardPayload struct {
+	RequestID string
+	ToolName  string
+	Operation string
+	Target    string
+	Message   string
+	Approved  bool
+}
+
+// ApprovalRecord 记录单次工具审批请求及其结论。
+type ApprovalRecord struct {
+	ToolName string
+	Decision string // "pending", "allow_once", "reject"
 }
 
 // StatusCardPayload 表示 run 状态卡片的展示字段。
@@ -127,6 +147,8 @@ type StatusCardPayload struct {
 	TaskName        string
 	Status          string
 	ApprovalStatus  string
+	ApprovalRecords []ApprovalRecord
+	PendingCount    int
 	Result          string
 	Summary         string
 	AsyncRewakeHint string

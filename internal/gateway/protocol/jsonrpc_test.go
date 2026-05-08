@@ -1807,3 +1807,75 @@ func TestNormalizeJSONRPCRequestNewRPCMethods(t *testing.T) {
 		}
 	})
 }
+
+func TestRunnerJSONRPCParamDecoders(t *testing.T) {
+	t.Run("decodeRegisterRunnerParams", func(t *testing.T) {
+		params, rpcErr := decodeRegisterRunnerParams(json.RawMessage(`{"runner_id":"runner-1","workdir":"/tmp/work"}`))
+		if rpcErr != nil {
+			t.Fatalf("decodeRegisterRunnerParams() error = %+v", rpcErr)
+		}
+		if params.RunnerID != "runner-1" || params.Workdir != "/tmp/work" {
+			t.Fatalf("decodeRegisterRunnerParams() = %+v", params)
+		}
+
+		normalized, rpcErr := NormalizeJSONRPCRequest(JSONRPCRequest{
+			JSONRPC: JSONRPCVersion,
+			ID:      json.RawMessage(`"runner-register"`),
+			Method:  MethodGatewayRegisterRunner,
+			Params:  json.RawMessage(`{"runner_id":"runner-1","workdir":"/tmp/work"}`),
+		})
+		if rpcErr != nil {
+			t.Fatalf("NormalizeJSONRPCRequest(registerRunner) error = %+v", rpcErr)
+		}
+		if normalized.Action != "register_runner" {
+			t.Fatalf("action = %q, want register_runner", normalized.Action)
+		}
+
+		cases := []json.RawMessage{
+			json.RawMessage(`{"runner_id":"","workdir":"/tmp/work"}`),
+			json.RawMessage(`{"runner_id":"runner-1","workdir":""}`),
+			json.RawMessage(`{"runner_id":1}`),
+		}
+		for _, raw := range cases {
+			if _, rpcErr := decodeRegisterRunnerParams(raw); rpcErr == nil {
+				t.Fatalf("decodeRegisterRunnerParams(%s) error = nil", raw)
+			}
+		}
+	})
+
+	t.Run("decodeExecuteToolResultParams", func(t *testing.T) {
+		params, rpcErr := decodeExecuteToolResultParams(json.RawMessage(`{"request_id":"req-1","session_id":"s-1","run_id":"r-1","tool_call_id":"tool-1"}`))
+		if rpcErr != nil {
+			t.Fatalf("decodeExecuteToolResultParams() error = %+v", rpcErr)
+		}
+		if params.RequestID != "req-1" || params.SessionID != "s-1" || params.RunID != "r-1" || params.ToolCallID != "tool-1" {
+			t.Fatalf("decodeExecuteToolResultParams() = %+v", params)
+		}
+
+		normalized, rpcErr := NormalizeJSONRPCRequest(JSONRPCRequest{
+			JSONRPC: JSONRPCVersion,
+			ID:      json.RawMessage(`"runner-result"`),
+			Method:  MethodGatewayExecuteToolResult,
+			Params:  json.RawMessage(`{"request_id":"req-1","session_id":" s-1 ","run_id":" r-1 ","tool_call_id":"tool-1"}`),
+		})
+		if rpcErr != nil {
+			t.Fatalf("NormalizeJSONRPCRequest(executeToolResult) error = %+v", rpcErr)
+		}
+		if normalized.SessionID != "s-1" || normalized.RunID != "r-1" {
+			t.Fatalf("normalized IDs = (%q,%q)", normalized.SessionID, normalized.RunID)
+		}
+
+		cases := []json.RawMessage{
+			json.RawMessage(`{"request_id":"","session_id":"s-1","run_id":"r-1","tool_call_id":"tool-1"}`),
+			json.RawMessage(`{"request_id":"req-1","session_id":"","run_id":"r-1","tool_call_id":"tool-1"}`),
+			json.RawMessage(`{"request_id":"req-1","session_id":"s-1","run_id":"","tool_call_id":"tool-1"}`),
+			json.RawMessage(`{"request_id":"req-1","session_id":"s-1","run_id":"r-1","tool_call_id":""}`),
+			json.RawMessage(`{"request_id":1}`),
+		}
+		for _, raw := range cases {
+			if _, rpcErr := decodeExecuteToolResultParams(raw); rpcErr == nil {
+				t.Fatalf("decodeExecuteToolResultParams(%s) error = nil", raw)
+			}
+		}
+	})
+}

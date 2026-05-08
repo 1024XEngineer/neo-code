@@ -21,6 +21,8 @@ type MultiWorkspaceRuntime struct {
 	defaultHash    string
 	managementPort ManagementRuntimePort
 
+	runnerDispatcherInjector func(RuntimePort)
+
 	events    chan RuntimeEvent
 	eventSubs map[string]chan<- RuntimeEvent
 	eventMu   sync.Mutex
@@ -106,6 +108,10 @@ func (m *MultiWorkspaceRuntime) getPortForHash(hash string) (RuntimePort, error)
 		return nil, fmt.Errorf("build workspace runtime for %s: %w", hash, err)
 	}
 
+	if m.runnerDispatcherInjector != nil {
+		m.runnerDispatcherInjector(port)
+	}
+
 	b = &workspaceBundle{port: port, cleanup: cleanup}
 	m.bundles[hash] = b
 	m.startEventForwarder(hash, port)
@@ -145,6 +151,19 @@ func (m *MultiWorkspaceRuntime) startEventForwarder(hash string, port RuntimePor
 			}
 		}
 	}()
+}
+
+// InjectRunnerDispatcher 设置 runner tool dispatcher 注入回调。
+// fn 对每个已加载或未来创建的 RuntimePort 调用一次。
+func (m *MultiWorkspaceRuntime) InjectRunnerDispatcher(fn func(RuntimePort)) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.runnerDispatcherInjector = fn
+
+	for _, b := range m.bundles {
+		fn(b.port)
+	}
 }
 
 // Close 优雅关闭所有已加载的工作区 runtime。

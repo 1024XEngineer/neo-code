@@ -822,6 +822,24 @@ func NormalizeJSONRPCRequest(request JSONRPCRequest) (NormalizedRequest, *JSONRP
 		normalized.Action = "workspace.delete"
 		normalized.Payload = params
 		return normalized, nil
+	case MethodGatewayRegisterRunner:
+		params, parseErr := decodeRegisterRunnerParams(request.Params)
+		if parseErr != nil {
+			return normalized, parseErr
+		}
+		normalized.Action = "register_runner"
+		normalized.Payload = params
+		return normalized, nil
+	case MethodGatewayExecuteToolResult:
+		params, parseErr := decodeExecuteToolResultParams(request.Params)
+		if parseErr != nil {
+			return normalized, parseErr
+		}
+		normalized.Action = "execute_tool_result"
+		normalized.SessionID = strings.TrimSpace(params.SessionID)
+		normalized.RunID = strings.TrimSpace(params.RunID)
+		normalized.Payload = params
+		return normalized, nil
 	default:
 		return normalized, NewJSONRPCError(
 			JSONRPCCodeMethodNotFound,
@@ -1517,6 +1535,70 @@ func decodeParamsInternal[T any](raw json.RawMessage, name string, validate func
 		if err := validate(&params); err != nil {
 			return zero, err
 		}
+	}
+	return params, nil
+}
+
+// decodeRegisterRunnerParams 对 gateway.registerRunner 的 params 执行反序列化与字段校验。
+func decodeRegisterRunnerParams(raw json.RawMessage) (RegisterRunnerParams, *JSONRPCError) {
+	params, err := decodeParams[RegisterRunnerParams](raw, "gateway.registerRunner", func(p *RegisterRunnerParams) *JSONRPCError {
+		if strings.TrimSpace(p.RunnerID) == "" {
+			return NewJSONRPCError(
+				JSONRPCCodeInvalidParams,
+				"missing required field: params.runner_id",
+				GatewayCodeMissingRequiredField,
+			)
+		}
+		if strings.TrimSpace(p.Workdir) == "" {
+			return NewJSONRPCError(
+				JSONRPCCodeInvalidParams,
+				"missing required field: params.workdir",
+				GatewayCodeMissingRequiredField,
+			)
+		}
+		return nil
+	})
+	if err != nil {
+		return RegisterRunnerParams{}, err
+	}
+	return params, nil
+}
+
+// decodeExecuteToolResultParams 对 gateway.executeToolResult 的 params 执行反序列化与字段校验。
+func decodeExecuteToolResultParams(raw json.RawMessage) (ExecuteToolResultParams, *JSONRPCError) {
+	params, err := decodeParams[ExecuteToolResultParams](raw, "gateway.executeToolResult", func(p *ExecuteToolResultParams) *JSONRPCError {
+		if strings.TrimSpace(p.RequestID) == "" {
+			return NewJSONRPCError(
+				JSONRPCCodeInvalidParams,
+				"missing required field: params.request_id",
+				GatewayCodeMissingRequiredField,
+			)
+		}
+		if strings.TrimSpace(p.SessionID) == "" {
+			return NewJSONRPCError(
+				JSONRPCCodeInvalidParams,
+				"missing required field: params.session_id",
+				GatewayCodeMissingRequiredField,
+			)
+		}
+		if strings.TrimSpace(p.RunID) == "" {
+			return NewJSONRPCError(
+				JSONRPCCodeInvalidParams,
+				"missing required field: params.run_id",
+				GatewayCodeMissingRequiredField,
+			)
+		}
+		if strings.TrimSpace(p.ToolCallID) == "" {
+			return NewJSONRPCError(
+				JSONRPCCodeInvalidParams,
+				"missing required field: params.tool_call_id",
+				GatewayCodeMissingRequiredField,
+			)
+		}
+		return nil
+	})
+	if err != nil {
+		return ExecuteToolResultParams{}, err
 	}
 	return params, nil
 }

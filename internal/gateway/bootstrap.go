@@ -2127,6 +2127,90 @@ func decodeCheckpointDiffPayload(payload any) CheckpointDiffInput {
 	}
 }
 
+// handleRegisterRunnerFrame 处理 runner 注册请求。
+func handleRegisterRunnerFrame(ctx context.Context, frame MessageFrame, _ RuntimePort) MessageFrame {
+	registry := RunnerRegistryFromContext(ctx)
+	if registry == nil {
+		return errorFrame(frame, NewFrameError(ErrorCodeInternalError, "runner registry not available"))
+	}
+
+	params, ok := frame.Payload.(protocol.RegisterRunnerParams)
+	if !ok {
+		raw, marshalErr := json.Marshal(frame.Payload)
+		if marshalErr != nil {
+			return errorFrame(frame, NewMissingRequiredFieldError("payload.runner_id"))
+		}
+		var p protocol.RegisterRunnerParams
+		if err := json.Unmarshal(raw, &p); err != nil {
+			return errorFrame(frame, NewFrameError(ErrorCodeInvalidAction, "invalid register_runner params"))
+		}
+		params = p
+	}
+
+	if params.RunnerID == "" {
+		return errorFrame(frame, NewMissingRequiredFieldError("runner_id"))
+	}
+	if params.Workdir == "" {
+		return errorFrame(frame, NewMissingRequiredFieldError("workdir"))
+	}
+
+	connectionID, ok := ConnectionIDFromContext(ctx)
+	if !ok {
+		return errorFrame(frame, NewFrameError(ErrorCodeInternalError, "connection id not found"))
+	}
+
+	registry.Register(connectionID, params.RunnerID, params.RunnerName, params.Workdir, params.Labels)
+
+	return MessageFrame{
+		Type:      FrameTypeAck,
+		Action:    FrameActionRegisterRunner,
+		RequestID: frame.RequestID,
+		Payload: map[string]string{
+			"runner_id": params.RunnerID,
+			"status":    "registered",
+		},
+	}
+}
+
+// handleExecuteToolResultFrame 处理 runner 回传的工具执行结果。
+func handleExecuteToolResultFrame(ctx context.Context, frame MessageFrame, _ RuntimePort) MessageFrame {
+	manager := RunnerToolManagerFromContext(ctx)
+	if manager == nil {
+		return errorFrame(frame, NewFrameError(ErrorCodeInternalError, "runner tool manager not available"))
+	}
+
+	params, ok := frame.Payload.(protocol.ExecuteToolResultParams)
+	if !ok {
+		raw, marshalErr := json.Marshal(frame.Payload)
+		if marshalErr != nil {
+			return errorFrame(frame, NewMissingRequiredFieldError("payload.request_id"))
+		}
+		var p protocol.ExecuteToolResultParams
+		if err := json.Unmarshal(raw, &p); err != nil {
+			return errorFrame(frame, NewFrameError(ErrorCodeInvalidAction, "invalid execute_tool_result params"))
+		}
+		params = p
+	}
+
+	if params.RequestID == "" {
+		return errorFrame(frame, NewMissingRequiredFieldError("request_id"))
+	}
+
+	if err := manager.CompleteToolRequest(params.RequestID, params.Content, params.IsError); err != nil {
+		return errorFrame(frame, NewFrameError(ErrorCodeResourceNotFound, err.Error()))
+	}
+
+	return MessageFrame{
+		Type:      FrameTypeAck,
+		Action:    FrameActionExecuteToolResult,
+		RequestID: frame.RequestID,
+		Payload: map[string]string{
+			"request_id": params.RequestID,
+			"status":     "completed",
+		},
+	}
+}
+
 func decodeCheckpointRestorePayload(payload any) CheckpointRestoreInput {
 	switch typed := payload.(type) {
 	case CheckpointRestoreInput:

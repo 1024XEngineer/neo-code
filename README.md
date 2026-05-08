@@ -8,19 +8,20 @@
   <a href="https://go.dev/">
     <img src="https://img.shields.io/badge/Go-1.25%2B-00ADD8?logo=go&logoColor=white" alt="Go Version" />
   </a>
-  <a href="https://github.com/1024XEngineer/neo-code/actions/workflows/ci.yml">
-    <img src="https://img.shields.io/github/actions/workflow/status/1024XEngineer/neo-code/ci.yml?branch=main&label=CI" alt="CI Status" />
+  <a href="https://github.com/1024XEngineer/neo-code">
+    <img src="https://codecov.io/gh/1024XEngineer/neo-code/branch/main/graph/badge.svg" alt="Codecov Coverage" />
   </a>
   <a href="https://github.com/1024XEngineer/neo-code/blob/main/LICENSE">
-    <img src="https://img.shields.io/github/license/1024XEngineer/neo-code?color=97CA00" alt="License" />
+    <img src="https://img.shields.io/badge/License-MIT-purple?logo=opensourceinitiative&logoColor=white" alt="License MIT" />
   </a>
   <a href="https://neocode-docs.pages.dev/">
     <img src="https://img.shields.io/badge/Docs-Official-1677FF?logo=readthedocs&logoColor=white" alt="Docs" />
   </a>
-  <a href="https://neocode-docs.pages.dev/guide/install">
+  <a href="https://neocode-docs.pages.dev/en/guide/install">
     <img src="https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-4EAA25" alt="Platform" />
   </a>
 </p>
+
 
 <p align="center">
   <a href="https://neocode-docs.pages.dev/">文档</a>
@@ -56,6 +57,7 @@ NeoCode 是一个运行在本地开发环境中的 AI Coding Agent。
 - MCP 接入：通过 MCP stdio server 扩展外部工具能力。
 - Gateway 模式：通过本地 JSON-RPC / SSE / WebSocket 接口连接桌面端、脚本和第三方客户端。
 - Feishu Adapter：支持 Webhook 与 SDK 长连接接入，并用单张状态卡片持续回传 run 状态。
+- Local Runner：`neocode runner` 在本机执行工具，通过 WebSocket 主动连接云端 Gateway，无需开放入站端口。
 
 ---
 
@@ -174,6 +176,21 @@ neocode use <provider> --model <model-id>
 
 # 示例
 neocode use openai --model gpt-4.1
+```
+
+#### Local Runner
+
+在本机启动执行守护进程，主动连接云端 Gateway 接收工具执行请求。
+
+```bash
+# 启动 runner（默认连接 127.0.0.1:8080）
+neocode runner
+
+# 指定远程 Gateway 地址和 token
+neocode runner --gateway-address "your-gateway.com:8080" --token-file ~/.neocode/auth.json
+
+# 指定 Runner 名称与工作目录
+neocode runner --runner-name "我的本机" --workdir /path/to/project
 ```
 
 ### 6. Shell 诊断代理

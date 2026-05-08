@@ -958,6 +958,10 @@ func initializeSQLiteSchema(ctx context.Context, db *sql.DB) error {
 		if err := migrateSQLiteSchemaV6ToV7(ctx, db); err != nil {
 			return err
 		}
+	case 6:
+		if err := migrateSQLiteSchemaV6ToV7(ctx, db); err != nil {
+			return err
+		}
 	default:
 		return fmt.Errorf("session: unsupported sqlite schema version %d", userVersion)
 	}
