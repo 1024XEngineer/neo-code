@@ -13,10 +13,10 @@ import (
 	"neo-code/internal/config"
 	agentcontext "neo-code/internal/context"
 	contextcompact "neo-code/internal/context/compact"
-	"neo-code/internal/repository"
 	"neo-code/internal/provider"
 	"neo-code/internal/provider/builtin"
 	providertypes "neo-code/internal/provider/types"
+	"neo-code/internal/repository"
 	"neo-code/internal/runtime/approval"
 	runtimehooks "neo-code/internal/runtime/hooks"
 	"neo-code/internal/security"
@@ -422,6 +422,9 @@ func (s *Service) LoadSession(ctx context.Context, id string) (agentsession.Sess
 	if err != nil {
 		return agentsession.Session{}, err
 	}
+	if err := s.repairSessionTranscriptIfNeeded(ctx, &session); err != nil {
+		return agentsession.Session{}, err
+	}
 	return session, nil
 }
 
@@ -443,7 +446,7 @@ func (s *Service) CreateSession(ctx context.Context, id string) (agentsession.Se
 		return agentsession.Session{}, err
 	}
 
-	existing, err := s.sessionStore.LoadSession(ctx, sessionID)
+	existing, err := s.LoadSession(ctx, sessionID)
 	if err == nil {
 		return existing, nil
 	}
@@ -459,7 +462,7 @@ func (s *Service) CreateSession(ctx context.Context, id string) (agentsession.Se
 		return created, nil
 	}
 	if isRuntimeSessionAlreadyExistsError(createErr) {
-		return s.sessionStore.LoadSession(ctx, sessionID)
+		return s.LoadSession(ctx, sessionID)
 	}
 	return agentsession.Session{}, createErr
 }

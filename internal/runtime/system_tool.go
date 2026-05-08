@@ -45,7 +45,7 @@ func (s *Service) ExecuteSystemTool(ctx context.Context, input SystemToolInput) 
 		sessionMu, releaseLockRef := s.acquireSessionLock(sessionID)
 		sessionMu.RLock()
 
-		session, err := s.sessionStore.LoadSession(ctx, sessionID)
+		session, err := s.LoadSession(ctx, sessionID)
 		if err != nil {
 			sessionMu.RUnlock()
 			releaseLockRef()

@@ -94,7 +94,7 @@ func (s *Service) ListSessionSkills(ctx context.Context, sessionID string) ([]Se
 		return nil, errors.New("runtime: session id is empty")
 	}
 
-	session, err := s.sessionStore.LoadSession(ctx, sessionID)
+	session, err := s.LoadSession(ctx, sessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -142,7 +142,7 @@ func (s *Service) ListAvailableSkills(ctx context.Context, sessionID string) ([]
 	workspace := ""
 	activeSet := map[string]struct{}{}
 	if normalizedSessionID != "" {
-		session, err := s.sessionStore.LoadSession(ctx, normalizedSessionID)
+		session, err := s.LoadSession(ctx, normalizedSessionID)
 		if err != nil {
 			return nil, err
 		}
@@ -321,7 +321,7 @@ func (s *Service) mutateSessionSkills(
 		releaseLockRef()
 	}()
 
-	session, err := s.sessionStore.LoadSession(ctx, sessionID)
+	session, err := s.LoadSession(ctx, sessionID)
 	if err != nil {
 		return agentsession.Session{}, false, err
 	}

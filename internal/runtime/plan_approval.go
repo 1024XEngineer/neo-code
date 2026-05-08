@@ -19,7 +19,7 @@ func (s *Service) ApproveCurrentPlan(ctx context.Context, input ApproveCurrentPl
 	releaseLock := s.bindSessionLock(sessionID)
 	defer releaseLock()
 
-	session, err := s.sessionStore.LoadSession(ctx, sessionID)
+	session, err := s.LoadSession(ctx, sessionID)
 	if err != nil {
 		return err
 	}
