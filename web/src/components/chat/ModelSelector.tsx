@@ -29,7 +29,6 @@ export default function ModelSelector() {
     useGatewayStore.getState().notifyProviderChanged()
   }
 
-  // 模型列表加载：直接在 effect 中 fetch，用 cancelled flag 防止陈旧更新
   useEffect(() => {
     if (!gatewayAPI) return
     let cancelled = false
@@ -61,22 +60,21 @@ export default function ModelSelector() {
     return () => { cancelled = true }
   }, [gatewayAPI, currentSessionId, providerChangeTick])
 
-  async function handleSelect(m: ModelEntry) {
-    setSelected(m)
+  async function handleSelect(model: ModelEntry) {
+    setSelected(model)
     setOpen(false)
     if (isGenerating) {
-      setPendingModelChange(m)
+      setPendingModelChange(model)
       useUIStore.getState().showToast('Model change will apply on the next turn', 'info')
       return
     }
     try {
-      await applyModelSelection(m)
+      await applyModelSelection(model)
     } catch (err) {
       console.error('applyModelSelection failed:', err)
     }
   }
 
-  // 生成完成后补发延迟的模型切换
   useEffect(() => {
     if (!isGenerating && pendingModelChange && gatewayAPI) {
       applyModelSelection(pendingModelChange)
@@ -89,106 +87,75 @@ export default function ModelSelector() {
 
   return (
     <div style={{ position: 'relative' }}>
-      <button
-        style={styles.selectorBtn}
-        onClick={() => setOpen(!open)}
-        disabled={loading}
-      >
+      <button className="model-selector" onClick={() => setOpen(!open)} disabled={loading}>
         {loading ? (
           <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} />
         ) : (
           <>
-            <span style={styles.modelName}>{selected ? `${selected.provider} / ${selected.name}` : (error || '无可用模型')}</span>
-            <ChevronDown size={14} style={{ color: 'var(--text-tertiary)', transition: 'transform 0.15s', transform: open ? 'rotate(180deg)' : 'none' }} />
+            <span className="model-dot" />
+            <span>{selected ? `${selected.provider} / ${selected.name}` : (error || '无可用模型')}</span>
+            <ChevronDown
+              size={14}
+              style={{
+                color: 'var(--text-tertiary)',
+                transition: 'transform 0.15s',
+                transform: open ? 'rotate(180deg)' : 'none',
+              }}
+            />
           </>
         )}
       </button>
 
       {open && (
-        <div style={styles.dropdown} onMouseLeave={() => setOpen(false)}>
+        <div
+          style={{
+            position: 'absolute',
+            bottom: 'calc(100% + 6px)',
+            right: 0,
+            width: 240,
+            background: 'var(--bg-overlay)',
+            borderRadius: 'var(--radius-md)',
+            padding: 4,
+            boxShadow: 'var(--shadow-elevated)',
+            zIndex: 60,
+            maxHeight: 320,
+            overflowY: 'auto',
+          }}
+          onMouseLeave={() => setOpen(false)}
+        >
           {models.length === 0 && !error && (
-            <div style={styles.emptyItem}>无可用模型</div>
+            <div style={{ padding: '6px 10px', fontSize: 12, color: 'var(--text-tertiary)' }}>无可用模型</div>
           )}
           {error && (
-            <div style={styles.emptyItem}>加载失败</div>
+            <div style={{ padding: '6px 10px', fontSize: 12, color: 'var(--text-tertiary)' }}>加载失败</div>
           )}
-          {models.map((m) => (
+          {models.map((model) => (
             <button
-              key={m.id}
+              key={model.id}
               style={{
-                ...styles.dropdownItem,
-                background: selected?.id === m.id ? 'var(--bg-active)' : 'transparent',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                width: '100%',
+                padding: '7px 10px',
+                borderRadius: 'var(--radius-sm)',
+                border: 'none',
+                background: selected?.id === model.id ? 'var(--bg-hover)' : 'transparent',
+                color: 'var(--text-primary)',
+                fontSize: 13,
+                fontFamily: 'var(--font-ui)',
+                cursor: 'pointer',
+                textAlign: 'left',
+                transition: 'all var(--duration-fast)',
               }}
-              onClick={() => handleSelect(m)}
+              onClick={() => handleSelect(model)}
             >
-              <span style={styles.dropdownName}>{m.name}</span>
-              <span style={styles.dropdownProvider}>{m.provider}</span>
+              <span style={{ fontWeight: 500 }}>{model.name}</span>
+              <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>{model.provider}</span>
             </button>
           ))}
         </div>
       )}
     </div>
   )
-}
-
-const styles: Record<string, React.CSSProperties> = {
-  selectorBtn: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 4,
-    padding: '4px 10px',
-    borderRadius: 'var(--radius-md)',
-    border: '1px solid var(--border-primary)',
-    background: 'var(--bg-secondary)',
-    color: 'var(--text-secondary)',
-    fontSize: 12,
-    fontFamily: 'var(--font-ui)',
-    cursor: 'pointer',
-    transition: 'all 0.15s',
-  },
-  modelName: {
-    fontWeight: 500,
-  },
-  dropdown: {
-    position: 'absolute',
-    top: 'calc(100% + 6px)',
-    right: 0,
-    width: 220,
-    background: 'var(--bg-secondary)',
-    border: '1px solid var(--border-primary)',
-    borderRadius: 'var(--radius-md)',
-    padding: 4,
-    boxShadow: 'var(--shadow-3)',
-    zIndex: 60,
-    maxHeight: 320,
-    overflowY: 'auto',
-  },
-  dropdownItem: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    width: '100%',
-    padding: '6px 10px',
-    borderRadius: 'var(--radius-sm)',
-    border: 'none',
-    color: 'var(--text-primary)',
-    fontSize: 13,
-    fontFamily: 'var(--font-ui)',
-    cursor: 'pointer',
-    textAlign: 'left',
-    transition: 'all 0.15s',
-  },
-  emptyItem: {
-    padding: '6px 10px',
-    fontSize: 12,
-    color: 'var(--text-tertiary)',
-    fontFamily: 'var(--font-ui)',
-  },
-  dropdownName: {
-    fontWeight: 500,
-  },
-  dropdownProvider: {
-    fontSize: 11,
-    color: 'var(--text-tertiary)',
-  },
 }
