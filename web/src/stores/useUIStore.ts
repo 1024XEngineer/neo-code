@@ -47,14 +47,17 @@ interface UIState {
   /** Toast 列表 */
   toasts: Toast[]
 
-  // Actions
-  toggleSidebar: () => void
-  setSidebarOpen: (open: boolean) => void
-  toggleChangesPanel: () => void
-  toggleFileTreePanel: () => void
-  setTodoStripExpanded: (expanded: boolean) => void
-  setTheme: (theme: 'light' | 'dark') => void
-  setSearchQuery: (q: string) => void
+	// Actions
+	toggleSidebar: () => void
+	setSidebarOpen: (open: boolean) => void
+	setSidebarWidth: (width: number) => void
+	toggleChangesPanel: () => void
+	setChangesPanelWidth: (width: number) => void
+	toggleFileTreePanel: () => void
+	setFileTreePanelWidth: (width: number) => void
+	setTodoStripExpanded: (expanded: boolean) => void
+	setTheme: (theme: 'light' | 'dark') => void
+	setSearchQuery: (q: string) => void
   addFileChange: (change: FileChange) => void
   replaceFileChanges: (changes: FileChange[]) => void
   acceptFileChange: (id: string) => void
@@ -67,27 +70,31 @@ interface UIState {
 let toastIdCounter = 0
 
 export const useUIStore = create<UIState>((set) => ({
-  sidebarOpen: true,
-  sidebarWidth: 260,
-  changesPanelOpen: false,
-  changesPanelWidth: 320,
-  fileTreePanelOpen: false,
-  fileTreePanelWidth: 280,
-  todoStripExpanded: false,
-  theme: 'dark',
-  searchQuery: '',
-  fileChanges: [],
-  toasts: [],
+	sidebarOpen: true,
+	sidebarWidth: 280,
+	changesPanelOpen: false,
+	changesPanelWidth: 380,
+	fileTreePanelOpen: false,
+	fileTreePanelWidth: 340,
+	todoStripExpanded: false,
+	theme: (localStorage.getItem('neocode-theme') as 'light' | 'dark') || 'dark',
+	searchQuery: '',
+	fileChanges: [],
+	toasts: [],
 
-  toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
-  setSidebarOpen: (sidebarOpen) => set({ sidebarOpen }),
-  toggleChangesPanel: () => set((s) => ({ changesPanelOpen: !s.changesPanelOpen })),
-  toggleFileTreePanel: () => set((s) => ({ fileTreePanelOpen: !s.fileTreePanelOpen })),
-  setTodoStripExpanded: (todoStripExpanded) => set({ todoStripExpanded }),
-  setTheme: (theme) => {
-    document.documentElement.setAttribute('data-theme', theme)
-    set({ theme })
-  },
+	toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
+	setSidebarOpen: (sidebarOpen) => set({ sidebarOpen }),
+	setSidebarWidth: (sidebarWidth) => set({ sidebarWidth }),
+	toggleChangesPanel: () => set((s) => ({ changesPanelOpen: !s.changesPanelOpen })),
+	setChangesPanelWidth: (changesPanelWidth) => set({ changesPanelWidth }),
+	toggleFileTreePanel: () => set((s) => ({ fileTreePanelOpen: !s.fileTreePanelOpen })),
+	setFileTreePanelWidth: (fileTreePanelWidth) => set({ fileTreePanelWidth }),
+	setTodoStripExpanded: (todoStripExpanded) => set({ todoStripExpanded }),
+	setTheme: (theme) => {
+		localStorage.setItem('neocode-theme', theme)
+		document.documentElement.setAttribute('data-theme', theme)
+		set({ theme })
+	},
   setSearchQuery: (searchQuery) => set({ searchQuery }),
   addFileChange: (change) =>
     set((s) => ({
