@@ -210,6 +210,7 @@ func TestRunSingleDiagnosisWithCoordinatorUsesCachedResult(t *testing.T) {
 		context.Background(),
 		coordinator,
 		nil,
+		nil,
 		output,
 		buffer,
 		options,

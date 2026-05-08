@@ -1,5 +1,3 @@
-//go:build !windows
-
 package ptyproxy
 
 import (
@@ -10,9 +8,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"neo-code/internal/gateway"
@@ -26,6 +26,12 @@ const (
 	diagnosisCacheMaxEntries    = 64
 	diagnosisAutoDedupeTTL      = 10 * time.Second
 	diagnosisQuickMaxConfidence = 0.55
+	diagnosisAskSessionPrefix   = "diag-ask"
+)
+
+var (
+	diagnosisAskSequence  atomic.Uint64
+	newDiagnosisRPCClient diagnosisRPCClientFactory = defaultDiagnosisRPCClientFactory
 )
 
 type preparedDiagnosisRequest struct {
@@ -34,6 +40,8 @@ type preparedDiagnosisRequest struct {
 	SanitizedErrorLog string
 	SanitizedCommand  string
 }
+
+type diagnosisRPCClientFactory func(ManualShellOptions) (*gatewayclient.GatewayRPCClient, error)
 
 type diagnosisOutcome struct {
 	Result tools.ToolResult
@@ -74,14 +82,14 @@ func newDiagnosisCoordinator() *diagnosisCoordinator {
 func prepareDiagnoseRequest(
 	buffer *UTF8RingBuffer,
 	options ManualShellOptions,
-	socketPath string,
+	shellSessionID string,
 	trigger diagnoseTrigger,
 ) (preparedDiagnosisRequest, error) {
 	if buffer == nil {
 		buffer = NewUTF8RingBuffer(DefaultRingBufferCapacity)
 	}
 	logSnapshot := buffer.SnapshotString()
-	if strings.TrimSpace(trigger.OutputText) != "" {
+	if hasDiagnoseTriggerContext(trigger) && strings.TrimSpace(trigger.OutputText) != "" {
 		logSnapshot = trigger.OutputText
 	}
 	sanitizedErrorLog := SanitizeDiagnosisText(logSnapshot, defaultDiagnosisPayloadMaxBytes)
@@ -93,10 +101,10 @@ func prepareDiagnoseRequest(
 	requestArgs := diagnoseToolArgs{
 		ErrorLog: sanitizedErrorLog,
 		OSEnv: map[string]string{
-			"os":     runtime.GOOS,
-			"shell":  resolveShellPath(options.Shell),
-			"cwd":    options.Workdir,
-			"socket": socketPath,
+			"os":               runtime.GOOS,
+			"shell":            resolveShellPath(options.Shell),
+			"cwd":              options.Workdir,
+			"shell_session_id": shellSessionID,
 		},
 		CommandText: sanitizedCommand,
 		ExitCode:    trigger.ExitCode,
@@ -113,6 +121,17 @@ func prepareDiagnoseRequest(
 	}, nil
 }
 
+// resolveManualDiagnoseTrigger 在手动 diag 未携带上下文时复用最近一条命令窗口。
+func resolveManualDiagnoseTrigger(trigger diagnoseTrigger, store *diagnosisTriggerStore) diagnoseTrigger {
+	if hasDiagnoseTriggerContext(trigger) {
+		return trigger
+	}
+	if last, ok := store.Last(); ok {
+		return last
+	}
+	return trigger
+}
+
 // fingerprintDiagnosisRequest 为脱敏后的诊断输入生成稳定指纹。
 func fingerprintDiagnosisRequest(command string, exitCode int, errorLog string) string {
 	sum := sha256.Sum256([]byte(strings.Join([]string{
@@ -123,67 +142,280 @@ func fingerprintDiagnosisRequest(command string, exitCode int, errorLog string) 
 	return hex.EncodeToString(sum[:])
 }
 
-// executePreparedDiagnoseToolWithTimeout 执行已构建好的 diagnose payload。
+// executePreparedDiagnoseToolWithTimeout 执行已构建好的 diagnose 请求，内部走 ask 事件流。
 func executePreparedDiagnoseToolWithTimeout(
 	rpcClient *gatewayclient.GatewayRPCClient,
+	eventStream <-chan gatewayclient.Notification,
 	options ManualShellOptions,
 	prepared preparedDiagnosisRequest,
 	timeout time.Duration,
 ) (tools.ToolResult, error) {
-	if rpcClient == nil {
+	if false && eventStream != nil {
 		return tools.ToolResult{}, errors.New("诊断服务未就绪，请确认 gateway 已连接后重试")
+	}
+
+	if err := EnsureTerminalDiagnosisSkillFile(); err != nil {
+		return tools.ToolResult{}, err
+	}
+
+	ownedClient := false
+	if rpcClient == nil || eventStream == nil {
+		var err error
+		rpcClient, err = newDiagnosisRPCClient(options)
+		if err != nil {
+			return tools.ToolResult{}, err
+		}
+		ownedClient = true
+		eventStream = rpcClient.Notifications()
+	}
+	if rpcClient == nil {
+		return tools.ToolResult{}, errors.New("diagnosis gateway rpc client is not ready")
+	}
+	if ownedClient {
+		defer rpcClient.Close()
 	}
 
 	callContext, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	var frame gateway.MessageFrame
+	askSessionID := generateDiagnosisAskSessionID()
+	var bindAck gateway.MessageFrame
 	if err := rpcClient.CallWithOptions(
 		callContext,
-		protocol.MethodGatewayExecuteSystemTool,
-		protocol.ExecuteSystemToolParams{
-			Workdir:   options.Workdir,
-			ToolName:  tools.ToolNameDiagnose,
-			Arguments: prepared.Payload,
+		protocol.MethodGatewayBindStream,
+		protocol.BindStreamParams{
+			SessionID: askSessionID,
+			Channel:   "all",
 		},
-		&frame,
+		&bindAck,
 		gatewayclient.GatewayRPCCallOptions{
 			Timeout: timeout,
 			Retries: 1,
 		},
 	); err != nil {
 		if options.Stderr != nil {
-			writeProxyf(options.Stderr, "neocode diag: executeSystemTool rpc failed: %v\n", err)
+			writeProxyf(options.Stderr, "neocode diag: bind ask stream failed: %v\n", err)
 		}
-		return tools.ToolResult{}, errors.New("诊断调用失败，请检查 gateway 连接后重试，或使用 `neocode diag -i` 继续排查")
+		return tools.ToolResult{}, fmt.Errorf("gateway bind_stream transport error: %w", err)
 	}
-
-	if frame.Type == gateway.FrameTypeError && frame.Error != nil {
+	if bindAck.Type == gateway.FrameTypeError && bindAck.Error != nil {
 		if options.Stderr != nil {
 			writeProxyf(
 				options.Stderr,
-				"neocode diag: gateway returned frame error code=%s message=%s\n",
-				strings.TrimSpace(frame.Error.Code),
-				strings.TrimSpace(frame.Error.Message),
+				"neocode diag: gateway bind_stream failed code=%s message=%s\n",
+				strings.TrimSpace(bindAck.Error.Code),
+				strings.TrimSpace(bindAck.Error.Message),
 			)
 		}
 		return tools.ToolResult{}, errors.New("诊断服务暂不可用，请稍后重试，或使用 `neocode diag -i` 继续排查")
 	}
-	if frame.Type != gateway.FrameTypeAck {
+	if bindAck.Type != gateway.FrameTypeAck {
 		if options.Stderr != nil {
-			writeProxyf(options.Stderr, "neocode diag: unexpected gateway frame type: %s\n", frame.Type)
+			writeProxyf(options.Stderr, "neocode diag: unexpected bind_stream frame type: %s\n", bindAck.Type)
 		}
 		return tools.ToolResult{}, errors.New("诊断服务返回异常响应，请稍后重试")
 	}
 
-	toolResult, err := decodeToolResult(frame.Payload)
+	if eventStream == nil {
+		eventStream = rpcClient.Notifications()
+	}
+	if eventStream == nil {
+		return tools.ToolResult{}, errors.New("gateway notification stream is not ready")
+	}
+	defer deleteDiagnosisAskSessionQuiet(rpcClient, askSessionID)
+
+	var askAck gateway.MessageFrame
+	if err := rpcClient.Ask(
+		callContext,
+		protocol.AskParams{
+			SessionID: askSessionID,
+			UserQuery: buildDiagnosisAskQuery(prepared),
+			Skills:    []string{terminalDiagnosisSkillID},
+			Workdir:   strings.TrimSpace(options.Workdir),
+		},
+		&askAck,
+		gatewayclient.GatewayRPCCallOptions{
+			Timeout: timeout,
+			Retries: 0,
+		},
+	); err != nil {
+		if options.Stderr != nil {
+			writeProxyf(options.Stderr, "neocode diag: ask call failed: %v\n", err)
+		}
+		return tools.ToolResult{}, fmt.Errorf("gateway ask transport error: %w", err)
+	}
+	if askAck.Type == gateway.FrameTypeError && askAck.Error != nil {
+		if options.Stderr != nil {
+			writeProxyf(
+				options.Stderr,
+				"neocode diag: gateway ask failed code=%s message=%s\n",
+				strings.TrimSpace(askAck.Error.Code),
+				strings.TrimSpace(askAck.Error.Message),
+			)
+		}
+		return tools.ToolResult{}, fmt.Errorf(
+			"gateway ask failed (%s): %s",
+			strings.TrimSpace(askAck.Error.Code),
+			strings.TrimSpace(askAck.Error.Message),
+		)
+	}
+	if askAck.Type != gateway.FrameTypeAck {
+		if options.Stderr != nil {
+			writeProxyf(options.Stderr, "neocode diag: unexpected ask frame type: %s\n", askAck.Type)
+		}
+		return tools.ToolResult{}, errors.New("诊断服务返回异常响应，请稍后重试")
+	}
+
+	toolResult, err := waitDiagnosisAskStream(callContext, eventStream, askSessionID)
 	if err != nil {
 		if options.Stderr != nil {
-			writeProxyf(options.Stderr, "neocode diag: decode diagnose payload failed: %v\n", err)
+			writeProxyf(options.Stderr, "neocode diag: wait ask stream failed: %v\n", err)
 		}
-		return tools.ToolResult{}, errors.New("诊断结果解析失败，请重试或更新 NeoCode")
+		return tools.ToolResult{}, err
 	}
 	return toolResult, nil
+}
+
+// generateDiagnosisAskSessionID 生成诊断 Ask 会话标识，避免并发请求复用同一会话。
+// defaultDiagnosisRPCClientFactory 创建诊断专用 RPC 客户端，避免与 shell 角色流共用通知通道。
+func defaultDiagnosisRPCClientFactory(options ManualShellOptions) (*gatewayclient.GatewayRPCClient, error) {
+	client, err := gatewayclient.NewGatewayRPCClient(gatewayclient.GatewayRPCClientOptions{
+		ListenAddress:       strings.TrimSpace(options.GatewayListenAddress),
+		TokenFile:           strings.TrimSpace(options.GatewayTokenFile),
+		DisableHeartbeatLog: true,
+	})
+	if err != nil {
+		return nil, err
+	}
+	authCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := client.Authenticate(authCtx); err != nil {
+		_ = client.Close()
+		return nil, err
+	}
+	return client, nil
+}
+
+func generateDiagnosisAskSessionID() string {
+	sequence := diagnosisAskSequence.Add(1)
+	return fmt.Sprintf("%s-%d-%d", diagnosisAskSessionPrefix, os.Getpid(), sequence)
+}
+
+// buildDiagnosisAskQuery 构造诊断 Ask 的输入提示，统一携带命令与错误日志上下文。
+func buildDiagnosisAskQuery(prepared preparedDiagnosisRequest) string {
+	commandText := strings.TrimSpace(prepared.SanitizedCommand)
+	if commandText == "" {
+		commandText = "(none)"
+	}
+	errorLog := strings.TrimSpace(prepared.SanitizedErrorLog)
+	if errorLog == "" {
+		errorLog = "no terminal output captured"
+	}
+	return fmt.Sprintf(
+		"请基于以下终端信息进行诊断，输出根因、修复建议与下一步排查命令。\n\n命令:\n%s\n\n错误日志:\n%s",
+		commandText,
+		errorLog,
+	)
+}
+
+// waitDiagnosisAskStream 等待 ask_chunk/ask_done/ask_error 事件，并转换为诊断输出。
+func waitDiagnosisAskStream(
+	ctx context.Context,
+	notifications <-chan gatewayclient.Notification,
+	sessionID string,
+) (tools.ToolResult, error) {
+	targetSessionID := strings.TrimSpace(sessionID)
+	if targetSessionID == "" {
+		return tools.ToolResult{}, errors.New("diagnosis ask session id is empty")
+	}
+	if notifications == nil {
+		return tools.ToolResult{}, errors.New("gateway notification stream is not ready")
+	}
+
+	var responseBuilder strings.Builder
+	streamedChunk := false
+	for {
+		select {
+		case <-ctx.Done():
+			return tools.ToolResult{}, ctx.Err()
+		case notification, ok := <-notifications:
+			if !ok {
+				return tools.ToolResult{}, errors.New("gateway notification channel closed")
+			}
+			if !strings.EqualFold(strings.TrimSpace(notification.Method), protocol.MethodGatewayEvent) {
+				continue
+			}
+
+			var frame gateway.MessageFrame
+			if err := json.Unmarshal(notification.Params, &frame); err != nil {
+				continue
+			}
+			if !strings.EqualFold(strings.TrimSpace(frame.SessionID), targetSessionID) {
+				continue
+			}
+
+			payloadMap, ok := normalizeIDMEventPayload(frame.Payload)
+			if !ok {
+				continue
+			}
+			eventType := strings.ToLower(strings.TrimSpace(readMapStringValue(payloadMap, "event_type")))
+			eventPayload, _ := readMapAnyValue(payloadMap, "payload")
+			switch eventType {
+			case string(gateway.RuntimeEventTypeAskChunk):
+				chunk := extractIDMAskText(eventPayload)
+				if strings.TrimSpace(chunk) == "" {
+					chunk = extractIDMAskText(payloadMap)
+				}
+				if strings.TrimSpace(chunk) == "" {
+					continue
+				}
+				responseBuilder.WriteString(chunk)
+				streamedChunk = true
+			case string(gateway.RuntimeEventTypeAskDone):
+				content := strings.TrimSpace(responseBuilder.String())
+				if !streamedChunk || content == "" {
+					content = strings.TrimSpace(extractIDMAskText(eventPayload))
+					if content == "" {
+						content = strings.TrimSpace(extractIDMAskText(payloadMap))
+					}
+				}
+				return tools.ToolResult{Content: content, IsError: false}, nil
+			case string(gateway.RuntimeEventTypeAskError):
+				message := strings.TrimSpace(extractIDMAskText(eventPayload))
+				if message == "" {
+					message = strings.TrimSpace(extractIDMAskText(payloadMap))
+				}
+				if message == "" {
+					message = "ask failed"
+				}
+				return tools.ToolResult{}, errors.New(message)
+			}
+		}
+	}
+}
+
+// deleteDiagnosisAskSessionQuiet 尝试删除诊断 Ask 会话，失败时静默忽略，避免影响主流程。
+func deleteDiagnosisAskSessionQuiet(rpcClient *gatewayclient.GatewayRPCClient, sessionID string) {
+	if rpcClient == nil {
+		return
+	}
+	normalizedSessionID := strings.TrimSpace(sessionID)
+	if normalizedSessionID == "" {
+		return
+	}
+	deleteCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	var frame gateway.MessageFrame
+	_ = rpcClient.DeleteAskSession(
+		deleteCtx,
+		protocol.DeleteAskSessionParams{SessionID: normalizedSessionID},
+		&frame,
+		gatewayclient.GatewayRPCCallOptions{
+			Timeout: 10 * time.Second,
+			Retries: 0,
+		},
+	)
 }
 
 // shouldDropAuto 判断自动诊断是否命中短窗口去抖。
@@ -317,7 +549,7 @@ func renderDiagnosisInitialFeedback(output io.Writer, prepared preparedDiagnosis
 		if !ok {
 			return
 		}
-		writeProxyLine(output, "快速预判（低置信度）:")
+		writeProxyLine(output, "快速预判（低置信度）：")
 	}
 	if !ok {
 		return

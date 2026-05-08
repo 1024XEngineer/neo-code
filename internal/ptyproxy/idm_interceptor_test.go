@@ -54,11 +54,11 @@ func TestRouteIDMInput(t *testing.T) {
 
 	t.Run("plain @ai without space should not intercept", func(t *testing.T) {
 		decision := routeIDMInput("@ai")
-		if decision.Kind != idmRoutePassThrough {
-			t.Fatalf("kind = %q, want %q", decision.Kind, idmRoutePassThrough)
+		if decision.Kind != idmRouteAskAI {
+			t.Fatalf("kind = %q, want %q", decision.Kind, idmRouteAskAI)
 		}
-		if decision.Payload != "@ai" {
-			t.Fatalf("payload = %q, want @ai", decision.Payload)
+		if decision.Payload != "" {
+			t.Fatalf("payload = %q, want empty", decision.Payload)
 		}
 	})
 }

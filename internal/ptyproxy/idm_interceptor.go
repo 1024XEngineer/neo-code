@@ -1,5 +1,3 @@
-//go:build !windows
-
 package ptyproxy
 
 import "strings"
@@ -41,6 +39,9 @@ func routeIDMInput(line string) idmRouteDecision {
 			Kind:    idmRouteAskAI,
 			Payload: strings.TrimSpace(strings.TrimPrefix(line, idmAIPrefix)),
 		}
+	}
+	if strings.EqualFold(trimmed, strings.TrimSpace(idmAIPrefix)) {
+		return idmRouteDecision{Kind: idmRouteAskAI}
 	}
 	return idmRouteDecision{
 		Kind:    idmRoutePassThrough,
