@@ -368,3 +368,89 @@ func TestWorkspaceIndex_ListIsCopy(t *testing.T) {
 		t.Fatalf("List should return a defensive copy; internal state mutated")
 	}
 }
+
+func TestWorkspaceRootExists(t *testing.T) {
+	existing := filepath.Join(t.TempDir(), "workspace")
+	if err := os.MkdirAll(existing, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if !WorkspaceRootExists(existing) {
+		t.Fatalf("WorkspaceRootExists(%q) = false, want true", existing)
+	}
+
+	missing := filepath.Join(t.TempDir(), "missing")
+	if WorkspaceRootExists(missing) {
+		t.Fatalf("WorkspaceRootExists(%q) = true, want false", missing)
+	}
+}
+
+func TestIsTemporaryReleaseCheckWorkspaceRoot(t *testing.T) {
+	tempRoot := filepath.Join(os.TempDir(), releaseCheckWorkspaceDirName, "build")
+	if !IsTemporaryReleaseCheckWorkspaceRoot(tempRoot) {
+		t.Fatalf("IsTemporaryReleaseCheckWorkspaceRoot(%q) = false, want true", tempRoot)
+	}
+
+	normalBuild := filepath.Join(t.TempDir(), "build")
+	if err := os.MkdirAll(normalBuild, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if IsTemporaryReleaseCheckWorkspaceRoot(normalBuild) {
+		t.Fatalf("IsTemporaryReleaseCheckWorkspaceRoot(%q) = true, want false", normalBuild)
+	}
+}
+
+func TestIsPersistentWorkspaceRoot(t *testing.T) {
+	realWorkspace := filepath.Join(t.TempDir(), "project-build")
+	if err := os.MkdirAll(realWorkspace, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if !IsPersistentWorkspaceRoot(realWorkspace) {
+		t.Fatalf("IsPersistentWorkspaceRoot(%q) = false, want true", realWorkspace)
+	}
+
+	tempWorkspace := filepath.Join(os.TempDir(), releaseCheckWorkspaceDirName, "build")
+	if err := os.MkdirAll(tempWorkspace, 0o755); err != nil {
+		t.Fatalf("mkdir temp workspace: %v", err)
+	}
+	if IsPersistentWorkspaceRoot(tempWorkspace) {
+		t.Fatalf("IsPersistentWorkspaceRoot(%q) = true, want false", tempWorkspace)
+	}
+
+	missing := filepath.Join(t.TempDir(), "missing")
+	if IsPersistentWorkspaceRoot(missing) {
+		t.Fatalf("IsPersistentWorkspaceRoot(%q) = true, want false", missing)
+	}
+}
+
+func TestWorkspaceIndexPrune(t *testing.T) {
+	base := t.TempDir()
+	idx := NewWorkspaceIndex(base)
+
+	keepDir := filepath.Join(base, "keep")
+	removeDir := filepath.Join(base, "remove")
+	for _, dir := range []string{keepDir, removeDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir %q: %v", dir, err)
+		}
+	}
+	keepRecord, err := idx.Register(keepDir, "Keep")
+	if err != nil {
+		t.Fatalf("register keep: %v", err)
+	}
+	removeRecord, err := idx.Register(removeDir, "Remove")
+	if err != nil {
+		t.Fatalf("register remove: %v", err)
+	}
+
+	removed := idx.Prune(func(record WorkspaceRecord) bool {
+		return record.Hash == removeRecord.Hash
+	})
+	if len(removed) != 1 || removed[0].Hash != removeRecord.Hash {
+		t.Fatalf("Prune() removed = %+v, want [%s]", removed, removeRecord.Hash)
+	}
+
+	list := idx.List()
+	if len(list) != 1 || list[0].Hash != keepRecord.Hash {
+		t.Fatalf("List() after Prune = %+v, want only keep record", list)
+	}
+}

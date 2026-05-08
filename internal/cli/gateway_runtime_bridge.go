@@ -93,15 +93,11 @@ func defaultBuildGatewayRuntimePort(ctx context.Context, workdir string) (gatewa
 		_ = bundle.Close()
 		return nil, nil, err
 	}
+	if err := sanitizeWorkspaceIndex(index, defaultWorkspaceRoot); err != nil {
+		_ = bundle.Close()
+		return nil, nil, err
+	}
 	defaultHash := agentsession.HashWorkspaceRoot(defaultWorkspaceRoot)
-	if _, err := index.Register(defaultWorkspaceRoot, ""); err != nil {
-		_ = bundle.Close()
-		return nil, nil, err
-	}
-	if err := index.Save(); err != nil {
-		_ = bundle.Close()
-		return nil, nil, err
-	}
 
 	bridge, err := newGatewayRuntimePortBridge(ctx, bundle.Runtime, bundle.SessionStore, bundle.ConfigManager, bundle.ProviderSelection, bundle.ToolRegistry)
 	if err != nil {
@@ -154,6 +150,40 @@ func defaultBuildGatewayRuntimePort(ctx context.Context, workdir string) (gatewa
 	mw.SetManagementPort(bridge)
 
 	return mw, mw.Close, nil
+}
+
+// sanitizeWorkspaceIndex 在 Gateway 启动时清洗工作区索引，移除失效或临时残留目录。
+func sanitizeWorkspaceIndex(index *agentsession.WorkspaceIndex, defaultWorkspaceRoot string) error {
+	if index == nil {
+		return fmt.Errorf("gateway runtime bridge: workspace index is nil")
+	}
+
+	shouldPersistDefault := agentsession.IsPersistentWorkspaceRoot(defaultWorkspaceRoot)
+	changed := false
+	if shouldPersistDefault {
+		if _, err := index.Register(defaultWorkspaceRoot, ""); err != nil {
+			return err
+		}
+		changed = true
+	}
+
+	removed := index.Prune(func(record agentsession.WorkspaceRecord) bool {
+		path := strings.TrimSpace(record.Path)
+		if path == "" {
+			return true
+		}
+		if shouldPersistDefault && agentsession.WorkspacePathKey(path) == agentsession.WorkspacePathKey(defaultWorkspaceRoot) {
+			return false
+		}
+		return !agentsession.IsPersistentWorkspaceRoot(path)
+	})
+	if len(removed) > 0 {
+		changed = true
+	}
+	if !changed {
+		return nil
+	}
+	return index.Save()
 }
 
 // resolveGatewayDefaultWorkspaceRoot 解析网关默认工作区，优先使用显式参数，缺失时回退到配置快照。
