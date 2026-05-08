@@ -19,6 +19,12 @@ const (
 	RuntimeEventTypeRunDone RuntimeEventType = "run_done"
 	// RuntimeEventTypeRunError 表示运行失败事件。
 	RuntimeEventTypeRunError RuntimeEventType = "run_error"
+	// RuntimeEventTypeAskChunk 表示 Ask 流式分片事件。
+	RuntimeEventTypeAskChunk RuntimeEventType = "ask_chunk"
+	// RuntimeEventTypeAskDone 表示 Ask 完成事件。
+	RuntimeEventTypeAskDone RuntimeEventType = "ask_done"
+	// RuntimeEventTypeAskError 表示 Ask 失败事件。
+	RuntimeEventTypeAskError RuntimeEventType = "ask_error"
 )
 
 // PermissionResolutionDecision 表示权限审批最终决策。
@@ -61,6 +67,32 @@ type RunInput struct {
 	Workdir string
 	// Mode 是请求级 Agent 工作模式（build / plan）。
 	Mode string
+}
+
+// AskInput 表示网关向下游运行端口发起 ask 动作时的输入。
+type AskInput struct {
+	// SubjectID 是请求方身份主体标识。
+	SubjectID string
+	// RequestID 是客户端请求标识。
+	RequestID string
+	// SessionID 是 ask 会话标识；允许为空，由下游自动创建。
+	SessionID string
+	// Workdir 是请求级工作目录覆盖值，可选。
+	Workdir string
+	// UserQuery 是本次 ask 的用户输入文本。
+	UserQuery string
+	// Skills 是本次 ask 附加技能标识列表，可选。
+	Skills []string
+}
+
+// DeleteAskSessionInput 表示删除 ask 会话动作输入。
+type DeleteAskSessionInput struct {
+	// SubjectID 是请求方身份主体标识。
+	SubjectID string
+	// RequestID 是客户端请求标识。
+	RequestID string
+	// SessionID 是待删除的 ask 会话标识。
+	SessionID string
 }
 
 // CompactInput 表示网关向下游运行端口发起 compact 动作时的输入。
@@ -644,6 +676,10 @@ type AvailableSkillState struct {
 type RuntimePort interface {
 	// Run 启动一次运行编排。
 	Run(ctx context.Context, input RunInput) error
+	// Ask 启动一次 Ask 轻量问答编排。
+	Ask(ctx context.Context, input AskInput) error
+	// DeleteAskSession 删除指定 Ask 会话。
+	DeleteAskSession(ctx context.Context, input DeleteAskSessionInput) (bool, error)
 	// Compact 对指定会话触发一次手动压缩。
 	Compact(ctx context.Context, input CompactInput) (CompactResult, error)
 	// ExecuteSystemTool 执行一次系统工具调用。

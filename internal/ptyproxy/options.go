@@ -10,19 +10,17 @@ import (
 )
 
 const (
-	// DiagSocketEnv 是 shell 子进程内用于定位普通诊断 socket 的环境变量名。
-	DiagSocketEnv = "NEOCODE_DIAG_SOCKET"
-	// IDMDiagSocketEnv 是 shell 子进程内用于定位 IDM 诊断 socket 的环境变量名。
-	IDMDiagSocketEnv = "NEOCODE_IDM_SOCKET"
-	// DiagAltScreenGuardDisableEnv 用于快速禁用全屏抑制逻辑，便于紧急回滚。
+	// ShellSessionEnv 用于在 shell 子进程中传递当前代理 shell session 标识。
+	ShellSessionEnv = "NEOCODE_SHELL_SESSION"
+	// DiagAltScreenGuardDisableEnv 用于紧急关闭全屏抑制逻辑。
 	DiagAltScreenGuardDisableEnv = "NEOCODE_DIAG_ALTSCREEN_GUARD_DISABLED"
-	// IDMSessionPlanModeDisableEnv 用于关闭 IDM @ai 的 plan 模式注入，便于紧急回滚。
+	// IDMSessionPlanModeDisableEnv 用于关闭 IDM @ai 的 plan 模式注入。
 	IDMSessionPlanModeDisableEnv = "NEOCODE_IDM_PLAN_MODE_DISABLED"
-	// DiagFastResponseDisableEnv 用于关闭诊断快速首响，便于对比和回滚。
+	// DiagFastResponseDisableEnv 用于关闭诊断快速首响。
 	DiagFastResponseDisableEnv = "NEOCODE_DIAG_FAST_RESPONSE_DISABLED"
-	// DiagCacheDisableEnv 用于关闭诊断缓存和 in-flight 合并，便于对比和回滚。
+	// DiagCacheDisableEnv 用于关闭诊断缓存与 in-flight 合并。
 	DiagCacheDisableEnv = "NEOCODE_DIAG_CACHE_DISABLED"
-	// DefaultRingBufferCapacity 定义诊断日志缓存窗口的默认字节上限（64KB）。
+	// DefaultRingBufferCapacity 定义诊断日志环形缓冲默认容量（64KB）。
 	DefaultRingBufferCapacity = 64 * 1024
 )
 
@@ -30,7 +28,6 @@ const (
 type ManualShellOptions struct {
 	Workdir              string
 	Shell                string
-	SocketPath           string
 	GatewayListenAddress string
 	GatewayTokenFile     string
 	Stdin                io.Reader
@@ -65,7 +62,6 @@ func NormalizeShellOptions(options ManualShellOptions) (ManualShellOptions, erro
 	}
 	normalized.Workdir = absoluteWorkdir
 	normalized.Shell = strings.TrimSpace(normalized.Shell)
-	normalized.SocketPath = strings.TrimSpace(normalized.SocketPath)
 	normalized.GatewayListenAddress = strings.TrimSpace(normalized.GatewayListenAddress)
 	normalized.GatewayTokenFile = strings.TrimSpace(normalized.GatewayTokenFile)
 	return normalized, nil

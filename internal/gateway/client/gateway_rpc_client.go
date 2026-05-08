@@ -261,6 +261,45 @@ func (c *GatewayRPCClient) Call(ctx context.Context, method string, params any, 
 	})
 }
 
+// Ask 调用 gateway.ask，并支持按需覆写超时与重试策略。
+func (c *GatewayRPCClient) Ask(
+	ctx context.Context,
+	params protocol.AskParams,
+	result any,
+	options ...GatewayRPCCallOptions,
+) error {
+	if len(options) > 0 {
+		return c.CallWithOptions(ctx, protocol.MethodGatewayAsk, params, result, options[0])
+	}
+	return c.Call(ctx, protocol.MethodGatewayAsk, params, result)
+}
+
+// DeleteAskSession 调用 gateway.deleteAskSession，并支持按需覆写超时与重试策略。
+func (c *GatewayRPCClient) DeleteAskSession(
+	ctx context.Context,
+	params protocol.DeleteAskSessionParams,
+	result any,
+	options ...GatewayRPCCallOptions,
+) error {
+	if len(options) > 0 {
+		return c.CallWithOptions(ctx, protocol.MethodGatewayDeleteAskSession, params, result, options[0])
+	}
+	return c.Call(ctx, protocol.MethodGatewayDeleteAskSession, params, result)
+}
+
+// TriggerAction 调用 gateway.experimental.triggerAction，并支持按需覆写超时与重试策略。
+func (c *GatewayRPCClient) TriggerAction(
+	ctx context.Context,
+	params protocol.TriggerActionParams,
+	result any,
+	options ...GatewayRPCCallOptions,
+) error {
+	if len(options) > 0 {
+		return c.CallWithOptions(ctx, protocol.MethodGatewayExperimentalTriggerAction, params, result, options[0])
+	}
+	return c.Call(ctx, protocol.MethodGatewayExperimentalTriggerAction, params, result)
+}
+
 // CallWithOptions 发起一次可覆盖超时与重试策略的 JSON-RPC 调用。
 func (c *GatewayRPCClient) CallWithOptions(
 	ctx context.Context,

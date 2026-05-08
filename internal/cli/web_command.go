@@ -22,13 +22,13 @@ import (
 )
 
 type webCommandOptions struct {
-	HTTPAddress  string
-	LogLevel     string
-	StaticDir    string
-	OpenBrowser  bool
-	SkipBuild    bool
-	Workdir      string
-	TokenFile    string
+	HTTPAddress string
+	LogLevel    string
+	StaticDir   string
+	OpenBrowser bool
+	SkipBuild   bool
+	Workdir     string
+	TokenFile   string
 }
 
 // newWebCommand 创建并返回根命令下的 web 子命令，负责构建前端并启动带 Web UI 的 Gateway。
@@ -36,9 +36,9 @@ func newWebCommand() *cobra.Command {
 	options := &webCommandOptions{}
 
 	cmd := &cobra.Command{
-		Use:   "web",
-		Short: "Start NeoCode with Web UI",
-		Long:  "Build frontend assets (if needed) and start the gateway with an integrated web UI.\nOpen http://127.0.0.1:8080 in your browser to use the interactive coding agent.",
+		Use:          "web",
+		Short:        "Start NeoCode with Web UI",
+		Long:         "Build frontend assets (if needed) and start the gateway with an integrated web UI.\nOpen http://127.0.0.1:8080 in your browser to use the interactive coding agent.",
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {

@@ -109,9 +109,9 @@ func TestRenderCurrentPlanSectionInjectsFullPlan(t *testing.T) {
 		Revision: 2,
 		Status:   agentsession.PlanStatusApproved,
 		Spec: agentsession.PlanSpec{
-			Goal:        "完整计划",
-			Steps:       []string{"步骤一"},
-			Verify:      []string{"验证一"},
+			Goal:          "完整计划",
+			Steps:         []string{"步骤一"},
+			Verify:        []string{"验证一"},
 			OpenQuestions: []string{"问题一"},
 		},
 		Summary: agentsession.SummaryView{

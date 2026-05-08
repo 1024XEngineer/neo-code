@@ -13,6 +13,14 @@ func (s *runtimePortCompileStub) Run(_ context.Context, _ RunInput) error {
 	return nil
 }
 
+func (s *runtimePortCompileStub) Ask(_ context.Context, _ AskInput) error {
+	return nil
+}
+
+func (s *runtimePortCompileStub) DeleteAskSession(_ context.Context, _ DeleteAskSessionInput) (bool, error) {
+	return false, nil
+}
+
 func (s *runtimePortCompileStub) Compact(_ context.Context, _ CompactInput) (CompactResult, error) {
 	return CompactResult{}, nil
 }

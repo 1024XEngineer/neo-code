@@ -24,6 +24,12 @@ const (
 	FrameActionPing FrameAction = "ping"
 	// FrameActionBindStream 表示声明流式事件订阅绑定。
 	FrameActionBindStream FrameAction = "bind_stream"
+	// FrameActionAsk 表示发起一次 Ask 轻量问答。
+	FrameActionAsk FrameAction = "ask"
+	// FrameActionDeleteAskSession 表示删除 Ask 会话。
+	FrameActionDeleteAskSession FrameAction = "delete_ask_session"
+	// FrameActionTriggerAction 表示触发 shell 侧动作通知。
+	FrameActionTriggerAction FrameAction = "trigger_action"
 	// FrameActionRun 表示发起一次运行。
 	FrameActionRun FrameAction = "run"
 	// FrameActionCompact 表示触发一次手动压缩。

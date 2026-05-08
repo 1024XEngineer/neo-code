@@ -8,8 +8,10 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"neo-code/internal/app"
@@ -26,6 +28,9 @@ import (
 
 const bridgeLocalSubjectID = "local_admin"
 const bridgeRuntimeUnavailableErrMsg = "gateway runtime bridge: runtime is unavailable"
+const bridgeAskSessionPrefix = "ask"
+const bridgeAskRunPrefix = "ask-run"
+const bridgeAskRunTTL = 30 * time.Minute
 
 type runtimeRunCanceler interface {
 	CancelRun(runID string) bool
@@ -50,7 +55,12 @@ type runtimeCheckpointer interface {
 	CheckpointDiff(ctx context.Context, input agentruntime.CheckpointDiffInput) (agentruntime.CheckpointDiffResult, error)
 }
 
-// bridgeSessionStore 定义桥接层对会话存储的最低需求。
+// askBridgeRunState 记录 ask 运行期间的会话映射。
+type askBridgeRunState struct {
+	SessionID string
+	StartedAt time.Time
+}
+
 type bridgeSessionStore interface {
 	DeleteSession(ctx context.Context, sessionID string) error
 	UpdateSessionState(ctx context.Context, input agentsession.UpdateSessionStateInput) error
@@ -189,6 +199,10 @@ type gatewayRuntimePortBridge struct {
 
 	stopOnce sync.Once
 	stopCh   chan struct{}
+
+	askMu       sync.Mutex
+	askRuns     map[string]askBridgeRunState
+	askSequence uint64
 }
 
 // newGatewayRuntimePortBridge 创建 RuntimePort 桥接器，用于把 runtime 事件转换为 gateway 统一事件。
@@ -226,6 +240,7 @@ func newGatewayRuntimePortBridge(
 		toolRegistry:      tr,
 		events:            make(chan gateway.RuntimeEvent, 128),
 		stopCh:            make(chan struct{}),
+		askRuns:           make(map[string]askBridgeRunState),
 	}
 	go bridge.runEventBridge(ctx)
 	return bridge, nil
@@ -252,6 +267,58 @@ func (b *gatewayRuntimePortBridge) Run(ctx context.Context, input gateway.RunInp
 		return b.runtime.Submit(ctx, convertGatewayRunInput(input))
 	}
 	return err
+}
+
+// Ask 将 gateway.ask 输入转换为 runtime Submit，并把运行态绑定到 ask 事件流。
+func (b *gatewayRuntimePortBridge) Ask(ctx context.Context, input gateway.AskInput) error {
+	if err := b.ensureRuntimeAccess(input.SubjectID); err != nil {
+		return err
+	}
+
+	normalizedQuery := strings.TrimSpace(input.UserQuery)
+	if normalizedQuery == "" {
+		return fmt.Errorf("gateway runtime bridge: ask user_query is empty")
+	}
+
+	sessionID := strings.TrimSpace(input.SessionID)
+	if sessionID == "" {
+		sessionID = b.generateAskSessionID()
+	}
+	runID := b.generateAskRunID()
+	b.trackAskRun(sessionID, runID)
+	submitErr := b.runtime.Ask(ctx, agentruntime.AskInput{
+		SessionID: sessionID,
+		RunID:     runID,
+		Workdir:   strings.TrimSpace(input.Workdir),
+		UserQuery: normalizedQuery,
+		Skills:    append([]string(nil), input.Skills...),
+	})
+	if submitErr != nil {
+		b.completeAskRun(runID)
+		return submitErr
+	}
+	return nil
+}
+
+// DeleteAskSession 删除 ask 会话并清理桥接层缓存状态。
+func (b *gatewayRuntimePortBridge) DeleteAskSession(ctx context.Context, input gateway.DeleteAskSessionInput) (bool, error) {
+	if err := b.ensureRuntimeAccess(input.SubjectID); err != nil {
+		return false, err
+	}
+	sessionID := strings.TrimSpace(input.SessionID)
+	if sessionID == "" {
+		return false, gateway.ErrRuntimeResourceNotFound
+	}
+
+	deleted, err := b.runtime.DeleteAskSession(ctx, agentruntime.DeleteAskSessionInput{SessionID: sessionID})
+	b.forgetAskSession(sessionID)
+	if err != nil {
+		if isRuntimeNotFoundError(err) {
+			return deleted, nil
+		}
+		return false, err
+	}
+	return deleted, nil
 }
 
 // Compact 将 gateway.compact 请求映射到 runtime 紧凑化能力并回填统一结果。
@@ -942,7 +1009,10 @@ func (b *gatewayRuntimePortBridge) runEventBridge(ctx context.Context) {
 			if !ok {
 				return
 			}
-			mappedEvent := convertRuntimeEvent(event)
+			mappedEvent, mapped := b.convertAskRuntimeEvent(event)
+			if !mapped {
+				mappedEvent = convertRuntimeEvent(event)
+			}
 			select {
 			case <-ctx.Done():
 				return
@@ -952,6 +1022,389 @@ func (b *gatewayRuntimePortBridge) runEventBridge(ctx context.Context) {
 			}
 		}
 	}
+}
+
+// convertAskRuntimeEvent 将 ask 运行的 runtime 事件映射为 ask_chunk/ask_done/ask_error。
+func (b *gatewayRuntimePortBridge) convertAskRuntimeEvent(event agentruntime.RuntimeEvent) (gateway.RuntimeEvent, bool) {
+	if b == nil {
+		return gateway.RuntimeEvent{}, false
+	}
+	runID := strings.TrimSpace(event.RunID)
+	if runID == "" {
+		return gateway.RuntimeEvent{}, false
+	}
+	payloadMap := normalizeAskPayloadMap(event.Payload)
+
+	if event.Type == agentruntime.EventError || event.Type == agentruntime.EventRunCanceled {
+		runState, exists := b.lookupAskRun(runID)
+		if !exists && !strings.HasPrefix(runID, bridgeAskRunPrefix+"-") {
+			return gateway.RuntimeEvent{}, false
+		}
+		sessionID := strings.TrimSpace(event.SessionID)
+		if sessionID == "" {
+			if exists {
+				sessionID = strings.TrimSpace(runState.SessionID)
+			}
+		}
+		if sessionID == "" {
+			return gateway.RuntimeEvent{}, false
+		}
+		code := normalizeAskErrorCode(readStringValueFromMap(payloadMap, "code"), event.Type)
+		message := strings.TrimSpace(readStringValueFromMap(payloadMap, "message"))
+		if message == "" {
+			message = strings.TrimSpace(extractAskPayloadText(event.Payload))
+		}
+		if message == "" {
+			message = "ask failed"
+		}
+		b.completeAskRun(runID)
+		return gateway.RuntimeEvent{
+			Type:      gateway.RuntimeEventTypeAskError,
+			RunID:     runID,
+			SessionID: sessionID,
+			Payload: map[string]any{
+				"code":    code,
+				"message": message,
+			},
+		}, true
+	}
+
+	runState, exists := b.lookupAskRun(runID)
+	if !exists {
+		return gateway.RuntimeEvent{}, false
+	}
+	sessionID := strings.TrimSpace(runState.SessionID)
+
+	switch event.Type {
+	case agentruntime.EventAgentChunk:
+		delta := readRawStringValueFromMap(payloadMap, "delta")
+		if delta == "" {
+			delta = extractAskPayloadText(event.Payload)
+		}
+		if delta == "" {
+			return gateway.RuntimeEvent{}, false
+		}
+		return gateway.RuntimeEvent{
+			Type:      gateway.RuntimeEventTypeAskChunk,
+			RunID:     runID,
+			SessionID: sessionID,
+			Payload: map[string]any{
+				"delta": delta,
+			},
+		}, true
+	case agentruntime.EventAgentDone:
+		fullResponse := readRawStringValueFromMap(payloadMap, "full_response")
+		if fullResponse == "" {
+			fullResponse = extractAskPayloadText(event.Payload)
+		}
+		compacted := readBoolValueFromMap(payloadMap, "compacted")
+		usage := readUsagePayload(payloadMap)
+		b.completeAskRun(runID)
+		return gateway.RuntimeEvent{
+			Type:      gateway.RuntimeEventTypeAskDone,
+			RunID:     runID,
+			SessionID: sessionID,
+			Payload: map[string]any{
+				"full_response": fullResponse,
+				"compacted":     compacted,
+				"usage":         usage,
+			},
+		}, true
+	default:
+		return gateway.RuntimeEvent{}, false
+	}
+}
+
+// generateAskSessionID 生成 ask 会话标识。
+func (b *gatewayRuntimePortBridge) generateAskSessionID() string {
+	sequence := atomic.AddUint64(&b.askSequence, 1)
+	return fmt.Sprintf("%s-%d-%d", bridgeAskSessionPrefix, os.Getpid(), sequence)
+}
+
+// generateAskRunID 生成 ask 运行标识。
+func (b *gatewayRuntimePortBridge) generateAskRunID() string {
+	sequence := atomic.AddUint64(&b.askSequence, 1)
+	return fmt.Sprintf("%s-%d-%d", bridgeAskRunPrefix, os.Getpid(), sequence)
+}
+
+// trackAskRun 记录 ask 运行与会话映射关系。
+func (b *gatewayRuntimePortBridge) trackAskRun(sessionID string, runID string) {
+	if b == nil {
+		return
+	}
+	normalizedSessionID := strings.TrimSpace(sessionID)
+	normalizedRunID := strings.TrimSpace(runID)
+	if normalizedSessionID == "" || normalizedRunID == "" {
+		return
+	}
+
+	now := time.Now().UTC()
+	b.askMu.Lock()
+	defer b.askMu.Unlock()
+	b.cleanupExpiredAskRunsLocked(now)
+	b.askRuns[normalizedRunID] = askBridgeRunState{
+		SessionID: normalizedSessionID,
+		StartedAt: now,
+	}
+}
+
+// lookupAskRun 查询 ask 运行对应的会话状态。
+func (b *gatewayRuntimePortBridge) lookupAskRun(runID string) (askBridgeRunState, bool) {
+	if b == nil {
+		return askBridgeRunState{}, false
+	}
+	normalizedRunID := strings.TrimSpace(runID)
+	if normalizedRunID == "" {
+		return askBridgeRunState{}, false
+	}
+
+	now := time.Now().UTC()
+	b.askMu.Lock()
+	defer b.askMu.Unlock()
+	b.cleanupExpiredAskRunsLocked(now)
+	runState, exists := b.askRuns[normalizedRunID]
+	if !exists {
+		return askBridgeRunState{}, false
+	}
+	return runState, true
+}
+
+// completeAskRun 清理 ask 运行映射。
+func (b *gatewayRuntimePortBridge) completeAskRun(runID string) {
+	if b == nil {
+		return
+	}
+	normalizedRunID := strings.TrimSpace(runID)
+	if normalizedRunID == "" {
+		return
+	}
+
+	b.askMu.Lock()
+	defer b.askMu.Unlock()
+	if _, exists := b.askRuns[normalizedRunID]; exists {
+		delete(b.askRuns, normalizedRunID)
+	}
+}
+
+// forgetAskSession 删除 ask 会话及其关联运行映射。
+func (b *gatewayRuntimePortBridge) forgetAskSession(sessionID string) {
+	if b == nil {
+		return
+	}
+	normalizedSessionID := strings.TrimSpace(sessionID)
+	if normalizedSessionID == "" {
+		return
+	}
+
+	b.askMu.Lock()
+	defer b.askMu.Unlock()
+	for runID, runState := range b.askRuns {
+		if strings.EqualFold(strings.TrimSpace(runState.SessionID), normalizedSessionID) {
+			delete(b.askRuns, runID)
+		}
+	}
+}
+
+// cleanupExpiredAskRunsLocked 清理过期 ask 运行映射（调用方需持有 askMu）。
+func (b *gatewayRuntimePortBridge) cleanupExpiredAskRunsLocked(now time.Time) {
+	if b == nil {
+		return
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	for runID, runState := range b.askRuns {
+		if runState.StartedAt.IsZero() {
+			delete(b.askRuns, runID)
+			continue
+		}
+		if now.Sub(runState.StartedAt) <= bridgeAskRunTTL {
+			continue
+		}
+		delete(b.askRuns, runID)
+	}
+}
+
+// extractAskPayloadText 将 runtime 事件 payload 规整为文本输出。
+func extractAskPayloadText(payload any) string {
+	switch typed := payload.(type) {
+	case nil:
+		return ""
+	case string:
+		return typed
+	case fmt.Stringer:
+		return typed.String()
+	case map[string]any:
+		return extractAskPayloadTextFromMap(typed)
+	default:
+		encoded, err := json.Marshal(typed)
+		if err != nil {
+			return fmt.Sprint(typed)
+		}
+		decoded := make(map[string]any)
+		if err := json.Unmarshal(encoded, &decoded); err != nil {
+			return fmt.Sprint(typed)
+		}
+		return extractAskPayloadTextFromMap(decoded)
+	}
+}
+
+// extractAskPayloadTextFromMap 从 map 结构中提取常见文本字段。
+func extractAskPayloadTextFromMap(payload map[string]any) string {
+	if len(payload) == 0 {
+		return ""
+	}
+	for _, key := range []string{"delta", "full_response", "message", "text", "content", "summary"} {
+		rawValue, exists := payload[key]
+		if !exists || rawValue == nil {
+			continue
+		}
+		text := fmt.Sprint(rawValue)
+		if text != "" {
+			return text
+		}
+	}
+	return ""
+}
+
+// normalizeAskPayloadMap 将 Ask 事件 payload 归一化为 map，便于结构字段读取。
+func normalizeAskPayloadMap(payload any) map[string]any {
+	switch typed := payload.(type) {
+	case map[string]any:
+		return typed
+	case nil:
+		return map[string]any{}
+	default:
+		encoded, err := json.Marshal(typed)
+		if err != nil {
+			return map[string]any{}
+		}
+		decoded := make(map[string]any)
+		if err := json.Unmarshal(encoded, &decoded); err != nil {
+			return map[string]any{}
+		}
+		return decoded
+	}
+}
+
+// readStringValueFromMap 安全读取 map 中的字符串字段。
+func readStringValueFromMap(container map[string]any, key string) string {
+	if len(container) == 0 {
+		return ""
+	}
+	raw, exists := container[strings.TrimSpace(key)]
+	if !exists || raw == nil {
+		return ""
+	}
+	return strings.TrimSpace(fmt.Sprint(raw))
+}
+
+// readRawStringValueFromMap 读取 map 字符串字段并保留首尾空白，避免 Ask 流式片段丢失换行和空格。
+func readRawStringValueFromMap(container map[string]any, key string) string {
+	if len(container) == 0 {
+		return ""
+	}
+	raw, exists := container[strings.TrimSpace(key)]
+	if !exists || raw == nil {
+		return ""
+	}
+	if typed, ok := raw.(string); ok {
+		return typed
+	}
+	return fmt.Sprint(raw)
+}
+
+// readBoolValueFromMap 安全读取 map 中的布尔字段。
+func readBoolValueFromMap(container map[string]any, key string) bool {
+	if len(container) == 0 {
+		return false
+	}
+	raw, exists := container[strings.TrimSpace(key)]
+	if !exists || raw == nil {
+		return false
+	}
+	switch typed := raw.(type) {
+	case bool:
+		return typed
+	case string:
+		normalized := strings.ToLower(strings.TrimSpace(typed))
+		return normalized == "1" || normalized == "true" || normalized == "yes" || normalized == "on"
+	default:
+		return false
+	}
+}
+
+// readUsagePayload 归一化 Ask usage 字段，缺失时补齐默认值。
+func readUsagePayload(container map[string]any) map[string]any {
+	fallback := map[string]any{
+		"input_tokens":  0,
+		"output_tokens": 0,
+	}
+	if len(container) == 0 {
+		return fallback
+	}
+	raw, exists := container["usage"]
+	if !exists || raw == nil {
+		return fallback
+	}
+	if usageMap, ok := raw.(map[string]any); ok {
+		return map[string]any{
+			"input_tokens":  normalizeTokenValue(usageMap["input_tokens"]),
+			"output_tokens": normalizeTokenValue(usageMap["output_tokens"]),
+		}
+	}
+	encoded, err := json.Marshal(raw)
+	if err != nil {
+		return fallback
+	}
+	decoded := map[string]any{}
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		return fallback
+	}
+	return map[string]any{
+		"input_tokens":  normalizeTokenValue(decoded["input_tokens"]),
+		"output_tokens": normalizeTokenValue(decoded["output_tokens"]),
+	}
+}
+
+// normalizeTokenValue 将 token 值转换为整型字段，非法值回退 0。
+func normalizeTokenValue(value any) int {
+	switch typed := value.(type) {
+	case int:
+		if typed > 0 {
+			return typed
+		}
+	case int64:
+		if typed > 0 {
+			return int(typed)
+		}
+	case float64:
+		if typed > 0 {
+			return int(typed)
+		}
+	case string:
+		trimmed := strings.TrimSpace(typed)
+		if trimmed == "" {
+			return 0
+		}
+		parsed, err := strconv.Atoi(trimmed)
+		if err == nil && parsed > 0 {
+			return parsed
+		}
+	}
+	return 0
+}
+
+// normalizeAskErrorCode 归一化 Ask 错误码，确保对外协议字段稳定。
+func normalizeAskErrorCode(raw string, eventType agentruntime.EventType) string {
+	code := strings.ToUpper(strings.TrimSpace(raw))
+	if code != "" {
+		return code
+	}
+	if eventType == agentruntime.EventRunCanceled {
+		return "CANCELED"
+	}
+	return "INTERNAL_ERROR"
 }
 
 // convertGatewayRunInput 将 gateway.run 输入转换为 runtime PrepareInput。

@@ -110,6 +110,25 @@ func TestIDMControllerOnShellEventRestoresIdle(t *testing.T) {
 	}
 }
 
+func TestIDMControllerPromptReadyRestoresIdleAfterNativePassthrough(t *testing.T) {
+	controller := newIDMController(idmControllerOptions{
+		PTYWriter: &bytes.Buffer{},
+		Output:    &bytes.Buffer{},
+	})
+	controller.mu.Lock()
+	controller.active = true
+	controller.mode = idmModeNativeCmd
+	controller.mu.Unlock()
+
+	controller.OnShellEvent(ShellEvent{Type: ShellEventPromptReady})
+
+	controller.mu.Lock()
+	defer controller.mu.Unlock()
+	if controller.mode != idmModeIdle {
+		t.Fatalf("mode = %v, want idle", controller.mode)
+	}
+}
+
 func TestIDMControllerHandleInputByteCtrlSignals(t *testing.T) {
 	t.Run("ctrl+c byte exits in idle mode", func(t *testing.T) {
 		controller := newIDMController(idmControllerOptions{

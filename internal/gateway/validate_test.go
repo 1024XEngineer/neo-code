@@ -272,8 +272,8 @@ func TestValidateFrameNewActions(t *testing.T) {
 				Type:   FrameTypeRequest,
 				Action: FrameActionCreateCustomProvider,
 				Payload: map[string]any{
-					"name":       "p",
-					"driver":     "d",
+					"name":        "p",
+					"driver":      "d",
 					"api_key_env": "e",
 				},
 			},
@@ -543,7 +543,9 @@ func TestValidateFrameInputParts(t *testing.T) {
 
 func TestDecodePayloadErrors(t *testing.T) {
 	t.Run("marshal error", func(t *testing.T) {
-		err := decodePayload(struct{ Bad chan int `json:"bad"` }{Bad: make(chan int)}, &protocol.RenameSessionParams{})
+		err := decodePayload(struct {
+			Bad chan int `json:"bad"`
+		}{Bad: make(chan int)}, &protocol.RenameSessionParams{})
 		if err == nil {
 			t.Fatal("expected decodePayload error")
 		}
