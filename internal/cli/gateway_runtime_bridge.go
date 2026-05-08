@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -13,6 +14,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"neo-code/internal/app"
 	"neo-code/internal/checkpoint"
@@ -20,6 +22,7 @@ import (
 	configstate "neo-code/internal/config/state"
 	"neo-code/internal/gateway"
 	providertypes "neo-code/internal/provider/types"
+	"neo-code/internal/repository"
 	agentruntime "neo-code/internal/runtime"
 	agentsession "neo-code/internal/session"
 	"neo-code/internal/skills"
@@ -31,6 +34,7 @@ const bridgeRuntimeUnavailableErrMsg = "gateway runtime bridge: runtime is unava
 const bridgeAskSessionPrefix = "ask"
 const bridgeAskRunPrefix = "ask-run"
 const bridgeAskRunTTL = 30 * time.Minute
+const readFilePreviewLimitBytes int64 = 512 * 1024
 
 type runtimeRunCanceler interface {
 	CancelRun(runID string) bool
@@ -93,15 +97,11 @@ func defaultBuildGatewayRuntimePort(ctx context.Context, workdir string) (gatewa
 		_ = bundle.Close()
 		return nil, nil, err
 	}
+	if err := sanitizeWorkspaceIndex(index, defaultWorkspaceRoot); err != nil {
+		_ = bundle.Close()
+		return nil, nil, err
+	}
 	defaultHash := agentsession.HashWorkspaceRoot(defaultWorkspaceRoot)
-	if _, err := index.Register(defaultWorkspaceRoot, ""); err != nil {
-		_ = bundle.Close()
-		return nil, nil, err
-	}
-	if err := index.Save(); err != nil {
-		_ = bundle.Close()
-		return nil, nil, err
-	}
 
 	bridge, err := newGatewayRuntimePortBridge(ctx, bundle.Runtime, bundle.SessionStore, bundle.ConfigManager, bundle.ProviderSelection, bundle.ToolRegistry)
 	if err != nil {
@@ -156,6 +156,40 @@ func defaultBuildGatewayRuntimePort(ctx context.Context, workdir string) (gatewa
 	return mw, mw.Close, nil
 }
 
+// sanitizeWorkspaceIndex 在 Gateway 启动时清洗工作区索引，移除失效或临时残留目录。
+func sanitizeWorkspaceIndex(index *agentsession.WorkspaceIndex, defaultWorkspaceRoot string) error {
+	if index == nil {
+		return fmt.Errorf("gateway runtime bridge: workspace index is nil")
+	}
+
+	shouldPersistDefault := agentsession.IsPersistentWorkspaceRoot(defaultWorkspaceRoot)
+	changed := false
+	if shouldPersistDefault {
+		if _, err := index.Register(defaultWorkspaceRoot, ""); err != nil {
+			return err
+		}
+		changed = true
+	}
+
+	removed := index.Prune(func(record agentsession.WorkspaceRecord) bool {
+		path := strings.TrimSpace(record.Path)
+		if path == "" {
+			return true
+		}
+		if shouldPersistDefault && agentsession.WorkspacePathKey(path) == agentsession.WorkspacePathKey(defaultWorkspaceRoot) {
+			return false
+		}
+		return !agentsession.IsPersistentWorkspaceRoot(path)
+	})
+	if len(removed) > 0 {
+		changed = true
+	}
+	if !changed {
+		return nil
+	}
+	return index.Save()
+}
+
 // resolveGatewayDefaultWorkspaceRoot 解析网关默认工作区，优先使用显式参数，缺失时回退到配置快照。
 func resolveGatewayDefaultWorkspaceRoot(requestedWorkdir string, configWorkdir string) (string, error) {
 	candidate := strings.TrimSpace(requestedWorkdir)
@@ -194,6 +228,7 @@ type gatewayRuntimePortBridge struct {
 	sessionStore      bridgeSessionStore
 	configManager     configManagerPort
 	providerSelection providerSelectorPort
+	repoService       *repository.Service
 	toolRegistry      *tools.Registry
 	events            chan gateway.RuntimeEvent
 
@@ -220,6 +255,7 @@ func newGatewayRuntimePortBridge(
 	}
 	var cm configManagerPort
 	var ps providerSelectorPort
+	var repoSvc *repository.Service
 	var tr *tools.Registry
 	for _, extra := range extras {
 		switch typed := extra.(type) {
@@ -227,9 +263,14 @@ func newGatewayRuntimePortBridge(
 			cm = typed
 		case providerSelectorPort:
 			ps = typed
+		case *repository.Service:
+			repoSvc = typed
 		case *tools.Registry:
 			tr = typed
 		}
+	}
+	if repoSvc == nil {
+		repoSvc = repository.NewService()
 	}
 
 	bridge := &gatewayRuntimePortBridge{
@@ -237,6 +278,7 @@ func newGatewayRuntimePortBridge(
 		sessionStore:      store,
 		configManager:     cm,
 		providerSelection: ps,
+		repoService:       repoSvc,
 		toolRegistry:      tr,
 		events:            make(chan gateway.RuntimeEvent, 128),
 		stopCh:            make(chan struct{}),
@@ -672,6 +714,142 @@ func (b *gatewayRuntimePortBridge) ListFiles(ctx context.Context, input gateway.
 	return result, nil
 }
 
+// ReadFile 读取工作目录内文件的只读预览内容。
+func (b *gatewayRuntimePortBridge) ReadFile(ctx context.Context, input gateway.ReadFileInput) (gateway.ReadFileResult, error) {
+	if err := b.ensureRuntimeAccess(input.SubjectID); err != nil {
+		return gateway.ReadFileResult{}, err
+	}
+	root, err := b.resolveListFilesRoot(ctx, gateway.ListFilesInput{
+		SubjectID: input.SubjectID,
+		SessionID: input.SessionID,
+		Workdir:   input.Workdir,
+	})
+	if err != nil {
+		return gateway.ReadFileResult{}, err
+	}
+	target, relativePath, err := resolveSafeListFilesPath(root, input.Path)
+	if err != nil {
+		return gateway.ReadFileResult{}, err
+	}
+	info, err := os.Stat(target)
+	if err != nil {
+		return gateway.ReadFileResult{}, err
+	}
+	if info.IsDir() {
+		return gateway.ReadFileResult{}, fmt.Errorf("gateway runtime bridge: readFile path is a directory")
+	}
+
+	result := gateway.ReadFileResult{
+		Path:     filepath.ToSlash(relativePath),
+		Encoding: "utf-8",
+		Size:     info.Size(),
+		ModTime:  info.ModTime().UTC().Format(time.RFC3339),
+	}
+	if info.Size() > readFilePreviewLimitBytes {
+		result.Truncated = true
+		return result, nil
+	}
+
+	data, err := os.ReadFile(target)
+	if err != nil {
+		return gateway.ReadFileResult{}, err
+	}
+	if isBinaryPreviewContent(data) {
+		result.Encoding = "binary"
+		result.IsBinary = true
+		return result, nil
+	}
+	result.Content = string(data)
+	return result, nil
+}
+
+// ListGitDiffFiles 返回当前工作树相对 HEAD 的 Git 变更文件列表。
+func (b *gatewayRuntimePortBridge) ListGitDiffFiles(ctx context.Context, input gateway.ListGitDiffFilesInput) (gateway.ListGitDiffFilesResult, error) {
+	if err := b.ensureRuntimeAccess(input.SubjectID); err != nil {
+		return gateway.ListGitDiffFilesResult{}, err
+	}
+	root, err := b.resolveListFilesRoot(ctx, gateway.ListFilesInput{
+		SubjectID: input.SubjectID,
+		SessionID: input.SessionID,
+		Workdir:   input.Workdir,
+	})
+	if err != nil {
+		return gateway.ListGitDiffFilesResult{}, err
+	}
+	if b.repoService == nil {
+		return gateway.ListGitDiffFilesResult{}, fmt.Errorf("gateway runtime bridge: repository service is unavailable")
+	}
+	inspection, err := b.repoService.Inspect(ctx, root, repository.InspectOptions{ChangedFilesLimit: 200})
+	if err != nil {
+		return gateway.ListGitDiffFilesResult{}, err
+	}
+	result := gateway.ListGitDiffFilesResult{
+		InGitRepo: inspection.Summary.InGitRepo,
+		Branch:    inspection.Summary.Branch,
+		Ahead:     inspection.Summary.Ahead,
+		Behind:    inspection.Summary.Behind,
+		Files:     make([]gateway.GitDiffEntry, 0, len(inspection.ChangedFiles.Files)),
+	}
+	if !inspection.Summary.InGitRepo {
+		return result, nil
+	}
+	result.Truncated = inspection.ChangedFiles.Truncated
+	result.TotalCount = inspection.ChangedFiles.TotalCount
+	for _, file := range inspection.ChangedFiles.Files {
+		result.Files = append(result.Files, gateway.GitDiffEntry{
+			Path:    filepath.ToSlash(file.Path),
+			OldPath: filepath.ToSlash(file.OldPath),
+			Status:  string(file.Status),
+		})
+	}
+	return result, nil
+}
+
+// ReadGitDiffFile 读取单个 Git 变更文件的双文本预览内容。
+func (b *gatewayRuntimePortBridge) ReadGitDiffFile(ctx context.Context, input gateway.ReadGitDiffFileInput) (gateway.ReadGitDiffFileResult, error) {
+	if err := b.ensureRuntimeAccess(input.SubjectID); err != nil {
+		return gateway.ReadGitDiffFileResult{}, err
+	}
+	root, err := b.resolveListFilesRoot(ctx, gateway.ListFilesInput{
+		SubjectID: input.SubjectID,
+		SessionID: input.SessionID,
+		Workdir:   input.Workdir,
+	})
+	if err != nil {
+		return gateway.ReadGitDiffFileResult{}, err
+	}
+	if b.repoService == nil {
+		return gateway.ReadGitDiffFileResult{}, fmt.Errorf("gateway runtime bridge: repository service is unavailable")
+	}
+	result, err := b.repoService.ReadGitDiffFile(ctx, root, input.Path, readFilePreviewLimitBytes)
+	if err != nil {
+		return gateway.ReadGitDiffFileResult{}, err
+	}
+	return gateway.ReadGitDiffFileResult{
+		Path:            filepath.ToSlash(result.Path),
+		OldPath:         filepath.ToSlash(result.OldPath),
+		Status:          string(result.Status),
+		OriginalContent: result.OriginalContent,
+		ModifiedContent: result.ModifiedContent,
+		Encoding:        result.Encoding,
+		IsBinary:        result.IsBinary,
+		Truncated:       result.Truncated,
+		OriginalSize:    result.OriginalSize,
+		ModifiedSize:    result.ModifiedSize,
+	}, nil
+}
+
+// isBinaryPreviewContent 用启发式规则判断预览内容是否应视为二进制。
+func isBinaryPreviewContent(data []byte) bool {
+	if len(data) == 0 {
+		return false
+	}
+	if bytes.IndexByte(data, 0) >= 0 {
+		return true
+	}
+	return !utf8.Valid(data)
+}
+
 // ListModels 列出可用模型；有会话时按会话有效 provider 返回，无会话时按全局默认 provider 返回。
 func (b *gatewayRuntimePortBridge) ListModels(ctx context.Context, input gateway.ListModelsInput) ([]gateway.ModelEntry, error) {
 	if err := b.ensureRuntimeAccess(input.SubjectID); err != nil {
@@ -861,6 +1039,9 @@ func (b *gatewayRuntimePortBridge) SelectProviderModel(ctx context.Context, inpu
 		if err != nil {
 			return gateway.ProviderSelectionResult{}, err
 		}
+	}
+	if err := b.SyncSessionsProviderModel(ctx, selection.ProviderID, selection.ModelID); err != nil {
+		return gateway.ProviderSelectionResult{}, err
 	}
 	return gateway.ProviderSelectionResult{ProviderID: selection.ProviderID, ModelID: selection.ModelID}, nil
 }
@@ -1770,6 +1951,52 @@ func (b *gatewayRuntimePortBridge) loadStoredSession(ctx context.Context, sessio
 		return agentsession.Session{}, fmt.Errorf("gateway runtime bridge: session store does not support load session")
 	}
 	return loader.LoadSession(ctx, strings.TrimSpace(sessionID))
+}
+
+// SyncSessionsProviderModel 将当前工作区已列出的会话统一切换到新的 provider/model，避免全局切换后会话元数据继续滞留旧值。
+func (b *gatewayRuntimePortBridge) SyncSessionsProviderModel(
+	ctx context.Context,
+	providerID string,
+	modelID string,
+) error {
+	if b == nil || b.sessionStore == nil || b.runtime == nil {
+		return nil
+	}
+	providerID = strings.TrimSpace(providerID)
+	modelID = strings.TrimSpace(modelID)
+	if providerID == "" || modelID == "" {
+		return nil
+	}
+
+	summaries, err := b.runtime.ListSessions(ctx)
+	if err != nil {
+		return err
+	}
+	for _, summary := range summaries {
+		sessionID := strings.TrimSpace(summary.ID)
+		if sessionID == "" {
+			continue
+		}
+		session, loadErr := b.loadStoredSession(ctx, sessionID)
+		if loadErr != nil {
+			if errors.Is(loadErr, agentsession.ErrSessionNotFound) {
+				continue
+			}
+			return loadErr
+		}
+		head := session.HeadSnapshot()
+		head.Provider = providerID
+		head.Model = modelID
+		if updateErr := b.sessionStore.UpdateSessionState(ctx, agentsession.UpdateSessionStateInput{
+			SessionID: session.ID,
+			Title:     session.Title,
+			UpdatedAt: time.Now().UTC(),
+			Head:      head,
+		}); updateErr != nil {
+			return updateErr
+		}
+	}
+	return nil
 }
 
 // resolveSafeListFilesPath 将前端传入的相对路径限制在根目录内。

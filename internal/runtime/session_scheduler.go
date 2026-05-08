@@ -34,7 +34,7 @@ func (s *Service) loadOrCreateSession(
 		return session, nil
 	}
 
-	session, err := s.sessionStore.LoadSession(ctx, sessionID)
+	session, err := s.LoadSession(ctx, sessionID)
 	if err != nil {
 		return agentsession.Session{}, err
 	}

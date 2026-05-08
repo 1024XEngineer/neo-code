@@ -82,7 +82,7 @@ func (s *Service) Compact(ctx context.Context, input CompactInput) (CompactResul
 	if err != nil {
 		return CompactResult{}, err
 	}
-	session, err := s.sessionStore.LoadSession(ctx, input.SessionID)
+	session, err := s.LoadSession(ctx, input.SessionID)
 	if err != nil {
 		return CompactResult{}, err
 	}

@@ -183,6 +183,31 @@ func (idx *WorkspaceIndex) Delete(hash string, removeData bool) (WorkspaceRecord
 	return target, nil
 }
 
+// Prune 删除命中判定条件的工作区记录，并返回被移除的记录。
+func (idx *WorkspaceIndex) Prune(shouldRemove func(WorkspaceRecord) bool) []WorkspaceRecord {
+	if shouldRemove == nil {
+		return nil
+	}
+
+	idx.mu.Lock()
+	defer idx.mu.Unlock()
+
+	removed := make([]WorkspaceRecord, 0)
+	kept := make([]WorkspaceRecord, 0, len(idx.records))
+	for _, record := range idx.records {
+		if shouldRemove(record) {
+			removed = append(removed, record)
+			continue
+		}
+		kept = append(kept, record)
+	}
+	if len(removed) == 0 {
+		return nil
+	}
+	idx.records = kept
+	return removed
+}
+
 // filePath 返回索引文件的绝对路径。
 func (idx *WorkspaceIndex) filePath() string {
 	return filepath.Join(idx.baseDir, workspaceIndexFileName)

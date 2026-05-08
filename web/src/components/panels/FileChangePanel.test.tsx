@@ -1,11 +1,76 @@
-import { beforeEach, describe, expect, it } from 'vitest'
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import FileChangePanel from './FileChangePanel'
-import { useUIStore } from '@/stores/useUIStore'
+import { CHANGES_PREVIEW_TAB_ID, GIT_DIFF_PREVIEW_TAB_ID, useUIStore } from '@/stores/useUIStore'
+
+const mockGatewayAPI = {
+  listGitDiffFiles: vi.fn(),
+  readGitDiffFile: vi.fn(),
+}
+
+vi.mock('@/context/RuntimeProvider', () => ({
+  useGatewayAPI: () => mockGatewayAPI,
+}))
+
+vi.mock('./CodePreviewEditor', () => ({
+  default: ({ path, content, theme }: { path: string; content: string; theme: string }) => (
+    <div data-testid="code-preview-editor" data-path={path} data-theme={theme}>
+      {content}
+    </div>
+  ),
+}))
+
+vi.mock('./GitDiffPreviewEditor', () => ({
+  default: ({
+    path,
+    originalContent,
+    modifiedContent,
+    renderSideBySide,
+  }: {
+    path: string
+    originalContent: string
+    modifiedContent: string
+    renderSideBySide: boolean
+  }) => (
+    <div
+      data-testid="git-diff-preview-editor"
+      data-path={path}
+      data-side-by-side={String(renderSideBySide)}
+    >
+      {originalContent}::{modifiedContent}
+    </div>
+  ),
+}))
 
 describe('FileChangePanel', () => {
   beforeEach(() => {
-    cleanup()
+    vi.clearAllMocks()
+    mockGatewayAPI.listGitDiffFiles.mockResolvedValue({
+      payload: {
+        in_git_repo: true,
+        branch: 'main',
+        ahead: 1,
+        behind: 0,
+        truncated: false,
+        total_count: 1,
+        files: [
+          {
+            path: 'src/main.go',
+            status: 'modified',
+          },
+        ],
+      },
+    })
+    mockGatewayAPI.readGitDiffFile.mockResolvedValue({
+      payload: {
+        path: 'src/main.go',
+        status: 'modified',
+        original_content: 'before',
+        modified_content: 'after',
+        size_original: 6,
+        size_modified: 5,
+      },
+    })
     useUIStore.setState({
       fileChanges: [
         {
@@ -26,86 +91,217 @@ describe('FileChangePanel', () => {
                 { type: 'add', content: 'line 2 new' },
               ],
             },
-            {
-              header: '@@ -10,3 +10,3 @@',
-              additions: 1,
-              deletions: 1,
-              lines: [
-                { type: 'header', content: '@@ -10,3 +10,3 @@' },
-                { type: 'context', content: 'line 10' },
-                { type: 'del', content: 'line 11 old' },
-                { type: 'add', content: 'line 11 new' },
-              ],
-            },
-          ],
-          diff: [
-            { type: 'header', content: '@@ -1,3 +1,3 @@' },
-            { type: 'context', content: 'line 1' },
           ],
         },
       ],
+      gitDiffSummary: {
+        in_git_repo: true,
+        branch: 'main',
+        ahead: 1,
+        behind: 0,
+        truncated: false,
+        total_count: 1,
+        files: [
+          {
+            path: 'src/main.go',
+            status: 'modified',
+          },
+        ],
+      },
+      gitDiffLoading: false,
+      gitDiffError: '',
+      previewTabs: [
+        {
+          id: CHANGES_PREVIEW_TAB_ID,
+          kind: 'changes',
+          title: '文件变更',
+          closable: false,
+        },
+        {
+          id: GIT_DIFF_PREVIEW_TAB_ID,
+          kind: 'git-diff',
+          title: 'Git Diff',
+          closable: false,
+        },
+      ],
+      activePreviewTabId: CHANGES_PREVIEW_TAB_ID,
       changesPanelOpen: true,
-    } as any)
+      changesPanelWidth: 560,
+      theme: 'dark',
+    } as never)
   })
 
-  it('renders separate hunk blocks and keeps accept as a UI-only review marker', () => {
+  it('renders change diff blocks and keeps accept as a UI-only review marker', () => {
     render(<FileChangePanel />)
 
     fireEvent.click(screen.getByText('src/a.txt'))
 
     expect(screen.getByText('接受')).toBeTruthy()
-    expect(screen.queryByText('拒绝')).toBeNull()
-    expect(screen.getAllByTestId(/diff-hunk-fc-1-/)).toHaveLength(2)
+    expect(screen.getAllByTestId(/diff-hunk-fc-1-/)).toHaveLength(1)
     expect(screen.getByText('line 1')).toBeTruthy()
-    expect(screen.getByText('line 10')).toBeTruthy()
     expect(screen.getByText('line 2 new')).toBeTruthy()
-    expect(screen.getByText('line 11 old')).toBeTruthy()
 
     fireEvent.click(screen.getByText('接受'))
 
     expect(useUIStore.getState().fileChanges[0]?.status).toBe('accepted')
   })
 
-  it('renders all added lines for an expanded +6 -0 hunk without relying on inner scrolling', () => {
+  it('keeps the panel body clipped and uses the content area as the scroll container', () => {
+    render(<FileChangePanel />)
+
+    const panelBody = screen.getByTestId('file-change-panel-body')
+    const scrollArea = screen.getByTestId('changes-scroll-area')
+
+    expect(panelBody).toHaveStyle({ overflow: 'hidden', minHeight: '0px' })
+    expect(scrollArea).toHaveStyle({ overflow: 'auto', minHeight: '0px', flex: '1 1 0%' })
+  })
+
+  it('caps expanded diff blocks so long hunks do not stretch the whole panel', () => {
+    render(<FileChangePanel />)
+
+    fireEvent.click(screen.getByText('src/a.txt'))
+
+    expect(screen.getByTestId('diff-scroller-fc-1')).toHaveStyle({
+      display: 'flex',
+      flexDirection: 'column',
+    })
+    expect(screen.getByTestId('diff-hunk-scroller-fc-1-0')).toHaveStyle({
+      overflowX: 'auto',
+      overflowY: 'visible',
+    })
+    expect(screen.getByText('line 2 new').parentElement).toHaveStyle({
+      width: 'max-content',
+      minWidth: '100%',
+    })
+    expect(screen.getByText('line 2 new')).not.toHaveStyle({ overflowX: 'auto' })
+  })
+
+  it('renders multiple hunks as separately scrollable change blocks', () => {
     useUIStore.setState({
       fileChanges: [
         {
           id: 'fc-2',
-          path: 'src/b.txt',
+          path: 'src/multi.txt',
           status: 'modified',
-          additions: 6,
-          deletions: 0,
+          additions: 2,
+          deletions: 1,
           hunks: [
             {
-              header: '@@ -3,0 +4,6 @@',
-              additions: 6,
+              header: '@@ -1,2 +1,2 @@',
+              additions: 1,
+              deletions: 1,
+              lines: [
+                { type: 'header', content: '@@ -1,2 +1,2 @@' },
+                { type: 'del', content: 'old line' },
+                { type: 'add', content: 'new line' },
+              ],
+            },
+            {
+              header: '@@ -8,0 +9,1 @@',
+              additions: 1,
               deletions: 0,
               lines: [
-                { type: 'header', content: '@@ -3,0 +4,6 @@' },
-                { type: 'add', content: 'line add 1' },
-                { type: 'add', content: 'line add 2' },
-                { type: 'add', content: 'line add 3' },
-                { type: 'add', content: 'line add 4' },
-                { type: 'add', content: 'line add 5' },
-                { type: 'add', content: 'line add 6' },
+                { type: 'header', content: '@@ -8,0 +9,1 @@' },
+                { type: 'context', content: 'ctx' },
+                { type: 'add', content: 'tail line' },
               ],
             },
           ],
         },
       ],
-      changesPanelOpen: true,
-    } as any)
+    } as never)
 
     render(<FileChangePanel />)
 
-    fireEvent.click(screen.getByText('src/b.txt'))
+    fireEvent.click(screen.getByText('src/multi.txt'))
 
-    for (let i = 1; i <= 6; i += 1) {
-      expect(screen.getByText(`line add ${i}`)).toBeTruthy()
-    }
+    expect(screen.getAllByTestId(/diff-hunk-fc-2-/)).toHaveLength(2)
+    expect(screen.getByTestId('diff-hunk-scroller-fc-2-0')).toHaveStyle({ overflowX: 'auto', overflowY: 'visible' })
+    expect(screen.getByTestId('diff-hunk-scroller-fc-2-1')).toHaveStyle({ overflowX: 'auto', overflowY: 'visible' })
+  })
 
-    const diffScroller = screen.getByTestId('diff-scroller-fc-2') as HTMLDivElement
-    expect(diffScroller.style.maxHeight).toBe('')
-    expect(diffScroller.style.overflowY).toBe('visible')
+  it('keeps both fixed tabs visible', () => {
+    render(<FileChangePanel />)
+
+    expect(screen.getByTestId(`preview-tab-${CHANGES_PREVIEW_TAB_ID}`)).toBeTruthy()
+    expect(screen.getByTestId(`preview-tab-${GIT_DIFF_PREVIEW_TAB_ID}`)).toBeTruthy()
+  })
+
+  it('opens a git diff file tab from the fixed git diff view', async () => {
+    render(<FileChangePanel />)
+
+    fireEvent.click(screen.getByTestId(`preview-tab-${GIT_DIFF_PREVIEW_TAB_ID}`))
+    fireEvent.click(await screen.findByTestId('git-diff-entry-src/main.go'))
+
+    await waitFor(() => {
+      expect(mockGatewayAPI.readGitDiffFile).toHaveBeenCalledWith({ path: 'src/main.go' })
+    })
+
+    const preview = await screen.findByTestId('git-diff-preview-editor')
+    expect(preview).toHaveAttribute('data-path', 'src/main.go')
+    expect(preview).toHaveAttribute('data-side-by-side', 'true')
+    expect(preview.textContent).toContain('before::after')
+  })
+
+  it('renders the Monaco-based preview host for loaded text files', async () => {
+    useUIStore.setState({
+      previewTabs: [
+        {
+          id: CHANGES_PREVIEW_TAB_ID,
+          kind: 'changes',
+          title: '文件变更',
+          closable: false,
+        },
+        {
+          id: GIT_DIFF_PREVIEW_TAB_ID,
+          kind: 'git-diff',
+          title: 'Git Diff',
+          closable: false,
+        },
+        {
+          id: 'file:cmd/neocode/main.go',
+          kind: 'file',
+          title: 'main.go',
+          closable: true,
+          path: 'cmd/neocode/main.go',
+          content: 'package main',
+          loading: false,
+          loaded: true,
+          error: '',
+          truncated: false,
+          is_binary: false,
+        },
+      ],
+      activePreviewTabId: 'file:cmd/neocode/main.go',
+      theme: 'light',
+    } as never)
+
+    render(<FileChangePanel />)
+
+    const preview = await screen.findByTestId('code-preview-editor')
+    expect(preview).toHaveAttribute('data-path', 'cmd/neocode/main.go')
+    expect(preview).toHaveAttribute('data-theme', 'light')
+    expect(preview.textContent).toContain('package main')
+  })
+
+  it('uses theme variables instead of fixed diff colors in light mode', () => {
+    useUIStore.setState({ theme: 'light' } as never)
+
+    render(<FileChangePanel />)
+
+    fireEvent.click(screen.getByText('src/a.txt'))
+
+    expect(screen.getByText('line 2 new').parentElement).toHaveStyle({
+      color: 'var(--diff-add-text)',
+      background: 'var(--diff-add-bg)',
+    })
+    expect(screen.getByText('line 2 old').parentElement).toHaveStyle({
+      color: 'var(--diff-del-text)',
+      background: 'var(--diff-del-bg)',
+    })
+    expect(screen.getByText('@@ -1,3 +1,3 @@').parentElement).toHaveStyle({
+      color: 'var(--diff-header-text)',
+      background: 'var(--diff-header-bg)',
+    })
   })
 })

@@ -306,6 +306,64 @@ END
 	}
 }
 
+func TestRepairIncompleteToolCallTailTruncatesDanglingAssistantSpan(t *testing.T) {
+	t.Parallel()
+
+	messages := []providertypes.Message{
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("before")}},
+		{
+			Role:  providertypes.RoleAssistant,
+			Parts: []providertypes.ContentPart{providertypes.NewTextPart("call tools")},
+			ToolCalls: []providertypes.ToolCall{
+				{ID: "call-1", Name: "filesystem_read_file", Arguments: `{"path":"README.md"}`},
+				{ID: "call-2", Name: "bash", Arguments: `{"command":"echo hi"}`},
+			},
+		},
+		{
+			Role:       providertypes.RoleTool,
+			ToolCallID: "call-1",
+			Parts:      []providertypes.ContentPart{providertypes.NewTextPart("README")},
+		},
+	}
+
+	repaired, changed := RepairIncompleteToolCallTail(messages)
+	if !changed {
+		t.Fatal("expected dangling tool_calls tail to be repaired")
+	}
+	if len(repaired) != 1 {
+		t.Fatalf("len(repaired) = %d, want 1", len(repaired))
+	}
+	if got := renderSessionMessageParts(repaired[0]); got != "before" {
+		t.Fatalf("repaired first message = %q, want %q", got, "before")
+	}
+}
+
+func TestRepairIncompleteToolCallTailKeepsCompleteToolSpan(t *testing.T) {
+	t.Parallel()
+
+	messages := []providertypes.Message{
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("before")}},
+		{
+			Role: providertypes.RoleAssistant,
+			ToolCalls: []providertypes.ToolCall{
+				{ID: "call-1", Name: "filesystem_read_file", Arguments: `{"path":"README.md"}`},
+				{ID: "call-2", Name: "bash", Arguments: `{"command":"echo hi"}`},
+			},
+		},
+		{Role: providertypes.RoleTool, ToolCallID: "call-1", Parts: []providertypes.ContentPart{providertypes.NewTextPart("README")}},
+		{Role: providertypes.RoleTool, ToolCallID: "call-2", Parts: []providertypes.ContentPart{providertypes.NewTextPart("hi")}},
+		{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("done")}},
+	}
+
+	repaired, changed := RepairIncompleteToolCallTail(messages)
+	if changed {
+		t.Fatal("expected complete tool span to remain unchanged")
+	}
+	if len(repaired) != len(messages) {
+		t.Fatalf("len(repaired) = %d, want %d", len(repaired), len(messages))
+	}
+}
+
 func TestSQLiteStoreErrors(t *testing.T) {
 	ctx := context.Background()
 	store := newTestStore(t)

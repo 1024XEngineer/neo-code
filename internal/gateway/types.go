@@ -64,6 +64,12 @@ const (
 	FrameActionRenameSession FrameAction = "rename_session"
 	// FrameActionListFiles 表示列出工作目录文件树。
 	FrameActionListFiles FrameAction = "list_files"
+	// FrameActionReadFile 表示读取工作目录文件的只读预览。
+	FrameActionReadFile FrameAction = "read_file"
+	// FrameActionListGitDiffFiles 表示列出工作树相对 HEAD 的 Git 变更文件。
+	FrameActionListGitDiffFiles FrameAction = "list_git_diff_files"
+	// FrameActionReadGitDiffFile 表示读取单个 Git 变更文件的双文本预览。
+	FrameActionReadGitDiffFile FrameAction = "read_git_diff_file"
 	// FrameActionListModels 表示列出可用模型。
 	FrameActionListModels FrameAction = "list_models"
 	// FrameActionSetSessionModel 表示设置会话模型。

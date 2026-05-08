@@ -129,6 +129,15 @@ func (p *recordingPort) RenameSession(_ context.Context, _ RenameSessionInput) e
 func (p *recordingPort) ListFiles(_ context.Context, _ ListFilesInput) ([]FileEntry, error) {
 	return nil, nil
 }
+func (p *recordingPort) ReadFile(_ context.Context, _ ReadFileInput) (ReadFileResult, error) {
+	return ReadFileResult{}, nil
+}
+func (p *recordingPort) ListGitDiffFiles(_ context.Context, _ ListGitDiffFilesInput) (ListGitDiffFilesResult, error) {
+	return ListGitDiffFilesResult{}, nil
+}
+func (p *recordingPort) ReadGitDiffFile(_ context.Context, _ ReadGitDiffFileInput) (ReadGitDiffFileResult, error) {
+	return ReadGitDiffFileResult{}, nil
+}
 
 func (p *recordingPort) ListModels(_ context.Context, _ ListModelsInput) ([]ModelEntry, error) {
 	return nil, nil

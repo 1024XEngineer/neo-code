@@ -249,6 +249,110 @@ type ListFilesInput struct {
 	Path string
 }
 
+// ReadFileInput 表示 gateway.readFile 动作的下游输入。
+type ReadFileInput struct {
+	// SubjectID 是请求方身份主体标识。
+	SubjectID string
+	// SessionID 是可选会话标识。
+	SessionID string
+	// Workdir 是工作目录。
+	Workdir string
+	// Path 是相对文件路径。
+	Path string
+}
+
+// ReadFileResult 表示只读文件预览的返回载荷。
+type ReadFileResult struct {
+	// Path 是相对路径。
+	Path string `json:"path"`
+	// Content 是文件文本内容。
+	Content string `json:"content"`
+	// Encoding 是编码标识。
+	Encoding string `json:"encoding,omitempty"`
+	// Size 是文件大小。
+	Size int64 `json:"size,omitempty"`
+	// Truncated 表示是否因大文件而未返回内容。
+	Truncated bool `json:"truncated,omitempty"`
+	// IsBinary 表示是否为二进制文件。
+	IsBinary bool `json:"is_binary,omitempty"`
+	// ModTime 是修改时间。
+	ModTime string `json:"mod_time,omitempty"`
+}
+
+// GitDiffEntry 表示 Git 工作树变更列表中的单个文件条目。
+type GitDiffEntry struct {
+	// Path 是当前工作树中的相对路径。
+	Path string `json:"path"`
+	// OldPath 是 rename/copy 场景下的旧路径。
+	OldPath string `json:"old_path,omitempty"`
+	// Status 是归一化后的 Git 变更状态。
+	Status string `json:"status"`
+}
+
+// ListGitDiffFilesInput 表示 gateway.listGitDiffFiles 的下游输入。
+type ListGitDiffFilesInput struct {
+	// SubjectID 是请求方身份主体标识。
+	SubjectID string
+	// SessionID 是可选会话标识。
+	SessionID string
+	// Workdir 是工作目录。
+	Workdir string
+}
+
+// ListGitDiffFilesResult 表示 Git 变更文件列表与仓库摘要。
+type ListGitDiffFilesResult struct {
+	// InGitRepo 表示当前工作区是否为 Git 仓库。
+	InGitRepo bool `json:"in_git_repo"`
+	// Branch 是当前分支名。
+	Branch string `json:"branch,omitempty"`
+	// Ahead 是相对跟踪分支的 ahead 数量。
+	Ahead int `json:"ahead,omitempty"`
+	// Behind 是相对跟踪分支的 behind 数量。
+	Behind int `json:"behind,omitempty"`
+	// Truncated 表示文件列表是否被截断。
+	Truncated bool `json:"truncated,omitempty"`
+	// TotalCount 是仓库中的总变更文件数量。
+	TotalCount int `json:"total_count,omitempty"`
+	// Files 是当前返回的变更文件列表。
+	Files []GitDiffEntry `json:"files"`
+}
+
+// ReadGitDiffFileInput 表示 gateway.readGitDiffFile 的下游输入。
+type ReadGitDiffFileInput struct {
+	// SubjectID 是请求方身份主体标识。
+	SubjectID string
+	// SessionID 是可选会话标识。
+	SessionID string
+	// Workdir 是工作目录。
+	Workdir string
+	// Path 是目标变更文件的相对路径。
+	Path string
+}
+
+// ReadGitDiffFileResult 表示单个 Git 变更文件的双文本预览结果。
+type ReadGitDiffFileResult struct {
+	// Path 是当前工作树中的相对路径。
+	Path string `json:"path"`
+	// OldPath 是 rename/copy 场景下的旧路径。
+	OldPath string `json:"old_path,omitempty"`
+	// Status 是归一化后的 Git 变更状态。
+	Status string `json:"status"`
+	// OriginalContent 是 HEAD 版本文本。
+	OriginalContent string `json:"original_content"`
+	// ModifiedContent 是工作树版本文本。
+	ModifiedContent string `json:"modified_content"`
+	// Encoding 是编码标识。
+	Encoding string `json:"encoding,omitempty"`
+	// IsBinary 表示任一侧是否为二进制内容。
+	IsBinary bool `json:"is_binary,omitempty"`
+	// Truncated 表示任一侧是否因超限未返回正文。
+	Truncated bool `json:"truncated,omitempty"`
+	// OriginalSize 是 HEAD 版本字节大小。
+	OriginalSize int64 `json:"size_original,omitempty"`
+	// ModifiedSize 是工作树版本字节大小。
+	ModifiedSize int64 `json:"size_modified,omitempty"`
+}
+
 // ModelEntry 表示可用模型条目。
 type ModelEntry struct {
 	// ID 是模型标识。
@@ -714,6 +818,12 @@ type RuntimePort interface {
 	RenameSession(ctx context.Context, input RenameSessionInput) error
 	// ListFiles 列出工作目录文件树。
 	ListFiles(ctx context.Context, input ListFilesInput) ([]FileEntry, error)
+	// ReadFile 返回工作目录内文件的只读预览内容。
+	ReadFile(ctx context.Context, input ReadFileInput) (ReadFileResult, error)
+	// ListGitDiffFiles 返回当前工作树相对 HEAD 的 Git 变更文件列表。
+	ListGitDiffFiles(ctx context.Context, input ListGitDiffFilesInput) (ListGitDiffFilesResult, error)
+	// ReadGitDiffFile 返回单个 Git 变更文件的双文本预览内容。
+	ReadGitDiffFile(ctx context.Context, input ReadGitDiffFileInput) (ReadGitDiffFileResult, error)
 	// ListModels 列出可用模型。
 	ListModels(ctx context.Context, input ListModelsInput) ([]ModelEntry, error)
 	// SetSessionModel 设置会话模型。

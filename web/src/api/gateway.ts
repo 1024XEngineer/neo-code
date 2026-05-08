@@ -28,6 +28,12 @@ import {
   type RenameSessionResult,
   type ListFilesParams,
   type ListFilesResult,
+  type ReadFileParams,
+  type ReadFileResult,
+  type ListGitDiffFilesParams,
+  type ListGitDiffFilesResult,
+  type ReadGitDiffFileParams,
+  type ReadGitDiffFileResult,
   type ListModelsResult,
   type SetSessionModelParams,
   type SetSessionModelResult,
@@ -163,6 +169,21 @@ export class GatewayAPI {
   /** 列出工作目录文件树 */
   async listFiles(params: ListFilesParams = {}) {
     return this.ws.call<ListFilesResult>(Method.ListFiles, params)
+  }
+
+  /** 读取工作目录内的文件预览内容 */
+  async readFile(params: ReadFileParams) {
+    return this.ws.call<ReadFileResult>(Method.ReadFile, params)
+  }
+
+  /** 列出当前工作树相对 HEAD 的 Git 变更文件 */
+  async listGitDiffFiles(params: ListGitDiffFilesParams = {}) {
+    return this.ws.call<ListGitDiffFilesResult>(Method.ListGitDiffFiles, params)
+  }
+
+  /** 读取单个 Git 变更文件的双文本预览 */
+  async readGitDiffFile(params: ReadGitDiffFileParams) {
+    return this.ws.call<ReadGitDiffFileResult>(Method.ReadGitDiffFile, params)
   }
 
   /** 列出可用模型 */

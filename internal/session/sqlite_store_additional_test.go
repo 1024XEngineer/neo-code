@@ -620,6 +620,67 @@ func TestSQLiteStoreAppendMessagesCapsBatchAndSessionCount(t *testing.T) {
 	}
 }
 
+func TestSQLiteStoreAppendMessagesPreservesToolSpanBoundaryWhenTrimming(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := newTestStore(t)
+	session, err := store.CreateSession(ctx, CreateSessionInput{ID: "append_trim_tool_span", Title: "append trim tool span"})
+	if err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+
+	seed := make([]providertypes.Message, 0, MaxSessionMessages)
+	seed = append(seed,
+		providertypes.Message{
+			Role: providertypes.RoleAssistant,
+			ToolCalls: []providertypes.ToolCall{
+				{ID: "call-head", Name: "filesystem_read_file", Arguments: `{"path":"README.md"}`},
+			},
+		},
+		providertypes.Message{
+			Role:       providertypes.RoleTool,
+			ToolCallID: "call-head",
+			Parts:      []providertypes.ContentPart{providertypes.NewTextPart("README")},
+		},
+	)
+	for i := 0; i < MaxSessionMessages-2; i++ {
+		seed = append(seed, providertypes.Message{
+			Role:  providertypes.RoleUser,
+			Parts: []providertypes.ContentPart{providertypes.NewTextPart("seed-" + buildIndexedSuffix(i))},
+		})
+	}
+	if err := store.AppendMessages(ctx, AppendMessagesInput{
+		SessionID: session.ID,
+		Messages:  seed,
+	}); err != nil {
+		t.Fatalf("AppendMessages(seed) error = %v", err)
+	}
+
+	if err := store.AppendMessages(ctx, AppendMessagesInput{
+		SessionID: session.ID,
+		Messages: []providertypes.Message{
+			{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("tail-0")}},
+		},
+	}); err != nil {
+		t.Fatalf("AppendMessages(tail) error = %v", err)
+	}
+
+	loaded, err := store.LoadSession(ctx, session.ID)
+	if err != nil {
+		t.Fatalf("LoadSession() error = %v", err)
+	}
+	if len(loaded.Messages) != MaxSessionMessages-1 {
+		t.Fatalf("len(Messages) = %d, want %d", len(loaded.Messages), MaxSessionMessages-1)
+	}
+	if loaded.Messages[0].Role != providertypes.RoleUser {
+		t.Fatalf("expected first kept message role user, got %q", loaded.Messages[0].Role)
+	}
+	if got := renderSessionMessageParts(loaded.Messages[0]); got != "seed-"+buildIndexedSuffix(0) {
+		t.Fatalf("first kept message = %q, want %q", got, "seed-"+buildIndexedSuffix(0))
+	}
+}
+
 func TestDeleteSessionsByIDSetWithBatchSizeDeletesAllBatches(t *testing.T) {
 	t.Parallel()
 
@@ -716,8 +777,8 @@ func TestTrimMessagesToSessionLimitBranches(t *testing.T) {
 		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("a")}},
 		{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("b")}},
 	}
-	if got := trimMessagesToSessionLimit(within); len(got) != len(within) {
-		t.Fatalf("trimMessagesToSessionLimit(within) len = %d, want %d", len(got), len(within))
+	if got := TrimMessagesToLimitPreservingToolSpans(within, MaxSessionMessages); len(got) != len(within) {
+		t.Fatalf("TrimMessagesToLimitPreservingToolSpans(within) len = %d, want %d", len(got), len(within))
 	}
 
 	overflow := make([]providertypes.Message, 0, MaxSessionMessages+1)
@@ -727,9 +788,9 @@ func TestTrimMessagesToSessionLimitBranches(t *testing.T) {
 			Parts: []providertypes.ContentPart{providertypes.NewTextPart(buildIndexedSuffix(i))},
 		})
 	}
-	got := trimMessagesToSessionLimit(overflow)
+	got := TrimMessagesToLimitPreservingToolSpans(overflow, MaxSessionMessages)
 	if len(got) != MaxSessionMessages {
-		t.Fatalf("trimMessagesToSessionLimit(overflow) len = %d, want %d", len(got), MaxSessionMessages)
+		t.Fatalf("TrimMessagesToLimitPreservingToolSpans(overflow) len = %d, want %d", len(got), MaxSessionMessages)
 	}
 	if renderSessionMessageParts(got[0]) != buildIndexedSuffix(1) {
 		t.Fatalf("first kept trimmed message = %q, want %q", renderSessionMessageParts(got[0]), buildIndexedSuffix(1))

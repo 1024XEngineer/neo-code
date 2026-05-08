@@ -439,6 +439,15 @@ func TestValidateFrameNewActions(t *testing.T) {
 			},
 			wantNil: true,
 		},
+		{
+			name: "read_file requires payload",
+			frame: MessageFrame{
+				Type:   FrameTypeRequest,
+				Action: FrameActionReadFile,
+			},
+			wantCode:  ErrorCodeMissingRequiredField.String(),
+			wantField: "payload",
+		},
 	}
 
 	for _, tt := range tests {

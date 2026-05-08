@@ -38,6 +38,9 @@ type bootstrapRuntimeStub struct {
 	deleteSessionFn      func(ctx context.Context, input DeleteSessionInput) (bool, error)
 	renameSessionFn      func(ctx context.Context, input RenameSessionInput) error
 	listFilesFn          func(ctx context.Context, input ListFilesInput) ([]FileEntry, error)
+	readFileFn           func(ctx context.Context, input ReadFileInput) (ReadFileResult, error)
+	listGitDiffFilesFn   func(ctx context.Context, input ListGitDiffFilesInput) (ListGitDiffFilesResult, error)
+	readGitDiffFileFn    func(ctx context.Context, input ReadGitDiffFileInput) (ReadGitDiffFileResult, error)
 	listModelsFn         func(ctx context.Context, input ListModelsInput) ([]ModelEntry, error)
 	setSessionModelFn    func(ctx context.Context, input SetSessionModelInput) error
 	getSessionModelFn    func(ctx context.Context, input GetSessionModelInput) (SessionModelResult, error)
@@ -196,6 +199,24 @@ func (s *bootstrapRuntimeStub) ListFiles(ctx context.Context, input ListFilesInp
 		return s.listFilesFn(ctx, input)
 	}
 	return nil, nil
+}
+func (s *bootstrapRuntimeStub) ReadFile(ctx context.Context, input ReadFileInput) (ReadFileResult, error) {
+	if s != nil && s.readFileFn != nil {
+		return s.readFileFn(ctx, input)
+	}
+	return ReadFileResult{}, nil
+}
+func (s *bootstrapRuntimeStub) ListGitDiffFiles(ctx context.Context, input ListGitDiffFilesInput) (ListGitDiffFilesResult, error) {
+	if s != nil && s.listGitDiffFilesFn != nil {
+		return s.listGitDiffFilesFn(ctx, input)
+	}
+	return ListGitDiffFilesResult{}, nil
+}
+func (s *bootstrapRuntimeStub) ReadGitDiffFile(ctx context.Context, input ReadGitDiffFileInput) (ReadGitDiffFileResult, error) {
+	if s != nil && s.readGitDiffFileFn != nil {
+		return s.readGitDiffFileFn(ctx, input)
+	}
+	return ReadGitDiffFileResult{}, nil
 }
 func (s *bootstrapRuntimeStub) ListModels(ctx context.Context, input ListModelsInput) ([]ModelEntry, error) {
 	if s != nil && s.listModelsFn != nil {
@@ -3125,6 +3146,93 @@ func TestHandleListFilesFrameSuccess(t *testing.T) {
 	}
 }
 
+func TestHandleReadFileFrameSuccess(t *testing.T) {
+	runtime := &bootstrapRuntimeStub{
+		readFileFn: func(_ context.Context, input ReadFileInput) (ReadFileResult, error) {
+			if input.Path != "main.go" {
+				t.Fatalf("input = %#v", input)
+			}
+			return ReadFileResult{
+				Path:     "main.go",
+				Content:  "package main\n",
+				Encoding: "utf-8",
+				Size:     13,
+			}, nil
+		},
+	}
+	authState := NewConnectionAuthState()
+	authState.MarkAuthenticated("subject-1")
+	ctx := WithRequestSource(context.Background(), RequestSourceIPC)
+	ctx = WithConnectionAuthState(ctx, authState)
+
+	frame := MessageFrame{
+		Type:      FrameTypeRequest,
+		Action:    FrameActionReadFile,
+		RequestID: "req-read-1",
+		Payload:   protocol.ReadFileParams{Path: "main.go"},
+	}
+	response := dispatchRequestFrame(ctx, frame, runtime)
+	if response.Type != FrameTypeAck {
+		t.Fatalf("response type = %q, want %q", response.Type, FrameTypeAck)
+	}
+}
+
+func TestHandleGitDiffFramesSuccess(t *testing.T) {
+	authState := NewConnectionAuthState()
+	authState.MarkAuthenticated("subject-1")
+	ctx := WithRequestSource(context.Background(), RequestSourceIPC)
+	ctx = WithConnectionAuthState(ctx, authState)
+
+	t.Run("listGitDiffFiles", func(t *testing.T) {
+		runtime := &bootstrapRuntimeStub{
+			listGitDiffFilesFn: func(_ context.Context, input ListGitDiffFilesInput) (ListGitDiffFilesResult, error) {
+				return ListGitDiffFilesResult{
+					InGitRepo:  true,
+					Branch:     "main",
+					Ahead:      1,
+					Files:      []GitDiffEntry{{Path: "main.go", Status: "modified"}},
+					TotalCount: 1,
+				}, nil
+			},
+		}
+		frame := MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionListGitDiffFiles,
+			RequestID: "req-gitdiff-list-1",
+		}
+		response := dispatchRequestFrame(ctx, frame, runtime)
+		if response.Type != FrameTypeAck || response.Action != FrameActionListGitDiffFiles {
+			t.Fatalf("response = %#v", response)
+		}
+	})
+
+	t.Run("readGitDiffFile", func(t *testing.T) {
+		runtime := &bootstrapRuntimeStub{
+			readGitDiffFileFn: func(_ context.Context, input ReadGitDiffFileInput) (ReadGitDiffFileResult, error) {
+				if input.Path != "main.go" {
+					t.Fatalf("input = %#v", input)
+				}
+				return ReadGitDiffFileResult{
+					Path:            "main.go",
+					Status:          "modified",
+					OriginalContent: "before",
+					ModifiedContent: "after",
+				}, nil
+			},
+		}
+		frame := MessageFrame{
+			Type:      FrameTypeRequest,
+			Action:    FrameActionReadGitDiffFile,
+			RequestID: "req-gitdiff-read-1",
+			Payload:   protocol.ReadGitDiffFileParams{Path: "main.go"},
+		}
+		response := dispatchRequestFrame(ctx, frame, runtime)
+		if response.Type != FrameTypeAck || response.Action != FrameActionReadGitDiffFile {
+			t.Fatalf("response = %#v", response)
+		}
+	})
+}
+
 func TestHandleListModelsFrameSuccess(t *testing.T) {
 	runtime := &bootstrapRuntimeStub{
 		listModelsFn: func(_ context.Context, input ListModelsInput) ([]ModelEntry, error) {
@@ -4695,6 +4803,15 @@ func (runtimeOnlyStub) DeleteSession(ctx context.Context, input DeleteSessionInp
 func (runtimeOnlyStub) RenameSession(ctx context.Context, input RenameSessionInput) error { return nil }
 func (runtimeOnlyStub) ListFiles(ctx context.Context, input ListFilesInput) ([]FileEntry, error) {
 	return nil, nil
+}
+func (runtimeOnlyStub) ReadFile(ctx context.Context, input ReadFileInput) (ReadFileResult, error) {
+	return ReadFileResult{}, nil
+}
+func (runtimeOnlyStub) ListGitDiffFiles(ctx context.Context, input ListGitDiffFilesInput) (ListGitDiffFilesResult, error) {
+	return ListGitDiffFilesResult{}, nil
+}
+func (runtimeOnlyStub) ReadGitDiffFile(ctx context.Context, input ReadGitDiffFileInput) (ReadGitDiffFileResult, error) {
+	return ReadGitDiffFileResult{}, nil
 }
 func (runtimeOnlyStub) ListModels(ctx context.Context, input ListModelsInput) ([]ModelEntry, error) {
 	return nil, nil

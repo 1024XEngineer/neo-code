@@ -197,7 +197,7 @@ func (s *Service) GetRuntimeSnapshot(ctx context.Context, sessionID string) (Run
 		return cached, nil
 	}
 
-	session, err := s.sessionStore.LoadSession(ctx, normalizedSessionID)
+	session, err := s.LoadSession(ctx, normalizedSessionID)
 	if err != nil {
 		return RuntimeSnapshot{}, err
 	}

@@ -218,7 +218,7 @@ func (s *Service) UndoRestoreCheckpoint(ctx context.Context, sessionID string) (
 // guardWritten=false 时若 fallbackRef 非空，则用它作为 CodeCheckpointRef 以保证 undo 可走代码恢复路径。
 // fallbackRef 应为完整的 "peredit:<id>" 格式引用。
 func (s *Service) createGuardCheckpoint(ctx context.Context, sessionID, runID, guardID string, guardWritten bool, fallbackRef string) (agentsession.CheckpointRecord, error) {
-	session, err := s.sessionStore.LoadSession(ctx, sessionID)
+	session, err := s.LoadSession(ctx, sessionID)
 	if err != nil {
 		return agentsession.CheckpointRecord{}, fmt.Errorf("checkpoint: load session for guard: %w", err)
 	}

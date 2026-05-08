@@ -69,6 +69,12 @@ const (
 	MethodGatewayRenameSession = "gateway.renameSession"
 	// MethodGatewayListFiles 表示列出工作目录文件树。
 	MethodGatewayListFiles = "gateway.listFiles"
+	// MethodGatewayReadFile 表示读取工作目录文件预览。
+	MethodGatewayReadFile = "gateway.readFile"
+	// MethodGatewayListGitDiffFiles 表示列出当前工作树相对 HEAD 的 Git 变更文件。
+	MethodGatewayListGitDiffFiles = "gateway.listGitDiffFiles"
+	// MethodGatewayReadGitDiffFile 表示读取单个 Git 变更文件的双文本预览。
+	MethodGatewayReadGitDiffFile = "gateway.readGitDiffFile"
 	// MethodGatewayListModels 表示列出可用模型。
 	MethodGatewayListModels = "gateway.listModels"
 	// MethodGatewaySetSessionModel 表示设置会话模型。
@@ -372,6 +378,26 @@ type ListFilesParams struct {
 	SessionID string `json:"session_id,omitempty"`
 	Workdir   string `json:"workdir,omitempty"`
 	Path      string `json:"path,omitempty"`
+}
+
+// ReadFileParams 表示 gateway.readFile 参数。
+type ReadFileParams struct {
+	SessionID string `json:"session_id,omitempty"`
+	Workdir   string `json:"workdir,omitempty"`
+	Path      string `json:"path"`
+}
+
+// ListGitDiffFilesParams 表示 gateway.listGitDiffFiles 参数。
+type ListGitDiffFilesParams struct {
+	SessionID string `json:"session_id,omitempty"`
+	Workdir   string `json:"workdir,omitempty"`
+}
+
+// ReadGitDiffFileParams 表示 gateway.readGitDiffFile 参数。
+type ReadGitDiffFileParams struct {
+	SessionID string `json:"session_id,omitempty"`
+	Workdir   string `json:"workdir,omitempty"`
+	Path      string `json:"path"`
 }
 
 // ListModelsParams 表示 gateway.listModels 参数。
@@ -765,6 +791,36 @@ func NormalizeJSONRPCRequest(request JSONRPCRequest) (NormalizedRequest, *JSONRP
 			return normalized, parseErr
 		}
 		normalized.Action = "list_files"
+		normalized.SessionID = strings.TrimSpace(params.SessionID)
+		normalized.Workdir = strings.TrimSpace(params.Workdir)
+		normalized.Payload = params
+		return normalized, nil
+	case MethodGatewayReadFile:
+		params, parseErr := decodeReadFileParams(request.Params)
+		if parseErr != nil {
+			return normalized, parseErr
+		}
+		normalized.Action = "read_file"
+		normalized.SessionID = strings.TrimSpace(params.SessionID)
+		normalized.Workdir = strings.TrimSpace(params.Workdir)
+		normalized.Payload = params
+		return normalized, nil
+	case MethodGatewayListGitDiffFiles:
+		params, parseErr := decodeListGitDiffFilesParams(request.Params)
+		if parseErr != nil {
+			return normalized, parseErr
+		}
+		normalized.Action = "list_git_diff_files"
+		normalized.SessionID = strings.TrimSpace(params.SessionID)
+		normalized.Workdir = strings.TrimSpace(params.Workdir)
+		normalized.Payload = params
+		return normalized, nil
+	case MethodGatewayReadGitDiffFile:
+		params, parseErr := decodeReadGitDiffFileParams(request.Params)
+		if parseErr != nil {
+			return normalized, parseErr
+		}
+		normalized.Action = "read_git_diff_file"
 		normalized.SessionID = strings.TrimSpace(params.SessionID)
 		normalized.Workdir = strings.TrimSpace(params.Workdir)
 		normalized.Payload = params
@@ -1468,6 +1524,41 @@ func decodeListFilesParams(raw json.RawMessage) (ListFilesParams, *JSONRPCError)
 		p.SessionID = strings.TrimSpace(p.SessionID)
 		p.Workdir = strings.TrimSpace(p.Workdir)
 		p.Path = strings.TrimSpace(p.Path)
+		return nil
+	})
+}
+
+// decodeReadFileParams 对 gateway.readFile 的 params 执行反序列化与校验。
+func decodeReadFileParams(raw json.RawMessage) (ReadFileParams, *JSONRPCError) {
+	return decodeParams(raw, "gateway.readFile", func(p *ReadFileParams) *JSONRPCError {
+		p.SessionID = strings.TrimSpace(p.SessionID)
+		p.Workdir = strings.TrimSpace(p.Workdir)
+		p.Path = strings.TrimSpace(p.Path)
+		if p.Path == "" {
+			return NewJSONRPCError(JSONRPCCodeInvalidParams, "missing required field: params.path", GatewayCodeMissingRequiredField)
+		}
+		return nil
+	})
+}
+
+// decodeListGitDiffFilesParams 对 gateway.listGitDiffFiles 的 params 执行反序列化与校验。
+func decodeListGitDiffFilesParams(raw json.RawMessage) (ListGitDiffFilesParams, *JSONRPCError) {
+	return decodeParamsOptional(raw, "gateway.listGitDiffFiles", func(p *ListGitDiffFilesParams) *JSONRPCError {
+		p.SessionID = strings.TrimSpace(p.SessionID)
+		p.Workdir = strings.TrimSpace(p.Workdir)
+		return nil
+	})
+}
+
+// decodeReadGitDiffFileParams 对 gateway.readGitDiffFile 的 params 执行反序列化与校验。
+func decodeReadGitDiffFileParams(raw json.RawMessage) (ReadGitDiffFileParams, *JSONRPCError) {
+	return decodeParams(raw, "gateway.readGitDiffFile", func(p *ReadGitDiffFileParams) *JSONRPCError {
+		p.SessionID = strings.TrimSpace(p.SessionID)
+		p.Workdir = strings.TrimSpace(p.Workdir)
+		p.Path = strings.TrimSpace(p.Path)
+		if p.Path == "" {
+			return NewJSONRPCError(JSONRPCCodeInvalidParams, "missing required field: params.path", GatewayCodeMissingRequiredField)
+		}
 		return nil
 	})
 }
