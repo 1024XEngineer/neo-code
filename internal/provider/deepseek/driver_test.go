@@ -14,9 +14,6 @@ func TestDriverName(t *testing.T) {
 	if d.Build == nil {
 		t.Fatal("build func is nil")
 	}
-	if d.Discover == nil {
-		t.Fatal("discover func is nil")
-	}
 }
 
 func TestNewValidatesBaseURL(t *testing.T) {

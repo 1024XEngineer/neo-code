@@ -31,12 +31,6 @@ func TestToolMetadataAndHelpers(t *testing.T) {
 		}
 	}
 
-	if effectiveRoot("", root) != root {
-		t.Fatalf("expected workdir fallback")
-	}
-	if got := effectiveRoot(root, ""); got != root {
-		t.Fatalf("expected default root, got %q", got)
-	}
 	if rel := toRelativePath(root, root); rel != "." {
 		t.Fatalf("expected relative root path '.', got %q", rel)
 	}

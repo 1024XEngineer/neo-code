@@ -86,6 +86,8 @@ export default function ModelSelector() {
     if (!isGenerating && pendingModelChange && currentSessionId && gatewayAPI) {
       gatewayAPI.setSessionModel(currentSessionId, pendingModelChange.id, pendingModelChange.provider)
         .catch((err) => console.error('Deferred setSessionModel failed:', err))
+      gatewayAPI.selectProviderModel({ provider_id: pendingModelChange.provider, model_id: pendingModelChange.id })
+        .catch((err) => console.error('Deferred selectProviderModel failed:', err))
       setPendingModelChange(null)
     }
   }, [isGenerating, pendingModelChange, currentSessionId, gatewayAPI])

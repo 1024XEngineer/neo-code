@@ -357,7 +357,7 @@ func (a App) renderPicker(width int, height int) string {
 	if a.state.ActivePicker == pickerProviderAdd {
 		title = providerAddTitle
 		subtitle = providerAddSubtitle
-		body = a.renderProviderAddForm()
+		body = a.renderProviderAddForm(max(32, width-6))
 	}
 	if a.state.ActivePicker == pickerModelScope {
 		title = modelScopeGuideTitle
@@ -430,14 +430,14 @@ func (a App) renderModelScopeGuide() string {
 	return sb.String()
 }
 
-func (a App) renderProviderAddForm() string {
+func (a App) renderProviderAddForm(bodyWidth int) string {
 	if a.providerAddForm == nil {
 		return "No form active"
 	}
 	if a.providerAddForm.Stage == providerAddFormStageManualModels {
 		var sb strings.Builder
-		sb.WriteString("Manual Model JSON（id/name 必填）\n")
-		sb.WriteString("[Shift+Tab] 返回字段页  [Enter] 提交  [Esc] 取消\n\n")
+		sb.WriteString("Manual Model JSON (id/name required)\n")
+		sb.WriteString("[Shift+Tab] back to fields  [Enter] confirm  [Esc] cancel\n\n")
 		content := strings.TrimSpace(a.providerAddForm.ManualModelsJSON)
 		if content == "" {
 			content = providerAddManualModelsJSONTemplate
@@ -471,29 +471,41 @@ func (a App) renderProviderAddForm() string {
 	for _, fieldID := range visible {
 		switch fieldID {
 		case providerAddFieldName:
-			fields = append(fields, renderField{label: "Name", value: a.providerAddForm.Name, required: true})
+			fields = append(fields, renderField{
+				label:    "Name",
+				value:    a.providerAddForm.Name,
+				required: true,
+				note:     "Unique local provider name. Use letters/numbers/-/_. Example: team-gateway.",
+			})
 		case providerAddFieldDriver:
-			fields = append(fields, renderField{label: "Driver", value: a.providerAddForm.Driver, required: true})
+			fields = append(fields, renderField{
+				label:    "Driver",
+				value:    a.providerAddForm.Driver,
+				required: true,
+				note:     "Protocol adapter. openaicompat for most gateways; gemini/anthropic for native APIs.",
+			})
 		case providerAddFieldModelSource:
-			note := "discover: 远端发现模型；manual: 手工 JSON 模型列表"
 			fields = append(fields, renderField{
 				label:    "Model Source",
 				value:    a.providerAddForm.ModelSource,
 				required: true,
-				note:     note,
+				note:     "discover = fetch models from remote endpoint; manual = paste custom model JSON in next step.",
 			})
 		case providerAddFieldChatAPIMode:
-			note := "仅 openaicompat 生效；chat_completions 或 responses"
 			fields = append(fields, renderField{
 				label: "Chat API Mode",
 				value: a.providerAddForm.ChatAPIMode,
-				note:  note,
+				note:  "openaicompat only. chat_completions uses /chat/completions; responses uses /responses style.",
 			})
 		case providerAddFieldBaseURL:
 			note := ""
 			if strings.TrimSpace(a.providerAddForm.BaseURL) == "" &&
 				(driver == provider.DriverOpenAICompat || driver == provider.DriverGemini || driver == provider.DriverAnthropic) {
-				note = "留空会自动填充默认地址"
+				note = "Server base address. Empty = built-in default for this driver."
+			} else if baseURLRequired {
+				note = "Required for custom drivers. Example: https://api.example.com/v1"
+			} else {
+				note = "Override the default base URL for this driver."
 			}
 			fields = append(fields, renderField{
 				label:    "Base URL",
@@ -505,44 +517,71 @@ func (a App) renderProviderAddForm() string {
 			note := ""
 			trimmedPath := strings.TrimSpace(a.providerAddForm.ChatEndpointPath)
 			if trimmedPath == "" {
-				note = "留空会按 Chat API Mode 自动回填默认端点"
+				note = "Chat endpoint path. Empty = auto default from driver/mode."
 			} else if trimmedPath == "/" {
-				note = "\"/\" 使用直连 base_url"
+				note = "\"/\" means call base URL directly (no extra path)."
 			} else {
-				note = "以 \"/\" 开头的端点路径"
+				note = "Must start with '/'. Example: /chat/completions"
 			}
 			fields = append(fields, renderField{label: "Chat Endpoint", value: a.providerAddForm.ChatEndpointPath, note: note})
 		case providerAddFieldDiscoveryEndpointPath:
 			note := ""
 			if strings.TrimSpace(a.providerAddForm.DiscoveryEndpointPath) == "" {
-				note = "OpenAI-compatible 默认 /models"
+				note = "Used by discover mode to fetch model list. Empty = /models."
+			} else {
+				note = "Path used for remote model discovery. Usually /models."
 			}
-			fields = append(fields, renderField{
-				label: "Discovery Endpoint",
-				value: a.providerAddForm.DiscoveryEndpointPath,
-				note:  note,
-			})
+			fields = append(fields, renderField{label: "Discovery Endpoint", value: a.providerAddForm.DiscoveryEndpointPath, note: note})
 		case providerAddFieldAPIKeyEnv:
-			fields = append(fields, renderField{label: "API Key Env", value: a.providerAddForm.APIKeyEnv, required: true})
+			fields = append(fields, renderField{
+				label:    "API Key Env",
+				value:    a.providerAddForm.APIKeyEnv,
+				required: true,
+				note:     "Environment variable name to store key. Example: OPENAI_API_KEY. Must be a valid env var name.",
+			})
 		case providerAddFieldAPIKey:
-			fields = append(fields, renderField{label: "API Key", value: maskedSecret(a.providerAddForm.APIKey), required: true})
+			fields = append(fields, renderField{
+				label:    "API Key",
+				value:    maskedSecret(a.providerAddForm.APIKey),
+				required: true,
+				note:     "Secret token for provider auth. Input is masked and applied to current process env.",
+			})
 		}
 	}
 
+	labelWidth := 0
+	for _, field := range fields {
+		displayLabel := field.label
+		if field.required {
+			displayLabel += " *"
+		}
+		labelWidth = max(labelWidth, len(displayLabel))
+	}
+	if labelWidth < 8 {
+		labelWidth = 8
+	}
+
+	noteWidth := max(20, bodyWidth-labelWidth-8)
+	currentHint := ""
+	currentHintLabel := ""
 	for i, field := range fields {
 		prefix := "  "
 		if i == a.providerAddForm.Step {
 			prefix = "> "
+			if strings.TrimSpace(field.note) != "" {
+				currentHint = strings.TrimSpace(field.note)
+				currentHintLabel = field.label
+			}
 		}
-		sb.WriteString(prefix + field.label + ": ")
-		sb.WriteString(field.value)
+		displayLabel := field.label
 		if field.required {
-			sb.WriteString(" *")
+			displayLabel += " *"
 		}
-		if field.note != "" {
-			sb.WriteString("  (" + field.note + ")")
+		value := strings.TrimSpace(field.value)
+		if value == "" {
+			value = "-"
 		}
-		sb.WriteString("\n")
+		sb.WriteString(fmt.Sprintf("%s%-*s : %s\n", prefix, labelWidth, displayLabel, value))
 	}
 
 	if a.providerAddForm.Error != "" {
@@ -553,7 +592,20 @@ func (a App) renderProviderAddForm() string {
 		sb.WriteString("\n" + label + " " + a.providerAddForm.Error + "\n")
 	}
 
-	sb.WriteString("\n[Tab] switch field  [Up/Down or K/J] change option  [Enter] confirm  [Esc] cancel")
+	if currentHint != "" {
+		sb.WriteString(fmt.Sprintf("\nHint (%s):\n", currentHintLabel))
+		wrapped := wrapPlain(currentHint, noteWidth)
+		for _, line := range strings.Split(wrapped, "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			sb.WriteString("  " + line + "\n")
+		}
+	}
+
+	sb.WriteString("\n* required\n")
+	sb.WriteString("[Tab/Shift+Tab] switch field  [Up/Down or K/J] change option  [Enter] confirm  [Esc] cancel")
 
 	return sb.String()
 }

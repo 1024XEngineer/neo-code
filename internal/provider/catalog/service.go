@@ -158,6 +158,9 @@ func (s *Service) discoverAndPersist(ctx context.Context, input provider.Catalog
 	if !s.registry.Supports(input.Identity.Driver) {
 		return nil, nil
 	}
+	if !s.registry.SupportsDiscovery(input.Identity.Driver) {
+		return nil, provider.NewDiscoveryConfigError(fmt.Sprintf("driver %q does not support model discovery", input.Identity.Driver))
+	}
 
 	if input.ResolveDiscoveryConfig == nil {
 		return nil, errors.New("provider catalog: discovery config resolver is nil")

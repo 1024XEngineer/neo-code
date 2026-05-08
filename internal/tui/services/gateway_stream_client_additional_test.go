@@ -12,14 +12,6 @@ import (
 	providertypes "neo-code/internal/provider/types"
 )
 
-type streamInvalidJSONMarshaler struct {
-	raw []byte
-}
-
-func (m streamInvalidJSONMarshaler) MarshalJSON() ([]byte, error) {
-	return m.raw, nil
-}
-
 func TestDecodeRuntimeEventFromGatewayNotificationErrorBranches(t *testing.T) {
 	t.Parallel()
 
@@ -91,25 +83,43 @@ func TestDecodeRuntimeEventFromGatewayNotificationRejectsPayloadVersionMismatch(
 	}
 }
 
-func TestExtractRuntimeEnvelopeFallbackMarshalling(t *testing.T) {
+func TestExtractRuntimeEnvelopeSupportsGatewayWrappedPayload(t *testing.T) {
 	t.Parallel()
 
 	type payloadEnvelope struct {
 		Payload map[string]any `json:"payload"`
 	}
-	envelope, ok := extractRuntimeEnvelope(payloadEnvelope{Payload: map[string]any{
+	if _, ok := extractRuntimeEnvelope(payloadEnvelope{Payload: map[string]any{
 		"RuntimeEventType": string(EventError),
 		"payload":          "x",
-	}})
-	if !ok {
-		t.Fatalf("expected envelope to be detected")
-	}
-	if got := streamReadMapString(envelope, "runtime_event_type"); got != string(EventError) {
-		t.Fatalf("runtime_event_type = %q", got)
+	}}); ok {
+		t.Fatalf("struct payload should not be treated as runtime envelope")
 	}
 
 	if _, ok := extractRuntimeEnvelope(nil); ok {
 		t.Fatalf("nil payload should not decode")
+	}
+
+	if _, ok := extractRuntimeEnvelope(map[string]any{
+		"payload_version": runtimeEventPayloadVersion,
+		"payload":         "x",
+	}); ok {
+		t.Fatalf("map without runtime_event_type should not decode")
+	}
+
+	envelope, ok := extractRuntimeEnvelope(map[string]any{
+		"event_type": "run_progress",
+		"payload": map[string]any{
+			"runtime_event_type": string(EventAgentChunk),
+			"payload_version":    runtimeEventPayloadVersion,
+			"payload":            "chunk",
+		},
+	})
+	if !ok {
+		t.Fatalf("expected wrapped runtime envelope to decode")
+	}
+	if streamReadMapString(envelope, "runtime_event_type") != string(EventAgentChunk) {
+		t.Fatalf("runtime_event_type = %q, want %q", streamReadMapString(envelope, "runtime_event_type"), EventAgentChunk)
 	}
 }
 
@@ -410,6 +420,12 @@ func TestRestoreRuntimePayloadAdditionalBranches(t *testing.T) {
 		{eventType: EventInputNormalized, payload: map[string]any{"text_length": 3}},
 		{eventType: EventAssetSaved, payload: map[string]any{"asset_id": "asset-1"}},
 		{eventType: EventAssetSaveFailed, payload: map[string]any{"message": "x"}},
+		{eventType: EventCheckpointCreated, payload: map[string]any{"checkpoint_id": "cp-1"}},
+		{eventType: EventCheckpointWarning, payload: map[string]any{"error": "warn"}},
+		{eventType: EventCheckpointRestored, payload: map[string]any{"checkpoint_id": "cp-1", "session_id": "s-1"}},
+		{eventType: EventCheckpointUndoRestore, payload: map[string]any{"guard_checkpoint_id": "cp-guard", "session_id": "s-1"}},
+		{eventType: EventToolDiff, payload: map[string]any{"tool_call_id": "call-1", "tool_name": "edit", "file_path": "a.txt"}},
+		{eventType: EventBashSideEffect, payload: map[string]any{"tool_call_id": "call-2", "changes": []map[string]any{{"path": "a.txt", "kind": "modified"}}}},
 		{eventType: EventTodoUpdated, payload: map[string]any{"action": "replace"}},
 		{eventType: EventTodoConflict, payload: map[string]any{"action": "conflict"}},
 		{eventType: EventTodoSnapshotUpdated, payload: map[string]any{"action": "snapshot"}},
@@ -534,16 +550,10 @@ func TestGatewayStreamDecodeAndEnvelopeExtraBranches(t *testing.T) {
 		t.Fatalf("expected restore payload decode error")
 	}
 
-	if _, ok := extractRuntimeEnvelope(streamInvalidJSONMarshaler{raw: []byte("{")}); ok {
-		t.Fatalf("expected marshal error path to fail envelope extraction")
-	}
-	if _, ok := extractRuntimeEnvelope(streamInvalidJSONMarshaler{raw: []byte("[]")}); ok {
-		t.Fatalf("expected unmarshal-to-map error path to fail envelope extraction")
-	}
 	if envelope, ok := extractRuntimeEnvelope(struct {
 		RuntimeEventType string `json:"runtime_event_type"`
-	}{RuntimeEventType: string(EventError)}); !ok || streamReadMapString(envelope, "runtime_event_type") == "" {
-		t.Fatalf("expected runtime_event_type detection after marshal/unmarshal")
+	}{RuntimeEventType: string(EventError)}); ok || streamReadMapString(envelope, "runtime_event_type") != "" {
+		t.Fatalf("non-map payload should not decode as envelope")
 	}
 
 	if got := streamReadMapString(map[string]any{"v": 123}, "v"); got != "123" {

@@ -105,6 +105,9 @@ func TestEditToolExecute(t *testing.T) {
 			if result.Content != "ok" {
 				t.Fatalf("expected result content ok, got %q", result.Content)
 			}
+			if !result.Facts.WorkspaceWrite {
+				t.Fatalf("expected WorkspaceWrite=true for successful edit, got false")
+			}
 
 			data, err := os.ReadFile(filepath.Join(workspace, tt.path))
 			if err != nil {

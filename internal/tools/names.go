@@ -21,4 +21,8 @@ const (
 	ToolNameMemoList             = "memo_list"
 	ToolNameMemoRemove           = "memo_remove"
 	ToolNameDiagnose             = "diagnose"
+
+	ToolNameCodebaseRead         = "codebase_read"
+	ToolNameCodebaseSearchText   = "codebase_search_text"
+	ToolNameCodebaseSearchSymbol = "codebase_search_symbol"
 )

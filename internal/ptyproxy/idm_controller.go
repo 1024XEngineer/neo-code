@@ -38,6 +38,7 @@ const (
 	idmSessionPrefix              = "idm-"
 	idmSessionRunAskPrefix        = "idm-ask"
 	idmMarkdownWrapWidth          = 96
+	idmPlanMode                   = "plan"
 )
 
 var idmRunSequence atomic.Uint64
@@ -64,6 +65,8 @@ the user.
   You cannot and must not gather additional information yourself.
 - Base your analysis solely on the provided error log. Do not speculate
   about content that does not appear in the log.
+- Do NOT output plan_spec, summary_candidate, or any planning JSON.
+- Do NOT perform build or write actions. Return diagnosis text only.
 - If the log appears heavily truncated or information is insufficient,
   lower your confidence. You may suggest commands for the user to run
   manually in next_actions to gather more context, but do not pretend
@@ -634,6 +637,7 @@ func (c *idmController) sendAIMessage(question string) error {
 			RunID:     runID,
 			InputText: question,
 			Workdir:   c.workdir,
+			Mode:      resolveIDMRunMode(),
 		},
 		&runAck,
 		gatewayclient.GatewayRPCCallOptions{
@@ -645,6 +649,10 @@ func (c *idmController) sendAIMessage(question string) error {
 		finishStreaming()
 		return err
 	}
+	if err := validateIDMAckFrame(runAck, "run"); err != nil {
+		finishStreaming()
+		return err
+	}
 
 	waitErr := c.waitRunStream(streamCtx, sessionID, runID)
 	c.cancelRun(sessionID, runID)
@@ -653,6 +661,34 @@ func (c *idmController) sendAIMessage(question string) error {
 		return waitErr
 	}
 	c.writePrompt()
+	return nil
+}
+
+// resolveIDMRunMode 返回 IDM @ai 本次运行应注入的 Runtime mode。
+func resolveIDMRunMode() string {
+	if !IsIDMPlanModeEnabledFromEnv() {
+		return ""
+	}
+	return idmPlanMode
+}
+
+// validateIDMAckFrame 校验 IDM RPC 调用返回的 ACK 语义，避免失败后继续等待流事件。
+func validateIDMAckFrame(frame gateway.MessageFrame, operation string) error {
+	operation = strings.TrimSpace(operation)
+	if operation == "" {
+		operation = "operation"
+	}
+	if frame.Type == gateway.FrameTypeError && frame.Error != nil {
+		return fmt.Errorf(
+			"gateway %s failed (%s): %s",
+			operation,
+			strings.TrimSpace(frame.Error.Code),
+			strings.TrimSpace(frame.Error.Message),
+		)
+	}
+	if frame.Type != gateway.FrameTypeAck {
+		return fmt.Errorf("unexpected gateway frame type for %s: %s", operation, frame.Type)
+	}
 	return nil
 }
 
@@ -788,6 +824,7 @@ func (c *idmController) currentSessionID() string {
 // waitRunStream 负责 waitRunStream 相关逻辑。
 func (c *idmController) waitRunStream(ctx context.Context, sessionID string, runID string) error {
 	var markdownBuffer strings.Builder
+	streamedChunks := false
 	for {
 		select {
 		case <-ctx.Done():
@@ -815,12 +852,20 @@ func (c *idmController) waitRunStream(ctx context.Context, sessionID string, run
 			switch eventType {
 			case "agent_chunk":
 				chunk := stringifyRuntimePayload(payload)
-				if strings.TrimSpace(chunk) == "" {
+				if chunk == "" {
 					continue
 				}
 				markdownBuffer.WriteString(chunk)
+				c.renderIDMStreamChunk(chunk)
+				streamedChunks = true
 			case "agent_done":
-				c.renderIDMAnswer(markdownBuffer.String())
+				answer := markdownBuffer.String()
+				if strings.TrimSpace(answer) == "" {
+					answer = extractIDMDonePayloadText(payload)
+				}
+				if !streamedChunks {
+					c.renderIDMAnswer(answer)
+				}
 				c.writeRawOutput([]byte("\r\n"))
 				return nil
 			case "run_canceled":
@@ -1087,6 +1132,74 @@ func stringifyRuntimePayload(payload any) string {
 		}
 		return string(encoded)
 	}
+}
+
+// extractIDMDonePayloadText 从 agent_done 负载中提取可展示文本，兜底无 chunk 的完成事件。
+func extractIDMDonePayloadText(payload any) string {
+	switch typed := payload.(type) {
+	case nil:
+		return ""
+	case string:
+		return strings.TrimSpace(typed)
+	case map[string]any:
+		return extractIDMTextFromMap(typed)
+	default:
+		raw, err := json.Marshal(typed)
+		if err != nil {
+			return strings.TrimSpace(fmt.Sprint(typed))
+		}
+		var decoded map[string]any
+		if err := json.Unmarshal(raw, &decoded); err != nil {
+			return strings.TrimSpace(fmt.Sprint(typed))
+		}
+		return extractIDMTextFromMap(decoded)
+	}
+}
+
+// extractIDMTextFromMap 按 Runtime message 常见结构读取 text/content/parts 文本。
+func extractIDMTextFromMap(container map[string]any) string {
+	if container == nil {
+		return ""
+	}
+	for _, key := range []string{"text", "content", "summary"} {
+		if value := strings.TrimSpace(readMapStringValue(container, key)); value != "" {
+			return value
+		}
+	}
+	parts, ok := readMapAnyValue(container, "parts")
+	if !ok {
+		return ""
+	}
+	items, ok := parts.([]any)
+	if !ok {
+		return ""
+	}
+	var builder strings.Builder
+	for _, item := range items {
+		part, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		text := readMapStringValue(part, "text")
+		if strings.TrimSpace(text) == "" {
+			text = readMapStringValue(part, "content")
+		}
+		if strings.TrimSpace(text) == "" {
+			continue
+		}
+		builder.WriteString(text)
+	}
+	return strings.TrimSpace(builder.String())
+}
+
+// renderIDMStreamChunk 将模型流式片段直接写入终端，避免等待完整 Markdown 渲染完成。
+func (c *idmController) renderIDMStreamChunk(rawText string) {
+	if c == nil || rawText == "" {
+		return
+	}
+	c.writeRawOutput([]byte(idmAIColor))
+	c.writeRawOutput([]byte(proxyOutputLineEndingNormalizer.Replace(rawText)))
+	c.writeRawOutput([]byte(idmColorReset))
 }
 
 // renderIDMAnswer 将模型回复按 Markdown 渲染后输出，渲染失败时回退原始文本。

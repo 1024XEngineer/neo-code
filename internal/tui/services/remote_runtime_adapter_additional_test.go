@@ -9,7 +9,6 @@ import (
 
 	"neo-code/internal/gateway"
 	"neo-code/internal/gateway/protocol"
-	providertypes "neo-code/internal/provider/types"
 	"neo-code/internal/skills"
 )
 
@@ -33,6 +32,11 @@ func TestNewRemoteRuntimeAdapterBranches(t *testing.T) {
 		if options.ListenAddress == "dial-failed" {
 			client.authErr = errors.New("dial failed")
 		}
+		if options.ListenAddress == "bind-failed" {
+			client.callErrs = map[string]error{
+				protocol.MethodGatewayBindStream: errors.New("bind failed"),
+			}
+		}
 		return client, nil
 	}
 	newGatewayStreamClientFactory = func(source <-chan gatewayRPCNotification) *GatewayStreamClient {
@@ -44,6 +48,9 @@ func TestNewRemoteRuntimeAdapterBranches(t *testing.T) {
 	}
 	if _, err := NewRemoteRuntimeAdapter(RemoteRuntimeAdapterOptions{ListenAddress: "dial-failed", RequestTimeout: -1}); err == nil {
 		t.Fatalf("expected authenticate fail-fast error")
+	}
+	if _, err := NewRemoteRuntimeAdapter(RemoteRuntimeAdapterOptions{ListenAddress: "bind-failed", RequestTimeout: -1}); err == nil {
+		t.Fatalf("expected bindStream fail-fast error")
 	}
 
 	adapter, err := NewRemoteRuntimeAdapter(RemoteRuntimeAdapterOptions{
@@ -63,14 +70,13 @@ func TestNewRemoteRuntimeAdapterBranches(t *testing.T) {
 	_ = adapter.Close()
 }
 
-func TestRemoteRuntimeAdapterPrepareUserInputAndRun(t *testing.T) {
+func TestRemoteRuntimeAdapterSubmitGeneratesIDsAndNormalizesInput(t *testing.T) {
 	t.Parallel()
 
 	rpcClient := &stubRemoteRPCClient{
 		frames: map[string]gateway.MessageFrame{
-			protocol.MethodGatewayLoadSession: {Type: gateway.FrameTypeAck, Action: gateway.FrameActionLoadSession, SessionID: "s-1"},
-			protocol.MethodGatewayBindStream:  {Type: gateway.FrameTypeAck, Action: gateway.FrameActionBindStream, SessionID: "s-1", RunID: "r-1"},
-			protocol.MethodGatewayRun:         {Type: gateway.FrameTypeAck, Action: gateway.FrameActionRun, SessionID: "s-1", RunID: "r-1"},
+			protocol.MethodGatewayBindStream: {Type: gateway.FrameTypeAck, Action: gateway.FrameActionBindStream, SessionID: "s-1", RunID: "r-1"},
+			protocol.MethodGatewayRun:        {Type: gateway.FrameTypeAck, Action: gateway.FrameActionRun, SessionID: "s-1", RunID: "r-1"},
 		},
 		notifications: make(chan gatewayRPCNotification),
 	}
@@ -78,13 +84,7 @@ func TestRemoteRuntimeAdapterPrepareUserInputAndRun(t *testing.T) {
 	adapter := newRemoteRuntimeAdapterWithClients(rpcClient, streamClient, time.Second, 1)
 	t.Cleanup(func() { _ = adapter.Close() })
 
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	if _, err := adapter.PrepareUserInput(ctx, PrepareInput{}); err == nil {
-		t.Fatalf("expected context cancellation error")
-	}
-
-	input, err := adapter.PrepareUserInput(context.Background(), PrepareInput{
+	if err := adapter.Submit(context.Background(), PrepareInput{
 		SessionID: "  ",
 		RunID:     "",
 		Text:      "  hello  ",
@@ -93,23 +93,28 @@ func TestRemoteRuntimeAdapterPrepareUserInputAndRun(t *testing.T) {
 			{Path: " /tmp/a.png ", MimeType: " image/png "},
 		},
 		Workdir: " /repo ",
-	})
-	if err != nil {
-		t.Fatalf("PrepareUserInput() error = %v", err)
-	}
-	if strings.TrimSpace(input.SessionID) == "" || strings.TrimSpace(input.RunID) == "" {
-		t.Fatalf("session/run id should be generated")
-	}
-	if len(input.Parts) != 2 {
-		t.Fatalf("parts len = %d, want 2", len(input.Parts))
-	}
-
-	if err := adapter.Run(context.Background(), input); err != nil {
-		t.Fatalf("Run() error = %v", err)
+	}); err != nil {
+		t.Fatalf("Submit() error = %v", err)
 	}
 	methods := rpcClient.snapshotMethods()
-	if len(methods) != 3 || methods[2] != protocol.MethodGatewayRun {
+	if len(methods) != 2 || methods[1] != protocol.MethodGatewayRun {
 		t.Fatalf("unexpected method chain: %#v", methods)
+	}
+	params, ok := rpcClient.snapshotParams()[protocol.MethodGatewayRun].(protocol.RunParams)
+	if !ok {
+		t.Fatalf("run params type = %T, want protocol.RunParams", rpcClient.snapshotParams()[protocol.MethodGatewayRun])
+	}
+	if !params.NewSession {
+		t.Fatalf("expected new_session=true when submitting draft input, params=%#v", params)
+	}
+	if strings.TrimSpace(params.SessionID) == "" || strings.TrimSpace(params.RunID) == "" {
+		t.Fatalf("session/run id should be generated: %#v", params)
+	}
+	if params.InputText != "hello" || params.Workdir != "/repo" {
+		t.Fatalf("unexpected normalized run payload: %#v", params)
+	}
+	if len(params.InputParts) != 1 || params.InputParts[0].Media == nil || params.InputParts[0].Media.URI != "/tmp/a.png" {
+		t.Fatalf("unexpected run input parts: %#v", params.InputParts)
 	}
 }
 
@@ -611,36 +616,209 @@ func TestRemoteRuntimeAdapterListAndLoadSessionErrorPaths(t *testing.T) {
 	}
 }
 
-func TestRemoteRuntimeAdapterRenderInputHelpers(t *testing.T) {
+func TestRemoteRuntimeAdapterBuildGatewayRunParams(t *testing.T) {
 	t.Parallel()
 
-	text := renderInputTextFromParts([]providertypes.ContentPart{
-		providertypes.NewTextPart("  first  "),
-		providertypes.NewRemoteImagePart("/tmp/a.png"),
-		providertypes.NewTextPart("second"),
-		providertypes.NewTextPart("   "),
-	})
-	if text != "first\nsecond" {
-		t.Fatalf("renderInputTextFromParts() = %q", text)
+	params := buildGatewayRunParams(" s ", " r ", true, PrepareInput{Text: " hi ", Workdir: " /w ", Mode: " plan ", Images: []UserImageInput{{Path: " /img.png ", MimeType: " image/png "}, {Path: " "}}})
+	if params.SessionID != "s" || !params.NewSession || params.RunID != "r" || params.Workdir != "/w" || params.Mode != "plan" || params.InputText != "hi" || len(params.InputParts) != 1 {
+		t.Fatalf("buildGatewayRunParams() = %#v", params)
 	}
+}
 
-	images := renderInputImagesFromParts([]providertypes.ContentPart{
-		providertypes.NewTextPart("x"),
-		providertypes.NewRemoteImagePart("  "),
-		providertypes.ContentPart{
-			Kind: providertypes.ContentPartImage,
-			Image: &providertypes.ImagePart{
-				URL:   " /tmp/b.png ",
-				Asset: &providertypes.AssetRef{MimeType: " image/png "},
+func TestRemoteRuntimeAdapterListModels(t *testing.T) {
+	t.Parallel()
+
+	rpcClient := &stubRemoteRPCClient{
+		frames: map[string]gateway.MessageFrame{
+			protocol.MethodGatewayListModels: {
+				Type:   gateway.FrameTypeAck,
+				Action: gateway.FrameActionListModels,
+				Payload: map[string]any{
+					"models": []gateway.ModelEntry{
+						{ID: " m-1 ", Name: " Model One "},
+						{ID: " m-2 ", Name: ""},
+						{ID: " ", Name: "ignored"},
+					},
+					"selected_model_id": " m-2 ",
+				},
 			},
 		},
-	})
-	if len(images) != 1 || images[0].Path != "/tmp/b.png" || images[0].MimeType != "image/png" {
-		t.Fatalf("renderInputImagesFromParts() = %#v", images)
+		notifications: make(chan gatewayRPCNotification),
+	}
+	adapter := newRemoteRuntimeAdapterWithClients(
+		rpcClient,
+		&stubRemoteStreamClient{events: make(chan RuntimeEvent)},
+		time.Second,
+		1,
+	)
+	t.Cleanup(func() { _ = adapter.Close() })
+
+	models, selectedID, err := adapter.ListModels(context.Background(), " session-1 ")
+	if err != nil {
+		t.Fatalf("ListModels() error = %v", err)
+	}
+	if len(models) != 2 {
+		t.Fatalf("expected two models after trimming/filtering, got %#v", models)
+	}
+	if models[0].ID != "m-1" || models[0].Name != "Model One" {
+		t.Fatalf("unexpected first model mapping: %#v", models[0])
+	}
+	if models[1].ID != "m-2" || models[1].Name != "m-2" {
+		t.Fatalf("unexpected second model mapping: %#v", models[1])
+	}
+	if selectedID != "m-2" {
+		t.Fatalf("selected model id = %q, want %q", selectedID, "m-2")
 	}
 
-	params := buildGatewayRunParams(" s ", " r ", PrepareInput{Text: " hi ", Workdir: " /w ", Mode: " plan ", Images: []UserImageInput{{Path: " /img.png ", MimeType: " image/png "}, {Path: " "}}})
-	if params.SessionID != "s" || params.RunID != "r" || params.Workdir != "/w" || params.Mode != "plan" || params.InputText != "hi" || len(params.InputParts) != 1 {
-		t.Fatalf("buildGatewayRunParams() = %#v", params)
+	params, ok := rpcClient.snapshotParams()[protocol.MethodGatewayListModels].(protocol.ListModelsParams)
+	if !ok {
+		t.Fatalf("listModels params type = %T, want protocol.ListModelsParams", rpcClient.snapshotParams()[protocol.MethodGatewayListModels])
+	}
+	if params.SessionID != "session-1" {
+		t.Fatalf("session_id = %q, want %q", params.SessionID, "session-1")
+	}
+}
+
+func TestRemoteRuntimeAdapterCheckpointAndWorkspaceMethods(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	rpcClient := &stubRemoteRPCClient{
+		frames: map[string]gateway.MessageFrame{
+			protocol.MethodGatewayListCheckpoints: {
+				Type:   gateway.FrameTypeAck,
+				Action: gateway.FrameActionListCheckpoints,
+				Payload: []CheckpointEntry{
+					{CheckpointID: "cp-1", SessionID: "s-1", CreatedAtMS: 1700000000000, Restorable: true},
+				},
+			},
+			protocol.MethodGatewayRestoreCheckpoint: {
+				Type:   gateway.FrameTypeAck,
+				Action: gateway.FrameActionRestoreCheckpoint,
+				Payload: CheckpointRestoreResult{
+					CheckpointID: "cp-1",
+					SessionID:    "s-1",
+				},
+			},
+			protocol.MethodGatewayUndoRestore: {
+				Type:   gateway.FrameTypeAck,
+				Action: gateway.FrameActionUndoRestore,
+				Payload: CheckpointRestoreResult{
+					CheckpointID: "cp-guard",
+					SessionID:    "s-1",
+				},
+			},
+			protocol.MethodGatewayCheckpointDiff: {
+				Type:   gateway.FrameTypeAck,
+				Action: gateway.FrameActionCheckpointDiff,
+				Payload: CheckpointDiffResult{
+					CheckpointID:     "cp-1",
+					PrevCheckpointID: "cp-0",
+					Files: CheckpointDiffFiles{
+						Modified: []string{"a.txt"},
+					},
+					Patch: "diff --git a/a.txt b/a.txt",
+				},
+			},
+			protocol.MethodGatewayListWorkspaces: {
+				Type:   gateway.FrameTypeAck,
+				Action: gateway.FrameActionWorkspaceList,
+				Payload: map[string]any{
+					"workspaces": []WorkspaceRecord{
+						{Hash: "ws-1", Path: "/repo", Name: "repo", CreatedAt: now, UpdatedAt: now},
+					},
+				},
+			},
+			protocol.MethodGatewayCreateWorkspace: {
+				Type:   gateway.FrameTypeAck,
+				Action: gateway.FrameActionWorkspaceCreate,
+				Payload: map[string]any{
+					"workspace": WorkspaceRecord{Hash: "ws-2", Path: "/repo2", Name: "repo2"},
+				},
+			},
+			protocol.MethodGatewaySwitchWorkspace: {
+				Type:   gateway.FrameTypeAck,
+				Action: gateway.FrameActionWorkspaceSwitch,
+				Payload: map[string]any{
+					"workspace_hash": "ws-1",
+				},
+			},
+			protocol.MethodGatewayRenameWorkspace: {
+				Type:   gateway.FrameTypeAck,
+				Action: gateway.FrameActionWorkspaceRename,
+				Payload: map[string]any{
+					"hash": "ws-1",
+					"name": "renamed",
+				},
+			},
+			protocol.MethodGatewayDeleteWorkspace: {
+				Type:   gateway.FrameTypeAck,
+				Action: gateway.FrameActionWorkspaceDelete,
+				Payload: map[string]any{
+					"hash": "ws-1",
+				},
+			},
+		},
+		notifications: make(chan gatewayRPCNotification),
+	}
+	adapter := newRemoteRuntimeAdapterWithClients(
+		rpcClient,
+		&stubRemoteStreamClient{events: make(chan RuntimeEvent)},
+		time.Second,
+		1,
+	)
+	t.Cleanup(func() { _ = adapter.Close() })
+
+	checkpoints, err := adapter.ListCheckpoints(context.Background(), CheckpointListInput{
+		SessionID:      " s-1 ",
+		Limit:          20,
+		RestorableOnly: true,
+	})
+	if err != nil || len(checkpoints) != 1 || checkpoints[0].CheckpointID != "cp-1" {
+		t.Fatalf("ListCheckpoints() = (%#v, %v)", checkpoints, err)
+	}
+	restoreResult, err := adapter.RestoreCheckpoint(context.Background(), CheckpointRestoreInput{
+		SessionID:    " s-1 ",
+		CheckpointID: " cp-1 ",
+		Force:        true,
+	})
+	if err != nil || restoreResult.CheckpointID != "cp-1" {
+		t.Fatalf("RestoreCheckpoint() = (%#v, %v)", restoreResult, err)
+	}
+	undoResult, err := adapter.UndoRestoreCheckpoint(context.Background(), " s-1 ")
+	if err != nil || undoResult.CheckpointID != "cp-guard" {
+		t.Fatalf("UndoRestoreCheckpoint() = (%#v, %v)", undoResult, err)
+	}
+	diffResult, err := adapter.CheckpointDiff(context.Background(), " s-1 ", " cp-1 ")
+	if err != nil || diffResult.CheckpointID != "cp-1" || len(diffResult.Files.Modified) != 1 {
+		t.Fatalf("CheckpointDiff() = (%#v, %v)", diffResult, err)
+	}
+
+	workspaces, err := adapter.ListWorkspaces(context.Background())
+	if err != nil || len(workspaces) != 1 || workspaces[0].Hash != "ws-1" {
+		t.Fatalf("ListWorkspaces() = (%#v, %v)", workspaces, err)
+	}
+	createdWorkspace, err := adapter.CreateWorkspace(context.Background(), WorkspaceCreateInput{
+		Path: " /repo2 ",
+		Name: " repo2 ",
+	})
+	if err != nil || createdWorkspace.Hash != "ws-2" {
+		t.Fatalf("CreateWorkspace() = (%#v, %v)", createdWorkspace, err)
+	}
+	if err := adapter.SwitchWorkspace(context.Background(), " ws-1 "); err != nil {
+		t.Fatalf("SwitchWorkspace() error = %v", err)
+	}
+	renamedWorkspace, err := adapter.RenameWorkspace(context.Background(), WorkspaceRenameInput{
+		WorkspaceHash: " ws-1 ",
+		Name:          " renamed ",
+	})
+	if err != nil || renamedWorkspace.Hash != "ws-1" || renamedWorkspace.Name != "renamed" {
+		t.Fatalf("RenameWorkspace() = (%#v, %v)", renamedWorkspace, err)
+	}
+	if err := adapter.DeleteWorkspace(context.Background(), WorkspaceDeleteInput{
+		WorkspaceHash: " ws-1 ",
+		RemoveData:    true,
+	}); err != nil {
+		t.Fatalf("DeleteWorkspace() error = %v", err)
 	}
 }

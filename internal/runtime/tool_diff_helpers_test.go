@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"neo-code/internal/checkpoint"
+	"neo-code/internal/repository"
 	providertypes "neo-code/internal/provider/types"
 	agentsession "neo-code/internal/session"
 	"neo-code/internal/tools"
@@ -232,7 +232,7 @@ func TestToolExecutionHelperFunctions(t *testing.T) {
 	})
 
 	t.Run("collectUncoveredBashPaths removes covered and duplicate entries", func(t *testing.T) {
-		diff := checkpoint.FingerprintDiff{
+		diff := repository.FingerprintDiff{
 			Added:    []string{"new.txt", "new.txt"},
 			Modified: []string{"tracked.txt", "covered.txt"},
 		}
@@ -246,7 +246,7 @@ func TestToolExecutionHelperFunctions(t *testing.T) {
 	})
 
 	t.Run("collectBashWriteFactPaths includes only added and modified paths", func(t *testing.T) {
-		got := collectBashWriteFactPaths(checkpoint.FingerprintDiff{
+		got := collectBashWriteFactPaths(repository.FingerprintDiff{
 			Added:    []string{"b.txt", "a.txt"},
 			Modified: []string{"a.txt", "c.txt"},
 			Deleted:  []string{"old.txt"},
@@ -275,7 +275,7 @@ func TestEmitHelpersPublishExpectedEvents(t *testing.T) {
 		state,
 		providertypes.ToolCall{ID: "tool-1"},
 		"touch x",
-		checkpoint.FingerprintDiff{
+		repository.FingerprintDiff{
 			Added:    []string{"new.txt"},
 			Modified: []string{"edit.txt"},
 			Deleted:  []string{"old.txt"},
@@ -301,7 +301,7 @@ func TestEmitHelpersPublishExpectedEvents(t *testing.T) {
 		state,
 		providertypes.ToolCall{ID: "tool-2"},
 		"touch noop",
-		checkpoint.FingerprintDiff{},
+		repository.FingerprintDiff{},
 		nil,
 		nil,
 	)

@@ -167,7 +167,7 @@ func TestDefaultToolUsagePromptIncludesPermissionAndAntiLoopGuidance(t *testing.
 	if !strings.Contains(toolUsage, "`status`, `ok`, `tool_call_id`, `truncated`, `meta.*`, exit codes, and `content`") {
 		t.Fatalf("expected Tool Usage to explain structured tool results, got %q", toolUsage)
 	}
-	if !strings.Contains(toolUsage, "inspect (`git status`/`git diff`/`git log`)") {
+	if !strings.Contains(toolUsage, "Use Git through dedicated `git_*` tools") {
 		t.Fatalf("expected Tool Usage to describe git inspection order, got %q", toolUsage)
 	}
 	if !strings.Contains(toolUsage, "Prefer rollback primitives in this order: `git restore`") {

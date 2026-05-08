@@ -55,7 +55,10 @@ func HandleEvent(event providertypes.StreamEvent, acc *Accumulator, hooks Hooks)
 		if hooks.OnThinkingDelta != nil {
 			hooks.OnThinkingDelta(payload.Text)
 		}
-		// thinking 不进入 accumulator（不混入 assistant 正文）
+		// thinking 独立累积（不混入 assistant 正文），后续写入 ThinkingMetadata
+		if acc != nil {
+			acc.AccumulateThinking(payload.Text)
+		}
 	case providertypes.StreamEventMessageDone:
 		payload, err := event.MessageDoneValue()
 		if err != nil {

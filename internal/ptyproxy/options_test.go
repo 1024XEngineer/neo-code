@@ -92,3 +92,54 @@ func TestNormalizeShellOptionsResolvesEmptyWorkdir(t *testing.T) {
 		t.Fatal("Workdir should not be empty after normalization")
 	}
 }
+
+func TestIsAltScreenGuardEnabledFromEnv(t *testing.T) {
+	t.Setenv(DiagAltScreenGuardDisableEnv, "")
+	if !IsAltScreenGuardEnabledFromEnv() {
+		t.Fatal("expected alt-screen guard enabled by default")
+	}
+
+	t.Setenv(DiagAltScreenGuardDisableEnv, "true")
+	if IsAltScreenGuardEnabledFromEnv() {
+		t.Fatal("expected alt-screen guard disabled when env=true")
+	}
+
+	t.Setenv(DiagAltScreenGuardDisableEnv, "false")
+	if !IsAltScreenGuardEnabledFromEnv() {
+		t.Fatal("expected alt-screen guard enabled when env=false")
+	}
+
+	t.Setenv(DiagAltScreenGuardDisableEnv, "invalid")
+	if IsAltScreenGuardEnabledFromEnv() {
+		t.Fatal("expected alt-screen guard disabled for non-empty invalid env")
+	}
+}
+
+func TestFeatureRollbackEnvs(t *testing.T) {
+	t.Setenv(IDMSessionPlanModeDisableEnv, "")
+	if !IsIDMPlanModeEnabledFromEnv() {
+		t.Fatal("expected IDM plan mode enabled by default")
+	}
+	t.Setenv(IDMSessionPlanModeDisableEnv, "1")
+	if IsIDMPlanModeEnabledFromEnv() {
+		t.Fatal("expected IDM plan mode disabled when env=1")
+	}
+
+	t.Setenv(DiagFastResponseDisableEnv, "")
+	if !IsDiagFastResponseEnabledFromEnv() {
+		t.Fatal("expected fast response enabled by default")
+	}
+	t.Setenv(DiagFastResponseDisableEnv, "invalid")
+	if IsDiagFastResponseEnabledFromEnv() {
+		t.Fatal("expected invalid non-empty fast response env to disable feature")
+	}
+
+	t.Setenv(DiagCacheDisableEnv, "")
+	if !IsDiagCacheEnabledFromEnv() {
+		t.Fatal("expected diagnosis cache enabled by default")
+	}
+	t.Setenv(DiagCacheDisableEnv, "true")
+	if IsDiagCacheEnabledFromEnv() {
+		t.Fatal("expected diagnosis cache disabled when env=true")
+	}
+}

@@ -3,7 +3,9 @@ package tui
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -65,10 +67,15 @@ const pasteSessionMinGuard = 2 * time.Second
 const pasteSessionPerLineGuard = 8 * time.Millisecond
 const inlineLogMarker = "[[neo-log]] "
 const sessionWorkdirMissingWarning = "Session workspace not found, keeping current workspace."
+const localLogViewerPersistDir = "log-viewer"
 
 type sessionLogPersistenceRuntime interface {
 	LoadSessionLogEntries(ctx context.Context, sessionID string) ([]tuiservices.SessionLogEntry, error)
 	SaveSessionLogEntries(ctx context.Context, sessionID string, entries []tuiservices.SessionLogEntry) error
+}
+
+type localSessionLogStore struct {
+	baseDir string
 }
 
 var supportsUserEnvPersistence = config.SupportsUserEnvPersistence
@@ -453,10 +460,13 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, batchUpdateCmds()
 		}
 
-		switch a.focus {
-		case panelTranscript:
-			a.handleViewportKeys(&a.transcript, typed)
-			return a, batchUpdateCmds()
+			switch a.focus {
+			case panelTranscript:
+				if key.Matches(typed, a.keys.Send) && a.toggleTranscriptProcessExpansion() {
+					return a, batchUpdateCmds()
+				}
+				a.handleViewportKeys(&a.transcript, typed)
+				return a, batchUpdateCmds()
 		case panelActivity:
 			a.handleViewportKeys(&a.activity, typed)
 			return a, batchUpdateCmds()
@@ -2562,6 +2572,7 @@ func (a *App) applySessionSnapshot(session agentsession.Session, warnOnMissingWo
 	a.setCurrentAgentMode(string(session.AgentMode))
 	a.syncSessionWorkdir(session.Workdir, warnOnMissingWorkdir)
 	a.loadLogEntriesForSession(session.ID)
+	a.replayFoldRelatedSessionLogsIntoTranscript()
 	a.refreshRuntimeSourceSnapshot()
 }
 
@@ -2791,6 +2802,12 @@ var runtimeEventHandlerRegistry = map[tuiservices.EventType]func(*App, tuiservic
 	tuiservices.EventRepoHooksLoaded:                          runtimeEventRepoHooksLoadedHandler,
 	tuiservices.EventRepoHooksSkippedUntrusted:                runtimeEventRepoHooksSkippedUntrustedHandler,
 	tuiservices.EventRepoHooksTrustStoreInvalid:               runtimeEventRepoHooksTrustStoreInvalidHandler,
+	tuiservices.EventCheckpointCreated:                        runtimeEventCheckpointCreatedHandler,
+	tuiservices.EventCheckpointWarning:                        runtimeEventCheckpointWarningHandler,
+	tuiservices.EventCheckpointRestored:                       runtimeEventCheckpointRestoredHandler,
+	tuiservices.EventCheckpointUndoRestore:                    runtimeEventCheckpointUndoRestoreHandler,
+	tuiservices.EventToolDiff:                                 runtimeEventToolDiffHandler,
+	tuiservices.EventBashSideEffect:                           runtimeEventBashSideEffectHandler,
 	tuiservices.EventSubAgentStarted:                          runtimeEventSubAgentLifecycleHandler,
 	tuiservices.EventSubAgentProgress:                         runtimeEventSubAgentLifecycleHandler,
 	tuiservices.EventSubAgentRetried:                          runtimeEventSubAgentLifecycleHandler,
@@ -2962,6 +2979,170 @@ func runtimeEventRepoHooksTrustStoreInvalidHandler(a *App, event tuiservices.Run
 		reason = "trust store is invalid"
 	}
 	a.appendActivity("hook", "Repo hooks trust store invalid", reason, false)
+	return false
+}
+
+func runtimeEventCheckpointCreatedHandler(a *App, event tuiservices.RuntimeEvent) bool {
+	payload, ok := event.Payload.(tuiservices.CheckpointCreatedPayload)
+	if !ok {
+		return false
+	}
+	checkpointID := strings.TrimSpace(payload.CheckpointID)
+	if checkpointID == "" {
+		checkpointID = "(unknown)"
+	}
+	details := []string{
+		"checkpoint_id=" + checkpointID,
+	}
+	if reason := strings.TrimSpace(payload.Reason); reason != "" {
+		details = append(details, "reason="+reason)
+	}
+	if commit := strings.TrimSpace(payload.CommitHash); commit != "" {
+		details = append(details, "commit="+commit)
+	}
+	if codeRef := strings.TrimSpace(payload.CodeCheckpointRef); codeRef != "" {
+		details = append(details, "code_ref="+codeRef)
+	}
+	a.appendActivity("checkpoint", "Checkpoint created", strings.Join(details, ", "), false)
+	return false
+}
+
+func runtimeEventCheckpointWarningHandler(a *App, event tuiservices.RuntimeEvent) bool {
+	payload, ok := event.Payload.(tuiservices.CheckpointWarningPayload)
+	if !ok {
+		return false
+	}
+	message := strings.TrimSpace(payload.Error)
+	if message == "" {
+		message = "checkpoint warning"
+	}
+	if phase := strings.TrimSpace(payload.Phase); phase != "" {
+		message = phase + ": " + message
+	}
+	a.appendActivity("checkpoint", "Checkpoint warning", message, true)
+	return false
+}
+
+func runtimeEventCheckpointRestoredHandler(a *App, event tuiservices.RuntimeEvent) bool {
+	payload, ok := event.Payload.(tuiservices.CheckpointRestoredPayload)
+	if !ok {
+		return false
+	}
+	if sessionID := strings.TrimSpace(payload.SessionID); sessionID != "" {
+		a.setActiveSessionID(sessionID)
+	}
+	detail := strings.TrimSpace(payload.CheckpointID)
+	if detail == "" {
+		detail = "(unknown)"
+	}
+	if guard := strings.TrimSpace(payload.GuardCheckpointID); guard != "" {
+		detail = fmt.Sprintf("%s (guard=%s)", detail, guard)
+	}
+	a.appendActivity("checkpoint", "Checkpoint restored", detail, false)
+	if err := a.refreshMessages(); err != nil && strings.TrimSpace(a.state.ActiveSessionID) != "" {
+		a.state.ExecutionError = err.Error()
+		a.state.StatusText = err.Error()
+		a.appendInlineMessage(roleError, err.Error())
+		a.appendActivity("checkpoint", "Failed to refresh session after restore", err.Error(), true)
+		return true
+	}
+	a.syncTodosFromRun()
+	a.refreshRuntimeSourceSnapshot()
+	a.state.ExecutionError = ""
+	a.state.StatusText = "Checkpoint restored"
+	return true
+}
+
+func runtimeEventCheckpointUndoRestoreHandler(a *App, event tuiservices.RuntimeEvent) bool {
+	payload, ok := event.Payload.(tuiservices.CheckpointUndoRestorePayload)
+	if !ok {
+		return false
+	}
+	if sessionID := strings.TrimSpace(payload.SessionID); sessionID != "" {
+		a.setActiveSessionID(sessionID)
+	}
+	detail := strings.TrimSpace(payload.GuardCheckpointID)
+	if detail == "" {
+		detail = "restore guard checkpoint"
+	}
+	a.appendActivity("checkpoint", "Checkpoint restore undo", detail, false)
+	if err := a.refreshMessages(); err != nil && strings.TrimSpace(a.state.ActiveSessionID) != "" {
+		a.state.ExecutionError = err.Error()
+		a.state.StatusText = err.Error()
+		a.appendInlineMessage(roleError, err.Error())
+		a.appendActivity("checkpoint", "Failed to refresh session after undo", err.Error(), true)
+		return true
+	}
+	a.syncTodosFromRun()
+	a.refreshRuntimeSourceSnapshot()
+	a.state.ExecutionError = ""
+	a.state.StatusText = "Checkpoint restore undo applied"
+	return true
+}
+
+func runtimeEventToolDiffHandler(a *App, event tuiservices.RuntimeEvent) bool {
+	payload, ok := event.Payload.(tuiservices.ToolDiffPayload)
+	if !ok {
+		return false
+	}
+	files := make([]string, 0, len(payload.Files)+1)
+	if len(payload.Files) > 0 {
+		for _, file := range payload.Files {
+			path := strings.TrimSpace(file.Path)
+			if path == "" {
+				continue
+			}
+			kind := strings.TrimSpace(file.Kind)
+			if kind == "" {
+				files = append(files, path)
+			} else {
+				files = append(files, fmt.Sprintf("%s(%s)", path, kind))
+			}
+		}
+	} else {
+		path := strings.TrimSpace(payload.FilePath)
+		if path != "" {
+			if payload.WasNew {
+				files = append(files, path+"(added)")
+			} else {
+				files = append(files, path)
+			}
+		}
+	}
+	if len(files) == 0 {
+		files = append(files, "(no file paths)")
+	}
+	detail := fmt.Sprintf("tool=%s, files=%s", fallbackText(strings.TrimSpace(payload.ToolName), "unknown"), strings.Join(files, ", "))
+	a.appendActivity("tool", "Tool diff captured", detail, false)
+	return false
+}
+
+func runtimeEventBashSideEffectHandler(a *App, event tuiservices.RuntimeEvent) bool {
+	payload, ok := event.Payload.(tuiservices.BashSideEffectPayload)
+	if !ok {
+		return false
+	}
+	changes := make([]string, 0, len(payload.Changes))
+	for _, file := range payload.Changes {
+		path := strings.TrimSpace(file.Path)
+		if path == "" {
+			continue
+		}
+		kind := strings.TrimSpace(file.Kind)
+		if kind == "" {
+			changes = append(changes, path)
+		} else {
+			changes = append(changes, fmt.Sprintf("%s(%s)", path, kind))
+		}
+	}
+	if len(changes) == 0 {
+		changes = append(changes, "(no tracked changes)")
+	}
+	detail := fmt.Sprintf("changes=%s", strings.Join(changes, ", "))
+	if len(payload.UncoveredPaths) > 0 {
+		detail += fmt.Sprintf("; uncovered=%s", strings.Join(payload.UncoveredPaths, ", "))
+	}
+	a.appendActivity("tool", "Bash side effects detected", detail, false)
 	return false
 }
 
@@ -4389,8 +4570,9 @@ func (a *App) appendActivity(kind string, title string, detail string, isError b
 	}
 	a.syncActivityViewport(previousCount)
 	a.viewDirty = true
-	a.addLogEntry(kind, title, detail)
-	a.appendInlineMessage(roleSystem, formatActivityInlineLog(kind, title, detail))
+	inline := formatActivityInlineLog(kind, title, detail)
+	a.addLogEntryWithInline(kind, title, detail, inline)
+	a.appendInlineMessage(roleSystem, inline)
 	a.rebuildTranscript()
 }
 
@@ -4456,6 +4638,10 @@ func (a *App) clearActivities() {
 }
 
 func (a *App) addLogEntry(kind string, title string, detail string) {
+	a.addLogEntryWithInline(kind, title, detail, "")
+}
+
+func (a *App) addLogEntryWithInline(kind string, title string, detail string, inline string) {
 	level := "info"
 	if strings.Contains(title, "error") || strings.Contains(title, "Error") || strings.Contains(title, "failed") {
 		level = "error"
@@ -4468,6 +4654,7 @@ func (a *App) addLogEntry(kind string, title string, detail string) {
 		Level:     level,
 		Source:    kind,
 		Message:   title + ": " + detail,
+		Inline:    strings.TrimSpace(inline),
 	})
 
 	a.logEntries = clampLogEntries(a.logEntries)
@@ -4627,6 +4814,12 @@ func (a *App) handleTranscriptMouse(msg tea.MouseMsg) bool {
 		return false
 	}
 
+	if msg.Button == tea.MouseButtonLeft && msg.Action == tea.MouseActionPress {
+		if a.toggleTranscriptProcessExpansionOnMouse(msg) {
+			return true
+		}
+	}
+
 	switch {
 	case msg.Button == tea.MouseButtonLeft && msg.Action == tea.MouseActionPress:
 		return a.beginTextSelection(msg)
@@ -4643,6 +4836,52 @@ func (a *App) handleTranscriptMouse(msg tea.MouseMsg) bool {
 	default:
 		return false
 	}
+}
+
+func (a *App) toggleTranscriptProcessExpansionOnMouse(msg tea.MouseMsg) bool {
+	if !a.transcriptProcessFoldAvailable {
+		return false
+	}
+	line, ok := a.transcriptLineAtMouse(msg)
+	if !ok {
+		return false
+	}
+	line = ansi.Strip(strings.TrimSpace(line))
+	lower := strings.ToLower(line)
+	if !strings.Contains(lower, "process output hidden") && !strings.Contains(lower, "process output expanded") {
+		return false
+	}
+	_, y, _, _ := a.transcriptBounds()
+	anchorRow := msg.Y - y
+	if anchorRow < 0 {
+		anchorRow = 0
+	}
+	contentLine := a.transcript.YOffset + anchorRow
+	controlOrdinal := transcriptProcessControlOrdinalAtLine(a.transcriptContent, contentLine)
+	return a.toggleTranscriptProcessExpansionWithAnchor(anchorRow, controlOrdinal)
+}
+
+func (a App) transcriptLineAtMouse(msg tea.MouseMsg) (string, bool) {
+	x, y, width, height := a.transcriptBounds()
+	if width <= 0 || height <= 0 {
+		return "", false
+	}
+	if msg.X < x || msg.X >= x+width || msg.Y < y || msg.Y >= y+height {
+		return "", false
+	}
+	bodyRow := msg.Y - y
+	if bodyRow < 0 {
+		return "", false
+	}
+	contentLine := a.transcript.YOffset + bodyRow
+	if contentLine < 0 {
+		return "", false
+	}
+	lines := strings.Split(a.transcriptContent, "\n")
+	if contentLine >= len(lines) {
+		return "", false
+	}
+	return lines[contentLine], true
 }
 
 func (a App) isMouseWithinTranscript(msg tea.MouseMsg) bool {
@@ -5057,10 +5296,63 @@ func (a *App) rebuildTranscript() {
 	}
 
 	atBottom := a.transcript.AtBottom()
+	foldSegments := findTranscriptProcessFoldSegments(a.activeMessages)
+	foldExists := len(foldSegments) > 0
+	a.transcriptProcessFoldAvailable = foldExists
+	if !foldExists {
+		a.transcriptProcessExpanded = false
+		a.transcriptProcessExpandedOrdinal = -1
+	}
+	if a.transcriptProcessExpanded {
+		if a.transcriptProcessExpandedOrdinal < 0 || a.transcriptProcessExpandedOrdinal >= len(foldSegments) {
+			a.transcriptProcessExpandedOrdinal = 0
+		}
+	}
+	applyProcessFold := foldExists
+	foldControl := make(map[int]int, len(foldSegments))
+	foldExpandedStart := make(map[int]bool, len(foldSegments))
+	foldHidden := make(map[int]struct{})
+	for segIdx, seg := range foldSegments {
+		foldControl[seg.Start] = seg.HiddenCount
+		segmentExpanded := a.transcriptProcessExpanded && segIdx == a.transcriptProcessExpandedOrdinal
+		foldExpandedStart[seg.Start] = segmentExpanded
+		if applyProcessFold && !segmentExpanded {
+			for idx := seg.Start; idx <= seg.End; idx++ {
+				if idx == seg.FinalAssistant {
+					continue
+				}
+				foldHidden[idx] = struct{}{}
+			}
+		}
+	}
 	var builder strings.Builder
 	hasBlock := false
 	lastRenderedRole := ""
-	for _, message := range a.activeMessages {
+	for idx := 0; idx < len(a.activeMessages); idx++ {
+		if hiddenCount, exists := foldControl[idx]; exists {
+			control := ""
+			if foldExpandedStart[idx] {
+				control = a.renderTranscriptProcessExpandedBlock(width)
+			} else if applyProcessFold {
+				control = a.renderTranscriptProcessFoldBlock(width, hiddenCount)
+			} else {
+				control = a.renderTranscriptProcessExpandedBlock(width)
+			}
+			if strings.TrimSpace(control) != "" {
+				if hasBlock {
+					builder.WriteString("\n\n")
+				}
+				builder.WriteString(control)
+				hasBlock = true
+				lastRenderedRole = ""
+			}
+		}
+		if applyProcessFold {
+			if _, hidden := foldHidden[idx]; hidden {
+				continue
+			}
+		}
+		message := a.activeMessages[idx]
 		inlineLog := isInlineLogMessage(message)
 		continuation := message.Role == roleAssistant && lastRenderedRole == roleAssistant
 		if inlineLog && lastRenderedRole == roleAssistant {
@@ -5103,6 +5395,186 @@ func (a *App) rebuildTranscript() {
 	if atBottom {
 		a.transcript.GotoBottom()
 	}
+}
+
+func (a *App) toggleTranscriptProcessExpansion() bool {
+	return a.toggleTranscriptProcessExpansionWithAnchor(-1, -1)
+}
+
+func (a *App) toggleTranscriptProcessExpansionWithAnchor(anchorViewportRow int, controlOrdinal int) bool {
+	if !a.transcriptProcessFoldAvailable {
+		return false
+	}
+	if controlOrdinal >= 0 {
+		if a.transcriptProcessExpanded && a.transcriptProcessExpandedOrdinal == controlOrdinal {
+			a.transcriptProcessExpanded = false
+			a.transcriptProcessExpandedOrdinal = -1
+		} else {
+			a.transcriptProcessExpanded = true
+			a.transcriptProcessExpandedOrdinal = controlOrdinal
+		}
+	} else {
+		if a.transcriptProcessExpanded {
+			a.transcriptProcessExpanded = false
+			a.transcriptProcessExpandedOrdinal = -1
+		} else {
+			a.transcriptProcessExpanded = true
+			a.transcriptProcessExpandedOrdinal = 0
+		}
+	}
+	if a.transcriptProcessExpanded {
+		a.state.StatusText = "Process output expanded"
+	} else {
+		a.state.StatusText = "Process output collapsed"
+	}
+	a.rebuildTranscript()
+	if anchorViewportRow >= 0 {
+		a.pinTranscriptProcessControlRow(anchorViewportRow, controlOrdinal)
+	}
+	return true
+}
+
+func (a *App) pinTranscriptProcessControlRow(anchorViewportRow int, controlOrdinal int) {
+	if anchorViewportRow < 0 {
+		return
+	}
+	target := "process output hidden"
+	if a.transcriptProcessExpanded {
+		target = "process output expanded"
+	}
+	lines := strings.Split(a.transcriptContent, "\n")
+	targetLine := -1
+	seen := 0
+	for idx, line := range lines {
+		plain := strings.ToLower(ansi.Strip(strings.TrimSpace(line)))
+		if strings.Contains(plain, target) {
+			// Expanded mode has only one expanded-control line; collapsed mode may have many.
+			if a.transcriptProcessExpanded || controlOrdinal < 0 || seen == controlOrdinal {
+				targetLine = idx
+				break
+			}
+			seen++
+		}
+	}
+	if targetLine < 0 {
+		return
+	}
+	desired := targetLine - anchorViewportRow
+	if desired < 0 {
+		desired = 0
+	}
+	maxOffset := a.transcriptMaxOffset()
+	if desired > maxOffset {
+		desired = maxOffset
+	}
+	a.transcript.SetYOffset(desired)
+}
+
+func transcriptProcessControlOrdinalAtLine(content string, contentLine int) int {
+	if contentLine < 0 {
+		return -1
+	}
+	lines := strings.Split(content, "\n")
+	if contentLine >= len(lines) {
+		return -1
+	}
+	ordinal := 0
+	for idx := 0; idx <= contentLine; idx++ {
+		plain := strings.ToLower(ansi.Strip(strings.TrimSpace(lines[idx])))
+		if strings.Contains(plain, "process output hidden") || strings.Contains(plain, "process output expanded") {
+			if idx == contentLine {
+				return ordinal
+			}
+			ordinal++
+		}
+	}
+	return -1
+}
+
+func (a App) renderTranscriptProcessFoldBlock(width int, hiddenCount int) string {
+	if hiddenCount < 1 {
+		hiddenCount = 1
+	}
+	detail := fmt.Sprintf("Process output hidden (%d messages).", hiddenCount)
+	if a.focus == panelTranscript {
+		detail += " Press Enter to expand."
+	} else {
+		detail += " Focus transcript and press Enter to expand."
+	}
+	message := providertypes.Message{
+		Role:  roleSystem,
+		Parts: []providertypes.ContentPart{providertypes.NewTextPart(detail)},
+	}
+	rendered, _ := a.renderMessageBlockWithCopy(message, width, 0, true)
+	return rendered
+}
+
+func (a App) renderTranscriptProcessExpandedBlock(width int) string {
+	detail := "Process output expanded. Click this line or press Enter to collapse."
+	message := providertypes.Message{
+		Role:  roleSystem,
+		Parts: []providertypes.ContentPart{providertypes.NewTextPart(detail)},
+	}
+	rendered, _ := a.renderMessageBlockWithCopy(message, width, 0, true)
+	return rendered
+}
+
+type transcriptProcessFoldSegment struct {
+	Start          int
+	End            int
+	FinalAssistant int
+	HiddenCount    int
+}
+
+func findTranscriptProcessFoldSegments(messages []providertypes.Message) []transcriptProcessFoldSegment {
+	segments := make([]transcriptProcessFoldSegment, 0, 4)
+	turnStart := 0
+	buildSegment := func(start int, end int) {
+		if start < 0 || end < start || end >= len(messages) {
+			return
+		}
+		finalAssistant := -1
+		for idx := end; idx >= start; idx-- {
+			msg := messages[idx]
+			if msg.Role != roleAssistant {
+				continue
+			}
+			if strings.TrimSpace(renderMessagePartsForDisplay(msg.Parts)) == "" {
+				continue
+			}
+			finalAssistant = idx
+			break
+		}
+		if finalAssistant < 0 {
+			return
+		}
+		hiddenCount := 0
+		for idx := start; idx <= end; idx++ {
+			if idx == finalAssistant {
+				continue
+			}
+			hiddenCount++
+		}
+		if hiddenCount < 1 {
+			return
+		}
+		segments = append(segments, transcriptProcessFoldSegment{
+			Start:          start,
+			End:            end,
+			FinalAssistant: finalAssistant,
+			HiddenCount:    hiddenCount,
+		})
+	}
+
+	for idx := 0; idx < len(messages); idx++ {
+		if messages[idx].Role != roleUser {
+			continue
+		}
+		buildSegment(turnStart, idx-1)
+		turnStart = idx + 1
+	}
+	buildSegment(turnStart, len(messages)-1)
+	return segments
 }
 
 func (a *App) setTranscriptContent(content string) {
@@ -5241,6 +5713,8 @@ func (a *App) handleImmediateSlashCommand(input string) (bool, tea.Cmd) {
 		return true, a.handleSkillsCommand()
 	case slashCommandSkill:
 		return true, a.handleSkillCommand(rest)
+	case slashCommandCheckpoint:
+		return true, a.handleCheckpointCommand(rest)
 	case slashCommandSession:
 		if err := a.ensureSessionSwitchAllowed(""); err != nil {
 			a.state.ExecutionError = err.Error()
@@ -5318,6 +5792,8 @@ func (a *App) startDraftSession() {
 	a.startupScreenLocked = false
 	a.state.ActiveSessionTitle = draftSessionTitle
 	a.activeMessages = nil
+	a.transcriptProcessFoldAvailable = false
+	a.transcriptProcessExpanded = false
 	a.clearActivities()
 	a.clearTodos()
 	a.state.IsCompacting = false
@@ -5492,6 +5968,67 @@ func (a *App) readLogEntriesForSession(sessionID string) []logEntry {
 	return clampLogEntries(fromRuntimeSessionLogEntries(entries))
 }
 
+func (a *App) replayFoldRelatedSessionLogsIntoTranscript() {
+	if len(a.logEntries) == 0 {
+		return
+	}
+	existing := make(map[string]struct{}, len(a.activeMessages))
+	for _, message := range a.activeMessages {
+		if !isInlineLogMessage(message) {
+			continue
+		}
+		content := strings.TrimSpace(renderMessagePartsForDisplay(message.Parts))
+		if content == "" {
+			continue
+		}
+		existing[content] = struct{}{}
+	}
+	for _, entry := range a.logEntries {
+		inline := strings.TrimSpace(entry.Inline)
+		if inline != "" && !strings.HasPrefix(inline, inlineLogMarker) {
+			inline = ""
+		}
+		if inline == "" {
+			if !isFoldRelatedSessionLogSource(entry.Source) {
+				continue
+			}
+			inline = formatSessionLogEntryInlineMessage(entry)
+		}
+		if inline == "" {
+			continue
+		}
+		if _, duplicated := existing[inline]; duplicated {
+			continue
+		}
+		a.activeMessages = append(a.activeMessages, providertypes.Message{
+			Role:  roleSystem,
+			Parts: []providertypes.ContentPart{providertypes.NewTextPart(inline)},
+		})
+		existing[inline] = struct{}{}
+	}
+}
+
+func isFoldRelatedSessionLogSource(source string) bool {
+	switch strings.ToLower(strings.TrimSpace(source)) {
+	case "tool", "verify", "acceptance", "decision", "runtime", "facts", "subagent", "todo", "run", "checkpoint":
+		return true
+	default:
+		return false
+	}
+}
+
+func formatSessionLogEntryInlineMessage(entry logEntry) string {
+	source := strings.TrimSpace(entry.Source)
+	if source == "" {
+		source = "log"
+	}
+	message := strings.TrimSpace(entry.Message)
+	if message == "" {
+		return ""
+	}
+	return inlineLogMarker + source + ": " + message
+}
+
 func (a *App) persistLogEntriesForActiveSession() {
 	sessionID := strings.TrimSpace(a.state.ActiveSessionID)
 	if sessionID == "" {
@@ -5521,9 +6058,101 @@ func (a *App) persistLogEntriesForActiveSession() {
 func (a *App) sessionLogRuntime() sessionLogPersistenceRuntime {
 	runtimeWithPersistence, ok := a.runtime.(sessionLogPersistenceRuntime)
 	if !ok {
-		return nil
+		baseDir := ""
+		if a.configManager != nil {
+			baseDir = strings.TrimSpace(a.configManager.BaseDir())
+		}
+		if baseDir == "" {
+			return nil
+		}
+		return localSessionLogStore{baseDir: baseDir}
 	}
 	return runtimeWithPersistence
+}
+
+func (s localSessionLogStore) LoadSessionLogEntries(ctx context.Context, sessionID string) ([]tuiservices.SessionLogEntry, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	path, err := s.sessionLogEntriesPath(sessionID)
+	if err != nil || path == "" {
+		return nil, err
+	}
+	payload, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("tui: read session log entries: %w", err)
+	}
+	entries := make([]tuiservices.SessionLogEntry, 0)
+	if err := json.Unmarshal(payload, &entries); err != nil {
+		return nil, fmt.Errorf("tui: decode session log entries: %w", err)
+	}
+	return entries, nil
+}
+
+func (s localSessionLogStore) SaveSessionLogEntries(ctx context.Context, sessionID string, entries []tuiservices.SessionLogEntry) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	path, err := s.sessionLogEntriesPath(sessionID)
+	if err != nil || path == "" {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("tui: ensure session log directory: %w", err)
+	}
+	payload, err := json.Marshal(entries)
+	if err != nil {
+		return fmt.Errorf("tui: encode session log entries: %w", err)
+	}
+	if err := os.WriteFile(path, payload, 0o600); err != nil {
+		return fmt.Errorf("tui: write session log entries: %w", err)
+	}
+	return nil
+}
+
+func (s localSessionLogStore) sessionLogEntriesPath(sessionID string) (string, error) {
+	normalizedSessionID := strings.TrimSpace(sessionID)
+	if normalizedSessionID == "" {
+		return "", nil
+	}
+	baseDir := strings.TrimSpace(s.baseDir)
+	if baseDir == "" {
+		return "", errors.New("tui: config base directory is empty")
+	}
+	sum := sha256.Sum256([]byte(normalizedSessionID))
+	fileName := fmt.Sprintf("%s_%s.json", sanitizeLocalSessionLogPrefix(normalizedSessionID), hex.EncodeToString(sum[:8]))
+	return filepath.Join(baseDir, localLogViewerPersistDir, fileName), nil
+}
+
+func sanitizeLocalSessionLogPrefix(sessionID string) string {
+	var b strings.Builder
+	for _, r := range sessionID {
+		switch {
+		case r >= 'a' && r <= 'z':
+			b.WriteRune(r)
+		case r >= 'A' && r <= 'Z':
+			b.WriteRune(r)
+		case r >= '0' && r <= '9':
+			b.WriteRune(r)
+		case r == '_' || r == '-':
+			b.WriteRune(r)
+		default:
+			if b.Len() > 0 {
+				b.WriteByte('_')
+			}
+		}
+		if b.Len() >= 24 {
+			break
+		}
+	}
+	prefix := strings.Trim(b.String(), "_")
+	if prefix == "" {
+		return "session"
+	}
+	return prefix
 }
 
 // reportLogPersistenceError 统一处理日志持久化失败提示，避免错误被静默吞掉。
@@ -5571,6 +6200,7 @@ func toRuntimeSessionLogEntries(entries []logEntry) []tuiservices.SessionLogEntr
 			Level:     entry.Level,
 			Source:    entry.Source,
 			Message:   entry.Message,
+			Inline:    entry.Inline,
 		})
 	}
 	return converted
@@ -5585,6 +6215,7 @@ func fromRuntimeSessionLogEntries(entries []tuiservices.SessionLogEntry) []logEn
 			Level:     entry.Level,
 			Source:    entry.Source,
 			Message:   entry.Message,
+			Inline:    strings.TrimSpace(entry.Inline),
 		})
 	}
 	return converted

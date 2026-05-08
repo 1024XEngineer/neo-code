@@ -14,9 +14,16 @@ import (
 
 var errInvalidMode = errors.New("repository: invalid retrieval mode")
 
-type fileReader func(path string) ([]byte, error)
+type FileReader func(path string) ([]byte, error)
 
-const maxSnippetLineRunes = 512
+const (
+	defaultRetrievalLimit = 20
+	maxRetrievalLimit     = 50
+	defaultContextLines   = 3
+	maxContextLines       = 8
+	maxSnippetLines       = 20
+	maxSnippetLineRunes   = 512
+)
 
 // normalizeRetrievalQuery 统一校验检索请求并补齐默认值。
 func normalizeRetrievalQuery(workdir string, query RetrievalQuery) (string, string, RetrievalQuery, error) {
@@ -43,11 +50,6 @@ func normalizeRetrievalQuery(workdir string, query RetrievalQuery) (string, stri
 	normalized.Limit = normalizeLimit(normalized.Limit, defaultRetrievalLimit, maxRetrievalLimit)
 	normalized.ContextLines = normalizeLimit(normalized.ContextLines, defaultContextLines, maxContextLines)
 	return root, scope, normalized, nil
-}
-
-// resolveWorkspacePath 将工作区内的相对路径解析为绝对路径并校验边界。
-func resolveWorkspacePath(workdir string, relativePath string) (string, string, error) {
-	return security.ResolveWorkspacePath(workdir, relativePath)
 }
 
 // resolveScopeDir 解析检索范围目录，空值时返回整个工作区根。
@@ -214,4 +216,8 @@ func minInt(a int, b int) int {
 		return a
 	}
 	return b
+}
+
+func readFile(path string) ([]byte, error) {
+	return os.ReadFile(path)
 }

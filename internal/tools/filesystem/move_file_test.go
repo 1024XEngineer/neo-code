@@ -47,7 +47,7 @@ func TestMoveFileTool_RenamesWithinWorkspace(t *testing.T) {
 	} else if string(data) != "hello" {
 		t.Fatalf("dst content = %q want hello", string(data))
 	}
-	if got := result.Metadata["destination_path"]; got != dst {
+	if got, ok := result.Metadata["destination_path"].(string); !ok || !strings.EqualFold(got, dst) {
 		t.Fatalf("destination_path metadata = %v want %v", got, dst)
 	}
 	paths, ok := result.Metadata["paths"].([]string)

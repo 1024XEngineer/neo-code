@@ -40,9 +40,9 @@ func (s *Service) resetTodosForUserRun(ctx context.Context, state *runState) err
 	return nil
 }
 
-// shouldResetTodosForUserRun 判断本轮用户输入是否应开启新的 Todo 边界，续做类输入保留旧 Todo。
-// 识别策略：去掉尾部标点 → 中文用前缀匹配，英文用单词边界匹配，覆盖
-// "继续修这个" / "continue with X" / "接着做" / "继续。" / "Continue!" / "keep going" 等常见变体。
+// shouldResetTodosForUserRun 判断本轮用户输入是否应开启新的 Todo 边界。
+// 策略：默认保留旧 Todo，由 prompt 层 stale_todo_reminder 引导模型自行清理；
+// 仅当用户输入极少且明确的"全新任务"表达时，才主动清空，避免硬编码过度覆盖。
 func shouldResetTodosForUserRun(userGoal string) bool {
 	goal := strings.ToLower(strings.TrimSpace(userGoal))
 	if goal == "" {
@@ -52,26 +52,24 @@ func shouldResetTodosForUserRun(userGoal string) bool {
 	if goal == "" {
 		return false
 	}
-	if isContinuationIntent(goal) {
-		return false
-	}
-	return true
+	return isExplicitNewTaskIntent(goal)
 }
 
-// continuationChinesePrefixes 中文续做关键词，落到 strings.HasPrefix 直接匹配。
-var continuationChinesePrefixes = []string{"继续", "接着", "续做", "再继续", "再来"}
+// newTaskChineseKeywords 中文明确新任务关键词，仅含完全无歧义的表达。
+var newTaskChineseKeywords = []string{"新任务", "换个任务", "换任务", "新需求"}
 
-// continuationEnglishPrefixes 英文续做关键词，要求精确匹配或后跟空格（避免 "keep it simple" 误命中）。
-var continuationEnglishPrefixes = []string{"continue", "keep going", "keep doing", "go on", "resume", "carry on"}
+// newTaskEnglishKeywords 英文明确新任务关键词，仅含完全无歧义的表达。
+var newTaskEnglishKeywords = []string{"new task", "different task", "switch task"}
 
-// isContinuationIntent 判断标准化后的 goal 是否含续做意图。
-func isContinuationIntent(goal string) bool {
-	for _, kw := range continuationChinesePrefixes {
-		if strings.HasPrefix(goal, kw) {
+// isExplicitNewTaskIntent 判断标准化后的 goal 是否含明确的新任务意图。
+// 默认返回 false，仅匹配极少且高度精确的关键词。
+func isExplicitNewTaskIntent(goal string) bool {
+	for _, kw := range newTaskChineseKeywords {
+		if strings.Contains(goal, kw) {
 			return true
 		}
 	}
-	for _, kw := range continuationEnglishPrefixes {
+	for _, kw := range newTaskEnglishKeywords {
 		if goal == kw {
 			return true
 		}

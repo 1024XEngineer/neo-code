@@ -24,5 +24,9 @@ func isReadOnlyVisibleTool(name string) bool {
 
 // isReadOnlyActionAllowed 判断当前权限动作是否属于只读阶段允许执行的范围。
 func isReadOnlyActionAllowed(action security.Action) bool {
-	return action.Type == security.ActionTypeRead
+	if action.Type == security.ActionTypeRead {
+		return true
+	}
+	return action.Type == security.ActionTypeWrite &&
+		strings.EqualFold(strings.TrimSpace(action.Payload.Operation), ToolNameTodoWrite)
 }

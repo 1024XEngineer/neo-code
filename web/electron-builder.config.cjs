@@ -35,11 +35,11 @@ const config = {
 		perMachine: false,
 		allowToChangeInstallationDirectory: true,
 		deleteAppDataOnUninstall: false,
-		artifactName: '${productName}-${version}-Setup.${ext}',
+		artifactName: 'neocode_${version}_Windows_${arch}_Setup.${ext}',
 		language: '2052',
 	},
 	portable: {
-		artifactName: '${productName}-${version}-Portable.${ext}',
+		artifactName: 'neocode_${version}_Windows_${arch}_Portable.${ext}',
 	},
 	mac: {
 		target: [
@@ -48,7 +48,7 @@ const config = {
 				arch: ['x64', 'arm64'],
 			},
 		],
-		artifactName: '${productName}-${version}-${arch}.${ext}',
+		artifactName: 'neocode_${version}_Darwin_${arch}.${ext}',
 	},
 	linux: {
 		target: [
@@ -57,7 +57,7 @@ const config = {
 				arch: ['x64'],
 			},
 		],
-		artifactName: '${productName}-${version}.${ext}',
+		artifactName: 'neocode_${version}_Linux_${arch}.${ext}',
 	},
 	publish: {
 		provider: 'github',

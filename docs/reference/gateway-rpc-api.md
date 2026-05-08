@@ -440,7 +440,7 @@ Response Schema：
       "saved_ratio": 0.63,
       "trigger_mode": "manual",
       "transcript_id": "compact-1",
-      "transcript_path": ".neocode/transcripts/compact-1.md"
+      "transcript_path": ".neocode/transcripts/compact-subagent.md"
     }
   }
 }
@@ -1147,7 +1147,7 @@ Success Response：
       "SavedRatio": 0.63,
       "TriggerMode": "manual",
       "TranscriptID": "compact-demo-1",
-      "TranscriptPath": ".neocode/transcripts/compact-demo-1.md"
+      "TranscriptPath": ".neocode/transcripts/compact-demo-subagent.md"
     }
   }
 }

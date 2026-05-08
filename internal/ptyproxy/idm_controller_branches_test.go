@@ -662,12 +662,291 @@ func TestIDMControllerUtilityBranches(t *testing.T) {
 	})
 }
 
+func TestIDMControllerPhase4RunModeAndAckFailures(t *testing.T) {
+	t.Run("done payload fallback renders answer", func(t *testing.T) {
+		client := &gatewayclient.GatewayRPCClient{}
+		notifications := make(chan gatewayclient.Notification, 4)
+		setGatewayClientNotifications(client, notifications)
+		output := &bytes.Buffer{}
+		controller := newIDMController(idmControllerOptions{Output: output, RPCClient: client})
+
+		notifications <- gatewayclient.Notification{
+			Method: protocol.MethodGatewayEvent,
+			Params: mustMarshalJSON(t, gateway.MessageFrame{
+				Type:      gateway.FrameTypeEvent,
+				SessionID: "session-fallback",
+				RunID:     "run-fallback",
+				Payload: map[string]any{
+					"runtime_event_type": "agent_done",
+					"payload": map[string]any{
+						"parts": []any{
+							map[string]any{"kind": "text", "text": "done payload fallback"},
+						},
+					},
+				},
+			}),
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if err := controller.waitRunStream(ctx, "session-fallback", "run-fallback"); err != nil {
+			t.Fatalf("waitRunStream() error = %v", err)
+		}
+		visibleOutput := normalizeWhitespace(stripANSI(output.String()))
+		if !strings.Contains(visibleOutput, "done payload fallback") {
+			t.Fatalf("output = %q, want done payload fallback", output.String())
+		}
+	})
+
+	t.Run("chunk renders before done", func(t *testing.T) {
+		client := &gatewayclient.GatewayRPCClient{}
+		notifications := make(chan gatewayclient.Notification, 4)
+		setGatewayClientNotifications(client, notifications)
+		output := &synchronizedBuffer{}
+		controller := newIDMController(idmControllerOptions{Output: output, RPCClient: client})
+
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		waitDone := make(chan error, 1)
+		go func() {
+			waitDone <- controller.waitRunStream(ctx, "session-stream", "run-stream")
+		}()
+
+		notifications <- gatewayclient.Notification{
+			Method: protocol.MethodGatewayEvent,
+			Params: mustMarshalJSON(t, gateway.MessageFrame{
+				Type:      gateway.FrameTypeEvent,
+				SessionID: "session-stream",
+				RunID:     "run-stream",
+				Payload: map[string]any{
+					"runtime_event_type": "agent_chunk",
+					"payload":            "streaming chunk",
+				},
+			}),
+		}
+
+		ticker := time.NewTicker(10 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case err := <-waitDone:
+				t.Fatalf("waitRunStream returned before agent_done: %v", err)
+			case <-ticker.C:
+				if strings.Contains(output.String(), "streaming chunk") {
+					goto chunkRendered
+				}
+			case <-ctx.Done():
+				t.Fatal("chunk was not rendered before agent_done")
+			}
+		}
+
+	chunkRendered:
+		notifications <- gatewayclient.Notification{
+			Method: protocol.MethodGatewayEvent,
+			Params: mustMarshalJSON(t, gateway.MessageFrame{
+				Type:      gateway.FrameTypeEvent,
+				SessionID: "session-stream",
+				RunID:     "run-stream",
+				Payload:   map[string]any{"runtime_event_type": "agent_done"},
+			}),
+		}
+
+		select {
+		case err := <-waitDone:
+			if err != nil {
+				t.Fatalf("waitRunStream() error = %v", err)
+			}
+		case <-ctx.Done():
+			t.Fatal("waitRunStream did not finish after agent_done")
+		}
+	})
+
+	t.Run("run mode follows env and run ack failures reset state", func(t *testing.T) {
+		tests := []struct {
+			name     string
+			envValue string
+			runFrame gateway.MessageFrame
+			wantMode string
+			wantErr  string
+		}{
+			{
+				name:     "plan enabled with run error",
+				envValue: "",
+				runFrame: gateway.MessageFrame{
+					Type:  gateway.FrameTypeError,
+					Error: &gateway.FrameError{Code: "bad_run", Message: "run failed"},
+				},
+				wantMode: idmPlanMode,
+				wantErr:  "gateway run failed",
+			},
+			{
+				name:     "plan disabled with run error",
+				envValue: "1",
+				runFrame: gateway.MessageFrame{
+					Type:  gateway.FrameTypeError,
+					Error: &gateway.FrameError{Code: "bad_run", Message: "run failed"},
+				},
+				wantMode: "",
+				wantErr:  "gateway run failed",
+			},
+			{
+				name:     "unexpected run frame",
+				envValue: "",
+				runFrame: gateway.MessageFrame{
+					Type: gateway.FrameTypeEvent,
+				},
+				wantMode: idmPlanMode,
+				wantErr:  "unexpected gateway frame type for run",
+			},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				t.Setenv(IDMSessionPlanModeDisableEnv, tt.envValue)
+				modeSeen := make(chan string, 1)
+				client, cleanup := newAuthenticatedIDMRPCClient(t, func(decoder *json.Decoder, encoder *json.Encoder) error {
+					bindReq, err := readRPCRequest(decoder)
+					if err != nil {
+						return err
+					}
+					if bindReq.Method != protocol.MethodGatewayBindStream {
+						return fmt.Errorf("unexpected bind method %s", bindReq.Method)
+					}
+					if err := writeRPCResult(encoder, bindReq.ID, gateway.MessageFrame{
+						Type:   gateway.FrameTypeAck,
+						Action: gateway.FrameActionBindStream,
+					}); err != nil {
+						return err
+					}
+
+					runReq, err := readRPCRequest(decoder)
+					if err != nil {
+						return err
+					}
+					if runReq.Method != protocol.MethodGatewayRun {
+						return fmt.Errorf("unexpected run method %s", runReq.Method)
+					}
+					var runParams protocol.RunParams
+					if err := json.Unmarshal(runReq.Params, &runParams); err != nil {
+						return fmt.Errorf("unmarshal run params: %w", err)
+					}
+					modeSeen <- runParams.Mode
+					return writeRPCResult(encoder, runReq.ID, tt.runFrame)
+				})
+				defer cleanup()
+
+				controller := newIDMController(idmControllerOptions{Output: &bytes.Buffer{}, RPCClient: client, Workdir: "/tmp"})
+				controller.mu.Lock()
+				controller.active = true
+				controller.sessionID = "session-send"
+				controller.sessionReady = true
+				controller.mu.Unlock()
+
+				err := controller.sendAIMessage("please analyze")
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("sendAIMessage() error = %v, want contains %q", err, tt.wantErr)
+				}
+				if got := <-modeSeen; got != tt.wantMode {
+					t.Fatalf("run mode = %q, want %q", got, tt.wantMode)
+				}
+				controller.mu.Lock()
+				defer controller.mu.Unlock()
+				if controller.mode != idmModeIdle || controller.currentRunID != "" || controller.streamCancel != nil {
+					t.Fatalf(
+						"controller did not reset streaming state: mode=%q run_id=%q cancel_nil=%v",
+						controller.mode,
+						controller.currentRunID,
+						controller.streamCancel == nil,
+					)
+				}
+			})
+		}
+	})
+
+	t.Run("bind ack failures reset state", func(t *testing.T) {
+		tests := []struct {
+			name    string
+			frame   gateway.MessageFrame
+			wantErr string
+		}{
+			{
+				name: "bind error frame",
+				frame: gateway.MessageFrame{
+					Type:  gateway.FrameTypeError,
+					Error: &gateway.FrameError{Code: "bad_bind", Message: "bind failed"},
+				},
+				wantErr: "gateway bind_stream failed",
+			},
+			{
+				name:    "unexpected bind frame",
+				frame:   gateway.MessageFrame{Type: gateway.FrameTypeEvent},
+				wantErr: "unexpected gateway frame type for bind_stream",
+			},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				client, cleanup := newAuthenticatedIDMRPCClient(t, func(decoder *json.Decoder, encoder *json.Encoder) error {
+					bindReq, err := readRPCRequest(decoder)
+					if err != nil {
+						return err
+					}
+					if bindReq.Method != protocol.MethodGatewayBindStream {
+						return fmt.Errorf("unexpected bind method %s", bindReq.Method)
+					}
+					return writeRPCResult(encoder, bindReq.ID, tt.frame)
+				})
+				defer cleanup()
+
+				controller := newIDMController(idmControllerOptions{Output: &bytes.Buffer{}, RPCClient: client, Workdir: "/tmp"})
+				controller.mu.Lock()
+				controller.active = true
+				controller.sessionID = "session-bind"
+				controller.sessionReady = true
+				controller.mu.Unlock()
+
+				err := controller.sendAIMessage("please analyze")
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("sendAIMessage() error = %v, want contains %q", err, tt.wantErr)
+				}
+				controller.mu.Lock()
+				defer controller.mu.Unlock()
+				if controller.mode != idmModeIdle || controller.currentRunID != "" || controller.streamCancel != nil {
+					t.Fatalf(
+						"controller did not reset streaming state: mode=%q run_id=%q cancel_nil=%v",
+						controller.mode,
+						controller.currentRunID,
+						controller.streamCancel == nil,
+					)
+				}
+			})
+		}
+	})
+}
+
 type failingWriter struct {
 	err error
 }
 
 func (w failingWriter) Write(_ []byte) (int, error) {
 	return 0, w.err
+}
+
+type synchronizedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *synchronizedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *synchronizedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }
 
 func mustMarshalJSON(t *testing.T, value any) json.RawMessage {

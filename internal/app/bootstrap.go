@@ -21,12 +21,14 @@ import (
 	"neo-code/internal/provider/builtin"
 	providercatalog "neo-code/internal/provider/catalog"
 	providertypes "neo-code/internal/provider/types"
+	"neo-code/internal/repository"
 	agentruntime "neo-code/internal/runtime"
 	"neo-code/internal/security"
 	agentsession "neo-code/internal/session"
 	"neo-code/internal/skills"
 	"neo-code/internal/tools"
 	"neo-code/internal/tools/bash"
+	"neo-code/internal/tools/codebase"
 	diagnosetool "neo-code/internal/tools/diagnose"
 	"neo-code/internal/tools/filesystem"
 	"neo-code/internal/tools/mcp"
@@ -460,6 +462,10 @@ func buildToolRegistry(cfg config.Config) (*tools.Registry, func() error, error)
 	}))
 	toolRegistry.Register(todo.New())
 	toolRegistry.Register(spawnsubagent.New())
+	repoSvc := repository.NewService()
+	toolRegistry.Register(codebase.NewRead(repoSvc, cfg.Workdir))
+	toolRegistry.Register(codebase.NewSearchText(repoSvc, cfg.Workdir))
+	toolRegistry.Register(codebase.NewSearchSymbol(repoSvc, cfg.Workdir))
 	mcpRegistry, err := BuildMCPRegistry(cfg)
 	if err != nil {
 		return nil, nil, err

@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"neo-code/internal/context/repository"
+	"neo-code/internal/repository"
 )
 
 func TestRepositoryContextSourceSkipsEmptyRepositoryContext(t *testing.T) {

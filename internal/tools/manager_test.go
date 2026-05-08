@@ -112,6 +112,7 @@ func TestDefaultManagerListAvailableSpecsReadOnlyFiltersWriteTools(t *testing.T)
 	registry.Register(&managerStubTool{name: ToolNameFilesystemReadFile})
 	registry.Register(&managerStubTool{name: ToolNameFilesystemWriteFile})
 	registry.Register(&managerStubTool{name: ToolNameBash})
+	registry.Register(&managerStubTool{name: ToolNameTodoWrite})
 
 	manager, err := NewManager(registry, mustAllowEngine(t), nil)
 	if err != nil {
@@ -125,7 +126,11 @@ func TestDefaultManagerListAvailableSpecsReadOnlyFiltersWriteTools(t *testing.T)
 	if err != nil {
 		t.Fatalf("list specs: %v", err)
 	}
-	if len(specs) != 1 || specs[0].Name != ToolNameFilesystemReadFile {
+	gotNames := make(map[string]bool, len(specs))
+	for _, spec := range specs {
+		gotNames[spec.Name] = true
+	}
+	if len(specs) != 2 || !gotNames[ToolNameFilesystemReadFile] || !gotNames[ToolNameTodoWrite] {
 		t.Fatalf("unexpected read-only specs: %+v", specs)
 	}
 }
@@ -463,6 +468,38 @@ func TestDefaultManagerExecuteBlocksWriteToolInReadOnlyMode(t *testing.T) {
 	}
 	if writeTool.callCount != 0 {
 		t.Fatalf("expected write tool not to execute, got %d", writeTool.callCount)
+	}
+}
+
+func TestDefaultManagerExecuteAllowsTodoWriteInReadOnlyMode(t *testing.T) {
+	t.Parallel()
+
+	registry := NewRegistry()
+	todoTool := &managerStubTool{name: ToolNameTodoWrite, content: "ok"}
+	registry.Register(todoTool)
+
+	manager, err := NewManager(registry, mustAllowEngine(t), nil)
+	if err != nil {
+		t.Fatalf("new manager: %v", err)
+	}
+
+	result, execErr := manager.Execute(context.Background(), ToolCallInput{
+		ID:        "call-readonly-todo-write",
+		Name:      ToolNameTodoWrite,
+		Arguments: []byte(`{"id":"todo-1","action":"update"}`),
+		ReadOnly:  true,
+	})
+	if execErr != nil {
+		t.Fatalf("expected todo_write to execute in read-only mode, got %v", execErr)
+	}
+	if result.Content != "ok" {
+		t.Fatalf("result.Content = %q, want ok", result.Content)
+	}
+	if todoTool.callCount != 1 {
+		t.Fatalf("expected todo_write to execute once, got %d", todoTool.callCount)
+	}
+	if !todoTool.lastCall.ReadOnly {
+		t.Fatal("expected read-only flag to be preserved on todo_write call")
 	}
 }
 

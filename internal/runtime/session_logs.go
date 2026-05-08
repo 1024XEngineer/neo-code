@@ -21,6 +21,7 @@ type SessionLogEntry struct {
 	Level     string    `json:"level"`
 	Source    string    `json:"source"`
 	Message   string    `json:"message"`
+	Inline    string    `json:"inline_message,omitempty"`
 }
 
 // LoadSessionLogEntries 按会话 ID 读取日志查看器持久化数据。

@@ -15,7 +15,7 @@ import (
 	"neo-code/internal/config"
 	agentcontext "neo-code/internal/context"
 	contextcompact "neo-code/internal/context/compact"
-	"neo-code/internal/context/repository"
+	"neo-code/internal/repository"
 	"neo-code/internal/provider"
 	providertypes "neo-code/internal/provider/types"
 	approvalflow "neo-code/internal/runtime/approval"

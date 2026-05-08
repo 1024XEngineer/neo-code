@@ -25,6 +25,21 @@ const (
 	RetrievalModeSymbol RetrievalMode = "symbol"
 )
 
+// FileChangeKind 表示两个 checkpoint 之间单个 path 的变更类别。
+type FileChangeKind string
+
+const (
+	FileChangeAdded    FileChangeKind = "added"
+	FileChangeDeleted  FileChangeKind = "deleted"
+	FileChangeModified FileChangeKind = "modified"
+)
+
+// FileChangeEntry 描述端到端 diff 中单个 path 的变更。
+type FileChangeEntry struct {
+	Path string
+	Kind FileChangeKind
+}
+
 // Summary 描述当前工作区相对仓库的最小事实快照。
 type Summary struct {
 	InGitRepo                  bool
@@ -75,7 +90,7 @@ type RetrievalQuery struct {
 	ContextLines int
 }
 
-// RetrievalHit 表示单个检索命中的结构化结果。
+// RetrievalHit 表示单个检索命中的结构化结果（兼容旧上下文，含代码片段）。
 type RetrievalHit struct {
 	Path          string
 	Kind          string
@@ -96,23 +111,69 @@ type InspectResult struct {
 	ChangedFiles ChangedFilesContext
 }
 
-// Service 提供轻量仓库摘要、变更上下文与定向检索能力。
-type Service struct {
-	gitRunner gitCommandRunner
-	readFile  fileReader
+// ReadOptions 控制 codebase_read 的读取上限。
+type ReadOptions struct {
+	MaxBytes int
 }
 
-type snippetResult struct {
-	text      string
-	lines     int
-	truncated bool
+// ReadResult 表示一次受限文件读取的结果。
+type ReadResult struct {
+	Path      string
+	Content   string
+	Truncated bool
+	IsBinary  bool
+	Size      int64
+}
+
+// SearchOptions 控制文本/符号搜索的裁剪策略。
+type SearchOptions struct {
+	ScopeDir  string
+	Limit     int
+	WholeWord bool
+}
+
+// TextSearchHit 表示文本搜索的单文件命中（硬约束：不返回代码内容）。
+type TextSearchHit struct {
+	Path       string
+	LineHint   int
+	MatchCount int
+}
+
+// TextSearchResult 表示文本搜索的结构化结果。
+type TextSearchResult struct {
+	Hits       []TextSearchHit
+	Truncated  bool
+	TotalCount int
+}
+
+// SymbolSearchHit 表示符号搜索的单条命中（硬约束：仅返回位置与签名，不含函数体）。
+type SymbolSearchHit struct {
+	Path      string
+	LineHint  int
+	Kind      string
+	Signature string
+}
+
+// SymbolSearchResult 表示符号搜索的结构化结果。
+type SymbolSearchResult struct {
+	Hits       []SymbolSearchHit
+	Truncated  bool
+	TotalCount int
+}
+
+// Service 提供轻量仓库摘要、变更上下文、定向检索与代码库探索能力。
+type Service struct {
+	gitRunner       GitCommandRunner
+	readFile        FileReader
+	treesitterIndex *TreeSitterIndexer
 }
 
 // NewService 返回默认的轻量仓库服务实现。
 func NewService() *Service {
 	return &Service{
-		gitRunner: runGitCommand,
-		readFile:  readFile,
+		gitRunner:       runGitCommand,
+		readFile:        readFile,
+		treesitterIndex: NewTreeSitterIndexer(),
 	}
 }
 
@@ -277,4 +338,10 @@ func (s *Service) Retrieve(ctx context.Context, workdir string, query RetrievalQ
 	default:
 		return RetrievalResult{}, errInvalidMode
 	}
+}
+
+type snippetResult struct {
+	text      string
+	lines     int
+	truncated bool
 }

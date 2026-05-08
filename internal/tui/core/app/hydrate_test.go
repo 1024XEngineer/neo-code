@@ -6,9 +6,11 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	providertypes "neo-code/internal/provider/types"
 	agentsession "neo-code/internal/session"
+	agentruntime "neo-code/internal/tui/services"
 )
 
 func TestHydrateSessionLoadsHistoryAndWorkdir(t *testing.T) {
@@ -87,5 +89,133 @@ func TestHydrateSessionReturnsLoadError(t *testing.T) {
 	err := app.HydrateSession(context.Background(), "session-load-failed")
 	if err == nil || !strings.Contains(err.Error(), "load failed") {
 		t.Fatalf("HydrateSession() error = %v, want contains %q", err, "load failed")
+	}
+}
+
+func TestHydrateSessionReplaysFoldRelatedPersistedLogs(t *testing.T) {
+	app, runtime := newTestApp(t)
+	sessionID := "session-hydrate-logs"
+	runtime.loadSessions = map[string]agentsession.Session{
+		sessionID: {
+			ID:      sessionID,
+			Title:   "Hydrated Logs Session",
+			Workdir: t.TempDir(),
+			Messages: []providertypes.Message{
+				{
+					Role:  roleUser,
+					Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")},
+				},
+				{
+					Role:  roleAssistant,
+					Parts: []providertypes.ContentPart{providertypes.NewTextPart("final answer")},
+				},
+			},
+		},
+	}
+	runtime.logEntriesBySID[sessionID] = []agentruntime.SessionLogEntry{
+		{Timestamp: time.Unix(1_700_020_001, 0), Level: "info", Source: "verify", Message: "Verification started: completion_passed=true"},
+		{Timestamp: time.Unix(1_700_020_002, 0), Level: "info", Source: "provider", Message: "Provider switched: openai"},
+	}
+
+	if err := app.HydrateSession(context.Background(), sessionID); err != nil {
+		t.Fatalf("HydrateSession() error = %v", err)
+	}
+
+	joined := ""
+	for _, message := range app.activeMessages {
+		text := strings.TrimSpace(renderMessagePartsForDisplay(message.Parts))
+		if joined != "" {
+			joined += "\n"
+		}
+		joined += text
+	}
+	if !strings.Contains(joined, inlineLogMarker+"verify: Verification started: completion_passed=true") {
+		t.Fatalf("expected verify session log to be replayed into transcript, got %q", joined)
+	}
+	if strings.Contains(joined, inlineLogMarker+"provider: Provider switched: openai") {
+		t.Fatalf("expected non-fold provider log to stay out of transcript replay, got %q", joined)
+	}
+}
+
+func TestHydrateSessionLogReplaySkipsDuplicateInlineMessages(t *testing.T) {
+	app, runtime := newTestApp(t)
+	sessionID := "session-hydrate-log-dedup"
+	inline := inlineLogMarker + "verify: Verification finished: accepted"
+	runtime.loadSessions = map[string]agentsession.Session{
+		sessionID: {
+			ID:      sessionID,
+			Title:   "Hydrated Dedup Session",
+			Workdir: t.TempDir(),
+			Messages: []providertypes.Message{
+				{
+					Role:  roleSystem,
+					Parts: []providertypes.ContentPart{providertypes.NewTextPart(inline)},
+				},
+				{
+					Role:  roleAssistant,
+					Parts: []providertypes.ContentPart{providertypes.NewTextPart("final answer")},
+				},
+			},
+		},
+	}
+	runtime.logEntriesBySID[sessionID] = []agentruntime.SessionLogEntry{
+		{Timestamp: time.Unix(1_700_020_011, 0), Level: "info", Source: "verify", Message: "Verification finished: accepted"},
+	}
+
+	if err := app.HydrateSession(context.Background(), sessionID); err != nil {
+		t.Fatalf("HydrateSession() error = %v", err)
+	}
+
+	count := 0
+	for _, message := range app.activeMessages {
+		text := strings.TrimSpace(renderMessagePartsForDisplay(message.Parts))
+		if text == inline {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("expected replay dedup to keep one inline message, got %d", count)
+	}
+}
+
+func TestHydrateSessionReplaysPersistedInlineMessageRegardlessOfSource(t *testing.T) {
+	app, runtime := newTestApp(t)
+	sessionID := "session-hydrate-inline-source"
+	runtime.loadSessions = map[string]agentsession.Session{
+		sessionID: {
+			ID:      sessionID,
+			Title:   "Hydrated Inline Source Session",
+			Workdir: t.TempDir(),
+			Messages: []providertypes.Message{
+				{
+					Role:  roleAssistant,
+					Parts: []providertypes.ContentPart{providertypes.NewTextPart("final answer")},
+				},
+			},
+		},
+	}
+	runtime.logEntriesBySID[sessionID] = []agentruntime.SessionLogEntry{
+		{
+			Timestamp: time.Unix(1_700_020_021, 0),
+			Level:     "info",
+			Source:    "provider",
+			Message:   "Provider switched: openai",
+			Inline:    inlineLogMarker + "verify: Verification finished: accepted",
+		},
+	}
+
+	if err := app.HydrateSession(context.Background(), sessionID); err != nil {
+		t.Fatalf("HydrateSession() error = %v", err)
+	}
+	joined := ""
+	for _, message := range app.activeMessages {
+		text := strings.TrimSpace(renderMessagePartsForDisplay(message.Parts))
+		if joined != "" {
+			joined += "\n"
+		}
+		joined += text
+	}
+	if !strings.Contains(joined, inlineLogMarker+"verify: Verification finished: accepted") {
+		t.Fatalf("expected persisted inline message to be replayed regardless of source, got %q", joined)
 	}
 }

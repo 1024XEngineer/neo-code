@@ -30,6 +30,11 @@ func collectCompletionState(
 	if current.TodoOnlyTaskCandidate && current.TodoStateSatisfied {
 		current.HasPendingAgentTodos = false
 	}
+	// 当存在 required TODO 且全部已终态时，清除 unverified writes 标记。
+	// required TODO 全部收敛本身就证明工作已完成，无需额外 verification tool 调用。
+	if !current.HasPendingAgentTodos && hasCompletedRequiredTodos(state.session.Todos) {
+		current.HasUnverifiedWrites = false
+	}
 	return current
 }
 
@@ -223,6 +228,21 @@ func hasPendingAgentTodos(items []agentsession.TodoItem) bool {
 		return true
 	}
 	return false
+}
+
+// hasCompletedRequiredTodos 判断是否存在至少一个 required TODO 且全部已终态。
+func hasCompletedRequiredTodos(items []agentsession.TodoItem) bool {
+	hasRequired := false
+	for _, item := range items {
+		if !item.RequiredValue() {
+			continue
+		}
+		hasRequired = true
+		if !item.Status.IsTerminal() {
+			return false
+		}
+	}
+	return hasRequired
 }
 
 // hasSuccessfulInformationalResult 判断本轮是否至少获得一个成功的非写入工具结果。

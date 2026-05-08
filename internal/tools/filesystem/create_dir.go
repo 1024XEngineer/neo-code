@@ -71,7 +71,10 @@ func (t *CreateDirTool) Execute(ctx context.Context, input tools.ToolCallInput) 
 		recursive = *args.Recursive
 	}
 
-	base := effectiveRoot(t.root, input.Workdir)
+	base, err := tools.ResolveEffectiveRoot(t.root, input.Workdir)
+	if err != nil {
+		return tools.NewErrorResult(t.Name(), "invalid workdir", err.Error(), nil), err
+	}
 
 	_, target, err := tools.ResolveWorkspaceTarget(input, security.TargetTypePath, base, args.Path, resolvePath)
 	if err != nil {

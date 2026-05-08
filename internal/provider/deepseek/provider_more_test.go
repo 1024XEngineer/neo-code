@@ -18,18 +18,8 @@ import (
 func TestDriverBuildAndDiscover(t *testing.T) {
 	t.Parallel()
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/models" {
-			t.Fatalf("unexpected path %q", r.URL.Path)
-		}
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"data": []map[string]any{{"id": "deepseek-chat"}},
-		})
-	}))
-	defer server.Close()
-
 	cfg := provider.RuntimeConfig{
-		BaseURL:        server.URL,
+		BaseURL:        "https://example.com",
 		APIKeyEnv:      "TEST_KEY",
 		APIKeyResolver: provider.StaticAPIKeyResolver("secret"),
 		Driver:         DriverName,
@@ -38,18 +28,11 @@ func TestDriverBuildAndDiscover(t *testing.T) {
 	if _, err := driver.Build(context.Background(), cfg); err != nil {
 		t.Fatalf("Build() error = %v", err)
 	}
-	models, err := driver.Discover(context.Background(), cfg)
-	if err != nil {
-		t.Fatalf("Discover() error = %v", err)
-	}
-	if len(models) != 1 || models[0].ID != "deepseek-chat" {
-		t.Fatalf("unexpected models: %+v", models)
+	if driver.Discover != nil {
+		t.Fatal("expected Discover to be nil for built-in driver")
 	}
 	if err := driver.ValidateCatalogIdentity(provider.ProviderIdentity{}); err != nil {
 		t.Fatalf("ValidateCatalogIdentity() error = %v", err)
-	}
-	if _, err := driver.Discover(context.Background(), provider.RuntimeConfig{}); err == nil {
-		t.Fatal("expected invalid config discover error")
 	}
 }
 
@@ -61,10 +44,6 @@ func TestProviderEstimateGenerateAndThinkingErrors(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		authHeader = r.Header.Get("Authorization")
 		switch r.URL.Path {
-		case "/models":
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"data": []map[string]any{{"id": "deepseek-chat"}},
-			})
 		case "/v1/chat/completions":
 			var err error
 			requestBody, err = ioReadAll(r)
@@ -108,14 +87,6 @@ func TestProviderEstimateGenerateAndThinkingErrors(t *testing.T) {
 	}
 	if estimate.EstimatedInputTokens <= 0 {
 		t.Fatalf("expected positive token estimate, got %+v", estimate)
-	}
-
-	models, err := p.DiscoverModels(context.Background())
-	if err != nil {
-		t.Fatalf("DiscoverModels() error = %v", err)
-	}
-	if len(models) != 1 || models[0].ID != "deepseek-chat" {
-		t.Fatalf("unexpected models: %+v", models)
 	}
 
 	events := make(chan providertypes.StreamEvent, 8)
@@ -191,9 +162,6 @@ func TestProviderEstimateGenerateAndThinkingErrors(t *testing.T) {
 		t.Fatal("expected invalid generate request error")
 	}
 	p.cfg.APIKeyResolver = provider.StaticAPIKeyResolver("")
-	if _, err := p.DiscoverModels(context.Background()); err == nil {
-		t.Fatal("expected discovery api key error")
-	}
 	if err := p.generateOnce(context.Background(), chatcompletions.Request{}, nil, make(chan providertypes.StreamEvent, 1)); err == nil {
 		t.Fatal("expected api key resolve error")
 	}

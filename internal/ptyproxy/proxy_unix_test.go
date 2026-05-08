@@ -1092,6 +1092,139 @@ func TestStreamPTYOutputPromptReadyKeepsUserAutoSwitch(t *testing.T) {
 	}
 }
 
+func TestStreamPTYOutputSuppressesTriggerInAltScreen(t *testing.T) {
+	t.Setenv(DiagAltScreenGuardDisableEnv, "")
+
+	payload := strings.NewReader(
+		"\x1b[?1049h" +
+			"\x1b]133;C\x07" +
+			"fatal: build failed in alt screen\n" +
+			"\x1b]133;D;1\x07" +
+			"\x1b]133;A\x07",
+	)
+	output := &bytes.Buffer{}
+	commandLog := NewUTF8RingBuffer(1024)
+	tracker := &commandTracker{}
+	tracker.Observe([]byte("go test ./...\r"))
+	autoTriggers := make(chan diagnoseTrigger, 1)
+	autoState := &autoRuntimeState{}
+	autoState.Enabled.Store(true)
+
+	streamPTYOutput(payload, output, commandLog, tracker, autoTriggers, autoState)
+
+	select {
+	case trigger := <-autoTriggers:
+		t.Fatalf("unexpected trigger in alt screen: %#v", trigger)
+	default:
+	}
+	if !strings.Contains(output.String(), "fatal: build failed in alt screen") {
+		t.Fatalf("output = %q, want contains alt-screen error text", output.String())
+	}
+}
+
+func TestStreamPTYOutputSuppressesFirstTriggerAfterAltExitOnly(t *testing.T) {
+	t.Setenv(DiagAltScreenGuardDisableEnv, "")
+
+	payloadReader, payloadWriter := io.Pipe()
+	defer payloadReader.Close()
+	output := &bytes.Buffer{}
+	commandLog := NewUTF8RingBuffer(1024)
+	tracker := &commandTracker{}
+	tracker.Observe([]byte("go test ./...\r"))
+	autoTriggers := make(chan diagnoseTrigger, 4)
+	autoState := &autoRuntimeState{}
+	autoState.Enabled.Store(true)
+	autoState.OSCReady.Store(false)
+
+	streamDone := make(chan struct{})
+	go func() {
+		defer close(streamDone)
+		streamPTYOutput(payloadReader, output, commandLog, tracker, autoTriggers, autoState)
+	}()
+	go func() {
+		_, _ = payloadWriter.Write([]byte("\x1b[?1049h"))
+		_, _ = payloadWriter.Write([]byte("\x1b]133;C\x07"))
+		_, _ = payloadWriter.Write([]byte("fatal first failure\n"))
+		_, _ = payloadWriter.Write([]byte("\x1b[?1049l"))
+		_, _ = payloadWriter.Write([]byte("\x1b]133;D;1\x07"))
+		_, _ = payloadWriter.Write([]byte("\x1b]133;A\x07"))
+
+		_, _ = payloadWriter.Write([]byte("\x1b]133;C\x07"))
+		_, _ = payloadWriter.Write([]byte("fatal second failure\n"))
+		_, _ = payloadWriter.Write([]byte("\x1b]133;D;1\x07"))
+		_, _ = payloadWriter.Write([]byte("\x1b]133;A\x07"))
+		_ = payloadWriter.Close()
+	}()
+
+	select {
+	case <-streamDone:
+	case <-time.After(time.Second):
+		t.Fatal("streamPTYOutput did not finish")
+	}
+
+	triggers := make([]diagnoseTrigger, 0, 2)
+drainLoop:
+	for {
+		select {
+		case trigger := <-autoTriggers:
+			triggers = append(triggers, trigger)
+		default:
+			break drainLoop
+		}
+	}
+	if len(triggers) != 1 {
+		t.Fatalf("trigger count = %d, want 1", len(triggers))
+	}
+	if !strings.Contains(triggers[0].OutputText, "fatal second failure") {
+		t.Fatalf("trigger output = %q, want second failure", triggers[0].OutputText)
+	}
+}
+
+func TestStreamPTYOutputAltScreenGuardDisabledByEnv(t *testing.T) {
+	t.Setenv(DiagAltScreenGuardDisableEnv, "true")
+
+	payloadReader, payloadWriter := io.Pipe()
+	defer payloadReader.Close()
+	output := &bytes.Buffer{}
+	commandLog := NewUTF8RingBuffer(1024)
+	tracker := &commandTracker{}
+	tracker.Observe([]byte("go test ./...\r"))
+	autoTriggers := make(chan diagnoseTrigger, 1)
+	autoState := &autoRuntimeState{}
+	autoState.Enabled.Store(true)
+
+	streamDone := make(chan struct{})
+	go func() {
+		defer close(streamDone)
+		streamPTYOutput(payloadReader, output, commandLog, tracker, autoTriggers, autoState)
+	}()
+	go func() {
+		_, _ = payloadWriter.Write([]byte("\x1b[?1049h"))
+		_, _ = payloadWriter.Write([]byte("\x1b]133;C\x07"))
+		_, _ = payloadWriter.Write([]byte("fatal: guard disabled should still trigger\n"))
+		_, _ = payloadWriter.Write([]byte("\x1b]133;D;1\x07"))
+		_, _ = payloadWriter.Write([]byte("\x1b]133;A\x07"))
+		_ = payloadWriter.Close()
+	}()
+
+	select {
+	case trigger := <-autoTriggers:
+		if !strings.Contains(trigger.OutputText, "guard disabled should still trigger") {
+			t.Fatalf("trigger output = %q, want guard-disabled failure text", trigger.OutputText)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("expected trigger when alt-screen guard is disabled by env")
+	}
+	select {
+	case <-streamDone:
+	case <-time.After(time.Second):
+		t.Fatal("streamPTYOutput did not finish")
+	}
+	if !strings.Contains(output.String(), "guard disabled should still trigger") {
+		t.Fatalf("output = %q, want contains failure text", output.String())
+	}
+}
+
 func TestDecodeToolResult(t *testing.T) {
 	result, err := decodeToolResult(map[string]any{
 		"Content": "ok",
@@ -1570,7 +1703,7 @@ func TestConsumeDiagSignalsAndBannerPaths(t *testing.T) {
 		autoState := &autoRuntimeState{}
 		autoState.Enabled.Store(true)
 
-		consumeDiagSignals(ctx, nil, jobCh, output, NewUTF8RingBuffer(1024), ManualShellOptions{}, "/tmp/diag.sock", autoState, nil)
+		consumeDiagSignals(ctx, nil, jobCh, output, NewUTF8RingBuffer(1024), ManualShellOptions{}, "/tmp/diag.sock", autoState, nil, nil)
 		select {
 		case response := <-doneCh:
 			if !response.OK {
@@ -1631,6 +1764,7 @@ func TestConsumeDiagSignalsAndBannerPaths(t *testing.T) {
 			"/tmp/diag.sock",
 			autoState,
 			func(err error) { callbackTriggered <- err },
+			nil,
 		)
 
 		select {
@@ -1744,7 +1878,7 @@ func TestConsumeDiagSignalsClosedChannelReturns(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		consumeDiagSignals(ctx, nil, jobCh, &bytes.Buffer{}, NewUTF8RingBuffer(1024), ManualShellOptions{}, "/tmp/diag.sock", &autoRuntimeState{}, nil)
+		consumeDiagSignals(ctx, nil, jobCh, &bytes.Buffer{}, NewUTF8RingBuffer(1024), ManualShellOptions{}, "/tmp/diag.sock", &autoRuntimeState{}, nil, nil)
 	}()
 
 	select {

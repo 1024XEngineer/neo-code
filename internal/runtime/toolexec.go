@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"neo-code/internal/checkpoint"
+	"neo-code/internal/repository"
 	providertypes "neo-code/internal/provider/types"
 	runtimefacts "neo-code/internal/runtime/facts"
 	runtimehooks "neo-code/internal/runtime/hooks"
@@ -156,7 +157,7 @@ func (s *Service) executeOneToolCall(
 	isBash := strings.EqualFold(strings.TrimSpace(call.Name), tools.ToolNameBash)
 
 	var preSnaps map[string]fileSnapshot
-	var preFingerprint checkpoint.WorkdirFingerprint
+	var preFingerprint repository.WorkdirFingerprint
 	var bashCapturedPaths []string
 	var bashCommand string
 	var bashChangedPaths []string
@@ -196,7 +197,7 @@ func (s *Service) executeOneToolCall(
 			if len(bashCapturedPaths) > 0 {
 				_, _ = s.perEditStore.CaptureBatch(bashCapturedPaths)
 			}
-			if fp, _, err := checkpoint.ScanWorkdir(ctx, snapshot.Workdir, checkpoint.DefaultFingerprintOptions()); err == nil {
+			if fp, _, err := repository.ScanWorkdir(ctx, snapshot.Workdir, repository.DefaultFingerprintOptions()); err == nil {
 				preFingerprint = fp
 			}
 		}
@@ -266,8 +267,8 @@ func (s *Service) executeOneToolCall(
 	}
 
 	if isBash && preFingerprint != nil && execErr == nil && !result.IsError {
-		if afterFP, _, err := checkpoint.ScanWorkdir(ctx, snapshot.Workdir, checkpoint.DefaultFingerprintOptions()); err == nil {
-			fpDiff := checkpoint.DiffFingerprints(preFingerprint, afterFP)
+		if afterFP, _, err := repository.ScanWorkdir(ctx, snapshot.Workdir, repository.DefaultFingerprintOptions()); err == nil {
+			fpDiff := repository.DiffFingerprints(preFingerprint, afterFP)
 			if len(fpDiff.Added) > 0 || len(fpDiff.Modified) > 0 || len(fpDiff.Deleted) > 0 {
 				bashChangedPaths = collectBashWriteFactPaths(fpDiff)
 				covered := make(map[string]struct{}, len(bashCapturedPaths))
@@ -598,7 +599,7 @@ func bashCommandFromCall(call providertypes.ToolCall) string {
 }
 
 // collectBashWriteFactPaths 从 bash fingerprint diff 中提取可验证的新增/修改路径，删除路径不作为写后验收目标。
-func collectBashWriteFactPaths(fpDiff checkpoint.FingerprintDiff) []string {
+func collectBashWriteFactPaths(fpDiff repository.FingerprintDiff) []string {
 	seen := make(map[string]struct{})
 	out := make([]string, 0, len(fpDiff.Modified)+len(fpDiff.Added))
 	add := func(path string) {
@@ -626,7 +627,7 @@ func collectBashWriteFactPaths(fpDiff checkpoint.FingerprintDiff) []string {
 
 // collectUncoveredBashPaths 把 fingerprint 检测到的变更路径与启发式预捕获集合做差，
 // 输出 EventBashSideEffect.UncoveredPaths 用于可观测性提醒。
-func collectUncoveredBashPaths(workdir string, fpDiff checkpoint.FingerprintDiff, covered map[string]struct{}) []string {
+func collectUncoveredBashPaths(workdir string, fpDiff repository.FingerprintDiff, covered map[string]struct{}) []string {
 	if len(fpDiff.Added) == 0 && len(fpDiff.Modified) == 0 {
 		return nil
 	}
@@ -673,7 +674,7 @@ func (s *Service) emitBashSideEffectEvent(
 	state *runState,
 	call providertypes.ToolCall,
 	command string,
-	fpDiff checkpoint.FingerprintDiff,
+	fpDiff repository.FingerprintDiff,
 	preCaptured []string,
 	uncovered []string,
 ) {

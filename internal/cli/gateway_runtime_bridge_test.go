@@ -591,7 +591,7 @@ func TestGatewayRuntimePortBridgeRuntimeMethods(t *testing.T) {
 			SavedRatio:     0.5,
 			TriggerMode:    "manual",
 			TranscriptID:   "tx-1",
-			TranscriptPath: "/tmp/tx-1.md",
+			TranscriptPath: "/tmp/tx-subagent.md",
 		},
 		systemToolRes: tools.ToolResult{
 			ToolCallID: "call-system-1",
@@ -2625,5 +2625,24 @@ func TestGatewayRuntimePortBridgeDeleteMCPServerSuccess(t *testing.T) {
 	}
 	if len(cfgMgr.cfg.Tools.MCP.Servers) != 1 || cfgMgr.cfg.Tools.MCP.Servers[0].ID != "srv-2" {
 		t.Fatalf("servers = %+v, want [srv-2]", cfgMgr.cfg.Tools.MCP.Servers)
+	}
+}
+
+func TestDefaultBuildGatewayRuntimePortListSessionsWithoutExplicitWorkdir(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+
+	port, cleanup, err := defaultBuildGatewayRuntimePort(context.Background(), "")
+	if err != nil {
+		t.Fatalf("defaultBuildGatewayRuntimePort() error = %v", err)
+	}
+	if cleanup != nil {
+		defer func() { _ = cleanup() }()
+	}
+
+	if _, err := port.ListSessions(context.Background()); err != nil {
+		t.Fatalf("ListSessions() with empty cli workdir should succeed, got %v", err)
 	}
 }

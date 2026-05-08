@@ -77,7 +77,10 @@ func (t *EditTool) Execute(ctx context.Context, input tools.ToolCallInput) (tool
 		return tools.NewErrorResult(t.Name(), tools.NormalizeErrorReason(t.Name(), err), "", nil), err
 	}
 
-	root := effectiveRoot(t.root, input.Workdir)
+	root, err := tools.ResolveEffectiveRoot(t.root, input.Workdir)
+	if err != nil {
+		return tools.NewErrorResult(t.Name(), "invalid workdir", err.Error(), nil), err
+	}
 	root, target, err := tools.ResolveWorkspaceTarget(
 		input,
 		security.TargetTypePath,
@@ -127,5 +130,6 @@ func (t *EditTool) Execute(ctx context.Context, input tools.ToolCallInput) (tool
 			"search_length":      len(args.SearchString),
 			"replacement_length": len(args.ReplaceString),
 		},
+		Facts: tools.ToolExecutionFacts{WorkspaceWrite: true},
 	}, nil
 }

@@ -1,3 +1,4 @@
+import { useMemo } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import CodeBlock from './CodeBlock'
@@ -57,26 +58,65 @@ function CodeComponent({
   return <CodeBlock code={code} language={language} />
 }
 
-/** Markdown 渲染器，支持 GFM；流式输出时降级为纯文本 */
-export default function MarkdownContent({ content, streaming }: MarkdownContentProps) {
-  if (streaming) {
-    return (
-      <div className="markdown-body" style={{ whiteSpace: 'pre-wrap' }}>
-        {content}
-      </div>
-    )
+function splitStreamingContent(content: string): { completed: string; pending: string } {
+  if (!content) return { completed: '', pending: '' }
+
+  // 1. 检测未闭合的代码块
+  const fenceMatches = content.match(/```/g)
+  if (fenceMatches && fenceMatches.length % 2 === 1) {
+    const lastFenceIdx = content.lastIndexOf('```')
+    return {
+      completed: content.slice(0, lastFenceIdx),
+      pending: content.slice(lastFenceIdx),
+    }
   }
+
+  // 2. 不在代码块中，按段落分割
+  const lastDoubleNewline = content.lastIndexOf('\n\n')
+  if (lastDoubleNewline !== -1) {
+    if (lastDoubleNewline >= content.length - 2) {
+      // \n\n 在末尾，找上一段
+      const prevDoubleNewline = content.lastIndexOf('\n\n', lastDoubleNewline - 1)
+      if (prevDoubleNewline !== -1) {
+        return {
+          completed: content.slice(0, prevDoubleNewline + 2),
+          pending: content.slice(prevDoubleNewline + 2),
+        }
+      }
+      return { completed: '', pending: content }
+    }
+    return {
+      completed: content.slice(0, lastDoubleNewline + 2),
+      pending: content.slice(lastDoubleNewline + 2),
+    }
+  }
+
+  // 3. 单段：包含完整行内语法或较长时尝试渲染
+  const hasBold = /\*\*[^*\n]+\*\*/.test(content)
+  const hasCode = /`[^`\n]+`/.test(content)
+  const hasItalic = /(?<!\*)\*[^*\n]+\*(?!\*)/.test(content)
+  if (hasBold || hasCode || hasItalic || content.length > 300) {
+    return { completed: content, pending: '' }
+  }
+
+  return { completed: '', pending: content }
+}
+
+/** Markdown 渲染器，支持 GFM；流式输出时分段增量渲染 */
+export default function MarkdownContent({ content, streaming }: MarkdownContentProps) {
+  const { completed, pending } = useMemo(
+    () => (streaming ? splitStreamingContent(content) : { completed: content, pending: '' }),
+    [content, streaming],
+  )
 
   return (
     <div className="markdown-body">
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        components={{
-          code: CodeComponent as any,
-        }}
-      >
-        {content}
-      </ReactMarkdown>
+      {completed && (
+        <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ code: CodeComponent as any }}>
+          {completed}
+        </ReactMarkdown>
+      )}
+      {pending && <span style={{ whiteSpace: 'pre-wrap' }}>{pending}</span>}
     </div>
   )
 }

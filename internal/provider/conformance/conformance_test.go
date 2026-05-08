@@ -321,23 +321,6 @@ func TestDiscoverContractAcrossDrivers(t *testing.T) {
 			responseBody:   `{"data":[{"id":"gpt-4.1","name":"GPT 4.1"}]}`,
 		},
 		{
-			name:   "deepseek_discover",
-			driver: deepseek.Driver(),
-			buildConfig: func(baseURL string) provider.RuntimeConfig {
-				return provider.RuntimeConfig{
-					Name:                  deepseek.DriverName,
-					Driver:                provider.DriverDeepSeek,
-					BaseURL:               baseURL,
-					APIKeyEnv:             "DEEPSEEK_TEST_KEY",
-					APIKeyResolver:        provider.StaticAPIKeyResolver("test-key"),
-					DiscoveryEndpointPath: "/models",
-				}
-			},
-			expectedPath:   "/models",
-			expectedHeader: "Authorization",
-			responseBody:   `{"data":[{"id":"deepseek-v4","name":"DeepSeek V4"}]}`,
-		},
-		{
 			name:   "gemini_discover",
 			driver: gemini.Driver(),
 			buildConfig: func(baseURL string) provider.RuntimeConfig {
@@ -371,74 +354,6 @@ func TestDiscoverContractAcrossDrivers(t *testing.T) {
 			expectedHeader: "x-api-key",
 			responseBody:   `{"data":[{"id":"claude-3-7-sonnet","display_name":"Claude 3.7 Sonnet"}],"has_more":false}`,
 		},
-		{
-			name:   "mimo_discover",
-			driver: mimo.Driver(),
-			buildConfig: func(baseURL string) provider.RuntimeConfig {
-				return provider.RuntimeConfig{
-					Name:                  mimo.DriverName,
-					Driver:                provider.DriverMiMo,
-					BaseURL:               baseURL,
-					APIKeyEnv:             "MIMO_TEST_KEY",
-					APIKeyResolver:        provider.StaticAPIKeyResolver("test-key"),
-					DiscoveryEndpointPath: "/models",
-				}
-			},
-			expectedPath:   "/models",
-			expectedHeader: "Authorization",
-			responseBody:   `{"data":[{"id":"mimo-v2.5","name":"MiMo V2.5"}]}`,
-		},
-		{
-			name:   "minimax_discover",
-			driver: minimax.Driver(),
-			buildConfig: func(baseURL string) provider.RuntimeConfig {
-				return provider.RuntimeConfig{
-					Name:                  minimax.DriverName,
-					Driver:                provider.DriverMiniMax,
-					BaseURL:               baseURL,
-					APIKeyEnv:             "MINIMAX_TEST_KEY",
-					APIKeyResolver:        provider.StaticAPIKeyResolver("test-key"),
-					DiscoveryEndpointPath: "/models",
-				}
-			},
-			expectedPath:   "/models",
-			expectedHeader: "Authorization",
-			responseBody:   `{"data":[{"id":"minimax-m2.7","name":"MiniMax M2.7"}]}`,
-		},
-		{
-			name:   "qwen_discover",
-			driver: qwen.Driver(),
-			buildConfig: func(baseURL string) provider.RuntimeConfig {
-				return provider.RuntimeConfig{
-					Name:                  qwen.DriverName,
-					Driver:                provider.DriverQwen,
-					BaseURL:               baseURL,
-					APIKeyEnv:             "QWEN_TEST_KEY",
-					APIKeyResolver:        provider.StaticAPIKeyResolver("test-key"),
-					DiscoveryEndpointPath: "/models",
-				}
-			},
-			expectedPath:   "/models",
-			expectedHeader: "Authorization",
-			responseBody:   `{"data":[{"id":"qwen3","name":"Qwen 3"}]}`,
-		},
-		{
-			name:   "glm_discover",
-			driver: glm.Driver(),
-			buildConfig: func(baseURL string) provider.RuntimeConfig {
-				return provider.RuntimeConfig{
-					Name:                  glm.DriverName,
-					Driver:                provider.DriverGLM,
-					BaseURL:               baseURL,
-					APIKeyEnv:             "GLM_TEST_KEY",
-					APIKeyResolver:        provider.StaticAPIKeyResolver("test-key"),
-					DiscoveryEndpointPath: "/models",
-				}
-			},
-			expectedPath:   "/models",
-			expectedHeader: "Authorization",
-			responseBody:   `{"data":[{"id":"glm-5.1","name":"GLM 5.1"}]}`,
-		},
 	}
 
 	for _, tt := range testCases {
@@ -462,6 +377,39 @@ func TestDiscoverContractAcrossDrivers(t *testing.T) {
 			}
 			if len(models) == 0 || strings.TrimSpace(models[0].ID) == "" {
 				t.Fatalf("expected discovered models with non-empty ID, got %+v", models)
+			}
+		})
+	}
+}
+
+func TestDiscoverUnsupportedDrivers(t *testing.T) {
+	testCases := []struct {
+		name   string
+		driver provider.DriverDefinition
+	}{
+		{name: "deepseek_discover_unsupported", driver: deepseek.Driver()},
+		{name: "minimax_discover_unsupported", driver: minimax.Driver()},
+		{name: "qwen_discover_unsupported", driver: qwen.Driver()},
+		{name: "glm_discover_unsupported", driver: glm.Driver()},
+		{name: "mimo_discover_unsupported", driver: mimo.Driver()},
+	}
+
+	for _, tt := range testCases {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			reg := provider.NewRegistry()
+			if err := reg.Register(tt.driver); err != nil {
+				t.Fatalf("Register() error = %v", err)
+			}
+			if reg.SupportsDiscovery(tt.driver.Name) {
+				t.Fatalf("expected driver %q to not support discovery", tt.driver.Name)
+			}
+			_, err := reg.DiscoverModels(context.Background(), provider.RuntimeConfig{Driver: tt.driver.Name})
+			if err == nil {
+				t.Fatal("expected discovery unsupported error, got nil")
+			}
+			if !provider.IsDiscoveryConfigError(err) {
+				t.Fatalf("expected discovery config error, got %T: %v", err, err)
 			}
 		})
 	}

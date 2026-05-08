@@ -13,17 +13,8 @@ func isGatewayUnsupportedActionError(err error) bool {
 	if err == nil {
 		return false
 	}
-	if errors.Is(err, tuiservices.ErrUnsupportedActionInGatewayMode) {
-		return true
-	}
-
 	var rpcErr *tuiservices.GatewayRPCError
-	if !errors.As(err, &rpcErr) || rpcErr == nil {
-		return false
-	}
-
-	if strings.EqualFold(strings.TrimSpace(rpcErr.GatewayCode), protocol.GatewayCodeUnsupportedAction) {
-		return true
-	}
-	return rpcErr.Code == protocol.JSONRPCCodeMethodNotFound
+	return errors.As(err, &rpcErr) &&
+		rpcErr != nil &&
+		strings.EqualFold(strings.TrimSpace(rpcErr.GatewayCode), protocol.GatewayCodeUnsupportedAction)
 }

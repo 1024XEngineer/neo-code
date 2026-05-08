@@ -25,6 +25,7 @@ import { useUIStore } from '@/stores/useUIStore'
 import { useGatewayStore } from '@/stores/useGatewayStore'
 import { useSessionStore } from '@/stores/useSessionStore'
 import { useRuntimeInsightStore } from '@/stores/useRuntimeInsightStore'
+import { useWorkspaceStore } from '@/stores/useWorkspaceStore'
 import { parseSingleFileDiff, type ParsedFileDiff } from '@/utils/patchParser'
 
 type PayloadRecord = Record<string, unknown> | undefined
@@ -44,11 +45,35 @@ export function resetEventBridgeCursors() {
   _latestCheckpointId = undefined
 }
 
+/**
+ * 把后端 toSlash 后的绝对路径与模型 raw 相对路径统一到工作区相对、正斜杠形式，
+ * 让 ToolStart 占位条目与 ToolDiff 真实条目能命中同一个 dedup key。
+ * Windows 下大小写不敏感比较；找不到工作区根时退化为只做斜杠/前导 ./ 归一化。
+ */
+function normalizeFilePath(input: string): string {
+  if (!input) return input
+  let p = input.replace(/\\/g, '/').trim()
+  const ws = useWorkspaceStore.getState()
+  const root = ws.workspaces.find((w) => w.hash === ws.currentWorkspaceHash)?.path
+  if (root) {
+    const r = root.replace(/\\/g, '/').replace(/\/+$/, '')
+    if (r && p.toLowerCase().startsWith(r.toLowerCase() + '/')) {
+      p = p.slice(r.length + 1)
+    } else if (r && p.toLowerCase() === r.toLowerCase()) {
+      p = ''
+    }
+  }
+  while (p.startsWith('./')) p = p.slice(2)
+  return p
+}
+
 function _upsertFileChange(
-  path: string,
+  rawPath: string,
   status: 'added' | 'modified' | 'deleted',
   parsed?: ParsedFileDiff,
 ) {
+  const path = normalizeFilePath(rawPath)
+  if (!path) return
   const existing = useUIStore.getState().fileChanges.find((c) => c.path === path)
   if (existing) {
     useUIStore.setState((s) => ({
@@ -203,7 +228,21 @@ export function handleGatewayEvent(frame: MessageFrame, gatewayAPI: GatewayAPI) 
   }
 
   switch (eventType) {
+    case EventType.ThinkingDelta: {
+      const text = eventPayload as string | undefined
+      if (!text) break
+      if (!chatStore.streamingThinkingMessageId) {
+        useChatStore.getState().startThinkingMessage()
+      }
+      useChatStore.getState().appendThinkingChunk(text)
+      break
+    }
+
     case EventType.AgentChunk: {
+      // 终结 thinking 消息
+      if (chatStore.streamingThinkingMessageId) {
+        chatStore.finalizeThinkingMessage()
+      }
       const text = eventPayload as string | undefined
       if (!text) break
       if (!chatStore.streamingMessageId) {
@@ -214,6 +253,9 @@ export function handleGatewayEvent(frame: MessageFrame, gatewayAPI: GatewayAPI) 
     }
 
     case EventType.AgentDone: {
+      if (chatStore.streamingThinkingMessageId) {
+        chatStore.finalizeThinkingMessage()
+      }
       if (chatStore.streamingMessageId) {
         const parts = (eventPayload as { parts?: { text?: string }[] } | undefined)?.parts
         const content = parts && Array.isArray(parts)
@@ -327,8 +369,13 @@ export function handleGatewayEvent(frame: MessageFrame, gatewayAPI: GatewayAPI) 
     }
 
     case EventType.StopReasonDecided: {
-      useChatStore.getState().setStopReason(strField(eventPayload, 'reason'))
+      const reason = strField(eventPayload, 'reason')
+      const detail = strField(eventPayload, 'detail')
+      useChatStore.getState().setStopReason(reason)
       useChatStore.getState().setGenerating(false)
+      if (reason === 'fatal_error') {
+        uiStore.showToast(detail || '模型调用失败，请检查配置', 'error')
+      }
       break
     }
 
@@ -429,22 +476,27 @@ export function handleGatewayEvent(frame: MessageFrame, gatewayAPI: GatewayAPI) 
 
     case EventType.VerificationStarted: {
       const payload = eventPayload as VerificationStartedPayload | undefined
-      if (payload) {
-        const recordId = insightStore.startVerification(payload)
-        const history = useRuntimeInsightStore.getState().verificationHistory
-        const record = history.length > 0 ? history[history.length - 1] : undefined
-        if (record) {
-          const msgId = `msg_${Date.now()}_verify_${recordId.slice(0, 8)}`
-          _latestVerificationMsgId = msgId
-          chatStore.addMessage({
-            id: msgId,
-            role: 'assistant',
-            type: 'verification',
-            content: '',
-            verificationData: record,
-            timestamp: Date.now(),
-          })
-        }
+      if (!payload) break
+      // completion gate 已拦截（典型场景: pending_todo），verifier 不会真正运行；
+      // 跳过创建 verification chat message，避免出现 "0/1 passed" 误导。
+      // 该状态由下游 AcceptanceDecided → AcceptanceMessage 完整呈现。
+      if (payload.completion_passed === false) {
+        break
+      }
+      const recordId = insightStore.startVerification(payload)
+      const history = useRuntimeInsightStore.getState().verificationHistory
+      const record = history.length > 0 ? history[history.length - 1] : undefined
+      if (record) {
+        const msgId = `msg_${Date.now()}_verify_${recordId.slice(0, 8)}`
+        _latestVerificationMsgId = msgId
+        chatStore.addMessage({
+          id: msgId,
+          role: 'assistant',
+          type: 'verification',
+          content: '',
+          verificationData: record,
+          timestamp: Date.now(),
+        })
       }
       chatStore.setPhase('verification')
       uiStore.showToast('Verification started', 'info')
@@ -520,13 +572,14 @@ export function handleGatewayEvent(frame: MessageFrame, gatewayAPI: GatewayAPI) 
     case EventType.CheckpointWarning: {
       const payload = eventPayload as CheckpointWarningPayload | undefined
       if (payload) insightStore.setCheckpointWarning(payload)
-      uiStore.showToast(`Checkpoint warning: ${strField(eventPayload, 'phase')}`, 'info')
+      uiStore.showToast(`Checkpoint warning: ${payload?.error ?? 'unknown error'}`, 'info')
       break
     }
 
     case EventType.CheckpointRestored: {
       const payload = eventPayload as CheckpointRestoredPayload | undefined
       if (payload) insightStore.addCheckpointEvent(payload)
+      chatStore.markAllCheckpointsRestored()
       uiStore.showToast('Checkpoint restored', 'success')
       break
     }
@@ -534,6 +587,7 @@ export function handleGatewayEvent(frame: MessageFrame, gatewayAPI: GatewayAPI) 
     case EventType.CheckpointUndoRestore: {
       const payload = eventPayload as CheckpointUndoRestorePayload | undefined
       if (payload) insightStore.addCheckpointEvent(payload)
+      chatStore.markAllCheckpointsAvailable()
       uiStore.showToast('Checkpoint restore undone', 'success')
       break
     }

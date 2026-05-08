@@ -106,6 +106,9 @@ func TestWriteFileToolMetadataAndExecute(t *testing.T) {
 			if result.Content != "ok" {
 				t.Fatalf("expected ok result, got %q", result.Content)
 			}
+			if !result.Facts.WorkspaceWrite {
+				t.Fatalf("expected WorkspaceWrite=true for fresh write, got false")
+			}
 
 			data, err := os.ReadFile(tt.expectPath)
 			if err != nil {
@@ -178,6 +181,9 @@ func TestWriteFileToolNoopWriteMetadata(t *testing.T) {
 	if !ok || !unchanged {
 		t.Fatalf("content_unchanged metadata = %#v, want true", result.Metadata["content_unchanged"])
 	}
+	if result.Facts.WorkspaceWrite {
+		t.Fatalf("expected WorkspaceWrite=false for noop write, got true")
+	}
 }
 
 func TestWriteFileToolVerifyAfterWriteFacts(t *testing.T) {
@@ -205,6 +211,9 @@ func TestWriteFileToolVerifyAfterWriteFacts(t *testing.T) {
 		}
 		if !result.Facts.VerificationPerformed || !result.Facts.VerificationPassed {
 			t.Fatalf("verification facts = %+v, want performed=true passed=true", result.Facts)
+		}
+		if !result.Facts.WorkspaceWrite {
+			t.Fatalf("expected WorkspaceWrite=true for fresh write, got false")
 		}
 		if token, _ := result.Metadata["written_content"].(string); token != "verified-content" {
 			t.Fatalf("written_content = %#v, want verified-content", result.Metadata["written_content"])
@@ -241,6 +250,9 @@ func TestWriteFileToolVerifyAfterWriteFacts(t *testing.T) {
 		}
 		if !result.Facts.VerificationPerformed || !result.Facts.VerificationPassed {
 			t.Fatalf("verification facts = %+v, want performed=true passed=true", result.Facts)
+		}
+		if result.Facts.WorkspaceWrite {
+			t.Fatalf("expected WorkspaceWrite=false for noop write, got true")
 		}
 		if result.Facts.VerificationScope != "artifact:same-verified.txt" {
 			t.Fatalf("verification scope = %q", result.Facts.VerificationScope)

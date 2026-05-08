@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -773,6 +774,76 @@ func TestCheckpointDiffRejectsMissingStateAndReturnsEmptyWhenNoPreviousSnapshot(
 	}
 	if result.CheckpointID != "cp-only" || result.PrevCheckpointID != "" || result.Patch != "" {
 		t.Fatalf("CheckpointDiff() = %#v, want latest checkpoint without previous diff", result)
+	}
+}
+
+func TestCreateEndOfTurnCheckpoint_SetsLastCheckpointID(t *testing.T) {
+	fixture := newRuntimeCheckpointFixture(t)
+	fixture.captureFile(t, "tracked.go", []byte("package main\n"))
+
+	state := newRunState("run-eot-id", fixture.session)
+	fixture.service.createEndOfTurnCheckpoint(context.Background(), &state, true)
+
+	if state.lastEndOfTurnCheckpointID == "" {
+		t.Fatal("expected lastEndOfTurnCheckpointID to be set after end-of-turn checkpoint creation")
+	}
+
+	records, err := fixture.checkpointStore.ListCheckpoints(context.Background(), fixture.session.ID, checkpoint.ListCheckpointOpts{})
+	if err != nil {
+		t.Fatalf("ListCheckpoints() error = %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("records = %#v, want 1", records)
+	}
+	wantRef := checkpoint.PerEditCheckpointIDFromRef(records[0].CodeCheckpointRef)
+	if state.lastEndOfTurnCheckpointID != wantRef {
+		t.Fatalf("lastEndOfTurnCheckpointID = %q, want %q", state.lastEndOfTurnCheckpointID, wantRef)
+	}
+}
+
+func TestFindPreviousEndOfTurnCheckpoint(t *testing.T) {
+	spy := &checkpointStoreSpy{
+		listRecords: []agentsession.CheckpointRecord{
+			{CheckpointID: "cp-skip-current", SessionID: "session-1", Reason: agentsession.CheckpointReasonEndOfTurn, CodeCheckpointRef: checkpoint.RefForPerEditCheckpoint("cp-skip-current"), RunID: "current-run", Status: agentsession.CheckpointStatusAvailable},
+			{CheckpointID: "cp-skip-reason", SessionID: "session-1", Reason: agentsession.CheckpointReasonCompact, CodeCheckpointRef: checkpoint.RefForPerEditCheckpoint("cp-skip-reason"), RunID: "old-run", Status: agentsession.CheckpointStatusAvailable},
+			{CheckpointID: "cp-valid", SessionID: "session-1", Reason: agentsession.CheckpointReasonEndOfTurn, CodeCheckpointRef: checkpoint.RefForPerEditCheckpoint("cp-valid"), RunID: "old-run", Status: agentsession.CheckpointStatusAvailable},
+		},
+	}
+	service := &Service{checkpointStore: spy}
+
+	got := service.findPreviousEndOfTurnCheckpoint(context.Background(), "session-1", "current-run")
+	if got != "cp-valid" {
+		t.Fatalf("findPreviousEndOfTurnCheckpoint() = %q, want cp-valid", got)
+	}
+	if spy.listSessionID != "session-1" || !spy.listOpts.RestorableOnly || spy.listOpts.Limit != 50 {
+		t.Fatalf("list opts = %#v, want session-1 restorableOnly=true limit=50", spy.listOpts)
+	}
+}
+
+func TestFindPreviousEndOfTurnCheckpoint_NoStore(t *testing.T) {
+	service := &Service{}
+	if got := service.findPreviousEndOfTurnCheckpoint(context.Background(), "session-1", "run-1"); got != "" {
+		t.Fatalf("expected empty, got %q", got)
+	}
+}
+
+func TestFindPreviousEndOfTurnCheckpoint_ListError(t *testing.T) {
+	spy := &checkpointStoreSpy{listErr: errors.New("db down")}
+	service := &Service{checkpointStore: spy}
+	if got := service.findPreviousEndOfTurnCheckpoint(context.Background(), "session-1", "run-1"); got != "" {
+		t.Fatalf("expected empty on list error, got %q", got)
+	}
+}
+
+func TestFindPreviousEndOfTurnCheckpoint_SkipsNonPerEditRef(t *testing.T) {
+	spy := &checkpointStoreSpy{
+		listRecords: []agentsession.CheckpointRecord{
+			{CheckpointID: "cp-no-ref", SessionID: "session-1", Reason: agentsession.CheckpointReasonEndOfTurn, CodeCheckpointRef: "", RunID: "old-run", Status: agentsession.CheckpointStatusAvailable},
+		},
+	}
+	service := &Service{checkpointStore: spy}
+	if got := service.findPreviousEndOfTurnCheckpoint(context.Background(), "session-1", "current-run"); got != "" {
+		t.Fatalf("expected empty when no per-edit ref available, got %q", got)
 	}
 }
 

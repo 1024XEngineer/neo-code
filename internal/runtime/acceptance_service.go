@@ -108,6 +108,18 @@ func (s *acceptanceService) Decide(ctx context.Context, input acceptanceServiceI
 		return output, nil
 	}
 
+	// verification gate 全部通过时信任其结果：即使 decider 基于启发式返回 continue，
+	// verification gate 已实际运行所有 profile 指定的 verifier 且全部 pass，应直接 accepted。
+	// 避免 decider 与 verification gate 数据源不一致导致死循环。
+	if input.CompletionPassed && verificationGate.Passed {
+		output.Status = acceptance.AcceptanceAccepted
+		output.StopReason = controlplane.StopReasonAccepted
+		output.ContinueHint = ""
+		output.CompletionPassed = true
+		output.VerificationPassed = true
+		return output, nil
+	}
+
 	if input.CompletionPassed && !verificationGate.Passed {
 		return mergeVerificationFailure(output, verificationGate), nil
 	}
@@ -131,6 +143,15 @@ func (s *acceptanceService) Decide(ctx context.Context, input acceptanceServiceI
 	}
 	if output.Status == acceptance.AcceptanceContinue && output.ContinueHint == "" {
 		output.ContinueHint = finalContinueReminder
+	}
+	// 死循环兜底：多轮 final 被拦截且无进展 + 存在 open required todo → 追加强制清理指令
+	if output.Status == acceptance.AcceptanceContinue && input.NoProgressStreak >= 2 && input.Todos.Summary.RequiredOpen > 0 {
+		staleHint := buildStaleTodoResetHint(input.Todos.Summary.RequiredOpen, input.NoProgressStreak)
+		if output.ContinueHint == "" {
+			output.ContinueHint = staleHint
+		} else {
+			output.ContinueHint = output.ContinueHint + "\n\n" + staleHint
+		}
 	}
 	if input.VerificationInput.RuntimeState.MaxTurnsReached && output.Status == acceptance.AcceptanceContinue {
 		output.Status = acceptance.AcceptanceIncomplete
@@ -290,6 +311,19 @@ func latestToolErrorClass(errors []runtimefacts.ToolErrorFact, tool string) stri
 		}
 	}
 	return ""
+}
+
+// buildStaleTodoResetHint 构造死循环兜底指令：当多轮 final 被拦截且无进展时，强制要求模型清理 stale todo。
+func buildStaleTodoResetHint(requiredOpen, noProgressStreak int) string {
+	var b strings.Builder
+	b.WriteString("<stale_todo_reset>\n")
+	b.WriteString(fmt.Sprintf("CRITICAL: You have been blocked for %d consecutive final attempts with %d unfinished required todo(s).\n", noProgressStreak, requiredOpen))
+	b.WriteString("If these todos are NO LONGER RELEVANT to the user's CURRENT request,\n")
+	b.WriteString("you MUST mark them canceled using todo_write set_status=canceled RIGHT NOW.\n")
+	b.WriteString("Do NOT attempt to complete stale todos that belong to a PREVIOUS task.\n")
+	b.WriteString("After canceling irrelevant todos, proceed with the user's current request.\n")
+	b.WriteString("</stale_todo_reset>")
+	return b.String()
 }
 
 func firstNonPassVerifierResult(results []verify.VerificationResult) *verify.VerificationResult {

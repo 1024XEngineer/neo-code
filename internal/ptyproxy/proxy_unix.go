@@ -14,7 +14,6 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -24,9 +23,7 @@ import (
 	"github.com/creack/pty"
 	"golang.org/x/term"
 
-	"neo-code/internal/gateway"
 	gatewayclient "neo-code/internal/gateway/client"
-	"neo-code/internal/gateway/protocol"
 	"neo-code/internal/tools"
 )
 
@@ -222,6 +219,7 @@ func RunManualShell(ctx context.Context, options ManualShellOptions) error {
 	var diagWG sync.WaitGroup
 	diagWG.Add(1)
 	autoDiagFatalCh := make(chan error, 1)
+	diagCoordinator := newDiagnosisCoordinator()
 	go func() {
 		defer diagWG.Done()
 		consumeDiagSignals(
@@ -242,6 +240,7 @@ func RunManualShell(ctx context.Context, options ManualShellOptions) error {
 				default:
 				}
 			},
+			diagCoordinator,
 		)
 	}()
 
@@ -1028,7 +1027,11 @@ func consumeDiagSignals(
 	socketPath string,
 	autoState *autoRuntimeState,
 	onAutoDiagnoseFailure func(error),
+	coordinator *diagnosisCoordinator,
 ) {
+	var autoWG sync.WaitGroup
+	autoSlots := make(chan struct{}, 1)
+	defer autoWG.Wait()
 	for {
 		select {
 		case <-ctx.Done():
@@ -1037,12 +1040,59 @@ func consumeDiagSignals(
 			if !ok {
 				return
 			}
-			diagnoseErr := runSingleDiagnosis(rpcClient, output, buffer, options, socketPath, job.Trigger, job.IsAuto, autoState)
-			if job.IsAuto && diagnoseErr != nil && onAutoDiagnoseFailure != nil && shouldTerminateShellOnAutoDiagnoseError(diagnoseErr) {
-				onAutoDiagnoseFailure(diagnoseErr)
+			if job.IsAuto {
+				if coordinator != nil {
+					prepared, prepareErr := prepareDiagnoseRequest(buffer, options, socketPath, job.Trigger)
+					if prepareErr == nil && coordinator.shouldDropAuto(prepared.Fingerprint) {
+						continue
+					}
+				}
+				select {
+				case autoSlots <- struct{}{}:
+				case <-ctx.Done():
+					return
+				default:
+					continue
+				}
+				autoWG.Add(1)
+				go func(autoJob diagnoseJob) {
+					defer autoWG.Done()
+					defer func() { <-autoSlots }()
+					diagnoseErr := runSingleDiagnosisWithCoordinator(
+						ctx,
+						coordinator,
+						rpcClient,
+						output,
+						buffer,
+						options,
+						socketPath,
+						autoJob.Trigger,
+						true,
+						autoState,
+					)
+					if diagnoseErr != nil && onAutoDiagnoseFailure != nil && shouldTerminateShellOnAutoDiagnoseError(diagnoseErr) {
+						onAutoDiagnoseFailure(diagnoseErr)
+					}
+				}(job)
+				continue
 			}
+			diagnoseErr := runSingleDiagnosisWithCoordinator(
+				ctx,
+				coordinator,
+				rpcClient,
+				output,
+				buffer,
+				options,
+				socketPath,
+				job.Trigger,
+				false,
+				autoState,
+			)
 			if job.Done != nil {
 				job.Done <- diagIPCResponse{OK: true, AutoEnabled: autoState.Enabled.Load(), Message: "diagnosis completed"}
+			}
+			if diagnoseErr != nil {
+				continue
 			}
 		}
 	}
@@ -1089,25 +1139,85 @@ func runSingleDiagnosis(
 	isAuto bool,
 	autoState *autoRuntimeState,
 ) error {
+	return runSingleDiagnosisWithCoordinator(
+		context.Background(),
+		nil,
+		rpcClient,
+		output,
+		buffer,
+		options,
+		socketPath,
+		trigger,
+		isAuto,
+		autoState,
+	)
+}
+
+// runSingleDiagnosisWithCoordinator 执行一次诊断，并按需复用快速首响、缓存与 in-flight 合并。
+func runSingleDiagnosisWithCoordinator(
+	ctx context.Context,
+	coordinator *diagnosisCoordinator,
+	rpcClient *gatewayclient.GatewayRPCClient,
+	output io.Writer,
+	buffer *UTF8RingBuffer,
+	options ManualShellOptions,
+	socketPath string,
+	trigger diagnoseTrigger,
+	isAuto bool,
+	autoState *autoRuntimeState,
+) error {
 	if output == nil {
 		return nil
 	}
+	if isAuto && autoState != nil && !autoState.Enabled.Load() {
+		return nil
+	}
+
+	prepared, prepareErr := prepareDiagnoseRequest(buffer, options, socketPath, trigger)
+	if prepareErr != nil {
+		if options.Stderr != nil {
+			writeProxyf(options.Stderr, "neocode diag: build diagnose payload failed: %v\n", prepareErr)
+		}
+		err := errors.New("诊断请求构建失败，请稍后重试")
+		writeProxyf(output, "\n\033[31m[NeoCode Diagnosis]\033[0m %s\n", strings.TrimSpace(err.Error()))
+		return err
+	}
+
+	if coordinator != nil {
+		if cached, ok := coordinator.cached(prepared.Fingerprint); ok {
+			if cached.Err != nil {
+				writeProxyf(output, "\n\033[31m[NeoCode Diagnosis]\033[0m %s\n", strings.TrimSpace(cached.Err.Error()))
+				return cached.Err
+			}
+			if !isAuto {
+				writeProxyLine(output, "\n\033[36m[NeoCode Diagnosis]\033[0m 使用最近一次缓存诊断结果。")
+			}
+			renderDiagnosis(output, cached.Result.Content, cached.Result.IsError)
+			return nil
+		}
+	}
+
+	renderDiagnosisInitialFeedback(output, prepared, isAuto)
 
 	var (
 		result tools.ToolResult
 		err    error
 	)
+	execute := func(timeout time.Duration) diagnosisOutcome {
+		if coordinator == nil {
+			result, callErr := executePreparedDiagnoseToolWithTimeout(rpcClient, options, prepared, timeout)
+			return diagnosisOutcome{Result: result, Err: callErr}
+		}
+		return coordinator.run(ctx, prepared.Fingerprint, func() (tools.ToolResult, error) {
+			return executePreparedDiagnoseToolWithTimeout(rpcClient, options, prepared, timeout)
+		})
+	}
 	if isAuto {
-		result, err = callDiagnoseToolWithTimeout(
-			rpcClient,
-			buffer,
-			options,
-			socketPath,
-			trigger,
-			autoDiagnoseCallTimeout,
-		)
+		outcome := execute(autoDiagnoseCallTimeout)
+		result, err = outcome.Result, outcome.Err
 	} else {
-		result, err = callDiagnoseTool(rpcClient, buffer, options, socketPath, trigger)
+		outcome := execute(diagnoseCallTimeout)
+		result, err = outcome.Result, outcome.Err
 	}
 	if err != nil {
 		writeProxyf(output, "\n\033[31m[NeoCode Diagnosis]\033[0m %s\n", strings.TrimSpace(err.Error()))
@@ -1140,90 +1250,14 @@ func callDiagnoseToolWithTimeout(
 	trigger diagnoseTrigger,
 	timeout time.Duration,
 ) (tools.ToolResult, error) {
-	if rpcClient == nil {
-		return tools.ToolResult{}, errors.New("诊断服务未就绪，请确认 gateway 已连接后重试")
-	}
-
-	logSnapshot := buffer.SnapshotString()
-	if strings.TrimSpace(trigger.OutputText) != "" {
-		logSnapshot = trigger.OutputText
-	}
-	sanitizedErrorLog := SanitizeDiagnosisText(logSnapshot, defaultDiagnosisPayloadMaxBytes)
-	if strings.TrimSpace(sanitizedErrorLog) == "" {
-		sanitizedErrorLog = "no terminal output captured"
-	}
-	sanitizedCommand := SanitizeDiagnosisText(trigger.CommandText, 1024)
-
-	requestArgs := diagnoseToolArgs{
-		ErrorLog: sanitizedErrorLog,
-		OSEnv: map[string]string{
-			"os":     runtime.GOOS,
-			"shell":  resolveShellPath(options.Shell),
-			"cwd":    options.Workdir,
-			"socket": socketPath,
-		},
-		CommandText: sanitizedCommand,
-		ExitCode:    trigger.ExitCode,
-	}
-
-	requestPayload, err := json.Marshal(requestArgs)
+	prepared, err := prepareDiagnoseRequest(buffer, options, socketPath, trigger)
 	if err != nil {
 		if options.Stderr != nil {
 			writeProxyf(options.Stderr, "neocode diag: build diagnose payload failed: %v\n", err)
 		}
 		return tools.ToolResult{}, errors.New("诊断请求构建失败，请稍后重试")
 	}
-
-	callContext, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-
-	var frame gateway.MessageFrame
-	if err := rpcClient.CallWithOptions(
-		callContext,
-		protocol.MethodGatewayExecuteSystemTool,
-		protocol.ExecuteSystemToolParams{
-			Workdir:   options.Workdir,
-			ToolName:  tools.ToolNameDiagnose,
-			Arguments: requestPayload,
-		},
-		&frame,
-		gatewayclient.GatewayRPCCallOptions{
-			Timeout: timeout,
-			Retries: 1,
-		},
-	); err != nil {
-		if options.Stderr != nil {
-			writeProxyf(options.Stderr, "neocode diag: executeSystemTool rpc failed: %v\n", err)
-		}
-		return tools.ToolResult{}, errors.New("诊断调用失败，请检查 gateway 连接后重试，或使用 `neocode diag -i` 继续排查")
-	}
-
-	if frame.Type == gateway.FrameTypeError && frame.Error != nil {
-		if options.Stderr != nil {
-			writeProxyf(
-				options.Stderr,
-				"neocode diag: gateway returned frame error code=%s message=%s\n",
-				strings.TrimSpace(frame.Error.Code),
-				strings.TrimSpace(frame.Error.Message),
-			)
-		}
-		return tools.ToolResult{}, errors.New("诊断服务暂不可用，请稍后重试，或使用 `neocode diag -i` 继续排查")
-	}
-	if frame.Type != gateway.FrameTypeAck {
-		if options.Stderr != nil {
-			writeProxyf(options.Stderr, "neocode diag: unexpected gateway frame type: %s\n", frame.Type)
-		}
-		return tools.ToolResult{}, errors.New("诊断服务返回异常响应，请稍后重试")
-	}
-
-	toolResult, err := decodeToolResult(frame.Payload)
-	if err != nil {
-		if options.Stderr != nil {
-			writeProxyf(options.Stderr, "neocode diag: decode diagnose payload failed: %v\n", err)
-		}
-		return tools.ToolResult{}, errors.New("诊断结果解析失败，请重试或更新 NeoCode")
-	}
-	return toolResult, nil
+	return executePreparedDiagnoseToolWithTimeout(rpcClient, options, prepared, timeout)
 }
 
 // decodeToolResult 负责 decodeToolResult 相关逻辑。
@@ -1301,6 +1335,7 @@ func streamPTYOutputWithIDM(
 		return
 	}
 	parser := &OSC133Parser{}
+	altScreen := newAltScreenState(IsAltScreenGuardEnabledFromEnv())
 	collectingCommand := false
 	pendingTrigger := (*diagnoseTrigger)(nil)
 	fallbackCommandBuffer := NewUTF8RingBuffer(DefaultRingBufferCapacity / 2)
@@ -1309,6 +1344,7 @@ func streamPTYOutputWithIDM(
 	for {
 		readBytes, err := ptyReader.Read(buffer)
 		if readBytes > 0 {
+			altScreen.Observe(buffer[:readBytes])
 			cleanOutput, events := parser.Feed(buffer[:readBytes])
 			if idm != nil && len(cleanOutput) > 0 {
 				cleanOutput = idm.FilterPTYOutput(cleanOutput)
@@ -1328,6 +1364,11 @@ func streamPTYOutputWithIDM(
 				case ShellEventPromptReady:
 					autoState.OSCReady.Store(true)
 					if pendingTrigger != nil && autoState.Enabled.Load() {
+						if altScreen.ShouldSuppressAutoTrigger(true) {
+							pendingTrigger = nil
+							fallbackCommandBuffer.Reset()
+							continue
+						}
 						select {
 						case autoTriggerCh <- *pendingTrigger:
 						default:
@@ -1351,6 +1392,10 @@ func streamPTYOutputWithIDM(
 						outputText = fallbackCommandBuffer.SnapshotString()
 					}
 					if ShouldTriggerAutoDiagnosis(event.ExitCode, commandText, outputText) {
+						if altScreen.ShouldSuppressAutoTrigger(true) {
+							pendingTrigger = nil
+							continue
+						}
 						pendingTrigger = &diagnoseTrigger{
 							CommandText: commandText,
 							ExitCode:    event.ExitCode,

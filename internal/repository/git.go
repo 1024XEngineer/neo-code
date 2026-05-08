@@ -23,16 +23,16 @@ const (
 	maxChangedDiffBytes             = 64 * 1024
 )
 
-type gitCommandOptions struct {
+type GitCommandOptions struct {
 	MaxOutputBytes int
 }
 
-type gitCommandOutput struct {
-	text      string
-	truncated bool
+type GitCommandOutput struct {
+	Text      string
+	Truncated bool
 }
 
-type gitCommandRunner func(ctx context.Context, workdir string, opts gitCommandOptions, args ...string) (gitCommandOutput, error)
+type GitCommandRunner func(ctx context.Context, workdir string, opts GitCommandOptions, args ...string) (GitCommandOutput, error)
 
 type gitSnapshot struct {
 	InGitRepo bool
@@ -57,18 +57,18 @@ func (s *Service) loadGitSnapshot(ctx context.Context, workdir string) (gitSnaps
 		return gitSnapshot{}, nil
 	}
 
-	output, err := s.gitRunner(ctx, workdir, gitCommandOptions{}, "status", "--porcelain=v1", "-z", "--branch", "--untracked-files=normal")
+	output, err := s.gitRunner(ctx, workdir, GitCommandOptions{}, "status", "--porcelain=v1", "-z", "--branch", "--untracked-files=normal")
 	if err != nil {
 		if isContextError(err) {
 			return gitSnapshot{}, err
 		}
-		if isNotGitRepository(output.text, err) || isAmbiguousGitStatusOutsideRepo(workdir, output.text, err) {
+		if isNotGitRepository(output.Text, err) || isAmbiguousGitStatusOutsideRepo(workdir, output.Text, err) {
 			return gitSnapshot{}, nil
 		}
 		return gitSnapshot{}, err
 	}
 
-	return parseGitSnapshot(output.text), nil
+	return parseGitSnapshot(output.Text), nil
 }
 
 // changedFileSnippet 按固定语义为单个变更条目生成受限片段。
@@ -99,15 +99,15 @@ func (s *Service) readDiffSnippet(ctx context.Context, workdir string, path stri
 	if !allowed {
 		return snippetResult{}, nil
 	}
-	output, err := s.gitRunner(ctx, workdir, gitCommandOptions{MaxOutputBytes: maxChangedDiffBytes}, "diff", "--unified=3", "HEAD", "--", filepath.ToSlash(path))
+	output, err := s.gitRunner(ctx, workdir, GitCommandOptions{MaxOutputBytes: maxChangedDiffBytes}, "diff", "--unified=3", "HEAD", "--", filepath.ToSlash(path))
 	if err != nil {
 		if isContextError(err) {
 			return snippetResult{}, err
 		}
 		return snippetResult{}, err
 	}
-	snippet := trimSnippetText(output.text, maxChangedSnippetLinesPerFile)
-	if output.truncated {
+	snippet := trimSnippetText(output.Text, maxChangedSnippetLinesPerFile)
+	if output.Truncated {
 		snippet.truncated = true
 	}
 	return snippet, nil
@@ -291,7 +291,7 @@ func normalizeStatus(x byte, y byte) ChangedFileStatus {
 }
 
 // runGitCommand 统一执行 git 子命令，并在超时后主动取消。
-func runGitCommand(ctx context.Context, workdir string, opts gitCommandOptions, args ...string) (gitCommandOutput, error) {
+func runGitCommand(ctx context.Context, workdir string, opts GitCommandOptions, args ...string) (GitCommandOutput, error) {
 	timeoutCtx, cancel := context.WithTimeout(ctx, gitCommandTimeout)
 	defer cancel()
 
@@ -300,7 +300,7 @@ func runGitCommand(ctx context.Context, workdir string, opts gitCommandOptions, 
 	command.Stdout = buffer
 	command.Stderr = io.MultiWriter(buffer)
 	err := command.Run()
-	return gitCommandOutput{text: buffer.String(), truncated: buffer.truncated}, err
+	return GitCommandOutput{Text: buffer.String(), Truncated: buffer.truncated}, err
 }
 
 type gitOutputBuffer struct {

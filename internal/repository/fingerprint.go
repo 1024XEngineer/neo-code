@@ -1,4 +1,4 @@
-package checkpoint
+package repository
 
 import (
 	"context"
