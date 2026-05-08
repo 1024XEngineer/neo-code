@@ -228,7 +228,10 @@ func (s *stubFeishuGatewayClient) Close() error {
 type stubFeishuMessenger struct{}
 
 func (stubFeishuMessenger) SendText(context.Context, string, string) error { return nil }
-func (stubFeishuMessenger) SendPermissionCard(context.Context, string, feishuadapter.PermissionCardPayload) error {
+func (stubFeishuMessenger) SendPermissionCard(context.Context, string, feishuadapter.PermissionCardPayload) (string, error) {
+	return "", nil
+}
+func (stubFeishuMessenger) UpdatePermissionCard(context.Context, string, feishuadapter.ResolvedPermissionCardPayload) error {
 	return nil
 }
 func (stubFeishuMessenger) SendStatusCard(context.Context, string, feishuadapter.StatusCardPayload) (string, error) {

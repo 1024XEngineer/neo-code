@@ -45,23 +45,32 @@
 ### 4.1 Webhook 模式（#554）
 
 ```bash
+# 开发模式 (go run)
+go run ./cmd/neocode feishu-adapter --ingress webhook
+
+# 安装模式 (neocode)
 neocode feishu-adapter --ingress webhook
 ```
 
 通常还会覆盖地址参数：
 
 ```bash
-neocode feishu-adapter \
-  --ingress webhook \
-  --listen 127.0.0.1:18080 \
-  --event-path /feishu/events \
-  --card-path /feishu/cards
+# 开发模式 (go run)
+go run ./cmd/neocode feishu-adapter --ingress webhook --listen 127.0.0.1:18080 --event-path /feishu/events --card-path /feishu/cards
+
+# 安装模式 (neocode)
+neocode feishu-adapter --ingress webhook --listen 127.0.0.1:18080 --event-path /feishu/events --card-path /feishu/cards
 ```
 
 ### 4.2 SDK 模式（#557，本地无公网）
 
 ```bash
 export FEISHU_APP_SECRET="cli_secret_xxx"
+
+# 开发模式 (go run)
+go run ./cmd/neocode feishu-adapter --ingress sdk
+
+# 安装模式 (neocode)
 neocode feishu-adapter --ingress sdk
 ```
 
@@ -118,11 +127,11 @@ Runner 是部署在用户本机的执行守护进程，通过 WebSocket 主动�
 ### 9.1 启动 Runner
 
 ```bash
-neocode runner \
-  --gateway-address "your-gateway:8080" \
-  --token-file ~/.neocode/auth.json \
-  --runner-name "我的本机" \
-  --workdir /path/to/project
+# 开发模式 (go run)
+go run ./cmd/neocode runner --gateway-address "your-gateway:8080" --token-file ~/.neocode/auth.json --runner-name "我的本机" --workdir /path/to/project
+
+# 安装模式 (neocode)
+neocode runner --gateway-address "your-gateway:8080" --token-file ~/.neocode/auth.json --runner-name "我的本机" --workdir /path/to/project
 ```
 
 Runner 启动后会主动连接 Gateway，注册自身并保持心跳。当飞书消息触发工具调用时，Gateway 将工具请求推送到 Runner 本机执行。

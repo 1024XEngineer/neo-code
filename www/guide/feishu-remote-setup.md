@@ -105,19 +105,19 @@ Gateway 和 Adapter 通过**同一个 listen 地址**通信。根据你的系统
 Gateway 是 NeoCode 的后端服务进程。Adapter 通过它接入 Runtime 和工具。
 
 ```bash
-# macOS / Linux
-go run ./cmd/neocode-gateway \
-  --listen "127.0.0.1:8080" \
-  --http-listen "127.0.0.1:18181" \
-  --workdir "/home/you/project"
+# 开发模式 (go run)
+go run ./cmd/neocode-gateway --listen "127.0.0.1:8080" --http-listen "127.0.0.1:18181" --workdir "/home/you/project"
+
+# 安装模式 (neocode)
+neocode gateway --listen "127.0.0.1:8080" --http-listen "127.0.0.1:18181" --workdir "/home/you/project"
 ```
 
 ```powershell
-# Windows PowerShell
-go run ./cmd/neocode-gateway `
-  --listen "\\.\pipe\neocode-gateway" `
-  --http-listen "127.0.0.1:18181" `
-  --workdir "F:\qiniu\neo-code"
+# 开发模式 (go run)
+go run ./cmd/neocode-gateway --listen "\\.\pipe\neocode-gateway" --http-listen "127.0.0.1:18181" --workdir "F:\qiniu\neo-code"
+
+# 安装模式 (neocode)
+neocode gateway --listen "\\.\pipe\neocode-gateway" --http-listen "127.0.0.1:18181" --workdir "F:\qiniu\neo-code"
 ```
 
 **Gateway 启动参数说明：**
@@ -137,17 +137,19 @@ go run ./cmd/neocode-gateway `
 Adapter 负责桥接飞书长连接与本地 Gateway，把飞书消息翻译为 `gateway.run` 调用。
 
 ```bash
-# macOS / Linux
-go run ./cmd/neocode feishu-adapter \
-  --ingress sdk \
-  --gateway-listen "127.0.0.1:8080"
+# 开发模式 (go run)
+go run ./cmd/neocode feishu-adapter --ingress sdk --gateway-listen "127.0.0.1:8080"
+
+# 安装模式 (neocode)
+neocode feishu-adapter --ingress sdk --gateway-listen "127.0.0.1:8080"
 ```
 
 ```powershell
-# Windows PowerShell
-go run ./cmd/neocode feishu-adapter `
-  --ingress sdk `
-  --gateway-listen "\\.\pipe\neocode-gateway"
+# 开发模式 (go run)
+go run ./cmd/neocode feishu-adapter --ingress sdk --gateway-listen "\\.\pipe\neocode-gateway"
+
+# 安装模式 (neocode)
+neocode feishu-adapter --ingress sdk --gateway-listen "\\.\pipe\neocode-gateway"
 ```
 
 **Adapter 启动参数说明：**
@@ -252,20 +254,21 @@ feishu:
 启动 Gateway（同 SDK）：
 
 ```bash
-go run ./cmd/neocode-gateway \
-  --listen "127.0.0.1:8080" \
-  --http-listen "127.0.0.1:18181" \
-  --workdir "/path/to/project"
+# 开发模式 (go run)
+go run ./cmd/neocode-gateway --listen "127.0.0.1:8080" --http-listen "127.0.0.1:18181" --workdir "/path/to/project"
+
+# 安装模式 (neocode)
+neocode gateway --listen "127.0.0.1:8080" --http-listen "127.0.0.1:18181" --workdir "/path/to/project"
 ```
 
 启动 Adapter：
 
 ```bash
-# macOS / Linux
-go run ./cmd/neocode feishu-adapter \
-  --ingress webhook \
-  --gateway-listen "127.0.0.1:8080" \
-  --listen "127.0.0.1:18080"
+# 开发模式 (go run)
+go run ./cmd/neocode feishu-adapter --ingress webhook --gateway-listen "127.0.0.1:8080" --listen "127.0.0.1:18080"
+
+# 安装模式 (neocode)
+neocode feishu-adapter --ingress webhook --gateway-listen "127.0.0.1:8080" --listen "127.0.0.1:18080"
 ```
 
 然后用 ngrok / cloudflared 把 `18080` 暴露公网，在飞书后台配置：
@@ -289,21 +292,19 @@ Runner 会主动通过 WebSocket 连接云端 Gateway，接收工具执行请求
 ### 8.1 启动 Runner
 
 ```bash
-# macOS / Linux
-go run ./cmd/neocode runner \
-  --gateway-address "your-gateway.com:8080" \
-  --token-file ~/.neocode/auth.json \
-  --runner-name "我的 MacBook" \
-  --workdir /path/to/project
+# 开发模式 (go run)
+go run ./cmd/neocode runner --gateway-address "your-gateway.com:8080" --token-file ~/.neocode/auth.json --runner-name "我的 MacBook" --workdir /path/to/project
+
+# 安装模式 (neocode)
+neocode runner --gateway-address "your-gateway.com:8080" --token-file ~/.neocode/auth.json --runner-name "我的 MacBook" --workdir /path/to/project
 ```
 
 ```powershell
-# Windows PowerShell
-go run ./cmd/neocode runner `
-  --gateway-address "your-gateway.com:8080" `
-  --token-file "$env:USERPROFILE\.neocode\auth.json" `
-  --runner-name "我的 PC" `
-  --workdir "F:\qiniu\neo-code"
+# 开发模式 (go run)
+go run ./cmd/neocode runner --gateway-address "your-gateway.com:8080" --token-file "$env:USERPROFILE\.neocode\auth.json" --runner-name "我的 PC" --workdir "F:\qiniu\neo-code"
+
+# 安装模式 (neocode)
+neocode runner --gateway-address "your-gateway.com:8080" --token-file "$env:USERPROFILE\.neocode\auth.json" --runner-name "我的 PC" --workdir "F:\qiniu\neo-code"
 ```
 
 Runner 启动后会打印连接状态：
