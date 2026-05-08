@@ -111,8 +111,8 @@ func (s *Service) ResolveUserQuestion(ctx context.Context, input UserQuestionRes
 	}
 
 	result := askuser.Result{
-		Status: status,
-		Values: input.Values,
+		Status:  status,
+		Values:  input.Values,
 		Message: strings.TrimSpace(input.Message),
 	}
 
@@ -147,8 +147,16 @@ func (s *Service) executeToolCallWithPermission(ctx context.Context, input permi
 		callInput.AskUserEventEmitter = func(eventName string, payload any) {
 			eventType := eventTypeFromAskUserEvent(eventName)
 			if eventName == "user_question_requested" {
+				if question, ok := parseAskUserRequestedPayload(payload); ok {
+					s.setPendingUserQuestion(input.State, question)
+					s.emitRuntimeSnapshotUpdated(ctx, input.State, "user_question_requested")
+				}
 				s.emitRunScopedPriority(eventType, input.State, payload)
 			} else {
+				if resolved, ok := parseAskUserResolvedPayload(payload); ok {
+					s.clearPendingUserQuestionIfMatches(input.State, resolved.RequestID)
+					s.emitRuntimeSnapshotUpdated(ctx, input.State, "user_question_"+strings.TrimSpace(resolved.Status))
+				}
 				s.emitRunScopedOptional(eventType, input.State, payload)
 			}
 		}

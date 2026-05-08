@@ -127,6 +127,9 @@ func TestGatewayRPCClientDelegatesRPCMethods(t *testing.T) {
 	if err := client.ResolvePermission(ctx, "perm-1", "allow_once"); err != nil {
 		t.Fatalf("resolve permission: %v", err)
 	}
+	if err := client.ResolveUserQuestion(ctx, "ask-1", "answered", []string{"A"}, "A"); err != nil {
+		t.Fatalf("resolve user question: %v", err)
+	}
 	if err := client.Ping(ctx); err != nil {
 		t.Fatalf("ping: %v", err)
 	}
@@ -152,6 +155,7 @@ func TestGatewayRPCClientDelegatesRPCMethods(t *testing.T) {
 		protocol.MethodGatewayBindStream,
 		protocol.MethodGatewayRun,
 		protocol.MethodGatewayResolvePermission,
+		protocol.MethodGatewayUserQuestionAnswer,
 		protocol.MethodGatewayPing,
 	}
 	if len(methods) < len(wantMethods) {

@@ -22,6 +22,7 @@ beforeEach(() => {
     isGenerating: false,
     streamingMessageId: '',
     permissionRequests: [],
+    pendingUserQuestion: null,
     tokenUsage: null,
     phase: '',
     stopReason: '',
@@ -115,6 +116,64 @@ describe('eventBridge', () => {
 
     expect(useSessionStore.getState().currentSessionId).toBe('sess-1')
     expect(useGatewayStore.getState().currentRunId).toBe('run-1')
+  })
+
+  it('UserQuestionRequested stores pending user question', () => {
+    const api = createMockGatewayAPI()
+    handleGatewayEvent({
+      type: EventType.UserQuestionRequested,
+      payload: {
+        payload: {
+          runtime_event_type: EventType.UserQuestionRequested,
+          payload: {
+            request_id: 'ask-1',
+            question_id: 'q-1',
+            title: 'Pick one',
+            description: 'Choose an option',
+            kind: 'single_choice',
+            options: [{ label: 'A' }, { label: 'B' }],
+            required: true,
+            allow_skip: true,
+            max_choices: 1,
+            timeout_sec: 120,
+          },
+        },
+      },
+      session_id: 'sess-1',
+      run_id: 'run-1',
+    }, api)
+
+    const pending = useChatStore.getState().pendingUserQuestion
+    expect(pending?.request_id).toBe('ask-1')
+    expect(pending?.kind).toBe('single_choice')
+    expect(pending?.allow_skip).toBe(true)
+  })
+
+  it('UserQuestionResolved events clear pending user question by request id', () => {
+    const api = createMockGatewayAPI()
+    useChatStore.getState().setPendingUserQuestion({
+      request_id: 'ask-2',
+      question_id: 'q-2',
+      title: 'Title',
+      description: '',
+      kind: 'text',
+      required: true,
+      allow_skip: false,
+    })
+
+    handleGatewayEvent({
+      type: EventType.UserQuestionAnswered,
+      payload: {
+        payload: {
+          runtime_event_type: EventType.UserQuestionAnswered,
+          payload: { request_id: 'ask-2', status: 'answered' },
+        },
+      },
+      session_id: 'sess-1',
+      run_id: 'run-1',
+    }, api)
+
+    expect(useChatStore.getState().pendingUserQuestion).toBeNull()
   })
 
   it('ToolStart adds a tool call message', () => {

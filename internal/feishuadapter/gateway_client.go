@@ -69,6 +69,23 @@ func (c *gatewayRPCClient) ResolvePermission(ctx context.Context, requestID stri
 	}, &result)
 }
 
+// ResolveUserQuestion 提交一次 ask_user 回答。
+func (c *gatewayRPCClient) ResolveUserQuestion(
+	ctx context.Context,
+	requestID string,
+	status string,
+	values []string,
+	message string,
+) error {
+	var result map[string]any
+	return c.client.Call(ctx, protocol.MethodGatewayUserQuestionAnswer, protocol.UserQuestionAnswerParams{
+		RequestID: requestID,
+		Status:    status,
+		Values:    values,
+		Message:   message,
+	}, &result)
+}
+
 // Ping 调用网关保活接口，触发自动重连与链路健康检查。
 func (c *gatewayRPCClient) Ping(ctx context.Context) error {
 	var result map[string]any

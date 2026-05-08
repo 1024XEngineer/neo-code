@@ -116,16 +116,34 @@ func mapSDKCardActionEvent(event *larkevent.EventReq) (FeishuCardActionEvent, bo
 	if err := json.Unmarshal(event.Body, &payload); err != nil {
 		return FeishuCardActionEvent{}, false
 	}
+	actionType := strings.TrimSpace(strings.ToLower(payload.Event.Action.Value["action_type"]))
 	requestID := strings.TrimSpace(payload.Event.Action.Value["request_id"])
 	decision := strings.TrimSpace(strings.ToLower(payload.Event.Action.Value["decision"]))
-	if requestID == "" || (decision != "allow_once" && decision != "reject") {
+	status := strings.TrimSpace(strings.ToLower(payload.Event.Action.Value["status"]))
+	value := strings.TrimSpace(payload.Event.Action.Value["value"])
+	message := strings.TrimSpace(payload.Event.Action.Value["message"])
+	if actionType == "" {
+		if decision != "" {
+			actionType = "permission"
+		} else {
+			actionType = "user_question"
+		}
+	}
+	if requestID == "" {
 		return FeishuCardActionEvent{}, false
 	}
-	return FeishuCardActionEvent{
-		EventID:   strings.TrimSpace(payload.Header.EventID),
-		RequestID: requestID,
-		Decision:  decision,
-	}, true
+	cardEvent := FeishuCardActionEvent{
+		EventID:    strings.TrimSpace(payload.Header.EventID),
+		ActionType: actionType,
+		RequestID:  requestID,
+		Decision:   decision,
+		Status:     status,
+		Message:    message,
+	}
+	if value != "" {
+		cardEvent.Values = []string{value}
+	}
+	return cardEvent, true
 }
 
 // extractSDKMessageText 从 SDK 消息 content JSON 里提取 text。

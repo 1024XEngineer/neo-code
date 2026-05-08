@@ -9,6 +9,8 @@ import {
   type LoadSessionParams,
   type ListSessionTodosParams,
   type ListSessionTodosResult,
+  type GetRuntimeSnapshotParams,
+  type GetRuntimeSnapshotResult,
   type ListCheckpointsParams,
   type ListCheckpointsResult,
   type RestoreCheckpointParams,
@@ -18,6 +20,7 @@ import {
   type CheckpointDiffParams,
   type CheckpointDiffResult,
   type ResolvePermissionParams,
+  type ResolveUserQuestionParams,
   type Session,
   type RunAckResult,
   type ListSessionsResult,
@@ -113,6 +116,13 @@ export class GatewayAPI {
     return this.ws.call<ListSessionTodosResult>(Method.ListSessionTodos, { session_id: sessionId } satisfies ListSessionTodosParams)
   }
 
+  async getRuntimeSnapshot(sessionId: string) {
+    return this.ws.call<GetRuntimeSnapshotResult>(
+      Method.GetRuntimeSnapshot,
+      { session_id: sessionId } satisfies GetRuntimeSnapshotParams,
+    )
+  }
+
   async listCheckpoints(params: ListCheckpointsParams) {
     return this.ws.call<ListCheckpointsResult>(Method.ListCheckpoints, params)
   }
@@ -132,6 +142,11 @@ export class GatewayAPI {
   /** 解析权限请求 */
   async resolvePermission(params: ResolvePermissionParams) {
     return this.ws.call(Method.ResolvePermission, params)
+  }
+
+  /** 提交 ask_user 回答 */
+  async resolveUserQuestion(params: ResolveUserQuestionParams) {
+    return this.ws.call(Method.UserQuestionAnswer, params)
   }
 
   /** 执行系统工具 */

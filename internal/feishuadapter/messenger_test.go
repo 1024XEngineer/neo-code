@@ -320,3 +320,76 @@ func TestBuildStatusCardAndHelpers(t *testing.T) {
 		t.Fatalf("fallback field = %q", value)
 	}
 }
+
+func TestSendAndUpdateUserQuestionCard(t *testing.T) {
+	client := &queuedHTTPClient{
+		responses: []queuedHTTPResponse{
+			{status: 200, body: `{"code":0,"msg":"ok","tenant_access_token":"token","expire":7200}`},
+			{status: 200, body: `{"code":0,"msg":"ok","data":{"message_id":"ask-mid"}}`},
+			{status: 200, body: `{"code":0,"msg":"ok","data":{"message_id":"updated"}}`},
+		},
+	}
+	messenger := NewFeishuMessenger("app", "secret", client)
+	cardID, err := messenger.SendUserQuestionCard(context.Background(), "chat-id", UserQuestionCardPayload{
+		RequestID:  "ask-1",
+		QuestionID: "q1",
+		Title:      "请选择环境",
+		Kind:       "single_choice",
+		Options: []UserQuestionCardOption{
+			{Label: "测试"},
+			{Label: "生产"},
+		},
+		AllowSkip: true,
+	})
+	if err != nil {
+		t.Fatalf("send user question card: %v", err)
+	}
+	if cardID != "ask-mid" {
+		t.Fatalf("cardID = %q, want ask-mid", cardID)
+	}
+	if err := messenger.UpdateUserQuestionCard(context.Background(), "ask-mid", ResolvedUserQuestionCardPayload{
+		RequestID: "ask-1",
+		Title:     "请选择环境",
+		Status:    "answered",
+		Summary:   "用户回答：测试",
+	}); err != nil {
+		t.Fatalf("update user question card: %v", err)
+	}
+	if len(client.requests) != 3 {
+		t.Fatalf("request count = %d, want 3", len(client.requests))
+	}
+	if client.requests[2].Method != http.MethodPatch {
+		t.Fatalf("update method = %s, want PATCH", client.requests[2].Method)
+	}
+}
+
+func TestBuildUserQuestionCardAndResolvedCard(t *testing.T) {
+	card := buildUserQuestionCard(UserQuestionCardPayload{
+		RequestID: "ask-2",
+		Title:     "选择发布模式",
+		Kind:      "single_choice",
+		Options: []UserQuestionCardOption{
+			{Label: "蓝绿"},
+			{Label: "滚动"},
+		},
+		AllowSkip: true,
+	})
+	raw, _ := json.Marshal(card)
+	content := string(raw)
+	if !strings.Contains(content, "action_type") || !strings.Contains(content, "user_question") {
+		t.Fatalf("card content = %s, want user_question action_type", content)
+	}
+	if !strings.Contains(content, "ask-2") {
+		t.Fatalf("card content = %s, want request id", content)
+	}
+
+	resolved := buildResolvedUserQuestionCard(ResolvedUserQuestionCardPayload{
+		Title:   "选择发布模式",
+		Status:  "skipped",
+		Summary: "用户已跳过",
+	})
+	header, _ := resolved["header"].(map[string]any)
+	if header["template"] != "yellow" {
+		t.Fatalf("resolved header template = %v, want yellow", header["template"])
+	}
+}

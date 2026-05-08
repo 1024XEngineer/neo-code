@@ -146,21 +146,45 @@ func (w *WebhookIngress) handleCardCallback(handler IngressHandler) http.Handler
 			http.Error(writer, "invalid verify token", http.StatusUnauthorized)
 			return
 		}
+		actionType := strings.TrimSpace(strings.ToLower(callback.Action.Value["action_type"]))
 		requestID := strings.TrimSpace(callback.Action.Value["request_id"])
 		decision := strings.TrimSpace(strings.ToLower(callback.Action.Value["decision"]))
-		if requestID == "" || (decision != "allow_once" && decision != "reject") {
+		status := strings.TrimSpace(strings.ToLower(callback.Action.Value["status"]))
+		value := strings.TrimSpace(callback.Action.Value["value"])
+		message := strings.TrimSpace(callback.Action.Value["message"])
+		if actionType == "" {
+			if decision != "" {
+				actionType = "permission"
+			} else {
+				actionType = "user_question"
+			}
+		}
+		if requestID == "" {
 			writeJSON(writer, http.StatusOK, map[string]any{"toast": map[string]string{"type": "info", "content": "callback ready"}})
 			return
 		}
-		if err := handler.HandleCardAction(request.Context(), FeishuCardActionEvent{
-			EventID:   strings.TrimSpace(callback.Header.EventID),
-			RequestID: requestID,
-			Decision:  decision,
-		}); err != nil {
+		event := FeishuCardActionEvent{
+			EventID:    strings.TrimSpace(callback.Header.EventID),
+			ActionType: actionType,
+			RequestID:  requestID,
+			Decision:   decision,
+			Status:     status,
+			Message:    message,
+		}
+		if value != "" {
+			event.Values = []string{value}
+		}
+		if err := handler.HandleCardAction(request.Context(), event); err != nil {
 			http.Error(writer, "card action failed", http.StatusInternalServerError)
 			return
 		}
-		writeJSON(writer, http.StatusOK, map[string]any{"toast": map[string]string{"type": "success", "content": "审批已提交"}})
+		toast := "操作已提交"
+		if actionType == "permission" {
+			toast = "审批已提交"
+		} else if actionType == "user_question" {
+			toast = "回答已提交"
+		}
+		writeJSON(writer, http.StatusOK, map[string]any{"toast": map[string]string{"type": "success", "content": toast}})
 	}
 }
 

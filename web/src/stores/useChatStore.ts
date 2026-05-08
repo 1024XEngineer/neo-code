@@ -1,5 +1,10 @@
 import { create } from 'zustand'
-import { type TokenUsage, type PermissionRequestPayload, type AcceptanceDecidedPayload } from '@/api/protocol'
+import {
+  type TokenUsage,
+  type PermissionRequestPayload,
+  type AcceptanceDecidedPayload,
+  type PendingUserQuestionSnapshot,
+} from '@/api/protocol'
 import { type VerificationRunRecord } from '@/stores/useRuntimeInsightStore'
 import { resetEventBridgeCursors } from '@/utils/eventBridge'
 
@@ -50,6 +55,8 @@ interface ChatState {
   streamingThinkingMessageId: string
   /** 权限请求列表 */
   permissionRequests: PermissionRequestPayload[]
+  /** 当前待回答 ask_user 问题（v1 单活跃） */
+  pendingUserQuestion: PendingUserQuestionSnapshot | null
   /** Token 用量 */
   tokenUsage: TokenUsage | null
   /** 当前运行阶段 */
@@ -95,6 +102,8 @@ interface ChatState {
   setTransitioning: (v: boolean) => void
   addPermissionRequest: (req: PermissionRequestPayload) => void
   removePermissionRequest: (requestId: string) => void
+  setPendingUserQuestion: (question: PendingUserQuestionSnapshot | null) => void
+  clearPendingUserQuestion: (requestId?: string) => void
   updateTokenUsage: (usage: TokenUsage) => void
   setPhase: (phase: string) => void
   setStopReason: (reason: string) => void
@@ -176,6 +185,7 @@ export const useChatStore = create<ChatState>((set) => ({
   streamingMessageId: '',
   streamingThinkingMessageId: '',
   permissionRequests: [],
+  pendingUserQuestion: null,
   tokenUsage: null,
   phase: '',
   stopReason: '',
@@ -195,6 +205,7 @@ export const useChatStore = create<ChatState>((set) => ({
         streamingThinkingMessageId: '',
         isGenerating: false,
         permissionRequests: [],
+        pendingUserQuestion: null,
         phase: '',
         stopReason: '',
       }
@@ -359,6 +370,23 @@ export const useChatStore = create<ChatState>((set) => ({
       permissionRequests: s.permissionRequests.filter((r) => r.request_id !== requestId),
     })),
 
+  setPendingUserQuestion: (question) => set({
+    pendingUserQuestion: question
+      ? {
+          ...question,
+          options: Array.isArray(question.options) ? [...question.options] : undefined,
+        }
+      : null,
+  }),
+
+  clearPendingUserQuestion: (requestId) =>
+    set((s) => {
+      if (!s.pendingUserQuestion) return s
+      if (!requestId) return { pendingUserQuestion: null }
+      if (s.pendingUserQuestion.request_id !== requestId) return s
+      return { pendingUserQuestion: null }
+    }),
+
   updateTokenUsage: (tokenUsage) => set({ tokenUsage }),
   setPhase: (phase) => set({ phase }),
   setStopReason: (stopReason) => set({ stopReason }),
@@ -377,6 +405,7 @@ export const useChatStore = create<ChatState>((set) => ({
       streamingThinkingMessageId: '',
       isGenerating: false,
       permissionRequests: [],
+      pendingUserQuestion: null,
       tokenUsage: null,
       phase: '',
       stopReason: '',

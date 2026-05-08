@@ -593,17 +593,32 @@ type TodoSnapshot struct {
 	Summary TodoSummary    `json:"summary,omitempty"`
 }
 
+// PendingUserQuestionSnapshot 描述当前会话待回答 ask_user 问题快照。
+type PendingUserQuestionSnapshot struct {
+	RequestID   string `json:"request_id"`
+	QuestionID  string `json:"question_id"`
+	Title       string `json:"title"`
+	Description string `json:"description"`
+	Kind        string `json:"kind"`
+	Options     []any  `json:"options,omitempty"`
+	Required    bool   `json:"required"`
+	AllowSkip   bool   `json:"allow_skip"`
+	MaxChoices  int    `json:"max_choices,omitempty"`
+	TimeoutSec  int    `json:"timeout_sec,omitempty"`
+}
+
 // RuntimeSnapshot 描述 runtime 对外暴露的统一运行状态快照。
 type RuntimeSnapshot struct {
-	RunID     string         `json:"run_id,omitempty"`
-	SessionID string         `json:"session_id"`
-	Phase     string         `json:"phase,omitempty"`
-	TaskKind  string         `json:"task_kind,omitempty"`
-	UpdatedAt time.Time      `json:"updated_at"`
-	Todos     TodoSnapshot   `json:"todos"`
-	Facts     map[string]any `json:"facts,omitempty"`
-	Decision  map[string]any `json:"decision,omitempty"`
-	SubAgents map[string]any `json:"subagents,omitempty"`
+	RunID               string                       `json:"run_id,omitempty"`
+	SessionID           string                       `json:"session_id"`
+	Phase               string                       `json:"phase,omitempty"`
+	TaskKind            string                       `json:"task_kind,omitempty"`
+	UpdatedAt           time.Time                    `json:"updated_at"`
+	Todos               TodoSnapshot                 `json:"todos"`
+	Facts               map[string]any               `json:"facts,omitempty"`
+	Decision            map[string]any               `json:"decision,omitempty"`
+	SubAgents           map[string]any               `json:"subagents,omitempty"`
+	PendingUserQuestion *PendingUserQuestionSnapshot `json:"pending_user_question,omitempty"`
 }
 
 // SkillSource 描述技能来源元数据。

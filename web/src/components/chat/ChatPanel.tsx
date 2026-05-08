@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, type CSSProperties } from 'react'
 import { useUIStore } from '@/stores/useUIStore'
 import { useSessionStore } from '@/stores/useSessionStore'
 import { useChatStore } from '@/stores/useChatStore'
@@ -34,10 +34,16 @@ export default function ChatPanel() {
 
   const permissionRequests = useChatStore((s) => s.permissionRequests)
   const currentPermission = permissionRequests[0]
+  const pendingUserQuestion = useChatStore((s) => s.pendingUserQuestion)
+  const clearPendingUserQuestion = useChatStore((s) => s.clearPendingUserQuestion)
 
   const [editingTitle, setEditingTitle] = useState(false)
   const [moreMenuOpen, setMoreMenuOpen] = useState(false)
   const [isResolvingPermission, setIsResolvingPermission] = useState(false)
+  const [isResolvingUserQuestion, setIsResolvingUserQuestion] = useState(false)
+  const [userQuestionText, setUserQuestionText] = useState('')
+  const [userQuestionSingleChoice, setUserQuestionSingleChoice] = useState('')
+  const [userQuestionMultiChoices, setUserQuestionMultiChoices] = useState<string[]>([])
   const titleRef = useRef<HTMLDivElement>(null)
   const moreMenuRef = useRef<HTMLDivElement>(null)
 
@@ -62,6 +68,106 @@ export default function ChatPanel() {
       setIsResolvingPermission(false)
     }
   }
+
+  function parseUserQuestionOptions(raw: unknown[]): { label: string; value: string; description?: string }[] {
+    const options: { label: string; value: string; description?: string }[] = []
+    for (const option of raw) {
+      if (typeof option === 'string') {
+        const trimmed = option.trim()
+        if (trimmed) options.push({ label: trimmed, value: trimmed })
+        continue
+      }
+      if (!option || typeof option !== 'object') continue
+      const record = option as Record<string, unknown>
+      const label = typeof record.label === 'string' ? record.label.trim() : ''
+      const description = typeof record.description === 'string' ? record.description.trim() : ''
+      if (!label) continue
+      options.push({ label, value: label, description: description || undefined })
+    }
+    return options
+  }
+
+  async function handleSubmitUserQuestion(status: 'answered' | 'skipped') {
+    if (!gatewayAPI || !pendingUserQuestion || isResolvingUserQuestion) return
+
+    const options = parseUserQuestionOptions(Array.isArray(pendingUserQuestion.options) ? pendingUserQuestion.options : [])
+    let values: string[] = []
+    let message = ''
+
+    if (status === 'answered') {
+      switch (pendingUserQuestion.kind) {
+        case 'text': {
+          const trimmed = userQuestionText.trim()
+          if (!trimmed) {
+            useUIStore.getState().showToast('Please enter an answer', 'info')
+            return
+          }
+          message = trimmed
+          values = [trimmed]
+          break
+        }
+        case 'single_choice': {
+          const selected = userQuestionSingleChoice.trim()
+          if (!selected) {
+            useUIStore.getState().showToast('Please select one option', 'info')
+            return
+          }
+          values = [selected]
+          break
+        }
+        case 'multi_choice': {
+          if (userQuestionMultiChoices.length === 0) {
+            useUIStore.getState().showToast('Please select at least one option', 'info')
+            return
+          }
+          const maxChoices = Number(pendingUserQuestion.max_choices || 0)
+          if (maxChoices > 0 && userQuestionMultiChoices.length > maxChoices) {
+            useUIStore.getState().showToast(`You can select up to ${maxChoices} option(s)`, 'info')
+            return
+          }
+          values = [...userQuestionMultiChoices]
+          break
+        }
+        default: {
+          if (options.length > 0 && !userQuestionSingleChoice.trim()) {
+            useUIStore.getState().showToast('Please provide an answer', 'info')
+            return
+          }
+          if (userQuestionSingleChoice.trim()) values = [userQuestionSingleChoice.trim()]
+        }
+      }
+    }
+
+    setIsResolvingUserQuestion(true)
+    try {
+      await gatewayAPI.resolveUserQuestion({
+        request_id: pendingUserQuestion.request_id,
+        status,
+        values: values.length > 0 ? values : undefined,
+        message: message || undefined,
+      })
+      clearPendingUserQuestion(pendingUserQuestion.request_id)
+      useUIStore.getState().showToast('User question submitted', 'success')
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Failed to submit user question'
+      useUIStore.getState().showToast(msg, 'error')
+      console.error('Resolve user question failed:', err)
+    } finally {
+      setIsResolvingUserQuestion(false)
+    }
+  }
+
+  useEffect(() => {
+    if (!pendingUserQuestion) {
+      setUserQuestionText('')
+      setUserQuestionSingleChoice('')
+      setUserQuestionMultiChoices([])
+      return
+    }
+    setUserQuestionText('')
+    setUserQuestionSingleChoice('')
+    setUserQuestionMultiChoices([])
+  }, [pendingUserQuestion?.request_id])
 
   useEffect(() => {
     function handleClick(event: MouseEvent) {
@@ -252,6 +358,88 @@ export default function ChatPanel() {
             </div>
           </div>
         </div>
+      ) : pendingUserQuestion ? (
+        <div style={permissionStyles.container}>
+          <div style={permissionStyles.card}>
+            <div style={permissionStyles.header}>
+              <Shield size={16} style={{ color: 'var(--accent)' }} />
+              <span style={permissionStyles.headerTitle}>{pendingUserQuestion.title || 'User question'}</span>
+            </div>
+            {pendingUserQuestion.description && (
+              <div style={{ ...permissionStyles.detailValue, textAlign: 'left', marginBottom: 12, fontSize: 12, fontWeight: 400 }}>
+                {pendingUserQuestion.description}
+              </div>
+            )}
+            {pendingUserQuestion.kind === 'text' && (
+              <textarea
+                value={userQuestionText}
+                onChange={(e) => setUserQuestionText(e.target.value)}
+                placeholder="Type your answer..."
+                disabled={isResolvingUserQuestion}
+                style={askUserStyles.textArea}
+              />
+            )}
+            {pendingUserQuestion.kind === 'single_choice' && (
+              <div style={askUserStyles.optionGroup}>
+                {parseUserQuestionOptions(Array.isArray(pendingUserQuestion.options) ? pendingUserQuestion.options : []).map((option) => (
+                  <label key={option.value} style={askUserStyles.optionRow}>
+                    <input
+                      type="radio"
+                      name={`ask-${pendingUserQuestion.request_id}`}
+                      value={option.value}
+                      checked={userQuestionSingleChoice === option.value}
+                      onChange={() => setUserQuestionSingleChoice(option.value)}
+                      disabled={isResolvingUserQuestion}
+                    />
+                    <span>{option.label}</span>
+                  </label>
+                ))}
+              </div>
+            )}
+            {pendingUserQuestion.kind === 'multi_choice' && (
+              <div style={askUserStyles.optionGroup}>
+                {parseUserQuestionOptions(Array.isArray(pendingUserQuestion.options) ? pendingUserQuestion.options : []).map((option) => {
+                  const checked = userQuestionMultiChoices.includes(option.value)
+                  return (
+                    <label key={option.value} style={askUserStyles.optionRow}>
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() => {
+                          if (checked) {
+                            setUserQuestionMultiChoices((prev) => prev.filter((v) => v !== option.value))
+                            return
+                          }
+                          setUserQuestionMultiChoices((prev) => [...prev, option.value])
+                        }}
+                        disabled={isResolvingUserQuestion}
+                      />
+                      <span>{option.label}</span>
+                    </label>
+                  )
+                })}
+              </div>
+            )}
+            <div style={permissionStyles.buttons}>
+              {pendingUserQuestion.allow_skip && (
+                <button
+                  onClick={() => handleSubmitUserQuestion('skipped')}
+                  disabled={isResolvingUserQuestion}
+                  style={{ ...permissionStyles.btn, ...permissionStyles.btnReject, opacity: isResolvingUserQuestion ? 0.6 : 1, cursor: isResolvingUserQuestion ? 'not-allowed' : 'pointer' }}
+                >
+                  <X size={13} /> Skip
+                </button>
+              )}
+              <button
+                onClick={() => handleSubmitUserQuestion('answered')}
+                disabled={isResolvingUserQuestion}
+                style={{ ...permissionStyles.btn, ...permissionStyles.btnPrimary, opacity: isResolvingUserQuestion ? 0.6 : 1, cursor: isResolvingUserQuestion ? 'not-allowed' : 'pointer' }}
+              >
+                <Check size={13} /> Submit
+              </button>
+            </div>
+          </div>
+        </div>
       ) : (
         <ChatInput />
       )}
@@ -259,7 +447,7 @@ export default function ChatPanel() {
   )
 }
 
-const styles: Record<string, React.CSSProperties> = {
+const styles: Record<string, CSSProperties> = {
   container: {
     display: 'flex',
     flexDirection: 'column',
@@ -385,7 +573,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
 }
 
-const permissionStyles: Record<string, React.CSSProperties> = {
+const permissionStyles: Record<string, CSSProperties> = {
   container: {
     padding: '12px 16px 8px',
     flexShrink: 0,
@@ -463,6 +651,35 @@ const permissionStyles: Record<string, React.CSSProperties> = {
   },
   btnSecondary: {
     background: 'var(--bg-active)',
+    color: 'var(--text-primary)',
+  },
+}
+
+const askUserStyles: Record<string, CSSProperties> = {
+  textArea: {
+    width: '100%',
+    minHeight: 88,
+    borderRadius: 'var(--radius-md)',
+    border: '1px solid var(--border-primary)',
+    background: 'var(--bg-primary)',
+    color: 'var(--text-primary)',
+    padding: '10px 12px',
+    fontSize: 12,
+    fontFamily: 'var(--font-ui)',
+    resize: 'vertical',
+    marginBottom: 12,
+  },
+  optionGroup: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 8,
+    marginBottom: 12,
+  },
+  optionRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+    fontSize: 12,
     color: 'var(--text-primary)',
   },
 }
