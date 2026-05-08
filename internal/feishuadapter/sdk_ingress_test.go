@@ -350,3 +350,18 @@ func TestMapSDKCardActionEventSupportsUserQuestionAction(t *testing.T) {
 		t.Fatalf("unexpected ask_user values: %#v", event.Values)
 	}
 }
+
+func TestMapSDKCardActionEventRejectsInvalidActionPayload(t *testing.T) {
+	if _, ok := mapSDKCardActionEvent(&larkevent.EventReq{Body: []byte(`{
+		"header":{"event_id":"evt-bad-card"},
+		"event":{"action":{"value":{"action_type":"permission","request_id":"perm-1","decision":"allow_all"}}}
+	}`)}); ok {
+		t.Fatal("expected invalid permission decision to be rejected")
+	}
+	if _, ok := mapSDKCardActionEvent(&larkevent.EventReq{Body: []byte(`{
+		"header":{"event_id":"evt-bad-ask"},
+		"event":{"action":{"value":{"action_type":"user_question","request_id":"ask-1","status":"pending"}}}
+	}`)}); ok {
+		t.Fatal("expected invalid user_question status to be rejected")
+	}
+}

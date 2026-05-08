@@ -132,6 +132,12 @@ func mapSDKCardActionEvent(event *larkevent.EventReq) (FeishuCardActionEvent, bo
 	if requestID == "" {
 		return FeishuCardActionEvent{}, false
 	}
+	if actionType == "permission" && decision != "allow_once" && decision != "reject" {
+		return FeishuCardActionEvent{}, false
+	}
+	if actionType == "user_question" && status != "answered" && status != "skipped" {
+		return FeishuCardActionEvent{}, false
+	}
 	cardEvent := FeishuCardActionEvent{
 		EventID:    strings.TrimSpace(payload.Header.EventID),
 		ActionType: actionType,

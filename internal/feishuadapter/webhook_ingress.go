@@ -159,7 +159,14 @@ func (w *WebhookIngress) handleCardCallback(handler IngressHandler) http.Handler
 				actionType = "user_question"
 			}
 		}
-		if requestID == "" {
+		valid := requestID != ""
+		if valid && actionType == "permission" {
+			valid = decision == "allow_once" || decision == "reject"
+		}
+		if valid && actionType == "user_question" {
+			valid = status == "answered" || status == "skipped"
+		}
+		if !valid {
 			writeJSON(writer, http.StatusOK, map[string]any{"toast": map[string]string{"type": "info", "content": "callback ready"}})
 			return
 		}

@@ -917,6 +917,23 @@ func TestCardCallbackProbeWithoutActionReturnsOK(t *testing.T) {
 	}
 }
 
+func TestCardCallbackInvalidActionPayloadReturnsInfoWithoutResolve(t *testing.T) {
+	adapter := newTestAdapter(t)
+	body := `{"action":{"value":{"action_type":"permission","request_id":"perm-x","decision":"allow_all"}},"token":"verify","header":{"token":"verify"}}`
+	request := signedRequest(t, adapter.cfg.SigningSecret, body)
+	recorder := httptest.NewRecorder()
+	adapter.handleCardCallback(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", recorder.Code)
+	}
+	if !strings.Contains(recorder.Body.String(), "callback ready") {
+		t.Fatalf("response = %s, want callback ready", recorder.Body.String())
+	}
+	if adapterTestGateway(adapter).resolveCount != 0 {
+		t.Fatalf("resolve count = %d, want 0", adapterTestGateway(adapter).resolveCount)
+	}
+}
+
 func TestReconnectRebindActiveSessions(t *testing.T) {
 	adapter := newTestAdapter(t)
 	gw := adapterTestGateway(adapter)
