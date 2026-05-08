@@ -245,6 +245,10 @@ func RunManualShell(ctx context.Context, options ManualShellOptions) error {
 				}
 			},
 			diagCoordinator,
+			diagRuntimeConfig{
+				CallTimeout:     diagnoseCallTimeout,
+				AutoCallTimeout: autoDiagnoseCallTimeout,
+			},
 		)
 	}()
 
@@ -608,117 +612,9 @@ func bindShellRoleStream(
 }
 
 // bindShellRoleStreamWithCaller 闂傚倸鍊搁崐鎼佸磹瀹勬噴褰掑炊瑜忛弳锕傛煕椤垵浜濋柛娆忕箻閺岋綁濮€閵忊晝鍔哥紓浣插亾濠㈣泛顑勭换鍡涙煏閸繃鍣洪柛锝呮贡缁辨帡骞囬褎鐤侀梺鍝勭焿缁绘繂鐣烽崼鏇炍ㄩ柕澹倻妫梻?shell 闂傚倸鍊搁崐鎼佸磹瀹勬噴褰掑炊瑜忛弳锕傛煟閵忋埄鐒剧紒鎰殜閺岀喖骞嶉纰辨毉闂佺顑戠换婵嬪蓟閵娾晛绫嶉柛灞剧煯婢规洟姊洪崫鍕棡缂侇喗鎹囧濠氭晲婢跺﹥顥濋梺鍦焾鐎涒晠宕伴幇鐗堚拺缂備焦顭囩粻姘箾婢跺娲撮柛鈺冨仱楠炲鏁傞挊澶夋睏闂備礁婀辩划顖滄暜閳哄倸顕遍柍褜鍓涚槐鎾存媴閸濆嫪澹曢梺绋垮婵炲﹥淇婇崼鏇炵濞达絾鐡曢幗鏇㈡⒑缂佹ɑ顥嗛柕鍡忓亾闂佺顑嗛幐鎼佸煡婢跺ň鏋庢俊顖滃帶婵櫣绱撻崒娆掑厡濠殿喚鏁婚弫鍐閵堝懓鎽曢梺璺ㄥ枔婵挳鐛姀銈嗙厸闁搞儮鏅涙禒婊呯磼娓氬洤娅嶆慨濠呮閹风娀鍨鹃搹顐や邯婵犵數濮崑鎾绘⒑椤掆偓缁夋挳鎮為崹顐犱簻闁圭儤鍩婇崝鐔虹磼婢舵劖娑ч棁澶嬬節婵犲倸顏柣顓熷笧閳ь剚顔栭崰妤佺箾婵犲洤绠栭柕蹇嬪€曠粈鍌炴煠濞村娅呮鐐村姇閳规垿鎮欓懜闈涙锭缂傚倸绉崇粈渚€鈥﹂崶顏嶆▌闂佺硶鏂侀崑鎾愁渻閵堝棗绗傞柤鍐插缁鎮欑喊妯轰壕婵炲牆鐏濆▍姗€鏌涚€ｎ亜顏い銏∩戠缓鐣岀矙鐠恒劌鈧偤姊洪幐搴㈩梿婵☆偄瀚崚濠冨鐎涙ǚ鎷绘繛杈剧导鐠€锕傛倿妤ｅ啯鐓ラ柡鍥朵簽閻ｇ數鈧娲滄晶妤呭箚閺冨牆惟闁挎洍鍋撳ù鐘欏喚娓婚柕鍫濇婢ч亶鏌涚€ｎ剙浠遍柛鈺傜洴楠炲鏁傜憴锝嗗闂備礁澹婇崑鍛枈瀹ュ應鏋嶉柛顐犲灮绾惧ジ鏌嶈閸撴盯鍩€椤掑﹦绉甸柛鐘愁殜閹繝寮撮姀锛勫幐闂佺鏈换鍐兜閸撲讲鍋撳☉娆戠疄闁哄睙鍥ㄥ殥闁靛牆鎳嶅▽顏堟⒑闂堟稒鎼愰悗姘嵆閻涱噣宕堕鈧悡娑樏归敐鍡楃祷濞存粎鍋撴穱濠囧Χ閸涱厽娈銈冨劜閼规崘鐏冮梺鎸庣箓閹冲酣寮抽悙鐑樼厽闁规儳顕幊鍥煙椤旂瓔娈旈柍钘夘槸閳诲骸螣閻撳骸楔缂傚倸鍊烽懗鑸垫叏閻㈢绠板Δ锝呭暙缁犵喖鏌熼梻瀵割槮缂佺姰鍎查妵鍕棘鐟併倓绮撮梺闈涚箞閸婃牠鎮￠崘顔界參婵☆垯璀﹀Ο鍫熶繆椤栨浜惧┑掳鍊楁慨鐑藉磻閻愮儤鏅梻浣风串缁插潡宕楀Ο铏规殾闁割偅娲栭獮銏ゆ煙闁箑澧┑顕嗙畵濮婃椽宕崟顓犲姽缂傚倸绉崇欢姘嚕椤愶箑纾奸柣鎰綑閻у嫭绻濋姀锝嗙【濠靛倹姊诲Σ鎰攽鐎ｎ偆鍘?state 闂傚倸鍊搁崐鎼佸磹瀹勬噴褰掑炊椤掑鏅悷婊冪箻閸┾偓妞ゆ帊鑳堕埢鎾绘煛閸涱喚绠橀柛鎺撳笒閳诲酣骞樺畷鍥跺敽婵犵绱曢崑娑㈡儍閻戣棄纾婚柟鎹愵嚙缁€鍐┿亜閺冨倸甯堕柤鏉跨仢閳规垿鎮欓弶鎴犱紘婵＄偛鐡ㄩ幃鍌氼嚕閺屻儱鐓涢柛娑卞枛閳ь剛鏁婚弻娑滅疀閹垮啯笑婵炲瓨绮撶粻鏍ь潖濞差亜宸濆┑鐘插暙椤︹晠姊虹粙娆惧剰婵☆偅绻堥獮鍡涘醇閵夈儳顦板銈嗙墬缁嬪牓骞忓ú顏呯厽闁绘ê寮剁粈宀勬煃瑜滈崜娆戝椤撶喓顩锋い鎾跺亹閺€浠嬫煟濮楀棗鏋涢柣蹇ｄ邯閺屻劌顫濋懜鐢靛帗缂傚倷鐒﹁摫閻忓繋鍗抽幃妤佹媴閸愩劋姹楅梺閫炲苯澧紒瀣浮閳ワ箓宕堕鈧崒銊╂⒑椤掆偓缁夌敻鍩涢幋锔界厱婵犻潧妫楅鈺呮煃瑜滈崗娑氬垝濞嗘挶鈧礁顫濋幇浣剐梻渚€鈧稓鈹掗柛鏃€鍨甸悾鐑藉箳閹存梹顫嶅┑掳鍊曢崯浼存偩閹€鏀介幒鎶藉磹瑜忓濠冪鐎ｎ亞鐛ュ┑顔斤供閸庨潧鈽夐姀鐘殿吅闂佹寧姊婚弲顐﹀储娴犲鈷戦梻鍫熶緱濡牓鏌涢悩铏闂囧姊洪崹顕呭剭濞存粍绮撻弻銊╁即濡も偓娴滃墽绱撻崒姘毙㈤柨鏇ㄤ簻椤曪絿鎷犲ù瀣潔闂侀潧绻嗛崜婵嗏枍濠婂牊鈷戦柛娑橈梗缁堕亶鏌涢悩鎰佹疁鐎规洑鍗抽獮鍥偋閸碍瀚奸柣鐔哥矌婢ф鏁埡浣勬盯骞嬪┑鍐╂杸闂佺粯鍔忛弲娑欑妤ｅ啯鐓熼幖娣焺閸熷繘鏌涢悩鎰佹當妞ゎ厼娲ら埢搴ㄥ箳閺傛崘鍩呴梻浣筋嚙濞寸兘骞婇幘鍨涘亾濮橆偄宓嗛柕鍡楀€块弫鍌炴偩瀹€鈧ぐ?
-func bindShellRoleStreamWithCaller(
-	ctx context.Context,
-	sessionID string,
-	autoEnabled bool,
-	caller func(context.Context, protocol.BindStreamParams, *gateway.MessageFrame) error,
-) error {
-	if caller == nil {
-		return errors.New("bind stream caller is nil")
-	}
-	primaryParams := protocol.BindStreamParams{
-		SessionID: strings.TrimSpace(sessionID),
-		Channel:   "all",
-		Role:      "shell",
-		State: map[string]any{
-			"auto_enabled": autoEnabled,
-		},
-	}
-	legacyParams := primaryParams
-	legacyParams.State = nil
-
-	var ack gateway.MessageFrame
-	if err := caller(ctx, primaryParams, &ack); err != nil {
-		if !shouldFallbackBindStreamState(err) {
-			return err
-		}
-		ack = gateway.MessageFrame{}
-		if retryErr := caller(ctx, legacyParams, &ack); retryErr != nil {
-			return retryErr
-		}
-		return validateBindStreamAckFrame(ack)
-	}
-	return validateBindStreamAckFrame(ack)
-}
-
 // shouldFallbackBindStreamState 闂傚倸鍊搁崐鎼佸磹閹间礁纾瑰瀣捣閻棗銆掑锝呬壕濡ょ姷鍋涢ˇ鐢稿极瀹ュ绀嬫い鎺嶇劍椤斿洭姊绘担瑙勫仩闁稿孩妞藉畷婊冣枎閹存繍妫滈悷婊呭鐢鎮″☉姘ｅ亾楠炲灝鍔氬Δ鐘虫倐閻涱噣寮介鐔哄弮?bind_stream 婵犵數濮烽弫鍛婃叏閻戣棄鏋侀柛娑橈攻閸欏繐霉閸忓吋缍戦柛銊ュ€圭换娑橆啅椤旇崵鐩庣紒鐐劤濞硷繝寮婚妶鍚ゅ湱鈧綆鍋呴悵鏃堟⒑閹肩偛濡界紒璇茬墦瀵鈽夐姀鐘殿啋濠德板€愰崑鎾绘倵濮樼厧澧寸€殿喗鎮傚畷鎺楁倷缁瀚奸梻浣告贡椤牏鈧稈鏅濈划鍫ュ焵椤掑嫭鈷戠紒瀣皡閺€濠氭煙椤旂厧鈧悂鎮鹃悜鑺ユ櫜闁糕剝鐟ч惁鍫ユ⒑閸涘﹤濮х紓鍌涙皑閼鸿鲸绻濆顓涙嫼闂佸憡绻傜€氼喛鈪归梻浣告啞閺屻劑鏌婇敐澶娢ラ柛宀€鍋涢拑鐔兼煏婢舵稑顩柛姗€浜堕弻鐔兼嚃閳哄媻澶嬩繆閹绘帒顏柣鎿冨墴椤㈡宕熼鍌氬箥婵＄偑鍊栧褰掑几婵犳碍鍤€闁秆勵殕閻撴瑦銇勯弮鍌涙珪闁瑰啿娲︽穱濠囶敃閵忕姵娈梺瀹犳椤︻垵鐏冮梺鍛婂姦閸犳浜搁懠顒傜＝闁稿本鑹鹃埀顒佹倐瀹曟劖顦版惔銏╁仺闂佽法鍠撴慨鐢稿磻閸岀偞鐓曟い鎰Т閸旀氨绱掗埀顒勫醇閵夛妇鍘介梺鍝勫€归娆忊枔閻樼粯鐓曢柕鍫濇缁€鍐煏閸パ冾伃鐎殿噮鍣ｉ崺鈧い鎺戝閺佸嫭绻涢崱妤冪翱闁挎繂妫涚弧鈧┑顔斤供閸樺ジ鍩€椤掑倹鏆柟顔煎槻閳诲氦绠涢幙鍐х棯缂傚倷璁查崑鎾绘煕閹般劍鏉哄ù婊勭矒閺屾洘绻涢崹顔煎Б婵犫拃宥夋妞ゃ劊鍎甸幃娆撴嚑椤掑偆鍞洪梻渚€鈧偛鑻晶鍓х磽瀹ュ懏顥㈢€规洘濞婇、姘跺焵椤掆偓椤曪綁顢曢敐鍥╃槇闂佹悶鍎崝搴ㄥ储閻愵剛绡€婵炲牆鐏濋弸鐔兼煕閺冣偓濞茬喖宕洪埀顒併亜閹哄秶璐版繛鍫熺矋椤ㄣ儵鎮欏顔叫梺闈涙处閸旀瑩鐛幒妤€绠绘い鏍ㄧ☉椤忓綊姊绘担钘夊惞闁稿鍋熺划娆撳醇閵夈儳鍔﹀銈嗗坊閸嬫捇鏌涘Ο鑽ゅ缂佹梻鍠栧鎾偄閸撲胶鐣鹃梻浣虹帛閸旓附绂嶅鍫濈劦妞ゆ帊鑳舵晶鐢告煙椤斻劌鍚橀弮鍫濈妞ゅ繐妫涢崢顖炴⒒娴ｄ警鏀伴柟娲讳邯濮婁粙宕熼姘憋紵?state 闂傚倸鍊搁崐鎼佸磹閹间礁纾归柣鎴ｅГ閸婂潡鏌ㄩ弴鐐测偓褰掑磿閹寸姵鍠愰柣妤€鐗嗙粭鎺旂磼閳ь剚寰勭仦绋夸壕闁稿繐顦禍楣冩⒑闁偛鑻晶鎾煕閳规儳浜炬俊鐐€栫敮濠勭矆娓氣偓瀹曠敻顢楅崟顒傚幈闂佽宕樺▔娑㈠几鎼淬劍鐓熼柨婵嗘搐閸樻潙鈹戦敍鍕効妞わ富鍣ｉ弻娑氣偓锝庡亝瀹曞矂鏌℃担鐟板闁诡垱妫冮崹楣冨礃閼碱剦鍚呴梻鍌氬€烽懗鍫曗€﹂崼銉晞闁糕剝绋戠粻鏌ユ煕閵夋垵鎳忓▓楣冩⒑缂佹ê鐏╅柣鈩冩瀵偊宕堕浣哄幗闂佸搫鍟悧濠囧极闁秵鐓熼柨婵嗛婢ь垳绱掔紒妯肩疄闁诡喕绮欏Λ鍐ㄢ槈鏉堛劎绋堥梻鍌欑窔閳ь剛鍋涢懟顖涙櫠鐎电硶鍋撶憴鍕闁搞劌娼￠悰顔嘉熼懖鈺冿紲濠碘槅鍨堕弨杈┾偓姘偢濮婄粯鎷呴崨濠傛殘缂備浇顕ч崐濠氬焵椤掍礁鍤柛妯圭矙瀹曟碍绻濋崘顏堟闂佸憡绋戦敃锕傚储閸楃儐娓婚柕鍫濋楠炴鏌涢妸銉т粵闁哄懎鐖奸獮姗€顢欓悾灞藉箞闂備礁鐤囬～澶愬磿閾忣偆顩?
-func shouldFallbackBindStreamState(err error) bool {
-	if err == nil {
-		return false
-	}
-	var rpcErr *gatewayclient.GatewayRPCError
-	if errors.As(err, &rpcErr) {
-		if rpcErr != nil && rpcErr.Code == protocol.JSONRPCCodeInvalidParams {
-			return true
-		}
-	}
-	return strings.Contains(strings.ToLower(strings.TrimSpace(err.Error())), "invalid params")
-}
-
 // validateBindStreamAckFrame 缂傚倸鍊搁崐鎼佸磹閹间礁纾归柟闂寸绾惧綊鏌熼梻瀵割槮缁炬儳缍婇弻锝夊箣閿濆憛鎾绘煕閵堝懎顏柡灞剧洴椤㈡洟鏁愰崱娆樻К缂傚倷鐒﹂崝鏍€冮崼銉ョ劦妞ゆ巻鍋撶紒鐘茬Ч瀹曟洟宕￠悘缁樻そ婵℃悂鍩℃担渚敤婵犳鍠楅…鍫ュ春閺嶎厽鍋傛繛鍡樺灩绾捐棄霉閿濆娑ч柣蹇婃櫊閺岋紕鈧綆鍋嗗ú鎾煛鐏炲墽娲存鐐叉喘婵℃悂濡烽妶鍜佹闂傚倸鍊搁崐鎼佸磹瀹勬噴褰掑炊瑜夐弸鏍煛閸ャ儱鐏╃紒鎰殜閺岀喖骞嗚閹界娀鏌涘▎蹇曠闁逞屽墰閹虫挾鈧凹鍘界粩鐔煎幢濞戞ɑ杈?bind_stream 闂傚倸鍊搁崐鎼佸磹閹间礁纾归柣鎴ｅГ閸婂潡鏌ㄩ弴鐐测偓鍝ョ不閺嶎厽鐓曟い鎰剁稻缁€鈧紒鐐劤濞硷繝寮婚悢鐓庣畾闁绘鐗滃Λ鍕磼閹冣挃缂侇噮鍨抽幑銏犫槈閵忕姷顓洪梺缁樺姌鐏忔瑩宕濇导瀛樷拺缂佸顑欓崕鎰版煙閻熺増鎼愰柣锝囨焿閵囨劙骞掑┑鍥ㄦ珖婵＄偑鍊栫敮鎺楀疮閻樿纾婚柟鎹愵嚙闁裤倖淇婇妶鍕厡闁告ê鎲＄换娑欐綇閸撗冨煂闂佺濮ょ划宀勬偤椤撱垺鈷掑ù锝夘棑娑撹尙绱掗幓鎺戔挃闁瑰箍鍨藉畷濂稿Ψ閵夛附袣闂備線鈧偛鑻晶顖炴煏閸パ冾伃妤犵偞甯￠獮瀣攽閹邦亝鍋呴梻鍌欐祰椤曆呮崲濡も偓閳诲秹寮撮悢琛℃敵婵犵數濮村ù鍌炲极瀹ュ棛绡€闂傚牊绋掗ˉ婊堟煙椤栨粌浠辨慨濠傛惈閻ｇ兘宕堕妸銉︾暚缂傚倷绀侀ˇ閬嶅极閹间礁绠查柕蹇曞Л閺€浠嬫倵閿濆骸浜芥俊顐㈠暙閳规垿鎮欓弶鎴犱淮闂佸摜鍠愮€笛囧箞閵娿儮妲堟俊顖炴敱閺傗偓闂備胶绮崝妯间焊濞嗘劖娅犻柡鍥ュ灪閻撶喖鏌″畵顔荤娴狀噣鎮楀▓鍨灈妞ゎ厾鍏樺顐﹀箛椤撶偟绐炲┑鐐村灦濮樸劑鍩ｉ妶鍡曠箚闁绘劦浜滈埀顒佺墪椤斿繑绻濆顒傦紱闂佸湱鍋撻弸濂稿绩娴犲鐓冮柍杞扮閺嗘瑦銇勯弴鐔虹煉闁哄本娲熷畷鎯邦槻妞ゅ浚鍓涚槐鎺楁偐瀹曞洦鍒涢梺杞扮劍閸旀瑥鐣烽妸鈺婃晣婵炴垶鐟ラ鈺呮⒒娴ｇ瓔鍤欐慨姗堢畵閿濈偞寰勬繛鎺撴そ閸╋繝宕橀鍡╂Ц濠电偞鎸婚崺鍐磻閹剧粯鐓忛柛鈩冩礈缁愭梻鈧鍣崳锝呯暦閻撳簶鏀介柛鈩冪懅瀹曞搫鈹戦敍鍕杭闁稿﹥鐗犻獮鎰偅閸愩劎锛熼梺褰掑亰閸庣敻鏁愰崱娆戠槇濠殿喗锕╅崢鎼佸箯缂佹绠鹃弶鍫濆⒔閸掔増銇勯锝嗙闁糕斁鍋撳銈嗗灱濡嫭绂嶆ィ鍐┾拻濞达絼璀﹂悞鐐亜閹存繃顥㈡鐐村灴瀹曞爼顢楅埀顒勬嫅閻斿吋鐓忛柛顐ｇ箖瀹告繈鏌ｉ鐔烘噰闁诡喖缍婇獮渚€骞掗幋婵愮€辩紓鍌欑贰閸ｏ絽顭囪閳ユ棃宕橀鍢壯囧箹缁厜鍋撻懠顒€鍤梻鍌欒兌缁垶銆冮崱娆忓灊闁规崘顕х粻姘舵煃?ACK闂?
-func validateBindStreamAckFrame(ack gateway.MessageFrame) error {
-	if ack.Type == gateway.FrameTypeError && ack.Error != nil {
-		return fmt.Errorf(
-			"gateway bind_stream failed (%s): %s",
-			strings.TrimSpace(ack.Error.Code),
-			strings.TrimSpace(ack.Error.Message),
-		)
-	}
-	if ack.Type != gateway.FrameTypeAck {
-		return fmt.Errorf("unexpected gateway frame type for bind_stream: %s", ack.Type)
-	}
-	return nil
-}
-
 // demuxGatewayNotifications 闂傚倸鍊搁崐鎼佸磹閹间礁纾圭€瑰嫭鍣磋ぐ鎺戠倞妞ゆ帒顦伴弲顏堟偡濠婂啰绠绘鐐村灴婵偓闁靛牆鎳愰悿鈧俊鐐€栧Λ浣肝涢崟顒佸劅濠电姴娲﹂埛鎴犳喐閻楀牆绗掑ù婊€鍗抽弻娑欐償閵婏附閿梺瀹犳椤︻垵鐏掗梻浣哥仢椤戞劕顭囬弮鈧换婵嗏枔閸喗鐏嶅銈庡幖閻楀﹦绮嬪澶樻晢闁告洖锕ゅú顓€佸☉妯锋婵浜Σ鍥⒒娓氣偓濞佳勵殽韫囨洖绶ゅù鐘差儐閸嬪倿鏌熼幍顔碱暭闁绘挻娲熼弻锟犲礃閿濆懍澹曟繝鐢靛仜瀵墎鍒掓惔銊ョ闁圭儤顨呴柋鍥煏婢跺牆鍔ら柨娑欑矒濮婅櫣绱掑Ο鍝勵潓濡炪倖娲﹂崣鍐ㄧ暦閵忋倖鍋ㄩ柛娑樑堥幏娲煟閻樺弶绀岄柍褜鍓欑壕顓熺缁嬪簱鏀介柣姗嗗枛閻忊晝绱掔紒姗堣€块柣娑卞櫍楠炴帡骞婇搹顐ｎ棃闁糕斁鍋撳銈嗗笒閸婃悂藟濮橆兘鏀介柣妯虹－椤ｆ煡鏌ｉ幘瀵告噰闁哄矉缍侀獮鍥濞戞﹩娼诲┑鐘媰鐏炵晫浠紓浣虹帛缁嬫挻绂嶉幖浣稿唨闁靛濡囪ぐ瀣煟鎼淬埄鍟忛柛鐘崇墵閹儵鎮℃惔锝嗘闂佺粯鎸哥€垫帒顭囬埡鍌樹簻闁规崘娉涢弸鏃傛喐閺夋寧鍤囬柡宀嬬稻閹棃濮€閳轰焦娅涢梻浣告憸婵敻骞戦崶褏鏆︽繝闈涱儏缁狅絾绻濋崹顐㈠缂傚秴楠搁埞鎴︽倷閸欏鏋欐繛瀛樼矋缁诲牆鐣烽幋锔芥櫢闁绘ê纾崢鍛婄節閵忥絾纭炬い鎴濇嚇椤㈡艾顭ㄩ崟顓ф锤濠电偞鍨堕悷褏寮ч埀顒傜磼閸撗冾暭閽冭鲸銇勯顫含闁哄本绋撻埀顒婄秵娴滄繈宕甸崶顒佺厪闁糕剝顨呴弳鐐电磼缂佹绠炵€规洘甯掗…銊╁礋椤掑鏅梻鍌欐祰瀹曠敻宕伴幇鐗堝仭闁靛／鈧崑鎾愁潩閻撳骸绫嶉悗瑙勬礃濞茬喖骞冮姀銈呯闁兼祴鏅涚敮楣冩⒒婵犲骸浜滄繛灞傚€濋弫鍐Ψ閳轰線妫锋繛瀵稿帶閻°劑鎮?runtime event 婵犵數濮烽弫鍛婃叏閻戣棄鏋侀柛娑橈攻閸欏繘鏌ｉ幋锝嗩棄闁哄绶氶弻鐔兼⒒鐎靛壊妲紒鐐劤椤兘寮婚敐澶婄睄闁稿本鑹炬俊娲倵鐟欏嫭绀€鐎殿喖澧庨幑銏犫攽鐎ｎ偒妫冨┑鐐村灦閻熻京妲愰悙娴嬫斀闁绘劕鐡ㄧ亸顓熴亜椤撶姴鍘寸€殿喖顭烽幃銏ゅ礂閻撳簶鍋撶紒妯圭箚妞ゆ牗绮岄崝锕傛煙閻ゎ垰鍚圭紒?control 闂傚倸鍊搁崐鎼佸磹閹间礁纾归柟闂寸绾惧綊鏌熼梻瀵割槮缁惧墽鎳撻—鍐偓锝庝簻椤掋垺銇勯幇顏嗙煓闁哄被鍔戦幃銏ゅ传閸曟垯鍨婚惀顏堝箚瑜滈悡濂告煛鐏炲墽鈽夐柍钘夘樀瀹曪繝鎮欓幓鎺濆妧濠电姷鏁搁崑娑㈡儍閻戣棄鐤鹃柣妯款嚙閽冪喖鏌￠崶鈺佹灁缂佺娀绠栭弻锝夊箛闂堟稑顫梺缁樼箖濞茬喎顫忛搹鍦煓婵炲棙鍎抽崜浼存⒑缁嬪尅宸ユ繛灏栤偓鎰佸殨閻犲洤妯婇崥瀣熆鐠哄ソ锟犲Ω閳哄倻鍘繝鐢靛Т濞撮攱绂掗姀锛勭瘈濠电姴鍊绘晶娑㈡煕鐎Ｑ冨⒉缂佺粯鐩畷鍗炍旈崘顏嶅敹婵＄偑鍊曞ù姘濠婂牆鐓橀柟杈惧瘜閺佸秵鎱ㄥΟ鐓庡付婵炲牆鐖煎鍝勑ч崶褍濮舵繛瀛樼矤娴滎亪鐛崘顓ф▌閻庤娲樺浠嬨€侀弴銏╂晝闁挎稑瀚崵顒傜磽?
-func demuxGatewayNotifications(
-	ctx context.Context,
-	source <-chan gatewayclient.Notification,
-	eventSink chan<- gatewayclient.Notification,
-	controlSink chan<- gatewayclient.Notification,
-) {
-	if source == nil {
-		return
-	}
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case notification, ok := <-source:
-			if !ok {
-				return
-			}
-			switch strings.TrimSpace(notification.Method) {
-			case protocol.MethodGatewayEvent:
-				if !forwardGatewayNotification(ctx, eventSink, notification) {
-					return
-				}
-			case protocol.MethodGatewayNotification:
-				if !forwardGatewayNotification(ctx, controlSink, notification) {
-					return
-				}
-			}
-		}
-	}
-}
-
-func forwardGatewayNotification(
-	ctx context.Context,
-	target chan<- gatewayclient.Notification,
-	notification gatewayclient.Notification,
-) bool {
-	if target == nil {
-		return true
-	}
-	select {
-	case <-ctx.Done():
-		return false
-	case target <- notification:
-		return true
-	}
-}
-
 // consumeGatewayControlNotifications 婵犵數濮烽弫鍛婃叏閻戣棄鏋侀柛娑橈攻閸欏繘鏌ｉ幋锝嗩棄闁哄绶氶弻鐔兼⒒鐎靛壊妲紒鐐劤椤兘寮婚敐澶婄疀妞ゆ帊鐒﹂崕鎾绘⒑閹肩偛濡奸柛濠傛健瀵鏁愭径濠庢綂闂佺粯锚閸熷潡寮抽崼銉︹拺缂佸顑欓崕蹇斻亜閹存繍妯€鐎殿喖顭烽幃銏ゅ礂閻撳簼缃曢梻浣稿閸嬪棝宕伴幘璇茬闁跨喓濮甸埛?shell 闂傚倸鍊搁崐鎼佸磹閹间礁纾圭€瑰嫭鍣磋ぐ鎺戠倞鐟滃繘寮抽敃鍌涚厽闁靛繈鍩勯悞鍓х磼閹邦収娈滈柡宀€鍠栭獮宥夘敊绾拌鲸姣夐梻浣侯焾椤戞垹鎹㈠┑瀣摕闁靛ň鏅涚猾宥夋煕鐏炲墽鐓瑙勬礋濮婃椽宕崟顒夋！缂備緡鍠楅幑鍥ь嚕婵犳碍鏅插璺猴攻椤ユ繈姊洪崷顓х劸閻庢稈鏅犲畷浼村箛閻楀牃鎷虹紓鍌欑劍椤洨绮诲顓犵濠㈣泛顑囧ú鎾煕閳哄啫浠辨鐐差儔閺佸倿鎸婃径澶嬬潖闂傚倷绀侀幉锟犳偡閵夆敡鍥ㄥ閺夋垹鐣哄┑鐐叉閸ㄥ湱澹曢挊澹濆綊鏁愰崨顔藉創閻庢稒绻勭槐鎺楀礈瑜戝鎼佹煕濞嗗繐鏆ｉ柣娑卞枟瀵板嫬鐣濋埀顒勬儗濞嗘劗绠鹃柛鈩兠崝銈夋煙椤旇棄鐏︾紒缁樼箞婵偓闁挎繂妫涢妴鎰版⒑閹稿孩纾搁柛搴″船瀹撳嫬顪冮妶鍡楀潑闁稿鎹囬弻宥囨喆閸曨偆浠稿Δ鐘靛仜閿曨亪寮诲☉娆戠瘈闁告劏鏅濋ˇ鏉课旈悩闈涗粶闁挎洏鍔庣划璇测槈濡攱顫嶅┑鐐叉缁诲棝宕戦幘鑸靛磯闁靛ě鍜冪闯濠电偠鎻紞鈧柛瀣€块獮瀣晝閳ь剟鎯屽Δ鍛彄闁搞儯鍔嶉悡锝囩磼鐠囧弶顥為柕鍥у瀵粙濡搁妷锔藉劎濠电偛顕慨鐢垫暜閿熺姴钃熸繛鎴烇供濞尖晠鏌ｉ幘宕囧嚬闁哥姴锕娲传閸曨剚鎷辩紓浣割儐閸ㄥ潡宕洪姀鈩冨劅闁挎繂瀚崟鍐⒑閻熸壆鎽犻悽顖涘浮钘熸慨姗嗗厴閺€浠嬫煟濡灝鐨烘俊顐㈠閺屸剝寰勬繝鍕殤闂佺顑嗛幐姝岀亙婵炶揪绲块幊鎾愁嚕閸ф鈷戠紓浣姑悘杈ㄤ繆椤愩垹顏瑙勬礃缁绘繂顫濋鐘插箺闂備礁缍婇崑濠囧礈濮樿泛绠氶柛顐犲灮濡垶鏌熼鍡楀娴犳挳姊洪崫鍕潶闁稿﹥鐩俊鐢稿箛閺夎法顔婇梺鐟扮摠缁矂寮搁崼銉︹拻濞达絽鎲￠幆鍫熴亜閿旇姤绶叉い顏勫暣閹稿﹥寰勫Ο鑽ょ▉缂傚倸鍊烽悞锕佹懌婵犳鍨遍幐鎶藉蓟濞戞ǚ妲堟慨妤€鐗嗘导鎰版⒑閸濆嫭顥滈柣妤佹尭椤繐煤椤忓懎娈ラ梺闈涚墕閹冲繘鎮甸姀銏㈢＝濞达絽鎼牎闂佺懓鎲￠幃鍌炲箖妤ｅ啯鍊婚柦妯侯槹瀹撳秴顪冮妶鍡樺暗闁哥姴娴锋竟鏇㈩敍閻愮补鎷虹紓鍌欑劍钃遍柣銊﹀灦閵囧嫰濡烽敃鈧慨宥夋煕閳规儳浜炬俊鐐€栧濠氬磻閹剧粯鐓熼煫鍥ㄦ⒒缁犵偞绻濋埀顒佺瑹閳ь剙顫忛搹鍦煓閻犳亽鍔庨鍥⒑閸涘﹨澹樻い鎴濇川濡叉劙鎮欓崫鍕吅闂佹寧姊婚弲顐﹀储閻㈠憡鈷戦柤濮愬€曢弸鎴濐熆閻熺増顥㈢€规洘妞介弫鎰緞鐎ｎ剙骞愰梺璇茬箳閸嬬喖鈥﹂崼鐔告珷闁肩⒈鍏橀崑鎾诲垂椤愶絿鍑￠柣搴㈠嚬閸橀箖骞戦姀鐘斀閻庯綆浜為ˇ鏉款渻閵堝懐绠版繛璇х畵椤㈡挸螖閸涱喒鎷洪梺鐓庮潟閸婃洘绂掗敂鑺ュ弿婵☆垳顭堟慨鍌溾偓瑙勬磻閸楁娊鐛崶顒夋晩闁芥ê顦花銉︾節閻㈤潧浠﹂柛銊ョ埣閹兘鏁傞崜褏顦梺鎼炲労閸撴岸鎮￠弴銏＄厵闁绘劦鍓﹀▓鏃堟煙椤栨稓鎳囨鐐差儔閺佸倻鎲撮敐鍡楊伖闂傚倷鑳堕、濠囧磻閹版澘纾绘繛鎴欏灩閻掑灚銇勯幒宥囧妽缂佲偓鐎ｎ喗鐓涢悘鐐存灮闊剟鏌℃担鐟板鐎垫澘瀚换婵嬪礃閳诡剚宀稿?
 func consumeGatewayControlNotifications(
 	ctx context.Context,
@@ -785,28 +681,6 @@ func consumeGatewayControlNotifications(
 			}
 		}
 	}
-}
-
-func decodeGatewayNotificationPayload(raw json.RawMessage) (map[string]any, bool) {
-	if len(raw) == 0 {
-		return nil, false
-	}
-	decoded := map[string]any{}
-	if err := json.Unmarshal(raw, &decoded); err != nil {
-		return nil, false
-	}
-	return decoded, true
-}
-
-func readMapString(container map[string]any, key string) string {
-	if container == nil {
-		return ""
-	}
-	value, exists := container[strings.TrimSpace(key)]
-	if !exists || value == nil {
-		return ""
-	}
-	return strings.TrimSpace(fmt.Sprint(value))
 }
 
 // prepareBashInitRC 闂傚倸鍊搁崐鎼佸磹瀹勬噴褰掑炊瑜忛弳锕傛煕椤垵浜濋柛娆忕箻閺岋綁濮€閵忊晝鍔哥紓浣插亾濠㈣泛顑勭换鍡涙煏閸繃鍣洪柛锝呮贡缁辨帡骞囬褎鐤侀梺鍝勭焿缁绘繂鐣烽崼鏇炍ㄩ柕澹倻妫梻?Bash/Zsh 闂傚倸鍊搁崐鎼佸磹閹间礁纾瑰瀣捣閻棗銆掑锝呬壕濡ょ姷鍋涢ˇ鐢稿极瀹ュ绀嬫い鎺嶇劍椤斿洦绻濆閿嬫緲閳ь剚娲熷畷顖烆敍濮樿鲸娈鹃梺鍝勮閸庢煡鎮￠弴鐘亾閸忓浜鹃梺閫炲苯澧寸€规洘娲熼獮瀣偐閻㈡妲搁梻浣告惈缁嬩線宕㈡禒瀣亗婵炲棙鎸婚悡鐔镐繆閵堝倸浜鹃梺缁橆殔閿曪箑鈻庨姀銈嗗殤妞ゆ帒鍊婚敍婊堟⒑闁偛鑻晶顕€鏌ｉ敐鍡欑疄鐎规洜鍠栭、妤呭磼濮橆剛顔囬梻浣筋嚙妤犲摜绮诲澶婄？閺夊牜鐓堝▓浠嬫煕濞戞﹫鏀绘繛鍛У閵囧嫰寮崒妤佸珱闂佺粯鏌ㄥΛ婵嬪箖瀹勬壋鏋庨煫鍥ㄦ惄娴尖偓濠电姭鎷冮崨顔芥瘓闂佸搫澶囬埀顒€纾弳鍡涙倵閿濆骸澧伴柣锕€鐗撻幃妤冩喆閸曨剛顦ラ梺闈涚墛閹倿濡存笟鈧鎾閻欌偓濞煎﹪姊虹紒妯兼喛闁稿鎸荤换娑㈡⒒鐎靛摜鐓撳┑顔硷功缁垶骞忛崨鏉戝窛濠电姴鍟崜鍨繆閻愵亜鈧牠宕归悽绋跨疇婵☆垵娅ｉ弳锔姐亜閺嶎偄鍓遍柡浣哥У缁绘繃绻濋崒娑樻闂佺粯甯掑鈥愁潖濞差亜鎹舵い鎾跺仜婵″搫顪冮妶鍐ㄥ闁硅櫕鍔楅崚鎺楀醇閵夈儵鍞跺┑鐘灪缁诲倻绱炴繝鍥ф瀬闁圭増婢樺婵囥亜閺冨洦纭舵い銏犳嚇濮婄粯鎷呴崨濠冨創濠碘槅鍋呯粙鎺旀崲濞戙垹鐒垫い鎺嶇劍閸欏繐鈹戦悩鎻掓殲闁靛洦绻勯埀顒冾潐濞插繘宕濆鍥ㄥ床婵犻潧顑呯壕鍏肩節婵犲倹鍣洪柛銈呭暟缁辨捇宕掑顑藉亾妞嬪海鐭嗗〒姘ｅ亾妞ゃ垺鐗犲畷鍗炩槈濡櫣鈧參姊洪棃鈺佺槣闁告ü绮欓敐鐐哄即閵忥紕鍘甸梺纭咁潐閸旓箓宕靛▎鎴犵＜闁绘ê妯婇悡濂告煙椤旂瓔娈滈柟顔荤矙閹粙鎮欓崗澶婁壕濠电姴娲﹂悡娑㈡倵閿濆骸浜炲褏鏁婚弻鈥崇暆閳ь剟宕伴弽褏鏆︽俊銈呮噺閸ゅ啴鏌嶉崫鍕偓褰掝敊閸愵喗鈷掑ù锝堫潐閸嬬娀鏌涢弬璺ㄧ劯闁炽儻绠撻幃婊勬叏閹般劌浜惧〒姘ｅ亾鐎殿噮鍣ｅ畷鐓庘攽閸偄鏅ｆ繝鐢靛仩閹活亞寰婇挊澶涜€块梺顒€绉撮崒銊ッ归悩宸剱闁抽攱鍨圭槐鎾存媴婵埈浜濋幈銊╁炊閳规儳浜炬繛鍫濈仢閺嬫盯鏌ｉ弽顒€顥嶆俊顐犲灩閳规垿鎮╃拠褍浼愰柣搴㈠嚬閸犳氨鍒掔紒妯稿亝闁告劏鏅濋崢鍗炩攽閻愬弶顥滄繛瀛樿壘鍗遍柛婵嗗閻斿棛鎲搁弮鈧粋宥夊醇閺囩偠鎽曢梺缁樻煥閹芥粓姊介崟顐唵閻犺櫣灏ㄥ妤呮煕閻樿韬柟顔筋殘閹叉挳宕熼鍌ゆО闂備焦瀵уú蹇涘垂閽樺鍤曟い鎰剁畱绾惧ジ鏌ｉ幇顓熺稇濞寸媭鍘芥穱濠囶敃閿旂粯娈ョ紓浣插亾濞撴埃鍋撻挊?
@@ -919,252 +793,11 @@ func resolveShellPath(shellOption string) string {
 }
 
 // consumeDiagSignals 闂傚倸鍊搁崐鎼佸磹閹间礁纾圭€瑰嫭鍣磋ぐ鎺戠倞鐟滃繘寮抽敃鍌涚厱妞ゎ厽鍨垫禍婵嬫煕濞嗗繒绠婚柡宀嬬秮婵偓闁靛繆鏅濋崝鍝ョ磽娴ｆ彃浜炬繝銏ｆ硾椤戝嫮鎹㈤崱娑欑厪闁割偅绻冮崳娲煕閿濆懏璐＄紒杈ㄥ浮楠炲洭顢樿閻や線姊洪崫鍕効缂佺粯绻傞悾鐑藉醇閺囩倣銊╂煏婢诡垰鍊诲Λ顖炴⒒?consumeDiagSignals 闂傚倸鍊搁崐鎼佸磹閹间礁纾归柟闂寸绾惧綊鏌ｉ幋锝呅撻柛銈呭閺屾盯顢曢敐鍡欘槬缂佺偓鍎冲锟犲蓟閿濆顫呴柕蹇婃櫇閸旀悂姊哄Ч鍥р偓妤呭磻閹捐埖宕叉繝闈涱儐椤ュ牊绻涢幋婵嗚埞闁告搩鍓熷娲焻閻愯尪瀚板褍澧界槐鎺楁偐閾忣偄纰嶉梺浼欑秮閺€杈╃紦閻ｅ瞼鐭欓悹鍥﹀嫎閸旀垿寮婚弴鐔虹彾妞ゆ牗纰嶉崳瑙勵殽閻愨晛浜鹃梻鍌氬€峰ù鍥х暦閻㈢绐楅柟閭﹀枛閸ㄦ繄鈧箍鍎遍幉妯衡槈閵忕姷顦ㄥ銈庡幗閸ㄩ潧鈻撻妸锔剧瘈闁汇垽娼ф牎闂佽壈顫夐崕鎶筋敊韫囨挴鏀介悗锝庡亞閸樺憡绻濋姀锝嗙【妞ゆ垵鎳橀幃姗€濡疯閸嬫挸鈻撻崹顔界亾闂佺绻戦敋閾荤偤鏌涘☉娆愬剹闁轰礁鍟撮弻鏇＄疀婵炴儳浜鹃柟棰佺劍琚╂繝鐢靛Х閺佹悂宕戝☉姗嗗殨闁割偅娲橀崑瀣節婵犲倹鍣归柛銊︾箞閺屽秹宕崟顐熷亾婵犳碍鈷旈柛鏇ㄥ灡閻撴洘绻涢幋鐐╂闁割偁鍎辩粻?
-func consumeDiagSignals(
-	ctx context.Context,
-	rpcClient *gatewayclient.GatewayRPCClient,
-	_ <-chan gatewayclient.Notification,
-	jobCh <-chan diagnoseJob,
-	output io.Writer,
-	buffer *UTF8RingBuffer,
-	options ManualShellOptions,
-	shellSessionID string,
-	recentTriggerStore *diagnosisTriggerStore,
-	autoState *autoRuntimeState,
-	onAutoDiagnoseFailure func(error),
-	coordinator *diagnosisCoordinator,
-) {
-	var autoWG sync.WaitGroup
-	autoSlots := make(chan struct{}, 1)
-	defer autoWG.Wait()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case job, ok := <-jobCh:
-			if !ok {
-				return
-			}
-			if job.IsAuto {
-				if coordinator != nil {
-					prepared, prepareErr := prepareDiagnoseRequest(buffer, options, shellSessionID, job.Trigger)
-					if prepareErr == nil && coordinator.shouldDropAuto(prepared.Fingerprint) {
-						continue
-					}
-				}
-				select {
-				case autoSlots <- struct{}{}:
-				case <-ctx.Done():
-					return
-				default:
-					continue
-				}
-				autoWG.Add(1)
-				go func(autoJob diagnoseJob) {
-					defer autoWG.Done()
-					defer func() { <-autoSlots }()
-					diagnoseErr := runSingleDiagnosisWithCoordinator(
-						ctx,
-						coordinator,
-						rpcClient,
-						nil,
-						output,
-						buffer,
-						options,
-						shellSessionID,
-						autoJob.Trigger,
-						true,
-						autoState,
-					)
-					if diagnoseErr != nil && onAutoDiagnoseFailure != nil && shouldTerminateShellOnAutoDiagnoseError(diagnoseErr) {
-						onAutoDiagnoseFailure(diagnoseErr)
-					}
-				}(job)
-				continue
-			}
-			diagnoseErr := runSingleDiagnosisWithCoordinator(
-				ctx,
-				coordinator,
-				rpcClient,
-				nil,
-				output,
-				buffer,
-				options,
-				shellSessionID,
-				resolveManualDiagnoseTrigger(job.Trigger, recentTriggerStore),
-				false,
-				autoState,
-			)
-			if diagnoseErr != nil {
-				continue
-			}
-		}
-	}
-}
-
 // shouldTerminateShellOnAutoDiagnoseError 闂傚倸鍊搁崐鎼佸磹閹间礁纾归柟闂寸绾剧懓顪冪€ｎ亝鎹ｉ柣顓炴閵嗘帒顫濋敐鍛婵°倗濮烽崑娑⑺囬悽绋挎瀬鐎广儱顦粈瀣亜閹哄秶鍔嶆い鏂挎喘濮婄粯鎷呯憴鍕哗闂佺瀛╁钘夌暦濠婂啠鏋庨柟瀛樼箥濡粓鎮峰鍛暭閻㈩垱顨婇幃鈥斥槈濮橈絽浜炬鐐茬仢閸旀艾螖閻樿櫕鍊愰柣娑卞櫍瀵粙顢橀悢鍝勫籍闂備礁鎲￠崝锔界濠婂牆鍑犳繛鎴欏灪閻撴盯鎮橀悙鎻掆挃婵炲弶娼欓埞鎴︽晬閸曨偄骞嬪銈冨灪閻熲晠骞冮埄鍐╁劅妞ゆ棁濮ょ粊浼存⒒閸屾艾鈧兘鎮為敃鍌氱畺闁割偅娲栫壕褰掓煛閸ャ儱鐏柡鍛箞閺屾洘寰勯崱妯荤彅婵℃鎳樺娲川婵犲啫顦╅梺鍝ュУ瀹€鎼佸箖閸ф鐒垫い鎺戝閳锋垿鏌涢敂璇插箹濞存粓绠栭弻娑㈠箻鐎靛壊鏆＄紓浣稿€圭敮妤冪紦娴犲宸濆┑鐘插€烽崫妤佺節濞堝灝鏋熼柨姘扁偓瑙勬处閸撶喎顕ｇ粙搴撴闁靛骏绱曢崢鎼佹倵閸忓浜鹃柣搴秵閸撴稖鈪甸梻鍌欐祰椤曟牠宕伴幒妤€鐤鹃柣妯垮皺閺嗭箓鏌ㄥ┑鍡橆棞缂佸墎鍋ら幃妤呮晲鎼粹€茬盎闂侀€炲苯澧伴柛蹇斆～蹇曠磼濡顎撻梺鑽ゅ枛閸嬪﹪宕电€ｎ亖鏀介柣鎰綑缁茶崵绱掔紒妯忣亪鎮鹃悜钘夊嵆闁靛繆妲呭Λ鍐ㄢ攽閻愭潙鐏ョ€规洦鍓欓埢鎾诲Ω閿斿墽鐦堥梺姹囧灲濞佳勭墡闂備胶鍘х紞濠勭不閺嶎厼绠栨繛鍡樺姉缁♀偓闂佹悶鍎崝搴ㄥ储椤忓懐绡€闁汇垽娼ф禒婊堟煟韫囨梻绠炵€规洘绻堟俊鍫曞炊閳哄喛绱查梻浣哥秺閸嬪﹪宕伴弽銊ь浄闂侇剙绉甸悡娑㈡倶閻愭鐒惧褑灏欓埀顒€鐏氬妯尖偓姘煎幘閹广垹鈹戠€ｎ亞顦板銈嗗姉閸犳劗鈧碍鐩濠氬磼濞嗘帒鍘″銈庡幖閻楁捇銆侀弽顓炲窛婵縿鍊曞ú顓㈢嵁鎼淬劍鐓ｉ柟娈垮枛閸樺鈧娲樼敮锟犲箖濞嗘垵鍨濋悷娆忓椤忕儤绻濋悽闈涗哗闁规椿浜炲濠冪鐎ｎ亞鐤呴梺璺ㄥ枔婵挳鎮块鈧弻锝夊箛椤旂厧濡洪梺缁樻尵婵炩偓闁哄矉缍侀幃銏ゅ川婵犲嫬鍤掗梻浣瑰▕閺€鍗炍涢崘顔艰摕鐎广儱鐗滃銊╂⒑閸涘﹥灏版慨妯稿妿閸掓帒鈻庨幘鎶藉敹闂侀潧顦崕鎶藉蓟瑜嶉埞鎴︽倷閺夋垹浠搁梺鎸庢皑缁辨帗绗熼崶褌鍠婂┑顔硷功缁垶骞忛崨鏉戜紶闁靛鐏濋妸銉㈡斀闁宠棄妫楁禍顖涚箾婢跺绀堥柛鎺撳浮瀹曞ジ鎮㈢粙娆锯偓鎾绘⒑缂佹ê鐏﹂柨姘舵煛鐎ｎ亜鈧灝顫忓ú顏勭閹兼番鍨婚ˇ銉╂⒑缁嬪尅宸ョ紓宥咃躬楠炲啴鏁撻悩鍙傘劑鏌嶉崫鍕偓濠氬储閹间焦鈷戦柟鑲╁仜閸旀挳鏌ｉ幘宕囧闁崇粯鎹囧顒€螞閻㈠灚鍤€妞ゎ厹鍔戝畷姗€濡搁姀鈥崇槺缂傚倸鍊峰ù鍥ㄣ仈閹间礁绠板┑鐘宠壘缁狀垶鏌涘☉娆愮稇濞磋偐濞€閺屾盯寮撮妸銉ょ盎閻炴碍绻堝濠氬磼濞嗘帒鍘″銈庡幖閻楁捇銆侀弽顓炲耿婵炴垶顭囬鍥╃磽閸屾瑧鍔嶆い顓炴喘閸╃偛顓奸崨顏呮杸闂佺粯锚瀵埖寰勯崟顖涚厱濠电姴娲﹂弫閬嶆煏閸パ冾伂缂佺姵鐩獮姗€骞囨担閿嬵潟闂傚倷鑳堕…鍫ヮ敄閸℃稑绠伴柟闂寸閻撯€愁熆鐠哄ソ锟犳偄閻撳海顦ч梺绋跨箳閳峰牓宕惔銊︹拻闁稿本鐟ч崝宥夋煟椤忓嫮绉虹€规洖缍婇幐濠冨緞濡厧濮洪柣鐔哥矋閺屻劑鎮鹃悜鑺ュ仭闁逛絻娅曢弬鈧梺璇插嚱缂嶅棝宕戦崱娑樺偍闁汇垹鎲￠埛鎴犵磽娴ｅ顏呮叏閿曞倹鐓曢柟鎯ь嚟閹冲嫰鏌￠崨顓犲煟妞ゃ垺绋戦埥澶婎潩妲屾牕鏅梻鍌欑閸氬绮婇幘顔肩柧婵炴埈娼块埀顒€鍊圭缓浠嬪川婵犲嫬甯鹃梻浣规偠閸庢粓宕橀崣銉х＞濠碉紕鍋戦崐鎴﹀垂閸濆娊娲偄缁楄　鍋撴笟鈧鎾閻欌偓濞煎﹪姊虹紒妯曟垿顢欓弽顓炵柈闁搞儺鍓氶埛鎺楁煕鐏炲墽鎳勭紒浣哄娣囧﹤顪冮悡搴☆瀷闂佺懓鍢查澶婎嚕婵犳艾唯闁靛／鍕弰闂傚倷鑳剁划顖炩€﹂崼銉晪鐟滄棃骞忛幋锔藉亜闁稿繗鍋愰崣鍡椻攽閻樼粯娑ф俊顐幖鍗辩憸鐗堝笚閻撴洖鈹戦悩鎻掝仼闁告ɑ鎸抽弻锛勪沪閸撗€妲堥梺瀹狀嚙濮橈妇绮诲☉銏℃櫜闁糕€崇箲閻忎礁鈹戦悩娈挎毌婵℃彃鎳樺畷鎴﹀幢濞戞锛涢梺闈涚墕閹峰顭囬弽銊х鐎瑰壊鍠曠花鑽ょ磼閻樺崬宓嗘鐐寸墬濞煎繘宕滆閻繃绻濆▓鍨灈婵炲樊鍘奸～蹇撁洪鍕祶濡炪倖鎸鹃崰搴♀枔鐏炶В鏀介柣鎰邦杺閸ゅ姊婚崟顐㈩伀缂?
-func shouldTerminateShellOnAutoDiagnoseError(err error) bool {
-	if err == nil {
-		return false
-	}
-	message := strings.ToLower(strings.TrimSpace(err.Error()))
-	if message == "" {
-		return false
-	}
-	if strings.Contains(message, "context deadline exceeded") {
-		return false
-	}
-	if strings.Contains(message, "rate limit") || strings.Contains(message, "rate_limited") {
-		return false
-	}
-	if strings.Contains(message, "provider generate") || strings.Contains(message, "sdk stream error") {
-		return false
-	}
-	if strings.Contains(message, "unauthorized") {
-		return true
-	}
-	if strings.Contains(message, "transport error") ||
-		strings.Contains(message, "connection refused") ||
-		strings.Contains(message, "no such file") ||
-		strings.Contains(message, "use of closed network connection") {
-		return true
-	}
-	return false
-}
-
 // runSingleDiagnosis 闂傚倸鍊搁崐鎼佸磹閹间礁纾圭€瑰嫭鍣磋ぐ鎺戠倞鐟滃繘寮抽敃鍌涚厱妞ゎ厽鍨垫禍婵嬫煕濞嗗繒绠婚柡宀嬬秮婵偓闁靛繆鏅濋崝鍝ョ磽娴ｆ彃浜炬繝銏ｆ硾椤戝嫮鎹㈤崱娑欑厪闁割偅绻冮崳娲煕閿濆懏璐＄紒杈ㄥ浮楠炲洭顢樿閻や線姊洪崫鍕効缂佺粯绻傞悾鐑藉醇閺囩倣銊╂煏婢诡垰鍊诲Λ顖炴⒒?runSingleDiagnosis 闂傚倸鍊搁崐鎼佸磹閹间礁纾归柟闂寸绾惧綊鏌ｉ幋锝呅撻柛銈呭閺屾盯顢曢敐鍡欘槬缂佺偓鍎冲锟犲蓟閿濆顫呴柕蹇婃櫇閸旀悂姊哄Ч鍥р偓妤呭磻閹捐埖宕叉繝闈涱儐椤ュ牊绻涢幋婵嗚埞闁告搩鍓熷娲焻閻愯尪瀚板褍澧界槐鎺楁偐閾忣偄纰嶉梺浼欑秮閺€杈╃紦閻ｅ瞼鐭欓悹鍥﹀嫎閸旀垿寮婚弴鐔虹彾妞ゆ牗纰嶉崳瑙勵殽閻愨晛浜鹃梻鍌氬€峰ù鍥х暦閻㈢绐楅柟閭﹀枛閸ㄦ繄鈧箍鍎遍幉妯衡槈閵忕姷顦ㄥ銈庡幗閸ㄩ潧鈻撻妸锔剧瘈闁汇垽娼ф牎闂佽壈顫夐崕鎶筋敊韫囨挴鏀介悗锝庡亞閸樺憡绻濋姀锝嗙【妞ゆ垵鎳橀幃姗€濡疯閸嬫挸鈻撻崹顔界亾闂佺绻戦敋閾荤偤鏌涘☉娆愬剹闁轰礁鍟撮弻鏇＄疀婵炴儳浜鹃柟棰佺劍琚╂繝鐢靛Х閺佹悂宕戝☉姗嗗殨闁割偅娲橀崑瀣節婵犲倹鍣归柛銊︾箞閺屽秹宕崟顐熷亾婵犳碍鈷旈柛鏇ㄥ灡閻撴洘绻涢幋鐐╂闁割偁鍎辩粻?
-func runSingleDiagnosis(
-	rpcClient *gatewayclient.GatewayRPCClient,
-	output io.Writer,
-	buffer *UTF8RingBuffer,
-	options ManualShellOptions,
-	shellSessionID string,
-	trigger diagnoseTrigger,
-	isAuto bool,
-	autoState *autoRuntimeState,
-) error {
-	return runSingleDiagnosisWithCoordinator(
-		context.Background(),
-		nil,
-		rpcClient,
-		nil,
-		output,
-		buffer,
-		options,
-		shellSessionID,
-		trigger,
-		isAuto,
-		autoState,
-	)
-}
-
 // runSingleDiagnosisWithCoordinator 闂傚倸鍊搁崐鎼佸磹閹间礁纾归柟闂寸绾剧懓顪冪€ｎ亝鎹ｉ柣顓炴闇夐柨婵嗩槹娴溿倝鏌ら弶鎸庡仴婵﹥妞介、妤呭焵椤掑倻鐭撻柣銏㈩焾绾惧鏌ㄩ悢鍝勑ｉ柣鎾寸懇閺岀喖顢涘鍐炬毉濡炪們鍎遍ˇ浼淬€冮妷鈺傚€锋い蹇撳娴煎牓姊洪崫鍕缂佸鎳撻悾鐑筋敃閿曗偓缁€瀣亜閹邦喖鏋庡ù婊冨⒔閹叉悂鎮ч崼婵堢懆缂備胶瀚忛崨顖滐紲闁诲函缍嗘禍鐐差潩閵娾晜鐓涢柍褜鍓氱粋鎺斺偓锝庡亞閸樹粙姊鸿ぐ鎺戜喊闁告鏅槐鐐哄箣閿旂晫鍘介棅顐㈡储閸庢娊鎮鹃悽鍛婄厸鐎光偓閳ь剟宕伴弽褏鏆﹂柕濠忓缁♀偓闂佸憡鍔戦崝宀勫绩椤撱垺鐓熼幖娣€ゅ鎰箾閸欏鑰跨€规洖缍婂畷绋课旈崘銊с偊婵犵妲呴崹浼存儍閻戣棄纾婚柟鍓х帛椤ュ牊绻涢幋鐐垫噭闁哥姵鍔曢—鍐Χ閸℃ǚ鎷瑰┑鐐跺皺閸犲酣锝炶箛鎾佹椽顢旈崟顏嗙倞闂備線娼чˇ顓㈠磿濞嗘挸围濠㈣泛顑囬崢鍛婄節閵忥絾纭鹃柨鏇畱椤繈濡搁埡鍌滃幈闁诲函缍嗛崑鍛焊椤撱垺鎳氶柡宥庡幗閻撳啰鎲稿鍫濈婵炲棗绻掗弳銈夋煕閺囥劌浜愰柡鈧懞銉ｄ簻闁哄啫鍊婚幗鍌炴煟閹烘鐣洪柡灞剧洴閸╋繝宕掑鍐ｆ嫲闂備浇顕栭崰鎺楀焵椤掍焦鐏辨俊鎻掔墦閺屾洝绠涢妷褏锛熼梺鍛婏耿娴滃爼寮婚敐鍫㈢杸闁哄洨鍋橀崫妤€顪冮妶鍡樿偁闁搞儜鍛Е婵＄偑鍊栫敮濠囨倿閿斿墽鐭嗛柍褜鍓欓—鍐Χ閸℃鈹涚紓浣瑰絻濞硷繝鐛幋锕€绀嬫い鏍嚤閳哄啯鍠愰煫鍥ㄧ⊕閺咁剚绻濇繝鍌滃闁绘挻绋戦…璺ㄦ崉閻氭潙濮涙繝鈷€鍕伌闁哄本鐩顒勫箰鎼淬垹闂紓鍌欑贰閸犳牠鈥﹂悜钘夌畺婵炲棙鎸婚崐缁樹繆椤栨粌甯舵鐐搭殕缁绘繈鎮介棃娑楁勃闂佹悶鍔戝褔鎮鹃悜绛嬫晢闁逞屽墴閸┿垹顓奸崪浣告倯婵犮垼娉涢鍥储閻㈠憡鈷戦柟顖嗗嫮顩伴梺绋款儏濡繈骞嗗畝鍕闁规崘灏欑粻姘渻閵堝棗濮傞柛銊ョ秺瀵啿鈻庨幘瀵稿帗闂佽姤锚椤﹁棄危閸涘浜滄い鎰剁悼缁犵偞銇勯姀鈭额亪鍩ユ径濞炬瀻闁瑰瓨鏌ㄦ禍鎯р攽閻樺磭顣查柍閿嬪浮閺屾稓浠﹂幑鎰棟闂侀€炲苯澧柟顔煎€搁悾鐑藉箛閺夎法顔愭繛杈剧到閹芥粓鏁嶅▎鎴犵＝濞达絽澹婇崕鎰版煥濞戞瑦绀€閻撱倖銇勮箛鎾村櫣濞存粌缍婇弻锝夋偐閸欏鈹涢柣蹇撶箲閻熲晠寮鍛闁靛繆妾ч幏娲⒑闂堚晛鐦滈柛妯哄悑缁傚秵銈ｉ崘鈺冨幈闂佸湱鍋撳娆撳传濞差亝鐓欐い鏂挎惈閻忚尙鈧娲栧畷顒勫煡婢跺ň鏋庨煫鍥ч鐎靛弶绻濆閿嬫緲閳ь儸鍥ㄢ挃闁告洦鍘搁崑鎾剁箔濞戞ɑ绁╅柡浣稿€块弻锝呂熼懖鈺佺闂佹悶鍊曢崯鎾蓟閳ユ剚鍚嬮幖绮光偓宕囶啈闂備焦濞婇弨閬嶅垂閸噮鍤曢柛顐ｆ礃閸婄兘鏌℃径濠勪虎缂佷緡鍠栭埞鎴﹀灳閸愭祴鎸冮梺绋跨箲閿曘垹顕ｇ拠娴嬫婵炲棙鍨归惁鍫ユ⒑閸涘﹤濮﹀ù婊勵殜閸┾偓妞ゆ帊绀佺粭褏绱掓潏銊ユ诞妞ゃ垺鐟ラ埢搴ㄥ箚瑜庨鍕⒒娴ｅ摜鏋冩俊顐㈠钘濋柛顭戝亝閸欏繘鏌嶈閸撶喖寮诲澶婁紶闁告洦鍋€閸嬫捇鎮烽幍铏€洪梺鎼炲労閸撴岸鍩涢幒鎳ㄥ綊鏁愰崶銊ユ畬濡炪倖娲樼划宥夊箞閵婏妇绡€闁稿被鍊楅崥瀣旈悩闈涗粶闁挎洦浜悰顔嘉熺亸鏍т壕闂傚牊绋戦ˉ蹇旂箾閹绘帗鍟炲ǎ鍥э躬婵℃儼绠涢弴鐐茬厒闂備礁鎽滈崳銉╁垂閸洖绠栭柨鐔哄У閸嬪嫰鏌涜箛姘汗闁告ɑ鎮傚娲川婵犲倸顫囬梺鍛婃煥閻倿宕洪埀顒併亜閹烘垵鈧綊寮抽渚囨闁绘劘灏欑粻濠氭煕閳轰礁顏€规洘锕㈤、鏃堝幢閳轰焦娅楅梻鍌欐祰椤曆呪偓娑掓櫇缁瑩骞掗弴鐔稿櫡缂傚倸鍊风拋鏌ュ磻閹剧粯鍊甸柨婵嗛閺嬬喖鏌ｉ幘瀵告创闁诡喗锕㈤幃娆撳箵閹哄棙瀵栭梻浣哥枃濡嫰藝閻㈢钃熺€广儱娲﹂崰鍡涙煕閺囥劌浜炲ù鐓庣焸閹鎲撮崟顒傤槬閻庤娲﹂崜鐔煎春閵忕媭鍚嬪璺侯儐閸庮亪姊洪懡銈呮瀾濠㈢懓顑夊鎼佸川鐎涙ǚ鎷洪梺鍛婄箓鐎氼垳鈧碍澹嗙槐鎺撳緞鐏炶棄骞嬬紒鈩冩尭閵嗘帒顫濋敐鍛闂備礁鎼張顒傜矙閺嶎偆涓嶆繛鎴欏灩缁秹鏌涚仦鍓р槈闁搞劑浜跺缁樻媴娓氼垱鏁┑鐐叉噺濞茬喖濡撮崘鈺冪瘈闁稿本绮嶅▓鎯р攽閻樿宸ラ悗姘煎幗閸掑﹪骞橀钘変化闂佹悶鍎荤徊鑺ユ櫠閼碱剛纾界€广儱妫▓婊勬叏婵犲嫮甯涢柟宄版嚇閹兘鏌囬敃鈧▓婵囩節绾版ɑ顫婇柛瀣瀹曨垶寮堕幋顓炴濡炪倖鍔х€靛矂寮€ｎ喗鐓冪憸婊堝礈濞嗘挻鍋╅柣鎴ｆ缁狅綁鏌ㄩ弴妤€浜剧紓浣哄Т椤兘寮婚敓鐘茬＜婵☆垰鎼慨鏇烆渻閵堝骸浜滅紒澶嬫尦閸╃偤骞嬮敂钘夆偓鐑芥煕濞嗗浚妲告い搴㈢洴濮婃椽宕ㄦ繝鍕枦闂佺顑嗛幑鍥ь潖閾忓湱鐭欐繛鍡樺劤閸撻亶姊洪崨濠冣拹妞ゃ劌锕ら悾?in-flight 闂傚倸鍊搁崐鎼佸磹閹间礁纾归柟闂寸绾剧懓顪冪€ｎ亝鎹ｉ柣顓炴閵嗘帒顫濋敐鍛婵°倗濮烽崑娑⑺囬悽绋挎瀬闁瑰墽绮崑鎰版煕閹邦剙绾ч柣銈呭閳规垶骞婇柛濞у懎绶ゅù鐘差儏閻ゎ喗銇勯弽顐粶缁炬儳顭烽幃妤呮晲鎼粹剝鐏嶉梺缁樻尰濞茬喖寮诲澶婄厸濞达絽鎲″▓鍫曟⒑閹颁礁鐏℃繛鑼枛瀵鈽夐姀鐘栄囨煕閳╁喚娈旀い顐ｅ浮濮婃椽宕崟顓犲姽缂傚倸绉崇粈渚€顢氶敐澶樻晪闁逞屽墮閻ｇ兘骞掗幋顓熷兊濡炪倖鍨煎▔鏇犳暜濞戙垺鈷?
-func runSingleDiagnosisWithCoordinator(
-	ctx context.Context,
-	coordinator *diagnosisCoordinator,
-	rpcClient *gatewayclient.GatewayRPCClient,
-	eventStream <-chan gatewayclient.Notification,
-	output io.Writer,
-	buffer *UTF8RingBuffer,
-	options ManualShellOptions,
-	shellSessionID string,
-	trigger diagnoseTrigger,
-	isAuto bool,
-	autoState *autoRuntimeState,
-) error {
-	if output == nil {
-		return nil
-	}
-	if isAuto && autoState != nil && !autoState.Enabled.Load() {
-		return nil
-	}
-
-	prepared, prepareErr := prepareDiagnoseRequest(buffer, options, shellSessionID, trigger)
-	if prepareErr != nil {
-		if options.Stderr != nil {
-			writeProxyf(options.Stderr, "neocode diag: build diagnose payload failed: %v\n", prepareErr)
-		}
-		err := errors.New("failed to build diagnosis payload")
-		writeProxyf(output, "\n\033[31m[NeoCode Diagnosis]\033[0m %s\n", strings.TrimSpace(err.Error()))
-		return err
-	}
-
-	if coordinator != nil {
-		if cached, ok := coordinator.cached(prepared.Fingerprint); ok {
-			if cached.Err != nil {
-				writeProxyf(output, "\n\033[31m[NeoCode Diagnosis]\033[0m %s\n", strings.TrimSpace(cached.Err.Error()))
-				return cached.Err
-			}
-			if !isAuto {
-				writeProxyLine(output, "\n\033[36m[NeoCode Diagnosis]\033[0m using cached diagnosis result")
-			}
-			renderDiagnosis(output, cached.Result.Content, cached.Result.IsError)
-			return nil
-		}
-	}
-
-	renderDiagnosisInitialFeedback(output, prepared, isAuto)
-
-	var (
-		result tools.ToolResult
-		err    error
-	)
-	execute := func(timeout time.Duration) diagnosisOutcome {
-		if coordinator == nil {
-			result, callErr := executePreparedDiagnoseToolWithTimeout(rpcClient, nil, options, prepared, timeout)
-			return diagnosisOutcome{Result: result, Err: callErr}
-		}
-		return coordinator.run(ctx, prepared.Fingerprint, func() (tools.ToolResult, error) {
-			return executePreparedDiagnoseToolWithTimeout(rpcClient, nil, options, prepared, timeout)
-		})
-	}
-	if isAuto {
-		outcome := execute(autoDiagnoseCallTimeout)
-		result, err = outcome.Result, outcome.Err
-	} else {
-		outcome := execute(diagnoseCallTimeout)
-		result, err = outcome.Result, outcome.Err
-	}
-	if err != nil {
-		writeProxyf(output, "\n\033[31m[NeoCode Diagnosis]\033[0m %s\n", strings.TrimSpace(err.Error()))
-		return err
-	}
-	if isAuto && autoState != nil && !autoState.Enabled.Load() {
-		return nil
-	}
-	renderDiagnosis(output, result.Content, result.IsError)
-	return nil
-}
-
 // callDiagnoseTool 闂傚倸鍊搁崐鎼佸磹閹间礁纾圭€瑰嫭鍣磋ぐ鎺戠倞鐟滃繘寮抽敃鍌涚厱妞ゎ厽鍨垫禍婵嬫煕濞嗗繒绠婚柡宀嬬秮婵偓闁靛繆鏅濋崝鍝ョ磽娴ｆ彃浜炬繝銏ｆ硾椤戝嫮鎹㈤崱娑欑厪闁割偅绻冮崳娲煕閿濆懏璐＄紒杈ㄥ浮楠炲洭顢樿閻や線姊洪崫鍕効缂佺粯绻傞悾鐑藉醇閺囩倣銊╂煏婢诡垰鍊诲Λ顖炴⒒?callDiagnoseTool 闂傚倸鍊搁崐鎼佸磹閹间礁纾归柟闂寸绾惧綊鏌ｉ幋锝呅撻柛銈呭閺屾盯顢曢敐鍡欘槬缂佺偓鍎冲锟犲蓟閿濆顫呴柕蹇婃櫇閸旀悂姊哄Ч鍥р偓妤呭磻閹捐埖宕叉繝闈涱儐椤ュ牊绻涢幋婵嗚埞闁告搩鍓熷娲焻閻愯尪瀚板褍澧界槐鎺楁偐閾忣偄纰嶉梺浼欑秮閺€杈╃紦閻ｅ瞼鐭欓悹鍥﹀嫎閸旀垿寮婚弴鐔虹彾妞ゆ牗纰嶉崳瑙勵殽閻愨晛浜鹃梻鍌氬€峰ù鍥х暦閻㈢绐楅柟閭﹀枛閸ㄦ繄鈧箍鍎遍幉妯衡槈閵忕姷顦ㄥ銈庡幗閸ㄩ潧鈻撻妸锔剧瘈闁汇垽娼ф牎闂佽壈顫夐崕鎶筋敊韫囨挴鏀介悗锝庡亞閸樺憡绻濋姀锝嗙【妞ゆ垵鎳橀幃姗€濡疯閸嬫挸鈻撻崹顔界亾闂佺绻戦敋閾荤偤鏌涘☉娆愬剹闁轰礁鍟撮弻鏇＄疀婵炴儳浜鹃柟棰佺劍琚╂繝鐢靛Х閺佹悂宕戝☉姗嗗殨闁割偅娲橀崑瀣節婵犲倹鍣归柛銊︾箞閺屽秹宕崟顐熷亾婵犳碍鈷旈柛鏇ㄥ灡閻撴洘绻涢幋鐐╂闁割偁鍎辩粻?
-func callDiagnoseTool(
-	rpcClient *gatewayclient.GatewayRPCClient,
-	buffer *UTF8RingBuffer,
-	options ManualShellOptions,
-	shellSessionID string,
-	trigger diagnoseTrigger,
-) (tools.ToolResult, error) {
-	return callDiagnoseToolWithTimeout(rpcClient, buffer, options, shellSessionID, trigger, diagnoseCallTimeout)
-}
-
 // callDiagnoseToolWithTimeout 闂傚倸鍊搁崐鎼佸磹閹间礁纾圭€瑰嫭鍣磋ぐ鎺戠倞鐟滃繘寮抽敃鍌涚厱妞ゎ厽鍨垫禍婵嬫煕濞嗗繒绠婚柡宀嬬秮婵偓闁靛繆鏅濋崝鍝ョ磽娴ｆ彃浜炬繝銏ｆ硾椤戝嫮鎹㈤崱娑欑厪闁割偅绻冮崳娲煕閿濆懏璐＄紒杈ㄥ浮楠炲洭顢樿閻や線姊洪崫鍕効缂佺粯绻傞悾鐑藉醇閺囩倣銊╂煏婢诡垰鍊诲Λ顖炴⒒?callDiagnoseToolWithTimeout 闂傚倸鍊搁崐鎼佸磹閹间礁纾归柟闂寸绾惧綊鏌ｉ幋锝呅撻柛銈呭閺屾盯顢曢敐鍡欘槬缂佺偓鍎冲锟犲蓟閿濆顫呴柕蹇婃櫇閸旀悂姊哄Ч鍥р偓妤呭磻閹捐埖宕叉繝闈涱儐椤ュ牊绻涢幋婵嗚埞闁告搩鍓熷娲焻閻愯尪瀚板褍澧界槐鎺楁偐閾忣偄纰嶉梺浼欑秮閺€杈╃紦閻ｅ瞼鐭欓悹鍥﹀嫎閸旀垿寮婚弴鐔虹彾妞ゆ牗纰嶉崳瑙勵殽閻愨晛浜鹃梻鍌氬€峰ù鍥х暦閻㈢绐楅柟閭﹀枛閸ㄦ繄鈧箍鍎遍幉妯衡槈閵忕姷顦ㄥ銈庡幗閸ㄩ潧鈻撻妸锔剧瘈闁汇垽娼ф牎闂佽壈顫夐崕鎶筋敊韫囨挴鏀介悗锝庡亞閸樺憡绻濋姀锝嗙【妞ゆ垵鎳橀幃姗€濡疯閸嬫挸鈻撻崹顔界亾闂佺绻戦敋閾荤偤鏌涘☉娆愬剹闁轰礁鍟撮弻鏇＄疀婵炴儳浜鹃柟棰佺劍琚╂繝鐢靛Х閺佹悂宕戝☉姗嗗殨闁割偅娲橀崑瀣節婵犲倹鍣归柛銊︾箞閺屽秹宕崟顐熷亾婵犳碍鈷旈柛鏇ㄥ灡閻撴洘绻涢幋鐐╂闁割偁鍎辩粻?
-func callDiagnoseToolWithTimeout(
-	rpcClient *gatewayclient.GatewayRPCClient,
-	buffer *UTF8RingBuffer,
-	options ManualShellOptions,
-	shellSessionID string,
-	trigger diagnoseTrigger,
-	timeout time.Duration,
-) (tools.ToolResult, error) {
-	prepared, err := prepareDiagnoseRequest(buffer, options, shellSessionID, trigger)
-	if err != nil {
-		if options.Stderr != nil {
-			writeProxyf(options.Stderr, "neocode diag: build diagnose payload failed: %v\n", err)
-		}
-		return tools.ToolResult{}, errors.New("failed to build diagnosis payload")
-	}
-	return executePreparedDiagnoseToolWithTimeout(rpcClient, nil, options, prepared, timeout)
-}
-
 // decodeToolResult 闂傚倸鍊搁崐鎼佸磹閹间礁纾圭€瑰嫭鍣磋ぐ鎺戠倞鐟滃繘寮抽敃鍌涚厱妞ゎ厽鍨垫禍婵嬫煕濞嗗繒绠婚柡宀嬬秮婵偓闁靛繆鏅濋崝鍝ョ磽娴ｆ彃浜炬繝銏ｆ硾椤戝嫮鎹㈤崱娑欑厪闁割偅绻冮崳娲煕閿濆懏璐＄紒杈ㄥ浮楠炲洭顢樿閻や線姊洪崫鍕効缂佺粯绻傞悾鐑藉醇閺囩倣銊╂煏婢诡垰鍊诲Λ顖炴⒒?decodeToolResult 闂傚倸鍊搁崐鎼佸磹閹间礁纾归柟闂寸绾惧綊鏌ｉ幋锝呅撻柛銈呭閺屾盯顢曢敐鍡欘槬缂佺偓鍎冲锟犲蓟閿濆顫呴柕蹇婃櫇閸旀悂姊哄Ч鍥р偓妤呭磻閹捐埖宕叉繝闈涱儐椤ュ牊绻涢幋婵嗚埞闁告搩鍓熷娲焻閻愯尪瀚板褍澧界槐鎺楁偐閾忣偄纰嶉梺浼欑秮閺€杈╃紦閻ｅ瞼鐭欓悹鍥﹀嫎閸旀垿寮婚弴鐔虹彾妞ゆ牗纰嶉崳瑙勵殽閻愨晛浜鹃梻鍌氬€峰ù鍥х暦閻㈢绐楅柟閭﹀枛閸ㄦ繄鈧箍鍎遍幉妯衡槈閵忕姷顦ㄥ銈庡幗閸ㄩ潧鈻撻妸锔剧瘈闁汇垽娼ф牎闂佽壈顫夐崕鎶筋敊韫囨挴鏀介悗锝庡亞閸樺憡绻濋姀锝嗙【妞ゆ垵鎳橀幃姗€濡疯閸嬫挸鈻撻崹顔界亾闂佺绻戦敋閾荤偤鏌涘☉娆愬剹闁轰礁鍟撮弻鏇＄疀婵炴儳浜鹃柟棰佺劍琚╂繝鐢靛Х閺佹悂宕戝☉姗嗗殨闁割偅娲橀崑瀣節婵犲倹鍣归柛銊︾箞閺屽秹宕崟顐熷亾婵犳碍鈷旈柛鏇ㄥ灡閻撴洘绻涢幋鐐╂闁割偁鍎辩粻?
 func decodeToolResult(payload any) (tools.ToolResult, error) {
 	raw, err := json.Marshal(payload)
@@ -1180,38 +813,40 @@ func decodeToolResult(payload any) (tools.ToolResult, error) {
 
 // renderDiagnosis 闂傚倸鍊搁崐鎼佸磹閹间礁纾圭€瑰嫭鍣磋ぐ鎺戠倞鐟滃繘寮抽敃鍌涚厱妞ゎ厽鍨垫禍婵嬫煕濞嗗繒绠婚柡宀嬬秮婵偓闁靛繆鏅濋崝鍝ョ磽娴ｆ彃浜炬繝銏ｆ硾椤戝嫮鎹㈤崱娑欑厪闁割偅绻冮崳娲煕閿濆懏璐＄紒杈ㄥ浮楠炲洭顢樿閻や線姊洪崫鍕効缂佺粯绻傞悾鐑藉醇閺囩倣銊╂煏婢诡垰鍊诲Λ顖炴⒒?renderDiagnosis 闂傚倸鍊搁崐鎼佸磹閹间礁纾归柟闂寸绾惧綊鏌ｉ幋锝呅撻柛銈呭閺屾盯顢曢敐鍡欘槬缂佺偓鍎冲锟犲蓟閿濆顫呴柕蹇婃櫇閸旀悂姊哄Ч鍥р偓妤呭磻閹捐埖宕叉繝闈涱儐椤ュ牊绻涢幋婵嗚埞闁告搩鍓熷娲焻閻愯尪瀚板褍澧界槐鎺楁偐閾忣偄纰嶉梺浼欑秮閺€杈╃紦閻ｅ瞼鐭欓悹鍥﹀嫎閸旀垿寮婚弴鐔虹彾妞ゆ牗纰嶉崳瑙勵殽閻愨晛浜鹃梻鍌氬€峰ù鍥х暦閻㈢绐楅柟閭﹀枛閸ㄦ繄鈧箍鍎遍幉妯衡槈閵忕姷顦ㄥ銈庡幗閸ㄩ潧鈻撻妸锔剧瘈闁汇垽娼ф牎闂佽壈顫夐崕鎶筋敊韫囨挴鏀介悗锝庡亞閸樺憡绻濋姀锝嗙【妞ゆ垵鎳橀幃姗€濡疯閸嬫挸鈻撻崹顔界亾闂佺绻戦敋閾荤偤鏌涘☉娆愬剹闁轰礁鍟撮弻鏇＄疀婵炴儳浜鹃柟棰佺劍琚╂繝鐢靛Х閺佹悂宕戝☉姗嗗殨闁割偅娲橀崑瀣節婵犲倹鍣归柛銊︾箞閺屽秹宕崟顐熷亾婵犳碍鈷旈柛鏇ㄥ灡閻撴洘绻涢幋鐐╂闁割偁鍎辩粻?
 func renderDiagnosis(output io.Writer, content string, isError bool) {
-	headerColor := "\033[36m"
-	if isError {
-		headerColor = "\033[31m"
-	}
-	writeProxyf(output, "\n%s[NeoCode Diagnosis]\033[0m\n", headerColor)
-
-	trimmedContent := strings.TrimSpace(content)
-	if trimmedContent == "" {
-		writeProxyLine(output, "- no diagnosis output")
-		return
-	}
-
-	var parsed diagnoseToolResult
-	if err := json.Unmarshal([]byte(trimmedContent), &parsed); err != nil || strings.TrimSpace(parsed.RootCause) == "" {
-		writeProxyLine(output, trimmedContent)
-		return
-	}
-
-	writeProxyf(output, "confidence: %.2f\n", parsed.Confidence)
-	writeProxyf(output, "root cause: %s\n", strings.TrimSpace(parsed.RootCause))
-	if len(parsed.InvestigationCommands) > 0 {
-		writeProxyLine(output, "investigation commands:")
-		for _, command := range parsed.InvestigationCommands {
-			writeProxyf(output, "- %s\n", strings.TrimSpace(command))
+	withDiagnosisCursorGuard(output, func() {
+		headerColor := "\033[36m"
+		if isError {
+			headerColor = "\033[31m"
 		}
-	}
-	if len(parsed.FixCommands) > 0 {
-		writeProxyLine(output, "fix commands:")
-		for _, command := range parsed.FixCommands {
-			writeProxyf(output, "- %s\n", strings.TrimSpace(command))
+		writeProxyf(output, "\n%s[NeoCode Diagnosis]\033[0m\n", headerColor)
+
+		trimmedContent := strings.TrimSpace(content)
+		if trimmedContent == "" {
+			writeProxyLine(output, "- no diagnosis output")
+			return
 		}
-	}
+
+		var parsed diagnoseToolResult
+		if err := json.Unmarshal([]byte(trimmedContent), &parsed); err != nil || strings.TrimSpace(parsed.RootCause) == "" {
+			writeProxyLine(output, trimmedContent)
+			return
+		}
+
+		writeProxyf(output, "confidence: %.2f\n", parsed.Confidence)
+		writeProxyf(output, "root cause: %s\n", strings.TrimSpace(parsed.RootCause))
+		if len(parsed.InvestigationCommands) > 0 {
+			writeProxyLine(output, "investigation commands:")
+			for _, command := range parsed.InvestigationCommands {
+				writeProxyf(output, "- %s\n", strings.TrimSpace(command))
+			}
+		}
+		if len(parsed.FixCommands) > 0 {
+			writeProxyLine(output, "fix commands:")
+			for _, command := range parsed.FixCommands {
+				writeProxyf(output, "- %s\n", strings.TrimSpace(command))
+			}
+		}
+	})
 }
 
 // streamPTYOutput 闂傚倸鍊搁崐鎼佸磹閹间礁纾圭€瑰嫭鍣磋ぐ鎺戠倞鐟滃繘寮抽敃鍌涚厱妞ゎ厽鍨垫禍婵嬫煕濞嗗繒绠婚柡宀嬬秮婵偓闁靛繆鏅濋崝鍝ョ磽娴ｆ彃浜炬繝銏ｆ硾椤戝嫮鎹㈤崱娑欑厪闁割偅绻冮崳娲煕閿濆懏璐＄紒杈ㄥ浮楠炲洭顢樿閻や線姊洪崫鍕効缂佺粯绻傞悾鐑藉醇閺囩倣銊╂煏婢诡垰鍊诲Λ顖炴⒒?streamPTYOutput 闂傚倸鍊搁崐鎼佸磹閹间礁纾归柟闂寸绾惧綊鏌ｉ幋锝呅撻柛銈呭閺屾盯顢曢敐鍡欘槬缂佺偓鍎冲锟犲蓟閿濆顫呴柕蹇婃櫇閸旀悂姊哄Ч鍥р偓妤呭磻閹捐埖宕叉繝闈涱儐椤ュ牊绻涢幋婵嗚埞闁告搩鍓熷娲焻閻愯尪瀚板褍澧界槐鎺楁偐閾忣偄纰嶉梺浼欑秮閺€杈╃紦閻ｅ瞼鐭欓悹鍥﹀嫎閸旀垿寮婚弴鐔虹彾妞ゆ牗纰嶉崳瑙勵殽閻愨晛浜鹃梻鍌氬€峰ù鍥х暦閻㈢绐楅柟閭﹀枛閸ㄦ繄鈧箍鍎遍幉妯衡槈閵忕姷顦ㄥ銈庡幗閸ㄩ潧鈻撻妸锔剧瘈闁汇垽娼ф牎闂佽壈顫夐崕鎶筋敊韫囨挴鏀介悗锝庡亞閸樺憡绻濋姀锝嗙【妞ゆ垵鎳橀幃姗€濡疯閸嬫挸鈻撻崹顔界亾闂佺绻戦敋閾荤偤鏌涘☉娆愬剹闁轰礁鍟撮弻鏇＄疀婵炴儳浜鹃柟棰佺劍琚╂繝鐢靛Х閺佹悂宕戝☉姗嗗殨闁割偅娲橀崑瀣節婵犲倹鍣归柛銊︾箞閺屽秹宕崟顐熷亾婵犳碍鈷旈柛鏇ㄥ灡閻撴洘绻涢幋鐐╂闁割偁鍎辩粻?

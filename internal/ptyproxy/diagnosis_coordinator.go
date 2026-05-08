@@ -186,6 +186,7 @@ func executePreparedDiagnoseToolWithTimeout(
 		protocol.BindStreamParams{
 			SessionID: askSessionID,
 			Channel:   "all",
+			Role:      "shell",
 		},
 		&bindAck,
 		gatewayclient.GatewayRPCCallOptions{
@@ -538,30 +539,32 @@ func renderDiagnosisInitialFeedback(output io.Writer, prepared preparedDiagnosis
 	if output == nil || !IsDiagFastResponseEnabledFromEnv() {
 		return
 	}
-	hint, ok := buildDiagnosisQuickHint(prepared)
-	if isAuto && !ok {
-		return
-	}
-	if isAuto {
-		writeProxyLine(output, "\n\033[36m[NeoCode Diagnosis]\033[0m 快速预判（低置信度，完整诊断稍后返回）")
-	} else {
-		writeProxyLine(output, "\n\033[36m[NeoCode Diagnosis]\033[0m 正在诊断，完整结果稍后返回。")
+	withDiagnosisCursorGuard(output, func() {
+		hint, ok := buildDiagnosisQuickHint(prepared)
+		if isAuto && !ok {
+			return
+		}
+		if isAuto {
+			writeProxyLine(output, "\n\033[36m[NeoCode Diagnosis]\033[0m 快速预判（低置信度，完整诊断稍后返回）")
+		} else {
+			writeProxyLine(output, "\n\033[36m[NeoCode Diagnosis]\033[0m 正在诊断，完整结果稍后返回。")
+			if !ok {
+				return
+			}
+			writeProxyLine(output, "快速预判（低置信度）：")
+		}
 		if !ok {
 			return
 		}
-		writeProxyLine(output, "快速预判（低置信度）：")
-	}
-	if !ok {
-		return
-	}
-	writeProxyf(output, "置信度: %.2f\n", hint.Confidence)
-	writeProxyf(output, "可能根因: %s\n", strings.TrimSpace(hint.RootCause))
-	if len(hint.InvestigationCommands) > 0 {
-		writeProxyLine(output, "建议先查:")
-		for _, command := range hint.InvestigationCommands {
-			writeProxyf(output, "- %s\n", strings.TrimSpace(command))
+		writeProxyf(output, "置信度: %.2f\n", hint.Confidence)
+		writeProxyf(output, "可能根因: %s\n", strings.TrimSpace(hint.RootCause))
+		if len(hint.InvestigationCommands) > 0 {
+			writeProxyLine(output, "建议先查:")
+			for _, command := range hint.InvestigationCommands {
+				writeProxyf(output, "- %s\n", strings.TrimSpace(command))
+			}
 		}
-	}
+	})
 }
 
 // buildDiagnosisQuickHint 根据常见终端错误模式生成低置信度快速预判。

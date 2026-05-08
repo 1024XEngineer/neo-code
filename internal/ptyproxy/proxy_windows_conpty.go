@@ -20,8 +20,8 @@ import (
 
 const (
 	windowsConPTYResizeInterval = 500 * time.Millisecond
-	windowsConPTYDefaultColumns = int16(120)
-	windowsConPTYDefaultRows    = int16(30)
+	windowsConPTYDefaultColumns = int16(80)
+	windowsConPTYDefaultRows    = int16(25)
 	windowsConPTYInt16Max       = int16(32767)
 )
 
@@ -30,6 +30,9 @@ var (
 	windowsResizePseudoConsole = windows.ResizePseudoConsole
 	windowsClosePseudoConsole  = windows.ClosePseudoConsole
 	windowsCreatePipe          = windows.CreatePipe
+	windowsGetConsoleMode      = windows.GetConsoleMode
+	windowsGetConsoleInfo      = windows.GetConsoleScreenBufferInfo
+	windowsWriteConsole        = windows.WriteConsole
 )
 
 // windowsConPTYShell 持有 ConPTY 进程与输入输出管道句柄。
@@ -299,6 +302,31 @@ func (s *windowsConPTYShell) Resize(columns int16, rows int16) error {
 	return windowsResizePseudoConsole(s.console, windows.Coord{X: columns, Y: rows})
 }
 
+// WriteScreenText 向 ConPTY 内部屏幕缓冲区写入文本，避免经过 shell stdin 被当作命令执行。
+func (s *windowsConPTYShell) WriteScreenText(text string) error {
+	if s == nil || s.console == 0 || strings.TrimSpace(text) == "" {
+		return nil
+	}
+	utf16Text, err := windows.UTF16FromString(text)
+	if err != nil {
+		return fmt.Errorf("encode conpty screen text: %w", err)
+	}
+	if len(utf16Text) <= 1 {
+		return nil
+	}
+	var written uint32
+	if err := windowsWriteConsole(
+		s.console,
+		&utf16Text[0],
+		uint32(len(utf16Text)-1),
+		&written,
+		nil,
+	); err != nil {
+		return fmt.Errorf("write conpty screen text: %w", err)
+	}
+	return nil
+}
+
 // CloseOutputReader 关闭 ConPTY 输出读取端，释放读取协程阻塞。
 func (s *windowsConPTYShell) CloseOutputReader() error {
 	if s == nil || s.outputReader == nil {
@@ -392,23 +420,45 @@ func resolveWindowsConPTYSize() windows.Coord {
 	columns := windowsConPTYDefaultColumns
 	rows := windowsConPTYDefaultRows
 
+	resolveFromConsole := func(file *os.File) (windows.Coord, bool) {
+		if file == nil {
+			return windows.Coord{}, false
+		}
+		handle := windows.Handle(file.Fd())
+		var mode uint32
+		if err := windowsGetConsoleMode(handle, &mode); err != nil {
+			return windows.Coord{}, false
+		}
+		var info windows.ConsoleScreenBufferInfo
+		if err := windowsGetConsoleInfo(handle, &info); err != nil {
+			return windows.Coord{}, false
+		}
+		width := int(info.Window.Right-info.Window.Left) + 1
+		height := int(info.Window.Bottom-info.Window.Top) + 1
+		if width <= 0 || height <= 0 {
+			return windows.Coord{}, false
+		}
+		return windows.Coord{
+			X: clampWindowsConPTYSize(width),
+			Y: clampWindowsConPTYSize(height),
+		}, true
+	}
+
+	for _, file := range []*os.File{os.Stdout, os.Stderr} {
+		if size, ok := resolveFromConsole(file); ok {
+			return size
+		}
+	}
+
 	width, height, err := term.GetSize(int(os.Stdout.Fd()))
 	if err != nil {
 		return windows.Coord{X: columns, Y: rows}
 	}
 	if width > 0 {
-		if width > int(windowsConPTYInt16Max) {
-			columns = windowsConPTYInt16Max
-		} else {
-			columns = int16(width)
-		}
+		columns = clampWindowsConPTYSize(width)
 	}
 	if height > 0 {
-		if height > int(windowsConPTYInt16Max) {
-			rows = windowsConPTYInt16Max
-		} else {
-			rows = int16(height)
-		}
+		rows = clampWindowsConPTYSize(height)
 	}
 	if columns <= 0 {
 		columns = windowsConPTYDefaultColumns
@@ -417,6 +467,17 @@ func resolveWindowsConPTYSize() windows.Coord {
 		rows = windowsConPTYDefaultRows
 	}
 	return windows.Coord{X: columns, Y: rows}
+}
+
+// clampWindowsConPTYSize 将整数尺寸限制到 ConPTY 支持的正向 int16 范围。
+func clampWindowsConPTYSize(value int) int16 {
+	if value <= 0 {
+		return 0
+	}
+	if value > int(windowsConPTYInt16Max) {
+		return windowsConPTYInt16Max
+	}
+	return int16(value)
 }
 
 // buildWindowsEnvironmentBlock 构建 CreateProcess 所需的 UTF-16 环境块。

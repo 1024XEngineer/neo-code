@@ -39,6 +39,8 @@ var (
 	idmMarkdownRendererErr  error
 )
 
+const idmNativeCommandLineEnding = "\r\n"
+
 // idmRuntimeMode 璐熻矗 idmRuntimeMode 鐩稿叧閫昏緫銆
 type idmRuntimeMode int
 
@@ -475,10 +477,11 @@ func (c *idmController) sendNativeCommand(commandLine string) error {
 		return errors.New("idm is not active")
 	}
 	c.mode = idmModeNativeCmd
-	c.pendingEcho = append(c.pendingEcho[:0], []byte(commandLine+"\r\n")...)
+	payload := commandLine + idmNativeCommandLineEnding
+	c.pendingEcho = append(c.pendingEcho[:0], []byte(payload)...)
 	c.mu.Unlock()
 
-	if _, err := io.WriteString(c.ptyWriter, commandLine+"\n"); err != nil {
+	if _, err := io.WriteString(c.ptyWriter, payload); err != nil {
 		c.mu.Lock()
 		if c.active {
 			c.mode = idmModeIdle
@@ -644,6 +647,7 @@ func (c *idmController) bindIDMAskStream(ctx context.Context, sessionID string) 
 		protocol.BindStreamParams{
 			SessionID: normalizedSessionID,
 			Channel:   "all",
+			Role:      "shell",
 		},
 		&bindAck,
 		gatewayclient.GatewayRPCCallOptions{
@@ -1107,8 +1111,12 @@ func (c *idmController) renderIDMStreamChunk(rawText string) {
 	if c == nil || rawText == "" {
 		return
 	}
+	chunk := rawText
+
+	chunk = proxyOutputLineEndingNormalizer.Replace(rawText)
+
 	c.writeRawOutput([]byte(idmAIColor))
-	c.writeRawOutput([]byte(proxyOutputLineEndingNormalizer.Replace(rawText)))
+	c.writeRawOutput([]byte(chunk))
 	c.writeRawOutput([]byte(idmColorReset))
 }
 
@@ -1123,12 +1131,19 @@ func (c *idmController) renderIDMAnswer(rawText string) {
 	}
 	rendered, err := renderIDMMarkdown(trimmed)
 	if err != nil {
+		plain := trimmed
+
+		plain = proxyOutputLineEndingNormalizer.Replace(trimmed)
+
 		c.writeRawOutput([]byte(idmAIColor))
-		c.writeRawOutput([]byte(proxyOutputLineEndingNormalizer.Replace(trimmed)))
+		c.writeRawOutput([]byte(plain))
 		c.writeRawOutput([]byte(idmColorReset))
 		return
 	}
-	c.writeRawOutput([]byte(proxyOutputLineEndingNormalizer.Replace(rendered)))
+
+	rendered = proxyOutputLineEndingNormalizer.Replace(rendered)
+
+	c.writeRawOutput([]byte(rendered))
 }
 
 // renderIDMMarkdown 浣跨敤缁堢娓叉煋鍣ㄦ妸 Markdown 鏂囨湰杞崲涓?ANSI 缁堢鍙鏍煎紡銆

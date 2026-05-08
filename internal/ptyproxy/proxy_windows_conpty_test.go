@@ -68,6 +68,36 @@ func TestWindowsConPTYShellResizeDelegatesAPI(t *testing.T) {
 	}
 }
 
+func TestWindowsConPTYShellWriteScreenTextDelegatesAPI(t *testing.T) {
+	originalWriteConsole := windowsWriteConsole
+	defer func() {
+		windowsWriteConsole = originalWriteConsole
+	}()
+
+	called := false
+	windowsWriteConsole = func(console windows.Handle, buf *uint16, towrite uint32, written *uint32, reserved *byte) error {
+		called = true
+		if console != windows.Handle(88) {
+			t.Fatalf("console handle = %v, want 88", console)
+		}
+		if towrite == 0 {
+			t.Fatal("towrite should be > 0")
+		}
+		if written != nil {
+			*written = towrite
+		}
+		return nil
+	}
+
+	shell := &windowsConPTYShell{console: windows.Handle(88)}
+	if err := shell.WriteScreenText("\r\n[NeoCode Diagnosis]\r\nroot cause: typo\r\n"); err != nil {
+		t.Fatalf("WriteScreenText() error = %v", err)
+	}
+	if !called {
+		t.Fatal("expected WriteScreenText() to call windowsWriteConsole")
+	}
+}
+
 func TestWindowsConPTYShellCloseReleasesResources(t *testing.T) {
 	originalClose := windowsClosePseudoConsole
 	defer func() {
@@ -122,14 +152,74 @@ func TestCreateWindowsInheritablePipeHandles(t *testing.T) {
 	}
 }
 
-func TestSanitizeWindowsInputConsoleModeDisablesVTInput(t *testing.T) {
-	original := uint32(0x0001 | windowsEnableVirtualTerminalInput | 0x0080)
+func TestSanitizeWindowsInputConsoleModeDisablesVTInputLineAndEcho(t *testing.T) {
+	original := uint32(0x0001 | windowsEnableVirtualTerminalInput | windows.ENABLE_LINE_INPUT | windows.ENABLE_ECHO_INPUT)
 	sanitized := sanitizeWindowsInputConsoleMode(original)
 	if sanitized&windowsEnableVirtualTerminalInput != 0 {
 		t.Fatalf("VT input bit should be cleared, got mode %#x", sanitized)
 	}
-	if sanitized&0x0001 == 0 || sanitized&0x0080 == 0 {
+	if sanitized&windows.ENABLE_LINE_INPUT != 0 {
+		t.Fatalf("line input bit should be cleared, got mode %#x", sanitized)
+	}
+	if sanitized&windows.ENABLE_ECHO_INPUT != 0 {
+		t.Fatalf("echo input bit should be cleared, got mode %#x", sanitized)
+	}
+	if sanitized&0x0001 == 0 {
 		t.Fatalf("unrelated input mode bits should be preserved, got mode %#x", sanitized)
+	}
+}
+
+func TestNormalizeWindowsConPTYInputByteBackspaceCompatibility(t *testing.T) {
+	if got := normalizeWindowsConPTYInputByte(0x08); got != 0x7F {
+		t.Fatalf("backspace byte normalization = %#x, want %#x", got, byte(0x7F))
+	}
+	if got := normalizeWindowsConPTYInputByte('a'); got != 'a' {
+		t.Fatalf("normal byte normalization = %#x, want %#x", got, byte('a'))
+	}
+}
+
+func TestSanitizeWindowsOutputConsoleModeEnablesVTWrapAndProcessed(t *testing.T) {
+	original := uint32(0)
+	sanitized := sanitizeWindowsOutputConsoleMode(original)
+	if sanitized&windowsEnableVirtualTerminalProcessing == 0 {
+		t.Fatalf("VT output bit should be enabled, got mode %#x", sanitized)
+	}
+	if sanitized&windows.ENABLE_PROCESSED_OUTPUT == 0 {
+		t.Fatalf("processed output bit should be enabled, got mode %#x", sanitized)
+	}
+	if sanitized&windows.ENABLE_WRAP_AT_EOL_OUTPUT == 0 {
+		t.Fatalf("wrap-at-EOL bit should be enabled, got mode %#x", sanitized)
+	}
+}
+
+func TestResolveWindowsConPTYSizePrefersConsoleInfo(t *testing.T) {
+	originalGetMode := windowsGetConsoleMode
+	originalGetInfo := windowsGetConsoleInfo
+	defer func() {
+		windowsGetConsoleMode = originalGetMode
+		windowsGetConsoleInfo = originalGetInfo
+	}()
+
+	windowsGetConsoleMode = func(handle windows.Handle, mode *uint32) error {
+		if mode != nil {
+			*mode = 1
+		}
+		return nil
+	}
+	windowsGetConsoleInfo = func(handle windows.Handle, info *windows.ConsoleScreenBufferInfo) error {
+		if info == nil {
+			return errors.New("nil info")
+		}
+		info.Window.Left = 0
+		info.Window.Top = 0
+		info.Window.Right = 99
+		info.Window.Bottom = 39
+		return nil
+	}
+
+	size := resolveWindowsConPTYSize()
+	if size.X != 100 || size.Y != 40 {
+		t.Fatalf("resolveWindowsConPTYSize() = (%d,%d), want (100,40)", size.X, size.Y)
 	}
 }
 
@@ -183,6 +273,12 @@ func TestResolveWindowsShellCommandFallsBackToCmd(t *testing.T) {
 	}
 	if len(args) != 3 || args[0] != "/Q" || args[1] != "/K" {
 		t.Fatalf("args = %#v, want /Q /K <integration>", args)
+	}
+	if args[2] != "chcp 65001>nul & prompt $P$G" {
+		t.Fatalf("cmd integration command = %q, want %q", args[2], "chcp 65001>nul & prompt $P$G")
+	}
+	if strings.Contains(args[2], "$_") {
+		t.Fatalf("cmd integration command should not contain forced newline, got %q", args[2])
 	}
 	if got := windowsNeoCodeCommandExample(shellPath); got != `.\\neocode` {
 		t.Fatalf("command example = %q, want .\\\\neocode", got)

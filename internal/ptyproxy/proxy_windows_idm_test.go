@@ -266,6 +266,7 @@ func TestStreamWindowsShellOutputWithIDMTriggersAutoDiagnosis(t *testing.T) {
 		&diagnosisTriggerStore{},
 		autoState,
 		nil,
+		nil,
 	)
 
 	if !autoState.OSCReady.Load() {
@@ -284,5 +285,89 @@ func TestStreamWindowsShellOutputWithIDMTriggersAutoDiagnosis(t *testing.T) {
 	}
 	if strings.Contains(output.String(), "]133;") {
 		t.Fatalf("OSC133 control bytes should be stripped, got %q", output.String())
+	}
+}
+
+func TestWindowsDiagnosisDispatcherFlushesAfterPromptReady(t *testing.T) {
+	tracker := &commandTracker{}
+	screen := &bytes.Buffer{}
+	ptyInput := &bytes.Buffer{}
+	dispatcher := newWindowsDiagnosisDispatcher(
+		"powershell.exe",
+		func(text string) error {
+			_, _ = screen.WriteString(text)
+			return nil
+		},
+		ptyInput,
+		tracker,
+		io.Discard,
+	)
+
+	dispatcher.Enqueue([]string{"[NeoCode Diagnosis]", "root cause: typo"})
+	if screen.Len() != 0 {
+		t.Fatalf("diagnosis should wait for prompt_ready, got %q", screen.String())
+	}
+	if ptyInput.Len() != 0 {
+		t.Fatalf("pty input should not advance prompt before flush, got %q", ptyInput.String())
+	}
+
+	dispatcher.MarkPromptReady(true)
+	if got := screen.String(); !strings.Contains(got, "\n[NeoCode Diagnosis]\nroot cause: typo\n") {
+		t.Fatalf("screen payload = %q, want diagnosis block", got)
+	}
+	if got := ptyInput.String(); got != "\r\n" {
+		t.Fatalf("pty input = %q, want single empty command to refresh prompt", got)
+	}
+}
+
+func TestWindowsDiagnosisDispatcherDefersWhenTyping(t *testing.T) {
+	tracker := &commandTracker{}
+	screen := &bytes.Buffer{}
+	ptyInput := &bytes.Buffer{}
+	dispatcher := newWindowsDiagnosisDispatcher(
+		"pwsh.exe",
+		func(text string) error {
+			_, _ = screen.WriteString(text)
+			return nil
+		},
+		ptyInput,
+		tracker,
+		io.Discard,
+	)
+
+	dispatcher.MarkPromptReady(true)
+	tracker.Observe([]byte("dir"))
+	dispatcher.Enqueue([]string{"[NeoCode Diagnosis]", "waiting"})
+	if screen.Len() != 0 {
+		t.Fatalf("diagnosis should not inject while user is typing, got %q", screen.String())
+	}
+
+	tracker.Observe([]byte("\r"))
+	dispatcher.MarkPromptReady(true)
+	if got := screen.String(); !strings.Contains(got, "\n[NeoCode Diagnosis]\nwaiting\n") {
+		t.Fatalf("expected diagnosis to flush after next prompt_ready, got %q", got)
+	}
+	if got := ptyInput.String(); got != "\r\n" {
+		t.Fatalf("pty input = %q, want prompt refresh after flush", got)
+	}
+}
+
+func TestBuildWindowsDiagnosisScreenBlock(t *testing.T) {
+	block := buildWindowsDiagnosisScreenBlock([]string{"[NeoCode Diagnosis]", "root cause: A&B|C<1>(ok)% "})
+	if block != "\n[NeoCode Diagnosis]\nroot cause: A&B|C<1>(ok)%\n" {
+		t.Fatalf("block = %q", block)
+	}
+}
+
+func TestBuildWindowsDiagnosisPrintCommandUsesBase64(t *testing.T) {
+	command := buildWindowsDiagnosisPrintCommand("powershell.exe", "\n[NeoCode Diagnosis]\nroot cause: A&B|C\n")
+	if !strings.Contains(command, "FromBase64String(") {
+		t.Fatalf("command = %q, want base64 decode", command)
+	}
+	if !strings.Contains(command, "-replace '\\n'") {
+		t.Fatalf("command = %q, want normalized newline replacement", command)
+	}
+	if strings.Contains(command, "root cause: A&B|C") {
+		t.Fatalf("command should not embed raw payload, got %q", command)
 	}
 }

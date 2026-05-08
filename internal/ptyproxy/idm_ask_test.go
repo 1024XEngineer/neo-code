@@ -115,6 +115,9 @@ func TestIDMControllerAskDoesNotInjectDiagnosisSkill(t *testing.T) {
 	if len(bindCalls) != 1 {
 		t.Fatalf("bind stream calls = %d, want 1", len(bindCalls))
 	}
+	if bindCalls[0].Role != "shell" {
+		t.Fatalf("bind role = %q, want %q", bindCalls[0].Role, "shell")
+	}
 	if len(askCalls) != 1 {
 		t.Fatalf("ask calls = %d, want 1", len(askCalls))
 	}

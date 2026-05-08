@@ -4,6 +4,7 @@ package ptyproxy
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -60,15 +61,15 @@ func RunManualShell(ctx context.Context, options ManualShellOptions) error {
 	synchronizedStdout := &serializedWriter{writer: normalized.Stdout, lock: &outputMu}
 	synchronizedStderr := &serializedWriter{writer: normalized.Stderr, lock: &outputMu}
 	outputSink := io.MultiWriter(synchronizedStdout, logBuffer)
-	printProxyInitializedBanner(synchronizedStdout)
-	writeProxyLine(synchronizedStdout, "[ NeoCode shell for Windows ]")
-	writeProxyf(synchronizedStdout, "[ shell: %s ]\n", windowsShellDisplayName(shellPath))
-	writeProxyf(synchronizedStdout, "[ diagnostics: `%s diag`, `%s diag -i`, `%s diag auto off` ]\n",
+	printProxyInitializedBanner(synchronizedStderr)
+	writeProxyLine(synchronizedStderr, "[ NeoCode shell for Windows ]")
+	writeProxyf(synchronizedStderr, "[ shell: %s ]\n", windowsShellDisplayName(shellPath))
+	writeProxyf(synchronizedStderr, "[ diagnostics: `%s diag`, `%s diag -i`, `%s diag auto off` ]\n",
 		windowsNeoCodeCommandExample(shellPath),
 		windowsNeoCodeCommandExample(shellPath),
 		windowsNeoCodeCommandExample(shellPath),
 	)
-	writeProxyLine(synchronizedStdout, "[ IDM: `diag -i` enters follow-up mode; use `@ai <question>`, `exit` to leave ]")
+	writeProxyLine(synchronizedStderr, "[ IDM: `diag -i` enters follow-up mode; use `@ai <question>`, `exit` to leave ]")
 
 	restoreConsoleMode, modeErr := enableWindowsConsoleModes()
 	if modeErr != nil && synchronizedStderr != nil {
@@ -84,18 +85,20 @@ func RunManualShell(ctx context.Context, options ManualShellOptions) error {
 	defer conPTY.Close()
 	stopResizeWatcher := watchWindowsConPTYResize(conPTY, synchronizedStderr)
 	defer stopResizeWatcher()
+	var ptyInputMu sync.Mutex
+	ptyInput := &serializedWriter{writer: conPTY.InputWriter(), lock: &ptyInputMu}
 
 	autoState := &autoRuntimeState{}
 	autoState.Enabled.Store(true)
 	autoState.OSCReady.Store(false)
-	printAutoModeBanner(synchronizedStdout, autoState)
+	printAutoModeBanner(synchronizedStderr, autoState)
 
 	inputCtx, cancelInput := context.WithCancel(context.Background())
 	defer cancelInput()
 
 	idm := newIDMController(idmControllerOptions{
-		PTYWriter:      conPTY.InputWriter(),
-		Output:         synchronizedStdout,
+		PTYWriter:      ptyInput,
+		Output:         synchronizedStderr,
 		Stderr:         synchronizedStderr,
 		AutoState:      autoState,
 		LogBuffer:      logBuffer,
@@ -106,6 +109,13 @@ func RunManualShell(ctx context.Context, options ManualShellOptions) error {
 
 	outputDone := make(chan struct{})
 	inputTracker := &commandTracker{}
+	diagDispatcher := newWindowsDiagnosisDispatcher(
+		shellPath,
+		func(text string) error { return conPTY.WriteScreenText(text) },
+		ptyInput,
+		inputTracker,
+		synchronizedStderr,
+	)
 	autoTriggerCh := make(chan diagnoseTrigger, 2)
 	recentTriggerStore := &diagnosisTriggerStore{}
 	go func() {
@@ -119,11 +129,12 @@ func RunManualShell(ctx context.Context, options ManualShellOptions) error {
 			recentTriggerStore,
 			autoState,
 			idm,
+			diagDispatcher,
 		)
 	}()
-	go pumpWindowsProxyInput(inputCtx, normalized.Stdin, conPTY.InputWriter(), inputTracker, idm)
+	go pumpWindowsProxyInput(inputCtx, normalized.Stdin, ptyInput, inputTracker, idm)
 
-	stopInterruptForwarder := watchWindowsInterruptSignals(conPTY.InputWriter(), synchronizedStderr, idm.HandleSignal)
+	stopInterruptForwarder := watchWindowsInterruptSignals(ptyInput, synchronizedStderr, idm.HandleSignal)
 	defer stopInterruptForwarder()
 
 	go func() {
@@ -195,7 +206,7 @@ func RunManualShell(ctx context.Context, options ManualShellOptions) error {
 					idm,
 					autoState,
 					publishShellState,
-					synchronizedStdout,
+					synchronizedStderr,
 					synchronizedStderr,
 				)
 			}()
@@ -214,7 +225,7 @@ func RunManualShell(ctx context.Context, options ManualShellOptions) error {
 			rpcClient,
 			gatewayEventNotifications,
 			diagnoseJobCh,
-			synchronizedStdout,
+			synchronizedStderr,
 			logBuffer,
 			normalized,
 			sessionID,
@@ -230,6 +241,29 @@ func RunManualShell(ctx context.Context, options ManualShellOptions) error {
 				}
 			},
 			diagCoordinator,
+			diagRuntimeConfig{
+				CallTimeout:     windowsDiagCallTimeout,
+				AutoCallTimeout: windowsDiagCallTimeout,
+				RenderInitial: func(output io.Writer, prepared preparedDiagnosisRequest, isAuto bool) {
+					lines, emit := buildDiagnosisInitialFeedbackLines(prepared, isAuto)
+					if !emit {
+						return
+					}
+					diagDispatcher.Enqueue(lines)
+				},
+				RenderFinal: func(output io.Writer, content string, isError bool) {
+					diagDispatcher.Enqueue(buildDiagnosisResultLines(content))
+				},
+				RenderError: func(output io.Writer, message string) {
+					diagDispatcher.Enqueue(buildDiagnosisResultLines(strings.TrimSpace(message)))
+				},
+				RenderCachedHit: func(output io.Writer, isAuto bool) {
+					if isAuto {
+						return
+					}
+					diagDispatcher.Enqueue([]string{"[NeoCode Diagnosis] using cached diagnosis result"})
+				},
+			},
 		)
 	}()
 
@@ -242,7 +276,7 @@ func RunManualShell(ctx context.Context, options ManualShellOptions) error {
 				autoState.Enabled.Store(false)
 				publishShellState(false)
 				writeProxyf(synchronizedStderr, "neocode shell: OSC133 probe timed out, auto diagnosis downgraded\n")
-				writeProxyLine(synchronizedStdout, "[ ! ] Auto diagnosis is downgraded because Windows shell integration is unavailable. Use `neocode diag` or `neocode diag -i` manually.")
+				writeProxyLine(synchronizedStderr, "[ ! ] Auto diagnosis is downgraded because Windows shell integration is unavailable. Use `neocode diag` or `neocode diag -i` manually.")
 			}
 		case <-diagCtx.Done():
 			return
@@ -275,8 +309,8 @@ func RunManualShell(ctx context.Context, options ManualShellOptions) error {
 		waitErr = <-waitDone
 	case diagnoseErr := <-autoDiagFatalCh:
 		forcedByAutoDiagFailure = true
-		writeProxyLine(synchronizedStdout, "[ x ] Auto diagnosis failed, NeoCode proxy will exit and return to the native shell.")
-		writeProxyf(synchronizedStdout, "[ reason: %s ]\n", strings.TrimSpace(diagnoseErr.Error()))
+		writeProxyLine(synchronizedStderr, "[ x ] Auto diagnosis failed, NeoCode proxy will exit and return to the native shell.")
+		writeProxyf(synchronizedStderr, "[ reason: %s ]\n", strings.TrimSpace(diagnoseErr.Error()))
 		_ = conPTY.Terminate()
 		waitErr = <-waitDone
 	case waitErr = <-waitDone:
@@ -293,7 +327,7 @@ func RunManualShell(ctx context.Context, options ManualShellOptions) error {
 	triggerWG.Wait()
 	diagWG.Wait()
 
-	printProxyExitedBanner(synchronizedStdout)
+	printProxyExitedBanner(synchronizedStderr)
 	if forcedByAutoDiagFailure {
 		return nil
 	}
@@ -355,9 +389,9 @@ func windowsPowerShellIntegrationCommand() string {
 	}, "; ")
 }
 
-// windowsCmdShellIntegrationCommand 注入 cmd 的 PROMPT OSC133 钩子，至少为 prompt_ready 提供稳定信号。
+// windowsCmdShellIntegrationCommand 为 cmd 设置 UTF-8 与稳定提示符，避免注入异常控制序列破坏光标状态。
 func windowsCmdShellIntegrationCommand() string {
-	return `for /f "delims=" %A in ('echo prompt $E^| cmd') do set "NEOCODE_ESC=%A" & prompt %NEOCODE_ESC%]133;A$G$_$P$G`
+	return `chcp 65001>nul & prompt $P$G`
 }
 
 var windowsLookPath = exec.LookPath
@@ -425,6 +459,240 @@ func printAutoModeBanner(writer io.Writer, autoState *autoRuntimeState) {
 	writeProxyLine(writer, "[ i ] Auto diagnosis is disabled. Use `neocode diag` for manual analysis.")
 }
 
+// windowsDiagnosisDispatcher 负责在 Windows 上缓存诊断文案并在安全时机写入 ConPTY 屏幕缓冲区。
+type windowsDiagnosisDispatcher struct {
+	mu          sync.Mutex
+	shellPath   string
+	screenWrite func(string) error
+	screenDead  bool
+	ptyWriter   io.Writer
+	tracker     *commandTracker
+	errWriter   io.Writer
+	promptReady bool
+	pending     []windowsDiagnosisPayload
+}
+
+// windowsDiagnosisPayload 描述一次待注入的诊断展示内容。
+type windowsDiagnosisPayload struct {
+	Lines []string
+}
+
+// newWindowsDiagnosisDispatcher 创建 Windows 诊断注入调度器。
+func newWindowsDiagnosisDispatcher(
+	shellPath string,
+	screenWrite func(string) error,
+	ptyWriter io.Writer,
+	tracker *commandTracker,
+	errWriter io.Writer,
+) *windowsDiagnosisDispatcher {
+	return &windowsDiagnosisDispatcher{
+		shellPath:   strings.TrimSpace(shellPath),
+		screenWrite: screenWrite,
+		ptyWriter:   ptyWriter,
+		tracker:     tracker,
+		errWriter:   errWriter,
+		pending:     make([]windowsDiagnosisPayload, 0, 4),
+	}
+}
+
+// Enqueue 提交一条诊断消息；若当前处于安全时机则立即注入，否则等待下一次 prompt_ready。
+func (d *windowsDiagnosisDispatcher) Enqueue(lines []string) {
+	if d == nil {
+		return
+	}
+	normalized := make([]string, 0, len(lines))
+	for _, line := range lines {
+		text := strings.TrimSpace(strings.ReplaceAll(line, "\r", ""))
+		if text == "" {
+			continue
+		}
+		normalized = append(normalized, text)
+	}
+	if len(normalized) == 0 {
+		return
+	}
+
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.pending = append(d.pending, windowsDiagnosisPayload{
+		Lines: normalized,
+	})
+	d.flushLocked()
+}
+
+// MarkPromptReady 更新 shell prompt 状态，并在 prompt 就绪时尝试冲刷待注入诊断消息。
+func (d *windowsDiagnosisDispatcher) MarkPromptReady(ready bool) {
+	if d == nil {
+		return
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.promptReady = ready
+	if ready {
+		d.flushLocked()
+	}
+}
+
+// flushLocked 在互斥锁保护下把可注入的诊断消息写入 ConPTY 屏幕并触发新提示符。
+func (d *windowsDiagnosisDispatcher) flushLocked() {
+	if d == nil || d.ptyWriter == nil || !d.promptReady || len(d.pending) == 0 {
+		return
+	}
+	if d.tracker != nil && d.tracker.CurrentLine() != "" {
+		return
+	}
+
+	var blocks []string
+	for _, item := range d.pending {
+		block := buildWindowsDiagnosisScreenBlock(item.Lines)
+		if strings.TrimSpace(block) == "" {
+			continue
+		}
+		blocks = append(blocks, block)
+	}
+	d.pending = d.pending[:0]
+	if len(blocks) == 0 {
+		return
+	}
+
+	payload := strings.Join(blocks, "\n")
+	if d.screenWrite != nil && !d.screenDead {
+		if err := d.screenWrite(payload); err == nil {
+			_, _ = io.WriteString(d.ptyWriter, "\r\n")
+			return
+		}
+		d.screenDead = true
+		if d.errWriter != nil {
+			writeProxyf(d.errWriter, "neocode diag: conpty screen write unavailable, fallback to safe shell print\n")
+		}
+	}
+	command := buildWindowsDiagnosisPrintCommand(d.shellPath, payload)
+	if strings.TrimSpace(command) == "" {
+		return
+	}
+	_, _ = io.WriteString(d.ptyWriter, command+"\r\n")
+}
+
+// buildWindowsDiagnosisScreenBlock 构造诊断文案块，统一使用 LF 避免 CRLF 叠加导致回车错位。
+func buildWindowsDiagnosisScreenBlock(lines []string) string {
+	if len(lines) == 0 {
+		return ""
+	}
+	normalized := make([]string, 0, len(lines))
+	for _, line := range lines {
+		text := strings.TrimSpace(strings.ReplaceAll(line, "\r", ""))
+		if text == "" {
+			continue
+		}
+		normalized = append(normalized, text)
+	}
+	if len(normalized) == 0 {
+		return ""
+	}
+	return "\n" + strings.Join(normalized, "\n") + "\n"
+}
+
+// buildWindowsDiagnosisPrintCommand 构造只负责打印文本的安全命令，避免把诊断正文当作命令执行。
+func buildWindowsDiagnosisPrintCommand(shellPath string, payload string) string {
+	trimmedPayload := strings.TrimSpace(payload)
+	if trimmedPayload == "" {
+		return ""
+	}
+	normalizedPayload := strings.ReplaceAll(payload, "\r\n", "\n")
+	normalizedPayload = strings.ReplaceAll(normalizedPayload, "\r", "\n")
+	if !strings.HasSuffix(normalizedPayload, "\n") {
+		normalizedPayload += "\n"
+	}
+	encoded := base64.StdEncoding.EncodeToString([]byte(normalizedPayload))
+	if isWindowsCmdShell(shellPath) {
+		// cmd 中统一调用 PowerShell 打印 Base64 解码文本，避免 cmd 元字符转义复杂度。
+		return fmt.Sprintf(
+			`powershell -NoLogo -NoProfile -Command "$t=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('%s')); [Console]::Out.Write(($t -replace '\n', [Environment]::NewLine))"`,
+			encoded,
+		)
+	}
+	// PowerShell / pwsh 直接在当前 shell 解码输出。
+	return fmt.Sprintf(
+		`$t=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('%s')); [Console]::Out.Write(($t -replace '\n', [Environment]::NewLine))`,
+		encoded,
+	)
+}
+
+// buildDiagnosisInitialFeedbackLines 构造首响提示文案，保持与既有终端文案一致。
+func buildDiagnosisInitialFeedbackLines(prepared preparedDiagnosisRequest, isAuto bool) ([]string, bool) {
+	if !IsDiagFastResponseEnabledFromEnv() {
+		return nil, false
+	}
+	hint, ok := buildDiagnosisQuickHint(prepared)
+	if isAuto && !ok {
+		return nil, false
+	}
+	if isAuto {
+		lines := []string{"[NeoCode Diagnosis] 快速预判（低置信度，完整诊断稍后返回）"}
+		if !ok {
+			return lines, true
+		}
+		lines = append(lines,
+			fmt.Sprintf("置信度: %.2f", hint.Confidence),
+			"可能根因: "+strings.TrimSpace(hint.RootCause),
+		)
+		if len(hint.InvestigationCommands) > 0 {
+			lines = append(lines, "建议先查:")
+			for _, command := range hint.InvestigationCommands {
+				lines = append(lines, "- "+strings.TrimSpace(command))
+			}
+		}
+		return lines, true
+	}
+
+	lines := []string{"[NeoCode Diagnosis] 正在诊断，完整结果稍后返回。"}
+	if !ok {
+		return lines, true
+	}
+	lines = append(lines,
+		"快速预判（低置信度）：",
+		fmt.Sprintf("置信度: %.2f", hint.Confidence),
+		"可能根因: "+strings.TrimSpace(hint.RootCause),
+	)
+	if len(hint.InvestigationCommands) > 0 {
+		lines = append(lines, "建议先查:")
+		for _, command := range hint.InvestigationCommands {
+			lines = append(lines, "- "+strings.TrimSpace(command))
+		}
+	}
+	return lines, true
+}
+
+// buildDiagnosisResultLines 构造最终诊断文案，解析成功时输出结构化字段，失败时输出原始文本。
+func buildDiagnosisResultLines(content string) []string {
+	lines := []string{"[NeoCode Diagnosis]"}
+	trimmedContent := strings.TrimSpace(content)
+	if trimmedContent == "" {
+		return append(lines, "- no diagnosis output")
+	}
+	var parsed diagnoseToolResult
+	if err := json.Unmarshal([]byte(trimmedContent), &parsed); err != nil || strings.TrimSpace(parsed.RootCause) == "" {
+		return append(lines, trimmedContent)
+	}
+	lines = append(lines,
+		fmt.Sprintf("confidence: %.2f", parsed.Confidence),
+		"root cause: "+strings.TrimSpace(parsed.RootCause),
+	)
+	if len(parsed.InvestigationCommands) > 0 {
+		lines = append(lines, "investigation commands:")
+		for _, command := range parsed.InvestigationCommands {
+			lines = append(lines, "- "+strings.TrimSpace(command))
+		}
+	}
+	if len(parsed.FixCommands) > 0 {
+		lines = append(lines, "fix commands:")
+		for _, command := range parsed.FixCommands {
+			lines = append(lines, "- "+strings.TrimSpace(command))
+		}
+	}
+	return lines
+}
+
 func generateWindowsShellSessionID(pid int) string {
 	if pid <= 0 {
 		pid = os.Getpid()
@@ -474,7 +742,7 @@ func bindWindowsShellRoleStream(
 }
 
 // bindWindowsShellRoleStreamWithCaller 复用 Windows 端 bind_stream 兼容回退逻辑。
-func bindWindowsShellRoleStreamWithCaller(
+func bindWindowsShellRoleStreamWithCallerLegacy(
 	ctx context.Context,
 	sessionID string,
 	autoEnabled bool,
@@ -509,7 +777,7 @@ func bindWindowsShellRoleStreamWithCaller(
 }
 
 // shouldFallbackWindowsBindStreamState 判断 bind_stream 是否需要回退到无 state 形式。
-func shouldFallbackWindowsBindStreamState(err error) bool {
+func shouldFallbackWindowsBindStreamStateLegacy(err error) bool {
 	if err == nil {
 		return false
 	}
@@ -523,7 +791,7 @@ func shouldFallbackWindowsBindStreamState(err error) bool {
 }
 
 // validateWindowsBindStreamAckFrame 校验 bind_stream ACK 帧。
-func validateWindowsBindStreamAckFrame(ack gateway.MessageFrame) error {
+func validateWindowsBindStreamAckFrameLegacy(ack gateway.MessageFrame) error {
 	if ack.Type == gateway.FrameTypeError && ack.Error != nil {
 		return fmt.Errorf(
 			"gateway bind_stream failed (%s): %s",
@@ -610,7 +878,7 @@ func consumeWindowsGatewayNotifications(
 }
 
 // demuxGatewayNotifications 将网关通知拆分为 runtime 事件流与控制通知流，避免多方竞争同一通知通道。
-func demuxGatewayNotifications(
+func demuxGatewayNotificationsLegacy(
 	ctx context.Context,
 	source <-chan gatewayclient.Notification,
 	eventSink chan<- gatewayclient.Notification,
@@ -642,7 +910,7 @@ func demuxGatewayNotifications(
 }
 
 // forwardGatewayNotification 在上下文可用时转发通知，避免退出阶段 goroutine 堵塞。
-func forwardGatewayNotification(
+func forwardGatewayNotificationLegacy(
 	ctx context.Context,
 	target chan<- gatewayclient.Notification,
 	notification gatewayclient.Notification,
@@ -668,6 +936,7 @@ func streamWindowsShellOutputWithIDM(
 	recentTriggerStore *diagnosisTriggerStore,
 	autoState *autoRuntimeState,
 	idm *idmController,
+	diagDispatcher *windowsDiagnosisDispatcher,
 ) {
 	if ptyReader == nil || outputSink == nil || commandLogBuffer == nil {
 		return
@@ -700,6 +969,9 @@ func streamWindowsShellOutputWithIDM(
 				}
 				switch event.Type {
 				case ShellEventPromptReady:
+					if diagDispatcher != nil {
+						diagDispatcher.MarkPromptReady(true)
+					}
 					if autoState != nil {
 						autoState.OSCReady.Store(true)
 					}
@@ -717,10 +989,16 @@ func streamWindowsShellOutputWithIDM(
 					}
 					fallbackCommandBuffer.Reset()
 				case ShellEventCommandStart:
+					if diagDispatcher != nil {
+						diagDispatcher.MarkPromptReady(false)
+					}
 					collectingCommand = true
 					commandLogBuffer = NewUTF8RingBuffer(DefaultRingBufferCapacity / 2)
 					fallbackCommandBuffer.Reset()
 				case ShellEventCommandDone:
+					if diagDispatcher != nil {
+						diagDispatcher.MarkPromptReady(false)
+					}
 					collectingCommand = false
 					commandText := ""
 					if tracker != nil {
@@ -776,21 +1054,22 @@ func pumpWindowsProxyInput(
 		if readCount > 0 {
 			payload := buffer[:readCount]
 			for _, item := range payload {
+				normalizedInput := normalizeWindowsConPTYInputByte(item)
 				if idm != nil && idm.IsActive() {
 					if idm.ShouldPassthroughInput() {
 						if tracker != nil {
-							tracker.Observe([]byte{item})
+							tracker.Observe([]byte{normalizedInput})
 						}
-						_, _ = ptyWriter.Write([]byte{item})
+						_, _ = ptyWriter.Write([]byte{normalizedInput})
 						continue
 					}
 					idm.HandleInputByte(item)
 					continue
 				}
 				if tracker != nil {
-					tracker.Observe([]byte{item})
+					tracker.Observe([]byte{normalizedInput})
 				}
-				_, _ = ptyWriter.Write([]byte{item})
+				_, _ = ptyWriter.Write([]byte{normalizedInput})
 			}
 		}
 		if err != nil {
@@ -869,10 +1148,10 @@ func enableWindowsConsoleModes() (func(), error) {
 		}
 	}
 	applyMode(os.Stdout, func(mode uint32) uint32 {
-		return mode | windowsEnableVirtualTerminalProcessing
+		return sanitizeWindowsOutputConsoleMode(mode)
 	}, nil)
 	applyMode(os.Stderr, func(mode uint32) uint32 {
-		return mode | windowsEnableVirtualTerminalProcessing
+		return sanitizeWindowsOutputConsoleMode(mode)
 	}, nil)
 	applyMode(os.Stdin, sanitizeWindowsInputConsoleMode, sanitizeWindowsInputConsoleMode)
 
@@ -888,13 +1167,27 @@ func enableWindowsConsoleModes() (func(), error) {
 	return restore, firstErr
 }
 
-// sanitizeWindowsInputConsoleMode 清除 VT 输入，避免按键被编码成 `^[[...` 序列传给子 shell。
+// sanitizeWindowsInputConsoleMode 关闭 VT 输入与本地行回显，使键盘输入仅由 ConPTY 子 shell 负责回显与编辑。
 func sanitizeWindowsInputConsoleMode(mode uint32) uint32 {
-	return mode &^ windowsEnableVirtualTerminalInput
+	return mode &^ (windowsEnableVirtualTerminalInput | windows.ENABLE_LINE_INPUT | windows.ENABLE_ECHO_INPUT)
+}
+
+// normalizeWindowsConPTYInputByte 统一 Windows 输入字节到 ConPTY 兼容形式。
+// 在部分 ConPTY 版本中，0x08 可能被解释为按词删除路径，这里转换为 0x7F 避免该问题。
+func normalizeWindowsConPTYInputByte(inputByte byte) byte {
+	if inputByte == 0x08 {
+		return 0x7F
+	}
+	return inputByte
+}
+
+// sanitizeWindowsOutputConsoleMode 为代理输出启用稳定的换行滚屏语义与 VT 渲染。
+func sanitizeWindowsOutputConsoleMode(mode uint32) uint32 {
+	return mode | windows.ENABLE_PROCESSED_OUTPUT | windows.ENABLE_WRAP_AT_EOL_OUTPUT | windowsEnableVirtualTerminalProcessing
 }
 
 // consumeDiagSignals 消费手动与自动诊断任务，复用统一诊断协调器避免重复请求。
-func consumeDiagSignals(
+func consumeDiagSignalsLegacy(
 	ctx context.Context,
 	rpcClient *gatewayclient.GatewayRPCClient,
 	_ <-chan gatewayclient.Notification,
@@ -937,7 +1230,7 @@ func consumeDiagSignals(
 				go func(autoJob diagnoseJob) {
 					defer autoWG.Done()
 					defer func() { <-autoSlots }()
-					diagnoseErr := runSingleDiagnosisWithCoordinator(
+					diagnoseErr := runSingleDiagnosisWithCoordinatorLegacy(
 						ctx,
 						coordinator,
 						rpcClient,
@@ -950,13 +1243,13 @@ func consumeDiagSignals(
 						true,
 						autoState,
 					)
-					if diagnoseErr != nil && onAutoDiagnoseFailure != nil && shouldTerminateShellOnAutoDiagnoseError(diagnoseErr) {
+					if diagnoseErr != nil && onAutoDiagnoseFailure != nil && shouldTerminateShellOnAutoDiagnoseErrorLegacy(diagnoseErr) {
 						onAutoDiagnoseFailure(diagnoseErr)
 					}
 				}(job)
 				continue
 			}
-			_ = runSingleDiagnosisWithCoordinator(
+			_ = runSingleDiagnosisWithCoordinatorLegacy(
 				ctx,
 				coordinator,
 				rpcClient,
@@ -974,7 +1267,7 @@ func consumeDiagSignals(
 }
 
 // shouldTerminateShellOnAutoDiagnoseError 判断自动诊断错误是否代表代理链路不可恢复。
-func shouldTerminateShellOnAutoDiagnoseError(err error) bool {
+func shouldTerminateShellOnAutoDiagnoseErrorLegacy(err error) bool {
 	if err == nil {
 		return false
 	}
@@ -1004,7 +1297,7 @@ func shouldTerminateShellOnAutoDiagnoseError(err error) bool {
 }
 
 // runSingleDiagnosisWithCoordinator 执行一次诊断，并统一渲染快速反馈与最终结果。
-func runSingleDiagnosisWithCoordinator(
+func runSingleDiagnosisWithCoordinatorLegacy(
 	ctx context.Context,
 	coordinator *diagnosisCoordinator,
 	rpcClient *gatewayclient.GatewayRPCClient,
@@ -1063,7 +1356,7 @@ func updateWindowsShellState(rpcClient *gatewayclient.GatewayRPCClient, sessionI
 	return bindWindowsShellRoleStream(callCtx, rpcClient, sessionID, autoEnabled)
 }
 
-func decodeGatewayNotificationPayload(raw json.RawMessage) (map[string]any, bool) {
+func decodeGatewayNotificationPayloadLegacy(raw json.RawMessage) (map[string]any, bool) {
 	if len(raw) == 0 {
 		return nil, false
 	}
@@ -1074,7 +1367,7 @@ func decodeGatewayNotificationPayload(raw json.RawMessage) (map[string]any, bool
 	return decoded, true
 }
 
-func readMapString(container map[string]any, key string) string {
+func readMapStringLegacy(container map[string]any, key string) string {
 	if container == nil {
 		return ""
 	}
@@ -1106,38 +1399,40 @@ func normalizePayloadMap(payload any) (map[string]any, bool) {
 
 // renderDiagnosis 以统一格式展示诊断最终结果。
 func renderDiagnosis(output io.Writer, content string, isError bool) {
-	headerColor := "\033[36m"
-	if isError {
-		headerColor = "\033[31m"
-	}
-	writeProxyf(output, "\n%s[NeoCode Diagnosis]\033[0m\n", headerColor)
-
-	trimmedContent := strings.TrimSpace(content)
-	if trimmedContent == "" {
-		writeProxyLine(output, "- no diagnosis output")
-		return
-	}
-
-	var parsed diagnoseToolResult
-	if err := json.Unmarshal([]byte(trimmedContent), &parsed); err != nil || strings.TrimSpace(parsed.RootCause) == "" {
-		writeProxyLine(output, trimmedContent)
-		return
-	}
-
-	writeProxyf(output, "confidence: %.2f\n", parsed.Confidence)
-	writeProxyf(output, "root cause: %s\n", strings.TrimSpace(parsed.RootCause))
-	if len(parsed.InvestigationCommands) > 0 {
-		writeProxyLine(output, "investigation commands:")
-		for _, command := range parsed.InvestigationCommands {
-			writeProxyf(output, "- %s\n", strings.TrimSpace(command))
+	withDiagnosisCursorGuard(output, func() {
+		headerColor := "\033[36m"
+		if isError {
+			headerColor = "\033[31m"
 		}
-	}
-	if len(parsed.FixCommands) > 0 {
-		writeProxyLine(output, "fix commands:")
-		for _, command := range parsed.FixCommands {
-			writeProxyf(output, "- %s\n", strings.TrimSpace(command))
+		writeProxyf(output, "\n%s[NeoCode Diagnosis]\033[0m\n", headerColor)
+
+		trimmedContent := strings.TrimSpace(content)
+		if trimmedContent == "" {
+			writeProxyLine(output, "- no diagnosis output")
+			return
 		}
-	}
+
+		var parsed diagnoseToolResult
+		if err := json.Unmarshal([]byte(trimmedContent), &parsed); err != nil || strings.TrimSpace(parsed.RootCause) == "" {
+			writeProxyLine(output, trimmedContent)
+			return
+		}
+
+		writeProxyf(output, "confidence: %.2f\n", parsed.Confidence)
+		writeProxyf(output, "root cause: %s\n", strings.TrimSpace(parsed.RootCause))
+		if len(parsed.InvestigationCommands) > 0 {
+			writeProxyLine(output, "investigation commands:")
+			for _, command := range parsed.InvestigationCommands {
+				writeProxyf(output, "- %s\n", strings.TrimSpace(command))
+			}
+		}
+		if len(parsed.FixCommands) > 0 {
+			writeProxyLine(output, "fix commands:")
+			for _, command := range parsed.FixCommands {
+				writeProxyf(output, "- %s\n", strings.TrimSpace(command))
+			}
+		}
+	})
 }
 
 func renderWindowsDiagnosis(output io.Writer, content string) {

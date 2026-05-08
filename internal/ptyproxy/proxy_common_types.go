@@ -158,3 +158,13 @@ func (t *commandTracker) LastCommand() string {
 	defer t.mu.Unlock()
 	return strings.TrimSpace(t.lastCommand)
 }
+
+// CurrentLine 返回当前正在编辑且尚未提交的输入行，用于判断是否处于安全注入时机。
+func (t *commandTracker) CurrentLine() string {
+	if t == nil {
+		return ""
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return strings.TrimSpace(string(t.lineBuffer))
+}
