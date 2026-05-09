@@ -232,3 +232,33 @@ func TestParseGatewayRuntimeEventHandlesEdgeCases(t *testing.T) {
 		t.Fatalf("readString = %q, want empty for non-string", value)
 	}
 }
+
+func TestParseGatewayRuntimeEventExtractsEnvelopeAndCloneRawMessageCopiesBytes(t *testing.T) {
+	raw := json.RawMessage(`{"session_id":"s-1","run_id":"r-1","payload":{"event_type":"user_question_requested","payload":{"request_id":"ask-1"}}}`)
+	eventType, sessionID, runID, envelope, err := parseGatewayRuntimeEvent(raw)
+	if err != nil {
+		t.Fatalf("parse event: %v", err)
+	}
+	if eventType != "user_question_requested" || sessionID != "s-1" || runID != "r-1" {
+		t.Fatalf("unexpected event header: type=%q session=%q run=%q", eventType, sessionID, runID)
+	}
+	if got := readString(envelope, "request_id"); got != "ask-1" {
+		t.Fatalf("envelope request_id = %q, want ask-1", got)
+	}
+
+	cloned := cloneRawMessage(raw)
+	if string(cloned) != string(raw) {
+		t.Fatalf("cloneRawMessage() = %s, want %s", cloned, raw)
+	}
+	cloned[2] = 'X'
+	if string(raw) != `{"session_id":"s-1","run_id":"r-1","payload":{"event_type":"user_question_requested","payload":{"request_id":"ask-1"}}}` {
+		t.Fatalf("expected clone mutation not to affect source, got %s", raw)
+	}
+
+	if got := readString(map[string]any{"value": "answer"}, "value"); got != "answer" {
+		t.Fatalf("readString(string) = %q, want answer", got)
+	}
+	if got := readString(nil, "value"); got != "" {
+		t.Fatalf("readString(nil) = %q, want empty", got)
+	}
+}

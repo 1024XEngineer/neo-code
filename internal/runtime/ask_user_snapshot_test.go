@@ -87,3 +87,113 @@ func TestPendingUserQuestionLifecycleInRunState(t *testing.T) {
 		t.Fatalf("expected pending user question to be cleared, got %+v", cleared.PendingUserQuestion)
 	}
 }
+
+func TestAskUserSnapshotHelpersHandleEdgeCases(t *testing.T) {
+	t.Parallel()
+
+	service := &Service{}
+	state := newRunState("run-edge-q", newRuntimeSession("session-edge-q"))
+
+	service.setPendingUserQuestion(nil, UserQuestionRequestedPayload{RequestID: "ignored"})
+	service.setPendingUserQuestion(&state, UserQuestionRequestedPayload{
+		RequestID: "ask-edge",
+		Title:     "title",
+		Options:   []any{"keep"},
+	})
+
+	service.clearPendingUserQuestionIfMatches(&state, "other")
+	if buildRuntimeSnapshot(&state).PendingUserQuestion == nil {
+		t.Fatal("expected non-matching request id to keep pending question")
+	}
+
+	service.clearPendingUserQuestionIfMatches(&state, " ASK-EDGE ")
+	if buildRuntimeSnapshot(&state).PendingUserQuestion != nil {
+		t.Fatal("expected case-insensitive request id match to clear pending question")
+	}
+
+	service.setPendingUserQuestion(&state, UserQuestionRequestedPayload{RequestID: "ask-blank"})
+	service.clearPendingUserQuestionIfMatches(&state, "   ")
+	if buildRuntimeSnapshot(&state).PendingUserQuestion != nil {
+		t.Fatal("expected blank request id to clear pending question")
+	}
+
+	service.clearPendingUserQuestionIfMatches(nil, "ignored")
+	var nilService *Service
+	nilService.setPendingUserQuestion(&state, UserQuestionRequestedPayload{RequestID: "nil-service"})
+	if buildRuntimeSnapshot(&state).PendingUserQuestion != nil {
+		t.Fatal("nil service should not mutate run state")
+	}
+}
+
+func TestParseAskUserPayloadHelpersHandlePointersAndInvalidMaps(t *testing.T) {
+	t.Parallel()
+
+	requested, ok := parseAskUserRequestedPayload(&UserQuestionRequestedPayload{
+		RequestID: "ask-pointer",
+		Kind:      "text",
+	})
+	if !ok || requested.RequestID != "ask-pointer" {
+		t.Fatalf("pointer payload = %+v, ok=%v", requested, ok)
+	}
+	if _, ok := parseAskUserRequestedPayload((*UserQuestionRequestedPayload)(nil)); ok {
+		t.Fatal("nil requested payload pointer should not parse")
+	}
+	if _, ok := parseAskUserRequestedPayload(map[string]any{"request_id": "   "}); ok {
+		t.Fatal("blank request_id should be rejected")
+	}
+	if _, ok := parseAskUserRequestedPayload("invalid"); ok {
+		t.Fatal("non-map requested payload should not parse")
+	}
+
+	resolved, ok := parseAskUserResolvedPayload(&UserQuestionResolvedPayload{
+		RequestID: "ask-resolved",
+		Status:    "answered",
+	})
+	if !ok || resolved.RequestID != "ask-resolved" {
+		t.Fatalf("resolved pointer payload = %+v, ok=%v", resolved, ok)
+	}
+	if _, ok := parseAskUserResolvedPayload((*UserQuestionResolvedPayload)(nil)); ok {
+		t.Fatal("nil resolved payload pointer should not parse")
+	}
+	if _, ok := parseAskUserResolvedPayload(123); ok {
+		t.Fatal("non-map resolved payload should not parse")
+	}
+}
+
+func TestAskUserSnapshotScalarConverters(t *testing.T) {
+	t.Parallel()
+
+	if got := trimAnyString("  hello  "); got != "hello" {
+		t.Fatalf("trimAnyString() = %q, want hello", got)
+	}
+	if got := trimAnyString(123); got != "" {
+		t.Fatalf("trimAnyString(non-string) = %q, want empty", got)
+	}
+	if got := toAnyBool(true); !got {
+		t.Fatal("toAnyBool(true) = false, want true")
+	}
+	if got := toAnyBool("true"); got {
+		t.Fatal("toAnyBool(non-bool) = true, want false")
+	}
+
+	intCases := map[string]any{
+		"int":     int(7),
+		"int32":   int32(8),
+		"int64":   int64(9),
+		"float64": float64(10),
+	}
+	want := map[string]int{
+		"int":     7,
+		"int32":   8,
+		"int64":   9,
+		"float64": 10,
+	}
+	for name, value := range intCases {
+		if got := toAnyInt(value); got != want[name] {
+			t.Fatalf("toAnyInt(%s) = %d, want %d", name, got, want[name])
+		}
+	}
+	if got := toAnyInt("11"); got != 0 {
+		t.Fatalf("toAnyInt(non-number) = %d, want 0", got)
+	}
+}
