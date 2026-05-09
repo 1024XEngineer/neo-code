@@ -712,6 +712,85 @@ html, body, #root {
 }
 .markdown-streamdown th { background: var(--bg-surface); font-weight: 600; }
 .markdown-streamdown tr:nth-child(even) { background: var(--bg-surface); }
+.markdown-streamdown [data-streamdown="strong"] {
+  font-weight: 700;
+  color: var(--text-primary);
+}
+.markdown-streamdown [data-streamdown="inline-code"] {
+  font-family: var(--font-mono);
+  font-size: 0.88em;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-primary);
+  color: var(--text-primary);
+}
+.markdown-streamdown [data-streamdown="code-block"] {
+  margin: 0.8em 0;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-primary);
+  background: var(--code-bg);
+  position: relative;
+  overflow: hidden;
+}
+.markdown-streamdown [data-streamdown="code-block-actions"] {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-primary);
+  background: color-mix(in srgb, var(--bg-elevated) 88%, transparent);
+  z-index: 2;
+}
+.markdown-streamdown [data-streamdown="code-block-copy-button"] {
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-sm);
+  border: none;
+  background: transparent;
+  color: var(--text-tertiary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: color var(--duration-fast) var(--ease-out), background var(--duration-fast) var(--ease-out);
+}
+.markdown-streamdown [data-streamdown="code-block-copy-button"]:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+.markdown-streamdown [data-streamdown="code-block-header"] {
+  display: flex;
+  align-items: center;
+  min-height: 30px;
+  padding: 6px 40px 6px 12px;
+  border-bottom: 1px solid var(--border-primary);
+  background: var(--code-header);
+}
+.markdown-streamdown [data-streamdown="code-block-header"] span {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-tertiary);
+  text-transform: lowercase;
+}
+.markdown-streamdown [data-streamdown="code-block"] pre {
+  margin: 0;
+  padding: 10px 12px;
+  overflow: auto;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.7;
+}
+.markdown-streamdown [data-streamdown="code-block"] code {
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-primary);
+}
 
 /* ── User Bubble ── */
 .user-row {

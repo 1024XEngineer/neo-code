@@ -20,6 +20,8 @@
   "dependencies": {
     "@fontsource/jetbrains-mono": "^5.2.8",
     "@monaco-editor/react": "^4.7.0",
+    "@streamdown/cjk": "^1.0.3",
+    "@streamdown/code": "^1.1.1",
     "electron-updater": "^6.8.3",
     "lucide-react": "^0.468.0",
     "monaco-editor": "^0.52.2",

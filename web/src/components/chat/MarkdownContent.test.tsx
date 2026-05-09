@@ -15,4 +15,18 @@ describe('MarkdownContent', () => {
     render(<MarkdownContent content={'```ts\nconst a = 1'} streaming />)
     expect(await screen.findByText(/const a = 1/)).toBeTruthy()
   })
+
+  it('renders strong text, inline code and fenced code blocks', async () => {
+    const { container } = render(
+      <MarkdownContent content={'**加粗** `inline` \n\n```ts\nconst v = 1\n```'} />,
+    )
+    expect(await screen.findByText('加粗')).toBeTruthy()
+    expect(await screen.findByText('inline')).toBeTruthy()
+
+    expect(container.querySelector('[data-streamdown="strong"]')).toBeTruthy()
+    expect(container.querySelector('[data-streamdown="inline-code"]')).toBeTruthy()
+    expect(container.querySelector('[data-streamdown="code-block"]')).toBeTruthy()
+    expect(container.querySelector('[data-streamdown="code-block-header"]')).toBeTruthy()
+    expect(container.querySelector('[data-streamdown="code-block-copy-button"]')).toBeTruthy()
+  })
 })
