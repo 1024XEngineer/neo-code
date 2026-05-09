@@ -29,71 +29,7 @@
 
 ## 2. 系统背景与目标
 
-### 2.1 核心定位
-
-NeoCode 是一个**本地优先、架构解耦、可被随时唤醒和编排的 AI Coding Agent 基础设施**。
-
-2025–2026 年，AI 编码工具已经从"代码补全"进化到"Agent 自主行动"——Claude Code、Codex CLI、OpenCode 等终端 CLI 工具已经证明了开发者不需要换 IDE 就能获得 Agent 级的 AI 辅助。MCP 和 Skills/Hooks 机制已成为 Agent 扩展生态的通用语言。多模型接入也不再是新鲜事。
-
-在这个背景下，NeoCode 的定位不是"发明一个新品类"，而是在已有的 Agent 基础设施共识之上，**将这些能力按照自己的设计哲学重新组装**——追求**更强的架构解耦**、**更多的客户端形态**、**更开放的多模型自由**，并通过 Gateway 统一 RPC 边界将这些能力暴露给任何想接入的客户端。
-
-### 2.2 NeoCode 的设计信念
-
-NeoCode 的设计基于以下几条核心判断：
-
-1. **AI Agent 不应该是编辑器的附属功能。** 它应该是一个独立的"结对编程进程"——在你写代码时安静运行在终端或后台，在你离开工位时仍然可以通过 IM 唤醒。所以 NeoCode 选择**"旁路架构"**而非"IDE 插件架构"（这一判断与 Claude Code、Codex CLI、OpenCode 一致——它们是 CLI 工具，不是 IDE 插件。但 NeoCode 进一步将**"独立进程"**推到极致：提供独立的 Gateway Daemon、独立的 Runner，以及可被第三方适配器接入的 RPC 接口）。
-
-2. **开发者不应该为 AI 体验而被锁定在一个模型或一个厂商上。** 多模型支持已是行业标配（Claude Code 支持多模型、Codex 原生多模型、OpenCode 也支持切换 provider）。NeoCode 的做法是让 Provider 成为架构层面的**一等公民**——不是"配置项切换"，而是**独立的插件化接口层**，新增模型的改动严格收敛在 Provider 包内，上层零改动。
-
-3. **AI Agent 的能力边界应该由使用者决定。** MCP 和 Skills/Hooks 是 Codex、Claude Code 等行业先行者开创的扩展机制。NeoCode 完整支持这些开放协议，并进一步将它们**整合**到 Gateway 安全边界内——所有工具（包括 MCP 挂载的外部工具）**统一经过** Security Engine 的权限裁决，确保扩展能力不侵蚀安全底线。
-
-4. **客户端形态应该自由演化。** 终端 TUI 是核心体验（与 Claude Code/Codex CLI/OpenCode 同类），但不应是唯一入口。NeoCode 的 Gateway 将 Agent 能力通过标准 JSON-RPC/SSE/WebSocket 暴露，使得 Web 端、桌面端、飞书 Bot、CI/CD 脚本都是**对等的一等公民客户端**——不需要"终端优先再做 Web 适配"。
-
-### 2.3 目标用户
-
-| 用户角色 | 核心场景 | 是否独创 | NeoCode 的思考 |
-|----------|----------|----------|---------------|
-| 追求编辑器自由的独立开发者/资深工程师 | 习惯 Neovim/JetBrains/Emacs，不愿为 AI 迁移到特定 IDE | 人有我有：Claude Code、Codex CLI、OpenCode 均已解决"不换 IDE 用 AI" | 旁路架构与它们一致。NeoCode 的不同：Gateway 作为一等公民设计——TUI/Web/Desktop 完全对等，不是"先有 CLI 再补 Web"；多模型切换是架构级的 Provider 插件化，不是配置切换 |
-| 需要随时响应代码问题的敏捷/分布式团队 | 通勤或开会时遇到线上问题，快速查阅和修改代码 | 创意集成，做的更好：Claude Code 有 headless 模式可做基础集成；NeoCode 将 IM 接入作为一等公民设计 | Local Runner 反向连接 + 飞书 Adapter 原生集成：Runner 主动连 Gateway（无需公网 IP），飞书 Bot 作为对等客户端接入 Gateway RPC。这不是"CLI 工具加了个 IM 通知"，而是 IM 就是一个完整的 Agent 交互界面 |
-| DevOps 工程师与自动化工作流构建者 | 需要把 AI 接入 CI/CD，通过 RPC 驱动代码库操作 | 人有我有：Codex/Claude Code 可做脚本集成 | NeoCode 的 Gateway 从设计第一天就是独立的 RPC 服务（`neocode gateway` 子命令），不是 CLI 的附属模式。JSON-RPC 协议使得 Python/Bash/Node.js 脚本都能平等接入 |
-
-### 2.4 与同类产品的差异化
-
-NeoCode 不声称自己发明了 AI Coding Agent 的基础范式——ReAct 循环、MCP 扩展、流式推理、上下文压缩这些都是行业的共同财富。以下按照"行业现状"和"NeoCode 的差异化设计"两层来对比。
-
-**行业现状（2026 年 AI 编码工具概览）：**
-
-| 产品 | 类型 | 已有能力 |
-|------|------|----------|
-| **Claude Code** | CLI Agent（闭源） | ReAct Agent、MCP、Skills/Hooks、多模型、上下文压缩、Plan Mode、终端 TUI |
-| **Codex CLI** | CLI Agent（开源） | ReAct Agent、MCP、多模型、Skills、沙箱执行、终端 TUI |
-| **OpenCode** | CLI Agent（开源） | ReAct Agent、MCP、多模型、终端 TUI、可自定义 provider |
-| **Cursor / Windsurf** | IDE 分叉（闭源） | IDE 深度集成、Agent 模式、代码补全、内联编辑 |
-| **GitHub Copilot** | IDE 插件 | 代码补全、Agent 模式（Copilot Chat）、MCP |
-
-**NeoCode 的差异化：不是"别人没有我有"，而是"别人有，我按自己的设计哲学重新组装，并在几个方向上做得更深"。**
-
-| 能力维度 | 行业现状 | NeoCode 的设计选择 |
-|----------|----------|-------------------|
-| **架构模型** | Claude Code/Codex CLI/OpenCode 是 CLI 优先的单体 Agent | Gateway 作为独立的 RPC 服务层：Agent 能力通过 JSON-RPC/SSE/WS 对外暴露，所有客户端（包括 TUI）都通过同一套 RPC 协议接入。这使得"把 Agent 作为基础设施"从第一天就是架构事实，不是后期改造 |
-| **多模型支持** | Codex、OpenCode、Claude Code 均支持多模型切换 | Provider 是架构级的一等公民：不是"配置项"，而是独立的插件化接口层（2 方法 interface）。新增模型不需要改 Runtime 或 Gateway 一行代码 |
-| **多客户端** | Claude Code 有 VS Code 扩展、Codex 有 Web UI | NeoCode 的 TUI/Web/Desktop 三者完全对等——没有"先做 CLI 再适配 Web"的技术债。第三方客户端（如飞书 Bot）通过适配器接入，与原生客户端在 Gateway 视角完全一致 |
-| **IM 接入** | Claude Code 可通过 API 做基础集成 | NeoCode 将飞书 Bot 作为一等公民客户端设计——完整的 Agent 交互（run、ask、permission_request、流式回复）都可以在 IM 中完成。Local Runner 反向连接使得 IM 指令能操作工位电脑的代码库 |
-| **安全模型** | Claude Code 有权限系统（ask/allow/deny） | NeoCode 在此基础上增加：策略引擎（按 Priority 排序的规则匹配）、工作区沙箱（路径穿越/Symlink 检测）、敏感路径自动检测（`.env`、`.ssh`、密钥文件）、Runner 的 Capability Token 签名——四层纵深防御 |
-| **部署形态** | Claude Code 为单二进制、Codex 需要 Node.js 运行时 | Go 静态编译单二进制（`CGO_ENABLED=0`），零运行时依赖。同一二进制提供 CLI、Gateway Daemon、Runner、HTTP Daemon 全部子命令 |
-| **可扩展性** | Claude Code/Codex 均有 MCP 和 Hooks/Skills | NeoCode 完整支持 MCP + Skills + Hooks，并明确区分三种扩展路径（有代码工具、零代码 MCP、零代码 Skills），在 §7.6 中集中定义了 7 个扩展点的接口契约和 4 条不可扩展边界 |
-
-### 2.5 核心痛点与 NeoCode 的方案
-
-以下三个痛点并非 NeoCode 独自发现——它们是 AI 编码工具行业公认的摩擦点。这里记录 NeoCode 针对每个痛点的**具体设计方案**。
-
-| 痛点 | 量化估算 | 行业中已有的解决思路 | NeoCode 的方案 |
-|------|----------|---------------------|---------------|
-| 终端→AI→编辑器频繁切换 | 每天 1–2 小时 | Claude Code/Codex CLI/OpenCode 均通过终端内 Agent 解决 | PTY Proxy 诊断代理：不只是"在终端里跑 AI"，而是自动截获终端最近一次命令的异常输出（编译错误、运行时 panic），原地附加 AI 诊断，不需要离开终端 |
-| 非工位状态下的代码查阅与应急 | 单次切换耗时极大 | Claude Code 的 headless 模式可做基础集成 | Local Runner 反向连接 + 飞书 Adapter 原生集成：Runner 主动连 Gateway（无需公网 IP/入站端口），飞书 Bot 作为对等客户端接入，手机端发指令 → 工位电脑执行 → 结果回传 IM |
-| 将公司内部工具接入 AI 工作流 | 传统 AI 工具无法调用内网基建 | Claude Code/Codex/OpenCode 率先引入了 MCP 和 Skills 机制 | NeoCode **完整支持 MCP + Skills**（这是行业标准，不是 NeoCode 独创）。NeoCode 的增量在于：外部的 MCP 工具统一经过 Security Engine 的权限裁决（每次调用前经过 PolicyEngine + WorkspaceSandbox），确保"扩展能力"不变成"安全漏洞"；Skills 的 project/global 双层加载 + 会话级激活，使其更易于在团队中管理和复用 |
-
-### 2.6 非目标
+### 2.1 非目标
 
 NeoCode **明确不追求**以下目标：
 
@@ -103,7 +39,7 @@ NeoCode **明确不追求**以下目标：
 4. **不做重型的代码编辑器分叉** — 不 Fork VS Code 或任何编辑器，UI 定位为 Agent 的独立控制面板与协作客户端。
 5. **不做"云端渲染/强依赖公网"的 Web 客户端** — 在离线局域网环境下（搭配本地模型），Web 端和桌面端也能独立拉起并直连本机 Gateway，始终坚持"本地工作区优先"的安全与数据留存策略。
 
-### 2.7 架构驱动力
+### 2.2 架构驱动力
 
 以上背景、用户场景和非目标背后，是六条贯串全部架构决策的驱动力。它们不是功能需求，而是**系统必须满足的约束**。文档后续的每个重要决策都应能追溯回这里。
 
@@ -116,7 +52,7 @@ NeoCode **明确不追求**以下目标：
 | D5 | **Human-in-the-Loop** | 危险操作在执行前需经过人类审批，系统不假设审批发生在哪个客户端 | 事件驱动的暂停-恢复推理循环；PolicyEngine 三态决策（allow/deny/ask）；会话级权限记忆 |
 | D6 | **单机零运维** | 系统在本地机器上运行，用户不需要是 DBA 或 SRE | 无外部数据库/消息队列依赖；核心模块同进程运行；数据生命周期全自动管理 |
 
-### 2.8 驱动力 → 决策追溯
+### 2.3 驱动力 → 决策追溯
 
 | 驱动力 | 直接导致的架构决策（章节/ADR） |
 |--------|-----------------------------|
@@ -289,17 +225,7 @@ AI 推理耗时由云端 API 主导，但本地框架的组装与工具执行不
 | Web UI | React + Vite（embed 到 Go binary） | Web 端嵌入，启动时由 Gateway 提供静态文件服务 |
 | 桌面端 | Electron | 跨平台桌面壳，内嵌 Web UI |
 
-### 5.2 团队与组织约束
-
-| 约束项 | 说明 |
-|--------|------|
-| 团队规模 | 5 名核心开发者 |
-| 模块分工 | TUI/Gateway 适配层（1 人）、Provider/Runtime/上下文压缩/网站（1 人）、Tools/Security/Hook/飞书适配器（1 人）、Session/Context/Memo/PromptAsset/Web/App（1 人）、Gateway/URL Scheme/Shell诊断/CLI/CI/发布/安装脚本（1 人） |
-| 审查流程 | 组内 peer review，简单审查后合入 |
-| 发布节奏 | 按需发布，通过 goreleaser 自动构建 |
-| 代码规范 | 参见 `AGENTS.md`：严格 UTF-8 编码、Go 惯用风格、TAB 缩进、中文注释、单行约 120 字符 |
-
-### 5.3 部署与平台约束
+### 5.2 部署与平台约束
 
 | 约束项 | 说明 |
 |--------|------|
@@ -309,7 +235,7 @@ AI 推理耗时由云端 API 主导，但本地框架的组装与工具执行不
 | 数据目录 | 默认 `~/.neocode/`（可配置），存放配置文件、SQLite 会话数据库、Skill 缓存、自更新下载等 |
 | 进程间通信 | 客户端与 Gateway 通过 JSON-RPC / SSE / WebSocket 等 RPC 协议通信；底层传输层正在从 IPC（Unix domain socket / named pipe）向全 RPC 方案迁移 |
 
-### 5.4 设计原则
+### 5.3 设计原则
 
 以下原则提炼自项目 AGENTS.md，每条原则在 NeoCode 中有其具体的设计动机。
 
@@ -1527,17 +1453,7 @@ NeoCode 通过 goreleaser 构建两个二进制产物（Inferred from `.goreleas
 
 **图 12-1：部署拓扑。** 单机模式（上）：所有组件在同一台机器上，通过本地 loopback RPC 通信。分布式模式（下）：Local Runner 主动连接 Gateway，使远程客户端可以通过 Gateway 驱动 Runner 所在机器的工具执行。
 
-### 12.3 安装与分发
-
-| 渠道 | 说明 |
-|------|------|
-| **Shell 脚本** | `curl -fsSL <url>/install.sh \| bash`（macOS/Linux），支持 `--flavor full\|gateway` |
-| **PowerShell** | `irm <url>/install.ps1 \| iex`（Windows） |
-| **自更新** | `neocode update` 命令通过 `go-selfupdate` 拉取最新 GitHub Release，校验 checksum 后原地替换二进制 |
-| **Electron 桌面端** | 通过 `electron-builder` 打包为 `.dmg`（macOS）/ `.exe` installer（Windows）/ `.AppImage`（Linux） |
-| **手动下载** | GitHub Releases 页面下载对应平台的 `.tar.gz` / `.zip` |
-
-### 12.4 环境隔离
+### 12.3 环境隔离
 
 | 环境 | 数据目录 | 说明 |
 |------|----------|------|
@@ -1545,7 +1461,7 @@ NeoCode 通过 goreleaser 构建两个二进制产物（Inferred from `.goreleas
 | `NEOCODE_HOME` 覆盖 | `$NEOCODE_HOME/` | 通过环境变量切换数据目录，支持多 Profile 隔离 |
 | 工作目录 | `--workdir` / `workdir` 配置项 | 限制工具的文件系统访问边界 |
 
-### 12.5 扩缩容考量
+### 12.4 扩缩容考量
 
 | 维度 | 限制 | 说明 |
 |------|------|------|
@@ -1716,27 +1632,6 @@ SessionID（会话级） + RunID（单次运行级）
 | **HTTP Daemon 存活** | `GET /healthz` → 200 | Daemon 进程存活 + HTTP 服务正常 |
 | **Gateway 存活** | `GET /healthz` → 200 | Gateway 进程存活 + HTTP 服务正常 |
 | **Gateway 就绪** | `gateway.ping` JSON-RPC | 全链路可达（客户端 → Gateway → Runtime） |
-
-### 14.5 告警建议
-
-基于 Gateway 暴露的 Prometheus 指标，推荐配置以下告警规则：
-
-| 告警 | 条件 | 严重度 |
-|------|------|--------|
-| 认证失败率异常 | `rate(gateway_auth_failures_total[5m]) > 0.1` | Warning |
-| ACL 拒绝突增 | `rate(gateway_acl_denied_total[5m]) > 5` | Warning |
-| 流连接数接近上限 | `gateway_connections_active > max * 0.8` | Warning |
-| 流连接异常剔除 | `rate(gateway_stream_dropped_total[5m]) > 0` | Critical |
-| Gateway 不可达 | `gateway.ping` 无响应或 `/healthz` 非 200 | Critical |
-
-### 14.6 运维诊断工具
-
-| 工具 | 用途 |
-|------|------|
-| `neocode diag` | Shell 诊断代理：自动获取终端最近一次命令的异常输出，调用 LLM 分析原因并给出建议 |
-| `neocode daemon status` | 查看 HTTP Daemon 运行状态与自启动安装状态 |
-| `neocode gateway --http-listen <addr>` | 显式指定 Gateway HTTP 监听地址，供调试时暴露到非 loopback 接口 |
-| Session Log Viewer | Runtime 内部将关键会话事件写入 `log-viewer/` 目录，供离线排查 |
 
 ---
 
@@ -1914,11 +1809,11 @@ SessionID（会话级） + RunID（单次运行级）
 
 ---
 
-## 16. 风险、局限与技术债
+## 16. 架构风险
 
-好的架构文档必须诚实。以下逐项记录当前架构中的已知风险、临时妥协和技术债务，以及每项的缓解计划。
+以下逐项记录当前架构中的已知风险及每项的缓解计划。已知局限和技术债清单见 `docs/tech-debt.md`。
 
-### 16.1 架构风险
+### 16.1 风险清单
 
 | 风险 | 严重度 | 描述 | 缓解措施 |
 |------|--------|------|----------|
@@ -1928,92 +1823,9 @@ SessionID（会话级） + RunID（单次运行级）
 | **上下文窗口天花板** | 中 | 即使有 Compact，模型原生的 context window 有硬限制（如 Claude 200K、GPT-4 128K）；对于超长会话，最终仍会达到无法继续的临界点 | Compact 两级策略（Micro + Full）最大化利用现有窗口；`max_turns` 限制防止无限循环；长期来看需借助模型厂商的 context window 增长 |
 | **TOCTOU 路径竞态** | 低 | 文件系统操作在 Security Engine 校验通过后、实际读写前，目标路径的状态可能被外部进程改变（symlink 替换攻击） | 当前在校验时 resolve symlink，但存在微小的时间窗口；现代 OS 的 `O_NOFOLLOW` 等标志可进一步缓解；实际攻击面极小（本地单用户场景） |
 
-### 16.2 已知局限
+## 17. 附录
 
-| 局限 | 影响 | 讨论 |
-|------|------|------|
-| **单机单用户模型** | 不支持多用户共享同一 NeoCode 实例 | 这是刻意的设计选择（见 ADR-004）。多用户场景可通过每个用户运行自己的 Gateway 实例 + 共享 Runner 来解决，不需要多租户 |
-| **无分布式追踪** | SessionID/RunID 仅在 NeoCode 内部可追踪，无法与外部的 APM（如 Datadog、Jaeger）关联 | 当前通过标准化日志格式（SessionID+RunID 前缀）做手动关联，未引入分布式追踪 SDK。如果未来部署复杂度提升，可在 Gateway 层注入 OpenTelemetry context |
-| **纯 Go 生态** | 工具和 Skill 的执行受限于 Go 生态；无法直接调用 Python/Node.js 库 | MCP 协议（stdio 子进程）提供了语言无关的扩展通道。Python/Node.js 工具可通过 MCP server 接入 |
-| **Web UI 嵌入分发** | Web 端 patch 只能随二进制更新，不支持独立热更新 | 这是单二进制部署的代价。对于需要频繁更新 UI 的场景，可将 Web 端独立部署（当前已支持 `neocode-gateway` 独立二进制 + 反向代理静态资源） |
-| **无插件市场/发现机制** | Skills 和 MCP server 的获取依赖用户手动配置，没有中心化的发现和安装渠道 | 当前的 Skills 设计优先保证离线可用性和零信任（文件即 Skill）。发现机制可在此基础上叠加 |
-
-### 16.3 技术债清单
-
-| 技术债 | 位置 | 影响 | 建议处理时机 |
-|--------|------|------|-------------|
-| **底层传输层 IPC 残留** | `internal/gateway/transport/` — Unix domain socket / Named pipe | 客户端连接路径复杂（需判断平台选 socket 类型），迁移到全 HTTP 后可消除 | 短期——已在迁移计划中 |
-| **`runtime/run.go` 单文件过长** | ReAct 主循环逻辑集中在 `run.go` (~400 行) 和 `runtime.go` (~540 行) | 新成员理解核心循环需要较长时间；修改风险集中在少数大文件中 | 中期——可按阶段拆分（pre-processing / loop body / termination） |
-| **Compact 策略配置分散** | MicroCompact 配置在 `MicroCompactConfig`，Full Compact 在 `CompactConfig`，部分阈值在 `RuntimeConfig` | 调整上下文管理策略需要理解三处配置 | 中期——收敛为统一的 `CompactPolicy` 结构体 |
-| **Gateway Bootstrap 单文件** | `bootstrap.go` 超过 1600 行，包含帧路由、认证、session CRUD、RPC 处理 | 单体文件难以定位和维护 | 中期——拆分为 `session_handler.go`、`rpc_handler.go`、`auth_handler.go` |
-| **Acceptance 测试耗时长** | `runtime/acceptance/` 的端到端测试依赖真实模型 API | CI 成本高、不稳定（网络波动导致 flaky） | 长期——增加录制/回放（VCR）模式，CI 中默认使用录制的 fixture |
-
----
-
-## 17. 未来演进
-
-以下演进方向的优先级判断基于一个核心问题：**"这项改进对 NeoCode 的独特价值（本地优先、多端接入、多模型自由、Human-in-the-loop 安全）有多大推动？"**
-
-### 17.1 短期（已在进行或立即需要的改进）
-
-| 方向 | 理由 | 优先级 |
-|------|------|--------|
-| **传输层全 HTTP 化** | 当前 `transport/` 中残留的 Unix socket / Named pipe 逻辑增加了双平台代码路径和维护负担。统一到 HTTP JSON-RPC 后：第三方客户端接入更简单（只需要发 HTTP POST，不需要理解 Unix socket 地址规则）、Windows 和 Linux/macOS 的客户端连接逻辑完全一致 | 高——正在进行 |
-| **Gateway 大文件拆分** | `bootstrap.go` 超 1600 行，包含帧路由、认证、session CRUD、RPC 处理、流绑定等所有 Gateway 逻辑。5 人团队每人负责不同模块，但 Gateway 的改动集中在同一大文件中 → 持续的合并冲突。按功能域拆分为 `auth_handler.go`、`session_handler.go`、`stream_handler.go` 后，各自改自己的文件 | 高——直接影响并行开发效率 |
-| **Runner 工具并行执行** | Runner 当前串行处理 Gateway 下发的工具请求。在"手机飞书下指令 → 工位 Runner 执行"场景中，模型经常一次产出多个独立的 tool call（如同时读 3 个文件），串行执行导致不必要的延迟。改为并行执行可显著改善远程场景的响应体验 | 中——核心差异化场景的性能瓶颈 |
-| **Compact 配置收敛** | MicroCompact 的 `MicroCompactConfig`、Full Compact 的 `CompactConfig`、预算阈值在 `RuntimeConfig` 中分散定义。调整上下文压缩策略时需要理解三个不同的配置入口，容易产生不一致的配置。收敛为单一 `CompactPolicy` 结构体 | 中——降低调优门槛 |
-
-### 17.2 中期（巩固和放大现有差异化优势）
-
-| 方向 | 理由 |
-|------|------|
-| **第三方客户端生态增强** | 飞书 Adapter 已证明"适配器接入 Gateway → 复用全栈 Agent 能力"的模式可行。下一步是降低第三方适配器的编写成本：提供官方 SDK（Go/Python/Node.js）封装 `gateway.authenticate` → `gateway.run` → SSE 事件消费的完整流程。这直接放大 NeoCode 最大的差异化优势——"任何客户端都能接入的 AI Agent 基础设施" |
-| **Skills 和 MCP 体验改善** | 当前 Skills 需要手动在目录中放置 `SKILL.md` 文件，MCP Server 需要手动编辑 JSON 配置。这些操作的受众是开发者，但不是所有开发者都愿意读 YAML。方向：`neocode skill add <url>` 一键安装 Skill；`neocode mcp add <command>` 自动生成 MCP 配置。降低扩展成本直接提升生态壁垒 |
-| **Checkpoint 可视化与选择性恢复** | Checkpoint 已在后台静默创建，但用户缺少手段查看"AI 在上一轮改了什么、为什么改"。方向：在 TUI/Web 端展示 `end_of_turn` Checkpoint 的 Diff 预览，支持用户选择"回滚到上一步"或"只回滚某个文件"。这增强 Human-in-the-loop 的安全信任感 |
-| **安全策略预置模板** | 当前 Security Engine 的策略规则完全由用户自定义（或使用默认 `ask` 兜底）。多数用户不会写策略规则。方向：预置 3 套模板（"宽松——信任所有工作区操作"、"标准——敏感文件需确认"、"严格——任何写入操作需确认"），用户一键切换。安全能力如果门槛太高，等于没有 |
-| **模型切换体验深化** | Provider 零侵入接入已实现（ADR-002），但用户切换模型时的体验仍粗糙：不知道新模型在"代码修改"场景的实际表现、不知道它的上下文窗口和工具调用能力。方向：为每个 Provider 提供能力画像（context window、tool calling 支持、已知局限），在切换时展示 |
-
-### 17.3 长期（战略级方向）
-
-| 方向 | 理由 |
-|------|------|
-| **无头模式（Headless Agent）** | NeoCode 的核心能力（ReAct 推理 + 工具执行）当前主要通过交互式客户端消费。但对于 CI/CD 场景——"当 PR 被标记为 `neocode-review` 时自动运行代码审查 Agent"——需要一个无交互的批处理模式。技术上 Runtime 已支持，缺少的是：非交互式权限策略（`allow`/`deny` 无 `ask`）、简洁的结果输出格式。这是从"开发者工具"走向"基础设施"的关键一步 |
-| **Runner 能力谱系** | 当前 Runner 是一个"全有或全无"的远程执行代理——注册后就能执行所有工具。但不同场景需要不同权限：CI Runner 可能只需要 `bash`（跑测试）；代码审查 Runner 可能只需要 `filesystem_read` + `codebase_search`。方向：Runner 注册时声明自己的能力谱系（tool list + path allowlist），Gateway 按需路由 |
-| **会话可移植性** | 当前会话数据绑定在本地 SQLite。如果开发者在工位电脑上开了一个长会话调试问题，回家后想在笔记本上继续，需要手动迁移 `session.db`。方向：可选的会话导出/导入（标准化格式），或可插拔的远程 Session Store 后端。这直接服务于"随时随地连线本地代码库"的价值主张 |
-
-### 17.4 刻意不做的方向
-
-以下方向经常被提及，但**故意不作为**演进目标：
-
-| 方向 | 不做理由 |
-|------|----------|
-| **自研模型或模型微调** | NeoCode 是 Agent 框架，不是模型厂商。见 §2.6 非目标 #2 |
-| **云端 SaaS 托管** | 代码留在本地是最核心的安全承诺。见 §2.6 非目标 #1 |
-| **重型 IDE 插件（Copilot 模式）** | 旁路架构是核心差异化。见 §2.6 非目标 #4 |
-| **微服务化拆分** | 单机场景下分布式是负资产。见 ADR-004 |
-| **引入消息队列（Kafka/RabbitMQ）** | 零外部依赖是强约束。见 ADR-005 的推理链 |
-| **图数据库 / 向量数据库** | 代码库理解（Tree-sitter AST + Grep + Glob）在代码领域远超向量检索的准确度，且不需要额外的数据库运维 |
-
-### 17.5 可替换模块
-
-以下模块在设计时就考虑了被替换的可能性——这是分层架构（§7.1）和接口优先原则（§5.4 原则 5）的直接成果：
-
-| 模块 | 可替换原因 | 替换成本 |
-|------|-----------|----------|
-| **Provider 实现** | 仅需实现 2 方法 interface | 低——新增 Go 包 + 配置即可 |
-| **Authenticator** | `TokenAuthenticator` interface | 低——实现验证逻辑即可 |
-| **工具（单个）** | `Executor` interface | 低——注册到 Registry 即可 |
-| **Skills 来源** | `SourceLayer` 机制 | 低——新增目录即可 |
-| **Web UI** | 独立于后端逻辑，纯 RPC 通信 | 中——需重写 UI 层，Gateway API 不变 |
-| **Session Store 后端** | `Store` interface | 中——理论上可替换为其他存储，但需重新评估 ADR-005 的零依赖约束 |
-| **Gateway 传输协议** | `transport.Listener` interface | 中——需实现新协议适配 |
-| **Runtime（整个）** | 通过 Gateway RPC 隔离 | 高——理论上可用非 Go 实现，但触及系统根基 |
-
----
-
-## 18. 附录
-
-### 18.1 术语表
+### 17.1 术语表
 
 | 术语 | 定义 |
 |------|------|
@@ -2031,7 +1843,7 @@ SessionID（会话级） + RunID（单次运行级）
 | **Runner** | 远程工具执行代理：独立进程，通过 WebSocket 主动连接 Gateway，在本地执行 Gateway 下发的工具请求 |
 | **ADR** | Architecture Decision Record：架构决策记录，记录背景、替代方案、决策和后果 |
 
-### 18.2 参考文档
+### 17.2 参考文档
 
 | 文档 | 路径 | 说明 |
 |------|------|------|
@@ -2049,10 +1861,4 @@ SessionID（会话级） + RunID（单次运行级）
 | Skills 系统设计 | `docs/skills-system-design.md` | Skills 系统的详细设计 |
 | Gateway 详细设计 | `docs/gateway-detailed-design.md` | Gateway 内部实现细节 |
 | 开发规范 | `AGENTS.md` | 项目 AI 协作规则、模块边界、编码规范 |
-
-### 18.3 变更日志
-
-| 版本 | 日期 | 变更 |
-|------|------|------|
-| v0.1 | 2026-05-09 | 初始完整版本。涵盖全部 18 节：系统背景与目标、范围与边界、质量属性、约束与原则、系统上下文、整体架构、核心模块设计（9 个模块）、核心流程（5 个流程 + 端到端走查）、数据与状态管理、接口与集成、部署视图、安全设计、可观测性、8 条 ADR、风险与局限、未来演进、附录 |
 
