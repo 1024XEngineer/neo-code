@@ -2630,6 +2630,41 @@ func TestGatewayRuntimePortBridgeListModelsUsesSessionProvider(t *testing.T) {
 	}
 }
 
+func TestGatewayRuntimePortBridgeListModelsSessionNotFoundFallsBackToGlobal(t *testing.T) {
+	store := &bridgeSessionStoreWithLoader{
+		bridgeSessionStoreStub: bridgeSessionStoreStub{},
+		loadErr:                agentsession.ErrSessionNotFound,
+	}
+	cfgMgr := &configManagerStub{
+		cfg: config.Config{
+			SelectedProvider: "gemini",
+			CurrentModel:     "gemini-2.5-pro",
+		},
+	}
+	ps := &providerSelectionStub{
+		listOptions: []configstate.ProviderOption{
+			{ID: "openai", Models: []providertypes.ModelDescriptor{{ID: "gpt-4.1", Name: "GPT-4.1"}}},
+			{ID: "gemini", Models: []providertypes.ModelDescriptor{{ID: "gemini-2.5-pro", Name: "Gemini 2.5 Pro"}}},
+		},
+	}
+	bridge, _ := newGatewayRuntimePortBridge(context.Background(), &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)}, store, cfgMgr, ps)
+	defer bridge.Close()
+
+	models, err := bridge.ListModels(context.Background(), gateway.ListModelsInput{
+		SubjectID: testBridgeSubjectID,
+		SessionID: "session-startup-probe-1",
+	})
+	if err != nil {
+		t.Fatalf("ListModels() error = %v", err)
+	}
+	if len(models) != 1 {
+		t.Fatalf("models len = %d, want 1", len(models))
+	}
+	if models[0].Provider != "gemini" || models[0].ID != "gemini-2.5-pro" {
+		t.Fatalf("models = %+v, want gemini/gemini-2.5-pro only", models)
+	}
+}
+
 func TestGatewayRuntimePortBridgeGetSessionModelFallsBackToEffectiveSelection(t *testing.T) {
 	store := &bridgeSessionStoreWithLoader{
 		bridgeSessionStoreStub: bridgeSessionStoreStub{},
