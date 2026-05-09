@@ -689,6 +689,21 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 			}
 			input := strings.TrimSpace(rawInput)
 			images := a.collectPendingImageInputs()
+			if a.pendingUserQuestion != nil &&
+				strings.HasPrefix(input, slashPrefix) &&
+				!strings.EqualFold(input, "/skip") &&
+				isCompleteSlashCommand(strings.ToLower(input)) {
+				a.input.Reset()
+				a.state.InputText = ""
+				a.clearPendingTextPastes()
+				a.applyComponentLayout(true)
+				a.refreshCommandMenu()
+				a.resetPasteHeuristics()
+				if cmd := a.runSlashCommandSelection(strings.ToLower(input)); cmd != nil {
+					cmds = append(cmds, cmd)
+				}
+				return a, batchUpdateCmds()
+			}
 			if cmd, handled := a.submitPendingUserQuestionInput(input); handled {
 				a.input.Reset()
 				a.state.InputText = ""

@@ -57,6 +57,8 @@ const (
 	minInlineSubAgentToolTimeout     = 30 * time.Second
 	defaultDiagnoseToolTimeout       = 60 * time.Second
 	defaultPermissionToolTimeout     = 20 * time.Second
+	defaultAskUserToolTimeout        = 5 * time.Minute
+	maxAskUserToolTimeout            = time.Hour
 )
 
 // permissionExecutionInput 汇总一次工具执行与审批协作所需的上下文。
@@ -310,6 +312,17 @@ func resolveToolExecutionTimeout(call providertypes.ToolCall, fallback time.Dura
 		}
 		return base
 	}
+	if strings.EqualFold(name, tools.ToolNameAskUser) {
+		requested := parseAskUserTimeoutFromArguments(call.Arguments)
+		if requested <= 0 {
+			requested = defaultAskUserToolTimeout
+		}
+		requested = clampDuration(requested, defaultAskUserToolTimeout, maxAskUserToolTimeout)
+		if requested > base {
+			return requested
+		}
+		return base
+	}
 	if !strings.EqualFold(name, tools.ToolNameSpawnSubAgent) {
 		return base
 	}
@@ -326,6 +339,20 @@ func resolveToolExecutionTimeout(call providertypes.ToolCall, fallback time.Dura
 		return requested
 	}
 	return base
+}
+
+// parseAskUserTimeoutFromArguments 解析 ask_user 的 timeout_sec，并返回持续时间。
+func parseAskUserTimeoutFromArguments(raw string) time.Duration {
+	if strings.TrimSpace(raw) == "" {
+		return 0
+	}
+	var payload struct {
+		TimeoutSec int `json:"timeout_sec"`
+	}
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		return 0
+	}
+	return time.Duration(payload.TimeoutSec) * time.Second
 }
 
 // parseSpawnSubAgentRuntimeOptions 提取 spawn_subagent 的运行模式与 timeout_sec 参数。

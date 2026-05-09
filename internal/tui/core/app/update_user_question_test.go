@@ -4,6 +4,8 @@ import (
 	"errors"
 	"testing"
 
+	tea "github.com/charmbracelet/bubbletea"
+
 	agentruntime "neo-code/internal/tui/services"
 )
 
@@ -228,5 +230,28 @@ func TestUpdateUserQuestionResolutionFinishedMessage(t *testing.T) {
 	}
 	if next.state.StatusText != statusUserQuestionSubmitted {
 		t.Fatalf("status text = %q, want %q", next.state.StatusText, statusUserQuestionSubmitted)
+	}
+}
+
+func TestPendingUserQuestionAllowsImmediateSlashCommands(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.pendingUserQuestion = &userQuestionPromptState{
+		Request: agentruntime.UserQuestionRequestedPayload{
+			RequestID: "ask-help",
+			Kind:      "text",
+			Required:  true,
+		},
+	}
+	app.input.SetValue("/help")
+	app.state.InputText = "/help"
+
+	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	next := model.(App)
+
+	if next.pendingUserQuestion == nil || next.pendingUserQuestion.Request.RequestID != "ask-help" {
+		t.Fatalf("expected pending ask_user question to remain while running slash command")
+	}
+	if next.state.ActivePicker != pickerHelp {
+		t.Fatalf("expected /help to open help picker, active=%v", next.state.ActivePicker)
 	}
 }
