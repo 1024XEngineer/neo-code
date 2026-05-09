@@ -305,6 +305,20 @@ func applyCurrentPlanRevision(session *agentsession.Session, plan *agentsession.
 	if oldPlan := session.CurrentPlan; oldPlan != nil && oldPlan.Revision < plan.Revision {
 		agentsession.CancelTodosByIDs(session.Todos, oldPlan.Summary.ActiveTodoIDs)
 	}
+	// 将 PlanSpec.Todos 中尚不存在于 session.Todos 的条目补入，
+	// 避免 plan 模式下模型后续通过 todo_write 引用这些 ID 时找不到。
+	for _, planTodo := range plan.Spec.Todos {
+		id := strings.TrimSpace(planTodo.ID)
+		if id == "" {
+			continue
+		}
+		if _, exists := session.FindTodo(id); exists {
+			continue
+		}
+		if err := session.AddTodo(planTodo); err != nil {
+			return false
+		}
+	}
 	session.CurrentPlan = plan
 	session.PlanApprovalPendingFullAlign = false
 	session.PlanCompletionPendingFullReview = false
