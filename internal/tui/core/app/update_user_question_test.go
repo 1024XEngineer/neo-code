@@ -200,7 +200,7 @@ func TestSubmitPendingUserQuestionInputMultiChoiceEnforcesMaxChoices(t *testing.
 	}
 }
 
-func TestUpdateUserQuestionResolutionFinishedMessage(t *testing.T) {
+func TestUpdateUserQuestionResolutionFinishedMessageAdditional(t *testing.T) {
 	app, _ := newTestApp(t)
 	app.pendingUserQuestion = &userQuestionPromptState{
 		Request:    agentruntime.UserQuestionRequestedPayload{RequestID: "ask-7"},
