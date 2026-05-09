@@ -82,7 +82,7 @@ func (s *Service) Compact(ctx context.Context, input CompactInput) (CompactResul
 	if err != nil {
 		return CompactResult{}, err
 	}
-	session, err := s.sessionStore.LoadSession(ctx, input.SessionID)
+	session, err := s.LoadSession(ctx, input.SessionID)
 	if err != nil {
 		return CompactResult{}, err
 	}
@@ -286,7 +286,7 @@ func (s *Service) createCompactCheckpoint(ctx context.Context, runID string, ses
 
 	// Per-edit snapshot if pending writes exist this turn.
 	if s.perEditStore != nil {
-		if written, err := s.perEditStore.Finalize(checkpointID); err == nil && written {
+		if written, err := s.perEditStore.FinalizeWithExactState(checkpointID); err == nil && written {
 			record.CodeCheckpointRef = checkpoint.RefForPerEditCheckpoint(checkpointID)
 			s.perEditStore.Reset()
 		}

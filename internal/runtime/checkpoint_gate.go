@@ -55,7 +55,7 @@ func (s *Service) createEndOfTurnCheckpoint(ctx context.Context, state *runState
 	state.mu.Unlock()
 
 	checkpointID := agentsession.NewID("checkpoint")
-	written, err := s.perEditStore.Finalize(checkpointID)
+	written, err := s.perEditStore.FinalizeWithExactState(checkpointID)
 	if err != nil {
 		log.Printf("checkpoint: end-of-turn finalize: %v", err)
 		return

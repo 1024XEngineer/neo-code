@@ -15,187 +15,167 @@ export default function ModelSelector() {
   const [open, setOpen] = useState(false)
   const [models, setModels] = useState<ModelEntry[]>([])
   const [selected, setSelected] = useState<ModelEntry | null>(null)
+  const [confirmedSelected, setConfirmedSelected] = useState<ModelEntry | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [pendingModelChange, setPendingModelChange] = useState<ModelEntry | null>(null)
-  const selectedRef = useRef(selected)
-  selectedRef.current = selected
+  const latestRefreshRequestId = useRef(0)
 
-  // 模型列表加载：直接在 effect 中 fetch，用 cancelled flag 防止陈旧更新
-  useEffect(() => {
-    if (!gatewayAPI) return
-    let cancelled = false
+  // 统一刷新模型列表，并以服务端返回的当前选择为准同步本地状态。
+  async function refreshModels() {
+    if (!gatewayAPI) return null
+    const requestId = ++latestRefreshRequestId.current
     setLoading(true)
     setError('')
-    gatewayAPI.listModels(currentSessionId || undefined)
-      .then((result) => {
-        if (cancelled) return
-        const fetched = result.payload.models
-        setModels(fetched)
-        if (fetched.length > 0) {
-          const prev = selectedRef.current
-          const byGlobal = result.payload.selected_model_id
-            ? fetched.find((f) => f.id === result.payload.selected_model_id)
-            : null
-          const retained = prev ? fetched.find((f) => f.id === prev.id) : null
-          const effective = byGlobal ?? retained ?? fetched[0]
-          setSelected(effective)
-          if (currentSessionId && !isGenerating) {
-            gatewayAPI.setSessionModel(currentSessionId, effective.id, effective.provider)
-              .catch((err) => console.error('Auto setSessionModel failed:', err))
-          }
-        } else {
-          setSelected(null)
-        }
-      })
-      .catch((err) => {
-        if (cancelled) return
-        setError(err instanceof Error ? err.message : 'Failed to load model list')
-        console.error('listModels failed:', err)
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false)
-      })
-    return () => { cancelled = true }
-  }, [gatewayAPI, currentSessionId, providerChangeTick])
-
-  async function handleSelect(m: ModelEntry) {
-    setSelected(m)
-    setOpen(false)
-    if (isGenerating) {
-      setPendingModelChange(m)
-      useUIStore.getState().showToast('Model change will apply on the next turn', 'info')
-      return
-    }
-    if (currentSessionId && gatewayAPI) {
-      try {
-        await gatewayAPI.setSessionModel(currentSessionId, m.id, m.provider)
-      } catch (err) {
-        console.error('setSessionModel failed:', err)
-      }
-      try {
-        await gatewayAPI.selectProviderModel({ provider_id: m.provider, model_id: m.id })
-      } catch (err) {
-        console.error('selectProviderModel failed:', err)
+    try {
+      const result = await gatewayAPI.listModels(currentSessionId || undefined)
+      if (requestId !== latestRefreshRequestId.current) return null
+      const fetched = result.payload.models
+      setModels(fetched)
+      const effective = fetched.find((entry) => (
+        entry.id === result.payload.selected_model_id
+        && entry.provider === result.payload.selected_provider_id
+      )) ?? null
+      setSelected(effective)
+      setConfirmedSelected(effective)
+      return effective
+    } catch (err) {
+      if (requestId !== latestRefreshRequestId.current) return null
+      setError(err instanceof Error ? err.message : 'Failed to load model list')
+      console.error('listModels failed:', err)
+      return null
+    } finally {
+      if (requestId === latestRefreshRequestId.current) {
+        setLoading(false)
       }
     }
   }
 
-  // 生成完成后补发延迟的模型切换
+  async function applyModelSelection(model: ModelEntry) {
+    if (!gatewayAPI) return
+    await gatewayAPI.selectProviderModel({ provider_id: model.provider, model_id: model.id })
+    useGatewayStore.getState().notifyProviderChanged()
+  }
+
   useEffect(() => {
-    if (!isGenerating && pendingModelChange && currentSessionId && gatewayAPI) {
-      gatewayAPI.setSessionModel(currentSessionId, pendingModelChange.id, pendingModelChange.provider)
-        .catch((err) => console.error('Deferred setSessionModel failed:', err))
-      gatewayAPI.selectProviderModel({ provider_id: pendingModelChange.provider, model_id: pendingModelChange.id })
-        .catch((err) => console.error('Deferred selectProviderModel failed:', err))
-      setPendingModelChange(null)
+    if (!gatewayAPI) return
+    void refreshModels()
+    return () => {
+      latestRefreshRequestId.current += 1
     }
-  }, [isGenerating, pendingModelChange, currentSessionId, gatewayAPI])
+  }, [gatewayAPI, currentSessionId, providerChangeTick])
+
+  async function handleSelect(model: ModelEntry) {
+    const previousConfirmed = confirmedSelected
+    setSelected(model)
+    setOpen(false)
+    if (isGenerating) {
+      setPendingModelChange(model)
+      useUIStore.getState().showToast('Model change will apply on the next turn', 'info')
+      return
+    }
+    try {
+      await applyModelSelection(model)
+      setConfirmedSelected(model)
+    } catch (err) {
+      setSelected(previousConfirmed)
+      useUIStore.getState().showToast('Failed to apply model change', 'error')
+      console.error('applyModelSelection failed:', err)
+    }
+  }
+
+  useEffect(() => {
+    if (!isGenerating && pendingModelChange && gatewayAPI) {
+      const previousConfirmed = confirmedSelected
+      applyModelSelection(pendingModelChange)
+        .then(() => {
+          setConfirmedSelected(pendingModelChange)
+        })
+        .catch(async (err) => {
+          setSelected(previousConfirmed)
+          useUIStore.getState().showToast('Failed to apply model change', 'error')
+          console.error('Deferred applyModelSelection failed:', err)
+          await refreshModels()
+        })
+        .finally(() => {
+          setPendingModelChange(null)
+        })
+    }
+  }, [isGenerating, pendingModelChange, confirmedSelected, currentSessionId, gatewayAPI])
 
   if (!gatewayAPI) return null
 
   return (
     <div style={{ position: 'relative' }}>
-      <button
-        style={styles.selectorBtn}
-        onClick={() => setOpen(!open)}
-        disabled={loading}
-      >
+      <button className="model-selector" onClick={() => setOpen(!open)} disabled={loading}>
         {loading ? (
           <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} />
         ) : (
           <>
-            <span style={styles.modelName}>{selected ? `${selected.provider} / ${selected.name}` : (error || '无可用模型')}</span>
-            <ChevronDown size={14} style={{ color: 'var(--text-tertiary)', transition: 'transform 0.15s', transform: open ? 'rotate(180deg)' : 'none' }} />
+            <span className="model-dot" />
+            <span>{selected ? `${selected.provider} / ${selected.name}` : (error || '无可用模型')}</span>
+            <ChevronDown
+              size={14}
+              style={{
+                color: 'var(--text-tertiary)',
+                transition: 'transform 0.15s',
+                transform: open ? 'rotate(180deg)' : 'none',
+              }}
+            />
           </>
         )}
       </button>
 
       {open && (
-        <div style={styles.dropdown} onMouseLeave={() => setOpen(false)}>
+        <div
+          style={{
+            position: 'absolute',
+            bottom: 'calc(100% + 6px)',
+            right: 0,
+            width: 240,
+            background: 'var(--bg-overlay)',
+            borderRadius: 'var(--radius-md)',
+            padding: 4,
+            boxShadow: 'var(--shadow-elevated)',
+            zIndex: 60,
+            maxHeight: 320,
+            overflowY: 'auto',
+          }}
+          onMouseLeave={() => setOpen(false)}
+        >
           {models.length === 0 && !error && (
-            <div style={styles.emptyItem}>无可用模型</div>
+            <div style={{ padding: '6px 10px', fontSize: 12, color: 'var(--text-tertiary)' }}>无可用模型</div>
           )}
           {error && (
-            <div style={styles.emptyItem}>加载失败</div>
+            <div style={{ padding: '6px 10px', fontSize: 12, color: 'var(--text-tertiary)' }}>加载失败</div>
           )}
-          {models.map((m) => (
+          {models.map((model) => (
             <button
-              key={m.id}
+              key={model.id}
               style={{
-                ...styles.dropdownItem,
-                background: selected?.id === m.id ? 'var(--bg-active)' : 'transparent',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                width: '100%',
+                padding: '7px 10px',
+                borderRadius: 'var(--radius-sm)',
+                border: 'none',
+                background: selected?.id === model.id ? 'var(--bg-hover)' : 'transparent',
+                color: 'var(--text-primary)',
+                fontSize: 13,
+                fontFamily: 'var(--font-ui)',
+                cursor: 'pointer',
+                textAlign: 'left',
+                transition: 'all var(--duration-fast)',
               }}
-              onClick={() => handleSelect(m)}
+              onClick={() => handleSelect(model)}
             >
-              <span style={styles.dropdownName}>{m.name}</span>
-              <span style={styles.dropdownProvider}>{m.provider}</span>
+              <span style={{ fontWeight: 500 }}>{model.name}</span>
+              <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>{model.provider}</span>
             </button>
           ))}
         </div>
       )}
     </div>
   )
-}
-
-const styles: Record<string, React.CSSProperties> = {
-  selectorBtn: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 4,
-    padding: '4px 10px',
-    borderRadius: 'var(--radius-md)',
-    border: '1px solid var(--border-primary)',
-    background: 'var(--bg-secondary)',
-    color: 'var(--text-secondary)',
-    fontSize: 12,
-    fontFamily: 'var(--font-ui)',
-    cursor: 'pointer',
-    transition: 'all 0.15s',
-  },
-  modelName: {
-    fontWeight: 500,
-  },
-  dropdown: {
-    position: 'absolute',
-    top: 'calc(100% + 6px)',
-    right: 0,
-    width: 220,
-    background: 'var(--bg-secondary)',
-    border: '1px solid var(--border-primary)',
-    borderRadius: 'var(--radius-md)',
-    padding: 4,
-    boxShadow: 'var(--shadow-3)',
-    zIndex: 60,
-    maxHeight: 320,
-    overflowY: 'auto',
-  },
-  dropdownItem: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    width: '100%',
-    padding: '6px 10px',
-    borderRadius: 'var(--radius-sm)',
-    border: 'none',
-    color: 'var(--text-primary)',
-    fontSize: 13,
-    fontFamily: 'var(--font-ui)',
-    cursor: 'pointer',
-    textAlign: 'left',
-    transition: 'all 0.15s',
-  },
-  emptyItem: {
-    padding: '6px 10px',
-    fontSize: 12,
-    color: 'var(--text-tertiary)',
-    fontFamily: 'var(--font-ui)',
-  },
-  dropdownName: {
-    fontWeight: 500,
-  },
-  dropdownProvider: {
-    fontSize: 11,
-    color: 'var(--text-tertiary)',
-  },
 }

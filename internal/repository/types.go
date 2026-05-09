@@ -125,6 +125,20 @@ type ReadResult struct {
 	Size      int64
 }
 
+// GitDiffFileResult 表示单个 Git 工作树差异文件的双文本预览结果。
+type GitDiffFileResult struct {
+	Path            string
+	OldPath         string
+	Status          ChangedFileStatus
+	OriginalContent string
+	ModifiedContent string
+	Encoding        string
+	IsBinary        bool
+	Truncated       bool
+	OriginalSize    int64
+	ModifiedSize    int64
+}
+
 // SearchOptions 控制文本/符号搜索的裁剪策略。
 type SearchOptions struct {
 	ScopeDir  string
@@ -164,6 +178,8 @@ type SymbolSearchResult struct {
 // Service 提供轻量仓库摘要、变更上下文、定向检索与代码库探索能力。
 type Service struct {
 	gitRunner       GitCommandRunner
+	gitBlobReader   GitBlobReader
+	gitBlobSizer    GitBlobSizer
 	readFile        FileReader
 	treesitterIndex *TreeSitterIndexer
 }
@@ -172,6 +188,8 @@ type Service struct {
 func NewService() *Service {
 	return &Service{
 		gitRunner:       runGitCommand,
+		gitBlobReader:   readGitBlob,
+		gitBlobSizer:    statGitBlob,
 		readFile:        readFile,
 		treesitterIndex: NewTreeSitterIndexer(),
 	}

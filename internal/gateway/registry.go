@@ -41,6 +41,9 @@ func (r *ActionRegistry) initCore() {
 	r.core[FrameActionBindStream] = func(ctx context.Context, frame MessageFrame, _ RuntimePort) MessageFrame {
 		return handleBindStreamFrame(ctx, frame)
 	}
+	r.core[FrameActionAsk] = handleAskFrame
+	r.core[FrameActionDeleteAskSession] = handleDeleteAskSessionFrame
+	r.core[FrameActionTriggerAction] = handleTriggerActionFrame
 	r.core[FrameActionWakeOpenURL] = func(ctx context.Context, frame MessageFrame, runtimePort RuntimePort) MessageFrame {
 		return handleWakeOpenURLFrame(ctx, frame, runtimePort)
 	}
@@ -62,6 +65,9 @@ func (r *ActionRegistry) initCore() {
 	r.core[FrameActionDeleteSession] = handleDeleteSessionFrame
 	r.core[FrameActionRenameSession] = handleRenameSessionFrame
 	r.core[FrameActionListFiles] = handleListFilesFrame
+	r.core[FrameActionReadFile] = handleReadFileFrame
+	r.core[FrameActionListGitDiffFiles] = handleListGitDiffFilesFrame
+	r.core[FrameActionReadGitDiffFile] = handleReadGitDiffFileFrame
 	r.core[FrameActionListModels] = handleListModelsFrame
 	r.core[FrameActionSetSessionModel] = handleSetSessionModelFrame
 	r.core[FrameActionGetSessionModel] = handleGetSessionModelFrame

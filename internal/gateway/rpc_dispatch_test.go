@@ -14,6 +14,9 @@ import (
 type rpcRunCaptureRuntimeStub struct {
 	runInput            RunInput
 	runCh               chan RunInput
+	askInput            AskInput
+	askFn               func(ctx context.Context, input AskInput) error
+	deleteAskSessionFn  func(ctx context.Context, input DeleteAskSessionInput) (bool, error)
 	createSessionID     string
 	createSessionFn     func(ctx context.Context, input CreateSessionInput) (string, error)
 	executeSystemToolIn ExecuteSystemToolInput
@@ -39,6 +42,24 @@ func (s *rpcRunCaptureRuntimeStub) Run(_ context.Context, input RunInput) error 
 		s.runCh <- input
 	}
 	return nil
+}
+
+func (s *rpcRunCaptureRuntimeStub) Ask(ctx context.Context, input AskInput) error {
+	s.askInput = input
+	if s.askFn != nil {
+		return s.askFn(ctx, input)
+	}
+	return nil
+}
+
+func (s *rpcRunCaptureRuntimeStub) DeleteAskSession(
+	ctx context.Context,
+	input DeleteAskSessionInput,
+) (bool, error) {
+	if s.deleteAskSessionFn != nil {
+		return s.deleteAskSessionFn(ctx, input)
+	}
+	return false, nil
 }
 
 func (s *rpcRunCaptureRuntimeStub) Compact(_ context.Context, _ CompactInput) (CompactResult, error) {
@@ -124,6 +145,15 @@ func (s *rpcRunCaptureRuntimeStub) RenameSession(_ context.Context, _ RenameSess
 }
 func (s *rpcRunCaptureRuntimeStub) ListFiles(_ context.Context, _ ListFilesInput) ([]FileEntry, error) {
 	return nil, nil
+}
+func (s *rpcRunCaptureRuntimeStub) ReadFile(_ context.Context, _ ReadFileInput) (ReadFileResult, error) {
+	return ReadFileResult{}, nil
+}
+func (s *rpcRunCaptureRuntimeStub) ListGitDiffFiles(_ context.Context, _ ListGitDiffFilesInput) (ListGitDiffFilesResult, error) {
+	return ListGitDiffFilesResult{}, nil
+}
+func (s *rpcRunCaptureRuntimeStub) ReadGitDiffFile(_ context.Context, _ ReadGitDiffFileInput) (ReadGitDiffFileResult, error) {
+	return ReadGitDiffFileResult{}, nil
 }
 func (s *rpcRunCaptureRuntimeStub) ListModels(_ context.Context, _ ListModelsInput) ([]ModelEntry, error) {
 	return nil, nil
@@ -348,6 +378,53 @@ func TestApplyAutomaticBindingPingRefreshesTTL(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatal("expected ping to refresh binding ttl")
+}
+
+func TestApplyAutomaticBindingDoesNotOverrideTriggerActionRoleBinding(t *testing.T) {
+	relay := NewStreamRelay(StreamRelayOptions{})
+	baseContext, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	connectionID := NewConnectionID()
+	connectionContext := WithConnectionID(baseContext, connectionID)
+	connectionContext = WithStreamRelay(connectionContext, relay)
+	if err := relay.RegisterConnection(ConnectionRegistration{
+		ConnectionID: connectionID,
+		Channel:      StreamChannelIPC,
+		Context:      connectionContext,
+		Cancel:       cancel,
+		Write: func(message RelayMessage) error {
+			_ = message
+			return nil
+		},
+		Close: func() {},
+	}); err != nil {
+		t.Fatalf("register connection: %v", err)
+	}
+	defer relay.dropConnection(connectionID)
+
+	if bindErr := relay.BindConnection(connectionID, StreamBinding{
+		SessionID: "session-trigger",
+		Channel:   StreamChannelAll,
+		Role:      StreamRoleCLI,
+		Explicit:  true,
+	}); bindErr != nil {
+		t.Fatalf("bind connection: %v", bindErr)
+	}
+
+	applyAutomaticBinding(connectionContext, MessageFrame{
+		Type:      FrameTypeRequest,
+		Action:    FrameActionTriggerAction,
+		SessionID: "session-trigger",
+	})
+
+	role, ok := relay.ResolveConnectionRole(connectionID, "session-trigger")
+	if !ok {
+		t.Fatal("expected connection role binding to remain available")
+	}
+	if role != StreamRoleCLI {
+		t.Fatalf("role = %q, want %q", role, StreamRoleCLI)
+	}
 }
 
 func TestDispatchFrameValidationBranches(t *testing.T) {
@@ -916,6 +993,10 @@ func TestDispatchRPCRequestProviderAndMCPMethods(t *testing.T) {
 type runtimePortOnlyStub struct{}
 
 func (s *runtimePortOnlyStub) Run(_ context.Context, _ RunInput) error { return nil }
+func (s *runtimePortOnlyStub) Ask(_ context.Context, _ AskInput) error { return nil }
+func (s *runtimePortOnlyStub) DeleteAskSession(_ context.Context, _ DeleteAskSessionInput) (bool, error) {
+	return false, nil
+}
 func (s *runtimePortOnlyStub) Compact(_ context.Context, _ CompactInput) (CompactResult, error) {
 	return CompactResult{}, nil
 }
@@ -967,6 +1048,15 @@ func (s *runtimePortOnlyStub) RenameSession(_ context.Context, _ RenameSessionIn
 }
 func (s *runtimePortOnlyStub) ListFiles(_ context.Context, _ ListFilesInput) ([]FileEntry, error) {
 	return nil, nil
+}
+func (s *runtimePortOnlyStub) ReadFile(_ context.Context, _ ReadFileInput) (ReadFileResult, error) {
+	return ReadFileResult{}, nil
+}
+func (s *runtimePortOnlyStub) ListGitDiffFiles(_ context.Context, _ ListGitDiffFilesInput) (ListGitDiffFilesResult, error) {
+	return ListGitDiffFilesResult{}, nil
+}
+func (s *runtimePortOnlyStub) ReadGitDiffFile(_ context.Context, _ ReadGitDiffFileInput) (ReadGitDiffFileResult, error) {
+	return ReadGitDiffFileResult{}, nil
 }
 func (s *runtimePortOnlyStub) ListModels(_ context.Context, _ ListModelsInput) ([]ModelEntry, error) {
 	return nil, nil

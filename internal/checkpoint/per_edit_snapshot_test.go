@@ -1124,6 +1124,252 @@ func TestChangedFiles_NewFileDetectedAsAdded(t *testing.T) {
 	}
 }
 
+// ──────────────────────── DiffCheckpointsToWorkdir tests ────────────────────────
+
+func TestDiffCheckpointsToWorkdir_AggregatesRepeatedEdits(t *testing.T) {
+	store, workdir := newTestStore(t)
+	abs := writeWorkdirFile(t, workdir, "a.txt", "A\n")
+
+	if _, err := store.CapturePreWrite(abs); err != nil {
+		t.Fatalf("capture cp1: %v", err)
+	}
+	if err := os.WriteFile(abs, []byte("B\n"), 0o644); err != nil {
+		t.Fatalf("write B: %v", err)
+	}
+	if _, err := store.Finalize("cp1"); err != nil {
+		t.Fatalf("finalize cp1: %v", err)
+	}
+	store.Reset()
+
+	if _, err := store.CapturePreWrite(abs); err != nil {
+		t.Fatalf("capture cp2: %v", err)
+	}
+	if err := os.WriteFile(abs, []byte("C\n"), 0o644); err != nil {
+		t.Fatalf("write C: %v", err)
+	}
+	if _, err := store.Finalize("cp2"); err != nil {
+		t.Fatalf("finalize cp2: %v", err)
+	}
+	store.Reset()
+
+	patch, changes, err := store.DiffCheckpointsToWorkdir(context.Background(), []string{"cp1", "cp2"})
+	if err != nil {
+		t.Fatalf("DiffCheckpointsToWorkdir() error = %v", err)
+	}
+	if len(changes) != 1 || changes[0].Path != "a.txt" || changes[0].Kind != FileChangeModified {
+		t.Fatalf("changes = %+v, want a.txt modified", changes)
+	}
+	if !strings.Contains(patch, "-A") || !strings.Contains(patch, "+C") || strings.Contains(patch, "-B") {
+		t.Fatalf("patch should compare A to C only, got:\n%s", patch)
+	}
+}
+
+func TestDiffCheckpointsToWorkdir_ElidesRevertedAndAddDelete(t *testing.T) {
+	store, workdir := newTestStore(t)
+	reverted := writeWorkdirFile(t, workdir, "reverted.txt", "A\n")
+	transient := filepath.Join(workdir, "transient.txt")
+
+	if _, err := store.CapturePreWrite(reverted); err != nil {
+		t.Fatalf("capture reverted cp1: %v", err)
+	}
+	if err := os.WriteFile(reverted, []byte("B\n"), 0o644); err != nil {
+		t.Fatalf("write reverted B: %v", err)
+	}
+	if _, err := store.CapturePreWrite(transient); err != nil {
+		t.Fatalf("capture transient cp1: %v", err)
+	}
+	if err := os.WriteFile(transient, []byte("created\n"), 0o644); err != nil {
+		t.Fatalf("write transient: %v", err)
+	}
+	if _, err := store.Finalize("cp1"); err != nil {
+		t.Fatalf("finalize cp1: %v", err)
+	}
+	store.Reset()
+
+	if _, err := store.CapturePreWrite(reverted); err != nil {
+		t.Fatalf("capture reverted cp2: %v", err)
+	}
+	if err := os.WriteFile(reverted, []byte("A\n"), 0o644); err != nil {
+		t.Fatalf("restore reverted A: %v", err)
+	}
+	if _, err := store.CapturePreWrite(transient); err != nil {
+		t.Fatalf("capture transient cp2: %v", err)
+	}
+	if err := os.Remove(transient); err != nil {
+		t.Fatalf("remove transient: %v", err)
+	}
+	if _, err := store.Finalize("cp2"); err != nil {
+		t.Fatalf("finalize cp2: %v", err)
+	}
+	store.Reset()
+
+	patch, changes, err := store.DiffCheckpointsToWorkdir(context.Background(), []string{"cp1", "cp2"})
+	if err != nil {
+		t.Fatalf("DiffCheckpointsToWorkdir() error = %v", err)
+	}
+	if patch != "" || len(changes) != 0 {
+		t.Fatalf("expected empty aggregate diff, patch=%q changes=%+v", patch, changes)
+	}
+}
+
+func TestDiffCheckpointsToWorkdir_DeletedExistingFile(t *testing.T) {
+	store, workdir := newTestStore(t)
+	abs := writeWorkdirFile(t, workdir, "gone.txt", "old\n")
+
+	if _, err := store.CapturePreWrite(abs); err != nil {
+		t.Fatalf("capture: %v", err)
+	}
+	if err := os.Remove(abs); err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+	if _, err := store.Finalize("cp1"); err != nil {
+		t.Fatalf("finalize: %v", err)
+	}
+	store.Reset()
+
+	patch, changes, err := store.DiffCheckpointsToWorkdir(context.Background(), []string{"cp1"})
+	if err != nil {
+		t.Fatalf("DiffCheckpointsToWorkdir() error = %v", err)
+	}
+	if len(changes) != 1 || changes[0].Path != "gone.txt" || changes[0].Kind != FileChangeDeleted {
+		t.Fatalf("changes = %+v, want gone.txt deleted", changes)
+	}
+	if !strings.Contains(patch, "-old") {
+		t.Fatalf("patch should contain deleted content, got:\n%s", patch)
+	}
+}
+
+func TestDiffCheckpointsToCheckpoint_UsesExactTargetState(t *testing.T) {
+	store, workdir := newTestStore(t)
+	abs := writeWorkdirFile(t, workdir, "tracked.txt", "A\n")
+
+	if _, err := store.CapturePreWrite(abs); err != nil {
+		t.Fatalf("capture cp1: %v", err)
+	}
+	if err := os.WriteFile(abs, []byte("B\n"), 0o644); err != nil {
+		t.Fatalf("write B: %v", err)
+	}
+	if _, err := store.FinalizeWithExactState("cp1"); err != nil {
+		t.Fatalf("FinalizeWithExactState(cp1): %v", err)
+	}
+	store.Reset()
+
+	if _, err := store.CapturePreWrite(abs); err != nil {
+		t.Fatalf("capture cp2: %v", err)
+	}
+	if err := os.WriteFile(abs, []byte("C\n"), 0o644); err != nil {
+		t.Fatalf("write C: %v", err)
+	}
+	if _, err := store.FinalizeWithExactState("cp2"); err != nil {
+		t.Fatalf("FinalizeWithExactState(cp2): %v", err)
+	}
+	store.Reset()
+
+	if err := os.WriteFile(abs, []byte("D\n"), 0o644); err != nil {
+		t.Fatalf("write D drift: %v", err)
+	}
+
+	patch, changes, err := store.DiffCheckpointsToCheckpoint(context.Background(), []string{"cp1", "cp2"}, "cp2")
+	if err != nil {
+		t.Fatalf("DiffCheckpointsToCheckpoint() error = %v", err)
+	}
+	if len(changes) != 1 || changes[0].Path != "tracked.txt" || changes[0].Kind != FileChangeModified {
+		t.Fatalf("changes = %+v, want tracked.txt modified", changes)
+	}
+	if !strings.Contains(patch, "-A") || !strings.Contains(patch, "+C") {
+		t.Fatalf("patch should compare A to C, got:\n%s", patch)
+	}
+	if strings.Contains(patch, "+D") || strings.Contains(patch, "-B") {
+		t.Fatalf("patch should ignore later workdir drift, got:\n%s", patch)
+	}
+}
+
+func TestDiffCheckpointsToCheckpoint_ElidesRevertedAndTransientFiles(t *testing.T) {
+	store, workdir := newTestStore(t)
+	reverted := writeWorkdirFile(t, workdir, "reverted.txt", "A\n")
+	transient := filepath.Join(workdir, "transient.txt")
+
+	if _, err := store.CapturePreWrite(reverted); err != nil {
+		t.Fatalf("capture reverted cp1: %v", err)
+	}
+	if err := os.WriteFile(reverted, []byte("B\n"), 0o644); err != nil {
+		t.Fatalf("write reverted B: %v", err)
+	}
+	if _, err := store.CapturePreWrite(transient); err != nil {
+		t.Fatalf("capture transient cp1: %v", err)
+	}
+	if err := os.WriteFile(transient, []byte("created\n"), 0o644); err != nil {
+		t.Fatalf("write transient: %v", err)
+	}
+	if _, err := store.FinalizeWithExactState("cp1"); err != nil {
+		t.Fatalf("FinalizeWithExactState(cp1): %v", err)
+	}
+	store.Reset()
+
+	if _, err := store.CapturePreWrite(reverted); err != nil {
+		t.Fatalf("capture reverted cp2: %v", err)
+	}
+	if err := os.WriteFile(reverted, []byte("A\n"), 0o644); err != nil {
+		t.Fatalf("restore reverted A: %v", err)
+	}
+	if _, err := store.CapturePreWrite(transient); err != nil {
+		t.Fatalf("capture transient cp2: %v", err)
+	}
+	if err := os.Remove(transient); err != nil {
+		t.Fatalf("remove transient: %v", err)
+	}
+	if _, err := store.FinalizeWithExactState("cp2"); err != nil {
+		t.Fatalf("FinalizeWithExactState(cp2): %v", err)
+	}
+	store.Reset()
+
+	patch, changes, err := store.DiffCheckpointsToCheckpoint(context.Background(), []string{"cp1", "cp2"}, "cp2")
+	if err != nil {
+		t.Fatalf("DiffCheckpointsToCheckpoint() error = %v", err)
+	}
+	if patch != "" || len(changes) != 0 {
+		t.Fatalf("expected empty aggregate diff, patch=%q changes=%+v", patch, changes)
+	}
+}
+
+func TestDiffCheckpointsToCheckpoint_FallsBackWhenExactStateMissing(t *testing.T) {
+	store, workdir := newTestStore(t)
+	abs := writeWorkdirFile(t, workdir, "tracked.txt", "A\n")
+
+	if _, err := store.CapturePreWrite(abs); err != nil {
+		t.Fatalf("capture cp1: %v", err)
+	}
+	if err := os.WriteFile(abs, []byte("B\n"), 0o644); err != nil {
+		t.Fatalf("write B: %v", err)
+	}
+	if _, err := store.Finalize("cp1"); err != nil {
+		t.Fatalf("Finalize(cp1): %v", err)
+	}
+	store.Reset()
+
+	if _, err := store.CapturePreWrite(abs); err != nil {
+		t.Fatalf("capture cp2: %v", err)
+	}
+	if err := os.WriteFile(abs, []byte("C\n"), 0o644); err != nil {
+		t.Fatalf("write C: %v", err)
+	}
+	if _, err := store.Finalize("cp2"); err != nil {
+		t.Fatalf("Finalize(cp2): %v", err)
+	}
+	store.Reset()
+
+	patch, changes, err := store.DiffCheckpointsToCheckpoint(context.Background(), []string{"cp1", "cp2"}, "cp2")
+	if err != nil {
+		t.Fatalf("DiffCheckpointsToCheckpoint() error = %v", err)
+	}
+	if len(changes) != 1 || changes[0].Path != "tracked.txt" || changes[0].Kind != FileChangeModified {
+		t.Fatalf("changes = %+v, want tracked.txt modified", changes)
+	}
+	if !strings.Contains(patch, "-A") || !strings.Contains(patch, "+C") {
+		t.Fatalf("patch should fall back to workdir and compare A to C, got:\n%s", patch)
+	}
+}
+
 // ──────────────────────── RunAggregateDiff tests ────────────────────────
 
 func TestRunAggregateDiff_ModifiedFileAcrossCheckpoints(t *testing.T) {

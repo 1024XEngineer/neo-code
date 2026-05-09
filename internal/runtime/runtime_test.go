@@ -15,9 +15,9 @@ import (
 	"neo-code/internal/config"
 	agentcontext "neo-code/internal/context"
 	contextcompact "neo-code/internal/context/compact"
-	"neo-code/internal/repository"
 	"neo-code/internal/provider"
 	providertypes "neo-code/internal/provider/types"
+	"neo-code/internal/repository"
 	approvalflow "neo-code/internal/runtime/approval"
 	"neo-code/internal/runtime/controlplane"
 	"neo-code/internal/runtime/streaming"
@@ -1552,6 +1552,80 @@ func TestServiceRunDelegatesToContextBuilder(t *testing.T) {
 	}
 	if len(scripted.requests[0].Messages) != 1 || renderPartsForTest(scripted.requests[0].Messages[0].Parts) != "delegated message" {
 		t.Fatalf("expected delegated messages, got %+v", scripted.requests[0].Messages)
+	}
+}
+
+func TestServiceRunUsesSessionSelectionForMetadataAndBudget(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	if err := manager.Update(context.Background(), func(cfg *config.Config) error {
+		cfg.SelectedProvider = config.GeminiName
+		cfg.CurrentModel = "gemini-current-model"
+		return nil
+	}); err != nil {
+		t.Fatalf("update config: %v", err)
+	}
+
+	store := newMemoryStore()
+	session := agentsession.New("session selection")
+	session.ID = "session-selection"
+	session.Provider = config.OpenAIName
+	session.Model = "openai-session-model"
+	store.sessions[session.ID] = cloneSession(session)
+
+	registry := tools.NewRegistry()
+	registry.Register(&stubTool{name: "filesystem_read_file", content: "default"})
+
+	builder := &stubContextBuilder{
+		buildFn: func(ctx context.Context, input agentcontext.BuildInput) (agentcontext.BuildResult, error) {
+			return agentcontext.BuildResult{
+				SystemPrompt: "delegated prompt",
+				Messages: []providertypes.Message{
+					{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("delegated message")}},
+				},
+			}, nil
+		},
+	}
+	scripted := &scriptedProvider{
+		streams: [][]providertypes.StreamEvent{
+			{providertypes.NewTextDeltaStreamEvent("done")},
+		},
+	}
+	factory := &scriptedProviderFactory{provider: scripted}
+	service := NewWithFactory(manager, registry, store, factory, builder)
+
+	var resolvedBudgetCfg config.Config
+	service.SetBudgetResolver(budgetResolverFunc(func(ctx context.Context, cfg config.Config) (BudgetResolution, error) {
+		resolvedBudgetCfg = cfg
+		return BudgetResolution{PromptBudget: 12345, Source: "derived", ContextWindow: 200000}, nil
+	}))
+
+	if err := service.Run(context.Background(), UserInput{
+		SessionID: session.ID,
+		RunID:     "run-session-selection",
+		Parts:     []providertypes.ContentPart{providertypes.NewTextPart("hello")},
+	}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	if builder.lastInput.Metadata.Provider != config.OpenAIName {
+		t.Fatalf("builder provider = %q, want %q", builder.lastInput.Metadata.Provider, config.OpenAIName)
+	}
+	if builder.lastInput.Metadata.Model != "openai-session-model" {
+		t.Fatalf("builder model = %q, want %q", builder.lastInput.Metadata.Model, "openai-session-model")
+	}
+	if resolvedBudgetCfg.SelectedProvider != config.OpenAIName {
+		t.Fatalf("budget provider = %q, want %q", resolvedBudgetCfg.SelectedProvider, config.OpenAIName)
+	}
+	if resolvedBudgetCfg.CurrentModel != "openai-session-model" {
+		t.Fatalf("budget model = %q, want %q", resolvedBudgetCfg.CurrentModel, "openai-session-model")
+	}
+	if len(factory.configs) != 1 || factory.configs[0].Name != config.OpenAIName {
+		t.Fatalf("factory configs = %+v, want one openai config", factory.configs)
+	}
+	if len(scripted.requests) != 1 || scripted.requests[0].Model != "openai-session-model" {
+		t.Fatalf("requests = %+v, want one openai-session-model request", scripted.requests)
 	}
 }
 
@@ -3517,6 +3591,108 @@ func TestServiceListSessionsSkipsPromotionWhenDerivedTitleInvalid(t *testing.T) 
 	}
 	if summaries[0].Title != "New Session" {
 		t.Fatalf("expected default title to stay unchanged, got %q", summaries[0].Title)
+	}
+}
+
+func TestServiceLoadSessionRepairsIncompleteToolCallTail(t *testing.T) {
+	manager := newRuntimeConfigManager(t)
+	store := newMemoryStore()
+	service := NewWithFactory(manager, tools.NewRegistry(), store, nil, nil)
+
+	session := agentsession.New("Repair Me")
+	session.Messages = []providertypes.Message{
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("before")}},
+		{
+			Role: providertypes.RoleAssistant,
+			ToolCalls: []providertypes.ToolCall{
+				{ID: "call-1", Name: "filesystem_read_file", Arguments: `{"path":"README.md"}`},
+				{ID: "call-2", Name: "bash", Arguments: `{"command":"echo hi"}`},
+			},
+		},
+		{
+			Role:       providertypes.RoleTool,
+			ToolCallID: "call-1",
+			Parts:      []providertypes.ContentPart{providertypes.NewTextPart("README")},
+		},
+	}
+	store.sessions[session.ID] = cloneSession(session)
+
+	loaded, err := service.LoadSession(context.Background(), session.ID)
+	if err != nil {
+		t.Fatalf("LoadSession() error = %v", err)
+	}
+	if len(loaded.Messages) != 1 {
+		t.Fatalf("len(loaded.Messages) = %d, want 1", len(loaded.Messages))
+	}
+	if got := renderPartsForTest(loaded.Messages[0].Parts); got != "before" {
+		t.Fatalf("loaded preserved message = %q, want %q", got, "before")
+	}
+
+	persisted, err := store.LoadSession(context.Background(), session.ID)
+	if err != nil {
+		t.Fatalf("store.LoadSession() error = %v", err)
+	}
+	if len(persisted.Messages) != 1 {
+		t.Fatalf("len(persisted.Messages) = %d, want 1", len(persisted.Messages))
+	}
+}
+
+func TestServiceRunRepairsIncompleteToolCallTailBeforeBuildingContext(t *testing.T) {
+	manager := newRuntimeConfigManager(t)
+	store := newMemoryStore()
+	builder := &stubContextBuilder{}
+	scripted := &scriptedProvider{
+		responses: []scriptedResponse{
+			{
+				Message: providertypes.Message{
+					Role:  providertypes.RoleAssistant,
+					Parts: []providertypes.ContentPart{providertypes.NewTextPart("done")},
+				},
+				FinishReason: "stop",
+			},
+		},
+	}
+	service := NewWithFactory(manager, tools.NewRegistry(), store, &scriptedProviderFactory{provider: scripted}, builder)
+
+	session := agentsession.New("Repair Before Run")
+	session.Messages = []providertypes.Message{
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("before")}},
+		{
+			Role: providertypes.RoleAssistant,
+			ToolCalls: []providertypes.ToolCall{
+				{ID: "call-1", Name: "filesystem_read_file", Arguments: `{"path":"README.md"}`},
+			},
+		},
+	}
+	store.sessions[session.ID] = cloneSession(session)
+
+	if err := service.Run(context.Background(), UserInput{
+		SessionID: session.ID,
+		RunID:     "run-repair-incomplete-tool-tail",
+		Parts:     []providertypes.ContentPart{providertypes.NewTextPart("continue")},
+	}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	if len(builder.lastInput.Messages) != 2 {
+		t.Fatalf("len(builder.lastInput.Messages) = %d, want 2", len(builder.lastInput.Messages))
+	}
+	if builder.lastInput.Messages[0].Role != providertypes.RoleUser || renderPartsForTest(builder.lastInput.Messages[0].Parts) != "before" {
+		t.Fatalf("unexpected repaired history in builder input: %+v", builder.lastInput.Messages)
+	}
+	if builder.lastInput.Messages[1].Role != providertypes.RoleUser || renderPartsForTest(builder.lastInput.Messages[1].Parts) != "continue" {
+		t.Fatalf("expected latest user input in builder messages, got %+v", builder.lastInput.Messages)
+	}
+
+	persisted, err := store.LoadSession(context.Background(), session.ID)
+	if err != nil {
+		t.Fatalf("store.LoadSession() error = %v", err)
+	}
+	if len(persisted.Messages) < 2 {
+		t.Fatalf("expected repaired transcript plus new turn, got %+v", persisted.Messages)
+	}
+	if len(persisted.Messages[0].ToolCalls) != 0 {
+		t.Fatalf("expected repaired transcript to drop dangling tool_calls, got %+v", persisted.Messages[0])
 	}
 }
 

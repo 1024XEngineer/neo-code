@@ -104,10 +104,13 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 		}
 		if statePtr != nil && s.perEditStore != nil && statePtr.baselineCheckpointID != "" && statePtr.lastEndOfTurnCheckpointID != "" {
 			runEndCtx := context.Background()
-			records, listErr := s.checkpointStore.ListCheckpoints(runEndCtx, statePtr.session.ID, checkpoint.ListCheckpointOpts{RunID: statePtr.runID})
+			records, listErr := s.checkpointStore.ListCheckpoints(runEndCtx, statePtr.session.ID, checkpoint.ListCheckpointOpts{})
 			if listErr == nil {
 				var perEditIDs []string
 				for _, r := range records {
+					if strings.TrimSpace(r.RunID) != statePtr.runID {
+						continue
+					}
 					if checkpoint.IsPerEditRef(r.CodeCheckpointRef) {
 						perEditIDs = append(perEditIDs, checkpoint.PerEditCheckpointIDFromRef(r.CodeCheckpointRef))
 					}
@@ -168,6 +171,8 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 
 	state := newRunState(input.RunID, session)
 	state.runToken = runToken
+	state.thinkingOverride = cloneThinkingOverride(input.ThinkingOverride)
+	state.disableTools = input.DisableTools
 	state.planningEnabled = strings.TrimSpace(input.Mode) != "" ||
 		session.CurrentPlan != nil ||
 		agentsession.NormalizeAgentMode(session.AgentMode) == agentsession.AgentModePlan
@@ -564,6 +569,10 @@ func (s *Service) prepareTurnBudgetSnapshot(ctx context.Context, state *runState
 	stage := resolvePlanningStageForState(state)
 	readOnly := isReadOnlyPlanningStage(stage)
 	injectFullPlan := planningNeedsFullPlan(state)
+	resolvedProvider, model, err := resolveCompactProviderSelection(state.session, cfg)
+	if err != nil {
+		return TurnBudgetSnapshot{}, false, err
+	}
 
 	builtContext, err := s.contextBuilder.Build(ctx, agentcontext.BuildInput{
 		Messages:          state.session.Messages,
@@ -580,8 +589,8 @@ func (s *Service) prepareTurnBudgetSnapshot(ctx context.Context, state *runState
 			ProjectRoot:         cfg.Workdir,
 			Workdir:             activeWorkdir,
 			Shell:               cfg.Shell,
-			Provider:            cfg.SelectedProvider,
-			Model:               cfg.CurrentModel,
+			Provider:            resolvedProvider.Name,
+			Model:               model,
 			SessionInputTokens:  state.session.TokenInputTotal,
 			SessionOutputTokens: state.session.TokenOutputTotal,
 		},
@@ -598,20 +607,19 @@ func (s *Service) prepareTurnBudgetSnapshot(ctx context.Context, state *runState
 		s.emitRunScoped(ctx, EventTodoSummaryInjected, state, TodoEventPayload{})
 	}
 
-	toolSpecs, err := s.toolManager.ListAvailableSpecs(ctx, tools.SpecListInput{
-		SessionID: state.session.ID,
-		Mode:      string(agentsession.NormalizeAgentMode(state.session.AgentMode)),
-		ReadOnly:  readOnly,
-	})
-	if err != nil {
-		return TurnBudgetSnapshot{}, false, err
+	var toolSpecs []providertypes.ToolSpec
+	if !state.disableTools {
+		toolSpecs, err = s.toolManager.ListAvailableSpecs(ctx, tools.SpecListInput{
+			SessionID: state.session.ID,
+			Mode:      string(agentsession.NormalizeAgentMode(state.session.AgentMode)),
+			ReadOnly:  readOnly,
+		})
+		if err != nil {
+			return TurnBudgetSnapshot{}, false, err
+		}
+		toolSpecs = prioritizeToolSpecsBySkillHints(toolSpecs, activeSkills)
 	}
-	toolSpecs = prioritizeToolSpecsBySkillHints(toolSpecs, activeSkills)
 
-	resolvedProvider, model, err := resolveCompactProviderSelection(state.session, cfg)
-	if err != nil {
-		return TurnBudgetSnapshot{}, false, err
-	}
 	providerRuntimeCfg, err := resolvedProvider.ToRuntimeConfig()
 	if err != nil {
 		return TurnBudgetSnapshot{}, false, err
@@ -627,11 +635,14 @@ func (s *Service) prepareTurnBudgetSnapshot(ctx context.Context, state *runState
 	if notificationHint := strings.TrimSpace(s.drainHookNotificationsForTurn(state)); notificationHint != "" {
 		systemPrompt = mergeEphemeralHookNotificationIntoSystemPrompt(systemPrompt, notificationHint)
 	}
-	promptBudget, budgetSource, contextWindow := s.resolvePromptBudget(ctx, cfg)
+	budgetCfg := cfg
+	budgetCfg.SelectedProvider = resolvedProvider.Name
+	budgetCfg.CurrentModel = model
+	promptBudget, budgetSource, contextWindow := s.resolvePromptBudget(ctx, budgetCfg)
 	requestMessages := append([]providertypes.Message(nil), builtContext.Messages...)
 	thinkingCfg, thinkingErr := resolveThinkingConfig(
 		modelCapabilityHintsForRequest(model, resolvedProvider.Models),
-		nil, // ThinkingOverride 暂未从 TUI 透传
+		state.thinkingOverride,
 		s.IsThinkingEnabled(),
 	)
 	if thinkingErr != nil {
@@ -712,21 +723,32 @@ func (s *Service) callProvider(
 	})
 	if streamOutcome.err != nil {
 		// unknown 模型 + ErrThinkingNotSupported → 重试不带 ThinkingConfig
-		if provider.IsThinkingNotSupportedError(streamOutcome.err) && snapshot.Request.ThinkingConfig != nil {
-			retryRequest := snapshot.Request
-			retryRequest.ThinkingConfig = nil
-			retryOutcome := generateStreamingMessage(ctx, modelProvider, retryRequest, streaming.Hooks{
-				OnTextDelta: func(text string) {
-					s.emitRunScoped(ctx, EventAgentChunk, state, text)
-				},
-				OnToolCallStart: func(payload providertypes.ToolCallStartPayload) {
-					s.emitRunScoped(ctx, EventToolCallThinking, state, payload.Name)
-				},
-			})
-			if retryOutcome.err != nil {
-				return turnProviderOutput{}, retryOutcome.err
+		if provider.IsThinkingNotSupportedError(streamOutcome.err) {
+			retryRequests := buildThinkingRetryRequests(snapshot.Request)
+			lastErr := streamOutcome.err
+			recovered := false
+			for _, retryRequest := range retryRequests {
+				retryOutcome := generateStreamingMessage(ctx, modelProvider, retryRequest, streaming.Hooks{
+					OnTextDelta: func(text string) {
+						s.emitRunScoped(ctx, EventAgentChunk, state, text)
+					},
+					OnToolCallStart: func(payload providertypes.ToolCallStartPayload) {
+						s.emitRunScoped(ctx, EventToolCallThinking, state, payload.Name)
+					},
+				})
+				if retryOutcome.err == nil {
+					streamOutcome = retryOutcome
+					recovered = true
+					break
+				}
+				lastErr = retryOutcome.err
+				if !provider.IsThinkingNotSupportedError(retryOutcome.err) {
+					return turnProviderOutput{}, retryOutcome.err
+				}
 			}
-			streamOutcome = retryOutcome
+			if !recovered {
+				return turnProviderOutput{}, lastErr
+			}
 		} else {
 			return turnProviderOutput{}, streamOutcome.err
 		}
@@ -742,6 +764,54 @@ func (s *Service) callProvider(
 			streamOutcome.outputObserved,
 		),
 	}, nil
+}
+
+// buildThinkingRetryRequests 为 thinking 不兼容场景生成降级重试序列。
+func buildThinkingRetryRequests(base providertypes.GenerateRequest) []providertypes.GenerateRequest {
+	retries := make([]providertypes.GenerateRequest, 0, 2)
+	seen := map[string]struct{}{}
+	appendRetry := func(cfg *providertypes.ThinkingConfig) {
+		key := thinkingConfigRetryKey(cfg)
+		if _, exists := seen[key]; exists {
+			return
+		}
+		if thinkingConfigRetryKey(base.ThinkingConfig) == key {
+			return
+		}
+		seen[key] = struct{}{}
+		candidate := base
+		candidate.ThinkingConfig = cloneProviderThinkingConfig(cfg)
+		retries = append(retries, candidate)
+	}
+
+	if base.ThinkingConfig == nil {
+		appendRetry(&providertypes.ThinkingConfig{Enabled: false})
+		return retries
+	}
+	if base.ThinkingConfig.Enabled || strings.TrimSpace(base.ThinkingConfig.Effort) != "" {
+		appendRetry(&providertypes.ThinkingConfig{Enabled: false})
+	}
+	appendRetry(nil)
+	return retries
+}
+
+// thinkingConfigRetryKey 将 ThinkingConfig 归一化为去重键，避免重复重试相同配置。
+func thinkingConfigRetryKey(cfg *providertypes.ThinkingConfig) string {
+	if cfg == nil {
+		return "nil"
+	}
+	return fmt.Sprintf("enabled=%t|effort=%s", cfg.Enabled, strings.TrimSpace(cfg.Effort))
+}
+
+// cloneProviderThinkingConfig 复制 provider 层 ThinkingConfig，隔离后续重试过程中的结构体复用。
+func cloneProviderThinkingConfig(cfg *providertypes.ThinkingConfig) *providertypes.ThinkingConfig {
+	if cfg == nil {
+		return nil
+	}
+	return &providertypes.ThinkingConfig{
+		Enabled: cfg.Enabled,
+		Effort:  strings.TrimSpace(cfg.Effort),
+	}
 }
 
 // emitTokenUsage 在单轮 provider 调用成功后发出 token_usage 事件。

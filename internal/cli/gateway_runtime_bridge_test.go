@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -24,6 +25,11 @@ import (
 type runtimeStub struct {
 	submitInput     agentruntime.PrepareInput
 	submitErr       error
+	askInput        agentruntime.AskInput
+	askErr          error
+	deleteAskInput  agentruntime.DeleteAskSessionInput
+	deleteAskResult bool
+	deleteAskErr    error
 	compactInput    agentruntime.CompactInput
 	compactResult   agentruntime.CompactResult
 	compactErr      error
@@ -84,6 +90,19 @@ const testBridgeSubjectID = bridgeLocalSubjectID
 func (s *runtimeStub) Submit(_ context.Context, input agentruntime.PrepareInput) error {
 	s.submitInput = input
 	return s.submitErr
+}
+
+func (s *runtimeStub) Ask(_ context.Context, input agentruntime.AskInput) error {
+	s.askInput = input
+	return s.askErr
+}
+
+func (s *runtimeStub) DeleteAskSession(
+	_ context.Context,
+	input agentruntime.DeleteAskSessionInput,
+) (bool, error) {
+	s.deleteAskInput = input
+	return s.deleteAskResult, s.deleteAskErr
 }
 
 func (s *runtimeStub) PrepareUserInput(context.Context, agentruntime.PrepareInput) (agentruntime.UserInput, error) {
@@ -199,6 +218,15 @@ type runtimeWithoutCreator struct {
 func (r *runtimeWithoutCreator) Submit(ctx context.Context, input agentruntime.PrepareInput) error {
 	return r.base.Submit(ctx, input)
 }
+func (r *runtimeWithoutCreator) Ask(ctx context.Context, input agentruntime.AskInput) error {
+	return r.base.Ask(ctx, input)
+}
+func (r *runtimeWithoutCreator) DeleteAskSession(
+	ctx context.Context,
+	input agentruntime.DeleteAskSessionInput,
+) (bool, error) {
+	return r.base.DeleteAskSession(ctx, input)
+}
 func (r *runtimeWithoutCreator) PrepareUserInput(ctx context.Context, input agentruntime.PrepareInput) (agentruntime.UserInput, error) {
 	return r.base.PrepareUserInput(ctx, input)
 }
@@ -264,6 +292,15 @@ type runtimeWithoutCheckpointer struct {
 
 func (r *runtimeWithoutCheckpointer) Submit(ctx context.Context, input agentruntime.PrepareInput) error {
 	return r.base.Submit(ctx, input)
+}
+func (r *runtimeWithoutCheckpointer) Ask(ctx context.Context, input agentruntime.AskInput) error {
+	return r.base.Ask(ctx, input)
+}
+func (r *runtimeWithoutCheckpointer) DeleteAskSession(
+	ctx context.Context,
+	input agentruntime.DeleteAskSessionInput,
+) (bool, error) {
+	return r.base.DeleteAskSession(ctx, input)
 }
 func (r *runtimeWithoutCheckpointer) PrepareUserInput(ctx context.Context, input agentruntime.PrepareInput) (agentruntime.UserInput, error) {
 	return r.base.PrepareUserInput(ctx, input)
@@ -1755,6 +1792,117 @@ func TestGatewayRuntimePortBridgeListFilesFiltersAndSorts(t *testing.T) {
 	}
 }
 
+func TestGatewayRuntimePortBridgeReadFileSuccess(t *testing.T) {
+	tmpDir := t.TempDir()
+	target := filepath.Join(tmpDir, "main.go")
+	if err := os.WriteFile(target, []byte("package main\n"), 0644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+
+	bridge, _ := newGatewayRuntimePortBridge(context.Background(), &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)}, testSessionStore)
+	defer bridge.Close()
+
+	result, err := bridge.ReadFile(context.Background(), gateway.ReadFileInput{
+		SubjectID: testBridgeSubjectID,
+		Workdir:   tmpDir,
+		Path:      "main.go",
+	})
+	if err != nil {
+		t.Fatalf("read file: %v", err)
+	}
+	if result.Path != "main.go" {
+		t.Fatalf("path = %q, want %q", result.Path, "main.go")
+	}
+	if result.Content != "package main\n" {
+		t.Fatalf("content = %q", result.Content)
+	}
+	if result.Encoding != "utf-8" || result.IsBinary || result.Truncated {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+}
+
+func TestGatewayRuntimePortBridgeReadFileRejectsDirectory(t *testing.T) {
+	tmpDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(tmpDir, "dir"), 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	bridge, _ := newGatewayRuntimePortBridge(context.Background(), &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)}, testSessionStore)
+	defer bridge.Close()
+
+	_, err := bridge.ReadFile(context.Background(), gateway.ReadFileInput{
+		SubjectID: testBridgeSubjectID,
+		Workdir:   tmpDir,
+		Path:      "dir",
+	})
+	if err == nil || !strings.Contains(err.Error(), "is a directory") {
+		t.Fatalf("expected directory error, got %v", err)
+	}
+}
+
+func TestGatewayRuntimePortBridgeReadFileRejectsEscapedPath(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	bridge, _ := newGatewayRuntimePortBridge(context.Background(), &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)}, testSessionStore)
+	defer bridge.Close()
+
+	_, err := bridge.ReadFile(context.Background(), gateway.ReadFileInput{
+		SubjectID: testBridgeSubjectID,
+		Workdir:   tmpDir,
+		Path:      "../secret.txt",
+	})
+	if err == nil || !strings.Contains(err.Error(), "escapes workdir") {
+		t.Fatalf("expected unsafe path error, got %v", err)
+	}
+}
+
+func TestGatewayRuntimePortBridgeReadFileTruncatesLargeFile(t *testing.T) {
+	tmpDir := t.TempDir()
+	target := filepath.Join(tmpDir, "large.txt")
+	payload := strings.Repeat("a", int(readFilePreviewLimitBytes)+1)
+	if err := os.WriteFile(target, []byte(payload), 0644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+
+	bridge, _ := newGatewayRuntimePortBridge(context.Background(), &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)}, testSessionStore)
+	defer bridge.Close()
+
+	result, err := bridge.ReadFile(context.Background(), gateway.ReadFileInput{
+		SubjectID: testBridgeSubjectID,
+		Workdir:   tmpDir,
+		Path:      "large.txt",
+	})
+	if err != nil {
+		t.Fatalf("read file: %v", err)
+	}
+	if !result.Truncated || result.Content != "" {
+		t.Fatalf("expected truncated placeholder, got %+v", result)
+	}
+}
+
+func TestGatewayRuntimePortBridgeReadFileMarksBinaryContent(t *testing.T) {
+	tmpDir := t.TempDir()
+	target := filepath.Join(tmpDir, "bin.dat")
+	if err := os.WriteFile(target, []byte{0x00, 0x01, 0x02}, 0644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+
+	bridge, _ := newGatewayRuntimePortBridge(context.Background(), &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)}, testSessionStore)
+	defer bridge.Close()
+
+	result, err := bridge.ReadFile(context.Background(), gateway.ReadFileInput{
+		SubjectID: testBridgeSubjectID,
+		Workdir:   tmpDir,
+		Path:      "bin.dat",
+	})
+	if err != nil {
+		t.Fatalf("read file: %v", err)
+	}
+	if !result.IsBinary || result.Encoding != "binary" || result.Content != "" {
+		t.Fatalf("expected binary placeholder, got %+v", result)
+	}
+}
+
 // ---- ListModels ----
 
 func TestGatewayRuntimePortBridgeListModelsNilSelection(t *testing.T) {
@@ -1893,7 +2041,12 @@ func TestGatewayRuntimePortBridgeSetSessionModelNotFound(t *testing.T) {
 
 func TestGatewayRuntimePortBridgeGetSessionModelStoreNil(t *testing.T) {
 	stub := &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)}
-	bridge, _ := newGatewayRuntimePortBridge(context.Background(), stub, nil)
+	ps := &providerSelectionStub{
+		listOptions: []configstate.ProviderOption{
+			{ID: "openai", Models: []providertypes.ModelDescriptor{{ID: "gpt-4"}}},
+		},
+	}
+	bridge, _ := newGatewayRuntimePortBridge(context.Background(), stub, nil, nil, ps)
 	defer bridge.Close()
 
 	_, err := bridge.GetSessionModel(context.Background(), gateway.GetSessionModelInput{
@@ -1908,7 +2061,12 @@ func TestGatewayRuntimePortBridgeGetSessionModelStoreNil(t *testing.T) {
 func TestGatewayRuntimePortBridgeGetSessionModelLoadFail(t *testing.T) {
 	store := &bridgeSessionStoreWithLoader{loadErr: errors.New("load failed")}
 	stub := &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)}
-	bridge, _ := newGatewayRuntimePortBridge(context.Background(), stub, store)
+	ps := &providerSelectionStub{
+		listOptions: []configstate.ProviderOption{
+			{ID: "openai", Models: []providertypes.ModelDescriptor{{ID: "gpt-4"}}},
+		},
+	}
+	bridge, _ := newGatewayRuntimePortBridge(context.Background(), stub, store, nil, ps)
 	defer bridge.Close()
 
 	_, err := bridge.GetSessionModel(context.Background(), gateway.GetSessionModelInput{
@@ -1952,7 +2110,11 @@ func TestGatewayRuntimePortBridgeGetSessionModelDisplayNameNotFound(t *testing.T
 	store := &bridgeSessionStoreWithLoader{
 		session: agentsession.Session{ID: "s-1", Provider: "openai", Model: "gpt-4"},
 	}
-	ps := &providerSelectionStub{listOptions: []configstate.ProviderOption{}}
+	ps := &providerSelectionStub{
+		listOptions: []configstate.ProviderOption{
+			{ID: "openai", Models: []providertypes.ModelDescriptor{{ID: "gpt-4", Name: ""}}},
+		},
+	}
 	stub := &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)}
 	bridge, _ := newGatewayRuntimePortBridge(context.Background(), stub, store, nil, ps)
 	defer bridge.Close()
@@ -2056,6 +2218,161 @@ func TestGatewayRuntimePortBridgeSelectProviderModelSelectError(t *testing.T) {
 	_, err := bridge.SelectProviderModel(context.Background(), gateway.SelectProviderModelInput{SubjectID: testBridgeSubjectID, ProviderID: "openai"})
 	if err == nil || err.Error() != "select failed" {
 		t.Fatalf("expected select failed, got %v", err)
+	}
+}
+
+func TestGatewayRuntimePortBridgeSelectProviderModelSyncsWorkspaceSessions(t *testing.T) {
+	updated := make([]agentsession.UpdateSessionStateInput, 0)
+	store := &bridgeSessionStoreWithLoader{
+		bridgeSessionStoreStub: bridgeSessionStoreStub{
+			updateFn: func(_ context.Context, input agentsession.UpdateSessionStateInput) error {
+				updated = append(updated, input)
+				return nil
+			},
+		},
+		session: agentsession.Session{
+			ID:       "session-1",
+			Title:    "Session 1",
+			Provider: "openai",
+			Model:    "gpt-4.1",
+		},
+	}
+	ps := &providerSelectionStub{
+		selectRes: configstate.Selection{ProviderID: "gemini", ModelID: "gemini-2.5-pro"},
+	}
+	stub := &runtimeStub{
+		eventsCh: make(chan agentruntime.RuntimeEvent, 1),
+		sessionList: []agentsession.Summary{
+			{ID: "session-1", Title: "Session 1"},
+			{ID: "session-2", Title: "Session 2"},
+		},
+	}
+	bridge, _ := newGatewayRuntimePortBridge(context.Background(), stub, store, nil, ps)
+	defer bridge.Close()
+
+	result, err := bridge.SelectProviderModel(context.Background(), gateway.SelectProviderModelInput{
+		SubjectID:  testBridgeSubjectID,
+		ProviderID: "gemini",
+	})
+	if err != nil {
+		t.Fatalf("SelectProviderModel() error = %v", err)
+	}
+	if result.ProviderID != "gemini" || result.ModelID != "gemini-2.5-pro" {
+		t.Fatalf("result = %+v, want gemini/gemini-2.5-pro", result)
+	}
+	if len(updated) != 2 {
+		t.Fatalf("updated len = %d, want 2", len(updated))
+	}
+	for _, input := range updated {
+		if input.Head.Provider != "gemini" || input.Head.Model != "gemini-2.5-pro" {
+			t.Fatalf("updated head = %+v, want gemini/gemini-2.5-pro", input.Head)
+		}
+	}
+}
+
+func TestGatewayRuntimePortBridgeSelectProviderModelWithExplicitModelSyncsWorkspaceSessions(t *testing.T) {
+	updated := make([]agentsession.UpdateSessionStateInput, 0)
+	store := &bridgeSessionStoreWithLoader{
+		bridgeSessionStoreStub: bridgeSessionStoreStub{
+			updateFn: func(_ context.Context, input agentsession.UpdateSessionStateInput) error {
+				updated = append(updated, input)
+				return nil
+			},
+		},
+		session: agentsession.Session{
+			ID:       "session-1",
+			Title:    "Session 1",
+			Provider: "openai",
+			Model:    "gpt-4.1",
+		},
+	}
+	ps := &providerSelectionStub{
+		selectRes:   configstate.Selection{ProviderID: "openai", ModelID: "gpt-4.1"},
+		setModelRes: configstate.Selection{ProviderID: "openai", ModelID: "gpt-4o"},
+	}
+	stub := &runtimeStub{
+		eventsCh: make(chan agentruntime.RuntimeEvent, 1),
+		sessionList: []agentsession.Summary{
+			{ID: "session-1", Title: "Session 1"},
+		},
+	}
+	bridge, _ := newGatewayRuntimePortBridge(context.Background(), stub, store, nil, ps)
+	defer bridge.Close()
+
+	result, err := bridge.SelectProviderModel(context.Background(), gateway.SelectProviderModelInput{
+		SubjectID:  testBridgeSubjectID,
+		ProviderID: "openai",
+		ModelID:    "gpt-4o",
+	})
+	if err != nil {
+		t.Fatalf("SelectProviderModel() error = %v", err)
+	}
+	if result.ProviderID != "openai" || result.ModelID != "gpt-4o" {
+		t.Fatalf("result = %+v, want openai/gpt-4o", result)
+	}
+	if len(updated) != 1 {
+		t.Fatalf("updated len = %d, want 1", len(updated))
+	}
+	if updated[0].Head.Provider != "openai" || updated[0].Head.Model != "gpt-4o" {
+		t.Fatalf("updated head = %+v, want openai/gpt-4o", updated[0].Head)
+	}
+}
+
+func TestGatewayRuntimePortBridgeSelectProviderModelSyncWorkspaceLoadError(t *testing.T) {
+	store := &bridgeSessionStoreWithLoader{loadErr: errors.New("load failed")}
+	ps := &providerSelectionStub{
+		selectRes: configstate.Selection{ProviderID: "gemini", ModelID: "gemini-2.5-pro"},
+	}
+	stub := &runtimeStub{
+		eventsCh: make(chan agentruntime.RuntimeEvent, 1),
+		sessionList: []agentsession.Summary{
+			{ID: "session-1", Title: "Session 1"},
+		},
+	}
+	bridge, _ := newGatewayRuntimePortBridge(context.Background(), stub, store, nil, ps)
+	defer bridge.Close()
+
+	_, err := bridge.SelectProviderModel(context.Background(), gateway.SelectProviderModelInput{
+		SubjectID:  testBridgeSubjectID,
+		ProviderID: "gemini",
+	})
+	if err == nil || err.Error() != "load failed" {
+		t.Fatalf("expected load failed, got %v", err)
+	}
+}
+
+func TestGatewayRuntimePortBridgeSelectProviderModelSyncWorkspaceUpdateError(t *testing.T) {
+	store := &bridgeSessionStoreWithLoader{
+		bridgeSessionStoreStub: bridgeSessionStoreStub{
+			updateFn: func(_ context.Context, _ agentsession.UpdateSessionStateInput) error {
+				return errors.New("update failed")
+			},
+		},
+		session: agentsession.Session{
+			ID:       "session-1",
+			Title:    "Session 1",
+			Provider: "openai",
+			Model:    "gpt-4.1",
+		},
+	}
+	ps := &providerSelectionStub{
+		selectRes: configstate.Selection{ProviderID: "gemini", ModelID: "gemini-2.5-pro"},
+	}
+	stub := &runtimeStub{
+		eventsCh: make(chan agentruntime.RuntimeEvent, 1),
+		sessionList: []agentsession.Summary{
+			{ID: "session-1", Title: "Session 1"},
+		},
+	}
+	bridge, _ := newGatewayRuntimePortBridge(context.Background(), stub, store, nil, ps)
+	defer bridge.Close()
+
+	_, err := bridge.SelectProviderModel(context.Background(), gateway.SelectProviderModelInput{
+		SubjectID:  testBridgeSubjectID,
+		ProviderID: "gemini",
+	})
+	if err == nil || err.Error() != "update failed" {
+		t.Fatalf("expected update failed, got %v", err)
 	}
 }
 
@@ -2195,6 +2512,124 @@ func TestResolveProviderModelForSession(t *testing.T) {
 			t.Fatalf("expected model not found, got %v", err)
 		}
 	})
+}
+
+func TestResolveEffectiveProviderModelSelection(t *testing.T) {
+	t.Run("session provider wins and falls back within provider", func(t *testing.T) {
+		selection, ok := resolveEffectiveProviderModelSelection(
+			[]configstate.ProviderOption{
+				{ID: "openai", Models: []providertypes.ModelDescriptor{{ID: "gpt-4.1"}, {ID: "gpt-4o"}}},
+				{ID: "gemini", Models: []providertypes.ModelDescriptor{{ID: "gemini-2.5-pro"}}},
+			},
+			"openai",
+			"missing-model",
+			"gemini",
+			"gemini-2.5-pro",
+		)
+		if !ok {
+			t.Fatal("expected effective selection")
+		}
+		if selection.ProviderID != "openai" || selection.ModelID != "gpt-4.1" {
+			t.Fatalf("selection = %+v, want openai/gpt-4.1", selection)
+		}
+	})
+
+	t.Run("invalid session provider falls back to global default", func(t *testing.T) {
+		selection, ok := resolveEffectiveProviderModelSelection(
+			[]configstate.ProviderOption{
+				{ID: "openai", Models: []providertypes.ModelDescriptor{{ID: "gpt-4.1"}}},
+				{ID: "gemini", Models: []providertypes.ModelDescriptor{{ID: "gemini-2.5-pro"}}},
+			},
+			"unknown",
+			"unknown-model",
+			"gemini",
+			"gemini-2.5-pro",
+		)
+		if !ok {
+			t.Fatal("expected effective selection")
+		}
+		if selection.ProviderID != "gemini" || selection.ModelID != "gemini-2.5-pro" {
+			t.Fatalf("selection = %+v, want gemini/gemini-2.5-pro", selection)
+		}
+	})
+}
+
+func TestGatewayRuntimePortBridgeListModelsUsesSessionProvider(t *testing.T) {
+	store := &bridgeSessionStoreWithLoader{
+		bridgeSessionStoreStub: bridgeSessionStoreStub{},
+		session: agentsession.Session{
+			ID:       "session-1",
+			Provider: "openai",
+			Model:    "gpt-4.1",
+		},
+	}
+	cfgMgr := &configManagerStub{
+		cfg: config.Config{
+			SelectedProvider: "gemini",
+			CurrentModel:     "gemini-2.5-pro",
+		},
+	}
+	ps := &providerSelectionStub{
+		listOptions: []configstate.ProviderOption{
+			{ID: "openai", Models: []providertypes.ModelDescriptor{{ID: "gpt-4.1", Name: "GPT-4.1"}}},
+			{ID: "gemini", Models: []providertypes.ModelDescriptor{{ID: "gemini-2.5-pro", Name: "Gemini 2.5 Pro"}}},
+		},
+	}
+	bridge, _ := newGatewayRuntimePortBridge(context.Background(), &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)}, store, cfgMgr, ps)
+	defer bridge.Close()
+
+	models, err := bridge.ListModels(context.Background(), gateway.ListModelsInput{
+		SubjectID: testBridgeSubjectID,
+		SessionID: "session-1",
+	})
+	if err != nil {
+		t.Fatalf("ListModels() error = %v", err)
+	}
+	if len(models) != 1 {
+		t.Fatalf("models len = %d, want 1", len(models))
+	}
+	if models[0].Provider != "openai" || models[0].ID != "gpt-4.1" {
+		t.Fatalf("models = %+v, want openai/gpt-4.1 only", models)
+	}
+}
+
+func TestGatewayRuntimePortBridgeGetSessionModelFallsBackToEffectiveSelection(t *testing.T) {
+	store := &bridgeSessionStoreWithLoader{
+		bridgeSessionStoreStub: bridgeSessionStoreStub{},
+		session: agentsession.Session{
+			ID:       "session-1",
+			Provider: "openai",
+			Model:    "missing-model",
+		},
+	}
+	cfgMgr := &configManagerStub{
+		cfg: config.Config{
+			SelectedProvider: "gemini",
+			CurrentModel:     "gemini-2.5-pro",
+		},
+	}
+	ps := &providerSelectionStub{
+		listOptions: []configstate.ProviderOption{
+			{ID: "openai", Models: []providertypes.ModelDescriptor{{ID: "gpt-4.1", Name: "GPT-4.1"}}},
+			{ID: "gemini", Models: []providertypes.ModelDescriptor{{ID: "gemini-2.5-pro", Name: "Gemini 2.5 Pro"}}},
+		},
+	}
+	bridge, _ := newGatewayRuntimePortBridge(context.Background(), &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)}, store, cfgMgr, ps)
+	defer bridge.Close()
+
+	result, err := bridge.GetSessionModel(context.Background(), gateway.GetSessionModelInput{
+		SubjectID: testBridgeSubjectID,
+		SessionID: "session-1",
+	})
+	if err != nil {
+		t.Fatalf("GetSessionModel() error = %v", err)
+	}
+	if result.ProviderID != "openai" || result.ModelID != "gpt-4.1" {
+		t.Fatalf("result = %+v, want openai/gpt-4.1", result)
+	}
+	if result.ModelName != "GPT-4.1" {
+		t.Fatalf("model name = %q, want %q", result.ModelName, "GPT-4.1")
+	}
 }
 
 func TestModelDisplayName(t *testing.T) {
@@ -2654,5 +3089,249 @@ func TestDefaultBuildGatewayRuntimePortListSessionsWithoutExplicitWorkdir(t *tes
 
 	if _, err := port.ListSessions(context.Background()); err != nil {
 		t.Fatalf("ListSessions() with empty cli workdir should succeed, got %v", err)
+	}
+}
+
+func TestGatewayRuntimePortBridgeAskDelegatesToRuntime(t *testing.T) {
+	stub := &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)}
+	bridge, err := newGatewayRuntimePortBridge(context.Background(), stub, testSessionStore, nil, nil)
+	if err != nil {
+		t.Fatalf("new bridge: %v", err)
+	}
+	defer bridge.Close()
+
+	err = bridge.Ask(context.Background(), gateway.AskInput{
+		SubjectID: testBridgeSubjectID,
+		SessionID: "ask-session-runtime",
+		UserQuery: "help me diagnose this",
+		Skills:    []string{"terminal-diagnosis"},
+		Workdir:   "C:/tmp/workdir",
+	})
+	if err != nil {
+		t.Fatalf("Ask() error = %v", err)
+	}
+
+	if stub.askInput.SessionID != "ask-session-runtime" {
+		t.Fatalf("ask session = %q, want ask-session-runtime", stub.askInput.SessionID)
+	}
+	if strings.TrimSpace(stub.askInput.RunID) == "" {
+		t.Fatal("ask run id should not be empty")
+	}
+	if stub.askInput.UserQuery != "help me diagnose this" {
+		t.Fatalf("ask query = %q, want %q", stub.askInput.UserQuery, "help me diagnose this")
+	}
+	if len(stub.askInput.Skills) != 1 || stub.askInput.Skills[0] != "terminal-diagnosis" {
+		t.Fatalf("ask skills = %#v, want [terminal-diagnosis]", stub.askInput.Skills)
+	}
+	if stub.askInput.Workdir != "C:/tmp/workdir" {
+		t.Fatalf("ask workdir = %q, want %q", stub.askInput.Workdir, "C:/tmp/workdir")
+	}
+
+	runState, ok := bridge.lookupAskRun(stub.askInput.RunID)
+	if !ok {
+		t.Fatalf("run %q should be tracked", stub.askInput.RunID)
+	}
+	if runState.SessionID != "ask-session-runtime" {
+		t.Fatalf("tracked session = %q, want ask-session-runtime", runState.SessionID)
+	}
+}
+
+func TestGatewayRuntimePortBridgeAskGeneratesSessionWhenEmpty(t *testing.T) {
+	stub := &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)}
+	bridge, err := newGatewayRuntimePortBridge(context.Background(), stub, testSessionStore, nil, nil)
+	if err != nil {
+		t.Fatalf("new bridge: %v", err)
+	}
+	defer bridge.Close()
+
+	err = bridge.Ask(context.Background(), gateway.AskInput{
+		SubjectID: testBridgeSubjectID,
+		UserQuery: "hello",
+	})
+	if err != nil {
+		t.Fatalf("Ask() error = %v", err)
+	}
+	if !strings.HasPrefix(stub.askInput.SessionID, bridgeAskSessionPrefix+"-") {
+		t.Fatalf("ask session = %q, want prefix %q", stub.askInput.SessionID, bridgeAskSessionPrefix+"-")
+	}
+	if strings.TrimSpace(stub.askInput.RunID) == "" {
+		t.Fatal("ask run id should not be empty")
+	}
+}
+
+func TestGatewayRuntimePortBridgeAskErrorEventSurvivesRunCleanup(t *testing.T) {
+	source := make(chan agentruntime.RuntimeEvent, 1)
+	stub := &runtimeStub{
+		eventsCh: source,
+		askErr:   errors.New("provider rate limited"),
+	}
+	bridge, err := newGatewayRuntimePortBridge(context.Background(), stub, testSessionStore, nil, nil)
+	if err != nil {
+		t.Fatalf("new bridge: %v", err)
+	}
+	defer bridge.Close()
+
+	err = bridge.Ask(context.Background(), gateway.AskInput{
+		SubjectID: testBridgeSubjectID,
+		SessionID: "ask-session-race",
+		UserQuery: "diagnose this",
+	})
+	if err == nil {
+		t.Fatal("Ask() should return error when runtime ask fails")
+	}
+
+	source <- agentruntime.RuntimeEvent{
+		Type:      agentruntime.EventError,
+		RunID:     stub.askInput.RunID,
+		SessionID: stub.askInput.SessionID,
+		Payload: map[string]any{
+			"code":    "RATE_LIMITED",
+			"message": "rate limit exceeded",
+		},
+	}
+	close(source)
+
+	var events []gateway.RuntimeEvent
+	for event := range bridge.Events() {
+		events = append(events, event)
+	}
+	if len(events) != 1 {
+		t.Fatalf("event count = %d, want 1", len(events))
+	}
+	if events[0].Type != gateway.RuntimeEventTypeAskError {
+		t.Fatalf("event type = %q, want %q", events[0].Type, gateway.RuntimeEventTypeAskError)
+	}
+	payload, ok := events[0].Payload.(map[string]any)
+	if !ok {
+		t.Fatalf("payload type = %T, want map[string]any", events[0].Payload)
+	}
+	if strings.TrimSpace(readStringValueFromMap(payload, "code")) != "RATE_LIMITED" {
+		t.Fatalf("ask error code = %#v, want RATE_LIMITED", payload["code"])
+	}
+}
+
+func TestGatewayRuntimePortBridgeAskEventsPreserveWhitespace(t *testing.T) {
+	source := make(chan agentruntime.RuntimeEvent, 3)
+	stub := &runtimeStub{eventsCh: source}
+	bridge, err := newGatewayRuntimePortBridge(context.Background(), stub, testSessionStore, nil, nil)
+	if err != nil {
+		t.Fatalf("new bridge: %v", err)
+	}
+	defer bridge.Close()
+
+	if err := bridge.Ask(context.Background(), gateway.AskInput{
+		SubjectID: testBridgeSubjectID,
+		SessionID: "ask-session-whitespace",
+		UserQuery: "preserve formatting",
+	}); err != nil {
+		t.Fatalf("Ask() error = %v", err)
+	}
+
+	source <- agentruntime.RuntimeEvent{
+		Type:      agentruntime.EventAgentChunk,
+		RunID:     stub.askInput.RunID,
+		SessionID: stub.askInput.SessionID,
+		Payload: map[string]any{
+			"delta": " first line\n",
+		},
+	}
+	source <- agentruntime.RuntimeEvent{
+		Type:      agentruntime.EventAgentChunk,
+		RunID:     stub.askInput.RunID,
+		SessionID: stub.askInput.SessionID,
+		Payload: map[string]any{
+			"delta": "  second line",
+		},
+	}
+	source <- agentruntime.RuntimeEvent{
+		Type:      agentruntime.EventAgentDone,
+		RunID:     stub.askInput.RunID,
+		SessionID: stub.askInput.SessionID,
+		Payload: map[string]any{
+			"full_response": " first line\n\n  second line\n",
+		},
+	}
+	close(source)
+
+	events := make([]gateway.RuntimeEvent, 0, 3)
+	for event := range bridge.Events() {
+		events = append(events, event)
+	}
+	if len(events) != 3 {
+		t.Fatalf("event count = %d, want 3", len(events))
+	}
+	if events[0].Type != gateway.RuntimeEventTypeAskChunk || events[1].Type != gateway.RuntimeEventTypeAskChunk {
+		t.Fatalf("chunk event types = [%q, %q], want ask_chunk", events[0].Type, events[1].Type)
+	}
+	if events[2].Type != gateway.RuntimeEventTypeAskDone {
+		t.Fatalf("done event type = %q, want %q", events[2].Type, gateway.RuntimeEventTypeAskDone)
+	}
+
+	firstPayload, ok := events[0].Payload.(map[string]any)
+	if !ok {
+		t.Fatalf("first payload type = %T, want map[string]any", events[0].Payload)
+	}
+	if got := fmt.Sprint(firstPayload["delta"]); got != " first line\n" {
+		t.Fatalf("first chunk delta = %q, want %q", got, " first line\n")
+	}
+
+	secondPayload, ok := events[1].Payload.(map[string]any)
+	if !ok {
+		t.Fatalf("second payload type = %T, want map[string]any", events[1].Payload)
+	}
+	if got := fmt.Sprint(secondPayload["delta"]); got != "  second line" {
+		t.Fatalf("second chunk delta = %q, want %q", got, "  second line")
+	}
+
+	donePayload, ok := events[2].Payload.(map[string]any)
+	if !ok {
+		t.Fatalf("done payload type = %T, want map[string]any", events[2].Payload)
+	}
+	if got := fmt.Sprint(donePayload["full_response"]); got != " first line\n\n  second line\n" {
+		t.Fatalf("full_response = %q, want preserved whitespace", got)
+	}
+}
+
+func TestExtractAskPayloadTextPreservesWhitespace(t *testing.T) {
+	if got := extractAskPayloadText("  hello\n"); got != "  hello\n" {
+		t.Fatalf("string payload text = %q, want %q", got, "  hello\n")
+	}
+	if got := extractAskPayloadText(map[string]any{"delta": " x "}); got != " x " {
+		t.Fatalf("map payload text = %q, want %q", got, " x ")
+	}
+}
+
+func TestGatewayRuntimePortBridgeDeleteAskSessionClearsRunMapping(t *testing.T) {
+	stub := &runtimeStub{
+		eventsCh:        make(chan agentruntime.RuntimeEvent, 1),
+		deleteAskResult: true,
+		deleteAskErr:    nil,
+	}
+	bridge, err := newGatewayRuntimePortBridge(context.Background(), stub, testSessionStore, nil, nil)
+	if err != nil {
+		t.Fatalf("new bridge: %v", err)
+	}
+	defer bridge.Close()
+
+	bridge.trackAskRun("ask-session-clean", "ask-run-clean")
+	if _, ok := bridge.lookupAskRun("ask-run-clean"); !ok {
+		t.Fatal("run should be tracked before deleting ask session")
+	}
+
+	deleted, err := bridge.DeleteAskSession(context.Background(), gateway.DeleteAskSessionInput{
+		SubjectID: testBridgeSubjectID,
+		SessionID: "ask-session-clean",
+	})
+	if err != nil {
+		t.Fatalf("DeleteAskSession() error = %v", err)
+	}
+	if !deleted {
+		t.Fatal("DeleteAskSession() deleted = false, want true")
+	}
+	if stub.deleteAskInput.SessionID != "ask-session-clean" {
+		t.Fatalf("runtime delete session = %q, want %q", stub.deleteAskInput.SessionID, "ask-session-clean")
+	}
+	if _, ok := bridge.lookupAskRun("ask-run-clean"); ok {
+		t.Fatal("run mapping should be cleared after deleting ask session")
 	}
 }

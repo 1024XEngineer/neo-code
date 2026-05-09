@@ -1011,6 +1011,12 @@ func (stubGatewayAuthenticator) ResolveSubjectID(token string) (string, bool) {
 
 func (stubRuntimePort) Run(context.Context, gateway.RunInput) error { return nil }
 
+func (stubRuntimePort) Ask(context.Context, gateway.AskInput) error { return nil }
+
+func (stubRuntimePort) DeleteAskSession(context.Context, gateway.DeleteAskSessionInput) (bool, error) {
+	return false, nil
+}
+
 func (stubRuntimePort) Compact(context.Context, gateway.CompactInput) (gateway.CompactResult, error) {
 	return gateway.CompactResult{}, nil
 }
@@ -1070,6 +1076,15 @@ func (stubRuntimePort) RenameSession(context.Context, gateway.RenameSessionInput
 }
 func (stubRuntimePort) ListFiles(context.Context, gateway.ListFilesInput) ([]gateway.FileEntry, error) {
 	return nil, nil
+}
+func (stubRuntimePort) ReadFile(context.Context, gateway.ReadFileInput) (gateway.ReadFileResult, error) {
+	return gateway.ReadFileResult{}, nil
+}
+func (stubRuntimePort) ListGitDiffFiles(context.Context, gateway.ListGitDiffFilesInput) (gateway.ListGitDiffFilesResult, error) {
+	return gateway.ListGitDiffFilesResult{}, nil
+}
+func (stubRuntimePort) ReadGitDiffFile(context.Context, gateway.ReadGitDiffFileInput) (gateway.ReadGitDiffFileResult, error) {
+	return gateway.ReadGitDiffFileResult{}, nil
 }
 func (stubRuntimePort) ListModels(context.Context, gateway.ListModelsInput) ([]gateway.ModelEntry, error) {
 	return nil, nil

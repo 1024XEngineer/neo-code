@@ -59,6 +59,7 @@ type runState struct {
 	reportedMissingSkills          map[string]struct{}
 	thinkingOverride               *ThinkingOverride
 	pendingUserQuestion            *UserQuestionRequestedPayload
+	disableTools                   bool
 }
 
 // newRunState 基于持久化会话创建一次运行的内存状态镜像。

@@ -24,6 +24,12 @@ const (
 	FrameActionPing FrameAction = "ping"
 	// FrameActionBindStream 表示声明流式事件订阅绑定。
 	FrameActionBindStream FrameAction = "bind_stream"
+	// FrameActionAsk 表示发起一次 Ask 轻量问答。
+	FrameActionAsk FrameAction = "ask"
+	// FrameActionDeleteAskSession 表示删除 Ask 会话。
+	FrameActionDeleteAskSession FrameAction = "delete_ask_session"
+	// FrameActionTriggerAction 表示触发 shell 侧动作通知。
+	FrameActionTriggerAction FrameAction = "trigger_action"
 	// FrameActionRun 表示发起一次运行。
 	FrameActionRun FrameAction = "run"
 	// FrameActionCompact 表示触发一次手动压缩。
@@ -60,6 +66,12 @@ const (
 	FrameActionRenameSession FrameAction = "rename_session"
 	// FrameActionListFiles 表示列出工作目录文件树。
 	FrameActionListFiles FrameAction = "list_files"
+	// FrameActionReadFile 表示读取工作目录文件的只读预览。
+	FrameActionReadFile FrameAction = "read_file"
+	// FrameActionListGitDiffFiles 表示列出工作树相对 HEAD 的 Git 变更文件。
+	FrameActionListGitDiffFiles FrameAction = "list_git_diff_files"
+	// FrameActionReadGitDiffFile 表示读取单个 Git 变更文件的双文本预览。
+	FrameActionReadGitDiffFile FrameAction = "read_git_diff_file"
 	// FrameActionListModels 表示列出可用模型。
 	FrameActionListModels FrameAction = "list_models"
 	// FrameActionSetSessionModel 表示设置会话模型。

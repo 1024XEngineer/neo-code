@@ -8,21 +8,21 @@ import (
 func TestMergeEnvVarOverridesExistingValue(t *testing.T) {
 	merged := MergeEnvVar([]string{
 		"PATH=/bin",
-		"NEOCODE_DIAG_SOCKET=/tmp/old.sock",
+		"NEOCODE_SHELL_SESSION=shell-old",
 		"HOME=/home/tester",
-	}, DiagSocketEnv, "/tmp/new.sock")
+	}, ShellSessionEnv, "shell-new")
 
-	var socketEntries []string
+	var sessionEntries []string
 	for _, item := range merged {
-		if strings.HasPrefix(item, DiagSocketEnv+"=") {
-			socketEntries = append(socketEntries, item)
+		if strings.HasPrefix(item, ShellSessionEnv+"=") {
+			sessionEntries = append(sessionEntries, item)
 		}
 	}
-	if len(socketEntries) != 1 {
-		t.Fatalf("socket entries len = %d, want 1", len(socketEntries))
+	if len(sessionEntries) != 1 {
+		t.Fatalf("session entries len = %d, want 1", len(sessionEntries))
 	}
-	if socketEntries[0] != DiagSocketEnv+"=/tmp/new.sock" {
-		t.Fatalf("socket entry = %q", socketEntries[0])
+	if sessionEntries[0] != ShellSessionEnv+"=shell-new" {
+		t.Fatalf("session entry = %q", sessionEntries[0])
 	}
 }
 
@@ -62,7 +62,6 @@ func TestNormalizeShellOptionsTrimsWhitespace(t *testing.T) {
 	opts, err := NormalizeShellOptions(ManualShellOptions{
 		Workdir:              "/tmp",
 		Shell:                "  /bin/zsh  ",
-		SocketPath:           "  /tmp/diag.sock  ",
 		GatewayListenAddress: "  /tmp/gw.sock  ",
 		GatewayTokenFile:     "  /tmp/token  ",
 	})
@@ -71,9 +70,6 @@ func TestNormalizeShellOptionsTrimsWhitespace(t *testing.T) {
 	}
 	if opts.Shell != "/bin/zsh" {
 		t.Fatalf("Shell = %q, want %q", opts.Shell, "/bin/zsh")
-	}
-	if opts.SocketPath != "/tmp/diag.sock" {
-		t.Fatalf("SocketPath = %q, want %q", opts.SocketPath, "/tmp/diag.sock")
 	}
 	if opts.GatewayListenAddress != "/tmp/gw.sock" {
 		t.Fatalf("GatewayListenAddress = %q, want %q", opts.GatewayListenAddress, "/tmp/gw.sock")

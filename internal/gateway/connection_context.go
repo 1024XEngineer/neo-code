@@ -22,6 +22,20 @@ const (
 	StreamChannelSSE StreamChannel = "sse"
 )
 
+// StreamRole 表示连接在同一会话内声明的角色，用于精准路由控制类通知。
+type StreamRole string
+
+const (
+	// StreamRoleNone 表示未声明角色，保持与历史客户端兼容。
+	StreamRoleNone StreamRole = ""
+	// StreamRoleShell 表示 shell 代理连接。
+	StreamRoleShell StreamRole = "shell"
+	// StreamRoleCLI 表示命令行控制连接。
+	StreamRoleCLI StreamRole = "cli"
+	// StreamRoleTUI 表示桌面/TUI 控制连接。
+	StreamRoleTUI StreamRole = "tui"
+)
+
 // ConnectionID 表示网关侧分配给物理连接的全局唯一标识。
 type ConnectionID string
 
@@ -90,6 +104,17 @@ func ParseStreamChannel(raw string) (StreamChannel, bool) {
 	normalized := StreamChannel(strings.ToLower(strings.TrimSpace(raw)))
 	switch normalized {
 	case StreamChannelAll, StreamChannelIPC, StreamChannelWS, StreamChannelSSE:
+		return normalized, true
+	default:
+		return "", false
+	}
+}
+
+// ParseStreamRole 解析并校验连接角色参数。
+func ParseStreamRole(raw string) (StreamRole, bool) {
+	normalized := StreamRole(strings.ToLower(strings.TrimSpace(raw)))
+	switch normalized {
+	case StreamRoleNone, StreamRoleShell, StreamRoleCLI, StreamRoleTUI:
 		return normalized, true
 	default:
 		return "", false

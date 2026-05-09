@@ -210,6 +210,7 @@ func TestRunSingleDiagnosisWithCoordinatorUsesCachedResult(t *testing.T) {
 		context.Background(),
 		coordinator,
 		nil,
+		nil,
 		output,
 		buffer,
 		options,
@@ -217,6 +218,7 @@ func TestRunSingleDiagnosisWithCoordinatorUsesCachedResult(t *testing.T) {
 		trigger,
 		false,
 		nil,
+		diagRuntimeConfig{},
 	)
 	if err != nil {
 		t.Fatalf("runSingleDiagnosisWithCoordinator() error = %v", err)

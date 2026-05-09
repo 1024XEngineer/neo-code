@@ -67,6 +67,8 @@ interface ChatState {
   isTransitioning: boolean
   /** 当前 Agent 工作模式 */
   agentMode: 'build' | 'plan'
+  /** Build 模式下的权限审批策略 */
+  permissionMode: 'default' | 'bypass'
 
   // Actions
   addMessage: (msg: ChatMessage) => void
@@ -110,6 +112,7 @@ interface ChatState {
   clearMessages: () => void
   addSystemMessage: (content: string) => void
   setAgentMode: (mode: 'build' | 'plan') => void
+  setPermissionMode: (mode: 'default' | 'bypass') => void
 }
 
 let msgIdCounter = 0
@@ -191,6 +194,7 @@ export const useChatStore = create<ChatState>((set) => ({
   stopReason: '',
   isTransitioning: false,
   agentMode: 'build',
+  permissionMode: 'default',
 
   addMessage: (msg) => set((s) => ({ messages: [...s.messages, msg] })),
   removeMessage: (id) => set((s) => ({ messages: s.messages.filter((m) => m.id !== id) })),
@@ -395,6 +399,7 @@ export const useChatStore = create<ChatState>((set) => ({
     set((s) => ({ messages: [...s.messages, createSystemMessage(content)] })),
 
   setAgentMode: (agentMode) => set({ agentMode }),
+  setPermissionMode: (permissionMode) => set({ permissionMode }),
 
   /** 清理全部聊天状态，包括权限请求、token用量等。同时重置 eventBridge 模块级游标，避免跨会话泄漏。 */
   clearMessages: () => {
@@ -411,6 +416,7 @@ export const useChatStore = create<ChatState>((set) => ({
       stopReason: '',
       isTransitioning: false,
       agentMode: 'build',
+      permissionMode: 'default',
     })
   },
 }))

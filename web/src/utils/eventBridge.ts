@@ -4,6 +4,7 @@ import {
   type BudgetCheckedPayload,
   type BudgetEstimateFailedPayload,
   type CheckpointCreatedPayload,
+  type CheckpointDiffResultPayload,
   type CheckpointRestoredPayload,
   type CheckpointUndoRestorePayload,
   type CheckpointWarningPayload,
@@ -27,7 +28,7 @@ import { useGatewayStore } from '@/stores/useGatewayStore'
 import { useSessionStore } from '@/stores/useSessionStore'
 import { useRuntimeInsightStore } from '@/stores/useRuntimeInsightStore'
 import { useWorkspaceStore } from '@/stores/useWorkspaceStore'
-import { parseSingleFileDiff, type ParsedFileDiff } from '@/utils/patchParser'
+import { parseSingleFileDiff, parseUnifiedPatch, type ParsedFileDiff } from '@/utils/patchParser'
 
 type PayloadRecord = Record<string, unknown> | undefined
 
@@ -36,14 +37,16 @@ type PayloadRecord = Record<string, unknown> | undefined
 let _latestVerificationMsgId: string | undefined
 let _latestDoneToolCallId: string | undefined
 
-// 模块级缓存最新的 checkpoint_id，供 reject 回退使用
+// 模块级缓存最新的 checkpoint_id，用于工具占位条目关联后续端到端 diff。
 let _latestCheckpointId: string | undefined
+let _latestRunDiffRequestId = 0
 
 /** 重置模块级游标 —— 在截断聊天历史 / 切换会话等场景调用，避免后续事件挂到已被移除的消息上 */
 export function resetEventBridgeCursors() {
   _latestVerificationMsgId = undefined
   _latestDoneToolCallId = undefined
   _latestCheckpointId = undefined
+  _latestRunDiffRequestId += 1
 }
 
 /**
@@ -86,6 +89,7 @@ function _upsertFileChange(
               additions: parsed?.additions ?? c.additions,
               deletions: parsed?.deletions ?? c.deletions,
               diff: parsed?.lines ?? c.diff,
+              hunks: parsed?.hunks ?? c.hunks,
               checkpoint_id: _latestCheckpointId ?? c.checkpoint_id,
             }
           : c,
@@ -99,6 +103,7 @@ function _upsertFileChange(
       additions: parsed?.additions ?? 0,
       deletions: parsed?.deletions ?? 0,
       diff: parsed?.lines,
+      hunks: parsed?.hunks,
       checkpoint_id: _latestCheckpointId,
     })
   }
@@ -163,6 +168,63 @@ function _applyToolDiff(payload: ToolDiffPayload) {
   if (!useUIStore.getState().changesPanelOpen) {
     useUIStore.getState().toggleChangesPanel()
   }
+}
+
+function _fileChangesFromCheckpointDiff(diff: CheckpointDiffResultPayload) {
+  const parsed = diff.patch ? parseUnifiedPatch(diff.patch) : {}
+  const parsedByPath = new Map<string, ParsedFileDiff>()
+  for (const [path, parsedDiff] of Object.entries(parsed)) {
+    const normalized = normalizeFilePath(path)
+    if (normalized) parsedByPath.set(normalized, parsedDiff)
+  }
+  const byPath = new Map<string, 'added' | 'modified' | 'deleted'>()
+  for (const path of diff.files?.added ?? []) byPath.set(normalizeFilePath(path), 'added')
+  for (const path of diff.files?.modified ?? []) byPath.set(normalizeFilePath(path), 'modified')
+  for (const path of diff.files?.deleted ?? []) byPath.set(normalizeFilePath(path), 'deleted')
+
+  for (const path of parsedByPath.keys()) {
+    if (!byPath.has(path)) byPath.set(path, 'modified')
+  }
+
+  return Array.from(byPath.entries())
+    .filter(([path]) => path)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([path, status]) => {
+      const parsedDiff = parsedByPath.get(path)
+      return {
+        id: `fc_${path}`,
+        path,
+        status,
+        additions: parsedDiff?.additions ?? 0,
+        deletions: parsedDiff?.deletions ?? 0,
+        diff: parsedDiff?.lines,
+        hunks: parsedDiff?.hunks,
+        checkpoint_id: diff.checkpoint_id,
+      }
+    })
+}
+
+function _refreshRunFileChanges(
+  gatewayAPI: GatewayAPI,
+  sessionId: string,
+  runId: string,
+  checkpointId: string,
+) {
+  const requestId = ++_latestRunDiffRequestId
+  gatewayAPI.checkpointDiff({
+    session_id: sessionId,
+    run_id: runId,
+    checkpoint_id: checkpointId,
+    scope: 'run',
+  }).then((result) => {
+    if (requestId !== _latestRunDiffRequestId) return
+    if (runId !== useGatewayStore.getState().currentRunId) return
+    if (sessionId !== useSessionStore.getState().currentSessionId) return
+    if (!result?.payload) return
+    useUIStore.getState().replaceFileChanges(_fileChangesFromCheckpointDiff(result.payload))
+  }).catch((error) => {
+    console.warn('[eventBridge] checkpoint.diff run scope failed:', error)
+  })
 }
 
 function normalizePermissionPayload(raw: unknown): PermissionRequestPayload | null {
@@ -347,6 +409,7 @@ export function handleGatewayEvent(frame: MessageFrame, gatewayAPI: GatewayAPI) 
       const sessionId = strField(eventPayload, 'session_id') || frameSessionId || ''
       const runId = strField(eventPayload, 'run_id') || frameRunId || ''
       if (runId) gwStore.setCurrentRunId(runId)
+      useUIStore.getState().clearFileChanges()
       if (sessionId && sessionId !== useSessionStore.getState().currentSessionId) {
         useSessionStore.getState().setCurrentSessionId(sessionId)
       }
@@ -610,6 +673,9 @@ export function handleGatewayEvent(frame: MessageFrame, gatewayAPI: GatewayAPI) 
           chatStore.attachCheckpointToToolCall(_latestDoneToolCallId, payload.checkpoint_id)
         }
         _latestCheckpointId = payload.checkpoint_id
+        if (payload.reason === 'end_of_turn' && gatewayAPI && frameSessionId && frameRunId) {
+          _refreshRunFileChanges(gatewayAPI, frameSessionId, frameRunId, payload.checkpoint_id)
+        }
       }
       break
     }

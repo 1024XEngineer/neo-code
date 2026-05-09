@@ -28,12 +28,20 @@ func resolveThinkingConfig(
 	}
 
 	enabled := globalEnabled
+	explicitOverride := false
 	if override != nil && override.Enabled != nil {
 		enabled = *override.Enabled
+		explicitOverride = true
 	}
 	// ThinkingForceEnabled 模型强制开启
 	if caps.ThinkingForceEnabled {
 		enabled = true
+	}
+	if explicitOverride && override != nil && override.Enabled != nil && !*override.Enabled {
+		enabled = false
+	}
+	if !enabled {
+		return &providertypes.ThinkingConfig{Enabled: false}, nil
 	}
 
 	effort := caps.ThinkingDefaultEffort
@@ -62,6 +70,20 @@ func containsEffort(list []string, target string) bool {
 		}
 	}
 	return false
+}
+
+func cloneThinkingOverride(override *ThinkingOverride) *ThinkingOverride {
+	if override == nil {
+		return nil
+	}
+	cloned := &ThinkingOverride{
+		Effort: override.Effort,
+	}
+	if override.Enabled != nil {
+		enabled := *override.Enabled
+		cloned.Enabled = &enabled
+	}
+	return cloned
 }
 
 // modelCapabilityHintsForRequest 从 provider 配置的静态模型列表中查找能力提示。

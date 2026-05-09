@@ -273,7 +273,7 @@ func TestNormalizeJSONRPCRequestCheckpointMethods(t *testing.T) {
 			JSONRPC: JSONRPCVersion,
 			ID:      json.RawMessage(`"checkpoint-diff-1"`),
 			Method:  MethodGatewayCheckpointDiff,
-			Params:  json.RawMessage(`{"session_id":" s-1 ","checkpoint_id":" cp-1 "}`),
+			Params:  json.RawMessage(`{"session_id":" s-1 ","checkpoint_id":" cp-1 ","run_id":" run-1 ","scope":" run "}`),
 		})
 		if rpcErr != nil {
 			t.Fatalf("normalize checkpoint.diff request: %v", rpcErr)
@@ -285,7 +285,7 @@ func TestNormalizeJSONRPCRequestCheckpointMethods(t *testing.T) {
 		if !ok {
 			t.Fatalf("payload type = %T, want CheckpointDiffParams", normalized.Payload)
 		}
-		if params.SessionID != "s-1" || params.CheckpointID != "cp-1" {
+		if params.SessionID != "s-1" || params.CheckpointID != "cp-1" || params.RunID != "run-1" || params.Scope != "run" {
 			t.Fatalf("checkpoint.diff params = %#v, want trimmed params", params)
 		}
 	})
@@ -580,6 +580,67 @@ func TestNormalizeJSONRPCRequestRuntimeMethods(t *testing.T) {
 	}
 	if resolveParams.RequestID != "req-1" || resolveParams.Decision != "allow_session" {
 		t.Fatalf("resolve payload = %#v, want normalized request_id/decision", resolveParams)
+	}
+}
+
+func TestNormalizeJSONRPCRequestTriggerAction(t *testing.T) {
+	normalized, rpcErr := NormalizeJSONRPCRequest(JSONRPCRequest{
+		JSONRPC: JSONRPCVersion,
+		ID:      json.RawMessage(`"trigger-1"`),
+		Method:  MethodGatewayExperimentalTriggerAction,
+		Params: json.RawMessage(`{
+			"session_id":" shell-session-1 ",
+			"action":" IDM_ENTER ",
+			"payload":{"reason":"manual","attempt":1}
+		}`),
+	})
+	if rpcErr != nil {
+		t.Fatalf("normalize trigger_action request: %v", rpcErr)
+	}
+	if normalized.Action != "trigger_action" {
+		t.Fatalf("action = %q, want %q", normalized.Action, "trigger_action")
+	}
+	if normalized.SessionID != "shell-session-1" {
+		t.Fatalf("session_id = %q, want %q", normalized.SessionID, "shell-session-1")
+	}
+	params, ok := normalized.Payload.(TriggerActionParams)
+	if !ok {
+		t.Fatalf("payload type = %T, want TriggerActionParams", normalized.Payload)
+	}
+	if params.Action != TriggerActionIDMEnter {
+		t.Fatalf("params.action = %q, want %q", params.Action, TriggerActionIDMEnter)
+	}
+	if params.Payload["reason"] != "manual" {
+		t.Fatalf("params.payload[reason] = %#v, want %q", params.Payload["reason"], "manual")
+	}
+	if params.Payload["attempt"] != float64(1) {
+		t.Fatalf("params.payload[attempt] = %#v, want 1", params.Payload["attempt"])
+	}
+
+	_, rpcErr = NormalizeJSONRPCRequest(JSONRPCRequest{
+		JSONRPC: JSONRPCVersion,
+		ID:      json.RawMessage(`"trigger-missing-action"`),
+		Method:  MethodGatewayExperimentalTriggerAction,
+		Params:  json.RawMessage(`{"session_id":"shell-session-1"}`),
+	})
+	if rpcErr == nil || rpcErr.Code != JSONRPCCodeInvalidParams {
+		t.Fatalf("missing action should be invalid params, got %#v", rpcErr)
+	}
+	if GatewayCodeFromJSONRPCError(rpcErr) != GatewayCodeMissingRequiredField {
+		t.Fatalf("gateway code = %q, want %q", GatewayCodeFromJSONRPCError(rpcErr), GatewayCodeMissingRequiredField)
+	}
+
+	_, rpcErr = NormalizeJSONRPCRequest(JSONRPCRequest{
+		JSONRPC: JSONRPCVersion,
+		ID:      json.RawMessage(`"trigger-invalid-action"`),
+		Method:  MethodGatewayExperimentalTriggerAction,
+		Params:  json.RawMessage(`{"session_id":"shell-session-1","action":"unknown_action"}`),
+	})
+	if rpcErr == nil || rpcErr.Code != JSONRPCCodeInvalidParams {
+		t.Fatalf("invalid action should be invalid params, got %#v", rpcErr)
+	}
+	if GatewayCodeFromJSONRPCError(rpcErr) != GatewayCodeInvalidAction {
+		t.Fatalf("gateway code = %q, want %q", GatewayCodeFromJSONRPCError(rpcErr), GatewayCodeInvalidAction)
 	}
 }
 
@@ -1745,6 +1806,66 @@ func TestNormalizeJSONRPCRequestNewRPCMethods(t *testing.T) {
 		}
 		if frame.Action != "list_files" {
 			t.Fatalf("action = %q, want %q", frame.Action, "list_files")
+		}
+	})
+
+	t.Run("readFile valid params", func(t *testing.T) {
+		frame, rpcErr := NormalizeJSONRPCRequest(JSONRPCRequest{
+			JSONRPC: JSONRPCVersion,
+			ID:      json.RawMessage(`"4a"`),
+			Method:  MethodGatewayReadFile,
+			Params:  json.RawMessage(`{"path":"main.go"}`),
+		})
+		if rpcErr != nil {
+			t.Fatalf("unexpected error: %+v", rpcErr)
+		}
+		if frame.Action != "read_file" {
+			t.Fatalf("action = %q, want %q", frame.Action, "read_file")
+		}
+	})
+
+	t.Run("readFile missing path", func(t *testing.T) {
+		_, rpcErr := NormalizeJSONRPCRequest(JSONRPCRequest{
+			JSONRPC: JSONRPCVersion,
+			ID:      json.RawMessage(`"4b"`),
+			Method:  MethodGatewayReadFile,
+			Params:  json.RawMessage(`{}`),
+		})
+		if rpcErr == nil {
+			t.Fatal("expected error for missing path")
+		}
+		if rpcErr.Code != JSONRPCCodeInvalidParams {
+			t.Fatalf("code = %d, want %d", rpcErr.Code, JSONRPCCodeInvalidParams)
+		}
+	})
+
+	t.Run("listGitDiffFiles valid params", func(t *testing.T) {
+		frame, rpcErr := NormalizeJSONRPCRequest(JSONRPCRequest{
+			JSONRPC: JSONRPCVersion,
+			ID:      json.RawMessage(`"4c"`),
+			Method:  MethodGatewayListGitDiffFiles,
+			Params:  json.RawMessage(`{"workdir":"/tmp"}`),
+		})
+		if rpcErr != nil {
+			t.Fatalf("unexpected error: %+v", rpcErr)
+		}
+		if frame.Action != "list_git_diff_files" {
+			t.Fatalf("action = %q, want %q", frame.Action, "list_git_diff_files")
+		}
+	})
+
+	t.Run("readGitDiffFile missing path", func(t *testing.T) {
+		_, rpcErr := NormalizeJSONRPCRequest(JSONRPCRequest{
+			JSONRPC: JSONRPCVersion,
+			ID:      json.RawMessage(`"4d"`),
+			Method:  MethodGatewayReadGitDiffFile,
+			Params:  json.RawMessage(`{}`),
+		})
+		if rpcErr == nil {
+			t.Fatal("expected error for missing path")
+		}
+		if rpcErr.Code != JSONRPCCodeInvalidParams {
+			t.Fatalf("code = %d, want %d", rpcErr.Code, JSONRPCCodeInvalidParams)
 		}
 	})
 

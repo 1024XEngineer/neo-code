@@ -113,6 +113,13 @@ $env:OPENAI_API_KEY = "your_key_here"
 neocode --workdir /path/to/your/project
 ```
 
+如果你希望使用浏览器 Web UI，可以直接运行：
+```bash
+neocode web
+```
+
+标签发布版会在缺少 `web/dist` 时自动使用发布包内的 `web/` 源码执行 `npm install` 和 `npm run build`。这要求用户机器已安装 Node.js 和 npm；如果你使用源码仓库运行，也保留相同的自动构建行为。
+
 ### 4. 常用命令
 
 ```text
