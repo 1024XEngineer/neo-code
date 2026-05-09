@@ -18,6 +18,7 @@
     "verify:electron-preload": "node scripts/verify-electron-preload.js"
   },
   "dependencies": {
+    "@fontsource/jetbrains-mono": "^5.2.8",
     "@monaco-editor/react": "^4.7.0",
     "electron-updater": "^6.8.3",
     "lucide-react": "^0.468.0",

@@ -14,7 +14,7 @@ vi.mock('@monaco-editor/react', () => ({
     value: string
     language: string
     theme: string
-    options: { readOnly?: boolean }
+    options: { readOnly?: boolean; fontFamily?: string }
   }) => (
     <div
       data-testid="monaco-editor"
@@ -23,6 +23,7 @@ vi.mock('@monaco-editor/react', () => ({
       data-language={language}
       data-theme={theme}
       data-readonly={String(Boolean(options.readOnly))}
+      data-font-family={options.fontFamily}
     />
   ),
 }))
@@ -52,6 +53,7 @@ describe('CodePreviewEditor', () => {
     expect(editor).toHaveAttribute('data-language', 'go')
     expect(editor).toHaveAttribute('data-theme', 'vs-dark')
     expect(editor).toHaveAttribute('data-readonly', 'true')
+    expect(editor).toHaveAttribute('data-font-family', 'var(--font-mono)')
   })
 
   it('uses the explicit language when provided', () => {
