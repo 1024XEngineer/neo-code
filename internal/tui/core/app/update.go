@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -945,15 +946,32 @@ func (a *App) submitPendingUserQuestionInput(input string) (tea.Cmd, bool) {
 	message := ""
 	switch kind {
 	case "single_choice":
-		values = parseUserQuestionValues(rawInput)
+		options := parseUserQuestionOptionLabels(request.Options)
+		var invalidValues []string
+		values, invalidValues = normalizeUserQuestionChoiceValues(parseUserQuestionValues(rawInput), options)
 		if len(values) != 1 {
 			a.state.StatusText = "single_choice requires exactly one value"
 			return nil, true
 		}
+		if len(invalidValues) > 0 {
+			a.state.StatusText = fmt.Sprintf("single_choice must match options: %s", strings.Join(invalidValues, ", "))
+			return nil, true
+		}
 	case "multi_choice":
-		values = parseUserQuestionValues(rawInput)
+		options := parseUserQuestionOptionLabels(request.Options)
+		var invalidValues []string
+		values, invalidValues = normalizeUserQuestionChoiceValues(parseUserQuestionValues(rawInput), options)
 		if len(values) == 0 {
 			a.state.StatusText = statusUserQuestionRequired
+			return nil, true
+		}
+		maxChoices := request.MaxChoices
+		if maxChoices > 0 && len(values) > maxChoices {
+			a.state.StatusText = fmt.Sprintf("multi_choice accepts up to %d values", maxChoices)
+			return nil, true
+		}
+		if len(invalidValues) > 0 {
+			a.state.StatusText = fmt.Sprintf("multi_choice values must match options: %s", strings.Join(invalidValues, ", "))
 			return nil, true
 		}
 	default:
@@ -978,6 +996,101 @@ func parseUserQuestionValues(raw string) []string {
 		values = append(values, trimmed)
 	}
 	return values
+}
+
+// parseUserQuestionOptionLabels 从 ask_user 事件 options 里提取可提交的标签列表。
+func parseUserQuestionOptionLabels(rawOptions []any) []string {
+	if len(rawOptions) == 0 {
+		return nil
+	}
+	labels := make([]string, 0, len(rawOptions))
+	for _, option := range rawOptions {
+		switch typed := option.(type) {
+		case string:
+			label := strings.TrimSpace(typed)
+			if label != "" {
+				labels = append(labels, label)
+			}
+		case map[string]any:
+			label := strings.TrimSpace(anyToString(typed["label"]))
+			if label != "" {
+				labels = append(labels, label)
+			}
+		default:
+			// 未知结构直接忽略，避免阻断已有链路。
+		}
+	}
+	return labels
+}
+
+// normalizeUserQuestionChoiceValues 把输入值归一为选项 label，并返回不合法的原始值。
+func normalizeUserQuestionChoiceValues(values []string, options []string) ([]string, []string) {
+	if len(values) == 0 {
+		return nil, nil
+	}
+	normalized := make([]string, 0, len(values))
+	invalid := make([]string, 0)
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		canonical, ok := normalizeUserQuestionChoiceValue(value, options)
+		if !ok {
+			invalid = append(invalid, strings.TrimSpace(value))
+			continue
+		}
+		key := strings.ToLower(strings.TrimSpace(canonical))
+		if key == "" {
+			continue
+		}
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		normalized = append(normalized, canonical)
+	}
+	return normalized, invalid
+}
+
+// normalizeUserQuestionChoiceValue 支持按序号或标签匹配 ask_user 选项。
+func normalizeUserQuestionChoiceValue(raw string, options []string) (string, bool) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return "", false
+	}
+	if len(options) == 0 {
+		return trimmed, true
+	}
+	if numeric, ok := parsePositiveInt(trimmed); ok {
+		if numeric >= 1 && numeric <= len(options) {
+			return options[numeric-1], true
+		}
+	}
+	for _, option := range options {
+		if strings.EqualFold(strings.TrimSpace(option), trimmed) {
+			return option, true
+		}
+	}
+	return "", false
+}
+
+// parsePositiveInt 尝试把字符串解析为正整数。
+func parsePositiveInt(raw string) (int, bool) {
+	value, err := strconv.Atoi(strings.TrimSpace(raw))
+	if err != nil || value <= 0 {
+		return 0, false
+	}
+	return value, true
+}
+
+// anyToString 将任意值转换为字符串，主要用于解析 map 结构的选项标签。
+func anyToString(value any) string {
+	switch typed := value.(type) {
+	case string:
+		return typed
+	case fmt.Stringer:
+		return typed.String()
+	default:
+		return ""
+	}
 }
 
 // toggleFullAccessMode 处理 Full Access 模式的启停切换；启用前必须经过风险确认?
