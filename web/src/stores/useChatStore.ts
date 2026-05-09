@@ -85,8 +85,10 @@ interface ChatState {
   appendThinkingChunk: (text: string) => void
   /** 终结 thinking 消息（collapsed=true）并清空 streamingThinkingMessageId */
   finalizeThinkingMessage: () => void
-  updateToolCall: (toolCallId: string, result: string, status: ChatMessage['toolStatus']) => void
+  updateToolCall: (toolCallId: string, result: string, status: ChatMessage['toolStatus']) => boolean
   appendToolOutput: (toolCallId: string, chunk: string) => void
+  /** 将所有运行中的工具条目标记为指定状态，用于终止事件兜底收敛 UI。 */
+  finalizeRunningToolCalls: (status: 'done' | 'error') => void
   /** 把 checkpointId 关联到一条 tool_call 消息(由 CheckpointCreated 时序关联触发) */
   attachCheckpointToToolCall: (toolCallId: string, checkpointId: string) => void
   /** 更新某条已挂 checkpoint 的 tool_call 消息的撤回状态 */
@@ -276,18 +278,34 @@ export const useChatStore = create<ChatState>((set) => ({
       }
     }),
 
-  updateToolCall: (toolCallId, result, status) =>
+  updateToolCall: (toolCallId, result, status) => {
+    let matched = false
     set((s) => ({
-      messages: s.messages.map((m) =>
-        m.toolCallId === toolCallId ? { ...m, toolResult: result, toolStatus: status } : m
-      ),
-    })),
+      messages: s.messages.map((m) => {
+        if (m.toolCallId === toolCallId) {
+          matched = true
+          return { ...m, toolResult: result, toolStatus: status }
+        }
+        return m
+      }),
+    }))
+    return matched
+  },
 
   appendToolOutput: (toolCallId, chunk) =>
     set((s) => ({
       messages: s.messages.map((m) =>
         m.toolCallId === toolCallId
           ? { ...m, toolResult: (m.toolResult ?? '') + chunk }
+          : m
+      ),
+    })),
+
+  finalizeRunningToolCalls: (status) =>
+    set((s) => ({
+      messages: s.messages.map((m) =>
+        m.type === 'tool_call' && m.toolStatus === 'running'
+          ? { ...m, toolStatus: status }
           : m
       ),
     })),

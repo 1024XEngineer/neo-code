@@ -282,6 +282,47 @@ function strField(payload: unknown, key: string): string {
   return ((payload as PayloadRecord)?.[key] as string) ?? ''
 }
 
+/** 从 tool_result 事件中解析最终工具调用 ID，兼容字段名差异。 */
+function resolveToolResultCallID(eventPayload: unknown): string {
+  return strField(eventPayload, 'tool_call_id')
+    || strField(eventPayload, 'toolCallId')
+    || strField(eventPayload, 'id')
+    || strField(eventPayload, 'call_id')
+}
+
+/** 将 tool_result 结算到匹配条目；若 ID 缺失或乱序，回退结算最近一条 running 工具消息。 */
+function settleToolResultMessage(eventPayload: unknown) {
+  const resultText = strField(eventPayload, 'content')
+  const isError = !!((eventPayload as PayloadRecord)?.is_error)
+  const status = isError ? 'error' as const : 'done' as const
+  const callID = resolveToolResultCallID(eventPayload)
+
+  if (callID) {
+    const matched = useChatStore.getState().updateToolCall(callID, resultText, status)
+    if (matched) return callID
+  }
+
+  let settledID = ''
+  useChatStore.setState((state) => {
+    let consumed = false
+    const next = [...state.messages]
+    for (let i = next.length - 1; i >= 0; i -= 1) {
+      const item = next[i]
+      if (item.type !== 'tool_call' || item.toolStatus !== 'running') continue
+      if (consumed) break
+      settledID = item.toolCallId || ''
+      next[i] = {
+        ...item,
+        toolStatus: status,
+        toolResult: resultText || item.toolResult,
+      }
+      consumed = true
+    }
+    return consumed ? { messages: next } : state
+  })
+  return settledID
+}
+
 /**
  * 将 Gateway 事件帧桥接到 Zustand store action。
  * 从 Go internal/tui/services/gateway_stream_client.go 的 decodeRuntimeEventFromGatewayNotification 对齐。
@@ -356,6 +397,7 @@ export function handleGatewayEvent(frame: MessageFrame, gatewayAPI: GatewayAPI) 
         chatStore.finalizeMessage(chatStore.streamingMessageId, content)
       }
       chatStore.setGenerating(false)
+      chatStore.finalizeRunningToolCalls('done')
       if (frameSessionId) {
         useSessionStore.getState().fetchSessions(gatewayAPI, true).catch(() => {})
       }
@@ -384,8 +426,7 @@ export function handleGatewayEvent(frame: MessageFrame, gatewayAPI: GatewayAPI) 
     }
 
     case EventType.ToolResult: {
-      const tcId = strField(eventPayload, 'tool_call_id')
-      useChatStore.getState().updateToolCall(tcId, strField(eventPayload, 'content'), 'done')
+      const tcId = settleToolResultMessage(eventPayload)
       _latestDoneToolCallId = tcId
       break
     }
@@ -473,6 +514,7 @@ export function handleGatewayEvent(frame: MessageFrame, gatewayAPI: GatewayAPI) 
       const errorMsg = (eventPayload as string) ?? 'Unknown error'
       uiStore.showToast(errorMsg, 'error')
       useChatStore.getState().resetGeneratingState()
+      useChatStore.getState().finalizeRunningToolCalls('error')
       break
     }
 
@@ -481,6 +523,7 @@ export function handleGatewayEvent(frame: MessageFrame, gatewayAPI: GatewayAPI) 
       const detail = strField(eventPayload, 'detail')
       useChatStore.getState().setStopReason(reason)
       useChatStore.getState().setGenerating(false)
+      useChatStore.getState().finalizeRunningToolCalls(reason === 'fatal_error' ? 'error' : 'done')
       if (reason === 'fatal_error') {
         uiStore.showToast(detail || '模型调用失败，请检查配置', 'error')
       }
@@ -494,6 +537,7 @@ export function handleGatewayEvent(frame: MessageFrame, gatewayAPI: GatewayAPI) 
 
     case EventType.RunCanceled: {
       useChatStore.getState().resetGeneratingState()
+      useChatStore.getState().finalizeRunningToolCalls('done')
       uiStore.showToast('Run cancelled', 'info')
       break
     }

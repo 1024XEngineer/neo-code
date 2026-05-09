@@ -73,7 +73,14 @@ describe('useSessionStore', () => {
 
   it('fetchSessions auto-selects first session and binds stream', async () => {
     const mockListSessions = vi.fn().mockResolvedValue({
-      payload: { sessions: [{ id: 'sess-a', title: 'Alpha' }] },
+      payload: {
+        sessions: [{
+          id: 'sess-a',
+          title: 'Alpha',
+          created_at: '2026-05-09T01:00:00Z',
+          updated_at: '2026-05-09T02:00:00Z',
+        }],
+      },
     })
     const mockBindStream = vi.fn().mockResolvedValue({})
     const mockLoadSession = vi.fn().mockResolvedValue({ payload: { messages: [] } })
@@ -87,7 +94,14 @@ describe('useSessionStore', () => {
 
   it('fetchSessions does not auto-select when current session is valid', async () => {
     const mockListSessions = vi.fn().mockResolvedValue({
-      payload: { sessions: [{ id: 'sess-a', title: 'Alpha' }] },
+      payload: {
+        sessions: [{
+          id: 'sess-a',
+          title: 'Alpha',
+          created_at: '2026-05-09T01:00:00Z',
+          updated_at: '2026-05-09T02:00:00Z',
+        }],
+      },
     })
     const mockBindStream = vi.fn().mockResolvedValue({})
     const mockAPI = { listSessions: mockListSessions, bindStream: mockBindStream } as any
@@ -97,6 +111,27 @@ describe('useSessionStore', () => {
 
     expect(useSessionStore.getState().currentSessionId).toBe('sess-b')
     expect(mockBindStream).not.toHaveBeenCalled()
+  })
+
+  it('fetchSessions uses the newer of created_at/updated_at as display time', async () => {
+    const mockListSessions = vi.fn().mockResolvedValue({
+      payload: {
+        sessions: [{
+          id: 'sess-a',
+          title: 'Alpha',
+          created_at: '2026-05-09T09:30:00Z',
+          updated_at: '2026-05-09T08:30:00Z',
+        }],
+      },
+    })
+    const mockBindStream = vi.fn().mockResolvedValue({})
+    const mockLoadSession = vi.fn().mockResolvedValue({ payload: { messages: [] } })
+    const mockAPI = { listSessions: mockListSessions, bindStream: mockBindStream, loadSession: mockLoadSession } as any
+
+    await useSessionStore.getState().fetchSessions(mockAPI)
+
+    const session = useSessionStore.getState().projects[0].sessions[0]
+    expect(session.time).toBe('2026-05-09T09:30:00.000Z')
   })
 
   it('switchSession concurrently fetches todos and checkpoints', async () => {

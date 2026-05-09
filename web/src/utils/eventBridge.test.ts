@@ -218,6 +218,51 @@ describe('eventBridge', () => {
     expect(msgs[0].toolStatus).toBe('done')
   })
 
+  it('ToolResult falls back to settling the latest running tool message when id is missing', () => {
+    const api = createMockGatewayAPI()
+    handleGatewayEvent({
+      type: EventType.ToolStart,
+      payload: { payload: { runtime_event_type: EventType.ToolStart, payload: { name: 'read_file', id: 'tc-fallback', arguments: '{}' } } },
+      session_id: 'sess-1',
+      run_id: 'run-1',
+    }, api)
+
+    handleGatewayEvent({
+      type: EventType.ToolResult,
+      payload: { payload: { runtime_event_type: EventType.ToolResult, payload: { content: 'ok without id' } } },
+      session_id: 'sess-1',
+      run_id: 'run-1',
+    }, api)
+
+    const msgs = useChatStore.getState().messages
+    expect(msgs[0].toolStatus).toBe('done')
+    expect(msgs[0].toolResult).toBe('ok without id')
+  })
+
+  it('AgentDone settles any dangling running tool call to done', () => {
+    const api = createMockGatewayAPI()
+    const chatStore = useChatStore.getState()
+    chatStore.addMessage({
+      id: 'tool1',
+      role: 'tool',
+      type: 'tool_call',
+      content: '',
+      toolName: 'bash',
+      toolCallId: 'tc1',
+      toolStatus: 'running',
+      timestamp: Date.now(),
+    })
+
+    handleGatewayEvent({
+      type: EventType.AgentDone,
+      payload: { payload: { runtime_event_type: EventType.AgentDone, payload: { content: 'done' } } },
+      session_id: 'sess-1',
+      run_id: 'run-1',
+    }, api)
+
+    expect(useChatStore.getState().messages[0].toolStatus).toBe('done')
+  })
+
   it('BudgetChecked updates runtime insight budget state', () => {
     const api = createMockGatewayAPI()
     handleGatewayEvent({
