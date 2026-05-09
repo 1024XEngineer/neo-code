@@ -342,6 +342,60 @@ describe('FileChangePanel', () => {
     expect(preview.textContent).toContain('before::after')
   })
 
+  it('opens expanded nested untracked files from the git diff list', async () => {
+    mockGatewayAPI.listGitDiffFiles.mockResolvedValue({
+      payload: {
+        in_git_repo: true,
+        branch: 'main',
+        ahead: 0,
+        behind: 0,
+        truncated: false,
+        total_count: 1,
+        files: [
+          {
+            path: 'handwrite_res/nested/result.txt',
+            status: 'untracked',
+          },
+        ],
+      },
+    })
+    mockGatewayAPI.readGitDiffFile.mockResolvedValue({
+      payload: {
+        path: 'handwrite_res/nested/result.txt',
+        status: 'untracked',
+        original_content: '',
+        modified_content: 'expanded',
+        size_original: 0,
+        size_modified: 8,
+      },
+    })
+    useUIStore.setState({
+      gitDiffSummary: {
+        in_git_repo: true,
+        branch: 'main',
+        ahead: 0,
+        behind: 0,
+        truncated: false,
+        total_count: 1,
+        files: [
+          {
+            path: 'handwrite_res/nested/result.txt',
+            status: 'untracked',
+          },
+        ],
+      },
+    } as never)
+
+    render(<FileChangePanel />)
+
+    fireEvent.click(screen.getByTestId(`preview-tab-${GIT_DIFF_PREVIEW_TAB_ID}`))
+    fireEvent.click(await screen.findByTestId('git-diff-entry-handwrite_res/nested/result.txt'))
+
+    await waitFor(() => {
+      expect(mockGatewayAPI.readGitDiffFile).toHaveBeenCalledWith({ path: 'handwrite_res/nested/result.txt' })
+    })
+  })
+
   it('renders the Monaco-based preview host for loaded text files', async () => {
     useUIStore.setState({
       previewTabs: [
