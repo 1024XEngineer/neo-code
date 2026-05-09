@@ -5,16 +5,22 @@ package launcher
 import (
 	"fmt"
 	"os/exec"
-	"strings"
 )
 
-// launchTerminal 在 Windows 上通过 `cmd /c start` 拉起独立终端窗口执行命令。
+var (
+	lookupPathForTerminalWindows  = exec.LookPath
+	execCommandForTerminalWindows = exec.Command
+)
+
+// launchTerminal 在 Windows 上优先使用 Windows Terminal，失败时回退 cmd /c start。
 func launchTerminal(command string) error {
-	args := append([]string{"/c", "start"}, strings.Fields(command)...)
-	if len(args) <= 2 {
-		return fmt.Errorf("empty terminal command")
+	if _, err := lookupPathForTerminalWindows("wt.exe"); err == nil {
+		wtCommand := execCommandForTerminalWindows("wt.exe", "new-tab", "cmd", "/k", command)
+		if runErr := wtCommand.Run(); runErr == nil {
+			return nil
+		}
 	}
-	cmd := exec.Command("cmd", args...)
+	cmd := execCommandForTerminalWindows("cmd", "/c", "start", "", "cmd", "/k", command)
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("launch terminal on windows: %w", err)
 	}
