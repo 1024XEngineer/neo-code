@@ -388,7 +388,7 @@ function SessionItem({
         </button>
       )}
       {!renaming && hover && (
-        <div style={{ display: 'flex', gap: 2, flexShrink: 0, paddingRight: 6 }}>
+        <div className="session-item-actions">
           <button
             className="workspace-action-btn"
             title="重命名"

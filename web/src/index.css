@@ -393,6 +393,7 @@ html, body, #root {
   background: transparent;
   transition: background 200ms var(--ease-out);
   margin-bottom: 1px;
+  position: relative;
 }
 .session-item-wrapper:hover { background: var(--bg-hover); }
 .session-item-wrapper:hover .workspace-action-btn { opacity: 1; transform: translateX(0); }
@@ -401,7 +402,8 @@ html, body, #root {
 .session-item {
   display: flex; align-items: center; gap: var(--space-2);
   width: 100%;
-  padding: 5px 10px 5px 12px;
+  min-width: 0;
+  padding: 5px 58px 5px 12px;
   border-radius: var(--radius-md);
   border: none;
   background: transparent;
@@ -430,6 +432,15 @@ html, body, #root {
 }
 .session-item .sess-time {
   font-size: 11px; color: var(--text-tertiary); flex-shrink: 0;
+}
+.session-item-actions {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  gap: 2px;
+  z-index: 1;
 }
 
 /* ── Workspace Header (the actual row with inline edit/delete) ── */
