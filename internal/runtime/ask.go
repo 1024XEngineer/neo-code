@@ -11,6 +11,7 @@ import (
 
 	"neo-code/internal/config"
 	agentcontext "neo-code/internal/context"
+	"neo-code/internal/partsrender"
 	"neo-code/internal/provider"
 	providertypes "neo-code/internal/provider/types"
 	"neo-code/internal/runtime/streaming"
@@ -145,7 +146,7 @@ func (s *Service) Ask(ctx context.Context, input AskInput) error {
 		return failAsk(streamOutcome.err)
 	}
 
-	reply := strings.TrimSpace(renderPartsForVerification(streamOutcome.message.Parts))
+	reply := strings.TrimSpace(partsrender.RenderDisplayParts(streamOutcome.message.Parts))
 	session = appendAskMessage(session, "assistant", reply)
 	if err := s.askStore.Save(ctx, session); err != nil {
 		return failAsk(err)

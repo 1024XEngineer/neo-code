@@ -134,6 +134,10 @@ func MigrateContextBudgetConfigContent(raw []byte) ([]byte, bool, []string, erro
 	if verificationChanged {
 		changed = true
 	}
+	legacyRuntimeChanged := migrateLegacyRuntimeConfigFields(doc)
+	if legacyRuntimeChanged {
+		changed = true
+	}
 
 	if !changed {
 		return raw, false, nil, nil
@@ -144,6 +148,31 @@ func MigrateContextBudgetConfigContent(raw []byte) ([]byte, bool, []string, erro
 		return nil, false, nil, err
 	}
 	return out, true, notes, nil
+}
+
+// migrateLegacyRuntimeConfigFields 清理 runtime 下已废弃且会导致严格解析失败的历史字段。
+func migrateLegacyRuntimeConfigFields(doc map[string]any) bool {
+	runtimeValue, ok := doc["runtime"]
+	if !ok {
+		return false
+	}
+	runtimeMap, ok := migrationStringMap(runtimeValue)
+	if !ok {
+		return false
+	}
+
+	changed := false
+	for _, key := range []string{"max_no_progress_streak"} {
+		if _, exists := runtimeMap[key]; exists {
+			delete(runtimeMap, key)
+			changed = true
+		}
+	}
+	if !changed {
+		return false
+	}
+	doc["runtime"] = runtimeMap
+	return true
 }
 
 // migrateVerificationConfig 清理已废弃的 verification 字段，并将安全的旧 command string 收敛成 argv。

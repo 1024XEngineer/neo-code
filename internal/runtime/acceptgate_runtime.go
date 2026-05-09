@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 
+	"neo-code/internal/partsrender"
 	"neo-code/internal/promptasset"
 	providertypes "neo-code/internal/provider/types"
 	"neo-code/internal/runtime/acceptgate"
@@ -108,7 +109,7 @@ func (s *Service) emitAcceptGateReport(state *runState, report acceptgate.Report
 }
 
 func renderAssistantTextWithoutCompletion(message providertypes.Message) string {
-	text := strings.TrimSpace(renderPartsForVerification(message.Parts))
+	text := strings.TrimSpace(partsrender.RenderDisplayParts(message.Parts))
 	if text == "" {
 		return ""
 	}
@@ -122,7 +123,7 @@ func renderAssistantTextWithoutCompletion(message providertypes.Message) string 
 // stripCompletionSignalFromAssistantMessage 移除仅供 runtime 控制使用的 task_completion JSON，保留用户可见回复。
 func stripCompletionSignalFromAssistantMessage(message providertypes.Message) providertypes.Message {
 	text := renderAssistantTextWithoutCompletion(message)
-	if strings.TrimSpace(text) == strings.TrimSpace(renderPartsForVerification(message.Parts)) {
+	if strings.TrimSpace(text) == strings.TrimSpace(partsrender.RenderDisplayParts(message.Parts)) {
 		return message
 	}
 	message.Parts = []providertypes.ContentPart{providertypes.NewTextPart(text)}

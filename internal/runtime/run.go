@@ -14,6 +14,7 @@ import (
 	"neo-code/internal/config"
 	agentcontext "neo-code/internal/context"
 	contextcompact "neo-code/internal/context/compact"
+	"neo-code/internal/partsrender"
 	"neo-code/internal/promptasset"
 	"neo-code/internal/provider"
 	providertypes "neo-code/internal/provider/types"
@@ -162,7 +163,7 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 		agentsession.NormalizeAgentMode(session.AgentMode) == agentsession.AgentModePlan
 	state.taskID = strings.TrimSpace(input.TaskID)
 	state.agentID = strings.TrimSpace(input.AgentID)
-	state.userGoal = strings.TrimSpace(renderPartsForVerification(input.Parts))
+	state.userGoal = strings.TrimSpace(partsrender.RenderDisplayParts(input.Parts))
 	if input.CapabilityToken != nil {
 		token := input.CapabilityToken.Normalize()
 		state.capabilityToken = &token
@@ -379,7 +380,7 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 						s.emitRunScoped(ctx, EventAgentDone, &state, planMessage)
 						return nil
 					}
-					if strings.TrimSpace(renderPartsForVerification(turnOutput.assistant.Parts)) != "" {
+					if strings.TrimSpace(partsrender.RenderDisplayParts(turnOutput.assistant.Parts)) != "" {
 						if err := s.appendAssistantMessageOnlyAndSave(ctx, &state, turnOutput.assistant); err != nil {
 							return s.handleRunError(err)
 						}

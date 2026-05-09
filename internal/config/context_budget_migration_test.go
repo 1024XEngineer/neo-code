@@ -206,6 +206,35 @@ runtime:
 	}
 }
 
+func TestMigrateContextBudgetConfigContentRemovesLegacyRuntimeNoProgressField(t *testing.T) {
+	t.Parallel()
+
+	input := []byte(strings.TrimSpace(`
+runtime:
+  max_no_progress_streak: 5
+  max_repeat_cycle_streak: 3
+`) + "\n")
+
+	out, changed, notes, err := MigrateContextBudgetConfigContent(input)
+	if err != nil {
+		t.Fatalf("MigrateContextBudgetConfigContent() error = %v", err)
+	}
+	if !changed {
+		t.Fatal("expected migration change")
+	}
+	if len(notes) != 0 {
+		t.Fatalf("expected no migration notes, got %v", notes)
+	}
+
+	text := string(out)
+	if strings.Contains(text, "max_no_progress_streak") {
+		t.Fatalf("expected max_no_progress_streak removed, got:\n%s", text)
+	}
+	if !strings.Contains(text, "max_repeat_cycle_streak: 3") {
+		t.Fatalf("expected max_repeat_cycle_streak preserved, got:\n%s", text)
+	}
+}
+
 func TestMigrateContextBudgetConfigFileCreatesBackup(t *testing.T) {
 	t.Parallel()
 
