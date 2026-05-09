@@ -218,6 +218,125 @@ describe('eventBridge', () => {
     expect(msgs[0].toolStatus).toBe('done')
   })
 
+  it('ToolResult falls back to settling the latest running tool message when id is missing', () => {
+    const api = createMockGatewayAPI()
+    handleGatewayEvent({
+      type: EventType.ToolStart,
+      payload: { payload: { runtime_event_type: EventType.ToolStart, payload: { name: 'read_file', id: 'tc-fallback', arguments: '{}' } } },
+      session_id: 'sess-1',
+      run_id: 'run-1',
+    }, api)
+
+    handleGatewayEvent({
+      type: EventType.ToolResult,
+      payload: { payload: { runtime_event_type: EventType.ToolResult, payload: { content: 'ok without id' } } },
+      session_id: 'sess-1',
+      run_id: 'run-1',
+    }, api)
+
+    const msgs = useChatStore.getState().messages
+    expect(msgs[0].toolStatus).toBe('done')
+    expect(msgs[0].toolResult).toBe('ok without id')
+  })
+
+  it('AgentDone settles any dangling running tool call to done', () => {
+    const api = createMockGatewayAPI()
+    const chatStore = useChatStore.getState()
+    chatStore.addMessage({
+      id: 'tool1',
+      role: 'tool',
+      type: 'tool_call',
+      content: '',
+      toolName: 'bash',
+      toolCallId: 'tc1',
+      toolStatus: 'running',
+      timestamp: Date.now(),
+    })
+
+    handleGatewayEvent({
+      type: EventType.AgentDone,
+      payload: { payload: { runtime_event_type: EventType.AgentDone, payload: { content: 'done' } } },
+      session_id: 'sess-1',
+      run_id: 'run-1',
+    }, api)
+
+    expect(useChatStore.getState().messages[0].toolStatus).toBe('done')
+  })
+
+  it('StopReasonDecided keeps running tool calls unresolved for non-fatal reasons', () => {
+    const api = createMockGatewayAPI()
+    useChatStore.getState().addMessage({
+      id: 'tool-running-nonfatal',
+      role: 'tool',
+      type: 'tool_call',
+      content: '',
+      toolName: 'bash',
+      toolCallId: 'tc-nonfatal',
+      toolStatus: 'running',
+      timestamp: Date.now(),
+    })
+
+    handleGatewayEvent({
+      type: EventType.StopReasonDecided,
+      payload: { payload: { runtime_event_type: EventType.StopReasonDecided, payload: { reason: 'user_interrupt' } } },
+      session_id: 'sess-1',
+      run_id: 'run-1',
+    }, api)
+
+    expect(useChatStore.getState().messages[0].toolStatus).toBe('running')
+  })
+
+  it('StopReasonDecided marks running tool calls as error on fatal_error', () => {
+    const api = createMockGatewayAPI()
+    useChatStore.getState().addMessage({
+      id: 'tool-running-fatal',
+      role: 'tool',
+      type: 'tool_call',
+      content: '',
+      toolName: 'bash',
+      toolCallId: 'tc-fatal',
+      toolStatus: 'running',
+      timestamp: Date.now(),
+    })
+
+    handleGatewayEvent({
+      type: EventType.StopReasonDecided,
+      payload: {
+        payload: {
+          runtime_event_type: EventType.StopReasonDecided,
+          payload: { reason: 'fatal_error', detail: 'fatal' },
+        },
+      },
+      session_id: 'sess-1',
+      run_id: 'run-1',
+    }, api)
+
+    expect(useChatStore.getState().messages[0].toolStatus).toBe('error')
+  })
+
+  it('RunCanceled does not convert running tool calls to done', () => {
+    const api = createMockGatewayAPI()
+    useChatStore.getState().addMessage({
+      id: 'tool-running-canceled',
+      role: 'tool',
+      type: 'tool_call',
+      content: '',
+      toolName: 'bash',
+      toolCallId: 'tc-canceled',
+      toolStatus: 'running',
+      timestamp: Date.now(),
+    })
+
+    handleGatewayEvent({
+      type: EventType.RunCanceled,
+      payload: { payload: { runtime_event_type: EventType.RunCanceled, payload: {} } },
+      session_id: 'sess-1',
+      run_id: 'run-1',
+    }, api)
+
+    expect(useChatStore.getState().messages[0].toolStatus).toBe('running')
+  })
+
   it('BudgetChecked updates runtime insight budget state', () => {
     const api = createMockGatewayAPI()
     handleGatewayEvent({

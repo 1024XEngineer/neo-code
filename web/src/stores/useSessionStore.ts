@@ -4,6 +4,7 @@ import { type SessionSummary as APISessionSummary } from '@/api/protocol'
 import { useChatStore } from '@/stores/useChatStore'
 import { useUIStore } from '@/stores/useUIStore'
 import { useRuntimeInsightStore } from '@/stores/useRuntimeInsightStore'
+import { parseDateTime } from '@/utils/format'
 
 /** 判断 sessionId 是否有效（非空且不是临时草稿前缀） */
 export function isValidSessionId(id: string): boolean {
@@ -15,6 +16,8 @@ export interface SessionSummary {
   id: string
   title: string
   time: string
+  createdAt?: string
+  updatedAt?: string
 }
 
 /** 项目分组 */
@@ -75,12 +78,12 @@ function mapSessionsToProjects(apiSessions: APISessionSummary[]): Project[] {
   }
 
   for (const s of apiSessions) {
-    const updated = new Date(s.updated_at)
-    if (updated >= today) {
+    const sessionTime = selectSessionDisplayTime(s)
+    if (sessionTime >= today) {
       groups['今天'].push(s)
-    } else if (updated >= yesterday) {
+    } else if (sessionTime >= yesterday) {
       groups['昨天'].push(s)
-    } else if (updated >= weekAgo) {
+    } else if (sessionTime >= weekAgo) {
       groups['最近7天'].push(s)
     } else {
       groups['更早'].push(s)
@@ -96,12 +99,29 @@ function mapSessionsToProjects(apiSessions: APISessionSummary[]): Project[] {
       sessions: sessions.map((s) => ({
         id: s.id,
         title: s.title || '未命名会话',
-        time: s.updated_at,
+        time: selectSessionDisplayTime(s).toISOString(),
+        createdAt: s.created_at,
+        updatedAt: s.updated_at,
       })),
     })
   }
 
   return projects
+}
+
+/** 选择会话展示时间：优先取 created/updated 中较新的有效时间，规避单字段异常。 */
+function selectSessionDisplayTime(session: APISessionSummary): Date {
+  const created = parseDateTime(session.created_at)
+  const updated = parseDateTime(session.updated_at)
+  const createdValid = !isNaN(created.getTime())
+  const updatedValid = !isNaN(updated.getTime())
+  if (createdValid && updatedValid) {
+    return updated.getTime() >= created.getTime() ? updated : created
+  }
+  if (updatedValid) return updated
+  if (createdValid) return created
+  // 当后端时间字段都无效时，不伪造“当前时间”，避免损坏记录冒充“刚刚更新”并扰乱排序。
+  return new Date(0)
 }
 
 export type BackendMessage = {

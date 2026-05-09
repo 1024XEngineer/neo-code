@@ -23,7 +23,7 @@ import {
   Moon,
 } from 'lucide-react'
 import ConfirmDialog from '@/components/ui/ConfirmDialog'
-import { relativeTime } from '@/utils/format'
+import { formatSessionTime, relativeTime } from '@/utils/format'
 import { type ProviderOption, type MCPServerParams, type AvailableSkillState, type SessionSkillState, type CreateProviderParams, type ProviderModelDescriptor } from '@/api/protocol'
 
 interface SidebarProps {
@@ -321,7 +321,7 @@ export default function Sidebar({ collapsed }: SidebarProps) {
 function SessionItem({
   session, isActive, onClick, gatewayAPI,
 }: {
-  session: { id: string; title: string; time: string }
+  session: { id: string; title: string; time: string; createdAt?: string; updatedAt?: string }
   isActive: boolean
   onClick: () => void
   gatewayAPI: ReturnType<typeof useGatewayAPI>
@@ -330,6 +330,11 @@ function SessionItem({
   const [renaming, setRenaming] = useState(false)
   const [renameVal, setRenameVal] = useState(session.title)
   const [deleting, setDeleting] = useState(false)
+  const updatedLabel = session.updatedAt ? formatSessionTime(session.updatedAt) : ''
+  const createdLabel = session.createdAt ? formatSessionTime(session.createdAt) : ''
+  const timeTitle = updatedLabel && createdLabel
+    ? `更新: ${updatedLabel}\n创建: ${createdLabel}`
+    : updatedLabel || createdLabel || ''
 
   async function commitRename() {
     const trimmed = renameVal.trim()
@@ -379,11 +384,11 @@ function SessionItem({
         >
           <MessageSquare size={14} />
           <span className="sess-title" title={session.title}>{session.title}</span>
-          <span className="sess-time">{relativeTime(session.time)}</span>
+          <span className="sess-time" title={timeTitle}>{relativeTime(session.time)}</span>
         </button>
       )}
       {!renaming && hover && (
-        <div style={{ display: 'flex', gap: 2, flexShrink: 0, paddingRight: 6 }}>
+        <div className="session-item-actions">
           <button
             className="workspace-action-btn"
             title="重命名"
