@@ -95,15 +95,10 @@ type VerificationFailedPayload struct {
 
 // AcceptanceDecidedPayload 描述 acceptance engine 决议结果。
 type AcceptanceDecidedPayload struct {
-	Status                  string                   `json:"status"`
-	StopReason              controlplane.StopReason  `json:"stop_reason,omitempty"`
-	ErrorClass              verify.ErrorClass        `json:"error_class,omitempty"`
-	CompletionBlockedReason string                   `json:"completion_blocked_reason,omitempty"`
-	UserVisibleSummary      string                   `json:"user_visible_summary,omitempty"`
-	InternalSummary         string                   `json:"internal_summary,omitempty"`
-	ContinueHint            string                   `json:"continue_hint,omitempty"`
-	Summary                 string                   `json:"summary,omitempty"`
-	Results                 []acceptgate.CheckResult `json:"results,omitempty"`
+	Status     string                   `json:"status"`
+	StopReason controlplane.StopReason  `json:"stop_reason,omitempty"`
+	Summary    string                   `json:"summary,omitempty"`
+	Results    []acceptgate.CheckResult `json:"results,omitempty"`
 }
 
 // LedgerReconciledPayload 为账本对账预留负载。
