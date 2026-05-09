@@ -53,7 +53,7 @@
 
   /* Typography */
   --font-ui:        system-ui, -apple-system, 'SF Pro Text', 'SF Pro Display', sans-serif;
-  --font-mono:      'SF Mono', 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
+  --font-mono:      'JetBrains Mono', 'SF Mono', 'Fira Code', ui-monospace, monospace;
 
   /* Spacing scale (4px base) */
   --space-1: 4px;

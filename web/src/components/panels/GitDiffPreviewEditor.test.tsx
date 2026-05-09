@@ -14,7 +14,7 @@ vi.mock('@monaco-editor/react', () => ({
     modified: string
     language: string
     theme: string
-    options: { renderSideBySide?: boolean; lineNumbers?: string }
+    options: { renderSideBySide?: boolean; lineNumbers?: string; fontFamily?: string }
   }) => (
     <div
       data-testid="monaco-diff-editor"
@@ -22,6 +22,7 @@ vi.mock('@monaco-editor/react', () => ({
       data-theme={theme}
       data-side-by-side={String(Boolean(options.renderSideBySide))}
       data-line-numbers={options.lineNumbers}
+      data-font-family={options.fontFamily}
     >
       {original}::{modified}
     </div>
@@ -45,6 +46,7 @@ describe('GitDiffPreviewEditor', () => {
     expect(editor).toHaveAttribute('data-theme', 'vs-dark')
     expect(editor).toHaveAttribute('data-side-by-side', 'true')
     expect(editor).toHaveAttribute('data-line-numbers', 'on')
+    expect(editor).toHaveAttribute('data-font-family', 'var(--font-mono)')
     expect(editor.textContent).toContain('before::after')
   })
 

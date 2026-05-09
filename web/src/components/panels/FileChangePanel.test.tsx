@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import FileChangePanel from './FileChangePanel'
 import { CHANGES_PREVIEW_TAB_ID, GIT_DIFF_PREVIEW_TAB_ID, useUIStore } from '@/stores/useUIStore'
 
@@ -323,6 +323,19 @@ describe('FileChangePanel', () => {
   })
 
   it('opens a git diff file tab from the fixed git diff view', async () => {
+    mockGatewayAPI.readGitDiffFile.mockResolvedValueOnce({
+      payload: {
+        path: 'src/main.go',
+        status: 'modified',
+        old_path: 'src/legacy.go',
+        encoding: 'utf-8',
+        original_content: 'before',
+        modified_content: 'after',
+        size_original: 6,
+        size_modified: 5,
+      },
+    })
+
     render(<FileChangePanel />)
 
     fireEvent.click(screen.getByTestId(`preview-tab-${GIT_DIFF_PREVIEW_TAB_ID}`))
@@ -342,6 +355,17 @@ describe('FileChangePanel', () => {
     expect(preview).toHaveAttribute('data-path', 'src/main.go')
     expect(preview).toHaveAttribute('data-side-by-side', 'true')
     expect(preview.textContent).toContain('before::after')
+
+    const gitDiffHeader = screen.getByTestId('git-diff-file-preview-header')
+    const gitDiffPath = within(gitDiffHeader).getByTestId('git-diff-file-preview-path')
+    expect(gitDiffPath.textContent).toBe('src/main.go')
+    expect(gitDiffPath).toHaveAttribute('title', 'src/main.go')
+    expect(gitDiffPath).toHaveStyle({
+      whiteSpace: 'nowrap',
+      overflow: 'hidden',
+      textOverflow: 'ellipsis',
+    })
+    expect(gitDiffHeader.textContent?.trim()).toBe('src/main.go')
   })
 
   it('renders file preview tabs in the secondary chip row instead of mixing them into the primary switcher', () => {
@@ -365,6 +389,9 @@ describe('FileChangePanel', () => {
           title: 'main.go',
           closable: true,
           path: 'cmd/neocode/main.go',
+          size: 1024,
+          encoding: 'utf-8',
+          mod_time: '2026-05-08T10:53:48Z',
           content: 'package main',
           loading: false,
           loaded: true,
@@ -553,6 +580,16 @@ describe('FileChangePanel', () => {
     expect(preview).toHaveAttribute('data-path', 'cmd/neocode/main.go')
     expect(preview).toHaveAttribute('data-theme', 'light')
     expect(preview.textContent).toContain('package main')
+    const fileHeader = screen.getByTestId('file-preview-header')
+    const filePath = within(fileHeader).getByTestId('file-preview-path')
+    expect(filePath.textContent).toBe('cmd/neocode/main.go')
+    expect(filePath).toHaveAttribute('title', 'cmd/neocode/main.go')
+    expect(filePath).toHaveStyle({
+      whiteSpace: 'nowrap',
+      overflow: 'hidden',
+      textOverflow: 'ellipsis',
+    })
+    expect(fileHeader.textContent?.trim()).toBe('cmd/neocode/main.go')
   })
 
   it('uses theme variables instead of fixed diff colors in light mode', () => {

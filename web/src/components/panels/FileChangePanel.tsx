@@ -117,34 +117,6 @@ function getContextPreviewTabID(activeTab: PreviewTab | undefined) {
   return activeTab.id
 }
 
-function formatPreviewMeta(tab: FilePreviewTab) {
-  const segments: string[] = []
-  if (typeof tab.size === 'number') {
-    segments.push(`${tab.size} B`)
-  }
-  if (tab.encoding) {
-    segments.push(tab.encoding)
-  }
-  if (tab.mod_time) {
-    segments.push(tab.mod_time)
-  }
-  return segments.join(' · ')
-}
-
-function formatGitDiffMeta(tab: GitDiffFilePreviewTab) {
-  const segments: string[] = []
-  if (typeof tab.size_original === 'number') {
-    segments.push(`原始 ${tab.size_original} B`)
-  }
-  if (typeof tab.size_modified === 'number') {
-    segments.push(`当前 ${tab.size_modified} B`)
-  }
-  if (tab.encoding) {
-    segments.push(tab.encoding)
-  }
-  return segments.join(' · ')
-}
-
 function DiffLineView({ line }: { line: DiffLine }) {
   const lineStyles: Record<DiffLine['type'], CSSProperties> = {
     add: { color: 'var(--diff-add-text)', background: 'var(--diff-add-bg)' },
@@ -313,7 +285,6 @@ function PreviewFallback({ message = '正在加载代码编辑器...' }: { messa
 
 function FilePreviewView({ tab }: { tab: FilePreviewTab }) {
   const theme = useUIStore((state) => state.theme)
-  const meta = formatPreviewMeta(tab)
 
   let body = null
   if (tab.loading) {
@@ -336,10 +307,8 @@ function FilePreviewView({ tab }: { tab: FilePreviewTab }) {
 
   return (
     <div style={styles.viewContainer}>
-      <div style={styles.viewHeader}>
-        <span style={styles.viewTitle}>{tab.title}</span>
-        <div style={styles.previewPath}>{tab.path}</div>
-        {meta && <div style={styles.previewMeta}>{meta}</div>}
+      <div style={styles.viewHeader} data-testid="file-preview-header">
+        <div style={styles.previewPath} data-testid="file-preview-path" title={tab.path}>{tab.path}</div>
       </div>
       {body}
     </div>
@@ -349,8 +318,6 @@ function FilePreviewView({ tab }: { tab: FilePreviewTab }) {
 function GitDiffFileView({ tab }: { tab: GitDiffFilePreviewTab }) {
   const theme = useUIStore((state) => state.theme)
   const changesPanelWidth = useUIStore((state) => state.changesPanelWidth)
-  const meta = formatGitDiffMeta(tab)
-  const statusMeta = gitDiffStatusMeta[tab.status]
 
   let body = null
   if (tab.loading) {
@@ -377,14 +344,8 @@ function GitDiffFileView({ tab }: { tab: GitDiffFilePreviewTab }) {
 
   return (
     <div style={styles.viewContainer}>
-      <div style={styles.viewHeader}>
-        <div style={styles.titleRow}>
-          <span style={styles.viewTitle}>{tab.title}</span>
-          <span style={{ ...styles.statusPill, color: statusMeta.color, background: statusMeta.bg }}>{statusMeta.label}</span>
-        </div>
-        <div style={styles.previewPath}>{tab.path}</div>
-        {tab.old_path && <div style={styles.previewSubPath}>原路径: {tab.old_path}</div>}
-        {meta && <div style={styles.previewMeta}>{meta}</div>}
+      <div style={styles.viewHeader} data-testid="git-diff-file-preview-header">
+        <div style={styles.previewPath} data-testid="git-diff-file-preview-path" title={tab.path}>{tab.path}</div>
       </div>
       {body}
     </div>
@@ -931,6 +892,7 @@ const styles: Record<string, CSSProperties> = {
     display: 'flex',
     flexDirection: 'column',
     overflow: 'hidden',
+    padding: '8px 10px 0',
   },
   viewContainer: {
     display: 'flex',
@@ -938,9 +900,13 @@ const styles: Record<string, CSSProperties> = {
     flex: 1,
     minHeight: 0,
     overflow: 'hidden',
+    background: 'var(--bg-primary)',
+    border: '1px solid var(--border-primary)',
+    borderRadius: 'var(--radius-md)',
+    boxShadow: 'var(--shadow-surface)',
   },
   viewHeader: {
-    padding: '12px 14px',
+    padding: '8px 10px',
     borderBottom: '1px solid var(--border-primary)',
     flexShrink: 0,
   },
@@ -984,7 +950,7 @@ const styles: Record<string, CSSProperties> = {
     flex: 1,
     minHeight: 0,
     overflow: 'auto',
-    padding: 12,
+    padding: 10,
   },
   contentStack: {
     display: 'flex',
@@ -1143,22 +1109,19 @@ const styles: Record<string, CSSProperties> = {
     color: 'var(--text-tertiary)',
     fontSize: 12,
     fontFamily: 'var(--font-ui)',
-    padding: 20,
+    padding: 16,
     textAlign: 'center',
   },
   previewPath: {
-    marginTop: 8,
+    marginTop: 0,
     color: 'var(--text-secondary)',
     fontSize: 12,
     fontFamily: 'var(--font-ui)',
-    wordBreak: 'break-all',
-  },
-  previewSubPath: {
-    marginTop: 4,
-    color: 'var(--text-tertiary)',
-    fontSize: 11,
-    fontFamily: 'var(--font-ui)',
-    wordBreak: 'break-all',
+    minWidth: 0,
+    lineHeight: '18px',
+    whiteSpace: 'nowrap',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
   },
   previewMeta: {
     marginTop: 6,
