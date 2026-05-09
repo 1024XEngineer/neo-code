@@ -141,6 +141,44 @@ func TestCachedMarkdownRendererCacheEviction(t *testing.T) {
 	}
 }
 
+func TestCachedMarkdownRendererCacheTouchPreventsEviction(t *testing.T) {
+	renderer := NewCachedMarkdownRenderer("dark", 2, "(empty)")
+
+	if _, err := renderer.Render("first", 20); err != nil {
+		t.Fatalf("Render(first) error = %v", err)
+	}
+	if _, err := renderer.Render("second", 20); err != nil {
+		t.Fatalf("Render(second) error = %v", err)
+	}
+	// Touch first entry so it should stay when a third entry arrives.
+	if _, err := renderer.Render("first", 20); err != nil {
+		t.Fatalf("Render(first-touch) error = %v", err)
+	}
+	if _, err := renderer.Render("third", 20); err != nil {
+		t.Fatalf("Render(third) error = %v", err)
+	}
+
+	if renderer.CacheCount() != 2 {
+		t.Fatalf("expected cache size to remain 2, got %d", renderer.CacheCount())
+	}
+	if len(renderer.cacheOrder.Front().Value.(string)) == 0 {
+		t.Fatalf("expected non-empty cache order front key")
+	}
+
+	firstKey := hashMarkdownCacheKey(20, "first")
+	secondKey := hashMarkdownCacheKey(20, "second")
+	thirdKey := hashMarkdownCacheKey(20, "third")
+	if _, ok := renderer.cache[firstKey]; !ok {
+		t.Fatalf("expected touched key to remain in cache")
+	}
+	if _, ok := renderer.cache[thirdKey]; !ok {
+		t.Fatalf("expected newest key to remain in cache")
+	}
+	if _, ok := renderer.cache[secondKey]; ok {
+		t.Fatalf("expected untouched oldest key to be evicted")
+	}
+}
+
 func TestCachedMarkdownRendererDefaultsAndSetMax(t *testing.T) {
 	renderer := NewCachedMarkdownRenderer("", -1, "(empty)")
 	if renderer.style != "dark" {

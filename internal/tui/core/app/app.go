@@ -99,74 +99,75 @@ type appComponents struct {
 
 // appRuntimeState 聚合运行期易变字段，降低 App 顶层字段密度。
 type appRuntimeState struct {
-	deferredEventCmd          tea.Cmd
-	deferredLogPersistCmd     tea.Cmd
-	nowFn                     func() time.Time
-	lastInputEditAt           time.Time
-	lastPasteLikeAt           time.Time
-	pasteSessionStartedAt     time.Time
-	pasteSessionUntil         time.Time
-	pendingCtrlVPasteEcho     string
-	pendingCtrlVEchoUntil     time.Time
-	deferredPastedTextLoadCmd tea.Cmd
-	loadingPastedText         bool
-	pendingSendAfterPasteLoad bool
-	skipNextSendPasteLoadWait bool
-	pasteTxnActive            bool
-	pasteTxnBuffer            string
-	pasteTxnVersion           int
-	pasteTxnTokenInjected     bool
-	pasteTxnInjectedToken     string
-	inputBurstStart           time.Time
-	inputBurstCount           int
-	pasteMode                 bool
-	pasteSessionBase          string
-	lastSummarizedPasteText   string
-	lastSummarizedPasteAt     time.Time
-	lastSummarizedPasteToken  string
-	lastPastedContent         string
-	lastPastedContentAt       time.Time
-	activeMessages            []providertypes.Message
-	activities                []tuistate.ActivityEntry
-	todoItems                 []todoViewItem
-	todoFilter                todoFilter
-	todoSelectedIndex         int
-	todoPanelVisible          bool
-	todoCollapsed             bool
-	fileCandidates            []string
-	modelRefreshID            string
-	focus                     panel
-	runProgressValue          float64
-	runProgressKnown          bool
-	runProgressLabel          string
-	lastUserMessageRunID      string
-	pendingPermission         *permissionPromptState
-	queuedIntervention        *queuedInterventionInput
-	pendingAutoPermission     *autoPermissionApprovalState
-	pendingFullAccessPrompt   *fullAccessPromptState
-	startupWakeSubmitInput    *startupWakeSubmitInput
-	fullAccessModeEnabled     bool
-	pendingImageAttachments   []pendingImageAttachment
-	pendingTextPastes         []pendingTextPaste
-	providerAddForm           *providerAddFormState
-	modelScopeGuide           *modelScopeGuideState
-	layoutCached              bool
-	cachedWidth               int
-	cachedHeight              int
-	viewDirty                 bool
-	logViewerVisible          bool
-	logViewerOffset           int
-	logViewerPrevStatus       string
-	logEntries                []logEntry
-	logPersistDirty           bool
-	logPersistVersion         int
-	transcriptContent         string
-	transcriptProcessFoldAvailable bool
-	transcriptProcessExpanded      bool
+	deferredEventCmd                 tea.Cmd
+	deferredLogPersistCmd            tea.Cmd
+	nowFn                            func() time.Time
+	lastInputEditAt                  time.Time
+	lastPasteLikeAt                  time.Time
+	pasteSessionStartedAt            time.Time
+	pasteSessionUntil                time.Time
+	pendingCtrlVPasteEcho            string
+	pendingCtrlVEchoUntil            time.Time
+	deferredPastedTextLoadCmd        tea.Cmd
+	loadingPastedText                bool
+	pendingSendAfterPasteLoad        bool
+	skipNextSendPasteLoadWait        bool
+	pasteTxnActive                   bool
+	pasteTxnBuffer                   string
+	pasteTxnVersion                  int
+	pasteTxnTokenInjected            bool
+	pasteTxnInjectedToken            string
+	inputBurstStart                  time.Time
+	inputBurstCount                  int
+	pasteMode                        bool
+	pasteSessionBase                 string
+	lastSummarizedPasteText          string
+	lastSummarizedPasteAt            time.Time
+	lastSummarizedPasteToken         string
+	lastPastedContent                string
+	lastPastedContentAt              time.Time
+	activeMessages                   []providertypes.Message
+	activities                       []tuistate.ActivityEntry
+	todoItems                        []todoViewItem
+	todoFilter                       todoFilter
+	todoSelectedIndex                int
+	todoPanelVisible                 bool
+	todoCollapsed                    bool
+	fileCandidates                   []string
+	modelRefreshID                   string
+	focus                            panel
+	runProgressValue                 float64
+	runProgressKnown                 bool
+	runProgressLabel                 string
+	lastUserMessageRunID             string
+	pendingPermission                *permissionPromptState
+	queuedIntervention               *queuedInterventionInput
+	pendingAutoPermission            *autoPermissionApprovalState
+	pendingFullAccessPrompt          *fullAccessPromptState
+	startupWakeSubmitInput           *startupWakeSubmitInput
+	fullAccessModeEnabled            bool
+	pendingImageAttachments          []pendingImageAttachment
+	pendingTextPastes                []pendingTextPaste
+	providerAddForm                  *providerAddFormState
+	modelScopeGuide                  *modelScopeGuideState
+	layoutCached                     bool
+	cachedWidth                      int
+	cachedHeight                     int
+	viewDirty                        bool
+	logViewerVisible                 bool
+	logViewerOffset                  int
+	logViewerPrevStatus              string
+	logEntries                       []logEntry
+	logPersistDirty                  bool
+	logPersistVersion                int
+	transcriptContent                string
+	transcriptBlockRenderCache       map[string]string
+	transcriptProcessFoldAvailable   bool
+	transcriptProcessExpanded        bool
 	transcriptProcessExpandedOrdinal int
-	transcriptScrollbarDrag   bool
-	startupScreenLocked       bool
-	suppressAssistantForRun   string
+	transcriptScrollbarDrag          bool
+	startupScreenLocked              bool
+	suppressAssistantForRun          string
 
 	textSelection struct {
 		active    bool
@@ -393,12 +394,13 @@ func newApp(container tuibootstrap.Container) (App, error) {
 			markdownRenderer: markdownRenderer,
 		},
 		appRuntimeState: appRuntimeState{
-			nowFn:        time.Now,
-			focus:        panelInput,
-			todoFilter:   todoFilterAll,
-			layoutCached: true,
-			cachedWidth:  128,
-			cachedHeight: 40,
+			nowFn:                      time.Now,
+			focus:                      panelInput,
+			todoFilter:                 todoFilterAll,
+			layoutCached:               true,
+			cachedWidth:                128,
+			cachedHeight:               40,
+			transcriptBlockRenderCache: make(map[string]string),
 			// 初始进入草稿态时锁定启动页，直到发送或切换 session 才退出。
 			startupScreenLocked: true,
 		},

@@ -1,6 +1,7 @@
 package infra
 
 import (
+	"container/list"
 	"fmt"
 	"hash/fnv"
 	"regexp"
@@ -17,7 +18,8 @@ type CachedMarkdownRenderer struct {
 	emptyPlaceholder string
 	renderers        map[int]*glamour.TermRenderer
 	cache            map[string]string
-	cacheOrder       []string
+	cacheOrder       *list.List
+	cacheNodes       map[string]*list.Element
 	maxCacheEntries  int
 }
 
@@ -34,7 +36,8 @@ func NewCachedMarkdownRenderer(style string, maxCacheEntries int, emptyPlacehold
 		emptyPlaceholder: emptyPlaceholder,
 		renderers:        make(map[int]*glamour.TermRenderer),
 		cache:            make(map[string]string),
-		cacheOrder:       make([]string, 0, maxCacheEntries),
+		cacheOrder:       list.New(),
+		cacheNodes:       make(map[string]*list.Element),
 		maxCacheEntries:  maxCacheEntries,
 	}
 }
@@ -49,6 +52,9 @@ func (r *CachedMarkdownRenderer) Render(content string, width int) (string, erro
 	renderWidth := max(16, width)
 	cacheKey := hashMarkdownCacheKey(renderWidth, content)
 	if cached, ok := r.cache[cacheKey]; ok {
+		if node, exists := r.cacheNodes[cacheKey]; exists {
+			r.cacheOrder.MoveToBack(node)
+		}
 		return cached, nil
 	}
 
@@ -82,10 +88,15 @@ func (r *CachedMarkdownRenderer) SetMaxCacheEntries(max int) {
 		max = 0
 	}
 	r.maxCacheEntries = max
-	for len(r.cacheOrder) > max {
-		oldest := r.cacheOrder[0]
-		r.cacheOrder = r.cacheOrder[1:]
-		delete(r.cache, oldest)
+	for r.cacheOrder.Len() > max {
+		oldest := r.cacheOrder.Front()
+		if oldest == nil {
+			break
+		}
+		oldestKey, _ := oldest.Value.(string)
+		r.cacheOrder.Remove(oldest)
+		delete(r.cacheNodes, oldestKey)
+		delete(r.cache, oldestKey)
 	}
 }
 
@@ -101,7 +112,7 @@ func (r *CachedMarkdownRenderer) CacheCount() int {
 
 // CacheOrderCount 返回缓存队列长度。
 func (r *CachedMarkdownRenderer) CacheOrderCount() int {
-	return len(r.cacheOrder)
+	return r.cacheOrder.Len()
 }
 
 // rendererForWidth 获取或创建指定宽度的底层终端渲染器。
@@ -124,16 +135,21 @@ func (r *CachedMarkdownRenderer) cacheResult(key string, value string) {
 	if r.maxCacheEntries <= 0 {
 		return
 	}
-	if _, exists := r.cache[key]; exists {
+	if node, exists := r.cacheNodes[key]; exists {
 		r.cache[key] = value
+		r.cacheOrder.MoveToBack(node)
 		return
 	}
-	if len(r.cacheOrder) >= r.maxCacheEntries {
-		oldest := r.cacheOrder[0]
-		r.cacheOrder = r.cacheOrder[1:]
-		delete(r.cache, oldest)
+	if r.cacheOrder.Len() >= r.maxCacheEntries {
+		oldest := r.cacheOrder.Front()
+		if oldest != nil {
+			oldestKey, _ := oldest.Value.(string)
+			r.cacheOrder.Remove(oldest)
+			delete(r.cache, oldestKey)
+			delete(r.cacheNodes, oldestKey)
+		}
 	}
-	r.cacheOrder = append(r.cacheOrder, key)
+	r.cacheNodes[key] = r.cacheOrder.PushBack(key)
 	r.cache[key] = value
 }
 

@@ -4,8 +4,8 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
-	"encoding/json"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -68,6 +68,7 @@ const pasteSessionPerLineGuard = 8 * time.Millisecond
 const inlineLogMarker = "[[neo-log]] "
 const sessionWorkdirMissingWarning = "Session workspace not found, keeping current workspace."
 const localLogViewerPersistDir = "log-viewer"
+const transcriptBlockRenderCacheMax = 2048
 
 type sessionLogPersistenceRuntime interface {
 	LoadSessionLogEntries(ctx context.Context, sessionID string) ([]tuiservices.SessionLogEntry, error)
@@ -460,13 +461,13 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, batchUpdateCmds()
 		}
 
-			switch a.focus {
-			case panelTranscript:
-				if key.Matches(typed, a.keys.Send) && a.toggleTranscriptProcessExpansion() {
-					return a, batchUpdateCmds()
-				}
-				a.handleViewportKeys(&a.transcript, typed)
+		switch a.focus {
+		case panelTranscript:
+			if key.Matches(typed, a.keys.Send) && a.toggleTranscriptProcessExpansion() {
 				return a, batchUpdateCmds()
+			}
+			a.handleViewportKeys(&a.transcript, typed)
+			return a, batchUpdateCmds()
 		case panelActivity:
 			a.handleViewportKeys(&a.activity, typed)
 			return a, batchUpdateCmds()
@@ -5282,20 +5283,63 @@ func (a *App) normalizeComposerHeight() {
 }
 
 func (a *App) rebuildTranscript() {
+	a.rebuildTranscriptInternal(false)
+}
+
+func (a *App) rebuildTranscriptForFoldToggle() {
+	a.rebuildTranscriptInternal(true)
+}
+
+func (a *App) rebuildTranscriptInternal(foldToggleOnly bool) {
 	width := max(24, a.transcript.Width)
 	if len(a.activeMessages) == 0 {
 		queued := a.renderQueuedInterventionBlock(width)
 		if strings.TrimSpace(queued) == "" {
 			a.setTranscriptContent(a.styles.empty.Width(width).Render(emptyConversationText))
 			a.transcript.GotoTop()
+			if foldToggleOnly {
+				a.transcriptScrollbarDrag = false
+				a.clearTextSelection()
+			}
 			return
 		}
 		a.setTranscriptContent(queued)
 		a.transcript.GotoTop()
+		if foldToggleOnly {
+			a.transcriptScrollbarDrag = false
+			a.clearTextSelection()
+		}
 		return
 	}
 
 	atBottom := a.transcript.AtBottom()
+	content, hasBlock := a.composeTranscriptContent(width)
+	if !hasBlock {
+		a.setTranscriptContent(a.styles.empty.Width(width).Render(emptyConversationText))
+		a.transcript.GotoTop()
+		if foldToggleOnly {
+			a.transcriptScrollbarDrag = false
+			a.clearTextSelection()
+		}
+		return
+	}
+
+	a.setTranscriptContent(content)
+	if atBottom {
+		a.transcript.GotoBottom()
+	}
+
+	if foldToggleOnly {
+		a.transcriptScrollbarDrag = false
+		a.clearTextSelection()
+		maxOffset := a.transcriptMaxOffset()
+		if a.transcript.YOffset > maxOffset {
+			a.transcript.SetYOffset(maxOffset)
+		}
+	}
+}
+
+func (a *App) composeTranscriptContent(width int) (string, bool) {
 	foldSegments := findTranscriptProcessFoldSegments(a.activeMessages)
 	foldExists := len(foldSegments) > 0
 	a.transcriptProcessFoldAvailable = foldExists
@@ -5358,7 +5402,7 @@ func (a *App) rebuildTranscript() {
 		if inlineLog && lastRenderedRole == roleAssistant {
 			continuation = true
 		}
-		rendered, _ := a.renderMessageBlockWithCopy(message, width, 0, !continuation)
+		rendered := a.renderMessageBlockForTranscript(message, width, !continuation)
 		if rendered == "" {
 			continue
 		}
@@ -5386,15 +5430,36 @@ func (a *App) rebuildTranscript() {
 	}
 
 	if !hasBlock {
-		a.setTranscriptContent(a.styles.empty.Width(width).Render(emptyConversationText))
-		a.transcript.GotoTop()
-		return
+		return "", false
 	}
 
-	a.setTranscriptContent(builder.String())
-	if atBottom {
-		a.transcript.GotoBottom()
+	return builder.String(), true
+}
+
+func (a *App) renderMessageBlockForTranscript(message providertypes.Message, width int, includeTag bool) string {
+	if a.transcriptBlockRenderCache == nil {
+		a.transcriptBlockRenderCache = make(map[string]string)
 	}
+	key := transcriptBlockRenderCacheKey(message, width, includeTag)
+	if cached, ok := a.transcriptBlockRenderCache[key]; ok {
+		return cached
+	}
+
+	rendered, _ := a.renderMessageBlockWithCopy(message, width, 0, includeTag)
+	if rendered == "" {
+		return ""
+	}
+	if len(a.transcriptBlockRenderCache) >= transcriptBlockRenderCacheMax {
+		clear(a.transcriptBlockRenderCache)
+	}
+	a.transcriptBlockRenderCache[key] = rendered
+	return rendered
+}
+
+func transcriptBlockRenderCacheKey(message providertypes.Message, width int, includeTag bool) string {
+	content := renderMessagePartsForDisplay(message.Parts)
+	sum := sha256.Sum256([]byte(content))
+	return fmt.Sprintf("%s|%t|%d|%t|%x", message.Role, message.IsError, width, includeTag, sum[:8])
 }
 
 func (a *App) toggleTranscriptProcessExpansion() bool {
@@ -5427,7 +5492,7 @@ func (a *App) toggleTranscriptProcessExpansionWithAnchor(anchorViewportRow int, 
 	} else {
 		a.state.StatusText = "Process output collapsed"
 	}
-	a.rebuildTranscript()
+	a.rebuildTranscriptForFoldToggle()
 	if anchorViewportRow >= 0 {
 		a.pinTranscriptProcessControlRow(anchorViewportRow, controlOrdinal)
 	}
@@ -5792,6 +5857,7 @@ func (a *App) startDraftSession() {
 	a.startupScreenLocked = false
 	a.state.ActiveSessionTitle = draftSessionTitle
 	a.activeMessages = nil
+	clear(a.transcriptBlockRenderCache)
 	a.transcriptProcessFoldAvailable = false
 	a.transcriptProcessExpanded = false
 	a.clearActivities()
