@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import FileTreePanel from './FileTreePanel'
 import { useUIStore } from '@/stores/useUIStore'
 import { useWorkspaceStore } from '@/stores/useWorkspaceStore'
@@ -27,7 +27,10 @@ describe('FileTreePanel', () => {
     } as never)
     useWorkspaceStore.setState({
       currentWorkspaceHash: 'ws-1',
-      workspaces: [{ hash: 'ws-1', name: 'demo', path: 'D:/demo', createdAt: '', updatedAt: '' }],
+      workspaces: [
+        { hash: 'ws-1', name: 'demo-1', path: 'D:/demo-1', createdAt: '', updatedAt: '' },
+        { hash: 'ws-2', name: 'demo-2', path: 'D:/demo-2', createdAt: '', updatedAt: '' },
+      ],
     } as never)
   })
 
@@ -120,5 +123,141 @@ describe('FileTreePanel', () => {
 
     const scrollArea = screen.getByTestId('file-tree-scroll-area')
     expect(scrollArea).toHaveStyle({ overflowY: 'auto', minHeight: '0px', flex: '1 1 0%' })
+  })
+
+  it('reloads the root tree when the workspace changes', async () => {
+    mockGatewayAPI = {
+      listFiles: vi.fn().mockImplementation(async ({ path = '' }: { path?: string }) => {
+        const workspaceHash = useWorkspaceStore.getState().currentWorkspaceHash
+        if (path) {
+          return { payload: { files: [] } }
+        }
+        if (workspaceHash === 'ws-1') {
+          return {
+            payload: {
+              files: [{ name: 'old.go', path: 'old.go', is_dir: false }],
+            },
+          }
+        }
+        return {
+          payload: {
+            files: [{ name: 'new.ts', path: 'new.ts', is_dir: false }],
+          },
+        }
+      }),
+      readFile: vi.fn(),
+    }
+
+    render(<FileTreePanel />)
+
+    await waitFor(() => {
+      expect(screen.getByText('old.go')).toBeTruthy()
+    })
+
+    act(() => {
+      useWorkspaceStore.setState({ currentWorkspaceHash: 'ws-2' } as never)
+    })
+
+    await waitFor(() => {
+      expect(screen.getByText('new.ts')).toBeTruthy()
+    })
+    expect(screen.queryByText('old.go')).toBeNull()
+  })
+
+  it('does not keep expanded directory state across workspace switches', async () => {
+    mockGatewayAPI = {
+      listFiles: vi.fn().mockImplementation(async ({ path = '' }: { path?: string }) => {
+        const workspaceHash = useWorkspaceStore.getState().currentWorkspaceHash
+        if (!path) {
+          return {
+            payload: {
+              files: [{ name: 'src', path: 'src', is_dir: true }],
+            },
+          }
+        }
+
+        if (workspaceHash === 'ws-1') {
+          return {
+            payload: {
+              files: [{ name: 'old.txt', path: 'src/old.txt', is_dir: false }],
+            },
+          }
+        }
+        return {
+          payload: {
+            files: [{ name: 'new.txt', path: 'src/new.txt', is_dir: false }],
+          },
+        }
+      }),
+      readFile: vi.fn(),
+    }
+
+    render(<FileTreePanel />)
+
+    await waitFor(() => {
+      expect(screen.getByText('src')).toBeTruthy()
+    })
+
+    fireEvent.click(screen.getByText('src'))
+
+    await waitFor(() => {
+      expect(screen.getByText('old.txt')).toBeTruthy()
+    })
+
+    act(() => {
+      useWorkspaceStore.setState({ currentWorkspaceHash: 'ws-2' } as never)
+    })
+
+    await waitFor(() => {
+      expect(screen.getByText('src')).toBeTruthy()
+    })
+    expect(screen.queryByText('old.txt')).toBeNull()
+    expect(screen.queryByText('new.txt')).toBeNull()
+  })
+
+  it('ignores late root responses from the previous workspace', async () => {
+    let resolveOldRoot: ((value: { payload: { files: Array<{ name: string; path: string; is_dir: boolean }> } }) => void) | null = null
+
+    mockGatewayAPI = {
+      listFiles: vi.fn().mockImplementation(({ path = '' }: { path?: string }) => {
+        const workspaceHash = useWorkspaceStore.getState().currentWorkspaceHash
+        if (path) {
+          return Promise.resolve({ payload: { files: [] } })
+        }
+        if (workspaceHash === 'ws-1') {
+          return new Promise((resolve) => {
+            resolveOldRoot = resolve
+          })
+        }
+        return Promise.resolve({
+          payload: {
+            files: [{ name: 'new.ts', path: 'new.ts', is_dir: false }],
+          },
+        })
+      }),
+      readFile: vi.fn(),
+    }
+
+    render(<FileTreePanel />)
+
+    act(() => {
+      useWorkspaceStore.setState({ currentWorkspaceHash: 'ws-2' } as never)
+    })
+
+    await waitFor(() => {
+      expect(screen.getByText('new.ts')).toBeTruthy()
+    })
+
+    await act(async () => {
+      resolveOldRoot?.({
+        payload: {
+          files: [{ name: 'old.go', path: 'old.go', is_dir: false }],
+        },
+      })
+      await Promise.resolve()
+    })
+
+    expect(screen.getByText('new.ts')).toBeTruthy()
+    expect(screen.queryByText('old.go')).toBeNull()
   })
 })
