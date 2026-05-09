@@ -143,13 +143,9 @@ func EvaluateProgress(state ProgressState, input ProgressInput) ProgressState {
 		next.StalledProgressState = StalledProgressHealthy
 		next.ReminderKind = ReminderKindNone
 	}
-	if input.NoProgressLimit > 0 && next.NoProgressStreak >= input.NoProgressLimit {
+	if shouldTerminateAfterStalledReminder(state.LastScore, next) {
 		next.ShouldTerminate = true
-		next.TerminateReason = StopReasonNoProgress
-	}
-	if input.RepeatCycleLimit > 0 && next.RepeatCycleStreak >= input.RepeatCycleLimit {
-		next.ShouldTerminate = true
-		next.TerminateReason = StopReasonRepeatCycle
+		next.TerminateReason = stopReasonForReminderKind(next.ReminderKind)
 	}
 
 	return ProgressState{
@@ -157,6 +153,27 @@ func EvaluateProgress(state ProgressState, input ProgressInput) ProgressState {
 		LastToolSignature:      input.CurrentToolSignature,
 		LastResultFingerprint:  input.ResultFingerprint,
 		LastSubgoalFingerprint: input.SubgoalFingerprint,
+	}
+}
+
+// shouldTerminateAfterStalledReminder 只在同类 stalled 已提醒过一轮后才允许硬终止。
+func shouldTerminateAfterStalledReminder(previous ProgressScore, current ProgressScore) bool {
+	if current.StalledProgressState != StalledProgressStalled || current.ReminderKind == ReminderKindNone {
+		return false
+	}
+	return previous.StalledProgressState == StalledProgressStalled &&
+		previous.ReminderKind == current.ReminderKind
+}
+
+// stopReasonForReminderKind 将当前 stalled 提醒类型映射为最终终止原因。
+func stopReasonForReminderKind(kind ReminderKind) StopReason {
+	switch kind {
+	case ReminderKindRepeatCycle:
+		return StopReasonRepeatCycle
+	case ReminderKindNoProgress, ReminderKindGenericStalled:
+		return StopReasonNoProgress
+	default:
+		return StopReasonNoProgress
 	}
 }
 
@@ -202,10 +219,8 @@ func isExplorationProgress(runState RunState, flags evidenceFlags) bool {
 // explorationWindowForPhase 返回不同阶段允许的 exploration 宽容窗口。
 func explorationWindowForPhase(runState RunState) int {
 	switch runState {
-	case RunStatePlan:
-		return 10
-	case RunStateExecute:
-		return 6
+	case RunStatePlan, RunStateExecute:
+		return 15
 	default:
 		return 0
 	}

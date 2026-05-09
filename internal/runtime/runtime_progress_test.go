@@ -16,7 +16,7 @@ import (
 	todotool "neo-code/internal/tools/todo"
 )
 
-func TestProgressStreakNoLongerStopsRun(t *testing.T) {
+func TestProgressStreakWarnsAndAllowsRecovery(t *testing.T) {
 	t.Setenv("TEST_KEY", "dummy")
 
 	cfg := config.Config{
@@ -45,16 +45,14 @@ func TestProgressStreakNoLongerStopsRun(t *testing.T) {
 	providerFactory := &scriptedProviderFactory{
 		provider: &scriptedProvider{
 			chatFn: func(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error {
-				call := atomic.AddInt32(&providerCalls, 1)
-				seq := atomic.AddInt32(&signatureSeq, 1)
+				atomic.AddInt32(&providerCalls, 1)
 				if strings.Contains(req.SystemPrompt, selfHealingReminder) {
 					promptInjected = true
-				}
-				if call >= 5 {
 					events <- providertypes.NewTextDeltaStreamEvent("{\"task_completion\":{\"completed\":true}}\ndone")
 					events <- providertypes.NewMessageDoneStreamEvent("stop", nil)
 					return nil
 				}
+				seq := atomic.AddInt32(&signatureSeq, 1)
 				// the model always decides to call the tool
 				events <- providertypes.NewToolCallStartStreamEvent(0, "call_err", "tool_error")
 				events <- providertypes.NewToolCallDeltaStreamEvent(
@@ -84,14 +82,83 @@ func TestProgressStreakNoLongerStopsRun(t *testing.T) {
 	}
 
 	if err := service.Run(context.Background(), input); err != nil {
+		t.Fatalf("expected run to recover after no-progress reminder, got %v", err)
+	}
+
+	events := collectRuntimeEvents(service.Events())
+	assertStopReasonDecided(t, events, controlplane.StopReasonAccepted, "")
+
+	if !promptInjected {
+		t.Error("expected self-healing prompt injection before recovery")
+	}
+	if providerCalls != 4 {
+		t.Fatalf("expected 4 provider turns including reminder recovery, got %d", providerCalls)
+	}
+}
+
+func TestProgressStreakTerminatesAfterReminderIfStillStalled(t *testing.T) {
+	t.Setenv("TEST_KEY", "dummy")
+
+	cfg := config.Config{
+		Providers:        []config.ProviderConfig{{Name: "test-progress-hard-stop", Driver: "test", BaseURL: "http://localhost", Model: "test", APIKeyEnv: "TEST_KEY"}},
+		SelectedProvider: "test-progress-hard-stop",
+		Workdir:          t.TempDir(),
+		Runtime: config.RuntimeConfig{
+			MaxNoProgressStreak:  2,
+			MaxRepeatCycleStreak: 6,
+		},
+	}
+
+	var executeCalls int32
+	toolManager := &stubToolManager{
+		specs: []providertypes.ToolSpec{{Name: "tool_error"}},
+		executeFn: func(ctx context.Context, input tools.ToolCallInput) (tools.ToolResult, error) {
+			atomic.AddInt32(&executeCalls, 1)
+			return tools.ToolResult{Name: input.Name, Content: "error occurred", IsError: true}, nil
+		},
+	}
+
+	var promptInjected bool
+	var providerCalls int32
+	var signatureSeq int32
+	providerFactory := &scriptedProviderFactory{
+		provider: &scriptedProvider{
+			chatFn: func(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error {
+				atomic.AddInt32(&providerCalls, 1)
+				if strings.Contains(req.SystemPrompt, selfHealingReminder) {
+					promptInjected = true
+				}
+				seq := atomic.AddInt32(&signatureSeq, 1)
+				events <- providertypes.NewToolCallStartStreamEvent(0, "call_err", "tool_error")
+				events <- providertypes.NewToolCallDeltaStreamEvent(
+					0,
+					"call_err",
+					`{"seq":`+strconv.FormatInt(int64(seq), 10)+`}`,
+				)
+				events <- providertypes.NewMessageDoneStreamEvent("tool_calls", nil)
+				return nil
+			},
+		},
+	}
+
+	manager := config.NewManager(config.NewLoader(t.TempDir(), &cfg))
+	service := NewWithFactory(manager, toolManager, newMemoryStore(), providerFactory, nil)
+
+	if err := service.Run(context.Background(), UserInput{
+		RunID: "run-progress-hard-stop",
+		Parts: []providertypes.ContentPart{providertypes.NewTextPart("trigger unrecovered error loop")},
+	}); err != nil {
 		t.Fatalf("expected run to stop cleanly on no-progress, got %v", err)
 	}
 
 	events := collectRuntimeEvents(service.Events())
 	assertStopReasonDecided(t, events, controlplane.StopReasonNoProgress, "")
 
-	if promptInjected {
-		t.Error("did not expect self-healing prompt injection after hard no-progress termination")
+	if !promptInjected {
+		t.Fatal("expected self-healing prompt injection before hard no-progress termination")
+	}
+	if executeCalls != 3 {
+		t.Fatalf("expected 3 tool executions before no-progress termination, got %d", executeCalls)
 	}
 	if providerCalls != 3 {
 		t.Fatalf("expected 3 provider turns before no-progress termination, got %d", providerCalls)
@@ -233,20 +300,83 @@ func TestRepeatCycleStreakNoLongerStopsRunAndInjectsReminder(t *testing.T) {
 		Parts: []providertypes.ContentPart{providertypes.NewTextPart("trigger repeat loop")},
 	})
 	if err != nil {
+		t.Fatalf("expected run to recover after repeat-cycle reminder, got %v", err)
+	}
+
+	events := collectRuntimeEvents(service.Events())
+	assertStopReasonDecided(t, events, controlplane.StopReasonAccepted, "")
+
+	if !promptInjected {
+		t.Fatal("expected repeat self-healing prompt injection before recovery")
+	}
+	if executeCalls != 4 {
+		t.Fatalf("expected 4 repeated tool executions before repeat reminder recovery, got %d", executeCalls)
+	}
+	if providerCalls != 5 {
+		t.Fatalf("expected 5 provider turns including recovery response, got %d", providerCalls)
+	}
+}
+
+func TestRepeatCycleTerminatesAfterReminderIfStillStalled(t *testing.T) {
+	t.Setenv("TEST_KEY", "dummy")
+
+	cfg := config.Config{
+		Providers:        []config.ProviderConfig{{Name: "test-repeat-hard-stop", Driver: "test", BaseURL: "http://localhost", Model: "test", APIKeyEnv: "TEST_KEY"}},
+		SelectedProvider: "test-repeat-hard-stop",
+		Workdir:          t.TempDir(),
+		Runtime: config.RuntimeConfig{
+			MaxNoProgressStreak:  10,
+			MaxRepeatCycleStreak: 3,
+		},
+	}
+
+	var executeCalls int32
+	var providerCalls int32
+	toolManager := &stubToolManager{
+		specs: []providertypes.ToolSpec{{Name: "tool_repeat"}},
+		executeFn: func(ctx context.Context, input tools.ToolCallInput) (tools.ToolResult, error) {
+			atomic.AddInt32(&executeCalls, 1)
+			return tools.ToolResult{Name: input.Name, Content: "ok", IsError: false}, nil
+		},
+	}
+
+	var promptInjected bool
+	providerFactory := &scriptedProviderFactory{
+		provider: &scriptedProvider{
+			chatFn: func(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error {
+				atomic.AddInt32(&providerCalls, 1)
+				if strings.Contains(req.SystemPrompt, selfHealingRepeatReminder) {
+					promptInjected = true
+				}
+				events <- providertypes.NewToolCallStartStreamEvent(0, "call_repeat", "tool_repeat")
+				events <- providertypes.NewToolCallDeltaStreamEvent(0, "call_repeat", `{"path":"x"}`)
+				events <- providertypes.NewMessageDoneStreamEvent("tool_calls", nil)
+				return nil
+			},
+		},
+	}
+
+	manager := config.NewManager(config.NewLoader(t.TempDir(), &cfg))
+	service := NewWithFactory(manager, toolManager, newMemoryStore(), providerFactory, nil)
+
+	if err := service.Run(context.Background(), UserInput{
+		RunID: "run-repeat-hard-stop",
+		Parts: []providertypes.ContentPart{providertypes.NewTextPart("trigger unrecovered repeat loop")},
+	}); err != nil {
 		t.Fatalf("expected run to stop cleanly on repeat-cycle, got %v", err)
 	}
 
 	events := collectRuntimeEvents(service.Events())
 	assertStopReasonDecided(t, events, controlplane.StopReasonRepeatCycle, "")
 
-	if promptInjected {
-		t.Fatal("did not expect repeat self-healing prompt injection after hard repeat-cycle termination")
+	if !promptInjected {
+		t.Fatal("expected repeat self-healing prompt injection before hard repeat-cycle termination")
 	}
-	if executeCalls != 4 {
-		t.Fatalf("expected repeated tool executions to stop at repeat limit, got %d", executeCalls)
+	if executeCalls != 5 {
+		t.Fatalf("expected 5 repeated tool executions before repeat-cycle termination, got %d", executeCalls)
 	}
-	if providerCalls != 4 {
-		t.Fatalf("expected 4 provider turns before repeat-cycle termination, got %d", providerCalls)
+	if providerCalls != 5 {
+		t.Fatalf("expected 5 provider turns before repeat-cycle termination, got %d", providerCalls)
 	}
 }
 
@@ -306,14 +436,16 @@ func TestRepeatCycleFailedCallsNoLongerHardStop(t *testing.T) {
 		Parts: []providertypes.ContentPart{providertypes.NewTextPart("trigger repeat fail loop")},
 	})
 	if err != nil {
-		t.Fatalf("expected run to stop cleanly on repeat-cycle, got %v", err)
+		t.Fatalf("expected run to recover after repeat-cycle reminder, got %v", err)
 	}
 	if executeCalls != 4 {
-		t.Fatalf("expected failed repeated calls to stop at repeat limit, got %d", executeCalls)
+		t.Fatalf("expected 4 failed repeated calls before recovery, got %d", executeCalls)
 	}
-	if providerCalls != 4 {
-		t.Fatalf("expected 4 provider turns before repeat-cycle termination, got %d", providerCalls)
+	if providerCalls != 5 {
+		t.Fatalf("expected 5 provider turns including recovery response, got %d", providerCalls)
 	}
+	events := collectRuntimeEvents(service.Events())
+	assertStopReasonDecided(t, events, controlplane.StopReasonAccepted, "")
 }
 
 func TestRunStopsWhenMaxTurnsReached(t *testing.T) {
