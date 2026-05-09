@@ -316,6 +316,7 @@ function BudgetTokenStrip() {
   const tokenUsage = useChatStore((s) => s.tokenUsage)
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
+  const [popoverStyle, setPopoverStyle] = useState<React.CSSProperties>({})
 
   const totalTokens = tokenUsage ? tokenUsage.input_tokens + tokenUsage.output_tokens : 0
   const ratio = budgetUsageRatio ?? 0
@@ -332,11 +333,38 @@ function BudgetTokenStrip() {
   // Click outside to close
   useEffect(() => {
     if (!open) return
+
+    /** 根据锚点动态计算弹层位置，避免被容器裁剪或超出视口。 */
+    function updatePopoverPosition() {
+      const anchor = ref.current
+      if (!anchor) return
+      const rect = anchor.getBoundingClientRect()
+      const width = 260
+      const leftMin = 12
+      const leftMax = Math.max(leftMin, window.innerWidth - width - 12)
+      const preferredLeft = rect.right - width + 6
+      const left = Math.min(leftMax, Math.max(leftMin, preferredLeft))
+      const bottom = Math.max(36, window.innerHeight - rect.top + 8)
+      setPopoverStyle({
+        position: 'fixed',
+        left,
+        bottom,
+        width,
+      })
+    }
+
+    updatePopoverPosition()
     function click(e: MouseEvent) {
       if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
     }
+    window.addEventListener('resize', updatePopoverPosition)
+    window.addEventListener('scroll', updatePopoverPosition, true)
     document.addEventListener('mousedown', click)
-    return () => document.removeEventListener('mousedown', click)
+    return () => {
+      window.removeEventListener('resize', updatePopoverPosition)
+      window.removeEventListener('scroll', updatePopoverPosition, true)
+      document.removeEventListener('mousedown', click)
+    }
   }, [open])
 
   if (!budgetChecked && !totalTokens) return null
@@ -364,7 +392,7 @@ function BudgetTokenStrip() {
       </div>
 
       {open && (
-        <div className="budget-popover" style={{ bottom: 28, right: -8 }}>
+        <div className="budget-popover" style={popoverStyle}>
           <div className="budget-popover-title">用量明细</div>
           {budgetEstimateFailed ? (
             <div style={{ color: 'var(--error)', fontSize: 11 }}>{budgetEstimateFailed.message}</div>
