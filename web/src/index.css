@@ -56,6 +56,7 @@
   /* Typography */
   --font-ui:        system-ui, -apple-system, 'SF Pro Text', 'SF Pro Display', sans-serif;
   --font-mono:      'JetBrains Mono', 'SF Mono', 'Fira Code', ui-monospace, monospace;
+  --font-code:      'JetBrains Mono', 'Cascadia Mono', 'SF Mono', 'Fira Code', Consolas, 'Courier New', monospace;
 
   /* Spacing scale (4px base) */
   --space-1: 4px;
@@ -717,7 +718,7 @@ html, body, #root {
   color: var(--text-primary);
 }
 .markdown-streamdown [data-streamdown="inline-code"] {
-  font-family: var(--font-mono);
+  font-family: var(--font-code);
   font-size: 0.88em;
   padding: 1px 6px;
   border-radius: var(--radius-sm);
@@ -772,7 +773,7 @@ html, body, #root {
   background: var(--code-header);
 }
 .markdown-streamdown [data-streamdown="code-block-header"] span {
-  font-family: var(--font-mono);
+  font-family: var(--font-code);
   font-size: 11px;
   color: var(--text-secondary);
   font-weight: 600;
@@ -782,7 +783,7 @@ html, body, #root {
   margin: 0;
   padding: 10px 12px;
   overflow: auto;
-  font-family: var(--font-mono);
+  font-family: var(--font-code);
   font-size: 12.5px;
   line-height: 1.7;
 }
