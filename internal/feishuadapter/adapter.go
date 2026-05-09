@@ -8,6 +8,7 @@ import (
 	"log"
 	"math/rand"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -34,6 +35,7 @@ type userQuestionEntry struct {
 	Kind        string
 	Options     []UserQuestionCardOption
 	AllowSkip   bool
+	MaxChoices  int
 }
 
 type sessionBinding struct {
@@ -660,6 +662,7 @@ func (a *Adapter) markUserQuestionPending(sessionID string, runID string, questi
 		Kind:        strings.TrimSpace(strings.ToLower(question.Kind)),
 		Options:     append([]UserQuestionCardOption(nil), question.Options...),
 		AllowSkip:   question.AllowSkip,
+		MaxChoices:  question.MaxChoices,
 	}
 	a.mu.Unlock()
 	return true
@@ -970,14 +973,14 @@ func (a *Adapter) parseUserQuestionTextAnswer(requestID string, answer string) (
 		if trimmedAnswer == "" {
 			return nil, "", false
 		}
-		selected := normalizeChoiceToken(trimmedAnswer)
-		for _, option := range question.Options {
-			label := strings.TrimSpace(option.Label)
-			if normalizeChoiceToken(label) == selected {
-				return []string{label}, "", true
-			}
+		if len(question.Options) == 0 {
+			return []string{trimmedAnswer}, "", true
 		}
-		return []string{trimmedAnswer}, "", true
+		matched, ok := resolveChoiceLabel(trimmedAnswer, question.Options)
+		if !ok {
+			return nil, "", false
+		}
+		return []string{matched}, "", true
 	case "multi_choice":
 		if trimmedAnswer == "" {
 			return nil, "", false
@@ -988,27 +991,51 @@ func (a *Adapter) parseUserQuestionTextAnswer(requestID string, answer string) (
 		}
 		selected := make([]string, 0, len(rawTokens))
 		for _, token := range rawTokens {
-			normalized := normalizeChoiceToken(token)
-			matched := ""
-			for _, option := range question.Options {
-				label := strings.TrimSpace(option.Label)
-				if normalizeChoiceToken(label) == normalized {
-					matched = label
-					break
-				}
+			if len(question.Options) == 0 {
+				selected = append(selected, token)
+				continue
 			}
-			if matched == "" {
-				matched = token
+			matched, ok := resolveChoiceLabel(token, question.Options)
+			if !ok {
+				return nil, "", false
 			}
 			selected = append(selected, matched)
 		}
-		return uniqueNonEmptyStrings(selected), "", true
+		selected = uniqueNonEmptyStrings(selected)
+		if question.MaxChoices > 0 && len(selected) > question.MaxChoices {
+			return nil, "", false
+		}
+		return selected, "", true
 	default:
 		if trimmedAnswer == "" {
 			return nil, "", false
 		}
 		return []string{trimmedAnswer}, trimmedAnswer, true
 	}
+}
+
+// resolveChoiceLabel 解析单个选项输入，支持按标签文本或 1-based 序号匹配。
+func resolveChoiceLabel(raw string, options []UserQuestionCardOption) (string, bool) {
+	token := strings.TrimSpace(raw)
+	if token == "" {
+		return "", false
+	}
+	if index, err := strconv.Atoi(token); err == nil {
+		if index >= 1 && index <= len(options) {
+			label := strings.TrimSpace(options[index-1].Label)
+			if label != "" {
+				return label, true
+			}
+		}
+	}
+	normalizedToken := normalizeChoiceToken(token)
+	for _, option := range options {
+		label := strings.TrimSpace(option.Label)
+		if normalizeChoiceToken(label) == normalizedToken {
+			return label, true
+		}
+	}
+	return "", false
 }
 
 // splitRequestAndBody 将“<request_id> <body>”文本分离为 request_id 与正文。
@@ -1122,6 +1149,7 @@ func extractUserQuestionRequest(envelope map[string]any) userQuestionEntry {
 		Description: strings.TrimSpace(readString(payload, "description")),
 		Kind:        strings.TrimSpace(strings.ToLower(readString(payload, "kind"))),
 		AllowSkip:   readBool(payload, "allow_skip"),
+		MaxChoices:  readInt(payload, "max_choices"),
 	}
 	rawOptions, _ := payload["options"].([]any)
 	if len(rawOptions) > 0 {
@@ -1280,6 +1308,29 @@ func readBool(m map[string]any, key string) bool {
 	}
 	value, _ := m[key].(bool)
 	return value
+}
+
+// readInt 从松散 map 中读取 int 字段，不可解析时返回 0。
+func readInt(m map[string]any, key string) int {
+	if m == nil {
+		return 0
+	}
+	switch typed := m[key].(type) {
+	case int:
+		return typed
+	case int32:
+		return int(typed)
+	case int64:
+		return int(typed)
+	case float64:
+		return int(typed)
+	case json.Number:
+		value, err := typed.Int64()
+		if err == nil {
+			return int(value)
+		}
+	}
+	return 0
 }
 
 // extractHookNotificationSummary 提取 async_rewake 等通知摘要并写入卡片，便于下轮继续追踪。

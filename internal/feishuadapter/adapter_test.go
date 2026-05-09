@@ -1198,6 +1198,68 @@ func TestTryHandleTextPermissionHandlesAskUserAnswerAndSkip(t *testing.T) {
 	}
 }
 
+func TestTryHandleTextPermissionRejectsInvalidChoiceAnswer(t *testing.T) {
+	adapter := newTestAdapter(t)
+	sessionID := BuildSessionID("chat-ask-invalid-choice")
+	runID := BuildRunID("msg-ask-invalid-choice")
+	adapter.trackSession(sessionID, runID, "chat-ask-invalid-choice", "ask invalid choice task")
+	adapter.markUserQuestionPending(sessionID, runID, userQuestionEntry{
+		RequestID:  "ask-invalid-choice-1",
+		QuestionID: "q-invalid-choice-1",
+		Title:      "选择发布环境",
+		Kind:       "single_choice",
+		Options: []UserQuestionCardOption{
+			{Label: "测试环境"},
+			{Label: "生产环境"},
+		},
+		AllowSkip: true,
+	})
+
+	handled, err := adapter.tryHandleTextPermission(context.Background(), "chat-ask-invalid-choice", "回答 ask-invalid-choice-1 staging")
+	if err != nil || !handled {
+		t.Fatalf("invalid single_choice answer = handled:%v err:%v", handled, err)
+	}
+	if adapterTestGateway(adapter).resolveCount != 0 {
+		t.Fatalf("resolve count = %d, want 0 for invalid answer", adapterTestGateway(adapter).resolveCount)
+	}
+	msgs := adapterTestMessenger(adapter).snapshot()
+	if len(msgs) == 0 || msgs[len(msgs)-1].text != "回答格式无效，请使用：回答 <request_id> <内容>" {
+		t.Fatalf("unexpected invalid answer reply: %#v", msgs)
+	}
+}
+
+func TestTryHandleTextPermissionRejectsMultiChoiceExceedingMaxChoices(t *testing.T) {
+	adapter := newTestAdapter(t)
+	sessionID := BuildSessionID("chat-ask-max-choice")
+	runID := BuildRunID("msg-ask-max-choice")
+	adapter.trackSession(sessionID, runID, "chat-ask-max-choice", "ask max choice task")
+	adapter.markUserQuestionPending(sessionID, runID, userQuestionEntry{
+		RequestID:  "ask-max-choice-1",
+		QuestionID: "q-max-choice-1",
+		Title:      "选择要发布的区域",
+		Kind:       "multi_choice",
+		Options: []UserQuestionCardOption{
+			{Label: "华北"},
+			{Label: "华东"},
+			{Label: "华南"},
+		},
+		MaxChoices: 2,
+		AllowSkip:  true,
+	})
+
+	handled, err := adapter.tryHandleTextPermission(context.Background(), "chat-ask-max-choice", "回答 ask-max-choice-1 华北,华东,华南")
+	if err != nil || !handled {
+		t.Fatalf("max_choices exceed answer = handled:%v err:%v", handled, err)
+	}
+	if adapterTestGateway(adapter).resolveCount != 0 {
+		t.Fatalf("resolve count = %d, want 0 when max_choices exceeded", adapterTestGateway(adapter).resolveCount)
+	}
+	msgs := adapterTestMessenger(adapter).snapshot()
+	if len(msgs) == 0 || msgs[len(msgs)-1].text != "回答格式无效，请使用：回答 <request_id> <内容>" {
+		t.Fatalf("unexpected max_choices reply: %#v", msgs)
+	}
+}
+
 func TestTryHandleTextPermissionHandlesEmptyAndUnknownCommands(t *testing.T) {
 	adapter := newTestAdapter(t)
 	for _, testCase := range []struct {

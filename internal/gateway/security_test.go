@@ -35,6 +35,8 @@ func TestStrictACLAllowlist(t *testing.T) {
 		{source: RequestSourceHTTP, method: "checkpoint.restore", want: true},
 		{source: RequestSourceHTTP, method: "checkpoint.undoRestore", want: true},
 		{source: RequestSourceHTTP, method: "checkpoint.diff", want: true},
+		{source: RequestSourceHTTP, method: "gateway.userQuestionAnswer", want: true},
+		{source: RequestSourceHTTP, method: "gateway.user_question_answer", want: true},
 		{source: RequestSourceUnknown, method: "gateway.ping", want: false},
 	}
 	for _, tc := range cases {
