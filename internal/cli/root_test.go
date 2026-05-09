@@ -1051,6 +1051,10 @@ func (stubRuntimePort) ResolvePermission(context.Context, gateway.PermissionReso
 	return nil
 }
 
+func (stubRuntimePort) ResolveUserQuestion(context.Context, gateway.UserQuestionAnswerInput) error {
+	return nil
+}
+
 func (stubRuntimePort) CancelRun(context.Context, gateway.CancelInput) (bool, error) {
 	return false, nil
 }

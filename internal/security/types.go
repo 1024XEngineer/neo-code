@@ -29,16 +29,17 @@ func (d Decision) Validate() error {
 type ActionType string
 
 const (
-	ActionTypeBash  ActionType = "bash"
-	ActionTypeRead  ActionType = "read"
-	ActionTypeWrite ActionType = "write"
-	ActionTypeMCP   ActionType = "mcp"
+	ActionTypeBash        ActionType = "bash"
+	ActionTypeRead        ActionType = "read"
+	ActionTypeWrite       ActionType = "write"
+	ActionTypeMCP         ActionType = "mcp"
+	ActionTypeInteraction ActionType = "interaction"
 )
 
 // Validate reports whether the action type is supported.
 func (a ActionType) Validate() error {
 	switch a {
-	case ActionTypeBash, ActionTypeRead, ActionTypeWrite, ActionTypeMCP:
+	case ActionTypeBash, ActionTypeRead, ActionTypeWrite, ActionTypeMCP, ActionTypeInteraction:
 		return nil
 	default:
 		return fmt.Errorf("security: invalid action type %q", a)

@@ -115,6 +115,10 @@ func (s *rpcRunCaptureRuntimeStub) ResolvePermission(_ context.Context, _ Permis
 	return nil
 }
 
+func (s *rpcRunCaptureRuntimeStub) ResolveUserQuestion(_ context.Context, _ UserQuestionAnswerInput) error {
+	return nil
+}
+
 func (s *rpcRunCaptureRuntimeStub) CancelRun(_ context.Context, _ CancelInput) (bool, error) {
 	return false, nil
 }
@@ -1012,6 +1016,9 @@ func (s *runtimePortOnlyStub) ListAvailableSkills(_ context.Context, _ ListAvail
 	return nil, nil
 }
 func (s *runtimePortOnlyStub) ResolvePermission(_ context.Context, _ PermissionResolutionInput) error {
+	return nil
+}
+func (s *runtimePortOnlyStub) ResolveUserQuestion(_ context.Context, _ UserQuestionAnswerInput) error {
 	return nil
 }
 func (s *runtimePortOnlyStub) CancelRun(_ context.Context, _ CancelInput) (bool, error) {

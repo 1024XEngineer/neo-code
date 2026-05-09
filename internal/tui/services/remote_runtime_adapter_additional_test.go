@@ -135,7 +135,8 @@ func TestRemoteRuntimeAdapterCompactResolvePermissionAndListSessions(t *testing.
 					TranscriptID: "t-1",
 				},
 			},
-			protocol.MethodGatewayResolvePermission: {Type: gateway.FrameTypeAck, Action: gateway.FrameActionResolvePermission},
+			protocol.MethodGatewayResolvePermission:  {Type: gateway.FrameTypeAck, Action: gateway.FrameActionResolvePermission},
+			protocol.MethodGatewayUserQuestionAnswer: {Type: gateway.FrameTypeAck, Action: gateway.FrameActionUserQuestionAnswer},
 			protocol.MethodGatewayListSessions: {
 				Type:   gateway.FrameTypeAck,
 				Action: gateway.FrameActionListSessions,
@@ -164,6 +165,21 @@ func TestRemoteRuntimeAdapterCompactResolvePermissionAndListSessions(t *testing.
 
 	if err := adapter.ResolvePermission(context.Background(), PermissionResolutionInput{RequestID: " req ", Decision: "APPROVE"}); err != nil {
 		t.Fatalf("ResolvePermission() error = %v", err)
+	}
+	if err := adapter.ResolveUserQuestion(context.Background(), UserQuestionResolutionInput{
+		RequestID: " ask-1 ",
+		Status:    " ANSWERED ",
+		Values:    []string{"A"},
+		Message:   " done ",
+	}); err != nil {
+		t.Fatalf("ResolveUserQuestion() error = %v", err)
+	}
+	questionParams, ok := rpcClient.snapshotParams()[protocol.MethodGatewayUserQuestionAnswer].(protocol.UserQuestionAnswerParams)
+	if !ok {
+		t.Fatalf("userQuestionAnswer params type = %T", rpcClient.snapshotParams()[protocol.MethodGatewayUserQuestionAnswer])
+	}
+	if questionParams.RequestID != "ask-1" || questionParams.Status != "answered" || questionParams.Message != "done" {
+		t.Fatalf("unexpected userQuestionAnswer params: %#v", questionParams)
 	}
 
 	summaries, err := adapter.ListSessions(context.Background())

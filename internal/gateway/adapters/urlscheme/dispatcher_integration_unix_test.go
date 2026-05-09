@@ -159,6 +159,13 @@ func (s *urlschemeIntegrationRuntimeStub) ResolvePermission(
 	return nil
 }
 
+func (s *urlschemeIntegrationRuntimeStub) ResolveUserQuestion(
+	context.Context,
+	gateway.UserQuestionAnswerInput,
+) error {
+	return nil
+}
+
 func (s *urlschemeIntegrationRuntimeStub) CancelRun(context.Context, gateway.CancelInput) (bool, error) {
 	return false, nil
 }

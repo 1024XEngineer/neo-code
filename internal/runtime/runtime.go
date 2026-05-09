@@ -18,6 +18,7 @@ import (
 	providertypes "neo-code/internal/provider/types"
 	"neo-code/internal/repository"
 	"neo-code/internal/runtime/approval"
+	"neo-code/internal/runtime/askuser"
 	runtimehooks "neo-code/internal/runtime/hooks"
 	"neo-code/internal/security"
 	agentsession "neo-code/internal/session"
@@ -41,6 +42,7 @@ type Runtime interface {
 	Compact(ctx context.Context, input CompactInput) (CompactResult, error)
 	ExecuteSystemTool(ctx context.Context, input SystemToolInput) (tools.ToolResult, error)
 	ResolvePermission(ctx context.Context, input PermissionResolutionInput) error
+	ResolveUserQuestion(ctx context.Context, input UserQuestionResolutionInput) error
 	CancelActiveRun() bool
 	Events() <-chan RuntimeEvent
 	ListSessions(ctx context.Context) ([]agentsession.Summary, error)
@@ -180,6 +182,7 @@ type Service struct {
 	repositoryService repositoryFactService
 	compactRunner     contextcompact.Runner
 	approvalBroker    *approval.Broker
+	askUserBroker     *askuser.Broker
 	memoExtractor     MemoExtractor
 	skillsRegistry    skills.Registry
 	budgetResolver    BudgetResolver
@@ -265,6 +268,7 @@ func NewWithFactory(
 		contextBuilder:     contextBuilder,
 		repositoryService:  repository.NewService(),
 		approvalBroker:     approval.NewBroker(),
+		askUserBroker:      askuser.NewBroker(),
 		events:             make(chan RuntimeEvent, 128),
 		runtimeSnapshots:   make(map[string]RuntimeSnapshot),
 		sessionLocks:       make(map[string]*sessionLockEntry),
@@ -530,4 +534,13 @@ func (s *Service) SetHookExecutor(executor HookExecutor) {
 func (s *Service) SetCheckpointDependencies(store checkpoint.CheckpointStore, perEdit *checkpoint.PerEditSnapshotStore) {
 	s.checkpointStore = store
 	s.perEditStore = perEdit
+}
+
+// AskUserBrokerAdapter returns a tools.AskUserBroker backed by this runtime's ask_user broker.
+// Returns nil if the broker hasn't been initialized.
+func (s *Service) AskUserBrokerAdapter() tools.AskUserBroker {
+	if s.askUserBroker == nil {
+		return nil
+	}
+	return newAskUserBrokerAdapter(s.askUserBroker)
 }

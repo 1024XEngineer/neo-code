@@ -477,6 +477,19 @@ func (b *gatewayRuntimePortBridge) ResolvePermission(ctx context.Context, input 
 	})
 }
 
+// ResolveUserQuestion 将网关 ask_user 回答转发到 runtime。
+func (b *gatewayRuntimePortBridge) ResolveUserQuestion(ctx context.Context, input gateway.UserQuestionAnswerInput) error {
+	if err := b.ensureRuntimeAccess(input.SubjectID); err != nil {
+		return err
+	}
+	return b.runtime.ResolveUserQuestion(ctx, agentruntime.UserQuestionResolutionInput{
+		RequestID: strings.TrimSpace(input.RequestID),
+		Status:    strings.TrimSpace(input.Status),
+		Values:    input.Values,
+		Message:   strings.TrimSpace(input.Message),
+	})
+}
+
 // CancelRun 转发 gateway.cancel 请求到 runtime 的 run_id 精确取消能力。
 func (b *gatewayRuntimePortBridge) CancelRun(_ context.Context, input gateway.CancelInput) (bool, error) {
 	if err := b.ensureRuntimeAccess(input.SubjectID); err != nil {

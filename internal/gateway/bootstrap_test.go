@@ -140,6 +140,10 @@ func (s *bootstrapRuntimeStub) ResolvePermission(ctx context.Context, input Perm
 	return nil
 }
 
+func (s *bootstrapRuntimeStub) ResolveUserQuestion(ctx context.Context, input UserQuestionAnswerInput) error {
+	return nil
+}
+
 func (s *bootstrapRuntimeStub) CancelRun(ctx context.Context, input CancelInput) (bool, error) {
 	if s != nil && s.cancelRunFn != nil {
 		return s.cancelRunFn(ctx, input)
@@ -4778,6 +4782,9 @@ func (runtimeOnlyStub) ListAvailableSkills(ctx context.Context, input ListAvaila
 	return nil, nil
 }
 func (runtimeOnlyStub) ResolvePermission(ctx context.Context, input PermissionResolutionInput) error {
+	return nil
+}
+func (runtimeOnlyStub) ResolveUserQuestion(ctx context.Context, input UserQuestionAnswerInput) error {
 	return nil
 }
 func (runtimeOnlyStub) CancelRun(ctx context.Context, input CancelInput) (bool, error) {

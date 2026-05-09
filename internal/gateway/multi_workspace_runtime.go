@@ -345,6 +345,14 @@ func (m *MultiWorkspaceRuntime) ResolvePermission(ctx context.Context, input Per
 	return port.ResolvePermission(ctx, input)
 }
 
+func (m *MultiWorkspaceRuntime) ResolveUserQuestion(ctx context.Context, input UserQuestionAnswerInput) error {
+	port, err := m.getPort(ctx)
+	if err != nil {
+		return err
+	}
+	return port.ResolveUserQuestion(ctx, input)
+}
+
 func (m *MultiWorkspaceRuntime) CancelRun(ctx context.Context, input CancelInput) (bool, error) {
 	port, err := m.getPort(ctx)
 	if err != nil {

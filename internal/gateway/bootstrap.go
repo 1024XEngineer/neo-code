@@ -1539,6 +1539,44 @@ func handleDeleteMCPServerFrame(ctx context.Context, frame MessageFrame, runtime
 	return MessageFrame{Type: FrameTypeAck, Action: FrameActionDeleteMCPServer, RequestID: frame.RequestID, Payload: map[string]any{"deleted": true, "id": input.ID}}
 }
 
+// handleUserQuestionAnswerFrame 处理 gateway.user_question_answer 请求。
+func handleUserQuestionAnswerFrame(ctx context.Context, frame MessageFrame, runtimePort RuntimePort) MessageFrame {
+	if runtimePort == nil {
+		return runtimePortUnavailableFrame(frame)
+	}
+	subjectID, subjectErr := requireAuthenticatedSubjectID(ctx)
+	if subjectErr != nil {
+		return errorFrame(frame, subjectErr)
+	}
+
+	input, err := decodeUserQuestionAnswerPayload(frame.Payload)
+	if err != nil {
+		return errorFrame(frame, NewFrameError(ErrorCodeInvalidAction, "invalid user_question_answer payload"))
+	}
+	input.SubjectID = subjectID
+	input.RequestID = strings.TrimSpace(input.RequestID)
+	if input.RequestID == "" {
+		return errorFrame(frame, NewMissingRequiredFieldError("payload.request_id"))
+	}
+
+	callCtx, cancel := withRuntimeOperationTimeout(ctx)
+	defer cancel()
+	if err := runtimePort.ResolveUserQuestion(callCtx, input); err != nil {
+		return runtimeCallFailedFrame(callCtx, frame, err, "user_question_answer")
+	}
+
+	return MessageFrame{
+		Type:      FrameTypeAck,
+		Action:    FrameActionUserQuestionAnswer,
+		RequestID: frame.RequestID,
+		Payload: map[string]any{
+			"request_id": input.RequestID,
+			"status":     input.Status,
+			"message":    "user question answered",
+		},
+	}
+}
+
 // handleResolvePermissionFrame 处理 gateway.resolvePermission 请求。
 func handleResolvePermissionFrame(ctx context.Context, frame MessageFrame, runtimePort RuntimePort) MessageFrame {
 	if runtimePort == nil {

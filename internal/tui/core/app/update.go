@@ -4,8 +4,8 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
-	"encoding/json"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -227,6 +227,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.state.CurrentTool = ""
 		a.state.ActiveRunID = ""
 		a.pendingPermission = nil
+		a.pendingUserQuestion = nil
 		a.pendingAutoPermission = nil
 		a.clearRunProgress()
 		a.state.IsCompacting = false
@@ -242,6 +243,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.state.IsAgentRunning = false
 			a.state.ActiveRunID = ""
 			a.pendingPermission = nil
+			a.pendingUserQuestion = nil
 			a.pendingAutoPermission = nil
 			a.clearRunProgress()
 			a.state.StreamingReply = false
@@ -268,6 +270,27 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, batchUpdateCmds()
 		}
 		a.handlePermissionResolutionFinished(typed)
+		return a, batchUpdateCmds()
+	case userQuestionResolutionFinishedMsg:
+		if a.pendingUserQuestion != nil && strings.EqualFold(strings.TrimSpace(a.pendingUserQuestion.Request.RequestID), strings.TrimSpace(typed.RequestID)) {
+			a.pendingUserQuestion.Submitting = false
+		}
+		if typed.Err != nil {
+			a.state.ExecutionError = typed.Err.Error()
+			a.state.StatusText = typed.Err.Error()
+			a.appendActivity("ask_user", "Failed to submit user question answer", typed.Err.Error(), true)
+			return a, batchUpdateCmds()
+		}
+		normalizedStatus := strings.ToLower(strings.TrimSpace(typed.Status))
+		if normalizedStatus == "" {
+			normalizedStatus = "answered"
+		}
+		a.state.ExecutionError = ""
+		a.state.StatusText = statusUserQuestionSubmitted
+		if a.pendingUserQuestion != nil && strings.EqualFold(strings.TrimSpace(a.pendingUserQuestion.Request.RequestID), strings.TrimSpace(typed.RequestID)) {
+			a.pendingUserQuestion = nil
+		}
+		a.applyComponentLayout(false)
 		return a, batchUpdateCmds()
 	case modelCatalogRefreshMsg:
 		if strings.EqualFold(a.modelRefreshID, typed.ProviderID) {
@@ -460,13 +483,13 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, batchUpdateCmds()
 		}
 
-			switch a.focus {
-			case panelTranscript:
-				if key.Matches(typed, a.keys.Send) && a.toggleTranscriptProcessExpansion() {
-					return a, batchUpdateCmds()
-				}
-				a.handleViewportKeys(&a.transcript, typed)
+		switch a.focus {
+		case panelTranscript:
+			if key.Matches(typed, a.keys.Send) && a.toggleTranscriptProcessExpansion() {
 				return a, batchUpdateCmds()
+			}
+			a.handleViewportKeys(&a.transcript, typed)
+			return a, batchUpdateCmds()
 		case panelActivity:
 			a.handleViewportKeys(&a.activity, typed)
 			return a, batchUpdateCmds()
@@ -665,6 +688,19 @@ func (a App) updateInputPanel(msg tea.Msg, typed tea.KeyMsg, cmds []tea.Cmd) (te
 			}
 			input := strings.TrimSpace(rawInput)
 			images := a.collectPendingImageInputs()
+			if cmd, handled := a.submitPendingUserQuestionInput(input); handled {
+				a.input.Reset()
+				a.state.InputText = ""
+				a.clearPendingTextPastes()
+				a.clearComposerAttachments()
+				a.applyComponentLayout(true)
+				a.refreshCommandMenu()
+				a.resetPasteHeuristics()
+				if cmd != nil {
+					cmds = append(cmds, cmd)
+				}
+				return a, batchUpdateCmds()
+			}
 
 			if a.isBusy() {
 				a.queueInterventionInput(input, images)
@@ -864,6 +900,86 @@ func (a *App) submitPermissionDecision(decision tuiservices.PermissionResolution
 	return runResolvePermission(a.runtime, requestID, decision)
 }
 
+// submitPendingUserQuestionInput 在存在待答 ask_user 请求时，把输入内容转换为回答提交。
+func (a *App) submitPendingUserQuestionInput(input string) (tea.Cmd, bool) {
+	if a.pendingUserQuestion == nil {
+		return nil, false
+	}
+	if a.pendingUserQuestion.Submitting {
+		return nil, true
+	}
+
+	request := a.pendingUserQuestion.Request
+	requestID := strings.TrimSpace(request.RequestID)
+	if requestID == "" {
+		a.state.StatusText = "User question request_id is empty"
+		a.state.ExecutionError = "user question request_id is empty"
+		return nil, true
+	}
+
+	rawInput := strings.TrimSpace(input)
+	if strings.EqualFold(rawInput, "/skip") {
+		if !request.AllowSkip {
+			a.state.StatusText = "This question does not allow skip"
+			return nil, true
+		}
+		a.pendingUserQuestion.Submitting = true
+		a.state.StatusText = statusUserQuestionSubmitting
+		a.appendActivity("ask_user", "Submitting user question answer", "status=skipped", false)
+		return runResolveUserQuestion(a.runtime, requestID, "skipped", nil, ""), true
+	}
+
+	if rawInput == "" {
+		if request.AllowSkip {
+			a.pendingUserQuestion.Submitting = true
+			a.state.StatusText = statusUserQuestionSubmitting
+			a.appendActivity("ask_user", "Submitting user question answer", "status=skipped", false)
+			return runResolveUserQuestion(a.runtime, requestID, "skipped", nil, ""), true
+		}
+		a.state.StatusText = statusUserQuestionRequired
+		return nil, true
+	}
+
+	kind := strings.ToLower(strings.TrimSpace(request.Kind))
+	values := []string(nil)
+	message := ""
+	switch kind {
+	case "single_choice":
+		values = parseUserQuestionValues(rawInput)
+		if len(values) != 1 {
+			a.state.StatusText = "single_choice requires exactly one value"
+			return nil, true
+		}
+	case "multi_choice":
+		values = parseUserQuestionValues(rawInput)
+		if len(values) == 0 {
+			a.state.StatusText = statusUserQuestionRequired
+			return nil, true
+		}
+	default:
+		message = rawInput
+	}
+
+	a.pendingUserQuestion.Submitting = true
+	a.state.StatusText = statusUserQuestionSubmitting
+	a.appendActivity("ask_user", "Submitting user question answer", "status=answered", false)
+	return runResolveUserQuestion(a.runtime, requestID, "answered", values, message), true
+}
+
+// parseUserQuestionValues 把输入字符串按逗号切分为选项值列表。
+func parseUserQuestionValues(raw string) []string {
+	parts := strings.Split(strings.TrimSpace(raw), ",")
+	values := make([]string, 0, len(parts))
+	for _, part := range parts {
+		trimmed := strings.TrimSpace(part)
+		if trimmed == "" {
+			continue
+		}
+		values = append(values, trimmed)
+	}
+	return values
+}
+
 // toggleFullAccessMode 处理 Full Access 模式的启停切换；启用前必须经过风险确认?
 func (a *App) toggleFullAccessMode() {
 	if a.fullAccessModeEnabled {
@@ -991,6 +1107,7 @@ func (a *App) handlePermissionResolutionFinished(msg permissionResolutionFinishe
 	}
 
 	a.pendingPermission = nil
+	a.pendingUserQuestion = nil
 	a.state.ExecutionError = ""
 	a.state.StatusText = statusPermissionSubmitted
 	a.appendActivity("permission", "Permission decision submitted", string(msg.Decision), false)
@@ -2587,6 +2704,7 @@ func (a *App) resetSessionRuntimeState() {
 	a.setCurrentAgentMode(string(agentsession.AgentModeBuild))
 	a.state.TokenUsage = tuistate.TokenUsageState{}
 	a.pendingPermission = nil
+	a.pendingUserQuestion = nil
 	a.queuedIntervention = nil
 	a.pendingAutoPermission = nil
 	a.clearRunProgress()
@@ -2776,6 +2894,10 @@ var runtimeEventHandlerRegistry = map[tuiservices.EventType]func(*App, tuiservic
 	tuiservices.EventError:                                    runtimeEventErrorHandler,
 	tuiservices.EventPermissionRequested:                      runtimeEventPermissionRequestHandler,
 	tuiservices.EventPermissionResolved:                       runtimeEventPermissionResolvedHandler,
+	tuiservices.EventUserQuestionRequested:                    runtimeEventUserQuestionRequestedHandler,
+	tuiservices.EventUserQuestionAnswered:                     runtimeEventUserQuestionResolvedHandler,
+	tuiservices.EventUserQuestionSkipped:                      runtimeEventUserQuestionResolvedHandler,
+	tuiservices.EventUserQuestionTimeout:                      runtimeEventUserQuestionResolvedHandler,
 	tuiservices.EventCompactApplied:                           runtimeEventCompactDoneHandler,
 	tuiservices.EventCompactError:                             runtimeEventCompactErrorHandler,
 	tuiservices.EventTokenUsage:                               runtimeEventTokenUsageHandler,
@@ -3387,6 +3509,7 @@ func runtimeEventStopReasonDecidedHandler(a *App, event tuiservices.RuntimeEvent
 	a.state.CurrentTool = ""
 	a.state.ActiveRunID = ""
 	a.pendingPermission = nil
+	a.pendingUserQuestion = nil
 	a.pendingAutoPermission = nil
 	a.clearRunProgress()
 
@@ -4167,6 +4290,7 @@ func runtimeEventAgentDoneHandler(a *App, event tuiservices.RuntimeEvent) bool {
 	a.state.CurrentTool = ""
 	a.state.ActiveRunID = ""
 	a.pendingPermission = nil
+	a.pendingUserQuestion = nil
 	a.pendingAutoPermission = nil
 	a.clearRunProgress()
 	if strings.TrimSpace(a.state.ExecutionError) == "" {
@@ -4191,6 +4315,7 @@ func runtimeEventRunCanceledHandler(a *App, event tuiservices.RuntimeEvent) bool
 	a.state.CurrentTool = ""
 	a.state.ActiveRunID = ""
 	a.pendingPermission = nil
+	a.pendingUserQuestion = nil
 	a.pendingAutoPermission = nil
 	a.state.ExecutionError = ""
 	a.state.StatusText = statusCanceled
@@ -4207,6 +4332,7 @@ func runtimeEventErrorHandler(a *App, event tuiservices.RuntimeEvent) bool {
 	a.state.CurrentTool = ""
 	a.state.ActiveRunID = ""
 	a.pendingPermission = nil
+	a.pendingUserQuestion = nil
 	a.pendingAutoPermission = nil
 	a.clearRunProgress()
 	if payload, ok := event.Payload.(string); ok {
@@ -4271,6 +4397,7 @@ func (a *App) beginAutoPermissionApproval(payload tuiservices.PermissionRequestP
 	}
 
 	a.pendingPermission = nil
+	a.pendingUserQuestion = nil
 	a.pendingAutoPermission = &autoPermissionApprovalState{Request: payload}
 	a.state.StatusText = statusPermissionSubmitting
 	a.state.ExecutionError = ""
@@ -4293,6 +4420,7 @@ func runtimeEventPermissionResolvedHandler(a *App, event tuiservices.RuntimeEven
 
 	if a.pendingPermission != nil && a.pendingPermission.Request.RequestID == payload.RequestID {
 		a.pendingPermission = nil
+		a.pendingUserQuestion = nil
 	}
 	if a.pendingAutoPermission != nil && a.pendingAutoPermission.Request.RequestID == payload.RequestID {
 		a.pendingAutoPermission = nil
@@ -4305,6 +4433,59 @@ func runtimeEventPermissionResolvedHandler(a *App, event tuiservices.RuntimeEven
 		false,
 	)
 	a.refreshPermissionPromptLayout()
+	return false
+}
+
+// runtimeEventUserQuestionRequestedHandler 处理 ask_user 提问事件并记录活动日志。
+func runtimeEventUserQuestionRequestedHandler(a *App, event tuiservices.RuntimeEvent) bool {
+	payload, ok := parseUserQuestionRequestedPayload(event.Payload)
+	if !ok {
+		return false
+	}
+	a.pendingUserQuestion = &userQuestionPromptState{
+		Request: payload,
+	}
+	questionID := fallbackText(strings.TrimSpace(payload.QuestionID), "unknown")
+	title := fallbackText(strings.TrimSpace(payload.Title), "(untitled question)")
+	detail := fmt.Sprintf("question_id=%s · kind=%s · title=%s", questionID, fallbackText(strings.TrimSpace(payload.Kind), "text"), title)
+	a.state.StatusText = statusUserQuestionRequired
+	a.state.ExecutionError = ""
+	a.applyComponentLayout(false)
+	a.appendActivity("ask_user", "User question requested", detail, false)
+	return false
+}
+
+// runtimeEventUserQuestionResolvedHandler 处理 ask_user 回答/跳过/超时事件并记录活动日志。
+func runtimeEventUserQuestionResolvedHandler(a *App, event tuiservices.RuntimeEvent) bool {
+	payload, ok := parseUserQuestionResolvedPayload(event.Payload)
+	if !ok {
+		return false
+	}
+	if a.pendingUserQuestion != nil && strings.EqualFold(strings.TrimSpace(a.pendingUserQuestion.Request.RequestID), strings.TrimSpace(payload.RequestID)) {
+		a.pendingUserQuestion = nil
+		a.applyComponentLayout(false)
+	}
+	status := strings.ToLower(strings.TrimSpace(payload.Status))
+	if status == "" {
+		status = "answered"
+	}
+	questionID := fallbackText(strings.TrimSpace(payload.QuestionID), "unknown")
+	detail := fmt.Sprintf("question_id=%s · status=%s", questionID, status)
+	switch status {
+	case "answered":
+		a.state.StatusText = statusUserQuestionSubmitted
+		a.appendActivity("ask_user", "User question answered", detail, false)
+	case "skipped":
+		a.state.StatusText = statusUserQuestionSubmitted
+		a.appendActivity("ask_user", "User question skipped", detail, false)
+	case "timeout":
+		a.state.StatusText = "User question timed out"
+		a.state.ExecutionError = "User question timed out"
+		a.appendActivity("ask_user", "User question timed out", detail, true)
+	default:
+		a.state.StatusText = "User question resolved"
+		a.appendActivity("ask_user", "User question resolved", detail, false)
+	}
 	return false
 }
 
@@ -5807,6 +5988,7 @@ func (a *App) startDraftSession() {
 	a.setCurrentAgentMode(string(agentsession.AgentModeBuild))
 	a.state.TokenUsage = tuistate.TokenUsageState{}
 	a.pendingPermission = nil
+	a.pendingUserQuestion = nil
 	a.queuedIntervention = nil
 	a.pendingAutoPermission = nil
 	a.clearRunProgress()
@@ -5884,6 +6066,32 @@ func runResolvePermission(
 			return permissionResolutionFinishedMsg{
 				RequestID: input.RequestID,
 				Decision:  string(input.Decision),
+				Err:       err,
+			}
+		},
+	)
+}
+
+// runResolveUserQuestion 提交 ask_user 回答并把结果封装为 UI 消息。
+func runResolveUserQuestion(
+	runtime tuiservices.Runtime,
+	requestID string,
+	status string,
+	values []string,
+	message string,
+) tea.Cmd {
+	return tuiservices.RunResolveUserQuestionCmd(
+		runtime,
+		tuiservices.UserQuestionResolutionInput{
+			RequestID: strings.TrimSpace(requestID),
+			Status:    strings.TrimSpace(status),
+			Values:    append([]string(nil), values...),
+			Message:   strings.TrimSpace(message),
+		},
+		func(input tuiservices.UserQuestionResolutionInput, err error) tea.Msg {
+			return userQuestionResolutionFinishedMsg{
+				RequestID: input.RequestID,
+				Status:    input.Status,
 				Err:       err,
 			}
 		},

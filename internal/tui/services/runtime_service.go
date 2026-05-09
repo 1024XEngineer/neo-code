@@ -31,6 +31,11 @@ type PermissionResolver interface {
 	ResolvePermission(ctx context.Context, input PermissionResolutionInput) error
 }
 
+// UserQuestionResolver 定义提交 ask_user 回答能力。
+type UserQuestionResolver interface {
+	ResolveUserQuestion(ctx context.Context, input UserQuestionResolutionInput) error
+}
+
 // ListenForRuntimeEventCmd 监听事件通道并映射为 UI 消息。
 func ListenForRuntimeEventCmd(sub <-chan RuntimeEvent, eventMsg func(RuntimeEvent) tea.Msg, closedMsg func() tea.Msg) tea.Cmd {
 	return func() tea.Msg {
@@ -77,6 +82,21 @@ func RunResolvePermissionCmd(
 		defer cancel()
 
 		err := runtime.ResolvePermission(ctx, input)
+		return doneMsg(input, err)
+	}
+}
+
+// RunResolveUserQuestionCmd 提交 ask_user 回答并回传结果。
+func RunResolveUserQuestionCmd(
+	runtime UserQuestionResolver,
+	input UserQuestionResolutionInput,
+	doneMsg func(UserQuestionResolutionInput, error) tea.Msg,
+) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), permissionResolveTimeout)
+		defer cancel()
+
+		err := runtime.ResolveUserQuestion(ctx, input)
 		return doneMsg(input, err)
 	}
 }
