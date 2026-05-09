@@ -327,7 +327,41 @@ func TestMapSDKCardActionEventSuccessAndExtractSDKMessageTextFallback(t *testing
 	if event.EventID != "evt-card" || event.RequestID != "perm-1" || event.Decision != "allow_once" {
 		t.Fatalf("unexpected card action: %#v", event)
 	}
+	if event.ActionType != "permission" {
+		t.Fatalf("action type = %q, want permission", event.ActionType)
+	}
 	if text := extractSDKMessageText("plain text"); text != "plain text" {
 		t.Fatalf("fallback sdk text = %q", text)
+	}
+}
+
+func TestMapSDKCardActionEventSupportsUserQuestionAction(t *testing.T) {
+	event, ok := mapSDKCardActionEvent(&larkevent.EventReq{Body: []byte(`{
+		"header":{"event_id":"evt-ask-card"},
+		"event":{"action":{"value":{"action_type":"user_question","request_id":"ask-1","status":"answered","value":"A"}}}
+	}`)})
+	if !ok {
+		t.Fatal("expected ask_user card action to parse")
+	}
+	if event.ActionType != "user_question" || event.RequestID != "ask-1" || event.Status != "answered" {
+		t.Fatalf("unexpected ask_user card action: %#v", event)
+	}
+	if len(event.Values) != 1 || event.Values[0] != "A" {
+		t.Fatalf("unexpected ask_user values: %#v", event.Values)
+	}
+}
+
+func TestMapSDKCardActionEventRejectsInvalidActionPayload(t *testing.T) {
+	if _, ok := mapSDKCardActionEvent(&larkevent.EventReq{Body: []byte(`{
+		"header":{"event_id":"evt-bad-card"},
+		"event":{"action":{"value":{"action_type":"permission","request_id":"perm-1","decision":"allow_all"}}}
+	}`)}); ok {
+		t.Fatal("expected invalid permission decision to be rejected")
+	}
+	if _, ok := mapSDKCardActionEvent(&larkevent.EventReq{Body: []byte(`{
+		"header":{"event_id":"evt-bad-ask"},
+		"event":{"action":{"value":{"action_type":"user_question","request_id":"ask-1","status":"pending"}}}
+	}`)}); ok {
+		t.Fatal("expected invalid user_question status to be rejected")
 	}
 }

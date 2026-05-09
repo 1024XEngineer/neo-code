@@ -421,6 +421,27 @@ type ResolvePermissionParams struct {
 
 ---
 
+## Method: gateway.userQuestionAnswer
+
+- Stability: Beta
+- Auth Required: Yes
+- Request Schema:
+
+```go
+type UserQuestionAnswerParams struct {
+	RequestID string   `json:"request_id"`        // MUST
+	Status    string   `json:"status,omitempty"`  // answered|skipped，默认 answered
+	Values    []string `json:"values,omitempty"`  // 可选：选择值
+	Message   string   `json:"message,omitempty"` // 可选：文本回答
+}
+```
+
+- Response Schema: `ack`（提交成功）或标准 `error`
+- Observation:
+  - `gateway_requests_total{method="gateway.userQuestionAnswer",...}`
+
+---
+
 ## Method: gateway.listProviders
 
 - Stability: Stable
@@ -656,6 +677,14 @@ type GetRuntimeSnapshotParams struct {
 
 - Response Schema:
   - Success: `ack` + `payload.snapshot`（runtime facts、decision、todo snapshot）
+  - `payload.snapshot.pending_user_question`（可选）：
+    - `request_id`
+    - `question_id`
+    - `title` / `description`
+    - `kind`（`text|single_choice|multi_choice`）
+    - `options`
+    - `required` / `allow_skip`
+    - `max_choices` / `timeout_sec`
   - Failure: 标准 `error`
 - Observation:
   - `gateway_requests_total{method="runtime.snapshot.get",...}`

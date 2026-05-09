@@ -19,6 +19,8 @@ type RuntimeSnapshot struct {
 	Facts     FactsSnapshot    `json:"facts"`
 	Decision  DecisionSnapshot `json:"decision,omitempty"`
 	SubAgents SubAgentSnapshot `json:"subagents,omitempty"`
+	// PendingUserQuestion 表示当前 run 是否存在待回答 ask_user 问题。
+	PendingUserQuestion *UserQuestionRequestedPayload `json:"pending_user_question,omitempty"`
 }
 
 // FactsSnapshot 是 runtime facts 的传输快照。
@@ -83,6 +85,7 @@ func buildRuntimeSnapshot(state *runState) RuntimeSnapshot {
 			Summary:    strings.TrimSpace(state.terminalStopDetail),
 		}
 	}
+	pendingUserQuestion := clonePendingUserQuestion(state.pendingUserQuestion)
 
 	return RuntimeSnapshot{
 		RunID:     strings.TrimSpace(state.runID),
@@ -99,6 +102,7 @@ func buildRuntimeSnapshot(state *runState) RuntimeSnapshot {
 			CompletedCount: len(factsSnapshot.SubAgents.Completed),
 			FailedCount:    len(factsSnapshot.SubAgents.Failed),
 		},
+		PendingUserQuestion: pendingUserQuestion,
 	}
 }
 
@@ -198,7 +202,18 @@ func (s *Service) GetRuntimeSnapshot(ctx context.Context, sessionID string) (Run
 		Facts: FactsSnapshot{
 			RuntimeFacts: runtimefacts.RuntimeFacts{},
 		},
+		PendingUserQuestion: nil,
 	}
 	s.cacheRuntimeSnapshot(snapshot)
 	return snapshot, nil
+}
+
+// clonePendingUserQuestion 复制待回答 ask_user 快照，避免共享可变引用到外部读取方。
+func clonePendingUserQuestion(question *UserQuestionRequestedPayload) *UserQuestionRequestedPayload {
+	if question == nil {
+		return nil
+	}
+	cloned := *question
+	cloned.Options = append([]any(nil), question.Options...)
+	return &cloned
 }

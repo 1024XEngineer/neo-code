@@ -165,3 +165,52 @@ func TestRuntimeUserQuestionEventHandlers(t *testing.T) {
 		t.Fatalf("expected generic resolved branch, got title=%q status=%q", last.Title, app.state.StatusText)
 	}
 }
+
+func TestFormatUserQuestionPromptLines(t *testing.T) {
+	t.Parallel()
+
+	lines := formatUserQuestionPromptLines(userQuestionPromptState{
+		Request: agentruntime.UserQuestionRequestedPayload{
+			Title:       "Pick options",
+			Kind:        "multi_choice",
+			Description: "choose",
+			Required:    true,
+			AllowSkip:   true,
+			MaxChoices:  2,
+			Options: []any{
+				map[string]any{"label": "alpha"},
+				map[string]any{"label": "beta"},
+			},
+		},
+		Submitting: true,
+	})
+
+	joined := ""
+	for _, line := range lines {
+		joined += line + "\n"
+	}
+	if !containsLine(lines, "Required: yes") {
+		t.Fatalf("expected Required hint in lines: %q", joined)
+	}
+	if !containsLine(lines, "Allow skip: yes") {
+		t.Fatalf("expected Allow skip hint in lines: %q", joined)
+	}
+	if !containsLine(lines, "Max choices: 2") {
+		t.Fatalf("expected Max choices hint in lines: %q", joined)
+	}
+	if !containsLine(lines, "  1. alpha") {
+		t.Fatalf("expected formatted option line in lines: %q", joined)
+	}
+	if !containsLine(lines, "Submitting user question answer...") {
+		t.Fatalf("expected submitting hint in lines: %q", joined)
+	}
+}
+
+func containsLine(lines []string, target string) bool {
+	for _, line := range lines {
+		if line == target {
+			return true
+		}
+	}
+	return false
+}

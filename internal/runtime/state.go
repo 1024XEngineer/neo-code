@@ -60,6 +60,7 @@ type runState struct {
 	hookNotificationOmitted        int
 	reportedMissingSkills          map[string]struct{}
 	thinkingOverride               *ThinkingOverride
+	pendingUserQuestion            *UserQuestionRequestedPayload
 	disableTools                   bool
 }
 

@@ -57,6 +57,8 @@ const (
 	minInlineSubAgentToolTimeout     = 30 * time.Second
 	defaultDiagnoseToolTimeout       = 60 * time.Second
 	defaultPermissionToolTimeout     = 20 * time.Second
+	defaultAskUserToolTimeout        = 5 * time.Minute
+	maxAskUserToolTimeout            = time.Hour
 )
 
 // permissionExecutionInput 汇总一次工具执行与审批协作所需的上下文。
@@ -111,8 +113,8 @@ func (s *Service) ResolveUserQuestion(ctx context.Context, input UserQuestionRes
 	}
 
 	result := askuser.Result{
-		Status: status,
-		Values: input.Values,
+		Status:  status,
+		Values:  input.Values,
 		Message: strings.TrimSpace(input.Message),
 	}
 
@@ -147,8 +149,16 @@ func (s *Service) executeToolCallWithPermission(ctx context.Context, input permi
 		callInput.AskUserEventEmitter = func(eventName string, payload any) {
 			eventType := eventTypeFromAskUserEvent(eventName)
 			if eventName == "user_question_requested" {
+				if question, ok := parseAskUserRequestedPayload(payload); ok {
+					s.setPendingUserQuestion(input.State, question)
+					s.emitRuntimeSnapshotUpdated(ctx, input.State, "user_question_requested")
+				}
 				s.emitRunScopedPriority(eventType, input.State, payload)
 			} else {
+				if resolved, ok := parseAskUserResolvedPayload(payload); ok {
+					s.clearPendingUserQuestionIfMatches(input.State, resolved.RequestID)
+					s.emitRuntimeSnapshotUpdated(ctx, input.State, "user_question_"+strings.TrimSpace(resolved.Status))
+				}
 				s.emitRunScopedOptional(eventType, input.State, payload)
 			}
 		}
@@ -302,6 +312,17 @@ func resolveToolExecutionTimeout(call providertypes.ToolCall, fallback time.Dura
 		}
 		return base
 	}
+	if strings.EqualFold(name, tools.ToolNameAskUser) {
+		requested := parseAskUserTimeoutFromArguments(call.Arguments)
+		if requested <= 0 {
+			requested = defaultAskUserToolTimeout
+		}
+		requested = clampDuration(requested, defaultAskUserToolTimeout, maxAskUserToolTimeout)
+		if requested > base {
+			return requested
+		}
+		return base
+	}
 	if !strings.EqualFold(name, tools.ToolNameSpawnSubAgent) {
 		return base
 	}
@@ -318,6 +339,20 @@ func resolveToolExecutionTimeout(call providertypes.ToolCall, fallback time.Dura
 		return requested
 	}
 	return base
+}
+
+// parseAskUserTimeoutFromArguments 解析 ask_user 的 timeout_sec，并返回持续时间。
+func parseAskUserTimeoutFromArguments(raw string) time.Duration {
+	if strings.TrimSpace(raw) == "" {
+		return 0
+	}
+	var payload struct {
+		TimeoutSec int `json:"timeout_sec"`
+	}
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		return 0
+	}
+	return time.Duration(payload.TimeoutSec) * time.Second
 }
 
 // parseSpawnSubAgentRuntimeOptions 提取 spawn_subagent 的运行模式与 timeout_sec 参数。

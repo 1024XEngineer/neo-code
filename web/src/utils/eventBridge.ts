@@ -11,6 +11,7 @@ import {
   type LedgerReconciledPayload,
   type MessageFrame,
   type PermissionRequestPayload,
+  type PendingUserQuestionSnapshot,
   type TodoEventPayload,
   type TokenUsage,
   type VerificationCompletedPayload,
@@ -244,6 +245,35 @@ function normalizePermissionPayload(raw: unknown): PermissionRequestPayload | nu
   }
 }
 
+function normalizeUserQuestionRequestedPayload(raw: unknown): PendingUserQuestionSnapshot | null {
+  const r = raw as Record<string, unknown> | undefined
+  if (!r || typeof r !== 'object') return null
+  const requestId = strField(r, 'request_id') || strField(r, 'RequestID')
+  if (!requestId) return null
+  const options = Array.isArray(r.options) ? [...r.options] : undefined
+  const parseNumberField = (camel: string, pascal: string): number | undefined => {
+    const value = r[camel] ?? r[pascal]
+    if (typeof value === 'number' && Number.isFinite(value) && value > 0) return value
+    if (typeof value === 'string') {
+      const parsed = Number(value)
+      if (Number.isFinite(parsed) && parsed > 0) return parsed
+    }
+    return undefined
+  }
+  return {
+    request_id: requestId,
+    question_id: strField(r, 'question_id') || strField(r, 'QuestionID'),
+    title: strField(r, 'title') || strField(r, 'Title'),
+    description: strField(r, 'description') || strField(r, 'Description'),
+    kind: strField(r, 'kind') || strField(r, 'Kind'),
+    options,
+    required: !!(r.required ?? r.Required),
+    allow_skip: !!(r.allow_skip ?? r.AllowSkip),
+    max_choices: parseNumberField('max_choices', 'MaxChoices'),
+    timeout_sec: parseNumberField('timeout_sec', 'TimeoutSec'),
+  }
+}
+
 const CRITICAL_EVENTS = new Set<string>([
   EventType.Error,
 ])
@@ -397,6 +427,21 @@ export function handleGatewayEvent(frame: MessageFrame, gatewayAPI: GatewayAPI) 
       const r = eventPayload as Record<string, unknown> | undefined
       const requestId = strField(r, 'request_id') || strField(r, 'RequestID')
       if (requestId) useChatStore.getState().removePermissionRequest(requestId)
+      break
+    }
+
+    case EventType.UserQuestionRequested: {
+      const payload = normalizeUserQuestionRequestedPayload(eventPayload)
+      if (payload) useChatStore.getState().setPendingUserQuestion(payload)
+      break
+    }
+
+    case EventType.UserQuestionAnswered:
+    case EventType.UserQuestionSkipped:
+    case EventType.UserQuestionTimeout: {
+      const p = eventPayload as Record<string, unknown> | undefined
+      const requestId = strField(p, 'request_id') || strField(p, 'RequestID')
+      useChatStore.getState().clearPendingUserQuestion(requestId || undefined)
       break
     }
 

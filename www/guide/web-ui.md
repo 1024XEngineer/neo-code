@@ -131,6 +131,24 @@ Web UI 支持两种运行模式，根据启动方式自动选择：
 | Allow Once | 仅允许本次 |
 | Allow for This Session | 本会话内同类请求全部放行 |
 
+### ask_user 交互卡片
+
+当 Runtime 发出 `ask_user` 问题时，输入区会进入“待回答”状态，并按问题类型展示交互：
+
+- `text`：文本输入框提交回答
+- `single_choice`：单选按钮提交回答
+- `multi_choice`：多选提交回答（遵循 `max_choices`）
+- `allow_skip=true` 时可点击 `Skip`
+
+提交失败不会吞错误，页面会保留当前问题并显示可重试提示。
+
+### 断线重连恢复
+
+Web / Electron 在首次连接与重连成功后会调用 `runtime.snapshot.get`：
+
+- 若返回 `pending_user_question`，会恢复该问题卡片并允许继续回答
+- 若问题已终态（`answered / skipped / timeout`），不会重复弹出
+
 ### 文件变更面板
 
 实时追踪 Agent 对文件的修改，显示新增 / 修改 / 删除的文件及 diff 统计。文件写入时自动打开。

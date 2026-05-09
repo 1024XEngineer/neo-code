@@ -12,6 +12,7 @@
   - `gateway.bindStream`
   - `gateway.run`
   - `gateway.resolvePermission`
+  - `gateway.userQuestionAnswer`
   - `gateway.event`
 - 会话与运行 ID 保持实现一致：
   - `session_id = "feishu_" + stableHash(chat_id)`
@@ -86,7 +87,7 @@ SDK 模式下不要求公网回调地址，不要求 `adapter.listen/event_path/
 ## 6. 幂等与重试
 
 - 消息去重键：`event_id + message_id`
-- 卡片去重键：`request_id + decision`
+- 卡片去重键：优先 `event_id`，无 `event_id` 时回退到动作键（如 `request_id + decision/status`）
 - 仅当 `gateway.run` 成功受理后才标记成功；
 - 若 `run` 失败会释放去重状态，Webhook 返回 `HTTP 500`，SDK 长连接回调返回失败 ACK，允许飞书重试恢复。
 
@@ -108,6 +109,22 @@ SDK 模式下不要求公网回调地址，不要求 `adapter.listen/event_path/
   - `拒绝 <request_id>`
 
 以上两种路径都复用 `gateway.resolvePermission`，不新增 Gateway action。
+
+## 7.1 ask_user 统一交互（permission + user_question）
+
+飞书端卡片回调已升级为通用 `action_type`：
+
+- `action_type=permission` -> `gateway.resolvePermission`
+- `action_type=user_question` -> `gateway.userQuestionAnswer`
+
+V1 交互策略：
+
+- 单选/跳过：优先卡片按钮提交
+- 文本/多选：回退文本指令提交
+  - `回答 <request_id> <内容>`
+  - `跳过 <request_id>`
+
+`webhook` 与 `sdk` 两条 ingress 使用同一动作映射与幂等规则，保证行为一致。
 
 ## 8. 安全要求
 

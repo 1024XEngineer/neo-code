@@ -24,22 +24,24 @@ import (
 )
 
 type runtimeStub struct {
-	submitInput     agentruntime.PrepareInput
-	submitErr       error
-	askInput        agentruntime.AskInput
-	askErr          error
-	deleteAskInput  agentruntime.DeleteAskSessionInput
-	deleteAskResult bool
-	deleteAskErr    error
-	compactInput    agentruntime.CompactInput
-	compactResult   agentruntime.CompactResult
-	compactErr      error
-	systemToolInput agentruntime.SystemToolInput
-	systemToolRes   tools.ToolResult
-	systemToolErr   error
-	permissionInput agentruntime.PermissionResolutionInput
-	permissionErr   error
-	activateSession struct {
+	submitInput       agentruntime.PrepareInput
+	submitErr         error
+	askInput          agentruntime.AskInput
+	askErr            error
+	deleteAskInput    agentruntime.DeleteAskSessionInput
+	deleteAskResult   bool
+	deleteAskErr      error
+	compactInput      agentruntime.CompactInput
+	compactResult     agentruntime.CompactResult
+	compactErr        error
+	systemToolInput   agentruntime.SystemToolInput
+	systemToolRes     tools.ToolResult
+	systemToolErr     error
+	permissionInput   agentruntime.PermissionResolutionInput
+	permissionErr     error
+	userQuestionInput agentruntime.UserQuestionResolutionInput
+	userQuestionErr   error
+	activateSession   struct {
 		sessionID string
 		skillID   string
 	}
@@ -130,7 +132,8 @@ func (s *runtimeStub) ResolvePermission(_ context.Context, input agentruntime.Pe
 }
 
 func (s *runtimeStub) ResolveUserQuestion(_ context.Context, input agentruntime.UserQuestionResolutionInput) error {
-	return nil
+	s.userQuestionInput = input
+	return s.userQuestionErr
 }
 
 func (s *runtimeStub) CancelActiveRun() bool {
@@ -857,6 +860,21 @@ func TestGatewayRuntimePortBridgeRuntimeMethods(t *testing.T) {
 	if stub.permissionInput.RequestID != "request-1" || string(stub.permissionInput.Decision) != "allow_session" {
 		t.Fatalf("permission input = %#v, want trimmed request id and allow_session", stub.permissionInput)
 	}
+	if err := bridge.ResolveUserQuestion(context.Background(), gateway.UserQuestionAnswerInput{
+		SubjectID: testBridgeSubjectID,
+		RequestID: " ask-1 ",
+		Status:    " answered ",
+		Values:    []string{"A", "B"},
+		Message:   " final answer ",
+	}); err != nil {
+		t.Fatalf("resolve_user_question: %v", err)
+	}
+	if stub.userQuestionInput.RequestID != "ask-1" || stub.userQuestionInput.Status != "answered" {
+		t.Fatalf("user question input = %#v, want trimmed request id and status", stub.userQuestionInput)
+	}
+	if stub.userQuestionInput.Message != "final answer" || len(stub.userQuestionInput.Values) != 2 {
+		t.Fatalf("user question input = %#v, want message and values forwarded", stub.userQuestionInput)
+	}
 
 	canceled, err := bridge.CancelRun(context.Background(), gateway.CancelInput{
 		SubjectID: testBridgeSubjectID,
@@ -1059,6 +1077,7 @@ func TestGatewayRuntimePortBridgeRuntimeMethodErrors(t *testing.T) {
 		compactErr:           errors.New("compact failed"),
 		systemToolErr:        errors.New("system tool failed"),
 		permissionErr:        errors.New("permission failed"),
+		userQuestionErr:      errors.New("user question failed"),
 		activateSessionErr:   errors.New("activate skill failed"),
 		deactivateSessionErr: errors.New("deactivate skill failed"),
 		sessionSkillsErr:     errors.New("list session skills failed"),
@@ -1114,6 +1133,11 @@ func TestGatewayRuntimePortBridgeRuntimeMethodErrors(t *testing.T) {
 		SubjectID: testBridgeSubjectID,
 	}); err == nil {
 		t.Fatal("expected resolve_permission error from runtime")
+	}
+	if err := bridge.ResolveUserQuestion(context.Background(), gateway.UserQuestionAnswerInput{
+		SubjectID: testBridgeSubjectID,
+	}); err == nil {
+		t.Fatal("expected resolve_user_question error from runtime")
 	}
 	if _, err := bridge.ListSessions(context.Background()); err == nil {
 		t.Fatal("expected list_sessions error from runtime")
