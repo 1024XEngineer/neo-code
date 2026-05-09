@@ -734,7 +734,7 @@ const (
 	GLMDefaultAPIKeyEnv = "GLM_API_KEY"
 
 	MiMoName             = "mimo"
-	MiMoDefaultBaseURL   = "https://api.xiaomimimo.com/v1"
+	MiMoDefaultBaseURL   = "https://token-plan-cn.xiaomimimo.com/v1"
 	MiMoDefaultModel     = "mimo-v2.5-pro"
 	MiMoDefaultAPIKeyEnv = "MIMO_API_KEY"
 
