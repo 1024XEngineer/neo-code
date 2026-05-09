@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/fstest"
 )
 
 // writeWebCommandTestFile 写入 web 命令测试所需的最小文件内容，避免各测试重复拼装目录。
@@ -73,6 +74,18 @@ func stubWebCommandHooks(
 		webCommandStartGatewayServer = originalStart
 		webCommandBuildFrontend = originalBuild
 		webCommandLookPath = originalLookPath
+	})
+}
+
+// stubWebCommandEmbeddedAssets 替换内嵌前端资源探测逻辑，便于覆盖发布版回退分支。
+func stubWebCommandEmbeddedAssets(t *testing.T, assets fs.FS, available bool) {
+	t.Helper()
+	original := webCommandEmbeddedAssets
+	webCommandEmbeddedAssets = func() (fs.FS, bool) {
+		return assets, available
+	}
+	t.Cleanup(func() {
+		webCommandEmbeddedAssets = original
 	})
 }
 
@@ -184,5 +197,92 @@ func TestRunWebCommandBuildsFrontendWhenDistMissing(t *testing.T) {
 	wantStaticDir := filepath.Join(tempDir, "web", "dist")
 	if capturedStaticDir != wantStaticDir {
 		t.Fatalf("startGatewayServer staticDir = %q, want %q", capturedStaticDir, wantStaticDir)
+	}
+}
+
+func TestRunWebCommandUsesEmbeddedAssetsWhenDistMissing(t *testing.T) {
+	tempDir := t.TempDir()
+	chdirForWebCommandTest(t, tempDir)
+	writeWebCommandTestFile(t, filepath.Join(tempDir, "web", "package.json"), "{}")
+
+	buildCalled := false
+	var capturedStaticDir string
+	var capturedStaticFS fs.FS
+	sentinelErr := errors.New("stop after start")
+	stubWebCommandEmbeddedAssets(t, fstest.MapFS{
+		"index.html": &fstest.MapFile{Data: []byte("<html></html>")},
+	}, true)
+	stubWebCommandHooks(
+		t,
+		func(_ context.Context, _ gatewayCommandOptions, staticDir string, staticFS fs.FS, _ func(string)) error {
+			capturedStaticDir = staticDir
+			capturedStaticFS = staticFS
+			return sentinelErr
+		},
+		func(_ string, _ *log.Logger) error {
+			buildCalled = true
+			return nil
+		},
+		nil,
+	)
+
+	err := runWebCommand(context.Background(), webCommandOptions{
+		HTTPAddress: "127.0.0.1:8080",
+		LogLevel:    "info",
+		OpenBrowser: false,
+		Workdir:     tempDir,
+	})
+	if !errors.Is(err, sentinelErr) {
+		t.Fatalf("runWebCommand() error = %v, want sentinel error %v", err, sentinelErr)
+	}
+	if buildCalled {
+		t.Fatal("runWebCommand() unexpectedly invoked frontend build when embedded assets were available")
+	}
+	if capturedStaticDir != "" {
+		t.Fatalf("startGatewayServer staticDir = %q, want empty string", capturedStaticDir)
+	}
+	if capturedStaticFS == nil {
+		t.Fatal("startGatewayServer staticFS = nil, want embedded assets FS")
+	}
+}
+
+func TestRunWebCommandSkipBuildStillUsesEmbeddedAssets(t *testing.T) {
+	tempDir := t.TempDir()
+	chdirForWebCommandTest(t, tempDir)
+
+	buildCalled := false
+	var capturedStaticFS fs.FS
+	sentinelErr := errors.New("stop after start")
+	stubWebCommandEmbeddedAssets(t, fstest.MapFS{
+		"index.html": &fstest.MapFile{Data: []byte("<html></html>")},
+	}, true)
+	stubWebCommandHooks(
+		t,
+		func(_ context.Context, _ gatewayCommandOptions, _ string, staticFS fs.FS, _ func(string)) error {
+			capturedStaticFS = staticFS
+			return sentinelErr
+		},
+		func(_ string, _ *log.Logger) error {
+			buildCalled = true
+			return nil
+		},
+		nil,
+	)
+
+	err := runWebCommand(context.Background(), webCommandOptions{
+		HTTPAddress: "127.0.0.1:8080",
+		LogLevel:    "info",
+		OpenBrowser: false,
+		SkipBuild:   true,
+		Workdir:     tempDir,
+	})
+	if !errors.Is(err, sentinelErr) {
+		t.Fatalf("runWebCommand() error = %v, want sentinel error %v", err, sentinelErr)
+	}
+	if buildCalled {
+		t.Fatal("runWebCommand() unexpectedly invoked frontend build when --skip-build used with embedded assets")
+	}
+	if capturedStaticFS == nil {
+		t.Fatal("startGatewayServer staticFS = nil, want embedded assets FS")
 	}
 }
