@@ -151,9 +151,14 @@ describe('FileChangePanel', () => {
 
     const panelBody = screen.getByTestId('file-change-panel-body')
     const scrollArea = screen.getByTestId('changes-scroll-area')
+    const view = scrollArea.parentElement as HTMLElement
+    const contentStack = screen.getByTestId('changes-content-stack')
 
     expect(panelBody).toHaveStyle({ overflow: 'hidden', minHeight: '0px' })
+    expect(view).toHaveStyle({ flex: '1 1 0%', minHeight: '0px', overflow: 'hidden' })
     expect(scrollArea).toHaveStyle({ overflow: 'auto', minHeight: '0px', flex: '1 1 0%' })
+    expect(scrollArea).not.toHaveStyle({ display: 'flex' })
+    expect(contentStack).toHaveStyle({ display: 'flex', flexDirection: 'column', gap: '10px' })
   })
 
   it('caps expanded diff blocks so long hunks do not stretch the whole panel', () => {
@@ -165,9 +170,11 @@ describe('FileChangePanel', () => {
       display: 'flex',
       flexDirection: 'column',
     })
+    expect(screen.getByTestId('change-card-fc-1')).toHaveStyle({ flexShrink: '0' })
     expect(screen.getByTestId('diff-hunk-scroller-fc-1-0')).toHaveStyle({
       overflowX: 'auto',
-      overflowY: 'visible',
+      overflowY: 'hidden',
+      maxWidth: '100%',
     })
     expect(screen.getByText('line 2 new').parentElement).toHaveStyle({
       width: 'max-content',
@@ -176,7 +183,21 @@ describe('FileChangePanel', () => {
     expect(screen.getByText('line 2 new')).not.toHaveStyle({ overflowX: 'auto' })
   })
 
-  it('renders multiple hunks as separately scrollable change blocks', () => {
+  it('forwards vertical wheel events from hunk scrollers to the outer changes scroll area', () => {
+    render(<FileChangePanel />)
+
+    fireEvent.click(screen.getByText('src/a.txt'))
+
+    const scrollArea = screen.getByTestId('changes-scroll-area') as HTMLDivElement
+    const hunkScroller = screen.getByTestId('diff-hunk-scroller-fc-1-0')
+    scrollArea.scrollBy = vi.fn()
+
+    fireEvent.wheel(hunkScroller, { deltaY: 120, deltaX: 0 })
+
+    expect(scrollArea.scrollBy).toHaveBeenCalledWith({ top: 120 })
+  })
+
+  it('keeps multiple hunks inside the outer vertical scroll container', () => {
     useUIStore.setState({
       fileChanges: [
         {
@@ -215,22 +236,102 @@ describe('FileChangePanel', () => {
 
     fireEvent.click(screen.getByText('src/multi.txt'))
 
+    expect(screen.getByTestId('changes-scroll-area')).toHaveStyle({ overflow: 'auto' })
     expect(screen.getAllByTestId(/diff-hunk-fc-2-/)).toHaveLength(2)
-    expect(screen.getByTestId('diff-hunk-scroller-fc-2-0')).toHaveStyle({ overflowX: 'auto', overflowY: 'visible' })
-    expect(screen.getByTestId('diff-hunk-scroller-fc-2-1')).toHaveStyle({ overflowX: 'auto', overflowY: 'visible' })
+    expect(screen.getByTestId('diff-hunk-scroller-fc-2-0')).toHaveStyle({
+      overflowX: 'auto',
+      overflowY: 'hidden',
+      maxWidth: '100%',
+    })
+    expect(screen.getByTestId('diff-hunk-scroller-fc-2-1')).toHaveStyle({
+      overflowX: 'auto',
+      overflowY: 'hidden',
+      maxWidth: '100%',
+    })
   })
 
-  it('keeps both fixed tabs visible', () => {
+  it('keeps later files in normal document flow when the first file is expanded', () => {
+    useUIStore.setState({
+      fileChanges: [
+        {
+          id: 'fc-3',
+          path: 'src/first.txt',
+          status: 'modified',
+          additions: 3,
+          deletions: 1,
+          hunks: [
+            {
+              header: '@@ -1,2 +1,4 @@',
+              additions: 2,
+              deletions: 1,
+              lines: [
+                { type: 'header', content: '@@ -1,2 +1,4 @@' },
+                { type: 'context', content: 'head' },
+                { type: 'del', content: 'old body' },
+                { type: 'add', content: 'new body' },
+                { type: 'add', content: 'tail' },
+              ],
+            },
+            {
+              header: '@@ -10,0 +13,1 @@',
+              additions: 1,
+              deletions: 0,
+              lines: [
+                { type: 'header', content: '@@ -10,0 +13,1 @@' },
+                { type: 'add', content: 'after block' },
+              ],
+            },
+          ],
+        },
+        {
+          id: 'fc-4',
+          path: 'src/second.txt',
+          status: 'modified',
+          additions: 1,
+          deletions: 0,
+          hunks: [
+            {
+              header: '@@ -0,0 +1,1 @@',
+              additions: 1,
+              deletions: 0,
+              lines: [
+                { type: 'header', content: '@@ -0,0 +1,1 @@' },
+                { type: 'add', content: 'next file line' },
+              ],
+            },
+          ],
+        },
+      ],
+    } as never)
+
     render(<FileChangePanel />)
 
-    expect(screen.getByTestId(`preview-tab-${CHANGES_PREVIEW_TAB_ID}`)).toBeTruthy()
-    expect(screen.getByTestId(`preview-tab-${GIT_DIFF_PREVIEW_TAB_ID}`)).toBeTruthy()
+    fireEvent.click(screen.getByText('src/first.txt'))
+
+    const contentStack = screen.getByTestId('changes-content-stack')
+    expect(contentStack).toHaveTextContent('src/second.txt')
+    expect(screen.getByTestId('change-card-fc-4')).toHaveStyle({ flexShrink: '0' })
+  })
+
+  it('keeps both fixed tabs visible in the primary switcher and hides secondary chips by default', () => {
+    render(<FileChangePanel />)
+
+    const primaryTabs = screen.getByTestId('preview-primary-tabs')
+    expect(primaryTabs).toContainElement(screen.getByTestId(`preview-tab-${CHANGES_PREVIEW_TAB_ID}`))
+    expect(primaryTabs).toContainElement(screen.getByTestId(`preview-tab-${GIT_DIFF_PREVIEW_TAB_ID}`))
+    expect(screen.queryByTestId('preview-secondary-tabs')).toBeNull()
   })
 
   it('opens a git diff file tab from the fixed git diff view', async () => {
     render(<FileChangePanel />)
 
     fireEvent.click(screen.getByTestId(`preview-tab-${GIT_DIFF_PREVIEW_TAB_ID}`))
+    expect(await screen.findByTestId('git-diff-content-stack')).toHaveStyle({
+      display: 'flex',
+      flexDirection: 'column',
+      gap: '10px',
+    })
+    expect(screen.getByTestId('git-diff-entry-src/main.go')).toHaveStyle({ flexShrink: '0' })
     fireEvent.click(await screen.findByTestId('git-diff-entry-src/main.go'))
 
     await waitFor(() => {
@@ -241,6 +342,176 @@ describe('FileChangePanel', () => {
     expect(preview).toHaveAttribute('data-path', 'src/main.go')
     expect(preview).toHaveAttribute('data-side-by-side', 'true')
     expect(preview.textContent).toContain('before::after')
+  })
+
+  it('renders file preview tabs in the secondary chip row instead of mixing them into the primary switcher', () => {
+    useUIStore.setState({
+      previewTabs: [
+        {
+          id: CHANGES_PREVIEW_TAB_ID,
+          kind: 'changes',
+          title: '鏂囦欢鍙樻洿',
+          closable: false,
+        },
+        {
+          id: GIT_DIFF_PREVIEW_TAB_ID,
+          kind: 'git-diff',
+          title: 'Git Diff',
+          closable: false,
+        },
+        {
+          id: 'file:cmd/neocode/main.go',
+          kind: 'file',
+          title: 'main.go',
+          closable: true,
+          path: 'cmd/neocode/main.go',
+          content: 'package main',
+          loading: false,
+          loaded: true,
+          error: '',
+          truncated: false,
+          is_binary: false,
+        },
+      ],
+      activePreviewTabId: 'file:cmd/neocode/main.go',
+    } as never)
+
+    render(<FileChangePanel />)
+
+    const primaryTabs = screen.getByTestId('preview-primary-tabs')
+    const secondaryTabs = screen.getByTestId('preview-secondary-tabs')
+    expect(primaryTabs).toContainElement(screen.getByTestId(`preview-tab-${CHANGES_PREVIEW_TAB_ID}`))
+    expect(primaryTabs).toContainElement(screen.getByTestId(`preview-tab-${GIT_DIFF_PREVIEW_TAB_ID}`))
+    expect(primaryTabs).not.toContainElement(screen.getByTestId('preview-tab-file:cmd/neocode/main.go'))
+    expect(secondaryTabs).toContainElement(screen.getByTestId('preview-tab-file:cmd/neocode/main.go'))
+  })
+
+  it('marks the fixed git diff switcher as context-active while a git diff file chip is selected', async () => {
+    render(<FileChangePanel />)
+
+    fireEvent.click(screen.getByTestId(`preview-tab-${GIT_DIFF_PREVIEW_TAB_ID}`))
+    fireEvent.click(await screen.findByTestId('git-diff-entry-src/main.go'))
+
+    await waitFor(() => {
+      expect(mockGatewayAPI.readGitDiffFile).toHaveBeenCalledWith({ path: 'src/main.go' })
+    })
+
+    expect(screen.getByTestId(`preview-tab-${GIT_DIFF_PREVIEW_TAB_ID}`)).toHaveAttribute('data-context-active', 'true')
+    expect(screen.getByTestId('preview-tab-git-diff-file:src/main.go')).toHaveAttribute('aria-selected', 'true')
+  })
+
+  it('falls back to the fixed git diff tab after closing the active git diff file chip', async () => {
+    render(<FileChangePanel />)
+
+    fireEvent.click(screen.getByTestId(`preview-tab-${GIT_DIFF_PREVIEW_TAB_ID}`))
+    fireEvent.click(await screen.findByTestId('git-diff-entry-src/main.go'))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('preview-tab-git-diff-file:src/main.go')).toBeTruthy()
+    })
+
+    fireEvent.click(screen.getByTestId('preview-tab-close-git-diff-file:src/main.go'))
+
+    expect(useUIStore.getState().activePreviewTabId).toBe(GIT_DIFF_PREVIEW_TAB_ID)
+    expect(screen.queryByTestId('preview-tab-git-diff-file:src/main.go')).toBeNull()
+  })
+
+  it('keeps keyboard roving focus across both fixed tabs and file chips', () => {
+    useUIStore.setState({
+      previewTabs: [
+        {
+          id: CHANGES_PREVIEW_TAB_ID,
+          kind: 'changes',
+          title: '鏂囦欢鍙樻洿',
+          closable: false,
+        },
+        {
+          id: GIT_DIFF_PREVIEW_TAB_ID,
+          kind: 'git-diff',
+          title: 'Git Diff',
+          closable: false,
+        },
+        {
+          id: 'file:cmd/neocode/main.go',
+          kind: 'file',
+          title: 'main.go',
+          closable: true,
+          path: 'cmd/neocode/main.go',
+          content: 'package main',
+          loading: false,
+          loaded: true,
+          error: '',
+          truncated: false,
+          is_binary: false,
+        },
+      ],
+      activePreviewTabId: CHANGES_PREVIEW_TAB_ID,
+    } as never)
+
+    render(<FileChangePanel />)
+
+    const changesTab = screen.getByTestId(`preview-tab-${CHANGES_PREVIEW_TAB_ID}`)
+    changesTab.focus()
+    fireEvent.keyDown(changesTab, { key: 'ArrowRight' })
+    expect(useUIStore.getState().activePreviewTabId).toBe(GIT_DIFF_PREVIEW_TAB_ID)
+
+    const gitDiffTab = screen.getByTestId(`preview-tab-${GIT_DIFF_PREVIEW_TAB_ID}`)
+    fireEvent.keyDown(gitDiffTab, { key: 'ArrowRight' })
+    expect(useUIStore.getState().activePreviewTabId).toBe('file:cmd/neocode/main.go')
+  })
+
+  it('opens expanded nested untracked files from the git diff list', async () => {
+    mockGatewayAPI.listGitDiffFiles.mockResolvedValue({
+      payload: {
+        in_git_repo: true,
+        branch: 'main',
+        ahead: 0,
+        behind: 0,
+        truncated: false,
+        total_count: 1,
+        files: [
+          {
+            path: 'handwrite_res/nested/result.txt',
+            status: 'untracked',
+          },
+        ],
+      },
+    })
+    mockGatewayAPI.readGitDiffFile.mockResolvedValue({
+      payload: {
+        path: 'handwrite_res/nested/result.txt',
+        status: 'untracked',
+        original_content: '',
+        modified_content: 'expanded',
+        size_original: 0,
+        size_modified: 8,
+      },
+    })
+    useUIStore.setState({
+      gitDiffSummary: {
+        in_git_repo: true,
+        branch: 'main',
+        ahead: 0,
+        behind: 0,
+        truncated: false,
+        total_count: 1,
+        files: [
+          {
+            path: 'handwrite_res/nested/result.txt',
+            status: 'untracked',
+          },
+        ],
+      },
+    } as never)
+
+    render(<FileChangePanel />)
+
+    fireEvent.click(screen.getByTestId(`preview-tab-${GIT_DIFF_PREVIEW_TAB_ID}`))
+    fireEvent.click(await screen.findByTestId('git-diff-entry-handwrite_res/nested/result.txt'))
+
+    await waitFor(() => {
+      expect(mockGatewayAPI.readGitDiffFile).toHaveBeenCalledWith({ path: 'handwrite_res/nested/result.txt' })
+    })
   })
 
   it('renders the Monaco-based preview host for loaded text files', async () => {

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useUIStore, type FilePreviewTab } from '@/stores/useUIStore'
 import { useWorkspaceStore } from '@/stores/useWorkspaceStore'
 import { useGatewayAPI } from '@/context/RuntimeProvider'
@@ -38,7 +38,7 @@ function buildFileTree(entries: FileEntry[]): FileTreeNode[] {
   const rootNodes: FileTreeNode[] = []
   const dirMap = new Map<string, FileTreeNode>()
 
-  // 先创建所有目录节点
+  // 先创建所有目录节点。
   for (const entry of entries) {
     if (entry.is_dir) {
       const node: FileTreeNode = { entry, children: [] }
@@ -46,7 +46,7 @@ function buildFileTree(entries: FileEntry[]): FileTreeNode[] {
     }
   }
 
-  // 再分配所有节点到父目录
+  // 再把所有节点归到父目录下。
   for (const entry of entries) {
     const parentPath = entry.path.split('/').slice(0, -1).join('/')
     if (parentPath && dirMap.has(parentPath)) {
@@ -57,14 +57,14 @@ function buildFileTree(entries: FileEntry[]): FileTreeNode[] {
         parent.children!.push({ entry })
       }
     } else if (!parentPath) {
-      // 根级别节点
+      // 根级节点。
       if (entry.is_dir) {
         rootNodes.push(dirMap.get(entry.path)!)
       } else {
         rootNodes.push({ entry })
       }
     } else {
-      // 父目录缺失：作为根节点挂载（容错处理，避免节点丢失）
+      // 父目录缺失时挂到根级，避免节点被丢弃。
       if (entry.is_dir) {
         rootNodes.push(dirMap.get(entry.path)!)
       } else {
@@ -99,6 +99,7 @@ function FileTreeItem({ node, depth = 0, dirCache, onLoadDir, onOpenFile }: File
       await onOpenFile(node.entry.path)
       return
     }
+
     if (!isLoaded) {
       setLocalLoading(true)
       try {
@@ -190,13 +191,36 @@ export default function FileTreePanel() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [currentPath, setCurrentPath] = useState('')
+  const activeWorkspaceRef = useRef(currentWorkspaceHash)
+  const rootRequestTokenRef = useRef(0)
+  const mountedRef = useRef(true)
+
+  useEffect(() => {
+    return () => {
+      mountedRef.current = false
+    }
+  }, [])
+
+  useEffect(() => {
+    activeWorkspaceRef.current = currentWorkspaceHash
+  }, [currentWorkspaceHash])
 
   const loadDir = useCallback(async (path: string) => {
     if (!gatewayAPI) return
+
+    const requestWorkspaceHash = activeWorkspaceRef.current
+
     try {
       const result = await gatewayAPI.listFiles({ path })
+      if (!mountedRef.current || activeWorkspaceRef.current !== requestWorkspaceHash) {
+        return
+      }
+
       const nodes = buildFileTree(result.payload.files)
       setDirCache((prev) => {
+        if (!mountedRef.current || activeWorkspaceRef.current !== requestWorkspaceHash) {
+          return prev
+        }
         const next = new Map(prev)
         next.set(path, nodes)
         return next
@@ -207,24 +231,55 @@ export default function FileTreePanel() {
     }
   }, [gatewayAPI])
 
-  const loadRoot = useCallback(async () => {
+  // loadRoot 在工作区切换时重置文件树状态，并丢弃旧工作区的晚到响应。
+  const loadRoot = useCallback(async (workspaceHash: string) => {
     if (!gatewayAPI) return
+
+    const requestToken = rootRequestTokenRef.current + 1
+    rootRequestTokenRef.current = requestToken
+
+    setRootNodes([])
+    setDirCache(new Map())
+    setCurrentPath('')
     setLoading(true)
     setError('')
+
     try {
       const result = await gatewayAPI.listFiles({ path: '' })
+      if (
+        !mountedRef.current ||
+        activeWorkspaceRef.current !== workspaceHash ||
+        rootRequestTokenRef.current !== requestToken
+      ) {
+        return
+      }
+
       setRootNodes(buildFileTree(result.payload.files))
       setCurrentPath('')
     } catch (err) {
+      if (
+        !mountedRef.current ||
+        activeWorkspaceRef.current !== workspaceHash ||
+        rootRequestTokenRef.current !== requestToken
+      ) {
+        return
+      }
+
       const msg = err instanceof Error ? err.message : 'Failed to load file list'
       setError(msg)
       console.error('listFiles failed:', err)
     } finally {
-      setLoading(false)
+      if (
+        mountedRef.current &&
+        activeWorkspaceRef.current === workspaceHash &&
+        rootRequestTokenRef.current === requestToken
+      ) {
+        setLoading(false)
+      }
     }
   }, [gatewayAPI])
 
-  // openFilePreview 负责复用/创建文件标签，并按需拉取只读预览内容。
+  // openFilePreview 负责复用或创建文件标签，并按需拉取只读预览内容。
   const openFilePreview = useCallback(async (path: string) => {
     if (!gatewayAPI) return
 
@@ -248,8 +303,9 @@ export default function FileTreePanel() {
   }, [gatewayAPI, openPreviewTab, setPreviewTabContent, setPreviewTabError, setPreviewTabLoading])
 
   useEffect(() => {
-    loadRoot()
-  }, [loadRoot])
+    activeWorkspaceRef.current = currentWorkspaceHash
+    void loadRoot(currentWorkspaceHash)
+  }, [currentWorkspaceHash, loadRoot])
 
   return (
     <div style={styles.container}>

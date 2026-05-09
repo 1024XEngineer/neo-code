@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type RefObject, type WheelEvent as ReactWheelEvent } from 'react'
 import { ChevronRight, Check, FileDiff, Loader2, PanelRightClose, RefreshCw, X } from 'lucide-react'
 import { useGatewayAPI } from '@/context/RuntimeProvider'
 import { useWorkspaceStore } from '@/stores/useWorkspaceStore'
@@ -110,6 +110,13 @@ function getPreviewBadge(tab: PreviewTab, fileChanges: FileChange[]) {
   return null
 }
 
+function getContextPreviewTabID(activeTab: PreviewTab | undefined) {
+  if (!activeTab) return CHANGES_PREVIEW_TAB_ID
+  if (activeTab.kind === 'file') return CHANGES_PREVIEW_TAB_ID
+  if (activeTab.kind === 'git-diff-file') return GIT_DIFF_PREVIEW_TAB_ID
+  return activeTab.id
+}
+
 function formatPreviewMeta(tab: FilePreviewTab) {
   const segments: string[] = []
   if (typeof tab.size === 'number') {
@@ -160,18 +167,33 @@ function FileChangeItem({
   change,
   expanded,
   onToggle,
+  scrollContainerRef,
 }: {
   change: FileChange
   expanded: boolean
   onToggle: () => void
+  scrollContainerRef: RefObject<HTMLDivElement | null>
 }) {
   const acceptFileChange = useUIStore((state) => state.acceptFileChange)
   const meta = getChangeStatusMeta(change.status)
   const reviewed = change.status === 'accepted' || change.status === 'rejected'
   const displayHunks = getDisplayHunks(change)
 
+  // 将 diff 内层收到的纵向滚轮显式转发给外层列表，避免 hover 在 hunk 上时卡住整列滚动。
+  const handleHunkWheel = (event: ReactWheelEvent<HTMLDivElement>) => {
+    if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) {
+      return
+    }
+    const scrollContainer = scrollContainerRef.current
+    if (!scrollContainer) {
+      return
+    }
+    scrollContainer.scrollBy({ top: event.deltaY })
+    event.preventDefault()
+  }
+
   return (
-    <div style={styles.changeCard}>
+    <div data-testid={`change-card-${change.id}`} style={styles.changeCard}>
       <button style={styles.changeHeader} onClick={onToggle}>
         <span style={{ ...styles.chevron, transform: expanded ? 'rotate(90deg)' : 'rotate(0deg)' }}>
           <ChevronRight size={12} />
@@ -212,7 +234,11 @@ function FileChangeItem({
                   data-testid={`diff-hunk-${change.id}-${index}`}
                   style={styles.hunkBlock}
                 >
-                  <div data-testid={`diff-hunk-scroller-${change.id}-${index}`} style={styles.hunkScroller}>
+                  <div
+                    data-testid={`diff-hunk-scroller-${change.id}-${index}`}
+                    style={styles.hunkScroller}
+                    onWheel={handleHunkWheel}
+                  >
                     {hunk.lines.map((line, lineIndex) => (
                       <DiffLineView key={`${change.id}-${index}-${lineIndex}`} line={line} />
                     ))}
@@ -231,6 +257,7 @@ function ChangesView() {
   const fileChanges = useUIStore((state) => state.fileChanges)
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set())
   const counts = useMemo(() => getChangeCounts(fileChanges), [fileChanges])
+  const scrollAreaRef = useRef<HTMLDivElement | null>(null)
 
   const toggleExpanded = (id: string) => {
     setExpandedIds((current) => {
@@ -254,18 +281,21 @@ function ChangesView() {
         </div>
       </div>
 
-      <div data-testid="changes-scroll-area" style={styles.scrollArea}>
+      <div ref={scrollAreaRef} data-testid="changes-scroll-area" style={styles.scrollArea}>
         {fileChanges.length === 0 ? (
           <div style={styles.emptyState}>当前会话暂无文件变更</div>
         ) : (
-          fileChanges.map((change) => (
-            <FileChangeItem
-              key={change.id}
-              change={change}
-              expanded={expandedIds.has(change.id)}
-              onToggle={() => toggleExpanded(change.id)}
-            />
-          ))
+          <div data-testid="changes-content-stack" style={styles.contentStack}>
+            {fileChanges.map((change) => (
+              <FileChangeItem
+                key={change.id}
+                change={change}
+                expanded={expandedIds.has(change.id)}
+                onToggle={() => toggleExpanded(change.id)}
+                scrollContainerRef={scrollAreaRef}
+              />
+            ))}
+          </div>
         )}
       </div>
     </div>
@@ -420,7 +450,7 @@ function GitDiffView({
           <div style={styles.emptyState}>当前工作树没有未提交变更</div>
         )}
         {!loading && !error && summary.in_git_repo && summary.files.length > 0 && (
-          <>
+          <div data-testid="git-diff-content-stack" style={styles.contentStack}>
             {summary.files.map((file) => {
               const meta = gitDiffStatusMeta[file.status]
               return (
@@ -440,7 +470,7 @@ function GitDiffView({
               )
             })}
             {summary.truncated && <div style={styles.previewMeta}>列表已按上限截断，仅显示前 200 个变更文件。</div>}
-          </>
+          </div>
         )}
       </div>
     </div>
@@ -461,6 +491,22 @@ function PreviewTabStrip({
   onClose: (id: string) => void
 }) {
   const tabRefs = useRef<Record<string, HTMLButtonElement | null>>({})
+  const fixedTabs = useMemo(
+    () => tabs.filter((tab) => tab.kind === 'changes' || tab.kind === 'git-diff'),
+    [tabs],
+  )
+  const previewFileTabs = useMemo(
+    () => tabs.filter((tab) => tab.kind === 'file' || tab.kind === 'git-diff-file'),
+    [tabs],
+  )
+  const activeTab = useMemo(
+    () => tabs.find((tab) => tab.id === activeTabId),
+    [activeTabId, tabs],
+  )
+  const contextTabId = useMemo(
+    () => getContextPreviewTabID(activeTab),
+    [activeTab],
+  )
 
   useEffect(() => {
     const active = tabRefs.current[activeTabId]
@@ -498,53 +544,107 @@ function PreviewTabStrip({
     }
   }
 
-  return (
-    <div role="tablist" aria-label="右侧预览标签" data-preview-tablist="1" style={styles.tabStrip}>
-      {tabs.map((tab, index) => {
-        const badge = getPreviewBadge(tab, fileChanges)
-        const active = tab.id === activeTabId
+  const renderTab = (tab: PreviewTab, index: number, appearance: 'switcher' | 'chip') => {
+    const badge = getPreviewBadge(tab, fileChanges)
+    const active = tab.id === activeTabId
+    const contextActive = appearance === 'switcher' && !active && tab.id === contextTabId
+    const title = tab.kind === 'file' || tab.kind === 'git-diff-file' ? tab.path : tab.title
 
-        return (
-          <div
-            key={tab.id}
-            style={{ ...styles.tabItem, ...(active ? styles.tabItemActive : {}) }}
-            title={tab.kind === 'file' || tab.kind === 'git-diff-file' ? tab.path : tab.title}
+    if (appearance === 'switcher') {
+      return (
+        <button
+          key={tab.id}
+          ref={(node) => {
+            tabRefs.current[tab.id] = node
+          }}
+          id={`preview-tab-${tab.id}`}
+          data-testid={`preview-tab-${tab.id}`}
+          data-context-active={contextActive ? 'true' : 'false'}
+          role="tab"
+          type="button"
+          aria-selected={active}
+          aria-controls={`preview-panel-${tab.id}`}
+          tabIndex={active ? 0 : -1}
+          title={title}
+          onClick={() => onActivate(tab.id)}
+          onKeyDown={(event) => handleKeyDown(event, index)}
+          style={{
+            ...styles.switcherButton,
+            ...(active ? styles.switcherButtonActive : {}),
+            ...(contextActive ? styles.switcherButtonContext : {}),
+          }}
+        >
+          <span style={styles.switcherLabel}>{tab.title}</span>
+        </button>
+      )
+    }
+
+    return (
+      <div
+        key={tab.id}
+        style={{
+          ...styles.chipItem,
+          ...(active ? styles.chipItemActive : {}),
+        }}
+        title={title}
+      >
+        <button
+          ref={(node) => {
+            tabRefs.current[tab.id] = node
+          }}
+          id={`preview-tab-${tab.id}`}
+          data-testid={`preview-tab-${tab.id}`}
+          role="tab"
+          type="button"
+          aria-selected={active}
+          aria-controls={`preview-panel-${tab.id}`}
+          tabIndex={active ? 0 : -1}
+          onClick={() => onActivate(tab.id)}
+          onKeyDown={(event) => handleKeyDown(event, index)}
+          style={styles.chipButton}
+        >
+          {badge && <span style={{ ...styles.chipDot, background: badge.color }} />}
+          <span style={styles.chipLabel}>{tab.title}</span>
+        </button>
+        {tab.closable && (
+          <button
+            type="button"
+            data-testid={`preview-tab-close-${tab.id}`}
+            aria-label={`close ${tab.title}`}
+            onClick={(event) => {
+              event.stopPropagation()
+              onClose(tab.id)
+            }}
+            style={{
+              ...styles.chipCloseButton,
+              ...(active ? styles.chipCloseButtonActive : {}),
+            }}
           >
-            <button
-              ref={(node) => {
-                tabRefs.current[tab.id] = node
-              }}
-              id={`preview-tab-${tab.id}`}
-              data-testid={`preview-tab-${tab.id}`}
-              role="tab"
-              type="button"
-              aria-selected={active}
-              aria-controls={`preview-panel-${tab.id}`}
-              tabIndex={active ? 0 : -1}
-              onClick={() => onActivate(tab.id)}
-              onKeyDown={(event) => handleKeyDown(event, index)}
-              style={styles.tabButton}
-            >
-              {badge && <span style={{ ...styles.tabBadge, color: badge.color }}>{badge.label}</span>}
-              <span style={styles.tabLabel}>{tab.title}</span>
-            </button>
-            {tab.closable && (
-              <button
-                type="button"
-                data-testid={`preview-tab-close-${tab.id}`}
-                aria-label={`关闭 ${tab.title}`}
-                onClick={(event) => {
-                  event.stopPropagation()
-                  onClose(tab.id)
-                }}
-                style={styles.tabCloseButton}
-              >
-                <X size={12} />
-              </button>
-            )}
-          </div>
-        )
-      })}
+            <X size={12} />
+          </button>
+        )}
+      </div>
+    )
+  }
+
+  return (
+    <div role="tablist" aria-label="right preview tabs" data-preview-tablist="1" style={styles.tabStack}>
+      <div data-testid="preview-primary-tabs" style={styles.switcherRow}>
+        <div style={styles.switcherRail}>
+          {fixedTabs.map((tab) => {
+            const index = tabs.findIndex((entry) => entry.id === tab.id)
+            return renderTab(tab, index, 'switcher')
+          })}
+        </div>
+      </div>
+      {previewFileTabs.length > 0 && (
+        <div data-testid="preview-secondary-tabs" style={styles.chipRow}>
+          {previewFileTabs.map((tab) => {
+            const index = tabs.findIndex((entry) => entry.id === tab.id)
+            return renderTab(tab, index, 'chip')
+          })}
+        </div>
+      )}
     </div>
   )
 }
@@ -686,81 +786,131 @@ const styles: Record<string, CSSProperties> = {
   },
   dockHeader: {
     display: 'flex',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     gap: 8,
-    padding: '8px 10px 0',
+    padding: '8px 10px 10px',
     borderBottom: '1px solid var(--border-primary)',
     flexShrink: 0,
   },
-  tabStrip: {
+  tabStack: {
     display: 'flex',
-    alignItems: 'stretch',
-    gap: 2,
-    overflowX: 'auto',
-    paddingBottom: 8,
+    flexDirection: 'column',
+    gap: 6,
+    minWidth: 0,
     flex: 1,
   },
-  tabItem: {
+  switcherRow: {
+    display: 'flex',
+    alignItems: 'center',
+    minWidth: 0,
+  },
+  switcherRail: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 2,
+    minWidth: 0,
+    padding: 2,
+    borderRadius: 'var(--radius-md)',
+    background: 'rgba(148, 163, 184, 0.08)',
+  },
+  switcherButton: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    height: 28,
+    padding: '0 12px',
+    border: 'none',
+    borderRadius: 'var(--radius-sm)',
+    background: 'transparent',
+    color: 'var(--text-secondary)',
+    minWidth: 0,
+    cursor: 'pointer',
+    transition: 'all var(--duration-fast) var(--ease-out)',
+  },
+  switcherButtonActive: {
+    background: 'var(--bg-active)',
+    color: 'var(--text-primary)',
+    boxShadow: 'inset 0 -1px 0 var(--accent)',
+  },
+  switcherButtonContext: {
+    background: 'rgba(148, 163, 184, 0.08)',
+    color: 'var(--text-primary)',
+    boxShadow: 'inset 0 -1px 0 var(--border-primary)',
+  },
+  switcherLabel: {
+    fontFamily: 'var(--font-ui)',
+    fontSize: 12,
+    fontWeight: 500,
+  },
+  chipRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 6,
+    overflowX: 'auto',
+    paddingBottom: 2,
+  },
+  chipItem: {
     display: 'flex',
     alignItems: 'center',
     minWidth: 0,
     maxWidth: 220,
-    borderRadius: '10px 10px 0 0',
-    borderTop: '1px solid transparent',
-    borderLeft: '1px solid transparent',
-    borderRight: '1px solid transparent',
-    borderBottom: 'none',
+    height: 26,
+    paddingLeft: 2,
+    borderRadius: 'var(--radius-full)',
+    border: '1px solid transparent',
     background: 'rgba(148, 163, 184, 0.08)',
     color: 'var(--text-secondary)',
+    flexShrink: 0,
   },
-  tabItemActive: {
-    background: 'var(--bg-primary)',
-    borderTopColor: 'var(--border-primary)',
-    borderLeftColor: 'var(--border-primary)',
-    borderRightColor: 'var(--border-primary)',
+  chipItemActive: {
+    background: 'var(--bg-active)',
+    borderColor: 'var(--border-primary)',
     color: 'var(--text-primary)',
-    boxShadow: '0 -1px 0 rgba(255,255,255,0.03) inset',
   },
-  tabButton: {
+  chipButton: {
     display: 'flex',
     alignItems: 'center',
-    gap: 6,
+    gap: 8,
     minWidth: 0,
     maxWidth: 188,
-    padding: '8px 10px 7px',
+    height: '100%',
+    padding: '0 10px',
     border: 'none',
     background: 'transparent',
     color: 'inherit',
     cursor: 'pointer',
     textAlign: 'left',
   },
-  tabBadge: {
-    fontSize: 10,
-    fontWeight: 700,
+  chipDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 'var(--radius-full)',
     flexShrink: 0,
-    fontFamily: 'var(--font-ui)',
   },
-  tabLabel: {
+  chipLabel: {
     overflow: 'hidden',
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap',
     fontFamily: 'var(--font-ui)',
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: 500,
   },
-  tabCloseButton: {
+  chipCloseButton: {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    width: 22,
-    height: 22,
-    marginRight: 6,
+    width: 18,
+    height: 18,
+    marginRight: 4,
     border: 'none',
-    borderRadius: '999px',
+    borderRadius: 'var(--radius-full)',
     background: 'transparent',
     color: 'var(--text-tertiary)',
     cursor: 'pointer',
     flexShrink: 0,
+  },
+  chipCloseButtonActive: {
+    color: 'var(--text-secondary)',
   },
   closeBtn: {
     display: 'flex',
@@ -768,7 +918,6 @@ const styles: Record<string, CSSProperties> = {
     justifyContent: 'center',
     width: 24,
     height: 24,
-    marginBottom: 8,
     borderRadius: 'var(--radius-sm)',
     border: 'none',
     background: 'transparent',
@@ -786,7 +935,7 @@ const styles: Record<string, CSSProperties> = {
   viewContainer: {
     display: 'flex',
     flexDirection: 'column',
-    height: '100%',
+    flex: 1,
     minHeight: 0,
     overflow: 'hidden',
   },
@@ -836,6 +985,8 @@ const styles: Record<string, CSSProperties> = {
     minHeight: 0,
     overflow: 'auto',
     padding: 12,
+  },
+  contentStack: {
     display: 'flex',
     flexDirection: 'column',
     gap: 10,
@@ -853,6 +1004,7 @@ const styles: Record<string, CSSProperties> = {
     borderRadius: 10,
     overflow: 'hidden',
     background: 'var(--bg-primary)',
+    flexShrink: 0,
   },
   changeHeader: {
     width: '100%',
@@ -955,7 +1107,8 @@ const styles: Record<string, CSSProperties> = {
   },
   hunkScroller: {
     overflowX: 'auto',
-    overflowY: 'visible',
+    overflowY: 'hidden',
+    maxWidth: '100%',
   },
   diffLine: {
     display: 'grid',
@@ -1038,6 +1191,7 @@ const styles: Record<string, CSSProperties> = {
     color: 'inherit',
     cursor: 'pointer',
     textAlign: 'left',
+    flexShrink: 0,
   },
   gitDiffBadge: {
     display: 'inline-flex',

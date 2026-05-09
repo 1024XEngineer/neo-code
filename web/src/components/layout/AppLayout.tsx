@@ -8,6 +8,7 @@ import ToastContainer from '@/components/ui/ToastContainer'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
 import { useUIStore } from '@/stores/useUIStore'
 import { useSessionStore } from '@/stores/useSessionStore'
+import { useWorkspaceStore } from '@/stores/useWorkspaceStore'
 
 interface AppLayoutProps {
   shellMode?: 'electron' | 'browser'
@@ -53,6 +54,7 @@ export default function AppLayout({ shellMode = 'electron' }: AppLayoutProps) {
   const fileTreePanelOpen = useUIStore((s) => s.fileTreePanelOpen)
   const fileTreePanelWidth = useUIStore((s) => s.fileTreePanelWidth)
   const setFileTreePanelWidth = useUIStore((s) => s.setFileTreePanelWidth)
+  const currentWorkspaceHash = useWorkspaceStore((s) => s.currentWorkspaceHash)
 
   const sidebarResize = useResize(useCallback((delta) => {
     setSidebarWidth(Math.max(180, Math.min(500, sidebarWidth + delta)))
@@ -113,7 +115,7 @@ export default function AppLayout({ shellMode = 'electron' }: AppLayoutProps) {
         {fileTreePanelOpen && (
           <div className="right-panel" style={{ width: fileTreePanelWidth, position: 'relative' }}>
             <div className="resize-handle resize-handle-left" onMouseDown={fileTreeResize.onMouseDown} />
-            <FileTreePanel />
+            <FileTreePanel key={`file-tree:${currentWorkspaceHash || 'default'}`} />
           </div>
         )}
       </div>

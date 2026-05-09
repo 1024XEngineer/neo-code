@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -1792,6 +1793,52 @@ func TestGatewayRuntimePortBridgeListFilesFiltersAndSorts(t *testing.T) {
 	}
 }
 
+func TestGatewayRuntimePortBridgeListGitDiffFilesExpandsUntrackedDirectory(t *testing.T) {
+	tmpDir := t.TempDir()
+	runGitTestCommand(t, tmpDir, "init")
+	runGitTestCommand(t, tmpDir, "config", "user.name", "NeoCode Test")
+	runGitTestCommand(t, tmpDir, "config", "user.email", "test@example.com")
+	runGitTestCommand(t, tmpDir, "commit", "--allow-empty", "-m", "init")
+
+	if err := os.MkdirAll(filepath.Join(tmpDir, "handwrite_res", "nested"), 0o755); err != nil {
+		t.Fatalf("mkdir handwrite_res: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, "handwrite_res", "a.txt"), []byte("a\n"), 0o644); err != nil {
+		t.Fatalf("write a.txt: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, "handwrite_res", "nested", "b.txt"), []byte("b\n"), 0o644); err != nil {
+		t.Fatalf("write b.txt: %v", err)
+	}
+
+	bridge, _ := newGatewayRuntimePortBridge(context.Background(), &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)}, testSessionStore)
+	defer bridge.Close()
+
+	result, err := bridge.ListGitDiffFiles(context.Background(), gateway.ListGitDiffFilesInput{
+		SubjectID: testBridgeSubjectID,
+		Workdir:   tmpDir,
+	})
+	if err != nil {
+		t.Fatalf("ListGitDiffFiles() error = %v", err)
+	}
+	if !result.InGitRepo || result.TotalCount != 2 || len(result.Files) != 2 {
+		t.Fatalf("unexpected git diff summary: %+v", result)
+	}
+	gotPaths := []string{result.Files[0].Path, result.Files[1].Path}
+	wantPaths := []string{"handwrite_res/a.txt", "handwrite_res/nested/b.txt"}
+	if strings.Join(gotPaths, ",") != strings.Join(wantPaths, ",") {
+		t.Fatalf("paths = %#v, want %#v", gotPaths, wantPaths)
+	}
+}
+
+func runGitTestCommand(t *testing.T, workdir string, args ...string) {
+	t.Helper()
+	command := exec.Command("git", append([]string{"-C", workdir}, args...)...)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %s failed: %v\n%s", strings.Join(args, " "), err, string(output))
+	}
+}
+
 func TestGatewayRuntimePortBridgeReadFileSuccess(t *testing.T) {
 	tmpDir := t.TempDir()
 	target := filepath.Join(tmpDir, "main.go")
@@ -2590,6 +2637,41 @@ func TestGatewayRuntimePortBridgeListModelsUsesSessionProvider(t *testing.T) {
 	}
 	if models[0].Provider != "openai" || models[0].ID != "gpt-4.1" {
 		t.Fatalf("models = %+v, want openai/gpt-4.1 only", models)
+	}
+}
+
+func TestGatewayRuntimePortBridgeListModelsSessionNotFoundFallsBackToGlobal(t *testing.T) {
+	store := &bridgeSessionStoreWithLoader{
+		bridgeSessionStoreStub: bridgeSessionStoreStub{},
+		loadErr:                agentsession.ErrSessionNotFound,
+	}
+	cfgMgr := &configManagerStub{
+		cfg: config.Config{
+			SelectedProvider: "gemini",
+			CurrentModel:     "gemini-2.5-pro",
+		},
+	}
+	ps := &providerSelectionStub{
+		listOptions: []configstate.ProviderOption{
+			{ID: "openai", Models: []providertypes.ModelDescriptor{{ID: "gpt-4.1", Name: "GPT-4.1"}}},
+			{ID: "gemini", Models: []providertypes.ModelDescriptor{{ID: "gemini-2.5-pro", Name: "Gemini 2.5 Pro"}}},
+		},
+	}
+	bridge, _ := newGatewayRuntimePortBridge(context.Background(), &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)}, store, cfgMgr, ps)
+	defer bridge.Close()
+
+	models, err := bridge.ListModels(context.Background(), gateway.ListModelsInput{
+		SubjectID: testBridgeSubjectID,
+		SessionID: "session-startup-probe-1",
+	})
+	if err != nil {
+		t.Fatalf("ListModels() error = %v", err)
+	}
+	if len(models) != 1 {
+		t.Fatalf("models len = %d, want 1", len(models))
+	}
+	if models[0].Provider != "gemini" || models[0].ID != "gemini-2.5-pro" {
+		t.Fatalf("models = %+v, want gemini/gemini-2.5-pro only", models)
 	}
 }
 

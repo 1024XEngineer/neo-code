@@ -25,6 +25,12 @@ var (
 	webCommandStartGatewayServer = startGatewayServer
 	webCommandBuildFrontend      = buildFrontend
 	webCommandLookPath           = exec.LookPath
+	webCommandEmbeddedAssets     = func() (fs.FS, bool) {
+		if !webassets.IsAvailable() {
+			return nil, false
+		}
+		return webassets.FS, true
+	}
 )
 
 type webCommandOptions struct {
@@ -57,7 +63,7 @@ func newWebCommand() *cobra.Command {
 	cmd.Flags().StringVar(&options.LogLevel, "log-level", "info", "gateway log level: debug|info|warn|error")
 	cmd.Flags().StringVar(&options.StaticDir, "static-dir", "", "frontend static files directory override")
 	cmd.Flags().BoolVar(&options.OpenBrowser, "open-browser", true, "open browser automatically")
-	cmd.Flags().BoolVar(&options.SkipBuild, "skip-build", false, "skip frontend build (error if dist/ missing)")
+	cmd.Flags().BoolVar(&options.SkipBuild, "skip-build", false, "skip local frontend build (still works with embedded assets)")
 	cmd.Flags().StringVar(&options.TokenFile, "token-file", "", "gateway auth token file path")
 
 	return cmd
@@ -66,6 +72,7 @@ func newWebCommand() *cobra.Command {
 // runWebCommand 执行 web 子命令：解析前端目录 → 构建前端（可选） → 启动 Gateway → 打开浏览器。
 func runWebCommand(ctx context.Context, options webCommandOptions) error {
 	logger := log.New(os.Stderr, "neocode-web: ", log.LstdFlags)
+	embeddedAssets, embeddedAssetsAvailable := webCommandEmbeddedAssets()
 
 	// 如果未指定 workdir，默认使用当前工作目录
 	if strings.TrimSpace(options.Workdir) == "" {
@@ -76,47 +83,55 @@ func runWebCommand(ctx context.Context, options webCommandOptions) error {
 
 	// 1. 解析前端静态文件目录
 	staticDir, err := resolveWebStaticDir(options.StaticDir)
-	needBuild := err != nil
-
-	// 检查源码是否比 dist 更新（仅在 dist 存在且未指定 --static-dir 时）
-	if err == nil && options.StaticDir == "" {
-		webDir := findWebSourceDir()
-		if webDir != "" && isStaleFrontendBuild(webDir) {
-			logger.Println("frontend source is newer than build output, rebuilding...")
-			needBuild = true
+	switch {
+	case options.StaticDir != "":
+		if err != nil {
+			return fmt.Errorf("invalid --static-dir: %w", err)
 		}
-	}
-
-	if needBuild {
+	case err != nil && embeddedAssetsAvailable:
+		logger.Println("frontend dist not found, falling back to embedded assets")
+		staticDir = ""
+	case err != nil:
 		if options.SkipBuild {
-			return fmt.Errorf("frontend needs rebuild and --skip-build is set")
+			return fmt.Errorf("frontend assets missing and --skip-build is set")
 		}
 		webDir := findWebSourceDir()
 		if webDir == "" {
-			if err != nil {
-				return fmt.Errorf(
-					"frontend assets unavailable: %w; release packages must include the web/ source directory, or source builds must run from the project root or use --static-dir",
-					err,
-				)
-			}
 			return fmt.Errorf(
-				"web source directory not found; release packages must include web/, or source builds must run from project root or set --static-dir",
+				"frontend assets unavailable: %w; source builds must run from the project root, provide --static-dir, or use a release binary with embedded web assets",
+				err,
 			)
 		}
 		if buildErr := webCommandBuildFrontend(webDir, logger); buildErr != nil {
-			return fmt.Errorf("frontend build failed on this machine after detecting bundled web source: %w", buildErr)
+			return fmt.Errorf("frontend build failed on this machine after detecting local web source: %w", buildErr)
 		}
-		// 构建后重新解析
 		staticDir, err = resolveWebStaticDir(options.StaticDir)
 		if err != nil {
 			return fmt.Errorf("frontend dist not found after build: %w", err)
 		}
+	default:
+		// 检查源码是否比 dist 更新（仅在 dist 存在且未指定 --static-dir 时）
+		webDir := findWebSourceDir()
+		if webDir != "" && isStaleFrontendBuild(webDir) {
+			logger.Println("frontend source is newer than build output, rebuilding...")
+			if options.SkipBuild {
+				return fmt.Errorf("frontend needs rebuild and --skip-build is set")
+			}
+			if buildErr := webCommandBuildFrontend(webDir, logger); buildErr != nil {
+				return fmt.Errorf("frontend build failed on this machine after detecting local web source: %w", buildErr)
+			}
+			staticDir, err = resolveWebStaticDir(options.StaticDir)
+			if err != nil {
+				return fmt.Errorf("frontend dist not found after build: %w", err)
+			}
+		}
 	}
+
 	// 2. 确定静态文件来源：外部目录优先，找不到时回退到嵌入资源
 	var staticFileFS fs.FS
 	if staticDir == "" {
-		if webassets.IsAvailable() {
-			staticFileFS = webassets.FS
+		if embeddedAssetsAvailable {
+			staticFileFS = embeddedAssets
 			logger.Println("serving web UI from embedded assets")
 		} else {
 			logger.Println("warning: no web UI assets found (external dist missing and embedded assets not compiled)")

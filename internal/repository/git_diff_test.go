@@ -119,4 +119,39 @@ func TestReadGitDiffFile(t *testing.T) {
 			t.Fatalf("expected truncated diff result, got %+v", result)
 		}
 	})
+
+	t.Run("reads expanded files from untracked directories", func(t *testing.T) {
+		service := &Service{
+			gitRunner: func(ctx context.Context, workdir string, opts GitCommandOptions, args ...string) (GitCommandOutput, error) {
+				return GitCommandOutput{Text: "## main\x00?? handwrite_res\x00"}, nil
+			},
+			readFile: readFile,
+		}
+		workdir := t.TempDir()
+		mustWriteRepositoryFile(t, filepath.Join(workdir, "handwrite_res", "nested", "result.txt"), "expanded content\n")
+
+		result, err := service.ReadGitDiffFile(context.Background(), workdir, "handwrite_res/nested/result.txt", 1024)
+		if err != nil {
+			t.Fatalf("ReadGitDiffFile() error = %v", err)
+		}
+		if result.Status != StatusUntracked || result.ModifiedContent != "expanded content\n" {
+			t.Fatalf("unexpected expanded untracked diff result: %+v", result)
+		}
+	})
+
+	t.Run("returns explicit directory error for git diff directory path", func(t *testing.T) {
+		service := &Service{
+			gitRunner: func(ctx context.Context, workdir string, opts GitCommandOptions, args ...string) (GitCommandOutput, error) {
+				return GitCommandOutput{Text: "## main\x00?? handwrite_res\x00"}, nil
+			},
+			readFile: readFile,
+		}
+		workdir := t.TempDir()
+		mustWriteRepositoryFile(t, filepath.Join(workdir, "handwrite_res", "nested", "result.txt"), "expanded content\n")
+
+		_, err := service.ReadGitDiffFile(context.Background(), workdir, "handwrite_res", 1024)
+		if err == nil || !strings.Contains(err.Error(), "is a directory") {
+			t.Fatalf("expected directory error, got %v", err)
+		}
+	})
 }

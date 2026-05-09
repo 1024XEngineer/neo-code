@@ -27,6 +27,17 @@ jobs:
         with:
           go-version-file: 'go.mod' # 💡 修复点 1：让 Action 自动跟随项目真实的 Go 版本
 
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Build web dist
+        working-directory: web
+        run: |
+          npm ci
+          npm run build
+
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v5
         with:

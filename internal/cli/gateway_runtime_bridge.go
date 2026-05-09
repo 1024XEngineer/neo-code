@@ -2122,10 +2122,13 @@ func (b *gatewayRuntimePortBridge) resolveEffectiveProviderModel(
 		}
 		session, err := b.loadStoredSession(ctx, sessionID)
 		if err != nil {
-			return "", "", err
+			if !isRuntimeNotFoundError(err) {
+				return "", "", err
+			}
+		} else {
+			sessionProviderID = strings.TrimSpace(session.Provider)
+			sessionModelID = strings.TrimSpace(session.Model)
 		}
-		sessionProviderID = strings.TrimSpace(session.Provider)
-		sessionModelID = strings.TrimSpace(session.Model)
 	}
 
 	cfg := b.currentConfig()

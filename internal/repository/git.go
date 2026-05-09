@@ -8,9 +8,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
+
+	"neo-code/internal/security"
 )
 
 const (
@@ -68,7 +71,16 @@ func (s *Service) loadGitSnapshot(ctx context.Context, workdir string) (gitSnaps
 		return gitSnapshot{}, err
 	}
 
-	return parseGitSnapshot(output.Text), nil
+	snapshot := parseGitSnapshot(output.Text)
+	expandedEntries, expandErr := expandUntrackedDirectoryEntries(ctx, workdir, snapshot.Entries)
+	if expandErr != nil {
+		if isContextError(expandErr) {
+			return gitSnapshot{}, expandErr
+		}
+		return gitSnapshot{}, expandErr
+	}
+	snapshot.Entries = expandedEntries
+	return snapshot, nil
 }
 
 // changedFileSnippet 按固定语义为单个变更条目生成受限片段。
@@ -160,6 +172,76 @@ func parseGitSnapshot(output string) gitSnapshot {
 		}
 	}
 	return snapshot
+}
+
+// expandUntrackedDirectoryEntries 将 git status 返回的未跟踪目录展开为具体文件条目，避免后续预览阶段把目录当文件处理。
+func expandUntrackedDirectoryEntries(ctx context.Context, workdir string, entries []gitChangedEntry) ([]gitChangedEntry, error) {
+	if len(entries) == 0 {
+		return nil, nil
+	}
+
+	expanded := make([]gitChangedEntry, 0, len(entries))
+	for _, entry := range entries {
+		if entry.Status != StatusUntracked {
+			expanded = append(expanded, entry)
+			continue
+		}
+
+		resolvedPath, err := resolveUntrackedEntryPath(workdir, entry.Path)
+		if err != nil {
+			expanded = append(expanded, entry)
+			continue
+		}
+
+		info, err := os.Stat(resolvedPath)
+		if err != nil {
+			expanded = append(expanded, entry)
+			continue
+		}
+		if !info.IsDir() {
+			expanded = append(expanded, entry)
+			continue
+		}
+
+		dirEntries, err := listUntrackedDirectoryFiles(ctx, workdir, resolvedPath)
+		if err != nil {
+			if isContextError(err) {
+				return nil, err
+			}
+			expanded = append(expanded, entry)
+			continue
+		}
+		expanded = append(expanded, dirEntries...)
+	}
+	return expanded, nil
+}
+
+// resolveUntrackedEntryPath 解析未跟踪条目的工作区绝对路径，供目录展开与防御性校验复用。
+func resolveUntrackedEntryPath(workdir string, relativePath string) (string, error) {
+	return security.ResolveWorkspacePathFromRoot(workdir, relativePath)
+}
+
+// listUntrackedDirectoryFiles 递归列出未跟踪目录下的真实文件，并返回稳定排序后的未跟踪文件条目。
+func listUntrackedDirectoryFiles(ctx context.Context, workdir string, absoluteDir string) ([]gitChangedEntry, error) {
+	files := make([]gitChangedEntry, 0)
+	walkErr := walkWorkspaceFiles(ctx, workdir, absoluteDir, func(path string) error {
+		relativePath, err := filepath.Rel(workdir, path)
+		if err != nil {
+			return err
+		}
+		files = append(files, gitChangedEntry{
+			Path:   filepathSlashClean(relativePath),
+			Status: StatusUntracked,
+		})
+		return nil
+	})
+	if walkErr != nil {
+		return nil, walkErr
+	}
+	sort.Slice(files, func(i int, j int) bool {
+		return filepath.ToSlash(files[i].Path) < filepath.ToSlash(files[j].Path)
+	})
+	return files, nil
 }
 
 // parseBranchLine 解析分支头信息中的分支名与 ahead/behind 计数。
