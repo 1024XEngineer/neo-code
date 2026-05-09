@@ -112,13 +112,14 @@ export type BackendMessage = {
   is_error?: boolean
 }
 
-/** 并发拉取 session 详情 + todos + checkpoints,把后两者写入 RuntimeInsightStore。
- *  todos / checkpoints 失败用 .catch 兜底,不阻断主流程的 loadSession。 */
+/** 并发拉取 session 详情 + todos + checkpoints + runtime snapshot，并把后者写入对应 store。
+ *  todos / checkpoints / runtime snapshot 失败用 .catch 兜底，不阻断主流程的 loadSession。 */
 export async function loadSessionWithInsights(gatewayAPI: GatewayAPI, sessionId: string) {
-  const [sessionFrame, todosResult, checkpointsResult] = await Promise.all([
+  const [sessionFrame, todosResult, checkpointsResult, runtimeSnapshotResult] = await Promise.all([
     gatewayAPI.loadSession(sessionId),
     (gatewayAPI.listSessionTodos?.(sessionId) ?? Promise.resolve(null)).catch(() => null),
     (gatewayAPI.listCheckpoints?.({ session_id: sessionId, limit: 50 }) ?? Promise.resolve(null)).catch(() => null),
+    (gatewayAPI.getRuntimeSnapshot?.(sessionId) ?? Promise.resolve(null)).catch(() => null),
   ])
   const insightStore = useRuntimeInsightStore.getState()
   if (todosResult?.payload) {
@@ -126,6 +127,12 @@ export async function loadSessionWithInsights(gatewayAPI: GatewayAPI, sessionId:
   }
   if (checkpointsResult?.payload) {
     insightStore.setCheckpoints(checkpointsResult.payload)
+  }
+  const pendingQuestion = runtimeSnapshotResult?.payload?.pending_user_question
+  if (pendingQuestion) {
+    useChatStore.getState().setPendingUserQuestion(pendingQuestion)
+  } else {
+    useChatStore.getState().clearPendingUserQuestion()
   }
   return sessionFrame
 }

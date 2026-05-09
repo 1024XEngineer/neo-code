@@ -49,6 +49,24 @@ interface RuntimeContextValue {
 
 const RuntimeContext = createContext<RuntimeContextValue | null>(null)
 
+/** refreshPendingUserQuestion 从 runtime snapshot 刷新当前会话的 ask_user 待答状态。 */
+async function refreshPendingUserQuestion(gatewayAPI: GatewayAPI, sessionId: string) {
+  if (!isValidSessionId(sessionId)) {
+    useChatStore.getState().clearPendingUserQuestion()
+    return
+  }
+  try {
+    const snapshot = await gatewayAPI.getRuntimeSnapshot(sessionId)
+    if (snapshot?.payload?.pending_user_question) {
+      useChatStore.getState().setPendingUserQuestion(snapshot.payload.pending_user_question)
+    } else {
+      useChatStore.getState().clearPendingUserQuestion()
+    }
+  } catch {
+    // best-effort: snapshot 拉取失败不影响主链路
+  }
+}
+
 /** RuntimeProvider 装配前端运行时，并为业务组件提供当前 Gateway 客户端。 */
 export function RuntimeProvider({ children }: { children: ReactNode }) {
   const mode = useMemo(detectRuntimeMode, [])
@@ -147,6 +165,7 @@ export function RuntimeProvider({ children }: { children: ReactNode }) {
         if (hasWorkspaces) {
           await useSessionStore.getState().fetchSessions(api, true)
         }
+        await refreshPendingUserQuestion(api, useSessionStore.getState().currentSessionId)
 
         // Restore connected status after successful reconnect
         setStatus('connected')
@@ -186,6 +205,9 @@ export function RuntimeProvider({ children }: { children: ReactNode }) {
       if (hasWorkspaces) {
         await useSessionStore.getState().fetchSessions(api, true)
         await useSessionStore.getState().initializeActiveSession(api)
+        await refreshPendingUserQuestion(api, useSessionStore.getState().currentSessionId)
+      } else {
+        useChatStore.getState().clearPendingUserQuestion()
       }
 
       // Persist browser config if appropriate

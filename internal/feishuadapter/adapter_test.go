@@ -69,6 +69,19 @@ func (f *fakeGatewayClient) ResolvePermission(_ context.Context, requestID strin
 	f.resolveCount++
 	return f.resolveErr
 }
+func (f *fakeGatewayClient) ResolveUserQuestion(
+	_ context.Context,
+	requestID string,
+	status string,
+	values []string,
+	message string,
+) error {
+	f.record("resolve_user_question:" + requestID + ":" + status + ":" + strings.Join(values, ",") + ":" + strings.TrimSpace(message))
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.resolveCount++
+	return f.resolveErr
+}
 func (f *fakeGatewayClient) Ping(context.Context) error {
 	f.record("ping")
 	f.mu.Lock()
@@ -94,13 +107,15 @@ func (f *fakeGatewayClient) snapshotCalls() []string {
 }
 
 type sentMessage struct {
-	chatID       string
-	kind         string
-	text         string
-	card         PermissionCardPayload
-	runCard      StatusCardPayload
-	cardID       string
-	resolvedCard *ResolvedPermissionCardPayload
+	chatID               string
+	kind                 string
+	text                 string
+	card                 PermissionCardPayload
+	userQuestionCard     UserQuestionCardPayload
+	runCard              StatusCardPayload
+	cardID               string
+	resolvedCard         *ResolvedPermissionCardPayload
+	resolvedUserQuestion *ResolvedUserQuestionCardPayload
 }
 
 type fakeMessenger struct {
@@ -132,6 +147,22 @@ func (m *fakeMessenger) UpdatePermissionCard(_ context.Context, cardID string, p
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.messages = append(m.messages, sentMessage{chatID: cardID, kind: "update_perm_card", resolvedCard: &payload})
+	return nil
+}
+
+func (m *fakeMessenger) SendUserQuestionCard(_ context.Context, chatID string, payload UserQuestionCardPayload) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.nextID++
+	cardID := fmt.Sprintf("ask-card-%d", m.nextID)
+	m.messages = append(m.messages, sentMessage{chatID: chatID, kind: "ask_card", userQuestionCard: payload, cardID: cardID})
+	return cardID, nil
+}
+
+func (m *fakeMessenger) UpdateUserQuestionCard(_ context.Context, cardID string, payload ResolvedUserQuestionCardPayload) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.messages = append(m.messages, sentMessage{chatID: cardID, kind: "update_ask_card", resolvedUserQuestion: &payload})
 	return nil
 }
 
@@ -487,6 +518,80 @@ func TestGatewayEventsMappedToMessagesAndPermissionCard(t *testing.T) {
 	}
 }
 
+func TestGatewayUserQuestionRequestedSingleChoiceSendsCard(t *testing.T) {
+	adapter := newTestAdapter(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go adapter.consumeGatewayEvents(ctx)
+
+	sessionID := BuildSessionID("chat-ask-card")
+	runID := BuildRunID("msg-ask-card")
+	adapter.trackSession(sessionID, runID, "chat-ask-card", "ask task")
+
+	pushGatewayEvent(t, adapterTestGateway(adapter), sessionID, runID, "run_progress", map[string]any{
+		"runtime_event_type": "user_question_requested",
+		"payload": map[string]any{
+			"request_id":  "ask-card-1",
+			"question_id": "q1",
+			"title":       "选择部署环境",
+			"kind":        "single_choice",
+			"allow_skip":  true,
+			"options": []any{
+				map[string]any{"label": "测试环境"},
+				map[string]any{"label": "生产环境"},
+			},
+		},
+	})
+	time.Sleep(30 * time.Millisecond)
+
+	msgs := adapterTestMessenger(adapter).snapshot()
+	found := false
+	for _, message := range msgs {
+		if message.kind == "ask_card" && message.userQuestionCard.RequestID == "ask-card-1" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected ask_user card message, got %#v", msgs)
+	}
+}
+
+func TestGatewayUserQuestionRequestedTextFallsBackToInstructionText(t *testing.T) {
+	adapter := newTestAdapter(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go adapter.consumeGatewayEvents(ctx)
+
+	sessionID := BuildSessionID("chat-ask-text")
+	runID := BuildRunID("msg-ask-text")
+	adapter.trackSession(sessionID, runID, "chat-ask-text", "ask text task")
+
+	pushGatewayEvent(t, adapterTestGateway(adapter), sessionID, runID, "run_progress", map[string]any{
+		"runtime_event_type": "user_question_requested",
+		"payload": map[string]any{
+			"request_id":  "ask-text-1",
+			"question_id": "q-text-1",
+			"title":       "请输入备注",
+			"kind":        "text",
+			"allow_skip":  false,
+		},
+	})
+	time.Sleep(30 * time.Millisecond)
+
+	msgs := adapterTestMessenger(adapter).snapshot()
+	foundInstruction := false
+	for _, message := range msgs {
+		if message.kind == "text" && strings.Contains(message.text, "回答 ask-text-1") {
+			foundInstruction = true
+			break
+		}
+	}
+	if !foundInstruction {
+		t.Fatalf("expected ask_user instruction text, got %#v", msgs)
+	}
+}
+
 func TestBindThenRunCreatesStatusCard(t *testing.T) {
 	adapter := newTestAdapter(t)
 	if err := adapter.bindThenRun(context.Background(), "session-card", "run-card", "chat-card", "编写发布说明"); err != nil {
@@ -569,6 +674,50 @@ func TestGatewayEventsUpdateStatusCard(t *testing.T) {
 	}
 	if !foundPlanning || !foundApproved || !foundSuccess {
 		t.Fatalf("unexpected card updates: %#v", msgs)
+	}
+}
+
+func TestHandleCardActionUserQuestionResolvesAndUpdatesCard(t *testing.T) {
+	adapter := newTestAdapter(t)
+	sessionID := BuildSessionID("chat-ask-resolve")
+	runID := BuildRunID("msg-ask-resolve")
+	adapter.trackSession(sessionID, runID, "chat-ask-resolve", "ask resolve task")
+	adapter.markUserQuestionPending(sessionID, runID, userQuestionEntry{
+		RequestID:   "ask-resolve-1",
+		QuestionID:  "q-resolve-1",
+		Title:       "选择分支",
+		Kind:        "single_choice",
+		AllowSkip:   true,
+		Options:     []UserQuestionCardOption{{Label: "main"}},
+		Description: "请选择目标分支",
+	})
+	adapter.mu.Lock()
+	adapter.userQuestionCards["ask-resolve-1"] = "ask-card-1"
+	adapter.mu.Unlock()
+
+	if err := adapter.HandleCardAction(context.Background(), FeishuCardActionEvent{
+		ActionType: "user_question",
+		RequestID:  "ask-resolve-1",
+		Status:     "answered",
+		Values:     []string{"main"},
+	}); err != nil {
+		t.Fatalf("handle card action: %v", err)
+	}
+
+	if adapterTestGateway(adapter).resolveCount != 1 {
+		t.Fatalf("resolve count = %d, want 1", adapterTestGateway(adapter).resolveCount)
+	}
+	msgs := adapterTestMessenger(adapter).snapshot()
+	foundUpdate := false
+	for _, message := range msgs {
+		if message.kind == "update_ask_card" && message.resolvedUserQuestion != nil &&
+			message.resolvedUserQuestion.RequestID == "ask-resolve-1" {
+			foundUpdate = true
+			break
+		}
+	}
+	if !foundUpdate {
+		t.Fatalf("expected ask card update, got %#v", msgs)
 	}
 }
 
@@ -690,6 +839,34 @@ func TestCardCallbackResolveFailureReturns500(t *testing.T) {
 	}
 }
 
+func TestCardCallbackUserQuestionAnswerAccepted(t *testing.T) {
+	adapter := newTestAdapter(t)
+	sessionID := BuildSessionID("chat-callback-ask")
+	runID := BuildRunID("msg-callback-ask")
+	adapter.trackSession(sessionID, runID, "chat-callback-ask", "ask callback task")
+	adapter.markUserQuestionPending(sessionID, runID, userQuestionEntry{
+		RequestID:  "ask-callback-1",
+		QuestionID: "q-callback-1",
+		Title:      "选择模式",
+		Kind:       "single_choice",
+		Options:    []UserQuestionCardOption{{Label: "快速"}},
+	})
+
+	body := `{"action":{"value":{"action_type":"user_question","request_id":"ask-callback-1","status":"answered","value":"快速"}},"token":"verify"}`
+	request := signedRequest(t, adapter.cfg.SigningSecret, body)
+	recorder := httptest.NewRecorder()
+	adapter.handleCardCallback(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", recorder.Code)
+	}
+	if adapterTestGateway(adapter).resolveCount != 1 {
+		t.Fatalf("resolve count = %d, want 1", adapterTestGateway(adapter).resolveCount)
+	}
+	if !strings.Contains(recorder.Body.String(), "回答已提交") {
+		t.Fatalf("response = %s, want ask toast", recorder.Body.String())
+	}
+}
+
 func TestCardCallbackUrlVerificationAccepted(t *testing.T) {
 	adapter := newTestAdapter(t)
 	body := `{"type":"url_verification","challenge":"card-challenge","token":"verify","header":{"token":"verify"}}`
@@ -734,6 +911,23 @@ func TestCardCallbackProbeWithoutActionReturnsOK(t *testing.T) {
 	adapter.handleCardCallback(recorder, request)
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", recorder.Code)
+	}
+	if adapterTestGateway(adapter).resolveCount != 0 {
+		t.Fatalf("resolve count = %d, want 0", adapterTestGateway(adapter).resolveCount)
+	}
+}
+
+func TestCardCallbackInvalidActionPayloadReturnsInfoWithoutResolve(t *testing.T) {
+	adapter := newTestAdapter(t)
+	body := `{"action":{"value":{"action_type":"permission","request_id":"perm-x","decision":"allow_all"}},"token":"verify","header":{"token":"verify"}}`
+	request := signedRequest(t, adapter.cfg.SigningSecret, body)
+	recorder := httptest.NewRecorder()
+	adapter.handleCardCallback(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", recorder.Code)
+	}
+	if !strings.Contains(recorder.Body.String(), "callback ready") {
+		t.Fatalf("response = %s, want callback ready", recorder.Body.String())
 	}
 	if adapterTestGateway(adapter).resolveCount != 0 {
 		t.Fatalf("resolve count = %d, want 0", adapterTestGateway(adapter).resolveCount)
@@ -971,6 +1165,98 @@ func TestTryHandleTextPermissionRejectFailureRepliesRetryable(t *testing.T) {
 	msgs := adapterTestMessenger(adapter).snapshot()
 	if len(msgs) == 0 || msgs[len(msgs)-1].text != "审批提交失败，请稍后重试。" {
 		t.Fatalf("unexpected failure reply: %#v", msgs)
+	}
+}
+
+func TestTryHandleTextPermissionHandlesAskUserAnswerAndSkip(t *testing.T) {
+	adapter := newTestAdapter(t)
+	sessionID := BuildSessionID("chat-ask-text-cmd")
+	runID := BuildRunID("msg-ask-text-cmd")
+	adapter.trackSession(sessionID, runID, "chat-ask-text-cmd", "ask cmd task")
+	adapter.markUserQuestionPending(sessionID, runID, userQuestionEntry{
+		RequestID:  "ask-cmd-1",
+		QuestionID: "q-cmd-1",
+		Title:      "选择发布环境",
+		Kind:       "single_choice",
+		Options: []UserQuestionCardOption{
+			{Label: "测试环境"},
+			{Label: "生产环境"},
+		},
+		AllowSkip: true,
+	})
+
+	handled, err := adapter.tryHandleTextPermission(context.Background(), "chat-ask-text-cmd", "回答 ask-cmd-1 测试环境")
+	if err != nil || !handled {
+		t.Fatalf("answer command = handled:%v err:%v", handled, err)
+	}
+	handled, err = adapter.tryHandleTextPermission(context.Background(), "chat-ask-text-cmd", "跳过 ask-cmd-1")
+	if err != nil || !handled {
+		t.Fatalf("skip command = handled:%v err:%v", handled, err)
+	}
+	if adapterTestGateway(adapter).resolveCount < 2 {
+		t.Fatalf("resolve count = %d, want >=2", adapterTestGateway(adapter).resolveCount)
+	}
+}
+
+func TestTryHandleTextPermissionRejectsInvalidChoiceAnswer(t *testing.T) {
+	adapter := newTestAdapter(t)
+	sessionID := BuildSessionID("chat-ask-invalid-choice")
+	runID := BuildRunID("msg-ask-invalid-choice")
+	adapter.trackSession(sessionID, runID, "chat-ask-invalid-choice", "ask invalid choice task")
+	adapter.markUserQuestionPending(sessionID, runID, userQuestionEntry{
+		RequestID:  "ask-invalid-choice-1",
+		QuestionID: "q-invalid-choice-1",
+		Title:      "选择发布环境",
+		Kind:       "single_choice",
+		Options: []UserQuestionCardOption{
+			{Label: "测试环境"},
+			{Label: "生产环境"},
+		},
+		AllowSkip: true,
+	})
+
+	handled, err := adapter.tryHandleTextPermission(context.Background(), "chat-ask-invalid-choice", "回答 ask-invalid-choice-1 staging")
+	if err != nil || !handled {
+		t.Fatalf("invalid single_choice answer = handled:%v err:%v", handled, err)
+	}
+	if adapterTestGateway(adapter).resolveCount != 0 {
+		t.Fatalf("resolve count = %d, want 0 for invalid answer", adapterTestGateway(adapter).resolveCount)
+	}
+	msgs := adapterTestMessenger(adapter).snapshot()
+	if len(msgs) == 0 || msgs[len(msgs)-1].text != "回答格式无效，请使用：回答 <request_id> <内容>" {
+		t.Fatalf("unexpected invalid answer reply: %#v", msgs)
+	}
+}
+
+func TestTryHandleTextPermissionRejectsMultiChoiceExceedingMaxChoices(t *testing.T) {
+	adapter := newTestAdapter(t)
+	sessionID := BuildSessionID("chat-ask-max-choice")
+	runID := BuildRunID("msg-ask-max-choice")
+	adapter.trackSession(sessionID, runID, "chat-ask-max-choice", "ask max choice task")
+	adapter.markUserQuestionPending(sessionID, runID, userQuestionEntry{
+		RequestID:  "ask-max-choice-1",
+		QuestionID: "q-max-choice-1",
+		Title:      "选择要发布的区域",
+		Kind:       "multi_choice",
+		Options: []UserQuestionCardOption{
+			{Label: "华北"},
+			{Label: "华东"},
+			{Label: "华南"},
+		},
+		MaxChoices: 2,
+		AllowSkip:  true,
+	})
+
+	handled, err := adapter.tryHandleTextPermission(context.Background(), "chat-ask-max-choice", "回答 ask-max-choice-1 华北,华东,华南")
+	if err != nil || !handled {
+		t.Fatalf("max_choices exceed answer = handled:%v err:%v", handled, err)
+	}
+	if adapterTestGateway(adapter).resolveCount != 0 {
+		t.Fatalf("resolve count = %d, want 0 when max_choices exceeded", adapterTestGateway(adapter).resolveCount)
+	}
+	msgs := adapterTestMessenger(adapter).snapshot()
+	if len(msgs) == 0 || msgs[len(msgs)-1].text != "回答格式无效，请使用：回答 <request_id> <内容>" {
+		t.Fatalf("unexpected max_choices reply: %#v", msgs)
 	}
 }
 
@@ -1265,6 +1551,115 @@ func TestHelperFunctionsCoverFallbackBranches(t *testing.T) {
 	}
 	safeLogAdapter := &Adapter{}
 	safeLogAdapter.safeLog("ignored")
+}
+
+func TestAskUserHelperFunctionsCoverFallbackBranches(t *testing.T) {
+	resolved := extractUserQuestionResolved(map[string]any{
+		"payload": map[string]any{
+			"request_id": " ask-1 ",
+			"status":     " Answered ",
+			"message":    " 已确认 ",
+			"values":     []any{" 选项A ", "", 123, "选项B"},
+		},
+	})
+	if resolved.RequestID != "ask-1" || resolved.Status != "answered" || resolved.Message != "已确认" {
+		t.Fatalf("unexpected resolved payload: %#v", resolved)
+	}
+	if len(resolved.Values) != 2 || resolved.Values[0] != "选项A" || resolved.Values[1] != "选项B" {
+		t.Fatalf("resolved values = %#v, want trimmed string values", resolved.Values)
+	}
+	if fallback := extractUserQuestionResolved(nil); fallback.RequestID != "" || fallback.Status != "" || fallback.Message != "" ||
+		len(fallback.Values) != 0 {
+		t.Fatalf("nil payload fallback = %#v", fallback)
+	}
+
+	if !shouldSendAskUserCard(userQuestionEntry{Kind: "single_choice", Options: []UserQuestionCardOption{{Label: "A"}}}) {
+		t.Fatal("expected single choice question to send card")
+	}
+	if shouldSendAskUserCard(userQuestionEntry{Kind: "text"}) {
+		t.Fatal("expected text question without skip to fall back to plain text")
+	}
+	if !shouldSendAskUserCard(userQuestionEntry{Kind: "text", AllowSkip: true}) {
+		t.Fatal("expected skip-enabled text question to send card")
+	}
+
+	if !isUserQuestionResolvedEvent(" user_question_timeout ") {
+		t.Fatal("expected timeout runtime type to be resolved event")
+	}
+	if isUserQuestionResolvedEvent("user_question_requested") {
+		t.Fatal("did not expect requested runtime type to be resolved event")
+	}
+	if status := userQuestionStatusFromRuntimeType(" user_question_skipped "); status != "skipped" {
+		t.Fatalf("status = %q, want skipped", status)
+	}
+	if status := userQuestionStatusFromRuntimeType("user_question_timeout"); status != "timeout" {
+		t.Fatalf("status = %q, want timeout", status)
+	}
+	if status := userQuestionStatusFromRuntimeType("user_question_answered"); status != "answered" {
+		t.Fatalf("status = %q, want answered", status)
+	}
+
+	prompt := buildAskUserTextPrompt(userQuestionEntry{
+		RequestID:   "ask-2",
+		Title:       "选择部署环境",
+		Description: "请确认本次发布目标",
+		Options: []UserQuestionCardOption{
+			{Label: "测试"},
+			{Label: "生产"},
+		},
+		AllowSkip: true,
+	})
+	if !strings.Contains(prompt, "选择部署环境") || !strings.Contains(prompt, "可选项：测试 / 生产") {
+		t.Fatalf("prompt = %q, want title and option labels", prompt)
+	}
+	if !strings.Contains(prompt, "请回复：回答 ask-2 <内容>") || !strings.Contains(prompt, "如需跳过：跳过 ask-2") {
+		t.Fatalf("prompt = %q, want answer and skip instructions", prompt)
+	}
+	if fallbackPrompt := buildAskUserTextPrompt(userQuestionEntry{}); !strings.Contains(fallbackPrompt, "请回答以下问题") {
+		t.Fatalf("fallback prompt = %q, want default title", fallbackPrompt)
+	}
+
+	if summary := buildUserQuestionResolvedSummary(userQuestionEntry{}, "skipped", nil, ""); summary != "用户已跳过该问题" {
+		t.Fatalf("skip summary = %q", summary)
+	}
+	if summary := buildUserQuestionResolvedSummary(userQuestionEntry{}, "timeout", nil, ""); summary != "问题等待超时" {
+		t.Fatalf("timeout summary = %q", summary)
+	}
+	if summary := buildUserQuestionResolvedSummary(userQuestionEntry{}, "answered", nil, " 已提交 "); summary != "用户回答：已提交" {
+		t.Fatalf("message summary = %q", summary)
+	}
+	if summary := buildUserQuestionResolvedSummary(userQuestionEntry{}, "answered", []string{"A", "B"}, ""); summary != "用户回答：A, B" {
+		t.Fatalf("values summary = %q", summary)
+	}
+	if summary := buildUserQuestionResolvedSummary(userQuestionEntry{Title: "选择模式"}, "answered", nil, ""); summary != "用户已回答：选择模式" {
+		t.Fatalf("title summary = %q", summary)
+	}
+	if summary := buildUserQuestionResolvedSummary(userQuestionEntry{}, "answered", nil, ""); summary != "用户已回答问题" {
+		t.Fatalf("fallback summary = %q", summary)
+	}
+
+	if value := readInt(nil, "count"); value != 0 {
+		t.Fatalf("readInt nil map = %d, want 0", value)
+	}
+	intCases := []struct {
+		name string
+		raw  any
+		want int
+	}{
+		{name: "int", raw: int(3), want: 3},
+		{name: "int32", raw: int32(4), want: 4},
+		{name: "int64", raw: int64(5), want: 5},
+		{name: "float64", raw: float64(6), want: 6},
+		{name: "json number", raw: json.Number("7"), want: 7},
+		{name: "invalid", raw: json.Number("bad"), want: 0},
+	}
+	for _, testCase := range intCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			if value := readInt(map[string]any{"count": testCase.raw}, "count"); value != testCase.want {
+				t.Fatalf("readInt(%s) = %d, want %d", testCase.name, value, testCase.want)
+			}
+		})
+	}
 }
 
 func TestIsMentionCurrentBotMatchesConfiguredBotIDs(t *testing.T) {

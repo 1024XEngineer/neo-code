@@ -1722,6 +1722,28 @@ func convertRuntimeSnapshot(snapshot agentruntime.RuntimeSnapshot) gateway.Runti
 			"completed_count": snapshot.SubAgents.CompletedCount,
 			"failed_count":    snapshot.SubAgents.FailedCount,
 		},
+		PendingUserQuestion: convertRuntimePendingUserQuestion(snapshot.PendingUserQuestion),
+	}
+}
+
+// convertRuntimePendingUserQuestion 把 runtime ask_user 待答快照映射为 gateway 契约结构。
+func convertRuntimePendingUserQuestion(
+	payload *agentruntime.UserQuestionRequestedPayload,
+) *gateway.PendingUserQuestionSnapshot {
+	if payload == nil {
+		return nil
+	}
+	return &gateway.PendingUserQuestionSnapshot{
+		RequestID:   strings.TrimSpace(payload.RequestID),
+		QuestionID:  strings.TrimSpace(payload.QuestionID),
+		Title:       strings.TrimSpace(payload.Title),
+		Description: strings.TrimSpace(payload.Description),
+		Kind:        strings.TrimSpace(payload.Kind),
+		Options:     append([]any(nil), payload.Options...),
+		Required:    payload.Required,
+		AllowSkip:   payload.AllowSkip,
+		MaxChoices:  payload.MaxChoices,
+		TimeoutSec:  payload.TimeoutSec,
 	}
 }
 
