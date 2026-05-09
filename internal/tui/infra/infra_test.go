@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/charmbracelet/x/ansi"
 )
 
 func TestCollectWorkspaceFiles(t *testing.T) {
@@ -124,6 +126,44 @@ func TestNormalizeMarkdownForTerminalPreservesTables(t *testing.T) {
 	normalized := normalizeMarkdownForTerminal(input)
 	if normalized != input {
 		t.Fatalf("expected markdown table text to be preserved for native renderer, got %q", normalized)
+	}
+}
+
+func TestAlignRenderedPipeTablesHandlesCJKWidth(t *testing.T) {
+	input := strings.Join([]string{
+		"| 原则 | 说明 |",
+		"| --- | --- |",
+		"| **持续验证** | 每次写入后立即通过工具验证结果 |",
+		"| **工具优先** | 优先使用 `filesystem_*` 工具而非 `bash` |",
+	}, "\n")
+
+	got := alignRenderedPipeTables(input)
+	lines := strings.Split(got, "\n")
+	if len(lines) != 4 {
+		t.Fatalf("expected 4 table lines, got %d", len(lines))
+	}
+
+	width := ansi.StringWidth(lines[0])
+	for i, line := range lines {
+		if w := ansi.StringWidth(line); w != width {
+			t.Fatalf("expected aligned row width %d, line %d got %d: %q", width, i, w, line)
+		}
+	}
+
+	if !strings.Contains(lines[1], "---") {
+		t.Fatalf("expected markdown separator line to remain readable, got %q", lines[1])
+	}
+}
+
+func TestAlignRenderedPipeTablesIgnoresNonTablePipeBlocks(t *testing.T) {
+	input := strings.Join([]string{
+		"| not a markdown table line |",
+		"| still plain text |",
+	}, "\n")
+
+	got := alignRenderedPipeTables(input)
+	if got != input {
+		t.Fatalf("expected non-table pipe block to stay untouched, got %q", got)
 	}
 }
 
