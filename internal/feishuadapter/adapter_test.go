@@ -1553,6 +1553,115 @@ func TestHelperFunctionsCoverFallbackBranches(t *testing.T) {
 	safeLogAdapter.safeLog("ignored")
 }
 
+func TestAskUserHelperFunctionsCoverFallbackBranches(t *testing.T) {
+	resolved := extractUserQuestionResolved(map[string]any{
+		"payload": map[string]any{
+			"request_id": " ask-1 ",
+			"status":     " Answered ",
+			"message":    " 已确认 ",
+			"values":     []any{" 选项A ", "", 123, "选项B"},
+		},
+	})
+	if resolved.RequestID != "ask-1" || resolved.Status != "answered" || resolved.Message != "已确认" {
+		t.Fatalf("unexpected resolved payload: %#v", resolved)
+	}
+	if len(resolved.Values) != 2 || resolved.Values[0] != "选项A" || resolved.Values[1] != "选项B" {
+		t.Fatalf("resolved values = %#v, want trimmed string values", resolved.Values)
+	}
+	if fallback := extractUserQuestionResolved(nil); fallback.RequestID != "" || fallback.Status != "" || fallback.Message != "" ||
+		len(fallback.Values) != 0 {
+		t.Fatalf("nil payload fallback = %#v", fallback)
+	}
+
+	if !shouldSendAskUserCard(userQuestionEntry{Kind: "single_choice", Options: []UserQuestionCardOption{{Label: "A"}}}) {
+		t.Fatal("expected single choice question to send card")
+	}
+	if shouldSendAskUserCard(userQuestionEntry{Kind: "text"}) {
+		t.Fatal("expected text question without skip to fall back to plain text")
+	}
+	if !shouldSendAskUserCard(userQuestionEntry{Kind: "text", AllowSkip: true}) {
+		t.Fatal("expected skip-enabled text question to send card")
+	}
+
+	if !isUserQuestionResolvedEvent(" user_question_timeout ") {
+		t.Fatal("expected timeout runtime type to be resolved event")
+	}
+	if isUserQuestionResolvedEvent("user_question_requested") {
+		t.Fatal("did not expect requested runtime type to be resolved event")
+	}
+	if status := userQuestionStatusFromRuntimeType(" user_question_skipped "); status != "skipped" {
+		t.Fatalf("status = %q, want skipped", status)
+	}
+	if status := userQuestionStatusFromRuntimeType("user_question_timeout"); status != "timeout" {
+		t.Fatalf("status = %q, want timeout", status)
+	}
+	if status := userQuestionStatusFromRuntimeType("user_question_answered"); status != "answered" {
+		t.Fatalf("status = %q, want answered", status)
+	}
+
+	prompt := buildAskUserTextPrompt(userQuestionEntry{
+		RequestID:   "ask-2",
+		Title:       "选择部署环境",
+		Description: "请确认本次发布目标",
+		Options: []UserQuestionCardOption{
+			{Label: "测试"},
+			{Label: "生产"},
+		},
+		AllowSkip: true,
+	})
+	if !strings.Contains(prompt, "选择部署环境") || !strings.Contains(prompt, "可选项：测试 / 生产") {
+		t.Fatalf("prompt = %q, want title and option labels", prompt)
+	}
+	if !strings.Contains(prompt, "请回复：回答 ask-2 <内容>") || !strings.Contains(prompt, "如需跳过：跳过 ask-2") {
+		t.Fatalf("prompt = %q, want answer and skip instructions", prompt)
+	}
+	if fallbackPrompt := buildAskUserTextPrompt(userQuestionEntry{}); !strings.Contains(fallbackPrompt, "请回答以下问题") {
+		t.Fatalf("fallback prompt = %q, want default title", fallbackPrompt)
+	}
+
+	if summary := buildUserQuestionResolvedSummary(userQuestionEntry{}, "skipped", nil, ""); summary != "用户已跳过该问题" {
+		t.Fatalf("skip summary = %q", summary)
+	}
+	if summary := buildUserQuestionResolvedSummary(userQuestionEntry{}, "timeout", nil, ""); summary != "问题等待超时" {
+		t.Fatalf("timeout summary = %q", summary)
+	}
+	if summary := buildUserQuestionResolvedSummary(userQuestionEntry{}, "answered", nil, " 已提交 "); summary != "用户回答：已提交" {
+		t.Fatalf("message summary = %q", summary)
+	}
+	if summary := buildUserQuestionResolvedSummary(userQuestionEntry{}, "answered", []string{"A", "B"}, ""); summary != "用户回答：A, B" {
+		t.Fatalf("values summary = %q", summary)
+	}
+	if summary := buildUserQuestionResolvedSummary(userQuestionEntry{Title: "选择模式"}, "answered", nil, ""); summary != "用户已回答：选择模式" {
+		t.Fatalf("title summary = %q", summary)
+	}
+	if summary := buildUserQuestionResolvedSummary(userQuestionEntry{}, "answered", nil, ""); summary != "用户已回答问题" {
+		t.Fatalf("fallback summary = %q", summary)
+	}
+
+	if value := readInt(nil, "count"); value != 0 {
+		t.Fatalf("readInt nil map = %d, want 0", value)
+	}
+	intCases := []struct {
+		name string
+		raw  any
+		want int
+	}{
+		{name: "int", raw: int(3), want: 3},
+		{name: "int32", raw: int32(4), want: 4},
+		{name: "int64", raw: int64(5), want: 5},
+		{name: "float64", raw: float64(6), want: 6},
+		{name: "json number", raw: json.Number("7"), want: 7},
+		{name: "invalid", raw: json.Number("bad"), want: 0},
+	}
+	for _, testCase := range intCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			if value := readInt(map[string]any{"count": testCase.raw}, "count"); value != testCase.want {
+				t.Fatalf("readInt(%s) = %d, want %d", testCase.name, value, testCase.want)
+			}
+		})
+	}
+}
+
 func TestIsMentionCurrentBotMatchesConfiguredBotIDs(t *testing.T) {
 	cfg := Config{AppID: "cli_app", BotUserID: "ou_bot", BotOpenID: "ou_open_bot"}
 	event := FeishuMessageEvent{
