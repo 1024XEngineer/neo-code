@@ -30,6 +30,44 @@ func TestAcceptChecksUnmarshalRequiredDefaultAndExplicitFalse(t *testing.T) {
 	}
 }
 
+func TestAcceptChecksNormalizePreservesDistinctParams(t *testing.T) {
+	t.Parallel()
+
+	checks := AcceptChecks{
+		{Kind: AcceptCheckContentContains, Target: "README.md", Params: map[string]string{"contains": "NeoCode"}},
+		{Kind: AcceptCheckContentContains, Target: "README.md", Params: map[string]string{"contains": "Todo"}},
+		{Kind: AcceptCheckContentContains, Target: "README.md", Params: map[string]string{"contains": "NeoCode"}},
+	}
+
+	normalized := checks.Normalize()
+	if len(normalized) != 2 {
+		t.Fatalf("Normalize() length = %d, want 2: %+v", len(normalized), normalized)
+	}
+	if normalized[0].Params["contains"] != "NeoCode" || normalized[1].Params["contains"] != "Todo" {
+		t.Fatalf("Normalize() = %+v, want distinct contains params kept", normalized)
+	}
+}
+
+func TestAcceptChecksNormalizePreservesDistinctRequired(t *testing.T) {
+	t.Parallel()
+
+	required := true
+	optional := false
+	checks := AcceptChecks{
+		{Kind: AcceptCheckCommandSuccess, Target: "go test ./...", Required: &required},
+		{Kind: AcceptCheckCommandSuccess, Target: "go test ./...", Required: &optional},
+	}
+
+	normalized := checks.Normalize()
+	if len(normalized) != 2 {
+		t.Fatalf("Normalize() length = %d, want 2: %+v", len(normalized), normalized)
+	}
+	if !normalized[0].RequiredValue() || normalized[1].RequiredValue() {
+		t.Fatalf("Normalize() required flags = [%v %v], want [true false]",
+			normalized[0].RequiredValue(), normalized[1].RequiredValue())
+	}
+}
+
 func TestNormalizeSummaryViewFallsBackToBuiltSummaryWhenStructurallyInvalid(t *testing.T) {
 	t.Parallel()
 

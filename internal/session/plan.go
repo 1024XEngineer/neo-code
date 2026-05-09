@@ -3,6 +3,8 @@ package session
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -361,10 +363,12 @@ func (checks AcceptChecks) Normalize() AcceptChecks {
 		check.Kind = normalizeAcceptCheckKind(check.Kind)
 		check.Target = strings.TrimSpace(check.Target)
 		check.Match = strings.TrimSpace(check.Match)
-		key := check.Kind + "\x00" + check.Target + "\x00" + check.Match
-		if key == "\x00\x00" {
+		if check.Kind == "" && check.Target == "" && check.Match == "" {
 			continue
 		}
+		key := check.Kind + "\x00" + check.Target + "\x00" + check.Match +
+			"\x00" + paramsKey(check.Params) +
+			"\x00" + strconv.FormatBool(check.RequiredValue())
 		if _, exists := seen[key]; exists {
 			continue
 		}
@@ -375,6 +379,23 @@ func (checks AcceptChecks) Normalize() AcceptChecks {
 		return nil
 	}
 	return out
+}
+
+// paramsKey 将验收参数稳定序列化，用于区分同目标下的不同机器检查。
+func paramsKey(params map[string]string) string {
+	if len(params) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(params))
+	for key := range params {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, key := range keys {
+		parts = append(parts, strconv.Quote(key)+"="+strconv.Quote(params[key]))
+	}
+	return strings.Join(parts, ";")
 }
 
 // RenderLines 返回面向计划正文的稳定验收项文本。

@@ -193,7 +193,7 @@ func normalizeCommand(value string) string {
 	fields := strings.Fields(value)
 	out := make([]string, 0, len(fields))
 	for _, field := range fields {
-		if strings.Contains(field, "=") && !strings.Contains(field, "/") && !strings.Contains(field, "\\") {
+		if isEnvVarAssignment(field) {
 			continue
 		}
 		if strings.HasPrefix(strings.ToLower(field), "$env:") {
@@ -202,6 +202,21 @@ func normalizeCommand(value string) string {
 		out = append(out, field)
 	}
 	return strings.ToLower(strings.Join(out, " "))
+}
+
+// isEnvVarAssignment 识别裸环境变量赋值，避免把 CLI 的 -flag=value 当作环境变量剥离。
+func isEnvVarAssignment(field string) bool {
+	field = strings.TrimSpace(field)
+	if !strings.Contains(field, "=") {
+		return false
+	}
+	if strings.HasPrefix(field, "-") {
+		return false
+	}
+	if strings.Contains(field, "/") || strings.Contains(field, "\\") {
+		return false
+	}
+	return true
 }
 
 func normalizePath(value string) string {

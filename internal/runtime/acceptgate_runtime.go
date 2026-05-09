@@ -51,7 +51,7 @@ func (s *Service) evaluateAcceptGate(ctx context.Context, state *runState, assis
 	})
 }
 
-// selectPlanOwnedTodos 只把当前计划显式拥有的 todo 交给终态验收，避免无 plan 的 chat/read-only 被旧 todo 污染。
+// selectPlanOwnedTodos 只把当前计划拥有的 todo 交给终态验收，避免无 plan 的 chat/read-only 被旧 todo 污染。
 func selectPlanOwnedTodos(plan *agentsession.PlanArtifact, todos []agentsession.TodoItem) []agentsession.TodoItem {
 	if plan == nil || len(todos) == 0 {
 		return nil
@@ -69,16 +69,28 @@ func selectPlanOwnedTodos(plan *agentsession.PlanArtifact, todos []agentsession.
 			owned[id] = struct{}{}
 		}
 	}
-	if len(owned) == 0 {
-		return nil
-	}
 	selected := make([]agentsession.TodoItem, 0, len(todos))
 	for _, todo := range todos {
 		if _, ok := owned[strings.TrimSpace(todo.ID)]; ok {
 			selected = append(selected, todo)
+			continue
+		}
+		if isPostPlanRequiredTodo(plan, todo) {
+			selected = append(selected, todo)
 		}
 	}
 	return selected
+}
+
+// isPostPlanRequiredTodo 判断计划执行期新增的必需 todo 是否应纳入当前计划验收。
+func isPostPlanRequiredTodo(plan *agentsession.PlanArtifact, todo agentsession.TodoItem) bool {
+	if plan == nil || !todo.RequiredValue() || todo.Status.IsTerminal() {
+		return false
+	}
+	if plan.CreatedAt.IsZero() || todo.CreatedAt.IsZero() {
+		return false
+	}
+	return !todo.CreatedAt.Before(plan.CreatedAt)
 }
 
 // emitAcceptGateReport 将 Accept Gate 报告发布为统一 acceptance_decided 事件。
