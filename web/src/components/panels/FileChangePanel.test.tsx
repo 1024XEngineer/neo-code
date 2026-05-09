@@ -1,11 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import FileChangePanel from './FileChangePanel'
+import { useChatStore } from '@/stores/useChatStore'
+import { useSessionStore } from '@/stores/useSessionStore'
 import { CHANGES_PREVIEW_TAB_ID, GIT_DIFF_PREVIEW_TAB_ID, useUIStore } from '@/stores/useUIStore'
 
 const mockGatewayAPI = {
   listGitDiffFiles: vi.fn(),
   readGitDiffFile: vi.fn(),
+  restoreCheckpoint: vi.fn(),
+  loadSession: vi.fn(),
+  listSessionTodos: vi.fn(),
+  listCheckpoints: vi.fn(),
 }
 
 vi.mock('@/context/RuntimeProvider', () => ({
@@ -71,6 +77,27 @@ describe('FileChangePanel', () => {
         size_modified: 5,
       },
     })
+    mockGatewayAPI.restoreCheckpoint.mockResolvedValue({
+      payload: {
+        checkpoint_id: 'cp-1',
+        session_id: 'sess-1',
+      },
+    })
+    mockGatewayAPI.loadSession.mockResolvedValue({
+      payload: {
+        id: 'sess-1',
+        agent_mode: 'build',
+        messages: [{ role: 'assistant', content: 'reloaded' }],
+      },
+    })
+    mockGatewayAPI.listSessionTodos.mockResolvedValue({
+      payload: { items: [] },
+    })
+    mockGatewayAPI.listCheckpoints.mockResolvedValue({
+      payload: [],
+    })
+    useChatStore.setState({ isGenerating: false } as never)
+    useSessionStore.setState({ currentSessionId: 'sess-1' } as never)
     useUIStore.setState({
       fileChanges: [
         {
@@ -79,6 +106,7 @@ describe('FileChangePanel', () => {
           status: 'modified',
           additions: 2,
           deletions: 2,
+          checkpoint_id: 'cp-1',
           hunks: [
             {
               header: '@@ -1,3 +1,3 @@',
@@ -128,6 +156,7 @@ describe('FileChangePanel', () => {
       changesPanelOpen: true,
       changesPanelWidth: 560,
       theme: 'dark',
+      isRestoringCheckpoint: false,
     } as never)
   })
 
@@ -136,14 +165,111 @@ describe('FileChangePanel', () => {
 
     fireEvent.click(screen.getByText('src/a.txt'))
 
-    expect(screen.getByText('接受')).toBeTruthy()
+    expect(screen.getByTestId('accept-change-fc-1')).toBeTruthy()
     expect(screen.getAllByTestId(/diff-hunk-fc-1-/)).toHaveLength(1)
     expect(screen.getByText('line 1')).toBeTruthy()
     expect(screen.getByText('line 2 new')).toBeTruthy()
 
-    fireEvent.click(screen.getByText('接受'))
+    fireEvent.click(screen.getByTestId('accept-change-fc-1'))
 
     expect(useUIStore.getState().fileChanges[0]?.status).toBe('accepted')
+  })
+
+  it('renders restore button per file change and disables it when checkpoint is missing', () => {
+    useUIStore.setState({
+      fileChanges: [
+        {
+          id: 'fc-with-cp',
+          path: 'src/with-cp.txt',
+          status: 'modified',
+          additions: 1,
+          deletions: 0,
+          checkpoint_id: 'cp-1',
+          hunks: [],
+        },
+        {
+          id: 'fc-without-cp',
+          path: 'src/no-cp.txt',
+          status: 'modified',
+          additions: 1,
+          deletions: 0,
+          hunks: [],
+        },
+      ],
+    } as never)
+
+    render(<FileChangePanel />)
+
+    fireEvent.click(screen.getByText('src/with-cp.txt'))
+    fireEvent.click(screen.getByText('src/no-cp.txt'))
+
+    expect(screen.getByTestId('restore-change-fc-with-cp')).toBeEnabled()
+    expect(screen.getByTestId('restore-change-fc-without-cp')).toBeDisabled()
+  })
+
+  it('calls restoreCheckpoint after confirming restore', async () => {
+    render(<FileChangePanel />)
+
+    fireEvent.click(screen.getByText('src/a.txt'))
+    fireEvent.click(screen.getByTestId('restore-change-fc-1'))
+
+    const confirmButtons = screen.getAllByRole('button', { name: 'Restore' })
+    fireEvent.click(confirmButtons[confirmButtons.length - 1])
+
+    await waitFor(() => {
+      expect(mockGatewayAPI.restoreCheckpoint).toHaveBeenCalledWith({
+        session_id: 'sess-1',
+        checkpoint_id: 'cp-1',
+      })
+    })
+    expect(mockGatewayAPI.loadSession).not.toHaveBeenCalled()
+  })
+
+  it('disables accept and restore actions while the session is generating', () => {
+    useChatStore.setState({ isGenerating: true } as never)
+    render(<FileChangePanel />)
+
+    fireEvent.click(screen.getByText('src/a.txt'))
+
+    expect(screen.getByTestId('accept-change-fc-1')).toBeDisabled()
+    expect(screen.getByTestId('restore-change-fc-1')).toBeDisabled()
+    fireEvent.click(screen.getByTestId('restore-change-fc-1'))
+    expect(mockGatewayAPI.restoreCheckpoint).not.toHaveBeenCalled()
+  })
+
+  it('disables accept and restore actions while checkpoint restore is in progress', () => {
+    useUIStore.setState({ isRestoringCheckpoint: true } as never)
+    render(<FileChangePanel />)
+
+    fireEvent.click(screen.getByText('src/a.txt'))
+
+    expect(screen.getByTestId('accept-change-fc-1')).toBeDisabled()
+    expect(screen.getByTestId('restore-change-fc-1')).toBeDisabled()
+  })
+
+  it('prevents duplicate restore calls while restore is in-flight', async () => {
+    let resolveRestore: ((value?: unknown) => void) | undefined
+    mockGatewayAPI.restoreCheckpoint.mockImplementation(() => new Promise((resolve) => {
+      resolveRestore = resolve
+    }))
+
+    render(<FileChangePanel />)
+
+    fireEvent.click(screen.getByText('src/a.txt'))
+    fireEvent.click(screen.getByTestId('restore-change-fc-1'))
+    const confirmButtons = screen.getAllByRole('button', { name: 'Restore' })
+    fireEvent.click(confirmButtons[confirmButtons.length - 1])
+
+    await waitFor(() => {
+      expect(mockGatewayAPI.restoreCheckpoint).toHaveBeenCalledTimes(1)
+    })
+
+    const restoreButton = screen.getByTestId('restore-change-fc-1')
+    expect(restoreButton).toBeDisabled()
+    fireEvent.click(restoreButton)
+    expect(mockGatewayAPI.restoreCheckpoint).toHaveBeenCalledTimes(1)
+
+    resolveRestore?.()
   })
 
   it('keeps the panel body clipped and uses the content area as the scroll container', () => {
@@ -374,7 +500,7 @@ describe('FileChangePanel', () => {
         {
           id: CHANGES_PREVIEW_TAB_ID,
           kind: 'changes',
-          title: '鏂囦欢鍙樻洿',
+          title: '文件变更',
           closable: false,
         },
         {
@@ -449,7 +575,7 @@ describe('FileChangePanel', () => {
         {
           id: CHANGES_PREVIEW_TAB_ID,
           kind: 'changes',
-          title: '鏂囦欢鍙樻洿',
+          title: '文件变更',
           closable: false,
         },
         {

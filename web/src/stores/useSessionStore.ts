@@ -214,6 +214,43 @@ export function mapHistoryMessages(backendMessages: BackendMessage[]): Array<Ret
   return result
 }
 
+let _latestCheckpointRestoreReloadSeq = 0
+
+/** beginCheckpointRestoreReloadSeq 申请一次 checkpoint 回退重载序号，用于丢弃过期重载结果。 */
+export function beginCheckpointRestoreReloadSeq(): number {
+  _latestCheckpointRestoreReloadSeq += 1
+  return _latestCheckpointRestoreReloadSeq
+}
+
+/** checkpoint 回退后全量重载会话状态，统一刷新消息、insight 与文件变更面板。 */
+export async function reloadSessionAfterCheckpointRestore(
+  gatewayAPI: GatewayAPI,
+  sessionId: string,
+  reloadSeq: number = beginCheckpointRestoreReloadSeq(),
+): Promise<boolean> {
+  const normalizedSessionId = sessionId.trim()
+  if (!normalizedSessionId) return false
+
+  useUIStore.getState().clearFileChanges()
+  useChatStore.getState().clearMessages()
+  useRuntimeInsightStore.getState().reset()
+
+  const sessionFrame = await loadSessionWithInsights(gatewayAPI, normalizedSessionId)
+  if (reloadSeq !== _latestCheckpointRestoreReloadSeq) return false
+  const sessionData = sessionFrame.payload as { messages?: BackendMessage[]; agent_mode?: string }
+
+  if (sessionData.messages && sessionData.messages.length > 0) {
+    const mapped = mapHistoryMessages(sessionData.messages)
+    for (const msg of mapped) {
+      useChatStore.getState().addMessage(msg)
+    }
+  }
+
+  const restoredMode = sessionData.agent_mode === 'plan' ? 'plan' : 'build'
+  useChatStore.getState().setAgentMode(restoredMode)
+  return true
+}
+
 let _fetchSessionsPromise: Promise<void> | null = null
 
 export const useSessionStore = create<SessionState>((set, get) => ({

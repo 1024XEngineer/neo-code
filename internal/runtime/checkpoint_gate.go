@@ -5,10 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
 	"neo-code/internal/checkpoint"
+	"neo-code/internal/repository"
 	agentsession "neo-code/internal/session"
 )
 
@@ -36,6 +39,73 @@ func (s *Service) createStartOfTurnCheckpoint(ctx context.Context, state *runSta
 	}
 	defer s.perEditStore.Reset()
 	return s.createCheckpointRecord(ctx, session, runID, state, checkpointID, agentsession.CheckpointReasonPreWrite)
+}
+
+// createPreRunDriftRebaseCheckpoint 在 run 开始前检测到外部漂移时，固化当前工作区为权威基线。
+func (s *Service) createPreRunDriftRebaseCheckpoint(
+	ctx context.Context,
+	state *runState,
+	diff repository.FingerprintDiff,
+) (string, error) {
+	if s.checkpointStore == nil || s.perEditStore == nil {
+		return "", nil
+	}
+
+	state.mu.Lock()
+	session := state.session
+	runID := state.runID
+	state.mu.Unlock()
+
+	workdir := strings.TrimSpace(session.Workdir)
+	if workdir == "" {
+		return "", fmt.Errorf("checkpoint: workdir is empty when creating drift rebase checkpoint")
+	}
+
+	currentFingerprint, _, err := repository.ScanWorkdir(ctx, workdir, repository.DefaultFingerprintOptions())
+	if err != nil {
+		return "", fmt.Errorf("checkpoint: scan workdir for drift rebase: %w", err)
+	}
+	absPaths := make([]string, 0, len(currentFingerprint))
+	for relPath := range currentFingerprint {
+		absPaths = append(absPaths, filepath.Join(workdir, filepath.FromSlash(relPath)))
+	}
+	sort.Strings(absPaths)
+	if len(absPaths) > 0 {
+		if _, err := s.perEditStore.CaptureBatch(absPaths); err != nil {
+			return "", fmt.Errorf("checkpoint: capture current files for drift rebase: %w", err)
+		}
+	}
+
+	deleted := append([]string(nil), diff.Deleted...)
+	sort.Strings(deleted)
+	for _, relPath := range deleted {
+		absPath := filepath.Join(workdir, filepath.FromSlash(relPath))
+		if _, err := s.perEditStore.CapturePreWrite(absPath); err != nil {
+			return "", fmt.Errorf("checkpoint: capture deleted file for drift rebase (%s): %w", relPath, err)
+		}
+	}
+
+	checkpointID := agentsession.NewID("checkpoint")
+	written, err := s.perEditStore.FinalizeWithExactState(checkpointID)
+	if err != nil {
+		return "", fmt.Errorf("checkpoint: finalize drift rebase checkpoint: %w", err)
+	}
+	if !written {
+		return "", fmt.Errorf("checkpoint: drift rebase checkpoint has no captured files")
+	}
+	defer s.perEditStore.Reset()
+
+	if err := s.createCheckpointRecord(
+		ctx,
+		session,
+		runID,
+		state,
+		checkpointID,
+		agentsession.CheckpointReasonPreRunDriftRebase,
+	); err != nil {
+		return "", err
+	}
+	return checkpointID, nil
 }
 
 // createEndOfTurnCheckpoint 在工具执行完成后创建代码检查点。

@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { waitFor } from '@testing-library/react'
 import { useChatStore } from '@/stores/useChatStore'
 import { useGatewayStore } from '@/stores/useGatewayStore'
 import { useSessionStore } from '@/stores/useSessionStore'
@@ -36,7 +37,8 @@ beforeEach(() => {
     authenticated: false,
   } as any)
   useRuntimeInsightStore.getState().reset()
-  useUIStore.setState({ toasts: [], fileChanges: [] } as any)
+  useSessionStore.setState({ currentSessionId: '' } as any)
+  useUIStore.setState({ toasts: [], fileChanges: [], isRestoringCheckpoint: false } as any)
 })
 
 describe('eventBridge', () => {
@@ -191,6 +193,19 @@ describe('eventBridge', () => {
     expect(msgs).toHaveLength(1)
     expect(msgs[0].type).toBe('tool_call')
     expect(msgs[0].toolName).toBe('read_file')
+  })
+
+  it('ToolStart file placeholders are pending before tool diff arrives', () => {
+    const api = createMockGatewayAPI()
+    handleGatewayEvent({
+      type: EventType.ToolStart,
+      payload: { payload: { runtime_event_type: EventType.ToolStart, payload: { name: 'filesystem_write_file', id: 'tc-pending', arguments: '{"path":"pending.txt"}' } } },
+      session_id: 'sess-1',
+      run_id: 'run-1',
+    }, api)
+
+    const change = useUIStore.getState().fileChanges.find((entry) => entry.path === 'pending.txt')
+    expect(change?.status).toBe('pending')
   })
 
   it('ToolResult updates an existing tool call message', () => {
@@ -472,6 +487,87 @@ describe('eventBridge', () => {
     expect(useRuntimeInsightStore.getState().checkpointEvents[0]).toMatchObject({ checkpoint_id: 'cp1' })
   })
 
+  it('CheckpointRestored reloads state for current session and clears stale file changes first', async () => {
+    const loadSession = vi.fn(async () => ({
+      payload: {
+        id: 'sess-1',
+        agent_mode: 'build',
+        messages: [{ role: 'assistant', content: 'after restore' }],
+      },
+    }))
+    const api = createMockGatewayAPI({ loadSession })
+    useSessionStore.setState({ currentSessionId: 'sess-1' } as any)
+    useUIStore.setState({
+      fileChanges: [
+        { id: 'fc-1', path: 'stale.txt', status: 'modified', additions: 1, deletions: 0 },
+      ],
+    } as any)
+
+    handleGatewayEvent({
+      type: EventType.CheckpointRestored,
+      payload: { payload: { runtime_event_type: EventType.CheckpointRestored, payload: { checkpoint_id: 'cp1', session_id: 'sess-1', guard_checkpoint_id: 'guard-1' } } },
+      session_id: 'sess-1',
+      run_id: 'run-1',
+    }, api)
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(loadSession).toHaveBeenCalledWith('sess-1')
+    expect(useUIStore.getState().fileChanges).toHaveLength(0)
+  })
+
+  it('CheckpointRestored does not reload when event session differs from current session', async () => {
+    const loadSession = vi.fn(async () => ({ payload: { id: 'sess-other', messages: [] } }))
+    const api = createMockGatewayAPI({ loadSession })
+    useSessionStore.setState({ currentSessionId: 'sess-current' } as any)
+    useUIStore.setState({
+      fileChanges: [
+        { id: 'fc-1', path: 'keep.txt', status: 'modified', additions: 1, deletions: 0 },
+      ],
+    } as any)
+
+    handleGatewayEvent({
+      type: EventType.CheckpointRestored,
+      payload: { payload: { runtime_event_type: EventType.CheckpointRestored, payload: { checkpoint_id: 'cp1', session_id: 'sess-other', guard_checkpoint_id: 'guard-1' } } },
+      session_id: 'sess-other',
+      run_id: 'run-1',
+    }, api)
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(loadSession).not.toHaveBeenCalled()
+    expect(useUIStore.getState().fileChanges).toHaveLength(1)
+  })
+
+  it('CheckpointUndoRestore reloads current session with the same restore-sync flow', async () => {
+    const loadSession = vi.fn(async () => ({
+      payload: {
+        id: 'sess-1',
+        agent_mode: 'build',
+        messages: [{ role: 'assistant', content: 'after undo restore' }],
+      },
+    }))
+    const api = createMockGatewayAPI({ loadSession })
+    useSessionStore.setState({ currentSessionId: 'sess-1' } as any)
+    useUIStore.setState({
+      fileChanges: [
+        { id: 'fc-1', path: 'stale.txt', status: 'modified', additions: 1, deletions: 0 },
+      ],
+    } as any)
+
+    handleGatewayEvent({
+      type: EventType.CheckpointUndoRestore,
+      payload: { payload: { runtime_event_type: EventType.CheckpointUndoRestore, payload: { session_id: 'sess-1', guard_checkpoint_id: 'guard-1' } } },
+      session_id: 'sess-1',
+      run_id: 'run-1',
+    }, api)
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(loadSession).toHaveBeenCalledWith('sess-1')
+    expect(useUIStore.getState().fileChanges).toHaveLength(0)
+  })
+
   it('VerificationStarted creates a verification ChatMessage', () => {
     const api = createMockGatewayAPI()
     handleGatewayEvent({
@@ -569,6 +665,33 @@ describe('eventBridge', () => {
     const toolMsg = useChatStore.getState().messages.find((m) => m.type === 'tool_call')
     expect(toolMsg?.checkpointId).toBe('cp1')
     expect(toolMsg?.checkpointStatus).toBe('available')
+  })
+
+  it('CheckpointCreated with pre_restore_guard does not override latest rollback baseline', () => {
+    const api = createMockGatewayAPI()
+
+    handleGatewayEvent({
+      type: EventType.CheckpointCreated,
+      payload: { payload: { runtime_event_type: EventType.CheckpointCreated, payload: { checkpoint_id: 'cp-base', code_checkpoint_ref: 'c', session_checkpoint_ref: 's', commit_hash: 'abc', reason: 'pre_write' } } },
+      session_id: 'sess-1',
+      run_id: 'run-1',
+    }, api)
+    handleGatewayEvent({
+      type: EventType.CheckpointCreated,
+      payload: { payload: { runtime_event_type: EventType.CheckpointCreated, payload: { checkpoint_id: 'cp-guard', code_checkpoint_ref: 'c', session_checkpoint_ref: 's', commit_hash: 'abc', reason: 'pre_restore_guard' } } },
+      session_id: 'sess-1',
+      run_id: 'run-1',
+    }, api)
+
+    handleGatewayEvent({
+      type: EventType.ToolStart,
+      payload: { payload: { runtime_event_type: EventType.ToolStart, payload: { name: 'filesystem_write_file', id: 'tc1', arguments: '{"path":"baseline.txt"}' } } },
+      session_id: 'sess-1',
+      run_id: 'run-1',
+    }, api)
+
+    const baselineChange = useUIStore.getState().fileChanges.find((entry) => entry.path === 'baseline.txt')
+    expect(baselineChange?.checkpoint_id).toBe('cp-base')
   })
 
   it('clearMessages resets eventBridge cursors so new session does not inherit prior checkpoint', () => {
@@ -698,6 +821,177 @@ describe('eventBridge', () => {
     ])
   })
 
+  it('uses run diff prev_checkpoint_id as rollback baseline authority', async () => {
+    const checkpointDiff = vi.fn(async () => ({
+      payload: {
+        checkpoint_id: 'cp-latest',
+        prev_checkpoint_id: 'cp-authoritative',
+        files: { modified: ['a.txt'] },
+        patch: '--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-old\n+new\n',
+      },
+    }))
+    const api = createMockGatewayAPI({ checkpointDiff })
+
+    handleGatewayEvent({
+      type: EventType.InputNormalized,
+      payload: { payload: { runtime_event_type: EventType.InputNormalized, payload: { session_id: 'sess-1', run_id: 'run-1' } } },
+      session_id: 'sess-1',
+      run_id: 'run-1',
+    }, api)
+    handleGatewayEvent({
+      type: EventType.CheckpointCreated,
+      payload: { payload: { runtime_event_type: EventType.CheckpointCreated, payload: { checkpoint_id: 'cp-base', code_checkpoint_ref: 'c', session_checkpoint_ref: 's', commit_hash: '', reason: 'pre_write' } } },
+      session_id: 'sess-1',
+      run_id: 'run-1',
+    }, api)
+    handleGatewayEvent({
+      type: EventType.ToolStart,
+      payload: { payload: { runtime_event_type: EventType.ToolStart, payload: { name: 'filesystem_write_file', id: 'tc1', arguments: '{"path":"a.txt"}' } } },
+      session_id: 'sess-1',
+      run_id: 'run-1',
+    }, api)
+
+    handleGatewayEvent({
+      type: EventType.CheckpointCreated,
+      payload: { payload: { runtime_event_type: EventType.CheckpointCreated, payload: { checkpoint_id: 'cp-latest', code_checkpoint_ref: 'c', session_checkpoint_ref: 's', commit_hash: '', reason: 'end_of_turn' } } },
+      session_id: 'sess-1',
+      run_id: 'run-1',
+    }, api)
+    await Promise.resolve()
+    await Promise.resolve()
+
+    const change = useUIStore.getState().fileChanges.find((entry) => entry.path === 'a.txt')
+    expect(change?.checkpoint_id).toBe('cp-authoritative')
+  })
+
+  it('shows warning toast when run diff carries warning text', async () => {
+    const checkpointDiff = vi.fn(async () => ({
+      payload: {
+        checkpoint_id: 'cp-latest',
+        files: { modified: ['a.txt'] },
+        patch: '--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-old\n+new\n',
+        warning: 'run baseline checkpoint is missing',
+      },
+    }))
+    const api = createMockGatewayAPI({ checkpointDiff })
+
+    handleGatewayEvent({
+      type: EventType.InputNormalized,
+      payload: { payload: { runtime_event_type: EventType.InputNormalized, payload: { session_id: 'sess-1', run_id: 'run-1' } } },
+      session_id: 'sess-1',
+      run_id: 'run-1',
+    }, api)
+    handleGatewayEvent({
+      type: EventType.ToolStart,
+      payload: { payload: { runtime_event_type: EventType.ToolStart, payload: { name: 'filesystem_write_file', id: 'tc1', arguments: '{"path":"a.txt"}' } } },
+      session_id: 'sess-1',
+      run_id: 'run-1',
+    }, api)
+    handleGatewayEvent({
+      type: EventType.CheckpointCreated,
+      payload: { payload: { runtime_event_type: EventType.CheckpointCreated, payload: { checkpoint_id: 'cp-latest', code_checkpoint_ref: 'c', session_checkpoint_ref: 's', commit_hash: '', reason: 'end_of_turn' } } },
+      session_id: 'sess-1',
+      run_id: 'run-1',
+    }, api)
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(useUIStore.getState().toasts.some((toast) => toast.message.includes('run baseline checkpoint is missing'))).toBe(true)
+  })
+
+  it('keeps first-touch checkpoint for a file after run-scoped diff replacement', async () => {
+    const checkpointDiff = vi.fn(async () => ({
+      payload: {
+        checkpoint_id: 'cp-latest',
+        files: { modified: ['a.txt'] },
+        patch: '--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-old\n+new\n',
+      },
+    }))
+    const api = createMockGatewayAPI({ checkpointDiff })
+
+    handleGatewayEvent({
+      type: EventType.InputNormalized,
+      payload: { payload: { runtime_event_type: EventType.InputNormalized, payload: { session_id: 'sess-1', run_id: 'run-1' } } },
+      session_id: 'sess-1',
+      run_id: 'run-1',
+    }, api)
+    handleGatewayEvent({
+      type: EventType.CheckpointCreated,
+      payload: { payload: { runtime_event_type: EventType.CheckpointCreated, payload: { checkpoint_id: 'cp-base', code_checkpoint_ref: 'c', session_checkpoint_ref: 's', commit_hash: '', reason: 'pre_write' } } },
+      session_id: 'sess-1',
+      run_id: 'run-1',
+    }, api)
+    handleGatewayEvent({
+      type: EventType.ToolStart,
+      payload: { payload: { runtime_event_type: EventType.ToolStart, payload: { name: 'filesystem_write_file', id: 'tc1', arguments: '{"path":"a.txt"}' } } },
+      session_id: 'sess-1',
+      run_id: 'run-1',
+    }, api)
+    handleGatewayEvent({
+      type: EventType.ToolDiff,
+      payload: { payload: { runtime_event_type: EventType.ToolDiff, payload: { tool_call_id: 'tc1', tool_name: 'filesystem_write_file', file_path: 'a.txt', diff: '--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-old\n+new\n' } } },
+      session_id: 'sess-1',
+      run_id: 'run-1',
+    }, api)
+
+    handleGatewayEvent({
+      type: EventType.CheckpointCreated,
+      payload: { payload: { runtime_event_type: EventType.CheckpointCreated, payload: { checkpoint_id: 'cp-latest', code_checkpoint_ref: 'c', session_checkpoint_ref: 's', commit_hash: '', reason: 'end_of_turn' } } },
+      session_id: 'sess-1',
+      run_id: 'run-1',
+    }, api)
+    await Promise.resolve()
+    await Promise.resolve()
+
+    const change = useUIStore.getState().fileChanges.find((entry) => entry.path === 'a.txt')
+    expect(change?.checkpoint_id).toBe('cp-base')
+  })
+
+  it('does not overwrite first-touch checkpoint when the same file is edited multiple times', () => {
+    const api = createMockGatewayAPI()
+
+    handleGatewayEvent({
+      type: EventType.InputNormalized,
+      payload: { payload: { runtime_event_type: EventType.InputNormalized, payload: { session_id: 'sess-1', run_id: 'run-1' } } },
+      session_id: 'sess-1',
+      run_id: 'run-1',
+    }, api)
+    handleGatewayEvent({
+      type: EventType.CheckpointCreated,
+      payload: { payload: { runtime_event_type: EventType.CheckpointCreated, payload: { checkpoint_id: 'cp-base', code_checkpoint_ref: 'c', session_checkpoint_ref: 's', commit_hash: '', reason: 'pre_write' } } },
+      session_id: 'sess-1',
+      run_id: 'run-1',
+    }, api)
+    handleGatewayEvent({
+      type: EventType.ToolStart,
+      payload: { payload: { runtime_event_type: EventType.ToolStart, payload: { name: 'filesystem_write_file', id: 'tc1', arguments: '{"path":"a.txt"}' } } },
+      session_id: 'sess-1',
+      run_id: 'run-1',
+    }, api)
+    handleGatewayEvent({
+      type: EventType.ToolDiff,
+      payload: { payload: { runtime_event_type: EventType.ToolDiff, payload: { tool_call_id: 'tc1', tool_name: 'filesystem_write_file', file_path: 'a.txt', diff: '--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-old\n+mid\n' } } },
+      session_id: 'sess-1',
+      run_id: 'run-1',
+    }, api)
+
+    handleGatewayEvent({
+      type: EventType.CheckpointCreated,
+      payload: { payload: { runtime_event_type: EventType.CheckpointCreated, payload: { checkpoint_id: 'cp-next', code_checkpoint_ref: 'c', session_checkpoint_ref: 's', commit_hash: '', reason: 'pre_write' } } },
+      session_id: 'sess-1',
+      run_id: 'run-1',
+    }, api)
+    handleGatewayEvent({
+      type: EventType.ToolDiff,
+      payload: { payload: { runtime_event_type: EventType.ToolDiff, payload: { tool_call_id: 'tc2', tool_name: 'filesystem_write_file', file_path: 'a.txt', diff: '--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-mid\n+new\n' } } },
+      session_id: 'sess-1',
+      run_id: 'run-1',
+    }, api)
+
+    const change = useUIStore.getState().fileChanges.find((entry) => entry.path === 'a.txt')
+    expect(change?.checkpoint_id).toBe('cp-base')
+  })
+
   it('stores hunk structure for transient tool diffs before aggregate checkpoint diff arrives', () => {
     const api = createMockGatewayAPI()
 
@@ -733,6 +1027,61 @@ describe('eventBridge', () => {
       'line 11',
       'line 12',
     ])
+  })
+
+  it('uses backend kind for multi-file tool diffs instead of was_new fallback', () => {
+    const api = createMockGatewayAPI()
+
+    handleGatewayEvent({
+      type: EventType.ToolDiff,
+      payload: {
+        payload: {
+          runtime_event_type: EventType.ToolDiff,
+          payload: {
+            tool_call_id: 'tc-move',
+            tool_name: 'filesystem_move_file',
+            file_path: 'old.txt',
+            files: [
+              { path: 'old.txt', kind: 'deleted' },
+              { path: 'new.txt', kind: 'added' },
+            ],
+            diffs: [
+              { path: 'old.txt', kind: 'deleted', was_new: false, diff: '--- a/old.txt\n+++ b/old.txt\n-old\n' },
+              { path: 'new.txt', kind: 'added', was_new: false, diff: '--- a/new.txt\n+++ b/new.txt\n+new\n' },
+            ],
+          },
+        },
+      },
+      session_id: 'sess-1',
+      run_id: 'run-1',
+    }, api)
+
+    const changes = useUIStore.getState().fileChanges
+    expect(changes.find((entry) => entry.path === 'old.txt')?.status).toBe('deleted')
+    expect(changes.find((entry) => entry.path === 'new.txt')?.status).toBe('added')
+  })
+
+  it('tracks bash side-effect changes using backend kind', () => {
+    const api = createMockGatewayAPI()
+
+    handleGatewayEvent({
+      type: EventType.BashSideEffect,
+      payload: {
+        payload: {
+          runtime_event_type: EventType.BashSideEffect,
+          payload: {
+            tool_call_id: 'bash-1',
+            command: 'echo hi > generated.txt',
+            changes: [{ path: 'generated.txt', kind: 'added' }],
+          },
+        },
+      },
+      session_id: 'sess-1',
+      run_id: 'run-1',
+    }, api)
+
+    const change = useUIStore.getState().fileChanges.find((entry) => entry.path === 'generated.txt')
+    expect(change?.status).toBe('added')
   })
 
   it('keeps transient tool diffs visible when backend sends simplified diff without @@ header', () => {
@@ -827,5 +1176,257 @@ describe('eventBridge', () => {
       additions: 0,
       deletions: 0,
     })
+  })
+
+  it('rebinds post-restore first-touch baseline to restored checkpoint', async () => {
+    const loadSession = vi.fn(async () => ({
+      payload: {
+        id: 'sess-1',
+        agent_mode: 'build',
+        messages: [],
+      },
+    }))
+    const api = createMockGatewayAPI({ loadSession })
+    useSessionStore.setState({ currentSessionId: 'sess-1' } as any)
+
+    handleGatewayEvent({
+      type: EventType.InputNormalized,
+      payload: { payload: { runtime_event_type: EventType.InputNormalized, payload: { session_id: 'sess-1', run_id: 'run-1' } } },
+      session_id: 'sess-1',
+      run_id: 'run-1',
+    }, api)
+    handleGatewayEvent({
+      type: EventType.CheckpointCreated,
+      payload: { payload: { runtime_event_type: EventType.CheckpointCreated, payload: { checkpoint_id: 'cp-old', code_checkpoint_ref: 'c', session_checkpoint_ref: 's', commit_hash: '', reason: 'pre_write' } } },
+      session_id: 'sess-1',
+      run_id: 'run-1',
+    }, api)
+    handleGatewayEvent({
+      type: EventType.ToolStart,
+      payload: { payload: { runtime_event_type: EventType.ToolStart, payload: { name: 'filesystem_write_file', id: 'tc1', arguments: '{"path":"a.txt"}' } } },
+      session_id: 'sess-1',
+      run_id: 'run-1',
+    }, api)
+
+    handleGatewayEvent({
+      type: EventType.CheckpointRestored,
+      payload: { payload: { runtime_event_type: EventType.CheckpointRestored, payload: { checkpoint_id: 'cp-restored', session_id: 'sess-1', guard_checkpoint_id: 'guard-1' } } },
+      session_id: 'sess-1',
+      run_id: 'run-1',
+    }, api)
+    await Promise.resolve()
+    await Promise.resolve()
+
+    useUIStore.getState().clearFileChanges()
+    handleGatewayEvent({
+      type: EventType.ToolStart,
+      payload: { payload: { runtime_event_type: EventType.ToolStart, payload: { name: 'filesystem_write_file', id: 'tc2', arguments: '{"path":"fresh.txt"}' } } },
+      session_id: 'sess-1',
+      run_id: 'run-2',
+    }, api)
+    const fresh = useUIStore.getState().fileChanges.find((entry) => entry.path === 'fresh.txt')
+    expect(fresh?.checkpoint_id).toBe('cp-restored')
+  })
+
+  it('keeps restored pending baseline even when InputNormalized is missing before next run', async () => {
+    const loadSession = vi.fn(async () => ({
+      payload: {
+        id: 'sess-1',
+        agent_mode: 'build',
+        messages: [],
+      },
+    }))
+    const api = createMockGatewayAPI({ loadSession })
+    useSessionStore.setState({ currentSessionId: 'sess-1' } as any)
+
+    handleGatewayEvent({
+      type: EventType.CheckpointRestored,
+      payload: { payload: { runtime_event_type: EventType.CheckpointRestored, payload: { checkpoint_id: 'cp-restored', session_id: 'sess-1', guard_checkpoint_id: 'guard-1' } } },
+      session_id: 'sess-1',
+      run_id: 'run-restore',
+    }, api)
+    await Promise.resolve()
+    await Promise.resolve()
+
+    // 注意: 故意不发送 InputNormalized
+    handleGatewayEvent({
+      type: EventType.ToolStart,
+      payload: { payload: { runtime_event_type: EventType.ToolStart, payload: { name: 'filesystem_write_file', id: 'tc-next', arguments: '{"path":"no-input-normalized.txt"}' } } },
+      session_id: 'sess-1',
+      run_id: 'run-next',
+    }, api)
+
+    const change = useUIStore.getState().fileChanges.find((entry) => entry.path === 'no-input-normalized.txt')
+    expect(change?.checkpoint_id).toBe('cp-restored')
+  })
+
+  it('rebinds post-undo first-touch baseline to guard checkpoint', async () => {
+    const loadSession = vi.fn(async () => ({
+      payload: {
+        id: 'sess-1',
+        agent_mode: 'build',
+        messages: [],
+      },
+    }))
+    const api = createMockGatewayAPI({ loadSession })
+    useSessionStore.setState({ currentSessionId: 'sess-1' } as any)
+
+    handleGatewayEvent({
+      type: EventType.CheckpointUndoRestore,
+      payload: { payload: { runtime_event_type: EventType.CheckpointUndoRestore, payload: { session_id: 'sess-1', guard_checkpoint_id: 'guard-1' } } },
+      session_id: 'sess-1',
+      run_id: 'run-1',
+    }, api)
+    await Promise.resolve()
+    await Promise.resolve()
+
+    useUIStore.getState().clearFileChanges()
+    handleGatewayEvent({
+      type: EventType.ToolStart,
+      payload: { payload: { runtime_event_type: EventType.ToolStart, payload: { name: 'filesystem_write_file', id: 'tc3', arguments: '{"path":"undo-fresh.txt"}' } } },
+      session_id: 'sess-1',
+      run_id: 'run-2',
+    }, api)
+    const fresh = useUIStore.getState().fileChanges.find((entry) => entry.path === 'undo-fresh.txt')
+    expect(fresh?.checkpoint_id).toBe('guard-1')
+  })
+
+  it('resets first-touch cache when run_id changes for the same file path', () => {
+    const api = createMockGatewayAPI()
+
+    handleGatewayEvent({
+      type: EventType.CheckpointCreated,
+      payload: { payload: { runtime_event_type: EventType.CheckpointCreated, payload: { checkpoint_id: 'cp-old', code_checkpoint_ref: 'c', session_checkpoint_ref: 's', commit_hash: '', reason: 'pre_write' } } },
+      session_id: 'sess-1',
+      run_id: 'run-1',
+    }, api)
+    handleGatewayEvent({
+      type: EventType.ToolStart,
+      payload: { payload: { runtime_event_type: EventType.ToolStart, payload: { name: 'filesystem_write_file', id: 'tc-old', arguments: '{"path":"same.txt"}' } } },
+      session_id: 'sess-1',
+      run_id: 'run-1',
+    }, api)
+    let change = useUIStore.getState().fileChanges.find((entry) => entry.path === 'same.txt')
+    expect(change?.checkpoint_id).toBe('cp-old')
+
+    useUIStore.getState().clearFileChanges()
+    handleGatewayEvent({
+      type: EventType.CheckpointCreated,
+      payload: { payload: { runtime_event_type: EventType.CheckpointCreated, payload: { checkpoint_id: 'cp-new', code_checkpoint_ref: 'c', session_checkpoint_ref: 's', commit_hash: '', reason: 'pre_write' } } },
+      session_id: 'sess-1',
+      run_id: 'run-2',
+    }, api)
+    handleGatewayEvent({
+      type: EventType.ToolStart,
+      payload: { payload: { runtime_event_type: EventType.ToolStart, payload: { name: 'filesystem_write_file', id: 'tc-new', arguments: '{"path":"same.txt"}' } } },
+      session_id: 'sess-1',
+      run_id: 'run-2',
+    }, api)
+    change = useUIStore.getState().fileChanges.find((entry) => entry.path === 'same.txt')
+    expect(change?.checkpoint_id).toBe('cp-new')
+  })
+
+  it('does not let pre_restore_guard overwrite pending restore baseline for the next run', async () => {
+    const loadSession = vi.fn(async () => ({
+      payload: {
+        id: 'sess-1',
+        agent_mode: 'build',
+        messages: [],
+      },
+    }))
+    const api = createMockGatewayAPI({ loadSession })
+    useSessionStore.setState({ currentSessionId: 'sess-1' } as any)
+
+    handleGatewayEvent({
+      type: EventType.CheckpointRestored,
+      payload: { payload: { runtime_event_type: EventType.CheckpointRestored, payload: { checkpoint_id: 'cp-restored', session_id: 'sess-1', guard_checkpoint_id: 'guard-1' } } },
+      session_id: 'sess-1',
+      run_id: 'run-restore',
+    }, api)
+    await Promise.resolve()
+    await Promise.resolve()
+
+    handleGatewayEvent({
+      type: EventType.CheckpointCreated,
+      payload: { payload: { runtime_event_type: EventType.CheckpointCreated, payload: { checkpoint_id: 'cp-guard', code_checkpoint_ref: 'c', session_checkpoint_ref: 's', commit_hash: '', reason: 'pre_restore_guard' } } },
+      session_id: 'sess-1',
+      run_id: 'run-restore',
+    }, api)
+
+    handleGatewayEvent({
+      type: EventType.ToolStart,
+      payload: { payload: { runtime_event_type: EventType.ToolStart, payload: { name: 'filesystem_write_file', id: 'tc-next', arguments: '{"path":"pending-protected.txt"}' } } },
+      session_id: 'sess-1',
+      run_id: 'run-next',
+    }, api)
+    const change = useUIStore.getState().fileChanges.find((entry) => entry.path === 'pending-protected.txt')
+    expect(change?.checkpoint_id).toBe('cp-restored')
+  })
+
+  it('applies only the latest restore reload when restore events arrive back-to-back', async () => {
+    let resolveFirst: ((value: unknown) => void) | undefined
+    let resolveSecond: ((value: unknown) => void) | undefined
+    const loadSession = vi.fn(() => {
+      if (!resolveFirst) {
+        return new Promise((resolve) => {
+          resolveFirst = resolve
+        })
+      }
+      return new Promise((resolve) => {
+        resolveSecond = resolve
+      })
+    })
+    const api = createMockGatewayAPI({ loadSession })
+    useSessionStore.setState({ currentSessionId: 'sess-1' } as any)
+
+    handleGatewayEvent({
+      type: EventType.CheckpointRestored,
+      payload: { payload: { runtime_event_type: EventType.CheckpointRestored, payload: { checkpoint_id: 'cp-old', session_id: 'sess-1', guard_checkpoint_id: 'guard-1' } } },
+      session_id: 'sess-1',
+      run_id: 'run-1',
+    }, api)
+    handleGatewayEvent({
+      type: EventType.CheckpointRestored,
+      payload: { payload: { runtime_event_type: EventType.CheckpointRestored, payload: { checkpoint_id: 'cp-new', session_id: 'sess-1', guard_checkpoint_id: 'guard-2' } } },
+      session_id: 'sess-1',
+      run_id: 'run-2',
+    }, api)
+
+    resolveSecond?.({
+      payload: {
+        id: 'sess-1',
+        agent_mode: 'build',
+        messages: [{ role: 'assistant', content: 'newest' }],
+      },
+    })
+    await Promise.resolve()
+    await Promise.resolve()
+
+    resolveFirst?.({
+      payload: {
+        id: 'sess-1',
+        agent_mode: 'build',
+        messages: [{ role: 'assistant', content: 'stale' }],
+      },
+    })
+    await Promise.resolve()
+    await Promise.resolve()
+
+    await waitFor(() => {
+      expect(useUIStore.getState().isRestoringCheckpoint).toBe(false)
+    })
+
+    handleGatewayEvent({
+      type: EventType.ToolStart,
+      payload: { payload: { runtime_event_type: EventType.ToolStart, payload: { name: 'filesystem_write_file', id: 'tc-after-restore', arguments: '{"path":"after-double-restore.txt"}' } } },
+      session_id: 'sess-1',
+      run_id: 'run-3',
+    }, api)
+    const change = useUIStore.getState().fileChanges.find((entry) => entry.path === 'after-double-restore.txt')
+    expect(change?.checkpoint_id).toBe('cp-new')
+
+    const textMessages = useChatStore.getState().messages.filter((m) => m.type === 'text')
+    expect(textMessages.map((m) => m.content)).toContain('newest')
+    expect(textMessages.map((m) => m.content)).not.toContain('stale')
   })
 })

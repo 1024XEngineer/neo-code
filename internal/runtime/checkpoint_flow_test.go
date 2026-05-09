@@ -11,6 +11,7 @@ import (
 
 	"neo-code/internal/checkpoint"
 	providertypes "neo-code/internal/provider/types"
+	"neo-code/internal/repository"
 	agentsession "neo-code/internal/session"
 )
 
@@ -205,6 +206,298 @@ func TestCreateStartOfTurnCheckpoint_NoPending_SessionOnly(t *testing.T) {
 	if records[0].CodeCheckpointRef != "" {
 		t.Fatalf("code ref = %q, want empty (session-only)", records[0].CodeCheckpointRef)
 	}
+}
+
+func TestCreatePreRunDriftRebaseCheckpoint_UsesDriftReasonAndPerEditRef(t *testing.T) {
+	fixture := newRuntimeCheckpointFixture(t)
+
+	absKeep := filepath.Join(fixture.workdir, "keep.txt")
+	if err := os.WriteFile(absKeep, []byte("keep"), 0o644); err != nil {
+		t.Fatalf("WriteFile(keep) error = %v", err)
+	}
+	absDeleted := filepath.Join(fixture.workdir, "deleted.txt")
+	if err := os.WriteFile(absDeleted, []byte("deleted"), 0o644); err != nil {
+		t.Fatalf("WriteFile(deleted) error = %v", err)
+	}
+	if err := os.Remove(absDeleted); err != nil {
+		t.Fatalf("Remove(deleted) error = %v", err)
+	}
+
+	state := newRunState("run-drift", fixture.session)
+	checkpointID, err := fixture.service.createPreRunDriftRebaseCheckpoint(context.Background(), &state, repository.FingerprintDiff{
+		Deleted: []string{"deleted.txt"},
+	})
+	if err != nil {
+		t.Fatalf("createPreRunDriftRebaseCheckpoint() error = %v", err)
+	}
+	if checkpointID == "" {
+		t.Fatal("expected non-empty drift baseline checkpoint id")
+	}
+
+	records, err := fixture.checkpointStore.ListCheckpoints(context.Background(), fixture.session.ID, checkpoint.ListCheckpointOpts{})
+	if err != nil {
+		t.Fatalf("ListCheckpoints() error = %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("expected 1 checkpoint, got %d", len(records))
+	}
+	if records[0].Reason != agentsession.CheckpointReasonPreRunDriftRebase {
+		t.Fatalf("reason = %s, want %s", records[0].Reason, agentsession.CheckpointReasonPreRunDriftRebase)
+	}
+	if !checkpoint.IsPerEditRef(records[0].CodeCheckpointRef) {
+		t.Fatalf("code ref = %q, want peredit ref", records[0].CodeCheckpointRef)
+	}
+}
+
+func TestCheckpointDiff_ScopeRun_RecreatedFileAfterDriftBaselineIsAdded(t *testing.T) {
+	fixture := newRuntimeCheckpointFixture(t)
+	state := newRunState("run-drift-add", fixture.session)
+
+	absPath := filepath.Join(fixture.workdir, "recreate.txt")
+	if err := os.WriteFile(absPath, []byte("legacy"), 0o644); err != nil {
+		t.Fatalf("WriteFile(legacy) error = %v", err)
+	}
+	if err := os.Remove(absPath); err != nil {
+		t.Fatalf("Remove(recreate.txt) error = %v", err)
+	}
+
+	rebasedCheckpointID, err := fixture.service.createPreRunDriftRebaseCheckpoint(
+		context.Background(),
+		&state,
+		repository.FingerprintDiff{Deleted: []string{"recreate.txt"}},
+	)
+	if err != nil {
+		t.Fatalf("createPreRunDriftRebaseCheckpoint() error = %v", err)
+	}
+	if rebasedCheckpointID == "" {
+		t.Fatal("expected drift rebase checkpoint id")
+	}
+
+	if _, err := fixture.perEditStore.CapturePreWrite(absPath); err != nil {
+		t.Fatalf("CapturePreWrite(recreate) error = %v", err)
+	}
+	if err := os.WriteFile(absPath, []byte("new"), 0o644); err != nil {
+		t.Fatalf("WriteFile(new) error = %v", err)
+	}
+	if _, err := fixture.perEditStore.FinalizeWithExactState("cp-end"); err != nil {
+		t.Fatalf("FinalizeWithExactState(cp-end) error = %v", err)
+	}
+	fixture.perEditStore.Reset()
+	if err := fixture.service.createCheckpointRecord(
+		context.Background(),
+		fixture.session,
+		state.runID,
+		&state,
+		"cp-end",
+		agentsession.CheckpointReasonEndOfTurn,
+	); err != nil {
+		t.Fatalf("createCheckpointRecord(cp-end) error = %v", err)
+	}
+
+	fixture.service.setRunWorkspaceDrift(fixture.session.ID, state.runID, true)
+	fixture.service.setRunRollbackBaseline(fixture.session.ID, state.runID, rebasedCheckpointID)
+	result, err := fixture.service.CheckpointDiff(context.Background(), CheckpointDiffInput{
+		SessionID:    fixture.session.ID,
+		Scope:        "run",
+		RunID:        state.runID,
+		CheckpointID: "cp-end",
+	})
+	if err != nil {
+		t.Fatalf("CheckpointDiff(scope=run) error = %v", err)
+	}
+	if result.PrevCheckpointID != rebasedCheckpointID {
+		t.Fatalf("PrevCheckpointID = %q, want %q", result.PrevCheckpointID, rebasedCheckpointID)
+	}
+	if len(result.Files.Added) != 1 || result.Files.Added[0] != "recreate.txt" {
+		t.Fatalf("added files = %+v, want recreate.txt", result.Files.Added)
+	}
+	if len(result.Files.Modified) != 0 {
+		t.Fatalf("modified files = %+v, want empty", result.Files.Modified)
+	}
+}
+
+func TestCheckpointDiff_ScopeRun_LoadsPersistedBaselineAfterCacheClear(t *testing.T) {
+	fixture := newRuntimeCheckpointFixture(t)
+	state := newRunState("run-persisted-baseline", fixture.session)
+
+	absPath := filepath.Join(fixture.workdir, "persisted-baseline.txt")
+	if err := os.WriteFile(absPath, []byte("manual\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(manual) error = %v", err)
+	}
+	rebasedCheckpointID, err := fixture.service.createPreRunDriftRebaseCheckpoint(
+		context.Background(),
+		&state,
+		repository.FingerprintDiff{Added: []string{"persisted-baseline.txt"}},
+	)
+	if err != nil {
+		t.Fatalf("createPreRunDriftRebaseCheckpoint() error = %v", err)
+	}
+	fixture.service.persistRunRollbackBaseline(context.Background(), fixture.session.ID, state.runID, rebasedCheckpointID, true)
+	fixture.service.clearRunCheckpointCaches(fixture.session.ID, state.runID)
+
+	if _, err := fixture.perEditStore.CapturePreWrite(absPath); err != nil {
+		t.Fatalf("CapturePreWrite(agent) error = %v", err)
+	}
+	if err := os.WriteFile(absPath, []byte("agent\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(agent) error = %v", err)
+	}
+	if _, err := fixture.perEditStore.FinalizeWithExactState("cp-end-persisted"); err != nil {
+		t.Fatalf("FinalizeWithExactState(cp-end-persisted) error = %v", err)
+	}
+	fixture.perEditStore.Reset()
+	if err := fixture.service.createCheckpointRecord(
+		context.Background(),
+		fixture.session,
+		state.runID,
+		&state,
+		"cp-end-persisted",
+		agentsession.CheckpointReasonEndOfTurn,
+	); err != nil {
+		t.Fatalf("createCheckpointRecord(cp-end-persisted) error = %v", err)
+	}
+
+	result, err := fixture.service.CheckpointDiff(context.Background(), CheckpointDiffInput{
+		SessionID:    fixture.session.ID,
+		Scope:        "run",
+		RunID:        state.runID,
+		CheckpointID: "cp-end-persisted",
+	})
+	if err != nil {
+		t.Fatalf("CheckpointDiff(scope=run) error = %v", err)
+	}
+	if result.PrevCheckpointID != rebasedCheckpointID {
+		t.Fatalf("PrevCheckpointID = %q, want %q", result.PrevCheckpointID, rebasedCheckpointID)
+	}
+	if !result.WorkspaceDrifted {
+		t.Fatal("expected persisted drift flag")
+	}
+}
+
+func TestRestoreCheckpoint_AfterExternalModifyRestoresToRebasedState(t *testing.T) {
+	fixture := newRuntimeCheckpointFixture(t)
+	state := newRunState("run-restore-rebased", fixture.session)
+
+	absPath := filepath.Join(fixture.workdir, "external.txt")
+	if err := os.WriteFile(absPath, []byte("manual\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(manual) error = %v", err)
+	}
+	unrelatedPath := filepath.Join(fixture.workdir, "unrelated.txt")
+	if err := os.WriteFile(unrelatedPath, []byte("keep\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(unrelated) error = %v", err)
+	}
+	rebasedCheckpointID, err := fixture.service.createPreRunDriftRebaseCheckpoint(
+		context.Background(),
+		&state,
+		repository.FingerprintDiff{Modified: []string{"external.txt"}},
+	)
+	if err != nil {
+		t.Fatalf("createPreRunDriftRebaseCheckpoint() error = %v", err)
+	}
+
+	if _, err := fixture.perEditStore.CapturePreWrite(absPath); err != nil {
+		t.Fatalf("CapturePreWrite(agent) error = %v", err)
+	}
+	if err := os.WriteFile(absPath, []byte("agent\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(agent) error = %v", err)
+	}
+	if _, err := fixture.perEditStore.FinalizeWithExactState("cp-agent-end"); err != nil {
+		t.Fatalf("FinalizeWithExactState(cp-agent-end) error = %v", err)
+	}
+	fixture.perEditStore.Reset()
+	if err := fixture.service.createCheckpointRecord(
+		context.Background(),
+		fixture.session,
+		state.runID,
+		&state,
+		"cp-agent-end",
+		agentsession.CheckpointReasonEndOfTurn,
+	); err != nil {
+		t.Fatalf("createCheckpointRecord(cp-agent-end) error = %v", err)
+	}
+	if err := os.WriteFile(unrelatedPath, []byte("post-run user edit\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(unrelated post-run) error = %v", err)
+	}
+
+	if _, err := fixture.service.RestoreCheckpoint(context.Background(), GatewayRestoreInput{
+		SessionID:    fixture.session.ID,
+		CheckpointID: rebasedCheckpointID,
+	}); err != nil {
+		t.Fatalf("RestoreCheckpoint() error = %v", err)
+	}
+	data, err := os.ReadFile(absPath)
+	if err != nil {
+		t.Fatalf("ReadFile(restored) error = %v", err)
+	}
+	if got := string(data); got != "manual\n" {
+		t.Fatalf("restored content = %q, want manual", got)
+	}
+	unrelatedData, err := os.ReadFile(unrelatedPath)
+	if err != nil {
+		t.Fatalf("ReadFile(unrelated) error = %v", err)
+	}
+	if got := string(unrelatedData); got != "post-run user edit\n" {
+		t.Fatalf("unrelated content = %q, want post-run user edit", got)
+	}
+}
+
+func TestRecordRunStartFingerprint_DetectsDriftAcrossSessionsByWorkspace(t *testing.T) {
+	fixture := newRuntimeCheckpointFixture(t)
+	service := fixture.service
+	ctx := context.Background()
+
+	absPath := filepath.Join(fixture.workdir, "cross-session.txt")
+	if err := os.WriteFile(absPath, []byte("before"), 0o644); err != nil {
+		t.Fatalf("WriteFile(before) error = %v", err)
+	}
+	service.recordRunEndFingerprint(ctx, "sess-a", fixture.workdir)
+
+	if err := os.Remove(absPath); err != nil {
+		t.Fatalf("Remove(cross-session.txt) error = %v", err)
+	}
+
+	drifted, driftDiff := service.recordRunStartFingerprint(ctx, "sess-b", "run-b", fixture.workdir)
+	if !drifted {
+		t.Fatal("expected drift across sessions on the same workspace")
+	}
+	if !containsString(driftDiff.Deleted, "cross-session.txt") {
+		t.Fatalf("deleted diff = %#v, want cross-session.txt", driftDiff.Deleted)
+	}
+}
+
+func TestRecordRunStartFingerprint_LoadsWorkspaceFingerprintFromPersistence(t *testing.T) {
+	fixture := newRuntimeCheckpointFixture(t)
+	ctx := context.Background()
+
+	absPath := filepath.Join(fixture.workdir, "persisted.txt")
+	if err := os.WriteFile(absPath, []byte("before"), 0o644); err != nil {
+		t.Fatalf("WriteFile(before) error = %v", err)
+	}
+	fixture.service.recordRunEndFingerprint(ctx, "sess-a", fixture.workdir)
+
+	if err := os.Remove(absPath); err != nil {
+		t.Fatalf("Remove(persisted.txt) error = %v", err)
+	}
+
+	// 模拟进程重启：新 Service 仅复用 checkpointStore，不复用内存指纹缓存。
+	restarted := &Service{
+		checkpointStore: fixture.checkpointStore,
+	}
+	drifted, driftDiff := restarted.recordRunStartFingerprint(ctx, "sess-b", "run-b", fixture.workdir)
+	if !drifted {
+		t.Fatal("expected drift when loading workspace fingerprint from persistence")
+	}
+	if !containsString(driftDiff.Deleted, "persisted.txt") {
+		t.Fatalf("deleted diff = %#v, want persisted.txt", driftDiff.Deleted)
+	}
+}
+
+func containsString(items []string, target string) bool {
+	for _, item := range items {
+		if item == target {
+			return true
+		}
+	}
+	return false
 }
 
 func TestCreateEndOfTurnCheckpoint_NoWriteSkipped(t *testing.T) {
@@ -924,6 +1217,9 @@ func TestCheckpointDiffRunScopeAggregatesCurrentRun(t *testing.T) {
 	if result.CheckpointID != "cp-2" {
 		t.Fatalf("CheckpointID = %q, want cp-2", result.CheckpointID)
 	}
+	if result.PrevCheckpointID != "" {
+		t.Fatalf("PrevCheckpointID = %q, want empty", result.PrevCheckpointID)
+	}
 	if len(result.Files.Modified) != 1 || result.Files.Modified[0] != "tracked.txt" {
 		t.Fatalf("modified files = %+v, want tracked.txt", result.Files.Modified)
 	}
@@ -941,7 +1237,7 @@ func mustReadRuntimeFile(t *testing.T, path string) []byte {
 	return data
 }
 
-// ──────── scope=run diff tests ────────
+// scope=run diff tests
 
 func TestCheckpointDiff_ScopeRun_ReturnsAggregateDiff(t *testing.T) {
 	workdir := t.TempDir()
@@ -988,6 +1284,15 @@ func TestCheckpointDiff_ScopeRun_ReturnsAggregateDiff(t *testing.T) {
 				CreatedAt:         now,
 				CodeCheckpointRef: checkpoint.RefForPerEditCheckpoint("cp-1"),
 			},
+			{
+				CheckpointID:      "cp-0",
+				SessionID:         "session-1",
+				RunID:             "run-prev",
+				CreatedAt:         now.Add(-time.Second),
+				Reason:            agentsession.CheckpointReasonEndOfTurn,
+				Status:            agentsession.CheckpointStatusAvailable,
+				CodeCheckpointRef: checkpoint.RefForPerEditCheckpoint("cp-0"),
+			},
 		},
 	}
 	service := &Service{
@@ -1026,9 +1331,11 @@ func TestCheckpointDiff_ScopeRun_ReturnsAggregateDiff(t *testing.T) {
 	if len(modifiedPaths) != 1 || modifiedPaths[0] != "a.txt" {
 		t.Fatalf("expected a.txt modified, got added=%v modified=%v", addedPaths, modifiedPaths)
 	}
-	// 当前 run-scope diff 默认返回目标 checkpoint（未显式指定时为最新 checkpoint）。
 	if result.CheckpointID != "cp-2" {
 		t.Fatalf("CheckpointID = %q, want cp-2", result.CheckpointID)
+	}
+	if result.PrevCheckpointID != "cp-0" {
+		t.Fatalf("PrevCheckpointID = %q, want cp-0", result.PrevCheckpointID)
 	}
 }
 
@@ -1074,6 +1381,161 @@ func TestCheckpointDiff_ScopeRun_NoCheckpointsForRunID(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "no code checkpoint found") {
 		t.Fatalf("error = %v, want 'no code checkpoint found'", err)
+	}
+}
+
+func TestCheckpointDiff_ScopeRun_RejectsTargetCheckpointFromAnotherRun(t *testing.T) {
+	spy := &checkpointStoreSpy{
+		listRecords: []agentsession.CheckpointRecord{
+			{
+				CheckpointID:      "cp-other-run",
+				SessionID:         "session-1",
+				RunID:             "run-other",
+				CreatedAt:         time.Now().UTC(),
+				CodeCheckpointRef: checkpoint.RefForPerEditCheckpoint("cp-other-run"),
+			},
+		},
+	}
+	service := &Service{
+		checkpointStore: spy,
+		perEditStore:    checkpoint.NewPerEditSnapshotStore(t.TempDir(), t.TempDir()),
+	}
+	_, err := service.CheckpointDiff(context.Background(), CheckpointDiffInput{
+		SessionID:    "session-1",
+		Scope:        "run",
+		RunID:        "run-target",
+		CheckpointID: "cp-other-run",
+	})
+	if err == nil {
+		t.Fatal("expected error for target checkpoint from another run")
+	}
+	if !strings.Contains(err.Error(), "does not belong to run") {
+		t.Fatalf("error = %v, want run mismatch", err)
+	}
+}
+
+func TestCheckpointDiff_ScopeRun_WarnsWhenBaselineMissing(t *testing.T) {
+	workdir := t.TempDir()
+	projectDir := t.TempDir()
+	store := checkpoint.NewPerEditSnapshotStore(projectDir, workdir)
+	now := time.Now().UTC()
+
+	absA := filepath.Join(workdir, "a.txt")
+	_ = os.WriteFile(absA, []byte("old a\n"), 0o644)
+	if _, err := store.CapturePreWrite(absA); err != nil {
+		t.Fatalf("CapturePreWrite a: %v", err)
+	}
+	_ = os.WriteFile(absA, []byte("new a\n"), 0o644)
+	if _, err := store.Finalize("cp-1"); err != nil {
+		t.Fatalf("Finalize cp-1: %v", err)
+	}
+	store.Reset()
+
+	spy := &checkpointStoreSpy{
+		listRecords: []agentsession.CheckpointRecord{
+			{
+				CheckpointID:      "cp-1",
+				SessionID:         "session-1",
+				RunID:             "run-target",
+				CreatedAt:         now,
+				CodeCheckpointRef: checkpoint.RefForPerEditCheckpoint("cp-1"),
+			},
+		},
+	}
+	service := &Service{
+		checkpointStore: spy,
+		perEditStore:    store,
+	}
+
+	result, err := service.CheckpointDiff(context.Background(), CheckpointDiffInput{
+		SessionID: "session-1",
+		Scope:     "run",
+		RunID:     "run-target",
+	})
+	if err != nil {
+		t.Fatalf("CheckpointDiff(scope=run) error = %v", err)
+	}
+	if result.PrevCheckpointID != "" {
+		t.Fatalf("PrevCheckpointID = %q, want empty", result.PrevCheckpointID)
+	}
+	if !strings.Contains(result.Warning, "run baseline checkpoint is missing") {
+		t.Fatalf("Warning = %q, want missing-baseline warning", result.Warning)
+	}
+}
+
+func TestCheckpointDiff_ScopeRun_PrefersRebasedBaselineWhenDrifted(t *testing.T) {
+	workdir := t.TempDir()
+	projectDir := t.TempDir()
+	store := checkpoint.NewPerEditSnapshotStore(projectDir, workdir)
+	now := time.Now().UTC()
+
+	absA := filepath.Join(workdir, "a.txt")
+	_ = os.WriteFile(absA, []byte("one\n"), 0o644)
+	if _, err := store.CapturePreWrite(absA); err != nil {
+		t.Fatalf("CapturePreWrite cp-drift: %v", err)
+	}
+	_ = os.WriteFile(absA, []byte("two\n"), 0o644)
+	if _, err := store.Finalize("cp-drift"); err != nil {
+		t.Fatalf("Finalize cp-drift: %v", err)
+	}
+	store.Reset()
+
+	if _, err := store.CapturePreWrite(absA); err != nil {
+		t.Fatalf("CapturePreWrite cp-target: %v", err)
+	}
+	_ = os.WriteFile(absA, []byte("three\n"), 0o644)
+	if _, err := store.Finalize("cp-target"); err != nil {
+		t.Fatalf("Finalize cp-target: %v", err)
+	}
+	store.Reset()
+
+	spy := &checkpointStoreSpy{
+		listRecords: []agentsession.CheckpointRecord{
+			{
+				CheckpointID:      "cp-target",
+				SessionID:         "session-1",
+				RunID:             "run-target",
+				CreatedAt:         now.Add(time.Second),
+				CodeCheckpointRef: checkpoint.RefForPerEditCheckpoint("cp-target"),
+			},
+			{
+				CheckpointID:      "cp-drift",
+				SessionID:         "session-1",
+				RunID:             "run-target",
+				CreatedAt:         now,
+				CodeCheckpointRef: checkpoint.RefForPerEditCheckpoint("cp-drift"),
+			},
+			{
+				CheckpointID:      "cp-old",
+				SessionID:         "session-1",
+				RunID:             "run-prev",
+				CreatedAt:         now.Add(-time.Second),
+				Reason:            agentsession.CheckpointReasonEndOfTurn,
+				Status:            agentsession.CheckpointStatusAvailable,
+				CodeCheckpointRef: checkpoint.RefForPerEditCheckpoint("cp-old"),
+			},
+		},
+	}
+	service := &Service{
+		checkpointStore: spy,
+		perEditStore:    store,
+	}
+	service.setRunWorkspaceDrift("session-1", "run-target", true)
+	service.setRunRollbackBaseline("session-1", "run-target", "cp-drift")
+
+	result, err := service.CheckpointDiff(context.Background(), CheckpointDiffInput{
+		SessionID: "session-1",
+		Scope:     "run",
+		RunID:     "run-target",
+	})
+	if err != nil {
+		t.Fatalf("CheckpointDiff(scope=run) error = %v", err)
+	}
+	if result.PrevCheckpointID != "cp-drift" {
+		t.Fatalf("PrevCheckpointID = %q, want cp-drift", result.PrevCheckpointID)
+	}
+	if !strings.Contains(result.Warning, "baseline re-anchored") {
+		t.Fatalf("Warning = %q, want re-anchored hint", result.Warning)
 	}
 }
 

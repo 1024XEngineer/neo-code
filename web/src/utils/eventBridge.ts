@@ -1,6 +1,7 @@
 import {
   EventType,
   type AcceptanceDecidedPayload,
+  type BashSideEffectPayload,
   type BudgetCheckedPayload,
   type BudgetEstimateFailedPayload,
   type CheckpointCreatedPayload,
@@ -25,7 +26,11 @@ import { type GatewayAPI } from '@/api/gateway'
 import { useChatStore } from '@/stores/useChatStore'
 import { useUIStore } from '@/stores/useUIStore'
 import { useGatewayStore } from '@/stores/useGatewayStore'
-import { useSessionStore } from '@/stores/useSessionStore'
+import {
+  beginCheckpointRestoreReloadSeq,
+  reloadSessionAfterCheckpointRestore,
+  useSessionStore,
+} from '@/stores/useSessionStore'
 import { useRuntimeInsightStore } from '@/stores/useRuntimeInsightStore'
 import { useWorkspaceStore } from '@/stores/useWorkspaceStore'
 import { parseSingleFileDiff, parseUnifiedPatch, type ParsedFileDiff } from '@/utils/patchParser'
@@ -40,13 +45,48 @@ let _latestDoneToolCallId: string | undefined
 // 模块级缓存最新的 checkpoint_id，用于工具占位条目关联后续端到端 diff。
 let _latestCheckpointId: string | undefined
 let _latestRunDiffRequestId = 0
+let _latestRestoreSyncRequestId = 0
+// 文件首次触碰时的回退基线 checkpoint：key=标准化路径，value=checkpoint_id。
+let _firstTouchRollbackCheckpointByPath = new Map<string, string>()
+// restore/undo 后“下一轮”回退基线锚点，仅由 restore/undo 事件写入。
+let _pendingNextRunRollbackCheckpointId: string | undefined
+// 当前用于回退基线绑定的 run 边界（按 frame.run_id 检测）。
+let _currentRollbackRunId: string | undefined
+// 标记 pending 基线已应用到哪个 run；切到下一 run 时自动失效。
+let _pendingRollbackAppliedRunId: string | undefined
+const CHECKPOINT_REASON_PRE_RESTORE_GUARD = 'pre_restore_guard'
 
 /** 重置模块级游标 —— 在截断聊天历史 / 切换会话等场景调用，避免后续事件挂到已被移除的消息上 */
 export function resetEventBridgeCursors() {
+  const keepCheckpointBaseline = useUIStore.getState().isRestoringCheckpoint
   _latestVerificationMsgId = undefined
   _latestDoneToolCallId = undefined
-  _latestCheckpointId = undefined
+  _latestCheckpointId = keepCheckpointBaseline ? _latestCheckpointId : undefined
+  _firstTouchRollbackCheckpointByPath = new Map<string, string>()
+  _currentRollbackRunId = undefined
+  _pendingRollbackAppliedRunId = keepCheckpointBaseline ? _pendingRollbackAppliedRunId : undefined
+  _pendingNextRunRollbackCheckpointId = keepCheckpointBaseline ? _pendingNextRunRollbackCheckpointId : undefined
   _latestRunDiffRequestId += 1
+  if (!keepCheckpointBaseline) {
+    _latestRestoreSyncRequestId += 1
+    useUIStore.getState().setRestoringCheckpoint(false)
+  }
+}
+
+// trackRollbackRunBoundary 按 run_id 切分文件回退基线缓存，避免跨 run 复用旧 first-touch 映射。
+function trackRollbackRunBoundary(runId: string) {
+  const normalizedRunId = runId.trim()
+  if (!normalizedRunId) return
+  if (_currentRollbackRunId === normalizedRunId) return
+
+  _currentRollbackRunId = normalizedRunId
+  _firstTouchRollbackCheckpointByPath = new Map<string, string>()
+
+  // pending 基线只作用于“下一轮”；一旦已在某个 run 消费，切到后续 run 即失效。
+  if (_pendingRollbackAppliedRunId && _pendingRollbackAppliedRunId !== normalizedRunId) {
+    _pendingNextRunRollbackCheckpointId = undefined
+    _pendingRollbackAppliedRunId = undefined
+  }
 }
 
 /**
@@ -71,13 +111,42 @@ function normalizeFilePath(input: string): string {
   return p
 }
 
+// resolveRollbackCheckpointID 计算文件项的回退 checkpoint，优先首次触碰基线，避免被后续 checkpoint 覆盖。
+function resolveRollbackCheckpointID(
+  path: string,
+  fallback?: string,
+  allowLatestFallback: boolean = true,
+): string | undefined {
+  const normalizedPath = normalizeFilePath(path)
+  if (!normalizedPath) return fallback
+
+  const firstTouch = _firstTouchRollbackCheckpointByPath.get(normalizedPath)
+  if (firstTouch) return firstTouch
+
+  const pending = _pendingNextRunRollbackCheckpointId
+  if (pending) {
+    _firstTouchRollbackCheckpointByPath.set(normalizedPath, pending)
+    if (_currentRollbackRunId && !_pendingRollbackAppliedRunId) {
+      _pendingRollbackAppliedRunId = _currentRollbackRunId
+    }
+    return pending
+  }
+
+  const candidate = fallback || (allowLatestFallback ? _latestCheckpointId : undefined)
+  if (candidate) {
+    _firstTouchRollbackCheckpointByPath.set(normalizedPath, candidate)
+  }
+  return candidate
+}
+
 function _upsertFileChange(
   rawPath: string,
-  status: 'added' | 'modified' | 'deleted',
+  status: 'pending' | 'added' | 'modified' | 'deleted',
   parsed?: ParsedFileDiff,
 ) {
   const path = normalizeFilePath(rawPath)
   if (!path) return
+  const checkpointID = resolveRollbackCheckpointID(path)
   const existing = useUIStore.getState().fileChanges.find((c) => c.path === path)
   if (existing) {
     useUIStore.setState((s) => ({
@@ -90,7 +159,7 @@ function _upsertFileChange(
               deletions: parsed?.deletions ?? c.deletions,
               diff: parsed?.lines ?? c.diff,
               hunks: parsed?.hunks ?? c.hunks,
-              checkpoint_id: _latestCheckpointId ?? c.checkpoint_id,
+              checkpoint_id: c.checkpoint_id ?? checkpointID,
             }
           : c,
       ),
@@ -104,9 +173,14 @@ function _upsertFileChange(
       deletions: parsed?.deletions ?? 0,
       diff: parsed?.lines,
       hunks: parsed?.hunks,
-      checkpoint_id: _latestCheckpointId,
+      checkpoint_id: checkpointID,
     })
   }
+}
+
+function normalizeChangeStatus(kind: unknown): 'added' | 'modified' | 'deleted' | undefined {
+  if (kind === 'added' || kind === 'modified' || kind === 'deleted') return kind
+  return undefined
 }
 
 /** 写文件工具名集合 */
@@ -129,15 +203,15 @@ function _trackFileChangeFromTool(toolName: string, argsRaw: string) {
     return
   }
 
-  // 统一用 modified 占位，真实状态由 tool_diff 事件覆盖
+  // 统一用 pending 占位，真实状态由 tool_diff/run diff 事件覆盖
   if (toolName === 'filesystem_move_file' || toolName === 'filesystem_copy_file') {
     const src = typeof args.source_path === 'string' ? args.source_path : ''
     const dst = typeof args.destination_path === 'string' ? args.destination_path : ''
-    if (src) _upsertFileChange(src, 'modified')
-    if (dst) _upsertFileChange(dst, 'modified')
+    if (src) _upsertFileChange(src, 'pending')
+    if (dst) _upsertFileChange(dst, 'pending')
   } else {
     const path = typeof args.path === 'string' ? args.path : ''
-    if (path) _upsertFileChange(path, 'modified')
+    if (path) _upsertFileChange(path, 'pending')
   }
 
   if (!useUIStore.getState().changesPanelOpen) {
@@ -149,8 +223,15 @@ function _trackFileChangeFromTool(toolName: string, argsRaw: string) {
 function _applyToolDiff(payload: ToolDiffPayload) {
   // 多文件工具（move/copy）
   if (payload.diffs && payload.diffs.length > 0) {
+    const kindByPath = new Map<string, 'added' | 'modified' | 'deleted'>()
+    for (const file of payload.files ?? []) {
+      const normalized = normalizeFilePath(file.path)
+      const status = normalizeChangeStatus(file.kind)
+      if (normalized && status) kindByPath.set(normalized, status)
+    }
     for (const entry of payload.diffs) {
-      const status: 'added' | 'modified' | 'deleted' = entry.was_new ? 'added' : 'modified'
+      const normalized = normalizeFilePath(entry.path)
+      const status = normalizeChangeStatus(entry.kind) ?? kindByPath.get(normalized) ?? (entry.was_new ? 'added' : 'modified')
       const parsed = entry.diff ? parseSingleFileDiff(entry.diff) : undefined
       _upsertFileChange(entry.path, status, parsed)
     }
@@ -170,7 +251,24 @@ function _applyToolDiff(payload: ToolDiffPayload) {
   }
 }
 
-function _fileChangesFromCheckpointDiff(diff: CheckpointDiffResultPayload) {
+function _applyBashSideEffect(payload: BashSideEffectPayload) {
+  let changed = false
+  for (const change of payload.changes ?? []) {
+    const status = normalizeChangeStatus(change.kind)
+    if (!status) continue
+    _upsertFileChange(change.path, status)
+    changed = true
+  }
+  if (changed && !useUIStore.getState().changesPanelOpen) {
+    useUIStore.getState().toggleChangesPanel()
+  }
+}
+
+function _fileChangesFromCheckpointDiff(
+  diff: CheckpointDiffResultPayload,
+  existingCheckpointByPath: Map<string, string | undefined>,
+) {
+  const authoritativeBaseline = diff.prev_checkpoint_id?.trim() || undefined
   const parsed = diff.patch ? parseUnifiedPatch(diff.patch) : {}
   const parsedByPath = new Map<string, ParsedFileDiff>()
   for (const [path, parsedDiff] of Object.entries(parsed)) {
@@ -191,6 +289,7 @@ function _fileChangesFromCheckpointDiff(diff: CheckpointDiffResultPayload) {
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([path, status]) => {
       const parsedDiff = parsedByPath.get(path)
+      const existingCheckpointID = existingCheckpointByPath.get(path)
       return {
         id: `fc_${path}`,
         path,
@@ -199,7 +298,7 @@ function _fileChangesFromCheckpointDiff(diff: CheckpointDiffResultPayload) {
         deletions: parsedDiff?.deletions ?? 0,
         diff: parsedDiff?.lines,
         hunks: parsedDiff?.hunks,
-        checkpoint_id: diff.checkpoint_id,
+        checkpoint_id: authoritativeBaseline ?? existingCheckpointID,
       }
     })
 }
@@ -221,9 +320,54 @@ function _refreshRunFileChanges(
     if (runId !== useGatewayStore.getState().currentRunId) return
     if (sessionId !== useSessionStore.getState().currentSessionId) return
     if (!result?.payload) return
-    useUIStore.getState().replaceFileChanges(_fileChangesFromCheckpointDiff(result.payload))
+    if (result.payload.warning) {
+      useUIStore.getState().showToast(`Checkpoint warning: ${result.payload.warning}`, 'info')
+    }
+    const existingCheckpointByPath = new Map<string, string | undefined>(
+      useUIStore.getState().fileChanges.map((change) => [change.path, change.checkpoint_id]),
+    )
+    useUIStore.getState().replaceFileChanges(_fileChangesFromCheckpointDiff(result.payload, existingCheckpointByPath))
   }).catch((error) => {
     console.warn('[eventBridge] checkpoint.diff run scope failed:', error)
+  })
+}
+
+// refreshSessionAfterCheckpointRestoreEvent 仅在当前会话收到 restore/undo 事件时刷新会话与文件变更视图。
+function refreshSessionAfterCheckpointRestoreEvent(
+  gatewayAPI: GatewayAPI,
+  payloadSessionId: string,
+  nextCheckpointId: string | undefined,
+) {
+  const sessionId = payloadSessionId.trim()
+  const currentSessionId = useSessionStore.getState().currentSessionId.trim()
+  if (!sessionId || !currentSessionId || sessionId !== currentSessionId) {
+    return
+  }
+
+  const normalizedNextCheckpointId = nextCheckpointId?.trim()
+  if (normalizedNextCheckpointId) {
+    _latestCheckpointId = normalizedNextCheckpointId
+    _pendingNextRunRollbackCheckpointId = normalizedNextCheckpointId
+    _pendingRollbackAppliedRunId = undefined
+  }
+
+  const requestId = ++_latestRestoreSyncRequestId
+  const reloadSeq = beginCheckpointRestoreReloadSeq()
+  _firstTouchRollbackCheckpointByPath = new Map<string, string>()
+  useUIStore.getState().setRestoringCheckpoint(true)
+  useUIStore.getState().clearFileChanges()
+  void reloadSessionAfterCheckpointRestore(gatewayAPI, sessionId, reloadSeq).then(() => {
+    if (requestId !== _latestRestoreSyncRequestId) return
+    if (normalizedNextCheckpointId) {
+      _latestCheckpointId = normalizedNextCheckpointId
+      _pendingNextRunRollbackCheckpointId = normalizedNextCheckpointId
+    }
+    useUIStore.getState().setRestoringCheckpoint(false)
+  }).catch((error) => {
+    if (requestId !== _latestRestoreSyncRequestId) return
+    useUIStore.getState().setRestoringCheckpoint(false)
+    console.warn('[eventBridge] failed to reload session after checkpoint restore:', error)
+    useUIStore.getState().showToast('Failed to refresh session after restore', 'error')
   })
 }
 
@@ -405,6 +549,7 @@ export function handleGatewayEvent(frame: MessageFrame, gatewayAPI: GatewayAPI) 
     }
 
     case EventType.ToolStart: {
+      trackRollbackRunBoundary(frameRunId || useGatewayStore.getState().currentRunId)
       const toolName = strField(eventPayload, 'name')
       const toolArgs = strField(eventPayload, 'arguments')
       const msg = {
@@ -432,8 +577,16 @@ export function handleGatewayEvent(frame: MessageFrame, gatewayAPI: GatewayAPI) 
     }
 
     case EventType.ToolDiff: {
+      trackRollbackRunBoundary(frameRunId || useGatewayStore.getState().currentRunId)
       const diffPayload = eventPayload as ToolDiffPayload | undefined
       if (diffPayload) _applyToolDiff(diffPayload)
+      break
+    }
+
+    case EventType.BashSideEffect: {
+      trackRollbackRunBoundary(frameRunId || useGatewayStore.getState().currentRunId)
+      const payload = eventPayload as BashSideEffectPayload | undefined
+      if (payload) _applyBashSideEffect(payload)
       break
     }
 
@@ -450,6 +603,8 @@ export function handleGatewayEvent(frame: MessageFrame, gatewayAPI: GatewayAPI) 
       const sessionId = strField(eventPayload, 'session_id') || frameSessionId || ''
       const runId = strField(eventPayload, 'run_id') || frameRunId || ''
       if (runId) gwStore.setCurrentRunId(runId)
+      trackRollbackRunBoundary(runId)
+      _firstTouchRollbackCheckpointByPath = new Map<string, string>()
       useUIStore.getState().clearFileChanges()
       if (sessionId && sessionId !== useSessionStore.getState().currentSessionId) {
         useSessionStore.getState().setCurrentSessionId(sessionId)
@@ -717,7 +872,9 @@ export function handleGatewayEvent(frame: MessageFrame, gatewayAPI: GatewayAPI) 
         if (_latestDoneToolCallId) {
           chatStore.attachCheckpointToToolCall(_latestDoneToolCallId, payload.checkpoint_id)
         }
-        _latestCheckpointId = payload.checkpoint_id
+        if (payload.reason !== CHECKPOINT_REASON_PRE_RESTORE_GUARD) {
+          _latestCheckpointId = payload.checkpoint_id
+        }
         if (payload.reason === 'end_of_turn' && gatewayAPI && frameSessionId && frameRunId) {
           _refreshRunFileChanges(gatewayAPI, frameSessionId, frameRunId, payload.checkpoint_id)
         }
@@ -734,17 +891,27 @@ export function handleGatewayEvent(frame: MessageFrame, gatewayAPI: GatewayAPI) 
 
     case EventType.CheckpointRestored: {
       const payload = eventPayload as CheckpointRestoredPayload | undefined
-      if (payload) insightStore.addCheckpointEvent(payload)
-      chatStore.markAllCheckpointsRestored()
-      uiStore.showToast('Checkpoint restored', 'success')
+      if (payload) {
+        insightStore.addCheckpointEvent(payload)
+        if (payload.session_id === useSessionStore.getState().currentSessionId) {
+          chatStore.markAllCheckpointsRestored()
+          refreshSessionAfterCheckpointRestoreEvent(gatewayAPI, payload.session_id, payload.checkpoint_id)
+          uiStore.showToast('Checkpoint restored', 'success')
+        }
+      }
       break
     }
 
     case EventType.CheckpointUndoRestore: {
       const payload = eventPayload as CheckpointUndoRestorePayload | undefined
-      if (payload) insightStore.addCheckpointEvent(payload)
-      chatStore.markAllCheckpointsAvailable()
-      uiStore.showToast('Checkpoint restore undone', 'success')
+      if (payload) {
+        insightStore.addCheckpointEvent(payload)
+        if (payload.session_id === useSessionStore.getState().currentSessionId) {
+          chatStore.markAllCheckpointsAvailable()
+          refreshSessionAfterCheckpointRestoreEvent(gatewayAPI, payload.session_id, payload.guard_checkpoint_id)
+          uiStore.showToast('Checkpoint restore undone', 'success')
+        }
+      }
       break
     }
 

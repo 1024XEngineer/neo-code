@@ -86,7 +86,9 @@ func (s *Service) restoreCheckpointCore(ctx context.Context, sessionID, checkpoi
 		return RestoreResult{}, agentsession.CheckpointRecord{}, fmt.Errorf("checkpoint: create guard: %w", guardErr)
 	}
 
-	// 3. Restore code via per-edit store（不在 cp.FileVersions 中的文件保持不变）。
+	relatedPerEditIDs := s.restoreRelatedPerEditIDs(ctx, sessionID, record.CreatedAt)
+
+	// 3. Restore code via per-edit store（仅处理目标、guard 与后续相关 checkpoint 涉及的文件）。
 	// Guard checkpoint 恢复时使用 RestoreExact：guard 中存储的 version 就是 restore 前的 pre-write 状态，
 	// 而 Restore 的 v_next 语义在 guard 上通常是 no-op（guard 之后没有新的 capture）。
 	isGuardRestore := record.Reason == agentsession.CheckpointReasonGuard
@@ -102,7 +104,7 @@ func (s *Service) restoreCheckpointCore(ctx context.Context, sessionID, checkpoi
 				if guardWritten {
 					guardCheckpointID = guardID
 				}
-				if err := s.perEditStore.Restore(ctx, perEditID, guardCheckpointID); err != nil {
+				if err := s.perEditStore.Restore(ctx, perEditID, guardCheckpointID, relatedPerEditIDs...); err != nil {
 					return RestoreResult{}, agentsession.CheckpointRecord{}, fmt.Errorf("checkpoint: restore code: %w", err)
 				}
 			}
@@ -149,11 +151,40 @@ func (s *Service) restoreCheckpointCore(ctx context.Context, sessionID, checkpoi
 
 	// 7. Update runtime session if it's the current session
 	s.updateRuntimeSessionAfterRestore(sessionID, head, messages)
+	s.recordRunEndWorkspaceState(ctx, sessionID, head.Workdir, checkpointID)
 
 	return RestoreResult{
 		CheckpointID: checkpointID,
 		SessionID:    sessionID,
 	}, guardRecord, nil
+}
+
+// restoreRelatedPerEditIDs 收集目标 checkpoint 之后仍 available 的代码 checkpoint，用于限定 restore 清理范围。
+func (s *Service) restoreRelatedPerEditIDs(ctx context.Context, sessionID string, targetCreatedAt time.Time) []string {
+	if s.checkpointStore == nil {
+		return nil
+	}
+	records, err := s.checkpointStore.ListCheckpoints(ctx, sessionID, checkpoint.ListCheckpointOpts{})
+	if err != nil {
+		return nil
+	}
+	out := make([]string, 0)
+	for _, record := range records {
+		if !record.CreatedAt.After(targetCreatedAt) {
+			continue
+		}
+		if record.Status != "" && record.Status != agentsession.CheckpointStatusAvailable {
+			continue
+		}
+		if record.Reason == agentsession.CheckpointReasonGuard {
+			continue
+		}
+		perEditID := checkpoint.PerEditCheckpointIDFromRef(record.CodeCheckpointRef)
+		if perEditID != "" {
+			out = append(out, perEditID)
+		}
+	}
+	return out
 }
 
 // RestoreCheckpoint 恢复指定 checkpoint 的会话和工作区状态，并发出 checkpoint_restored 事件。
@@ -315,6 +346,8 @@ type CheckpointDiffResult struct {
 	PrevCommitHash   string    `json:"prev_commit_hash,omitempty"`
 	Files            FileDiffs `json:"files"`
 	Patch            string    `json:"patch,omitempty"`
+	WorkspaceDrifted bool      `json:"workspace_drifted,omitempty"`
+	Warning          string    `json:"warning,omitempty"`
 }
 
 // FileDiffs 描述 diff 中的文件变更列表。
@@ -452,6 +485,9 @@ func (s *Service) checkpointDiffForRun(ctx context.Context, input CheckpointDiff
 	if runID == "" {
 		return CheckpointDiffResult{}, fmt.Errorf("checkpoint: run_id required for run scope diff")
 	}
+	if targetRecord != nil && strings.TrimSpace(targetRecord.RunID) != runID {
+		return CheckpointDiffResult{}, fmt.Errorf("checkpoint: target checkpoint %s does not belong to run %s", targetRecord.CheckpointID, runID)
+	}
 
 	codeRecords := make([]agentsession.CheckpointRecord, 0)
 	for _, record := range records {
@@ -479,6 +515,11 @@ func (s *Service) checkpointDiffForRun(ctx context.Context, input CheckpointDiff
 		targetRecord = &codeRecords[len(codeRecords)-1]
 	}
 
+	prevCheckpointID, workspaceDrifted := s.getPersistentRunRollbackBaseline(ctx, sessionID, runID)
+	if prevCheckpointID == "" {
+		prevCheckpointID = resolveRunPrevCheckpointID(records, codeRecords[0].CreatedAt, runID)
+	}
+
 	perEditIDs := make([]string, 0, len(codeRecords))
 	for _, record := range codeRecords {
 		perEditID := checkpoint.PerEditCheckpointIDFromRef(record.CodeCheckpointRef)
@@ -492,7 +533,30 @@ func (s *Service) checkpointDiffForRun(ctx context.Context, input CheckpointDiff
 		return CheckpointDiffResult{}, fmt.Errorf("checkpoint: per-edit run diff: %w", err)
 	}
 
-	result := CheckpointDiffResult{CheckpointID: targetRecord.CheckpointID, Patch: patch}
+	result := CheckpointDiffResult{
+		CheckpointID:     targetRecord.CheckpointID,
+		PrevCheckpointID: prevCheckpointID,
+		Patch:            patch,
+		WorkspaceDrifted: workspaceDrifted,
+	}
+	if result.WorkspaceDrifted {
+		if prevCheckpointID != "" {
+			result.Warning = "workspace drift detected before run start; baseline re-anchored"
+		} else {
+			result.Warning = "workspace drift detected before run start"
+		}
+	}
+	if result.PrevCheckpointID == "" {
+		if result.Warning != "" {
+			result.Warning += "; run baseline checkpoint is missing"
+		} else {
+			result.Warning = "run baseline checkpoint is missing"
+		}
+	}
+	if result.PrevCheckpointID != "" {
+		s.persistRunRollbackBaseline(ctx, sessionID, runID, result.PrevCheckpointID, result.WorkspaceDrifted)
+	}
+
 	for _, c := range changes {
 		switch c.Kind {
 		case checkpoint.FileChangeAdded:
@@ -504,4 +568,46 @@ func (s *Service) checkpointDiffForRun(ctx context.Context, input CheckpointDiff
 		}
 	}
 	return result, nil
+}
+
+// resolveRunPrevCheckpointID 解析 run 级 diff 的权威 baseline checkpoint_id。
+// 优先选择 run 开始前最近的 end_of_turn 代码 checkpoint；若不存在，退化为最近的可用代码 checkpoint。
+func resolveRunPrevCheckpointID(records []agentsession.CheckpointRecord, runStartAt time.Time, runID string) string {
+	var preferred *agentsession.CheckpointRecord
+	var fallback *agentsession.CheckpointRecord
+	for i := range records {
+		record := records[i]
+		if strings.TrimSpace(record.RunID) == strings.TrimSpace(runID) {
+			continue
+		}
+		if record.Status != "" && record.Status != agentsession.CheckpointStatusAvailable {
+			continue
+		}
+		if !checkpoint.IsPerEditRef(record.CodeCheckpointRef) {
+			continue
+		}
+		if record.Reason == agentsession.CheckpointReasonGuard {
+			continue
+		}
+		if !record.CreatedAt.Before(runStartAt) {
+			continue
+		}
+		if fallback == nil || record.CreatedAt.After(fallback.CreatedAt) {
+			candidate := record
+			fallback = &candidate
+		}
+		if record.Reason == agentsession.CheckpointReasonEndOfTurn {
+			if preferred == nil || record.CreatedAt.After(preferred.CreatedAt) {
+				candidate := record
+				preferred = &candidate
+			}
+		}
+	}
+	if preferred != nil {
+		return preferred.CheckpointID
+	}
+	if fallback != nil {
+		return fallback.CheckpointID
+	}
+	return ""
 }
