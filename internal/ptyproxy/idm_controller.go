@@ -1,23 +1,16 @@
-//go:build !windows
-
 package ptyproxy
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
-	"syscall"
-	"time"
 	"unicode/utf8"
 
 	"github.com/charmbracelet/glamour"
@@ -33,8 +26,6 @@ const (
 	idmColorReset                 = "\033[0m"
 	idmPromptText                 = "IDM> "
 	idmExpandedRingBufferCapacity = 256 * 1024
-	idmSkillID                    = "terminal-diagnosis"
-	idmSkillRelativePath          = ".neocode/skills/terminal-diagnosis/SKILL.md"
 	idmSessionPrefix              = "idm-"
 	idmSessionRunAskPrefix        = "idm-ask"
 	idmMarkdownWrapWidth          = 96
@@ -48,73 +39,9 @@ var (
 	idmMarkdownRendererErr  error
 )
 
-const terminalDiagnosisSkillMarkdown = `---
-name: "terminal-diagnosis"
-description: "Terminal error diagnosis agent. Text-only analysis, no tool calls."
-scope: "session"
----
+const idmNativeCommandLineEnding = "\r\n"
 
-## Instruction
-
-You are a terminal diagnosis agent running in a restricted sandbox. Your
-only input is the error log snapshot and environment context provided by
-the user.
-
-**Hard constraints:**
-- Do NOT call any tools (file read, command execution, network, etc.).
-  You cannot and must not gather additional information yourself.
-- Base your analysis solely on the provided error log. Do not speculate
-  about content that does not appear in the log.
-- Do NOT output plan_spec, summary_candidate, or any planning JSON.
-- Do NOT perform build or write actions. Return diagnosis text only.
-- If the log appears heavily truncated or information is insufficient,
-  lower your confidence. You may suggest commands for the user to run
-  manually in next_actions to gather more context, but do not pretend
-  you know the exact root cause.
-
-**Analysis priority:**
-1. Locate error line numbers, file paths, function names.
-2. Classify error type: syntax / permission / dependency / network /
-   disk / memory / config.
-3. Cross-validate with the provided exit code.
-
-**Output Constraints:**
-- The content of all output fields MUST be entirely in Chinese (except
-  for code snippets, paths, or command literals).
-- DO NOT wrap the output in markdown code blocks.
-
-**Output must populate these SubAgent fields:**
-- summary: One-sentence root cause (actionable).
-- findings: First item MUST be confidence=<0.0~1.0> format, remainder
-  as step-by-step evidence extracted from the log.
-- patches: Fix commands ready to copy-paste (max 3). Leave empty if no
-  safe fix exists.
-- next_actions: Investigation commands for the user to run manually
-  for further validation (max 3).
-- risks: Limitations of your analysis or potential dangers of running
-  the patches.
-
-## References
-
-**Common exit codes:**
-| Code  | Meaning |
-|-------|---------|
-| 0     | Success |
-| 1     | General error |
-| 2     | Syntax error / misuse |
-| 126   | No execute permission |
-| 127   | Command not found |
-| 128+N | Killed by signal N (130=SIGINT, 137=SIGKILL) |
-
-**Typical patterns:**
-- No such file or directory -> wrong path or working directory.
-- Permission denied -> insufficient permissions or ownership mismatch.
-- command not found -> PATH or toolchain not installed.
-- undefined reference / cannot find package -> missing or conflicting
-  dependency.
-`
-
-// idmRuntimeMode 负责 idmRuntimeMode 相关逻辑。
+// idmRuntimeMode 璐熻矗 idmRuntimeMode 鐩稿叧閫昏緫銆
 type idmRuntimeMode int
 
 const (
@@ -123,27 +50,31 @@ const (
 	idmModeNativeCmd
 )
 
-// idmControllerOptions 负责 idmControllerOptions 相关逻辑。
+// idmControllerOptions 璐熻矗 idmControllerOptions 鐩稿叧閫昏緫銆
 type idmControllerOptions struct {
-	PTYWriter  io.Writer
-	Output     io.Writer
-	Stderr     io.Writer
-	RPCClient  *gatewayclient.GatewayRPCClient
-	AutoState  *autoRuntimeState
-	LogBuffer  *UTF8RingBuffer
-	DefaultCap int
-	Workdir    string
+	PTYWriter          io.Writer
+	Output             io.Writer
+	Stderr             io.Writer
+	RPCClient          *gatewayclient.GatewayRPCClient
+	NotificationStream <-chan gatewayclient.Notification
+	AutoState          *autoRuntimeState
+	LogBuffer          *UTF8RingBuffer
+	DefaultCap         int
+	Workdir            string
+	ShellSessionID     string
 }
 
-// idmController 负责 idmController 相关逻辑。
+// idmController 璐熻矗 idmController 鐩稿叧閫昏緫銆
 type idmController struct {
-	ptyWriter io.Writer
-	output    io.Writer
-	stderr    io.Writer
-	rpcClient *gatewayclient.GatewayRPCClient
-	autoState *autoRuntimeState
-	logBuffer *UTF8RingBuffer
-	workdir   string
+	ptyWriter          io.Writer
+	output             io.Writer
+	stderr             io.Writer
+	rpcClient          *gatewayclient.GatewayRPCClient
+	notificationStream <-chan gatewayclient.Notification
+	autoState          *autoRuntimeState
+	logBuffer          *UTF8RingBuffer
+	workdir            string
+	shellSessionID     string
 
 	mu                  sync.Mutex
 	active              bool
@@ -157,9 +88,10 @@ type idmController struct {
 	sessionReady        bool
 	currentRunID        string
 	streamCancel        context.CancelFunc
+	abandonedRunIDs     map[string]struct{}
 }
 
-// newIDMController 负责 newIDMController 相关逻辑。
+// newIDMController 璐熻矗 newIDMController 鐩稿叧閫昏緫銆
 func newIDMController(options idmControllerOptions) *idmController {
 	defaultCap := options.DefaultCap
 	if defaultCap <= 0 {
@@ -170,17 +102,20 @@ func newIDMController(options idmControllerOptions) *idmController {
 		output:              options.Output,
 		stderr:              options.Stderr,
 		rpcClient:           options.RPCClient,
+		notificationStream:  options.NotificationStream,
 		autoState:           options.AutoState,
 		logBuffer:           options.LogBuffer,
 		workdir:             strings.TrimSpace(options.Workdir),
+		shellSessionID:      strings.TrimSpace(options.ShellSessionID),
 		defaultRingCapacity: defaultCap,
 		lineBuffer:          make([]byte, 0, 128),
 		utf8Pending:         make([]byte, 0, utf8.UTFMax),
 		pendingEcho:         make([]byte, 0, 128),
+		abandonedRunIDs:     make(map[string]struct{}),
 	}
 }
 
-// Enter 负责 Enter 相关逻辑。
+// Enter 璐熻矗 Enter 鐩稿叧閫昏緫銆
 func (c *idmController) Enter() error {
 	if c == nil {
 		return errors.New("idm controller is nil")
@@ -191,7 +126,7 @@ func (c *idmController) Enter() error {
 		c.mu.Unlock()
 		return nil
 	}
-	if c.autoState != nil && !c.autoState.OSCReady.Load() {
+	if c.autoState != nil && !c.autoState.OSCReady.Load() && c.ptyWriter == nil {
 		c.mu.Unlock()
 		return errors.New("shell integration is not ready (OSC133 unavailable)")
 	}
@@ -201,12 +136,10 @@ func (c *idmController) Enter() error {
 	c.lineBuffer = c.lineBuffer[:0]
 	c.utf8Pending = c.utf8Pending[:0]
 	c.pendingEcho = c.pendingEcho[:0]
-	c.sessionReady = false
 	c.currentRunID = ""
 	c.streamCancel = nil
 	c.sessionID = generateIDMSessionID(os.Getpid())
-	enterSessionID := c.sessionID
-
+	c.sessionReady = true
 	if c.autoState != nil {
 		c.autoSnapshot = c.autoState.Enabled.Load()
 		c.autoState.Enabled.Store(false)
@@ -219,21 +152,13 @@ func (c *idmController) Enter() error {
 	}
 	c.mu.Unlock()
 
-	if err := ensureTerminalDiagnosisSkillFile(); err != nil {
-		c.rollbackEnter(enterSessionID)
-		return fmt.Errorf("prepare terminal-diagnosis skill failed: %w", err)
-	}
-	if err := c.ensureSessionReady(); err != nil {
-		c.rollbackEnter(enterSessionID)
-		return err
-	}
-
-	c.writeSystemMessage("[NeoCode] 已进入 IDM 交互式诊断模式，输入 `exit` 或空闲态按 Ctrl+C 退出。")
+	c.writeSystemMessage("[NeoCode] IDM mode enabled. Use `@ai <question>` for follow-up chat; other input passes to the shell.")
+	c.writeSystemMessage("[NeoCode] Type `exit` or press Ctrl+C in idle mode to leave.")
 	c.writePrompt()
 	return nil
 }
 
-// rollbackEnter 负责 rollbackEnter 相关逻辑。
+// rollbackEnter 璐熻矗 rollbackEnter 鐩稿叧閫昏緫銆
 func (c *idmController) rollbackEnter(sessionID string) {
 	if c == nil {
 		return
@@ -261,7 +186,7 @@ func (c *idmController) rollbackEnter(sessionID string) {
 	c.mu.Unlock()
 
 	if strings.TrimSpace(sessionID) != "" {
-		c.deleteSession(sessionID)
+		c.deleteAskSession(sessionID)
 	}
 	if shouldRestore {
 		if defaultCap <= 0 {
@@ -275,7 +200,7 @@ func (c *idmController) rollbackEnter(sessionID string) {
 	}
 }
 
-// Exit 负责 Exit 相关逻辑。
+// Exit 璐熻矗 Exit 鐩稿叧閫昏緫銆
 func (c *idmController) Exit() {
 	if c == nil {
 		return
@@ -285,7 +210,6 @@ func (c *idmController) Exit() {
 		cancelFunc     context.CancelFunc
 		runID          string
 		sessionID      string
-		sessionReady   bool
 		autoSnapshot   bool
 		shouldRestore  bool
 		defaultBufSize int
@@ -301,7 +225,6 @@ func (c *idmController) Exit() {
 	cancelFunc = c.streamCancel
 	runID = strings.TrimSpace(c.currentRunID)
 	sessionID = strings.TrimSpace(c.sessionID)
-	sessionReady = c.sessionReady
 	autoSnapshot = c.autoSnapshot
 	shouldRestore = c.logBuffer != nil
 	defaultBufSize = c.defaultRingCapacity
@@ -319,10 +242,10 @@ func (c *idmController) Exit() {
 		cancelFunc()
 	}
 	if runID != "" {
-		c.cancelRun(sessionID, runID)
+		c.markAskRunAbandoned(runID)
 	}
-	if sessionReady && sessionID != "" {
-		c.deleteSession(sessionID)
+	if sessionID != "" {
+		c.deleteAskSession(sessionID)
 	}
 	if shouldRestore {
 		if defaultBufSize <= 0 {
@@ -334,10 +257,10 @@ func (c *idmController) Exit() {
 	if c.autoState != nil {
 		c.autoState.Enabled.Store(autoSnapshot)
 	}
-	c.writeSystemMessage("[NeoCode] 已退出 IDM，恢复普通 shell 透传模式。")
+	c.writeSystemMessage("[NeoCode] IDM mode exited, shell passthrough restored.")
 }
 
-// IsActive 负责 IsActive 相关逻辑。
+// IsActive 璐熻矗 IsActive 鐩稿叧閫昏緫銆
 func (c *idmController) IsActive() bool {
 	if c == nil {
 		return false
@@ -347,7 +270,7 @@ func (c *idmController) IsActive() bool {
 	return c.active
 }
 
-// ShouldPassthroughInput 负责 ShouldPassthroughInput 相关逻辑。
+// ShouldPassthroughInput 璐熻矗 ShouldPassthroughInput 鐩稿叧閫昏緫銆
 func (c *idmController) ShouldPassthroughInput() bool {
 	if c == nil {
 		return false
@@ -357,12 +280,12 @@ func (c *idmController) ShouldPassthroughInput() bool {
 	return c.active && c.mode == idmModeNativeCmd
 }
 
-// HandleSignal 负责 HandleSignal 相关逻辑。
+// HandleSignal 璐熻矗 HandleSignal 鐩稿叧閫昏緫銆
 func (c *idmController) HandleSignal(signalValue os.Signal) bool {
 	if c == nil {
 		return false
 	}
-	if signalValue == nil || signalValue != syscall.SIGINT {
+	if !isInterruptSignal(signalValue) {
 		return false
 	}
 
@@ -370,7 +293,6 @@ func (c *idmController) HandleSignal(signalValue os.Signal) bool {
 		mode       idmRuntimeMode
 		cancelFunc context.CancelFunc
 		runID      string
-		sessionID  string
 	)
 	c.mu.Lock()
 	if !c.active {
@@ -381,7 +303,6 @@ func (c *idmController) HandleSignal(signalValue os.Signal) bool {
 	if mode == idmModeStreaming {
 		cancelFunc = c.streamCancel
 		runID = strings.TrimSpace(c.currentRunID)
-		sessionID = strings.TrimSpace(c.sessionID)
 		c.mode = idmModeIdle
 		c.streamCancel = nil
 		c.currentRunID = ""
@@ -397,9 +318,9 @@ func (c *idmController) HandleSignal(signalValue os.Signal) bool {
 			cancelFunc()
 		}
 		if runID != "" {
-			c.cancelRun(sessionID, runID)
+			c.markAskRunAbandoned(runID)
 		}
-		c.writeSystemMessage("[NeoCode] 已取消当前 @ai 请求。")
+		c.writeSystemMessage("[NeoCode] Current @ai request canceled.")
 		c.writePrompt()
 		return true
 	case idmModeNativeCmd:
@@ -409,16 +330,16 @@ func (c *idmController) HandleSignal(signalValue os.Signal) bool {
 	}
 }
 
-// HandleInputByte 负责 HandleInputByte 相关逻辑。
+// HandleInputByte 璐熻矗 HandleInputByte 鐩稿叧閫昏緫銆
 func (c *idmController) HandleInputByte(inputByte byte) {
 	if c == nil {
 		return
 	}
 
-	// Raw 模式下 Ctrl+C / Ctrl+Z 会以字节输入，不会触发宿主信号；这里显式转成 SIGINT 语义。
+	// Raw 模式下 Ctrl+C / Ctrl+Z 会作为字节输入，这里显式转换为 SIGINT 语义。
 	switch inputByte {
 	case 0x03, 0x1A:
-		if c.HandleSignal(syscall.SIGINT) {
+		if c.HandleSignal(interruptSignal()) {
 			return
 		}
 	}
@@ -458,7 +379,7 @@ func (c *idmController) HandleInputByte(inputByte byte) {
 	}
 }
 
-// FilterPTYOutput 负责 FilterPTYOutput 相关逻辑。
+// FilterPTYOutput 璐熻矗 FilterPTYOutput 鐩稿叧閫昏緫銆
 func (c *idmController) FilterPTYOutput(chunk []byte) []byte {
 	if c == nil || len(chunk) == 0 {
 		return chunk
@@ -491,9 +412,12 @@ func (c *idmController) FilterPTYOutput(chunk []byte) []byte {
 	return filtered
 }
 
-// OnShellEvent 负责 OnShellEvent 相关逻辑。
+// OnShellEvent 璐熻矗 OnShellEvent 鐩稿叧閫昏緫銆
 func (c *idmController) OnShellEvent(event ShellEvent) {
-	if c == nil || event.Type != ShellEventCommandDone {
+	if c == nil {
+		return
+	}
+	if event.Type != ShellEventCommandDone && event.Type != ShellEventPromptReady {
 		return
 	}
 	c.mu.Lock()
@@ -506,7 +430,7 @@ func (c *idmController) OnShellEvent(event ShellEvent) {
 	c.writePrompt()
 }
 
-// handleInputLine 负责 handleInputLine 相关逻辑。
+// handleInputLine 璐熻矗 handleInputLine 鐩稿叧閫昏緫銆
 func (c *idmController) handleInputLine(line string) {
 	decision := routeIDMInput(line)
 	switch decision.Kind {
@@ -520,7 +444,7 @@ func (c *idmController) handleInputLine(line string) {
 			return
 		}
 		if err := c.sendNativeCommand(decision.Payload); err != nil {
-			c.writeFriendlyMessage(fmt.Sprintf("[NeoCode: 原生命令透传失败 (%v)]", err))
+			c.writeFriendlyMessage(fmt.Sprintf("[NeoCode: 鍘熺敓鍛戒护閫忎紶澶辫触 (%v)]", err))
 			c.writePrompt()
 		}
 	default:
@@ -528,20 +452,20 @@ func (c *idmController) handleInputLine(line string) {
 	}
 }
 
-// handleAskAIAsync 以异步方式执行 @ai，避免阻塞输入循环导致 Ctrl+C 无法生效。
+// handleAskAIAsync 浠ュ紓姝ユ柟寮忔墽琛?@ai锛岄伩鍏嶉樆濉炶緭鍏ュ惊鐜鑷?Ctrl+C 鏃犳硶鐢熸晥銆
 func (c *idmController) handleAskAIAsync(question string) {
 	if c == nil {
 		return
 	}
 	go func() {
 		if err := c.sendAIMessage(question); err != nil {
-			c.writeFriendlyMessage(fmt.Sprintf("[NeoCode: @ai 请求失败 (%v)]", err))
+			c.writeFriendlyMessage(fmt.Sprintf("[NeoCode: @ai 璇锋眰澶辫触 (%v)]", err))
 			c.writePrompt()
 		}
 	}()
 }
 
-// sendNativeCommand 负责 sendNativeCommand 相关逻辑。
+// sendNativeCommand 璐熻矗 sendNativeCommand 鐩稿叧閫昏緫銆
 func (c *idmController) sendNativeCommand(commandLine string) error {
 	trimmed := strings.TrimSpace(commandLine)
 	if trimmed == "" {
@@ -553,10 +477,11 @@ func (c *idmController) sendNativeCommand(commandLine string) error {
 		return errors.New("idm is not active")
 	}
 	c.mode = idmModeNativeCmd
-	c.pendingEcho = append(c.pendingEcho[:0], []byte(commandLine+"\r\n")...)
+	payload := commandLine + idmNativeCommandLineEnding
+	c.pendingEcho = append(c.pendingEcho[:0], []byte(payload)...)
 	c.mu.Unlock()
 
-	if _, err := io.WriteString(c.ptyWriter, commandLine+"\n"); err != nil {
+	if _, err := io.WriteString(c.ptyWriter, payload); err != nil {
 		c.mu.Lock()
 		if c.active {
 			c.mode = idmModeIdle
@@ -568,21 +493,19 @@ func (c *idmController) sendNativeCommand(commandLine string) error {
 	return nil
 }
 
-// sendAIMessage 负责 sendAIMessage 相关逻辑。
+// sendAIMessage 璐熻矗 sendAIMessage 鐩稿叧閫昏緫銆
 func (c *idmController) sendAIMessage(question string) error {
 	question = strings.TrimSpace(question)
 	if question == "" {
 		return errors.New("empty ai question")
 	}
-	if err := c.ensureSessionReady(); err != nil {
-		return err
+	if c == nil {
+		return errors.New("idm controller is nil")
 	}
-
-	runID := generateIDMRunID(idmSessionRunAskPrefix, os.Getpid())
-	sessionID := c.currentSessionID()
-	if sessionID == "" {
-		return errors.New("idm session id is empty")
+	if c.rpcClient == nil {
+		return errors.New("gateway rpc client is not ready")
 	}
+	sessionID := c.ensureAskSessionID()
 
 	streamCtx, streamCancel := context.WithCancel(context.Background())
 	c.mu.Lock()
@@ -592,71 +515,49 @@ func (c *idmController) sendAIMessage(question string) error {
 		return errors.New("idm is not active")
 	}
 	c.mode = idmModeStreaming
-	c.currentRunID = runID
+	c.currentRunID = ""
 	c.streamCancel = streamCancel
 	c.mu.Unlock()
 
-	finishStreaming := func() {
+	finishStreaming := func(runID string) {
 		streamCancel()
 		c.finishStreaming(runID)
 	}
 
-	var bindAck gateway.MessageFrame
-	if err := c.rpcClient.CallWithOptions(
-		streamCtx,
-		protocol.MethodGatewayBindStream,
-		protocol.BindStreamParams{
-			SessionID: sessionID,
-			RunID:     runID,
-			Channel:   "all",
-		},
-		&bindAck,
-		gatewayclient.GatewayRPCCallOptions{
-			Timeout: diagnoseCallTimeout,
-			Retries: 0,
-		},
-	); err != nil {
-		finishStreaming()
+	if err := c.bindIDMAskStream(streamCtx, sessionID); err != nil {
+		finishStreaming("")
 		return err
 	}
-	if bindAck.Type == gateway.FrameTypeError && bindAck.Error != nil {
-		finishStreaming()
-		return fmt.Errorf("gateway bind_stream failed (%s): %s", strings.TrimSpace(bindAck.Error.Code), strings.TrimSpace(bindAck.Error.Message))
-	}
-	if bindAck.Type != gateway.FrameTypeAck {
-		finishStreaming()
-		return fmt.Errorf("unexpected gateway frame type for bind_stream: %s", bindAck.Type)
-	}
 
-	var runAck gateway.MessageFrame
-	err := c.rpcClient.CallWithOptions(
+	var askAck gateway.MessageFrame
+	err := c.rpcClient.Ask(
 		streamCtx,
-		protocol.MethodGatewayRun,
-		protocol.RunParams{
+		protocol.AskParams{
 			SessionID: sessionID,
-			RunID:     runID,
-			InputText: question,
+			UserQuery: question,
 			Workdir:   c.workdir,
-			Mode:      resolveIDMRunMode(),
 		},
-		&runAck,
+		&askAck,
 		gatewayclient.GatewayRPCCallOptions{
 			Timeout: diagnoseCallTimeout,
 			Retries: 0,
 		},
 	)
 	if err != nil {
-		finishStreaming()
+		finishStreaming("")
 		return err
 	}
-	if err := validateIDMAckFrame(runAck, "run"); err != nil {
-		finishStreaming()
-		return err
+	if askAck.Type == gateway.FrameTypeError && askAck.Error != nil {
+		finishStreaming("")
+		return fmt.Errorf("gateway ask failed (%s): %s", strings.TrimSpace(askAck.Error.Code), strings.TrimSpace(askAck.Error.Message))
+	}
+	if askAck.Type != gateway.FrameTypeAck {
+		finishStreaming("")
+		return fmt.Errorf("unexpected gateway frame type for ask: %s", askAck.Type)
 	}
 
-	waitErr := c.waitRunStream(streamCtx, sessionID, runID)
-	c.cancelRun(sessionID, runID)
-	finishStreaming()
+	runID, waitErr := c.waitAskStream(streamCtx, sessionID)
+	finishStreaming(runID)
 	if waitErr != nil && !errors.Is(waitErr, context.Canceled) {
 		return waitErr
 	}
@@ -664,7 +565,7 @@ func (c *idmController) sendAIMessage(question string) error {
 	return nil
 }
 
-// resolveIDMRunMode 返回 IDM @ai 本次运行应注入的 Runtime mode。
+// resolveIDMRunMode 杩斿洖 IDM @ai 鏈杩愯搴旀敞鍏ョ殑 Runtime mode銆
 func resolveIDMRunMode() string {
 	if !IsIDMPlanModeEnabledFromEnv() {
 		return ""
@@ -672,7 +573,7 @@ func resolveIDMRunMode() string {
 	return idmPlanMode
 }
 
-// validateIDMAckFrame 校验 IDM RPC 调用返回的 ACK 语义，避免失败后继续等待流事件。
+// validateIDMAckFrame 鏍￠獙 IDM RPC 璋冪敤杩斿洖鐨?ACK 璇箟锛岄伩鍏嶅け璐ュ悗缁х画绛夊緟娴佷簨浠躲€
 func validateIDMAckFrame(frame gateway.MessageFrame, operation string) error {
 	operation = strings.TrimSpace(operation)
 	if operation == "" {
@@ -692,14 +593,14 @@ func validateIDMAckFrame(frame gateway.MessageFrame, operation string) error {
 	return nil
 }
 
-// finishStreaming 负责 finishStreaming 相关逻辑。
+// finishStreaming 结束当前流式状态，并把控制器切回空闲模式。
 func (c *idmController) finishStreaming(runID string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if !c.active {
 		return
 	}
-	if strings.TrimSpace(c.currentRunID) != strings.TrimSpace(runID) {
+	if strings.TrimSpace(runID) != "" && strings.TrimSpace(c.currentRunID) != strings.TrimSpace(runID) {
 		return
 	}
 	c.currentRunID = ""
@@ -707,131 +608,87 @@ func (c *idmController) finishStreaming(runID string) {
 	c.mode = idmModeIdle
 }
 
-// ensureSessionReady 负责 ensureSessionReady 相关逻辑。
-func (c *idmController) ensureSessionReady() error {
-	if c == nil {
-		return errors.New("idm controller is nil")
-	}
-	if c.rpcClient == nil {
-		return errors.New("gateway rpc client is not ready")
-	}
-
-	c.mu.Lock()
-	sessionID := strings.TrimSpace(c.sessionID)
-	ready := c.sessionReady
-	c.mu.Unlock()
-	if ready && sessionID != "" {
-		return nil
-	}
-	if sessionID == "" {
-		return errors.New("idm session id is empty")
-	}
-
-	if err := c.createSession(sessionID); err != nil {
-		return err
-	}
-	if err := c.activateSessionSkill(sessionID, idmSkillID); err != nil {
-		c.deleteSession(sessionID)
-		return err
-	}
-
-	c.mu.Lock()
-	if strings.EqualFold(strings.TrimSpace(c.sessionID), sessionID) {
-		c.sessionReady = true
-	}
-	c.mu.Unlock()
-	return nil
-}
-
-// createSession 负责 createSession 相关逻辑。
-func (c *idmController) createSession(sessionID string) error {
-	if c == nil || c.rpcClient == nil {
-		return errors.New("gateway rpc client is not ready")
-	}
-	sessionID = strings.TrimSpace(sessionID)
-	if sessionID == "" {
-		return errors.New("idm session id is empty")
-	}
-
-	var ack gateway.MessageFrame
-	if err := c.rpcClient.CallWithOptions(
-		context.Background(),
-		protocol.MethodGatewayCreateSession,
-		protocol.CreateSessionParams{SessionID: sessionID},
-		&ack,
-		gatewayclient.GatewayRPCCallOptions{
-			Timeout: diagnoseCallTimeout,
-			Retries: 0,
-		},
-	); err != nil {
-		return err
-	}
-	if ack.Type == gateway.FrameTypeError && ack.Error != nil {
-		return fmt.Errorf("gateway create_session failed (%s): %s", strings.TrimSpace(ack.Error.Code), strings.TrimSpace(ack.Error.Message))
-	}
-	if ack.Type != gateway.FrameTypeAck {
-		return fmt.Errorf("unexpected gateway frame type for create_session: %s", ack.Type)
-	}
-	return nil
-}
-
-// activateSessionSkill 负责 activateSessionSkill 相关逻辑。
-func (c *idmController) activateSessionSkill(sessionID string, skillID string) error {
-	if c == nil || c.rpcClient == nil {
-		return errors.New("gateway rpc client is not ready")
-	}
-	sessionID = strings.TrimSpace(sessionID)
-	skillID = strings.TrimSpace(skillID)
-	if sessionID == "" {
-		return errors.New("idm session id is empty")
-	}
-	if skillID == "" {
-		return errors.New("idm skill id is empty")
-	}
-
-	var skillAck gateway.MessageFrame
-	if err := c.rpcClient.CallWithOptions(
-		context.Background(),
-		protocol.MethodGatewayActivateSessionSkill,
-		protocol.ActivateSessionSkillParams{
-			SessionID: sessionID,
-			SkillID:   skillID,
-		},
-		&skillAck,
-		gatewayclient.GatewayRPCCallOptions{
-			Timeout: diagnoseCallTimeout,
-			Retries: 0,
-		},
-	); err != nil {
-		return err
-	}
-	if skillAck.Type == gateway.FrameTypeError && skillAck.Error != nil {
-		return fmt.Errorf("gateway activate_session_skill failed (%s): %s", strings.TrimSpace(skillAck.Error.Code), strings.TrimSpace(skillAck.Error.Message))
-	}
-	if skillAck.Type != gateway.FrameTypeAck {
-		return fmt.Errorf("unexpected gateway frame type for activate_session_skill: %s", skillAck.Type)
-	}
-	return nil
-}
-
-// currentSessionID 负责 currentSessionID 相关逻辑。
+// currentSessionID 返回当前 IDM 控制器维护的 Ask 会话标识。
 func (c *idmController) currentSessionID() string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return strings.TrimSpace(c.sessionID)
 }
 
-// waitRunStream 负责 waitRunStream 相关逻辑。
-func (c *idmController) waitRunStream(ctx context.Context, sessionID string, runID string) error {
-	var markdownBuffer strings.Builder
-	streamedChunks := false
+// ensureAskSessionID 确保控制器存在可复用的 Ask 会话标识。
+func (c *idmController) ensureAskSessionID() string {
+	if c == nil {
+		return ""
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if current := strings.TrimSpace(c.sessionID); current != "" {
+		return current
+	}
+	c.sessionID = generateIDMSessionID(os.Getpid())
+	c.sessionReady = true
+	return c.sessionID
+}
+
+// bindIDMAskStream 为 IDM Ask 会话绑定事件流，接收 ask_chunk/ask_done/ask_error。
+func (c *idmController) bindIDMAskStream(ctx context.Context, sessionID string) error {
+	if c == nil || c.rpcClient == nil {
+		return errors.New("gateway rpc client is not ready")
+	}
+	normalizedSessionID := strings.TrimSpace(sessionID)
+	if normalizedSessionID == "" {
+		return errors.New("idm ask session id is empty")
+	}
+
+	var bindAck gateway.MessageFrame
+	if err := c.rpcClient.CallWithOptions(
+		ctx,
+		protocol.MethodGatewayBindStream,
+		protocol.BindStreamParams{
+			SessionID: normalizedSessionID,
+			Channel:   "all",
+			Role:      "shell",
+		},
+		&bindAck,
+		gatewayclient.GatewayRPCCallOptions{
+			Timeout: diagnoseCallTimeout,
+			Retries: 0,
+		},
+	); err != nil {
+		return err
+	}
+	if bindAck.Type == gateway.FrameTypeError && bindAck.Error != nil {
+		return fmt.Errorf("gateway bind_stream failed (%s): %s", strings.TrimSpace(bindAck.Error.Code), strings.TrimSpace(bindAck.Error.Message))
+	}
+	if bindAck.Type != gateway.FrameTypeAck {
+		return fmt.Errorf("unexpected gateway frame type for bind_stream: %s", bindAck.Type)
+	}
+	return nil
+}
+
+// waitAskStream 等待 Ask 事件流完成，并拼接流式输出文本。
+func (c *idmController) waitAskStream(ctx context.Context, sessionID string) (string, error) {
+	notifications := c.notificationStream
+	if notifications == nil && c.rpcClient != nil {
+		notifications = c.rpcClient.Notifications()
+	}
+	if notifications == nil {
+		return "", errors.New("gateway notification stream is not ready")
+	}
+
+	targetSessionID := strings.TrimSpace(sessionID)
+	var (
+		runID         string
+		markdown      strings.Builder
+		streamedChunk bool
+	)
 	for {
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
-		case notification, ok := <-c.rpcClient.Notifications():
+			return runID, ctx.Err()
+		case notification, ok := <-notifications:
 			if !ok {
-				return errors.New("gateway notification channel closed")
+				return runID, errors.New("gateway notification channel closed")
 			}
 			if !strings.EqualFold(strings.TrimSpace(notification.Method), protocol.MethodGatewayEvent) {
 				continue
@@ -840,80 +697,145 @@ func (c *idmController) waitRunStream(ctx context.Context, sessionID string, run
 			if err := json.Unmarshal(notification.Params, &frame); err != nil {
 				continue
 			}
-			if strings.TrimSpace(frame.SessionID) != strings.TrimSpace(sessionID) || strings.TrimSpace(frame.RunID) != strings.TrimSpace(runID) {
+			if targetSessionID != "" && !strings.EqualFold(strings.TrimSpace(frame.SessionID), targetSessionID) {
 				continue
 			}
-			envelope, ok := extractIDMRuntimeEnvelope(frame.Payload)
+
+			payloadMap, ok := normalizeIDMEventPayload(frame.Payload)
 			if !ok {
 				continue
 			}
-			eventType := strings.TrimSpace(readMapStringValue(envelope, "runtime_event_type"))
-			payload, _ := readMapAnyValue(envelope, "payload")
+			eventType := strings.ToLower(strings.TrimSpace(readMapStringValue(payloadMap, "event_type")))
+			if eventType != string(gateway.RuntimeEventTypeAskChunk) &&
+				eventType != string(gateway.RuntimeEventTypeAskDone) &&
+				eventType != string(gateway.RuntimeEventTypeAskError) {
+				continue
+			}
+
+			frameRunID := strings.TrimSpace(frame.RunID)
+			if c.shouldIgnoreAskRun(frameRunID, eventType) {
+				continue
+			}
+			if runID == "" && frameRunID != "" {
+				runID = frameRunID
+				c.mu.Lock()
+				if c.active && c.mode == idmModeStreaming {
+					c.currentRunID = frameRunID
+				}
+				c.mu.Unlock()
+			} else if runID != "" && frameRunID != "" && !strings.EqualFold(frameRunID, runID) {
+				continue
+			}
+
+			eventPayload, _ := readMapAnyValue(payloadMap, "payload")
 			switch eventType {
-			case "agent_chunk":
-				chunk := stringifyRuntimePayload(payload)
+			case string(gateway.RuntimeEventTypeAskChunk):
+				chunk := extractIDMAskText(eventPayload)
+				if strings.TrimSpace(chunk) == "" {
+					chunk = extractIDMAskText(payloadMap)
+				}
 				if chunk == "" {
 					continue
 				}
-				markdownBuffer.WriteString(chunk)
+				markdown.WriteString(chunk)
 				c.renderIDMStreamChunk(chunk)
-				streamedChunks = true
-			case "agent_done":
-				answer := markdownBuffer.String()
+				streamedChunk = true
+			case string(gateway.RuntimeEventTypeAskDone):
+				answer := markdown.String()
 				if strings.TrimSpace(answer) == "" {
-					answer = extractIDMDonePayloadText(payload)
+					answer = extractIDMAskText(eventPayload)
+					if strings.TrimSpace(answer) == "" {
+						answer = extractIDMAskText(payloadMap)
+					}
 				}
-				if !streamedChunks {
+				if !streamedChunk {
 					c.renderIDMAnswer(answer)
 				}
 				c.writeRawOutput([]byte("\r\n"))
-				return nil
-			case "run_canceled":
-				return context.Canceled
-			case "permission_requested":
-				return c.rejectPermissionInIDM(payload)
-			case "error":
-				message := strings.TrimSpace(stringifyRuntimePayload(payload))
-				if message == "" {
-					message = "runtime error"
+				return runID, nil
+			case string(gateway.RuntimeEventTypeAskError):
+				message := extractIDMAskText(eventPayload)
+				if strings.TrimSpace(message) == "" {
+					message = extractIDMAskText(payloadMap)
 				}
-				return errors.New(message)
+				if strings.TrimSpace(message) == "" {
+					message = "ask failed"
+				}
+				return runID, errors.New(strings.TrimSpace(message))
 			}
 		}
 	}
 }
 
-// cancelRun 负责 cancelRun 相关逻辑。
-func (c *idmController) cancelRun(sessionID string, runID string) {
-	if c == nil || c.rpcClient == nil || strings.TrimSpace(runID) == "" {
+// currentSessionID 璐熻矗 currentSessionID 鐩稿叧閫昏緫銆
+func (c *idmController) markAskRunAbandoned(runID string) {
+	if c == nil {
 		return
 	}
-	var ack gateway.MessageFrame
-	_ = c.rpcClient.CallWithOptions(
-		context.Background(),
-		protocol.MethodGatewayCancel,
-		protocol.CancelParams{
-			SessionID: strings.TrimSpace(sessionID),
-			RunID:     strings.TrimSpace(runID),
-		},
-		&ack,
-		gatewayclient.GatewayRPCCallOptions{
-			Timeout: diagnoseCallTimeout,
-			Retries: 0,
-		},
-	)
+	normalizedRunID := strings.TrimSpace(runID)
+	if normalizedRunID == "" {
+		return
+	}
+	c.mu.Lock()
+	if c.abandonedRunIDs == nil {
+		c.abandonedRunIDs = make(map[string]struct{})
+	}
+	c.abandonedRunIDs[normalizedRunID] = struct{}{}
+	c.mu.Unlock()
 }
 
-// deleteSession 负责 deleteSession 相关逻辑。
-func (c *idmController) deleteSession(sessionID string) {
+// waitRunStream 璐熻矗 waitRunStream 鐩稿叧閫昏緫銆
+func (c *idmController) shouldIgnoreAskRun(runID string, eventType string) bool {
+	if c == nil {
+		return false
+	}
+	normalizedRunID := strings.TrimSpace(runID)
+	if normalizedRunID == "" {
+		return false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.abandonedRunIDs) == 0 {
+		return false
+	}
+	if _, exists := c.abandonedRunIDs[normalizedRunID]; !exists {
+		return false
+	}
+	if eventType == string(gateway.RuntimeEventTypeAskDone) || eventType == string(gateway.RuntimeEventTypeAskError) {
+		delete(c.abandonedRunIDs, normalizedRunID)
+	}
+	return true
+}
+
+// cancelRun 璐熻矗 cancelRun 鐩稿叧閫昏緫銆
+func normalizeIDMEventPayload(payload any) (map[string]any, bool) {
+	switch typed := payload.(type) {
+	case map[string]any:
+		return typed, true
+	case nil:
+		return nil, false
+	default:
+		raw, err := json.Marshal(typed)
+		if err != nil {
+			return nil, false
+		}
+		decoded := map[string]any{}
+		if err := json.Unmarshal(raw, &decoded); err != nil {
+			return nil, false
+		}
+		return decoded, true
+	}
+}
+
+// deleteSession 璐熻矗 deleteSession 鐩稿叧閫昏緫銆
+func (c *idmController) deleteAskSession(sessionID string) {
 	if c == nil || c.rpcClient == nil || strings.TrimSpace(sessionID) == "" {
 		return
 	}
 	var ack gateway.MessageFrame
-	_ = c.rpcClient.CallWithOptions(
+	_ = c.rpcClient.DeleteAskSession(
 		context.Background(),
-		protocol.MethodGatewayDeleteSession,
-		protocol.DeleteSessionParams{SessionID: strings.TrimSpace(sessionID)},
+		protocol.DeleteAskSessionParams{SessionID: strings.TrimSpace(sessionID)},
 		&ack,
 		gatewayclient.GatewayRPCCallOptions{
 			Timeout: diagnoseCallTimeout,
@@ -922,7 +844,39 @@ func (c *idmController) deleteSession(sessionID string) {
 	)
 }
 
-// flushPendingUTF8 负责 flushPendingUTF8 相关逻辑。
+func extractIDMAskText(payload any) string {
+	switch typed := payload.(type) {
+	case nil:
+		return ""
+	case string:
+		return typed
+	case map[string]any:
+		if text, ok := readMapRawStringValue(typed, "delta"); ok {
+			return text
+		}
+		for _, key := range []string{"delta", "full_response", "message", "text", "content", "summary"} {
+			if text := strings.TrimSpace(readMapStringValue(typed, key)); text != "" {
+				return text
+			}
+		}
+		if nested, exists := readMapAnyValue(typed, "payload"); exists {
+			return extractIDMAskText(nested)
+		}
+		return ""
+	default:
+		raw, err := json.Marshal(typed)
+		if err != nil {
+			return strings.TrimSpace(fmt.Sprint(typed))
+		}
+		decoded := map[string]any{}
+		if err := json.Unmarshal(raw, &decoded); err != nil {
+			return strings.TrimSpace(fmt.Sprint(typed))
+		}
+		return extractIDMAskText(decoded)
+	}
+}
+
+// flushPendingUTF8 璐熻矗 flushPendingUTF8 鐩稿叧閫昏緫銆
 func (c *idmController) flushPendingUTF8() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -933,7 +887,7 @@ func (c *idmController) flushPendingUTF8() {
 	c.utf8Pending = c.utf8Pending[:0]
 }
 
-// handleBackspace 负责 handleBackspace 相关逻辑。
+// handleBackspace 璐熻矗 handleBackspace 鐩稿叧閫昏緫銆
 func (c *idmController) handleBackspace() {
 	c.mu.Lock()
 	if len(c.utf8Pending) > 0 {
@@ -954,7 +908,7 @@ func (c *idmController) handleBackspace() {
 	c.writeRawOutput([]byte("\b \b"))
 }
 
-// handleUTF8Byte 负责 handleUTF8Byte 相关逻辑。
+// handleUTF8Byte 璐熻矗 handleUTF8Byte 鐩稿叧閫昏緫銆
 func (c *idmController) handleUTF8Byte(inputByte byte) {
 	c.mu.Lock()
 	c.utf8Pending = append(c.utf8Pending, inputByte)
@@ -970,12 +924,12 @@ func (c *idmController) handleUTF8Byte(inputByte byte) {
 	c.writeRawOutput(token)
 }
 
-// writePrompt 负责 writePrompt 相关逻辑。
+// writePrompt 璐熻矗 writePrompt 鐩稿叧閫昏緫銆
 func (c *idmController) writePrompt() {
 	c.writeRawOutput([]byte(idmSystemColor + idmPromptText + idmColorReset))
 }
 
-// writeSystemMessage 负责 writeSystemMessage 相关逻辑。
+// writeSystemMessage 璐熻矗 writeSystemMessage 鐩稿叧閫昏緫銆
 func (c *idmController) writeSystemMessage(text string) {
 	trimmed := strings.TrimSpace(text)
 	if trimmed == "" {
@@ -984,7 +938,7 @@ func (c *idmController) writeSystemMessage(text string) {
 	c.writeRawOutput([]byte(idmSystemColor + trimmed + idmColorReset + "\r\n"))
 }
 
-// writeFriendlyMessage 负责 writeFriendlyMessage 相关逻辑。
+// writeFriendlyMessage 璐熻矗 writeFriendlyMessage 鐩稿叧閫昏緫銆
 func (c *idmController) writeFriendlyMessage(text string) {
 	trimmed := strings.TrimSpace(text)
 	if trimmed == "" {
@@ -993,7 +947,7 @@ func (c *idmController) writeFriendlyMessage(text string) {
 	c.writeRawOutput([]byte(idmAIColor + trimmed + idmColorReset + "\r\n"))
 }
 
-// writeRawOutput 负责 writeRawOutput 相关逻辑。
+// writeRawOutput 璐熻矗 writeRawOutput 鐩稿叧閫昏緫銆
 func (c *idmController) writeRawOutput(payload []byte) {
 	if c == nil || c.output == nil || len(payload) == 0 {
 		return
@@ -1001,60 +955,7 @@ func (c *idmController) writeRawOutput(payload []byte) {
 	_, _ = c.output.Write(payload)
 }
 
-// serveIDMSocket 负责 serveIDMSocket 相关逻辑。
-func serveIDMSocket(ctx context.Context, listener net.Listener, controller *idmController, errWriter io.Writer) {
-	for {
-		connection, err := listener.Accept()
-		if err != nil {
-			if ctx.Err() != nil || isClosedNetworkError(err) {
-				return
-			}
-			if errWriter != nil {
-				writeProxyf(errWriter, "neocode idm: accept signal error: %v\n", err)
-			}
-			continue
-		}
-		handleIDMSocketConnection(connection, controller)
-	}
-}
-
-// handleIDMSocketConnection 负责 handleIDMSocketConnection 相关逻辑。
-func handleIDMSocketConnection(connection net.Conn, controller *idmController) {
-	if connection == nil {
-		return
-	}
-	defer connection.Close()
-
-	_ = connection.SetReadDeadline(time.Now().Add(diagSocketReadDeadline))
-	reader := bufio.NewReader(io.LimitReader(connection, 8*1024))
-	line, err := reader.ReadBytes('\n')
-	if err != nil {
-		writeDiagIPCResponse(connection, diagIPCResponse{OK: false, Message: "read request failed"})
-		return
-	}
-	_ = connection.SetReadDeadline(time.Time{})
-
-	var request diagIPCRequest
-	if unmarshalErr := json.Unmarshal(line, &request); unmarshalErr != nil {
-		writeDiagIPCResponse(connection, diagIPCResponse{OK: false, Message: "invalid request"})
-		return
-	}
-	if normalizeDiagIPCCommand(request.Cmd) != diagCommandIDMEnter {
-		writeDiagIPCResponse(connection, diagIPCResponse{OK: false, Message: "unsupported command"})
-		return
-	}
-	if controller == nil {
-		writeDiagIPCResponse(connection, diagIPCResponse{OK: false, Message: "idm controller is unavailable"})
-		return
-	}
-	if err := controller.Enter(); err != nil {
-		writeDiagIPCResponse(connection, diagIPCResponse{OK: false, Message: err.Error()})
-		return
-	}
-	writeDiagIPCResponse(connection, diagIPCResponse{OK: true, Message: "idm entered"})
-}
-
-// extractIDMRuntimeEnvelope 负责 extractIDMRuntimeEnvelope 相关逻辑。
+// extractIDMRuntimeEnvelope 璐熻矗 extractIDMRuntimeEnvelope 鐩稿叧閫昏緫銆
 func extractIDMRuntimeEnvelope(payload any) (map[string]any, bool) {
 	switch typed := payload.(type) {
 	case map[string]any:
@@ -1093,7 +994,7 @@ func extractIDMRuntimeEnvelope(payload any) (map[string]any, bool) {
 	return nil, false
 }
 
-// readMapAnyValue 负责 readMapAnyValue 相关逻辑。
+// readMapAnyValue 璐熻矗 readMapAnyValue 鐩稿叧閫昏緫銆
 func readMapAnyValue(container map[string]any, key string) (any, bool) {
 	if container == nil {
 		return nil, false
@@ -1102,7 +1003,7 @@ func readMapAnyValue(container map[string]any, key string) (any, bool) {
 	return value, ok
 }
 
-// readMapStringValue 负责 readMapStringValue 相关逻辑。
+// readMapStringValue 璐熻矗 readMapStringValue 鐩稿叧閫昏緫銆
 func readMapStringValue(container map[string]any, key string) string {
 	value, ok := readMapAnyValue(container, key)
 	if !ok || value == nil {
@@ -1116,7 +1017,20 @@ func readMapStringValue(container map[string]any, key string) string {
 	}
 }
 
-// stringifyRuntimePayload 负责 stringifyRuntimePayload 相关逻辑。
+// readMapRawStringValue 读取字符串值但保留首尾空白，用于流式 delta 拼接。
+func readMapRawStringValue(container map[string]any, key string) (string, bool) {
+	value, ok := readMapAnyValue(container, key)
+	if !ok || value == nil {
+		return "", false
+	}
+	typed, ok := value.(string)
+	if !ok {
+		return fmt.Sprint(value), true
+	}
+	return typed, true
+}
+
+// stringifyRuntimePayload 璐熻矗 stringifyRuntimePayload 鐩稿叧閫昏緫銆
 func stringifyRuntimePayload(payload any) string {
 	switch typed := payload.(type) {
 	case nil:
@@ -1134,7 +1048,7 @@ func stringifyRuntimePayload(payload any) string {
 	}
 }
 
-// extractIDMDonePayloadText 从 agent_done 负载中提取可展示文本，兜底无 chunk 的完成事件。
+// extractIDMDonePayloadText 浠?agent_done 璐熻浇涓彁鍙栧彲灞曠ず鏂囨湰锛屽厹搴曟棤 chunk 鐨勫畬鎴愪簨浠躲€
 func extractIDMDonePayloadText(payload any) string {
 	switch typed := payload.(type) {
 	case nil:
@@ -1156,12 +1070,12 @@ func extractIDMDonePayloadText(payload any) string {
 	}
 }
 
-// extractIDMTextFromMap 按 Runtime message 常见结构读取 text/content/parts 文本。
+// extractIDMTextFromMap 鎸?Runtime message 甯歌缁撴瀯璇诲彇 text/content/parts 鏂囨湰銆
 func extractIDMTextFromMap(container map[string]any) string {
 	if container == nil {
 		return ""
 	}
-	for _, key := range []string{"text", "content", "summary"} {
+	for _, key := range []string{"full_response", "text", "content", "summary"} {
 		if value := strings.TrimSpace(readMapStringValue(container, key)); value != "" {
 			return value
 		}
@@ -1192,17 +1106,21 @@ func extractIDMTextFromMap(container map[string]any) string {
 	return strings.TrimSpace(builder.String())
 }
 
-// renderIDMStreamChunk 将模型流式片段直接写入终端，避免等待完整 Markdown 渲染完成。
+// renderIDMStreamChunk 灏嗘ā鍨嬫祦寮忕墖娈电洿鎺ュ啓鍏ョ粓绔紝閬垮厤绛夊緟瀹屾暣 Markdown 娓叉煋瀹屾垚銆
 func (c *idmController) renderIDMStreamChunk(rawText string) {
 	if c == nil || rawText == "" {
 		return
 	}
+	chunk := rawText
+
+	chunk = proxyOutputLineEndingNormalizer.Replace(rawText)
+
 	c.writeRawOutput([]byte(idmAIColor))
-	c.writeRawOutput([]byte(proxyOutputLineEndingNormalizer.Replace(rawText)))
+	c.writeRawOutput([]byte(chunk))
 	c.writeRawOutput([]byte(idmColorReset))
 }
 
-// renderIDMAnswer 将模型回复按 Markdown 渲染后输出，渲染失败时回退原始文本。
+// renderIDMAnswer 灏嗘ā鍨嬪洖澶嶆寜 Markdown 娓叉煋鍚庤緭鍑猴紝娓叉煋澶辫触鏃跺洖閫€鍘熷鏂囨湰銆
 func (c *idmController) renderIDMAnswer(rawText string) {
 	if c == nil {
 		return
@@ -1213,15 +1131,22 @@ func (c *idmController) renderIDMAnswer(rawText string) {
 	}
 	rendered, err := renderIDMMarkdown(trimmed)
 	if err != nil {
+		plain := trimmed
+
+		plain = proxyOutputLineEndingNormalizer.Replace(trimmed)
+
 		c.writeRawOutput([]byte(idmAIColor))
-		c.writeRawOutput([]byte(proxyOutputLineEndingNormalizer.Replace(trimmed)))
+		c.writeRawOutput([]byte(plain))
 		c.writeRawOutput([]byte(idmColorReset))
 		return
 	}
-	c.writeRawOutput([]byte(proxyOutputLineEndingNormalizer.Replace(rendered)))
+
+	rendered = proxyOutputLineEndingNormalizer.Replace(rendered)
+
+	c.writeRawOutput([]byte(rendered))
 }
 
-// renderIDMMarkdown 使用终端渲染器把 Markdown 文本转换为 ANSI 终端可读格式。
+// renderIDMMarkdown 浣跨敤缁堢娓叉煋鍣ㄦ妸 Markdown 鏂囨湰杞崲涓?ANSI 缁堢鍙鏍煎紡銆
 func renderIDMMarkdown(markdown string) (string, error) {
 	idmMarkdownRendererOnce.Do(func() {
 		idmMarkdownRenderer, idmMarkdownRendererErr = glamour.NewTermRenderer(
@@ -1238,22 +1163,22 @@ func renderIDMMarkdown(markdown string) (string, error) {
 	return idmMarkdownRenderer.Render(markdown)
 }
 
-// rejectPermissionInIDM 在 IDM 收到权限请求时自动拒绝，避免因缺少审批交互导致卡死。
+// rejectPermissionInIDM 鍦?IDM 鏀跺埌鏉冮檺璇锋眰鏃惰嚜鍔ㄦ嫆缁濓紝閬垮厤鍥犵己灏戝鎵逛氦浜掑鑷村崱姝汇€
 func (c *idmController) rejectPermissionInIDM(payload any) error {
 	requestID, toolName := readPermissionRequestFromPayload(payload)
 	if requestID == "" {
-		return errors.New("IDM 检测到工具权限请求，但未找到 request_id，已取消当前 @ai 请求")
+		return errors.New("IDM 妫€娴嬪埌宸ュ叿鏉冮檺璇锋眰锛屼絾鏈壘鍒?request_id锛屽凡鍙栨秷褰撳墠 @ai 璇锋眰")
 	}
 	if err := c.resolvePermission(requestID, "reject"); err != nil {
-		return fmt.Errorf("IDM 自动拒绝工具权限失败: %w", err)
+		return fmt.Errorf("IDM 鑷姩鎷掔粷宸ュ叿鏉冮檺澶辫触: %w", err)
 	}
 	if strings.TrimSpace(toolName) == "" {
 		toolName = "unknown"
 	}
-	return fmt.Errorf("IDM 暂不支持工具权限审批，已自动拒绝工具 %s 请求", strings.TrimSpace(toolName))
+	return fmt.Errorf("IDM 鏆備笉鏀寔宸ュ叿鏉冮檺瀹℃壒锛屽凡鑷姩鎷掔粷宸ュ叿 %s 璇锋眰", strings.TrimSpace(toolName))
 }
 
-// readPermissionRequestFromPayload 解析权限请求事件中的 request_id 与工具名。
+// readPermissionRequestFromPayload 瑙ｆ瀽鏉冮檺璇锋眰浜嬩欢涓殑 request_id 涓庡伐鍏峰悕銆
 func readPermissionRequestFromPayload(payload any) (string, string) {
 	container, ok := payload.(map[string]any)
 	if !ok {
@@ -1278,7 +1203,7 @@ func readPermissionRequestFromPayload(payload any) (string, string) {
 	return strings.TrimSpace(requestID), strings.TrimSpace(toolName)
 }
 
-// resolvePermission 向 gateway 提交权限决策，供 IDM 的自动拒绝流程复用。
+// resolvePermission 鍚?gateway 鎻愪氦鏉冮檺鍐崇瓥锛屼緵 IDM 鐨勮嚜鍔ㄦ嫆缁濇祦绋嬪鐢ㄣ€
 func (c *idmController) resolvePermission(requestID string, decision string) error {
 	if c == nil || c.rpcClient == nil {
 		return errors.New("gateway rpc client is not ready")
@@ -1321,7 +1246,7 @@ func (c *idmController) resolvePermission(requestID string, decision string) err
 	return nil
 }
 
-// generateIDMSessionID 负责 generateIDMSessionID 相关逻辑。
+// generateIDMSessionID 璐熻矗 generateIDMSessionID 鐩稿叧閫昏緫銆
 func generateIDMSessionID(pid int) string {
 	if pid <= 0 {
 		pid = os.Getpid()
@@ -1330,7 +1255,7 @@ func generateIDMSessionID(pid int) string {
 	return fmt.Sprintf("%s%d-%d", idmSessionPrefix, pid, sequence)
 }
 
-// generateIDMRunID 负责 generateIDMRunID 相关逻辑。
+// generateIDMRunID 璐熻矗 generateIDMRunID 鐩稿叧閫昏緫銆
 func generateIDMRunID(prefix string, pid int) string {
 	if strings.TrimSpace(prefix) == "" {
 		prefix = idmSessionRunAskPrefix
@@ -1342,34 +1267,9 @@ func generateIDMRunID(prefix string, pid int) string {
 	return fmt.Sprintf("%s-%d-%d", strings.TrimSpace(prefix), pid, sequence)
 }
 
-// ensureTerminalDiagnosisSkillFile 负责 ensureTerminalDiagnosisSkillFile 相关逻辑。
-func ensureTerminalDiagnosisSkillFile() error {
-	skillPath, err := resolveTerminalDiagnosisSkillPath()
-	if err != nil {
-		return err
-	}
-	if info, statErr := os.Stat(skillPath); statErr == nil && !info.IsDir() {
-		return nil
-	}
-	if err := os.MkdirAll(filepath.Dir(skillPath), 0o700); err != nil {
-		return fmt.Errorf("create skill directory: %w", err)
-	}
-	if err := os.WriteFile(skillPath, []byte(terminalDiagnosisSkillMarkdown), 0o600); err != nil {
-		return fmt.Errorf("write skill file: %w", err)
-	}
-	return nil
-}
-
-// resolveTerminalDiagnosisSkillPath 负责 resolveTerminalDiagnosisSkillPath 相关逻辑。
-func resolveTerminalDiagnosisSkillPath() (string, error) {
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return "", fmt.Errorf("resolve user home dir: %w", err)
-	}
-	return filepath.Join(homeDir, idmSkillRelativePath), nil
-}
-
-// cleanupZombieIDMSessions 负责 cleanupZombieIDMSessions 相关逻辑。
+// ensureTerminalDiagnosisSkillFile 璐熻矗 ensureTerminalDiagnosisSkillFile 鐩稿叧閫昏緫銆
+// resolveTerminalDiagnosisSkillPath 璐熻矗 resolveTerminalDiagnosisSkillPath 鐩稿叧閫昏緫銆
+// cleanupZombieIDMSessions 璐熻矗 cleanupZombieIDMSessions 鐩稿叧閫昏緫銆
 func cleanupZombieIDMSessions(rpcClient *gatewayclient.GatewayRPCClient, errWriter io.Writer) {
 	if rpcClient == nil {
 		return
@@ -1419,10 +1319,9 @@ func cleanupZombieIDMSessions(rpcClient *gatewayclient.GatewayRPCClient, errWrit
 			continue
 		}
 		var deleteAck gateway.MessageFrame
-		if err := rpcClient.CallWithOptions(
+		if err := rpcClient.DeleteAskSession(
 			context.Background(),
-			protocol.MethodGatewayDeleteSession,
-			protocol.DeleteSessionParams{SessionID: sessionID},
+			protocol.DeleteAskSessionParams{SessionID: sessionID},
 			&deleteAck,
 			gatewayclient.GatewayRPCCallOptions{Timeout: diagnoseCallTimeout, Retries: 0},
 		); err == nil && errWriter != nil {
@@ -1431,7 +1330,7 @@ func cleanupZombieIDMSessions(rpcClient *gatewayclient.GatewayRPCClient, errWrit
 	}
 }
 
-// parseIDMSessionPID 负责 parseIDMSessionPID 相关逻辑。
+// parseIDMSessionPID 璐熻矗 parseIDMSessionPID 鐩稿叧閫昏緫銆
 func parseIDMSessionPID(sessionID string) (int, bool) {
 	trimmed := strings.TrimSpace(sessionID)
 	if !strings.HasPrefix(trimmed, idmSessionPrefix) {
@@ -1448,14 +1347,7 @@ func parseIDMSessionPID(sessionID string) (int, bool) {
 	return pid, true
 }
 
-// isProcessAlive 负责 isProcessAlive 相关逻辑。
+// isProcessAlive 璐熻矗 isProcessAlive 鐩稿叧閫昏緫銆
 func isProcessAlive(pid int) bool {
-	if pid <= 0 {
-		return false
-	}
-	err := syscall.Kill(pid, 0)
-	if err == nil {
-		return true
-	}
-	return errors.Is(err, syscall.EPERM)
+	return isProcessAliveByPID(pid)
 }

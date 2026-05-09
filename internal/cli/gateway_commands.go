@@ -19,12 +19,13 @@ import (
 	"neo-code/internal/config"
 	"neo-code/internal/gateway"
 	gatewayauth "neo-code/internal/gateway/auth"
+	agentruntime "neo-code/internal/runtime"
 	"neo-code/internal/webassets"
 )
 
 const (
 	defaultGatewayLogLevel          = "info"
-	defaultGatewayIdleShutdownDelay = 30 * time.Second
+	defaultGatewayIdleShutdownDelay = 5 * time.Minute
 )
 
 var (
@@ -58,7 +59,7 @@ type gatewayCommandOptions struct {
 
 	MetricsEnabled           bool
 	MetricsEnabledOverridden bool
-	SkipIPC                 bool
+	SkipIPC                  bool
 }
 
 // defaultNewAuthManager 创建默认网关认证器，并把具体持久化实现收敛在 CLI 装配层内部。
@@ -238,6 +239,15 @@ func startGatewayServer(ctx context.Context, options gatewayCommandOptions, stat
 		Metrics: metrics,
 	})
 
+	runnerRegistry := gateway.NewRunnerRegistry(logger)
+	runnerToolManager := gateway.NewRunnerToolManager(
+		runnerRegistry,
+		relay,
+		nil, // capability signer: nil allows execution without token for MVP
+		30*time.Second,
+		logger,
+	)
+
 	runtimePort, closeRuntimePort, err := buildGatewayRuntimePort(signalContext, options.Workdir)
 	if err != nil {
 		return fmt.Errorf("initialize gateway runtime: %w", err)
@@ -247,6 +257,9 @@ func startGatewayServer(ctx context.Context, options gatewayCommandOptions, stat
 			_ = closeRuntimePort()
 		}
 	}()
+
+	// 注入 Runner 工具分发器到 runtime，使 ReAct 循环中的工具调用可以通过 runner 执行
+	injectRunnerDispatcherIntoRuntime(runtimePort, runnerToolManager)
 
 	idleCloser := newGatewayIdleShutdownController(logger, cancelRuntime)
 	defer idleCloser.close()
@@ -294,6 +307,8 @@ func startGatewayServer(ctx context.Context, options gatewayCommandOptions, stat
 		AllowedOrigins:       gatewayConfig.Security.AllowOrigins,
 		StaticFileDir:        staticFileDir,
 		StaticFileFS:         staticFileFS,
+		RunnerRegistry:       runnerRegistry,
+		RunnerToolManager:    runnerToolManager,
 		ConnectionCountChanged: func(active int) {
 			idleCloser.observe(active)
 		},
@@ -477,6 +492,33 @@ func defaultNewGatewayServer(options gateway.ServerOptions) (gateway.TransportAd
 // defaultNewGatewayNetworkServer 创建默认网关网络访问服务实例，供命令层启动流程调用。
 func defaultNewGatewayNetworkServer(options gateway.NetworkServerOptions) (gateway.TransportAdapter, error) {
 	return gateway.NewNetworkServer(options)
+}
+
+// injectRunnerDispatcherIntoRuntime 将 RunnerToolManager 注入到多工作区 runtime 的所有 bundle 中，
+// 使 ReAct 循环中的工具调用可以通过 runner 远程执行。
+func injectRunnerDispatcherIntoRuntime(runtimePort gateway.RuntimePort, runnerToolManager *gateway.RunnerToolManager) {
+	if runtimePort == nil || runnerToolManager == nil {
+		return
+	}
+
+	mw, ok := runtimePort.(*gateway.MultiWorkspaceRuntime)
+	if !ok {
+		return
+	}
+
+	dispatcher := gateway.NewRunnerToolDispatcher(runnerToolManager)
+
+	mw.InjectRunnerDispatcher(func(port gateway.RuntimePort) {
+		bridge, ok := port.(*gatewayRuntimePortBridge)
+		if !ok {
+			return
+		}
+		svc, ok := bridge.runtime.(*agentruntime.Service)
+		if !ok {
+			return
+		}
+		svc.SetRunnerToolDispatcher(dispatcher)
+	})
 }
 
 // encodeJSONLine 将对象编码为单行 JSON，并写入目标输出流。

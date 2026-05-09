@@ -63,6 +63,14 @@ neocode --workdir /path/to/your/project
 
 Type natural language in the input box to chat. Type `/` to see local control commands.
 
+NeoCode also provides a browser-based Web UI:
+
+```bash
+neocode web
+```
+
+Tagged release builds start the Web UI from assets already embedded in the `neocode` binary, so the target machine does not need Node.js or npm. When running from source, a missing `web/dist` still triggers a local frontend build.
+
 ## 5. First conversation
 
 Try:

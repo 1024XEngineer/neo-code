@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -21,6 +22,7 @@ import (
 type permissionTestRuntime struct {
 	resolveErr   error
 	lastResolved agentruntime.PermissionResolutionInput
+	lastQuestion agentruntime.UserQuestionResolutionInput
 }
 
 func (r *permissionTestRuntime) PrepareUserInput(ctx context.Context, input agentruntime.PrepareInput) (agentruntime.UserInput, error) {
@@ -51,6 +53,11 @@ func (r *permissionTestRuntime) ExecuteSystemTool(ctx context.Context, input age
 
 func (r *permissionTestRuntime) ResolvePermission(ctx context.Context, input agentruntime.PermissionResolutionInput) error {
 	r.lastResolved = input
+	return r.resolveErr
+}
+
+func (r *permissionTestRuntime) ResolveUserQuestion(ctx context.Context, input agentruntime.UserQuestionResolutionInput) error {
+	r.lastQuestion = input
 	return r.resolveErr
 }
 
@@ -211,6 +218,138 @@ func TestUpdatePendingPermissionInputSubmittingConsumesInput(t *testing.T) {
 	}
 }
 
+func TestSubmitPendingUserQuestionInputBranches(t *testing.T) {
+	runtime := &permissionTestRuntime{}
+	app := newPermissionTestApp(runtime)
+
+	if cmd, handled := app.submitPendingUserQuestionInput("hello"); handled || cmd != nil {
+		t.Fatalf("expected nil pending question to be ignored, handled=%v cmd=%v", handled, cmd)
+	}
+
+	app.pendingUserQuestion = &userQuestionPromptState{
+		Request:    agentruntime.UserQuestionRequestedPayload{RequestID: "ask-submitting"},
+		Submitting: true,
+	}
+	if cmd, handled := app.submitPendingUserQuestionInput("hello"); !handled || cmd != nil {
+		t.Fatalf("expected submitting question to consume input, handled=%v cmd=%v", handled, cmd)
+	}
+
+	app.pendingUserQuestion = &userQuestionPromptState{
+		Request: agentruntime.UserQuestionRequestedPayload{RequestID: "  "},
+	}
+	if cmd, handled := app.submitPendingUserQuestionInput("hello"); !handled || cmd != nil {
+		t.Fatalf("expected empty request id branch, handled=%v cmd=%v", handled, cmd)
+	}
+	if app.state.ExecutionError != "user question request_id is empty" {
+		t.Fatalf("expected empty request id error, got %q", app.state.ExecutionError)
+	}
+
+	app.pendingUserQuestion = &userQuestionPromptState{
+		Request: agentruntime.UserQuestionRequestedPayload{RequestID: "ask-no-skip", AllowSkip: false},
+	}
+	if cmd, handled := app.submitPendingUserQuestionInput("/skip"); !handled || cmd != nil {
+		t.Fatalf("expected disallowed skip to be consumed, handled=%v cmd=%v", handled, cmd)
+	}
+	if app.state.StatusText != "This question does not allow skip" {
+		t.Fatalf("unexpected status for disallowed skip: %q", app.state.StatusText)
+	}
+
+	app.pendingUserQuestion = &userQuestionPromptState{
+		Request: agentruntime.UserQuestionRequestedPayload{RequestID: "ask-empty", AllowSkip: false},
+	}
+	if cmd, handled := app.submitPendingUserQuestionInput("   "); !handled || cmd != nil {
+		t.Fatalf("expected empty required answer to be consumed, handled=%v cmd=%v", handled, cmd)
+	}
+	if app.state.StatusText != statusUserQuestionRequired {
+		t.Fatalf("expected required status for empty answer, got %q", app.state.StatusText)
+	}
+
+	app.pendingUserQuestion = &userQuestionPromptState{
+		Request: agentruntime.UserQuestionRequestedPayload{
+			RequestID: "ask-one",
+			Kind:      "single_choice",
+		},
+	}
+	if cmd, handled := app.submitPendingUserQuestionInput("a,b"); !handled || cmd != nil {
+		t.Fatalf("expected invalid single_choice to be consumed, handled=%v cmd=%v", handled, cmd)
+	}
+	if app.state.StatusText != "single_choice requires exactly one value" {
+		t.Fatalf("unexpected single_choice validation status: %q", app.state.StatusText)
+	}
+
+	app.pendingUserQuestion = &userQuestionPromptState{
+		Request: agentruntime.UserQuestionRequestedPayload{
+			RequestID: "ask-multi",
+			Kind:      "multi_choice",
+		},
+	}
+	if cmd, handled := app.submitPendingUserQuestionInput(" ,, "); !handled || cmd != nil {
+		t.Fatalf("expected empty multi_choice to be consumed, handled=%v cmd=%v", handled, cmd)
+	}
+	if app.state.StatusText != statusUserQuestionRequired {
+		t.Fatalf("expected required status for empty multi_choice, got %q", app.state.StatusText)
+	}
+
+	app.pendingUserQuestion = &userQuestionPromptState{
+		Request: agentruntime.UserQuestionRequestedPayload{
+			RequestID: "ask-skip",
+			AllowSkip: true,
+		},
+	}
+	cmd, handled := app.submitPendingUserQuestionInput("   ")
+	if !handled || cmd == nil {
+		t.Fatalf("expected blank allowed skip to submit, handled=%v cmd=%v", handled, cmd)
+	}
+	msg := cmd()
+	done, ok := msg.(userQuestionResolutionFinishedMsg)
+	if !ok {
+		t.Fatalf("expected userQuestionResolutionFinishedMsg, got %T", msg)
+	}
+	if done.RequestID != "ask-skip" || done.Status != "skipped" {
+		t.Fatalf("unexpected skip submit payload: %+v", done)
+	}
+	if runtime.lastQuestion.Status != "skipped" || runtime.lastQuestion.Message != "" || len(runtime.lastQuestion.Values) != 0 {
+		t.Fatalf("unexpected runtime skip input: %+v", runtime.lastQuestion)
+	}
+
+	app.pendingUserQuestion = &userQuestionPromptState{
+		Request: agentruntime.UserQuestionRequestedPayload{
+			RequestID: "ask-choice",
+			Kind:      "single_choice",
+		},
+	}
+	cmd, handled = app.submitPendingUserQuestionInput(" alpha ")
+	if !handled || cmd == nil {
+		t.Fatalf("expected single_choice answer submit, handled=%v cmd=%v", handled, cmd)
+	}
+	_ = cmd()
+	if runtime.lastQuestion.Status != "answered" || !slices.Equal(runtime.lastQuestion.Values, []string{"alpha"}) {
+		t.Fatalf("unexpected runtime single_choice input: %+v", runtime.lastQuestion)
+	}
+
+	app.pendingUserQuestion = &userQuestionPromptState{
+		Request: agentruntime.UserQuestionRequestedPayload{
+			RequestID: "ask-text",
+			Kind:      "text",
+		},
+	}
+	cmd, handled = app.submitPendingUserQuestionInput("  final answer  ")
+	if !handled || cmd == nil {
+		t.Fatalf("expected text answer submit, handled=%v cmd=%v", handled, cmd)
+	}
+	_ = cmd()
+	if runtime.lastQuestion.Status != "answered" || runtime.lastQuestion.Message != "final answer" {
+		t.Fatalf("unexpected runtime text input: %+v", runtime.lastQuestion)
+	}
+}
+
+func TestParseUserQuestionValues(t *testing.T) {
+	values := parseUserQuestionValues(" alpha, , beta ,gamma ")
+	if !slices.Equal(values, []string{"alpha", "beta", "gamma"}) {
+		t.Fatalf("unexpected parsed values: %#v", values)
+	}
+}
+
 func TestSubmitPermissionDecisionValidation(t *testing.T) {
 	app := newPermissionTestApp(&permissionTestRuntime{})
 	if cmd := app.submitPermissionDecision(agentruntime.DecisionAllowOnce); cmd != nil {
@@ -307,15 +446,54 @@ func TestUpdatePermissionResolutionFinishedMessageSuccessClearsPendingPermission
 	}
 }
 
+func TestUpdateUserQuestionResolutionFinishedMessage(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.pendingUserQuestion = &userQuestionPromptState{
+		Request: agentruntime.UserQuestionRequestedPayload{RequestID: "ask-1"},
+	}
+
+	model, _ := app.Update(userQuestionResolutionFinishedMsg{
+		RequestID: "ask-1",
+		Status:    "answered",
+		Err:       errors.New("gateway failed"),
+	})
+	next := model.(App)
+	if next.pendingUserQuestion == nil || next.pendingUserQuestion.Submitting {
+		t.Fatalf("expected pending question to remain and reset submitting on error")
+	}
+	if next.state.ExecutionError != "gateway failed" {
+		t.Fatalf("expected execution error, got %q", next.state.ExecutionError)
+	}
+
+	next.pendingUserQuestion.Submitting = true
+	model, _ = next.Update(userQuestionResolutionFinishedMsg{
+		RequestID: "ask-1",
+		Status:    "  ",
+	})
+	final := model.(App)
+	if final.pendingUserQuestion != nil {
+		t.Fatalf("expected success to clear pending question")
+	}
+	if final.state.ExecutionError != "" || final.state.StatusText != statusUserQuestionSubmitted {
+		t.Fatalf("expected submitted status, got status=%q err=%q", final.state.StatusText, final.state.ExecutionError)
+	}
+}
+
 func TestUpdateRuntimeClosedClearsPendingPermission(t *testing.T) {
 	app := newPermissionTestApp(&permissionTestRuntime{})
 	app.pendingPermission = &permissionPromptState{
 		Request: agentruntime.PermissionRequestPayload{RequestID: "perm-6"},
 	}
+	app.pendingUserQuestion = &userQuestionPromptState{
+		Request: agentruntime.UserQuestionRequestedPayload{RequestID: "ask-closed"},
+	}
 	model, _ := app.Update(RuntimeClosedMsg{})
 	next := model.(App)
 	if next.pendingPermission != nil {
 		t.Fatalf("expected runtime closed to clear pending permission")
+	}
+	if next.pendingUserQuestion != nil {
+		t.Fatalf("expected runtime closed to clear pending user question")
 	}
 }
 

@@ -19,6 +19,12 @@ const (
 	RuntimeEventTypeRunDone RuntimeEventType = "run_done"
 	// RuntimeEventTypeRunError 表示运行失败事件。
 	RuntimeEventTypeRunError RuntimeEventType = "run_error"
+	// RuntimeEventTypeAskChunk 表示 Ask 流式分片事件。
+	RuntimeEventTypeAskChunk RuntimeEventType = "ask_chunk"
+	// RuntimeEventTypeAskDone 表示 Ask 完成事件。
+	RuntimeEventTypeAskDone RuntimeEventType = "ask_done"
+	// RuntimeEventTypeAskError 表示 Ask 失败事件。
+	RuntimeEventTypeAskError RuntimeEventType = "ask_error"
 )
 
 // PermissionResolutionDecision 表示权限审批最终决策。
@@ -61,6 +67,32 @@ type RunInput struct {
 	Workdir string
 	// Mode 是请求级 Agent 工作模式（build / plan）。
 	Mode string
+}
+
+// AskInput 表示网关向下游运行端口发起 ask 动作时的输入。
+type AskInput struct {
+	// SubjectID 是请求方身份主体标识。
+	SubjectID string
+	// RequestID 是客户端请求标识。
+	RequestID string
+	// SessionID 是 ask 会话标识；允许为空，由下游自动创建。
+	SessionID string
+	// Workdir 是请求级工作目录覆盖值，可选。
+	Workdir string
+	// UserQuery 是本次 ask 的用户输入文本。
+	UserQuery string
+	// Skills 是本次 ask 附加技能标识列表，可选。
+	Skills []string
+}
+
+// DeleteAskSessionInput 表示删除 ask 会话动作输入。
+type DeleteAskSessionInput struct {
+	// SubjectID 是请求方身份主体标识。
+	SubjectID string
+	// RequestID 是客户端请求标识。
+	RequestID string
+	// SessionID 是待删除的 ask 会话标识。
+	SessionID string
 }
 
 // CompactInput 表示网关向下游运行端口发起 compact 动作时的输入。
@@ -217,6 +249,110 @@ type ListFilesInput struct {
 	Path string
 }
 
+// ReadFileInput 表示 gateway.readFile 动作的下游输入。
+type ReadFileInput struct {
+	// SubjectID 是请求方身份主体标识。
+	SubjectID string
+	// SessionID 是可选会话标识。
+	SessionID string
+	// Workdir 是工作目录。
+	Workdir string
+	// Path 是相对文件路径。
+	Path string
+}
+
+// ReadFileResult 表示只读文件预览的返回载荷。
+type ReadFileResult struct {
+	// Path 是相对路径。
+	Path string `json:"path"`
+	// Content 是文件文本内容。
+	Content string `json:"content"`
+	// Encoding 是编码标识。
+	Encoding string `json:"encoding,omitempty"`
+	// Size 是文件大小。
+	Size int64 `json:"size,omitempty"`
+	// Truncated 表示是否因大文件而未返回内容。
+	Truncated bool `json:"truncated,omitempty"`
+	// IsBinary 表示是否为二进制文件。
+	IsBinary bool `json:"is_binary,omitempty"`
+	// ModTime 是修改时间。
+	ModTime string `json:"mod_time,omitempty"`
+}
+
+// GitDiffEntry 表示 Git 工作树变更列表中的单个文件条目。
+type GitDiffEntry struct {
+	// Path 是当前工作树中的相对路径。
+	Path string `json:"path"`
+	// OldPath 是 rename/copy 场景下的旧路径。
+	OldPath string `json:"old_path,omitempty"`
+	// Status 是归一化后的 Git 变更状态。
+	Status string `json:"status"`
+}
+
+// ListGitDiffFilesInput 表示 gateway.listGitDiffFiles 的下游输入。
+type ListGitDiffFilesInput struct {
+	// SubjectID 是请求方身份主体标识。
+	SubjectID string
+	// SessionID 是可选会话标识。
+	SessionID string
+	// Workdir 是工作目录。
+	Workdir string
+}
+
+// ListGitDiffFilesResult 表示 Git 变更文件列表与仓库摘要。
+type ListGitDiffFilesResult struct {
+	// InGitRepo 表示当前工作区是否为 Git 仓库。
+	InGitRepo bool `json:"in_git_repo"`
+	// Branch 是当前分支名。
+	Branch string `json:"branch,omitempty"`
+	// Ahead 是相对跟踪分支的 ahead 数量。
+	Ahead int `json:"ahead,omitempty"`
+	// Behind 是相对跟踪分支的 behind 数量。
+	Behind int `json:"behind,omitempty"`
+	// Truncated 表示文件列表是否被截断。
+	Truncated bool `json:"truncated,omitempty"`
+	// TotalCount 是仓库中的总变更文件数量。
+	TotalCount int `json:"total_count,omitempty"`
+	// Files 是当前返回的变更文件列表。
+	Files []GitDiffEntry `json:"files"`
+}
+
+// ReadGitDiffFileInput 表示 gateway.readGitDiffFile 的下游输入。
+type ReadGitDiffFileInput struct {
+	// SubjectID 是请求方身份主体标识。
+	SubjectID string
+	// SessionID 是可选会话标识。
+	SessionID string
+	// Workdir 是工作目录。
+	Workdir string
+	// Path 是目标变更文件的相对路径。
+	Path string
+}
+
+// ReadGitDiffFileResult 表示单个 Git 变更文件的双文本预览结果。
+type ReadGitDiffFileResult struct {
+	// Path 是当前工作树中的相对路径。
+	Path string `json:"path"`
+	// OldPath 是 rename/copy 场景下的旧路径。
+	OldPath string `json:"old_path,omitempty"`
+	// Status 是归一化后的 Git 变更状态。
+	Status string `json:"status"`
+	// OriginalContent 是 HEAD 版本文本。
+	OriginalContent string `json:"original_content"`
+	// ModifiedContent 是工作树版本文本。
+	ModifiedContent string `json:"modified_content"`
+	// Encoding 是编码标识。
+	Encoding string `json:"encoding,omitempty"`
+	// IsBinary 表示任一侧是否为二进制内容。
+	IsBinary bool `json:"is_binary,omitempty"`
+	// Truncated 表示任一侧是否因超限未返回正文。
+	Truncated bool `json:"truncated,omitempty"`
+	// OriginalSize 是 HEAD 版本字节大小。
+	OriginalSize int64 `json:"size_original,omitempty"`
+	// ModifiedSize 是工作树版本字节大小。
+	ModifiedSize int64 `json:"size_modified,omitempty"`
+}
+
 // ModelEntry 表示可用模型条目。
 type ModelEntry struct {
 	// ID 是模型标识。
@@ -326,6 +462,10 @@ type CheckpointDiffInput struct {
 	SessionID string `json:"session_id"`
 	// CheckpointID 是可选的 checkpoint 标识，为空则查最新代码检查点。
 	CheckpointID string `json:"checkpoint_id,omitempty"`
+	// Scope 可选，为 "run" 时按 run_id 做聚合 diff；为空时沿用相邻 checkpoint 对比行为。
+	Scope string `json:"scope,omitempty"`
+	// RunID 在 scope=run 时指定目标 run。
+	RunID string `json:"run_id,omitempty"`
 }
 
 // CheckpointDiffResult 描述两个相邻代码检查点之间的差异。
@@ -403,6 +543,20 @@ type DeleteProviderInput struct {
 	SubjectID string
 	// ProviderID 是 provider 标识。
 	ProviderID string `json:"provider_id"`
+}
+
+// UserQuestionAnswerInput 表示一次 ask_user 回答的输入。
+type UserQuestionAnswerInput struct {
+	// SubjectID 是请求方身份主体标识。
+	SubjectID string `json:"subject_id,omitempty"`
+	// RequestID 是待回答的提问标识。
+	RequestID string `json:"request_id"`
+	// Status 是回答状态：answered / skipped。
+	Status string `json:"status"`
+	// Values 是用户选择的答案值。
+	Values []string `json:"values,omitempty"`
+	// Message 是用户的文本答案。
+	Message string `json:"message,omitempty"`
 }
 
 // SelectProviderModelInput 表示全局选择 provider/model 的输入。
@@ -575,17 +729,32 @@ type TodoSnapshot struct {
 	Summary TodoSummary    `json:"summary,omitempty"`
 }
 
+// PendingUserQuestionSnapshot 描述当前会话待回答 ask_user 问题快照。
+type PendingUserQuestionSnapshot struct {
+	RequestID   string `json:"request_id"`
+	QuestionID  string `json:"question_id"`
+	Title       string `json:"title"`
+	Description string `json:"description"`
+	Kind        string `json:"kind"`
+	Options     []any  `json:"options,omitempty"`
+	Required    bool   `json:"required"`
+	AllowSkip   bool   `json:"allow_skip"`
+	MaxChoices  int    `json:"max_choices,omitempty"`
+	TimeoutSec  int    `json:"timeout_sec,omitempty"`
+}
+
 // RuntimeSnapshot 描述 runtime 对外暴露的统一运行状态快照。
 type RuntimeSnapshot struct {
-	RunID     string         `json:"run_id,omitempty"`
-	SessionID string         `json:"session_id"`
-	Phase     string         `json:"phase,omitempty"`
-	TaskKind  string         `json:"task_kind,omitempty"`
-	UpdatedAt time.Time      `json:"updated_at"`
-	Todos     TodoSnapshot   `json:"todos"`
-	Facts     map[string]any `json:"facts,omitempty"`
-	Decision  map[string]any `json:"decision,omitempty"`
-	SubAgents map[string]any `json:"subagents,omitempty"`
+	RunID               string                       `json:"run_id,omitempty"`
+	SessionID           string                       `json:"session_id"`
+	Phase               string                       `json:"phase,omitempty"`
+	TaskKind            string                       `json:"task_kind,omitempty"`
+	UpdatedAt           time.Time                    `json:"updated_at"`
+	Todos               TodoSnapshot                 `json:"todos"`
+	Facts               map[string]any               `json:"facts,omitempty"`
+	Decision            map[string]any               `json:"decision,omitempty"`
+	SubAgents           map[string]any               `json:"subagents,omitempty"`
+	PendingUserQuestion *PendingUserQuestionSnapshot `json:"pending_user_question,omitempty"`
 }
 
 // SkillSource 描述技能来源元数据。
@@ -640,6 +809,10 @@ type AvailableSkillState struct {
 type RuntimePort interface {
 	// Run 启动一次运行编排。
 	Run(ctx context.Context, input RunInput) error
+	// Ask 启动一次 Ask 轻量问答编排。
+	Ask(ctx context.Context, input AskInput) error
+	// DeleteAskSession 删除指定 Ask 会话。
+	DeleteAskSession(ctx context.Context, input DeleteAskSessionInput) (bool, error)
 	// Compact 对指定会话触发一次手动压缩。
 	Compact(ctx context.Context, input CompactInput) (CompactResult, error)
 	// ExecuteSystemTool 执行一次系统工具调用。
@@ -654,6 +827,8 @@ type RuntimePort interface {
 	ListAvailableSkills(ctx context.Context, input ListAvailableSkillsInput) ([]AvailableSkillState, error)
 	// ResolvePermission 向运行时提交一次权限审批决策。
 	ResolvePermission(ctx context.Context, input PermissionResolutionInput) error
+	// ResolveUserQuestion 向运行时提交一次 ask_user 回答。
+	ResolveUserQuestion(ctx context.Context, input UserQuestionAnswerInput) error
 	// CancelRun 按 run_id 精确取消运行态任务。
 	CancelRun(ctx context.Context, input CancelInput) (bool, error)
 	// Events 返回统一运行事件流。
@@ -674,6 +849,12 @@ type RuntimePort interface {
 	RenameSession(ctx context.Context, input RenameSessionInput) error
 	// ListFiles 列出工作目录文件树。
 	ListFiles(ctx context.Context, input ListFilesInput) ([]FileEntry, error)
+	// ReadFile 返回工作目录内文件的只读预览内容。
+	ReadFile(ctx context.Context, input ReadFileInput) (ReadFileResult, error)
+	// ListGitDiffFiles 返回当前工作树相对 HEAD 的 Git 变更文件列表。
+	ListGitDiffFiles(ctx context.Context, input ListGitDiffFilesInput) (ListGitDiffFilesResult, error)
+	// ReadGitDiffFile 返回单个 Git 变更文件的双文本预览内容。
+	ReadGitDiffFile(ctx context.Context, input ReadGitDiffFileInput) (ReadGitDiffFileResult, error)
 	// ListModels 列出可用模型。
 	ListModels(ctx context.Context, input ListModelsInput) ([]ModelEntry, error)
 	// SetSessionModel 设置会话模型。

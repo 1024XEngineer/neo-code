@@ -26,6 +26,12 @@ const (
 	ErrorCodeAccessDenied ErrorCode = "access_denied"
 	// ErrorCodeResourceNotFound 表示目标资源不存在或不可见。
 	ErrorCodeResourceNotFound ErrorCode = "resource_not_found"
+	// ErrorCodeRunnerOffline 表示目标 runner 不在线。
+	ErrorCodeRunnerOffline ErrorCode = "runner_offline"
+	// ErrorCodeCapabilityDenied 表示 capability token 校验不通过。
+	ErrorCodeCapabilityDenied ErrorCode = "capability_denied"
+	// ErrorCodeToolExecutionFailed 表示工具在 runner 端执行失败。
+	ErrorCodeToolExecutionFailed ErrorCode = "tool_execution_failed"
 )
 
 var stableErrorCodes = map[string]struct{}{
@@ -39,6 +45,9 @@ var stableErrorCodes = map[string]struct{}{
 	string(ErrorCodeUnauthorized):             {},
 	string(ErrorCodeAccessDenied):             {},
 	string(ErrorCodeResourceNotFound):         {},
+	string(ErrorCodeRunnerOffline):            {},
+	string(ErrorCodeCapabilityDenied):         {},
+	string(ErrorCodeToolExecutionFailed):      {},
 }
 
 // String 返回错误码的字符串值。

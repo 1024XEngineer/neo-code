@@ -10,8 +10,8 @@ import (
 	"sync"
 
 	"neo-code/internal/checkpoint"
-	"neo-code/internal/repository"
 	providertypes "neo-code/internal/provider/types"
+	"neo-code/internal/repository"
 	runtimefacts "neo-code/internal/runtime/facts"
 	runtimehooks "neo-code/internal/runtime/hooks"
 	"neo-code/internal/tools"
@@ -258,6 +258,10 @@ func (s *Service) executeOneToolCall(
 				_ = s.perEditStore.CapturePostDelete(allPaths)
 			} else if len(touchedPaths) > 0 {
 				_ = s.perEditStore.CapturePostDelete(touchedPaths)
+			}
+		case tools.ToolNameFilesystemMoveFile:
+			if len(touchedPaths) > 1 {
+				_ = s.perEditStore.CapturePostDelete([]string{touchedPaths[0]})
 			}
 		case tools.ToolNameFilesystemDeleteFile:
 			if len(touchedPaths) > 0 {

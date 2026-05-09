@@ -60,6 +60,7 @@ type modelCatalogRefreshMsg = tuistate.ModelCatalogRefreshMsg
 type compactFinishedMsg = tuistate.CompactFinishedMsg
 type localCommandResultMsg = tuistate.LocalCommandResultMsg
 type permissionResolutionFinishedMsg = tuistate.PermissionResolutionFinishedMsg
+type userQuestionResolutionFinishedMsg = tuistate.UserQuestionResolutionFinishedMsg
 
 type ProviderController interface {
 	ListProviderOptions(ctx context.Context) ([]configstate.ProviderOption, error)
@@ -141,6 +142,7 @@ type appRuntimeState struct {
 	runProgressLabel                 string
 	lastUserMessageRunID             string
 	pendingPermission                *permissionPromptState
+	pendingUserQuestion              *userQuestionPromptState
 	queuedIntervention               *queuedInterventionInput
 	pendingAutoPermission            *autoPermissionApprovalState
 	pendingFullAccessPrompt          *fullAccessPromptState

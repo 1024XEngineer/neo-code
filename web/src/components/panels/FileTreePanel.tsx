@@ -1,5 +1,5 @@
-import { useState, useEffect, useCallback } from 'react'
-import { useUIStore } from '@/stores/useUIStore'
+import { useState, useEffect, useCallback, useRef } from 'react'
+import { useUIStore, type FilePreviewTab } from '@/stores/useUIStore'
 import { useWorkspaceStore } from '@/stores/useWorkspaceStore'
 import { useGatewayAPI } from '@/context/RuntimeProvider'
 import { type FileEntry } from '@/api/protocol'
@@ -38,7 +38,7 @@ function buildFileTree(entries: FileEntry[]): FileTreeNode[] {
   const rootNodes: FileTreeNode[] = []
   const dirMap = new Map<string, FileTreeNode>()
 
-  // 先创建所有目录节点
+  // 先创建所有目录节点。
   for (const entry of entries) {
     if (entry.is_dir) {
       const node: FileTreeNode = { entry, children: [] }
@@ -46,7 +46,7 @@ function buildFileTree(entries: FileEntry[]): FileTreeNode[] {
     }
   }
 
-  // 再分配所有节点到父目录
+  // 再把所有节点归到父目录下。
   for (const entry of entries) {
     const parentPath = entry.path.split('/').slice(0, -1).join('/')
     if (parentPath && dirMap.has(parentPath)) {
@@ -57,14 +57,14 @@ function buildFileTree(entries: FileEntry[]): FileTreeNode[] {
         parent.children!.push({ entry })
       }
     } else if (!parentPath) {
-      // 根级别节点
+      // 根级节点。
       if (entry.is_dir) {
         rootNodes.push(dirMap.get(entry.path)!)
       } else {
         rootNodes.push({ entry })
       }
     } else {
-      // 父目录缺失：作为根节点挂载（容错处理，避免节点丢失）
+      // 父目录缺失时挂到根级，避免节点被丢弃。
       if (entry.is_dir) {
         rootNodes.push(dirMap.get(entry.path)!)
       } else {
@@ -81,9 +81,11 @@ interface FileTreeItemProps {
   depth?: number
   dirCache: Map<string, FileTreeNode[]>
   onLoadDir: (path: string) => Promise<void>
+  onOpenFile: (path: string) => Promise<void>
 }
 
-function FileTreeItem({ node, depth = 0, dirCache, onLoadDir }: FileTreeItemProps) {
+// FileTreeItem 渲染单个目录树节点，并在文件点击时打开预览标签。
+function FileTreeItem({ node, depth = 0, dirCache, onLoadDir, onOpenFile }: FileTreeItemProps) {
   const [expanded, setExpanded] = useState(false)
   const [localLoading, setLocalLoading] = useState(false)
   const isFolder = node.entry.is_dir
@@ -93,7 +95,11 @@ function FileTreeItem({ node, depth = 0, dirCache, onLoadDir }: FileTreeItemProp
   const isLoaded = cachedChildren !== undefined
 
   const handleClick = async () => {
-    if (!isFolder) return
+    if (!isFolder) {
+      await onOpenFile(node.entry.path)
+      return
+    }
+
     if (!isLoaded) {
       setLocalLoading(true)
       try {
@@ -148,6 +154,7 @@ function FileTreeItem({ node, depth = 0, dirCache, onLoadDir }: FileTreeItemProp
               depth={depth + 1}
               dirCache={dirCache}
               onLoadDir={onLoadDir}
+              onOpenFile={onOpenFile}
             />
           ))
         ) : isLoaded ? (
@@ -171,6 +178,10 @@ function FileTreeItem({ node, depth = 0, dirCache, onLoadDir }: FileTreeItemProp
 
 export default function FileTreePanel() {
   const toggleFileTreePanel = useUIStore((s) => s.toggleFileTreePanel)
+  const openPreviewTab = useUIStore((s) => s.openPreviewTab)
+  const setPreviewTabLoading = useUIStore((s) => s.setPreviewTabLoading)
+  const setPreviewTabContent = useUIStore((s) => s.setPreviewTabContent)
+  const setPreviewTabError = useUIStore((s) => s.setPreviewTabError)
   const gatewayAPI = useGatewayAPI()
   const currentWorkspaceHash = useWorkspaceStore((s) => s.currentWorkspaceHash)
   const workspaces = useWorkspaceStore((s) => s.workspaces)
@@ -180,13 +191,36 @@ export default function FileTreePanel() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [currentPath, setCurrentPath] = useState('')
+  const activeWorkspaceRef = useRef(currentWorkspaceHash)
+  const rootRequestTokenRef = useRef(0)
+  const mountedRef = useRef(true)
+
+  useEffect(() => {
+    return () => {
+      mountedRef.current = false
+    }
+  }, [])
+
+  useEffect(() => {
+    activeWorkspaceRef.current = currentWorkspaceHash
+  }, [currentWorkspaceHash])
 
   const loadDir = useCallback(async (path: string) => {
     if (!gatewayAPI) return
+
+    const requestWorkspaceHash = activeWorkspaceRef.current
+
     try {
       const result = await gatewayAPI.listFiles({ path })
+      if (!mountedRef.current || activeWorkspaceRef.current !== requestWorkspaceHash) {
+        return
+      }
+
       const nodes = buildFileTree(result.payload.files)
       setDirCache((prev) => {
+        if (!mountedRef.current || activeWorkspaceRef.current !== requestWorkspaceHash) {
+          return prev
+        }
         const next = new Map(prev)
         next.set(path, nodes)
         return next
@@ -197,26 +231,81 @@ export default function FileTreePanel() {
     }
   }, [gatewayAPI])
 
-  const loadRoot = useCallback(async () => {
+  // loadRoot 在工作区切换时重置文件树状态，并丢弃旧工作区的晚到响应。
+  const loadRoot = useCallback(async (workspaceHash: string) => {
     if (!gatewayAPI) return
+
+    const requestToken = rootRequestTokenRef.current + 1
+    rootRequestTokenRef.current = requestToken
+
+    setRootNodes([])
+    setDirCache(new Map())
+    setCurrentPath('')
     setLoading(true)
     setError('')
+
     try {
       const result = await gatewayAPI.listFiles({ path: '' })
+      if (
+        !mountedRef.current ||
+        activeWorkspaceRef.current !== workspaceHash ||
+        rootRequestTokenRef.current !== requestToken
+      ) {
+        return
+      }
+
       setRootNodes(buildFileTree(result.payload.files))
       setCurrentPath('')
     } catch (err) {
+      if (
+        !mountedRef.current ||
+        activeWorkspaceRef.current !== workspaceHash ||
+        rootRequestTokenRef.current !== requestToken
+      ) {
+        return
+      }
+
       const msg = err instanceof Error ? err.message : 'Failed to load file list'
       setError(msg)
       console.error('listFiles failed:', err)
     } finally {
-      setLoading(false)
+      if (
+        mountedRef.current &&
+        activeWorkspaceRef.current === workspaceHash &&
+        rootRequestTokenRef.current === requestToken
+      ) {
+        setLoading(false)
+      }
     }
   }, [gatewayAPI])
 
+  // openFilePreview 负责复用或创建文件标签，并按需拉取只读预览内容。
+  const openFilePreview = useCallback(async (path: string) => {
+    if (!gatewayAPI) return
+
+    const currentTab = useUIStore.getState().previewTabs.find(
+      (tab): tab is FilePreviewTab => tab.kind === 'file' && tab.path === path,
+    )
+    const { id, created } = openPreviewTab(path)
+    if (currentTab && !created) {
+      if (currentTab.loading) return
+      if (currentTab.loaded && !currentTab.error) return
+      setPreviewTabLoading(id)
+    }
+
+    try {
+      const result = await gatewayAPI.readFile({ path })
+      setPreviewTabContent(id, result.payload)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to read file preview'
+      setPreviewTabError(id, message)
+    }
+  }, [gatewayAPI, openPreviewTab, setPreviewTabContent, setPreviewTabError, setPreviewTabLoading])
+
   useEffect(() => {
-    loadRoot()
-  }, [loadRoot])
+    activeWorkspaceRef.current = currentWorkspaceHash
+    void loadRoot(currentWorkspaceHash)
+  }, [currentWorkspaceHash, loadRoot])
 
   return (
     <div style={styles.container}>
@@ -234,7 +323,7 @@ export default function FileTreePanel() {
         <div style={styles.headerPath}>{currentPath || currentWorkspace?.name || currentWorkspace?.path || '.'}</div>
       </div>
 
-      <div style={styles.scrollArea}>
+      <div data-testid="file-tree-scroll-area" style={styles.scrollArea}>
         {loading && (
           <div style={styles.emptyState}>
             <Loader2 size={16} style={{ animation: 'spin 1s linear infinite' }} />
@@ -262,6 +351,7 @@ export default function FileTreePanel() {
               depth={0}
               dirCache={dirCache}
               onLoadDir={loadDir}
+              onOpenFile={openFilePreview}
             />
           ))}
       </div>
@@ -274,6 +364,8 @@ const styles: Record<string, React.CSSProperties> = {
     display: 'flex',
     flexDirection: 'column',
     height: '100%',
+    minHeight: 0,
+    overflow: 'hidden',
     background: 'var(--bg-secondary)',
   },
   header: {
@@ -314,6 +406,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   scrollArea: {
     flex: 1,
+    minHeight: 0,
     overflowY: 'auto',
     padding: '6px 4px',
   },

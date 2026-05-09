@@ -112,6 +112,85 @@ func TestRepositoryServiceSummaryChangedFilesAndRetrieve(t *testing.T) {
 		assertChangedRepositoryFile(t, result.ChangedFiles.Files[6], filepath.Clean("pkg/conflicted.go"), "", StatusConflicted, "")
 	})
 
+	t.Run("untracked directories expand into stable file entries across summary inspect and changed files", func(t *testing.T) {
+		t.Parallel()
+
+		workdir := t.TempDir()
+		mustWriteRepositoryFile(t, filepath.Join(workdir, "handwrite_res", "first.txt"), "first\n")
+		mustWriteRepositoryFile(t, filepath.Join(workdir, "handwrite_res", "nested", "second.txt"), "second\n")
+		mustWriteRepositoryFile(t, filepath.Join(workdir, "handwrite_res", "node_modules", "ignored.txt"), "ignored\n")
+
+		service := newRepositoryTestService(func(ctx context.Context, dir string, args ...string) (GitCommandOutput, error) {
+			if strings.Join(args, " ") != "status --porcelain=v1 -z --branch --untracked-files=normal" {
+				return GitCommandOutput{}, nil
+			}
+			return GitCommandOutput{Text: nulJoin("## main", "?? handwrite_res")}, nil
+		})
+
+		summary, err := service.Summary(context.Background(), workdir)
+		if err != nil {
+			t.Fatalf("Summary() error = %v", err)
+		}
+		if summary.ChangedFileCount != 2 {
+			t.Fatalf("expected expanded summary count 2, got %+v", summary)
+		}
+
+		inspectResult, err := service.Inspect(context.Background(), workdir, InspectOptions{ChangedFilesLimit: 10})
+		if err != nil {
+			t.Fatalf("Inspect() error = %v", err)
+		}
+		if inspectResult.Summary.ChangedFileCount != 2 || inspectResult.ChangedFiles.TotalCount != 2 {
+			t.Fatalf("unexpected inspect result: %+v", inspectResult)
+		}
+		if got := []string{
+			inspectResult.ChangedFiles.Files[0].Path,
+			inspectResult.ChangedFiles.Files[1].Path,
+		}; !slices.Equal(got, []string{
+			filepath.Clean("handwrite_res/first.txt"),
+			filepath.Clean("handwrite_res/nested/second.txt"),
+		}) {
+			t.Fatalf("unexpected inspect paths: %#v", got)
+		}
+
+		changedFiles, err := service.ChangedFiles(context.Background(), workdir, ChangedFilesOptions{})
+		if err != nil {
+			t.Fatalf("ChangedFiles() error = %v", err)
+		}
+		if changedFiles.TotalCount != 2 || len(changedFiles.Files) != 2 {
+			t.Fatalf("unexpected changed files result: %+v", changedFiles)
+		}
+	})
+
+	t.Run("untracked directory containing only skipped noise does not emit pseudo files", func(t *testing.T) {
+		t.Parallel()
+
+		workdir := t.TempDir()
+		mustWriteRepositoryFile(t, filepath.Join(workdir, "handwrite_res", "node_modules", "ignored.txt"), "ignored\n")
+
+		service := newRepositoryTestService(func(ctx context.Context, dir string, args ...string) (GitCommandOutput, error) {
+			if strings.Join(args, " ") != "status --porcelain=v1 -z --branch --untracked-files=normal" {
+				return GitCommandOutput{}, nil
+			}
+			return GitCommandOutput{Text: nulJoin("## main", "?? handwrite_res")}, nil
+		})
+
+		summary, err := service.Summary(context.Background(), workdir)
+		if err != nil {
+			t.Fatalf("Summary() error = %v", err)
+		}
+		if summary.ChangedFileCount != 0 {
+			t.Fatalf("expected skipped directory to contribute no files, got %+v", summary)
+		}
+
+		changedFiles, err := service.ChangedFiles(context.Background(), workdir, ChangedFilesOptions{})
+		if err != nil {
+			t.Fatalf("ChangedFiles() error = %v", err)
+		}
+		if changedFiles.TotalCount != 0 || len(changedFiles.Files) != 0 {
+			t.Fatalf("expected no changed files, got %+v", changedFiles)
+		}
+	})
+
 	t.Run("changed files truncation and snippet filters", func(t *testing.T) {
 		t.Parallel()
 

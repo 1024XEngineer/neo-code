@@ -1295,6 +1295,43 @@ func TestResolveToolExecutionTimeoutForDiagnose(t *testing.T) {
 	}
 }
 
+func TestResolveToolExecutionTimeoutForAskUser(t *testing.T) {
+	t.Parallel()
+
+	base := 20 * time.Second
+	got := resolveToolExecutionTimeout(providertypes.ToolCall{
+		Name:      tools.ToolNameAskUser,
+		Arguments: `{"question_id":"q1","title":"need input","kind":"text"}`,
+	}, base)
+	if got != defaultAskUserToolTimeout {
+		t.Fatalf("expected ask_user timeout %v, got %v", defaultAskUserToolTimeout, got)
+	}
+
+	got = resolveToolExecutionTimeout(providertypes.ToolCall{
+		Name:      tools.ToolNameAskUser,
+		Arguments: `{"question_id":"q1","title":"need input","kind":"text","timeout_sec":600}`,
+	}, base)
+	if got != 10*time.Minute {
+		t.Fatalf("expected ask_user timeout 10m, got %v", got)
+	}
+
+	got = resolveToolExecutionTimeout(providertypes.ToolCall{
+		Name:      tools.ToolNameAskUser,
+		Arguments: `{"question_id":"q1","title":"need input","kind":"text","timeout_sec":7200}`,
+	}, base)
+	if got != maxAskUserToolTimeout {
+		t.Fatalf("expected ask_user timeout clamped to %v, got %v", maxAskUserToolTimeout, got)
+	}
+
+	got = resolveToolExecutionTimeout(providertypes.ToolCall{
+		Name:      tools.ToolNameAskUser,
+		Arguments: `{"question_id":"q1","title":"need input","kind":"text","timeout_sec":60}`,
+	}, 15*time.Minute)
+	if got != 15*time.Minute {
+		t.Fatalf("expected larger base timeout to win, got %v", got)
+	}
+}
+
 func TestResolveToolExecutionTimeoutFallbackAndHelpers(t *testing.T) {
 	t.Parallel()
 
@@ -1319,6 +1356,16 @@ func TestResolveToolExecutionTimeoutFallbackAndHelpers(t *testing.T) {
 	mode, timeout = parseSpawnSubAgentRuntimeOptions(`{"mode":" inline ","timeout_sec":12}`)
 	if mode != "inline" || timeout != 12*time.Second {
 		t.Fatalf("unexpected parsed options mode=%q timeout=%v", mode, timeout)
+	}
+
+	if got := parseAskUserTimeoutFromArguments(""); got != 0 {
+		t.Fatalf("expected empty ask_user args timeout 0, got %v", got)
+	}
+	if got := parseAskUserTimeoutFromArguments("{"); got != 0 {
+		t.Fatalf("expected invalid ask_user args timeout 0, got %v", got)
+	}
+	if got := parseAskUserTimeoutFromArguments(`{"timeout_sec":321}`); got != 321*time.Second {
+		t.Fatalf("expected parsed ask_user timeout 321s, got %v", got)
 	}
 
 	if got := clampDuration(5*time.Second, 10*time.Second, 20*time.Second); got != 10*time.Second {

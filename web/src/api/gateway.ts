@@ -9,6 +9,8 @@ import {
   type LoadSessionParams,
   type ListSessionTodosParams,
   type ListSessionTodosResult,
+  type GetRuntimeSnapshotParams,
+  type GetRuntimeSnapshotResult,
   type ListCheckpointsParams,
   type ListCheckpointsResult,
   type RestoreCheckpointParams,
@@ -18,6 +20,7 @@ import {
   type CheckpointDiffParams,
   type CheckpointDiffResult,
   type ResolvePermissionParams,
+  type ResolveUserQuestionParams,
   type Session,
   type RunAckResult,
   type ListSessionsResult,
@@ -28,6 +31,12 @@ import {
   type RenameSessionResult,
   type ListFilesParams,
   type ListFilesResult,
+  type ReadFileParams,
+  type ReadFileResult,
+  type ListGitDiffFilesParams,
+  type ListGitDiffFilesResult,
+  type ReadGitDiffFileParams,
+  type ReadGitDiffFileResult,
   type ListModelsResult,
   type SetSessionModelParams,
   type SetSessionModelResult,
@@ -113,6 +122,13 @@ export class GatewayAPI {
     return this.ws.call<ListSessionTodosResult>(Method.ListSessionTodos, { session_id: sessionId } satisfies ListSessionTodosParams)
   }
 
+  async getRuntimeSnapshot(sessionId: string) {
+    return this.ws.call<GetRuntimeSnapshotResult>(
+      Method.GetRuntimeSnapshot,
+      { session_id: sessionId } satisfies GetRuntimeSnapshotParams,
+    )
+  }
+
   async listCheckpoints(params: ListCheckpointsParams) {
     return this.ws.call<ListCheckpointsResult>(Method.ListCheckpoints, params)
   }
@@ -132,6 +148,11 @@ export class GatewayAPI {
   /** 解析权限请求 */
   async resolvePermission(params: ResolvePermissionParams) {
     return this.ws.call(Method.ResolvePermission, params)
+  }
+
+  /** 提交 ask_user 回答 */
+  async resolveUserQuestion(params: ResolveUserQuestionParams) {
+    return this.ws.call(Method.UserQuestionAnswer, params)
   }
 
   /** 执行系统工具 */
@@ -163,6 +184,21 @@ export class GatewayAPI {
   /** 列出工作目录文件树 */
   async listFiles(params: ListFilesParams = {}) {
     return this.ws.call<ListFilesResult>(Method.ListFiles, params)
+  }
+
+  /** 读取工作目录内的文件预览内容 */
+  async readFile(params: ReadFileParams) {
+    return this.ws.call<ReadFileResult>(Method.ReadFile, params)
+  }
+
+  /** 列出当前工作树相对 HEAD 的 Git 变更文件 */
+  async listGitDiffFiles(params: ListGitDiffFilesParams = {}) {
+    return this.ws.call<ListGitDiffFilesResult>(Method.ListGitDiffFiles, params)
+  }
+
+  /** 读取单个 Git 变更文件的双文本预览 */
+  async readGitDiffFile(params: ReadGitDiffFileParams) {
+    return this.ws.call<ReadGitDiffFileResult>(Method.ReadGitDiffFile, params)
   }
 
   /** 列出可用模型 */

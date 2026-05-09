@@ -146,7 +146,7 @@ func TestRestore_UsesNextVersionAsTargetState(t *testing.T) {
 	}
 
 	// Restore cp1: should write STATE_AFTER_TURN_1 (== v2.bin == content captured at start of turn 2).
-	if err := store.Restore(context.Background(), "cp1"); err != nil {
+	if err := store.Restore(context.Background(), "cp1", ""); err != nil {
 		t.Fatalf("restore cp1: %v", err)
 	}
 	if got := mustReadFile(t, abs); got != "STATE_AFTER_TURN_1" {
@@ -170,7 +170,7 @@ func TestRestore_NoNextVersionIsNoOp(t *testing.T) {
 	}
 	store.Reset()
 
-	if err := store.Restore(context.Background(), "cp1"); err != nil {
+	if err := store.Restore(context.Background(), "cp1", ""); err != nil {
 		t.Fatalf("restore: %v", err)
 	}
 	if got := mustReadFile(t, abs); got != "AFTER" {
@@ -212,7 +212,7 @@ func TestRestore_PreservesUntrackedFiles(t *testing.T) {
 	}
 	store.Reset()
 
-	if err := store.Restore(context.Background(), "cp1"); err != nil {
+	if err := store.Restore(context.Background(), "cp1", ""); err != nil {
 		t.Fatalf("restore cp1: %v", err)
 	}
 	if got := mustReadFile(t, tracked); got != "TR_AFTER_T1" {
@@ -341,7 +341,7 @@ func TestIndexReload_SurvivesProcessRestart(t *testing.T) {
 	// Workdir is "Y" right now (we never edited again post second capture).
 	// cp1 -> v_next(v1) = v2 -> meta.Existed=true, content="Y"
 	// So Restore writes "Y" back which is no-op effectively.
-	if err := revived.Restore(context.Background(), "cp1"); err != nil {
+	if err := revived.Restore(context.Background(), "cp1", ""); err != nil {
 		t.Fatalf("revived restore: %v", err)
 	}
 	if got := mustReadFile(t, abs); got != "Y" {
@@ -409,7 +409,7 @@ func TestRestore_RemovesFileWhenVNextExistedFalse(t *testing.T) {
 	store.Reset()
 
 	// Restore cp2: v2 captured "STILL_LIVE"; v_next(v2)=v3 has Existed=false → delete file.
-	if err := store.Restore(context.Background(), "cp2"); err != nil {
+	if err := store.Restore(context.Background(), "cp2", ""); err != nil {
 		t.Fatalf("restore cp2: %v", err)
 	}
 	if _, err := os.Stat(abs); !os.IsNotExist(err) {
@@ -519,7 +519,7 @@ func TestRestore_DirectoryRecreateAndDelete(t *testing.T) {
 	if err := os.RemoveAll(dir); err != nil {
 		t.Fatalf("manual remove before restore: %v", err)
 	}
-	if err := store.Restore(context.Background(), "cp1"); err != nil {
+	if err := store.Restore(context.Background(), "cp1", ""); err != nil {
 		t.Fatalf("restore cp1: %v", err)
 	}
 	info, err := os.Stat(dir)
@@ -531,7 +531,7 @@ func TestRestore_DirectoryRecreateAndDelete(t *testing.T) {
 	}
 
 	// Restore cp2: v_next=v3(Existed=false) → RemoveAll. Dir should be deleted.
-	if err := store.Restore(context.Background(), "cp2"); err != nil {
+	if err := store.Restore(context.Background(), "cp2", ""); err != nil {
 		t.Fatalf("restore cp2: %v", err)
 	}
 	if _, err := os.Stat(dir); !os.IsNotExist(err) {
@@ -600,7 +600,7 @@ func TestRestore_DirectoryWithNestedFile(t *testing.T) {
 	if err := os.RemoveAll(dir); err != nil {
 		t.Fatalf("manual remove before restore: %v", err)
 	}
-	if err := store.Restore(context.Background(), "cp-dir"); err != nil {
+	if err := store.Restore(context.Background(), "cp-dir", ""); err != nil {
 		t.Fatalf("restore cp-dir: %v", err)
 	}
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
@@ -614,7 +614,7 @@ func TestRestore_DirectoryWithNestedFile(t *testing.T) {
 	if err := os.WriteFile(child, []byte("new"), 0o644); err != nil {
 		t.Fatalf("write child before restore: %v", err)
 	}
-	if err := store.Restore(context.Background(), "cp-remove"); err != nil {
+	if err := store.Restore(context.Background(), "cp-remove", ""); err != nil {
 		t.Fatalf("restore cp-remove: %v", err)
 	}
 	if _, err := os.Stat(dir); !os.IsNotExist(err) {
@@ -677,7 +677,7 @@ func TestChangedFiles(t *testing.T) {
 	store.Reset()
 
 	// Restore to cp1 so workdir fallback matches cp1 state.
-	if err := store.Restore(context.Background(), "cp1"); err != nil {
+	if err := store.Restore(context.Background(), "cp1", ""); err != nil {
 		t.Fatalf("restore cp1: %v", err)
 	}
 	// c.txt did not exist in cp1; Restore won't remove it because cp1 doesn't know about it.
@@ -809,7 +809,7 @@ func TestCapturePostDelete_CreatesExistedFalseVersion(t *testing.T) {
 	}
 
 	// Restore cp1: v_next should be v2(Existed=false) → file should be deleted.
-	if err := store.Restore(context.Background(), "cp1"); err != nil {
+	if err := store.Restore(context.Background(), "cp1", ""); err != nil {
 		t.Fatalf("restore cp1: %v", err)
 	}
 	if _, err := os.Stat(abs); !os.IsNotExist(err) {
@@ -864,7 +864,7 @@ func TestCapturePostDelete_DirectoryTreeRecovery(t *testing.T) {
 	store.Reset()
 
 	// Restore cp1: v_next is v2(pre-delete, Existed=true) → tree recreated.
-	if err := store.Restore(context.Background(), "cp1"); err != nil {
+	if err := store.Restore(context.Background(), "cp1", ""); err != nil {
 		t.Fatalf("restore cp1: %v", err)
 	}
 	if got := mustReadFile(t, child1); got != "alpha" {
@@ -875,7 +875,7 @@ func TestCapturePostDelete_DirectoryTreeRecovery(t *testing.T) {
 	}
 
 	// Restore cp2: v_next is v3(post-delete, Existed=false) → tree deleted.
-	if err := store.Restore(context.Background(), "cp2"); err != nil {
+	if err := store.Restore(context.Background(), "cp2", ""); err != nil {
 		t.Fatalf("restore cp2: %v", err)
 	}
 	if _, err := os.Stat(dir); !os.IsNotExist(err) {
@@ -933,7 +933,7 @@ func TestRestore_RemoveDirWithNestedFiles(t *testing.T) {
 	store.Reset()
 
 	// Restore cp2: should delete the tree.
-	if err := store.Restore(context.Background(), "cp2"); err != nil {
+	if err := store.Restore(context.Background(), "cp2", ""); err != nil {
 		t.Fatalf("restore cp2: %v", err)
 	}
 	if _, err := os.Stat(dir); !os.IsNotExist(err) {
@@ -941,7 +941,7 @@ func TestRestore_RemoveDirWithNestedFiles(t *testing.T) {
 	}
 
 	// Restore cp1: should recreate the tree with original content.
-	if err := store.Restore(context.Background(), "cp1"); err != nil {
+	if err := store.Restore(context.Background(), "cp1", ""); err != nil {
 		t.Fatalf("restore cp1: %v", err)
 	}
 	if got := mustReadFile(t, child); got != "hello" {
@@ -1105,7 +1105,7 @@ func TestChangedFiles_NewFileDetectedAsAdded(t *testing.T) {
 	store.Reset()
 
 	// Restore to cp1 so workdir fallback matches cp1 state.
-	if err := store.Restore(context.Background(), "cp1"); err != nil {
+	if err := store.Restore(context.Background(), "cp1", ""); err != nil {
 		t.Fatalf("restore cp1: %v", err)
 	}
 	if err := os.Remove(filepath.Join(workdir, "b.txt")); err != nil && !os.IsNotExist(err) {
@@ -1121,5 +1121,615 @@ func TestChangedFiles_NewFileDetectedAsAdded(t *testing.T) {
 	}
 	if changes[0].Path != "b.txt" || changes[0].Kind != FileChangeAdded {
 		t.Fatalf("expected b.txt added, got %+v", changes[0])
+	}
+}
+
+// ──────────────────────── DiffCheckpointsToWorkdir tests ────────────────────────
+
+func TestDiffCheckpointsToWorkdir_AggregatesRepeatedEdits(t *testing.T) {
+	store, workdir := newTestStore(t)
+	abs := writeWorkdirFile(t, workdir, "a.txt", "A\n")
+
+	if _, err := store.CapturePreWrite(abs); err != nil {
+		t.Fatalf("capture cp1: %v", err)
+	}
+	if err := os.WriteFile(abs, []byte("B\n"), 0o644); err != nil {
+		t.Fatalf("write B: %v", err)
+	}
+	if _, err := store.Finalize("cp1"); err != nil {
+		t.Fatalf("finalize cp1: %v", err)
+	}
+	store.Reset()
+
+	if _, err := store.CapturePreWrite(abs); err != nil {
+		t.Fatalf("capture cp2: %v", err)
+	}
+	if err := os.WriteFile(abs, []byte("C\n"), 0o644); err != nil {
+		t.Fatalf("write C: %v", err)
+	}
+	if _, err := store.Finalize("cp2"); err != nil {
+		t.Fatalf("finalize cp2: %v", err)
+	}
+	store.Reset()
+
+	patch, changes, err := store.DiffCheckpointsToWorkdir(context.Background(), []string{"cp1", "cp2"})
+	if err != nil {
+		t.Fatalf("DiffCheckpointsToWorkdir() error = %v", err)
+	}
+	if len(changes) != 1 || changes[0].Path != "a.txt" || changes[0].Kind != FileChangeModified {
+		t.Fatalf("changes = %+v, want a.txt modified", changes)
+	}
+	if !strings.Contains(patch, "-A") || !strings.Contains(patch, "+C") || strings.Contains(patch, "-B") {
+		t.Fatalf("patch should compare A to C only, got:\n%s", patch)
+	}
+}
+
+func TestDiffCheckpointsToWorkdir_ElidesRevertedAndAddDelete(t *testing.T) {
+	store, workdir := newTestStore(t)
+	reverted := writeWorkdirFile(t, workdir, "reverted.txt", "A\n")
+	transient := filepath.Join(workdir, "transient.txt")
+
+	if _, err := store.CapturePreWrite(reverted); err != nil {
+		t.Fatalf("capture reverted cp1: %v", err)
+	}
+	if err := os.WriteFile(reverted, []byte("B\n"), 0o644); err != nil {
+		t.Fatalf("write reverted B: %v", err)
+	}
+	if _, err := store.CapturePreWrite(transient); err != nil {
+		t.Fatalf("capture transient cp1: %v", err)
+	}
+	if err := os.WriteFile(transient, []byte("created\n"), 0o644); err != nil {
+		t.Fatalf("write transient: %v", err)
+	}
+	if _, err := store.Finalize("cp1"); err != nil {
+		t.Fatalf("finalize cp1: %v", err)
+	}
+	store.Reset()
+
+	if _, err := store.CapturePreWrite(reverted); err != nil {
+		t.Fatalf("capture reverted cp2: %v", err)
+	}
+	if err := os.WriteFile(reverted, []byte("A\n"), 0o644); err != nil {
+		t.Fatalf("restore reverted A: %v", err)
+	}
+	if _, err := store.CapturePreWrite(transient); err != nil {
+		t.Fatalf("capture transient cp2: %v", err)
+	}
+	if err := os.Remove(transient); err != nil {
+		t.Fatalf("remove transient: %v", err)
+	}
+	if _, err := store.Finalize("cp2"); err != nil {
+		t.Fatalf("finalize cp2: %v", err)
+	}
+	store.Reset()
+
+	patch, changes, err := store.DiffCheckpointsToWorkdir(context.Background(), []string{"cp1", "cp2"})
+	if err != nil {
+		t.Fatalf("DiffCheckpointsToWorkdir() error = %v", err)
+	}
+	if patch != "" || len(changes) != 0 {
+		t.Fatalf("expected empty aggregate diff, patch=%q changes=%+v", patch, changes)
+	}
+}
+
+func TestDiffCheckpointsToWorkdir_DeletedExistingFile(t *testing.T) {
+	store, workdir := newTestStore(t)
+	abs := writeWorkdirFile(t, workdir, "gone.txt", "old\n")
+
+	if _, err := store.CapturePreWrite(abs); err != nil {
+		t.Fatalf("capture: %v", err)
+	}
+	if err := os.Remove(abs); err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+	if _, err := store.Finalize("cp1"); err != nil {
+		t.Fatalf("finalize: %v", err)
+	}
+	store.Reset()
+
+	patch, changes, err := store.DiffCheckpointsToWorkdir(context.Background(), []string{"cp1"})
+	if err != nil {
+		t.Fatalf("DiffCheckpointsToWorkdir() error = %v", err)
+	}
+	if len(changes) != 1 || changes[0].Path != "gone.txt" || changes[0].Kind != FileChangeDeleted {
+		t.Fatalf("changes = %+v, want gone.txt deleted", changes)
+	}
+	if !strings.Contains(patch, "-old") {
+		t.Fatalf("patch should contain deleted content, got:\n%s", patch)
+	}
+}
+
+func TestDiffCheckpointsToCheckpoint_UsesExactTargetState(t *testing.T) {
+	store, workdir := newTestStore(t)
+	abs := writeWorkdirFile(t, workdir, "tracked.txt", "A\n")
+
+	if _, err := store.CapturePreWrite(abs); err != nil {
+		t.Fatalf("capture cp1: %v", err)
+	}
+	if err := os.WriteFile(abs, []byte("B\n"), 0o644); err != nil {
+		t.Fatalf("write B: %v", err)
+	}
+	if _, err := store.FinalizeWithExactState("cp1"); err != nil {
+		t.Fatalf("FinalizeWithExactState(cp1): %v", err)
+	}
+	store.Reset()
+
+	if _, err := store.CapturePreWrite(abs); err != nil {
+		t.Fatalf("capture cp2: %v", err)
+	}
+	if err := os.WriteFile(abs, []byte("C\n"), 0o644); err != nil {
+		t.Fatalf("write C: %v", err)
+	}
+	if _, err := store.FinalizeWithExactState("cp2"); err != nil {
+		t.Fatalf("FinalizeWithExactState(cp2): %v", err)
+	}
+	store.Reset()
+
+	if err := os.WriteFile(abs, []byte("D\n"), 0o644); err != nil {
+		t.Fatalf("write D drift: %v", err)
+	}
+
+	patch, changes, err := store.DiffCheckpointsToCheckpoint(context.Background(), []string{"cp1", "cp2"}, "cp2")
+	if err != nil {
+		t.Fatalf("DiffCheckpointsToCheckpoint() error = %v", err)
+	}
+	if len(changes) != 1 || changes[0].Path != "tracked.txt" || changes[0].Kind != FileChangeModified {
+		t.Fatalf("changes = %+v, want tracked.txt modified", changes)
+	}
+	if !strings.Contains(patch, "-A") || !strings.Contains(patch, "+C") {
+		t.Fatalf("patch should compare A to C, got:\n%s", patch)
+	}
+	if strings.Contains(patch, "+D") || strings.Contains(patch, "-B") {
+		t.Fatalf("patch should ignore later workdir drift, got:\n%s", patch)
+	}
+}
+
+func TestDiffCheckpointsToCheckpoint_ElidesRevertedAndTransientFiles(t *testing.T) {
+	store, workdir := newTestStore(t)
+	reverted := writeWorkdirFile(t, workdir, "reverted.txt", "A\n")
+	transient := filepath.Join(workdir, "transient.txt")
+
+	if _, err := store.CapturePreWrite(reverted); err != nil {
+		t.Fatalf("capture reverted cp1: %v", err)
+	}
+	if err := os.WriteFile(reverted, []byte("B\n"), 0o644); err != nil {
+		t.Fatalf("write reverted B: %v", err)
+	}
+	if _, err := store.CapturePreWrite(transient); err != nil {
+		t.Fatalf("capture transient cp1: %v", err)
+	}
+	if err := os.WriteFile(transient, []byte("created\n"), 0o644); err != nil {
+		t.Fatalf("write transient: %v", err)
+	}
+	if _, err := store.FinalizeWithExactState("cp1"); err != nil {
+		t.Fatalf("FinalizeWithExactState(cp1): %v", err)
+	}
+	store.Reset()
+
+	if _, err := store.CapturePreWrite(reverted); err != nil {
+		t.Fatalf("capture reverted cp2: %v", err)
+	}
+	if err := os.WriteFile(reverted, []byte("A\n"), 0o644); err != nil {
+		t.Fatalf("restore reverted A: %v", err)
+	}
+	if _, err := store.CapturePreWrite(transient); err != nil {
+		t.Fatalf("capture transient cp2: %v", err)
+	}
+	if err := os.Remove(transient); err != nil {
+		t.Fatalf("remove transient: %v", err)
+	}
+	if _, err := store.FinalizeWithExactState("cp2"); err != nil {
+		t.Fatalf("FinalizeWithExactState(cp2): %v", err)
+	}
+	store.Reset()
+
+	patch, changes, err := store.DiffCheckpointsToCheckpoint(context.Background(), []string{"cp1", "cp2"}, "cp2")
+	if err != nil {
+		t.Fatalf("DiffCheckpointsToCheckpoint() error = %v", err)
+	}
+	if patch != "" || len(changes) != 0 {
+		t.Fatalf("expected empty aggregate diff, patch=%q changes=%+v", patch, changes)
+	}
+}
+
+func TestDiffCheckpointsToCheckpoint_FallsBackWhenExactStateMissing(t *testing.T) {
+	store, workdir := newTestStore(t)
+	abs := writeWorkdirFile(t, workdir, "tracked.txt", "A\n")
+
+	if _, err := store.CapturePreWrite(abs); err != nil {
+		t.Fatalf("capture cp1: %v", err)
+	}
+	if err := os.WriteFile(abs, []byte("B\n"), 0o644); err != nil {
+		t.Fatalf("write B: %v", err)
+	}
+	if _, err := store.Finalize("cp1"); err != nil {
+		t.Fatalf("Finalize(cp1): %v", err)
+	}
+	store.Reset()
+
+	if _, err := store.CapturePreWrite(abs); err != nil {
+		t.Fatalf("capture cp2: %v", err)
+	}
+	if err := os.WriteFile(abs, []byte("C\n"), 0o644); err != nil {
+		t.Fatalf("write C: %v", err)
+	}
+	if _, err := store.Finalize("cp2"); err != nil {
+		t.Fatalf("Finalize(cp2): %v", err)
+	}
+	store.Reset()
+
+	patch, changes, err := store.DiffCheckpointsToCheckpoint(context.Background(), []string{"cp1", "cp2"}, "cp2")
+	if err != nil {
+		t.Fatalf("DiffCheckpointsToCheckpoint() error = %v", err)
+	}
+	if len(changes) != 1 || changes[0].Path != "tracked.txt" || changes[0].Kind != FileChangeModified {
+		t.Fatalf("changes = %+v, want tracked.txt modified", changes)
+	}
+	if !strings.Contains(patch, "-A") || !strings.Contains(patch, "+C") {
+		t.Fatalf("patch should fall back to workdir and compare A to C, got:\n%s", patch)
+	}
+}
+
+// ──────────────────────── RunAggregateDiff tests ────────────────────────
+
+func TestRunAggregateDiff_ModifiedFileAcrossCheckpoints(t *testing.T) {
+	store, workdir := newTestStore(t)
+
+	absA := writeWorkdirFile(t, workdir, "a.txt", "original content\n")
+
+	// Turn 1: modify a.txt
+	v, err := store.CapturePreWrite(absA)
+	if err != nil {
+		t.Fatalf("capture turn1: %v", err)
+	}
+	if v != 1 {
+		t.Fatalf("first capture version = %d, want 1", v)
+	}
+	if err := os.WriteFile(absA, []byte("modified content\n"), 0o644); err != nil {
+		t.Fatalf("write turn1: %v", err)
+	}
+	if _, err := store.Finalize("cp1"); err != nil {
+		t.Fatalf("finalize cp1: %v", err)
+	}
+	store.Reset()
+
+	// Turn 2: modify a.txt again
+	v2, err := store.CapturePreWrite(absA)
+	if err != nil {
+		t.Fatalf("capture turn2: %v", err)
+	}
+	if v2 != 2 {
+		t.Fatalf("second capture version = %d, want 2", v2)
+	}
+	if err := os.WriteFile(absA, []byte("final content\n"), 0o644); err != nil {
+		t.Fatalf("write turn2: %v", err)
+	}
+	if _, err := store.Finalize("cp2"); err != nil {
+		t.Fatalf("finalize cp2: %v", err)
+	}
+	store.Reset()
+
+	patch, changes, err := store.RunAggregateDiff(context.Background(), []string{"cp1", "cp2"}, nil)
+	if err != nil {
+		t.Fatalf("RunAggregateDiff: %v", err)
+	}
+	if !strings.Contains(patch, "--- a/a.txt") {
+		t.Fatalf("patch missing a.txt header:\n%s", patch)
+	}
+	// baseline = v1.bin = "original content\n"
+	// current workdir = "final content\n"
+	if !strings.Contains(patch, "-original content") {
+		t.Fatalf("patch missing expected deletion line:\n%s", patch)
+	}
+	if !strings.Contains(patch, "+final content") {
+		t.Fatalf("patch missing expected addition line:\n%s", patch)
+	}
+	if len(changes) != 1 {
+		t.Fatalf("expected 1 change, got %d: %+v", len(changes), changes)
+	}
+	if changes[0].Path != "a.txt" || changes[0].Kind != FileChangeModified {
+		t.Fatalf("expected a.txt modified, got %+v", changes[0])
+	}
+}
+
+func TestRunAggregateDiff_CreatedFile(t *testing.T) {
+	store, workdir := newTestStore(t)
+
+	absB := filepath.Join(workdir, "b.txt")
+	// b.txt does not exist initially
+	v, err := store.CapturePreWrite(absB)
+	if err != nil {
+		t.Fatalf("capture: %v", err)
+	}
+	if v != 1 {
+		t.Fatalf("version = %d, want 1", v)
+	}
+	if err := os.WriteFile(absB, []byte("brand new file\n"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if _, err := store.Finalize("cp1"); err != nil {
+		t.Fatalf("finalize: %v", err)
+	}
+	store.Reset()
+
+	patch, changes, err := store.RunAggregateDiff(context.Background(), []string{"cp1"}, nil)
+	if err != nil {
+		t.Fatalf("RunAggregateDiff: %v", err)
+	}
+	if !strings.Contains(patch, "+++ b/b.txt") {
+		t.Fatalf("patch missing created file header:\n%s", patch)
+	}
+	if len(changes) != 1 {
+		t.Fatalf("expected 1 change, got %d: %+v", len(changes), changes)
+	}
+	if changes[0].Path != "b.txt" || changes[0].Kind != FileChangeAdded {
+		t.Fatalf("expected b.txt added, got %+v", changes[0])
+	}
+}
+
+func TestRunAggregateDiff_DeletedFile(t *testing.T) {
+	store, workdir := newTestStore(t)
+
+	absC := writeWorkdirFile(t, workdir, "c.txt", "will be deleted\n")
+
+	v, err := store.CapturePreWrite(absC)
+	if err != nil {
+		t.Fatalf("capture: %v", err)
+	}
+	if v != 1 {
+		t.Fatalf("version = %d, want 1", v)
+	}
+	if err := os.Remove(absC); err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+	if err := store.CapturePostDelete([]string{absC}); err != nil {
+		t.Fatalf("post-delete: %v", err)
+	}
+	if _, err := store.Finalize("cp1"); err != nil {
+		t.Fatalf("finalize: %v", err)
+	}
+	store.Reset()
+
+	patch, changes, err := store.RunAggregateDiff(context.Background(), []string{"cp1"}, nil)
+	if err != nil {
+		t.Fatalf("RunAggregateDiff: %v", err)
+	}
+	if len(changes) != 1 {
+		t.Fatalf("expected 1 change, got %d: %+v", len(changes), changes)
+	}
+	if changes[0].Path != "c.txt" || changes[0].Kind != FileChangeDeleted {
+		t.Fatalf("expected c.txt deleted, got %+v", changes[0])
+	}
+	if !strings.Contains(patch, "--- a/c.txt") || !strings.Contains(patch, "-will be deleted") {
+		t.Fatalf("patch missing deleted content:\n%s", patch)
+	}
+}
+
+func TestRunAggregateDiff_CreatedThenDeleted(t *testing.T) {
+	// Verify that a file created and deleted within the same run yields no net
+	// change in the aggregate diff.  Because CapturePostDelete writes directly
+	// to the index (not pending), we include a second-file capture in the same
+	// turn so that Finalize actually writes the checkpoint containing both
+	// files; otherwise the post-delete version is still in the index but the
+	// checkpoint meta file never gets created.
+	store, workdir := newTestStore(t)
+
+	absD := filepath.Join(workdir, "d.txt")
+	absE := writeWorkdirFile(t, workdir, "e.txt", "existing e\n")
+
+	// Create d.txt + modify e.txt in the same turn
+	if _, err := store.CapturePreWrite(absD); err != nil {
+		t.Fatalf("capture d: %v", err)
+	}
+	if _, err := store.CapturePreWrite(absE); err != nil {
+		t.Fatalf("capture e: %v", err)
+	}
+	if err := os.WriteFile(absD, []byte("ephemeral\n"), 0o644); err != nil {
+		t.Fatalf("write d: %v", err)
+	}
+	if err := os.WriteFile(absE, []byte("modified e\n"), 0o644); err != nil {
+		t.Fatalf("write e: %v", err)
+	}
+	if _, err := store.Finalize("cp1"); err != nil {
+		t.Fatalf("finalize cp1: %v", err)
+	}
+	store.Reset()
+
+	// Delete d.txt in the next turn.
+	if err := os.Remove(absD); err != nil {
+		t.Fatalf("remove d: %v", err)
+	}
+	if err := store.CapturePostDelete([]string{absD}); err != nil {
+		t.Fatalf("post-delete d: %v", err)
+	}
+	// Need at least one CapturePreWrite so Finalize produces a checkpoint.
+	if _, err := store.CapturePreWrite(absE); err != nil {
+		t.Fatalf("capture e turn2: %v", err)
+	}
+	if _, err := store.Finalize("cp2"); err != nil {
+		t.Fatalf("finalize cp2: %v", err)
+	}
+	store.Reset()
+
+	_, changes, err := store.RunAggregateDiff(context.Background(), []string{"cp1", "cp2"}, nil)
+	if err != nil {
+		t.Fatalf("RunAggregateDiff: %v", err)
+	}
+	// d.txt: created then deleted → no net change
+	// e.txt: modified once → 1 change
+	if len(changes) != 1 {
+		t.Fatalf("expected 1 change (e.txt modified only, d.txt cancelled out), got %d: %+v", len(changes), changes)
+	}
+	if changes[0].Path != "e.txt" || changes[0].Kind != FileChangeModified {
+		t.Fatalf("expected e.txt modified, got %+v", changes[0])
+	}
+}
+
+func TestRunAggregateDiff_UnchangedFileOmitted(t *testing.T) {
+	store, workdir := newTestStore(t)
+
+	abs := writeWorkdirFile(t, workdir, "e.txt", "same content\n")
+
+	// Touch but revert to same content
+	if _, err := store.CapturePreWrite(abs); err != nil {
+		t.Fatalf("capture: %v", err)
+	}
+	// Write different content temporarily
+	if err := os.WriteFile(abs, []byte("different\n"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if _, err := store.Finalize("cp1"); err != nil {
+		t.Fatalf("finalize cp1: %v", err)
+	}
+	store.Reset()
+
+	// Second touch: revert back to the original "same content\n"
+	if _, err := store.CapturePreWrite(abs); err != nil {
+		t.Fatalf("capture 2: %v", err)
+	}
+	if err := os.WriteFile(abs, []byte("same content\n"), 0o644); err != nil {
+		t.Fatalf("write back: %v", err)
+	}
+	if _, err := store.Finalize("cp2"); err != nil {
+		t.Fatalf("finalize cp2: %v", err)
+	}
+	store.Reset()
+
+	_, changes, err := store.RunAggregateDiff(context.Background(), []string{"cp1", "cp2"}, nil)
+	if err != nil {
+		t.Fatalf("RunAggregateDiff: %v", err)
+	}
+	if len(changes) != 0 {
+		t.Fatalf("expected 0 changes (end-to-end content unchanged), got %d: %+v", len(changes), changes)
+	}
+}
+
+func TestRunAggregateDiff_EmptyCheckpointIDs(t *testing.T) {
+	store, _ := newTestStore(t)
+	patch, changes, err := store.RunAggregateDiff(context.Background(), nil, nil)
+	if err != nil {
+		t.Fatalf("RunAggregateDiff with nil: %v", err)
+	}
+	if patch != "" {
+		t.Fatalf("expected empty patch for nil input, got: %s", patch)
+	}
+	if len(changes) != 0 {
+		t.Fatalf("expected 0 changes for nil input, got %d", len(changes))
+	}
+}
+
+func TestRunAggregateDiff_NonexistentCheckpoint(t *testing.T) {
+	store, _ := newTestStore(t)
+	_, _, err := store.RunAggregateDiff(context.Background(), []string{"nonexistent_cp"}, nil)
+	if err == nil {
+		t.Fatal("expected error for nonexistent checkpoint")
+	}
+	if !strings.Contains(err.Error(), "nonexistent_cp") {
+		t.Fatalf("error should mention checkpoint ID, got: %v", err)
+	}
+}
+
+func TestRunAggregateDiff_MultipleFilesAggregated(t *testing.T) {
+	store, workdir := newTestStore(t)
+
+	absA := writeWorkdirFile(t, workdir, "a.txt", "old a\n")
+	absB := filepath.Join(workdir, "b.txt") // will be created
+
+	// Turn 1: modify a.txt, create b.txt
+	if _, err := store.CapturePreWrite(absA); err != nil {
+		t.Fatalf("capture a: %v", err)
+	}
+	if _, err := store.CapturePreWrite(absB); err != nil {
+		t.Fatalf("capture b: %v", err)
+	}
+	if err := os.WriteFile(absA, []byte("new a\n"), 0o644); err != nil {
+		t.Fatalf("write a: %v", err)
+	}
+	if err := os.WriteFile(absB, []byte("new b\n"), 0o644); err != nil {
+		t.Fatalf("write b: %v", err)
+	}
+	if _, err := store.Finalize("cp1"); err != nil {
+		t.Fatalf("finalize: %v", err)
+	}
+	store.Reset()
+
+	patch, changes, err := store.RunAggregateDiff(context.Background(), []string{"cp1"}, nil)
+	if err != nil {
+		t.Fatalf("RunAggregateDiff: %v", err)
+	}
+	if len(changes) != 2 {
+		t.Fatalf("expected 2 changes, got %d: %+v", len(changes), changes)
+	}
+	var kinds = map[string]FileChangeKind{}
+	for _, c := range changes {
+		kinds[c.Path] = c.Kind
+	}
+	if kinds["a.txt"] != FileChangeModified {
+		t.Fatalf("a.txt kind = %v, want modified", kinds["a.txt"])
+	}
+	if kinds["b.txt"] != FileChangeAdded {
+		t.Fatalf("b.txt kind = %v, want added", kinds["b.txt"])
+	}
+	if !strings.Contains(patch, "a.txt") || !strings.Contains(patch, "b.txt") {
+		t.Fatalf("patch missing file headers:\n%s", patch)
+	}
+}
+
+func TestRunAggregateDiff_HistoricalFileFilteredByVersion(t *testing.T) {
+	store, workdir := newTestStore(t)
+
+	// Simulate "previous run": capture file A, finalize prev_cp.
+	absA := writeWorkdirFile(t, workdir, "a.txt", "from prev run\n")
+	if _, err := store.CapturePreWrite(absA); err != nil {
+		t.Fatalf("capture a: %v", err)
+	}
+	if err := os.WriteFile(absA, []byte("modified in prev run\n"), 0o644); err != nil {
+		t.Fatalf("write a: %v", err)
+	}
+	if _, err := store.Finalize("prev_cp"); err != nil {
+		t.Fatalf("finalize prev_cp: %v", err)
+	}
+	store.Reset()
+
+	// Get prev run's FileVersions.
+	prevFV, err := store.GetCheckpointFileVersions("prev_cp")
+	if err != nil {
+		t.Fatalf("get prev vers: %v", err)
+	}
+
+	// "Current run": capture file B only, a.txt is NOT touched.
+	absB := writeWorkdirFile(t, workdir, "b.txt", "old b\n")
+	if _, err := store.CapturePreWrite(absB); err != nil {
+		t.Fatalf("capture b: %v", err)
+	}
+	if err := os.WriteFile(absB, []byte("new b\n"), 0o644); err != nil {
+		t.Fatalf("write b: %v", err)
+	}
+	if _, err := store.Finalize("cur_cp1"); err != nil {
+		t.Fatalf("finalize cur_cp1: %v", err)
+	}
+	store.Reset()
+
+	// Second checkpoint in current run (still no touch on a.txt).
+	if _, err := store.Finalize("cur_cp2"); err != nil {
+		t.Fatalf("finalize cur_cp2: %v", err)
+	}
+	store.Reset()
+
+	patch, changes, err := store.RunAggregateDiff(context.Background(),
+		[]string{"cur_cp1", "cur_cp2"}, prevFV)
+	if err != nil {
+		t.Fatalf("RunAggregateDiff: %v", err)
+	}
+	// a.txt should be filtered out: version unchanged from prev run.
+	// b.txt should appear.
+	if len(changes) != 1 {
+		t.Fatalf("expected 1 change (b.txt only), got %d: %+v", len(changes), changes)
+	}
+	if changes[0].Path != "b.txt" {
+		t.Fatalf("expected b.txt, got %s", changes[0].Path)
+	}
+	if strings.Contains(patch, "a.txt") {
+		t.Fatalf("patch should NOT contain a.txt (filtered by version):\n%s", patch)
 	}
 }

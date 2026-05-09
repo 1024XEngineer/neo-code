@@ -65,6 +65,10 @@ type NetworkServerOptions struct {
 	ACL                          *ControlPlaneACL
 	Metrics                      *GatewayMetrics
 	AllowedOrigins               []string
+	// RunnerRegistry 可选：runner 注册中心。
+	RunnerRegistry *RunnerRegistry
+	// RunnerToolManager 可选：runner 工具管理器。
+	RunnerToolManager *RunnerToolManager
 	// ConnectionCountChanged 在活跃长连接数变化时回调当前总数，用于空闲退出治理。
 	ConnectionCountChanged func(active int)
 	// StaticFileDir 可选：如果非空，从该目录提供 SPA 静态文件服务。
@@ -76,25 +80,27 @@ type NetworkServerOptions struct {
 
 // NetworkServer 提供 HTTP/WebSocket/SSE 网络访问面的统一入口服务。
 type NetworkServer struct {
-	listenAddress        string
-	logger               *log.Logger
-	readTimeout          time.Duration
-	writeTimeout         time.Duration
-	shutdownTimeout      time.Duration
-	heartbeatInterval    time.Duration
-	unauthenticatedWSTTL time.Duration
-	maxRequestBytes      int64
-	maxStreamConnections int
-	listenFn             func(network, address string) (net.Listener, error)
-	relay                *StreamRelay
-	authenticator        TokenAuthenticator
-	acl                  *ControlPlaneACL
-	metrics              *GatewayMetrics
-	allowedOrigins       []string
+	listenAddress          string
+	logger                 *log.Logger
+	readTimeout            time.Duration
+	writeTimeout           time.Duration
+	shutdownTimeout        time.Duration
+	heartbeatInterval      time.Duration
+	unauthenticatedWSTTL   time.Duration
+	maxRequestBytes        int64
+	maxStreamConnections   int
+	listenFn               func(network, address string) (net.Listener, error)
+	relay                  *StreamRelay
+	authenticator          TokenAuthenticator
+	acl                    *ControlPlaneACL
+	metrics                *GatewayMetrics
+	allowedOrigins         []string
 	connectionCountChanged func(active int)
 	staticFileDir          string
 	staticFileFS           fs.FS
 	startedAt              time.Time
+	runnerRegistry         *RunnerRegistry
+	runnerToolManager      *RunnerToolManager
 
 	mu         sync.Mutex
 	server     *http.Server
@@ -176,25 +182,27 @@ func NewNetworkServer(options NetworkServerOptions) (*NetworkServer, error) {
 	}
 
 	return &NetworkServer{
-		listenAddress:        listenAddress,
-		logger:               logger,
-		readTimeout:          readTimeout,
-		writeTimeout:         writeTimeout,
-		shutdownTimeout:      shutdownTimeout,
-		heartbeatInterval:    heartbeatInterval,
-		unauthenticatedWSTTL: unauthenticatedWSTTL,
-		maxRequestBytes:      maxRequestBytes,
-		maxStreamConnections: maxStreamConnections,
-		listenFn:             listenFn,
-		relay:                relay,
-		authenticator:        authenticator,
-		acl:                  acl,
-		metrics:              metrics,
-		allowedOrigins:       allowedOrigins,
+		listenAddress:          listenAddress,
+		logger:                 logger,
+		readTimeout:            readTimeout,
+		writeTimeout:           writeTimeout,
+		shutdownTimeout:        shutdownTimeout,
+		heartbeatInterval:      heartbeatInterval,
+		unauthenticatedWSTTL:   unauthenticatedWSTTL,
+		maxRequestBytes:        maxRequestBytes,
+		maxStreamConnections:   maxStreamConnections,
+		listenFn:               listenFn,
+		relay:                  relay,
+		authenticator:          authenticator,
+		acl:                    acl,
+		metrics:                metrics,
+		allowedOrigins:         allowedOrigins,
 		connectionCountChanged: options.ConnectionCountChanged,
 		staticFileDir:          options.StaticFileDir,
 		staticFileFS:           options.StaticFileFS,
 		startedAt:              time.Now().UTC(),
+		runnerRegistry:         options.RunnerRegistry,
+		runnerToolManager:      options.RunnerToolManager,
 		wsConns:                make(map[*websocket.Conn]context.CancelFunc),
 		sseCancels:             make(map[int]context.CancelFunc),
 	}, nil
@@ -559,6 +567,12 @@ func (s *NetworkServer) handleWebSocket(conn *websocket.Conn, runtimePort Runtim
 	connectionContext = s.decorateRequestContext(connectionContext, RequestSourceWS, requestToken)
 	connectionContext = WithConnectionID(connectionContext, connectionID)
 	connectionContext = WithStreamRelay(connectionContext, relay)
+	if s.runnerRegistry != nil {
+		connectionContext = WithRunnerRegistry(connectionContext, s.runnerRegistry)
+	}
+	if s.runnerToolManager != nil {
+		connectionContext = WithRunnerToolManager(connectionContext, s.runnerToolManager)
+	}
 
 	if !s.registerWSConnection(conn, cancelConnection) {
 		_ = conn.SetWriteDeadline(time.Now().Add(s.writeTimeout))
@@ -607,6 +621,9 @@ func (s *NetworkServer) handleWebSocket(conn *websocket.Conn, runtimePort Runtim
 
 	defer func() {
 		s.unregisterWSConnection(conn)
+		if s.runnerRegistry != nil {
+			s.runnerRegistry.OnConnectionDropped(connectionID)
+		}
 		relay.dropConnection(connectionID)
 		_ = conn.Close()
 	}()

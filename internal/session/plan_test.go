@@ -250,7 +250,7 @@ func TestNormalizePlanArtifactEmptyID(t *testing.T) {
 	t.Parallel()
 
 	_, err := NormalizePlanArtifact(&PlanArtifact{
-		ID:  "",
+		ID: "",
 		Spec: PlanSpec{
 			Goal:   "测试",
 			Steps:  []string{"步骤一"},
@@ -404,7 +404,7 @@ func TestNormalizePlanArtifactSpecErrorPropagated(t *testing.T) {
 	t.Parallel()
 
 	_, err := NormalizePlanArtifact(&PlanArtifact{
-		ID:  "plan-err",
+		ID: "plan-err",
 		Spec: PlanSpec{
 			Goal: "",
 			Todos: []TodoItem{

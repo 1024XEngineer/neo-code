@@ -105,6 +105,14 @@ func (s *urlschemeIntegrationRuntimeStub) Run(context.Context, gateway.RunInput)
 	return nil
 }
 
+func (s *urlschemeIntegrationRuntimeStub) Ask(context.Context, gateway.AskInput) error {
+	return nil
+}
+
+func (s *urlschemeIntegrationRuntimeStub) DeleteAskSession(context.Context, gateway.DeleteAskSessionInput) (bool, error) {
+	return true, nil
+}
+
 func (s *urlschemeIntegrationRuntimeStub) Compact(context.Context, gateway.CompactInput) (gateway.CompactResult, error) {
 	return gateway.CompactResult{}, nil
 }
@@ -147,6 +155,13 @@ func (s *urlschemeIntegrationRuntimeStub) ListAvailableSkills(
 func (s *urlschemeIntegrationRuntimeStub) ResolvePermission(
 	context.Context,
 	gateway.PermissionResolutionInput,
+) error {
+	return nil
+}
+
+func (s *urlschemeIntegrationRuntimeStub) ResolveUserQuestion(
+	context.Context,
+	gateway.UserQuestionAnswerInput,
 ) error {
 	return nil
 }
@@ -198,6 +213,16 @@ func (s *urlschemeIntegrationRuntimeStub) RenameSession(context.Context, gateway
 
 func (s *urlschemeIntegrationRuntimeStub) ListFiles(context.Context, gateway.ListFilesInput) ([]gateway.FileEntry, error) {
 	return nil, nil
+}
+
+func (s *urlschemeIntegrationRuntimeStub) ReadFile(context.Context, gateway.ReadFileInput) (gateway.ReadFileResult, error) {
+	return gateway.ReadFileResult{}, nil
+}
+func (s *urlschemeIntegrationRuntimeStub) ListGitDiffFiles(context.Context, gateway.ListGitDiffFilesInput) (gateway.ListGitDiffFilesResult, error) {
+	return gateway.ListGitDiffFilesResult{}, nil
+}
+func (s *urlschemeIntegrationRuntimeStub) ReadGitDiffFile(context.Context, gateway.ReadGitDiffFileInput) (gateway.ReadGitDiffFileResult, error) {
+	return gateway.ReadGitDiffFileResult{}, nil
 }
 
 func (s *urlschemeIntegrationRuntimeStub) ListModels(context.Context, gateway.ListModelsInput) ([]gateway.ModelEntry, error) {

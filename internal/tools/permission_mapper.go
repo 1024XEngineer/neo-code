@@ -156,6 +156,11 @@ func buildPermissionAction(input ToolCallInput) (security.Action, error) {
 		action.Payload.Operation = "diagnose"
 		action.Payload.TargetType = security.TargetTypeCommand
 		action.Payload.Target = "diagnose"
+	case ToolNameAskUser:
+		action.Type = security.ActionTypeInteraction
+		action.Payload.Operation = "ask_user"
+		action.Payload.TargetType = security.TargetTypeCommand
+		action.Payload.Target = "ask_user"
 	default:
 		if strings.HasPrefix(strings.ToLower(toolName), "mcp.") {
 			toolIdentity := normalizeMCPToolIdentity(toolName)

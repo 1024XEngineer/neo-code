@@ -33,11 +33,13 @@ type persistedConfig struct {
 	Memo                    persistedMemoConfig    `yaml:"memo,omitempty"`
 	Gateway                 GatewayConfig          `yaml:"gateway,omitempty"`
 	Feishu                  FeishuConfig           `yaml:"feishu,omitempty"`
+	Runner                  RunnerConfig           `yaml:"runner,omitempty"`
 }
 
 type persistedContextConfig struct {
 	Compact persistedCompactConfig `yaml:"compact,omitempty"`
 	Budget  persistedBudgetConfig  `yaml:"budget,omitempty"`
+	Ask     persistedAskConfig     `yaml:"ask,omitempty"`
 }
 
 type persistedCompactConfig struct {
@@ -55,6 +57,12 @@ type persistedBudgetConfig struct {
 	ReserveTokens        int `yaml:"reserve_tokens,omitempty"`
 	FallbackPromptBudget int `yaml:"fallback_prompt_budget,omitempty"`
 	MaxReactiveCompacts  int `yaml:"max_reactive_compacts,omitempty"`
+}
+
+type persistedAskConfig struct {
+	MaxInputTokens  int `yaml:"max_input_tokens,omitempty"`
+	RetainTurns     int `yaml:"retain_turns,omitempty"`
+	SummaryMaxChars int `yaml:"summary_max_chars,omitempty"`
 }
 
 type persistedMemoConfig struct {
@@ -238,6 +246,7 @@ func parseCurrentConfig(data []byte, contextDefaults ContextConfig, memoDefaults
 		Memo:                    fromPersistedMemoConfig(file.Memo, memoDefaults),
 		Gateway:                 file.Gateway,
 		Feishu:                  file.Feishu,
+		Runner:                  file.Runner,
 	}
 
 	return cfg, nil
@@ -256,6 +265,7 @@ func marshalPersistedConfig(snapshot Config) ([]byte, error) {
 		Memo:                    newPersistedMemoConfig(snapshot.Memo),
 		Gateway:                 snapshot.Gateway,
 		Feishu:                  snapshot.Feishu,
+		Runner:                  snapshot.Runner,
 	}
 
 	data, err := yaml.Marshal(&file)
@@ -286,6 +296,11 @@ func newPersistedContextConfig(cfg ContextConfig) persistedContextConfig {
 			FallbackPromptBudget: cfg.Budget.FallbackPromptBudget,
 			MaxReactiveCompacts:  cfg.Budget.MaxReactiveCompacts,
 		},
+		Ask: persistedAskConfig{
+			MaxInputTokens:  cfg.Ask.MaxInputTokens,
+			RetainTurns:     cfg.Ask.RetainTurns,
+			SummaryMaxChars: cfg.Ask.SummaryMaxChars,
+		},
 	}
 }
 
@@ -307,9 +322,15 @@ func fromPersistedContextConfig(file persistedContextConfig, defaults ContextCon
 			FallbackPromptBudget: file.Budget.FallbackPromptBudget,
 			MaxReactiveCompacts:  file.Budget.MaxReactiveCompacts,
 		},
+		Ask: AskConfig{
+			MaxInputTokens:  file.Ask.MaxInputTokens,
+			RetainTurns:     file.Ask.RetainTurns,
+			SummaryMaxChars: file.Ask.SummaryMaxChars,
+		},
 	}
 	out.Compact.ApplyDefaults(defaults.Compact)
 	out.Budget.ApplyDefaults(defaults.Budget)
+	out.Ask.ApplyDefaults(defaults.Ask)
 	return out
 }
 

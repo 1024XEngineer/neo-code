@@ -11,6 +11,7 @@ import (
 
 	providertypes "neo-code/internal/provider/types"
 	approvalflow "neo-code/internal/runtime/approval"
+	"neo-code/internal/runtime/askuser"
 	"neo-code/internal/runtime/controlplane"
 	runtimehooks "neo-code/internal/runtime/hooks"
 	"neo-code/internal/security"
@@ -21,6 +22,14 @@ import (
 type PermissionResolutionInput struct {
 	RequestID string
 	Decision  PermissionResolutionDecision
+}
+
+// UserQuestionResolutionInput 描述一次来自客户端的 ask_user 回答。
+type UserQuestionResolutionInput struct {
+	RequestID string
+	Status    string
+	Values    []string
+	Message   string
 }
 
 // PermissionResolutionDecision 表示用户在审批弹层中的最终选择。
@@ -48,6 +57,8 @@ const (
 	minInlineSubAgentToolTimeout     = 30 * time.Second
 	defaultDiagnoseToolTimeout       = 60 * time.Second
 	defaultPermissionToolTimeout     = 20 * time.Second
+	defaultAskUserToolTimeout        = 5 * time.Minute
+	maxAskUserToolTimeout            = time.Hour
 )
 
 // permissionExecutionInput 汇总一次工具执行与审批协作所需的上下文。
@@ -81,14 +92,48 @@ func (s *Service) ResolvePermission(ctx context.Context, input PermissionResolut
 	}
 }
 
+// ResolveUserQuestion 接收客户端的 ask_user 回答，提交给等待中的 broker。
+func (s *Service) ResolveUserQuestion(ctx context.Context, input UserQuestionResolutionInput) error {
+	requestID := strings.TrimSpace(input.RequestID)
+	if requestID == "" {
+		return errors.New("runtime: user question request id is empty")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	status := strings.ToLower(strings.TrimSpace(input.Status))
+	switch status {
+	case askuser.StatusAnswered, askuser.StatusSkipped:
+		// valid
+	case "":
+		status = askuser.StatusAnswered
+	default:
+		return fmt.Errorf("runtime: unsupported user question status %q", input.Status)
+	}
+
+	result := askuser.Result{
+		Status:  status,
+		Values:  input.Values,
+		Message: strings.TrimSpace(input.Message),
+	}
+
+	return s.askUserBroker.Resolve(requestID, result)
+}
+
 // executeToolCallWithPermission 执行工具调用，并在 ask/deny 路径上统一发出权限事件。
 func (s *Service) executeToolCallWithPermission(ctx context.Context, input permissionExecutionInput) (tools.ToolResult, error) {
+	mode := ""
+	if input.State != nil {
+		mode = resolvePlanningStageForState(input.State)
+	}
 	callInput := tools.ToolCallInput{
 		ID:              input.Call.ID,
 		Name:            input.Call.Name,
 		Arguments:       []byte(input.Call.Arguments),
 		Workdir:         input.Workdir,
-		ReadOnly:        input.State != nil && isReadOnlyPlanningStage(resolvePlanningStageForState(input.State)),
+		ReadOnly:        input.State != nil && isReadOnlyPlanningStage(mode),
+		Mode:            mode,
 		SessionID:       input.SessionID,
 		TaskID:          input.TaskID,
 		AgentID:         input.AgentID,
@@ -100,6 +145,24 @@ func (s *Service) executeToolCallWithPermission(ctx context.Context, input permi
 			return s.emit(ctx, EventToolChunk, input.RunID, input.SessionID, string(chunk))
 		},
 	}
+	if strings.EqualFold(input.Call.Name, tools.ToolNameAskUser) {
+		callInput.AskUserEventEmitter = func(eventName string, payload any) {
+			eventType := eventTypeFromAskUserEvent(eventName)
+			if eventName == "user_question_requested" {
+				if question, ok := parseAskUserRequestedPayload(payload); ok {
+					s.setPendingUserQuestion(input.State, question)
+					s.emitRuntimeSnapshotUpdated(ctx, input.State, "user_question_requested")
+				}
+				s.emitRunScopedPriority(eventType, input.State, payload)
+			} else {
+				if resolved, ok := parseAskUserResolvedPayload(payload); ok {
+					s.clearPendingUserQuestionIfMatches(input.State, resolved.RequestID)
+					s.emitRuntimeSnapshotUpdated(ctx, input.State, "user_question_"+strings.TrimSpace(resolved.Status))
+				}
+				s.emitRunScopedOptional(eventType, input.State, payload)
+			}
+		}
+	}
 	if input.State != nil {
 		callInput.SessionMutator = newRuntimeSessionMutator(ctx, s, input.State)
 	}
@@ -107,8 +170,16 @@ func (s *Service) executeToolCallWithPermission(ctx context.Context, input permi
 
 	effectiveTimeout := resolveToolExecutionTimeout(input.Call, input.ToolTimeout)
 	runCtx, cancel := context.WithTimeout(ctx, effectiveTimeout)
+	defer cancel()
+
+	if s.runnerToolDispatcher != nil {
+		result, handled, dispatchErr := s.runnerToolDispatcher.TryDispatch(runCtx, input.SessionID, input.RunID, callInput)
+		if handled {
+			return result, dispatchErr
+		}
+	}
+
 	result, execErr := s.toolManager.Execute(runCtx, callInput)
-	cancel()
 	if execErr == nil {
 		return result, nil
 	}
@@ -241,6 +312,17 @@ func resolveToolExecutionTimeout(call providertypes.ToolCall, fallback time.Dura
 		}
 		return base
 	}
+	if strings.EqualFold(name, tools.ToolNameAskUser) {
+		requested := parseAskUserTimeoutFromArguments(call.Arguments)
+		if requested <= 0 {
+			requested = defaultAskUserToolTimeout
+		}
+		requested = clampDuration(requested, defaultAskUserToolTimeout, maxAskUserToolTimeout)
+		if requested > base {
+			return requested
+		}
+		return base
+	}
 	if !strings.EqualFold(name, tools.ToolNameSpawnSubAgent) {
 		return base
 	}
@@ -257,6 +339,20 @@ func resolveToolExecutionTimeout(call providertypes.ToolCall, fallback time.Dura
 		return requested
 	}
 	return base
+}
+
+// parseAskUserTimeoutFromArguments 解析 ask_user 的 timeout_sec，并返回持续时间。
+func parseAskUserTimeoutFromArguments(raw string) time.Duration {
+	if strings.TrimSpace(raw) == "" {
+		return 0
+	}
+	var payload struct {
+		TimeoutSec int `json:"timeout_sec"`
+	}
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		return 0
+	}
+	return time.Duration(payload.TimeoutSec) * time.Second
 }
 
 // parseSpawnSubAgentRuntimeOptions 提取 spawn_subagent 的运行模式与 timeout_sec 参数。
@@ -424,6 +520,22 @@ func rememberScopeFromDecision(decision PermissionResolutionDecision) (tools.Ses
 		return tools.SessionPermissionScopeReject, nil
 	default:
 		return "", fmt.Errorf("runtime: unsupported permission decision %q", decision)
+	}
+}
+
+// eventTypeFromAskUserEvent 将 ask_user 事件名映射为 RuntimeEvent 类型。
+func eventTypeFromAskUserEvent(eventName string) EventType {
+	switch eventName {
+	case "user_question_requested":
+		return EventUserQuestionRequested
+	case "user_question_answered":
+		return EventUserQuestionAnswered
+	case "user_question_skipped":
+		return EventUserQuestionSkipped
+	case "user_question_timeout":
+		return EventUserQuestionTimeout
+	default:
+		return EventError
 	}
 }
 

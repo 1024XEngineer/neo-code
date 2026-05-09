@@ -13,11 +13,12 @@ import (
 	"neo-code/internal/config"
 	agentcontext "neo-code/internal/context"
 	contextcompact "neo-code/internal/context/compact"
-	"neo-code/internal/repository"
 	"neo-code/internal/provider"
 	"neo-code/internal/provider/builtin"
 	providertypes "neo-code/internal/provider/types"
+	"neo-code/internal/repository"
 	"neo-code/internal/runtime/approval"
+	"neo-code/internal/runtime/askuser"
 	runtimehooks "neo-code/internal/runtime/hooks"
 	"neo-code/internal/security"
 	agentsession "neo-code/internal/session"
@@ -34,11 +35,14 @@ const (
 // Runtime 定义 runtime 对外暴露的运行、压缩与审批接口。
 type Runtime interface {
 	Submit(ctx context.Context, input PrepareInput) error
+	Ask(ctx context.Context, input AskInput) error
+	DeleteAskSession(ctx context.Context, input DeleteAskSessionInput) (bool, error)
 	PrepareUserInput(ctx context.Context, input PrepareInput) (UserInput, error)
 	Run(ctx context.Context, input UserInput) error
 	Compact(ctx context.Context, input CompactInput) (CompactResult, error)
 	ExecuteSystemTool(ctx context.Context, input SystemToolInput) (tools.ToolResult, error)
 	ResolvePermission(ctx context.Context, input PermissionResolutionInput) error
+	ResolveUserQuestion(ctx context.Context, input UserQuestionResolutionInput) error
 	CancelActiveRun() bool
 	Events() <-chan RuntimeEvent
 	ListSessions(ctx context.Context) ([]agentsession.Summary, error)
@@ -56,14 +60,16 @@ type PlanApprover interface {
 
 // UserInput 描述一次用户输入请求的最小运行参数。
 type UserInput struct {
-	SessionID       string
-	RunID           string
-	Parts           []providertypes.ContentPart
-	Workdir         string
-	Mode            string
-	TaskID          string
-	AgentID         string
-	CapabilityToken *security.CapabilityToken
+	SessionID        string
+	RunID            string
+	Parts            []providertypes.ContentPart
+	Workdir          string
+	Mode             string
+	TaskID           string
+	AgentID          string
+	DisableTools     bool
+	ThinkingOverride *ThinkingOverride
+	CapabilityToken  *security.CapabilityToken
 }
 
 // UserImageInput 表示用户输入中附带的单个图片引用（路径 + MIME）。
@@ -80,6 +86,7 @@ type PrepareInput struct {
 	Mode             string
 	Text             string
 	Images           []UserImageInput
+	DisableTools     bool              `json:"disable_tools,omitempty"`
 	ThinkingOverride *ThinkingOverride `json:"thinking_override,omitempty"`
 }
 
@@ -96,6 +103,20 @@ type SystemToolInput struct {
 	Workdir   string
 	ToolName  string
 	Arguments []byte
+}
+
+// AskInput 描述一次 Ask 轻量问答请求。
+type AskInput struct {
+	SessionID string
+	RunID     string
+	Workdir   string
+	UserQuery string
+	Skills    []string
+}
+
+// DeleteAskSessionInput 描述一次 Ask 会话删除请求。
+type DeleteAskSessionInput struct {
+	SessionID string
 }
 
 // PreparedInputResult 描述输入归一化完成后的结果快照（标准 UserInput + 本轮保存附件元数据）。
@@ -161,6 +182,7 @@ type Service struct {
 	repositoryService repositoryFactService
 	compactRunner     contextcompact.Runner
 	approvalBroker    *approval.Broker
+	askUserBroker     *askuser.Broker
 	memoExtractor     MemoExtractor
 	skillsRegistry    skills.Registry
 	budgetResolver    BudgetResolver
@@ -182,8 +204,23 @@ type Service struct {
 	activeRunStates    map[uint64]*runState
 	permissionAskMapMu sync.Mutex
 	permissionAskLocks map[string]*permissionAskLockEntry
+	askStore           AskSessionStore
+	askSequence        uint64
 
 	thinkingEnabled bool
+
+	runnerToolDispatcher RunnerToolDispatcher
+}
+
+// RunnerToolDispatcher 可选：将工具执行分发到远程 runner。
+// 返回 (result, handled, error)。handled=false 表示继续走本地执行。
+type RunnerToolDispatcher interface {
+	TryDispatch(ctx context.Context, sessionID, runID string, input tools.ToolCallInput) (tools.ToolResult, bool, error)
+}
+
+// SetRunnerToolDispatcher 设置远程工具分发器。
+func (s *Service) SetRunnerToolDispatcher(d RunnerToolDispatcher) {
+	s.runnerToolDispatcher = d
 }
 
 // sessionLockEntry 维护单个会话读写锁及其当前引用计数，用于在无引用时回收 map 项。
@@ -231,6 +268,7 @@ func NewWithFactory(
 		contextBuilder:     contextBuilder,
 		repositoryService:  repository.NewService(),
 		approvalBroker:     approval.NewBroker(),
+		askUserBroker:      askuser.NewBroker(),
 		events:             make(chan RuntimeEvent, 128),
 		runtimeSnapshots:   make(map[string]RuntimeSnapshot),
 		sessionLocks:       make(map[string]*sessionLockEntry),
@@ -239,6 +277,7 @@ func NewWithFactory(
 		activeRunByID:      make(map[string]uint64),
 		activeRunTokenIDs:  make(map[uint64]string),
 		activeRunStates:    make(map[uint64]*runState),
+		askStore:           newInMemoryAskSessionStore(askSessionTTL),
 		thinkingEnabled:    true,
 	}
 	baseHookExecutor := runtimehooks.NewExecutor(runtimehooks.NewRegistry(), newHookRuntimeEventEmitter(service), runtimehooks.DefaultHookTimeout)
@@ -387,6 +426,9 @@ func (s *Service) LoadSession(ctx context.Context, id string) (agentsession.Sess
 	if err != nil {
 		return agentsession.Session{}, err
 	}
+	if err := s.repairSessionTranscriptIfNeeded(ctx, &session); err != nil {
+		return agentsession.Session{}, err
+	}
 	return session, nil
 }
 
@@ -408,7 +450,7 @@ func (s *Service) CreateSession(ctx context.Context, id string) (agentsession.Se
 		return agentsession.Session{}, err
 	}
 
-	existing, err := s.sessionStore.LoadSession(ctx, sessionID)
+	existing, err := s.LoadSession(ctx, sessionID)
 	if err == nil {
 		return existing, nil
 	}
@@ -424,7 +466,7 @@ func (s *Service) CreateSession(ctx context.Context, id string) (agentsession.Se
 		return created, nil
 	}
 	if isRuntimeSessionAlreadyExistsError(createErr) {
-		return s.sessionStore.LoadSession(ctx, sessionID)
+		return s.LoadSession(ctx, sessionID)
 	}
 	return agentsession.Session{}, createErr
 }
@@ -492,4 +534,13 @@ func (s *Service) SetHookExecutor(executor HookExecutor) {
 func (s *Service) SetCheckpointDependencies(store checkpoint.CheckpointStore, perEdit *checkpoint.PerEditSnapshotStore) {
 	s.checkpointStore = store
 	s.perEditStore = perEdit
+}
+
+// AskUserBrokerAdapter returns a tools.AskUserBroker backed by this runtime's ask_user broker.
+// Returns nil if the broker hasn't been initialized.
+func (s *Service) AskUserBrokerAdapter() tools.AskUserBroker {
+	if s.askUserBroker == nil {
+		return nil
+	}
+	return newAskUserBrokerAdapter(s.askUserBroker)
 }

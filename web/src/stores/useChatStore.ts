@@ -1,5 +1,10 @@
 import { create } from 'zustand'
-import { type TokenUsage, type PermissionRequestPayload, type AcceptanceDecidedPayload } from '@/api/protocol'
+import {
+  type TokenUsage,
+  type PermissionRequestPayload,
+  type AcceptanceDecidedPayload,
+  type PendingUserQuestionSnapshot,
+} from '@/api/protocol'
 import { type VerificationRunRecord } from '@/stores/useRuntimeInsightStore'
 import { resetEventBridgeCursors } from '@/utils/eventBridge'
 
@@ -50,6 +55,8 @@ interface ChatState {
   streamingThinkingMessageId: string
   /** 权限请求列表 */
   permissionRequests: PermissionRequestPayload[]
+  /** 当前待回答 ask_user 问题（v1 单活跃） */
+  pendingUserQuestion: PendingUserQuestionSnapshot | null
   /** Token 用量 */
   tokenUsage: TokenUsage | null
   /** 当前运行阶段 */
@@ -60,6 +67,8 @@ interface ChatState {
   isTransitioning: boolean
   /** 当前 Agent 工作模式 */
   agentMode: 'build' | 'plan'
+  /** Build 模式下的权限审批策略 */
+  permissionMode: 'default' | 'bypass'
 
   // Actions
   addMessage: (msg: ChatMessage) => void
@@ -76,8 +85,10 @@ interface ChatState {
   appendThinkingChunk: (text: string) => void
   /** 终结 thinking 消息（collapsed=true）并清空 streamingThinkingMessageId */
   finalizeThinkingMessage: () => void
-  updateToolCall: (toolCallId: string, result: string, status: ChatMessage['toolStatus']) => void
+  updateToolCall: (toolCallId: string, result: string, status: ChatMessage['toolStatus']) => boolean
   appendToolOutput: (toolCallId: string, chunk: string) => void
+  /** 将所有运行中的工具条目标记为指定状态，用于终止事件兜底收敛 UI。 */
+  finalizeRunningToolCalls: (status: 'done' | 'error') => void
   /** 把 checkpointId 关联到一条 tool_call 消息(由 CheckpointCreated 时序关联触发) */
   attachCheckpointToToolCall: (toolCallId: string, checkpointId: string) => void
   /** 更新某条已挂 checkpoint 的 tool_call 消息的撤回状态 */
@@ -95,12 +106,15 @@ interface ChatState {
   setTransitioning: (v: boolean) => void
   addPermissionRequest: (req: PermissionRequestPayload) => void
   removePermissionRequest: (requestId: string) => void
+  setPendingUserQuestion: (question: PendingUserQuestionSnapshot | null) => void
+  clearPendingUserQuestion: (requestId?: string) => void
   updateTokenUsage: (usage: TokenUsage) => void
   setPhase: (phase: string) => void
   setStopReason: (reason: string) => void
   clearMessages: () => void
   addSystemMessage: (content: string) => void
   setAgentMode: (mode: 'build' | 'plan') => void
+  setPermissionMode: (mode: 'default' | 'bypass') => void
 }
 
 let msgIdCounter = 0
@@ -176,11 +190,13 @@ export const useChatStore = create<ChatState>((set) => ({
   streamingMessageId: '',
   streamingThinkingMessageId: '',
   permissionRequests: [],
+  pendingUserQuestion: null,
   tokenUsage: null,
   phase: '',
   stopReason: '',
   isTransitioning: false,
   agentMode: 'build',
+  permissionMode: 'default',
 
   addMessage: (msg) => set((s) => ({ messages: [...s.messages, msg] })),
   removeMessage: (id) => set((s) => ({ messages: s.messages.filter((m) => m.id !== id) })),
@@ -195,6 +211,7 @@ export const useChatStore = create<ChatState>((set) => ({
         streamingThinkingMessageId: '',
         isGenerating: false,
         permissionRequests: [],
+        pendingUserQuestion: null,
         phase: '',
         stopReason: '',
       }
@@ -261,18 +278,34 @@ export const useChatStore = create<ChatState>((set) => ({
       }
     }),
 
-  updateToolCall: (toolCallId, result, status) =>
+  updateToolCall: (toolCallId, result, status) => {
+    let matched = false
     set((s) => ({
-      messages: s.messages.map((m) =>
-        m.toolCallId === toolCallId ? { ...m, toolResult: result, toolStatus: status } : m
-      ),
-    })),
+      messages: s.messages.map((m) => {
+        if (m.toolCallId === toolCallId) {
+          matched = true
+          return { ...m, toolResult: result, toolStatus: status }
+        }
+        return m
+      }),
+    }))
+    return matched
+  },
 
   appendToolOutput: (toolCallId, chunk) =>
     set((s) => ({
       messages: s.messages.map((m) =>
         m.toolCallId === toolCallId
           ? { ...m, toolResult: (m.toolResult ?? '') + chunk }
+          : m
+      ),
+    })),
+
+  finalizeRunningToolCalls: (status) =>
+    set((s) => ({
+      messages: s.messages.map((m) =>
+        m.type === 'tool_call' && m.toolStatus === 'running'
+          ? { ...m, toolStatus: status }
           : m
       ),
     })),
@@ -359,6 +392,23 @@ export const useChatStore = create<ChatState>((set) => ({
       permissionRequests: s.permissionRequests.filter((r) => r.request_id !== requestId),
     })),
 
+  setPendingUserQuestion: (question) => set({
+    pendingUserQuestion: question
+      ? {
+          ...question,
+          options: Array.isArray(question.options) ? [...question.options] : undefined,
+        }
+      : null,
+  }),
+
+  clearPendingUserQuestion: (requestId) =>
+    set((s) => {
+      if (!s.pendingUserQuestion) return s
+      if (!requestId) return { pendingUserQuestion: null }
+      if (s.pendingUserQuestion.request_id !== requestId) return s
+      return { pendingUserQuestion: null }
+    }),
+
   updateTokenUsage: (tokenUsage) => set({ tokenUsage }),
   setPhase: (phase) => set({ phase }),
   setStopReason: (stopReason) => set({ stopReason }),
@@ -367,6 +417,7 @@ export const useChatStore = create<ChatState>((set) => ({
     set((s) => ({ messages: [...s.messages, createSystemMessage(content)] })),
 
   setAgentMode: (agentMode) => set({ agentMode }),
+  setPermissionMode: (permissionMode) => set({ permissionMode }),
 
   /** 清理全部聊天状态，包括权限请求、token用量等。同时重置 eventBridge 模块级游标，避免跨会话泄漏。 */
   clearMessages: () => {
@@ -377,11 +428,13 @@ export const useChatStore = create<ChatState>((set) => ({
       streamingThinkingMessageId: '',
       isGenerating: false,
       permissionRequests: [],
+      pendingUserQuestion: null,
       tokenUsage: null,
       phase: '',
       stopReason: '',
       isTransitioning: false,
       agentMode: 'build',
+      permissionMode: 'default',
     })
   },
 }))

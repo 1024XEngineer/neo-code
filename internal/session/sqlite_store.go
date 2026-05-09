@@ -317,7 +317,7 @@ func (s *SQLiteStore) AppendMessages(ctx context.Context, input AppendMessagesIn
 	if err != nil {
 		return err
 	}
-	normalizedMessages = trimMessagesToSessionLimit(normalizedMessages)
+	normalizedMessages = TrimMessagesToLimitPreservingToolSpans(normalizedMessages, MaxSessionMessages)
 	updatedAt := resolveUpdatedAt(input.UpdatedAt)
 
 	tx, err := db.BeginTx(ctx, nil)
@@ -955,6 +955,10 @@ func initializeSQLiteSchema(ctx context.Context, db *sql.DB) error {
 		if err := migrateSQLiteSchemaV5ToV6(ctx, db); err != nil {
 			return err
 		}
+		if err := migrateSQLiteSchemaV6ToV7(ctx, db); err != nil {
+			return err
+		}
+	case 6:
 		if err := migrateSQLiteSchemaV6ToV7(ctx, db); err != nil {
 			return err
 		}
@@ -1636,6 +1640,17 @@ func trimOverflowMessages(ctx context.Context, tx *sql.Tx, sessionID string, new
 	if overflow <= 0 {
 		return nil
 	}
+	rows, err := loadMessages(ctx, tx, sessionID)
+	if err != nil {
+		return err
+	}
+	overflow, err = trimOverflowDeleteCount(rows, overflow)
+	if err != nil {
+		return err
+	}
+	if overflow <= 0 {
+		return nil
+	}
 	if _, err := tx.ExecContext(ctx,
 		`DELETE FROM messages WHERE session_id = ? AND seq IN (SELECT seq FROM messages WHERE session_id = ? ORDER BY seq ASC LIMIT ?)`,
 		sessionID, sessionID, overflow,
@@ -1652,12 +1667,20 @@ func trimOverflowMessages(ctx context.Context, tx *sql.Tx, sessionID string, new
 }
 
 // trimMessagesToSessionLimit 保留最新一批消息，使单次追加的消息数不会超过会话上限。
-func trimMessagesToSessionLimit(messages []providertypes.Message) []providertypes.Message {
-	if MaxSessionMessages <= 0 || len(messages) <= MaxSessionMessages {
-		return messages
+func trimOverflowDeleteCount(rows []sqliteMessageRow, overflow int) (int, error) {
+	if overflow <= 0 || len(rows) == 0 {
+		return overflow, nil
 	}
-	start := len(messages) - MaxSessionMessages
-	return append([]providertypes.Message(nil), messages[start:]...)
+
+	messages := make([]providertypes.Message, 0, len(rows))
+	for _, row := range rows {
+		message, err := buildMessageFromRow(row)
+		if err != nil {
+			return 0, err
+		}
+		messages = append(messages, message)
+	}
+	return TrimPrefixCountPreservingToolSpans(messages, overflow), nil
 }
 
 // listExpiredSessionIDs 在事务内查询过期会话 ID，供后续按固定集合删除。

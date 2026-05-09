@@ -68,15 +68,15 @@ func TestCleanupZombieIDMSessions(t *testing.T) {
 								"sessions": sessions,
 							},
 						})
-					case protocol.MethodGatewayDeleteSession:
-						var params protocol.DeleteSessionParams
+					case protocol.MethodGatewayDeleteAskSession:
+						var params protocol.DeleteAskSessionParams
 						_ = json.Unmarshal(request.Params, &params)
 						mu.Lock()
 						deleted = append(deleted, params.SessionID)
 						mu.Unlock()
 						writeRPCResultFrame(t, encoder, request.ID, gateway.MessageFrame{
 							Type:   gateway.FrameTypeAck,
-							Action: gateway.FrameActionDeleteSession,
+							Action: gateway.FrameActionDeleteAskSession,
 						})
 					default:
 						writeRPCResultFrame(t, encoder, request.ID, gateway.MessageFrame{

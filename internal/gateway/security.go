@@ -18,6 +18,8 @@ const (
 	RequestSourceWS RequestSource = "ws"
 	// RequestSourceSSE 表示 SSE 来源。
 	RequestSourceSSE RequestSource = "sse"
+	// RequestSourceRunner 表示本地 runner 来源。
+	RequestSourceRunner RequestSource = "runner"
 	// RequestSourceUnknown 表示未知来源。
 	RequestSourceUnknown RequestSource = "unknown"
 )
@@ -49,6 +51,9 @@ func fullControlPlaneMethods() map[string]struct{} {
 		"gateway.authenticate",
 		pingMethod,
 		"gateway.bindStream",
+		"gateway.ask",
+		"gateway.deleteAskSession",
+		"gateway.experimental.triggerAction",
 		"gateway.run",
 		"gateway.compact",
 		"gateway.executeSystemTool",
@@ -67,9 +72,14 @@ func fullControlPlaneMethods() map[string]struct{} {
 		"checkpoint.undoRestore",
 		"checkpoint.diff",
 		"gateway.resolvePermission",
+		"gateway.userQuestionAnswer",
+		"gateway.user_question_answer",
 		"gateway.deleteSession",
 		"gateway.renameSession",
 		"gateway.listFiles",
+		"gateway.readFile",
+		"gateway.listGitDiffFiles",
+		"gateway.readGitDiffFile",
 		"gateway.listModels",
 		"gateway.setSessionModel",
 		"gateway.getSessionModel",
@@ -94,11 +104,13 @@ func fullControlPlaneMethods() map[string]struct{} {
 // NewStrictControlPlaneACL 创建默认拒绝的严格 ACL。
 func NewStrictControlPlaneACL() *ControlPlaneACL {
 	localMethods := fullControlPlaneMethods()
+	runnerMethods := runnerControlPlaneMethods()
 	allow := map[RequestSource]map[string]struct{}{
-		RequestSourceIPC:  localMethods,
-		RequestSourceHTTP: localMethods,
-		RequestSourceWS:   localMethods,
-		RequestSourceSSE:  normalizedMethodSet(pingMethod),
+		RequestSourceIPC:    localMethods,
+		RequestSourceHTTP:   localMethods,
+		RequestSourceWS:     localMethods,
+		RequestSourceSSE:    normalizedMethodSet(pingMethod),
+		RequestSourceRunner: runnerMethods,
 	}
 	return &ControlPlaneACL{
 		mode:    ACLModeStrict,
@@ -133,6 +145,18 @@ func (a *ControlPlaneACL) Mode() ACLMode {
 	return a.mode
 }
 
+// runnerControlPlaneMethods 返回 runner 来源允许的方法白名单。
+func runnerControlPlaneMethods() map[string]struct{} {
+	methods := []string{
+		"gateway.authenticate",
+		pingMethod,
+		"gateway.bindStream",
+		"gateway.registerRunner",
+		"gateway.executeToolResult",
+	}
+	return normalizedMethodSet(methods...)
+}
+
 // normalizedMethodSet 将方法名白名单统一转成归一化集合并去除空值。
 func normalizedMethodSet(methods ...string) map[string]struct{} {
 	set := make(map[string]struct{}, len(methods))
@@ -157,6 +181,8 @@ func NormalizeRequestSource(source RequestSource) RequestSource {
 		return RequestSourceWS
 	case RequestSourceSSE:
 		return RequestSourceSSE
+	case RequestSourceRunner:
+		return RequestSourceRunner
 	default:
 		return RequestSourceUnknown
 	}

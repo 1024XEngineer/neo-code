@@ -16,11 +16,13 @@ export const Method = {
   ListSessions: 'gateway.listSessions',
   LoadSession: 'gateway.loadSession',
   ListSessionTodos: 'session.todos.list',
+  GetRuntimeSnapshot: 'runtime.snapshot.get',
   ListCheckpoints: 'checkpoint.list',
   RestoreCheckpoint: 'checkpoint.restore',
   UndoRestore: 'checkpoint.undoRestore',
   CheckpointDiff: 'checkpoint.diff',
   ResolvePermission: 'gateway.resolvePermission',
+  UserQuestionAnswer: 'gateway.userQuestionAnswer',
   ExecuteSystemTool: 'gateway.executeSystemTool',
   ActivateSessionSkill: 'gateway.activateSessionSkill',
   DeactivateSessionSkill: 'gateway.deactivateSessionSkill',
@@ -29,6 +31,9 @@ export const Method = {
   DeleteSession: 'gateway.deleteSession',
   RenameSession: 'gateway.renameSession',
   ListFiles: 'gateway.listFiles',
+  ReadFile: 'gateway.readFile',
+  ListGitDiffFiles: 'gateway.listGitDiffFiles',
+  ReadGitDiffFile: 'gateway.readGitDiffFile',
   ListModels: 'gateway.listModels',
   SetSessionModel: 'gateway.setSessionModel',
   GetSessionModel: 'gateway.getSessionModel',
@@ -83,6 +88,10 @@ export const EventType = {
   Error: 'error',
   PermissionRequested: 'permission_requested',
   PermissionResolved: 'permission_resolved',
+  UserQuestionRequested: 'user_question_requested',
+  UserQuestionAnswered: 'user_question_answered',
+  UserQuestionSkipped: 'user_question_skipped',
+  UserQuestionTimeout: 'user_question_timeout',
   CompactStart: 'compact_start',
   CompactApplied: 'compact_applied',
   CompactError: 'compact_error',
@@ -229,6 +238,10 @@ export interface ListSessionTodosParams {
   session_id: string
 }
 
+export interface GetRuntimeSnapshotParams {
+  session_id: string
+}
+
 export interface ListCheckpointsParams {
   session_id: string
   limit?: number
@@ -248,12 +261,22 @@ export interface UndoRestoreParams {
 export interface CheckpointDiffParams {
   session_id: string
   checkpoint_id?: string
+  run_id?: string
+  scope?: 'run' | string
 }
 
 /** gateway.resolvePermission 参数 */
 export interface ResolvePermissionParams {
   request_id: string
   decision: string
+}
+
+/** gateway.userQuestionAnswer 参数 */
+export interface ResolveUserQuestionParams {
+  request_id: string
+  status?: string
+  values?: string[]
+  message?: string
 }
 
 /** 会话摘要 */
@@ -365,6 +388,32 @@ export interface TodoSnapshot {
   summary?: TodoSummary
 }
 
+export interface PendingUserQuestionSnapshot {
+  request_id: string
+  question_id: string
+  title: string
+  description: string
+  kind: string
+  options?: unknown[]
+  required: boolean
+  allow_skip: boolean
+  max_choices?: number
+  timeout_sec?: number
+}
+
+export interface RuntimeSnapshotPayload {
+  run_id?: string
+  session_id: string
+  phase?: string
+  task_kind?: string
+  updated_at: string
+  todos: TodoSnapshot
+  facts?: Record<string, unknown>
+  decision?: Record<string, unknown>
+  subagents?: Record<string, unknown>
+  pending_user_question?: PendingUserQuestionSnapshot
+}
+
 export interface TodoEventPayload {
   action: string
   reason?: string
@@ -373,6 +422,7 @@ export interface TodoEventPayload {
 }
 
 export type ListSessionTodosResult = RPCResult<TodoSnapshot>
+export type GetRuntimeSnapshotResult = RPCResult<RuntimeSnapshotPayload>
 
 export interface VerificationStartedPayload {
   completion_passed: boolean
@@ -507,6 +557,78 @@ export interface FileEntry {
 /** gateway.listFiles 响应 */
 export type ListFilesResult = RPCResult<{ files: FileEntry[] }>
 
+/** gateway.readFile 参数 */
+export interface ReadFileParams {
+  session_id?: string
+  workdir?: string
+  path: string
+}
+
+/** 文件预览内容 */
+export interface ReadFilePayload {
+  path: string
+  content: string
+  encoding?: string
+  size?: number
+  truncated?: boolean
+  is_binary?: boolean
+  mod_time?: string
+}
+
+/** gateway.readFile 响应 */
+export type ReadFileResult = RPCResult<ReadFilePayload>
+
+/** Git Diff 文件条目 */
+export interface GitDiffEntry {
+  path: string
+  old_path?: string
+  status: 'added' | 'modified' | 'deleted' | 'renamed' | 'copied' | 'untracked' | 'conflicted'
+}
+
+/** gateway.listGitDiffFiles 参数 */
+export interface ListGitDiffFilesParams {
+  session_id?: string
+  workdir?: string
+}
+
+/** Git Diff 概览 */
+export interface GitDiffSummaryPayload {
+  in_git_repo: boolean
+  branch?: string
+  ahead?: number
+  behind?: number
+  truncated?: boolean
+  total_count?: number
+  files: GitDiffEntry[]
+}
+
+/** gateway.listGitDiffFiles 响应 */
+export type ListGitDiffFilesResult = RPCResult<GitDiffSummaryPayload>
+
+/** gateway.readGitDiffFile 参数 */
+export interface ReadGitDiffFileParams {
+  session_id?: string
+  workdir?: string
+  path: string
+}
+
+/** Git Diff 单文件预览 */
+export interface ReadGitDiffFilePayload {
+  path: string
+  old_path?: string
+  status: GitDiffEntry['status']
+  original_content: string
+  modified_content: string
+  encoding?: string
+  is_binary?: boolean
+  truncated?: boolean
+  size_original?: number
+  size_modified?: number
+}
+
+/** gateway.readGitDiffFile 响应 */
+export type ReadGitDiffFileResult = RPCResult<ReadGitDiffFilePayload>
+
 /** 模型条目 */
 export interface ModelEntry {
   id: string
@@ -515,7 +637,7 @@ export interface ModelEntry {
 }
 
 /** gateway.listModels 响应 */
-export type ListModelsResult = RPCResult<{ models: ModelEntry[]; selected_model_id?: string }>
+export type ListModelsResult = RPCResult<{ models: ModelEntry[]; selected_provider_id?: string; selected_model_id?: string }>
 
 /** gateway.setSessionModel 参数 */
 export interface SetSessionModelParams {

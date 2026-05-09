@@ -11,7 +11,7 @@ type connectionWorkspaceStateContextKey struct{}
 
 // ConnectionWorkspaceState 维护连接当前活跃的工作区哈希。
 type ConnectionWorkspaceState struct {
-	mu          sync.RWMutex
+	mu            sync.RWMutex
 	workspaceHash string
 }
 

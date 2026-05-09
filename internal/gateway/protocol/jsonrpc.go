@@ -21,6 +21,12 @@ const (
 	MethodGatewayPing = "gateway.ping"
 	// MethodGatewayBindStream 表示客户端向网关声明流式订阅绑定的方法。
 	MethodGatewayBindStream = "gateway.bindStream"
+	// MethodGatewayAsk 表示通过网关发起一次轻量问答会话请求。
+	MethodGatewayAsk = "gateway.ask"
+	// MethodGatewayDeleteAskSession 表示删除 Ask 会话。
+	MethodGatewayDeleteAskSession = "gateway.deleteAskSession"
+	// MethodGatewayExperimentalTriggerAction 表示触发 shell 侧诊断/模式控制动作。
+	MethodGatewayExperimentalTriggerAction = "gateway.experimental.triggerAction"
 	// MethodGatewayRun 表示通过网关触发一次运行时执行。
 	MethodGatewayRun = "gateway.run"
 	// MethodGatewayCompact 表示通过网关触发一次会话压缩。
@@ -57,12 +63,20 @@ const (
 	MethodGatewayCheckpointDiff = "checkpoint.diff"
 	// MethodGatewayResolvePermission 表示提交权限审批决策。
 	MethodGatewayResolvePermission = "gateway.resolvePermission"
+	// MethodGatewayUserQuestionAnswer 表示提交 ask_user 回答。
+	MethodGatewayUserQuestionAnswer = "gateway.userQuestionAnswer"
 	// MethodGatewayDeleteSession 表示删除/归档会话。
 	MethodGatewayDeleteSession = "gateway.deleteSession"
 	// MethodGatewayRenameSession 表示重命名会话。
 	MethodGatewayRenameSession = "gateway.renameSession"
 	// MethodGatewayListFiles 表示列出工作目录文件树。
 	MethodGatewayListFiles = "gateway.listFiles"
+	// MethodGatewayReadFile 表示读取工作目录文件预览。
+	MethodGatewayReadFile = "gateway.readFile"
+	// MethodGatewayListGitDiffFiles 表示列出当前工作树相对 HEAD 的 Git 变更文件。
+	MethodGatewayListGitDiffFiles = "gateway.listGitDiffFiles"
+	// MethodGatewayReadGitDiffFile 表示读取单个 Git 变更文件的双文本预览。
+	MethodGatewayReadGitDiffFile = "gateway.readGitDiffFile"
 	// MethodGatewayListModels 表示列出可用模型。
 	MethodGatewayListModels = "gateway.listModels"
 	// MethodGatewaySetSessionModel 表示设置会话模型。
@@ -87,6 +101,8 @@ const (
 	MethodGatewayDeleteMCPServer = "gateway.deleteMCPServer"
 	// MethodGatewayEvent 表示网关向客户端推送运行时事件的通知方法。
 	MethodGatewayEvent = "gateway.event"
+	// MethodGatewayNotification 表示网关向特定角色连接推送动作通知。
+	MethodGatewayNotification = "gateway.notification"
 	// MethodWakeOpenURL 表示 URL Scheme 唤醒方法。
 	MethodWakeOpenURL            = "wake.openUrl"
 	MethodGatewayListWorkspaces  = "gateway.listWorkspaces"
@@ -187,10 +203,45 @@ type AuthenticateParams struct {
 
 // BindStreamParams 表示 gateway.bindStream 的标准化参数载荷。
 type BindStreamParams struct {
-	SessionID string `json:"session_id"`
-	RunID     string `json:"run_id,omitempty"`
-	Channel   string `json:"channel,omitempty"`
+	SessionID string         `json:"session_id"`
+	RunID     string         `json:"run_id,omitempty"`
+	Channel   string         `json:"channel,omitempty"`
+	Role      string         `json:"role,omitempty"`
+	State     map[string]any `json:"state,omitempty"`
 }
+
+// AskParams 表示 gateway.ask 的参数载荷。
+type AskParams struct {
+	SessionID string   `json:"session_id,omitempty"`
+	UserQuery string   `json:"user_query"`
+	Skills    []string `json:"skills,omitempty"`
+	Workdir   string   `json:"workdir,omitempty"`
+}
+
+// DeleteAskSessionParams 表示 gateway.deleteAskSession 的参数载荷。
+type DeleteAskSessionParams struct {
+	SessionID string `json:"session_id"`
+}
+
+// TriggerActionParams 表示 gateway.experimental.triggerAction 的参数载荷。
+type TriggerActionParams struct {
+	SessionID string `json:"session_id,omitempty"`
+	Action    string `json:"action"`
+	Payload   map[string]any `json:"payload,omitempty"`
+}
+
+const (
+	// TriggerActionDiagnose 表示触发一次 shell 诊断动作。
+	TriggerActionDiagnose = "diagnose"
+	// TriggerActionIDMEnter 表示请求 shell 进入 IDM 模式。
+	TriggerActionIDMEnter = "idm_enter"
+	// TriggerActionAutoOn 表示开启自动诊断模式。
+	TriggerActionAutoOn = "auto_on"
+	// TriggerActionAutoOff 表示关闭自动诊断模式。
+	TriggerActionAutoOff = "auto_off"
+	// TriggerActionAutoStatus 表示查询自动诊断模式状态。
+	TriggerActionAutoStatus = "auto_status"
+)
 
 // RunInputMedia 用于承载 gateway.run 中图片分片的媒体元数据。
 type RunInputMedia struct {
@@ -303,12 +354,22 @@ type UndoRestoreParams struct {
 type CheckpointDiffParams struct {
 	SessionID    string `json:"session_id"`
 	CheckpointID string `json:"checkpoint_id,omitempty"`
+	Scope        string `json:"scope,omitempty"`  // 可选，"run" 表示 run 级聚合 diff
+	RunID        string `json:"run_id,omitempty"` // scope=run 时必需
 }
 
 // ResolvePermissionParams 表示 gateway.resolvePermission 参数。
 type ResolvePermissionParams struct {
 	RequestID string `json:"request_id"`
 	Decision  string `json:"decision"`
+}
+
+// UserQuestionAnswerParams 表示 gateway.userQuestionAnswer 参数。
+type UserQuestionAnswerParams struct {
+	RequestID string   `json:"request_id"`
+	Status    string   `json:"status,omitempty"`
+	Values    []string `json:"values,omitempty"`
+	Message   string   `json:"message,omitempty"`
 }
 
 // DeleteSessionParams 表示 gateway.deleteSession 参数。
@@ -327,6 +388,26 @@ type ListFilesParams struct {
 	SessionID string `json:"session_id,omitempty"`
 	Workdir   string `json:"workdir,omitempty"`
 	Path      string `json:"path,omitempty"`
+}
+
+// ReadFileParams 表示 gateway.readFile 参数。
+type ReadFileParams struct {
+	SessionID string `json:"session_id,omitempty"`
+	Workdir   string `json:"workdir,omitempty"`
+	Path      string `json:"path"`
+}
+
+// ListGitDiffFilesParams 表示 gateway.listGitDiffFiles 参数。
+type ListGitDiffFilesParams struct {
+	SessionID string `json:"session_id,omitempty"`
+	Workdir   string `json:"workdir,omitempty"`
+}
+
+// ReadGitDiffFileParams 表示 gateway.readGitDiffFile 参数。
+type ReadGitDiffFileParams struct {
+	SessionID string `json:"session_id,omitempty"`
+	Workdir   string `json:"workdir,omitempty"`
+	Path      string `json:"path"`
 }
 
 // ListModelsParams 表示 gateway.listModels 参数。
@@ -506,6 +587,34 @@ func NormalizeJSONRPCRequest(request JSONRPCRequest) (NormalizedRequest, *JSONRP
 		normalized.RunID = params.RunID
 		normalized.Payload = params
 		return normalized, nil
+	case MethodGatewayAsk:
+		params, parseErr := decodeAskParams(request.Params)
+		if parseErr != nil {
+			return normalized, parseErr
+		}
+		normalized.Action = "ask"
+		normalized.SessionID = strings.TrimSpace(params.SessionID)
+		normalized.Workdir = strings.TrimSpace(params.Workdir)
+		normalized.Payload = params
+		return normalized, nil
+	case MethodGatewayDeleteAskSession:
+		params, parseErr := decodeDeleteAskSessionParams(request.Params)
+		if parseErr != nil {
+			return normalized, parseErr
+		}
+		normalized.Action = "delete_ask_session"
+		normalized.SessionID = strings.TrimSpace(params.SessionID)
+		normalized.Payload = params
+		return normalized, nil
+	case MethodGatewayExperimentalTriggerAction:
+		params, parseErr := decodeTriggerActionParams(request.Params)
+		if parseErr != nil {
+			return normalized, parseErr
+		}
+		normalized.Action = "trigger_action"
+		normalized.SessionID = strings.TrimSpace(params.SessionID)
+		normalized.Payload = params
+		return normalized, nil
 	case MethodGatewayRun:
 		params, parseErr := decodeRunParams(request.Params)
 		if parseErr != nil {
@@ -668,6 +777,14 @@ func NormalizeJSONRPCRequest(request JSONRPCRequest) (NormalizedRequest, *JSONRP
 		normalized.Action = "resolve_permission"
 		normalized.Payload = params
 		return normalized, nil
+	case MethodGatewayUserQuestionAnswer:
+		params, parseErr := decodeUserQuestionAnswerParams(request.Params)
+		if parseErr != nil {
+			return normalized, parseErr
+		}
+		normalized.Action = "user_question_answer"
+		normalized.Payload = params
+		return normalized, nil
 	case MethodGatewayDeleteSession:
 		params, parseErr := decodeDeleteSessionParams(request.Params)
 		if parseErr != nil {
@@ -692,6 +809,36 @@ func NormalizeJSONRPCRequest(request JSONRPCRequest) (NormalizedRequest, *JSONRP
 			return normalized, parseErr
 		}
 		normalized.Action = "list_files"
+		normalized.SessionID = strings.TrimSpace(params.SessionID)
+		normalized.Workdir = strings.TrimSpace(params.Workdir)
+		normalized.Payload = params
+		return normalized, nil
+	case MethodGatewayReadFile:
+		params, parseErr := decodeReadFileParams(request.Params)
+		if parseErr != nil {
+			return normalized, parseErr
+		}
+		normalized.Action = "read_file"
+		normalized.SessionID = strings.TrimSpace(params.SessionID)
+		normalized.Workdir = strings.TrimSpace(params.Workdir)
+		normalized.Payload = params
+		return normalized, nil
+	case MethodGatewayListGitDiffFiles:
+		params, parseErr := decodeListGitDiffFilesParams(request.Params)
+		if parseErr != nil {
+			return normalized, parseErr
+		}
+		normalized.Action = "list_git_diff_files"
+		normalized.SessionID = strings.TrimSpace(params.SessionID)
+		normalized.Workdir = strings.TrimSpace(params.Workdir)
+		normalized.Payload = params
+		return normalized, nil
+	case MethodGatewayReadGitDiffFile:
+		params, parseErr := decodeReadGitDiffFileParams(request.Params)
+		if parseErr != nil {
+			return normalized, parseErr
+		}
+		normalized.Action = "read_git_diff_file"
 		normalized.SessionID = strings.TrimSpace(params.SessionID)
 		normalized.Workdir = strings.TrimSpace(params.Workdir)
 		normalized.Payload = params
@@ -822,6 +969,24 @@ func NormalizeJSONRPCRequest(request JSONRPCRequest) (NormalizedRequest, *JSONRP
 		normalized.Action = "workspace.delete"
 		normalized.Payload = params
 		return normalized, nil
+	case MethodGatewayRegisterRunner:
+		params, parseErr := decodeRegisterRunnerParams(request.Params)
+		if parseErr != nil {
+			return normalized, parseErr
+		}
+		normalized.Action = "register_runner"
+		normalized.Payload = params
+		return normalized, nil
+	case MethodGatewayExecuteToolResult:
+		params, parseErr := decodeExecuteToolResultParams(request.Params)
+		if parseErr != nil {
+			return normalized, parseErr
+		}
+		normalized.Action = "execute_tool_result"
+		normalized.SessionID = strings.TrimSpace(params.SessionID)
+		normalized.RunID = strings.TrimSpace(params.RunID)
+		normalized.Payload = params
+		return normalized, nil
 	default:
 		return normalized, NewJSONRPCError(
 			JSONRPCCodeMethodNotFound,
@@ -934,8 +1099,13 @@ func decodeCheckpointDiffParams(raw json.RawMessage) (CheckpointDiffParams, *JSO
 	return decodeParams(raw, "checkpoint.diff", func(p *CheckpointDiffParams) *JSONRPCError {
 		p.SessionID = strings.TrimSpace(p.SessionID)
 		p.CheckpointID = strings.TrimSpace(p.CheckpointID)
+		p.Scope = strings.TrimSpace(p.Scope)
+		p.RunID = strings.TrimSpace(p.RunID)
 		if p.SessionID == "" {
 			return NewJSONRPCError(JSONRPCCodeInvalidParams, "missing required field: params.session_id", GatewayCodeMissingRequiredField)
+		}
+		if p.Scope == "run" && p.RunID == "" {
+			return NewJSONRPCError(JSONRPCCodeInvalidParams, "missing required field: params.run_id (required when scope=run)", GatewayCodeMissingRequiredField)
 		}
 		return nil
 	})
@@ -1111,6 +1281,7 @@ func decodeBindStreamParams(raw json.RawMessage) (BindStreamParams, *JSONRPCErro
 		p.SessionID = strings.TrimSpace(p.SessionID)
 		p.RunID = strings.TrimSpace(p.RunID)
 		p.Channel = strings.ToLower(strings.TrimSpace(p.Channel))
+		p.Role = strings.ToLower(strings.TrimSpace(p.Role))
 		if p.Channel == "" {
 			p.Channel = "all"
 		}
@@ -1121,6 +1292,71 @@ func decodeBindStreamParams(raw json.RawMessage) (BindStreamParams, *JSONRPCErro
 		case "all", "ipc", "ws", "sse":
 		default:
 			return NewJSONRPCError(JSONRPCCodeInvalidParams, "invalid field: params.channel", GatewayCodeInvalidAction)
+		}
+		switch p.Role {
+		case "", "shell", "cli", "tui":
+		default:
+			return NewJSONRPCError(JSONRPCCodeInvalidParams, "invalid field: params.role", GatewayCodeInvalidAction)
+		}
+		if len(p.State) == 0 {
+			p.State = nil
+		}
+		return nil
+	})
+}
+
+// decodeAskParams 对 gateway.ask 的 params 执行反序列化与字段清理。
+func decodeAskParams(raw json.RawMessage) (AskParams, *JSONRPCError) {
+	return decodeParams(raw, "gateway.ask", func(p *AskParams) *JSONRPCError {
+		p.SessionID = strings.TrimSpace(p.SessionID)
+		p.UserQuery = strings.TrimSpace(p.UserQuery)
+		p.Workdir = strings.TrimSpace(p.Workdir)
+		if p.UserQuery == "" {
+			return NewJSONRPCError(JSONRPCCodeInvalidParams, "missing required field: params.user_query", GatewayCodeMissingRequiredField)
+		}
+		if len(p.Skills) > 0 {
+			normalized := make([]string, 0, len(p.Skills))
+			for _, item := range p.Skills {
+				skillID := strings.TrimSpace(item)
+				if skillID == "" {
+					continue
+				}
+				normalized = append(normalized, skillID)
+			}
+			p.Skills = normalized
+		} else {
+			p.Skills = nil
+		}
+		return nil
+	})
+}
+
+// decodeDeleteAskSessionParams 对 gateway.deleteAskSession 的 params 执行反序列化与校验。
+func decodeDeleteAskSessionParams(raw json.RawMessage) (DeleteAskSessionParams, *JSONRPCError) {
+	return decodeParams(raw, "gateway.deleteAskSession", func(p *DeleteAskSessionParams) *JSONRPCError {
+		p.SessionID = strings.TrimSpace(p.SessionID)
+		if p.SessionID == "" {
+			return NewJSONRPCError(JSONRPCCodeInvalidParams, "missing required field: params.session_id", GatewayCodeMissingRequiredField)
+		}
+		return nil
+	})
+}
+
+// decodeTriggerActionParams 对 gateway.experimental.triggerAction 的 params 执行反序列化与校验。
+func decodeTriggerActionParams(raw json.RawMessage) (TriggerActionParams, *JSONRPCError) {
+	return decodeParams(raw, "gateway.experimental.triggerAction", func(p *TriggerActionParams) *JSONRPCError {
+		p.SessionID = strings.TrimSpace(p.SessionID)
+		p.Action = strings.ToLower(strings.TrimSpace(p.Action))
+		if p.Action == "" {
+			return NewJSONRPCError(JSONRPCCodeInvalidParams, "missing required field: params.action", GatewayCodeMissingRequiredField)
+		}
+		switch p.Action {
+		case TriggerActionDiagnose, TriggerActionIDMEnter, TriggerActionAutoOn, TriggerActionAutoOff, TriggerActionAutoStatus:
+		default:
+			return NewJSONRPCError(JSONRPCCodeInvalidParams, "invalid field: params.action", GatewayCodeInvalidAction)
+		}
+		if len(p.Payload) == 0 {
+			p.Payload = nil
 		}
 		return nil
 	})
@@ -1274,6 +1510,24 @@ func decodeResolvePermissionParams(raw json.RawMessage) (ResolvePermissionParams
 	})
 }
 
+// decodeUserQuestionAnswerParams 对 gateway.userQuestionAnswer 的 params 执行反序列化与字段校验。
+func decodeUserQuestionAnswerParams(raw json.RawMessage) (UserQuestionAnswerParams, *JSONRPCError) {
+	return decodeParams(raw, "gateway.userQuestionAnswer", func(p *UserQuestionAnswerParams) *JSONRPCError {
+		p.RequestID = strings.TrimSpace(p.RequestID)
+		p.Status = strings.ToLower(strings.TrimSpace(p.Status))
+		p.Message = strings.TrimSpace(p.Message)
+		if p.RequestID == "" {
+			return NewJSONRPCError(JSONRPCCodeInvalidParams, "missing required field: params.request_id", GatewayCodeMissingRequiredField)
+		}
+		switch p.Status {
+		case "", "answered", "skipped":
+			return nil
+		default:
+			return NewJSONRPCError(JSONRPCCodeInvalidParams, "invalid field: params.status", GatewayCodeInvalidAction)
+		}
+	})
+}
+
 // decodeDeleteSessionParams 对 gateway.deleteSession 的 params 执行反序列化与校验。
 func decodeDeleteSessionParams(raw json.RawMessage) (DeleteSessionParams, *JSONRPCError) {
 	return decodeParams(raw, "gateway.deleteSession", func(p *DeleteSessionParams) *JSONRPCError {
@@ -1306,6 +1560,41 @@ func decodeListFilesParams(raw json.RawMessage) (ListFilesParams, *JSONRPCError)
 		p.SessionID = strings.TrimSpace(p.SessionID)
 		p.Workdir = strings.TrimSpace(p.Workdir)
 		p.Path = strings.TrimSpace(p.Path)
+		return nil
+	})
+}
+
+// decodeReadFileParams 对 gateway.readFile 的 params 执行反序列化与校验。
+func decodeReadFileParams(raw json.RawMessage) (ReadFileParams, *JSONRPCError) {
+	return decodeParams(raw, "gateway.readFile", func(p *ReadFileParams) *JSONRPCError {
+		p.SessionID = strings.TrimSpace(p.SessionID)
+		p.Workdir = strings.TrimSpace(p.Workdir)
+		p.Path = strings.TrimSpace(p.Path)
+		if p.Path == "" {
+			return NewJSONRPCError(JSONRPCCodeInvalidParams, "missing required field: params.path", GatewayCodeMissingRequiredField)
+		}
+		return nil
+	})
+}
+
+// decodeListGitDiffFilesParams 对 gateway.listGitDiffFiles 的 params 执行反序列化与校验。
+func decodeListGitDiffFilesParams(raw json.RawMessage) (ListGitDiffFilesParams, *JSONRPCError) {
+	return decodeParamsOptional(raw, "gateway.listGitDiffFiles", func(p *ListGitDiffFilesParams) *JSONRPCError {
+		p.SessionID = strings.TrimSpace(p.SessionID)
+		p.Workdir = strings.TrimSpace(p.Workdir)
+		return nil
+	})
+}
+
+// decodeReadGitDiffFileParams 对 gateway.readGitDiffFile 的 params 执行反序列化与校验。
+func decodeReadGitDiffFileParams(raw json.RawMessage) (ReadGitDiffFileParams, *JSONRPCError) {
+	return decodeParams(raw, "gateway.readGitDiffFile", func(p *ReadGitDiffFileParams) *JSONRPCError {
+		p.SessionID = strings.TrimSpace(p.SessionID)
+		p.Workdir = strings.TrimSpace(p.Workdir)
+		p.Path = strings.TrimSpace(p.Path)
+		if p.Path == "" {
+			return NewJSONRPCError(JSONRPCCodeInvalidParams, "missing required field: params.path", GatewayCodeMissingRequiredField)
+		}
 		return nil
 	})
 }
@@ -1517,6 +1806,70 @@ func decodeParamsInternal[T any](raw json.RawMessage, name string, validate func
 		if err := validate(&params); err != nil {
 			return zero, err
 		}
+	}
+	return params, nil
+}
+
+// decodeRegisterRunnerParams 对 gateway.registerRunner 的 params 执行反序列化与字段校验。
+func decodeRegisterRunnerParams(raw json.RawMessage) (RegisterRunnerParams, *JSONRPCError) {
+	params, err := decodeParams[RegisterRunnerParams](raw, "gateway.registerRunner", func(p *RegisterRunnerParams) *JSONRPCError {
+		if strings.TrimSpace(p.RunnerID) == "" {
+			return NewJSONRPCError(
+				JSONRPCCodeInvalidParams,
+				"missing required field: params.runner_id",
+				GatewayCodeMissingRequiredField,
+			)
+		}
+		if strings.TrimSpace(p.Workdir) == "" {
+			return NewJSONRPCError(
+				JSONRPCCodeInvalidParams,
+				"missing required field: params.workdir",
+				GatewayCodeMissingRequiredField,
+			)
+		}
+		return nil
+	})
+	if err != nil {
+		return RegisterRunnerParams{}, err
+	}
+	return params, nil
+}
+
+// decodeExecuteToolResultParams 对 gateway.executeToolResult 的 params 执行反序列化与字段校验。
+func decodeExecuteToolResultParams(raw json.RawMessage) (ExecuteToolResultParams, *JSONRPCError) {
+	params, err := decodeParams[ExecuteToolResultParams](raw, "gateway.executeToolResult", func(p *ExecuteToolResultParams) *JSONRPCError {
+		if strings.TrimSpace(p.RequestID) == "" {
+			return NewJSONRPCError(
+				JSONRPCCodeInvalidParams,
+				"missing required field: params.request_id",
+				GatewayCodeMissingRequiredField,
+			)
+		}
+		if strings.TrimSpace(p.SessionID) == "" {
+			return NewJSONRPCError(
+				JSONRPCCodeInvalidParams,
+				"missing required field: params.session_id",
+				GatewayCodeMissingRequiredField,
+			)
+		}
+		if strings.TrimSpace(p.RunID) == "" {
+			return NewJSONRPCError(
+				JSONRPCCodeInvalidParams,
+				"missing required field: params.run_id",
+				GatewayCodeMissingRequiredField,
+			)
+		}
+		if strings.TrimSpace(p.ToolCallID) == "" {
+			return NewJSONRPCError(
+				JSONRPCCodeInvalidParams,
+				"missing required field: params.tool_call_id",
+				GatewayCodeMissingRequiredField,
+			)
+		}
+		return nil
+	})
+	if err != nil {
+		return ExecuteToolResultParams{}, err
 	}
 	return params, nil
 }

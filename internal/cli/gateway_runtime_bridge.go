@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -8,9 +9,12 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"neo-code/internal/app"
 	"neo-code/internal/checkpoint"
@@ -18,6 +22,7 @@ import (
 	configstate "neo-code/internal/config/state"
 	"neo-code/internal/gateway"
 	providertypes "neo-code/internal/provider/types"
+	"neo-code/internal/repository"
 	agentruntime "neo-code/internal/runtime"
 	agentsession "neo-code/internal/session"
 	"neo-code/internal/skills"
@@ -26,6 +31,10 @@ import (
 
 const bridgeLocalSubjectID = "local_admin"
 const bridgeRuntimeUnavailableErrMsg = "gateway runtime bridge: runtime is unavailable"
+const bridgeAskSessionPrefix = "ask"
+const bridgeAskRunPrefix = "ask-run"
+const bridgeAskRunTTL = 30 * time.Minute
+const readFilePreviewLimitBytes int64 = 512 * 1024
 
 type runtimeRunCanceler interface {
 	CancelRun(runID string) bool
@@ -50,7 +59,12 @@ type runtimeCheckpointer interface {
 	CheckpointDiff(ctx context.Context, input agentruntime.CheckpointDiffInput) (agentruntime.CheckpointDiffResult, error)
 }
 
-// bridgeSessionStore 定义桥接层对会话存储的最低需求。
+// askBridgeRunState 记录 ask 运行期间的会话映射。
+type askBridgeRunState struct {
+	SessionID string
+	StartedAt time.Time
+}
+
 type bridgeSessionStore interface {
 	DeleteSession(ctx context.Context, sessionID string) error
 	UpdateSessionState(ctx context.Context, input agentsession.UpdateSessionStateInput) error
@@ -83,15 +97,11 @@ func defaultBuildGatewayRuntimePort(ctx context.Context, workdir string) (gatewa
 		_ = bundle.Close()
 		return nil, nil, err
 	}
+	if err := sanitizeWorkspaceIndex(index, defaultWorkspaceRoot); err != nil {
+		_ = bundle.Close()
+		return nil, nil, err
+	}
 	defaultHash := agentsession.HashWorkspaceRoot(defaultWorkspaceRoot)
-	if _, err := index.Register(defaultWorkspaceRoot, ""); err != nil {
-		_ = bundle.Close()
-		return nil, nil, err
-	}
-	if err := index.Save(); err != nil {
-		_ = bundle.Close()
-		return nil, nil, err
-	}
 
 	bridge, err := newGatewayRuntimePortBridge(ctx, bundle.Runtime, bundle.SessionStore, bundle.ConfigManager, bundle.ProviderSelection, bundle.ToolRegistry)
 	if err != nil {
@@ -146,6 +156,40 @@ func defaultBuildGatewayRuntimePort(ctx context.Context, workdir string) (gatewa
 	return mw, mw.Close, nil
 }
 
+// sanitizeWorkspaceIndex 在 Gateway 启动时清洗工作区索引，移除失效或临时残留目录。
+func sanitizeWorkspaceIndex(index *agentsession.WorkspaceIndex, defaultWorkspaceRoot string) error {
+	if index == nil {
+		return fmt.Errorf("gateway runtime bridge: workspace index is nil")
+	}
+
+	shouldPersistDefault := agentsession.IsPersistentWorkspaceRoot(defaultWorkspaceRoot)
+	changed := false
+	if shouldPersistDefault {
+		if _, err := index.Register(defaultWorkspaceRoot, ""); err != nil {
+			return err
+		}
+		changed = true
+	}
+
+	removed := index.Prune(func(record agentsession.WorkspaceRecord) bool {
+		path := strings.TrimSpace(record.Path)
+		if path == "" {
+			return true
+		}
+		if shouldPersistDefault && agentsession.WorkspacePathKey(path) == agentsession.WorkspacePathKey(defaultWorkspaceRoot) {
+			return false
+		}
+		return !agentsession.IsPersistentWorkspaceRoot(path)
+	})
+	if len(removed) > 0 {
+		changed = true
+	}
+	if !changed {
+		return nil
+	}
+	return index.Save()
+}
+
 // resolveGatewayDefaultWorkspaceRoot 解析网关默认工作区，优先使用显式参数，缺失时回退到配置快照。
 func resolveGatewayDefaultWorkspaceRoot(requestedWorkdir string, configWorkdir string) (string, error) {
 	candidate := strings.TrimSpace(requestedWorkdir)
@@ -184,11 +228,16 @@ type gatewayRuntimePortBridge struct {
 	sessionStore      bridgeSessionStore
 	configManager     configManagerPort
 	providerSelection providerSelectorPort
+	repoService       *repository.Service
 	toolRegistry      *tools.Registry
 	events            chan gateway.RuntimeEvent
 
 	stopOnce sync.Once
 	stopCh   chan struct{}
+
+	askMu       sync.Mutex
+	askRuns     map[string]askBridgeRunState
+	askSequence uint64
 }
 
 // newGatewayRuntimePortBridge 创建 RuntimePort 桥接器，用于把 runtime 事件转换为 gateway 统一事件。
@@ -206,6 +255,7 @@ func newGatewayRuntimePortBridge(
 	}
 	var cm configManagerPort
 	var ps providerSelectorPort
+	var repoSvc *repository.Service
 	var tr *tools.Registry
 	for _, extra := range extras {
 		switch typed := extra.(type) {
@@ -213,9 +263,14 @@ func newGatewayRuntimePortBridge(
 			cm = typed
 		case providerSelectorPort:
 			ps = typed
+		case *repository.Service:
+			repoSvc = typed
 		case *tools.Registry:
 			tr = typed
 		}
+	}
+	if repoSvc == nil {
+		repoSvc = repository.NewService()
 	}
 
 	bridge := &gatewayRuntimePortBridge{
@@ -223,9 +278,11 @@ func newGatewayRuntimePortBridge(
 		sessionStore:      store,
 		configManager:     cm,
 		providerSelection: ps,
+		repoService:       repoSvc,
 		toolRegistry:      tr,
 		events:            make(chan gateway.RuntimeEvent, 128),
 		stopCh:            make(chan struct{}),
+		askRuns:           make(map[string]askBridgeRunState),
 	}
 	go bridge.runEventBridge(ctx)
 	return bridge, nil
@@ -252,6 +309,58 @@ func (b *gatewayRuntimePortBridge) Run(ctx context.Context, input gateway.RunInp
 		return b.runtime.Submit(ctx, convertGatewayRunInput(input))
 	}
 	return err
+}
+
+// Ask 将 gateway.ask 输入转换为 runtime Submit，并把运行态绑定到 ask 事件流。
+func (b *gatewayRuntimePortBridge) Ask(ctx context.Context, input gateway.AskInput) error {
+	if err := b.ensureRuntimeAccess(input.SubjectID); err != nil {
+		return err
+	}
+
+	normalizedQuery := strings.TrimSpace(input.UserQuery)
+	if normalizedQuery == "" {
+		return fmt.Errorf("gateway runtime bridge: ask user_query is empty")
+	}
+
+	sessionID := strings.TrimSpace(input.SessionID)
+	if sessionID == "" {
+		sessionID = b.generateAskSessionID()
+	}
+	runID := b.generateAskRunID()
+	b.trackAskRun(sessionID, runID)
+	submitErr := b.runtime.Ask(ctx, agentruntime.AskInput{
+		SessionID: sessionID,
+		RunID:     runID,
+		Workdir:   strings.TrimSpace(input.Workdir),
+		UserQuery: normalizedQuery,
+		Skills:    append([]string(nil), input.Skills...),
+	})
+	if submitErr != nil {
+		b.completeAskRun(runID)
+		return submitErr
+	}
+	return nil
+}
+
+// DeleteAskSession 删除 ask 会话并清理桥接层缓存状态。
+func (b *gatewayRuntimePortBridge) DeleteAskSession(ctx context.Context, input gateway.DeleteAskSessionInput) (bool, error) {
+	if err := b.ensureRuntimeAccess(input.SubjectID); err != nil {
+		return false, err
+	}
+	sessionID := strings.TrimSpace(input.SessionID)
+	if sessionID == "" {
+		return false, gateway.ErrRuntimeResourceNotFound
+	}
+
+	deleted, err := b.runtime.DeleteAskSession(ctx, agentruntime.DeleteAskSessionInput{SessionID: sessionID})
+	b.forgetAskSession(sessionID)
+	if err != nil {
+		if isRuntimeNotFoundError(err) {
+			return deleted, nil
+		}
+		return false, err
+	}
+	return deleted, nil
 }
 
 // Compact 将 gateway.compact 请求映射到 runtime 紧凑化能力并回填统一结果。
@@ -365,6 +474,19 @@ func (b *gatewayRuntimePortBridge) ResolvePermission(ctx context.Context, input 
 	return b.runtime.ResolvePermission(ctx, agentruntime.PermissionResolutionInput{
 		RequestID: strings.TrimSpace(input.RequestID),
 		Decision:  agentruntime.PermissionResolutionDecision(strings.TrimSpace(string(input.Decision))),
+	})
+}
+
+// ResolveUserQuestion 将网关 ask_user 回答转发到 runtime。
+func (b *gatewayRuntimePortBridge) ResolveUserQuestion(ctx context.Context, input gateway.UserQuestionAnswerInput) error {
+	if err := b.ensureRuntimeAccess(input.SubjectID); err != nil {
+		return err
+	}
+	return b.runtime.ResolveUserQuestion(ctx, agentruntime.UserQuestionResolutionInput{
+		RequestID: strings.TrimSpace(input.RequestID),
+		Status:    strings.TrimSpace(input.Status),
+		Values:    input.Values,
+		Message:   strings.TrimSpace(input.Message),
 	})
 }
 
@@ -605,24 +727,163 @@ func (b *gatewayRuntimePortBridge) ListFiles(ctx context.Context, input gateway.
 	return result, nil
 }
 
-// ListModels 列出可用模型（仅返回当前选中 provider 的模型）。
+// ReadFile 读取工作目录内文件的只读预览内容。
+func (b *gatewayRuntimePortBridge) ReadFile(ctx context.Context, input gateway.ReadFileInput) (gateway.ReadFileResult, error) {
+	if err := b.ensureRuntimeAccess(input.SubjectID); err != nil {
+		return gateway.ReadFileResult{}, err
+	}
+	root, err := b.resolveListFilesRoot(ctx, gateway.ListFilesInput{
+		SubjectID: input.SubjectID,
+		SessionID: input.SessionID,
+		Workdir:   input.Workdir,
+	})
+	if err != nil {
+		return gateway.ReadFileResult{}, err
+	}
+	target, relativePath, err := resolveSafeListFilesPath(root, input.Path)
+	if err != nil {
+		return gateway.ReadFileResult{}, err
+	}
+	info, err := os.Stat(target)
+	if err != nil {
+		return gateway.ReadFileResult{}, err
+	}
+	if info.IsDir() {
+		return gateway.ReadFileResult{}, fmt.Errorf("gateway runtime bridge: readFile path is a directory")
+	}
+
+	result := gateway.ReadFileResult{
+		Path:     filepath.ToSlash(relativePath),
+		Encoding: "utf-8",
+		Size:     info.Size(),
+		ModTime:  info.ModTime().UTC().Format(time.RFC3339),
+	}
+	if info.Size() > readFilePreviewLimitBytes {
+		result.Truncated = true
+		return result, nil
+	}
+
+	data, err := os.ReadFile(target)
+	if err != nil {
+		return gateway.ReadFileResult{}, err
+	}
+	if isBinaryPreviewContent(data) {
+		result.Encoding = "binary"
+		result.IsBinary = true
+		return result, nil
+	}
+	result.Content = string(data)
+	return result, nil
+}
+
+// ListGitDiffFiles 返回当前工作树相对 HEAD 的 Git 变更文件列表。
+func (b *gatewayRuntimePortBridge) ListGitDiffFiles(ctx context.Context, input gateway.ListGitDiffFilesInput) (gateway.ListGitDiffFilesResult, error) {
+	if err := b.ensureRuntimeAccess(input.SubjectID); err != nil {
+		return gateway.ListGitDiffFilesResult{}, err
+	}
+	root, err := b.resolveListFilesRoot(ctx, gateway.ListFilesInput{
+		SubjectID: input.SubjectID,
+		SessionID: input.SessionID,
+		Workdir:   input.Workdir,
+	})
+	if err != nil {
+		return gateway.ListGitDiffFilesResult{}, err
+	}
+	if b.repoService == nil {
+		return gateway.ListGitDiffFilesResult{}, fmt.Errorf("gateway runtime bridge: repository service is unavailable")
+	}
+	inspection, err := b.repoService.Inspect(ctx, root, repository.InspectOptions{ChangedFilesLimit: 200})
+	if err != nil {
+		return gateway.ListGitDiffFilesResult{}, err
+	}
+	result := gateway.ListGitDiffFilesResult{
+		InGitRepo: inspection.Summary.InGitRepo,
+		Branch:    inspection.Summary.Branch,
+		Ahead:     inspection.Summary.Ahead,
+		Behind:    inspection.Summary.Behind,
+		Files:     make([]gateway.GitDiffEntry, 0, len(inspection.ChangedFiles.Files)),
+	}
+	if !inspection.Summary.InGitRepo {
+		return result, nil
+	}
+	result.Truncated = inspection.ChangedFiles.Truncated
+	result.TotalCount = inspection.ChangedFiles.TotalCount
+	for _, file := range inspection.ChangedFiles.Files {
+		result.Files = append(result.Files, gateway.GitDiffEntry{
+			Path:    filepath.ToSlash(file.Path),
+			OldPath: filepath.ToSlash(file.OldPath),
+			Status:  string(file.Status),
+		})
+	}
+	return result, nil
+}
+
+// ReadGitDiffFile 读取单个 Git 变更文件的双文本预览内容。
+func (b *gatewayRuntimePortBridge) ReadGitDiffFile(ctx context.Context, input gateway.ReadGitDiffFileInput) (gateway.ReadGitDiffFileResult, error) {
+	if err := b.ensureRuntimeAccess(input.SubjectID); err != nil {
+		return gateway.ReadGitDiffFileResult{}, err
+	}
+	root, err := b.resolveListFilesRoot(ctx, gateway.ListFilesInput{
+		SubjectID: input.SubjectID,
+		SessionID: input.SessionID,
+		Workdir:   input.Workdir,
+	})
+	if err != nil {
+		return gateway.ReadGitDiffFileResult{}, err
+	}
+	if b.repoService == nil {
+		return gateway.ReadGitDiffFileResult{}, fmt.Errorf("gateway runtime bridge: repository service is unavailable")
+	}
+	result, err := b.repoService.ReadGitDiffFile(ctx, root, input.Path, readFilePreviewLimitBytes)
+	if err != nil {
+		return gateway.ReadGitDiffFileResult{}, err
+	}
+	return gateway.ReadGitDiffFileResult{
+		Path:            filepath.ToSlash(result.Path),
+		OldPath:         filepath.ToSlash(result.OldPath),
+		Status:          string(result.Status),
+		OriginalContent: result.OriginalContent,
+		ModifiedContent: result.ModifiedContent,
+		Encoding:        result.Encoding,
+		IsBinary:        result.IsBinary,
+		Truncated:       result.Truncated,
+		OriginalSize:    result.OriginalSize,
+		ModifiedSize:    result.ModifiedSize,
+	}, nil
+}
+
+// isBinaryPreviewContent 用启发式规则判断预览内容是否应视为二进制。
+func isBinaryPreviewContent(data []byte) bool {
+	if len(data) == 0 {
+		return false
+	}
+	if bytes.IndexByte(data, 0) >= 0 {
+		return true
+	}
+	return !utf8.Valid(data)
+}
+
+// ListModels 列出可用模型；有会话时按会话有效 provider 返回，无会话时按全局默认 provider 返回。
 func (b *gatewayRuntimePortBridge) ListModels(ctx context.Context, input gateway.ListModelsInput) ([]gateway.ModelEntry, error) {
 	if err := b.ensureRuntimeAccess(input.SubjectID); err != nil {
 		return nil, err
 	}
-
-	// 复用 ListProviders 的 Selected 标记逻辑，避免与 cfg.SelectedProvider 单独比较产生不一致
-	providers, err := b.ListProviders(ctx, gateway.ListProvidersInput{SubjectID: input.SubjectID})
+	options, err := b.listProviderOptions(ctx)
+	if err != nil {
+		return nil, err
+	}
+	providerID, _, err := b.resolveEffectiveProviderModel(ctx, strings.TrimSpace(input.SessionID), options)
 	if err != nil {
 		return nil, err
 	}
 
 	models := make([]gateway.ModelEntry, 0)
-	for _, p := range providers {
-		if !p.Selected {
+	for _, option := range options {
+		optionID := strings.TrimSpace(option.ID)
+		if providerID != "" && !strings.EqualFold(providerID, optionID) {
 			continue
 		}
-		for _, model := range p.Models {
+		for _, model := range option.Models {
 			id := strings.TrimSpace(model.ID)
 			if id == "" {
 				continue
@@ -634,7 +895,7 @@ func (b *gatewayRuntimePortBridge) ListModels(ctx context.Context, input gateway
 			models = append(models, gateway.ModelEntry{
 				ID:              id,
 				Name:            name,
-				Provider:        strings.TrimSpace(p.ID),
+				Provider:        optionID,
 				CapabilityHints: model.CapabilityHints,
 			})
 		}
@@ -674,27 +935,18 @@ func (b *gatewayRuntimePortBridge) GetSessionModel(ctx context.Context, input ga
 	if err := b.ensureRuntimeAccess(input.SubjectID); err != nil {
 		return gateway.SessionModelResult{}, err
 	}
-	if b.sessionStore == nil {
-		return gateway.SessionModelResult{}, fmt.Errorf("gateway runtime bridge: session store is unavailable")
-	}
-	session, err := b.loadStoredSession(ctx, strings.TrimSpace(input.SessionID))
+	options, err := b.listProviderOptions(ctx)
 	if err != nil {
 		return gateway.SessionModelResult{}, err
 	}
-	providerID, modelID := strings.TrimSpace(session.Provider), strings.TrimSpace(session.Model)
-	if providerID == "" || modelID == "" {
-		cfg := b.currentConfig()
-		if providerID == "" {
-			providerID = strings.TrimSpace(cfg.SelectedProvider)
-		}
-		if modelID == "" {
-			modelID = strings.TrimSpace(cfg.CurrentModel)
-		}
+	providerID, modelID, err := b.resolveEffectiveProviderModel(ctx, strings.TrimSpace(input.SessionID), options)
+	if err != nil {
+		return gateway.SessionModelResult{}, err
 	}
 	return gateway.SessionModelResult{
 		ProviderID: providerID,
 		ModelID:    modelID,
-		ModelName:  b.modelDisplayName(ctx, providerID, modelID),
+		ModelName:  b.modelDisplayNameFromOptions(providerID, modelID, options),
 		Provider:   providerID,
 	}, nil
 }
@@ -800,6 +1052,9 @@ func (b *gatewayRuntimePortBridge) SelectProviderModel(ctx context.Context, inpu
 		if err != nil {
 			return gateway.ProviderSelectionResult{}, err
 		}
+	}
+	if err := b.SyncSessionsProviderModel(ctx, selection.ProviderID, selection.ModelID); err != nil {
+		return gateway.ProviderSelectionResult{}, err
 	}
 	return gateway.ProviderSelectionResult{ProviderID: selection.ProviderID, ModelID: selection.ModelID}, nil
 }
@@ -942,7 +1197,10 @@ func (b *gatewayRuntimePortBridge) runEventBridge(ctx context.Context) {
 			if !ok {
 				return
 			}
-			mappedEvent := convertRuntimeEvent(event)
+			mappedEvent, mapped := b.convertAskRuntimeEvent(event)
+			if !mapped {
+				mappedEvent = convertRuntimeEvent(event)
+			}
 			select {
 			case <-ctx.Done():
 				return
@@ -952,6 +1210,389 @@ func (b *gatewayRuntimePortBridge) runEventBridge(ctx context.Context) {
 			}
 		}
 	}
+}
+
+// convertAskRuntimeEvent 将 ask 运行的 runtime 事件映射为 ask_chunk/ask_done/ask_error。
+func (b *gatewayRuntimePortBridge) convertAskRuntimeEvent(event agentruntime.RuntimeEvent) (gateway.RuntimeEvent, bool) {
+	if b == nil {
+		return gateway.RuntimeEvent{}, false
+	}
+	runID := strings.TrimSpace(event.RunID)
+	if runID == "" {
+		return gateway.RuntimeEvent{}, false
+	}
+	payloadMap := normalizeAskPayloadMap(event.Payload)
+
+	if event.Type == agentruntime.EventError || event.Type == agentruntime.EventRunCanceled {
+		runState, exists := b.lookupAskRun(runID)
+		if !exists && !strings.HasPrefix(runID, bridgeAskRunPrefix+"-") {
+			return gateway.RuntimeEvent{}, false
+		}
+		sessionID := strings.TrimSpace(event.SessionID)
+		if sessionID == "" {
+			if exists {
+				sessionID = strings.TrimSpace(runState.SessionID)
+			}
+		}
+		if sessionID == "" {
+			return gateway.RuntimeEvent{}, false
+		}
+		code := normalizeAskErrorCode(readStringValueFromMap(payloadMap, "code"), event.Type)
+		message := strings.TrimSpace(readStringValueFromMap(payloadMap, "message"))
+		if message == "" {
+			message = strings.TrimSpace(extractAskPayloadText(event.Payload))
+		}
+		if message == "" {
+			message = "ask failed"
+		}
+		b.completeAskRun(runID)
+		return gateway.RuntimeEvent{
+			Type:      gateway.RuntimeEventTypeAskError,
+			RunID:     runID,
+			SessionID: sessionID,
+			Payload: map[string]any{
+				"code":    code,
+				"message": message,
+			},
+		}, true
+	}
+
+	runState, exists := b.lookupAskRun(runID)
+	if !exists {
+		return gateway.RuntimeEvent{}, false
+	}
+	sessionID := strings.TrimSpace(runState.SessionID)
+
+	switch event.Type {
+	case agentruntime.EventAgentChunk:
+		delta := readRawStringValueFromMap(payloadMap, "delta")
+		if delta == "" {
+			delta = extractAskPayloadText(event.Payload)
+		}
+		if delta == "" {
+			return gateway.RuntimeEvent{}, false
+		}
+		return gateway.RuntimeEvent{
+			Type:      gateway.RuntimeEventTypeAskChunk,
+			RunID:     runID,
+			SessionID: sessionID,
+			Payload: map[string]any{
+				"delta": delta,
+			},
+		}, true
+	case agentruntime.EventAgentDone:
+		fullResponse := readRawStringValueFromMap(payloadMap, "full_response")
+		if fullResponse == "" {
+			fullResponse = extractAskPayloadText(event.Payload)
+		}
+		compacted := readBoolValueFromMap(payloadMap, "compacted")
+		usage := readUsagePayload(payloadMap)
+		b.completeAskRun(runID)
+		return gateway.RuntimeEvent{
+			Type:      gateway.RuntimeEventTypeAskDone,
+			RunID:     runID,
+			SessionID: sessionID,
+			Payload: map[string]any{
+				"full_response": fullResponse,
+				"compacted":     compacted,
+				"usage":         usage,
+			},
+		}, true
+	default:
+		return gateway.RuntimeEvent{}, false
+	}
+}
+
+// generateAskSessionID 生成 ask 会话标识。
+func (b *gatewayRuntimePortBridge) generateAskSessionID() string {
+	sequence := atomic.AddUint64(&b.askSequence, 1)
+	return fmt.Sprintf("%s-%d-%d", bridgeAskSessionPrefix, os.Getpid(), sequence)
+}
+
+// generateAskRunID 生成 ask 运行标识。
+func (b *gatewayRuntimePortBridge) generateAskRunID() string {
+	sequence := atomic.AddUint64(&b.askSequence, 1)
+	return fmt.Sprintf("%s-%d-%d", bridgeAskRunPrefix, os.Getpid(), sequence)
+}
+
+// trackAskRun 记录 ask 运行与会话映射关系。
+func (b *gatewayRuntimePortBridge) trackAskRun(sessionID string, runID string) {
+	if b == nil {
+		return
+	}
+	normalizedSessionID := strings.TrimSpace(sessionID)
+	normalizedRunID := strings.TrimSpace(runID)
+	if normalizedSessionID == "" || normalizedRunID == "" {
+		return
+	}
+
+	now := time.Now().UTC()
+	b.askMu.Lock()
+	defer b.askMu.Unlock()
+	b.cleanupExpiredAskRunsLocked(now)
+	b.askRuns[normalizedRunID] = askBridgeRunState{
+		SessionID: normalizedSessionID,
+		StartedAt: now,
+	}
+}
+
+// lookupAskRun 查询 ask 运行对应的会话状态。
+func (b *gatewayRuntimePortBridge) lookupAskRun(runID string) (askBridgeRunState, bool) {
+	if b == nil {
+		return askBridgeRunState{}, false
+	}
+	normalizedRunID := strings.TrimSpace(runID)
+	if normalizedRunID == "" {
+		return askBridgeRunState{}, false
+	}
+
+	now := time.Now().UTC()
+	b.askMu.Lock()
+	defer b.askMu.Unlock()
+	b.cleanupExpiredAskRunsLocked(now)
+	runState, exists := b.askRuns[normalizedRunID]
+	if !exists {
+		return askBridgeRunState{}, false
+	}
+	return runState, true
+}
+
+// completeAskRun 清理 ask 运行映射。
+func (b *gatewayRuntimePortBridge) completeAskRun(runID string) {
+	if b == nil {
+		return
+	}
+	normalizedRunID := strings.TrimSpace(runID)
+	if normalizedRunID == "" {
+		return
+	}
+
+	b.askMu.Lock()
+	defer b.askMu.Unlock()
+	if _, exists := b.askRuns[normalizedRunID]; exists {
+		delete(b.askRuns, normalizedRunID)
+	}
+}
+
+// forgetAskSession 删除 ask 会话及其关联运行映射。
+func (b *gatewayRuntimePortBridge) forgetAskSession(sessionID string) {
+	if b == nil {
+		return
+	}
+	normalizedSessionID := strings.TrimSpace(sessionID)
+	if normalizedSessionID == "" {
+		return
+	}
+
+	b.askMu.Lock()
+	defer b.askMu.Unlock()
+	for runID, runState := range b.askRuns {
+		if strings.EqualFold(strings.TrimSpace(runState.SessionID), normalizedSessionID) {
+			delete(b.askRuns, runID)
+		}
+	}
+}
+
+// cleanupExpiredAskRunsLocked 清理过期 ask 运行映射（调用方需持有 askMu）。
+func (b *gatewayRuntimePortBridge) cleanupExpiredAskRunsLocked(now time.Time) {
+	if b == nil {
+		return
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	for runID, runState := range b.askRuns {
+		if runState.StartedAt.IsZero() {
+			delete(b.askRuns, runID)
+			continue
+		}
+		if now.Sub(runState.StartedAt) <= bridgeAskRunTTL {
+			continue
+		}
+		delete(b.askRuns, runID)
+	}
+}
+
+// extractAskPayloadText 将 runtime 事件 payload 规整为文本输出。
+func extractAskPayloadText(payload any) string {
+	switch typed := payload.(type) {
+	case nil:
+		return ""
+	case string:
+		return typed
+	case fmt.Stringer:
+		return typed.String()
+	case map[string]any:
+		return extractAskPayloadTextFromMap(typed)
+	default:
+		encoded, err := json.Marshal(typed)
+		if err != nil {
+			return fmt.Sprint(typed)
+		}
+		decoded := make(map[string]any)
+		if err := json.Unmarshal(encoded, &decoded); err != nil {
+			return fmt.Sprint(typed)
+		}
+		return extractAskPayloadTextFromMap(decoded)
+	}
+}
+
+// extractAskPayloadTextFromMap 从 map 结构中提取常见文本字段。
+func extractAskPayloadTextFromMap(payload map[string]any) string {
+	if len(payload) == 0 {
+		return ""
+	}
+	for _, key := range []string{"delta", "full_response", "message", "text", "content", "summary"} {
+		rawValue, exists := payload[key]
+		if !exists || rawValue == nil {
+			continue
+		}
+		text := fmt.Sprint(rawValue)
+		if text != "" {
+			return text
+		}
+	}
+	return ""
+}
+
+// normalizeAskPayloadMap 将 Ask 事件 payload 归一化为 map，便于结构字段读取。
+func normalizeAskPayloadMap(payload any) map[string]any {
+	switch typed := payload.(type) {
+	case map[string]any:
+		return typed
+	case nil:
+		return map[string]any{}
+	default:
+		encoded, err := json.Marshal(typed)
+		if err != nil {
+			return map[string]any{}
+		}
+		decoded := make(map[string]any)
+		if err := json.Unmarshal(encoded, &decoded); err != nil {
+			return map[string]any{}
+		}
+		return decoded
+	}
+}
+
+// readStringValueFromMap 安全读取 map 中的字符串字段。
+func readStringValueFromMap(container map[string]any, key string) string {
+	if len(container) == 0 {
+		return ""
+	}
+	raw, exists := container[strings.TrimSpace(key)]
+	if !exists || raw == nil {
+		return ""
+	}
+	return strings.TrimSpace(fmt.Sprint(raw))
+}
+
+// readRawStringValueFromMap 读取 map 字符串字段并保留首尾空白，避免 Ask 流式片段丢失换行和空格。
+func readRawStringValueFromMap(container map[string]any, key string) string {
+	if len(container) == 0 {
+		return ""
+	}
+	raw, exists := container[strings.TrimSpace(key)]
+	if !exists || raw == nil {
+		return ""
+	}
+	if typed, ok := raw.(string); ok {
+		return typed
+	}
+	return fmt.Sprint(raw)
+}
+
+// readBoolValueFromMap 安全读取 map 中的布尔字段。
+func readBoolValueFromMap(container map[string]any, key string) bool {
+	if len(container) == 0 {
+		return false
+	}
+	raw, exists := container[strings.TrimSpace(key)]
+	if !exists || raw == nil {
+		return false
+	}
+	switch typed := raw.(type) {
+	case bool:
+		return typed
+	case string:
+		normalized := strings.ToLower(strings.TrimSpace(typed))
+		return normalized == "1" || normalized == "true" || normalized == "yes" || normalized == "on"
+	default:
+		return false
+	}
+}
+
+// readUsagePayload 归一化 Ask usage 字段，缺失时补齐默认值。
+func readUsagePayload(container map[string]any) map[string]any {
+	fallback := map[string]any{
+		"input_tokens":  0,
+		"output_tokens": 0,
+	}
+	if len(container) == 0 {
+		return fallback
+	}
+	raw, exists := container["usage"]
+	if !exists || raw == nil {
+		return fallback
+	}
+	if usageMap, ok := raw.(map[string]any); ok {
+		return map[string]any{
+			"input_tokens":  normalizeTokenValue(usageMap["input_tokens"]),
+			"output_tokens": normalizeTokenValue(usageMap["output_tokens"]),
+		}
+	}
+	encoded, err := json.Marshal(raw)
+	if err != nil {
+		return fallback
+	}
+	decoded := map[string]any{}
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		return fallback
+	}
+	return map[string]any{
+		"input_tokens":  normalizeTokenValue(decoded["input_tokens"]),
+		"output_tokens": normalizeTokenValue(decoded["output_tokens"]),
+	}
+}
+
+// normalizeTokenValue 将 token 值转换为整型字段，非法值回退 0。
+func normalizeTokenValue(value any) int {
+	switch typed := value.(type) {
+	case int:
+		if typed > 0 {
+			return typed
+		}
+	case int64:
+		if typed > 0 {
+			return int(typed)
+		}
+	case float64:
+		if typed > 0 {
+			return int(typed)
+		}
+	case string:
+		trimmed := strings.TrimSpace(typed)
+		if trimmed == "" {
+			return 0
+		}
+		parsed, err := strconv.Atoi(trimmed)
+		if err == nil && parsed > 0 {
+			return parsed
+		}
+	}
+	return 0
+}
+
+// normalizeAskErrorCode 归一化 Ask 错误码，确保对外协议字段稳定。
+func normalizeAskErrorCode(raw string, eventType agentruntime.EventType) string {
+	code := strings.ToUpper(strings.TrimSpace(raw))
+	if code != "" {
+		return code
+	}
+	if eventType == agentruntime.EventRunCanceled {
+		return "CANCELED"
+	}
+	return "INTERNAL_ERROR"
 }
 
 // convertGatewayRunInput 将 gateway.run 输入转换为 runtime PrepareInput。
@@ -1081,6 +1722,28 @@ func convertRuntimeSnapshot(snapshot agentruntime.RuntimeSnapshot) gateway.Runti
 			"completed_count": snapshot.SubAgents.CompletedCount,
 			"failed_count":    snapshot.SubAgents.FailedCount,
 		},
+		PendingUserQuestion: convertRuntimePendingUserQuestion(snapshot.PendingUserQuestion),
+	}
+}
+
+// convertRuntimePendingUserQuestion 把 runtime ask_user 待答快照映射为 gateway 契约结构。
+func convertRuntimePendingUserQuestion(
+	payload *agentruntime.UserQuestionRequestedPayload,
+) *gateway.PendingUserQuestionSnapshot {
+	if payload == nil {
+		return nil
+	}
+	return &gateway.PendingUserQuestionSnapshot{
+		RequestID:   strings.TrimSpace(payload.RequestID),
+		QuestionID:  strings.TrimSpace(payload.QuestionID),
+		Title:       strings.TrimSpace(payload.Title),
+		Description: strings.TrimSpace(payload.Description),
+		Kind:        strings.TrimSpace(payload.Kind),
+		Options:     append([]any(nil), payload.Options...),
+		Required:    payload.Required,
+		AllowSkip:   payload.AllowSkip,
+		MaxChoices:  payload.MaxChoices,
+		TimeoutSec:  payload.TimeoutSec,
 	}
 }
 
@@ -1325,6 +1988,52 @@ func (b *gatewayRuntimePortBridge) loadStoredSession(ctx context.Context, sessio
 	return loader.LoadSession(ctx, strings.TrimSpace(sessionID))
 }
 
+// SyncSessionsProviderModel 将当前工作区已列出的会话统一切换到新的 provider/model，避免全局切换后会话元数据继续滞留旧值。
+func (b *gatewayRuntimePortBridge) SyncSessionsProviderModel(
+	ctx context.Context,
+	providerID string,
+	modelID string,
+) error {
+	if b == nil || b.sessionStore == nil || b.runtime == nil {
+		return nil
+	}
+	providerID = strings.TrimSpace(providerID)
+	modelID = strings.TrimSpace(modelID)
+	if providerID == "" || modelID == "" {
+		return nil
+	}
+
+	summaries, err := b.runtime.ListSessions(ctx)
+	if err != nil {
+		return err
+	}
+	for _, summary := range summaries {
+		sessionID := strings.TrimSpace(summary.ID)
+		if sessionID == "" {
+			continue
+		}
+		session, loadErr := b.loadStoredSession(ctx, sessionID)
+		if loadErr != nil {
+			if errors.Is(loadErr, agentsession.ErrSessionNotFound) {
+				continue
+			}
+			return loadErr
+		}
+		head := session.HeadSnapshot()
+		head.Provider = providerID
+		head.Model = modelID
+		if updateErr := b.sessionStore.UpdateSessionState(ctx, agentsession.UpdateSessionStateInput{
+			SessionID: session.ID,
+			Title:     session.Title,
+			UpdatedAt: time.Now().UTC(),
+			Head:      head,
+		}); updateErr != nil {
+			return updateErr
+		}
+	}
+	return nil
+}
+
 // resolveSafeListFilesPath 将前端传入的相对路径限制在根目录内。
 func resolveSafeListFilesPath(root string, rawPath string) (string, string, error) {
 	rootAbs, err := filepath.Abs(filepath.Clean(root))
@@ -1412,6 +2121,135 @@ func (b *gatewayRuntimePortBridge) resolveProviderModelForSession(
 	return "", "", fmt.Errorf("gateway runtime bridge: model %q not found", modelID)
 }
 
+// listProviderOptions 读取当前 provider 选项快照，供模型选择相关逻辑复用。
+func (b *gatewayRuntimePortBridge) listProviderOptions(ctx context.Context) ([]configstate.ProviderOption, error) {
+	if b.providerSelection == nil {
+		return nil, fmt.Errorf("gateway runtime bridge: provider selection is unavailable")
+	}
+	return b.providerSelection.ListProviderOptions(ctx)
+}
+
+// resolveEffectiveProviderModel 解析当前会话或全局默认的有效 provider/model，不会回写会话状态。
+func (b *gatewayRuntimePortBridge) resolveEffectiveProviderModel(
+	ctx context.Context,
+	sessionID string,
+	options []configstate.ProviderOption,
+) (string, string, error) {
+	sessionID = strings.TrimSpace(sessionID)
+	sessionProviderID := ""
+	sessionModelID := ""
+	if sessionID != "" {
+		if b.sessionStore == nil {
+			return "", "", fmt.Errorf("gateway runtime bridge: session store is unavailable")
+		}
+		session, err := b.loadStoredSession(ctx, sessionID)
+		if err != nil {
+			if !isRuntimeNotFoundError(err) {
+				return "", "", err
+			}
+		} else {
+			sessionProviderID = strings.TrimSpace(session.Provider)
+			sessionModelID = strings.TrimSpace(session.Model)
+		}
+	}
+
+	cfg := b.currentConfig()
+	defaultProviderID := strings.TrimSpace(cfg.SelectedProvider)
+	defaultModelID := strings.TrimSpace(cfg.CurrentModel)
+
+	selection, ok := resolveEffectiveProviderModelSelection(
+		options,
+		sessionProviderID,
+		sessionModelID,
+		defaultProviderID,
+		defaultModelID,
+	)
+	if !ok {
+		return "", "", fmt.Errorf("gateway runtime bridge: no available provider/model selection")
+	}
+	return selection.ProviderID, selection.ModelID, nil
+}
+
+type effectiveProviderModelSelection struct {
+	ProviderID string
+	ModelID    string
+}
+
+// resolveEffectiveProviderModelSelection 按“会话优先、全局兜底”规则解析有效 provider/model。
+func resolveEffectiveProviderModelSelection(
+	options []configstate.ProviderOption,
+	sessionProviderID string,
+	sessionModelID string,
+	defaultProviderID string,
+	defaultModelID string,
+) (effectiveProviderModelSelection, bool) {
+	findProvider := func(providerID string) *configstate.ProviderOption {
+		providerID = strings.TrimSpace(providerID)
+		if providerID == "" {
+			return nil
+		}
+		for i := range options {
+			if strings.EqualFold(strings.TrimSpace(options[i].ID), providerID) {
+				return &options[i]
+			}
+		}
+		return nil
+	}
+	firstModelID := func(option *configstate.ProviderOption) string {
+		if option == nil {
+			return ""
+		}
+		for _, model := range option.Models {
+			if id := strings.TrimSpace(model.ID); id != "" {
+				return id
+			}
+		}
+		return ""
+	}
+	resolveModelID := func(option *configstate.ProviderOption, preferredModelID string) string {
+		preferredModelID = strings.TrimSpace(preferredModelID)
+		if option == nil {
+			return ""
+		}
+		if preferredModelID != "" {
+			for _, model := range option.Models {
+				if strings.EqualFold(strings.TrimSpace(model.ID), preferredModelID) {
+					return strings.TrimSpace(model.ID)
+				}
+			}
+		}
+		return firstModelID(option)
+	}
+	firstAvailable := func() (effectiveProviderModelSelection, bool) {
+		for _, option := range options {
+			providerID := strings.TrimSpace(option.ID)
+			modelID := firstModelID(&option)
+			if providerID != "" && modelID != "" {
+				return effectiveProviderModelSelection{ProviderID: providerID, ModelID: modelID}, true
+			}
+		}
+		return effectiveProviderModelSelection{}, false
+	}
+
+	if option := findProvider(sessionProviderID); option != nil {
+		if modelID := resolveModelID(option, sessionModelID); modelID != "" {
+			return effectiveProviderModelSelection{
+				ProviderID: strings.TrimSpace(option.ID),
+				ModelID:    modelID,
+			}, true
+		}
+	}
+	if option := findProvider(defaultProviderID); option != nil {
+		if modelID := resolveModelID(option, defaultModelID); modelID != "" {
+			return effectiveProviderModelSelection{
+				ProviderID: strings.TrimSpace(option.ID),
+				ModelID:    modelID,
+			}, true
+		}
+	}
+	return firstAvailable()
+}
+
 // modelDisplayName 从 provider 候选中查找模型展示名，找不到时回退模型 ID。
 func (b *gatewayRuntimePortBridge) modelDisplayName(ctx context.Context, providerID string, modelID string) string {
 	modelID = strings.TrimSpace(modelID)
@@ -1420,6 +2258,32 @@ func (b *gatewayRuntimePortBridge) modelDisplayName(ctx context.Context, provide
 	}
 	options, err := b.providerSelection.ListProviderOptions(ctx)
 	if err != nil {
+		return modelID
+	}
+	for _, option := range options {
+		if providerID != "" && !strings.EqualFold(strings.TrimSpace(option.ID), strings.TrimSpace(providerID)) {
+			continue
+		}
+		for _, model := range option.Models {
+			if strings.EqualFold(strings.TrimSpace(model.ID), modelID) {
+				if name := strings.TrimSpace(model.Name); name != "" {
+					return name
+				}
+				return strings.TrimSpace(model.ID)
+			}
+		}
+	}
+	return modelID
+}
+
+// modelDisplayNameFromOptions 基于 provider 选项快照查找模型展示名，避免重复读取 provider 列表。
+func (b *gatewayRuntimePortBridge) modelDisplayNameFromOptions(
+	providerID string,
+	modelID string,
+	options []configstate.ProviderOption,
+) string {
+	modelID = strings.TrimSpace(modelID)
+	if modelID == "" {
 		return modelID
 	}
 	for _, option := range options {
@@ -1576,6 +2440,8 @@ func (b *gatewayRuntimePortBridge) CheckpointDiff(ctx context.Context, input gat
 	result, err := cp.CheckpointDiff(ctx, agentruntime.CheckpointDiffInput{
 		SessionID:    strings.TrimSpace(input.SessionID),
 		CheckpointID: strings.TrimSpace(input.CheckpointID),
+		Scope:        strings.TrimSpace(input.Scope),
+		RunID:        strings.TrimSpace(input.RunID),
 	})
 	if err != nil {
 		return gateway.CheckpointDiffResult{}, err

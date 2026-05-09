@@ -12,11 +12,12 @@
   - `gateway.bindStream`
   - `gateway.run`
   - `gateway.resolvePermission`
+  - `gateway.userQuestionAnswer`
   - `gateway.event`
 - 会话与运行 ID 保持实现一致：
   - `session_id = "feishu_" + stableHash(chat_id)`
   - `run_id = "feishu_" + stableHash(message_id)`
-- #557 只新增 SDK 入站，不包含 #555 Local Runner 主动长连。
+- #557 新增 SDK 入站；#555 新增 Local Runner 主动长连（工具在 Runner 本机执行）。
 
 ## 2. 事件执行顺序
 
@@ -45,23 +46,32 @@
 ### 4.1 Webhook 模式（#554）
 
 ```bash
+# 开发模式 (go run)
+go run ./cmd/neocode feishu-adapter --ingress webhook
+
+# 安装模式 (neocode)
 neocode feishu-adapter --ingress webhook
 ```
 
 通常还会覆盖地址参数：
 
 ```bash
-neocode feishu-adapter \
-  --ingress webhook \
-  --listen 127.0.0.1:18080 \
-  --event-path /feishu/events \
-  --card-path /feishu/cards
+# 开发模式 (go run)
+go run ./cmd/neocode feishu-adapter --ingress webhook --listen 127.0.0.1:18080 --event-path /feishu/events --card-path /feishu/cards
+
+# 安装模式 (neocode)
+neocode feishu-adapter --ingress webhook --listen 127.0.0.1:18080 --event-path /feishu/events --card-path /feishu/cards
 ```
 
 ### 4.2 SDK 模式（#557，本地无公网）
 
 ```bash
 export FEISHU_APP_SECRET="cli_secret_xxx"
+
+# 开发模式 (go run)
+go run ./cmd/neocode feishu-adapter --ingress sdk
+
+# 安装模式 (neocode)
 neocode feishu-adapter --ingress sdk
 ```
 
@@ -77,7 +87,7 @@ SDK 模式下不要求公网回调地址，不要求 `adapter.listen/event_path/
 ## 6. 幂等与重试
 
 - 消息去重键：`event_id + message_id`
-- 卡片去重键：`request_id + decision`
+- 卡片去重键：优先 `event_id`，无 `event_id` 时回退到动作键（如 `request_id + decision/status`）
 - 仅当 `gateway.run` 成功受理后才标记成功；
 - 若 `run` 失败会释放去重状态，Webhook 返回 `HTTP 500`，SDK 长连接回调返回失败 ACK，允许飞书重试恢复。
 
@@ -100,8 +110,71 @@ SDK 模式下不要求公网回调地址，不要求 `adapter.listen/event_path/
 
 以上两种路径都复用 `gateway.resolvePermission`，不新增 Gateway action。
 
+## 7.1 ask_user 统一交互（permission + user_question）
+
+飞书端卡片回调已升级为通用 `action_type`：
+
+- `action_type=permission` -> `gateway.resolvePermission`
+- `action_type=user_question` -> `gateway.userQuestionAnswer`
+
+V1 交互策略：
+
+- 单选/跳过：优先卡片按钮提交
+- 文本/多选：回退文本指令提交
+  - `回答 <request_id> <内容>`
+  - `跳过 <request_id>`
+
+`webhook` 与 `sdk` 两条 ingress 使用同一动作映射与幂等规则，保证行为一致。
+
 ## 8. 安全要求
 
 - 默认启用签名校验（Webhook）；
 - 日志不会输出 `app_secret`、签名密钥、gateway token、Authorization 等敏感信息；
 - 用户侧只回关键状态（受理、权限请求、完成、失败），不暴露内部堆栈和控制面细节。
+
+## 9. Local Runner 远程工具执行（#555）
+
+Runner 是部署在用户本机的执行守护进程，通过 WebSocket 主动连接云端 Gateway，接收工具执行请求并在本机完成。
+
+```
+飞书消息 -> Feishu Adapter (cloud) -> Gateway (cloud) -> WebSocket -> Local Runner (本机)
+                                                           ↑ 主动出站连接
+```
+
+### 9.1 启动 Runner
+
+```bash
+# 开发模式 (go run)
+go run ./cmd/neocode runner --gateway-address "your-gateway:8080" --token-file ~/.neocode/auth.json --runner-name "我的本机" --workdir /path/to/project
+
+# 安装模式 (neocode)
+neocode runner --gateway-address "your-gateway:8080" --token-file ~/.neocode/auth.json --runner-name "我的本机" --workdir /path/to/project
+```
+
+Runner 启动后会主动连接 Gateway，注册自身并保持心跳。当飞书消息触发工具调用时，Gateway 将工具请求推送到 Runner 本机执行。
+
+### 9.2 参数说明
+
+| 参数 | 必填 | 默认值 | 说明 |
+|------|:---:|--------|------|
+| `--gateway-address` | 否 | `127.0.0.1:8080` | Gateway WebSocket 地址 |
+| `--token-file` | 否 | — | Gateway 认证 token 文件路径 |
+| `--runner-id` | 否 | 本机 hostname | Runner 唯一标识 |
+| `--runner-name` | 否 | — | 人类可读的 Runner 名称 |
+| `--workdir` | 否 | 当前目录 | Runner 工作目录 |
+
+### 9.3 安全模型
+
+- Runner 端验证 CapabilityToken（HMAC-SHA256 签名、TTL、AllowedTools、AllowedPaths）
+- 支持 Workdir Allowlist 限制可访问路径
+- 所有工具在 Runner 本机执行，结果通过 Gateway 回传飞书
+
+### 9.4 错误翻译
+
+当 Runner 不可用或权限不足时，Feishu Adapter 会将错误码翻译为用户可读消息：
+
+| 错误码 | 飞书消息 |
+|--------|----------|
+| `runner_offline` | 本机 Runner 未连接，请在电脑上启动 `neocode runner` |
+| `capability_denied` | 权限不足：当前能力令牌不允许此操作 |
+| `tool_execution_failed` | 工具执行失败：{详情} |

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -57,14 +58,27 @@ func (s *Service) restoreCheckpointCore(ctx context.Context, sessionID, checkpoi
 
 	// 2. Pre-restore guard checkpoint：把当前 pending 固化为 guard cp，以便 undo 回到 restore 之前。
 	guardID := agentsession.NewID("checkpoint")
-	guardWritten, finalizeErr := s.perEditStore.Finalize(guardID)
+	guardWritten, finalizeErr := s.perEditStore.FinalizePending(guardID)
 	if finalizeErr != nil {
 		return RestoreResult{}, agentsession.CheckpointRecord{}, fmt.Errorf("checkpoint: finalize guard: %w", finalizeErr)
 	}
 	if guardWritten {
 		s.perEditStore.Reset()
 	}
-	guardRecord, guardErr := s.createGuardCheckpoint(ctx, sessionID, record.RunID, guardID, guardWritten)
+	// 当 pending 为空时回退到最近 end-of-turn checkpoint 作为 undo 基线
+	var fallbackRef string
+	if !guardWritten && s.checkpointStore != nil {
+		records, listErr := s.checkpointStore.ListCheckpoints(ctx, sessionID, checkpoint.ListCheckpointOpts{Limit: 5})
+		if listErr == nil {
+			for _, r := range records {
+				if r.Reason == agentsession.CheckpointReasonEndOfTurn && checkpoint.IsPerEditRef(r.CodeCheckpointRef) {
+					fallbackRef = r.CodeCheckpointRef
+					break
+				}
+			}
+		}
+	}
+	guardRecord, guardErr := s.createGuardCheckpoint(ctx, sessionID, record.RunID, guardID, guardWritten, fallbackRef)
 	if guardErr != nil {
 		if guardWritten {
 			_ = s.perEditStore.DeleteCheckpoint(guardID)
@@ -84,7 +98,11 @@ func (s *Service) restoreCheckpointCore(ctx context.Context, sessionID, checkpoi
 					return RestoreResult{}, agentsession.CheckpointRecord{}, fmt.Errorf("checkpoint: restore code: %w", err)
 				}
 			} else {
-				if err := s.perEditStore.Restore(ctx, perEditID); err != nil {
+				guardCheckpointID := ""
+				if guardWritten {
+					guardCheckpointID = guardID
+				}
+				if err := s.perEditStore.Restore(ctx, perEditID, guardCheckpointID); err != nil {
 					return RestoreResult{}, agentsession.CheckpointRecord{}, fmt.Errorf("checkpoint: restore code: %w", err)
 				}
 			}
@@ -196,9 +214,11 @@ func (s *Service) UndoRestoreCheckpoint(ctx context.Context, sessionID string) (
 }
 
 // createGuardCheckpoint 创建 pre_restore_guard 类型的 checkpoint。
-// guardWritten=true 时 guardID 对应的 per-edit cp_<id>.json 已写入，CodeCheckpointRef 指向它；否则仅记 session 状态。
-func (s *Service) createGuardCheckpoint(ctx context.Context, sessionID, runID, guardID string, guardWritten bool) (agentsession.CheckpointRecord, error) {
-	session, err := s.sessionStore.LoadSession(ctx, sessionID)
+// guardWritten=true 时 guardID 对应的 per-edit cp_<id>.json 已写入，CodeCheckpointRef 指向它；
+// guardWritten=false 时若 fallbackRef 非空，则用它作为 CodeCheckpointRef 以保证 undo 可走代码恢复路径。
+// fallbackRef 应为完整的 "peredit:<id>" 格式引用。
+func (s *Service) createGuardCheckpoint(ctx context.Context, sessionID, runID, guardID string, guardWritten bool, fallbackRef string) (agentsession.CheckpointRecord, error) {
+	session, err := s.LoadSession(ctx, sessionID)
 	if err != nil {
 		return agentsession.CheckpointRecord{}, fmt.Errorf("checkpoint: load session for guard: %w", err)
 	}
@@ -216,6 +236,8 @@ func (s *Service) createGuardCheckpoint(ctx context.Context, sessionID, runID, g
 	var ref string
 	if guardWritten {
 		ref = checkpoint.RefForPerEditCheckpoint(guardID)
+	} else if fallbackRef != "" {
+		ref = fallbackRef
 	}
 
 	now := time.Now()
@@ -281,6 +303,8 @@ func (s *Service) updateRuntimeSessionAfterRestore(sessionID string, head agents
 type CheckpointDiffInput struct {
 	SessionID    string `json:"session_id"`
 	CheckpointID string `json:"checkpoint_id,omitempty"` // 可选，为空则查最新代码检查点
+	Scope        string `json:"scope,omitempty"`         // 可选，"run" 表示 run 级聚合 diff
+	RunID        string `json:"run_id,omitempty"`        // scope=run 时指定目标 run
 }
 
 // CheckpointDiffResult 描述两个相邻代码检查点之间的差异。
@@ -300,7 +324,10 @@ type FileDiffs struct {
 	Modified []string `json:"modified,omitempty"`
 }
 
-// CheckpointDiff 查询两个相邻代码检查点之间的差异，单一 per-edit 后端路径。
+// CheckpointDiff 查询 checkpoint 间差异或按 run 聚合 diff。
+// 当 input.Scope == "run" 时，按 runRunDiff 逻辑收集 run_id 下所有
+// per-edit checkpoint，以各文件首次触碰前的 v1.bin 作为 baseline，
+// 对比当前 workdir 状态生成聚合 unified patch。
 func (s *Service) CheckpointDiff(ctx context.Context, input CheckpointDiffInput) (CheckpointDiffResult, error) {
 	if s.checkpointStore == nil || s.perEditStore == nil {
 		return CheckpointDiffResult{}, fmt.Errorf("checkpoint: store not available")
@@ -309,6 +336,10 @@ func (s *Service) CheckpointDiff(ctx context.Context, input CheckpointDiffInput)
 	sessionID := strings.TrimSpace(input.SessionID)
 	if sessionID == "" {
 		return CheckpointDiffResult{}, fmt.Errorf("checkpoint: session_id required")
+	}
+
+	if strings.EqualFold(strings.TrimSpace(input.Scope), "run") {
+		return s.checkpointDiffForRun(ctx, input, sessionID)
 	}
 
 	records, err := s.checkpointStore.ListCheckpoints(ctx, sessionID, checkpoint.ListCheckpointOpts{Limit: 20})
@@ -391,5 +422,86 @@ func (s *Service) CheckpointDiff(ctx context.Context, input CheckpointDiffInput)
 		}
 	}
 
+	return result, nil
+}
+
+// checkpointDiffForRun 汇总指定 run 内的代码 checkpoint，返回本次请求初始状态到当前工作区的净变更。
+func (s *Service) checkpointDiffForRun(ctx context.Context, input CheckpointDiffInput, sessionID string) (CheckpointDiffResult, error) {
+	records, err := s.checkpointStore.ListCheckpoints(ctx, sessionID, checkpoint.ListCheckpointOpts{})
+	if err != nil {
+		return CheckpointDiffResult{}, fmt.Errorf("checkpoint: list for run diff: %w", err)
+	}
+
+	targetID := strings.TrimSpace(input.CheckpointID)
+	runID := strings.TrimSpace(input.RunID)
+	var targetRecord *agentsession.CheckpointRecord
+	if targetID != "" {
+		for i := range records {
+			if records[i].CheckpointID == targetID {
+				targetRecord = &records[i]
+				break
+			}
+		}
+		if targetRecord == nil || !checkpoint.IsPerEditRef(targetRecord.CodeCheckpointRef) {
+			return CheckpointDiffResult{}, fmt.Errorf("checkpoint: %s not found or has no code snapshot", targetID)
+		}
+		if runID == "" {
+			runID = strings.TrimSpace(targetRecord.RunID)
+		}
+	}
+	if runID == "" {
+		return CheckpointDiffResult{}, fmt.Errorf("checkpoint: run_id required for run scope diff")
+	}
+
+	codeRecords := make([]agentsession.CheckpointRecord, 0)
+	for _, record := range records {
+		if strings.TrimSpace(record.RunID) != runID {
+			continue
+		}
+		if !checkpoint.IsPerEditRef(record.CodeCheckpointRef) {
+			continue
+		}
+		if record.Reason == agentsession.CheckpointReasonGuard {
+			continue
+		}
+		if targetRecord != nil && record.CreatedAt.After(targetRecord.CreatedAt) {
+			continue
+		}
+		codeRecords = append(codeRecords, record)
+	}
+	if len(codeRecords) == 0 {
+		return CheckpointDiffResult{}, fmt.Errorf("checkpoint: no code checkpoint found for run %s", runID)
+	}
+	sort.Slice(codeRecords, func(i, j int) bool {
+		return codeRecords[i].CreatedAt.Before(codeRecords[j].CreatedAt)
+	})
+	if targetRecord == nil {
+		targetRecord = &codeRecords[len(codeRecords)-1]
+	}
+
+	perEditIDs := make([]string, 0, len(codeRecords))
+	for _, record := range codeRecords {
+		perEditID := checkpoint.PerEditCheckpointIDFromRef(record.CodeCheckpointRef)
+		if perEditID != "" {
+			perEditIDs = append(perEditIDs, perEditID)
+		}
+	}
+	targetPerEditID := checkpoint.PerEditCheckpointIDFromRef(targetRecord.CodeCheckpointRef)
+	patch, changes, err := s.perEditStore.DiffCheckpointsToCheckpoint(ctx, perEditIDs, targetPerEditID)
+	if err != nil {
+		return CheckpointDiffResult{}, fmt.Errorf("checkpoint: per-edit run diff: %w", err)
+	}
+
+	result := CheckpointDiffResult{CheckpointID: targetRecord.CheckpointID, Patch: patch}
+	for _, c := range changes {
+		switch c.Kind {
+		case checkpoint.FileChangeAdded:
+			result.Files.Added = append(result.Files.Added, c.Path)
+		case checkpoint.FileChangeDeleted:
+			result.Files.Deleted = append(result.Files.Deleted, c.Path)
+		case checkpoint.FileChangeModified:
+			result.Files.Modified = append(result.Files.Modified, c.Path)
+		}
+	}
 	return result, nil
 }

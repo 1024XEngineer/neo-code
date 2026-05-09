@@ -124,6 +124,8 @@ func handleBindStreamFrame(ctx context.Context, frame MessageFrame) MessageFrame
 		SessionID: params.SessionID,
 		RunID:     params.RunID,
 		Channel:   params.Channel,
+		Role:      params.Role,
+		State:     cloneMapValue(params.State),
 		Explicit:  true,
 	}); bindErr != nil {
 		return errorFrame(frame, bindErr)
@@ -138,6 +140,207 @@ func handleBindStreamFrame(ctx context.Context, frame MessageFrame) MessageFrame
 		Payload: map[string]any{
 			"message": "stream binding updated",
 			"channel": params.Channel,
+			"role":    params.Role,
+			"state":   cloneMapValue(params.State),
+		},
+	}
+}
+
+// handleAskFrame 处理 gateway.ask 请求，并以异步方式转发到底层 Ask 编排能力。
+func handleAskFrame(ctx context.Context, frame MessageFrame, runtimePort RuntimePort) MessageFrame {
+	if runtimePort == nil {
+		return runtimePortUnavailableFrame(frame)
+	}
+	subjectID, subjectErr := requireAuthenticatedSubjectID(ctx)
+	if subjectErr != nil {
+		return errorFrame(frame, subjectErr)
+	}
+
+	params, parseErr := decodeAskPayload(frame.Payload)
+	if parseErr != nil {
+		return errorFrame(frame, parseErr)
+	}
+
+	sessionID := strings.TrimSpace(params.SessionID)
+	if sessionID == "" {
+		sessionID = strings.TrimSpace(frame.SessionID)
+	}
+	input := AskInput{
+		SubjectID: subjectID,
+		RequestID: strings.TrimSpace(frame.RequestID),
+		SessionID: sessionID,
+		Workdir:   strings.TrimSpace(params.Workdir),
+		UserQuery: strings.TrimSpace(params.UserQuery),
+		Skills:    append([]string(nil), params.Skills...),
+	}
+	frame.SessionID = sessionID
+
+	askExecutionContext := deriveRuntimeExecutionContext(ctx)
+	callCtx, cancel := withRuntimeOperationTimeout(askExecutionContext)
+	frameSnapshot := frame
+	inputSnapshot := input
+	relay, relayExists := StreamRelayFromContext(ctx)
+	go func() {
+		defer cancel()
+		if err := runtimePort.Ask(callCtx, inputSnapshot); err != nil {
+			failedFrame := runtimeCallFailedFrame(callCtx, frameSnapshot, err, "ask")
+			if logger, ok := GatewayLoggerFromContext(callCtx); ok && logger != nil && failedFrame.Error != nil {
+				logger.Printf(
+					"gateway ask async failed: request_id=%s session_id=%s code=%s message=%s",
+					strings.TrimSpace(frameSnapshot.RequestID),
+					strings.TrimSpace(frameSnapshot.SessionID),
+					strings.TrimSpace(failedFrame.Error.Code),
+					strings.TrimSpace(failedFrame.Error.Message),
+				)
+			}
+			if relayExists && relay != nil {
+				errorCode := "INTERNAL_ERROR"
+				errorMessage := "ask failed"
+				if failedFrame.Error != nil {
+					if normalizedCode := strings.ToUpper(strings.TrimSpace(failedFrame.Error.Code)); normalizedCode != "" {
+						errorCode = normalizedCode
+					}
+					if normalizedMessage := strings.TrimSpace(failedFrame.Error.Message); normalizedMessage != "" {
+						errorMessage = normalizedMessage
+					}
+				}
+				fallbackSessionID := strings.TrimSpace(frameSnapshot.SessionID)
+				if fallbackSessionID == "" {
+					fallbackSessionID = strings.TrimSpace(inputSnapshot.SessionID)
+				}
+				if fallbackSessionID != "" {
+					relay.PublishRuntimeEvent(RuntimeEvent{
+						Type:      RuntimeEventTypeAskError,
+						SessionID: fallbackSessionID,
+						RunID:     strings.TrimSpace(frameSnapshot.RunID),
+						Payload: map[string]any{
+							"code":    errorCode,
+							"message": errorMessage,
+						},
+					})
+				}
+			}
+		}
+	}()
+
+	return MessageFrame{
+		Type:      FrameTypeAck,
+		Action:    FrameActionAsk,
+		RequestID: frame.RequestID,
+		SessionID: input.SessionID,
+		Payload: map[string]string{
+			"message": "ask accepted",
+		},
+	}
+}
+
+// handleDeleteAskSessionFrame 处理 gateway.deleteAskSession 请求。
+func handleDeleteAskSessionFrame(ctx context.Context, frame MessageFrame, runtimePort RuntimePort) MessageFrame {
+	if runtimePort == nil {
+		return runtimePortUnavailableFrame(frame)
+	}
+	subjectID, subjectErr := requireAuthenticatedSubjectID(ctx)
+	if subjectErr != nil {
+		return errorFrame(frame, subjectErr)
+	}
+
+	params, parseErr := decodeDeleteAskSessionPayload(frame.Payload)
+	if parseErr != nil {
+		return errorFrame(frame, parseErr)
+	}
+
+	callCtx, cancel := withRuntimeOperationTimeout(ctx)
+	defer cancel()
+	deleted, err := runtimePort.DeleteAskSession(callCtx, DeleteAskSessionInput{
+		SubjectID: subjectID,
+		RequestID: strings.TrimSpace(frame.RequestID),
+		SessionID: strings.TrimSpace(params.SessionID),
+	})
+	if err != nil {
+		return runtimeCallFailedFrame(callCtx, frame, err, "delete_ask_session")
+	}
+
+	return MessageFrame{
+		Type:      FrameTypeAck,
+		Action:    FrameActionDeleteAskSession,
+		RequestID: frame.RequestID,
+		SessionID: strings.TrimSpace(params.SessionID),
+		Payload: map[string]any{
+			"deleted":    deleted,
+			"session_id": strings.TrimSpace(params.SessionID),
+		},
+	}
+}
+
+// handleTriggerActionFrame 处理 gateway.experimental.triggerAction 请求。
+func handleTriggerActionFrame(ctx context.Context, frame MessageFrame, _ RuntimePort) MessageFrame {
+	params, parseErr := decodeTriggerActionPayload(frame.Payload)
+	if parseErr != nil {
+		return errorFrame(frame, parseErr)
+	}
+
+	relay, relayExists := StreamRelayFromContext(ctx)
+	connectionID, connectionExists := ConnectionIDFromContext(ctx)
+	if !relayExists || !connectionExists {
+		return errorFrame(frame, NewFrameError(ErrorCodeInternalError, "stream relay context is unavailable"))
+	}
+
+	sourceRole, roleExists := relay.ResolveConnectionRole(connectionID, "")
+	if !roleExists || (sourceRole != StreamRoleCLI && sourceRole != StreamRoleTUI) {
+		return errorFrame(frame, NewFrameError(ErrorCodeAccessDenied, "trigger_action requires cli/tui role binding"))
+	}
+
+	targetSessionID, resolveErr := relay.ResolveSessionByRole(strings.TrimSpace(params.SessionID), StreamRoleShell)
+	if resolveErr != nil {
+		return errorFrame(frame, resolveErr)
+	}
+	sourceSessionID := strings.TrimSpace(relay.ResolveFallbackSessionID(connectionID))
+	if sourceSessionID == "" {
+		sourceSessionID = strings.TrimSpace(frame.SessionID)
+	}
+
+	if strings.EqualFold(strings.TrimSpace(params.Action), protocol.TriggerActionAutoStatus) {
+		state, ok := relay.ReadRoleState(targetSessionID, StreamRoleShell)
+		if !ok {
+			return errorFrame(frame, NewFrameError(ErrorCodeResourceNotFound, "shell state is unavailable"))
+		}
+		autoEnabled := readBoolValue(state, "auto_enabled")
+		return MessageFrame{
+			Type:      FrameTypeAck,
+			Action:    FrameActionTriggerAction,
+			RequestID: frame.RequestID,
+			SessionID: targetSessionID,
+			Payload: map[string]any{
+				"action":            protocol.TriggerActionAutoStatus,
+				"session_id":        targetSessionID,
+				"source_session_id": sourceSessionID,
+				"auto_enabled":      autoEnabled,
+			},
+		}
+	}
+
+	notification := protocol.NewJSONRPCNotification(protocol.MethodGatewayNotification, map[string]any{
+		"action":            strings.TrimSpace(params.Action),
+		"payload":           cloneMapValue(params.Payload),
+		"session_id":        targetSessionID,
+		"source_session_id": sourceSessionID,
+	})
+	delivered := relay.SendRoleNotification(targetSessionID, StreamRoleShell, notification)
+	if delivered == 0 {
+		return errorFrame(frame, NewFrameError(ErrorCodeResourceNotFound, "target shell stream is unavailable"))
+	}
+
+	return MessageFrame{
+		Type:      FrameTypeAck,
+		Action:    FrameActionTriggerAction,
+		RequestID: frame.RequestID,
+		SessionID: targetSessionID,
+		Payload: map[string]any{
+			"action":            strings.TrimSpace(params.Action),
+			"payload":           cloneMapValue(params.Payload),
+			"session_id":        targetSessionID,
+			"source_session_id": sourceSessionID,
+			"delivered":         delivered,
 		},
 	}
 }
@@ -874,6 +1077,146 @@ func handleListFilesFrame(ctx context.Context, frame MessageFrame, runtimePort R
 	}
 }
 
+// handleReadFileFrame 处理 gateway.readFile 请求。
+func handleReadFileFrame(ctx context.Context, frame MessageFrame, runtimePort RuntimePort) MessageFrame {
+	if runtimePort == nil {
+		return runtimePortUnavailableFrame(frame)
+	}
+	subjectID, subjectErr := requireAuthenticatedSubjectID(ctx)
+	if subjectErr != nil {
+		return errorFrame(frame, subjectErr)
+	}
+
+	input, err := decodeReadFilePayload(frame.Payload)
+	if err != nil {
+		return errorFrame(frame, err)
+	}
+	if input.Path == "" {
+		return errorFrame(frame, NewMissingRequiredFieldError("payload.path"))
+	}
+
+	callCtx, cancel := withRuntimeOperationTimeout(ctx)
+	defer cancel()
+	result, readErr := runtimePort.ReadFile(callCtx, ReadFileInput{
+		SubjectID: subjectID,
+		SessionID: strings.TrimSpace(frame.SessionID),
+		Workdir:   strings.TrimSpace(frame.Workdir),
+		Path:      input.Path,
+	})
+	if readErr != nil {
+		return runtimeCallFailedFrame(callCtx, frame, readErr, "read_file")
+	}
+
+	return MessageFrame{
+		Type:      FrameTypeAck,
+		Action:    FrameActionReadFile,
+		RequestID: frame.RequestID,
+		SessionID: strings.TrimSpace(frame.SessionID),
+		Payload: map[string]any{
+			"path":      result.Path,
+			"content":   result.Content,
+			"encoding":  result.Encoding,
+			"size":      result.Size,
+			"truncated": result.Truncated,
+			"is_binary": result.IsBinary,
+			"mod_time":  result.ModTime,
+		},
+	}
+}
+
+// handleListGitDiffFilesFrame 处理 gateway.listGitDiffFiles 请求。
+func handleListGitDiffFilesFrame(ctx context.Context, frame MessageFrame, runtimePort RuntimePort) MessageFrame {
+	if runtimePort == nil {
+		return runtimePortUnavailableFrame(frame)
+	}
+	subjectID, subjectErr := requireAuthenticatedSubjectID(ctx)
+	if subjectErr != nil {
+		return errorFrame(frame, subjectErr)
+	}
+
+	input, err := decodeListGitDiffFilesPayload(frame.Payload)
+	if err != nil {
+		return errorFrame(frame, err)
+	}
+
+	callCtx, cancel := withRuntimeOperationTimeout(ctx)
+	defer cancel()
+	result, listErr := runtimePort.ListGitDiffFiles(callCtx, ListGitDiffFilesInput{
+		SubjectID: subjectID,
+		SessionID: input.SessionID,
+		Workdir:   input.Workdir,
+	})
+	if listErr != nil {
+		return runtimeCallFailedFrame(callCtx, frame, listErr, "list_git_diff_files")
+	}
+
+	return MessageFrame{
+		Type:      FrameTypeAck,
+		Action:    FrameActionListGitDiffFiles,
+		RequestID: frame.RequestID,
+		SessionID: strings.TrimSpace(frame.SessionID),
+		Payload: map[string]any{
+			"in_git_repo": result.InGitRepo,
+			"branch":      result.Branch,
+			"ahead":       result.Ahead,
+			"behind":      result.Behind,
+			"truncated":   result.Truncated,
+			"total_count": result.TotalCount,
+			"files":       result.Files,
+		},
+	}
+}
+
+// handleReadGitDiffFileFrame 处理 gateway.readGitDiffFile 请求。
+func handleReadGitDiffFileFrame(ctx context.Context, frame MessageFrame, runtimePort RuntimePort) MessageFrame {
+	if runtimePort == nil {
+		return runtimePortUnavailableFrame(frame)
+	}
+	subjectID, subjectErr := requireAuthenticatedSubjectID(ctx)
+	if subjectErr != nil {
+		return errorFrame(frame, subjectErr)
+	}
+
+	input, err := decodeReadGitDiffFilePayload(frame.Payload)
+	if err != nil {
+		return errorFrame(frame, err)
+	}
+	if input.Path == "" {
+		return errorFrame(frame, NewMissingRequiredFieldError("payload.path"))
+	}
+
+	callCtx, cancel := withRuntimeOperationTimeout(ctx)
+	defer cancel()
+	result, readErr := runtimePort.ReadGitDiffFile(callCtx, ReadGitDiffFileInput{
+		SubjectID: subjectID,
+		SessionID: input.SessionID,
+		Workdir:   input.Workdir,
+		Path:      input.Path,
+	})
+	if readErr != nil {
+		return runtimeCallFailedFrame(callCtx, frame, readErr, "read_git_diff_file")
+	}
+
+	return MessageFrame{
+		Type:      FrameTypeAck,
+		Action:    FrameActionReadGitDiffFile,
+		RequestID: frame.RequestID,
+		SessionID: strings.TrimSpace(frame.SessionID),
+		Payload: map[string]any{
+			"path":             result.Path,
+			"old_path":         result.OldPath,
+			"status":           result.Status,
+			"original_content": result.OriginalContent,
+			"modified_content": result.ModifiedContent,
+			"encoding":         result.Encoding,
+			"is_binary":        result.IsBinary,
+			"truncated":        result.Truncated,
+			"size_original":    result.OriginalSize,
+			"size_modified":    result.ModifiedSize,
+		},
+	}
+}
+
 // handleListModelsFrame 处理 gateway.listModels 请求。
 func handleListModelsFrame(ctx context.Context, frame MessageFrame, runtimePort RuntimePort) MessageFrame {
 	if runtimePort == nil {
@@ -905,8 +1248,9 @@ func handleListModelsFrame(ctx context.Context, frame MessageFrame, runtimePort 
 		RequestID: frame.RequestID,
 		SessionID: strings.TrimSpace(frame.SessionID),
 		Payload: map[string]any{
-			"models":            models,
-			"selected_model_id": sessionModel.ModelID,
+			"models":               models,
+			"selected_provider_id": sessionModel.ProviderID,
+			"selected_model_id":    sessionModel.ModelID,
 		},
 	}
 }
@@ -1195,6 +1539,44 @@ func handleDeleteMCPServerFrame(ctx context.Context, frame MessageFrame, runtime
 	return MessageFrame{Type: FrameTypeAck, Action: FrameActionDeleteMCPServer, RequestID: frame.RequestID, Payload: map[string]any{"deleted": true, "id": input.ID}}
 }
 
+// handleUserQuestionAnswerFrame 处理 gateway.user_question_answer 请求。
+func handleUserQuestionAnswerFrame(ctx context.Context, frame MessageFrame, runtimePort RuntimePort) MessageFrame {
+	if runtimePort == nil {
+		return runtimePortUnavailableFrame(frame)
+	}
+	subjectID, subjectErr := requireAuthenticatedSubjectID(ctx)
+	if subjectErr != nil {
+		return errorFrame(frame, subjectErr)
+	}
+
+	input, err := decodeUserQuestionAnswerPayload(frame.Payload)
+	if err != nil {
+		return errorFrame(frame, NewFrameError(ErrorCodeInvalidAction, "invalid user_question_answer payload"))
+	}
+	input.SubjectID = subjectID
+	input.RequestID = strings.TrimSpace(input.RequestID)
+	if input.RequestID == "" {
+		return errorFrame(frame, NewMissingRequiredFieldError("payload.request_id"))
+	}
+
+	callCtx, cancel := withRuntimeOperationTimeout(ctx)
+	defer cancel()
+	if err := runtimePort.ResolveUserQuestion(callCtx, input); err != nil {
+		return runtimeCallFailedFrame(callCtx, frame, err, "user_question_answer")
+	}
+
+	return MessageFrame{
+		Type:      FrameTypeAck,
+		Action:    FrameActionUserQuestionAnswer,
+		RequestID: frame.RequestID,
+		Payload: map[string]any{
+			"request_id": input.RequestID,
+			"status":     input.Status,
+			"message":    "user question answered",
+		},
+	}
+}
+
 // handleResolvePermissionFrame 处理 gateway.resolvePermission 请求。
 func handleResolvePermissionFrame(ctx context.Context, frame MessageFrame, runtimePort RuntimePort) MessageFrame {
 	if runtimePort == nil {
@@ -1371,6 +1753,25 @@ type bindStreamParams struct {
 	SessionID string
 	RunID     string
 	Channel   StreamChannel
+	Role      StreamRole
+	State     map[string]any
+}
+
+type askParams struct {
+	SessionID string
+	UserQuery string
+	Skills    []string
+	Workdir   string
+}
+
+type deleteAskSessionParams struct {
+	SessionID string
+}
+
+type triggerActionParams struct {
+	SessionID string
+	Action    string
+	Payload   map[string]any
 }
 
 type authenticateParams struct {
@@ -1392,6 +1793,12 @@ type renameSessionParams struct {
 }
 
 type listFilesParams struct {
+	SessionID string
+	Workdir   string
+	Path      string
+}
+
+type readFileParams struct {
 	SessionID string
 	Workdir   string
 	Path      string
@@ -1447,6 +1854,8 @@ func decodeBindStreamParams(payload any) (bindStreamParams, *FrameError) {
 			SessionID: readStringValue(typed, "session_id"),
 			RunID:     readStringValue(typed, "run_id"),
 			Channel:   readStringValue(typed, "channel"),
+			Role:      readStringValue(typed, "role"),
+			State:     readMapValue(typed, "state"),
 		})
 	default:
 		raw, marshalErr := json.Marshal(payload)
@@ -1459,6 +1868,69 @@ func decodeBindStreamParams(payload any) (bindStreamParams, *FrameError) {
 		}
 		return normalizeBindStreamParams(decoded)
 	}
+}
+
+// decodeAskPayload 解析 ask 的负载参数。
+func decodeAskPayload(payload any) (askParams, *FrameError) {
+	var params protocol.AskParams
+	if err := decodePayload(payload, &params); err != nil {
+		return askParams{}, NewFrameError(ErrorCodeInvalidFrame, "invalid ask payload")
+	}
+
+	normalized := askParams{
+		SessionID: strings.TrimSpace(params.SessionID),
+		UserQuery: strings.TrimSpace(params.UserQuery),
+		Workdir:   strings.TrimSpace(params.Workdir),
+	}
+	if normalized.UserQuery == "" {
+		return askParams{}, NewMissingRequiredFieldError("payload.user_query")
+	}
+	if len(params.Skills) > 0 {
+		normalized.Skills = make([]string, 0, len(params.Skills))
+		for _, skillID := range params.Skills {
+			trimmed := strings.TrimSpace(skillID)
+			if trimmed == "" {
+				continue
+			}
+			normalized.Skills = append(normalized.Skills, trimmed)
+		}
+	}
+
+	return normalized, nil
+}
+
+// decodeDeleteAskSessionPayload 解析 delete_ask_session 的负载参数。
+func decodeDeleteAskSessionPayload(payload any) (deleteAskSessionParams, *FrameError) {
+	var params protocol.DeleteAskSessionParams
+	if err := decodePayload(payload, &params); err != nil {
+		return deleteAskSessionParams{}, NewFrameError(ErrorCodeInvalidFrame, "invalid delete_ask_session payload")
+	}
+	normalized := deleteAskSessionParams{SessionID: strings.TrimSpace(params.SessionID)}
+	if normalized.SessionID == "" {
+		return deleteAskSessionParams{}, NewMissingRequiredFieldError("payload.session_id")
+	}
+	return normalized, nil
+}
+
+// decodeTriggerActionPayload 解析 trigger_action 的负载参数。
+func decodeTriggerActionPayload(payload any) (triggerActionParams, *FrameError) {
+	var params protocol.TriggerActionParams
+	if err := decodePayload(payload, &params); err != nil {
+		return triggerActionParams{}, NewFrameError(ErrorCodeInvalidFrame, "invalid trigger_action payload")
+	}
+
+	normalized := triggerActionParams{
+		SessionID: strings.TrimSpace(params.SessionID),
+		Action:    strings.ToLower(strings.TrimSpace(params.Action)),
+		Payload:   cloneMapValue(params.Payload),
+	}
+	if normalized.Action == "" {
+		return triggerActionParams{}, NewMissingRequiredFieldError("payload.action")
+	}
+	if !isSupportedTriggerAction(normalized.Action) {
+		return triggerActionParams{}, NewFrameError(ErrorCodeInvalidAction, "invalid trigger_action action")
+	}
+	return normalized, nil
 }
 
 // decodeAuthenticatePayload 解析 authenticate 的负载参数。
@@ -1870,11 +2342,22 @@ func normalizeBindStreamParams(params protocol.BindStreamParams) (bindStreamPara
 	if !validChannel {
 		return bindStreamParams{}, NewFrameError(ErrorCodeInvalidAction, "invalid bind_stream channel")
 	}
+	role := strings.ToLower(strings.TrimSpace(params.Role))
+	parsedRole, validRole := ParseStreamRole(role)
+	if !validRole {
+		return bindStreamParams{}, NewFrameError(ErrorCodeInvalidAction, "invalid bind_stream role")
+	}
+	var state map[string]any
+	if len(params.State) > 0 {
+		state = cloneMapValue(params.State)
+	}
 
 	return bindStreamParams{
 		SessionID: sessionID,
 		RunID:     runID,
 		Channel:   parsedChannel,
+		Role:      parsedRole,
+		State:     state,
 	}, nil
 }
 
@@ -1889,6 +2372,31 @@ func readStringValue(payload map[string]any, key string) string {
 		return ""
 	}
 	return strings.TrimSpace(stringValue)
+}
+
+// readMapValue 读取 map 负载中的对象字段并复制为独立 map。
+func readMapValue(payload map[string]any, key string) map[string]any {
+	rawValue, exists := payload[key]
+	if !exists || rawValue == nil {
+		return nil
+	}
+	typedValue, ok := rawValue.(map[string]any)
+	if !ok {
+		return nil
+	}
+	return cloneMapValue(typedValue)
+}
+
+// cloneMapValue 复制 map，避免跨协程共享同一底层引用。
+func cloneMapValue(source map[string]any) map[string]any {
+	if len(source) == 0 {
+		return nil
+	}
+	cloned := make(map[string]any, len(source))
+	for key, value := range source {
+		cloned[strings.TrimSpace(key)] = value
+	}
+	return cloned
 }
 
 func readBoolValue(payload map[string]any, key string) bool {
@@ -1916,6 +2424,20 @@ func readIntValue(payload map[string]any, key string) int {
 		return int(typed)
 	default:
 		return 0
+	}
+}
+
+// isSupportedTriggerAction 判断 trigger_action 是否属于受支持动作集合。
+func isSupportedTriggerAction(action string) bool {
+	switch strings.ToLower(strings.TrimSpace(action)) {
+	case protocol.TriggerActionDiagnose,
+		protocol.TriggerActionIDMEnter,
+		protocol.TriggerActionAutoOn,
+		protocol.TriggerActionAutoOff,
+		protocol.TriggerActionAutoStatus:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -2104,11 +2626,15 @@ func decodeCheckpointDiffPayload(payload any) CheckpointDiffInput {
 			SubjectID:    strings.TrimSpace(typed.SubjectID),
 			SessionID:    strings.TrimSpace(typed.SessionID),
 			CheckpointID: strings.TrimSpace(typed.CheckpointID),
+			Scope:        strings.TrimSpace(typed.Scope),
+			RunID:        strings.TrimSpace(typed.RunID),
 		}
 	case map[string]any:
 		return CheckpointDiffInput{
 			SessionID:    readStringValue(typed, "session_id"),
 			CheckpointID: readStringValue(typed, "checkpoint_id"),
+			Scope:        readStringValue(typed, "scope"),
+			RunID:        readStringValue(typed, "run_id"),
 		}
 	default:
 		raw, marshalErr := json.Marshal(payload)
@@ -2118,12 +2644,100 @@ func decodeCheckpointDiffPayload(payload any) CheckpointDiffInput {
 		var decoded struct {
 			SessionID    string `json:"session_id"`
 			CheckpointID string `json:"checkpoint_id"`
+			RunID        string `json:"run_id"`
+			Scope        string `json:"scope"`
 		}
 		_ = json.Unmarshal(raw, &decoded)
 		return CheckpointDiffInput{
 			SessionID:    strings.TrimSpace(decoded.SessionID),
 			CheckpointID: strings.TrimSpace(decoded.CheckpointID),
+			Scope:        strings.TrimSpace(decoded.Scope),
+			RunID:        strings.TrimSpace(decoded.RunID),
 		}
+	}
+}
+
+// handleRegisterRunnerFrame 处理 runner 注册请求。
+func handleRegisterRunnerFrame(ctx context.Context, frame MessageFrame, _ RuntimePort) MessageFrame {
+	registry := RunnerRegistryFromContext(ctx)
+	if registry == nil {
+		return errorFrame(frame, NewFrameError(ErrorCodeInternalError, "runner registry not available"))
+	}
+
+	params, ok := frame.Payload.(protocol.RegisterRunnerParams)
+	if !ok {
+		raw, marshalErr := json.Marshal(frame.Payload)
+		if marshalErr != nil {
+			return errorFrame(frame, NewMissingRequiredFieldError("payload.runner_id"))
+		}
+		var p protocol.RegisterRunnerParams
+		if err := json.Unmarshal(raw, &p); err != nil {
+			return errorFrame(frame, NewFrameError(ErrorCodeInvalidAction, "invalid register_runner params"))
+		}
+		params = p
+	}
+
+	if params.RunnerID == "" {
+		return errorFrame(frame, NewMissingRequiredFieldError("runner_id"))
+	}
+	if params.Workdir == "" {
+		return errorFrame(frame, NewMissingRequiredFieldError("workdir"))
+	}
+
+	connectionID, ok := ConnectionIDFromContext(ctx)
+	if !ok {
+		return errorFrame(frame, NewFrameError(ErrorCodeInternalError, "connection id not found"))
+	}
+
+	registry.Register(connectionID, params.RunnerID, params.RunnerName, params.Workdir, params.Labels)
+
+	return MessageFrame{
+		Type:      FrameTypeAck,
+		Action:    FrameActionRegisterRunner,
+		RequestID: frame.RequestID,
+		Payload: map[string]string{
+			"runner_id": params.RunnerID,
+			"status":    "registered",
+		},
+	}
+}
+
+// handleExecuteToolResultFrame 处理 runner 回传的工具执行结果。
+func handleExecuteToolResultFrame(ctx context.Context, frame MessageFrame, _ RuntimePort) MessageFrame {
+	manager := RunnerToolManagerFromContext(ctx)
+	if manager == nil {
+		return errorFrame(frame, NewFrameError(ErrorCodeInternalError, "runner tool manager not available"))
+	}
+
+	params, ok := frame.Payload.(protocol.ExecuteToolResultParams)
+	if !ok {
+		raw, marshalErr := json.Marshal(frame.Payload)
+		if marshalErr != nil {
+			return errorFrame(frame, NewMissingRequiredFieldError("payload.request_id"))
+		}
+		var p protocol.ExecuteToolResultParams
+		if err := json.Unmarshal(raw, &p); err != nil {
+			return errorFrame(frame, NewFrameError(ErrorCodeInvalidAction, "invalid execute_tool_result params"))
+		}
+		params = p
+	}
+
+	if params.RequestID == "" {
+		return errorFrame(frame, NewMissingRequiredFieldError("request_id"))
+	}
+
+	if err := manager.CompleteToolRequest(params.RequestID, params.Content, params.IsError); err != nil {
+		return errorFrame(frame, NewFrameError(ErrorCodeResourceNotFound, err.Error()))
+	}
+
+	return MessageFrame{
+		Type:      FrameTypeAck,
+		Action:    FrameActionExecuteToolResult,
+		RequestID: frame.RequestID,
+		Payload: map[string]string{
+			"request_id": params.RequestID,
+			"status":     "completed",
+		},
 	}
 }
 

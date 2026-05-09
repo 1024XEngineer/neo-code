@@ -53,6 +53,18 @@ $env:OPENAI_API_KEY = "your_key_here"
 
 If you want the variable to persist, use your operating system or shell's normal environment variable setup. Do not put real keys in `config.yaml`.
 
+### ModelScope API Key Setup
+
+ModelScope uses a semi-automated TUI guide flow to configure the API key:
+
+1. Run `/provider` in the TUI and select `modelscope`
+2. Press Enter to step through: guide page → login page, complete ModelScope community login
+3. On the Token page (<https://www.modelscope.cn/my/access/token>), create and copy your API Key
+4. Back in the TUI, paste the token in the guide panel and press Enter to validate
+5. **Bind Alibaba Cloud account**: Visit [Account Settings](https://www.modelscope.cn/my/settings/account) to link your Alibaba Cloud account. This step is required — API calls will fail without it
+
+If token validation detects an auth or permission error, the TUI will automatically open the account binding page.
+
 ## Switch provider and model
 
 The recommended path is the NeoCode UI; selections are saved automatically:

@@ -4,12 +4,14 @@ import {
   type BudgetCheckedPayload,
   type BudgetEstimateFailedPayload,
   type CheckpointCreatedPayload,
+  type CheckpointDiffResultPayload,
   type CheckpointRestoredPayload,
   type CheckpointUndoRestorePayload,
   type CheckpointWarningPayload,
   type LedgerReconciledPayload,
   type MessageFrame,
   type PermissionRequestPayload,
+  type PendingUserQuestionSnapshot,
   type TodoEventPayload,
   type TokenUsage,
   type VerificationCompletedPayload,
@@ -26,7 +28,7 @@ import { useGatewayStore } from '@/stores/useGatewayStore'
 import { useSessionStore } from '@/stores/useSessionStore'
 import { useRuntimeInsightStore } from '@/stores/useRuntimeInsightStore'
 import { useWorkspaceStore } from '@/stores/useWorkspaceStore'
-import { parseSingleFileDiff, type ParsedFileDiff } from '@/utils/patchParser'
+import { parseSingleFileDiff, parseUnifiedPatch, type ParsedFileDiff } from '@/utils/patchParser'
 
 type PayloadRecord = Record<string, unknown> | undefined
 
@@ -35,14 +37,16 @@ type PayloadRecord = Record<string, unknown> | undefined
 let _latestVerificationMsgId: string | undefined
 let _latestDoneToolCallId: string | undefined
 
-// 模块级缓存最新的 checkpoint_id，供 reject 回退使用
+// 模块级缓存最新的 checkpoint_id，用于工具占位条目关联后续端到端 diff。
 let _latestCheckpointId: string | undefined
+let _latestRunDiffRequestId = 0
 
 /** 重置模块级游标 —— 在截断聊天历史 / 切换会话等场景调用，避免后续事件挂到已被移除的消息上 */
 export function resetEventBridgeCursors() {
   _latestVerificationMsgId = undefined
   _latestDoneToolCallId = undefined
   _latestCheckpointId = undefined
+  _latestRunDiffRequestId += 1
 }
 
 /**
@@ -85,6 +89,7 @@ function _upsertFileChange(
               additions: parsed?.additions ?? c.additions,
               deletions: parsed?.deletions ?? c.deletions,
               diff: parsed?.lines ?? c.diff,
+              hunks: parsed?.hunks ?? c.hunks,
               checkpoint_id: _latestCheckpointId ?? c.checkpoint_id,
             }
           : c,
@@ -98,6 +103,7 @@ function _upsertFileChange(
       additions: parsed?.additions ?? 0,
       deletions: parsed?.deletions ?? 0,
       diff: parsed?.lines,
+      hunks: parsed?.hunks,
       checkpoint_id: _latestCheckpointId,
     })
   }
@@ -164,6 +170,63 @@ function _applyToolDiff(payload: ToolDiffPayload) {
   }
 }
 
+function _fileChangesFromCheckpointDiff(diff: CheckpointDiffResultPayload) {
+  const parsed = diff.patch ? parseUnifiedPatch(diff.patch) : {}
+  const parsedByPath = new Map<string, ParsedFileDiff>()
+  for (const [path, parsedDiff] of Object.entries(parsed)) {
+    const normalized = normalizeFilePath(path)
+    if (normalized) parsedByPath.set(normalized, parsedDiff)
+  }
+  const byPath = new Map<string, 'added' | 'modified' | 'deleted'>()
+  for (const path of diff.files?.added ?? []) byPath.set(normalizeFilePath(path), 'added')
+  for (const path of diff.files?.modified ?? []) byPath.set(normalizeFilePath(path), 'modified')
+  for (const path of diff.files?.deleted ?? []) byPath.set(normalizeFilePath(path), 'deleted')
+
+  for (const path of parsedByPath.keys()) {
+    if (!byPath.has(path)) byPath.set(path, 'modified')
+  }
+
+  return Array.from(byPath.entries())
+    .filter(([path]) => path)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([path, status]) => {
+      const parsedDiff = parsedByPath.get(path)
+      return {
+        id: `fc_${path}`,
+        path,
+        status,
+        additions: parsedDiff?.additions ?? 0,
+        deletions: parsedDiff?.deletions ?? 0,
+        diff: parsedDiff?.lines,
+        hunks: parsedDiff?.hunks,
+        checkpoint_id: diff.checkpoint_id,
+      }
+    })
+}
+
+function _refreshRunFileChanges(
+  gatewayAPI: GatewayAPI,
+  sessionId: string,
+  runId: string,
+  checkpointId: string,
+) {
+  const requestId = ++_latestRunDiffRequestId
+  gatewayAPI.checkpointDiff({
+    session_id: sessionId,
+    run_id: runId,
+    checkpoint_id: checkpointId,
+    scope: 'run',
+  }).then((result) => {
+    if (requestId !== _latestRunDiffRequestId) return
+    if (runId !== useGatewayStore.getState().currentRunId) return
+    if (sessionId !== useSessionStore.getState().currentSessionId) return
+    if (!result?.payload) return
+    useUIStore.getState().replaceFileChanges(_fileChangesFromCheckpointDiff(result.payload))
+  }).catch((error) => {
+    console.warn('[eventBridge] checkpoint.diff run scope failed:', error)
+  })
+}
+
 function normalizePermissionPayload(raw: unknown): PermissionRequestPayload | null {
   const r = raw as Record<string, unknown> | undefined
   if (!r || typeof r !== 'object') return null
@@ -182,12 +245,82 @@ function normalizePermissionPayload(raw: unknown): PermissionRequestPayload | nu
   }
 }
 
+function normalizeUserQuestionRequestedPayload(raw: unknown): PendingUserQuestionSnapshot | null {
+  const r = raw as Record<string, unknown> | undefined
+  if (!r || typeof r !== 'object') return null
+  const requestId = strField(r, 'request_id') || strField(r, 'RequestID')
+  if (!requestId) return null
+  const options = Array.isArray(r.options) ? [...r.options] : undefined
+  const parseNumberField = (camel: string, pascal: string): number | undefined => {
+    const value = r[camel] ?? r[pascal]
+    if (typeof value === 'number' && Number.isFinite(value) && value > 0) return value
+    if (typeof value === 'string') {
+      const parsed = Number(value)
+      if (Number.isFinite(parsed) && parsed > 0) return parsed
+    }
+    return undefined
+  }
+  return {
+    request_id: requestId,
+    question_id: strField(r, 'question_id') || strField(r, 'QuestionID'),
+    title: strField(r, 'title') || strField(r, 'Title'),
+    description: strField(r, 'description') || strField(r, 'Description'),
+    kind: strField(r, 'kind') || strField(r, 'Kind'),
+    options,
+    required: !!(r.required ?? r.Required),
+    allow_skip: !!(r.allow_skip ?? r.AllowSkip),
+    max_choices: parseNumberField('max_choices', 'MaxChoices'),
+    timeout_sec: parseNumberField('timeout_sec', 'TimeoutSec'),
+  }
+}
+
 const CRITICAL_EVENTS = new Set<string>([
   EventType.Error,
 ])
 
 function strField(payload: unknown, key: string): string {
   return ((payload as PayloadRecord)?.[key] as string) ?? ''
+}
+
+/** 从 tool_result 事件中解析最终工具调用 ID，兼容字段名差异。 */
+function resolveToolResultCallID(eventPayload: unknown): string {
+  return strField(eventPayload, 'tool_call_id')
+    || strField(eventPayload, 'toolCallId')
+    || strField(eventPayload, 'id')
+    || strField(eventPayload, 'call_id')
+}
+
+/** 将 tool_result 结算到匹配条目；若 ID 缺失或乱序，回退结算最近一条 running 工具消息。 */
+function settleToolResultMessage(eventPayload: unknown) {
+  const resultText = strField(eventPayload, 'content')
+  const isError = !!((eventPayload as PayloadRecord)?.is_error)
+  const status = isError ? 'error' as const : 'done' as const
+  const callID = resolveToolResultCallID(eventPayload)
+
+  if (callID) {
+    const matched = useChatStore.getState().updateToolCall(callID, resultText, status)
+    if (matched) return callID
+  }
+
+  let settledID = ''
+  useChatStore.setState((state) => {
+    let consumed = false
+    const next = [...state.messages]
+    for (let i = next.length - 1; i >= 0; i -= 1) {
+      const item = next[i]
+      if (item.type !== 'tool_call' || item.toolStatus !== 'running') continue
+      if (consumed) break
+      settledID = item.toolCallId || ''
+      next[i] = {
+        ...item,
+        toolStatus: status,
+        toolResult: resultText || item.toolResult,
+      }
+      consumed = true
+    }
+    return consumed ? { messages: next } : state
+  })
+  return settledID
 }
 
 /**
@@ -264,6 +397,7 @@ export function handleGatewayEvent(frame: MessageFrame, gatewayAPI: GatewayAPI) 
         chatStore.finalizeMessage(chatStore.streamingMessageId, content)
       }
       chatStore.setGenerating(false)
+      chatStore.finalizeRunningToolCalls('done')
       if (frameSessionId) {
         useSessionStore.getState().fetchSessions(gatewayAPI, true).catch(() => {})
       }
@@ -292,8 +426,7 @@ export function handleGatewayEvent(frame: MessageFrame, gatewayAPI: GatewayAPI) 
     }
 
     case EventType.ToolResult: {
-      const tcId = strField(eventPayload, 'tool_call_id')
-      useChatStore.getState().updateToolCall(tcId, strField(eventPayload, 'content'), 'done')
+      const tcId = settleToolResultMessage(eventPayload)
       _latestDoneToolCallId = tcId
       break
     }
@@ -317,6 +450,7 @@ export function handleGatewayEvent(frame: MessageFrame, gatewayAPI: GatewayAPI) 
       const sessionId = strField(eventPayload, 'session_id') || frameSessionId || ''
       const runId = strField(eventPayload, 'run_id') || frameRunId || ''
       if (runId) gwStore.setCurrentRunId(runId)
+      useUIStore.getState().clearFileChanges()
       if (sessionId && sessionId !== useSessionStore.getState().currentSessionId) {
         useSessionStore.getState().setCurrentSessionId(sessionId)
       }
@@ -334,6 +468,21 @@ export function handleGatewayEvent(frame: MessageFrame, gatewayAPI: GatewayAPI) 
       const r = eventPayload as Record<string, unknown> | undefined
       const requestId = strField(r, 'request_id') || strField(r, 'RequestID')
       if (requestId) useChatStore.getState().removePermissionRequest(requestId)
+      break
+    }
+
+    case EventType.UserQuestionRequested: {
+      const payload = normalizeUserQuestionRequestedPayload(eventPayload)
+      if (payload) useChatStore.getState().setPendingUserQuestion(payload)
+      break
+    }
+
+    case EventType.UserQuestionAnswered:
+    case EventType.UserQuestionSkipped:
+    case EventType.UserQuestionTimeout: {
+      const p = eventPayload as Record<string, unknown> | undefined
+      const requestId = strField(p, 'request_id') || strField(p, 'RequestID')
+      useChatStore.getState().clearPendingUserQuestion(requestId || undefined)
       break
     }
 
@@ -365,6 +514,7 @@ export function handleGatewayEvent(frame: MessageFrame, gatewayAPI: GatewayAPI) 
       const errorMsg = (eventPayload as string) ?? 'Unknown error'
       uiStore.showToast(errorMsg, 'error')
       useChatStore.getState().resetGeneratingState()
+      useChatStore.getState().finalizeRunningToolCalls('error')
       break
     }
 
@@ -373,6 +523,9 @@ export function handleGatewayEvent(frame: MessageFrame, gatewayAPI: GatewayAPI) 
       const detail = strField(eventPayload, 'detail')
       useChatStore.getState().setStopReason(reason)
       useChatStore.getState().setGenerating(false)
+      if (reason === 'fatal_error') {
+        useChatStore.getState().finalizeRunningToolCalls('error')
+      }
       if (reason === 'fatal_error') {
         uiStore.showToast(detail || '模型调用失败，请检查配置', 'error')
       }
@@ -565,6 +718,9 @@ export function handleGatewayEvent(frame: MessageFrame, gatewayAPI: GatewayAPI) 
           chatStore.attachCheckpointToToolCall(_latestDoneToolCallId, payload.checkpoint_id)
         }
         _latestCheckpointId = payload.checkpoint_id
+        if (payload.reason === 'end_of_turn' && gatewayAPI && frameSessionId && frameRunId) {
+          _refreshRunFileChanges(gatewayAPI, frameSessionId, frameRunId, payload.checkpoint_id)
+        }
       }
       break
     }

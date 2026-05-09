@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useCallback, useRef } from 'react'
 import Sidebar from './Sidebar'
 import ChatPanel from '@/components/chat/ChatPanel'
 import FileChangePanel from '@/components/panels/FileChangePanel'
@@ -8,19 +8,65 @@ import ToastContainer from '@/components/ui/ToastContainer'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
 import { useUIStore } from '@/stores/useUIStore'
 import { useSessionStore } from '@/stores/useSessionStore'
+import { useWorkspaceStore } from '@/stores/useWorkspaceStore'
 
 interface AppLayoutProps {
   shellMode?: 'electron' | 'browser'
 }
 
-/** 三栏布局外壳 */
+/** 拖拽调整面板宽度 */
+function useResize(onResize: (delta: number) => void) {
+  const dragging = useRef(false)
+
+  const onMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    dragging.current = true
+    const startX = e.clientX
+
+    function onMove(ev: MouseEvent) {
+      if (!dragging.current) return
+      onResize(ev.clientX - startX)
+    }
+    function onUp() {
+      dragging.current = false
+      document.removeEventListener('mousemove', onMove)
+      document.removeEventListener('mouseup', onUp)
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+    }
+
+    document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none'
+    document.addEventListener('mousemove', onMove)
+    document.addEventListener('mouseup', onUp)
+  }, [onResize])
+
+  return { onMouseDown }
+}
+
 export default function AppLayout({ shellMode = 'electron' }: AppLayoutProps) {
   const sidebarOpen = useUIStore((s) => s.sidebarOpen)
   const sidebarWidth = useUIStore((s) => s.sidebarWidth)
+  const setSidebarWidth = useUIStore((s) => s.setSidebarWidth)
   const changesPanelOpen = useUIStore((s) => s.changesPanelOpen)
   const changesPanelWidth = useUIStore((s) => s.changesPanelWidth)
+  const setChangesPanelWidth = useUIStore((s) => s.setChangesPanelWidth)
   const fileTreePanelOpen = useUIStore((s) => s.fileTreePanelOpen)
   const fileTreePanelWidth = useUIStore((s) => s.fileTreePanelWidth)
+  const setFileTreePanelWidth = useUIStore((s) => s.setFileTreePanelWidth)
+  const currentWorkspaceHash = useWorkspaceStore((s) => s.currentWorkspaceHash)
+
+  const sidebarResize = useResize(useCallback((delta) => {
+    setSidebarWidth(Math.max(180, Math.min(500, sidebarWidth + delta)))
+  }, [sidebarWidth, setSidebarWidth]))
+
+  const changesResize = useResize(useCallback((delta) => {
+    setChangesPanelWidth(Math.max(240, Math.min(600, changesPanelWidth - delta)))
+  }, [changesPanelWidth, setChangesPanelWidth]))
+
+  const fileTreeResize = useResize(useCallback((delta) => {
+    setFileTreePanelWidth(Math.max(240, Math.min(600, fileTreePanelWidth - delta)))
+  }, [fileTreePanelWidth, setFileTreePanelWidth]))
 
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
@@ -34,43 +80,42 @@ export default function AppLayout({ shellMode = 'electron' }: AppLayoutProps) {
   }, [])
 
   return (
-    <div style={{
-      ...layoutStyles.container,
-      ...(shellMode === 'browser' ? layoutStyles.browserContainer : null),
-    }}>
-      <div style={layoutStyles.workspace}>
+    <div className="app-shell" style={shellMode === 'browser' ? { minHeight: '100dvh', height: '100dvh' } : undefined}>
+      <div className="app-workspace">
         {sidebarOpen ? (
-          <div style={{ ...layoutStyles.sidebar, width: sidebarWidth }}>
-            <ErrorBoundary fallback={(_err, retry) => <div style={{ padding: 12, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}><div style={{ color: 'var(--text-tertiary)', fontSize: 12 }}>Failed to load sidebar</div><button onClick={retry} style={{ padding: '4px 12px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-primary)', background: 'var(--bg-secondary)', color: 'var(--text-primary)', fontSize: 11, cursor: 'pointer' }}>Retry</button></div>}>
-              <Sidebar />
-            </ErrorBoundary>
+          <div className="sidebar" style={{ width: sidebarWidth, position: 'relative' }}>
+            <Sidebar />
+            <div
+              className="resize-handle"
+              onMouseDown={sidebarResize.onMouseDown}
+            />
           </div>
         ) : (
-          <div style={layoutStyles.sidebarCollapsed}>
-            <ErrorBoundary fallback={(_err, retry) => <div style={{ padding: 8, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}><div style={{ color: 'var(--text-tertiary)', fontSize: 11 }}>Sidebar error</div><button onClick={retry} style={{ padding: '2px 8px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-primary)', background: 'var(--bg-secondary)', color: 'var(--text-primary)', fontSize: 10, cursor: 'pointer' }}>Retry</button></div>}>
-              <Sidebar collapsed />
-            </ErrorBoundary>
+          <div className="sidebar-collapsed-wrapper">
+            <Sidebar collapsed />
           </div>
         )}
-        <div style={layoutStyles.main}>
+        <div className="main-area">
           <ErrorBoundary fallback={(err, retry) => (
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: 12, padding: 32, color: 'var(--text-tertiary)' }}>
-              <div>Failed to load chat panel</div>
-              <div style={{ fontSize: 12 }}>{err.message}</div>
-              <button onClick={retry} style={{ padding: '6px 16px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-primary)', background: 'var(--bg-secondary)', color: 'var(--text-primary)', fontSize: 12, cursor: 'pointer' }}>Retry</button>
+            <div className="error-screen">
+              <div className="error-screen-title">Failed to load chat panel</div>
+              <div className="error-screen-detail">{err.message}</div>
+              <button onClick={retry} className="error-screen-btn">Retry</button>
             </div>
           )}>
             <ChatPanel />
           </ErrorBoundary>
         </div>
         {changesPanelOpen && (
-          <div style={{ ...layoutStyles.rightPanel, width: `min(${changesPanelWidth}px, 24vw)` }}>
+          <div className="right-panel" style={{ width: changesPanelWidth, position: 'relative' }}>
+            <div className="resize-handle resize-handle-left" onMouseDown={changesResize.onMouseDown} />
             <FileChangePanel />
           </div>
         )}
         {fileTreePanelOpen && (
-          <div style={{ ...layoutStyles.rightPanel, width: `min(${fileTreePanelWidth}px, 22vw)` }}>
-            <FileTreePanel />
+          <div className="right-panel" style={{ width: fileTreePanelWidth, position: 'relative' }}>
+            <div className="resize-handle resize-handle-left" onMouseDown={fileTreeResize.onMouseDown} />
+            <FileTreePanel key={`file-tree:${currentWorkspaceHash || 'default'}`} />
           </div>
         )}
       </div>
@@ -78,58 +123,4 @@ export default function AppLayout({ shellMode = 'electron' }: AppLayoutProps) {
       <ToastContainer />
     </div>
   )
-}
-
-const layoutStyles: Record<string, React.CSSProperties> = {
-  container: {
-    display: 'flex',
-    flexDirection: 'column',
-    height: '100vh',
-    width: '100vw',
-    overflow: 'hidden',
-    background: 'var(--bg-primary)',
-    color: 'var(--text-primary)',
-  },
-  browserContainer: {
-    minHeight: '100dvh',
-    height: '100dvh',
-  },
-  workspace: {
-    flex: 1,
-    minHeight: 0,
-    display: 'flex',
-    overflow: 'hidden',
-  },
-  sidebar: {
-    flexShrink: 0,
-    borderRight: '1px solid var(--border-primary)',
-    display: 'flex',
-    flexDirection: 'column',
-    overflow: 'hidden',
-  },
-  sidebarCollapsed: {
-    width: 44,
-    flexShrink: 0,
-    borderRight: '1px solid var(--border-primary)',
-    background: 'var(--bg-secondary)',
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-    paddingTop: 8,
-    gap: 4,
-  },
-  main: {
-    flex: 1,
-    minWidth: 0,
-    display: 'flex',
-    flexDirection: 'column',
-    overflow: 'hidden',
-  },
-  rightPanel: {
-    flexShrink: 0,
-    borderLeft: '1px solid var(--border-primary)',
-    display: 'flex',
-    flexDirection: 'column',
-    overflow: 'hidden',
-  },
 }

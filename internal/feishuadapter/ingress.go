@@ -37,7 +37,11 @@ type FeishuMention struct {
 
 // FeishuCardActionEvent 表示标准化后的审批动作事件。
 type FeishuCardActionEvent struct {
-	EventID   string
-	RequestID string
-	Decision  string
+	EventID    string
+	ActionType string
+	RequestID  string
+	Decision   string
+	Status     string
+	Values     []string
+	Message    string
 }

@@ -73,6 +73,8 @@ neocode --workdir /path/to/your/project
 neocode web
 ```
 
+标签发布版执行 `neocode web` 时，会直接使用二进制内嵌的 Web UI 资源启动，不要求当前机器安装 Node.js 或 npm。
+
 ## 5. 第一次对话
 
 可以先让 NeoCode 读项目结构：
@@ -115,6 +117,8 @@ cd neo-code
 go build ./...
 go run ./cmd/neocode
 ```
+
+如果你希望从源码仓库直接验证 Web UI，也可以运行 `go run ./cmd/neocode web`。当 `web/dist` 缺失时，命令会自动尝试构建前端；若构建机没有 Node.js/npm，会直接报出依赖缺失提示。也就是说，只有源码运行场景仍依赖本地前端构建链路。
 
 如果你只想稳定使用，优先使用一键安装方式。源码构建更适合阅读代码、调试功能或参与开发。
 

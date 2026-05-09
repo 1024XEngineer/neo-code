@@ -81,6 +81,7 @@ type ToolCallInput struct {
 	AgentID         string
 	Workdir         string
 	ReadOnly        bool
+	Mode            string
 	CapabilityToken *security.CapabilityToken
 	WorkspacePlan   *security.WorkspaceExecutionPlan
 	// SessionMutator 仅对需要会话级写入的工具开放（例如 todo_write）。
@@ -89,7 +90,13 @@ type ToolCallInput struct {
 	SubAgentInvoker SubAgentInvoker
 	// EmitChunk 用于工具执行期间的流式输出回调。
 	EmitChunk ChunkEmitter
+	// AskUserEventEmitter 用于 ask_user 工具发出事件（user_question_requested/answered 等）。
+	AskUserEventEmitter AskUserEventEmitter
 }
+
+// AskUserEventEmitter 定义 ask_user 工具的事件发射回调。
+// 第一个参数是事件名，第二个参数是事件负载。
+type AskUserEventEmitter func(eventName string, payload any)
 
 // ToolResult 是工具执行完成后返回给 runtime 的统一结果结构。
 type ToolResult struct {

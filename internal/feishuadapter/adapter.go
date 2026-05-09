@@ -8,6 +8,7 @@ import (
 	"log"
 	"math/rand"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -19,6 +20,24 @@ const defaultSignatureMaxSkew = 5 * time.Minute
 const defaultProgressNotifyInterval = 2 * time.Second
 const defaultCardRefreshInterval = 1500 * time.Millisecond
 
+type approvalEntry struct {
+	RequestID string
+	ToolName  string
+	Reason    string
+	Decision  string // "pending", "allow_once", "reject"
+}
+
+type userQuestionEntry struct {
+	RequestID   string
+	QuestionID  string
+	Title       string
+	Description string
+	Kind        string
+	Options     []UserQuestionCardOption
+	AllowSkip   bool
+	MaxChoices  int
+}
+
 type sessionBinding struct {
 	SessionID       string
 	ChatID          string
@@ -27,6 +46,7 @@ type sessionBinding struct {
 	TaskName        string
 	Status          string
 	ApprovalStatus  string
+	ApprovalRecords []approvalEntry
 	Result          string
 	LastSummary     string
 	AsyncRewakeHint string
@@ -43,11 +63,14 @@ type Adapter struct {
 
 	nowFn func() time.Time
 
-	mu             sync.RWMutex
-	activeRuns     map[string]sessionBinding
-	sessionChats   map[string]string
-	requestRuns    map[string]string
-	lastProgressAt map[string]time.Time
+	mu                sync.RWMutex
+	activeRuns        map[string]sessionBinding
+	sessionChats      map[string]string
+	requestRuns       map[string]string
+	lastProgressAt    map[string]time.Time
+	permissionCards   map[string]string // requestID -> card message_id
+	userQuestionCards map[string]string // requestID -> card message_id
+	pendingQuestions  map[string]userQuestionEntry
 }
 
 // New 创建飞书适配器实例。
@@ -65,16 +88,19 @@ func New(cfg Config, gateway GatewayClient, messenger Messenger, logger *log.Log
 		logger = log.New(io.Discard, "", 0)
 	}
 	return &Adapter{
-		cfg:            cfg,
-		gateway:        gateway,
-		messenger:      messenger,
-		logger:         logger,
-		idem:           newIdempotencyStore(cfg.IdempotencyTTL),
-		nowFn:          func() time.Time { return time.Now().UTC() },
-		activeRuns:     make(map[string]sessionBinding),
-		sessionChats:   make(map[string]string),
-		requestRuns:    make(map[string]string),
-		lastProgressAt: make(map[string]time.Time),
+		cfg:               cfg,
+		gateway:           gateway,
+		messenger:         messenger,
+		logger:            logger,
+		idem:              newIdempotencyStore(cfg.IdempotencyTTL),
+		nowFn:             func() time.Time { return time.Now().UTC() },
+		activeRuns:        make(map[string]sessionBinding),
+		sessionChats:      make(map[string]string),
+		requestRuns:       make(map[string]string),
+		lastProgressAt:    make(map[string]time.Time),
+		permissionCards:   make(map[string]string),
+		userQuestionCards: make(map[string]string),
+		pendingQuestions:  make(map[string]userQuestionEntry),
 	}, nil
 }
 
@@ -157,7 +183,7 @@ func (a *Adapter) HandleMessage(ctx context.Context, event FeishuMessageEvent) e
 	if text == "" {
 		return nil
 	}
-	if handled, err := a.tryHandleTextPermission(ctx, event.ChatID, text); handled {
+	if handled, err := a.tryHandleTextAction(ctx, event.ChatID, text); handled {
 		if err == nil {
 			succeeded = true
 		}
@@ -178,11 +204,19 @@ func (a *Adapter) HandleMessage(ctx context.Context, event FeishuMessageEvent) e
 // HandleCardAction 处理标准化后的审批动作事件并映射到网关授权接口。
 func (a *Adapter) HandleCardAction(ctx context.Context, event FeishuCardActionEvent) error {
 	requestID := strings.TrimSpace(event.RequestID)
-	decision := strings.TrimSpace(strings.ToLower(event.Decision))
-	if requestID == "" || (decision != "allow_once" && decision != "reject") {
+	if requestID == "" {
 		return nil
 	}
-	dedupeKey := "card:" + requestID + ":" + decision
+	actionType := strings.TrimSpace(strings.ToLower(event.ActionType))
+	if actionType == "" {
+		if decision := strings.TrimSpace(strings.ToLower(event.Decision)); decision != "" {
+			actionType = "permission"
+		} else {
+			actionType = "user_question"
+		}
+	}
+
+	dedupeKey := buildCardActionDedupeKey(event, actionType)
 	if !a.idem.TryStart(dedupeKey, a.nowFn()) {
 		return nil
 	}
@@ -197,11 +231,35 @@ func (a *Adapter) HandleCardAction(ctx context.Context, event FeishuCardActionEv
 
 	callCtx, cancel := context.WithTimeout(ctx, a.cfg.RequestTimeout)
 	defer cancel()
-	if err := a.gateway.ResolvePermission(callCtx, requestID, decision); err != nil {
-		a.safeLog("resolve permission failed: %v", err)
-		return err
+	switch actionType {
+	case "permission":
+		decision := strings.TrimSpace(strings.ToLower(event.Decision))
+		if decision != "allow_once" && decision != "reject" {
+			return nil
+		}
+		if err := a.gateway.ResolvePermission(callCtx, requestID, decision); err != nil {
+			a.safeLog("resolve permission failed: %v", err)
+			return err
+		}
+		a.updateApprovalStatus(requestID, decision)
+	case "user_question":
+		status := strings.TrimSpace(strings.ToLower(event.Status))
+		if status == "" {
+			status = "answered"
+		}
+		if status != "answered" && status != "skipped" {
+			return nil
+		}
+		values := append([]string(nil), event.Values...)
+		message := strings.TrimSpace(event.Message)
+		if err := a.gateway.ResolveUserQuestion(callCtx, requestID, status, values, message); err != nil {
+			a.safeLog("resolve user question failed: %v", err)
+			return err
+		}
+		a.updateUserQuestionStatus(requestID, status, values, message)
+	default:
+		return nil
 	}
-	a.updateApprovalStatus(requestID, decision)
 	succeeded = true
 	return nil
 }
@@ -261,6 +319,9 @@ func (a *Adapter) untrackRun(sessionID string, runID string) {
 		for requestID, requestRunKey := range a.requestRuns {
 			if requestRunKey == key {
 				delete(a.requestRuns, requestID)
+				delete(a.permissionCards, requestID)
+				delete(a.userQuestionCards, requestID)
+				delete(a.pendingQuestions, requestID)
 			}
 		}
 		delete(a.lastProgressAt, key)
@@ -316,14 +377,56 @@ func (a *Adapter) handleGatewayEvent(ctx context.Context, raw json.RawMessage) {
 		if envelope != nil {
 			if runtimeType := readString(envelope, "runtime_event_type"); runtimeType != "" {
 				if strings.EqualFold(runtimeType, "permission_requested") {
-					requestID, reason := extractPermissionRequest(envelope)
+					requestID, toolName, operation, target, reason := extractPermissionRequest(envelope)
 					if requestID != "" {
-						a.markPermissionPending(sessionID, runID, requestID, reason)
-						_ = a.messenger.SendPermissionCard(ctx, chatID, PermissionCardPayload{
+						a.markPermissionPending(sessionID, runID, requestID, toolName, reason)
+						cardID, err := a.messenger.SendPermissionCard(ctx, chatID, PermissionCardPayload{
 							RequestID: requestID,
+							ToolName:  toolName,
+							Operation: operation,
+							Target:    target,
 							Message:   reason,
 						})
+						if err == nil && strings.TrimSpace(cardID) != "" {
+							a.mu.Lock()
+							a.permissionCards[requestID] = cardID
+							a.mu.Unlock()
+						}
 						return
+					}
+				} else if strings.EqualFold(runtimeType, "user_question_requested") {
+					question := extractUserQuestionRequest(envelope)
+					if question.RequestID != "" {
+						if !a.markUserQuestionPending(sessionID, runID, question) {
+							return
+						}
+						if shouldSendAskUserCard(question) {
+							cardID, err := a.messenger.SendUserQuestionCard(ctx, chatID, UserQuestionCardPayload{
+								RequestID:   question.RequestID,
+								QuestionID:  question.QuestionID,
+								Title:       question.Title,
+								Description: question.Description,
+								Kind:        question.Kind,
+								Options:     append([]UserQuestionCardOption(nil), question.Options...),
+								AllowSkip:   question.AllowSkip,
+							})
+							if err == nil && strings.TrimSpace(cardID) != "" {
+								a.mu.Lock()
+								a.userQuestionCards[question.RequestID] = cardID
+								a.mu.Unlock()
+							}
+						} else {
+							_ = a.messenger.SendText(ctx, chatID, buildAskUserTextPrompt(question))
+						}
+						return
+					}
+				} else if isUserQuestionResolvedEvent(runtimeType) {
+					resolved := extractUserQuestionResolved(envelope)
+					if resolved.Status == "" {
+						resolved.Status = userQuestionStatusFromRuntimeType(runtimeType)
+					}
+					if resolved.RequestID != "" {
+						a.updateUserQuestionStatus(resolved.RequestID, resolved.Status, resolved.Values, resolved.Message)
 					}
 				}
 				a.handleRunProgressCard(ctx, sessionID, runID, runtimeType, envelope)
@@ -494,12 +597,18 @@ func (a *Adapter) handleRunProgressCard(ctx context.Context, sessionID string, r
 }
 
 // markPermissionPending 将权限请求映射到 run 卡片，便于用户在同一卡片观察审批状态。
-func (a *Adapter) markPermissionPending(sessionID string, runID string, requestID string, reason string) {
+func (a *Adapter) markPermissionPending(sessionID string, runID string, requestID string, toolName string, reason string) {
 	key := runBindingKey(sessionID, runID)
 	a.mu.Lock()
 	binding, ok := a.activeRuns[key]
 	if ok {
 		binding.ApprovalStatus = "pending"
+		binding.ApprovalRecords = append(binding.ApprovalRecords, approvalEntry{
+			RequestID: requestID,
+			ToolName:  toolName,
+			Reason:    reason,
+			Decision:  "pending",
+		})
 		if strings.TrimSpace(reason) != "" {
 			binding.LastSummary = strings.TrimSpace(reason)
 		}
@@ -522,7 +631,92 @@ func (a *Adapter) markPermissionPending(sessionID string, runID string, requestI
 	}
 }
 
-// updateApprovalStatus 在审批动作被网关受理后更新 run 卡片中的审批结论。
+// markUserQuestionPending 记录 ask_user 待回答问题，并挂接到 run 状态卡上下文。
+func (a *Adapter) markUserQuestionPending(sessionID string, runID string, question userQuestionEntry) bool {
+	requestID := strings.TrimSpace(question.RequestID)
+	if requestID == "" {
+		return false
+	}
+	key := runBindingKey(sessionID, runID)
+	a.mu.Lock()
+	if _, exists := a.pendingQuestions[requestID]; exists {
+		a.mu.Unlock()
+		return false
+	}
+	if binding, ok := a.activeRuns[key]; ok {
+		summary := strings.TrimSpace(question.Title)
+		if summary == "" {
+			summary = strings.TrimSpace(question.Description)
+		}
+		if summary != "" {
+			binding.LastSummary = "等待用户回答：" + summary
+			a.activeRuns[key] = binding
+		}
+	}
+	a.requestRuns[requestID] = key
+	a.pendingQuestions[requestID] = userQuestionEntry{
+		RequestID:   requestID,
+		QuestionID:  strings.TrimSpace(question.QuestionID),
+		Title:       strings.TrimSpace(question.Title),
+		Description: strings.TrimSpace(question.Description),
+		Kind:        strings.TrimSpace(strings.ToLower(question.Kind)),
+		Options:     append([]UserQuestionCardOption(nil), question.Options...),
+		AllowSkip:   question.AllowSkip,
+		MaxChoices:  question.MaxChoices,
+	}
+	a.mu.Unlock()
+	return true
+}
+
+// updateUserQuestionStatus 在 ask_user 提交后更新状态卡摘要，并将提问卡片更新为已处理态。
+func (a *Adapter) updateUserQuestionStatus(requestID string, status string, values []string, message string) {
+	normalizedRequestID := strings.TrimSpace(requestID)
+	if normalizedRequestID == "" {
+		return
+	}
+	normalizedStatus := strings.TrimSpace(strings.ToLower(status))
+	if normalizedStatus == "" {
+		normalizedStatus = "answered"
+	}
+
+	a.mu.Lock()
+	key := a.requestRuns[normalizedRequestID]
+	binding, ok := a.activeRuns[key]
+	question := a.pendingQuestions[normalizedRequestID]
+	if ok {
+		binding.LastSummary = buildUserQuestionResolvedSummary(question, normalizedStatus, values, message)
+		a.activeRuns[key] = binding
+	}
+	statusCardID := ""
+	statusPayload := StatusCardPayload{}
+	if ok {
+		statusCardID = strings.TrimSpace(binding.CardID)
+		statusPayload = binding.statusCardPayload()
+	}
+	cardID := strings.TrimSpace(a.userQuestionCards[normalizedRequestID])
+	delete(a.pendingQuestions, normalizedRequestID)
+	delete(a.userQuestionCards, normalizedRequestID)
+	delete(a.requestRuns, normalizedRequestID)
+	a.mu.Unlock()
+
+	if statusCardID != "" {
+		if err := a.messenger.UpdateCard(context.Background(), statusCardID, statusPayload); err != nil {
+			a.safeLog("update ask_user status card failed: %v", err)
+		}
+	}
+	if cardID != "" {
+		if err := a.messenger.UpdateUserQuestionCard(context.Background(), cardID, ResolvedUserQuestionCardPayload{
+			RequestID: normalizedRequestID,
+			Title:     question.Title,
+			Status:    normalizedStatus,
+			Summary:   buildUserQuestionResolvedSummary(question, normalizedStatus, values, message),
+		}); err != nil {
+			a.safeLog("update ask_user card failed: %v", err)
+		}
+	}
+}
+
+// updateApprovalStatus 在审批动作被网关受理后更新 run 卡片中的审批结论，并更新权限卡片为已处理状态。
 func (a *Adapter) updateApprovalStatus(requestID string, decision string) {
 	normalizedDecision := strings.TrimSpace(strings.ToLower(decision))
 	if normalizedDecision == "" {
@@ -531,25 +725,51 @@ func (a *Adapter) updateApprovalStatus(requestID string, decision string) {
 	a.mu.Lock()
 	key := a.requestRuns[strings.TrimSpace(requestID)]
 	binding, ok := a.activeRuns[key]
+	var approvalEntry *approvalEntry
 	if ok {
-		switch normalizedDecision {
-		case "allow_once", "allow_session":
-			binding.ApprovalStatus = "approved"
-		case "reject":
-			binding.ApprovalStatus = "rejected"
+		status := "approved"
+		if normalizedDecision == "reject" {
+			status = "rejected"
+		}
+		binding.ApprovalStatus = status
+		for i := range binding.ApprovalRecords {
+			if binding.ApprovalRecords[i].RequestID == strings.TrimSpace(requestID) {
+				binding.ApprovalRecords[i].Decision = normalizedDecision
+				entry := binding.ApprovalRecords[i]
+				approvalEntry = &entry
+				break
+			}
 		}
 		a.activeRuns[key] = binding
 	}
-	cardID := ""
-	payload := StatusCardPayload{}
+	statusCardID := ""
+	statusPayload := StatusCardPayload{}
 	if ok {
-		cardID = strings.TrimSpace(binding.CardID)
-		payload = binding.statusCardPayload()
+		statusCardID = strings.TrimSpace(binding.CardID)
+		statusPayload = binding.statusCardPayload()
 	}
+	permCardID := a.permissionCards[strings.TrimSpace(requestID)]
 	a.mu.Unlock()
-	if cardID != "" {
-		if err := a.messenger.UpdateCard(context.Background(), cardID, payload); err != nil {
+
+	// 更新状态卡片
+	if statusCardID != "" {
+		if err := a.messenger.UpdateCard(context.Background(), statusCardID, statusPayload); err != nil {
 			a.safeLog("update approval status card failed: %v", err)
+		}
+	}
+
+	// 更新权限卡片为已处理状态（去掉按钮，显示结果）
+	if permCardID != "" {
+		resolvedPayload := ResolvedPermissionCardPayload{
+			RequestID: strings.TrimSpace(requestID),
+			Approved:  normalizedDecision != "reject",
+		}
+		if approvalEntry != nil {
+			resolvedPayload.ToolName = approvalEntry.ToolName
+			resolvedPayload.Message = approvalEntry.Reason
+		}
+		if err := a.messenger.UpdatePermissionCard(context.Background(), permCardID, resolvedPayload); err != nil {
+			a.safeLog("update permission card failed: %v", err)
 		}
 	}
 }
@@ -639,8 +859,8 @@ func isMentionCurrentBot(event FeishuMessageEvent, cfg Config) bool {
 	return false
 }
 
-// tryHandleTextPermission 处理 SDK 模式下的文本审批降级指令。
-func (a *Adapter) tryHandleTextPermission(ctx context.Context, chatID string, text string) (bool, error) {
+// tryHandleTextAction 处理权限审批与 ask_user 的文本降级指令。
+func (a *Adapter) tryHandleTextAction(ctx context.Context, chatID string, text string) (bool, error) {
 	trimmed := strings.TrimSpace(text)
 	if trimmed == "" {
 		return false, nil
@@ -652,7 +872,11 @@ func (a *Adapter) tryHandleTextPermission(ctx context.Context, chatID string, te
 		if requestID == "" {
 			return true, nil
 		}
-		err := a.HandleCardAction(ctx, FeishuCardActionEvent{RequestID: requestID, Decision: "allow_once"})
+		err := a.HandleCardAction(ctx, FeishuCardActionEvent{
+			ActionType: "permission",
+			RequestID:  requestID,
+			Decision:   "allow_once",
+		})
 		if err != nil {
 			_ = a.messenger.SendText(context.Background(), chatID, "审批提交失败，请稍后重试。")
 			return true, err
@@ -664,16 +888,217 @@ func (a *Adapter) tryHandleTextPermission(ctx context.Context, chatID string, te
 		if requestID == "" {
 			return true, nil
 		}
-		err := a.HandleCardAction(ctx, FeishuCardActionEvent{RequestID: requestID, Decision: "reject"})
+		err := a.HandleCardAction(ctx, FeishuCardActionEvent{
+			ActionType: "permission",
+			RequestID:  requestID,
+			Decision:   "reject",
+		})
 		if err != nil {
 			_ = a.messenger.SendText(context.Background(), chatID, "审批提交失败，请稍后重试。")
 			return true, err
 		}
 		_ = a.messenger.SendText(context.Background(), chatID, "审批已提交：拒绝。")
 		return true, nil
+	case strings.HasPrefix(normalized, "跳过 "):
+		requestID := strings.TrimSpace(trimmed[len("跳过 "):])
+		if requestID == "" {
+			return true, nil
+		}
+		err := a.HandleCardAction(ctx, FeishuCardActionEvent{
+			ActionType: "user_question",
+			RequestID:  requestID,
+			Status:     "skipped",
+		})
+		if err != nil {
+			_ = a.messenger.SendText(context.Background(), chatID, "回答提交失败，请稍后重试。")
+			return true, err
+		}
+		_ = a.messenger.SendText(context.Background(), chatID, "已提交：跳过当前问题。")
+		return true, nil
+	case strings.HasPrefix(normalized, "回答 "):
+		remainder := strings.TrimSpace(trimmed[len("回答 "):])
+		requestID, answer := splitRequestAndBody(remainder)
+		if requestID == "" {
+			return true, nil
+		}
+		values, message, ok := a.parseUserQuestionTextAnswer(requestID, answer)
+		if !ok {
+			_ = a.messenger.SendText(context.Background(), chatID, "回答格式无效，请使用：回答 <request_id> <内容>")
+			return true, nil
+		}
+		err := a.HandleCardAction(ctx, FeishuCardActionEvent{
+			ActionType: "user_question",
+			RequestID:  requestID,
+			Status:     "answered",
+			Values:     values,
+			Message:    message,
+		})
+		if err != nil {
+			_ = a.messenger.SendText(context.Background(), chatID, "回答提交失败，请稍后重试。")
+			return true, err
+		}
+		_ = a.messenger.SendText(context.Background(), chatID, "回答已提交。")
+		return true, nil
 	default:
 		return false, nil
 	}
+}
+
+// tryHandleTextPermission 为兼容旧测试与调用入口保留，内部复用统一文本动作处理。
+func (a *Adapter) tryHandleTextPermission(ctx context.Context, chatID string, text string) (bool, error) {
+	return a.tryHandleTextAction(ctx, chatID, text)
+}
+
+// parseUserQuestionTextAnswer 根据 pending 问题元数据解析文本回答指令。
+func (a *Adapter) parseUserQuestionTextAnswer(requestID string, answer string) ([]string, string, bool) {
+	trimmedRequestID := strings.TrimSpace(requestID)
+	trimmedAnswer := strings.TrimSpace(answer)
+	a.mu.RLock()
+	question, ok := a.pendingQuestions[trimmedRequestID]
+	a.mu.RUnlock()
+	if !ok {
+		if trimmedAnswer == "" {
+			return nil, "", false
+		}
+		return []string{trimmedAnswer}, trimmedAnswer, true
+	}
+
+	switch strings.TrimSpace(strings.ToLower(question.Kind)) {
+	case "text":
+		if trimmedAnswer == "" {
+			return nil, "", false
+		}
+		return []string{trimmedAnswer}, trimmedAnswer, true
+	case "single_choice":
+		if trimmedAnswer == "" {
+			return nil, "", false
+		}
+		if len(question.Options) == 0 {
+			return []string{trimmedAnswer}, "", true
+		}
+		matched, ok := resolveChoiceLabel(trimmedAnswer, question.Options)
+		if !ok {
+			return nil, "", false
+		}
+		return []string{matched}, "", true
+	case "multi_choice":
+		if trimmedAnswer == "" {
+			return nil, "", false
+		}
+		rawTokens := splitMultiChoiceTokens(trimmedAnswer)
+		if len(rawTokens) == 0 {
+			return nil, "", false
+		}
+		selected := make([]string, 0, len(rawTokens))
+		for _, token := range rawTokens {
+			if len(question.Options) == 0 {
+				selected = append(selected, token)
+				continue
+			}
+			matched, ok := resolveChoiceLabel(token, question.Options)
+			if !ok {
+				return nil, "", false
+			}
+			selected = append(selected, matched)
+		}
+		selected = uniqueNonEmptyStrings(selected)
+		if question.MaxChoices > 0 && len(selected) > question.MaxChoices {
+			return nil, "", false
+		}
+		return selected, "", true
+	default:
+		if trimmedAnswer == "" {
+			return nil, "", false
+		}
+		return []string{trimmedAnswer}, trimmedAnswer, true
+	}
+}
+
+// resolveChoiceLabel 解析单个选项输入，支持按标签文本或 1-based 序号匹配。
+func resolveChoiceLabel(raw string, options []UserQuestionCardOption) (string, bool) {
+	token := strings.TrimSpace(raw)
+	if token == "" {
+		return "", false
+	}
+	if index, err := strconv.Atoi(token); err == nil {
+		if index >= 1 && index <= len(options) {
+			label := strings.TrimSpace(options[index-1].Label)
+			if label != "" {
+				return label, true
+			}
+		}
+	}
+	normalizedToken := normalizeChoiceToken(token)
+	for _, option := range options {
+		label := strings.TrimSpace(option.Label)
+		if normalizeChoiceToken(label) == normalizedToken {
+			return label, true
+		}
+	}
+	return "", false
+}
+
+// splitRequestAndBody 将“<request_id> <body>”文本分离为 request_id 与正文。
+func splitRequestAndBody(input string) (string, string) {
+	trimmed := strings.TrimSpace(input)
+	if trimmed == "" {
+		return "", ""
+	}
+	parts := strings.Fields(trimmed)
+	if len(parts) == 0 {
+		return "", ""
+	}
+	requestID := strings.TrimSpace(parts[0])
+	body := ""
+	if len(parts) > 1 {
+		body = strings.TrimSpace(strings.TrimPrefix(trimmed, parts[0]))
+	}
+	return requestID, body
+}
+
+// splitMultiChoiceTokens 支持“逗号/中文逗号/竖线/空格”分隔的多选文本输入。
+func splitMultiChoiceTokens(raw string) []string {
+	replacer := strings.NewReplacer("，", ",", "|", ",", "、", ",", ";", ",", "；", ",")
+	normalized := replacer.Replace(raw)
+	segments := strings.Split(normalized, ",")
+	if len(segments) == 1 {
+		return uniqueNonEmptyStrings(strings.Fields(normalized))
+	}
+	tokens := make([]string, 0, len(segments))
+	for _, segment := range segments {
+		trimmed := strings.TrimSpace(segment)
+		if trimmed != "" {
+			tokens = append(tokens, trimmed)
+		}
+	}
+	if len(tokens) == 0 {
+		return uniqueNonEmptyStrings(strings.Fields(normalized))
+	}
+	return uniqueNonEmptyStrings(tokens)
+}
+
+// normalizeChoiceToken 对选项文本做归一化比较，避免大小写与多空格影响匹配。
+func normalizeChoiceToken(value string) string {
+	return strings.ToLower(strings.Join(strings.Fields(strings.TrimSpace(value)), " "))
+}
+
+// uniqueNonEmptyStrings 去重并保序保留非空字符串。
+func uniqueNonEmptyStrings(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			continue
+		}
+		key := normalizeChoiceToken(trimmed)
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, trimmed)
+	}
+	return out
 }
 
 // runBindingKey 生成稳定的 session/run 复合键，避免同会话多 run 相互覆盖。
@@ -695,17 +1120,217 @@ func decodeMessageText(rawContent string) (string, error) {
 }
 
 // extractPermissionRequest 从 permission_requested 事件中抽取审批请求关键信息。
-func extractPermissionRequest(envelope map[string]any) (string, string) {
+func extractPermissionRequest(envelope map[string]any) (requestID, toolName, operation, target, reason string) {
 	payload, _ := envelope["payload"].(map[string]any)
 	if payload == nil {
-		return "", "需要审批"
+		return "", "", "", "", "需要审批"
 	}
-	requestID := readString(payload, "request_id")
-	reason := readString(payload, "reason")
+	requestID = readString(payload, "request_id")
+	toolName = readString(payload, "tool_name")
+	operation = readString(payload, "operation")
+	target = readString(payload, "target")
+	reason = readString(payload, "reason")
 	if reason == "" {
 		reason = "工具执行请求审批，请确认是否放行。"
 	}
-	return requestID, reason
+	return
+}
+
+// extractUserQuestionRequest 从 user_question_requested 事件中抽取关键信息。
+func extractUserQuestionRequest(envelope map[string]any) userQuestionEntry {
+	payload, _ := envelope["payload"].(map[string]any)
+	if payload == nil {
+		return userQuestionEntry{}
+	}
+	entry := userQuestionEntry{
+		RequestID:   strings.TrimSpace(readString(payload, "request_id")),
+		QuestionID:  strings.TrimSpace(readString(payload, "question_id")),
+		Title:       strings.TrimSpace(readString(payload, "title")),
+		Description: strings.TrimSpace(readString(payload, "description")),
+		Kind:        strings.TrimSpace(strings.ToLower(readString(payload, "kind"))),
+		AllowSkip:   readBool(payload, "allow_skip"),
+		MaxChoices:  readInt(payload, "max_choices"),
+	}
+	rawOptions, _ := payload["options"].([]any)
+	if len(rawOptions) > 0 {
+		options := make([]UserQuestionCardOption, 0, len(rawOptions))
+		for _, raw := range rawOptions {
+			switch typed := raw.(type) {
+			case string:
+				label := strings.TrimSpace(typed)
+				if label != "" {
+					options = append(options, UserQuestionCardOption{Label: label})
+				}
+			case map[string]any:
+				label := strings.TrimSpace(readString(typed, "label"))
+				if label == "" {
+					continue
+				}
+				options = append(options, UserQuestionCardOption{
+					Label:       label,
+					Description: strings.TrimSpace(readString(typed, "description")),
+				})
+			}
+		}
+		entry.Options = options
+	}
+	return entry
+}
+
+type userQuestionResolved struct {
+	RequestID string
+	Status    string
+	Values    []string
+	Message   string
+}
+
+// extractUserQuestionResolved 从 user_question_* resolved 事件中抽取回传结果。
+func extractUserQuestionResolved(envelope map[string]any) userQuestionResolved {
+	payload, _ := envelope["payload"].(map[string]any)
+	if payload == nil {
+		return userQuestionResolved{}
+	}
+	resolved := userQuestionResolved{
+		RequestID: strings.TrimSpace(readString(payload, "request_id")),
+		Status:    strings.TrimSpace(strings.ToLower(readString(payload, "status"))),
+		Message:   strings.TrimSpace(readString(payload, "message")),
+	}
+	rawValues, _ := payload["values"].([]any)
+	values := make([]string, 0, len(rawValues))
+	for _, raw := range rawValues {
+		value, _ := raw.(string)
+		value = strings.TrimSpace(value)
+		if value != "" {
+			values = append(values, value)
+		}
+	}
+	resolved.Values = values
+	return resolved
+}
+
+// shouldSendAskUserCard 根据问题形态判断是否展示飞书交互卡片。
+func shouldSendAskUserCard(question userQuestionEntry) bool {
+	kind := strings.TrimSpace(strings.ToLower(question.Kind))
+	if kind == "single_choice" && len(question.Options) > 0 {
+		return true
+	}
+	return question.AllowSkip
+}
+
+// isUserQuestionResolvedEvent 判断 runtime event 是否为 ask_user 终态事件。
+func isUserQuestionResolvedEvent(runtimeType string) bool {
+	switch strings.TrimSpace(strings.ToLower(runtimeType)) {
+	case "user_question_answered", "user_question_skipped", "user_question_timeout":
+		return true
+	default:
+		return false
+	}
+}
+
+// userQuestionStatusFromRuntimeType 将 runtime 终态事件类型映射为 status 字段。
+func userQuestionStatusFromRuntimeType(runtimeType string) string {
+	switch strings.TrimSpace(strings.ToLower(runtimeType)) {
+	case "user_question_skipped":
+		return "skipped"
+	case "user_question_timeout":
+		return "timeout"
+	default:
+		return "answered"
+	}
+}
+
+// buildAskUserTextPrompt 构造文本降级指令，覆盖 text/multi_choice 及无按钮场景。
+func buildAskUserTextPrompt(question userQuestionEntry) string {
+	title := strings.TrimSpace(question.Title)
+	if title == "" {
+		title = "请回答以下问题"
+	}
+	lines := []string{title}
+	if description := strings.TrimSpace(question.Description); description != "" {
+		lines = append(lines, description)
+	}
+	if len(question.Options) > 0 {
+		optionLabels := make([]string, 0, len(question.Options))
+		for _, option := range question.Options {
+			label := strings.TrimSpace(option.Label)
+			if label != "" {
+				optionLabels = append(optionLabels, label)
+			}
+		}
+		if len(optionLabels) > 0 {
+			lines = append(lines, "可选项："+strings.Join(optionLabels, " / "))
+		}
+	}
+	lines = append(lines, fmt.Sprintf("请回复：回答 %s <内容>", strings.TrimSpace(question.RequestID)))
+	if question.AllowSkip {
+		lines = append(lines, fmt.Sprintf("如需跳过：跳过 %s", strings.TrimSpace(question.RequestID)))
+	}
+	return strings.Join(lines, "\n")
+}
+
+// buildUserQuestionResolvedSummary 生成 ask_user 终态摘要文案，写入状态卡与已处理卡片。
+func buildUserQuestionResolvedSummary(question userQuestionEntry, status string, values []string, message string) string {
+	switch strings.TrimSpace(strings.ToLower(status)) {
+	case "skipped":
+		return "用户已跳过该问题"
+	case "timeout":
+		return "问题等待超时"
+	default:
+		if trimmed := strings.TrimSpace(message); trimmed != "" {
+			return "用户回答：" + trimmed
+		}
+		if len(values) > 0 {
+			return "用户回答：" + strings.Join(values, ", ")
+		}
+		if strings.TrimSpace(question.Title) != "" {
+			return "用户已回答：" + strings.TrimSpace(question.Title)
+		}
+		return "用户已回答问题"
+	}
+}
+
+// buildCardActionDedupeKey 生成卡片动作幂等键，优先使用 event_id 避免重复回调重放。
+func buildCardActionDedupeKey(event FeishuCardActionEvent, actionType string) string {
+	if eventID := strings.TrimSpace(event.EventID); eventID != "" {
+		return "card:event:" + eventID
+	}
+	requestID := strings.TrimSpace(event.RequestID)
+	if actionType == "permission" {
+		return "card:permission:" + requestID + ":" + strings.TrimSpace(strings.ToLower(event.Decision))
+	}
+	return "card:user_question:" + requestID + ":" + strings.TrimSpace(strings.ToLower(event.Status))
+}
+
+// readBool 从松散 map 中读取 bool 字段并提供 false 默认值。
+func readBool(m map[string]any, key string) bool {
+	if m == nil {
+		return false
+	}
+	value, _ := m[key].(bool)
+	return value
+}
+
+// readInt 从松散 map 中读取 int 字段，不可解析时返回 0。
+func readInt(m map[string]any, key string) int {
+	if m == nil {
+		return 0
+	}
+	switch typed := m[key].(type) {
+	case int:
+		return typed
+	case int32:
+		return int(typed)
+	case int64:
+		return int(typed)
+	case float64:
+		return int(typed)
+	case json.Number:
+		value, err := typed.Int64()
+		if err == nil {
+			return int(value)
+		}
+	}
+	return 0
 }
 
 // extractHookNotificationSummary 提取 async_rewake 等通知摘要并写入卡片，便于下轮继续追踪。
@@ -799,7 +1424,29 @@ func extractUserVisibleErrorText(envelope map[string]any) string {
 	if message == "" {
 		return ""
 	}
+
+	// 翻译 runner 相关错误码为用户可读消息
+	if translated := translateRunnerError(message); translated != "" {
+		return translated
+	}
+
 	return "任务失败：" + message
+}
+
+// translateRunnerError 将 runner 相关错误码翻译为中文提示。
+func translateRunnerError(message string) string {
+	switch {
+	case strings.Contains(message, "runner_offline") || strings.Contains(message, "runner not online"):
+		return "本机 Runner 未连接，请在电脑上启动 `neocode runner`"
+	case strings.Contains(message, "capability_denied"):
+		return "权限不足：当前能力令牌不允许此操作"
+	case strings.Contains(message, "tool_execution_failed"):
+		return "工具执行失败：" + message
+	case strings.Contains(message, "timed out waiting for runner"):
+		return "本机 Runner 响应超时，请检查网络连接和 Runner 状态"
+	default:
+		return ""
+	}
 }
 
 // nextBackoff 计算指数退避下一步等待时间。
@@ -838,6 +1485,7 @@ func deriveRunStatus(runtimeType string, envelope map[string]any, current string
 	case "tool_call_thinking", "agent_chunk":
 		return "thinking"
 	case "permission_requested", "permission_resolved", "tool_start", "tool_result", "tool_chunk", "tool_diff",
+		"user_question_requested", "user_question_answered", "user_question_skipped", "user_question_timeout",
 		"verification_started", "verification_finished", "verification_completed", "verification_failed",
 		"acceptance_decided", "hook_notification":
 		return "running"
@@ -882,10 +1530,23 @@ func formatElapsed(start time.Time) string {
 
 // statusCardPayload 将 run 绑定状态映射为卡片更新载荷。
 func (b sessionBinding) statusCardPayload() StatusCardPayload {
+	pendingCount := 0
+	records := make([]ApprovalRecord, 0, len(b.ApprovalRecords))
+	for _, e := range b.ApprovalRecords {
+		if e.Decision == "pending" {
+			pendingCount++
+		}
+		records = append(records, ApprovalRecord{
+			ToolName: e.ToolName,
+			Decision: e.Decision,
+		})
+	}
 	return StatusCardPayload{
 		TaskName:        b.TaskName,
 		Status:          b.Status,
 		ApprovalStatus:  b.ApprovalStatus,
+		ApprovalRecords: records,
+		PendingCount:    pendingCount,
 		Result:          b.Result,
 		Summary:         b.LastSummary,
 		AsyncRewakeHint: b.AsyncRewakeHint,

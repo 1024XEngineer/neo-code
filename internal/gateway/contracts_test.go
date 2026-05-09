@@ -13,6 +13,14 @@ func (s *runtimePortCompileStub) Run(_ context.Context, _ RunInput) error {
 	return nil
 }
 
+func (s *runtimePortCompileStub) Ask(_ context.Context, _ AskInput) error {
+	return nil
+}
+
+func (s *runtimePortCompileStub) DeleteAskSession(_ context.Context, _ DeleteAskSessionInput) (bool, error) {
+	return false, nil
+}
+
 func (s *runtimePortCompileStub) Compact(_ context.Context, _ CompactInput) (CompactResult, error) {
 	return CompactResult{}, nil
 }
@@ -50,6 +58,10 @@ func (s *runtimePortCompileStub) ResolvePermission(_ context.Context, _ Permissi
 	return nil
 }
 
+func (s *runtimePortCompileStub) ResolveUserQuestion(_ context.Context, _ UserQuestionAnswerInput) error {
+	return nil
+}
+
 func (s *runtimePortCompileStub) CancelRun(_ context.Context, _ CancelInput) (bool, error) {
 	return false, nil
 }
@@ -73,6 +85,15 @@ func (s *runtimePortCompileStub) RenameSession(_ context.Context, _ RenameSessio
 }
 func (s *runtimePortCompileStub) ListFiles(_ context.Context, _ ListFilesInput) ([]FileEntry, error) {
 	return nil, nil
+}
+func (s *runtimePortCompileStub) ReadFile(_ context.Context, _ ReadFileInput) (ReadFileResult, error) {
+	return ReadFileResult{}, nil
+}
+func (s *runtimePortCompileStub) ListGitDiffFiles(_ context.Context, _ ListGitDiffFilesInput) (ListGitDiffFilesResult, error) {
+	return ListGitDiffFilesResult{}, nil
+}
+func (s *runtimePortCompileStub) ReadGitDiffFile(_ context.Context, _ ReadGitDiffFileInput) (ReadGitDiffFileResult, error) {
+	return ReadGitDiffFileResult{}, nil
 }
 func (s *runtimePortCompileStub) ListModels(_ context.Context, _ ListModelsInput) ([]ModelEntry, error) {
 	return nil, nil

@@ -10,6 +10,8 @@ builds:
   - id: neocode
     env:
       - CGO_ENABLED=0
+    tags:
+      - webembed
     ldflags:
       - -s -w -X 'neo-code/internal/version.Version={{.Version}}'
     goos:

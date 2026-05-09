@@ -103,6 +103,7 @@ type GatewayClient interface {
 	BindStream(ctx context.Context, sessionID string, runID string) error
 	Run(ctx context.Context, sessionID string, runID string, inputText string) error
 	ResolvePermission(ctx context.Context, requestID string, decision string) error
+	ResolveUserQuestion(ctx context.Context, requestID string, status string, values []string, message string) error
 	Ping(ctx context.Context) error
 	Notifications() <-chan GatewayNotification
 	Close() error
@@ -111,15 +112,62 @@ type GatewayClient interface {
 // Messenger 定义飞书消息发送器接口，便于测试替换。
 type Messenger interface {
 	SendText(ctx context.Context, chatID string, text string) error
-	SendPermissionCard(ctx context.Context, chatID string, payload PermissionCardPayload) error
+	SendPermissionCard(ctx context.Context, chatID string, payload PermissionCardPayload) (string, error)
+	UpdatePermissionCard(ctx context.Context, cardID string, payload ResolvedPermissionCardPayload) error
+	SendUserQuestionCard(ctx context.Context, chatID string, payload UserQuestionCardPayload) (string, error)
+	UpdateUserQuestionCard(ctx context.Context, cardID string, payload ResolvedUserQuestionCardPayload) error
 	SendStatusCard(ctx context.Context, chatID string, payload StatusCardPayload) (string, error)
 	UpdateCard(ctx context.Context, cardID string, payload StatusCardPayload) error
 }
 
-// PermissionCardPayload 表示最小审批卡片的关键字段。
+// PermissionCardPayload 表示审批卡片的关键字段。
 type PermissionCardPayload struct {
 	RequestID string
+	ToolName  string
+	Operation string
+	Target    string
 	Message   string
+}
+
+// ResolvedPermissionCardPayload 表示已处理的审批卡片字段。
+type ResolvedPermissionCardPayload struct {
+	RequestID string
+	ToolName  string
+	Operation string
+	Target    string
+	Message   string
+	Approved  bool
+}
+
+// UserQuestionCardOption 表示 ask_user 单选项按钮。
+type UserQuestionCardOption struct {
+	Label       string
+	Description string
+}
+
+// UserQuestionCardPayload 表示 ask_user 待回答卡片字段。
+type UserQuestionCardPayload struct {
+	RequestID   string
+	QuestionID  string
+	Title       string
+	Description string
+	Kind        string
+	Options     []UserQuestionCardOption
+	AllowSkip   bool
+}
+
+// ResolvedUserQuestionCardPayload 表示 ask_user 已处理卡片字段。
+type ResolvedUserQuestionCardPayload struct {
+	RequestID string
+	Title     string
+	Status    string
+	Summary   string
+}
+
+// ApprovalRecord 记录单次工具审批请求及其结论。
+type ApprovalRecord struct {
+	ToolName string
+	Decision string // "pending", "allow_once", "reject"
 }
 
 // StatusCardPayload 表示 run 状态卡片的展示字段。
@@ -127,6 +175,8 @@ type StatusCardPayload struct {
 	TaskName        string
 	Status          string
 	ApprovalStatus  string
+	ApprovalRecords []ApprovalRecord
+	PendingCount    int
 	Result          string
 	Summary         string
 	AsyncRewakeHint string

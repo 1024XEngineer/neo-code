@@ -15,6 +15,9 @@ const (
 	DefaultBudgetMaxReactiveCompacts       = 3
 	DefaultMicroCompactRetainedToolSpans   = 6
 	DefaultCompactReadTimeMaxMessageSpans  = 24
+	DefaultAskMaxInputTokens               = 8000
+	DefaultAskRetainTurns                  = 5
+	DefaultAskSummaryMaxChars              = 1200
 
 	CompactManualStrategyKeepRecent  = "keep_recent"
 	CompactManualStrategyFullReplace = "full_replace"
@@ -23,6 +26,7 @@ const (
 type ContextConfig struct {
 	Compact CompactConfig `yaml:"compact,omitempty"`
 	Budget  BudgetConfig  `yaml:"budget,omitempty"`
+	Ask     AskConfig     `yaml:"ask,omitempty"`
 }
 
 type CompactConfig struct {
@@ -43,11 +47,19 @@ type BudgetConfig struct {
 	MaxReactiveCompacts  int `yaml:"max_reactive_compacts,omitempty"`
 }
 
+// AskConfig 定义 Ask 模式的轻量上下文策略。
+type AskConfig struct {
+	MaxInputTokens  int `yaml:"max_input_tokens,omitempty"`
+	RetainTurns     int `yaml:"retain_turns,omitempty"`
+	SummaryMaxChars int `yaml:"summary_max_chars,omitempty"`
+}
+
 // defaultContextConfig 返回上下文压缩相关配置的默认值。
 func defaultContextConfig() ContextConfig {
 	return ContextConfig{
 		Compact: defaultCompactConfig(),
 		Budget:  defaultBudgetConfig(),
+		Ask:     defaultAskConfig(),
 	}
 }
 
@@ -72,11 +84,21 @@ func defaultCompactConfig() CompactConfig {
 	}
 }
 
+// defaultAskConfig 返回 Ask 模式默认配置。
+func defaultAskConfig() AskConfig {
+	return AskConfig{
+		MaxInputTokens:  DefaultAskMaxInputTokens,
+		RetainTurns:     DefaultAskRetainTurns,
+		SummaryMaxChars: DefaultAskSummaryMaxChars,
+	}
+}
+
 // Clone 返回上下文配置的独立副本，避免后续修改污染原值。
 func (c ContextConfig) Clone() ContextConfig {
 	return ContextConfig{
 		Compact: c.Compact.Clone(),
 		Budget:  c.Budget.Clone(),
+		Ask:     c.Ask.Clone(),
 	}
 }
 
@@ -90,6 +112,11 @@ func (c BudgetConfig) Clone() BudgetConfig {
 	return c
 }
 
+// Clone 返回 ask 配置的值副本。
+func (c AskConfig) Clone() AskConfig {
+	return c
+}
+
 // ApplyDefaults 为上下文配置补齐缺省的 compact 参数。
 func (c *ContextConfig) ApplyDefaults(defaults ContextConfig) {
 	if c == nil {
@@ -98,6 +125,7 @@ func (c *ContextConfig) ApplyDefaults(defaults ContextConfig) {
 
 	c.Compact.ApplyDefaults(defaults.Compact)
 	c.Budget.ApplyDefaults(defaults.Budget)
+	c.Ask.ApplyDefaults(defaults.Ask)
 }
 
 // ApplyDefaults 为 compact 配置填充缺省策略和阈值。
@@ -139,6 +167,22 @@ func (c *BudgetConfig) ApplyDefaults(defaults BudgetConfig) {
 	}
 }
 
+// ApplyDefaults 为 ask 配置填充缺省值。
+func (c *AskConfig) ApplyDefaults(defaults AskConfig) {
+	if c == nil {
+		return
+	}
+	if c.MaxInputTokens <= 0 {
+		c.MaxInputTokens = defaults.MaxInputTokens
+	}
+	if c.RetainTurns <= 0 {
+		c.RetainTurns = defaults.RetainTurns
+	}
+	if c.SummaryMaxChars <= 0 {
+		c.SummaryMaxChars = defaults.SummaryMaxChars
+	}
+}
+
 // Validate 校验上下文压缩配置是否合法。
 func (c ContextConfig) Validate() error {
 	if err := c.Compact.Validate(); err != nil {
@@ -146,6 +190,9 @@ func (c ContextConfig) Validate() error {
 	}
 	if err := c.Budget.Validate(); err != nil {
 		return fmt.Errorf("budget: %w", err)
+	}
+	if err := c.Ask.Validate(); err != nil {
+		return fmt.Errorf("ask: %w", err)
 	}
 	return nil
 }
@@ -183,6 +230,20 @@ func (c BudgetConfig) Validate() error {
 	}
 	if c.MaxReactiveCompacts <= 0 {
 		return errors.New("max_reactive_compacts must be greater than 0")
+	}
+	return nil
+}
+
+// Validate 校验 ask 配置是否合法。
+func (c AskConfig) Validate() error {
+	if c.MaxInputTokens <= 0 {
+		return errors.New("max_input_tokens must be greater than 0")
+	}
+	if c.RetainTurns <= 0 {
+		return errors.New("retain_turns must be greater than 0")
+	}
+	if c.SummaryMaxChars <= 0 {
+		return errors.New("summary_max_chars must be greater than 0")
 	}
 	return nil
 }

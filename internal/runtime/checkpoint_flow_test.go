@@ -681,8 +681,8 @@ func TestCheckpointDiffSelectsLatestCodeCheckpointAndRejectsSessionOnlyTarget(t 
 	if err := os.WriteFile(target, []byte("two\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile(cp1 next) error = %v", err)
 	}
-	if _, err := perEditStore.Finalize("cp-1"); err != nil {
-		t.Fatalf("Finalize(cp-1) error = %v", err)
+	if _, err := perEditStore.FinalizeWithExactState("cp-1"); err != nil {
+		t.Fatalf("FinalizeWithExactState(cp-1) error = %v", err)
 	}
 	perEditStore.Reset()
 
@@ -692,10 +692,14 @@ func TestCheckpointDiffSelectsLatestCodeCheckpointAndRejectsSessionOnlyTarget(t 
 	if err := os.WriteFile(target, []byte("three\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile(cp2 next) error = %v", err)
 	}
-	if _, err := perEditStore.Finalize("cp-2"); err != nil {
-		t.Fatalf("Finalize(cp-2) error = %v", err)
+	if _, err := perEditStore.FinalizeWithExactState("cp-2"); err != nil {
+		t.Fatalf("FinalizeWithExactState(cp-2) error = %v", err)
 	}
 	perEditStore.Reset()
+
+	if err := os.WriteFile(target, []byte("four\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(four) error = %v", err)
+	}
 
 	spy := &checkpointStoreSpy{
 		listRecords: []agentsession.CheckpointRecord{
@@ -847,6 +851,87 @@ func TestFindPreviousEndOfTurnCheckpoint_SkipsNonPerEditRef(t *testing.T) {
 	}
 }
 
+func TestCheckpointDiffRunScopeAggregatesCurrentRun(t *testing.T) {
+	now := time.Now().UTC()
+	workdir := t.TempDir()
+	projectDir := t.TempDir()
+	perEditStore := checkpoint.NewPerEditSnapshotStore(projectDir, workdir)
+	target := filepath.Join(workdir, "tracked.txt")
+	if err := os.WriteFile(target, []byte("one\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(base) error = %v", err)
+	}
+	if _, err := perEditStore.CapturePreWrite(target); err != nil {
+		t.Fatalf("CapturePreWrite(cp1) error = %v", err)
+	}
+	if err := os.WriteFile(target, []byte("two\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(two) error = %v", err)
+	}
+	if _, err := perEditStore.Finalize("cp-1"); err != nil {
+		t.Fatalf("Finalize(cp-1) error = %v", err)
+	}
+	perEditStore.Reset()
+
+	if _, err := perEditStore.CapturePreWrite(target); err != nil {
+		t.Fatalf("CapturePreWrite(cp2) error = %v", err)
+	}
+	if err := os.WriteFile(target, []byte("three\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(three) error = %v", err)
+	}
+	if _, err := perEditStore.Finalize("cp-2"); err != nil {
+		t.Fatalf("Finalize(cp-2) error = %v", err)
+	}
+	perEditStore.Reset()
+
+	spy := &checkpointStoreSpy{
+		listRecords: []agentsession.CheckpointRecord{
+			{
+				CheckpointID:      "cp-other",
+				SessionID:         "session-1",
+				RunID:             "run-other",
+				CreatedAt:         now.Add(3 * time.Second),
+				CodeCheckpointRef: checkpoint.RefForPerEditCheckpoint("cp-other"),
+			},
+			{
+				CheckpointID:      "cp-2",
+				SessionID:         "session-1",
+				RunID:             "run-1",
+				CreatedAt:         now.Add(2 * time.Second),
+				CodeCheckpointRef: checkpoint.RefForPerEditCheckpoint("cp-2"),
+			},
+			{
+				CheckpointID:      "cp-1",
+				SessionID:         "session-1",
+				RunID:             "run-1",
+				CreatedAt:         now.Add(time.Second),
+				CodeCheckpointRef: checkpoint.RefForPerEditCheckpoint("cp-1"),
+			},
+		},
+	}
+	service := &Service{
+		checkpointStore: spy,
+		perEditStore:    perEditStore,
+	}
+
+	result, err := service.CheckpointDiff(context.Background(), CheckpointDiffInput{
+		SessionID:    "session-1",
+		CheckpointID: "cp-2",
+		RunID:        "run-1",
+		Scope:        "run",
+	})
+	if err != nil {
+		t.Fatalf("CheckpointDiff(run) error = %v", err)
+	}
+	if result.CheckpointID != "cp-2" {
+		t.Fatalf("CheckpointID = %q, want cp-2", result.CheckpointID)
+	}
+	if len(result.Files.Modified) != 1 || result.Files.Modified[0] != "tracked.txt" {
+		t.Fatalf("modified files = %+v, want tracked.txt", result.Files.Modified)
+	}
+	if !strings.Contains(result.Patch, "-one") || !strings.Contains(result.Patch, "+three") || strings.Contains(result.Patch, "-two") || strings.Contains(result.Patch, "+four") {
+		t.Fatalf("run patch should compare one to three only, got:\n%s", result.Patch)
+	}
+}
+
 func mustReadRuntimeFile(t *testing.T, path string) []byte {
 	t.Helper()
 	data, err := os.ReadFile(path)
@@ -854,4 +939,223 @@ func mustReadRuntimeFile(t *testing.T, path string) []byte {
 		t.Fatalf("ReadFile(%s) error = %v", path, err)
 	}
 	return data
+}
+
+// ──────── scope=run diff tests ────────
+
+func TestCheckpointDiff_ScopeRun_ReturnsAggregateDiff(t *testing.T) {
+	workdir := t.TempDir()
+	projectDir := t.TempDir()
+	store := checkpoint.NewPerEditSnapshotStore(projectDir, workdir)
+	now := time.Now().UTC()
+
+	// Turn 1: modify a.txt
+	absA := filepath.Join(workdir, "a.txt")
+	_ = os.WriteFile(absA, []byte("old a\n"), 0o644)
+	if _, err := store.CapturePreWrite(absA); err != nil {
+		t.Fatalf("CapturePreWrite a: %v", err)
+	}
+	_ = os.WriteFile(absA, []byte("new a\n"), 0o644)
+	if _, err := store.Finalize("cp-1"); err != nil {
+		t.Fatalf("Finalize cp-1: %v", err)
+	}
+	store.Reset()
+
+	// Turn 2: create b.txt
+	absB := filepath.Join(workdir, "b.txt")
+	if _, err := store.CapturePreWrite(absB); err != nil {
+		t.Fatalf("CapturePreWrite b: %v", err)
+	}
+	_ = os.WriteFile(absB, []byte("new b\n"), 0o644)
+	if _, err := store.Finalize("cp-2"); err != nil {
+		t.Fatalf("Finalize cp-2: %v", err)
+	}
+	store.Reset()
+
+	spy := &checkpointStoreSpy{
+		listRecords: []agentsession.CheckpointRecord{
+			{
+				CheckpointID:      "cp-2",
+				SessionID:         "session-1",
+				RunID:             "run-target",
+				CreatedAt:         now.Add(time.Second),
+				CodeCheckpointRef: checkpoint.RefForPerEditCheckpoint("cp-2"),
+			},
+			{
+				CheckpointID:      "cp-1",
+				SessionID:         "session-1",
+				RunID:             "run-target",
+				CreatedAt:         now,
+				CodeCheckpointRef: checkpoint.RefForPerEditCheckpoint("cp-1"),
+			},
+		},
+	}
+	service := &Service{
+		checkpointStore: spy,
+		perEditStore:    store,
+	}
+
+	result, err := service.CheckpointDiff(context.Background(), CheckpointDiffInput{
+		SessionID: "session-1",
+		Scope:     "run",
+		RunID:     "run-target",
+	})
+	if err != nil {
+		t.Fatalf("CheckpointDiff(scope=run) error = %v", err)
+	}
+	if result.Patch == "" {
+		t.Fatal("expected non-empty patch for scope=run")
+	}
+	if !strings.Contains(result.Patch, "a.txt") {
+		t.Fatalf("patch missing a.txt:\n%s", result.Patch)
+	}
+	if !strings.Contains(result.Patch, "b.txt") {
+		t.Fatalf("patch missing b.txt:\n%s", result.Patch)
+	}
+	// Created b.txt should be classified as added
+	var addedPaths, modifiedPaths []string
+	for _, p := range result.Files.Added {
+		addedPaths = append(addedPaths, p)
+	}
+	for _, p := range result.Files.Modified {
+		modifiedPaths = append(modifiedPaths, p)
+	}
+	if len(addedPaths) != 1 || addedPaths[0] != "b.txt" {
+		t.Fatalf("expected b.txt added, got added=%v modified=%v", addedPaths, modifiedPaths)
+	}
+	if len(modifiedPaths) != 1 || modifiedPaths[0] != "a.txt" {
+		t.Fatalf("expected a.txt modified, got added=%v modified=%v", addedPaths, modifiedPaths)
+	}
+	// 当前 run-scope diff 默认返回目标 checkpoint（未显式指定时为最新 checkpoint）。
+	if result.CheckpointID != "cp-2" {
+		t.Fatalf("CheckpointID = %q, want cp-2", result.CheckpointID)
+	}
+}
+
+func TestCheckpointDiff_ScopeRun_RejectsMissingRunID(t *testing.T) {
+	service := &Service{
+		checkpointStore: &checkpointStoreSpy{},
+		perEditStore:    checkpoint.NewPerEditSnapshotStore(t.TempDir(), t.TempDir()),
+	}
+	_, err := service.CheckpointDiff(context.Background(), CheckpointDiffInput{
+		SessionID: "session-1",
+		Scope:     "run",
+	})
+	if err == nil {
+		t.Fatal("expected error for scope=run without run_id")
+	}
+	if !strings.Contains(err.Error(), "run_id required") {
+		t.Fatalf("error = %v, want run_id required", err)
+	}
+}
+
+func TestCheckpointDiff_ScopeRun_NoCheckpointsForRunID(t *testing.T) {
+	spy := &checkpointStoreSpy{
+		listRecords: []agentsession.CheckpointRecord{
+			{
+				CheckpointID:      "cp-other-run",
+				SessionID:         "session-1",
+				RunID:             "other-run",
+				CodeCheckpointRef: checkpoint.RefForPerEditCheckpoint("cp-other"),
+			},
+		},
+	}
+	service := &Service{
+		checkpointStore: spy,
+		perEditStore:    checkpoint.NewPerEditSnapshotStore(t.TempDir(), t.TempDir()),
+	}
+	_, err := service.CheckpointDiff(context.Background(), CheckpointDiffInput{
+		SessionID: "session-1",
+		Scope:     "run",
+		RunID:     "run-target",
+	})
+	if err == nil {
+		t.Fatal("expected error for run_id with no code checkpoints")
+	}
+	if !strings.Contains(err.Error(), "no code checkpoint found") {
+		t.Fatalf("error = %v, want 'no code checkpoint found'", err)
+	}
+}
+
+func TestCheckpointDiff_DefaultScopePreservesExistingBehavior(t *testing.T) {
+	// Verify empty scope still uses checkpoint-to-checkpoint comparison.
+	workdir := t.TempDir()
+	projectDir := t.TempDir()
+	store := checkpoint.NewPerEditSnapshotStore(projectDir, workdir)
+	now := time.Now().UTC()
+
+	absA := filepath.Join(workdir, "a.txt")
+	_ = os.WriteFile(absA, []byte("v1\n"), 0o644)
+	if _, err := store.CapturePreWrite(absA); err != nil {
+		t.Fatalf("CapturePreWrite: %v", err)
+	}
+	_ = os.WriteFile(absA, []byte("v2\n"), 0o644)
+	if _, err := store.Finalize("cp-1"); err != nil {
+		t.Fatalf("Finalize cp-1: %v", err)
+	}
+	store.Reset()
+
+	if _, err := store.CapturePreWrite(absA); err != nil {
+		t.Fatalf("CapturePreWrite 2: %v", err)
+	}
+	_ = os.WriteFile(absA, []byte("v3\n"), 0o644)
+	if _, err := store.Finalize("cp-2"); err != nil {
+		t.Fatalf("Finalize cp-2: %v", err)
+	}
+	store.Reset()
+
+	spy := &checkpointStoreSpy{
+		listRecords: []agentsession.CheckpointRecord{
+			{
+				CheckpointID:      "cp-2",
+				SessionID:         "session-1",
+				RunID:             "another-run",
+				CreatedAt:         now.Add(time.Second),
+				CodeCheckpointRef: checkpoint.RefForPerEditCheckpoint("cp-2"),
+			},
+			{
+				CheckpointID:      "cp-1",
+				SessionID:         "session-1",
+				RunID:             "some-run",
+				CreatedAt:         now,
+				CodeCheckpointRef: checkpoint.RefForPerEditCheckpoint("cp-1"),
+			},
+		},
+	}
+	service := &Service{
+		checkpointStore: spy,
+		perEditStore:    store,
+	}
+
+	// Empty scope (default): adjacent checkpoint comparison
+	result, err := service.CheckpointDiff(context.Background(), CheckpointDiffInput{
+		SessionID: "session-1",
+	})
+	if err != nil {
+		t.Fatalf("CheckpointDiff(default) error = %v", err)
+	}
+	if result.CheckpointID != "cp-2" || result.PrevCheckpointID != "cp-1" {
+		t.Fatalf("expected cp-2 vs cp-1, got %s vs %s", result.CheckpointID, result.PrevCheckpointID)
+	}
+}
+
+func TestCheckpointDiff_StoreNotAvailable(t *testing.T) {
+	service := &Service{}
+	_, err := service.CheckpointDiff(context.Background(), CheckpointDiffInput{
+		SessionID: "session-1",
+	})
+	if err == nil || !strings.Contains(err.Error(), "store not available") {
+		t.Fatalf("expected store not available, got %v", err)
+	}
+}
+
+func TestCheckpointDiff_EmptySessionID(t *testing.T) {
+	service := &Service{
+		checkpointStore: &checkpointStoreSpy{},
+		perEditStore:    checkpoint.NewPerEditSnapshotStore(t.TempDir(), t.TempDir()),
+	}
+	_, err := service.CheckpointDiff(context.Background(), CheckpointDiffInput{})
+	if err == nil || !strings.Contains(err.Error(), "session_id required") {
+		t.Fatalf("expected session_id required, got %v", err)
+	}
 }

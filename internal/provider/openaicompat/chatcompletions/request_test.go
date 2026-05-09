@@ -111,8 +111,8 @@ func TestBuildRequestThinkingConfigAndContinuity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildRequest() disabled error = %v", err)
 	}
-	if disabled.ReasoningEffort != "none" {
-		t.Fatalf("expected disabled reasoning effort marker, got %q", disabled.ReasoningEffort)
+	if disabled.ReasoningEffort != "" {
+		t.Fatalf("expected disabled reasoning effort to be omitted, got %q", disabled.ReasoningEffort)
 	}
 }
 

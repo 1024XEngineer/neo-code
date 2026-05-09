@@ -37,6 +37,7 @@ type CreateCheckpointInput struct {
 type ListCheckpointOpts struct {
 	Limit          int
 	RestorableOnly bool
+	RunID          string
 }
 
 // RestoreCheckpointInput 描述一次 restore 操作的完整输入。
@@ -218,6 +219,10 @@ WHERE session_id = ?
 	if opts.RestorableOnly {
 		query += ` AND restorable = 1 AND status = ?`
 		args = append(args, string(session.CheckpointStatusAvailable))
+	}
+	if opts.RunID != "" {
+		query += ` AND run_id = ?`
+		args = append(args, opts.RunID)
 	}
 	query += ` ORDER BY created_at_ms DESC`
 	if opts.Limit > 0 {

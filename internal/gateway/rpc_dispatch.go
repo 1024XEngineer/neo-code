@@ -354,6 +354,7 @@ func convertProtocolRunInputParts(parts []protocol.RunInputPart) []InputPart {
 func requiresSession(action FrameAction) bool {
 	switch action {
 	case FrameActionBindStream,
+		FrameActionDeleteAskSession,
 		FrameActionCompact,
 		FrameActionLoadSession,
 		FrameActionListSessionTodos,
@@ -388,6 +389,9 @@ func applyAutomaticBinding(ctx context.Context, frame MessageFrame) {
 		return
 	}
 	if frame.Action == FrameActionAuthenticate {
+		return
+	}
+	if frame.Action == FrameActionTriggerAction {
 		return
 	}
 

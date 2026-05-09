@@ -27,6 +27,10 @@ func TestStrictACLAllowlist(t *testing.T) {
 		{source: RequestSourceHTTP, method: "gateway.executeSystemTool", want: true},
 		{source: RequestSourceHTTP, method: "gateway.activateSessionSkill", want: true},
 		{source: RequestSourceHTTP, method: "gateway.deactivateSessionSkill", want: true},
+		{source: RequestSourceHTTP, method: "gateway.readFile", want: true},
+		{source: RequestSourceWS, method: "gateway.readFile", want: true},
+		{source: RequestSourceHTTP, method: "gateway.listGitDiffFiles", want: true},
+		{source: RequestSourceWS, method: "gateway.readGitDiffFile", want: true},
 		{source: RequestSourceHTTP, method: "gateway.listSessionSkills", want: true},
 		{source: RequestSourceHTTP, method: "gateway.listAvailableSkills", want: true},
 		{source: RequestSourceHTTP, method: "session.todos.list", want: true},
@@ -35,6 +39,8 @@ func TestStrictACLAllowlist(t *testing.T) {
 		{source: RequestSourceHTTP, method: "checkpoint.restore", want: true},
 		{source: RequestSourceHTTP, method: "checkpoint.undoRestore", want: true},
 		{source: RequestSourceHTTP, method: "checkpoint.diff", want: true},
+		{source: RequestSourceHTTP, method: "gateway.userQuestionAnswer", want: true},
+		{source: RequestSourceHTTP, method: "gateway.user_question_answer", want: true},
 		{source: RequestSourceUnknown, method: "gateway.ping", want: false},
 	}
 	for _, tc := range cases {

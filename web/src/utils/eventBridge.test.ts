@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { useChatStore } from '@/stores/useChatStore'
 import { useGatewayStore } from '@/stores/useGatewayStore'
 import { useSessionStore } from '@/stores/useSessionStore'
@@ -7,11 +7,13 @@ import { useUIStore } from '@/stores/useUIStore'
 import { handleGatewayEvent, resetEventBridgeCursors } from './eventBridge'
 import { EventType } from '@/api/protocol'
 
-function createMockGatewayAPI() {
+function createMockGatewayAPI(overrides: Record<string, unknown> = {}) {
   return {
     listSessions: async () => ({ payload: { sessions: [] } }),
     loadSession: async () => ({ payload: { messages: [] } }),
     bindStream: async () => ({}),
+    checkpointDiff: async () => ({ payload: { checkpoint_id: 'cp', files: {}, patch: '' } }),
+    ...overrides,
   } as any
 }
 
@@ -22,6 +24,7 @@ beforeEach(() => {
     isGenerating: false,
     streamingMessageId: '',
     permissionRequests: [],
+    pendingUserQuestion: null,
     tokenUsage: null,
     phase: '',
     stopReason: '',
@@ -117,6 +120,64 @@ describe('eventBridge', () => {
     expect(useGatewayStore.getState().currentRunId).toBe('run-1')
   })
 
+  it('UserQuestionRequested stores pending user question', () => {
+    const api = createMockGatewayAPI()
+    handleGatewayEvent({
+      type: EventType.UserQuestionRequested,
+      payload: {
+        payload: {
+          runtime_event_type: EventType.UserQuestionRequested,
+          payload: {
+            request_id: 'ask-1',
+            question_id: 'q-1',
+            title: 'Pick one',
+            description: 'Choose an option',
+            kind: 'single_choice',
+            options: [{ label: 'A' }, { label: 'B' }],
+            required: true,
+            allow_skip: true,
+            max_choices: 1,
+            timeout_sec: 120,
+          },
+        },
+      },
+      session_id: 'sess-1',
+      run_id: 'run-1',
+    }, api)
+
+    const pending = useChatStore.getState().pendingUserQuestion
+    expect(pending?.request_id).toBe('ask-1')
+    expect(pending?.kind).toBe('single_choice')
+    expect(pending?.allow_skip).toBe(true)
+  })
+
+  it('UserQuestionResolved events clear pending user question by request id', () => {
+    const api = createMockGatewayAPI()
+    useChatStore.getState().setPendingUserQuestion({
+      request_id: 'ask-2',
+      question_id: 'q-2',
+      title: 'Title',
+      description: '',
+      kind: 'text',
+      required: true,
+      allow_skip: false,
+    })
+
+    handleGatewayEvent({
+      type: EventType.UserQuestionAnswered,
+      payload: {
+        payload: {
+          runtime_event_type: EventType.UserQuestionAnswered,
+          payload: { request_id: 'ask-2', status: 'answered' },
+        },
+      },
+      session_id: 'sess-1',
+      run_id: 'run-1',
+    }, api)
+
+    expect(useChatStore.getState().pendingUserQuestion).toBeNull()
+  })
+
   it('ToolStart adds a tool call message', () => {
     const api = createMockGatewayAPI()
     handleGatewayEvent({
@@ -155,6 +216,125 @@ describe('eventBridge', () => {
     expect(msgs[0].role).toBe('tool')
     expect(msgs[0].toolResult).toBe('file contents')
     expect(msgs[0].toolStatus).toBe('done')
+  })
+
+  it('ToolResult falls back to settling the latest running tool message when id is missing', () => {
+    const api = createMockGatewayAPI()
+    handleGatewayEvent({
+      type: EventType.ToolStart,
+      payload: { payload: { runtime_event_type: EventType.ToolStart, payload: { name: 'read_file', id: 'tc-fallback', arguments: '{}' } } },
+      session_id: 'sess-1',
+      run_id: 'run-1',
+    }, api)
+
+    handleGatewayEvent({
+      type: EventType.ToolResult,
+      payload: { payload: { runtime_event_type: EventType.ToolResult, payload: { content: 'ok without id' } } },
+      session_id: 'sess-1',
+      run_id: 'run-1',
+    }, api)
+
+    const msgs = useChatStore.getState().messages
+    expect(msgs[0].toolStatus).toBe('done')
+    expect(msgs[0].toolResult).toBe('ok without id')
+  })
+
+  it('AgentDone settles any dangling running tool call to done', () => {
+    const api = createMockGatewayAPI()
+    const chatStore = useChatStore.getState()
+    chatStore.addMessage({
+      id: 'tool1',
+      role: 'tool',
+      type: 'tool_call',
+      content: '',
+      toolName: 'bash',
+      toolCallId: 'tc1',
+      toolStatus: 'running',
+      timestamp: Date.now(),
+    })
+
+    handleGatewayEvent({
+      type: EventType.AgentDone,
+      payload: { payload: { runtime_event_type: EventType.AgentDone, payload: { content: 'done' } } },
+      session_id: 'sess-1',
+      run_id: 'run-1',
+    }, api)
+
+    expect(useChatStore.getState().messages[0].toolStatus).toBe('done')
+  })
+
+  it('StopReasonDecided keeps running tool calls unresolved for non-fatal reasons', () => {
+    const api = createMockGatewayAPI()
+    useChatStore.getState().addMessage({
+      id: 'tool-running-nonfatal',
+      role: 'tool',
+      type: 'tool_call',
+      content: '',
+      toolName: 'bash',
+      toolCallId: 'tc-nonfatal',
+      toolStatus: 'running',
+      timestamp: Date.now(),
+    })
+
+    handleGatewayEvent({
+      type: EventType.StopReasonDecided,
+      payload: { payload: { runtime_event_type: EventType.StopReasonDecided, payload: { reason: 'user_interrupt' } } },
+      session_id: 'sess-1',
+      run_id: 'run-1',
+    }, api)
+
+    expect(useChatStore.getState().messages[0].toolStatus).toBe('running')
+  })
+
+  it('StopReasonDecided marks running tool calls as error on fatal_error', () => {
+    const api = createMockGatewayAPI()
+    useChatStore.getState().addMessage({
+      id: 'tool-running-fatal',
+      role: 'tool',
+      type: 'tool_call',
+      content: '',
+      toolName: 'bash',
+      toolCallId: 'tc-fatal',
+      toolStatus: 'running',
+      timestamp: Date.now(),
+    })
+
+    handleGatewayEvent({
+      type: EventType.StopReasonDecided,
+      payload: {
+        payload: {
+          runtime_event_type: EventType.StopReasonDecided,
+          payload: { reason: 'fatal_error', detail: 'fatal' },
+        },
+      },
+      session_id: 'sess-1',
+      run_id: 'run-1',
+    }, api)
+
+    expect(useChatStore.getState().messages[0].toolStatus).toBe('error')
+  })
+
+  it('RunCanceled does not convert running tool calls to done', () => {
+    const api = createMockGatewayAPI()
+    useChatStore.getState().addMessage({
+      id: 'tool-running-canceled',
+      role: 'tool',
+      type: 'tool_call',
+      content: '',
+      toolName: 'bash',
+      toolCallId: 'tc-canceled',
+      toolStatus: 'running',
+      timestamp: Date.now(),
+    })
+
+    handleGatewayEvent({
+      type: EventType.RunCanceled,
+      payload: { payload: { runtime_event_type: EventType.RunCanceled, payload: {} } },
+      session_id: 'sess-1',
+      run_id: 'run-1',
+    }, api)
+
+    expect(useChatStore.getState().messages[0].toolStatus).toBe('running')
   })
 
   it('BudgetChecked updates runtime insight budget state', () => {
@@ -439,5 +619,213 @@ describe('eventBridge', () => {
     const newChange = useUIStore.getState().fileChanges.find((c) => c.path === 'b.txt')
     expect(newChange).toBeDefined()
     expect(newChange?.checkpoint_id).toBeUndefined()
+  })
+
+  it('replaces transient tool diffs with run-scoped checkpoint diff on end-of-turn checkpoint', async () => {
+    const checkpointDiff = vi.fn(async () => ({
+      payload: {
+        checkpoint_id: 'cp2',
+        files: { modified: ['a.txt'] },
+        patch: '--- a/a.txt\n+++ b/a.txt\n@@ -1,3 +1,3 @@\n line 1\n-A\n+C\n line 3\n@@ -10,3 +10,3 @@\n line 10\n-B\n+D\n line 12\n',
+      },
+    }))
+    const api = createMockGatewayAPI({ checkpointDiff })
+
+    handleGatewayEvent({
+      type: EventType.InputNormalized,
+      payload: { payload: { runtime_event_type: EventType.InputNormalized, payload: { session_id: 'sess-1', run_id: 'run-1' } } },
+      session_id: 'sess-1',
+      run_id: 'run-1',
+    }, api)
+
+    handleGatewayEvent({
+      type: EventType.ToolStart,
+      payload: { payload: { runtime_event_type: EventType.ToolStart, payload: { name: 'filesystem_write_file', id: 'tc1', arguments: '{"path":"a.txt"}' } } },
+      session_id: 'sess-1',
+      run_id: 'run-1',
+    }, api)
+    handleGatewayEvent({
+      type: EventType.ToolDiff,
+      payload: { payload: { runtime_event_type: EventType.ToolDiff, payload: { tool_call_id: 'tc1', tool_name: 'filesystem_write_file', file_path: 'a.txt', diff: '--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-A\n+B\n' } } },
+      session_id: 'sess-1',
+      run_id: 'run-1',
+    }, api)
+    handleGatewayEvent({
+      type: EventType.ToolDiff,
+      payload: { payload: { runtime_event_type: EventType.ToolDiff, payload: { tool_call_id: 'tc2', tool_name: 'filesystem_write_file', file_path: 'a.txt', diff: '--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-B\n+C\n' } } },
+      session_id: 'sess-1',
+      run_id: 'run-1',
+    }, api)
+
+    expect(useUIStore.getState().fileChanges[0]?.hunks?.[0]?.lines.map((line) => line.content)).toEqual([
+      '@@ -1 +1 @@',
+      'B',
+      'C',
+    ])
+
+    handleGatewayEvent({
+      type: EventType.CheckpointCreated,
+      payload: { payload: { runtime_event_type: EventType.CheckpointCreated, payload: { checkpoint_id: 'cp2', code_checkpoint_ref: 'c', session_checkpoint_ref: 's', commit_hash: '', reason: 'end_of_turn' } } },
+      session_id: 'sess-1',
+      run_id: 'run-1',
+    }, api)
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(checkpointDiff).toHaveBeenCalledWith({
+      session_id: 'sess-1',
+      run_id: 'run-1',
+      checkpoint_id: 'cp2',
+      scope: 'run',
+    })
+    const changes = useUIStore.getState().fileChanges
+    expect(changes).toHaveLength(1)
+    expect(changes[0]).toMatchObject({ path: 'a.txt', status: 'modified', additions: 2, deletions: 2 })
+    expect(changes[0].hunks).toHaveLength(2)
+    expect(changes[0].hunks?.[0]?.lines.map((line) => line.content)).toEqual([
+      '@@ -1,3 +1,3 @@',
+      'line 1',
+      'A',
+      'C',
+      'line 3',
+    ])
+    expect(changes[0].hunks?.[1]?.lines.map((line) => line.content)).toEqual([
+      '@@ -10,3 +10,3 @@',
+      'line 10',
+      'B',
+      'D',
+      'line 12',
+    ])
+  })
+
+  it('stores hunk structure for transient tool diffs before aggregate checkpoint diff arrives', () => {
+    const api = createMockGatewayAPI()
+
+    handleGatewayEvent({
+      type: EventType.ToolStart,
+      payload: { payload: { runtime_event_type: EventType.ToolStart, payload: { name: 'filesystem_write_file', id: 'tc1', arguments: '{"path":"a.txt"}' } } },
+      session_id: 'sess-1',
+      run_id: 'run-1',
+    }, api)
+    handleGatewayEvent({
+      type: EventType.ToolDiff,
+      payload: {
+        payload: {
+          runtime_event_type: EventType.ToolDiff,
+          payload: {
+            tool_call_id: 'tc1',
+            tool_name: 'filesystem_write_file',
+            file_path: 'a.txt',
+            diff: '--- a/a.txt\n+++ b/a.txt\n@@ -1,3 +1,3 @@\n line 1\n-old\n+new\n line 3\n@@ -10,2 +10,3 @@\n line 10\n+line 11\n line 12\n',
+          },
+        },
+      },
+      session_id: 'sess-1',
+      run_id: 'run-1',
+    }, api)
+
+    const change = useUIStore.getState().fileChanges.find((entry) => entry.path === 'a.txt')
+    expect(change?.hunks).toHaveLength(2)
+    expect(change?.hunks?.[0]?.lines.map((line) => line.type)).toEqual(['header', 'context', 'del', 'add', 'context'])
+    expect(change?.hunks?.[1]?.lines.map((line) => line.content)).toEqual([
+      '@@ -10,2 +10,3 @@',
+      'line 10',
+      'line 11',
+      'line 12',
+    ])
+  })
+
+  it('keeps transient tool diffs visible when backend sends simplified diff without @@ header', () => {
+    const api = createMockGatewayAPI()
+
+    handleGatewayEvent({
+      type: EventType.ToolStart,
+      payload: { payload: { runtime_event_type: EventType.ToolStart, payload: { name: 'filesystem_write_file', id: 'tc1', arguments: '{"path":"a.txt"}' } } },
+      session_id: 'sess-1',
+      run_id: 'run-1',
+    }, api)
+    handleGatewayEvent({
+      type: EventType.ToolDiff,
+      payload: {
+        payload: {
+          runtime_event_type: EventType.ToolDiff,
+          payload: {
+            tool_call_id: 'tc1',
+            tool_name: 'filesystem_write_file',
+            file_path: 'a.txt',
+            diff: '--- a/a.txt\n+++ b/a.txt\n-old\n+new\n',
+          },
+        },
+      },
+      session_id: 'sess-1',
+      run_id: 'run-1',
+    }, api)
+
+    const change = useUIStore.getState().fileChanges.find((entry) => entry.path === 'a.txt')
+    expect(change).toMatchObject({ additions: 1, deletions: 1 })
+    expect(change?.hunks).toHaveLength(1)
+    expect(change?.hunks?.[0]?.lines.map((line) => line.content)).toEqual(['old', 'new'])
+  })
+
+  it('preserves run-scoped file entries even when patch metadata is absent', async () => {
+    const checkpointDiff = vi.fn(async () => ({
+      payload: {
+        checkpoint_id: 'cp2',
+        files: { added: ['c.txt'], modified: ['a.txt', 'b.txt'], deleted: ['d.txt'] },
+        patch: '--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-old\n+new\n',
+      },
+    }))
+    const api = createMockGatewayAPI({ checkpointDiff })
+
+    handleGatewayEvent({
+      type: EventType.InputNormalized,
+      payload: { payload: { runtime_event_type: EventType.InputNormalized, payload: { session_id: 'sess-1', run_id: 'run-1' } } },
+      session_id: 'sess-1',
+      run_id: 'run-1',
+    }, api)
+
+    handleGatewayEvent({
+      type: EventType.ToolStart,
+      payload: { payload: { runtime_event_type: EventType.ToolStart, payload: { name: 'filesystem_write_file', id: 'tc1', arguments: '{"path":"b.txt"}' } } },
+      session_id: 'sess-1',
+      run_id: 'run-1',
+    }, api)
+
+    expect(useUIStore.getState().fileChanges.find((entry) => entry.path === 'b.txt')).toBeDefined()
+
+    handleGatewayEvent({
+      type: EventType.CheckpointCreated,
+      payload: { payload: { runtime_event_type: EventType.CheckpointCreated, payload: { checkpoint_id: 'cp2', code_checkpoint_ref: 'c', session_checkpoint_ref: 's', commit_hash: '', reason: 'end_of_turn' } } },
+      session_id: 'sess-1',
+      run_id: 'run-1',
+    }, api)
+    await Promise.resolve()
+    await Promise.resolve()
+
+    const changes = useUIStore.getState().fileChanges
+    expect(changes).toHaveLength(4)
+    expect(changes.map((entry) => entry.path)).toEqual(['a.txt', 'b.txt', 'c.txt', 'd.txt'])
+    expect(changes.find((entry) => entry.path === 'a.txt')).toMatchObject({
+      status: 'modified',
+      additions: 1,
+      deletions: 1,
+    })
+    expect(changes.find((entry) => entry.path === 'b.txt')).toMatchObject({
+      status: 'modified',
+      additions: 0,
+      deletions: 0,
+      diff: undefined,
+      hunks: undefined,
+    })
+    expect(changes.find((entry) => entry.path === 'c.txt')).toMatchObject({
+      status: 'added',
+      additions: 0,
+      deletions: 0,
+    })
+    expect(changes.find((entry) => entry.path === 'd.txt')).toMatchObject({
+      status: 'deleted',
+      additions: 0,
+      deletions: 0,
+    })
   })
 })

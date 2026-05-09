@@ -214,6 +214,9 @@ func (s *stubFeishuGatewayClient) Run(context.Context, string, string, string) e
 func (s *stubFeishuGatewayClient) ResolvePermission(context.Context, string, string) error {
 	return nil
 }
+func (s *stubFeishuGatewayClient) ResolveUserQuestion(context.Context, string, string, []string, string) error {
+	return nil
+}
 func (s *stubFeishuGatewayClient) Ping(context.Context) error { return nil }
 func (s *stubFeishuGatewayClient) Notifications() <-chan feishuadapter.GatewayNotification {
 	ch := make(chan feishuadapter.GatewayNotification)
@@ -228,7 +231,16 @@ func (s *stubFeishuGatewayClient) Close() error {
 type stubFeishuMessenger struct{}
 
 func (stubFeishuMessenger) SendText(context.Context, string, string) error { return nil }
-func (stubFeishuMessenger) SendPermissionCard(context.Context, string, feishuadapter.PermissionCardPayload) error {
+func (stubFeishuMessenger) SendPermissionCard(context.Context, string, feishuadapter.PermissionCardPayload) (string, error) {
+	return "", nil
+}
+func (stubFeishuMessenger) UpdatePermissionCard(context.Context, string, feishuadapter.ResolvedPermissionCardPayload) error {
+	return nil
+}
+func (stubFeishuMessenger) SendUserQuestionCard(context.Context, string, feishuadapter.UserQuestionCardPayload) (string, error) {
+	return "", nil
+}
+func (stubFeishuMessenger) UpdateUserQuestionCard(context.Context, string, feishuadapter.ResolvedUserQuestionCardPayload) error {
 	return nil
 }
 func (stubFeishuMessenger) SendStatusCard(context.Context, string, feishuadapter.StatusCardPayload) (string, error) {

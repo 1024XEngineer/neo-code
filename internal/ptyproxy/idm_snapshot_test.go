@@ -6,11 +6,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"path/filepath"
+	"net"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"neo-code/internal/gateway"
+	gatewayauth "neo-code/internal/gateway/auth"
 	gatewayclient "neo-code/internal/gateway/client"
 	"neo-code/internal/gateway/protocol"
 )
@@ -18,107 +21,66 @@ import (
 func TestIDMControllerEnterExitRingBufferLifecycle(t *testing.T) {
 	homeDir := t.TempDir()
 	t.Setenv("HOME", homeDir)
-	socketDir := t.TempDir()
-	gatewaySocket := filepath.Join(socketDir, "gateway.sock")
-	tokenFile := filepath.Join(socketDir, "auth.json")
-	writeGatewayAuthTokenFile(t, tokenFile, "test-token")
+	authManager, err := gatewayauth.NewManager("")
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
 
-	cleanupServer, serverDone := startGatewayRPCMockServer(
-		t,
-		gatewaySocket,
-		func(decoder *json.Decoder, encoder *json.Encoder) error {
-			authReq, err := readRPCRequest(decoder)
-			if err != nil {
-				return err
-			}
-			if authReq.Method != protocol.MethodGatewayAuthenticate {
-				return writeRPCResult(encoder, authReq.ID, gateway.MessageFrame{
-					Type: gateway.FrameTypeError,
-					Error: &gateway.FrameError{
-						Code:    "unexpected_method",
-						Message: authReq.Method,
-					},
-				})
-			}
-			if err := writeRPCResult(encoder, authReq.ID, gateway.MessageFrame{
-				Type:   gateway.FrameTypeAck,
-				Action: gateway.FrameActionAuthenticate,
-			}); err != nil {
-				return err
-			}
-
-			createReq, err := readRPCRequest(decoder)
-			if err != nil {
-				return err
-			}
-			if createReq.Method != protocol.MethodGatewayCreateSession {
-				return writeRPCResult(encoder, createReq.ID, gateway.MessageFrame{
-					Type: gateway.FrameTypeError,
-					Error: &gateway.FrameError{
-						Code:    "unexpected_method",
-						Message: createReq.Method,
-					},
-				})
-			}
-			if err := writeRPCResult(encoder, createReq.ID, gateway.MessageFrame{
-				Type:   gateway.FrameTypeAck,
-				Action: gateway.FrameActionCreateSession,
-			}); err != nil {
-				return err
-			}
-
-			activateReq, err := readRPCRequest(decoder)
-			if err != nil {
-				return err
-			}
-			if activateReq.Method != protocol.MethodGatewayActivateSessionSkill {
-				return writeRPCResult(encoder, activateReq.ID, gateway.MessageFrame{
-					Type: gateway.FrameTypeError,
-					Error: &gateway.FrameError{
-						Code:    "unexpected_method",
-						Message: activateReq.Method,
-					},
-				})
-			}
-			if err := writeRPCResult(encoder, activateReq.ID, gateway.MessageFrame{
-				Type:   gateway.FrameTypeAck,
-				Action: gateway.FrameActionActivateSessionSkill,
-			}); err != nil {
-				return err
-			}
-
-			deleteReq, err := readRPCRequest(decoder)
-			if err != nil {
-				return err
-			}
-			if deleteReq.Method != protocol.MethodGatewayDeleteSession {
-				return writeRPCResult(encoder, deleteReq.ID, gateway.MessageFrame{
-					Type: gateway.FrameTypeError,
-					Error: &gateway.FrameError{
-						Code:    "unexpected_method",
-						Message: deleteReq.Method,
-					},
-				})
-			}
-			return writeRPCResult(encoder, deleteReq.ID, gateway.MessageFrame{
-				Type:   gateway.FrameTypeAck,
-				Action: gateway.FrameActionDeleteSession,
-			})
-		},
+	var (
+		mu                  sync.Mutex
+		deleteAskSessionIDs []string
 	)
-	defer cleanupServer()
 
-	rpcClient, err := gatewayclient.NewGatewayRPCClient(gatewayclient.GatewayRPCClientOptions{
-		ListenAddress: gatewaySocket,
-		TokenFile:     tokenFile,
+	client, err := gatewayclient.NewGatewayRPCClient(gatewayclient.GatewayRPCClientOptions{
+		ListenAddress: "test://gateway",
+		TokenFile:     authManager.Path(),
+		ResolveListenAddress: func(_ string) (string, error) {
+			return "test://gateway", nil
+		},
+		Dial: func(_ string) (net.Conn, error) {
+			clientConn, serverConn := net.Pipe()
+			go func() {
+				defer serverConn.Close()
+				decoder := json.NewDecoder(serverConn)
+				encoder := json.NewEncoder(serverConn)
+				for {
+					var request protocol.JSONRPCRequest
+					if err := decoder.Decode(&request); err != nil {
+						return
+					}
+					switch request.Method {
+					case protocol.MethodGatewayAuthenticate:
+						writeRPCResultFrame(t, encoder, request.ID, gateway.MessageFrame{
+							Type:   gateway.FrameTypeAck,
+							Action: gateway.FrameActionAuthenticate,
+						})
+					case protocol.MethodGatewayDeleteAskSession:
+						var params protocol.DeleteAskSessionParams
+						_ = json.Unmarshal(request.Params, &params)
+						mu.Lock()
+						deleteAskSessionIDs = append(deleteAskSessionIDs, strings.TrimSpace(params.SessionID))
+						mu.Unlock()
+						writeRPCResultFrame(t, encoder, request.ID, gateway.MessageFrame{
+							Type:   gateway.FrameTypeAck,
+							Action: gateway.FrameActionDeleteAskSession,
+						})
+					default:
+						writeRPCResultFrame(t, encoder, request.ID, gateway.MessageFrame{
+							Type: gateway.FrameTypeAck,
+						})
+					}
+				}
+			}()
+			return clientConn, nil
+		},
 	})
 	if err != nil {
 		t.Fatalf("NewGatewayRPCClient() error = %v", err)
 	}
-	defer rpcClient.Close()
+	defer client.Close()
 
 	authCtx, authCancel := context.WithTimeout(context.Background(), time.Second)
-	if err := rpcClient.Authenticate(authCtx); err != nil {
+	if err := client.Authenticate(authCtx); err != nil {
 		authCancel()
 		t.Fatalf("Authenticate() error = %v", err)
 	}
@@ -133,14 +95,16 @@ func TestIDMControllerEnterExitRingBufferLifecycle(t *testing.T) {
 
 	output := &bytes.Buffer{}
 	controller := newIDMController(idmControllerOptions{
-		PTYWriter:  &bytes.Buffer{},
-		Output:     output,
-		Stderr:     output,
-		RPCClient:  rpcClient,
-		AutoState:  autoState,
-		LogBuffer:  logBuffer,
-		DefaultCap: DefaultRingBufferCapacity,
-		Workdir:    "/tmp",
+		PTYWriter:          &bytes.Buffer{},
+		Output:             output,
+		Stderr:             output,
+		RPCClient:          client,
+		NotificationStream: nil,
+		AutoState:          autoState,
+		LogBuffer:          logBuffer,
+		DefaultCap:         DefaultRingBufferCapacity,
+		Workdir:            "/tmp",
+		ShellSessionID:     "shell-test",
 	})
 
 	if err := controller.Enter(); err != nil {
@@ -163,7 +127,23 @@ func TestIDMControllerEnterExitRingBufferLifecycle(t *testing.T) {
 	if !autoState.Enabled.Load() {
 		t.Fatal("auto mode should be restored after IDM exit")
 	}
-	if serverErr := <-serverDone; serverErr != nil {
-		t.Fatalf("mock gateway server error = %v", serverErr)
+
+	deadline := time.Now().Add(200 * time.Millisecond)
+	for {
+		mu.Lock()
+		calls := len(deleteAskSessionIDs)
+		mu.Unlock()
+		if calls > 0 || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(deleteAskSessionIDs) != 1 {
+		t.Fatalf("delete ask session calls = %v, want exactly one call", deleteAskSessionIDs)
+	}
+	if deleteAskSessionIDs[0] == "" {
+		t.Fatalf("delete ask session id should not be empty: %v", deleteAskSessionIDs)
 	}
 }
