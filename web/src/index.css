@@ -787,6 +787,11 @@ html, body, #root {
   font-size: 12.5px;
   line-height: 1.7;
 }
+.markdown-streamdown [data-streamdown="code-block"] pre,
+.markdown-streamdown [data-streamdown="code-block"] pre code,
+.markdown-streamdown [data-streamdown="code-block"] pre code span {
+  font-family: var(--font-code) !important;
+}
 .markdown-streamdown [data-streamdown="code-block"] code {
   padding: 0;
   border: none;
