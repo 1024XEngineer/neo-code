@@ -2,6 +2,7 @@ package acceptgate
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"neo-code/internal/runtime/controlplane"
@@ -69,6 +70,11 @@ func TestEvaluateWorkspaceChangeUsesRuntimeFactsOnly(t *testing.T) {
 	if report := Evaluate(context.Background(), input); report.Outcome != OutcomeFailed {
 		t.Fatalf("read-only fact report = %+v, want failed", report)
 	}
+
+	input.Facts.Files.Exists = []runtimefacts.FileExistFact{{Path: "internal/foo.go", Source: "filesystem_write_file_noop"}}
+	if report := Evaluate(context.Background(), input); report.Outcome != OutcomeFailed {
+		t.Fatalf("noop write fact report = %+v, want failed", report)
+	}
 }
 
 func TestEvaluateFileAndContentFacts(t *testing.T) {
@@ -123,6 +129,27 @@ func TestEvaluateToolFactAndUnknownKind(t *testing.T) {
 	}
 	if report.Results[len(report.Results)-1].Reason != "unknown required accept check kind" {
 		t.Fatalf("last result = %+v, want unknown kind reason", report.Results[len(report.Results)-1])
+	}
+}
+
+func TestEvaluateOptionalUnknownKindDoesNotFail(t *testing.T) {
+	t.Parallel()
+
+	optional := false
+	var checks agentsession.AcceptChecks
+	if err := json.Unmarshal([]byte(`[{"kind":"output_only"},{"kind":"future_check","required":false}]`), &checks); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	checks = append(checks, agentsession.AcceptCheck{Kind: "go_literal_optional", Required: &optional})
+	report := Evaluate(context.Background(), Input{
+		PlanVerify:        checks,
+		LastAssistantText: "done",
+	})
+	if report.Outcome != OutcomeAccepted {
+		t.Fatalf("report = %+v, want accepted", report)
+	}
+	if len(report.Results) != 5 {
+		t.Fatalf("results len = %d, want 5", len(report.Results))
 	}
 }
 

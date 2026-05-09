@@ -79,7 +79,7 @@ func checkWorkspaceChange(input Input, check agentsession.AcceptCheck) CheckResu
 	}
 	for _, item := range input.Facts.Files.Exists {
 		switch strings.TrimSpace(item.Source) {
-		case "filesystem_write_file", "filesystem_write_file_noop", "filesystem_edit", "bash", "workspace_write":
+		case "filesystem_write_file", "filesystem_edit", "bash", "workspace_write":
 			return pass(check)
 		}
 	}

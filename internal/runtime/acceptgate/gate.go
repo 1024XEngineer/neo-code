@@ -65,15 +65,21 @@ func Evaluate(ctx context.Context, input Input) Report {
 
 	checks := input.PlanVerify.Normalize()
 	if len(checks) == 0 {
-		checks = agentsession.AcceptChecks{{Kind: agentsession.AcceptCheckOutputOnly, Required: true}}
+		checks = agentsession.AcceptChecks{{Kind: agentsession.AcceptCheckOutputOnly}}
 	}
 	for _, check := range checks {
-		report.add(evaluateAcceptCheck(input, check))
+		result := evaluateAcceptCheck(input, check)
+		if !check.RequiredValue() {
+			report.addOptional(result)
+			continue
+		}
+		report.add(result)
 	}
 	report.finalize()
 	return report
 }
 
+// add 记录必需验收项结果，并在失败时更新终态原因。
 func (r *Report) add(result CheckResult) {
 	if strings.TrimSpace(result.Name) == "" {
 		return
@@ -97,6 +103,15 @@ func (r *Report) add(result CheckResult) {
 	}
 }
 
+// addOptional 保留可选验收项结果，但不让可选失败改变终态。
+func (r *Report) addOptional(result CheckResult) {
+	if strings.TrimSpace(result.Name) == "" {
+		return
+	}
+	r.Results = append(r.Results, result)
+}
+
+// finalize 汇总逐项失败原因，形成对上层展示稳定的终态摘要。
 func (r *Report) finalize() {
 	if r.Outcome == OutcomeAccepted {
 		r.StopReason = controlplane.StopReasonAccepted

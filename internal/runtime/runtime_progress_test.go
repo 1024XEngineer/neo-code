@@ -579,6 +579,7 @@ func TestNoToolIncompleteTurnStillEvaluatesProgressAndInjectsReminder(t *testing
 	registry.Register(todotool.New())
 
 	providerImpl := &scriptedProvider{
+		requireExplicitCompletion: true,
 		responses: []scriptedResponse{
 			{
 				Message: providertypes.Message{
@@ -616,7 +617,7 @@ func TestNoToolIncompleteTurnStillEvaluatesProgressAndInjectsReminder(t *testing
 			{
 				Message: providertypes.Message{
 					Role:  providertypes.RoleAssistant,
-					Parts: []providertypes.ContentPart{providertypes.NewTextPart("done")},
+					Parts: []providertypes.ContentPart{providertypes.NewTextPart("{\"task_completion\":{\"completed\":true}}\ndone")},
 				},
 				FinishReason: "stop",
 			},
@@ -687,28 +688,14 @@ func TestAcceptanceContinueWithoutToolCallStopsAsIncomplete(t *testing.T) {
 	store.sessions[session.ID] = cloneSession(session)
 
 	providerImpl := &scriptedProvider{
+		requireExplicitCompletion: true,
 		responses: []scriptedResponse{
-			{
-				Message: providertypes.Message{
-					Role:  providertypes.RoleAssistant,
-					Parts: []providertypes.ContentPart{providertypes.NewTextPart("{\"task_completion\":{\"completed\":false}}\n我没有完成信号")},
-				},
-				FinishReason: "stop",
-			},
-			{
-				Message: providertypes.Message{
-					Role:  providertypes.RoleAssistant,
-					Parts: []providertypes.ContentPart{providertypes.NewTextPart("{\"task_completion\":{\"completed\":false}}\n仍然没有完成信号")},
-				},
-				FinishReason: "stop",
-			},
-			{
-				Message: providertypes.Message{
-					Role:  providertypes.RoleAssistant,
-					Parts: []providertypes.ContentPart{providertypes.NewTextPart("不应再到这里")},
-				},
-				FinishReason: "stop",
-			},
+			{Message: providertypes.Message{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("{\"task_completion\":{\"completed\":false}}\n1")}}, FinishReason: "stop"},
+			{Message: providertypes.Message{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("{\"task_completion\":{\"completed\":false}}\n2")}}, FinishReason: "stop"},
+			{Message: providertypes.Message{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("{\"task_completion\":{\"completed\":false}}\n3")}}, FinishReason: "stop"},
+			{Message: providertypes.Message{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("{\"task_completion\":{\"completed\":false}}\n4")}}, FinishReason: "stop"},
+			{Message: providertypes.Message{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("{\"task_completion\":{\"completed\":false}}\n5")}}, FinishReason: "stop"},
+			{Message: providertypes.Message{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("不应再到这里")}}, FinishReason: "stop"},
 		},
 	}
 
@@ -728,23 +715,26 @@ func TestAcceptanceContinueWithoutToolCallStopsAsIncomplete(t *testing.T) {
 		t.Fatalf("Run() error = %v", err)
 	}
 
-	if len(providerImpl.requests) != 2 {
-		t.Fatalf("expected runtime to stop after two no-tool continues, got %d requests", len(providerImpl.requests))
+	if len(providerImpl.requests) != 6 {
+		t.Fatalf("expected runtime to stop after six missing completion signals, got %d requests", len(providerImpl.requests))
 	}
-	secondRequestMessages := providerImpl.requests[1].Messages
-	foundHint := false
-	for _, message := range secondRequestMessages {
+	// 第 6 个请求（streak=5 时注入最终提醒后）应包含最终协议提醒
+	fifthRequestMessages := providerImpl.requests[5].Messages
+	foundFinalHint := false
+	for _, message := range fifthRequestMessages {
 		if message.Role != providertypes.RoleSystem {
 			continue
 		}
 		content := renderPartsForTest(message.Parts)
-		if strings.Contains(content, "[Runtime Control]") && strings.Contains(content, "task_completion") {
-			foundHint = true
+		if strings.Contains(content, "[Runtime Control]") &&
+			strings.Contains(content, "final protocol reminder") &&
+			strings.Contains(content, "task_completion") {
+			foundFinalHint = true
 			break
 		}
 	}
-	if !foundHint {
-		t.Fatalf("expected runtime protocol note, got messages: %+v", secondRequestMessages)
+	if !foundFinalHint {
+		t.Fatalf("expected final runtime protocol note in request 5, got messages: %+v", fifthRequestMessages)
 	}
 
 	events := collectRuntimeEvents(service.Events())

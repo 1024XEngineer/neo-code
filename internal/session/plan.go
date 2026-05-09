@@ -52,7 +52,7 @@ type AcceptCheck struct {
 	Kind     string            `json:"kind"`
 	Target   string            `json:"target,omitempty"`
 	Match    string            `json:"match,omitempty"`
-	Required bool              `json:"required,omitempty"`
+	Required *bool             `json:"required,omitempty"`
 	Params   map[string]string `json:"params,omitempty"`
 }
 
@@ -309,6 +309,14 @@ func (checks *AcceptChecks) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// RequiredValue 返回验收项是否为必需项；nil 表示 JSON 省略字段，默认视为必需。
+func (check AcceptCheck) RequiredValue() bool {
+	if check.Required == nil {
+		return true
+	}
+	return *check.Required
+}
+
 // Clone 返回验收项深拷贝，避免调用方共享 Params map。
 func (checks AcceptChecks) Clone() AcceptChecks {
 	if len(checks) == 0 {
@@ -321,6 +329,10 @@ func (checks AcceptChecks) Clone() AcceptChecks {
 		cloned.Kind = strings.TrimSpace(cloned.Kind)
 		cloned.Target = strings.TrimSpace(cloned.Target)
 		cloned.Match = strings.TrimSpace(cloned.Match)
+		if check.Required != nil {
+			required := *check.Required
+			cloned.Required = &required
+		}
 		if len(check.Params) > 0 {
 			cloned.Params = make(map[string]string, len(check.Params))
 			for key, value := range check.Params {
@@ -398,7 +410,7 @@ func migrateLegacyAcceptCheck(value string) AcceptCheck {
 	case looksLikePath(value):
 		kind = AcceptCheckFileExists
 	}
-	return AcceptCheck{Kind: kind, Target: strings.TrimSpace(value), Required: true}
+	return AcceptCheck{Kind: kind, Target: strings.TrimSpace(value)}
 }
 
 func normalizeAcceptCheckKind(kind string) string {

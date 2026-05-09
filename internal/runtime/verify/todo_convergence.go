@@ -100,7 +100,7 @@ func (TodoConvergenceVerifier) VerifyFinal(_ context.Context, input FinalVerifyI
 	if len(waitingExternalIDs) > 0 {
 		return VerificationResult{
 			Name:            todoConvergenceVerifierName,
-			Status:          VerificationHardBlock,
+			Status:          VerificationFail,
 			Summary:         fmt.Sprintf("%d required todo(s) wait for external input", len(waitingExternalIDs)),
 			Reason:          "required todos are blocked by external dependency",
 			WaitingExternal: true,
@@ -110,7 +110,7 @@ func (TodoConvergenceVerifier) VerifyFinal(_ context.Context, input FinalVerifyI
 	if len(pendingIDs) > 0 || len(inProgressIDs) > 0 || len(blockedIDs) > 0 {
 		return VerificationResult{
 			Name:     todoConvergenceVerifierName,
-			Status:   VerificationSoftBlock,
+			Status:   VerificationFail,
 			Summary:  "required todos are not converged",
 			Reason:   "required todos are still pending, in progress, or internally blocked",
 			Evidence: evidence,

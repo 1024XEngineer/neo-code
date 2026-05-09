@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"neo-code/internal/runtime/controlplane"
-	"neo-code/internal/runtime/decider"
 	runtimefacts "neo-code/internal/runtime/facts"
 	"neo-code/internal/security"
 	agentsession "neo-code/internal/session"
@@ -13,55 +12,47 @@ import (
 
 // runState 汇总单次 Run 生命周期内会变化的会话与计量状态。
 type runState struct {
-	mu                             sync.Mutex
-	runID                          string
-	runToken                       uint64
-	session                        agentsession.Session
-	compactCount                   int
-	reactiveCompactAttempts        int
-	rememberedThisRun              bool
-	planningEnabled                bool
-	taskID                         string
-	agentID                        string
-	capabilityToken                *security.CapabilityToken
-	nextAttemptSeq                 int
-	turn                           int
-	baseLifecycle                  controlplane.RunState
-	lifecycle                      controlplane.RunState
-	waitingPermissionCount         int
-	compactingCount                int
-	stopEmitted                    bool
-	budgetExceeded                 bool
-	maxTurnsReached                bool
-	maxTurnsLimit                  int
-	finalInterceptStreak           int
-	pendingFinalProgress           bool
-	mustUseToolAfterFinalContinue  bool
-	noToolAfterFinalContinueStreak int
-	lastAcceptanceBlockedReason    string
-	taskKind                       decider.TaskKind
-	userGoal                       string
-	missingCompletionSignalStreak  int
-	completionProtocolHinted       bool
-	factsCollector                 *runtimefacts.Collector
-	lastDeciderDecision            decider.Decision
-	terminalStatus                 controlplane.TerminalStatus
-	terminalStopReason             controlplane.StopReason
-	terminalStopDetail             string
-	terminalSet                    bool
-	hasUnknownUsage                bool
-	completion                     controlplane.CompletionState
-	progress                       controlplane.ProgressState
-	lastEndOfTurnCheckpointID      string
-	baselineCheckpointID           string
-	hookAnnotations                []string
-	hookNotifications              []queuedHookNotification
-	hookNotificationSeen           map[string]time.Time
-	hookNotificationOmitted        int
-	reportedMissingSkills          map[string]struct{}
-	thinkingOverride               *ThinkingOverride
-	pendingUserQuestion            *UserQuestionRequestedPayload
-	disableTools                   bool
+	mu                            sync.Mutex
+	runID                         string
+	runToken                      uint64
+	session                       agentsession.Session
+	compactCount                  int
+	reactiveCompactAttempts       int
+	rememberedThisRun             bool
+	planningEnabled               bool
+	taskID                        string
+	agentID                       string
+	capabilityToken               *security.CapabilityToken
+	nextAttemptSeq                int
+	turn                          int
+	baseLifecycle                 controlplane.RunState
+	lifecycle                     controlplane.RunState
+	waitingPermissionCount        int
+	compactingCount               int
+	stopEmitted                   bool
+	budgetExceeded                bool
+	maxTurnsReached               bool
+	maxTurnsLimit                 int
+	userGoal                      string
+	missingCompletionSignalStreak int
+	factsCollector                *runtimefacts.Collector
+	terminalStatus                controlplane.TerminalStatus
+	terminalStopReason            controlplane.StopReason
+	terminalStopDetail            string
+	terminalSet                   bool
+	hasUnknownUsage               bool
+	completion                    controlplane.CompletionState
+	progress                      controlplane.ProgressState
+	lastEndOfTurnCheckpointID     string
+	baselineCheckpointID          string
+	hookAnnotations               []string
+	hookNotifications             []queuedHookNotification
+	hookNotificationSeen          map[string]time.Time
+	hookNotificationOmitted       int
+	reportedMissingSkills         map[string]struct{}
+	thinkingOverride              *ThinkingOverride
+	pendingUserQuestion           *UserQuestionRequestedPayload
+	disableTools                  bool
 }
 
 // newRunState 基于持久化会话创建一次运行的内存状态镜像。
@@ -72,7 +63,6 @@ func newRunState(runID string, session agentsession.Session) runState {
 		nextAttemptSeq:        1,
 		completion:            controlplane.CompletionState{TodoOnlyTaskCandidate: true},
 		reportedMissingSkills: make(map[string]struct{}),
-		taskKind:              "",
 		factsCollector:        runtimefacts.NewCollector(),
 		hookNotificationSeen:  make(map[string]time.Time),
 	}

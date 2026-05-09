@@ -73,7 +73,7 @@ func (ContentMatchVerifier) VerifyFinal(_ context.Context, input FinalVerifyInpu
 	}
 	return VerificationResult{
 		Name:     contentMatchVerifierName,
-		Status:   VerificationSoftBlock,
+		Status:   VerificationFail,
 		Summary:  "content rule mismatch detected",
 		Reason:   "content match check did not pass",
 		Evidence: evidence,

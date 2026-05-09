@@ -21,7 +21,7 @@ func (FileExistsVerifier) VerifyFinal(_ context.Context, input FinalVerifyInput)
 	if len(paths) == 0 {
 		return VerificationResult{
 			Name:    fileExistsVerifierName,
-			Status:  VerificationSoftBlock,
+			Status:  VerificationFail,
 			Summary: "no artifact targets declared",
 			Reason:  "file existence targets are missing",
 		}, nil
@@ -71,7 +71,7 @@ func (FileExistsVerifier) VerifyFinal(_ context.Context, input FinalVerifyInput)
 	}
 	return VerificationResult{
 		Name:     fileExistsVerifierName,
-		Status:   VerificationSoftBlock,
+		Status:   VerificationFail,
 		Summary:  "artifact targets are missing or invalid",
 		Reason:   "file existence check did not pass",
 		Evidence: evidence,

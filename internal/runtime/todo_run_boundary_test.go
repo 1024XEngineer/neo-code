@@ -69,6 +69,9 @@ func TestResetTodosForUserRunKeepsTodosForActivePlan(t *testing.T) {
 	session.CurrentPlan = &agentsession.PlanArtifact{
 		ID:     "plan-1",
 		Status: agentsession.PlanStatusApproved,
+		Spec: agentsession.PlanSpec{
+			Todos: []agentsession.TodoItem{{ID: "plan-todo", Content: "plan task"}},
+		},
 	}
 	session.Todos = []agentsession.TodoItem{{
 		ID:       "plan-todo",
@@ -91,6 +94,38 @@ func TestResetTodosForUserRunKeepsTodosForActivePlan(t *testing.T) {
 	}
 	if events := collectRuntimeEvents(service.Events()); len(events) != 0 {
 		t.Fatalf("active plan should not emit reset events, got %+v", events)
+	}
+}
+
+func TestResetTodosForUserRunPrunesTodosOutsideActivePlan(t *testing.T) {
+	t.Parallel()
+
+	store := newMemoryStore()
+	required := true
+	session := agentsession.New("todo-boundary-prune")
+	session.CurrentPlan = &agentsession.PlanArtifact{
+		ID:     "plan-1",
+		Status: agentsession.PlanStatusApproved,
+		Spec: agentsession.PlanSpec{
+			Todos: []agentsession.TodoItem{{ID: "plan-todo", Content: "plan task"}},
+		},
+	}
+	session.Todos = []agentsession.TodoItem{
+		{ID: "plan-todo", Content: "plan task", Status: agentsession.TodoStatusPending, Required: &required},
+		{ID: "old-todo", Content: "old task", Status: agentsession.TodoStatusPending, Required: &required},
+	}
+	created, err := store.CreateSession(context.Background(), createSessionInputFromSession(session))
+	if err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+
+	service := &Service{sessionStore: store, events: make(chan RuntimeEvent, 8)}
+	state := newRunState("run-boundary-prune", created)
+	if err := service.resetTodosForUserRun(context.Background(), &state); err != nil {
+		t.Fatalf("resetTodosForUserRun() error = %v", err)
+	}
+	if len(state.session.Todos) != 1 || state.session.Todos[0].ID != "plan-todo" {
+		t.Fatalf("state todos = %+v, want only plan-owned todo", state.session.Todos)
 	}
 }
 

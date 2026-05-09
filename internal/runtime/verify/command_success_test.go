@@ -69,7 +69,7 @@ func TestCommandSuccessVerifier(t *testing.T) {
 		if err != nil {
 			t.Fatalf("VerifyFinal() error = %v", err)
 		}
-		if result.Status != VerificationSoftBlock || result.ErrorClass != ErrorClassCompileError {
+		if result.Status != VerificationFail || result.ErrorClass != ErrorClassCompileError {
 			t.Fatalf("unexpected result: %+v", result)
 		}
 	})

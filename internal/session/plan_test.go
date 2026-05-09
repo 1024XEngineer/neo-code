@@ -1,6 +1,7 @@
 package session
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -8,7 +9,25 @@ import (
 )
 
 func acceptText(target string) AcceptChecks {
-	return AcceptChecks{{Kind: AcceptCheckOutputOnly, Target: target, Required: true}}
+	return AcceptChecks{{Kind: AcceptCheckOutputOnly, Target: target}}
+}
+
+func TestAcceptChecksUnmarshalRequiredDefaultAndExplicitFalse(t *testing.T) {
+	t.Parallel()
+
+	var checks AcceptChecks
+	if err := json.Unmarshal([]byte(`[{"kind":"output_only"},{"kind":"tool_fact","required":false}]`), &checks); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	if len(checks) != 2 {
+		t.Fatalf("len = %d, want 2", len(checks))
+	}
+	if !checks[0].RequiredValue() {
+		t.Fatalf("omitted required should default to true: %+v", checks[0])
+	}
+	if checks[1].RequiredValue() {
+		t.Fatalf("explicit required=false should stay optional: %+v", checks[1])
+	}
 }
 
 func TestNormalizeSummaryViewFallsBackToBuiltSummaryWhenStructurallyInvalid(t *testing.T) {

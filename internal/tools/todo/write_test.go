@@ -435,6 +435,57 @@ func TestToolExecuteReasonMapping(t *testing.T) {
 	}
 }
 
+func TestToolExecuteTodoNotFoundRecoveryDetails(t *testing.T) {
+	t.Parallel()
+
+	tool := New()
+	emptySession := agentsession.New("todo-not-found-empty")
+	emptyMutator := &stubMutator{session: &emptySession}
+	result, err := tool.Execute(context.Background(), tools.ToolCallInput{
+		Name:           tools.ToolNameTodoWrite,
+		SessionMutator: emptyMutator,
+		Arguments:      []byte(`{"action":"complete","id":"missing"}`),
+	})
+	if err == nil {
+		t.Fatalf("expected missing todo error")
+	}
+	if result.Metadata["reason_code"] != reasonTodoNotFound {
+		t.Fatalf("reason_code = %v, want %q", result.Metadata["reason_code"], reasonTodoNotFound)
+	}
+	if !strings.Contains(result.Content, "current session has no active todos") ||
+		!strings.Contains(result.Content, `action="plan"`) {
+		t.Fatalf("expected empty-session recovery details, got %q", result.Content)
+	}
+	if result.Metadata["todo_count"] != 0 {
+		t.Fatalf("todo_count = %v, want 0", result.Metadata["todo_count"])
+	}
+
+	existingSession := agentsession.New("todo-not-found-existing")
+	if err := existingSession.AddTodo(agentsession.TodoItem{
+		ID:      "todo-1",
+		Content: "current",
+		Status:  agentsession.TodoStatusPending,
+	}); err != nil {
+		t.Fatalf("AddTodo() error = %v", err)
+	}
+	existingMutator := &stubMutator{session: &existingSession}
+	result, err = tool.Execute(context.Background(), tools.ToolCallInput{
+		Name:           tools.ToolNameTodoWrite,
+		SessionMutator: existingMutator,
+		Arguments:      []byte(`{"action":"complete","id":"missing"}`),
+	})
+	if err == nil {
+		t.Fatalf("expected missing todo error")
+	}
+	if !strings.Contains(result.Content, "active_todo_ids=todo-1") {
+		t.Fatalf("expected active todo recovery details, got %q", result.Content)
+	}
+	ids, ok := result.Metadata["active_todo_ids"].([]string)
+	if !ok || len(ids) != 1 || ids[0] != "todo-1" {
+		t.Fatalf("active_todo_ids metadata = %#v", result.Metadata["active_todo_ids"])
+	}
+}
+
 func TestParseInput(t *testing.T) {
 	t.Parallel()
 

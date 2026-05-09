@@ -305,12 +305,20 @@ const (
 	StopReasonVerificationFailed StopReason = "verification_failed"
 	// StopReasonAccepted 表示双门控通过并被 acceptance 接受。
 	StopReasonAccepted StopReason = "accepted"
+	// StopReasonMissingCompletionSignal 表示 assistant 停止调用工具但未输出完成信号。
+	StopReasonMissingCompletionSignal StopReason = "missing_completion_signal"
+	// StopReasonAcceptCheckFailed 表示最终 Accept Gate 的验收项失败。
+	StopReasonAcceptCheckFailed StopReason = "accept_check_failed"
 	// StopReasonTodoNotConverged 表示 required todo 未收敛。
 	StopReasonTodoNotConverged StopReason = "todo_not_converged"
 	// StopReasonTodoWaitingExternal 表示 todo 等待外部输入。
 	StopReasonTodoWaitingExternal StopReason = "todo_waiting_external"
 	// StopReasonNoProgressAfterFinalIntercept 表示 final 被拦截后长期无进展。
 	StopReasonNoProgressAfterFinalIntercept StopReason = "no_progress_after_final_intercept"
+	// StopReasonNoProgress 表示运行连续缺少实质进展。
+	StopReasonNoProgress StopReason = "no_progress"
+	// StopReasonRepeatCycle 表示运行重复相同动作或结果。
+	StopReasonRepeatCycle StopReason = "repeat_cycle"
 	// StopReasonMaxTurnExceededWithUnconvergedTodos 表示 max turn + todo 未收敛。
 	StopReasonMaxTurnExceededWithUnconvergedTodos StopReason = "max_turn_exceeded_with_unconverged_todos"
 	// StopReasonMaxTurnExceededWithFailedVerification 表示 max turn + verification 失败。
@@ -366,13 +374,24 @@ type VerificationFailedPayload struct {
 
 // AcceptanceDecidedPayload 描述 acceptance 引擎输出。
 type AcceptanceDecidedPayload struct {
-	Status                  string     `json:"status"`
-	StopReason              StopReason `json:"stop_reason,omitempty"`
-	ErrorClass              string     `json:"error_class,omitempty"`
-	CompletionBlockedReason string     `json:"completion_blocked_reason,omitempty"`
-	UserVisibleSummary      string     `json:"user_visible_summary,omitempty"`
-	InternalSummary         string     `json:"internal_summary,omitempty"`
-	ContinueHint            string     `json:"continue_hint,omitempty"`
+	Status                  string                  `json:"status"`
+	StopReason              StopReason              `json:"stop_reason,omitempty"`
+	ErrorClass              string                  `json:"error_class,omitempty"`
+	CompletionBlockedReason string                  `json:"completion_blocked_reason,omitempty"`
+	UserVisibleSummary      string                  `json:"user_visible_summary,omitempty"`
+	InternalSummary         string                  `json:"internal_summary,omitempty"`
+	ContinueHint            string                  `json:"continue_hint,omitempty"`
+	Summary                 string                  `json:"summary,omitempty"`
+	Results                 []AcceptanceCheckResult `json:"results,omitempty"`
+}
+
+// AcceptanceCheckResult 描述 Accept Gate 中单个检查项的结果。
+type AcceptanceCheckResult struct {
+	Passed bool   `json:"passed"`
+	Name   string `json:"name"`
+	Kind   string `json:"kind,omitempty"`
+	Target string `json:"target,omitempty"`
+	Reason string `json:"reason,omitempty"`
 }
 
 // TokenUsagePayload 描述 runtime 当前 token_usage 事件载荷。

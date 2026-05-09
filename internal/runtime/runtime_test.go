@@ -2519,7 +2519,7 @@ func TestServiceRunErrorPaths(t *testing.T) {
 					})
 				}
 				responses = append(responses, scriptedResponse{
-					Message:      providertypes.Message{Parts: []providertypes.ContentPart{providertypes.NewTextPart("done after many cycles")}},
+					Message:      providertypes.Message{Parts: []providertypes.ContentPart{providertypes.NewTextPart("{\"task_completion\":{\"completed\":true}}\ndone after many cycles")}},
 					FinishReason: "stop",
 				})
 				return &scriptedProvider{responses: responses}
@@ -2528,8 +2528,8 @@ func TestServiceRunErrorPaths(t *testing.T) {
 			expectEvents: []EventType{EventUserMessage, EventToolStart, EventToolChunk, EventToolResult, EventAgentDone},
 			assert: func(t *testing.T, store *memoryStore, scripted *scriptedProvider, tool *stubTool) {
 				t.Helper()
-				if scripted.callCount != 7 {
-					t.Fatalf("expected 7 provider calls before no-progress hard stop, got %d", scripted.callCount)
+				if scripted.callCount != 10 {
+					t.Fatalf("expected 10 provider calls (9 tool cycles + 1 completion), got %d", scripted.callCount)
 				}
 			},
 		},

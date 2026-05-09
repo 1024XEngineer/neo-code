@@ -92,6 +92,12 @@ func TestPlanModePromptTemplates(t *testing.T) {
 		})
 	}
 
+	if !strings.Contains(PlanModePrompt("plan"), "summary_candidate.active_todo_ids") {
+		t.Fatalf("expected plan prompt to require active todo ownership")
+	}
+	if !strings.Contains(PlanModePrompt("build_execute"), "create current-run required todos") {
+		t.Fatalf("expected build prompt to require direct-build todo bootstrap")
+	}
 	if got := PlanModePrompt("unknown"); got != "" {
 		t.Fatalf("PlanModePrompt(unknown) = %q, want empty", got)
 	}

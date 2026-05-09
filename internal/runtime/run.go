@@ -178,7 +178,6 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 		agentsession.NormalizeAgentMode(session.AgentMode) == agentsession.AgentModePlan
 	state.taskID = strings.TrimSpace(input.TaskID)
 	state.agentID = strings.TrimSpace(input.AgentID)
-	state.taskKind = inferTaskKindFromInput(input.Parts)
 	state.userGoal = strings.TrimSpace(renderPartsForVerification(input.Parts))
 	if input.CapabilityToken != nil {
 		token := input.CapabilityToken.Normalize()
@@ -217,6 +216,9 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 		return s.handleRunError(errors.New(findHookBlockMessage(submitHookOutput)))
 	}
 	if err := s.appendUserMessageAndSave(ctx, &state, input.Parts); err != nil {
+		return s.handleRunError(err)
+	}
+	if err := s.maybeAppendTodoBootstrapReminder(ctx, &state); err != nil {
 		return s.handleRunError(err)
 	}
 	s.emitRuntimeSnapshotUpdated(ctx, &state, "session_start")
@@ -315,6 +317,9 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 			}
 			hasToolCalls := len(turnOutput.assistant.ToolCalls) > 0
 			if hasToolCalls {
+				state.mu.Lock()
+				state.missingCompletionSignalStreak = 0
+				state.mu.Unlock()
 				if err := s.appendAssistantMessageAndSave(
 					ctx,
 					&state,
@@ -399,16 +404,18 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 				if err != nil {
 					return s.handleRunError(err)
 				}
+				hasThinking := len(turnOutput.assistant.ThinkingMetadata) > 0
 				if !completionSignaled {
+					if hasThinking {
+						break turnAttempt
+					}
 					state.mu.Lock()
 					state.missingCompletionSignalStreak++
-					alreadyHinted := state.completionProtocolHinted
-					if !alreadyHinted {
-						state.completionProtocolHinted = true
-					}
+					missingCompletionSignalStreak := state.missingCompletionSignalStreak
 					state.mu.Unlock()
-					if !alreadyHinted {
-						if err := s.appendSystemMessageAndSave(ctx, &state, completionProtocolReminder); err != nil {
+					if missingCompletionSignalStreak < missingCompletionSignalLimit {
+						reminder := completionProtocolReminderForStreak(missingCompletionSignalStreak)
+						if err := s.appendSystemMessageAndSave(ctx, &state, reminder); err != nil {
 							return s.handleRunError(err)
 						}
 						break turnAttempt
@@ -432,7 +439,6 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 				if report.Outcome == acceptgate.OutcomeAccepted {
 					state.mu.Lock()
 					state.missingCompletionSignalStreak = 0
-					state.completionProtocolHinted = false
 					state.mu.Unlock()
 					if markCurrentPlanCompleted(&state.session, completionSignaled) {
 						state.touchSession()
@@ -453,7 +459,6 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 				}
 				state.mu.Lock()
 				state.missingCompletionSignalStreak = 0
-				state.completionProtocolHinted = false
 				state.mu.Unlock()
 				if err := s.appendAssistantMessageOnlyAndSave(ctx, &state, assistantForFinal); err != nil {
 					return s.handleRunError(err)

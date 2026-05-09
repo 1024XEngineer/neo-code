@@ -27,20 +27,20 @@ func (s stubFinalVerifier) VerifyFinal(ctx context.Context, input FinalVerifyInp
 func TestOrchestratorRunFinalVerification(t *testing.T) {
 	t.Parallel()
 
-	t.Run("short-circuits on first non-pass", func(t *testing.T) {
+	t.Run("runs all verifiers, aggregates all results", func(t *testing.T) {
 		t.Parallel()
 		decision, err := (Orchestrator{Verifiers: []FinalVerifier{
-			stubFinalVerifier{name: "todo", result: VerificationResult{Name: "todo", Status: VerificationSoftBlock}},
+			stubFinalVerifier{name: "todo", result: VerificationResult{Name: "todo", Status: VerificationFail}},
 			stubFinalVerifier{name: "build", result: VerificationResult{Name: "build", Status: VerificationFail}},
 		}}).RunFinalVerification(context.Background(), FinalVerifyInput{})
 		if err != nil {
 			t.Fatalf("RunFinalVerification() error = %v", err)
 		}
-		if decision.Passed || decision.Reason != controlplane.StopReasonTodoNotConverged {
+		if decision.Passed {
 			t.Fatalf("unexpected decision: %+v", decision)
 		}
-		if len(decision.Results) != 1 {
-			t.Fatalf("results len = %d, want 1", len(decision.Results))
+		if len(decision.Results) != 2 {
+			t.Fatalf("results len = %d, want 2 (all verifiers run)", len(decision.Results))
 		}
 	})
 
@@ -57,15 +57,15 @@ func TestOrchestratorRunFinalVerification(t *testing.T) {
 		}
 	})
 
-	t.Run("hard block waiting external maps correctly", func(t *testing.T) {
+	t.Run("fail with waiting external maps to verification_failed", func(t *testing.T) {
 		t.Parallel()
 		decision, err := (Orchestrator{Verifiers: []FinalVerifier{
-			stubFinalVerifier{name: "todo", result: VerificationResult{Name: "todo", Status: VerificationHardBlock, WaitingExternal: true}},
+			stubFinalVerifier{name: "todo", result: VerificationResult{Name: "todo", Status: VerificationFail, WaitingExternal: true}},
 		}}).RunFinalVerification(context.Background(), FinalVerifyInput{})
 		if err != nil {
 			t.Fatalf("RunFinalVerification() error = %v", err)
 		}
-		if decision.Reason != controlplane.StopReasonTodoWaitingExternal {
+		if decision.Reason != controlplane.StopReasonVerificationFailed {
 			t.Fatalf("reason = %q, want %q", decision.Reason, controlplane.StopReasonTodoWaitingExternal)
 		}
 	})

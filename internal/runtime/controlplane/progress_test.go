@@ -68,7 +68,7 @@ func TestEvaluateProgressExplorationExhaustionStartsNoProgress(t *testing.T) {
 
 	state := ProgressState{
 		LastScore: ProgressScore{
-			ExplorationStreak: 4,
+			ExplorationStreak: 11,
 			NoProgressStreak:  1,
 		},
 	}

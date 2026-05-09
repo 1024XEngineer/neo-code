@@ -4,14 +4,22 @@ import (
 	"context"
 	"strings"
 
+	"neo-code/internal/promptasset"
 	providertypes "neo-code/internal/provider/types"
-	"neo-code/internal/runtime/acceptance"
 	"neo-code/internal/runtime/acceptgate"
 	runtimefacts "neo-code/internal/runtime/facts"
 	agentsession "neo-code/internal/session"
 )
 
-const completionProtocolReminder = "[Runtime Control]\n你当前没有调用工具，也没有输出 task_completion。若任务已完成，请按结构化完成信号结束；否则继续调用工具推进。"
+const missingCompletionSignalLimit = 6
+
+// completionProtocolReminderForStreak 根据连续缺失完成信号的次数返回对应协议提示。
+func completionProtocolReminderForStreak(streak int) string {
+	if streak >= missingCompletionSignalLimit-1 {
+		return promptasset.CompletionProtocolFinalReminder()
+	}
+	return promptasset.CompletionProtocolReminder()
+}
 
 // evaluateAcceptGate 从运行态提取事实快照，并执行最终 Accept Gate。
 func (s *Service) evaluateAcceptGate(ctx context.Context, state *runState, assistantMessage providertypes.Message) acceptgate.Report {
@@ -75,9 +83,9 @@ func selectPlanOwnedTodos(plan *agentsession.PlanArtifact, todos []agentsession.
 
 // emitAcceptGateReport 将 Accept Gate 报告发布为统一 acceptance_decided 事件。
 func (s *Service) emitAcceptGateReport(state *runState, report acceptgate.Report) {
-	status := acceptance.AcceptanceFailed
+	status := string(acceptgate.OutcomeFailed)
 	if report.Outcome == acceptgate.OutcomeAccepted {
-		status = acceptance.AcceptanceAccepted
+		status = string(acceptgate.OutcomeAccepted)
 	}
 	s.emitRunScopedOptional(EventAcceptanceDecided, state, AcceptanceDecidedPayload{
 		Status:     status,

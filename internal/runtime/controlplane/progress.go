@@ -203,9 +203,9 @@ func isExplorationProgress(runState RunState, flags evidenceFlags) bool {
 func explorationWindowForPhase(runState RunState) int {
 	switch runState {
 	case RunStatePlan:
-		return 4
+		return 10
 	case RunStateExecute:
-		return 2
+		return 6
 	default:
 		return 0
 	}
