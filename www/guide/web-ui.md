@@ -14,7 +14,7 @@ neocode web
 ```
 
 启动后浏览器会自动打开 `http://127.0.0.1:8080`。如果端口被占用，会自动尝试 8081 ~ 8090。
-如果当前目录或发布包内存在 `web/` 源码但还没有 `web/dist`，命令会自动执行 `npm install` 和 `npm run build`。标签发布版使用该能力时，用户机器必须预先安装 Node.js 和 npm。
+标签发布版会直接使用二进制内嵌的 Web UI 资源启动，不要求用户机器安装 Node.js 或 npm。只有在源码仓库运行、且本地缺少 `web/dist` 时，命令才会自动执行 `npm install` 和 `npm run build`。
 
 ### 常用参数
 
@@ -22,7 +22,7 @@ neocode web
 |------|--------|------|
 | `--http-listen` | `127.0.0.1:8080` | 监听地址（仅允许回环地址） |
 | `--open-browser` | `true` | 启动后自动打开浏览器 |
-| `--skip-build` | `false` | 跳过前端构建（dist/ 缺失时会报错；仅在你已准备好预构建资源时使用） |
+| `--skip-build` | `false` | 跳过本地前端构建（若二进制已内嵌资源仍可启动；主要用于源码模式或自备 dist 的场景） |
 | `--static-dir` | — | 指定前端静态文件目录 |
 | `--log-level` | `info` | 日志级别：debug / info / warn / error |
 | `--token-file` | — | 自定义认证 token 文件路径 |
@@ -57,7 +57,7 @@ Web UI 支持两种运行模式，根据启动方式自动选择：
 ### 浏览器模式
 
 通过 `neocode web` 或直接在浏览器中访问 Gateway 地址时使用。首次连接需要输入 Gateway URL 和 token，配置保存在 sessionStorage 中。
-如果你使用标签发布版，首次运行 `neocode web` 可能先看到前端依赖安装与构建日志；构建完成后会继续启动 Web UI。若机器缺少 Node.js/npm，命令会直接提示安装依赖。
+如果你使用标签发布版，`neocode web` 会直接启动内嵌的 Web UI。若你使用源码仓库运行并且本地没有 `web/dist`，命令才会先执行前端依赖安装与构建；此时如果机器缺少 Node.js/npm，会直接提示安装依赖。
 
 ## 核心功能
 

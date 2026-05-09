@@ -113,6 +113,14 @@ Then start with your workspace:
 neocode --workdir /path/to/your/project
 ```
 
+To launch the browser-based Web UI:
+
+```bash
+neocode web
+```
+
+Tagged release builds already embed `web/dist` into the `neocode` binary, so the target machine does not need Node.js or npm. When running from source, missing `web/dist` still triggers the local frontend build path.
+
 ### 4. Common commands
 
 ```text

@@ -10,6 +10,8 @@ builds:
   - id: neocode
     env:
       - CGO_ENABLED=0
+    tags:
+      - webembed
     ldflags:
       - -s -w -X 'neo-code/internal/version.Version={{.Version}}'
     goos:
@@ -52,18 +54,6 @@ archives:
       {{- else if eq .Arch "386" }}i386
       {{- else }}{{ .Arch }}{{ end }}
       {{- if .Arm }}v{{ .Arm }}{{ end }}
-    files:
-      - web/package.json
-      - web/package-lock.json
-      - web/index.html
-      - web/components.json
-      - web/tsconfig.json
-      - web/tsconfig.app.json
-      - web/tsconfig.node.json
-      - web/vite.config.ts
-      - web/src/**/*
-      - web/scripts/**/*
-      - web/vite-plugins/**/*
 
   - id: neocode-gateway
     ids:

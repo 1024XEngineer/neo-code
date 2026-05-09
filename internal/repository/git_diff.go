@@ -43,6 +43,9 @@ func (s *Service) ReadGitDiffFile(ctx context.Context, workdir string, path stri
 	normalizedPath := filepathSlashClean(path)
 	entry, ok := findGitDiffEntry(snapshot.Entries, normalizedPath)
 	if !ok {
+		if isDirectoryGitDiffPath(root, normalizedPath) {
+			return GitDiffFileResult{}, fmt.Errorf("repository: git diff path %q is a directory", normalizedPath)
+		}
 		return GitDiffFileResult{}, fmt.Errorf("repository: git diff file %q not found", normalizedPath)
 	}
 	limit := maxBytes
@@ -149,7 +152,7 @@ func (s *Service) readGitDiffOriginal(ctx context.Context, workdir string, relat
 
 // readGitDiffModified 读取工作树中的当前文本。
 func (s *Service) readGitDiffModified(workdir string, relativePath string, maxBytes int64) (gitDiffReadResult, error) {
-	target, err := security.ResolveWorkspacePathFromRoot(workdir, relativePath)
+	target, err := resolveUntrackedEntryPath(workdir, relativePath)
 	if err != nil {
 		return gitDiffReadResult{}, err
 	}
@@ -175,6 +178,19 @@ func (s *Service) readGitDiffModified(workdir string, relativePath string, maxBy
 	}
 	result.content = string(data)
 	return result, nil
+}
+
+// isDirectoryGitDiffPath 判断调用方请求的 Git Diff 路径当前是否是工作区目录，用于返回更明确的错误语义。
+func isDirectoryGitDiffPath(workdir string, relativePath string) bool {
+	target, err := resolveUntrackedEntryPath(workdir, relativePath)
+	if err != nil {
+		return false
+	}
+	info, err := os.Stat(target)
+	if err != nil {
+		return false
+	}
+	return info.IsDir()
 }
 
 // buildGitHeadBlobSpec 构造 HEAD blob 读取使用的对象说明。

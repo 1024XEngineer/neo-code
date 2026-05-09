@@ -118,7 +118,7 @@ neocode --workdir /path/to/your/project
 neocode web
 ```
 
-标签发布版会在缺少 `web/dist` 时自动使用发布包内的 `web/` 源码执行 `npm install` 和 `npm run build`。这要求用户机器已安装 Node.js 和 npm；如果你使用源码仓库运行，也保留相同的自动构建行为。
+标签发布版已经将 Web UI 的 `web/dist` 内嵌进 `neocode` 二进制，执行 `neocode web` 时不再要求用户机器安装 Node.js 或 npm。如果你在源码仓库里运行 `go run ./cmd/neocode web`，当本地缺少 `web/dist` 时仍会自动尝试构建前端。
 
 ### 4. 常用命令
 
