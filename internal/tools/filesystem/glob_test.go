@@ -242,6 +242,36 @@ func TestGlobToolFiltersSensitiveAndSymlinkEscapes(t *testing.T) {
 	}
 }
 
+func TestGlobToolSkipsNoisyDirectories(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	mustWriteFile(t, filepath.Join(workspace, "src", "main.go"), "package main\n")
+	for _, dir := range []string{".cache", ".tmp", "tmp", "build", "dist", "out", "target", "coverage", ".next", ".nuxt", ".turbo", ".parcel-cache", ".vite", "vendor", "bin", "obj"} {
+		mustWriteFile(t, filepath.Join(workspace, dir, "skip.go"), "package skip\n")
+	}
+
+	tool := NewGlob(workspace)
+	result, err := tool.Execute(context.Background(), tools.ToolCallInput{
+		Name:      tool.Name(),
+		Arguments: mustMarshalFSArgs(t, map[string]string{"pattern": "**/*.go"}),
+		Workdir:   workspace,
+	})
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	content := normalizeSlashPath(result.Content)
+	if !strings.Contains(content, normalizeSlashPath(filepath.Join("src", "main.go"))) {
+		t.Fatalf("expected src match, got %q", result.Content)
+	}
+	for _, dir := range []string{".cache", ".tmp", "tmp", "build", "dist", "out", "target", "coverage", ".next", ".nuxt", ".turbo", ".parcel-cache", ".vite", "vendor", "bin", "obj"} {
+		if strings.Contains(content, dir) {
+			t.Fatalf("expected noisy dir %q to be skipped, got %q", dir, result.Content)
+		}
+	}
+}
+
 func TestGlobToolVerificationFacts(t *testing.T) {
 	t.Parallel()
 

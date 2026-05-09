@@ -22,8 +22,6 @@ const (
 
 var coreSections = loadCoreSections()
 
-var noProgressReminder = mustReadTemplate("templates/runtime/self_healing_no_progress.txt")
-
 var repeatCycleReminder = mustReadTemplate("templates/runtime/self_healing_repeat_cycle.txt")
 
 var completionProtocolReminder = mustReadTemplate("templates/runtime/completion_protocol_reminder.md")
@@ -49,11 +47,6 @@ var planCapabilities = mustReadTemplate("templates/core/capabilities_plan.md")
 // CoreSections 返回主会话固定核心 prompt sections 的有序副本。
 func CoreSections() []Section {
 	return append([]Section(nil), coreSections...)
-}
-
-// NoProgressReminder 返回 runtime 无进展自愈提醒文案。
-func NoProgressReminder() string {
-	return noProgressReminder
 }
 
 // RepeatCycleReminder 返回 runtime 重复同参工具调用自愈提醒文案。

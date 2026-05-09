@@ -24,10 +24,6 @@ const (
 	StopReasonTodoNotConverged StopReason = "todo_not_converged"
 	// StopReasonTodoWaitingExternal 表示 required todo 仍在等待外部条件。
 	StopReasonTodoWaitingExternal StopReason = "todo_waiting_external"
-	// StopReasonNoProgressAfterFinalIntercept 表示 final 连续被拦截且没有新进展。
-	StopReasonNoProgressAfterFinalIntercept StopReason = "no_progress_after_final_intercept"
-	// StopReasonNoProgress 表示运行连续缺少实质进展并触发硬终止。
-	StopReasonNoProgress StopReason = "no_progress"
 	// StopReasonRepeatCycle 表示运行重复相同动作/结果并触发硬终止。
 	StopReasonRepeatCycle StopReason = "repeat_cycle"
 	// StopReasonMaxTurnExceededWithUnconvergedTodos 表示达到最大轮次时 todo 仍未收敛。

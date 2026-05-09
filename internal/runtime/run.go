@@ -25,8 +25,6 @@ import (
 	"neo-code/internal/tools"
 )
 
-var selfHealingReminder = promptasset.NoProgressReminder()
-
 var selfHealingRepeatReminder = promptasset.RepeatCycleReminder()
 
 const (
@@ -60,20 +58,6 @@ func computeToolSignature(calls []providertypes.ToolCall) string {
 		sb.WriteString(";")
 	}
 	hash := sha256.Sum256([]byte(sb.String()))
-	return hex.EncodeToString(hash[:])
-}
-
-// computeTodoStateSignature 计算当前 Todo 列表的状态签名，用于识别 dispatch 是否产生了真实状态变化。
-func computeTodoStateSignature(items []agentsession.TodoItem) string {
-	normalized := cloneTodosForPersistence(items)
-	if len(normalized) == 0 {
-		return ""
-	}
-	encoded, err := json.Marshal(normalized)
-	if err != nil {
-		return ""
-	}
-	hash := sha256.Sum256(encoded)
 	return hex.EncodeToString(hash[:])
 }
 
@@ -219,6 +203,9 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 		return s.handleRunError(err)
 	}
 	if err := s.maybeAppendTodoBootstrapReminder(ctx, &state); err != nil {
+		return s.handleRunError(err)
+	}
+	if err := s.maybeAppendPlanBootstrapReminder(ctx, &state); err != nil {
 		return s.handleRunError(err)
 	}
 	s.emitRuntimeSnapshotUpdated(ctx, &state, "session_start")
@@ -471,9 +458,6 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 				return nil
 			}
 
-			beforeTask := state.session.TaskState.Clone()
-			beforeTodos := cloneTodosForPersistence(state.session.Todos)
-
 			if err := s.setBaseRunState(ctx, &state, controlplane.RunStateExecute); err != nil {
 				return s.handleRunError(err)
 			}
@@ -493,18 +477,10 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 			state.completion = applyToolExecutionCompletion(state.completion, summary)
 			afterTask := state.session.TaskState.Clone()
 			afterTodos := cloneTodosForPersistence(state.session.Todos)
-			progressRunState := controlplane.RunStateExecute
-			if resolvePlanningStageForState(&state) == planStagePlan {
-				progressRunState = controlplane.RunStatePlan
-			}
 			progressInput := collectProgressInput(
-				progressRunState,
-				beforeTask,
 				afterTask,
-				beforeTodos,
 				afterTodos,
 				summary,
-				snapshot.NoProgressStreakLimit,
 				snapshot.RepeatCycleStreakLimit,
 			)
 			state.progress = controlplane.EvaluateProgress(state.progress, progressInput)
@@ -515,7 +491,7 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 			if currentScore.ShouldTerminate {
 				reason := currentScore.TerminateReason
 				if reason == "" {
-					reason = controlplane.StopReasonNoProgress
+					reason = controlplane.StopReasonRepeatCycle
 				}
 				state.markTerminalDecision(controlplane.TerminalStatusIncomplete, reason, "progress hard stop")
 				s.emitRunScoped(ctx, EventAgentDone, &state, providertypes.Message{Role: providertypes.RoleAssistant})
@@ -608,7 +584,6 @@ func (s *Service) prepareTurnBudgetSnapshot(ctx context.Context, state *runState
 	score := state.progress.LastScore
 	state.mu.Unlock()
 
-	limit := resolveNoProgressStreakLimit(cfg.Runtime)
 	repeatLimit := resolveRepeatCycleStreakLimit(cfg.Runtime)
 	systemPrompt := withProgressReminder(builtContext.SystemPrompt, score)
 	if notificationHint := strings.TrimSpace(s.drainHookNotificationsForTurn(state)); notificationHint != "" {
@@ -650,20 +625,11 @@ func (s *Service) prepareTurnBudgetSnapshot(ctx context.Context, state *runState
 		promptBudget,
 		budgetSource,
 		state.compactCount,
-		limit,
 		repeatLimit,
 		injectFullPlan,
 		contextWindow,
 		request,
 	), false, nil
-}
-
-// resolveNoProgressStreakLimit 统一解析熔断阈值，避免运行期出现无效值导致分支行为不一致。
-func resolveNoProgressStreakLimit(rc config.RuntimeConfig) int {
-	if rc.MaxNoProgressStreak <= 0 {
-		return config.DefaultMaxNoProgressStreak
-	}
-	return rc.MaxNoProgressStreak
 }
 
 // resolveRepeatCycleStreakLimit 统一解析重复调用循环阈值。
@@ -1129,8 +1095,6 @@ func withProgressReminder(systemPrompt string, score controlplane.ProgressScore)
 	switch score.ReminderKind {
 	case controlplane.ReminderKindRepeatCycle:
 		reminder = selfHealingRepeatReminder
-	case controlplane.ReminderKindNoProgress, controlplane.ReminderKindGenericStalled:
-		reminder = selfHealingReminder
 	default:
 		return systemPrompt
 	}

@@ -75,7 +75,7 @@ func applyToolExecutionCompletion(current controlplane.CompletionState, summary 
 				}
 			}
 		}
-		if result.Facts.WorkspaceWrite && !toolResultNoopWrite(result.Metadata) {
+		if hasConfirmedWorkspaceWriteResult(result) {
 			current.HasUnverifiedWrites = true
 		}
 		if result.Facts.VerificationPerformed && result.Facts.VerificationPassed {
@@ -87,63 +87,17 @@ func applyToolExecutionCompletion(current controlplane.CompletionState, summary 
 
 // collectProgressInput 基于执行前后事实组装 progress 评估输入。
 func collectProgressInput(
-	runState controlplane.RunState,
-	beforeTask agentsession.TaskState,
 	afterTask agentsession.TaskState,
-	beforeTodos []agentsession.TodoItem,
 	afterTodos []agentsession.TodoItem,
 	summary toolExecutionSummary,
-	noProgressLimit int,
 	repeatLimit int,
 ) controlplane.ProgressInput {
-	evidence := deriveProgressEvidence(beforeTask, afterTask, beforeTodos, afterTodos, summary)
 	return controlplane.ProgressInput{
-		RunState:             runState,
-		Evidence:             evidence,
 		CurrentToolSignature: computeToolSignature(summary.Calls),
 		ResultFingerprint:    computeToolResultFingerprint(summary.Results),
 		SubgoalFingerprint:   computeSubgoalFingerprint(afterTask, afterTodos, summary.Calls),
-		NoProgressLimit:      noProgressLimit,
 		RepeatCycleLimit:     repeatLimit,
 	}
-}
-
-// deriveProgressEvidence 从本轮前后快照和工具摘要中提取结构化 evidence。
-func deriveProgressEvidence(
-	beforeTask agentsession.TaskState,
-	afterTask agentsession.TaskState,
-	beforeTodos []agentsession.TodoItem,
-	afterTodos []agentsession.TodoItem,
-	summary toolExecutionSummary,
-) []controlplane.ProgressEvidenceRecord {
-	var evidence []controlplane.ProgressEvidenceRecord
-
-	if computeTaskStateSignature(beforeTask) != computeTaskStateSignature(afterTask) {
-		evidence = append(evidence, controlplane.ProgressEvidenceRecord{Kind: controlplane.EvidenceTaskStateChanged})
-	}
-	if computeTodoStateSignature(beforeTodos) != computeTodoStateSignature(afterTodos) {
-		evidence = append(evidence, controlplane.ProgressEvidenceRecord{Kind: controlplane.EvidenceTodoStateChanged})
-	}
-	if summary.HasSuccessfulWorkspaceWrite {
-		evidence = append(evidence, controlplane.ProgressEvidenceRecord{Kind: controlplane.EvidenceWriteApplied})
-	}
-	if summary.HasSuccessfulVerification {
-		evidence = append(evidence, controlplane.ProgressEvidenceRecord{Kind: controlplane.EvidenceVerifyPassed})
-	}
-	if hasSuccessfulInformationalResult(summary.Results) {
-		evidence = append(evidence, controlplane.ProgressEvidenceRecord{Kind: controlplane.EvidenceNewInfoNonDup})
-	}
-	return evidence
-}
-
-// computeTaskStateSignature 计算 task_state 的结构化签名。
-func computeTaskStateSignature(task agentsession.TaskState) string {
-	encoded, err := json.Marshal(task.Clone())
-	if err != nil {
-		return ""
-	}
-	hash := sha256.Sum256(encoded)
-	return hex.EncodeToString(hash[:])
 }
 
 // computeToolResultFingerprint 计算本轮工具结果的聚合指纹。
@@ -243,64 +197,6 @@ func hasCompletedRequiredTodos(items []agentsession.TodoItem) bool {
 		}
 	}
 	return hasRequired
-}
-
-// hasSuccessfulInformationalResult 判断本轮是否至少获得一个成功的非写入工具结果。
-func hasSuccessfulInformationalResult(results []tools.ToolResult) bool {
-	for _, result := range results {
-		if result.IsError {
-			continue
-		}
-		switch strings.TrimSpace(result.Name) {
-		case tools.ToolNameFilesystemWriteFile, tools.ToolNameFilesystemEdit:
-			continue
-		default:
-			return true
-		}
-	}
-	return false
-}
-
-// shouldPromotePendingFinalProgress 判断本轮执行结果是否可以作为 final 拦截后的有效推进信号。
-func shouldPromotePendingFinalProgress(
-	score controlplane.ProgressScore,
-	summary toolExecutionSummary,
-	completion controlplane.CompletionState,
-	lastBlockedReason string,
-) bool {
-	if score.HasBusinessProgress {
-		return true
-	}
-	if !score.HasExplorationProgress {
-		return false
-	}
-
-	// 只读 read/glob 首次探索可算推进；同签名/同结果/同子目标且阻塞原因未变化时，不再重置 final 拦截计数。
-	if hasSuccessfulReadOrGlobResult(summary.Results) &&
-		score.SameToolSignature &&
-		score.SameResultFingerprint &&
-		score.SameSubgoal == controlplane.SubgoalRelationSame &&
-		strings.EqualFold(
-			strings.TrimSpace(lastBlockedReason),
-			strings.TrimSpace(string(completion.CompletionBlockedReason)),
-		) {
-		return false
-	}
-	return true
-}
-
-// hasSuccessfulReadOrGlobResult 判断本轮是否存在成功的 filesystem_read_file / filesystem_glob 结果。
-func hasSuccessfulReadOrGlobResult(results []tools.ToolResult) bool {
-	for _, result := range results {
-		if result.IsError {
-			continue
-		}
-		switch strings.TrimSpace(result.Name) {
-		case tools.ToolNameFilesystemReadFile, tools.ToolNameFilesystemGlob:
-			return true
-		}
-	}
-	return false
 }
 
 // hasSuccessfulVerificationResult 判断本轮是否存在显式验证成功的结构化事实。

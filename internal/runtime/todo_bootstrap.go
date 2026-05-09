@@ -54,3 +54,39 @@ func hasActivePlanForTodoBootstrap(plan *agentsession.PlanArtifact) bool {
 		return false
 	}
 }
+
+const planBootstrapRequiredReason = "plan_bootstrap_required"
+
+const planBootstrapRequiredReminder = `[Runtime Control]
+
+plan_bootstrap_required: You are in plan mode but no current plan exists.
+
+Before research, analysis, or conversational response, you MUST complete the following:
+
+1. Research the codebase as needed using read-only tools.
+2. Output a JSON object containing "plan_spec" and "summary_candidate" that defines the current plan.
+3. plan_spec.todos must be non-empty — include major actionable items with unique IDs and status "pending".
+
+Do not end this turn without producing a plan.`
+
+// maybeAppendPlanBootstrapReminder 在 plan 模式缺少 CurrentPlan 时注入一次结构化提醒。
+func (s *Service) maybeAppendPlanBootstrapReminder(ctx context.Context, state *runState) error {
+	if !shouldInjectPlanBootstrapReminder(state) {
+		return nil
+	}
+	return s.appendSystemMessageAndSave(ctx, state, planBootstrapRequiredReminder)
+}
+
+// shouldInjectPlanBootstrapReminder 判断本轮 plan 模式是否需要先创建 plan。
+func shouldInjectPlanBootstrapReminder(state *runState) bool {
+	if state == nil || state.disableTools || !state.planningEnabled {
+		return false
+	}
+	if resolvePlanningStageForState(state) != planStagePlan {
+		return false
+	}
+	state.mu.Lock()
+	plan := state.session.CurrentPlan
+	state.mu.Unlock()
+	return plan == nil
+}

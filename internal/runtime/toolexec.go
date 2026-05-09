@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -471,10 +472,27 @@ func hasSuccessfulWorkspaceWriteFact(result tools.ToolResult, execErr error) boo
 	if execErr != nil || result.IsError {
 		return false
 	}
+	return hasConfirmedWorkspaceWriteResult(result)
+}
+
+// hasConfirmedWorkspaceWriteResult 判断工具结果是否带有 runtime 可确认的真实写入。
+func hasConfirmedWorkspaceWriteResult(result tools.ToolResult) bool {
 	if toolResultNoopWrite(result.Metadata) {
 		return false
 	}
-	return result.Facts.WorkspaceWrite
+	if !result.Facts.WorkspaceWrite {
+		return false
+	}
+	name := strings.TrimSpace(result.Name)
+	switch {
+	case isFileWriteTool(name):
+		_, ok := buildToolDiffPayload(result)
+		return ok
+	case strings.EqualFold(name, tools.ToolNameBash):
+		return len(toolResultWorkspaceWritePaths(result.Metadata)) > 0
+	default:
+		return false
+	}
 }
 
 // toolResultNoopWrite 判断工具结果是否声明了 no-op 写入（内容未变化）。
@@ -503,6 +521,43 @@ func toolResultFilePath(metadata map[string]any) string {
 	}
 	p, _ := metadata["path"].(string)
 	return strings.TrimSpace(p)
+}
+
+// toolResultWorkspaceWritePaths 从工具结果中提取 runtime 确认的写入路径。
+func toolResultWorkspaceWritePaths(metadata map[string]any) []string {
+	if metadata == nil {
+		return nil
+	}
+	raw, ok := metadata["workspace_write_paths"]
+	if !ok || raw == nil {
+		return nil
+	}
+	seen := map[string]struct{}{}
+	var out []string
+	add := func(value any) {
+		text := strings.TrimSpace(fmt.Sprint(value))
+		if text == "" {
+			return
+		}
+		if _, exists := seen[text]; exists {
+			return
+		}
+		seen[text] = struct{}{}
+		out = append(out, text)
+	}
+	switch typed := raw.(type) {
+	case []string:
+		for _, value := range typed {
+			add(value)
+		}
+	case []any:
+		for _, value := range typed {
+			add(value)
+		}
+	case string:
+		add(typed)
+	}
+	return out
 }
 
 // isFileWriteTool 判断工具调用是否为文件写入类工具，需在执行前后做 diff。

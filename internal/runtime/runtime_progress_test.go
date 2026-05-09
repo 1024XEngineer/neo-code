@@ -2,7 +2,6 @@ package runtime
 
 import (
 	"context"
-	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -16,230 +15,6 @@ import (
 	todotool "neo-code/internal/tools/todo"
 )
 
-func TestProgressStreakWarnsAndAllowsRecovery(t *testing.T) {
-	t.Setenv("TEST_KEY", "dummy")
-
-	cfg := config.Config{
-		Providers:        []config.ProviderConfig{{Name: "test-progress", Driver: "test", BaseURL: "http://localhost", Model: "test", APIKeyEnv: "TEST_KEY"}},
-		SelectedProvider: "test-progress",
-		Workdir:          t.TempDir(),
-		Runtime: config.RuntimeConfig{
-			MaxNoProgressStreak:  3,
-			MaxRepeatCycleStreak: 6,
-		},
-	}
-
-	toolManager := &stubToolManager{
-		specs: []providertypes.ToolSpec{
-			{Name: "tool_error"},
-		},
-		executeFn: func(ctx context.Context, input tools.ToolCallInput) (tools.ToolResult, error) {
-			// Always return error to avoid generating progress
-			return tools.ToolResult{Content: "error occurred", IsError: true}, nil
-		},
-	}
-
-	var promptInjected bool
-	var providerCalls int32
-	var signatureSeq int32
-	providerFactory := &scriptedProviderFactory{
-		provider: &scriptedProvider{
-			chatFn: func(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error {
-				atomic.AddInt32(&providerCalls, 1)
-				if strings.Contains(req.SystemPrompt, selfHealingReminder) {
-					promptInjected = true
-					events <- providertypes.NewTextDeltaStreamEvent("{\"task_completion\":{\"completed\":true}}\ndone")
-					events <- providertypes.NewMessageDoneStreamEvent("stop", nil)
-					return nil
-				}
-				seq := atomic.AddInt32(&signatureSeq, 1)
-				// the model always decides to call the tool
-				events <- providertypes.NewToolCallStartStreamEvent(0, "call_err", "tool_error")
-				events <- providertypes.NewToolCallDeltaStreamEvent(
-					0,
-					"call_err",
-					`{"seq":`+strconv.FormatInt(int64(seq), 10)+`}`,
-				)
-				events <- providertypes.NewMessageDoneStreamEvent("tool_calls", nil)
-				return nil
-			},
-		},
-	}
-
-	manager := config.NewManager(config.NewLoader(t.TempDir(), &cfg))
-
-	service := NewWithFactory(
-		manager,
-		toolManager,
-		newMemoryStore(),
-		providerFactory,
-		nil,
-	)
-
-	input := UserInput{
-		RunID: "run-progress",
-		Parts: []providertypes.ContentPart{providertypes.NewTextPart("trigger error loop")},
-	}
-
-	if err := service.Run(context.Background(), input); err != nil {
-		t.Fatalf("expected run to recover after no-progress reminder, got %v", err)
-	}
-
-	events := collectRuntimeEvents(service.Events())
-	assertStopReasonDecided(t, events, controlplane.StopReasonAccepted, "")
-
-	if !promptInjected {
-		t.Error("expected self-healing prompt injection before recovery")
-	}
-	if providerCalls != 4 {
-		t.Fatalf("expected 4 provider turns including reminder recovery, got %d", providerCalls)
-	}
-}
-
-func TestProgressStreakTerminatesAfterReminderIfStillStalled(t *testing.T) {
-	t.Setenv("TEST_KEY", "dummy")
-
-	cfg := config.Config{
-		Providers:        []config.ProviderConfig{{Name: "test-progress-hard-stop", Driver: "test", BaseURL: "http://localhost", Model: "test", APIKeyEnv: "TEST_KEY"}},
-		SelectedProvider: "test-progress-hard-stop",
-		Workdir:          t.TempDir(),
-		Runtime: config.RuntimeConfig{
-			MaxNoProgressStreak:  2,
-			MaxRepeatCycleStreak: 6,
-		},
-	}
-
-	var executeCalls int32
-	toolManager := &stubToolManager{
-		specs: []providertypes.ToolSpec{{Name: "tool_error"}},
-		executeFn: func(ctx context.Context, input tools.ToolCallInput) (tools.ToolResult, error) {
-			atomic.AddInt32(&executeCalls, 1)
-			return tools.ToolResult{Name: input.Name, Content: "error occurred", IsError: true}, nil
-		},
-	}
-
-	var promptInjected bool
-	var providerCalls int32
-	var signatureSeq int32
-	providerFactory := &scriptedProviderFactory{
-		provider: &scriptedProvider{
-			chatFn: func(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error {
-				atomic.AddInt32(&providerCalls, 1)
-				if strings.Contains(req.SystemPrompt, selfHealingReminder) {
-					promptInjected = true
-				}
-				seq := atomic.AddInt32(&signatureSeq, 1)
-				events <- providertypes.NewToolCallStartStreamEvent(0, "call_err", "tool_error")
-				events <- providertypes.NewToolCallDeltaStreamEvent(
-					0,
-					"call_err",
-					`{"seq":`+strconv.FormatInt(int64(seq), 10)+`}`,
-				)
-				events <- providertypes.NewMessageDoneStreamEvent("tool_calls", nil)
-				return nil
-			},
-		},
-	}
-
-	manager := config.NewManager(config.NewLoader(t.TempDir(), &cfg))
-	service := NewWithFactory(manager, toolManager, newMemoryStore(), providerFactory, nil)
-
-	if err := service.Run(context.Background(), UserInput{
-		RunID: "run-progress-hard-stop",
-		Parts: []providertypes.ContentPart{providertypes.NewTextPart("trigger unrecovered error loop")},
-	}); err != nil {
-		t.Fatalf("expected run to stop cleanly on no-progress, got %v", err)
-	}
-
-	events := collectRuntimeEvents(service.Events())
-	assertStopReasonDecided(t, events, controlplane.StopReasonNoProgress, "")
-
-	if !promptInjected {
-		t.Fatal("expected self-healing prompt injection before hard no-progress termination")
-	}
-	if executeCalls != 3 {
-		t.Fatalf("expected 3 tool executions before no-progress termination, got %d", executeCalls)
-	}
-	if providerCalls != 3 {
-		t.Fatalf("expected 3 provider turns before no-progress termination, got %d", providerCalls)
-	}
-}
-
-func TestProgressEvidenceResetsNoProgressStreak(t *testing.T) {
-	t.Setenv("TEST_KEY", "dummy")
-
-	cfg := config.Config{
-		Providers:        []config.ProviderConfig{{Name: "test-progress", Driver: "test", BaseURL: "http://localhost", Model: "test", APIKeyEnv: "TEST_KEY"}},
-		SelectedProvider: "test-progress",
-		Workdir:          t.TempDir(),
-	}
-
-	var executeCalls int32
-	toolManager := &stubToolManager{
-		specs: []providertypes.ToolSpec{
-			{Name: "tool_mixed"},
-		},
-		executeFn: func(ctx context.Context, input tools.ToolCallInput) (tools.ToolResult, error) {
-			call := int(atomic.AddInt32(&executeCalls, 1))
-			if call == 3 {
-				return tools.ToolResult{Name: input.Name, Content: "ok", IsError: false}, nil
-			}
-			return tools.ToolResult{Name: input.Name, Content: "error occurred", IsError: true}, nil
-		},
-	}
-
-	var providerCalls int32
-	var signatureSeq int32
-	providerFactory := &scriptedProviderFactory{
-		provider: &scriptedProvider{
-			chatFn: func(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error {
-				call := int(atomic.AddInt32(&providerCalls, 1))
-				if call <= 4 {
-					seq := atomic.AddInt32(&signatureSeq, 1)
-					events <- providertypes.NewToolCallStartStreamEvent(0, "call_mixed", "tool_mixed")
-					events <- providertypes.NewToolCallDeltaStreamEvent(
-						0,
-						"call_mixed",
-						`{"seq":`+strconv.FormatInt(int64(seq), 10)+`}`,
-					)
-					events <- providertypes.NewMessageDoneStreamEvent("tool_calls", nil)
-					return nil
-				}
-				events <- providertypes.NewTextDeltaStreamEvent("{\"task_completion\":{\"completed\":true}}\ndone")
-				events <- providertypes.NewMessageDoneStreamEvent("stop", nil)
-				return nil
-			},
-		},
-	}
-
-	manager := config.NewManager(config.NewLoader(t.TempDir(), &cfg))
-	service := NewWithFactory(
-		manager,
-		toolManager,
-		newMemoryStore(),
-		providerFactory,
-		nil,
-	)
-
-	err := service.Run(context.Background(), UserInput{
-		RunID: "run-progress-reset",
-		Parts: []providertypes.ContentPart{providertypes.NewTextPart("trigger mixed progress loop")},
-	})
-	if err != nil {
-		t.Fatalf("expected run to finish successfully, got %v", err)
-	}
-
-	if executeCalls != 4 {
-		t.Fatalf("expected 4 tool executions, got %d", executeCalls)
-	}
-	if providerCalls != 5 {
-		t.Fatalf("expected 5 provider calls (4 tool turns + 1 done), got %d", providerCalls)
-	}
-
-	events := collectRuntimeEvents(service.Events())
-	assertStopReasonDecided(t, events, controlplane.StopReasonAccepted, "")
-}
-
 func TestRepeatCycleStreakNoLongerStopsRunAndInjectsReminder(t *testing.T) {
 	t.Setenv("TEST_KEY", "dummy")
 
@@ -248,7 +23,6 @@ func TestRepeatCycleStreakNoLongerStopsRunAndInjectsReminder(t *testing.T) {
 		SelectedProvider: "test-repeat",
 		Workdir:          t.TempDir(),
 		Runtime: config.RuntimeConfig{
-			MaxNoProgressStreak:  10,
 			MaxRepeatCycleStreak: 3,
 		},
 	}
@@ -325,7 +99,6 @@ func TestRepeatCycleTerminatesAfterReminderIfStillStalled(t *testing.T) {
 		SelectedProvider: "test-repeat-hard-stop",
 		Workdir:          t.TempDir(),
 		Runtime: config.RuntimeConfig{
-			MaxNoProgressStreak:  10,
 			MaxRepeatCycleStreak: 3,
 		},
 	}
@@ -388,7 +161,6 @@ func TestRepeatCycleFailedCallsNoLongerHardStop(t *testing.T) {
 		SelectedProvider: "test-repeat-fail",
 		Workdir:          t.TempDir(),
 		Runtime: config.RuntimeConfig{
-			MaxNoProgressStreak:  10,
 			MaxRepeatCycleStreak: 3,
 		},
 	}
@@ -576,7 +348,6 @@ func TestPrepareTurnSnapshotInjectRepeatReminderWithEmptyPrompt(t *testing.T) {
 func TestPrepareTurnBudgetSnapshotRepeatReminderTakesPriority(t *testing.T) {
 	manager := newRuntimeConfigManager(t)
 	if err := manager.Update(context.Background(), func(cfg *config.Config) error {
-		cfg.Runtime.MaxNoProgressStreak = 3
 		cfg.Runtime.MaxRepeatCycleStreak = 3
 		return nil
 	}); err != nil {
@@ -593,7 +364,6 @@ func TestPrepareTurnBudgetSnapshotRepeatReminderTakesPriority(t *testing.T) {
 		toolManager: &stubToolManager{},
 	}
 	state := newRunState("run-reminder-priority", newRuntimeSession("session-reminder-priority"))
-	state.progress.LastScore.NoProgressStreak = 2
 	state.progress.LastScore.RepeatCycleStreak = 2
 	state.progress.LastScore.StalledProgressState = controlplane.StalledProgressStalled
 	state.progress.LastScore.ReminderKind = controlplane.ReminderKindRepeatCycle
@@ -608,19 +378,9 @@ func TestPrepareTurnBudgetSnapshotRepeatReminderTakesPriority(t *testing.T) {
 	if !strings.Contains(snapshot.Request.SystemPrompt, selfHealingRepeatReminder) {
 		t.Fatalf("expected prompt to contain repeat reminder, got %q", snapshot.Request.SystemPrompt)
 	}
-	if strings.Contains(snapshot.Request.SystemPrompt, selfHealingReminder) {
-		t.Fatalf("expected no-progress reminder to be skipped when repeat reminder is injected, got %q", snapshot.Request.SystemPrompt)
-	}
 }
 
 func TestResolveStreakLimitDefaults(t *testing.T) {
-	if got := resolveNoProgressStreakLimit(config.RuntimeConfig{MaxNoProgressStreak: 0}); got != config.DefaultMaxNoProgressStreak {
-		t.Fatalf("expected default no-progress limit %d, got %d", config.DefaultMaxNoProgressStreak, got)
-	}
-	if got := resolveNoProgressStreakLimit(config.RuntimeConfig{MaxNoProgressStreak: 8}); got != 8 {
-		t.Fatalf("expected explicit no-progress limit 8, got %d", got)
-	}
-
 	if got := resolveRepeatCycleStreakLimit(config.RuntimeConfig{MaxRepeatCycleStreak: -1}); got != config.DefaultMaxRepeatCycleStreak {
 		t.Fatalf("expected default repeat limit %d, got %d", config.DefaultMaxRepeatCycleStreak, got)
 	}
@@ -636,59 +396,11 @@ func TestResolveStreakLimitDefaults(t *testing.T) {
 	}
 }
 
-func TestComputeTodoStateSignature(t *testing.T) {
-	t.Parallel()
-
-	if got := computeTodoStateSignature(nil); got != "" {
-		t.Fatalf("computeTodoStateSignature(nil) = %q", got)
-	}
-
-	base := []agentsession.TodoItem{
-		{
-			ID:       "t1",
-			Content:  "task",
-			Status:   agentsession.TodoStatusPending,
-			Executor: agentsession.TodoExecutorAgent,
-		},
-	}
-	sig1 := computeTodoStateSignature(base)
-	if strings.TrimSpace(sig1) == "" {
-		t.Fatal("expected non-empty signature")
-	}
-
-	same := []agentsession.TodoItem{
-		{
-			ID:       "t1",
-			Content:  "task",
-			Status:   agentsession.TodoStatusPending,
-			Executor: agentsession.TodoExecutorAgent,
-		},
-	}
-	sig2 := computeTodoStateSignature(same)
-	if sig1 != sig2 {
-		t.Fatalf("expected stable signature, got %q vs %q", sig1, sig2)
-	}
-
-	changed := []agentsession.TodoItem{
-		{
-			ID:       "t1",
-			Content:  "task",
-			Status:   agentsession.TodoStatusCompleted,
-			Executor: agentsession.TodoExecutorAgent,
-		},
-	}
-	sig3 := computeTodoStateSignature(changed)
-	if sig3 == sig1 {
-		t.Fatalf("expected changed signature when todo state changes")
-	}
-}
-
 func TestNoToolIncompleteTurnStillEvaluatesProgressAndInjectsReminder(t *testing.T) {
 	t.Parallel()
 
 	manager := newRuntimeConfigManager(t)
 	if err := manager.Update(context.Background(), func(cfg *config.Config) error {
-		cfg.Runtime.MaxNoProgressStreak = 5
 		return nil
 	}); err != nil {
 		t.Fatalf("update config: %v", err)
@@ -799,7 +511,6 @@ func TestAcceptanceContinueWithoutToolCallStopsAsIncomplete(t *testing.T) {
 
 	manager := newRuntimeConfigManager(t)
 	if err := manager.Update(context.Background(), func(cfg *config.Config) error {
-		cfg.Runtime.MaxNoProgressStreak = 2
 		return nil
 	}); err != nil {
 		t.Fatalf("update config: %v", err)

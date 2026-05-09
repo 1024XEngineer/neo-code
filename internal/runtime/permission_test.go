@@ -1333,17 +1333,22 @@ func TestResolveToolExecutionTimeoutForAskUser(t *testing.T) {
 	}
 }
 
-func TestResolveToolExecutionTimeoutForCodebaseSearch(t *testing.T) {
+func TestResolveToolExecutionTimeoutForWorkspaceScanTools(t *testing.T) {
 	t.Parallel()
 
 	base := 20 * time.Second
-	for _, name := range []string{tools.ToolNameCodebaseSearchText, tools.ToolNameCodebaseSearchSymbol} {
+	for _, name := range []string{
+		tools.ToolNameCodebaseSearchText,
+		tools.ToolNameCodebaseSearchSymbol,
+		tools.ToolNameFilesystemGrep,
+		tools.ToolNameFilesystemGlob,
+	} {
 		got := resolveToolExecutionTimeout(providertypes.ToolCall{
 			Name:      name,
 			Arguments: `{"query":"plan mode"}`,
 		}, base)
-		if got != defaultCodebaseSearchToolTimeout {
-			t.Fatalf("%s timeout = %v, want %v", name, got, defaultCodebaseSearchToolTimeout)
+		if got != defaultWorkspaceScanToolTimeout {
+			t.Fatalf("%s timeout = %v, want %v", name, got, defaultWorkspaceScanToolTimeout)
 		}
 	}
 
@@ -1393,22 +1398,33 @@ func TestResolveAdaptiveToolExecutionTimeoutBackoff(t *testing.T) {
 	}
 }
 
-func TestResolveAdaptiveToolExecutionTimeoutForCodebaseSearch(t *testing.T) {
+func TestResolveAdaptiveToolExecutionTimeoutForWorkspaceScanTools(t *testing.T) {
 	t.Parallel()
 
 	state := newRunState("run-codebase-timeout-backoff", agentsession.New("codebase-timeout-backoff"))
 	call := providertypes.ToolCall{
 		Name:      tools.ToolNameCodebaseSearchText,
-		Arguments: `{"query":"plan mode"}`,
+		Arguments: `{"query":"plan mode","scope_dir":"internal/runtime"}`,
 	}
-	base := defaultCodebaseSearchToolTimeout
+	sameScopeDifferentQuery := providertypes.ToolCall{
+		Name:      tools.ToolNameCodebaseSearchText,
+		Arguments: `{"query":"todo","scope_dir":"internal/runtime"}`,
+	}
+	differentScope := providertypes.ToolCall{
+		Name:      tools.ToolNameCodebaseSearchText,
+		Arguments: `{"query":"todo","scope_dir":"internal/session"}`,
+	}
+	base := defaultWorkspaceScanToolTimeout
 
 	if got := resolveAdaptiveToolExecutionTimeout(&state, call, base); got != 60*time.Second {
 		t.Fatalf("first codebase timeout = %v, want 60s", got)
 	}
 	recordAdaptiveToolTimeoutResult(&state, call, tools.ToolResult{}, context.DeadlineExceeded)
-	if got := resolveAdaptiveToolExecutionTimeout(&state, call, base); got != 120*time.Second {
-		t.Fatalf("second codebase timeout = %v, want 120s", got)
+	if got := resolveAdaptiveToolExecutionTimeout(&state, sameScopeDifferentQuery, base); got != 120*time.Second {
+		t.Fatalf("same-scope codebase timeout = %v, want 120s", got)
+	}
+	if got := resolveAdaptiveToolExecutionTimeout(&state, differentScope, base); got != base {
+		t.Fatalf("different-scope codebase timeout = %v, want %v", got, base)
 	}
 	recordAdaptiveToolTimeoutResult(&state, call, tools.ToolResult{ErrorClass: "timeout"}, nil)
 	if got := resolveAdaptiveToolExecutionTimeout(&state, call, base); got != 160*time.Second {
@@ -1417,6 +1433,20 @@ func TestResolveAdaptiveToolExecutionTimeoutForCodebaseSearch(t *testing.T) {
 	recordAdaptiveToolTimeoutResult(&state, call, tools.ToolResult{Name: tools.ToolNameCodebaseSearchText, Content: "ok"}, nil)
 	if got := resolveAdaptiveToolExecutionTimeout(&state, call, base); got != base {
 		t.Fatalf("reset codebase timeout = %v, want %v", got, base)
+	}
+
+	grepState := newRunState("run-grep-timeout-backoff", agentsession.New("grep-timeout-backoff"))
+	grepCall := providertypes.ToolCall{
+		Name:      tools.ToolNameFilesystemGrep,
+		Arguments: `{"pattern":"CurrentPlan","dir":"internal/runtime"}`,
+	}
+	grepSameDir := providertypes.ToolCall{
+		Name:      tools.ToolNameFilesystemGrep,
+		Arguments: `{"pattern":"PlanArtifact","dir":"internal/runtime"}`,
+	}
+	recordAdaptiveToolTimeoutResult(&grepState, grepCall, tools.ToolResult{}, context.DeadlineExceeded)
+	if got := resolveAdaptiveToolExecutionTimeout(&grepState, grepSameDir, base); got != 120*time.Second {
+		t.Fatalf("same-dir grep timeout = %v, want 120s", got)
 	}
 }
 

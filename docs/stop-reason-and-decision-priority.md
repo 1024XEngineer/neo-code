@@ -7,9 +7,11 @@
 - `max_turn_exceeded`
 - `verification_failed`
 - `accepted`
+- `missing_completion_signal`
+- `accept_check_failed`
 - `todo_not_converged`
 - `todo_waiting_external`
-- `no_progress_after_final_intercept`
+- `repeat_cycle`
 - `max_turn_exceeded_with_unconverged_todos`
 - `max_turn_exceeded_with_failed_verification`
 - `verification_config_missing`

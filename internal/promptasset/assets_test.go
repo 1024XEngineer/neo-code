@@ -58,9 +58,6 @@ func TestCorePromptContainsOperationalGuidance(t *testing.T) {
 func TestRuntimeReminderTemplates(t *testing.T) {
 	t.Parallel()
 
-	if !strings.Contains(NoProgressReminder(), "multiple consecutive attempts") {
-		t.Fatalf("expected no-progress reminder guidance, got %q", NoProgressReminder())
-	}
 	if !strings.Contains(RepeatCycleReminder(), "exact same arguments") {
 		t.Fatalf("expected repeat-cycle reminder guidance, got %q", RepeatCycleReminder())
 	}

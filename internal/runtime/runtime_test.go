@@ -3968,10 +3968,10 @@ func TestServiceRunPlanModePersistsDraftPlan(t *testing.T) {
 	if builder.lastInput.CurrentPlan != nil {
 		t.Fatalf("expected initial plan-mode build input to have nil CurrentPlan")
 	}
-	if len(saved.Messages) != 2 {
-		t.Fatalf("message count = %d, want 2", len(saved.Messages))
+	if len(saved.Messages) != 3 {
+		t.Fatalf("message count = %d, want 3", len(saved.Messages))
 	}
-	if got := renderPartsForTest(saved.Messages[1].Parts); !strings.Contains(got, "目标") {
+	if got := renderPartsForTest(saved.Messages[2].Parts); !strings.Contains(got, "目标") {
 		t.Fatalf("expected rendered plan content, got %q", got)
 	}
 }
@@ -4018,10 +4018,10 @@ func TestServiceRunPlanModeShowsExplanationTextOutsidePlanningJSON(t *testing.T)
 	if saved.CurrentPlan == nil || saved.CurrentPlan.Spec.Goal != "Preserve prose around planning JSON" {
 		t.Fatalf("expected current plan to be updated, got %+v", saved.CurrentPlan)
 	}
-	if len(saved.Messages) != 2 {
-		t.Fatalf("message count = %d, want 2", len(saved.Messages))
+	if len(saved.Messages) != 3 {
+		t.Fatalf("message count = %d, want 3", len(saved.Messages))
 	}
-	got := renderPartsForTest(saved.Messages[1].Parts)
+	got := renderPartsForTest(saved.Messages[2].Parts)
 	if strings.Contains(got, "\"plan_spec\"") {
 		t.Fatalf("expected persisted assistant text to strip planning JSON, got %q", got)
 	}

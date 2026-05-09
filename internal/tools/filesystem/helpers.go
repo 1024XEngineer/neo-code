@@ -47,7 +47,9 @@ func skipDirEntry(path string, entry os.DirEntry) bool {
 
 	name := strings.ToLower(strings.TrimSpace(entry.Name()))
 	switch name {
-	case ".git", ".idea", ".vscode", "node_modules":
+	case ".git", ".idea", ".vscode", "node_modules",
+		".cache", ".tmp", "tmp", "build", "dist", "out", "target", "coverage",
+		".next", ".nuxt", ".turbo", ".parcel-cache", ".vite", "vendor", "bin", "obj":
 		return true
 	}
 

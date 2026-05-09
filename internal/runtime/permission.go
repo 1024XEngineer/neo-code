@@ -57,7 +57,7 @@ const (
 	minInlineSubAgentToolTimeout     = 30 * time.Second
 	defaultDiagnoseToolTimeout       = 60 * time.Second
 	defaultPermissionToolTimeout     = 20 * time.Second
-	defaultCodebaseSearchToolTimeout = 60 * time.Second
+	defaultWorkspaceScanToolTimeout  = 60 * time.Second
 	defaultAskUserToolTimeout        = 5 * time.Minute
 	maxAskUserToolTimeout            = time.Hour
 	maxAdaptiveToolTimeout           = 160 * time.Second
@@ -321,9 +321,9 @@ func resolveToolExecutionTimeout(call providertypes.ToolCall, fallback time.Dura
 		}
 		return base
 	}
-	if isCodebaseSearchTool(name) {
-		if base < defaultCodebaseSearchToolTimeout {
-			return defaultCodebaseSearchToolTimeout
+	if isWorkspaceScanTool(name) {
+		if base < defaultWorkspaceScanToolTimeout {
+			return defaultWorkspaceScanToolTimeout
 		}
 		return base
 	}
@@ -356,10 +356,12 @@ func resolveToolExecutionTimeout(call providertypes.ToolCall, fallback time.Dura
 	return base
 }
 
-// isCodebaseSearchTool 识别会做代码库遍历的搜索工具，用于给首轮执行预留更合理的时间。
-func isCodebaseSearchTool(name string) bool {
+// isWorkspaceScanTool 识别会遍历工作区的搜索工具，用于给首轮执行预留更合理的时间。
+func isWorkspaceScanTool(name string) bool {
 	return strings.EqualFold(name, tools.ToolNameCodebaseSearchText) ||
-		strings.EqualFold(name, tools.ToolNameCodebaseSearchSymbol)
+		strings.EqualFold(name, tools.ToolNameCodebaseSearchSymbol) ||
+		strings.EqualFold(name, tools.ToolNameFilesystemGrep) ||
+		strings.EqualFold(name, tools.ToolNameFilesystemGlob)
 }
 
 // resolveAdaptiveToolExecutionTimeout 根据同一 Run 内同签名工具的 timeout 次数指数放大超时。
@@ -424,11 +426,50 @@ func supportsAdaptiveToolTimeout(name string) bool {
 
 // toolTimeoutBackoffKey 将工具名和规范化参数组合为本轮 timeout 倍增键。
 func toolTimeoutBackoffKey(call providertypes.ToolCall) string {
+	if isWorkspaceScanTool(call.Name) {
+		return workspaceScanToolTimeoutBackoffKey(call)
+	}
 	signature := computeToolSignature([]providertypes.ToolCall{call})
 	if strings.TrimSpace(signature) == "" {
 		return ""
 	}
 	return strings.ToLower(strings.TrimSpace(call.Name)) + "\x00" + signature
+}
+
+// workspaceScanToolTimeoutBackoffKey 仅按扫描工具和范围聚合 timeout，避免换关键词后丢失退避状态。
+func workspaceScanToolTimeoutBackoffKey(call providertypes.ToolCall) string {
+	name := strings.ToLower(strings.TrimSpace(call.Name))
+	if name == "" {
+		return ""
+	}
+	return name + "\x00" + workspaceScanScopeFromArguments(call.Arguments)
+}
+
+// workspaceScanScopeFromArguments 从搜索工具参数中抽取扫描范围，解析失败时回落到全工作区范围。
+func workspaceScanScopeFromArguments(raw string) string {
+	if strings.TrimSpace(raw) == "" {
+		return "."
+	}
+	var payload struct {
+		Dir      string `json:"dir"`
+		ScopeDir string `json:"scope_dir"`
+		Workdir  string `json:"workdir"`
+	}
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		return "."
+	}
+	scope := strings.TrimSpace(payload.ScopeDir)
+	if scope == "" {
+		scope = strings.TrimSpace(payload.Dir)
+	}
+	if scope == "" {
+		scope = "."
+	}
+	workdir := strings.TrimSpace(payload.Workdir)
+	if workdir == "" {
+		return scope
+	}
+	return workdir + "/" + scope
 }
 
 // toolExecutionTimedOut 判断工具结果是否代表执行超时。
