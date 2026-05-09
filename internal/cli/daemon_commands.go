@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	neturl "net/url"
 	"os"
@@ -25,6 +26,9 @@ var (
 	installHTTPDaemon   = urlscheme.InstallHTTPDaemon
 	uninstallHTTPDaemon = urlscheme.UninstallHTTPDaemon
 	getHTTPDaemonStatus = urlscheme.GetHTTPDaemonStatus
+
+	daemonInstallJSONWriter io.Writer = os.Stdout
+	daemonInstallLogWriter  io.Writer = os.Stderr
 )
 
 type daemonServeCommandOptions struct {
@@ -287,13 +291,26 @@ func defaultDaemonInstallCommandRunner(ctx context.Context, options daemonInstal
 		ListenAddress:  options.ListenAddress,
 	})
 	if err != nil {
+		_, _ = fmt.Fprintf(daemonInstallLogWriter, "daemon install failed: %v\n", err)
+		_, _ = fmt.Fprintf(daemonInstallLogWriter, "remedy: run `%s daemon install --listen %s`\n", executablePath, options.ListenAddress)
 		return err
 	}
-	return encodeJSONLine(os.Stdout, map[string]any{
-		"status":         "ok",
-		"listen_address": result.ListenAddress,
-		"autostart_mode": result.AutostartMode,
-		"hosts_warning":  strings.TrimSpace(result.HostsWarning),
+	_, _ = fmt.Fprintf(daemonInstallLogWriter, "daemon install succeeded: autostart=%s listen=%s\n", result.AutostartMode, result.ListenAddress)
+	if strings.TrimSpace(result.HostsWarning) != "" {
+		_, _ = fmt.Fprintf(daemonInstallLogWriter, "hosts warning: %s\n", strings.TrimSpace(result.HostsWarning))
+	}
+	if result.DaemonStarted {
+		_, _ = fmt.Fprintf(daemonInstallLogWriter, "daemon started in background and is ready on %s\n", result.ListenAddress)
+	} else if strings.TrimSpace(result.DaemonStartWarning) != "" {
+		_, _ = fmt.Fprintf(daemonInstallLogWriter, "daemon startup warning: %s\n", strings.TrimSpace(result.DaemonStartWarning))
+	}
+	return encodeJSONLine(daemonInstallJSONWriter, map[string]any{
+		"status":               "ok",
+		"listen_address":       result.ListenAddress,
+		"autostart_mode":       result.AutostartMode,
+		"hosts_warning":        strings.TrimSpace(result.HostsWarning),
+		"daemon_started":       result.DaemonStarted,
+		"daemon_start_warning": strings.TrimSpace(result.DaemonStartWarning),
 	})
 }
 

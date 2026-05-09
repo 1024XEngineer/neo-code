@@ -1,10 +1,11 @@
 package cli
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"net/url"
-	"os"
 	"strings"
 	"testing"
 
@@ -42,25 +43,34 @@ func TestDaemonInstallDefaultRunnerUsesCurrentExecutable(t *testing.T) {
 	originalRunner := runDaemonInstallCommand
 	originalResolveExecutablePath := resolveExecutablePath
 	originalInstall := installHTTPDaemon
+	originalJSONWriter := daemonInstallJSONWriter
+	originalLogWriter := daemonInstallLogWriter
 	t.Cleanup(func() { runDaemonInstallCommand = originalRunner })
 	t.Cleanup(func() { resolveExecutablePath = originalResolveExecutablePath })
 	t.Cleanup(func() { installHTTPDaemon = originalInstall })
+	t.Cleanup(func() { daemonInstallJSONWriter = originalJSONWriter })
+	t.Cleanup(func() { daemonInstallLogWriter = originalLogWriter })
 
 	runDaemonInstallCommand = defaultDaemonInstallCommandRunner
 	resolveExecutablePath = func() (string, error) {
 		return "/tmp/neocode", nil
 	}
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	daemonInstallJSONWriter = &stdout
+	daemonInstallLogWriter = &stderr
 	var captured urlscheme.HTTPDaemonInstallOptions
 	installHTTPDaemon = func(options urlscheme.HTTPDaemonInstallOptions) (urlscheme.HTTPDaemonInstallResult, error) {
 		captured = options
 		return urlscheme.HTTPDaemonInstallResult{
-			ListenAddress: options.ListenAddress,
-			AutostartMode: "test-mode",
+			ListenAddress:      options.ListenAddress,
+			AutostartMode:      "test-mode",
+			DaemonStarted:      true,
+			DaemonStartWarning: "",
 		}, nil
 	}
 
 	command := NewRootCommand()
-	command.SetOut(os.Stdout)
 	command.SetArgs([]string{"daemon", "install", "--listen", "127.0.0.1:19921"})
 	if err := command.ExecuteContext(context.Background()); err != nil {
 		t.Fatalf("ExecuteContext() error = %v", err)
@@ -70,6 +80,57 @@ func TestDaemonInstallDefaultRunnerUsesCurrentExecutable(t *testing.T) {
 	}
 	if captured.ListenAddress != "127.0.0.1:19921" {
 		t.Fatalf("listen address = %q, want %q", captured.ListenAddress, "127.0.0.1:19921")
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(bytes.TrimSpace(stdout.Bytes()), &payload); err != nil {
+		t.Fatalf("decode stdout json: %v", err)
+	}
+	if payload["status"] != "ok" {
+		t.Fatalf("status = %v, want ok", payload["status"])
+	}
+	if payload["daemon_started"] != true {
+		t.Fatalf("daemon_started = %v, want true", payload["daemon_started"])
+	}
+	if !strings.Contains(stderr.String(), "daemon install succeeded") {
+		t.Fatalf("stderr = %q, want success summary", stderr.String())
+	}
+}
+
+func TestDaemonInstallDefaultRunnerFailureWritesRemedy(t *testing.T) {
+	originalRunner := runDaemonInstallCommand
+	originalResolveExecutablePath := resolveExecutablePath
+	originalInstall := installHTTPDaemon
+	originalJSONWriter := daemonInstallJSONWriter
+	originalLogWriter := daemonInstallLogWriter
+	t.Cleanup(func() { runDaemonInstallCommand = originalRunner })
+	t.Cleanup(func() { resolveExecutablePath = originalResolveExecutablePath })
+	t.Cleanup(func() { installHTTPDaemon = originalInstall })
+	t.Cleanup(func() { daemonInstallJSONWriter = originalJSONWriter })
+	t.Cleanup(func() { daemonInstallLogWriter = originalLogWriter })
+
+	runDaemonInstallCommand = defaultDaemonInstallCommandRunner
+	resolveExecutablePath = func() (string, error) {
+		return "/tmp/neocode", nil
+	}
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	daemonInstallJSONWriter = &stdout
+	daemonInstallLogWriter = &stderr
+	installHTTPDaemon = func(options urlscheme.HTTPDaemonInstallOptions) (urlscheme.HTTPDaemonInstallResult, error) {
+		return urlscheme.HTTPDaemonInstallResult{}, errors.New("boom")
+	}
+
+	command := NewRootCommand()
+	command.SetArgs([]string{"daemon", "install", "--listen", "127.0.0.1:19921"})
+	err := command.ExecuteContext(context.Background())
+	if err == nil {
+		t.Fatal("expected install failure")
+	}
+	if !strings.Contains(stderr.String(), "remedy: run `/tmp/neocode daemon install --listen 127.0.0.1:19921`") {
+		t.Fatalf("stderr = %q, want remedy command", stderr.String())
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout should be empty on failure, got %q", stdout.String())
 	}
 }
 
