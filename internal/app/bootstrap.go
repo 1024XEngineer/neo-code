@@ -230,6 +230,15 @@ func BuildGatewayServerDeps(ctx context.Context, opts BootstrapOptions) (Runtime
 		return RuntimeBundle{}, err
 	}
 
+	// Wire ask_user broker from runtime into the pre-registered ask_user tool.
+	if brokerAdapter := runtimeSvc.AskUserBrokerAdapter(); brokerAdapter != nil {
+		if askTool, err := toolRegistry.Get(tools.ToolNameAskUser); err == nil {
+			if setter, ok := askTool.(tools.AskUserBrokerSetter); ok {
+				setter.SetAskUserBroker(brokerAdapter)
+			}
+		}
+	}
+
 	// 注入记忆提取钩子：当 AutoExtract 启用且 memoSvc 可用时，ReAct 循环完成后异步提取记忆。
 	if memoSvc != nil && cfg.Memo.AutoExtract {
 		runtimeSvc.SetMemoExtractor(newMemoExtractorAdapter(
@@ -466,6 +475,7 @@ func buildToolRegistry(cfg config.Config) (*tools.Registry, func() error, error)
 	toolRegistry.Register(codebase.NewRead(repoSvc, cfg.Workdir))
 	toolRegistry.Register(codebase.NewSearchText(repoSvc, cfg.Workdir))
 	toolRegistry.Register(codebase.NewSearchSymbol(repoSvc, cfg.Workdir))
+	toolRegistry.Register(tools.NewAskUserTool(nil)) // broker injected after runtime creation
 	mcpRegistry, err := BuildMCPRegistry(cfg)
 	if err != nil {
 		return nil, nil, err

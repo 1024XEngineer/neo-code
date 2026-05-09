@@ -187,16 +187,6 @@ function _fileChangesFromCheckpointDiff(diff: CheckpointDiffResultPayload) {
 
   return Array.from(byPath.entries())
     .filter(([path]) => path)
-    .filter(([path]) => {
-      const parsedDiff = parsedByPath.get(path)
-      return Boolean(
-        parsedDiff &&
-        (parsedDiff.additions > 0 ||
-          parsedDiff.deletions > 0 ||
-          (parsedDiff.hunks?.length ?? 0) > 0 ||
-          (parsedDiff.lines?.length ?? 0) > 0),
-      )
-    })
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([path, status]) => {
       const parsedDiff = parsedByPath.get(path)

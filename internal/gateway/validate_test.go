@@ -439,6 +439,15 @@ func TestValidateFrameNewActions(t *testing.T) {
 			},
 			wantNil: true,
 		},
+		{
+			name: "read_file requires payload",
+			frame: MessageFrame{
+				Type:   FrameTypeRequest,
+				Action: FrameActionReadFile,
+			},
+			wantCode:  ErrorCodeMissingRequiredField.String(),
+			wantField: "payload",
+		},
 	}
 
 	for _, tt := range tests {
@@ -827,6 +836,107 @@ func TestValidateFrame_MultimodalPayloadRules(t *testing.T) {
 			}
 			if err.Code != tt.wantCode {
 				t.Fatalf("error code mismatch: got %q want %q", err.Code, tt.wantCode)
+			}
+		})
+	}
+}
+
+func TestValidateUserQuestionAnswerFrame(t *testing.T) {
+	tests := []struct {
+		name      string
+		frame     MessageFrame
+		wantNil   bool
+		wantCode  string
+		wantField string
+	}{
+		{
+			name: "valid with answered status",
+			frame: MessageFrame{
+				Type:   FrameTypeRequest,
+				Action: FrameActionUserQuestionAnswer,
+				Payload: UserQuestionAnswerInput{
+					RequestID: "ask-1",
+					Status:    "answered",
+					Values:    []string{"yes"},
+				},
+			},
+			wantNil: true,
+		},
+		{
+			name: "valid with skipped status",
+			frame: MessageFrame{
+				Type:   FrameTypeRequest,
+				Action: FrameActionUserQuestionAnswer,
+				Payload: map[string]any{
+					"request_id": "ask-2",
+					"status":     "skipped",
+				},
+			},
+			wantNil: true,
+		},
+		{
+			name: "valid with empty status",
+			frame: MessageFrame{
+				Type:   FrameTypeRequest,
+				Action: FrameActionUserQuestionAnswer,
+				Payload: UserQuestionAnswerInput{
+					RequestID: "ask-3",
+				},
+			},
+			wantNil: true,
+		},
+		{
+			name: "missing payload",
+			frame: MessageFrame{
+				Type:   FrameTypeRequest,
+				Action: FrameActionUserQuestionAnswer,
+			},
+			wantCode:  ErrorCodeMissingRequiredField.String(),
+			wantField: "payload",
+		},
+		{
+			name: "missing request_id",
+			frame: MessageFrame{
+				Type:   FrameTypeRequest,
+				Action: FrameActionUserQuestionAnswer,
+				Payload: map[string]any{
+					"status": "answered",
+				},
+			},
+			wantCode:  ErrorCodeMissingRequiredField.String(),
+			wantField: "payload.request_id",
+		},
+		{
+			name: "invalid status",
+			frame: MessageFrame{
+				Type:   FrameTypeRequest,
+				Action: FrameActionUserQuestionAnswer,
+				Payload: map[string]any{
+					"request_id": "ask-1",
+					"status":     "rejected",
+				},
+			},
+			wantCode: ErrorCodeInvalidAction.String(),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateFrame(tt.frame)
+			if tt.wantNil {
+				if err != nil {
+					t.Fatalf("expected nil error, got: %#v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("expected validation error, got nil")
+			}
+			if err.Code != tt.wantCode {
+				t.Fatalf("error code mismatch: got %q want %q", err.Code, tt.wantCode)
+			}
+			if tt.wantField != "" && !strings.Contains(err.Message, tt.wantField) {
+				t.Fatalf("expected message to contain %q, got %q", tt.wantField, err.Message)
 			}
 		})
 	}

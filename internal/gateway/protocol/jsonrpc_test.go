@@ -1809,6 +1809,66 @@ func TestNormalizeJSONRPCRequestNewRPCMethods(t *testing.T) {
 		}
 	})
 
+	t.Run("readFile valid params", func(t *testing.T) {
+		frame, rpcErr := NormalizeJSONRPCRequest(JSONRPCRequest{
+			JSONRPC: JSONRPCVersion,
+			ID:      json.RawMessage(`"4a"`),
+			Method:  MethodGatewayReadFile,
+			Params:  json.RawMessage(`{"path":"main.go"}`),
+		})
+		if rpcErr != nil {
+			t.Fatalf("unexpected error: %+v", rpcErr)
+		}
+		if frame.Action != "read_file" {
+			t.Fatalf("action = %q, want %q", frame.Action, "read_file")
+		}
+	})
+
+	t.Run("readFile missing path", func(t *testing.T) {
+		_, rpcErr := NormalizeJSONRPCRequest(JSONRPCRequest{
+			JSONRPC: JSONRPCVersion,
+			ID:      json.RawMessage(`"4b"`),
+			Method:  MethodGatewayReadFile,
+			Params:  json.RawMessage(`{}`),
+		})
+		if rpcErr == nil {
+			t.Fatal("expected error for missing path")
+		}
+		if rpcErr.Code != JSONRPCCodeInvalidParams {
+			t.Fatalf("code = %d, want %d", rpcErr.Code, JSONRPCCodeInvalidParams)
+		}
+	})
+
+	t.Run("listGitDiffFiles valid params", func(t *testing.T) {
+		frame, rpcErr := NormalizeJSONRPCRequest(JSONRPCRequest{
+			JSONRPC: JSONRPCVersion,
+			ID:      json.RawMessage(`"4c"`),
+			Method:  MethodGatewayListGitDiffFiles,
+			Params:  json.RawMessage(`{"workdir":"/tmp"}`),
+		})
+		if rpcErr != nil {
+			t.Fatalf("unexpected error: %+v", rpcErr)
+		}
+		if frame.Action != "list_git_diff_files" {
+			t.Fatalf("action = %q, want %q", frame.Action, "list_git_diff_files")
+		}
+	})
+
+	t.Run("readGitDiffFile missing path", func(t *testing.T) {
+		_, rpcErr := NormalizeJSONRPCRequest(JSONRPCRequest{
+			JSONRPC: JSONRPCVersion,
+			ID:      json.RawMessage(`"4d"`),
+			Method:  MethodGatewayReadGitDiffFile,
+			Params:  json.RawMessage(`{}`),
+		})
+		if rpcErr == nil {
+			t.Fatal("expected error for missing path")
+		}
+		if rpcErr.Code != JSONRPCCodeInvalidParams {
+			t.Fatalf("code = %d, want %d", rpcErr.Code, JSONRPCCodeInvalidParams)
+		}
+	})
+
 	t.Run("listModels no params required", func(t *testing.T) {
 		frame, rpcErr := NormalizeJSONRPCRequest(JSONRPCRequest{
 			JSONRPC: JSONRPCVersion,

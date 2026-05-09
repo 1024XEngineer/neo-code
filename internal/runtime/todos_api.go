@@ -11,7 +11,7 @@ func (s *Service) ListTodos(ctx context.Context, sessionID string) (TodoSnapshot
 	if normalizedSessionID == "" {
 		return TodoSnapshot{}, nil
 	}
-	session, err := s.sessionStore.LoadSession(ctx, normalizedSessionID)
+	session, err := s.LoadSession(ctx, normalizedSessionID)
 	if err != nil {
 		return TodoSnapshot{}, err
 	}

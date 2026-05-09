@@ -48,3 +48,10 @@ type PermissionResolutionFinishedMsg struct {
 	Decision  string
 	Err       error
 }
+
+// UserQuestionResolutionFinishedMsg 表示一次 ask_user 回答提交完成结果。
+type UserQuestionResolutionFinishedMsg struct {
+	RequestID string
+	Status    string
+	Err       error
+}

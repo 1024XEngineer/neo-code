@@ -115,6 +115,10 @@ func (s *rpcRunCaptureRuntimeStub) ResolvePermission(_ context.Context, _ Permis
 	return nil
 }
 
+func (s *rpcRunCaptureRuntimeStub) ResolveUserQuestion(_ context.Context, _ UserQuestionAnswerInput) error {
+	return nil
+}
+
 func (s *rpcRunCaptureRuntimeStub) CancelRun(_ context.Context, _ CancelInput) (bool, error) {
 	return false, nil
 }
@@ -141,6 +145,15 @@ func (s *rpcRunCaptureRuntimeStub) RenameSession(_ context.Context, _ RenameSess
 }
 func (s *rpcRunCaptureRuntimeStub) ListFiles(_ context.Context, _ ListFilesInput) ([]FileEntry, error) {
 	return nil, nil
+}
+func (s *rpcRunCaptureRuntimeStub) ReadFile(_ context.Context, _ ReadFileInput) (ReadFileResult, error) {
+	return ReadFileResult{}, nil
+}
+func (s *rpcRunCaptureRuntimeStub) ListGitDiffFiles(_ context.Context, _ ListGitDiffFilesInput) (ListGitDiffFilesResult, error) {
+	return ListGitDiffFilesResult{}, nil
+}
+func (s *rpcRunCaptureRuntimeStub) ReadGitDiffFile(_ context.Context, _ ReadGitDiffFileInput) (ReadGitDiffFileResult, error) {
+	return ReadGitDiffFileResult{}, nil
 }
 func (s *rpcRunCaptureRuntimeStub) ListModels(_ context.Context, _ ListModelsInput) ([]ModelEntry, error) {
 	return nil, nil
@@ -1005,6 +1018,9 @@ func (s *runtimePortOnlyStub) ListAvailableSkills(_ context.Context, _ ListAvail
 func (s *runtimePortOnlyStub) ResolvePermission(_ context.Context, _ PermissionResolutionInput) error {
 	return nil
 }
+func (s *runtimePortOnlyStub) ResolveUserQuestion(_ context.Context, _ UserQuestionAnswerInput) error {
+	return nil
+}
 func (s *runtimePortOnlyStub) CancelRun(_ context.Context, _ CancelInput) (bool, error) {
 	return false, nil
 }
@@ -1032,6 +1048,15 @@ func (s *runtimePortOnlyStub) RenameSession(_ context.Context, _ RenameSessionIn
 }
 func (s *runtimePortOnlyStub) ListFiles(_ context.Context, _ ListFilesInput) ([]FileEntry, error) {
 	return nil, nil
+}
+func (s *runtimePortOnlyStub) ReadFile(_ context.Context, _ ReadFileInput) (ReadFileResult, error) {
+	return ReadFileResult{}, nil
+}
+func (s *runtimePortOnlyStub) ListGitDiffFiles(_ context.Context, _ ListGitDiffFilesInput) (ListGitDiffFilesResult, error) {
+	return ListGitDiffFilesResult{}, nil
+}
+func (s *runtimePortOnlyStub) ReadGitDiffFile(_ context.Context, _ ReadGitDiffFileInput) (ReadGitDiffFileResult, error) {
+	return ReadGitDiffFileResult{}, nil
 }
 func (s *runtimePortOnlyStub) ListModels(_ context.Context, _ ListModelsInput) ([]ModelEntry, error) {
 	return nil, nil

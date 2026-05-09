@@ -589,11 +589,11 @@ describe('eventBridge', () => {
     expect(change?.hunks?.[0]?.lines.map((line) => line.content)).toEqual(['old', 'new'])
   })
 
-  it('filters final run-scoped modified entries that have no renderable patch', async () => {
+  it('preserves run-scoped file entries even when patch metadata is absent', async () => {
     const checkpointDiff = vi.fn(async () => ({
       payload: {
         checkpoint_id: 'cp2',
-        files: { modified: ['a.txt', 'b.txt'] },
+        files: { added: ['c.txt'], modified: ['a.txt', 'b.txt'], deleted: ['d.txt'] },
         patch: '--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-old\n+new\n',
       },
     }))
@@ -625,8 +625,29 @@ describe('eventBridge', () => {
     await Promise.resolve()
 
     const changes = useUIStore.getState().fileChanges
-    expect(changes).toHaveLength(1)
-    expect(changes[0]).toMatchObject({ path: 'a.txt', additions: 1, deletions: 1 })
-    expect(changes.find((entry) => entry.path === 'b.txt')).toBeUndefined()
+    expect(changes).toHaveLength(4)
+    expect(changes.map((entry) => entry.path)).toEqual(['a.txt', 'b.txt', 'c.txt', 'd.txt'])
+    expect(changes.find((entry) => entry.path === 'a.txt')).toMatchObject({
+      status: 'modified',
+      additions: 1,
+      deletions: 1,
+    })
+    expect(changes.find((entry) => entry.path === 'b.txt')).toMatchObject({
+      status: 'modified',
+      additions: 0,
+      deletions: 0,
+      diff: undefined,
+      hunks: undefined,
+    })
+    expect(changes.find((entry) => entry.path === 'c.txt')).toMatchObject({
+      status: 'added',
+      additions: 0,
+      deletions: 0,
+    })
+    expect(changes.find((entry) => entry.path === 'd.txt')).toMatchObject({
+      status: 'deleted',
+      additions: 0,
+      deletions: 0,
+    })
   })
 })

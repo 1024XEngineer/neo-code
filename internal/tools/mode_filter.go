@@ -15,7 +15,8 @@ func isReadOnlyVisibleTool(name string) bool {
 		ToolNameWebFetch,
 		ToolNameMemoRecall,
 		ToolNameMemoList,
-		ToolNameTodoWrite:
+		ToolNameTodoWrite,
+		ToolNameAskUser:
 		return true
 	default:
 		return false
@@ -27,6 +28,20 @@ func isReadOnlyActionAllowed(action security.Action) bool {
 	if action.Type == security.ActionTypeRead {
 		return true
 	}
+	if action.Type == security.ActionTypeInteraction {
+		return true
+	}
 	return action.Type == security.ActionTypeWrite &&
 		strings.EqualFold(strings.TrimSpace(action.Payload.Operation), ToolNameTodoWrite)
 }
+
+const ()
+
+// isPlanModeOnlyTool 判断工具是否仅限 plan 模式可见。
+func isPlanModeOnlyTool(name string) bool {
+	return strings.EqualFold(strings.TrimSpace(name), ToolNameAskUser)
+}
+
+const (
+	errAskUserNotAvailableInCurrentMode = "ask_user is not available in current mode"
+)

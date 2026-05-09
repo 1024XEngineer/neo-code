@@ -16,6 +16,7 @@ type Runtime interface {
 	Compact(ctx context.Context, input CompactInput) (CompactResult, error)
 	ExecuteSystemTool(ctx context.Context, input SystemToolInput) (tools.ToolResult, error)
 	ResolvePermission(ctx context.Context, input PermissionResolutionInput) error
+	ResolveUserQuestion(ctx context.Context, input UserQuestionResolutionInput) error
 	CancelActiveRun() bool
 	Events() <-chan RuntimeEvent
 	ListSessions(ctx context.Context) ([]agentsession.Summary, error)
@@ -107,6 +108,14 @@ type PermissionResolutionInput struct {
 	Decision  PermissionResolutionDecision
 }
 
+// UserQuestionResolutionInput 描述 ask_user 回答提交。
+type UserQuestionResolutionInput struct {
+	RequestID string
+	Status    string
+	Values    []string
+	Message   string
+}
+
 // PermissionResolutionDecision 表示权限审批决策。
 type PermissionResolutionDecision string
 
@@ -147,6 +156,29 @@ type PermissionResolvedPayload struct {
 	RuleID        string `json:"rule_id"`
 	RememberScope string `json:"remember_scope,omitempty"`
 	ResolvedAs    string `json:"resolved_as,omitempty"`
+}
+
+// UserQuestionRequestedPayload 描述 ask_user 提问事件载荷。
+type UserQuestionRequestedPayload struct {
+	RequestID   string `json:"request_id"`
+	QuestionID  string `json:"question_id"`
+	Title       string `json:"title"`
+	Description string `json:"description"`
+	Kind        string `json:"kind"`
+	Options     []any  `json:"options,omitempty"`
+	Required    bool   `json:"required"`
+	AllowSkip   bool   `json:"allow_skip"`
+	MaxChoices  int    `json:"max_choices,omitempty"`
+	TimeoutSec  int    `json:"timeout_sec,omitempty"`
+}
+
+// UserQuestionResolvedPayload 描述 ask_user 已回答/跳过/超时事件载荷。
+type UserQuestionResolvedPayload struct {
+	RequestID  string   `json:"request_id"`
+	QuestionID string   `json:"question_id"`
+	Status     string   `json:"status"`
+	Values     []string `json:"values,omitempty"`
+	Message    string   `json:"message,omitempty"`
 }
 
 // SessionSkillState 描述会话技能状态。
@@ -627,6 +659,10 @@ const (
 	EventToolCallThinking           EventType = "tool_call_thinking"
 	EventPermissionRequested        EventType = "permission_requested"
 	EventPermissionResolved         EventType = "permission_resolved"
+	EventUserQuestionRequested      EventType = "user_question_requested"
+	EventUserQuestionAnswered       EventType = "user_question_answered"
+	EventUserQuestionTimeout        EventType = "user_question_timeout"
+	EventUserQuestionSkipped        EventType = "user_question_skipped"
 	EventCompactStart               EventType = "compact_start"
 	EventCompactApplied             EventType = "compact_applied"
 	EventCompactError               EventType = "compact_error"

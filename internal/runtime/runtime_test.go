@@ -3673,6 +3673,108 @@ func TestServiceListSessionsSkipsPromotionWhenDerivedTitleInvalid(t *testing.T) 
 	}
 }
 
+func TestServiceLoadSessionRepairsIncompleteToolCallTail(t *testing.T) {
+	manager := newRuntimeConfigManager(t)
+	store := newMemoryStore()
+	service := NewWithFactory(manager, tools.NewRegistry(), store, nil, nil)
+
+	session := agentsession.New("Repair Me")
+	session.Messages = []providertypes.Message{
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("before")}},
+		{
+			Role: providertypes.RoleAssistant,
+			ToolCalls: []providertypes.ToolCall{
+				{ID: "call-1", Name: "filesystem_read_file", Arguments: `{"path":"README.md"}`},
+				{ID: "call-2", Name: "bash", Arguments: `{"command":"echo hi"}`},
+			},
+		},
+		{
+			Role:       providertypes.RoleTool,
+			ToolCallID: "call-1",
+			Parts:      []providertypes.ContentPart{providertypes.NewTextPart("README")},
+		},
+	}
+	store.sessions[session.ID] = cloneSession(session)
+
+	loaded, err := service.LoadSession(context.Background(), session.ID)
+	if err != nil {
+		t.Fatalf("LoadSession() error = %v", err)
+	}
+	if len(loaded.Messages) != 1 {
+		t.Fatalf("len(loaded.Messages) = %d, want 1", len(loaded.Messages))
+	}
+	if got := renderPartsForTest(loaded.Messages[0].Parts); got != "before" {
+		t.Fatalf("loaded preserved message = %q, want %q", got, "before")
+	}
+
+	persisted, err := store.LoadSession(context.Background(), session.ID)
+	if err != nil {
+		t.Fatalf("store.LoadSession() error = %v", err)
+	}
+	if len(persisted.Messages) != 1 {
+		t.Fatalf("len(persisted.Messages) = %d, want 1", len(persisted.Messages))
+	}
+}
+
+func TestServiceRunRepairsIncompleteToolCallTailBeforeBuildingContext(t *testing.T) {
+	manager := newRuntimeConfigManager(t)
+	store := newMemoryStore()
+	builder := &stubContextBuilder{}
+	scripted := &scriptedProvider{
+		responses: []scriptedResponse{
+			{
+				Message: providertypes.Message{
+					Role:  providertypes.RoleAssistant,
+					Parts: []providertypes.ContentPart{providertypes.NewTextPart("done")},
+				},
+				FinishReason: "stop",
+			},
+		},
+	}
+	service := NewWithFactory(manager, tools.NewRegistry(), store, &scriptedProviderFactory{provider: scripted}, builder)
+
+	session := agentsession.New("Repair Before Run")
+	session.Messages = []providertypes.Message{
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("before")}},
+		{
+			Role: providertypes.RoleAssistant,
+			ToolCalls: []providertypes.ToolCall{
+				{ID: "call-1", Name: "filesystem_read_file", Arguments: `{"path":"README.md"}`},
+			},
+		},
+	}
+	store.sessions[session.ID] = cloneSession(session)
+
+	if err := service.Run(context.Background(), UserInput{
+		SessionID: session.ID,
+		RunID:     "run-repair-incomplete-tool-tail",
+		Parts:     []providertypes.ContentPart{providertypes.NewTextPart("continue")},
+	}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	if len(builder.lastInput.Messages) != 2 {
+		t.Fatalf("len(builder.lastInput.Messages) = %d, want 2", len(builder.lastInput.Messages))
+	}
+	if builder.lastInput.Messages[0].Role != providertypes.RoleUser || renderPartsForTest(builder.lastInput.Messages[0].Parts) != "before" {
+		t.Fatalf("unexpected repaired history in builder input: %+v", builder.lastInput.Messages)
+	}
+	if builder.lastInput.Messages[1].Role != providertypes.RoleUser || renderPartsForTest(builder.lastInput.Messages[1].Parts) != "continue" {
+		t.Fatalf("expected latest user input in builder messages, got %+v", builder.lastInput.Messages)
+	}
+
+	persisted, err := store.LoadSession(context.Background(), session.ID)
+	if err != nil {
+		t.Fatalf("store.LoadSession() error = %v", err)
+	}
+	if len(persisted.Messages) < 2 {
+		t.Fatalf("expected repaired transcript plus new turn, got %+v", persisted.Messages)
+	}
+	if len(persisted.Messages[0].ToolCalls) != 0 {
+		t.Fatalf("expected repaired transcript to drop dangling tool_calls, got %+v", persisted.Messages[0])
+	}
+}
+
 func TestRuntimeSessionTitlePromotionHelpers(t *testing.T) {
 	t.Parallel()
 

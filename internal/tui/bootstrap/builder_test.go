@@ -55,6 +55,10 @@ func (r *testRuntime) ResolvePermission(ctx context.Context, input agentruntime.
 	return nil
 }
 
+func (r *testRuntime) ResolveUserQuestion(ctx context.Context, input agentruntime.UserQuestionResolutionInput) error {
+	return nil
+}
+
 func (r *testRuntime) Events() <-chan agentruntime.RuntimeEvent {
 	ch := make(chan agentruntime.RuntimeEvent)
 	close(ch)
@@ -283,6 +287,10 @@ func (r noopRuntime) ExecuteSystemTool(ctx context.Context, input agentruntime.S
 }
 
 func (r noopRuntime) ResolvePermission(ctx context.Context, input agentruntime.PermissionResolutionInput) error {
+	return nil
+}
+
+func (r noopRuntime) ResolveUserQuestion(ctx context.Context, input agentruntime.UserQuestionResolutionInput) error {
 	return nil
 }
 

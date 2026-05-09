@@ -154,6 +154,18 @@ func TestRuntimeEventHandlerRegistryContainsRenamedEvents(t *testing.T) {
 	if _, ok := runtimeEventHandlerRegistry[agentruntime.EventPermissionRequested]; !ok {
 		t.Fatalf("expected permission_requested handler to be registered")
 	}
+	if _, ok := runtimeEventHandlerRegistry[agentruntime.EventUserQuestionRequested]; !ok {
+		t.Fatalf("expected user_question_requested handler to be registered")
+	}
+	if _, ok := runtimeEventHandlerRegistry[agentruntime.EventUserQuestionAnswered]; !ok {
+		t.Fatalf("expected user_question_answered handler to be registered")
+	}
+	if _, ok := runtimeEventHandlerRegistry[agentruntime.EventUserQuestionSkipped]; !ok {
+		t.Fatalf("expected user_question_skipped handler to be registered")
+	}
+	if _, ok := runtimeEventHandlerRegistry[agentruntime.EventUserQuestionTimeout]; !ok {
+		t.Fatalf("expected user_question_timeout handler to be registered")
+	}
 	if _, ok := runtimeEventHandlerRegistry[agentruntime.EventCompactApplied]; !ok {
 		t.Fatalf("expected compact_applied handler to be registered")
 	}

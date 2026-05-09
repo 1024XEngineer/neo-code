@@ -77,9 +77,16 @@ func validateRequestFrame(frame MessageFrame) *FrameError {
 		if strings.TrimSpace(frame.SessionID) == "" {
 			return NewMissingRequiredFieldError("session_id")
 		}
-	case FrameActionListFiles:
+	case FrameActionListFiles,
+		FrameActionListGitDiffFiles,
+		FrameActionWorkspaceList:
 		// listFiles 不强制 session_id，workdir 可独立使用
-	case FrameActionWorkspaceList:
+		return nil
+	case FrameActionReadFile,
+		FrameActionReadGitDiffFile:
+		if frame.Payload == nil {
+			return NewMissingRequiredFieldError("payload")
+		}
 		return nil
 	case FrameActionWorkspaceCreate,
 		FrameActionWorkspaceSwitch,
@@ -91,6 +98,8 @@ func validateRequestFrame(frame MessageFrame) *FrameError {
 		return nil
 	case FrameActionResolvePermission:
 		return validateResolvePermissionFrame(frame)
+	case FrameActionUserQuestionAnswer:
+		return validateUserQuestionAnswerFrame(frame)
 	case FrameActionRestoreCheckpoint,
 		FrameActionCheckpointDiff:
 		if frame.Payload == nil {
@@ -222,6 +231,89 @@ func decodeListFilesPayload(payload any) (listFilesParams, *FrameError) {
 			return listFilesParams{}, NewFrameError(ErrorCodeInvalidFrame, "invalid list_files payload")
 		}
 		return listFilesParams{SessionID: strings.TrimSpace(decoded.SessionID), Workdir: strings.TrimSpace(decoded.Workdir), Path: strings.TrimSpace(decoded.Path)}, nil
+	}
+}
+
+// decodeReadFilePayload 解析 readFile 的负载参数。
+func decodeReadFilePayload(payload any) (readFileParams, *FrameError) {
+	switch typed := payload.(type) {
+	case protocol.ReadFileParams:
+		return readFileParams{SessionID: strings.TrimSpace(typed.SessionID), Workdir: strings.TrimSpace(typed.Workdir), Path: strings.TrimSpace(typed.Path)}, nil
+	case *protocol.ReadFileParams:
+		if typed == nil {
+			return readFileParams{}, NewMissingRequiredFieldError("payload")
+		}
+		return readFileParams{SessionID: strings.TrimSpace(typed.SessionID), Workdir: strings.TrimSpace(typed.Workdir), Path: strings.TrimSpace(typed.Path)}, nil
+	case map[string]any:
+		sessionID := readStringValue(typed, "session_id")
+		workdir := readStringValue(typed, "workdir")
+		path := readStringValue(typed, "path")
+		return readFileParams{SessionID: sessionID, Workdir: workdir, Path: path}, nil
+	default:
+		raw, marshalErr := json.Marshal(payload)
+		if marshalErr != nil {
+			return readFileParams{}, NewFrameError(ErrorCodeInvalidFrame, "invalid read_file payload")
+		}
+		var decoded protocol.ReadFileParams
+		if unmarshalErr := json.Unmarshal(raw, &decoded); unmarshalErr != nil {
+			return readFileParams{}, NewFrameError(ErrorCodeInvalidFrame, "invalid read_file payload")
+		}
+		return readFileParams{SessionID: strings.TrimSpace(decoded.SessionID), Workdir: strings.TrimSpace(decoded.Workdir), Path: strings.TrimSpace(decoded.Path)}, nil
+	}
+}
+
+// decodeListGitDiffFilesPayload 解析 listGitDiffFiles 的负载参数。
+func decodeListGitDiffFilesPayload(payload any) (listFilesParams, *FrameError) {
+	switch typed := payload.(type) {
+	case protocol.ListGitDiffFilesParams:
+		return listFilesParams{SessionID: strings.TrimSpace(typed.SessionID), Workdir: strings.TrimSpace(typed.Workdir)}, nil
+	case *protocol.ListGitDiffFilesParams:
+		if typed == nil {
+			return listFilesParams{}, nil
+		}
+		return listFilesParams{SessionID: strings.TrimSpace(typed.SessionID), Workdir: strings.TrimSpace(typed.Workdir)}, nil
+	case map[string]any:
+		sessionID := readStringValue(typed, "session_id")
+		workdir := readStringValue(typed, "workdir")
+		return listFilesParams{SessionID: sessionID, Workdir: workdir}, nil
+	default:
+		raw, marshalErr := json.Marshal(payload)
+		if marshalErr != nil {
+			return listFilesParams{}, NewFrameError(ErrorCodeInvalidFrame, "invalid list_git_diff_files payload")
+		}
+		var decoded protocol.ListGitDiffFilesParams
+		if unmarshalErr := json.Unmarshal(raw, &decoded); unmarshalErr != nil {
+			return listFilesParams{}, NewFrameError(ErrorCodeInvalidFrame, "invalid list_git_diff_files payload")
+		}
+		return listFilesParams{SessionID: strings.TrimSpace(decoded.SessionID), Workdir: strings.TrimSpace(decoded.Workdir)}, nil
+	}
+}
+
+// decodeReadGitDiffFilePayload 解析 readGitDiffFile 的负载参数。
+func decodeReadGitDiffFilePayload(payload any) (readFileParams, *FrameError) {
+	switch typed := payload.(type) {
+	case protocol.ReadGitDiffFileParams:
+		return readFileParams{SessionID: strings.TrimSpace(typed.SessionID), Workdir: strings.TrimSpace(typed.Workdir), Path: strings.TrimSpace(typed.Path)}, nil
+	case *protocol.ReadGitDiffFileParams:
+		if typed == nil {
+			return readFileParams{}, NewMissingRequiredFieldError("payload")
+		}
+		return readFileParams{SessionID: strings.TrimSpace(typed.SessionID), Workdir: strings.TrimSpace(typed.Workdir), Path: strings.TrimSpace(typed.Path)}, nil
+	case map[string]any:
+		sessionID := readStringValue(typed, "session_id")
+		workdir := readStringValue(typed, "workdir")
+		path := readStringValue(typed, "path")
+		return readFileParams{SessionID: sessionID, Workdir: workdir, Path: path}, nil
+	default:
+		raw, marshalErr := json.Marshal(payload)
+		if marshalErr != nil {
+			return readFileParams{}, NewFrameError(ErrorCodeInvalidFrame, "invalid read_git_diff_file payload")
+		}
+		var decoded protocol.ReadGitDiffFileParams
+		if unmarshalErr := json.Unmarshal(raw, &decoded); unmarshalErr != nil {
+			return readFileParams{}, NewFrameError(ErrorCodeInvalidFrame, "invalid read_git_diff_file payload")
+		}
+		return readFileParams{SessionID: strings.TrimSpace(decoded.SessionID), Workdir: strings.TrimSpace(decoded.Workdir), Path: strings.TrimSpace(decoded.Path)}, nil
 	}
 }
 
@@ -379,6 +471,51 @@ func convertProtocolMCPServer(server protocol.MCPServerParams) config.MCPServerC
 	}
 }
 
+// validateUserQuestionAnswerFrame 校验 user_question_answer 动作所需字段。
+func validateUserQuestionAnswerFrame(frame MessageFrame) *FrameError {
+	if frame.Payload == nil {
+		return NewMissingRequiredFieldError("payload")
+	}
+
+	input, err := decodeUserQuestionAnswerPayload(frame.Payload)
+	if err != nil {
+		return NewFrameError(ErrorCodeInvalidAction, "invalid user_question_answer payload")
+	}
+	if strings.TrimSpace(input.RequestID) == "" {
+		return NewMissingRequiredFieldError("payload.request_id")
+	}
+	status := strings.ToLower(strings.TrimSpace(input.Status))
+	if status != "" && status != "answered" && status != "skipped" {
+		return NewFrameError(ErrorCodeInvalidAction, "invalid user_question_answer status")
+	}
+
+	return nil
+}
+
+// decodeUserQuestionAnswerPayload 将 payload 解析为用户提问回答输入。
+func decodeUserQuestionAnswerPayload(payload any) (UserQuestionAnswerInput, error) {
+	if direct, ok := payload.(UserQuestionAnswerInput); ok {
+		return direct, nil
+	}
+	if ptr, ok := payload.(*UserQuestionAnswerInput); ok {
+		if ptr == nil {
+			return UserQuestionAnswerInput{}, nil
+		}
+		return *ptr, nil
+	}
+
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return UserQuestionAnswerInput{}, err
+	}
+
+	var input UserQuestionAnswerInput
+	if err := json.Unmarshal(raw, &input); err != nil {
+		return UserQuestionAnswerInput{}, err
+	}
+	return input, nil
+}
+
 // isValidPermissionResolutionDecision 判断审批决策是否属于受支持集合。
 func isValidPermissionResolutionDecision(decision PermissionResolutionDecision) bool {
 	switch decision {
@@ -461,6 +598,9 @@ func isValidFrameAction(action FrameAction) bool {
 		FrameActionDeleteSession,
 		FrameActionRenameSession,
 		FrameActionListFiles,
+		FrameActionReadFile,
+		FrameActionListGitDiffFiles,
+		FrameActionReadGitDiffFile,
 		FrameActionListModels,
 		FrameActionSetSessionModel,
 		FrameActionGetSessionModel,
@@ -480,7 +620,8 @@ func isValidFrameAction(action FrameAction) bool {
 		FrameActionWorkspaceCreate,
 		FrameActionWorkspaceSwitch,
 		FrameActionWorkspaceRename,
-		FrameActionWorkspaceDelete:
+		FrameActionWorkspaceDelete,
+		FrameActionUserQuestionAnswer:
 		return true
 	default:
 		return false

@@ -345,6 +345,14 @@ func (m *MultiWorkspaceRuntime) ResolvePermission(ctx context.Context, input Per
 	return port.ResolvePermission(ctx, input)
 }
 
+func (m *MultiWorkspaceRuntime) ResolveUserQuestion(ctx context.Context, input UserQuestionAnswerInput) error {
+	port, err := m.getPort(ctx)
+	if err != nil {
+		return err
+	}
+	return port.ResolveUserQuestion(ctx, input)
+}
+
 func (m *MultiWorkspaceRuntime) CancelRun(ctx context.Context, input CancelInput) (bool, error) {
 	port, err := m.getPort(ctx)
 	if err != nil {
@@ -403,6 +411,33 @@ func (m *MultiWorkspaceRuntime) ListFiles(ctx context.Context, input ListFilesIn
 		return nil, err
 	}
 	return port.ListFiles(ctx, input)
+}
+
+// ReadFile 读取当前工作区内文件的只读预览内容。
+func (m *MultiWorkspaceRuntime) ReadFile(ctx context.Context, input ReadFileInput) (ReadFileResult, error) {
+	port, err := m.getPort(ctx)
+	if err != nil {
+		return ReadFileResult{}, err
+	}
+	return port.ReadFile(ctx, input)
+}
+
+// ListGitDiffFiles 返回当前工作区相对 HEAD 的 Git 变更文件列表。
+func (m *MultiWorkspaceRuntime) ListGitDiffFiles(ctx context.Context, input ListGitDiffFilesInput) (ListGitDiffFilesResult, error) {
+	port, err := m.getPort(ctx)
+	if err != nil {
+		return ListGitDiffFilesResult{}, err
+	}
+	return port.ListGitDiffFiles(ctx, input)
+}
+
+// ReadGitDiffFile 读取单个 Git 变更文件的双文本预览内容。
+func (m *MultiWorkspaceRuntime) ReadGitDiffFile(ctx context.Context, input ReadGitDiffFileInput) (ReadGitDiffFileResult, error) {
+	port, err := m.getPort(ctx)
+	if err != nil {
+		return ReadGitDiffFileResult{}, err
+	}
+	return port.ReadGitDiffFile(ctx, input)
 }
 
 func (m *MultiWorkspaceRuntime) ListModels(ctx context.Context, input ListModelsInput) ([]ModelEntry, error) {
@@ -533,6 +568,26 @@ func (m *MultiWorkspaceRuntime) syncAllWorkspaceMCP() {
 	}
 }
 
+// syncAllWorkspaceSessionsProviderModel 将全局 provider/model 选择同步到所有已加载工作区的会话元数据，
+// 避免非管理端口对应工作区的会话滞留旧值，导致 listModels 解析到过期 provider/model。
+func (m *MultiWorkspaceRuntime) syncAllWorkspaceSessionsProviderModel(ctx context.Context, providerID, modelID string) {
+	m.mu.RLock()
+	bundles := make([]*workspaceBundle, 0, len(m.bundles))
+	for _, b := range m.bundles {
+		bundles = append(bundles, b)
+	}
+	m.mu.RUnlock()
+
+	for _, b := range bundles {
+		type sessionSyncer interface {
+			SyncSessionsProviderModel(ctx context.Context, providerID, modelID string) error
+		}
+		if syncer, ok := b.port.(sessionSyncer); ok {
+			_ = syncer.SyncSessionsProviderModel(ctx, providerID, modelID)
+		}
+	}
+}
+
 // ---- ManagementRuntimePort implementation ----
 
 func (m *MultiWorkspaceRuntime) ListProviders(ctx context.Context, input ListProvidersInput) ([]ProviderOption, error) {
@@ -553,6 +608,7 @@ func (m *MultiWorkspaceRuntime) CreateProvider(ctx context.Context, input Create
 		return ProviderSelectionResult{}, err
 	}
 	m.syncAllWorkspaceConfigs(ctx)
+	m.syncAllWorkspaceSessionsProviderModel(ctx, result.ProviderID, result.ModelID)
 	return result, nil
 }
 
@@ -578,6 +634,7 @@ func (m *MultiWorkspaceRuntime) SelectProviderModel(ctx context.Context, input S
 		return ProviderSelectionResult{}, err
 	}
 	m.syncAllWorkspaceConfigs(ctx)
+	m.syncAllWorkspaceSessionsProviderModel(ctx, result.ProviderID, result.ModelID)
 	return result, nil
 }
 

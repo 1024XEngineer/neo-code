@@ -437,6 +437,15 @@ const (
 	EventBashSideEffect EventType = "bash_side_effect"
 	// EventRunDiffSummary 表示一次完整 run 的端到端代码变更摘要已生成。
 	EventRunDiffSummary EventType = "run_diff_summary"
+
+	// EventUserQuestionRequested 表示 ask_user 已向客户端发出提问。
+	EventUserQuestionRequested EventType = "user_question_requested"
+	// EventUserQuestionAnswered 表示用户已回答 ask_user 提问。
+	EventUserQuestionAnswered EventType = "user_question_answered"
+	// EventUserQuestionTimeout 表示 ask_user 提问超时。
+	EventUserQuestionTimeout EventType = "user_question_timeout"
+	// EventUserQuestionSkipped 表示用户跳过 ask_user 提问。
+	EventUserQuestionSkipped EventType = "user_question_skipped"
 )
 
 // TokenUsagePayload 承载单轮 token 用量统计。
@@ -511,6 +520,29 @@ type RunDiffSummaryPayload struct {
 	ToCheckpointID   string          `json:"to_checkpoint_id,omitempty"`
 	Diff             string          `json:"diff,omitempty"`
 	ChangedFiles     []FileDiffEntry `json:"changed_files,omitempty"`
+}
+
+// UserQuestionRequestedPayload 描述 ask_user 提问事件负载。
+type UserQuestionRequestedPayload struct {
+	RequestID   string   `json:"request_id"`
+	QuestionID  string   `json:"question_id"`
+	Title       string   `json:"title"`
+	Description string   `json:"description"`
+	Kind        string   `json:"kind"`
+	Options     []any    `json:"options,omitempty"`
+	Required    bool     `json:"required"`
+	AllowSkip   bool     `json:"allow_skip"`
+	MaxChoices  int      `json:"max_choices,omitempty"`
+	TimeoutSec  int      `json:"timeout_sec,omitempty"`
+}
+
+// UserQuestionResolvedPayload 描述 ask_user 回答/跳过/超时事件负载。
+type UserQuestionResolvedPayload struct {
+	RequestID  string   `json:"request_id"`
+	QuestionID string   `json:"question_id"`
+	Status     string   `json:"status"`
+	Values     []string `json:"values,omitempty"`
+	Message    string   `json:"message,omitempty"`
 }
 
 // BashSideEffectPayload 描述 bash 命令在 workdir 内的文件变更。

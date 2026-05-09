@@ -1077,6 +1077,146 @@ func handleListFilesFrame(ctx context.Context, frame MessageFrame, runtimePort R
 	}
 }
 
+// handleReadFileFrame 处理 gateway.readFile 请求。
+func handleReadFileFrame(ctx context.Context, frame MessageFrame, runtimePort RuntimePort) MessageFrame {
+	if runtimePort == nil {
+		return runtimePortUnavailableFrame(frame)
+	}
+	subjectID, subjectErr := requireAuthenticatedSubjectID(ctx)
+	if subjectErr != nil {
+		return errorFrame(frame, subjectErr)
+	}
+
+	input, err := decodeReadFilePayload(frame.Payload)
+	if err != nil {
+		return errorFrame(frame, err)
+	}
+	if input.Path == "" {
+		return errorFrame(frame, NewMissingRequiredFieldError("payload.path"))
+	}
+
+	callCtx, cancel := withRuntimeOperationTimeout(ctx)
+	defer cancel()
+	result, readErr := runtimePort.ReadFile(callCtx, ReadFileInput{
+		SubjectID: subjectID,
+		SessionID: strings.TrimSpace(frame.SessionID),
+		Workdir:   strings.TrimSpace(frame.Workdir),
+		Path:      input.Path,
+	})
+	if readErr != nil {
+		return runtimeCallFailedFrame(callCtx, frame, readErr, "read_file")
+	}
+
+	return MessageFrame{
+		Type:      FrameTypeAck,
+		Action:    FrameActionReadFile,
+		RequestID: frame.RequestID,
+		SessionID: strings.TrimSpace(frame.SessionID),
+		Payload: map[string]any{
+			"path":      result.Path,
+			"content":   result.Content,
+			"encoding":  result.Encoding,
+			"size":      result.Size,
+			"truncated": result.Truncated,
+			"is_binary": result.IsBinary,
+			"mod_time":  result.ModTime,
+		},
+	}
+}
+
+// handleListGitDiffFilesFrame 处理 gateway.listGitDiffFiles 请求。
+func handleListGitDiffFilesFrame(ctx context.Context, frame MessageFrame, runtimePort RuntimePort) MessageFrame {
+	if runtimePort == nil {
+		return runtimePortUnavailableFrame(frame)
+	}
+	subjectID, subjectErr := requireAuthenticatedSubjectID(ctx)
+	if subjectErr != nil {
+		return errorFrame(frame, subjectErr)
+	}
+
+	input, err := decodeListGitDiffFilesPayload(frame.Payload)
+	if err != nil {
+		return errorFrame(frame, err)
+	}
+
+	callCtx, cancel := withRuntimeOperationTimeout(ctx)
+	defer cancel()
+	result, listErr := runtimePort.ListGitDiffFiles(callCtx, ListGitDiffFilesInput{
+		SubjectID: subjectID,
+		SessionID: input.SessionID,
+		Workdir:   input.Workdir,
+	})
+	if listErr != nil {
+		return runtimeCallFailedFrame(callCtx, frame, listErr, "list_git_diff_files")
+	}
+
+	return MessageFrame{
+		Type:      FrameTypeAck,
+		Action:    FrameActionListGitDiffFiles,
+		RequestID: frame.RequestID,
+		SessionID: strings.TrimSpace(frame.SessionID),
+		Payload: map[string]any{
+			"in_git_repo": result.InGitRepo,
+			"branch":      result.Branch,
+			"ahead":       result.Ahead,
+			"behind":      result.Behind,
+			"truncated":   result.Truncated,
+			"total_count": result.TotalCount,
+			"files":       result.Files,
+		},
+	}
+}
+
+// handleReadGitDiffFileFrame 处理 gateway.readGitDiffFile 请求。
+func handleReadGitDiffFileFrame(ctx context.Context, frame MessageFrame, runtimePort RuntimePort) MessageFrame {
+	if runtimePort == nil {
+		return runtimePortUnavailableFrame(frame)
+	}
+	subjectID, subjectErr := requireAuthenticatedSubjectID(ctx)
+	if subjectErr != nil {
+		return errorFrame(frame, subjectErr)
+	}
+
+	input, err := decodeReadGitDiffFilePayload(frame.Payload)
+	if err != nil {
+		return errorFrame(frame, err)
+	}
+	if input.Path == "" {
+		return errorFrame(frame, NewMissingRequiredFieldError("payload.path"))
+	}
+
+	callCtx, cancel := withRuntimeOperationTimeout(ctx)
+	defer cancel()
+	result, readErr := runtimePort.ReadGitDiffFile(callCtx, ReadGitDiffFileInput{
+		SubjectID: subjectID,
+		SessionID: input.SessionID,
+		Workdir:   input.Workdir,
+		Path:      input.Path,
+	})
+	if readErr != nil {
+		return runtimeCallFailedFrame(callCtx, frame, readErr, "read_git_diff_file")
+	}
+
+	return MessageFrame{
+		Type:      FrameTypeAck,
+		Action:    FrameActionReadGitDiffFile,
+		RequestID: frame.RequestID,
+		SessionID: strings.TrimSpace(frame.SessionID),
+		Payload: map[string]any{
+			"path":             result.Path,
+			"old_path":         result.OldPath,
+			"status":           result.Status,
+			"original_content": result.OriginalContent,
+			"modified_content": result.ModifiedContent,
+			"encoding":         result.Encoding,
+			"is_binary":        result.IsBinary,
+			"truncated":        result.Truncated,
+			"size_original":    result.OriginalSize,
+			"size_modified":    result.ModifiedSize,
+		},
+	}
+}
+
 // handleListModelsFrame 处理 gateway.listModels 请求。
 func handleListModelsFrame(ctx context.Context, frame MessageFrame, runtimePort RuntimePort) MessageFrame {
 	if runtimePort == nil {
@@ -1399,6 +1539,44 @@ func handleDeleteMCPServerFrame(ctx context.Context, frame MessageFrame, runtime
 	return MessageFrame{Type: FrameTypeAck, Action: FrameActionDeleteMCPServer, RequestID: frame.RequestID, Payload: map[string]any{"deleted": true, "id": input.ID}}
 }
 
+// handleUserQuestionAnswerFrame 处理 gateway.user_question_answer 请求。
+func handleUserQuestionAnswerFrame(ctx context.Context, frame MessageFrame, runtimePort RuntimePort) MessageFrame {
+	if runtimePort == nil {
+		return runtimePortUnavailableFrame(frame)
+	}
+	subjectID, subjectErr := requireAuthenticatedSubjectID(ctx)
+	if subjectErr != nil {
+		return errorFrame(frame, subjectErr)
+	}
+
+	input, err := decodeUserQuestionAnswerPayload(frame.Payload)
+	if err != nil {
+		return errorFrame(frame, NewFrameError(ErrorCodeInvalidAction, "invalid user_question_answer payload"))
+	}
+	input.SubjectID = subjectID
+	input.RequestID = strings.TrimSpace(input.RequestID)
+	if input.RequestID == "" {
+		return errorFrame(frame, NewMissingRequiredFieldError("payload.request_id"))
+	}
+
+	callCtx, cancel := withRuntimeOperationTimeout(ctx)
+	defer cancel()
+	if err := runtimePort.ResolveUserQuestion(callCtx, input); err != nil {
+		return runtimeCallFailedFrame(callCtx, frame, err, "user_question_answer")
+	}
+
+	return MessageFrame{
+		Type:      FrameTypeAck,
+		Action:    FrameActionUserQuestionAnswer,
+		RequestID: frame.RequestID,
+		Payload: map[string]any{
+			"request_id": input.RequestID,
+			"status":     input.Status,
+			"message":    "user question answered",
+		},
+	}
+}
+
 // handleResolvePermissionFrame 处理 gateway.resolvePermission 请求。
 func handleResolvePermissionFrame(ctx context.Context, frame MessageFrame, runtimePort RuntimePort) MessageFrame {
 	if runtimePort == nil {
@@ -1615,6 +1793,12 @@ type renameSessionParams struct {
 }
 
 type listFilesParams struct {
+	SessionID string
+	Workdir   string
+	Path      string
+}
+
+type readFileParams struct {
 	SessionID string
 	Workdir   string
 	Path      string

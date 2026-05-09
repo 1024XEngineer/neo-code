@@ -24,6 +24,7 @@ type recordingPort struct {
 	runCalls          atomic.Int32
 	listSessionsCalls atomic.Int32
 	executeSysCalls   atomic.Int32
+	resolveUserCalls  atomic.Int32
 	cancelCalls       atomic.Int32
 	closed            atomic.Int32
 	closeOnce         sync.Once
@@ -88,6 +89,11 @@ func (p *recordingPort) ResolvePermission(_ context.Context, _ PermissionResolut
 	return nil
 }
 
+func (p *recordingPort) ResolveUserQuestion(_ context.Context, _ UserQuestionAnswerInput) error {
+	p.resolveUserCalls.Add(1)
+	return nil
+}
+
 func (p *recordingPort) CancelRun(_ context.Context, _ CancelInput) (bool, error) {
 	p.cancelCalls.Add(1)
 	return true, nil
@@ -128,6 +134,15 @@ func (p *recordingPort) RenameSession(_ context.Context, _ RenameSessionInput) e
 
 func (p *recordingPort) ListFiles(_ context.Context, _ ListFilesInput) ([]FileEntry, error) {
 	return nil, nil
+}
+func (p *recordingPort) ReadFile(_ context.Context, _ ReadFileInput) (ReadFileResult, error) {
+	return ReadFileResult{}, nil
+}
+func (p *recordingPort) ListGitDiffFiles(_ context.Context, _ ListGitDiffFilesInput) (ListGitDiffFilesResult, error) {
+	return ListGitDiffFilesResult{}, nil
+}
+func (p *recordingPort) ReadGitDiffFile(_ context.Context, _ ReadGitDiffFileInput) (ReadGitDiffFileResult, error) {
+	return ReadGitDiffFileResult{}, nil
 }
 
 func (p *recordingPort) ListModels(_ context.Context, _ ListModelsInput) ([]ModelEntry, error) {
@@ -468,6 +483,28 @@ func TestMultiWorkspaceRuntime_SwitchWorkspaceValidates(t *testing.T) {
 
 	if err := mw.SwitchWorkspace(context.Background(), "missing"); err == nil {
 		t.Fatalf("SwitchWorkspace should reject unknown hash")
+	}
+}
+
+func TestMultiWorkspaceRuntime_ResolveUserQuestionRoutesByWorkspace(t *testing.T) {
+	idx, alpha, beta := setupIndex(t)
+	builder := newTestBuilder()
+	mw := NewMultiWorkspaceRuntime(idx, alpha.Hash, builder.build)
+	t.Cleanup(func() { _ = mw.Close() })
+
+	if err := mw.ResolveUserQuestion(ctxWithHash(t, beta.Hash), UserQuestionAnswerInput{
+		RequestID: "ask-1",
+		Status:    "answered",
+	}); err != nil {
+		t.Fatalf("ResolveUserQuestion: %v", err)
+	}
+
+	betaPort := builder.portFor(beta.Path)
+	if betaPort == nil {
+		t.Fatalf("beta port should be built")
+	}
+	if got := betaPort.resolveUserCalls.Load(); got != 1 {
+		t.Fatalf("beta resolve user calls = %d, want 1", got)
 	}
 }
 

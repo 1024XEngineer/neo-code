@@ -122,25 +122,27 @@ func (s stubProviderService) CreateCustomProvider(
 }
 
 type stubRuntime struct {
-	events             chan agentruntime.RuntimeEvent
-	prepareInputs      []agentruntime.PrepareInput
-	prepareErr         error
-	preparedOutput     agentruntime.UserInput
-	runInputs          []agentruntime.UserInput
-	systemToolCalls    []agentruntime.SystemToolInput
-	systemToolRes      tools.ToolResult
-	systemToolErr      error
-	resolveCalls       []agentruntime.PermissionResolutionInput
-	resolveErr         error
-	cancelInvoked      bool
-	listSessions       []agentsession.Summary
-	listSessionsErr    error
-	loadSessions       map[string]agentsession.Session
-	loadSessionErr     error
-	logEntriesBySID    map[string][]agentruntime.SessionLogEntry
-	loadLogErr         error
-	saveLogErr         error
-	activateSkillCalls []struct {
+	events               chan agentruntime.RuntimeEvent
+	prepareInputs        []agentruntime.PrepareInput
+	prepareErr           error
+	preparedOutput       agentruntime.UserInput
+	runInputs            []agentruntime.UserInput
+	systemToolCalls      []agentruntime.SystemToolInput
+	systemToolRes        tools.ToolResult
+	systemToolErr        error
+	resolveCalls         []agentruntime.PermissionResolutionInput
+	resolveErr           error
+	resolveQuestionCalls []agentruntime.UserQuestionResolutionInput
+	resolveQuestionErr   error
+	cancelInvoked        bool
+	listSessions         []agentsession.Summary
+	listSessionsErr      error
+	loadSessions         map[string]agentsession.Session
+	loadSessionErr       error
+	logEntriesBySID      map[string][]agentruntime.SessionLogEntry
+	loadLogErr           error
+	saveLogErr           error
+	activateSkillCalls   []struct {
 		SessionID string
 		SkillID   string
 	}
@@ -226,6 +228,11 @@ func (s *stubRuntime) ExecuteSystemTool(ctx context.Context, input agentruntime.
 func (s *stubRuntime) ResolvePermission(ctx context.Context, input agentruntime.PermissionResolutionInput) error {
 	s.resolveCalls = append(s.resolveCalls, input)
 	return s.resolveErr
+}
+
+func (s *stubRuntime) ResolveUserQuestion(ctx context.Context, input agentruntime.UserQuestionResolutionInput) error {
+	s.resolveQuestionCalls = append(s.resolveQuestionCalls, input)
+	return s.resolveQuestionErr
 }
 
 func (s *stubRuntime) CancelActiveRun() bool {
