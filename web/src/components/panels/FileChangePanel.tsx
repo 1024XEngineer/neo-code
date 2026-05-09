@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type RefObject, type WheelEvent as ReactWheelEvent } from 'react'
 import { ChevronRight, Check, FileDiff, Loader2, PanelRightClose, RefreshCw, X } from 'lucide-react'
 import { useGatewayAPI } from '@/context/RuntimeProvider'
 import { useWorkspaceStore } from '@/stores/useWorkspaceStore'
@@ -160,18 +160,33 @@ function FileChangeItem({
   change,
   expanded,
   onToggle,
+  scrollContainerRef,
 }: {
   change: FileChange
   expanded: boolean
   onToggle: () => void
+  scrollContainerRef: RefObject<HTMLDivElement | null>
 }) {
   const acceptFileChange = useUIStore((state) => state.acceptFileChange)
   const meta = getChangeStatusMeta(change.status)
   const reviewed = change.status === 'accepted' || change.status === 'rejected'
   const displayHunks = getDisplayHunks(change)
 
+  // 将 diff 内层收到的纵向滚轮显式转发给外层列表，避免 hover 在 hunk 上时卡住整列滚动。
+  const handleHunkWheel = (event: ReactWheelEvent<HTMLDivElement>) => {
+    if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) {
+      return
+    }
+    const scrollContainer = scrollContainerRef.current
+    if (!scrollContainer) {
+      return
+    }
+    scrollContainer.scrollBy({ top: event.deltaY })
+    event.preventDefault()
+  }
+
   return (
-    <div style={styles.changeCard}>
+    <div data-testid={`change-card-${change.id}`} style={styles.changeCard}>
       <button style={styles.changeHeader} onClick={onToggle}>
         <span style={{ ...styles.chevron, transform: expanded ? 'rotate(90deg)' : 'rotate(0deg)' }}>
           <ChevronRight size={12} />
@@ -212,7 +227,11 @@ function FileChangeItem({
                   data-testid={`diff-hunk-${change.id}-${index}`}
                   style={styles.hunkBlock}
                 >
-                  <div data-testid={`diff-hunk-scroller-${change.id}-${index}`} style={styles.hunkScroller}>
+                  <div
+                    data-testid={`diff-hunk-scroller-${change.id}-${index}`}
+                    style={styles.hunkScroller}
+                    onWheel={handleHunkWheel}
+                  >
                     {hunk.lines.map((line, lineIndex) => (
                       <DiffLineView key={`${change.id}-${index}-${lineIndex}`} line={line} />
                     ))}
@@ -231,6 +250,7 @@ function ChangesView() {
   const fileChanges = useUIStore((state) => state.fileChanges)
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set())
   const counts = useMemo(() => getChangeCounts(fileChanges), [fileChanges])
+  const scrollAreaRef = useRef<HTMLDivElement | null>(null)
 
   const toggleExpanded = (id: string) => {
     setExpandedIds((current) => {
@@ -254,18 +274,21 @@ function ChangesView() {
         </div>
       </div>
 
-      <div data-testid="changes-scroll-area" style={styles.scrollArea}>
+      <div ref={scrollAreaRef} data-testid="changes-scroll-area" style={styles.scrollArea}>
         {fileChanges.length === 0 ? (
           <div style={styles.emptyState}>当前会话暂无文件变更</div>
         ) : (
-          fileChanges.map((change) => (
-            <FileChangeItem
-              key={change.id}
-              change={change}
-              expanded={expandedIds.has(change.id)}
-              onToggle={() => toggleExpanded(change.id)}
-            />
-          ))
+          <div data-testid="changes-content-stack" style={styles.contentStack}>
+            {fileChanges.map((change) => (
+              <FileChangeItem
+                key={change.id}
+                change={change}
+                expanded={expandedIds.has(change.id)}
+                onToggle={() => toggleExpanded(change.id)}
+                scrollContainerRef={scrollAreaRef}
+              />
+            ))}
+          </div>
         )}
       </div>
     </div>
@@ -420,7 +443,7 @@ function GitDiffView({
           <div style={styles.emptyState}>当前工作树没有未提交变更</div>
         )}
         {!loading && !error && summary.in_git_repo && summary.files.length > 0 && (
-          <>
+          <div data-testid="git-diff-content-stack" style={styles.contentStack}>
             {summary.files.map((file) => {
               const meta = gitDiffStatusMeta[file.status]
               return (
@@ -440,7 +463,7 @@ function GitDiffView({
               )
             })}
             {summary.truncated && <div style={styles.previewMeta}>列表已按上限截断，仅显示前 200 个变更文件。</div>}
-          </>
+          </div>
         )}
       </div>
     </div>
@@ -786,7 +809,7 @@ const styles: Record<string, CSSProperties> = {
   viewContainer: {
     display: 'flex',
     flexDirection: 'column',
-    height: '100%',
+    flex: 1,
     minHeight: 0,
     overflow: 'hidden',
   },
@@ -836,6 +859,8 @@ const styles: Record<string, CSSProperties> = {
     minHeight: 0,
     overflow: 'auto',
     padding: 12,
+  },
+  contentStack: {
     display: 'flex',
     flexDirection: 'column',
     gap: 10,
@@ -853,6 +878,7 @@ const styles: Record<string, CSSProperties> = {
     borderRadius: 10,
     overflow: 'hidden',
     background: 'var(--bg-primary)',
+    flexShrink: 0,
   },
   changeHeader: {
     width: '100%',
@@ -955,7 +981,8 @@ const styles: Record<string, CSSProperties> = {
   },
   hunkScroller: {
     overflowX: 'auto',
-    overflowY: 'visible',
+    overflowY: 'hidden',
+    maxWidth: '100%',
   },
   diffLine: {
     display: 'grid',
@@ -1038,6 +1065,7 @@ const styles: Record<string, CSSProperties> = {
     color: 'inherit',
     cursor: 'pointer',
     textAlign: 'left',
+    flexShrink: 0,
   },
   gitDiffBadge: {
     display: 'inline-flex',
