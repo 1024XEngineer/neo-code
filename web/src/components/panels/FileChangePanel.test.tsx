@@ -313,11 +313,13 @@ describe('FileChangePanel', () => {
     expect(screen.getByTestId('change-card-fc-4')).toHaveStyle({ flexShrink: '0' })
   })
 
-  it('keeps both fixed tabs visible', () => {
+  it('keeps both fixed tabs visible in the primary switcher and hides secondary chips by default', () => {
     render(<FileChangePanel />)
 
-    expect(screen.getByTestId(`preview-tab-${CHANGES_PREVIEW_TAB_ID}`)).toBeTruthy()
-    expect(screen.getByTestId(`preview-tab-${GIT_DIFF_PREVIEW_TAB_ID}`)).toBeTruthy()
+    const primaryTabs = screen.getByTestId('preview-primary-tabs')
+    expect(primaryTabs).toContainElement(screen.getByTestId(`preview-tab-${CHANGES_PREVIEW_TAB_ID}`))
+    expect(primaryTabs).toContainElement(screen.getByTestId(`preview-tab-${GIT_DIFF_PREVIEW_TAB_ID}`))
+    expect(screen.queryByTestId('preview-secondary-tabs')).toBeNull()
   })
 
   it('opens a git diff file tab from the fixed git diff view', async () => {
@@ -340,6 +342,122 @@ describe('FileChangePanel', () => {
     expect(preview).toHaveAttribute('data-path', 'src/main.go')
     expect(preview).toHaveAttribute('data-side-by-side', 'true')
     expect(preview.textContent).toContain('before::after')
+  })
+
+  it('renders file preview tabs in the secondary chip row instead of mixing them into the primary switcher', () => {
+    useUIStore.setState({
+      previewTabs: [
+        {
+          id: CHANGES_PREVIEW_TAB_ID,
+          kind: 'changes',
+          title: '鏂囦欢鍙樻洿',
+          closable: false,
+        },
+        {
+          id: GIT_DIFF_PREVIEW_TAB_ID,
+          kind: 'git-diff',
+          title: 'Git Diff',
+          closable: false,
+        },
+        {
+          id: 'file:cmd/neocode/main.go',
+          kind: 'file',
+          title: 'main.go',
+          closable: true,
+          path: 'cmd/neocode/main.go',
+          content: 'package main',
+          loading: false,
+          loaded: true,
+          error: '',
+          truncated: false,
+          is_binary: false,
+        },
+      ],
+      activePreviewTabId: 'file:cmd/neocode/main.go',
+    } as never)
+
+    render(<FileChangePanel />)
+
+    const primaryTabs = screen.getByTestId('preview-primary-tabs')
+    const secondaryTabs = screen.getByTestId('preview-secondary-tabs')
+    expect(primaryTabs).toContainElement(screen.getByTestId(`preview-tab-${CHANGES_PREVIEW_TAB_ID}`))
+    expect(primaryTabs).toContainElement(screen.getByTestId(`preview-tab-${GIT_DIFF_PREVIEW_TAB_ID}`))
+    expect(primaryTabs).not.toContainElement(screen.getByTestId('preview-tab-file:cmd/neocode/main.go'))
+    expect(secondaryTabs).toContainElement(screen.getByTestId('preview-tab-file:cmd/neocode/main.go'))
+  })
+
+  it('marks the fixed git diff switcher as context-active while a git diff file chip is selected', async () => {
+    render(<FileChangePanel />)
+
+    fireEvent.click(screen.getByTestId(`preview-tab-${GIT_DIFF_PREVIEW_TAB_ID}`))
+    fireEvent.click(await screen.findByTestId('git-diff-entry-src/main.go'))
+
+    await waitFor(() => {
+      expect(mockGatewayAPI.readGitDiffFile).toHaveBeenCalledWith({ path: 'src/main.go' })
+    })
+
+    expect(screen.getByTestId(`preview-tab-${GIT_DIFF_PREVIEW_TAB_ID}`)).toHaveAttribute('data-context-active', 'true')
+    expect(screen.getByTestId('preview-tab-git-diff-file:src/main.go')).toHaveAttribute('aria-selected', 'true')
+  })
+
+  it('falls back to the fixed git diff tab after closing the active git diff file chip', async () => {
+    render(<FileChangePanel />)
+
+    fireEvent.click(screen.getByTestId(`preview-tab-${GIT_DIFF_PREVIEW_TAB_ID}`))
+    fireEvent.click(await screen.findByTestId('git-diff-entry-src/main.go'))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('preview-tab-git-diff-file:src/main.go')).toBeTruthy()
+    })
+
+    fireEvent.click(screen.getByTestId('preview-tab-close-git-diff-file:src/main.go'))
+
+    expect(useUIStore.getState().activePreviewTabId).toBe(GIT_DIFF_PREVIEW_TAB_ID)
+    expect(screen.queryByTestId('preview-tab-git-diff-file:src/main.go')).toBeNull()
+  })
+
+  it('keeps keyboard roving focus across both fixed tabs and file chips', () => {
+    useUIStore.setState({
+      previewTabs: [
+        {
+          id: CHANGES_PREVIEW_TAB_ID,
+          kind: 'changes',
+          title: '鏂囦欢鍙樻洿',
+          closable: false,
+        },
+        {
+          id: GIT_DIFF_PREVIEW_TAB_ID,
+          kind: 'git-diff',
+          title: 'Git Diff',
+          closable: false,
+        },
+        {
+          id: 'file:cmd/neocode/main.go',
+          kind: 'file',
+          title: 'main.go',
+          closable: true,
+          path: 'cmd/neocode/main.go',
+          content: 'package main',
+          loading: false,
+          loaded: true,
+          error: '',
+          truncated: false,
+          is_binary: false,
+        },
+      ],
+      activePreviewTabId: CHANGES_PREVIEW_TAB_ID,
+    } as never)
+
+    render(<FileChangePanel />)
+
+    const changesTab = screen.getByTestId(`preview-tab-${CHANGES_PREVIEW_TAB_ID}`)
+    changesTab.focus()
+    fireEvent.keyDown(changesTab, { key: 'ArrowRight' })
+    expect(useUIStore.getState().activePreviewTabId).toBe(GIT_DIFF_PREVIEW_TAB_ID)
+
+    const gitDiffTab = screen.getByTestId(`preview-tab-${GIT_DIFF_PREVIEW_TAB_ID}`)
+    fireEvent.keyDown(gitDiffTab, { key: 'ArrowRight' })
+    expect(useUIStore.getState().activePreviewTabId).toBe('file:cmd/neocode/main.go')
   })
 
   it('opens expanded nested untracked files from the git diff list', async () => {
