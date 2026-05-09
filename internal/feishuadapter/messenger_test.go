@@ -393,3 +393,78 @@ func TestBuildUserQuestionCardAndResolvedCard(t *testing.T) {
 		t.Fatalf("resolved header template = %v, want yellow", header["template"])
 	}
 }
+
+func TestUpdatePermissionCardAndResolvedCardHelpers(t *testing.T) {
+	client := &queuedHTTPClient{
+		responses: []queuedHTTPResponse{
+			{status: 200, body: `{"code":0,"msg":"ok","tenant_access_token":"token","expire":7200}`},
+			{status: 200, body: `{"code":0,"msg":"ok","data":{"message_id":"updated"}}`},
+		},
+	}
+	messenger := NewFeishuMessenger("app", "secret", client)
+	err := messenger.UpdatePermissionCard(context.Background(), "perm-card", ResolvedPermissionCardPayload{
+		RequestID: "perm-1",
+		ToolName:  "bash",
+		Operation: "run",
+		Target:    "deploy.sh",
+		Message:   "需要执行部署命令",
+		Approved:  false,
+	})
+	if err != nil {
+		t.Fatalf("update permission card: %v", err)
+	}
+	if len(client.requests) != 2 {
+		t.Fatalf("request count = %d, want 2", len(client.requests))
+	}
+	if client.requests[1].Method != http.MethodPatch {
+		t.Fatalf("update method = %s, want PATCH", client.requests[1].Method)
+	}
+	content := string(client.bodies[1])
+	if !strings.Contains(content, "已拒绝") || !strings.Contains(content, "deploy.sh") {
+		t.Fatalf("update body = %s, want rejected summary and target", content)
+	}
+
+	approved := buildResolvedPermissionCard(ResolvedPermissionCardPayload{
+		ToolName:  "bash",
+		Operation: "run",
+		Approved:  true,
+	})
+	approvedHeader, _ := approved["header"].(map[string]any)
+	if approvedHeader["template"] != "green" {
+		t.Fatalf("approved header template = %v, want green", approvedHeader["template"])
+	}
+	rejected := buildResolvedPermissionCard(ResolvedPermissionCardPayload{
+		ToolName: "bash",
+		Approved: false,
+	})
+	rejectedHeader, _ := rejected["header"].(map[string]any)
+	if rejectedHeader["template"] != "red" {
+		t.Fatalf("rejected header template = %v, want red", rejectedHeader["template"])
+	}
+
+	approvalSummary := buildApprovalRecordsElement([]ApprovalRecord{
+		{ToolName: "bash", Decision: "allow_once"},
+		{ToolName: "git", Decision: "reject"},
+	}, 2)
+	rawSummary, _ := json.Marshal(approvalSummary)
+	summaryText := string(rawSummary)
+	if !strings.Contains(summaryText, "1 通过") || !strings.Contains(summaryText, "1 拒绝") || !strings.Contains(summaryText, "2 等待") {
+		t.Fatalf("approval summary = %s, want approval counts", summaryText)
+	}
+	if !strings.Contains(summaryText, "bash") || !strings.Contains(summaryText, "git") {
+		t.Fatalf("approval summary = %s, want tool details", summaryText)
+	}
+
+	timeout := buildResolvedUserQuestionCard(ResolvedUserQuestionCardPayload{
+		Status:  "timeout",
+		Summary: "问题等待超时",
+	})
+	timeoutHeader, _ := timeout["header"].(map[string]any)
+	if timeoutHeader["template"] != "red" {
+		t.Fatalf("timeout header template = %v, want red", timeoutHeader["template"])
+	}
+	title, _ := timeoutHeader["title"].(map[string]string)
+	if title["content"] != "用户问题" {
+		t.Fatalf("timeout title = %#v, want default title", timeoutHeader["title"])
+	}
+}
