@@ -137,7 +137,7 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 		}
 		if statePtr != nil {
 			runEndCtx := context.Background()
-			s.recordRunEndWorkspaceState(runEndCtx, statePtr.session.ID, statePtr.session.Workdir, statePtr.lastEndOfTurnCheckpointID)
+			s.recordRunEndWorkspaceState(runEndCtx, statePtr.session.ID, effectiveWorkdirForCheckpointState(statePtr, statePtr.session), statePtr.lastEndOfTurnCheckpointID)
 			s.clearRunCheckpointCaches(statePtr.session.ID, statePtr.runID)
 		}
 		s.emitRunTermination(runCtx, input, statePtr, err)
@@ -175,6 +175,8 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 	}
 
 	state := newRunState(input.RunID, session)
+	effectiveWorkdir := agentsession.EffectiveWorkdir(state.session.Workdir, initialCfg.Workdir)
+	state.effectiveWorkdir = effectiveWorkdir
 	state.runToken = runToken
 	state.thinkingOverride = cloneThinkingOverride(input.ThinkingOverride)
 	state.disableTools = input.DisableTools
@@ -195,7 +197,6 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 		return s.handleRunError(err)
 	}
 
-	effectiveWorkdir := agentsession.EffectiveWorkdir(state.session.Workdir, initialCfg.Workdir)
 	runBaselineCheckpointID := ""
 	if drifted, driftDiff := s.recordRunStartFingerprint(ctx, state.session.ID, state.runID, effectiveWorkdir); drifted {
 		if checkpointID, cpErr := s.createPreRunDriftRebaseCheckpoint(ctx, &state, driftDiff); cpErr != nil {

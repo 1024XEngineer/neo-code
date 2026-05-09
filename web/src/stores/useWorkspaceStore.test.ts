@@ -42,7 +42,7 @@ describe('useWorkspaceStore', () => {
 	})
 
 	it('deduplicates concurrent fetchWorkspaces calls', async () => {
-		let resolveList: ((value: any) => void) | null = null
+		let resolveList!: (value: any) => void
 		const gatewayAPI = {
 			listWorkspaces: vi.fn(() => new Promise((resolve) => { resolveList = resolve })),
 		} as any
@@ -51,7 +51,7 @@ describe('useWorkspaceStore', () => {
 		const p2 = useWorkspaceStore.getState().fetchWorkspaces(gatewayAPI)
 		expect(gatewayAPI.listWorkspaces).toHaveBeenCalledTimes(1)
 
-		resolveList?.({
+		resolveList({
 			payload: {
 				workspaces: [{ hash: 'w1', path: '/a', name: 'A', created_at: '1', updated_at: '2' }],
 			},

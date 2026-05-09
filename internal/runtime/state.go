@@ -17,6 +17,7 @@ type runState struct {
 	runID                          string
 	runToken                       uint64
 	session                        agentsession.Session
+	effectiveWorkdir               string
 	compactCount                   int
 	reactiveCompactAttempts        int
 	rememberedThisRun              bool

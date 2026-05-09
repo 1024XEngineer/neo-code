@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen } from '@testing-library/react'
+import type { ReactElement } from 'react'
 import { ErrorBoundary } from './ErrorBoundary'
 
-function Crash() {
+function Crash(): ReactElement {
 	throw new Error('boom')
 }
 

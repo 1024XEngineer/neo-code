@@ -352,6 +352,7 @@ function refreshSessionAfterCheckpointRestoreEvent(
   }
 
   const requestId = ++_latestRestoreSyncRequestId
+  _latestRunDiffRequestId += 1
   const reloadSeq = beginCheckpointRestoreReloadSeq()
   _firstTouchRollbackCheckpointByPath = new Map<string, string>()
   useUIStore.getState().setRestoringCheckpoint(true)

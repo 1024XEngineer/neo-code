@@ -516,6 +516,52 @@ describe('eventBridge', () => {
     expect(useUIStore.getState().fileChanges).toHaveLength(0)
   })
 
+  it('CheckpointRestored invalidates in-flight run-scoped file change refreshes', async () => {
+    let resolveDiff: ((value: unknown) => void) | undefined
+    const checkpointDiff = vi.fn(() => new Promise((resolve) => {
+      resolveDiff = resolve
+    }))
+    const loadSession = vi.fn(async () => ({
+      payload: {
+        id: 'sess-1',
+        agent_mode: 'build',
+        messages: [{ role: 'assistant', content: 'after restore' }],
+      },
+    }))
+    const api = createMockGatewayAPI({ checkpointDiff, loadSession })
+    useSessionStore.setState({ currentSessionId: 'sess-1' } as any)
+    useGatewayStore.setState({ currentRunId: 'run-1' } as any)
+
+    handleGatewayEvent({
+      type: EventType.CheckpointCreated,
+      payload: { payload: { runtime_event_type: EventType.CheckpointCreated, payload: { checkpoint_id: 'cp-end', code_checkpoint_ref: 'c', session_checkpoint_ref: 's', commit_hash: '', reason: 'end_of_turn' } } },
+      session_id: 'sess-1',
+      run_id: 'run-1',
+    }, api)
+    expect(checkpointDiff).toHaveBeenCalled()
+
+    handleGatewayEvent({
+      type: EventType.CheckpointRestored,
+      payload: { payload: { runtime_event_type: EventType.CheckpointRestored, payload: { checkpoint_id: 'cp-restored', session_id: 'sess-1', guard_checkpoint_id: 'guard-1' } } },
+      session_id: 'sess-1',
+      run_id: 'run-restore',
+    }, api)
+    await Promise.resolve()
+    await Promise.resolve()
+
+    resolveDiff?.({
+      payload: {
+        checkpoint_id: 'cp-end',
+        files: { modified: ['stale.txt'] },
+        patch: '--- a/stale.txt\n+++ b/stale.txt\n@@ -1 +1 @@\n-old\n+new\n',
+      },
+    })
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(useUIStore.getState().fileChanges).toHaveLength(0)
+  })
+
   it('CheckpointRestored does not reload when event session differs from current session', async () => {
     const loadSession = vi.fn(async () => ({ payload: { id: 'sess-other', messages: [] } }))
     const api = createMockGatewayAPI({ loadSession })

@@ -54,9 +54,9 @@ func (s *Service) createPreRunDriftRebaseCheckpoint(
 	state.mu.Lock()
 	session := state.session
 	runID := state.runID
+	workdir := effectiveWorkdirForCheckpointState(state, session)
 	state.mu.Unlock()
 
-	workdir := strings.TrimSpace(session.Workdir)
 	if workdir == "" {
 		return "", fmt.Errorf("checkpoint: workdir is empty when creating drift rebase checkpoint")
 	}
@@ -165,7 +165,7 @@ func (s *Service) createCheckpointRecord(
 		return fmt.Errorf("checkpoint: marshal messages: %w", err)
 	}
 
-	effectiveWorkdir := strings.TrimSpace(session.Workdir)
+	effectiveWorkdir := effectiveWorkdirForCheckpointState(state, session)
 	now := time.Now()
 	ref := checkpoint.RefForPerEditCheckpoint(checkpointID)
 
@@ -229,12 +229,13 @@ func (s *Service) createSessionOnlyCheckpoint(
 		return fmt.Errorf("checkpoint: marshal session-only messages: %w", err)
 	}
 
+	effectiveWorkdir := effectiveWorkdirForCheckpointState(state, session)
 	record := agentsession.CheckpointRecord{
 		CheckpointID: checkpointID,
-		WorkspaceKey: agentsession.WorkspacePathKey(session.Workdir),
+		WorkspaceKey: agentsession.WorkspacePathKey(effectiveWorkdir),
 		SessionID:    session.ID,
 		RunID:        runID,
-		Workdir:      session.Workdir,
+		Workdir:      effectiveWorkdir,
 		CreatedAt:    now,
 		Reason:       reason,
 		Restorable:   true,
@@ -293,4 +294,14 @@ func (s *Service) findPreviousEndOfTurnCheckpoint(ctx context.Context, sessionID
 		return checkpoint.PerEditCheckpointIDFromRef(r.CodeCheckpointRef)
 	}
 	return ""
+}
+
+// effectiveWorkdirForCheckpointState 返回 checkpoint 流程应使用的工作目录，优先使用本次 run 已归一化的目录。
+func effectiveWorkdirForCheckpointState(state *runState, session agentsession.Session) string {
+	if state != nil {
+		if workdir := strings.TrimSpace(state.effectiveWorkdir); workdir != "" {
+			return workdir
+		}
+	}
+	return strings.TrimSpace(session.Workdir)
 }

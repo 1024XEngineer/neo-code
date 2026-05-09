@@ -249,6 +249,78 @@ func TestCreatePreRunDriftRebaseCheckpoint_UsesDriftReasonAndPerEditRef(t *testi
 	}
 }
 
+func TestCreatePreRunDriftRebaseCheckpoint_UsesEffectiveWorkdirWhenSessionWorkdirEmpty(t *testing.T) {
+	fixture := newRuntimeCheckpointFixture(t)
+
+	absPath := filepath.Join(fixture.workdir, "effective.txt")
+	if err := os.WriteFile(absPath, []byte("effective"), 0o644); err != nil {
+		t.Fatalf("WriteFile(effective) error = %v", err)
+	}
+
+	session := fixture.session
+	session.Workdir = ""
+	state := newRunState("run-effective-workdir", session)
+	state.effectiveWorkdir = fixture.workdir
+	checkpointID, err := fixture.service.createPreRunDriftRebaseCheckpoint(context.Background(), &state, repository.FingerprintDiff{
+		Added: []string{"effective.txt"},
+	})
+	if err != nil {
+		t.Fatalf("createPreRunDriftRebaseCheckpoint() error = %v", err)
+	}
+	if checkpointID == "" {
+		t.Fatal("expected non-empty drift baseline checkpoint id")
+	}
+
+	records, err := fixture.checkpointStore.ListCheckpoints(context.Background(), fixture.session.ID, checkpoint.ListCheckpointOpts{})
+	if err != nil {
+		t.Fatalf("ListCheckpoints() error = %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("expected 1 checkpoint, got %d", len(records))
+	}
+	if records[0].Workdir != fixture.workdir {
+		t.Fatalf("record workdir = %q, want %q", records[0].Workdir, fixture.workdir)
+	}
+	if records[0].WorkspaceKey != agentsession.WorkspacePathKey(fixture.workdir) {
+		t.Fatalf("workspace key = %q, want %q", records[0].WorkspaceKey, agentsession.WorkspacePathKey(fixture.workdir))
+	}
+}
+
+func TestRecordRunEndWorkspaceStateUsesEffectiveWorkdirWhenSessionWorkdirEmpty(t *testing.T) {
+	fixture := newRuntimeCheckpointFixture(t)
+
+	absPath := filepath.Join(fixture.workdir, "run-end.txt")
+	if err := os.WriteFile(absPath, []byte("run end"), 0o644); err != nil {
+		t.Fatalf("WriteFile(run-end) error = %v", err)
+	}
+
+	session := fixture.session
+	session.Workdir = ""
+	state := newRunState("run-end-effective-workdir", session)
+	state.effectiveWorkdir = fixture.workdir
+	fixture.service.recordRunEndWorkspaceState(
+		context.Background(),
+		session.ID,
+		effectiveWorkdirForCheckpointState(&state, session),
+		"cp-current-effective",
+	)
+
+	workspaceKey := agentsession.WorkspacePathKey(fixture.workdir)
+	loaded, ok, err := fixture.checkpointStore.LoadWorkspaceCheckpointState(context.Background(), workspaceKey)
+	if err != nil {
+		t.Fatalf("LoadWorkspaceCheckpointState() error = %v", err)
+	}
+	if !ok {
+		t.Fatal("expected workspace checkpoint state to be persisted")
+	}
+	if loaded.CurrentCheckpointID != "cp-current-effective" {
+		t.Fatalf("current checkpoint id = %q, want cp-current-effective", loaded.CurrentCheckpointID)
+	}
+	if loaded.WorkspaceKey != workspaceKey {
+		t.Fatalf("workspace key = %q, want %q", loaded.WorkspaceKey, workspaceKey)
+	}
+}
+
 func TestCheckpointDiff_ScopeRun_RecreatedFileAfterDriftBaselineIsAdded(t *testing.T) {
 	fixture := newRuntimeCheckpointFixture(t)
 	state := newRunState("run-drift-add", fixture.session)
