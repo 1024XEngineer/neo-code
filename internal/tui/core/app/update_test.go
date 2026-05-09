@@ -3355,6 +3355,77 @@ func TestHandleImmediateSlashCommandCompactBranches(t *testing.T) {
 	}
 }
 
+func TestHandleImmediateSlashCommandWebBranches(t *testing.T) {
+	app, _ := newTestApp(t)
+
+	handled, cmd := app.handleImmediateSlashCommand("/web now")
+	if !handled || cmd != nil {
+		t.Fatalf("expected /web with args to be handled without cmd")
+	}
+	if !strings.Contains(app.state.StatusText, "usage:") {
+		t.Fatalf("expected usage error for /web with args")
+	}
+
+	prevStart := startWebUIProcess
+	defer func() {
+		startWebUIProcess = prevStart
+	}()
+
+	capturedWorkdir := ""
+	startWebUIProcess = func(workdir string) error {
+		capturedWorkdir = workdir
+		return nil
+	}
+
+	app.state.CurrentWorkdir = t.TempDir()
+	handled, cmd = app.handleImmediateSlashCommand("/web")
+	if !handled || cmd == nil {
+		t.Fatalf("expected /web to return command")
+	}
+
+	msg := cmd()
+	result, ok := msg.(localCommandResultMsg)
+	if !ok {
+		t.Fatalf("expected localCommandResultMsg, got %T", msg)
+	}
+	if result.Err != nil {
+		t.Fatalf("expected nil error, got %v", result.Err)
+	}
+	if !strings.Contains(result.Notice, "Web UI startup requested") {
+		t.Fatalf("expected web startup notice, got %q", result.Notice)
+	}
+	if capturedWorkdir != app.state.CurrentWorkdir {
+		t.Fatalf("captured workdir = %q, want %q", capturedWorkdir, app.state.CurrentWorkdir)
+	}
+}
+
+func TestHandleImmediateSlashCommandWebStartError(t *testing.T) {
+	app, _ := newTestApp(t)
+
+	prevStart := startWebUIProcess
+	defer func() {
+		startWebUIProcess = prevStart
+	}()
+	startWebUIProcess = func(workdir string) error {
+		_ = workdir
+		return errors.New("web start failed")
+	}
+
+	handled, cmd := app.handleImmediateSlashCommand("/web")
+	if !handled || cmd == nil {
+		t.Fatalf("expected /web to return command")
+	}
+
+	msg := cmd()
+	result, ok := msg.(localCommandResultMsg)
+	if !ok {
+		t.Fatalf("expected localCommandResultMsg, got %T", msg)
+	}
+	if result.Err == nil || !strings.Contains(result.Err.Error(), "web start failed") {
+		t.Fatalf("expected web start error, got %v", result.Err)
+	}
+}
+
 func TestHandleMemoCommandsRouteToSystemTools(t *testing.T) {
 	app, runtime := newTestApp(t)
 

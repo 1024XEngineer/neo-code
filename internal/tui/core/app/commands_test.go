@@ -23,6 +23,7 @@ func TestBuiltinSlashCommands(t *testing.T) {
 	foundSkills := false
 	foundSkillUse := false
 	foundCheckpoint := false
+	foundWeb := false
 	foundStatus := false
 	for _, cmd := range builtinSlashCommands {
 		if cmd.Usage == slashUsageHelp {
@@ -39,6 +40,9 @@ func TestBuiltinSlashCommands(t *testing.T) {
 		}
 		if cmd.Usage == slashUsageCheckpoint {
 			foundCheckpoint = true
+		}
+		if cmd.Usage == slashUsageWeb {
+			foundWeb = true
 		}
 		if strings.EqualFold(cmd.Usage, "/status") {
 			foundStatus = true
@@ -58,6 +62,9 @@ func TestBuiltinSlashCommands(t *testing.T) {
 	}
 	if !foundCheckpoint {
 		t.Error("expected to find /checkpoint command")
+	}
+	if !foundWeb {
+		t.Error("expected to find /web command")
 	}
 	if foundStatus {
 		t.Error("did not expect /status command in builtin slash commands")
