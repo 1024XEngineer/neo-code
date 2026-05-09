@@ -774,7 +774,8 @@ html, body, #root {
 .markdown-streamdown [data-streamdown="code-block-header"] span {
   font-family: var(--font-mono);
   font-size: 11px;
-  color: var(--text-tertiary);
+  color: var(--text-secondary);
+  font-weight: 600;
   text-transform: lowercase;
 }
 .markdown-streamdown [data-streamdown="code-block"] pre {
