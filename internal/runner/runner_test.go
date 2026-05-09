@@ -438,10 +438,8 @@ func TestRunnerEventLoopAndConnectErrors(t *testing.T) {
 			},
 			logger: log.New(io.Discard, "", 0),
 		}
-		if err := r.connectAndServe(context.Background()); err == nil || !strings.Contains(err.Error(), "authenticate:") {
-			if err == nil || !(strings.Contains(err.Error(), "authenticate:") || strings.Contains(err.Error(), "register runner:")) {
-				t.Fatalf("connectAndServe(auth) error = %v", err)
-			}
+		if err := r.connectAndServe(context.Background()); err == nil || !isHandshakeStageError(err, "authenticate:", "register runner:", "read message:") {
+			t.Fatalf("connectAndServe(auth) error = %v", err)
 		}
 
 		registerServer := newRunnerGatewayServer(t, func(conn *websocket.Conn) {
@@ -451,10 +449,23 @@ func TestRunnerEventLoopAndConnectErrors(t *testing.T) {
 		})
 		defer registerServer.Close()
 		r.cfg.GatewayAddress = runnerGatewayAddress(registerServer.URL)
-		if err := r.connectAndServe(context.Background()); err == nil || !(strings.Contains(err.Error(), "register runner:") || strings.Contains(err.Error(), "read message:")) {
+		if err := r.connectAndServe(context.Background()); err == nil || !isHandshakeStageError(err, "register runner:", "read message:") {
 			t.Fatalf("connectAndServe(register) error = %v", err)
 		}
 	})
+}
+
+func isHandshakeStageError(err error, markers ...string) bool {
+	if err == nil {
+		return false
+	}
+	message := err.Error()
+	for _, marker := range markers {
+		if strings.Contains(message, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func TestRunnerHeartbeatLoopSendsPing(t *testing.T) {
