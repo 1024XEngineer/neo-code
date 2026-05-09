@@ -376,7 +376,14 @@ func TestRepositoryHelpersAndGitParsing(t *testing.T) {
 		workdir := t.TempDir()
 		mustWriteRepositoryFile(t, filepath.Join(workdir, "pkg", "a.go"), "package pkg\n\nconst Name = \"Widget\"\n")
 		mustWriteRepositoryFile(t, filepath.Join(workdir, "pkg", "b.txt"), "Widget appears twice\nWidget\n")
-		mustWriteRepositoryFile(t, filepath.Join(workdir, "node_modules", "ignored.txt"), "ignored")
+		skippedDirs := []string{
+			".cache", ".tmp", "tmp", "build", "dist", "out", "target", "coverage",
+			".next", ".nuxt", ".turbo", ".parcel-cache", ".vite", "vendor", "bin", "obj",
+			"node_modules",
+		}
+		for _, dir := range skippedDirs {
+			mustWriteRepositoryFile(t, filepath.Join(workdir, dir, "ignored.txt"), "ignored")
+		}
 
 		if _, _, _, err := normalizeRetrievalQuery(workdir, RetrievalQuery{Mode: RetrievalModePath, Value: " "}); err == nil {
 			t.Fatal("expected empty query error")
@@ -417,14 +424,20 @@ func TestRepositoryHelpersAndGitParsing(t *testing.T) {
 
 		var visited []string
 		err = walkWorkspaceFiles(context.Background(), workdir, workdir, func(path string) error {
-			visited = append(visited, filepath.Base(path))
+			rel, relErr := filepath.Rel(workdir, path)
+			if relErr != nil {
+				return relErr
+			}
+			visited = append(visited, filepath.Clean(rel))
 			return nil
 		})
 		if err != nil {
 			t.Fatalf("walkWorkspaceFiles() error = %v", err)
 		}
-		if slices.Contains(visited, "ignored.txt") {
-			t.Fatalf("expected node_modules to be skipped, got %v", visited)
+		for _, dir := range skippedDirs {
+			if slices.Contains(visited, filepath.Clean(filepath.Join(dir, "ignored.txt"))) {
+				t.Fatalf("expected %s to be skipped, got %v", dir, visited)
+			}
 		}
 		stopErr := errors.New("stop")
 		if err := walkWorkspaceFiles(context.Background(), workdir, workdir, func(path string) error { return stopErr }); !errors.Is(err, stopErr) {
@@ -508,6 +521,8 @@ func TestRepositoryReadSearchAndServiceEntrypoints(t *testing.T) {
 	mustWriteRepositoryFile(t, filepath.Join(workdir, "notes.py"), "def py_symbol():\n    return 1\n")
 	mustWriteRepositoryFile(t, filepath.Join(workdir, ".env"), "SECRET=1\n")
 	mustWriteRepositoryFile(t, filepath.Join(workdir, "pkg", "bin.dat"), string([]byte{0x00, 0x01, 0x02}))
+	mustWriteRepositoryFile(t, filepath.Join(workdir, ".cache", "hidden.txt"), "hidden_alpha\n")
+	mustWriteRepositoryFile(t, filepath.Join(workdir, "build", "hidden.go"), "package build\n\nfunc HiddenWidget() {}\n")
 
 	service := NewService()
 
@@ -539,6 +554,13 @@ func TestRepositoryReadSearchAndServiceEntrypoints(t *testing.T) {
 	if len(textResult.Hits) != 1 || !textResult.Truncated || textResult.TotalCount == 0 {
 		t.Fatalf("unexpected text search result: %+v", textResult)
 	}
+	skippedTextResult, err := service.SearchText(context.Background(), workdir, "hidden_alpha", SearchOptions{Limit: 10})
+	if err != nil {
+		t.Fatalf("SearchText(skipped) error = %v", err)
+	}
+	if len(skippedTextResult.Hits) != 0 {
+		t.Fatalf("expected skipped directory text to be ignored, got %+v", skippedTextResult)
+	}
 
 	symbolResult, err := service.SearchSymbol(context.Background(), workdir, "BuildWidget", SearchOptions{Limit: 10})
 	if err != nil {
@@ -562,6 +584,13 @@ func TestRepositoryReadSearchAndServiceEntrypoints(t *testing.T) {
 	}
 	if len(fallbackResult.Hits) == 0 || fallbackResult.Hits[0].Kind != "reference" {
 		t.Fatalf("unexpected fallback symbol result: %+v", fallbackResult)
+	}
+	skippedSymbolResult, err := service.SearchSymbol(context.Background(), workdir, "HiddenWidget", SearchOptions{Limit: 10})
+	if err != nil {
+		t.Fatalf("SearchSymbol(skipped) error = %v", err)
+	}
+	if len(skippedSymbolResult.Hits) != 0 {
+		t.Fatalf("expected skipped directory symbol to be ignored, got %+v", skippedSymbolResult)
 	}
 
 	if got := extractGoSignature("func BuildWidget(\n\tname string,\n) string {\n\treturn name\n}\n", 1); !strings.Contains(got, "name string") {

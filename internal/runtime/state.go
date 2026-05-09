@@ -43,6 +43,7 @@ type runState struct {
 	hasUnknownUsage               bool
 	completion                    controlplane.CompletionState
 	progress                      controlplane.ProgressState
+	toolTimeoutBackoff            map[string]int
 	lastEndOfTurnCheckpointID     string
 	baselineCheckpointID          string
 	hookAnnotations               []string
@@ -65,6 +66,7 @@ func newRunState(runID string, session agentsession.Session) runState {
 		reportedMissingSkills: make(map[string]struct{}),
 		factsCollector:        runtimefacts.NewCollector(),
 		hookNotificationSeen:  make(map[string]time.Time),
+		toolTimeoutBackoff:    make(map[string]int),
 	}
 }
 

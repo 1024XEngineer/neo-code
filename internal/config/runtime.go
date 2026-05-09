@@ -8,7 +8,7 @@ import (
 )
 
 const (
-	DefaultMaxNoProgressStreak  = 5
+	DefaultMaxNoProgressStreak  = 6
 	DefaultMaxRepeatCycleStreak = 3
 	DefaultMaxTurns             = 90
 )

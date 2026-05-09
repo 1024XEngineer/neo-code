@@ -57,8 +57,10 @@ const (
 	minInlineSubAgentToolTimeout     = 30 * time.Second
 	defaultDiagnoseToolTimeout       = 60 * time.Second
 	defaultPermissionToolTimeout     = 20 * time.Second
+	defaultCodebaseSearchToolTimeout = 60 * time.Second
 	defaultAskUserToolTimeout        = 5 * time.Minute
 	maxAskUserToolTimeout            = time.Hour
+	maxAdaptiveToolTimeout           = 160 * time.Second
 )
 
 // permissionExecutionInput 汇总一次工具执行与审批协作所需的上下文。
@@ -168,24 +170,28 @@ func (s *Service) executeToolCallWithPermission(ctx context.Context, input permi
 	}
 	callInput.SubAgentInvoker = newRuntimeSubAgentInvoker(s, input.RunID, input.SessionID, input.AgentID, input.Workdir)
 
-	effectiveTimeout := resolveToolExecutionTimeout(input.Call, input.ToolTimeout)
+	baseTimeout := resolveToolExecutionTimeout(input.Call, input.ToolTimeout)
+	effectiveTimeout := resolveAdaptiveToolExecutionTimeout(input.State, input.Call, baseTimeout)
 	runCtx, cancel := context.WithTimeout(ctx, effectiveTimeout)
 	defer cancel()
 
 	if s.runnerToolDispatcher != nil {
 		result, handled, dispatchErr := s.runnerToolDispatcher.TryDispatch(runCtx, input.SessionID, input.RunID, callInput)
 		if handled {
+			recordAdaptiveToolTimeoutResult(input.State, input.Call, result, dispatchErr)
 			return result, dispatchErr
 		}
 	}
 
 	result, execErr := s.toolManager.Execute(runCtx, callInput)
 	if execErr == nil {
+		recordAdaptiveToolTimeoutResult(input.State, input.Call, result, nil)
 		return result, nil
 	}
 
 	var permissionErr *tools.PermissionDecisionError
 	if !errors.As(execErr, &permissionErr) {
+		recordAdaptiveToolTimeoutResult(input.State, input.Call, result, execErr)
 		return result, execErr
 	}
 
@@ -220,6 +226,7 @@ func (s *Service) executeToolCallWithPermission(ctx context.Context, input permi
 			Reason:     reason,
 			Enforced:   true,
 		})
+		recordAdaptiveToolTimeoutResult(input.State, input.Call, blockedResult, errors.New(reason))
 		return blockedResult, errors.New(reason)
 	}
 
@@ -233,6 +240,7 @@ func (s *Service) executeToolCallWithPermission(ctx context.Context, input permi
 			permissionResolutionStatus(permissionErr.Decision()),
 			permissionErr.RememberScope(),
 		)
+		recordAdaptiveToolTimeoutResult(input.State, input.Call, result, execErr)
 		return result, execErr
 	}
 
@@ -296,6 +304,7 @@ func (s *Service) executeToolCallWithPermission(ctx context.Context, input permi
 	retryCtx, retryCancel := context.WithTimeout(ctx, effectiveTimeout)
 	retryResult, retryErr := s.toolManager.Execute(retryCtx, callInput)
 	retryCancel()
+	recordAdaptiveToolTimeoutResult(input.State, input.Call, retryResult, retryErr)
 	return retryResult, retryErr
 }
 
@@ -309,6 +318,12 @@ func resolveToolExecutionTimeout(call providertypes.ToolCall, fallback time.Dura
 	if strings.EqualFold(name, tools.ToolNameDiagnose) {
 		if base < defaultDiagnoseToolTimeout {
 			return defaultDiagnoseToolTimeout
+		}
+		return base
+	}
+	if isCodebaseSearchTool(name) {
+		if base < defaultCodebaseSearchToolTimeout {
+			return defaultCodebaseSearchToolTimeout
 		}
 		return base
 	}
@@ -339,6 +354,95 @@ func resolveToolExecutionTimeout(call providertypes.ToolCall, fallback time.Dura
 		return requested
 	}
 	return base
+}
+
+// isCodebaseSearchTool 识别会做代码库遍历的搜索工具，用于给首轮执行预留更合理的时间。
+func isCodebaseSearchTool(name string) bool {
+	return strings.EqualFold(name, tools.ToolNameCodebaseSearchText) ||
+		strings.EqualFold(name, tools.ToolNameCodebaseSearchSymbol)
+}
+
+// resolveAdaptiveToolExecutionTimeout 根据同一 Run 内同签名工具的 timeout 次数指数放大超时。
+func resolveAdaptiveToolExecutionTimeout(state *runState, call providertypes.ToolCall, base time.Duration) time.Duration {
+	if state == nil || !supportsAdaptiveToolTimeout(call.Name) {
+		return base
+	}
+	key := toolTimeoutBackoffKey(call)
+	if key == "" {
+		return base
+	}
+	state.mu.Lock()
+	attempts := state.toolTimeoutBackoff[key]
+	state.mu.Unlock()
+	timeout := base
+	for attempts > 0 && timeout < maxAdaptiveToolTimeout {
+		timeout *= 2
+		if timeout > maxAdaptiveToolTimeout {
+			timeout = maxAdaptiveToolTimeout
+		}
+		attempts--
+	}
+	return timeout
+}
+
+// recordAdaptiveToolTimeoutResult 记录工具 timeout 结果；成功或非 timeout 错误会清除该签名的倍增状态。
+func recordAdaptiveToolTimeoutResult(state *runState, call providertypes.ToolCall, result tools.ToolResult, err error) {
+	if state == nil || !supportsAdaptiveToolTimeout(call.Name) {
+		return
+	}
+	key := toolTimeoutBackoffKey(call)
+	if key == "" {
+		return
+	}
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if toolExecutionTimedOut(result, err) {
+		if state.toolTimeoutBackoff == nil {
+			state.toolTimeoutBackoff = make(map[string]int)
+		}
+		state.toolTimeoutBackoff[key]++
+		return
+	}
+	delete(state.toolTimeoutBackoff, key)
+}
+
+// supportsAdaptiveToolTimeout 仅对普通工具调用启用倍增，避免覆盖交互/子代理等自带超时语义。
+func supportsAdaptiveToolTimeout(name string) bool {
+	normalized := strings.TrimSpace(name)
+	if normalized == "" {
+		return false
+	}
+	switch {
+	case strings.EqualFold(normalized, tools.ToolNameAskUser),
+		strings.EqualFold(normalized, tools.ToolNameSpawnSubAgent),
+		strings.EqualFold(normalized, tools.ToolNameDiagnose):
+		return false
+	default:
+		return true
+	}
+}
+
+// toolTimeoutBackoffKey 将工具名和规范化参数组合为本轮 timeout 倍增键。
+func toolTimeoutBackoffKey(call providertypes.ToolCall) string {
+	signature := computeToolSignature([]providertypes.ToolCall{call})
+	if strings.TrimSpace(signature) == "" {
+		return ""
+	}
+	return strings.ToLower(strings.TrimSpace(call.Name)) + "\x00" + signature
+}
+
+// toolExecutionTimedOut 判断工具结果是否代表执行超时。
+func toolExecutionTimedOut(result tools.ToolResult, err error) bool {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	if strings.EqualFold(strings.TrimSpace(result.ErrorClass), "timeout") {
+		return true
+	}
+	content := strings.ToLower(strings.TrimSpace(result.Content))
+	return strings.Contains(content, "context deadline exceeded") ||
+		strings.Contains(content, "timed out") ||
+		strings.Contains(content, "timeout")
 }
 
 // parseAskUserTimeoutFromArguments 解析 ask_user 的 timeout_sec，并返回持续时间。

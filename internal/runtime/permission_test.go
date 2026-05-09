@@ -11,6 +11,7 @@ import (
 	providertypes "neo-code/internal/provider/types"
 	approvalflow "neo-code/internal/runtime/approval"
 	"neo-code/internal/security"
+	agentsession "neo-code/internal/session"
 	"neo-code/internal/tools"
 	"neo-code/internal/tools/mcp"
 )
@@ -1329,6 +1330,109 @@ func TestResolveToolExecutionTimeoutForAskUser(t *testing.T) {
 	}, 15*time.Minute)
 	if got != 15*time.Minute {
 		t.Fatalf("expected larger base timeout to win, got %v", got)
+	}
+}
+
+func TestResolveToolExecutionTimeoutForCodebaseSearch(t *testing.T) {
+	t.Parallel()
+
+	base := 20 * time.Second
+	for _, name := range []string{tools.ToolNameCodebaseSearchText, tools.ToolNameCodebaseSearchSymbol} {
+		got := resolveToolExecutionTimeout(providertypes.ToolCall{
+			Name:      name,
+			Arguments: `{"query":"plan mode"}`,
+		}, base)
+		if got != defaultCodebaseSearchToolTimeout {
+			t.Fatalf("%s timeout = %v, want %v", name, got, defaultCodebaseSearchToolTimeout)
+		}
+	}
+
+	largerBase := 90 * time.Second
+	got := resolveToolExecutionTimeout(providertypes.ToolCall{
+		Name:      tools.ToolNameCodebaseSearchText,
+		Arguments: `{"query":"plan mode"}`,
+	}, largerBase)
+	if got != largerBase {
+		t.Fatalf("expected larger base timeout %v to win, got %v", largerBase, got)
+	}
+}
+
+func TestResolveAdaptiveToolExecutionTimeoutBackoff(t *testing.T) {
+	t.Parallel()
+
+	state := newRunState("run-timeout-backoff", agentsession.New("timeout-backoff"))
+	call := providertypes.ToolCall{
+		Name:      tools.ToolNameBash,
+		Arguments: `{"command":"go test ./..."}`,
+	}
+	base := 20 * time.Second
+
+	if got := resolveAdaptiveToolExecutionTimeout(&state, call, base); got != 20*time.Second {
+		t.Fatalf("first timeout = %v, want 20s", got)
+	}
+	recordAdaptiveToolTimeoutResult(&state, call, tools.ToolResult{}, context.DeadlineExceeded)
+	if got := resolveAdaptiveToolExecutionTimeout(&state, call, base); got != 40*time.Second {
+		t.Fatalf("second timeout = %v, want 40s", got)
+	}
+	recordAdaptiveToolTimeoutResult(&state, call, tools.ToolResult{ErrorClass: "timeout"}, nil)
+	if got := resolveAdaptiveToolExecutionTimeout(&state, call, base); got != 80*time.Second {
+		t.Fatalf("third timeout = %v, want 80s", got)
+	}
+	recordAdaptiveToolTimeoutResult(&state, call, tools.ToolResult{Content: "command timed out"}, nil)
+	if got := resolveAdaptiveToolExecutionTimeout(&state, call, base); got != 160*time.Second {
+		t.Fatalf("fourth timeout = %v, want 160s", got)
+	}
+	recordAdaptiveToolTimeoutResult(&state, call, tools.ToolResult{Content: "timeout"}, nil)
+	if got := resolveAdaptiveToolExecutionTimeout(&state, call, base); got != 160*time.Second {
+		t.Fatalf("capped timeout = %v, want 160s", got)
+	}
+
+	recordAdaptiveToolTimeoutResult(&state, call, tools.ToolResult{Name: tools.ToolNameBash, Content: "ok"}, nil)
+	if got := resolveAdaptiveToolExecutionTimeout(&state, call, base); got != base {
+		t.Fatalf("reset timeout = %v, want %v", got, base)
+	}
+}
+
+func TestResolveAdaptiveToolExecutionTimeoutForCodebaseSearch(t *testing.T) {
+	t.Parallel()
+
+	state := newRunState("run-codebase-timeout-backoff", agentsession.New("codebase-timeout-backoff"))
+	call := providertypes.ToolCall{
+		Name:      tools.ToolNameCodebaseSearchText,
+		Arguments: `{"query":"plan mode"}`,
+	}
+	base := defaultCodebaseSearchToolTimeout
+
+	if got := resolveAdaptiveToolExecutionTimeout(&state, call, base); got != 60*time.Second {
+		t.Fatalf("first codebase timeout = %v, want 60s", got)
+	}
+	recordAdaptiveToolTimeoutResult(&state, call, tools.ToolResult{}, context.DeadlineExceeded)
+	if got := resolveAdaptiveToolExecutionTimeout(&state, call, base); got != 120*time.Second {
+		t.Fatalf("second codebase timeout = %v, want 120s", got)
+	}
+	recordAdaptiveToolTimeoutResult(&state, call, tools.ToolResult{ErrorClass: "timeout"}, nil)
+	if got := resolveAdaptiveToolExecutionTimeout(&state, call, base); got != 160*time.Second {
+		t.Fatalf("third codebase timeout = %v, want 160s", got)
+	}
+	recordAdaptiveToolTimeoutResult(&state, call, tools.ToolResult{Name: tools.ToolNameCodebaseSearchText, Content: "ok"}, nil)
+	if got := resolveAdaptiveToolExecutionTimeout(&state, call, base); got != base {
+		t.Fatalf("reset codebase timeout = %v, want %v", got, base)
+	}
+}
+
+func TestResolveAdaptiveToolExecutionTimeoutSkipsInteractiveTools(t *testing.T) {
+	t.Parallel()
+
+	state := newRunState("run-timeout-no-backoff", agentsession.New("timeout-no-backoff"))
+	call := providertypes.ToolCall{
+		Name:      tools.ToolNameAskUser,
+		Arguments: `{"question_id":"q1","title":"T","kind":"text"}`,
+	}
+	base := 20 * time.Second
+
+	recordAdaptiveToolTimeoutResult(&state, call, tools.ToolResult{ErrorClass: "timeout"}, nil)
+	if got := resolveAdaptiveToolExecutionTimeout(&state, call, base); got != base {
+		t.Fatalf("ask_user adaptive timeout = %v, want unchanged %v", got, base)
 	}
 }
 
