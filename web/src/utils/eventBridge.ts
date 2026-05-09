@@ -523,7 +523,9 @@ export function handleGatewayEvent(frame: MessageFrame, gatewayAPI: GatewayAPI) 
       const detail = strField(eventPayload, 'detail')
       useChatStore.getState().setStopReason(reason)
       useChatStore.getState().setGenerating(false)
-      useChatStore.getState().finalizeRunningToolCalls(reason === 'fatal_error' ? 'error' : 'done')
+      if (reason === 'fatal_error') {
+        useChatStore.getState().finalizeRunningToolCalls('error')
+      }
       if (reason === 'fatal_error') {
         uiStore.showToast(detail || '模型调用失败，请检查配置', 'error')
       }
@@ -537,7 +539,6 @@ export function handleGatewayEvent(frame: MessageFrame, gatewayAPI: GatewayAPI) 
 
     case EventType.RunCanceled: {
       useChatStore.getState().resetGeneratingState()
-      useChatStore.getState().finalizeRunningToolCalls('done')
       uiStore.showToast('Run cancelled', 'info')
       break
     }

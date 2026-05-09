@@ -120,7 +120,8 @@ function selectSessionDisplayTime(session: APISessionSummary): Date {
   }
   if (updatedValid) return updated
   if (createdValid) return created
-  return new Date()
+  // 当后端时间字段都无效时，不伪造“当前时间”，避免损坏记录冒充“刚刚更新”并扰乱排序。
+  return new Date(0)
 }
 
 export type BackendMessage = {

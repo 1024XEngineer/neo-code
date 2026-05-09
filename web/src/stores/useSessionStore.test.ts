@@ -134,6 +134,27 @@ describe('useSessionStore', () => {
     expect(session.time).toBe('2026-05-09T09:30:00.000Z')
   })
 
+  it('fetchSessions uses stable fallback time when created_at and updated_at are both invalid', async () => {
+    const mockListSessions = vi.fn().mockResolvedValue({
+      payload: {
+        sessions: [{
+          id: 'sess-invalid-time',
+          title: 'InvalidTime',
+          created_at: 'not-a-date',
+          updated_at: '',
+        }],
+      },
+    })
+    const mockBindStream = vi.fn().mockResolvedValue({})
+    const mockLoadSession = vi.fn().mockResolvedValue({ payload: { messages: [] } })
+    const mockAPI = { listSessions: mockListSessions, bindStream: mockBindStream, loadSession: mockLoadSession } as any
+
+    await useSessionStore.getState().fetchSessions(mockAPI)
+
+    const session = useSessionStore.getState().projects[0].sessions[0]
+    expect(session.time).toBe('1970-01-01T00:00:00.000Z')
+  })
+
   it('switchSession concurrently fetches todos and checkpoints', async () => {
     const mockBindStream = vi.fn().mockResolvedValue({})
     const mockLoadSession = vi.fn().mockResolvedValue({
