@@ -232,7 +232,7 @@ const styles: Record<string, React.CSSProperties> = {
     display: 'flex',
     justifyContent: 'flex-end',
     alignItems: 'flex-start',
-    padding: '8px 0',
+    padding: '12px 0 10px',
     position: 'relative',
     gap: 6,
   },
@@ -240,12 +240,13 @@ const styles: Record<string, React.CSSProperties> = {
     maxWidth: '85%',
   },
   userBubble: {
-    background: 'var(--user-msg-bg)',
-    color: 'var(--text-primary)',
+    background: 'var(--user-bubble)',
+    color: 'var(--user-bubble-text)',
     padding: '10px 14px',
     borderRadius: 'var(--radius-lg)',
     fontSize: 14,
     lineHeight: 1.6,
+    border: '1px solid var(--border-primary)',
     textWrap: 'pretty' as any,
   },
   revertBtn: {
@@ -266,7 +267,7 @@ const styles: Record<string, React.CSSProperties> = {
   aiRow: {
     display: 'flex',
     gap: 10,
-    padding: '8px 0',
+    padding: '8px 0 10px',
   },
   aiRowGrouped: {
     display: 'flex',

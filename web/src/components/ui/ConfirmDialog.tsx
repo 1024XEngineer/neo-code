@@ -1,4 +1,4 @@
-import { X } from 'lucide-react'
+import { AlertTriangle, X } from 'lucide-react'
 
 interface ConfirmDialogProps {
   title: string
@@ -22,23 +22,33 @@ export default function ConfirmDialog({
 }: ConfirmDialogProps) {
   const confirmBg =
     variant === 'danger'
-      ? 'rgba(220,38,38,0.15)'
+      ? 'var(--error)'
       : variant === 'warning'
-      ? 'rgba(217,119,6,0.15)'
-      : 'var(--bg-active)'
+      ? 'var(--warning)'
+      : 'var(--accent)'
 
   const confirmColor =
+    variant === 'default'
+      ? '#ffffff'
+      : '#111111'
+
+  const toneColor =
     variant === 'danger'
       ? 'var(--error)'
       : variant === 'warning'
       ? 'var(--warning)'
-      : 'var(--text-primary)'
+      : 'var(--accent)'
 
   return (
     <div style={styles.overlay} onClick={onCancel}>
       <div style={styles.modal} onClick={(e) => e.stopPropagation()}>
         <div style={styles.header}>
-          <h3 style={styles.title}>{title}</h3>
+          <div style={styles.titleRow}>
+            <span style={{ ...styles.toneIcon, color: toneColor }}>
+              <AlertTriangle size={16} />
+            </span>
+            <h3 style={styles.title}>{title}</h3>
+          </div>
           <button style={styles.closeBtn} onClick={onCancel}>
             <X size={16} />
           </button>
@@ -66,22 +76,23 @@ const styles: Record<string, React.CSSProperties> = {
   overlay: {
     position: 'fixed',
     inset: 0,
-    background: 'rgba(0,0,0,0.5)',
+    background: 'rgba(0,0,0,0.64)',
+    backdropFilter: 'blur(2px)',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
     zIndex: 200,
   },
   modal: {
-    width: 400,
+    width: 420,
     maxWidth: '90vw',
-    background: 'var(--bg-secondary)',
+    background: 'var(--bg-elevated)',
     border: '1px solid var(--border-primary)',
     borderRadius: 'var(--radius-lg)',
     display: 'flex',
     flexDirection: 'column',
     overflow: 'hidden',
-    boxShadow: 'var(--shadow-3)',
+    boxShadow: 'var(--shadow-modal)',
   },
   header: {
     display: 'flex',
@@ -89,6 +100,21 @@ const styles: Record<string, React.CSSProperties> = {
     justifyContent: 'space-between',
     padding: '14px 16px',
     borderBottom: '1px solid var(--border-primary)',
+  },
+  titleRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+  },
+  toneIcon: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 24,
+    height: 24,
+    borderRadius: 'var(--radius-sm)',
+    background: 'rgba(148,163,184,0.12)',
+    flexShrink: 0,
   },
   title: {
     fontSize: 15,
@@ -105,7 +131,7 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: 'var(--radius-sm)',
     border: 'none',
     background: 'transparent',
-    color: 'var(--text-tertiary)',
+    color: 'var(--text-secondary)',
     cursor: 'pointer',
   },
   body: {
@@ -116,9 +142,9 @@ const styles: Record<string, React.CSSProperties> = {
   },
   description: {
     margin: 0,
-    fontSize: 13,
+    fontSize: 14,
     lineHeight: 1.6,
-    color: 'var(--text-secondary)',
+    color: 'var(--text-primary)',
     whiteSpace: 'pre-wrap',
   },
   actions: {
@@ -127,22 +153,22 @@ const styles: Record<string, React.CSSProperties> = {
     gap: 8,
   },
   cancelBtn: {
-    padding: '6px 14px',
+    padding: '8px 14px',
     borderRadius: 'var(--radius-md)',
     border: '1px solid var(--border-primary)',
-    background: 'var(--bg-secondary)',
-    color: 'var(--text-secondary)',
-    fontSize: 12,
+    background: 'var(--bg-surface)',
+    color: 'var(--text-primary)',
+    fontSize: 13,
     fontWeight: 500,
     cursor: 'pointer',
     fontFamily: 'var(--font-ui)',
   },
   confirmBtn: {
-    padding: '6px 14px',
+    padding: '8px 16px',
     borderRadius: 'var(--radius-md)',
-    border: '1px solid var(--border-primary)',
-    fontSize: 12,
-    fontWeight: 500,
+    border: 'none',
+    fontSize: 13,
+    fontWeight: 600,
     cursor: 'pointer',
     fontFamily: 'var(--font-ui)',
   },

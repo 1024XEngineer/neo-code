@@ -54,6 +54,11 @@ export default function TodoStrip() {
   const total = items.length
   const hasFailure = failedCount > 0
   const allDone = total > 0 && completedCount === total
+  const requiredTotal = summary?.required_total ?? total
+  const requiredCompleted = summary?.required_completed ?? completedCount
+  const progressRatio = requiredTotal > 0 ? Math.min(1, requiredCompleted / requiredTotal) : 0
+  const showProgress = !conflict && requiredTotal > 0
+  const progressIndeterminate = !!inProgress && !allDone
 
   // 冲突态强制展开
   const effectiveExpanded = expanded || !!conflict
@@ -119,6 +124,15 @@ export default function TodoStrip() {
             {effectiveExpanded ? <ChevronDown size={14} /> : <ChevronUp size={14} />}
           </span>
         </button>
+        {showProgress && (
+          <div style={styles.progressTrack} aria-hidden>
+            {progressIndeterminate ? (
+              <span style={styles.progressIndeterminate} />
+            ) : (
+              <span style={{ ...styles.progressFill, width: `${Math.round(progressRatio * 100)}%` }} />
+            )}
+          </div>
+        )}
 
         {effectiveExpanded && (
           <div style={styles.body}>
@@ -258,6 +272,30 @@ const styles: Record<string, React.CSSProperties> = {
     display: 'flex',
     flexShrink: 0,
     color: 'var(--text-tertiary)',
+  },
+  progressTrack: {
+    height: 3,
+    background: 'var(--bg-active)',
+    overflow: 'hidden',
+    position: 'relative',
+  },
+  progressFill: {
+    display: 'block',
+    height: '100%',
+    borderRadius: '0 var(--radius-full) var(--radius-full) 0',
+    background: 'linear-gradient(90deg, var(--accent), var(--accent-hover))',
+    transition: 'width 0.25s ease-out',
+  },
+  progressIndeterminate: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    display: 'block',
+    width: '45%',
+    height: '100%',
+    borderRadius: 'var(--radius-full)',
+    background: 'linear-gradient(90deg, rgba(41,151,255,0), var(--accent), rgba(41,151,255,0))',
+    animation: 'todo-indeterminate 1.1s linear infinite',
   },
   body: {
     padding: '8px 12px 10px',
