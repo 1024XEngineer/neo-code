@@ -29,6 +29,7 @@ func (s *Service) appendUserMessageAndSave(ctx context.Context, state *runState,
 	}); err != nil {
 		return err
 	}
+	appendMemoRunMessage(state, message)
 	s.emitRunScoped(ctx, EventUserMessage, state, message)
 	return nil
 }
@@ -87,7 +88,7 @@ func (s *Service) appendAssistantMessageOnlyAndSave(
 	}
 	state.session.Messages = append(state.session.Messages, assistant)
 	state.touchSession()
-	return s.sessionStore.AppendMessages(ctx, agentsession.AppendMessagesInput{
+	if err := s.sessionStore.AppendMessages(ctx, agentsession.AppendMessagesInput{
 		SessionID:       state.session.ID,
 		Messages:        []providertypes.Message{assistant},
 		UpdatedAt:       state.session.UpdatedAt,
@@ -95,7 +96,11 @@ func (s *Service) appendAssistantMessageOnlyAndSave(
 		Model:           state.session.Model,
 		Workdir:         state.session.Workdir,
 		HasUnknownUsage: state.session.HasUnknownUsage,
-	})
+	}); err != nil {
+		return err
+	}
+	appendMemoRunMessage(state, assistant)
+	return nil
 }
 
 // appendSystemMessageAndSave 将系统提醒消息追加到会话并持久化。
@@ -111,7 +116,7 @@ func (s *Service) appendSystemMessageAndSave(ctx context.Context, state *runStat
 	}
 	state.session.Messages = append(state.session.Messages, message)
 	state.touchSession()
-	return s.sessionStore.AppendMessages(ctx, agentsession.AppendMessagesInput{
+	if err := s.sessionStore.AppendMessages(ctx, agentsession.AppendMessagesInput{
 		SessionID:       state.session.ID,
 		Messages:        []providertypes.Message{message},
 		UpdatedAt:       state.session.UpdatedAt,
@@ -119,7 +124,11 @@ func (s *Service) appendSystemMessageAndSave(ctx context.Context, state *runStat
 		Model:           state.session.Model,
 		Workdir:         state.session.Workdir,
 		HasUnknownUsage: state.session.HasUnknownUsage,
-	})
+	}); err != nil {
+		return err
+	}
+	appendMemoRunMessage(state, message)
+	return nil
 }
 
 // appendToolMessageAndSave 将工具原始结果写回会话，持久化时仅追加一条 tool message。
@@ -143,7 +152,11 @@ func (s *Service) appendToolMessageAndSave(
 		HasUnknownUsage: state.session.HasUnknownUsage,
 	}
 	state.mu.Unlock()
-	return s.sessionStore.AppendMessages(ctx, input)
+	if err := s.sessionStore.AppendMessages(ctx, input); err != nil {
+		return err
+	}
+	appendMemoRunMessage(state, toolMessage)
+	return nil
 }
 
 // normalizeToolMessageForPersistence 负责在写入会话前收敛工具结果，避免成功结果落成完全空语义消息。

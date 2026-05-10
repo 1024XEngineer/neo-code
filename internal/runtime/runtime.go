@@ -145,7 +145,7 @@ type ProviderFactory interface {
 // MemoExtractor 定义 runtime 层调用记忆提取的最小能力。
 // 通过接口注入避免 runtime 直接依赖 memo 子系统实现细节。
 type MemoExtractor interface {
-	// Schedule 从消息中安排一次后台记忆提取，失败由实现方自行处理。
+	// Schedule 从当前 run 边界内的消息安排一次后台记忆提取，失败由实现方自行处理。
 	Schedule(sessionID string, messages []providertypes.Message)
 }
 

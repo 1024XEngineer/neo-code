@@ -1266,6 +1266,52 @@ func TestServiceRunSchedulesMemoExtractionAfterFinalReply(t *testing.T) {
 	}
 }
 
+func TestServiceRunSchedulesMemoExtractionFromCurrentRunBoundary(t *testing.T) {
+	t.Parallel()
+
+	manager := newRuntimeConfigManager(t)
+	store := newMemoryStore()
+	session := agentsession.New("existing")
+	session.ID = "session-existing-memo"
+	session.Messages = []providertypes.Message{
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("old user")}},
+		{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("old assistant")}},
+	}
+	store.sessions[session.ID] = cloneSession(session)
+
+	scripted := &scriptedProvider{
+		streams: [][]providertypes.StreamEvent{
+			{
+				providertypes.NewTextDeltaStreamEvent("new final"),
+				providertypes.NewMessageDoneStreamEvent("stop", nil),
+			},
+		},
+	}
+	service := NewWithFactory(manager, tools.NewRegistry(), store, &scriptedProviderFactory{provider: scripted}, &stubContextBuilder{})
+	memoExtractor := &stubScheduledMemoExtractor{}
+	service.SetMemoExtractor(memoExtractor)
+
+	err := service.Run(context.Background(), UserInput{
+		SessionID: session.ID,
+		RunID:     "run-memo-boundary",
+		Parts:     []providertypes.ContentPart{providertypes.NewTextPart("new user")},
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if len(memoExtractor.calls) != 1 {
+		t.Fatalf("memo schedule calls = %d, want 1", len(memoExtractor.calls))
+	}
+	messages := memoExtractor.calls[0].messages
+	if len(messages) != 2 {
+		t.Fatalf("scheduled messages = %#v, want current run user+assistant only", messages)
+	}
+	if renderPartsForVerification(messages[0].Parts) != "new user" ||
+		renderPartsForVerification(messages[1].Parts) != "new final" {
+		t.Fatalf("scheduled messages crossed run boundary: %#v", messages)
+	}
+}
+
 func TestServiceRunSkipsAutoMemoExtractionAfterRememberTool(t *testing.T) {
 	t.Parallel()
 
@@ -5637,6 +5683,8 @@ func TestServiceRunReactivelyCompactsOnContextTooLong(t *testing.T) {
 	}
 
 	service := NewWithFactory(manager, registry, store, &scriptedProviderFactory{provider: scripted}, builder)
+	memoExtractor := &stubScheduledMemoExtractor{}
+	service.SetMemoExtractor(memoExtractor)
 	service.compactRunner = &stubCompactRunner{
 		result: contextcompact.Result{
 			Messages: []providertypes.Message{
@@ -5698,6 +5746,16 @@ func TestServiceRunReactivelyCompactsOnContextTooLong(t *testing.T) {
 	}
 	if renderPartsForTest(saved.Messages[2].Parts) != "recovered" {
 		t.Fatalf("expected final assistant reply %q, got %q", "recovered", renderPartsForTest(saved.Messages[2].Parts))
+	}
+	if len(memoExtractor.calls) != 1 {
+		t.Fatalf("memo schedule calls = %d, want 1", len(memoExtractor.calls))
+	}
+	memoMessages := memoExtractor.calls[0].messages
+	if len(memoMessages) != 2 {
+		t.Fatalf("memo messages = %+v, want current run user+assistant only after compact", memoMessages)
+	}
+	if renderPartsForTest(memoMessages[0].Parts) != "continue" || renderPartsForTest(memoMessages[1].Parts) != "recovered" {
+		t.Fatalf("memo messages crossed compact boundary: %+v", memoMessages)
 	}
 
 	events := collectRuntimeEvents(service.Events())

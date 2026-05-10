@@ -440,7 +440,8 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 					})
 					state.markTerminalDecision(controlplane.TerminalStatusCompleted, report.StopReason, report.Summary)
 					s.emitRunScoped(ctx, EventAgentDone, &state, assistantForFinal)
-					s.triggerMemoExtraction(state.session.ID, state.session.Messages, state.rememberedThisRun)
+					s.triggerMemoExtraction(state.session.ID, runBoundaryMessagesForMemo(&state), state.rememberedThisRun)
+
 					return nil
 				}
 				state.mu.Lock()

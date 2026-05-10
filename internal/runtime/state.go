@@ -4,6 +4,7 @@ import (
 	"sync"
 	"time"
 
+	providertypes "neo-code/internal/provider/types"
 	"neo-code/internal/runtime/controlplane"
 	runtimefacts "neo-code/internal/runtime/facts"
 	"neo-code/internal/security"
@@ -24,6 +25,7 @@ type runState struct {
 	taskID                        string
 	agentID                       string
 	capabilityToken               *security.CapabilityToken
+	memoRunMessages                []providertypes.Message
 	nextAttemptSeq                int
 	turn                          int
 	baseLifecycle                 controlplane.RunState
@@ -57,6 +59,7 @@ type runState struct {
 	thinkingOverride              *ThinkingOverride
 	pendingUserQuestion           *UserQuestionRequestedPayload
 	disableTools                  bool
+
 }
 
 // newRunState 基于持久化会话创建一次运行的内存状态镜像。
