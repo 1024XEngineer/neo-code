@@ -1255,8 +1255,11 @@ func TestDefaultBuilderBuildReturnsStableAndDynamicPrompts(t *testing.T) {
 	if !strings.Contains(result.StableSystemPrompt, "## Agent Identity") {
 		t.Fatalf("expected Agent Identity in stable prompt, got %q", result.StableSystemPrompt)
 	}
-	if !strings.Contains(result.StableSystemPrompt, "## Capabilities") {
-		t.Fatalf("expected Capabilities in stable prompt, got %q", result.StableSystemPrompt)
+	if !strings.Contains(result.StableSystemPrompt, "## Tool Usage") {
+		t.Fatalf("expected Tool Usage in stable prompt, got %q", result.StableSystemPrompt)
+	}
+	if !strings.Contains(result.DynamicSystemPrompt, "## Capabilities & Limitations") {
+		t.Fatalf("expected Capabilities & Limitations in dynamic prompt, got %q", result.DynamicSystemPrompt)
 	}
 	if !strings.Contains(result.DynamicSystemPrompt, "## System State") {
 		t.Fatalf("expected System State in dynamic prompt, got %q", result.DynamicSystemPrompt)
@@ -1267,7 +1270,6 @@ func TestDefaultBuilderBuildReturnsStableAndDynamicPrompts(t *testing.T) {
 		t.Fatalf("SystemPrompt should equal StableSystemPrompt + DynamicSystemPrompt, got %q, expected %q", result.SystemPrompt, expected)
 	}
 }
-
 func TestDefaultBuilderBuildTodoChangeDoesNotChangeStablePrompt(t *testing.T) {
 	t.Parallel()
 

@@ -21,7 +21,6 @@ type DefaultBuilder struct {
 func newStablePromptSources(extra ...SectionSource) []promptSectionSource {
 	sources := []promptSectionSource{
 		corePromptSource{},
-		capabilitiesSource{},
 		newRulesPromptSource(nil),
 	}
 	for _, src := range extra {
@@ -35,6 +34,7 @@ func newStablePromptSources(extra ...SectionSource) []promptSectionSource {
 // newDynamicPromptSources 返回动态提示词来源列表，随任务进度、会话状态变化。
 func newDynamicPromptSources() []promptSectionSource {
 	return []promptSectionSource{
+		capabilitiesSource{},
 		taskStateSource{},
 		planModeContextSource{},
 		todosSource{},
@@ -42,28 +42,6 @@ func newDynamicPromptSources() []promptSectionSource {
 		repositoryContextSource{},
 		&systemStateSource{},
 	}
-}
-
-// newPromptSources 组装系统提示词来源列表（旧版单列表），将额外 SectionSource 插入到 systemState 之前。
-// 保留用于兼容测试中直接使用 promptSources 的旧构造方式。
-// nil 元素会被跳过，不会影响来源顺序。
-func newPromptSources(extra ...SectionSource) []promptSectionSource {
-	sources := []promptSectionSource{
-		corePromptSource{},
-		capabilitiesSource{},
-		newRulesPromptSource(nil),
-		taskStateSource{},
-		planModeContextSource{},
-		todosSource{},
-		skillPromptSource{},
-	}
-	for _, src := range extra {
-		if src != nil {
-			sources = append(sources, src)
-		}
-	}
-	sources = append(sources, repositoryContextSource{})
-	return append(sources, &systemStateSource{})
 }
 
 // NewConfiguredBuilder 基于聚合配置和可选 SectionSource 列表构建上下文构建器，是推荐的统一构造入口。

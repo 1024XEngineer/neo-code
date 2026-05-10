@@ -4,8 +4,11 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
+
+	"neo-code/internal/repository"
 )
 
 // repositoryContextSource 负责把 runtime 决策好的 repository 上下文渲染为单独 section。
@@ -36,6 +39,18 @@ func renderRepositoryContext(repo RepositoryContext) string {
 	return strings.Join(parts, "\n\n")
 }
 
+// stableSortedChangedFiles 按 path 稳定排序 changed files，确保多轮请求间缓存前缀不因顺序抖动。
+func stableSortedChangedFiles(section *RepositoryChangedFilesSection) []repository.ChangedFile {
+	if section == nil || len(section.Files) == 0 {
+		return nil
+	}
+	sorted := append([]repository.ChangedFile(nil), section.Files...)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		return sorted[i].Path < sorted[j].Path
+	})
+	return sorted
+}
+
 // renderChangedFilesRepositoryContext 以紧凑列表渲染当前轮允许注入的 changed-files 摘要。
 func renderChangedFilesRepositoryContext(section *RepositoryChangedFilesSection) string {
 	if section == nil || len(section.Files) == 0 {
@@ -48,7 +63,7 @@ func renderChangedFilesRepositoryContext(section *RepositoryChangedFilesSection)
 		fmt.Sprintf("- returned_changed_files: `%d`", section.ReturnedCount),
 		fmt.Sprintf("- truncated: `%t`", section.Truncated),
 	}
-	for _, file := range section.Files {
+	for _, file := range stableSortedChangedFiles(section) {
 		lines = append(lines, fmt.Sprintf("- status: `%s`", file.Status))
 		lines = append(lines, "  path: "+renderRepositoryScalar(file.Path))
 		if file.OldPath != "" {
@@ -59,6 +74,21 @@ func renderChangedFilesRepositoryContext(section *RepositoryChangedFilesSection)
 		}
 	}
 	return strings.Join(lines, "\n")
+}
+
+// stableSortedRetrievalHits 按 path + line_hint 排序检索命中，消除不同轮次间的顺序抖动。
+func stableSortedRetrievalHits(section *RepositoryRetrievalSection) []repository.RetrievalHit {
+	if section == nil || len(section.Hits) == 0 {
+		return nil
+	}
+	sorted := append([]repository.RetrievalHit(nil), section.Hits...)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		if sorted[i].Path != sorted[j].Path {
+			return sorted[i].Path < sorted[j].Path
+		}
+		return sorted[i].LineHint < sorted[j].LineHint
+	})
+	return sorted
 }
 
 // renderRetrievalRepositoryContext 以受限格式渲染本轮命中的 targeted retrieval 结果。
@@ -73,7 +103,7 @@ func renderRetrievalRepositoryContext(section *RepositoryRetrievalSection) strin
 		"- query: " + renderRepositoryScalar(section.Query),
 		fmt.Sprintf("- truncated: `%t`", section.Truncated),
 	}
-	for _, hit := range section.Hits {
+	for _, hit := range stableSortedRetrievalHits(section) {
 		lines = append(lines, "- path: "+renderRepositoryScalar(hit.Path))
 		lines = append(lines, fmt.Sprintf("  line_hint: `%d`", hit.LineHint))
 		if snippet := strings.TrimSpace(hit.Snippet); snippet != "" {
