@@ -66,12 +66,11 @@ type persistedAskConfig struct {
 }
 
 type persistedMemoConfig struct {
-	Enabled               *bool `yaml:"enabled,omitempty"`
-	AutoExtract           *bool `yaml:"auto_extract,omitempty"`
-	MaxEntries            *int  `yaml:"max_entries,omitempty"`
-	MaxIndexBytes         *int  `yaml:"max_index_bytes,omitempty"`
-	ExtractTimeoutSec     *int  `yaml:"extract_timeout_sec,omitempty"`
-	ExtractRecentMessages *int  `yaml:"extract_recent_messages,omitempty"`
+	Enabled           *bool `yaml:"enabled,omitempty"`
+	AutoExtract       *bool `yaml:"auto_extract,omitempty"`
+	MaxEntries        *int  `yaml:"max_entries,omitempty"`
+	MaxIndexBytes     *int  `yaml:"max_index_bytes,omitempty"`
+	ExtractTimeoutSec *int  `yaml:"extract_timeout_sec,omitempty"`
 }
 
 func NewLoader(baseDir string, defaults *Config) *Loader {
@@ -225,6 +224,9 @@ func parseConfigWithContextDefaults(
 }
 
 func parseCurrentConfig(data []byte, contextDefaults ContextConfig, memoDefaults MemoConfig) (*Config, error) {
+	if err := rejectRemovedMemoFields(data); err != nil {
+		return nil, err
+	}
 	var file persistedConfig
 	decoder := yaml.NewDecoder(bytes.NewReader(data))
 	decoder.KnownFields(true)
@@ -384,14 +386,12 @@ func newPersistedMemoConfig(cfg MemoConfig) persistedMemoConfig {
 	maxEntries := cfg.MaxEntries
 	maxIndexBytes := cfg.MaxIndexBytes
 	extractTimeoutSec := cfg.ExtractTimeoutSec
-	extractRecentMessages := cfg.ExtractRecentMessages
 	return persistedMemoConfig{
-		Enabled:               &enabled,
-		AutoExtract:           &autoExtract,
-		MaxEntries:            &maxEntries,
-		MaxIndexBytes:         &maxIndexBytes,
-		ExtractTimeoutSec:     &extractTimeoutSec,
-		ExtractRecentMessages: &extractRecentMessages,
+		Enabled:           &enabled,
+		AutoExtract:       &autoExtract,
+		MaxEntries:        &maxEntries,
+		MaxIndexBytes:     &maxIndexBytes,
+		ExtractTimeoutSec: &extractTimeoutSec,
 	}
 }
 
@@ -413,10 +413,41 @@ func fromPersistedMemoConfig(file persistedMemoConfig, defaults MemoConfig) Memo
 	if file.ExtractTimeoutSec != nil {
 		out.ExtractTimeoutSec = *file.ExtractTimeoutSec
 	}
-	if file.ExtractRecentMessages != nil {
-		out.ExtractRecentMessages = *file.ExtractRecentMessages
-	}
 	return out
+}
+
+// rejectRemovedMemoFields 在 strict decode 前拦截已删除的 memo 字段，输出明确迁移提示。
+func rejectRemovedMemoFields(data []byte) error {
+	var root yaml.Node
+	if err := yaml.Unmarshal(data, &root); err != nil {
+		return err
+	}
+	if len(root.Content) == 0 {
+		return nil
+	}
+	doc := root.Content[0]
+	if doc.Kind != yaml.MappingNode {
+		return nil
+	}
+
+	for i := 0; i < len(doc.Content); i += 2 {
+		if strings.TrimSpace(doc.Content[i].Value) != "memo" {
+			continue
+		}
+		memoNode := doc.Content[i+1]
+		if memoNode.Kind != yaml.MappingNode {
+			return nil
+		}
+		for j := 0; j < len(memoNode.Content); j += 2 {
+			if strings.TrimSpace(memoNode.Content[j].Value) == "extract_recent_messages" {
+				return fmt.Errorf(
+					"config: memo.extract_recent_messages has been removed; memory extraction now always uses the full run boundary",
+				)
+			}
+		}
+		return nil
+	}
+	return nil
 }
 
 // normalizeVerificationSchemaContent 在内存中预处理 verification schema，避免旧字段先于 strict decode 触发硬失败。

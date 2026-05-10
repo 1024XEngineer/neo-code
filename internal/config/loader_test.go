@@ -1930,7 +1930,6 @@ memo:
   max_entries: 123
   max_index_bytes: 4096
   extract_timeout_sec: 9
-  extract_recent_messages: 4
 `
 	writeLoaderConfig(t, loader, raw)
 
@@ -1952,9 +1951,6 @@ memo:
 	}
 	if cfg.Memo.ExtractTimeoutSec != 9 {
 		t.Fatalf("expected memo.extract_timeout_sec=9, got %d", cfg.Memo.ExtractTimeoutSec)
-	}
-	if cfg.Memo.ExtractRecentMessages != 4 {
-		t.Fatalf("expected memo.extract_recent_messages=4, got %d", cfg.Memo.ExtractRecentMessages)
 	}
 
 	data, err := os.ReadFile(loader.ConfigPath())
@@ -2001,9 +1997,6 @@ shell: powershell
 	if cfg.Memo.ExtractTimeoutSec <= 0 {
 		t.Fatalf("expected memo.extract_timeout_sec to be defaulted, got %d", cfg.Memo.ExtractTimeoutSec)
 	}
-	if cfg.Memo.ExtractRecentMessages <= 0 {
-		t.Fatalf("expected memo.extract_recent_messages to be defaulted, got %d", cfg.Memo.ExtractRecentMessages)
-	}
 }
 
 func TestLoaderRejectsLegacyMemoMaxIndexLinesField(t *testing.T) {
@@ -2025,6 +2018,28 @@ memo:
 	}
 	if !strings.Contains(err.Error(), "memo.max_index_lines has been removed") {
 		t.Fatalf("expected migration hint for max_index_lines, got %v", err)
+	}
+}
+
+func TestLoaderRejectsRemovedMemoExtractRecentMessagesField(t *testing.T) {
+	t.Parallel()
+
+	loader := NewLoader(t.TempDir(), testDefaultConfig())
+	raw := `
+selected_provider: openai
+current_model: gpt-4.1
+shell: powershell
+memo:
+  extract_recent_messages: 4
+`
+	writeLoaderConfig(t, loader, raw)
+
+	cfg, err := loader.Load(context.Background())
+	if err == nil {
+		t.Fatalf("expected removed memo field to be rejected, cfg=%+v", cfg)
+	}
+	if !strings.Contains(err.Error(), "memo.extract_recent_messages has been removed") {
+		t.Fatalf("expected migration hint for extract_recent_messages, got %v", err)
 	}
 }
 
@@ -2050,11 +2065,6 @@ func TestLoaderRejectsExplicitInvalidMemoNumbers(t *testing.T) {
 			name:       "negative extract_timeout_sec",
 			fieldYAML:  "extract_timeout_sec: -1",
 			errContain: "config: memo: extract_timeout_sec must be greater than 0",
-		},
-		{
-			name:       "negative extract_recent_messages",
-			fieldYAML:  "extract_recent_messages: -1",
-			errContain: "config: memo: extract_recent_messages must be greater than 0",
 		},
 	}
 
