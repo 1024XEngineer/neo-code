@@ -447,9 +447,44 @@ function FileChangeItem({
 }
 
 function ChangesView() {
+  const gatewayAPI = useGatewayAPI();
+  const sessionId = useSessionStore((state) => state.currentSessionId);
+  const isGenerating = useChatStore((state) => state.isGenerating);
+  const isRestoringCheckpoint = useUIStore(
+    (state) => state.isRestoringCheckpoint,
+  );
+  const setRestoringCheckpoint = useUIStore(
+    (state) => state.setRestoringCheckpoint,
+  );
+  const showToast = useUIStore((state) => state.showToast);
   const fileChanges = useUIStore((state) => state.fileChanges);
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
+  const [confirmingRollbackAll, setConfirmingRollbackAll] = useState(false);
   const counts = useMemo(() => getChangeCounts(fileChanges), [fileChanges]);
+  const rollbackGroups = useMemo(() => {
+    const groups = new Map<string, string[]>();
+    for (const change of fileChanges) {
+      if (change.status === "accepted" || change.status === "rejected") {
+        continue;
+      }
+      const checkpointID = change.rollback_checkpoint_id?.trim();
+      if (!checkpointID) continue;
+      const paths = groups.get(checkpointID) ?? [];
+      paths.push(change.path);
+      groups.set(checkpointID, paths);
+    }
+    return groups;
+  }, [fileChanges]);
+  const canRollbackAll = rollbackGroups.size > 0;
+  const rollbackAllDisabled =
+    isGenerating || isRestoringCheckpoint || !canRollbackAll;
+  const rollbackAllTitle = isGenerating
+    ? "Running; action is disabled"
+    : isRestoringCheckpoint
+      ? "Checkpoint restore in progress"
+      : canRollbackAll
+        ? "Rollback all files in this run"
+        : "No rollback checkpoint available for current file changes";
   const scrollAreaRef = useRef<HTMLDivElement | null>(null);
 
   const toggleExpanded = (id: string) => {
@@ -461,10 +496,53 @@ function ChangesView() {
     });
   };
 
+  async function handleRollbackAll() {
+    setConfirmingRollbackAll(false);
+    if (!gatewayAPI || !sessionId || rollbackAllDisabled) return;
+
+    setRestoringCheckpoint(true);
+    try {
+      for (const [checkpointID, paths] of rollbackGroups.entries()) {
+        await gatewayAPI.restoreCheckpoint({
+          session_id: sessionId,
+          checkpoint_id: checkpointID,
+          mode: "baseline",
+          paths,
+        });
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Unknown error";
+      showToast(`Restore failed: ${message}`, "error");
+      setRestoringCheckpoint(false);
+    }
+  }
+
   return (
     <div style={styles.viewContainer}>
       <div style={styles.viewHeader}>
-        <span style={styles.viewTitle}>文件变更</span>
+        <div style={styles.titleRow}>
+          <span style={styles.viewTitle}>文件变更</span>
+          <button
+            type="button"
+            data-testid="restore-all-changes"
+            style={{
+              ...styles.actionBtn,
+              color: rollbackAllDisabled
+                ? "var(--text-tertiary)"
+                : "var(--error)",
+            }}
+            disabled={rollbackAllDisabled}
+            title={rollbackAllTitle}
+            onClick={() => setConfirmingRollbackAll(true)}
+          >
+            {isRestoringCheckpoint ? (
+              <Loader2 size={13} className="animate-spin" />
+            ) : (
+              <RotateCcw size={13} />
+            )}
+            Rollback all
+          </button>
+        </div>
         <div style={styles.summaryRow}>
           <span>{fileChanges.length} 个文件</span>
           <span style={styles.summaryDivider} />
@@ -498,6 +576,17 @@ function ChangesView() {
           </div>
         )}
       </div>
+      {confirmingRollbackAll && (
+        <ConfirmDialog
+          title="Rollback all files"
+          description="Revert all current file changes to their pre-agent state. Continue?"
+          variant="warning"
+          confirmLabel="Rollback all"
+          cancelLabel="Cancel"
+          onConfirm={handleRollbackAll}
+          onCancel={() => setConfirmingRollbackAll(false)}
+        />
+      )}
     </div>
   );
 }

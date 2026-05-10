@@ -248,6 +248,25 @@ describe("FileChangePanel", () => {
     expect(mockGatewayAPI.loadSession).not.toHaveBeenCalled();
   });
 
+  it("rolls back all current file changes with one baseline restore request", async () => {
+    render(<FileChangePanel />);
+
+    fireEvent.click(screen.getByTestId("restore-all-changes"));
+    const confirmButtons = screen.getAllByRole("button", {
+      name: "Rollback all",
+    });
+    fireEvent.click(confirmButtons[confirmButtons.length - 1]);
+
+    await waitFor(() => {
+      expect(mockGatewayAPI.restoreCheckpoint).toHaveBeenCalledWith({
+        session_id: "sess-1",
+        checkpoint_id: "cp-rollback-1",
+        mode: "baseline",
+        paths: ["src/a.txt"],
+      });
+    });
+  });
+
   it("disables accept and restore actions while the session is generating", () => {
     useChatStore.setState({ isGenerating: true } as never);
     render(<FileChangePanel />);

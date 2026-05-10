@@ -1864,6 +1864,43 @@ func TestRestoreBaseline_RemovesNewFileWhenBaselineDidNotExist(t *testing.T) {
 	}
 }
 
+func TestRestoreBaseline_UsesCapturedDisplayPathWhenStoreWorkdirDiffers(t *testing.T) {
+	root := t.TempDir()
+	projectDir := filepath.Join(root, "project")
+	captureWorkdir := filepath.Join(root, "actual-workdir")
+	configuredWorkdir := filepath.Join(root, "configured-workdir")
+	if err := os.MkdirAll(captureWorkdir, 0o755); err != nil {
+		t.Fatalf("mkdir capture workdir: %v", err)
+	}
+	if err := os.MkdirAll(configuredWorkdir, 0o755); err != nil {
+		t.Fatalf("mkdir configured workdir: %v", err)
+	}
+
+	captureStore := NewPerEditSnapshotStore(projectDir, captureWorkdir)
+	target := writeWorkdirFile(t, captureWorkdir, "src/a.txt", "before\n")
+	if _, err := captureStore.CapturePreWrite(target); err != nil {
+		t.Fatalf("CapturePreWrite: %v", err)
+	}
+	if err := os.WriteFile(target, []byte("after\n"), 0o644); err != nil {
+		t.Fatalf("write after: %v", err)
+	}
+	if _, err := captureStore.FinalizeWithExactState("cp-display-path"); err != nil {
+		t.Fatalf("FinalizeWithExactState: %v", err)
+	}
+	captureStore.Reset()
+
+	restoreStore := NewPerEditSnapshotStore(projectDir, configuredWorkdir)
+	if err := os.WriteFile(target, []byte("drift\n"), 0o644); err != nil {
+		t.Fatalf("write drift: %v", err)
+	}
+	if err := restoreStore.RestoreBaseline(context.Background(), "cp-display-path", []string{"src/a.txt"}); err != nil {
+		t.Fatalf("RestoreBaseline: %v", err)
+	}
+	if got := mustReadFile(t, target); got != "before\n" {
+		t.Fatalf("restored content = %q, want before", got)
+	}
+}
+
 func TestRestoreBaseline_ErrorsWhenPathMissingFromBaseline(t *testing.T) {
 	store, workdir := newTestStore(t)
 	target := writeWorkdirFile(t, workdir, "tracked.txt", "before\n")

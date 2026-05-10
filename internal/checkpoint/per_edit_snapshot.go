@@ -582,23 +582,9 @@ func (s *PerEditSnapshotStore) RestoreBaseline(ctx context.Context, checkpointID
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		cleanRel := filepath.ToSlash(strings.TrimSpace(relPath))
-		for strings.HasPrefix(cleanRel, "./") {
-			cleanRel = strings.TrimPrefix(cleanRel, "./")
-		}
-		if cleanRel == "" || cleanRel == "." {
-			return fmt.Errorf("per-edit: invalid restore path %q", relPath)
-		}
-		absPath := filepath.Clean(filepath.Join(s.workdir, filepath.FromSlash(cleanRel)))
-		relToWorkdir, relErr := filepath.Rel(filepath.Clean(s.workdir), absPath)
-		if relErr != nil || relToWorkdir == ".." || strings.HasPrefix(relToWorkdir, ".."+string(filepath.Separator)) {
-			return fmt.Errorf("per-edit: restore path %q escapes workdir", relPath)
-		}
-
-		hash := perEditPathHash(absPath)
-		version, ok := cp.FileVersions[hash]
-		if !ok || version <= 0 {
-			return fmt.Errorf("per-edit: baseline version for path %s not found in checkpoint %s", cleanRel, checkpointID)
+		cleanRel, absPath, hash, version, err := s.resolveBaselineRestoreTargetLocked(cp, checkpointID, relPath)
+		if err != nil {
+			return err
 		}
 		meta, err := s.readVersionMeta(hash, version)
 		if err != nil {
@@ -635,6 +621,52 @@ func (s *PerEditSnapshotStore) RestoreBaseline(ctx context.Context, checkpointID
 		}
 	}
 	return nil
+}
+
+// resolveBaselineRestoreTargetLocked 根据前端相对路径定位 checkpoint 中真实捕获的 baseline 版本。
+// 该方法优先使用当前 workdir 计算 hash；若 workdir 与实际 run 目录不一致，则回退到版本 meta 的 DisplayPath 做后缀匹配。
+func (s *PerEditSnapshotStore) resolveBaselineRestoreTargetLocked(
+	cp CheckpointMeta,
+	checkpointID string,
+	relPath string,
+) (string, string, string, int, error) {
+	cleanRel := filepath.ToSlash(strings.TrimSpace(relPath))
+	for strings.HasPrefix(cleanRel, "./") {
+		cleanRel = strings.TrimPrefix(cleanRel, "./")
+	}
+	if cleanRel == "" || cleanRel == "." {
+		return "", "", "", 0, fmt.Errorf("per-edit: invalid restore path %q", relPath)
+	}
+	if filepath.IsAbs(filepath.FromSlash(cleanRel)) {
+		return "", "", "", 0, fmt.Errorf("per-edit: restore path %q must be relative", relPath)
+	}
+
+	if strings.TrimSpace(s.workdir) != "" {
+		absPath := filepath.Clean(filepath.Join(s.workdir, filepath.FromSlash(cleanRel)))
+		relToWorkdir, relErr := filepath.Rel(filepath.Clean(s.workdir), absPath)
+		if relErr != nil || relToWorkdir == ".." || strings.HasPrefix(relToWorkdir, ".."+string(filepath.Separator)) {
+			return "", "", "", 0, fmt.Errorf("per-edit: restore path %q escapes workdir", relPath)
+		}
+		hash := perEditPathHash(absPath)
+		if version, ok := cp.FileVersions[hash]; ok && version > 0 {
+			return cleanRel, absPath, hash, version, nil
+		}
+	}
+
+	for hash, version := range cp.FileVersions {
+		if version <= 0 {
+			continue
+		}
+		meta, err := s.readVersionMeta(hash, version)
+		if err != nil {
+			return "", "", "", 0, fmt.Errorf("per-edit: read baseline meta v%d for %s: %w", version, cleanRel, err)
+		}
+		display := filepath.ToSlash(filepath.Clean(strings.TrimSpace(meta.DisplayPath)))
+		if display == cleanRel || strings.HasSuffix(display, "/"+cleanRel) {
+			return cleanRel, filepath.Clean(meta.DisplayPath), hash, version, nil
+		}
+	}
+	return "", "", "", 0, fmt.Errorf("per-edit: baseline version for path %s not found in checkpoint %s", cleanRel, checkpointID)
 }
 
 // Diff 端到端对比两个 checkpoint 之间的工作区差异，返回 unified diff。
