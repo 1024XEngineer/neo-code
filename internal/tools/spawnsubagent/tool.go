@@ -113,9 +113,9 @@ func (t *Tool) Schema() map[string]any {
 	}
 }
 
-// MicroCompactPolicy 声明 spawn_subagent 结果默认参与 micro compact。
+// MicroCompactPolicy 保留子代理结果，避免短期压缩时丢失分析链路与结论。
 func (t *Tool) MicroCompactPolicy() tools.MicroCompactPolicy {
-	return tools.MicroCompactPolicyCompact
+	return tools.MicroCompactPolicyPreserveHistory
 }
 
 // Execute 解析入参后执行 inline 模式。

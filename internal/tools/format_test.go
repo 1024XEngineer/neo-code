@@ -250,6 +250,27 @@ func TestSanitizeToolMetadata(t *testing.T) {
 				}
 			},
 		},
+		{
+			name: "keeps copy and move path metadata but drops path arrays",
+			tool: "filesystem_move_file",
+			input: map[string]any{
+				"source_path":      "/repo/package.json",
+				"destination_path": "/repo/pkg.json",
+				"paths":            []string{"/repo/package.json", "/repo/pkg.json"},
+			},
+			assert: func(t *testing.T, got map[string]string) {
+				t.Helper()
+				if got["source_path"] != "/repo/package.json" {
+					t.Fatalf("expected source_path to be preserved, got %#v", got)
+				}
+				if got["destination_path"] != "/repo/pkg.json" {
+					t.Fatalf("expected destination_path to be preserved, got %#v", got)
+				}
+				if got["paths"] != "" {
+					t.Fatalf("expected array metadata to be dropped, got %#v", got)
+				}
+			},
+		},
 	}
 
 	for _, tt := range tests {
