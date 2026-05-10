@@ -196,8 +196,8 @@ func TestLLMExtractorExtractCancelledContext(t *testing.T) {
 	}
 }
 
-// TestLLMExtractorExtractUsesRecentNonToolMessages 验证只取最近 10 条非 tool 消息。
-func TestLLMExtractorExtractUsesRecentNonToolMessages(t *testing.T) {
+// TestLLMExtractorExtractUsesFullRunMessages 验证提取器使用完整 run 消息而非固定 recent window。
+func TestLLMExtractorExtractUsesFullRunMessages(t *testing.T) {
 	generator := &stubTextGenerator{response: `[]`}
 	extractor := NewLLMExtractor(generator, 10)
 
@@ -219,19 +219,64 @@ func TestLLMExtractorExtractUsesRecentNonToolMessages(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Extract() error = %v", err)
 	}
-	if len(generator.messages) != 10 {
-		t.Fatalf("len(generator.messages) = %d, want 10", len(generator.messages))
+	if len(generator.messages) != 12 {
+		t.Fatalf("len(generator.messages) = %d, want 12", len(generator.messages))
 	}
 	for _, message := range generator.messages {
 		if message.Role == providertypes.RoleTool {
 			t.Fatalf("unexpected tool message in extraction context: %#v", message)
 		}
 	}
-	if renderMemoParts(generator.messages[0].Parts) != "user-c" ||
-		renderMemoParts(generator.messages[9].Parts) != "user-l" {
-		t.Fatalf("unexpected recent window: first=%q last=%q",
+	if renderMemoParts(generator.messages[0].Parts) != "user-a" ||
+		renderMemoParts(generator.messages[11].Parts) != "user-l" {
+		t.Fatalf("unexpected run window: first=%q last=%q",
 			renderMemoParts(generator.messages[0].Parts),
-			renderMemoParts(generator.messages[9].Parts))
+			renderMemoParts(generator.messages[11].Parts))
+	}
+}
+
+func TestLLMExtractorExtractDecisionsIncludesExistingCandidates(t *testing.T) {
+	generator := &stubTextGenerator{
+		response: `[{"action":"skip","ref":"user:u.md"},{"action":"update","ref":"project:p.md","title":"测试策略","content":"用户要求修改后先跑相关测试。","keywords":["test"]}]`,
+	}
+	extractor := NewLLMExtractor(generator, 10)
+
+	decisions, err := extractor.ExtractDecisions(
+		context.Background(),
+		[]providertypes.Message{
+			{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("以后改完先跑相关测试。")}},
+		},
+		[]ExtractionCandidate{
+			{
+				Ref:     "project:p.md",
+				Scope:   ScopeProject,
+				Type:    TypeFeedback,
+				Source:  SourceAutoExtract,
+				Title:   "测试策略",
+				Content: "用户要求修改后先跑测试。",
+			},
+		},
+	)
+	if err != nil {
+		t.Fatalf("ExtractDecisions() error = %v", err)
+	}
+	if len(decisions) != 2 {
+		t.Fatalf("len(decisions) = %d, want 2", len(decisions))
+	}
+	if decisions[0].Action != ExtractionActionSkip || decisions[0].Ref != "user:u.md" {
+		t.Fatalf("unexpected skip decision: %+v", decisions[0])
+	}
+	if decisions[1].Action != ExtractionActionUpdate || decisions[1].Ref != "project:p.md" {
+		t.Fatalf("unexpected update decision: %+v", decisions[1])
+	}
+	if decisions[1].Entry.Type != "" {
+		t.Fatalf("update decision should not require type, got %+v", decisions[1].Entry)
+	}
+	if !strings.Contains(generator.prompt, `"ref":"project:p.md"`) {
+		t.Fatalf("prompt should include existing memory candidates, got %q", generator.prompt)
+	}
+	if !strings.Contains(generator.prompt, `action="update"`) || !strings.Contains(generator.prompt, `source="extractor_auto"`) {
+		t.Fatalf("prompt should describe semantic dedupe protocol, got %q", generator.prompt)
 	}
 }
 

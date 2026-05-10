@@ -68,6 +68,130 @@ func (s *Service) addAutoExtractIfAbsent(ctx context.Context, entry Entry) (bool
 	return true, nil
 }
 
+// autoExtractionCandidates 加载既有记忆快照，供模型在提取时做语义去重判断。
+func (s *Service) autoExtractionCandidates(ctx context.Context) ([]ExtractionCandidate, error) {
+	if s == nil {
+		return nil, nil
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	candidates := make([]ExtractionCandidate, 0)
+	for _, scope := range supportedStorageScopes() {
+		index, err := s.loadIndexLocked(ctx, scope)
+		if err != nil {
+			return nil, err
+		}
+		for _, entry := range index.Entries {
+			topicFile := strings.TrimSpace(entry.TopicFile)
+			if topicFile == "" {
+				continue
+			}
+			topicContent, err := s.store.LoadTopic(ctx, scope, topicFile)
+			if err != nil {
+				continue
+			}
+			source, content := parseTopicSourceAndContent(topicContent)
+			candidates = append(candidates, ExtractionCandidate{
+				Ref:     scopedTopicKey(scope, topicFile),
+				Scope:   scope,
+				Type:    entry.Type,
+				Source:  source,
+				Title:   entry.Title,
+				Content: content,
+			})
+		}
+	}
+	return candidates, nil
+}
+
+// updateAutoExtractIfAllowed 按 ref 更新既有自动提取记忆，显式记忆不会被后台流程覆盖。
+func (s *Service) updateAutoExtractIfAllowed(ctx context.Context, ref string, next Entry) (bool, error) {
+	next.Title = NormalizeTitle(next.Title)
+	next.Content = strings.TrimSpace(next.Content)
+	next.Keywords = normalizeKeywords(next.Keywords)
+	if next.Title == "" {
+		return false, fmt.Errorf("memo: title is empty")
+	}
+	if next.Content == "" {
+		return false, fmt.Errorf("memo: content is empty")
+	}
+	if err := s.ensureAutoExtractIndex(ctx); err != nil {
+		return false, err
+	}
+
+	scope, topicFile, ok := parseScopedTopicKey(ref)
+	if !ok {
+		return false, nil
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	index, err := s.loadIndexLocked(ctx, scope)
+	if err != nil {
+		return false, err
+	}
+	working := cloneIndex(index)
+
+	targetIndex := -1
+	var current Entry
+	for idx, existing := range working.Entries {
+		if strings.TrimSpace(existing.TopicFile) == topicFile {
+			targetIndex = idx
+			current = existing
+			break
+		}
+	}
+	if targetIndex < 0 {
+		return false, nil
+	}
+
+	topicContent, err := s.store.LoadTopic(ctx, scope, topicFile)
+	if err != nil {
+		return false, nil
+	}
+	source, _ := parseTopicSourceAndContent(topicContent)
+	if source != SourceAutoExtract {
+		return false, nil
+	}
+
+	current.Title = next.Title
+	current.Content = next.Content
+	current.Keywords = next.Keywords
+	current.Source = SourceAutoExtract
+	current.TopicFile = topicFile
+	working.Entries[targetIndex] = current
+	working.UpdatedAt = time.Now()
+
+	removedEntries := trimIndexEntries(working, s.config.MaxEntries, s.config.MaxIndexBytes)
+	if err := s.store.SaveTopic(ctx, scope, topicFile, RenderTopic(&current)); err != nil {
+		return false, fmt.Errorf("memo: save topic: %w", err)
+	}
+	if err := s.store.SaveIndex(ctx, scope, working); err != nil {
+		return false, fmt.Errorf("memo: save index: %w", err)
+	}
+	for _, removed := range removedEntries {
+		if removedTopic := strings.TrimSpace(removed.TopicFile); removedTopic != "" {
+			_ = s.store.DeleteTopic(ctx, scope, removedTopic)
+		}
+	}
+
+	if s.autoExtractIndexReady {
+		s.removeAutoExtractTopicLocked(scope, topicFile)
+		for _, removed := range removedEntries {
+			s.removeAutoExtractTopicLocked(scope, removed.TopicFile)
+		}
+		if indexContainsTopicFile(working, topicFile) {
+			s.trackAutoExtractEntryLocked(scope, current)
+		}
+	}
+
+	s.invalidateCache()
+	return true, nil
+}
+
 // normalizeKeyword 统一关键词的空格与大小写处理。
 func normalizeKeyword(keyword string) string {
 	return strings.ToLower(strings.TrimSpace(keyword))
@@ -557,6 +681,23 @@ func indexContainsEntryID(index *Index, entryID string) bool {
 	return false
 }
 
+// indexContainsTopicFile 判断索引中是否仍保留指定 topic 文件。
+func indexContainsTopicFile(index *Index, topicFile string) bool {
+	if index == nil {
+		return false
+	}
+	topicFile = strings.TrimSpace(topicFile)
+	if topicFile == "" {
+		return false
+	}
+	for _, item := range index.Entries {
+		if strings.TrimSpace(item.TopicFile) == topicFile {
+			return true
+		}
+	}
+	return false
+}
+
 // scopesForQuery 将查询范围展开为实际存储分层列表。
 func scopesForQuery(scope Scope) []Scope {
 	switch NormalizeScope(scope) {
@@ -583,4 +724,21 @@ func validateQueryScope(scope Scope) error {
 // scopedTopicKey 为自动提取去重索引生成稳定的 topic 维度键。
 func scopedTopicKey(scope Scope, topicFile string) string {
 	return string(scope) + ":" + strings.TrimSpace(topicFile)
+}
+
+// parseScopedTopicKey 解析自动提取语义去重协议中的 ref 字段。
+func parseScopedTopicKey(ref string) (Scope, string, bool) {
+	parts := strings.SplitN(strings.TrimSpace(ref), ":", 2)
+	if len(parts) != 2 {
+		return "", "", false
+	}
+	scope := Scope(strings.TrimSpace(parts[0]))
+	if err := validateStorageScope(scope); err != nil {
+		return "", "", false
+	}
+	topicFile := strings.TrimSpace(parts[1])
+	if topicFile == "" {
+		return "", "", false
+	}
+	return scope, topicFile, true
 }
