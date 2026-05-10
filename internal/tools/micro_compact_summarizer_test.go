@@ -276,7 +276,7 @@ func TestRegisterBuiltinSummarizers(t *testing.T) {
 	RegisterBuiltinSummarizers(registry)
 
 	toolNames := []string{
-		ToolNameBash, ToolNameFilesystemReadFile, ToolNameFilesystemWriteFile,
+		ToolNameBash, ToolNameFilesystemReadFile, ToolNameCodebaseRead, ToolNameFilesystemWriteFile,
 		ToolNameFilesystemEdit, ToolNameFilesystemGrep, ToolNameFilesystemGlob,
 		ToolNameWebFetch,
 	}

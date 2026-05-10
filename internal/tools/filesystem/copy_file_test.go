@@ -53,6 +53,17 @@ func TestCopyFileTool_DuplicatesContent(t *testing.T) {
 	if !ok || len(paths) != 1 {
 		t.Fatalf("paths metadata = %#v want 1-item slice", result.Metadata["paths"])
 	}
+	if got, _ := result.Metadata["source_path"].(string); got != "a.go" {
+		t.Fatalf("source_path metadata = %q want a.go", got)
+	}
+	if got, _ := result.Metadata["destination_path"].(string); got != "nested/b.go" {
+		t.Fatalf("destination_path metadata = %q want nested/b.go", got)
+	}
+	for _, value := range []string{result.Metadata["source_path"].(string), result.Metadata["destination_path"].(string), paths[0]} {
+		if filepath.IsAbs(value) || strings.Contains(strings.ToLower(value), strings.ToLower(workspace)) {
+			t.Fatalf("expected metadata path to stay workspace-relative, got %q", value)
+		}
+	}
 }
 
 func TestCopyFileTool_RefusesOverwriteByDefault(t *testing.T) {

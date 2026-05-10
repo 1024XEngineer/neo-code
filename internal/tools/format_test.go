@@ -2,6 +2,7 @@ package tools
 
 import (
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -247,6 +248,30 @@ func TestSanitizeToolMetadata(t *testing.T) {
 				}
 				if len(got["path"]) <= maxProjectedToolMetadataValueLen {
 					t.Fatalf("expected long value to be truncated, got %q", got["path"])
+				}
+			},
+		},
+		{
+			name: "keeps relative copy and move path metadata but drops path arrays",
+			tool: "filesystem_move_file",
+			input: map[string]any{
+				"source_path":      "package.json",
+				"destination_path": "pkg.json",
+				"paths":            []string{"/repo/package.json", "/repo/pkg.json"},
+			},
+			assert: func(t *testing.T, got map[string]string) {
+				t.Helper()
+				if got["source_path"] != "package.json" {
+					t.Fatalf("expected source_path to be preserved, got %#v", got)
+				}
+				if got["destination_path"] != "pkg.json" {
+					t.Fatalf("expected destination_path to be preserved, got %#v", got)
+				}
+				if filepath.IsAbs(got["source_path"]) || filepath.IsAbs(got["destination_path"]) {
+					t.Fatalf("expected projected copy/move paths to be relative, got %#v", got)
+				}
+				if got["paths"] != "" {
+					t.Fatalf("expected array metadata to be dropped, got %#v", got)
 				}
 			},
 		},
