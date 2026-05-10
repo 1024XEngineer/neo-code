@@ -16,12 +16,16 @@ const (
 	StopReasonVerificationFailed StopReason = "verification_failed"
 	// StopReasonAccepted 表示 completion gate 与 verifier gate 均通过并完成收尾。
 	StopReasonAccepted StopReason = "accepted"
+	// StopReasonMissingCompletionSignal 表示模型停止调用工具但没有输出结构化完成信号。
+	StopReasonMissingCompletionSignal StopReason = "missing_completion_signal"
+	// StopReasonAcceptCheckFailed 表示最终 Accept Gate 的验收项失败。
+	StopReasonAcceptCheckFailed StopReason = "accept_check_failed"
 	// StopReasonTodoNotConverged 表示 required todo 尚未收敛。
 	StopReasonTodoNotConverged StopReason = "todo_not_converged"
 	// StopReasonTodoWaitingExternal 表示 required todo 仍在等待外部条件。
 	StopReasonTodoWaitingExternal StopReason = "todo_waiting_external"
-	// StopReasonNoProgressAfterFinalIntercept 表示 final 连续被拦截且没有新进展。
-	StopReasonNoProgressAfterFinalIntercept StopReason = "no_progress_after_final_intercept"
+	// StopReasonRepeatCycle 表示运行重复相同动作/结果并触发硬终止。
+	StopReasonRepeatCycle StopReason = "repeat_cycle"
 	// StopReasonMaxTurnExceededWithUnconvergedTodos 表示达到最大轮次时 todo 仍未收敛。
 	StopReasonMaxTurnExceededWithUnconvergedTodos StopReason = "max_turn_exceeded_with_unconverged_todos"
 	// StopReasonMaxTurnExceededWithFailedVerification 表示达到最大轮次时 verifier 已失败。

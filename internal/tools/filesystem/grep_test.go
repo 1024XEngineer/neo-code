@@ -239,3 +239,33 @@ func TestGrepToolFiltersSensitiveAndSymlinkEscapes(t *testing.T) {
 		t.Fatalf("expected symlink_escape reason count, got %#v", reasons)
 	}
 }
+
+func TestGrepToolSkipsNoisyDirectories(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	mustWriteFile(t, filepath.Join(workspace, "src", "main.go"), "needle\n")
+	for _, dir := range []string{".cache", ".tmp", "tmp", "build", "dist", "out", "target", "coverage", ".next", ".nuxt", ".turbo", ".parcel-cache", ".vite", "vendor", "bin", "obj"} {
+		mustWriteFile(t, filepath.Join(workspace, dir, "skip.txt"), "needle from "+dir+"\n")
+	}
+
+	tool := NewGrep(workspace)
+	result, err := tool.Execute(context.Background(), tools.ToolCallInput{
+		Name:      tool.Name(),
+		Arguments: mustMarshalFSArgs(t, map[string]any{"pattern": "needle"}),
+		Workdir:   workspace,
+	})
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	content := normalizeSlashPath(result.Content)
+	if !strings.Contains(content, normalizeSlashPath(filepath.Join("src", "main.go"))+":1: needle") {
+		t.Fatalf("expected src match, got %q", result.Content)
+	}
+	for _, dir := range []string{".cache", ".tmp", "tmp", "build", "dist", "out", "target", "coverage", ".next", ".nuxt", ".turbo", ".parcel-cache", ".vite", "vendor", "bin", "obj"} {
+		if strings.Contains(content, dir) {
+			t.Fatalf("expected noisy dir %q to be skipped, got %q", dir, result.Content)
+		}
+	}
+}

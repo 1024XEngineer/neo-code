@@ -20,7 +20,6 @@ type TurnBudgetSnapshot struct {
 	PromptBudget           int
 	BudgetSource           string
 	CompactCount           int
-	NoProgressStreakLimit  int
 	RepeatCycleStreakLimit int
 	InjectFullPlan         bool
 	ContextWindow          int
@@ -62,7 +61,6 @@ func newTurnBudgetSnapshot(
 	promptBudget int,
 	budgetSource string,
 	compactCount int,
-	noProgressStreakLimit int,
 	repeatCycleStreakLimit int,
 	injectFullPlan bool,
 	contextWindow int,
@@ -84,7 +82,6 @@ func newTurnBudgetSnapshot(
 		PromptBudget:           promptBudget,
 		BudgetSource:           budgetSource,
 		CompactCount:           compactCount,
-		NoProgressStreakLimit:  noProgressStreakLimit,
 		RepeatCycleStreakLimit: repeatCycleStreakLimit,
 		InjectFullPlan:         injectFullPlan,
 		ContextWindow:          contextWindow,

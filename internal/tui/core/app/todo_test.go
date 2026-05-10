@@ -200,7 +200,7 @@ func TestRebuildTodoSanitizesMarkdownTableLikeTitle(t *testing.T) {
 			ID:       "todo-md",
 			Status:   "pending",
 			Priority: 2,
-			Title: "| col1 | col2 |\n| --- | --- |\n| value-a | value-b |",
+			Title:    "| col1 | col2 |\n| --- | --- |\n| value-a | value-b |",
 		},
 	}
 
@@ -597,6 +597,35 @@ func TestRuntimeEventTodoHandlers(t *testing.T) {
 	}
 	if len(app.activities) != before {
 		t.Fatalf("expected no activity for foreign session")
+	}
+}
+
+func TestRuntimeEventTodoConflictTodoNotFoundDoesNotRefreshEmptyPanel(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.state.ActiveSessionID = "session-1"
+	app.todoItems = []todoViewItem{{ID: "stale", Title: "stale", Status: "pending"}}
+	app.todoPanelVisible = true
+
+	handled := runtimeEventTodoConflictHandler(&app, agentruntime.RuntimeEvent{
+		SessionID: "session-1",
+		Payload: agentruntime.TodoEventPayload{
+			Action: "complete",
+			Reason: "todo_not_found",
+		},
+	})
+	if handled {
+		t.Fatalf("expected todo conflict handler to return false")
+	}
+	if len(app.todoItems) != 0 || app.todoPanelVisible {
+		t.Fatalf("expected empty todo_not_found conflict to hide stale panel, items=%+v visible=%v", app.todoItems, app.todoPanelVisible)
+	}
+	if len(app.activities) == 0 || app.activities[len(app.activities)-1].Title != "Todo conflict" {
+		t.Fatalf("expected todo conflict activity, got %+v", app.activities)
+	}
+	for _, activity := range app.activities {
+		if activity.Title == "Failed to refresh todo panel" {
+			t.Fatalf("did not expect refresh failure activity for empty todo_not_found conflict: %+v", app.activities)
+		}
 	}
 }
 

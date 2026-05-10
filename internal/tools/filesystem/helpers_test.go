@@ -26,6 +26,10 @@ func TestSkipDirEntry(t *testing.T) {
 	root := t.TempDir()
 	mustCreateDir(t, filepath.Join(root, ".git"))
 	mustCreateDir(t, filepath.Join(root, "node_modules"))
+	mustCreateDir(t, filepath.Join(root, ".cache"))
+	mustCreateDir(t, filepath.Join(root, "build"))
+	mustCreateDir(t, filepath.Join(root, "dist"))
+	mustCreateDir(t, filepath.Join(root, "vendor"))
 	mustCreateDir(t, filepath.Join(root, "keep"))
 	mustWriteTestFile(t, filepath.Join(root, ".vscode"), "not-a-dir")
 
@@ -44,6 +48,11 @@ func TestSkipDirEntry(t *testing.T) {
 	}
 	if !got["node_modules"] {
 		t.Fatalf("node_modules skip = false, want true")
+	}
+	for _, name := range []string{".cache", "build", "dist", "vendor"} {
+		if !got[name] {
+			t.Fatalf("%s skip = false, want true", name)
+		}
 	}
 	if got["keep"] {
 		t.Fatalf("keep skip = true, want false")

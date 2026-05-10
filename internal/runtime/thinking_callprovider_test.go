@@ -13,7 +13,7 @@ import (
 func TestCallProviderRetriesWithThinkingDowngrade(t *testing.T) {
 	t.Parallel()
 
-	scripted := &scriptedProvider{}
+	scripted := &scriptedProvider{requireExplicitCompletion: true}
 	scripted.chatFn = func(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error {
 		if len(scripted.requests) == 1 {
 			return errors.Join(provider.ErrThinkingNotSupported, errors.New("upstream rejected thinking"))
@@ -57,6 +57,7 @@ func TestCallProviderEmitsThinkingDeltaEvent(t *testing.T) {
 	t.Parallel()
 
 	scripted := &scriptedProvider{
+		requireExplicitCompletion: true,
 		chatFn: func(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error {
 			events <- providertypes.NewThinkingDeltaStreamEvent("plan")
 			events <- providertypes.NewTextDeltaStreamEvent("answer")

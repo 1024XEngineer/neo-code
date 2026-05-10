@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"neo-code/internal/runtime/decider"
 	runtimefacts "neo-code/internal/runtime/facts"
 	agentsession "neo-code/internal/session"
 )
@@ -79,9 +78,6 @@ func TestGetRuntimeSnapshotBranches(t *testing.T) {
 	}
 	if got.SessionID != session.ID {
 		t.Fatalf("session id = %q, want %q", got.SessionID, session.ID)
-	}
-	if got.TaskKind != string(decider.TaskKindMixed) {
-		t.Fatalf("task kind = %q, want %q", got.TaskKind, decider.TaskKindMixed)
 	}
 	if got.Facts.RuntimeFacts.Progress.ObservedFactCount != 0 {
 		t.Fatalf("unexpected facts snapshot: %+v", got.Facts.RuntimeFacts)

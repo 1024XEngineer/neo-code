@@ -1721,7 +1721,6 @@ func TestValidateSnapshotPropagatesCompactError(t *testing.T) {
 			},
 		},
 		Runtime: RuntimeConfig{
-			MaxNoProgressStreak:  3,
 			MaxRepeatCycleStreak: 3,
 		},
 		Context: ContextConfig{
@@ -1830,7 +1829,7 @@ func TestParseCurrentConfigRoundTripRuntimeConfig(t *testing.T) {
 	t.Parallel()
 
 	snapshot := testDefaultConfig().Clone()
-	snapshot.Runtime.MaxNoProgressStreak = 5
+	snapshot.Runtime.MaxRepeatCycleStreak = 5
 
 	data, err := marshalPersistedConfig(snapshot)
 	if err != nil {
@@ -1841,8 +1840,8 @@ func TestParseCurrentConfigRoundTripRuntimeConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parseCurrentConfig() error = %v", err)
 	}
-	if parsed.Runtime.MaxNoProgressStreak != 5 {
-		t.Fatalf("expected max_no_progress_streak=5, got %d", parsed.Runtime.MaxNoProgressStreak)
+	if parsed.Runtime.MaxRepeatCycleStreak != 5 {
+		t.Fatalf("expected max_repeat_cycle_streak=5, got %d", parsed.Runtime.MaxRepeatCycleStreak)
 	}
 }
 
@@ -1854,7 +1853,7 @@ selected_provider: openai
 current_model: gpt-4.1
 shell: bash
 runtime:
-  max_no_progress_streak: -2
+  max_repeat_cycle_streak: -2
 `)
 
 	parsed, err := parseCurrentConfig(raw, StaticDefaults().Context, StaticDefaults().Memo)
@@ -1866,9 +1865,9 @@ runtime:
 	if err := parsed.ValidateSnapshot(); err != nil {
 		t.Fatalf("ValidateSnapshot() error = %v", err)
 	}
-	if parsed.Runtime.MaxNoProgressStreak != DefaultMaxNoProgressStreak {
-		t.Fatalf("expected default max_no_progress_streak=%d, got %d",
-			DefaultMaxNoProgressStreak, parsed.Runtime.MaxNoProgressStreak)
+	if parsed.Runtime.MaxRepeatCycleStreak != DefaultMaxRepeatCycleStreak {
+		t.Fatalf("expected default max_repeat_cycle_streak=%d, got %d",
+			DefaultMaxRepeatCycleStreak, parsed.Runtime.MaxRepeatCycleStreak)
 	}
 }
 

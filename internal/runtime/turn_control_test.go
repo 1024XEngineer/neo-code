@@ -29,7 +29,7 @@ func TestApplyToolExecutionCompletionTracksWriteAndVerification(t *testing.T) {
 
 	written := applyToolExecutionCompletion(controlplane.CompletionState{}, toolExecutionSummary{
 		Results: []tools.ToolResult{
-			{Facts: tools.ToolExecutionFacts{WorkspaceWrite: true}},
+			confirmedFilesystemWriteResult("a.txt"),
 		},
 	})
 	if !written.HasUnverifiedWrites {
@@ -52,7 +52,7 @@ func TestApplyToolExecutionCompletionKeepsUnverifiedWhenVerifyBeforeWrite(t *tes
 	got := applyToolExecutionCompletion(controlplane.CompletionState{}, toolExecutionSummary{
 		Results: []tools.ToolResult{
 			{Facts: tools.ToolExecutionFacts{VerificationPerformed: true, VerificationPassed: true}},
-			{Facts: tools.ToolExecutionFacts{WorkspaceWrite: true}},
+			confirmedFilesystemWriteResult("a.txt"),
 		},
 	})
 	if !got.HasUnverifiedWrites {
@@ -65,7 +65,7 @@ func TestApplyToolExecutionCompletionClearsWhenVerifyAfterWrite(t *testing.T) {
 
 	got := applyToolExecutionCompletion(controlplane.CompletionState{}, toolExecutionSummary{
 		Results: []tools.ToolResult{
-			{Facts: tools.ToolExecutionFacts{WorkspaceWrite: true}},
+			confirmedFilesystemWriteResult("a.txt"),
 			{Facts: tools.ToolExecutionFacts{VerificationPerformed: true, VerificationPassed: true}},
 		},
 	})
@@ -106,6 +106,100 @@ func TestToolResultNoopWrite(t *testing.T) {
 	}
 	if toolResultNoopWrite(nil) {
 		t.Fatal("expected nil metadata to be ignored")
+	}
+}
+
+func TestHasConfirmedWorkspaceWriteResultRequiresToolDiffEvidence(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name   string
+		result tools.ToolResult
+		want   bool
+	}{
+		{
+			name:   "filesystem write with tool diff payload",
+			result: confirmedFilesystemWriteResult("a.txt"),
+			want:   true,
+		},
+		{
+			name: "filesystem write without tool diff payload",
+			result: tools.ToolResult{
+				Name:  tools.ToolNameFilesystemEdit,
+				Facts: tools.ToolExecutionFacts{WorkspaceWrite: true},
+			},
+			want: false,
+		},
+		{
+			name: "noop write",
+			result: tools.ToolResult{
+				Name:  tools.ToolNameFilesystemWriteFile,
+				Facts: tools.ToolExecutionFacts{WorkspaceWrite: true},
+				Metadata: map[string]any{
+					"path":       "a.txt",
+					"noop_write": true,
+				},
+			},
+			want: false,
+		},
+		{
+			name: "tool error",
+			result: tools.ToolResult{
+				Name:    tools.ToolNameFilesystemEdit,
+				IsError: true,
+				Facts:   tools.ToolExecutionFacts{WorkspaceWrite: true},
+				Metadata: map[string]any{
+					"path": "a.txt",
+				},
+			},
+			want: false,
+		},
+		{
+			name: "bash write paths",
+			result: tools.ToolResult{
+				Name:  tools.ToolNameBash,
+				Facts: tools.ToolExecutionFacts{WorkspaceWrite: true},
+				Metadata: map[string]any{
+					"workspace_write_paths": []string{"a.txt"},
+				},
+			},
+			want: true,
+		},
+		{
+			name: "bash without write paths",
+			result: tools.ToolResult{
+				Name:  tools.ToolNameBash,
+				Facts: tools.ToolExecutionFacts{WorkspaceWrite: true},
+			},
+			want: false,
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := hasSuccessfulWorkspaceWriteFact(tc.result, nil); got != tc.want {
+				t.Fatalf("hasSuccessfulWorkspaceWriteFact() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func confirmedFilesystemWriteResult(path string) tools.ToolResult {
+	return tools.ToolResult{
+		Name:  tools.ToolNameFilesystemEdit,
+		Facts: tools.ToolExecutionFacts{WorkspaceWrite: true},
+		Metadata: map[string]any{
+			"path": path,
+			"tool_diffs": []map[string]any{
+				{
+					"path": path,
+					"diff": "--- a\n+++ b\n@@ -1 +1 @@\n-a\n+b",
+					"kind": FileChangeKindModified,
+				},
+			},
+		},
 	}
 }
 
@@ -184,70 +278,6 @@ func TestClassifyToolErrorPrefersExplicitErrorClass(t *testing.T) {
 	if got != "hook_blocked" {
 		t.Fatalf("classifyToolError() = %q, want hook_blocked", got)
 	}
-}
-
-func TestShouldPromotePendingFinalProgress(t *testing.T) {
-	t.Parallel()
-
-	t.Run("business progress always promotes", func(t *testing.T) {
-		t.Parallel()
-		score := controlplane.ProgressScore{HasBusinessProgress: true}
-		if !shouldPromotePendingFinalProgress(score, toolExecutionSummary{}, controlplane.CompletionState{}, "") {
-			t.Fatal("expected business progress to promote pending final progress")
-		}
-	})
-
-	t.Run("duplicate read result with same blocked reason does not promote", func(t *testing.T) {
-		t.Parallel()
-		score := controlplane.ProgressScore{
-			HasExplorationProgress: true,
-			SameToolSignature:      true,
-			SameResultFingerprint:  true,
-			SameSubgoal:            controlplane.SubgoalRelationSame,
-		}
-		summary := toolExecutionSummary{
-			Results: []tools.ToolResult{
-				{Name: tools.ToolNameFilesystemReadFile, Content: "same result"},
-			},
-		}
-		completion := controlplane.CompletionState{
-			CompletionBlockedReason: controlplane.CompletionBlockedReasonPendingTodo,
-		}
-		if shouldPromotePendingFinalProgress(
-			score,
-			summary,
-			completion,
-			string(controlplane.CompletionBlockedReasonPendingTodo),
-		) {
-			t.Fatal("expected duplicate informational read to not promote progress")
-		}
-	})
-
-	t.Run("read result still promotes when blocked reason changed", func(t *testing.T) {
-		t.Parallel()
-		score := controlplane.ProgressScore{
-			HasExplorationProgress: true,
-			SameToolSignature:      true,
-			SameResultFingerprint:  true,
-			SameSubgoal:            controlplane.SubgoalRelationSame,
-		}
-		summary := toolExecutionSummary{
-			Results: []tools.ToolResult{
-				{Name: tools.ToolNameFilesystemGlob, Content: "same result"},
-			},
-		}
-		completion := controlplane.CompletionState{
-			CompletionBlockedReason: controlplane.CompletionBlockedReasonPendingTodo,
-		}
-		if !shouldPromotePendingFinalProgress(
-			score,
-			summary,
-			completion,
-			string(controlplane.CompletionBlockedReasonUnverifiedWrite),
-		) {
-			t.Fatal("expected changed blocked reason to allow one more exploration promotion")
-		}
-	})
 }
 
 func TestApplyToolExecutionCompletionTracksTodoStateFacts(t *testing.T) {

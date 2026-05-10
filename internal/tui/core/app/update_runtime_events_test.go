@@ -799,15 +799,24 @@ func TestRuntimeEventVerificationAndAcceptanceHandlers(t *testing.T) {
 	}
 	runtimeEventAcceptanceDecidedHandler(&app, agentruntime.RuntimeEvent{
 		Payload: agentruntime.AcceptanceDecidedPayload{
-			Status:                  "failed",
-			UserVisibleSummary:      "",
-			InternalSummary:         "",
-			ContinueHint:            "provide missing files",
-			CompletionBlockedReason: "unverified_write",
+			Status:     "failed",
+			Summary:    "command_success: missing successful command evidence",
+			StopReason: agentruntime.StopReasonAcceptCheckFailed,
+			Results: []agentruntime.AcceptanceCheckResult{
+				{
+					Passed: false,
+					Name:   "command_success",
+					Kind:   "command_success",
+					Target: "go test ./...",
+					Reason: "missing successful command evidence",
+				},
+			},
 		},
 	})
 	acceptance := app.activities[len(app.activities)-1]
-	if acceptance.Title != "Acceptance decided (failed)" || !strings.Contains(acceptance.Detail, "reason=unverified_write") || !acceptance.IsError {
+	if acceptance.Title != "Acceptance decided (failed)" ||
+		!strings.Contains(acceptance.Detail, "command_success") ||
+		!acceptance.IsError {
 		t.Fatalf("unexpected acceptance activity: %+v", acceptance)
 	}
 }

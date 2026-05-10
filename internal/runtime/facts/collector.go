@@ -110,7 +110,7 @@ func (c *Collector) ApplyToolResult(toolName string, result tools.ToolResult) {
 	c.applyVerificationFacts(name, result)
 }
 
-// applyWorkspaceWritePathFacts 将工具 metadata 中声明的写入路径转成可被 decider 验收的文件事实。
+// applyWorkspaceWritePathFacts 将工具 metadata 中声明的写入路径转成可被 Accept Gate 消费的文件事实。
 func (c *Collector) applyWorkspaceWritePathFacts(result tools.ToolResult, source string) {
 	if !result.Facts.WorkspaceWrite {
 		return

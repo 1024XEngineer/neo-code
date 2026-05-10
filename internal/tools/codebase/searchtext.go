@@ -25,7 +25,7 @@ func (t *SearchTextTool) Name() string {
 }
 
 func (t *SearchTextTool) Description() string {
-	return "Search for text occurrences across the workspace. Returns file paths, line hints, and match counts. Does NOT return code snippets; use codebase_read to view content."
+	return "Search for text occurrences across the workspace. Prefer scope_dir during exploration/plan mode to avoid expensive full-workspace scans. Returns file paths, line hints, and match counts. Does NOT return code snippets; use codebase_read to view content."
 }
 
 func (t *SearchTextTool) Schema() map[string]any {

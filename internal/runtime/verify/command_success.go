@@ -90,7 +90,7 @@ func (v CommandSuccessVerifier) VerifyFinal(ctx context.Context, input FinalVeri
 	}
 	return VerificationResult{
 		Name:       name,
-		Status:     VerificationSoftBlock,
+		Status:     VerificationFail,
 		Summary:    fmt.Sprintf("verification command failed with exit code %d", result.ExitCode),
 		Reason:     "command exit code is non-zero",
 		ErrorClass: classifyCommandFailure(name, result),

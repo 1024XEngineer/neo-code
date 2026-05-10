@@ -1703,19 +1703,16 @@ func convertRuntimeSnapshot(snapshot agentruntime.RuntimeSnapshot) gateway.Runti
 		RunID:     strings.TrimSpace(snapshot.RunID),
 		SessionID: strings.TrimSpace(snapshot.SessionID),
 		Phase:     strings.TrimSpace(snapshot.Phase),
-		TaskKind:  strings.TrimSpace(snapshot.TaskKind),
 		UpdatedAt: snapshot.UpdatedAt,
 		Todos:     convertRuntimeTodoSnapshot(snapshot.Todos),
 		Facts: map[string]any{
 			"runtime_facts": snapshot.Facts.RuntimeFacts,
 		},
 		Decision: map[string]any{
-			"status":                strings.TrimSpace(snapshot.Decision.Status),
-			"stop_reason":           strings.TrimSpace(snapshot.Decision.StopReason),
-			"missing_facts":         snapshot.Decision.MissingFacts,
-			"required_next_actions": snapshot.Decision.RequiredNextActions,
-			"user_visible_summary":  strings.TrimSpace(snapshot.Decision.UserVisibleSummary),
-			"internal_summary":      strings.TrimSpace(snapshot.Decision.InternalSummary),
+			"status":      strings.TrimSpace(snapshot.Decision.Status),
+			"stop_reason": strings.TrimSpace(snapshot.Decision.StopReason),
+			"summary":     strings.TrimSpace(snapshot.Decision.Summary),
+			"details":     append([]string(nil), snapshot.Decision.Details...),
 		},
 		SubAgents: map[string]any{
 			"started_count":   snapshot.SubAgents.StartedCount,

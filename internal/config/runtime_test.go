@@ -5,21 +5,15 @@ import "testing"
 func TestRuntimeConfigCloneAndDefaults(t *testing.T) {
 	t.Parallel()
 
-	cfg := RuntimeConfig{MaxNoProgressStreak: 7, MaxRepeatCycleStreak: 4, MaxTurns: 21}
+	cfg := RuntimeConfig{MaxRepeatCycleStreak: 4, MaxTurns: 21}
 	cloned := cfg.Clone()
-	if cloned.MaxNoProgressStreak != 7 || cloned.MaxRepeatCycleStreak != 4 || cloned.MaxTurns != 21 {
+	if cloned.MaxRepeatCycleStreak != 4 || cloned.MaxTurns != 21 {
 		t.Fatalf("Clone() mismatch: %+v", cloned)
 	}
 
 	defaults := defaultRuntimeConfig()
 	var zero RuntimeConfig
 	zero.ApplyDefaults(defaults)
-	if zero.MaxNoProgressStreak != defaults.MaxNoProgressStreak {
-		t.Fatalf("MaxNoProgressStreak = %d, want %d", zero.MaxNoProgressStreak, defaults.MaxNoProgressStreak)
-	}
-	if zero.Verification.MaxNoProgress != defaults.Verification.MaxNoProgress {
-		t.Fatalf("Verification.MaxNoProgress = %d, want %d", zero.Verification.MaxNoProgress, defaults.Verification.MaxNoProgress)
-	}
 	if len(zero.Verification.Verifiers) == 0 {
 		t.Fatal("expected default verifiers to be populated")
 	}
@@ -28,25 +22,20 @@ func TestRuntimeConfigCloneAndDefaults(t *testing.T) {
 func TestRuntimeConfigValidate(t *testing.T) {
 	t.Parallel()
 
-	if err := (RuntimeConfig{MaxNoProgressStreak: 1, MaxRepeatCycleStreak: 1, MaxTurns: 1}).Validate(); err != nil {
+	if err := (RuntimeConfig{MaxRepeatCycleStreak: 1, MaxTurns: 1}).Validate(); err != nil {
 		t.Fatalf("expected valid config, got %v", err)
 	}
-	if err := (RuntimeConfig{MaxNoProgressStreak: 0, MaxRepeatCycleStreak: 1, MaxTurns: 1}).Validate(); err == nil {
-		t.Fatal("expected max_no_progress_streak validation error")
-	}
-	if err := (RuntimeConfig{MaxNoProgressStreak: 1, MaxRepeatCycleStreak: 0, MaxTurns: 1}).Validate(); err == nil {
+	if err := (RuntimeConfig{MaxRepeatCycleStreak: 0, MaxTurns: 1}).Validate(); err == nil {
 		t.Fatal("expected max_repeat_cycle_streak validation error")
 	}
-	if err := (RuntimeConfig{MaxNoProgressStreak: 1, MaxRepeatCycleStreak: 1, MaxTurns: -1}).Validate(); err == nil {
+	if err := (RuntimeConfig{MaxRepeatCycleStreak: 1, MaxTurns: -1}).Validate(); err == nil {
 		t.Fatal("expected max_turns validation error")
 	}
 
 	err := (RuntimeConfig{
-		MaxNoProgressStreak:  1,
 		MaxRepeatCycleStreak: 1,
 		MaxTurns:             1,
 		Verification: VerificationConfig{
-			MaxNoProgress: 1,
 			Verifiers: map[string]VerifierConfig{
 				"": {},
 			},

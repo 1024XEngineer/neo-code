@@ -11,11 +11,7 @@ type VerificationStatus string
 const (
 	// VerificationPass 表示验证通过。
 	VerificationPass VerificationStatus = "pass"
-	// VerificationSoftBlock 表示当前不能收尾，但仍可继续推进。
-	VerificationSoftBlock VerificationStatus = "soft_block"
-	// VerificationHardBlock 表示当前不能收尾且需要外部条件才能继续。
-	VerificationHardBlock VerificationStatus = "hard_block"
-	// VerificationFail 表示验证明确失败。
+	// VerificationFail 表示验证失败。
 	VerificationFail VerificationStatus = "fail"
 )
 
@@ -88,14 +84,6 @@ type TaskStateSnapshot struct {
 	KeyArtifacts        []string `json:"key_artifacts,omitempty"`
 }
 
-// RuntimeStateSnapshot 表示 verifier 所需的 runtime 控制面快照。
-type RuntimeStateSnapshot struct {
-	Turn                 int  `json:"turn,omitempty"`
-	MaxTurns             int  `json:"max_turns,omitempty"`
-	MaxTurnsReached      bool `json:"max_turns_reached,omitempty"`
-	FinalInterceptStreak int  `json:"final_intercept_streak,omitempty"`
-}
-
 // FinalVerifyInput 表示一次 final 验证请求的完整输入。
 type FinalVerifyInput struct {
 	SessionID          string                    `json:"session_id,omitempty"`
@@ -107,7 +95,6 @@ type FinalVerifyInput struct {
 	LastAssistantFinal string                    `json:"last_assistant_final,omitempty"`
 	ToolResults        []ToolResultLike          `json:"tool_results,omitempty"`
 	TaskState          TaskStateSnapshot         `json:"task_state,omitempty"`
-	RuntimeState       RuntimeStateSnapshot      `json:"runtime_state,omitempty"`
 	VerificationConfig config.VerificationConfig `json:"verification_config,omitempty"`
 }
 

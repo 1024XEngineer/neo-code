@@ -1009,7 +1009,6 @@ func TestGatewayRuntimePortBridgeListSessionTodosAndSnapshot(t *testing.T) {
 				RunID:     "run-1",
 				SessionID: "session-2",
 				Phase:     "acceptance",
-				TaskKind:  "workspace_write",
 				Decision:  agentruntime.DecisionSnapshot{Status: "continue", StopReason: "unverified_write"},
 				SubAgents: agentruntime.SubAgentSnapshot{StartedCount: 1, CompletedCount: 1, FailedCount: 0},
 			},

@@ -287,13 +287,22 @@ func (t *Tool) Execute(ctx context.Context, call tools.ToolCallInput) (tools.Too
 	if resultErr != nil {
 		reason := mapReason(resultErr)
 		extra := map[string]any{"action": input.Action}
+		details := resultErr.Error()
 		if reason == reasonRevisionConflict && input.ID != "" {
 			if current, ok := call.SessionMutator.FindTodo(input.ID); ok {
 				extra["current_revision"] = current.Revision
 				extra["current_status"] = string(current.Status)
 			}
 		}
-		return errorResult(reason, resultErr.Error(), extra), resultErr
+		if reason == reasonTodoNotFound {
+			details = todoNotFoundRecoveryDetails(call.SessionMutator, input.ID, resultErr)
+			todos := call.SessionMutator.ListTodos()
+			extra["todo_count"] = len(todos)
+			if ids := activeTodoIDsForRecovery(todos); len(ids) > 0 {
+				extra["active_todo_ids"] = ids
+			}
+		}
+		return errorResult(reason, details, extra), resultErr
 	}
 
 	return successResultWithMetadata(input.Action, call.SessionMutator.ListTodos(), dispatchMeta), nil
@@ -392,6 +401,41 @@ func (t *Tool) dispatch(call tools.ToolCallInput, input writeInput) (map[string]
 	default:
 		return nil, fmt.Errorf("todo_write: unsupported action %q", input.Action)
 	}
+}
+
+// todoNotFoundRecoveryDetails 为缺失 todo 的错误结果补充下一步恢复建议。
+func todoNotFoundRecoveryDetails(mutator tools.SessionMutator, id string, err error) string {
+	base := strings.TrimSpace(err.Error())
+	if base == "" {
+		base = fmt.Sprintf("%s: todo %q", agentsession.ErrTodoNotFound, strings.TrimSpace(id))
+	}
+	if mutator == nil || len(mutator.ListTodos()) == 0 {
+		return base + "; current session has no active todos. Create current run todos first with todo_write action=\"plan\" or action=\"add\", then update or complete those ids."
+	}
+	ids := activeTodoIDsForRecovery(mutator.ListTodos())
+	if len(ids) == 0 {
+		return base + "; current todos are all terminal. Create new current plan todos with todo_write action=\"plan\" or action=\"add\" before updating status."
+	}
+	return base + "; use one of the current active todo ids or recreate the current plan todos. active_todo_ids=" + strings.Join(ids, ",")
+}
+
+// activeTodoIDsForRecovery 收集非终态 todo ID，帮助模型从 todo_not_found 中恢复。
+func activeTodoIDsForRecovery(items []agentsession.TodoItem) []string {
+	if len(items) == 0 {
+		return nil
+	}
+	ids := make([]string, 0, len(items))
+	for _, item := range items {
+		id := strings.TrimSpace(item.ID)
+		if id == "" || item.Status.IsTerminal() {
+			continue
+		}
+		ids = append(ids, id)
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	return ids
 }
 
 // completeTodoWithErgonomics 为 complete 动作提供 pending->in_progress->completed 便捷迁移。
