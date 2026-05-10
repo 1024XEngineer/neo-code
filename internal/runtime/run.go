@@ -472,7 +472,7 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 					})
 					recordAcceptanceTerminal(&state, acceptanceDecision)
 					s.emitRunScoped(ctx, EventAgentDone, &state, turnOutput.assistant)
-					s.triggerMemoExtraction(state.session.ID, state.session.Messages, state.rememberedThisRun)
+					s.triggerMemoExtraction(state.session.ID, runBoundaryMessagesForMemo(&state), state.rememberedThisRun)
 					return nil
 				case acceptance.AcceptanceContinue:
 					state.lastAcceptanceBlockedReason = strings.TrimSpace(acceptanceDecision.CompletionBlockedReason)

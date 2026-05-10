@@ -1675,6 +1675,48 @@ func TestNewMemoExtractorAdapterBuildsProviderSafeMemoWindow(t *testing.T) {
 	}
 }
 
+func TestNewMemoExtractorAdapterUsesFullRunMemoWindow(t *testing.T) {
+	t.Setenv(config.OpenAIDefaultAPIKeyEnv, "token")
+	cfg := config.StaticDefaults().Clone()
+	cfg.SelectedProvider = config.OpenAIName
+	cfg.Memo.ExtractRecentMessages = 3
+	manager := config.NewManager(config.NewLoader("", &cfg))
+
+	providerStub := &stubMemoProvider{
+		generate: func(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error {
+			if len(req.Messages) != 12 {
+				t.Fatalf("unexpected memo window length %d, want full run: %+v", len(req.Messages), req.Messages)
+			}
+			events <- providertypes.NewTextDeltaStreamEvent(`[]`)
+			events <- providertypes.NewMessageDoneStreamEvent("stop", nil)
+			return nil
+		},
+	}
+	factory := &stubMemoProviderFactory{provider: providerStub}
+	scheduler := &stubMemoExtractorScheduler{}
+	extractor := newMemoExtractorAdapter(factory, manager, scheduler)
+
+	inputMessages := make([]providertypes.Message, 0, 12)
+	for index := 0; index < 12; index++ {
+		inputMessages = append(inputMessages, providertypes.Message{
+			Role:  providertypes.RoleUser,
+			Parts: []providertypes.ContentPart{providertypes.NewTextPart(fmt.Sprintf("message-%02d", index))},
+		})
+	}
+	extractor.Schedule("session-1", inputMessages)
+	if !scheduler.called || scheduler.extractor == nil {
+		t.Fatalf("expected scheduler to receive extractor")
+	}
+
+	_, err := scheduler.extractor.Extract(context.Background(), inputMessages)
+	if err != nil {
+		t.Fatalf("extractor.Extract() error = %v", err)
+	}
+	if !factory.called {
+		t.Fatalf("expected provider factory Build to be called")
+	}
+}
+
 func TestNewMemoExtractorAdapterKeepsScheduledConfigSnapshot(t *testing.T) {
 	t.Setenv(config.OpenAIDefaultAPIKeyEnv, "openai-token")
 	t.Setenv(config.QiniuDefaultAPIKeyEnv, "qiniu-token")

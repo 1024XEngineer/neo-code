@@ -4,6 +4,7 @@ import (
 	"sync"
 	"time"
 
+	providertypes "neo-code/internal/provider/types"
 	"neo-code/internal/runtime/controlplane"
 	"neo-code/internal/runtime/decider"
 	runtimefacts "neo-code/internal/runtime/facts"
@@ -20,6 +21,7 @@ type runState struct {
 	effectiveWorkdir               string
 	compactCount                   int
 	reactiveCompactAttempts        int
+	memoRunMessages                []providertypes.Message
 	rememberedThisRun              bool
 	planningEnabled                bool
 	taskID                         string

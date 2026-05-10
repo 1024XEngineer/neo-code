@@ -140,6 +140,50 @@ func TestBuildRecentMessagesForModelKeepsOnlyRecentValidAnchors(t *testing.T) {
 	}
 }
 
+func TestBuildMemoExtractionMessagesForModelKeepsFullRunSafeSpans(t *testing.T) {
+	t.Parallel()
+
+	messages := []providertypes.Message{
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("first")}},
+		{Role: providertypes.RoleTool, ToolCallID: "orphan", Parts: []providertypes.ContentPart{providertypes.NewTextPart("orphan")}},
+		{
+			Role: providertypes.RoleAssistant,
+			ToolCalls: []providertypes.ToolCall{
+				{ID: "call-1", Name: "filesystem_read_file", Arguments: `{"path":"README.md"}`},
+			},
+		},
+		{
+			Role:         providertypes.RoleTool,
+			ToolCallID:   "call-1",
+			Parts:        []providertypes.ContentPart{providertypes.NewTextPart("README body")},
+			ToolMetadata: map[string]string{"tool_name": "filesystem_read_file", "path": "README.md"},
+		},
+		{
+			Role: providertypes.RoleAssistant,
+			ToolCalls: []providertypes.ToolCall{
+				{ID: "call-missing", Name: "bash", Arguments: `{}`},
+			},
+		},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("last")}},
+	}
+
+	projected := BuildMemoExtractionMessagesForModel(messages)
+	if len(projected) != 4 {
+		t.Fatalf("len(projected) = %d, want 4: %+v", len(projected), projected)
+	}
+	if renderDisplayParts(projected[0].Parts) != "first" || renderDisplayParts(projected[3].Parts) != "last" {
+		t.Fatalf("expected full run user messages to remain, got %+v", projected)
+	}
+	if projected[1].Role != providertypes.RoleAssistant || len(projected[1].ToolCalls) != 1 {
+		t.Fatalf("expected complete assistant tool span, got %+v", projected[1])
+	}
+	if projected[2].Role != providertypes.RoleTool ||
+		!strings.Contains(renderDisplayParts(projected[2].Parts), "tool result") ||
+		projected[2].ToolMetadata != nil {
+		t.Fatalf("expected projected tool result, got %+v", projected[2])
+	}
+}
+
 func TestBuildRecentMessagesForModelRespectsAbsoluteMessageBudget(t *testing.T) {
 	t.Parallel()
 

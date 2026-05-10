@@ -27,6 +27,8 @@ type LLMExtractor struct {
 }
 
 type extractedEntry struct {
+	Action   string   `json:"action"`
+	Ref      string   `json:"ref"`
 	Type     string   `json:"type"`
 	Title    string   `json:"title"`
 	Content  string   `json:"content"`
@@ -45,8 +47,27 @@ func NewLLMExtractor(generator TextGenerator, recentMessageLimit int) *LLMExtrac
 	}
 }
 
-// Extract 从最近对话中提取可跨会话持久化的记忆条目。
+// Extract 从当前 run 对话中提取可跨会话持久化的新增记忆条目。
 func (e *LLMExtractor) Extract(ctx context.Context, messages []providertypes.Message) ([]Entry, error) {
+	decisions, err := e.ExtractDecisions(ctx, messages, nil)
+	if err != nil {
+		return nil, err
+	}
+	entries := make([]Entry, 0, len(decisions))
+	for _, decision := range decisions {
+		if decision.Action == ExtractionActionCreate {
+			entries = append(entries, decision.Entry)
+		}
+	}
+	return entries, nil
+}
+
+// ExtractDecisions 从当前 run 对话中提取记忆，并结合既有记忆输出新增、合并或跳过决策。
+func (e *LLMExtractor) ExtractDecisions(
+	ctx context.Context,
+	messages []providertypes.Message,
+	existing []ExtractionCandidate,
+) ([]ExtractionDecision, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -54,12 +75,12 @@ func (e *LLMExtractor) Extract(ctx context.Context, messages []providertypes.Mes
 		return nil, errors.New("memo: text generator is nil")
 	}
 
-	recent := agentcontext.BuildRecentMessagesForModel(messages, e.recentMessageLimit)
-	if len(recent) == 0 || !containsUserMessage(recent) {
+	runMessages := agentcontext.BuildMemoExtractionMessagesForModel(messages)
+	if len(runMessages) == 0 || !containsUserMessage(runMessages) {
 		return nil, nil
 	}
 
-	response, err := e.generator.Generate(ctx, buildExtractionPrompt(e.now()), recent)
+	response, err := e.generator.Generate(ctx, buildExtractionPrompt(e.now(), existing), runMessages)
 	if err != nil {
 		return nil, err
 	}
@@ -77,23 +98,29 @@ func (e *LLMExtractor) Extract(ctx context.Context, messages []providertypes.Mes
 		return nil, fmt.Errorf("memo: parse extraction response: %w", err)
 	}
 
-	entries := make([]Entry, 0, len(extracted))
+	decisions := make([]ExtractionDecision, 0, len(extracted))
 	for _, item := range extracted {
-		entry, ok := toMemoEntry(item)
+		decision, ok := toExtractionDecision(item)
 		if !ok {
 			continue
 		}
-		entries = append(entries, entry)
+		decisions = append(decisions, decision)
 	}
-	return entries, nil
+	return decisions, nil
 }
 
 // buildExtractionPrompt 构造记忆提取专用的 system prompt。
-func buildExtractionPrompt(now time.Time) string {
+func buildExtractionPrompt(now time.Time, existing []ExtractionCandidate) string {
 	currentDate := now.In(time.Local).Format("2006-01-02")
+	existingJSON := "[]"
+	if len(existing) > 0 {
+		if data, err := json.Marshal(existing); err == nil {
+			existingJSON = string(data)
+		}
+	}
 	return strings.TrimSpace(fmt.Sprintf(`
 你是一个记忆提取助手（memory extraction assistant）。
-分析最近对话中值得跨会话持久记住的信息，并返回严格 JSON 数组。
+分析当前 run 对话中值得跨会话持久记住的信息，并结合既有记忆完成语义去重，返回严格 JSON 数组。
 
 当前本地日期：%s
 如果对话中出现“今天、明天、下周二”等相对日期，必须先转换为绝对日期再写入 content。
@@ -109,11 +136,18 @@ func buildExtractionPrompt(now time.Time) string {
 2. 不要提取通用编程知识、代码结构、文件路径、Git 历史。
 3. 每条记忆必须具体、可操作。
 4. 没有值得记住的信息时，返回 []。
-5. 输出必须是 JSON 数组，不要输出任何额外解释。
+5. 如果新信息与既有记忆语义相同或只是轻微改写，输出 action="skip"。
+6. 如果新信息能补充或修正既有 source="extractor_auto" 的记忆，输出 action="update" 并填写目标 ref。
+7. 不允许 update source 不是 "extractor_auto" 的既有记忆；这类相近内容只能 skip。
+8. 如果是全新的可持久化信息，输出 action="create"。
+9. 输出必须是 JSON 数组，不要输出任何额外解释。
+
+既有记忆候选（JSON）：
+%s
 
 输出格式：
-[{"type":"user","title":"...","content":"...","keywords":["..."]}]
-`, currentDate))
+[{"action":"create","type":"user","title":"...","content":"...","keywords":["..."]},{"action":"update","ref":"project:p.md","title":"...","content":"...","keywords":["..."]},{"action":"skip","ref":"user:u.md"}]
+`, currentDate, existingJSON))
 }
 
 // containsUserMessage 检查待提取消息中是否包含用户输入。
@@ -146,6 +180,69 @@ func toMemoEntry(item extractedEntry) (Entry, bool) {
 		Keywords: normalizeKeywords(item.Keywords),
 		Source:   SourceAutoExtract,
 	}, true
+}
+
+// toExtractionDecision 将 LLM 输出收敛为自动提取持久化决策。
+func toExtractionDecision(item extractedEntry) (ExtractionDecision, bool) {
+	action := parseExtractionAction(item.Action)
+	if action == "" {
+		return ExtractionDecision{}, false
+	}
+	if action == ExtractionActionSkip {
+		return ExtractionDecision{
+			Action: action,
+			Ref:    strings.TrimSpace(item.Ref),
+		}, true
+	}
+
+	if action == ExtractionActionUpdate {
+		ref := strings.TrimSpace(item.Ref)
+		if ref == "" {
+			return ExtractionDecision{}, false
+		}
+		entry, ok := toMemoUpdateEntry(item)
+		if !ok {
+			return ExtractionDecision{}, false
+		}
+		return ExtractionDecision{Action: action, Ref: ref, Entry: entry}, true
+	}
+
+	entry, ok := toMemoEntry(item)
+	if !ok {
+		return ExtractionDecision{}, false
+	}
+	return ExtractionDecision{Action: action, Entry: entry}, true
+}
+
+// toMemoUpdateEntry 将 update 决策中的可变字段收敛为 Entry 片段。
+func toMemoUpdateEntry(item extractedEntry) (Entry, bool) {
+	title := NormalizeTitle(item.Title)
+	content := strings.TrimSpace(item.Content)
+	if title == "" || content == "" {
+		return Entry{}, false
+	}
+	return Entry{
+		Title:    title,
+		Content:  content,
+		Keywords: normalizeKeywords(item.Keywords),
+		Source:   SourceAutoExtract,
+	}, true
+}
+
+// parseExtractionAction 解析模型决策动作，并兼容旧格式中缺省 action 的 create 输出。
+func parseExtractionAction(action string) ExtractionAction {
+	switch ExtractionAction(strings.ToLower(strings.TrimSpace(action))) {
+	case "":
+		return ExtractionActionCreate
+	case ExtractionActionCreate:
+		return ExtractionActionCreate
+	case ExtractionActionUpdate:
+		return ExtractionActionUpdate
+	case ExtractionActionSkip:
+		return ExtractionActionSkip
+	default:
+		return ""
+	}
 }
 
 // normalizeKeywords 规范化关键词列表，移除空值和重复值。

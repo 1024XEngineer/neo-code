@@ -79,6 +79,42 @@ func BuildRecentMessagesForModel(messages []providertypes.Message, limit int) []
 	return sanitizeRecentWindowToolMessages(ProjectToolMessagesForModel(cloneContextMessages(selected)))
 }
 
+// BuildMemoExtractionMessagesForModel 构造完整 run 的 provider-safe 记忆提取上下文。
+func BuildMemoExtractionMessagesForModel(messages []providertypes.Message) []providertypes.Message {
+	if len(messages) == 0 {
+		return nil
+	}
+
+	keep := make([]bool, len(messages))
+	for index := 0; index < len(messages); index++ {
+		message := messages[index]
+		if message.Role == providertypes.RoleTool {
+			continue
+		}
+
+		if message.Role == providertypes.RoleAssistant && len(message.ToolCalls) > 0 {
+			for _, spanIndex := range matchedToolCallSpan(messages, index) {
+				keep[spanIndex] = true
+			}
+			continue
+		}
+
+		keep[index] = true
+	}
+
+	selected := make([]providertypes.Message, 0, len(messages))
+	for index, message := range messages {
+		if keep[index] {
+			selected = append(selected, message)
+		}
+	}
+	if len(selected) == 0 {
+		return nil
+	}
+
+	return sanitizeRecentWindowToolMessages(ProjectToolMessagesForModel(cloneContextMessages(selected)))
+}
+
 // matchedToolCallSpan 返回 assistant tool call 与其完整 tool 响应组成的合法窗口下标集合。
 func matchedToolCallSpan(messages []providertypes.Message, assistantIndex int) []int {
 	if assistantIndex < 0 || assistantIndex >= len(messages) {
