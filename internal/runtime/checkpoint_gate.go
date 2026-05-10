@@ -5,10 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
 	"neo-code/internal/checkpoint"
+	"neo-code/internal/repository"
 	agentsession "neo-code/internal/session"
 )
 
@@ -36,6 +39,73 @@ func (s *Service) createStartOfTurnCheckpoint(ctx context.Context, state *runSta
 	}
 	defer s.perEditStore.Reset()
 	return s.createCheckpointRecord(ctx, session, runID, state, checkpointID, agentsession.CheckpointReasonPreWrite)
+}
+
+// createPreRunDriftRebaseCheckpoint 在 run 开始前检测到外部漂移时，固化当前工作区为权威基线。
+func (s *Service) createPreRunDriftRebaseCheckpoint(
+	ctx context.Context,
+	state *runState,
+	diff repository.FingerprintDiff,
+) (string, error) {
+	if s.checkpointStore == nil || s.perEditStore == nil {
+		return "", nil
+	}
+
+	state.mu.Lock()
+	session := state.session
+	runID := state.runID
+	workdir := effectiveWorkdirForCheckpointState(state, session)
+	state.mu.Unlock()
+
+	if workdir == "" {
+		return "", fmt.Errorf("checkpoint: workdir is empty when creating drift rebase checkpoint")
+	}
+
+	currentFingerprint, _, err := repository.ScanWorkdir(ctx, workdir, repository.DefaultFingerprintOptions())
+	if err != nil {
+		return "", fmt.Errorf("checkpoint: scan workdir for drift rebase: %w", err)
+	}
+	absPaths := make([]string, 0, len(currentFingerprint))
+	for relPath := range currentFingerprint {
+		absPaths = append(absPaths, filepath.Join(workdir, filepath.FromSlash(relPath)))
+	}
+	sort.Strings(absPaths)
+	if len(absPaths) > 0 {
+		if _, err := s.perEditStore.CaptureBatch(absPaths); err != nil {
+			return "", fmt.Errorf("checkpoint: capture current files for drift rebase: %w", err)
+		}
+	}
+
+	deleted := append([]string(nil), diff.Deleted...)
+	sort.Strings(deleted)
+	for _, relPath := range deleted {
+		absPath := filepath.Join(workdir, filepath.FromSlash(relPath))
+		if _, err := s.perEditStore.CapturePreWrite(absPath); err != nil {
+			return "", fmt.Errorf("checkpoint: capture deleted file for drift rebase (%s): %w", relPath, err)
+		}
+	}
+
+	checkpointID := agentsession.NewID("checkpoint")
+	written, err := s.perEditStore.FinalizeWithExactState(checkpointID)
+	if err != nil {
+		return "", fmt.Errorf("checkpoint: finalize drift rebase checkpoint: %w", err)
+	}
+	if !written {
+		return "", fmt.Errorf("checkpoint: drift rebase checkpoint has no captured files")
+	}
+	defer s.perEditStore.Reset()
+
+	if err := s.createCheckpointRecord(
+		ctx,
+		session,
+		runID,
+		state,
+		checkpointID,
+		agentsession.CheckpointReasonPreRunDriftRebase,
+	); err != nil {
+		return "", err
+	}
+	return checkpointID, nil
 }
 
 // createEndOfTurnCheckpoint 在工具执行完成后创建代码检查点。
@@ -95,7 +165,7 @@ func (s *Service) createCheckpointRecord(
 		return fmt.Errorf("checkpoint: marshal messages: %w", err)
 	}
 
-	effectiveWorkdir := strings.TrimSpace(session.Workdir)
+	effectiveWorkdir := effectiveWorkdirForCheckpointState(state, session)
 	now := time.Now()
 	ref := checkpoint.RefForPerEditCheckpoint(checkpointID)
 
@@ -159,12 +229,13 @@ func (s *Service) createSessionOnlyCheckpoint(
 		return fmt.Errorf("checkpoint: marshal session-only messages: %w", err)
 	}
 
+	effectiveWorkdir := effectiveWorkdirForCheckpointState(state, session)
 	record := agentsession.CheckpointRecord{
 		CheckpointID: checkpointID,
-		WorkspaceKey: agentsession.WorkspacePathKey(session.Workdir),
+		WorkspaceKey: agentsession.WorkspacePathKey(effectiveWorkdir),
 		SessionID:    session.ID,
 		RunID:        runID,
-		Workdir:      session.Workdir,
+		Workdir:      effectiveWorkdir,
 		CreatedAt:    now,
 		Reason:       reason,
 		Restorable:   true,
@@ -223,4 +294,14 @@ func (s *Service) findPreviousEndOfTurnCheckpoint(ctx context.Context, sessionID
 		return checkpoint.PerEditCheckpointIDFromRef(r.CodeCheckpointRef)
 	}
 	return ""
+}
+
+// effectiveWorkdirForCheckpointState 返回 checkpoint 流程应使用的工作目录，优先使用本次 run 已归一化的目录。
+func effectiveWorkdirForCheckpointState(state *runState, session agentsession.Session) string {
+	if state != nil {
+		if workdir := strings.TrimSpace(state.effectiveWorkdir); workdir != "" {
+			return workdir
+		}
+	}
+	return strings.TrimSpace(session.Workdir)
 }

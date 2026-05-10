@@ -193,19 +193,26 @@ type Service struct {
 	events             chan RuntimeEvent
 	runtimeSnapshotMu  sync.Mutex
 	runtimeSnapshots   map[string]RuntimeSnapshot
-	sessionMu          sync.Mutex
-	sessionLocks       map[string]*sessionLockEntry
-	runMu              sync.Mutex
-	activeRunToken     uint64
-	nextRunToken       uint64
-	activeRunCancels   map[uint64]context.CancelFunc
-	activeRunByID      map[string]uint64
-	activeRunTokenIDs  map[uint64]string
-	activeRunStates    map[uint64]*runState
-	permissionAskMapMu sync.Mutex
-	permissionAskLocks map[string]*permissionAskLockEntry
-	askStore           AskSessionStore
-	askSequence        uint64
+	rollbackBaselineMu sync.Mutex
+	// runRollbackBaselineByRunKey 记录一次 run 的权威回退基线 checkpoint_id，key=session_id+"\n"+run_id。
+	runRollbackBaselineByRunKey map[string]string
+	// runWorkspaceDriftByRunKey 标记 run 开始前工作区是否发生空闲期漂移，key=session_id+"\n"+run_id。
+	runWorkspaceDriftByRunKey map[string]bool
+	// lastRunFingerprintByWorkspaceKey 保存每个工作区上一次 run 结束时的指纹，用于跨会话漂移检测。
+	lastRunFingerprintByWorkspaceKey map[string]repository.WorkdirFingerprint
+	sessionMu                        sync.Mutex
+	sessionLocks                     map[string]*sessionLockEntry
+	runMu                            sync.Mutex
+	activeRunToken                   uint64
+	nextRunToken                     uint64
+	activeRunCancels                 map[uint64]context.CancelFunc
+	activeRunByID                    map[string]uint64
+	activeRunTokenIDs                map[uint64]string
+	activeRunStates                  map[uint64]*runState
+	permissionAskMapMu               sync.Mutex
+	permissionAskLocks               map[string]*permissionAskLockEntry
+	askStore                         AskSessionStore
+	askSequence                      uint64
 
 	thinkingEnabled bool
 
@@ -261,24 +268,27 @@ func NewWithFactory(
 	}
 
 	service := &Service{
-		configManager:      configManager,
-		sessionStore:       sessionStore,
-		toolManager:        toolManager,
-		providerFactory:    providerFactory,
-		contextBuilder:     contextBuilder,
-		repositoryService:  repository.NewService(),
-		approvalBroker:     approval.NewBroker(),
-		askUserBroker:      askuser.NewBroker(),
-		events:             make(chan RuntimeEvent, 128),
-		runtimeSnapshots:   make(map[string]RuntimeSnapshot),
-		sessionLocks:       make(map[string]*sessionLockEntry),
-		permissionAskLocks: make(map[string]*permissionAskLockEntry),
-		activeRunCancels:   make(map[uint64]context.CancelFunc),
-		activeRunByID:      make(map[string]uint64),
-		activeRunTokenIDs:  make(map[uint64]string),
-		activeRunStates:    make(map[uint64]*runState),
-		askStore:           newInMemoryAskSessionStore(askSessionTTL),
-		thinkingEnabled:    true,
+		configManager:                    configManager,
+		sessionStore:                     sessionStore,
+		toolManager:                      toolManager,
+		providerFactory:                  providerFactory,
+		contextBuilder:                   contextBuilder,
+		repositoryService:                repository.NewService(),
+		approvalBroker:                   approval.NewBroker(),
+		askUserBroker:                    askuser.NewBroker(),
+		events:                           make(chan RuntimeEvent, 128),
+		runtimeSnapshots:                 make(map[string]RuntimeSnapshot),
+		runRollbackBaselineByRunKey:      make(map[string]string),
+		runWorkspaceDriftByRunKey:        make(map[string]bool),
+		lastRunFingerprintByWorkspaceKey: make(map[string]repository.WorkdirFingerprint),
+		sessionLocks:                     make(map[string]*sessionLockEntry),
+		permissionAskLocks:               make(map[string]*permissionAskLockEntry),
+		activeRunCancels:                 make(map[uint64]context.CancelFunc),
+		activeRunByID:                    make(map[string]uint64),
+		activeRunTokenIDs:                make(map[uint64]string),
+		activeRunStates:                  make(map[uint64]*runState),
+		askStore:                         newInMemoryAskSessionStore(askSessionTTL),
+		thinkingEnabled:                  true,
 	}
 	baseHookExecutor := runtimehooks.NewExecutor(runtimehooks.NewRegistry(), newHookRuntimeEventEmitter(service), runtimehooks.DefaultHookTimeout)
 	baseHookExecutor.SetAsyncResultSink(newHookAsyncResultSink(service))

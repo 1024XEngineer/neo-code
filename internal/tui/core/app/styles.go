@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
 
 const (
@@ -171,10 +172,12 @@ func newStyles() styles {
 		messageAgentTag: tagStyle(neoBadge),
 		messageBody: lipgloss.NewStyle().
 			Foreground(lipgloss.Color(neoText)).
-			MarginLeft(3),
+			MarginLeft(2).
+			PaddingLeft(1),
 		messageUserBody: lipgloss.NewStyle().
 			Foreground(lipgloss.Color(youText)).
-			MarginLeft(3),
+			MarginLeft(2).
+			PaddingLeft(1),
 		inlineNotice: lipgloss.NewStyle().
 			Foreground(lipgloss.Color(oliveGray)).
 			Italic(true),
@@ -294,45 +297,14 @@ func wrapPlain(text string, width int) string {
 	if width <= 0 {
 		return text
 	}
-
-	lines := strings.Split(text, "\n")
-	out := make([]string, 0, len(lines))
-	for _, line := range lines {
-		runes := []rune(line)
-		if len(runes) == 0 {
-			out = append(out, "")
-			continue
-		}
-		for len(runes) > width {
-			out = append(out, string(runes[:width]))
-			runes = runes[width:]
-		}
-		out = append(out, string(runes))
-	}
-	return strings.Join(out, "\n")
+	return wrapByDisplayWidth(text, width, false)
 }
 
 func wrapCodeBlock(text string, width int) string {
 	if width <= 0 {
 		return text
 	}
-
-	lines := strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n")
-	out := make([]string, 0, len(lines))
-	for _, line := range lines {
-		expanded := strings.ReplaceAll(line, "\t", "    ")
-		runes := []rune(expanded)
-		if len(runes) == 0 {
-			out = append(out, "")
-			continue
-		}
-		for len(runes) > width {
-			out = append(out, string(runes[:width]))
-			runes = runes[width:]
-		}
-		out = append(out, string(runes))
-	}
-	return strings.Join(out, "\n")
+	return wrapByDisplayWidth(text, width, true)
 }
 
 func preview(text string, width int, lines int) string {
@@ -351,9 +323,45 @@ func preview(text string, width int, lines int) string {
 		return "(empty)"
 	}
 	joined := strings.Join(out, "\n")
-	runes := []rune(joined)
-	if len(runes) > width*lines {
-		return string(runes[:width*lines-3]) + "..."
+	maxWidth := width * lines
+	if maxWidth <= 0 {
+		return joined
+	}
+	if ansi.StringWidth(joined) > maxWidth {
+		if maxWidth <= 3 {
+			return ansi.Cut(joined, 0, maxWidth)
+		}
+		return ansi.Cut(joined, 0, maxWidth-3) + "..."
 	}
 	return joined
+}
+
+func wrapByDisplayWidth(text string, width int, expandTabs bool) string {
+	if width <= 0 {
+		return text
+	}
+
+	normalized := strings.ReplaceAll(text, "\r\n", "\n")
+	lines := strings.Split(normalized, "\n")
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		if expandTabs {
+			line = strings.ReplaceAll(line, "\t", "    ")
+		}
+		if line == "" {
+			out = append(out, "")
+			continue
+		}
+		remaining := line
+		for ansi.StringWidth(remaining) > width {
+			chunk := ansi.Cut(remaining, 0, width)
+			if chunk == "" {
+				break
+			}
+			out = append(out, chunk)
+			remaining = ansi.Cut(remaining, width, ansi.StringWidth(remaining))
+		}
+		out = append(out, remaining)
+	}
+	return strings.Join(out, "\n")
 }

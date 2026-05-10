@@ -2453,6 +2453,8 @@ func (b *gatewayRuntimePortBridge) CheckpointDiff(ctx context.Context, input gat
 			Deleted:  result.Files.Deleted,
 			Modified: result.Files.Modified,
 		},
-		Patch: result.Patch,
+		Patch:            result.Patch,
+		WorkspaceDrifted: result.WorkspaceDrifted,
+		Warning:          result.Warning,
 	}, nil
 }

@@ -11,7 +11,7 @@ export interface Toast {
 export interface FileChange {
   id: string
   path: string
-  status: 'added' | 'modified' | 'deleted' | 'accepted' | 'rejected'
+  status: 'pending' | 'added' | 'modified' | 'deleted' | 'accepted' | 'rejected'
   additions: number
   deletions: number
   diff?: DiffLine[]
@@ -196,6 +196,7 @@ interface UIState {
   theme: 'light' | 'dark'
   searchQuery: string
   fileChanges: FileChange[]
+  isRestoringCheckpoint: boolean
   gitDiffSummary: GitDiffSummary
   gitDiffLoading: boolean
   gitDiffError: string
@@ -219,6 +220,7 @@ interface UIState {
   acceptFileChange: (id: string) => void
   rejectFileChange: (id: string) => void
   clearFileChanges: () => void
+  setRestoringCheckpoint: (restoring: boolean) => void
   openPreviewTab: (path: string) => OpenPreviewTabResult
   openGitDiffTab: (path: string) => OpenPreviewTabResult
   activatePreviewTab: (id: string) => void
@@ -251,6 +253,7 @@ export const useUIStore = create<UIState>((set) => ({
   theme: (localStorage.getItem('neocode-theme') as 'light' | 'dark') || 'dark',
   searchQuery: '',
   fileChanges: [],
+  isRestoringCheckpoint: false,
   gitDiffSummary: createEmptyGitDiffSummary(),
   gitDiffLoading: false,
   gitDiffError: '',
@@ -287,6 +290,7 @@ export const useUIStore = create<UIState>((set) => ({
       fileChanges: state.fileChanges.map((change) => (change.id === id ? { ...change, status: 'rejected' as const } : change)),
     })),
   clearFileChanges: () => set({ fileChanges: [] }),
+  setRestoringCheckpoint: (isRestoringCheckpoint) => set({ isRestoringCheckpoint }),
   openPreviewTab: (path) => {
     const normalizedPath = path.trim()
     const tabID = `file:${normalizedPath}`

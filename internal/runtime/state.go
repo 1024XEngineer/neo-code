@@ -19,6 +19,7 @@ type runState struct {
 	compactCount                  int
 	reactiveCompactAttempts       int
 	rememberedThisRun             bool
+	effectiveWorkdir               string
 	planningEnabled               bool
 	taskID                        string
 	agentID                       string

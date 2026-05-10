@@ -6,13 +6,14 @@ import "time"
 type CheckpointReason string
 
 const (
-	CheckpointReasonPreWrite         CheckpointReason = "pre_write"
-	CheckpointReasonCompact          CheckpointReason = "compact"
-	CheckpointReasonPlanMode         CheckpointReason = "plan_mode"
-	CheckpointReasonManual           CheckpointReason = "manual"
-	CheckpointReasonGuard            CheckpointReason = "pre_restore_guard"
-	CheckpointReasonPreWriteDegraded CheckpointReason = "pre_write_degraded"
-	CheckpointReasonEndOfTurn        CheckpointReason = "end_of_turn"
+	CheckpointReasonPreWrite          CheckpointReason = "pre_write"
+	CheckpointReasonCompact           CheckpointReason = "compact"
+	CheckpointReasonPlanMode          CheckpointReason = "plan_mode"
+	CheckpointReasonManual            CheckpointReason = "manual"
+	CheckpointReasonGuard             CheckpointReason = "pre_restore_guard"
+	CheckpointReasonPreRunDriftRebase CheckpointReason = "pre_run_drift_rebase"
+	CheckpointReasonPreWriteDegraded  CheckpointReason = "pre_write_degraded"
+	CheckpointReasonEndOfTurn         CheckpointReason = "end_of_turn"
 )
 
 // CheckpointStatus 描述 checkpoint 的生命周期状态。

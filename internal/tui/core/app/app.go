@@ -163,6 +163,7 @@ type appRuntimeState struct {
 	logPersistDirty                  bool
 	logPersistVersion                int
 	transcriptContent                string
+	transcriptBlockRenderCache       map[string]string
 	transcriptProcessFoldAvailable   bool
 	transcriptProcessExpanded        bool
 	transcriptProcessExpandedOrdinal int
@@ -395,12 +396,13 @@ func newApp(container tuibootstrap.Container) (App, error) {
 			markdownRenderer: markdownRenderer,
 		},
 		appRuntimeState: appRuntimeState{
-			nowFn:        time.Now,
-			focus:        panelInput,
-			todoFilter:   todoFilterAll,
-			layoutCached: true,
-			cachedWidth:  128,
-			cachedHeight: 40,
+			nowFn:                      time.Now,
+			focus:                      panelInput,
+			todoFilter:                 todoFilterAll,
+			layoutCached:               true,
+			cachedWidth:                128,
+			cachedHeight:               40,
+			transcriptBlockRenderCache: make(map[string]string),
 			// 初始进入草稿态时锁定启动页，直到发送或切换 session 才退出。
 			startupScreenLocked: true,
 		},

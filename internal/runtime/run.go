@@ -120,6 +120,11 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 				ChangedFiles:     changedFiles,
 			})
 		}
+		if statePtr != nil {
+			runEndCtx := context.Background()
+			s.recordRunEndWorkspaceState(runEndCtx, statePtr.session.ID, effectiveWorkdirForCheckpointState(statePtr, statePtr.session), statePtr.lastEndOfTurnCheckpointID)
+			s.clearRunCheckpointCaches(statePtr.session.ID, statePtr.runID)
+		}
 		s.emitRunTermination(runCtx, input, statePtr, err)
 	}()
 	ctx = runCtx
@@ -155,6 +160,8 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 	}
 
 	state := newRunState(input.RunID, session)
+	effectiveWorkdir := agentsession.EffectiveWorkdir(state.session.Workdir, initialCfg.Workdir)
+	state.effectiveWorkdir = effectiveWorkdir
 	state.runToken = runToken
 	state.thinkingOverride = cloneThinkingOverride(input.ThinkingOverride)
 	state.disableTools = input.DisableTools
@@ -174,7 +181,28 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 		return s.handleRunError(err)
 	}
 
-	effectiveWorkdir := agentsession.EffectiveWorkdir(state.session.Workdir, initialCfg.Workdir)
+	runBaselineCheckpointID := ""
+	if drifted, driftDiff := s.recordRunStartFingerprint(ctx, state.session.ID, state.runID, effectiveWorkdir); drifted {
+		if checkpointID, cpErr := s.createPreRunDriftRebaseCheckpoint(ctx, &state, driftDiff); cpErr != nil {
+			s.emitRunScopedOptional(EventCheckpointWarning, &state, CheckpointWarningPayload{
+				Error: fmt.Sprintf("workspace drift detected but baseline rebase failed: %v", cpErr),
+				Phase: "run_start_drift_rebase",
+			})
+		} else if checkpointID != "" {
+			runBaselineCheckpointID = checkpointID
+			s.persistRunRollbackBaseline(ctx, state.session.ID, state.runID, checkpointID, true)
+			s.recordRunEndWorkspaceState(ctx, state.session.ID, effectiveWorkdir, checkpointID)
+		}
+		s.emitRunScopedOptional(EventCheckpointWarning, &state, CheckpointWarningPayload{
+			Error: "workspace drift detected before run start",
+			Phase: "run_start_drift",
+		})
+	}
+	if runBaselineCheckpointID == "" {
+		if baseline, _ := s.getPersistentRunRollbackBaseline(ctx, state.session.ID, state.runID); baseline != "" {
+			runBaselineCheckpointID = baseline
+		}
+	}
 	_ = s.runHookPoint(ctx, &state, runtimehooks.HookPointSessionStart, runtimehooks.HookContext{
 		Metadata: map[string]any{
 			"session_id": state.session.ID,
@@ -213,7 +241,11 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 	s.updateResumeCheckpoint(ctx, &state, "plan", "")
 
 	maxTurns := resolveRuntimeMaxTurns(initialCfg.Runtime)
-	state.baselineCheckpointID = s.findPreviousEndOfTurnCheckpoint(ctx, sessionID, input.RunID)
+	if runBaselineCheckpointID != "" {
+		state.baselineCheckpointID = runBaselineCheckpointID
+	} else {
+		state.baselineCheckpointID = s.findPreviousEndOfTurnCheckpoint(ctx, sessionID, input.RunID)
+	}
 	for turn := 0; ; turn++ {
 		if turn >= maxTurns {
 			state.maxTurnsReached = true
