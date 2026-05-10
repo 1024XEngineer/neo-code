@@ -1,4 +1,4 @@
-package memo
+﻿package memo
 
 import (
 	"context"
@@ -317,5 +317,113 @@ func TestJSONPayloadExtractors(t *testing.T) {
 	}
 	if _, err := extractJSONObject(`{"a":"x"`); err == nil || !strings.Contains(err.Error(), "incomplete") {
 		t.Fatalf("expected incomplete object error, got %v", err)
+	}
+}
+
+// TestLLMExtractorExtractInvalidJSON 验证无效 JSON 会返回错误。
+func TestLLMExtractorExtractInvalidJSON(t *testing.T) {
+	extractor := NewLLMExtractor(&stubTextGenerator{response: `[{invalid json}]`})
+
+	_, err := extractor.Extract(context.Background(), []providertypes.Message{
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("记住这个。")}},
+	})
+	if err == nil {
+		t.Fatal("expected invalid JSON error")
+	}
+}
+
+// TestLLMExtractorExtractToleratesWrappedJSON 验证 JSON 前后噪声不会影响解析。
+func TestLLMExtractorExtractToleratesWrappedJSON(t *testing.T) {
+	extractor := NewLLMExtractor(&stubTextGenerator{
+		response: "分析如下：\n[{\"type\":\"feedback\",\"title\":\"以后先跑测试\",\"content\":\"用户要求修改后先跑测试。\"}]\n以上完毕。",
+	})
+
+	entries, err := extractor.Extract(context.Background(), []providertypes.Message{
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("以后改完先跑测试。")}},
+	})
+	if err != nil {
+		t.Fatalf("Extract() error = %v", err)
+	}
+	if len(entries) != 1 || entries[0].Type != TypeFeedback {
+		t.Fatalf("entries = %#v", entries)
+	}
+}
+
+// TestLLMExtractorExtractFiltersInvalidEntries 验证非法类型和空字段会被过滤。
+func TestLLMExtractorExtractFiltersInvalidEntries(t *testing.T) {
+	extractor := NewLLMExtractor(&stubTextGenerator{
+		response: `[
+			{"type":"invalid","title":"bad","content":"bad"},
+			{"type":"project","title":" ","content":"missing title"},
+			{"type":"reference","title":"文档入口","content":"查看 docs/runtime-provider-event-flow.md"}
+		]`,
+	})
+
+	entries, err := extractor.Extract(context.Background(), []providertypes.Message{
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("参考文档在 docs/runtime-provider-event-flow.md。")}},
+	})
+	if err != nil {
+		t.Fatalf("Extract() error = %v", err)
+	}
+	if len(entries) != 1 || entries[0].Type != TypeReference {
+		t.Fatalf("entries = %#v", entries)
+	}
+}
+
+// TestLLMExtractorExtractCancelledContext 验证已取消上下文会中止提取。
+func TestLLMExtractorExtractCancelledContext(t *testing.T) {
+	generator := &stubTextGenerator{response: `[]`}
+	extractor := NewLLMExtractor(generator)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := extractor.Extract(ctx, []providertypes.Message{
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("记住这个。")}},
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Extract() error = %v, want context.Canceled", err)
+	}
+	if generator.calls != 0 {
+		t.Fatalf("Generate() calls = %d, want 0", generator.calls)
+	}
+}
+
+// TestLLMExtractorExtractDecisionsIncludesExistingCandidates 验证去重决策阶段会传递既有记忆快照。
+func TestLLMExtractorExtractDecisionsIncludesExistingCandidates(t *testing.T) {
+	generator := &stubTextGenerator{
+		response: `[{"action":"skip","ref":"user:u.md"},{"action":"update","ref":"project:p.md","title":"测试策略","content":"用户要求修改后先跑相关测试。","keywords":["test"]}]`,
+	}
+	extractor := NewLLMExtractor(generator)
+
+	decisions, err := extractor.ExtractDecisions(
+		context.Background(),
+		[]providertypes.Message{
+			{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("以后改完先跑相关测试。")}},
+		},
+		[]ExtractionCandidate{
+			{
+				Ref:     "project:p.md",
+				Scope:   ScopeProject,
+				Type:    TypeFeedback,
+				Source:  SourceAutoExtract,
+				Title:   "测试策略",
+				Content: "用户要求修改后先跑测试。",
+			},
+		},
+	)
+	if err != nil {
+		t.Fatalf("ExtractDecisions() error = %v", err)
+	}
+	if len(decisions) != 2 {
+		t.Fatalf("len(decisions) = %d, want 2", len(decisions))
+	}
+	if decisions[0].Action != ExtractionActionSkip || decisions[0].Ref != "user:u.md" {
+		t.Fatalf("unexpected skip decision: %+v", decisions[0])
+	}
+	if decisions[1].Action != ExtractionActionUpdate || decisions[1].Ref != "project:p.md" {
+		t.Fatalf("unexpected update decision: %+v", decisions[1])
+	}
+	if !strings.Contains(generator.prompt, `"ref":"project:p.md"`) {
+		t.Fatalf("prompt should include existing memory candidates, got %q", generator.prompt)
 	}
 }

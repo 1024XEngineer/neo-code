@@ -143,6 +143,15 @@ type DecisionResolver interface {
 	) (ExtractionDecision, error)
 }
 
+// DecisionExtractor 定义带既有记忆快照的语义提取能力。
+type DecisionExtractor interface {
+	ExtractDecisions(
+		ctx context.Context,
+		messages []providertypes.Message,
+		existing []ExtractionCandidate,
+	) ([]ExtractionDecision, error)
+}
+
 // TextGenerator 定义调用 LLM 生成文本的最小能力，用于记忆提取。
 // 该接口隔离 provider 细节，避免 memo 包直接依赖 provider 基础设施。
 type TextGenerator interface {

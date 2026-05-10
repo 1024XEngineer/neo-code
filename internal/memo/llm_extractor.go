@@ -1,4 +1,4 @@
-package memo
+﻿package memo
 
 import (
 	"context"
@@ -44,6 +44,25 @@ func NewLLMExtractor(generator TextGenerator) *LLMExtractor {
 
 // Extract 从当前 run 对话中提取可跨会话持久化的新增记忆条目。
 func (e *LLMExtractor) Extract(ctx context.Context, messages []providertypes.Message) ([]Entry, error) {
+	decisions, err := e.ExtractDecisions(ctx, messages, nil)
+	if err != nil {
+		return nil, err
+	}
+	entries := make([]Entry, 0, len(decisions))
+	for _, decision := range decisions {
+		if decision.Action == ExtractionActionCreate {
+			entries = append(entries, decision.Entry)
+		}
+	}
+	return entries, nil
+}
+
+// ExtractDecisions 从当前 run 对话中提取记忆，并结合既有记忆输出新增、合并或跳过决策。
+func (e *LLMExtractor) ExtractDecisions(
+	ctx context.Context,
+	messages []providertypes.Message,
+	existing []ExtractionCandidate,
+) ([]ExtractionDecision, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -56,7 +75,7 @@ func (e *LLMExtractor) Extract(ctx context.Context, messages []providertypes.Mes
 		return nil, nil
 	}
 
-	response, err := e.generator.Generate(ctx, buildExtractionPrompt(e.now()), runMessages)
+	response, err := e.generator.Generate(ctx, buildExtractionPrompt(e.now(), existing), runMessages)
 	if err != nil {
 		return nil, err
 	}
@@ -74,15 +93,15 @@ func (e *LLMExtractor) Extract(ctx context.Context, messages []providertypes.Mes
 		return nil, fmt.Errorf("memo: parse extraction response: %w", err)
 	}
 
-	entries := make([]Entry, 0, len(extracted))
+	decisions := make([]ExtractionDecision, 0, len(extracted))
 	for _, item := range extracted {
-		entry, ok := toMemoEntry(item)
+		decision, ok := toExtractionDecision(item)
 		if !ok {
 			continue
 		}
-		entries = append(entries, entry)
+		decisions = append(decisions, decision)
 	}
-	return entries, nil
+	return decisions, nil
 }
 
 // ResolveDecision 结合单条候选记忆与 shortlist，解析 create/update/skip 决策。
@@ -122,15 +141,21 @@ func (e *LLMExtractor) ResolveDecision(
 	return decision, nil
 }
 
-// buildExtractionPrompt 构造仅负责“当前 run 提取”的 system prompt。
-func buildExtractionPrompt(now time.Time) string {
+// buildExtractionPrompt 构造记忆提取专用的 system prompt。
+func buildExtractionPrompt(now time.Time, existing []ExtractionCandidate) string {
 	currentDate := now.In(time.Local).Format("2006-01-02")
+	existingJSON := "[]"
+	if len(existing) > 0 {
+		if data, err := json.Marshal(existing); err == nil {
+			existingJSON = string(data)
+		}
+	}
 	return strings.TrimSpace(fmt.Sprintf(`
 你是一个记忆提取助手（memory extraction assistant）。
-分析当前 run 对话中值得跨会话持久记住的信息，并返回严格 JSON 数组。
+分析当前 run 对话中值得跨会话持久记住的信息，并结合既有记忆完成语义去重，返回严格 JSON 数组。
 
 当前本地日期：%s
-如果对话中出现“今天、明天、下周二”等相对日期，必须先转换为绝对日期再写入 content。
+如果对话中出现"今天、明天、下周二"等相对日期，必须先转换为绝对日期再写入 content。
 只允许以下四种 type：
 - user: 用户偏好、习惯、背景、专长
 - feedback: 用户对 Agent 做法的纠正、要求、确认过的工作方式
@@ -142,11 +167,18 @@ func buildExtractionPrompt(now time.Time) string {
 2. 不要提取通用编程知识、代码结构、文件路径、Git 历史。
 3. 每条记忆必须具体、可操作。
 4. 没有值得记住的信息时，返回 []。
-5. 输出必须是 JSON 数组，不要输出任何额外解释。
+5. 如果新信息与既有记忆语义相同或只是轻微改写，输出 action="skip"。
+6. 如果新信息能补充或修正既有 source="extractor_auto" 的记忆，输出 action="update" 并填写目标 ref。
+7. 不允许 update source 不是 "extractor_auto" 的既有记忆；这类相近内容只能 skip。
+8. 如果是全新的可持久化信息，输出 action="create"。
+9. 输出必须是 JSON 数组，不要输出任何额外解释。
+
+既有记忆候选（JSON）：
+%s
 
 输出格式：
-[{"type":"user","title":"...","content":"...","keywords":["..."]}]
-`, currentDate))
+[{"action":"create","type":"user","title":"...","content":"...","keywords":["..."]},{"action":"update","ref":"project:p.md","title":"...","content":"...","keywords":["..."]},{"action":"skip","ref":"user:u.md"}]
+`, currentDate, existingJSON))
 }
 
 // buildResolutionPrompt 构造单条候选记忆的去重决策提示。

@@ -222,6 +222,24 @@ func (a *AutoExtractor) extractAndStore(extractor Extractor, messages []provider
 	ctx, cancel := context.WithTimeout(context.Background(), a.extractTimeout)
 	defer cancel()
 
+	if decisionExtractor, ok := extractor.(DecisionExtractor); ok {
+		existing, err := a.svc.autoExtractionCandidates(ctx)
+		if err != nil {
+			a.logError("memo: auto extract load candidates failed: %v", err)
+			return false
+		}
+		decisions, err := decisionExtractor.ExtractDecisions(ctx, messages, existing)
+		if err != nil {
+			if errors.Is(err, ErrExtractionNoJSONArray) || errors.Is(err, ErrExtractionIncompleteJSONArray) {
+				a.logError("memo: auto extract skipped (protocol_mismatch): %v", err)
+				return true
+			}
+			a.logError("memo: auto extract failed: %v", err)
+			return false
+		}
+		return a.applyExtractionDecisions(ctx, decisions)
+	}
+
 	entries, err := extractor.Extract(ctx, messages)
 	if err != nil {
 		if errors.Is(err, ErrExtractionNoJSONArray) || errors.Is(err, ErrExtractionIncompleteJSONArray) {
@@ -296,6 +314,52 @@ func (a *AutoExtractor) extractAndStore(extractor Extractor, messages []provider
 			if _, err := a.svc.updateAutoExtractIfAllowed(ctx, decision.Ref, updateEntry); err != nil {
 				a.logError("memo: auto extract update failed: %v", err)
 				succeeded = false
+			}
+		case ExtractionActionSkip:
+			continue
+		}
+	}
+	return succeeded
+}
+
+// applyExtractionDecisions 应用模型返回的 create/update/skip 决策，并保留本地精确去重兜底。
+func (a *AutoExtractor) applyExtractionDecisions(ctx context.Context, decisions []ExtractionDecision) bool {
+	if len(decisions) == 0 {
+		return true
+	}
+
+	seenCreates := make(map[string]struct{}, len(decisions))
+	succeeded := true
+	for _, decision := range decisions {
+		switch decision.Action {
+		case ExtractionActionCreate:
+			entry := decision.Entry
+			entry.Source = SourceAutoExtract
+			key := autoExtractDedupKey(entry)
+			if key == "" {
+				continue
+			}
+			if _, exists := seenCreates[key]; exists {
+				continue
+			}
+			added, err := a.svc.addAutoExtractIfAbsent(ctx, entry)
+			if err != nil {
+				a.logError("memo: auto extract add failed: %v", err)
+				succeeded = false
+				continue
+			}
+			seenCreates[key] = struct{}{}
+			if !added {
+				continue
+			}
+		case ExtractionActionUpdate:
+			entry := decision.Entry
+			entry.Source = SourceAutoExtract
+			_, err := a.svc.updateAutoExtractIfAllowed(ctx, decision.Ref, entry)
+			if err != nil {
+				a.logError("memo: auto extract update failed: %v", err)
+				succeeded = false
+				continue
 			}
 		case ExtractionActionSkip:
 			continue
