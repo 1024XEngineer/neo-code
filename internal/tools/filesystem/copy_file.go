@@ -118,9 +118,9 @@ func (t *CopyFileTool) Execute(ctx context.Context, input tools.ToolCallInput) (
 		Name:    t.Name(),
 		Content: "ok",
 		Metadata: map[string]any{
-			"source_path":      src,
-			"destination_path": dst,
-			"paths":            []string{dst},
+			"source_path":      normalizeSlashPath(toRelativePath(base, src)),
+			"destination_path": normalizeSlashPath(toRelativePath(base, dst)),
+			"paths":            []string{normalizeSlashPath(toRelativePath(base, dst))},
 			"bytes":            srcInfo.Size(),
 			"overwrite":        args.Overwrite,
 		},

@@ -50,7 +50,7 @@ func (t *ReadTool) Schema() map[string]any {
 }
 
 func (t *ReadTool) MicroCompactPolicy() tools.MicroCompactPolicy {
-	return tools.MicroCompactPolicyCompact
+	return tools.MicroCompactPolicyPreserveHistory
 }
 
 func (t *ReadTool) Execute(ctx context.Context, call tools.ToolCallInput) (tools.ToolResult, error) {

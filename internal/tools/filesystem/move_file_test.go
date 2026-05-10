@@ -47,12 +47,20 @@ func TestMoveFileTool_RenamesWithinWorkspace(t *testing.T) {
 	} else if string(data) != "hello" {
 		t.Fatalf("dst content = %q want hello", string(data))
 	}
-	if got, ok := result.Metadata["destination_path"].(string); !ok || !strings.EqualFold(got, dst) {
-		t.Fatalf("destination_path metadata = %v want %v", got, dst)
+	if got, ok := result.Metadata["source_path"].(string); !ok || got != "old.go" {
+		t.Fatalf("source_path metadata = %v want old.go", got)
+	}
+	if got, ok := result.Metadata["destination_path"].(string); !ok || got != "renamed.go" {
+		t.Fatalf("destination_path metadata = %v want renamed.go", got)
 	}
 	paths, ok := result.Metadata["paths"].([]string)
 	if !ok || len(paths) != 2 {
 		t.Fatalf("paths metadata = %#v, want 2-item slice", result.Metadata["paths"])
+	}
+	for _, value := range []string{result.Metadata["source_path"].(string), result.Metadata["destination_path"].(string), paths[0], paths[1]} {
+		if filepath.IsAbs(value) || strings.Contains(strings.ToLower(value), strings.ToLower(workspace)) {
+			t.Fatalf("expected metadata path to stay workspace-relative, got %q", value)
+		}
 	}
 }
 

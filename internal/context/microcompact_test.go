@@ -310,7 +310,7 @@ func TestMicroCompactMessagesPreservesSpawnSubAgentHistory(t *testing.T) {
 	}
 }
 
-func TestMicroCompactMessagesCompactsCodebaseReadToSummary(t *testing.T) {
+func TestMicroCompactMessagesPreservesCodebaseReadHistory(t *testing.T) {
 	t.Parallel()
 
 	messages := []providertypes.Message{
@@ -339,9 +339,11 @@ func TestMicroCompactMessagesCompactsCodebaseReadToSummary(t *testing.T) {
 		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("latest explicit instruction")}},
 	}
 
-	got := microCompactMessagesWithPolicies(messages, stubMicroCompactPolicySource{}, 2, nil, nil)
-	if !strings.Contains(renderDisplayParts(got[2].Parts), "[summary] codebase_read") {
-		t.Fatalf("expected codebase_read history to fall back to summary, got %q", renderDisplayParts(got[2].Parts))
+	got := microCompactMessagesWithPolicies(messages, stubMicroCompactPolicySource{
+		tools.ToolNameCodebaseRead: tools.MicroCompactPolicyPreserveHistory,
+	}, 2, nil, nil)
+	if renderDisplayParts(got[2].Parts) != "path: main.go\n\npackage main" {
+		t.Fatalf("expected codebase_read history to stay visible, got %q", renderDisplayParts(got[2].Parts))
 	}
 }
 
