@@ -235,6 +235,68 @@ runtime:
 	}
 }
 
+func TestMigrateContextBudgetConfigContentRemovesLegacyVerificationNoProgressField(t *testing.T) {
+	t.Parallel()
+
+	input := []byte(strings.TrimSpace(`
+runtime:
+  verification:
+    max_no_progress: 3
+    verifiers:
+      test:
+        timeout_sec: 30
+`) + "\n")
+
+	out, changed, notes, err := MigrateContextBudgetConfigContent(input)
+	if err != nil {
+		t.Fatalf("MigrateContextBudgetConfigContent() error = %v", err)
+	}
+	if !changed {
+		t.Fatal("expected migration change")
+	}
+	if len(notes) != 0 {
+		t.Fatalf("expected no migration notes, got %v", notes)
+	}
+
+	text := string(out)
+	if strings.Contains(text, "max_no_progress") {
+		t.Fatalf("expected max_no_progress removed, got:\n%s", text)
+	}
+	if !strings.Contains(text, "timeout_sec: 30") {
+		t.Fatalf("expected verifier config preserved, got:\n%s", text)
+	}
+}
+
+func TestMigrateContextBudgetConfigContentRemovesLegacyMemoExtractRecentMessagesField(t *testing.T) {
+	t.Parallel()
+
+	input := []byte(strings.TrimSpace(`
+memo:
+  auto_extract: true
+  extract_recent_messages: 4
+  extract_timeout_sec: 9
+`) + "\n")
+
+	out, changed, notes, err := MigrateContextBudgetConfigContent(input)
+	if err != nil {
+		t.Fatalf("MigrateContextBudgetConfigContent() error = %v", err)
+	}
+	if !changed {
+		t.Fatal("expected migration change")
+	}
+	if len(notes) != 0 {
+		t.Fatalf("expected no migration notes, got %v", notes)
+	}
+
+	text := string(out)
+	if strings.Contains(text, "extract_recent_messages") {
+		t.Fatalf("expected extract_recent_messages removed, got:\n%s", text)
+	}
+	if !strings.Contains(text, "auto_extract: true") || !strings.Contains(text, "extract_timeout_sec: 9") {
+		t.Fatalf("expected supported memo fields preserved, got:\n%s", text)
+	}
+}
+
 func TestMigrateContextBudgetConfigFileCreatesBackup(t *testing.T) {
 	t.Parallel()
 

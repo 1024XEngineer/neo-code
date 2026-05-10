@@ -1306,8 +1306,8 @@ func TestServiceRunSchedulesMemoExtractionFromCurrentRunBoundary(t *testing.T) {
 	if len(messages) != 2 {
 		t.Fatalf("scheduled messages = %#v, want current run user+assistant only", messages)
 	}
-	if renderPartsForVerification(messages[0].Parts) != "new user" ||
-		renderPartsForVerification(messages[1].Parts) != "new final" {
+	if renderPartsForTest(messages[0].Parts) != "new user" ||
+		renderPartsForTest(messages[1].Parts) != "new final" {
 		t.Fatalf("scheduled messages crossed run boundary: %#v", messages)
 	}
 }

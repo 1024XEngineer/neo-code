@@ -61,6 +61,20 @@ func TestRuntimeReminderTemplates(t *testing.T) {
 	if !strings.Contains(RepeatCycleReminder(), "exact same arguments") {
 		t.Fatalf("expected repeat-cycle reminder guidance, got %q", RepeatCycleReminder())
 	}
+	for name, prompt := range map[string]string{
+		"completion":       CompletionProtocolReminder(),
+		"final_completion": CompletionProtocolFinalReminder(),
+	} {
+		if !strings.Contains(prompt, "Completion retry rule") {
+			t.Fatalf("%s reminder should contain retry rule, got %q", name, prompt)
+		}
+		if !strings.Contains(prompt, "Do not repeat file lists") {
+			t.Fatalf("%s reminder should prevent repeated summaries, got %q", name, prompt)
+		}
+		if !strings.Contains(prompt, "at most one brief final sentence") {
+			t.Fatalf("%s reminder should keep final prose concise, got %q", name, prompt)
+		}
+	}
 }
 
 func TestPlanModePromptTemplates(t *testing.T) {

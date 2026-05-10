@@ -138,6 +138,10 @@ func MigrateContextBudgetConfigContent(raw []byte) ([]byte, bool, []string, erro
 	if legacyRuntimeChanged {
 		changed = true
 	}
+	legacyMemoChanged := migrateLegacyMemoConfigFields(doc)
+	if legacyMemoChanged {
+		changed = true
+	}
 
 	if !changed {
 		return raw, false, nil, nil
@@ -175,6 +179,35 @@ func migrateLegacyRuntimeConfigFields(doc map[string]any) bool {
 	return true
 }
 
+// migrateLegacyMemoConfigFields 清理 memo 下已移除且可安全丢弃的历史字段。
+func migrateLegacyMemoConfigFields(doc map[string]any) bool {
+	memoValue, ok := doc["memo"]
+	if !ok {
+		return false
+	}
+	memoMap, ok := migrationStringMap(memoValue)
+	if !ok {
+		return false
+	}
+
+	changed := false
+	for _, key := range []string{"extract_recent_messages"} {
+		if _, exists := memoMap[key]; exists {
+			delete(memoMap, key)
+			changed = true
+		}
+	}
+	if !changed {
+		return false
+	}
+	if len(memoMap) == 0 {
+		delete(doc, "memo")
+	} else {
+		doc["memo"] = memoMap
+	}
+	return true
+}
+
 // migrateVerificationConfig 清理已废弃的 verification 字段，并将安全的旧 command string 收敛成 argv。
 func migrateVerificationConfig(doc map[string]any) (bool, error) {
 	runtimeValue, ok := doc["runtime"]
@@ -195,7 +228,7 @@ func migrateVerificationConfig(doc map[string]any) (bool, error) {
 	}
 
 	changed := false
-	for _, key := range []string{"enabled", "default_task_policy", "final_intercept", "max_retries", "hooks"} {
+	for _, key := range []string{"enabled", "default_task_policy", "final_intercept", "max_retries", "hooks", "max_no_progress"} {
 		if _, exists := verificationMap[key]; exists {
 			delete(verificationMap, key)
 			changed = true
