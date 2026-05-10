@@ -256,9 +256,7 @@ export async function reloadSessionAfterCheckpointRestore(
 
   if (sessionData.messages && sessionData.messages.length > 0) {
     const mapped = mapHistoryMessages(sessionData.messages)
-    for (const msg of mapped) {
-      useChatStore.getState().addMessage(msg)
-    }
+    useChatStore.getState().setMessages(mapped)
   }
 
   const restoredMode = sessionData.agent_mode === 'plan' ? 'plan' : 'build'
@@ -323,9 +321,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       // 5. Load messages and stop transitioning
       if (sessionData.messages && sessionData.messages.length > 0) {
         const mapped = mapHistoryMessages(sessionData.messages)
-        for (const msg of mapped) {
-          useChatStore.getState().addMessage(msg)
-        }
+        useChatStore.getState().setMessages(mapped)
       }
       // 恢复会话的 agent_mode
       const restoredMode = sessionData.agent_mode === 'plan' ? 'plan' : 'build'
@@ -419,9 +415,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
             const sessionData = sessionFrame.payload as { messages?: BackendMessage[]; agent_mode?: string }
             if (sessionData.messages && sessionData.messages.length > 0) {
               const mapped = mapHistoryMessages(sessionData.messages)
-              for (const msg of mapped) {
-                useChatStore.getState().addMessage(msg)
-              }
+              useChatStore.getState().setMessages(mapped)
             }
             const restoredMode = sessionData.agent_mode === 'plan' ? 'plan' : 'build'
             useChatStore.getState().setAgentMode(restoredMode)

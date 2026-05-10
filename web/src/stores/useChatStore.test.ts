@@ -30,6 +30,45 @@ describe('useChatStore', () => {
     expect(useChatStore.getState().messages[0].content).toBe('hello')
   })
 
+  it('setMessages replaces messages atomically', () => {
+    const store = useChatStore.getState()
+    store.addMessage({ id: 'old', role: 'user', content: 'old', type: 'text', timestamp: 1 })
+
+    store.setMessages([
+      { id: 'new-1', role: 'user', content: 'first', type: 'text', timestamp: 2 },
+      { id: 'new-2', role: 'assistant', content: 'second', type: 'text', timestamp: 3 },
+    ])
+
+    expect(useChatStore.getState().messages.map((m) => m.id)).toEqual(['new-1', 'new-2'])
+  })
+
+  it('setMessages preserves unrelated chat state', () => {
+    const store = useChatStore.getState()
+    store.setGenerating(true)
+    store.addPermissionRequest({
+      request_id: 'r1',
+      tool_name: 'filesystem_read_file',
+      tool_category: 'filesystem',
+      action_type: 'read',
+      operation: 'read',
+      target_type: 'file',
+      target: 'README.md',
+    } as any)
+    store.updateTokenUsage({ input_tokens: 1, output_tokens: 2, total_tokens: 3 } as any)
+    store.setPhase('running')
+    store.setStopReason('manual')
+
+    store.setMessages([{ id: 'hist', role: 'assistant', content: 'loaded', type: 'text', timestamp: 4 }])
+
+    const state = useChatStore.getState()
+    expect(state.messages.map((m) => m.id)).toEqual(['hist'])
+    expect(state.isGenerating).toBe(true)
+    expect(state.permissionRequests).toHaveLength(1)
+    expect(state.tokenUsage).toEqual({ input_tokens: 1, output_tokens: 2, total_tokens: 3 })
+    expect(state.phase).toBe('running')
+    expect(state.stopReason).toBe('manual')
+  })
+
   it('appendChunk concatenates to streaming message', () => {
     const store = useChatStore.getState()
     store.addMessage({ id: 'stream-1', role: 'assistant', content: 'Hel', type: 'text', timestamp: 1 })

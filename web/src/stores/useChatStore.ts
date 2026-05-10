@@ -72,6 +72,7 @@ interface ChatState {
 
   // Actions
   addMessage: (msg: ChatMessage) => void
+  setMessages: (messages: ChatMessage[]) => void
   removeMessage: (id: string) => void
   /** 从指定消息（含）开始截断 messages 数组并清理生成相关状态 */
   truncateFromMessage: (messageId: string) => void
@@ -199,6 +200,7 @@ export const useChatStore = create<ChatState>((set) => ({
   permissionMode: 'default',
 
   addMessage: (msg) => set((s) => ({ messages: [...s.messages, msg] })),
+  setMessages: (messages) => set({ messages: [...messages] }),
   removeMessage: (id) => set((s) => ({ messages: s.messages.filter((m) => m.id !== id) })),
 
   truncateFromMessage: (messageId) =>

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mapHistoryMessages, useSessionStore } from './useSessionStore'
 import { useChatStore } from './useChatStore'
 import { useGatewayStore } from './useGatewayStore'
@@ -9,6 +9,10 @@ beforeEach(() => {
   useChatStore.setState({ messages: [], isGenerating: false, streamingMessageId: '', permissionRequests: [], tokenUsage: null, phase: '', stopReason: '' } as any)
   useGatewayStore.setState({ connectionState: 'disconnected', currentRunId: '', token: '', authenticated: false } as any)
   useRuntimeInsightStore.getState().reset()
+})
+
+afterEach(() => {
+  vi.restoreAllMocks()
 })
 
 describe('useSessionStore', () => {
@@ -115,6 +119,8 @@ describe('useSessionStore', () => {
   })
 
   it('switchSession binds stream and loads session data', async () => {
+    const setMessagesSpy = vi.spyOn(useChatStore.getState(), 'setMessages')
+    const addMessageSpy = vi.spyOn(useChatStore.getState(), 'addMessage')
     const mockBindStream = vi.fn().mockResolvedValue({})
     const mockLoadSession = vi.fn().mockResolvedValue({
       payload: {
@@ -128,11 +134,15 @@ describe('useSessionStore', () => {
     await useSessionStore.getState().switchSession('sess-2', mockAPI)
 
     expect(mockBindStream).toHaveBeenCalledWith({ session_id: 'sess-2', channel: 'all' })
+    expect(setMessagesSpy).toHaveBeenCalledTimes(1)
+    expect(addMessageSpy).not.toHaveBeenCalled()
     expect(useChatStore.getState().messages).toHaveLength(1)
     expect(useChatStore.getState().messages[0].role).toBe('user')
   })
 
   it('fetchSessions auto-selects first session and binds stream', async () => {
+    const setMessagesSpy = vi.spyOn(useChatStore.getState(), 'setMessages')
+    const addMessageSpy = vi.spyOn(useChatStore.getState(), 'addMessage')
     const mockListSessions = vi.fn().mockResolvedValue({
       payload: {
         sessions: [{
@@ -144,13 +154,18 @@ describe('useSessionStore', () => {
       },
     })
     const mockBindStream = vi.fn().mockResolvedValue({})
-    const mockLoadSession = vi.fn().mockResolvedValue({ payload: { messages: [] } })
+    const mockLoadSession = vi.fn().mockResolvedValue({
+      payload: { messages: [{ role: 'assistant', content: 'loaded history', tool_calls: [] }] },
+    })
     const mockAPI = { listSessions: mockListSessions, bindStream: mockBindStream, loadSession: mockLoadSession } as any
 
     await useSessionStore.getState().fetchSessions(mockAPI)
 
     expect(useSessionStore.getState().currentSessionId).toBe('sess-a')
     expect(mockBindStream).toHaveBeenCalledWith({ session_id: 'sess-a', channel: 'all' })
+    expect(setMessagesSpy).toHaveBeenCalled()
+    expect(addMessageSpy).not.toHaveBeenCalled()
+    expect(useChatStore.getState().messages[0]).toMatchObject({ role: 'assistant', content: 'loaded history' })
   })
 
   it('fetchSessions does not auto-select when current session is valid', async () => {

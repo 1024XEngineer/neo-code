@@ -63,9 +63,11 @@ export default function MessageList() {
 
   // 条件滚动到底部
   useEffect(() => {
+    const prevMessagesLength = prevMessagesLengthRef.current
     const lastMsg = messages[messages.length - 1]
+    const loadedHistoryFromEmpty = prevMessagesLength === 0 && messages.length > 0
     const userJustSent =
-      messages.length > prevMessagesLengthRef.current && lastMsg?.role === 'user'
+      prevMessagesLength > 0 && messages.length > prevMessagesLength && lastMsg?.role === 'user'
     prevMessagesLengthRef.current = messages.length
 
     const scrollEl = getScrollEl()
@@ -83,6 +85,13 @@ export default function MessageList() {
         userScrolledUpRef.current = false
       }
       prevScrollTopRef.current = scrollTop
+    }
+
+    // 历史会话首次加载完成时直接定位到底部，避免进入会话后停留在顶部。
+    if (loadedHistoryFromEmpty) {
+      userScrolledUpRef.current = false
+      bottomRef.current?.scrollIntoView({ behavior: 'instant' })
+      return
     }
 
     // 用户发送新消息时重置暂停状态，强制滚到底部

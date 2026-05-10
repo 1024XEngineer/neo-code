@@ -90,7 +90,7 @@ function UserMessage({ message }: { message: ChatMessage }) {
       if (sessionData?.messages) {
         useChatStore.getState().clearMessages()
         const mapped = mapHistoryMessages(sessionData.messages)
-        for (const msg of mapped) useChatStore.getState().addMessage(msg)
+        useChatStore.getState().setMessages(mapped)
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Revert failed'
