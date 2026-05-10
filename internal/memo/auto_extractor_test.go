@@ -39,30 +39,38 @@ func (s *stubMemoExtractor) Calls() int {
 }
 
 type stubDecisionMemoExtractor struct {
-	mu         sync.Mutex
-	callCount  int
-	candidates []ExtractionCandidate
-	decisions  []ExtractionDecision
-	err        error
+	mu             sync.Mutex
+	callCount      int
+	candidates     []ExtractionCandidate
+	extractEntries []Entry
+	decisions      []ExtractionDecision
+	err            error
 }
 
 func (s *stubDecisionMemoExtractor) Extract(ctx context.Context, messages []providertypes.Message) ([]Entry, error) {
-	return nil, nil
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]Entry(nil), s.extractEntries...), nil
 }
 
-func (s *stubDecisionMemoExtractor) ExtractDecisions(
+func (s *stubDecisionMemoExtractor) ResolveDecision(
 	ctx context.Context,
-	messages []providertypes.Message,
+	candidate Entry,
 	existing []ExtractionCandidate,
-) ([]ExtractionDecision, error) {
+) (ExtractionDecision, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.callCount++
 	s.candidates = append([]ExtractionCandidate(nil), existing...)
 	if s.err != nil {
-		return nil, s.err
+		return ExtractionDecision{}, s.err
 	}
-	return append([]ExtractionDecision(nil), s.decisions...), nil
+	if len(s.decisions) == 0 {
+		return ExtractionDecision{Action: ExtractionActionCreate, Entry: candidate}, nil
+	}
+	decision := s.decisions[0]
+	s.decisions = append([]ExtractionDecision(nil), s.decisions[1:]...)
+	return decision, nil
 }
 
 func newAutoExtractorTestService(t *testing.T) *Service {
@@ -278,6 +286,9 @@ func TestAutoExtractorAppliesSemanticUpdateOnlyForAutoExtractedMemory(t *testing
 	}
 
 	extractor := &stubDecisionMemoExtractor{
+		extractEntries: []Entry{
+			{Type: TypeFeedback, Title: "测试策略", Content: "用户要求修改后先跑相关测试。"},
+		},
 		decisions: []ExtractionDecision{
 			{
 				Action: ExtractionActionUpdate,
@@ -324,8 +335,8 @@ func TestAutoExtractorAppliesSemanticUpdateOnlyForAutoExtractedMemory(t *testing
 	if len(manualRecall) != 1 || strings.Contains(manualRecall[0].Content, "不应覆盖") {
 		t.Fatalf("manual memory should not be overwritten, got %+v", manualRecall)
 	}
-	if len(extractor.candidates) != 2 {
-		t.Fatalf("expected existing candidates to be provided, got %+v", extractor.candidates)
+	if len(extractor.candidates) != 1 || extractor.candidates[0].Ref != autoRef {
+		t.Fatalf("expected shortlist to target the auto-extracted memory, got %+v", extractor.candidates)
 	}
 }
 
@@ -341,6 +352,10 @@ func TestAutoExtractorSemanticCreateStillUsesExactDedup(t *testing.T) {
 	}
 
 	extractor := &stubDecisionMemoExtractor{
+		extractEntries: []Entry{
+			{Type: TypeUser, Title: "中文回复", Content: "用户偏好中文回复。"},
+			{Type: TypeProject, Title: "新事实", Content: "项目需要语义去重。"},
+		},
 		decisions: []ExtractionDecision{
 			{Action: ExtractionActionCreate, Entry: Entry{Type: TypeUser, Title: "中文回复", Content: "用户偏好中文回复。"}},
 			{Action: ExtractionActionCreate, Entry: Entry{Type: TypeProject, Title: "新事实", Content: "项目需要语义去重。"}},

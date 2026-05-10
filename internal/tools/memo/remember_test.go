@@ -15,10 +15,9 @@ func newTestService(t *testing.T) *memo.Service {
 	t.Helper()
 	store := memo.NewFileStore(t.TempDir(), t.TempDir())
 	return memo.NewService(store, config.MemoConfig{
-		MaxEntries:            200,
-		MaxIndexBytes:         16 * 1024,
-		ExtractTimeoutSec:     15,
-		ExtractRecentMessages: 10,
+		MaxEntries:        200,
+		MaxIndexBytes:     16 * 1024,
+		ExtractTimeoutSec: 15,
 	}, nil)
 }
 

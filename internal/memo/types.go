@@ -103,12 +103,13 @@ const (
 
 // ExtractionCandidate 表示提供给模型做语义去重的既有记忆快照。
 type ExtractionCandidate struct {
-	Ref     string `json:"ref"`
-	Scope   Scope  `json:"scope"`
-	Type    Type   `json:"type"`
-	Source  string `json:"source"`
-	Title   string `json:"title"`
-	Content string `json:"content"`
+	Ref      string   `json:"ref"`
+	Scope    Scope    `json:"scope"`
+	Type     Type     `json:"type"`
+	Source   string   `json:"source"`
+	Title    string   `json:"title"`
+	Keywords []string `json:"keywords,omitempty"`
+	Content  string   `json:"content"`
 }
 
 // ExtractionDecision 表示模型针对新旧记忆关系返回的结构化决策。
@@ -133,13 +134,13 @@ type Extractor interface {
 	Extract(ctx context.Context, messages []providertypes.Message) ([]Entry, error)
 }
 
-// DecisionExtractor 定义带既有记忆快照的语义提取能力。
-type DecisionExtractor interface {
-	ExtractDecisions(
+// DecisionResolver 定义针对单条候选记忆做去重决策的最小能力。
+type DecisionResolver interface {
+	ResolveDecision(
 		ctx context.Context,
-		messages []providertypes.Message,
+		candidate Entry,
 		existing []ExtractionCandidate,
-	) ([]ExtractionDecision, error)
+	) (ExtractionDecision, error)
 }
 
 // TextGenerator 定义调用 LLM 生成文本的最小能力，用于记忆提取。

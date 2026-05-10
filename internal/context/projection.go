@@ -88,7 +88,7 @@ func BuildMemoExtractionMessagesForModel(messages []providertypes.Message) []pro
 	keep := make([]bool, len(messages))
 	for index := 0; index < len(messages); index++ {
 		message := messages[index]
-		if message.Role == providertypes.RoleTool {
+		if message.Role == providertypes.RoleTool || message.Role == providertypes.RoleSystem {
 			continue
 		}
 

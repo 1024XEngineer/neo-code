@@ -145,6 +145,7 @@ func TestBuildMemoExtractionMessagesForModelKeepsFullRunSafeSpans(t *testing.T) 
 
 	messages := []providertypes.Message{
 		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("first")}},
+		{Role: providertypes.RoleSystem, Parts: []providertypes.ContentPart{providertypes.NewTextPart("<acceptance_continue>must call todo_write</acceptance_continue>")}},
 		{Role: providertypes.RoleTool, ToolCallID: "orphan", Parts: []providertypes.ContentPart{providertypes.NewTextPart("orphan")}},
 		{
 			Role: providertypes.RoleAssistant,
@@ -173,6 +174,11 @@ func TestBuildMemoExtractionMessagesForModelKeepsFullRunSafeSpans(t *testing.T) 
 	}
 	if renderDisplayParts(projected[0].Parts) != "first" || renderDisplayParts(projected[3].Parts) != "last" {
 		t.Fatalf("expected full run user messages to remain, got %+v", projected)
+	}
+	for _, message := range projected {
+		if message.Role == providertypes.RoleSystem {
+			t.Fatalf("system reminder should be excluded from memo extraction window: %+v", projected)
+		}
 	}
 	if projected[1].Role != providertypes.RoleAssistant || len(projected[1].ToolCalls) != 1 {
 		t.Fatalf("expected complete assistant tool span, got %+v", projected[1])

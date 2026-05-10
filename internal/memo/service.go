@@ -14,14 +14,17 @@ import (
 
 // Service 编排记忆的存储、检索、删除和索引维护，是 memo 子系统对外的统一入口。
 type Service struct {
-	store                  Store
-	config                 config.MemoConfig
-	mu                     sync.Mutex
-	sourceInvl             func()
-	autoExtractIndexMu     sync.Mutex
-	autoExtractIndexReady  bool
-	autoExtractKeysByTopic map[string]string
-	autoExtractKeyRefs     map[string]int
+	store                   Store
+	config                  config.MemoConfig
+	mu                      sync.Mutex
+	sourceInvl              func()
+	autoExtractIndexMu      sync.Mutex
+	autoExtractIndexReady   bool
+	autoExtractKeysByTopic  map[string]string
+	autoExtractKeyRefs      map[string]int
+	semanticIndexMu         sync.Mutex
+	semanticIndexReady      bool
+	semanticCandidatesByRef map[string]ExtractionCandidate
 }
 
 // NewService 创建 memo Service 实例。
@@ -187,6 +190,15 @@ func (s *Service) updateAutoExtractIfAllowed(ctx context.Context, ref string, ne
 			s.trackAutoExtractEntryLocked(scope, current)
 		}
 	}
+	if s.semanticIndexReady {
+		s.removeSemanticCandidateLocked(scope, topicFile)
+		for _, removed := range removedEntries {
+			s.removeSemanticCandidateLocked(scope, removed.TopicFile)
+		}
+		if indexContainsTopicFile(working, topicFile) {
+			s.trackSemanticCandidateLocked(scope, current)
+		}
+	}
 
 	s.invalidateCache()
 	return true, nil
@@ -239,6 +251,7 @@ func (s *Service) Remove(ctx context.Context, keyword string, scope Scope) (int,
 			if topicFile := strings.TrimSpace(entry.TopicFile); topicFile != "" {
 				_ = s.store.DeleteTopic(ctx, bucket, topicFile)
 				s.removeAutoExtractTopicLocked(bucket, topicFile)
+				s.removeSemanticCandidateLocked(bucket, topicFile)
 			}
 		}
 		removed += len(removedEntries)
@@ -391,6 +404,17 @@ func (s *Service) saveEntryLocked(ctx context.Context, entry Entry) error {
 		}
 		if indexContainsEntryID(working, entry.ID) {
 			s.trackAutoExtractEntryLocked(scope, entry)
+		}
+	}
+	if s.semanticIndexReady {
+		if replaced {
+			s.removeSemanticCandidateLocked(scope, previous.TopicFile)
+		}
+		for _, removed := range removedEntries {
+			s.removeSemanticCandidateLocked(scope, removed.TopicFile)
+		}
+		if indexContainsEntryID(working, entry.ID) {
+			s.trackSemanticCandidateLocked(scope, entry)
 		}
 	}
 

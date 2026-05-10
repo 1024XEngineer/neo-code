@@ -115,7 +115,7 @@ func newMemoExtractorAdapter(
 			})
 		})
 
-		scheduler.ScheduleWithExtractor(sessionID, messages, memo.NewLLMExtractor(generator, cfg.Memo.ExtractRecentMessages))
+		scheduler.ScheduleWithExtractor(sessionID, messages, memo.NewLLMExtractor(generator))
 	})
 }
 

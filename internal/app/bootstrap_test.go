@@ -1679,7 +1679,6 @@ func TestNewMemoExtractorAdapterUsesFullRunMemoWindow(t *testing.T) {
 	t.Setenv(config.OpenAIDefaultAPIKeyEnv, "token")
 	cfg := config.StaticDefaults().Clone()
 	cfg.SelectedProvider = config.OpenAIName
-	cfg.Memo.ExtractRecentMessages = 3
 	manager := config.NewManager(config.NewLoader("", &cfg))
 
 	providerStub := &stubMemoProvider{

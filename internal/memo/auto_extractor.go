@@ -149,7 +149,6 @@ func (a *AutoExtractor) handleDebounce(sessionID string, state *autoExtractState
 	req := *state.pending
 	state.pending = nil
 
-	// 增量检测：消息未变化时跳过提取
 	fp := computeMessageFingerprint(req.messages)
 	if fp == state.lastFingerprint {
 		a.armIdleTimerLocked(sessionID, state)
@@ -183,7 +182,7 @@ func (a *AutoExtractor) handleRunDone(sessionID string, state *autoExtractState)
 	a.armIdleTimerLocked(sessionID, state)
 }
 
-// armIdleTimerLocked 在会话空闲时安排状态回收，避免 map 与 goroutine 长期累积。
+// armIdleTimerLocked 在会话空闲时安排状态回收，避免 map 中 goroutine 长期累积。
 func (a *AutoExtractor) armIdleTimerLocked(sessionID string, state *autoExtractState) {
 	stopTimer(state.idleTimer)
 	state.idleSeq++
@@ -203,7 +202,6 @@ func (a *AutoExtractor) handleIdle(sessionID string, state *autoExtractState, se
 
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	// 在删除前再次确认 map 中仍指向当前状态，防止旧回调回收新状态。
 	if a.states[sessionID] != state {
 		return
 	}
@@ -219,29 +217,10 @@ func isIdleStateLocked(state *autoExtractState, seq uint64) bool {
 	return state.idleSeq == seq && !state.running && state.pending == nil
 }
 
-// extractAndStore 执行提取，并在写入前做本地批次去重和持久化级别的原子去重。
-// 返回值表示本次提取和写入流程是否成功完成，可用于更新增量指纹。
+// extractAndStore 执行提取，并在写入前完成本地去重和语义决策。
 func (a *AutoExtractor) extractAndStore(extractor Extractor, messages []providertypes.Message) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), a.extractTimeout)
 	defer cancel()
-
-	if decisionExtractor, ok := extractor.(DecisionExtractor); ok {
-		existing, err := a.svc.autoExtractionCandidates(ctx)
-		if err != nil {
-			a.logError("memo: auto extract load candidates failed: %v", err)
-			return false
-		}
-		decisions, err := decisionExtractor.ExtractDecisions(ctx, messages, existing)
-		if err != nil {
-			if errors.Is(err, ErrExtractionNoJSONArray) || errors.Is(err, ErrExtractionIncompleteJSONArray) {
-				a.logError("memo: auto extract skipped (protocol_mismatch): %v", err)
-				return true
-			}
-			a.logError("memo: auto extract failed: %v", err)
-			return false
-		}
-		return a.applyExtractionDecisions(ctx, decisions)
-	}
 
 	entries, err := extractor.Extract(ctx, messages)
 	if err != nil {
@@ -256,6 +235,7 @@ func (a *AutoExtractor) extractAndStore(extractor Extractor, messages []provider
 		return true
 	}
 
+	resolver, _ := extractor.(DecisionResolver)
 	seen := make(map[string]struct{}, len(entries))
 	succeeded := true
 	for _, entry := range entries {
@@ -267,60 +247,55 @@ func (a *AutoExtractor) extractAndStore(extractor Extractor, messages []provider
 		if _, exists := seen[key]; exists {
 			continue
 		}
+		seen[key] = struct{}{}
 
-		added, err := a.svc.addAutoExtractIfAbsent(ctx, entry)
+		if resolver == nil {
+			if _, err := a.svc.addAutoExtractIfAbsent(ctx, entry); err != nil {
+				a.logError("memo: auto extract add failed: %v", err)
+				succeeded = false
+			}
+			continue
+		}
+
+		shortlist, err := a.svc.semanticCandidateShortlist(ctx, entry, semanticCandidateShortlistLimit)
 		if err != nil {
-			a.logError("memo: auto extract add failed: %v", err)
+			a.logError("memo: auto extract shortlist failed: %v", err)
+			succeeded = false
+			continue
+		}
+		if len(shortlist) == 0 {
+			if _, err := a.svc.addAutoExtractIfAbsent(ctx, entry); err != nil {
+				a.logError("memo: auto extract add failed: %v", err)
+				succeeded = false
+			}
+			continue
+		}
+
+		decision, err := resolver.ResolveDecision(ctx, entry, shortlist)
+		if err != nil {
+			if errors.Is(err, ErrExtractionNoJSONArray) || errors.Is(err, ErrExtractionIncompleteJSONArray) {
+				a.logError("memo: auto extract skipped (protocol_mismatch): %v", err)
+				return true
+			}
+			a.logError("memo: auto extract resolve failed: %v", err)
 			succeeded = false
 			continue
 		}
 
-		seen[key] = struct{}{}
-		if !added {
-			continue
-		}
-	}
-	return succeeded
-}
-
-// applyExtractionDecisions 应用模型返回的 create/update/skip 决策，并保留本地精确去重兜底。
-func (a *AutoExtractor) applyExtractionDecisions(ctx context.Context, decisions []ExtractionDecision) bool {
-	if len(decisions) == 0 {
-		return true
-	}
-
-	seenCreates := make(map[string]struct{}, len(decisions))
-	succeeded := true
-	for _, decision := range decisions {
 		switch decision.Action {
 		case ExtractionActionCreate:
-			entry := decision.Entry
-			entry.Source = SourceAutoExtract
-			key := autoExtractDedupKey(entry)
-			if key == "" {
-				continue
-			}
-			if _, exists := seenCreates[key]; exists {
-				continue
-			}
-			added, err := a.svc.addAutoExtractIfAbsent(ctx, entry)
-			if err != nil {
+			createEntry := decision.Entry
+			createEntry.Source = SourceAutoExtract
+			if _, err := a.svc.addAutoExtractIfAbsent(ctx, createEntry); err != nil {
 				a.logError("memo: auto extract add failed: %v", err)
 				succeeded = false
-				continue
-			}
-			seenCreates[key] = struct{}{}
-			if !added {
-				continue
 			}
 		case ExtractionActionUpdate:
-			entry := decision.Entry
-			entry.Source = SourceAutoExtract
-			_, err := a.svc.updateAutoExtractIfAllowed(ctx, decision.Ref, entry)
-			if err != nil {
+			updateEntry := decision.Entry
+			updateEntry.Source = SourceAutoExtract
+			if _, err := a.svc.updateAutoExtractIfAllowed(ctx, decision.Ref, updateEntry); err != nil {
 				a.logError("memo: auto extract update failed: %v", err)
 				succeeded = false
-				continue
 			}
 		case ExtractionActionSkip:
 			continue
@@ -341,21 +316,8 @@ func autoExtractDedupKey(entry Entry) string {
 
 // parseTopicSourceAndContent 从 topic 文件中解析 source frontmatter 和正文内容。
 func parseTopicSourceAndContent(topic string) (string, string) {
-	parts := strings.Split(topic, "---")
-	if len(parts) < 3 {
-		return "", strings.TrimSpace(topic)
-	}
-
-	frontmatter := parts[1]
-	body := strings.TrimSpace(strings.Join(parts[2:], "---"))
-	for _, line := range strings.Split(frontmatter, "\n") {
-		line = strings.TrimSpace(line)
-		if !strings.HasPrefix(line, "source:") {
-			continue
-		}
-		return strings.TrimSpace(strings.TrimPrefix(line, "source:")), body
-	}
-	return "", body
+	source, _, body := parseTopicSnapshot(topic)
+	return source, body
 }
 
 // cloneProviderMessages 深拷贝消息切片，避免后台任务读取到后续修改。
@@ -400,7 +362,6 @@ func computeMessageFingerprint(messages []providertypes.Message) uint64 {
 		return h.Sum64()
 	}
 
-	// 回退路径仅在意外序列化失败时使用，至少保留文本消息的增量检测能力。
 	for _, msg := range messages {
 		_, _ = h.Write([]byte(msg.Role))
 		_, _ = h.Write([]byte{0})
