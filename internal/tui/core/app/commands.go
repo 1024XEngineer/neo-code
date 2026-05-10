@@ -36,6 +36,7 @@ const (
 	slashCommandSkills      = "/skills"
 	slashCommandSkill       = "/skill"
 	slashCommandCheckpoint  = "/checkpoint"
+	slashCommandWeb         = "/web"
 
 	slashUsageHelp              = "/help"
 	slashUsageExit              = "/exit"
@@ -56,6 +57,7 @@ const (
 	slashUsageCheckpointRestore = "/checkpoint restore <id>"
 	slashUsageCheckpointUndo    = "/checkpoint undo"
 	slashUsageCheckpointDiff    = "/checkpoint diff <id>"
+	slashUsageWeb               = "/web"
 
 	commandMenuTitle        = "Suggestions"
 	providerPickerTitle     = "Select Provider"
@@ -158,6 +160,7 @@ var builtinSlashCommands = []slashCommand{
 	{Usage: slashUsageProviderAdd, Description: "Add a new custom provider"},
 	{Usage: slashUsageModel, Description: "Open the interactive model picker"},
 	{Usage: slashUsageSession, Description: "Switch to another session"},
+	{Usage: slashUsageWeb, Description: "Start Web UI in browser"},
 	{Usage: slashUsageExit, Description: "Exit NeoCode"},
 }
 

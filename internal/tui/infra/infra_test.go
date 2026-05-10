@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/charmbracelet/x/ansi"
 )
 
 func TestCollectWorkspaceFiles(t *testing.T) {
@@ -114,7 +116,7 @@ func TestCachedMarkdownRendererRemovesHeadingHashPrefix(t *testing.T) {
 	}
 }
 
-func TestNormalizeMarkdownForTerminalFencesTables(t *testing.T) {
+func TestNormalizeMarkdownForTerminalPreservesTables(t *testing.T) {
 	input := strings.Join([]string{
 		"| col1 | col2 |",
 		"| ---- | ---- |",
@@ -122,11 +124,46 @@ func TestNormalizeMarkdownForTerminalFencesTables(t *testing.T) {
 	}, "\n")
 
 	normalized := normalizeMarkdownForTerminal(input)
-	if !strings.Contains(normalized, "```text") {
-		t.Fatalf("expected markdown table to be fenced, got %q", normalized)
+	if normalized != input {
+		t.Fatalf("expected markdown table text to be preserved for native renderer, got %q", normalized)
 	}
-	if !strings.Contains(normalized, "| col1 | col2 |") {
-		t.Fatalf("expected original table rows to remain in fenced block")
+}
+
+func TestAlignRenderedPipeTablesHandlesCJKWidth(t *testing.T) {
+	input := strings.Join([]string{
+		"| 原则 | 说明 |",
+		"| --- | --- |",
+		"| **持续验证** | 每次写入后立即通过工具验证结果 |",
+		"| **工具优先** | 优先使用 `filesystem_*` 工具而非 `bash` |",
+	}, "\n")
+
+	got := alignRenderedPipeTables(input)
+	lines := strings.Split(got, "\n")
+	if len(lines) != 4 {
+		t.Fatalf("expected 4 table lines, got %d", len(lines))
+	}
+
+	width := ansi.StringWidth(lines[0])
+	for i, line := range lines {
+		if w := ansi.StringWidth(line); w != width {
+			t.Fatalf("expected aligned row width %d, line %d got %d: %q", width, i, w, line)
+		}
+	}
+
+	if !strings.Contains(lines[1], "---") {
+		t.Fatalf("expected markdown separator line to remain readable, got %q", lines[1])
+	}
+}
+
+func TestAlignRenderedPipeTablesIgnoresNonTablePipeBlocks(t *testing.T) {
+	input := strings.Join([]string{
+		"| not a markdown table line |",
+		"| still plain text |",
+	}, "\n")
+
+	got := alignRenderedPipeTables(input)
+	if got != input {
+		t.Fatalf("expected non-table pipe block to stay untouched, got %q", got)
 	}
 }
 
@@ -141,6 +178,44 @@ func TestCachedMarkdownRendererCacheEviction(t *testing.T) {
 	}
 	if renderer.CacheOrderCount() != 1 || renderer.CacheCount() != 1 {
 		t.Fatalf("expected single cache entry after eviction, got order=%d cache=%d", renderer.CacheOrderCount(), renderer.CacheCount())
+	}
+}
+
+func TestCachedMarkdownRendererCacheTouchPreventsEviction(t *testing.T) {
+	renderer := NewCachedMarkdownRenderer("dark", 2, "(empty)")
+
+	if _, err := renderer.Render("first", 20); err != nil {
+		t.Fatalf("Render(first) error = %v", err)
+	}
+	if _, err := renderer.Render("second", 20); err != nil {
+		t.Fatalf("Render(second) error = %v", err)
+	}
+	// Touch first entry so it should stay when a third entry arrives.
+	if _, err := renderer.Render("first", 20); err != nil {
+		t.Fatalf("Render(first-touch) error = %v", err)
+	}
+	if _, err := renderer.Render("third", 20); err != nil {
+		t.Fatalf("Render(third) error = %v", err)
+	}
+
+	if renderer.CacheCount() != 2 {
+		t.Fatalf("expected cache size to remain 2, got %d", renderer.CacheCount())
+	}
+	if len(renderer.cacheOrder.Front().Value.(string)) == 0 {
+		t.Fatalf("expected non-empty cache order front key")
+	}
+
+	firstKey := hashMarkdownCacheKey(20, "first")
+	secondKey := hashMarkdownCacheKey(20, "second")
+	thirdKey := hashMarkdownCacheKey(20, "third")
+	if _, ok := renderer.cache[firstKey]; !ok {
+		t.Fatalf("expected touched key to remain in cache")
+	}
+	if _, ok := renderer.cache[thirdKey]; !ok {
+		t.Fatalf("expected newest key to remain in cache")
+	}
+	if _, ok := renderer.cache[secondKey]; ok {
+		t.Fatalf("expected untouched oldest key to be evicted")
 	}
 }
 
