@@ -1,6 +1,9 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type RefObject, type WheelEvent as ReactWheelEvent } from 'react'
-import { ChevronRight, Check, FileDiff, Loader2, PanelRightClose, RefreshCw, X } from 'lucide-react'
+import { ChevronRight, Check, FileDiff, Loader2, PanelRightClose, RefreshCw, RotateCcw, X } from 'lucide-react'
 import { useGatewayAPI } from '@/context/RuntimeProvider'
+import ConfirmDialog from '@/components/ui/ConfirmDialog'
+import { useChatStore } from '@/stores/useChatStore'
+import { useSessionStore } from '@/stores/useSessionStore'
 import { useWorkspaceStore } from '@/stores/useWorkspaceStore'
 import {
   CHANGES_PREVIEW_TAB_ID,
@@ -19,6 +22,7 @@ const LazyCodePreviewEditor = lazy(() => import('./CodePreviewEditor'))
 const LazyGitDiffPreviewEditor = lazy(() => import('./GitDiffPreviewEditor'))
 
 const changeStatusMeta: Record<string, { label: string; color: string; bg: string }> = {
+  pending: { label: '待定', color: 'var(--text-tertiary)', bg: 'var(--bg-active)' },
   added: { label: '新增', color: 'var(--success)', bg: 'rgba(22, 163, 74, 0.12)' },
   modified: { label: '修改', color: 'var(--warning)', bg: 'rgba(217, 119, 6, 0.14)' },
   deleted: { label: '删除', color: 'var(--error)', bg: 'rgba(220, 38, 38, 0.12)' },
@@ -41,6 +45,7 @@ function getChangeStatusMeta(status: string) {
 }
 
 function getChangeType(change: { status: string; additions: number; deletions: number }) {
+  if (change.status === 'pending') return 'pending' as const
   if (['added', 'modified', 'deleted'].includes(change.status)) return change.status as 'added' | 'modified' | 'deleted'
   if (change.additions > 0 && change.deletions > 0) return 'modified'
   if (change.additions > 0) return 'added'
@@ -52,12 +57,13 @@ function getChangeCounts(fileChanges: { status: string; additions: number; delet
   return fileChanges.reduce(
     (counts, change) => {
       const type = getChangeType(change)
+      if (type === 'pending') counts.pending += 1
       if (type === 'added') counts.added += 1
       if (type === 'modified') counts.modified += 1
       if (type === 'deleted') counts.deleted += 1
       return counts
     },
-    { added: 0, modified: 0, deleted: 0 },
+    { pending: 0, added: 0, modified: 0, deleted: 0 },
   )
 }
 
@@ -99,6 +105,7 @@ function getPreviewBadge(tab: PreviewTab, fileChanges: FileChange[]) {
     const matched = fileChanges.find((change) => change.path === tab.path)
     if (!matched) return null
     const type = getChangeType(matched)
+    if (type === 'pending') return { label: 'P', color: 'var(--text-tertiary)' }
     if (type === 'added') return { label: 'A', color: 'var(--success)' }
     if (type === 'deleted') return { label: 'D', color: 'var(--error)' }
     return { label: 'M', color: 'var(--warning)' }
@@ -146,12 +153,31 @@ function FileChangeItem({
   onToggle: () => void
   scrollContainerRef: RefObject<HTMLDivElement | null>
 }) {
+  const gatewayAPI = useGatewayAPI()
+  const sessionId = useSessionStore((state) => state.currentSessionId)
+  const isGenerating = useChatStore((state) => state.isGenerating)
   const acceptFileChange = useUIStore((state) => state.acceptFileChange)
+  const isRestoringCheckpoint = useUIStore((state) => state.isRestoringCheckpoint)
+  const setRestoringCheckpoint = useUIStore((state) => state.setRestoringCheckpoint)
+  const showToast = useUIStore((state) => state.showToast)
   const meta = getChangeStatusMeta(change.status)
   const reviewed = change.status === 'accepted' || change.status === 'rejected'
   const displayHunks = getDisplayHunks(change)
+  const [confirmingRestore, setConfirmingRestore] = useState(false)
+  const disabledByRunning = isGenerating
+  const disabledByRestore = isRestoringCheckpoint
+  const acceptDisabled = reviewed || disabledByRestore || disabledByRunning
+  const restoreDisabled = reviewed || disabledByRestore || disabledByRunning || !change.checkpoint_id
+  const acceptTitle = disabledByRunning || disabledByRestore ? 'Running; action is disabled' : 'Mark as reviewed'
+  const restoreTitle = disabledByRunning
+    ? 'Running; action is disabled'
+    : disabledByRestore
+    ? 'Checkpoint restore in progress'
+    : change.checkpoint_id
+    ? 'Restore to this point (impacts all later changes)'
+    : 'No checkpoint available for this file change'
 
-  // 将 diff 内层收到的纵向滚轮显式转发给外层列表，避免 hover 在 hunk 上时卡住整列滚动。
+  // 横向 diff 区域优先消费纵向滚轮，避免 hover 在 hunk 上时页面滚动。
   const handleHunkWheel = (event: ReactWheelEvent<HTMLDivElement>) => {
     if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) {
       return
@@ -162,6 +188,24 @@ function FileChangeItem({
     }
     scrollContainer.scrollBy({ top: event.deltaY })
     event.preventDefault()
+  }
+
+  // handleConfirmRestore 只负责触发 checkpoint 回退，成功后的状态刷新由事件链路驱动。
+  async function handleConfirmRestore() {
+    setConfirmingRestore(false)
+    if (!gatewayAPI || !sessionId || !change.checkpoint_id || disabledByRestore || disabledByRunning) return
+
+    setRestoringCheckpoint(true)
+    try {
+      await gatewayAPI.restoreCheckpoint({
+        session_id: sessionId,
+        checkpoint_id: change.checkpoint_id,
+      })
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unknown error'
+      showToast(`Restore failed: ${message}`, 'error')
+      setRestoringCheckpoint(false)
+    }
   }
 
   return (
@@ -187,18 +231,33 @@ function FileChangeItem({
         <div style={styles.expandedArea}>
           <div style={styles.actionsRow}>
             <button
+              data-testid={`accept-change-${change.id}`}
               style={{ ...styles.actionBtn, color: reviewed ? 'var(--text-tertiary)' : 'var(--success)' }}
               onClick={() => acceptFileChange(change.id)}
-              disabled={reviewed}
-              title="标记为已审阅"
+              disabled={acceptDisabled}
+              title={acceptTitle}
             >
               <Check size={13} />
-              接受
+              Accept
+            </button>
+            <button
+              data-testid={`restore-change-${change.id}`}
+              style={{ ...styles.actionBtn, color: restoreDisabled ? 'var(--text-tertiary)' : 'var(--error)' }}
+              onClick={() => setConfirmingRestore(true)}
+              disabled={restoreDisabled}
+              title={restoreTitle}
+            >
+              {isRestoringCheckpoint ? (
+                <Loader2 size={13} className="animate-spin" />
+              ) : (
+                <RotateCcw size={13} />
+              )}
+              Rollback
             </button>
           </div>
           <div data-testid={`diff-scroller-${change.id}`} style={styles.diffScroller}>
             {displayHunks.length === 0 ? (
-              <div style={styles.emptyDiff}>当前文件没有可展示的 diff</div>
+              <div style={styles.emptyDiff}>暂无可展示的 diff</div>
             ) : (
               displayHunks.map((hunk, index) => (
                 <div
@@ -220,6 +279,17 @@ function FileChangeItem({
             )}
           </div>
         </div>
+      )}
+      {confirmingRestore && (
+        <ConfirmDialog
+          title="Restore to this point"
+          description="This will restore the workspace to this point and impact all later changes. Continue?"
+          variant="warning"
+          confirmLabel="Restore"
+          cancelLabel="Cancel"
+          onConfirm={handleConfirmRestore}
+          onCancel={() => setConfirmingRestore(false)}
+        />
       )}
     </div>
   )
@@ -247,6 +317,7 @@ function ChangesView() {
         <div style={styles.summaryRow}>
           <span>{fileChanges.length} 个文件</span>
           <span style={styles.summaryDivider} />
+          <span>{counts.pending} 待定</span>
           <span style={{ color: 'var(--success)' }}>{counts.added} 新增</span>
           <span style={{ color: 'var(--warning)' }}>{counts.modified} 修改</span>
           <span style={{ color: 'var(--error)' }}>{counts.deleted} 删除</span>

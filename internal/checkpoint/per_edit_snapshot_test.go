@@ -1733,3 +1733,93 @@ func TestRunAggregateDiff_HistoricalFileFilteredByVersion(t *testing.T) {
 		t.Fatalf("patch should NOT contain a.txt (filtered by version):\n%s", patch)
 	}
 }
+
+func TestRestore_DoesNotUseGlobalHistoryWhenNoRelatedScope(t *testing.T) {
+	store, workdir := newTestStore(t)
+
+	target := writeWorkdirFile(t, workdir, "target.txt", "old\n")
+	if _, err := store.CapturePreWrite(target); err != nil {
+		t.Fatalf("capture target: %v", err)
+	}
+	if err := os.WriteFile(target, []byte("new\n"), 0o644); err != nil {
+		t.Fatalf("write target: %v", err)
+	}
+	if _, err := store.FinalizeWithExactState("cp-target"); err != nil {
+		t.Fatalf("finalize target: %v", err)
+	}
+	store.Reset()
+
+	unrelated := writeWorkdirFile(t, workdir, "unrelated.txt", "must stay\n")
+	if _, err := store.CapturePreWrite(unrelated); err != nil {
+		t.Fatalf("capture unrelated: %v", err)
+	}
+	if err := store.Restore(context.Background(), "cp-target", ""); err != nil {
+		t.Fatalf("restore cp-target: %v", err)
+	}
+	if got := mustReadFile(t, unrelated); got != "must stay\n" {
+		t.Fatalf("unrelated file should not be touched, got %q", got)
+	}
+}
+
+func TestRestore_WithRelatedScopeSkipsUnchangedFilesFromFullRebase(t *testing.T) {
+	store, workdir := newTestStore(t)
+
+	agentPath := writeWorkdirFile(t, workdir, "agent.txt", "baseline\n")
+	unrelatedPath := writeWorkdirFile(t, workdir, "unrelated.txt", "keep\n")
+	if _, err := store.CaptureBatch([]string{agentPath, unrelatedPath}); err != nil {
+		t.Fatalf("CaptureBatch baseline: %v", err)
+	}
+	if _, err := store.FinalizeWithExactState("cp-rebase"); err != nil {
+		t.Fatalf("FinalizeWithExactState(cp-rebase): %v", err)
+	}
+	store.Reset()
+
+	if _, err := store.CapturePreWrite(agentPath); err != nil {
+		t.Fatalf("CapturePreWrite agent: %v", err)
+	}
+	if err := os.WriteFile(agentPath, []byte("agent edit\n"), 0o644); err != nil {
+		t.Fatalf("write agent edit: %v", err)
+	}
+	if _, err := store.FinalizeWithExactState("cp-agent"); err != nil {
+		t.Fatalf("FinalizeWithExactState(cp-agent): %v", err)
+	}
+	store.Reset()
+
+	if err := os.WriteFile(unrelatedPath, []byte("user post-run edit\n"), 0o644); err != nil {
+		t.Fatalf("write unrelated post-run edit: %v", err)
+	}
+	if err := store.Restore(context.Background(), "cp-rebase", "", "cp-agent"); err != nil {
+		t.Fatalf("Restore(cp-rebase): %v", err)
+	}
+	if got := mustReadFile(t, agentPath); got != "baseline\n" {
+		t.Fatalf("agent file = %q, want baseline", got)
+	}
+	if got := mustReadFile(t, unrelatedPath); got != "user post-run edit\n" {
+		t.Fatalf("unrelated file should not be restored, got %q", got)
+	}
+}
+
+func TestRestoreExact_PrefersExactCheckpointState(t *testing.T) {
+	store, workdir := newTestStore(t)
+	target := writeWorkdirFile(t, workdir, "exact.txt", "before\n")
+	if _, err := store.CapturePreWrite(target); err != nil {
+		t.Fatalf("capture: %v", err)
+	}
+	if err := os.WriteFile(target, []byte("checkpoint state\n"), 0o644); err != nil {
+		t.Fatalf("write checkpoint state: %v", err)
+	}
+	if _, err := store.FinalizeWithExactState("cp-exact"); err != nil {
+		t.Fatalf("FinalizeWithExactState: %v", err)
+	}
+	store.Reset()
+
+	if err := os.WriteFile(target, []byte("drift\n"), 0o644); err != nil {
+		t.Fatalf("write drift: %v", err)
+	}
+	if err := store.RestoreExact(context.Background(), "cp-exact"); err != nil {
+		t.Fatalf("RestoreExact: %v", err)
+	}
+	if got := mustReadFile(t, target); got != "checkpoint state\n" {
+		t.Fatalf("RestoreExact should use exact state, got %q", got)
+	}
+}

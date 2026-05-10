@@ -4,7 +4,7 @@ import tuiinfra "neo-code/internal/tui/infra"
 
 const (
 	defaultMarkdownStyle    = "dark"
-	defaultMarkdownCacheMax = 128
+	defaultMarkdownCacheMax = 512
 )
 
 type markdownContentRenderer interface {

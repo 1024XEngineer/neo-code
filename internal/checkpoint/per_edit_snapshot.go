@@ -367,9 +367,9 @@ func (s *PerEditSnapshotStore) Reset() {
 // guardID 为 pre-restore 固化的快照（restoreCheckpointCore 中的 guard checkpoint），
 // 用于对比确定每个文件的目标操作；guardID 为空时仅处理 target checkpoint 内的文件。
 //
-// 对比逻辑：对 target 与 guard 中出现的每个文件，分别计算"目标状态"与"当前状态"，
-// 据此执行写回 / 删除 / 跳过，覆盖文件创建、修改、删除三种变更方向。
-func (s *PerEditSnapshotStore) Restore(ctx context.Context, targetID, guardID string) error {
+// 对比逻辑：存在 relatedCheckpointIDs 时先收敛到 target 与后续 checkpoint 的净变化路径，
+// 再分别计算"目标状态"与"当前状态"并执行写回 / 删除 / 跳过。
+func (s *PerEditSnapshotStore) Restore(ctx context.Context, targetID, guardID string, relatedCheckpointIDs ...string) error {
 	targetCP, err := s.readCheckpointMeta(targetID)
 	if err != nil {
 		return err
@@ -378,11 +378,6 @@ func (s *PerEditSnapshotStore) Restore(ctx context.Context, targetID, guardID st
 	s.indexMu.Lock()
 	defer s.indexMu.Unlock()
 
-	hashSet := make(map[string]struct{}, len(targetCP.FileVersions))
-	for h := range targetCP.FileVersions {
-		hashSet[h] = struct{}{}
-	}
-
 	var guardCP CheckpointMeta
 	hasGuard := guardID != ""
 	if hasGuard {
@@ -390,15 +385,29 @@ func (s *PerEditSnapshotStore) Restore(ctx context.Context, targetID, guardID st
 		if err != nil {
 			return err
 		}
-		for h := range guardCP.FileVersions {
-			hashSet[h] = struct{}{}
-		}
 	}
-	// 无论有无 guard，都必须合并全量 pathToVersions。
-	// guard 是 pending-only 的，不包含此前创建的、本 turn 未触碰的新文件；
-	// 不合并则这些文件在 restore 后仍会残留。
-	for h := range s.pathToVersions {
-		hashSet[h] = struct{}{}
+	relatedCPs := make([]CheckpointMeta, 0, len(relatedCheckpointIDs))
+	for _, checkpointID := range relatedCheckpointIDs {
+		if strings.TrimSpace(checkpointID) == "" || checkpointID == targetID || checkpointID == guardID {
+			continue
+		}
+		relatedCP, err := s.readCheckpointMeta(checkpointID)
+		if err != nil {
+			return err
+		}
+		relatedCPs = append(relatedCPs, relatedCP)
+	}
+
+	hashSet := make(map[string]struct{})
+	if len(relatedCPs) > 0 {
+		if err := s.collectRestoreChangedHashesLocked(hashSet, targetCP, relatedCPs); err != nil {
+			return err
+		}
+	} else {
+		addCheckpointHashes(hashSet, targetCP)
+	}
+	if hasGuard {
+		addCheckpointHashes(hashSet, guardCP)
 	}
 
 	for hash := range hashSet {
@@ -407,7 +416,7 @@ func (s *PerEditSnapshotStore) Restore(ctx context.Context, targetID, guardID st
 		}
 
 		// 目标状态：target checkpoint 时刻文件应如何。
-		toContent, toIsDir, toExists, toMode, toDisplay, err := s.contentAtCheckpointLocked(hash, targetCP.FileVersions, false)
+		toContent, toIsDir, toExists, toMode, toDisplay, err := s.contentAtCheckpointStateLocked(hash, targetCP, false)
 		if err != nil {
 			return err
 		}
@@ -418,7 +427,7 @@ func (s *PerEditSnapshotStore) Restore(ctx context.Context, targetID, guardID st
 		var fromMode os.FileMode
 		var fromDisplay string
 		if hasGuard {
-			fromContent, fromIsDir, fromExists, fromMode, fromDisplay, err = s.contentAtCheckpointLocked(hash, guardCP.FileVersions, true)
+			fromContent, fromIsDir, fromExists, fromMode, fromDisplay, err = s.contentAtCheckpointStateLocked(hash, guardCP, true)
 			if err != nil {
 				return err
 			}
@@ -492,9 +501,25 @@ func (s *PerEditSnapshotStore) RestoreExact(ctx context.Context, checkpointID st
 	s.indexMu.Lock()
 	defer s.indexMu.Unlock()
 
-	for hash, vAt := range cp.FileVersions {
+	hashSet := make(map[string]struct{}, len(cp.FileVersions)+len(cp.ExactFileVersions))
+	for hash := range cp.FileVersions {
+		hashSet[hash] = struct{}{}
+	}
+	for hash := range cp.ExactFileVersions {
+		hashSet[hash] = struct{}{}
+	}
+	hashes := make([]string, 0, len(hashSet))
+	for hash := range hashSet {
+		hashes = append(hashes, hash)
+	}
+	sort.Strings(hashes)
+	for _, hash := range hashes {
 		if err := ctx.Err(); err != nil {
 			return err
+		}
+		vAt, ok := cp.ExactFileVersions[hash]
+		if !ok {
+			vAt = cp.FileVersions[hash]
 		}
 		meta, err := s.readVersionMeta(hash, vAt)
 		if err != nil {
@@ -1309,6 +1334,82 @@ func readWorkdirMode(absPath string) os.FileMode {
 		return 0
 	}
 	return info.Mode()
+}
+
+// addCheckpointHashes 把 checkpoint 中显式记录的文件 hash 加入 restore 候选集合。
+func addCheckpointHashes(hashSet map[string]struct{}, cp CheckpointMeta) {
+	for hash := range cp.FileVersions {
+		hashSet[hash] = struct{}{}
+	}
+	for hash := range cp.ExactFileVersions {
+		hashSet[hash] = struct{}{}
+	}
+}
+
+// collectRestoreChangedHashesLocked 只收集 target 到后续 checkpoint 之间净变化的路径。
+// target 可作为全工作区重锚点；真正 restore 时不应因为 target 是全量快照而误碰无关文件。
+func (s *PerEditSnapshotStore) collectRestoreChangedHashesLocked(
+	hashSet map[string]struct{},
+	targetCP CheckpointMeta,
+	relatedCPs []CheckpointMeta,
+) error {
+	if len(relatedCPs) == 0 {
+		return nil
+	}
+	latestCP := relatedCPs[0]
+	candidateHashes := make(map[string]struct{})
+	addCheckpointHashes(candidateHashes, targetCP)
+	for _, cp := range relatedCPs {
+		addCheckpointHashes(candidateHashes, cp)
+		if cp.CreatedAt.After(latestCP.CreatedAt) {
+			latestCP = cp
+		}
+	}
+	for hash := range candidateHashes {
+		targetContent, targetIsDir, targetExists, targetMode, _, err := s.contentAtCheckpointStateLocked(hash, targetCP, false)
+		if err != nil {
+			return err
+		}
+		latestContent, latestIsDir, latestExists, latestMode, _, err := s.contentAtCheckpointStateLocked(hash, latestCP, false)
+		if err != nil {
+			return err
+		}
+		if targetExists != latestExists ||
+			targetIsDir != latestIsDir ||
+			targetMode != latestMode ||
+			!bytes.Equal(targetContent, latestContent) {
+			hashSet[hash] = struct{}{}
+		}
+	}
+	return nil
+}
+
+// contentAtCheckpointStateLocked 读取 checkpoint 结束态；新 checkpoint 优先使用 ExactFileVersions。
+// 旧 checkpoint 没有 exact 版本时，继续使用 v_next 兼容语义。
+func (s *PerEditSnapshotStore) contentAtCheckpointStateLocked(
+	hash string,
+	cp CheckpointMeta,
+	fallbackIfMissing bool,
+) ([]byte, bool, bool, os.FileMode, string, error) {
+	if version, ok := cp.ExactFileVersions[hash]; ok {
+		meta, err := s.readVersionMeta(hash, version)
+		if err != nil {
+			return nil, false, false, 0, "", fmt.Errorf("per-edit: read exact meta v%d for %s: %w", version, hash, err)
+		}
+		display := s.resolveDisplayPathLocked(hash, meta.DisplayPath)
+		if !meta.Existed {
+			return nil, false, false, meta.Mode, display, nil
+		}
+		if meta.IsDir {
+			return nil, true, true, meta.Mode, display, nil
+		}
+		content, err := s.readVersionBin(hash, version)
+		if err != nil {
+			return nil, false, false, 0, display, fmt.Errorf("per-edit: read exact bin v%d for %s: %w", version, hash, err)
+		}
+		return content, false, true, meta.Mode, display, nil
+	}
+	return s.contentAtCheckpointLocked(hash, cp.FileVersions, fallbackIfMissing)
 }
 
 // contentAtCheckpointLocked 计算 hash 在某个 checkpoint 时刻的 workdir 内容。

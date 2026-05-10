@@ -18,6 +18,7 @@ type runState struct {
 	session                       agentsession.Session
 	compactCount                  int
 	reactiveCompactAttempts       int
+	effectiveWorkdir               string
 	rememberedThisRun             bool
 	planningEnabled               bool
 	taskID                        string

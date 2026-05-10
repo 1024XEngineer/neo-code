@@ -476,6 +476,8 @@ type CheckpointDiffResult struct {
 	PrevCommitHash   string    `json:"prev_commit_hash,omitempty"`
 	Files            FileDiffs `json:"files"`
 	Patch            string    `json:"patch,omitempty"`
+	WorkspaceDrifted bool      `json:"workspace_drifted,omitempty"`
+	Warning          string    `json:"warning,omitempty"`
 }
 
 // FileDiffs 描述 diff 中的文件变更列表。
