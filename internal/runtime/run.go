@@ -403,9 +403,7 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 					state.mu.Unlock()
 					if missingCompletionSignalStreak < missingCompletionSignalLimit {
 						reminder := completionProtocolReminderForStreak(missingCompletionSignalStreak)
-						if err := s.appendSystemMessageAndSave(ctx, &state, reminder); err != nil {
-							return s.handleRunError(err)
-						}
+						setPendingSystemReminder(&state, reminder)
 						break turnAttempt
 					}
 					state.markTerminalDecision(
@@ -587,6 +585,9 @@ func (s *Service) prepareTurnBudgetSnapshot(ctx context.Context, state *runState
 
 	repeatLimit := resolveRepeatCycleStreakLimit(cfg.Runtime)
 	systemPrompt := withProgressReminder(builtContext.SystemPrompt, score)
+	if pendingReminder := drainPendingSystemReminder(state); pendingReminder != "" {
+		systemPrompt = mergeEphemeralHookNotificationIntoSystemPrompt(systemPrompt, pendingReminder)
+	}
 	if notificationHint := strings.TrimSpace(s.drainHookNotificationsForTurn(state)); notificationHint != "" {
 		systemPrompt = mergeEphemeralHookNotificationIntoSystemPrompt(systemPrompt, notificationHint)
 	}
@@ -647,6 +648,32 @@ func resolveRuntimeMaxTurns(rc config.RuntimeConfig) int {
 		return config.DefaultMaxTurns
 	}
 	return rc.MaxTurns
+}
+
+// setPendingSystemReminder 暂存只用于下一轮 provider 请求的系统提醒，避免写入会话历史。
+func setPendingSystemReminder(state *runState, reminder string) {
+	if state == nil {
+		return
+	}
+	reminder = strings.TrimSpace(reminder)
+	if reminder == "" {
+		return
+	}
+	state.mu.Lock()
+	state.pendingSystemReminder = reminder
+	state.mu.Unlock()
+}
+
+// drainPendingSystemReminder 读取并清空本轮待注入的系统提醒，保证提醒只进入一次 provider 请求。
+func drainPendingSystemReminder(state *runState) string {
+	if state == nil {
+		return ""
+	}
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	reminder := strings.TrimSpace(state.pendingSystemReminder)
+	state.pendingSystemReminder = ""
+	return reminder
 }
 
 // callProvider 使用冻结后的 TurnBudgetSnapshot 执行单次 provider 调用。

@@ -35,6 +35,7 @@ type runState struct {
 	maxTurnsLimit                 int
 	userGoal                      string
 	missingCompletionSignalStreak int
+	pendingSystemReminder         string
 	factsCollector                *runtimefacts.Collector
 	terminalStatus                controlplane.TerminalStatus
 	terminalStopReason            controlplane.StopReason

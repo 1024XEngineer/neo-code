@@ -487,18 +487,27 @@ func TestNoToolIncompleteTurnStillEvaluatesProgressAndInjectsReminder(t *testing
 	if len(providerImpl.requests) < 2 {
 		t.Fatalf("expected at least 2 provider requests, got %d", len(providerImpl.requests))
 	}
-	foundReminder := false
-	for _, message := range providerImpl.requests[1].Messages {
+	secondSystemPrompt := providerImpl.requests[1].SystemPrompt
+	if !strings.Contains(secondSystemPrompt, "[Runtime Control]") ||
+		!strings.Contains(secondSystemPrompt, "task_completion") {
+		t.Fatalf("expected runtime protocol note in second provider request system prompt, got %q", secondSystemPrompt)
+	}
+	if len(providerImpl.requests) > 2 {
+		thirdSystemPrompt := providerImpl.requests[2].SystemPrompt
+		if strings.Contains(thirdSystemPrompt, "[Runtime Control]") &&
+			strings.Contains(thirdSystemPrompt, "task_completion") {
+			t.Fatalf("expected runtime protocol note to be injected once, got third system prompt %q", thirdSystemPrompt)
+		}
+	}
+
+	savedSession := store.sessions[session.ID]
+	for _, message := range savedSession.Messages {
 		content := renderPartsForTest(message.Parts)
 		if message.Role == providertypes.RoleSystem &&
 			strings.Contains(content, "[Runtime Control]") &&
 			strings.Contains(content, "task_completion") {
-			foundReminder = true
-			break
+			t.Fatalf("expected completion reminder to stay out of session transcript, found %q", content)
 		}
-	}
-	if !foundReminder {
-		t.Fatalf("expected runtime protocol note in second provider request messages, got %+v", providerImpl.requests[1].Messages)
 	}
 
 	events := collectRuntimeEvents(service.Events())
@@ -562,22 +571,20 @@ func TestAcceptanceContinueWithoutToolCallStopsAsIncomplete(t *testing.T) {
 		t.Fatalf("expected runtime to stop after six missing completion signals, got %d requests", len(providerImpl.requests))
 	}
 	// 第 6 个请求（streak=5 时注入最终提醒后）应包含最终协议提醒
-	fifthRequestMessages := providerImpl.requests[5].Messages
-	foundFinalHint := false
-	for _, message := range fifthRequestMessages {
-		if message.Role != providertypes.RoleSystem {
-			continue
-		}
-		content := renderPartsForTest(message.Parts)
-		if strings.Contains(content, "[Runtime Control]") &&
-			strings.Contains(content, "final protocol reminder") &&
-			strings.Contains(content, "task_completion") {
-			foundFinalHint = true
-			break
-		}
+	fifthSystemPrompt := providerImpl.requests[5].SystemPrompt
+	if !strings.Contains(fifthSystemPrompt, "[Runtime Control]") ||
+		!strings.Contains(fifthSystemPrompt, "final protocol reminder") ||
+		!strings.Contains(fifthSystemPrompt, "task_completion") {
+		t.Fatalf("expected final runtime protocol note in request 5 system prompt, got %q", fifthSystemPrompt)
 	}
-	if !foundFinalHint {
-		t.Fatalf("expected final runtime protocol note in request 5, got messages: %+v", fifthRequestMessages)
+	savedSession := store.sessions[session.ID]
+	for _, message := range savedSession.Messages {
+		content := renderPartsForTest(message.Parts)
+		if message.Role == providertypes.RoleSystem &&
+			strings.Contains(content, "[Runtime Control]") &&
+			strings.Contains(content, "task_completion") {
+			t.Fatalf("expected completion reminder to stay out of session transcript, found %q", content)
+		}
 	}
 
 	events := collectRuntimeEvents(service.Events())
