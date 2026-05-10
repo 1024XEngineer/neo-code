@@ -25,6 +25,12 @@ vi.mock('./ModelSelector', () => ({
   default: () => <div data-testid="model-selector" />,
 }))
 
+async function submitSlashCommand(command: string) {
+  const textarea = screen.getByRole('textbox') as HTMLTextAreaElement
+  fireEvent.change(textarea, { target: { value: command } })
+  fireEvent.keyDown(textarea, { key: 'Enter' })
+}
+
 describe('ChatInput', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -133,5 +139,68 @@ describe('ChatInput', () => {
 
     expect(screen.queryByTitle('附件文件')).not.toBeInTheDocument()
     expect(screen.queryByTitle('引用上下文')).not.toBeInTheDocument()
+  })
+  it('executes /memo without session id and shows payload.Content', async () => {
+    mockGatewayAPI.executeSystemTool.mockResolvedValueOnce({
+      payload: {
+        Content: 'User Memo:\n- [user] coding preference',
+      },
+    })
+    render(<ChatInput />)
+
+    await submitSlashCommand('/memo')
+
+    await waitFor(() => {
+      expect(mockGatewayAPI.executeSystemTool).toHaveBeenCalledWith('', '', 'memo_list', {})
+    })
+    await waitFor(() => {
+      expect(useChatStore.getState().messages.some((msg) => msg.type === 'system' && msg.content.includes('coding preference'))).toBe(true)
+    })
+  })
+
+  it('uses fallback text when memo payload has no content field', async () => {
+    mockGatewayAPI.executeSystemTool.mockResolvedValueOnce({ payload: {} })
+    render(<ChatInput />)
+
+    await submitSlashCommand('/memo')
+
+    await waitFor(() => {
+      expect(useChatStore.getState().messages.some((msg) => msg.type === 'system' && msg.content === 'Memo query complete')).toBe(true)
+    })
+  })
+
+  it('executes /remember and /forget without session id', async () => {
+    mockGatewayAPI.executeSystemTool
+      .mockResolvedValueOnce({ payload: { Content: 'Memory saved: [user] keep tests strict' } })
+      .mockResolvedValueOnce({ payload: { Content: 'Removed 1 memo(s) matching \"strict\".' } })
+    render(<ChatInput />)
+
+    await submitSlashCommand('/remember keep tests strict')
+    await waitFor(() => {
+      expect(mockGatewayAPI.executeSystemTool).toHaveBeenNthCalledWith(1, '', '', 'memo_remember', {
+        type: 'user',
+        title: 'keep tests strict',
+        content: 'keep tests strict',
+      })
+    })
+
+    await submitSlashCommand('/forget strict')
+    await waitFor(() => {
+      expect(mockGatewayAPI.executeSystemTool).toHaveBeenNthCalledWith(2, '', '', 'memo_remove', {
+        keyword: 'strict',
+        scope: 'all',
+      })
+    })
+  })
+
+  it('keeps argument validation for /remember and /forget', async () => {
+    render(<ChatInput />)
+
+    await submitSlashCommand('/remember')
+    await submitSlashCommand('/forget')
+
+    await waitFor(() => {
+      expect(mockGatewayAPI.executeSystemTool).not.toHaveBeenCalled()
+    })
   })
 })
