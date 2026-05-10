@@ -81,6 +81,7 @@ export const EventType = {
   ToolStart: 'tool_start',
   ToolResult: 'tool_result',
   ToolDiff: 'tool_diff',
+  BashSideEffect: 'bash_side_effect',
   ToolChunk: 'tool_chunk',
   ToolCallThinking: 'tool_call_thinking',
   ThinkingDelta: 'thinking_delta',
@@ -484,6 +485,8 @@ export interface CheckpointDiffResultPayload {
   prev_commit_hash?: string
   files: FileDiffs
   patch?: string
+  workspace_drifted?: boolean
+  warning?: string
 }
 
 export interface CheckpointRestoreResultPayload {
@@ -916,6 +919,7 @@ export interface ToolDiffFileEntry {
   path: string
   diff?: string
   was_new?: boolean
+  kind?: string
 }
 
 /** tool_diff 事件载荷：写工具修改了哪些文件 */
@@ -927,4 +931,13 @@ export interface ToolDiffPayload {
   was_new?: boolean
   files?: ToolDiffFileChange[]
   diffs?: ToolDiffFileEntry[]
+}
+
+/** bash_side_effect 文件变更条目 */
+export interface BashSideEffectPayload {
+  tool_call_id: string
+  command?: string
+  changes?: ToolDiffFileChange[]
+  preemptively_captured_paths?: string[]
+  uncovered_paths?: string[]
 }

@@ -26,41 +26,50 @@ function getCommandIcon(cmd: AnySlashCommand): React.ReactNode {
 }
 
 function highlightMatch(text: string, query: string): React.ReactNode {
-  if (!query || query === '/') return text
+  const normalizedQuery = query.trim().toLowerCase()
+  if (!normalizedQuery || normalizedQuery === '/') return text
+
   const lowerText = text.toLowerCase()
-  const lowerQuery = query.toLowerCase().trim()
-  const idx = lowerText.indexOf(lowerQuery)
-  if (idx === -1) return text
+  const matchIndex = lowerText.indexOf(normalizedQuery)
+  if (matchIndex < 0) return text
 
   return (
     <>
-      {text.slice(0, idx)}
-      <span style={{ fontWeight: 700, color: 'var(--accent)' }}>{text.slice(idx, idx + lowerQuery.length)}</span>
-      {text.slice(idx + lowerQuery.length)}
+      {text.slice(0, matchIndex)}
+      <span style={{ fontWeight: 700, color: 'var(--accent)' }}>
+        {text.slice(matchIndex, matchIndex + normalizedQuery.length)}
+      </span>
+      {text.slice(matchIndex + normalizedQuery.length)}
     </>
   )
 }
 
-/** Slash 命令浮动菜单 */
-export default function SlashCommandMenu({ commands, selectedIndex, onSelect, onHover, query }: SlashCommandMenuProps) {
+/** Slash 命令菜单只负责渲染内容，不再自行决定浮层定位。 */
+export default function SlashCommandMenu({
+  commands,
+  selectedIndex,
+  onSelect,
+  onHover,
+  query,
+}: SlashCommandMenuProps) {
   useEffect(() => {
     const el = document.querySelector(`[data-slash-index="${selectedIndex}"]`)
-    if (el) {
+    if (el instanceof HTMLElement && typeof el.scrollIntoView === 'function') {
       el.scrollIntoView({ block: 'nearest' })
     }
   }, [selectedIndex])
 
   if (commands.length === 0) return null
 
-  const builtinCmds = commands.filter(isBuiltinCommand)
-  const skillCmds = commands.filter(isSkillCommand)
+  const builtinCommands = commands.filter(isBuiltinCommand)
+  const skillCommands = commands.filter(isSkillCommand)
 
   return (
-    <div style={styles.container}>
-      {builtinCmds.length > 0 && (
+    <div data-testid="slash-command-menu" style={styles.container}>
+      {builtinCommands.length > 0 && (
         <div>
           <div style={styles.sectionLabel}>命令</div>
-          {builtinCmds.map((cmd) => {
+          {builtinCommands.map((cmd) => {
             const globalIndex = commands.indexOf(cmd)
             return (
               <CommandItem
@@ -77,11 +86,11 @@ export default function SlashCommandMenu({ commands, selectedIndex, onSelect, on
         </div>
       )}
 
-      {skillCmds.length > 0 && (
+      {skillCommands.length > 0 && (
         <div>
-          {builtinCmds.length > 0 && <div style={styles.divider} />}
+          {builtinCommands.length > 0 && <div style={styles.divider} />}
           <div style={styles.sectionLabel}>技能</div>
-          {skillCmds.map((cmd) => {
+          {skillCommands.map((cmd) => {
             const globalIndex = commands.indexOf(cmd)
             return (
               <CommandItem
@@ -141,19 +150,14 @@ const CommandItem = ({ cmd, dataIndex, isSelected, onSelect, onHover, query }: C
 
 const styles: Record<string, React.CSSProperties> = {
   container: {
-    position: 'absolute',
-    bottom: '100%',
-    left: 0,
-    marginBottom: 8,
     minWidth: 280,
     maxWidth: 360,
     maxHeight: 320,
     overflowY: 'auto',
-    background: 'var(--bg-secondary)',
+    background: 'var(--bg-overlay)',
     border: '1px solid var(--border-primary)',
     borderRadius: 'var(--radius-lg)',
-    boxShadow: '0 4px 24px rgba(0,0,0,0.15)',
-    zIndex: 100,
+    boxShadow: 'var(--shadow-elevated)',
     padding: '6px 0',
   },
   sectionLabel: {
