@@ -14,6 +14,7 @@ type builtinSummarizerRegistration struct {
 var builtinSummarizers = []builtinSummarizerRegistration{
 	{toolName: ToolNameBash, summarizer: bashSummarizer},
 	{toolName: ToolNameFilesystemReadFile, summarizer: readFileSummarizer},
+	{toolName: ToolNameCodebaseRead, summarizer: readFileSummarizer},
 	{toolName: ToolNameFilesystemWriteFile, summarizer: writeFileSummarizer},
 	{toolName: ToolNameFilesystemEdit, summarizer: editSummarizer},
 	{toolName: ToolNameFilesystemGrep, summarizer: grepSummarizer},

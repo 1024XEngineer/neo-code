@@ -38,8 +38,8 @@ func TestToolMetadata(t *testing.T) {
 	if strings.TrimSpace(tool.Description()) == "" {
 		t.Fatalf("Description() should not be empty")
 	}
-	if tool.MicroCompactPolicy() != tools.MicroCompactPolicyCompact {
-		t.Fatalf("MicroCompactPolicy() = %q, want compact", tool.MicroCompactPolicy())
+	if tool.MicroCompactPolicy() != tools.MicroCompactPolicyPreserveHistory {
+		t.Fatalf("MicroCompactPolicy() = %q, want %q", tool.MicroCompactPolicy(), tools.MicroCompactPolicyPreserveHistory)
 	}
 	schema := tool.Schema()
 	properties, ok := schema["properties"].(map[string]any)

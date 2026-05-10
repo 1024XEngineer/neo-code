@@ -23,6 +23,8 @@ var defaultPinPatterns = []string{
 var defaultPinToolNames = map[string]struct{}{
 	tools.ToolNameFilesystemWriteFile: {},
 	tools.ToolNameFilesystemEdit:      {},
+	tools.ToolNameFilesystemCopyFile:  {},
+	tools.ToolNameFilesystemMoveFile:  {},
 }
 
 // pinChecker 基于文件路径 glob 模式判断工具结果是否应钉住。
@@ -44,21 +46,32 @@ func (p *pinChecker) ShouldPin(toolName string, metadata map[string]string) bool
 		return false
 	}
 
-	path := metadata["relative_path"]
-	if path == "" {
-		path = metadata["path"]
-	}
-	if path == "" {
-		return false
-	}
-
-	base := filepath.Base(path)
-	for _, pattern := range p.patterns {
-		if matched, _ := filepath.Match(pattern, base); matched {
-			return true
+	for _, path := range candidatePinPaths(metadata) {
+		base := filepath.Base(path)
+		for _, pattern := range p.patterns {
+			if matched, _ := filepath.Match(pattern, base); matched {
+				return true
+			}
 		}
 	}
 	return false
+}
+
+// candidatePinPaths 按稳定顺序提取可参与 pin 判断的文件路径字段。
+func candidatePinPaths(metadata map[string]string) []string {
+	keys := []string{"relative_path", "path", "source_path", "destination_path"}
+	paths := make([]string, 0, len(keys))
+	for _, key := range keys {
+		path := strings.TrimSpace(metadata[key])
+		if path == "" {
+			continue
+		}
+		paths = append(paths, path)
+	}
+	if len(paths) == 0 {
+		return nil
+	}
+	return paths
 }
 
 // toolSupportsPinnedRetention 判断工具是否允许参与默认 pin 策略，避免非文件修改类工具扩大保留范围。

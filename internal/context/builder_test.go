@@ -399,8 +399,8 @@ func TestDefaultBuilderBuildAppliesMicroCompactAfterTrim(t *testing.T) {
 	if len(got.Messages) != len(messages) {
 		t.Fatalf("expected builder output to keep message count, got %d want %d", len(got.Messages), len(messages))
 	}
-	if renderDisplayParts(got.Messages[2].Parts) != microCompactClearedMessage {
-		t.Fatalf("expected builder output to clear older tool result, got %q", renderDisplayParts(got.Messages[2].Parts))
+	if !strings.Contains(renderDisplayParts(got.Messages[2].Parts), "[summary] filesystem_read_file") {
+		t.Fatalf("expected builder output to summarize older tool result, got %q", renderDisplayParts(got.Messages[2].Parts))
 	}
 	if renderDisplayParts(got.Messages[4].Parts) != "recent bash result" {
 		t.Fatalf("expected recent tool result to stay visible, got %q", renderDisplayParts(got.Messages[4].Parts))
@@ -513,8 +513,8 @@ func TestDefaultBuilderBuildRespectsExplicitPinCheckerOverride(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build() error = %v", err)
 	}
-	if renderDisplayParts(got.Messages[2].Parts) != microCompactClearedMessage {
-		t.Fatalf("expected explicit noop pin checker to allow compaction, got %q", renderDisplayParts(got.Messages[2].Parts))
+	if !strings.Contains(renderDisplayParts(got.Messages[2].Parts), "[summary] filesystem_write_file") {
+		t.Fatalf("expected explicit noop pin checker to allow compaction into summary, got %q", renderDisplayParts(got.Messages[2].Parts))
 	}
 }
 
@@ -1116,8 +1116,8 @@ func TestNewConfiguredBuilder(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Build() error = %v", err)
 		}
-		if renderDisplayParts(got.Messages[2].Parts) != microCompactClearedMessage {
-			t.Fatalf("expected noop pin checker to allow compaction, got %q", renderDisplayParts(got.Messages[2].Parts))
+		if !strings.Contains(renderDisplayParts(got.Messages[2].Parts), "[summary] filesystem_write_file") {
+			t.Fatalf("expected noop pin checker to allow compaction into summary, got %q", renderDisplayParts(got.Messages[2].Parts))
 		}
 	})
 

@@ -1,7 +1,9 @@
 package context
 
 import (
+	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"neo-code/internal/config"
 	"neo-code/internal/context/internalcompact"
@@ -235,30 +237,61 @@ func summarizeOrClear(
 	toolNames map[string]string,
 	summarizers MicroCompactSummarizerSource,
 ) string {
-	if summarizers == nil {
-		return microCompactClearedMessage
-	}
-
 	callID := strings.TrimSpace(message.ToolCallID)
 	toolName, ok := toolNames[callID]
 	if !ok {
 		return microCompactClearedMessage
 	}
 
-	summarizer := summarizers.MicroCompactSummarizer(toolName)
-	if summarizer == nil {
-		return microCompactClearedMessage
+	if summarizers != nil {
+		summarizer := summarizers.MicroCompactSummarizer(toolName)
+		if summarizer != nil {
+			summary := summarizer(content, message.ToolMetadata, message.IsError)
+			if summary != "" {
+				summary = sanitizeMicroCompactSummary(summary)
+				if summary != "" {
+					return summary
+				}
+			}
+		}
 	}
 
-	summary := summarizer(content, message.ToolMetadata, message.IsError)
-	if summary == "" {
-		return microCompactClearedMessage
-	}
-	summary = sanitizeMicroCompactSummary(summary)
+	summary := sanitizeMicroCompactSummary(fallbackSummary(toolName, content))
 	if summary == "" {
 		return microCompactClearedMessage
 	}
 	return summary
+}
+
+// fallbackSummary 为缺少专用摘要器的工具生成最小可读摘要，避免静默清空历史。
+func fallbackSummary(toolName string, content string) string {
+	trimmedName := strings.TrimSpace(toolName)
+	if trimmedName == "" {
+		return ""
+	}
+
+	parts := []string{
+		"[summary]",
+		trimmedName,
+		"lines=" + strconv.Itoa(stableLineCount(content)),
+		"chars=" + strconv.Itoa(utf8.RuneCountInString(content)),
+	}
+	return strings.Join(parts, " ")
+}
+
+// stableLineCount 统计文本行数；空文本返回 0，末尾换行不会产生额外空行计数。
+func stableLineCount(text string) int {
+	if text == "" {
+		return 0
+	}
+	count := strings.Count(text, "\n") + 1
+	if strings.HasSuffix(text, "\n") {
+		count--
+	}
+	if count < 0 {
+		return 0
+	}
+	return count
 }
 
 // sanitizeMicroCompactSummary 对 summarizer 输出做最终净化与限长，避免把不安全文本直接回灌上下文。

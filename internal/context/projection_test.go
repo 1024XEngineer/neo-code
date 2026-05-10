@@ -229,7 +229,7 @@ func TestBuildRecentMessagesForModelRespectsAbsoluteMessageBudget(t *testing.T) 
 func TestSanitizeProjectedToolContent(t *testing.T) {
 	t.Parallel()
 
-	rawBody := strings.Repeat("甲", recentWindowToolContentCharLimit+10)
+	rawBody := strings.Repeat("A", recentWindowToolContentHeadChars+10) + strings.Repeat("B", recentWindowToolContentTailChars-20) + "TAIL-MARKER"
 	projected := "tool result\nstatus: ok\n\ncontent:\n" + rawBody
 	sanitized := sanitizeProjectedToolContent(projected)
 	if !strings.Contains(sanitized, "content_excerpt:") {
@@ -237,6 +237,12 @@ func TestSanitizeProjectedToolContent(t *testing.T) {
 	}
 	if strings.Contains(sanitized, "content:\n") {
 		t.Fatalf("expected original content marker removed, got %q", sanitized)
+	}
+	if !strings.Contains(sanitized, "...[truncated]...") {
+		t.Fatalf("expected middle truncation marker, got %q", sanitized)
+	}
+	if !strings.Contains(sanitized, "TAIL-MARKER") {
+		t.Fatalf("expected tail content to be preserved, got %q", sanitized)
 	}
 	if !strings.Contains(sanitized, "[content truncated for memo extraction]") {
 		t.Fatalf("expected truncation marker, got %q", sanitized)
@@ -390,10 +396,16 @@ func TestIsInjectableToolMessage(t *testing.T) {
 func TestSanitizeProjectedToolContentFallsBackForRawPayload(t *testing.T) {
 	t.Parallel()
 
-	raw := strings.Repeat("x", recentWindowToolContentCharLimit+10)
+	raw := strings.Repeat("x", recentWindowToolContentHeadChars+20) + strings.Repeat("y", recentWindowToolContentTailChars-10) + "RAW-TAIL"
 	sanitized := sanitizeProjectedToolContent(raw)
 	if !strings.Contains(sanitized, "content_excerpt:") {
 		t.Fatalf("expected raw payload to be excerpted, got %q", sanitized)
+	}
+	if !strings.Contains(sanitized, "RAW-TAIL") {
+		t.Fatalf("expected raw payload tail to be preserved, got %q", sanitized)
+	}
+	if !strings.Contains(sanitized, "...[truncated]...") {
+		t.Fatalf("expected middle truncation marker, got %q", sanitized)
 	}
 	if !strings.Contains(sanitized, "[content truncated for memo extraction]") {
 		t.Fatalf("expected truncation marker, got %q", sanitized)
