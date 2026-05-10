@@ -4,6 +4,7 @@ import ChatInput from './ChatInput'
 import { useChatStore } from '@/stores/useChatStore'
 import { useComposerStore } from '@/stores/useComposerStore'
 import { useSessionStore } from '@/stores/useSessionStore'
+import { useRuntimeInsightStore } from '@/stores/useRuntimeInsightStore'
 
 const mockGatewayAPI = {
   listAvailableSkills: vi.fn(),
@@ -31,6 +32,21 @@ async function submitSlashCommand(command: string) {
   fireEvent.keyDown(textarea, { key: 'Enter' })
 }
 
+function renderWithBudget(input: {
+  action: string
+  estimated_input_tokens: number
+  prompt_budget: number
+  context_window?: number
+}) {
+  useRuntimeInsightStore.getState().setBudgetChecked({
+    attempt_seq: 1,
+    request_hash: 'budget-test',
+    ...input,
+  })
+  render(<ChatInput />)
+  return screen.getByTestId('budget-token-ring')
+}
+
 describe('ChatInput', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -54,12 +70,14 @@ describe('ChatInput', () => {
 
     useComposerStore.setState({ composerText: '' })
     useSessionStore.setState({ currentSessionId: '' } as never)
+    useRuntimeInsightStore.getState().reset()
     useChatStore.setState({
       isGenerating: false,
       messages: [],
       permissionRequests: [],
       agentMode: 'build',
       permissionMode: 'default',
+      tokenUsage: null,
     } as never)
   })
 
@@ -202,5 +220,70 @@ describe('ChatInput', () => {
     await waitFor(() => {
       expect(mockGatewayAPI.executeSystemTool).not.toHaveBeenCalled()
     })
+  })
+
+  it('shows a green budget ring below the warning threshold', () => {
+    const ring = renderWithBudget({
+      action: 'allow',
+      estimated_input_tokens: 80,
+      prompt_budget: 100,
+      context_window: 200,
+    })
+
+    expect(ring).toHaveAttribute('stroke', 'var(--success)')
+  })
+
+  it('shows a yellow budget ring near the automatic compact threshold', () => {
+    const ring = renderWithBudget({
+      action: 'allow',
+      estimated_input_tokens: 90,
+      prompt_budget: 100,
+      context_window: 200,
+    })
+
+    expect(ring).toHaveAttribute('stroke', 'var(--warning)')
+  })
+
+  it('shows a red budget ring near the context window limit', () => {
+    const ring = renderWithBudget({
+      action: 'allow',
+      estimated_input_tokens: 190,
+      prompt_budget: 100,
+      context_window: 200,
+    })
+
+    expect(ring).toHaveAttribute('stroke', 'var(--error)')
+  })
+
+  it('falls back to prompt budget as the limit when context window is missing', () => {
+    const ring = renderWithBudget({
+      action: 'allow',
+      estimated_input_tokens: 100,
+      prompt_budget: 100,
+    })
+
+    expect(ring).toHaveAttribute('stroke', 'var(--error)')
+  })
+
+  it('honors compact budget action as a yellow color override', () => {
+    const ring = renderWithBudget({
+      action: 'compact',
+      estimated_input_tokens: 20,
+      prompt_budget: 100,
+      context_window: 200,
+    })
+
+    expect(ring).toHaveAttribute('stroke', 'var(--warning)')
+  })
+
+  it('honors stop budget action as a red color override', () => {
+    const ring = renderWithBudget({
+      action: 'stop',
+      estimated_input_tokens: 20,
+      prompt_budget: 100,
+      context_window: 200,
+    })
+
+    expect(ring).toHaveAttribute('stroke', 'var(--error)')
   })
 })

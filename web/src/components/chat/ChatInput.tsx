@@ -28,6 +28,9 @@ const slashMenuAnchorStyle: React.CSSProperties = {
   zIndex: 100,
 }
 
+const budgetWarningThresholdRatio = 0.9
+const budgetDangerThresholdRatio = 0.95
+
 /** 将网关返回的技能列表转换成输入框使用的 slash 命令结构。 */
 function buildSkillSlashCommands(
   skills: Array<{ descriptor: { id: string; description?: string }; active?: boolean }>,
@@ -62,6 +65,59 @@ function extractSystemToolContent(result: unknown, fallback: string): string {
   const payload = (result as { payload?: { content?: string; Content?: string } } | null)?.payload
   const content = payload?.content ?? payload?.Content
   return content || fallback
+}
+
+/** 将预算事件转换为输入框圆环的语义状态，保持阈值和颜色判断集中。 */
+function resolveBudgetRingState(
+  budgetChecked: ReturnType<typeof useRuntimeInsightStore.getState>['budgetChecked'],
+  budgetEstimateFailed: ReturnType<typeof useRuntimeInsightStore.getState>['budgetEstimateFailed'],
+) {
+  if (budgetEstimateFailed) {
+    return {
+      color: 'var(--error)',
+      label: '预算估算失败',
+      ratio: 0,
+    }
+  }
+  if (!budgetChecked) {
+    return {
+      color: 'var(--text-tertiary)',
+      label: '暂无预算数据',
+      ratio: 0,
+    }
+  }
+
+  const estimatedTokens = Math.max(0, budgetChecked.estimated_input_tokens)
+  const promptBudget = Math.max(0, budgetChecked.prompt_budget)
+  const contextLimit = Math.max(0, budgetChecked.context_window || promptBudget)
+  const ringRatio = contextLimit > 0 ? Math.min(estimatedTokens / contextLimit, 1) : 0
+
+  if (
+    budgetChecked.action === 'stop' ||
+    (contextLimit > 0 && estimatedTokens >= contextLimit * budgetDangerThresholdRatio) ||
+    (!budgetChecked.context_window && promptBudget > 0 && estimatedTokens >= promptBudget)
+  ) {
+    return {
+      color: 'var(--error)',
+      label: '接近上下文上限',
+      ratio: ringRatio,
+    }
+  }
+  if (
+    budgetChecked.action === 'compact' ||
+    (promptBudget > 0 && estimatedTokens >= promptBudget * budgetWarningThresholdRatio)
+  ) {
+    return {
+      color: 'var(--warning)',
+      label: '接近自动压缩阈值',
+      ratio: ringRatio,
+    }
+  }
+  return {
+    color: 'var(--success)',
+    label: '正常',
+    ratio: ringRatio,
+  }
 }
 
 export default function ChatInput() {
@@ -471,16 +527,17 @@ function BudgetTokenStrip() {
   const [popoverStyle, setPopoverStyle] = useState<React.CSSProperties>({})
 
   const totalTokens = tokenUsage ? tokenUsage.input_tokens + tokenUsage.output_tokens : 0
-  const ratio = budgetUsageRatio ?? 0
+  const budgetRingState = resolveBudgetRingState(budgetChecked, budgetEstimateFailed)
+  const ratio = budgetRingState.ratio
+  const budgetPct = budgetUsageRatio ?? 0
   const pct = Math.min(Math.round(ratio * 100), 100)
+  const budgetThresholdPct = Math.min(Math.round(budgetPct * 100), 100)
 
   // SVG ring: radius 8, circumference ~50
   const r = 7
   const circ = 2 * Math.PI * r
   const dash = (ratio * circ).toFixed(1)
-  let ringColor = 'var(--text-tertiary)'
-  if (budgetEstimateFailed || ratio > 0.8) ringColor = 'var(--error)'
-  else if (ratio > 0.6) ringColor = 'var(--warning)'
+  const ringColor = budgetRingState.color
 
   // Click outside to close
   useEffect(() => {
@@ -542,6 +599,7 @@ function BudgetTokenStrip() {
           <circle cx={9} cy={9} r={r} fill="none" stroke="var(--bg-active)" strokeWidth="2" />
           {budgetChecked && (
             <circle
+              data-testid="budget-token-ring"
               cx={9}
               cy={9}
               r={r}
@@ -570,6 +628,10 @@ function BudgetTokenStrip() {
           ) : budgetChecked ? (
             <>
               <div className="budget-popover-row">
+                <span className="budget-popover-label">状态</span>
+                <span className="budget-popover-value" style={{ color: ringColor }}>{budgetRingState.label}</span>
+              </div>
+              <div className="budget-popover-row">
                 <span className="budget-popover-label">Budget</span>
                 <span className="budget-popover-value">{formatTokenCount(budgetChecked.prompt_budget)}</span>
               </div>
@@ -582,9 +644,15 @@ function BudgetTokenStrip() {
               <div className="budget-popover-row">
                 <span className="budget-popover-label">已用</span>
                 <span className="budget-popover-value">
-                  {formatTokenCount(budgetChecked.estimated_input_tokens)} ({pct}%)
+                  {formatTokenCount(budgetChecked.estimated_input_tokens)} ({budgetThresholdPct}%)
                 </span>
               </div>
+              {budgetChecked.context_window && (
+                <div className="budget-popover-row">
+                  <span className="budget-popover-label">上限占用</span>
+                  <span className="budget-popover-value">{pct}%</span>
+                </div>
+              )}
               {totalTokens > 0 && (
                 <div className="budget-popover-row">
                   <span className="budget-popover-label">本轮 Tokens</span>
