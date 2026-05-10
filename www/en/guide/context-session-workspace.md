@@ -14,7 +14,7 @@ The workspace decides which project the agent can inspect. A session stores one 
 Launch NeoCode in a project:
 
 ```bash
-neocode --workdir /path/to/project
+neocode -w /path/to/project
 ```
 
 View or switch workspace:

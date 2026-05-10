@@ -331,7 +331,7 @@ $env:MODELSCOPE_API_KEY = "ms-..."
 工作目录不写入 `config.yaml`，只通过启动参数覆盖：
 
 ```bash
-go run ./cmd/neocode --workdir /path/to/workspace
+go run ./cmd/neocode -w /path/to/workspace
 ```
 
 说明：
@@ -373,7 +373,7 @@ feishu:
 ```bash
 export FEISHU_APP_SECRET="cli_secret_xxx"
 export FEISHU_SIGNING_SECRET="signing_secret_xxx" # 仅 webhook 模式需要
-neocode feishu-adapter
+neocode adapter feishu
 ```
 
 说明：

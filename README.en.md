@@ -110,7 +110,7 @@ $env:OPENAI_API_KEY = "your_key_here"
 Then start with your workspace:
 
 ```bash
-neocode --workdir /path/to/your/project
+neocode -w /path/to/your/project
 ```
 
 To launch the browser-based Web UI:
@@ -154,7 +154,7 @@ Detailed docs are intentionally split out. README keeps entry links:
 neocode runner --gateway-address "your-gateway.com:8080" --token-file ~/.neocode/auth.json
 
 # Start feishu adapter (SDK mode, no public network required)
-neocode feishu-adapter --ingress sdk --gateway-listen "127.0.0.1:8080"
+neocode adapter feishu --ingress sdk --gateway-listen "127.0.0.1:8080"
 ```
 
 ---

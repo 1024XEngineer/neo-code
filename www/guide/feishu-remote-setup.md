@@ -138,18 +138,18 @@ Adapter 负责桥接飞书长连接与本地 Gateway，把飞书消息翻译为 
 
 ```bash
 # 开发模式 (go run)
-go run ./cmd/neocode feishu-adapter --ingress sdk --gateway-listen "127.0.0.1:8080"
+go run ./cmd/neocode adapter feishu --ingress sdk --gateway-listen "127.0.0.1:8080"
 
 # 安装模式 (neocode)
-neocode feishu-adapter --ingress sdk --gateway-listen "127.0.0.1:8080"
+neocode adapter feishu --ingress sdk --gateway-listen "127.0.0.1:8080"
 ```
 
 ```powershell
 # 开发模式 (go run)
-go run ./cmd/neocode feishu-adapter --ingress sdk --gateway-listen "\\.\pipe\neocode-gateway"
+go run ./cmd/neocode adapter feishu --ingress sdk --gateway-listen "\\.\pipe\neocode-gateway"
 
 # 安装模式 (neocode)
-neocode feishu-adapter --ingress sdk --gateway-listen "\\.\pipe\neocode-gateway"
+neocode adapter feishu --ingress sdk --gateway-listen "\\.\pipe\neocode-gateway"
 ```
 
 **Adapter 启动参数说明：**
@@ -265,10 +265,10 @@ neocode gateway --listen "127.0.0.1:8080" --http-listen "127.0.0.1:18181" --work
 
 ```bash
 # 开发模式 (go run)
-go run ./cmd/neocode feishu-adapter --ingress webhook --gateway-listen "127.0.0.1:8080" --listen "127.0.0.1:18080"
+go run ./cmd/neocode adapter feishu --ingress webhook --gateway-listen "127.0.0.1:8080" --listen "127.0.0.1:18080"
 
 # 安装模式 (neocode)
-neocode feishu-adapter --ingress webhook --gateway-listen "127.0.0.1:8080" --listen "127.0.0.1:18080"
+neocode adapter feishu --ingress webhook --gateway-listen "127.0.0.1:8080" --listen "127.0.0.1:18080"
 ```
 
 然后用 ngrok / cloudflared 把 `18080` 暴露公网，在飞书后台配置：
