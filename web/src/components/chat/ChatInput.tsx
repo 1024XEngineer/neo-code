@@ -57,6 +57,13 @@ function buildSlashHelpText(commands: AnySlashCommand[]): string {
   return ['可用命令：', ...lines].join('\n')
 }
 
+/** 统一提取系统工具返回文本，兼容 payload.content 与 payload.Content。 */
+function extractSystemToolContent(result: unknown, fallback: string): string {
+  const payload = (result as { payload?: { content?: string; Content?: string } } | null)?.payload
+  const content = payload?.content ?? payload?.Content
+  return content || fallback
+}
+
 export default function ChatInput() {
   const gatewayAPI = useGatewayAPI()
   const text = useComposerStore((state) => state.composerText)
@@ -149,13 +156,9 @@ export default function ChatInput() {
         return true
       }
       case '/memo': {
-        if (!isValidSessionId(currentSessionId)) {
-          useUIStore.getState().showToast('Send a message first to start a session', 'error')
-          return true
-        }
         try {
           const result = await api.executeSystemTool(currentSessionId, '', 'memo_list', {})
-          addSystemMessage((result as { payload?: { content?: string } })?.payload?.content || 'Memo query complete')
+          addSystemMessage(extractSystemToolContent(result, 'Memo query complete'))
         } catch (err) {
           console.error('Memo list failed:', err)
           useUIStore.getState().showToast('Failed to query memo', 'error')
@@ -167,17 +170,13 @@ export default function ChatInput() {
           useUIStore.getState().showToast('Usage: /remember <content>', 'error')
           return true
         }
-        if (!isValidSessionId(currentSessionId)) {
-          useUIStore.getState().showToast('Send a message first to start a session', 'error')
-          return true
-        }
         try {
           const result = await api.executeSystemTool(currentSessionId, '', 'memo_remember', {
             type: 'user',
             title: argument,
             content: argument,
           })
-          addSystemMessage((result as { payload?: { content?: string } })?.payload?.content || 'Memo saved')
+          addSystemMessage(extractSystemToolContent(result, 'Memo saved'))
         } catch (err) {
           console.error('Remember failed:', err)
           useUIStore.getState().showToast('Failed to save memo', 'error')
@@ -189,16 +188,12 @@ export default function ChatInput() {
           useUIStore.getState().showToast('Usage: /forget <keyword>', 'error')
           return true
         }
-        if (!isValidSessionId(currentSessionId)) {
-          useUIStore.getState().showToast('Send a message first to start a session', 'error')
-          return true
-        }
         try {
           const result = await api.executeSystemTool(currentSessionId, '', 'memo_remove', {
             keyword: argument,
             scope: 'all',
           })
-          addSystemMessage((result as { payload?: { content?: string } })?.payload?.content || 'Memo deleted')
+          addSystemMessage(extractSystemToolContent(result, 'Memo deleted'))
         } catch (err) {
           console.error('Forget failed:', err)
           useUIStore.getState().showToast('Failed to delete memo', 'error')
