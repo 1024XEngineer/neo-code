@@ -2405,6 +2405,8 @@ func (b *gatewayRuntimePortBridge) RestoreCheckpoint(ctx context.Context, input 
 		SessionID:    strings.TrimSpace(input.SessionID),
 		CheckpointID: strings.TrimSpace(input.CheckpointID),
 		Force:        input.Force,
+		Mode:         strings.TrimSpace(input.Mode),
+		Paths:        append([]string(nil), input.Paths...),
 	})
 	if err != nil {
 		return gateway.CheckpointRestoreResult{}, err
@@ -2446,6 +2448,15 @@ func (b *gatewayRuntimePortBridge) CheckpointDiff(ctx context.Context, input gat
 	if err != nil {
 		return gateway.CheckpointDiffResult{}, err
 	}
+	entries := make([]gateway.CheckpointDiffFileEntry, 0, len(result.FileEntries))
+	for _, entry := range result.FileEntries {
+		entries = append(entries, gateway.CheckpointDiffFileEntry{
+			Path:                 entry.Path,
+			Kind:                 entry.Kind,
+			RollbackCheckpointID: entry.RollbackCheckpointID,
+			CanRollback:          entry.CanRollback,
+		})
+	}
 	return gateway.CheckpointDiffResult{
 		CheckpointID:     result.CheckpointID,
 		PrevCheckpointID: result.PrevCheckpointID,
@@ -2456,8 +2467,8 @@ func (b *gatewayRuntimePortBridge) CheckpointDiff(ctx context.Context, input gat
 			Deleted:  result.Files.Deleted,
 			Modified: result.Files.Modified,
 		},
-		Patch:            result.Patch,
-		WorkspaceDrifted: result.WorkspaceDrifted,
-		Warning:          result.Warning,
+		FileEntries: entries,
+		Patch:       result.Patch,
+		Warning:     result.Warning,
 	}, nil
 }

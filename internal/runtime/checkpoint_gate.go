@@ -5,13 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
 	"neo-code/internal/checkpoint"
-	"neo-code/internal/repository"
 	agentsession "neo-code/internal/session"
 )
 
@@ -39,73 +36,6 @@ func (s *Service) createStartOfTurnCheckpoint(ctx context.Context, state *runSta
 	}
 	defer s.perEditStore.Reset()
 	return s.createCheckpointRecord(ctx, session, runID, state, checkpointID, agentsession.CheckpointReasonPreWrite)
-}
-
-// createPreRunDriftRebaseCheckpoint 在 run 开始前检测到外部漂移时，固化当前工作区为权威基线。
-func (s *Service) createPreRunDriftRebaseCheckpoint(
-	ctx context.Context,
-	state *runState,
-	diff repository.FingerprintDiff,
-) (string, error) {
-	if s.checkpointStore == nil || s.perEditStore == nil {
-		return "", nil
-	}
-
-	state.mu.Lock()
-	session := state.session
-	runID := state.runID
-	workdir := effectiveWorkdirForCheckpointState(state, session)
-	state.mu.Unlock()
-
-	if workdir == "" {
-		return "", fmt.Errorf("checkpoint: workdir is empty when creating drift rebase checkpoint")
-	}
-
-	currentFingerprint, _, err := repository.ScanWorkdir(ctx, workdir, repository.DefaultFingerprintOptions())
-	if err != nil {
-		return "", fmt.Errorf("checkpoint: scan workdir for drift rebase: %w", err)
-	}
-	absPaths := make([]string, 0, len(currentFingerprint))
-	for relPath := range currentFingerprint {
-		absPaths = append(absPaths, filepath.Join(workdir, filepath.FromSlash(relPath)))
-	}
-	sort.Strings(absPaths)
-	if len(absPaths) > 0 {
-		if _, err := s.perEditStore.CaptureBatch(absPaths); err != nil {
-			return "", fmt.Errorf("checkpoint: capture current files for drift rebase: %w", err)
-		}
-	}
-
-	deleted := append([]string(nil), diff.Deleted...)
-	sort.Strings(deleted)
-	for _, relPath := range deleted {
-		absPath := filepath.Join(workdir, filepath.FromSlash(relPath))
-		if _, err := s.perEditStore.CapturePreWrite(absPath); err != nil {
-			return "", fmt.Errorf("checkpoint: capture deleted file for drift rebase (%s): %w", relPath, err)
-		}
-	}
-
-	checkpointID := agentsession.NewID("checkpoint")
-	written, err := s.perEditStore.FinalizeWithExactState(checkpointID)
-	if err != nil {
-		return "", fmt.Errorf("checkpoint: finalize drift rebase checkpoint: %w", err)
-	}
-	if !written {
-		return "", fmt.Errorf("checkpoint: drift rebase checkpoint has no captured files")
-	}
-	defer s.perEditStore.Reset()
-
-	if err := s.createCheckpointRecord(
-		ctx,
-		session,
-		runID,
-		state,
-		checkpointID,
-		agentsession.CheckpointReasonPreRunDriftRebase,
-	); err != nil {
-		return "", err
-	}
-	return checkpointID, nil
 }
 
 // createEndOfTurnCheckpoint 在工具执行完成后创建代码检查点。
@@ -141,6 +71,41 @@ func (s *Service) createEndOfTurnCheckpoint(ctx context.Context, state *runState
 	state.mu.Lock()
 	state.lastEndOfTurnCheckpointID = checkpointID
 	state.mu.Unlock()
+}
+
+// createRunEndCheckpoint 在 run 结束时创建单个代码 checkpoint，统一固化本 run 的首触碰基线与结束态。
+func (s *Service) createRunEndCheckpoint(ctx context.Context, state *runState) {
+	if s.checkpointStore == nil || s.perEditStore == nil || state == nil {
+		return
+	}
+
+	state.mu.Lock()
+	hasWorkspaceWrite := state.hasRunWorkspaceWrite
+	session := state.session
+	runID := state.runID
+	checkpointID := strings.TrimSpace(state.runCheckpointID)
+	state.mu.Unlock()
+
+	if !hasWorkspaceWrite || checkpointID == "" {
+		return
+	}
+
+	written, err := s.perEditStore.FinalizeWithExactState(checkpointID)
+	if err != nil {
+		log.Printf("checkpoint: run-end finalize: %v", err)
+		return
+	}
+	if !written {
+		return
+	}
+	if err := s.createCheckpointRecord(ctx, session, runID, state, checkpointID, agentsession.CheckpointReasonEndOfTurn); err != nil {
+		log.Printf("checkpoint: run-end record: %v", err)
+		return
+	}
+	state.mu.Lock()
+	state.lastEndOfTurnCheckpointID = checkpointID
+	state.mu.Unlock()
+	s.perEditStore.Reset()
 }
 
 // createCheckpointRecord 写入 SQLite checkpoint 记录 + session 快照，并发出 EventCheckpointCreated。
@@ -265,35 +230,6 @@ func (s *Service) createSessionOnlyCheckpoint(
 		Reason:               string(saved.Reason),
 	})
 	return nil
-}
-
-// findPreviousEndOfTurnCheckpoint 查询指定 session 中、不属于当前 run 的最新可用 end_of_turn checkpoint。
-// 用于 run-scoped diff 的 baseline 定位；找不到时返回空字符串，不报错。
-func (s *Service) findPreviousEndOfTurnCheckpoint(ctx context.Context, sessionID string, currentRunID string) string {
-	if s.checkpointStore == nil {
-		return ""
-	}
-	records, err := s.checkpointStore.ListCheckpoints(ctx, sessionID, checkpoint.ListCheckpointOpts{
-		Limit:          50,
-		RestorableOnly: true,
-	})
-	if err != nil {
-		log.Printf("checkpoint: find previous end-of-turn list failed: %v", err)
-		return ""
-	}
-	for _, r := range records {
-		if r.Reason != agentsession.CheckpointReasonEndOfTurn {
-			continue
-		}
-		if !checkpoint.IsPerEditRef(r.CodeCheckpointRef) {
-			continue
-		}
-		if r.RunID == currentRunID {
-			continue
-		}
-		return checkpoint.PerEditCheckpointIDFromRef(r.CodeCheckpointRef)
-	}
-	return ""
 }
 
 // effectiveWorkdirForCheckpointState 返回 checkpoint 流程应使用的工作目录，优先使用本次 run 已归一化的目录。

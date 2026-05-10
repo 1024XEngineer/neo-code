@@ -52,7 +52,8 @@ type runState struct {
 	completion                     controlplane.CompletionState
 	progress                       controlplane.ProgressState
 	lastEndOfTurnCheckpointID      string
-	baselineCheckpointID           string
+	runCheckpointID                string
+	hasRunWorkspaceWrite           bool
 	hookAnnotations                []string
 	hookNotifications              []queuedHookNotification
 	hookNotificationSeen           map[string]time.Time

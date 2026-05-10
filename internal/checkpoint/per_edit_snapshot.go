@@ -242,38 +242,21 @@ func (s *PerEditSnapshotStore) finalizeCheckpoint(checkpointID string, captureEx
 		return false, fmt.Errorf("per-edit: empty checkpointID")
 	}
 
-	// 收集版本号（持锁）后释放，再逐文件读 meta 构建快照。
-	s.indexMu.Lock()
-	if len(s.pathToVersions) == 0 {
-		s.indexMu.Unlock()
+	s.pendingMu.Lock()
+	if len(s.pending) == 0 {
+		s.pendingMu.Unlock()
 		return false, nil
 	}
-	type hashEntry struct {
-		hash     string
-		versions []int
-	}
-	entries := make([]hashEntry, 0, len(s.pathToVersions))
-	for h, versions := range s.pathToVersions {
-		if len(versions) > 0 {
-			entries = append(entries, hashEntry{hash: h, versions: versions})
+	snapshot := make(map[string]int, len(s.pending))
+	for hash, version := range s.pending {
+		if hash == "" || version <= 0 {
+			continue
 		}
+		snapshot[hash] = version
 	}
-	s.indexMu.Unlock()
-
-	snapshot := make(map[string]int, len(entries))
-	for _, e := range entries {
-		// 从最新版本往回找，跳过 IsPostDelete=true 的标记版本
-		// （post-delete 只记录"文件已删除"，不应用于全量快照）。
-		// pre-create 版本（Existed=false, IsPostDelete=false）仍要保留，
-		// 否则新建文件在 checkpoint 中将完全不可见。
-		for i := len(e.versions) - 1; i >= 0; i-- {
-			meta, err := s.readVersionMeta(e.hash, e.versions[i])
-			if err != nil || meta.IsPostDelete {
-				continue
-			}
-			snapshot[e.hash] = e.versions[i]
-			break
-		}
+	s.pendingMu.Unlock()
+	if len(snapshot) == 0 {
+		return false, nil
 	}
 
 	var exactSnapshot map[string]int
@@ -297,28 +280,51 @@ func (s *PerEditSnapshotStore) finalizeCheckpoint(checkpointID string, captureEx
 	return true, nil
 }
 
-// FinalizePending 仅将当前 pending 写入 checkpoint（pre-restore guard 专用）。
-// 全量快照会包含多轮前的旧 pre-write 内容，用于 guard 反而会写错状态；
-// guard 只需固化为本轮 capture 的增量。
-func (s *PerEditSnapshotStore) FinalizePending(checkpointID string) (bool, error) {
-	if checkpointID == "" {
+// FinalizeExactForCheckpoints 为指定检查点影响到的文件捕获当前精确状态，用于 restore guard。
+func (s *PerEditSnapshotStore) FinalizeExactForCheckpoints(checkpointID string, checkpointIDs []string) (bool, error) {
+	if strings.TrimSpace(checkpointID) == "" {
 		return false, fmt.Errorf("per-edit: empty checkpointID")
 	}
-	s.pendingMu.Lock()
-	if len(s.pending) == 0 {
-		s.pendingMu.Unlock()
+	baseVersions := make(map[string]int)
+	for _, relatedID := range checkpointIDs {
+		relatedID = strings.TrimSpace(relatedID)
+		if relatedID == "" {
+			continue
+		}
+		cp, err := s.readCheckpointMeta(relatedID)
+		if err != nil {
+			return false, err
+		}
+		for hash, version := range cp.FileVersions {
+			if strings.TrimSpace(hash) == "" || version <= 0 {
+				continue
+			}
+			baseVersions[hash] = version
+		}
+		for hash, version := range cp.ExactFileVersions {
+			if strings.TrimSpace(hash) == "" || version <= 0 {
+				continue
+			}
+			if _, ok := baseVersions[hash]; !ok {
+				baseVersions[hash] = version
+			}
+		}
+	}
+	if len(baseVersions) == 0 {
 		return false, nil
 	}
-	snapshot := make(map[string]int, len(s.pending))
-	for k, v := range s.pending {
-		snapshot[k] = v
+	exactSnapshot, err := s.captureExactStateSnapshot(baseVersions)
+	if err != nil {
+		return false, err
 	}
-	s.pendingMu.Unlock()
-
+	if len(exactSnapshot) == 0 {
+		return false, nil
+	}
 	meta := CheckpointMeta{
-		CheckpointID: checkpointID,
-		CreatedAt:    time.Now().UTC(),
-		FileVersions: snapshot,
+		CheckpointID:      checkpointID,
+		CreatedAt:         time.Now().UTC(),
+		FileVersions:      exactSnapshot,
+		ExactFileVersions: exactSnapshot,
 	}
 	if err := s.writeCheckpointMeta(meta); err != nil {
 		return false, err
@@ -399,12 +405,9 @@ func (s *PerEditSnapshotStore) Restore(ctx context.Context, targetID, guardID st
 	}
 
 	hashSet := make(map[string]struct{})
-	if len(relatedCPs) > 0 {
-		if err := s.collectRestoreChangedHashesLocked(hashSet, targetCP, relatedCPs); err != nil {
-			return err
-		}
-	} else {
-		addCheckpointHashes(hashSet, targetCP)
+	addCheckpointHashes(hashSet, targetCP)
+	for _, relatedCP := range relatedCPs {
+		addCheckpointHashes(hashSet, relatedCP)
 	}
 	if hasGuard {
 		addCheckpointHashes(hashSet, guardCP)
@@ -550,6 +553,85 @@ func (s *PerEditSnapshotStore) RestoreExact(ctx context.Context, checkpointID st
 		}
 		if err := writeFileAtomic(target, content, meta.Mode); err != nil {
 			return fmt.Errorf("per-edit: restore-exact write %s: %w", target, err)
+		}
+	}
+	return nil
+}
+
+// RestoreBaseline 按 checkpoint 的 FileVersions 还原指定相对路径到首次触碰前基线。
+// 该函数仅读取 FileVersions，不读取 ExactFileVersions，也不使用 v_next 推断语义。
+func (s *PerEditSnapshotStore) RestoreBaseline(ctx context.Context, checkpointID string, relPaths []string) error {
+	if s == nil {
+		return fmt.Errorf("per-edit: store not available")
+	}
+	if strings.TrimSpace(checkpointID) == "" {
+		return fmt.Errorf("per-edit: checkpoint id required")
+	}
+	if len(relPaths) == 0 {
+		return fmt.Errorf("per-edit: baseline restore paths required")
+	}
+	cp, err := s.readCheckpointMeta(checkpointID)
+	if err != nil {
+		return err
+	}
+
+	s.indexMu.Lock()
+	defer s.indexMu.Unlock()
+
+	for _, relPath := range relPaths {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		cleanRel := filepath.ToSlash(strings.TrimSpace(relPath))
+		for strings.HasPrefix(cleanRel, "./") {
+			cleanRel = strings.TrimPrefix(cleanRel, "./")
+		}
+		if cleanRel == "" || cleanRel == "." {
+			return fmt.Errorf("per-edit: invalid restore path %q", relPath)
+		}
+		absPath := filepath.Clean(filepath.Join(s.workdir, filepath.FromSlash(cleanRel)))
+		relToWorkdir, relErr := filepath.Rel(filepath.Clean(s.workdir), absPath)
+		if relErr != nil || relToWorkdir == ".." || strings.HasPrefix(relToWorkdir, ".."+string(filepath.Separator)) {
+			return fmt.Errorf("per-edit: restore path %q escapes workdir", relPath)
+		}
+
+		hash := perEditPathHash(absPath)
+		version, ok := cp.FileVersions[hash]
+		if !ok || version <= 0 {
+			return fmt.Errorf("per-edit: baseline version for path %s not found in checkpoint %s", cleanRel, checkpointID)
+		}
+		meta, err := s.readVersionMeta(hash, version)
+		if err != nil {
+			return fmt.Errorf("per-edit: read baseline meta v%d for %s: %w", version, cleanRel, err)
+		}
+		if !meta.Existed {
+			if err := os.RemoveAll(absPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return fmt.Errorf("per-edit: baseline remove %s: %w", cleanRel, err)
+			}
+			continue
+		}
+		if meta.IsDir {
+			mode := meta.Mode
+			if mode == 0 {
+				mode = 0o755
+			}
+			if err := os.MkdirAll(absPath, mode); err != nil {
+				return fmt.Errorf("per-edit: baseline mkdir %s: %w", cleanRel, err)
+			}
+			if err := os.Chmod(absPath, mode); err != nil {
+				return fmt.Errorf("per-edit: baseline chmod %s: %w", cleanRel, err)
+			}
+			continue
+		}
+		content, err := s.readVersionBin(hash, version)
+		if err != nil {
+			return fmt.Errorf("per-edit: baseline read bin v%d for %s: %w", version, cleanRel, err)
+		}
+		if err := os.MkdirAll(filepath.Dir(absPath), 0o755); err != nil {
+			return fmt.Errorf("per-edit: baseline mkdir parent %s: %w", cleanRel, err)
+		}
+		if err := writeFileAtomic(absPath, content, meta.Mode); err != nil {
+			return fmt.Errorf("per-edit: baseline write %s: %w", cleanRel, err)
 		}
 	}
 	return nil
@@ -704,23 +786,18 @@ func (s *PerEditSnapshotStore) RunEndCapture(ctx context.Context, checkpointIDs 
 //
 // checkpointIDs 应为 PerEditCheckpointIDFromRef 提取后的值（不含 "peredit:" 前缀）。
 //
-// prevFileVersions 为上一个 run 最后一个 checkpoint 的 FileVersions 快照。
-// 版本号未变的文件（同一 hash 在相邻 run 中版本号相同）会被跳过，
-// 因为这些文件在本 run 中未产生新 capture，内容没有变化。传 nil 表示不过滤。
+// prevFileVersions 保留为兼容参数；run-touched 语义下不再用跨 run 基线过滤文件。
 func (s *PerEditSnapshotStore) RunAggregateDiff(ctx context.Context, checkpointIDs []string, prevFileVersions map[string]int) (string, []FileChangeEntry, error) {
 	type versionRange struct {
 		minV int
 		maxV int
 	}
 	versionByHash := make(map[string]versionRange)
-	var runEndTime time.Time
+	_ = prevFileVersions
 	for _, cid := range checkpointIDs {
 		meta, err := s.readCheckpointMeta(cid)
 		if err != nil {
 			return "", nil, fmt.Errorf("per-edit: read checkpoint %s: %w", cid, err)
-		}
-		if meta.CreatedAt.After(runEndTime) {
-			runEndTime = meta.CreatedAt
 		}
 		for hash, v := range meta.FileVersions {
 			if vr, ok := versionByHash[hash]; ok {
@@ -737,16 +814,6 @@ func (s *PerEditSnapshotStore) RunAggregateDiff(ctx context.Context, checkpointI
 		}
 	}
 
-	// 过滤历史文件：版本号与上一个 run 结束时相同 = 本 run 未产生新 capture = 跳过。
-	if prevFileVersions != nil {
-		for hash, vr := range versionByHash {
-			if vr.minV == vr.maxV {
-				if prevV, ok := prevFileVersions[hash]; ok && prevV == vr.minV {
-					delete(versionByHash, hash)
-				}
-			}
-		}
-	}
 	s.indexMu.Lock()
 	defer s.indexMu.Unlock()
 
@@ -780,13 +847,7 @@ func (s *PerEditSnapshotStore) RunAggregateDiff(ctx context.Context, checkpointI
 				return "", nil, fmt.Errorf("per-edit: read baseline bin v%d %s: %w", vr.minV, hash, err)
 			}
 		}
-		afterContent, afterIsDir, afterExists, degraded := s.contentAfterLastVersionLocked(hash, vr.maxV, display)
-		if degraded {
-			if info, err := os.Stat(display); err == nil && info.ModTime().After(runEndTime) {
-				// run 结束后文件被外部修改，跳过以避免污染
-				continue
-			}
-		}
+		afterContent, afterIsDir, afterExists, _ := s.contentAfterLastVersionLocked(hash, vr.maxV, display)
 		// 只有 before 和 after 都是目录时才跳过（unified diff 不支持目录）。
 		// 目录删除、目录变文件等变更仍要进入分类，这样 changes 列表能正确反映。
 		if beforeIsDir && beforeExists && afterIsDir && afterExists {
@@ -1217,8 +1278,7 @@ func (s *PerEditSnapshotStore) writeCheckpointMeta(meta CheckpointMeta) error {
 	return writeFileAtomic(s.checkpointMetaPath(meta.CheckpointID), data, 0o644)
 }
 
-// GetCheckpointFileVersions 读取指定 checkpoint 的 FileVersions 映射，
-// 供调用方用于版本号比较（如 RunAggregateDiff 的跨 run 过滤）。
+// GetCheckpointFileVersions 读取指定 checkpoint 的 FileVersions 映射，供兼容路径和测试使用。
 func (s *PerEditSnapshotStore) GetCheckpointFileVersions(checkpointID string) (map[string]int, error) {
 	meta, err := s.readCheckpointMeta(checkpointID)
 	if err != nil {
@@ -1344,44 +1404,6 @@ func addCheckpointHashes(hashSet map[string]struct{}, cp CheckpointMeta) {
 	for hash := range cp.ExactFileVersions {
 		hashSet[hash] = struct{}{}
 	}
-}
-
-// collectRestoreChangedHashesLocked 只收集 target 到后续 checkpoint 之间净变化的路径。
-// target 可作为全工作区重锚点；真正 restore 时不应因为 target 是全量快照而误碰无关文件。
-func (s *PerEditSnapshotStore) collectRestoreChangedHashesLocked(
-	hashSet map[string]struct{},
-	targetCP CheckpointMeta,
-	relatedCPs []CheckpointMeta,
-) error {
-	if len(relatedCPs) == 0 {
-		return nil
-	}
-	latestCP := relatedCPs[0]
-	candidateHashes := make(map[string]struct{})
-	addCheckpointHashes(candidateHashes, targetCP)
-	for _, cp := range relatedCPs {
-		addCheckpointHashes(candidateHashes, cp)
-		if cp.CreatedAt.After(latestCP.CreatedAt) {
-			latestCP = cp
-		}
-	}
-	for hash := range candidateHashes {
-		targetContent, targetIsDir, targetExists, targetMode, _, err := s.contentAtCheckpointStateLocked(hash, targetCP, false)
-		if err != nil {
-			return err
-		}
-		latestContent, latestIsDir, latestExists, latestMode, _, err := s.contentAtCheckpointStateLocked(hash, latestCP, false)
-		if err != nil {
-			return err
-		}
-		if targetExists != latestExists ||
-			targetIsDir != latestIsDir ||
-			targetMode != latestMode ||
-			!bytes.Equal(targetContent, latestContent) {
-			hashSet[hash] = struct{}{}
-		}
-	}
-	return nil
 }
 
 // contentAtCheckpointStateLocked 读取 checkpoint 结束态；新 checkpoint 优先使用 ExactFileVersions。
