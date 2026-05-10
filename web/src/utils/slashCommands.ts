@@ -1,6 +1,6 @@
 /**
  * Slash Command 定义、解析与匹配工具模块
- * 与 TUI 端 internal/tui/core/app/commands.go 对齐
+ * 与 Web 端当前已支持的命令集保持一致
  */
 
 export interface SlashCommand {
@@ -60,12 +60,10 @@ export const builtinSlashCommands: SlashCommand[] = [
   },
 ]
 
-/** 所有内置命令的 usage 集合，用于快速判断 */
-const builtinUsages = new Set(builtinSlashCommands.map((c) => c.usage))
+const builtinUsages = new Set(builtinSlashCommands.map((command) => command.usage.toLowerCase()))
 
 /**
- * 解析 slash command 输入
- * 输入 "/remember 用户名是 Alice" → { command: '/remember', argument: '用户名是 Alice' }
+ * 解析 slash command 输入，提取命令与参数部分。
  */
 export function parseSlashCommand(input: string): { command: string; argument: string } | null {
   const trimmed = input.trim()
@@ -82,34 +80,87 @@ export function parseSlashCommand(input: string): { command: string; argument: s
 }
 
 /**
- * 判断输入是否是 slash command（以 / 开头且不止一个字符）
+ * 判断输入是否进入 slash 提示态；单独输入 "/" 也应视为有效触发。
  */
 export function isSlashCommand(input: string): boolean {
-  const trimmed = input.trim()
-  return trimmed.startsWith('/') && trimmed.length > 1
+  return input.trim().startsWith('/')
 }
 
 /**
- * 根据输入过滤匹配命令列表
- * 输入 "/com" → 过滤出 /compact
+ * 判断输入是否已经完整匹配某个命令；完整命令且无尾随空格时不再继续提示。
+ */
+function isCompleteSlashCommand(input: string, commands: AnySlashCommand[]): boolean {
+  const normalizedInput = input.trimLeft().toLowerCase()
+  if (normalizedInput.trimRight() !== normalizedInput) {
+    return false
+  }
+  return commands.some((command) => command.usage.trim().toLowerCase() === normalizedInput)
+}
+
+/**
+ * 计算模糊匹配分值；分值越小表示匹配越优先，返回 null 表示不匹配。
+ */
+function buildFuzzyMatchScore(target: string, needle: string): number | null {
+  if (!target || !needle) return null
+  if (target === needle) return 0
+  if (target.startsWith(needle)) return 100 + target.length
+
+  const includeIndex = target.indexOf(needle)
+  if (includeIndex >= 0) return 200 + includeIndex
+
+  let cursor = 0
+  let spanStart = -1
+  let spanEnd = -1
+  for (const char of needle) {
+    const foundAt = target.indexOf(char, cursor)
+    if (foundAt < 0) return null
+    if (spanStart < 0) spanStart = foundAt
+    spanEnd = foundAt
+    cursor = foundAt + 1
+  }
+
+  if (spanStart < 0 || spanEnd < 0) return null
+  const spanLength = spanEnd - spanStart + 1
+  return 500 + spanLength + spanStart
+}
+
+/**
+ * 根据输入过滤匹配命令列表；优先 usage/id，再回退 description。
  */
 export function matchSlashCommands(input: string, commands: AnySlashCommand[]): AnySlashCommand[] {
   if (!isSlashCommand(input)) return []
 
-  const query = input.trim().toLowerCase()
+  const query = input.trimLeft().toLowerCase()
   if (query === '/') return commands
+  if (isCompleteSlashCommand(query, commands)) return []
 
-  return commands.filter(
-    (cmd) =>
-      cmd.usage.toLowerCase().includes(query) ||
-      cmd.description.toLowerCase().includes(query) ||
-      cmd.id.toLowerCase().includes(query.slice(1)),
-  )
+  const needle = query.slice(1).trim()
+  if (!needle) return commands
+
+  const matches = commands
+    .map((command, index) => {
+      const usageScore = buildFuzzyMatchScore(command.usage.toLowerCase().slice(1), needle)
+      const idScore = buildFuzzyMatchScore(command.id.toLowerCase(), needle)
+      const descriptionScore = buildFuzzyMatchScore(command.description.toLowerCase(), needle)
+
+      const bestScore = [usageScore, idScore, descriptionScore == null ? null : descriptionScore + 1000]
+        .filter((score): score is number => score != null)
+        .sort((left, right) => left - right)[0]
+
+      if (bestScore == null) return null
+      return { command, index, score: bestScore }
+    })
+    .filter((entry): entry is { command: AnySlashCommand; index: number; score: number } => entry != null)
+    .sort((left, right) => left.score - right.score || left.index - right.index)
+    .map((entry) => entry.command)
+
+  if (matches.length > 0) return matches
+  if (needle.length === 1) return commands
+  return []
 }
 
 /**
- * 判断输入是否匹配一个已知的完整内置命令
- * 用于决定 Enter 是执行命令还是发送普通消息
+ * 判断输入是否匹配一个已知的完整内置命令。
  */
 export function isKnownSlashCommand(input: string): boolean {
   const parsed = parseSlashCommand(input)
@@ -118,14 +169,14 @@ export function isKnownSlashCommand(input: string): boolean {
 }
 
 /**
- * 判断是否为内置命令（非技能命令）
+ * 判断是否为内置命令（非技能命令）。
  */
 export function isBuiltinCommand(cmd: AnySlashCommand): cmd is SlashCommand {
   return !('isSkill' in cmd)
 }
 
 /**
- * 判断是否为技能命令
+ * 判断是否为技能命令。
  */
 export function isSkillCommand(cmd: AnySlashCommand): cmd is SkillSlashCommand {
   return 'isSkill' in cmd && cmd.isSkill
