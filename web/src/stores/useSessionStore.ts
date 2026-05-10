@@ -157,12 +157,25 @@ export async function loadSessionWithInsights(gatewayAPI: GatewayAPI, sessionId:
   return sessionFrame
 }
 
+/** isInternalHistoryMessage 识别仅供 runtime/provider 续跑使用、不能回放到 Web 聊天流的内部控制消息。 */
+function isInternalHistoryMessage(msg: BackendMessage): boolean {
+  const role = msg.role.trim().toLowerCase()
+  if (role === 'system') return true
+
+  const content = msg.content.trim()
+  if (!content) return false
+  return content.startsWith('<acceptance_continue>') ||
+    content.includes('<completion_blocked_reason>') ||
+    content.includes('<todo_convergence>')
+}
+
 /** 将后端历史消息映射为前端 ChatMessage 列表，正确合并 tool_result 回 tool_call */
 export function mapHistoryMessages(backendMessages: BackendMessage[]): Array<ReturnType<typeof useChatStore.getState>['messages'][0]> {
   let _idCounter = 0
   // Phase 1: Collect tool results by tool_call_id
   const toolResults = new Map<string, { content: string; isError: boolean }>()
   for (const msg of backendMessages) {
+    if (isInternalHistoryMessage(msg)) continue
     if (msg.tool_call_id) {
       toolResults.set(msg.tool_call_id, { content: msg.content, isError: !!msg.is_error })
     }
@@ -171,6 +184,8 @@ export function mapHistoryMessages(backendMessages: BackendMessage[]): Array<Ret
   // Phase 2: Map messages, merging tool results into corresponding tool_calls
   const result: Array<ReturnType<typeof useChatStore.getState>['messages'][0]> = []
   for (const msg of backendMessages) {
+    if (isInternalHistoryMessage(msg)) continue
+
     // Skip bare tool result messages — they are merged into tool_call messages
     if (msg.tool_call_id) continue
 

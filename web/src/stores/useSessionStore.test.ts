@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { useSessionStore } from './useSessionStore'
+import { mapHistoryMessages, useSessionStore } from './useSessionStore'
 import { useChatStore } from './useChatStore'
 import { useGatewayStore } from './useGatewayStore'
 import { useRuntimeInsightStore } from './useRuntimeInsightStore'
@@ -12,6 +12,67 @@ beforeEach(() => {
 })
 
 describe('useSessionStore', () => {
+  it('mapHistoryMessages skips internal system acceptance reminders', () => {
+    const mapped = mapHistoryMessages([
+      { role: 'user', content: 'start' },
+      {
+        role: 'system',
+        content: [
+          '<acceptance_continue>',
+          '<completion_blocked_reason>pending_todo</completion_blocked_reason>',
+          '</acceptance_continue>',
+        ].join(''),
+      },
+      { role: 'assistant', content: 'visible answer' },
+    ])
+
+    expect(mapped.map((m) => m.content)).toEqual(['start', 'visible answer'])
+    expect(mapped.every((m) => m.content.includes('acceptance_continue') === false)).toBe(true)
+  })
+
+  it('mapHistoryMessages skips leaked assistant acceptance control text', () => {
+    const mapped = mapHistoryMessages([
+      {
+        role: 'assistant',
+        content: '<acceptance_continue><todo_convergence></todo_convergence></acceptance_continue>',
+      },
+      { role: 'assistant', content: 'normal assistant text' },
+      {
+        role: 'assistant',
+        content: 'prefix <completion_blocked_reason>pending_todo</completion_blocked_reason>',
+      },
+    ])
+
+    expect(mapped).toHaveLength(1)
+    expect(mapped[0].content).toBe('normal assistant text')
+  })
+
+  it('mapHistoryMessages keeps normal messages and merges tool results', () => {
+    const mapped = mapHistoryMessages([
+      { role: 'user', content: 'please inspect' },
+      {
+        role: 'assistant',
+        content: 'calling tool',
+        tool_calls: [
+          { id: 'call-1', name: 'filesystem_read_file', arguments: '{"path":"README.md"}' },
+        ],
+      },
+      { role: 'tool', content: 'file content', tool_call_id: 'call-1' },
+    ])
+
+    expect(mapped).toHaveLength(3)
+    expect(mapped[0]).toMatchObject({ role: 'user', type: 'text', content: 'please inspect' })
+    expect(mapped[1]).toMatchObject({ role: 'assistant', type: 'text', content: 'calling tool' })
+    expect(mapped[2]).toMatchObject({
+      role: 'tool',
+      type: 'tool_call',
+      toolName: 'filesystem_read_file',
+      toolCallId: 'call-1',
+      toolResult: 'file content',
+      toolStatus: 'done',
+    })
+  })
+
   it('createSession clears messages and resets session state', () => {
     useChatStore.getState().addMessage({ id: '1', role: 'user', content: 'hello', type: 'text', timestamp: 1 })
     useSessionStore.setState({ currentSessionId: 'sess-1' })
