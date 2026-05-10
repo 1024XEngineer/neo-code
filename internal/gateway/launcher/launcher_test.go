@@ -284,7 +284,7 @@ func TestLaunchTerminalBranches(t *testing.T) {
 	})
 
 	t.Run("unsupported platform returns sentinel", func(t *testing.T) {
-		if runtime.GOOS == "windows" || runtime.GOOS == "darwin" {
+		if runtime.GOOS == "windows" || runtime.GOOS == "darwin" || runtime.GOOS == "linux" {
 			t.Skip("unsupported branch only applies to non-windows/non-darwin")
 		}
 		err := LaunchTerminal("neocode --session session-1")

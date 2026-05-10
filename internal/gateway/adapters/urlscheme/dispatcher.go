@@ -32,7 +32,7 @@ const (
 	// defaultDispatchIOTimeout 是 URL 派发读写超时时间。
 	defaultDispatchIOTimeout = 10 * time.Second
 	// defaultGatewayLaunchTimeout 是自动拉起网关后的就绪等待时间。
-	defaultGatewayLaunchTimeout = 3 * time.Second
+	defaultGatewayLaunchTimeout = 10 * time.Second
 	// defaultGatewayLaunchRetryInterval 是拉起后拨号重试间隔。
 	defaultGatewayLaunchRetryInterval = 100 * time.Millisecond
 	wakeReviewStartupPromptTemplate   = "请审查文件 %s"
@@ -416,14 +416,14 @@ func (d *Dispatcher) dialGatewayWithFallback(
 	if launchErr := d.launchGateway(ctx, listenAddress, requestID, authToken); launchErr != nil {
 		return nil, newDispatchError(
 			ErrorCodeGatewayUnavailable,
-			fmt.Sprintf("dial gateway failed: %v; launch gateway failed: %v", err, launchErr),
+			fmt.Sprintf("dial gateway failed: %v; automatic gateway startup failed: %v", err, launchErr),
 		)
 	}
 	retriedConnection, retryErr := dialFn(listenAddress)
 	if retryErr != nil {
 		return nil, newDispatchError(
 			ErrorCodeGatewayUnavailable,
-			fmt.Sprintf("dial gateway failed after single fallback: %v", retryErr),
+			fmt.Sprintf("dial gateway failed after automatic startup: %v", retryErr),
 		)
 	}
 	return retriedConnection, nil
@@ -566,7 +566,7 @@ func (d *Dispatcher) waitGatewayReady(ctx context.Context, listenAddress string)
 			return nil
 		}
 		if !nowFn().Before(deadline) {
-			return fmt.Errorf("gateway did not become reachable within %s", effectiveTimeout)
+			return fmt.Errorf("gateway auto-start timed out after %s", effectiveTimeout)
 		}
 		sleepFn(defaultGatewayLaunchRetryInterval)
 	}

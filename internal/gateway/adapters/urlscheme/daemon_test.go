@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -144,11 +145,26 @@ func TestHTTPDaemonHandlerDispatchesIntent(t *testing.T) {
 	if !strings.Contains(responseBody, "session_id=session-from-runtime") {
 		t.Fatalf("response body = %q, want contains session_id", responseBody)
 	}
-	if !strings.Contains(responseBody, "reusable_url=") {
+	if !strings.Contains(responseBody, "reusable_url") {
 		t.Fatalf("response body = %q, want contains reusable_url", responseBody)
 	}
-	if !strings.Contains(responseBody, "tip=") {
-		t.Fatalf("response body = %q, want contains tip", responseBody)
+	if !strings.Contains(responseBody, "copy-reusable-btn") {
+		t.Fatalf("response body = %q, want contains copy button", responseBody)
+	}
+	if !strings.Contains(responseBody, "navigator.clipboard.writeText") {
+		t.Fatalf("response body = %q, want contains copy script", responseBody)
+	}
+	if !strings.Contains(responseBody, "name=\"viewport\"") {
+		t.Fatalf("response body = %q, want contains viewport meta", responseBody)
+	}
+	if !strings.Contains(responseBody, "<title>Wake Accepted - NeoCode Daemon</title>") {
+		t.Fatalf("response body = %q, want contains title", responseBody)
+	}
+	if !strings.Contains(responseBody, "rel=\"icon\"") {
+		t.Fatalf("response body = %q, want contains favicon", responseBody)
+	}
+	if !strings.Contains(responseBody, ".copy-btn") {
+		t.Fatalf("response body = %q, want contains css", responseBody)
 	}
 	if captured.Intent.Action != protocol.WakeActionRun {
 		t.Fatalf("captured action = %q, want %q", captured.Intent.Action, protocol.WakeActionRun)
@@ -158,6 +174,53 @@ func TestHTTPDaemonHandlerDispatchesIntent(t *testing.T) {
 	}
 	if captured.ListenAddress != "/tmp/gateway.sock" {
 		t.Fatalf("captured listen address = %q, want %q", captured.ListenAddress, "/tmp/gateway.sock")
+	}
+}
+
+func TestHTTPDaemonHandlerDispatchErrorIsFriendly(t *testing.T) {
+	handler := newHTTPDaemonHandler(
+		func(context.Context, daemonWakeDispatchRequest) (daemonWakeDispatchResult, error) {
+			return daemonWakeDispatchResult{}, newDispatchError(
+				ErrorCodeGatewayUnavailable,
+				"gateway auto-start timed out after 10s",
+			)
+		},
+		"/tmp/gateway.sock",
+	)
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "http://neocode:18921/run?prompt=hello", http.NoBody)
+	request.Host = "neocode:18921"
+	handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusInternalServerError)
+	}
+	responseBody := recorder.Body.String()
+	if !strings.Contains(responseBody, "Gateway unavailable") {
+		t.Fatalf("response body = %q, want gateway unavailable title", responseBody)
+	}
+	if !strings.Contains(responseBody, "10 秒内未就绪") {
+		t.Fatalf("response body = %q, want startup timeout hint", responseBody)
+	}
+	if !strings.Contains(responseBody, "neocode daemon status") {
+		t.Fatalf("response body = %q, want daemon status remedy", responseBody)
+	}
+	if !strings.Contains(responseBody, "neocode gateway --listen /tmp/gateway.sock") {
+		t.Fatalf("response body = %q, want gateway remedy command", responseBody)
+	}
+}
+
+func TestBuildHostsAliasWarningIncludesManualCommands(t *testing.T) {
+	warning := buildHostsAliasWarning(errors.New("permission denied"))
+	if runtime.GOOS == "windows" {
+		if !strings.Contains(warning, `echo 127.0.0.1 neocode >> C:\Windows\System32\drivers\etc\hosts`) {
+			t.Fatalf("warning = %q, want windows hosts command", warning)
+		}
+		return
+	}
+	if !strings.Contains(warning, `sudo echo '127.0.0.1 neocode' >> /etc/hosts`) {
+		t.Fatalf("warning = %q, want unix hosts command", warning)
 	}
 }
 

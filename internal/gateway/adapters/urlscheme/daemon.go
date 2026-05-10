@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -30,9 +31,15 @@ const (
 	daemonAutostartModeDesktop     = "desktop_autostart"
 )
 
+const (
+	daemonHTTPPageTitle      = "NeoCode Daemon"
+	daemonHTTPPageFaviconURL = "data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%20120%20120'%3E%3Crect%20width='120'%20height='120'%20rx='22'%20fill='%230f172a'/%3E%3Cpath%20d='M36%2032h16l32%2056H68L36%2032z'%20fill='%2338bdf8'/%3E%3Cpath%20d='M84%2032H68L36%2088h16l32-56z'%20fill='%230ea5e9'/%3E%3C/svg%3E"
+)
+
 var (
 	httpDaemonDispatchWakeFn = defaultHTTPDaemonDispatchWake
 	httpDaemonGetHTTPClient  = defaultHTTPDaemonHTTPClient
+	httpDaemonStartProcessFn = startHTTPDaemonProcess
 )
 
 // HTTPDaemonServeOptions 定义 daemon serve 的启动参数。
@@ -49,9 +56,11 @@ type HTTPDaemonInstallOptions struct {
 
 // HTTPDaemonInstallResult 返回 daemon install 的结果摘要。
 type HTTPDaemonInstallResult struct {
-	ListenAddress string `json:"listen_address"`
-	AutostartMode string `json:"autostart_mode"`
-	HostsWarning  string `json:"hosts_warning,omitempty"`
+	ListenAddress      string `json:"listen_address"`
+	AutostartMode      string `json:"autostart_mode"`
+	HostsWarning       string `json:"hosts_warning,omitempty"`
+	DaemonStarted      bool   `json:"daemon_started"`
+	DaemonStartWarning string `json:"daemon_start_warning,omitempty"`
 }
 
 // HTTPDaemonStatusOptions 定义 daemon status 的查询参数。
@@ -134,7 +143,12 @@ func InstallHTTPDaemon(options HTTPDaemonInstallOptions) (HTTPDaemonInstallResul
 		AutostartMode: mode,
 	}
 	if hostsErr := ensureDaemonHostsAlias(); hostsErr != nil {
-		result.HostsWarning = hostsErr.Error()
+		result.HostsWarning = buildHostsAliasWarning(hostsErr)
+	}
+	if daemonStartErr := ensureHTTPDaemonProcessStarted(executablePath, listenAddress); daemonStartErr != nil {
+		result.DaemonStartWarning = daemonStartErr.Error()
+	} else {
+		result.DaemonStarted = true
 	}
 	return result, nil
 }
@@ -220,7 +234,7 @@ func newHTTPDaemonHandler(
 			ListenAddress: gatewayListenAddress,
 		})
 		if err != nil {
-			writeHTTPDaemonError(writer, http.StatusInternalServerError, "dispatch failed", err.Error())
+			writeHTTPDaemonDispatchError(writer, gatewayListenAddress, err)
 			return
 		}
 		writeHTTPDaemonSuccess(writer, request, result)
@@ -349,9 +363,51 @@ func writeHTTPDaemonError(writer http.ResponseWriter, statusCode int, title stri
 	writer.WriteHeader(statusCode)
 	escapedTitle := html.EscapeString(strings.TrimSpace(title))
 	escapedDetail := html.EscapeString(strings.TrimSpace(detail))
-	_, _ = writer.Write([]byte(
-		"<html><body><h3>" + escapedTitle + "</h3><p>" + escapedDetail + "</p></body></html>",
-	))
+	content := `<h1 class="status error">` + escapedTitle + `</h1><p class="detail">` + escapedDetail + `</p>`
+	_, _ = writer.Write([]byte(buildHTTPDaemonPageHTML(escapedTitle, content, "")))
+}
+
+// writeHTTPDaemonDispatchError 输出 wake 派发失败页面，并附带可执行补救指引。
+func writeHTTPDaemonDispatchError(writer http.ResponseWriter, gatewayListenAddress string, err error) {
+	title := "Dispatch failed"
+	detail := strings.TrimSpace(err.Error())
+	if detail == "" {
+		detail = "unknown dispatch error"
+	}
+	hints := []string{
+		"运行 `neocode daemon status` 检查 daemon 状态。",
+	}
+	startGatewayCommand := "neocode gateway"
+	if trimmedGatewayListenAddress := strings.TrimSpace(gatewayListenAddress); trimmedGatewayListenAddress != "" {
+		startGatewayCommand += " --listen " + trimmedGatewayListenAddress
+	}
+	hints = append(hints, "若 gateway 未运行，请手动执行 `"+startGatewayCommand+"`。")
+
+	var dispatchErr *DispatchError
+	if errors.As(err, &dispatchErr) {
+		switch dispatchErr.Code {
+		case ErrorCodeGatewayUnavailable:
+			title = "Gateway unavailable"
+			detail = "无法连接到 gateway，daemon 已尝试自动拉起，但当前不可达。"
+			if strings.Contains(strings.ToLower(dispatchErr.Message), "timed out") {
+				detail = "gateway 自动拉起后 10 秒内未就绪，无法继续派发。"
+			}
+		case ErrorCodeNotSupported:
+			title = "Terminal launch is not supported"
+			detail = strings.TrimSpace(dispatchErr.Message)
+			if detail == "" {
+				detail = "当前平台不支持自动拉起终端，请手动运行 neocode 续接会话。"
+			}
+		default:
+			if message := strings.TrimSpace(dispatchErr.Message); message != "" {
+				detail = message
+			}
+		}
+	}
+	if strings.TrimSpace(err.Error()) != "" {
+		hints = append(hints, "原始错误: "+strings.TrimSpace(err.Error()))
+	}
+	writeHTTPDaemonError(writer, http.StatusInternalServerError, title, strings.Join(hintsWithLead(detail, hints), "\n"))
 }
 
 // writeHTTPDaemonSuccess 输出浏览器可读的成功页面，并提供可复用的 session 链接。
@@ -362,11 +418,81 @@ func writeHTTPDaemonSuccess(writer http.ResponseWriter, request *http.Request, r
 	sessionID := html.EscapeString(strings.TrimSpace(result.SessionID))
 	reusableURL := buildHTTPDaemonReusableURL(request, result.SessionID)
 	escapedReusableURL := html.EscapeString(reusableURL)
-	_, _ = writer.Write([]byte(
-		"<html><body><h3>OK</h3><p>action=" + action + "</p><p>session_id=" + sessionID +
-			"</p><p>reusable_url=<a href=\"" + escapedReusableURL + "\">" + escapedReusableURL +
-			"</a></p><p>tip=后续若要续接同一会话，请使用带 session_id 的链接。</p></body></html>",
-	))
+	content := `<h1 class="status ok">Wake Accepted</h1>` +
+		`<p class="detail">action=<strong>` + action + `</strong></p>` +
+		`<p class="detail">session_id=<code>` + sessionID + `</code></p>` +
+		`<p class="label">reusable_url</p>` +
+		`<a class="link" id="reusable-link" href="` + escapedReusableURL + `">` + escapedReusableURL + `</a>` +
+		`<div class="copy-row"><button class="copy-btn" type="button" id="copy-reusable-btn" data-copy-text="` + escapedReusableURL + `">复制链接</button>` +
+		`<span class="copy-feedback" id="copy-feedback">点击后自动复制 reusable_url</span></div>` +
+		`<p class="tip">后续若要续接同一会话，请使用带 session_id 的链接。</p>`
+	_, _ = writer.Write([]byte(buildHTTPDaemonPageHTML("Wake Accepted", content, daemonCopyScript())))
+}
+
+// buildHTTPDaemonPageHTML 渲染统一的 daemon HTML 页面骨架与基础样式。
+func buildHTTPDaemonPageHTML(title string, contentHTML string, script string) string {
+	escapedTitle := html.EscapeString(strings.TrimSpace(title))
+	if escapedTitle == "" {
+		escapedTitle = daemonHTTPPageTitle
+	}
+	if strings.TrimSpace(contentHTML) == "" {
+		contentHTML = `<p class="detail">empty content</p>`
+	}
+	return "<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\">" +
+		"<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">" +
+		"<title>" + escapedTitle + " - " + daemonHTTPPageTitle + "</title>" +
+		"<link rel=\"icon\" href=\"" + daemonHTTPPageFaviconURL + "\">" +
+		"<style>" + daemonHTTPPageStyle() + "</style></head><body><main class=\"card\">" + contentHTML +
+		"</main>" + script + "</body></html>"
+}
+
+// daemonHTTPPageStyle 返回 daemon 页面使用的基础视觉样式。
+func daemonHTTPPageStyle() string {
+	return "body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;" +
+		"background:radial-gradient(circle at top,#e0f2fe 0%,#f8fafc 45%,#f1f5f9 100%);" +
+		"font-family:'Segoe UI',Tahoma,Helvetica,Arial,sans-serif;color:#0f172a;padding:24px;}" +
+		".card{width:min(760px,100%);background:#ffffff;border:1px solid #dbeafe;border-radius:18px;" +
+		"box-shadow:0 18px 40px rgba(15,23,42,.12);padding:28px;}" +
+		".status{margin:0 0 12px;font-size:28px;line-height:1.2;}" +
+		".status.ok{color:#0284c7;}.status.error{color:#b91c1c;}" +
+		".detail{margin:8px 0;font-size:15px;line-height:1.6;white-space:pre-line;}" +
+		".label{margin:18px 0 8px;font-weight:600;font-size:14px;color:#334155;}" +
+		".link{display:block;word-break:break-all;color:#0f766e;text-decoration:none;background:#ecfeff;" +
+		"padding:10px 12px;border-radius:10px;border:1px solid #bae6fd;}" +
+		".copy-row{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-top:12px;}" +
+		".copy-btn{border:none;border-radius:10px;padding:10px 14px;background:#0ea5e9;color:#fff;cursor:pointer;" +
+		"font-weight:600;}" +
+		".copy-btn:hover{background:#0284c7;}" +
+		".copy-feedback{font-size:13px;color:#475569;}" +
+		".tip{margin-top:14px;font-size:14px;color:#334155;}"
+}
+
+// daemonCopyScript 返回成功页的链接复制脚本，优先使用 Clipboard API，
+// 在非安全上下文（如 http://neocode）中回退到 execCommand。
+func daemonCopyScript() string {
+	return `<script>(function(){const btn=document.getElementById('copy-reusable-btn');` +
+		`const feedback=document.getElementById('copy-feedback');if(!btn){return;}` +
+		`function fallbackCopy(t){const ta=document.createElement('textarea');ta.value=t;` +
+		`ta.style.position='fixed';ta.style.opacity='0';document.body.appendChild(ta);ta.select();` +
+		`try{document.execCommand('copy');return true;}catch(_){return false;}finally{document.body.removeChild(ta);}}` +
+		`btn.addEventListener('click',async function(){` +
+		`const text=btn.getAttribute('data-copy-text')||'';if(!text){if(feedback){feedback.textContent='链接为空，无法复制';}return;}` +
+		`let ok=false;try{if(navigator.clipboard&&navigator.clipboard.writeText){await navigator.clipboard.writeText(text);ok=true;}}catch(_){}` +
+		`if(!ok){ok=fallbackCopy(text);}` +
+		`if(feedback){feedback.textContent=ok?'已复制到剪贴板':'复制失败，请手动复制上方链接';}});})();</script>`
+}
+
+// hintsWithLead 拼装错误正文与补救建议列表。
+func hintsWithLead(detail string, hints []string) []string {
+	lines := []string{strings.TrimSpace(detail)}
+	for _, hint := range hints {
+		trimmedHint := strings.TrimSpace(hint)
+		if trimmedHint == "" {
+			continue
+		}
+		lines = append(lines, "- "+trimmedHint)
+	}
+	return lines
 }
 
 // buildHTTPDaemonReusableURL 基于当前请求地址生成包含 session_id 的可复用链接。
@@ -424,6 +550,58 @@ func probeHTTPDaemonRunning(ctx context.Context, listenAddress string) bool {
 	}
 	defer func() { _ = response.Body.Close() }()
 	return response.StatusCode == http.StatusOK
+}
+
+// ensureHTTPDaemonProcessStarted 尝试在 install 完成后立刻拉起 daemon，并返回可读告警。
+func ensureHTTPDaemonProcessStarted(executablePath string, listenAddress string) error {
+	normalizedListenAddress := normalizeHTTPDaemonListenAddress(listenAddress)
+	probeCtx, cancel := context.WithTimeout(context.Background(), 1400*time.Millisecond)
+	alreadyRunning := probeHTTPDaemonRunning(probeCtx, normalizedListenAddress)
+	cancel()
+	if alreadyRunning {
+		return nil
+	}
+
+	startFn := httpDaemonStartProcessFn
+	if startFn == nil {
+		startFn = startHTTPDaemonProcess
+	}
+	if err := startFn(executablePath, normalizedListenAddress); err != nil {
+		return fmt.Errorf("failed to start daemon in background: %w; run `%s daemon serve --listen %s` manually", err, executablePath, normalizedListenAddress)
+	}
+
+	readyCtx, readyCancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer readyCancel()
+	for {
+		if probeHTTPDaemonRunning(readyCtx, normalizedListenAddress) {
+			return nil
+		}
+		if readyCtx.Err() != nil {
+			return fmt.Errorf("daemon background process started but not ready within 3s; run `%s daemon serve --listen %s` manually", executablePath, normalizedListenAddress)
+		}
+		time.Sleep(120 * time.Millisecond)
+	}
+}
+
+// startHTTPDaemonProcess 以后台进程方式启动 daemon serve。
+func startHTTPDaemonProcess(executablePath string, listenAddress string) error {
+	command := exec.Command(executablePath, "daemon", "serve", "--listen", strings.TrimSpace(listenAddress))
+	command.Stdin = nil
+	command.Stdout = nil
+	command.Stderr = nil
+	if err := command.Start(); err != nil {
+		return err
+	}
+	return command.Process.Release()
+}
+
+// buildHostsAliasWarning 构建 hosts 自动写入失败时的手动修复提示。
+func buildHostsAliasWarning(err error) string {
+	base := fmt.Sprintf("failed to update hosts alias automatically: %v", err)
+	if runtime.GOOS == "windows" {
+		return base + "; please run as Administrator: echo 127.0.0.1 neocode >> C:\\Windows\\System32\\drivers\\etc\\hosts"
+	}
+	return base + "; please run with sudo: sudo echo '127.0.0.1 neocode' >> /etc/hosts"
 }
 
 // ensureDaemonHostsAlias 以 best-effort 方式确保 hosts 文件存在 neocode 别名。
