@@ -87,11 +87,14 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 			}
 			s.updateResumeCheckpoint(runCtx, statePtr, "stopped", completion)
 		}
-		if statePtr != nil && s.perEditStore != nil && statePtr.baselineCheckpointID != "" && statePtr.lastEndOfTurnCheckpointID != "" {
+		if statePtr != nil {
+			s.createRunEndCheckpoint(context.Background(), statePtr)
+		}
+		if statePtr != nil && s.perEditStore != nil && statePtr.lastEndOfTurnCheckpointID != "" {
 			runEndCtx := context.Background()
 			records, listErr := s.checkpointStore.ListCheckpoints(runEndCtx, statePtr.session.ID, checkpoint.ListCheckpointOpts{})
+			var perEditIDs []string
 			if listErr == nil {
-				var perEditIDs []string
 				for _, r := range records {
 					if strings.TrimSpace(r.RunID) != statePtr.runID {
 						continue
@@ -104,8 +107,7 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 					_ = s.perEditStore.RunEndCapture(runEndCtx, perEditIDs)
 				}
 			}
-			diffStr, _ := s.perEditStore.Diff(runEndCtx, statePtr.baselineCheckpointID, statePtr.lastEndOfTurnCheckpointID)
-			files, _ := s.perEditStore.ChangedFiles(runEndCtx, statePtr.baselineCheckpointID, statePtr.lastEndOfTurnCheckpointID)
+			diffStr, files, _ := s.perEditStore.RunAggregateDiff(runEndCtx, perEditIDs, nil)
 			var changedFiles []FileDiffEntry
 			for _, f := range files {
 				changedFiles = append(changedFiles, FileDiffEntry{
@@ -114,17 +116,13 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 				})
 			}
 			s.emitRunScopedOptional(EventRunDiffSummary, statePtr, RunDiffSummaryPayload{
-				FromCheckpointID: statePtr.baselineCheckpointID,
+				FromCheckpointID: "",
 				ToCheckpointID:   statePtr.lastEndOfTurnCheckpointID,
 				Diff:             diffStr,
 				ChangedFiles:     changedFiles,
 			})
 		}
-		if statePtr != nil {
-			runEndCtx := context.Background()
-			s.recordRunEndWorkspaceState(runEndCtx, statePtr.session.ID, effectiveWorkdirForCheckpointState(statePtr, statePtr.session), statePtr.lastEndOfTurnCheckpointID)
-			s.clearRunCheckpointCaches(statePtr.session.ID, statePtr.runID)
-		}
+
 		s.emitRunTermination(runCtx, input, statePtr, err)
 	}()
 	ctx = runCtx
@@ -181,28 +179,6 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 		return s.handleRunError(err)
 	}
 
-	runBaselineCheckpointID := ""
-	if drifted, driftDiff := s.recordRunStartFingerprint(ctx, state.session.ID, state.runID, effectiveWorkdir); drifted {
-		if checkpointID, cpErr := s.createPreRunDriftRebaseCheckpoint(ctx, &state, driftDiff); cpErr != nil {
-			s.emitRunScopedOptional(EventCheckpointWarning, &state, CheckpointWarningPayload{
-				Error: fmt.Sprintf("workspace drift detected but baseline rebase failed: %v", cpErr),
-				Phase: "run_start_drift_rebase",
-			})
-		} else if checkpointID != "" {
-			runBaselineCheckpointID = checkpointID
-			s.persistRunRollbackBaseline(ctx, state.session.ID, state.runID, checkpointID, true)
-			s.recordRunEndWorkspaceState(ctx, state.session.ID, effectiveWorkdir, checkpointID)
-		}
-		s.emitRunScopedOptional(EventCheckpointWarning, &state, CheckpointWarningPayload{
-			Error: "workspace drift detected before run start",
-			Phase: "run_start_drift",
-		})
-	}
-	if runBaselineCheckpointID == "" {
-		if baseline, _ := s.getPersistentRunRollbackBaseline(ctx, state.session.ID, state.runID); baseline != "" {
-			runBaselineCheckpointID = baseline
-		}
-	}
 	_ = s.runHookPoint(ctx, &state, runtimehooks.HookPointSessionStart, runtimehooks.HookContext{
 		Metadata: map[string]any{
 			"session_id": state.session.ID,
@@ -240,12 +216,12 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 	s.emitRuntimeSnapshotUpdated(ctx, &state, "session_start")
 	s.updateResumeCheckpoint(ctx, &state, "plan", "")
 
-	maxTurns := resolveRuntimeMaxTurns(initialCfg.Runtime)
-	if runBaselineCheckpointID != "" {
-		state.baselineCheckpointID = runBaselineCheckpointID
-	} else {
-		state.baselineCheckpointID = s.findPreviousEndOfTurnCheckpoint(ctx, sessionID, input.RunID)
+	if s.perEditStore != nil {
+		s.perEditStore.Reset()
 	}
+	state.runCheckpointID = agentsession.NewID("checkpoint")
+
+	maxTurns := resolveRuntimeMaxTurns(initialCfg.Runtime)
 	for turn := 0; ; turn++ {
 		if turn >= maxTurns {
 			state.maxTurnsReached = true
@@ -258,14 +234,6 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 		stage := resolvePlanningStageForState(&state)
 		if err := s.setBaseRunState(ctx, &state, baseRunStateForPlanningStage(stage)); err != nil {
 			return s.handleRunError(err)
-		}
-		if s.checkpointStore != nil {
-			if cpErr := s.createStartOfTurnCheckpoint(ctx, &state); cpErr != nil {
-				s.emitRunScoped(ctx, EventCheckpointWarning, &state, CheckpointWarningPayload{
-					Error: cpErr.Error(),
-					Phase: "start_of_turn",
-				})
-			}
 		}
 
 	turnAttempt:
@@ -501,8 +469,12 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 			// 通知 TUI 本轮修改了哪些文件
 			s.emitToolDiffs(ctx, &state, summary)
 
-			// 工具执行完成后创建代码检查点，传入 hasWorkspaceWrite 区分 agent 写操作与外界修改
-			s.createEndOfTurnCheckpoint(ctx, &state, summary.HasSuccessfulWorkspaceWrite)
+			// 标记本 run 是否发生工作区写入，run 结束时统一固化单个 checkpoint。
+			if summary.HasSuccessfulWorkspaceWrite {
+				state.mu.Lock()
+				state.hasRunWorkspaceWrite = true
+				state.mu.Unlock()
+			}
 
 			state.mu.Lock()
 			state.completion = applyToolExecutionCompletion(state.completion, summary)

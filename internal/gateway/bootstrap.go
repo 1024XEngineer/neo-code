@@ -2374,6 +2374,46 @@ func readStringValue(payload map[string]any, key string) string {
 	return strings.TrimSpace(stringValue)
 }
 
+// readStringSliceValue 读取 map 负载中的字符串数组字段，并复制为独立切片。
+func readStringSliceValue(payload map[string]any, key string) []string {
+	rawValue, exists := payload[key]
+	if !exists || rawValue == nil {
+		return nil
+	}
+	switch typedValue := rawValue.(type) {
+	case []string:
+		return cloneTrimmedStringSlice(typedValue)
+	case []any:
+		out := make([]string, 0, len(typedValue))
+		for _, item := range typedValue {
+			stringItem, ok := item.(string)
+			if !ok {
+				continue
+			}
+			if trimmed := strings.TrimSpace(stringItem); trimmed != "" {
+				out = append(out, trimmed)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+// cloneTrimmedStringSlice 复制字符串切片并去除空白项，避免共享输入底层数组。
+func cloneTrimmedStringSlice(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
+}
+
 // readMapValue 读取 map 负载中的对象字段并复制为独立 map。
 func readMapValue(payload map[string]any, key string) map[string]any {
 	rawValue, exists := payload[key]
@@ -2749,12 +2789,16 @@ func decodeCheckpointRestorePayload(payload any) CheckpointRestoreInput {
 			SessionID:    strings.TrimSpace(typed.SessionID),
 			CheckpointID: strings.TrimSpace(typed.CheckpointID),
 			Force:        typed.Force,
+			Mode:         strings.TrimSpace(typed.Mode),
+			Paths:        cloneTrimmedStringSlice(typed.Paths),
 		}
 	case map[string]any:
 		return CheckpointRestoreInput{
 			SessionID:    readStringValue(typed, "session_id"),
 			CheckpointID: readStringValue(typed, "checkpoint_id"),
 			Force:        readBoolValue(typed, "force"),
+			Mode:         readStringValue(typed, "mode"),
+			Paths:        readStringSliceValue(typed, "paths"),
 		}
 	default:
 		raw, marshalErr := json.Marshal(payload)
@@ -2762,15 +2806,19 @@ func decodeCheckpointRestorePayload(payload any) CheckpointRestoreInput {
 			return CheckpointRestoreInput{}
 		}
 		var decoded struct {
-			SessionID    string `json:"session_id"`
-			CheckpointID string `json:"checkpoint_id"`
-			Force        bool   `json:"force"`
+			SessionID    string   `json:"session_id"`
+			CheckpointID string   `json:"checkpoint_id"`
+			Force        bool     `json:"force"`
+			Mode         string   `json:"mode"`
+			Paths        []string `json:"paths"`
 		}
 		_ = json.Unmarshal(raw, &decoded)
 		return CheckpointRestoreInput{
 			SessionID:    strings.TrimSpace(decoded.SessionID),
 			CheckpointID: strings.TrimSpace(decoded.CheckpointID),
 			Force:        decoded.Force,
+			Mode:         strings.TrimSpace(decoded.Mode),
+			Paths:        cloneTrimmedStringSlice(decoded.Paths),
 		}
 	}
 }

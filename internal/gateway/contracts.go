@@ -437,6 +437,10 @@ type CheckpointRestoreInput struct {
 	CheckpointID string
 	// Force 强制恢复，忽略冲突检测。
 	Force bool
+	// Mode 指定恢复模式，"exact" 为普通恢复，"baseline" 为文件回退到首触碰前基线。
+	Mode string `json:"mode,omitempty"`
+	// Paths 在 mode=baseline 时指定需要回退的相对路径列表。
+	Paths []string `json:"paths,omitempty"`
 }
 
 // UndoRestoreInput 描述撤销 restore 的输入。
@@ -470,14 +474,22 @@ type CheckpointDiffInput struct {
 
 // CheckpointDiffResult 描述两个相邻代码检查点之间的差异。
 type CheckpointDiffResult struct {
-	CheckpointID     string    `json:"checkpoint_id"`
-	PrevCheckpointID string    `json:"prev_checkpoint_id,omitempty"`
-	CommitHash       string    `json:"commit_hash,omitempty"`
-	PrevCommitHash   string    `json:"prev_commit_hash,omitempty"`
-	Files            FileDiffs `json:"files"`
-	Patch            string    `json:"patch,omitempty"`
-	WorkspaceDrifted bool      `json:"workspace_drifted,omitempty"`
-	Warning          string    `json:"warning,omitempty"`
+	CheckpointID     string                    `json:"checkpoint_id"`
+	PrevCheckpointID string                    `json:"prev_checkpoint_id,omitempty"`
+	CommitHash       string                    `json:"commit_hash,omitempty"`
+	PrevCommitHash   string                    `json:"prev_commit_hash,omitempty"`
+	Files            FileDiffs                 `json:"files"`
+	FileEntries      []CheckpointDiffFileEntry `json:"file_entries,omitempty"`
+	Patch            string                    `json:"patch,omitempty"`
+	Warning          string                    `json:"warning,omitempty"`
+}
+
+// CheckpointDiffFileEntry 描述单个文件变更及其对应的回退 checkpoint。
+type CheckpointDiffFileEntry struct {
+	Path                 string `json:"path"`
+	Kind                 string `json:"kind"`
+	RollbackCheckpointID string `json:"rollback_checkpoint_id,omitempty"`
+	CanRollback          bool   `json:"can_rollback"`
 }
 
 // FileDiffs 描述 diff 中的文件变更列表。

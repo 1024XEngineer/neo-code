@@ -1675,7 +1675,7 @@ func TestRunAggregateDiff_MultipleFilesAggregated(t *testing.T) {
 	}
 }
 
-func TestRunAggregateDiff_HistoricalFileFilteredByVersion(t *testing.T) {
+func TestRunAggregateDiff_IgnoresPreviousRunFileVersions(t *testing.T) {
 	store, workdir := newTestStore(t)
 
 	// Simulate "previous run": capture file A, finalize prev_cp.
@@ -1691,7 +1691,7 @@ func TestRunAggregateDiff_HistoricalFileFilteredByVersion(t *testing.T) {
 	}
 	store.Reset()
 
-	// Get prev run's FileVersions.
+	// Get prev run's FileVersions; RunAggregateDiff keeps this parameter only for compatibility.
 	prevFV, err := store.GetCheckpointFileVersions("prev_cp")
 	if err != nil {
 		t.Fatalf("get prev vers: %v", err)
@@ -1710,19 +1710,12 @@ func TestRunAggregateDiff_HistoricalFileFilteredByVersion(t *testing.T) {
 	}
 	store.Reset()
 
-	// Second checkpoint in current run (still no touch on a.txt).
-	if _, err := store.Finalize("cur_cp2"); err != nil {
-		t.Fatalf("finalize cur_cp2: %v", err)
-	}
-	store.Reset()
-
 	patch, changes, err := store.RunAggregateDiff(context.Background(),
-		[]string{"cur_cp1", "cur_cp2"}, prevFV)
+		[]string{"cur_cp1"}, prevFV)
 	if err != nil {
 		t.Fatalf("RunAggregateDiff: %v", err)
 	}
-	// a.txt should be filtered out: version unchanged from prev run.
-	// b.txt should appear.
+	// a.txt should stay out because current run never touched it; b.txt should appear.
 	if len(changes) != 1 {
 		t.Fatalf("expected 1 change (b.txt only), got %d: %+v", len(changes), changes)
 	}
@@ -1730,7 +1723,7 @@ func TestRunAggregateDiff_HistoricalFileFilteredByVersion(t *testing.T) {
 		t.Fatalf("expected b.txt, got %s", changes[0].Path)
 	}
 	if strings.Contains(patch, "a.txt") {
-		t.Fatalf("patch should NOT contain a.txt (filtered by version):\n%s", patch)
+		t.Fatalf("patch should NOT contain untouched a.txt:\n%s", patch)
 	}
 }
 
@@ -1761,12 +1754,12 @@ func TestRestore_DoesNotUseGlobalHistoryWhenNoRelatedScope(t *testing.T) {
 	}
 }
 
-func TestRestore_WithRelatedScopeSkipsUnchangedFilesFromFullRebase(t *testing.T) {
+func TestRestore_WithRelatedScopePreservesUntouchedFiles(t *testing.T) {
 	store, workdir := newTestStore(t)
 
 	agentPath := writeWorkdirFile(t, workdir, "agent.txt", "baseline\n")
 	unrelatedPath := writeWorkdirFile(t, workdir, "unrelated.txt", "keep\n")
-	if _, err := store.CaptureBatch([]string{agentPath, unrelatedPath}); err != nil {
+	if _, err := store.CaptureBatch([]string{agentPath}); err != nil {
 		t.Fatalf("CaptureBatch baseline: %v", err)
 	}
 	if _, err := store.FinalizeWithExactState("cp-rebase"); err != nil {
@@ -1821,5 +1814,109 @@ func TestRestoreExact_PrefersExactCheckpointState(t *testing.T) {
 	}
 	if got := mustReadFile(t, target); got != "checkpoint state\n" {
 		t.Fatalf("RestoreExact should use exact state, got %q", got)
+	}
+}
+
+func TestRestoreBaseline_RestoresFirstTouchContent(t *testing.T) {
+	store, workdir := newTestStore(t)
+	target := writeWorkdirFile(t, workdir, "baseline.txt", "before\n")
+	if _, err := store.CapturePreWrite(target); err != nil {
+		t.Fatalf("CapturePreWrite: %v", err)
+	}
+	if err := os.WriteFile(target, []byte("after\n"), 0o644); err != nil {
+		t.Fatalf("write after: %v", err)
+	}
+	if _, err := store.FinalizeWithExactState("cp-baseline"); err != nil {
+		t.Fatalf("FinalizeWithExactState: %v", err)
+	}
+	store.Reset()
+
+	if err := os.WriteFile(target, []byte("drift\n"), 0o644); err != nil {
+		t.Fatalf("write drift: %v", err)
+	}
+	if err := store.RestoreBaseline(context.Background(), "cp-baseline", []string{"baseline.txt"}); err != nil {
+		t.Fatalf("RestoreBaseline: %v", err)
+	}
+	if got := mustReadFile(t, target); got != "before\n" {
+		t.Fatalf("RestoreBaseline should use first-touch baseline, got %q", got)
+	}
+}
+
+func TestRestoreBaseline_RemovesNewFileWhenBaselineDidNotExist(t *testing.T) {
+	store, workdir := newTestStore(t)
+	target := filepath.Join(workdir, "new.txt")
+	if _, err := store.CapturePreWrite(target); err != nil {
+		t.Fatalf("CapturePreWrite(new): %v", err)
+	}
+	if err := os.WriteFile(target, []byte("created\n"), 0o644); err != nil {
+		t.Fatalf("write created: %v", err)
+	}
+	if _, err := store.FinalizeWithExactState("cp-new"); err != nil {
+		t.Fatalf("FinalizeWithExactState: %v", err)
+	}
+	store.Reset()
+
+	if err := store.RestoreBaseline(context.Background(), "cp-new", []string{"new.txt"}); err != nil {
+		t.Fatalf("RestoreBaseline(new): %v", err)
+	}
+	if _, err := os.Stat(target); !os.IsNotExist(err) {
+		t.Fatalf("new file should be removed, stat err = %v", err)
+	}
+}
+
+func TestRestoreBaseline_UsesCapturedDisplayPathWhenStoreWorkdirDiffers(t *testing.T) {
+	root := t.TempDir()
+	projectDir := filepath.Join(root, "project")
+	captureWorkdir := filepath.Join(root, "actual-workdir")
+	configuredWorkdir := filepath.Join(root, "configured-workdir")
+	if err := os.MkdirAll(captureWorkdir, 0o755); err != nil {
+		t.Fatalf("mkdir capture workdir: %v", err)
+	}
+	if err := os.MkdirAll(configuredWorkdir, 0o755); err != nil {
+		t.Fatalf("mkdir configured workdir: %v", err)
+	}
+
+	captureStore := NewPerEditSnapshotStore(projectDir, captureWorkdir)
+	target := writeWorkdirFile(t, captureWorkdir, "src/a.txt", "before\n")
+	if _, err := captureStore.CapturePreWrite(target); err != nil {
+		t.Fatalf("CapturePreWrite: %v", err)
+	}
+	if err := os.WriteFile(target, []byte("after\n"), 0o644); err != nil {
+		t.Fatalf("write after: %v", err)
+	}
+	if _, err := captureStore.FinalizeWithExactState("cp-display-path"); err != nil {
+		t.Fatalf("FinalizeWithExactState: %v", err)
+	}
+	captureStore.Reset()
+
+	restoreStore := NewPerEditSnapshotStore(projectDir, configuredWorkdir)
+	if err := os.WriteFile(target, []byte("drift\n"), 0o644); err != nil {
+		t.Fatalf("write drift: %v", err)
+	}
+	if err := restoreStore.RestoreBaseline(context.Background(), "cp-display-path", []string{"src/a.txt"}); err != nil {
+		t.Fatalf("RestoreBaseline: %v", err)
+	}
+	if got := mustReadFile(t, target); got != "before\n" {
+		t.Fatalf("restored content = %q, want before", got)
+	}
+}
+
+func TestRestoreBaseline_ErrorsWhenPathMissingFromBaseline(t *testing.T) {
+	store, workdir := newTestStore(t)
+	target := writeWorkdirFile(t, workdir, "tracked.txt", "before\n")
+	if _, err := store.CapturePreWrite(target); err != nil {
+		t.Fatalf("CapturePreWrite: %v", err)
+	}
+	if err := os.WriteFile(target, []byte("after\n"), 0o644); err != nil {
+		t.Fatalf("write after: %v", err)
+	}
+	if _, err := store.FinalizeWithExactState("cp-tracked"); err != nil {
+		t.Fatalf("FinalizeWithExactState: %v", err)
+	}
+	store.Reset()
+
+	err := store.RestoreBaseline(context.Background(), "cp-tracked", []string{"missing.txt"})
+	if err == nil || !strings.Contains(err.Error(), "baseline version for path missing.txt not found") {
+		t.Fatalf("RestoreBaseline missing path error = %v", err)
 	}
 }

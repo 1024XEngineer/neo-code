@@ -245,7 +245,6 @@ type CheckpointDiffResult struct {
 	PrevCommitHash   string              `json:"prev_commit_hash,omitempty"`
 	Files            CheckpointDiffFiles `json:"files"`
 	Patch            string              `json:"patch,omitempty"`
-	WorkspaceDrifted bool                `json:"workspace_drifted,omitempty"`
 	Warning          string              `json:"warning,omitempty"`
 }
 

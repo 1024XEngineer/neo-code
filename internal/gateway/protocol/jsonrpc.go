@@ -225,8 +225,8 @@ type DeleteAskSessionParams struct {
 
 // TriggerActionParams 表示 gateway.experimental.triggerAction 的参数载荷。
 type TriggerActionParams struct {
-	SessionID string `json:"session_id,omitempty"`
-	Action    string `json:"action"`
+	SessionID string         `json:"session_id,omitempty"`
+	Action    string         `json:"action"`
 	Payload   map[string]any `json:"payload,omitempty"`
 }
 
@@ -340,9 +340,11 @@ type ListCheckpointsParams struct {
 
 // RestoreCheckpointParams 表示 checkpoint.restore 参数。
 type RestoreCheckpointParams struct {
-	SessionID    string `json:"session_id"`
-	CheckpointID string `json:"checkpoint_id"`
-	Force        bool   `json:"force,omitempty"`
+	SessionID    string   `json:"session_id"`
+	CheckpointID string   `json:"checkpoint_id"`
+	Force        bool     `json:"force,omitempty"`
+	Mode         string   `json:"mode,omitempty"`
+	Paths        []string `json:"paths,omitempty"`
 }
 
 // UndoRestoreParams 表示 checkpoint.undoRestore 参数。
@@ -1073,6 +1075,8 @@ func decodeRestoreCheckpointParams(raw json.RawMessage) (RestoreCheckpointParams
 	return decodeParams(raw, "checkpoint.restore", func(p *RestoreCheckpointParams) *JSONRPCError {
 		p.SessionID = strings.TrimSpace(p.SessionID)
 		p.CheckpointID = strings.TrimSpace(p.CheckpointID)
+		p.Mode = strings.TrimSpace(p.Mode)
+		p.Paths = trimStringSlice(p.Paths)
 		if p.SessionID == "" {
 			return NewJSONRPCError(JSONRPCCodeInvalidParams, "missing required field: params.session_id", GatewayCodeMissingRequiredField)
 		}
@@ -1770,6 +1774,20 @@ func decodeDeleteWorkspaceParams(raw json.RawMessage) (DeleteWorkspaceParams, *J
 		}
 		return nil
 	})
+}
+
+// trimStringSlice 复制并清理字符串数组参数，过滤空白项。
+func trimStringSlice(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
 }
 
 func decodeParams[T any](raw json.RawMessage, name string, validate func(*T) *JSONRPCError) (T, *JSONRPCError) {

@@ -12,51 +12,50 @@ import (
 
 // runState 汇总单次 Run 生命周期内会变化的会话与计量状态。
 type runState struct {
-	mu                            sync.Mutex
-	runID                         string
-	runToken                      uint64
-	session                       agentsession.Session
-	compactCount                  int
-	reactiveCompactAttempts       int
+	mu                             sync.Mutex
+	runID                          string
+	runToken                       uint64
+	session                        agentsession.Session
 	effectiveWorkdir               string
-	rememberedThisRun             bool
-	effectiveWorkdir               string
-	planningEnabled               bool
-	taskID                        string
-	agentID                       string
-	capabilityToken               *security.CapabilityToken
-	nextAttemptSeq                int
-	turn                          int
-	baseLifecycle                 controlplane.RunState
-	lifecycle                     controlplane.RunState
-	waitingPermissionCount        int
-	compactingCount               int
-	stopEmitted                   bool
-	budgetExceeded                bool
-	maxTurnsReached               bool
-	maxTurnsLimit                 int
-	userGoal                      string
+	compactCount                   int
+	reactiveCompactAttempts        int
+	rememberedThisRun              bool
+	planningEnabled                bool
+	taskID                         string
+	agentID                        string
+	capabilityToken                *security.CapabilityToken
+	nextAttemptSeq                 int
+	turn                           int
+	baseLifecycle                  controlplane.RunState
+	lifecycle                      controlplane.RunState
+	waitingPermissionCount         int
+	compactingCount                int
+	stopEmitted                    bool
+	budgetExceeded                 bool
+	maxTurnsReached                bool
+	maxTurnsLimit                  int
+	userGoal                       string
 	missingCompletionSignalStreak int
 	pendingSystemReminder         string
-	factsCollector                *runtimefacts.Collector
-	terminalStatus                controlplane.TerminalStatus
-	terminalStopReason            controlplane.StopReason
-	terminalStopDetail            string
-	terminalSet                   bool
-	hasUnknownUsage               bool
-	completion                    controlplane.CompletionState
-	progress                      controlplane.ProgressState
-	toolTimeoutBackoff            map[string]int
-	lastEndOfTurnCheckpointID     string
-	baselineCheckpointID          string
-	hookAnnotations               []string
-	hookNotifications             []queuedHookNotification
-	hookNotificationSeen          map[string]time.Time
-	hookNotificationOmitted       int
-	reportedMissingSkills         map[string]struct{}
-	thinkingOverride              *ThinkingOverride
-	pendingUserQuestion           *UserQuestionRequestedPayload
-	disableTools                  bool
+	factsCollector                 *runtimefacts.Collector
+	terminalStatus                 controlplane.TerminalStatus
+	terminalStopReason             controlplane.StopReason
+	terminalStopDetail             string
+	terminalSet                    bool
+	hasUnknownUsage                bool
+	completion                     controlplane.CompletionState
+	progress                       controlplane.ProgressState
+	lastEndOfTurnCheckpointID      string
+	runCheckpointID                string
+	hasRunWorkspaceWrite           bool
+	hookAnnotations                []string
+	hookNotifications              []queuedHookNotification
+	hookNotificationSeen           map[string]time.Time
+	hookNotificationOmitted        int
+	reportedMissingSkills          map[string]struct{}
+	thinkingOverride               *ThinkingOverride
+	pendingUserQuestion            *UserQuestionRequestedPayload
+	disableTools                   bool
 }
 
 // newRunState 基于持久化会话创建一次运行的内存状态镜像。
