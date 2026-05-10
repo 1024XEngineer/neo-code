@@ -884,8 +884,10 @@ func (b *stubContextBuilder) Build(ctx context.Context, input agentcontext.Build
 		return b.buildFn(ctx, input)
 	}
 	return agentcontext.BuildResult{
-		SystemPrompt: "stub system prompt",
-		Messages:     append([]providertypes.Message(nil), input.Messages...),
+		SystemPrompt:        "stub system prompt",
+		StableSystemPrompt:  "stub stable prompt",
+		DynamicSystemPrompt: "stub dynamic prompt",
+		Messages:            append([]providertypes.Message(nil), input.Messages...),
 	}, nil
 }
 

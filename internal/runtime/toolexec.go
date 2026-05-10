@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 
@@ -859,4 +860,17 @@ func (s *Service) emitAfterToolFailureHook(
 	_ = s.runHookPoint(ctx, state, runtimehooks.HookPointAfterToolFailure, runtimehooks.HookContext{
 		Metadata: afterToolFailureMetadata,
 	})
+}
+
+// stableSortToolSpecsByName 按工具名稳定排序工具规格列表，确保多轮请求间前缀稳定。
+// 使用 sort.SliceStable 保证同名工具保持原始相对顺序。
+func stableSortToolSpecsByName(specs []providertypes.ToolSpec) []providertypes.ToolSpec {
+	if len(specs) == 0 {
+		return nil
+	}
+	sorted := append([]providertypes.ToolSpec(nil), specs...)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		return sorted[i].Name < sorted[j].Name
+	})
+	return sorted
 }
