@@ -99,6 +99,7 @@ export default defineConfig({
                 { text: "HTTP URL 唤醒指南", link: "/guide/http-daemon-wake-user-guide" },
                 { text: "配置指南", link: "/guide/configuration" },
                 { text: "工具与权限", link: "/guide/tools-permissions" },
+                { text: "终端代理与诊断", link: "/guide/shell-diag" },
               ],
             },
             {
@@ -196,6 +197,7 @@ export default defineConfig({
                 { text: "Daily Use", link: "/en/guide/daily-use" },
                 { text: "Configuration", link: "/en/guide/configuration" },
                 { text: "Tools & Permissions", link: "/en/guide/tools-permissions" },
+                { text: "Shell Proxy & Diagnosis", link: "/en/guide/shell-diag" },
               ],
             },
             {
