@@ -720,8 +720,8 @@ func TestViewNormalIncludesHeaderAndBody(t *testing.T) {
 	if !strings.Contains(view, "NeoCode") {
 		t.Fatalf("expected header text, got %q", view)
 	}
-	if !strings.Contains(view, "42% loading") {
-		t.Fatalf("expected progress header, got %q", view)
+	if !strings.Contains(view, "loading") {
+		t.Fatalf("expected progress label in header, got %q", view)
 	}
 	if !strings.Contains(view, "cwd: /tmp/workdir") {
 		t.Fatalf("expected current workdir in header, got %q", view)

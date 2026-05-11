@@ -114,9 +114,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	a.syncFooterErrorToast()
 	a.spinner, spinCmd = a.spinner.Update(msg)
-	if a.isBusy() {
-		cmds = append(cmds, spinCmd)
-	}
+	cmds = append(cmds, spinCmd)
 	if a.deferredLogPersistCmd != nil {
 		cmds = append(cmds, a.deferredLogPersistCmd)
 		a.deferredLogPersistCmd = nil
