@@ -2,7 +2,10 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	gruntime "runtime"
@@ -53,6 +56,98 @@ func TestBuildUserHookSpecMapsFailurePolicyAndScope(t *testing.T) {
 	}
 	if spec.Timeout != 7*time.Second {
 		t.Fatalf("timeout = %v, want 7s", spec.Timeout)
+	}
+}
+
+func TestBuildUserHookSpecAllowsHTTPObserve(t *testing.T) {
+	t.Parallel()
+
+	var called atomic.Int32
+	var captured map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		called.Add(1)
+		if request.Method != http.MethodPost {
+			t.Fatalf("method = %q, want POST", request.Method)
+		}
+		if got := request.Header.Get("X-Hook-Test"); got != "ok" {
+			t.Fatalf("header X-Hook-Test = %q, want ok", got)
+		}
+		if err := json.NewDecoder(request.Body).Decode(&captured); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		writer.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	item := config.RuntimeHookItemConfig{
+		ID:            "http-observe",
+		Point:         "before_tool_call",
+		Scope:         "user",
+		Kind:          "http",
+		Mode:          "observe",
+		TimeoutSec:    2,
+		FailurePolicy: "warn_only",
+		Params: map[string]any{
+			"url":     server.URL,
+			"headers": map[string]any{"X-Hook-Test": "ok"},
+		},
+	}
+	spec, err := buildUserHookSpec(item, t.TempDir())
+	if err != nil {
+		t.Fatalf("buildUserHookSpec() error = %v", err)
+	}
+	if spec.Kind != runtimehooks.HookKindHTTP {
+		t.Fatalf("kind = %q, want %q", spec.Kind, runtimehooks.HookKindHTTP)
+	}
+	result := spec.Handler(context.Background(), runtimehooks.HookContext{
+		RunID:     "run-http-observe",
+		SessionID: "session-http-observe",
+		Metadata:  map[string]any{"tool_name": "bash"},
+	})
+	if result.Status != runtimehooks.HookResultPass {
+		t.Fatalf("status = %q, want pass", result.Status)
+	}
+	if called.Load() != 1 {
+		t.Fatalf("called = %d, want 1", called.Load())
+	}
+	if mode, _ := captured["mode"].(string); mode != "observe" {
+		t.Fatalf("payload.mode = %v, want observe", captured["mode"])
+	}
+	if hookID, _ := captured["hook_id"].(string); hookID != "http-observe" {
+		t.Fatalf("payload.hook_id = %v, want http-observe", captured["hook_id"])
+	}
+}
+
+func TestBuildUserHTTPObserveHandlerReturnsFailedOnHTTPError(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.WriteHeader(http.StatusBadRequest)
+		_, _ = writer.Write([]byte("invalid payload"))
+	}))
+	defer server.Close()
+
+	item := config.RuntimeHookItemConfig{
+		ID:         "http-observe-error",
+		Point:      "before_tool_call",
+		Scope:      "user",
+		Kind:       "http",
+		Mode:       "observe",
+		TimeoutSec: 2,
+		Params: map[string]any{
+			"url": server.URL,
+		},
+	}
+	spec, err := buildUserHookSpec(item, t.TempDir())
+	if err != nil {
+		t.Fatalf("buildUserHookSpec() error = %v", err)
+	}
+	result := spec.Handler(context.Background(), runtimehooks.HookContext{})
+	if result.Status != runtimehooks.HookResultFailed {
+		t.Fatalf("status = %q, want failed", result.Status)
+	}
+	if !strings.Contains(result.Error, "status=400") {
+		t.Fatalf("error = %q, want contains status=400", result.Error)
 	}
 }
 

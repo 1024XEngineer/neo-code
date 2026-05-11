@@ -105,7 +105,7 @@ func TestRuntimeHooksConfigValidateRejectsExternalKindsWithP6LiteMessage(t *test
 		DefaultTimeoutSec:    2,
 		DefaultFailurePolicy: runtimeHookFailurePolicyWarnOnly,
 	}
-	externalKinds := []string{"command", "http", "prompt", "agent"}
+	externalKinds := []string{"command", "prompt", "agent"}
 	for _, kind := range externalKinds {
 		kind := kind
 		t.Run(kind, func(t *testing.T) {
@@ -128,6 +128,111 @@ func TestRuntimeHooksConfigValidateRejectsExternalKindsWithP6LiteMessage(t *test
 			}
 			if !strings.Contains(err.Error(), "not supported in P6-lite") {
 				t.Fatalf("error=%q, want contains not supported in P6-lite", err.Error())
+			}
+		})
+	}
+}
+
+func TestRuntimeHooksConfigValidateAllowsHTTPObserve(t *testing.T) {
+	t.Parallel()
+
+	cfg := RuntimeHooksConfig{
+		Enabled:              boolPtr(true),
+		UserHooksEnabled:     boolPtr(true),
+		DefaultTimeoutSec:    2,
+		DefaultFailurePolicy: runtimeHookFailurePolicyWarnOnly,
+		Items: []RuntimeHookItemConfig{
+			{
+				ID:    "observe-http",
+				Point: runtimeHookPointBeforeToolCall,
+				Scope: runtimeHookScopeUser,
+				Kind:  runtimeHookKindHTTP,
+				Params: map[string]any{
+					"url": "http://127.0.0.1:19090/hook",
+				},
+			},
+		},
+	}
+	cfg.ApplyDefaults(defaultRuntimeHooksConfig())
+	if cfg.Items[0].Mode != runtimeHookModeObserve {
+		t.Fatalf("mode=%q, want observe default", cfg.Items[0].Mode)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("expected http observe to pass, got err=%v", err)
+	}
+}
+
+func TestRuntimeHooksConfigValidateRejectsInvalidHTTPObserveConfig(t *testing.T) {
+	t.Parallel()
+
+	base := RuntimeHookItemConfig{
+		ID:    "observe-http",
+		Point: runtimeHookPointBeforeToolCall,
+		Scope: runtimeHookScopeUser,
+		Kind:  runtimeHookKindHTTP,
+		Mode:  runtimeHookModeObserve,
+		Params: map[string]any{
+			"url": "http://127.0.0.1:19090/hook",
+		},
+	}
+	tests := []struct {
+		name string
+		edit func(*RuntimeHookItemConfig)
+	}{
+		{
+			name: "sync mode not allowed",
+			edit: func(item *RuntimeHookItemConfig) {
+				item.Mode = runtimeHookModeSync
+			},
+		},
+		{
+			name: "fail closed not allowed",
+			edit: func(item *RuntimeHookItemConfig) {
+				item.FailurePolicy = runtimeHookFailurePolicyFailClose
+			},
+		},
+		{
+			name: "handler must be empty",
+			edit: func(item *RuntimeHookItemConfig) {
+				item.Handler = runtimeHookHandlerAddContextNote
+			},
+		},
+		{
+			name: "missing url",
+			edit: func(item *RuntimeHookItemConfig) {
+				item.Params = map[string]any{}
+			},
+		},
+		{
+			name: "bad scheme",
+			edit: func(item *RuntimeHookItemConfig) {
+				item.Params = map[string]any{"url": "file:///tmp/hook"}
+			},
+		},
+		{
+			name: "bad method",
+			edit: func(item *RuntimeHookItemConfig) {
+				item.Params = map[string]any{"url": "http://127.0.0.1:19090/hook", "method": "TRACE"}
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			item := base.Clone()
+			tc.edit(&item)
+			cfg := RuntimeHooksConfig{
+				Enabled:              boolPtr(true),
+				UserHooksEnabled:     boolPtr(true),
+				DefaultTimeoutSec:    2,
+				DefaultFailurePolicy: runtimeHookFailurePolicyWarnOnly,
+				Items:                []RuntimeHookItemConfig{item},
+			}
+			cfg.ApplyDefaults(defaultRuntimeHooksConfig())
+			if err := cfg.Validate(); err == nil {
+				t.Fatalf("expected invalid http observe config to fail: %+v", item)
 			}
 		})
 	}

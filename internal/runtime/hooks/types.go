@@ -91,7 +91,7 @@ const (
 	HookKindFunction HookKind = "function"
 	// HookKindCommand 表示命令型 hook（P6 预留）。
 	HookKindCommand HookKind = "command"
-	// HookKindHTTP 表示 HTTP 型 hook（P6 预留）。
+	// HookKindHTTP 表示 HTTP 型 hook（当前用于 observe 回调适配）。
 	HookKindHTTP HookKind = "http"
 	// HookKindPrompt 表示 prompt 型 hook（P6 预留）。
 	HookKindPrompt HookKind = "prompt"
@@ -173,8 +173,10 @@ func (s HookSpec) normalizeAndValidate() (HookSpec, error) {
 	if s.Kind == "" {
 		s.Kind = HookKindFunction
 	}
-	if s.Kind != HookKindFunction {
-		return HookSpec{}, wrapInvalidSpec("kind %q is not supported in P0", s.Kind)
+	switch s.Kind {
+	case HookKindFunction, HookKindHTTP:
+	default:
+		return HookSpec{}, wrapInvalidSpec("kind %q is not supported in current stage", s.Kind)
 	}
 	if s.Mode == "" {
 		s.Mode = HookModeSync

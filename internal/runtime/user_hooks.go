@@ -1,8 +1,12 @@
 package runtime
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -12,6 +16,13 @@ import (
 
 	"neo-code/internal/config"
 	runtimehooks "neo-code/internal/runtime/hooks"
+)
+
+const (
+	configuredHookKindBuiltin = "builtin"
+	configuredHookKindHTTP    = "http"
+	configuredHookModeSync    = "sync"
+	configuredHookModeObserve = "observe"
 )
 
 // ConfigureRuntimeHooks 根据配置装配 runtime hook 执行器；当 hooks 被关闭时会禁用执行器。
@@ -176,7 +187,22 @@ func buildConfiguredHookSpec(
 	if err := validateConfiguredHookItemForP6Lite(item, scope); err != nil {
 		return runtimehooks.HookSpec{}, err
 	}
-	handler, err := buildUserBuiltinHookHandler(strings.TrimSpace(item.Handler), item.Params, defaultWorkdir)
+	kind := strings.ToLower(strings.TrimSpace(item.Kind))
+	specKind := runtimehooks.HookKindFunction
+	var (
+		handler runtimehooks.HookHandler
+		err     error
+	)
+	switch kind {
+	case configuredHookKindBuiltin:
+		handler, err = buildUserBuiltinHookHandler(strings.TrimSpace(item.Handler), item.Params, defaultWorkdir)
+		specKind = runtimehooks.HookKindFunction
+	case configuredHookKindHTTP:
+		handler, err = buildUserHTTPObserveHookHandler(item)
+		specKind = runtimehooks.HookKindHTTP
+	default:
+		return runtimehooks.HookSpec{}, fmt.Errorf("kind %q is not supported", item.Kind)
+	}
 	if err != nil {
 		return runtimehooks.HookSpec{}, err
 	}
@@ -185,7 +211,7 @@ func buildConfiguredHookSpec(
 		Point:         runtimehooks.HookPoint(strings.TrimSpace(item.Point)),
 		Scope:         scope,
 		Source:        source,
-		Kind:          runtimehooks.HookKindFunction,
+		Kind:          specKind,
 		Mode:          runtimehooks.HookModeSync,
 		Priority:      item.Priority,
 		Timeout:       time.Duration(item.TimeoutSec) * time.Second,
@@ -203,19 +229,24 @@ func validateConfiguredHookItemForP6Lite(item config.RuntimeHookItemConfig, scop
 	}
 
 	kind := strings.ToLower(strings.TrimSpace(item.Kind))
-	if kind != "builtin" {
+	mode := strings.ToLower(strings.TrimSpace(item.Mode))
+	switch kind {
+	case configuredHookKindBuiltin:
+		if mode != configuredHookModeSync {
+			return fmt.Errorf("mode %q is not supported", item.Mode)
+		}
+	case configuredHookKindHTTP:
+		if mode != configuredHookModeObserve {
+			return fmt.Errorf("mode %q is not supported for kind http (only observe)", item.Mode)
+		}
+	default:
 		if isExternalHookKind(kind) {
 			return fmt.Errorf(
-				"external hook kind %q is not supported in P6-lite; only builtin hooks are enabled",
+				"external hook kind %q is not supported in P6-lite; only builtin/http-observe hooks are enabled",
 				item.Kind,
 			)
 		}
 		return fmt.Errorf("kind %q is not supported", item.Kind)
-	}
-
-	mode := strings.ToLower(strings.TrimSpace(item.Mode))
-	if mode != "sync" {
-		return fmt.Errorf("mode %q is not supported", item.Mode)
 	}
 	return nil
 }
@@ -314,6 +345,133 @@ func buildUserBuiltinHookHandler(
 		}, nil
 	default:
 		return nil, fmt.Errorf("unsupported user builtin handler %q", handlerName)
+	}
+}
+
+// buildUserHTTPObserveHookHandler 将 kind=http 的 observe 配置转换为观测回调处理器。
+func buildUserHTTPObserveHookHandler(item config.RuntimeHookItemConfig) (runtimehooks.HookHandler, error) {
+	endpoint := strings.TrimSpace(readHookParamString(item.Params, "url"))
+	if endpoint == "" {
+		return nil, fmt.Errorf("kind http requires params.url")
+	}
+	method := strings.ToUpper(strings.TrimSpace(readHookParamString(item.Params, "method")))
+	if method == "" {
+		method = http.MethodPost
+	}
+	headers, err := buildHTTPObserveHeaders(item.Params)
+	if err != nil {
+		return nil, err
+	}
+	includeMetadata := readHookParamBool(item.Params, "include_metadata", true)
+	hookID := strings.TrimSpace(item.ID)
+	point := strings.TrimSpace(item.Point)
+
+	return func(ctx context.Context, input runtimehooks.HookContext) runtimehooks.HookResult {
+		payload := map[string]any{
+			"hook_id":      hookID,
+			"point":        point,
+			"scope":        "user",
+			"kind":         configuredHookKindHTTP,
+			"mode":         configuredHookModeObserve,
+			"run_id":       strings.TrimSpace(input.RunID),
+			"session_id":   strings.TrimSpace(input.SessionID),
+			"triggered_at": time.Now().UTC().Format(time.RFC3339Nano),
+		}
+		if includeMetadata && len(input.Metadata) > 0 {
+			payload["metadata"] = input.Metadata
+		}
+		body, err := json.Marshal(payload)
+		if err != nil {
+			detail := fmt.Sprintf("http observe marshal payload failed: %v", err)
+			return runtimehooks.HookResult{Status: runtimehooks.HookResultFailed, Message: detail, Error: detail}
+		}
+		req, err := http.NewRequestWithContext(ctx, method, endpoint, bytes.NewReader(body))
+		if err != nil {
+			detail := fmt.Sprintf("http observe build request failed: %v", err)
+			return runtimehooks.HookResult{Status: runtimehooks.HookResultFailed, Message: detail, Error: detail}
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("User-Agent", "neocode-hook-observe/1.0")
+		for key, value := range headers {
+			req.Header.Set(key, value)
+		}
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			detail := fmt.Sprintf("http observe request failed: %v", err)
+			return runtimehooks.HookResult{Status: runtimehooks.HookResultFailed, Message: detail, Error: detail}
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode >= http.StatusBadRequest {
+			preview, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+			detail := fmt.Sprintf("http observe response status=%d", resp.StatusCode)
+			errText := detail
+			if trimmed := strings.TrimSpace(string(preview)); trimmed != "" {
+				errText = detail + ": " + trimmed
+			}
+			return runtimehooks.HookResult{Status: runtimehooks.HookResultFailed, Message: detail, Error: errText}
+		}
+		return runtimehooks.HookResult{Status: runtimehooks.HookResultPass}
+	}, nil
+}
+
+// buildHTTPObserveHeaders 从 params.headers 读取并归一化 HTTP 头配置。
+func buildHTTPObserveHeaders(params map[string]any) (map[string]string, error) {
+	if len(params) == 0 {
+		return nil, nil
+	}
+	rawHeaders, ok := params["headers"]
+	if !ok || rawHeaders == nil {
+		return nil, nil
+	}
+	typed, ok := rawHeaders.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("kind http params.headers must be a map")
+	}
+	headers := make(map[string]string, len(typed))
+	for key, value := range typed {
+		normalizedKey := strings.TrimSpace(key)
+		if normalizedKey == "" {
+			return nil, fmt.Errorf("kind http params.headers contains empty header name")
+		}
+		normalizedValue := strings.TrimSpace(fmt.Sprintf("%v", value))
+		if normalizedValue == "" {
+			return nil, fmt.Errorf("kind http params.headers[%q] is empty", normalizedKey)
+		}
+		headers[normalizedKey] = normalizedValue
+	}
+	return headers, nil
+}
+
+// readHookParamBool 按默认值读取布尔参数，兼容 bool/string/number 输入。
+func readHookParamBool(params map[string]any, key string, defaultValue bool) bool {
+	if len(params) == 0 {
+		return defaultValue
+	}
+	value, ok := params[key]
+	if !ok || value == nil {
+		return defaultValue
+	}
+	switch typed := value.(type) {
+	case bool:
+		return typed
+	case string:
+		switch strings.ToLower(strings.TrimSpace(typed)) {
+		case "true", "1", "yes", "on":
+			return true
+		case "false", "0", "no", "off":
+			return false
+		default:
+			return defaultValue
+		}
+	case int:
+		return typed != 0
+	case int64:
+		return typed != 0
+	case float64:
+		return typed != 0
+	default:
+		return defaultValue
 	}
 }
 
