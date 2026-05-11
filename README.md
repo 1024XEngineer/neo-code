@@ -56,6 +56,7 @@ NeoCode 是一个运行在本地开发环境中的 AI Coding Agent。
 - Skills 系统：为不同任务启用专用行为和流程。
 - MCP 接入：通过 MCP stdio server 扩展外部工具能力。
 - Gateway 模式：通过本地 JSON-RPC / SSE / WebSocket 接口连接桌面端、脚本和第三方客户端。
+- Web UI：通过 `neocode web` 启动浏览器端界面，适合图形化对话与会话管理。
 - Feishu Adapter：支持 Webhook 与 SDK 长连接接入，并用单张状态卡片持续回传 run 状态。
 - Local Runner：`neocode runner` 在本机执行工具，通过 WebSocket 主动连接云端 Gateway，无需开放入站端口。
 
@@ -63,9 +64,21 @@ NeoCode 是一个运行在本地开发环境中的 AI Coding Agent。
 
 ## 预览
 
-![NeoCode TUI 对话视图](docs/assert/readme/preview-1.png)
-![NeoCode TUI 执行视图](docs/assert/readme/preview-4.png)
-![NeoCode Gateway 交互示例](docs/assert/readme/preview-5.png)
+TUI：
+
+![preview-1](docs/assert/readme/preview-1.png)
+
+Web：
+
+![preview-2](docs/assert/readme/preview-2.png)
+
+Feishu：
+
+![preview-3](docs/assert/readme/preview-3.png)
+
+更多端侧截图与交互说明：
+- [Web UI 使用指南](https://neocode-docs.pages.dev/guide/web-ui)
+- [飞书远程接入配置](https://neocode-docs.pages.dev/guide/feishu-remote-setup)
 
 ---
 
@@ -120,7 +133,27 @@ neocode web
 
 标签发布版已经将 Web UI 的 `web/dist` 内嵌进 `neocode` 二进制，执行 `neocode web` 时不再要求用户机器安装 Node.js 或 npm。如果你在源码仓库里运行 `go run ./cmd/neocode web`，当本地缺少 `web/dist` 时仍会自动尝试构建前端。
 
-### 4. 常用命令
+### 4. Web / 飞书快速入口
+
+```bash
+# 浏览器端 Web UI（默认 127.0.0.1:8080）
+neocode web
+
+# 指定 Web UI 监听地址（例如本地调试）
+neocode web --http-listen 127.0.0.1:8080 --skip-build
+
+# 飞书 SDK 模式（推荐，无需公网入口）
+neocode feishu-adapter --ingress sdk --gateway-listen "127.0.0.1:8080"
+
+# 飞书 Webhook 模式（需要可被飞书回调访问的地址）
+neocode feishu-adapter --ingress webhook --gateway-listen "127.0.0.1:8080" --listen "127.0.0.1:18080"
+```
+
+详细说明：
+- [Web UI 使用指南](https://neocode-docs.pages.dev/guide/web-ui)
+- [飞书远程接入配置（SDK / Webhook）](https://neocode-docs.pages.dev/guide/feishu-remote-setup)
+
+### 5. 常用命令
 
 ```text
 /help                 查看帮助
@@ -134,7 +167,7 @@ neocode web
 /skill off <id>       停用 skill
 ```
 
-### 5. CLI 路由速查
+### 6. CLI 路由速查
 
 #### Provider 管理
 
@@ -200,7 +233,7 @@ neocode runner --gateway-address "your-gateway.com:8080" --token-file ~/.neocode
 neocode runner --runner-name "我的本机" --workdir /path/to/project
 ```
 
-### 6. Shell 诊断代理
+### 7. Shell 诊断代理
 
 用于进入代理 shell、初始化 shell integration、手动触发诊断和控制自动诊断模式。
 
@@ -225,7 +258,7 @@ neocode diag auto off
 neocode diag auto status
 ```
 
-### 7. url scheme使用
+### 8. URL Scheme 使用
 详细指南链接： [HTTP URL 唤醒使用指南（用户故事版）](https://neocode-docs.pages.dev/guide/http-daemon-wake-user-guide)
 
 ```bash
@@ -271,30 +304,33 @@ go run ./cmd/neocode --session <session_id>
 
 ---
 
-## Gateway / MCP / Skills / Hooks
+## 文档导航（按场景）
 
-详细说明在文档内：
+官方文档站（中文）：[https://neocode-docs.pages.dev/](https://neocode-docs.pages.dev/)
 
+建议阅读路径：
+
+1. 初次使用
+- [安装指南](https://neocode-docs.pages.dev/guide/install)
+- [日常使用指南](https://neocode-docs.pages.dev/guide/daily-use)
+- [配置指南](https://neocode-docs.pages.dev/guide/configuration)
+
+2. 端侧入口（你这次关心的 Web / 飞书）
+- [Web UI 使用指南](https://neocode-docs.pages.dev/guide/web-ui)
+- [飞书远程接入配置（SDK / Webhook）](https://neocode-docs.pages.dev/guide/feishu-remote-setup)
+- [HTTP URL 唤醒使用指南](https://neocode-docs.pages.dev/guide/http-daemon-wake-user-guide)
+
+3. 扩展能力（MCP / Skills / Hooks）
+- [MCP 工具接入](https://neocode-docs.pages.dev/guide/mcp)
+- [Skills 使用](https://neocode-docs.pages.dev/guide/skills)
+- [Hooks 使用](https://neocode-docs.pages.dev/guide/hooks)
+- [工具与权限](https://neocode-docs.pages.dev/guide/tools-permissions)
+
+4. 接口与底层机制
 - [Gateway 集成与协议（Reference）](https://neocode-docs.pages.dev/reference/gateway)
-- [MCP 工具接入（Guide）](https://neocode-docs.pages.dev/guide/mcp)
-- [Skills 使用（Guide）](https://neocode-docs.pages.dev/guide/skills)
-- [飞书远程接入配置（Guide）](https://neocode-docs.pages.dev/guide/feishu-remote-setup)
-- [飞书本地 SDK 长连接（免公网，个人开发推荐）](https://neocode-docs.pages.dev/guide/feishu-remote-setup)
-- [Hooks 使用（Guide）](https://neocode-docs.pages.dev/guide/hooks)
-- [工具与权限（Guide）](https://neocode-docs.pages.dev/guide/tools-permissions)
 - [Runtime / Provider 事件流（Repo Doc）](docs/runtime-provider-event-flow.md)
 
----
-
-## 文档
-
-- 官方文档站：[https://neocode-docs.pages.dev/](https://neocode-docs.pages.dev/)
-- 快速引导（中文）：[www/guide/index.md](www/guide/index.md)
-- [配置指南](https://neocode-docs.pages.dev/guide/configuration)
-- [飞书远程接入配置](https://neocode-docs.pages.dev/guide/feishu-remote-setup)
-- [工具与权限](https://neocode-docs.pages.dev/guide/tools-permissions)
-- [Skills 使用](https://neocode-docs.pages.dev/guide/skills)
-- [MCP 工具接入](https://neocode-docs.pages.dev/guide/mcp)
+5. 维护与排障
 - [升级与版本检查](https://neocode-docs.pages.dev/guide/update)
 - [排障与常见问题](https://neocode-docs.pages.dev/guide/troubleshooting)
 
