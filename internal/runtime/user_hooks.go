@@ -251,6 +251,10 @@ func validateConfiguredHookItemForP6Lite(item config.RuntimeHookItemConfig, scop
 		if mode != configuredHookModeObserve {
 			return fmt.Errorf("mode %q is not supported for kind http (only observe)", item.Mode)
 		}
+		policy := strings.ToLower(strings.TrimSpace(item.FailurePolicy))
+		if policy == "fail_closed" {
+			return fmt.Errorf("failure_policy %q is not supported for kind http observe", item.FailurePolicy)
+		}
 	default:
 		if isExternalHookKind(kind) {
 			return fmt.Errorf(

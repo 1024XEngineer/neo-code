@@ -52,6 +52,9 @@ func TestHookSpecNormalizeAndValidateAllowsHTTPKind(t *testing.T) {
 	if spec.Kind != HookKindHTTP {
 		t.Fatalf("Kind = %q, want %q", spec.Kind, HookKindHTTP)
 	}
+	if spec.Mode != HookModeObserve {
+		t.Fatalf("Mode = %q, want %q for http default", spec.Mode, HookModeObserve)
+	}
 }
 
 func TestHookSpecNormalizeAndValidateAllowsUserHTTPObserve(t *testing.T) {

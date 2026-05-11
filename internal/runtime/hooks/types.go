@@ -181,7 +181,11 @@ func (s HookSpec) normalizeAndValidate() (HookSpec, error) {
 		return HookSpec{}, wrapInvalidSpec("kind %q is not supported in current stage", s.Kind)
 	}
 	if s.Mode == "" {
-		s.Mode = HookModeSync
+		if s.Kind == HookKindHTTP {
+			s.Mode = HookModeObserve
+		} else {
+			s.Mode = HookModeSync
+		}
 	}
 	switch s.Mode {
 	case HookModeSync, HookModeObserve, HookModeAsync, HookModeAsyncRewake:

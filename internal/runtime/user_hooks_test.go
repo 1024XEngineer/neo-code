@@ -181,6 +181,30 @@ func TestBuildUserHookSpecRejectsHTTPObserveRemoteHost(t *testing.T) {
 	}
 }
 
+func TestBuildUserHookSpecRejectsHTTPObserveFailClosedPolicy(t *testing.T) {
+	t.Parallel()
+
+	item := config.RuntimeHookItemConfig{
+		ID:            "http-observe-fail-closed",
+		Point:         "after_tool_result",
+		Scope:         "user",
+		Kind:          "http",
+		Mode:          "observe",
+		TimeoutSec:    2,
+		FailurePolicy: "fail_closed",
+		Params: map[string]any{
+			"url": "http://127.0.0.1:19090/hook",
+		},
+	}
+	_, err := buildUserHookSpec(item, t.TempDir())
+	if err == nil {
+		t.Fatal("expected fail_closed to be rejected for http observe")
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "failure_policy") {
+		t.Fatalf("error=%q, want contains failure_policy", err.Error())
+	}
+}
+
 func TestBuildUserHookSpecHTTPObserveCanIncludeSanitizedMetadata(t *testing.T) {
 	t.Parallel()
 
