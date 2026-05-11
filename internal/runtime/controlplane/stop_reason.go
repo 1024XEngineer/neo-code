@@ -16,7 +16,7 @@ const (
 	StopReasonVerificationFailed StopReason = "verification_failed"
 	// StopReasonAccepted 表示 completion gate 与 verifier gate 均通过并完成收尾。
 	StopReasonAccepted StopReason = "accepted"
-	// StopReasonEmptyResponse 表示模型连续返回空文本响应。
+	// StopReasonEmptyResponse 表示模型返回空文本响应。
 	StopReasonEmptyResponse StopReason = "empty_response"
 	// StopReasonAcceptCheckFailed 表示最终 Accept Gate 的验收项失败。
 	StopReasonAcceptCheckFailed StopReason = "accept_check_failed"
