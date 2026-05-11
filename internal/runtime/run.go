@@ -576,7 +576,7 @@ func (s *Service) prepareTurnBudgetSnapshot(ctx context.Context, state *runState
 		if err != nil {
 			return TurnBudgetSnapshot{}, false, err
 		}
-		toolSpecs = prioritizeToolSpecsBySkillHints(toolSpecs, activeSkills)
+		toolSpecs = stableSortToolSpecsByName(toolSpecs)
 	}
 
 	providerRuntimeCfg, err := resolvedProvider.ToRuntimeConfig()
@@ -589,12 +589,26 @@ func (s *Service) prepareTurnBudgetSnapshot(ctx context.Context, state *runState
 	state.mu.Unlock()
 
 	repeatLimit := resolveRepeatCycleStreakLimit(cfg.Runtime)
-	systemPrompt := withProgressReminder(builtContext.SystemPrompt, score)
-	if pendingReminder := drainPendingSystemReminder(state); pendingReminder != "" {
-		systemPrompt = mergeEphemeralHookNotificationIntoSystemPrompt(systemPrompt, pendingReminder)
-	}
-	if notificationHint := strings.TrimSpace(s.drainHookNotificationsForTurn(state)); notificationHint != "" {
-		systemPrompt = mergeEphemeralHookNotificationIntoSystemPrompt(systemPrompt, notificationHint)
+	var systemPrompt string
+	if builtContext.DynamicSystemPrompt != "" {
+		// New style: reminders append to dynamicPrompt, then join with stable
+		prompt := withProgressReminder(builtContext.DynamicSystemPrompt, score)
+		if pendingReminder := drainPendingSystemReminder(state); pendingReminder != "" {
+			prompt = mergeEphemeralHookNotificationIntoSystemPrompt(prompt, pendingReminder)
+		}
+		if notificationHint := strings.TrimSpace(s.drainHookNotificationsForTurn(state)); notificationHint != "" {
+			prompt = mergeEphemeralHookNotificationIntoSystemPrompt(prompt, notificationHint)
+		}
+		systemPrompt = joinRuntimeSystemPromptParts(builtContext.StableSystemPrompt, prompt)
+	} else {
+		// Legacy fallback: reminders append to SystemPrompt directly
+		systemPrompt = withProgressReminder(builtContext.SystemPrompt, score)
+		if pendingReminder := drainPendingSystemReminder(state); pendingReminder != "" {
+			systemPrompt = mergeEphemeralHookNotificationIntoSystemPrompt(systemPrompt, pendingReminder)
+		}
+		if notificationHint := strings.TrimSpace(s.drainHookNotificationsForTurn(state)); notificationHint != "" {
+			systemPrompt = mergeEphemeralHookNotificationIntoSystemPrompt(systemPrompt, notificationHint)
+		}
 	}
 	budgetCfg := cfg
 	budgetCfg.SelectedProvider = resolvedProvider.Name
@@ -1120,6 +1134,20 @@ func (s *Service) bindSessionLock(sessionID string) func() {
 		sessionMu.Unlock()
 		releaseLockRef()
 	}
+}
+
+// joinRuntimeSystemPromptParts 拼接 stable 与 dynamic 两部分系统提示词为最终 system prompt。
+// 空部分会被跳过，非空部分之间用两个换行分隔。
+func joinRuntimeSystemPromptParts(parts ...string) string {
+	rendered := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		rendered = append(rendered, part)
+	}
+	return strings.Join(rendered, "\n\n")
 }
 
 // withProgressReminder 根据当前 progress 快照选择并注入唯一的自愈提醒。

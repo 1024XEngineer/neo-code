@@ -32,6 +32,20 @@ func defaultSystemPromptSections() []promptSection {
 	return sections
 }
 
+// joinSystemPromptParts 将 stable 和 dynamic 两部分提示词拼接为最终 SystemPrompt。
+// 空部分会被跳过，非空部分之间用两个换行分隔。
+func joinSystemPromptParts(parts ...string) string {
+	rendered := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		rendered = append(rendered, part)
+	}
+	return strings.Join(rendered, "\n\n")
+}
+
 func composeSystemPrompt(sections ...promptSection) string {
 	rendered := make([]string, 0, len(sections))
 	for _, section := range sections {

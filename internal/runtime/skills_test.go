@@ -604,7 +604,7 @@ func TestPrioritizeToolSpecsBySkillHintsKeepsNonHintedRelativeOrder(t *testing.T
 	}
 }
 
-func TestPrepareTurnSnapshotPrioritizesToolsByActiveSkillHints(t *testing.T) {
+func TestPrepareTurnSnapshotStableSortsToolsByName(t *testing.T) {
 	t.Parallel()
 
 	manager := newRuntimeConfigManager(t)
@@ -815,5 +815,61 @@ func TestSkillHelperFunctionsBranches(t *testing.T) {
 	}
 	if collectSkillToolHints(nil) != nil {
 		t.Fatalf("expected nil for empty active skills")
+	}
+}
+
+func TestStableSortToolSpecsByNameSortsByName(t *testing.T) {
+	t.Parallel()
+
+	specs := []providertypes.ToolSpec{
+		{Name: "webfetch"},
+		{Name: "bash"},
+		{Name: "filesystem_read_file"},
+	}
+
+	sorted := stableSortToolSpecsByName(specs)
+	if len(sorted) != 3 {
+		t.Fatalf("expected 3 tools, got %d", len(sorted))
+	}
+	if sorted[0].Name != "bash" {
+		t.Fatalf("expected first tool bash, got %q", sorted[0].Name)
+	}
+	if sorted[1].Name != "filesystem_read_file" {
+		t.Fatalf("expected second tool filesystem_read_file, got %q", sorted[1].Name)
+	}
+	if sorted[2].Name != "webfetch" {
+		t.Fatalf("expected third tool webfetch, got %q", sorted[2].Name)
+	}
+}
+
+func TestStableSortToolSpecsByNameKeepsSameNameRelativeOrder(t *testing.T) {
+	t.Parallel()
+
+	// Two specs with same name should keep their original relative order.
+	specs := []providertypes.ToolSpec{
+		{Name: "bash", Description: "first"},
+		{Name: "bash", Description: "second"},
+	}
+
+	sorted := stableSortToolSpecsByName(specs)
+	if len(sorted) != 2 {
+		t.Fatalf("expected 2 tools, got %d", len(sorted))
+	}
+	if sorted[0].Description != "first" {
+		t.Fatalf("expected first bash entry, got %q", sorted[0].Description)
+	}
+	if sorted[1].Description != "second" {
+		t.Fatalf("expected second bash entry, got %q", sorted[1].Description)
+	}
+}
+
+func TestStableSortToolSpecsByNameEmpty(t *testing.T) {
+	t.Parallel()
+
+	if got := stableSortToolSpecsByName(nil); got != nil {
+		t.Fatalf("expected nil for empty input, got %+v", got)
+	}
+	if got := stableSortToolSpecsByName([]providertypes.ToolSpec{}); got != nil {
+		t.Fatalf("expected nil for empty slice, got %+v", got)
 	}
 }

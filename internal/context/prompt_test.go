@@ -99,6 +99,42 @@ func TestComposeSystemPromptSkipsEmptySections(t *testing.T) {
 	}
 }
 
+func TestJoinSystemPromptPartsSkipsEmptyParts(t *testing.T) {
+	t.Parallel()
+
+	got := joinSystemPromptParts("", "stable", "", "dynamic", "")
+	if got != "stable\n\ndynamic" {
+		t.Fatalf("joinSystemPromptParts() = %q, want %q", got, "stable\n\ndynamic")
+	}
+}
+
+func TestJoinSystemPromptPartsPreservesStableBeforeDynamic(t *testing.T) {
+	t.Parallel()
+
+	got := joinSystemPromptParts("stable content", "dynamic content")
+	if got != "stable content\n\ndynamic content" {
+		t.Fatalf("joinSystemPromptParts() = %q, want %q", got, "stable content\n\ndynamic content")
+	}
+}
+
+func TestJoinSystemPromptPartsSinglePart(t *testing.T) {
+	t.Parallel()
+
+	got := joinSystemPromptParts("only one part")
+	if got != "only one part" {
+		t.Fatalf("joinSystemPromptParts() = %q, want %q", got, "only one part")
+	}
+}
+
+func TestJoinSystemPromptPartsAllEmpty(t *testing.T) {
+	t.Parallel()
+
+	got := joinSystemPromptParts("", "", "")
+	if got != "" {
+		t.Fatalf("joinSystemPromptParts() = %q, want empty string", got)
+	}
+}
+
 func TestDefaultToolUsagePromptIncludesPermissionAndAntiLoopGuidance(t *testing.T) {
 	t.Parallel()
 
