@@ -126,6 +126,8 @@ neocode web
 
 Tagged release builds already embed Web UI assets (`web/dist`) into the `neocode` binary, so running `neocode web` does not require Node.js or npm on the target machine. If you run from source with `go run ./cmd/neocode web`, NeoCode will still automatically try to build the frontend when `web/dist` is missing.
 
+Electron desktop releases use the checked-in `web/build/icon.png`, `web/build/icon.ico`, and `web/build/icon.icns` assets. Only run `npm run generate:icons` from `web/` after replacing the source `web/build/icon.png`; the command uses PowerShell/.NET image APIs on Windows, `sips` on macOS, and requires ImageMagick's `magick` command on Linux.
+
 ### 4. Quick Web / Feishu Entry
 
 ```bash

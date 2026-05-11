@@ -20,10 +20,14 @@ const tempDir = mkdtempSync(join(tmpdir(), 'neocode-icons-'))
 
 try {
 	const resizedPngs = resizeImages(sourceIcon, tempDir, iconSizes)
-	writeFileSync(outputIco, buildIco(resizedPngs))
-	writeFileSync(outputIcns, buildIcns(resizedPngs))
-	console.log(`Generated ${outputIco}`)
-	console.log(`Generated ${outputIcns}`)
+	if (resizedPngs === null) {
+		console.log(`Existing ${outputIco} and ${outputIcns} are up to date.`)
+	} else {
+		writeFileSync(outputIco, buildIco(resizedPngs))
+		writeFileSync(outputIcns, buildIcns(resizedPngs))
+		console.log(`Generated ${outputIco}`)
+		console.log(`Generated ${outputIcns}`)
+	}
 } finally {
 	rmSync(tempDir, { recursive: true, force: true })
 }
@@ -41,7 +45,7 @@ function resizeImages(inputPath, outputDir, sizes) {
 	}
 	if (outputsAreFresh()) {
 		console.warn('No local image resizer found; existing icon.ico and icon.icns are up to date.')
-		process.exit(0)
+		return null
 	}
 	throw new Error('No local image resizer found. Install ImageMagick or run this script on Windows/macOS.')
 }
