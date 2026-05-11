@@ -84,7 +84,7 @@ runtime:
           method: POST
           headers:
             X-Source: neocode
-          include_metadata: true
+          include_metadata: false
 ```
 
 ## 字段怎么填（通俗版）
@@ -107,12 +107,13 @@ runtime:
 | `params.url` | 是 | 绝对 `http/https` 地址 |
 | `params.method` | 否 | 默认 `POST` |
 | `params.headers` | 否 | 自定义请求头 |
-| `params.include_metadata` | 否 | 是否带上 metadata（默认 `true`） |
+| `params.include_metadata` | 否 | 是否带上 metadata（默认 `false`） |
 
 注意：
 
 - `http observe` 只做观测回调，不会阻断主链。
 - `failure_policy` 不能用 `fail_closed`，建议用 `warn_only`。
+- 即使开启 `include_metadata`，`result_content_preview` 与 `execution_error` 也会被自动剥离。
 
 ## 支持哪些 builtin handler
 

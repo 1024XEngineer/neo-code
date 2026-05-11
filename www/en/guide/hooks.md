@@ -77,7 +77,7 @@ runtime:
           method: POST
           headers:
             X-Source: neocode
-          include_metadata: true
+          include_metadata: false
 ```
 
 ## HTTP observe fields
@@ -89,12 +89,13 @@ runtime:
 | `params.url` | Yes | Absolute `http/https` URL |
 | `params.method` | No | Default `POST` |
 | `params.headers` | No | Custom request headers |
-| `params.include_metadata` | No | Include metadata payload (`true` by default) |
+| `params.include_metadata` | No | Include metadata payload (`false` by default) |
 
 Notes:
 
 - `http observe` is non-blocking by design.
 - `failure_policy: fail_closed` is not allowed for `http observe`.
+- Even when enabled, sensitive fields (`result_content_preview`, `execution_error`) are stripped from callback metadata.
 
 ## Callback payload
 
@@ -128,4 +129,3 @@ See the step-by-step walkthrough:
 - Supported for user hooks: `builtin/sync` and `http/observe`
 - Not supported yet: `command`, `prompt`, `agent`
 - Hook params use `params` (not `with`)
-

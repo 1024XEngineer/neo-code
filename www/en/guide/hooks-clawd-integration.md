@@ -47,7 +47,7 @@ runtime:
         params:
           url: "http://127.0.0.1:3101/neocode-hook"
           method: POST
-          include_metadata: true
+          include_metadata: false
 
       - id: clawd-before-tool
         enabled: true
@@ -58,7 +58,7 @@ runtime:
         params:
           url: "http://127.0.0.1:3101/neocode-hook"
           method: POST
-          include_metadata: true
+          include_metadata: false
 
       - id: clawd-after-tool
         enabled: true
@@ -69,7 +69,7 @@ runtime:
         params:
           url: "http://127.0.0.1:3101/neocode-hook"
           method: POST
-          include_metadata: true
+          include_metadata: false
 
       - id: clawd-session-end
         enabled: true
@@ -80,7 +80,7 @@ runtime:
         params:
           url: "http://127.0.0.1:3101/neocode-hook"
           method: POST
-          include_metadata: true
+          include_metadata: false
 ```
 
 ## Step 2: Start a local bridge
@@ -164,4 +164,3 @@ Will callback failures stop my run?
 2. Set request body size limits
 3. Dedupe repeated events (`run_id + point + ts`)
 4. Forward only fields needed by Clawd
-

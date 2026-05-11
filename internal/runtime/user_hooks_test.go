@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -116,6 +117,9 @@ func TestBuildUserHookSpecAllowsHTTPObserve(t *testing.T) {
 	if hookID, _ := captured["hook_id"].(string); hookID != "http-observe" {
 		t.Fatalf("payload.hook_id = %v, want http-observe", captured["hook_id"])
 	}
+	if _, exists := captured["metadata"]; exists {
+		t.Fatalf("metadata should be omitted by default for http observe, got=%v", captured["metadata"])
+	}
 }
 
 func TestBuildUserHTTPObserveHandlerReturnsFailedOnHTTPError(t *testing.T) {
@@ -150,6 +154,97 @@ func TestBuildUserHTTPObserveHandlerReturnsFailedOnHTTPError(t *testing.T) {
 		t.Fatalf("error = %q, want contains status=400", result.Error)
 	}
 }
+
+func TestBuildUserHookSpecHTTPObserveCanIncludeSanitizedMetadata(t *testing.T) {
+	t.Parallel()
+
+	var captured map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if err := json.NewDecoder(request.Body).Decode(&captured); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		writer.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	item := config.RuntimeHookItemConfig{
+		ID:            "http-observe-with-metadata",
+		Point:         "after_tool_result",
+		Scope:         "user",
+		Kind:          "http",
+		Mode:          "observe",
+		TimeoutSec:    2,
+		FailurePolicy: "warn_only",
+		Params: map[string]any{
+			"url":              server.URL,
+			"include_metadata": true,
+		},
+	}
+	spec, err := buildUserHookSpec(item, t.TempDir())
+	if err != nil {
+		t.Fatalf("buildUserHookSpec() error = %v", err)
+	}
+	result := spec.Handler(context.Background(), runtimehooks.HookContext{
+		RunID:     "run-meta",
+		SessionID: "session-meta",
+		Metadata: map[string]any{
+			"tool_name":              "bash",
+			"result_content_preview": "should_not_leak",
+			"execution_error":        "should_not_leak",
+		},
+	})
+	if result.Status != runtimehooks.HookResultPass {
+		t.Fatalf("status = %q, want pass", result.Status)
+	}
+	rawMeta, ok := captured["metadata"].(map[string]any)
+	if !ok {
+		t.Fatalf("metadata type = %T, want map[string]any", captured["metadata"])
+	}
+	if toolName, _ := rawMeta["tool_name"].(string); toolName != "bash" {
+		t.Fatalf("metadata.tool_name = %v, want bash", rawMeta["tool_name"])
+	}
+	if _, exists := rawMeta["result_content_preview"]; exists {
+		t.Fatal("result_content_preview should be stripped from http observe payload metadata")
+	}
+	if _, exists := rawMeta["execution_error"]; exists {
+		t.Fatal("execution_error should be stripped from http observe payload metadata")
+	}
+}
+
+func TestDrainAndCloseHTTPResponseBody(t *testing.T) {
+	t.Parallel()
+
+	body := &trackingReadCloser{
+		reader: strings.NewReader("hello-response-body"),
+	}
+	resp := &http.Response{Body: body}
+	drainAndCloseHTTPResponseBody(resp)
+	if !body.closed {
+		t.Fatal("expected response body to be closed")
+	}
+	if body.readBytes == 0 {
+		t.Fatal("expected response body to be drained before close")
+	}
+}
+
+type trackingReadCloser struct {
+	reader    *strings.Reader
+	closed    bool
+	readBytes int
+}
+
+func (t *trackingReadCloser) Read(p []byte) (int, error) {
+	n, err := t.reader.Read(p)
+	t.readBytes += n
+	return n, err
+}
+
+func (t *trackingReadCloser) Close() error {
+	t.closed = true
+	return nil
+}
+
+var _ io.ReadCloser = (*trackingReadCloser)(nil)
 
 func TestRequireFileExistsHandler(t *testing.T) {
 	t.Parallel()

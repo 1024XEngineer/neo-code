@@ -40,4 +40,4 @@ runtime:
           method: POST
           headers:
             X-Source: neocode
-          include_metadata: true
+          include_metadata: false

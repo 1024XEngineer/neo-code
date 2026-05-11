@@ -25,6 +25,11 @@ const (
 	configuredHookModeObserve = "observe"
 )
 
+var httpObserveSensitiveMetadataKeys = map[string]struct{}{
+	"result_content_preview": {},
+	"execution_error":        {},
+}
+
 // ConfigureRuntimeHooks 根据配置装配 runtime hook 执行器；当 hooks 被关闭时会禁用执行器。
 func ConfigureRuntimeHooks(service *Service, cfg config.Config) error {
 	return configureRuntimeHooksFromConfig(service, cfg)
@@ -362,7 +367,7 @@ func buildUserHTTPObserveHookHandler(item config.RuntimeHookItemConfig) (runtime
 	if err != nil {
 		return nil, err
 	}
-	includeMetadata := readHookParamBool(item.Params, "include_metadata", true)
+	includeMetadata := readHookParamBool(item.Params, "include_metadata", false)
 	hookID := strings.TrimSpace(item.ID)
 	point := strings.TrimSpace(item.Point)
 
@@ -378,7 +383,7 @@ func buildUserHTTPObserveHookHandler(item config.RuntimeHookItemConfig) (runtime
 			"triggered_at": time.Now().UTC().Format(time.RFC3339Nano),
 		}
 		if includeMetadata && len(input.Metadata) > 0 {
-			payload["metadata"] = input.Metadata
+			payload["metadata"] = sanitizeHTTPObserveMetadata(input.Metadata)
 		}
 		body, err := json.Marshal(payload)
 		if err != nil {
@@ -401,7 +406,7 @@ func buildUserHTTPObserveHookHandler(item config.RuntimeHookItemConfig) (runtime
 			detail := fmt.Sprintf("http observe request failed: %v", err)
 			return runtimehooks.HookResult{Status: runtimehooks.HookResultFailed, Message: detail, Error: detail}
 		}
-		defer resp.Body.Close()
+		defer drainAndCloseHTTPResponseBody(resp)
 		if resp.StatusCode >= http.StatusBadRequest {
 			preview, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 			detail := fmt.Sprintf("http observe response status=%d", resp.StatusCode)
@@ -413,6 +418,31 @@ func buildUserHTTPObserveHookHandler(item config.RuntimeHookItemConfig) (runtime
 		}
 		return runtimehooks.HookResult{Status: runtimehooks.HookResultPass}
 	}, nil
+}
+
+// sanitizeHTTPObserveMetadata 对外发 payload 前剥离敏感预览字段，避免意外外传。
+func sanitizeHTTPObserveMetadata(metadata map[string]any) map[string]any {
+	if len(metadata) == 0 {
+		return nil
+	}
+	sanitized := make(map[string]any, len(metadata))
+	for key, value := range metadata {
+		normalized := strings.ToLower(strings.TrimSpace(key))
+		if _, blocked := httpObserveSensitiveMetadataKeys[normalized]; blocked {
+			continue
+		}
+		sanitized[key] = value
+	}
+	return sanitized
+}
+
+// drainAndCloseHTTPResponseBody 在关闭前尽量读到 EOF，以提升 keep-alive 复用概率。
+func drainAndCloseHTTPResponseBody(resp *http.Response) {
+	if resp == nil || resp.Body == nil {
+		return
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+	_ = resp.Body.Close()
 }
 
 // buildHTTPObserveHeaders 从 params.headers 读取并归一化 HTTP 头配置。

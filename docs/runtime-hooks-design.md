@@ -30,6 +30,7 @@ P2 仅支持：
   `session_start`、`session_end`、`user_prompt_submit`、`post_compact`、`subagent_stop`
 - handler：`require_file_exists`、`warn_on_tool_call`、`add_context_note`
 - `kind=http + mode=observe`：允许发送 HTTP 观测回调（不支持 block）
+- `http observe` 默认不携带 metadata（`include_metadata=false`）；即使显式开启也会剥离 `result_content_preview`、`execution_error`
 - external kinds 中 `command/prompt/agent` 在 P6-lite 阶段显式拒绝，不会半生效
 
 当前（P3）明确不支持：

@@ -131,7 +131,7 @@ context:
 | `priority` | 同一 hook point 内执行优先级，数值越大越先执行 |
 | `timeout_sec` | 覆盖默认超时；未配置时继承 `runtime.hooks.default_timeout_sec` |
 | `failure_policy` | 覆盖默认失败策略；未配置时继承 `runtime.hooks.default_failure_policy` |
-| `params` | `builtin` 为 handler 参数；`http` 至少包含 `url`（可选 `method`、`headers`、`include_metadata`） |
+| `params` | `builtin` 为 handler 参数；`http` 至少包含 `url`（可选 `method`、`headers`、`include_metadata`，默认 `false`） |
 
 > 注意：`warn_only` 在 runtime 内部映射为 `fail_open`，表示记录失败但不阻断主链。
 

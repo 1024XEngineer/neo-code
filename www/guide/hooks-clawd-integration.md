@@ -51,7 +51,7 @@ runtime:
           method: POST
           headers:
             X-Event-Source: neocode
-          include_metadata: true
+          include_metadata: false
 
       - id: clawd-before-tool
         enabled: true
@@ -62,7 +62,7 @@ runtime:
         params:
           url: "http://127.0.0.1:3101/neocode-hook"
           method: POST
-          include_metadata: true
+          include_metadata: false
 
       - id: clawd-after-tool
         enabled: true
@@ -73,7 +73,7 @@ runtime:
         params:
           url: "http://127.0.0.1:3101/neocode-hook"
           method: POST
-          include_metadata: true
+          include_metadata: false
 
       - id: clawd-session-end
         enabled: true
@@ -84,7 +84,7 @@ runtime:
         params:
           url: "http://127.0.0.1:3101/neocode-hook"
           method: POST
-          include_metadata: true
+          include_metadata: false
 ```
 
 这四个点位基本覆盖了“开始任务 -> 调工具 -> 完成任务”的常见展示需求。
@@ -184,4 +184,3 @@ app.listen(3101, "127.0.0.1", () => {
 5. 桥接崩溃时自动拉起（pm2 / systemd / NSSM）
 
 这样做可以把“可观测性”开放给用户，同时保持 NeoCode 主链路稳定、安全、可控。
-
