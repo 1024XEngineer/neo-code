@@ -234,7 +234,12 @@ describe('ChatPanel', () => {
 
     render(<ChatPanel />)
 
-    expect(screen.getByLabelText('选项说明：先执行方案 A')).toBeInTheDocument()
-    expect(screen.getByLabelText('选项说明：再执行方案 B')).toBeInTheDocument()
+    const optionADescriptionBtn = screen.getByRole('button', { name: '查看选项说明：选项 A' })
+    const optionBDescriptionBtn = screen.getByRole('button', { name: '查看选项说明：选项 B' })
+    expect(optionADescriptionBtn).toBeInTheDocument()
+    expect(optionBDescriptionBtn).toBeInTheDocument()
+
+    fireEvent.click(optionADescriptionBtn)
+    expect(screen.getByText('先执行方案 A')).toBeInTheDocument()
   })
 })
