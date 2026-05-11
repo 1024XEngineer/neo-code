@@ -26,6 +26,11 @@ const (
 	diagControlSessionPrefix = "diag-cli"
 	diagAskSkillID           = "terminal-diagnosis"
 	diagInputMaxBytes        = 256 * 1024
+
+	// errNoShellSession 提示用户先通过 `neocode shell` 启动代理终端。
+	errNoShellSession = "no neocode shell session found; run `neocode shell` first to start a terminal proxy session, then run this command again"
+	// errTargetRoleUnavailable 是网关返回的原始错误特征串，用于识别需要友好提示的场景。
+	errTargetRoleUnavailable = "target role stream is unavailable"
 )
 
 var (
@@ -289,18 +294,27 @@ func defaultDiagCommandRunner(ctx context.Context, options diagCommandOptions) e
 		return runDiagAsk(ctx, options)
 	}
 	targetSessionID := resolveDiagTargetSessionID(options.SessionID)
+	if targetSessionID == "" {
+		return errors.New(errNoShellSession)
+	}
 	return sendDiagnoseSignalFn(ctx, targetSessionID)
 }
 
 // defaultDiagInteractiveCommandRunner 触发 shell 进入 IDM 模式。
 func defaultDiagInteractiveCommandRunner(ctx context.Context, options diagCommandOptions) error {
 	targetSessionID := resolveDiagTargetSessionID(options.SessionID)
+	if targetSessionID == "" {
+		return errors.New(errNoShellSession)
+	}
 	return sendIDMEnterSignalFn(ctx, targetSessionID)
 }
 
 // defaultDiagAutoCommandRunner 处理 auto on/off/status，并输出状态文案。
 func defaultDiagAutoCommandRunner(ctx context.Context, options diagAutoCommandOptions, stdout io.Writer) error {
 	targetSessionID := resolveDiagTargetSessionID(options.SessionID)
+	if targetSessionID == "" {
+		return errors.New(errNoShellSession)
+	}
 	if options.QueryOnly {
 		enabled, err := queryAutoModeFn(ctx, targetSessionID)
 		if err != nil {
@@ -391,7 +405,7 @@ func triggerDiagAction(ctx context.Context, sessionID string, action string) (ga
 		bindSessionID = generateDiagSessionID(diagControlSessionPrefix)
 	}
 	if err := bindDiagStream(callCtx, client, bindSessionID); err != nil {
-		return gateway.MessageFrame{}, err
+		return gateway.MessageFrame{}, wrapDiagGatewayError(err)
 	}
 
 	var frame gateway.MessageFrame
@@ -407,19 +421,38 @@ func triggerDiagAction(ctx context.Context, sessionID string, action string) (ga
 			Retries: 0,
 		},
 	); err != nil {
-		return gateway.MessageFrame{}, err
+		return gateway.MessageFrame{}, wrapDiagGatewayError(err)
 	}
 	if frame.Type == gateway.FrameTypeError && frame.Error != nil {
-		return gateway.MessageFrame{}, fmt.Errorf(
+		return gateway.MessageFrame{}, wrapDiagGatewayError(fmt.Errorf(
 			"gateway trigger_action failed (%s): %s",
 			strings.TrimSpace(frame.Error.Code),
 			strings.TrimSpace(frame.Error.Message),
-		)
+		))
 	}
 	if frame.Type != gateway.FrameTypeAck {
 		return gateway.MessageFrame{}, fmt.Errorf("unexpected gateway frame type: %s", strings.TrimSpace(string(frame.Type)))
 	}
 	return frame, nil
+}
+
+// isNoShellSessionError 检测网关错误是否指示当前没有活跃的 shell 会话。
+func isNoShellSessionError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(err.Error(), errTargetRoleUnavailable)
+}
+
+// wrapDiagGatewayError 对无 shell 会话的网关错误附加友好提示。
+func wrapDiagGatewayError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if isNoShellSessionError(err) {
+		return fmt.Errorf("%s (original: %w)", errNoShellSession, err)
+	}
+	return err
 }
 
 // bindDiagStream 以 CLI 角色绑定事件流，接收后续 RPC 事件和通知。
