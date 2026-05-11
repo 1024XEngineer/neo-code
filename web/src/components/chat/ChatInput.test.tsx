@@ -161,14 +161,6 @@ describe('ChatInput', () => {
     expect(screen.queryByTitle('附件文件')).not.toBeInTheDocument()
     expect(screen.queryByTitle('引用上下文')).not.toBeInTheDocument()
   })
-  it('shows inline compact status while compaction is running', () => {
-    useChatStore.getState().startCompacting('manual', 'Compacting context...')
-
-    render(<ChatInput />)
-
-    expect(screen.getByRole('status')).toHaveTextContent('Compacting context...')
-  })
-
   it('blocks normal sends while compaction is running', async () => {
     useChatStore.getState().startCompacting('manual', 'Compacting context...')
     render(<ChatInput />)

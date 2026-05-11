@@ -12,10 +12,11 @@
 - P3：repo hooks（`<workspace>/.neocode/hooks.yaml`）+ workspace trust gate（`~/.neocode/trusted-workspaces.json`）
 - P4：生命周期点位扩展（permission/session/compact/subagent）+ 点位能力矩阵
 - P5：internal hooks 支持 `async/async_rewake` + run 内存通知队列（ephemeral 注入）
+- P6-lite：user `http/observe` hooks（仅观测回调）
 
 当前未实现能力：
 
-- command/http/prompt/agent hooks（P6）
+- command/prompt/agent hooks（P6）
 
 ## P2 user hooks 边界
 
@@ -28,7 +29,10 @@ P2 仅支持：
   `before_tool_call`、`after_tool_result`、`before_completion_decision`、`after_tool_failure`、
   `session_start`、`session_end`、`user_prompt_submit`、`post_compact`、`subagent_stop`
 - handler：`require_file_exists`、`warn_on_tool_call`、`add_context_note`
-- external kinds（`command/http/prompt/agent`）在 P6-lite 阶段显式拒绝，不会半生效
+- `kind=http + mode=observe`：允许发送 HTTP 观测回调（不支持 block）
+- `http observe` 默认不携带 metadata（`include_metadata=false`）；即使显式开启也会剥离 `result_content_preview`、`execution_error`
+- `http observe` 回调端点仅允许 loopback 地址（`localhost` / `127.0.0.1` / `::1`），避免误配为公网外发
+- external kinds 中 `command/prompt/agent` 在 P6-lite 阶段显式拒绝，不会半生效
 
 当前（P3）明确不支持：
 
@@ -46,7 +50,7 @@ repo hooks 文件路径固定为：
 ```
 
 仅支持与 P2 相同的 builtin 子集（`kind=builtin`、`mode=sync`、`UserAllowed=true` points、3 个 handlers）。
-external kinds（`command/http/prompt/agent`）在 P6-lite 阶段显式拒绝，不会加载执行。
+repo hooks 暂不支持 `kind=http`，external kinds（`command/http/prompt/agent`）在 repo 侧仍显式拒绝。
 
 执行顺序固定为：
 

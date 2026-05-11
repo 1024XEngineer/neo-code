@@ -113,7 +113,7 @@ context:
 | `runtime.hooks.user_hooks_enabled` | user hooks 开关；关闭后不加载 `runtime.hooks.items` |
 | `runtime.hooks.default_timeout_sec` | user hook 默认超时秒数，需 `> 0` |
 | `runtime.hooks.default_failure_policy` | 默认失败策略，支持 `warn_only` / `fail_open` / `fail_closed` |
-| `runtime.hooks.items` | user builtin hooks 列表；仅支持 `scope=user`、`kind=builtin`、`mode=sync` |
+| `runtime.hooks.items` | user hooks 列表；支持 `builtin/sync` 与 `http/observe` 两种子类型 |
 | `runtime.assets.max_session_asset_bytes` | 单个 `session_asset` 最大原始字节数，默认 `20971520`（20 MiB）；`0` 或未配置时回退默认值 |
 | `runtime.assets.max_session_assets_total_bytes` | 单次请求可携带的 `session_asset` 原始总字节上限，默认 `20971520`（20 MiB）；`0` 或未配置时回退默认值 |
 
@@ -125,13 +125,13 @@ context:
 | `enabled` | 是否启用该 hook，默认 `true` |
 | `point` | 支持 `before_tool_call` / `after_tool_result` / `before_completion_decision` / `before_permission_decision` / `after_tool_failure` / `session_start` / `session_end` / `user_prompt_submit` / `pre_compact` / `post_compact` / `subagent_start` / `subagent_stop` |
 | `scope` | P2 固定为 `user` |
-| `kind` | P2 固定为 `builtin` |
-| `mode` | P2 固定为 `sync` |
-| `handler` | 仅支持 `require_file_exists` / `warn_on_tool_call` / `add_context_note` |
+| `kind` | 支持 `builtin` 或 `http` |
+| `mode` | `builtin` 固定 `sync`；`http` 固定 `observe` |
+| `handler` | `builtin` 必填（`require_file_exists` / `warn_on_tool_call` / `add_context_note`）；`http` 必须留空 |
 | `priority` | 同一 hook point 内执行优先级，数值越大越先执行 |
 | `timeout_sec` | 覆盖默认超时；未配置时继承 `runtime.hooks.default_timeout_sec` |
 | `failure_policy` | 覆盖默认失败策略；未配置时继承 `runtime.hooks.default_failure_policy` |
-| `params` | handler 参数；不同 handler 使用不同键 |
+| `params` | `builtin` 为 handler 参数；`http` 至少包含 `url`（仅允许 loopback 主机，且为绝对 `http/https`；可选 `method`、`headers`、`include_metadata`，默认 `false`） |
 
 > 注意：`warn_only` 在 runtime 内部映射为 `fail_open`，表示记录失败但不阻断主链。
 
@@ -177,7 +177,7 @@ trust store 示例：
 
 - `runtime.hooks.enabled=false` 会关闭全部 hooks（internal/user/repo）。
 - repo hooks 仅支持 builtin 子集（上述 points + 3 个 handlers）。
-- P6-lite 阶段会显式拒绝 external kinds（`command/http/prompt/agent`），报错并且不会注册执行。
+- P6-lite 阶段仅放开 `kind=http + mode=observe`；`command/prompt/agent` 仍会显式拒绝。
 - 执行顺序固定：`internal -> user -> repo`。
 - 跨来源同 ID 允许并存；同来源内重复 ID 会报错。
 - trust store 缺失/空文件/损坏 JSON/结构错误时，按 untrusted 处理并发出 `repo_hooks_trust_store_invalid` 事件，不阻断启动。
