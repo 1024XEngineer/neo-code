@@ -868,6 +868,24 @@ func TestGatewayRPCClientResetConnectionClearsAutoSpawnAttempt(t *testing.T) {
 }
 
 func TestGatewayAutoSpawnHelpers(t *testing.T) {
+	t.Run("resolve ready window with env override", func(t *testing.T) {
+		t.Setenv(gatewayAutoSpawnReadyTimeoutEnv, "4500")
+		window := resolveGatewayAutoSpawnReadyWindow(context.Background())
+		if window != 4500*time.Millisecond {
+			t.Fatalf("window = %s, want 4.5s", window)
+		}
+	})
+
+	t.Run("resolve ready window caps to context deadline", func(t *testing.T) {
+		t.Setenv(gatewayAutoSpawnReadyTimeoutEnv, "20000")
+		ctx, cancel := context.WithTimeout(context.Background(), 1200*time.Millisecond)
+		defer cancel()
+		window := resolveGatewayAutoSpawnReadyWindow(ctx)
+		if window > 1200*time.Millisecond || window < 900*time.Millisecond {
+			t.Fatalf("window = %s, want about <=1.2s", window)
+		}
+	})
+
 	t.Run("wait ready with empty address", func(t *testing.T) {
 		err := waitGatewayReadyAfterAutoSpawn(context.Background(), "   ", func(string) (net.Conn, error) {
 			return nil, errors.New("should not dial")
@@ -1197,6 +1215,7 @@ func TestDefaultAutoSpawnGatewaySuccess(t *testing.T) {
 }
 
 func TestWaitGatewayReadyAfterAutoSpawnTimeout(t *testing.T) {
+	t.Setenv(gatewayAutoSpawnReadyTimeoutEnv, "3000")
 	start := time.Now()
 	err := waitGatewayReadyAfterAutoSpawn(context.Background(), "ipc://gateway", func(string) (net.Conn, error) {
 		return nil, os.ErrNotExist
