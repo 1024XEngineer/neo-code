@@ -516,3 +516,138 @@ func TestRuntimeHooksConfigEdgeBranches(t *testing.T) {
 		}
 	})
 }
+
+func TestRuntimeHTTPObserveValidationHelpers(t *testing.T) {
+	t.Parallel()
+
+	t.Run("allow localhost variants", func(t *testing.T) {
+		t.Parallel()
+		for _, rawURL := range []string{
+			"http://localhost:19090/hook",
+			"http://[::1]:19090/hook",
+		} {
+			item := RuntimeHookItemConfig{
+				ID:    "observe-http",
+				Point: runtimeHookPointBeforeToolCall,
+				Scope: runtimeHookScopeUser,
+				Kind:  runtimeHookKindHTTP,
+				Mode:  runtimeHookModeObserve,
+				Params: map[string]any{
+					"url":     rawURL,
+					"method":  "PATCH",
+					"headers": map[string]any{"X-Test": 7},
+				},
+			}
+			if err := validateRuntimeHTTPObserveItem(item, runtimeHookFailurePolicyWarnOnly); err != nil {
+				t.Fatalf("validateRuntimeHTTPObserveItem(%q) error = %v", rawURL, err)
+			}
+		}
+	})
+
+	t.Run("reject malformed headers and urls", func(t *testing.T) {
+		t.Parallel()
+		tests := []struct {
+			name string
+			item RuntimeHookItemConfig
+		}{
+			{
+				name: "invalid absolute url",
+				item: RuntimeHookItemConfig{
+					ID:    "observe-http",
+					Point: runtimeHookPointBeforeToolCall,
+					Scope: runtimeHookScopeUser,
+					Kind:  runtimeHookKindHTTP,
+					Mode:  runtimeHookModeObserve,
+					Params: map[string]any{
+						"url": "://bad",
+					},
+				},
+			},
+			{
+				name: "headers must be map",
+				item: RuntimeHookItemConfig{
+					ID:    "observe-http",
+					Point: runtimeHookPointBeforeToolCall,
+					Scope: runtimeHookScopeUser,
+					Kind:  runtimeHookKindHTTP,
+					Mode:  runtimeHookModeObserve,
+					Params: map[string]any{
+						"url":     "http://127.0.0.1:19090/hook",
+						"headers": "bad",
+					},
+				},
+			},
+			{
+				name: "empty header name",
+				item: RuntimeHookItemConfig{
+					ID:    "observe-http",
+					Point: runtimeHookPointBeforeToolCall,
+					Scope: runtimeHookScopeUser,
+					Kind:  runtimeHookKindHTTP,
+					Mode:  runtimeHookModeObserve,
+					Params: map[string]any{
+						"url":     "http://127.0.0.1:19090/hook",
+						"headers": map[string]any{" ": "x"},
+					},
+				},
+			},
+			{
+				name: "empty header value",
+				item: RuntimeHookItemConfig{
+					ID:    "observe-http",
+					Point: runtimeHookPointBeforeToolCall,
+					Scope: runtimeHookScopeUser,
+					Kind:  runtimeHookKindHTTP,
+					Mode:  runtimeHookModeObserve,
+					Params: map[string]any{
+						"url":     "http://127.0.0.1:19090/hook",
+						"headers": map[string]any{"X-Test": "   "},
+					},
+				},
+			},
+		}
+		for _, tc := range tests {
+			tc := tc
+			t.Run(tc.name, func(t *testing.T) {
+				t.Parallel()
+				if err := validateRuntimeHTTPObserveItem(tc.item, runtimeHookFailurePolicyWarnOnly); err == nil {
+					t.Fatalf("expected validation error for %+v", tc.item.Params)
+				}
+			})
+		}
+	})
+
+	t.Run("helper functions", func(t *testing.T) {
+		t.Parallel()
+		if !isRuntimeHookHTTPObserveLoopbackHost("localhost") {
+			t.Fatal("localhost should be treated as loopback")
+		}
+		if !isRuntimeHookHTTPObserveLoopbackHost("::1") {
+			t.Fatal("::1 should be treated as loopback")
+		}
+		if isRuntimeHookHTTPObserveLoopbackHost("") {
+			t.Fatal("empty host should not be loopback")
+		}
+		if isRuntimeHookHTTPObserveLoopbackHost("example.com") {
+			t.Fatal("remote host should not be loopback")
+		}
+		if got := readRuntimeHookParamString(nil, "x"); got != "" {
+			t.Fatalf("readRuntimeHookParamString(nil) = %q", got)
+		}
+		if got := readRuntimeHookParamString(map[string]any{"x": 123}, "x"); got != "123" {
+			t.Fatalf("readRuntimeHookParamString(non-string) = %q", got)
+		}
+		if !runtimeHookPointUserAllowed(runtimeHookPointBeforeToolCall) {
+			t.Fatal("before_tool_call should allow user hooks")
+		}
+		for _, point := range []string{
+			runtimeHookPointBeforePermissionDecision,
+			runtimeHookPointPreCompact,
+			runtimeHookPointSubAgentStart,
+		} {
+			if runtimeHookPointUserAllowed(point) {
+				t.Fatalf("%s should be rejected for user hooks", point)
+			}
+		}
+	})
+}

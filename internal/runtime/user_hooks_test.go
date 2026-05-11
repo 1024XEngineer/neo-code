@@ -893,6 +893,289 @@ func TestBuildUserBuiltinHookHandlerEdgeCases(t *testing.T) {
 
 }
 
+func TestBuildConfiguredHookSpecAndValidationHelpers(t *testing.T) {
+	t.Parallel()
+
+	t.Run("build repo http observe spec", func(t *testing.T) {
+		t.Parallel()
+		item := config.RuntimeHookItemConfig{
+			ID:            "repo-http-observe",
+			Point:         "after_tool_result",
+			Scope:         "repo",
+			Kind:          "http",
+			Mode:          "observe",
+			TimeoutSec:    3,
+			FailurePolicy: "warn_only",
+			Params: map[string]any{
+				"url": "http://localhost:19090/hook",
+			},
+		}
+		spec, err := buildRepoHookSpec(item, t.TempDir())
+		if err != nil {
+			t.Fatalf("buildRepoHookSpec() error = %v", err)
+		}
+		if spec.Scope != runtimehooks.HookScopeRepo || spec.Source != runtimehooks.HookSourceRepo {
+			t.Fatalf("unexpected repo spec scope/source: %+v", spec)
+		}
+		if spec.Kind != runtimehooks.HookKindHTTP || spec.Mode != runtimehooks.HookModeObserve {
+			t.Fatalf("unexpected repo spec kind/mode: %+v", spec)
+		}
+	})
+
+	t.Run("validation rejects unsupported combinations", func(t *testing.T) {
+		t.Parallel()
+		tests := []struct {
+			name  string
+			item  config.RuntimeHookItemConfig
+			scope runtimehooks.HookScope
+		}{
+			{
+				name:  "scope mismatch",
+				scope: runtimehooks.HookScopeUser,
+				item: config.RuntimeHookItemConfig{
+					ID:    "bad-scope",
+					Scope: "repo",
+					Kind:  "builtin",
+					Mode:  "sync",
+				},
+			},
+			{
+				name:  "builtin bad mode",
+				scope: runtimehooks.HookScopeUser,
+				item: config.RuntimeHookItemConfig{
+					ID:    "bad-mode",
+					Scope: "user",
+					Kind:  "builtin",
+					Mode:  "observe",
+				},
+			},
+			{
+				name:  "http bad mode",
+				scope: runtimehooks.HookScopeUser,
+				item: config.RuntimeHookItemConfig{
+					ID:    "bad-http-mode",
+					Scope: "user",
+					Kind:  "http",
+					Mode:  "sync",
+				},
+			},
+			{
+				name:  "http fail closed",
+				scope: runtimehooks.HookScopeUser,
+				item: config.RuntimeHookItemConfig{
+					ID:            "bad-http-policy",
+					Scope:         "user",
+					Kind:          "http",
+					Mode:          "observe",
+					FailurePolicy: "fail_closed",
+				},
+			},
+			{
+				name:  "external kind",
+				scope: runtimehooks.HookScopeUser,
+				item: config.RuntimeHookItemConfig{
+					ID:    "bad-external",
+					Scope: "user",
+					Kind:  "prompt",
+					Mode:  "sync",
+				},
+			},
+			{
+				name:  "unknown kind",
+				scope: runtimehooks.HookScopeUser,
+				item: config.RuntimeHookItemConfig{
+					ID:    "bad-kind",
+					Scope: "user",
+					Kind:  "custom",
+					Mode:  "sync",
+				},
+			},
+		}
+		for _, tc := range tests {
+			tc := tc
+			t.Run(tc.name, func(t *testing.T) {
+				t.Parallel()
+				if err := validateConfiguredHookItemForP6Lite(tc.item, tc.scope); err == nil {
+					t.Fatalf("expected validation error for %+v", tc.item)
+				}
+			})
+		}
+	})
+
+	t.Run("external kind helper", func(t *testing.T) {
+		t.Parallel()
+		for _, kind := range []string{"command", "http", "prompt", "agent"} {
+			if !isExternalHookKind(kind) {
+				t.Fatalf("%q should be treated as external kind", kind)
+			}
+		}
+		if isExternalHookKind("builtin") {
+			t.Fatal("builtin should not be treated as external kind")
+		}
+	})
+}
+
+func TestHTTPObserveHelperBranches(t *testing.T) {
+	t.Parallel()
+
+	t.Run("bool and metadata helpers", func(t *testing.T) {
+		t.Parallel()
+		if !readHookParamBool(map[string]any{"x": true}, "x", false) {
+			t.Fatal("bool true should be preserved")
+		}
+		if readHookParamBool(map[string]any{"x": "off"}, "x", true) {
+			t.Fatal("string off should decode to false")
+		}
+		if !readHookParamBool(map[string]any{"x": "yes"}, "x", false) {
+			t.Fatal("string yes should decode to true")
+		}
+		if readHookParamBool(map[string]any{"x": 0}, "x", true) {
+			t.Fatal("int 0 should decode to false")
+		}
+		if !readHookParamBool(map[string]any{"x": int64(2)}, "x", false) {
+			t.Fatal("int64 non-zero should decode to true")
+		}
+		if readHookParamBool(map[string]any{"x": float64(0)}, "x", true) {
+			t.Fatal("float64 0 should decode to false")
+		}
+		if !readHookParamBool(map[string]any{"x": struct{}{}}, "x", true) {
+			t.Fatal("unsupported type should return default")
+		}
+		if sanitizeHTTPObserveMetadata(nil) != nil {
+			t.Fatal("nil metadata should stay nil")
+		}
+		if sanitizeHTTPObserveMetadata(map[string]any{}) != nil {
+			t.Fatal("empty metadata should stay nil")
+		}
+	})
+
+	t.Run("endpoint and header validation", func(t *testing.T) {
+		t.Parallel()
+		validURLs := []string{
+			"http://localhost:19090/hook",
+			"https://127.0.0.1:19090/hook",
+			"http://[::1]:19090/hook",
+		}
+		for _, rawURL := range validURLs {
+			if err := validateHTTPObserveEndpoint(rawURL); err != nil {
+				t.Fatalf("validateHTTPObserveEndpoint(%q) error = %v", rawURL, err)
+			}
+		}
+		for _, rawURL := range []string{"", "://bad", "file:///tmp/x", "https://example.com/hook"} {
+			if err := validateHTTPObserveEndpoint(rawURL); err == nil {
+				t.Fatalf("expected endpoint %q to fail validation", rawURL)
+			}
+		}
+		if !isHTTPObserveLoopbackHost("127.0.0.1") || !isHTTPObserveLoopbackHost("::1") {
+			t.Fatal("loopback IPs should be allowed")
+		}
+		if isHTTPObserveLoopbackHost("example.com") {
+			t.Fatal("remote host should not be allowed")
+		}
+
+		headers, err := buildHTTPObserveHeaders(map[string]any{"headers": map[string]any{"X-Test": 9}})
+		if err != nil {
+			t.Fatalf("buildHTTPObserveHeaders() error = %v", err)
+		}
+		if headers["X-Test"] != "9" {
+			t.Fatalf("header value = %q, want %q", headers["X-Test"], "9")
+		}
+		if headers, err := buildHTTPObserveHeaders(nil); err != nil || headers != nil {
+			t.Fatalf("nil headers should return nil,nil, got %#v err=%v", headers, err)
+		}
+		for _, params := range []map[string]any{
+			{"headers": "bad"},
+			{"headers": map[string]any{" ": "x"}},
+			{"headers": map[string]any{"X-Test": " "}},
+		} {
+			if _, err := buildHTTPObserveHeaders(params); err == nil {
+				t.Fatalf("expected buildHTTPObserveHeaders error for %+v", params)
+			}
+		}
+	})
+
+	t.Run("handler failure branches", func(t *testing.T) {
+		t.Parallel()
+		item := config.RuntimeHookItemConfig{
+			ID:    "observe-http",
+			Point: "after_tool_result",
+			Params: map[string]any{
+				"url":              "http://127.0.0.1:1/hook",
+				"include_metadata": "yes",
+			},
+		}
+		handler, err := buildUserHTTPObserveHookHandler(item)
+		if err != nil {
+			t.Fatalf("buildUserHTTPObserveHookHandler() error = %v", err)
+		}
+		result := handler(context.Background(), runtimehooks.HookContext{Metadata: map[string]any{"tool_name": "bash"}})
+		if result.Status != runtimehooks.HookResultFailed || !strings.Contains(result.Error, "request failed") {
+			t.Fatalf("unexpected request failure result: %+v", result)
+		}
+
+		server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			writer.WriteHeader(http.StatusBadRequest)
+		}))
+		defer server.Close()
+		item.Params["url"] = server.URL
+		handler, err = buildUserHTTPObserveHookHandler(item)
+		if err != nil {
+			t.Fatalf("buildUserHTTPObserveHookHandler(server) error = %v", err)
+		}
+		result = handler(context.Background(), runtimehooks.HookContext{})
+		if result.Status != runtimehooks.HookResultFailed || result.Error != result.Message {
+			t.Fatalf("empty response body should reuse message as error, got %+v", result)
+		}
+
+		marshalItem := config.RuntimeHookItemConfig{
+			ID:    "observe-http-marshal",
+			Point: "after_tool_result",
+			Params: map[string]any{
+				"url":              server.URL,
+				"include_metadata": 1,
+			},
+		}
+		handler, err = buildUserHTTPObserveHookHandler(marshalItem)
+		if err != nil {
+			t.Fatalf("buildUserHTTPObserveHookHandler(marshal) error = %v", err)
+		}
+		result = handler(context.Background(), runtimehooks.HookContext{
+			Metadata: map[string]any{"bad": func() {}},
+		})
+		if result.Status != runtimehooks.HookResultFailed || !strings.Contains(result.Error, "marshal payload failed") {
+			t.Fatalf("unexpected marshal failure result: %+v", result)
+		}
+	})
+
+	t.Run("drain nil response", func(t *testing.T) {
+		t.Parallel()
+		drainAndCloseHTTPResponseBody(nil)
+		drainAndCloseHTTPResponseBody(&http.Response{})
+	})
+}
+
+func TestResolveHookPathWithinWorkdirRejectsSymlinkEscape(t *testing.T) {
+	t.Parallel()
+
+	workdir := t.TempDir()
+	outsideDir := t.TempDir()
+	outsideFile := filepath.Join(outsideDir, "escape.txt")
+	if err := os.WriteFile(outsideFile, []byte("escape"), 0o644); err != nil {
+		t.Fatalf("write outside file: %v", err)
+	}
+	link := filepath.Join(workdir, "escape-link.txt")
+	if err := os.Symlink(outsideFile, link); err != nil {
+		if gruntime.GOOS == "windows" &&
+			(errors.Is(err, os.ErrPermission) || strings.Contains(strings.ToLower(err.Error()), "privilege")) {
+			t.Skipf("skip symlink escape test without Windows symlink privilege: %v", err)
+		}
+		t.Fatalf("create symlink escape: %v", err)
+	}
+	if _, err := resolveHookPathWithinWorkdir(workdir, "escape-link.txt"); err == nil {
+		t.Fatal("expected symlink escaping workdir to be rejected")
+	}
+}
+
 func TestConfigureRuntimeHooksRejectsExternalKindAndDoesNotRegister(t *testing.T) {
 	t.Parallel()
 
