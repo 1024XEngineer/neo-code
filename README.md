@@ -64,8 +64,17 @@ NeoCode 是一个运行在本地开发环境中的 AI Coding Agent。
 
 ## 预览
 
-![NeoCode TUI 对话视图](docs/assert/readme/preview-1.png)
-![NeoCode Gateway 交互视图](docs/assert/readme/preview-5.png)
+TUI：
+
+![preview-1](docs/assert/readme/preview-1.png)
+
+Web：
+
+![preview-2](docs/assert/readme/preview-2.png)
+
+Feishu：
+
+![preview-3](docs/assert/readme/preview-3.png)
 
 更多端侧截图与交互说明：
 - [Web UI 使用指南](https://neocode-docs.pages.dev/guide/web-ui)
@@ -127,11 +136,11 @@ neocode web
 ### 4. Web / 飞书快速入口
 
 ```bash
-# 浏览器端 Web UI（默认 127.0.0.1:9090）
+# 浏览器端 Web UI（默认 127.0.0.1:8080）
 neocode web
 
 # 指定 Web UI 监听地址（例如本地调试）
-neocode web --http-listen 127.0.0.1:9090 --skip-build
+neocode web --http-listen 127.0.0.1:8080 --skip-build
 
 # 飞书 SDK 模式（推荐，无需公网入口）
 neocode feishu-adapter --ingress sdk --gateway-listen "127.0.0.1:8080"

@@ -490,7 +490,7 @@ func TestCallOrderAuthenticateBindRun(t *testing.T) {
 	}
 }
 
-func TestGatewayEventsMappedToMessagesAndPermissionCard(t *testing.T) {
+func TestGatewayEventsIgnoreStalePermissionRequestedAfterTerminal(t *testing.T) {
 	adapter := newTestAdapter(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -512,17 +512,10 @@ func TestGatewayEventsMappedToMessagesAndPermissionCard(t *testing.T) {
 	})
 	time.Sleep(30 * time.Millisecond)
 	msgs := adapterTestMessenger(adapter).snapshot()
-	if len(msgs) < 1 {
-		t.Fatalf("messages = %#v, want >=1", msgs)
-	}
-	foundCard := false
 	for _, message := range msgs {
 		if message.kind == "card" && message.card.RequestID == "perm-1" {
-			foundCard = true
+			t.Fatalf("unexpected stale permission card after run terminal: %#v", msgs)
 		}
-	}
-	if !foundCard {
-		t.Fatalf("expected permission card message, got %#v", msgs)
 	}
 }
 
@@ -824,6 +817,43 @@ func TestRunTerminalEventUntracksActiveRun(t *testing.T) {
 	adapter.mu.RUnlock()
 	if exists {
 		t.Fatalf("expected run binding cleaned after terminal event")
+	}
+}
+
+func TestPermissionRequestedAfterRunTerminalDoesNotReopenApprovalCard(t *testing.T) {
+	adapter := newTestAdapter(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go adapter.consumeGatewayEvents(ctx)
+
+	sessionID := BuildSessionID("chat-stale-perm")
+	runID := BuildRunID("msg-stale-perm")
+	chatID := "chat-stale-perm"
+	adapter.trackSession(sessionID, runID, chatID, "stale permission task")
+
+	pushGatewayEvent(t, adapterTestGateway(adapter), sessionID, runID, "run_done", map[string]any{
+		"runtime_event_type": "agent_done",
+		"payload": map[string]any{
+			"content": "done",
+		},
+	})
+	time.Sleep(20 * time.Millisecond)
+
+	// run 已终态且绑定已清理时，乱序/重复 permission_requested 不应重新弹出审批卡片。
+	pushGatewayEvent(t, adapterTestGateway(adapter), sessionID, runID, "run_progress", map[string]any{
+		"runtime_event_type": "permission_requested",
+		"payload": map[string]any{
+			"request_id": "perm-stale-1",
+			"reason":     "旧事件回放",
+		},
+	})
+	time.Sleep(30 * time.Millisecond)
+
+	msgs := adapterTestMessenger(adapter).snapshot()
+	for _, message := range msgs {
+		if message.kind == "card" && message.card.RequestID == "perm-stale-1" {
+			t.Fatalf("unexpected stale permission card after terminal run: %#v", msgs)
+		}
 	}
 }
 

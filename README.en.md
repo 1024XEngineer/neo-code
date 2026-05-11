@@ -65,7 +65,8 @@ Core loop:
 ## Preview
 
 ![NeoCode TUI chat view](docs/assert/readme/preview-1.png)
-![NeoCode Gateway interaction example](docs/assert/readme/preview-5.png)
+![NeoCode Web UI view](docs/assert/readme/preview-2.png)
+![NeoCode Feishu adapter view](docs/assert/readme/preview-3.png)
 
 More screenshots and interaction details:
 - [Web UI Guide](https://neocode-docs.pages.dev/guide/web-ui)
@@ -128,11 +129,11 @@ Tagged release builds already embed Web UI assets (`web/dist`) into the `neocode
 ### 4. Quick Web / Feishu Entry
 
 ```bash
-# Browser Web UI (default 127.0.0.1:9090)
+# Browser Web UI (default 127.0.0.1:8080)
 neocode web
 
 # Specify Web UI listen address (for local debugging)
-neocode web --http-listen 127.0.0.1:9090 --skip-build
+neocode web --http-listen 127.0.0.1:8080 --skip-build
 
 # Feishu SDK mode (recommended, no public ingress required)
 neocode feishu-adapter --ingress sdk --gateway-listen "127.0.0.1:8080"

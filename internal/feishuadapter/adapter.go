@@ -64,16 +64,16 @@ type Adapter struct {
 
 	nowFn func() time.Time
 
-	mu                sync.RWMutex
-	activeRuns        map[string]sessionBinding
-	sessionChats      map[string]string
-	requestRuns       map[string]string
-	lastProgressAt    map[string]time.Time
-	permissionCards   map[string]string // requestID -> card message_id
+	mu              sync.RWMutex
+	activeRuns      map[string]sessionBinding
+	sessionChats    map[string]string
+	requestRuns     map[string]string
+	lastProgressAt  map[string]time.Time
+	permissionCards map[string]string // requestID -> card message_id
 	// resolvedPermissions 记录已完成审批的 request_id，避免重复事件将状态回滚为 pending。
 	resolvedPermissions map[string]string // requestID -> decision
-	userQuestionCards map[string]string // requestID -> card message_id
-	pendingQuestions  map[string]userQuestionEntry
+	userQuestionCards   map[string]string // requestID -> card message_id
+	pendingQuestions    map[string]userQuestionEntry
 
 	permissionCardDismissDelay time.Duration
 }
@@ -93,20 +93,20 @@ func New(cfg Config, gateway GatewayClient, messenger Messenger, logger *log.Log
 		logger = log.New(io.Discard, "", 0)
 	}
 	return &Adapter{
-		cfg:               cfg,
-		gateway:           gateway,
-		messenger:         messenger,
-		logger:            logger,
-		idem:              newIdempotencyStore(cfg.IdempotencyTTL),
-		nowFn:             func() time.Time { return time.Now().UTC() },
-		activeRuns:        make(map[string]sessionBinding),
-		sessionChats:      make(map[string]string),
-		requestRuns:       make(map[string]string),
-		lastProgressAt:    make(map[string]time.Time),
-		permissionCards:   make(map[string]string),
-		resolvedPermissions: make(map[string]string),
-		userQuestionCards: make(map[string]string),
-		pendingQuestions:  make(map[string]userQuestionEntry),
+		cfg:                        cfg,
+		gateway:                    gateway,
+		messenger:                  messenger,
+		logger:                     logger,
+		idem:                       newIdempotencyStore(cfg.IdempotencyTTL),
+		nowFn:                      func() time.Time { return time.Now().UTC() },
+		activeRuns:                 make(map[string]sessionBinding),
+		sessionChats:               make(map[string]string),
+		requestRuns:                make(map[string]string),
+		lastProgressAt:             make(map[string]time.Time),
+		permissionCards:            make(map[string]string),
+		resolvedPermissions:        make(map[string]string),
+		userQuestionCards:          make(map[string]string),
+		pendingQuestions:           make(map[string]userQuestionEntry),
 		permissionCardDismissDelay: defaultPermissionCardDismissDelay,
 	}, nil
 }
@@ -327,7 +327,6 @@ func (a *Adapter) untrackRun(sessionID string, runID string) {
 			if requestRunKey == key {
 				delete(a.requestRuns, requestID)
 				delete(a.permissionCards, requestID)
-				delete(a.resolvedPermissions, requestID)
 				delete(a.userQuestionCards, requestID)
 				delete(a.pendingQuestions, requestID)
 			}
@@ -614,51 +613,49 @@ func (a *Adapter) markPermissionPending(sessionID string, runID string, requestI
 	key := runBindingKey(sessionID, runID)
 	a.mu.Lock()
 	binding, ok := a.activeRuns[key]
+	if !ok {
+		a.mu.Unlock()
+		return false
+	}
 	if _, resolved := a.resolvedPermissions[normalizedRequestID]; resolved {
 		a.mu.Unlock()
 		return false
 	}
 
 	shouldSendCard := strings.TrimSpace(a.permissionCards[normalizedRequestID]) == ""
-	if ok {
-		binding.ApprovalStatus = "pending"
-		found := false
-		for i := range binding.ApprovalRecords {
-			if binding.ApprovalRecords[i].RequestID != normalizedRequestID {
-				continue
-			}
-			found = true
-			if strings.TrimSpace(binding.ApprovalRecords[i].ToolName) == "" && strings.TrimSpace(toolName) != "" {
-				binding.ApprovalRecords[i].ToolName = strings.TrimSpace(toolName)
-			}
-			if strings.TrimSpace(reason) != "" {
-				binding.ApprovalRecords[i].Reason = strings.TrimSpace(reason)
-			}
-			break
+	binding.ApprovalStatus = "pending"
+	found := false
+	for i := range binding.ApprovalRecords {
+		if binding.ApprovalRecords[i].RequestID != normalizedRequestID {
+			continue
 		}
-		if !found {
-			binding.ApprovalRecords = append(binding.ApprovalRecords, approvalEntry{
-				RequestID: normalizedRequestID,
-				ToolName:  strings.TrimSpace(toolName),
-				Reason:    strings.TrimSpace(reason),
-				Decision:  "pending",
-			})
+		found = true
+		if strings.TrimSpace(binding.ApprovalRecords[i].ToolName) == "" && strings.TrimSpace(toolName) != "" {
+			binding.ApprovalRecords[i].ToolName = strings.TrimSpace(toolName)
 		}
 		if strings.TrimSpace(reason) != "" {
-			binding.LastSummary = strings.TrimSpace(reason)
+			binding.ApprovalRecords[i].Reason = strings.TrimSpace(reason)
 		}
-		a.activeRuns[key] = binding
+		break
 	}
-	if ok {
-		a.requestRuns[normalizedRequestID] = key
+	if !found {
+		binding.ApprovalRecords = append(binding.ApprovalRecords, approvalEntry{
+			RequestID: normalizedRequestID,
+			ToolName:  strings.TrimSpace(toolName),
+			Reason:    strings.TrimSpace(reason),
+			Decision:  "pending",
+		})
 	}
+	if strings.TrimSpace(reason) != "" {
+		binding.LastSummary = strings.TrimSpace(reason)
+	}
+	a.activeRuns[key] = binding
+	a.requestRuns[normalizedRequestID] = key
 
 	cardID := ""
 	payload := StatusCardPayload{}
-	if ok {
-		cardID = strings.TrimSpace(binding.CardID)
-		payload = binding.statusCardPayload()
-	}
+	cardID = strings.TrimSpace(binding.CardID)
+	payload = binding.statusCardPayload()
 	a.mu.Unlock()
 	if cardID != "" {
 		if err := a.messenger.UpdateCard(context.Background(), cardID, payload); err != nil {
