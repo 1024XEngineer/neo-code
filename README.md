@@ -133,6 +133,8 @@ neocode web
 
 标签发布版已经将 Web UI 的 `web/dist` 内嵌进 `neocode` 二进制，执行 `neocode web` 时不再要求用户机器安装 Node.js 或 npm。如果你在源码仓库里运行 `go run ./cmd/neocode web`，当本地缺少 `web/dist` 时仍会自动尝试构建前端。
 
+Electron 桌面端发布图标使用已提交的 `web/build/icon.png`、`web/build/icon.ico` 和 `web/build/icon.icns`。只有替换 `web/build/icon.png` 源图时，才需要在 `web/` 目录手动运行 `npm run generate:icons` 重新生成 Windows 与 macOS 图标；该命令在 Windows 使用 PowerShell/.NET 图像能力，在 macOS 使用 `sips`，在 Linux 需要 ImageMagick 的 `magick` 命令。
+
 ### 4. Web / 飞书快速入口
 
 ```bash
