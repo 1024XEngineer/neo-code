@@ -14,6 +14,7 @@ import {
   Shield,
   X,
   Check,
+  Info,
 } from 'lucide-react'
 
 export default function ChatPanel() {
@@ -39,11 +40,14 @@ export default function ChatPanel() {
   const [userQuestionText, setUserQuestionText] = useState('')
   const [userQuestionSingleChoice, setUserQuestionSingleChoice] = useState('')
   const [userQuestionMultiChoices, setUserQuestionMultiChoices] = useState<string[]>([])
+  const [userQuestionAdditionalText, setUserQuestionAdditionalText] = useState('')
+  const [expandedOptionDescriptions, setExpandedOptionDescriptions] = useState<Record<string, boolean>>({})
   const titleRef = useRef<HTMLDivElement>(null)
   const autoResolvingPermissionIdsRef = useRef<Set<string>>(new Set())
 
   const currentSession = projects.flatMap((p) => p.sessions).find((s) => s.id === currentSessionId)
   const title = currentSession?.title || '新对话'
+  const pendingQuestionOptions = parseUserQuestionOptions(Array.isArray(pendingUserQuestion?.options) ? pendingUserQuestion.options : [])
 
   async function handlePermissionDecision(decision: string) {
     if (!gatewayAPI || !currentPermission || isResolvingPermission) return
@@ -78,12 +82,20 @@ export default function ChatPanel() {
     return options
   }
 
+  function toggleOptionDescription(optionKey: string) {
+    setExpandedOptionDescriptions((prev) => ({
+      ...prev,
+      [optionKey]: !prev[optionKey],
+    }))
+  }
+
   async function handleSubmitUserQuestion(status: 'answered' | 'skipped') {
     if (!gatewayAPI || !pendingUserQuestion || isResolvingUserQuestion) return
 
     const options = parseUserQuestionOptions(Array.isArray(pendingUserQuestion.options) ? pendingUserQuestion.options : [])
     let values: string[] = []
     let message = ''
+    const additionalText = userQuestionAdditionalText.trim()
 
     if (status === 'answered') {
       switch (pendingUserQuestion.kind) {
@@ -99,16 +111,17 @@ export default function ChatPanel() {
         }
         case 'single_choice': {
           const selected = userQuestionSingleChoice.trim()
-          if (!selected) {
-            useUIStore.getState().showToast('Please select one option', 'info')
+          if (!selected && !additionalText) {
+            useUIStore.getState().showToast('Please select one option or enter another idea', 'info')
             return
           }
-          values = [selected]
+          if (selected) values = [selected]
+          if (additionalText) message = additionalText
           break
         }
         case 'multi_choice': {
-          if (userQuestionMultiChoices.length === 0) {
-            useUIStore.getState().showToast('Please select at least one option', 'info')
+          if (userQuestionMultiChoices.length === 0 && !additionalText) {
+            useUIStore.getState().showToast('Please select at least one option or enter another idea', 'info')
             return
           }
           const maxChoices = Number(pendingUserQuestion.max_choices || 0)
@@ -117,6 +130,7 @@ export default function ChatPanel() {
             return
           }
           values = [...userQuestionMultiChoices]
+          if (additionalText) message = additionalText
           break
         }
         default: {
@@ -153,11 +167,15 @@ export default function ChatPanel() {
       setUserQuestionText('')
       setUserQuestionSingleChoice('')
       setUserQuestionMultiChoices([])
+      setUserQuestionAdditionalText('')
+      setExpandedOptionDescriptions({})
       return
     }
     setUserQuestionText('')
     setUserQuestionSingleChoice('')
     setUserQuestionMultiChoices([])
+    setUserQuestionAdditionalText('')
+    setExpandedOptionDescriptions({})
   }, [pendingUserQuestion?.request_id])
 
   useEffect(() => {
@@ -331,43 +349,152 @@ export default function ChatPanel() {
             )}
             {pendingUserQuestion.kind === 'single_choice' && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 12 }}>
-                {parseUserQuestionOptions(Array.isArray(pendingUserQuestion.options) ? pendingUserQuestion.options : []).map((option) => (
-                  <label key={option.value} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
-                    <input
-                      type="radio"
-                      name={`ask-${pendingUserQuestion.request_id}`}
-                      value={option.value}
-                      checked={userQuestionSingleChoice === option.value}
-                      onChange={() => setUserQuestionSingleChoice(option.value)}
-                      disabled={isResolvingUserQuestion}
-                    />
-                    <span>{option.label}</span>
-                  </label>
-                ))}
+                {pendingQuestionOptions.map((option, index) => {
+                  const optionId = `ask-${pendingUserQuestion.request_id}-single-${index}`
+                  const optionKey = `${pendingUserQuestion.request_id}-single-${option.value}-${index}`
+                  const descriptionId = `desc-${optionId}`
+                  const expanded = !!expandedOptionDescriptions[optionKey]
+                  return (
+                    <div key={optionKey} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
+                        <input
+                          id={optionId}
+                          type="radio"
+                          name={`ask-${pendingUserQuestion.request_id}`}
+                          value={option.value}
+                          checked={userQuestionSingleChoice === option.value}
+                          onChange={() => setUserQuestionSingleChoice(option.value)}
+                          disabled={isResolvingUserQuestion}
+                        />
+                        <label htmlFor={optionId}>{option.label}</label>
+                        {option.description && (
+                          <button
+                            type="button"
+                            onClick={() => toggleOptionDescription(optionKey)}
+                            aria-label={`查看选项说明：${option.label}`}
+                            aria-expanded={expanded}
+                            aria-controls={descriptionId}
+                            style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              width: 18,
+                              height: 18,
+                              borderRadius: '50%',
+                              border: '1px solid var(--border-primary)',
+                              background: 'var(--bg-primary)',
+                              color: 'var(--text-secondary)',
+                              cursor: 'pointer',
+                              padding: 0,
+                            }}
+                          >
+                            <Info size={11} />
+                          </button>
+                        )}
+                      </div>
+                      {option.description && expanded && (
+                        <div
+                          id={descriptionId}
+                          style={{
+                            marginLeft: 24,
+                            fontSize: 11,
+                            color: 'var(--text-secondary)',
+                            lineHeight: 1.5,
+                            background: 'var(--bg-primary)',
+                            border: '1px solid var(--border-primary)',
+                            borderRadius: 6,
+                            padding: '6px 8px',
+                          }}
+                        >
+                          {option.description}
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
               </div>
             )}
             {pendingUserQuestion.kind === 'multi_choice' && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 12 }}>
-                {parseUserQuestionOptions(Array.isArray(pendingUserQuestion.options) ? pendingUserQuestion.options : []).map((option) => {
+                {pendingQuestionOptions.map((option, index) => {
                   const checked = userQuestionMultiChoices.includes(option.value)
+                  const optionId = `ask-${pendingUserQuestion.request_id}-multi-${index}`
+                  const optionKey = `${pendingUserQuestion.request_id}-multi-${option.value}-${index}`
+                  const descriptionId = `desc-${optionId}`
+                  const expanded = !!expandedOptionDescriptions[optionKey]
                   return (
-                    <label key={option.value} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
-                      <input
-                        type="checkbox"
-                        checked={checked}
-                        onChange={() => {
-                          if (checked) {
-                            setUserQuestionMultiChoices((prev) => prev.filter((v) => v !== option.value))
-                            return
-                          }
-                          setUserQuestionMultiChoices((prev) => [...prev, option.value])
-                        }}
-                        disabled={isResolvingUserQuestion}
-                      />
-                      <span>{option.label}</span>
-                    </label>
+                    <div key={optionKey} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
+                        <input
+                          id={optionId}
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => {
+                            if (checked) {
+                              setUserQuestionMultiChoices((prev) => prev.filter((v) => v !== option.value))
+                              return
+                            }
+                            setUserQuestionMultiChoices((prev) => [...prev, option.value])
+                          }}
+                          disabled={isResolvingUserQuestion}
+                        />
+                        <label htmlFor={optionId}>{option.label}</label>
+                        {option.description && (
+                          <button
+                            type="button"
+                            onClick={() => toggleOptionDescription(optionKey)}
+                            aria-label={`查看选项说明：${option.label}`}
+                            aria-expanded={expanded}
+                            aria-controls={descriptionId}
+                            style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              width: 18,
+                              height: 18,
+                              borderRadius: '50%',
+                              border: '1px solid var(--border-primary)',
+                              background: 'var(--bg-primary)',
+                              color: 'var(--text-secondary)',
+                              cursor: 'pointer',
+                              padding: 0,
+                            }}
+                          >
+                            <Info size={11} />
+                          </button>
+                        )}
+                      </div>
+                      {option.description && expanded && (
+                        <div
+                          id={descriptionId}
+                          style={{
+                            marginLeft: 24,
+                            fontSize: 11,
+                            color: 'var(--text-secondary)',
+                            lineHeight: 1.5,
+                            background: 'var(--bg-primary)',
+                            border: '1px solid var(--border-primary)',
+                            borderRadius: 6,
+                            padding: '6px 8px',
+                          }}
+                        >
+                          {option.description}
+                        </div>
+                      )}
+                    </div>
                   )
                 })}
+              </div>
+            )}
+            {(pendingUserQuestion.kind === 'single_choice' || pendingUserQuestion.kind === 'multi_choice') && (
+              <div style={{ marginBottom: 12 }}>
+                <textarea
+                  value={userQuestionAdditionalText}
+                  onChange={(e) => setUserQuestionAdditionalText(e.target.value)}
+                  placeholder="否，我有其他想法要告诉Neo-Code"
+                  disabled={isResolvingUserQuestion}
+                  style={{ width: '100%', minHeight: 72, borderRadius: 8, border: '1px solid var(--border-primary)', background: 'var(--bg-primary)', color: 'var(--text-primary)', padding: '10px 12px', fontSize: 12, resize: 'vertical' }}
+                />
               </div>
             )}
             <div className="permission-actions">
