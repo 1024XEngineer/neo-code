@@ -19,7 +19,7 @@ import {
 import SlashCommandMenu from './SlashCommandMenu'
 import SkillPicker from './SkillPicker'
 import ModelSelector from './ModelSelector'
-import { Send, Square } from 'lucide-react'
+import { LoaderCircle, Send, Square } from 'lucide-react'
 
 const slashMenuAnchorStyle: React.CSSProperties = {
   position: 'absolute',
@@ -129,6 +129,8 @@ export default function ChatInput() {
   const runCancelledRef = useRef(false)
   const composingRef = useRef(false)
   const isGenerating = useChatStore((state) => state.isGenerating)
+  const isCompacting = useChatStore((state) => state.isCompacting)
+  const compactMessage = useChatStore((state) => state.compactMessage)
   const addMessage = useChatStore((state) => state.addMessage)
   const addSystemMessage = useChatStore((state) => state.addSystemMessage)
   const setGenerating = useChatStore((state) => state.setGenerating)
@@ -188,6 +190,10 @@ export default function ChatInput() {
     const { command, argument } = parsed
     const currentSessionId = sessionId
     const api = gatewayAPI
+    if (isCompacting) {
+      useUIStore.getState().showToast('Context compaction is still running', 'info')
+      return true
+    }
     if (!api) {
       useUIStore.getState().showToast('Gateway not connected', 'error')
       return true
@@ -203,11 +209,17 @@ export default function ChatInput() {
           useUIStore.getState().showToast('Send a message first to start a session', 'error')
           return true
         }
+        useChatStore.getState().startCompacting('manual', 'Compacting context...')
         try {
           await api.compact(currentSessionId, '')
         } catch (err) {
           console.error('Compact failed:', err)
-          useUIStore.getState().showToast('Compaction failed', 'error')
+          if (useChatStore.getState().isCompacting) {
+            useChatStore.getState().finishCompacting()
+            useUIStore.getState().showToast('Compaction failed', 'error')
+          }
+        } finally {
+          useChatStore.getState().finishCompacting()
         }
         return true
       }
@@ -261,8 +273,8 @@ export default function ChatInput() {
         return true
       }
       default: {
-        if (isGenerating) {
-          useUIStore.getState().showToast('Cannot toggle skill while generating', 'info')
+        if (isGenerating || isCompacting) {
+          useUIStore.getState().showToast(isCompacting ? 'Context compaction is still running' : 'Cannot toggle skill while generating', 'info')
           return true
         }
         const skillCommand = availableSkillCommands.find((skill) => skill.usage === command)
@@ -287,11 +299,16 @@ export default function ChatInput() {
         return false
       }
     }
-  }, [gatewayAPI, sessionId, addSystemMessage, availableSkillCommands, isGenerating, allSlashCommands])
+  }, [gatewayAPI, sessionId, addSystemMessage, availableSkillCommands, isGenerating, isCompacting, allSlashCommands])
 
   async function handleSubmit() {
     const input = text.trim()
     if (!input) return
+
+    if (isCompacting) {
+      useUIStore.getState().showToast('Context compaction is still running', 'info')
+      return
+    }
 
     if (isGenerating) {
       if (isSlashCommand(input)) useUIStore.getState().showToast('Cannot run commands while generating', 'info')
@@ -419,6 +436,7 @@ export default function ChatInput() {
   }
 
   const isEmpty = !text.trim()
+  const controlsLocked = isGenerating || isCompacting
 
   return (
     <>
@@ -438,7 +456,13 @@ export default function ChatInput() {
               />
             </div>
           )}
-          <div className="input-box">
+          <div className={`input-box ${isCompacting ? 'compacting' : ''}`}>
+            {isCompacting && (
+              <div className="compact-status-row" role="status" aria-live="polite">
+                <LoaderCircle size={14} className="compact-status-spinner" />
+                <span>{compactMessage || 'Compacting context...'}</span>
+              </div>
+            )}
             <textarea
               ref={textareaRef}
               value={text}
@@ -454,7 +478,8 @@ export default function ChatInput() {
                 <button
                   className={`input-mode-toggle ${agentMode === 'plan' ? 'plan' : ''}`}
                   title={agentMode === 'plan' ? '规划模式' : '构建模式'}
-                  onClick={() => { if (!isGenerating) setAgentMode(agentMode === 'plan' ? 'build' : 'plan') }}
+                  disabled={controlsLocked}
+                  onClick={() => { if (!controlsLocked) setAgentMode(agentMode === 'plan' ? 'build' : 'plan') }}
                 >
                   {agentMode === 'plan' ? 'Plan' : 'Build'}
                 </button>
@@ -470,15 +495,16 @@ export default function ChatInput() {
                       padding: 2,
                       borderRadius: 'var(--radius-sm)',
                       background: 'var(--bg-hover)',
-                      opacity: isGenerating ? 0.5 : 1,
+                      opacity: controlsLocked ? 0.5 : 1,
                     }}
                   >
                     <button
                       type="button"
                       aria-pressed={permissionMode === 'default'}
+                      disabled={controlsLocked}
                       style={permissionModeButtonStyle(permissionMode === 'default')}
                       onClick={() => {
-                        if (isGenerating) return
+                        if (controlsLocked) return
                         setPermissionMode('default')
                       }}
                     >
@@ -487,9 +513,10 @@ export default function ChatInput() {
                     <button
                       type="button"
                       aria-pressed={permissionMode === 'bypass'}
+                      disabled={controlsLocked}
                       style={permissionModeButtonStyle(permissionMode === 'bypass')}
                       onClick={() => {
-                        if (isGenerating) return
+                        if (controlsLocked) return
                         setPermissionMode('bypass')
                       }}
                     >
@@ -503,8 +530,8 @@ export default function ChatInput() {
               <button
                 className={`input-send-btn ${isGenerating ? 'stop' : ''}`}
                 onClick={isGenerating ? handleCancel : handleSubmit}
-                disabled={isEmpty && !isGenerating}
-                title={isGenerating ? '停止生成' : '发送'}
+                disabled={isCompacting || (isEmpty && !isGenerating)}
+                title={isCompacting ? 'Context compaction is still running' : isGenerating ? '停止生成' : '发送'}
               >
                 {isGenerating ? <Square size={16} /> : <Send size={16} />}
               </button>

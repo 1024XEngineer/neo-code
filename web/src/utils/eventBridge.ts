@@ -831,18 +831,31 @@ export function handleGatewayEvent(
       break;
 
     case EventType.CompactStart: {
-      uiStore.showToast("Compacting context...", "info");
+      const mode =
+        typeof eventPayload === "string"
+          ? eventPayload
+          : strField(eventPayload, "trigger_mode") ||
+            strField(eventPayload, "TriggerMode") ||
+            "manual";
+      useChatStore
+        .getState()
+        .startCompacting(mode, "Compacting context...");
       break;
     }
 
     case EventType.CompactApplied: {
+      useChatStore.getState().finishCompacting();
       uiStore.showToast("Context compacted", "success");
       break;
     }
 
     case EventType.CompactError: {
+      useChatStore.getState().finishCompacting();
       uiStore.showToast(
-        (eventPayload as string) ?? "Compaction failed",
+        strField(eventPayload, "message") ||
+          strField(eventPayload, "Message") ||
+          (typeof eventPayload === "string" ? eventPayload : "") ||
+          "Compaction failed",
         "error",
       );
       break;

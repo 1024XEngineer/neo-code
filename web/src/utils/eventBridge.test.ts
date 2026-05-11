@@ -25,6 +25,9 @@ beforeEach(() => {
   useChatStore.setState({
     messages: [],
     isGenerating: false,
+    isCompacting: false,
+    compactMode: "",
+    compactMessage: "",
     streamingMessageId: "",
     permissionRequests: [],
     pendingUserQuestion: null,
@@ -536,6 +539,85 @@ describe("eventBridge", () => {
       "allow",
     );
     expect(useRuntimeInsightStore.getState().budgetUsageRatio).toBe(0.8);
+  });
+
+  it("CompactStart sets persistent compact state without a toast", () => {
+    const api = createMockGatewayAPI();
+    handleGatewayEvent(
+      {
+        type: EventType.CompactStart,
+        payload: {
+          payload: {
+            runtime_event_type: EventType.CompactStart,
+            payload: "manual",
+          },
+        },
+        session_id: "sess-1",
+        run_id: "run-1",
+      },
+      api,
+    );
+
+    expect(useChatStore.getState().isCompacting).toBe(true);
+    expect(useChatStore.getState().compactMode).toBe("manual");
+    expect(useChatStore.getState().compactMessage).toBe(
+      "Compacting context...",
+    );
+    expect(useUIStore.getState().toasts).toHaveLength(0);
+  });
+
+  it("CompactApplied clears compact state and shows completion toast", () => {
+    const api = createMockGatewayAPI();
+    useChatStore
+      .getState()
+      .startCompacting("manual", "Compacting context...");
+
+    handleGatewayEvent(
+      {
+        type: EventType.CompactApplied,
+        payload: {
+          payload: {
+            runtime_event_type: EventType.CompactApplied,
+            payload: { applied: true },
+          },
+        },
+        session_id: "sess-1",
+        run_id: "run-1",
+      },
+      api,
+    );
+
+    expect(useChatStore.getState().isCompacting).toBe(false);
+    expect(useUIStore.getState().toasts.at(-1)?.message).toBe(
+      "Context compacted",
+    );
+  });
+
+  it("CompactError clears compact state and uses payload message", () => {
+    const api = createMockGatewayAPI();
+    useChatStore
+      .getState()
+      .startCompacting("manual", "Compacting context...");
+
+    handleGatewayEvent(
+      {
+        type: EventType.CompactError,
+        payload: {
+          payload: {
+            runtime_event_type: EventType.CompactError,
+            payload: { message: "compact timed out" },
+          },
+        },
+        session_id: "sess-1",
+        run_id: "run-1",
+      },
+      api,
+    );
+
+    expect(useChatStore.getState().isCompacting).toBe(false);
+    expect(useUIStore.getState().toasts.at(-1)?.message).toBe(
+      "compact timed out",
+    );
   });
 
   it("VerificationStageFinished upserts verifier status", () => {

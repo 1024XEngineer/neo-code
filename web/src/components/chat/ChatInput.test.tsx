@@ -73,6 +73,9 @@ describe('ChatInput', () => {
     useRuntimeInsightStore.getState().reset()
     useChatStore.setState({
       isGenerating: false,
+      isCompacting: false,
+      compactMode: '',
+      compactMessage: '',
       messages: [],
       permissionRequests: [],
       agentMode: 'build',
@@ -158,6 +161,60 @@ describe('ChatInput', () => {
     expect(screen.queryByTitle('附件文件')).not.toBeInTheDocument()
     expect(screen.queryByTitle('引用上下文')).not.toBeInTheDocument()
   })
+  it('shows inline compact status while compaction is running', () => {
+    useChatStore.getState().startCompacting('manual', 'Compacting context...')
+
+    render(<ChatInput />)
+
+    expect(screen.getByRole('status')).toHaveTextContent('Compacting context...')
+  })
+
+  it('blocks normal sends while compaction is running', async () => {
+    useChatStore.getState().startCompacting('manual', 'Compacting context...')
+    render(<ChatInput />)
+
+    const textarea = screen.getByRole('textbox')
+    fireEvent.change(textarea, { target: { value: 'hello' } })
+    fireEvent.keyDown(textarea, { key: 'Enter' })
+
+    await waitFor(() => {
+      expect(mockGatewayAPI.run).not.toHaveBeenCalled()
+    })
+    expect(useChatStore.getState().messages).toHaveLength(0)
+  })
+
+  it('blocks duplicate compact commands while compaction is running', async () => {
+    useSessionStore.setState({ currentSessionId: 'session-1' } as never)
+    useChatStore.getState().startCompacting('manual', 'Compacting context...')
+    render(<ChatInput />)
+
+    await submitSlashCommand('/compact')
+
+    await waitFor(() => {
+      expect(mockGatewayAPI.compact).not.toHaveBeenCalled()
+    })
+  })
+
+  it('sets compact state immediately when running /compact', async () => {
+    useSessionStore.setState({ currentSessionId: 'session-1' } as never)
+    let resolveCompact: (value: unknown) => void = () => {}
+    mockGatewayAPI.compact.mockReturnValueOnce(new Promise((resolve) => {
+      resolveCompact = resolve
+    }))
+    render(<ChatInput />)
+
+    await submitSlashCommand('/compact')
+
+    await waitFor(() => {
+      expect(useChatStore.getState().isCompacting).toBe(true)
+    })
+
+    resolveCompact({})
+    await waitFor(() => {
+      expect(useChatStore.getState().isCompacting).toBe(false)
+    })
+  })
+
   it('executes /memo without session id and shows payload.Content', async () => {
     mockGatewayAPI.executeSystemTool.mockResolvedValueOnce({
       payload: {

@@ -5,6 +5,9 @@ beforeEach(() => {
   useChatStore.setState({
     messages: [],
     isGenerating: false,
+    isCompacting: false,
+    compactMode: '',
+    compactMessage: '',
     streamingMessageId: '',
     streamingThinkingMessageId: '',
     permissionRequests: [],
@@ -162,6 +165,32 @@ describe('useChatStore', () => {
     expect(useChatStore.getState().isGenerating).toBe(false)
   })
 
+  it('tracks compact state independently from generation', () => {
+    const store = useChatStore.getState()
+    store.setGenerating(true)
+    store.startCompacting('manual', 'Compacting context...')
+
+    expect(useChatStore.getState().isGenerating).toBe(true)
+    expect(useChatStore.getState().isCompacting).toBe(true)
+    expect(useChatStore.getState().compactMode).toBe('manual')
+    expect(useChatStore.getState().compactMessage).toBe('Compacting context...')
+
+    store.finishCompacting()
+
+    expect(useChatStore.getState().isGenerating).toBe(true)
+    expect(useChatStore.getState().isCompacting).toBe(false)
+    expect(useChatStore.getState().compactMode).toBe('')
+  })
+
+  it('resetGeneratingState clears stuck compact state', () => {
+    const store = useChatStore.getState()
+    store.startCompacting('manual', 'Compacting context...')
+    store.resetGeneratingState()
+
+    expect(useChatStore.getState().isCompacting).toBe(false)
+    expect(useChatStore.getState().compactMessage).toBe('')
+  })
+
   it('starts with default permission mode', () => {
     expect(useChatStore.getState().permissionMode).toBe('default')
   })
@@ -174,7 +203,9 @@ describe('useChatStore', () => {
   it('clearMessages resets permission mode to default', () => {
     const store = useChatStore.getState()
     store.setPermissionMode('bypass')
+    store.startCompacting('manual', 'Compacting context...')
     store.clearMessages()
     expect(useChatStore.getState().permissionMode).toBe('default')
+    expect(useChatStore.getState().isCompacting).toBe(false)
   })
 })
