@@ -23,6 +23,42 @@ type stubMemoExtractor struct {
 	doneCh   chan struct{}
 }
 
+type mutationFallbackStore struct {
+	base *memoryStore
+}
+
+func (s *mutationFallbackStore) CreateSession(ctx context.Context, input agentsession.CreateSessionInput) (agentsession.Session, error) {
+	return s.base.CreateSession(ctx, input)
+}
+
+func (s *mutationFallbackStore) LoadSession(ctx context.Context, id string) (agentsession.Session, error) {
+	return s.base.LoadSession(ctx, id)
+}
+
+func (s *mutationFallbackStore) ListSummaries(ctx context.Context) ([]agentsession.Summary, error) {
+	return s.base.ListSummaries(ctx)
+}
+
+func (s *mutationFallbackStore) AppendMessages(ctx context.Context, input agentsession.AppendMessagesInput) error {
+	return s.base.AppendMessages(ctx, input)
+}
+
+func (s *mutationFallbackStore) UpdateSessionWorkdir(ctx context.Context, input agentsession.UpdateSessionWorkdirInput) error {
+	return s.base.UpdateSessionWorkdir(ctx, input)
+}
+
+func (s *mutationFallbackStore) UpdateSessionState(ctx context.Context, input agentsession.UpdateSessionStateInput) error {
+	return s.base.UpdateSessionState(ctx, input)
+}
+
+func (s *mutationFallbackStore) ReplaceTranscript(ctx context.Context, input agentsession.ReplaceTranscriptInput) error {
+	return s.base.ReplaceTranscript(ctx, input)
+}
+
+func (s *mutationFallbackStore) CleanupExpiredSessions(ctx context.Context, maxAge time.Duration) (int, error) {
+	return s.base.CleanupExpiredSessions(ctx, maxAge)
+}
+
 type lockProbeStore struct {
 	appendFn func(ctx context.Context, input agentsession.AppendMessagesInput) error
 }
@@ -765,6 +801,249 @@ func TestExecuteAssistantToolCallsCanceledSaveStillEmitsResultWhenExecErr(t *tes
 
 	events := collectRuntimeEvents(service.Events())
 	assertEventSequence(t, events, []EventType{EventToolStart, EventToolResult})
+}
+
+func TestExecuteAssistantToolCallsEmitsResultsWhenDoneAndPersistsInCallOrder(t *testing.T) {
+	t.Parallel()
+
+	store := newMemoryStore()
+	session := newRuntimeSession("session-exec-tool-order")
+	store.sessions[session.ID] = cloneSession(session)
+
+	var mu sync.Mutex
+	active := 0
+	maxActive := 0
+	slowStarted := make(chan struct{})
+	releaseSlow := make(chan struct{})
+	var slowStartedOnce sync.Once
+	manager := &stubToolManager{
+		executeFn: func(ctx context.Context, input tools.ToolCallInput) (tools.ToolResult, error) {
+			mu.Lock()
+			active++
+			if active > maxActive {
+				maxActive = active
+			}
+			mu.Unlock()
+			if input.Name == "tool_slow" {
+				slowStartedOnce.Do(func() { close(slowStarted) })
+				select {
+				case <-releaseSlow:
+				case <-ctx.Done():
+					return tools.ToolResult{Name: input.Name, Content: ctx.Err().Error()}, ctx.Err()
+				}
+			}
+			mu.Lock()
+			active--
+			mu.Unlock()
+			return tools.ToolResult{Name: input.Name, Content: input.Name + " done"}, nil
+		},
+	}
+	service := &Service{
+		sessionStore:   store,
+		toolManager:    manager,
+		approvalBroker: approval.NewBroker(),
+		events:         make(chan RuntimeEvent, 32),
+	}
+	state := newRunState("run-exec-tool-order", session)
+	assistant := providertypes.Message{
+		Role: providertypes.RoleAssistant,
+		ToolCalls: []providertypes.ToolCall{
+			{ID: "call-slow", Name: "tool_slow", Arguments: `{}`},
+			{ID: "call-fast", Name: "tool_fast", Arguments: `{}`},
+		},
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := service.executeAssistantToolCalls(context.Background(), &state, TurnBudgetSnapshot{}, assistant)
+		done <- err
+	}()
+
+	select {
+	case <-slowStarted:
+	case <-time.After(time.Second):
+		t.Fatalf("timed out waiting for slow tool to start")
+	}
+
+	select {
+	case event := <-service.Events():
+		if event.Type != EventToolStart {
+			t.Fatalf("first event = %s, want %s", event.Type, EventToolStart)
+		}
+	case <-time.After(time.Second):
+		t.Fatalf("timed out waiting for first tool start")
+	}
+
+	var fastResultSeen bool
+	deadline := time.After(time.Second)
+	for !fastResultSeen {
+		select {
+		case event := <-service.Events():
+			if event.Type != EventToolResult {
+				continue
+			}
+			result, ok := event.Payload.(tools.ToolResult)
+			if !ok {
+				t.Fatalf("tool result payload type = %T", event.Payload)
+			}
+			if result.Name == "tool_fast" {
+				fastResultSeen = true
+			}
+		case <-deadline:
+			t.Fatalf("timed out waiting for fast tool result before slow tool finished")
+		}
+	}
+
+	if len(state.session.Messages) != 0 {
+		t.Fatalf("messages persisted before slow tool finished = %d, want 0", len(state.session.Messages))
+	}
+	close(releaseSlow)
+
+	if err := <-done; err != nil {
+		t.Fatalf("executeAssistantToolCalls() error = %v", err)
+	}
+	if maxActive < 2 {
+		t.Fatalf("expected tools to execute concurrently, maxActive=%d", maxActive)
+	}
+	if len(state.session.Messages) != 2 {
+		t.Fatalf("message count = %d, want 2", len(state.session.Messages))
+	}
+	got := []string{
+		renderPartsForTest(state.session.Messages[0].Parts),
+		renderPartsForTest(state.session.Messages[1].Parts),
+	}
+	want := []string{"tool_slow done", "tool_fast done"}
+	if got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("persisted tool messages = %#v, want %#v", got, want)
+	}
+}
+
+func TestServiceSessionMutationBoundaryMethods(t *testing.T) {
+	t.Parallel()
+
+	store := newMemoryStore()
+	first := newRuntimeSession("session-mutation-first")
+	second := newRuntimeSession("session-mutation-second")
+	store.sessions[first.ID] = cloneSession(first)
+	store.sessions[second.ID] = cloneSession(second)
+	service := &Service{
+		sessionStore:      store,
+		runtimeSnapshots:  map[string]RuntimeSnapshot{first.ID: {SessionID: first.ID}},
+		sessionLocks:      map[string]*sessionLockEntry{},
+		runtimeSnapshotMu: sync.Mutex{},
+	}
+
+	if !service.SupportsSessionMutationBoundary() {
+		t.Fatalf("SupportsSessionMutationBoundary() = false, want true")
+	}
+	if err := service.RenameSession(context.Background(), first.ID, "  renamed  "); err != nil {
+		t.Fatalf("RenameSession() error = %v", err)
+	}
+	if err := service.UpdateSessionModel(context.Background(), first.ID, " provider-a ", " model-a "); err != nil {
+		t.Fatalf("UpdateSessionModel() error = %v", err)
+	}
+	if err := service.SyncSessionsProviderModel(context.Background(), "provider-b", "model-b"); err != nil {
+		t.Fatalf("SyncSessionsProviderModel() error = %v", err)
+	}
+
+	loadedFirst, err := store.LoadSession(context.Background(), first.ID)
+	if err != nil {
+		t.Fatalf("LoadSession(first) error = %v", err)
+	}
+	if loadedFirst.Title != "renamed" || loadedFirst.Provider != "provider-b" || loadedFirst.Model != "model-b" {
+		t.Fatalf("first session after mutations = title:%q provider:%q model:%q",
+			loadedFirst.Title, loadedFirst.Provider, loadedFirst.Model)
+	}
+	loadedSecond, err := store.LoadSession(context.Background(), second.ID)
+	if err != nil {
+		t.Fatalf("LoadSession(second) error = %v", err)
+	}
+	if loadedSecond.Provider != "provider-b" || loadedSecond.Model != "model-b" {
+		t.Fatalf("second provider/model = %q/%q, want provider-b/model-b", loadedSecond.Provider, loadedSecond.Model)
+	}
+
+	if err := service.DeleteSession(context.Background(), first.ID); err != nil {
+		t.Fatalf("DeleteSession() error = %v", err)
+	}
+	store.mu.Lock()
+	_, exists := store.sessions[first.ID]
+	store.mu.Unlock()
+	if exists {
+		t.Fatalf("deleted session still exists in store")
+	}
+	service.runtimeSnapshotMu.Lock()
+	_, hasSnapshot := service.runtimeSnapshots[first.ID]
+	service.runtimeSnapshotMu.Unlock()
+	if hasSnapshot {
+		t.Fatalf("runtime snapshot for deleted session was not cleared")
+	}
+}
+
+func TestServiceSessionMutationBoundaryRejectsInvalidInput(t *testing.T) {
+	t.Parallel()
+
+	service := &Service{
+		sessionStore: newMemoryStore(),
+		sessionLocks: map[string]*sessionLockEntry{},
+	}
+
+	if err := service.DeleteSession(context.Background(), " "); !errors.Is(err, agentsession.ErrSessionNotFound) {
+		t.Fatalf("DeleteSession(empty) error = %v, want ErrSessionNotFound", err)
+	}
+	if err := service.RenameSession(context.Background(), "session", " "); err == nil {
+		t.Fatalf("expected empty title error")
+	}
+	if err := service.UpdateSessionModel(context.Background(), "session", "", "model"); err == nil {
+		t.Fatalf("expected empty provider/model error")
+	}
+	if err := service.SyncSessionsProviderModel(context.Background(), "", "model"); err != nil {
+		t.Fatalf("SyncSessionsProviderModel(empty provider) error = %v", err)
+	}
+}
+
+func TestServiceSessionMutationBoundaryFallbackAndErrors(t *testing.T) {
+	t.Parallel()
+
+	base := newMemoryStore()
+	session := newRuntimeSession("session-mutation-fallback")
+	base.sessions[session.ID] = cloneSession(session)
+	fallbackStore := &mutationFallbackStore{base: base}
+	service := &Service{
+		sessionStore: fallbackStore,
+		sessionLocks: map[string]*sessionLockEntry{},
+	}
+
+	if err := service.RenameSession(context.Background(), session.ID, "fallback title"); err != nil {
+		t.Fatalf("RenameSession() fallback error = %v", err)
+	}
+	loaded, err := base.LoadSession(context.Background(), session.ID)
+	if err != nil {
+		t.Fatalf("LoadSession() error = %v", err)
+	}
+	if loaded.Title != "fallback title" {
+		t.Fatalf("fallback title = %q, want fallback title", loaded.Title)
+	}
+
+	unsupportedDelete := &Service{
+		sessionStore: fallbackStore,
+		sessionLocks: map[string]*sessionLockEntry{},
+	}
+	if err := unsupportedDelete.DeleteSession(context.Background(), session.ID); err == nil ||
+		!strings.Contains(err.Error(), "does not support delete") {
+		t.Fatalf("DeleteSession() unsupported error = %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := service.RenameSession(ctx, session.ID, "canceled"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("RenameSession(canceled) error = %v, want context.Canceled", err)
+	}
+	if err := service.UpdateSessionModel(ctx, session.ID, "provider", "model"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("UpdateSessionModel(canceled) error = %v, want context.Canceled", err)
+	}
+	if err := service.SyncSessionsProviderModel(ctx, "provider", "model"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("SyncSessionsProviderModel(canceled) error = %v, want context.Canceled", err)
+	}
 }
 
 func TestSetMemoExtractorAndRunTriggersExtraction(t *testing.T) {
