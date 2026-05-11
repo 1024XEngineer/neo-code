@@ -41,17 +41,26 @@ func newVersionCommand() *cobra.Command {
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			result, err := runVersionCommand(cmd.Context(), *options)
-			if err != nil {
-				return err
-			}
-			printVersionCommandResult(cmd.OutOrStdout(), result)
-			return nil
+			return runVersionShortcut(cmd.Context(), cmd.OutOrStdout(), *options)
 		},
 	}
 
 	cmd.Flags().BoolVar(&options.IncludePrerelease, "prerelease", false, "include prerelease versions")
 	return cmd
+}
+
+// runVersionShortcut 复用 version 子命令核心逻辑，供顶层 --version/-v 与子命令统一输出。
+func runVersionShortcut(ctx context.Context, out io.Writer, options ...versionCommandOptions) error {
+	resolved := versionCommandOptions{}
+	if len(options) > 0 {
+		resolved = options[0]
+	}
+	result, err := runVersionCommand(ctx, resolved)
+	if err != nil {
+		return err
+	}
+	printVersionCommandResult(out, result)
+	return nil
 }
 
 // defaultVersionCommandRunner 执行版本探测并构造可展示结果，探测失败不返回执行错误。

@@ -42,6 +42,7 @@ type GlobalFlags struct {
 	Workdir      string
 	Session      string
 	WakeInputB64 string
+	Version      bool
 }
 
 // Execute 执行 NeoCode 根命令入口，并在退出前等待静默更新检查收尾。
@@ -79,6 +80,10 @@ func NewRootCommand() *cobra.Command {
 			return nil
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
+			flags.Version = settings.GetBool("version")
+			if flags.Version {
+				return runVersionShortcut(cmd.Context(), cmd.OutOrStdout())
+			}
 			flags.Workdir = strings.TrimSpace(settings.GetString("workdir"))
 			flags.Session = strings.TrimSpace(settings.GetString("session"))
 			flags.WakeInputB64 = strings.TrimSpace(settings.GetString("wake-input-b64"))
@@ -89,16 +94,19 @@ func NewRootCommand() *cobra.Command {
 			})
 		},
 	}
-	cmd.PersistentFlags().String("workdir", "", "workdir override for current run")
+	cmd.PersistentFlags().BoolP("version", "v", false, "show current version and check for updates")
+	cmd.PersistentFlags().StringP("workdir", "w", "", "workdir override for current run")
 	cmd.PersistentFlags().String("session", "", "session id to hydrate on startup")
 	cmd.PersistentFlags().String("wake-input-b64", "", "internal wake startup payload")
 	_ = cmd.PersistentFlags().MarkHidden("wake-input-b64")
+	_ = settings.BindPFlag("version", cmd.PersistentFlags().Lookup("version"))
 	_ = settings.BindPFlag("workdir", cmd.PersistentFlags().Lookup("workdir"))
 	_ = settings.BindPFlag("session", cmd.PersistentFlags().Lookup("session"))
 	_ = settings.BindPFlag("wake-input-b64", cmd.PersistentFlags().Lookup("wake-input-b64"))
 	cmd.AddCommand(
 		newGatewayCommand(),
-		newFeishuAdapterCommand(),
+		newAdapterCommand(),
+		newLegacyFeishuAdapterCommand(),
 		newRunnerCommand(),
 		newWebCommand(),
 		newDaemonCommand(),

@@ -12,7 +12,7 @@ A normal NeoCode workflow is: open a project, describe the goal, watch agent act
 Start in a workspace:
 
 ```bash
-neocode --workdir /path/to/project
+neocode -w /path/to/project
 ```
 
 View or switch workspace inside NeoCode:

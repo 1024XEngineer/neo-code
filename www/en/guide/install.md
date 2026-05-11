@@ -58,7 +58,7 @@ neocode
 Open a specific project:
 
 ```bash
-neocode --workdir /path/to/your/project
+neocode -w /path/to/your/project
 ```
 
 Type natural language in the input box to chat. Type `/` to see local control commands.
