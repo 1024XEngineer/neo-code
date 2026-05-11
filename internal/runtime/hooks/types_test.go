@@ -54,6 +54,25 @@ func TestHookSpecNormalizeAndValidateAllowsHTTPKind(t *testing.T) {
 	}
 }
 
+func TestHookSpecNormalizeAndValidateAllowsUserHTTPObserve(t *testing.T) {
+	t.Parallel()
+
+	spec, err := (HookSpec{
+		ID:      "hook-http-observe",
+		Point:   HookPointBeforeToolCall,
+		Scope:   HookScopeUser,
+		Kind:    HookKindHTTP,
+		Mode:    HookModeObserve,
+		Handler: func(context.Context, HookContext) HookResult { return HookResult{} },
+	}).normalizeAndValidate()
+	if err != nil {
+		t.Fatalf("normalizeAndValidate() error = %v", err)
+	}
+	if spec.Mode != HookModeObserve {
+		t.Fatalf("Mode = %q, want %q", spec.Mode, HookModeObserve)
+	}
+}
+
 func TestHookSpecNormalizeAndValidateErrors(t *testing.T) {
 	t.Parallel()
 
@@ -145,6 +164,17 @@ func TestHookSpecNormalizeAndValidateErrors(t *testing.T) {
 				Point:   HookPointBeforeToolCall,
 				Scope:   HookScopeRepo,
 				Mode:    HookModeAsyncRewake,
+				Handler: handler,
+			},
+		},
+		{
+			name: "user http sync not allowed",
+			spec: HookSpec{
+				ID:      "hook-1",
+				Point:   HookPointBeforeToolCall,
+				Scope:   HookScopeUser,
+				Kind:    HookKindHTTP,
+				Mode:    HookModeSync,
 				Handler: handler,
 			},
 		},

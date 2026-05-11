@@ -105,6 +105,8 @@ type HookMode string
 const (
 	// HookModeSync 表示同步执行。
 	HookModeSync HookMode = "sync"
+	// HookModeObserve 表示只观测模式（不参与主链阻断决策）。
+	HookModeObserve HookMode = "observe"
 	// HookModeAsync 表示异步执行（P5 预留）。
 	HookModeAsync HookMode = "async"
 	// HookModeAsyncRewake 表示异步回灌执行（P5 预留）。
@@ -182,12 +184,17 @@ func (s HookSpec) normalizeAndValidate() (HookSpec, error) {
 		s.Mode = HookModeSync
 	}
 	switch s.Mode {
-	case HookModeSync, HookModeAsync, HookModeAsyncRewake:
+	case HookModeSync, HookModeObserve, HookModeAsync, HookModeAsyncRewake:
 	default:
 		return HookSpec{}, wrapInvalidSpec("mode %q is not supported in current stage", s.Mode)
 	}
-	if (s.Scope == HookScopeUser || s.Scope == HookScopeRepo) && s.Mode != HookModeSync {
-		return HookSpec{}, wrapInvalidSpec("scope %q only supports sync mode", s.Scope)
+	if s.Scope == HookScopeUser || s.Scope == HookScopeRepo {
+		if s.Kind == HookKindHTTP && s.Mode != HookModeObserve {
+			return HookSpec{}, wrapInvalidSpec("scope %q with kind http only supports observe mode", s.Scope)
+		}
+		if s.Kind != HookKindHTTP && s.Mode != HookModeSync {
+			return HookSpec{}, wrapInvalidSpec("scope %q only supports sync mode", s.Scope)
+		}
 	}
 	if s.FailurePolicy == "" {
 		s.FailurePolicy = FailurePolicyFailOpen

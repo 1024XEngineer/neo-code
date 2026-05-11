@@ -96,6 +96,7 @@ Notes:
 - `http observe` is non-blocking by design.
 - `failure_policy: fail_closed` is not allowed for `http observe`.
 - Even when enabled, sensitive fields (`result_content_preview`, `execution_error`) are stripped from callback metadata.
+- `params.url` is restricted to loopback hosts (`localhost`, `127.0.0.1`, `::1`) to prevent accidental public exfiltration.
 
 ## Callback payload
 

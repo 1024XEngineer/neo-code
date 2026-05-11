@@ -100,6 +100,9 @@ func TestBuildUserHookSpecAllowsHTTPObserve(t *testing.T) {
 	if spec.Kind != runtimehooks.HookKindHTTP {
 		t.Fatalf("kind = %q, want %q", spec.Kind, runtimehooks.HookKindHTTP)
 	}
+	if spec.Mode != runtimehooks.HookModeObserve {
+		t.Fatalf("mode = %q, want %q", spec.Mode, runtimehooks.HookModeObserve)
+	}
 	result := spec.Handler(context.Background(), runtimehooks.HookContext{
 		RunID:     "run-http-observe",
 		SessionID: "session-http-observe",
@@ -152,6 +155,29 @@ func TestBuildUserHTTPObserveHandlerReturnsFailedOnHTTPError(t *testing.T) {
 	}
 	if !strings.Contains(result.Error, "status=400") {
 		t.Fatalf("error = %q, want contains status=400", result.Error)
+	}
+}
+
+func TestBuildUserHookSpecRejectsHTTPObserveRemoteHost(t *testing.T) {
+	t.Parallel()
+
+	item := config.RuntimeHookItemConfig{
+		ID:         "http-observe-remote",
+		Point:      "after_tool_result",
+		Scope:      "user",
+		Kind:       "http",
+		Mode:       "observe",
+		TimeoutSec: 2,
+		Params: map[string]any{
+			"url": "https://example.com/hook",
+		},
+	}
+	_, err := buildUserHookSpec(item, t.TempDir())
+	if err == nil {
+		t.Fatal("expected remote host to be rejected for http observe")
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "loopback only") {
+		t.Fatalf("error=%q, want contains loopback only", err.Error())
 	}
 }
 

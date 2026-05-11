@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"net/url"
 	"strings"
 )
@@ -337,6 +338,9 @@ func validateRuntimeHTTPObserveItem(c RuntimeHookItemConfig, policy string) erro
 	default:
 		return fmt.Errorf("kind http only supports http/https params.url")
 	}
+	if !isRuntimeHookHTTPObserveLoopbackHost(parsed.Hostname()) {
+		return fmt.Errorf("kind http params.url host %q is not allowed (loopback only)", parsed.Hostname())
+	}
 	method := strings.ToUpper(strings.TrimSpace(readRuntimeHookParamString(c.Params, "method")))
 	if method != "" {
 		switch method {
@@ -360,6 +364,19 @@ func validateRuntimeHTTPObserveItem(c RuntimeHookItemConfig, policy string) erro
 		}
 	}
 	return nil
+}
+
+// isRuntimeHookHTTPObserveLoopbackHost 判断 http observe 回调域名是否属于本地回环地址。
+func isRuntimeHookHTTPObserveLoopbackHost(host string) bool {
+	normalized := strings.TrimSpace(strings.ToLower(host))
+	if normalized == "" {
+		return false
+	}
+	if normalized == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(normalized)
+	return ip != nil && ip.IsLoopback()
 }
 
 // IsEnabled 返回单条 hook item 是否启用。

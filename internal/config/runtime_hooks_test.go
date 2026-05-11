@@ -215,6 +215,12 @@ func TestRuntimeHooksConfigValidateRejectsInvalidHTTPObserveConfig(t *testing.T)
 				item.Params = map[string]any{"url": "http://127.0.0.1:19090/hook", "method": "TRACE"}
 			},
 		},
+		{
+			name: "remote host not allowed",
+			edit: func(item *RuntimeHookItemConfig) {
+				item.Params = map[string]any{"url": "https://example.com/hook"}
+			},
+		},
 	}
 
 	for _, tc := range tests {

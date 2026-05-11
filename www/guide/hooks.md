@@ -114,6 +114,7 @@ runtime:
 - `http observe` 只做观测回调，不会阻断主链。
 - `failure_policy` 不能用 `fail_closed`，建议用 `warn_only`。
 - 即使开启 `include_metadata`，`result_content_preview` 与 `execution_error` 也会被自动剥离。
+- `params.url` 只允许回环地址（`localhost` / `127.0.0.1` / `::1`），避免误发到公网。
 
 ## 支持哪些 builtin handler
 

@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -23,6 +25,8 @@ const (
 	configuredHookKindHTTP    = "http"
 	configuredHookModeSync    = "sync"
 	configuredHookModeObserve = "observe"
+	// httpObserveDrainLimitBytes 用于限制成功路径响应体的最大清空字节，避免被大响应拖慢。
+	httpObserveDrainLimitBytes = 64 * 1024
 )
 
 var httpObserveSensitiveMetadataKeys = map[string]struct{}{
@@ -194,6 +198,7 @@ func buildConfiguredHookSpec(
 	}
 	kind := strings.ToLower(strings.TrimSpace(item.Kind))
 	specKind := runtimehooks.HookKindFunction
+	specMode := runtimehooks.HookModeSync
 	var (
 		handler runtimehooks.HookHandler
 		err     error
@@ -202,9 +207,11 @@ func buildConfiguredHookSpec(
 	case configuredHookKindBuiltin:
 		handler, err = buildUserBuiltinHookHandler(strings.TrimSpace(item.Handler), item.Params, defaultWorkdir)
 		specKind = runtimehooks.HookKindFunction
+		specMode = runtimehooks.HookModeSync
 	case configuredHookKindHTTP:
 		handler, err = buildUserHTTPObserveHookHandler(item)
 		specKind = runtimehooks.HookKindHTTP
+		specMode = runtimehooks.HookModeObserve
 	default:
 		return runtimehooks.HookSpec{}, fmt.Errorf("kind %q is not supported", item.Kind)
 	}
@@ -217,7 +224,7 @@ func buildConfiguredHookSpec(
 		Scope:         scope,
 		Source:        source,
 		Kind:          specKind,
-		Mode:          runtimehooks.HookModeSync,
+		Mode:          specMode,
 		Priority:      item.Priority,
 		Timeout:       time.Duration(item.TimeoutSec) * time.Second,
 		FailurePolicy: mapRuntimeHookFailurePolicy(item.FailurePolicy),
@@ -359,6 +366,9 @@ func buildUserHTTPObserveHookHandler(item config.RuntimeHookItemConfig) (runtime
 	if endpoint == "" {
 		return nil, fmt.Errorf("kind http requires params.url")
 	}
+	if err := validateHTTPObserveEndpoint(endpoint); err != nil {
+		return nil, err
+	}
 	method := strings.ToUpper(strings.TrimSpace(readHookParamString(item.Params, "method")))
 	if method == "" {
 		method = http.MethodPost
@@ -441,8 +451,37 @@ func drainAndCloseHTTPResponseBody(resp *http.Response) {
 	if resp == nil || resp.Body == nil {
 		return
 	}
-	_, _ = io.Copy(io.Discard, resp.Body)
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, httpObserveDrainLimitBytes))
 	_ = resp.Body.Close()
+}
+
+// validateHTTPObserveEndpoint 校验 observe 回调地址，仅允许本机回环地址。
+func validateHTTPObserveEndpoint(endpoint string) error {
+	parsed, err := url.Parse(strings.TrimSpace(endpoint))
+	if err != nil || parsed == nil || !parsed.IsAbs() {
+		return fmt.Errorf("kind http requires absolute params.url")
+	}
+	scheme := strings.ToLower(strings.TrimSpace(parsed.Scheme))
+	if scheme != "http" && scheme != "https" {
+		return fmt.Errorf("kind http only supports http/https params.url")
+	}
+	if !isHTTPObserveLoopbackHost(parsed.Hostname()) {
+		return fmt.Errorf("kind http params.url host %q is not allowed (loopback only)", parsed.Hostname())
+	}
+	return nil
+}
+
+// isHTTPObserveLoopbackHost 判断目标地址是否为回环主机，避免误配为公网外发。
+func isHTTPObserveLoopbackHost(host string) bool {
+	normalized := strings.TrimSpace(strings.ToLower(host))
+	if normalized == "" {
+		return false
+	}
+	if normalized == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(normalized)
+	return ip != nil && ip.IsLoopback()
 }
 
 // buildHTTPObserveHeaders 从 params.headers 读取并归一化 HTTP 头配置。
