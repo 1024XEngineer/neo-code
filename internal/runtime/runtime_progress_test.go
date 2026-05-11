@@ -396,7 +396,7 @@ func TestResolveStreakLimitDefaults(t *testing.T) {
 	}
 }
 
-func TestNoToolIncompleteTurnStillEvaluatesProgressAndInjectsReminder(t *testing.T) {
+func TestToolExecutionProgressAndFinalTextAcceptance(t *testing.T) {
 	t.Parallel()
 
 	manager := newRuntimeConfigManager(t)
@@ -423,15 +423,7 @@ func TestNoToolIncompleteTurnStillEvaluatesProgressAndInjectsReminder(t *testing
 	registry.Register(todotool.New())
 
 	providerImpl := &scriptedProvider{
-		requireExplicitCompletion: true,
 		responses: []scriptedResponse{
-			{
-				Message: providertypes.Message{
-					Role:  providertypes.RoleAssistant,
-					Parts: []providertypes.ContentPart{providertypes.NewTextPart("{\"task_completion\":{\"completed\":false}}\ndone")},
-				},
-				FinishReason: "stop",
-			},
 			{
 				Message: providertypes.Message{
 					Role: providertypes.RoleAssistant,
@@ -461,7 +453,7 @@ func TestNoToolIncompleteTurnStillEvaluatesProgressAndInjectsReminder(t *testing
 			{
 				Message: providertypes.Message{
 					Role:  providertypes.RoleAssistant,
-					Parts: []providertypes.ContentPart{providertypes.NewTextPart("{\"task_completion\":{\"completed\":true}}\ndone")},
+					Parts: []providertypes.ContentPart{providertypes.NewTextPart("done")},
 				},
 				FinishReason: "stop",
 			},
@@ -487,35 +479,13 @@ func TestNoToolIncompleteTurnStillEvaluatesProgressAndInjectsReminder(t *testing
 	if len(providerImpl.requests) < 2 {
 		t.Fatalf("expected at least 2 provider requests, got %d", len(providerImpl.requests))
 	}
-	secondSystemPrompt := providerImpl.requests[1].SystemPrompt
-	if !strings.Contains(secondSystemPrompt, "[Runtime Control]") ||
-		!strings.Contains(secondSystemPrompt, "task_completion") {
-		t.Fatalf("expected runtime protocol note in second provider request system prompt, got %q", secondSystemPrompt)
-	}
-	if len(providerImpl.requests) > 2 {
-		thirdSystemPrompt := providerImpl.requests[2].SystemPrompt
-		if strings.Contains(thirdSystemPrompt, "[Runtime Control]") &&
-			strings.Contains(thirdSystemPrompt, "task_completion") {
-			t.Fatalf("expected runtime protocol note to be injected once, got third system prompt %q", thirdSystemPrompt)
-		}
-	}
-
-	savedSession := store.sessions[session.ID]
-	for _, message := range savedSession.Messages {
-		content := renderPartsForTest(message.Parts)
-		if message.Role == providertypes.RoleSystem &&
-			strings.Contains(content, "[Runtime Control]") &&
-			strings.Contains(content, "task_completion") {
-			t.Fatalf("expected completion reminder to stay out of session transcript, found %q", content)
-		}
-	}
 
 	events := collectRuntimeEvents(service.Events())
 	assertEventContains(t, events, EventProgressEvaluated)
 	assertStopReasonDecided(t, events, controlplane.StopReasonAccepted, "")
 }
 
-func TestAcceptanceContinueWithoutToolCallStopsAsIncomplete(t *testing.T) {
+func TestAcceptGateFailsWithPendingRequiredTodo(t *testing.T) {
 	t.Parallel()
 
 	manager := newRuntimeConfigManager(t)
@@ -526,7 +496,7 @@ func TestAcceptanceContinueWithoutToolCallStopsAsIncomplete(t *testing.T) {
 	}
 
 	store := newMemoryStore()
-	session := newRuntimeSession("session-no-tool-incomplete")
+	session := newRuntimeSession("session-pending-todo-fail")
 	required := true
 	session.TaskState.VerificationProfile = agentsession.VerificationProfileTaskOnly
 	session.Todos = []agentsession.TodoItem{
@@ -540,14 +510,8 @@ func TestAcceptanceContinueWithoutToolCallStopsAsIncomplete(t *testing.T) {
 	store.sessions[session.ID] = cloneSession(session)
 
 	providerImpl := &scriptedProvider{
-		requireExplicitCompletion: true,
 		responses: []scriptedResponse{
-			{Message: providertypes.Message{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("{\"task_completion\":{\"completed\":false}}\n1")}}, FinishReason: "stop"},
-			{Message: providertypes.Message{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("{\"task_completion\":{\"completed\":false}}\n2")}}, FinishReason: "stop"},
-			{Message: providertypes.Message{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("{\"task_completion\":{\"completed\":false}}\n3")}}, FinishReason: "stop"},
-			{Message: providertypes.Message{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("{\"task_completion\":{\"completed\":false}}\n4")}}, FinishReason: "stop"},
-			{Message: providertypes.Message{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("{\"task_completion\":{\"completed\":false}}\n5")}}, FinishReason: "stop"},
-			{Message: providertypes.Message{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("不应再到这里")}}, FinishReason: "stop"},
+			{Message: providertypes.Message{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("本文是最终回答，但 todo 未完成")}}, FinishReason: "stop"},
 		},
 	}
 
@@ -560,35 +524,19 @@ func TestAcceptanceContinueWithoutToolCallStopsAsIncomplete(t *testing.T) {
 	)
 
 	if err := service.Run(context.Background(), UserInput{
-		RunID:     "run-no-tool-incomplete",
+		RunID:     "run-pending-todo-fail",
 		SessionID: session.ID,
 		Parts:     []providertypes.ContentPart{providertypes.NewTextPart("继续")},
 	}); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
 
-	if len(providerImpl.requests) != 6 {
-		t.Fatalf("expected runtime to stop after six missing completion signals, got %d requests", len(providerImpl.requests))
-	}
-	// 第 6 个请求（streak=5 时注入最终提醒后）应包含最终协议提醒
-	fifthSystemPrompt := providerImpl.requests[5].SystemPrompt
-	if !strings.Contains(fifthSystemPrompt, "[Runtime Control]") ||
-		!strings.Contains(fifthSystemPrompt, "final protocol reminder") ||
-		!strings.Contains(fifthSystemPrompt, "task_completion") {
-		t.Fatalf("expected final runtime protocol note in request 5 system prompt, got %q", fifthSystemPrompt)
-	}
-	savedSession := store.sessions[session.ID]
-	for _, message := range savedSession.Messages {
-		content := renderPartsForTest(message.Parts)
-		if message.Role == providertypes.RoleSystem &&
-			strings.Contains(content, "[Runtime Control]") &&
-			strings.Contains(content, "task_completion") {
-			t.Fatalf("expected completion reminder to stay out of session transcript, found %q", content)
-		}
+	if len(providerImpl.requests) != 1 {
+		t.Fatalf("expected runtime to stop after one attempt (accept gate failed), got %d requests", len(providerImpl.requests))
 	}
 
 	events := collectRuntimeEvents(service.Events())
-	assertStopReasonDecided(t, events, controlplane.StopReasonMissingCompletionSignal, "")
+	assertEventContains(t, events, EventAcceptanceDecided)
 }
 
 func assertStopReasonDecided(t *testing.T, events []RuntimeEvent, wantReason controlplane.StopReason, wantDetail string) {

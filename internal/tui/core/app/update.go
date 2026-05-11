@@ -3695,7 +3695,7 @@ func runtimeEventStopReasonDecidedHandler(a *App, event tuiservices.RuntimeEvent
 		}
 	case strings.ToLower(string(tuiservices.StopReasonTodoNotConverged)),
 		strings.ToLower(string(tuiservices.StopReasonTodoWaitingExternal)),
-		strings.ToLower(string(tuiservices.StopReasonMissingCompletionSignal)),
+		strings.ToLower(string(tuiservices.StopReasonEmptyResponse)),
 		strings.ToLower(string(tuiservices.StopReasonRepeatCycle)),
 		strings.ToLower(string(tuiservices.StopReasonMaxTurnExceededWithUnconvergedTodos)),
 		strings.ToLower(string(tuiservices.StopReasonMaxTurnExceededWithFailedVerification)):

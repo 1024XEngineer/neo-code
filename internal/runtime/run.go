@@ -305,9 +305,6 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 			}
 			hasToolCalls := len(turnOutput.assistant.ToolCalls) > 0
 			if hasToolCalls {
-				state.mu.Lock()
-				state.missingCompletionSignalStreak = 0
-				state.mu.Unlock()
 				if err := s.appendAssistantMessageAndSave(
 					ctx,
 					&state,
@@ -388,28 +385,18 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 						return nil
 					}
 				}
-				completionSignaled, err := maybeParseCompletionTurnOutput(turnOutput.assistant)
-				if err != nil {
-					return s.handleRunError(err)
-				}
+
+				assistantText := strings.TrimSpace(partsrender.RenderDisplayParts(turnOutput.assistant.Parts))
 				hasThinking := len(turnOutput.assistant.ThinkingMetadata) > 0
-				if !completionSignaled {
+
+				if assistantText == "" {
 					if hasThinking {
-						break turnAttempt
-					}
-					state.mu.Lock()
-					state.missingCompletionSignalStreak++
-					missingCompletionSignalStreak := state.missingCompletionSignalStreak
-					state.mu.Unlock()
-					if missingCompletionSignalStreak < missingCompletionSignalLimit {
-						reminder := completionProtocolReminderForStreak(missingCompletionSignalStreak)
-						setPendingSystemReminder(&state, reminder)
 						break turnAttempt
 					}
 					state.markTerminalDecision(
 						controlplane.TerminalStatusIncomplete,
-						controlplane.StopReasonMissingCompletionSignal,
-						"assistant stopped without task_completion",
+						controlplane.StopReasonEmptyResponse,
+						"assistant returned empty text without tool calls",
 					)
 					s.emitRunScoped(ctx, EventAgentDone, &state, turnOutput.assistant)
 					return nil
@@ -421,40 +408,34 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 				s.updateResumeCheckpoint(ctx, &state, "verify", "completed")
 				report := s.evaluateAcceptGate(ctx, &state, turnOutput.assistant)
 				s.emitAcceptGateReport(&state, report)
-				assistantForFinal := stripCompletionSignalFromAssistantMessage(turnOutput.assistant)
+
 				if report.Outcome == acceptgate.OutcomeAccepted {
-					state.mu.Lock()
-					state.missingCompletionSignalStreak = 0
-					state.mu.Unlock()
-					if markCurrentPlanCompleted(&state.session, completionSignaled) {
+					if markCurrentPlanCompleted(&state.session) {
 						state.touchSession()
 						if err := s.sessionStore.UpdateSessionState(ctx, sessionStateInputFromSession(state.session)); err != nil {
 							return s.handleRunError(err)
 						}
 					}
-					if err := s.appendAssistantMessageOnlyAndSave(ctx, &state, assistantForFinal); err != nil {
+					if err := s.appendAssistantMessageOnlyAndSave(ctx, &state, turnOutput.assistant); err != nil {
 						return s.handleRunError(err)
 					}
 					s.emitRunScopedOptional(EventVerificationCompleted, &state, VerificationCompletedPayload{
 						StopReason: report.StopReason,
 					})
 					state.markTerminalDecision(controlplane.TerminalStatusCompleted, report.StopReason, report.Summary)
-					s.emitRunScoped(ctx, EventAgentDone, &state, assistantForFinal)
+					s.emitRunScoped(ctx, EventAgentDone, &state, turnOutput.assistant)
 					s.triggerMemoExtraction(state.session.ID, runBoundaryMessagesForMemo(&state), state.rememberedThisRun)
 
 					return nil
 				}
-				state.mu.Lock()
-				state.missingCompletionSignalStreak = 0
-				state.mu.Unlock()
-				if err := s.appendAssistantMessageOnlyAndSave(ctx, &state, assistantForFinal); err != nil {
+				if err := s.appendAssistantMessageOnlyAndSave(ctx, &state, turnOutput.assistant); err != nil {
 					return s.handleRunError(err)
 				}
 				s.emitRunScopedOptional(EventVerificationFailed, &state, VerificationFailedPayload{
 					StopReason: report.StopReason,
 				})
 				state.markTerminalDecision(controlplane.TerminalStatusFailed, report.StopReason, report.Summary)
-				s.emitRunScoped(ctx, EventAgentDone, &state, assistantForFinal)
+				s.emitRunScoped(ctx, EventAgentDone, &state, turnOutput.assistant)
 				return nil
 			}
 
@@ -667,20 +648,6 @@ func resolveRuntimeMaxTurns(rc config.RuntimeConfig) int {
 		return config.DefaultMaxTurns
 	}
 	return rc.MaxTurns
-}
-
-// setPendingSystemReminder 暂存只用于下一轮 provider 请求的系统提醒，避免写入会话历史。
-func setPendingSystemReminder(state *runState, reminder string) {
-	if state == nil {
-		return
-	}
-	reminder = strings.TrimSpace(reminder)
-	if reminder == "" {
-		return
-	}
-	state.mu.Lock()
-	state.pendingSystemReminder = reminder
-	state.mu.Unlock()
 }
 
 // drainPendingSystemReminder 读取并清空本轮待注入的系统提醒，保证提醒只进入一次 provider 请求。

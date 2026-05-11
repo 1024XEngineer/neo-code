@@ -306,8 +306,8 @@ const (
 	StopReasonVerificationFailed StopReason = "verification_failed"
 	// StopReasonAccepted 表示双门控通过并被 acceptance 接受。
 	StopReasonAccepted StopReason = "accepted"
-	// StopReasonMissingCompletionSignal 表示 assistant 停止调用工具但未输出完成信号。
-	StopReasonMissingCompletionSignal StopReason = "missing_completion_signal"
+	// StopReasonEmptyResponse 表示模型连续返回空文本响应。
+	StopReasonEmptyResponse StopReason = "empty_response"
 	// StopReasonAcceptCheckFailed 表示最终 Accept Gate 的验收项失败。
 	StopReasonAcceptCheckFailed StopReason = "accept_check_failed"
 	// StopReasonTodoNotConverged 表示 required todo 未收敛。

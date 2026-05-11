@@ -618,14 +618,13 @@ func (s *blockingLoadStore) CleanupExpiredSessions(ctx context.Context, maxAge t
 }
 
 type scriptedProvider struct {
-	name                      string
-	streams                   [][]providertypes.StreamEvent
-	responses                 []scriptedResponse
-	requests                  []providertypes.GenerateRequest
-	callCount                 int
-	requireExplicitCompletion bool
-	estimateFn                func(ctx context.Context, req providertypes.GenerateRequest) (providertypes.BudgetEstimate, error)
-	chatFn                    func(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error
+	name       string
+	streams    [][]providertypes.StreamEvent
+	responses  []scriptedResponse
+	requests   []providertypes.GenerateRequest
+	callCount  int
+	estimateFn func(ctx context.Context, req providertypes.GenerateRequest) (providertypes.BudgetEstimate, error)
+	chatFn     func(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error
 }
 
 func (p *scriptedProvider) EstimateInputTokens(
@@ -656,13 +655,6 @@ func (p *scriptedProvider) Generate(ctx context.Context, req providertypes.Gener
 
 	if p.chatFn != nil {
 		stream, err := p.collectChatFnStream(ctx, req)
-		if p.shouldInjectDefaultCompletionForStream(stream) {
-			select {
-			case events <- providertypes.NewTextDeltaStreamEvent("{\"task_completion\":{\"completed\":true}}\n"):
-			case <-ctx.Done():
-				return ctx.Err()
-			}
-		}
 		for _, event := range stream {
 			select {
 			case events <- event:
@@ -672,15 +664,7 @@ func (p *scriptedProvider) Generate(ctx context.Context, req providertypes.Gener
 		}
 		return err
 	}
-
 	if callIndex < len(p.streams) {
-		if p.shouldInjectDefaultCompletionForStream(p.streams[callIndex]) {
-			select {
-			case events <- providertypes.NewTextDeltaStreamEvent("{\"task_completion\":{\"completed\":true}}\n"):
-			case <-ctx.Done():
-				return ctx.Err()
-			}
-		}
 		for _, event := range p.streams[callIndex] {
 			select {
 			case events <- event:
@@ -698,7 +682,6 @@ func (p *scriptedProvider) Generate(ctx context.Context, req providertypes.Gener
 	}
 	if callIndex < len(p.responses) {
 		response := p.responses[callIndex]
-		response.Message = p.withDefaultCompletionSignal(response.Message)
 		for index, toolCall := range response.Message.ToolCalls {
 			select {
 			case events <- providertypes.NewToolCallStartStreamEvent(index, toolCall.ID, toolCall.Name):
@@ -728,23 +711,6 @@ func (p *scriptedProvider) Generate(ctx context.Context, req providertypes.Gener
 	return nil
 }
 
-// withDefaultCompletionSignal 让旧测试脚本中的普通最终回复满足新的 task_completion 协议。
-func (p *scriptedProvider) withDefaultCompletionSignal(message providertypes.Message) providertypes.Message {
-	if p.requireExplicitCompletion || len(message.ToolCalls) > 0 {
-		return message
-	}
-	text := renderPartsForTest(message.Parts)
-	if strings.TrimSpace(text) == "" ||
-		strings.Contains(text, `"task_completion"`) ||
-		strings.Contains(text, `"plan_spec"`) {
-		return message
-	}
-	message.Parts = []providertypes.ContentPart{
-		providertypes.NewTextPart("{\"task_completion\":{\"completed\":true}}\n" + text),
-	}
-	return message
-}
-
 // collectChatFnStream 收集自定义测试 provider 的流事件，便于统一补齐完成信号。
 func (p *scriptedProvider) collectChatFnStream(
 	ctx context.Context,
@@ -761,33 +727,6 @@ func (p *scriptedProvider) collectChatFnStream(
 		stream = append(stream, event)
 	}
 	return stream, <-errCh
-}
-
-// shouldInjectDefaultCompletionForStream 为旧测试中的纯文本流补齐完成信号，工具调用流和显式完成流保持原样。
-func (p *scriptedProvider) shouldInjectDefaultCompletionForStream(stream []providertypes.StreamEvent) bool {
-	if p.requireExplicitCompletion {
-		return false
-	}
-	hasText := false
-	for _, event := range stream {
-		switch event.Type {
-		case providertypes.StreamEventToolCallStart, providertypes.StreamEventToolCallDelta:
-			return false
-		case providertypes.StreamEventTextDelta:
-			if event.TextDelta == nil {
-				continue
-			}
-			text := strings.TrimSpace(event.TextDelta.Text)
-			if text == "" {
-				continue
-			}
-			hasText = true
-			if strings.Contains(text, `"task_completion"`) || strings.Contains(text, `"plan_spec"`) {
-				return false
-			}
-		}
-	}
-	return hasText
 }
 
 // streamContainsMessageDone 判断测试流中是否已显式包含结束事件，避免辅助 provider 重复补发 message_done。
@@ -3802,7 +3741,7 @@ func TestServiceRunRepairsIncompleteToolCallTailBeforeBuildingContext(t *testing
 	}
 
 	if len(builder.lastInput.Messages) != 2 {
-		t.Fatalf("len(builder.lastInput.Messages) = %d, want 2", len(builder.lastInput.Messages))
+		t.Fatalf("len(builder.lastInput.Messages) = %d, want 1", len(builder.lastInput.Messages))
 	}
 	if builder.lastInput.Messages[0].Role != providertypes.RoleUser || renderPartsForTest(builder.lastInput.Messages[0].Parts) != "before" {
 		t.Fatalf("unexpected repaired history in builder input: %+v", builder.lastInput.Messages)
@@ -4111,7 +4050,7 @@ func TestServiceRunPlanModeKeepsExistingPlanWhenPlanSpecIsInvalid(t *testing.T) 
 			{
 				Message: providertypes.Message{
 					Role: providertypes.RoleAssistant,
-					Parts: []providertypes.ContentPart{providertypes.NewTextPart(`{"task_completion":{"completed":true}}
+					Parts: []providertypes.ContentPart{providertypes.NewTextPart(`
 {
   "plan_spec": {
     "goal": "",
@@ -4203,8 +4142,8 @@ func TestServiceRunBuildModeDoesNotRequireCurrentPlan(t *testing.T) {
 	if saved.CurrentPlan != nil {
 		t.Fatalf("expected build mode to complete without CurrentPlan, got %+v", saved.CurrentPlan)
 	}
-	if builder.callCount != 2 {
-		t.Fatalf("builder call count = %d, want 2", builder.callCount)
+	if builder.callCount != 1 {
+		t.Fatalf("builder call count = %d, want 1", builder.callCount)
 	}
 	if builder.builds[0].PlanStage != planStageBuildExecute {
 		t.Fatalf("PlanStage = %q, want %q", builder.builds[0].PlanStage, planStageBuildExecute)
@@ -4228,7 +4167,7 @@ func TestServiceRunPlanModeInjectsFullPlanOnNextTurnAfterDraftCreation(t *testin
 			{
 				Message: providertypes.Message{
 					Role: providertypes.RoleAssistant,
-					Parts: []providertypes.ContentPart{providertypes.NewTextPart(`{"task_completion":{"completed":true}}
+					Parts: []providertypes.ContentPart{providertypes.NewTextPart(`
 {
   "plan_spec": {
     "goal": "Introduce plan mode",
@@ -4748,7 +4687,7 @@ func TestServiceRunBuildModeIgnoresPlanningJSON(t *testing.T) {
 			{
 				Message: providertypes.Message{
 					Role: providertypes.RoleAssistant,
-					Parts: []providertypes.ContentPart{providertypes.NewTextPart(`{"task_completion":{"completed":true}}
+					Parts: []providertypes.ContentPart{providertypes.NewTextPart(`
 {
   "plan_spec": {
     "goal": "不应在 build 中落库",

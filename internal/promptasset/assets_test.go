@@ -61,20 +61,6 @@ func TestRuntimeReminderTemplates(t *testing.T) {
 	if !strings.Contains(RepeatCycleReminder(), "exact same arguments") {
 		t.Fatalf("expected repeat-cycle reminder guidance, got %q", RepeatCycleReminder())
 	}
-	for name, prompt := range map[string]string{
-		"completion":       CompletionProtocolReminder(),
-		"final_completion": CompletionProtocolFinalReminder(),
-	} {
-		if !strings.Contains(prompt, "Completion retry rule") {
-			t.Fatalf("%s reminder should contain retry rule, got %q", name, prompt)
-		}
-		if !strings.Contains(prompt, "Do not repeat file lists") {
-			t.Fatalf("%s reminder should prevent repeated summaries, got %q", name, prompt)
-		}
-		if !strings.Contains(prompt, "at most one brief final sentence") {
-			t.Fatalf("%s reminder should keep final prose concise, got %q", name, prompt)
-		}
-	}
 }
 
 func TestPlanModePromptTemplates(t *testing.T) {
@@ -108,6 +94,15 @@ func TestPlanModePromptTemplates(t *testing.T) {
 	}
 	if !strings.Contains(PlanModePrompt("build_execute"), "create current-run required todos") {
 		t.Fatalf("expected build prompt to require direct-build todo bootstrap")
+	}
+	if !strings.Contains(PlanModePrompt("build_execute"), "simple conversational inputs") {
+		t.Fatalf("expected build prompt to cover simple conversational completion")
+	}
+	if !strings.Contains(PlanModePrompt("build_execute"), "without an explicit actionable request") {
+		t.Fatalf("expected build prompt to cover non-actionable input completion")
+	}
+	if !strings.Contains(PlanModePrompt("build_execute"), "do not inspect or analyze the project") {
+		t.Fatalf("expected build prompt to prevent needless project analysis for casual chat")
 	}
 	if got := PlanModePrompt("unknown"); got != "" {
 		t.Fatalf("PlanModePrompt(unknown) = %q, want empty", got)
