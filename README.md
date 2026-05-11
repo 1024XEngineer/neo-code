@@ -315,7 +315,7 @@ go run ./cmd/neocode --session <session_id>
 - [日常使用指南](https://neocode-docs.pages.dev/guide/daily-use)
 - [配置指南](https://neocode-docs.pages.dev/guide/configuration)
 
-2. 端侧入口（你这次关心的 Web / 飞书）
+2. 端侧入口
 - [Web UI 使用指南](https://neocode-docs.pages.dev/guide/web-ui)
 - [飞书远程接入配置（SDK / Webhook）](https://neocode-docs.pages.dev/guide/feishu-remote-setup)
 - [HTTP URL 唤醒使用指南](https://neocode-docs.pages.dev/guide/http-daemon-wake-user-guide)
