@@ -5770,6 +5770,10 @@ func (a *App) composeTranscriptContent(width int) (string, bool) {
 			}
 		}
 		message := a.activeMessages[idx]
+		// 跳过 system 角色消息，避免系统提醒被渲染为 assistant 回复
+		if message.Role == roleSystem {
+			continue
+		}
 		inlineLog := isInlineLogMessage(message)
 		continuation := message.Role == roleAssistant && lastRenderedRole == roleAssistant
 		if inlineLog && lastRenderedRole == roleAssistant {
