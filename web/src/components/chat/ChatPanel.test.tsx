@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import ChatPanel from './ChatPanel'
 import { useChatStore } from '@/stores/useChatStore'
 import { useSessionStore } from '@/stores/useSessionStore'
@@ -31,6 +31,7 @@ describe('ChatPanel', () => {
   beforeEach(() => {
     mockGatewayAPI = {
       resolvePermission: vi.fn().mockResolvedValue(undefined),
+      resolveUserQuestion: vi.fn().mockResolvedValue(undefined),
     }
 
     useUIStore.setState({
@@ -154,5 +155,86 @@ describe('ChatPanel', () => {
 
     await new Promise((resolve) => setTimeout(resolve, 20))
     expect(mockGatewayAPI.resolvePermission).toHaveBeenCalledTimes(1)
+  })
+
+  it('submits single choice ask_user with additional free text only', async () => {
+    useChatStore.setState({
+      pendingUserQuestion: {
+        request_id: 'uq-single',
+        title: 'Choose an option',
+        description: 'Pick one',
+        kind: 'single_choice',
+        options: ['A', 'B', 'C'],
+        allow_skip: false,
+      },
+    } as any)
+
+    render(<ChatPanel />)
+
+    fireEvent.change(screen.getByPlaceholderText('否，我有其他想法要告诉Neo-Code'), {
+      target: { value: '我有其他方案：先做灰度' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /提交/ }))
+
+    await waitFor(() => {
+      expect(mockGatewayAPI.resolveUserQuestion).toHaveBeenCalledWith({
+        request_id: 'uq-single',
+        status: 'answered',
+        values: undefined,
+        message: '我有其他方案：先做灰度',
+      })
+    })
+  })
+
+  it('submits multi choice ask_user with selected values and additional free text', async () => {
+    useChatStore.setState({
+      pendingUserQuestion: {
+        request_id: 'uq-multi',
+        title: 'Choose options',
+        description: 'Pick one or more',
+        kind: 'multi_choice',
+        options: ['A', 'B', 'C'],
+        allow_skip: false,
+      },
+    } as any)
+
+    render(<ChatPanel />)
+
+    fireEvent.click(screen.getByRole('checkbox', { name: 'A' }))
+    fireEvent.click(screen.getByRole('checkbox', { name: 'C' }))
+    fireEvent.change(screen.getByPlaceholderText('否，我有其他想法要告诉Neo-Code'), {
+      target: { value: 'C 放到后面，我建议先做 A' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /提交/ }))
+
+    await waitFor(() => {
+      expect(mockGatewayAPI.resolveUserQuestion).toHaveBeenCalledWith({
+        request_id: 'uq-multi',
+        status: 'answered',
+        values: ['A', 'C'],
+        message: 'C 放到后面，我建议先做 A',
+      })
+    })
+  })
+
+  it('renders option description tooltip icon for ask_user options', () => {
+    useChatStore.setState({
+      pendingUserQuestion: {
+        request_id: 'uq-desc',
+        title: 'Choose one',
+        description: 'Pick one option',
+        kind: 'single_choice',
+        options: [
+          { label: '选项 A', description: '先执行方案 A' },
+          { label: '选项 B', description: '再执行方案 B' },
+        ],
+        allow_skip: false,
+      },
+    } as any)
+
+    render(<ChatPanel />)
+
+    expect(screen.getByLabelText('选项说明：先执行方案 A')).toBeInTheDocument()
+    expect(screen.getByLabelText('选项说明：再执行方案 B')).toBeInTheDocument()
   })
 })

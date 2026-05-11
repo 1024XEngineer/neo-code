@@ -14,6 +14,7 @@ import {
   Shield,
   X,
   Check,
+  Info,
 } from 'lucide-react'
 
 export default function ChatPanel() {
@@ -39,6 +40,7 @@ export default function ChatPanel() {
   const [userQuestionText, setUserQuestionText] = useState('')
   const [userQuestionSingleChoice, setUserQuestionSingleChoice] = useState('')
   const [userQuestionMultiChoices, setUserQuestionMultiChoices] = useState<string[]>([])
+  const [userQuestionAdditionalText, setUserQuestionAdditionalText] = useState('')
   const titleRef = useRef<HTMLDivElement>(null)
   const autoResolvingPermissionIdsRef = useRef<Set<string>>(new Set())
 
@@ -84,6 +86,7 @@ export default function ChatPanel() {
     const options = parseUserQuestionOptions(Array.isArray(pendingUserQuestion.options) ? pendingUserQuestion.options : [])
     let values: string[] = []
     let message = ''
+    const additionalText = userQuestionAdditionalText.trim()
 
     if (status === 'answered') {
       switch (pendingUserQuestion.kind) {
@@ -99,16 +102,17 @@ export default function ChatPanel() {
         }
         case 'single_choice': {
           const selected = userQuestionSingleChoice.trim()
-          if (!selected) {
-            useUIStore.getState().showToast('Please select one option', 'info')
+          if (!selected && !additionalText) {
+            useUIStore.getState().showToast('Please select one option or enter another idea', 'info')
             return
           }
-          values = [selected]
+          if (selected) values = [selected]
+          if (additionalText) message = additionalText
           break
         }
         case 'multi_choice': {
-          if (userQuestionMultiChoices.length === 0) {
-            useUIStore.getState().showToast('Please select at least one option', 'info')
+          if (userQuestionMultiChoices.length === 0 && !additionalText) {
+            useUIStore.getState().showToast('Please select at least one option or enter another idea', 'info')
             return
           }
           const maxChoices = Number(pendingUserQuestion.max_choices || 0)
@@ -117,6 +121,7 @@ export default function ChatPanel() {
             return
           }
           values = [...userQuestionMultiChoices]
+          if (additionalText) message = additionalText
           break
         }
         default: {
@@ -153,11 +158,13 @@ export default function ChatPanel() {
       setUserQuestionText('')
       setUserQuestionSingleChoice('')
       setUserQuestionMultiChoices([])
+      setUserQuestionAdditionalText('')
       return
     }
     setUserQuestionText('')
     setUserQuestionSingleChoice('')
     setUserQuestionMultiChoices([])
+    setUserQuestionAdditionalText('')
   }, [pendingUserQuestion?.request_id])
 
   useEffect(() => {
@@ -342,6 +349,15 @@ export default function ChatPanel() {
                       disabled={isResolvingUserQuestion}
                     />
                     <span>{option.label}</span>
+                    {option.description && (
+                      <span
+                        title={option.description}
+                        aria-label={`选项说明：${option.description}`}
+                        style={{ display: 'inline-flex', alignItems: 'center', color: 'var(--text-tertiary)', cursor: 'help' }}
+                      >
+                        <Info size={12} />
+                      </span>
+                    )}
                   </label>
                 ))}
               </div>
@@ -365,9 +381,29 @@ export default function ChatPanel() {
                         disabled={isResolvingUserQuestion}
                       />
                       <span>{option.label}</span>
+                      {option.description && (
+                        <span
+                          title={option.description}
+                          aria-label={`选项说明：${option.description}`}
+                          style={{ display: 'inline-flex', alignItems: 'center', color: 'var(--text-tertiary)', cursor: 'help' }}
+                        >
+                          <Info size={12} />
+                        </span>
+                      )}
                     </label>
                   )
                 })}
+              </div>
+            )}
+            {(pendingUserQuestion.kind === 'single_choice' || pendingUserQuestion.kind === 'multi_choice') && (
+              <div style={{ marginBottom: 12 }}>
+                <textarea
+                  value={userQuestionAdditionalText}
+                  onChange={(e) => setUserQuestionAdditionalText(e.target.value)}
+                  placeholder="否，我有其他想法要告诉Neo-Code"
+                  disabled={isResolvingUserQuestion}
+                  style={{ width: '100%', minHeight: 72, borderRadius: 8, border: '1px solid var(--border-primary)', background: 'var(--bg-primary)', color: 'var(--text-primary)', padding: '10px 12px', fontSize: 12, resize: 'vertical' }}
+                />
               </div>
             )}
             <div className="permission-actions">
