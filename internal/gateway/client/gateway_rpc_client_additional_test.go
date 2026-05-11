@@ -886,6 +886,38 @@ func TestGatewayAutoSpawnHelpers(t *testing.T) {
 		}
 	})
 
+	t.Run("auto-spawn context does not inherit parent deadline", func(t *testing.T) {
+		t.Setenv(gatewayAutoSpawnReadyTimeoutEnv, "3000")
+		parent, cancelParent := context.WithTimeout(context.Background(), 80*time.Millisecond)
+		defer cancelParent()
+
+		autoSpawnCtx, cancelAutoSpawn := withAutoSpawnConnectContext(parent)
+		defer cancelAutoSpawn()
+
+		<-parent.Done()
+		time.Sleep(80 * time.Millisecond)
+		if err := autoSpawnCtx.Err(); err != nil {
+			t.Fatalf("auto-spawn ctx should ignore parent deadline, got %v", err)
+		}
+	})
+
+	t.Run("auto-spawn context forwards explicit cancel", func(t *testing.T) {
+		t.Setenv(gatewayAutoSpawnReadyTimeoutEnv, "3000")
+		parent, cancelParent := context.WithCancel(context.Background())
+		autoSpawnCtx, cancelAutoSpawn := withAutoSpawnConnectContext(parent)
+		defer cancelAutoSpawn()
+
+		cancelParent()
+		select {
+		case <-autoSpawnCtx.Done():
+		case <-time.After(500 * time.Millisecond):
+			t.Fatal("expected auto-spawn ctx to be canceled")
+		}
+		if !errors.Is(autoSpawnCtx.Err(), context.Canceled) {
+			t.Fatalf("auto-spawn ctx err = %v, want context.Canceled", autoSpawnCtx.Err())
+		}
+	})
+
 	t.Run("wait ready with empty address", func(t *testing.T) {
 		err := waitGatewayReadyAfterAutoSpawn(context.Background(), "   ", func(string) (net.Conn, error) {
 			return nil, errors.New("should not dial")
