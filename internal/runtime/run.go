@@ -589,20 +589,19 @@ func (s *Service) prepareTurnBudgetSnapshot(ctx context.Context, state *runState
 	state.mu.Unlock()
 
 	repeatLimit := resolveRepeatCycleStreakLimit(cfg.Runtime)
-	dynamicPrompt := withProgressReminder(builtContext.DynamicSystemPrompt, score)
-	if pendingReminder := drainPendingSystemReminder(state); pendingReminder != "" {
-		dynamicPrompt = mergeEphemeralHookNotificationIntoSystemPrompt(dynamicPrompt, pendingReminder)
-	}
-	if notificationHint := strings.TrimSpace(s.drainHookNotificationsForTurn(state)); notificationHint != "" {
-		dynamicPrompt = mergeEphemeralHookNotificationIntoSystemPrompt(dynamicPrompt, notificationHint)
-	}
-	systemPrompt := builtContext.SystemPrompt
+	var systemPrompt string
 	if builtContext.DynamicSystemPrompt != "" {
-		systemPrompt = joinRuntimeSystemPromptParts(builtContext.StableSystemPrompt, dynamicPrompt)
-	} else if builtContext.StableSystemPrompt != "" {
-		systemPrompt = joinRuntimeSystemPromptParts(builtContext.StableSystemPrompt, dynamicPrompt)
+		// New style: reminders append to dynamicPrompt, then join with stable
+		prompt := withProgressReminder(builtContext.DynamicSystemPrompt, score)
+		if pendingReminder := drainPendingSystemReminder(state); pendingReminder != "" {
+			prompt = mergeEphemeralHookNotificationIntoSystemPrompt(prompt, pendingReminder)
+		}
+		if notificationHint := strings.TrimSpace(s.drainHookNotificationsForTurn(state)); notificationHint != "" {
+			prompt = mergeEphemeralHookNotificationIntoSystemPrompt(prompt, notificationHint)
+		}
+		systemPrompt = joinRuntimeSystemPromptParts(builtContext.StableSystemPrompt, prompt)
 	} else {
-		// 旧 SystemPrompt 路径：directly append reminders.
+		// Legacy fallback: reminders append to SystemPrompt directly
 		systemPrompt = withProgressReminder(builtContext.SystemPrompt, score)
 		if pendingReminder := drainPendingSystemReminder(state); pendingReminder != "" {
 			systemPrompt = mergeEphemeralHookNotificationIntoSystemPrompt(systemPrompt, pendingReminder)
