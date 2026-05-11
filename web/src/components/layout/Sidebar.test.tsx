@@ -198,4 +198,52 @@ describe('Sidebar ProviderModal', () => {
     expect(showToast).not.toHaveBeenCalled()
     expect(screen.getByText('switch failed')).toBeInTheDocument()
   })
+
+  it('only shows the expanded workspace style on the current workspace', async () => {
+    const switchWorkspace = vi.fn().mockResolvedValue(undefined)
+    useWorkspaceStore.setState({
+      workspaces: [
+        { hash: 'w1', path: '/workspace-one', name: 'Workspace One', createdAt: '1', updatedAt: '1' },
+        { hash: 'w2', path: '/workspace-two', name: 'Workspace Two', createdAt: '1', updatedAt: '1' },
+      ],
+      currentWorkspaceHash: 'w1',
+      switchWorkspace,
+    } as any)
+
+    render(<Sidebar />)
+
+    const workspaceOne = screen.getByRole('button', { name: /Workspace One/i })
+    const workspaceTwo = screen.getByRole('button', { name: /Workspace Two/i })
+    const chevronFor = (button: HTMLElement) => {
+      const chevron = button.querySelector('.chevron')
+      if (!(chevron instanceof HTMLElement)) {
+        throw new Error('workspace chevron not found')
+      }
+      return chevron
+    }
+
+    await waitFor(() => {
+      expect(chevronFor(workspaceOne)).toHaveClass('expanded')
+    })
+
+    fireEvent.click(workspaceOne)
+    await waitFor(() => {
+      expect(chevronFor(workspaceOne)).not.toHaveClass('expanded')
+    })
+    fireEvent.click(workspaceOne)
+    await waitFor(() => {
+      expect(chevronFor(workspaceOne)).toHaveClass('expanded')
+    })
+
+    fireEvent.click(workspaceTwo)
+    await waitFor(() => {
+      expect(switchWorkspace).toHaveBeenCalledWith('w2', mockGatewayAPI)
+    })
+    useWorkspaceStore.setState({ currentWorkspaceHash: 'w2' } as any)
+
+    await waitFor(() => {
+      expect(chevronFor(workspaceOne)).not.toHaveClass('expanded')
+      expect(chevronFor(workspaceTwo)).toHaveClass('expanded')
+    })
+  })
 })

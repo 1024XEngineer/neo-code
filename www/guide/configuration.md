@@ -88,7 +88,7 @@ current_model: gemini-2.5-pro
 工作区建议通过启动参数指定，不写进主配置：
 
 ```bash
-neocode --workdir /path/to/project
+neocode -w /path/to/project
 ```
 
 ## Shell 和工具超时

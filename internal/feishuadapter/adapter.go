@@ -19,6 +19,7 @@ import (
 const defaultSignatureMaxSkew = 5 * time.Minute
 const defaultProgressNotifyInterval = 2 * time.Second
 const defaultCardRefreshInterval = 1500 * time.Millisecond
+const defaultPermissionCardDismissDelay = 2 * time.Second
 
 type approvalEntry struct {
 	RequestID string
@@ -63,14 +64,18 @@ type Adapter struct {
 
 	nowFn func() time.Time
 
-	mu                sync.RWMutex
-	activeRuns        map[string]sessionBinding
-	sessionChats      map[string]string
-	requestRuns       map[string]string
-	lastProgressAt    map[string]time.Time
-	permissionCards   map[string]string // requestID -> card message_id
-	userQuestionCards map[string]string // requestID -> card message_id
-	pendingQuestions  map[string]userQuestionEntry
+	mu              sync.RWMutex
+	activeRuns      map[string]sessionBinding
+	sessionChats    map[string]string
+	requestRuns     map[string]string
+	lastProgressAt  map[string]time.Time
+	permissionCards map[string]string // requestID -> card message_id
+	// resolvedPermissions 记录已完成审批的 request_id，避免重复事件将状态回滚为 pending。
+	resolvedPermissions map[string]string // requestID -> decision
+	userQuestionCards   map[string]string // requestID -> card message_id
+	pendingQuestions    map[string]userQuestionEntry
+
+	permissionCardDismissDelay time.Duration
 }
 
 // New 创建飞书适配器实例。
@@ -88,19 +93,21 @@ func New(cfg Config, gateway GatewayClient, messenger Messenger, logger *log.Log
 		logger = log.New(io.Discard, "", 0)
 	}
 	return &Adapter{
-		cfg:               cfg,
-		gateway:           gateway,
-		messenger:         messenger,
-		logger:            logger,
-		idem:              newIdempotencyStore(cfg.IdempotencyTTL),
-		nowFn:             func() time.Time { return time.Now().UTC() },
-		activeRuns:        make(map[string]sessionBinding),
-		sessionChats:      make(map[string]string),
-		requestRuns:       make(map[string]string),
-		lastProgressAt:    make(map[string]time.Time),
-		permissionCards:   make(map[string]string),
-		userQuestionCards: make(map[string]string),
-		pendingQuestions:  make(map[string]userQuestionEntry),
+		cfg:                        cfg,
+		gateway:                    gateway,
+		messenger:                  messenger,
+		logger:                     logger,
+		idem:                       newIdempotencyStore(cfg.IdempotencyTTL),
+		nowFn:                      func() time.Time { return time.Now().UTC() },
+		activeRuns:                 make(map[string]sessionBinding),
+		sessionChats:               make(map[string]string),
+		requestRuns:                make(map[string]string),
+		lastProgressAt:             make(map[string]time.Time),
+		permissionCards:            make(map[string]string),
+		resolvedPermissions:        make(map[string]string),
+		userQuestionCards:          make(map[string]string),
+		pendingQuestions:           make(map[string]userQuestionEntry),
+		permissionCardDismissDelay: defaultPermissionCardDismissDelay,
 	}, nil
 }
 
@@ -379,18 +386,19 @@ func (a *Adapter) handleGatewayEvent(ctx context.Context, raw json.RawMessage) {
 				if strings.EqualFold(runtimeType, "permission_requested") {
 					requestID, toolName, operation, target, reason := extractPermissionRequest(envelope)
 					if requestID != "" {
-						a.markPermissionPending(sessionID, runID, requestID, toolName, reason)
-						cardID, err := a.messenger.SendPermissionCard(ctx, chatID, PermissionCardPayload{
-							RequestID: requestID,
-							ToolName:  toolName,
-							Operation: operation,
-							Target:    target,
-							Message:   reason,
-						})
-						if err == nil && strings.TrimSpace(cardID) != "" {
-							a.mu.Lock()
-							a.permissionCards[requestID] = cardID
-							a.mu.Unlock()
+						if a.markPermissionPending(sessionID, runID, requestID, toolName, reason) {
+							cardID, err := a.messenger.SendPermissionCard(ctx, chatID, PermissionCardPayload{
+								RequestID: requestID,
+								ToolName:  toolName,
+								Operation: operation,
+								Target:    target,
+								Message:   reason,
+							})
+							if err == nil && strings.TrimSpace(cardID) != "" {
+								a.mu.Lock()
+								a.permissionCards[requestID] = cardID
+								a.mu.Unlock()
+							}
 						}
 						return
 					}
@@ -596,39 +604,65 @@ func (a *Adapter) handleRunProgressCard(ctx context.Context, sessionID string, r
 	}
 }
 
-// markPermissionPending 将权限请求映射到 run 卡片，便于用户在同一卡片观察审批状态。
-func (a *Adapter) markPermissionPending(sessionID string, runID string, requestID string, toolName string, reason string) {
+// markPermissionPending 将权限请求映射到 run 卡片，返回是否需要发送审批按钮卡片。
+func (a *Adapter) markPermissionPending(sessionID string, runID string, requestID string, toolName string, reason string) bool {
+	normalizedRequestID := strings.TrimSpace(requestID)
+	if normalizedRequestID == "" {
+		return false
+	}
 	key := runBindingKey(sessionID, runID)
 	a.mu.Lock()
 	binding, ok := a.activeRuns[key]
-	if ok {
-		binding.ApprovalStatus = "pending"
+	if !ok {
+		a.mu.Unlock()
+		return false
+	}
+	if _, resolved := a.resolvedPermissions[normalizedRequestID]; resolved {
+		a.mu.Unlock()
+		return false
+	}
+
+	shouldSendCard := strings.TrimSpace(a.permissionCards[normalizedRequestID]) == ""
+	binding.ApprovalStatus = "pending"
+	found := false
+	for i := range binding.ApprovalRecords {
+		if binding.ApprovalRecords[i].RequestID != normalizedRequestID {
+			continue
+		}
+		found = true
+		if strings.TrimSpace(binding.ApprovalRecords[i].ToolName) == "" && strings.TrimSpace(toolName) != "" {
+			binding.ApprovalRecords[i].ToolName = strings.TrimSpace(toolName)
+		}
+		if strings.TrimSpace(reason) != "" {
+			binding.ApprovalRecords[i].Reason = strings.TrimSpace(reason)
+		}
+		break
+	}
+	if !found {
 		binding.ApprovalRecords = append(binding.ApprovalRecords, approvalEntry{
-			RequestID: requestID,
-			ToolName:  toolName,
-			Reason:    reason,
+			RequestID: normalizedRequestID,
+			ToolName:  strings.TrimSpace(toolName),
+			Reason:    strings.TrimSpace(reason),
 			Decision:  "pending",
 		})
-		if strings.TrimSpace(reason) != "" {
-			binding.LastSummary = strings.TrimSpace(reason)
-		}
-		a.activeRuns[key] = binding
 	}
-	if strings.TrimSpace(requestID) != "" {
-		a.requestRuns[requestID] = key
+	if strings.TrimSpace(reason) != "" {
+		binding.LastSummary = strings.TrimSpace(reason)
 	}
+	a.activeRuns[key] = binding
+	a.requestRuns[normalizedRequestID] = key
+
 	cardID := ""
 	payload := StatusCardPayload{}
-	if ok {
-		cardID = strings.TrimSpace(binding.CardID)
-		payload = binding.statusCardPayload()
-	}
+	cardID = strings.TrimSpace(binding.CardID)
+	payload = binding.statusCardPayload()
 	a.mu.Unlock()
 	if cardID != "" {
 		if err := a.messenger.UpdateCard(context.Background(), cardID, payload); err != nil {
 			a.safeLog("update pending approval card failed: %v", err)
 		}
 	}
+	return shouldSendCard
 }
 
 // markUserQuestionPending 记录 ask_user 待回答问题，并挂接到 run 状态卡上下文。
@@ -718,12 +752,16 @@ func (a *Adapter) updateUserQuestionStatus(requestID string, status string, valu
 
 // updateApprovalStatus 在审批动作被网关受理后更新 run 卡片中的审批结论，并更新权限卡片为已处理状态。
 func (a *Adapter) updateApprovalStatus(requestID string, decision string) {
+	normalizedRequestID := strings.TrimSpace(requestID)
+	if normalizedRequestID == "" {
+		return
+	}
 	normalizedDecision := strings.TrimSpace(strings.ToLower(decision))
 	if normalizedDecision == "" {
 		return
 	}
 	a.mu.Lock()
-	key := a.requestRuns[strings.TrimSpace(requestID)]
+	key := a.requestRuns[normalizedRequestID]
 	binding, ok := a.activeRuns[key]
 	var approvalEntry *approvalEntry
 	if ok {
@@ -733,7 +771,7 @@ func (a *Adapter) updateApprovalStatus(requestID string, decision string) {
 		}
 		binding.ApprovalStatus = status
 		for i := range binding.ApprovalRecords {
-			if binding.ApprovalRecords[i].RequestID == strings.TrimSpace(requestID) {
+			if binding.ApprovalRecords[i].RequestID == normalizedRequestID {
 				binding.ApprovalRecords[i].Decision = normalizedDecision
 				entry := binding.ApprovalRecords[i]
 				approvalEntry = &entry
@@ -748,7 +786,8 @@ func (a *Adapter) updateApprovalStatus(requestID string, decision string) {
 		statusCardID = strings.TrimSpace(binding.CardID)
 		statusPayload = binding.statusCardPayload()
 	}
-	permCardID := a.permissionCards[strings.TrimSpace(requestID)]
+	permCardID := a.permissionCards[normalizedRequestID]
+	a.resolvedPermissions[normalizedRequestID] = normalizedDecision
 	a.mu.Unlock()
 
 	// 更新状态卡片
@@ -761,7 +800,7 @@ func (a *Adapter) updateApprovalStatus(requestID string, decision string) {
 	// 更新权限卡片为已处理状态（去掉按钮，显示结果）
 	if permCardID != "" {
 		resolvedPayload := ResolvedPermissionCardPayload{
-			RequestID: strings.TrimSpace(requestID),
+			RequestID: normalizedRequestID,
 			Approved:  normalizedDecision != "reject",
 		}
 		if approvalEntry != nil {
@@ -770,8 +809,39 @@ func (a *Adapter) updateApprovalStatus(requestID string, decision string) {
 		}
 		if err := a.messenger.UpdatePermissionCard(context.Background(), permCardID, resolvedPayload); err != nil {
 			a.safeLog("update permission card failed: %v", err)
+		} else {
+			a.schedulePermissionCardDismiss(normalizedRequestID, permCardID)
 		}
 	}
+}
+
+// schedulePermissionCardDismiss 在审批结果展示短暂停留后收起卡片，避免页面残留。
+func (a *Adapter) schedulePermissionCardDismiss(requestID string, cardID string) {
+	normalizedRequestID := strings.TrimSpace(requestID)
+	normalizedCardID := strings.TrimSpace(cardID)
+	if normalizedRequestID == "" || normalizedCardID == "" {
+		return
+	}
+	delay := a.permissionCardDismissDelay
+	if delay <= 0 {
+		delay = defaultPermissionCardDismissDelay
+	}
+	go func() {
+		timer := time.NewTimer(delay)
+		defer timer.Stop()
+		<-timer.C
+		callCtx, cancel := context.WithTimeout(context.Background(), a.cfg.RequestTimeout)
+		defer cancel()
+		if err := a.messenger.DeleteMessage(callCtx, normalizedCardID); err != nil {
+			a.safeLog("delete permission card failed: %v", err)
+			return
+		}
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		if strings.TrimSpace(a.permissionCards[normalizedRequestID]) == normalizedCardID {
+			delete(a.permissionCards, normalizedRequestID)
+		}
+	}()
 }
 
 // markRunTerminal 在 run 结束时合并结果摘要并刷新状态卡片。

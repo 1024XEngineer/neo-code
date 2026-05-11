@@ -448,6 +448,82 @@ func TestRestoreRuntimePayloadAdditionalBranches(t *testing.T) {
 	}
 }
 
+func TestRestoreRuntimePayloadCheckpointRestoredKeepsBaselineFields(t *testing.T) {
+	t.Parallel()
+
+	payload, err := restoreRuntimePayload(EventCheckpointRestored, map[string]any{
+		"checkpoint_id":       "cp-baseline",
+		"session_id":          "session-1",
+		"guard_checkpoint_id": "",
+		"mode":                "baseline",
+		"paths":               []any{"a.txt", "nested/b.txt"},
+	})
+	if err != nil {
+		t.Fatalf("restoreRuntimePayload(CheckpointRestored) error = %v", err)
+	}
+	restored, ok := payload.(CheckpointRestoredPayload)
+	if !ok {
+		t.Fatalf("payload type = %T, want CheckpointRestoredPayload", payload)
+	}
+	if restored.CheckpointID != "cp-baseline" || restored.SessionID != "session-1" {
+		t.Fatalf("unexpected restored identity payload: %+v", restored)
+	}
+	if restored.Mode != "baseline" {
+		t.Fatalf("restored.Mode = %q, want baseline", restored.Mode)
+	}
+	if !reflect.DeepEqual(restored.Paths, []string{"a.txt", "nested/b.txt"}) {
+		t.Fatalf("restored.Paths = %#v, want [a.txt nested/b.txt]", restored.Paths)
+	}
+	if restored.GuardCheckpointID != "" {
+		t.Fatalf("restored.GuardCheckpointID = %q, want empty for baseline restore", restored.GuardCheckpointID)
+	}
+}
+
+func TestDecodeRuntimeEventCheckpointRestoredKeepsModeAndPaths(t *testing.T) {
+	t.Parallel()
+
+	notification := buildGatewayEventNotification(t, gateway.MessageFrame{
+		Type:      gateway.FrameTypeEvent,
+		Action:    gateway.FrameActionRun,
+		RunID:     "run-1",
+		SessionID: "session-1",
+		Payload: map[string]any{
+			"event_type": "run_progress",
+			"payload": map[string]any{
+				"runtime_event_type": string(EventCheckpointRestored),
+				"payload_version":    runtimeEventPayloadVersion,
+				"turn":               2,
+				"phase":              "restore",
+				"payload": map[string]any{
+					"checkpoint_id":       "cp-baseline",
+					"session_id":          "session-1",
+					"guard_checkpoint_id": "",
+					"mode":                "baseline",
+					"paths":               []string{"a.txt", "nested/b.txt"},
+				},
+			},
+		},
+	})
+
+	event, err := decodeRuntimeEventFromGatewayNotification(notification)
+	if err != nil {
+		t.Fatalf("decodeRuntimeEventFromGatewayNotification() error = %v", err)
+	}
+	if event.Type != EventCheckpointRestored || event.RunID != "run-1" || event.SessionID != "session-1" || event.Turn != 2 || event.Phase != "restore" {
+		t.Fatalf("unexpected event metadata: %+v", event)
+	}
+	restored, ok := event.Payload.(CheckpointRestoredPayload)
+	if !ok {
+		t.Fatalf("event.Payload type = %T, want CheckpointRestoredPayload", event.Payload)
+	}
+	if restored.CheckpointID != "cp-baseline" || restored.Mode != "baseline" {
+		t.Fatalf("unexpected checkpoint restored payload: %+v", restored)
+	}
+	if !reflect.DeepEqual(restored.Paths, []string{"a.txt", "nested/b.txt"}) {
+		t.Fatalf("restored.Paths = %#v, want [a.txt nested/b.txt]", restored.Paths)
+	}
+}
+
 func TestStreamHelperBranches(t *testing.T) {
 	t.Parallel()
 

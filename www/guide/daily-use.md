@@ -16,7 +16,7 @@ NeoCode 默认在终端中运行。如果你更喜欢图形界面，可以通过
 启动时指定工作区：
 
 ```bash
-neocode --workdir /path/to/project
+neocode -w /path/to/project
 ```
 
 工作区决定 NeoCode 能读取、搜索、编辑和执行命令的项目范围。切换到另一个项目时，建议新建会话，避免旧上下文混入。

@@ -25,6 +25,9 @@ beforeEach(() => {
   useChatStore.setState({
     messages: [],
     isGenerating: false,
+    isCompacting: false,
+    compactMode: "",
+    compactMessage: "",
     streamingMessageId: "",
     permissionRequests: [],
     pendingUserQuestion: null,
@@ -538,6 +541,85 @@ describe("eventBridge", () => {
     expect(useRuntimeInsightStore.getState().budgetUsageRatio).toBe(0.8);
   });
 
+  it("CompactStart sets persistent compact state without a toast", () => {
+    const api = createMockGatewayAPI();
+    handleGatewayEvent(
+      {
+        type: EventType.CompactStart,
+        payload: {
+          payload: {
+            runtime_event_type: EventType.CompactStart,
+            payload: "manual",
+          },
+        },
+        session_id: "sess-1",
+        run_id: "run-1",
+      },
+      api,
+    );
+
+    expect(useChatStore.getState().isCompacting).toBe(true);
+    expect(useChatStore.getState().compactMode).toBe("manual");
+    expect(useChatStore.getState().compactMessage).toBe(
+      "Compacting context...",
+    );
+    expect(useUIStore.getState().toasts).toHaveLength(0);
+  });
+
+  it("CompactApplied clears compact state and shows completion toast", () => {
+    const api = createMockGatewayAPI();
+    useChatStore
+      .getState()
+      .startCompacting("manual", "Compacting context...");
+
+    handleGatewayEvent(
+      {
+        type: EventType.CompactApplied,
+        payload: {
+          payload: {
+            runtime_event_type: EventType.CompactApplied,
+            payload: { applied: true },
+          },
+        },
+        session_id: "sess-1",
+        run_id: "run-1",
+      },
+      api,
+    );
+
+    expect(useChatStore.getState().isCompacting).toBe(false);
+    expect(useUIStore.getState().toasts.at(-1)?.message).toBe(
+      "Context compacted",
+    );
+  });
+
+  it("CompactError clears compact state and uses payload message", () => {
+    const api = createMockGatewayAPI();
+    useChatStore
+      .getState()
+      .startCompacting("manual", "Compacting context...");
+
+    handleGatewayEvent(
+      {
+        type: EventType.CompactError,
+        payload: {
+          payload: {
+            runtime_event_type: EventType.CompactError,
+            payload: { message: "compact timed out" },
+          },
+        },
+        session_id: "sess-1",
+        run_id: "run-1",
+      },
+      api,
+    );
+
+    expect(useChatStore.getState().isCompacting).toBe(false);
+    expect(useUIStore.getState().toasts.at(-1)?.message).toBe(
+      "compact timed out",
+    );
+  });
+
   it("VerificationStageFinished upserts verifier status", () => {
     const api = createMockGatewayAPI();
     handleGatewayEvent(
@@ -865,6 +947,196 @@ describe("eventBridge", () => {
     await Promise.resolve();
 
     expect(loadSession).toHaveBeenCalledWith("sess-1");
+    expect(useUIStore.getState().fileChanges).toHaveLength(0);
+  });
+
+  it("baseline CheckpointRestored removes only restored file changes without reloading the session", async () => {
+    const loadSession = vi.fn(async () => ({
+      payload: {
+        id: "sess-1",
+        agent_mode: "build",
+        messages: [{ role: "assistant", content: "after restore" }],
+      },
+    }));
+    const api = createMockGatewayAPI({ loadSession });
+    useSessionStore.setState({ currentSessionId: "sess-1" } as any);
+    useUIStore.setState({
+      isRestoringCheckpoint: true,
+      fileChanges: [
+        {
+          id: "fc-1",
+          path: "src/a.txt",
+          status: "modified",
+          additions: 1,
+          deletions: 0,
+        },
+        {
+          id: "fc-2",
+          path: "src/b.txt",
+          status: "modified",
+          additions: 2,
+          deletions: 1,
+        },
+      ],
+    } as any);
+
+    handleGatewayEvent(
+      {
+        type: EventType.CheckpointRestored,
+        payload: {
+          payload: {
+            runtime_event_type: EventType.CheckpointRestored,
+            payload: {
+              checkpoint_id: "cp1",
+              session_id: "sess-1",
+              guard_checkpoint_id: "",
+              mode: "baseline",
+              paths: ["./src/a.txt"],
+            },
+          },
+        },
+        session_id: "sess-1",
+        run_id: "run-1",
+      },
+      api,
+    );
+    await Promise.resolve();
+
+    expect(loadSession).not.toHaveBeenCalled();
+    expect(useUIStore.getState().isRestoringCheckpoint).toBe(false);
+    expect(useUIStore.getState().fileChanges.map((entry) => entry.path)).toEqual(
+      ["src/b.txt"],
+    );
+  });
+
+  it("baseline CheckpointRestored removes all paths from rollback all events", async () => {
+    const loadSession = vi.fn();
+    const api = createMockGatewayAPI({ loadSession });
+    useSessionStore.setState({ currentSessionId: "sess-1" } as any);
+    useUIStore.setState({
+      isRestoringCheckpoint: true,
+      fileChanges: [
+        {
+          id: "fc-1",
+          path: "src/a.txt",
+          status: "modified",
+          additions: 1,
+          deletions: 0,
+        },
+        {
+          id: "fc-2",
+          path: "src/b.txt",
+          status: "added",
+          additions: 2,
+          deletions: 0,
+        },
+      ],
+    } as any);
+
+    handleGatewayEvent(
+      {
+        type: EventType.CheckpointRestored,
+        payload: {
+          payload: {
+            runtime_event_type: EventType.CheckpointRestored,
+            payload: {
+              checkpoint_id: "cp1",
+              session_id: "sess-1",
+              guard_checkpoint_id: "",
+              mode: "baseline",
+              paths: ["src/a.txt", "src/b.txt"],
+            },
+          },
+        },
+        session_id: "sess-1",
+        run_id: "run-1",
+      },
+      api,
+    );
+    await Promise.resolve();
+
+    expect(loadSession).not.toHaveBeenCalled();
+    expect(useUIStore.getState().fileChanges).toHaveLength(0);
+  });
+
+  it("baseline CheckpointRestored invalidates in-flight run-scoped file change refreshes", async () => {
+    let resolveDiff: ((value: unknown) => void) | undefined;
+    const checkpointDiff = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          resolveDiff = resolve;
+        }),
+    );
+    const loadSession = vi.fn();
+    const api = createMockGatewayAPI({ checkpointDiff, loadSession });
+    useSessionStore.setState({ currentSessionId: "sess-1" } as any);
+    useGatewayStore.setState({ currentRunId: "run-1" } as any);
+    useUIStore.setState({
+      fileChanges: [
+        {
+          id: "fc-1",
+          path: "src/a.txt",
+          status: "modified",
+          additions: 1,
+          deletions: 0,
+        },
+      ],
+    } as any);
+
+    handleGatewayEvent(
+      {
+        type: EventType.CheckpointCreated,
+        payload: {
+          payload: {
+            runtime_event_type: EventType.CheckpointCreated,
+            payload: {
+              checkpoint_id: "cp-end",
+              code_checkpoint_ref: "c",
+              session_checkpoint_ref: "s",
+              commit_hash: "",
+              reason: "end_of_turn",
+            },
+          },
+        },
+        session_id: "sess-1",
+        run_id: "run-1",
+      },
+      api,
+    );
+    expect(checkpointDiff).toHaveBeenCalled();
+
+    handleGatewayEvent(
+      {
+        type: EventType.CheckpointRestored,
+        payload: {
+          payload: {
+            runtime_event_type: EventType.CheckpointRestored,
+            payload: {
+              checkpoint_id: "cp-end",
+              session_id: "sess-1",
+              guard_checkpoint_id: "",
+              mode: "baseline",
+              paths: ["src/a.txt"],
+            },
+          },
+        },
+        session_id: "sess-1",
+        run_id: "run-1",
+      },
+      api,
+    );
+
+    resolveDiff?.({
+      payload: {
+        checkpoint_id: "cp-end",
+        files: { modified: ["src/a.txt"] },
+        patch: "--- a/src/a.txt\n+++ b/src/a.txt\n@@ -1 +1 @@\n-old\n+new\n",
+      },
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(loadSession).not.toHaveBeenCalled();
     expect(useUIStore.getState().fileChanges).toHaveLength(0);
   });
 

@@ -88,7 +88,7 @@ If the model list is empty, first check that the active provider's API key is se
 Use the launch argument for workspaces:
 
 ```bash
-neocode --workdir /path/to/project
+neocode -w /path/to/project
 ```
 
 Inside NeoCode:
