@@ -125,6 +125,7 @@ type fakeMessenger struct {
 	sendTextErr   error
 	sendCardErr   error
 	updateCardErr error
+	deleteCardErr error
 }
 
 func (m *fakeMessenger) SendText(_ context.Context, chatID string, text string) error {
@@ -148,6 +149,13 @@ func (m *fakeMessenger) UpdatePermissionCard(_ context.Context, cardID string, p
 	defer m.mu.Unlock()
 	m.messages = append(m.messages, sentMessage{chatID: cardID, kind: "update_perm_card", resolvedCard: &payload})
 	return nil
+}
+
+func (m *fakeMessenger) DeleteMessage(_ context.Context, messageID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.messages = append(m.messages, sentMessage{chatID: messageID, kind: "delete_card"})
+	return m.deleteCardErr
 }
 
 func (m *fakeMessenger) SendUserQuestionCard(_ context.Context, chatID string, payload UserQuestionCardPayload) (string, error) {
@@ -674,6 +682,78 @@ func TestGatewayEventsUpdateStatusCard(t *testing.T) {
 	}
 	if !foundPlanning || !foundApproved || !foundSuccess {
 		t.Fatalf("unexpected card updates: %#v", msgs)
+	}
+}
+
+func TestPermissionApprovalDoesNotRevertToPendingAndDismissesCard(t *testing.T) {
+	adapter := newTestAdapter(t)
+	adapter.permissionCardDismissDelay = 5 * time.Millisecond
+	if err := adapter.bindThenRun(context.Background(), "session-approval", "run-approval", "chat-approval", "执行审批任务"); err != nil {
+		t.Fatalf("bindThenRun: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go adapter.consumeGatewayEvents(ctx)
+
+	pushGatewayEvent(t, adapterTestGateway(adapter), "session-approval", "run-approval", "run_progress", map[string]any{
+		"runtime_event_type": "permission_requested",
+		"payload": map[string]any{
+			"request_id": "perm-revert-1",
+			"reason":     "需要审批",
+		},
+	})
+	time.Sleep(20 * time.Millisecond)
+
+	if err := adapter.HandleCardAction(context.Background(), FeishuCardActionEvent{
+		RequestID: "perm-revert-1",
+		Decision:  "allow_once",
+	}); err != nil {
+		t.Fatalf("handle card action: %v", err)
+	}
+	time.Sleep(20 * time.Millisecond)
+
+	// 网关重复推送同一 permission_requested 时，不应把已审批状态回滚成 pending，也不应重发审批卡片。
+	pushGatewayEvent(t, adapterTestGateway(adapter), "session-approval", "run-approval", "run_progress", map[string]any{
+		"runtime_event_type": "permission_requested",
+		"payload": map[string]any{
+			"request_id": "perm-revert-1",
+			"reason":     "重复事件",
+		},
+	})
+	time.Sleep(30 * time.Millisecond)
+
+	msgs := adapterTestMessenger(adapter).snapshot()
+	cardSendCount := 0
+	updatedResolved := false
+	deletedResolvedCard := false
+	lastApprovalStatus := ""
+	for _, message := range msgs {
+		if message.kind == "card" && message.card.RequestID == "perm-revert-1" {
+			cardSendCount++
+		}
+		if message.kind == "update_perm_card" && message.resolvedCard != nil &&
+			message.resolvedCard.RequestID == "perm-revert-1" &&
+			message.resolvedCard.Approved {
+			updatedResolved = true
+		}
+		if message.kind == "delete_card" {
+			deletedResolvedCard = true
+		}
+		if message.kind == "update_card" {
+			lastApprovalStatus = message.runCard.ApprovalStatus
+		}
+	}
+	if cardSendCount != 1 {
+		t.Fatalf("permission card send count = %d, want 1; msgs=%#v", cardSendCount, msgs)
+	}
+	if !updatedResolved {
+		t.Fatalf("expected resolved permission card update, msgs=%#v", msgs)
+	}
+	if !deletedResolvedCard {
+		t.Fatalf("expected resolved permission card deletion, msgs=%#v", msgs)
+	}
+	if lastApprovalStatus != "approved" {
+		t.Fatalf("last approval status = %q, want approved; msgs=%#v", lastApprovalStatus, msgs)
 	}
 }
 

@@ -238,6 +238,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   userContent: {
     maxWidth: '85%',
+    minWidth: 0,
   },
   userBubble: {
     background: 'var(--user-bubble)',
@@ -247,6 +248,10 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: 14,
     lineHeight: 1.6,
     border: '1px solid var(--border-primary)',
+    maxWidth: '100%',
+    whiteSpace: 'pre-wrap',
+    overflowWrap: 'anywhere',
+    wordBreak: 'break-word',
     textWrap: 'pretty' as any,
   },
   revertBtn: {

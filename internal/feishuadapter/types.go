@@ -114,6 +114,8 @@ type Messenger interface {
 	SendText(ctx context.Context, chatID string, text string) error
 	SendPermissionCard(ctx context.Context, chatID string, payload PermissionCardPayload) (string, error)
 	UpdatePermissionCard(ctx context.Context, cardID string, payload ResolvedPermissionCardPayload) error
+	// DeleteMessage 删除已发送消息，用于审批完成后的卡片收起。
+	DeleteMessage(ctx context.Context, messageID string) error
 	SendUserQuestionCard(ctx context.Context, chatID string, payload UserQuestionCardPayload) (string, error)
 	UpdateUserQuestionCard(ctx context.Context, cardID string, payload ResolvedUserQuestionCardPayload) error
 	SendStatusCard(ctx context.Context, chatID string, payload StatusCardPayload) (string, error)

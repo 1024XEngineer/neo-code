@@ -249,6 +249,7 @@ func (stubFeishuMessenger) SendStatusCard(context.Context, string, feishuadapter
 func (stubFeishuMessenger) UpdateCard(context.Context, string, feishuadapter.StatusCardPayload) error {
 	return nil
 }
+func (stubFeishuMessenger) DeleteMessage(context.Context, string) error { return nil }
 
 func writeFeishuAdapterConfig(t *testing.T) {
 	t.Helper()
