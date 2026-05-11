@@ -51,8 +51,8 @@ func TestMicroCompactMessagesClearsOlderCompactableToolResults(t *testing.T) {
 	if len(got) != len(messages) {
 		t.Fatalf("expected message count to stay unchanged, got %d want %d", len(got), len(messages))
 	}
-	if renderDisplayParts(got[2].Parts) != microCompactClearedMessage {
-		t.Fatalf("expected oldest compactable tool result to be cleared, got %q", renderDisplayParts(got[2].Parts))
+	if !strings.Contains(renderDisplayParts(got[2].Parts), "[summary] filesystem_read_file") {
+		t.Fatalf("expected oldest compactable tool result to fall back to summary, got %q", renderDisplayParts(got[2].Parts))
 	}
 	if renderDisplayParts(got[4].Parts) != "recent bash result" {
 		t.Fatalf("expected recent compactable tool result to be retained, got %q", renderDisplayParts(got[4].Parts))
@@ -123,8 +123,8 @@ func TestMicroCompactMessagesKeepsProtectedTailUntouched(t *testing.T) {
 	}
 
 	got := microCompactMessagesWithPolicies(messages, stubMicroCompactPolicySource{}, 2, nil, nil)
-	if renderDisplayParts(got[2].Parts) != microCompactClearedMessage {
-		t.Fatalf("expected old tool result before protected tail to be cleared, got %q", renderDisplayParts(got[2].Parts))
+	if !strings.Contains(renderDisplayParts(got[2].Parts), "[summary] filesystem_grep") {
+		t.Fatalf("expected old tool result before protected tail to fall back to summary, got %q", renderDisplayParts(got[2].Parts))
 	}
 	if renderDisplayParts(got[4].Parts) != "recent read result" {
 		t.Fatalf("expected recent tool result before protected tail to remain, got %q", renderDisplayParts(got[4].Parts))
@@ -227,8 +227,8 @@ func TestMicroCompactMessagesClearsOnlyNonPreservedResultsInMixedToolSpan(t *tes
 	got := microCompactMessagesWithPolicies(messages, stubMicroCompactPolicySource{
 		"custom_tool": tools.MicroCompactPolicyPreserveHistory,
 	}, 2, nil, nil)
-	if renderDisplayParts(got[2].Parts) != microCompactClearedMessage {
-		t.Fatalf("expected default compactable tool result to be cleared, got %q", renderDisplayParts(got[2].Parts))
+	if !strings.Contains(renderDisplayParts(got[2].Parts), "[summary] filesystem_read_file") {
+		t.Fatalf("expected default compactable tool result to fall back to summary, got %q", renderDisplayParts(got[2].Parts))
 	}
 	if renderDisplayParts(got[3].Parts) != "custom result" {
 		t.Fatalf("expected preserved tool result in mixed span to remain, got %q", renderDisplayParts(got[3].Parts))
@@ -268,8 +268,82 @@ func TestMicroCompactMessagesTreatsNewToolsAsCompactableByDefault(t *testing.T) 
 	}
 
 	got := microCompactMessagesWithPolicies(messages, stubMicroCompactPolicySource{}, 2, nil, nil)
-	if renderDisplayParts(got[2].Parts) != microCompactClearedMessage {
-		t.Fatalf("expected new tool result to be compacted by default, got %q", renderDisplayParts(got[2].Parts))
+	if !strings.Contains(renderDisplayParts(got[2].Parts), "[summary] repo_search") {
+		t.Fatalf("expected new tool result to be compacted into fallback summary by default, got %q", renderDisplayParts(got[2].Parts))
+	}
+}
+
+func TestMicroCompactMessagesPreservesSpawnSubAgentHistory(t *testing.T) {
+	t.Parallel()
+
+	messages := []providertypes.Message{
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("older user")}},
+		{
+			Role: providertypes.RoleAssistant,
+			ToolCalls: []providertypes.ToolCall{
+				{ID: "call-1", Name: tools.ToolNameSpawnSubAgent, Arguments: "{}"},
+			},
+		},
+		{Role: providertypes.RoleTool, ToolCallID: "call-1", Parts: []providertypes.ContentPart{providertypes.NewTextPart("spawned analysis")}},
+		{
+			Role: providertypes.RoleAssistant,
+			ToolCalls: []providertypes.ToolCall{
+				{ID: "call-2", Name: tools.ToolNameBash, Arguments: "{}"},
+			},
+		},
+		{Role: providertypes.RoleTool, ToolCallID: "call-2", Parts: []providertypes.ContentPart{providertypes.NewTextPart("recent bash result")}},
+		{
+			Role: providertypes.RoleAssistant,
+			ToolCalls: []providertypes.ToolCall{
+				{ID: "call-3", Name: tools.ToolNameWebFetch, Arguments: "{}"},
+			},
+		},
+		{Role: providertypes.RoleTool, ToolCallID: "call-3", Parts: []providertypes.ContentPart{providertypes.NewTextPart("latest webfetch result")}},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("latest explicit instruction")}},
+	}
+
+	got := microCompactMessagesWithPolicies(messages, stubMicroCompactPolicySource{
+		tools.ToolNameSpawnSubAgent: tools.MicroCompactPolicyPreserveHistory,
+	}, 1, nil, nil)
+	if renderDisplayParts(got[2].Parts) != "spawned analysis" {
+		t.Fatalf("expected spawn_subagent history to be preserved, got %q", renderDisplayParts(got[2].Parts))
+	}
+}
+
+func TestMicroCompactMessagesPreservesCodebaseReadHistory(t *testing.T) {
+	t.Parallel()
+
+	messages := []providertypes.Message{
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("older user")}},
+		{
+			Role: providertypes.RoleAssistant,
+			ToolCalls: []providertypes.ToolCall{
+				{ID: "call-1", Name: tools.ToolNameCodebaseRead, Arguments: "{}"},
+			},
+		},
+		{Role: providertypes.RoleTool, ToolCallID: "call-1", Parts: []providertypes.ContentPart{providertypes.NewTextPart("path: main.go\n\npackage main")}},
+		{
+			Role: providertypes.RoleAssistant,
+			ToolCalls: []providertypes.ToolCall{
+				{ID: "call-2", Name: tools.ToolNameBash, Arguments: "{}"},
+			},
+		},
+		{Role: providertypes.RoleTool, ToolCallID: "call-2", Parts: []providertypes.ContentPart{providertypes.NewTextPart("recent bash result")}},
+		{
+			Role: providertypes.RoleAssistant,
+			ToolCalls: []providertypes.ToolCall{
+				{ID: "call-3", Name: tools.ToolNameWebFetch, Arguments: "{}"},
+			},
+		},
+		{Role: providertypes.RoleTool, ToolCallID: "call-3", Parts: []providertypes.ContentPart{providertypes.NewTextPart("latest webfetch result")}},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("latest explicit instruction")}},
+	}
+
+	got := microCompactMessagesWithPolicies(messages, stubMicroCompactPolicySource{
+		tools.ToolNameCodebaseRead: tools.MicroCompactPolicyPreserveHistory,
+	}, 2, nil, nil)
+	if renderDisplayParts(got[2].Parts) != "path: main.go\n\npackage main" {
+		t.Fatalf("expected codebase_read history to stay visible, got %q", renderDisplayParts(got[2].Parts))
 	}
 }
 
@@ -318,8 +392,8 @@ func TestMicroCompactMessagesSkipsEmptyRecentSpansWhenCountingRetainedBudget(t *
 	}
 
 	got := microCompactMessagesWithPolicies(messages, stubMicroCompactPolicySource{}, 2, nil, nil)
-	if renderDisplayParts(got[2].Parts) != microCompactClearedMessage {
-		t.Fatalf("expected oldest valid tool result to be cleared, got %q", renderDisplayParts(got[2].Parts))
+	if !strings.Contains(renderDisplayParts(got[2].Parts), "[summary] filesystem_read_file") {
+		t.Fatalf("expected oldest valid tool result to fall back to summary, got %q", renderDisplayParts(got[2].Parts))
 	}
 	if renderDisplayParts(got[4].Parts) != "middle grep result" {
 		t.Fatalf("expected middle valid tool result to remain, got %q", renderDisplayParts(got[4].Parts))
@@ -423,8 +497,103 @@ func TestMicroCompactMixedPinnedAndNonPinned(t *testing.T) {
 	if renderDisplayParts(got[2].Parts) != "README content" {
 		t.Fatalf("expected pinned README result preserved, got %q", renderDisplayParts(got[2].Parts))
 	}
-	if renderDisplayParts(got[3].Parts) != microCompactClearedMessage {
-		t.Fatalf("expected non-pinned main.go result to be cleared, got %q", renderDisplayParts(got[3].Parts))
+	if !strings.Contains(renderDisplayParts(got[3].Parts), "[summary] filesystem_write_file") {
+		t.Fatalf("expected non-pinned main.go result to fall back to summary, got %q", renderDisplayParts(got[3].Parts))
+	}
+}
+
+func TestMicroCompactPinsCopyAndMoveUsingPersistedMetadataPaths(t *testing.T) {
+	t.Parallel()
+
+	pinChecker := NewDefaultPinChecker()
+
+	copyMessages := []providertypes.Message{
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("older user")}},
+		{
+			Role: providertypes.RoleAssistant,
+			ToolCalls: []providertypes.ToolCall{
+				{ID: "copy-call", Name: tools.ToolNameFilesystemCopyFile, Arguments: `{"source_path":"main.go","destination_path":"go.mod"}`},
+			},
+		},
+		{Role: providertypes.RoleTool, ToolCallID: "copy-call", Parts: []providertypes.ContentPart{providertypes.NewTextPart("ok")}, ToolMetadata: map[string]string{
+			"tool_name":        tools.ToolNameFilesystemCopyFile,
+			"source_path":      "/project/main.go",
+			"destination_path": "/project/go.mod",
+		}},
+		{
+			Role: providertypes.RoleAssistant,
+			ToolCalls: []providertypes.ToolCall{
+				{ID: "recent-call", Name: tools.ToolNameBash, Arguments: "{}"},
+			},
+		},
+		{Role: providertypes.RoleTool, ToolCallID: "recent-call", Parts: []providertypes.ContentPart{providertypes.NewTextPart("recent bash result")}},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("latest explicit instruction")}},
+	}
+
+	copyGot := microCompactMessagesWithPolicies(copyMessages, stubMicroCompactPolicySource{}, 1, nil, pinChecker)
+	if renderDisplayParts(copyGot[2].Parts) != "ok" {
+		t.Fatalf("expected copy_file result touching go.mod to stay pinned, got %q", renderDisplayParts(copyGot[2].Parts))
+	}
+
+	moveMessages := []providertypes.Message{
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("older user")}},
+		{
+			Role: providertypes.RoleAssistant,
+			ToolCalls: []providertypes.ToolCall{
+				{ID: "move-call", Name: tools.ToolNameFilesystemMoveFile, Arguments: `{"source_path":"package.json","destination_path":"package.backup.json"}`},
+			},
+		},
+		{Role: providertypes.RoleTool, ToolCallID: "move-call", Parts: []providertypes.ContentPart{providertypes.NewTextPart("ok")}, ToolMetadata: map[string]string{
+			"tool_name":        tools.ToolNameFilesystemMoveFile,
+			"source_path":      "/project/package.json",
+			"destination_path": "/project/package.backup.json",
+		}},
+		{
+			Role: providertypes.RoleAssistant,
+			ToolCalls: []providertypes.ToolCall{
+				{ID: "recent-call", Name: tools.ToolNameBash, Arguments: "{}"},
+			},
+		},
+		{Role: providertypes.RoleTool, ToolCallID: "recent-call", Parts: []providertypes.ContentPart{providertypes.NewTextPart("recent bash result")}},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("latest explicit instruction")}},
+	}
+
+	moveGot := microCompactMessagesWithPolicies(moveMessages, stubMicroCompactPolicySource{}, 1, nil, pinChecker)
+	if renderDisplayParts(moveGot[2].Parts) != "ok" {
+		t.Fatalf("expected move_file result touching package.json to stay pinned, got %q", renderDisplayParts(moveGot[2].Parts))
+	}
+}
+
+func TestMicroCompactStillCompactsCopyAndMoveWhenNoKeyFileIsTouched(t *testing.T) {
+	t.Parallel()
+
+	pinChecker := NewDefaultPinChecker()
+	messages := []providertypes.Message{
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("older user")}},
+		{
+			Role: providertypes.RoleAssistant,
+			ToolCalls: []providertypes.ToolCall{
+				{ID: "move-call", Name: tools.ToolNameFilesystemMoveFile, Arguments: `{"source_path":"main.go","destination_path":"main2.go"}`},
+			},
+		},
+		{Role: providertypes.RoleTool, ToolCallID: "move-call", Parts: []providertypes.ContentPart{providertypes.NewTextPart("ok")}, ToolMetadata: map[string]string{
+			"tool_name":        tools.ToolNameFilesystemMoveFile,
+			"source_path":      "/project/main.go",
+			"destination_path": "/project/main2.go",
+		}},
+		{
+			Role: providertypes.RoleAssistant,
+			ToolCalls: []providertypes.ToolCall{
+				{ID: "recent-call", Name: tools.ToolNameBash, Arguments: "{}"},
+			},
+		},
+		{Role: providertypes.RoleTool, ToolCallID: "recent-call", Parts: []providertypes.ContentPart{providertypes.NewTextPart("recent bash result")}},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("latest explicit instruction")}},
+	}
+
+	got := microCompactMessagesWithPolicies(messages, stubMicroCompactPolicySource{}, 1, nil, pinChecker)
+	if !strings.Contains(renderDisplayParts(got[2].Parts), "[summary] filesystem_move_file") {
+		t.Fatalf("expected non-key move_file result to still compact into summary, got %q", renderDisplayParts(got[2].Parts))
 	}
 }
 

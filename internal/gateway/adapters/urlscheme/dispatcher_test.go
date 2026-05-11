@@ -7,6 +7,7 @@ import (
 	"net"
 	"strings"
 	"testing"
+	"time"
 
 	"neo-code/internal/gateway"
 	"neo-code/internal/gateway/protocol"
@@ -508,5 +509,36 @@ func TestDispatchWakeIntentReturnsGatewayFrameError(t *testing.T) {
 	}
 	if dispatchErr.Code != gateway.ErrorCodeInvalidAction.String() {
 		t.Fatalf("error code = %q, want %q", dispatchErr.Code, gateway.ErrorCodeInvalidAction.String())
+	}
+}
+
+func TestGatewayLaunchTimeoutIsTenSeconds(t *testing.T) {
+	if defaultGatewayLaunchTimeout != 10*time.Second {
+		t.Fatalf("defaultGatewayLaunchTimeout = %s, want %s", defaultGatewayLaunchTimeout, 10*time.Second)
+	}
+}
+
+func TestWaitGatewayReadyTimeoutMessage(t *testing.T) {
+	dispatcher := NewDispatcher()
+	start := time.Unix(1700000000, 0)
+	nowCalls := 0
+	dispatcher.nowFn = func() time.Time {
+		nowCalls++
+		if nowCalls <= 2 {
+			return start
+		}
+		return start.Add(11 * time.Second)
+	}
+	dispatcher.sleepFn = func(time.Duration) {}
+	dispatcher.dialFn = func(string) (net.Conn, error) {
+		return nil, errors.New("dial failed")
+	}
+
+	err := dispatcher.waitGatewayReady(context.Background(), "inmemory")
+	if err == nil {
+		t.Fatal("expected wait timeout")
+	}
+	if !strings.Contains(err.Error(), "gateway auto-start timed out after") {
+		t.Fatalf("error = %v, want timeout message", err)
 	}
 }

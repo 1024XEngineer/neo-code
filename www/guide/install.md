@@ -62,7 +62,7 @@ neocode
 如果要直接打开指定项目：
 
 ```bash
-neocode --workdir /path/to/your/project
+neocode -w /path/to/your/project
 ```
 
 启动后会进入终端界面，底部是输入框。直接输入自然语言即可开始对话；输入 `/` 可以打开本地控制命令建议。

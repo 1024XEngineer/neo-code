@@ -243,13 +243,14 @@ export default function Sidebar({ collapsed }: SidebarProps) {
         {filteredWorkspaces.map((ws) => {
           const expanded = expandedWorkspaces.has(ws.hash)
           const isCurrent = ws.hash === currentWorkspaceHash
+          const rowExpanded = isCurrent && expanded
           const sessionsForThisWorkspace = isCurrent ? filteredCurrentSessions : []
           const isRenaming = renamingWorkspaceHash === ws.hash
           return (
             <div key={ws.hash} style={{ marginBottom: 2 }}>
               <WorkspaceRow
                 workspace={ws}
-                expanded={expanded}
+                expanded={rowExpanded}
                 isCurrent={isCurrent}
                 isRenaming={isRenaming}
                 renameValue={workspaceRenameValue}
@@ -269,7 +270,7 @@ export default function Sidebar({ collapsed }: SidebarProps) {
                 }}
                 onDelete={() => handleDeleteWorkspace(ws.hash)}
               />
-              {expanded && isCurrent && (
+              {rowExpanded && (
                 <div className="session-list">
                   {sessionsForThisWorkspace.length === 0 && (
                     <div style={{ padding: '6px 12px', fontSize: 11, color: 'var(--text-tertiary)', fontStyle: 'italic' }}>暂无会话</div>

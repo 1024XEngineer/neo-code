@@ -123,7 +123,7 @@ $env:OPENAI_API_KEY = "your_key_here"
 然后在项目目录中启动：
 
 ```bash
-neocode --workdir /path/to/your/project
+neocode -w /path/to/your/project
 ```
 
 如果你希望使用浏览器 Web UI，可以直接运行：
@@ -212,10 +212,10 @@ neocode model set gpt-4.1
 neocode use <provider>
 
 # 切换 provider 并指定模型（会做模型归属校验）
-neocode use <provider> --model <model-id>
+neocode use <provider> -m <model-id>
 
 # 示例
-neocode use openai --model gpt-4.1
+neocode use openai -m gpt-4.1
 ```
 
 #### Local Runner

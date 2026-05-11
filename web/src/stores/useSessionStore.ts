@@ -157,12 +157,23 @@ export async function loadSessionWithInsights(gatewayAPI: GatewayAPI, sessionId:
   return sessionFrame
 }
 
+/** isInternalHistoryMessage 识别仅供 runtime/provider 续跑使用、不能回放到 Web 聊天流的内部控制消息。 */
+function isInternalHistoryMessage(msg: BackendMessage): boolean {
+  const role = msg.role.trim().toLowerCase()
+  if (role !== 'system' && role !== 'assistant') return false
+
+  const content = msg.content.trim()
+  if (!content) return false
+  return /^<acceptance_continue\b[\s\S]*<\/acceptance_continue>$/.test(content)
+}
+
 /** 将后端历史消息映射为前端 ChatMessage 列表，正确合并 tool_result 回 tool_call */
 export function mapHistoryMessages(backendMessages: BackendMessage[]): Array<ReturnType<typeof useChatStore.getState>['messages'][0]> {
   let _idCounter = 0
   // Phase 1: Collect tool results by tool_call_id
   const toolResults = new Map<string, { content: string; isError: boolean }>()
   for (const msg of backendMessages) {
+    if (isInternalHistoryMessage(msg)) continue
     if (msg.tool_call_id) {
       toolResults.set(msg.tool_call_id, { content: msg.content, isError: !!msg.is_error })
     }
@@ -171,6 +182,8 @@ export function mapHistoryMessages(backendMessages: BackendMessage[]): Array<Ret
   // Phase 2: Map messages, merging tool results into corresponding tool_calls
   const result: Array<ReturnType<typeof useChatStore.getState>['messages'][0]> = []
   for (const msg of backendMessages) {
+    if (isInternalHistoryMessage(msg)) continue
+
     // Skip bare tool result messages — they are merged into tool_call messages
     if (msg.tool_call_id) continue
 
@@ -241,9 +254,7 @@ export async function reloadSessionAfterCheckpointRestore(
 
   if (sessionData.messages && sessionData.messages.length > 0) {
     const mapped = mapHistoryMessages(sessionData.messages)
-    for (const msg of mapped) {
-      useChatStore.getState().addMessage(msg)
-    }
+    useChatStore.getState().setMessages(mapped)
   }
 
   const restoredMode = sessionData.agent_mode === 'plan' ? 'plan' : 'build'
@@ -308,9 +319,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       // 5. Load messages and stop transitioning
       if (sessionData.messages && sessionData.messages.length > 0) {
         const mapped = mapHistoryMessages(sessionData.messages)
-        for (const msg of mapped) {
-          useChatStore.getState().addMessage(msg)
-        }
+        useChatStore.getState().setMessages(mapped)
       }
       // 恢复会话的 agent_mode
       const restoredMode = sessionData.agent_mode === 'plan' ? 'plan' : 'build'
@@ -404,9 +413,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
             const sessionData = sessionFrame.payload as { messages?: BackendMessage[]; agent_mode?: string }
             if (sessionData.messages && sessionData.messages.length > 0) {
               const mapped = mapHistoryMessages(sessionData.messages)
-              for (const msg of mapped) {
-                useChatStore.getState().addMessage(msg)
-              }
+              useChatStore.getState().setMessages(mapped)
             }
             const restoredMode = sessionData.agent_mode === 'plan' ? 'plan' : 'build'
             useChatStore.getState().setAgentMode(restoredMode)

@@ -25,7 +25,7 @@ func (t *SearchSymbolTool) Name() string {
 }
 
 func (t *SearchSymbolTool) Description() string {
-	return "Search for symbol definitions across the workspace. Returns file paths, line hints, kind (function/type/method/etc.), and signature. Does NOT return the function body; use codebase_read to view implementation."
+	return "Search for symbol definitions across the workspace. Prefer scope_dir during exploration/plan mode to avoid expensive full-workspace scans. Returns file paths, line hints, kind (function/type/method/etc.), and signature. Does NOT return the function body; use codebase_read to view implementation."
 }
 
 func (t *SearchSymbolTool) Schema() map[string]any {

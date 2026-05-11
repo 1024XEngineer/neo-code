@@ -22,6 +22,13 @@ switch ($Flavor) {
 	}
 }
 
+function Write-FullInstallRemedy {
+	Write-Warning "Remedy commands:"
+	Write-Warning "  `"$env:LOCALAPPDATA\\NeoCode\\neocode.exe`" daemon install"
+	Write-Warning "  echo 127.0.0.1 neocode >> C:\\Windows\\System32\\drivers\\etc\\hosts"
+	Write-Warning "  `"$env:LOCALAPPDATA\\NeoCode\\neocode.exe`" daemon status"
+}
+
 # 1. 识别物理架构（优先考虑 64 位重定向环境）
 $RawArch = $env:PROCESSOR_ARCHITEW6432
 if ([string]::IsNullOrWhiteSpace($RawArch)) {
@@ -122,10 +129,18 @@ try {
 		}
 		catch {
 			Write-Warning "Failed to install HTTP daemon autostart automatically."
-			Write-Warning "Run '$NeoCodeExecutablePath daemon install' manually after installation."
+			Write-FullInstallRemedy
 		}
 	}
 	Write-Host "Installed $BinaryName ($Flavor) from $LatestTag." -ForegroundColor Green
+}
+catch {
+	Write-Error "Installation failed: $($_.Exception.Message)"
+	Write-Warning "Retry command: powershell -ExecutionPolicy Bypass -File scripts\\install.ps1 -Flavor $Flavor"
+	if ($Flavor -eq "full") {
+		Write-FullInstallRemedy
+	}
+	throw
 }
 finally {
 	if (Test-Path $TempDir) {

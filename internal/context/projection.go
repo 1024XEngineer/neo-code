@@ -10,8 +10,11 @@ import (
 
 const (
 	recentWindowAbsoluteMessageLimit = 24
-	recentWindowToolContentCharLimit = 600
+	recentWindowToolContentHeadChars = 300
+	recentWindowToolContentTailChars = 300
 )
+
+const truncatedExcerptMarker = "\n...[truncated]...\n"
 
 // ProjectToolMessagesForModel 原地投影 tool 消息，复用主链路对模型可见的只读格式化规则。
 func ProjectToolMessagesForModel(messages []providertypes.Message) []providertypes.Message {
@@ -71,6 +74,42 @@ func BuildRecentMessagesForModel(messages []providertypes.Message, limit int) []
 			continue
 		}
 		selected = append(selected, message)
+	}
+	if len(selected) == 0 {
+		return nil
+	}
+
+	return sanitizeRecentWindowToolMessages(ProjectToolMessagesForModel(cloneContextMessages(selected)))
+}
+
+// BuildMemoExtractionMessagesForModel 构造完整 run 的 provider-safe 记忆提取上下文。
+func BuildMemoExtractionMessagesForModel(messages []providertypes.Message) []providertypes.Message {
+	if len(messages) == 0 {
+		return nil
+	}
+
+	keep := make([]bool, len(messages))
+	for index := 0; index < len(messages); index++ {
+		message := messages[index]
+		if message.Role == providertypes.RoleTool || message.Role == providertypes.RoleSystem {
+			continue
+		}
+
+		if message.Role == providertypes.RoleAssistant && len(message.ToolCalls) > 0 {
+			for _, spanIndex := range matchedToolCallSpan(messages, index) {
+				keep[spanIndex] = true
+			}
+			continue
+		}
+
+		keep[index] = true
+	}
+
+	selected := make([]providertypes.Message, 0, len(messages))
+	for index, message := range messages {
+		if keep[index] {
+			selected = append(selected, message)
+		}
 	}
 	if len(selected) == 0 {
 		return nil
@@ -193,7 +232,7 @@ func sanitizeProjectedToolContent(content string) string {
 		return prefix
 	}
 
-	limited, truncated := truncateUTF8(body, recentWindowToolContentCharLimit)
+	limited, truncated := sanitizeToolExcerpt(body)
 	lines := []string{prefix, "content_excerpt:", limited}
 	if truncated {
 		lines = append(lines, "[content truncated for memo extraction]")
@@ -207,7 +246,7 @@ func sanitizeRawToolContent(content string) string {
 	if body == "" {
 		return ""
 	}
-	limited, truncated := truncateUTF8(body, recentWindowToolContentCharLimit)
+	limited, truncated := sanitizeToolExcerpt(body)
 	if !truncated {
 		return body
 	}
@@ -218,21 +257,58 @@ func sanitizeRawToolContent(content string) string {
 	}, "\n")
 }
 
-// truncateUTF8 按 rune 数量截断字符串，返回截断后的文本及是否发生截断。
-func truncateUTF8(text string, maxRunes int) (string, bool) {
+// sanitizeToolExcerpt 保留工具输出的头尾窗口，避免 memo 提取遗漏尾部关键错误。
+func sanitizeToolExcerpt(text string) (string, bool) {
+	total := utf8.RuneCountInString(text)
+	limit := recentWindowToolContentHeadChars + recentWindowToolContentTailChars
+	if limit <= 0 || text == "" {
+		return "", total > 0
+	}
+	if total <= limit {
+		return text, false
+	}
+
+	head := headRunes(text, recentWindowToolContentHeadChars)
+	tail := tailRunes(text, recentWindowToolContentTailChars)
+	return head + truncatedExcerptMarker + tail, true
+}
+
+// headRunes 返回文本前 maxRunes 个 rune。
+func headRunes(text string, maxRunes int) string {
 	if maxRunes <= 0 || text == "" {
-		return "", text != ""
+		return ""
 	}
 	if utf8.RuneCountInString(text) <= maxRunes {
-		return text, false
+		return text
 	}
 
 	count := 0
 	for index := range text {
 		if count == maxRunes {
-			return text[:index], true
+			return text[:index]
 		}
 		count++
 	}
-	return text, false
+	return text
+}
+
+// tailRunes 返回文本后 maxRunes 个 rune。
+func tailRunes(text string, maxRunes int) string {
+	if maxRunes <= 0 || text == "" {
+		return ""
+	}
+	total := utf8.RuneCountInString(text)
+	if total <= maxRunes {
+		return text
+	}
+
+	startRune := total - maxRunes
+	count := 0
+	for index := range text {
+		if count == startRune {
+			return text[index:]
+		}
+		count++
+	}
+	return text
 }

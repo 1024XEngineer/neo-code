@@ -52,8 +52,8 @@ func TestTodoConvergenceVerifierStates(t *testing.T) {
 		if err != nil {
 			t.Fatalf("VerifyFinal() error = %v", err)
 		}
-		if result.Status != VerificationSoftBlock {
-			t.Fatalf("status = %q, want %q", result.Status, VerificationSoftBlock)
+		if result.Status != VerificationFail {
+			t.Fatalf("status = %q, want %q", result.Status, VerificationFail)
 		}
 	})
 
@@ -68,8 +68,8 @@ func TestTodoConvergenceVerifierStates(t *testing.T) {
 		if err != nil {
 			t.Fatalf("VerifyFinal() error = %v", err)
 		}
-		if result.Status != VerificationSoftBlock {
-			t.Fatalf("status = %q, want %q", result.Status, VerificationSoftBlock)
+		if result.Status != VerificationFail {
+			t.Fatalf("status = %q, want %q", result.Status, VerificationFail)
 		}
 	})
 
@@ -83,8 +83,8 @@ func TestTodoConvergenceVerifierStates(t *testing.T) {
 		if err != nil {
 			t.Fatalf("VerifyFinal() error = %v", err)
 		}
-		if result.Status != VerificationHardBlock {
-			t.Fatalf("status = %q, want %q", result.Status, VerificationHardBlock)
+		if result.Status != VerificationFail {
+			t.Fatalf("status = %q, want %q", result.Status, VerificationFail)
 		}
 		if !result.WaitingExternal {
 			t.Fatalf("expected WaitingExternal=true")

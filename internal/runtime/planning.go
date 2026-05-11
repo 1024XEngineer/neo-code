@@ -18,11 +18,11 @@ const (
 )
 
 type summaryCandidate struct {
-	Goal          string   `json:"goal"`
-	KeySteps      []string `json:"key_steps"`
-	Constraints   []string `json:"constraints"`
-	Verify        []string `json:"verify"`
-	ActiveTodoIDs []string `json:"active_todo_ids"`
+	Goal          string                    `json:"goal"`
+	KeySteps      []string                  `json:"key_steps"`
+	Constraints   []string                  `json:"constraints"`
+	Verify        agentsession.AcceptChecks `json:"verify"`
+	ActiveTodoIDs []string                  `json:"active_todo_ids"`
 }
 
 type planTurnOutput struct {
@@ -119,7 +119,7 @@ func normalizeSummaryCandidate(candidate summaryCandidate) agentsession.SummaryV
 		Goal:          strings.TrimSpace(candidate.Goal),
 		KeySteps:      append([]string(nil), candidate.KeySteps...),
 		Constraints:   append([]string(nil), candidate.Constraints...),
-		Verify:        append([]string(nil), candidate.Verify...),
+		Verify:        candidate.Verify.Clone(),
 		ActiveTodoIDs: append([]string(nil), candidate.ActiveTodoIDs...),
 	}
 }
@@ -304,6 +304,20 @@ func applyCurrentPlanRevision(session *agentsession.Session, plan *agentsession.
 	// 新 revision 覆盖时，仅取消旧 plan 明确引用的非终态 todo
 	if oldPlan := session.CurrentPlan; oldPlan != nil && oldPlan.Revision < plan.Revision {
 		agentsession.CancelTodosByIDs(session.Todos, oldPlan.Summary.ActiveTodoIDs)
+	}
+	// 将 PlanSpec.Todos 中尚不存在于 session.Todos 的条目补入，
+	// 避免 plan 模式下模型后续通过 todo_write 引用这些 ID 时找不到。
+	for _, planTodo := range plan.Spec.Todos {
+		id := strings.TrimSpace(planTodo.ID)
+		if id == "" {
+			continue
+		}
+		if _, exists := session.FindTodo(id); exists {
+			continue
+		}
+		if err := session.AddTodo(planTodo); err != nil {
+			return false
+		}
 	}
 	session.CurrentPlan = plan
 	session.PlanApprovalPendingFullAlign = false

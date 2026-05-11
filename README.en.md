@@ -115,7 +115,7 @@ $env:OPENAI_API_KEY = "your_key_here"
 Then start in your project directory:
 
 ```bash
-neocode --workdir /path/to/your/project
+neocode -w /path/to/your/project
 ```
 
 If you want to use the browser-based Web UI, run:
@@ -224,6 +224,8 @@ neocode runner --gateway-address "your-gateway.com:8080" --token-file ~/.neocode
 
 # Set runner name and working directory
 neocode runner --runner-name "My Local Machine" --workdir /path/to/project
+# Start feishu adapter (SDK mode, no public network required)
+neocode adapter feishu --ingress sdk --gateway-listen "127.0.0.1:8080"
 ```
 
 ### 7. Shell Diagnostic Agent

@@ -47,20 +47,20 @@
 
 ```bash
 # 开发模式 (go run)
-go run ./cmd/neocode feishu-adapter --ingress webhook
+go run ./cmd/neocode adapter feishu --ingress webhook
 
 # 安装模式 (neocode)
-neocode feishu-adapter --ingress webhook
+neocode adapter feishu --ingress webhook
 ```
 
 通常还会覆盖地址参数：
 
 ```bash
 # 开发模式 (go run)
-go run ./cmd/neocode feishu-adapter --ingress webhook --listen 127.0.0.1:18080 --event-path /feishu/events --card-path /feishu/cards
+go run ./cmd/neocode adapter feishu --ingress webhook --listen 127.0.0.1:18080 --event-path /feishu/events --card-path /feishu/cards
 
 # 安装模式 (neocode)
-neocode feishu-adapter --ingress webhook --listen 127.0.0.1:18080 --event-path /feishu/events --card-path /feishu/cards
+neocode adapter feishu --ingress webhook --listen 127.0.0.1:18080 --event-path /feishu/events --card-path /feishu/cards
 ```
 
 ### 4.2 SDK 模式（#557，本地无公网）
@@ -69,10 +69,10 @@ neocode feishu-adapter --ingress webhook --listen 127.0.0.1:18080 --event-path /
 export FEISHU_APP_SECRET="cli_secret_xxx"
 
 # 开发模式 (go run)
-go run ./cmd/neocode feishu-adapter --ingress sdk
+go run ./cmd/neocode adapter feishu --ingress sdk
 
 # 安装模式 (neocode)
-neocode feishu-adapter --ingress sdk
+neocode adapter feishu --ingress sdk
 ```
 
 SDK 模式下不要求公网回调地址，不要求 `adapter.listen/event_path/card_path`。

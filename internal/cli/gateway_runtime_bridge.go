@@ -1703,19 +1703,16 @@ func convertRuntimeSnapshot(snapshot agentruntime.RuntimeSnapshot) gateway.Runti
 		RunID:     strings.TrimSpace(snapshot.RunID),
 		SessionID: strings.TrimSpace(snapshot.SessionID),
 		Phase:     strings.TrimSpace(snapshot.Phase),
-		TaskKind:  strings.TrimSpace(snapshot.TaskKind),
 		UpdatedAt: snapshot.UpdatedAt,
 		Todos:     convertRuntimeTodoSnapshot(snapshot.Todos),
 		Facts: map[string]any{
 			"runtime_facts": snapshot.Facts.RuntimeFacts,
 		},
 		Decision: map[string]any{
-			"status":                strings.TrimSpace(snapshot.Decision.Status),
-			"stop_reason":           strings.TrimSpace(snapshot.Decision.StopReason),
-			"missing_facts":         snapshot.Decision.MissingFacts,
-			"required_next_actions": snapshot.Decision.RequiredNextActions,
-			"user_visible_summary":  strings.TrimSpace(snapshot.Decision.UserVisibleSummary),
-			"internal_summary":      strings.TrimSpace(snapshot.Decision.InternalSummary),
+			"status":      strings.TrimSpace(snapshot.Decision.Status),
+			"stop_reason": strings.TrimSpace(snapshot.Decision.StopReason),
+			"summary":     strings.TrimSpace(snapshot.Decision.Summary),
+			"details":     append([]string(nil), snapshot.Decision.Details...),
 		},
 		SubAgents: map[string]any{
 			"started_count":   snapshot.SubAgents.StartedCount,
@@ -2405,6 +2402,8 @@ func (b *gatewayRuntimePortBridge) RestoreCheckpoint(ctx context.Context, input 
 		SessionID:    strings.TrimSpace(input.SessionID),
 		CheckpointID: strings.TrimSpace(input.CheckpointID),
 		Force:        input.Force,
+		Mode:         strings.TrimSpace(input.Mode),
+		Paths:        append([]string(nil), input.Paths...),
 	})
 	if err != nil {
 		return gateway.CheckpointRestoreResult{}, err
@@ -2446,6 +2445,15 @@ func (b *gatewayRuntimePortBridge) CheckpointDiff(ctx context.Context, input gat
 	if err != nil {
 		return gateway.CheckpointDiffResult{}, err
 	}
+	entries := make([]gateway.CheckpointDiffFileEntry, 0, len(result.FileEntries))
+	for _, entry := range result.FileEntries {
+		entries = append(entries, gateway.CheckpointDiffFileEntry{
+			Path:                 entry.Path,
+			Kind:                 entry.Kind,
+			RollbackCheckpointID: entry.RollbackCheckpointID,
+			CanRollback:          entry.CanRollback,
+		})
+	}
 	return gateway.CheckpointDiffResult{
 		CheckpointID:     result.CheckpointID,
 		PrevCheckpointID: result.PrevCheckpointID,
@@ -2456,8 +2464,8 @@ func (b *gatewayRuntimePortBridge) CheckpointDiff(ctx context.Context, input gat
 			Deleted:  result.Files.Deleted,
 			Modified: result.Files.Modified,
 		},
-		Patch:            result.Patch,
-		WorkspaceDrifted: result.WorkspaceDrifted,
-		Warning:          result.Warning,
+		FileEntries: entries,
+		Patch:       result.Patch,
+		Warning:     result.Warning,
 	}, nil
 }

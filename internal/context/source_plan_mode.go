@@ -31,6 +31,13 @@ func (planModeContextSource) Sections(ctx context.Context, input BuildInput) ([]
 	}
 
 	if input.CurrentPlan == nil {
+		if stage == "plan" {
+			noPlanHint := promptSection{
+				Title:   "Current Plan",
+				Content: "status: none\n\nNo current plan exists. You must create one by outputting a `plan_spec` + `summary_candidate` JSON before this turn ends.",
+			}
+			sections = append(sections, noPlanHint)
+		}
 		return sections, nil
 	}
 	planSection := renderCurrentPlanSection(input.CurrentPlan, input.InjectFullPlan)
@@ -80,7 +87,7 @@ func renderCurrentPlanSection(plan *agentsession.PlanArtifact, injectFull bool) 
 	}
 	if len(plan.Summary.Verify) > 0 {
 		lines = append(lines, "verify:")
-		for _, check := range plan.Summary.Verify {
+		for _, check := range plan.Summary.Verify.RenderLines() {
 			lines = append(lines, "- "+check)
 		}
 	}

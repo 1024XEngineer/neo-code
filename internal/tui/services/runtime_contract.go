@@ -245,7 +245,6 @@ type CheckpointDiffResult struct {
 	PrevCommitHash   string              `json:"prev_commit_hash,omitempty"`
 	Files            CheckpointDiffFiles `json:"files"`
 	Patch            string              `json:"patch,omitempty"`
-	WorkspaceDrifted bool                `json:"workspace_drifted,omitempty"`
 	Warning          string              `json:"warning,omitempty"`
 }
 
@@ -307,12 +306,16 @@ const (
 	StopReasonVerificationFailed StopReason = "verification_failed"
 	// StopReasonAccepted 表示双门控通过并被 acceptance 接受。
 	StopReasonAccepted StopReason = "accepted"
+	// StopReasonMissingCompletionSignal 表示 assistant 停止调用工具但未输出完成信号。
+	StopReasonMissingCompletionSignal StopReason = "missing_completion_signal"
+	// StopReasonAcceptCheckFailed 表示最终 Accept Gate 的验收项失败。
+	StopReasonAcceptCheckFailed StopReason = "accept_check_failed"
 	// StopReasonTodoNotConverged 表示 required todo 未收敛。
 	StopReasonTodoNotConverged StopReason = "todo_not_converged"
 	// StopReasonTodoWaitingExternal 表示 todo 等待外部输入。
 	StopReasonTodoWaitingExternal StopReason = "todo_waiting_external"
-	// StopReasonNoProgressAfterFinalIntercept 表示 final 被拦截后长期无进展。
-	StopReasonNoProgressAfterFinalIntercept StopReason = "no_progress_after_final_intercept"
+	// StopReasonRepeatCycle 表示运行重复相同动作或结果。
+	StopReasonRepeatCycle StopReason = "repeat_cycle"
 	// StopReasonMaxTurnExceededWithUnconvergedTodos 表示 max turn + todo 未收敛。
 	StopReasonMaxTurnExceededWithUnconvergedTodos StopReason = "max_turn_exceeded_with_unconverged_todos"
 	// StopReasonMaxTurnExceededWithFailedVerification 表示 max turn + verification 失败。
@@ -368,13 +371,24 @@ type VerificationFailedPayload struct {
 
 // AcceptanceDecidedPayload 描述 acceptance 引擎输出。
 type AcceptanceDecidedPayload struct {
-	Status                  string     `json:"status"`
-	StopReason              StopReason `json:"stop_reason,omitempty"`
-	ErrorClass              string     `json:"error_class,omitempty"`
-	CompletionBlockedReason string     `json:"completion_blocked_reason,omitempty"`
-	UserVisibleSummary      string     `json:"user_visible_summary,omitempty"`
-	InternalSummary         string     `json:"internal_summary,omitempty"`
-	ContinueHint            string     `json:"continue_hint,omitempty"`
+	Status                  string                  `json:"status"`
+	StopReason              StopReason              `json:"stop_reason,omitempty"`
+	ErrorClass              string                  `json:"error_class,omitempty"`
+	CompletionBlockedReason string                  `json:"completion_blocked_reason,omitempty"`
+	UserVisibleSummary      string                  `json:"user_visible_summary,omitempty"`
+	InternalSummary         string                  `json:"internal_summary,omitempty"`
+	ContinueHint            string                  `json:"continue_hint,omitempty"`
+	Summary                 string                  `json:"summary,omitempty"`
+	Results                 []AcceptanceCheckResult `json:"results,omitempty"`
+}
+
+// AcceptanceCheckResult 描述 Accept Gate 中单个检查项的结果。
+type AcceptanceCheckResult struct {
+	Passed bool   `json:"passed"`
+	Name   string `json:"name"`
+	Kind   string `json:"kind,omitempty"`
+	Target string `json:"target,omitempty"`
+	Reason string `json:"reason,omitempty"`
 }
 
 // TokenUsagePayload 描述 runtime 当前 token_usage 事件载荷。
@@ -604,9 +618,11 @@ type CheckpointWarningPayload struct {
 
 // CheckpointRestoredPayload 描述 checkpoint 恢复成功事件。
 type CheckpointRestoredPayload struct {
-	CheckpointID      string `json:"checkpoint_id"`
-	SessionID         string `json:"session_id"`
-	GuardCheckpointID string `json:"guard_checkpoint_id"`
+	CheckpointID      string   `json:"checkpoint_id"`
+	SessionID         string   `json:"session_id"`
+	GuardCheckpointID string   `json:"guard_checkpoint_id"`
+	Mode              string   `json:"mode,omitempty"`
+	Paths             []string `json:"paths,omitempty"`
 }
 
 // CheckpointUndoRestorePayload 描述 restore 撤销事件。

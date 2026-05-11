@@ -3,6 +3,7 @@ package memo
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -11,10 +12,9 @@ import (
 
 func testMemoConfig() config.MemoConfig {
 	return config.MemoConfig{
-		MaxEntries:            200,
-		MaxIndexBytes:         16 * 1024,
-		ExtractTimeoutSec:     15,
-		ExtractRecentMessages: 10,
+		MaxEntries:        200,
+		MaxIndexBytes:     16 * 1024,
+		ExtractTimeoutSec: 15,
 	}
 }
 
@@ -300,10 +300,9 @@ func TestServiceAutoExtractDedupAcrossScopes(t *testing.T) {
 
 func TestServiceAutoExtractTrimmedEntryDoesNotPolluteDedupIndex(t *testing.T) {
 	svc := NewService(newMemoryTestStore(), config.MemoConfig{
-		MaxEntries:            10,
-		MaxIndexBytes:         1,
-		ExtractTimeoutSec:     15,
-		ExtractRecentMessages: 10,
+		MaxEntries:        10,
+		MaxIndexBytes:     1,
+		ExtractTimeoutSec: 15,
 	}, nil)
 	entry := Entry{
 		Type:    TypeUser,
@@ -372,6 +371,82 @@ func TestMatchesKeywordIncludesContent(t *testing.T) {
 	}
 	if matchesKeyword(entry, "missing") {
 		t.Fatal("unexpected match for missing keyword")
+	}
+}
+
+func TestServiceSemanticCandidateShortlistMatchesRelevantMemo(t *testing.T) {
+	store := NewFileStore(t.TempDir(), t.TempDir())
+	svc := NewService(store, testMemoConfig(), nil)
+
+	if err := svc.Add(context.Background(), Entry{
+		Type:    TypeFeedback,
+		Title:   "测试策略",
+		Content: "用户要求修改后先跑测试。",
+		Source:  SourceAutoExtract,
+	}); err != nil {
+		t.Fatalf("seed relevant Add() error = %v", err)
+	}
+	if err := svc.Add(context.Background(), Entry{
+		Type:    TypeUser,
+		Title:   "语言偏好",
+		Content: "用户偏好中文回复。",
+		Source:  SourceUserManual,
+	}); err != nil {
+		t.Fatalf("seed unrelated Add() error = %v", err)
+	}
+
+	shortlist, err := svc.semanticCandidateShortlist(context.Background(), Entry{
+		Type:    TypeFeedback,
+		Title:   "测试策略",
+		Content: "用户要求修改后先跑相关测试。",
+	}, semanticCandidateShortlistLimit)
+	if err != nil {
+		t.Fatalf("semanticCandidateShortlist() error = %v", err)
+	}
+	if len(shortlist) != 1 {
+		t.Fatalf("len(shortlist) = %d, want 1", len(shortlist))
+	}
+	if shortlist[0].Title != "测试策略" || shortlist[0].Source != SourceAutoExtract {
+		t.Fatalf("unexpected shortlist candidate: %+v", shortlist[0])
+	}
+}
+
+func TestServiceSemanticCandidateShortlistLimitsAndTruncates(t *testing.T) {
+	store := NewFileStore(t.TempDir(), t.TempDir())
+	svc := NewService(store, testMemoConfig(), nil)
+
+	longContent := strings.Repeat("release-note ", 40)
+	for index := 0; index < 6; index++ {
+		if err := svc.Add(context.Background(), Entry{
+			Type:     TypeProject,
+			Title:    fmt.Sprintf("发布计划 %d", index),
+			Content:  longContent + fmt.Sprintf(" milestone-%d", index),
+			Keywords: []string{"release"},
+			Source:   SourceAutoExtract,
+		}); err != nil {
+			t.Fatalf("seed Add(%d) error = %v", index, err)
+		}
+	}
+
+	shortlist, err := svc.semanticCandidateShortlist(context.Background(), Entry{
+		Type:     TypeProject,
+		Title:    "发布计划",
+		Content:  "release milestone",
+		Keywords: []string{"release"},
+	}, semanticCandidateShortlistLimit)
+	if err != nil {
+		t.Fatalf("semanticCandidateShortlist() error = %v", err)
+	}
+	if len(shortlist) != semanticCandidateShortlistLimit {
+		t.Fatalf("len(shortlist) = %d, want %d", len(shortlist), semanticCandidateShortlistLimit)
+	}
+	for _, candidate := range shortlist {
+		if len([]rune(candidate.Content)) > semanticCandidateContentMaxRunes+3 {
+			t.Fatalf("candidate content should be truncated, got %q", candidate.Content)
+		}
+		if len(candidate.Keywords) != 1 || candidate.Keywords[0] != "release" {
+			t.Fatalf("candidate keywords should be preserved, got %+v", candidate)
+		}
 	}
 }
 

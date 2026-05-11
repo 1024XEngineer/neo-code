@@ -39,7 +39,7 @@ func newUseCommandWithResolver(resolver selectionServiceResolver) *cobra.Command
 			return runUseCommand(cmd, svc, args[0], opts)
 		},
 	}
-	cmd.Flags().StringVar(&opts.Model, "model", "", "model to select for the provider")
+	cmd.Flags().StringVarP(&opts.Model, "model", "m", "", "model to select for the provider")
 	return cmd
 }
 

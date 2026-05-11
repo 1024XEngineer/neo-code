@@ -3609,7 +3609,13 @@ func runtimeEventAcceptanceDecidedHandler(a *App, event tuiservices.RuntimeEvent
 	if status == "" {
 		status = "unknown"
 	}
-	detail := strings.TrimSpace(payload.UserVisibleSummary)
+	detail := strings.TrimSpace(payload.Summary)
+	if detail == "" {
+		detail = formatAcceptanceResults(payload.Results)
+	}
+	if detail == "" {
+		detail = strings.TrimSpace(payload.UserVisibleSummary)
+	}
 	if detail == "" {
 		detail = strings.TrimSpace(payload.InternalSummary)
 	}
@@ -3625,6 +3631,33 @@ func runtimeEventAcceptanceDecidedHandler(a *App, event tuiservices.RuntimeEvent
 	isError := strings.EqualFold(status, "failed")
 	a.appendActivity("acceptance", "Acceptance decided ("+status+")", detail, isError)
 	return false
+}
+
+// formatAcceptanceResults 将逐项验收结果压缩成活动日志可读的一行摘要。
+func formatAcceptanceResults(results []tuiservices.AcceptanceCheckResult) string {
+	if len(results) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(results))
+	for _, result := range results {
+		name := strings.TrimSpace(result.Name)
+		if name == "" {
+			name = strings.TrimSpace(result.Kind)
+		}
+		if name == "" {
+			name = "accept_check"
+		}
+		if result.Passed {
+			parts = append(parts, name+": pass")
+			continue
+		}
+		reason := strings.TrimSpace(result.Reason)
+		if reason == "" {
+			reason = "failed"
+		}
+		parts = append(parts, name+": "+reason)
+	}
+	return strings.Join(parts, "; ")
 }
 
 // runtimeEventStopReasonDecidedHandler 处理运行终止原因事件，统一收尾状态与活动日志。
@@ -3662,7 +3695,8 @@ func runtimeEventStopReasonDecidedHandler(a *App, event tuiservices.RuntimeEvent
 		}
 	case strings.ToLower(string(tuiservices.StopReasonTodoNotConverged)),
 		strings.ToLower(string(tuiservices.StopReasonTodoWaitingExternal)),
-		strings.ToLower(string(tuiservices.StopReasonNoProgressAfterFinalIntercept)),
+		strings.ToLower(string(tuiservices.StopReasonMissingCompletionSignal)),
+		strings.ToLower(string(tuiservices.StopReasonRepeatCycle)),
 		strings.ToLower(string(tuiservices.StopReasonMaxTurnExceededWithUnconvergedTodos)),
 		strings.ToLower(string(tuiservices.StopReasonMaxTurnExceededWithFailedVerification)):
 		detail := strings.TrimSpace(payload.Detail)
@@ -3677,6 +3711,7 @@ func runtimeEventStopReasonDecidedHandler(a *App, event tuiservices.RuntimeEvent
 		a.state.StatusText = statusCanceled
 		a.appendActivity("run", "Canceled current run", "", false)
 	case strings.ToLower(string(tuiservices.StopReasonVerificationFailed)),
+		strings.ToLower(string(tuiservices.StopReasonAcceptCheckFailed)),
 		strings.ToLower(string(tuiservices.StopReasonRequiredTodoFailed)),
 		strings.ToLower(string(tuiservices.StopReasonVerificationExecutionDenied)),
 		strings.ToLower(string(tuiservices.StopReasonVerificationExecutionError)):
@@ -3730,8 +3765,16 @@ func runtimeEventTodoUpdatedHandler(a *App, event tuiservices.RuntimeEvent) bool
 	}
 
 	payload, _ := parseTodoEventPayload(event.Payload)
+	rawReason := strings.TrimSpace(payload.Reason)
+	if rawReason == "" {
+		rawReason = todoConflictReasonFromPayload(event.Payload)
+	}
 	if len(payload.Items) > 0 {
 		a.syncTodosFromEventItems(payload.Items)
+	} else if isTodoNotFoundConflict(rawReason) {
+		a.clearTodos()
+		a.applyComponentLayout(false)
+		a.todoPanelVisible = false
 	} else if err := a.refreshTodosFromSession(sessionID); err != nil {
 		a.appendActivity("todo", "Failed to refresh todo panel", err.Error(), true)
 		return false
@@ -3766,14 +3809,22 @@ func runtimeEventTodoConflictHandler(a *App, event tuiservices.RuntimeEvent) boo
 	}
 
 	payload, _ := parseTodoEventPayload(event.Payload)
+	rawReason := strings.TrimSpace(payload.Reason)
+	if rawReason == "" {
+		rawReason = todoConflictReasonFromPayload(event.Payload)
+	}
 	if len(payload.Items) > 0 {
 		a.syncTodosFromEventItems(payload.Items)
+	} else if isTodoNotFoundConflict(rawReason) {
+		a.clearTodos()
+		a.applyComponentLayout(false)
+		a.todoPanelVisible = false
 	} else if err := a.refreshTodosFromSession(sessionID); err != nil {
 		a.appendActivity("todo", "Failed to refresh todo panel", err.Error(), true)
 		return false
 	}
 	a.state.StatusText = formatTodoSummaryStatus(payload.Summary)
-	reason := strings.TrimSpace(payload.Reason)
+	reason := rawReason
 	if reason == "" {
 		reason = "todo conflict"
 	}
@@ -3789,6 +3840,21 @@ func runtimeEventTodoConflictHandler(a *App, event tuiservices.RuntimeEvent) boo
 	}
 	a.appendActivity("todo", "Todo conflict", reason, true)
 	return false
+}
+
+// isTodoNotFoundConflict 判断 todo 冲突是否只是模型操作了不存在的 todo id。
+func isTodoNotFoundConflict(reason string) bool {
+	return strings.EqualFold(strings.TrimSpace(reason), "todo_not_found") ||
+		strings.Contains(strings.ToLower(strings.TrimSpace(reason)), "todo_not_found") ||
+		strings.Contains(strings.ToLower(strings.TrimSpace(reason)), "todo not found")
+}
+
+// todoConflictReasonFromPayload 从未解析的 payload 中兜底提取冲突原因文本。
+func todoConflictReasonFromPayload(payload any) string {
+	if payload == nil {
+		return ""
+	}
+	return strings.TrimSpace(fmt.Sprintf("%v", payload))
 }
 
 // runtimeEventTodoSnapshotUpdatedHandler 处理 todo_snapshot_updated 事件并实时同步 Todo 面板。
@@ -4747,8 +4813,6 @@ func humanizeDecisionReason(reason string, missingFacts []map[string]any) string
 			}
 		}
 		return "任务仍缺少关键事实。"
-	case "no_progress_after_final_intercept":
-		return "连续多轮未产生新事实。"
 	case "required_todo_failed":
 		return "存在 required todo 失败。"
 	default:

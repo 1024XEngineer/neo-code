@@ -39,6 +39,8 @@ func TestDefaultPinCheckerMatchesKeyArtifacts(t *testing.T) {
 		{toolName: "filesystem_write_file", path: "utils.py", expected: false},
 		{toolName: "filesystem_write_file", path: "style.css", expected: false},
 		{toolName: "filesystem_edit", path: "README.md", expected: true},
+		{toolName: "filesystem_copy_file", path: "go.mod", expected: true},
+		{toolName: "filesystem_move_file", path: "package.json", expected: true},
 		{toolName: "filesystem_read_file", path: "README.md", expected: false},
 		{toolName: "bash", path: "README.md", expected: false},
 	}
@@ -75,6 +77,34 @@ func TestDefaultPinCheckerFallsBackToPath(t *testing.T) {
 	})
 	if !got {
 		t.Error("expected path fallback match for README.md")
+	}
+}
+
+func TestDefaultPinCheckerSupportsCopyAndMoveMetadataFields(t *testing.T) {
+	t.Parallel()
+
+	checker := NewDefaultPinChecker()
+
+	copyPinned := checker.ShouldPin("filesystem_copy_file", map[string]string{
+		"destination_path": "/project/go.mod",
+	})
+	if !copyPinned {
+		t.Error("expected destination_path match for copy_file go.mod")
+	}
+
+	movePinned := checker.ShouldPin("filesystem_move_file", map[string]string{
+		"source_path": "/project/package.json",
+	})
+	if !movePinned {
+		t.Error("expected source_path match for move_file package.json")
+	}
+
+	notPinned := checker.ShouldPin("filesystem_move_file", map[string]string{
+		"source_path":      "/project/main.go",
+		"destination_path": "/project/main2.go",
+	})
+	if notPinned {
+		t.Error("expected non-key source/destination paths to remain unpinned")
 	}
 }
 

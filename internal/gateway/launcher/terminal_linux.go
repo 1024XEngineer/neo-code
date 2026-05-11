@@ -2,9 +2,36 @@
 
 package launcher
 
-import "fmt"
+import (
+	"fmt"
+	"os/exec"
+	"runtime"
+)
 
-// launchTerminal 在 Linux/其他平台先返回未实现错误，后续再接入具体终端适配。
+var (
+	lookupPathForTerminalLinux  = exec.LookPath
+	execCommandForTerminalLinux = exec.Command
+)
+
+// launchTerminal 在 Linux 上优先尝试 gnome-terminal，再回退到 x-terminal-emulator。
 func launchTerminal(command string) error {
-	return fmt.Errorf("%w: run `%s` manually in your terminal", ErrTerminalUnsupported, command)
+	if runtime.GOOS != "linux" {
+		return fmt.Errorf("%w: run `%s` manually in your terminal", ErrTerminalUnsupported, command)
+	}
+	if err := launchWithLinuxTerminal("gnome-terminal", []string{"--", "bash", "-lc", command}); err == nil {
+		return nil
+	}
+	if err := launchWithLinuxTerminal("x-terminal-emulator", []string{"-e", "bash", "-lc", command}); err == nil {
+		return nil
+	}
+	return fmt.Errorf("%w: install gnome-terminal/x-terminal-emulator or run `%s` manually", ErrTerminalUnsupported, command)
+}
+
+// launchWithLinuxTerminal 通过指定终端模拟器拉起命令。
+func launchWithLinuxTerminal(binary string, args []string) error {
+	if _, err := lookupPathForTerminalLinux(binary); err != nil {
+		return err
+	}
+	cmd := execCommandForTerminalLinux(binary, args...)
+	return cmd.Run()
 }

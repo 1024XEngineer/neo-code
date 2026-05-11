@@ -3,7 +3,7 @@ package runtime
 import (
 	"time"
 
-	"neo-code/internal/runtime/acceptance"
+	"neo-code/internal/runtime/acceptgate"
 	"neo-code/internal/runtime/controlplane"
 	"neo-code/internal/runtime/verify"
 )
@@ -77,9 +77,9 @@ type VerificationStageFinishedPayload struct {
 
 // VerificationFinishedPayload 描述整体验证流程结束事件。
 type VerificationFinishedPayload struct {
-	AcceptanceStatus acceptance.AcceptanceStatus `json:"acceptance_status"`
-	StopReason       controlplane.StopReason     `json:"stop_reason,omitempty"`
-	ErrorClass       verify.ErrorClass           `json:"error_class,omitempty"`
+	AcceptanceStatus string                  `json:"acceptance_status"`
+	StopReason       controlplane.StopReason `json:"stop_reason,omitempty"`
+	ErrorClass       verify.ErrorClass       `json:"error_class,omitempty"`
 }
 
 // VerificationCompletedPayload 描述验证通过并可完成的事件。
@@ -95,13 +95,10 @@ type VerificationFailedPayload struct {
 
 // AcceptanceDecidedPayload 描述 acceptance engine 决议结果。
 type AcceptanceDecidedPayload struct {
-	Status                  acceptance.AcceptanceStatus `json:"status"`
-	StopReason              controlplane.StopReason     `json:"stop_reason,omitempty"`
-	ErrorClass              verify.ErrorClass           `json:"error_class,omitempty"`
-	CompletionBlockedReason string                      `json:"completion_blocked_reason,omitempty"`
-	UserVisibleSummary      string                      `json:"user_visible_summary,omitempty"`
-	InternalSummary         string                      `json:"internal_summary,omitempty"`
-	ContinueHint            string                      `json:"continue_hint,omitempty"`
+	Status     string                   `json:"status"`
+	StopReason controlplane.StopReason  `json:"stop_reason,omitempty"`
+	Summary    string                   `json:"summary,omitempty"`
+	Results    []acceptgate.CheckResult `json:"results,omitempty"`
 }
 
 // LedgerReconciledPayload 为账本对账预留负载。
@@ -473,9 +470,11 @@ type CheckpointWarningPayload struct {
 
 // CheckpointRestoredPayload 描述 checkpoint 恢复成功事件。
 type CheckpointRestoredPayload struct {
-	CheckpointID      string `json:"checkpoint_id"`
-	SessionID         string `json:"session_id"`
-	GuardCheckpointID string `json:"guard_checkpoint_id"`
+	CheckpointID      string   `json:"checkpoint_id"`
+	SessionID         string   `json:"session_id"`
+	GuardCheckpointID string   `json:"guard_checkpoint_id"`
+	Mode              string   `json:"mode,omitempty"`
+	Paths             []string `json:"paths,omitempty"`
 }
 
 // CheckpointUndoRestorePayload 描述 restore 撤销事件。
@@ -521,16 +520,16 @@ type RunDiffSummaryPayload struct {
 
 // UserQuestionRequestedPayload 描述 ask_user 提问事件负载。
 type UserQuestionRequestedPayload struct {
-	RequestID   string   `json:"request_id"`
-	QuestionID  string   `json:"question_id"`
-	Title       string   `json:"title"`
-	Description string   `json:"description"`
-	Kind        string   `json:"kind"`
-	Options     []any    `json:"options,omitempty"`
-	Required    bool     `json:"required"`
-	AllowSkip   bool     `json:"allow_skip"`
-	MaxChoices  int      `json:"max_choices,omitempty"`
-	TimeoutSec  int      `json:"timeout_sec,omitempty"`
+	RequestID   string `json:"request_id"`
+	QuestionID  string `json:"question_id"`
+	Title       string `json:"title"`
+	Description string `json:"description"`
+	Kind        string `json:"kind"`
+	Options     []any  `json:"options,omitempty"`
+	Required    bool   `json:"required"`
+	AllowSkip   bool   `json:"allow_skip"`
+	MaxChoices  int    `json:"max_choices,omitempty"`
+	TimeoutSec  int    `json:"timeout_sec,omitempty"`
 }
 
 // UserQuestionResolvedPayload 描述 ask_user 回答/跳过/超时事件负载。

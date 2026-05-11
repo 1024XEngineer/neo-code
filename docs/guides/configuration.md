@@ -26,7 +26,6 @@ tool_timeout_sec: 20
 generate_start_timeout_sec: 90
 
 runtime:
-  max_no_progress_streak: 5
   max_repeat_cycle_streak: 3
   max_turns: 90
   hooks:
@@ -108,9 +107,8 @@ context:
 
 | 字段 | 说明 |
 |------|------|
-| `runtime.max_no_progress_streak` | 连续“无进展”轮次提醒阈值，默认 `5`；达到 `limit-1` 起会向模型注入纠偏提示，不会直接终止运行 |
-| `runtime.max_repeat_cycle_streak` | 连续“重复调用同一工具参数”提醒阈值，默认 `3`；达到阈值后触发重复循环提醒，不会直接终止运行 |
-| `runtime.max_turns` | 单次 Run 的最大推理轮数上限，默认 `40`；达到上限后直接终止并返回明确 stop reason |
+| `runtime.max_repeat_cycle_streak` | 连续“相同工具签名 + 相同结果指纹 + 相同子目标”阈值，默认 `3`；达到阈值后先注入重复循环提醒，提醒后仍重复则终止为 `repeat_cycle` |
+| `runtime.max_turns` | 单次 Run 的最大推理轮数上限，默认 `90`；达到上限后直接终止并返回明确 stop reason |
 | `runtime.hooks.enabled` | hooks 总开关；关闭后不执行 runtime hooks |
 | `runtime.hooks.user_hooks_enabled` | user hooks 开关；关闭后不加载 `runtime.hooks.items` |
 | `runtime.hooks.default_timeout_sec` | user hook 默认超时秒数，需 `> 0` |
@@ -333,7 +331,7 @@ $env:MODELSCOPE_API_KEY = "ms-..."
 工作目录不写入 `config.yaml`，只通过启动参数覆盖：
 
 ```bash
-go run ./cmd/neocode --workdir /path/to/workspace
+go run ./cmd/neocode -w /path/to/workspace
 ```
 
 说明：
@@ -375,7 +373,7 @@ feishu:
 ```bash
 export FEISHU_APP_SECRET="cli_secret_xxx"
 export FEISHU_SIGNING_SECRET="signing_secret_xxx" # 仅 webhook 模式需要
-neocode feishu-adapter
+neocode adapter feishu
 ```
 
 说明：

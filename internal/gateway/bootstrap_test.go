@@ -643,8 +643,11 @@ func TestDecodeCheckpointRestorePayloadBranches(t *testing.T) {
 		"session_id":    " session-1 ",
 		"checkpoint_id": " cp-1 ",
 		"force":         true,
+		"mode":          " baseline ",
+		"paths":         []any{" a.txt ", " b.txt ", ""},
 	})
-	if params.SessionID != "session-1" || params.CheckpointID != "cp-1" || !params.Force {
+	if params.SessionID != "session-1" || params.CheckpointID != "cp-1" || !params.Force ||
+		params.Mode != "baseline" || len(params.Paths) != 2 || params.Paths[0] != "a.txt" || params.Paths[1] != "b.txt" {
 		t.Fatalf("decode map payload = %#v", params)
 	}
 
@@ -652,13 +655,16 @@ func TestDecodeCheckpointRestorePayloadBranches(t *testing.T) {
 		SessionID:    "session-2",
 		CheckpointID: "cp-2",
 		Force:        true,
+		Mode:         " exact ",
+		Paths:        []string{" c.txt "},
 	})
-	if params.SessionID != "session-2" || params.CheckpointID != "cp-2" || !params.Force {
+	if params.SessionID != "session-2" || params.CheckpointID != "cp-2" || !params.Force ||
+		params.Mode != "exact" || len(params.Paths) != 1 || params.Paths[0] != "c.txt" {
 		t.Fatalf("decode struct payload = %#v", params)
 	}
 
 	params = decodeCheckpointRestorePayload(invalidJSONMarshaler{})
-	if params != (CheckpointRestoreInput{}) {
+	if params.SessionID != "" || params.CheckpointID != "" || params.Force || params.Mode != "" || len(params.Paths) != 0 {
 		t.Fatalf("marshal failure should return zero input, got %#v", params)
 	}
 }

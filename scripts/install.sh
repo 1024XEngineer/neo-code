@@ -7,6 +7,15 @@ DEFAULT_FLAVOR="full"
 flavor="$DEFAULT_FLAVOR"
 dry_run=0
 
+print_full_install_remedy() {
+  cat >&2 <<'REMEDY'
+Remedy commands:
+  /usr/local/bin/neocode daemon install
+  sudo echo '127.0.0.1 neocode' >> /etc/hosts
+  /usr/local/bin/neocode daemon status
+REMEDY
+}
+
 usage() {
   cat <<'USAGE'
 Usage: install.sh [--flavor full|gateway] [--dry-run]
@@ -58,6 +67,8 @@ case "$flavor" in
     exit 1
     ;;
 esac
+
+trap 'status=$?; if [[ $status -ne 0 ]]; then echo "Installation failed (exit ${status})." >&2; echo "Retry: bash scripts/install.sh --flavor ${flavor}" >&2; if [[ "${flavor}" == "full" ]]; then print_full_install_remedy; fi; fi' ERR
 
 os="$(uname -s)"
 arch="$(uname -m)"
@@ -152,6 +163,6 @@ if [[ "${flavor}" == "full" ]]; then
   echo "Installing HTTP daemon autostart..."
   if ! /usr/local/bin/neocode daemon install >/dev/null 2>&1; then
     echo "Warning: failed to install HTTP daemon autostart automatically." >&2
-    echo "Run '/usr/local/bin/neocode daemon install' manually after installation." >&2
+    print_full_install_remedy
   fi
 fi

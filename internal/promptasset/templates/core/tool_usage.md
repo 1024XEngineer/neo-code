@@ -8,6 +8,10 @@
 - Verify file content with `filesystem_read_file` + `expect_contains` and `verification_scope`; avoid `bash Get-Content` for routine checks.
 - Use `filesystem_grep` to locate symbols, strings, and relevant code paths efficiently.
 - Read tool results carefully before acting. Treat `status`, `ok`, `tool_call_id`, `truncated`, `meta.*`, exit codes, and `content` as the authoritative model-visible outcome of that call.
+- For explanation, Q&A, or concept-clarification requests, use tools only until you have enough evidence to answer.
+- After reading or searching the relevant files for an informational request, stop exploring and answer directly.
+- Do not restart the same interpretation loop after you already have enough context.
+- If two search/read passes do not change your conclusion, provide the answer and briefly state any remaining uncertainty.
 
 ## Repository exploration
 When exploring the codebase, Git state, or current changes:

@@ -78,8 +78,8 @@ func TestMicroCompactWithSummarizerProducesSummary(t *testing.T) {
 	}
 }
 
-// TestMicroCompactWithoutSummarizerFallsBackToClear 验证未注册 summarizer 的工具仍使用清除占位。
-func TestMicroCompactWithoutSummarizerFallsBackToClear(t *testing.T) {
+// TestMicroCompactWithoutSummarizerFallsBackToSummary 验证未注册 summarizer 的工具使用通用兜底摘要。
+func TestMicroCompactWithoutSummarizerFallsBackToSummary(t *testing.T) {
 	t.Parallel()
 
 	messages := []providertypes.Message{
@@ -121,9 +121,12 @@ func TestMicroCompactWithoutSummarizerFallsBackToClear(t *testing.T) {
 		nil,
 	)
 
-	// read_file 没有 summarizer，应回退到清除
-	if renderDisplayParts(got[2].Parts) != microCompactClearedMessage {
-		t.Fatalf("expected cleared placeholder for read_file without summarizer, got %q", renderDisplayParts(got[2].Parts))
+	summary := renderDisplayParts(got[2].Parts)
+	if summary == microCompactClearedMessage {
+		t.Fatalf("expected fallback summary for read_file without summarizer, got cleared placeholder")
+	}
+	if !strings.Contains(summary, "[summary] filesystem_read_file") {
+		t.Fatalf("expected fallback summary to include tool name, got %q", summary)
 	}
 }
 
@@ -176,14 +179,17 @@ func TestMicroCompactMixedSpanWithSummarizer(t *testing.T) {
 	if !strings.Contains(renderDisplayParts(got[2].Parts), "[summary]") {
 		t.Fatalf("expected bash summary in old span, got %q", renderDisplayParts(got[2].Parts))
 	}
-	// call-2 read_file 在旧 span，没有 summarizer，应清除
-	if renderDisplayParts(got[3].Parts) != microCompactClearedMessage {
-		t.Fatalf("expected read_file cleared in old span, got %q", renderDisplayParts(got[3].Parts))
+	summary := renderDisplayParts(got[3].Parts)
+	if summary == microCompactClearedMessage {
+		t.Fatalf("expected read_file fallback summary in old span, got cleared placeholder")
+	}
+	if !strings.Contains(summary, "[summary] filesystem_read_file") {
+		t.Fatalf("expected read_file fallback summary to include tool name, got %q", summary)
 	}
 }
 
-// TestMicroCompactSummarizerReturnsEmptyFallsBackToClear 验证 summarizer 返回空字符串时回退到清除。
-func TestMicroCompactSummarizerReturnsEmptyFallsBackToClear(t *testing.T) {
+// TestMicroCompactSummarizerReturnsEmptyFallsBackToSummary 验证 summarizer 返回空字符串时回退到通用摘要。
+func TestMicroCompactSummarizerReturnsEmptyFallsBackToSummary(t *testing.T) {
 	t.Parallel()
 
 	messages := []providertypes.Message{
@@ -224,8 +230,12 @@ func TestMicroCompactSummarizerReturnsEmptyFallsBackToClear(t *testing.T) {
 		nil,
 	)
 
-	if renderDisplayParts(got[2].Parts) != microCompactClearedMessage {
-		t.Fatalf("expected cleared fallback when summarizer returns empty, got %q", renderDisplayParts(got[2].Parts))
+	summary := renderDisplayParts(got[2].Parts)
+	if summary == microCompactClearedMessage {
+		t.Fatalf("expected fallback summary when summarizer returns empty, got cleared placeholder")
+	}
+	if !strings.Contains(summary, "[summary] bash") {
+		t.Fatalf("expected fallback summary to include tool name, got %q", summary)
 	}
 }
 
@@ -241,6 +251,26 @@ func TestSummarizeOrClearWithNilSummarizers(t *testing.T) {
 	)
 	if got != microCompactClearedMessage {
 		t.Fatalf("expected cleared message for nil summarizers, got %q", got)
+	}
+}
+
+func TestSummarizeOrClearFallsBackWithoutRegisteredSummarizer(t *testing.T) {
+	t.Parallel()
+
+	got := summarizeOrClear(
+		providertypes.Message{ToolCallID: "call-1"},
+		"first line\nsecond line",
+		map[string]string{"call-1": "mcp.github.issue"},
+		nil,
+	)
+	if got == microCompactClearedMessage {
+		t.Fatalf("expected fallback summary for MCP tool, got cleared placeholder")
+	}
+	if !strings.Contains(got, "[summary] mcp.github.issue") {
+		t.Fatalf("expected MCP tool name in fallback summary, got %q", got)
+	}
+	if !strings.Contains(got, "lines=2") {
+		t.Fatalf("expected line count in fallback summary, got %q", got)
 	}
 }
 
@@ -321,8 +351,11 @@ func TestSummarizeOrClearSanitizationEmptyFallback(t *testing.T) {
 		},
 	)
 
-	if got != microCompactClearedMessage {
-		t.Fatalf("expected cleared fallback when sanitized summary is empty, got %q", got)
+	if got == microCompactClearedMessage {
+		t.Fatalf("expected fallback summary when sanitized summary is empty, got cleared placeholder")
+	}
+	if !strings.Contains(got, "[summary] bash") {
+		t.Fatalf("expected fallback summary to include tool name, got %q", got)
 	}
 }
 

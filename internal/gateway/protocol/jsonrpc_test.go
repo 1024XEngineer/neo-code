@@ -229,7 +229,7 @@ func TestNormalizeJSONRPCRequestCheckpointMethods(t *testing.T) {
 			JSONRPC: JSONRPCVersion,
 			ID:      json.RawMessage(`"checkpoint-restore-1"`),
 			Method:  MethodGatewayRestoreCheckpoint,
-			Params:  json.RawMessage(`{"session_id":" s-1 ","checkpoint_id":" cp-1 ","force":true}`),
+			Params:  json.RawMessage(`{"session_id":" s-1 ","checkpoint_id":" cp-1 ","force":true,"mode":" baseline ","paths":[" a.txt "," b.txt ",""]}`),
 		})
 		if rpcErr != nil {
 			t.Fatalf("normalize checkpoint.restore request: %v", rpcErr)
@@ -241,8 +241,9 @@ func TestNormalizeJSONRPCRequestCheckpointMethods(t *testing.T) {
 		if !ok {
 			t.Fatalf("payload type = %T, want RestoreCheckpointParams", normalized.Payload)
 		}
-		if params.SessionID != "s-1" || params.CheckpointID != "cp-1" || !params.Force {
-			t.Fatalf("checkpoint.restore params = %#v, want trimmed params with force", params)
+		if params.SessionID != "s-1" || params.CheckpointID != "cp-1" || !params.Force ||
+			params.Mode != "baseline" || len(params.Paths) != 2 || params.Paths[0] != "a.txt" || params.Paths[1] != "b.txt" {
+			t.Fatalf("checkpoint.restore params = %#v, want trimmed params with force, mode and paths", params)
 		}
 	})
 

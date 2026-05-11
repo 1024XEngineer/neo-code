@@ -38,6 +38,41 @@ func (s *stubMemoExtractor) Calls() int {
 	return s.callCount
 }
 
+type stubDecisionMemoExtractor struct {
+	mu             sync.Mutex
+	callCount      int
+	candidates     []ExtractionCandidate
+	extractEntries []Entry
+	decisions      []ExtractionDecision
+	err            error
+}
+
+func (s *stubDecisionMemoExtractor) Extract(ctx context.Context, messages []providertypes.Message) ([]Entry, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]Entry(nil), s.extractEntries...), nil
+}
+
+func (s *stubDecisionMemoExtractor) ResolveDecision(
+	ctx context.Context,
+	candidate Entry,
+	existing []ExtractionCandidate,
+) (ExtractionDecision, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.callCount++
+	s.candidates = append([]ExtractionCandidate(nil), existing...)
+	if s.err != nil {
+		return ExtractionDecision{}, s.err
+	}
+	if len(s.decisions) == 0 {
+		return ExtractionDecision{Action: ExtractionActionCreate, Entry: candidate}, nil
+	}
+	decision := s.decisions[0]
+	s.decisions = append([]ExtractionDecision(nil), s.decisions[1:]...)
+	return decision, nil
+}
+
 func newAutoExtractorTestService(t *testing.T) *Service {
 	t.Helper()
 	store := NewFileStore(t.TempDir(), t.TempDir())
@@ -204,6 +239,130 @@ func TestAutoExtractorSuppressesExactDuplicates(t *testing.T) {
 	}
 	auto := NewAutoExtractor(extractor, svc, time.Second)
 	auto.debounce = 10 * time.Millisecond
+	auto.logf = func(string, ...any) {}
+	registerAutoExtractorCleanup(t, auto)
+
+	auto.Schedule("session-1", []providertypes.Message{{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("dedupe")}}})
+	waitFor(t, time.Second, func() bool {
+		entries, err := svc.List(context.Background(), ScopeAll)
+		return err == nil && len(entries) == 2
+	})
+}
+
+func TestAutoExtractorAppliesSemanticUpdateOnlyForAutoExtractedMemory(t *testing.T) {
+	svc := newAutoExtractorTestService(t)
+	if err := svc.Add(context.Background(), Entry{
+		Type:    TypeFeedback,
+		Title:   "测试策略",
+		Content: "用户要求修改后先跑测试。",
+		Source:  SourceAutoExtract,
+	}); err != nil {
+		t.Fatalf("seed auto Add() error = %v", err)
+	}
+	if err := svc.Add(context.Background(), Entry{
+		Type:    TypeUser,
+		Title:   "语言偏好",
+		Content: "用户手动保存偏好中文回复。",
+		Source:  SourceUserManual,
+	}); err != nil {
+		t.Fatalf("seed manual Add() error = %v", err)
+	}
+
+	candidates, err := svc.autoExtractionCandidates(context.Background())
+	if err != nil {
+		t.Fatalf("autoExtractionCandidates() error = %v", err)
+	}
+	var autoRef, manualRef string
+	for _, candidate := range candidates {
+		switch candidate.Source {
+		case SourceAutoExtract:
+			autoRef = candidate.Ref
+		case SourceUserManual:
+			manualRef = candidate.Ref
+		}
+	}
+	if autoRef == "" || manualRef == "" {
+		t.Fatalf("expected refs, auto=%q manual=%q candidates=%+v", autoRef, manualRef, candidates)
+	}
+
+	extractor := &stubDecisionMemoExtractor{
+		extractEntries: []Entry{
+			{Type: TypeFeedback, Title: "测试策略", Content: "用户要求修改后先跑相关测试。"},
+		},
+		decisions: []ExtractionDecision{
+			{
+				Action: ExtractionActionUpdate,
+				Ref:    autoRef,
+				Entry: Entry{
+					Title:    "测试策略",
+					Content:  "用户要求修改后先跑相关测试。",
+					Keywords: []string{"test"},
+				},
+			},
+			{
+				Action: ExtractionActionUpdate,
+				Ref:    manualRef,
+				Entry: Entry{
+					Title:   "语言偏好",
+					Content: "不应覆盖手动记忆。",
+				},
+			},
+		},
+	}
+	auto := NewAutoExtractor(extractor, svc, time.Second)
+	auto.debounce = 5 * time.Millisecond
+	auto.logf = func(string, ...any) {}
+	registerAutoExtractorCleanup(t, auto)
+
+	auto.Schedule("session-1", []providertypes.Message{{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("更新测试策略")}}})
+	waitFor(t, time.Second, func() bool {
+		extractor.mu.Lock()
+		defer extractor.mu.Unlock()
+		return extractor.callCount == 1
+	})
+
+	recall, err := svc.Recall(context.Background(), "测试策略", ScopeProject)
+	if err != nil {
+		t.Fatalf("Recall(auto) error = %v", err)
+	}
+	if len(recall) != 1 || !strings.Contains(recall[0].Content, "相关测试") {
+		t.Fatalf("expected auto memory to be updated, got %+v", recall)
+	}
+	manualRecall, err := svc.Recall(context.Background(), "语言偏好", ScopeUser)
+	if err != nil {
+		t.Fatalf("Recall(manual) error = %v", err)
+	}
+	if len(manualRecall) != 1 || strings.Contains(manualRecall[0].Content, "不应覆盖") {
+		t.Fatalf("manual memory should not be overwritten, got %+v", manualRecall)
+	}
+	if len(extractor.candidates) != 1 || extractor.candidates[0].Ref != autoRef {
+		t.Fatalf("expected shortlist to target the auto-extracted memory, got %+v", extractor.candidates)
+	}
+}
+
+func TestAutoExtractorSemanticCreateStillUsesExactDedup(t *testing.T) {
+	svc := newAutoExtractorTestService(t)
+	if err := svc.Add(context.Background(), Entry{
+		Type:    TypeUser,
+		Title:   "中文回复",
+		Content: "用户偏好中文回复。",
+		Source:  SourceAutoExtract,
+	}); err != nil {
+		t.Fatalf("seed Add() error = %v", err)
+	}
+
+	extractor := &stubDecisionMemoExtractor{
+		extractEntries: []Entry{
+			{Type: TypeUser, Title: "中文回复", Content: "用户偏好中文回复。"},
+			{Type: TypeProject, Title: "新事实", Content: "项目需要语义去重。"},
+		},
+		decisions: []ExtractionDecision{
+			{Action: ExtractionActionCreate, Entry: Entry{Type: TypeUser, Title: "中文回复", Content: "用户偏好中文回复。"}},
+			{Action: ExtractionActionCreate, Entry: Entry{Type: TypeProject, Title: "新事实", Content: "项目需要语义去重。"}},
+		},
+	}
+	auto := NewAutoExtractor(extractor, svc, time.Second)
+	auto.debounce = 5 * time.Millisecond
 	auto.logf = func(string, ...any) {}
 	registerAutoExtractorCleanup(t, auto)
 

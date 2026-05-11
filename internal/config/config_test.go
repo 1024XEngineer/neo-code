@@ -1495,12 +1495,11 @@ func TestMemoConfigClone(t *testing.T) {
 	t.Parallel()
 
 	original := MemoConfig{
-		Enabled:               true,
-		AutoExtract:           false,
-		MaxEntries:            100,
-		MaxIndexBytes:         2048,
-		ExtractTimeoutSec:     9,
-		ExtractRecentMessages: 3,
+		Enabled:           true,
+		AutoExtract:       false,
+		MaxEntries:        100,
+		MaxIndexBytes:     2048,
+		ExtractTimeoutSec: 9,
 	}
 	cloned := original.Clone()
 	if cloned != original {
@@ -1518,10 +1517,9 @@ func TestMemoConfigApplyDefaults(t *testing.T) {
 	t.Run("fills zero fields", func(t *testing.T) {
 		cfg := MemoConfig{}
 		cfg.ApplyDefaults(MemoConfig{
-			MaxEntries:            DefaultMemoMaxEntries,
-			MaxIndexBytes:         DefaultMemoMaxIndexBytes,
-			ExtractTimeoutSec:     DefaultMemoExtractTimeoutSec,
-			ExtractRecentMessages: DefaultMemoExtractRecentMessage,
+			MaxEntries:        DefaultMemoMaxEntries,
+			MaxIndexBytes:     DefaultMemoMaxIndexBytes,
+			ExtractTimeoutSec: DefaultMemoExtractTimeoutSec,
 		})
 		if cfg.MaxEntries != DefaultMemoMaxEntries {
 			t.Errorf("MaxEntries = %d, want %d", cfg.MaxEntries, DefaultMemoMaxEntries)
@@ -1532,33 +1530,28 @@ func TestMemoConfigApplyDefaults(t *testing.T) {
 		if cfg.ExtractTimeoutSec != DefaultMemoExtractTimeoutSec {
 			t.Errorf("ExtractTimeoutSec = %d, want %d", cfg.ExtractTimeoutSec, DefaultMemoExtractTimeoutSec)
 		}
-		if cfg.ExtractRecentMessages != DefaultMemoExtractRecentMessage {
-			t.Errorf("ExtractRecentMessages = %d, want %d", cfg.ExtractRecentMessages, DefaultMemoExtractRecentMessage)
-		}
 	})
 
 	t.Run("preserves explicit fields", func(t *testing.T) {
 		cfg := MemoConfig{
-			MaxEntries:            50,
-			MaxIndexBytes:         1024,
-			ExtractTimeoutSec:     30,
-			ExtractRecentMessages: 5,
+			MaxEntries:        50,
+			MaxIndexBytes:     1024,
+			ExtractTimeoutSec: 30,
 		}
 		cfg.ApplyDefaults(defaultMemoConfig())
-		if cfg.MaxEntries != 50 || cfg.MaxIndexBytes != 1024 || cfg.ExtractTimeoutSec != 30 || cfg.ExtractRecentMessages != 5 {
+		if cfg.MaxEntries != 50 || cfg.MaxIndexBytes != 1024 || cfg.ExtractTimeoutSec != 30 {
 			t.Fatalf("ApplyDefaults() unexpectedly overwrote explicit values: %+v", cfg)
 		}
 	})
 
 	t.Run("preserves negative fields for validation", func(t *testing.T) {
 		cfg := MemoConfig{
-			MaxEntries:            -1,
-			MaxIndexBytes:         -2,
-			ExtractTimeoutSec:     -3,
-			ExtractRecentMessages: -4,
+			MaxEntries:        -1,
+			MaxIndexBytes:     -2,
+			ExtractTimeoutSec: -3,
 		}
 		cfg.ApplyDefaults(defaultMemoConfig())
-		if cfg.MaxEntries != -1 || cfg.MaxIndexBytes != -2 || cfg.ExtractTimeoutSec != -3 || cfg.ExtractRecentMessages != -4 {
+		if cfg.MaxEntries != -1 || cfg.MaxIndexBytes != -2 || cfg.ExtractTimeoutSec != -3 {
 			t.Fatalf("ApplyDefaults() unexpectedly rewrote invalid values: %+v", cfg)
 		}
 	})
@@ -1603,13 +1596,6 @@ func TestMemoConfigValidate(t *testing.T) {
 		}
 	})
 
-	t.Run("non-positive ExtractRecentMessages", func(t *testing.T) {
-		cfg := defaultMemoConfig()
-		cfg.ExtractRecentMessages = 0
-		if err := cfg.Validate(); err == nil {
-			t.Fatal("non-positive ExtractRecentMessages should fail validation")
-		}
-	})
 }
 
 func TestNormalizeWorkdirEdgeCases(t *testing.T) {
@@ -1735,7 +1721,6 @@ func TestValidateSnapshotPropagatesCompactError(t *testing.T) {
 			},
 		},
 		Runtime: RuntimeConfig{
-			MaxNoProgressStreak:  3,
 			MaxRepeatCycleStreak: 3,
 		},
 		Context: ContextConfig{
@@ -1844,7 +1829,7 @@ func TestParseCurrentConfigRoundTripRuntimeConfig(t *testing.T) {
 	t.Parallel()
 
 	snapshot := testDefaultConfig().Clone()
-	snapshot.Runtime.MaxNoProgressStreak = 5
+	snapshot.Runtime.MaxRepeatCycleStreak = 5
 
 	data, err := marshalPersistedConfig(snapshot)
 	if err != nil {
@@ -1855,8 +1840,8 @@ func TestParseCurrentConfigRoundTripRuntimeConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parseCurrentConfig() error = %v", err)
 	}
-	if parsed.Runtime.MaxNoProgressStreak != 5 {
-		t.Fatalf("expected max_no_progress_streak=5, got %d", parsed.Runtime.MaxNoProgressStreak)
+	if parsed.Runtime.MaxRepeatCycleStreak != 5 {
+		t.Fatalf("expected max_repeat_cycle_streak=5, got %d", parsed.Runtime.MaxRepeatCycleStreak)
 	}
 }
 
@@ -1868,7 +1853,7 @@ selected_provider: openai
 current_model: gpt-4.1
 shell: bash
 runtime:
-  max_no_progress_streak: -2
+  max_repeat_cycle_streak: -2
 `)
 
 	parsed, err := parseCurrentConfig(raw, StaticDefaults().Context, StaticDefaults().Memo)
@@ -1880,9 +1865,9 @@ runtime:
 	if err := parsed.ValidateSnapshot(); err != nil {
 		t.Fatalf("ValidateSnapshot() error = %v", err)
 	}
-	if parsed.Runtime.MaxNoProgressStreak != DefaultMaxNoProgressStreak {
-		t.Fatalf("expected default max_no_progress_streak=%d, got %d",
-			DefaultMaxNoProgressStreak, parsed.Runtime.MaxNoProgressStreak)
+	if parsed.Runtime.MaxRepeatCycleStreak != DefaultMaxRepeatCycleStreak {
+		t.Fatalf("expected default max_repeat_cycle_streak=%d, got %d",
+			DefaultMaxRepeatCycleStreak, parsed.Runtime.MaxRepeatCycleStreak)
 	}
 }
 

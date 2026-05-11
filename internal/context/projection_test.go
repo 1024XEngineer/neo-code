@@ -140,6 +140,56 @@ func TestBuildRecentMessagesForModelKeepsOnlyRecentValidAnchors(t *testing.T) {
 	}
 }
 
+func TestBuildMemoExtractionMessagesForModelKeepsFullRunSafeSpans(t *testing.T) {
+	t.Parallel()
+
+	messages := []providertypes.Message{
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("first")}},
+		{Role: providertypes.RoleSystem, Parts: []providertypes.ContentPart{providertypes.NewTextPart("<acceptance_continue>must call todo_write</acceptance_continue>")}},
+		{Role: providertypes.RoleTool, ToolCallID: "orphan", Parts: []providertypes.ContentPart{providertypes.NewTextPart("orphan")}},
+		{
+			Role: providertypes.RoleAssistant,
+			ToolCalls: []providertypes.ToolCall{
+				{ID: "call-1", Name: "filesystem_read_file", Arguments: `{"path":"README.md"}`},
+			},
+		},
+		{
+			Role:         providertypes.RoleTool,
+			ToolCallID:   "call-1",
+			Parts:        []providertypes.ContentPart{providertypes.NewTextPart("README body")},
+			ToolMetadata: map[string]string{"tool_name": "filesystem_read_file", "path": "README.md"},
+		},
+		{
+			Role: providertypes.RoleAssistant,
+			ToolCalls: []providertypes.ToolCall{
+				{ID: "call-missing", Name: "bash", Arguments: `{}`},
+			},
+		},
+		{Role: providertypes.RoleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("last")}},
+	}
+
+	projected := BuildMemoExtractionMessagesForModel(messages)
+	if len(projected) != 4 {
+		t.Fatalf("len(projected) = %d, want 4: %+v", len(projected), projected)
+	}
+	if renderDisplayParts(projected[0].Parts) != "first" || renderDisplayParts(projected[3].Parts) != "last" {
+		t.Fatalf("expected full run user messages to remain, got %+v", projected)
+	}
+	for _, message := range projected {
+		if message.Role == providertypes.RoleSystem {
+			t.Fatalf("system reminder should be excluded from memo extraction window: %+v", projected)
+		}
+	}
+	if projected[1].Role != providertypes.RoleAssistant || len(projected[1].ToolCalls) != 1 {
+		t.Fatalf("expected complete assistant tool span, got %+v", projected[1])
+	}
+	if projected[2].Role != providertypes.RoleTool ||
+		!strings.Contains(renderDisplayParts(projected[2].Parts), "tool result") ||
+		projected[2].ToolMetadata != nil {
+		t.Fatalf("expected projected tool result, got %+v", projected[2])
+	}
+}
+
 func TestBuildRecentMessagesForModelRespectsAbsoluteMessageBudget(t *testing.T) {
 	t.Parallel()
 
@@ -179,7 +229,7 @@ func TestBuildRecentMessagesForModelRespectsAbsoluteMessageBudget(t *testing.T) 
 func TestSanitizeProjectedToolContent(t *testing.T) {
 	t.Parallel()
 
-	rawBody := strings.Repeat("甲", recentWindowToolContentCharLimit+10)
+	rawBody := strings.Repeat("A", recentWindowToolContentHeadChars+10) + strings.Repeat("B", recentWindowToolContentTailChars-20) + "TAIL-MARKER"
 	projected := "tool result\nstatus: ok\n\ncontent:\n" + rawBody
 	sanitized := sanitizeProjectedToolContent(projected)
 	if !strings.Contains(sanitized, "content_excerpt:") {
@@ -187,6 +237,12 @@ func TestSanitizeProjectedToolContent(t *testing.T) {
 	}
 	if strings.Contains(sanitized, "content:\n") {
 		t.Fatalf("expected original content marker removed, got %q", sanitized)
+	}
+	if !strings.Contains(sanitized, "...[truncated]...") {
+		t.Fatalf("expected middle truncation marker, got %q", sanitized)
+	}
+	if !strings.Contains(sanitized, "TAIL-MARKER") {
+		t.Fatalf("expected tail content to be preserved, got %q", sanitized)
 	}
 	if !strings.Contains(sanitized, "[content truncated for memo extraction]") {
 		t.Fatalf("expected truncation marker, got %q", sanitized)
@@ -340,10 +396,16 @@ func TestIsInjectableToolMessage(t *testing.T) {
 func TestSanitizeProjectedToolContentFallsBackForRawPayload(t *testing.T) {
 	t.Parallel()
 
-	raw := strings.Repeat("x", recentWindowToolContentCharLimit+10)
+	raw := strings.Repeat("x", recentWindowToolContentHeadChars+20) + strings.Repeat("y", recentWindowToolContentTailChars-10) + "RAW-TAIL"
 	sanitized := sanitizeProjectedToolContent(raw)
 	if !strings.Contains(sanitized, "content_excerpt:") {
 		t.Fatalf("expected raw payload to be excerpted, got %q", sanitized)
+	}
+	if !strings.Contains(sanitized, "RAW-TAIL") {
+		t.Fatalf("expected raw payload tail to be preserved, got %q", sanitized)
+	}
+	if !strings.Contains(sanitized, "...[truncated]...") {
+		t.Fatalf("expected middle truncation marker, got %q", sanitized)
 	}
 	if !strings.Contains(sanitized, "[content truncated for memo extraction]") {
 		t.Fatalf("expected truncation marker, got %q", sanitized)

@@ -89,6 +89,36 @@ type RecalledEntry struct {
 	Content string
 }
 
+// ExtractionAction 表示自动提取器对单条候选记忆的持久化决策。
+type ExtractionAction string
+
+const (
+	// ExtractionActionCreate 表示新增一条记忆。
+	ExtractionActionCreate ExtractionAction = "create"
+	// ExtractionActionUpdate 表示合并更新一条既有自动提取记忆。
+	ExtractionActionUpdate ExtractionAction = "update"
+	// ExtractionActionSkip 表示跳过重复或不值得沉淀的内容。
+	ExtractionActionSkip ExtractionAction = "skip"
+)
+
+// ExtractionCandidate 表示提供给模型做语义去重的既有记忆快照。
+type ExtractionCandidate struct {
+	Ref      string   `json:"ref"`
+	Scope    Scope    `json:"scope"`
+	Type     Type     `json:"type"`
+	Source   string   `json:"source"`
+	Title    string   `json:"title"`
+	Keywords []string `json:"keywords,omitempty"`
+	Content  string   `json:"content"`
+}
+
+// ExtractionDecision 表示模型针对新旧记忆关系返回的结构化决策。
+type ExtractionDecision struct {
+	Action ExtractionAction
+	Ref    string
+	Entry  Entry
+}
+
 // Store 定义记忆持久化的最小抽象。
 type Store interface {
 	LoadIndex(ctx context.Context, scope Scope) (*Index, error)
@@ -102,6 +132,15 @@ type Store interface {
 // Extractor 定义从对话消息中提取记忆的最小能力。
 type Extractor interface {
 	Extract(ctx context.Context, messages []providertypes.Message) ([]Entry, error)
+}
+
+// DecisionResolver 定义针对单条候选记忆做去重决策的最小能力。
+type DecisionResolver interface {
+	ResolveDecision(
+		ctx context.Context,
+		candidate Entry,
+		existing []ExtractionCandidate,
+	) (ExtractionDecision, error)
 }
 
 // TextGenerator 定义调用 LLM 生成文本的最小能力，用于记忆提取。

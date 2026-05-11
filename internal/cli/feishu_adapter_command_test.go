@@ -119,23 +119,34 @@ func TestMergeFeishuOptionsAppliesAllCLIOverrides(t *testing.T) {
 	}
 }
 
-func TestNewRootCommandContainsFeishuAdapter(t *testing.T) {
+func TestNewRootCommandContainsAdapterFeishu(t *testing.T) {
 	root := NewRootCommand()
-	found := false
+	foundAdapter := false
+	foundFeishu := false
 	for _, command := range root.Commands() {
-		if command.Name() == "feishu-adapter" {
-			found = true
-			if !shouldSkipGlobalPreload(command) {
-				t.Fatal("feishu-adapter should skip global preload")
-			}
-			if !shouldSkipSilentUpdateCheck(command) {
-				t.Fatal("feishu-adapter should skip silent update check")
-			}
-			break
+		if command.Name() != "adapter" {
+			continue
 		}
+		foundAdapter = true
+		for _, child := range command.Commands() {
+			if child.Name() == "feishu" {
+				foundFeishu = true
+				if !shouldSkipGlobalPreload(child) {
+					t.Fatal("adapter feishu should skip global preload")
+				}
+				if !shouldSkipSilentUpdateCheck(child) {
+					t.Fatal("adapter feishu should skip silent update check")
+				}
+				break
+			}
+		}
+		break
 	}
-	if !found {
-		t.Fatal("expected feishu-adapter command in root")
+	if !foundAdapter {
+		t.Fatal("expected adapter command in root")
+	}
+	if !foundFeishu {
+		t.Fatal("expected feishu command under adapter")
 	}
 }
 

@@ -55,7 +55,7 @@ func TestContentMatchVerifier(t *testing.T) {
 		if err != nil {
 			t.Fatalf("VerifyFinal() error = %v", err)
 		}
-		if result.Status != VerificationSoftBlock {
+		if result.Status != VerificationFail {
 			t.Fatalf("status = %q, want soft_block", result.Status)
 		}
 	})

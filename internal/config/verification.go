@@ -11,7 +11,6 @@ const (
 	verifierFileExists      = "file_exists"
 	verifierContentMatch    = "content_match"
 	verifierCommandSuccess  = "command_success"
-	verifierGitDiff         = "git_diff"
 	verifierBuild           = "build"
 	verifierTest            = "test"
 	verifierLint            = "lint"
@@ -51,7 +50,6 @@ var defaultVerificationDeniedCommands = []string{
 
 // VerificationConfig 定义 runtime final 验收阶段的 verifier 执行配置。
 type VerificationConfig struct {
-	MaxNoProgress   int                               `yaml:"max_no_progress,omitempty"`
 	Verifiers       map[string]VerifierConfig         `yaml:"verifiers,omitempty"`
 	ExecutionPolicy VerificationExecutionPolicyConfig `yaml:"execution_policy,omitempty"`
 }
@@ -77,7 +75,6 @@ type VerificationExecutionPolicyConfig struct {
 // defaultVerificationConfig 返回验证引擎默认策略。
 func defaultVerificationConfig() VerificationConfig {
 	return VerificationConfig{
-		MaxNoProgress: 2,
 		Verifiers: map[string]VerifierConfig{
 			verifierTodoConvergence: {
 				TimeoutSec:     5,
@@ -97,12 +94,6 @@ func defaultVerificationConfig() VerificationConfig {
 			verifierCommandSuccess: {
 				TimeoutSec:     120,
 				OutputCapBytes: 128 * 1024,
-				Scope:          verificationScopeProject,
-			},
-			verifierGitDiff: {
-				Command:        []string{"git", "status", "--porcelain", "--untracked-files=normal"},
-				TimeoutSec:     15,
-				OutputCapBytes: 64 * 1024,
 				Scope:          verificationScopeProject,
 			},
 			verifierBuild: {
@@ -145,7 +136,6 @@ func defaultVerificationExecutionPolicyConfig() VerificationExecutionPolicyConfi
 // Clone 复制 verification 配置，避免 map/slice 共享底层数据。
 func (c VerificationConfig) Clone() VerificationConfig {
 	cloned := VerificationConfig{
-		MaxNoProgress:   c.MaxNoProgress,
 		ExecutionPolicy: c.ExecutionPolicy.Clone(),
 	}
 	if len(c.Verifiers) > 0 {
@@ -161,9 +151,6 @@ func (c VerificationConfig) Clone() VerificationConfig {
 func (c *VerificationConfig) ApplyDefaults(defaults VerificationConfig) {
 	if c == nil {
 		return
-	}
-	if c.MaxNoProgress <= 0 {
-		c.MaxNoProgress = defaults.MaxNoProgress
 	}
 	if c.Verifiers == nil {
 		c.Verifiers = make(map[string]VerifierConfig, len(defaults.Verifiers))
@@ -182,9 +169,6 @@ func (c *VerificationConfig) ApplyDefaults(defaults VerificationConfig) {
 
 // Validate 校验 verification 配置合法性。
 func (c VerificationConfig) Validate() error {
-	if c.MaxNoProgress <= 0 {
-		return errors.New("runtime.verification.max_no_progress must be greater than 0")
-	}
 	for name, verifier := range c.Verifiers {
 		if strings.TrimSpace(name) == "" {
 			return errors.New("runtime.verification.verifiers has empty name")

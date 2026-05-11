@@ -2,7 +2,6 @@ package runtime
 
 import (
 	"context"
-	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -16,163 +15,6 @@ import (
 	todotool "neo-code/internal/tools/todo"
 )
 
-func TestProgressStreakNoLongerStopsRun(t *testing.T) {
-	t.Setenv("TEST_KEY", "dummy")
-
-	cfg := config.Config{
-		Providers:        []config.ProviderConfig{{Name: "test-progress", Driver: "test", BaseURL: "http://localhost", Model: "test", APIKeyEnv: "TEST_KEY"}},
-		SelectedProvider: "test-progress",
-		Workdir:          t.TempDir(),
-		Runtime: config.RuntimeConfig{
-			MaxNoProgressStreak:  3,
-			MaxRepeatCycleStreak: 6,
-		},
-	}
-
-	toolManager := &stubToolManager{
-		specs: []providertypes.ToolSpec{
-			{Name: "tool_error"},
-		},
-		executeFn: func(ctx context.Context, input tools.ToolCallInput) (tools.ToolResult, error) {
-			// Always return error to avoid generating progress
-			return tools.ToolResult{Content: "error occurred", IsError: true}, nil
-		},
-	}
-
-	var promptInjected bool
-	var providerCalls int32
-	var signatureSeq int32
-	providerFactory := &scriptedProviderFactory{
-		provider: &scriptedProvider{
-			chatFn: func(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error {
-				call := atomic.AddInt32(&providerCalls, 1)
-				seq := atomic.AddInt32(&signatureSeq, 1)
-				if strings.Contains(req.SystemPrompt, selfHealingReminder) {
-					promptInjected = true
-				}
-				if call >= 5 {
-					events <- providertypes.NewTextDeltaStreamEvent("done")
-					events <- providertypes.NewMessageDoneStreamEvent("stop", nil)
-					return nil
-				}
-				// the model always decides to call the tool
-				events <- providertypes.NewToolCallStartStreamEvent(0, "call_err", "tool_error")
-				events <- providertypes.NewToolCallDeltaStreamEvent(
-					0,
-					"call_err",
-					`{"seq":`+strconv.FormatInt(int64(seq), 10)+`}`,
-				)
-				events <- providertypes.NewMessageDoneStreamEvent("tool_calls", nil)
-				return nil
-			},
-		},
-	}
-
-	manager := config.NewManager(config.NewLoader(t.TempDir(), &cfg))
-
-	service := NewWithFactory(
-		manager,
-		toolManager,
-		newMemoryStore(),
-		providerFactory,
-		nil,
-	)
-
-	input := UserInput{
-		RunID: "run-progress",
-		Parts: []providertypes.ContentPart{providertypes.NewTextPart("trigger error loop")},
-	}
-
-	if err := service.Run(context.Background(), input); err != nil {
-		t.Fatalf("expected run success without no-progress hard stop, got %v", err)
-	}
-
-	events := collectRuntimeEvents(service.Events())
-	assertStopReasonDecided(t, events, controlplane.StopReasonAccepted, "")
-
-	if !promptInjected {
-		t.Error("expected self-healing prompt to be injected before repetitive no-progress turns")
-	}
-	if providerCalls != 5 {
-		t.Fatalf("expected 5 provider turns (4 tool cycles + done), got %d", providerCalls)
-	}
-}
-
-func TestProgressEvidenceResetsNoProgressStreak(t *testing.T) {
-	t.Setenv("TEST_KEY", "dummy")
-
-	cfg := config.Config{
-		Providers:        []config.ProviderConfig{{Name: "test-progress", Driver: "test", BaseURL: "http://localhost", Model: "test", APIKeyEnv: "TEST_KEY"}},
-		SelectedProvider: "test-progress",
-		Workdir:          t.TempDir(),
-	}
-
-	var executeCalls int32
-	toolManager := &stubToolManager{
-		specs: []providertypes.ToolSpec{
-			{Name: "tool_mixed"},
-		},
-		executeFn: func(ctx context.Context, input tools.ToolCallInput) (tools.ToolResult, error) {
-			call := int(atomic.AddInt32(&executeCalls, 1))
-			if call == 3 {
-				return tools.ToolResult{Name: input.Name, Content: "ok", IsError: false}, nil
-			}
-			return tools.ToolResult{Name: input.Name, Content: "error occurred", IsError: true}, nil
-		},
-	}
-
-	var providerCalls int32
-	var signatureSeq int32
-	providerFactory := &scriptedProviderFactory{
-		provider: &scriptedProvider{
-			chatFn: func(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error {
-				call := int(atomic.AddInt32(&providerCalls, 1))
-				if call <= 4 {
-					seq := atomic.AddInt32(&signatureSeq, 1)
-					events <- providertypes.NewToolCallStartStreamEvent(0, "call_mixed", "tool_mixed")
-					events <- providertypes.NewToolCallDeltaStreamEvent(
-						0,
-						"call_mixed",
-						`{"seq":`+strconv.FormatInt(int64(seq), 10)+`}`,
-					)
-					events <- providertypes.NewMessageDoneStreamEvent("tool_calls", nil)
-					return nil
-				}
-				events <- providertypes.NewTextDeltaStreamEvent("done")
-				events <- providertypes.NewMessageDoneStreamEvent("stop", nil)
-				return nil
-			},
-		},
-	}
-
-	manager := config.NewManager(config.NewLoader(t.TempDir(), &cfg))
-	service := NewWithFactory(
-		manager,
-		toolManager,
-		newMemoryStore(),
-		providerFactory,
-		nil,
-	)
-
-	err := service.Run(context.Background(), UserInput{
-		RunID: "run-progress-reset",
-		Parts: []providertypes.ContentPart{providertypes.NewTextPart("trigger mixed progress loop")},
-	})
-	if err != nil {
-		t.Fatalf("expected run to finish successfully, got %v", err)
-	}
-
-	if executeCalls != 4 {
-		t.Fatalf("expected 4 tool executions, got %d", executeCalls)
-	}
-	if providerCalls != 5 {
-		t.Fatalf("expected 5 provider calls (4 tool turns + 1 done), got %d", providerCalls)
-	}
-
-	events := collectRuntimeEvents(service.Events())
-	assertStopReasonDecided(t, events, controlplane.StopReasonAccepted, "")
-}
-
 func TestRepeatCycleStreakNoLongerStopsRunAndInjectsReminder(t *testing.T) {
 	t.Setenv("TEST_KEY", "dummy")
 
@@ -181,7 +23,6 @@ func TestRepeatCycleStreakNoLongerStopsRunAndInjectsReminder(t *testing.T) {
 		SelectedProvider: "test-repeat",
 		Workdir:          t.TempDir(),
 		Runtime: config.RuntimeConfig{
-			MaxNoProgressStreak:  10,
 			MaxRepeatCycleStreak: 3,
 		},
 	}
@@ -207,7 +48,7 @@ func TestRepeatCycleStreakNoLongerStopsRunAndInjectsReminder(t *testing.T) {
 					promptInjected = true
 				}
 				if call >= 5 {
-					events <- providertypes.NewTextDeltaStreamEvent("done")
+					events <- providertypes.NewTextDeltaStreamEvent("{\"task_completion\":{\"completed\":true}}\ndone")
 					events <- providertypes.NewMessageDoneStreamEvent("stop", nil)
 					return nil
 				}
@@ -233,20 +74,82 @@ func TestRepeatCycleStreakNoLongerStopsRunAndInjectsReminder(t *testing.T) {
 		Parts: []providertypes.ContentPart{providertypes.NewTextPart("trigger repeat loop")},
 	})
 	if err != nil {
-		t.Fatalf("expected run success without repeat hard stop, got %v", err)
+		t.Fatalf("expected run to recover after repeat-cycle reminder, got %v", err)
 	}
 
 	events := collectRuntimeEvents(service.Events())
 	assertStopReasonDecided(t, events, controlplane.StopReasonAccepted, "")
 
 	if !promptInjected {
-		t.Fatal("expected repeat self-healing prompt to be injected before repeat limit is reached")
+		t.Fatal("expected repeat self-healing prompt injection before recovery")
 	}
 	if executeCalls != 4 {
-		t.Fatalf("expected repeated tool executions to continue until model stops, got %d", executeCalls)
+		t.Fatalf("expected 4 repeated tool executions before repeat reminder recovery, got %d", executeCalls)
 	}
 	if providerCalls != 5 {
-		t.Fatalf("expected 5 provider turns (4 tool cycles + done), got %d", providerCalls)
+		t.Fatalf("expected 5 provider turns including recovery response, got %d", providerCalls)
+	}
+}
+
+func TestRepeatCycleTerminatesAfterReminderIfStillStalled(t *testing.T) {
+	t.Setenv("TEST_KEY", "dummy")
+
+	cfg := config.Config{
+		Providers:        []config.ProviderConfig{{Name: "test-repeat-hard-stop", Driver: "test", BaseURL: "http://localhost", Model: "test", APIKeyEnv: "TEST_KEY"}},
+		SelectedProvider: "test-repeat-hard-stop",
+		Workdir:          t.TempDir(),
+		Runtime: config.RuntimeConfig{
+			MaxRepeatCycleStreak: 3,
+		},
+	}
+
+	var executeCalls int32
+	var providerCalls int32
+	toolManager := &stubToolManager{
+		specs: []providertypes.ToolSpec{{Name: "tool_repeat"}},
+		executeFn: func(ctx context.Context, input tools.ToolCallInput) (tools.ToolResult, error) {
+			atomic.AddInt32(&executeCalls, 1)
+			return tools.ToolResult{Name: input.Name, Content: "ok", IsError: false}, nil
+		},
+	}
+
+	var promptInjected bool
+	providerFactory := &scriptedProviderFactory{
+		provider: &scriptedProvider{
+			chatFn: func(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error {
+				atomic.AddInt32(&providerCalls, 1)
+				if strings.Contains(req.SystemPrompt, selfHealingRepeatReminder) {
+					promptInjected = true
+				}
+				events <- providertypes.NewToolCallStartStreamEvent(0, "call_repeat", "tool_repeat")
+				events <- providertypes.NewToolCallDeltaStreamEvent(0, "call_repeat", `{"path":"x"}`)
+				events <- providertypes.NewMessageDoneStreamEvent("tool_calls", nil)
+				return nil
+			},
+		},
+	}
+
+	manager := config.NewManager(config.NewLoader(t.TempDir(), &cfg))
+	service := NewWithFactory(manager, toolManager, newMemoryStore(), providerFactory, nil)
+
+	if err := service.Run(context.Background(), UserInput{
+		RunID: "run-repeat-hard-stop",
+		Parts: []providertypes.ContentPart{providertypes.NewTextPart("trigger unrecovered repeat loop")},
+	}); err != nil {
+		t.Fatalf("expected run to stop cleanly on repeat-cycle, got %v", err)
+	}
+
+	events := collectRuntimeEvents(service.Events())
+	assertStopReasonDecided(t, events, controlplane.StopReasonRepeatCycle, "")
+
+	if !promptInjected {
+		t.Fatal("expected repeat self-healing prompt injection before hard repeat-cycle termination")
+	}
+	if executeCalls != 5 {
+		t.Fatalf("expected 5 repeated tool executions before repeat-cycle termination, got %d", executeCalls)
+	}
+	if providerCalls != 5 {
+		t.Fatalf("expected 5 provider turns before repeat-cycle termination, got %d", providerCalls)
 	}
 }
 
@@ -258,7 +161,6 @@ func TestRepeatCycleFailedCallsNoLongerHardStop(t *testing.T) {
 		SelectedProvider: "test-repeat-fail",
 		Workdir:          t.TempDir(),
 		Runtime: config.RuntimeConfig{
-			MaxNoProgressStreak:  10,
 			MaxRepeatCycleStreak: 3,
 		},
 	}
@@ -280,7 +182,7 @@ func TestRepeatCycleFailedCallsNoLongerHardStop(t *testing.T) {
 			chatFn: func(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error {
 				call := atomic.AddInt32(&providerCalls, 1)
 				if call >= 5 {
-					events <- providertypes.NewTextDeltaStreamEvent("done")
+					events <- providertypes.NewTextDeltaStreamEvent("{\"task_completion\":{\"completed\":true}}\ndone")
 					events <- providertypes.NewMessageDoneStreamEvent("stop", nil)
 					return nil
 				}
@@ -306,14 +208,16 @@ func TestRepeatCycleFailedCallsNoLongerHardStop(t *testing.T) {
 		Parts: []providertypes.ContentPart{providertypes.NewTextPart("trigger repeat fail loop")},
 	})
 	if err != nil {
-		t.Fatalf("expected run success without repeat hard stop, got %v", err)
+		t.Fatalf("expected run to recover after repeat-cycle reminder, got %v", err)
 	}
 	if executeCalls != 4 {
-		t.Fatalf("expected failed repeated calls to continue until model stops, got %d", executeCalls)
+		t.Fatalf("expected 4 failed repeated calls before recovery, got %d", executeCalls)
 	}
 	if providerCalls != 5 {
-		t.Fatalf("expected 5 provider turns (4 tool cycles + done), got %d", providerCalls)
+		t.Fatalf("expected 5 provider turns including recovery response, got %d", providerCalls)
 	}
+	events := collectRuntimeEvents(service.Events())
+	assertStopReasonDecided(t, events, controlplane.StopReasonAccepted, "")
 }
 
 func TestRunStopsWhenMaxTurnsReached(t *testing.T) {
@@ -444,7 +348,6 @@ func TestPrepareTurnSnapshotInjectRepeatReminderWithEmptyPrompt(t *testing.T) {
 func TestPrepareTurnBudgetSnapshotRepeatReminderTakesPriority(t *testing.T) {
 	manager := newRuntimeConfigManager(t)
 	if err := manager.Update(context.Background(), func(cfg *config.Config) error {
-		cfg.Runtime.MaxNoProgressStreak = 3
 		cfg.Runtime.MaxRepeatCycleStreak = 3
 		return nil
 	}); err != nil {
@@ -461,7 +364,6 @@ func TestPrepareTurnBudgetSnapshotRepeatReminderTakesPriority(t *testing.T) {
 		toolManager: &stubToolManager{},
 	}
 	state := newRunState("run-reminder-priority", newRuntimeSession("session-reminder-priority"))
-	state.progress.LastScore.NoProgressStreak = 2
 	state.progress.LastScore.RepeatCycleStreak = 2
 	state.progress.LastScore.StalledProgressState = controlplane.StalledProgressStalled
 	state.progress.LastScore.ReminderKind = controlplane.ReminderKindRepeatCycle
@@ -476,19 +378,9 @@ func TestPrepareTurnBudgetSnapshotRepeatReminderTakesPriority(t *testing.T) {
 	if !strings.Contains(snapshot.Request.SystemPrompt, selfHealingRepeatReminder) {
 		t.Fatalf("expected prompt to contain repeat reminder, got %q", snapshot.Request.SystemPrompt)
 	}
-	if strings.Contains(snapshot.Request.SystemPrompt, selfHealingReminder) {
-		t.Fatalf("expected no-progress reminder to be skipped when repeat reminder is injected, got %q", snapshot.Request.SystemPrompt)
-	}
 }
 
 func TestResolveStreakLimitDefaults(t *testing.T) {
-	if got := resolveNoProgressStreakLimit(config.RuntimeConfig{MaxNoProgressStreak: 0}); got != config.DefaultMaxNoProgressStreak {
-		t.Fatalf("expected default no-progress limit %d, got %d", config.DefaultMaxNoProgressStreak, got)
-	}
-	if got := resolveNoProgressStreakLimit(config.RuntimeConfig{MaxNoProgressStreak: 8}); got != 8 {
-		t.Fatalf("expected explicit no-progress limit 8, got %d", got)
-	}
-
 	if got := resolveRepeatCycleStreakLimit(config.RuntimeConfig{MaxRepeatCycleStreak: -1}); got != config.DefaultMaxRepeatCycleStreak {
 		t.Fatalf("expected default repeat limit %d, got %d", config.DefaultMaxRepeatCycleStreak, got)
 	}
@@ -504,59 +396,11 @@ func TestResolveStreakLimitDefaults(t *testing.T) {
 	}
 }
 
-func TestComputeTodoStateSignature(t *testing.T) {
-	t.Parallel()
-
-	if got := computeTodoStateSignature(nil); got != "" {
-		t.Fatalf("computeTodoStateSignature(nil) = %q", got)
-	}
-
-	base := []agentsession.TodoItem{
-		{
-			ID:       "t1",
-			Content:  "task",
-			Status:   agentsession.TodoStatusPending,
-			Executor: agentsession.TodoExecutorAgent,
-		},
-	}
-	sig1 := computeTodoStateSignature(base)
-	if strings.TrimSpace(sig1) == "" {
-		t.Fatal("expected non-empty signature")
-	}
-
-	same := []agentsession.TodoItem{
-		{
-			ID:       "t1",
-			Content:  "task",
-			Status:   agentsession.TodoStatusPending,
-			Executor: agentsession.TodoExecutorAgent,
-		},
-	}
-	sig2 := computeTodoStateSignature(same)
-	if sig1 != sig2 {
-		t.Fatalf("expected stable signature, got %q vs %q", sig1, sig2)
-	}
-
-	changed := []agentsession.TodoItem{
-		{
-			ID:       "t1",
-			Content:  "task",
-			Status:   agentsession.TodoStatusCompleted,
-			Executor: agentsession.TodoExecutorAgent,
-		},
-	}
-	sig3 := computeTodoStateSignature(changed)
-	if sig3 == sig1 {
-		t.Fatalf("expected changed signature when todo state changes")
-	}
-}
-
 func TestNoToolIncompleteTurnStillEvaluatesProgressAndInjectsReminder(t *testing.T) {
 	t.Parallel()
 
 	manager := newRuntimeConfigManager(t)
 	if err := manager.Update(context.Background(), func(cfg *config.Config) error {
-		cfg.Runtime.MaxNoProgressStreak = 1
 		return nil
 	}); err != nil {
 		t.Fatalf("update config: %v", err)
@@ -579,11 +423,12 @@ func TestNoToolIncompleteTurnStillEvaluatesProgressAndInjectsReminder(t *testing
 	registry.Register(todotool.New())
 
 	providerImpl := &scriptedProvider{
+		requireExplicitCompletion: true,
 		responses: []scriptedResponse{
 			{
 				Message: providertypes.Message{
 					Role:  providertypes.RoleAssistant,
-					Parts: []providertypes.ContentPart{providertypes.NewTextPart("done")},
+					Parts: []providertypes.ContentPart{providertypes.NewTextPart("{\"task_completion\":{\"completed\":false}}\ndone")},
 				},
 				FinishReason: "stop",
 			},
@@ -616,7 +461,7 @@ func TestNoToolIncompleteTurnStillEvaluatesProgressAndInjectsReminder(t *testing
 			{
 				Message: providertypes.Message{
 					Role:  providertypes.RoleAssistant,
-					Parts: []providertypes.ContentPart{providertypes.NewTextPart("done")},
+					Parts: []providertypes.ContentPart{providertypes.NewTextPart("{\"task_completion\":{\"completed\":true}}\ndone")},
 				},
 				FinishReason: "stop",
 			},
@@ -642,18 +487,27 @@ func TestNoToolIncompleteTurnStillEvaluatesProgressAndInjectsReminder(t *testing
 	if len(providerImpl.requests) < 2 {
 		t.Fatalf("expected at least 2 provider requests, got %d", len(providerImpl.requests))
 	}
-	foundReminder := false
-	for _, message := range providerImpl.requests[1].Messages {
-		content := renderPartsForTest(message.Parts)
-		if message.Role == providertypes.RoleSystem &&
-			strings.Contains(content, "<acceptance_continue>") &&
-			strings.Contains(content, "MUST call todo_write") {
-			foundReminder = true
-			break
+	secondSystemPrompt := providerImpl.requests[1].SystemPrompt
+	if !strings.Contains(secondSystemPrompt, "[Runtime Control]") ||
+		!strings.Contains(secondSystemPrompt, "task_completion") {
+		t.Fatalf("expected runtime protocol note in second provider request system prompt, got %q", secondSystemPrompt)
+	}
+	if len(providerImpl.requests) > 2 {
+		thirdSystemPrompt := providerImpl.requests[2].SystemPrompt
+		if strings.Contains(thirdSystemPrompt, "[Runtime Control]") &&
+			strings.Contains(thirdSystemPrompt, "task_completion") {
+			t.Fatalf("expected runtime protocol note to be injected once, got third system prompt %q", thirdSystemPrompt)
 		}
 	}
-	if !foundReminder {
-		t.Fatalf("expected continue reminder in second provider request messages, got %+v", providerImpl.requests[1].Messages)
+
+	savedSession := store.sessions[session.ID]
+	for _, message := range savedSession.Messages {
+		content := renderPartsForTest(message.Parts)
+		if message.Role == providertypes.RoleSystem &&
+			strings.Contains(content, "[Runtime Control]") &&
+			strings.Contains(content, "task_completion") {
+			t.Fatalf("expected completion reminder to stay out of session transcript, found %q", content)
+		}
 	}
 
 	events := collectRuntimeEvents(service.Events())
@@ -666,7 +520,6 @@ func TestAcceptanceContinueWithoutToolCallStopsAsIncomplete(t *testing.T) {
 
 	manager := newRuntimeConfigManager(t)
 	if err := manager.Update(context.Background(), func(cfg *config.Config) error {
-		cfg.Runtime.Verification.MaxNoProgress = 2
 		return nil
 	}); err != nil {
 		t.Fatalf("update config: %v", err)
@@ -687,28 +540,14 @@ func TestAcceptanceContinueWithoutToolCallStopsAsIncomplete(t *testing.T) {
 	store.sessions[session.ID] = cloneSession(session)
 
 	providerImpl := &scriptedProvider{
+		requireExplicitCompletion: true,
 		responses: []scriptedResponse{
-			{
-				Message: providertypes.Message{
-					Role:  providertypes.RoleAssistant,
-					Parts: []providertypes.ContentPart{providertypes.NewTextPart("我已经完成了")},
-				},
-				FinishReason: "stop",
-			},
-			{
-				Message: providertypes.Message{
-					Role:  providertypes.RoleAssistant,
-					Parts: []providertypes.ContentPart{providertypes.NewTextPart("任务已完成")},
-				},
-				FinishReason: "stop",
-			},
-			{
-				Message: providertypes.Message{
-					Role:  providertypes.RoleAssistant,
-					Parts: []providertypes.ContentPart{providertypes.NewTextPart("不应再到这里")},
-				},
-				FinishReason: "stop",
-			},
+			{Message: providertypes.Message{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("{\"task_completion\":{\"completed\":false}}\n1")}}, FinishReason: "stop"},
+			{Message: providertypes.Message{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("{\"task_completion\":{\"completed\":false}}\n2")}}, FinishReason: "stop"},
+			{Message: providertypes.Message{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("{\"task_completion\":{\"completed\":false}}\n3")}}, FinishReason: "stop"},
+			{Message: providertypes.Message{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("{\"task_completion\":{\"completed\":false}}\n4")}}, FinishReason: "stop"},
+			{Message: providertypes.Message{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("{\"task_completion\":{\"completed\":false}}\n5")}}, FinishReason: "stop"},
+			{Message: providertypes.Message{Role: providertypes.RoleAssistant, Parts: []providertypes.ContentPart{providertypes.NewTextPart("不应再到这里")}}, FinishReason: "stop"},
 		},
 	}
 
@@ -728,49 +567,28 @@ func TestAcceptanceContinueWithoutToolCallStopsAsIncomplete(t *testing.T) {
 		t.Fatalf("Run() error = %v", err)
 	}
 
-	if len(providerImpl.requests) != 2 {
-		t.Fatalf("expected runtime to stop after two no-tool continues, got %d requests", len(providerImpl.requests))
+	if len(providerImpl.requests) != 6 {
+		t.Fatalf("expected runtime to stop after six missing completion signals, got %d requests", len(providerImpl.requests))
 	}
-	secondRequestMessages := providerImpl.requests[1].Messages
-	foundHint := false
-	for _, message := range secondRequestMessages {
-		if message.Role != providertypes.RoleSystem {
-			continue
-		}
+	// 第 6 个请求（streak=5 时注入最终提醒后）应包含最终协议提醒
+	fifthSystemPrompt := providerImpl.requests[5].SystemPrompt
+	if !strings.Contains(fifthSystemPrompt, "[Runtime Control]") ||
+		!strings.Contains(fifthSystemPrompt, "final protocol reminder") ||
+		!strings.Contains(fifthSystemPrompt, "task_completion") {
+		t.Fatalf("expected final runtime protocol note in request 5 system prompt, got %q", fifthSystemPrompt)
+	}
+	savedSession := store.sessions[session.ID]
+	for _, message := range savedSession.Messages {
 		content := renderPartsForTest(message.Parts)
-		if strings.Contains(content, "<acceptance_continue>") && strings.Contains(content, "MUST call todo_write") {
-			foundHint = true
-			break
+		if message.Role == providertypes.RoleSystem &&
+			strings.Contains(content, "[Runtime Control]") &&
+			strings.Contains(content, "task_completion") {
+			t.Fatalf("expected completion reminder to stay out of session transcript, found %q", content)
 		}
-	}
-	if !foundHint {
-		t.Fatalf("expected actionable acceptance continue hint, got messages: %+v", secondRequestMessages)
 	}
 
 	events := collectRuntimeEvents(service.Events())
-	assertStopReasonDecided(t, events, controlplane.StopReasonNoProgressAfterFinalIntercept, "")
-	foundVerificationReason := false
-	foundAcceptanceReason := false
-	for _, event := range events {
-		switch event.Type {
-		case EventVerificationStarted:
-			payload, ok := event.Payload.(VerificationStartedPayload)
-			if ok && strings.TrimSpace(payload.CompletionBlockedReason) == string(controlplane.CompletionBlockedReasonPendingTodo) {
-				foundVerificationReason = true
-			}
-		case EventAcceptanceDecided:
-			payload, ok := event.Payload.(AcceptanceDecidedPayload)
-			if ok && strings.TrimSpace(payload.CompletionBlockedReason) == string(controlplane.CompletionBlockedReasonPendingTodo) {
-				foundAcceptanceReason = true
-			}
-		}
-	}
-	if !foundVerificationReason {
-		t.Fatal("expected verification_started payload to include completion_blocked_reason=pending_todo")
-	}
-	if !foundAcceptanceReason {
-		t.Fatal("expected acceptance_decided payload to include completion_blocked_reason=pending_todo")
-	}
+	assertStopReasonDecided(t, events, controlplane.StopReasonMissingCompletionSignal, "")
 }
 
 func assertStopReasonDecided(t *testing.T, events []RuntimeEvent, wantReason controlplane.StopReason, wantDetail string) {

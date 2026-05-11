@@ -8,12 +8,12 @@ import (
 	"neo-code/internal/runtime/controlplane"
 )
 
-// Orchestrator 按固定顺序执行 verifier 并在首个非 pass 结果处短路。
+// Orchestrator 执行所有 verifier 并聚合结果。
 type Orchestrator struct {
 	Verifiers []FinalVerifier
 }
 
-// RunFinalVerification 执行 verifier 列表并生成统一 gate 决议。
+// RunFinalVerification 执行所有 verifier 并生成统一 gate 决议。任一 Fail → 整体 Failed。
 func (o Orchestrator) RunFinalVerification(ctx context.Context, input FinalVerifyInput) (VerificationGateDecision, error) {
 	results := make([]VerificationResult, 0, len(o.Verifiers))
 	decision := VerificationGateDecision{
@@ -43,22 +43,8 @@ func (o Orchestrator) RunFinalVerification(ctx context.Context, input FinalVerif
 		if result.Status == VerificationPass {
 			continue
 		}
-
 		decision.Passed = false
-		switch result.Status {
-		case VerificationSoftBlock:
-			decision.Reason = controlplane.StopReasonTodoNotConverged
-		case VerificationHardBlock:
-			if result.WaitingExternal {
-				decision.Reason = controlplane.StopReasonTodoWaitingExternal
-			} else {
-				decision.Reason = controlplane.StopReasonTodoNotConverged
-			}
-		default:
-			decision.Reason = stopReasonForVerificationFailure(result)
-		}
-		decision.Results = results
-		return decision, nil
+		decision.Reason = stopReasonForVerificationFailure(result)
 	}
 	decision.Results = results
 	return decision, nil

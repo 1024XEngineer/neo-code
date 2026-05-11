@@ -22,9 +22,11 @@ const (
 
 var coreSections = loadCoreSections()
 
-var noProgressReminder = mustReadTemplate("templates/runtime/self_healing_no_progress.txt")
-
 var repeatCycleReminder = mustReadTemplate("templates/runtime/self_healing_repeat_cycle.txt")
+
+var completionProtocolReminder = mustReadTemplate("templates/runtime/completion_protocol_reminder.md")
+
+var completionProtocolFinalReminder = mustReadTemplate("templates/runtime/completion_protocol_final_reminder.md")
 
 var compactSystemPromptTemplate = mustReadTemplate("templates/context/compact_system_prompt.md")
 
@@ -47,14 +49,19 @@ func CoreSections() []Section {
 	return append([]Section(nil), coreSections...)
 }
 
-// NoProgressReminder 返回 runtime 无进展自愈提醒文案。
-func NoProgressReminder() string {
-	return noProgressReminder
-}
-
 // RepeatCycleReminder 返回 runtime 重复同参工具调用自愈提醒文案。
 func RepeatCycleReminder() string {
 	return repeatCycleReminder
+}
+
+// CompletionProtocolReminder 返回缺少 task_completion 时的普通协议提示。
+func CompletionProtocolReminder() string {
+	return completionProtocolReminder
+}
+
+// CompletionProtocolFinalReminder 返回缺少 task_completion 时的最终协议提示。
+func CompletionProtocolFinalReminder() string {
+	return completionProtocolFinalReminder
 }
 
 // CompactSystemPrompt 返回 compact 场景使用的静态 system prompt。

@@ -14,18 +14,17 @@ import (
 	"neo-code/internal/config"
 	agentcontext "neo-code/internal/context"
 	contextcompact "neo-code/internal/context/compact"
+	"neo-code/internal/partsrender"
 	"neo-code/internal/promptasset"
 	"neo-code/internal/provider"
 	providertypes "neo-code/internal/provider/types"
-	"neo-code/internal/runtime/acceptance"
+	"neo-code/internal/runtime/acceptgate"
 	"neo-code/internal/runtime/controlplane"
 	runtimehooks "neo-code/internal/runtime/hooks"
 	"neo-code/internal/runtime/streaming"
 	agentsession "neo-code/internal/session"
 	"neo-code/internal/tools"
 )
-
-var selfHealingReminder = promptasset.NoProgressReminder()
 
 var selfHealingRepeatReminder = promptasset.RepeatCycleReminder()
 
@@ -63,20 +62,6 @@ func computeToolSignature(calls []providertypes.ToolCall) string {
 	return hex.EncodeToString(hash[:])
 }
 
-// computeTodoStateSignature 计算当前 Todo 列表的状态签名，用于识别 dispatch 是否产生了真实状态变化。
-func computeTodoStateSignature(items []agentsession.TodoItem) string {
-	normalized := cloneTodosForPersistence(items)
-	if len(normalized) == 0 {
-		return ""
-	}
-	encoded, err := json.Marshal(normalized)
-	if err != nil {
-		return ""
-	}
-	hash := sha256.Sum256(encoded)
-	return hex.EncodeToString(hash[:])
-}
-
 // Run 执行一次完整的 ReAct 闭环：保存用户输入、驱动模型、执行工具并发出事件。
 // 已有会话会先加锁再加载/更新，确保同一会话并发 Run 不会出现状态覆盖；
 // 新会话在创建后再绑定会话锁，不同会话可并行执行。
@@ -102,11 +87,14 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 			}
 			s.updateResumeCheckpoint(runCtx, statePtr, "stopped", completion)
 		}
-		if statePtr != nil && s.perEditStore != nil && statePtr.baselineCheckpointID != "" && statePtr.lastEndOfTurnCheckpointID != "" {
+		if statePtr != nil {
+			s.createRunEndCheckpoint(context.Background(), statePtr)
+		}
+		if statePtr != nil && s.perEditStore != nil && statePtr.lastEndOfTurnCheckpointID != "" {
 			runEndCtx := context.Background()
 			records, listErr := s.checkpointStore.ListCheckpoints(runEndCtx, statePtr.session.ID, checkpoint.ListCheckpointOpts{})
+			var perEditIDs []string
 			if listErr == nil {
-				var perEditIDs []string
 				for _, r := range records {
 					if strings.TrimSpace(r.RunID) != statePtr.runID {
 						continue
@@ -119,8 +107,7 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 					_ = s.perEditStore.RunEndCapture(runEndCtx, perEditIDs)
 				}
 			}
-			diffStr, _ := s.perEditStore.Diff(runEndCtx, statePtr.baselineCheckpointID, statePtr.lastEndOfTurnCheckpointID)
-			files, _ := s.perEditStore.ChangedFiles(runEndCtx, statePtr.baselineCheckpointID, statePtr.lastEndOfTurnCheckpointID)
+			diffStr, files, _ := s.perEditStore.RunAggregateDiff(runEndCtx, perEditIDs, nil)
 			var changedFiles []FileDiffEntry
 			for _, f := range files {
 				changedFiles = append(changedFiles, FileDiffEntry{
@@ -129,17 +116,13 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 				})
 			}
 			s.emitRunScopedOptional(EventRunDiffSummary, statePtr, RunDiffSummaryPayload{
-				FromCheckpointID: statePtr.baselineCheckpointID,
+				FromCheckpointID: "",
 				ToCheckpointID:   statePtr.lastEndOfTurnCheckpointID,
 				Diff:             diffStr,
 				ChangedFiles:     changedFiles,
 			})
 		}
-		if statePtr != nil {
-			runEndCtx := context.Background()
-			s.recordRunEndWorkspaceState(runEndCtx, statePtr.session.ID, effectiveWorkdirForCheckpointState(statePtr, statePtr.session), statePtr.lastEndOfTurnCheckpointID)
-			s.clearRunCheckpointCaches(statePtr.session.ID, statePtr.runID)
-		}
+
 		s.emitRunTermination(runCtx, input, statePtr, err)
 	}()
 	ctx = runCtx
@@ -185,8 +168,7 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 		agentsession.NormalizeAgentMode(session.AgentMode) == agentsession.AgentModePlan
 	state.taskID = strings.TrimSpace(input.TaskID)
 	state.agentID = strings.TrimSpace(input.AgentID)
-	state.taskKind = inferTaskKindFromInput(input.Parts)
-	state.userGoal = strings.TrimSpace(renderPartsForVerification(input.Parts))
+	state.userGoal = strings.TrimSpace(partsrender.RenderDisplayParts(input.Parts))
 	if input.CapabilityToken != nil {
 		token := input.CapabilityToken.Normalize()
 		state.capabilityToken = &token
@@ -197,28 +179,6 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 		return s.handleRunError(err)
 	}
 
-	runBaselineCheckpointID := ""
-	if drifted, driftDiff := s.recordRunStartFingerprint(ctx, state.session.ID, state.runID, effectiveWorkdir); drifted {
-		if checkpointID, cpErr := s.createPreRunDriftRebaseCheckpoint(ctx, &state, driftDiff); cpErr != nil {
-			s.emitRunScopedOptional(EventCheckpointWarning, &state, CheckpointWarningPayload{
-				Error: fmt.Sprintf("workspace drift detected but baseline rebase failed: %v", cpErr),
-				Phase: "run_start_drift_rebase",
-			})
-		} else if checkpointID != "" {
-			runBaselineCheckpointID = checkpointID
-			s.persistRunRollbackBaseline(ctx, state.session.ID, state.runID, checkpointID, true)
-			s.recordRunEndWorkspaceState(ctx, state.session.ID, effectiveWorkdir, checkpointID)
-		}
-		s.emitRunScopedOptional(EventCheckpointWarning, &state, CheckpointWarningPayload{
-			Error: "workspace drift detected before run start",
-			Phase: "run_start_drift",
-		})
-	}
-	if runBaselineCheckpointID == "" {
-		if baseline, _ := s.getPersistentRunRollbackBaseline(ctx, state.session.ID, state.runID); baseline != "" {
-			runBaselineCheckpointID = baseline
-		}
-	}
 	_ = s.runHookPoint(ctx, &state, runtimehooks.HookPointSessionStart, runtimehooks.HookContext{
 		Metadata: map[string]any{
 			"session_id": state.session.ID,
@@ -247,15 +207,21 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 	if err := s.appendUserMessageAndSave(ctx, &state, input.Parts); err != nil {
 		return s.handleRunError(err)
 	}
+	if err := s.maybeAppendTodoBootstrapReminder(ctx, &state); err != nil {
+		return s.handleRunError(err)
+	}
+	if err := s.maybeAppendPlanBootstrapReminder(ctx, &state); err != nil {
+		return s.handleRunError(err)
+	}
 	s.emitRuntimeSnapshotUpdated(ctx, &state, "session_start")
 	s.updateResumeCheckpoint(ctx, &state, "plan", "")
 
-	maxTurns := resolveRuntimeMaxTurns(initialCfg.Runtime)
-	if runBaselineCheckpointID != "" {
-		state.baselineCheckpointID = runBaselineCheckpointID
-	} else {
-		state.baselineCheckpointID = s.findPreviousEndOfTurnCheckpoint(ctx, sessionID, input.RunID)
+	if s.perEditStore != nil {
+		s.perEditStore.Reset()
 	}
+	state.runCheckpointID = agentsession.NewID("checkpoint")
+
+	maxTurns := resolveRuntimeMaxTurns(initialCfg.Runtime)
 	for turn := 0; ; turn++ {
 		if turn >= maxTurns {
 			state.maxTurnsReached = true
@@ -268,14 +234,6 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 		stage := resolvePlanningStageForState(&state)
 		if err := s.setBaseRunState(ctx, &state, baseRunStateForPlanningStage(stage)); err != nil {
 			return s.handleRunError(err)
-		}
-		if s.checkpointStore != nil {
-			if cpErr := s.createStartOfTurnCheckpoint(ctx, &state); cpErr != nil {
-				s.emitRunScoped(ctx, EventCheckpointWarning, &state, CheckpointWarningPayload{
-					Error: cpErr.Error(),
-					Phase: "start_of_turn",
-				})
-			}
 		}
 
 	turnAttempt:
@@ -346,16 +304,10 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 				return s.handleRunError(err)
 			}
 			hasToolCalls := len(turnOutput.assistant.ToolCalls) > 0
-			state.mu.Lock()
 			if hasToolCalls {
-				state.mustUseToolAfterFinalContinue = false
-				state.noToolAfterFinalContinueStreak = 0
-			} else if state.mustUseToolAfterFinalContinue {
-				state.pendingFinalProgress = false
-				state.noToolAfterFinalContinueStreak++
-			}
-			state.mu.Unlock()
-			if hasToolCalls {
+				state.mu.Lock()
+				state.missingCompletionSignalStreak = 0
+				state.mu.Unlock()
 				if err := s.appendAssistantMessageAndSave(
 					ctx,
 					&state,
@@ -392,7 +344,7 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 				turnOutput.assistant,
 				hasToolCalls,
 			)
-			completionState, completed := controlplane.EvaluateCompletion(
+			completionState, _ := controlplane.EvaluateCompletion(
 				state.completion,
 				hasToolCalls,
 			)
@@ -428,105 +380,83 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 						s.emitRunScoped(ctx, EventAgentDone, &state, planMessage)
 						return nil
 					}
+					if strings.TrimSpace(partsrender.RenderDisplayParts(turnOutput.assistant.Parts)) != "" {
+						if err := s.appendAssistantMessageOnlyAndSave(ctx, &state, turnOutput.assistant); err != nil {
+							return s.handleRunError(err)
+						}
+						s.emitRunScoped(ctx, EventAgentDone, &state, turnOutput.assistant)
+						return nil
+					}
 				}
 				completionSignaled, err := maybeParseCompletionTurnOutput(turnOutput.assistant)
 				if err != nil {
 					return s.handleRunError(err)
 				}
+				hasThinking := len(turnOutput.assistant.ThinkingMetadata) > 0
+				if !completionSignaled {
+					if hasThinking {
+						break turnAttempt
+					}
+					state.mu.Lock()
+					state.missingCompletionSignalStreak++
+					missingCompletionSignalStreak := state.missingCompletionSignalStreak
+					state.mu.Unlock()
+					if missingCompletionSignalStreak < missingCompletionSignalLimit {
+						reminder := completionProtocolReminderForStreak(missingCompletionSignalStreak)
+						setPendingSystemReminder(&state, reminder)
+						break turnAttempt
+					}
+					state.markTerminalDecision(
+						controlplane.TerminalStatusIncomplete,
+						controlplane.StopReasonMissingCompletionSignal,
+						"assistant stopped without task_completion",
+					)
+					s.emitRunScoped(ctx, EventAgentDone, &state, turnOutput.assistant)
+					return nil
+				}
+
 				if err := s.setBaseRunState(ctx, &state, controlplane.RunStateVerify); err != nil {
 					return s.handleRunError(err)
 				}
 				s.updateResumeCheckpoint(ctx, &state, "verify", "completed")
-				acceptanceDecision, err := s.runBeforeCompletionDecisionAcceptance(
-					ctx,
-					&state,
-					snapshot,
-					turnOutput.assistant,
-					snapshot.Workdir,
-					completed,
-					hasToolCalls,
-					turnOutput.assistant.Role,
-				)
-				if err != nil {
-					return s.handleRunError(err)
-				}
-				s.emitAcceptanceDecisionEvents(&state, acceptanceDecision)
-				applyAcceptanceResultProgress(&state, acceptanceDecision)
-
-				switch acceptanceDecision.Status {
-				case acceptance.AcceptanceAccepted:
-					state.lastAcceptanceBlockedReason = ""
-					state.mustUseToolAfterFinalContinue = false
-					state.noToolAfterFinalContinueStreak = 0
+				report := s.evaluateAcceptGate(ctx, &state, turnOutput.assistant)
+				s.emitAcceptGateReport(&state, report)
+				assistantForFinal := stripCompletionSignalFromAssistantMessage(turnOutput.assistant)
+				if report.Outcome == acceptgate.OutcomeAccepted {
+					state.mu.Lock()
+					state.missingCompletionSignalStreak = 0
+					state.mu.Unlock()
 					if markCurrentPlanCompleted(&state.session, completionSignaled) {
 						state.touchSession()
 						if err := s.sessionStore.UpdateSessionState(ctx, sessionStateInputFromSession(state.session)); err != nil {
 							return s.handleRunError(err)
 						}
 					}
-					if err := s.appendAssistantMessageOnlyAndSave(ctx, &state, turnOutput.assistant); err != nil {
+					if err := s.appendAssistantMessageOnlyAndSave(ctx, &state, assistantForFinal); err != nil {
 						return s.handleRunError(err)
 					}
 					s.emitRunScopedOptional(EventVerificationCompleted, &state, VerificationCompletedPayload{
-						StopReason: acceptanceDecision.StopReason,
+						StopReason: report.StopReason,
 					})
-					recordAcceptanceTerminal(&state, acceptanceDecision)
-					s.emitRunScoped(ctx, EventAgentDone, &state, turnOutput.assistant)
-					s.triggerMemoExtraction(state.session.ID, state.session.Messages, state.rememberedThisRun)
-					return nil
-				case acceptance.AcceptanceContinue:
-					state.lastAcceptanceBlockedReason = strings.TrimSpace(acceptanceDecision.CompletionBlockedReason)
-					state.mustUseToolAfterFinalContinue = true
-					if state.noToolAfterFinalContinueStreak == 0 {
-						state.noToolAfterFinalContinueStreak = 1
-					}
-					reminder := strings.TrimSpace(buildAcceptanceContinueHint(acceptanceDecision))
-					if reminder == "" {
-						reminder = finalContinueReminder
-					}
-					if err := s.appendSystemMessageAndSave(ctx, &state, reminder); err != nil {
-						return s.handleRunError(err)
-					}
-					break turnAttempt
-				case acceptance.AcceptanceIncomplete:
-					state.lastAcceptanceBlockedReason = ""
-					state.mustUseToolAfterFinalContinue = false
-					state.noToolAfterFinalContinueStreak = 0
-					if err := s.appendAssistantMessageOnlyAndSave(ctx, &state, turnOutput.assistant); err != nil {
-						return s.handleRunError(err)
-					}
-					recordAcceptanceTerminal(&state, acceptanceDecision)
-					s.emitRunScoped(ctx, EventAgentDone, &state, turnOutput.assistant)
-					return nil
-				case acceptance.AcceptanceFailed:
-					state.lastAcceptanceBlockedReason = ""
-					state.mustUseToolAfterFinalContinue = false
-					state.noToolAfterFinalContinueStreak = 0
-					if err := s.appendAssistantMessageOnlyAndSave(ctx, &state, turnOutput.assistant); err != nil {
-						return s.handleRunError(err)
-					}
-					s.emitRunScopedOptional(EventVerificationFailed, &state, VerificationFailedPayload{
-						StopReason: acceptanceDecision.StopReason,
-						ErrorClass: acceptanceDecision.ErrorClass,
-					})
-					recordAcceptanceTerminal(&state, acceptanceDecision)
-					s.emitRunScoped(ctx, EventAgentDone, &state, turnOutput.assistant)
-					return nil
-				default:
-					state.lastAcceptanceBlockedReason = ""
-					state.mustUseToolAfterFinalContinue = false
-					state.noToolAfterFinalContinueStreak = 0
-					if err := s.appendAssistantMessageOnlyAndSave(ctx, &state, turnOutput.assistant); err != nil {
-						return s.handleRunError(err)
-					}
-					recordAcceptanceTerminal(&state, acceptanceDecision)
-					s.emitRunScoped(ctx, EventAgentDone, &state, turnOutput.assistant)
+					state.markTerminalDecision(controlplane.TerminalStatusCompleted, report.StopReason, report.Summary)
+					s.emitRunScoped(ctx, EventAgentDone, &state, assistantForFinal)
+					s.triggerMemoExtraction(state.session.ID, runBoundaryMessagesForMemo(&state), state.rememberedThisRun)
+
 					return nil
 				}
+				state.mu.Lock()
+				state.missingCompletionSignalStreak = 0
+				state.mu.Unlock()
+				if err := s.appendAssistantMessageOnlyAndSave(ctx, &state, assistantForFinal); err != nil {
+					return s.handleRunError(err)
+				}
+				s.emitRunScopedOptional(EventVerificationFailed, &state, VerificationFailedPayload{
+					StopReason: report.StopReason,
+				})
+				state.markTerminalDecision(controlplane.TerminalStatusFailed, report.StopReason, report.Summary)
+				s.emitRunScoped(ctx, EventAgentDone, &state, assistantForFinal)
+				return nil
 			}
-
-			beforeTask := state.session.TaskState.Clone()
-			beforeTodos := cloneTodosForPersistence(state.session.Todos)
 
 			if err := s.setBaseRunState(ctx, &state, controlplane.RunStateExecute); err != nil {
 				return s.handleRunError(err)
@@ -540,40 +470,37 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 			// 通知 TUI 本轮修改了哪些文件
 			s.emitToolDiffs(ctx, &state, summary)
 
-			// 工具执行完成后创建代码检查点，传入 hasWorkspaceWrite 区分 agent 写操作与外界修改
-			s.createEndOfTurnCheckpoint(ctx, &state, summary.HasSuccessfulWorkspaceWrite)
+			// 标记本 run 是否发生工作区写入，run 结束时统一固化单个 checkpoint。
+			if summary.HasSuccessfulWorkspaceWrite {
+				state.mu.Lock()
+				state.hasRunWorkspaceWrite = true
+				state.mu.Unlock()
+			}
 
 			state.mu.Lock()
 			state.completion = applyToolExecutionCompletion(state.completion, summary)
 			afterTask := state.session.TaskState.Clone()
 			afterTodos := cloneTodosForPersistence(state.session.Todos)
-			progressRunState := controlplane.RunStateExecute
-			if resolvePlanningStageForState(&state) == planStagePlan {
-				progressRunState = controlplane.RunStatePlan
-			}
 			progressInput := collectProgressInput(
-				progressRunState,
-				beforeTask,
 				afterTask,
-				beforeTodos,
 				afterTodos,
 				summary,
-				snapshot.NoProgressStreakLimit,
 				snapshot.RepeatCycleStreakLimit,
 			)
 			state.progress = controlplane.EvaluateProgress(state.progress, progressInput)
 			currentScore := state.progress.LastScore
-			if shouldPromotePendingFinalProgress(
-				currentScore,
-				summary,
-				state.completion,
-				state.lastAcceptanceBlockedReason,
-			) {
-				state.pendingFinalProgress = true
-			}
 			state.mu.Unlock()
 
 			s.emitRunScoped(ctx, EventProgressEvaluated, &state, ProgressEvaluatedPayload{Score: currentScore})
+			if currentScore.ShouldTerminate {
+				reason := currentScore.TerminateReason
+				if reason == "" {
+					reason = controlplane.StopReasonRepeatCycle
+				}
+				state.markTerminalDecision(controlplane.TerminalStatusIncomplete, reason, "progress hard stop")
+				s.emitRunScoped(ctx, EventAgentDone, &state, providertypes.Message{Role: providertypes.RoleAssistant})
+				return nil
+			}
 			if err := s.setBaseRunState(ctx, &state, controlplane.RunStateVerify); err != nil {
 				return s.handleRunError(err)
 			}
@@ -661,9 +588,11 @@ func (s *Service) prepareTurnBudgetSnapshot(ctx context.Context, state *runState
 	score := state.progress.LastScore
 	state.mu.Unlock()
 
-	limit := resolveNoProgressStreakLimit(cfg.Runtime)
 	repeatLimit := resolveRepeatCycleStreakLimit(cfg.Runtime)
 	systemPrompt := withProgressReminder(builtContext.SystemPrompt, score)
+	if pendingReminder := drainPendingSystemReminder(state); pendingReminder != "" {
+		systemPrompt = mergeEphemeralHookNotificationIntoSystemPrompt(systemPrompt, pendingReminder)
+	}
 	if notificationHint := strings.TrimSpace(s.drainHookNotificationsForTurn(state)); notificationHint != "" {
 		systemPrompt = mergeEphemeralHookNotificationIntoSystemPrompt(systemPrompt, notificationHint)
 	}
@@ -703,20 +632,11 @@ func (s *Service) prepareTurnBudgetSnapshot(ctx context.Context, state *runState
 		promptBudget,
 		budgetSource,
 		state.compactCount,
-		limit,
 		repeatLimit,
 		injectFullPlan,
 		contextWindow,
 		request,
 	), false, nil
-}
-
-// resolveNoProgressStreakLimit 统一解析熔断阈值，避免运行期出现无效值导致分支行为不一致。
-func resolveNoProgressStreakLimit(rc config.RuntimeConfig) int {
-	if rc.MaxNoProgressStreak <= 0 {
-		return config.DefaultMaxNoProgressStreak
-	}
-	return rc.MaxNoProgressStreak
 }
 
 // resolveRepeatCycleStreakLimit 统一解析重复调用循环阈值。
@@ -733,6 +653,32 @@ func resolveRuntimeMaxTurns(rc config.RuntimeConfig) int {
 		return config.DefaultMaxTurns
 	}
 	return rc.MaxTurns
+}
+
+// setPendingSystemReminder 暂存只用于下一轮 provider 请求的系统提醒，避免写入会话历史。
+func setPendingSystemReminder(state *runState, reminder string) {
+	if state == nil {
+		return
+	}
+	reminder = strings.TrimSpace(reminder)
+	if reminder == "" {
+		return
+	}
+	state.mu.Lock()
+	state.pendingSystemReminder = reminder
+	state.mu.Unlock()
+}
+
+// drainPendingSystemReminder 读取并清空本轮待注入的系统提醒，保证提醒只进入一次 provider 请求。
+func drainPendingSystemReminder(state *runState) string {
+	if state == nil {
+		return ""
+	}
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	reminder := strings.TrimSpace(state.pendingSystemReminder)
+	state.pendingSystemReminder = ""
+	return reminder
 }
 
 // callProvider 使用冻结后的 TurnBudgetSnapshot 执行单次 provider 调用。
@@ -1182,8 +1128,6 @@ func withProgressReminder(systemPrompt string, score controlplane.ProgressScore)
 	switch score.ReminderKind {
 	case controlplane.ReminderKindRepeatCycle:
 		reminder = selfHealingRepeatReminder
-	case controlplane.ReminderKindNoProgress, controlplane.ReminderKindGenericStalled:
-		reminder = selfHealingReminder
 	default:
 		return systemPrompt
 	}

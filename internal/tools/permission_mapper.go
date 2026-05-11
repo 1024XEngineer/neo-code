@@ -59,6 +59,27 @@ func buildPermissionAction(input ToolCallInput) (security.Action, error) {
 		action.Payload.Target = extractStringArgument(input.Arguments, "path")
 		action.Payload.SandboxTargetType = security.TargetTypePath
 		action.Payload.SandboxTarget = action.Payload.Target
+	case ToolNameCodebaseRead:
+		action.Type = security.ActionTypeRead
+		action.Payload.Operation = "codebase_read"
+		action.Payload.TargetType = security.TargetTypePath
+		action.Payload.Target = extractStringArgument(input.Arguments, "path")
+		action.Payload.SandboxTargetType = security.TargetTypePath
+		action.Payload.SandboxTarget = action.Payload.Target
+	case ToolNameCodebaseSearchText:
+		action.Type = security.ActionTypeRead
+		action.Payload.Operation = "codebase_search_text"
+		action.Payload.TargetType = security.TargetTypeDirectory
+		action.Payload.Target = extractStringArgument(input.Arguments, "dir")
+		action.Payload.SandboxTargetType = security.TargetTypeDirectory
+		action.Payload.SandboxTarget = action.Payload.Target
+	case ToolNameCodebaseSearchSymbol:
+		action.Type = security.ActionTypeRead
+		action.Payload.Operation = "codebase_search_symbol"
+		action.Payload.TargetType = security.TargetTypeDirectory
+		action.Payload.Target = extractStringArgument(input.Arguments, "dir")
+		action.Payload.SandboxTargetType = security.TargetTypeDirectory
+		action.Payload.SandboxTarget = action.Payload.Target
 	case ToolNameFilesystemGrep:
 		action.Type = security.ActionTypeRead
 		action.Payload.Operation = "grep"

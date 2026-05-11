@@ -397,6 +397,14 @@ func TestGatewayRuntimePortBridgeCheckpointOperations(t *testing.T) {
 				Deleted:  []string{"old.txt"},
 				Modified: []string{"keep.txt"},
 			},
+			FileEntries: []agentruntime.CheckpointDiffFileEntry{
+				{
+					Path:                 "keep.txt",
+					Kind:                 "modified",
+					RollbackCheckpointID: "cp-2",
+					CanRollback:          true,
+				},
+			},
 			Patch: "diff --git a/keep.txt b/keep.txt",
 		},
 	}
@@ -422,11 +430,15 @@ func TestGatewayRuntimePortBridgeCheckpointOperations(t *testing.T) {
 		SessionID:    " session-1 ",
 		CheckpointID: " cp-1 ",
 		Force:        true,
+		Mode:         " baseline ",
+		Paths:        []string{" a.txt ", " b.txt "},
 	})
 	if err != nil {
 		t.Fatalf("RestoreCheckpoint() error = %v", err)
 	}
-	if stub.restoreCheckpointIn.SessionID != "session-1" || stub.restoreCheckpointIn.CheckpointID != "cp-1" || !stub.restoreCheckpointIn.Force {
+	if stub.restoreCheckpointIn.SessionID != "session-1" || stub.restoreCheckpointIn.CheckpointID != "cp-1" || !stub.restoreCheckpointIn.Force ||
+		stub.restoreCheckpointIn.Mode != "baseline" || len(stub.restoreCheckpointIn.Paths) != 2 ||
+		stub.restoreCheckpointIn.Paths[0] != " a.txt " || stub.restoreCheckpointIn.Paths[1] != " b.txt " {
 		t.Fatalf("RestoreCheckpoint() forwarded %#v", stub.restoreCheckpointIn)
 	}
 	if restoreResult.CheckpointID != "cp-1" || restoreResult.SessionID != "session-1" || restoreResult.HasConflict {
@@ -459,6 +471,9 @@ func TestGatewayRuntimePortBridgeCheckpointOperations(t *testing.T) {
 		len(diffResult.Files.Added) != 1 || diffResult.Files.Added[0] != "new.txt" ||
 		len(diffResult.Files.Deleted) != 1 || diffResult.Files.Deleted[0] != "old.txt" ||
 		len(diffResult.Files.Modified) != 1 || diffResult.Files.Modified[0] != "keep.txt" ||
+		len(diffResult.FileEntries) != 1 || diffResult.FileEntries[0].Path != "keep.txt" ||
+		diffResult.FileEntries[0].Kind != "modified" || diffResult.FileEntries[0].RollbackCheckpointID != "cp-2" ||
+		!diffResult.FileEntries[0].CanRollback ||
 		diffResult.Patch != "diff --git a/keep.txt b/keep.txt" {
 		t.Fatalf("CheckpointDiff() = %#v", diffResult)
 	}
@@ -994,7 +1009,6 @@ func TestGatewayRuntimePortBridgeListSessionTodosAndSnapshot(t *testing.T) {
 				RunID:     "run-1",
 				SessionID: "session-2",
 				Phase:     "acceptance",
-				TaskKind:  "workspace_write",
 				Decision:  agentruntime.DecisionSnapshot{Status: "continue", StopReason: "unverified_write"},
 				SubAgents: agentruntime.SubAgentSnapshot{StartedCount: 1, CompletedCount: 1, FailedCount: 0},
 			},
