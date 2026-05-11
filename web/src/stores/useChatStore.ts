@@ -49,6 +49,12 @@ interface ChatState {
   messages: ChatMessage[]
   /** 是否正在生成 */
   isGenerating: boolean
+  /** 当前会话是否正在执行上下文压缩。 */
+  isCompacting: boolean
+  /** 当前压缩触发模式，用于展示压缩来源。 */
+  compactMode: string
+  /** 压缩期间展示给用户的持续状态文案。 */
+  compactMessage: string
   /** 当前 AI 回复缓冲 ID（流式追加用） */
   streamingMessageId: string
   /** 当前 thinking 流式消息 ID */
@@ -72,6 +78,7 @@ interface ChatState {
 
   // Actions
   addMessage: (msg: ChatMessage) => void
+  setMessages: (messages: ChatMessage[]) => void
   removeMessage: (id: string) => void
   /** 从指定消息（含）开始截断 messages 数组并清理生成相关状态 */
   truncateFromMessage: (messageId: string) => void
@@ -100,6 +107,8 @@ interface ChatState {
   /** 更新一条 verification 消息的 data(verification 进行中持续更新同一条消息) */
   updateVerificationMessage: (messageId: string, data: VerificationRunRecord) => void
   setGenerating: (v: boolean) => void
+  startCompacting: (mode?: string, message?: string) => void
+  finishCompacting: () => void
   setStreamingMessageId: (id: string) => void
   /** 重置生成状态：终结当前流式消息 + 清除 isGenerating */
   resetGeneratingState: () => void
@@ -187,6 +196,9 @@ function createThinkingMessage(): ChatMessage {
 export const useChatStore = create<ChatState>((set) => ({
   messages: [],
   isGenerating: false,
+  isCompacting: false,
+  compactMode: '',
+  compactMessage: '',
   streamingMessageId: '',
   streamingThinkingMessageId: '',
   permissionRequests: [],
@@ -199,6 +211,7 @@ export const useChatStore = create<ChatState>((set) => ({
   permissionMode: 'default',
 
   addMessage: (msg) => set((s) => ({ messages: [...s.messages, msg] })),
+  setMessages: (messages) => set({ messages: [...messages] }),
   removeMessage: (id) => set((s) => ({ messages: s.messages.filter((m) => m.id !== id) })),
 
   truncateFromMessage: (messageId) =>
@@ -210,6 +223,9 @@ export const useChatStore = create<ChatState>((set) => ({
         streamingMessageId: '',
         streamingThinkingMessageId: '',
         isGenerating: false,
+        isCompacting: false,
+        compactMode: '',
+        compactMessage: '',
         permissionRequests: [],
         pendingUserQuestion: null,
         phase: '',
@@ -356,6 +372,18 @@ export const useChatStore = create<ChatState>((set) => ({
     })),
 
   setGenerating: (isGenerating) => set({ isGenerating }),
+  startCompacting: (compactMode = 'manual', compactMessage = 'Compacting context...') =>
+    set({
+      isCompacting: true,
+      compactMode,
+      compactMessage,
+    }),
+  finishCompacting: () =>
+    set({
+      isCompacting: false,
+      compactMode: '',
+      compactMessage: '',
+    }),
   setStreamingMessageId: (streamingMessageId) => set({ streamingMessageId }),
 
   /** 重置生成状态：终结当前流式消息 + 清除 isGenerating */
@@ -379,6 +407,9 @@ export const useChatStore = create<ChatState>((set) => ({
         streamingMessageId: '',
         streamingThinkingMessageId: '',
         isGenerating: false,
+        isCompacting: false,
+        compactMode: '',
+        compactMessage: '',
       }
     }),
 
@@ -427,6 +458,9 @@ export const useChatStore = create<ChatState>((set) => ({
       streamingMessageId: '',
       streamingThinkingMessageId: '',
       isGenerating: false,
+      isCompacting: false,
+      compactMode: '',
+      compactMessage: '',
       permissionRequests: [],
       pendingUserQuestion: null,
       tokenUsage: null,

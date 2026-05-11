@@ -1153,6 +1153,26 @@ html, body, #root {
   transition: all var(--duration-fast) var(--ease-out);
 }
 .input-box:focus-within { background: var(--bg-elevated); border-color: var(--accent-muted); }
+.input-box.compacting {
+  border-color: var(--warning-muted);
+}
+.compact-status-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px 0;
+  color: var(--warning);
+  font-size: 12px;
+  font-weight: 500;
+}
+.compact-status-spinner {
+  flex-shrink: 0;
+  animation: compact-spin 900ms linear infinite;
+}
+@keyframes compact-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
 .input-box textarea {
   width: 100%;
   padding: 10px 14px 6px;

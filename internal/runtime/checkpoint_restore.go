@@ -191,11 +191,13 @@ func (s *Service) RestoreCheckpoint(ctx context.Context, input GatewayRestoreInp
 			CheckpointID:      result.CheckpointID,
 			SessionID:         result.SessionID,
 			GuardCheckpointID: guardRecord.CheckpointID,
+			Mode:              "exact",
 		})
 		return result, nil
 	}
 	if mode == "baseline" {
-		result, err := s.restoreCheckpointBaseline(ctx, input.SessionID, input.CheckpointID, input.Paths)
+		paths := normalizeBaselineRestorePaths(input.Paths)
+		result, err := s.restoreCheckpointBaseline(ctx, input.SessionID, input.CheckpointID, paths)
 		if err != nil {
 			return RestoreResult{}, err
 		}
@@ -203,6 +205,8 @@ func (s *Service) RestoreCheckpoint(ctx context.Context, input GatewayRestoreInp
 			CheckpointID:      result.CheckpointID,
 			SessionID:         result.SessionID,
 			GuardCheckpointID: "",
+			Mode:              "baseline",
+			Paths:             paths,
 		})
 		return result, nil
 	}
@@ -351,7 +355,20 @@ func (s *Service) restoreCheckpointBaseline(
 	if perEditID == "" {
 		return RestoreResult{}, fmt.Errorf("checkpoint: %s has no code snapshot", checkpointID)
 	}
+	relPaths := normalizeBaselineRestorePaths(paths)
+	if len(relPaths) == 0 {
+		return RestoreResult{}, fmt.Errorf("checkpoint: baseline restore paths required")
+	}
+	if err := s.perEditStore.RestoreBaseline(ctx, perEditID, relPaths); err != nil {
+		return RestoreResult{}, fmt.Errorf("checkpoint: baseline restore code: %w", err)
+	}
+	return RestoreResult{CheckpointID: checkpointID, SessionID: sessionID}, nil
+}
+
+// normalizeBaselineRestorePaths 统一 baseline 文件回退路径，保证恢复执行与事件通知使用同一组相对路径。
+func normalizeBaselineRestorePaths(paths []string) []string {
 	relPaths := make([]string, 0, len(paths))
+	seen := make(map[string]struct{}, len(paths))
 	for _, path := range paths {
 		clean := filepath.ToSlash(strings.TrimSpace(path))
 		for strings.HasPrefix(clean, "./") {
@@ -360,15 +377,13 @@ func (s *Service) restoreCheckpointBaseline(
 		if clean == "" || clean == "." {
 			continue
 		}
+		if _, ok := seen[clean]; ok {
+			continue
+		}
+		seen[clean] = struct{}{}
 		relPaths = append(relPaths, clean)
 	}
-	if len(relPaths) == 0 {
-		return RestoreResult{}, fmt.Errorf("checkpoint: baseline restore paths required")
-	}
-	if err := s.perEditStore.RestoreBaseline(ctx, perEditID, relPaths); err != nil {
-		return RestoreResult{}, fmt.Errorf("checkpoint: baseline restore code: %w", err)
-	}
-	return RestoreResult{CheckpointID: checkpointID, SessionID: sessionID}, nil
+	return relPaths
 }
 
 // ListCheckpoints 查询指定会话的 checkpoint 列表。
