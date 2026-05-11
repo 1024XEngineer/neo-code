@@ -160,13 +160,11 @@ export async function loadSessionWithInsights(gatewayAPI: GatewayAPI, sessionId:
 /** isInternalHistoryMessage 识别仅供 runtime/provider 续跑使用、不能回放到 Web 聊天流的内部控制消息。 */
 function isInternalHistoryMessage(msg: BackendMessage): boolean {
   const role = msg.role.trim().toLowerCase()
-  if (role === 'system') return true
+  if (role !== 'system' && role !== 'assistant') return false
 
   const content = msg.content.trim()
   if (!content) return false
-  return content.startsWith('<acceptance_continue>') ||
-    content.includes('<completion_blocked_reason>') ||
-    content.includes('<todo_convergence>')
+  return /^<acceptance_continue\b[\s\S]*<\/acceptance_continue>$/.test(content)
 }
 
 /** 将后端历史消息映射为前端 ChatMessage 列表，正确合并 tool_result 回 tool_call */

@@ -47,8 +47,36 @@ describe('useSessionStore', () => {
       },
     ])
 
+    expect(mapped.map((m) => m.content)).toEqual([
+      'normal assistant text',
+      'prefix <completion_blocked_reason>pending_todo</completion_blocked_reason>',
+    ])
+  })
+
+  it('mapHistoryMessages keeps tool results that contain acceptance-like text', () => {
+    const mapped = mapHistoryMessages([
+      {
+        role: 'assistant',
+        content: '',
+        tool_calls: [
+          { id: 'call-xml', name: 'filesystem_read_file', arguments: '{"path":"fixture.xml"}' },
+        ],
+      },
+      {
+        role: 'tool',
+        content: '<completion_blocked_reason>literal fixture</completion_blocked_reason>\n<todo_convergence />',
+        tool_call_id: 'call-xml',
+      },
+    ])
+
     expect(mapped).toHaveLength(1)
-    expect(mapped[0].content).toBe('normal assistant text')
+    expect(mapped[0]).toMatchObject({
+      role: 'tool',
+      type: 'tool_call',
+      toolCallId: 'call-xml',
+      toolResult: '<completion_blocked_reason>literal fixture</completion_blocked_reason>\n<todo_convergence />',
+      toolStatus: 'done',
+    })
   })
 
   it('mapHistoryMessages keeps normal messages and merges tool results', () => {
