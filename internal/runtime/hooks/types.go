@@ -91,7 +91,7 @@ const (
 	HookKindFunction HookKind = "function"
 	// HookKindCommand 表示命令型 hook（P6 预留）。
 	HookKindCommand HookKind = "command"
-	// HookKindHTTP 表示 HTTP 型 hook（P6 预留）。
+	// HookKindHTTP 表示 HTTP 型 hook（当前用于 observe 回调适配）。
 	HookKindHTTP HookKind = "http"
 	// HookKindPrompt 表示 prompt 型 hook（P6 预留）。
 	HookKindPrompt HookKind = "prompt"
@@ -105,6 +105,8 @@ type HookMode string
 const (
 	// HookModeSync 表示同步执行。
 	HookModeSync HookMode = "sync"
+	// HookModeObserve 表示只观测模式（不参与主链阻断决策）。
+	HookModeObserve HookMode = "observe"
 	// HookModeAsync 表示异步执行（P5 预留）。
 	HookModeAsync HookMode = "async"
 	// HookModeAsyncRewake 表示异步回灌执行（P5 预留）。
@@ -173,19 +175,30 @@ func (s HookSpec) normalizeAndValidate() (HookSpec, error) {
 	if s.Kind == "" {
 		s.Kind = HookKindFunction
 	}
-	if s.Kind != HookKindFunction {
-		return HookSpec{}, wrapInvalidSpec("kind %q is not supported in P0", s.Kind)
+	switch s.Kind {
+	case HookKindFunction, HookKindHTTP:
+	default:
+		return HookSpec{}, wrapInvalidSpec("kind %q is not supported in current stage", s.Kind)
 	}
 	if s.Mode == "" {
-		s.Mode = HookModeSync
+		if s.Kind == HookKindHTTP {
+			s.Mode = HookModeObserve
+		} else {
+			s.Mode = HookModeSync
+		}
 	}
 	switch s.Mode {
-	case HookModeSync, HookModeAsync, HookModeAsyncRewake:
+	case HookModeSync, HookModeObserve, HookModeAsync, HookModeAsyncRewake:
 	default:
 		return HookSpec{}, wrapInvalidSpec("mode %q is not supported in current stage", s.Mode)
 	}
-	if (s.Scope == HookScopeUser || s.Scope == HookScopeRepo) && s.Mode != HookModeSync {
-		return HookSpec{}, wrapInvalidSpec("scope %q only supports sync mode", s.Scope)
+	if s.Scope == HookScopeUser || s.Scope == HookScopeRepo {
+		if s.Kind == HookKindHTTP && s.Mode != HookModeObserve {
+			return HookSpec{}, wrapInvalidSpec("scope %q with kind http only supports observe mode", s.Scope)
+		}
+		if s.Kind != HookKindHTTP && s.Mode != HookModeSync {
+			return HookSpec{}, wrapInvalidSpec("scope %q only supports sync mode", s.Scope)
+		}
 	}
 	if s.FailurePolicy == "" {
 		s.FailurePolicy = FailurePolicyFailOpen

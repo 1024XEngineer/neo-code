@@ -28,3 +28,16 @@ runtime:
         params:
           tool_names: ["bash"]
           message: "执行 bash 前请确认命令不会破坏工作区。"
+
+      - id: user-http-observe
+        enabled: true
+        point: after_tool_result
+        scope: user
+        kind: http
+        mode: observe
+        params:
+          url: "http://127.0.0.1:3101/hook"
+          method: POST
+          headers:
+            X-Source: neocode
+          include_metadata: false

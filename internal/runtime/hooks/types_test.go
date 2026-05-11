@@ -37,6 +37,45 @@ func TestHookSpecNormalizeAndValidateDefaults(t *testing.T) {
 	}
 }
 
+func TestHookSpecNormalizeAndValidateAllowsHTTPKind(t *testing.T) {
+	t.Parallel()
+
+	spec, err := (HookSpec{
+		ID:      "hook-http",
+		Point:   HookPointBeforeToolCall,
+		Kind:    HookKindHTTP,
+		Handler: func(context.Context, HookContext) HookResult { return HookResult{} },
+	}).normalizeAndValidate()
+	if err != nil {
+		t.Fatalf("normalizeAndValidate() error = %v", err)
+	}
+	if spec.Kind != HookKindHTTP {
+		t.Fatalf("Kind = %q, want %q", spec.Kind, HookKindHTTP)
+	}
+	if spec.Mode != HookModeObserve {
+		t.Fatalf("Mode = %q, want %q for http default", spec.Mode, HookModeObserve)
+	}
+}
+
+func TestHookSpecNormalizeAndValidateAllowsUserHTTPObserve(t *testing.T) {
+	t.Parallel()
+
+	spec, err := (HookSpec{
+		ID:      "hook-http-observe",
+		Point:   HookPointBeforeToolCall,
+		Scope:   HookScopeUser,
+		Kind:    HookKindHTTP,
+		Mode:    HookModeObserve,
+		Handler: func(context.Context, HookContext) HookResult { return HookResult{} },
+	}).normalizeAndValidate()
+	if err != nil {
+		t.Fatalf("normalizeAndValidate() error = %v", err)
+	}
+	if spec.Mode != HookModeObserve {
+		t.Fatalf("Mode = %q, want %q", spec.Mode, HookModeObserve)
+	}
+}
+
 func TestHookSpecNormalizeAndValidateErrors(t *testing.T) {
 	t.Parallel()
 
@@ -98,7 +137,7 @@ func TestHookSpecNormalizeAndValidateErrors(t *testing.T) {
 			spec: HookSpec{
 				ID:      "hook-1",
 				Point:   HookPointBeforeToolCall,
-				Kind:    HookKindHTTP,
+				Kind:    HookKindPrompt,
 				Handler: handler,
 			},
 		},
@@ -128,6 +167,17 @@ func TestHookSpecNormalizeAndValidateErrors(t *testing.T) {
 				Point:   HookPointBeforeToolCall,
 				Scope:   HookScopeRepo,
 				Mode:    HookModeAsyncRewake,
+				Handler: handler,
+			},
+		},
+		{
+			name: "user http sync not allowed",
+			spec: HookSpec{
+				ID:      "hook-1",
+				Point:   HookPointBeforeToolCall,
+				Scope:   HookScopeUser,
+				Kind:    HookKindHTTP,
+				Mode:    HookModeSync,
 				Handler: handler,
 			},
 		},

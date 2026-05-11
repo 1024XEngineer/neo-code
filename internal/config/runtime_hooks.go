@@ -2,6 +2,8 @@ package config
 
 import (
 	"fmt"
+	"net"
+	"net/url"
 	"strings"
 )
 
@@ -23,7 +25,9 @@ const (
 const (
 	runtimeHookScopeUser   = "user"
 	runtimeHookKindBuiltIn = "builtin"
+	runtimeHookKindHTTP    = "http"
 	runtimeHookModeSync    = "sync"
+	runtimeHookModeObserve = "observe"
 )
 
 var runtimeHookExternalKinds = map[string]struct{}{
@@ -63,7 +67,7 @@ type RuntimeHooksConfig struct {
 	Items                []RuntimeHookItemConfig `yaml:"items,omitempty"`
 }
 
-// RuntimeHookItemConfig 描述单个 user builtin hook 配置项。
+// RuntimeHookItemConfig 描述单个 user hook 配置项（当前支持 builtin 与 http observe）。
 type RuntimeHookItemConfig struct {
 	ID            string         `yaml:"id,omitempty"`
 	Enabled       *bool          `yaml:"enabled,omitempty"`
@@ -221,7 +225,11 @@ func (c *RuntimeHookItemConfig) ApplyDefaults(defaults RuntimeHooksConfig) {
 		c.Kind = runtimeHookKindBuiltIn
 	}
 	if strings.TrimSpace(c.Mode) == "" {
-		c.Mode = runtimeHookModeSync
+		if strings.EqualFold(strings.TrimSpace(c.Kind), runtimeHookKindHTTP) {
+			c.Mode = runtimeHookModeObserve
+		} else {
+			c.Mode = runtimeHookModeSync
+		}
 	}
 	if c.TimeoutSec <= 0 {
 		c.TimeoutSec = defaults.DefaultTimeoutSec
@@ -260,17 +268,18 @@ func (c RuntimeHookItemConfig) Validate(defaultFailurePolicy string) error {
 	if normalizedScope := strings.ToLower(strings.TrimSpace(c.Scope)); normalizedScope != runtimeHookScopeUser {
 		return fmt.Errorf("scope %q is not supported", c.Scope)
 	}
-	if normalizedKind := strings.ToLower(strings.TrimSpace(c.Kind)); normalizedKind != runtimeHookKindBuiltIn {
+	normalizedKind := strings.ToLower(strings.TrimSpace(c.Kind))
+	switch normalizedKind {
+	case runtimeHookKindBuiltIn:
+	case runtimeHookKindHTTP:
+	default:
 		if _, external := runtimeHookExternalKinds[normalizedKind]; external {
 			return fmt.Errorf(
-				"external hook kind %q is not supported in P6-lite; only builtin hooks are enabled",
+				"external hook kind %q is not supported in P6-lite; only builtin/http-observe hooks are enabled",
 				c.Kind,
 			)
 		}
 		return fmt.Errorf("kind %q is not supported", c.Kind)
-	}
-	if normalizedMode := strings.ToLower(strings.TrimSpace(c.Mode)); normalizedMode != runtimeHookModeSync {
-		return fmt.Errorf("mode %q is not supported", c.Mode)
 	}
 	if c.TimeoutSec <= 0 {
 		return fmt.Errorf("timeout_sec must be greater than 0")
@@ -282,17 +291,92 @@ func (c RuntimeHookItemConfig) Validate(defaultFailurePolicy string) error {
 	if err := validateRuntimeHookFailurePolicy(policy); err != nil {
 		return fmt.Errorf("failure_policy: %w", err)
 	}
-
-	handler := strings.ToLower(strings.TrimSpace(c.Handler))
-	switch handler {
-	case runtimeHookHandlerRequireFileExists, runtimeHookHandlerWarnOnToolCall, runtimeHookHandlerAddContextNote:
-	default:
-		return fmt.Errorf("handler %q is not supported", c.Handler)
-	}
-	if handler == runtimeHookHandlerWarnOnToolCall && !hasWarnOnToolCallTargets(c.Params) {
-		return fmt.Errorf("handler %q requires params.tool_name or params.tool_names", c.Handler)
+	normalizedMode := strings.ToLower(strings.TrimSpace(c.Mode))
+	switch normalizedKind {
+	case runtimeHookKindBuiltIn:
+		if normalizedMode != runtimeHookModeSync {
+			return fmt.Errorf("mode %q is not supported", c.Mode)
+		}
+		handler := strings.ToLower(strings.TrimSpace(c.Handler))
+		switch handler {
+		case runtimeHookHandlerRequireFileExists, runtimeHookHandlerWarnOnToolCall, runtimeHookHandlerAddContextNote:
+		default:
+			return fmt.Errorf("handler %q is not supported", c.Handler)
+		}
+		if handler == runtimeHookHandlerWarnOnToolCall && !hasWarnOnToolCallTargets(c.Params) {
+			return fmt.Errorf("handler %q requires params.tool_name or params.tool_names", c.Handler)
+		}
+	case runtimeHookKindHTTP:
+		if normalizedMode != runtimeHookModeObserve {
+			return fmt.Errorf("mode %q is not supported for kind http (only observe)", c.Mode)
+		}
+		if err := validateRuntimeHTTPObserveItem(c, policy); err != nil {
+			return err
+		}
 	}
 	return nil
+}
+
+// validateRuntimeHTTPObserveItem 校验 http observe hook 的最小安全与可执行约束。
+func validateRuntimeHTTPObserveItem(c RuntimeHookItemConfig, policy string) error {
+	if strings.TrimSpace(c.Handler) != "" {
+		return fmt.Errorf("handler must be empty for kind http")
+	}
+	if strings.EqualFold(strings.TrimSpace(policy), runtimeHookFailurePolicyFailClose) {
+		return fmt.Errorf("failure_policy %q is not supported for kind http observe", policy)
+	}
+	rawURL := strings.TrimSpace(readRuntimeHookParamString(c.Params, "url"))
+	if rawURL == "" {
+		return fmt.Errorf("kind http requires params.url")
+	}
+	parsed, err := url.Parse(rawURL)
+	if err != nil || !parsed.IsAbs() {
+		return fmt.Errorf("kind http requires absolute params.url")
+	}
+	switch strings.ToLower(strings.TrimSpace(parsed.Scheme)) {
+	case "http", "https":
+	default:
+		return fmt.Errorf("kind http only supports http/https params.url")
+	}
+	if !isRuntimeHookHTTPObserveLoopbackHost(parsed.Hostname()) {
+		return fmt.Errorf("kind http params.url host %q is not allowed (loopback only)", parsed.Hostname())
+	}
+	method := strings.ToUpper(strings.TrimSpace(readRuntimeHookParamString(c.Params, "method")))
+	if method != "" {
+		switch method {
+		case "GET", "POST", "PUT", "PATCH", "DELETE":
+		default:
+			return fmt.Errorf("kind http params.method %q is not supported", method)
+		}
+	}
+	if headers, ok := c.Params["headers"]; ok && headers != nil {
+		typed, ok := headers.(map[string]any)
+		if !ok {
+			return fmt.Errorf("kind http params.headers must be a map")
+		}
+		for key, value := range typed {
+			if strings.TrimSpace(key) == "" {
+				return fmt.Errorf("kind http params.headers contains empty header name")
+			}
+			if strings.TrimSpace(fmt.Sprintf("%v", value)) == "" {
+				return fmt.Errorf("kind http params.headers[%q] is empty", key)
+			}
+		}
+	}
+	return nil
+}
+
+// isRuntimeHookHTTPObserveLoopbackHost 判断 http observe 回调域名是否属于本地回环地址。
+func isRuntimeHookHTTPObserveLoopbackHost(host string) bool {
+	normalized := strings.TrimSpace(strings.ToLower(host))
+	if normalized == "" {
+		return false
+	}
+	if normalized == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(normalized)
+	return ip != nil && ip.IsLoopback()
 }
 
 // IsEnabled 返回单条 hook item 是否启用。
@@ -358,6 +442,23 @@ func hasWarnOnToolCallTargets(params map[string]any) bool {
 		}
 	}
 	return false
+}
+
+// readRuntimeHookParamString 以兼容方式读取 runtime hook 参数中的字符串值。
+func readRuntimeHookParamString(params map[string]any, key string) string {
+	if len(params) == 0 {
+		return ""
+	}
+	value, ok := params[key]
+	if !ok || value == nil {
+		return ""
+	}
+	switch typed := value.(type) {
+	case string:
+		return typed
+	default:
+		return fmt.Sprintf("%v", typed)
+	}
 }
 
 func runtimeHookPointUserAllowed(point string) bool {

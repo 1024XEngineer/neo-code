@@ -38,6 +38,8 @@ NeoCode is a local terminal AI coding assistant. It works around your workspace,
 
 - [Skills](./skills)
 - [MCP Tools](./mcp)
+- [Hooks](./hooks)
+- [NeoCode x Clawd Integration Example](./hooks-clawd-integration)
 
 ## Troubleshooting
 

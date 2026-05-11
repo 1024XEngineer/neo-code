@@ -108,6 +108,7 @@ export default defineConfig({
                 { text: "Skills 使用", link: "/guide/skills" },
                 { text: "飞书远程接入配置", link: "/guide/feishu-remote-setup" },
                 { text: "Hooks 使用", link: "/guide/hooks" },
+                { text: "Clawd 桌宠接入示例", link: "/guide/hooks-clawd-integration" },
               ],
             },
             {
@@ -203,6 +204,8 @@ export default defineConfig({
               items: [
                 { text: "MCP Tools", link: "/en/guide/mcp" },
                 { text: "Skills", link: "/en/guide/skills" },
+                { text: "Hooks", link: "/en/guide/hooks" },
+                { text: "NeoCode x Clawd", link: "/en/guide/hooks-clawd-integration" },
               ],
             },
             {
