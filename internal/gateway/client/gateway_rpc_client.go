@@ -10,6 +10,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -29,10 +31,12 @@ const (
 	defaultGatewayRPCHeartbeatTimeout        = 5 * time.Second
 	defaultGatewayAutoSpawnProbeInterval     = 200 * time.Millisecond
 	defaultGatewayAutoSpawnProbeAttempts     = 15
+	defaultGatewayAutoSpawnReadyTimeoutWin   = 20 * time.Second
 	defaultGatewayAutoSpawnLogRelativePath   = ".neocode/logs/gateway_auto.log"
 	defaultGatewayNotificationBuffer         = 64
 	defaultGatewayNotificationQueue          = 256
 	defaultGatewayNotificationEnqueueTimeout = 3 * time.Second
+	gatewayAutoSpawnReadyTimeoutEnv          = "NEOCODE_GATEWAY_AUTOSPAWN_READY_TIMEOUT_MS"
 )
 
 // DefaultGatewayRPCRetryCount 暴露网关 RPC 客户端默认重试次数，供上层适配器复用一致策略。
@@ -932,9 +936,14 @@ func waitGatewayReadyAfterAutoSpawn(
 		return errors.New("gateway listen address is empty")
 	}
 
-	totalWindow := time.Duration(defaultGatewayAutoSpawnProbeAttempts) * defaultGatewayAutoSpawnProbeInterval
+	totalWindow := resolveGatewayAutoSpawnReadyWindow(ctx)
+	probeAttempts := int(totalWindow / defaultGatewayAutoSpawnProbeInterval)
+	if probeAttempts < 1 {
+		probeAttempts = 1
+	}
+
 	var lastErr error
-	for attempt := 0; attempt < defaultGatewayAutoSpawnProbeAttempts; attempt++ {
+	for attempt := 0; attempt < probeAttempts; attempt++ {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -949,7 +958,7 @@ func waitGatewayReadyAfterAutoSpawn(
 			return fmt.Errorf("probe gateway readiness: %w", err)
 		}
 
-		if attempt == defaultGatewayAutoSpawnProbeAttempts-1 {
+		if attempt == probeAttempts-1 {
 			break
 		}
 		timer := time.NewTimer(defaultGatewayAutoSpawnProbeInterval)
@@ -965,6 +974,34 @@ func waitGatewayReadyAfterAutoSpawn(
 		lastErr = errors.New("gateway is unavailable")
 	}
 	return fmt.Errorf("gateway not ready within %s: %w", totalWindow, lastErr)
+}
+
+// resolveGatewayAutoSpawnReadyWindow 决定 auto-spawn 后等待网关就绪的时间窗口。
+// Windows 机器上首次冷启动经常超过 3 秒，这里放宽为更稳妥的默认值，并允许环境变量覆盖。
+func resolveGatewayAutoSpawnReadyWindow(ctx context.Context) time.Duration {
+	defaultWindow := time.Duration(defaultGatewayAutoSpawnProbeAttempts) * defaultGatewayAutoSpawnProbeInterval
+	if runtime.GOOS == "windows" {
+		defaultWindow = defaultGatewayAutoSpawnReadyTimeoutWin
+	}
+
+	envValue := strings.TrimSpace(os.Getenv(gatewayAutoSpawnReadyTimeoutEnv))
+	if envValue != "" {
+		if ms, err := strconv.Atoi(envValue); err == nil && ms > 0 {
+			defaultWindow = time.Duration(ms) * time.Millisecond
+		}
+	}
+
+	if ctx != nil {
+		if deadline, ok := ctx.Deadline(); ok {
+			if remaining := time.Until(deadline); remaining > 0 && remaining < defaultWindow {
+				defaultWindow = remaining
+			}
+		}
+	}
+	if defaultWindow <= 0 {
+		defaultWindow = defaultGatewayAutoSpawnProbeInterval
+	}
+	return defaultWindow
 }
 
 // openGatewayAutoSpawnOutput 打开后台网关日志输出目标，优先写入 ~/.neocode/logs/gateway_auto.log，失败时回退到 DevNull。
