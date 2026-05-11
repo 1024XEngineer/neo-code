@@ -90,7 +90,7 @@ function UserMessage({ message }: { message: ChatMessage }) {
       if (sessionData?.messages) {
         useChatStore.getState().clearMessages()
         const mapped = mapHistoryMessages(sessionData.messages)
-        for (const msg of mapped) useChatStore.getState().addMessage(msg)
+        useChatStore.getState().setMessages(mapped)
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Revert failed'
@@ -238,6 +238,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   userContent: {
     maxWidth: '85%',
+    minWidth: 0,
   },
   userBubble: {
     background: 'var(--user-bubble)',
@@ -247,6 +248,10 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: 14,
     lineHeight: 1.6,
     border: '1px solid var(--border-primary)',
+    maxWidth: '100%',
+    whiteSpace: 'pre-wrap',
+    overflowWrap: 'anywhere',
+    wordBreak: 'break-word',
     textWrap: 'pretty' as any,
   },
   revertBtn: {

@@ -43,7 +43,7 @@ type feishuAdapterCommandOptions struct {
 func newFeishuAdapterCommand() *cobra.Command {
 	options := &feishuAdapterCommandOptions{}
 	cmd := &cobra.Command{
-		Use:          "feishu-adapter",
+		Use:          "feishu",
 		Short:        "Start Feishu adapter bridge for gateway",
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,

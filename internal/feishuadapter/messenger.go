@@ -101,6 +101,25 @@ func (m *feishuMessenger) UpdatePermissionCard(ctx context.Context, cardID strin
 	return m.doJSONRequest(req)
 }
 
+// DeleteMessage 根据 message_id 删除飞书消息，常用于审批卡片在完成后收起。
+func (m *feishuMessenger) DeleteMessage(ctx context.Context, messageID string) error {
+	trimmedID := strings.TrimSpace(messageID)
+	if trimmedID == "" {
+		return nil
+	}
+	token, err := m.tenantAccessToken(ctx)
+	if err != nil {
+		return err
+	}
+	url := strings.TrimRight(m.baseURL, "/") + "/open-apis/im/v1/messages/" + trimmedID
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, url, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	return m.doJSONRequest(req)
+}
+
 // SendUserQuestionCard 向指定 chat_id 发送 ask_user 交互卡片，返回 message_id 供后续更新。
 func (m *feishuMessenger) SendUserQuestionCard(ctx context.Context, chatID string, payload UserQuestionCardPayload) (string, error) {
 	card := buildUserQuestionCard(payload)

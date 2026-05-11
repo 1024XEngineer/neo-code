@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { useSessionStore } from './useSessionStore'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { mapHistoryMessages, useSessionStore } from './useSessionStore'
 import { useChatStore } from './useChatStore'
 import { useGatewayStore } from './useGatewayStore'
 import { useRuntimeInsightStore } from './useRuntimeInsightStore'
@@ -11,7 +11,100 @@ beforeEach(() => {
   useRuntimeInsightStore.getState().reset()
 })
 
+afterEach(() => {
+  vi.restoreAllMocks()
+})
+
 describe('useSessionStore', () => {
+  it('mapHistoryMessages skips internal system acceptance reminders', () => {
+    const mapped = mapHistoryMessages([
+      { role: 'user', content: 'start' },
+      {
+        role: 'system',
+        content: [
+          '<acceptance_continue>',
+          '<completion_blocked_reason>pending_todo</completion_blocked_reason>',
+          '</acceptance_continue>',
+        ].join(''),
+      },
+      { role: 'assistant', content: 'visible answer' },
+    ])
+
+    expect(mapped.map((m) => m.content)).toEqual(['start', 'visible answer'])
+    expect(mapped.every((m) => m.content.includes('acceptance_continue') === false)).toBe(true)
+  })
+
+  it('mapHistoryMessages skips leaked assistant acceptance control text', () => {
+    const mapped = mapHistoryMessages([
+      {
+        role: 'assistant',
+        content: '<acceptance_continue><todo_convergence></todo_convergence></acceptance_continue>',
+      },
+      { role: 'assistant', content: 'normal assistant text' },
+      {
+        role: 'assistant',
+        content: 'prefix <completion_blocked_reason>pending_todo</completion_blocked_reason>',
+      },
+    ])
+
+    expect(mapped.map((m) => m.content)).toEqual([
+      'normal assistant text',
+      'prefix <completion_blocked_reason>pending_todo</completion_blocked_reason>',
+    ])
+  })
+
+  it('mapHistoryMessages keeps tool results that contain acceptance-like text', () => {
+    const mapped = mapHistoryMessages([
+      {
+        role: 'assistant',
+        content: '',
+        tool_calls: [
+          { id: 'call-xml', name: 'filesystem_read_file', arguments: '{"path":"fixture.xml"}' },
+        ],
+      },
+      {
+        role: 'tool',
+        content: '<completion_blocked_reason>literal fixture</completion_blocked_reason>\n<todo_convergence />',
+        tool_call_id: 'call-xml',
+      },
+    ])
+
+    expect(mapped).toHaveLength(1)
+    expect(mapped[0]).toMatchObject({
+      role: 'tool',
+      type: 'tool_call',
+      toolCallId: 'call-xml',
+      toolResult: '<completion_blocked_reason>literal fixture</completion_blocked_reason>\n<todo_convergence />',
+      toolStatus: 'done',
+    })
+  })
+
+  it('mapHistoryMessages keeps normal messages and merges tool results', () => {
+    const mapped = mapHistoryMessages([
+      { role: 'user', content: 'please inspect' },
+      {
+        role: 'assistant',
+        content: 'calling tool',
+        tool_calls: [
+          { id: 'call-1', name: 'filesystem_read_file', arguments: '{"path":"README.md"}' },
+        ],
+      },
+      { role: 'tool', content: 'file content', tool_call_id: 'call-1' },
+    ])
+
+    expect(mapped).toHaveLength(3)
+    expect(mapped[0]).toMatchObject({ role: 'user', type: 'text', content: 'please inspect' })
+    expect(mapped[1]).toMatchObject({ role: 'assistant', type: 'text', content: 'calling tool' })
+    expect(mapped[2]).toMatchObject({
+      role: 'tool',
+      type: 'tool_call',
+      toolName: 'filesystem_read_file',
+      toolCallId: 'call-1',
+      toolResult: 'file content',
+      toolStatus: 'done',
+    })
+  })
+
   it('createSession clears messages and resets session state', () => {
     useChatStore.getState().addMessage({ id: '1', role: 'user', content: 'hello', type: 'text', timestamp: 1 })
     useSessionStore.setState({ currentSessionId: 'sess-1' })
@@ -54,6 +147,8 @@ describe('useSessionStore', () => {
   })
 
   it('switchSession binds stream and loads session data', async () => {
+    const setMessagesSpy = vi.spyOn(useChatStore.getState(), 'setMessages')
+    const addMessageSpy = vi.spyOn(useChatStore.getState(), 'addMessage')
     const mockBindStream = vi.fn().mockResolvedValue({})
     const mockLoadSession = vi.fn().mockResolvedValue({
       payload: {
@@ -67,11 +162,15 @@ describe('useSessionStore', () => {
     await useSessionStore.getState().switchSession('sess-2', mockAPI)
 
     expect(mockBindStream).toHaveBeenCalledWith({ session_id: 'sess-2', channel: 'all' })
+    expect(setMessagesSpy).toHaveBeenCalledTimes(1)
+    expect(addMessageSpy).not.toHaveBeenCalled()
     expect(useChatStore.getState().messages).toHaveLength(1)
     expect(useChatStore.getState().messages[0].role).toBe('user')
   })
 
   it('fetchSessions auto-selects first session and binds stream', async () => {
+    const setMessagesSpy = vi.spyOn(useChatStore.getState(), 'setMessages')
+    const addMessageSpy = vi.spyOn(useChatStore.getState(), 'addMessage')
     const mockListSessions = vi.fn().mockResolvedValue({
       payload: {
         sessions: [{
@@ -83,13 +182,18 @@ describe('useSessionStore', () => {
       },
     })
     const mockBindStream = vi.fn().mockResolvedValue({})
-    const mockLoadSession = vi.fn().mockResolvedValue({ payload: { messages: [] } })
+    const mockLoadSession = vi.fn().mockResolvedValue({
+      payload: { messages: [{ role: 'assistant', content: 'loaded history', tool_calls: [] }] },
+    })
     const mockAPI = { listSessions: mockListSessions, bindStream: mockBindStream, loadSession: mockLoadSession } as any
 
     await useSessionStore.getState().fetchSessions(mockAPI)
 
     expect(useSessionStore.getState().currentSessionId).toBe('sess-a')
     expect(mockBindStream).toHaveBeenCalledWith({ session_id: 'sess-a', channel: 'all' })
+    expect(setMessagesSpy).toHaveBeenCalled()
+    expect(addMessageSpy).not.toHaveBeenCalled()
+    expect(useChatStore.getState().messages[0]).toMatchObject({ role: 'assistant', content: 'loaded history' })
   })
 
   it('fetchSessions does not auto-select when current session is valid', async () => {

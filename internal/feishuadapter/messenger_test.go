@@ -249,6 +249,28 @@ func TestSendStatusCardReturnsMessageIDAndUpdateCardUsesPatch(t *testing.T) {
 	}
 }
 
+func TestDeleteMessageUsesDeleteMethod(t *testing.T) {
+	client := &queuedHTTPClient{
+		responses: []queuedHTTPResponse{
+			{status: 200, body: `{"code":0,"msg":"ok","tenant_access_token":"token","expire":7200}`},
+			{status: 200, body: `{"code":0,"msg":"ok","data":{"message_id":"deleted"}}`},
+		},
+	}
+	messenger := NewFeishuMessenger("app", "secret", client)
+	if err := messenger.DeleteMessage(context.Background(), "perm-card-mid"); err != nil {
+		t.Fatalf("delete message: %v", err)
+	}
+	if len(client.requests) != 2 {
+		t.Fatalf("request count = %d, want 2", len(client.requests))
+	}
+	if client.requests[1].Method != http.MethodDelete {
+		t.Fatalf("method = %s, want DELETE", client.requests[1].Method)
+	}
+	if got := client.requests[1].URL.Path; !strings.HasSuffix(got, "/open-apis/im/v1/messages/perm-card-mid") {
+		t.Fatalf("unexpected delete path: %s", got)
+	}
+}
+
 func TestDoJSONRequestWithMessageIDRejectsInvalidSuccessBody(t *testing.T) {
 	client := &queuedHTTPClient{
 		responses: []queuedHTTPResponse{

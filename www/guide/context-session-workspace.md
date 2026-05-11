@@ -16,7 +16,7 @@ NeoCode 的日常使用围绕三个概念：工作区、会话和上下文。
 启动时指定工作区：
 
 ```bash
-neocode --workdir /path/to/project
+neocode -w /path/to/project
 ```
 
 建议一个会话只服务一个工作区。切换到另一个项目时，新建会话会更清楚。

@@ -618,9 +618,11 @@ type CheckpointWarningPayload struct {
 
 // CheckpointRestoredPayload 描述 checkpoint 恢复成功事件。
 type CheckpointRestoredPayload struct {
-	CheckpointID      string `json:"checkpoint_id"`
-	SessionID         string `json:"session_id"`
-	GuardCheckpointID string `json:"guard_checkpoint_id"`
+	CheckpointID      string   `json:"checkpoint_id"`
+	SessionID         string   `json:"session_id"`
+	GuardCheckpointID string   `json:"guard_checkpoint_id"`
+	Mode              string   `json:"mode,omitempty"`
+	Paths             []string `json:"paths,omitempty"`
 }
 
 // CheckpointUndoRestorePayload 描述 restore 撤销事件。

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  act,
   fireEvent,
   render,
   screen,
@@ -264,6 +265,73 @@ describe("FileChangePanel", () => {
         mode: "baseline",
         paths: ["src/a.txt"],
       });
+    });
+  });
+
+  it("rolls back only remaining file changes after one file was already restored", async () => {
+    useUIStore.setState({
+      fileChanges: [
+        {
+          id: "fc-a",
+          path: "src/a.txt",
+          status: "modified",
+          additions: 1,
+          deletions: 0,
+          checkpoint_id: "cp-1",
+          rollback_checkpoint_id: "cp-rollback-1",
+          hunks: [],
+        },
+        {
+          id: "fc-b",
+          path: "src/b.txt",
+          status: "modified",
+          additions: 1,
+          deletions: 0,
+          checkpoint_id: "cp-1",
+          rollback_checkpoint_id: "cp-rollback-1",
+          hunks: [],
+        },
+      ],
+    } as never);
+
+    render(<FileChangePanel />);
+
+    act(() => {
+      useUIStore.setState({
+        fileChanges: [
+          {
+            id: "fc-b",
+            path: "src/b.txt",
+            status: "modified",
+            additions: 1,
+            deletions: 0,
+            checkpoint_id: "cp-1",
+            rollback_checkpoint_id: "cp-rollback-1",
+            hunks: [],
+          },
+        ],
+      } as never);
+    });
+
+    fireEvent.click(screen.getByTestId("restore-all-changes"));
+    const confirmButtons = screen.getAllByRole("button", {
+      name: "Rollback all",
+    });
+    fireEvent.click(confirmButtons[confirmButtons.length - 1]);
+
+    await waitFor(() => {
+      expect(mockGatewayAPI.restoreCheckpoint).toHaveBeenCalledWith({
+        session_id: "sess-1",
+        checkpoint_id: "cp-rollback-1",
+        mode: "baseline",
+        paths: ["src/b.txt"],
+      });
+    });
+    expect(mockGatewayAPI.restoreCheckpoint).not.toHaveBeenCalledWith({
+      session_id: "sess-1",
+      checkpoint_id: "cp-rollback-1",
+      mode: "baseline",
+      paths: ["src/a.txt", "src/b.txt"],
     });
   });
 
