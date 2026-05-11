@@ -421,3 +421,89 @@ func mustMarshalDiagPayload(value any) string {
 	}
 	return strings.TrimSpace(string(payload))
 }
+
+func TestDefaultDiagCommandRunnerNoShellSession(t *testing.T) {
+	originalReadEnv := readDiagEnvValue
+	t.Cleanup(func() { readDiagEnvValue = originalReadEnv })
+
+	readDiagEnvValue = func(key string) string { return "" }
+
+	err := defaultDiagCommandRunner(context.Background(), diagCommandOptions{})
+	if err == nil {
+		t.Fatal("expected error when no shell session is available")
+	}
+	if !strings.Contains(err.Error(), errNoShellSession) {
+		t.Fatalf("error = %q, want contains %q", err.Error(), errNoShellSession)
+	}
+}
+
+func TestDefaultDiagInteractiveCommandRunnerNoShellSession(t *testing.T) {
+	originalReadEnv := readDiagEnvValue
+	t.Cleanup(func() { readDiagEnvValue = originalReadEnv })
+
+	readDiagEnvValue = func(key string) string { return "" }
+
+	err := defaultDiagInteractiveCommandRunner(context.Background(), diagCommandOptions{})
+	if err == nil {
+		t.Fatal("expected error when no shell session is available")
+	}
+	if !strings.Contains(err.Error(), errNoShellSession) {
+		t.Fatalf("error = %q, want contains %q", err.Error(), errNoShellSession)
+	}
+}
+
+func TestDefaultDiagAutoCommandRunnerNoShellSession(t *testing.T) {
+	originalReadEnv := readDiagEnvValue
+	t.Cleanup(func() { readDiagEnvValue = originalReadEnv })
+
+	readDiagEnvValue = func(key string) string { return "" }
+
+	err := defaultDiagAutoCommandRunner(context.Background(), diagAutoCommandOptions{QueryOnly: true}, &bytes.Buffer{})
+	if err == nil {
+		t.Fatal("expected error when no shell session is available")
+	}
+	if !strings.Contains(err.Error(), errNoShellSession) {
+		t.Fatalf("error = %q, want contains %q", err.Error(), errNoShellSession)
+	}
+}
+
+func TestWrapDiagGatewayError(t *testing.T) {
+	t.Run("nil returns nil", func(t *testing.T) {
+		if err := wrapDiagGatewayError(nil); err != nil {
+			t.Fatalf("wrapDiagGatewayError(nil) = %v", err)
+		}
+	})
+
+	t.Run("non-shell error passes through unchanged", func(t *testing.T) {
+		original := errors.New("some other error")
+		if err := wrapDiagGatewayError(original); err != original {
+			t.Fatalf("expected unwrapped original error, got %v", err)
+		}
+	})
+
+	t.Run("shell session error is wrapped", func(t *testing.T) {
+		original := errors.New("gateway trigger_action failed (resource_not_found): target role stream is unavailable")
+		wrapped := wrapDiagGatewayError(original)
+		if wrapped == nil {
+			t.Fatal("expected wrapped error")
+		}
+		if !strings.Contains(wrapped.Error(), errNoShellSession) {
+			t.Fatalf("wrapped error = %q, want contains %q", wrapped.Error(), errNoShellSession)
+		}
+		if !strings.Contains(wrapped.Error(), original.Error()) {
+			t.Fatalf("wrapped error = %q, want contains original %q", wrapped.Error(), original.Error())
+		}
+	})
+}
+
+func TestIsNoShellSessionError(t *testing.T) {
+	if isNoShellSessionError(nil) {
+		t.Fatal("isNoShellSessionError(nil) = true")
+	}
+	if !isNoShellSessionError(errors.New("target role stream is unavailable")) {
+		t.Fatal("isNoShellSessionError should detect 'target role stream is unavailable'")
+	}
+	if isNoShellSessionError(errors.New("some other error")) {
+		t.Fatal("isNoShellSessionError should not match other errors")
+	}
+}

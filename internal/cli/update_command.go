@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -20,6 +21,34 @@ var runUpdateCommand = defaultUpdateCommandRunner
 var doUpdate = updater.DoUpdate
 
 var updateCommandTimeout = 5 * time.Minute
+
+// updateSpinnerFrames 定义更新加载动画的旋转字符帧。
+var updateSpinnerFrames = []string{"-", "\\", "|", "/"}
+
+// startUpdateSpinner 在 os.Stderr 上输出旋转加载动画，返回停止函数。
+func startUpdateSpinner() func() {
+	done := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(100 * time.Millisecond)
+		defer ticker.Stop()
+		i := 0
+		for {
+			select {
+			case <-done:
+				fmt.Fprint(os.Stderr, "\r \r")
+				return
+			case <-ticker.C:
+				frame := updateSpinnerFrames[i%len(updateSpinnerFrames)]
+				fmt.Fprintf(os.Stderr, "\r%s Updating...", frame)
+				i++
+			}
+		}
+	}()
+	return func() {
+		close(done)
+		time.Sleep(150 * time.Millisecond)
+	}
+}
 
 const updateTimeoutErrorTemplate = "\u66f4\u65b0\u8d85\u65f6\uff08%s\uff09\uff0c\u8bf7\u68c0\u67e5\u7f51\u7edc\u540e\u91cd\u8bd5"
 
@@ -60,6 +89,9 @@ func newUpdateCommand() *cobra.Command {
 func defaultUpdateCommandRunner(ctx context.Context, options updateCommandOptions) (updater.UpdateResult, error) {
 	updateCtx, cancel := context.WithTimeout(ctx, updateCommandTimeout)
 	defer cancel()
+
+	stop := startUpdateSpinner()
+	defer stop()
 
 	result, err := doUpdate(updateCtx, updater.UpdateOptions{
 		CurrentVersion:    version.Current(),
