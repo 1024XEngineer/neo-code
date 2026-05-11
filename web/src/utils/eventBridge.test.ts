@@ -566,6 +566,31 @@ describe("eventBridge", () => {
     expect(useUIStore.getState().toasts).toHaveLength(0);
   });
 
+  it("CompactStart uses proactive mode copy without a toast", () => {
+    const api = createMockGatewayAPI();
+    handleGatewayEvent(
+      {
+        type: EventType.CompactStart,
+        payload: {
+          payload: {
+            runtime_event_type: EventType.CompactStart,
+            payload: { trigger_mode: "proactive" },
+          },
+        },
+        session_id: "sess-1",
+        run_id: "run-1",
+      },
+      api,
+    );
+
+    expect(useChatStore.getState().isCompacting).toBe(true);
+    expect(useChatStore.getState().compactMode).toBe("proactive");
+    expect(useChatStore.getState().compactMessage).toBe(
+      "Context is near the limit. Auto-compacting...",
+    );
+    expect(useUIStore.getState().toasts).toHaveLength(0);
+  });
+
   it("CompactApplied clears compact state and shows completion toast", () => {
     const api = createMockGatewayAPI();
     useChatStore
@@ -593,6 +618,31 @@ describe("eventBridge", () => {
     );
   });
 
+  it("CompactApplied for automatic modes clears compact state without completion toast", () => {
+    const api = createMockGatewayAPI();
+    useChatStore
+      .getState()
+      .startCompacting("proactive", "Context is near the limit. Auto-compacting...");
+
+    handleGatewayEvent(
+      {
+        type: EventType.CompactApplied,
+        payload: {
+          payload: {
+            runtime_event_type: EventType.CompactApplied,
+            payload: { TriggerMode: "proactive", Applied: true },
+          },
+        },
+        session_id: "sess-1",
+        run_id: "run-1",
+      },
+      api,
+    );
+
+    expect(useChatStore.getState().isCompacting).toBe(false);
+    expect(useUIStore.getState().toasts).toHaveLength(0);
+  });
+
   it("CompactError clears compact state and uses payload message", () => {
     const api = createMockGatewayAPI();
     useChatStore
@@ -617,6 +667,33 @@ describe("eventBridge", () => {
     expect(useChatStore.getState().isCompacting).toBe(false);
     expect(useUIStore.getState().toasts.at(-1)?.message).toBe(
       "compact timed out",
+    );
+  });
+
+  it("CompactError for automatic modes includes automatic compact context", () => {
+    const api = createMockGatewayAPI();
+    useChatStore
+      .getState()
+      .startCompacting("reactive", "Model reported context too long. Compacting and retrying...");
+
+    handleGatewayEvent(
+      {
+        type: EventType.CompactError,
+        payload: {
+          payload: {
+            runtime_event_type: EventType.CompactError,
+            payload: { TriggerMode: "reactive", Message: "context still too long" },
+          },
+        },
+        session_id: "sess-1",
+        run_id: "run-1",
+      },
+      api,
+    );
+
+    expect(useChatStore.getState().isCompacting).toBe(false);
+    expect(useUIStore.getState().toasts.at(-1)?.message).toBe(
+      "Auto context compaction failed: context still too long",
     );
   });
 

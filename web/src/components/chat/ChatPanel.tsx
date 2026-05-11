@@ -14,6 +14,7 @@ import {
   Shield,
   X,
   Check,
+  LoaderCircle,
 } from 'lucide-react'
 
 export default function ChatPanel() {
@@ -32,6 +33,8 @@ export default function ChatPanel() {
   const currentPermission = permissionRequests[0]
   const pendingUserQuestion = useChatStore((s) => s.pendingUserQuestion)
   const clearPendingUserQuestion = useChatStore((s) => s.clearPendingUserQuestion)
+  const isCompacting = useChatStore((s) => s.isCompacting)
+  const compactMessage = useChatStore((s) => s.compactMessage)
 
   const [editingTitle, setEditingTitle] = useState(false)
   const [isResolvingPermission, setIsResolvingPermission] = useState(false)
@@ -262,6 +265,13 @@ export default function ChatPanel() {
       </div>
 
       <TodoStrip />
+
+      {isCompacting && (
+        <div className="compact-status-panel" role="status" aria-live="polite">
+          <LoaderCircle size={14} className="compact-status-spinner" />
+          <span>{compactMessage || 'Compacting context...'}</span>
+        </div>
+      )}
 
       {currentPermission && !(agentMode === 'build' && permissionMode === 'bypass') ? (
         <div className="permission-area">
