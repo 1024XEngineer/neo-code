@@ -767,6 +767,69 @@ func TestExecuteAssistantToolCallsCanceledSaveStillEmitsResultWhenExecErr(t *tes
 	assertEventSequence(t, events, []EventType{EventToolStart, EventToolResult})
 }
 
+func TestExecuteAssistantToolCallsPersistsResultsInCallOrder(t *testing.T) {
+	t.Parallel()
+
+	store := newMemoryStore()
+	session := newRuntimeSession("session-exec-tool-order")
+	store.sessions[session.ID] = cloneSession(session)
+
+	var mu sync.Mutex
+	active := 0
+	maxActive := 0
+	manager := &stubToolManager{
+		executeFn: func(ctx context.Context, input tools.ToolCallInput) (tools.ToolResult, error) {
+			mu.Lock()
+			active++
+			if active > maxActive {
+				maxActive = active
+			}
+			mu.Unlock()
+			if input.Name == "tool_slow" {
+				time.Sleep(50 * time.Millisecond)
+			} else {
+				time.Sleep(10 * time.Millisecond)
+			}
+			mu.Lock()
+			active--
+			mu.Unlock()
+			return tools.ToolResult{Name: input.Name, Content: input.Name + " done"}, nil
+		},
+	}
+	service := &Service{
+		sessionStore:   store,
+		toolManager:    manager,
+		approvalBroker: approval.NewBroker(),
+		events:         make(chan RuntimeEvent, 32),
+	}
+	state := newRunState("run-exec-tool-order", session)
+	assistant := providertypes.Message{
+		Role: providertypes.RoleAssistant,
+		ToolCalls: []providertypes.ToolCall{
+			{ID: "call-slow", Name: "tool_slow", Arguments: `{}`},
+			{ID: "call-fast", Name: "tool_fast", Arguments: `{}`},
+		},
+	}
+
+	if _, err := service.executeAssistantToolCalls(context.Background(), &state, TurnBudgetSnapshot{}, assistant); err != nil {
+		t.Fatalf("executeAssistantToolCalls() error = %v", err)
+	}
+	if maxActive < 2 {
+		t.Fatalf("expected tools to execute concurrently, maxActive=%d", maxActive)
+	}
+	if len(state.session.Messages) != 2 {
+		t.Fatalf("message count = %d, want 2", len(state.session.Messages))
+	}
+	got := []string{
+		renderPartsForTest(state.session.Messages[0].Parts),
+		renderPartsForTest(state.session.Messages[1].Parts),
+	}
+	want := []string{"tool_slow done", "tool_fast done"}
+	if got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("persisted tool messages = %#v, want %#v", got, want)
+	}
+}
+
 func TestSetMemoExtractorAndRunTriggersExtraction(t *testing.T) {
 	t.Parallel()
 

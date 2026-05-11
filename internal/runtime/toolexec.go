@@ -42,6 +42,8 @@ func (s *Service) executeAssistantToolCalls(
 	toolLocks := buildToolExecutionLocks(assistant.ToolCalls)
 	taskCh := make(chan indexedToolCall)
 	results := make([]tools.ToolResult, len(assistant.ToolCalls))
+	execErrs := make([]error, len(assistant.ToolCalls))
+	workerErrs := make([]error, len(assistant.ToolCalls))
 	completed := make([]bool, len(assistant.ToolCalls))
 	writes := make([]bool, len(assistant.ToolCalls))
 	var mu sync.Mutex
@@ -57,7 +59,7 @@ func (s *Service) executeAssistantToolCalls(
 		go func() {
 			defer workerWG.Done()
 			for task := range taskCh {
-				result, wrote, err := s.executeOneToolCall(
+				result, wrote, execErr, err := s.executeOneToolCallWithoutPersistence(
 					execCtx,
 					state,
 					snapshot,
@@ -67,6 +69,8 @@ func (s *Service) executeAssistantToolCalls(
 				)
 				mu.Lock()
 				results[task.index] = result
+				execErrs[task.index] = execErr
+				workerErrs[task.index] = err
 				completed[task.index] = true
 				writes[task.index] = wrote
 				mu.Unlock()
@@ -94,6 +98,14 @@ func (s *Service) executeAssistantToolCalls(
 		if !ok {
 			continue
 		}
+		if workerErrs[index] == nil {
+			call := assistant.ToolCalls[index]
+			if persistErr := s.persistCompletedToolCallResult(ctx, state, call, results[index], execErrs[index]); persistErr != nil {
+				recordAndCancelOnFirstError(&mu, &firstErr, persistErr, cancelExec)
+			} else if ctxErr := execCtx.Err(); ctxErr != nil {
+				recordAndCancelOnFirstError(&mu, &firstErr, ctxErr, cancelExec)
+			}
+		}
 		summary.Results = append(summary.Results, results[index])
 		if writes[index] {
 			summary.HasSuccessfulWorkspaceWrite = true
@@ -112,8 +124,31 @@ func (s *Service) executeOneToolCall(
 	toolLock *sync.Mutex,
 	checkContext func() bool,
 ) (tools.ToolResult, bool, error) {
+	result, wrote, execErr, err := s.executeOneToolCallWithoutPersistence(ctx, state, snapshot, call, toolLock, checkContext)
+	if err != nil {
+		return result, wrote, err
+	}
+	if persistErr := s.persistCompletedToolCallResult(ctx, state, call, result, execErr); persistErr != nil {
+		return result, false, persistErr
+	}
+	return result, wrote, nil
+}
+
+// executeOneToolCallWithoutPersistence 执行单个工具调用并返回待回灌结果，调用方负责按稳定顺序持久化。
+func (s *Service) executeOneToolCallWithoutPersistence(
+	ctx context.Context,
+	state *runState,
+	snapshot TurnBudgetSnapshot,
+	call providertypes.ToolCall,
+	toolLock *sync.Mutex,
+	checkContext func() bool,
+) (tools.ToolResult, bool, error, error) {
 	if checkContext() {
-		return tools.ToolResult{}, false, ctx.Err()
+		err := ctx.Err()
+		if err == nil {
+			err = context.Canceled
+		}
+		return tools.ToolResult{}, false, err, err
 	}
 
 	toolLock.Lock()
@@ -146,11 +181,7 @@ func (s *Service) executeOneToolCall(
 			Reason:     reason,
 			Enforced:   true,
 		})
-		if err := s.appendToolMessageAndSave(ctx, state, call, result); err != nil {
-			return result, false, err
-		}
-		s.emitRunScoped(ctx, EventToolResult, state, result)
-		return result, false, nil
+		return result, false, nil, nil
 	}
 
 	s.emitRunScoped(ctx, EventToolStart, state, call)
@@ -298,7 +329,7 @@ func (s *Service) executeOneToolCall(
 	if errors.Is(execErr, context.Canceled) {
 		s.emitAfterToolResultHook(ctx, state, call, result, execErr, snapshot.Workdir)
 		s.emitAfterToolFailureHook(ctx, state, call, result, execErr, snapshot.Workdir)
-		return result, false, execErr
+		return result, false, execErr, execErr
 	}
 	if execErr != nil && strings.TrimSpace(result.Content) == "" {
 		result.Content = execErr.Error()
@@ -308,11 +339,25 @@ func (s *Service) executeOneToolCall(
 		s.emitAfterToolFailureHook(ctx, state, call, result, execErr, snapshot.Workdir)
 	}
 
+	if execErr != nil {
+		return result, false, execErr, nil
+	}
+	return result, hasSuccessfulWorkspaceWriteFact(result, execErr), nil, nil
+}
+
+// persistCompletedToolCallResult 按调度顺序回灌工具结果，避免并发 worker 同时写入同一会话 transcript。
+func (s *Service) persistCompletedToolCallResult(
+	ctx context.Context,
+	state *runState,
+	call providertypes.ToolCall,
+	result tools.ToolResult,
+	execErr error,
+) error {
 	if err := s.appendToolMessageAndSave(ctx, state, call, result); err != nil {
 		if execErr != nil && errors.Is(err, context.Canceled) {
 			s.emitRunScoped(ctx, EventToolResult, state, result)
 		}
-		return result, false, err
+		return err
 	}
 
 	s.emitRunScoped(ctx, EventToolResult, state, result)
@@ -336,14 +381,7 @@ func (s *Service) executeOneToolCall(
 		state.rememberedThisRun = true
 		state.mu.Unlock()
 	}
-
-	if checkContext() {
-		return result, hasSuccessfulWorkspaceWriteFact(result, execErr), ctx.Err()
-	}
-	if execErr != nil {
-		return result, false, nil
-	}
-	return result, hasSuccessfulWorkspaceWriteFact(result, execErr), nil
+	return nil
 }
 
 // resolveToolParallelism 计算本轮工具执行的并发上限，避免无界 goroutine 扩散。

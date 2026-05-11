@@ -61,6 +61,7 @@ type SQLiteStore struct {
 	dbPath     string
 
 	initMu      sync.Mutex
+	writeMu     sync.Mutex
 	db          *sql.DB
 	limitsMu    sync.RWMutex
 	assetPolicy AssetPolicy
@@ -117,6 +118,9 @@ func (s *SQLiteStore) CleanupExpiredSessions(ctx context.Context, maxAge time.Du
 	if maxAge <= 0 {
 		return 0, nil
 	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
 	db, err := s.ensureDB(ctx)
 	if err != nil {
 		return 0, err
@@ -163,6 +167,9 @@ func (s *SQLiteStore) CreateSession(ctx context.Context, input CreateSessionInpu
 	if err := s.ensureStorageDirs(); err != nil {
 		return Session{}, err
 	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
 	db, err := s.ensureDB(ctx)
 	if err != nil {
 		return Session{}, err
@@ -308,6 +315,9 @@ func (s *SQLiteStore) AppendMessages(ctx context.Context, input AppendMessagesIn
 	if len(input.Messages) == 0 {
 		return errors.New("session: append messages input is empty")
 	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
 	db, err := s.ensureDB(ctx)
 	if err != nil {
 		return err
@@ -387,6 +397,9 @@ func (s *SQLiteStore) UpdateSessionWorkdir(ctx context.Context, input UpdateSess
 	if err := validateStorageID("session id", input.SessionID); err != nil {
 		return fmt.Errorf("session: %w", err)
 	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
 	db, err := s.ensureDB(ctx)
 	if err != nil {
 		return err
@@ -416,6 +429,9 @@ func (s *SQLiteStore) UpdateSessionTitle(ctx context.Context, input UpdateSessio
 	if err := validateStorageID("session id", input.SessionID); err != nil {
 		return fmt.Errorf("session: %w", err)
 	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
 	db, err := s.ensureDB(ctx)
 	if err != nil {
 		return err
@@ -446,6 +462,9 @@ func (s *SQLiteStore) UpdateSessionState(ctx context.Context, input UpdateSessio
 	if err != nil {
 		return err
 	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
 	db, err := s.ensureDB(ctx)
 	if err != nil {
 		return err
@@ -508,6 +527,9 @@ func (s *SQLiteStore) ReplaceTranscript(ctx context.Context, input ReplaceTransc
 	if err != nil {
 		return err
 	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
 	db, err := s.ensureDB(ctx)
 	if err != nil {
 		return err
@@ -601,6 +623,9 @@ func (s *SQLiteStore) SaveAsset(ctx context.Context, sessionID string, r io.Read
 	if err := validateStorageID("session id", sessionID); err != nil {
 		return AssetMeta{}, fmt.Errorf("session: %w", err)
 	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
 	db, err := s.ensureDB(ctx)
 	if err != nil {
 		return AssetMeta{}, err
@@ -723,6 +748,9 @@ func (s *SQLiteStore) DeleteAsset(ctx context.Context, sessionID string, assetID
 	if err := validateStorageID("asset id", assetID); err != nil {
 		return fmt.Errorf("session: %w", err)
 	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
 	db, err := s.ensureDB(ctx)
 	if err != nil {
 		return err
@@ -758,6 +786,9 @@ func (s *SQLiteStore) DeleteSession(ctx context.Context, sessionID string) error
 	if err := validateStorageID("session id", sessionID); err != nil {
 		return fmt.Errorf("session: %w", err)
 	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
 	db, err := s.ensureDB(ctx)
 	if err != nil {
 		return err
@@ -798,8 +829,8 @@ func (s *SQLiteStore) initialize(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("session: open sqlite db: %w", err)
 	}
-	db.SetMaxOpenConns(4)
-	db.SetMaxIdleConns(4)
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
 
 	if err := applySQLitePragmas(ctx, db); err != nil {
 		_ = db.Close()
