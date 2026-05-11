@@ -67,7 +67,7 @@ type RuntimeHooksConfig struct {
 	Items                []RuntimeHookItemConfig `yaml:"items,omitempty"`
 }
 
-// RuntimeHookItemConfig 描述单个 user builtin hook 配置项。
+// RuntimeHookItemConfig 描述单个 user hook 配置项（当前支持 builtin 与 http observe）。
 type RuntimeHookItemConfig struct {
 	ID            string         `yaml:"id,omitempty"`
 	Enabled       *bool          `yaml:"enabled,omitempty"`

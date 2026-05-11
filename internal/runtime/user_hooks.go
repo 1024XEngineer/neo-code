@@ -166,7 +166,7 @@ func runHookExecutorSafely(
 	return executor.Run(ctx, point, input)
 }
 
-// buildUserHookSpec 将 user builtin hook 配置转换为 runtime 可执行 HookSpec。
+// buildUserHookSpec 将 user hook 配置转换为 runtime 可执行 HookSpec。
 func buildUserHookSpec(item config.RuntimeHookItemConfig, defaultWorkdir string) (runtimehooks.HookSpec, error) {
 	return buildConfiguredHookSpec(
 		item,
@@ -176,7 +176,7 @@ func buildUserHookSpec(item config.RuntimeHookItemConfig, defaultWorkdir string)
 	)
 }
 
-// buildRepoHookSpec 将 repo builtin hook 配置转换为 runtime 可执行 HookSpec。
+// buildRepoHookSpec 将 repo hook 配置转换为 runtime 可执行 HookSpec。
 func buildRepoHookSpec(item config.RuntimeHookItemConfig, defaultWorkdir string) (runtimehooks.HookSpec, error) {
 	return buildConfiguredHookSpec(
 		item,
@@ -186,7 +186,7 @@ func buildRepoHookSpec(item config.RuntimeHookItemConfig, defaultWorkdir string)
 	)
 }
 
-// buildConfiguredHookSpec 按给定 scope/source 构建 builtin hook 执行定义。
+// buildConfiguredHookSpec 按给定 scope/source 构建配置化 hook 执行定义。
 func buildConfiguredHookSpec(
 	item config.RuntimeHookItemConfig,
 	defaultWorkdir string,
@@ -450,7 +450,7 @@ func sanitizeHTTPObserveMetadata(metadata map[string]any) map[string]any {
 	return sanitized
 }
 
-// drainAndCloseHTTPResponseBody 在关闭前尽量读到 EOF，以提升 keep-alive 复用概率。
+// drainAndCloseHTTPResponseBody 在关闭前执行有上限 drain，兼顾连接复用与响应体放大风险控制。
 func drainAndCloseHTTPResponseBody(resp *http.Response) {
 	if resp == nil || resp.Body == nil {
 		return
