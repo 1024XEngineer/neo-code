@@ -493,7 +493,9 @@ func (c *GatewayRPCClient) ensureConnected(ctx context.Context) (net.Conn, error
 			listenAddress := c.listenAddress
 			dialFn := c.dialFn
 			c.stateMu.Unlock()
-			spawnedCmd, spawnErr := autoSpawnFn(ctx, listenAddress, dialFn)
+			autoSpawnCtx, cancelAutoSpawn := withAutoSpawnConnectContext(ctx)
+			spawnedCmd, spawnErr := autoSpawnFn(autoSpawnCtx, listenAddress, dialFn)
+			cancelAutoSpawn()
 			if spawnErr != nil {
 				c.stateMu.Lock()
 				c.autoSpawnAttempt = false
@@ -1002,6 +1004,28 @@ func resolveGatewayAutoSpawnReadyWindow(ctx context.Context) time.Duration {
 		defaultWindow = defaultGatewayAutoSpawnProbeInterval
 	}
 	return defaultWindow
+}
+
+// withAutoSpawnConnectContext 为 auto-spawn 建立独立等待窗口：
+// - 不受上层短 request timeout 截断，避免冷启动误判失败；
+// - 仍响应显式 context.Canceled，保证用户主动取消可及时终止。
+func withAutoSpawnConnectContext(parent context.Context) (context.Context, context.CancelFunc) {
+	window := resolveGatewayAutoSpawnReadyWindow(context.Background())
+	autoSpawnCtx, autoSpawnCancel := context.WithTimeout(context.Background(), window)
+	if parent == nil {
+		return autoSpawnCtx, autoSpawnCancel
+	}
+
+	stopForward := context.AfterFunc(parent, func() {
+		if errors.Is(parent.Err(), context.Canceled) {
+			autoSpawnCancel()
+		}
+	})
+
+	return autoSpawnCtx, func() {
+		stopForward()
+		autoSpawnCancel()
+	}
 }
 
 // openGatewayAutoSpawnOutput 打开后台网关日志输出目标，优先写入 ~/.neocode/logs/gateway_auto.log，失败时回退到 DevNull。
