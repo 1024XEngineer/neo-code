@@ -77,6 +77,27 @@ func TestGenerateTextSuccess(t *testing.T) {
 	}
 }
 
+func TestGenerateTextIgnoresThinkingDelta(t *testing.T) {
+	providerStub := &stubTextGenProvider{
+		generate: func(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error {
+			events <- providertypes.NewThinkingDeltaStreamEvent("plan")
+			events <- providertypes.NewTextDeltaStreamEvent("[")
+			events <- providertypes.NewThinkingDeltaStreamEvent("more plan")
+			events <- providertypes.NewTextDeltaStreamEvent("]")
+			events <- providertypes.NewMessageDoneStreamEvent("stop", nil)
+			return nil
+		},
+	}
+
+	text, err := provider.GenerateText(context.Background(), providerStub, providertypes.GenerateRequest{})
+	if err != nil {
+		t.Fatalf("GenerateText() error = %v", err)
+	}
+	if text != "[]" {
+		t.Fatalf("text = %q, want %q", text, "[]")
+	}
+}
+
 func TestGenerateTextProviderError(t *testing.T) {
 	providerStub := &stubTextGenProvider{
 		generate: func(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error {
@@ -183,6 +204,22 @@ func TestGenerateTextRejectsTextDeltaWithNilPayload(t *testing.T) {
 
 	_, err := provider.GenerateText(context.Background(), providerStub, providertypes.GenerateRequest{})
 	if err == nil || !strings.Contains(err.Error(), "text_delta event payload is nil") {
+		t.Fatalf("GenerateText() error = %v", err)
+	}
+}
+
+func TestGenerateTextRejectsThinkingDeltaWithNilPayload(t *testing.T) {
+	providerStub := &stubTextGenProvider{
+		generate: func(ctx context.Context, req providertypes.GenerateRequest, events chan<- providertypes.StreamEvent) error {
+			events <- providertypes.StreamEvent{Type: providertypes.StreamEventThinkingDelta}
+			events <- providertypes.NewTextDeltaStreamEvent("partial")
+			events <- providertypes.NewMessageDoneStreamEvent("stop", nil)
+			return nil
+		},
+	}
+
+	_, err := provider.GenerateText(context.Background(), providerStub, providertypes.GenerateRequest{})
+	if err == nil || !strings.Contains(err.Error(), "thinking_delta event payload is nil") {
 		t.Fatalf("GenerateText() error = %v", err)
 	}
 }

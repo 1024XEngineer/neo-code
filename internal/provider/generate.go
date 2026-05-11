@@ -39,6 +39,13 @@ func GenerateText(ctx context.Context, p Provider, req providertypes.GenerateReq
 					continue
 				}
 				messageDone = true
+			case providertypes.StreamEventThinkingDelta:
+				if _, err := event.ThinkingDeltaValue(); err != nil {
+					if streamErr == nil {
+						streamErr = err
+					}
+					continue
+				}
 			default:
 				if streamErr == nil {
 					streamErr = fmt.Errorf("unexpected provider stream event %q", event.Type)
