@@ -20,6 +20,16 @@ let gatewayToken = ''
 let currentWorkdir = process.env['NEOCODE_WORKDIR'] ?? ''
 let isQuitting = false
 
+/** resolveWindowIconPath 返回开发态与打包态都可用的窗口图标路径。 */
+function resolveWindowIconPath(): string | undefined {
+	const candidates = [
+		...(is.dev ? [join(__dirname, '..', 'build', 'icon.png')] : []),
+		join(process.resourcesPath, 'icon.png'),
+		join(process.resourcesPath, 'build', 'icon.png'),
+	]
+	return candidates.find((candidate) => existsSync(candidate))
+}
+
 /** 安全发送 Gateway 状态，避免窗口销毁后访问 webContents 触发主进程异常 */
 function sendGatewayStatus(data: { ready: boolean; error?: string }): void {
 	if (isQuitting) return
@@ -37,6 +47,7 @@ function createWindow(): void {
 		show: false,
 		title: 'NeoCode',
 		titleBarStyle: 'hiddenInset',
+		icon: resolveWindowIconPath(),
 		webPreferences: {
 			preload: join(__dirname, 'preload.cjs'),
 			sandbox: false,

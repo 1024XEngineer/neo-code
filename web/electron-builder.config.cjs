@@ -1,5 +1,5 @@
 /**
- * electron-builder 配置
+ * electron-builder 配置。
  */
 const config = {
 	appId: 'com.neocode.app',
@@ -15,10 +15,11 @@ const config = {
 		{
 			from: 'build',
 			to: '.',
-			filter: ['neocode-gateway', 'neocode-gateway.exe'],
+			filter: ['neocode-gateway', 'neocode-gateway.exe', 'icon.png'],
 		},
 	],
 	win: {
+		icon: 'build/icon.ico',
 		target: [
 			{
 				target: 'nsis',
@@ -42,6 +43,7 @@ const config = {
 		artifactName: 'neocode_${version}_Windows_${arch}_Portable.${ext}',
 	},
 	mac: {
+		icon: 'build/icon.icns',
 		target: [
 			{
 				target: 'dmg',
@@ -51,6 +53,7 @@ const config = {
 		artifactName: 'neocode_${version}_Darwin_${arch}.${ext}',
 	},
 	linux: {
+		icon: 'build/icon.png',
 		target: [
 			{
 				target: 'AppImage',

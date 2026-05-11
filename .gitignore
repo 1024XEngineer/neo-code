@@ -49,6 +49,9 @@ www/.vitepress/dist/
 # Web frontend build artifacts
 web/dist/
 web/.vite/
-web/build/
+web/build/*
+!web/build/icon.png
+!web/build/icon.ico
+!web/build/icon.icns
 web/release/
 web/dist-electron/
