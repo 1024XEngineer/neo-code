@@ -61,6 +61,7 @@ type SQLiteStore struct {
 	dbPath     string
 
 	initMu      sync.Mutex
+	writeMu     sync.Mutex
 	db          *sql.DB
 	limitsMu    sync.RWMutex
 	assetPolicy AssetPolicy
@@ -117,35 +118,43 @@ func (s *SQLiteStore) CleanupExpiredSessions(ctx context.Context, maxAge time.Du
 	if maxAge <= 0 {
 		return 0, nil
 	}
+
 	db, err := s.ensureDB(ctx)
 	if err != nil {
 		return 0, err
 	}
 
+	s.writeMu.Lock()
 	cutoffMS := toUnixMillis(time.Now().Add(-maxAge))
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
+		s.writeMu.Unlock()
 		return 0, fmt.Errorf("session: begin cleanup tx: %w", err)
 	}
 	defer rollbackTx(tx)
 
 	expiredIDs, err := listExpiredSessionIDs(ctx, tx, cutoffMS)
 	if err != nil {
+		s.writeMu.Unlock()
 		return 0, err
 	}
 
 	if len(expiredIDs) == 0 {
+		s.writeMu.Unlock()
 		return 0, nil
 	}
 
 	// 在同一事务内按固定 ID 集合删除记录，避免查询结果与实际删除集合不一致。
 	affected, err := deleteSessionsByIDSet(ctx, tx, expiredIDs)
 	if err != nil {
+		s.writeMu.Unlock()
 		return 0, err
 	}
 	if err := tx.Commit(); err != nil {
+		s.writeMu.Unlock()
 		return 0, fmt.Errorf("session: commit cleanup tx: %w", err)
 	}
+	s.writeMu.Unlock()
 
 	// 清理附件目录
 	if err := s.cleanupExpiredSessionAssets(ctx, expiredIDs); err != nil {
@@ -163,6 +172,9 @@ func (s *SQLiteStore) CreateSession(ctx context.Context, input CreateSessionInpu
 	if err := s.ensureStorageDirs(); err != nil {
 		return Session{}, err
 	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
 	db, err := s.ensureDB(ctx)
 	if err != nil {
 		return Session{}, err
@@ -308,6 +320,9 @@ func (s *SQLiteStore) AppendMessages(ctx context.Context, input AppendMessagesIn
 	if len(input.Messages) == 0 {
 		return errors.New("session: append messages input is empty")
 	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
 	db, err := s.ensureDB(ctx)
 	if err != nil {
 		return err
@@ -387,6 +402,9 @@ func (s *SQLiteStore) UpdateSessionWorkdir(ctx context.Context, input UpdateSess
 	if err := validateStorageID("session id", input.SessionID); err != nil {
 		return fmt.Errorf("session: %w", err)
 	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
 	db, err := s.ensureDB(ctx)
 	if err != nil {
 		return err
@@ -416,6 +434,9 @@ func (s *SQLiteStore) UpdateSessionTitle(ctx context.Context, input UpdateSessio
 	if err := validateStorageID("session id", input.SessionID); err != nil {
 		return fmt.Errorf("session: %w", err)
 	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
 	db, err := s.ensureDB(ctx)
 	if err != nil {
 		return err
@@ -446,6 +467,9 @@ func (s *SQLiteStore) UpdateSessionState(ctx context.Context, input UpdateSessio
 	if err != nil {
 		return err
 	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
 	db, err := s.ensureDB(ctx)
 	if err != nil {
 		return err
@@ -508,6 +532,9 @@ func (s *SQLiteStore) ReplaceTranscript(ctx context.Context, input ReplaceTransc
 	if err != nil {
 		return err
 	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
 	db, err := s.ensureDB(ctx)
 	if err != nil {
 		return err
@@ -601,10 +628,6 @@ func (s *SQLiteStore) SaveAsset(ctx context.Context, sessionID string, r io.Read
 	if err := validateStorageID("session id", sessionID); err != nil {
 		return AssetMeta{}, fmt.Errorf("session: %w", err)
 	}
-	db, err := s.ensureDB(ctx)
-	if err != nil {
-		return AssetMeta{}, err
-	}
 
 	meta, err := newAssetMeta(mimeType)
 	if err != nil {
@@ -662,7 +685,14 @@ func (s *SQLiteStore) SaveAsset(ctx context.Context, sessionID string, r io.Read
 		return AssetMeta{}, fmt.Errorf("session: compute relative asset path: %w", err)
 	}
 
-	result, err := db.ExecContext(ctx, `
+	db, err := s.ensureDB(ctx)
+	if err != nil {
+		_ = os.Remove(target)
+		return AssetMeta{}, err
+	}
+
+	s.writeMu.Lock()
+	result, insertErr := db.ExecContext(ctx, `
 INSERT INTO session_assets (id, session_id, mime_type, size_bytes, relative_path, created_at_ms)
 VALUES (?, ?, ?, ?, ?, ?)
 `,
@@ -673,11 +703,15 @@ VALUES (?, ?, ?, ?, ?, ?)
 		filepath.ToSlash(relativePath),
 		toUnixMillis(time.Now()),
 	)
-	if err != nil {
-		_ = os.Remove(target)
-		return AssetMeta{}, mapSessionAssetInsertError(meta.ID, err)
+	if insertErr == nil {
+		err = expectRowsAffected(result, sessionID)
 	}
-	if err := expectRowsAffected(result, sessionID); err != nil {
+	s.writeMu.Unlock()
+	if insertErr != nil {
+		_ = os.Remove(target)
+		return AssetMeta{}, mapSessionAssetInsertError(meta.ID, insertErr)
+	}
+	if err != nil {
 		_ = os.Remove(target)
 		return AssetMeta{}, err
 	}
@@ -723,17 +757,19 @@ func (s *SQLiteStore) DeleteAsset(ctx context.Context, sessionID string, assetID
 	if err := validateStorageID("asset id", assetID); err != nil {
 		return fmt.Errorf("session: %w", err)
 	}
-	db, err := s.ensureDB(ctx)
-	if err != nil {
-		return err
-	}
 
 	meta, path, err := s.loadAssetMeta(ctx, sessionID, assetID)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
 
+	db, dbErr := s.ensureDB(ctx)
+	if dbErr != nil {
+		return dbErr
+	}
+	s.writeMu.Lock()
 	result, execErr := db.ExecContext(ctx, `DELETE FROM session_assets WHERE session_id = ? AND id = ?`, sessionID, assetID)
+	s.writeMu.Unlock()
 	if execErr != nil {
 		return fmt.Errorf("session: delete asset meta %s: %w", assetID, execErr)
 	}
@@ -758,12 +794,16 @@ func (s *SQLiteStore) DeleteSession(ctx context.Context, sessionID string) error
 	if err := validateStorageID("session id", sessionID); err != nil {
 		return fmt.Errorf("session: %w", err)
 	}
+
 	db, err := s.ensureDB(ctx)
 	if err != nil {
 		return err
 	}
 
-	if _, err := db.ExecContext(ctx, `DELETE FROM sessions WHERE id = ?`, sessionID); err != nil {
+	s.writeMu.Lock()
+	_, err = db.ExecContext(ctx, `DELETE FROM sessions WHERE id = ?`, sessionID)
+	s.writeMu.Unlock()
+	if err != nil {
 		return fmt.Errorf("session: delete session %s: %w", sessionID, err)
 	}
 
@@ -798,8 +838,8 @@ func (s *SQLiteStore) initialize(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("session: open sqlite db: %w", err)
 	}
-	db.SetMaxOpenConns(4)
-	db.SetMaxIdleConns(4)
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
 
 	if err := applySQLitePragmas(ctx, db); err != nil {
 		_ = db.Close()

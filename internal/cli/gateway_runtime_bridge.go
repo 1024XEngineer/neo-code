@@ -44,6 +44,26 @@ type runtimeSessionCreator interface {
 	CreateSession(ctx context.Context, id string) (agentsession.Session, error)
 }
 
+type runtimeSessionDeleter interface {
+	SupportsSessionMutationBoundary() bool
+	DeleteSession(ctx context.Context, sessionID string) error
+}
+
+type runtimeSessionRenamer interface {
+	SupportsSessionMutationBoundary() bool
+	RenameSession(ctx context.Context, sessionID string, title string) error
+}
+
+type runtimeSessionModelUpdater interface {
+	SupportsSessionMutationBoundary() bool
+	UpdateSessionModel(ctx context.Context, sessionID string, providerID string, modelID string) error
+}
+
+type runtimeSessionsProviderModelSyncer interface {
+	SupportsSessionMutationBoundary() bool
+	SyncSessionsProviderModel(ctx context.Context, providerID string, modelID string) error
+}
+
 type runtimeTodoLister interface {
 	ListTodos(ctx context.Context, sessionID string) (agentruntime.TodoSnapshot, error)
 }
@@ -648,6 +668,12 @@ func (b *gatewayRuntimePortBridge) DeleteSession(ctx context.Context, input gate
 	if sessionID == "" {
 		return false, gateway.ErrRuntimeResourceNotFound
 	}
+	if deleter, ok := b.runtime.(runtimeSessionDeleter); ok {
+		if err := deleter.DeleteSession(ctx, sessionID); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
 	if b.sessionStore == nil {
 		return false, fmt.Errorf("gateway runtime bridge: session store is unavailable")
 	}
@@ -669,6 +695,9 @@ func (b *gatewayRuntimePortBridge) RenameSession(ctx context.Context, input gate
 	}
 	if title == "" {
 		return fmt.Errorf("gateway runtime bridge: title is required for rename")
+	}
+	if renamer, ok := b.runtime.(runtimeSessionRenamer); ok {
+		return renamer.RenameSession(ctx, sessionID, title)
 	}
 	if b.sessionStore == nil {
 		return fmt.Errorf("gateway runtime bridge: session store is unavailable")
@@ -918,6 +947,9 @@ func (b *gatewayRuntimePortBridge) SetSessionModel(ctx context.Context, input ga
 	providerID, modelID, err := b.resolveProviderModelForSession(ctx, session, input.ProviderID, input.ModelID)
 	if err != nil {
 		return err
+	}
+	if updater, ok := b.runtime.(runtimeSessionModelUpdater); ok {
+		return updater.UpdateSessionModel(ctx, session.ID, providerID, modelID)
 	}
 	head := session.HeadSnapshot()
 	head.Provider = providerID
@@ -1998,6 +2030,9 @@ func (b *gatewayRuntimePortBridge) SyncSessionsProviderModel(
 	modelID = strings.TrimSpace(modelID)
 	if providerID == "" || modelID == "" {
 		return nil
+	}
+	if syncer, ok := b.runtime.(runtimeSessionsProviderModelSyncer); ok {
+		return syncer.SyncSessionsProviderModel(ctx, providerID, modelID)
 	}
 
 	summaries, err := b.runtime.ListSessions(ctx)

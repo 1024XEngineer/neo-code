@@ -338,6 +338,20 @@ func (s *memoryStore) CleanupExpiredSessions(ctx context.Context, maxAge time.Du
 	return 0, nil
 }
 
+func (s *memoryStore) DeleteSession(ctx context.Context, id string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.sessions[id]; !ok {
+		return agentsession.ErrSessionNotFound
+	}
+	delete(s.sessions, id)
+	s.saves++
+	return nil
+}
+
 // CreateSession 转发到底层 Store，并按当前 save 计数规则注入失败。
 func (s *failingStore) CreateSession(ctx context.Context, input agentsession.CreateSessionInput) (agentsession.Session, error) {
 	if err := s.nextSaveError(ctx); err != nil {

@@ -367,6 +367,46 @@ func (s *bridgeSessionStoreStub) UpdateSessionState(ctx context.Context, input a
 	return nil
 }
 
+type boundaryRuntimeStub struct {
+	*runtimeStub
+	deletedSessionID string
+	renamedSessionID string
+	renamedTitle     string
+	modelSessionID   string
+	modelProviderID  string
+	modelID          string
+	syncProviderID   string
+	syncModelID      string
+}
+
+func (s *boundaryRuntimeStub) SupportsSessionMutationBoundary() bool {
+	return true
+}
+
+func (s *boundaryRuntimeStub) DeleteSession(_ context.Context, sessionID string) error {
+	s.deletedSessionID = sessionID
+	return nil
+}
+
+func (s *boundaryRuntimeStub) RenameSession(_ context.Context, sessionID string, title string) error {
+	s.renamedSessionID = sessionID
+	s.renamedTitle = title
+	return nil
+}
+
+func (s *boundaryRuntimeStub) UpdateSessionModel(_ context.Context, sessionID string, providerID string, modelID string) error {
+	s.modelSessionID = sessionID
+	s.modelProviderID = providerID
+	s.modelID = modelID
+	return nil
+}
+
+func (s *boundaryRuntimeStub) SyncSessionsProviderModel(_ context.Context, providerID string, modelID string) error {
+	s.syncProviderID = providerID
+	s.syncModelID = modelID
+	return nil
+}
+
 func TestGatewayRuntimePortBridgeCheckpointOperations(t *testing.T) {
 	stub := &runtimeStub{
 		listCheckpointsResult: []agentsession.CheckpointRecord{
@@ -1496,6 +1536,32 @@ func TestGatewayRuntimePortBridgeDeleteSession(t *testing.T) {
 	})
 }
 
+func TestGatewayRuntimePortBridgeDeleteSessionUsesRuntimeBoundary(t *testing.T) {
+	store := &bridgeSessionStoreStub{
+		deleteFn: func(_ context.Context, _ string) error {
+			t.Fatalf("DeleteSession should use runtime boundary instead of direct store write")
+			return nil
+		},
+	}
+	stub := &boundaryRuntimeStub{runtimeStub: &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)}}
+	bridge, err := newGatewayRuntimePortBridge(context.Background(), stub, store)
+	if err != nil {
+		t.Fatalf("new bridge: %v", err)
+	}
+	defer bridge.Close()
+
+	deleted, err := bridge.DeleteSession(context.Background(), gateway.DeleteSessionInput{
+		SubjectID: testBridgeSubjectID,
+		SessionID: " session-1 ",
+	})
+	if err != nil {
+		t.Fatalf("DeleteSession() error = %v", err)
+	}
+	if !deleted || stub.deletedSessionID != "session-1" {
+		t.Fatalf("deleted=%v runtimeID=%q", deleted, stub.deletedSessionID)
+	}
+}
+
 func TestGatewayRuntimePortBridgeRenameSession(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
 		store := &bridgeSessionStoreStub{
@@ -1562,6 +1628,32 @@ func TestGatewayRuntimePortBridgeRenameSession(t *testing.T) {
 			t.Fatal("expected error for empty session_id")
 		}
 	})
+}
+
+func TestGatewayRuntimePortBridgeRenameSessionUsesRuntimeBoundary(t *testing.T) {
+	store := &bridgeSessionStoreStub{
+		updateFn: func(_ context.Context, _ agentsession.UpdateSessionStateInput) error {
+			t.Fatalf("RenameSession should use runtime boundary instead of direct store write")
+			return nil
+		},
+	}
+	stub := &boundaryRuntimeStub{runtimeStub: &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)}}
+	bridge, err := newGatewayRuntimePortBridge(context.Background(), stub, store)
+	if err != nil {
+		t.Fatalf("new bridge: %v", err)
+	}
+	defer bridge.Close()
+
+	if err := bridge.RenameSession(context.Background(), gateway.RenameSessionInput{
+		SubjectID: testBridgeSubjectID,
+		SessionID: " session-1 ",
+		Title:     " New Title ",
+	}); err != nil {
+		t.Fatalf("RenameSession() error = %v", err)
+	}
+	if stub.renamedSessionID != "session-1" || stub.renamedTitle != "New Title" {
+		t.Fatalf("runtime rename = (%q, %q)", stub.renamedSessionID, stub.renamedTitle)
+	}
 }
 
 // ---- providerSelection stub ----
@@ -2096,6 +2188,58 @@ func TestGatewayRuntimePortBridgeSetSessionModelProviderInference(t *testing.T) 
 	})
 	if err != nil {
 		t.Fatalf("set session model: %v", err)
+	}
+}
+
+func TestGatewayRuntimePortBridgeSetSessionModelUsesRuntimeBoundary(t *testing.T) {
+	store := &bridgeSessionStoreWithLoader{
+		bridgeSessionStoreStub: bridgeSessionStoreStub{
+			updateFn: func(_ context.Context, _ agentsession.UpdateSessionStateInput) error {
+				t.Fatalf("SetSessionModel should use runtime boundary instead of direct store write")
+				return nil
+			},
+		},
+		session: agentsession.Session{ID: "s-1", Provider: "", Model: ""},
+	}
+	ps := &providerSelectionStub{
+		listOptions: []configstate.ProviderOption{
+			{ID: "openai", Models: []providertypes.ModelDescriptor{{ID: "gpt-4", Name: "GPT-4"}}},
+		},
+	}
+	stub := &boundaryRuntimeStub{runtimeStub: &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)}}
+	bridge, _ := newGatewayRuntimePortBridge(context.Background(), stub, store, nil, ps)
+	defer bridge.Close()
+
+	if err := bridge.SetSessionModel(context.Background(), gateway.SetSessionModelInput{
+		SubjectID: testBridgeSubjectID,
+		SessionID: "s-1",
+		ModelID:   "gpt-4",
+	}); err != nil {
+		t.Fatalf("SetSessionModel() error = %v", err)
+	}
+	if stub.modelSessionID != "s-1" || stub.modelProviderID != "openai" || stub.modelID != "gpt-4" {
+		t.Fatalf("runtime model update = (%q, %q, %q)", stub.modelSessionID, stub.modelProviderID, stub.modelID)
+	}
+}
+
+func TestGatewayRuntimePortBridgeSyncSessionsProviderModelUsesRuntimeBoundary(t *testing.T) {
+	store := &bridgeSessionStoreWithLoader{
+		bridgeSessionStoreStub: bridgeSessionStoreStub{
+			updateFn: func(_ context.Context, _ agentsession.UpdateSessionStateInput) error {
+				t.Fatalf("SyncSessionsProviderModel should use runtime boundary instead of direct store write")
+				return nil
+			},
+		},
+	}
+	stub := &boundaryRuntimeStub{runtimeStub: &runtimeStub{eventsCh: make(chan agentruntime.RuntimeEvent, 1)}}
+	bridge, _ := newGatewayRuntimePortBridge(context.Background(), stub, store)
+	defer bridge.Close()
+
+	if err := bridge.SyncSessionsProviderModel(context.Background(), " openai ", " gpt-4 "); err != nil {
+		t.Fatalf("SyncSessionsProviderModel() error = %v", err)
+	}
+	if stub.syncProviderID != "openai" || stub.syncModelID != "gpt-4" {
+		t.Fatalf("runtime sync = (%q, %q)", stub.syncProviderID, stub.syncModelID)
 	}
 }
 
