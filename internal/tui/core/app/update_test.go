@@ -6373,6 +6373,27 @@ func TestAppendActivityAppendsInlineLogMessage(t *testing.T) {
 	}
 }
 
+func TestRebuildTranscriptHidesPlainSystemNoticeButKeepsInlineLog(t *testing.T) {
+	app, _ := newTestApp(t)
+	app.width = 120
+	app.height = 30
+	app.applyComponentLayout(true)
+	app.activeMessages = []providertypes.Message{
+		{Role: roleUser, Parts: []providertypes.ContentPart{providertypes.NewTextPart("帮我执行技能命令")}},
+		{Role: roleSystem, Parts: []providertypes.ContentPart{providertypes.NewTextPart("Skill command completed.")}},
+		{Role: roleSystem, Parts: []providertypes.ContentPart{providertypes.NewTextPart(inlineLogMarker + "tool: success")}},
+	}
+
+	app.rebuildTranscript()
+	plain := copyCodeANSIPattern.ReplaceAllString(app.transcriptContent, "")
+	if strings.Contains(plain, "Skill command completed.") {
+		t.Fatalf("expected plain system notice to stay hidden from transcript, got %q", plain)
+	}
+	if !strings.Contains(plain, "tool: success") {
+		t.Fatalf("expected inline log to remain visible in transcript, got %q", plain)
+	}
+}
+
 func TestInlineLogDoesNotBreakAssistantContinuationTag(t *testing.T) {
 	app, _ := newTestApp(t)
 	app.width = 120

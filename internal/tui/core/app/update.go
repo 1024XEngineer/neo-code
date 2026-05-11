@@ -5770,6 +5770,11 @@ func (a *App) composeTranscriptContent(width int) (string, bool) {
 			}
 		}
 		message := a.activeMessages[idx]
+		// 隐藏活动消息里的普通 system 提示，避免把内部通知渲染到用户 transcript；
+		// inline log 仍需保留以支持过程折叠与展开。
+		if message.Role == roleSystem && !isInlineLogMessage(message) {
+			continue
+		}
 		inlineLog := isInlineLogMessage(message)
 		continuation := message.Role == roleAssistant && lastRenderedRole == roleAssistant
 		if inlineLog && lastRenderedRole == roleAssistant {
