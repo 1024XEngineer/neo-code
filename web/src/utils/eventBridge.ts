@@ -409,6 +409,26 @@ function _refreshRunFileChanges(
     });
 }
 
+// applyBaselineCheckpointRestoreEvent 只同步文件级 baseline 回退，不刷新会话消息或 insight。
+function applyBaselineCheckpointRestoreEvent(payload: CheckpointRestoredPayload) {
+  const restoredPaths = new Set(
+    (payload.paths ?? []).map(normalizeFilePath).filter(Boolean),
+  );
+  _latestRunDiffRequestId += 1;
+  useUIStore.getState().setRestoringCheckpoint(false);
+  if (restoredPaths.size === 0) {
+    return;
+  }
+  for (const path of restoredPaths) {
+    _firstTouchRollbackCheckpointByPath.delete(path);
+  }
+  useUIStore.setState((state) => ({
+    fileChanges: state.fileChanges.filter(
+      (change) => !restoredPaths.has(normalizeFilePath(change.path)),
+    ),
+  }));
+}
+
 // refreshSessionAfterCheckpointRestoreEvent 仅在当前会话收到 restore/undo 事件时刷新会话与文件变更视图。
 function refreshSessionAfterCheckpointRestoreEvent(
   gatewayAPI: GatewayAPI,
@@ -1081,6 +1101,11 @@ export function handleGatewayEvent(
         if (
           payload.session_id === useSessionStore.getState().currentSessionId
         ) {
+          if (payload.mode === "baseline") {
+            applyBaselineCheckpointRestoreEvent(payload);
+            uiStore.showToast("File rollback completed", "success");
+            break;
+          }
           chatStore.markAllCheckpointsRestored();
           refreshSessionAfterCheckpointRestoreEvent(
             gatewayAPI,

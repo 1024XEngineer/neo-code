@@ -521,6 +521,8 @@ export interface CheckpointRestoredPayload {
   checkpoint_id: string;
   session_id: string;
   guard_checkpoint_id: string;
+  mode?: "exact" | "baseline" | string;
+  paths?: string[];
 }
 
 export interface CheckpointUndoRestorePayload {
