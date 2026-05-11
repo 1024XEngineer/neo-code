@@ -33,8 +33,13 @@ type BuildInput struct {
 
 // BuildResult is the provider-facing context produced for a single round.
 type BuildResult struct {
+	// SystemPrompt 是最终拼接结果，兼容旧链路：StableSystemPrompt + "\n\n" + DynamicSystemPrompt。
 	SystemPrompt string
-	Messages     []providertypes.Message
+	// StableSystemPrompt 是长期稳定、适合作为缓存前缀的系统提示词。
+	StableSystemPrompt string
+	// DynamicSystemPrompt 是当前轮运行态提示词，随任务进度变化。
+	DynamicSystemPrompt string
+	Messages            []providertypes.Message
 }
 
 // RepositorySummarySection 承载 runtime 已决策好的最小 repository summary 投影。

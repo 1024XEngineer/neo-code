@@ -1230,3 +1230,128 @@ func TestDefaultBuilderBuildProjectsMetadataOnlyToolResult(t *testing.T) {
 		t.Fatalf("expected projected tool metadata to be cleared, got %#v", toolMessage.ToolMetadata)
 	}
 }
+
+func TestDefaultBuilderBuildReturnsStableAndDynamicPrompts(t *testing.T) {
+	t.Parallel()
+
+	builder := NewBuilder()
+	result, err := builder.Build(stdcontext.Background(), BuildInput{
+		Messages: []providertypes.Message{
+			{Role: "user", Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")}},
+		},
+		Metadata: testMetadata(t.TempDir()),
+	})
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+
+	if result.StableSystemPrompt == "" {
+		t.Fatalf("expected non-empty StableSystemPrompt")
+	}
+	if result.DynamicSystemPrompt == "" {
+		t.Fatalf("expected non-empty DynamicSystemPrompt")
+	}
+
+	if !strings.Contains(result.StableSystemPrompt, "## Agent Identity") {
+		t.Fatalf("expected Agent Identity in stable prompt, got %q", result.StableSystemPrompt)
+	}
+	if !strings.Contains(result.StableSystemPrompt, "## Tool Usage") {
+		t.Fatalf("expected Tool Usage in stable prompt, got %q", result.StableSystemPrompt)
+	}
+	if !strings.Contains(result.DynamicSystemPrompt, "## Capabilities & Limitations") {
+		t.Fatalf("expected Capabilities & Limitations in dynamic prompt, got %q", result.DynamicSystemPrompt)
+	}
+	if !strings.Contains(result.DynamicSystemPrompt, "## System State") {
+		t.Fatalf("expected System State in dynamic prompt, got %q", result.DynamicSystemPrompt)
+	}
+
+	expected := result.StableSystemPrompt + "\n\n" + result.DynamicSystemPrompt
+	if result.SystemPrompt != expected {
+		t.Fatalf("SystemPrompt should equal StableSystemPrompt + DynamicSystemPrompt, got %q, expected %q", result.SystemPrompt, expected)
+	}
+}
+func TestDefaultBuilderBuildTodoChangeDoesNotChangeStablePrompt(t *testing.T) {
+	t.Parallel()
+
+	builder := NewBuilder()
+	baseInput := BuildInput{
+		Messages: []providertypes.Message{
+			{Role: "user", Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")}},
+		},
+		Metadata: testMetadata(t.TempDir()),
+	}
+
+	first, err := builder.Build(stdcontext.Background(), baseInput)
+	if err != nil {
+		t.Fatalf("first Build() error = %v", err)
+	}
+
+	inputWithTodos := baseInput
+	inputWithTodos.Todos = []agentsession.TodoItem{
+		{
+			ID:      "todo-1",
+			Content: "new todo",
+			Status:  agentsession.TodoStatusPending,
+		},
+	}
+	second, err := builder.Build(stdcontext.Background(), inputWithTodos)
+	if err != nil {
+		t.Fatalf("second Build() error = %v", err)
+	}
+
+	if first.StableSystemPrompt != second.StableSystemPrompt {
+		t.Fatalf("expected StableSystemPrompt unchanged after todo change")
+	}
+	if first.DynamicSystemPrompt == second.DynamicSystemPrompt {
+		t.Fatalf("expected DynamicSystemPrompt to change after todo change")
+	}
+}
+
+func TestDefaultBuilderBuildMemoIsStable(t *testing.T) {
+	t.Parallel()
+
+	builder := NewConfiguredBuilder(MicroCompactConfig{}, stubPromptSectionSource{
+		sections: []promptSection{
+			NewPromptSection("memo", "remember this"),
+		},
+	})
+
+	result, err := builder.Build(stdcontext.Background(), BuildInput{
+		Messages: []providertypes.Message{
+			{Role: "user", Parts: []providertypes.ContentPart{providertypes.NewTextPart("hello")}},
+		},
+		Metadata: testMetadata(t.TempDir()),
+	})
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+
+	if !strings.Contains(result.StableSystemPrompt, "## memo") {
+		t.Fatalf("expected memo in StableSystemPrompt, got %q", result.StableSystemPrompt)
+	}
+	if strings.Contains(result.DynamicSystemPrompt, "## memo") {
+		t.Fatalf("did not expect memo in DynamicSystemPrompt, got %q", result.DynamicSystemPrompt)
+	}
+}
+
+func TestDefaultBuilderBuildStableAndDynamicPreservesBackwardCompat(t *testing.T) {
+	t.Parallel()
+
+	builder := &DefaultBuilder{
+		promptSources: []promptSectionSource{
+			stubPromptSectionSource{sections: []promptSection{{Title: "Old", Content: "old style"}}},
+		},
+		microCompactCfg: MicroCompactConfig{PinChecker: NewDefaultPinChecker()},
+	}
+
+	result, err := builder.Build(stdcontext.Background(), BuildInput{})
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if !strings.Contains(result.SystemPrompt, "old style") {
+		t.Fatalf("expected old style content in system prompt, got %q", result.SystemPrompt)
+	}
+	if !strings.Contains(result.StableSystemPrompt, "old style") {
+		t.Fatalf("expected old style content in StableSystemPrompt, got %q", result.StableSystemPrompt)
+	}
+}
