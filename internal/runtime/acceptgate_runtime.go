@@ -5,22 +5,11 @@ import (
 	"strings"
 
 	"neo-code/internal/partsrender"
-	"neo-code/internal/promptasset"
 	providertypes "neo-code/internal/provider/types"
 	"neo-code/internal/runtime/acceptgate"
 	runtimefacts "neo-code/internal/runtime/facts"
 	agentsession "neo-code/internal/session"
 )
-
-const missingCompletionSignalLimit = 6
-
-// completionProtocolReminderForStreak 根据连续缺失完成信号的次数返回对应协议提示。
-func completionProtocolReminderForStreak(streak int) string {
-	if streak >= missingCompletionSignalLimit-1 {
-		return promptasset.CompletionProtocolFinalReminder()
-	}
-	return promptasset.CompletionProtocolReminder()
-}
 
 // evaluateAcceptGate 从运行态提取事实快照，并执行最终 Accept Gate。
 func (s *Service) evaluateAcceptGate(ctx context.Context, state *runState, assistantMessage providertypes.Message) acceptgate.Report {
@@ -48,7 +37,7 @@ func (s *Service) evaluateAcceptGate(ctx context.Context, state *runState, assis
 		PlanVerify:        planVerify,
 		Facts:             factsSnapshot,
 		Todos:             todos,
-		LastAssistantText: renderAssistantTextWithoutCompletion(assistantMessage),
+		LastAssistantText: strings.TrimSpace(partsrender.RenderDisplayParts(assistantMessage.Parts)),
 	})
 }
 
@@ -106,26 +95,4 @@ func (s *Service) emitAcceptGateReport(state *runState, report acceptgate.Report
 		Summary:    report.Summary,
 		Results:    append([]acceptgate.CheckResult(nil), report.Results...),
 	})
-}
-
-func renderAssistantTextWithoutCompletion(message providertypes.Message) string {
-	text := strings.TrimSpace(partsrender.RenderDisplayParts(message.Parts))
-	if text == "" {
-		return ""
-	}
-	candidate, ok := extractPlanningJSONObjectIfPresent(text, "task_completion")
-	if !ok {
-		return text
-	}
-	return strings.TrimSpace(stripPlanningJSONObjectText(text, candidate))
-}
-
-// stripCompletionSignalFromAssistantMessage 移除仅供 runtime 控制使用的 task_completion JSON，保留用户可见回复。
-func stripCompletionSignalFromAssistantMessage(message providertypes.Message) providertypes.Message {
-	text := renderAssistantTextWithoutCompletion(message)
-	if strings.TrimSpace(text) == strings.TrimSpace(partsrender.RenderDisplayParts(message.Parts)) {
-		return message
-	}
-	message.Parts = []providertypes.ContentPart{providertypes.NewTextPart(text)}
-	return message
 }

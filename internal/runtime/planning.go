@@ -31,14 +31,6 @@ type planTurnOutput struct {
 	DisplayText      string                `json:"-"`
 }
 
-type taskCompletionSignal struct {
-	Completed bool `json:"completed"`
-}
-
-type completionTurnOutput struct {
-	TaskCompletion taskCompletionSignal `json:"task_completion"`
-}
-
 // resolvePlanningStage 根据当前会话模式映射出活动的 planning stage。
 func resolvePlanningStage(session agentsession.Session) string {
 	if agentsession.NormalizeAgentMode(session.AgentMode) == agentsession.AgentModePlan {
@@ -140,23 +132,6 @@ func maybeParsePlanTurnOutput(message providertypes.Message) (planTurnOutput, bo
 	}
 	output.DisplayText = stripPlanningJSONObjectText(text, candidate)
 	return output, true, nil
-}
-
-// maybeParseCompletionTurnOutput 仅在 assistant 明确输出结构化完成信号时返回完成标记。
-func maybeParseCompletionTurnOutput(message providertypes.Message) (bool, error) {
-	text := strings.TrimSpace(partsrender.RenderDisplayParts(message.Parts))
-	if text == "" || !strings.Contains(text, `"task_completion"`) {
-		return false, nil
-	}
-	candidate, ok := extractPlanningJSONObjectIfPresent(text, "task_completion")
-	if !ok {
-		return false, nil
-	}
-	var output completionTurnOutput
-	if err := json.Unmarshal([]byte(candidate.Text), &output); err != nil {
-		return false, nil
-	}
-	return output.TaskCompletion.Completed, nil
 }
 
 // extractPlanningJSONObjectIfPresent 在文本中提取首个配平的 JSON 对象。
@@ -410,12 +385,9 @@ func approveCurrentPlan(session *agentsession.Session, planID string, revision i
 	return nil
 }
 
-// markCurrentPlanCompleted 在结构化完成信号和验收同时通过后推进计划完成态。
-func markCurrentPlanCompleted(session *agentsession.Session, completionSignaled bool) bool {
+// markCurrentPlanCompleted 在验收通过后推进计划完成态。
+func markCurrentPlanCompleted(session *agentsession.Session) bool {
 	if session == nil || session.CurrentPlan == nil {
-		return false
-	}
-	if !completionSignaled {
 		return false
 	}
 	if session.CurrentPlan.Status == agentsession.PlanStatusCompleted {

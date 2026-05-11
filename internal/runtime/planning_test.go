@@ -191,49 +191,6 @@ Explanation still continues.`)},
 	}
 }
 
-func TestMaybeParseCompletionTurnOutput(t *testing.T) {
-	t.Parallel()
-
-	completed, err := maybeParseCompletionTurnOutput(providertypes.Message{
-		Role: providertypes.RoleAssistant,
-		Parts: []providertypes.ContentPart{
-			providertypes.NewTextPart("{\"task_completion\":{\"completed\":true}}\n任务已经完成。"),
-		},
-	})
-	if err != nil {
-		t.Fatalf("maybeParseCompletionTurnOutput() error = %v", err)
-	}
-	if !completed {
-		t.Fatal("expected structured completion signal to be detected")
-	}
-
-	completed, err = maybeParseCompletionTurnOutput(providertypes.Message{
-		Role:  providertypes.RoleAssistant,
-		Parts: []providertypes.ContentPart{providertypes.NewTextPart("plain answer only")},
-	})
-	if err != nil {
-		t.Fatalf("maybeParseCompletionTurnOutput() natural language error = %v", err)
-	}
-	if completed {
-		t.Fatal("expected natural language without completion JSON not to signal completion")
-	}
-}
-
-func TestMaybeParseCompletionTurnOutputIgnoresInvalidStructuredReply(t *testing.T) {
-	t.Parallel()
-
-	completed, err := maybeParseCompletionTurnOutput(providertypes.Message{
-		Role:  providertypes.RoleAssistant,
-		Parts: []providertypes.ContentPart{providertypes.NewTextPart(`{"task_completion":"done"}`)},
-	})
-	if err != nil {
-		t.Fatalf("maybeParseCompletionTurnOutput() error = %v", err)
-	}
-	if completed {
-		t.Fatal("expected invalid completion payload to be ignored")
-	}
-}
-
 func TestExtractPlanningJSONObjectIfPresent(t *testing.T) {
 	t.Parallel()
 
@@ -322,8 +279,8 @@ func TestMarkCurrentPlanCompleted(t *testing.T) {
 			Verify: acceptText("验证一"),
 		},
 	}
-	if !markCurrentPlanCompleted(&session, true) {
-		t.Fatalf("expected draft plan with completion signal to transition to completed")
+	if !markCurrentPlanCompleted(&session) {
+		t.Fatalf("expected draft plan to transition to completed")
 	}
 	if session.CurrentPlan.Status != agentsession.PlanStatusCompleted {
 		t.Fatalf("Status = %q, want completed", session.CurrentPlan.Status)
@@ -331,22 +288,13 @@ func TestMarkCurrentPlanCompleted(t *testing.T) {
 	if !session.PlanCompletionPendingFullReview {
 		t.Fatal("expected completed plan to request one final full-plan review turn")
 	}
-	if markCurrentPlanCompleted(&session, true) {
+	if markCurrentPlanCompleted(&session) {
 		t.Fatalf("expected completed plan not to transition again")
 	}
 
-	session.CurrentPlan = &agentsession.PlanArtifact{
-		ID:       "plan-2",
-		Revision: 1,
-		Status:   agentsession.PlanStatusDraft,
-		Spec: agentsession.PlanSpec{
-			Goal:   "草案计划",
-			Steps:  []string{"步骤一"},
-			Verify: acceptText("验证一"),
-		},
-	}
-	if markCurrentPlanCompleted(&session, false) {
-		t.Fatalf("expected missing completion signal to keep plan unfinished")
+	session2 := agentsession.New("no plan")
+	if markCurrentPlanCompleted(&session2) {
+		t.Fatalf("expected no plan to return false")
 	}
 }
 
