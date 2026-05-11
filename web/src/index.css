@@ -1156,11 +1156,18 @@ html, body, #root {
 .input-box.compacting {
   border-color: var(--warning-muted);
 }
-.compact-status-row {
+.compact-status-panel {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 12px 0;
+  flex-shrink: 0;
+  max-width: 740px;
+  width: calc(100% - var(--space-12));
+  margin: 0 auto var(--space-2);
+  padding: 8px 12px;
+  border: 1px solid var(--warning-muted);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
   color: var(--warning);
   font-size: 12px;
   font-weight: 500;

@@ -19,7 +19,7 @@ import {
 import SlashCommandMenu from './SlashCommandMenu'
 import SkillPicker from './SkillPicker'
 import ModelSelector from './ModelSelector'
-import { LoaderCircle, Send, Square } from 'lucide-react'
+import { Send, Square } from 'lucide-react'
 
 const slashMenuAnchorStyle: React.CSSProperties = {
   position: 'absolute',
@@ -130,7 +130,6 @@ export default function ChatInput() {
   const composingRef = useRef(false)
   const isGenerating = useChatStore((state) => state.isGenerating)
   const isCompacting = useChatStore((state) => state.isCompacting)
-  const compactMessage = useChatStore((state) => state.compactMessage)
   const addMessage = useChatStore((state) => state.addMessage)
   const addSystemMessage = useChatStore((state) => state.addSystemMessage)
   const setGenerating = useChatStore((state) => state.setGenerating)
@@ -457,12 +456,6 @@ export default function ChatInput() {
             </div>
           )}
           <div className={`input-box ${isCompacting ? 'compacting' : ''}`}>
-            {isCompacting && (
-              <div className="compact-status-row" role="status" aria-live="polite">
-                <LoaderCircle size={14} className="compact-status-spinner" />
-                <span>{compactMessage || 'Compacting context...'}</span>
-              </div>
-            )}
             <textarea
               ref={textareaRef}
               value={text}
