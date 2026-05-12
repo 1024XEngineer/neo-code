@@ -103,9 +103,6 @@ func (s *Service) Run(ctx context.Context, input UserInput) (err error) {
 						perEditIDs = append(perEditIDs, checkpoint.PerEditCheckpointIDFromRef(r.CodeCheckpointRef))
 					}
 				}
-				if len(perEditIDs) > 0 {
-					_ = s.perEditStore.RunEndCapture(runEndCtx, perEditIDs)
-				}
 			}
 			diffStr, files, _ := s.perEditStore.RunAggregateDiff(runEndCtx, perEditIDs, nil)
 			var changedFiles []FileDiffEntry
