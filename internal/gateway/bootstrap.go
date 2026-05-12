@@ -474,6 +474,7 @@ func dispatchRunFrameWithSubjectID(
 	callCtx, cancel := withRuntimeOperationTimeout(runExecutionContext)
 	frameSnapshot := frame
 	inputSnapshot := input
+	relay, relayExists := StreamRelayFromContext(ctx)
 	go func() {
 		defer cancel()
 		if err := runtimePort.Run(callCtx, inputSnapshot); err != nil {
@@ -487,6 +488,37 @@ func dispatchRunFrameWithSubjectID(
 					strings.TrimSpace(failedFrame.Error.Code),
 					strings.TrimSpace(failedFrame.Error.Message),
 				)
+			}
+			if relayExists && relay != nil {
+				errorCode := "INTERNAL_ERROR"
+				errorMessage := "run failed"
+				if failedFrame.Error != nil {
+					if normalizedCode := strings.ToUpper(strings.TrimSpace(failedFrame.Error.Code)); normalizedCode != "" {
+						errorCode = normalizedCode
+					}
+					if normalizedMessage := strings.TrimSpace(failedFrame.Error.Message); normalizedMessage != "" {
+						errorMessage = normalizedMessage
+					}
+				}
+				fallbackSessionID := strings.TrimSpace(frameSnapshot.SessionID)
+				if fallbackSessionID == "" {
+					fallbackSessionID = strings.TrimSpace(inputSnapshot.SessionID)
+				}
+				fallbackRunID := strings.TrimSpace(frameSnapshot.RunID)
+				if fallbackRunID == "" {
+					fallbackRunID = strings.TrimSpace(inputSnapshot.RunID)
+				}
+				if fallbackSessionID != "" {
+					relay.PublishRuntimeEvent(RuntimeEvent{
+						Type:      RuntimeEventTypeRunError,
+						SessionID: fallbackSessionID,
+						RunID:     fallbackRunID,
+						Payload: map[string]any{
+							"code":    errorCode,
+							"message": errorMessage,
+						},
+					})
+				}
 			}
 		}
 	}()

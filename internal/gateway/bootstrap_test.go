@@ -1827,6 +1827,120 @@ func TestHandleRunFrameBranches(t *testing.T) {
 	})
 }
 
+func TestDispatchRequestFrameRunFailurePublishesRunErrorEvent(t *testing.T) {
+	relay := NewStreamRelay(StreamRelayOptions{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	connectionID := NewConnectionID()
+	connectionCtx := WithConnectionID(ctx, connectionID)
+	connectionCtx = WithStreamRelay(connectionCtx, relay)
+
+	messageCh := make(chan RelayMessage, 8)
+	if err := relay.RegisterConnection(ConnectionRegistration{
+		ConnectionID: connectionID,
+		Channel:      StreamChannelIPC,
+		Context:      connectionCtx,
+		Cancel:       cancel,
+		Write: func(message RelayMessage) error {
+			messageCh <- message
+			return nil
+		},
+		Close: func() {},
+	}); err != nil {
+		t.Fatalf("register connection: %v", err)
+	}
+	defer relay.dropConnection(connectionID)
+
+	if err := relay.BindConnection(connectionID, StreamBinding{
+		SessionID: "run-session-1",
+		RunID:     "run-1",
+		Channel:   StreamChannelIPC,
+		Role:      StreamRoleNone,
+		Explicit:  true,
+	}); err != nil {
+		t.Fatalf("bind connection: %v", err)
+	}
+
+	runtime := &bootstrapRuntimeStub{
+		runFn: func(_ context.Context, _ RunInput) error {
+			return errors.New("provider error (status=400): Param Incorrect")
+		},
+	}
+	response := dispatchRequestFrame(connectionCtx, MessageFrame{
+		Type:      FrameTypeRequest,
+		Action:    FrameActionRun,
+		RequestID: "req-run-fallback",
+		SessionID: "run-session-1",
+		RunID:     "run-1",
+		InputText: "hello",
+	}, runtime)
+	if response.Type != FrameTypeAck {
+		t.Fatalf("response type = %q, want %q", response.Type, FrameTypeAck)
+	}
+
+	var notification protocol.JSONRPCNotification
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case message := <-messageCh:
+			payload, ok := message.Payload.(protocol.JSONRPCNotification)
+			if !ok {
+				continue
+			}
+			if payload.Method != protocol.MethodGatewayEvent {
+				continue
+			}
+			eventFrame := MessageFrame{}
+			raw, err := json.Marshal(payload.Params)
+			if err != nil {
+				t.Fatalf("marshal payload params: %v", err)
+			}
+			if err := json.Unmarshal(raw, &eventFrame); err != nil {
+				t.Fatalf("unmarshal event frame: %v", err)
+			}
+			payloadMap, _ := eventFrame.Payload.(map[string]any)
+			if strings.TrimSpace(fmt.Sprint(payloadMap["event_type"])) != string(RuntimeEventTypeRunError) {
+				continue
+			}
+			notification = payload
+			goto ASSERT
+		case <-deadline:
+			t.Fatal("expected fallback run_error event")
+		}
+	}
+
+ASSERT:
+	if notification.Method != protocol.MethodGatewayEvent {
+		t.Fatalf("notification method = %q, want %q", notification.Method, protocol.MethodGatewayEvent)
+	}
+	eventFrame := MessageFrame{}
+	raw, err := json.Marshal(notification.Params)
+	if err != nil {
+		t.Fatalf("marshal notification params: %v", err)
+	}
+	if err := json.Unmarshal(raw, &eventFrame); err != nil {
+		t.Fatalf("unmarshal notification params: %v", err)
+	}
+	if eventFrame.SessionID != "run-session-1" {
+		t.Fatalf("event session_id = %q, want run-session-1", eventFrame.SessionID)
+	}
+	if eventFrame.RunID != "run-1" {
+		t.Fatalf("event run_id = %q, want run-1", eventFrame.RunID)
+	}
+	payloadMap, ok := eventFrame.Payload.(map[string]any)
+	if !ok {
+		t.Fatalf("event payload type = %T, want map[string]any", eventFrame.Payload)
+	}
+	if strings.TrimSpace(fmt.Sprint(payloadMap["event_type"])) != string(RuntimeEventTypeRunError) {
+		t.Fatalf("event_type = %#v, want %q", payloadMap["event_type"], RuntimeEventTypeRunError)
+	}
+	envelope, _ := payloadMap["payload"].(map[string]any)
+	if strings.TrimSpace(fmt.Sprint(envelope["message"])) != "run failed" {
+		t.Fatalf("payload.message = %#v, want run failed", envelope["message"])
+	}
+}
+
 func TestRuntimeCallFailedFrameSanitizesErrorAndMapsCode(t *testing.T) {
 	var buf bytes.Buffer
 	ctx := WithGatewayLogger(context.Background(), log.New(&buf, "", 0))
