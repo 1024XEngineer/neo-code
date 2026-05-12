@@ -820,6 +820,44 @@ func TestRunTerminalEventUntracksActiveRun(t *testing.T) {
 	}
 }
 
+func TestRefreshActiveCardsMarksStalledRunAsFailure(t *testing.T) {
+	adapter := newTestAdapter(t)
+	base := time.Now().UTC()
+	adapter.nowFn = func() time.Time { return base }
+
+	sessionID := BuildSessionID("chat-stalled")
+	runID := BuildRunID("msg-stalled")
+	adapter.trackSession(sessionID, runID, "chat-stalled", "stalled task")
+	if err := adapter.ensureRunCard(context.Background(), sessionID, runID); err != nil {
+		t.Fatalf("ensureRunCard: %v", err)
+	}
+
+	adapter.nowFn = func() time.Time { return base.Add(defaultRunStallTimeout + 5*time.Second) }
+	adapter.refreshActiveCards(context.Background())
+
+	adapter.mu.RLock()
+	_, exists := adapter.activeRuns[runBindingKey(sessionID, runID)]
+	adapter.mu.RUnlock()
+	if exists {
+		t.Fatalf("expected stalled run to be untracked")
+	}
+
+	msgs := adapterTestMessenger(adapter).snapshot()
+	foundFailure := false
+	for _, message := range msgs {
+		if message.kind != "update_card" {
+			continue
+		}
+		if message.runCard.Result == "failure" && strings.Contains(message.runCard.Summary, "超过 3 分钟未收到网关事件") {
+			foundFailure = true
+			break
+		}
+	}
+	if !foundFailure {
+		t.Fatalf("expected failure card update for stalled run, got %#v", msgs)
+	}
+}
+
 func TestPermissionRequestedAfterRunTerminalDoesNotReopenApprovalCard(t *testing.T) {
 	adapter := newTestAdapter(t)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1658,6 +1696,27 @@ func TestHelperFunctionsCoverFallbackBranches(t *testing.T) {
 		"payload": map[string]any{"to": "plan"},
 	}, "thinking"); status != "planning" {
 		t.Fatalf("status = %q, want planning", status)
+	}
+	if stalled := shouldMarkRunStalled(sessionBinding{
+		Result:         "pending",
+		ApprovalStatus: "none",
+		LastEventTime:  time.Now().UTC().Add(-(defaultRunStallTimeout + time.Second)),
+	}, time.Now().UTC()); !stalled {
+		t.Fatal("expected stalled run to be detected")
+	}
+	if stalled := shouldMarkRunStalled(sessionBinding{
+		Result:         "pending",
+		ApprovalStatus: "pending",
+		LastEventTime:  time.Now().UTC().Add(-(defaultRunStallTimeout + time.Second)),
+	}, time.Now().UTC()); stalled {
+		t.Fatal("did not expect approval-pending run to be marked stalled")
+	}
+	if stalled := shouldMarkRunStalled(sessionBinding{
+		Result:         "success",
+		ApprovalStatus: "none",
+		LastEventTime:  time.Now().UTC().Add(-(defaultRunStallTimeout + time.Second)),
+	}, time.Now().UTC()); stalled {
+		t.Fatal("did not expect terminal run to be marked stalled")
 	}
 	if status := terminalStatusFromResult("success"); status != "success" {
 		t.Fatalf("terminal status = %q, want success", status)

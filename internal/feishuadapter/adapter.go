@@ -19,6 +19,7 @@ import (
 const defaultSignatureMaxSkew = 5 * time.Minute
 const defaultProgressNotifyInterval = 2 * time.Second
 const defaultCardRefreshInterval = 1500 * time.Millisecond
+const defaultRunStallTimeout = 3 * time.Minute
 const defaultPermissionCardDismissDelay = 2 * time.Second
 
 type approvalEntry struct {
@@ -52,6 +53,7 @@ type sessionBinding struct {
 	LastSummary     string
 	AsyncRewakeHint string
 	RunStartTime    time.Time
+	LastEventTime   time.Time
 }
 
 // Adapter 负责桥接飞书回调与 Gateway JSON-RPC 长连接。
@@ -314,6 +316,7 @@ func (a *Adapter) bindThenRun(ctx context.Context, sessionID string, runID strin
 
 // trackSession 记录 session 到飞书 chat 的映射，用于事件回推。
 func (a *Adapter) trackSession(sessionID string, runID string, chatID string, taskName string) {
+	now := a.nowFn()
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	key := runBindingKey(sessionID, runID)
@@ -325,7 +328,8 @@ func (a *Adapter) trackSession(sessionID string, runID string, chatID string, ta
 		Status:         "thinking",
 		ApprovalStatus: "none",
 		Result:         "pending",
-		RunStartTime:   a.nowFn(),
+		RunStartTime:   now,
+		LastEventTime:  now,
 	}
 	if sessionID != "" && chatID != "" {
 		a.sessionChats[sessionID] = chatID
@@ -401,6 +405,7 @@ func (a *Adapter) handleGatewayEvent(ctx context.Context, raw json.RawMessage) {
 	}
 	switch strings.ToLower(strings.TrimSpace(eventType)) {
 	case "run_progress":
+		a.touchRunEvent(sessionID, runID)
 		if envelope != nil {
 			if runtimeType := readString(envelope, "runtime_event_type"); runtimeType != "" {
 				if strings.EqualFold(runtimeType, "permission_requested") {
@@ -463,9 +468,11 @@ func (a *Adapter) handleGatewayEvent(ctx context.Context, raw json.RawMessage) {
 		// 除审批请求外，内部 runtime_event_type 不直接透出到飞书用户视图，避免暴露控制面细节。
 		return
 	case "run_done":
+		a.touchRunEvent(sessionID, runID)
 		a.markRunTerminal(sessionID, runID, "success", extractSummaryText(envelope), "")
 		a.untrackRun(sessionID, runID)
 	case "run_error":
+		a.touchRunEvent(sessionID, runID)
 		a.markRunTerminal(sessionID, runID, "failure", "", extractUserVisibleErrorText(envelope))
 		a.untrackRun(sessionID, runID)
 	}
@@ -551,14 +558,37 @@ func (a *Adapter) refreshActiveCardsLoop(ctx context.Context) {
 
 // refreshActiveCards 对当前所有活跃 run 更新卡片，仅刷新耗时字段变化。
 func (a *Adapter) refreshActiveCards(ctx context.Context) {
+	now := a.nowFn()
+	staleRuns := make([]sessionBinding, 0)
+	snapshot := make([]sessionBinding, 0)
 	a.mu.RLock()
-	snapshot := make([]sessionBinding, 0, len(a.activeRuns))
 	for _, binding := range a.activeRuns {
+		if shouldMarkRunStalled(binding, now) {
+			staleRuns = append(staleRuns, binding)
+			continue
+		}
 		if strings.TrimSpace(binding.CardID) != "" {
 			snapshot = append(snapshot, binding)
 		}
 	}
 	a.mu.RUnlock()
+
+	for _, stale := range staleRuns {
+		a.safeLog(
+			"run stalled: mark terminal failure session_id=%s run_id=%s idle_for=%s",
+			stale.SessionID,
+			stale.RunID,
+			now.Sub(stale.LastEventTime).String(),
+		)
+		a.markRunTerminal(
+			stale.SessionID,
+			stale.RunID,
+			"failure",
+			"",
+			"运行中断：超过 3 分钟未收到网关事件，请检查 gateway 连接、网络与证书配置。",
+		)
+		a.untrackRun(stale.SessionID, stale.RunID)
+	}
 
 	for _, binding := range snapshot {
 		callCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
@@ -567,6 +597,19 @@ func (a *Adapter) refreshActiveCards(ctx context.Context) {
 		}
 		cancel()
 	}
+}
+
+// touchRunEvent 记录 run 的最近事件时间，用于识别“长时间无事件”的僵尸运行态。
+func (a *Adapter) touchRunEvent(sessionID string, runID string) {
+	key := runBindingKey(sessionID, runID)
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	binding, ok := a.activeRuns[key]
+	if !ok {
+		return
+	}
+	binding.LastEventTime = a.nowFn()
+	a.activeRuns[key] = binding
 }
 
 // ensureRunCard 为新受理的 run 发送单独状态卡片，集中展示执行状态与审批结果。
@@ -1612,6 +1655,20 @@ func deriveRunStatus(runtimeType string, envelope map[string]any, current string
 		return "thinking"
 	}
 	return current
+}
+
+// shouldMarkRunStalled 判断 run 是否进入“僵尸态”：未结束且长时间未收到事件。
+func shouldMarkRunStalled(binding sessionBinding, now time.Time) bool {
+	if strings.TrimSpace(strings.ToLower(binding.Result)) != "pending" {
+		return false
+	}
+	if strings.TrimSpace(strings.ToLower(binding.ApprovalStatus)) == "pending" {
+		return false
+	}
+	if binding.LastEventTime.IsZero() {
+		return false
+	}
+	return now.Sub(binding.LastEventTime) > defaultRunStallTimeout
 }
 
 // terminalStatusFromResult 将终态结果映射为卡片状态字段，避免 run 已结束仍显示 running。
