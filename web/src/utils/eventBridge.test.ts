@@ -925,6 +925,29 @@ describe("eventBridge", () => {
     expect(useUIStore.getState().toasts).toHaveLength(0);
   });
 
+  it("TodoConflict invalid_transition does NOT show toast", () => {
+    const api = createMockGatewayAPI();
+    handleGatewayEvent(
+      {
+        type: EventType.TodoConflict,
+        payload: {
+          payload: {
+            runtime_event_type: EventType.TodoConflict,
+            payload: { action: "update", reason: "invalid_transition" },
+          },
+        },
+        session_id: "sess-1",
+        run_id: "run-1",
+      },
+      api,
+    );
+
+    expect(useRuntimeInsightStore.getState().todoConflict?.reason).toBe(
+      "invalid_transition",
+    );
+    expect(useUIStore.getState().toasts).toHaveLength(0);
+  });
+
   it("TodoConflict invalid_arguments shows info toast", () => {
     const api = createMockGatewayAPI();
     handleGatewayEvent(
