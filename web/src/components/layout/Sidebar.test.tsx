@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { readFileSync } from 'node:fs'
 import Sidebar from './Sidebar'
 import { useChatStore } from '@/stores/useChatStore'
 import { useGatewayStore } from '@/stores/useGatewayStore'
@@ -8,6 +9,7 @@ import { useUIStore } from '@/stores/useUIStore'
 import { useWorkspaceStore } from '@/stores/useWorkspaceStore'
 
 let mockGatewayAPI: any = null
+const appCss = readFileSync('src/index.css', 'utf-8')
 
 vi.mock('@/context/RuntimeProvider', () => ({
   useGatewayAPI: () => mockGatewayAPI,
@@ -232,6 +234,10 @@ describe('Sidebar ProviderModal', () => {
     const arkCard = providerCard('Ark')
     const models = arkCard.querySelector('.config-card-models')
     expect(models).toBeInstanceOf(HTMLElement)
+    const modelRule = appCss.match(/\.config-card-models\s*{(?<body>[^}]*)}/)?.groups?.body ?? ''
+    expect(modelRule).toContain('flex-wrap: nowrap')
+    expect(modelRule).toContain('overflow-x: auto')
+    expect(modelRule).toContain('overflow-y: hidden')
     expect(models?.querySelectorAll('.config-card-model-tag')).toHaveLength(16)
     expect(within(arkCard).getByRole('button', { name: /选择/i })).toBeTruthy()
     expect(within(arkCard).getByRole('button', { name: /删除/i })).toBeTruthy()
