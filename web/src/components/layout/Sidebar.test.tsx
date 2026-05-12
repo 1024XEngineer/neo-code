@@ -199,6 +199,44 @@ describe('Sidebar ProviderModal', () => {
     expect(screen.getByText('switch failed')).toBeInTheDocument()
   })
 
+  it('keeps provider models in a single scrollable row when there are many models', async () => {
+    mockGatewayAPI.listProviders = vi.fn().mockResolvedValue({
+      payload: {
+        providers: [
+          {
+            id: 'ark',
+            name: 'Ark',
+            source: 'custom',
+            selected: false,
+            models: Array.from({ length: 16 }, (_, index) => ({
+              id: `ark-code-${index + 1}`,
+              name: `ark-code-${index + 1}`,
+            })),
+          },
+        ],
+      },
+    })
+    mockGatewayAPI.getSessionModel = vi.fn().mockResolvedValue({
+      payload: {
+        provider_id: 'openai',
+        model_id: 'gpt-5.4',
+        model_name: 'GPT-5.4',
+        provider: 'openai',
+      },
+    })
+
+    render(<Sidebar />)
+    fireEvent.click(screen.getByRole('button', { name: /供应商/i }))
+    await screen.findByText('Ark')
+
+    const arkCard = providerCard('Ark')
+    const models = arkCard.querySelector('.config-card-models')
+    expect(models).toBeInstanceOf(HTMLElement)
+    expect(models?.querySelectorAll('.config-card-model-tag')).toHaveLength(16)
+    expect(within(arkCard).getByRole('button', { name: /选择/i })).toBeTruthy()
+    expect(within(arkCard).getByRole('button', { name: /删除/i })).toBeTruthy()
+  })
+
   it('only shows the expanded workspace style on the current workspace', async () => {
     const switchWorkspace = vi.fn().mockResolvedValue(undefined)
     useWorkspaceStore.setState({
