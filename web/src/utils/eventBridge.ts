@@ -982,9 +982,13 @@ export function handleGatewayEvent(
       const payload = eventPayload as TodoEventPayload | undefined;
       if (payload) insightStore.setTodoConflict(payload);
       const reason = strField(eventPayload, "reason");
-      // revision_conflict 是可恢复冲突，仅在面板显示，不弹全局 toast;
+      // revision_conflict 与 invalid_transition 是可恢复冲突，仅在面板显示，不弹全局 toast;
       // 其余冲突降级为 info 避免打断聊天体验。
-      if (reason && reason !== "revision_conflict") {
+      if (
+        reason &&
+        reason !== "revision_conflict" &&
+        reason !== "invalid_transition"
+      ) {
         uiStore.showToast(`Todo conflict: ${reason}`, "info");
       }
       break;
