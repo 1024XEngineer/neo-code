@@ -167,14 +167,21 @@ func (a *Adapter) HandleMessage(ctx context.Context, event FeishuMessageEvent) e
 	if chatType == "" {
 		chatType = "p2p"
 	}
-	if chatType == "group" && !isMentionCurrentBot(event, a.cfg) {
-		return nil
-	}
+	a.safeLog(
+		"feishu message received event_id=%s message_id=%s chat_id=%s chat_type=%s mentions=%d",
+		strings.TrimSpace(event.EventID),
+		strings.TrimSpace(event.MessageID),
+		strings.TrimSpace(event.ChatID),
+		chatType,
+		len(event.Mentions),
+	)
 	if strings.TrimSpace(event.MessageID) == "" || strings.TrimSpace(event.ChatID) == "" {
+		a.safeLog("feishu message rejected: missing message_id or chat_id")
 		return fmt.Errorf("missing message_id or chat_id")
 	}
 	dedupeKey := "msg:" + strings.TrimSpace(event.EventID) + ":" + strings.TrimSpace(event.MessageID)
 	if !a.idem.TryStart(dedupeKey, a.nowFn()) {
+		a.safeLog("feishu message skipped by idempotency dedupe_key=%s", dedupeKey)
 		return nil
 	}
 	succeeded := false
@@ -188,9 +195,11 @@ func (a *Adapter) HandleMessage(ctx context.Context, event FeishuMessageEvent) e
 
 	text := strings.TrimSpace(event.ContentText)
 	if text == "" {
+		a.safeLog("feishu message ignored: empty text content message_id=%s", strings.TrimSpace(event.MessageID))
 		return nil
 	}
 	if handled, err := a.tryHandleTextAction(ctx, event.ChatID, text); handled {
+		a.safeLog("feishu text action handled chat_id=%s err=%v", strings.TrimSpace(event.ChatID), err)
 		if err == nil {
 			succeeded = true
 		}
@@ -199,11 +208,13 @@ func (a *Adapter) HandleMessage(ctx context.Context, event FeishuMessageEvent) e
 
 	sessionID := BuildSessionID(event.ChatID)
 	runID := BuildRunID(event.MessageID)
+	a.safeLog("feishu message dispatching run session_id=%s run_id=%s chat_id=%s", sessionID, runID, strings.TrimSpace(event.ChatID))
 	if err := a.bindThenRun(ctx, sessionID, runID, event.ChatID, text); err != nil {
 		a.safeLog("handle message failed: %v", err)
 		_ = a.messenger.SendText(context.Background(), event.ChatID, "任务受理失败，请稍后重试。")
 		return err
 	}
+	a.safeLog("feishu message accepted session_id=%s run_id=%s", sessionID, runID)
 	succeeded = true
 	return nil
 }
@@ -275,18 +286,25 @@ func (a *Adapter) HandleCardAction(ctx context.Context, event FeishuCardActionEv
 func (a *Adapter) bindThenRun(ctx context.Context, sessionID string, runID string, chatID string, text string) error {
 	callCtx, cancel := context.WithTimeout(ctx, a.cfg.RequestTimeout)
 	defer cancel()
+	a.safeLog("bindThenRun authenticate start session_id=%s run_id=%s", sessionID, runID)
 	if err := a.gateway.Authenticate(callCtx); err != nil {
+		a.safeLog("bindThenRun authenticate failed session_id=%s run_id=%s err=%v", sessionID, runID, err)
 		return err
 	}
+	a.safeLog("bindThenRun bind stream start session_id=%s run_id=%s", sessionID, runID)
 	if err := a.gateway.BindStream(callCtx, sessionID, runID); err != nil {
+		a.safeLog("bindThenRun bind stream failed session_id=%s run_id=%s err=%v", sessionID, runID, err)
 		return err
 	}
 	a.trackSession(sessionID, runID, chatID, text)
+	a.safeLog("bindThenRun gateway run start session_id=%s run_id=%s", sessionID, runID)
 	if err := a.gateway.Run(callCtx, sessionID, runID, text); err != nil {
 		// run 受理失败时及时回收活跃绑定，避免重连阶段反复重绑无效 run。
 		a.untrackRun(sessionID, runID)
+		a.safeLog("bindThenRun gateway run failed session_id=%s run_id=%s err=%v", sessionID, runID, err)
 		return err
 	}
+	a.safeLog("bindThenRun gateway run accepted session_id=%s run_id=%s", sessionID, runID)
 	if err := a.ensureRunCard(context.Background(), sessionID, runID); err != nil {
 		a.safeLog("send status card failed: %v", err)
 		_ = a.messenger.SendText(context.Background(), chatID, "任务已受理，正在执行。")
@@ -375,8 +393,10 @@ func (a *Adapter) handleGatewayEvent(ctx context.Context, raw json.RawMessage) {
 		a.safeLog("decode gateway event failed: %v", err)
 		return
 	}
+	a.safeLog("gateway event received type=%s session_id=%s run_id=%s", eventType, sessionID, runID)
 	chatID := a.lookupChatID(sessionID, runID)
 	if chatID == "" {
+		a.safeLog("gateway event ignored: no chat binding type=%s session_id=%s run_id=%s", eventType, sessionID, runID)
 		return
 	}
 	switch strings.ToLower(strings.TrimSpace(eventType)) {
@@ -555,18 +575,24 @@ func (a *Adapter) ensureRunCard(ctx context.Context, sessionID string, runID str
 	binding, ok := a.activeRuns[runBindingKey(sessionID, runID)]
 	a.mu.RUnlock()
 	if !ok || strings.TrimSpace(binding.ChatID) == "" {
+		a.safeLog("ensureRunCard skipped: no binding or empty chat session_id=%s run_id=%s", sessionID, runID)
 		return nil
 	}
 	if strings.TrimSpace(binding.CardID) != "" {
+		a.safeLog("ensureRunCard updating existing card session_id=%s run_id=%s card_id=%s", sessionID, runID, strings.TrimSpace(binding.CardID))
 		return a.messenger.UpdateCard(ctx, binding.CardID, binding.statusCardPayload())
 	}
+	a.safeLog("ensureRunCard creating status card session_id=%s run_id=%s chat_id=%s", sessionID, runID, strings.TrimSpace(binding.ChatID))
 	cardID, err := a.messenger.SendStatusCard(ctx, binding.ChatID, binding.statusCardPayload())
 	if err != nil {
+		a.safeLog("ensureRunCard create failed session_id=%s run_id=%s err=%v", sessionID, runID, err)
 		return err
 	}
 	if strings.TrimSpace(cardID) == "" {
-		return nil
+		a.safeLog("ensureRunCard create returned empty card_id session_id=%s run_id=%s", sessionID, runID)
+		return fmt.Errorf("create status card returned empty card id")
 	}
+	a.safeLog("ensureRunCard created status card session_id=%s run_id=%s card_id=%s", sessionID, runID, strings.TrimSpace(cardID))
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	current := a.activeRuns[runBindingKey(sessionID, runID)]
@@ -597,6 +623,9 @@ func (a *Adapter) handleRunProgressCard(ctx context.Context, sessionID string, r
 	a.activeRuns[key] = updated
 	a.mu.Unlock()
 	if !changed || cardID == "" {
+		if changed && cardID == "" {
+			a.safeLog("handleRunProgressCard skipped update: empty card_id session_id=%s run_id=%s runtime_type=%s", sessionID, runID, runtimeType)
+		}
 		return
 	}
 	if err := a.messenger.UpdateCard(ctx, cardID, updated.statusCardPayload()); err != nil {
@@ -858,15 +887,34 @@ func (a *Adapter) markRunTerminal(sessionID string, runID string, result string,
 	} else if strings.TrimSpace(fallback) != "" {
 		binding.LastSummary = strings.TrimSpace(fallback)
 	}
-	binding.Result = strings.TrimSpace(result)
-	binding.Status = "running"
+	normalizedResult := strings.TrimSpace(strings.ToLower(result))
+	binding.Result = normalizedResult
+	binding.Status = terminalStatusFromResult(normalizedResult)
 	cardID := strings.TrimSpace(binding.CardID)
+	chatID := strings.TrimSpace(binding.ChatID)
 	payload := binding.statusCardPayload()
 	a.activeRuns[key] = binding
 	a.mu.Unlock()
 	if cardID != "" {
-		if err := a.messenger.UpdateCard(context.Background(), cardID, payload); err != nil {
+		callCtx, cancel := context.WithTimeout(context.Background(), a.cfg.RequestTimeout)
+		err := a.messenger.UpdateCard(callCtx, cardID, payload)
+		cancel()
+		if err != nil {
 			a.safeLog("update terminal card failed: %v", err)
+			if chatID != "" {
+				terminalText := buildTerminalFallbackText(normalizedResult, binding.LastSummary)
+				if sendErr := a.messenger.SendText(context.Background(), chatID, terminalText); sendErr != nil {
+					a.safeLog("send terminal fallback text failed: %v", sendErr)
+				}
+			}
+		}
+		return
+	}
+	a.safeLog("markRunTerminal skipped card update: empty card_id session_id=%s run_id=%s result=%s", sessionID, runID, strings.TrimSpace(result))
+	if chatID != "" {
+		terminalText := buildTerminalFallbackText(normalizedResult, binding.LastSummary)
+		if err := a.messenger.SendText(context.Background(), chatID, terminalText); err != nil {
+			a.safeLog("send terminal fallback text failed: %v", err)
 		}
 	}
 }
@@ -1564,6 +1612,33 @@ func deriveRunStatus(runtimeType string, envelope map[string]any, current string
 		return "thinking"
 	}
 	return current
+}
+
+// terminalStatusFromResult 将终态结果映射为卡片状态字段，避免 run 已结束仍显示 running。
+func terminalStatusFromResult(result string) string {
+	switch strings.TrimSpace(strings.ToLower(result)) {
+	case "success":
+		return "success"
+	case "failure":
+		return "failure"
+	default:
+		return "running"
+	}
+}
+
+// buildTerminalFallbackText 在终态卡片更新失败时提供可见文本回退，避免飞书侧感知为“无响应”。
+func buildTerminalFallbackText(result string, summary string) string {
+	trimmedSummary := strings.TrimSpace(summary)
+	if strings.TrimSpace(strings.ToLower(result)) == "success" {
+		if trimmedSummary != "" {
+			return "任务已完成：\n" + trimmedSummary
+		}
+		return "任务已完成。"
+	}
+	if trimmedSummary != "" {
+		return "任务执行失败：\n" + trimmedSummary
+	}
+	return "任务执行失败，请稍后重试。"
 }
 
 // buildTaskName 生成卡片标题中使用的任务摘要，保留原始输入首行信息且控制长度。

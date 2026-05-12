@@ -381,7 +381,7 @@ func TestRunFailureCleansTrackedRunBinding(t *testing.T) {
 	}
 }
 
-func TestGroupMessageWithoutMentionIgnored(t *testing.T) {
+func TestGroupMessageWithoutMentionAccepted(t *testing.T) {
 	adapter := newTestAdapter(t)
 	body := messageEventBodyWithChatType("evt-group", "msg-group", "chat-group", "hello group", "group")
 	request := signedRequest(t, adapter.cfg.SigningSecret, body)
@@ -390,8 +390,8 @@ func TestGroupMessageWithoutMentionIgnored(t *testing.T) {
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", recorder.Code)
 	}
-	if adapterTestGateway(adapter).runCount != 0 {
-		t.Fatalf("run count = %d, want 0", adapterTestGateway(adapter).runCount)
+	if adapterTestGateway(adapter).runCount != 1 {
+		t.Fatalf("run count = %d, want 1", adapterTestGateway(adapter).runCount)
 	}
 }
 
@@ -434,7 +434,7 @@ func TestGroupMessageWithMentionAccepted(t *testing.T) {
 	}
 }
 
-func TestGroupMessageWithNonBotMentionIgnored(t *testing.T) {
+func TestGroupMessageWithNonBotMentionAccepted(t *testing.T) {
 	adapter := newTestAdapter(t)
 	content, _ := json.Marshal(map[string]string{"text": "<at user_id=\"ou_other\">alice</at> hi"})
 	payload := map[string]any{
@@ -468,8 +468,8 @@ func TestGroupMessageWithNonBotMentionIgnored(t *testing.T) {
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", recorder.Code)
 	}
-	if adapterTestGateway(adapter).runCount != 0 {
-		t.Fatalf("run count = %d, want 0", adapterTestGateway(adapter).runCount)
+	if adapterTestGateway(adapter).runCount != 1 {
+		t.Fatalf("run count = %d, want 1", adapterTestGateway(adapter).runCount)
 	}
 }
 
@@ -1658,6 +1658,24 @@ func TestHelperFunctionsCoverFallbackBranches(t *testing.T) {
 		"payload": map[string]any{"to": "plan"},
 	}, "thinking"); status != "planning" {
 		t.Fatalf("status = %q, want planning", status)
+	}
+	if status := terminalStatusFromResult("success"); status != "success" {
+		t.Fatalf("terminal status = %q, want success", status)
+	}
+	if status := terminalStatusFromResult("failure"); status != "failure" {
+		t.Fatalf("terminal status = %q, want failure", status)
+	}
+	if status := terminalStatusFromResult("unknown"); status != "running" {
+		t.Fatalf("terminal status = %q, want running fallback", status)
+	}
+	if text := buildTerminalFallbackText("success", "执行完成"); text != "任务已完成：\n执行完成" {
+		t.Fatalf("terminal fallback text = %q, want success summary", text)
+	}
+	if text := buildTerminalFallbackText("failure", "命令执行失败"); text != "任务执行失败：\n命令执行失败" {
+		t.Fatalf("terminal fallback text = %q, want failure summary", text)
+	}
+	if text := buildTerminalFallbackText("failure", ""); text != "任务执行失败，请稍后重试。" {
+		t.Fatalf("terminal fallback text = %q, want failure default", text)
 	}
 	safeLogAdapter := &Adapter{}
 	safeLogAdapter.safeLog("ignored")
