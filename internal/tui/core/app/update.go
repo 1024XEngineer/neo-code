@@ -3025,6 +3025,7 @@ var runtimeEventHandlerRegistry = map[tuiservices.EventType]func(*App, tuiservic
 	tuiservices.EventUserQuestionAnswered:                     runtimeEventUserQuestionResolvedHandler,
 	tuiservices.EventUserQuestionSkipped:                      runtimeEventUserQuestionResolvedHandler,
 	tuiservices.EventUserQuestionTimeout:                      runtimeEventUserQuestionResolvedHandler,
+	tuiservices.EventCompactStart:                             runtimeEventCompactStartHandler,
 	tuiservices.EventCompactApplied:                           runtimeEventCompactDoneHandler,
 	tuiservices.EventCompactError:                             runtimeEventCompactErrorHandler,
 	tuiservices.EventTokenUsage:                               runtimeEventTokenUsageHandler,
@@ -4696,6 +4697,7 @@ func runtimeEventCompactDoneHandler(a *App, event tuiservices.RuntimeEvent) bool
 		return false
 	}
 	a.state.ExecutionError = ""
+	a.state.IsCompacting = false
 	a.state.StatusText = fmt.Sprintf("Compact(%s) saved %.1f%% context", payload.TriggerMode, payload.SavedRatio*100)
 	a.appendInlineMessage(
 		roleSystem,
@@ -4719,8 +4721,26 @@ func runtimeEventCompactErrorHandler(a *App, event tuiservices.RuntimeEvent) boo
 	}
 	message := fmt.Sprintf("Compact(%s) failed: %s", payload.TriggerMode, payload.Message)
 	a.state.ExecutionError = message
+	a.state.IsCompacting = false
 	a.state.StatusText = message
 	a.appendInlineMessage(roleError, message)
+	return true
+}
+
+func runtimeEventCompactStartHandler(a *App, event tuiservices.RuntimeEvent) bool {
+	mode, ok := event.Payload.(string)
+	if !ok {
+		return false
+	}
+	a.state.IsCompacting = true
+	a.state.StreamingReply = false
+	a.state.CurrentTool = ""
+	if mode != "" {
+		a.state.StatusText = fmt.Sprintf("Compacting (%s)...", mode)
+	} else {
+		a.state.StatusText = statusCompacting
+	}
+	a.state.ExecutionError = ""
 	return true
 }
 func (a *App) appendAssistantChunk(chunk string) {
