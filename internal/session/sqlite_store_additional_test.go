@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -99,6 +100,212 @@ func TestSQLiteStoreUpdateSessionTitlePersistsSanitizedTitle(t *testing.T) {
 	}
 	if loaded.Title != "line1 line2" {
 		t.Fatalf("expected sanitized single-line title, got %q", loaded.Title)
+	}
+}
+
+func TestSQLiteStoreConcurrentAppendMessagesSerializesWrites(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := newTestStore(t)
+	created, err := store.CreateSession(ctx, CreateSessionInput{
+		ID:    "concurrent_append",
+		Title: "Concurrent Append",
+	})
+	if err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+
+	const workers = 32
+	start := make(chan struct{})
+	errs := make(chan error, workers)
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		i := i
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			errs <- store.AppendMessages(ctx, AppendMessagesInput{
+				SessionID: created.ID,
+				Messages: []providertypes.Message{{
+					Role:  providertypes.RoleUser,
+					Parts: []providertypes.ContentPart{providertypes.NewTextPart("message " + buildIndexedSuffix(i))},
+				}},
+				UpdatedAt: created.UpdatedAt.Add(time.Duration(i) * time.Millisecond),
+				Provider:  "provider",
+				Model:     "model",
+				Workdir:   created.Workdir,
+			})
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("AppendMessages() concurrent error = %v", err)
+		}
+	}
+
+	loaded, err := store.LoadSession(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("LoadSession() error = %v", err)
+	}
+	if len(loaded.Messages) != workers {
+		t.Fatalf("message count = %d, want %d", len(loaded.Messages), workers)
+	}
+	db := store.DB()
+	var lastSeq, messageCount, distinctSeq int
+	if err := db.QueryRowContext(ctx, `SELECT last_seq, message_count FROM sessions WHERE id = ?`, created.ID).
+		Scan(&lastSeq, &messageCount); err != nil {
+		t.Fatalf("query session counters: %v", err)
+	}
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(DISTINCT seq) FROM messages WHERE session_id = ?`, created.ID).
+		Scan(&distinctSeq); err != nil {
+		t.Fatalf("query distinct seq: %v", err)
+	}
+	if lastSeq != workers || messageCount != workers || distinctSeq != workers {
+		t.Fatalf("counters = lastSeq:%d messageCount:%d distinctSeq:%d, want %d", lastSeq, messageCount, distinctSeq, workers)
+	}
+}
+
+func TestSQLiteStoreConcurrentMixedWritesRemainLoadable(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := newTestStore(t)
+	created, err := store.CreateSession(ctx, CreateSessionInput{
+		ID:    "concurrent_mixed",
+		Title: "Concurrent Mixed",
+	})
+	if err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+
+	const workers = 24
+	start := make(chan struct{})
+	errs := make(chan error, workers)
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		i := i
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			switch i % 3 {
+			case 0:
+				errs <- store.AppendMessages(ctx, AppendMessagesInput{
+					SessionID: created.ID,
+					Messages: []providertypes.Message{{
+						Role:  providertypes.RoleAssistant,
+						Parts: []providertypes.ContentPart{providertypes.NewTextPart("assistant " + buildIndexedSuffix(i))},
+					}},
+					UpdatedAt: created.UpdatedAt.Add(time.Duration(i) * time.Millisecond),
+				})
+			case 1:
+				errs <- store.UpdateSessionTitle(ctx, UpdateSessionTitleInput{
+					SessionID: created.ID,
+					UpdatedAt: created.UpdatedAt.Add(time.Duration(i) * time.Millisecond),
+					Title:     "title " + buildIndexedSuffix(i),
+				})
+			default:
+				head := created.HeadSnapshot()
+				head.Provider = "provider"
+				head.Model = "model-" + buildIndexedSuffix(i)
+				errs <- store.UpdateSessionState(ctx, UpdateSessionStateInput{
+					SessionID: created.ID,
+					Title:     created.Title,
+					UpdatedAt: created.UpdatedAt.Add(time.Duration(i) * time.Millisecond),
+					Head:      head,
+				})
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("mixed write error = %v", err)
+		}
+	}
+
+	loaded, err := store.LoadSession(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("LoadSession() after mixed writes error = %v", err)
+	}
+	if len(loaded.Messages) != workers/3 {
+		t.Fatalf("message count = %d, want %d", len(loaded.Messages), workers/3)
+	}
+}
+
+func TestSQLiteStoreConcurrentAssetAndTranscriptWrites(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := newTestStore(t)
+	created, err := store.CreateSession(ctx, CreateSessionInput{
+		ID:    "concurrent_assets",
+		Title: "Concurrent Assets",
+	})
+	if err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+
+	const assetWrites = 8
+	const messageWrites = 8
+	errs := make(chan error, assetWrites+messageWrites)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := 0; i < assetWrites; i++ {
+		i := i
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, err := store.SaveAsset(ctx, created.ID, strings.NewReader("asset "+buildIndexedSuffix(i)), "image/png")
+			errs <- err
+		}()
+	}
+	for i := 0; i < messageWrites; i++ {
+		i := i
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			errs <- store.AppendMessages(ctx, AppendMessagesInput{
+				SessionID: created.ID,
+				Messages: []providertypes.Message{{
+					Role:  providertypes.RoleUser,
+					Parts: []providertypes.ContentPart{providertypes.NewTextPart("message " + buildIndexedSuffix(i))},
+				}},
+			})
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("asset/transcript concurrent write error = %v", err)
+		}
+	}
+
+	loaded, err := store.LoadSession(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("LoadSession() error = %v", err)
+	}
+	if len(loaded.Messages) != messageWrites {
+		t.Fatalf("message count = %d, want %d", len(loaded.Messages), messageWrites)
+	}
+	var assetCount int
+	if err := store.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM session_assets WHERE session_id = ?`, created.ID).
+		Scan(&assetCount); err != nil {
+		t.Fatalf("query asset count: %v", err)
+	}
+	if assetCount != assetWrites {
+		t.Fatalf("asset count = %d, want %d", assetCount, assetWrites)
 	}
 }
 

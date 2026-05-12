@@ -97,7 +97,7 @@ func resolvePath(target string, workdir string) string {
 	if trimmed == "" {
 		return ""
 	}
-	if filepath.IsAbs(trimmed) {
+	if filepath.IsAbs(trimmed) || strings.HasPrefix(filepath.ToSlash(trimmed), "/") {
 		return trimmed
 	}
 	base := strings.TrimSpace(workdir)

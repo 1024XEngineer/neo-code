@@ -8,8 +8,36 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
+
+	providertypes "neo-code/internal/provider/types"
 )
+
+type blockingAssetReader struct {
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+	read    bool
+}
+
+func newBlockingAssetReader() *blockingAssetReader {
+	return &blockingAssetReader{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+}
+
+func (r *blockingAssetReader) Read(p []byte) (int, error) {
+	r.once.Do(func() { close(r.started) })
+	<-r.release
+	if r.read {
+		return 0, io.EOF
+	}
+	r.read = true
+	return copy(p, []byte("slow-image")), nil
+}
 
 func TestSQLiteStoreSaveAssetOpenAndStat(t *testing.T) {
 	ctx := context.Background()
@@ -96,6 +124,111 @@ func TestSQLiteStoreSaveAssetRejectsOversizedPayload(t *testing.T) {
 	}
 }
 
+func TestSQLiteStoreSaveAssetDoesNotHoldWriteLockDuringFileCopy(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := newTestStore(t)
+	session, err := store.CreateSession(ctx, CreateSessionInput{ID: "session_assets_slow_copy", Title: "assets"})
+	if err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+
+	reader := newBlockingAssetReader()
+	saveDone := make(chan error, 1)
+	go func() {
+		_, err := store.SaveAsset(ctx, session.ID, reader, "image/png")
+		saveDone <- err
+	}()
+
+	select {
+	case <-reader.started:
+	case <-time.After(time.Second):
+		t.Fatalf("timed out waiting for SaveAsset copy to start")
+	}
+
+	appendDone := make(chan error, 1)
+	go func() {
+		appendDone <- store.AppendMessages(ctx, AppendMessagesInput{
+			SessionID: session.ID,
+			Messages: []providertypes.Message{{
+				Role:  providertypes.RoleUser,
+				Parts: []providertypes.ContentPart{providertypes.NewTextPart("message while asset copy is blocked")},
+			}},
+		})
+	}()
+
+	select {
+	case err := <-appendDone:
+		if err != nil {
+			close(reader.release)
+			t.Fatalf("AppendMessages() while SaveAsset copying error = %v", err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		close(reader.release)
+		t.Fatalf("AppendMessages() blocked while SaveAsset was copying")
+	}
+
+	close(reader.release)
+	if err := <-saveDone; err != nil {
+		t.Fatalf("SaveAsset() error = %v", err)
+	}
+}
+
+func TestSQLiteStoreDeleteAssetRemovesMetadataAndFile(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := newTestStore(t)
+	session, err := store.CreateSession(ctx, CreateSessionInput{ID: "session_assets_delete", Title: "assets"})
+	if err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+	meta, err := store.SaveAsset(ctx, session.ID, strings.NewReader("image"), "image/png")
+	if err != nil {
+		t.Fatalf("SaveAsset() error = %v", err)
+	}
+	target := filepath.Join(store.assetsDir, session.ID, meta.ID+".bin")
+
+	if err := store.DeleteAsset(ctx, session.ID, meta.ID); err != nil {
+		t.Fatalf("DeleteAsset() error = %v", err)
+	}
+	if _, err := store.Stat(ctx, session.ID, meta.ID); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("Stat(deleted asset) error = %v, want os.ErrNotExist", err)
+	}
+	if _, err := os.Stat(target); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("asset file stat error = %v, want os.ErrNotExist", err)
+	}
+	if err := store.DeleteAsset(ctx, session.ID, meta.ID); err != nil {
+		t.Fatalf("DeleteAsset() should be idempotent, got %v", err)
+	}
+}
+
+func TestSQLiteStoreDeleteSessionRemovesAssetDirectory(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := newTestStore(t)
+	session, err := store.CreateSession(ctx, CreateSessionInput{ID: "session_delete_assets", Title: "assets"})
+	if err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+	if _, err := store.SaveAsset(ctx, session.ID, strings.NewReader("image"), "image/png"); err != nil {
+		t.Fatalf("SaveAsset() error = %v", err)
+	}
+	assetDir := filepath.Join(store.assetsDir, session.ID)
+
+	if err := store.DeleteSession(ctx, session.ID); err != nil {
+		t.Fatalf("DeleteSession() error = %v", err)
+	}
+	if _, err := store.LoadSession(ctx, session.ID); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("LoadSession(deleted) error = %v, want os.ErrNotExist", err)
+	}
+	if _, err := os.Stat(assetDir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("asset dir stat error = %v, want os.ErrNotExist", err)
+	}
+}
+
 func TestSQLiteStoreOpenReturnsFileErrorWhenPayloadMissing(t *testing.T) {
 	ctx := context.Background()
 	baseDir, err := os.MkdirTemp("", "session-base-")
@@ -144,6 +277,15 @@ func TestSQLiteStoreAssetMethodsRespectContext(t *testing.T) {
 	}
 	if _, err := store.Stat(ctx, "session_assets_ctx", "asset_x"); err == nil {
 		t.Fatalf("expected canceled Stat error")
+	}
+	if err := store.DeleteAsset(ctx, "session_assets_ctx", "asset_x"); err == nil {
+		t.Fatalf("expected canceled DeleteAsset error")
+	}
+	if err := store.DeleteSession(ctx, "session_assets_ctx"); err == nil {
+		t.Fatalf("expected canceled DeleteSession error")
+	}
+	if _, err := store.CleanupExpiredSessions(ctx, time.Hour); err == nil {
+		t.Fatalf("expected canceled CleanupExpiredSessions error")
 	}
 }
 

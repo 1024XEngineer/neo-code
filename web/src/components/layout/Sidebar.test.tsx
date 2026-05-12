@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { readFileSync } from 'node:fs'
 import Sidebar from './Sidebar'
 import { useChatStore } from '@/stores/useChatStore'
 import { useGatewayStore } from '@/stores/useGatewayStore'
@@ -8,6 +9,7 @@ import { useUIStore } from '@/stores/useUIStore'
 import { useWorkspaceStore } from '@/stores/useWorkspaceStore'
 
 let mockGatewayAPI: any = null
+const appCss = readFileSync('src/index.css', 'utf-8')
 
 vi.mock('@/context/RuntimeProvider', () => ({
   useGatewayAPI: () => mockGatewayAPI,
@@ -197,6 +199,48 @@ describe('Sidebar ProviderModal', () => {
     expect(useGatewayStore.getState().providerChangeTick).toBe(0)
     expect(showToast).not.toHaveBeenCalled()
     expect(screen.getByText('switch failed')).toBeInTheDocument()
+  })
+
+  it('keeps provider models in a single scrollable row when there are many models', async () => {
+    mockGatewayAPI.listProviders = vi.fn().mockResolvedValue({
+      payload: {
+        providers: [
+          {
+            id: 'ark',
+            name: 'Ark',
+            source: 'custom',
+            selected: false,
+            models: Array.from({ length: 16 }, (_, index) => ({
+              id: `ark-code-${index + 1}`,
+              name: `ark-code-${index + 1}`,
+            })),
+          },
+        ],
+      },
+    })
+    mockGatewayAPI.getSessionModel = vi.fn().mockResolvedValue({
+      payload: {
+        provider_id: 'openai',
+        model_id: 'gpt-5.4',
+        model_name: 'GPT-5.4',
+        provider: 'openai',
+      },
+    })
+
+    render(<Sidebar />)
+    fireEvent.click(screen.getByRole('button', { name: /供应商/i }))
+    await screen.findByText('Ark')
+
+    const arkCard = providerCard('Ark')
+    const models = arkCard.querySelector('.config-card-models')
+    expect(models).toBeInstanceOf(HTMLElement)
+    const modelRule = appCss.match(/\.config-card-models\s*{(?<body>[^}]*)}/)?.groups?.body ?? ''
+    expect(modelRule).toContain('flex-wrap: nowrap')
+    expect(modelRule).toContain('overflow-x: auto')
+    expect(modelRule).toContain('overflow-y: hidden')
+    expect(models?.querySelectorAll('.config-card-model-tag')).toHaveLength(16)
+    expect(within(arkCard).getByRole('button', { name: /选择/i })).toBeTruthy()
+    expect(within(arkCard).getByRole('button', { name: /删除/i })).toBeTruthy()
   })
 
   it('only shows the expanded workspace style on the current workspace', async () => {
