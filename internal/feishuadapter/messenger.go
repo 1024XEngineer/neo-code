@@ -534,7 +534,10 @@ func buildPermissionCard(payload PermissionCardPayload) map[string]any {
 	}
 
 	return map[string]any{
-		"config": map[string]any{"wide_screen_mode": true},
+		"config": map[string]any{
+			"wide_screen_mode": true,
+			"update_multi":     true,
+		},
 		"header": map[string]any{
 			"title":    map[string]string{"tag": "plain_text", "content": "工具审批"},
 			"template": "yellow",
@@ -576,7 +579,10 @@ func buildResolvedPermissionCard(payload ResolvedPermissionCardPayload) map[stri
 	body += "\n\n" + resultIcon + " **" + resultText + "**"
 
 	return map[string]any{
-		"config": map[string]any{"wide_screen_mode": true},
+		"config": map[string]any{
+			"wide_screen_mode": true,
+			"update_multi":     true,
+		},
 		"header": map[string]any{
 			"title":    map[string]string{"tag": "plain_text", "content": "工具审批"},
 			"template": headerColor,
@@ -659,7 +665,10 @@ func buildUserQuestionCard(payload UserQuestionCardPayload) map[string]any {
 	}
 
 	return map[string]any{
-		"config": map[string]any{"wide_screen_mode": true},
+		"config": map[string]any{
+			"wide_screen_mode": true,
+			"update_multi":     true,
+		},
 		"header": map[string]any{
 			"title":    map[string]string{"tag": "plain_text", "content": title},
 			"template": "wathet",
@@ -695,7 +704,10 @@ func buildResolvedUserQuestionCard(payload ResolvedUserQuestionCardPayload) map[
 	}
 
 	return map[string]any{
-		"config": map[string]any{"wide_screen_mode": true},
+		"config": map[string]any{
+			"wide_screen_mode": true,
+			"update_multi":     true,
+		},
 		"header": map[string]any{
 			"title":    map[string]string{"tag": "plain_text", "content": title},
 			"template": headerColor,
